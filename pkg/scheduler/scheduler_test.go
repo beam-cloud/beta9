@@ -89,32 +89,38 @@ func NewSchedulerForTest() (*Scheduler, error) {
 
 func TestPrivateWorkerRequestUsesPoolMode(t *testing.T) {
 	manager := NewWorkerPoolManager(false)
-	manager.SetPool("private-pool", types.WorkerPoolConfig{Mode: types.PoolModePrivate}, nil)
+	privateState := &compute.PoolState{Selector: "private-pool"}
+	manager.SetPoolAt(agentPoolControllerKey("workspace-1", privateState), "private-pool", types.WorkerPoolConfig{Mode: types.PoolModePrivate}, nil)
 	manager.SetPool("local-pool", types.WorkerPoolConfig{Mode: types.PoolModeLocal}, nil)
 	scheduler := &Scheduler{workerPoolManager: manager}
 
-	assert.True(t, scheduler.privateWorkerRequest(&types.Worker{PoolName: "private-pool"}))
-	assert.False(t, scheduler.privateWorkerRequest(&types.Worker{PoolName: "local-pool"}))
-	assert.False(t, scheduler.privateWorkerRequest(&types.Worker{PoolName: "missing-pool"}))
+	request := &types.ContainerRequest{WorkspaceId: "workspace-1"}
+	assert.True(t, scheduler.privateWorkerRequest(&types.Worker{PoolName: "private-pool"}, request))
+	assert.False(t, scheduler.privateWorkerRequest(&types.Worker{PoolName: "local-pool"}, request))
+	assert.False(t, scheduler.privateWorkerRequest(&types.Worker{PoolName: "missing-pool"}, request))
 }
 
 func TestPrivatePoolRequestsBypassManagedQuotaLookup(t *testing.T) {
 	manager := NewWorkerPoolManager(false)
-	manager.SetPool("private-gpu-pool", types.WorkerPoolConfig{Mode: types.PoolModePrivate}, nil)
+	privateState := &compute.PoolState{Selector: "private-gpu-pool"}
+	manager.SetPoolAt(agentPoolControllerKey("workspace-1", privateState), "private-gpu-pool", types.WorkerPoolConfig{Mode: types.PoolModePrivate}, nil)
 	scheduler := &Scheduler{workerPoolManager: manager}
 	stubConfig, err := json.Marshal(types.StubConfigV1{
 		Pool: &types.PoolConfig{Name: "private-gpu-pool", Selector: "private-gpu-pool", Fallback: types.PrivatePoolFallbackInternal},
 	})
 	assert.NoError(t, err)
 
-	assert.True(t, scheduler.privatePoolQuotaExempt(&types.ContainerRequest{PoolSelector: "private-gpu-pool"}))
+	assert.True(t, scheduler.privatePoolQuotaExempt(&types.ContainerRequest{WorkspaceId: "workspace-1", PoolSelector: "private-gpu-pool"}))
 	assert.True(t, scheduler.privatePoolQuotaExempt(&types.ContainerRequest{
+		WorkspaceId:  "workspace-1",
 		PoolSelector: "private-gpu-pool",
 		Stub:         types.StubWithRelated{Stub: types.Stub{Config: string(stubConfig)}},
 	}))
 	assert.True(t, scheduler.privatePoolQuotaExempt(&types.ContainerRequest{
-		Stub: types.StubWithRelated{Stub: types.Stub{Config: string(stubConfig)}},
+		WorkspaceId: "workspace-1",
+		Stub:        types.StubWithRelated{Stub: types.Stub{Config: string(stubConfig)}},
 	}))
+	assert.False(t, scheduler.privatePoolQuotaExempt(&types.ContainerRequest{WorkspaceId: "workspace-2", PoolSelector: "private-gpu-pool"}))
 	assert.False(t, scheduler.privatePoolQuotaExempt(&types.ContainerRequest{}))
 }
 
@@ -336,13 +342,13 @@ func TestMarketplacePoolRuntimeFallsBackForUnsupportedGPU(t *testing.T) {
 	assert.Equal(t, types.ContainerRuntimeGvisor.String(), config.ContainerRuntime)
 }
 
-func TestRegisterAgentPoolNormalizesPersistedManagedConfig(t *testing.T) {
+func TestEnsureAgentPoolNormalizesPersistedManagedConfig(t *testing.T) {
 	scheduler, err := NewSchedulerForTest()
 	assert.NoError(t, err)
 	scheduler.workerPoolManager = NewWorkerPoolManager(false)
 
 	provider := types.ProviderGeneric
-	err = scheduler.RegisterAgentPool("admin-workspace", &compute.PoolState{
+	err = scheduler.EnsureAgentPool("admin-workspace", &compute.PoolState{
 		Name:             "api-pool",
 		Selector:         "api-pool",
 		ManagementSource: types.WorkerPoolManagementSourceAPI,
@@ -361,6 +367,37 @@ func TestRegisterAgentPoolNormalizesPersistedManagedConfig(t *testing.T) {
 	assert.Nil(t, pool.Config.Provider)
 	assert.Equal(t, types.ContainerRuntimeRunc.String(), pool.Config.ContainerRuntime)
 	assert.Equal(t, int32(7), pool.Config.Priority)
+}
+
+func TestTenantAgentPoolsUseWorkspaceScopedControllerKeys(t *testing.T) {
+	scheduler, err := NewSchedulerForTest()
+	assert.NoError(t, err)
+	scheduler.workerPoolManager = NewWorkerPoolManager(false)
+	scheduler.workerPoolManager.SetPool("shared", types.WorkerPoolConfig{Mode: types.PoolModeLocal}, nil)
+
+	for _, workspaceID := range []string{"workspace-a", "workspace-b"} {
+		state := &compute.PoolState{
+			Name:     "private-pool",
+			Selector: "shared",
+			Mode:     string(types.PoolModePrivate),
+			Config:   &pb.PoolConfig{Name: "private-pool", Selector: "shared", Mode: string(types.PoolModePrivate)},
+		}
+		assert.NoError(t, scheduler.computeRepo.SavePoolState(context.Background(), workspaceID, state))
+
+		pool, err := scheduler.ensureAgentPoolForRequest(&types.ContainerRequest{WorkspaceId: workspaceID, PoolSelector: "shared"})
+		assert.NoError(t, err)
+		if pool == nil {
+			t.Fatal("private pool controller was not loaded")
+		}
+		assert.Equal(t, types.PoolModePrivate, pool.Config.Mode)
+		assert.Equal(t, "shared", pool.Name)
+		assert.Equal(t, workspaceID, pool.Controller.(*AgentWorkerPoolController).WorkspaceID())
+		assert.True(t, scheduler.privatePoolQuotaExempt(&types.ContainerRequest{WorkspaceId: workspaceID, PoolSelector: "shared"}))
+	}
+
+	global, ok := scheduler.workerPoolManager.GetPool("shared")
+	assert.True(t, ok)
+	assert.Equal(t, types.PoolModeLocal, global.Config.Mode)
 }
 
 // Machine-pinned requests (marketplace rentals) must only ever see the pinned
@@ -2091,6 +2128,7 @@ func TestGetControllersRegistersAgentPoolFromRepository(t *testing.T) {
 	if len(controllers) == 1 {
 		assert.Equal(t, poolState.Selector, controllers[0].Name())
 	}
+	assert.NoError(t, wb.EnsureAgentMachine(workspaceID, poolState, "machine-1"))
 	worker, err := wb.workerRepo.GetWorkerById(compute.AgentMachineWorkerID("machine-1"))
 	assert.NoError(t, err)
 	assert.Equal(t, poolState.Name, worker.PoolName)
@@ -2160,7 +2198,7 @@ func TestSelectPrivateAgentWorkerIgnoresStaleMachine(t *testing.T) {
 		LastHeartbeatAt: now.Add(-2 * compute.AgentHeartbeatTimeout),
 	}, time.Hour))
 
-	assert.NoError(t, wb.RegisterAgentPool(workspaceID, poolState))
+	assert.NoError(t, wb.EnsureAgentMachine(workspaceID, poolState, "live-machine"))
 	assert.NoError(t, wb.workerRepo.UpdateWorkerStatus(compute.AgentMachineWorkerID("live-machine"), types.WorkerStatusAvailable))
 	assert.NoError(t, wb.workerRepo.AddWorker(&types.Worker{
 		Id:                   compute.AgentMachineWorkerID("stale-machine"),

@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Masterminds/squirrel"
@@ -93,11 +94,19 @@ func GenerateDSN(config types.PostgresConfig) string {
 }
 
 type PostgresBackendRepository struct {
-	client         *sqlx.DB
-	config         types.PostgresConfig
-	eventRepo      EventRepository
-	adminWorkspace *types.Workspace
-	taskEvents     *taskEventPublisher
+	client                *sqlx.DB
+	config                types.PostgresConfig
+	eventRepo             EventRepository
+	adminWorkspaceMu      sync.Mutex
+	adminWorkspace        *types.Workspace
+	adminWorkspaceLoading *adminWorkspaceLoad
+	taskEvents            *taskEventPublisher
+}
+
+type adminWorkspaceLoad struct {
+	done      chan struct{}
+	workspace *types.Workspace
+	err       error
 }
 
 func NewBackendPostgresRepository(config types.PostgresConfig, eventRepo EventRepository) (*PostgresBackendRepository, error) {
@@ -129,12 +138,16 @@ func (l *GooseLogger) Fatalf(format string, v ...any) {
 }
 
 func (r *PostgresBackendRepository) Migrate() error {
+	return r.MigrateContext(context.Background())
+}
+
+func (r *PostgresBackendRepository) MigrateContext(ctx context.Context) error {
 	goose.SetLogger(&GooseLogger{log.Logger.Level(zerolog.InfoLevel)})
 	if err := goose.SetDialect("postgres"); err != nil {
 		return err
 	}
 
-	if err := goose.Up(r.client.DB, "./"); err != nil {
+	if err := goose.UpContext(ctx, r.client.DB, "./"); err != nil {
 		return err
 	}
 
@@ -248,23 +261,53 @@ func (r *PostgresBackendRepository) GetWorkspaceByExternalIdWithSigningKey(ctx c
 }
 
 func (r *PostgresBackendRepository) GetAdminWorkspace(ctx context.Context) (*types.Workspace, error) {
-	if r.adminWorkspace != nil {
-		return r.adminWorkspace, nil
-	}
+	for {
+		r.adminWorkspaceMu.Lock()
+		if r.adminWorkspace != nil {
+			workspace := r.adminWorkspace
+			r.adminWorkspaceMu.Unlock()
+			return workspace, nil
+		}
+		if loading := r.adminWorkspaceLoading; loading != nil {
+			r.adminWorkspaceMu.Unlock()
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-loading.done:
+				sharedContextEnded := errors.Is(loading.err, context.Canceled) || errors.Is(loading.err, context.DeadlineExceeded)
+				if ctx.Err() == nil && sharedContextEnded {
+					continue
+				}
+				return loading.workspace, loading.err
+			}
+		}
+		loading := &adminWorkspaceLoad{done: make(chan struct{})}
+		r.adminWorkspaceLoading = loading
+		r.adminWorkspaceMu.Unlock()
 
-	var adminWorkspace types.Workspace
-
-	query := `SELECT w.id, w.external_id, w.name, w.created_at, w.concurrency_limit_id, w.volume_cache_enabled, w.multi_gpu_enabled
+		var adminWorkspace types.Workspace
+		query := `SELECT w.id, w.external_id, w.name, w.created_at, w.concurrency_limit_id, w.volume_cache_enabled, w.multi_gpu_enabled
 	FROM token t
 	INNER JOIN workspace w ON t.workspace_id = w.id
-	WHERE t.token_type = 'admin';`
-	err := r.client.GetContext(ctx, &adminWorkspace, query)
-	if err != nil {
-		return nil, err
-	}
+	WHERE t.token_type = 'admin'
+	ORDER BY t.id
+	LIMIT 1;`
+		err := r.client.GetContext(ctx, &adminWorkspace, query)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			err = ctxErr
+		}
 
-	r.adminWorkspace = &adminWorkspace
-	return r.adminWorkspace, nil
+		r.adminWorkspaceMu.Lock()
+		if err == nil {
+			r.adminWorkspace = &adminWorkspace
+		}
+		loading.workspace = r.adminWorkspace
+		loading.err = err
+		r.adminWorkspaceLoading = nil
+		close(loading.done)
+		r.adminWorkspaceMu.Unlock()
+		return loading.workspace, loading.err
+	}
 }
 
 // Token

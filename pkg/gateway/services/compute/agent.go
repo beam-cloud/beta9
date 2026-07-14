@@ -2,6 +2,7 @@ package compute
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -29,22 +30,27 @@ func (s *Service) JoinAgent(ctx context.Context, in *pb.JoinAgentRequest) (*pb.J
 		return &pb.JoinAgentResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 
-	poolState, err := s.getPrivatePoolState(ctx, tokenState.WorkspaceID, tokenState.PoolName)
+	var poolState *model.PoolState
+	if tokenState.ManagedPoolInstanceID != "" {
+		if activationErr := s.requireManagedPoolRepository(); activationErr != nil {
+			err = activationErr
+		} else {
+			poolState, err = s.managedPoolRepo.GetManagedPoolState(ctx, tokenState.WorkspaceID, tokenState.PoolName)
+			if err == nil {
+				poolState, err = s.activeManagedPoolState(poolState)
+			}
+		}
+	}
 	if err != nil {
 		return &pb.JoinAgentResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
-	if poolState == nil {
-		return &pb.JoinAgentResponse{Ok: false, ErrMsg: "pool not found"}, nil
-	}
 	if tokenState.ManagedPoolInstanceID != "" {
-		if poolState.ManagementSource == "" ||
+		if poolState == nil || poolState.ManagementSource == "" ||
 			poolState.Mode != string(types.PoolModeExternal) ||
 			poolState.ManagedInstanceID == "" ||
 			tokenState.ManagedPoolInstanceID != poolState.ManagedInstanceID {
 			return &pb.JoinAgentResponse{Ok: false, ErrMsg: "join token is invalid or expired"}, nil
 		}
-	} else if poolState.CreatedByTokenID == "" || poolState.CreatedByTokenID != tokenState.CreatedByTokenID {
-		return &pb.JoinAgentResponse{Ok: false, ErrMsg: "join token is invalid or expired"}, nil
 	}
 
 	agentToken, err := generateComputeToken()
@@ -60,9 +66,10 @@ func (s *Service) JoinAgent(ctx context.Context, in *pb.JoinAgentRequest) (*pb.J
 		TokenHash:                 hashComputeToken(agentToken),
 		WorkspaceID:               tokenState.WorkspaceID,
 		PoolName:                  tokenState.PoolName,
-		Mode:                      firstNonEmpty(tokenState.Mode, poolState.Mode),
-		MarketplaceListingID:      firstNonEmpty(tokenState.MarketplaceListingID, poolState.MarketplaceListingID),
-		SellerWorkspaceID:         firstNonEmpty(tokenState.SellerWorkspaceID, poolState.SellerWorkspaceID),
+		Mode:                      tokenState.Mode,
+		MarketplaceListingID:      tokenState.MarketplaceListingID,
+		SellerWorkspaceID:         tokenState.SellerWorkspaceID,
+		ManagedPoolInstanceID:     tokenState.ManagedPoolInstanceID,
 		MachineID:                 machineID,
 		MachineFingerprint:        in.MachineFingerprint,
 		Hostname:                  in.Hostname,
@@ -83,7 +90,7 @@ func (s *Service) JoinAgent(ctx context.Context, in *pb.JoinAgentRequest) (*pb.J
 		LastJoinAt:                now,
 		LastHeartbeatAt:           now,
 	}
-	if poolState.ManagementSource != "" && poolState.WorkerConfig != nil {
+	if poolState != nil && poolState.ManagementSource != "" && poolState.WorkerConfig != nil {
 		if poolState.WorkerConfig.NetworkSlotPoolSize > 0 {
 			agentState.NetworkSlotPoolSize = uint32(poolState.WorkerConfig.NetworkSlotPoolSize)
 		}
@@ -91,29 +98,27 @@ func (s *Service) JoinAgent(ctx context.Context, in *pb.JoinAgentRequest) (*pb.J
 			agentState.ContainerStartConcurrency = uint32(poolState.WorkerConfig.ContainerStartConcurrency)
 		}
 	}
-	if err := s.enforcePoolGPUType(ctx, poolState, agentState); err != nil {
-		return &pb.JoinAgentResponse{Ok: false, ErrMsg: err.Error()}, nil
+	var bootstrap *pb.AgentBootstrapConfig
+	if agentState.ManagedPoolInstanceID == "" {
+		poolState, bootstrap, err = s.commitPrivateAgentJoin(ctx, tokenState, agentState)
+	} else {
+		if err = s.enforcePoolGPUType(ctx, poolState, agentState); err == nil {
+			bootstrap, err = s.agentBootstrapConfig(ctx, tokenState.WorkspaceID, poolState)
+		}
+		if err == nil {
+			bootstrap.Executor = agentState.Executor
+			err = s.saveJoinedAgentState(ctx, poolState, agentState)
+		}
+		if err == nil {
+			err = s.ensureAgentMachine(ctx, agentState, poolState)
+		}
+		if err != nil {
+			_ = s.removePrivateMachineWorker(agentState)
+			_ = s.computeRepo.DeleteAgentMachineState(ctx, agentState.WorkspaceID, agentState.PoolName, agentState.MachineID)
+		}
 	}
-
-	bootstrap, err := s.agentBootstrapConfig(ctx, tokenState.WorkspaceID, poolState)
 	if err != nil {
 		return &pb.JoinAgentResponse{Ok: false, ErrMsg: err.Error()}, nil
-	}
-	bootstrap.Executor = agentState.Executor
-
-	if err := s.saveComputeAgentTokenState(ctx, agentState); err != nil {
-		return &pb.JoinAgentResponse{Ok: false, ErrMsg: err.Error()}, nil
-	}
-	if err := s.assignManagedReservationToMachine(ctx, poolState, tokenState, agentState); err != nil {
-		_ = s.computeRepo.DeleteAgentMachineState(ctx, agentState.WorkspaceID, agentState.PoolName, agentState.MachineID)
-		return &pb.JoinAgentResponse{Ok: false, ErrMsg: err.Error()}, nil
-	}
-	if s.scheduler != nil {
-		if err := s.scheduler.RegisterAgentPool(tokenState.WorkspaceID, poolState); err != nil {
-			// Roll back the partially-committed join.
-			_ = s.computeRepo.DeleteAgentMachineState(ctx, agentState.WorkspaceID, agentState.PoolName, agentState.MachineID)
-			return &pb.JoinAgentResponse{Ok: false, ErrMsg: err.Error()}, nil
-		}
 	}
 	s.emitComputeEvent(types.EventComputeMachine, types.EventComputeSchema{
 		WorkspaceID: tokenState.WorkspaceID,
@@ -148,6 +153,95 @@ func (s *Service) JoinAgent(ctx context.Context, in *pb.JoinAgentRequest) (*pb.J
 	}, nil
 }
 
+func (s *Service) commitPrivateAgentJoin(ctx context.Context, token *model.JoinTokenState, agent *model.AgentTokenState) (*model.PoolState, *pb.AgentBootstrapConfig, error) {
+	var pool *model.PoolState
+	var bootstrap *pb.AgentBootstrapConfig
+	err := s.withPoolStateLock(ctx, agent.WorkspaceID, agent.PoolName, func(lockCtx context.Context) error {
+		var err error
+		pool, err = s.getPrivatePoolState(lockCtx, agent.WorkspaceID, agent.PoolName)
+		if err != nil {
+			return err
+		}
+		if pool == nil {
+			return errors.New("pool no longer exists")
+		}
+		if pool.CreatedByTokenID == "" || pool.CreatedByTokenID != token.CreatedByTokenID {
+			return errors.New("join token is invalid or expired")
+		}
+		agent.Mode = firstNonEmpty(token.Mode, pool.Mode)
+		agent.MarketplaceListingID = firstNonEmpty(token.MarketplaceListingID, pool.MarketplaceListingID)
+		agent.SellerWorkspaceID = firstNonEmpty(token.SellerWorkspaceID, pool.SellerWorkspaceID)
+		if err := s.enforcePoolGPUType(lockCtx, pool, agent); err != nil {
+			return err
+		}
+		bootstrap, err = s.agentBootstrapConfig(lockCtx, agent.WorkspaceID, pool)
+		if err != nil {
+			return err
+		}
+		bootstrap.Executor = agent.Executor
+		if err := s.saveComputeAgentTokenState(lockCtx, agent); err != nil {
+			return err
+		}
+		if err := s.assignManagedReservationToMachineLocked(lockCtx, pool, token, agent); err != nil {
+			return errors.Join(err, s.computeRepo.DeleteAgentMachineState(lockCtx, agent.WorkspaceID, agent.PoolName, agent.MachineID))
+		}
+		if err := s.ensureAgentMachine(lockCtx, agent, pool); err != nil {
+			return errors.Join(err, s.removePrivateMachineWorker(agent), s.computeRepo.DeleteAgentMachineState(lockCtx, agent.WorkspaceID, agent.PoolName, agent.MachineID))
+		}
+		return nil
+	})
+	return pool, bootstrap, err
+}
+
+func (s *Service) saveJoinedAgentState(ctx context.Context, poolState *model.PoolState, agentState *model.AgentTokenState) error {
+	if agentState == nil {
+		return errors.New("agent state is unavailable")
+	}
+	if agentState.ManagedPoolInstanceID == "" {
+		return s.saveComputeAgentTokenState(ctx, agentState)
+	}
+	return s.withManagedPoolStateLock(ctx, agentState.WorkspaceID, agentState.PoolName, func(lockCtx context.Context) error {
+		persisted, err := s.managedPoolRepo.GetManagedPoolState(lockCtx, agentState.WorkspaceID, agentState.PoolName)
+		if err != nil {
+			return err
+		}
+		current, err := s.activeManagedPoolState(persisted)
+		if err != nil {
+			return err
+		}
+		if current == nil || current.ManagedInstanceID != agentState.ManagedPoolInstanceID {
+			return errors.New("managed pool is no longer active")
+		}
+		if current.ManagedInstanceID != poolState.ManagedInstanceID {
+			return errors.New("managed pool changed while the machine was joining; retry")
+		}
+		return s.saveComputeAgentTokenState(lockCtx, agentState)
+	})
+}
+
+func (s *Service) ensureAgentMachine(ctx context.Context, agentState *model.AgentTokenState, poolState *model.PoolState) error {
+	if s.scheduler == nil {
+		return nil
+	}
+	if poolState == nil {
+		var err error
+		poolState, err = s.getAgentPoolState(ctx, agentState)
+		if err != nil {
+			return err
+		}
+		if poolState == nil {
+			if agentState.ManagedPoolInstanceID != "" {
+				return nil
+			}
+			return errors.New("pool no longer exists")
+		}
+	}
+	if agentState.ManagedPoolInstanceID != "" {
+		return s.ensureManagedAgentMachine(ctx, poolState, agentState.MachineID)
+	}
+	return s.scheduler.EnsureAgentMachine(agentState.WorkspaceID, poolState, agentState.MachineID)
+}
+
 // bindJoinTokenFingerprint pins machine-specific join tokens to the first
 // fingerprint that uses them; pool-wide tokens stay reusable.
 func (s *Service) bindJoinTokenFingerprint(ctx context.Context, tokenState *model.JoinTokenState, fingerprint string) error {
@@ -179,7 +273,35 @@ func (s *Service) requireAgentState(ctx context.Context, token string) (*model.A
 	if agentState == nil {
 		return nil, "invalid agent token"
 	}
+	if agentState.ManagedPoolInstanceID != "" {
+		if err := s.requireManagedPoolRepository(); err != nil {
+			return nil, err.Error()
+		}
+		state, err := s.managedPoolRepo.GetManagedPoolState(ctx, agentState.WorkspaceID, agentState.PoolName)
+		if err != nil {
+			return nil, err.Error()
+		}
+		if state == nil || state.Name != agentState.PoolName || state.WorkspaceID != agentState.WorkspaceID ||
+			state.ManagementSource == "" || state.Mode != string(types.PoolModeExternal) ||
+			agentState.ManagedPoolInstanceID == "" || agentState.ManagedPoolInstanceID != state.ManagedInstanceID {
+			return nil, "managed pool no longer exists"
+		}
+	}
 	return agentState, ""
+}
+
+func (s *Service) getAgentPoolState(ctx context.Context, agentState *model.AgentTokenState) (*model.PoolState, error) {
+	if agentState == nil {
+		return nil, nil
+	}
+	if agentState.ManagedPoolInstanceID != "" && s.managedPoolRepo != nil {
+		state, err := s.managedPoolRepo.GetManagedPoolState(ctx, agentState.WorkspaceID, agentState.PoolName)
+		if err != nil {
+			return nil, err
+		}
+		return s.activeManagedPoolState(state)
+	}
+	return s.getPrivatePoolState(ctx, agentState.WorkspaceID, agentState.PoolName)
 }
 
 func (s *Service) RequestAgentTransportCredential(ctx context.Context, in *pb.RequestAgentTransportCredentialRequest) (*pb.RequestAgentTransportCredentialResponse, error) {
@@ -216,6 +338,13 @@ func (s *Service) StreamAgent(in *pb.StreamAgentRequest, stream pb.GatewayServic
 	if errMsg != "" {
 		return stream.Send(&pb.StreamAgentResponse{Ok: false, ErrMsg: errMsg})
 	}
+	agentState, err := s.touchAgentHeartbeat(ctx, agentState)
+	if err != nil {
+		return stream.Send(&pb.StreamAgentResponse{Ok: false, ErrMsg: err.Error()})
+	}
+	if err := s.ensureAgentMachine(ctx, agentState, nil); err != nil {
+		return stream.Send(&pb.StreamAgentResponse{Ok: false, ErrMsg: err.Error()})
+	}
 	// Record disconnect on any stream exit; recordAgentDisconnect no-ops
 	// while the heartbeat is still fresh.
 	defer func() {
@@ -235,13 +364,6 @@ func (s *Service) StreamAgent(in *pb.StreamAgentRequest, stream pb.GatewayServic
 			return fmt.Errorf("agent token is no longer current")
 		}
 		agentState = current
-		if s.scheduler != nil {
-			if poolState, err := s.getPrivatePoolState(ctx, agentState.WorkspaceID, agentState.PoolName); err == nil && poolState != nil {
-				if err := s.scheduler.RegisterAgentPool(agentState.WorkspaceID, poolState); err != nil {
-					return stream.Send(&pb.StreamAgentResponse{Ok: false, ErrMsg: err.Error()})
-				}
-			}
-		}
 		routes, err := s.agentRoutesForMachine(ctx, agentState)
 		if err != nil {
 			return err
@@ -299,8 +421,16 @@ func (s *Service) StreamAgent(in *pb.StreamAgentRequest, stream pb.GatewayServic
 				return err
 			}
 		case <-heartbeat.C:
-			if current := s.touchAgentHeartbeat(ctx, agentState); current != nil {
-				agentState = current
+			current, err := s.touchAgentHeartbeat(ctx, agentState)
+			if err != nil {
+				return err
+			}
+			agentState = current
+			worker := s.agentMachineStatusWorker(agentState)
+			if worker == nil || worker.Status == types.WorkerStatusDisabled {
+				if err := s.ensureAgentMachine(ctx, agentState, nil); err != nil {
+					return err
+				}
 			}
 		case <-ticker.C:
 			if err := sendSnapshot(); err != nil {
@@ -319,21 +449,24 @@ func isAgentSnapshotTransient(err error) bool {
 
 // touchAgentHeartbeat refreshes the machine's liveness timestamp without
 // touching telemetry-reported metrics.
-func (s *Service) touchAgentHeartbeat(ctx context.Context, agentState *model.AgentTokenState) *model.AgentTokenState {
+func (s *Service) touchAgentHeartbeat(ctx context.Context, agentState *model.AgentTokenState) (*model.AgentTokenState, error) {
 	current, err := s.currentComputeAgentState(ctx, agentState)
-	if err != nil || current == nil {
-		return nil
+	if err != nil {
+		return nil, err
+	}
+	if current == nil {
+		return nil, errors.New("agent token is no longer current")
 	}
 	now := time.Now().UTC()
 	if current.LastHeartbeatAt.After(now) {
-		return current
+		return current, nil
 	}
 	current.LastHeartbeatAt = now
 	current.LastDisconnectAt = time.Time{}
 	if err := s.saveComputeAgentTokenState(ctx, current); err != nil {
-		return nil
+		return nil, err
 	}
-	return current
+	return current, nil
 }
 
 func coalesceAgentStreamEvents(ctx context.Context, events <-chan common.KeyEvent) {
@@ -489,15 +622,22 @@ func (s *Service) ensureAgentWorkerSlot(ctx context.Context, agentState *model.A
 }
 
 func (s *Service) workerTokenWorkspaceAndType(ctx context.Context, agentState *model.AgentTokenState) (*types.Workspace, string, error) {
-	if agentState != nil && (agentState.Mode == string(types.PoolModeMarketplace) || agentState.Mode == string(types.PoolModeExternal)) {
+	if agentState == nil {
+		return nil, "", fmt.Errorf("agent state is unavailable")
+	}
+	if agentState.Mode == string(types.PoolModeMarketplace) {
 		workspace, err := s.backendRepo.GetAdminWorkspace(ctx)
 		return workspace, types.TokenTypeWorker, err
 	}
+	tokenType := types.TokenTypeWorkerPrivate
+	if agentState.Mode == string(types.PoolModeExternal) {
+		tokenType = types.TokenTypeWorker
+	}
 	workspace, err := s.backendRepo.GetWorkspaceByExternalId(ctx, agentState.WorkspaceID)
 	if err != nil {
-		return nil, types.TokenTypeWorkerPrivate, err
+		return nil, tokenType, err
 	}
-	return &workspace, types.TokenTypeWorkerPrivate, nil
+	return &workspace, tokenType, nil
 }
 
 // agentWorkerToken mints (or reuses) the worker token for an agent worker
@@ -710,6 +850,7 @@ func (s *Service) UpdateAgentAvailability(ctx context.Context, in *pb.UpdateAgen
 	current.AvailabilityUpdatedAt = observedAt
 	if current.Schedulable {
 		current.LastDisconnectAt = time.Time{}
+		current.LastHeartbeatAt = time.Now().UTC()
 	}
 	if err := s.saveComputeAgentTokenState(ctx, current); err != nil {
 		return &pb.UpdateAgentAvailabilityResponse{Ok: false, ErrMsg: err.Error()}, nil
@@ -717,11 +858,11 @@ func (s *Service) UpdateAgentAvailability(ctx context.Context, in *pb.UpdateAgen
 	if !current.Schedulable {
 		s.disableMachineWorker(ctx, current, reconcileReasonExternalAvailability)
 	} else if s.scheduler != nil {
-		// The worker was disabled while the machine was unschedulable;
-		// re-registering the pool re-runs ensureMachineWorkers, which recreates
-		// it immediately instead of waiting for the next agent stream refresh.
-		if poolState, err := s.getPrivatePoolState(ctx, current.WorkspaceID, current.PoolName); err == nil && poolState != nil {
-			_ = s.scheduler.RegisterAgentPool(current.WorkspaceID, poolState)
+		if err := s.ensureAgentMachine(ctx, current, nil); err != nil {
+			current.Schedulable = false
+			rollbackErr := s.saveComputeAgentTokenState(ctx, current)
+			s.disableMachineWorker(ctx, current, reconcileReasonExternalAvailability)
+			return &pb.UpdateAgentAvailabilityResponse{Ok: false, ErrMsg: errors.Join(err, rollbackErr).Error()}, nil
 		}
 	}
 

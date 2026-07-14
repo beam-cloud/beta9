@@ -23,18 +23,12 @@ func NewComputeRedisRepository(rdb *common.RedisClient) ComputeRepository {
 	return &ComputeRedisRepository{rdb: rdb, lock: common.NewRedisLock(rdb)}
 }
 
-// LockPoolState serializes pool state writes across the reconciler, launch,
-// and release paths.
-func (r *ComputeRedisRepository) LockPoolState(ctx context.Context, workspaceID, name string) error {
-	return r.lock.Acquire(ctx, common.RedisKeys.ComputePoolStateLock(workspaceID, name), common.RedisLockOptions{
+func (r *ComputeRedisRepository) WithPoolStateLock(ctx context.Context, workspaceID, name string, fn func(context.Context) error) error {
+	return r.lock.WithLease(ctx, common.RedisKeys.ComputePoolStateLock(workspaceID, name), common.RedisLockOptions{
 		TtlS:          300,
 		Retries:       100,
 		RetryInterval: 100 * time.Millisecond,
-	})
-}
-
-func (r *ComputeRedisRepository) UnlockPoolState(ctx context.Context, workspaceID, name string) error {
-	return r.lock.Release(common.RedisKeys.ComputePoolStateLock(workspaceID, name))
+	}, fn)
 }
 
 func (r *ComputeRedisRepository) SavePoolState(ctx context.Context, workspaceID string, state *compute.PoolState) error {

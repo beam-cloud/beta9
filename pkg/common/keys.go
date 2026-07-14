@@ -118,6 +118,10 @@ var (
 	computePoolStateLock                 string = "compute:{%s}:pool:%s:lock"
 	computePoolIndex                     string = "compute:{%s}:pools"
 	computePoolWorkspaceIndex            string = "compute:workspaces"
+	computeManagedPoolState              string = "compute:managed:{%s}:pool:%s:state"
+	computeManagedPoolStateLock          string = "compute:managed:{%s}:pool:%s:lock"
+	computeManagedPoolIndex              string = "compute:managed:{%s}:pools"
+	computeManagedPoolUpdates            string = "compute:managed_pools:updates"
 	computeJoinToken                     string = "compute:join:%s"
 	computeAgentToken                    string = "compute:agent:token:%s"
 	computeAgentMachine                  string = "compute:{%s}:pool:%s:machine:%s"
@@ -350,6 +354,22 @@ func (rk *redisKeys) ComputePoolIndex(workspaceID string) string {
 
 func (rk *redisKeys) ComputePoolWorkspaceIndex() string {
 	return computePoolWorkspaceIndex
+}
+
+func (rk *redisKeys) ComputeManagedPoolState(workspaceID, name string) string {
+	return fmt.Sprintf(computeManagedPoolState, workspaceID, name)
+}
+
+func (rk *redisKeys) ComputeManagedPoolStateLock(workspaceID, name string) string {
+	return fmt.Sprintf(computeManagedPoolStateLock, workspaceID, name)
+}
+
+func (rk *redisKeys) ComputeManagedPoolIndex(workspaceID string) string {
+	return fmt.Sprintf(computeManagedPoolIndex, workspaceID)
+}
+
+func (rk *redisKeys) ComputeManagedPoolUpdates() string {
+	return computeManagedPoolUpdates
 }
 
 func (rk *redisKeys) ComputeJoinToken(tokenHash string) string {

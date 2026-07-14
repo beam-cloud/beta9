@@ -172,20 +172,6 @@ func TestAgentWorkerPoolControllerAddWorkerCreatesDesiredSlot(t *testing.T) {
 		t.Fatalf("restored worker status = %q, want %q", restoredWorker.Status, types.WorkerStatusPending)
 	}
 
-	if err := workerRepo.UpdateWorkerStatus(worker.Id, types.WorkerStatusDisabled); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := NewAgentWorkerPoolController(opts); err != nil {
-		t.Fatal(err)
-	}
-	restoredWorker, err = workerRepo.GetWorkerById(worker.Id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if restoredWorker.Status != types.WorkerStatusPending {
-		t.Fatalf("restored worker status = %q, want %q", restoredWorker.Status, types.WorkerStatusPending)
-	}
-
 	_, err = controller.AddWorker(999999, 1024, 1)
 	if err == nil {
 		t.Fatal("expected capacity error")

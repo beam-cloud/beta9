@@ -77,10 +77,10 @@ func NewAuthInterceptor(config types.AppConfig, backendRepo repository.BackendRe
 	}
 }
 
-func (ai *AuthInterceptor) getToken(tokenKey string) (*types.Token, *types.Workspace, error) {
+func (ai *AuthInterceptor) getToken(ctx context.Context, tokenKey string) (*types.Token, *types.Workspace, error) {
 	token, workspace, err := ai.workspaceRepo.AuthorizeToken(tokenKey)
 	if err != nil {
-		token, workspace, err = ai.backendRepo.AuthorizeToken(context.TODO(), tokenKey)
+		token, workspace, err = ai.backendRepo.AuthorizeToken(ctx, tokenKey)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -98,7 +98,7 @@ func (ai *AuthInterceptor) isAuthRequired(method string) bool {
 	return !ai.unauthenticatedMethods[method]
 }
 
-func (ai *AuthInterceptor) validateToken(md metadata.MD) (*AuthInfo, bool) {
+func (ai *AuthInterceptor) validateToken(ctx context.Context, md metadata.MD) (*AuthInfo, bool) {
 	if len(md["authorization"]) == 0 {
 		return nil, false
 	}
@@ -109,7 +109,7 @@ func (ai *AuthInterceptor) validateToken(md metadata.MD) (*AuthInfo, bool) {
 	var workspace *types.Workspace
 	var err error
 
-	token, workspace, err = ai.getToken(tokenKey)
+	token, workspace, err = ai.getToken(ctx, tokenKey)
 	if err != nil {
 		return nil, false
 	}
@@ -118,7 +118,6 @@ func (ai *AuthInterceptor) validateToken(md metadata.MD) (*AuthInfo, bool) {
 	if !token.Active || token.DisabledByClusterAdmin {
 		return nil, false
 	}
-
 	return &AuthInfo{
 		Token:     token,
 		Workspace: workspace,
@@ -141,7 +140,7 @@ func (ai *AuthInterceptor) Stream() grpc.StreamServerInterceptor {
 			return status.Errorf(codes.Unauthenticated, "invalid or missing token")
 		}
 
-		authInfo, valid := ai.validateToken(md)
+		authInfo, valid := ai.validateToken(stream.Context(), md)
 		if !valid {
 			if !ai.isAuthRequired(info.FullMethod) {
 				return handler(srv, stream)
@@ -169,7 +168,7 @@ func (ai *AuthInterceptor) Unary() grpc.UnaryServerInterceptor {
 			return nil, status.Errorf(codes.Unauthenticated, "invalid or missing token")
 		}
 
-		authInfo, valid := ai.validateToken(md)
+		authInfo, valid := ai.validateToken(ctx, md)
 		if !valid {
 			if !ai.isAuthRequired(info.FullMethod) {
 				return handler(ctx, req)

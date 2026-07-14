@@ -38,7 +38,7 @@ type DatabaseConfig struct {
 
 type RedisMode string
 
-var (
+const (
 	RedisModeSingle  RedisMode = "single"
 	RedisModeCluster RedisMode = "cluster"
 )
@@ -605,25 +605,17 @@ type HetznerRegionConfig struct {
 }
 
 type AgentConfig struct {
-	ElasticSearch  ElasticSearchConfig `key:"elasticSearch" json:"elastic_search"`
-	VictoriaLogs   VictoriaLogsConfig  `key:"victoriaLogs" json:"victoria_logs"`
-	UpstreamURL    string              `key:"upstreamURL" json:"upstream_url"`
-	UpstreamBranch string              `key:"upstreamBranch" json:"upstream_branch"`
-	UpstreamToken  string              `key:"upstreamToken" json:"upstream_token"`
-	Configman      ConfigmanConfig     `key:"configman" json:"configman"`
+	VictoriaLogs   VictoriaLogsConfig `key:"victoriaLogs" json:"victoria_logs"`
+	UpstreamURL    string             `key:"upstreamURL" json:"upstream_url"`
+	UpstreamBranch string             `key:"upstreamBranch" json:"upstream_branch"`
+	UpstreamToken  string             `key:"upstreamToken" json:"upstream_token"`
+	Configman      ConfigmanConfig    `key:"configman" json:"configman"`
 }
 
 type ConfigmanConfig struct {
 	ControllerAddress      string `key:"controllerAddress" json:"controller_address"`
 	ControllerToken        string `key:"controllerToken" json:"controller_token"`
 	ControllerDefaultGroup string `key:"controllerDefaultGroup" json:"controller_default_group"`
-}
-
-type ElasticSearchConfig struct {
-	Host       string `key:"host" json:"host"`
-	Port       string `key:"port" json:"port"`
-	HttpUser   string `key:"httpUser" json:"http_user"`
-	HttpPasswd string `key:"httpPasswd" json:"http_passwd"`
 }
 
 type VictoriaLogsConfig struct {

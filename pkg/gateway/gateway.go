@@ -66,6 +66,7 @@ type Gateway struct {
 	httpServer           *http.Server
 	grpcServer           *grpc.Server
 	healthServer         *health.Server
+	computeReady         <-chan struct{}
 	RedisClient          *common.RedisClient
 	TaskDispatcher       *task.Dispatcher
 	TaskRepo             repository.TaskRepository
@@ -95,6 +96,8 @@ type Gateway struct {
 const (
 	gatewayDrainPropagationDelay = 10 * time.Second
 	gatewayGRPCShutdownMaxWait   = 5 * time.Second
+	gatewayLivenessService       = "liveness"
+	gatewayReadinessService      = "readiness"
 )
 
 func NewGateway() (*Gateway, error) {
@@ -137,11 +140,8 @@ func NewGateway() (*Gateway, error) {
 		return nil, err
 	}
 
-	if release, err := gateway.initLock("postgres"); err == nil {
-		defer release()
-		if err = backendRepo.Migrate(); err != nil {
-			return nil, err
-		}
+	if err := gateway.migratePostgres(backendRepo); err != nil {
+		return nil, err
 	}
 
 	tailscaleRepo := repository.NewTailscaleRedisRepository(redisClient, config)
@@ -149,6 +149,7 @@ func NewGateway() (*Gateway, error) {
 
 	workspaceRepo := repository.NewWorkspaceRedisRepository(redisClient)
 	computeRepo := repository.NewComputeRedisRepository(redisClient)
+	managedPoolRepo := repository.NewManagedPoolRedisRepository(redisClient)
 
 	scheduler, err := scheduler.NewScheduler(ctx, config, redisClient, usageMetricsRepo, backendRepo, workspaceRepo, tailscale)
 	if err != nil {
@@ -200,28 +201,29 @@ func NewGateway() (*Gateway, error) {
 		WorkerPoolRepo:   workerPoolRepo,
 		UsageMetricsRepo: usageMetricsRepo,
 		ComputeRepo:      computeRepo,
+		ManagedPoolRepo:  managedPoolRepo,
 		KeyEventManager:  keyEventManager,
 		RedisClient:      redisClient,
 		Tailscale:        tailscale,
 	})
+	gateway.computeReady = gateway.ComputeService.Ready()
 	gateway.ComputeService.Start(ctx)
 
 	return gateway, nil
 }
 
-func (g *Gateway) initLock(name string) (func(), error) {
-	lockKey := fmt.Sprintf("gateway:init:%v:lock", name)
+type postgresMigrator interface {
+	MigrateContext(context.Context) error
+}
+
+func (g *Gateway) migratePostgres(backendRepo postgresMigrator) error {
+	const lockTTL = 30 * time.Second
 	lock := common.NewRedisLock(g.RedisClient)
-
-	if err := lock.Acquire(g.ctx, lockKey, common.RedisLockOptions{TtlS: 10, Retries: 1}); err != nil {
-		return nil, err
-	}
-
-	return func() {
-		if err := lock.Release(lockKey); err != nil {
-			log.Error().Str("lock_key", lockKey).Err(err).Msg("failed to release init lock")
-		}
-	}, nil
+	return lock.WithLease(g.ctx, "gateway:init:postgres:lock", common.RedisLockOptions{
+		TtlS:          int(lockTTL.Seconds()),
+		Retries:       480,
+		RetryInterval: 500 * time.Millisecond,
+	}, backendRepo.MigrateContext)
 }
 
 func (g *Gateway) initHttp() error {
@@ -563,6 +565,7 @@ func (g *Gateway) registerServices() error {
 		Ctx:              g.ctx,
 		Config:           g.Config,
 		BackendRepo:      g.BackendRepo,
+		WorkspaceRepo:    g.WorkspaceRepo,
 		ContainerRepo:    g.ContainerRepo,
 		ProviderRepo:     g.ProviderRepo,
 		Scheduler:        g.Scheduler,
@@ -581,15 +584,7 @@ func (g *Gateway) registerServices() error {
 	}
 	pb.RegisterGatewayServiceServer(g.grpcServer, gws)
 
-	// Register health service
-	hs := health.NewServer()
-	hs.Resume()
-	g.healthServer = hs
-	go func() {
-		<-g.ctx.Done()
-		hs.Shutdown()
-	}()
-	healthpb.RegisterHealthServer(g.grpcServer, hs)
+	g.registerHealthService()
 
 	return nil
 }
@@ -667,7 +662,66 @@ func (g *Gateway) Start() error {
 }
 
 func (g *Gateway) isReady() bool {
-	return !g.draining.Load()
+	if g.draining.Load() {
+		return false
+	}
+	if g.computeReady == nil {
+		return true
+	}
+	select {
+	case <-g.computeReady:
+		return true
+	default:
+		return false
+	}
+}
+
+func (g *Gateway) registerHealthService() {
+	hs := g.newHealthServer()
+	healthpb.RegisterHealthServer(g.grpcServer, hs)
+}
+
+func (g *Gateway) newHealthServer() *health.Server {
+	hs := health.NewServer()
+	// Keep the unnamed service serving for clients using the legacy health
+	// check. Kubernetes uses the named services below so reconciliation can
+	// gate readiness without coupling it to liveness.
+	hs.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
+	hs.SetServingStatus(gatewayLivenessService, healthpb.HealthCheckResponse_SERVING)
+	hs.SetServingStatus(gatewayReadinessService, healthpb.HealthCheckResponse_NOT_SERVING)
+	g.healthServer = hs
+
+	if g.computeReady == nil {
+		g.markReady()
+	} else if g.ctx != nil {
+		go func() {
+			select {
+			case <-g.computeReady:
+				g.markReady()
+			case <-g.ctx.Done():
+			}
+		}()
+	}
+
+	if g.ctx != nil {
+		go func() {
+			<-g.ctx.Done()
+			hs.Shutdown()
+		}()
+	}
+	return hs
+}
+
+func (g *Gateway) markReady() {
+	if g.healthServer == nil || g.draining.Load() {
+		return
+	}
+	g.healthServer.SetServingStatus(gatewayReadinessService, healthpb.HealthCheckResponse_SERVING)
+	// Draining can begin between the check and status update. Reasserting the
+	// terminal readiness state closes that race without coupling liveness to it.
+	if g.draining.Load() {
+		g.healthServer.SetServingStatus(gatewayReadinessService, healthpb.HealthCheckResponse_NOT_SERVING)
+	}
 }
 
 func (g *Gateway) drainMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
@@ -691,6 +745,7 @@ func (g *Gateway) startDraining() {
 	}
 	if g.healthServer != nil {
 		g.healthServer.SetServingStatus("", healthpb.HealthCheckResponse_NOT_SERVING)
+		g.healthServer.SetServingStatus(gatewayReadinessService, healthpb.HealthCheckResponse_NOT_SERVING)
 	}
 	if g.drainCancelFunc != nil {
 		g.drainCancelFunc()

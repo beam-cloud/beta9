@@ -38,8 +38,9 @@ networkpolicies:
 controllers:
   gateway:
     type: deployment
-    annotations:
-      secret-hash: {{ include "sha256sum" (toYaml .Values.config) }}
+    pod:
+      annotations:
+        secret-hash: {{ include "sha256sum" (toYaml .Values.config) }}
     containers:
       main:
         command:
@@ -60,6 +61,7 @@ controllers:
               timeoutSeconds: 1
               grpc:
                 port: 1993
+                service: readiness
           liveness:
             enabled: true
             custom: true
@@ -71,6 +73,17 @@ controllers:
               timeoutSeconds: 1
               grpc:
                 port: 1993
+                service: liveness
+          startup:
+            enabled: true
+            custom: true
+            spec:
+              periodSeconds: 3
+              timeoutSeconds: 1
+              failureThreshold: 100
+              grpc:
+                port: 1993
+                service: liveness
         securityContext:
           privileged: true
     hostNetwork: true

@@ -52,12 +52,16 @@ func (s *Service) StreamAgentTelemetry(stream pb.GatewayService_StreamAgentTelem
 
 		if agentState == nil {
 			agentToken = strings.TrimSpace(req.AgentToken)
-			state, err := s.getCurrentComputeAgentTokenState(ctx, agentToken)
+			state, errMsg := s.requireAgentState(ctx, agentToken)
+			if errMsg != "" {
+				return stream.SendAndClose(&pb.AgentTelemetryResponse{Ok: false, ErrMsg: errMsg})
+			}
+			state, err := s.touchAgentHeartbeat(ctx, state)
 			if err != nil {
 				return stream.SendAndClose(&pb.AgentTelemetryResponse{Ok: false, ErrMsg: err.Error()})
 			}
-			if state == nil {
-				return stream.SendAndClose(&pb.AgentTelemetryResponse{Ok: false, ErrMsg: "invalid agent token"})
+			if err := s.ensureAgentMachine(ctx, state, nil); err != nil {
+				return stream.SendAndClose(&pb.AgentTelemetryResponse{Ok: false, ErrMsg: err.Error()})
 			}
 			agentState = state
 		} else if req.AgentToken != "" && req.AgentToken != agentToken {
@@ -163,7 +167,7 @@ func (s *Service) recordAgentMetrics(ctx context.Context, agentState *model.Agen
 	}
 	var poolState *model.PoolState
 	if s.computeRepo != nil {
-		poolState, _ = s.getPrivatePoolState(ctx, agentState.WorkspaceID, agentState.PoolName)
+		poolState, _ = s.getAgentPoolState(ctx, agentState)
 	}
 	agentState.Metrics = metrics
 	// Liveness is always tracked on the gateway clock: agent-supplied
@@ -186,12 +190,6 @@ func (s *Service) recordAgentMetrics(ctx context.Context, agentState *model.Agen
 			Str("pool_name", agentState.PoolName).
 			Str("machine_id", agentState.MachineID).
 			Msg("failed to record node usage telemetry")
-	}
-
-	if s.scheduler != nil && poolState != nil {
-		if err := s.scheduler.RegisterAgentPool(agentState.WorkspaceID, poolState); err != nil {
-			return err
-		}
 	}
 
 	attrs := map[string]string{

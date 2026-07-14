@@ -363,7 +363,7 @@ func TestAgentWorkerConfigMarketplaceSlotUsesGatewayRuntimeWithBilling(t *testin
 	}
 }
 
-func TestAgentWorkerConfigPlatformExternalPreservesPoolSemantics(t *testing.T) {
+func TestAgentWorkerConfigManagedExternalPreservesPoolSemantics(t *testing.T) {
 	slot := &pb.AgentWorkerSlot{
 		PoolName:                  "public-h100",
 		Mode:                      string(types.PoolModeExternal),

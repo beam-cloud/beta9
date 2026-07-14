@@ -77,17 +77,18 @@ type WorkerPoolCapacity struct {
 }
 
 type WorkerPoolControllerOptions struct {
-	Name           string
-	Context        context.Context
-	Config         types.AppConfig
-	BackendRepo    repository.BackendRepository
-	WorkerRepo     repository.WorkerRepository
-	WorkerPoolRepo repository.WorkerPoolRepository
-	ContainerRepo  repository.ContainerRepository
-	ProviderName   *types.MachineProvider
-	ProviderRepo   repository.ProviderRepository
-	EventRepo      repository.EventRepository
-	Tailscale      *network.Tailscale
+	Name            string
+	Context         context.Context
+	Config          types.AppConfig
+	BackendRepo     repository.BackendRepository
+	WorkerRepo      repository.WorkerRepository
+	WorkerPoolRepo  repository.WorkerPoolRepository
+	ContainerRepo   repository.ContainerRepository
+	ProviderName    *types.MachineProvider
+	ProviderRepo    repository.ProviderRepository
+	EventRepo       repository.EventRepository
+	PushPoolMetrics func(types.EventComputeSchema)
+	Tailscale       *network.Tailscale
 }
 
 func GenerateWorkerId() string {

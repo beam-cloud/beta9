@@ -2775,7 +2775,7 @@
         },
         "installCommand": {
           "type": "string",
-          "description": "Agent-backed platform pools return the systemd installer here. The join\ntoken embedded in the command is short-lived and machine-bound."
+          "description": "Agent-backed managed pools return the systemd installer here. The join\ntoken embedded in the command is short-lived and machine-bound."
         }
       }
     },

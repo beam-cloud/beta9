@@ -87,18 +87,52 @@ func (s *Service) reconcileManagedComputeWithClock(ctx context.Context, nowFunc 
 				Msg("failed to reconcile managed compute pool")
 		}
 	}
+	if s.managedPoolRepo == nil {
+		return nil
+	}
+	now := time.Now().UTC()
+	if nowFunc != nil {
+		now = nowFunc().UTC()
+	}
+	return s.reconcileManagedPoolMachines(ctx, now)
+}
+
+func (s *Service) reconcileManagedPoolMachines(ctx context.Context, now time.Time) error {
+	workspaceID, err := s.adminWorkspaceID(ctx)
+	if err != nil {
+		return err
+	}
+	states, err := s.managedPoolRepo.ListManagedPoolStates(ctx, workspaceID, 0)
+	if err != nil {
+		return err
+	}
+	for _, state := range states {
+		if state == nil || state.WorkspaceID != workspaceID || state.Name == "" || state.ManagementSource == "" {
+			continue
+		}
+		if err := s.withManagedPoolStateLock(ctx, workspaceID, state.Name, func(lockCtx context.Context) error {
+			current, err := s.managedPoolRepo.GetManagedPoolState(lockCtx, workspaceID, state.Name)
+			if err != nil || current == nil || current.ManagementSource == "" {
+				return err
+			}
+			s.reconcileStaleMachines(lockCtx, workspaceID, current, now)
+			return nil
+		}); err != nil {
+			return fmt.Errorf("reconcile managed pool %q: %w", state.Name, err)
+		}
+	}
 	return nil
 }
 
 // reconcilePoolLocked re-reads the pool state under the pool lock so a stale
 // snapshot cannot clobber concurrent launch/release updates.
 func (s *Service) reconcilePoolLocked(ctx context.Context, workspaceID, poolName string, now time.Time) error {
-	return s.withPoolStateLock(ctx, workspaceID, poolName, func() error {
-		state, err := s.getPrivatePoolState(ctx, workspaceID, poolName)
+	return s.withPoolStateLock(ctx, workspaceID, poolName, func(lockCtx context.Context) error {
+		state, err := s.getPrivatePoolState(lockCtx, workspaceID, poolName)
 		if err != nil || state == nil {
 			return err
 		}
-		return s.reconcilePool(ctx, workspaceID, state, now)
+		return s.reconcilePool(lockCtx, workspaceID, state, now)
 	})
 }
 

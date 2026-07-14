@@ -13,7 +13,7 @@ import (
 )
 
 // AgentWorkerPoolController manages machines that connect to the control plane
-// through the agent protocol, including private and platform external pools.
+// through the agent protocol, including private and managed external pools.
 type AgentWorkerPoolController struct {
 	ctx              context.Context
 	name             string
@@ -86,7 +86,7 @@ func (e *AgentPoolCapacityError) Error() string {
 	)
 }
 
-func NewAgentWorkerPoolController(opts AgentWorkerPoolControllerOptions) (WorkerPoolController, error) {
+func NewAgentWorkerPoolController(opts AgentWorkerPoolControllerOptions) (*AgentWorkerPoolController, error) {
 	if opts.WorkspaceID == "" {
 		return nil, errors.New("workspace id is required")
 	}
@@ -106,9 +106,6 @@ func NewAgentWorkerPoolController(opts AgentWorkerPoolControllerOptions) (Worker
 		poolState:        opts.PoolState,
 		workerRepo:       opts.WorkerRepo,
 		computeRepo:      opts.ComputeRepo,
-	}
-	if err := wpc.ensureMachineWorkers(); err != nil {
-		return nil, err
 	}
 	return wpc, nil
 }
@@ -211,6 +208,16 @@ func (wpc *AgentWorkerPoolController) WorkspaceID() string {
 	return wpc.workspaceID
 }
 
+func (wpc *AgentWorkerPoolController) owns(workspaceID, selector string, state *compute.PoolState) bool {
+	if state == nil || wpc.poolState == nil {
+		return false
+	}
+	if wpc.name != selector || wpc.poolName() != state.Name || wpc.poolState.Mode != state.Mode {
+		return false
+	}
+	return wpc.workspaceID == workspaceID && wpc.poolState.ManagementSource == state.ManagementSource
+}
+
 func (wpc *AgentWorkerPoolController) poolName() string {
 	if wpc.poolState != nil && wpc.poolState.Name != "" {
 		return wpc.poolState.Name
@@ -218,23 +225,19 @@ func (wpc *AgentWorkerPoolController) poolName() string {
 	return wpc.name
 }
 
-func (wpc *AgentWorkerPoolController) ensureMachineWorkers() error {
-	machines, err := wpc.computeRepo.ListAgentTokenStates(wpc.ctx, wpc.workspaceID, wpc.poolName())
-	if err != nil {
+func (wpc *AgentWorkerPoolController) ensureMachine(machineID string) error {
+	machine, err := wpc.computeRepo.GetAgentMachineState(wpc.ctx, wpc.workspaceID, wpc.poolName(), machineID)
+	if err != nil || machine == nil {
 		return err
 	}
-	for _, machine := range machines {
-		if !wpc.machineSchedulable(machine) {
-			if worker, err := wpc.machineWorker(machine); err == nil && worker != nil {
-				_ = wpc.workerRepo.UpdateWorkerStatus(worker.Id, types.WorkerStatusDisabled)
-			}
-			continue
+	if !wpc.machineSchedulable(machine) {
+		if worker, err := wpc.machineWorker(machine); err == nil && worker != nil {
+			return wpc.workerRepo.UpdateWorkerStatus(worker.Id, types.WorkerStatusDisabled)
 		}
-		if _, err := wpc.ensureMachineWorker(machine); err != nil {
-			return err
-		}
+		return nil
 	}
-	return nil
+	_, err = wpc.ensureMachineWorker(machine)
+	return err
 }
 
 func (wpc *AgentWorkerPoolController) findMachine(match func(*compute.AgentTokenState) bool) (*compute.AgentTokenState, error) {
@@ -373,7 +376,8 @@ func (wpc *AgentWorkerPoolController) ensureMachineWorker(machine *compute.Agent
 		return nil, err
 	}
 	if worker != nil && worker.Status != types.WorkerStatusDisabled {
-		return worker, nil
+		spec.applyToWorker(worker)
+		return worker, wpc.workerRepo.AddWorker(worker)
 	}
 
 	next := spec.worker()
@@ -410,23 +414,28 @@ func (wpc *AgentWorkerPoolController) agentMachineWorker(machine *compute.AgentT
 }
 
 func (m agentMachineWorker) worker() *types.Worker {
-	return &types.Worker{
-		Id:                   m.id,
-		Status:               types.WorkerStatusPending,
-		TotalCpu:             m.cpu,
-		TotalMemory:          m.memory,
-		TotalGpuCount:        m.gpuCount,
-		FreeCpu:              m.cpu,
-		FreeMemory:           m.memory,
-		FreeGpuCount:         m.gpuCount,
-		Gpu:                  m.gpu,
-		PoolName:             m.poolName,
-		PoolSelector:         m.poolSelector,
-		MachineId:            m.machineID,
-		RequiresPoolSelector: m.requiresPoolSelector,
-		Priority:             m.priority,
-		Preemptable:          m.preemptable,
-		Runtime:              m.runtime,
-		BuildVersion:         m.buildVersion,
+	worker := &types.Worker{
+		Id:            m.id,
+		Status:        types.WorkerStatusPending,
+		TotalCpu:      m.cpu,
+		TotalMemory:   m.memory,
+		TotalGpuCount: m.gpuCount,
+		FreeCpu:       m.cpu,
+		FreeMemory:    m.memory,
+		FreeGpuCount:  m.gpuCount,
+		MachineId:     m.machineID,
 	}
+	m.applyToWorker(worker)
+	return worker
+}
+
+func (m agentMachineWorker) applyToWorker(worker *types.Worker) {
+	worker.Gpu = m.gpu
+	worker.PoolName = m.poolName
+	worker.PoolSelector = m.poolSelector
+	worker.RequiresPoolSelector = m.requiresPoolSelector
+	worker.Priority = m.priority
+	worker.Preemptable = m.preemptable
+	worker.Runtime = m.runtime
+	worker.BuildVersion = m.buildVersion
 }

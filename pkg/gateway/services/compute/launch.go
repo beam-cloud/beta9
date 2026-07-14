@@ -58,6 +58,11 @@ func (s *Service) LaunchPoolCapacity(ctx context.Context, in *pb.LaunchPoolCapac
 	if err := s.validateAgentTransportConfig(config.Transport); err != nil {
 		return &pb.LaunchPoolCapacityResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
+	for _, name := range []string{pool.Name, pool.Selector} {
+		if _, exists := s.appConfig.Worker.Pools[name]; exists {
+			return &pb.LaunchPoolCapacityResponse{Ok: false, ErrMsg: fmt.Sprintf("pool %q conflicts with a configured worker pool", name)}, nil
+		}
+	}
 
 	offers, err := s.collectPoolOffers(ctx, pool)
 	if err != nil {
@@ -66,9 +71,9 @@ func (s *Service) LaunchPoolCapacity(ctx context.Context, in *pb.LaunchPoolCapac
 
 	// Serialize against the reconciler and release paths.
 	var response *pb.LaunchPoolCapacityResponse
-	lockErr := s.withPoolStateLock(ctx, workspaceID, pool.Name, func() error {
+	lockErr := s.withPoolStateLock(ctx, workspaceID, pool.Name, func(lockCtx context.Context) error {
 		var err error
-		response, err = s.launchPoolCapacityLocked(ctx, authInfo, workspaceID, ownerTokenID, config, pool, offers)
+		response, err = s.launchPoolCapacityLocked(lockCtx, authInfo, workspaceID, ownerTokenID, config, pool, offers)
 		return err
 	})
 	if lockErr != nil {
@@ -223,7 +228,7 @@ func (s *Service) launchPoolCapacityLocked(ctx context.Context, authInfo *auth.A
 		return launchPoolError("store_failed", err.Error(), billingDecision{}), nil
 	}
 	if s.scheduler != nil {
-		if err := s.scheduler.RegisterAgentPool(workspaceID, state); err != nil {
+		if err := s.scheduler.EnsureAgentPool(workspaceID, state); err != nil {
 			err = s.compensatePoolLaunchFailure(ctx, workspaceID, pool.Name, existing, vendors, createdReservations, err)
 			return launchPoolError("scheduler_failed", err.Error(), billingDecision{}), nil
 		}
@@ -419,12 +424,8 @@ func (s *Service) compensatePoolLaunchFailure(ctx context.Context, workspaceID, 
 		}
 	}
 
-	if previous != nil {
-		if err := s.savePrivatePoolState(ctx, workspaceID, previous); err != nil {
-			failures = append(failures, fmt.Sprintf("restore previous pool state: %v", err))
-		}
-	} else if err := s.deletePrivatePoolState(ctx, workspaceID, poolName); err != nil {
-		failures = append(failures, fmt.Sprintf("delete partial pool state: %v", err))
+	if err := s.rollbackPoolState(ctx, workspaceID, poolName, previous, nil); err != nil {
+		failures = append(failures, fmt.Sprintf("restore pool state: %v", err))
 	}
 
 	if len(failures) > 0 {

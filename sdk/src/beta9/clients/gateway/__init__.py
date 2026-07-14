@@ -1461,7 +1461,7 @@ class CreateMachineResponse(betterproto.Message):
     agent_upstream_token: str = betterproto.string_field(6)
     install_command: str = betterproto.string_field(7)
     """
-    Agent-backed platform pools return the systemd installer here. The join
+    Agent-backed managed pools return the systemd installer here. The join
      token embedded in the command is short-lived and machine-bound.
     """
 

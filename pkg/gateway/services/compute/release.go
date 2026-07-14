@@ -16,6 +16,9 @@ func (s *Service) releasePrivateMachine(ctx context.Context, machine *model.Agen
 	if machine == nil {
 		return nil
 	}
+	if s == nil || s.computeRepo == nil {
+		return errors.New("compute repository is unavailable")
+	}
 	if err := s.releaseBYOCProviderMachine(ctx, machine); err != nil {
 		reconciled, reconcileErr := s.reconcileBYOCMachineReleaseFailure(ctx, machine, err)
 		if reconcileErr != nil {
@@ -83,6 +86,9 @@ func (s *Service) removePrivateMachine(ctx context.Context, machine *model.Agent
 	if machine == nil {
 		return nil
 	}
+	if s == nil || s.computeRepo == nil {
+		return errors.New("compute repository is unavailable")
+	}
 	s.flushBYOCMachineManagedUsage(ctx, machine)
 	if err := s.markPrivateMachineUnschedulable(ctx, machine); err != nil {
 		return err
@@ -133,8 +139,8 @@ func (s *Service) markPrivateMachineUnschedulable(ctx context.Context, machine *
 }
 
 func (s *Service) releaseManagedMachineReservation(ctx context.Context, machine *model.AgentTokenState) error {
-	return s.withPoolStateLock(ctx, machine.WorkspaceID, machine.PoolName, func() error {
-		state, err := s.getPrivatePoolState(ctx, machine.WorkspaceID, machine.PoolName)
+	return s.withPoolStateLock(ctx, machine.WorkspaceID, machine.PoolName, func(lockCtx context.Context) error {
+		state, err := s.getPrivatePoolState(lockCtx, machine.WorkspaceID, machine.PoolName)
 		if err != nil || state == nil {
 			return err
 		}
@@ -145,7 +151,7 @@ func (s *Service) releaseManagedMachineReservation(ctx context.Context, machine 
 		if reservation == nil {
 			return nil
 		}
-		return s.releaseManagedReservation(ctx, machine.WorkspaceID, state, reservation)
+		return s.releaseManagedReservation(lockCtx, machine.WorkspaceID, state, reservation)
 	})
 }
 
@@ -212,41 +218,34 @@ func (s *Service) assignManagedReservationToMachine(ctx context.Context, state *
 	if token != nil && token.ManagedPoolInstanceID != "" {
 		return nil
 	}
-	return s.withPoolStateLock(ctx, machine.WorkspaceID, machine.PoolName, func() error {
-		// Re-read under the lock so the write cannot clobber concurrent updates.
-		target := state
-		if s.computeRepo != nil {
-			fresh, err := s.getPrivatePoolState(ctx, machine.WorkspaceID, machine.PoolName)
-			if err != nil {
-				return err
-			}
-			if fresh != nil {
-				target = fresh
-			}
+	return s.withPoolStateLock(ctx, machine.WorkspaceID, machine.PoolName, func(lockCtx context.Context) error {
+		fresh, err := s.getPrivatePoolState(lockCtx, machine.WorkspaceID, machine.PoolName)
+		if err != nil {
+			return err
 		}
-
-		reservation := managedReservationForToken(target, token)
-		if reservation == nil {
-			if token != nil && token.MachineID != "" {
-				return fmt.Errorf("managed reservation for machine %q is not active", token.MachineID)
-			}
-			return nil
+		if fresh == nil {
+			return errors.New("pool no longer exists")
 		}
-		if reservation.MachineID != "" && reservation.MachineID != machine.MachineID {
-			return fmt.Errorf("managed reservation %q is already linked to machine %q", reservation.ID, reservation.MachineID)
-		}
-		if !attachReservationToMachine(reservation, machine.MachineID) {
-			return nil
-		}
-		if target != state {
-			// Keep the caller's snapshot consistent with what we persisted.
-			if callerReservation := managedReservationForToken(state, token); callerReservation != nil {
-				attachReservationToMachine(callerReservation, machine.MachineID)
-			}
-		}
-		target.UpdatedAt = time.Now().UTC()
-		return s.savePrivatePoolState(ctx, machine.WorkspaceID, target)
+		return s.assignManagedReservationToMachineLocked(lockCtx, fresh, token, machine)
 	})
+}
+
+func (s *Service) assignManagedReservationToMachineLocked(ctx context.Context, state *model.PoolState, token *model.JoinTokenState, machine *model.AgentTokenState) error {
+	reservation := managedReservationForToken(state, token)
+	if reservation == nil {
+		if token != nil && token.MachineID != "" {
+			return fmt.Errorf("managed reservation for machine %q is not active", token.MachineID)
+		}
+		return nil
+	}
+	if reservation.MachineID != "" && reservation.MachineID != machine.MachineID {
+		return fmt.Errorf("managed reservation %q is already linked to machine %q", reservation.ID, reservation.MachineID)
+	}
+	if !attachReservationToMachine(reservation, machine.MachineID) {
+		return nil
+	}
+	state.UpdatedAt = time.Now().UTC()
+	return s.savePrivatePoolState(ctx, machine.WorkspaceID, state)
 }
 
 func managedReservationForToken(state *model.PoolState, token *model.JoinTokenState) *model.Reservation {

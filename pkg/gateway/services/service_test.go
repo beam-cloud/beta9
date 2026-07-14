@@ -16,6 +16,14 @@ type privatePoolPolicyComputeRepo struct {
 	pools map[string]*model.PoolState
 }
 
+type managedPoolTestBackend struct {
+	repository.BackendRepository
+}
+
+func (*managedPoolTestBackend) GetAdminWorkspace(context.Context) (*types.Workspace, error) {
+	return &types.Workspace{ExternalId: "admin-workspace"}, nil
+}
+
 func (r *privatePoolPolicyComputeRepo) GetPoolState(_ context.Context, workspaceID, name string) (*model.PoolState, error) {
 	return r.pools[workspaceID+"/"+name], nil
 }
@@ -30,10 +38,34 @@ func (r *privatePoolPolicyComputeRepo) ListPoolStates(_ context.Context, workspa
 	return pools, nil
 }
 
+func (r *privatePoolPolicyComputeRepo) ListAllPoolStates(context.Context, int) ([]*model.PoolState, error) {
+	pools := make([]*model.PoolState, 0, len(r.pools))
+	for _, pool := range r.pools {
+		pools = append(pools, pool)
+	}
+	return pools, nil
+}
+
 func TestNewGatewayServiceRequiresComputeRepoOrRedis(t *testing.T) {
 	_, err := NewGatewayService(&GatewayServiceOpts{})
 	if err == nil {
 		t.Fatal("expected missing compute repository and redis client to fail")
+	}
+}
+
+func TestNewGatewayServiceDoesNotCreateManagedRepositoryWithoutRedis(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	gatewayService, err := NewGatewayService(&GatewayServiceOpts{
+		Ctx:         ctx,
+		BackendRepo: &managedPoolTestBackend{},
+		ComputeRepo: &privatePoolPolicyComputeRepo{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gatewayService.computeService.ReconcileManagedPools(context.Background()); err == nil || !strings.Contains(err.Error(), "repository is unavailable") {
+		t.Fatalf("managed pool reconciliation error = %v, want repository unavailable", err)
 	}
 }
 
