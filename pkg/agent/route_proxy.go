@@ -489,9 +489,6 @@ func updateRouteStatus(ctx context.Context, client pb.GatewayServiceClient, agen
 }
 
 func (p *routeProxy) updateRouteStatus(ctx context.Context, routeID, state, errMsg string, attrs map[string]string) error {
-	if p.statusSlots == nil {
-		return updateRouteStatus(ctx, p.client, p.agentToken, routeID, state, p.proxyTarget, errMsg, attrs)
-	}
 	select {
 	case p.statusSlots <- struct{}{}:
 		defer func() { <-p.statusSlots }()

@@ -368,21 +368,30 @@ func (s *Service) ListMachineContainers(ctx context.Context, in *pb.ListMachineC
 	}
 
 	ownerWorkspaceID := workspaceID
-	state, err := s.getPrivatePoolState(ctx, workspaceID, poolName)
-	if err != nil {
-		return &pb.ListMachineContainersResponse{Ok: false, ErrMsg: err.Error()}, nil
-	}
-	poolFound := state != nil
-	if !poolFound && requireClusterAdmin(authInfo) == nil && s.managedPoolRepo != nil {
+	poolFound := false
+	if requireClusterAdmin(authInfo) == nil && s.managedPoolRepo != nil {
 		// Serverless (managed) pools are not private pool states — they live
 		// in the managed pool store under the admin workspace. Cluster admins
 		// can inspect their machines from any workspace.
-		if adminID, adminErr := s.adminWorkspaceID(ctx); adminErr == nil && adminID != "" {
-			if managed, managedErr := s.managedPoolRepo.GetManagedPoolState(ctx, adminID, poolName); managedErr == nil && managed != nil {
-				ownerWorkspaceID = adminID
-				poolFound = true
-			}
+		adminID, err := s.adminWorkspaceID(ctx)
+		if err != nil {
+			return &pb.ListMachineContainersResponse{Ok: false, ErrMsg: err.Error()}, nil
 		}
+		managed, err := s.managedPoolRepo.GetManagedPoolState(ctx, adminID, poolName)
+		if err != nil {
+			return &pb.ListMachineContainersResponse{Ok: false, ErrMsg: err.Error()}, nil
+		}
+		if managed != nil {
+			ownerWorkspaceID = adminID
+			poolFound = true
+		}
+	}
+	if !poolFound {
+		state, err := s.getPrivatePoolState(ctx, workspaceID, poolName)
+		if err != nil {
+			return &pb.ListMachineContainersResponse{Ok: false, ErrMsg: err.Error()}, nil
+		}
+		poolFound = state != nil
 	}
 	if !poolFound {
 		return &pb.ListMachineContainersResponse{Ok: false, ErrMsg: "pool not found"}, nil

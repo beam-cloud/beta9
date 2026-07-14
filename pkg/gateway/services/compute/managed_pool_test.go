@@ -64,8 +64,9 @@ type fakeManagedPoolWorkerPoolRepo struct {
 }
 
 type fakeManagedPoolRepo struct {
-	repo  *fakeComputeRepo
-	saved chan struct{}
+	repo   *fakeComputeRepo
+	saved  chan struct{}
+	getErr error
 }
 
 func (*fakeManagedPoolRepo) WithManagedPoolStateLock(ctx context.Context, _, _ string, fn func(context.Context) error) error {
@@ -81,6 +82,9 @@ func (r *fakeManagedPoolRepo) SaveManagedPoolState(ctx context.Context, workspac
 	return nil
 }
 func (r *fakeManagedPoolRepo) GetManagedPoolState(ctx context.Context, workspaceID, name string) (*model.PoolState, error) {
+	if r.getErr != nil {
+		return nil, r.getErr
+	}
 	return r.repo.GetPoolState(ctx, workspaceID, name)
 }
 func (r *fakeManagedPoolRepo) ListManagedPoolStates(ctx context.Context, workspaceID string, limit int) ([]*model.PoolState, error) {

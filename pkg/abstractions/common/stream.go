@@ -49,8 +49,13 @@ type ContainerStream struct {
 	syncQueue       chan *pb.SyncContainerWorkspaceRequest
 }
 
+type containerStreamClient interface {
+	StreamLogsWithReady(context.Context, string, chan common.OutputMsg, func()) error
+	SyncWorkspace(context.Context, *pb.SyncContainerWorkspaceRequest) (*pb.SyncContainerWorkspaceResponse, error)
+}
+
 type containerClientResult struct {
-	client *common.ContainerClient
+	client containerStreamClient
 	err    error
 }
 
@@ -90,7 +95,9 @@ func (l *ContainerStream) handleStreams(
 	clientResult chan containerClientResult,
 ) error {
 	var lastMessage common.OutputMsg
-	var client *common.ContainerClient
+	var client containerStreamClient
+	var exitEvents <-chan common.KeyEvent
+	var logStreamReady <-chan struct{}
 	var syncQueue <-chan *pb.SyncContainerWorkspaceRequest
 
 _stream:
@@ -103,7 +110,12 @@ _stream:
 			}
 			client = result.client
 			syncQueue = l.syncQueue
-			go client.StreamLogs(ctx, containerId, outputChan)
+			ready := make(chan struct{})
+			logStreamReady = ready
+			go client.StreamLogsWithReady(ctx, containerId, outputChan, func() { close(ready) })
+		case <-logStreamReady:
+			logStreamReady = nil
+			exitEvents = keyEventChan
 		case req := <-syncQueue:
 			_, err := client.SyncWorkspace(ctx, req)
 			if err != nil {
@@ -119,7 +131,7 @@ _stream:
 				lastMessage = o
 				break _stream
 			}
-		case <-keyEventChan:
+		case <-exitEvents:
 			exitCode, err := l.containerRepo.GetContainerExitCode(containerId)
 			if err != nil {
 				exitCode = -1

@@ -24,7 +24,11 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 	gatewayEnv := s.gatewayContainerEnvironment()
 
 	// Most of these env vars are required to communicate with the gateway and vice versa.
-	env := make([]string, 0, len(request.Env)+9)
+	envCapacity := len(request.Env) + 9
+	if options.InitialSpec != nil && options.InitialSpec.Process != nil {
+		envCapacity += len(options.InitialSpec.Process.Env)
+	}
+	env := make([]string, 0, envCapacity)
 	if options.InitialSpec != nil && options.InitialSpec.Process != nil {
 		env = append(env, options.InitialSpec.Process.Env...)
 	}

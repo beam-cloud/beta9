@@ -169,14 +169,11 @@ def _handle_sigabort(*args: Any, **kwargs: Any) -> None:
 @json_output_interceptor(task_id=config.task_id)
 @handle_error()
 def main():
-    # User imports do not need a gateway connection. Loading them first avoids
-    # competing with connection establishment during burst startup.
-    handler = FunctionHandler()
     with get_channel(get_config_context()) as channel:
-        run(channel, handler)
+        run(channel)
 
 
-def run(channel: Channel, handler: FunctionHandler):
+def run(channel: Channel):
     function_stub: FunctionServiceStub = FunctionServiceStub(channel)
     gateway_stub: GatewayServiceStub = GatewayServiceStub(channel)
     task_id = config.task_id
@@ -209,7 +206,7 @@ def run(channel: Channel, handler: FunctionHandler):
     monitor_thread.start()
 
     # Invoke the function and handle its result
-    result = asyncio.run(invoke_function(function_stub, context, task_id, handler))
+    result = asyncio.run(invoke_function(function_stub, context, task_id))
     if result.exception:
         handle_task_failure(gateway_stub, result, task_id, container_id, container_hostname)
         raise result.exception
@@ -235,13 +232,16 @@ async def invoke_function(
     function_stub: FunctionServiceStub,
     context: FunctionContext,
     task_id: str,
-    handler: FunctionHandler,
+    handler: Optional[FunctionHandler] = None,
 ) -> InvokeResult:
     result: Any = None
     callback_url = None
     pickled_result = None
 
     try:
+        if handler is None:
+            handler = FunctionHandler()
+
         get_args_resp = function_stub.function_get_args(FunctionGetArgsRequest(task_id=task_id))
         if not get_args_resp.ok:
             raise InvalidFunctionArgumentsError

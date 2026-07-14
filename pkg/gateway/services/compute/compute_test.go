@@ -5482,6 +5482,78 @@ func TestListMachineContainersReturnsActiveContainers(t *testing.T) {
 	}
 }
 
+func TestListMachineContainersClusterAdminPrefersManagedPool(t *testing.T) {
+	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
+		Workspace: &types.Workspace{ExternalId: "selected-workspace"},
+		Token: &types.Token{
+			Active:    true,
+			TokenType: types.TokenTypeClusterAdmin,
+		},
+	})
+	computeRepo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{
+			"selected-workspace": {{Name: "shared-name"}},
+		},
+		machines: map[string][]*model.AgentTokenState{
+			fakeComputeKey("admin-workspace", "shared-name"): {{
+				WorkspaceID: "admin-workspace",
+				PoolName:    "shared-name",
+				MachineID:   "managed-machine",
+			}},
+		},
+	}
+	managedRepo := &fakeComputeRepo{pools: map[string][]*model.PoolState{
+		"admin-workspace": {{Name: "shared-name"}},
+	}}
+	service := &Service{
+		backendRepo:     &fakeManagedPoolBackendRepo{},
+		computeRepo:     computeRepo,
+		managedPoolRepo: &fakeManagedPoolRepo{repo: managedRepo},
+	}
+
+	response, err := service.ListMachineContainers(ctx, &pb.ListMachineContainersRequest{
+		PoolName:  "shared-name",
+		MachineId: "managed-machine",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !response.Ok {
+		t.Fatalf("managed pool was shadowed by selected workspace: %s", response.ErrMsg)
+	}
+}
+
+func TestListMachineContainersReturnsManagedPoolStoreError(t *testing.T) {
+	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
+		Workspace: &types.Workspace{ExternalId: "selected-workspace"},
+		Token: &types.Token{
+			Active:    true,
+			TokenType: types.TokenTypeClusterAdmin,
+		},
+	})
+	service := &Service{
+		backendRepo: &fakeManagedPoolBackendRepo{},
+		computeRepo: &fakeComputeRepo{pools: map[string][]*model.PoolState{
+			"selected-workspace": {{Name: "shared-name"}},
+		}},
+		managedPoolRepo: &fakeManagedPoolRepo{
+			repo:   &fakeComputeRepo{},
+			getErr: errors.New("managed pool store unavailable"),
+		},
+	}
+
+	response, err := service.ListMachineContainers(ctx, &pb.ListMachineContainersRequest{
+		PoolName:  "shared-name",
+		MachineId: "machine-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Ok || response.ErrMsg != "managed pool store unavailable" {
+		t.Fatalf("response = %+v, want managed pool store error", response)
+	}
+}
+
 // Full seller flow: publish a listing, generate the join command, then join
 // machines. The join must enforce the listing's declared GPU type — machines
 // without that GPU are rejected — while raw nvidia-smi names are accepted.

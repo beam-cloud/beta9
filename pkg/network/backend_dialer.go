@@ -94,42 +94,42 @@ func (d *BackendDialer) Dial(ctx context.Context, address string) (net.Conn, err
 // error and feeds the rate-limited stale-netmap detector before retrying.
 func (d *BackendDialer) dialTSNetRoute(ctx context.Context, route *types.BackendRoute, routeID string, deadline time.Time) (net.Conn, error) {
 	host := tailnetHostFromAddr(route.ProxyTarget)
-	var lastPeerErr error
 	var lastErr error
-	firstAttempt := true
 
 	for remaining := time.Until(deadline); remaining > 0; remaining = time.Until(deadline) {
-		if !firstAttempt && host != "" {
-			// Leave headroom for the dial itself.
-			peerWait := min(remaining-tsnetDialReserve(remaining), tailnetPeerAdvisoryTimeout)
-			if peerWait > 0 {
-				if err := d.tailscale.WaitForPeer(ctx, host, peerWait); err != nil {
-					lastPeerErr = err
-				}
-			}
-			if remaining = time.Until(deadline); remaining <= 0 {
-				break
-			}
+		// A failed MagicDNS dial must still reach WaitForPeer so stale netmaps
+		// are observable. Keep a bounded part of each attempt for that check.
+		peerReserve := time.Duration(0)
+		if host != "" {
+			peerReserve = tsnetPeerProbeReserve(remaining)
 		}
-
-		if err := acquireBackendRouteDial(ctx, remaining); err != nil {
+		dialBudget := remaining - peerReserve
+		if dialBudget <= 0 {
+			break
+		}
+		if err := acquireBackendRouteDial(ctx, dialBudget); err != nil {
 			return nil, err
 		}
-		dialTimeout := time.Until(deadline)
+		dialTimeout := time.Until(deadline) - peerReserve
 		if dialTimeout <= 0 {
 			<-backendRouteDialSlots
 			return nil, context.DeadlineExceeded
 		}
 		conn, err := d.dialTSNetTarget(ctx, route.ProxyTarget, dialTimeout)
 		<-backendRouteDialSlots
-		firstAttempt = false
 		if err == nil {
 			return writeBackendRoutePreface(conn, routeID)
 		}
-		if lastPeerErr != nil {
-			err = fmt.Errorf("%w; tsnet dial failed: %w", lastPeerErr, err)
-		}
 		lastErr = err
+
+		if host != "" {
+			peerWait := min(time.Until(deadline), tailnetPeerAdvisoryTimeout)
+			if peerWait > 0 {
+				if peerErr := d.tailscale.WaitForPeer(ctx, host, peerWait); peerErr != nil {
+					lastErr = fmt.Errorf("%w; tsnet dial failed: %w", peerErr, err)
+				}
+			}
+		}
 
 		select {
 		case <-ctx.Done():
@@ -164,11 +164,11 @@ func (d *BackendDialer) dialTSNetTarget(ctx context.Context, addr string, timeou
 	return d.tailscale.DialContextTimeout(ctx, "tcp", addr, timeout)
 }
 
-// tsnetDialReserve is how much of the remaining dial budget is held back for
-// the connect itself while waiting for the peer to appear in the netmap:
-// a third of the budget, clamped to [100ms, 2s], never more than remains.
-func tsnetDialReserve(remaining time.Duration) time.Duration {
-	return min(max(remaining/3, 100*time.Millisecond), 2*time.Second, remaining)
+// tsnetPeerProbeReserve leaves enough of the route deadline to inspect the
+// netmap after a failed MagicDNS dial without consuming more than half of a
+// short request or the normal advisory timeout.
+func tsnetPeerProbeReserve(remaining time.Duration) time.Duration {
+	return min(max(remaining/3, 10*time.Millisecond), remaining/2, tailnetPeerAdvisoryTimeout)
 }
 
 // resolveReadyRoute returns the backend route once it is ready to accept

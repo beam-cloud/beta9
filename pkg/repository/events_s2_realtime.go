@@ -30,7 +30,7 @@ const (
 	poolMetricsSampledSpanThreshold = 6 * time.Hour
 	// How far back from each bucket's end to sample. Must comfortably exceed
 	// the heartbeat cadence so every pool/machine reports at least once.
-	poolMetricsSampleTailWindow = 3 * time.Minute
+	poolMetricsSampleTailWindow  = 3 * time.Minute
 	poolMetricsSampleConcurrency = 12
 )
 
@@ -46,6 +46,19 @@ func (b s2MetricsScanBudget) consume(records int) s2MetricsScanBudget {
 
 func (b s2MetricsScanBudget) state() (uint64, bool) {
 	return uint64(s2ReadScanLimit) - uint64(b), b == 0
+}
+
+func reserveS2MetricsRead(remaining *atomic.Int64) uint64 {
+	for {
+		available := remaining.Load()
+		if available <= 0 {
+			return 0
+		}
+		reserved := min(available, int64(s2MetricsReadLimit))
+		if remaining.CompareAndSwap(available, available-reserved) {
+			return uint64(reserved)
+		}
+	}
 }
 
 func (r *S2EventRepository) GetLogs(ctx context.Context, query types.LogQuery) (*types.LogsResponse, error) {
@@ -210,11 +223,6 @@ func (r *S2EventRepository) GetPoolMetricsTimeseries(ctx context.Context, query 
 func (r *S2EventRepository) getPoolMetricsTimeseriesSampled(ctx context.Context, streamName s2.StreamName, start, end time.Time, bucketSize time.Duration, scanBudget s2MetricsScanBudget) (*types.PoolMetricsTimeseriesResponse, s2MetricsScanBudget, error) {
 	response := &types.PoolMetricsTimeseriesResponse{}
 
-	type bucketResult struct {
-		key     int64
-		samples map[string]types.EventComputeSchema
-	}
-
 	bucketEnds := make([]time.Time, 0, int(end.Sub(start)/bucketSize)+1)
 	for bucketStart := start.UTC().Truncate(bucketSize); bucketStart.Before(end); bucketStart = bucketStart.Add(bucketSize) {
 		bucketEnd := bucketStart.Add(bucketSize)
@@ -226,16 +234,12 @@ func (r *S2EventRepository) getPoolMetricsTimeseriesSampled(ctx context.Context,
 
 	remaining := atomic.Int64{}
 	remaining.Store(int64(scanBudget))
-	results := make([]*bucketResult, len(bucketEnds))
+	results := make([]*poolMetricsBucket, len(bucketEnds))
 
 	group, groupCtx := errgroup.WithContext(ctx)
 	group.SetLimit(poolMetricsSampleConcurrency)
 	for index, bucketEnd := range bucketEnds {
 		group.Go(func() error {
-			if remaining.Load() <= 0 {
-				return nil
-			}
-
 			sampleStart := bucketEnd.Add(-poolMetricsSampleTailWindow)
 			bucketStart := bucketEnd.Add(-bucketSize)
 			if sampleStart.Before(bucketStart) {
@@ -250,8 +254,8 @@ func (r *S2EventRepository) getPoolMetricsTimeseriesSampled(ctx context.Context,
 			startMs := uint64(sampleStart.UTC().UnixMilli())
 			endMs := uint64(bucketEnd.UTC().UnixMilli())
 
-			for remaining.Load() > 0 {
-				readLimit := uint64(min(int64(s2MetricsReadLimit), max(remaining.Load(), 0)))
+			for {
+				readLimit := reserveS2MetricsRead(&remaining)
 				if readLimit == 0 {
 					break
 				}
@@ -262,15 +266,16 @@ func (r *S2EventRepository) getPoolMetricsTimeseriesSampled(ctx context.Context,
 				}
 				batch, err := r.basin.Stream(streamName).Read(groupCtx, opts)
 				if err != nil {
+					remaining.Add(int64(readLimit))
 					if isS2ReadEmpty(err) {
 						break
 					}
 					return fmt.Errorf("read pool metrics from s2 stream %q: %w", streamName, err)
 				}
+				remaining.Add(int64(readLimit) - int64(len(batch.Records)))
 				if len(batch.Records) == 0 {
 					break
 				}
-				remaining.Add(-int64(len(batch.Records)))
 
 				for _, record := range batch.Records {
 					sample, eventTime, ok := computePoolMetricFromS2(record)
@@ -292,8 +297,8 @@ func (r *S2EventRepository) getPoolMetricsTimeseriesSampled(ctx context.Context,
 			}
 
 			if len(samples) > 0 {
-				results[index] = &bucketResult{
-					key: bucketEnd.Add(-bucketSize).UTC().Truncate(bucketSize).UnixMilli(),
+				results[index] = &poolMetricsBucket{
+					key:     poolMetricsBucketKey(bucketEnd, bucketSize),
 					samples: samples,
 				}
 			}
@@ -309,8 +314,7 @@ func (r *S2EventRepository) getPoolMetricsTimeseriesSampled(ctx context.Context,
 		if result == nil {
 			continue
 		}
-		bucket := &poolMetricsBucket{key: result.key, samples: result.samples}
-		response.Points = append(response.Points, bucket.point(bucketSize))
+		response.Points = append(response.Points, result.point(bucketSize))
 	}
 	sort.Slice(response.Points, func(i, j int) bool { return response.Points[i].Timestamp < response.Points[j].Timestamp })
 
@@ -410,6 +414,10 @@ func computePoolMetricFromS2(record s2.SequencedRecord) (types.EventComputeSchem
 type poolMetricsBucket struct {
 	key     int64
 	samples map[string]types.EventComputeSchema
+}
+
+func poolMetricsBucketKey(end time.Time, size time.Duration) int64 {
+	return end.Add(-time.Nanosecond).UTC().Truncate(size).UnixMilli()
 }
 
 func (b *poolMetricsBucket) point(bucketSize time.Duration) types.PoolMetricsPoint {

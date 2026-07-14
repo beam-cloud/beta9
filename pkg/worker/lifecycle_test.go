@@ -837,6 +837,36 @@ func TestApplyDeferredSandboxCPUThrottleClearsQuotaAfterRuntimeUpdate(t *testing
 	require.Nil(t, updated.DeferredCPUQuota)
 }
 
+func TestEnforceRunnerCPUThrottleStopsContainerWhenUpdateFails(t *testing.T) {
+	containerID := "cpu-throttle-update-failure"
+	readyDir := runnerSignalDir(containerID)
+	require.NoError(t, os.MkdirAll(readyDir, 0o755))
+	t.Cleanup(func() { _ = os.RemoveAll(filepath.Dir(readyDir)) })
+	require.NoError(t, os.WriteFile(
+		filepath.Join(readyDir, filepath.Base(types.ContainerRunnerReadyPath)),
+		nil,
+		0o644,
+	))
+
+	rt := &mockResourceRuntime{
+		mockRuntime: mockRuntime{name: "runc"},
+		updateErr:   assert.AnError,
+	}
+	quota := int64(10000)
+	instances := common.NewSafeMap[*ContainerInstance]()
+	instances.Set(containerID, &ContainerInstance{
+		Id:               containerID,
+		DeferredCPUQuota: &specs.LinuxCPU{Quota: &quota},
+		Runtime:          rt,
+	})
+	worker := &Worker{containerInstances: instances}
+
+	err := worker.enforceRunnerCPUThrottle(context.Background(), &types.ContainerRequest{ContainerId: containerID})
+
+	require.ErrorIs(t, err, assert.AnError)
+	require.Equal(t, []syscall.Signal{syscall.SIGKILL}, rt.signals)
+}
+
 func TestNormalizeContainerExitCodePreservesUnexpectedSigkill(t *testing.T) {
 	assert.Equal(t,
 		int(types.ContainerExitCodeOomKill),

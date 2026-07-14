@@ -185,8 +185,8 @@ func (s *Service) recordAgentMetrics(ctx context.Context, agentState *model.Agen
 	worker := s.agentMachineStatusWorker(agentState)
 	capacityMetrics := agentMachineMetrics(agentState, worker)
 
-	// The scheduler's container index is the source of truth for per-machine
-	// container counts; the agent snapshot and worker state don't carry them.
+	// The scheduler's container index is authoritative for per-machine
+	// container counts, overriding the agent snapshot and worker state.
 	s.applyAgentContainerCount(agentState, capacityMetrics)
 	if err := s.recordAgentNodeUsage(agentState, poolState, capacityMetrics, previousSeen, now); err != nil {
 		log.Warn().

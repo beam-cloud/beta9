@@ -1372,7 +1372,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			}
 		} else if s.runnerCPUThrottleDeferred(request) {
 			phaseStart := time.Now()
-			err := s.waitForRunnerReadyAndApplyCPUThrottle(ctx, request)
+			err := s.enforceRunnerCPUThrottle(ctx, request)
 			metrics.RecordWorkerStartupPhase("runner_apply_cpu_quota", time.Since(phaseStart), request, map[string]string{
 				"success": fmt.Sprintf("%t", err == nil),
 			})
@@ -1902,6 +1902,18 @@ func (s *Worker) runnerCPUThrottleDeferred(request *types.ContainerRequest) bool
 	}
 	instance, exists := s.containerInstances.Get(request.ContainerId)
 	return exists && instance.DeferredCPUQuota != nil
+}
+
+func (s *Worker) enforceRunnerCPUThrottle(ctx context.Context, request *types.ContainerRequest) error {
+	err := s.waitForRunnerReadyAndApplyCPUThrottle(ctx, request)
+	if err == nil || errors.Is(err, context.Canceled) {
+		return err
+	}
+
+	if stopErr := s.stopContainer(request.ContainerId, true); stopErr != nil {
+		return errors.Join(err, fmt.Errorf("stop unthrottled container: %w", stopErr))
+	}
+	return err
 }
 
 func (s *Worker) waitForRunnerReadyAndApplyCPUThrottle(ctx context.Context, request *types.ContainerRequest) error {

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -184,17 +185,17 @@ func (r *RedisClient) PSubscribe(ctx context.Context, channels ...string) (<-cha
 			}()
 		}
 
-		count := 0
+		var count atomic.Int32
 		switch client := r.UniversalClient.(type) {
 		case *redis.Client:
-			count = 1
+			count.Store(1)
 			start(client.PSubscribe)
 
 		case *redis.ClusterClient:
 			// Keyspace notifications are node-local, so pattern subscriptions must
 			// remain active on every master in the cluster.
 			err := client.ForEachMaster(ctx, func(_ context.Context, master *redis.Client) error {
-				count++
+				count.Add(1)
 				start(master.PSubscribe)
 				return nil
 			})
@@ -203,7 +204,7 @@ func (r *RedisClient) PSubscribe(ctx context.Context, channels ...string) (<-cha
 			}
 		}
 
-		for range count {
+		for range count.Load() {
 			if err := <-ready; err != nil {
 				sendRedisSubscriptionError(ctx, errCh, err)
 			}

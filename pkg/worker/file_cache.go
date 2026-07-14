@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"syscall"
 
 	"github.com/rs/zerolog/log"
@@ -28,7 +27,6 @@ const (
 type FileCacheManager struct {
 	config              types.AppConfig
 	client              *cache.Client
-	initialized         sync.Map
 	initializationGroup singleflight.Group
 }
 
@@ -143,19 +141,9 @@ func envListContains(value string, item string) bool {
 
 func (cm *FileCacheManager) initWorkspace(workspaceName string) (string, error) {
 	workspaceVolumePath := filepath.Join(types.DefaultVolumesPath, workspaceName)
-	if _, ok := cm.initialized.Load(workspaceVolumePath); ok {
-		return workspaceVolumePath, nil
-	}
-
 	_, err, _ := cm.initializationGroup.Do(workspaceVolumePath, func() (interface{}, error) {
-		if _, ok := cm.initialized.Load(workspaceVolumePath); ok {
-			return nil, nil
-		}
-
 		fileName := fmt.Sprintf("%s/.cache", workspaceVolumePath)
-
-		if cm.CacheAvailable() && cm.client.IsPathCachedReachable(context.Background(), fileName) {
-			cm.initialized.Store(workspaceVolumePath, struct{}{})
+		if cm.client.IsPathCachedReachable(context.Background(), fileName) {
 			return nil, nil
 		}
 
@@ -166,7 +154,6 @@ func (cm *FileCacheManager) initWorkspace(workspaceName string) (string, error) 
 		if err != nil {
 			return nil, err
 		}
-		cm.initialized.Store(workspaceVolumePath, struct{}{})
 		return nil, nil
 	})
 
