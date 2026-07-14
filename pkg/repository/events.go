@@ -45,10 +45,11 @@ type eventStreamer interface {
 }
 
 type EventClientRepo struct {
-	storageSinks  []eventSink
-	callbackSinks []eventSink
-	reader        eventReader
-	streamer      eventStreamer
+	storageSinks           []eventSink
+	callbackSinks          []eventSink
+	reader                 eventReader
+	streamer               eventStreamer
+	containerLifecyclePush func(types.EventContainerLifecycleSchema) bool
 }
 
 var (
@@ -310,6 +311,11 @@ func (r *EventClientRepo) PushContainerLifecycleEvent(lifecycle types.EventConta
 		}
 	}
 
+	if r.containerLifecyclePush != nil {
+		if r.containerLifecyclePush(lifecycle) {
+			return
+		}
+	}
 	r.pushEvent(types.EventContainerLifecycle, types.EventContainerLifecycleSchemaVersion, lifecycle)
 }
 

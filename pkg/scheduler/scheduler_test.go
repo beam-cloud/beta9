@@ -18,7 +18,6 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
-	"github.com/knadh/koanf/providers/rawbytes"
 	"github.com/tj/assert"
 )
 
@@ -47,9 +46,16 @@ func NewSchedulerForTest() (*Scheduler, error) {
 		return nil, err
 	}
 
-	poolJson := []byte(`{"worker":{"pools":{"beta9-build":{},"beta9-cpu":{},"beta9-a10g":{"gpuType": "A10G"},"beta9-t4":{"gpuType": "T4"}}}}}`)
-	configManager.LoadConfig(common.YAMLConfigFormat, rawbytes.Provider(poolJson))
 	config := configManager.GetConfig()
+	defaultPool := config.Worker.Pools["default"]
+	defaultPool.Priority = 1
+	config.Worker.Pools = map[string]types.WorkerPoolConfig{
+		"default":     defaultPool,
+		"beta9-build": {RequiresPoolSelector: true},
+		"beta9-cpu":   {},
+		"beta9-a10g":  {GPUType: "A10G"},
+		"beta9-t4":    {GPUType: "T4"},
+	}
 	eventRepo := repo.NewEventClientRepo(config)
 
 	schedulerUsageMetrics := SchedulerUsageMetrics{
@@ -369,6 +375,45 @@ func TestEnsureAgentPoolNormalizesPersistedManagedConfig(t *testing.T) {
 	assert.Equal(t, int32(7), pool.Config.Priority)
 }
 
+func TestEnsureAgentPoolReconcilesExistingMachineWorkers(t *testing.T) {
+	s, err := NewSchedulerForTest()
+	assert.NoError(t, err)
+	s.workerPoolManager = NewWorkerPoolManager(false)
+
+	state := &compute.PoolState{
+		Name:              "api-pool",
+		Selector:          "api-pool",
+		ManagementSource:  types.WorkerPoolManagementSourceAPI,
+		ManagedInstanceID: "instance-1",
+		WorkerConfig: &types.WorkerPoolConfig{
+			Mode:             types.PoolModeExternal,
+			ContainerRuntime: types.ContainerRuntimeGvisor.String(),
+		},
+	}
+	machine := &compute.AgentTokenState{
+		WorkspaceID:     "admin-workspace",
+		PoolName:        state.Name,
+		MachineID:       "machine-1",
+		CPUCount:        4,
+		MemoryMB:        8192,
+		Executor:        types.DefaultAgentWorkerContainerMode,
+		Schedulable:     true,
+		LastHeartbeatAt: time.Now(),
+	}
+	assert.NoError(t, s.computeRepo.SaveAgentTokenState(context.Background(), machine, time.Hour))
+	assert.NoError(t, s.EnsureAgentPool(machine.WorkspaceID, state))
+
+	worker, err := s.workerRepo.GetWorkerById(compute.AgentMachineWorkerID(machine.MachineID))
+	assert.NoError(t, err)
+	assert.Equal(t, types.ContainerRuntimeGvisor.String(), worker.Runtime)
+
+	state.WorkerConfig.ContainerRuntime = types.ContainerRuntimeRunc.String()
+	assert.NoError(t, s.EnsureAgentPool(machine.WorkspaceID, state))
+	worker, err = s.workerRepo.GetWorkerById(worker.Id)
+	assert.NoError(t, err)
+	assert.Equal(t, types.ContainerRuntimeRunc.String(), worker.Runtime)
+}
+
 func TestTenantAgentPoolsUseWorkspaceScopedControllerKeys(t *testing.T) {
 	scheduler, err := NewSchedulerForTest()
 	assert.NoError(t, err)
@@ -398,6 +443,48 @@ func TestTenantAgentPoolsUseWorkspaceScopedControllerKeys(t *testing.T) {
 	global, ok := scheduler.workerPoolManager.GetPool("shared")
 	assert.True(t, ok)
 	assert.Equal(t, types.PoolModeLocal, global.Config.Mode)
+}
+
+func TestLoadedPrivatePoolDoesNotReconcileOnRequest(t *testing.T) {
+	scheduler, err := NewSchedulerForTest()
+	assert.NoError(t, err)
+	scheduler.workerPoolManager = NewWorkerPoolManager(false)
+
+	const workspaceID = "workspace-private"
+	state := &compute.PoolState{
+		Name:     "private-pool",
+		Selector: "private-selector",
+		Mode:     string(types.PoolModePrivate),
+		Config:   &pb.PoolConfig{Name: "private-pool", Selector: "private-selector", Mode: string(types.PoolModePrivate)},
+	}
+	machine := &compute.AgentTokenState{
+		WorkspaceID:     workspaceID,
+		PoolName:        state.Name,
+		MachineID:       "machine-private",
+		CPUCount:        4,
+		MemoryMB:        8192,
+		Executor:        types.DefaultAgentWorkerContainerMode,
+		Schedulable:     true,
+		LastHeartbeatAt: time.Now(),
+	}
+	assert.NoError(t, scheduler.computeRepo.SavePoolState(context.Background(), workspaceID, state))
+	assert.NoError(t, scheduler.computeRepo.SaveAgentTokenState(context.Background(), machine, time.Hour))
+
+	request := &types.ContainerRequest{WorkspaceId: workspaceID, PoolSelector: state.Selector}
+	_, err = scheduler.ensureAgentPoolForRequest(request)
+	assert.NoError(t, err)
+
+	worker, err := scheduler.workerRepo.GetWorkerById(compute.AgentMachineWorkerID(machine.MachineID))
+	assert.NoError(t, err)
+	assert.NoError(t, scheduler.workerRepo.UpdateWorkerStatus(worker.Id, types.WorkerStatusAvailable))
+	assert.NoError(t, scheduler.workerRepo.UpdateWorkerCapacity(worker, &types.ContainerRequest{Cpu: 100, Memory: 100}, types.RemoveCapacity))
+	version := worker.ResourceVersion
+
+	_, err = scheduler.ensureAgentPoolForRequest(request)
+	assert.NoError(t, err)
+	worker, err = scheduler.workerRepo.GetWorkerById(worker.Id)
+	assert.NoError(t, err)
+	assert.Equal(t, version, worker.ResourceVersion)
 }
 
 // Machine-pinned requests (marketplace rentals) must only ever see the pinned
@@ -1155,18 +1242,20 @@ func TestProcessRequestTracksPendingWorkerCapacityAcrossBatches(t *testing.T) {
 	assert.Nil(t, err)
 
 	firstRequest := &types.ContainerRequest{
-		ContainerId: uuid.New().String(),
-		Cpu:         1000,
-		Memory:      1000,
-		GpuRequest:  []string{"A10G"},
-		Timestamp:   time.Now(),
+		ContainerId:  uuid.New().String(),
+		Cpu:          1000,
+		Memory:       1000,
+		GpuRequest:   []string{"A10G"},
+		PoolSelector: "beta9-a10g",
+		Timestamp:    time.Now(),
 	}
 	secondRequest := &types.ContainerRequest{
-		ContainerId: uuid.New().String(),
-		Cpu:         1000,
-		Memory:      1000,
-		GpuRequest:  []string{"A10G"},
-		Timestamp:   time.Now(),
+		ContainerId:  uuid.New().String(),
+		Cpu:          1000,
+		Memory:       1000,
+		GpuRequest:   []string{"A10G"},
+		PoolSelector: "beta9-a10g",
+		Timestamp:    time.Now(),
 	}
 
 	firstBatchWorkers, err := wb.workerRepo.GetAllWorkers()
@@ -1687,7 +1776,7 @@ func TestProcessRequestStaleReplicaGPUReservationRequeues(t *testing.T) {
 
 	assert.Equal(t, secondRequest.ContainerId, requeuedRequest.ContainerId)
 	assert.Equal(t, uint32(1), requeuedRequest.GpuCount)
-	assert.Equal(t, "A10G", requeuedRequest.Gpu)
+	assert.Empty(t, requeuedRequest.Gpu)
 }
 
 func TestProcessRequestConcurrentStaleReplicaGPUReservationRequeues(t *testing.T) {
@@ -1793,7 +1882,7 @@ func TestProcessRequestConcurrentStaleReplicaGPUReservationRequeues(t *testing.T
 	_, requeuedWasAlreadyQueued := queuedIds[requeuedRequest.ContainerId]
 	assert.False(t, requeuedWasAlreadyQueued)
 	assert.Equal(t, uint32(1), requeuedRequest.GpuCount)
-	assert.Equal(t, "A10G", requeuedRequest.Gpu)
+	assert.Empty(t, requeuedRequest.Gpu)
 
 	extraRequeuedRequest, err := firstScheduler.requestBacklog.Pop()
 	assert.Error(t, err)
@@ -2767,35 +2856,33 @@ func TestPreemptableWorker(t *testing.T) {
 	assert.Equal(t, worker.Id, newNonPreemptableWorker.Id)
 }
 
-func TestPoolPriority(t *testing.T) {
+func TestServerlessPoolFallsBackWhenHighPriorityPoolIsFull(t *testing.T) {
 	wb, err := NewSchedulerForTest()
 	assert.Nil(t, err)
 	assert.NotNil(t, wb)
 
-	newWorkerWithLowPriority := &types.Worker{
-		Id:         "worker1",
+	defaultWorker := &types.Worker{
+		Id:         "worker-default",
 		Status:     types.WorkerStatusAvailable,
 		FreeCpu:    2000,
 		FreeMemory: 2500,
-		Gpu:        "",
-		PoolName:   "cpu",
-		Priority:   0,
+		PoolName:   "default",
+		Priority:   100,
 	}
 
-	newWorkerWithHigherPriority := &types.Worker{
-		Id:         "worker2",
+	gladiatorWorker := &types.Worker{
+		Id:         "worker-gladiator",
 		Status:     types.WorkerStatusAvailable,
 		FreeCpu:    2000,
 		FreeMemory: 2500,
-		Gpu:        "",
-		PoolName:   "cpu2",
-		Priority:   1,
+		PoolName:   "gladiator",
+		Priority:   1000,
 	}
 
-	err = wb.workerRepo.AddWorker(newWorkerWithLowPriority)
+	err = wb.workerRepo.AddWorker(defaultWorker)
 	assert.Nil(t, err)
 
-	err = wb.workerRepo.AddWorker(newWorkerWithHigherPriority)
+	err = wb.workerRepo.AddWorker(gladiatorWorker)
 	assert.Nil(t, err)
 
 	request := &types.ContainerRequest{
@@ -2804,11 +2891,10 @@ func TestPoolPriority(t *testing.T) {
 		Gpu:    "",
 	}
 
-	// Select a worker for the request, this one should land on worker2
-	// since it has higher priority
+	// Unselected serverless work prefers gladiator while it has capacity.
 	worker, err := wb.selectWorker(request)
 	assert.Nil(t, err)
-	assert.Equal(t, newWorkerWithHigherPriority.Id, worker.Id)
+	assert.Equal(t, gladiatorWorker.Id, worker.Id)
 
 	err = wb.scheduleRequest(worker, request)
 	assert.Nil(t, err)
@@ -2819,10 +2905,11 @@ func TestPoolPriority(t *testing.T) {
 		Gpu:    "",
 	}
 
-	// Select a worker for the second request, this one should land on worker1
+	// Gladiator now has only 1000m free, so the request falls through to the
+	// lower-priority default serverless pool.
 	worker, err = wb.selectWorker(secondRequest)
 	assert.Nil(t, err)
-	assert.Equal(t, newWorkerWithLowPriority.Id, worker.Id)
+	assert.Equal(t, defaultWorker.Id, worker.Id)
 }
 
 func TestSelectBuildWorker(t *testing.T) {

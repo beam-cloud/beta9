@@ -13,6 +13,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"google.golang.org/protobuf/proto"
 )
 
 type workerRuntimeManager struct {
@@ -300,29 +301,9 @@ func cloneAgentWorkerSlot(slot *pb.AgentWorkerSlot) *pb.AgentWorkerSlot {
 	if slot == nil {
 		return nil
 	}
-	clone := *slot
-	return &clone
+	return proto.Clone(slot).(*pb.AgentWorkerSlot)
 }
 
 func sameWorkerSlot(a, b *pb.AgentWorkerSlot) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return a.WorkerId == b.WorkerId &&
-		a.WorkerToken == b.WorkerToken &&
-		a.PoolName == b.PoolName &&
-		a.MachineId == b.MachineId &&
-		a.Mode == b.Mode &&
-		a.ContainerRuntime == b.ContainerRuntime &&
-		a.MarketplaceListingId == b.MarketplaceListingId &&
-		a.SellerWorkspaceId == b.SellerWorkspaceId &&
-		a.Cpu == b.Cpu &&
-		a.Memory == b.Memory &&
-		a.Gpu == b.Gpu &&
-		a.GpuCount == b.GpuCount &&
-		a.GpuAssignment == b.GpuAssignment &&
-		a.NetworkPrefix == b.NetworkPrefix &&
-		a.WorkerImage == b.WorkerImage &&
-		a.NetworkSlotPoolSize == b.NetworkSlotPoolSize &&
-		a.ContainerStartConcurrency == b.ContainerStartConcurrency
+	return proto.Equal(a, b)
 }

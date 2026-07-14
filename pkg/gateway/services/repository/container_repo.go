@@ -3,7 +3,6 @@ package repository_services
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -93,20 +92,37 @@ func (s *ContainerRepositoryService) SetContainerAddressMap(ctx context.Context,
 	for k, v := range req.AddressMap {
 		addressMap[int32(k)] = v
 	}
+	routes := make([]types.BackendRoute, 0, len(req.Routes))
 	for _, routeProto := range req.Routes {
 		if routeProto == nil {
 			return &pb.SetContainerAddressMapResponse{Ok: false, ErrorMsg: "backend route is required"}, nil
 		}
-		routeAddress, err := s.registerBackendRoute(ctx, req.ContainerId, routeProto, addressMap[routeProto.Port])
+		route, routeAddress, err := backendRoute(req.ContainerId, routeProto, addressMap[routeProto.Port])
 		if err != nil {
 			return &pb.SetContainerAddressMapResponse{Ok: false, ErrorMsg: err.Error()}, nil
 		}
+		routes = append(routes, route)
 		addressMap[routeProto.Port] = routeAddress
+	}
+	var primaryAddress string
+	if req.PrimaryPort != 0 {
+		primaryAddress = addressMap[req.PrimaryPort]
+		if primaryAddress == "" {
+			return &pb.SetContainerAddressMapResponse{Ok: false, ErrorMsg: fmt.Sprintf("primary port %d has no address", req.PrimaryPort)}, nil
+		}
+	}
+	if err := s.containerRepo.SetBackendRoutes(ctx, routes); err != nil {
+		return &pb.SetContainerAddressMapResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
 	err := s.containerRepo.SetContainerAddressMap(req.ContainerId, addressMap)
 	if err != nil {
 		return &pb.SetContainerAddressMapResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+	if primaryAddress != "" {
+		if err := s.containerRepo.SetContainerAddress(req.ContainerId, primaryAddress); err != nil {
+			return &pb.SetContainerAddressMapResponse{Ok: false, ErrorMsg: err.Error()}, nil
+		}
 	}
 
 	return &pb.SetContainerAddressMapResponse{Ok: true}, nil
@@ -148,19 +164,26 @@ func (s *ContainerRepositoryService) registerBackendRoute(ctx context.Context, c
 	if routeProto == nil {
 		return "", fmt.Errorf("backend route is required")
 	}
+	route, address, err := backendRoute(containerID, routeProto, defaultLocalTarget)
+	if err != nil {
+		return "", err
+	}
+	if err := s.containerRepo.SetBackendRoute(ctx, route); err != nil {
+		return "", err
+	}
+	return address, nil
+}
+
+func backendRoute(containerID string, routeProto *pb.BackendRoute, defaultLocalTarget string) (types.BackendRoute, string, error) {
 	route := backendRouteFromProto(routeProto)
 	route.ContainerID = registeredRouteContainerID(containerID, route)
 	if route.LocalTarget == "" {
 		route.LocalTarget = defaultLocalTarget
 	}
 	if route.LocalTarget == "" {
-		return "", fmt.Errorf("backend route local target is required for port %d", route.Port)
+		return types.BackendRoute{}, "", fmt.Errorf("backend route local target is required for port %d", route.Port)
 	}
-	seedReadyAgentWorkerRoute(&route)
-	if err := s.containerRepo.SetBackendRoute(ctx, route); err != nil {
-		return "", err
-	}
-	return types.BackendRouteAddress(route.RouteID), nil
+	return route, types.BackendRouteAddress(route.RouteID), nil
 }
 
 func backendRouteFromProto(in *pb.BackendRoute) types.BackendRoute {
@@ -201,21 +224,4 @@ func registeredRouteContainerID(containerID string, route types.BackendRoute) st
 		return ""
 	}
 	return containerID
-}
-
-func seedReadyAgentWorkerRoute(route *types.BackendRoute) {
-	if route == nil ||
-		route.Kind != types.BackendRouteKindWorker ||
-		route.Transport != types.BackendRouteTransportTSNet ||
-		route.MachineID == "" {
-		return
-	}
-
-	if route.ProxyTarget == "" {
-		route.ProxyTarget = fmt.Sprintf("beam-agent-%s:%d", route.MachineID, types.DefaultAgentTSNetRouteProxyPort)
-	}
-	if route.State == "" || route.State == types.BackendRouteStateOpening {
-		route.State = types.BackendRouteStateReady
-		route.UpdatedAt = time.Now().Unix()
-	}
 }

@@ -21,20 +21,25 @@ type WorkerRepositoryService struct {
 	workerRepo            repository.WorkerRepository
 	containerRepo         repository.ContainerRepository
 	backendRepo           repository.BackendRepository
+	computeRepo           repository.ComputeRepository
+	eventRepo             repository.EventRepository
 	appConfig             types.AppConfig
 	pb.UnimplementedWorkerRepositoryServiceServer
 }
 
 const (
 	containerRequestPollingInterval time.Duration = 100 * time.Millisecond
+	containerRequestBatchSize                     = 128
 )
 
-func NewWorkerRepositoryService(ctx context.Context, workerRepo repository.WorkerRepository, containerRepo repository.ContainerRepository, backendRepo repository.BackendRepository, rdb *common.RedisClient, appConfig types.AppConfig, cacheCoordinatorToken string) *WorkerRepositoryService {
+func NewWorkerRepositoryService(ctx context.Context, workerRepo repository.WorkerRepository, containerRepo repository.ContainerRepository, backendRepo repository.BackendRepository, computeRepo repository.ComputeRepository, eventRepo repository.EventRepository, rdb *common.RedisClient, appConfig types.AppConfig, cacheCoordinatorToken string) *WorkerRepositoryService {
 	service := &WorkerRepositoryService{
 		ctx:                   ctx,
 		workerRepo:            workerRepo,
 		containerRepo:         containerRepo,
 		backendRepo:           backendRepo,
+		computeRepo:           computeRepo,
+		eventRepo:             eventRepo,
 		appConfig:             appConfig,
 		cacheCoordinatorToken: configuredCacheCoordinatorToken(cacheCoordinatorToken),
 	}
@@ -47,6 +52,9 @@ func NewWorkerRepositoryService(ctx context.Context, workerRepo repository.Worke
 }
 
 func (s *WorkerRepositoryService) GetNextContainerRequest(req *pb.GetNextContainerRequestRequest, stream pb.WorkerRepositoryService_GetNextContainerRequestServer) error {
+	if err := s.workerRepo.RecoverPendingContainerRequests(req.WorkerId); err != nil {
+		return err
+	}
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -54,7 +62,7 @@ func (s *WorkerRepositoryService) GetNextContainerRequest(req *pb.GetNextContain
 		case <-stream.Context().Done():
 			return stream.Context().Err()
 		default:
-			request, err := s.workerRepo.GetNextContainerRequest(req.WorkerId)
+			requests, err := s.workerRepo.GetNextContainerRequests(req.WorkerId, containerRequestBatchSize)
 			if err != nil {
 				return stream.Send(&pb.GetNextContainerRequestResponse{
 					Ok:       false,
@@ -62,20 +70,20 @@ func (s *WorkerRepositoryService) GetNextContainerRequest(req *pb.GetNextContain
 				})
 			}
 
-			var containerRequest *pb.ContainerRequest = nil
-			if request != nil {
-				containerRequest = request.ToProto()
+			for i, request := range requests {
+				if err := stream.Send(&pb.GetNextContainerRequestResponse{
+					Ok:               true,
+					ContainerRequest: request.ToProto(),
+					DeliveryToken:    request.DeliveryToken,
+				}); err != nil {
+					if requeueErr := s.workerRepo.RequeueContainerRequests(req.WorkerId, requests[i:]); requeueErr != nil {
+						log.Error().Err(requeueErr).Str("worker_id", req.WorkerId).Msg("failed to requeue undelivered container requests")
+					}
+					return err
+				}
 			}
 
-			err = stream.Send(&pb.GetNextContainerRequestResponse{
-				Ok:               true,
-				ContainerRequest: containerRequest,
-			})
-			if err != nil {
-				return err
-			}
-
-			if containerRequest != nil {
+			if len(requests) > 0 {
 				continue
 			}
 
@@ -103,7 +111,7 @@ func (s *WorkerRepositoryService) RemoveImagePullLock(ctx context.Context, req *
 }
 
 func (s *WorkerRepositoryService) AddContainerToWorker(ctx context.Context, req *pb.AddContainerToWorkerRequest) (*pb.AddContainerToWorkerResponse, error) {
-	err := s.workerRepo.AddContainerToWorker(req.WorkerId, req.ContainerId)
+	err := s.workerRepo.AddContainerToWorker(req.WorkerId, req.ContainerId, req.DeliveryToken)
 	if err != nil {
 		log.Error().Str("pool_name", req.PoolName).Str("hostname", req.PodHostname).Str("worker_id", req.WorkerId).Str("container_id", req.ContainerId).Msg("failed to add container to worker")
 		return &pb.AddContainerToWorkerResponse{Ok: false, ErrorMsg: err.Error()}, nil

@@ -8,12 +8,14 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
 	"github.com/s2-streamstore/s2-sdk-go/s2"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -21,6 +23,15 @@ const (
 	maxS2LogReadLimit     = 1000
 	s2MetricsReadLimit    = 1000
 	s2ReadScanLimit       = 50000
+
+	// Ranges longer than this switch from a full sequential scan to per-bucket
+	// tail sampling; scanning every heartbeat over long windows blows through
+	// the scan budget and truncates results.
+	poolMetricsSampledSpanThreshold = 6 * time.Hour
+	// How far back from each bucket's end to sample. Must comfortably exceed
+	// the heartbeat cadence so every pool/machine reports at least once.
+	poolMetricsSampleTailWindow  = 3 * time.Minute
+	poolMetricsSampleConcurrency = 12
 )
 
 type s2MetricsScanBudget uint64
@@ -35,6 +46,19 @@ func (b s2MetricsScanBudget) consume(records int) s2MetricsScanBudget {
 
 func (b s2MetricsScanBudget) state() (uint64, bool) {
 	return uint64(s2ReadScanLimit) - uint64(b), b == 0
+}
+
+func reserveS2MetricsRead(remaining *atomic.Int64) uint64 {
+	for {
+		available := remaining.Load()
+		if available <= 0 {
+			return 0
+		}
+		reserved := min(available, int64(s2MetricsReadLimit))
+		if remaining.CompareAndSwap(available, available-reserved) {
+			return uint64(reserved)
+		}
+	}
 }
 
 func (r *S2EventRepository) GetLogs(ctx context.Context, query types.LogQuery) (*types.LogsResponse, error) {
@@ -157,8 +181,17 @@ func (r *S2EventRepository) GetPoolMetricsTimeseries(ctx context.Context, query 
 		return nil, fmt.Errorf("invalid pool metrics interval %q", interval)
 	}
 
+	// Long windows sample each bucket's tail instead of scanning every
+	// heartbeat; a week of 5s heartbeats is millions of records.
+	sampled := end.Sub(start) > poolMetricsSampledSpanThreshold
+
+	readStream := r.getPoolMetricsTimeseries
+	if sampled {
+		readStream = r.getPoolMetricsTimeseriesSampled
+	}
+
 	scanBudget := s2MetricsScanBudget(s2ReadScanLimit)
-	response, scanBudget, err = r.getPoolMetricsTimeseries(ctx, r.workspacePoolMetricsStreamName(query.WorkspaceID), start, end, bucketSize, scanBudget)
+	response, scanBudget, err = readStream(ctx, r.workspacePoolMetricsStreamName(query.WorkspaceID), start, end, bucketSize, scanBudget)
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +203,7 @@ func (r *S2EventRepository) GetPoolMetricsTimeseries(ctx context.Context, query 
 		// The dedicated stream is new. Fill any prefix written before rollout
 		// from the workspace stream; once the requested range is fully covered,
 		// this fallback disappears without a migration flag.
-		legacy, remaining, err := r.getPoolMetricsTimeseries(ctx, r.workspaceStreamName(query.WorkspaceID), start, legacyEnd, bucketSize, scanBudget)
+		legacy, remaining, err := readStream(ctx, r.workspaceStreamName(query.WorkspaceID), start, legacyEnd, bucketSize, scanBudget)
 		if err != nil {
 			return nil, err
 		}
@@ -180,6 +213,116 @@ func (r *S2EventRepository) GetPoolMetricsTimeseries(ctx context.Context, query 
 	response.Workspaces = []string{query.WorkspaceID}
 	response.ScannedRecords, response.Truncated = scanBudget.state()
 	return response, nil
+}
+
+// getPoolMetricsTimeseriesSampled reads only the trailing window of every
+// bucket rather than the full stream, bounding work for long ranges. Each
+// bucket's value is the latest heartbeat per pool/machine inside that window,
+// which matches what the full scan would keep anyway (buckets store the last
+// sample per key).
+func (r *S2EventRepository) getPoolMetricsTimeseriesSampled(ctx context.Context, streamName s2.StreamName, start, end time.Time, bucketSize time.Duration, scanBudget s2MetricsScanBudget) (*types.PoolMetricsTimeseriesResponse, s2MetricsScanBudget, error) {
+	response := &types.PoolMetricsTimeseriesResponse{}
+
+	bucketEnds := make([]time.Time, 0, int(end.Sub(start)/bucketSize)+1)
+	for bucketStart := start.UTC().Truncate(bucketSize); bucketStart.Before(end); bucketStart = bucketStart.Add(bucketSize) {
+		bucketEnd := bucketStart.Add(bucketSize)
+		if bucketEnd.After(end) {
+			bucketEnd = end
+		}
+		bucketEnds = append(bucketEnds, bucketEnd)
+	}
+
+	remaining := atomic.Int64{}
+	remaining.Store(int64(scanBudget))
+	results := make([]*poolMetricsBucket, len(bucketEnds))
+
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.SetLimit(poolMetricsSampleConcurrency)
+	for index, bucketEnd := range bucketEnds {
+		group.Go(func() error {
+			sampleStart := bucketEnd.Add(-poolMetricsSampleTailWindow)
+			bucketStart := bucketEnd.Add(-bucketSize)
+			if sampleStart.Before(bucketStart) {
+				sampleStart = bucketStart
+			}
+			if sampleStart.Before(start) {
+				sampleStart = start
+			}
+
+			samples := map[string]types.EventComputeSchema{}
+			seqNum := uint64(0)
+			startMs := uint64(sampleStart.UTC().UnixMilli())
+			endMs := uint64(bucketEnd.UTC().UnixMilli())
+
+			for {
+				readLimit := reserveS2MetricsRead(&remaining)
+				if readLimit == 0 {
+					break
+				}
+				opts := &s2.ReadOptions{SeqNum: &seqNum, Count: countOption(readLimit), Until: &endMs}
+				if seqNum == 0 {
+					opts.Timestamp = &startMs
+					opts.SeqNum = nil
+				}
+				batch, err := r.basin.Stream(streamName).Read(groupCtx, opts)
+				if err != nil {
+					remaining.Add(int64(readLimit))
+					if isS2ReadEmpty(err) {
+						break
+					}
+					return fmt.Errorf("read pool metrics from s2 stream %q: %w", streamName, err)
+				}
+				remaining.Add(int64(readLimit) - int64(len(batch.Records)))
+				if len(batch.Records) == 0 {
+					break
+				}
+
+				for _, record := range batch.Records {
+					sample, eventTime, ok := computePoolMetricFromS2(record)
+					if !ok || eventTime.Before(sampleStart) || !eventTime.Before(bucketEnd) {
+						continue
+					}
+					sampleKey := sample.PoolName + "\x00" + sample.MachineID
+					if sample.Action == types.EventComputeActionPoolHeartbeat {
+						sampleKey = sample.PoolName + "\x00"
+					}
+					samples[sampleKey] = sample
+				}
+
+				last := batch.Records[len(batch.Records)-1]
+				seqNum = last.SeqNum + 1
+				if uint64(len(batch.Records)) < readLimit {
+					break
+				}
+			}
+
+			if len(samples) > 0 {
+				results[index] = &poolMetricsBucket{
+					key:     poolMetricsBucketKey(bucketEnd, bucketSize),
+					samples: samples,
+				}
+			}
+			return nil
+		})
+	}
+	if err := group.Wait(); err != nil {
+		return nil, scanBudget, err
+	}
+
+	response.Points = make([]types.PoolMetricsPoint, 0, len(results))
+	for _, result := range results {
+		if result == nil {
+			continue
+		}
+		response.Points = append(response.Points, result.point(bucketSize))
+	}
+	sort.Slice(response.Points, func(i, j int) bool { return response.Points[i].Timestamp < response.Points[j].Timestamp })
+
+	left := remaining.Load()
+	if left < 0 {
+		left = 0
+	}
+	return response, s2MetricsScanBudget(left), nil
 }
 
 func (r *S2EventRepository) getPoolMetricsTimeseries(ctx context.Context, streamName s2.StreamName, start, end time.Time, bucketSize time.Duration, scanBudget s2MetricsScanBudget) (*types.PoolMetricsTimeseriesResponse, s2MetricsScanBudget, error) {
@@ -271,6 +414,10 @@ func computePoolMetricFromS2(record s2.SequencedRecord) (types.EventComputeSchem
 type poolMetricsBucket struct {
 	key     int64
 	samples map[string]types.EventComputeSchema
+}
+
+func poolMetricsBucketKey(end time.Time, size time.Duration) int64 {
+	return end.Add(-time.Nanosecond).UTC().Truncate(size).UnixMilli()
 }
 
 func (b *poolMetricsBucket) point(bucketSize time.Duration) types.PoolMetricsPoint {

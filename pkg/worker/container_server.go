@@ -237,6 +237,9 @@ func (s *ContainerRuntimeServer) ContainerStreamLogs(req *pb.ContainerStreamLogs
 	if !exists {
 		return errors.New("container not found")
 	}
+	if err := stream.SendHeader(nil); err != nil {
+		return err
+	}
 
 	buffer := make([]byte, 4096)
 	logEntry := &pb.ContainerLogEntry{}
@@ -1406,14 +1409,16 @@ func (s *ContainerRuntimeServer) ContainerSandboxExposePort(ctx context.Context,
 		return &pb.ContainerSandboxExposePortResponse{Ok: true}, nil
 	}
 
-	bindPort, err := getRandomFreePort()
-	if err != nil {
-		return &pb.ContainerSandboxExposePortResponse{Ok: false, ErrorMsg: err.Error()}, nil
-	}
-
 	if s.containerNetworkManager == nil {
 		return &pb.ContainerSandboxExposePortResponse{Ok: false, ErrorMsg: "container network manager unavailable"}, nil
 	}
+
+	bindPorts, err := s.containerNetworkManager.ReservePorts(in.ContainerId, 1)
+	if err != nil {
+		return &pb.ContainerSandboxExposePortResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+	defer s.containerNetworkManager.ReleasePortReservations(in.ContainerId)
+	bindPort := bindPorts[0]
 
 	binding := PortBinding{HostPort: bindPort, ContainerPort: int(in.Port)}
 	err = s.containerNetworkManager.ExposePort(in.ContainerId, binding.HostPort, binding.ContainerPort)

@@ -2521,6 +2521,18 @@
         "prioritySet": {
           "type": "boolean",
           "description": "Distinguishes an explicitly configured zero priority from legacy\ngateways that did not send scheduling priority metadata."
+        },
+        "gvisorPlatform": {
+          "type": "string"
+        },
+        "gvisorRoot": {
+          "type": "string"
+        },
+        "gvisorExtraArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       }
     },

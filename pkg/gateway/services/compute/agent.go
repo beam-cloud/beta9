@@ -394,8 +394,8 @@ func (s *Service) StreamAgent(in *pb.StreamAgentRequest, stream pb.GatewayServic
 
 	events := make(chan common.KeyEvent, 32)
 	if s.keyEventManager != nil {
-		routeRevisionKey := agentRouteRevisionKey(agentState)
-		if err := s.keyEventManager.ListenForPublishedPattern(ctx, routeRevisionKey, events); err != nil {
+		revisionKey := agentSnapshotRevisionKey(agentState)
+		if err := s.keyEventManager.ListenForPublishedPattern(ctx, revisionKey, events); err != nil {
 			return err
 		}
 	}
@@ -505,36 +505,49 @@ func (s *Service) agentRoutesForMachine(ctx context.Context, agentState *model.A
 }
 
 func (s *Service) listAgentRoutesForMachine(ctx context.Context, agentState *model.AgentTokenState) ([]types.BackendRoute, error) {
-	if agentMarketplaceMode(agentState) {
-		return s.containerRepo.ListBackendRoutesByMachineID(ctx, agentState.MachineID)
-	}
-	return s.containerRepo.ListBackendRoutesByMachine(ctx, agentState.WorkspaceID, agentState.PoolName, agentState.MachineID)
+	return s.containerRepo.ListBackendRoutesByMachineID(ctx, agentState.MachineID)
 }
 
-func agentRouteRevisionKey(agentState *model.AgentTokenState) string {
-	if agentMarketplaceMode(agentState) {
-		return common.RedisKeys.SchedulerBackendRouteMachineIDRevision(agentState.MachineID)
-	}
-	return common.RedisKeys.SchedulerBackendRouteMachineRevision(agentState.WorkspaceID, agentState.PoolName, agentState.MachineID)
+func agentSnapshotRevisionKey(agentState *model.AgentTokenState) string {
+	return common.RedisKeys.SchedulerBackendRouteMachineIDRevision(agentState.MachineID)
 }
 
-func agentMarketplaceMode(agentState *model.AgentTokenState) bool {
-	return agentState != nil && agentState.Mode == string(types.PoolModeMarketplace)
+func (s *Service) notifyAgentPool(ctx context.Context, workspaceID, poolName string) error {
+	if s.redisClient == nil || s.computeRepo == nil {
+		return nil
+	}
+	machines, err := s.computeRepo.ListAgentTokenStates(ctx, workspaceID, poolName)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, machine := range machines {
+		if machine == nil || machine.MachineID == "" {
+			continue
+		}
+		err := s.redisClient.Publish(ctx, agentSnapshotRevisionKey(machine), common.KeyOperationSet).Err()
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
 }
 
 func agentCanManageRoute(agentState *model.AgentTokenState, route types.BackendRoute) bool {
 	if agentState == nil {
 		return false
 	}
-	if agentMarketplaceMode(agentState) {
-		return route.MachineID == agentState.MachineID && route.PoolName == agentState.PoolName
-	}
-	return route.WorkspaceID == agentState.WorkspaceID &&
-		route.PoolName == agentState.PoolName &&
+	return route.PoolName == agentState.PoolName &&
 		route.MachineID == agentState.MachineID
 }
 
 func (s *Service) agentSlotsForMachine(ctx context.Context, agentState *model.AgentTokenState) ([]*pb.AgentWorkerSlot, error) {
+	poolState, err := s.getAgentPoolState(ctx, agentState)
+	if err != nil {
+		return nil, err
+	}
+	var poolConfig types.WorkerPoolConfig
+	if poolState != nil && poolState.WorkerConfig != nil {
+		poolConfig = *poolState.WorkerConfig
+	}
 	slots, err := s.computeRepo.ListAgentWorkerSlotStates(ctx, agentState.WorkspaceID, agentState.PoolName, agentState.MachineID)
 	if err != nil {
 		return nil, err
@@ -550,7 +563,7 @@ func (s *Service) agentSlotsForMachine(ctx context.Context, agentState *model.Ag
 		return nil, nil
 	}
 
-	slot, workerToken, err := s.ensureAgentWorkerSlot(ctx, agentState, worker, slots)
+	slot, workerToken, err := s.ensureAgentWorkerSlot(ctx, agentState, worker, poolConfig, slots)
 	if err != nil {
 		return nil, err
 	}
@@ -575,7 +588,7 @@ func (s *Service) agentMachineWorker(agentState *model.AgentTokenState) (*types.
 	return worker, nil
 }
 
-func (s *Service) ensureAgentWorkerSlot(ctx context.Context, agentState *model.AgentTokenState, worker *types.Worker, slots []*model.AgentWorkerSlotState) (*model.AgentWorkerSlotState, string, error) {
+func (s *Service) ensureAgentWorkerSlot(ctx context.Context, agentState *model.AgentTokenState, worker *types.Worker, poolConfig types.WorkerPoolConfig, slots []*model.AgentWorkerSlotState) (*model.AgentWorkerSlotState, string, error) {
 	var existing *model.AgentWorkerSlotState
 	for _, slot := range slots {
 		if slot != nil && slot.WorkerID == worker.Id {
@@ -593,7 +606,7 @@ func (s *Service) ensureAgentWorkerSlot(ctx context.Context, agentState *model.A
 		return nil, "", err
 	}
 
-	slot := agentWorkerSlotState(s.appConfig, agentState, worker, tokenID, tokenHash)
+	slot := agentWorkerSlotState(s.appConfig, agentState, worker, poolConfig, tokenID, tokenHash)
 	if existing != nil {
 		slot.CreatedAt = existing.CreatedAt
 	}
@@ -683,7 +696,28 @@ func (s *Service) pruneAgentWorkerSlots(ctx context.Context, agentState *model.A
 	return nil
 }
 
-func agentWorkerSlotState(config types.AppConfig, agentState *model.AgentTokenState, worker *types.Worker, tokenID, tokenHash string) *model.AgentWorkerSlotState {
+func agentWorkerSlotState(config types.AppConfig, agentState *model.AgentTokenState, worker *types.Worker, poolConfig types.WorkerPoolConfig, tokenID, tokenHash string) *model.AgentWorkerSlotState {
+	runtimeName := agentWorkerRuntime(agentState, worker)
+	networkSlots := agentState.NetworkSlotPoolSize
+	startConcurrency := agentState.ContainerStartConcurrency
+	requiresPoolSelector := worker.RequiresPoolSelector
+	priority := worker.Priority
+	preemptable := worker.Preemptable
+
+	// Managed pool configuration is authoritative and may change while the
+	// machine remains connected. Machine capacity still comes from the worker.
+	if agentState.ManagedPoolInstanceID != "" {
+		runtimeName = firstNonEmpty(poolConfig.ContainerRuntime, types.ContainerRuntimeRunc.String())
+		if poolConfig.NetworkSlotPoolSize > 0 {
+			networkSlots = uint32(poolConfig.NetworkSlotPoolSize)
+		}
+		if poolConfig.ContainerStartConcurrency > 0 {
+			startConcurrency = uint32(poolConfig.ContainerStartConcurrency)
+		}
+		requiresPoolSelector = poolConfig.RequiresPoolSelector
+		priority = poolConfig.Priority
+		preemptable = poolConfig.Preemptable
+	}
 	return &model.AgentWorkerSlotState{
 		WorkerID:                  worker.Id,
 		WorkerTokenID:             tokenID,
@@ -692,7 +726,8 @@ func agentWorkerSlotState(config types.AppConfig, agentState *model.AgentTokenSt
 		PoolName:                  agentState.PoolName,
 		MachineID:                 agentState.MachineID,
 		Mode:                      firstNonEmpty(agentState.Mode, string(types.PoolModePrivate)),
-		ContainerRuntime:          agentWorkerRuntime(agentState, worker),
+		ContainerRuntime:          runtimeName,
+		ContainerRuntimeConfig:    poolConfig.ContainerRuntimeConfig.WithDefaults(runtimeName),
 		MarketplaceListingID:      agentState.MarketplaceListingID,
 		SellerWorkspaceID:         agentState.SellerWorkspaceID,
 		CPU:                       worker.TotalCpu,
@@ -702,11 +737,11 @@ func agentWorkerSlotState(config types.AppConfig, agentState *model.AgentTokenSt
 		GPUAssignment:             strings.Join(agentState.GPUIDs, ","),
 		NetworkPrefix:             common.WorkerNetworkPrefix(config.ClusterName, agentState.MachineID),
 		WorkerImage:               agentWorkerImage(config),
-		NetworkSlotPoolSize:       agentState.NetworkSlotPoolSize,
-		ContainerStartConcurrency: agentState.ContainerStartConcurrency,
-		RequiresPoolSelector:      worker.RequiresPoolSelector,
-		Priority:                  worker.Priority,
-		Preemptable:               worker.Preemptable,
+		NetworkSlotPoolSize:       networkSlots,
+		ContainerStartConcurrency: startConcurrency,
+		RequiresPoolSelector:      requiresPoolSelector,
+		Priority:                  priority,
+		Preemptable:               preemptable,
 	}
 }
 
@@ -757,6 +792,9 @@ func agentWorkerSlotToProto(slot *model.AgentWorkerSlotState, workerToken string
 		MachineId:                 slot.MachineID,
 		Mode:                      slot.Mode,
 		ContainerRuntime:          slot.ContainerRuntime,
+		GvisorPlatform:            slot.ContainerRuntimeConfig.GVisorPlatform,
+		GvisorRoot:                slot.ContainerRuntimeConfig.GVisorRoot,
+		GvisorExtraArgs:           append([]string(nil), slot.ContainerRuntimeConfig.GVisorExtraArgs...),
 		MarketplaceListingId:      slot.MarketplaceListingID,
 		SellerWorkspaceId:         slot.SellerWorkspaceID,
 		Cpu:                       slot.CPU,

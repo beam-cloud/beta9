@@ -10,13 +10,10 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import wraps
-from multiprocessing import Value
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple, Union
 
 import cloudpickle
-import requests
-from starlette.responses import Response
 
 from ..clients.gateway import (
     EndTaskRequest,
@@ -27,7 +24,6 @@ from ..clients.gateway import (
 )
 from ..env import is_remote
 from ..exceptions import RunnerException
-from ..schema import Schema, ValidationError
 
 USER_CODE_DIR = "/mnt/code"
 USER_VOLUMES_DIR = "/volumes"
@@ -173,11 +169,6 @@ class FunctionContext:
         )
 
 
-workers_ready = None
-if is_remote():
-    workers_ready = Value("i", 0)
-
-
 class FunctionHandler:
     """
     Helper class for loading user entry point functions
@@ -188,8 +179,9 @@ class FunctionHandler:
         self.handler_path: Optional[str] = handler_path
         self.handler: Optional[Callable] = None
         self.is_async: bool = False
-        self.inputs: Optional[Schema] = None
-        self.outputs: Optional[Schema] = None
+        self.inputs: Optional[Any] = None
+        self.outputs: Optional[Any] = None
+        self.validation_error = ()
         self._load()
 
     @contextmanager
@@ -216,6 +208,11 @@ class FunctionHandler:
     def _load(self):
         if sys.path[0] != USER_CODE_DIR:
             sys.path.insert(0, USER_CODE_DIR)
+
+        if config.inputs or config.outputs:
+            from ..schema import Schema, ValidationError
+
+            self.validation_error = ValidationError
 
         if config.inputs:
             self.inputs = Schema.from_dict(config.inputs)
@@ -286,7 +283,7 @@ class FunctionHandler:
 
             try:
                 parsed_outputs = self.outputs.new(result)
-            except ValidationError as e:
+            except self.validation_error as e:
                 print(f"Output validation error: {e}")
                 return e.to_dict()
 
@@ -297,7 +294,7 @@ class FunctionHandler:
     def __call__(self, context: FunctionContext, *args: Any, **kwargs: Any) -> Any:
         try:
             handler_args, handler_kwargs = self._prepare_handler_call(context, *args, **kwargs)
-        except ValidationError as e:
+        except self.validation_error as e:
             print(f"Input validation error: {e}")
             return e.to_dict()
 
@@ -307,7 +304,7 @@ class FunctionHandler:
     async def __acall__(self, context: FunctionContext, *args: Any, **kwargs: Any) -> Any:
         try:
             handler_args, handler_kwargs = self._prepare_handler_call(context, *args, **kwargs)
-        except ValidationError as e:
+        except self.validation_error as e:
             print(f"Input validation error: {e}")
             return e.to_dict()
 
@@ -443,6 +440,9 @@ def send_callback(
     if not callback_url:
         return
 
+    import requests
+    from starlette.responses import Response
+
     body = {}
     headers = {}
 
@@ -527,7 +527,7 @@ CHECKPOINT_CONTAINER_ID_FILE = "/criu/CONTAINER_ID"
 CHECKPOINT_CONTAINER_HOSTNAME_FILE = "/criu/CONTAINER_HOSTNAME"
 
 
-def wait_for_checkpoint(workers_ready: Optional[Value] = None):
+def wait_for_checkpoint(workers_ready: Any):
     def _reload_config():
         # Once we have set the checkpoint signal file, wait for checkpoint to be complete before reloading the config
         while not Path(CHECKPOINT_COMPLETE_FILE).exists():
@@ -537,20 +537,16 @@ def wait_for_checkpoint(workers_ready: Optional[Value] = None):
         config.container_id = Path(CHECKPOINT_CONTAINER_ID_FILE).read_text()
         config.container_hostname = Path(CHECKPOINT_CONTAINER_HOSTNAME_FILE).read_text()
 
-    ready_counter = workers_ready if workers_ready is not None else globals().get("workers_ready")
-    if not ready_counter:
-        return
+    with workers_ready.get_lock():
+        workers_ready.value += 1
 
-    with ready_counter.get_lock():
-        ready_counter.value += 1
-
-    if ready_counter.value == config.workers:
+    if workers_ready.value == config.workers:
         Path(CHECKPOINT_SIGNAL_FILE).touch(exist_ok=True)
         return _reload_config()
 
     while True:
-        with ready_counter.get_lock():
-            if ready_counter.value == config.workers:
+        with workers_ready.get_lock():
+            if workers_ready.value == config.workers:
                 break
 
         time.sleep(1)

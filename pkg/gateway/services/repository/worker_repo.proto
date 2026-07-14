@@ -6,6 +6,8 @@ import "types.proto";
 service WorkerRepositoryService {
   rpc GetNextContainerRequest(GetNextContainerRequestRequest)
       returns (stream GetNextContainerRequestResponse) {}
+  rpc PushContainerLifecycleEvents(PushContainerLifecycleEventsRequest)
+      returns (PushContainerLifecycleEventsResponse) {}
   rpc StreamWorkerEvents(StreamWorkerEventsRequest)
       returns (stream WorkerEvent) {}
   rpc SetImagePullLock(SetImagePullLockRequest)
@@ -87,6 +89,7 @@ message GetNextContainerRequestResponse {
   bool ok = 1;
   types.ContainerRequest container_request = 2;
   string error_msg = 3;
+  string delivery_token = 4;
 }
 
 message StreamWorkerEventsRequest {
@@ -137,6 +140,7 @@ message AddContainerToWorkerRequest {
   string container_id = 2;
   string pool_name = 3;
   string pod_hostname = 4;
+  string delivery_token = 5;
 }
 
 message AddContainerToWorkerResponse {
@@ -601,6 +605,16 @@ message RemoveContainerIpRequest {
 }
 
 message RemoveContainerIpResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message PushContainerLifecycleEventsRequest {
+  string worker_id = 1;
+  repeated bytes events = 2;
+}
+
+message PushContainerLifecycleEventsResponse {
   bool ok = 1;
   string error_msg = 2;
 }

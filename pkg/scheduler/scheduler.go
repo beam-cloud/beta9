@@ -172,8 +172,11 @@ func (s *Scheduler) EnsureAgentPool(workspaceID string, state *compute.PoolState
 	}
 	s.agentPoolMu.Lock()
 	defer s.agentPoolMu.Unlock()
-	_, err := s.ensureAgentPool(workspaceID, state)
-	return err
+	controller, err := s.ensureAgentPool(workspaceID, state)
+	if err != nil {
+		return err
+	}
+	return controller.reconcileMachines()
 }
 
 func (s *Scheduler) EnsureAgentMachine(workspaceID string, state *compute.PoolState, machineID string) error {
@@ -607,44 +610,40 @@ func (s *Scheduler) processRequest(request *types.ContainerRequest, workers []*t
 }
 
 func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.ContainerRequest) error {
-	normalizeGPURequest(request)
-
-	if err := s.containerRepo.UpdateAssignedContainerGPU(request.ContainerId, worker.Gpu); err != nil {
-		workerLog(requestLog(log.Error(), request), worker).Err(err).Msg("failed to update assigned container gpu")
+	workerRequest := s.prepareWorkerRequest(worker, request)
+	if err := s.pushWorkerRequests(worker, []*types.ContainerRequest{workerRequest}); err != nil {
 		return err
 	}
 
-	request.Gpu = worker.Gpu
-
-	s.attachImageCredentials(request)
-	s.attachBuildRegistryCredentials(request)
-
-	workerRequest := s.workerRequest(worker, request)
-	workerRequest.Timestamp = time.Now()
-	if err := s.pushWorkerRequest(worker, request, workerRequest); err != nil {
-		return err
-	}
-
-	scheduledEvent := workerRequest.Clone()
-	go s.schedulerUsageMetrics.CounterIncContainerScheduled(scheduledEvent)
+	go s.schedulerUsageMetrics.CounterIncContainerScheduled(workerRequest.Clone())
 	return nil
 }
 
-func (s *Scheduler) pushWorkerRequest(worker *types.Worker, originalRequest, workerRequest *types.ContainerRequest) error {
-	start := time.Now()
-	err := s.workerRepo.ScheduleContainerRequest(worker, workerRequest)
-	s.recordContainerLifecycle(originalRequest, types.ContainerLifecycleSchedulerWorkerQueuePush, start, time.Now(), err == nil, map[string]string{
-		"worker_id": worker.Id,
-	})
-	return err
+func (s *Scheduler) prepareWorkerRequest(worker *types.Worker, request *types.ContainerRequest) *types.ContainerRequest {
+	workerRequest := request.Clone()
+	normalizeGPURequest(workerRequest)
+	workerRequest.Gpu = worker.Gpu
+
+	s.attachImageCredentials(workerRequest)
+	s.attachBuildRegistryCredentials(workerRequest)
+
+	if s.privateWorkerRequest(worker, workerRequest) {
+		workerRequest = workerRequest.PrivateWorkerRequest()
+	}
+	workerRequest.Timestamp = time.Now()
+	return workerRequest
 }
 
-func (s *Scheduler) workerRequest(worker *types.Worker, request *types.ContainerRequest) *types.ContainerRequest {
-	workerRequest := request.Clone()
-	if s.privateWorkerRequest(worker, request) {
-		return workerRequest.PrivateWorkerRequest()
+func (s *Scheduler) pushWorkerRequests(worker *types.Worker, requests []*types.ContainerRequest) error {
+	start := time.Now()
+	err := s.workerRepo.ScheduleContainerRequests(worker, requests)
+	end := time.Now()
+	for _, request := range requests {
+		s.recordContainerLifecycle(request, types.ContainerLifecycleSchedulerWorkerQueuePush, start, end, err == nil, map[string]string{
+			"worker_id": worker.Id,
+		})
 	}
-	return workerRequest
+	return err
 }
 
 func (s *Scheduler) privateWorkerRequest(worker *types.Worker, request *types.ContainerRequest) bool {
@@ -1417,9 +1416,7 @@ func (s *Scheduler) ensureAgentPoolForRequest(request *types.ContainerRequest) (
 		return nil, nil
 	}
 	if pool, ok := s.privateAgentPool(request.WorkspaceId, request.PoolSelector); ok {
-		if _, agent := pool.Controller.(*AgentWorkerPoolController); !agent || s.computeRepo == nil {
-			return pool, nil
-		}
+		return pool, nil
 	}
 
 	state, err := s.agentPoolStateForRequest(request)

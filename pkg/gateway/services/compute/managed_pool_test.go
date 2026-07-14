@@ -64,8 +64,9 @@ type fakeManagedPoolWorkerPoolRepo struct {
 }
 
 type fakeManagedPoolRepo struct {
-	repo  *fakeComputeRepo
-	saved chan struct{}
+	repo   *fakeComputeRepo
+	saved  chan struct{}
+	getErr error
 }
 
 func (*fakeManagedPoolRepo) WithManagedPoolStateLock(ctx context.Context, _, _ string, fn func(context.Context) error) error {
@@ -81,6 +82,9 @@ func (r *fakeManagedPoolRepo) SaveManagedPoolState(ctx context.Context, workspac
 	return nil
 }
 func (r *fakeManagedPoolRepo) GetManagedPoolState(ctx context.Context, workspaceID, name string) (*model.PoolState, error) {
+	if r.getErr != nil {
+		return nil, r.getErr
+	}
 	return r.repo.GetPoolState(ctx, workspaceID, name)
 }
 func (r *fakeManagedPoolRepo) ListManagedPoolStates(ctx context.Context, workspaceID string, limit int) ([]*model.PoolState, error) {
@@ -247,8 +251,8 @@ func TestManagedPoolLifecyclePreservesWorkerConfiguration(t *testing.T) {
 		t.Fatalf("priority = %d, want 250", updated.Config.Priority)
 	}
 	state, err = service.managedPoolRepo.GetManagedPoolState(context.Background(), "admin-workspace", "public-h100")
-	if err != nil || state == nil || state.ManagedInstanceID == createdInstanceID {
-		t.Fatalf("updated generation = %+v, err = %v", state, err)
+	if err != nil || state == nil || state.ManagedInstanceID != createdInstanceID {
+		t.Fatalf("updated pool identity = %+v, err = %v", state, err)
 	}
 
 	repo.machines = map[string][]*model.AgentTokenState{
@@ -257,8 +261,9 @@ func TestManagedPoolLifecyclePreservesWorkerConfiguration(t *testing.T) {
 		},
 	}
 	config.Priority = 300
-	if _, err := service.UpdateManagedPool(context.Background(), clusterAdminAuth(), "public-h100", config); !errors.Is(err, model.ErrManagedPoolInUse) {
-		t.Fatalf("update with inventory error = %v, want in-use", err)
+	updated, err = service.UpdateManagedPool(context.Background(), clusterAdminAuth(), "public-h100", config)
+	if err != nil || updated.Config.Priority != 300 {
+		t.Fatalf("live update = %+v, err = %v", updated, err)
 	}
 	if err := service.DeleteManagedPool(context.Background(), clusterAdminAuth(), "public-h100"); !errors.Is(err, model.ErrManagedPoolInUse) {
 		t.Fatalf("delete with inventory error = %v, want in-use", err)

@@ -1464,6 +1464,9 @@ message AgentWorkerSlot {
   // Distinguishes an explicitly configured zero priority from legacy
   // gateways that did not send scheduling priority metadata.
   bool priority_set = 21;
+  string gvisor_platform = 22;
+  string gvisor_root = 23;
+  repeated string gvisor_extra_args = 24;
 }
 
 message StreamAgentRequest { string agent_token = 1; }

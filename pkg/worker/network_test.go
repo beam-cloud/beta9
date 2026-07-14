@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"slices"
@@ -26,6 +27,20 @@ type cleanupContextWorkerRepoClient struct {
 func (c *cleanupContextWorkerRepoClient) MoveContainerIp(ctx context.Context, in *pb.MoveContainerIpRequest, opts ...grpc.CallOption) (*pb.MoveContainerIpResponse, error) {
 	c.moveCtxErr = ctx.Err()
 	return &pb.MoveContainerIpResponse{Ok: true}, nil
+}
+
+type networkIPWorkerRepoClient struct {
+	pb.WorkerRepositoryServiceClient
+	loads atomic.Int32
+}
+
+func (c *networkIPWorkerRepoClient) GetContainerIps(context.Context, *pb.GetContainerIpsRequest, ...grpc.CallOption) (*pb.GetContainerIpsResponse, error) {
+	c.loads.Add(1)
+	return &pb.GetContainerIpsResponse{Ok: true}, nil
+}
+
+func (c *networkIPWorkerRepoClient) SetContainerIp(context.Context, *pb.SetContainerIpRequest, ...grpc.CallOption) (*pb.SetContainerIpResponse, error) {
+	return &pb.SetContainerIpResponse{Ok: true}, nil
 }
 
 func TestGetIPFromEnv(t *testing.T) {
@@ -195,6 +210,36 @@ func TestContainerNetworkSlotReservationParsing(t *testing.T) {
 	}
 }
 
+func TestReservePortsIsUniqueAcrossConcurrentContainers(t *testing.T) {
+	manager := &ContainerNetworkManager{}
+	const containers = 100
+
+	ports := make(chan int, containers)
+	var wg sync.WaitGroup
+	for i := 0; i < containers; i++ {
+		wg.Add(1)
+		go func(containerID string) {
+			defer wg.Done()
+			reserved, err := manager.ReservePorts(containerID, 1)
+			if err != nil {
+				t.Errorf("ReservePorts(%q): %v", containerID, err)
+				return
+			}
+			ports <- reserved[0]
+		}(fmt.Sprintf("container-%d", i))
+	}
+	wg.Wait()
+	close(ports)
+
+	seen := map[int]struct{}{}
+	for port := range ports {
+		if _, exists := seen[port]; exists {
+			t.Fatalf("port %d was reserved twice", port)
+		}
+		seen[port] = struct{}{}
+	}
+}
+
 func TestReleasePreallocatedNetworkSlotUsesFreshCleanupContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -299,6 +344,25 @@ func TestShouldCleanupNetworkSlotReservation(t *testing.T) {
 	}
 }
 
+func TestAdoptNetworkSlotRespectsPoolSize(t *testing.T) {
+	manager := &ContainerNetworkManager{slotPoolSize: 1}
+	first := &pb.ContainerIpAssignment{ContainerId: "network-slot:worker-a:slot-a", IpAddress: "192.168.0.2"}
+	second := &pb.ContainerIpAssignment{ContainerId: "network-slot:worker-a:slot-b", IpAddress: "192.168.0.3"}
+
+	if !manager.adoptNetworkSlot(first, "slot-a") {
+		t.Fatal("expected first slot to be adopted")
+	}
+	if manager.adoptNetworkSlot(second, "slot-b") {
+		t.Fatal("expected pool size to reject extra slot")
+	}
+	if manager.totalSlots != 1 || len(manager.freeSlots) != 1 {
+		t.Fatalf("unexpected adopted slot state: total=%d free=%d", manager.totalSlots, len(manager.freeSlots))
+	}
+	if got := manager.freeSlots[0]; got.id != "slot-a" || got.reservationID != first.ContainerId || got.ip != first.IpAddress {
+		t.Fatalf("unexpected adopted slot: %#v", got)
+	}
+}
+
 func TestDrainFreeNetworkSlots(t *testing.T) {
 	manager := &ContainerNetworkManager{
 		freeSlots: []*containerNetworkSlot{
@@ -389,6 +453,31 @@ func TestContainerNetworkSlotPoolSizeEnvOverride(t *testing.T) {
 
 	if got := containerNetworkSlotPoolSizeForPool(types.WorkerPoolConfig{}, 128); got != 256 {
 		t.Fatalf("expected env override slot pool, got %d", got)
+	}
+}
+
+func TestNetworkSlotReservationsLoadAllocatedIPsOnce(t *testing.T) {
+	repo := &networkIPWorkerRepoClient{}
+	manager := &ContainerNetworkManager{
+		ctx:              context.Background(),
+		workerRepoClient: repo,
+		allocatedIPs:     map[string]struct{}{},
+		containerIPs:     map[string]string{},
+	}
+
+	first, err := manager.reserveNetworkSlotIP("slot-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := manager.reserveNetworkSlotIP("slot-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.IP.Equal(second.IP) {
+		t.Fatalf("slot reservations reused %s", first.IP)
+	}
+	if loads := repo.loads.Load(); loads != 1 {
+		t.Fatalf("expected one allocated IP load, got %d", loads)
 	}
 }
 

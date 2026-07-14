@@ -3,6 +3,8 @@ package worker
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"testing"
@@ -21,6 +23,54 @@ type shutdownSignalRuntime struct {
 	mu      sync.Mutex
 	signals []syscall.Signal
 	onKill  func(syscall.Signal)
+}
+
+type acknowledgementWorkerRepoClient struct {
+	pb.WorkerRepositoryServiceClient
+	mu       sync.Mutex
+	failures int
+	calls    int
+	request  *pb.AddContainerToWorkerRequest
+	response *pb.AddContainerToWorkerResponse
+}
+
+func (c *acknowledgementWorkerRepoClient) AddContainerToWorker(_ context.Context, request *pb.AddContainerToWorkerRequest, _ ...grpc.CallOption) (*pb.AddContainerToWorkerResponse, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calls++
+	c.request = request
+	if c.calls <= c.failures {
+		return nil, context.DeadlineExceeded
+	}
+	return c.response, nil
+}
+
+func TestAcknowledgeContainerRequestRetriesAmbiguousTransportFailure(t *testing.T) {
+	client := &acknowledgementWorkerRepoClient{
+		failures: 1,
+		response: &pb.AddContainerToWorkerResponse{Ok: true},
+	}
+	worker := &Worker{
+		ctx:              context.Background(),
+		workerId:         "worker-1",
+		poolName:         "pool-1",
+		podHostName:      "host-1",
+		workerRepoClient: client,
+	}
+
+	require.NoError(t, worker.acknowledgeContainerRequest("container-1", "delivery-1"))
+	require.Equal(t, 2, client.calls)
+	require.Equal(t, "delivery-1", client.request.DeliveryToken)
+}
+
+func TestAcknowledgeContainerRequestReturnsAuthoritativeRejection(t *testing.T) {
+	client := &acknowledgementWorkerRepoClient{
+		response: &pb.AddContainerToWorkerResponse{ErrorMsg: "stale delivery"},
+	}
+	worker := &Worker{ctx: context.Background(), workerRepoClient: client}
+
+	require.EqualError(t, worker.acknowledgeContainerRequest("container-1", "delivery-1"), "stale delivery")
+	require.Equal(t, 1, client.calls)
 }
 
 func (m *shutdownSignalRuntime) Kill(ctx context.Context, containerID string, sig syscall.Signal, opts *runtime.KillOpts) error {
@@ -322,6 +372,31 @@ func TestMarkContainerStoppingUsesStoppingTTL(t *testing.T) {
 	require.Equal(t, int64(types.ContainerStateTtlSWhilePending), repoClient.lastUpdateStatus.ExpirySeconds)
 }
 
+func TestFailContainerRequestReportsExitCode(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	repoClient := &fakeContainerRepoClient{}
+	request := &types.ContainerRequest{ContainerId: "container-failed-start-cleanup"}
+	tempDir := filepath.Join(baseConfigPath, request.ContainerId)
+	require.NoError(t, os.MkdirAll(tempDir, 0o755))
+	t.Cleanup(func() { _ = os.RemoveAll(tempDir) })
+	worker := &Worker{
+		ctx:                     ctx,
+		containerRepoClient:     repoClient,
+		containerInstances:      common.NewSafeMap[*ContainerInstance](),
+		containerNetworkManager: &fakeContainerNetworkController{},
+		completedRequests:       make(chan *types.ContainerRequest, 1),
+	}
+
+	worker.failContainerRequest(request.ContainerId, request, errors.New("startup failed"))
+
+	require.Equal(t, 1, repoClient.setExitCodeCalls)
+	require.Equal(t, request.ContainerId, repoClient.lastSetExitCode.ContainerId)
+	require.Equal(t, int32(1), repoClient.lastSetExitCode.ExitCode)
+	require.NoDirExists(t, tempDir)
+}
+
 func TestDropCancelledContainerRequestDeletesStoppingStateAndReleasesCapacity(t *testing.T) {
 	repoClient := &fakeContainerRepoClient{
 		state: &pb.ContainerState{
@@ -370,6 +445,47 @@ func TestDropCancelledContainerRequestReleasesCapacityForMissingState(t *testing
 	}
 }
 
+func TestHandleContainerRequestChecksCancellationWithoutBlockingRequestStream(t *testing.T) {
+	stateLookupStarted := make(chan struct{})
+	stateLookupRelease := make(chan struct{})
+	repoClient := &fakeContainerRepoClient{
+		state: &pb.ContainerState{
+			ContainerId: "container-1",
+			Status:      string(types.ContainerStatusStopping),
+		},
+		getStateStarted: stateLookupStarted,
+		getStateRelease: stateLookupRelease,
+	}
+	worker := &Worker{
+		containerRepoClient: repoClient,
+		containerInstances:  common.NewSafeMap[*ContainerInstance](),
+		completedRequests:   make(chan *types.ContainerRequest, 1),
+	}
+	request := &types.ContainerRequest{
+		ContainerId: "container-1",
+	}
+
+	returned := make(chan struct{})
+	go func() {
+		worker.handleContainerRequest(request)
+		close(returned)
+	}()
+
+	<-stateLookupStarted
+	select {
+	case <-returned:
+	case <-time.After(time.Second):
+		t.Fatal("container request stream blocked on state lookup")
+	}
+
+	close(stateLookupRelease)
+	require.Eventually(t, func() bool {
+		_, exists := worker.containerInstances.Get(request.ContainerId)
+		return !exists
+	}, time.Second, time.Millisecond)
+	require.Equal(t, request, <-worker.completedRequests)
+}
+
 type fakeContainerRepoClient struct {
 	state                 *pb.ContainerState
 	getStateErrorMsg      string
@@ -383,10 +499,24 @@ type fakeContainerRepoClient struct {
 	lastSetAddress        *pb.SetContainerAddressRequest
 	setAddressMapCalls    int
 	lastSetAddressMap     *pb.SetContainerAddressMapRequest
+	setExitCodeCalls      int
+	lastSetExitCode       *pb.SetContainerExitCodeRequest
+	getStateStarted       chan struct{}
+	getStateRelease       chan struct{}
 }
 
 func (f *fakeContainerRepoClient) GetContainerState(ctx context.Context, in *pb.GetContainerStateRequest, opts ...grpc.CallOption) (*pb.GetContainerStateResponse, error) {
 	f.getStateCalls++
+	if f.getStateStarted != nil {
+		close(f.getStateStarted)
+	}
+	if f.getStateRelease != nil {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-f.getStateRelease:
+		}
+	}
 	if f.getStateErrorMsg != "" {
 		return &pb.GetContainerStateResponse{
 			Ok:       false,
@@ -414,6 +544,8 @@ func (f *fakeContainerRepoClient) UpdateContainerStatus(ctx context.Context, in 
 }
 
 func (f *fakeContainerRepoClient) SetContainerExitCode(ctx context.Context, in *pb.SetContainerExitCodeRequest, opts ...grpc.CallOption) (*pb.SetContainerExitCodeResponse, error) {
+	f.setExitCodeCalls++
+	f.lastSetExitCode = in
 	return &pb.SetContainerExitCodeResponse{Ok: true}, nil
 }
 

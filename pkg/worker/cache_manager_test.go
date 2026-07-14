@@ -187,11 +187,16 @@ func TestEmbeddedWorkerYieldsCacheServerToDaemonSetMarker(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return manager.runningCacheServer() && len(repo.activeHosts()) == 1
 	}, 5*time.Second, 50*time.Millisecond)
+	var registrationID string
+	for _, host := range repo.activeHosts() {
+		registrationID = host.GetRegistrationId()
+	}
+	require.NotEmpty(t, registrationID)
 
 	require.NoError(t, writeCacheServerDaemonSetMarker(cacheDir, "cache-server-single-node", "pod-a"))
 
 	require.Eventually(t, func() bool {
-		return !manager.runningCacheServer() && repo.unregisterCalled("worker-a")
+		return !manager.runningCacheServer() && repo.unregisterCalled(registrationID)
 	}, 5*time.Second, 50*time.Millisecond)
 }
 
@@ -455,7 +460,7 @@ func testCacheManagerConfig(cacheDir string) types.AppConfig {
 				Enabled:     true,
 				MountPath:   cacheDir,
 				HostPath:    cacheDir,
-				MaxUsagePct: 0.95,
+				MaxUsagePct: 1,
 			},
 			Coordinator: cache.CoordinatorConfig{
 				RegistrationTTLSeconds:   30,
@@ -464,7 +469,7 @@ func testCacheManagerConfig(cacheDir string) types.AppConfig {
 			},
 			Server: cache.ServerConfig{
 				DiskCacheDir:         cacheDir,
-				DiskCacheMaxUsagePct: 0.95,
+				DiskCacheMaxUsagePct: 1,
 				PageSizeBytes:        4,
 				ObjectTtlS:           300,
 			},

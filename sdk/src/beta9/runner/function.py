@@ -5,13 +5,14 @@ import signal
 import time
 import traceback
 from dataclasses import dataclass
-from multiprocessing import Process
+from pathlib import Path
+from threading import Thread
 from typing import Any, Optional
 
 import cloudpickle
 import grpc
 
-from ..channel import Channel, get_channel, handle_error, pass_channel
+from ..channel import Channel, get_channel, handle_error
 from ..clients.function import (
     FunctionGetArgsRequest,
     FunctionMonitorRequest,
@@ -66,11 +67,9 @@ def _load_args(args: bytes) -> dict:
 def _monitor_task(
     *,
     function_context: FunctionContext,
-    env: dict,
+    runner_pid: int,
 ) -> None:
-    os.environ.update(env)
     config = get_config_context()
-    parent_pid = os.getppid()
 
     def _monitor_stream() -> bool:
         """
@@ -105,7 +104,7 @@ def _monitor_task(
                                 payload={},
                                 task_status=TaskStatus.Cancelled,
                             )
-                            os.kill(parent_pid, signal.SIGTERM)
+                            os.kill(runner_pid, signal.SIGTERM)
                             return False
 
                         # If the task is complete, exit
@@ -121,7 +120,7 @@ def _monitor_task(
                                 payload={},
                                 task_status=TaskStatus.Timeout,
                             )
-                            os.kill(parent_pid, signal.SIGTERM)
+                            os.kill(runner_pid, signal.SIGTERM)
                             return False
 
                         # Reset retry state if a valid response was received
@@ -136,7 +135,7 @@ def _monitor_task(
                 except (grpc.RpcError, ConnectionRefusedError):
                     if retry == max_retries:
                         print("Lost connection to task monitor, exiting")
-                        os.kill(parent_pid, signal.SIGABRT)
+                        os.kill(runner_pid, signal.SIGABRT)
                         return False
 
                     time.sleep(backoff)
@@ -145,7 +144,7 @@ def _monitor_task(
 
                 except BaseException:
                     print(f"Unexpected error occurred in task monitor: {traceback.format_exc()}")
-                    os.kill(parent_pid, signal.SIGABRT)
+                    os.kill(runner_pid, signal.SIGABRT)
                     return False
 
     # Outer loop: restart only if the stream ended with no errors
@@ -169,8 +168,12 @@ def _handle_sigabort(*args: Any, **kwargs: Any) -> None:
 
 @json_output_interceptor(task_id=config.task_id)
 @handle_error()
-@pass_channel
-def main(channel: Channel):
+def main():
+    with get_channel(get_config_context()) as channel:
+        run(channel)
+
+
+def run(channel: Channel):
     function_stub: FunctionServiceStub = FunctionServiceStub(channel)
     gateway_stub: GatewayServiceStub = GatewayServiceStub(channel)
     task_id = config.task_id
@@ -189,41 +192,34 @@ def main(channel: Channel):
 
     context = FunctionContext.new(config=config, task_id=task_id)
 
-    # Start monitor_task process to send health checks
-    env = os.environ.copy()
-
     signal.signal(signal.SIGTERM, _handle_sigterm)
     signal.signal(signal.SIGABRT, _handle_sigabort)
 
-    monitor_process = Process(
+    monitor_thread = Thread(
         target=_monitor_task,
         kwargs={
             "function_context": context,
-            "env": env,
+            "runner_pid": os.getpid(),
         },
         daemon=True,
     )
-    monitor_process.start()
+    monitor_thread.start()
 
-    try:
-        # Invoke the function and handle its result
-        result = asyncio.run(invoke_function(function_stub, context, task_id))
-        if result.exception:
-            handle_task_failure(gateway_stub, result, task_id, container_id, container_hostname)
-            raise result.exception
+    # Invoke the function and handle its result
+    result = asyncio.run(invoke_function(function_stub, context, task_id))
+    if result.exception:
+        handle_task_failure(gateway_stub, result, task_id, container_id, container_hostname)
+        raise result.exception
 
-        # End the task and send callback
-        complete_task(
-            gateway_stub,
-            result,
-            task_id,
-            container_id,
-            container_hostname,
-            start_time,
-        )
-    finally:
-        monitor_process.terminate()
-        monitor_process.join(timeout=1)
+    # End the task and send callback
+    complete_task(
+        gateway_stub,
+        result,
+        task_id,
+        container_id,
+        container_hostname,
+        start_time,
+    )
 
 
 def start_task(
@@ -233,13 +229,19 @@ def start_task(
 
 
 async def invoke_function(
-    function_stub: FunctionServiceStub, context: FunctionContext, task_id: str
+    function_stub: FunctionServiceStub,
+    context: FunctionContext,
+    task_id: str,
+    handler: Optional[FunctionHandler] = None,
 ) -> InvokeResult:
     result: Any = None
     callback_url = None
     pickled_result = None
 
     try:
+        if handler is None:
+            handler = FunctionHandler()
+
         get_args_resp = function_stub.function_get_args(FunctionGetArgsRequest(task_id=task_id))
         if not get_args_resp.ok:
             raise InvalidFunctionArgumentsError
@@ -249,7 +251,12 @@ async def invoke_function(
         kwargs = payload.get("kwargs") or {}
         callback_url = kwargs.pop("callback_url", None)
 
-        handler = FunctionHandler()
+        if ready_path := os.getenv("BETA9_RUNNER_READY_PATH"):
+            try:
+                Path(ready_path).touch()
+            except OSError as exc:
+                print(f"Unable to signal runner readiness: {exc}")
+
         if handler.is_async:
             result = await handler.__acall__(
                 context,

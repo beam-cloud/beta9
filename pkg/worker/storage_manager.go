@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path"
-	"slices"
 	"sync"
 	"time"
 
@@ -19,11 +18,13 @@ import (
 
 const (
 	mountCleanupInterval = 30 * time.Second
+	mountIdleTimeout     = 5 * time.Minute
 )
 
 type WorkspaceStorageManager struct {
 	ctx                context.Context
 	mounts             *common.SafeMap[storage.Storage]
+	mountLastUsed      *common.SafeMap[time.Time]
 	config             types.StorageConfig
 	poolConfig         types.WorkerPoolConfig
 	containerInstances *common.SafeMap[*ContainerInstance]
@@ -36,6 +37,7 @@ func NewWorkspaceStorageManager(ctx context.Context, config types.StorageConfig,
 	sm := &WorkspaceStorageManager{
 		ctx:                ctx,
 		mounts:             common.NewSafeMap[storage.Storage](),
+		mountLastUsed:      common.NewSafeMap[time.Time](),
 		config:             config,
 		poolConfig:         poolConfig,
 		containerInstances: containerInstances,
@@ -58,12 +60,14 @@ func (sm *WorkspaceStorageManager) Create(workspaceName string, storage storage.
 	defer unlock()
 
 	sm.mounts.Set(workspaceName, storage)
+	sm.mountLastUsed.Set(workspaceName, time.Now())
 }
 
 func (sm *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage *types.WorkspaceStorage) (storage.Storage, error) {
 	mountPath := path.Join(sm.config.WorkspaceStorage.BaseMountPath, workspaceName)
 	mount, ok := sm.mounts.Get(workspaceName)
 	if ok && workspaceMountHealthy(mount, mountPath) {
+		sm.mountLastUsed.Set(workspaceName, time.Now())
 		return mount, nil
 	}
 
@@ -73,6 +77,7 @@ func (sm *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage 
 	mount, ok = sm.mounts.Get(workspaceName)
 	if ok {
 		if workspaceMountHealthy(mount, mountPath) {
+			sm.mountLastUsed.Set(workspaceName, time.Now())
 			return mount, nil
 		}
 
@@ -174,6 +179,7 @@ func (sm *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage 
 	}
 
 	sm.mounts.Set(workspaceName, mount)
+	sm.mountLastUsed.Set(workspaceName, time.Now())
 
 	return mount, nil
 }
@@ -222,6 +228,7 @@ func (sm *WorkspaceStorageManager) Unmount(workspaceName string) error {
 	}
 
 	sm.mounts.Delete(workspaceName)
+	sm.mountLastUsed.Delete(workspaceName)
 
 	return nil
 }
@@ -249,23 +256,30 @@ func workspaceMountHealthy(mount storage.Storage, mountPath string) bool {
 }
 
 func (sm *WorkspaceStorageManager) Cleanup() error {
-	mountsToDelete := []string{}
-	activeWorkspaceNames := []string{}
+	return sm.cleanupUnused(time.Now())
+}
 
-	sm.containerInstances.Range(func(containerInstanceId string, value *ContainerInstance) bool {
-		activeWorkspaceNames = append(activeWorkspaceNames, value.Request.Workspace.Name)
+func (sm *WorkspaceStorageManager) cleanupUnused(lastUsedBefore time.Time) error {
+	active := make(map[string]struct{})
+
+	sm.containerInstances.Range(func(_ string, value *ContainerInstance) bool {
+		active[value.Request.Workspace.Name] = struct{}{}
 		return true
 	})
 
-	sm.mounts.Range(func(workspaceName string, value storage.Storage) bool {
-		if !slices.Contains(activeWorkspaceNames, workspaceName) {
-			mountsToDelete = append(mountsToDelete, workspaceName)
+	var unused []string
+	sm.mounts.Range(func(workspaceName string, _ storage.Storage) bool {
+		if _, ok := active[workspaceName]; ok {
+			return true
 		}
-
+		if lastUsed, ok := sm.mountLastUsed.Get(workspaceName); ok && lastUsed.After(lastUsedBefore) {
+			return true
+		}
+		unused = append(unused, workspaceName)
 		return true
 	})
 
-	for _, workspaceName := range mountsToDelete {
+	for _, workspaceName := range unused {
 		log.Info().Str("workspace_name", workspaceName).Msg("unmounting storage")
 		err := sm.Unmount(workspaceName)
 		if err != nil {
@@ -287,7 +301,7 @@ func (sm *WorkspaceStorageManager) cleanupUnusedMounts() {
 		case <-sm.ctx.Done():
 			return
 		case <-ticker.C:
-			err := sm.Cleanup()
+			err := sm.cleanupUnused(time.Now().Add(-mountIdleTimeout))
 			if err != nil {
 				log.Error().Err(err).Msg("failed to cleanup unused mounts")
 			}

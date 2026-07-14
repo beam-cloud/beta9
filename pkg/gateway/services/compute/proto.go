@@ -217,7 +217,24 @@ func timestampOrNil(t time.Time) *timestamppb.Timestamp {
 }
 
 func (s *Service) agentMachineToProto(state *model.AgentTokenState) *pb.Machine {
-	return agentMachineToProto(state, s.agentMachineStatusWorker(state))
+	machine := agentMachineToProto(state, s.agentMachineStatusWorker(state))
+	s.applyAgentContainerCount(state, machine.MachineMetrics)
+	return machine
+}
+
+// applyAgentContainerCount replaces the derived container count with the
+// scheduler's container index. Worker state does not persist active
+// containers and the agent does not report them, so the count computed by
+// agentMachineMetrics is otherwise always zero.
+func (s *Service) applyAgentContainerCount(state *model.AgentTokenState, metrics *pb.MachineMetrics) {
+	if s == nil || s.containerRepo == nil || state == nil || metrics == nil {
+		return
+	}
+	containers, err := s.containerRepo.GetActiveContainersByWorkerId(model.AgentMachineWorkerID(state.MachineID))
+	if err != nil {
+		return
+	}
+	metrics.ContainerCount = int32(len(containers))
 }
 
 func (s *Service) agentMachineStatusWorker(state *model.AgentTokenState) *types.Worker {

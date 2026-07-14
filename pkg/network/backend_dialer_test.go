@@ -273,6 +273,28 @@ func TestBackendDialerTSNetIncludesPeerMissWhenDialFails(t *testing.T) {
 	}
 }
 
+func TestBackendDialerTSNetChecksPeerAfterDialConsumesBudget(t *testing.T) {
+	ts, dialer := newMissingPeerBackendDialer(t, 100*time.Millisecond)
+	dialer.tsnetDial = func(ctx context.Context, addr string, timeout time.Duration) (net.Conn, error) {
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-timer.C:
+			return nil, context.DeadlineExceeded
+		}
+	}
+
+	_, err := dialer.Dial(context.Background(), types.BackendRouteAddress("route-ts"))
+	if err == nil || !strings.Contains(err.Error(), "netmap") {
+		t.Fatalf("dial error = %v, want netmap miss after exhausted dial", err)
+	}
+	if ts.staleNetmap.misses < 1 {
+		t.Fatalf("netmap misses = %d, want at least 1", ts.staleNetmap.misses)
+	}
+}
+
 // A dead peer (offline seller machine) produces netmap miss + NXDOMAIN on
 // every dial. That must feed the rate-limited stale-netmap detector only —
 // recycling the shared tsnet server per dial would drop every other route.

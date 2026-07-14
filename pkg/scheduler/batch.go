@@ -113,17 +113,35 @@ func (b *schedulingBatch) dispatch() {
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
-			for _, schedule := range schedules {
-				b.dispatchSchedule(schedule)
-			}
+			b.dispatchSchedules(schedules)
 		}()
 	}
 
 	wg.Wait()
 }
 
-func (b *schedulingBatch) dispatchSchedule(schedule plannedSchedule) {
-	if err := b.scheduler.scheduleRequest(schedule.worker, schedule.request); err != nil {
+func (b *schedulingBatch) dispatchSchedules(schedules []plannedSchedule) {
+	if len(schedules) == 0 {
+		return
+	}
+
+	workerRequests := make([]*types.ContainerRequest, len(schedules))
+	for i, schedule := range schedules {
+		workerRequests[i] = b.scheduler.prepareWorkerRequest(schedule.worker, schedule.request)
+	}
+	err := b.scheduler.pushWorkerRequests(schedules[0].worker, workerRequests)
+	if err == nil {
+		for _, request := range workerRequests {
+			go b.scheduler.schedulerUsageMetrics.CounterIncContainerScheduled(request.Clone())
+		}
+	}
+	for _, schedule := range schedules {
+		b.completeSchedule(schedule, err)
+	}
+}
+
+func (b *schedulingBatch) completeSchedule(schedule plannedSchedule, err error) {
+	if err != nil {
 		workerLog(requestLog(log.Error(), schedule.request), schedule.worker).
 			Err(err).
 			Msg("unable to schedule planned request on worker")

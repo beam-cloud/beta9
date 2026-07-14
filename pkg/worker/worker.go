@@ -34,6 +34,7 @@ const (
 	defaultCacheWaitTime           time.Duration = 30 * time.Second
 	containerStatusUpdateInterval  time.Duration = 30 * time.Second
 	containerRequestStreamInterval time.Duration = 100 * time.Millisecond
+	containerRequestAckTimeout     time.Duration = 5 * time.Second
 	completedRequestRetryTimeout   time.Duration = 30 * time.Second
 	completedRequestRetryInterval  time.Duration = 200 * time.Millisecond
 	workerEventStreamReconnectMin  time.Duration = time.Second
@@ -239,7 +240,7 @@ func NewWorker() (_ *Worker, err error) {
 		return nil, err
 	}
 
-	eventRepo := repo.NewEventClientRepo(config)
+	eventRepo := repo.NewWorkerEventClientRepo(config, workerRepoClient, workerId)
 
 	poolConfig, poolFound := config.Worker.Pools[workerPoolName]
 	if !poolFound {
@@ -474,6 +475,7 @@ func (s *Worker) Run() error {
 	go s.processStopContainerEvents()
 
 	lastContainerRequest := time.Now()
+	reconnectDelay := containerRequestStreamInterval
 
 	// Listen for container requests
 containerRequestStream:
@@ -482,12 +484,15 @@ containerRequestStream:
 			WorkerId: s.workerId,
 		})
 		if err != nil {
-			if s.ctx.Err() == context.Canceled {
+			if s.ctx.Err() != nil {
 				break
 			}
 
 			log.Warn().Err(err).Str("worker_id", s.workerId).Msg("worker container request stream failed to connect")
-			time.Sleep(containerRequestStreamInterval)
+			if !waitForReconnect(s.ctx, reconnectDelay) {
+				break
+			}
+			reconnectDelay = nextReconnectDelay(reconnectDelay, workerEventStreamReconnectMax)
 			continue
 		}
 		log.Info().Str("worker_id", s.workerId).Msg("worker container request stream connected")
@@ -502,9 +507,9 @@ containerRequestStream:
 			}
 			if !response.Ok {
 				log.Warn().Str("worker_id", s.workerId).Str("error", response.ErrorMsg).Msg("worker container request stream returned error")
-				time.Sleep(containerRequestStreamInterval)
 				break
 			}
+			reconnectDelay = containerRequestStreamInterval
 
 			if response.ContainerRequest != nil {
 				lastContainerRequest = time.Now()
@@ -518,6 +523,10 @@ containerRequestStream:
 						"worker_id": s.workerId,
 					}))
 				}
+				if err := s.acknowledgeContainerRequest(request.ContainerId, response.DeliveryToken); err != nil {
+					log.Warn().Err(err).Str("worker_id", s.workerId).Str("container_id", request.ContainerId).Msg("failed to acknowledge container request")
+					break
+				}
 				s.handleContainerRequest(request)
 			}
 
@@ -525,9 +534,41 @@ containerRequestStream:
 				break containerRequestStream
 			}
 		}
+		if !waitForReconnect(s.ctx, reconnectDelay) {
+			break
+		}
+		reconnectDelay = nextReconnectDelay(reconnectDelay, workerEventStreamReconnectMax)
 	}
 
 	return s.shutdown()
+}
+
+func (s *Worker) acknowledgeContainerRequest(containerID, deliveryToken string) error {
+	request := &pb.AddContainerToWorkerRequest{
+		WorkerId:      s.workerId,
+		ContainerId:   containerID,
+		PoolName:      s.poolName,
+		PodHostname:   s.podHostName,
+		DeliveryToken: deliveryToken,
+	}
+
+	for {
+		ctx, cancel := context.WithTimeout(s.ctx, containerRequestAckTimeout)
+		response, err := s.workerRepoClient.AddContainerToWorker(ctx, request)
+		cancel()
+		if err == nil {
+			if response != nil && response.Ok {
+				return nil
+			}
+			if response == nil {
+				return errors.New("empty container request acknowledgement")
+			}
+			return errors.New(response.ErrorMsg)
+		}
+		if !waitForReconnect(s.ctx, containerRequestStreamInterval) {
+			return s.ctx.Err()
+		}
+	}
 }
 
 func containerStartLimitForRuntime(runtimeType string) int {
@@ -627,15 +668,17 @@ func (s *Worker) dropCancelledContainerRequest(request *types.ContainerRequest) 
 
 // handleContainerRequest handles an individual container request.
 func (s *Worker) handleContainerRequest(request *types.ContainerRequest) {
-	if s.dropCancelledContainerRequest(request) {
-		return
-	}
-
 	if !s.reserveContainerInstance(request) {
 		return
 	}
 
-	go s.runContainerRequest(request)
+	go func() {
+		if s.dropCancelledContainerRequest(request) {
+			s.containerInstances.Delete(request.ContainerId)
+			return
+		}
+		s.runContainerRequest(request)
+	}()
 }
 
 func (s *Worker) runContainerRequest(request *types.ContainerRequest) {
@@ -731,7 +774,7 @@ func (s *Worker) failContainerRequest(containerId string, request *types.Contain
 		exitCode = int(serr.ExitCode)
 	}
 
-	s.clearContainer(containerId, request, exitCode)
+	s.clearContainer(containerId, request, exitCode, false)
 }
 
 // cancelBuildIfAlreadyStopping checks if a build has already been cancelled and cancels the context if it has.

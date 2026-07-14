@@ -517,6 +517,22 @@ type RuntimeConfig struct {
 	GVisorExtraArgs []string `key:"gvisorExtraArgs" json:"gvisor_extra_args"` // Additional runsc flags appended for this pool
 }
 
+func (c RuntimeConfig) WithDefaults(runtime string) RuntimeConfig {
+	if runtime != ContainerRuntimeGvisor.String() {
+		return c
+	}
+	if c.GVisorPlatform == "" {
+		c.GVisorPlatform = "systrap"
+	}
+	if c.GVisorRoot == "" {
+		c.GVisorRoot = "/run/gvisor"
+	}
+	if len(c.GVisorExtraArgs) == 0 {
+		c.GVisorExtraArgs = []string{"--overlay2=none", "--file-access=shared"}
+	}
+	return c
+}
+
 type WorkerPoolJobSpecConfig struct {
 	NodeSelector map[string]string `key:"nodeSelector" json:"node_selector"`
 	Env          []corev1.EnvVar   `key:"env" json:"env"`

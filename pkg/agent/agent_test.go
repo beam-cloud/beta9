@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -646,9 +647,14 @@ func TestDetailLogWriterReportsUnconsumedBytesOnFlushError(t *testing.T) {
 	}
 }
 
-func TestResolveAgentIdentityDoesNotFallbackWhenJoinRejected(t *testing.T) {
+func TestResolveAgentIdentityFallsBackWhenBootstrapTokenExpires(t *testing.T) {
 	t.Setenv(types.AgentStateDirEnv, t.TempDir())
-	if err := saveRuntimeState("http://gateway.local", &joinResponse{
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(joinResponse{Ok: false, ErrMsg: "join token revoked"})
+	}))
+	t.Cleanup(server.Close)
+
+	if err := saveRuntimeState(server.URL, &joinResponse{
 		Ok:          true,
 		WorkspaceID: "workspace-one",
 		PoolName:    "pool-one",
@@ -658,23 +664,31 @@ func TestResolveAgentIdentityDoesNotFallbackWhenJoinRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(joinResponse{Ok: false, ErrMsg: "join token revoked"})
-	}))
-	t.Cleanup(server.Close)
-
-	_, err := resolveAgentIdentity(context.Background(), NewClient(server.URL), types.AgentJoinOptions{
+	resolved, err := resolveAgentIdentity(context.Background(), NewClient(server.URL), types.AgentJoinOptions{
 		GatewayURL: server.URL,
 		JoinToken:  "bad-token",
 		DevMode:    true,
 		Stdout:     io.Discard,
 		Stderr:     io.Discard,
 	})
-	if err == nil {
-		t.Fatal("expected rejected join token error")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "join token revoked") {
-		t.Fatalf("unexpected error: %v", err)
+	if resolved.AgentToken != "saved-token" {
+		t.Fatalf("agent token = %q, want saved identity", resolved.AgentToken)
+	}
+}
+
+func TestNormalizeJoinOptionsAllowsConsumedTokenFile(t *testing.T) {
+	opts, err := normalizeJoinOptions(types.AgentJoinOptions{
+		GatewayURL:    "https://gateway.beam.cloud",
+		JoinTokenFile: filepath.Join(t.TempDir(), "consumed-token"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.JoinToken != "" {
+		t.Fatalf("join token = %q, want empty", opts.JoinToken)
 	}
 }
 
@@ -780,6 +794,39 @@ func (w *closeTrackingWriter) Close() error {
 	return nil
 }
 
+func testWorkerSlot() *pb.AgentWorkerSlot {
+	return &pb.AgentWorkerSlot{
+		PoolName:                  "private-dev",
+		MachineId:                 "machine-a",
+		ContainerRuntime:          types.ContainerRuntimeGvisor.String(),
+		GvisorPlatform:            "kvm",
+		GvisorRoot:                "/run/gvisor-test",
+		GvisorExtraArgs:           []string{"--overlay2=none", "--file-access=exclusive"},
+		Cpu:                       500,
+		Memory:                    256,
+		NetworkPrefix:             "10.0.0.0/24",
+		NetworkSlotPoolSize:       64,
+		ContainerStartConcurrency: 12,
+	}
+}
+
+func assertGVisorRuntimeConfig(t *testing.T, config map[string]any, slot *pb.AgentWorkerSlot) {
+	t.Helper()
+	if got := config["gvisorPlatform"]; got != slot.GvisorPlatform {
+		t.Fatalf("gVisor platform = %v, want %q", got, slot.GvisorPlatform)
+	}
+	if got := config["gvisorRoot"]; got != slot.GvisorRoot {
+		t.Fatalf("gVisor root = %v, want %q", got, slot.GvisorRoot)
+	}
+	wantExtraArgs := make([]any, len(slot.GvisorExtraArgs))
+	for i, arg := range slot.GvisorExtraArgs {
+		wantExtraArgs[i] = arg
+	}
+	if got := config["gvisorExtraArgs"]; !reflect.DeepEqual(got, wantExtraArgs) {
+		t.Fatalf("gVisor extra args = %#v, want %#v", got, wantExtraArgs)
+	}
+}
+
 type errorWriter struct{}
 
 func (errorWriter) Write([]byte) (int, error) {
@@ -807,15 +854,7 @@ func TestAgentLockRejectsSecondAgentForSameStateDir(t *testing.T) {
 
 func TestWriteWorkerConfigUsesGatewayBootstrapParts(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
-	slot := &pb.AgentWorkerSlot{
-		PoolName:                  "private-dev",
-		MachineId:                 "machine-a",
-		Cpu:                       500,
-		Memory:                    256,
-		NetworkPrefix:             "10.0.0.0/24",
-		NetworkSlotPoolSize:       64,
-		ContainerStartConcurrency: 12,
-	}
+	slot := testWorkerSlot()
 
 	if err := writeWorkerConfig(path, bootstrapConfig{
 		GatewayHTTPURL:  "http://host.docker.internal:1994",
@@ -859,6 +898,7 @@ func TestWriteWorkerConfigUsesGatewayBootstrapParts(t *testing.T) {
 	if got := poolConfig["criuEnabled"]; got != true {
 		t.Fatalf("private pool criuEnabled = %v, want true", got)
 	}
+	assertGVisorRuntimeConfig(t, poolConfig["containerRuntimeConfig"].(map[string]any), slot)
 }
 
 func TestAgentLocalRegistryForwardTargetUsesLocalK3DPort(t *testing.T) {
@@ -1037,15 +1077,7 @@ func TestNvidiaProcDriverStateAllowsHealthyDetectedGPUs(t *testing.T) {
 
 func TestWriteWorkerConfigUsesGeeseForWorkspaceStorage(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
-	slot := &pb.AgentWorkerSlot{
-		PoolName:                  "private-dev",
-		MachineId:                 "machine-a",
-		Cpu:                       500,
-		Memory:                    256,
-		NetworkPrefix:             "10.0.0.0/24",
-		NetworkSlotPoolSize:       64,
-		ContainerStartConcurrency: 12,
-	}
+	slot := testWorkerSlot()
 
 	if err := writeWorkerConfig(path, bootstrapConfig{
 		ImageRegistryStore:     reg.S3ImageRegistryStore,
@@ -1079,6 +1111,8 @@ func TestWriteWorkerConfigUsesGeeseForWorkspaceStorage(t *testing.T) {
 	if got := workspaceStorage["defaultStorageMode"]; got != types.StorageModeGeese {
 		t.Fatalf("workspace storage mode = %v, want %q", got, types.StorageModeGeese)
 	}
+	poolConfig := config["worker"].(map[string]any)["pools"].(map[string]any)[slot.PoolName].(map[string]any)
+	assertGVisorRuntimeConfig(t, poolConfig["containerRuntimeConfig"].(map[string]any), slot)
 
 	imageConfig := config["imageService"].(map[string]any)
 	if got := imageConfig["registryStore"]; got != reg.S3ImageRegistryStore {

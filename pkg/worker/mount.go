@@ -415,7 +415,15 @@ const (
 )
 
 func checkpointSignalDir(containerId string) string {
-	return filepath.Join(types.AgentTmpPath, containerId, "criu")
+	return containerSignalDir(containerId, "criu")
+}
+
+func runnerSignalDir(containerId string) string {
+	return containerSignalDir(containerId, "runner")
+}
+
+func containerSignalDir(containerId, name string) string {
+	return filepath.Join(types.AgentTmpPath, containerId, name)
 }
 
 func getAndExtractStubCodeToPath(ctx context.Context, request *types.ContainerRequest, destPath string) error {

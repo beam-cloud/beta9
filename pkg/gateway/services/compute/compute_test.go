@@ -5226,7 +5226,7 @@ func (r *fakeContainerRepo) ListBackendRoutesByMachineID(ctx context.Context, ma
 	return append([]types.BackendRoute(nil), r.routesByMachineID[machineID]...), nil
 }
 
-func TestMarketplaceAgentRoutesUseMachineIndex(t *testing.T) {
+func TestAgentRoutesUseMachineIndex(t *testing.T) {
 	buyerRoute := types.BackendRoute{
 		RouteID:     "route-buyer",
 		WorkspaceID: "buyer-1",
@@ -5236,11 +5236,6 @@ func TestMarketplaceAgentRoutesUseMachineIndex(t *testing.T) {
 		State:       types.BackendRouteStateOpening,
 	}
 	repo := &fakeContainerRepo{
-		routesByMachine: map[string][]types.BackendRoute{
-			"seller-1/marketplace-listing-1/machine-1": {
-				{RouteID: "seller-scoped-route", WorkspaceID: "seller-1", PoolName: "marketplace-listing-1", MachineID: "machine-1"},
-			},
-		},
 		routesByMachineID: map[string][]types.BackendRoute{
 			"machine-1": {
 				buyerRoute,
@@ -5255,67 +5250,32 @@ func TestMarketplaceAgentRoutesUseMachineIndex(t *testing.T) {
 		WorkspaceID: "seller-1",
 		PoolName:    "marketplace-listing-1",
 		MachineID:   "machine-1",
-		Mode:        string(types.PoolModeMarketplace),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(routes) != 1 || routes[0].RouteId != buyerRoute.RouteID {
-		t.Fatalf("routes = %#v, want only buyer route from machine index", routes)
+		t.Fatalf("routes = %#v, want only route for the agent's machine and pool", routes)
 	}
 }
 
-func TestPrivateAgentRoutesRemainWorkspaceScoped(t *testing.T) {
-	repo := &fakeContainerRepo{
-		routesByMachine: map[string][]types.BackendRoute{
-			"workspace-1/private-pool/machine-1": {
-				{RouteID: "private-route", WorkspaceID: "workspace-1", PoolName: "private-pool", MachineID: "machine-1"},
-			},
-		},
-		routesByMachineID: map[string][]types.BackendRoute{
-			"machine-1": {
-				{RouteID: "buyer-route", WorkspaceID: "buyer-1", PoolName: "private-pool", MachineID: "machine-1"},
-			},
-		},
-	}
-	service := &Service{containerRepo: repo}
-
-	routes, err := service.agentRoutesForMachine(context.Background(), &model.AgentTokenState{
-		WorkspaceID: "workspace-1",
-		PoolName:    "private-pool",
-		MachineID:   "machine-1",
-		Mode:        string(types.PoolModePrivate),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(routes) != 1 || routes[0].RouteId != "private-route" {
-		t.Fatalf("routes = %#v, want only workspace-scoped private route", routes)
-	}
-}
-
-func TestMarketplaceAgentCanManageBuyerRouteOnOwnMachine(t *testing.T) {
+func TestAgentCanManageWorkloadRouteOnOwnMachine(t *testing.T) {
 	agentState := &model.AgentTokenState{
 		WorkspaceID: "seller-1",
 		PoolName:    "marketplace-listing-1",
 		MachineID:   "machine-1",
-		Mode:        string(types.PoolModeMarketplace),
 	}
 	buyerRoute := types.BackendRoute{WorkspaceID: "buyer-1", PoolName: "marketplace-listing-1", MachineID: "machine-1"}
 	if !agentCanManageRoute(agentState, buyerRoute) {
-		t.Fatal("marketplace agent could not manage buyer route on its own machine")
+		t.Fatal("agent could not manage workload route on its own machine")
 	}
 	for _, route := range []types.BackendRoute{
 		{WorkspaceID: "buyer-1", PoolName: "other-pool", MachineID: "machine-1"},
 		{WorkspaceID: "buyer-1", PoolName: "marketplace-listing-1", MachineID: "machine-2"},
 	} {
 		if agentCanManageRoute(agentState, route) {
-			t.Fatalf("marketplace agent managed out-of-scope route: %#v", route)
+			t.Fatalf("agent managed out-of-scope route: %#v", route)
 		}
-	}
-	privateState := &model.AgentTokenState{WorkspaceID: "seller-1", PoolName: "marketplace-listing-1", MachineID: "machine-1"}
-	if agentCanManageRoute(privateState, buyerRoute) {
-		t.Fatal("private agent managed a route from another workspace")
 	}
 }
 
@@ -5334,7 +5294,7 @@ func TestAgentWorkerSlotStateCarriesMarketplaceModeAndRuntime(t *testing.T) {
 		SellerWorkspaceID:    "seller-1",
 	}
 	worker := &types.Worker{Id: "worker-1", TotalCpu: 4000, TotalMemory: 8192, Gpu: "A10G", TotalGpuCount: 1}
-	slot := agentWorkerSlotState(config, marketplaceState, worker, "token-id", "token-hash")
+	slot := agentWorkerSlotState(config, marketplaceState, worker, types.WorkerPoolConfig{}, "token-id", "token-hash")
 	wireSlot := agentWorkerSlotToProto(slot, "worker-token")
 	if !wireSlot.PrioritySet || wireSlot.Priority != 0 {
 		t.Fatalf("wire priority = %d (set=%v), want explicit zero", wireSlot.Priority, wireSlot.PrioritySet)
@@ -5355,7 +5315,7 @@ func TestAgentWorkerSlotStateCarriesMarketplaceModeAndRuntime(t *testing.T) {
 	}
 
 	worker.Gpu = "V100"
-	slot = agentWorkerSlotState(config, marketplaceState, worker, "token-id", "token-hash")
+	slot = agentWorkerSlotState(config, marketplaceState, worker, types.WorkerPoolConfig{}, "token-id", "token-hash")
 	if slot.ContainerRuntime != types.ContainerRuntimeRunc.String() {
 		t.Fatalf("slot runtime = %q, want runc fallback for V100", slot.ContainerRuntime)
 	}
@@ -5365,7 +5325,7 @@ func TestAgentWorkerSlotStateCarriesMarketplaceModeAndRuntime(t *testing.T) {
 		PoolName:    "private-pool",
 		MachineID:   "machine-2",
 	}
-	slot = agentWorkerSlotState(config, privateState, worker, "token-id", "token-hash")
+	slot = agentWorkerSlotState(config, privateState, worker, types.WorkerPoolConfig{}, "token-id", "token-hash")
 	if slot.Mode != string(types.PoolModePrivate) {
 		t.Fatalf("slot mode = %q, want private default", slot.Mode)
 	}
@@ -5374,6 +5334,25 @@ func TestAgentWorkerSlotStateCarriesMarketplaceModeAndRuntime(t *testing.T) {
 	}
 	if slot.WorkerImage != "registry.example.com/beta9-worker:same-tag" {
 		t.Fatalf("private slot worker image = %q, want configured image", slot.WorkerImage)
+	}
+
+	managedState := &model.AgentTokenState{
+		WorkspaceID:           "admin-workspace",
+		PoolName:              "managed-pool",
+		MachineID:             "machine-3",
+		ManagedPoolInstanceID: "instance-1",
+		NetworkSlotPoolSize:   8,
+	}
+	worker.Runtime = types.ContainerRuntimeGvisor.String()
+	worker.Priority = 900
+	slot = agentWorkerSlotState(config, managedState, worker, types.WorkerPoolConfig{
+		ContainerRuntime:          types.ContainerRuntimeRunc.String(),
+		ContainerStartConcurrency: 64,
+		NetworkSlotPoolSize:       128,
+		Priority:                  10,
+	}, "token-id", "token-hash")
+	if slot.ContainerRuntime != types.ContainerRuntimeRunc.String() || slot.ContainerStartConcurrency != 64 || slot.NetworkSlotPoolSize != 128 || slot.Priority != 10 {
+		t.Fatalf("managed slot did not use live pool config: %#v", slot)
 	}
 }
 
@@ -5500,6 +5479,78 @@ func TestListMachineContainersReturnsActiveContainers(t *testing.T) {
 	}
 	if missing.Ok {
 		t.Fatal("ListMachineContainers() should reject unknown machines")
+	}
+}
+
+func TestListMachineContainersClusterAdminPrefersManagedPool(t *testing.T) {
+	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
+		Workspace: &types.Workspace{ExternalId: "selected-workspace"},
+		Token: &types.Token{
+			Active:    true,
+			TokenType: types.TokenTypeClusterAdmin,
+		},
+	})
+	computeRepo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{
+			"selected-workspace": {{Name: "shared-name"}},
+		},
+		machines: map[string][]*model.AgentTokenState{
+			fakeComputeKey("admin-workspace", "shared-name"): {{
+				WorkspaceID: "admin-workspace",
+				PoolName:    "shared-name",
+				MachineID:   "managed-machine",
+			}},
+		},
+	}
+	managedRepo := &fakeComputeRepo{pools: map[string][]*model.PoolState{
+		"admin-workspace": {{Name: "shared-name"}},
+	}}
+	service := &Service{
+		backendRepo:     &fakeManagedPoolBackendRepo{},
+		computeRepo:     computeRepo,
+		managedPoolRepo: &fakeManagedPoolRepo{repo: managedRepo},
+	}
+
+	response, err := service.ListMachineContainers(ctx, &pb.ListMachineContainersRequest{
+		PoolName:  "shared-name",
+		MachineId: "managed-machine",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !response.Ok {
+		t.Fatalf("managed pool was shadowed by selected workspace: %s", response.ErrMsg)
+	}
+}
+
+func TestListMachineContainersReturnsManagedPoolStoreError(t *testing.T) {
+	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
+		Workspace: &types.Workspace{ExternalId: "selected-workspace"},
+		Token: &types.Token{
+			Active:    true,
+			TokenType: types.TokenTypeClusterAdmin,
+		},
+	})
+	service := &Service{
+		backendRepo: &fakeManagedPoolBackendRepo{},
+		computeRepo: &fakeComputeRepo{pools: map[string][]*model.PoolState{
+			"selected-workspace": {{Name: "shared-name"}},
+		}},
+		managedPoolRepo: &fakeManagedPoolRepo{
+			repo:   &fakeComputeRepo{},
+			getErr: errors.New("managed pool store unavailable"),
+		},
+	}
+
+	response, err := service.ListMachineContainers(ctx, &pb.ListMachineContainersRequest{
+		PoolName:  "shared-name",
+		MachineId: "machine-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Ok || response.ErrMsg != "managed pool store unavailable" {
+		t.Fatalf("response = %+v, want managed pool store error", response)
 	}
 }
 

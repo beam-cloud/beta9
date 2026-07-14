@@ -49,48 +49,74 @@ type ContainerStream struct {
 	syncQueue       chan *pb.SyncContainerWorkspaceRequest
 }
 
+type containerStreamClient interface {
+	StreamLogsWithReady(context.Context, string, chan common.OutputMsg, func()) error
+	SyncWorkspace(context.Context, *pb.SyncContainerWorkspaceRequest) (*pb.SyncContainerWorkspaceResponse, error)
+}
+
+type containerClientResult struct {
+	client containerStreamClient
+	err    error
+}
+
 func (l *ContainerStream) Stream(ctx context.Context, authInfo *auth.AuthInfo, containerId string) error {
-	hostname, err := l.containerRepo.GetWorkerAddress(ctx, containerId)
-	if err != nil {
-		return err
-	}
-
-	conn, err := network.ConnectToBackend(ctx, hostname, time.Second*30, l.tailscale, l.config.Tailscale, l.containerRepo)
-	if err != nil {
-		return err
-	}
-
-	client, err := common.NewContainerClient(hostname, authInfo.Token.Key, conn)
-	if err != nil {
-		return err
-	}
-
 	outputChan := make(chan common.OutputMsg, 1000)
 	keyEventChan := make(chan common.KeyEvent, 1000)
-
-	err = l.keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerExitCode(containerId), keyEventChan)
-	if err != nil {
+	if err := l.keyEventManager.ListenForKey(ctx, common.RedisKeys.SchedulerContainerExitCode(containerId), keyEventChan); err != nil {
 		return err
 	}
 
-	go client.StreamLogs(ctx, containerId, outputChan)
-	return l.handleStreams(ctx, client, containerId, outputChan, keyEventChan)
+	clientResult := make(chan containerClientResult, 1)
+	go func() {
+		hostname, err := l.containerRepo.GetWorkerAddress(ctx, containerId)
+		if err != nil {
+			clientResult <- containerClientResult{err: err}
+			return
+		}
+
+		conn, err := network.ConnectToBackend(ctx, hostname, 30*time.Second, l.tailscale, l.config.Tailscale, l.containerRepo)
+		if err != nil {
+			clientResult <- containerClientResult{err: err}
+			return
+		}
+
+		client, err := common.NewContainerClient(hostname, authInfo.Token.Key, conn)
+		clientResult <- containerClientResult{client: client, err: err}
+	}()
+
+	return l.handleStreams(ctx, containerId, outputChan, keyEventChan, clientResult)
 }
 
 func (l *ContainerStream) handleStreams(
 	ctx context.Context,
-	client *common.ContainerClient,
 	containerId string,
 	outputChan chan common.OutputMsg,
 	keyEventChan chan common.KeyEvent,
+	clientResult chan containerClientResult,
 ) error {
-
 	var lastMessage common.OutputMsg
+	var client containerStreamClient
+	var exitEvents <-chan common.KeyEvent
+	var logStreamReady <-chan struct{}
+	var syncQueue <-chan *pb.SyncContainerWorkspaceRequest
 
 _stream:
 	for {
 		select {
-		case req := <-l.syncQueue:
+		case result := <-clientResult:
+			clientResult = nil
+			if result.err != nil {
+				return result.err
+			}
+			client = result.client
+			syncQueue = l.syncQueue
+			ready := make(chan struct{})
+			logStreamReady = ready
+			go client.StreamLogsWithReady(ctx, containerId, outputChan, func() { close(ready) })
+		case <-logStreamReady:
+			logStreamReady = nil
+			exitEvents = keyEventChan
+		case req := <-syncQueue:
 			_, err := client.SyncWorkspace(ctx, req)
 			if err != nil {
 				continue
@@ -105,7 +131,7 @@ _stream:
 				lastMessage = o
 				break _stream
 			}
-		case <-keyEventChan:
+		case <-exitEvents:
 			exitCode, err := l.containerRepo.GetContainerExitCode(containerId)
 			if err != nil {
 				exitCode = -1

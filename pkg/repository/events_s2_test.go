@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1355,6 +1356,43 @@ func TestS2MetricsScanBudgetReportsExhaustion(t *testing.T) {
 	budget = budget.consume(s2ReadScanLimit)
 	if scanned, truncated := budget.state(); scanned != s2ReadScanLimit || !truncated {
 		t.Fatalf("exhausted budget state = (%d, %v), want (%d, true)", scanned, truncated, s2ReadScanLimit)
+	}
+}
+
+func TestReserveS2MetricsReadIsAtomic(t *testing.T) {
+	remaining := atomic.Int64{}
+	remaining.Store(s2ReadScanLimit)
+	reservations := make(chan uint64, 100)
+
+	for range 100 {
+		go func() {
+			reservations <- reserveS2MetricsRead(&remaining)
+		}()
+	}
+
+	var reserved uint64
+	for range 100 {
+		reservation := <-reservations
+		if reservation > s2MetricsReadLimit {
+			t.Fatalf("reservation = %d, want at most %d", reservation, s2MetricsReadLimit)
+		}
+		reserved += reservation
+	}
+	if reserved != s2ReadScanLimit || remaining.Load() != 0 {
+		t.Fatalf("reserved = %d, remaining = %d; want %d, 0", reserved, remaining.Load(), s2ReadScanLimit)
+	}
+}
+
+func TestPoolMetricsBucketKeyUsesContainingInterval(t *testing.T) {
+	interval := 5 * time.Minute
+	alignedEnd := time.Date(2026, 7, 14, 10, 5, 0, 0, time.UTC)
+	partialEnd := alignedEnd.Add(2 * time.Minute)
+
+	if got, want := poolMetricsBucketKey(alignedEnd, interval), alignedEnd.Add(-interval).UnixMilli(); got != want {
+		t.Fatalf("aligned bucket key = %d, want %d", got, want)
+	}
+	if got, want := poolMetricsBucketKey(partialEnd, interval), alignedEnd.UnixMilli(); got != want {
+		t.Fatalf("partial bucket key = %d, want %d", got, want)
 	}
 }
 

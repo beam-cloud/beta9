@@ -319,9 +319,25 @@ func (g *LogGroup) authorizeLogQuery(ctx echo.Context, authInfo *auth.AuthInfo, 
 		if err != nil {
 			return err
 		}
+		if machine == nil && isClusterAdmin(authInfo) {
+			// Serverless pool machines register under the admin workspace, not
+			// the requesting workspace.
+			adminWorkspace, adminErr := g.backendRepo.GetAdminWorkspace(ctx.Request().Context())
+			if adminErr != nil {
+				return HTTPInternalServerError("Failed to resolve admin workspace")
+			}
+			if adminWorkspace != nil && adminWorkspace.ExternalId != "" {
+				machine, err = g.privateMachineForWorkspace(ctx, adminWorkspace.ExternalId, machineID)
+				if err != nil {
+					return err
+				}
+			}
+		}
 		if machine == nil {
 			return HTTPNotFound()
 		}
+		// Machine log streams live under the machine's owning workspace.
+		query.WorkspaceID = machine.WorkspaceID
 		query.MachineID = machine.MachineID
 		query.WorkerID = compute.AgentMachineWorkerID(machine.MachineID)
 	case types.GatewayObjectTypeWorkspace, "":
