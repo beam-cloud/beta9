@@ -551,6 +551,7 @@ var (
 	ProviderLambdaLabs MachineProvider = "lambda"
 	ProviderCrusoe     MachineProvider = "crusoe"
 	ProviderHydra      MachineProvider = "hydra"
+	ProviderTenki      MachineProvider = "tenki"
 	ProviderGeneric    MachineProvider = "generic"
 )
 
@@ -564,6 +565,13 @@ type ProviderConfig struct {
 	Vast       VastProviderConfig       `key:"vast" json:"vast"`
 	Shadeform  ShadeformProviderConfig  `key:"shadeform" json:"shadeform"`
 	Hetzner    HetznerProviderConfig    `key:"hetzner" json:"hetzner"`
+	Tenki      TenkiProviderConfig      `key:"tenki" json:"tenki"`
+}
+
+type TenkiProviderConfig struct {
+	AuthToken  string `key:"authToken" json:"auth_token"`
+	BaseURL    string `key:"baseURL" json:"base_url"`
+	DiskSizeGB int    `key:"diskSizeGB" json:"disk_size_gb"`
 }
 
 type VastProviderConfig struct {

@@ -1,12 +1,11 @@
 module github.com/beam-cloud/beta9
 
-go 1.23
-
-toolchain go1.23.0
+go 1.25.3
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/Masterminds/squirrel v1.5.4
+	github.com/TenkiCloud/tenki-sdk-go/sandbox v0.3.3
 	github.com/VictoriaMetrics/metrics v1.37.0
 	github.com/alicebob/miniredis/v2 v2.30.5
 	github.com/aws/aws-sdk-go-v2 v1.31.0
@@ -78,12 +77,12 @@ require (
 	go.opentelemetry.io/otel/sdk/metric v1.34.0
 	go.opentelemetry.io/otel/trace v1.35.0
 	golang.org/x/exp v0.0.0-20240719175910-8a7402abbf56
-	golang.org/x/net v0.35.0
-	golang.org/x/sync v0.11.0
-	golang.org/x/sys v0.30.0
+	golang.org/x/net v0.55.0
+	golang.org/x/sync v0.20.0
+	golang.org/x/sys v0.45.0
 	golang.org/x/time v0.9.0
 	google.golang.org/grpc v1.71.1
-	google.golang.org/protobuf v1.36.4
+	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v2 v2.4.0
 	gotest.tools v2.2.0+incompatible
 	gvisor.dev/gvisor v0.0.0-20240722211153-64c016c92987
@@ -95,10 +94,12 @@ require (
 )
 
 require (
+	buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go v1.36.11-20260415201107-50325440f8f2.1 // indirect
 	cloud.google.com/go v0.112.1 // indirect
 	cloud.google.com/go/compute/metadata v0.6.0 // indirect
 	cloud.google.com/go/iam v1.1.6 // indirect
 	cloud.google.com/go/storage v1.38.0 // indirect
+	connectrpc.com/connect v1.20.0 // indirect
 	github.com/Azure/azure-pipeline-go v0.2.2 // indirect
 	github.com/Azure/azure-sdk-for-go v32.1.0+incompatible // indirect
 	github.com/Azure/azure-storage-blob-go v0.7.1-0.20190724222048-33c102d4ffd2 // indirect
@@ -309,12 +310,12 @@ require (
 	go.uber.org/zap v1.27.0 // indirect
 	go4.org/mem v0.0.0-20220726221520-4f986261bf13 // indirect
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba // indirect
-	golang.org/x/crypto v0.33.0 // indirect
-	golang.org/x/mod v0.23.0 // indirect
+	golang.org/x/crypto v0.51.0 // indirect
+	golang.org/x/mod v0.35.0 // indirect
 	golang.org/x/oauth2 v0.25.0 // indirect
-	golang.org/x/term v0.29.0
-	golang.org/x/text v0.22.0 // indirect
-	golang.org/x/tools v0.30.0 // indirect
+	golang.org/x/term v0.43.0
+	golang.org/x/text v0.37.0 // indirect
+	golang.org/x/tools v0.44.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 	golang.zx2c4.com/wireguard/windows v0.5.3 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20250106144421-5f5ef82da422

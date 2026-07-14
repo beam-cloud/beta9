@@ -70,6 +70,8 @@ func NewLegacyExternalWorkerPoolController(opts WorkerPoolControllerOptions) (Wo
 		provider, err = providers.NewCrusoeProvider(opts.Context, opts.Config, opts.ProviderRepo, opts.WorkerRepo, opts.Tailscale)
 	case types.ProviderHydra:
 		provider, err = providers.NewHydraProvider(opts.Context, opts.Config, opts.ProviderRepo, opts.WorkerRepo, opts.Tailscale)
+	case types.ProviderTenki:
+		provider, err = providers.NewTenkiProvider(opts.Context, opts.Config, opts.ProviderRepo, opts.WorkerRepo, opts.Tailscale)
 	case types.ProviderGeneric:
 		provider, err = providers.NewGenericProvider(opts.Context, opts.Config, opts.ProviderRepo, opts.WorkerRepo, opts.Tailscale)
 	default:
