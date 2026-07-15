@@ -94,6 +94,9 @@ func TestTasklessASGIRequestProxiesWithoutTaskHeader(t *testing.T) {
 		maxTokens:     1,
 		isASGI:        true,
 		workReady:     make(chan struct{}, 1),
+		onTaskQueued: func() {
+			t.Fatal("taskless request notified the autoscaler")
+		},
 		availableContainers: []container{{
 			id:      "container-1",
 			address: backendURL.Host,
@@ -101,7 +104,7 @@ func TestTasklessASGIRequestProxiesWithoutTaskHeader(t *testing.T) {
 	}
 	go rb.processRequests()
 
-	if err := rb.ForwardRequest(ctx, nil, nil); err != nil {
+	if err := rb.ForwardRequest(ctx, nil); err != nil {
 		t.Fatal(err)
 	}
 	if rec.Code != http.StatusNoContent {
@@ -175,7 +178,7 @@ func TestForwardRequestTimesOutWhenNoBackendContainersAreReady(t *testing.T) {
 		},
 	}
 
-	if err := rb.ForwardRequest(ctx, nil, nil); err != nil {
+	if err := rb.ForwardRequest(ctx, nil); err != nil {
 		t.Fatal(err)
 	}
 	if rec.Code != http.StatusGatewayTimeout {
@@ -191,10 +194,9 @@ func TestForwardRequestTimesOutWhenNoBackendContainersAreReady(t *testing.T) {
 	}
 }
 
-func TestForwardRequestSignalsAfterEnqueue(t *testing.T) {
+func TestForwardRequestNotifiesAfterTaskIsQueued(t *testing.T) {
 	e := echo.New()
-	requestContext, cancel := context.WithCancel(context.Background())
-	ctx := e.NewContext(httptest.NewRequest(http.MethodPost, "/", nil).WithContext(requestContext), httptest.NewRecorder())
+	ctx := e.NewContext(httptest.NewRequest(http.MethodPost, "/", nil), httptest.NewRecorder())
 	rb := &RequestBuffer{
 		ctx:        context.Background(),
 		buffer:     abstractions.NewRingBuffer[*request](1),
@@ -202,13 +204,18 @@ func TestForwardRequestSignalsAfterEnqueue(t *testing.T) {
 	}
 
 	called := false
-	err := rb.ForwardRequest(ctx, nil, func() {
+	rb.onTaskQueued = func() {
 		called = true
 		if rb.buffer.Len() != 1 {
-			t.Fatal("enqueue callback ran before the request entered the buffer")
+			t.Fatal("notification ran before the request entered the buffer")
 		}
-		cancel()
-	})
+		queued, ok := rb.buffer.Pop()
+		if !ok {
+			t.Fatal("queued request is missing")
+		}
+		close(queued.done)
+	}
+	err := rb.ForwardRequest(ctx, &EndpointTask{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +236,7 @@ func TestForwardRequestFailsWhenBufferIsClosed(t *testing.T) {
 		stubConfig: &types.StubConfigV1{TaskPolicy: types.TaskPolicy{Timeout: 30}},
 	}
 
-	if err := rb.ForwardRequest(ctx, nil, nil); err != context.Canceled {
+	if err := rb.ForwardRequest(ctx, nil); err != context.Canceled {
 		t.Fatalf("ForwardRequest() error = %v, want context canceled", err)
 	}
 }

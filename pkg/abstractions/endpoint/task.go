@@ -45,7 +45,7 @@ func (t *EndpointTask) Execute(ctx context.Context, options ...interface{}) erro
 		return err
 	}
 
-	return instance.buffer.ForwardRequest(echoCtx, t, instance.Autoscaler.Trigger)
+	return instance.buffer.ForwardRequest(echoCtx, t)
 }
 
 func (t *EndpointTask) Retry(ctx context.Context) error {

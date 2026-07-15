@@ -74,6 +74,7 @@ type RequestBuffer struct {
 	keyEventChan            chan common.KeyEvent
 	workReady               chan struct{}
 	discoverReady           chan struct{}
+	onTaskQueued            func()
 }
 
 func NewRequestBuffer(
@@ -148,7 +149,7 @@ func (rb *RequestBuffer) handleHeartbeatEvents() {
 	}
 }
 
-func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, task *EndpointTask, onEnqueue func()) error {
+func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, task *EndpointTask) error {
 	ctx.Set("stubId", rb.stubId)
 
 	requestID := uuid.NewString()
@@ -167,8 +168,8 @@ func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, task *EndpointTask, on
 		enqueuedAt: time.Now(),
 	}
 	rb.enqueueRequest(req, false)
-	if onEnqueue != nil {
-		onEnqueue()
+	if task != nil && rb.onTaskQueued != nil {
+		rb.onTaskQueued()
 	}
 	rb.signalDiscovery()
 	rb.signalWork()

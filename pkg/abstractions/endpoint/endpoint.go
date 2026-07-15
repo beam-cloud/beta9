@@ -215,7 +215,7 @@ func (es *HttpEndpointService) forwardASGIHealthRequest(ctx echo.Context, stubId
 		return err
 	}
 
-	return instance.buffer.ForwardRequest(ctx, nil, nil)
+	return instance.buffer.ForwardRequest(ctx, nil)
 }
 
 func (es *HttpEndpointService) InstanceFactory(ctx context.Context, stubId string, options ...func(abstractions.IAutoscaledInstance)) (abstractions.IAutoscaledInstance, error) {
@@ -304,8 +304,6 @@ func (es *HttpEndpointService) getOrCreateEndpointInstance(ctx context.Context, 
 		instance.isASGI = true
 	}
 
-	instance.buffer = NewRequestBuffer(autoscaledInstance.Ctx, es.rdb, &stub.Workspace, stubId, requestBufferSize, es.containerRepo, es.keyEventManager, stubConfig, es.tailscale, es.config.Tailscale, instance.isASGI)
-
 	// Embed autoscaled instance struct
 	instance.AutoscaledInstance = autoscaledInstance
 
@@ -320,6 +318,11 @@ func (es *HttpEndpointService) getOrCreateEndpointInstance(ctx context.Context, 
 		} else if stub.Type.IsServe() {
 			instance.Autoscaler = abstractions.NewAutoscaler(instance, endpointSampleFunc, endpointServeScaleFunc)
 		}
+	}
+
+	instance.buffer = NewRequestBuffer(autoscaledInstance.Ctx, es.rdb, &stub.Workspace, stubId, requestBufferSize, es.containerRepo, es.keyEventManager, stubConfig, es.tailscale, es.config.Tailscale, instance.isASGI)
+	if instance.Autoscaler != nil {
+		instance.buffer.onTaskQueued = instance.Autoscaler.Trigger
 	}
 
 	if len(instance.EntryPoint) == 0 {
