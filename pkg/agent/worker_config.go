@@ -29,6 +29,7 @@ type agentConfigDatabase struct {
 }
 
 type agentConfigS2 struct {
+	ApiKey            string `json:"apiKey"`
 	Basin             string `json:"basin"`
 	StreamPrefix      string `json:"streamPrefix"`
 	LogApiKey         string `json:"logApiKey"`
@@ -238,14 +239,7 @@ func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) a
 		DebugMode:   false,
 		PrettyLogs:  true,
 		Database: agentConfigDatabase{
-			S2: agentConfigS2{
-				Basin:             firstNonEmpty(bootstrap.Telemetry.Events.Destination, bootstrap.Telemetry.Logs.Destination),
-				StreamPrefix:      bootstrap.Telemetry.StreamPrefix,
-				LogApiKey:         bootstrap.Telemetry.Logs.Credential,
-				LogStreamPrefix:   bootstrap.Telemetry.Logs.StreamPrefix,
-				EventApiKey:       bootstrap.Telemetry.Events.Credential,
-				EventStreamPrefix: bootstrap.Telemetry.Events.StreamPrefix,
-			},
+			S2: agentS2Config(bootstrap.Telemetry, poolMode),
 		},
 		Gateway: agentConfigGateway{
 			GRPC: agentConfigEndpoint{
@@ -331,6 +325,25 @@ func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) a
 		},
 		ManagedCompute: managedComputeConfigForSlot(bootstrap, slot, poolMode),
 	}
+}
+
+func agentS2Config(telemetry telemetryConfig, poolMode string) agentConfigS2 {
+	config := agentConfigS2{
+		Basin:             firstNonEmpty(telemetry.Events.Destination, telemetry.Logs.Destination),
+		StreamPrefix:      telemetry.StreamPrefix,
+		LogApiKey:         telemetry.Logs.Credential,
+		LogStreamPrefix:   telemetry.Logs.StreamPrefix,
+		EventApiKey:       telemetry.Events.Credential,
+		EventStreamPrefix: telemetry.Events.StreamPrefix,
+	}
+	if poolMode == string(types.PoolModeExternal) {
+		config.ApiKey = firstNonEmpty(telemetry.Events.Credential, telemetry.Logs.Credential)
+		config.LogApiKey = ""
+		config.LogStreamPrefix = ""
+		config.EventApiKey = ""
+		config.EventStreamPrefix = ""
+	}
+	return config
 }
 
 // slotPoolMode returns the pool mode the gateway assigned to this worker slot,

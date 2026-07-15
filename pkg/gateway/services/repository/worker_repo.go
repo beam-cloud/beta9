@@ -56,9 +56,17 @@ func (s *WorkerRepositoryService) GetNextContainerRequest(req *pb.GetNextContain
 	if err := s.workerRepo.RecoverPendingContainerRequests(req.WorkerId); err != nil {
 		return err
 	}
+	var requestsReady <-chan struct{}
+	if s.workerEvents != nil {
+		sinkID, ready := s.workerEvents.registerRequests(req.WorkerId)
+		defer s.workerEvents.unregister(sinkID)
+		requestsReady = ready
+	}
 	if err := s.workerRepo.ToggleWorkerAvailable(req.WorkerId); err != nil {
 		return err
 	}
+	poll := time.NewTicker(containerRequestPollingInterval)
+	defer poll.Stop()
 	heartbeatAt := time.Now().Add(containerRequestHeartbeatInterval)
 	for {
 		select {
@@ -98,7 +106,14 @@ func (s *WorkerRepositoryService) GetNextContainerRequest(req *pb.GetNextContain
 				heartbeatAt = time.Now().Add(containerRequestHeartbeatInterval)
 			}
 
-			time.Sleep(containerRequestPollingInterval)
+			select {
+			case <-s.ctx.Done():
+				return s.ctx.Err()
+			case <-stream.Context().Done():
+				return stream.Context().Err()
+			case <-requestsReady:
+			case <-poll.C:
+			}
 		}
 	}
 }

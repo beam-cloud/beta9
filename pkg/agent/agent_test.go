@@ -99,6 +99,49 @@ func TestRouteProxyMarksRouteReadyForReachableLocalTarget(t *testing.T) {
 	}
 }
 
+func TestRouteProxyPollsOpeningRouteWithoutBackoff(t *testing.T) {
+	reserved, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := reserved.Addr().String()
+	_ = reserved.Close()
+
+	backend := make(chan net.Listener, 1)
+	backendErr := make(chan error, 1)
+	go func() {
+		time.Sleep(350 * time.Millisecond)
+		listener, err := net.Listen("tcp", target)
+		if err != nil {
+			backendErr <- err
+			return
+		}
+		backend <- listener
+	}()
+
+	updates := make(chan *pb.UpdateAgentRouteStatusRequest, 1)
+	proxy := newRouteProxy(&routeStatusClient{updates: updates}, "agent-token", nil, "agent.tailnet:29443", nil, io.Discard, io.Discard)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	proxy.setRoute("route-one", target)
+	proxy.ensureRouteReady(ctx, "route-one", target)
+
+	select {
+	case listener := <-backend:
+		t.Cleanup(func() { _ = listener.Close() })
+	case err := <-backendErr:
+		t.Fatal(err)
+	case <-time.After(time.Second):
+		t.Fatal("backend did not start")
+	}
+
+	select {
+	case <-updates:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("route readiness polling backed off after the backend started")
+	}
+}
+
 func TestDialLocalTargetFallsBackToLoopback(t *testing.T) {
 	backend := startEchoListener(t, "127.0.0.1:0")
 	_, port, err := net.SplitHostPort(backend.Addr().String())
@@ -807,6 +850,32 @@ func testWorkerSlot() *pb.AgentWorkerSlot {
 		NetworkPrefix:             "10.0.0.0/24",
 		NetworkSlotPoolSize:       64,
 		ContainerStartConcurrency: 12,
+	}
+}
+
+func TestAgentS2ConfigUsesClusterCredentialsOnlyForPlatformPools(t *testing.T) {
+	telemetry := telemetryConfig{
+		StreamPrefix: "events",
+		Logs: telemetrySinkConfig{
+			Destination:  "basin",
+			Credential:   "cluster-key",
+			StreamPrefix: "events/logs/workspaces",
+		},
+		Events: telemetrySinkConfig{
+			Destination:  "basin",
+			Credential:   "cluster-key",
+			StreamPrefix: "events/workspaces",
+		},
+	}
+
+	platform := agentS2Config(telemetry, string(types.PoolModeExternal))
+	if platform.ApiKey != "cluster-key" || platform.LogApiKey != "" || platform.EventApiKey != "" {
+		t.Fatalf("unexpected platform S2 config: %#v", platform)
+	}
+
+	private := agentS2Config(telemetry, string(types.PoolModePrivate))
+	if private.ApiKey != "" || private.LogApiKey != "cluster-key" || private.EventApiKey != "cluster-key" {
+		t.Fatalf("unexpected private S2 config: %#v", private)
 	}
 }
 

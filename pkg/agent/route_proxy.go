@@ -17,10 +17,11 @@ import (
 )
 
 const (
-	routeProxyPrefaceTimeout   = 10 * time.Second
-	routeProxyLocalDialTimeout = 2 * time.Second
-	routeProxyReadyDialTimeout = 250 * time.Millisecond
-	routeStatusConcurrency     = 16
+	routeProxyPrefaceTimeout    = 10 * time.Second
+	routeProxyLocalDialTimeout  = 2 * time.Second
+	routeProxyReadyDialTimeout  = 250 * time.Millisecond
+	routeProxyReadyPollInterval = 50 * time.Millisecond
+	routeStatusConcurrency      = 16
 
 	// routeProxyMaxConsecutiveFailures is how many local dials must fail in a
 	// row before the route is dropped and reported degraded.
@@ -215,7 +216,7 @@ func (p *routeProxy) ensureRouteReady(ctx context.Context, routeID, localTarget 
 func (p *routeProxy) waitForRouteReady(ctx context.Context, routeID, localTarget string) {
 	defer p.clearReadinessCheck(routeID, localTarget)
 
-	backoff := 100 * time.Millisecond
+	statusRetry := 100 * time.Millisecond
 	for {
 		if ctx.Err() != nil || !p.routeTargetMatches(routeID, localTarget) {
 			return
@@ -223,7 +224,9 @@ func (p *routeProxy) waitForRouteReady(ctx context.Context, routeID, localTarget
 
 		dialLatency, err := checkLocalTargetReady(localTarget)
 		if err != nil {
-			backoff = p.waitBeforeNextReadinessCheck(ctx, backoff)
+			if !waitForRouteRetry(ctx, routeProxyReadyPollInterval) {
+				return
+			}
 			continue
 		}
 
@@ -237,7 +240,10 @@ func (p *routeProxy) waitForRouteReady(ctx context.Context, routeID, localTarget
 				return
 			}
 			fmt.Fprintf(p.stderr, "route %s ready status update failed: %v\n", routeID, err)
-			backoff = p.waitBeforeNextReadinessCheck(ctx, backoff)
+			if !waitForRouteRetry(ctx, statusRetry) {
+				return
+			}
+			statusRetry = nextBackoff(statusRetry, time.Second)
 			continue
 		}
 
@@ -245,12 +251,16 @@ func (p *routeProxy) waitForRouteReady(ctx context.Context, routeID, localTarget
 	}
 }
 
-func (p *routeProxy) waitBeforeNextReadinessCheck(ctx context.Context, backoff time.Duration) time.Duration {
+func waitForRouteRetry(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
 	select {
 	case <-ctx.Done():
-	case <-time.After(backoff):
+		return false
+	case <-timer.C:
+		return true
 	}
-	return nextBackoff(backoff, time.Second)
 }
 
 func (p *routeProxy) routeTargetMatches(routeID, localTarget string) bool {

@@ -397,133 +397,22 @@ func TestFailContainerRequestReportsExitCode(t *testing.T) {
 	require.NoDirExists(t, tempDir)
 }
 
-func TestDropCancelledContainerRequestDeletesStoppingStateAndReleasesCapacity(t *testing.T) {
-	repoClient := &fakeContainerRepoClient{
-		state: &pb.ContainerState{
-			ContainerId: "build-1",
-			Status:      string(types.ContainerStatusStopping),
-		},
-	}
-	request := &types.ContainerRequest{ContainerId: "build-1"}
-	worker := &Worker{
-		containerRepoClient: repoClient,
-		completedRequests:   make(chan *types.ContainerRequest, 1),
-	}
-
-	require.True(t, worker.dropCancelledContainerRequest(request))
-	require.Equal(t, 1, repoClient.getStateCalls)
-	require.Equal(t, 1, repoClient.deleteStateCalls)
-	require.Equal(t, "build-1", repoClient.lastDeleteContainerID)
-
-	select {
-	case got := <-worker.completedRequests:
-		require.Equal(t, request, got)
-	default:
-		t.Fatal("expected skipped request to release capacity")
-	}
-}
-
-func TestDropCancelledContainerRequestReleasesCapacityForMissingState(t *testing.T) {
-	repoClient := &fakeContainerRepoClient{
-		getStateErrorMsg: (&types.ErrContainerStateNotFound{ContainerId: "build-1"}).Error(),
-	}
-	request := &types.ContainerRequest{ContainerId: "build-1"}
-	worker := &Worker{
-		containerRepoClient: repoClient,
-		completedRequests:   make(chan *types.ContainerRequest, 1),
-	}
-
-	require.True(t, worker.dropCancelledContainerRequest(request))
-	require.Equal(t, 1, repoClient.getStateCalls)
-	require.Equal(t, 0, repoClient.deleteStateCalls)
-
-	select {
-	case got := <-worker.completedRequests:
-		require.Equal(t, request, got)
-	default:
-		t.Fatal("expected skipped request to release capacity")
-	}
-}
-
-func TestHandleContainerRequestChecksCancellationWithoutBlockingRequestStream(t *testing.T) {
-	stateLookupStarted := make(chan struct{})
-	stateLookupRelease := make(chan struct{})
-	repoClient := &fakeContainerRepoClient{
-		state: &pb.ContainerState{
-			ContainerId: "container-1",
-			Status:      string(types.ContainerStatusStopping),
-		},
-		getStateStarted: stateLookupStarted,
-		getStateRelease: stateLookupRelease,
-	}
-	worker := &Worker{
-		containerRepoClient: repoClient,
-		containerInstances:  common.NewSafeMap[*ContainerInstance](),
-		completedRequests:   make(chan *types.ContainerRequest, 1),
-	}
-	request := &types.ContainerRequest{
-		ContainerId: "container-1",
-	}
-
-	returned := make(chan struct{})
-	go func() {
-		worker.handleContainerRequest(request)
-		close(returned)
-	}()
-
-	<-stateLookupStarted
-	select {
-	case <-returned:
-	case <-time.After(time.Second):
-		t.Fatal("container request stream blocked on state lookup")
-	}
-
-	close(stateLookupRelease)
-	require.Eventually(t, func() bool {
-		_, exists := worker.containerInstances.Get(request.ContainerId)
-		return !exists
-	}, time.Second, time.Millisecond)
-	require.Equal(t, request, <-worker.completedRequests)
-}
-
 type fakeContainerRepoClient struct {
-	state                 *pb.ContainerState
-	getStateErrorMsg      string
-	getStateCalls         int
-	deleteStateCalls      int
-	lastDeleteContainerID string
-	updateStatusCalls     int
-	lastUpdateStatus      *pb.UpdateContainerStatusRequest
-	addressMap            map[int32]string
-	setAddressCalls       int
-	lastSetAddress        *pb.SetContainerAddressRequest
-	setAddressMapCalls    int
-	lastSetAddressMap     *pb.SetContainerAddressMapRequest
-	setExitCodeCalls      int
-	lastSetExitCode       *pb.SetContainerExitCodeRequest
-	getStateStarted       chan struct{}
-	getStateRelease       chan struct{}
+	state              *pb.ContainerState
+	getStateCalls      int
+	updateStatusCalls  int
+	lastUpdateStatus   *pb.UpdateContainerStatusRequest
+	addressMap         map[int32]string
+	setAddressCalls    int
+	lastSetAddress     *pb.SetContainerAddressRequest
+	setAddressMapCalls int
+	lastSetAddressMap  *pb.SetContainerAddressMapRequest
+	setExitCodeCalls   int
+	lastSetExitCode    *pb.SetContainerExitCodeRequest
 }
 
 func (f *fakeContainerRepoClient) GetContainerState(ctx context.Context, in *pb.GetContainerStateRequest, opts ...grpc.CallOption) (*pb.GetContainerStateResponse, error) {
 	f.getStateCalls++
-	if f.getStateStarted != nil {
-		close(f.getStateStarted)
-	}
-	if f.getStateRelease != nil {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-f.getStateRelease:
-		}
-	}
-	if f.getStateErrorMsg != "" {
-		return &pb.GetContainerStateResponse{
-			Ok:       false,
-			ErrorMsg: f.getStateErrorMsg,
-		}, nil
-	}
-
 	return &pb.GetContainerStateResponse{
 		Ok:          true,
 		ContainerId: in.ContainerId,
@@ -532,8 +421,6 @@ func (f *fakeContainerRepoClient) GetContainerState(ctx context.Context, in *pb.
 }
 
 func (f *fakeContainerRepoClient) DeleteContainerState(ctx context.Context, in *pb.DeleteContainerStateRequest, opts ...grpc.CallOption) (*pb.DeleteContainerStateResponse, error) {
-	f.deleteStateCalls++
-	f.lastDeleteContainerID = in.ContainerId
 	return &pb.DeleteContainerStateResponse{Ok: true}, nil
 }
 

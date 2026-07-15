@@ -21,6 +21,11 @@ import (
 	"github.com/tj/assert"
 )
 
+func testWorkspaceWithStorage() types.Workspace {
+	id := uint(1)
+	return types.Workspace{Storage: &types.WorkspaceStorage{Id: &id}}
+}
+
 func NewSchedulerForTest() (*Scheduler, error) {
 	s, err := miniredis.Run()
 	if err != nil {
@@ -139,6 +144,7 @@ func TestPrivateGPUWorkerCapacityRequiresRequestedGPUCount(t *testing.T) {
 		GpuRequest:   []string{"H100"},
 		GpuCount:     8,
 		PoolSelector: "private-gpu-pool",
+		Workspace:    testWorkspaceWithStorage(),
 	}
 
 	worker, err := scheduler.selectWorkerFromWorkers([]*types.Worker{{
@@ -198,7 +204,7 @@ func TestPreemptibleMarketplaceCapacityReachableWithAllowMarketplace(t *testing.
 		mode:        types.PoolModeMarketplace,
 		preemptable: true,
 	}
-	request := &types.ContainerRequest{AllowMarketplace: true}
+	request := &types.ContainerRequest{AllowMarketplace: true, Workspace: testWorkspaceWithStorage()}
 	assert.Equal(
 		t,
 		[]WorkerPoolController{preemptibleMarketplace},
@@ -237,6 +243,7 @@ func TestPreemptibleMarketplaceCapacityReachableWithAllowMarketplace(t *testing.
 		GpuRequest:       []string{"A10G"},
 		GpuCount:         1,
 		AllowMarketplace: true,
+		Workspace:        testWorkspaceWithStorage(),
 	})
 	assert.NoError(t, err)
 	assert.Equal(t, preemptibleWorker.Id, worker.Id)
@@ -264,11 +271,12 @@ func TestPreemptibleMarketplaceCapacityReachableWithAllowMarketplace(t *testing.
 func TestMarketplaceControllersRequireExplicitSafeOptIn(t *testing.T) {
 	marketplace := &LocalWorkerPoolControllerForTest{name: "marketplace", mode: types.PoolModeMarketplace}
 	regular := &LocalWorkerPoolControllerForTest{name: "regular", mode: types.PoolModeLocal}
+	workspace := testWorkspaceWithStorage()
 
-	assert.Equal(t, []WorkerPoolController{regular}, filterControllersByFlags([]WorkerPoolController{marketplace, regular}, &types.ContainerRequest{}))
-	assert.Equal(t, []WorkerPoolController{marketplace, regular}, filterControllersByFlags([]WorkerPoolController{marketplace, regular}, &types.ContainerRequest{AllowMarketplace: true}))
-	assert.Equal(t, []WorkerPoolController{regular}, filterControllersByFlags([]WorkerPoolController{marketplace, regular}, &types.ContainerRequest{AllowMarketplace: true, DockerEnabled: true}))
-	assert.Equal(t, []WorkerPoolController{regular}, filterControllersByFlags([]WorkerPoolController{marketplace, regular}, &types.ContainerRequest{AllowMarketplace: true, PoolSelector: "regular"}))
+	assert.Equal(t, []WorkerPoolController{regular}, filterControllersByFlags([]WorkerPoolController{marketplace, regular}, &types.ContainerRequest{Workspace: workspace}))
+	assert.Equal(t, []WorkerPoolController{marketplace, regular}, filterControllersByFlags([]WorkerPoolController{marketplace, regular}, &types.ContainerRequest{AllowMarketplace: true, Workspace: workspace}))
+	assert.Equal(t, []WorkerPoolController{regular}, filterControllersByFlags([]WorkerPoolController{marketplace, regular}, &types.ContainerRequest{AllowMarketplace: true, DockerEnabled: true, Workspace: workspace}))
+	assert.Equal(t, []WorkerPoolController{regular}, filterControllersByFlags([]WorkerPoolController{marketplace, regular}, &types.ContainerRequest{AllowMarketplace: true, PoolSelector: "regular", Workspace: workspace}))
 }
 
 func TestMarketplaceWorkersRequireExplicitSafeOptIn(t *testing.T) {
@@ -291,45 +299,41 @@ func TestMarketplaceWorkersRequireExplicitSafeOptIn(t *testing.T) {
 		RequiresPoolSelector: false,
 	}, nil)
 
-	baseRequest := &types.ContainerRequest{Cpu: 1000, Memory: 512, GpuRequest: []string{"A10G"}, GpuCount: 1}
+	baseRequest := &types.ContainerRequest{Cpu: 1000, Memory: 512, GpuRequest: []string{"A10G"}, GpuCount: 1, Workspace: testWorkspaceWithStorage()}
 
 	_, err := scheduler.selectWorkerFromWorkers([]*types.Worker{marketplaceWorker}, baseRequest.Clone())
 	assert.Error(t, err)
 
-	worker, err := scheduler.selectWorkerFromWorkers([]*types.Worker{marketplaceWorker}, &types.ContainerRequest{Cpu: 1000, Memory: 512, GpuRequest: []string{"A10G"}, GpuCount: 1, AllowMarketplace: true})
+	allowed := baseRequest.Clone()
+	allowed.AllowMarketplace = true
+	worker, err := scheduler.selectWorkerFromWorkers([]*types.Worker{marketplaceWorker}, allowed)
 	assert.NoError(t, err)
 	assert.Equal(t, marketplaceWorker.Id, worker.Id)
 
-	_, err = scheduler.selectWorkerFromWorkers([]*types.Worker{marketplaceWorker}, &types.ContainerRequest{Cpu: 1000, Memory: 512, GpuRequest: []string{"A10G"}, GpuCount: 1, AllowMarketplace: true, DockerEnabled: true})
+	docker := allowed.Clone()
+	docker.DockerEnabled = true
+	_, err = scheduler.selectWorkerFromWorkers([]*types.Worker{marketplaceWorker}, docker)
 	assert.Error(t, err)
 
-	_, err = scheduler.selectWorkerFromWorkers([]*types.Worker{marketplaceWorker}, &types.ContainerRequest{Cpu: 1000, Memory: 512, GpuRequest: []string{"A10G"}, GpuCount: 1, AllowMarketplace: true, PoolSelector: "marketplace"})
+	selected := allowed.Clone()
+	selected.PoolSelector = "marketplace"
+	_, err = scheduler.selectWorkerFromWorkers([]*types.Worker{marketplaceWorker}, selected)
 	assert.Error(t, err)
 
-	_, err = scheduler.selectWorkerFromWorkers([]*types.Worker{marketplaceWorker}, &types.ContainerRequest{
-		Cpu:              1000,
-		Memory:           512,
-		GpuRequest:       []string{"A10G"},
-		GpuCount:         1,
-		AllowMarketplace: true,
-		Mounts: []types.Mount{{
-			LocalPath: "/var/run/docker.sock",
-			MountPath: "/var/run/docker.sock",
-		}},
-	})
+	dockerMount := allowed.Clone()
+	dockerMount.Mounts = []types.Mount{{
+		LocalPath: "/var/run/docker.sock",
+		MountPath: "/var/run/docker.sock",
+	}}
+	_, err = scheduler.selectWorkerFromWorkers([]*types.Worker{marketplaceWorker}, dockerMount)
 	assert.Error(t, err)
 
-	_, err = scheduler.selectWorkerFromWorkers([]*types.Worker{marketplaceWorker}, &types.ContainerRequest{
-		Cpu:              1000,
-		Memory:           512,
-		GpuRequest:       []string{"A10G"},
-		GpuCount:         1,
-		AllowMarketplace: true,
-		Mounts: []types.Mount{{
-			LocalPath: "/data/objects/workspace/stub",
-			MountPath: "/mnt/code",
-		}},
-	})
+	codeMount := allowed.Clone()
+	codeMount.Mounts = []types.Mount{{
+		LocalPath: "/data/objects/workspace/stub",
+		MountPath: "/mnt/code",
+	}}
+	_, err = scheduler.selectWorkerFromWorkers([]*types.Worker{marketplaceWorker}, codeMount)
 	assert.NoError(t, err)
 }
 
@@ -2060,6 +2064,7 @@ func TestAgentHostedProvisioningUsesRequestSizing(t *testing.T) {
 		GpuCount:     1,
 		PoolSelector: "private-pool",
 		Timestamp:    time.Now(),
+		Workspace:    testWorkspaceWithStorage(),
 	}
 
 	controllers, err := wb.getControllers(request)
@@ -2209,6 +2214,7 @@ func TestGetControllersRegistersAgentPoolFromRepository(t *testing.T) {
 		PoolSelector: poolState.Selector,
 		Cpu:          1000,
 		Memory:       1000,
+		Workspace:    testWorkspaceWithStorage(),
 	}
 
 	controllers, err := wb.getControllers(request)
@@ -2307,6 +2313,7 @@ func TestSelectPrivateAgentWorkerIgnoresStaleMachine(t *testing.T) {
 		PoolSelector: poolState.Selector,
 		Cpu:          1000,
 		Memory:       1000,
+		Workspace:    testWorkspaceWithStorage(),
 	})
 	assert.NoError(t, err)
 	assert.Equal(t, compute.AgentMachineWorkerID("live-machine"), worker.Id)
@@ -2910,6 +2917,39 @@ func TestServerlessPoolFallsBackWhenHighPriorityPoolIsFull(t *testing.T) {
 	worker, err = wb.selectWorker(secondRequest)
 	assert.Nil(t, err)
 	assert.Equal(t, defaultWorker.Id, worker.Id)
+}
+
+func TestAgentManagedCapacityRequiresWorkspaceStorage(t *testing.T) {
+	scheduler, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+
+	agentController := &AgentWorkerPoolController{
+		name:             "gladiator",
+		workerPoolConfig: types.WorkerPoolConfig{Mode: types.PoolModeExternal},
+	}
+	localController := &LocalWorkerPoolControllerForTest{name: "default"}
+	request := &types.ContainerRequest{Cpu: 1000, Memory: 1000}
+
+	assert.Equal(t, []WorkerPoolController{localController}, filterControllersByFlags(
+		[]WorkerPoolController{agentController, localController}, request,
+	))
+
+	workers := []*types.Worker{
+		{Id: "gladiator", PoolName: "gladiator", PoolSelector: "gladiator", Status: types.WorkerStatusAvailable, FreeCpu: 2000, FreeMemory: 2500, Priority: 1000},
+		{Id: "default", PoolName: "default", Status: types.WorkerStatusAvailable, FreeCpu: 2000, FreeMemory: 2500, Priority: 3},
+	}
+
+	worker, err := scheduler.selectWorkerFromWorkers(workers, request)
+	assert.Nil(t, err)
+	assert.Equal(t, "default", worker.Id)
+
+	request.Workspace = testWorkspaceWithStorage()
+	worker, err = scheduler.selectWorkerFromWorkers(workers, request)
+	assert.Nil(t, err)
+	assert.Equal(t, "gladiator", worker.Id)
+	assert.Equal(t, []WorkerPoolController{agentController, localController}, filterControllersByFlags(
+		[]WorkerPoolController{agentController, localController}, request,
+	))
 }
 
 func TestSelectBuildWorker(t *testing.T) {

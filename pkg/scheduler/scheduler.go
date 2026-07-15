@@ -898,6 +898,9 @@ func filterControllersByFlags(controllers []WorkerPoolController, request *types
 	filteredControllers := []WorkerPoolController{}
 
 	for _, controller := range controllers {
+		if !request.StorageAvailable() && controllerUsesAgentCapacity(controller) {
+			continue
+		}
 		if !marketplaceControllerAllowed(controller, request) {
 			continue
 		}
@@ -1104,6 +1107,7 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 
 	filteredWorkers := filterWorkersByMachine(workers, request) // Machine-pinned requests only see their machine's worker
 	filteredWorkers = filterWorkersByPoolSelector(filteredWorkers, request)
+	filteredWorkers = s.filterAgentWorkersByStorage(filteredWorkers, request)
 	filteredWorkers = s.filterMarketplaceWorkers(filteredWorkers, request)
 	filteredWorkers = s.filterLivePrivateAgentWorkers(filteredWorkers, request)
 	filteredWorkers = filterWorkersByResources(filteredWorkers, request)  // Filter workers resource requirements
@@ -1130,6 +1134,33 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 	})
 
 	return scoredWorkers[0].worker, nil
+}
+
+func (s *Scheduler) filterAgentWorkersByStorage(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
+	if len(workers) == 0 || request == nil || request.StorageAvailable() {
+		return workers
+	}
+
+	filtered := make([]*types.Worker, 0, len(workers))
+	for _, worker := range workers {
+		// Agent controllers persist their scheduling selector on every worker.
+		// Reject it even if this replica has not reconciled the pool yet.
+		if worker.PoolSelector != "" {
+			continue
+		}
+		if s != nil && s.workerPoolManager != nil {
+			selector := workerPoolSelector(worker)
+			pool, ok := s.workerPoolManager.GetPool(selector)
+			if !ok {
+				pool, ok = s.privateAgentPool(request.WorkspaceId, selector)
+			}
+			if ok && pool.Config.AgentHosted() {
+				continue
+			}
+		}
+		filtered = append(filtered, worker)
+	}
+	return filtered
 }
 
 func (s *Scheduler) filterMarketplaceWorkers(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {

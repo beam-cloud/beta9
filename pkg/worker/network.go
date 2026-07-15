@@ -58,8 +58,6 @@ const (
 	networkSlotPoolLockTTL                            = 120
 	containerNetworkCleanupRPCTimeout   time.Duration = 30 * time.Second
 	containerNetworkCleanupLockRetries                = 14
-	containerNetworkSlotProbePort                     = 1
-	containerNetworkSlotProbeTimeout    time.Duration = 50 * time.Millisecond
 	containerNetworkSlotAcquireAttempts               = 3
 )
 
@@ -1038,23 +1036,17 @@ func (m *ContainerNetworkManager) prepareNetworkSlotForAssignment(slot *containe
 	if slot == nil || slot.ip == "" {
 		return errors.New("network slot is missing an IP address")
 	}
-
-	m.clearNetworkSlotNeighbor(slot)
-	probe := probeTCP(m.ctx, slot.ip, containerNetworkSlotProbePort, containerNetworkSlotProbeTimeout)
-	if probe.RouteReady {
-		return nil
+	if !m.networkSlotResourcesExist(slot.id) {
+		return fmt.Errorf("network slot %s is missing local resources", slot.id)
 	}
-
-	m.clearNetworkSlotNeighbor(slot)
-	time.Sleep(containerNetworkSlotProbeTimeout)
-	probe = probeTCP(m.ctx, slot.ip, containerNetworkSlotProbePort, containerNetworkSlotProbeTimeout)
-	if probe.RouteReady {
-		return nil
+	ip, err := networkSlotIPv4(slot.id)
+	if err != nil {
+		return fmt.Errorf("network slot %s: %w", slot.id, err)
 	}
-	if probe.Err != nil {
-		return fmt.Errorf("network slot %s at %s is not route-ready: %w", slot.id, slot.ip, probe.Err)
+	if ip != slot.ip {
+		return fmt.Errorf("network slot %s has IP %s, expected %s", slot.id, ip, slot.ip)
 	}
-	return fmt.Errorf("network slot %s at %s is not route-ready", slot.id, slot.ip)
+	return nil
 }
 
 func (m *ContainerNetworkManager) clearNetworkSlotNeighbor(slot *containerNetworkSlot) {

@@ -166,6 +166,10 @@ func (t *Tailscale) ensureUp(ctx context.Context) error {
 	return nil
 }
 
+func (t *Tailscale) Start(ctx context.Context) error {
+	return t.ensureUp(ctx)
+}
+
 // Serve connects to a tailnet and serves a local service
 func (t *Tailscale) Serve(ctx context.Context, service types.InternalService) (net.Listener, error) {
 	server := t.currentServer()

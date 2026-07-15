@@ -11,6 +11,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -27,6 +28,7 @@ type ContainerMountManager struct {
 	storageConfig    types.StorageConfig
 	codeCacheRoot    string
 	codeCacheGroup   singleflight.Group
+	readyOutputDirs  sync.Map
 }
 
 type containerMountPoint struct {
@@ -115,6 +117,26 @@ func (c *ContainerMountManager) SetupContainerMounts(ctx context.Context, reques
 		}
 	}
 
+	return nil
+}
+
+func (c *ContainerMountManager) ensureBindMountSourceDirs(mounts []types.Mount) error {
+	for _, mount := range mounts {
+		if mount.MountType == storage.StorageModeMountPoint || mount.LocalPath == "" {
+			continue
+		}
+		if mount.MountPath == types.WorkerUserOutputVolume {
+			if _, ready := c.readyOutputDirs.Load(mount.LocalPath); ready {
+				continue
+			}
+		}
+		if err := os.MkdirAll(mount.LocalPath, 0755); err != nil {
+			return fmt.Errorf("create bind mount source %s for %s: %w", mount.LocalPath, mount.MountPath, err)
+		}
+		if mount.MountPath == types.WorkerUserOutputVolume {
+			c.readyOutputDirs.Store(mount.LocalPath, struct{}{})
+		}
+	}
 	return nil
 }
 
