@@ -28,8 +28,9 @@ type WorkerRepositoryService struct {
 }
 
 const (
-	containerRequestPollingInterval time.Duration = 100 * time.Millisecond
-	containerRequestBatchSize                     = 128
+	containerRequestPollingInterval   = 100 * time.Millisecond
+	containerRequestHeartbeatInterval = 30 * time.Second
+	containerRequestBatchSize         = 128
 )
 
 func NewWorkerRepositoryService(ctx context.Context, workerRepo repository.WorkerRepository, containerRepo repository.ContainerRepository, backendRepo repository.BackendRepository, computeRepo repository.ComputeRepository, eventRepo repository.EventRepository, rdb *common.RedisClient, appConfig types.AppConfig, cacheCoordinatorToken string) *WorkerRepositoryService {
@@ -58,6 +59,7 @@ func (s *WorkerRepositoryService) GetNextContainerRequest(req *pb.GetNextContain
 	if err := s.workerRepo.ToggleWorkerAvailable(req.WorkerId); err != nil {
 		return err
 	}
+	heartbeatAt := time.Now().Add(containerRequestHeartbeatInterval)
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -88,6 +90,12 @@ func (s *WorkerRepositoryService) GetNextContainerRequest(req *pb.GetNextContain
 
 			if len(requests) > 0 {
 				continue
+			}
+			if time.Now().After(heartbeatAt) {
+				if err := stream.Send(&pb.GetNextContainerRequestResponse{Ok: true}); err != nil {
+					return err
+				}
+				heartbeatAt = time.Now().Add(containerRequestHeartbeatInterval)
 			}
 
 			time.Sleep(containerRequestPollingInterval)
