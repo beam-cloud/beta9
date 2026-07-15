@@ -172,6 +172,21 @@ func TestToggleWorkerAvailable(t *testing.T) {
 	assert.Equal(t, types.WorkerStatusAvailable, worker.Status)
 }
 
+func TestToggleWorkerAvailablePreservesDisabledWorker(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	assert.NotNil(t, rdb)
+	assert.Nil(t, err)
+
+	repo := NewWorkerRedisRepositoryForTest(rdb)
+	worker := &types.Worker{Id: "disabled-worker", Status: types.WorkerStatusDisabled}
+	assert.Nil(t, repo.AddWorker(worker))
+	assert.Nil(t, repo.ToggleWorkerAvailable(worker.Id))
+
+	worker, err = repo.GetWorkerById(worker.Id)
+	assert.Nil(t, err)
+	assert.Equal(t, types.WorkerStatusDisabled, worker.Status)
+}
+
 func TestToggleWorkerAvailableReconcilesCapacityFromQueueAndContainerIndex(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	assert.NotNil(t, rdb)

@@ -55,6 +55,9 @@ func (s *WorkerRepositoryService) GetNextContainerRequest(req *pb.GetNextContain
 	if err := s.workerRepo.RecoverPendingContainerRequests(req.WorkerId); err != nil {
 		return err
 	}
+	if err := s.workerRepo.ToggleWorkerAvailable(req.WorkerId); err != nil {
+		return err
+	}
 	for {
 		select {
 		case <-s.ctx.Done():
