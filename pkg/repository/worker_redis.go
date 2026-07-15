@@ -473,10 +473,10 @@ func (r *WorkerRedisRepository) restoreWorkerRequests(ctx context.Context, worke
 }
 
 func (r *WorkerRedisRepository) UpdateWorkerStatus(workerId string, status types.WorkerStatus) error {
-	return r.updateWorkerStatus(workerId, status, false)
+	return r.updateWorkerStatus(workerId, status, "", false)
 }
 
-func (r *WorkerRedisRepository) updateWorkerStatus(workerId string, status types.WorkerStatus, reconcileCapacity bool) error {
+func (r *WorkerRedisRepository) updateWorkerStatus(workerId string, status, expected types.WorkerStatus, reconcileCapacity bool) error {
 	err := r.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerWorkerLock(workerId), schedulerWorkerLockOptions)
 	if err != nil {
 		return err
@@ -487,6 +487,9 @@ func (r *WorkerRedisRepository) updateWorkerStatus(workerId string, status types
 	worker, err := r.getWorkerFromKey(stateKey)
 	if err != nil {
 		return err
+	}
+	if expected != "" && worker.Status != expected {
+		return nil
 	}
 
 	if reconcileCapacity && status == types.WorkerStatusAvailable {
@@ -714,7 +717,7 @@ func (r *WorkerRedisRepository) SetWorkerKeepAlive(workerId string, keepAlive ty
 }
 
 func (r *WorkerRedisRepository) ToggleWorkerAvailable(workerId string) error {
-	return r.updateWorkerStatus(workerId, types.WorkerStatusAvailable, true)
+	return r.updateWorkerStatus(workerId, types.WorkerStatusAvailable, types.WorkerStatusPending, true)
 }
 
 func (r *WorkerRedisRepository) workerIndexKeys(worker *types.Worker) []string {

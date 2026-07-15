@@ -822,9 +822,6 @@ func (r *S2EventRepository) readEventHistoryStream(ctx context.Context, streamNa
 		seq := last.SeqNum + 1
 		nextSeqNum = &seq
 		startTimestamp = nil
-		if len(batch.Records) < int(count) {
-			return nil
-		}
 	}
 	return nil
 }
