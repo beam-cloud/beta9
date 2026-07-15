@@ -79,6 +79,9 @@ func TestWorkerUsageOpenMeterHTTPIntegration(t *testing.T) {
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
+		if request.WorkspaceId != "workspace-1" {
+			t.Errorf("quote workspace = %q, want workspace-1", request.WorkspaceId)
+		}
 
 		mu.Lock()
 		quoteCalls[request]++
@@ -257,9 +260,9 @@ func TestWorkerUsageOpenMeterHTTPIntegration(t *testing.T) {
 	if !finalDurationSeen || !gpuCostSeen {
 		t.Fatalf("final/GPU flags = %t/%t", finalDurationSeen, gpuCostSeen)
 	}
-	if calls[clients.ContainerCostRequest{Cpu: 1_000, Memory: 1_024}] != 1 ||
-		calls[clients.ContainerCostRequest{Cpu: 1_000, Memory: 1_024, Gpu: "T4", GpuCount: 1}] != 1 ||
-		calls[clients.ContainerCostRequest{Cpu: 2_000, Memory: 1_024}] != 1 {
+	if calls[clients.ContainerCostRequest{WorkspaceId: "workspace-1", Cpu: 1_000, Memory: 1_024}] != 1 ||
+		calls[clients.ContainerCostRequest{WorkspaceId: "workspace-1", Cpu: 1_000, Memory: 1_024, Gpu: "T4", GpuCount: 1}] != 1 ||
+		calls[clients.ContainerCostRequest{WorkspaceId: "workspace-1", Cpu: 2_000, Memory: 1_024}] != 1 {
 		t.Fatalf("quote calls = %+v, want cache, missing retry, refresh, and final flush", calls)
 	}
 	if external.count != 5 || external.unpriced != 3 || external.invalidCost {
