@@ -317,38 +317,62 @@ func (s *Service) extendManagedReservations(ctx context.Context, state *model.Po
 
 func (s *Service) ListPoolMachines(ctx context.Context, in *pb.ListPoolMachinesRequest) (*pb.ListPoolMachinesResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
+	machines, err := s.ListWorkspaceMachines(ctx, authInfo, in.PoolName, int(in.Limit))
+	if err != nil {
+		return &pb.ListPoolMachinesResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+	return &pb.ListPoolMachinesResponse{Ok: true, Machines: machines}, nil
+}
+
+// ListWorkspaceMachines lists private/BYOC inventory in the authenticated workspace.
+func (s *Service) ListWorkspaceMachines(ctx context.Context, authInfo *auth.AuthInfo, poolName string, limit int) ([]*pb.Machine, error) {
 	workspaceID := computeWorkspaceID(authInfo)
 	if workspaceID == "" {
-		return &pb.ListPoolMachinesResponse{Ok: false, ErrMsg: "missing workspace auth"}, nil
-	}
-	state, err := s.getPrivatePoolState(ctx, workspaceID, in.PoolName)
-	if err != nil {
-		return &pb.ListPoolMachinesResponse{Ok: false, ErrMsg: err.Error()}, nil
-	}
-	if state == nil || !poolStateIsPrivate(state) {
-		return &pb.ListPoolMachinesResponse{Ok: false, ErrMsg: "pool not found"}, nil
+		return nil, errors.New("missing workspace auth")
 	}
 
-	machines, err := s.computeRepo.ListAgentTokenStates(ctx, workspaceID, state.Name)
-	if err != nil {
-		return &pb.ListPoolMachinesResponse{Ok: false, ErrMsg: err.Error()}, nil
-	}
-	machines, deleted, err := s.reconcileBYOCPoolMachinesForRead(ctx, workspaceID, state, machines, time.Now().UTC())
-	if err != nil {
-		return &pb.ListPoolMachinesResponse{Ok: false, ErrMsg: err.Error()}, nil
-	}
-	if deleted {
-		return &pb.ListPoolMachinesResponse{Ok: true, Machines: nil}, nil
-	}
-	if limit := int(in.Limit); limit > 0 && len(machines) > limit {
-		machines = machines[:limit]
+	var states []*model.PoolState
+	if poolName != "" {
+		state, err := s.getPrivatePoolState(ctx, workspaceID, poolName)
+		if err != nil {
+			return nil, err
+		}
+		if state == nil || !poolStateIsPrivate(state) {
+			return nil, errors.New("pool not found")
+		}
+		states = []*model.PoolState{state}
+	} else {
+		var err error
+		states, err = s.listPrivatePoolStates(ctx, workspaceID, 0)
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	out := make([]*pb.Machine, 0, len(machines))
-	for _, machine := range machines {
-		out = append(out, s.agentMachineToProto(machine))
+	out := []*pb.Machine{}
+	for _, state := range states {
+		if !poolStateIsPrivate(state) {
+			continue
+		}
+		machines, err := s.computeRepo.ListAgentTokenStates(ctx, workspaceID, state.Name)
+		if err != nil {
+			return nil, err
+		}
+		machines, deleted, err := s.reconcileBYOCPoolMachinesForRead(ctx, workspaceID, state, machines, time.Now().UTC())
+		if err != nil {
+			return nil, err
+		}
+		if deleted {
+			continue
+		}
+		for _, machine := range machines {
+			out = append(out, s.agentMachineToProto(machine))
+			if limit > 0 && len(out) == limit {
+				return out, nil
+			}
+		}
 	}
-	return &pb.ListPoolMachinesResponse{Ok: true, Machines: out}, nil
+	return out, nil
 }
 
 // ListMachineContainers lists the active containers scheduled on one machine.

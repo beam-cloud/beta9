@@ -636,7 +636,7 @@ def delete(service: ServiceClient, name: str):
 
 @management.command(
     name="join-command",
-    help="Print the one-command installer for a private agent pool.",
+    help="Print the installer; edit --worker-image to pin this machine to a test build.",
 )
 @click.argument("name")
 @click.option("--ttl", default="30m", show_default=True, help="Join token lifetime.")
@@ -659,7 +659,6 @@ def join_command(service: ServiceClient, name: str, ttl: str):
 
       # Print the command without running it
       {cli_name} pool join private-gpu --print-only
-      \b
     """,
 )
 @click.argument("name")
@@ -679,7 +678,11 @@ def join_command(service: ServiceClient, name: str, ttl: str):
     default=None,
     help="Override the agent executor returned by preflight.",
 )
-@click.option("--worker-image", default="", help="Worker image for the worker-container executor.")
+@click.option(
+    "--worker-image",
+    default="",
+    help="Pin this machine to a specific worker image instead of following cluster rollouts.",
+)
 @click.option("--max-cpu", default="", help="Maximum CPU cores to advertise from this machine.")
 @click.option("--max-memory", default="", help="Maximum memory to advertise, for example 32Gi.")
 @click.option("--max-gpus", type=click.IntRange(0), default=0, help="Maximum GPUs to advertise.")

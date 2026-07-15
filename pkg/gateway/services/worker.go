@@ -1,6 +1,7 @@
 package gatewayservices
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"time"
@@ -23,13 +24,6 @@ func (gws *GatewayService) ListWorkers(ctx context.Context, in *pb.ListWorkersRe
 		}, nil
 	}
 
-	if _, err := isClusterAdmin(ctx); err != nil {
-		return &pb.ListWorkersResponse{
-			Ok:     false,
-			ErrMsg: err.Error(),
-		}, nil
-	}
-
 	workers, err := gws.workerRepo.GetAllWorkers()
 	if err != nil {
 		return &pb.ListWorkersResponse{
@@ -38,25 +32,33 @@ func (gws *GatewayService) ListWorkers(ctx context.Context, in *pb.ListWorkersRe
 		}, nil
 	}
 
-	workers = gws.filterControlPlaneWorkers(workers)
+	workers = gws.filterVisibleWorkers(authInfo, workers)
 	sortWorkers(workers)
 
 	pbWorkers := make([]*pb.Worker, len(workers))
 	for i, w := range workers {
+		rolloutVersion := ""
+		if w.RolloutGeneration != "" {
+			rolloutVersion = types.WorkerImageVersion(w.WorkerImageOverride, gws.appConfig.Worker.ImageTag)
+		}
 		pbWorkers[i] = &pb.Worker{
-			Id:            w.Id,
-			Status:        string(w.Status),
-			Gpu:           w.Gpu,
-			PoolName:      w.PoolName,
-			MachineId:     w.MachineId,
-			Priority:      w.Priority,
-			TotalCpu:      w.TotalCpu,
-			TotalMemory:   w.TotalMemory,
-			TotalGpuCount: w.TotalGpuCount,
-			FreeCpu:       w.FreeCpu,
-			FreeMemory:    w.FreeMemory,
-			FreeGpuCount:  w.FreeGpuCount,
-			BuildVersion:  w.BuildVersion,
+			Id:                  w.Id,
+			Status:              string(w.Status),
+			Gpu:                 w.Gpu,
+			PoolName:            w.PoolName,
+			MachineId:           w.MachineId,
+			Priority:            w.Priority,
+			TotalCpu:            w.TotalCpu,
+			TotalMemory:         w.TotalMemory,
+			TotalGpuCount:       w.TotalGpuCount,
+			FreeCpu:             w.FreeCpu,
+			FreeMemory:          w.FreeMemory,
+			FreeGpuCount:        w.FreeGpuCount,
+			BuildVersion:        w.BuildVersion,
+			CordonRequested:     w.CordonRequested,
+			RolloutGeneration:   w.RolloutGeneration,
+			RolloutBuildVersion: rolloutVersion,
+			WorkerImageOverride: w.WorkerImageOverride,
 		}
 
 		containers, err := gws.containerRepo.GetActiveContainersByWorkerId(w.Id)
@@ -81,56 +83,58 @@ func (gws *GatewayService) ListWorkers(ctx context.Context, in *pb.ListWorkersRe
 	}, nil
 }
 
-// filterControlPlaneWorkers drops workers belonging to workspace private
-// pools. Pool names are not namespaced by workspace, so listing every
-// workspace's private-pool agent workers produces duplicate-looking rows
-// that are not actionable for cluster operators; those machines are managed
-// through the workspace-scoped compute APIs instead.
-func (gws *GatewayService) filterControlPlaneWorkers(workers []*types.Worker) []*types.Worker {
+// Scope worker management by authenticated identity, never by pool name alone.
+func (gws *GatewayService) filterVisibleWorkers(authInfo *auth.AuthInfo, workers []*types.Worker) []*types.Worker {
 	filtered := make([]*types.Worker, 0, len(workers))
 	for _, worker := range workers {
-		poolConfig, ok := gws.appConfig.Worker.Pools[worker.PoolName]
-		if !ok || poolConfig.Mode == types.PoolModePrivate {
-			continue
+		if gws.workerVisibleTo(authInfo, worker) {
+			filtered = append(filtered, worker)
 		}
-		// Agent (private pool) workers always set RequiresPoolSelector; if the
-		// config pool of the same name does not, this worker belongs to a
-		// private pool whose name collides with a control-plane pool.
-		if worker.RequiresPoolSelector && !poolConfig.RequiresPoolSelector {
-			continue
-		}
-		filtered = append(filtered, worker)
 	}
 	return filtered
 }
 
+func (gws *GatewayService) workerVisibleTo(authInfo *auth.AuthInfo, worker *types.Worker) bool {
+	if worker == nil || authInfo == nil || authInfo.Token == nil {
+		return false
+	}
+	if authInfo.Token.TokenType != types.TokenTypeClusterAdmin {
+		return authInfo.Workspace != nil && !worker.ControlPlaneManaged &&
+			worker.WorkspaceId == authInfo.Workspace.ExternalId
+	}
+	if worker.ControlPlaneManaged {
+		return true
+	}
+	if worker.WorkspaceId != "" {
+		return false
+	}
+	pool, ok := gws.appConfig.Worker.Pools[worker.PoolName]
+	if !ok || pool.Mode == types.PoolModePrivate {
+		return false
+	}
+	// Distinguish a private agent worker from a same-named configured pool.
+	return !worker.RequiresPoolSelector || pool.RequiresPoolSelector
+}
+
+func (gws *GatewayService) visibleWorker(authInfo *auth.AuthInfo, workerID string) (*types.Worker, error) {
+	worker, err := gws.workerRepo.GetWorkerById(workerID)
+	if err != nil {
+		return nil, err
+	}
+	if !gws.workerVisibleTo(authInfo, worker) {
+		return nil, errors.New("worker not found")
+	}
+	return worker, nil
+}
+
 func sortWorkers(w []*types.Worker) {
 	slices.SortFunc(w, func(i, j *types.Worker) int {
-		if i.PoolName < j.PoolName {
-			return -1
-		}
-		if i.PoolName > j.PoolName {
-			return 1
-		}
-		if i.Status < j.Status {
-			return -1
-		}
-		if i.Status > j.Status {
-			return 1
-		}
-		if i.MachineId < j.MachineId {
-			return -1
-		}
-		if i.MachineId > j.MachineId {
-			return 1
-		}
-		if i.Id < j.Id {
-			return -1
-		}
-		if i.Id > j.Id {
-			return 1
-		}
-		return 0
+		return cmp.Or(
+			cmp.Compare(i.PoolName, j.PoolName),
+			cmp.Compare(i.Status, j.Status),
+			cmp.Compare(i.MachineId, j.MachineId),
+			cmp.Compare(i.Id, j.Id),
+		)
 	})
 }
 
@@ -144,22 +148,14 @@ func (gws *GatewayService) CordonWorker(ctx context.Context, in *pb.CordonWorker
 		}, nil
 	}
 
-	if _, err := isClusterAdmin(ctx); err != nil {
-		return &pb.CordonWorkerResponse{
-			Ok:     false,
-			ErrMsg: err.Error(),
-		}, nil
-	}
-
-	worker, err := gws.workerRepo.GetWorkerById(in.WorkerId)
+	worker, err := gws.visibleWorker(authInfo, in.WorkerId)
 	if err != nil {
 		return &pb.CordonWorkerResponse{
 			Ok:     false,
 			ErrMsg: err.Error(),
 		}, nil
 	}
-
-	if err := gws.workerRepo.UpdateWorkerStatus(worker.Id, types.WorkerStatusDisabled); err != nil {
+	if err := gws.setWorkerCordon(ctx, worker, true); err != nil {
 		return &pb.CordonWorkerResponse{
 			Ok:     false,
 			ErrMsg: err.Error(),
@@ -180,22 +176,14 @@ func (gws *GatewayService) UncordonWorker(ctx context.Context, in *pb.UncordonWo
 			ErrMsg: "Unauthorized Access",
 		}, nil
 	}
-	if _, err := isClusterAdmin(ctx); err != nil {
-		return &pb.UncordonWorkerResponse{
-			Ok:     false,
-			ErrMsg: err.Error(),
-		}, nil
-	}
-
-	worker, err := gws.workerRepo.GetWorkerById(in.WorkerId)
+	worker, err := gws.visibleWorker(authInfo, in.WorkerId)
 	if err != nil {
 		return &pb.UncordonWorkerResponse{
 			Ok:     false,
 			ErrMsg: err.Error(),
 		}, nil
 	}
-
-	err = gws.workerRepo.UpdateWorkerStatus(worker.Id, types.WorkerStatusAvailable)
+	err = gws.setWorkerCordon(ctx, worker, false)
 	if err != nil {
 		return &pb.UncordonWorkerResponse{
 			Ok:     false,
@@ -218,15 +206,17 @@ func (gws *GatewayService) DrainWorker(ctx context.Context, in *pb.DrainWorkerRe
 		}, nil
 	}
 
-	if _, err := isClusterAdmin(ctx); err != nil {
+	worker, err := gws.visibleWorker(authInfo, in.WorkerId)
+	if err != nil {
 		return &pb.DrainWorkerResponse{
 			Ok:     false,
 			ErrMsg: err.Error(),
 		}, nil
 	}
-
-	worker, err := gws.workerRepo.GetWorkerById(in.WorkerId)
-	if err != nil {
+	// Drain is a safe, one-step operation: stop new scheduling before asking
+	// existing containers to terminate. The cordon remains until an explicit
+	// uncordon, which makes the command predictable for maintenance scripts.
+	if err := gws.setWorkerCordon(ctx, worker, true); err != nil {
 		return &pb.DrainWorkerResponse{
 			Ok:     false,
 			ErrMsg: err.Error(),
@@ -243,6 +233,9 @@ func (gws *GatewayService) DrainWorker(ctx context.Context, in *pb.DrainWorkerRe
 
 	var group errgroup.Group
 	for _, container := range containers {
+		if container.Status == types.ContainerStatusStopping {
+			continue
+		}
 		group.Go(func() error {
 			return gws.scheduler.Stop(&types.StopContainerArgs{ContainerId: container.ContainerId, Reason: types.StopContainerReasonAdmin})
 		})
@@ -257,6 +250,16 @@ func (gws *GatewayService) DrainWorker(ctx context.Context, in *pb.DrainWorkerRe
 	return &pb.DrainWorkerResponse{
 		Ok: true,
 	}, nil
+}
+
+func (gws *GatewayService) setWorkerCordon(ctx context.Context, worker *types.Worker, cordoned bool) error {
+	if gws.computeService != nil {
+		handled, err := gws.computeService.SetAgentWorkerCordon(ctx, worker, cordoned)
+		if err != nil || handled {
+			return err
+		}
+	}
+	return gws.workerRepo.SetWorkerCordon(worker.Id, cordoned)
 }
 
 func isClusterAdmin(ctx context.Context) (bool, error) {

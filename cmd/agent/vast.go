@@ -47,7 +47,7 @@ func runVastInstall(ctx context.Context, args []string) error {
 	flags.StringVar(&opts.BinaryPath, "binary", "", "agent binary path for generated systemd units")
 	flags.StringVar(&opts.MaxCPU, "max-cpu-per-gpu", "", "maximum CPU cores advertised by each per-GPU agent")
 	flags.StringVar(&opts.MaxMemory, "max-memory-per-gpu", "", "maximum memory advertised by each per-GPU agent")
-	flags.StringVar(&opts.WorkerImage, "worker-image", "", "worker image for each per-GPU agent")
+	flags.StringVar(&opts.WorkerImage, "worker-image", "", "optional worker image pin for each per-GPU agent")
 	flags.UintVar(&opts.NetworkSlots, "network-slots", 0, "number of preallocated container network slots per GPU agent")
 	flags.UintVar(&opts.ContainerStartConcurrency, "container-start-concurrency", 0, "maximum concurrent container starts per GPU agent")
 	flags.StringVar(&opts.SentinelImage, "sentinel-image", agentvast.DefaultSentinelImage, "Vast default-job sentinel image")
@@ -102,7 +102,7 @@ func runVastGPUAgent(ctx context.Context, args []string) error {
 	flags.StringVar(&opts.GPUIndex, "gpu-index", "", "host GPU index assigned to this agent")
 	flags.StringVar(&opts.MaxCPU, "max-cpu", "", "maximum CPU cores to advertise")
 	flags.StringVar(&opts.MaxMemory, "max-memory", "", "maximum memory to advertise")
-	flags.StringVar(&opts.WorkerImage, "worker-image", "", "worker image")
+	flags.StringVar(&opts.WorkerImage, "worker-image", "", "optional worker image pin")
 	flags.UintVar(&opts.NetworkSlots, "network-slots", 0, "number of preallocated container network slots")
 	flags.UintVar(&opts.ContainerStartConcurrency, "container-start-concurrency", 0, "maximum concurrent container starts")
 	if err := flags.Parse(args); err != nil {

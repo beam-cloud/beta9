@@ -20,7 +20,9 @@ type WorkerRepository interface {
 	CordonAllPendingWorkersInPool(poolName string) error
 	GetAllWorkersOnMachine(machineId string) ([]*types.Worker, error)
 	AddWorker(w *types.Worker) error
-	ToggleWorkerAvailable(workerId string) error
+	ToggleWorkerAvailable(workerId, generation string) error
+	SetWorkerCordon(workerId string, cordoned bool) error
+	PrepareWorkerRollout(workerId, generation string) (bool, error)
 	UpdateWorkerStatus(workerId string, status types.WorkerStatus) error
 	RemoveWorker(workerId string) error
 	SetWorkerKeepAlive(workerId string, keepAlive types.WorkerKeepAlive) error

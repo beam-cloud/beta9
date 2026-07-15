@@ -34,7 +34,7 @@ func newJoinFlags(name string) (*flag.FlagSet, *joinFlags) {
 	flags.BoolVar(&opts.DevMode, "dev", false, "use local development installer defaults")
 	flags.StringVar(&opts.TransportOverride, "transport", "", "override transport returned by gateway bootstrap")
 	flags.StringVar(&opts.ExecutorOverride, "executor", "", "override executor returned by local preflight")
-	flags.StringVar(&opts.WorkerImage, "worker-image", "", "worker image for worker-container executor")
+	flags.StringVar(&opts.WorkerImage, "worker-image", "", "optional worker image pin (edit the generated value to test a specific version)")
 	flags.StringVar(&opts.CacheDir, "cache-dir", "", "agent host cache directory")
 	flags.StringVar(&opts.MaxCPU, "max-cpu", "", "maximum CPU cores to advertise to the pool")
 	flags.StringVar(&opts.MaxMemory, "max-memory", "", "maximum memory to advertise to the pool, for example 32Gi or 32768Mi")

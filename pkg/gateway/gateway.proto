@@ -1361,6 +1361,10 @@ message JoinAgentRequest {
   repeated string gpu_ids = 14;
   uint32 network_slot_pool_size = 15;
   uint32 container_start_concurrency = 16;
+  // Optional per-machine worker image override. The gateway remembers the
+  // generated value as a baseline so untouched installs continue to follow
+  // future image tag changes while manually edited values remain pinned.
+  string worker_image = 17;
 }
 
 message JoinAgentResponse {
@@ -1467,6 +1471,8 @@ message AgentWorkerSlot {
   string gvisor_platform = 22;
   string gvisor_root = 23;
   repeated string gvisor_extra_args = 24;
+  // Deterministic identity of the restart-relevant slot specification.
+  string generation = 25;
 }
 
 message StreamAgentRequest { string agent_token = 1; }

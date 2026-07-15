@@ -150,6 +150,7 @@ func join(ctx context.Context, client *Client, opts types.AgentJoinOptions) (*jo
 		Executor:                  executor,
 		NetworkSlotPoolSize:       capacity.NetworkSlotPoolSize,
 		ContainerStartConcurrency: capacity.ContainerStartConcurrency,
+		WorkerImage:               strings.TrimSpace(opts.WorkerImage),
 	}
 
 	res := joinResponse{}

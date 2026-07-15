@@ -62,7 +62,7 @@ func (s *WorkerRepositoryService) GetNextContainerRequest(req *pb.GetNextContain
 		defer s.workerEvents.unregister(sinkID)
 		requestsReady = ready
 	}
-	if err := s.workerRepo.ToggleWorkerAvailable(req.WorkerId); err != nil {
+	if err := s.workerRepo.ToggleWorkerAvailable(req.WorkerId, ""); err != nil {
 		return err
 	}
 	poll := time.NewTicker(containerRequestPollingInterval)
@@ -168,7 +168,7 @@ func (s *WorkerRepositoryService) GetWorkerById(ctx context.Context, req *pb.Get
 }
 
 func (s *WorkerRepositoryService) ToggleWorkerAvailable(ctx context.Context, req *pb.ToggleWorkerAvailableRequest) (*pb.ToggleWorkerAvailableResponse, error) {
-	err := s.workerRepo.ToggleWorkerAvailable(req.WorkerId)
+	err := s.workerRepo.ToggleWorkerAvailable(req.WorkerId, req.Generation)
 	if err != nil {
 		return &pb.ToggleWorkerAvailableResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}

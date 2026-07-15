@@ -158,6 +158,8 @@ type AgentTokenState struct {
 	Executor                  string                `json:"executor"`
 	NetworkSlotPoolSize       uint32                `json:"network_slot_pool_size"`
 	ContainerStartConcurrency uint32                `json:"container_start_concurrency"`
+	WorkerImageOverride       string                `json:"worker_image_override,omitempty"`
+	Cordoned                  bool                  `json:"cordoned,omitempty"`
 	Schedulable               bool                  `json:"schedulable"`
 	AvailabilityReason        string                `json:"availability_reason,omitempty"`
 	AvailabilityUpdatedAt     time.Time             `json:"availability_updated_at,omitempty"`
@@ -196,6 +198,7 @@ type AgentPathMetric struct {
 }
 
 type AgentWorkerSlotState struct {
+	Generation                string              `json:"generation"`
 	WorkerID                  string              `json:"worker_id"`
 	WorkerTokenID             string              `json:"worker_token_id"`
 	WorkerTokenHash           string              `json:"worker_token_hash"`

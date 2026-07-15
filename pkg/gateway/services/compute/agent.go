@@ -2,6 +2,8 @@ package compute
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -61,6 +63,14 @@ func (s *Service) JoinAgent(ctx context.Context, in *pb.JoinAgentRequest) (*pb.J
 	if machineID == "" {
 		machineID = model.AgentMachineID(tokenState.WorkspaceID, tokenState.PoolName, in.MachineFingerprint)
 	}
+	existing, err := s.computeRepo.GetAgentMachineState(ctx, tokenState.WorkspaceID, tokenState.PoolName, machineID)
+	if err != nil {
+		return &pb.JoinAgentResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+	workerImageOverride := strings.TrimSpace(in.WorkerImage)
+	if workerImageOverride == agentWorkerImage(s.appConfig) {
+		workerImageOverride = ""
+	}
 	now := time.Now()
 	agentState := &model.AgentTokenState{
 		TokenHash:                 hashComputeToken(agentToken),
@@ -84,11 +94,18 @@ func (s *Service) JoinAgent(ctx context.Context, in *pb.JoinAgentRequest) (*pb.J
 		Executor:                  firstNonEmpty(in.Executor, defaultPrivateExecutor),
 		NetworkSlotPoolSize:       in.NetworkSlotPoolSize,
 		ContainerStartConcurrency: in.ContainerStartConcurrency,
+		WorkerImageOverride:       workerImageOverride,
 		Schedulable:               in.Schedulable,
 		Preflight:                 preflightChecksFromProto(in.Preflight),
 		CreatedAt:                 now,
 		LastJoinAt:                now,
 		LastHeartbeatAt:           now,
+	}
+	if existing != nil {
+		agentState.Cordoned = existing.Cordoned
+		if !existing.CreatedAt.IsZero() {
+			agentState.CreatedAt = existing.CreatedAt
+		}
 	}
 	if poolState != nil && poolState.ManagementSource != "" && poolState.WorkerConfig != nil {
 		if poolState.WorkerConfig.NetworkSlotPoolSize > 0 {
@@ -327,7 +344,7 @@ func (s *Service) RequestAgentTransportCredential(ctx context.Context, in *pb.Re
 		Ok:         true,
 		AuthKey:    s.appConfig.Tailscale.AgentAuthKey,
 		ControlUrl: s.appConfig.Tailscale.ControlURL,
-		Hostname:   "beam-agent-" + agentState.MachineID,
+		Hostname:   types.AgentTailnetHostnamePrefix + agentState.MachineID,
 		Ephemeral:  true,
 	}, nil
 }
@@ -582,7 +599,10 @@ func (s *Service) agentMachineWorker(agentState *model.AgentTokenState) (*types.
 		}
 		return nil, err
 	}
-	if worker.MachineId != agentState.MachineID || worker.PoolName != agentState.PoolName || worker.Status == types.WorkerStatusDisabled {
+	if worker.MachineId != agentState.MachineID || worker.PoolName != agentState.PoolName {
+		return nil, nil
+	}
+	if worker.Status == types.WorkerStatusDisabled && !agentState.Cordoned && worker.RolloutGeneration == "" {
 		return nil, nil
 	}
 	return worker, nil
@@ -607,8 +627,23 @@ func (s *Service) ensureAgentWorkerSlot(ctx context.Context, agentState *model.A
 	}
 
 	slot := agentWorkerSlotState(s.appConfig, agentState, worker, poolConfig, tokenID, tokenHash)
+	if err := setAgentWorkerSlotGeneration(slot); err != nil {
+		return nil, "", err
+	}
 	if existing != nil {
 		slot.CreatedAt = existing.CreatedAt
+	}
+	if existing != nil && existing.Generation == slot.Generation {
+		return existing, token, nil
+	}
+	if existing != nil {
+		prepared, err := s.workerRepo.PrepareWorkerRollout(worker.Id, slot.Generation)
+		if err != nil {
+			return nil, "", err
+		}
+		if !prepared {
+			return existing, token, nil
+		}
 	}
 	if err := s.computeRepo.SaveAgentWorkerSlotState(ctx, slot); err != nil {
 		return nil, "", err
@@ -736,13 +771,30 @@ func agentWorkerSlotState(config types.AppConfig, agentState *model.AgentTokenSt
 		GPUCount:                  worker.TotalGpuCount,
 		GPUAssignment:             strings.Join(agentState.GPUIDs, ","),
 		NetworkPrefix:             common.WorkerNetworkPrefix(config.ClusterName, agentState.MachineID),
-		WorkerImage:               agentWorkerImage(config),
+		WorkerImage:               firstNonEmpty(agentState.WorkerImageOverride, agentWorkerImage(config)),
 		NetworkSlotPoolSize:       networkSlots,
 		ContainerStartConcurrency: startConcurrency,
 		RequiresPoolSelector:      requiresPoolSelector,
 		Priority:                  priority,
 		Preemptable:               preemptable,
 	}
+}
+
+func setAgentWorkerSlotGeneration(slot *model.AgentWorkerSlotState) error {
+	if slot == nil {
+		return fmt.Errorf("agent worker slot is unavailable")
+	}
+	copy := *slot
+	copy.Generation = ""
+	copy.CreatedAt = time.Time{}
+	copy.UpdatedAt = time.Time{}
+	data, err := json.Marshal(copy)
+	if err != nil {
+		return err
+	}
+	sum := sha256.Sum256(data)
+	slot.Generation = fmt.Sprintf("%x", sum[:])
+	return nil
 }
 
 // agentWorkerRuntime picks the container runtime for an agent worker slot.
@@ -786,6 +838,7 @@ func agentWorkerImageWithTag(config types.AppConfig, tag string) string {
 
 func agentWorkerSlotToProto(slot *model.AgentWorkerSlotState, workerToken string) *pb.AgentWorkerSlot {
 	return &pb.AgentWorkerSlot{
+		Generation:                slot.Generation,
 		WorkerId:                  slot.WorkerID,
 		WorkerToken:               workerToken,
 		PoolName:                  slot.PoolName,

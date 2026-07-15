@@ -7,14 +7,11 @@ from rich.table import Column, Table, box
 from .. import terminal
 from ..channel import ServiceClient
 from ..cli import extraclick
-from ..clients.gateway import (
-    CordonWorkerRequest,
-    DrainWorkerRequest,
-    ListWorkersRequest,
-    ListWorkersResponse,
-    UncordonWorkerRequest,
-)
+from ..clients.gateway import ListWorkersRequest, ListWorkersResponse
+from ..clients.types import Worker
 from .extraclick import ClickCommonGroup, ClickManagementGroup
+from .machine_format import format_memory
+from .worker_management import apply_worker_action, worker_ids_from_args
 
 
 @click.group(cls=ClickCommonGroup)
@@ -24,22 +21,72 @@ def common(**_):
 
 @click.group(
     name="worker",
-    help="Manage workers.",
+    help="Inspect and maintain workers visible to the current profile.",
     cls=ClickManagementGroup,
 )
 def management():
     pass
 
 
+def _worker_state(worker: Worker) -> str:
+    states = []
+    if worker.cordon_requested:
+        states.append("[red]cordoned[/red]")
+    if worker.rollout_generation:
+        phase = "draining" if worker.active_containers else "upgrading"
+        states.append(f"[yellow]{phase}[/yellow]")
+    if states:
+        return " · ".join(states)
+    return {
+        "available": "[green]available[/green]",
+        "pending": "[yellow]pending[/yellow]",
+        "disabled": "[red]disabled[/red]",
+    }.get(worker.status, worker.status or "-")
+
+
+def _worker_matches_state(worker: Worker, state: str) -> bool:
+    if state == "cordoned":
+        return worker.cordon_requested
+    if state == "draining":
+        return bool(worker.rollout_generation and worker.active_containers)
+    if state == "upgrading":
+        return bool(worker.rollout_generation and not worker.active_containers)
+    return worker.status == state
+
+
+def _worker_resources(worker: Worker) -> str:
+    parts = [
+        f"{worker.free_cpu / 1000:g}/{worker.total_cpu / 1000:g} CPU",
+        f"{format_memory(worker.free_memory)}/{format_memory(worker.total_memory)}",
+    ]
+    if worker.gpu or worker.total_gpu_count:
+        parts.append(f"{worker.free_gpu_count}/{worker.total_gpu_count} {worker.gpu or 'GPU'}")
+    return "\n".join(parts)
+
+
+def _worker_version(worker: Worker) -> str:
+    current = worker.build_version or "-"
+    target = worker.rollout_build_version
+    if target and target != current:
+        version = f"[yellow]{current} → {target}[/yellow]"
+    else:
+        version = target or current
+    if worker.worker_image_override:
+        version += " [magenta](pinned)[/magenta]"
+    return version
+
+
 @management.command(
     name="list",
-    help="List all workers.",
+    help="List workers with maintenance and rollout state.",
     epilog="""
     Examples:
 
-      # List workers and output in JSON format
-      {cli_name} worker list --format json
-      \b
+      # Show workers in a pool
+      {cli_name} worker list --pool my-gpu-pool
+
+      # Watch rollout details as JSON
+      watch -n 2 '{cli_name} worker list --state upgrading --format json'
     """,
 )
 @click.option(
@@ -47,192 +94,114 @@ def management():
     type=click.Choice(("table", "json")),
     default="table",
     show_default=True,
-    help="Change the format of the output.",
+    help="Output format.",
+)
+@click.option("--pool", "pool_name", help="Only show workers in this pool.")
+@click.option("--machine", "machine_id", help="Only show workers on this machine.")
+@click.option(
+    "--state",
+    "--status",
+    "state",
+    type=click.Choice(("available", "pending", "disabled", "cordoned", "draining", "upgrading")),
+    help="Only show workers in this operational state.",
 )
 @extraclick.pass_service_client
 def list_workers(
     service: ServiceClient,
     format: str,
+    pool_name: str,
+    machine_id: str,
+    state: str,
 ):
-    res: ListWorkersResponse
-    res = service.gateway.list_workers(ListWorkersRequest())
-
+    res: ListWorkersResponse = service.gateway.list_workers(ListWorkersRequest())
     if not res.ok:
         terminal.error(res.err_msg)
 
+    workers: List[Worker] = list(res.workers)
+    if pool_name:
+        workers = [worker for worker in workers if worker.pool_name == pool_name]
+    if machine_id:
+        workers = [worker for worker in workers if worker.machine_id == machine_id]
+    if state:
+        workers = [worker for worker in workers if _worker_matches_state(worker, state)]
+
     if format == "json":
-        workers = [d.to_dict(casing=Casing.SNAKE) for d in res.workers]  # type:ignore
-        terminal.print_json(workers)
+        terminal.print_json(
+            [worker.to_dict(casing=Casing.SNAKE, include_default_values=True) for worker in workers]  # type: ignore
+        )
         return
 
     table = Table(
-        Column("ID"),
+        Column("ID", no_wrap=True),
         Column("Pool"),
-        Column("Status"),
-        Column("Machine ID"),
-        Column("Priority"),
-        Column("CPU"),
-        Column("Memory"),
-        Column("GPUs"),
-        Column("CPU Available"),
-        Column("Memory Available"),
-        Column("GPUs Available"),
-        Column("Containers"),
+        Column("State"),
+        Column("Machine"),
+        Column("Free / total", no_wrap=True),
+        Column("Ctrs", justify="right"),
         Column("Version"),
         box=box.SIMPLE,
     )
-
-    for worker in res.workers:
+    for worker in workers:
         table.add_row(
             worker.id,
-            worker.pool_name,
-            {
-                "available": f"[green]{worker.status}[/green]",
-                "pending": f"[yellow]{worker.status}[/yellow]",
-                "disabled": f"[red]{worker.status}[/red]",
-            }.get(worker.status, worker.status),
-            worker.machine_id if worker.machine_id else "-",
-            str(worker.priority),
-            f"{worker.total_cpu:,}m" if worker.total_cpu > 0 else "-",
-            terminal.humanize_memory(worker.total_memory * 1024 * 1024),
-            str(worker.total_gpu_count),
-            f"{worker.free_cpu:,}m",
-            terminal.humanize_memory(worker.free_memory * 1024 * 1024),
-            str(worker.free_gpu_count),
+            worker.pool_name or "-",
+            _worker_state(worker),
+            worker.machine_id or "-",
+            _worker_resources(worker),
             str(len(worker.active_containers)),
-            worker.build_version,
+            _worker_version(worker),
         )
-
     table.add_section()
-    table.add_row(f"[bold]{len(res.workers)} items")
-
+    table.add_row(f"[bold]{len(workers)} items")
     terminal.print(table)
 
 
 @management.command(
     name="cordon",
-    help="""
-    Cordon a worker.
-
-    When a worker is cordoned, it will not accept new container requests. However,
-    it will continue to run existing containers until they are finished. This is
-    useful when you want to gracefully remove a worker from the pool.
-    """,
+    help="Stop scheduling new work while existing containers keep running.",
     epilog="""
     Examples:
 
-      # Cordon a worker
       {cli_name} worker cordon 675a65c3
-
-      # Cordon multiple workers from stdin (useful for piping)
-      {cli_name} worker list --format=json | jq -r '.[].id' | {cli_name} worker cordon -
-      \b
+      {cli_name} worker list --format json | jq -r '.[].id' | {cli_name} worker cordon -
     """,
 )
-@click.argument(
-    "worker_ids",
-    nargs=-1,
-    required=True,
-)
+@click.argument("worker_ids", nargs=-1, required=True)
 @extraclick.pass_service_client
 def cordon_worker(service: ServiceClient, worker_ids: List[str]):
-    if worker_ids and worker_ids[0] == "-":
-        worker_ids = click.get_text_stream("stdin").read().strip().split()
-
-    if not worker_ids:
-        return terminal.error("Must provide at least one worker ID.")
-
-    for worker_id in worker_ids:
-        res = service.gateway.cordon_worker(CordonWorkerRequest(worker_id=worker_id))
-        if not res.ok:
-            text = res.err_msg.capitalize()
-            terminal.warn(text)
-        else:
-            terminal.success(f"Worker {worker_id} has been cordoned.")
+    apply_worker_action(service, worker_ids_from_args(worker_ids), "cordon")
 
 
 @management.command(
     name="uncordon",
-    help="Uncordon a worker.",
+    help="Return explicitly cordoned workers to scheduling after maintenance.",
     epilog="""
-      Examples:
+    Examples:
 
-        # Uncordon a worker
-        {cli_name} worker uncordon 675a65c3
-
-        # Uncordon multiple workers
-        {cli_name} worker uncordon 675a65c3 9c1b7bae 4c89436cs
-
-        # Uncordon workers from stdin (useful for piping)
-        {cli_name} worker list --format=json | jq -r '.[] | select(.status=="disabled") | .id' | {cli_name} worker uncordon -
-        \b
+      {cli_name} worker uncordon 675a65c3
+      {cli_name} worker list --state cordoned --format json | jq -r '.[].id' | {cli_name} worker uncordon -
     """,
 )
-@click.argument(
-    "worker_ids",
-    nargs=-1,
-    required=True,
-)
+@click.argument("worker_ids", nargs=-1, required=True)
 @extraclick.pass_service_client
 def uncordon_worker(service: ServiceClient, worker_ids: List[str]):
-    if worker_ids and worker_ids[0] == "-":
-        worker_ids = click.get_text_stream("stdin").read().strip().split()
-
-    if not worker_ids:
-        return terminal.error("Must provide at least one worker ID.")
-
-    for worker_id in worker_ids:
-        res = service.gateway.uncordon_worker(UncordonWorkerRequest(worker_id=worker_id))
-        if not res.ok:
-            text = res.err_msg.capitalize()
-            terminal.warn(text)
-        else:
-            terminal.success(f"Worker {worker_id} has been uncordon.")
+    apply_worker_action(service, worker_ids_from_args(worker_ids), "uncordon")
 
 
 @management.command(
     name="drain",
-    help="""
-    Drain a worker.
-
-    When a worker is drained, all running containers on it will be stopped. The
-    worker will continue to run until it reaches its idle timeout, but only if
-    the worker was cordoned before being drained.
-    """,
+    help="Cordon workers and stop their active containers for maintenance.",
     epilog="""
-      Examples:
+    Drained workers remain cordoned. Run `worker uncordon` after maintenance.
 
-        # Drain a worker
-        {cli_name} worker drain 675a65c3
+    Examples:
 
-        # Drain multiple workers
-        {cli_name} worker drain 675a65c3 9c1b7bae 4c89436cs
-
-        # Drain workers from stdin (useful for piping)
-        {cli_name} worker list --format=json | jq -r '.[].id' | {cli_name} worker drain -
-        \b
+      {cli_name} worker drain 675a65c3
+      {cli_name} worker drain 675a65c3 9c1b7bae
+      {cli_name} worker list --pool my-pool --format json | jq -r '.[].id' | {cli_name} worker drain -
     """,
 )
-@click.argument(
-    "worker_ids",
-    nargs=-1,
-    required=True,
-)
+@click.argument("worker_ids", nargs=-1, required=True)
 @extraclick.pass_service_client
-def drain_worker(
-    service: ServiceClient,
-    worker_ids: List[str],
-):
-    if worker_ids and worker_ids[0] == "-":
-        worker_ids = click.get_text_stream("stdin").read().strip().split()
-
-    if not worker_ids:
-        return terminal.error("Must provide at least one worker ID.")
-
-    for worker_id in worker_ids:
-        res = service.gateway.drain_worker(DrainWorkerRequest(worker_id=worker_id))
-        if not res.ok:
-            text = res.err_msg.capitalize()
-            terminal.warn(text)
-        else:
-            terminal.success(f"Worker {worker_id} has been drained.")
+def drain_worker(service: ServiceClient, worker_ids: List[str]):
+    apply_worker_action(service, worker_ids_from_args(worker_ids), "drain")

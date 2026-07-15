@@ -168,7 +168,10 @@ message GetWorkerByIdResponse {
   string error_msg = 3;
 }
 
-message ToggleWorkerAvailableRequest { string worker_id = 1; }
+message ToggleWorkerAvailableRequest {
+  string worker_id = 1;
+  string generation = 2;
+}
 
 message ToggleWorkerAvailableResponse {
   bool ok = 1;
