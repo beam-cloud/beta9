@@ -480,7 +480,7 @@ func (s *Worker) setWorkerAddress(ctx context.Context, request *types.ContainerR
 func (s *Worker) loadContainerImage(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger) (time.Duration, bool, error) {
 	outputLogger.Info(fmt.Sprintf("Loading image <%s>...\n", request.ImageId))
 
-	elapsed, err := s.pullLazyWithMetrics(ctx, request, "pull_lazy")
+	elapsed, err := s.pullLazyWithMetrics(ctx, request, "pull_lazy", outputLogger)
 	if err == nil {
 		outputLogger.Info(fmt.Sprintf("Loaded image <%s>, took: %s\n", request.ImageId, elapsed))
 		return elapsed, true, nil
@@ -501,7 +501,7 @@ func (s *Worker) loadContainerImage(ctx context.Context, request *types.Containe
 		return elapsed, false, err
 	}
 
-	elapsed, err = s.pullLazyWithMetrics(ctx, request, "pull_lazy_after_build")
+	elapsed, err = s.pullLazyWithMetrics(ctx, request, "pull_lazy_after_build", outputLogger)
 	if err != nil {
 		return elapsed, false, err
 	}
@@ -510,9 +510,9 @@ func (s *Worker) loadContainerImage(ctx context.Context, request *types.Containe
 	return elapsed, true, nil
 }
 
-func (s *Worker) pullLazyWithMetrics(ctx context.Context, request *types.ContainerRequest, phase string) (time.Duration, error) {
+func (s *Worker) pullLazyWithMetrics(ctx context.Context, request *types.ContainerRequest, phase string, outputLogger *slog.Logger) (time.Duration, error) {
 	phaseStart := time.Now()
-	elapsed, err := s.imageClient.PullLazy(ctx, request)
+	elapsed, err := s.imageClient.PullLazy(ctx, request, outputLogger)
 	metrics.RecordWorkerStartupPhase(phase, time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 	spanID := types.ContainerLifecycleImageLoad
 	if phase != "pull_lazy" && phase != "pull_lazy_after_build" {

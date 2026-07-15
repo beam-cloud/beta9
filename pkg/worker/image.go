@@ -50,6 +50,8 @@ const (
 	embeddedImageCacheWaitInterval           = 250 * time.Millisecond
 	imageArchiveLockRetryInterval            = 100 * time.Millisecond
 	maxSyncV1ArchiveDataRestoreBytes         = 512 * 1024 * 1024
+	imageLayerPrepareConcurrency             = 8
+	imageLayerProgressInterval               = 3 * time.Second
 )
 
 var (
@@ -269,7 +271,7 @@ func ociStorageInfo(meta *clipCommon.ClipArchiveMetadata) (*clipCommon.OCIStorag
 	return nil, false
 }
 
-func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequest) (time.Duration, error) {
+func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger) (time.Duration, error) {
 	startTime := time.Now()
 
 	// Refresh the recent-stub window on every container start so reconciliation
@@ -298,6 +300,16 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	}
 
 	mountOptions := c.lazyMountOptions(ctx, request, archive)
+	if archive.usesOCIStorage() {
+		mountOptions.Context = ctx
+		mountOptions.PrepareConcurrency = imageLayerPrepareConcurrency
+		mountOptions.PrepareProgress = imageLayerPrepareProgressLogger(outputLogger)
+		if err := clip.PrepareArchiveContent(mountOptions); err != nil {
+			return time.Since(startTime), err
+		}
+		mountOptions.PrepareConcurrency = 0
+		mountOptions.PrepareProgress = nil
+	}
 
 	if elapsed, ok := c.mountedImageHit(startTime, request, "clip_mounted_fuse_hit"); ok {
 		return elapsed, nil
@@ -327,6 +339,38 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	})
 
 	return time.Since(startTime), nil
+}
+
+func imageLayerPrepareProgressLogger(outputLogger *slog.Logger) func(storage.PrepareProgress) {
+	if outputLogger == nil {
+		return nil
+	}
+
+	startedAt := time.Now()
+	var mu sync.Mutex
+	var lastLog time.Time
+	return func(progress storage.PrepareProgress) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		now := time.Now()
+		if progress.Completed == 0 {
+			outputLogger.Info(fmt.Sprintf("Preparing %d image layers (%d concurrent)...\n", progress.Total, imageLayerPrepareConcurrency))
+			lastLog = now
+			return
+		}
+		if progress.Completed < progress.Total && now.Sub(lastLog) < imageLayerProgressInterval {
+			return
+		}
+
+		elapsed := now.Sub(startedAt).Round(100 * time.Millisecond)
+		if progress.Completed == progress.Total {
+			outputLogger.Info(fmt.Sprintf("Prepared %d image layers (%s) in %s\n", progress.Total, formatImageBytes(progress.Bytes), elapsed))
+		} else {
+			outputLogger.Info(fmt.Sprintf("Preparing image layers: %d/%d ready (%s, %s)\n", progress.Completed, progress.Total, formatImageBytes(progress.Bytes), elapsed))
+		}
+		lastLog = now
+	}
 }
 
 type lazyImageArchive struct {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -13,10 +14,27 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
+	clipStorage "github.com/beam-cloud/clip/pkg/storage"
 	"github.com/rs/zerolog"
 	zerologlog "github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 )
+
+func TestImageLayerPrepareProgressLoggerEmitsAggregateUpdates(t *testing.T) {
+	var output bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&output, nil))
+	report := imageLayerPrepareProgressLogger(logger)
+	require.NotNil(t, report)
+
+	report(clipStorage.PrepareProgress{Total: 4})
+	report(clipStorage.PrepareProgress{Completed: 1, Total: 4, Bytes: 1024})
+	report(clipStorage.PrepareProgress{Completed: 4, Total: 4, Bytes: 4 * 1024 * 1024})
+
+	logs := output.String()
+	require.Contains(t, logs, "Preparing 4 image layers (8 concurrent)")
+	require.Contains(t, logs, "Prepared 4 image layers (4.0 MiB)")
+	require.NotContains(t, logs, "1/4 ready", "rapid per-layer updates should be coalesced")
+}
 
 func TestImageRegistryPullFailureLogLevel(t *testing.T) {
 	var buf bytes.Buffer
