@@ -104,18 +104,26 @@ func (kem *KeyEventManager) listenForSubscriptionPattern(
 	go func() {
 		defer close()
 
-	retry:
 		for {
 			select {
-			case m := <-messages:
-				keyEventChan <- kem.messageToKeyEvent(patternPrefix, m.Channel, string(m.Payload))
+			case m, ok := <-messages:
+				if !ok || m == nil {
+					return
+				}
+				select {
+				case keyEventChan <- kem.messageToKeyEvent(patternPrefix, m.Channel, string(m.Payload)):
+				case <-ctx.Done():
+					return
+				}
 
 			case <-ctx.Done():
 				return
 
-			case err := <-errs:
-				log.Error().Err(err).Msg("error with key manager subscription")
-				break retry
+			case err, ok := <-errs:
+				if ok && err != nil {
+					log.Error().Err(err).Msg("error with key manager subscription")
+				}
+				return
 			}
 		}
 	}()
