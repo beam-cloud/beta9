@@ -236,7 +236,17 @@ func TestPrivatePoolMissFallsBackToRegularAvailableWorker(t *testing.T) {
 		Memory:       1000,
 		PoolSelector: "private-cpu",
 		Timestamp:    time.Now(),
+		Workspace:    testWorkspaceWithStorage(),
 	}
+	withoutStorage := request.Clone()
+	withoutStorage.Workspace = types.Workspace{}
+	privateController.hasCapacity = true
+	fallback, poolName, ok := newSchedulingAttempt(scheduler, withoutStorage, nil).privatePoolFallbackRequest()
+	assert.True(t, ok)
+	assert.Equal(t, "private-cpu", poolName)
+	assert.Empty(t, fallback.PoolSelector)
+	privateController.hasCapacity = false
+
 	newSchedulingAttempt(scheduler, request, []*types.Worker{privateWorker, regularWorker}).run()
 
 	queued, err := scheduler.workerRepo.GetNextContainerRequest(regularWorker.Id)
@@ -250,7 +260,6 @@ func TestPrivatePoolMissFallsBackToRegularAvailableWorker(t *testing.T) {
 	assert.Equal(t, int64(100), privateAfter.FreeCpu)
 	assert.Equal(t, 0, privateController.AddWorkerCallCount())
 }
-
 func TestPrivatePoolMissWithDurableDiskDoesNotFallback(t *testing.T) {
 	scheduler, err := NewSchedulerForTest()
 	assert.Nil(t, err)
@@ -325,6 +334,7 @@ func TestPrivatePoolMissWithoutRegularCapacityKeepsPrivateSelector(t *testing.T)
 		Memory:       1000,
 		PoolSelector: "private-cpu",
 		Timestamp:    time.Now(),
+		Workspace:    testWorkspaceWithStorage(),
 	}
 	newSchedulingAttempt(scheduler, request, nil).run()
 
