@@ -777,3 +777,29 @@ func (s *Service) DeleteManagedMachine(ctx context.Context, authInfo *auth.AuthI
 	}
 	return true, s.removePrivateMachine(ctx, machine)
 }
+
+// SetAgentWorkerCordon persists operator intent on every agent-managed machine
+// so a worker TTL expiry or agent reconnect cannot silently undo a cordon.
+func (s *Service) SetAgentWorkerCordon(ctx context.Context, worker *types.Worker, cordoned bool) (bool, error) {
+	if s == nil || s.computeRepo == nil || worker == nil || worker.WorkspaceId == "" || worker.PoolName == "" || worker.MachineId == "" {
+		return false, nil
+	}
+	machine, err := s.computeRepo.GetAgentMachineState(ctx, worker.WorkspaceId, worker.PoolName, worker.MachineId)
+	if err != nil || machine == nil {
+		return false, err
+	}
+	if worker.Id != model.AgentMachineWorkerID(machine.MachineID) {
+		return false, nil
+	}
+	machine.Cordoned = cordoned
+	if err := s.saveComputeAgentTokenState(ctx, machine); err != nil {
+		return true, err
+	}
+	if err = s.workerRepo.SetWorkerCordon(worker.Id, cordoned); err != nil {
+		return true, err
+	}
+	if err = s.notifyAgentPool(ctx, machine.WorkspaceID, machine.PoolName); err != nil {
+		log.Warn().Err(err).Str("worker_id", worker.Id).Msg("failed to notify cordoned agent; periodic refresh remains active")
+	}
+	return true, nil
+}

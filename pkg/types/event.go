@@ -555,6 +555,7 @@ const (
 	ContainerLifecycleSetWorkerAddress            ContainerLifecycleID = "worker.set_worker_address"
 	ContainerLifecyclePortAllocation              ContainerLifecycleID = "worker.port_allocation"
 	ContainerLifecycleReadBundleConfig            ContainerLifecycleID = "worker.read_bundle_config"
+	ContainerLifecycleWorkspaceMount              ContainerLifecycleID = "mount.workspace"
 	ContainerLifecycleSetupMounts                 ContainerLifecycleID = "mount.setup"
 	ContainerLifecycleSpecFromRequest             ContainerLifecycleID = "worker.spec_from_request"
 	ContainerLifecycleSetContainerAddr            ContainerLifecycleID = "worker.set_container_address"
@@ -638,6 +639,7 @@ var ContainerLifecycleDefinitions = map[ContainerLifecycleID]ContainerLifecycleD
 	ContainerLifecycleSetWorkerAddress:            {ID: ContainerLifecycleSetWorkerAddress, Domain: EventDomainWorker, ParentID: ContainerLifecycleStartup, Label: "Set worker address"},
 	ContainerLifecyclePortAllocation:              {ID: ContainerLifecyclePortAllocation, Domain: EventDomainWorker, ParentID: ContainerLifecycleStartup, Label: "Port allocation"},
 	ContainerLifecycleReadBundleConfig:            {ID: ContainerLifecycleReadBundleConfig, Domain: EventDomainWorker, ParentID: ContainerLifecycleStartup, Label: "Read bundle config"},
+	ContainerLifecycleWorkspaceMount:              {ID: ContainerLifecycleWorkspaceMount, Domain: EventDomainMount, ParentID: ContainerLifecycleStartup, Label: "Mount workspace storage"},
 	ContainerLifecycleSetupMounts:                 {ID: ContainerLifecycleSetupMounts, Domain: EventDomainMount, ParentID: ContainerLifecycleStartup, Label: "Setup mounts"},
 	ContainerLifecycleSpecFromRequest:             {ID: ContainerLifecycleSpecFromRequest, Domain: EventDomainWorker, ParentID: ContainerLifecycleStartup, Label: "Spec from request"},
 	ContainerLifecycleSetContainerAddr:            {ID: ContainerLifecycleSetContainerAddr, Domain: EventDomainWorker, ParentID: ContainerLifecycleStartup, Label: "Set container address"},

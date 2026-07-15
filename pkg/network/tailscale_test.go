@@ -2,7 +2,9 @@ package network
 
 import (
 	"context"
+	"net/netip"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -38,6 +40,48 @@ func withFastPeerPolling(t *testing.T) {
 	prev := tailnetPeerPollInterval
 	tailnetPeerPollInterval = time.Millisecond
 	t.Cleanup(func() { tailnetPeerPollInterval = prev })
+}
+
+func TestWarmPeersPingsOnlyMatchingOnlinePeers(t *testing.T) {
+	status := statusWithPeers()
+	addPeer := func(host, ip string, online bool) {
+		status.Peer[key.NewNode().Public()] = &ipnstate.PeerStatus{
+			HostName:     host,
+			Online:       online,
+			TailscaleIPs: []netip.Addr{netip.MustParseAddr(ip)},
+		}
+	}
+	addPeer("beam-agent-ready", "100.64.0.1", true)
+	addPeer("beam-agent-offline", "100.64.0.2", false)
+	addPeer("other-peer", "100.64.0.3", true)
+
+	ts := testTailscale(t, status)
+	var mu sync.Mutex
+	var pinged []netip.Addr
+	ts.pingFunc = func(_ context.Context, ip netip.Addr) error {
+		mu.Lock()
+		pinged = append(pinged, ip)
+		mu.Unlock()
+		return nil
+	}
+
+	ts.WarmPeers(context.Background(), "beam-agent-")
+
+	if len(pinged) != 1 || pinged[0] != netip.MustParseAddr("100.64.0.1") {
+		t.Fatalf("pinged = %v, want [100.64.0.1]", pinged)
+	}
+}
+
+func TestTailnetPeerIPPrefersIPv4(t *testing.T) {
+	peer := &ipnstate.PeerStatus{TailscaleIPs: []netip.Addr{
+		netip.MustParseAddr("fd7a:115c:a1e0::1"),
+		netip.MustParseAddr("100.64.0.1"),
+	}}
+
+	ip, ok := tailnetPeerIP(peer)
+	if !ok || ip != netip.MustParseAddr("100.64.0.1") {
+		t.Fatalf("tailnetPeerIP() = (%v, %v), want (100.64.0.1, true)", ip, ok)
+	}
 }
 
 func TestWaitForPeerFindsPeerByDNSName(t *testing.T) {

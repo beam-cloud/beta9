@@ -345,6 +345,22 @@ func (r *WorkerRedisRepository) AddWorker(worker *types.Worker) error {
 			return err
 		}
 	}
+	if oldWorker != nil {
+		incomingControlState := worker.CordonRequested || worker.RolloutGeneration != ""
+		oldControlState := oldWorker.CordonRequested || oldWorker.RolloutGeneration != ""
+		worker.CordonRequested = oldWorker.CordonRequested
+		worker.RolloutGeneration = oldWorker.RolloutGeneration
+		if oldWorker.BuildVersion != "" {
+			worker.BuildVersion = oldWorker.BuildVersion
+		}
+		if oldControlState {
+			worker.Status = types.WorkerStatusDisabled
+		} else if incomingControlState {
+			// A stale controller snapshot must not reapply a cordon or rollout
+			// after the repository has already cleared it.
+			worker.Status = oldWorker.Status
+		}
+	}
 
 	worker.ResourceVersion = 0
 
@@ -733,8 +749,118 @@ func (r *WorkerRedisRepository) SetWorkerKeepAlive(workerId string, keepAlive ty
 	return nil
 }
 
-func (r *WorkerRedisRepository) ToggleWorkerAvailable(workerId string) error {
-	return r.updateWorkerStatus(workerId, types.WorkerStatusAvailable, types.WorkerStatusPending, true)
+func (r *WorkerRedisRepository) ToggleWorkerAvailable(workerId, generation string) error {
+	return r.withWorker(workerId, func(ctx context.Context, stateKey string, worker *types.Worker) error {
+		if worker.RolloutGeneration != "" {
+			if generation == "" || generation != worker.RolloutGeneration {
+				return nil
+			}
+			worker.Status = types.WorkerStatusAvailable
+			if worker.CordonRequested {
+				worker.Status = types.WorkerStatusDisabled
+			}
+			worker.BuildVersion = types.WorkerImageVersion(worker.WorkerImageOverride, r.config.ImageTag)
+			worker.RolloutGeneration = ""
+		} else {
+			if worker.Status != types.WorkerStatusPending {
+				return nil
+			}
+			worker.Status = types.WorkerStatusAvailable
+		}
+
+		if worker.Status == types.WorkerStatusAvailable {
+			if err := r.reconcileWorkerCapacity(ctx, worker); err != nil {
+				return err
+			}
+		}
+		return r.saveWorkerFields(ctx, stateKey,
+			"status", string(worker.Status),
+			"build_version", worker.BuildVersion,
+			"rollout_generation", worker.RolloutGeneration,
+			"free_cpu", worker.FreeCpu,
+			"free_memory", worker.FreeMemory,
+			"gpu_count", worker.FreeGpuCount,
+		)
+	})
+}
+
+func (r *WorkerRedisRepository) SetWorkerCordon(workerId string, cordoned bool) error {
+	return r.withWorker(workerId, func(ctx context.Context, stateKey string, worker *types.Worker) error {
+		status := worker.Status
+		if cordoned {
+			status = types.WorkerStatusDisabled
+		} else if worker.CordonRequested && worker.RolloutGeneration == "" {
+			status = types.WorkerStatusAvailable
+		}
+		return r.saveWorkerFields(ctx, stateKey, "cordon_requested", cordoned, "status", string(status))
+	})
+}
+
+// PrepareWorkerRollout disables an agent worker immediately, then waits until
+// queued, delivered, and active container work is gone before allowing the
+// agent slot to change. The worker lock is shared with scheduling, so no new
+// assignment can race the transition.
+func (r *WorkerRedisRepository) PrepareWorkerRollout(workerId, generation string) (bool, error) {
+	if generation == "" {
+		return false, fmt.Errorf("worker rollout generation is required")
+	}
+	ready := false
+	err := r.withWorker(workerId, func(ctx context.Context, stateKey string, worker *types.Worker) error {
+		if worker.Status != types.WorkerStatusDisabled || worker.RolloutGeneration != generation {
+			if err := r.saveWorkerFields(ctx, stateKey, "status", string(types.WorkerStatusDisabled), "rollout_generation", generation); err != nil {
+				return fmt.Errorf("failed to cordon worker for rollout <%s>: %w", workerId, err)
+			}
+		}
+		busy, err := r.workerHasOutstandingWork(ctx, workerId)
+		ready = !busy
+		return err
+	})
+	return ready, err
+}
+
+func (r *WorkerRedisRepository) workerHasOutstandingWork(ctx context.Context, workerId string) (bool, error) {
+	pending, err := r.rdb.Exists(ctx,
+		common.RedisKeys.SchedulerWorkerRequests(workerId),
+		common.RedisKeys.SchedulerWorkerPendingRequests(workerId),
+	).Result()
+	if err != nil || pending > 0 {
+		return pending > 0, err
+	}
+	keys, err := r.rdb.SMembers(ctx, common.RedisKeys.SchedulerContainerWorkerIndex(workerId)).Result()
+	if err != nil {
+		return false, err
+	}
+	for _, key := range keys {
+		state, exists, err := r.getIndexedContainerState(ctx, workerId, key)
+		if err != nil {
+			return false, err
+		}
+		if exists && state != nil {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (r *WorkerRedisRepository) saveWorkerFields(ctx context.Context, stateKey string, fields ...any) error {
+	pipe := r.rdb.TxPipeline()
+	pipe.HSet(ctx, stateKey, fields...)
+	pipe.HIncrBy(ctx, stateKey, "resource_version", 1)
+	pipe.Expire(ctx, stateKey, time.Duration(types.WorkerStateTtlS)*time.Second)
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+func (r *WorkerRedisRepository) withWorker(workerId string, fn func(context.Context, string, *types.Worker) error) error {
+	ctx := context.TODO()
+	return r.lock.WithLease(ctx, common.RedisKeys.SchedulerWorkerLock(workerId), schedulerWorkerLockOptions, func(ctx context.Context) error {
+		stateKey := common.RedisKeys.SchedulerWorkerState(workerId)
+		worker, err := r.getWorkerFromKey(stateKey)
+		if err != nil {
+			return err
+		}
+		return fn(ctx, stateKey, worker)
+	})
 }
 
 func (r *WorkerRedisRepository) workerIndexKeys(worker *types.Worker) []string {

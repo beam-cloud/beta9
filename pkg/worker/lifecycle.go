@@ -299,12 +299,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 	bundlePath := filepath.Join(s.imageMountPath, request.ImageId)
 
-	startupBaseCtx, cancelStartup := context.WithCancel(ctx)
-	startup, startupCtx := errgroup.WithContext(startupBaseCtx)
-	defer func() {
-		cancelStartup()
-		_ = startup.Wait()
-	}()
+	startup, startupCtx := errgroup.WithContext(ctx)
 	addressRequest := request.Clone()
 	startup.Go(func() error { return s.setWorkerAddress(startupCtx, addressRequest) })
 
@@ -331,8 +326,16 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		request.Checkpoint = nil
 	}
 
-	_, imageLoaded, err := s.loadContainerImage(ctx, request, outputLogger)
-	if err != nil {
+	var imageLoaded bool
+	startup.Go(func() error {
+		var err error
+		_, imageLoaded, err = s.loadContainerImage(startupCtx, request, outputLogger)
+		return err
+	})
+	if s.containerMountManager.RequiresWorkspaceStorageMount(request) {
+		startup.Go(func() error { return s.mountWorkspaceStorage(startupCtx, request) })
+	}
+	if err := startup.Wait(); err != nil {
 		return err
 	}
 	if !imageLoaded {
@@ -343,9 +346,6 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	// (see buildOrPullBaseImage) and indexed as a .clip archive. We don't need to run a
 	// runc container or execute any commands inside it. Mark the build as successful and exit.
 	if request.IsBuildRequest() && s.config.ImageService.ClipVersion == uint32(types.ClipVersion2) {
-		if err := startup.Wait(); err != nil {
-			return err
-		}
 		exitCode := 0
 		exitReported := false
 		outputLogger.Info("", "done", true, "success", true)
@@ -408,7 +408,8 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	startup.Go(func() error { return s.containerMountManager.ensureBindMountSourceDirs(request.Mounts) })
+	var mountSetup errgroup.Group
+	mountSetup.Go(func() error { return s.containerMountManager.ensureBindMountSourceDirs(request.Mounts) })
 
 	// Generate dynamic runc spec for this container
 	phaseStart = time.Now()
@@ -420,7 +421,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	}
 	log.Info().Str("container_id", containerId).Msg("successfully created spec from request")
 
-	if err := startup.Wait(); err != nil {
+	if err := mountSetup.Wait(); err != nil {
 		return err
 	}
 
@@ -438,6 +439,28 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 	log.Info().Str("container_id", containerId).Msg("spawned successfully")
 	logCaptureClosed = true
+	return nil
+}
+
+func (s *Worker) mountWorkspaceStorage(ctx context.Context, request *types.ContainerRequest) error {
+	log.Info().Str("container_id", request.ContainerId).Msg("mounting workspace storage")
+	startedAt := time.Now()
+	mount, err := s.storageManager.Mount(request.Workspace.Name, request.Workspace.Storage)
+	metrics.RecordWorkerStartupPhase("workspace_mount", time.Since(startedAt), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
+	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleWorkspaceMount, startedAt, err == nil, nil)
+	if err != nil {
+		return fmt.Errorf("mount workspace storage: %w", err)
+	}
+	if s.cacheManager == nil {
+		return nil
+	}
+	reporter := s.cacheManager.ContentReporter()
+	if reporter == nil {
+		return nil
+	}
+	if aware, ok := mount.(storage.VolumeContentReporterAware); ok {
+		aware.SetVolumeContentReporter(request.WorkspaceId, reporter)
+	}
 	return nil
 }
 

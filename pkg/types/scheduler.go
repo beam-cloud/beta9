@@ -74,6 +74,15 @@ type Worker struct {
 	ActiveContainers     []Container  `json:"active_containers" redis:"active_containers"`
 	Runtime              string       `json:"runtime" redis:"runtime"`
 	PoolSelector         string       `json:"pool_selector" redis:"pool_selector"`
+	// CordonRequested records explicit operator intent. Disabled workers without
+	// this flag may be recovered automatically after a transient failure.
+	CordonRequested bool `json:"cordon_requested" redis:"cordon_requested"`
+	// RolloutGeneration gates readiness while an agent worker is being replaced.
+	RolloutGeneration   string `json:"rollout_generation" redis:"rollout_generation"`
+	RolloutBuildVersion string `json:"rollout_build_version" redis:"-"`
+	WorkerImageOverride string `json:"worker_image_override" redis:"worker_image_override"`
+	WorkspaceId         string `json:"-" redis:"workspace_id" go2proto:"ignore"`
+	ControlPlaneManaged bool   `json:"-" redis:"control_plane_managed" go2proto:"ignore"`
 }
 
 type WorkerKeepAlive struct {
@@ -113,6 +122,10 @@ func (w *Worker) ToProto() *pb.Worker {
 		ActiveContainers:     containers,
 		Runtime:              w.Runtime,
 		PoolSelector:         w.PoolSelector,
+		CordonRequested:      w.CordonRequested,
+		RolloutGeneration:    w.RolloutGeneration,
+		RolloutBuildVersion:  w.RolloutBuildVersion,
+		WorkerImageOverride:  w.WorkerImageOverride,
 	}
 }
 
@@ -142,6 +155,10 @@ func NewWorkerFromProto(in *pb.Worker) *Worker {
 		ActiveContainers:     containers,
 		Runtime:              in.Runtime,
 		PoolSelector:         in.PoolSelector,
+		CordonRequested:      in.CordonRequested,
+		RolloutGeneration:    in.RolloutGeneration,
+		RolloutBuildVersion:  in.RolloutBuildVersion,
+		WorkerImageOverride:  in.WorkerImageOverride,
 	}
 }
 

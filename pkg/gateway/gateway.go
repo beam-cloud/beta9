@@ -96,6 +96,8 @@ const (
 	gatewayDrainPropagationDelay = 10 * time.Second
 	gatewayGRPCShutdownMaxWait   = 5 * time.Second
 	gatewayTailscaleStartTimeout = 30 * time.Second
+	gatewayAgentWarmupTimeout    = 10 * time.Second
+	gatewayAgentKeepalive        = 30 * time.Second
 	gatewayLivenessService       = "liveness"
 	gatewayReadinessService      = "readiness"
 )
@@ -598,6 +600,10 @@ func (g *Gateway) Start() error {
 		if err != nil {
 			return fmt.Errorf("failed to connect gateway to tailnet: %w", err)
 		}
+		warmupCtx, cancel := context.WithTimeout(g.ctx, gatewayAgentWarmupTimeout)
+		g.Tailscale.WarmPeers(warmupCtx, types.AgentTailnetHostnamePrefix)
+		cancel()
+		go g.Tailscale.KeepPeersAlive(g.ctx, types.AgentTailnetHostnamePrefix, gatewayAgentKeepalive)
 	}
 
 	if g.Config.Monitoring.Telemetry.Enabled {

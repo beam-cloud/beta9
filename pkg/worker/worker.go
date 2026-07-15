@@ -58,6 +58,7 @@ const (
 type Worker struct {
 	workerId                string
 	workerToken             string
+	workerGeneration        string
 	poolName                string
 	machineID               string
 	poolConfig              types.WorkerPoolConfig
@@ -189,6 +190,7 @@ func NewWorker() (_ *Worker, err error) {
 	gpuType := os.Getenv(types.WorkerGPUEnv)
 	workerId := os.Getenv(types.WorkerIDEnv)
 	workerToken := os.Getenv(types.WorkerTokenEnv)
+	workerGeneration := os.Getenv(types.WorkerGenerationEnv)
 	workerPoolName := os.Getenv(types.WorkerPoolEnv)
 	machineID := os.Getenv(types.WorkerMachineEnv)
 	podHostName := os.Getenv(types.WorkerHostnameEnv)
@@ -370,6 +372,7 @@ func NewWorker() (_ *Worker, err error) {
 		ctx:                     ctx,
 		workerId:                workerId,
 		workerToken:             workerToken,
+		workerGeneration:        workerGeneration,
 		poolName:                workerPoolName,
 		machineID:               machineID,
 		poolConfig:              poolConfig,
@@ -660,21 +663,6 @@ func (s *Worker) runContainerRequest(request *types.ContainerRequest) {
 	}
 
 	run := func() error {
-		if s.containerMountManager.RequiresWorkspaceStorageMount(request) {
-			log.Info().Str("container_id", containerId).Msg("mounting workspace storage")
-			mount, err := s.storageManager.Mount(request.Workspace.Name, request.Workspace.Storage)
-			if err != nil {
-				log.Error().Str("container_id", containerId).Str("workspace_id", request.Workspace.ExternalId).Err(err).Msg("unable to mount workspace storage")
-				return err
-			}
-			if s.cacheManager != nil {
-				if reporter := s.cacheManager.ContentReporter(); reporter != nil {
-					if aware, ok := mount.(storage.VolumeContentReporterAware); ok {
-						aware.SetVolumeContentReporter(request.WorkspaceId, reporter)
-					}
-				}
-			}
-		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -1062,7 +1050,8 @@ func (s *Worker) startup() error {
 		return err
 	}
 	_, err := handleGRPCResponse(s.workerRepoClient.ToggleWorkerAvailable(s.ctx, &pb.ToggleWorkerAvailableRequest{
-		WorkerId: s.workerId,
+		WorkerId:   s.workerId,
+		Generation: s.workerGeneration,
 	}))
 	if err != nil {
 		return err

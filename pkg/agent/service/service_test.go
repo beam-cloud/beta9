@@ -49,9 +49,9 @@ func TestSystemdInstallWritesUnitAndStartsService(t *testing.T) {
 		`Environment="BEAM_WORKER_IMAGE=registry.example.com/worker:latest"`,
 		`Environment="HOME=` + filepath.Join(tmp, "state") + `"`,
 		`ExecStart="` + types.DefaultAgentBinaryPath + `" "join" "--gateway" "https://gateway.beam.cloud" "--join-token" "token with spaces"`,
-		`StartLimitIntervalSec=300`,
-		`StartLimitBurst=5`,
-		`Restart=on-failure`,
+		`RequiresMountsFor=` + filepath.Join(tmp, "state"),
+		`StartLimitIntervalSec=0`,
+		`Restart=always`,
 		`RestartSec=30`,
 		`Environment="XDG_CONFIG_HOME=` + filepath.Join(tmp, "state", ".config") + `"`,
 	} {
@@ -65,8 +65,7 @@ func TestSystemdInstallWritesUnitAndStartsService(t *testing.T) {
 
 	if got, want := strings.Join(runner.commands, "\n"), strings.Join([]string{
 		types.AgentSystemctlCommand + " daemon-reload",
-		types.AgentSystemctlCommand + " enable " + types.DefaultAgentServiceName + types.AgentServiceUnitExtension,
-		types.AgentSystemctlCommand + " start " + types.DefaultAgentServiceName + types.AgentServiceUnitExtension,
+		types.AgentSystemctlCommand + " enable --now " + types.DefaultAgentServiceName + types.AgentServiceUnitExtension,
 	}, "\n"); got != want {
 		t.Fatalf("unexpected commands:\ngot:\n%s\nwant:\n%s", got, want)
 	}

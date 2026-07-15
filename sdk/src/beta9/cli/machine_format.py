@@ -24,47 +24,29 @@ def gpu_availability_table(gpus: Dict[str, bool]) -> Table:
 
 def machine_table(machines: Sequence[Machine]) -> Table:
     table = Table(
-        Column("ID"),
-        Column("CPU"),
-        Column("Memory"),
-        Column("GPU"),
-        Column("Status"),
+        Column("ID", no_wrap=True),
         Column("Pool"),
-        Column("Created"),
-        Column("Last Keepalive"),
-        Column("Agent Version"),
-        Column("Free GPU Count"),
+        Column("State"),
+        Column("Capacity", no_wrap=True),
+        Column("Load", no_wrap=True),
+        Column("Last seen"),
+        Column("Agent"),
         box=box.SIMPLE,
     )
     for machine in machines:
         table.add_row(
             machine.id,
-            machine_cpu(machine),
-            machine_memory(machine),
-            machine_gpu(machine),
-            machine_status(machine.status),
             machine.pool_name or "-",
-            machine_created(machine.created),
+            machine_status(machine.status),
+            machine_capacity(machine),
+            machine_load(machine),
             machine_last_keepalive(machine.last_keepalive),
             f"v{machine.agent_version}" if machine.agent_version else "-",
-            machine_free_gpu_count(machine),
         )
 
     table.add_section()
     table.add_row(f"[bold]{len(machines)} items")
     return table
-
-
-def machine_cpu(machine: Machine) -> str:
-    if machine.cpu <= 0:
-        return "-"
-    return f"{machine.cpu:,}m"
-
-
-def machine_memory(machine: Machine) -> str:
-    if machine.memory <= 0:
-        return "-"
-    return terminal.humanize_memory(machine.memory * 1024 * 1024)
 
 
 def format_cpu(millicores: int) -> str:
@@ -80,10 +62,6 @@ def format_memory(memory_mb: int) -> str:
     return f"{memory_mb}MiB"
 
 
-def machine_gpu(machine: Machine) -> str:
-    return format_gpu(machine.gpu, machine.gpu_count)
-
-
 def format_gpu(gpu: str, gpu_count: int = 0) -> str:
     if not gpu:
         return "-"
@@ -92,11 +70,29 @@ def format_gpu(gpu: str, gpu_count: int = 0) -> str:
     return f"{gpu} x {gpu_count}"
 
 
-def machine_free_gpu_count(machine: Machine) -> str:
+def machine_capacity(machine: Machine) -> str:
+    parts = []
+    if machine.cpu > 0:
+        parts.append(format_cpu(machine.cpu))
+    if machine.memory > 0:
+        parts.append(format_memory(machine.memory))
+    if machine.gpu:
+        parts.append(format_gpu(machine.gpu, machine.gpu_count))
+    return "\n".join(parts) or "-"
+
+
+def machine_load(machine: Machine) -> str:
     metrics = getattr(machine, "machine_metrics", None)
     if metrics is None:
         return "-"
-    return str(metrics.free_gpu_count)
+    parts = []
+    if machine.gpu_count:
+        parts.append(f"{metrics.free_gpu_count}/{machine.gpu_count} GPU free")
+    if metrics.worker_count or metrics.container_count:
+        workers = "worker" if metrics.worker_count == 1 else "workers"
+        containers = "container" if metrics.container_count == 1 else "containers"
+        parts.append(f"{metrics.worker_count} {workers} · {metrics.container_count} {containers}")
+    return "\n".join(parts) or "-"
 
 
 def machine_status(status: str) -> str:
@@ -115,11 +111,6 @@ def machine_status(status: str) -> str:
     if not status or not style:
         return status or "-"
     return f"[{style}]{status}[/{style}]"
-
-
-def machine_created(value: str) -> str:
-    created = machine_datetime(value)
-    return terminal.humanize_date(created) if created else "-"
 
 
 def machine_last_keepalive(value: str) -> str:

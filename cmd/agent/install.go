@@ -34,7 +34,11 @@ func runInstallService(ctx context.Context, args []string) error {
 		return err
 	}
 
-	fmt.Fprintf(os.Stdout, "=> Installed agent service %q with %s\n", spec.Name, manager.Name())
+	if manager.Name() == types.AgentServiceManagerSystemd {
+		fmt.Fprintf(os.Stdout, "=> Installed and started agent service %q with systemd (enabled at boot)\n", spec.Name)
+	} else {
+		fmt.Fprintf(os.Stdout, "=> Installed agent service %q with %s\n", spec.Name, manager.Name())
+	}
 	return nil
 }
 

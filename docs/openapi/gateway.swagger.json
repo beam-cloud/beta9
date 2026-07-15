@@ -2533,6 +2533,10 @@
           "items": {
             "type": "string"
           }
+        },
+        "generation": {
+          "type": "string",
+          "description": "Deterministic identity of the restart-relevant slot specification."
         }
       }
     },
@@ -3657,6 +3661,10 @@
         "containerStartConcurrency": {
           "type": "integer",
           "format": "int64"
+        },
+        "workerImage": {
+          "type": "string",
+          "description": "Optional per-machine worker image override. The gateway remembers the\ngenerated value as a baseline so untouched installs continue to follow\nfuture image tag changes while manually edited values remain pinned."
         }
       }
     },
@@ -5506,6 +5514,18 @@
           "type": "string"
         },
         "poolSelector": {
+          "type": "string"
+        },
+        "cordonRequested": {
+          "type": "boolean"
+        },
+        "rolloutGeneration": {
+          "type": "string"
+        },
+        "rolloutBuildVersion": {
+          "type": "string"
+        },
+        "workerImageOverride": {
           "type": "string"
         }
       }

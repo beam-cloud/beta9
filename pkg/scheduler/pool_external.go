@@ -38,6 +38,8 @@ type AgentWorkerPoolControllerOptions struct {
 
 type agentMachineWorker struct {
 	id                   string
+	workspaceID          string
+	controlPlaneManaged  bool
 	cpu                  int64
 	memory               int64
 	gpu                  string
@@ -50,6 +52,8 @@ type agentMachineWorker struct {
 	preemptable          bool
 	runtime              string
 	buildVersion         string
+	workerImageOverride  string
+	cordoned             bool
 }
 
 type AgentPoolCapacityError struct {
@@ -370,6 +374,9 @@ func (wpc *AgentWorkerPoolController) machineAvailableCapacity(machine *compute.
 	case types.WorkerStatusPending:
 		return worker.TotalCpu, worker.TotalMemory, worker.TotalGpuCount
 	case types.WorkerStatusDisabled:
+		if worker.CordonRequested || worker.RolloutGeneration != "" {
+			return 0, 0, 0
+		}
 		return capacity.cpu, capacity.memory, capacity.gpuCount
 	default:
 		return 0, 0, 0
@@ -400,9 +407,26 @@ func (wpc *AgentWorkerPoolController) ensureMachineWorker(machine *compute.Agent
 	if err != nil {
 		return nil, err
 	}
-	if worker != nil && worker.Status != types.WorkerStatusDisabled {
+	if worker != nil {
 		spec.applyToWorker(worker)
-		return worker, wpc.workerRepo.AddWorker(worker)
+		if worker.CordonRequested || worker.RolloutGeneration != "" {
+			worker.Status = types.WorkerStatusDisabled
+			return worker, wpc.workerRepo.AddWorker(worker)
+		}
+		if worker.Status != types.WorkerStatusDisabled {
+			return worker, wpc.workerRepo.AddWorker(worker)
+		}
+		// A disabled worker without durable cordon/rollout intent was disabled
+		// by transient health reconciliation. Recreate it as pending while
+		// preserving the last acknowledged runtime generation.
+		next := spec.worker()
+		if worker.BuildVersion != "" {
+			next.BuildVersion = worker.BuildVersion
+		}
+		if err := wpc.workerRepo.AddWorker(next); err != nil {
+			return nil, err
+		}
+		return next, nil
 	}
 
 	next := spec.worker()
@@ -423,6 +447,8 @@ func (wpc *AgentWorkerPoolController) agentMachineWorker(machine *compute.AgentT
 	}
 	return agentMachineWorker{
 		id:                   compute.AgentMachineWorkerID(machine.MachineID),
+		workspaceID:          machine.WorkspaceID,
+		controlPlaneManaged:  machine.ManagedPoolInstanceID != "" && machine.Mode == string(types.PoolModeExternal),
 		cpu:                  cpu,
 		memory:               int64(machine.MemoryMB),
 		gpu:                  gpu,
@@ -434,21 +460,29 @@ func (wpc *AgentWorkerPoolController) agentMachineWorker(machine *compute.AgentT
 		priority:             wpc.workerPoolConfig.Priority,
 		preemptable:          wpc.workerPoolConfig.Preemptable,
 		runtime:              wpc.ContainerRuntime(),
-		buildVersion:         wpc.config.Worker.ImageTag,
+		buildVersion:         types.WorkerImageVersion(machine.WorkerImageOverride, wpc.config.Worker.ImageTag),
+		workerImageOverride:  machine.WorkerImageOverride,
+		cordoned:             machine.Cordoned,
 	}
 }
 
 func (m agentMachineWorker) worker() *types.Worker {
 	worker := &types.Worker{
-		Id:            m.id,
-		Status:        types.WorkerStatusPending,
-		TotalCpu:      m.cpu,
-		TotalMemory:   m.memory,
-		TotalGpuCount: m.gpuCount,
-		FreeCpu:       m.cpu,
-		FreeMemory:    m.memory,
-		FreeGpuCount:  m.gpuCount,
-		MachineId:     m.machineID,
+		Id:                  m.id,
+		Status:              types.WorkerStatusPending,
+		TotalCpu:            m.cpu,
+		TotalMemory:         m.memory,
+		TotalGpuCount:       m.gpuCount,
+		FreeCpu:             m.cpu,
+		FreeMemory:          m.memory,
+		FreeGpuCount:        m.gpuCount,
+		MachineId:           m.machineID,
+		WorkspaceId:         m.workspaceID,
+		ControlPlaneManaged: m.controlPlaneManaged,
+		CordonRequested:     m.cordoned,
+	}
+	if m.cordoned {
+		worker.Status = types.WorkerStatusDisabled
 	}
 	m.applyToWorker(worker)
 	return worker
@@ -456,11 +490,17 @@ func (m agentMachineWorker) worker() *types.Worker {
 
 func (m agentMachineWorker) applyToWorker(worker *types.Worker) {
 	worker.Gpu = m.gpu
+	worker.WorkspaceId = m.workspaceID
+	worker.ControlPlaneManaged = m.controlPlaneManaged
 	worker.PoolName = m.poolName
 	worker.PoolSelector = m.poolSelector
 	worker.RequiresPoolSelector = m.requiresPoolSelector
 	worker.Priority = m.priority
 	worker.Preemptable = m.preemptable
 	worker.Runtime = m.runtime
-	worker.BuildVersion = m.buildVersion
+	worker.WorkerImageOverride = m.workerImageOverride
+	worker.CordonRequested = m.cordoned
+	if worker.BuildVersion == "" {
+		worker.BuildVersion = m.buildVersion
+	}
 }

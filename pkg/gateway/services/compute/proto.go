@@ -356,6 +356,9 @@ func agentMachineStatus(state *model.AgentTokenState, worker *types.Worker, now 
 	if !model.AgentMachineConnected(state, now) {
 		return types.MachineStatusRegistered
 	}
+	if state.Cordoned {
+		return types.MachineStatusDisabled
+	}
 	if worker == nil {
 		return types.MachineStatusRegistered
 	}

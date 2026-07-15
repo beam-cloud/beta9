@@ -1,9 +1,12 @@
 package types
 
+import "strings"
+
 const (
 	DefaultAgentName                = "agent"
 	DefaultAgentServiceName         = "beam-agent"
 	DefaultAgentServiceDescription  = "Beam Agent"
+	AgentTailnetHostnamePrefix      = "beam-agent-"
 	DefaultAgentBinaryPath          = "/usr/local/bin/beam-agent"
 	DefaultAgentBinaryPattern       = "/usr/local/bin/beam-agent-%s-%s"
 	DefaultAgentStateDir            = "/var/lib/beam/agent"
@@ -95,6 +98,19 @@ const (
 	AgentPreflightSeverityError     = "error"
 )
 
+func WorkerImageVersion(image, fallback string) string {
+	if image == "" {
+		return fallback
+	}
+	if i := strings.LastIndex(image, "@"); i >= 0 {
+		return image[i+1:]
+	}
+	if i := strings.LastIndex(image, ":"); i > strings.LastIndex(image, "/") {
+		return image[i+1:]
+	}
+	return image
+}
+
 const (
 	WorkerConfigPathEnv     = "CONFIG_PATH"
 	WorkerConfigJSONEnv     = "CONFIG_JSON"
@@ -103,6 +119,7 @@ const (
 	WorkerPoolEnv           = "WORKER_POOL_NAME"
 	WorkerMachineEnv        = "WORKER_MACHINE_ID"
 	WorkerPersistentEnv     = "WORKER_PERSISTENT"
+	WorkerGenerationEnv     = "WORKER_GENERATION"
 	WorkerRouteTransportEnv = "WORKER_ROUTE_TRANSPORT"
 	WorkerRouteTargetEnv    = "WORKER_ROUTE_LOCAL_TARGET_HOST"
 	WorkerCPUEnv            = "CPU_LIMIT"

@@ -160,7 +160,7 @@ func TestToggleWorkerAvailable(t *testing.T) {
 	assert.Equal(t, newWorker.Status, worker.Status)
 
 	// Set it to be available
-	err = repo.ToggleWorkerAvailable(worker.Id)
+	err = repo.ToggleWorkerAvailable(worker.Id, "")
 	assert.Nil(t, err)
 
 	// Retrieve it again and check fields
@@ -180,7 +180,7 @@ func TestToggleWorkerAvailablePreservesDisabledWorker(t *testing.T) {
 	repo := NewWorkerRedisRepositoryForTest(rdb)
 	worker := &types.Worker{Id: "disabled-worker", Status: types.WorkerStatusDisabled}
 	assert.Nil(t, repo.AddWorker(worker))
-	assert.Nil(t, repo.ToggleWorkerAvailable(worker.Id))
+	assert.Nil(t, repo.ToggleWorkerAvailable(worker.Id, ""))
 
 	worker, err = repo.GetWorkerById(worker.Id)
 	assert.Nil(t, err)
@@ -246,7 +246,7 @@ func TestToggleWorkerAvailableReconcilesCapacityFromQueueAndContainerIndex(t *te
 	err = rdb.SAdd(context.TODO(), common.RedisKeys.SchedulerContainerWorkerIndex(worker.Id), staleStateKey).Err()
 	assert.Nil(t, err)
 
-	err = repo.ToggleWorkerAvailable(worker.Id)
+	err = repo.ToggleWorkerAvailable(worker.Id, "")
 	assert.Nil(t, err)
 
 	updatedWorker, err := repo.GetWorkerById(worker.Id)
@@ -295,7 +295,7 @@ func TestToggleWorkerAvailableCapsReconciledCapacityAtZero(t *testing.T) {
 	err = rdb.RPush(context.TODO(), common.RedisKeys.SchedulerWorkerRequests(worker.Id), queuedJSON).Err()
 	assert.Nil(t, err)
 
-	err = repo.ToggleWorkerAvailable(worker.Id)
+	err = repo.ToggleWorkerAvailable(worker.Id, "")
 	assert.Nil(t, err)
 
 	updatedWorker, err := repo.GetWorkerById(worker.Id)

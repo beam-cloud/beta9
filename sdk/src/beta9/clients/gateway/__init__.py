@@ -1186,6 +1186,12 @@ class JoinAgentRequest(betterproto.Message):
     gpu_ids: List[str] = betterproto.string_field(14)
     network_slot_pool_size: int = betterproto.uint32_field(15)
     container_start_concurrency: int = betterproto.uint32_field(16)
+    worker_image: str = betterproto.string_field(17)
+    """
+    Optional per-machine worker image override. The gateway remembers the
+     generated value as a baseline so untouched installs continue to follow
+     future image tag changes while manually edited values remain pinned.
+    """
 
 
 @dataclass(eq=False, repr=False)
@@ -1315,6 +1321,8 @@ class AgentWorkerSlot(betterproto.Message):
     gvisor_platform: str = betterproto.string_field(22)
     gvisor_root: str = betterproto.string_field(23)
     gvisor_extra_args: List[str] = betterproto.string_field(24)
+    generation: str = betterproto.string_field(25)
+    """Deterministic identity of the restart-relevant slot specification."""
 
 
 @dataclass(eq=False, repr=False)

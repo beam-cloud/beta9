@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -28,8 +29,9 @@ type workerRuntimeManager struct {
 }
 
 type workerRuntimeSupervisor struct {
-	slot   *pb.AgentWorkerSlot
-	cancel context.CancelFunc
+	slot    *pb.AgentWorkerSlot
+	cancel  context.CancelFunc
+	updates chan *pb.AgentWorkerSlot
 }
 
 type workerContainerRuntime struct {
@@ -121,34 +123,111 @@ func (m *workerRuntimeManager) ensureSlot(ctx context.Context, slot *pb.AgentWor
 		if sameWorkerSlot(current.slot, slot) {
 			return
 		}
-		current.cancel()
-		delete(m.supervisors, slot.WorkerId)
+		current.slot = cloneAgentWorkerSlot(slot)
+		select {
+		case <-current.updates:
+		default:
+		}
+		current.updates <- cloneAgentWorkerSlot(slot)
+		return
 	}
 
 	slotCtx, cancel := context.WithCancel(ctx)
-	m.supervisors[slot.WorkerId] = &workerRuntimeSupervisor{slot: cloneAgentWorkerSlot(slot), cancel: cancel}
+	supervisor := &workerRuntimeSupervisor{
+		slot:    cloneAgentWorkerSlot(slot),
+		cancel:  cancel,
+		updates: make(chan *pb.AgentWorkerSlot, 1),
+	}
+	m.supervisors[slot.WorkerId] = supervisor
 	statusf(m.statusOut, "Preparing worker %q", slot.WorkerId)
-	go m.superviseSlot(slotCtx, slot)
+	go m.superviseSlot(slotCtx, supervisor)
 }
 
-func (m *workerRuntimeManager) superviseSlot(ctx context.Context, slot *pb.AgentWorkerSlot) {
+func (m *workerRuntimeManager) superviseSlot(ctx context.Context, supervisor *workerRuntimeSupervisor) {
+	desired := cloneAgentWorkerSlot(supervisor.slot)
 	backoff := time.Second
 	for {
-		err := m.runtime.run(ctx, slot)
-		if ctx.Err() != nil {
-			return
-		}
-		if err == nil {
-			err = fmt.Errorf("worker exited")
-		}
-		fmt.Fprintf(m.statusErr, "worker slot %s exited: %v\n", slot.WorkerId, err)
+		runCtx, stop := context.WithCancel(ctx)
+		done := make(chan error, 1)
+		current := cloneAgentWorkerSlot(desired)
+		go func(slot *pb.AgentWorkerSlot) { done <- m.runtime.run(runCtx, slot) }(current)
 
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(backoff):
+		restart := false
+		for !restart {
+			select {
+			case <-ctx.Done():
+				stop()
+				<-done
+				return
+			case next := <-supervisor.updates:
+				desired = latestWorkerSlotUpdate(next, supervisor.updates)
+				for !sameWorkerSlot(current, desired) {
+					prepared := cloneAgentWorkerSlot(desired)
+					if _, err := m.runtime.pullImage(ctx, strings.TrimSpace(prepared.GetWorkerImage())); err != nil {
+						fmt.Fprintf(m.statusErr, "worker slot %s prepare failed: %v\n", desired.WorkerId, err)
+						var ok bool
+						desired, ok = waitWorkerSlot(ctx, desired, supervisor.updates, backoff)
+						if !ok {
+							stop()
+							<-done
+							return
+						}
+						backoff = nextBackoff(backoff, 30*time.Second)
+						continue
+					}
+					desired = latestWorkerSlotUpdate(desired, supervisor.updates)
+					if sameWorkerSlot(prepared, desired) {
+						break
+					}
+				}
+				// The replacement is local before the current worker is stopped.
+				stop()
+				<-done
+				backoff = time.Second
+				restart = true
+			case err := <-done:
+				stop()
+				if ctx.Err() != nil {
+					return
+				}
+				if err == nil {
+					err = fmt.Errorf("worker exited")
+				}
+				fmt.Fprintf(m.statusErr, "worker slot %s exited: %v\n", current.WorkerId, err)
+				var ok bool
+				desired, ok = waitWorkerSlot(ctx, desired, supervisor.updates, backoff)
+				if !ok {
+					return
+				}
+				backoff = nextBackoff(backoff, 30*time.Second)
+				restart = true
+			}
 		}
-		backoff = nextBackoff(backoff, 30*time.Second)
+	}
+}
+
+func waitWorkerSlot(ctx context.Context, desired *pb.AgentWorkerSlot, updates <-chan *pb.AgentWorkerSlot, delay time.Duration) (*pb.AgentWorkerSlot, bool) {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return desired, false
+	case next := <-updates:
+		return latestWorkerSlotUpdate(next, updates), true
+	case <-timer.C:
+		return desired, true
+	}
+}
+
+func latestWorkerSlotUpdate(slot *pb.AgentWorkerSlot, updates <-chan *pb.AgentWorkerSlot) *pb.AgentWorkerSlot {
+	latest := cloneAgentWorkerSlot(slot)
+	for {
+		select {
+		case next := <-updates:
+			latest = cloneAgentWorkerSlot(next)
+		default:
+			return latest
+		}
 	}
 }
 
@@ -177,7 +256,10 @@ func (r *workerContainerRuntime) run(ctx context.Context, slot *pb.AgentWorkerSl
 	}
 
 	name := types.DefaultAgentServiceName + "-" + sanitizeDockerName(slot.WorkerId)
-	image := firstNonEmpty(r.opts.WorkerImage, os.Getenv(types.AgentWorkerImageEnv), slot.WorkerImage)
+	// The gateway has already folded any explicit join-time override into the
+	// slot. Keeping image selection here slot-only prevents an untouched
+	// generated install command from pinning the machine forever.
+	image := strings.TrimSpace(slot.WorkerImage)
 	if image == "" {
 		return fmt.Errorf("worker image is required for slot %s", slot.WorkerId)
 	}
@@ -200,7 +282,7 @@ func (r *workerContainerRuntime) run(ctx context.Context, slot *pb.AgentWorkerSl
 	}()
 
 	args := dockerRunArgs(name, image, imageID, configPath, r.bootstrap, slot, dirs)
-	cmd := exec.CommandContext(ctx, "docker", args...)
+	cmd := exec.Command("docker", args...)
 	stdoutLogs := r.telemetry.logWriter(types.AgentTelemetrySourceWorker, slot.WorkerId, types.EventLogStreamStdout)
 	stderrLogs := r.telemetry.logWriter(types.AgentTelemetrySourceWorker, slot.WorkerId, types.EventLogStreamStderr)
 	defer closeRuntimeWriter(stdoutLogs)
@@ -229,10 +311,30 @@ func (r *workerContainerRuntime) run(ctx context.Context, slot *pb.AgentWorkerSl
 	case err := <-done:
 		return err
 	case <-ctx.Done():
-		_ = exec.Command("docker", "rm", "-f", name).Run()
-		<-done
+		if err := stopWorkerContainer(name); err != nil {
+			fmt.Fprintf(r.statusErr, "failed to gracefully stop worker %s: %v\n", name, err)
+			_ = exec.Command("docker", "rm", "-f", name).Run()
+		}
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			_ = exec.Command("docker", "rm", "-f", name).Run()
+			if cmd.Process != nil {
+				_ = cmd.Process.Kill()
+			}
+		}
 		return ctx.Err()
 	}
+}
+
+func stopWorkerContainer(name string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "docker", "stop", "--time", "30", name).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("docker stop: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 func (r *workerContainerRuntime) pullImage(ctx context.Context, image string) (string, error) {

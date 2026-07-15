@@ -7,19 +7,17 @@ from .. import terminal
 from ..channel import ServiceClient
 from ..cli import extraclick
 from ..clients.gateway import (
-    CordonWorkerRequest,
     CreateMachineRequest,
     CreateMachineResponse,
     DeleteMachineRequest,
     DeleteMachineResponse,
-    DrainWorkerRequest,
     ListMachinesRequest,
     ListMachinesResponse,
-    ListWorkersRequest,
     Machine,
 )
 from .extraclick import ClickCommonGroup, ClickManagementGroup
 from .machine_format import gpu_availability_table, machine_table
+from .worker_management import apply_worker_action, worker_ids_for_machine
 
 
 @click.group(cls=ClickCommonGroup)
@@ -29,22 +27,20 @@ def common(**_):
 
 @click.group(
     name="machine",
-    help="Manage provider machines.",
+    help="Manage machines visible to the current profile.",
     cls=ClickManagementGroup,
 )
 def management():
     pass
 
 
-def _machine_list_renderables(
-    gpus: Dict[str, bool], machines: Sequence[Machine]
-) -> List[Any]:
+def _machine_list_renderables(gpus: Dict[str, bool], machines: Sequence[Machine]) -> List[Any]:
     return [gpu_availability_table(gpus), machine_table(machines)]
 
 
 @management.command(
     name="list",
-    help="List provider machines.",
+    help="List control-plane or private/BYOC machines for the current profile.",
     epilog="""
     Examples:
 
@@ -83,9 +79,7 @@ def list_machines(
     pool: str,
 ):
     res: ListMachinesResponse
-    res = service.gateway.list_machines(
-        ListMachinesRequest(pool_name=pool, limit=limit)
-    )
+    res = service.gateway.list_machines(ListMachinesRequest(pool_name=pool, limit=limit))
 
     if not res.ok:
         terminal.error(res.err_msg)
@@ -102,8 +96,11 @@ def list_machines(
 
 @management.command(
     name="create",
-    help="Create a new machine.",
+    help="Create a machine in a cluster-managed pool.",
     epilog="""
+      For private hardware, use `pool join`. For managed BYOC capacity, use
+      `pool scale`.
+
       Examples:
 
         {cli_name} machine create --pool ec2-t4
@@ -128,6 +125,9 @@ def create_machine(service: ServiceClient, pool: str):
             f"Created machine with ID: '{res.machine.id}'. Run the following command on the node:"
         )
         terminal.detail(res.install_command, crop=False, overflow="ignore")
+        terminal.detail(
+            "Leave --worker-image unchanged to follow cluster rollouts, or edit its tag to pin this machine to a test build."
+        )
         return
 
     terminal.header(
@@ -174,6 +174,10 @@ def create_machine(service: ServiceClient, pool: str):
     epilog="""
       Examples:
 
+        # Private/BYOC machines are resolved in the current workspace
+        {cli_name} machine delete my-machine-id
+
+        # Control-plane machines require their pool
         {cli_name} machine delete my-machine-id --pool ec2-t4
         \b
     """,
@@ -186,8 +190,7 @@ def create_machine(service: ServiceClient, pool: str):
 @click.option(
     "--pool",
     "-p",
-    help="The pool to select for the machine.",
-    required=True,
+    help="Pool name. Required for control-plane machines; inferred for private/BYOC machines.",
 )
 @extraclick.pass_service_client
 def delete_machine(service: ServiceClient, machine_id: str, pool: str):
@@ -196,24 +199,20 @@ def delete_machine(service: ServiceClient, machine_id: str, pool: str):
         DeleteMachineRequest(machine_id=machine_id, pool_name=pool)
     )
     if res.ok:
-        terminal.success(f"Deleted machine '{machine_id}' from pool '{pool}'")
+        location = f" from pool '{pool}'" if pool else ""
+        terminal.success(f"Deleted machine '{machine_id}'{location}")
     else:
         terminal.error(f"Error: {res.err_msg}")
 
 
 @management.command(
     name="drain",
-    help="""
-    Drain all workers on a specific machine.
-
-    This command will find all workers running on the specified machine ID and drain them.
-    When a worker is drained, all running containers on it will be stopped. The worker will 
-    continue until its idle timeout if was cordoned before being drained. 
-    """,
+    help="Cordon every worker on a machine and stop its active containers.",
     epilog="""
-      Examples:
+      Drained workers remain cordoned. Run `machine uncordon` after maintenance.
 
-        # Drain all workers on a specific machine
+      Example:
+
         {cli_name} machine drain 0d123123
     """,
 )
@@ -227,40 +226,15 @@ def drain_machine(
     service: ServiceClient,
     machine_id: str,
 ):
-    res = service.gateway.list_workers(ListWorkersRequest())
-    if not res.ok:
-        return terminal.error(f"Failed to list workers: {res.err_msg}")
-
-    matching_workers = [w.id for w in res.workers if w.machine_id == machine_id]
-
-    if not matching_workers:
-        return terminal.error(f"No workers found for machine ID: {machine_id}")
-
-    terminal.detail(f"Found {len(matching_workers)} workers on machine {machine_id}")
-
-    for worker_id in matching_workers:
-        res = service.gateway.drain_worker(DrainWorkerRequest(worker_id=worker_id))
-        if not res.ok:
-            text = res.err_msg.capitalize()
-            terminal.warn(text)
-        else:
-            terminal.success(f"Worker {worker_id} has been drained.")
+    apply_worker_action(service, worker_ids_for_machine(service, machine_id), "drain")
 
 
 @management.command(
     name="cordon",
-    help="""
-    Cordon all workers on a specific machine.
-
-    This command will find all workers running on the specified machine ID and cordon them.
-    When workers are cordoned, they will not accept new container requests but will
-    continue running existing containers. This is useful when you want to gracefully
-    remove workers from a machine.
-    """,
+    help="Stop new scheduling on every worker on a machine.",
     epilog="""
-      Examples:
+      Example:
 
-        # Cordon all workers on a specific machine
         {cli_name} machine cordon 0d123123
     """,
 )
@@ -274,21 +248,19 @@ def cordon_machine(
     service: ServiceClient,
     machine_id: str,
 ):
-    res = service.gateway.list_workers(ListWorkersRequest())
-    if not res.ok:
-        return terminal.error(f"Failed to list workers: {res.err_msg}")
+    apply_worker_action(service, worker_ids_for_machine(service, machine_id), "cordon")
 
-    matching_workers = [w.id for w in res.workers if w.machine_id == machine_id]
 
-    if not matching_workers:
-        return terminal.error(f"No workers found for machine ID: {machine_id}")
+@management.command(
+    name="uncordon",
+    help="Return every explicitly cordoned worker on a machine to scheduling.",
+    epilog="""
+      Example:
 
-    terminal.detail(f"Found {len(matching_workers)} workers on machine {machine_id}")
-
-    for worker_id in matching_workers:
-        res = service.gateway.cordon_worker(CordonWorkerRequest(worker_id=worker_id))
-        if not res.ok:
-            text = res.err_msg.capitalize()
-            terminal.warn(text)
-        else:
-            terminal.success(f"Worker {worker_id} has been cordoned.")
+        {cli_name} machine uncordon 0d123123
+    """,
+)
+@click.argument("machine_id", nargs=1, required=True)
+@extraclick.pass_service_client
+def uncordon_machine(service: ServiceClient, machine_id: str):
+    apply_worker_action(service, worker_ids_for_machine(service, machine_id), "uncordon")

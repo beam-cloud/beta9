@@ -1,6 +1,7 @@
 package gatewayservices
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 
 	pb "github.com/beam-cloud/beta9/proto"
+	"golang.org/x/exp/slices"
 )
 
 func (gws *GatewayService) ListMachines(ctx context.Context, in *pb.ListMachinesRequest) (*pb.ListMachinesResponse, error) {
@@ -27,12 +29,16 @@ func (gws *GatewayService) ListMachines(ctx context.Context, in *pb.ListMachines
 		return nil, err
 	}
 
-	// Non-cluster admins only see GPU availability
+	// Workspace profiles see private/BYOC inventory; admins see the control plane.
 	if authInfo.Token.TokenType != types.TokenTypeClusterAdmin {
-		return &pb.ListMachinesResponse{
-			Ok:   true,
-			Gpus: gpus,
-		}, nil
+		machines := []*pb.Machine{}
+		if gws.computeService != nil {
+			machines, err = gws.computeService.ListWorkspaceMachines(ctx, authInfo, in.PoolName, int(in.Limit))
+			if err != nil {
+				return &pb.ListMachinesResponse{Ok: false, ErrMsg: err.Error()}, nil
+			}
+		}
+		return machineListResponse(gpus, machines, in.Limit), nil
 	}
 
 	// Cluster admins see all machines associated with a cluster
@@ -43,7 +49,7 @@ func (gws *GatewayService) ListMachines(ctx context.Context, in *pb.ListMachines
 			return &pb.ListMachinesResponse{Ok: false, ErrMsg: err.Error()}, nil
 		}
 		if handled && in.PoolName != "" {
-			return &pb.ListMachinesResponse{Ok: true, Gpus: gpus, Machines: managedMachines}, nil
+			return machineListResponse(gpus, managedMachines, in.Limit), nil
 		}
 		formattedMachines = append(formattedMachines, managedMachines...)
 	}
@@ -59,7 +65,7 @@ func (gws *GatewayService) ListMachines(ctx context.Context, in *pb.ListMachines
 		if pool.Provider == nil {
 			return &pb.ListMachinesResponse{
 				Ok:     false,
-				ErrMsg: "Local pools don't currently track machines",
+				ErrMsg: fmt.Sprintf("Pool %q is controller-managed and does not track machines; use worker commands for its capacity", in.PoolName),
 			}, nil
 		}
 
@@ -103,11 +109,17 @@ func (gws *GatewayService) ListMachines(ctx context.Context, in *pb.ListMachines
 		}
 	}
 
-	return &pb.ListMachinesResponse{
-		Ok:       true,
-		Gpus:     gpus,
-		Machines: formattedMachines,
-	}, nil
+	return machineListResponse(gpus, formattedMachines, in.Limit), nil
+}
+
+func machineListResponse(gpus map[string]bool, machines []*pb.Machine, limit uint32) *pb.ListMachinesResponse {
+	slices.SortFunc(machines, func(i, j *pb.Machine) int {
+		return cmp.Or(cmp.Compare(i.PoolName, j.PoolName), cmp.Compare(i.Id, j.Id))
+	})
+	if limit > 0 && len(machines) > int(limit) {
+		machines = machines[:limit]
+	}
+	return &pb.ListMachinesResponse{Ok: true, Gpus: gpus, Machines: machines}
 }
 
 func providerMachineToProto(machine *types.ProviderMachine) *pb.Machine {
@@ -162,10 +174,7 @@ func (gws *GatewayService) CreateMachine(ctx context.Context, in *pb.CreateMachi
 	}
 
 	if authInfo.Token.TokenType != types.TokenTypeClusterAdmin {
-		return &pb.CreateMachineResponse{
-			Ok:     false,
-			ErrMsg: "This action is not permitted",
-		}, nil
+		return &pb.CreateMachineResponse{Ok: false, ErrMsg: "machine creation is managed through private pool join or BYOC scaling"}, nil
 	}
 
 	if gws.computeService != nil {
@@ -245,6 +254,9 @@ func (gws *GatewayService) CreateMachine(ctx context.Context, in *pb.CreateMachi
 
 func (gws *GatewayService) DeleteMachine(ctx context.Context, in *pb.DeleteMachineRequest) (*pb.DeleteMachineResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
+	if !auth.HasPermission(authInfo) {
+		return &pb.DeleteMachineResponse{Ok: false, ErrMsg: "Unauthorized Access"}, nil
+	}
 	clusterAdmin, _ := isClusterAdmin(ctx)
 	if gws.computeService != nil && clusterAdmin {
 		handled, err := gws.computeService.DeleteManagedMachine(ctx, authInfo, in.PoolName, in.MachineId)
@@ -256,18 +268,11 @@ func (gws *GatewayService) DeleteMachine(ctx context.Context, in *pb.DeleteMachi
 		}
 	}
 
-	if gws.computeService != nil {
+	if gws.computeService != nil && !clusterAdmin {
 		handled, res, err := gws.computeService.DeletePoolMachine(ctx, in)
 		if handled || err != nil {
 			return res, err
 		}
-	}
-
-	if !auth.HasPermission(authInfo) {
-		return &pb.DeleteMachineResponse{
-			Ok:     false,
-			ErrMsg: "Unauthorized Access",
-		}, nil
 	}
 
 	if authInfo.Token.TokenType != types.TokenTypeClusterAdmin {
@@ -283,6 +288,9 @@ func (gws *GatewayService) DeleteMachine(ctx context.Context, in *pb.DeleteMachi
 			Ok:     false,
 			ErrMsg: "Invalid pool name",
 		}, nil
+	}
+	if pool.Provider == nil {
+		return &pb.DeleteMachineResponse{Ok: false, ErrMsg: "This pool does not track provider machines"}, nil
 	}
 
 	err := gws.providerRepo.RemoveMachine(string(*pool.Provider), in.PoolName, in.MachineId)

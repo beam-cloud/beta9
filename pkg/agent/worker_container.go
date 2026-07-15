@@ -83,6 +83,7 @@ func dockerRunArgs(name, image, imageID, configPath string, bootstrap bootstrapC
 		types.WorkerTokenEnv:          slot.WorkerToken,
 		types.WorkerPoolEnv:           slot.PoolName,
 		types.WorkerMachineEnv:        slot.MachineId,
+		types.WorkerGenerationEnv:     slot.Generation,
 		types.WorkerCPUEnv:            strconv.FormatInt(slot.Cpu, 10),
 		types.WorkerMemoryEnv:         strconv.FormatInt(slot.Memory, 10),
 		types.WorkerGPUEnv:            slot.Gpu,
