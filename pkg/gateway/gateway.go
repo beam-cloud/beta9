@@ -95,6 +95,7 @@ type Gateway struct {
 const (
 	gatewayDrainPropagationDelay = 10 * time.Second
 	gatewayGRPCShutdownMaxWait   = 5 * time.Second
+	gatewayTailscaleStartTimeout = 30 * time.Second
 	gatewayLivenessService       = "liveness"
 	gatewayReadinessService      = "readiness"
 )
@@ -590,6 +591,14 @@ func (g *Gateway) registerServices() error {
 // Gateway entry point
 func (g *Gateway) Start() error {
 	var err error
+	if g.Config.Tailscale.Enabled {
+		ctx, cancel := context.WithTimeout(g.ctx, gatewayTailscaleStartTimeout)
+		err := g.Tailscale.Start(ctx)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("failed to connect gateway to tailnet: %w", err)
+		}
+	}
 
 	if g.Config.Monitoring.Telemetry.Enabled {
 		_, err = common.SetupTelemetry(g.ctx, types.DefaultGatewayServiceName, g.Config)

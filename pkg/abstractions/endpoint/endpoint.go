@@ -215,7 +215,7 @@ func (es *HttpEndpointService) forwardASGIHealthRequest(ctx echo.Context, stubId
 		return err
 	}
 
-	return instance.buffer.ForwardRequest(ctx, nil)
+	return instance.buffer.ForwardRequest(ctx, nil, nil)
 }
 
 func (es *HttpEndpointService) InstanceFactory(ctx context.Context, stubId string, options ...func(abstractions.IAutoscaledInstance)) (abstractions.IAutoscaledInstance, error) {
@@ -232,7 +232,7 @@ func (es *HttpEndpointService) GetInstance(stubId string) (abstractions.IAutosca
 
 func (es *HttpEndpointService) getOrCreateEndpointInstance(ctx context.Context, stubId string, options ...func(*endpointInstance)) (*endpointInstance, error) {
 	instance, exists := es.endpointInstances.Get(stubId)
-	if exists {
+	if exists && instance.Ctx.Err() == nil {
 		return instance, nil
 	}
 
@@ -245,8 +245,11 @@ func (es *HttpEndpointService) getOrCreateEndpointInstance(ctx context.Context, 
 	defer es.mu.Unlock()
 
 	instance, exists = es.endpointInstances.Get(stubId)
-	if exists {
+	if exists && instance.Ctx.Err() == nil {
 		return instance, nil
+	}
+	if exists {
+		es.endpointInstances.Delete(stubId)
 	}
 
 	stub, err := es.backendRepo.GetStubByExternalId(es.ctx, stubId)
@@ -329,10 +332,19 @@ func (es *HttpEndpointService) getOrCreateEndpointInstance(ctx context.Context, 
 	go instance.Monitor()
 	go func(i *endpointInstance) {
 		<-i.Ctx.Done()
-		es.endpointInstances.Delete(stubId)
+		es.deleteEndpointInstance(stubId, i)
 	}(instance)
 
 	return instance, nil
+}
+
+func (es *HttpEndpointService) deleteEndpointInstance(stubId string, instance *endpointInstance) {
+	es.mu.Lock()
+	defer es.mu.Unlock()
+
+	if current, exists := es.endpointInstances.Get(stubId); exists && current == instance {
+		es.endpointInstances.Delete(stubId)
+	}
 }
 
 var Keys = &keys{}

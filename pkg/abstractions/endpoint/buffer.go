@@ -30,6 +30,7 @@ import (
 
 const (
 	readyCheckInterval             time.Duration = 500 * time.Millisecond
+	queuedReadyCheckInterval       time.Duration = 50 * time.Millisecond
 	connectToHostTimeout           time.Duration = 2 * time.Second
 	httpConnectionTimeout          time.Duration = 2 * time.Second
 	checkAddressIsReadyTimeout     time.Duration = 2 * time.Second
@@ -53,11 +54,6 @@ type container struct {
 	inFlightRequests int
 }
 
-type backendTransportKey struct {
-	address string
-	timeout time.Duration
-}
-
 type RequestBuffer struct {
 	ctx                     context.Context
 	httpClient              *http.Client
@@ -77,6 +73,7 @@ type RequestBuffer struct {
 	keyEventManager         *common.KeyEventManager
 	keyEventChan            chan common.KeyEvent
 	workReady               chan struct{}
+	discoverReady           chan struct{}
 }
 
 func NewRequestBuffer(
@@ -110,6 +107,7 @@ func NewRequestBuffer(
 		maxTokens:               int(stubConfig.Workers),
 		isASGI:                  isASGI,
 		workReady:               make(chan struct{}, 1),
+		discoverReady:           make(chan struct{}, 1),
 	}
 
 	if stubConfig.ConcurrentRequests > 1 && isASGI {
@@ -150,7 +148,7 @@ func (rb *RequestBuffer) handleHeartbeatEvents() {
 	}
 }
 
-func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, task *EndpointTask) error {
+func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, task *EndpointTask, onEnqueue func()) error {
 	ctx.Set("stubId", rb.stubId)
 
 	requestID := uuid.NewString()
@@ -169,6 +167,10 @@ func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, task *EndpointTask) er
 		enqueuedAt: time.Now(),
 	}
 	rb.enqueueRequest(req, false)
+	if onEnqueue != nil {
+		onEnqueue()
+	}
+	rb.signalDiscovery()
 	rb.signalWork()
 
 	waitTimer := time.NewTimer(rb.requestQueueTimeout())
@@ -177,7 +179,7 @@ func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, task *EndpointTask) er
 	for {
 		select {
 		case <-rb.ctx.Done():
-			return nil
+			return rb.ctx.Err()
 		case <-ctx.Request().Context().Done():
 			select {
 			case <-started:
@@ -256,6 +258,13 @@ func (rb *RequestBuffer) signalWork() {
 	}
 	select {
 	case rb.workReady <- struct{}{}:
+	default:
+	}
+}
+
+func (rb *RequestBuffer) signalDiscovery() {
+	select {
+	case rb.discoverReady <- struct{}{}:
 	default:
 	}
 }
@@ -339,6 +348,7 @@ func (rb *RequestBuffer) checkAddressIsReady(address string) bool {
 		return false
 	}
 	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
 
 	ready := resp.StatusCode == http.StatusOK
 	metrics.RecordProxyBackendDialLatency("endpoint", rb.workspaceName(), rb.stubId, "http", ready, time.Since(start))
@@ -347,15 +357,8 @@ func (rb *RequestBuffer) checkAddressIsReady(address string) bool {
 
 func (rb *RequestBuffer) discoverContainers() {
 	for {
-		select {
-		case <-rb.ctx.Done():
-			return
-		default:
-			containerStates, err := rb.containerRepo.GetActiveContainersByStubId(rb.stubId)
-			if err != nil {
-				continue
-			}
-
+		containerStates, err := rb.containerRepo.GetActiveContainersByStubId(rb.stubId)
+		if err == nil {
 			var wg sync.WaitGroup
 			availableContainersChan := make(chan container, len(containerStates))
 
@@ -413,8 +416,23 @@ func (rb *RequestBuffer) discoverContainers() {
 			rb.availableContainersLock.Unlock()
 			rb.pruneBackendTransports(availableContainers)
 			rb.signalWork()
+		}
 
-			time.Sleep(readyCheckInterval)
+		interval := readyCheckInterval
+		if rb.buffer.Len() > 0 {
+			interval = queuedReadyCheckInterval
+		}
+
+		timer := time.NewTimer(interval)
+		select {
+		case <-rb.ctx.Done():
+			timer.Stop()
+			return
+		case <-rb.discoverReady:
+			if !timer.Stop() {
+				<-timer.C
+			}
+		case <-timer.C:
 		}
 	}
 }
@@ -505,14 +523,13 @@ func (rb *RequestBuffer) getHttpClient(address string, timeout time.Duration) *h
 	}
 
 	return &http.Client{
-		Transport: rb.backendTransport(address, timeout),
+		Transport: rb.backendTransport(address),
 		Timeout:   timeout,
 	}
 }
 
-func (rb *RequestBuffer) backendTransport(address string, timeout time.Duration) *http.Transport {
-	key := backendTransportKey{address: address, timeout: timeout}
-	if transport, ok := rb.backendTransports.Load(key); ok {
+func (rb *RequestBuffer) backendTransport(address string) *http.Transport {
+	if transport, ok := rb.backendTransports.Load(address); ok {
 		return transport.(*http.Transport)
 	}
 
@@ -528,14 +545,14 @@ func (rb *RequestBuffer) backendTransport(address string, timeout time.Duration)
 			}
 
 			start := time.Now()
-			conn, err := network.ConnectToBackend(ctx, dialAddress, backendDialTimeout(timeout), rb.tailscale, rb.tsConfig, rb.containerRepo)
+			conn, err := network.ConnectToBackend(ctx, dialAddress, backendConnectTimeout, rb.tailscale, rb.tsConfig, rb.containerRepo)
 			metrics.RecordDialTime(time.Since(start), dialAddress)
 			metrics.RecordProxyBackendDialLatency("endpoint", rb.workspaceName(), rb.stubId, "http", err == nil, time.Since(start))
 			return conn, err
 		},
 	}
 
-	actual, loaded := rb.backendTransports.LoadOrStore(key, transport)
+	actual, loaded := rb.backendTransports.LoadOrStore(address, transport)
 	if loaded {
 		transport.CloseIdleConnections()
 		return actual.(*http.Transport)
@@ -558,12 +575,12 @@ func (rb *RequestBuffer) pruneBackendTransports(containers []container) {
 		active[container.address] = struct{}{}
 	}
 	rb.backendTransports.Range(func(key, value any) bool {
-		transportKey, ok := key.(backendTransportKey)
+		address, ok := key.(string)
 		if !ok {
 			rb.backendTransports.Delete(key)
 			return true
 		}
-		if _, ok := active[transportKey.address]; ok {
+		if _, ok := active[address]; ok {
 			return true
 		}
 		value.(*http.Transport).CloseIdleConnections()

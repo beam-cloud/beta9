@@ -32,9 +32,9 @@ func TestScopedTelemetryConfigUsesWorkspaceWriteOnlyPrefixes(t *testing.T) {
 		telemetryCredentials: issuer,
 	}
 
-	config, err := service.scopedTelemetryConfig(context.Background(), "workspace-123")
+	config, err := service.agentTelemetryConfig(context.Background(), "workspace-123", false)
 	if err != nil {
-		t.Fatalf("scopedTelemetryConfig() error = %v", err)
+		t.Fatalf("agentTelemetryConfig() error = %v", err)
 	}
 	if config == nil || !config.Enabled {
 		t.Fatalf("expected enabled scoped telemetry config, got %#v", config)
@@ -76,5 +76,36 @@ func TestScopedTelemetryConfigUsesWorkspaceWriteOnlyPrefixes(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestAgentTelemetryConfigUsesClusterCredentialsForPlatformPools(t *testing.T) {
+	issuer := &fakeTelemetryCredentialIssuer{}
+	service := &Service{
+		appConfig: types.AppConfig{Database: types.DatabaseConfig{S2: types.S2Config{
+			ApiKey: "root-token",
+			Basin:  "events-basin",
+		}}},
+		telemetryCredentials: issuer,
+	}
+
+	config, err := service.agentTelemetryConfig(context.Background(), "admin-workspace", true)
+	if err != nil {
+		t.Fatalf("agentTelemetryConfig() error = %v", err)
+	}
+	if got, want := config.Logs.Credential, "root-token"; got != want {
+		t.Fatalf("log credential = %q, want %q", got, want)
+	}
+	if got, want := config.Logs.StreamPrefix, "events/logs/workspaces"; got != want {
+		t.Fatalf("log prefix = %q, want %q", got, want)
+	}
+	if got, want := config.Events.Credential, "root-token"; got != want {
+		t.Fatalf("event credential = %q, want %q", got, want)
+	}
+	if got, want := config.Events.StreamPrefix, "events/workspaces"; got != want {
+		t.Fatalf("event prefix = %q, want %q", got, want)
+	}
+	if len(issuer.args) != 0 {
+		t.Fatalf("platform workers should use the cluster S2 config, issued %d scoped tokens", len(issuer.args))
 	}
 }

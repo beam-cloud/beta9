@@ -408,7 +408,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	startup.Go(func() error { return ensureBindMountSourceDirs(request.Mounts) })
+	startup.Go(func() error { return s.containerMountManager.ensureBindMountSourceDirs(request.Mounts) })
 
 	// Generate dynamic runc spec for this container
 	phaseStart = time.Now()
@@ -1013,18 +1013,6 @@ func (s *Worker) prepareRequestMount(request *types.ContainerRequest, mount *typ
 
 func checkpointModelCacheMount(mountPath string) bool {
 	return strings.HasPrefix(filepath.Base(mountPath), types.CheckpointModelCacheVolumePrefix)
-}
-
-func ensureBindMountSourceDirs(mounts []types.Mount) error {
-	for _, mount := range mounts {
-		if mount.MountType == storage.StorageModeMountPoint || mount.LocalPath == "" {
-			continue
-		}
-		if err := os.MkdirAll(mount.LocalPath, 0755); err != nil {
-			return fmt.Errorf("create bind mount source %s for %s: %w", mount.LocalPath, mount.MountPath, err)
-		}
-	}
-	return nil
 }
 
 func bindMountMode(mount types.Mount) string {

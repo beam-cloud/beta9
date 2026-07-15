@@ -1098,6 +1098,7 @@ func TestScheduleContainerRequestsReservesAndQueuesBatch(t *testing.T) {
 		TotalGpuCount: 3,
 	}
 	assert.NoError(t, repo.AddWorker(worker))
+	messages, _ := rdb.Subscribe(context.Background(), common.RedisKeys.SchedulerWorkerRequestChannel())
 
 	requests := []*types.ContainerRequest{
 		{ContainerId: "container-batch-1", Cpu: 100, Memory: 100, Gpu: worker.Gpu},
@@ -1105,6 +1106,12 @@ func TestScheduleContainerRequestsReservesAndQueuesBatch(t *testing.T) {
 		{ContainerId: "container-batch-3", Cpu: 100, Memory: 100, Gpu: worker.Gpu},
 	}
 	assert.NoError(t, repo.ScheduleContainerRequests(worker, requests))
+	select {
+	case message := <-messages:
+		assert.Equal(t, worker.Id, message.Payload)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for worker request notification")
+	}
 
 	updatedWorker, err := repo.GetWorkerById(worker.Id)
 	assert.NoError(t, err)
@@ -1175,6 +1182,7 @@ func TestAcknowledgedContainerRequestIsNotReplayedWhenWorkerIsRemoved(t *testing
 	request := &types.ContainerRequest{ContainerId: "container-acknowledged-delivery", Cpu: 100, Memory: 100}
 	assert.NoError(t, repo.AddWorker(worker))
 	assert.NoError(t, repo.ScheduleContainerRequest(worker, request))
+	assert.NoError(t, rdb.HSet(context.TODO(), common.RedisKeys.SchedulerContainerState(request.ContainerId), "status", string(types.ContainerStatusPending)).Err())
 	delivered, err := repo.GetNextContainerRequests(worker.Id, 1)
 	assert.NoError(t, err)
 
@@ -1182,6 +1190,44 @@ func TestAcknowledgedContainerRequestIsNotReplayedWhenWorkerIsRemoved(t *testing
 	assert.Equal(t, int64(0), rdb.HLen(context.TODO(), common.RedisKeys.SchedulerWorkerPendingRequests(worker.Id)).Val())
 	assert.NoError(t, repo.RemoveWorker(worker.Id))
 	assert.Equal(t, int64(0), rdb.ZCard(context.TODO(), common.RedisKeys.SchedulerContainerRequests()).Val())
+}
+
+func TestContainerRequestAcknowledgementRejectsCancelledContainer(t *testing.T) {
+	for _, status := range []string{string(types.ContainerStatusStopping), ""} {
+		status := status
+		t.Run(firstNonEmpty(status, "deleted"), func(t *testing.T) {
+			rdb, err := NewRedisClientForTest()
+			assert.NotNil(t, rdb)
+			assert.NoError(t, err)
+
+			repo := NewWorkerRedisRepositoryForTest(rdb)
+			worker := &types.Worker{
+				Id:          "worker-cancelled-delivery",
+				Status:      types.WorkerStatusAvailable,
+				FreeCpu:     100,
+				FreeMemory:  125,
+				TotalCpu:    100,
+				TotalMemory: 125,
+			}
+			request := &types.ContainerRequest{ContainerId: "container-cancelled-delivery", Cpu: 100, Memory: 100}
+			assert.NoError(t, repo.AddWorker(worker))
+			assert.NoError(t, repo.ScheduleContainerRequest(worker, request))
+			delivered, err := repo.GetNextContainerRequests(worker.Id, 1)
+			assert.NoError(t, err)
+			assert.Len(t, delivered, 1)
+
+			stateKey := common.RedisKeys.SchedulerContainerState(request.ContainerId)
+			if status == "" {
+				assert.NoError(t, rdb.Del(context.TODO(), stateKey).Err())
+			} else {
+				assert.NoError(t, rdb.HSet(context.TODO(), stateKey, "status", status).Err())
+			}
+
+			assert.Error(t, repo.AddContainerToWorker(worker.Id, request.ContainerId, delivered[0].DeliveryToken))
+			assert.Equal(t, int64(0), rdb.HLen(context.TODO(), common.RedisKeys.SchedulerWorkerPendingRequests(worker.Id)).Val())
+			assert.Equal(t, int64(0), rdb.SCard(context.TODO(), common.RedisKeys.SchedulerContainerWorkerIndex(worker.Id)).Val())
+		})
+	}
 }
 
 func TestRecoveredContainerRequestRejectsStaleAcknowledgement(t *testing.T) {
@@ -1194,6 +1240,7 @@ func TestRecoveredContainerRequestRejectsStaleAcknowledgement(t *testing.T) {
 	request := &types.ContainerRequest{ContainerId: "container-reconnect", Cpu: 100, Memory: 100}
 	assert.NoError(t, repo.AddWorker(worker))
 	assert.NoError(t, repo.ScheduleContainerRequest(worker, request))
+	assert.NoError(t, rdb.HSet(context.TODO(), common.RedisKeys.SchedulerContainerState(request.ContainerId), "status", string(types.ContainerStatusPending)).Err())
 	first, err := repo.GetNextContainerRequests(worker.Id, 1)
 	assert.NoError(t, err)
 
@@ -1215,6 +1262,7 @@ func TestSendFailureDoesNotRequeueAcknowledgedDelivery(t *testing.T) {
 	request := &types.ContainerRequest{ContainerId: "container-ack-race", Cpu: 100, Memory: 100}
 	assert.NoError(t, repo.AddWorker(worker))
 	assert.NoError(t, repo.ScheduleContainerRequest(worker, request))
+	assert.NoError(t, rdb.HSet(context.TODO(), common.RedisKeys.SchedulerContainerState(request.ContainerId), "status", string(types.ContainerStatusPending)).Err())
 	delivered, err := repo.GetNextContainerRequests(worker.Id, 1)
 	assert.NoError(t, err)
 	assert.NoError(t, repo.AddContainerToWorker(worker.Id, request.ContainerId, delivered[0].DeliveryToken))

@@ -24,6 +24,7 @@ const (
 type workerEventSink struct {
 	workerID string
 	events   chan *pb.WorkerEvent
+	requests chan struct{}
 }
 
 type workerEventBroker struct {
@@ -46,19 +47,29 @@ func newWorkerEventBroker(ctx context.Context, rdb *common.RedisClient) *workerE
 
 	go broker.receive(common.EventTypeStopContainer)
 	go broker.receive(common.EventTypeStopBuild)
+	go broker.receiveRequests()
 
 	return broker
 }
 
 func (b *workerEventBroker) register(workerID string) (uint64, <-chan *pb.WorkerEvent) {
+	events := make(chan *pb.WorkerEvent, workerEventSinkBufferSize)
+	return b.addSink(&workerEventSink{workerID: workerID, events: events}), events
+}
+
+func (b *workerEventBroker) registerRequests(workerID string) (uint64, <-chan struct{}) {
+	requests := make(chan struct{}, 1)
+	return b.addSink(&workerEventSink{workerID: workerID, requests: requests}), requests
+}
+
+func (b *workerEventBroker) addSink(sink *workerEventSink) uint64 {
 	b.mu.Lock()
 	b.nextID++
 	id := b.nextID
-	events := make(chan *pb.WorkerEvent, workerEventSinkBufferSize)
-	b.sinks[id] = &workerEventSink{workerID: workerID, events: events}
+	b.sinks[id] = sink
 	b.mu.Unlock()
 
-	return id, events
+	return id
 }
 
 func (b *workerEventBroker) unregister(id uint64) {
@@ -71,12 +82,23 @@ func (b *workerEventBroker) unregister(id uint64) {
 	}
 
 	delete(b.sinks, id)
-	close(sink.events)
+	if sink.events != nil {
+		close(sink.events)
+	}
+	if sink.requests != nil {
+		close(sink.requests)
+	}
 }
 
 func (b *workerEventBroker) receive(eventType common.EventType) {
-	channel := common.EventChannelKey(eventType)
+	b.subscribe(common.EventChannelKey(eventType), b.handleRedisEventID)
+}
 
+func (b *workerEventBroker) receiveRequests() {
+	b.subscribe(common.RedisKeys.SchedulerWorkerRequestChannel(), b.wakeRequests)
+}
+
+func (b *workerEventBroker) subscribe(channel string, handle func(string)) {
 	for {
 		select {
 		case <-b.ctx.Done():
@@ -96,7 +118,7 @@ func (b *workerEventBroker) receive(eventType common.EventType) {
 					goto retry
 				}
 
-				b.handleRedisEventID(message.Payload)
+				handle(message.Payload)
 			case err, ok := <-errs:
 				if ok && err != nil && !errors.Is(err, context.Canceled) {
 					log.Error().Err(err).Str("channel", channel).Msg("worker event subscription error")
@@ -141,6 +163,9 @@ func (b *workerEventBroker) fanout(event *pb.WorkerEvent) {
 	defer b.mu.RUnlock()
 
 	for _, sink := range b.sinks {
+		if sink.events == nil {
+			continue
+		}
 		select {
 		case sink.events <- event:
 		default:
@@ -148,6 +173,21 @@ func (b *workerEventBroker) fanout(event *pb.WorkerEvent) {
 				Str("worker_id", sink.workerID).
 				Str("event_id", event.EventId).
 				Msg("dropping worker event for slow stream")
+		}
+	}
+}
+
+func (b *workerEventBroker) wakeRequests(workerID string) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	for _, sink := range b.sinks {
+		if sink.workerID != workerID || sink.requests == nil {
+			continue
+		}
+		select {
+		case sink.requests <- struct{}{}:
+		default:
 		}
 	}
 }

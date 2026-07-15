@@ -16,9 +16,10 @@ const backendRouteDialConcurrency = 16
 
 var backendRouteDialSlots = make(chan struct{}, backendRouteDialConcurrency)
 
-// backendRouteReadyPollInterval is how often an "opening" route is re-resolved
-// while waiting for the remote agent to confirm readiness.
-var backendRouteReadyPollInterval = 250 * time.Millisecond
+var (
+	backendRouteReadyPollInterval = 50 * time.Millisecond
+	backendRouteDialRetryInterval = 250 * time.Millisecond
+)
 
 type BackendRouteResolver interface {
 	GetBackendRoute(ctx context.Context, routeID string) (*types.BackendRoute, error)
@@ -134,7 +135,7 @@ func (d *BackendDialer) dialTSNetRoute(ctx context.Context, route *types.Backend
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-time.After(backendRouteReadyPollInterval):
+		case <-time.After(backendRouteDialRetryInterval):
 		}
 	}
 

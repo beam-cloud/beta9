@@ -924,7 +924,7 @@ func (s *Service) UpdateAgentAvailability(ctx context.Context, in *pb.UpdateAgen
 
 func (s *Service) agentBootstrapConfig(ctx context.Context, workspaceID string, poolState *model.PoolState) (*pb.AgentBootstrapConfig, error) {
 	config := normalizePoolConfig(poolState.Config)
-	telemetryConfig, err := s.scopedTelemetryConfig(ctx, workspaceID)
+	telemetryConfig, err := s.agentTelemetryConfig(ctx, workspaceID, poolState.ManagementSource != "")
 	if err != nil {
 		return nil, err
 	}

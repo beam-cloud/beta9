@@ -525,6 +525,7 @@ containerRequestStream:
 				}
 				if err := s.acknowledgeContainerRequest(request.ContainerId, response.DeliveryToken); err != nil {
 					log.Warn().Err(err).Str("worker_id", s.workerId).Str("container_id", request.ContainerId).Msg("failed to acknowledge container request")
+					s.completedRequests <- request
 					break
 				}
 				s.handleContainerRequest(request)
@@ -630,55 +631,13 @@ func (s *Worker) reserveContainerInstance(request *types.ContainerRequest) bool 
 	return true
 }
 
-func (s *Worker) dropCancelledContainerRequest(request *types.ContainerRequest) bool {
-	if s.containerRepoClient == nil {
-		return false
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	resp, err := handleGRPCResponse(s.containerRepoClient.GetContainerState(ctx, &pb.GetContainerStateRequest{
-		ContainerId: request.ContainerId,
-	}))
-	if err != nil {
-		notFoundErr := &types.ErrContainerStateNotFound{}
-		if notFoundErr.From(err) {
-			log.Info().Str("container_id", request.ContainerId).Msg("dropping container request because state is missing")
-			s.completedRequests <- request
-			return true
-		}
-
-		log.Warn().Str("container_id", request.ContainerId).Err(err).Msg("unable to check container state before start")
-		return false
-	}
-
-	if resp.State == nil || types.ContainerStatus(resp.State.Status) != types.ContainerStatusStopping {
-		return false
-	}
-
-	log.Info().Str("container_id", request.ContainerId).Msg("dropping container request because state is already stopping")
-	if _, err := handleGRPCResponse(s.containerRepoClient.DeleteContainerState(ctx, &pb.DeleteContainerStateRequest{ContainerId: request.ContainerId})); err != nil {
-		log.Debug().Str("container_id", request.ContainerId).Err(err).Msg("failed to remove stopping container state")
-	}
-
-	s.completedRequests <- request
-	return true
-}
-
 // handleContainerRequest handles an individual container request.
 func (s *Worker) handleContainerRequest(request *types.ContainerRequest) {
 	if !s.reserveContainerInstance(request) {
 		return
 	}
 
-	go func() {
-		if s.dropCancelledContainerRequest(request) {
-			s.containerInstances.Delete(request.ContainerId)
-			return
-		}
-		s.runContainerRequest(request)
-	}()
+	go s.runContainerRequest(request)
 }
 
 func (s *Worker) runContainerRequest(request *types.ContainerRequest) {

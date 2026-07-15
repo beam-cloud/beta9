@@ -210,6 +210,17 @@ if not assignment then
 	if redis.call("HGET", KEYS[1], ARGV[3]) == ARGV[4] then
 		return 1
 	end
+	if redis.call("EXISTS", KEYS[1]) == 0 then
+		local deliveries = redis.call("HGETALL", KEYS[3])
+		for i = 1, #deliveries, 2 do
+			local pending = cjson.decode(deliveries[i + 1])
+			if pending.delivery_token == ARGV[4] then
+				redis.call("HDEL", KEYS[3], deliveries[i])
+				redis.call("SREM", KEYS[2], KEYS[1])
+				return -3
+			end
+		end
+	end
 	return -2
 end
 local encoded = redis.call("HGET", KEYS[3], assignment)
@@ -219,6 +230,12 @@ end
 local pending = cjson.decode(encoded)
 if pending.delivery_token ~= ARGV[4] then
 	return -2
+end
+local status = redis.call("HGET", KEYS[1], "status")
+if not status or status == ARGV[5] then
+	redis.call("HDEL", KEYS[3], assignment)
+	redis.call("SREM", KEYS[2], KEYS[1])
+	return -3
 end
 
 redis.call("HDEL", KEYS[3], assignment)
@@ -1252,6 +1269,9 @@ func (r *WorkerRedisRepository) ScheduleContainerRequests(worker *types.Worker, 
 		}
 		return fmt.Errorf("worker <%s> is not available", worker.Id)
 	}
+	if err := r.rdb.Publish(ctx, common.RedisKeys.SchedulerWorkerRequestChannel(), worker.Id).Err(); err != nil {
+		log.Warn().Err(err).Str("worker_id", worker.Id).Msg("failed to notify worker request stream")
+	}
 
 	worker.FreeCpu = capacity.freeCPU
 	worker.FreeMemory = capacity.freeMemory
@@ -1323,7 +1343,7 @@ func (r *WorkerRedisRepository) AddContainerToWorker(workerId, containerId, deli
 		common.RedisKeys.SchedulerContainerWorkerIndex(workerId),
 		common.RedisKeys.SchedulerWorkerPendingRequests(workerId),
 		common.RedisKeys.SchedulerWorkerState(workerId),
-	}, workerId, schedulerAssignmentIDField, schedulerDeliveryTokenField, deliveryToken).Int()
+	}, workerId, schedulerAssignmentIDField, schedulerDeliveryTokenField, deliveryToken, string(types.ContainerStatusStopping)).Int()
 	if err != nil {
 		return fmt.Errorf("failed to add container to worker container index: %w", err)
 	}
@@ -1332,6 +1352,9 @@ func (r *WorkerRedisRepository) AddContainerToWorker(workerId, containerId, deli
 	}
 	if result == -2 {
 		return fmt.Errorf("container <%s> delivery is no longer pending", containerId)
+	}
+	if result == -3 {
+		return fmt.Errorf("container <%s> is no longer runnable", containerId)
 	}
 	return nil
 }

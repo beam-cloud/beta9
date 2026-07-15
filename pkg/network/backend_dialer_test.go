@@ -54,6 +54,13 @@ func withFastRoutePolling(t *testing.T) {
 	t.Cleanup(func() { backendRouteReadyPollInterval = previous })
 }
 
+func withFastRouteDialRetry(t *testing.T) {
+	t.Helper()
+	previous := backendRouteDialRetryInterval
+	backendRouteDialRetryInterval = 10 * time.Millisecond
+	t.Cleanup(func() { backendRouteDialRetryInterval = previous })
+}
+
 func withFastPeerAdvisory(t *testing.T) {
 	t.Helper()
 	previous := tailnetPeerAdvisoryTimeout
@@ -158,6 +165,7 @@ func (f *tsnetRouteResolver) GetBackendRoute(ctx context.Context, routeID string
 
 func TestBackendDialerTSNetRetriesTransientDialFailures(t *testing.T) {
 	withFastRoutePolling(t)
+	withFastRouteDialRetry(t)
 	withFastPeerPolling(t)
 
 	ts := testTailscale(t, statusWithPeers("beam-agent-machine"))
@@ -215,6 +223,7 @@ func TestBackendDialerTSNetRetriesTransientDialFailures(t *testing.T) {
 func newMissingPeerBackendDialer(t *testing.T, dialTimeout time.Duration) (*Tailscale, *BackendDialer) {
 	t.Helper()
 	withFastRoutePolling(t)
+	withFastRouteDialRetry(t)
 	withFastPeerPolling(t)
 	withFastPeerAdvisory(t)
 
