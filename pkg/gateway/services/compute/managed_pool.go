@@ -85,9 +85,10 @@ func normalizeManagedPoolConfig(config types.WorkerPoolConfig) (types.WorkerPool
 	if config.Mode != types.PoolModeExternal {
 		return types.WorkerPoolConfig{}, fmt.Errorf("managed pools must use mode %q", types.PoolModeExternal)
 	}
-	if config.Provider != nil {
+	if !config.AgentHosted() {
 		return types.WorkerPoolConfig{}, errors.New("managed pools are agent-backed and cannot set provider")
 	}
+	config.Provider = nil
 	if config.ContainerRuntime == "" {
 		config.ContainerRuntime = types.ContainerRuntimeRunc.String()
 	}
@@ -173,7 +174,7 @@ func (s *Service) activeManagedPoolState(state *model.PoolState) (*model.PoolSta
 	case types.WorkerPoolManagementSourceConfig:
 		var exists bool
 		config, exists = s.appConfig.Worker.Pools[state.Name]
-		if !exists || config.Mode != types.PoolModeExternal || config.Provider != nil {
+		if !exists || !config.AgentHosted() {
 			return nil, nil
 		}
 	case types.WorkerPoolManagementSourceAPI:
@@ -231,7 +232,7 @@ func (s *Service) managedPoolCatalog(ctx context.Context) (map[string]*model.Poo
 
 	names := make([]string, 0, len(s.appConfig.Worker.Pools))
 	for name, config := range s.appConfig.Worker.Pools {
-		if config.Mode == types.PoolModeExternal && config.Provider == nil {
+		if config.AgentHosted() {
 			names = append(names, name)
 		}
 	}
@@ -432,7 +433,7 @@ func configuredManagedPoolController(config types.WorkerPoolConfig) types.Worker
 	switch {
 	case config.Mode == types.PoolModeLocal:
 		return types.WorkerPoolControllerLocal
-	case config.Mode == types.PoolModeExternal && config.Provider == nil:
+	case config.AgentHosted():
 		return types.WorkerPoolControllerAgent
 	case config.Mode == types.PoolModeExternal:
 		return types.WorkerPoolControllerExternalLegacy
@@ -696,7 +697,7 @@ func (s *Service) CreateManagedMachine(ctx context.Context, authInfo *auth.AuthI
 	}
 	if state.ManagementSource == types.WorkerPoolManagementSourceConfig {
 		configured, ok := s.appConfig.Worker.Pools[state.Name]
-		if !ok || configured.Mode != types.PoolModeExternal || configured.Provider != nil {
+		if !ok || !configured.AgentHosted() {
 			return nil, false, nil
 		}
 	}

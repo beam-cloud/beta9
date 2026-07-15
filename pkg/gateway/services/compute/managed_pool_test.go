@@ -385,12 +385,14 @@ func TestManagedExternalWorkerUsesItsPersistedWorkspace(t *testing.T) {
 	}
 }
 
-func TestReconcileManagedPoolsOnlyMaterializesProviderlessExternalPools(t *testing.T) {
+func TestReconcileManagedPoolsOnlyMaterializesAgentExternalPools(t *testing.T) {
 	legacyProvider := types.ProviderEC2
+	agentProvider := types.ProviderAgent
 	service := managedPoolTestService(types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
-		"local":        {Mode: types.PoolModeLocal},
-		"legacy":       {Mode: types.PoolModeExternal, Provider: &legacyProvider},
-		"public-agent": {Mode: types.PoolModeExternal, Priority: 10},
+		"local":                {Mode: types.PoolModeLocal},
+		"legacy":               {Mode: types.PoolModeExternal, Provider: &legacyProvider},
+		"providerless-agent":   {Mode: types.PoolModeExternal, Priority: 10},
+		"named-agent-provider": {Mode: types.PoolModeExternal, Provider: &agentProvider, Priority: 20},
 	}}}, &fakeComputeRepo{})
 
 	if err := service.ReconcileManagedPools(context.Background()); err != nil {
@@ -400,8 +402,20 @@ func TestReconcileManagedPoolsOnlyMaterializesProviderlessExternalPools(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(states) != 1 || states[0].Name != "public-agent" || states[0].ManagementSource != types.WorkerPoolManagementSourceConfig {
+	if len(states) != 2 {
 		t.Fatalf("reconciled states = %+v", states)
+	}
+	names := map[string]struct{}{}
+	for _, state := range states {
+		if state.ManagementSource != types.WorkerPoolManagementSourceConfig || state.WorkerConfig == nil || state.WorkerConfig.Provider != nil {
+			t.Fatalf("reconciled state = %+v", state)
+		}
+		names[state.Name] = struct{}{}
+	}
+	for _, name := range []string{"providerless-agent", "named-agent-provider"} {
+		if _, ok := names[name]; !ok {
+			t.Fatalf("missing reconciled pool %q in %+v", name, states)
+		}
 	}
 }
 
