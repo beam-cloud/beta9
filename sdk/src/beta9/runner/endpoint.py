@@ -8,12 +8,12 @@ import types
 from contextlib import asynccontextmanager
 from http import HTTPStatus
 from multiprocessing import Value
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, Union
 
+from fastapi import Depends, FastAPI, Request
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from gunicorn.app.base import Arbiter, BaseApplication
 from starlette.applications import Starlette
-from starlette.requests import Request
-from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.types import ASGIApp
 from uvicorn.workers import UvicornWorker
 
@@ -136,9 +136,13 @@ class OnStartMethodHandler:
             await asyncio.sleep(1)
 
 
+def get_task_lifecycle_data(request: Request):
+    return request.state.task_lifecycle_data
+
+
 class EndpointManager:
     @asynccontextmanager
-    async def lifespan(self, _: Starlette):
+    async def lifespan(self, _: FastAPI):
         with runner_context() as channel:
             self.app.state.gateway_stub = GatewayServiceStub(channel)
             yield
@@ -161,7 +165,7 @@ class EndpointManager:
                 on_start_value=self.on_start_value,
             )
 
-            app: Optional[ASGIApp] = None
+            app: Union[FastAPI, None] = None
             internal_asgi_app = getattr(self.handler.handler.func, "internal_asgi_app", None)
             if internal_asgi_app is not None:
                 app = internal_asgi_app
@@ -176,7 +180,7 @@ class EndpointManager:
 
             self.app.router.lifespan_context = self.lifespan
         else:
-            self.app = Starlette(lifespan=self.lifespan)
+            self.app = FastAPI(lifespan=self.lifespan)
 
         self.app.add_middleware(TaskLifecycleMiddleware)
         self.app.add_middleware(WebsocketTaskLifecycleMiddleware)
@@ -201,9 +205,12 @@ class EndpointManager:
         if self.is_asgi_stub:
             return
 
-        @self.app.route("/", methods=["GET", "POST"])
-        async def function(request: Request):
-            task_lifecycle_data: TaskLifecycleData = request.state.task_lifecycle_data
+        @self.app.get("/")
+        @self.app.post("/")
+        async def function(
+            request: Request,
+            task_lifecycle_data: TaskLifecycleData = Depends(get_task_lifecycle_data),
+        ):
             task_id = request.headers.get("X-TASK-ID")
             payload = await request.json()
 

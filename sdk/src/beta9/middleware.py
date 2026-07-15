@@ -4,9 +4,9 @@ from dataclasses import dataclass
 from http import HTTPStatus
 from typing import Any, Optional
 
-from starlette.exceptions import HTTPException
+from fastapi import HTTPException, Request
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import HTTPConnection, Request
+from starlette.requests import HTTPConnection
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .clients.gateway import (

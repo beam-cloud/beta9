@@ -1,5 +1,3 @@
-import subprocess
-import sys
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from inspect import signature
@@ -142,21 +140,3 @@ class TestRunner(unittest.TestCase):
             VLLM,
         ):
             self.assertIn("disks", signature(cls.__init__).parameters, cls.__name__)
-
-    def test_endpoint_runner_does_not_import_fastapi(self):
-        result = subprocess.run(
-            [
-                sys.executable,
-                "-c",
-                (
-                    "import sys; from types import SimpleNamespace; "
-                    "from beta9.runner import common; "
-                    "common.config = SimpleNamespace(checkpoint_enabled=False); "
-                    "import beta9.runner.endpoint; assert 'fastapi' not in sys.modules"
-                ),
-            ],
-            capture_output=True,
-            text=True,
-        )
-
-        self.assertEqual(result.returncode, 0, result.stderr)
