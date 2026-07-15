@@ -111,11 +111,12 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 
 	stubConfig := types.StubConfigV1{
 		Runtime: types.Runtime{
-			Cpu:      in.Cpu,
-			Gpus:     gpus,
-			GpuCount: in.GpuCount,
-			Memory:   in.Memory,
-			ImageId:  in.ImageId,
+			Cpu:            in.Cpu,
+			Gpus:           gpus,
+			GpuCount:       in.GpuCount,
+			GpuVirtualized: in.GpuVirtualized,
+			Memory:         in.Memory,
+			ImageId:        in.ImageId,
 		},
 		Handler:            in.Handler,
 		OnStart:            in.OnStart,

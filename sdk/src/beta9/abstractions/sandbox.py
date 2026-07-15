@@ -150,6 +150,9 @@ class Sandbox(Pod):
             applicable or no GPU required, leave it empty. Default is [GpuType.NoGPU](#gputype).
         gpu_count (int):
             The number of GPUs to allocate. Default is 0.
+        gpu_virtualized (bool):
+            If true, preserve GPU scheduling and image selection but do not expose physical GPU devices
+            inside the sandbox. Default is False.
         image (Union[Image, dict]):
             The container image used for the task execution. Whatever you pass here will have an additional `add_python_packages` call
             with `["fastapi", "vllm", "huggingface_hub"]` added to it to ensure that we can run vLLM in the container.
@@ -234,6 +237,7 @@ class Sandbox(Pod):
         gpu: Union[GpuTypeAlias, List[GpuTypeAlias]] = GpuType.NoGPU,
         gpu_count: int = 0,
         image: Image = Image(python_version="python3.11"),
+        gpu_virtualized: bool = False,
         keep_warm_seconds: int = 600,
         authorized: bool = False,
         name: Optional[str] = None,
@@ -260,6 +264,7 @@ class Sandbox(Pod):
             memory=memory,
             gpu=gpu,
             gpu_count=gpu_count,
+            gpu_virtualized=gpu_virtualized,
             image=image,
             keep_warm_seconds=keep_warm_seconds,
             authorized=authorized,

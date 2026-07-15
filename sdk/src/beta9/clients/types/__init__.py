@@ -122,6 +122,7 @@ class ContainerRequest(betterproto.Message):
     machine_id: str = betterproto.string_field(34)
     checkpoint_trigger: "CheckpointTrigger" = betterproto.message_field(35)
     task_id: str = betterproto.string_field(36)
+    gpu_virtualized: bool = betterproto.bool_field(37)
 
 
 @dataclass(eq=False, repr=False)

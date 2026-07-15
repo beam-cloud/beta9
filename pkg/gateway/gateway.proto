@@ -706,6 +706,7 @@ message GetOrCreateStubRequest {
   repeated DurableDisk disks = 44;
   bool allow_marketplace = 45;
   types.CheckpointTrigger checkpoint_trigger = 46;
+  bool gpu_virtualized = 47;
 }
 
 message GetOrCreateStubResponse {

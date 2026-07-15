@@ -440,6 +440,7 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 		Memory:            stubConfig.Runtime.Memory,
 		GpuRequest:        gpuRequest,
 		GpuCount:          uint32(gpuCount),
+		GpuVirtualized:    stubConfig.Runtime.GpuVirtualized,
 		Mounts:            mounts,
 		Stub:              *stub,
 		ImageId:           *imageId,

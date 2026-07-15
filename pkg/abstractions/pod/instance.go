@@ -117,6 +117,7 @@ func (i *podInstance) startContainers(containersToRun int) error {
 			Memory:            i.StubConfig.Runtime.Memory,
 			GpuRequest:        gpuRequest,
 			GpuCount:          uint32(gpuCount),
+			GpuVirtualized:    i.StubConfig.Runtime.GpuVirtualized,
 			ImageId:           i.StubConfig.Runtime.ImageId,
 			StubId:            i.Stub.ExternalId,
 			AppId:             i.Stub.App.ExternalId,
