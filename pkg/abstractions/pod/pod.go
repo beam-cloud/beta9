@@ -260,7 +260,7 @@ func (ps *GenericPodService) forwardTCPRequest(tc *tcpConnection, stubId string)
 
 func (ps *GenericPodService) getOrCreatePodInstance(stubId string, options ...func(*podInstance)) (*podInstance, error) {
 	instance, exists := ps.podInstances.Get(stubId)
-	if exists {
+	if exists && instance.Ctx.Err() == nil {
 		return instance, nil
 	}
 
@@ -273,8 +273,11 @@ func (ps *GenericPodService) getOrCreatePodInstance(stubId string, options ...fu
 	defer ps.mu.Unlock()
 
 	instance, exists = ps.podInstances.Get(stubId)
-	if exists {
+	if exists && instance.Ctx.Err() == nil {
 		return instance, nil
+	}
+	if exists {
+		ps.podInstances.Delete(stubId)
 	}
 
 	stub, err := ps.backendRepo.GetStubByExternalId(ps.ctx, stubId)
@@ -343,10 +346,19 @@ func (ps *GenericPodService) getOrCreatePodInstance(stubId string, options ...fu
 	go instance.Monitor()
 	go func(i *podInstance) {
 		<-i.Ctx.Done()
-		ps.podInstances.Delete(stubId)
+		ps.deletePodInstance(stubId, i)
 	}(instance)
 
 	return instance, nil
+}
+
+func (ps *GenericPodService) deletePodInstance(stubId string, instance *podInstance) {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+
+	if current, exists := ps.podInstances.Get(stubId); exists && current == instance {
+		ps.podInstances.Delete(stubId)
+	}
 }
 
 func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, stub *types.StubWithRelated, imageId *string, checkpoint *types.Checkpoint) (string, error) {

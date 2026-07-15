@@ -30,13 +30,14 @@ import (
 )
 
 const (
-	containerDiscoveryInterval    time.Duration = time.Millisecond * 250
-	containerDialTimeoutDurationS time.Duration = time.Second * 30
-	containerPinnedDialTimeout    time.Duration = time.Millisecond * 900
-	containerAvailableTimeout     time.Duration = time.Second * 2
-	containerPrimeTimeout         time.Duration = time.Second * 3
-	connectionKeepAliveInterval   time.Duration = time.Second * 1
-	connectionReadTimeout         time.Duration = time.Minute * 5
+	containerDiscoveryInterval       time.Duration = time.Millisecond * 250
+	queuedContainerDiscoveryInterval time.Duration = time.Millisecond * 50
+	containerDialTimeoutDurationS    time.Duration = time.Second * 30
+	containerPinnedDialTimeout       time.Duration = time.Millisecond * 900
+	containerAvailableTimeout        time.Duration = time.Second * 2
+	containerPrimeTimeout            time.Duration = time.Second * 3
+	connectionKeepAliveInterval      time.Duration = time.Second * 1
+	connectionReadTimeout            time.Duration = time.Minute * 5
 )
 
 type container struct {
@@ -54,7 +55,14 @@ type connection struct {
 	enqueuedAt  time.Time
 	dialTimeout time.Duration
 	llm         *llmRequestInfo
+	state       atomic.Int32
 }
+
+const (
+	connectionQueued int32 = iota
+	connectionActive
+	connectionFinished
+)
 
 type backendTransportKey struct {
 	targetHost  string
@@ -97,6 +105,7 @@ type PodProxyBuffer struct {
 	proxyIndexRefreshAfter  atomic.Int64
 	buffer                  *abstractions.RingBuffer[*connection]
 	workReady               chan struct{}
+	discoverReady           chan struct{}
 }
 
 func NewPodProxyBuffer(ctx, drainCtx context.Context,
@@ -138,6 +147,7 @@ func NewPodProxyBuffer(ctx, drainCtx context.Context,
 		availableContainersLock: sync.RWMutex{},
 		buffer:                  abstractions.NewRingBuffer[*connection](size),
 		workReady:               make(chan struct{}, 1),
+		discoverReady:           make(chan struct{}, 1),
 	}
 
 	go pb.discoverContainers()
@@ -187,6 +197,7 @@ func (pb *PodProxyBuffer) ForwardRequest(ctx echo.Context) error {
 
 	container, ok, hasContainers, hasPort := pb.reserveContainerForRequest(int32(port), llmInfo)
 	if ok {
+		conn.claim()
 		pb.handleConnection(conn, container, int32(port))
 		return nil
 	}
@@ -196,8 +207,9 @@ func (pb *PodProxyBuffer) ForwardRequest(ctx echo.Context) error {
 
 	conn.enqueuedAt = time.Now()
 	pb.enqueueConnection(conn, false)
+	pb.signalDiscovery()
 	pb.signalWork()
-	return pb.waitForConnection(ctx, conn)
+	return pb.waitForConnection(conn, ctx.Request().Context().Done())
 }
 
 func (pb *PodProxyBuffer) ForwardContainerRequest(ctx echo.Context, containerId string) error {
@@ -230,7 +242,9 @@ func (pb *PodProxyBuffer) ForwardContainerRequest(ctx echo.Context, containerId 
 	}
 
 	done := make(chan struct{})
-	pb.handleConnection(&connection{ctx: ctx, done: done, dialTimeout: containerPinnedDialTimeout}, container{
+	conn := &connection{ctx: ctx, done: done, dialTimeout: containerPinnedDialTimeout}
+	conn.claim()
+	pb.handleConnection(conn, container{
 		id:         containerId,
 		addressMap: addressMap,
 	}, int32(port))
@@ -238,17 +252,24 @@ func (pb *PodProxyBuffer) ForwardContainerRequest(ctx echo.Context, containerId 
 	return nil
 }
 
-func (pb *PodProxyBuffer) waitForConnection(ctx echo.Context, conn *connection) error {
+func (pb *PodProxyBuffer) waitForConnection(conn *connection, requestDone <-chan struct{}) error {
+	instanceDone := pb.ctx.Done()
+	drainDone := pb.drainDone()
 	for {
 		select {
-		case <-pb.ctx.Done():
-			return ctx.String(http.StatusServiceUnavailable, "Failed to connect to service")
-		case <-pb.drainDone():
-			pb.failQueuedConnection(conn, http.StatusServiceUnavailable, "Service is draining")
-			return nil
+		case <-instanceDone:
+			if pb.failQueuedConnection(conn, http.StatusServiceUnavailable, "Failed to connect to service") {
+				return nil
+			}
+			instanceDone = nil
+		case <-drainDone:
+			if pb.failQueuedConnection(conn, http.StatusServiceUnavailable, "Service is draining") {
+				return nil
+			}
+			drainDone = nil
 		case <-conn.done:
 			return nil
-		case <-ctx.Request().Context().Done():
+		case <-requestDone:
 			return nil
 		}
 	}
@@ -275,20 +296,17 @@ func (pb *PodProxyBuffer) ForwardTCPRequest(tc *tcpConnection) error {
 	}
 
 	pb.enqueueConnection(conn, false)
+	pb.signalDiscovery()
 	pb.signalWork()
 
-	for {
-		select {
-		case <-conn.done:
-			return nil
-		}
-	}
+	return pb.waitForConnection(conn, nil)
 }
 
 func (pb *PodProxyBuffer) processBuffer() {
 	for {
 		select {
 		case <-pb.ctx.Done():
+			pb.failQueuedConnections(http.StatusServiceUnavailable, "Failed to connect to service")
 			return
 		case <-pb.drainDone():
 			pb.failQueuedConnections(http.StatusServiceUnavailable, "Service is draining")
@@ -300,10 +318,13 @@ func (pb *PodProxyBuffer) processBuffer() {
 					break
 				}
 				pb.recordBufferOccupancy()
+				if !conn.claim() {
+					continue
+				}
 
 				if conn.tc != nil {
 					if pb.isDraining() {
-						pb.failQueuedConnection(conn, http.StatusServiceUnavailable, "Service is draining")
+						pb.failConnection(conn, http.StatusServiceUnavailable, "Service is draining")
 						continue
 					}
 					port := int32(conn.tc.Fields.Port)
@@ -328,7 +349,7 @@ func (pb *PodProxyBuffer) processBuffer() {
 					continue
 				}
 				if pb.isDraining() {
-					pb.failQueuedConnection(conn, http.StatusServiceUnavailable, "Service is draining")
+					pb.failConnection(conn, http.StatusServiceUnavailable, "Service is draining")
 					continue
 				}
 
@@ -367,6 +388,16 @@ func (pb *PodProxyBuffer) signalWork() {
 	}
 }
 
+func (pb *PodProxyBuffer) signalDiscovery() {
+	if pb.discoverReady == nil {
+		return
+	}
+	select {
+	case pb.discoverReady <- struct{}{}:
+	default:
+	}
+}
+
 func (pb *PodProxyBuffer) enqueueConnection(conn *connection, priority bool) {
 	if overwritten, ok := pb.buffer.PushWithOverwrite(conn, priority); ok {
 		metrics.RecordRingBufferOverwrite("pod", pb.workspaceName(), pb.stubId)
@@ -375,10 +406,15 @@ func (pb *PodProxyBuffer) enqueueConnection(conn *connection, priority bool) {
 	pb.recordBufferOccupancy()
 }
 
-func (pb *PodProxyBuffer) failQueuedConnection(conn *connection, status int, message string) {
-	if conn == nil {
-		return
+func (pb *PodProxyBuffer) failQueuedConnection(conn *connection, status int, message string) bool {
+	if conn == nil || !conn.claim() {
+		return false
 	}
+	pb.failConnection(conn, status, message)
+	return true
+}
+
+func (pb *PodProxyBuffer) failConnection(conn *connection, status int, message string) {
 	if conn.tc != nil {
 		conn.tc.Conn.Close()
 	} else if conn.ctx != nil && !conn.ctx.Response().Committed {
@@ -425,9 +461,14 @@ func (c *connection) finish() {
 	if c == nil || c.done == nil {
 		return
 	}
+	c.state.Store(connectionFinished)
 	c.finishOnce.Do(func() {
 		close(c.done)
 	})
+}
+
+func (c *connection) claim() bool {
+	return c != nil && c.state.CompareAndSwap(connectionQueued, connectionActive)
 }
 
 func (pb *PodProxyBuffer) availableContainerSnapshot() []container {
@@ -543,6 +584,7 @@ func (pb *PodProxyBuffer) primeContainerPort(containerID string, port int32, tim
 
 func (pb *PodProxyBuffer) requeueConnection(conn *connection) {
 	pb.enqueueConnection(conn, true)
+	conn.state.CompareAndSwap(connectionActive, connectionQueued)
 }
 
 func (pb *PodProxyBuffer) handleTCPConnection(conn *connection, container container) {
@@ -858,10 +900,10 @@ func (pb *PodProxyBuffer) discoverContainers() {
 		case <-pb.drainDone():
 			return
 		default:
-			containerStates, err := pb.containerRepo.GetActiveContainersByStubId(pb.stubId)
-			if err != nil {
-				continue
-			}
+		}
+
+		containerStates, err := pb.containerRepo.GetActiveContainersByStubId(pb.stubId)
+		if err == nil {
 
 			var wg sync.WaitGroup
 			availableContainersChan := make(chan container, len(containerStates))
@@ -918,8 +960,26 @@ func (pb *PodProxyBuffer) discoverContainers() {
 			pb.availableContainersLock.Unlock()
 			pb.pruneBackendTransports(availableContainers)
 			pb.signalWork()
+		}
 
-			time.Sleep(containerDiscoveryInterval)
+		interval := containerDiscoveryInterval
+		if pb.buffer != nil && pb.buffer.Len() > 0 {
+			interval = queuedContainerDiscoveryInterval
+		}
+
+		timer := time.NewTimer(interval)
+		select {
+		case <-pb.ctx.Done():
+			timer.Stop()
+			return
+		case <-pb.drainDone():
+			timer.Stop()
+			return
+		case <-pb.discoverReady:
+			if !timer.Stop() {
+				<-timer.C
+			}
+		case <-timer.C:
 		}
 	}
 }

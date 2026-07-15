@@ -93,6 +93,73 @@ func TestProcessBufferWakesWhenBackendBecomesAvailable(t *testing.T) {
 	})
 }
 
+func TestForwardRequestWakesContainerDiscovery(t *testing.T) {
+	e := echo.New()
+	requestCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx := e.NewContext(httptest.NewRequest(http.MethodGet, "/", nil).WithContext(requestCtx), httptest.NewRecorder())
+	ctx.SetParamNames("port")
+	ctx.SetParamValues("8000")
+
+	pb := &PodProxyBuffer{
+		ctx:           context.Background(),
+		stubConfig:    &types.StubConfigV1{},
+		buffer:        abstractions.NewRingBuffer[*connection](1),
+		workReady:     make(chan struct{}, 1),
+		discoverReady: make(chan struct{}, 1),
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- pb.ForwardRequest(ctx) }()
+
+	select {
+	case <-pb.discoverReady:
+	case <-time.After(time.Second):
+		t.Fatal("queued request did not wake container discovery")
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDeletePodInstancePreservesReplacement(t *testing.T) {
+	service := &GenericPodService{podInstances: common.NewSafeMap[*podInstance]()}
+	oldInstance := &podInstance{}
+	replacement := &podInstance{}
+	service.podInstances.Set("stub", replacement)
+
+	service.deletePodInstance("stub", oldInstance)
+	if current, exists := service.podInstances.Get("stub"); !exists || current != replacement {
+		t.Fatal("stale instance cleanup deleted its replacement")
+	}
+
+	service.deletePodInstance("stub", replacement)
+	if _, exists := service.podInstances.Get("stub"); exists {
+		t.Fatal("current instance was not deleted")
+	}
+}
+
+func TestDrainDoesNotRejectClaimedConnection(t *testing.T) {
+	e := echo.New()
+	recorder := httptest.NewRecorder()
+	conn := &connection{
+		ctx:  e.NewContext(httptest.NewRequest(http.MethodGet, "/", nil), recorder),
+		done: make(chan struct{}),
+	}
+	if !conn.claim() {
+		t.Fatal("connection was not claimed")
+	}
+
+	pb := &PodProxyBuffer{}
+	if pb.failQueuedConnection(conn, http.StatusServiceUnavailable, "Service is draining") {
+		t.Fatal("claimed connection was rejected as queued")
+	}
+	if recorder.Body.Len() != 0 {
+		t.Fatal("drain wrote to an active response")
+	}
+}
+
 func TestEnqueueConnectionFailsOverwrittenHTTPConnection(t *testing.T) {
 	e := echo.New()
 	firstReq := httptest.NewRequest(http.MethodGet, "/", nil)
