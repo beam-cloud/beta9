@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -608,6 +609,93 @@ func TestContainerCPUAffinityIsOptInAndLoadBalanced(t *testing.T) {
 	require.Equal(t, 1, firstSet.Size())
 	require.Equal(t, 1, secondSet.Size())
 	require.True(t, firstSet.Intersection(secondSet).IsEmpty())
+}
+
+func TestCheckpointRestoreCPUAffinityIsDeferredAndApplied(t *testing.T) {
+	quota := int64(100000)
+	spec := specs.Spec{Linux: &specs.Linux{Resources: &specs.LinuxResources{
+		CPU: &specs.LinuxCPU{Cpus: "2", Quota: &quota},
+	}}}
+	config, err := json.Marshal(&spec)
+	require.NoError(t, err)
+	configPath := filepath.Join(t.TempDir(), specBaseName)
+	require.NoError(t, os.WriteFile(configPath, config, 0644))
+
+	rt := &mockResourceRuntime{mockRuntime: mockRuntime{
+		name:         types.ContainerRuntimeRunc.String(),
+		capabilities: runtime.Capabilities{CheckpointRestore: true},
+	}}
+	instances := common.NewSafeMap[*ContainerInstance]()
+	instances.Set("container-1", &ContainerInstance{
+		Id:      "container-1",
+		CPUSet:  "2",
+		Runtime: rt,
+	})
+	worker := &Worker{containerInstances: instances}
+	request := &types.ContainerRequest{
+		ContainerId: "container-1",
+		ConfigPath:  configPath,
+		Checkpoint:  &types.Checkpoint{Status: string(types.CheckpointStatusAvailable)},
+	}
+
+	require.NoError(t, worker.deferCheckpointRestoreCPUAffinity(request, config))
+	deferredConfig, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	var deferredSpec specs.Spec
+	require.NoError(t, json.Unmarshal(deferredConfig, &deferredSpec))
+	require.Empty(t, deferredSpec.Linux.Resources.CPU.Cpus)
+	require.Equal(t, quota, *deferredSpec.Linux.Resources.CPU.Quota)
+	instance, _ := instances.Get(request.ContainerId)
+	require.True(t, instance.RestoreCPUAffinityDeferred)
+
+	require.NoError(t, worker.applyDeferredCheckpointRestoreCPUAffinity(context.Background(), request))
+	require.Equal(t, "2", rt.updatedResources.CPU.Cpus)
+	instance, _ = instances.Get(request.ContainerId)
+	require.False(t, instance.RestoreCPUAffinityDeferred)
+}
+
+func TestCheckpointRestoreCPUAffinityAppliedBeforeStartedForwarded(t *testing.T) {
+	rt := &mockResourceRuntime{mockRuntime: mockRuntime{
+		name:         types.ContainerRuntimeRunc.String(),
+		capabilities: runtime.Capabilities{CheckpointRestore: true},
+	}}
+	instances := common.NewSafeMap[*ContainerInstance]()
+	instances.Set("container-1", &ContainerInstance{
+		Id:                         "container-1",
+		CPUSet:                     "4",
+		RestoreCPUAffinityDeferred: true,
+		Runtime:                    rt,
+	})
+	worker := &Worker{
+		criuManager:        &startedCRIUManager{},
+		containerInstances: instances,
+	}
+	request := &types.ContainerRequest{
+		ContainerId: "container-1",
+		Checkpoint: &types.Checkpoint{
+			CheckpointId: "checkpoint-1",
+			Status:       string(types.CheckpointStatusAvailable),
+		},
+	}
+	started := make(chan int)
+	appliedBeforeForward := make(chan bool, 1)
+	go func() {
+		<-started
+		appliedBeforeForward <- rt.updatedResources != nil && rt.updatedResources.CPU.Cpus == "4"
+	}()
+
+	_, restored, restoreStarted, err := worker.attemptRestoreCheckpoint(
+		context.Background(),
+		request,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		io.Discard,
+		started,
+		make(chan int, 1),
+	)
+	require.NoError(t, err)
+	require.True(t, restored)
+	require.True(t, restoreStarted)
+	require.True(t, <-appliedBeforeForward)
 }
 
 func TestSpecFromRequestRejectsInvalidOCIInputs(t *testing.T) {

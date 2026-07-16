@@ -125,6 +125,7 @@ type ContainerInstance struct {
 	SandboxProcessManagerReady bool
 	DeferredCPUQuota           *specs.LinuxCPU
 	CPUSet                     string
+	RestoreCPUAffinityDeferred bool
 	ProcessManagerReadyOnce    sync.Once
 	ProcessManagerReadyChan    chan struct{}
 	ContainerIp                string

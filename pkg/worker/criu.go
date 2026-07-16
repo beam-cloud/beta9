@@ -394,12 +394,26 @@ func (s *Worker) attemptRestoreCheckpoint(ctx context.Context, request *types.Co
 	}()
 
 	restoreStartedChan := (<-chan int)(restoreStarted)
+	forwardStarted := func(pid int) error {
+		if err := s.applyDeferredCheckpointRestoreCPUAffinity(ctx, request); err != nil {
+			log.Error().Err(err).
+				Str("container_id", request.ContainerId).
+				Str("checkpoint_id", checkpoint.CheckpointId).
+				Msg("failed to apply CPU affinity after checkpoint restore")
+			cleanupErr := deleteFailedRestoreRuntimeContainer(ctx, instance.Runtime, request.ContainerId)
+			if cleanupErr != nil {
+				err = errors.Join(err, fmt.Errorf("clean up restore after CPU affinity failure: %w", cleanupErr))
+			}
+			return err
+		}
+		return forwardRestoreStarted(ctx, startedChan, pid)
+	}
 	for restoreDone != nil {
 		select {
 		case pid := <-restoreStartedChan:
 			started = true
 			restoreStartedChan = nil
-			if err := forwardRestoreStarted(ctx, startedChan, pid); err != nil {
+			if err := forwardStarted(pid); err != nil {
 				return -1, false, started, err
 			}
 		case result := <-restoreDone:
@@ -409,7 +423,7 @@ func (s *Worker) attemptRestoreCheckpoint(ctx context.Context, request *types.Co
 				if pid, ok := restoreStartedPID(restoreStarted); ok {
 					started = true
 					if err == nil {
-						if forwardErr := forwardRestoreStarted(ctx, startedChan, pid); forwardErr != nil {
+						if forwardErr := forwardStarted(pid); forwardErr != nil {
 							return -1, false, started, forwardErr
 						}
 					}
@@ -487,6 +501,12 @@ func deleteFailedRestoreRuntimeContainer(ctx context.Context, rt runtime.Runtime
 }
 
 func (s *Worker) prepareRestoreFallback(request *types.ContainerRequest, config []byte) error {
+	if request != nil {
+		if instance, exists := s.containerInstances.Get(request.ContainerId); exists {
+			instance.RestoreCPUAffinityDeferred = false
+			s.containerInstances.Set(request.ContainerId, instance)
+		}
+	}
 	if request == nil || request.ConfigPath == "" || len(config) == 0 {
 		return nil
 	}

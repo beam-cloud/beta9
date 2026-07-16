@@ -210,6 +210,7 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 	s.containerLock.Lock()
 	if instance, exists := s.containerInstances.Get(containerId); exists {
 		instance.CPUSet = ""
+		instance.RestoreCPUAffinityDeferred = false
 		s.containerInstances.Set(containerId, instance)
 	}
 
@@ -1792,6 +1793,15 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 			}
 			fallbackFromCheckpoint(true)
 		} else {
+			if originalConfigErr == nil {
+				if err := s.deferCheckpointRestoreCPUAffinity(request, originalConfig); err != nil {
+					log.Warn().Err(err).Str("container_id", request.ContainerId).Msg("failed to defer CPU affinity for checkpoint restore")
+					if restoreErr := os.WriteFile(request.ConfigPath, originalConfig, 0644); restoreErr != nil {
+						finishRuntimeStarted()
+						return -1, errors.Join(err, fmt.Errorf("restore constrained container config: %w", restoreErr))
+					}
+				}
+			}
 			runtimeStart = time.Now()
 			phaseStarted := time.Now()
 			exitCode, restored, restoreStarted, err := s.attemptRestoreCheckpoint(ctx, request, outputLogger, outputWriter, runtimeStartedChan, checkpointPIDChan)
@@ -1892,6 +1902,71 @@ type restoreWaitsForExitRuntime interface {
 func runtimeRestoreWaitsForExit(rt runtime.Runtime) bool {
 	restoreRuntime, ok := rt.(restoreWaitsForExitRuntime)
 	return ok && restoreRuntime.RestoreWaitsForExit()
+}
+
+// CRIU moves CUDA restore helpers into the container cgroup. Let those helpers
+// use the worker CPU set, then restore the workload affinity before publication.
+func (s *Worker) deferCheckpointRestoreCPUAffinity(request *types.ContainerRequest, config []byte) error {
+	if request == nil || request.ConfigPath == "" || len(config) == 0 {
+		return nil
+	}
+	instance, exists := s.containerInstances.Get(request.ContainerId)
+	if !exists || instance.Runtime == nil || instance.CPUSet == "" || runtimeRestoreWaitsForExit(instance.Runtime) {
+		return nil
+	}
+	if _, ok := instance.Runtime.(containerResourceUpdater); !ok {
+		return nil
+	}
+
+	var spec specs.Spec
+	if err := json.Unmarshal(config, &spec); err != nil {
+		return fmt.Errorf("decode container config: %w", err)
+	}
+	if spec.Linux == nil || spec.Linux.Resources == nil || spec.Linux.Resources.CPU == nil || spec.Linux.Resources.CPU.Cpus == "" {
+		return nil
+	}
+
+	spec.Linux.Resources.CPU.Cpus = ""
+	updated, err := json.Marshal(&spec)
+	if err != nil {
+		return fmt.Errorf("encode container config: %w", err)
+	}
+	if err := os.WriteFile(request.ConfigPath, updated, 0644); err != nil {
+		return fmt.Errorf("write restore container config: %w", err)
+	}
+
+	instance.RestoreCPUAffinityDeferred = true
+	s.containerInstances.Set(request.ContainerId, instance)
+	return nil
+}
+
+func (s *Worker) applyDeferredCheckpointRestoreCPUAffinity(ctx context.Context, request *types.ContainerRequest) error {
+	if request == nil {
+		return nil
+	}
+	instance, exists := s.containerInstances.Get(request.ContainerId)
+	if !exists || !instance.RestoreCPUAffinityDeferred {
+		return nil
+	}
+	updater, ok := instance.Runtime.(containerResourceUpdater)
+	if !ok {
+		return fmt.Errorf("runtime %s does not support resource updates", instance.Runtime.Name())
+	}
+
+	updateCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cpuQuotaApplyTimeout)
+	defer cancel()
+	startedAt := time.Now()
+	err := updater.UpdateResources(updateCtx, request.ContainerId, &specs.LinuxResources{
+		CPU: &specs.LinuxCPU{Cpus: instance.CPUSet},
+	})
+	metrics.RecordWorkerStartupPhase("checkpoint_restore_cpu_affinity", time.Since(startedAt), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
+	if err != nil {
+		return err
+	}
+
+	instance.RestoreCPUAffinityDeferred = false
+	s.containerInstances.Set(request.ContainerId, instance)
+	return nil
 }
 
 func (s *Worker) markContainerRunning(ctx context.Context, request *types.ContainerRequest, startupStartedAt time.Time) {
