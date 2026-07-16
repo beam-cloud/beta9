@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/beam-cloud/clip/pkg/clip"
 	clipStorage "github.com/beam-cloud/clip/pkg/storage"
 	"github.com/rs/zerolog"
 	zerologlog "github.com/rs/zerolog/log"
@@ -34,6 +35,54 @@ func TestImageLayerPrepareProgressLoggerEmitsAggregateUpdates(t *testing.T) {
 	require.Contains(t, logs, "Preparing 4 image layers (8 concurrent)")
 	require.Contains(t, logs, "Prepared 4 image layers (4.0 MiB)")
 	require.NotContains(t, logs, "1/4 ready", "rapid per-layer updates should be coalesced")
+}
+
+func TestImageIndexProgressReporterEmitsMonotonicAggregateUpdates(t *testing.T) {
+	var output bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&output, nil))
+	reporter := newImageIndexProgressReporter(logger)
+
+	reporter.report(clip.OCIIndexProgress{
+		LayerIndex:      3,
+		LayerDigest:     "layer-3",
+		Stage:           "completed",
+		CompletedLayers: 3,
+		TotalLayers:     10,
+		BytesProcessed:  2 << 30,
+		Source:          clip.LayerSourceLocalLayout,
+	})
+	reporter.report(clip.OCIIndexProgress{
+		LayerIndex:      2,
+		LayerDigest:     "layer-2",
+		Stage:           "completed",
+		CompletedLayers: 2,
+		TotalLayers:     10,
+		BytesProcessed:  1 << 30,
+		Source:          clip.LayerSourceIndexCache,
+	})
+	reporter.finish()
+
+	logs := output.String()
+	require.Contains(t, logs, "Image indexing: 3/10 layers complete")
+	require.NotContains(t, logs, "Image indexing: 2/10")
+	require.Contains(t, logs, "Image indexed in")
+	require.Contains(t, logs, "1 cached")
+}
+
+func TestOCILayoutPushArgsUseEightWayDigestPreservingCopy(t *testing.T) {
+	args := ociLayoutPushArgs("/tmp/layout", "registry.example.com/beam/image:test", "user:token", true)
+
+	require.Equal(t, []string{
+		"copy",
+		"--image-parallel-copies", "8",
+		"--preserve-digests",
+		"--retry-times", "5",
+		"--retry-delay", "1s",
+		"--dest-tls-verify=false",
+		"--dest-creds", "user:token",
+		"oci:/tmp/layout:latest",
+		"docker://registry.example.com/beam/image:test",
+	}, args)
 }
 
 func TestImageRegistryPullFailureLogLevel(t *testing.T) {
@@ -134,10 +183,10 @@ func TestNewBuildahCommandUsesCancelableProcessGroup(t *testing.T) {
 	require.NotNil(t, cmd.Cancel)
 	require.NotNil(t, cmd.SysProcAttr)
 	require.True(t, cmd.SysProcAttr.Setpgid)
-	require.Equal(t, buildahCancelGracePeriod, cmd.WaitDelay)
+	require.Equal(t, imageCommandCancelGracePeriod, cmd.WaitDelay)
 }
 
-func TestTerminateBuildahProcessGroupKillsDescendants(t *testing.T) {
+func TestTerminateImageProcessGroupKillsDescendants(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("process-group signal semantics are validated on Linux workers")
 	}
@@ -146,7 +195,7 @@ func TestTerminateBuildahProcessGroupKillsDescendants(t *testing.T) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	require.NoError(t, cmd.Start())
 
-	require.NoError(t, terminateBuildahProcessGroup(cmd.Process.Pid))
+	require.NoError(t, terminateImageProcessGroup(cmd.Process.Pid))
 
 	done := make(chan error, 1)
 	go func() {
