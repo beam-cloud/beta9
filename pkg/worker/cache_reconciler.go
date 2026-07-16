@@ -23,6 +23,7 @@ package worker
 import (
 	"compress/gzip"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -1498,12 +1499,11 @@ func (m *WorkerCacheManager) extractCheckpointArchive(ctx context.Context, serve
 	if checkpointMaterialized(checkpointPath) {
 		return nil
 	}
-	archivePath := filepath.Join(m.checkpointRoot, item.CheckpointID+checkpointArchiveExtension)
-	if err := writeLocalCacheContentFile(ctx, server, archivePath, item.Hash, item.SizeBytes); err != nil {
-		return err
+	if server == nil {
+		return fmt.Errorf("cache server is unavailable")
 	}
-	defer os.Remove(archivePath)
-	return materializeCheckpointArchive(archivePath, checkpointPath, item.CheckpointID)
+	reader := newCheckpointCacheReader(ctx, item.Hash, item.SizeBytes, server.ReadContentInto)
+	return materializeCheckpointReader(ctx, reader, item.Hash, item.SizeBytes, checkpointPath, item.CheckpointID, nil)
 }
 
 // materializeWorkspaceObject fetches a workspace object from object storage using

@@ -16,7 +16,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.144.0
 	github.com/aws/aws-sdk-go-v2/service/ecr v1.27.0
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.58.0
-	github.com/beam-cloud/clip v0.0.0-20260630181046-c83059e7c84a
+	github.com/beam-cloud/clip v0.0.0-20260716143906-e2890f62e230
 	github.com/beam-cloud/go-runc v0.0.0-20250911154456-bb45084abfe1
 	github.com/beam-cloud/goproc v0.1.12
 	github.com/beam-cloud/redislock v0.0.0-20250201162619-1b534b3be324
@@ -331,7 +331,7 @@ require (
 	tags.cncf.io/container-device-interface/specs-go v0.8.0 // indirect
 )
 
-replace github.com/yandex-cloud/geesefs => github.com/beam-cloud/geesefs v0.0.0-20260604132438-6acb73b2cebd
+replace github.com/yandex-cloud/geesefs => github.com/beam-cloud/geesefs v0.0.0-20260716095427-ddd6815a3881
 
 replace github.com/aws/aws-sdk-go => github.com/beam-cloud/geesefs/s3ext v0.0.0-20250606164905-2f3593d03f4f
 

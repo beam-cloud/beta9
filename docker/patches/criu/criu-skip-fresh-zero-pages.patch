@@ -1,0 +1,177 @@
+diff --git a/criu/include/pagemap.h b/criu/include/pagemap.h
+index 23e6bc9f..475930f5 100644
+--- a/criu/include/pagemap.h
++++ b/criu/include/pagemap.h
+@@ -158,6 +158,7 @@ struct page_read {
+ /* flags for ->read_pages */
+ #define PR_ASYNC 0x1 /* may exit w/o data in the buffer */
+ #define PR_ASAP	 0x2 /* PR_ASYNC, but start the IO right now */
++#define PR_SKIP_ZERO 0x4 /* destination is a fresh zero-filled mapping */
+ 
+ /* flags for open_page_read */
+ #define PR_SHMEM 0x1
+@@ -177,7 +178,8 @@ extern int open_page_read_at(int dfd, unsigned long id, struct page_read *pr, in
+ 
+ struct task_restore_args;
+ 
+-int pagemap_enqueue_iovec(struct page_read *pr, void *buf, unsigned long len, struct list_head *to);
++int pagemap_enqueue_iovec(struct page_read *pr, void *buf, unsigned long len,
++			  struct list_head *to, unsigned flags);
+ int pagemap_render_iovec(struct list_head *from, struct task_restore_args *ta);
+ 
+ /*
+diff --git a/criu/mem.c b/criu/mem.c
+index c52b6104..23bcda34 100644
+--- a/criu/mem.c
++++ b/criu/mem.c
+@@ -879,6 +879,11 @@ static inline bool vma_inherited(struct vma_area *vma)
+ 	return (vma->pvma != NULL && vma->pvma != VMA_COW_ROOT);
+ }
+ 
++static inline bool vma_is_fresh_anon_private(struct vma_area *vma)
++{
++	return vma_area_is(vma, VMA_ANON_PRIVATE) && !vma_inherited(vma);
++}
++
+ static void prepare_cow_vmas_for(struct vm_area_list *vmas, struct vm_area_list *pvmas)
+ {
+ 	struct vma_area *vma, *pvma;
+@@ -1310,7 +1315,10 @@ static int restore_priv_vma_content(struct pstree_item *t, struct page_read *pr)
+ 					BUG();
+ 				}
+ 
+-				if (pagemap_enqueue_iovec(pr, (void *)va, len, vma_io))
++				if (pagemap_enqueue_iovec(
++					    pr, (void *)va, len, vma_io,
++					    vma_is_fresh_anon_private(vma) ?
++						    PR_SKIP_ZERO : 0))
+ 					goto out;
+ 
+ 				pr->skip_pages(pr, len);
+@@ -1404,7 +1412,11 @@ static int restore_priv_vma_content(struct pstree_item *t, struct page_read *pr)
+ 				nr = min_t(int, nr_pages - i, (vma->e->end - va) / PAGE_SIZE);
+ 
+ 				set_bit(off, vma->page_bitmap);
+-				ret = pr->read_pages(pr, va, nr, p, PR_ASYNC);
++				ret = pr->read_pages(
++					pr, va, nr, p,
++					PR_ASYNC |
++						(vma_is_fresh_anon_private(vma) ?
++							 PR_SKIP_ZERO : 0));
+ 				if (ret < 0)
+ 					goto err_read;
+ 
+diff --git a/criu/pagemap.c b/criu/pagemap.c
+index 81c65d89..141782ba 100644
+--- a/criu/pagemap.c
++++ b/criu/pagemap.c
+@@ -1076,7 +1076,8 @@ rollback_iov:
+ 	return -1;
+ }
+ 
+-int pagemap_enqueue_iovec(struct page_read *pr, void *buf, unsigned long len, struct list_head *to)
++int pagemap_enqueue_iovec(struct page_read *pr, void *buf, unsigned long len,
++			  struct list_head *to, unsigned flags)
+ {
+ 	struct page_read_iov *original_tail = NULL;
+ 	off_t original_end = 0;
+@@ -1135,6 +1136,18 @@ int pagemap_enqueue_iovec(struct page_read *pr, void *buf, unsigned long len, st
+ 			break;
+ 		}
+ 
++		/*
++		 * Fresh anonymous mappings already contain zeroes. Keep zero
++		 * regions non-resident instead of faulting and clearing them.
++		 */
++		if (storage == VMA_IO_ZERO && (flags & PR_SKIP_ZERO)) {
++			ret = advance_compressed_offsets(pr, chunk);
++			if (ret)
++				break;
++			done += chunk;
++			continue;
++		}
++
+ 		/* Premapped large zero runs can share the decompression worker pool. */
+ 		if (storage == VMA_IO_ZERO && parallel_zero && blocks > 1 &&
+ 		    chunk * PAGE_SIZE >= PARALLEL_RESTORE_MIN_BATCH_BYTES)
+@@ -1254,7 +1267,7 @@ static int maybe_read_page_local(struct page_read *pr, unsigned long vaddr, unsi
+ 	 * cached read.
+ 	 */
+ 	if ((flags & (PR_ASYNC | PR_ASAP)) == PR_ASYNC)
+-		ret = pagemap_enqueue_iovec(pr, buf, len, &pr->async);
++		ret = pagemap_enqueue_iovec(pr, buf, len, &pr->async, flags);
+ 	else {
+ 		ret = read_local_page(pr, vaddr, len, buf);
+ 		if (ret == 0 && pr->io_complete)
+@@ -1423,7 +1436,7 @@ static void skip_compressed_offsets(struct page_read *pr, unsigned long nr)
+  * from the image file directly into @buf.
+  */
+ static int read_compressed_pages(struct page_read *pr, int fd,
+-				 unsigned long nr, void *buf)
++				 unsigned long nr, void *buf, unsigned flags)
+ {
+ 	size_t curr = 0;
+ 	off_t compressed_offset = 0;
+@@ -1442,7 +1455,8 @@ static int read_compressed_pages(struct page_read *pr, int fd,
+ 
+ 		if (cs == 0) {
+ 			/* Zero page, nothing stored in the image */
+-			memset(buf + curr, 0, PAGE_SIZE);
++			if (!(flags & PR_SKIP_ZERO))
++				memset(buf + curr, 0, PAGE_SIZE);
+ 		} else if (cs == PAGE_SIZE) {
+ 			/* Stored raw, no decompression needed */
+ 			if (pread_full(fd, buf + curr, PAGE_SIZE,
+@@ -1521,7 +1535,7 @@ static int region_cache_load(struct page_read *pr, int fd, char *compressed_buf,
+  */
+ static int read_compressed_pages_region(struct page_read *pr, int fd,
+ 					unsigned long vaddr, unsigned long nr,
+-					void *buf)
++					void *buf, unsigned flags)
+ {
+ 	unsigned long pages_done = 0;
+ 	size_t scratch_cap = 0;
+@@ -1564,7 +1578,9 @@ static int read_compressed_pages_region(struct page_read *pr, int fd,
+ 				 (unsigned long)off * PAGE_SIZE;
+ 
+ 		if (cs == 0) {
+-			memset((char *)buf + pages_done * PAGE_SIZE, 0, out_bytes);
++			if (!(flags & PR_SKIP_ZERO))
++				memset((char *)buf + pages_done * PAGE_SIZE, 0,
++				       out_bytes);
+ 		} else if ((size_t)cs == this_bytes) {
+ 			/* Stored raw: pread directly the requested slice. */
+ 			if (pread_full(fd,
+@@ -1695,7 +1711,8 @@ static int maybe_read_page_local_compressed(struct page_read *pr, unsigned long
+ 		}
+ 
+ 		if (can_async) {
+-			ret = pagemap_enqueue_iovec(pr, buf, len, &pr->async);
++			ret = pagemap_enqueue_iovec(pr, buf, len, &pr->async,
++						   flags);
+ 			if (ret)
+ 				return ret;
+ 			skip_compressed_offsets(pr, nr);
+@@ -1721,9 +1738,10 @@ static int maybe_read_page_local_compressed(struct page_read *pr, unsigned long
+ 		 pr->img_id, pr->id, pr->cvaddr, pr->pi_off);
+ 
+ 	if (region_pages)
+-		ret = read_compressed_pages_region(pr, fd, vaddr, nr, buf);
++		ret = read_compressed_pages_region(pr, fd, vaddr, nr, buf,
++						  flags);
+ 	else
+-		ret = read_compressed_pages(pr, fd, nr, buf);
++		ret = read_compressed_pages(pr, fd, nr, buf, flags);
+ 	if (ret)
+ 		return ret;
+ 
+@@ -1965,7 +1983,8 @@ static int maybe_read_page_img_streamer_compressed(struct page_read *pr, unsigne
+ 				    (pages_done + i) * PAGE_SIZE;
+ 
+ 			if (!cs) {
+-				memset(dst, 0, PAGE_SIZE);
++				if (!(flags & PR_SKIP_ZERO))
++					memset(dst, 0, PAGE_SIZE);
+ 			} else if (cs == PAGE_SIZE) {
+ 				memcpy(dst, ctx->compressed + payload_offset,
+ 				       PAGE_SIZE);

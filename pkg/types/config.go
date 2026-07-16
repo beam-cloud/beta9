@@ -423,8 +423,9 @@ type WorkerConfig struct {
 }
 
 type ContainerResourceLimitsConfig struct {
-	CPUEnforced    bool `key:"cpuEnforced" json:"cpu_enforced"`
-	MemoryEnforced bool `key:"memoryEnforced" json:"memory_enforced"`
+	CPUEnforced         bool `key:"cpuEnforced" json:"cpu_enforced"`
+	CPUAffinityEnforced bool `key:"cpuAffinityEnforced" json:"cpu_affinity_enforced"`
+	MemoryEnforced      bool `key:"memoryEnforced" json:"memory_enforced"`
 }
 
 type FailoverConfig struct {

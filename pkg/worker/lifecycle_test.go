@@ -2,6 +2,8 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -23,6 +25,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"k8s.io/utils/cpuset"
 )
 
 func TestWaitForRuntimeStartedDrainsQueuedPIDWhenRuntimeDone(t *testing.T) {
@@ -112,6 +115,49 @@ func TestStartupPortBindingsForPodKeepsStartupPorts(t *testing.T) {
 		{HostPort: 30001, ContainerPort: containerInnerPort},
 		{HostPort: 30002, ContainerPort: int(types.WorkerShellPort)},
 	}, bindings)
+}
+
+func TestRequiresPostBuildImageMaterialization(t *testing.T) {
+	dockerfile := "FROM ubuntu:22.04"
+	sourceImage := "ubuntu:22.04"
+
+	tests := []struct {
+		name        string
+		request     *types.ContainerRequest
+		clipVersion uint32
+		want        bool
+	}{
+		{
+			name:        "v2 dockerfile build",
+			request:     &types.ContainerRequest{BuildOptions: types.BuildOptions{Dockerfile: &dockerfile}},
+			clipVersion: uint32(types.ClipVersion2),
+			want:        false,
+		},
+		{
+			name:        "v2 source image build",
+			request:     &types.ContainerRequest{BuildOptions: types.BuildOptions{SourceImage: &sourceImage}},
+			clipVersion: uint32(types.ClipVersion2),
+			want:        false,
+		},
+		{
+			name:        "v1 build",
+			request:     &types.ContainerRequest{BuildOptions: types.BuildOptions{Dockerfile: &dockerfile}},
+			clipVersion: uint32(types.ClipVersion1),
+			want:        true,
+		},
+		{
+			name:        "runtime image",
+			request:     &types.ContainerRequest{},
+			clipVersion: uint32(types.ClipVersion2),
+			want:        true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, requiresPostBuildImageMaterialization(tt.request, tt.clipVersion))
+		})
+	}
 }
 
 func TestCreateOverlayUsesTmpfsForAgentWorkers(t *testing.T) {
@@ -484,6 +530,174 @@ func TestSpecFromRequestReturnsIndependentSpecs(t *testing.T) {
 	require.NotContains(t, second.Process.Env, "LEAKED=true")
 }
 
+func TestSelectRequestedCPUs(t *testing.T) {
+	available := cpuset.New(2, 4, 6, 8)
+
+	require.Empty(t, selectRequestedCPUs(0, available, nil))
+	require.Equal(t, "2", selectRequestedCPUs(1000, available, nil))
+	require.Equal(t, "4,8", selectRequestedCPUs(1001, available, map[int]int64{
+		2: 1000,
+		6: 500,
+	}))
+	require.Equal(t, "2,4,6,8", selectRequestedCPUs(8000, available, nil))
+}
+
+func TestSpecFromRequestAppliesCPUAffinityToGPUWorkload(t *testing.T) {
+	instances := common.NewSafeMap[*ContainerInstance]()
+	worker := &Worker{
+		config: types.AppConfig{Worker: types.WorkerConfig{
+			ContainerResourceLimits: types.ContainerResourceLimitsConfig{CPUAffinityEnforced: true},
+		}},
+		containerInstances: instances,
+		cpuLimit:           4000,
+		runtime:            &mockRuntime{name: types.ContainerRuntimeRunc.String()},
+	}
+	request := &types.ContainerRequest{
+		ContainerId: "gpu-container",
+		EntryPoint:  []string{"sleep", "60"},
+		Cpu:         1000,
+		GpuCount:    1,
+		Stub: types.StubWithRelated{Stub: types.Stub{
+			Type: types.StubType(types.StubTypePodDeployment),
+		}},
+	}
+	require.True(t, worker.reserveContainerInstance(request))
+
+	spec, err := worker.specFromRequest(request, &ContainerOptions{BindPorts: []int{8001}})
+	require.NoError(t, err)
+	require.NotNil(t, spec.Linux.Resources.CPU)
+
+	affinity, err := cpuset.Parse(spec.Linux.Resources.CPU.Cpus)
+	require.NoError(t, err)
+	require.Equal(t, 1, affinity.Size())
+	require.Nil(t, spec.Linux.Resources.CPU.Quota)
+	require.Nil(t, spec.Linux.Resources.CPU.Period)
+}
+
+func TestContainerCPUAffinityIsOptInAndLoadBalanced(t *testing.T) {
+	instances := common.NewSafeMap[*ContainerInstance]()
+	worker := &Worker{
+		containerInstances: instances,
+		cpuLimit:           4000,
+	}
+	request := func(id string) *types.ContainerRequest {
+		return &types.ContainerRequest{
+			ContainerId: id,
+			EntryPoint:  []string{"sleep", "60"},
+			Cpu:         1000,
+			Stub: types.StubWithRelated{Stub: types.Stub{
+				Type: types.StubType(types.StubTypePodDeployment),
+			}},
+		}
+	}
+
+	require.True(t, worker.reserveContainerInstance(request("disabled")))
+	disabled, exists := instances.Get("disabled")
+	require.True(t, exists)
+	require.Empty(t, disabled.CPUSet)
+	instances.Delete("disabled")
+
+	worker.config.Worker.ContainerResourceLimits.CPUAffinityEnforced = true
+	require.True(t, worker.reserveContainerInstance(request("first")))
+	require.True(t, worker.reserveContainerInstance(request("second")))
+	first, _ := instances.Get("first")
+	second, _ := instances.Get("second")
+	firstSet, err := cpuset.Parse(first.CPUSet)
+	require.NoError(t, err)
+	secondSet, err := cpuset.Parse(second.CPUSet)
+	require.NoError(t, err)
+	require.Equal(t, 1, firstSet.Size())
+	require.Equal(t, 1, secondSet.Size())
+	require.True(t, firstSet.Intersection(secondSet).IsEmpty())
+}
+
+func TestCheckpointRestoreCPUAffinityIsDeferredAndApplied(t *testing.T) {
+	quota := int64(100000)
+	spec := specs.Spec{Linux: &specs.Linux{Resources: &specs.LinuxResources{
+		CPU: &specs.LinuxCPU{Cpus: "2", Quota: &quota},
+	}}}
+	config, err := json.Marshal(&spec)
+	require.NoError(t, err)
+	configPath := filepath.Join(t.TempDir(), specBaseName)
+	require.NoError(t, os.WriteFile(configPath, config, 0644))
+
+	rt := &mockResourceRuntime{mockRuntime: mockRuntime{
+		name:         types.ContainerRuntimeRunc.String(),
+		capabilities: runtime.Capabilities{CheckpointRestore: true},
+	}}
+	instances := common.NewSafeMap[*ContainerInstance]()
+	instances.Set("container-1", &ContainerInstance{
+		Id:      "container-1",
+		CPUSet:  "2",
+		Runtime: rt,
+	})
+	worker := &Worker{containerInstances: instances}
+	request := &types.ContainerRequest{
+		ContainerId: "container-1",
+		ConfigPath:  configPath,
+		Checkpoint:  &types.Checkpoint{Status: string(types.CheckpointStatusAvailable)},
+	}
+
+	require.NoError(t, worker.deferCheckpointRestoreCPUAffinity(request, config))
+	deferredConfig, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	var deferredSpec specs.Spec
+	require.NoError(t, json.Unmarshal(deferredConfig, &deferredSpec))
+	require.Empty(t, deferredSpec.Linux.Resources.CPU.Cpus)
+	require.Equal(t, quota, *deferredSpec.Linux.Resources.CPU.Quota)
+	instance, _ := instances.Get(request.ContainerId)
+	require.True(t, instance.RestoreCPUAffinityDeferred)
+
+	require.NoError(t, worker.applyDeferredCheckpointRestoreCPUAffinity(context.Background(), request))
+	require.Equal(t, "2", rt.updatedResources.CPU.Cpus)
+	instance, _ = instances.Get(request.ContainerId)
+	require.False(t, instance.RestoreCPUAffinityDeferred)
+}
+
+func TestCheckpointRestoreCPUAffinityAppliedBeforeStartedForwarded(t *testing.T) {
+	rt := &mockResourceRuntime{mockRuntime: mockRuntime{
+		name:         types.ContainerRuntimeRunc.String(),
+		capabilities: runtime.Capabilities{CheckpointRestore: true},
+	}}
+	instances := common.NewSafeMap[*ContainerInstance]()
+	instances.Set("container-1", &ContainerInstance{
+		Id:                         "container-1",
+		CPUSet:                     "4",
+		RestoreCPUAffinityDeferred: true,
+		Runtime:                    rt,
+	})
+	worker := &Worker{
+		criuManager:        &startedCRIUManager{},
+		containerInstances: instances,
+	}
+	request := &types.ContainerRequest{
+		ContainerId: "container-1",
+		Checkpoint: &types.Checkpoint{
+			CheckpointId: "checkpoint-1",
+			Status:       string(types.CheckpointStatusAvailable),
+		},
+	}
+	started := make(chan int)
+	appliedBeforeForward := make(chan bool, 1)
+	go func() {
+		<-started
+		appliedBeforeForward <- rt.updatedResources != nil && rt.updatedResources.CPU.Cpus == "4"
+	}()
+
+	_, restored, restoreStarted, err := worker.attemptRestoreCheckpoint(
+		context.Background(),
+		request,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		io.Discard,
+		started,
+		make(chan int, 1),
+	)
+	require.NoError(t, err)
+	require.True(t, restored)
+	require.True(t, restoreStarted)
+	require.True(t, <-appliedBeforeForward)
+}
+
 func TestSpecFromRequestRejectsInvalidOCIInputs(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -746,14 +960,15 @@ func sameStringSet(a, b []string) bool {
 func TestSpecFromRequestDefersSandboxCPUThrottleWhenRuntimeCanUpdate(t *testing.T) {
 	rt := &mockResourceRuntime{mockRuntime: mockRuntime{name: "runc"}}
 	containerInstances := common.NewSafeMap[*ContainerInstance]()
-	containerInstances.Set("container-1", &ContainerInstance{Id: "container-1", Runtime: rt})
+	containerInstances.Set("container-1", &ContainerInstance{Id: "container-1", Runtime: rt, CPUSet: "0"})
 
 	worker := &Worker{
 		config: types.AppConfig{
 			Worker: types.WorkerConfig{
 				ContainerResourceLimits: types.ContainerResourceLimitsConfig{
-					CPUEnforced:    true,
-					MemoryEnforced: true,
+					CPUEnforced:         true,
+					CPUAffinityEnforced: true,
+					MemoryEnforced:      true,
 				},
 			},
 		},
@@ -776,11 +991,13 @@ func TestSpecFromRequestDefersSandboxCPUThrottleWhenRuntimeCanUpdate(t *testing.
 	require.NotNil(t, spec.Linux.Resources.CPU.Shares)
 	require.Nil(t, spec.Linux.Resources.CPU.Quota)
 	require.Nil(t, spec.Linux.Resources.CPU.Period)
+	require.Empty(t, spec.Linux.Resources.CPU.Cpus)
 	require.NotNil(t, spec.Linux.Resources.Memory)
 
 	instance, exists := containerInstances.Get("container-1")
 	require.True(t, exists)
 	require.NotNil(t, instance.DeferredCPUQuota)
+	require.Equal(t, "0", instance.DeferredCPUQuota.Cpus)
 }
 
 func TestSpecFromRequestKeepsSandboxCPUThrottleWhenRuntimeCannotUpdate(t *testing.T) {
@@ -935,6 +1152,49 @@ func TestNormalizeContainerExitCodeMapsExplicitStopReasons(t *testing.T) {
 	}
 }
 
+func TestRuntimeNeedsGraceKill(t *testing.T) {
+	tests := []struct {
+		name  string
+		state func(context.Context, string) (runtime.State, error)
+		want  bool
+	}{
+		{
+			name: "running",
+			state: func(context.Context, string) (runtime.State, error) {
+				return runtime.State{Status: types.RuncContainerStatusRunning}, nil
+			},
+			want: true,
+		},
+		{
+			name: "stopped",
+			state: func(context.Context, string) (runtime.State, error) {
+				return runtime.State{Status: "stopped"}, nil
+			},
+		},
+		{
+			name: "terminal checkpoint removed runtime",
+			state: func(context.Context, string) (runtime.State, error) {
+				return runtime.State{}, runtime.ErrContainerNotFound{ContainerID: "container"}
+			},
+		},
+		{
+			name: "transient state failure still forces stop",
+			state: func(context.Context, string) (runtime.State, error) {
+				return runtime.State{}, errors.New("runtime state temporarily unavailable")
+			},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rt := &mockRuntime{state: tt.state}
+			require.Equal(t, tt.want, runtimeNeedsGraceKill(context.Background(), rt, "container"))
+		})
+	}
+	require.False(t, runtimeNeedsGraceKill(context.Background(), nil, "container"))
+}
+
 func TestContainerExitReasonSeparatesCompletionFromStops(t *testing.T) {
 	require.Equal(t, "COMPLETED", containerExitReason(0, types.StopContainerReasonUnknown, false))
 	require.Equal(t, "SIGKILL", containerExitReason(int(types.ContainerExitCodeOomKill), types.StopContainerReasonUnknown, false))
@@ -993,6 +1253,7 @@ func TestRunContainerDoesNotCancelRuntimeRunWithWorkerContext(t *testing.T) {
 			make(chan int, 1),
 			make(chan int, 1),
 			time.Now(),
+			nil,
 			nil,
 		)
 		result <- err
@@ -1067,6 +1328,7 @@ func TestRunContainerRestorePublishesAddressFromStartedHandler(t *testing.T) {
 		make(chan int, 1),
 		time.Now(),
 		[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
+		nil,
 	)
 
 	require.NoError(t, err)
@@ -1080,6 +1342,54 @@ func TestRunContainerRestorePublishesAddressFromStartedHandler(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return backendRepoClient.updateCalls == 1 && backendRepoClient.lastUpdate.LastRestoredAt != nil
 	}, time.Second, 10*time.Millisecond)
+}
+
+func TestCheckpointFilesystemRestorePreparesInitialUpperLayer(t *testing.T) {
+	checkpointRoot := t.TempDir()
+	checkpointID := "checkpoint-prepare-upper"
+	checkpointPath := filepath.Join(checkpointRoot, checkpointID)
+	checkpointFilesystem := filepath.Join(checkpointPath, checkpointFsDir)
+	require.NoError(t, os.MkdirAll(filepath.Join(checkpointFilesystem, "state"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(checkpointPath, "inventory.img"), []byte("runtime"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(checkpointFilesystem, "state", "ready"), []byte("yes"), 0644))
+
+	worker := &Worker{
+		ctx:          context.Background(),
+		cacheManager: &WorkerCacheManager{checkpointRoot: checkpointRoot},
+	}
+	request := &types.ContainerRequest{
+		ContainerId: "checkpoint-prepare-upper-test",
+		Checkpoint: &types.Checkpoint{
+			CheckpointId: checkpointID,
+			Status:       string(types.CheckpointStatusAvailable),
+		},
+	}
+	restore := worker.startCheckpointFilesystemRestore(request, nil)
+	t.Cleanup(restore.cleanup)
+
+	require.NoError(t, restore.wait())
+	data, err := os.ReadFile(filepath.Join(restore.upperPath, "state", "ready"))
+	require.NoError(t, err)
+	require.Equal(t, "yes", string(data))
+}
+
+func TestCheckpointFilesystemRestoreDiscardRemovesPartialUpperLayer(t *testing.T) {
+	overlayRoot := filepath.Join(t.TempDir(), "overlay")
+	require.NoError(t, os.MkdirAll(filepath.Join(overlayRoot, "layer-0", "upper"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(overlayRoot, "layer-0", "upper", "partial"), []byte("partial"), 0644))
+
+	_, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	close(done)
+	restore := &checkpointFilesystemRestore{
+		overlayRoot: overlayRoot,
+		done:        done,
+		cancel:      cancel,
+		err:         assert.AnError,
+	}
+
+	require.NoError(t, restore.discard())
+	require.NoDirExists(t, overlayRoot)
 }
 
 func TestRunContainerRestoreWaitsForRestoredRuntimeExit(t *testing.T) {
@@ -1152,6 +1462,7 @@ func TestRunContainerRestoreWaitsForRestoredRuntimeExit(t *testing.T) {
 			make(chan int, 1),
 			time.Now(),
 			[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
+			nil,
 		)
 		done <- err
 	}()
@@ -1296,6 +1607,7 @@ func TestRunContainerRestoreFailureCleansRuntimeBeforeFallback(t *testing.T) {
 		make(chan int, 1),
 		time.Now(),
 		[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
+		nil,
 	)
 
 	require.NoError(t, err)
@@ -1362,14 +1674,14 @@ func TestRunContainerMaterializeFailureFallsBackWithoutRestore(t *testing.T) {
 		make(chan int, 1),
 		time.Now(),
 		[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
+		nil,
 	)
 
 	require.NoError(t, err)
 	require.Equal(t, 0, exitCode)
 	require.True(t, rt.runCalled)
 	require.Equal(t, 0, criuManager.restoreCalls)
-	require.Equal(t, 1, backendRepoClient.updateCalls)
-	require.Equal(t, string(types.CheckpointStatusRestoreFailed), backendRepoClient.lastUpdate.Status)
+	require.Equal(t, 0, backendRepoClient.updateCalls)
 	require.Nil(t, request.Checkpoint)
 }
 
@@ -2042,7 +2354,7 @@ func (m *startedCRIUManager) Available() bool {
 	return true
 }
 
-func (m *startedCRIUManager) CreateCheckpoint(ctx context.Context, rt runtime.Runtime, checkpointId string, request *types.ContainerRequest) (string, error) {
+func (m *startedCRIUManager) CreateCheckpoint(ctx context.Context, rt runtime.Runtime, checkpointId string, request *types.ContainerRequest, terminateAfterCheckpoint bool) (string, error) {
 	return "", nil
 }
 
@@ -2060,7 +2372,7 @@ func (m *restoreErrorCRIUManager) Available() bool {
 	return true
 }
 
-func (m *restoreErrorCRIUManager) CreateCheckpoint(ctx context.Context, rt runtime.Runtime, checkpointId string, request *types.ContainerRequest) (string, error) {
+func (m *restoreErrorCRIUManager) CreateCheckpoint(ctx context.Context, rt runtime.Runtime, checkpointId string, request *types.ContainerRequest, terminateAfterCheckpoint bool) (string, error) {
 	return "", nil
 }
 
@@ -2079,7 +2391,7 @@ func (m *observingRestoreErrorCRIUManager) Available() bool {
 	return true
 }
 
-func (m *observingRestoreErrorCRIUManager) CreateCheckpoint(ctx context.Context, rt runtime.Runtime, checkpointId string, request *types.ContainerRequest) (string, error) {
+func (m *observingRestoreErrorCRIUManager) CreateCheckpoint(ctx context.Context, rt runtime.Runtime, checkpointId string, request *types.ContainerRequest, terminateAfterCheckpoint bool) (string, error) {
 	return "", assert.AnError
 }
 

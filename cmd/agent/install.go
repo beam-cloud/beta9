@@ -130,6 +130,7 @@ var serviceEnvKeys = []string{
 	types.AgentHostnameEnv,
 	types.AgentCacheDirEnv,
 	types.AgentStorageModeEnv,
+	types.AgentCPUAffinityEnforcedEnv,
 }
 
 func defaultStateDir() string {

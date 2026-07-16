@@ -1,0 +1,267 @@
+diff --git a/criu/include/sk-inet.h b/criu/include/sk-inet.h
+index 69ee8589..0a8474d3 100644
+--- a/criu/include/sk-inet.h
++++ b/criu/include/sk-inet.h
+@@ -57,0 +58 @@ struct inet_sk_info {
++	bool close_on_restore;
+diff --git a/criu/sk-inet.c b/criu/sk-inet.c
+index 566d1c23..f7306642 100644
+--- a/criu/sk-inet.c
++++ b/criu/sk-inet.c
+@@ -46,0 +47 @@
++#define BEAM_CLOSE_EXTERNAL_TCP_MARKER "beam-close-external-tcp"
+@@ -53,0 +55 @@ static LIST_HEAD(inet_ports);
++static int close_external_tcp = -1;
+@@ -707,0 +710,27 @@ static inline int tcp_connection(InetSkEntry *ie)
++static bool should_close_external_tcp(InetSkEntry *ie)
++{
++	size_t address_size;
++
++	if (!tcp_connection(ie))
++		return false;
++	if (close_external_tcp < 0) {
++		close_external_tcp = faccessat(get_service_fd(IMG_FD_OFF),
++					       BEAM_CLOSE_EXTERNAL_TCP_MARKER, F_OK, 0) == 0;
++		if (close_external_tcp)
++			pr_info("External TCP connections will be restored closed\n");
++	}
++	if (!close_external_tcp)
++		return false;
++
++	if (ie->family == AF_INET && ie->n_src_addr >= PB_ALEN_INET &&
++	    ie->n_dst_addr >= PB_ALEN_INET)
++		address_size = PB_ALEN_INET * sizeof(*ie->src_addr);
++	else if (ie->family == AF_INET6 && ie->n_src_addr == PB_ALEN_INET6 &&
++		 ie->n_dst_addr == PB_ALEN_INET6)
++		address_size = PB_ALEN_INET6 * sizeof(*ie->src_addr);
++	else
++		return false;
++
++	return memcmp(ie->src_addr, ie->dst_addr, address_size) != 0;
++}
++
+@@ -713,0 +743,3 @@ static int collect_one_inetsk(void *o, ProtobufCMessage *base, struct cr_img *i)
++	ii->close_on_restore = should_close_external_tcp(ii->ie);
++	if (ii->close_on_restore)
++		pr_info("TCP connection id %x has an external peer and will be restored closed\n", ii->ie->id);
+@@ -719 +751 @@ static int collect_one_inetsk(void *o, ProtobufCMessage *base, struct cr_img *i)
+-	if (tcp_connection(ii->ie))
++	if (tcp_connection(ii->ie) && !ii->close_on_restore)
+@@ -781 +813 @@ static int post_open_inet_sk(struct file_desc *d, int sk)
+-	if (tcp_connection(ii->ie)) {
++	if (tcp_connection(ii->ie) && !ii->close_on_restore) {
+diff --git a/criu/sk-tcp.c b/criu/sk-tcp.c
+index 9c8bad1c..c67acd0b 100644
+--- a/criu/sk-tcp.c
++++ b/criu/sk-tcp.c
+@@ -464 +464 @@ int restore_one_tcp(int fd, struct inet_sk_info *ii)
+-	if (opts.tcp_close) {
++	if (opts.tcp_close || ii->close_on_restore) {
+diff --git a/plugins/cuda/cuda_plugin.c b/plugins/cuda/cuda_plugin.c
+index 9ccb0422..b283fb10 100644
+--- a/plugins/cuda/cuda_plugin.c
++++ b/plugins/cuda/cuda_plugin.c
+@@ -5,0 +6 @@
++#include "pstree.h"
+@@ -13,0 +15 @@
++#include <errno.h>
+@@ -15,0 +18 @@
++#include <sys/stat.h>
+@@ -36,0 +40,3 @@ typedef enum {
++#define CUDA_PID_IMAGE "cuda-pids-v1.img"
++#define CUDA_PID_IMAGE_TMP "cuda-pids-v1.img.tmp"
++#define CUDA_PID_IMAGE_MAX_ENTRIES 4096
+@@ -60,0 +67,5 @@ static LIST_HEAD(cuda_pids);
++static pid_t *restore_cuda_pids;
++static size_t restore_cuda_pid_count;
++static bool restore_cuda_pid_filter;
++
++static int write_full(int fd, const void *buf, size_t size);
+@@ -88,0 +100,160 @@ static int add_pid_to_buf(struct list_head *pid_buf, int pid, cuda_task_state_t
++static int write_full(int fd, const void *buf, size_t size)
++{
++	const char *cursor = buf;
++
++	while (size > 0) {
++		ssize_t written = write(fd, cursor, size);
++
++		if (written < 0) {
++			if (errno == EINTR)
++				continue;
++			return -1;
++		}
++		if (written == 0) {
++			errno = EIO;
++			return -1;
++		}
++		cursor += written;
++		size -= written;
++	}
++
++	return 0;
++}
++
++static int read_full(int fd, void *buf, size_t size)
++{
++	char *cursor = buf;
++
++	while (size > 0) {
++		ssize_t bytes_read = read(fd, cursor, size);
++
++		if (bytes_read < 0) {
++			if (errno == EINTR)
++				continue;
++			return -1;
++		}
++		if (bytes_read == 0) {
++			errno = EIO;
++			return -1;
++		}
++		cursor += bytes_read;
++		size -= bytes_read;
++	}
++
++	return 0;
++}
++
++static void finish_cuda_pid_image(int dump_ret)
++{
++	struct pid_info *info;
++	int image_dir_fd = criu_get_image_dir();
++	int fd = -1;
++	int saved_errno = EIO;
++	size_t count = 0;
++	bool published = false;
++
++	if (dump_ret || !plugin_added_to_inventory)
++		return;
++	unlinkat(image_dir_fd, CUDA_PID_IMAGE, 0);
++	unlinkat(image_dir_fd, CUDA_PID_IMAGE_TMP, 0);
++	fd = openat(image_dir_fd, CUDA_PID_IMAGE_TMP,
++		    O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
++	if (fd < 0)
++		goto out;
++
++	list_for_each_entry(info, &cuda_pids, list) {
++		pid_t virt_pid = pid_to_virt(info->pid);
++
++		if (virt_pid <= 0 || count == CUDA_PID_IMAGE_MAX_ENTRIES) {
++			errno = EINVAL;
++			goto out;
++		}
++		if (write_full(fd, &virt_pid, sizeof(virt_pid)))
++			goto out;
++		count++;
++	}
++	if (count == 0) {
++		errno = EINVAL;
++		goto out;
++	}
++	if (fsync(fd))
++		goto out;
++	if (close(fd)) {
++		fd = -1;
++		goto out;
++	}
++	fd = -1;
++	if (renameat(image_dir_fd, CUDA_PID_IMAGE_TMP, image_dir_fd, CUDA_PID_IMAGE))
++		goto out;
++	published = true;
++
++out:
++	saved_errno = errno;
++	if (fd >= 0)
++		close(fd);
++	if (!published)
++		unlinkat(image_dir_fd, CUDA_PID_IMAGE_TMP, 0);
++	if (published)
++		pr_info("saved %zu CUDA process IDs\n", count);
++	else {
++		errno = saved_errno;
++		pr_perror("failed to save CUDA process metadata; restore will use compatibility mode");
++	}
++}
++
++static int load_cuda_pid_image(void)
++{
++	struct stat st;
++	pid_t *pids = NULL;
++	int fd;
++	size_t count;
++	size_t i;
++	int ret = -1;
++
++	fd = openat(criu_get_image_dir(), CUDA_PID_IMAGE, O_RDONLY | O_CLOEXEC);
++	if (fd < 0)
++		return errno == ENOENT ? 0 : -1;
++	if (fstat(fd, &st) || st.st_size <= 0 || st.st_size % sizeof(*pids) != 0 ||
++	    st.st_size > CUDA_PID_IMAGE_MAX_ENTRIES * sizeof(*pids)) {
++		errno = EINVAL;
++		goto out;
++	}
++	count = st.st_size / sizeof(*pids);
++	pids = xmalloc(st.st_size);
++	if (pids == NULL || read_full(fd, pids, st.st_size))
++		goto out;
++	for (i = 0; i < count; i++) {
++		if (pids[i] <= 0) {
++			errno = EINVAL;
++			goto out;
++		}
++	}
++
++	restore_cuda_pids = pids;
++	restore_cuda_pid_count = count;
++	restore_cuda_pid_filter = true;
++	pids = NULL;
++	pr_info("loaded %zu CUDA process IDs\n", count);
++	ret = 0;
++out:
++	if (pids != NULL)
++		xfree(pids);
++	close(fd);
++	return ret;
++}
++
++static bool is_cuda_restore_pid(pid_t real_pid)
++{
++	pid_t virt_pid = pid_to_virt(real_pid);
++	size_t i;
++
++	if (!restore_cuda_pid_filter || virt_pid <= 0)
++		return true;
++	for (i = 0; i < restore_cuda_pid_count; i++) {
++		if (restore_cuda_pids[i] == virt_pid)
++			return true;
++	}
++
++	return false;
++}
++
+@@ -439,2 +610 @@ int cuda_plugin_pause_devices(int pid)
+-		add_pid_to_buf(&cuda_pids, pid, CUDA_TASK_LOCKED);
+-		return 0;
++		return add_pid_to_buf(&cuda_pids, pid, CUDA_TASK_LOCKED);
+@@ -446,2 +616 @@ int cuda_plugin_pause_devices(int pid)
+-		add_pid_to_buf(&cuda_pids, pid, CUDA_TASK_CHECKPOINTED);
+-		return 0;
++		return add_pid_to_buf(&cuda_pids, pid, CUDA_TASK_CHECKPOINTED);
+@@ -535,0 +705,4 @@ int cuda_plugin_resume_devices_late(int pid)
++	if (!is_cuda_restore_pid(pid)) {
++		pr_info("skip resume for PID %d (not checkpointed by CUDA)\n", pid);
++		return 0;
++	}
+@@ -574,0 +748,2 @@ int cuda_plugin_init(int stage)
++		if (load_cuda_pid_image())
++			pr_perror("failed to load CUDA process metadata; restoring all processes");
+@@ -602,0 +778 @@ int cuda_plugin_init(int stage)
++		plugin_added_to_inventory = false;
+@@ -627,0 +804 @@ void cuda_plugin_fini(int stage, int ret)
++		finish_cuda_pid_image(ret);
+@@ -629,0 +807,6 @@ void cuda_plugin_fini(int stage, int ret)
++	if (stage == CR_PLUGIN_STAGE__RESTORE) {
++		xfree(restore_cuda_pids);
++		restore_cuda_pids = NULL;
++		restore_cuda_pid_count = 0;
++		restore_cuda_pid_filter = false;
++	}

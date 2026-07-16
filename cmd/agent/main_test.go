@@ -37,6 +37,7 @@ func TestJoinArgsIncludeCacheDir(t *testing.T) {
 }
 
 func TestServiceEnvIncludesCacheDir(t *testing.T) {
+	t.Setenv(types.AgentCPUAffinityEnforcedEnv, "true")
 	env := serviceEnv("worker:latest", "/var/lib/beam/agent", "/mnt/cache")
 
 	if got := env[types.AgentCacheDirEnv]; got != "/mnt/cache" {
@@ -44,6 +45,9 @@ func TestServiceEnvIncludesCacheDir(t *testing.T) {
 	}
 	if got := env[types.AgentStateDirEnv]; got != "/var/lib/beam/agent" {
 		t.Fatalf("state dir env = %q, want /var/lib/beam/agent", got)
+	}
+	if got := env[types.AgentCPUAffinityEnforcedEnv]; got != "true" {
+		t.Fatalf("CPU affinity env = %q, want true", got)
 	}
 }
 
