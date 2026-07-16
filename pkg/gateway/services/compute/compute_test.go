@@ -143,6 +143,59 @@ func TestListPrivatePoolsReadyMachineCountUsesAgentConnection(t *testing.T) {
 	}
 }
 
+func TestFindReadyPrivatePoolForGPU(t *testing.T) {
+	now := time.Now().UTC()
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{
+			"workspace-1": {
+				{Name: "ondemand-a6000", Status: "active", Config: &pb.PoolConfig{Gpu: []string{"A6000"}}},
+				{Name: "empty-t4", Status: "active", Config: &pb.PoolConfig{Gpu: []string{"T4"}}},
+			},
+		},
+		machines: map[string][]*model.AgentTokenState{
+			fakeComputeKey("workspace-1", "ondemand-a6000"): {
+				{
+					WorkspaceID:     "workspace-1",
+					PoolName:        "ondemand-a6000",
+					MachineID:       "machine-1",
+					Schedulable:     true,
+					LastJoinAt:      now.Add(-time.Minute),
+					LastHeartbeatAt: now,
+				},
+			},
+		},
+	}
+	service := &Service{computeRepo: repo}
+	ctx := context.Background()
+
+	// Matching GPU with a connected machine.
+	pool, err := service.FindReadyPrivatePoolForGPU(ctx, "workspace-1", []types.GpuType{types.GpuType("A6000")})
+	if err != nil {
+		t.Fatalf("FindReadyPrivatePoolForGPU() error = %v", err)
+	}
+	if pool != "ondemand-a6000" {
+		t.Fatalf("pool = %q, want %q", pool, "ondemand-a6000")
+	}
+
+	// Matching GPU config but no connected machines: not ready.
+	pool, err = service.FindReadyPrivatePoolForGPU(ctx, "workspace-1", []types.GpuType{types.GpuType("T4")})
+	if err != nil {
+		t.Fatalf("FindReadyPrivatePoolForGPU() error = %v", err)
+	}
+	if pool != "" {
+		t.Fatalf("pool = %q, want empty", pool)
+	}
+
+	// No pool configured for the GPU at all.
+	pool, err = service.FindReadyPrivatePoolForGPU(ctx, "workspace-1", []types.GpuType{types.GpuType("H100")})
+	if err != nil {
+		t.Fatalf("FindReadyPrivatePoolForGPU() error = %v", err)
+	}
+	if pool != "" {
+		t.Fatalf("pool = %q, want empty", pool)
+	}
+}
+
 func TestCreatePoolConflictsWithWorkspacePoolOwnedByAnotherToken(t *testing.T) {
 	ctx := testAuthContext("workspace-1", "viewer-token")
 	repo := &fakeComputeRepo{

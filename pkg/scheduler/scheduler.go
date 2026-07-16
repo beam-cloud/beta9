@@ -119,6 +119,9 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 		case types.PoolModeLocal:
 			controller, err = NewLocalKubernetesWorkerPoolController(controllerOptions)
 		case types.PoolModeExternal:
+			if pool.AgentHosted() {
+				continue
+			}
 			controllerOptions.ProviderName = pool.Provider
 			controllerOptions.Tailscale = tailscale
 			controller, err = NewLegacyExternalWorkerPoolController(controllerOptions)

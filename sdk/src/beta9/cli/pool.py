@@ -42,7 +42,9 @@ def common(**_):
 
 @click.group(
     name="pool",
-    help="Manage compute pools.",
+    help="Manage compute pools (named groups of machines): create pools, join your "
+    "own hardware, and scale or extend reserved capacity. To browse inventory or "
+    "reserve/release single machines, use 'machine'.",
     cls=ClickManagementGroup,
 )
 def management():
@@ -449,7 +451,7 @@ def create(
 
 @management.command(
     name="offers",
-    help="List managed node offers for a private pool.",
+    help="Browse raw on-demand offers. For an interactive picker, use 'machine reserve'.",
     epilog="""
     Examples:
 
@@ -493,7 +495,8 @@ def offers(
 
 @management.command(
     name="scale",
-    help="Reserve managed nodes for a private pool.",
+    help="Reserve nodes into a named pool (scriptable; 'machine reserve' is the "
+    "interactive equivalent).",
     epilog="""
     Examples:
 
@@ -544,14 +547,6 @@ def scale(
     terminal.success(f"Scaled private pool '{res.pool.name}' ({_pool_capacity_summary(res.pool)})")
 
 
-@management.command(name="private", help="List private compute pools.", hidden=True)
-@click.option("--limit", type=click.IntRange(1, 100), default=20, show_default=True)
-@click.option("--format", type=click.Choice(("table", "json")), default="table", show_default=True)
-@extraclick.pass_service_client
-def private_pools(service: ServiceClient, limit: int, format: str):
-    terminal.print(_get_pool_renderable(service, limit, format, {}, "private"))
-
-
 @management.command(name="machines", help="List machines joined to private pools.")
 @click.argument("name", required=False)
 @click.option("--limit", type=click.IntRange(1, 100), default=20, show_default=True)
@@ -600,10 +595,23 @@ def _fetch_pool_machines(service: ServiceClient, pool_name: str, limit: int) -> 
     return list(res.machines)
 
 
-@management.command(name="extend", help="Extend private pool capacity.", hidden=True)
+@management.command(
+    name="extend",
+    help="Extend a reserved pool's duration or spend cap.",
+    epilog="""
+    Examples:
+
+      # Keep a reservation alive for another 12 hours
+      {cli_name} pool extend ondemand-a6000 --ttl 12h
+
+      # Raise the spend cap on a long-lived reservation
+      {cli_name} pool extend ondemand-a6000 --max-spend 50
+      \b
+    """,
+)
 @click.argument("name")
-@click.option("--ttl", default="")
-@click.option("--max-spend", type=float, default=0)
+@click.option("--ttl", default="", help="New duration from now, e.g. 12h, 3d.")
+@click.option("--max-spend", type=float, default=0, help="New max spend in USD.")
 @extraclick.pass_service_client
 def extend(service: ServiceClient, name: str, ttl: str, max_spend: float):
     res = service.gateway.extend_pool_capacity(
@@ -611,27 +619,20 @@ def extend(service: ServiceClient, name: str, ttl: str, max_spend: float):
     )
     if not res.ok:
         return terminal.error(res.err_msg)
-    terminal.success(f"Extended private pool '{name}'")
+    terminal.success(f"Extended pool '{name}'")
 
 
-@management.command(name="terminate", help="Terminate and delete a private pool.", hidden=True)
-@click.argument("name")
-@extraclick.pass_service_client
-def terminate(service: ServiceClient, name: str):
-    res = service.gateway.delete_pool(DeletePoolRequest(name=name))
-    if not res.ok:
-        return terminal.error(res.err_msg)
-    terminal.success(f"Terminated private pool '{name}'")
-
-
-@management.command(name="delete", help="Delete a private pool.")
+@management.command(
+    name="delete",
+    help="Delete a pool, releasing all of its machines and reservations.",
+)
 @click.argument("name")
 @extraclick.pass_service_client
 def delete(service: ServiceClient, name: str):
     res = service.gateway.delete_pool(DeletePoolRequest(name=name))
     if not res.ok:
         return terminal.error(res.err_msg)
-    terminal.success(f"Deleted private pool '{name}'")
+    terminal.success(f"Deleted pool '{name}' and released its machines")
 
 
 @management.command(

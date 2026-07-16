@@ -713,6 +713,16 @@ message GetOrCreateStubResponse {
   string stub_id = 2;
   string err_msg = 3;
   string warn_msg = 4;
+  // Capacity verdict for the requested GPU types, computed at stub creation:
+  // "available", "low", or "none". Empty when no check applies (CPU-only
+  // workloads, private-pool-only stubs, or pool-selector-bound stubs).
+  string capacity_status = 5;
+  // GPU types from the request that no serverless pool supports.
+  repeated string unsupported_gpus = 6;
+  // Name of an existing ready private pool in the workspace that satisfies
+  // the GPU request. Set instead of capacity_status "none" so clients can
+  // re-issue stub creation targeting this pool.
+  string matched_private_pool = 7;
 }
 
 message DeployStubRequest {
@@ -1587,7 +1597,12 @@ message ListMachinesResponse {
   bool ok = 1;
   string err_msg = 2;
   repeated Machine machines = 3;
+  // gpus reports live worker availability per GPU type (a worker with that
+  // GPU is currently registered).
   map<string, bool> gpus = 4;
+  // supported_gpus reports pool-config-based serverless support per GPU
+  // type: true when a pool could serve the GPU even if scaled to zero.
+  map<string, bool> supported_gpus = 5;
 }
 
 message CreateMachineRequest { string pool_name = 1; }

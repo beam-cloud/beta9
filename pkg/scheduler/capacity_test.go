@@ -8,6 +8,37 @@ import (
 	"github.com/tj/assert"
 )
 
+func TestHasManagedPoolForGPU(t *testing.T) {
+	manager := NewWorkerPoolManager(false)
+	manager.SetPool("beta9-t4", types.WorkerPoolConfig{GPUType: "T4"}, &LocalWorkerPoolControllerForTest{name: "beta9-t4"})
+	manager.SetPool("private-h100", types.WorkerPoolConfig{GPUType: "H100", Mode: types.PoolModePrivate}, &LocalWorkerPoolControllerForTest{
+		name:             "private-h100",
+		mode:             types.PoolModePrivate,
+		requiresSelector: true,
+	})
+	manager.SetPool("marketplace-a6000", types.WorkerPoolConfig{GPUType: "A6000", Mode: types.PoolModeMarketplace}, &LocalWorkerPoolControllerForTest{
+		name: "marketplace-a6000",
+		mode: types.PoolModeMarketplace,
+	})
+	scheduler := &Scheduler{workerPoolManager: manager}
+
+	// Pool-config-based: a pool with zero live workers still counts.
+	assert.True(t, scheduler.HasManagedPoolForGPU("T4", false))
+
+	// Pools requiring a pool selector can't serve selector-less workloads.
+	assert.False(t, scheduler.HasManagedPoolForGPU("H100", false))
+
+	// Marketplace pools only count when the workload opted in.
+	assert.False(t, scheduler.HasManagedPoolForGPU("A6000", false))
+	assert.True(t, scheduler.HasManagedPoolForGPU("A6000", true))
+
+	// GPU_ANY matches any GPU pool usable without a selector.
+	assert.True(t, scheduler.HasManagedPoolForGPU(string(types.GPU_ANY), false))
+
+	// Unknown GPU type: guaranteed blackhole.
+	assert.False(t, scheduler.HasManagedPoolForGPU("B200", false))
+}
+
 func TestCheckCapacityRestoresPaddedMemoryForReplacement(t *testing.T) {
 	s, err := NewSchedulerForTest()
 	assert.NoError(t, err)

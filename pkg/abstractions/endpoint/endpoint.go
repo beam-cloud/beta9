@@ -168,6 +168,14 @@ func (es *HttpEndpointService) forwardRequest(
 		return err
 	}
 
+	// Fail fast instead of queueing until timeout when the stub's GPU has no
+	// supporting pool; requests start succeeding as soon as capacity joins.
+	if reason := instance.UnschedulableReason(); reason != "" {
+		return ctx.JSON(http.StatusServiceUnavailable, map[string]interface{}{
+			"error": reason,
+		})
+	}
+
 	tasksInFlight, err := es.taskRepo.TasksInFlight(ctx.Request().Context(), instance.Workspace.Name, stubId)
 	if err != nil {
 		return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{

@@ -408,6 +408,22 @@ class GetOrCreateStubResponse(betterproto.Message):
     stub_id: str = betterproto.string_field(2)
     err_msg: str = betterproto.string_field(3)
     warn_msg: str = betterproto.string_field(4)
+    capacity_status: str = betterproto.string_field(5)
+    """
+    Capacity verdict for the requested GPU types, computed at stub creation:
+     "available", "low", or "none". Empty when no check applies (CPU-only
+     workloads, private-pool-only stubs, or pool-selector-bound stubs).
+    """
+
+    unsupported_gpus: List[str] = betterproto.string_field(6)
+    """GPU types from the request that no serverless pool supports."""
+
+    matched_private_pool: str = betterproto.string_field(7)
+    """
+    Name of an existing ready private pool in the workspace that satisfies
+     the GPU request. Set instead of capacity_status "none" so clients can
+     re-issue stub creation targeting this pool.
+    """
 
 
 @dataclass(eq=False, repr=False)
@@ -1456,6 +1472,18 @@ class ListMachinesResponse(betterproto.Message):
     gpus: Dict[str, bool] = betterproto.map_field(
         4, betterproto.TYPE_STRING, betterproto.TYPE_BOOL
     )
+    """
+    gpus reports live worker availability per GPU type (a worker with that
+     GPU is currently registered).
+    """
+
+    supported_gpus: Dict[str, bool] = betterproto.map_field(
+        5, betterproto.TYPE_STRING, betterproto.TYPE_BOOL
+    )
+    """
+    supported_gpus reports pool-config-based serverless support per GPU
+     type: true when a pool could serve the GPU even if scaled to zero.
+    """
 
 
 @dataclass(eq=False, repr=False)

@@ -492,10 +492,8 @@ type WorkerPoolConfig struct {
 }
 
 // AgentHosted reports whether this concrete pool uses the agent control path.
-// External pools without a provider are agent-backed; external pools with a
-// provider remain on the legacy remote-k3s controller during migration.
 func (c WorkerPoolConfig) AgentHosted() bool {
-	return c.Mode.AgentHosted() || (c.Mode == PoolModeExternal && c.Provider == nil)
+	return c.Mode.AgentHosted() || (c.Mode == PoolModeExternal && (c.Provider == nil || *c.Provider == ProviderAgent))
 }
 
 type WorkerPoolCacheConfig struct {
@@ -569,6 +567,7 @@ var (
 	ProviderCrusoe     MachineProvider = "crusoe"
 	ProviderHydra      MachineProvider = "hydra"
 	ProviderGeneric    MachineProvider = "generic"
+	ProviderAgent      MachineProvider = MachineProvider(DefaultAgentName)
 )
 
 type ProviderConfig struct {

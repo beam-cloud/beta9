@@ -3534,6 +3534,21 @@
         },
         "warnMsg": {
           "type": "string"
+        },
+        "capacityStatus": {
+          "type": "string",
+          "description": "Capacity verdict for the requested GPU types, computed at stub creation:\n\"available\", \"low\", or \"none\". Empty when no check applies (CPU-only\nworkloads, private-pool-only stubs, or pool-selector-bound stubs)."
+        },
+        "unsupportedGpus": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "GPU types from the request that no serverless pool supports."
+        },
+        "matchedPrivatePool": {
+          "type": "string",
+          "description": "Name of an existing ready private pool in the workspace that satisfies\nthe GPU request. Set instead of capacity_status \"none\" so clients can\nre-issue stub creation targeting this pool."
         }
       }
     },
@@ -3887,7 +3902,15 @@
           "type": "object",
           "additionalProperties": {
             "type": "boolean"
-          }
+          },
+          "description": "gpus reports live worker availability per GPU type (a worker with that\nGPU is currently registered)."
+        },
+        "supportedGpus": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "description": "supported_gpus reports pool-config-based serverless support per GPU\ntype: true when a pool could serve the GPU even if scaled to zero."
         }
       }
     },

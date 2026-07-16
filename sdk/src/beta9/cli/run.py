@@ -4,6 +4,7 @@ import click
 
 from .. import terminal
 from ..abstractions.base.container import Container
+from ..abstractions.base.runner import RUNTIME_PREPARE_FAILED_MSG
 from ..abstractions.pod import Pod, PodInstance
 from ..channel import ServiceClient
 from ..utils import load_module_spec
@@ -71,7 +72,9 @@ def run(
 
     result: PodInstance = pod_spec.create()
     if not result.ok:
-        terminal.error("Failed to create container.")
+        if result.error_msg == RUNTIME_PREPARE_FAILED_MSG:
+            return  # prepare_runtime already reported the specific failure
+        terminal.error(result.error_msg or "Failed to create container.")
         return
 
     container = Container(container_id=result.container_id)

@@ -217,6 +217,13 @@ func (ps *GenericPodService) forwardRequest(ctx echo.Context, stubId string) err
 	}
 
 	if !instance.buffer.hasAvailableContainers() {
+		// Fail fast instead of queueing until timeout when the stub's GPU has
+		// no supporting pool; requests succeed as soon as capacity joins.
+		if reason := instance.UnschedulableReason(); reason != "" {
+			return ctx.JSON(http.StatusServiceUnavailable, map[string]interface{}{
+				"error": reason,
+			})
+		}
 		if err := instance.ensureReadyForRequest(); err != nil {
 			return err
 		}
@@ -250,6 +257,10 @@ func (ps *GenericPodService) forwardTCPRequest(tc *tcpConnection, stubId string)
 	}
 
 	if !instance.buffer.hasAvailableContainers() {
+		if reason := instance.UnschedulableReason(); reason != "" {
+			tc.Conn.Close()
+			return nil
+		}
 		if err := instance.ensureReadyForRequest(); err != nil {
 			return err
 		}

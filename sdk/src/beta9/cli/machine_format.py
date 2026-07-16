@@ -4,25 +4,76 @@ from typing import Dict, Optional, Sequence
 from rich.table import Column, Table, box
 
 from .. import terminal
-from ..clients.gateway import Machine
+from ..clients.gateway import Machine, PoolOffer
 
 
-def gpu_availability_table(gpus: Dict[str, bool]) -> Table:
+def gpu_inventory_table(
+    live_gpus: Dict[str, bool],
+    supported_gpus: Dict[str, bool],
+    cheapest_offers: Dict[str, PoolOffer],
+    offers_available: bool = True,
+) -> Table:
+    """
+    One row per GPU type that has any capacity signal: live serverless
+    workers, a serverless pool config (scale-to-zero), or an on-demand offer.
+    GPU types with no capacity anywhere are summarized in the caption so
+    they never stretch the table.
+    """
+    gpu_types = sorted(set(live_gpus) | set(supported_gpus) | set(cheapest_offers))
+    hidden = 0
+    rows = []
+    for gpu_type in gpu_types:
+        live = live_gpus.get(gpu_type, False)
+        supported = supported_gpus.get(gpu_type, False)
+        offer = cheapest_offers.get(gpu_type)
+
+        if not live and not supported and offer is None:
+            hidden += 1
+            continue
+
+        if live:
+            serverless = "[green]●[/green] ready"
+        elif supported:
+            serverless = "[cyan]●[/cyan] available"
+        else:
+            serverless = "[dim]—[/dim]"
+
+        if offer is not None:
+            hourly = offer.hourly_cost_micros / 1_000_000
+            on_demand = f"${hourly:.2f}/hr"
+        elif offers_available:
+            on_demand = "[dim]—[/dim]"
+        else:
+            on_demand = "[dim]?[/dim]"
+
+        rows.append((gpu_type, serverless, on_demand))
+
+    caption = None
+    if hidden > 0:
+        caption = f"{hidden} more GPU types · no capacity"
+
     table = Table(
-        Column("GPU Type"),
-        Column("Available", justify="center"),
+        Column("GPU", no_wrap=True),
+        Column("Serverless", no_wrap=True),
+        Column("On-demand", justify="right", no_wrap=True),
         box=box.SIMPLE,
+        title="GPU inventory",
+        title_justify="left",
+        title_style=f"bold {terminal.BRAND_COLOR}",
+        caption=caption,
+        caption_justify="left",
+        caption_style="dim",
     )
-    for gpu_type, gpu_available in sorted(gpus.items()):
-        table.add_row(gpu_type, "✅" if gpu_available else "❌")
-    if not gpus:
-        table.add_row("-", "-")
-    table.add_section()
-    table.add_row(f"[bold]{len(gpus)} items")
+
+    for row in rows:
+        table.add_row(*row)
+    if not rows:
+        table.add_row("[dim]—[/dim]", "[dim]no capacity visible[/dim]", "[dim]—[/dim]")
+
     return table
 
 
-def machine_table(machines: Sequence[Machine]) -> Table:
+def machine_table(machines: Sequence[Machine], title: str = "") -> Table:
     table = Table(
         Column("ID", no_wrap=True),
         Column("Pool"),
@@ -32,6 +83,9 @@ def machine_table(machines: Sequence[Machine]) -> Table:
         Column("Last seen"),
         Column("Agent"),
         box=box.SIMPLE,
+        title=title or None,
+        title_justify="left",
+        title_style=f"bold {terminal.BRAND_COLOR}",
     )
     for machine in machines:
         table.add_row(
@@ -45,7 +99,8 @@ def machine_table(machines: Sequence[Machine]) -> Table:
         )
 
     table.add_section()
-    table.add_row(f"[bold]{len(machines)} items")
+    count, suffix = terminal.pluralize(machines, "s")
+    table.add_row(f"[bold]{count} machine{suffix}")
     return table
 
 
