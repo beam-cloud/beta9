@@ -24,7 +24,7 @@ FROM golang:1.23-bookworm AS runc
 
 WORKDIR /workspace
 
-COPY pkg/worker/patches/runc-criu-production-log-level.patch /tmp/runc-criu-production-log-level.patch
+COPY docker/patches/runc/runc-criu-production-log-level.patch /tmp/runc-criu-production-log-level.patch
 
 RUN apt-get update && apt-get install -y \
     make \
@@ -239,8 +239,8 @@ ARG CEDANA_VERSION=0.9.240
 ARG CEDANA_BASE_URL=""
 ARG CEDANA_TOKEN=""
 ARG CRIU_COMMIT=b47c692bb3a73ae45ee1c4ab215a8f6869d40efd
-COPY pkg/worker/patches/criu-skip-non-cuda-resume.patch /tmp/criu-skip-non-cuda-resume.patch
-COPY pkg/worker/patches/criu-skip-fresh-zero-pages.patch /tmp/criu-skip-fresh-zero-pages.patch
+COPY docker/patches/criu/criu-skip-non-cuda-resume.patch /tmp/criu-skip-non-cuda-resume.patch
+COPY docker/patches/criu/criu-skip-fresh-zero-pages.patch /tmp/criu-skip-fresh-zero-pages.patch
 
 RUN <<EOT
 set -eux
