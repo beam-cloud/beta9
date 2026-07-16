@@ -24,6 +24,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"k8s.io/utils/cpuset"
 )
 
 func TestWaitForRuntimeStartedDrainsQueuedPIDWhenRuntimeDone(t *testing.T) {
@@ -526,6 +527,37 @@ func TestSpecFromRequestReturnsIndependentSpecs(t *testing.T) {
 	require.Equal(t, []string{"IMAGE=one"}, initialEnv)
 	require.Equal(t, "print('two')", second.Process.Args[2])
 	require.NotContains(t, second.Process.Env, "LEAKED=true")
+}
+
+func TestSelectRequestedCPUs(t *testing.T) {
+	available := cpuset.New(2, 4, 6, 8)
+
+	require.Empty(t, selectRequestedCPUs(0, available))
+	require.Equal(t, "2", selectRequestedCPUs(1000, available))
+	require.Equal(t, "2,4", selectRequestedCPUs(1001, available))
+	require.Equal(t, "2,4,6,8", selectRequestedCPUs(8000, available))
+}
+
+func TestSpecFromRequestAppliesCPUAffinityToGPUWorkload(t *testing.T) {
+	worker := &Worker{runtime: &mockRuntime{name: types.ContainerRuntimeRunc.String()}}
+
+	spec, err := worker.specFromRequest(&types.ContainerRequest{
+		ContainerId: "gpu-container",
+		EntryPoint:  []string{"sleep", "60"},
+		Cpu:         1000,
+		GpuCount:    1,
+		Stub: types.StubWithRelated{Stub: types.Stub{
+			Type: types.StubType(types.StubTypePodDeployment),
+		}},
+	}, &ContainerOptions{BindPorts: []int{8001}})
+	require.NoError(t, err)
+	require.NotNil(t, spec.Linux.Resources.CPU)
+
+	affinity, err := cpuset.Parse(spec.Linux.Resources.CPU.Cpus)
+	require.NoError(t, err)
+	require.Equal(t, 1, affinity.Size())
+	require.Nil(t, spec.Linux.Resources.CPU.Quota)
+	require.Nil(t, spec.Linux.Resources.CPU.Period)
 }
 
 func TestSpecFromRequestRejectsInvalidOCIInputs(t *testing.T) {

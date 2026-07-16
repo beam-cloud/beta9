@@ -844,6 +844,14 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		return nil, fmt.Errorf("container <%s> has empty process args for stub <%s> type <%s>", request.ContainerId, request.StubId, request.Stub.Type)
 	}
 
+	cpuAffinity := requestedCPUAffinity(request.Cpu)
+	if cpuAffinity != "" {
+		if spec.Linux.Resources.CPU == nil {
+			spec.Linux.Resources.CPU = &specs.LinuxCPU{}
+		}
+		spec.Linux.Resources.CPU.Cpus = cpuAffinity
+	}
+
 	throttlingEnabled := !request.IsBuildRequest() && !request.RequiresGPU()
 	cpuEnforced := s.config.Worker.ContainerResourceLimits.CPUEnforced
 	memoryEnforced := s.config.Worker.ContainerResourceLimits.MemoryEnforced
@@ -853,6 +861,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 			return nil, err
 		}
 		if cpuEnforced && resources.CPU != nil {
+			resources.CPU.Cpus = cpuAffinity
 			if s.deferCPUThrottle(request, resources.CPU) {
 				startupCPU := *resources.CPU
 				startupCPU.Quota = nil

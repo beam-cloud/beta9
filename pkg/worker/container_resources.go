@@ -1,8 +1,13 @@
 package worker
 
 import (
+	"os"
+	"runtime"
+	"strings"
+
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/opencontainers/runtime-spec/specs-go"
+	"k8s.io/utils/cpuset"
 	"k8s.io/utils/ptr"
 )
 
@@ -41,6 +46,44 @@ func (r *StandardResources) GetCPU(request *types.ContainerRequest) *specs.Linux
 		Quota:  ptr.To(r.calculateCPUQuota(request.Cpu)),
 		Period: ptr.To(r.standardCPUPeriod),
 	}
+}
+
+func requestedCPUAffinity(millicores int64) string {
+	return selectRequestedCPUs(millicores, processCPUSet())
+}
+
+func selectRequestedCPUs(millicores int64, available cpuset.CPUSet) string {
+	if millicores <= 0 || available.IsEmpty() {
+		return ""
+	}
+
+	count := int((millicores-1)/1000 + 1)
+	cpus := available.List()
+	if count < len(cpus) {
+		cpus = cpus[:count]
+	}
+	return cpuset.New(cpus...).String()
+}
+
+func processCPUSet() cpuset.CPUSet {
+	if status, err := os.ReadFile("/proc/self/status"); err == nil {
+		for _, line := range strings.Split(string(status), "\n") {
+			key, value, ok := strings.Cut(line, ":")
+			if !ok || key != "Cpus_allowed_list" {
+				continue
+			}
+			if available, err := cpuset.Parse(strings.TrimSpace(value)); err == nil && !available.IsEmpty() {
+				return available
+			}
+			break
+		}
+	}
+
+	cpus := make([]int, runtime.NumCPU())
+	for index := range cpus {
+		cpus[index] = index
+	}
+	return cpuset.New(cpus...)
 }
 
 func (r *StandardResources) GetMemory(request *types.ContainerRequest) *specs.LinuxMemory {
