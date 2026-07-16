@@ -124,6 +124,7 @@ type ContainerInstance struct {
 	SandboxProcessManager      *goproc.GoProcClient
 	SandboxProcessManagerReady bool
 	DeferredCPUQuota           *specs.LinuxCPU
+	CPUSet                     string
 	ProcessManagerReadyOnce    sync.Once
 	ProcessManagerReadyChan    chan struct{}
 	ContainerIp                string
@@ -630,6 +631,7 @@ func (s *Worker) reserveContainerInstance(request *types.ContainerRequest) bool 
 		LogBuffer: common.NewLogBuffer(),
 		Request:   request,
 		Runtime:   s.runtime,
+		CPUSet:    s.allocateContainerCPUSet(request),
 	})
 
 	return true

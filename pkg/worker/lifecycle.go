@@ -208,6 +208,10 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 	}
 
 	s.containerLock.Lock()
+	if instance, exists := s.containerInstances.Get(containerId); exists {
+		instance.CPUSet = ""
+		s.containerInstances.Set(containerId, instance)
+	}
 
 	// De-allocate GPU devices so they are available for new containers
 	if request.Gpu != "" {
@@ -332,6 +336,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	}
 	if existing, exists := s.containerInstances.Get(containerId); exists {
 		instance.StopReason = existing.StopReason
+		instance.CPUSet = existing.CPUSet
 	}
 	s.containerInstances.Set(containerId, instance)
 
@@ -844,7 +849,12 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		return nil, fmt.Errorf("container <%s> has empty process args for stub <%s> type <%s>", request.ContainerId, request.StubId, request.Stub.Type)
 	}
 
-	cpuAffinity := requestedCPUAffinity(request.Cpu)
+	cpuAffinity := ""
+	if s.containerInstances != nil {
+		if instance, exists := s.containerInstances.Get(request.ContainerId); exists {
+			cpuAffinity = instance.CPUSet
+		}
+	}
 	if cpuAffinity != "" {
 		if spec.Linux.Resources.CPU == nil {
 			spec.Linux.Resources.CPU = &specs.LinuxCPU{}
@@ -867,6 +877,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 				startupCPU.Quota = nil
 				startupCPU.Burst = nil
 				startupCPU.Period = nil
+				startupCPU.Cpus = ""
 				spec.Linux.Resources.CPU = &startupCPU
 			} else {
 				spec.Linux.Resources.CPU = resources.CPU

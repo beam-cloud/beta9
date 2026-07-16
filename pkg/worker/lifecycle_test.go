@@ -532,16 +532,26 @@ func TestSpecFromRequestReturnsIndependentSpecs(t *testing.T) {
 func TestSelectRequestedCPUs(t *testing.T) {
 	available := cpuset.New(2, 4, 6, 8)
 
-	require.Empty(t, selectRequestedCPUs(0, available))
-	require.Equal(t, "2", selectRequestedCPUs(1000, available))
-	require.Equal(t, "2,4", selectRequestedCPUs(1001, available))
-	require.Equal(t, "2,4,6,8", selectRequestedCPUs(8000, available))
+	require.Empty(t, selectRequestedCPUs(0, available, nil))
+	require.Equal(t, "2", selectRequestedCPUs(1000, available, nil))
+	require.Equal(t, "4,8", selectRequestedCPUs(1001, available, map[int]int64{
+		2: 1000,
+		6: 500,
+	}))
+	require.Equal(t, "2,4,6,8", selectRequestedCPUs(8000, available, nil))
 }
 
 func TestSpecFromRequestAppliesCPUAffinityToGPUWorkload(t *testing.T) {
-	worker := &Worker{runtime: &mockRuntime{name: types.ContainerRuntimeRunc.String()}}
-
-	spec, err := worker.specFromRequest(&types.ContainerRequest{
+	instances := common.NewSafeMap[*ContainerInstance]()
+	worker := &Worker{
+		config: types.AppConfig{Worker: types.WorkerConfig{
+			ContainerResourceLimits: types.ContainerResourceLimitsConfig{CPUAffinityEnforced: true},
+		}},
+		containerInstances: instances,
+		cpuLimit:           4000,
+		runtime:            &mockRuntime{name: types.ContainerRuntimeRunc.String()},
+	}
+	request := &types.ContainerRequest{
 		ContainerId: "gpu-container",
 		EntryPoint:  []string{"sleep", "60"},
 		Cpu:         1000,
@@ -549,7 +559,10 @@ func TestSpecFromRequestAppliesCPUAffinityToGPUWorkload(t *testing.T) {
 		Stub: types.StubWithRelated{Stub: types.Stub{
 			Type: types.StubType(types.StubTypePodDeployment),
 		}},
-	}, &ContainerOptions{BindPorts: []int{8001}})
+	}
+	require.True(t, worker.reserveContainerInstance(request))
+
+	spec, err := worker.specFromRequest(request, &ContainerOptions{BindPorts: []int{8001}})
 	require.NoError(t, err)
 	require.NotNil(t, spec.Linux.Resources.CPU)
 
@@ -558,6 +571,43 @@ func TestSpecFromRequestAppliesCPUAffinityToGPUWorkload(t *testing.T) {
 	require.Equal(t, 1, affinity.Size())
 	require.Nil(t, spec.Linux.Resources.CPU.Quota)
 	require.Nil(t, spec.Linux.Resources.CPU.Period)
+}
+
+func TestContainerCPUAffinityIsOptInAndLoadBalanced(t *testing.T) {
+	instances := common.NewSafeMap[*ContainerInstance]()
+	worker := &Worker{
+		containerInstances: instances,
+		cpuLimit:           4000,
+	}
+	request := func(id string) *types.ContainerRequest {
+		return &types.ContainerRequest{
+			ContainerId: id,
+			EntryPoint:  []string{"sleep", "60"},
+			Cpu:         1000,
+			Stub: types.StubWithRelated{Stub: types.Stub{
+				Type: types.StubType(types.StubTypePodDeployment),
+			}},
+		}
+	}
+
+	require.True(t, worker.reserveContainerInstance(request("disabled")))
+	disabled, exists := instances.Get("disabled")
+	require.True(t, exists)
+	require.Empty(t, disabled.CPUSet)
+	instances.Delete("disabled")
+
+	worker.config.Worker.ContainerResourceLimits.CPUAffinityEnforced = true
+	require.True(t, worker.reserveContainerInstance(request("first")))
+	require.True(t, worker.reserveContainerInstance(request("second")))
+	first, _ := instances.Get("first")
+	second, _ := instances.Get("second")
+	firstSet, err := cpuset.Parse(first.CPUSet)
+	require.NoError(t, err)
+	secondSet, err := cpuset.Parse(second.CPUSet)
+	require.NoError(t, err)
+	require.Equal(t, 1, firstSet.Size())
+	require.Equal(t, 1, secondSet.Size())
+	require.True(t, firstSet.Intersection(secondSet).IsEmpty())
 }
 
 func TestSpecFromRequestRejectsInvalidOCIInputs(t *testing.T) {
@@ -822,14 +872,15 @@ func sameStringSet(a, b []string) bool {
 func TestSpecFromRequestDefersSandboxCPUThrottleWhenRuntimeCanUpdate(t *testing.T) {
 	rt := &mockResourceRuntime{mockRuntime: mockRuntime{name: "runc"}}
 	containerInstances := common.NewSafeMap[*ContainerInstance]()
-	containerInstances.Set("container-1", &ContainerInstance{Id: "container-1", Runtime: rt})
+	containerInstances.Set("container-1", &ContainerInstance{Id: "container-1", Runtime: rt, CPUSet: "0"})
 
 	worker := &Worker{
 		config: types.AppConfig{
 			Worker: types.WorkerConfig{
 				ContainerResourceLimits: types.ContainerResourceLimitsConfig{
-					CPUEnforced:    true,
-					MemoryEnforced: true,
+					CPUEnforced:         true,
+					CPUAffinityEnforced: true,
+					MemoryEnforced:      true,
 				},
 			},
 		},
@@ -852,11 +903,13 @@ func TestSpecFromRequestDefersSandboxCPUThrottleWhenRuntimeCanUpdate(t *testing.
 	require.NotNil(t, spec.Linux.Resources.CPU.Shares)
 	require.Nil(t, spec.Linux.Resources.CPU.Quota)
 	require.Nil(t, spec.Linux.Resources.CPU.Period)
+	require.Empty(t, spec.Linux.Resources.CPU.Cpus)
 	require.NotNil(t, spec.Linux.Resources.Memory)
 
 	instance, exists := containerInstances.Get("container-1")
 	require.True(t, exists)
 	require.NotNil(t, instance.DeferredCPUQuota)
+	require.Equal(t, "0", instance.DeferredCPUQuota.Cpus)
 }
 
 func TestSpecFromRequestKeepsSandboxCPUThrottleWhenRuntimeCannotUpdate(t *testing.T) {
