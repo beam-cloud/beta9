@@ -336,9 +336,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	}
 
 	var filesystemRestore *checkpointFilesystemRestore
-	if caps.CheckpointRestore && request.Checkpoint != nil &&
-		request.Checkpoint.Status == string(types.CheckpointStatusAvailable) &&
-		s.IsCRIUAvailable(request.GpuCount) {
+	if s.canRestoreCheckpoint(request, s.runtime) {
 		filesystemRestore = s.startCheckpointFilesystemRestore(request, outputLogger)
 	}
 	filesystemRestoreHandedOff := false
@@ -1204,9 +1202,8 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	// Setup container overlay filesystem
 	var err error
 	if opts.CheckpointFilesystemRestore != nil {
-		result := opts.CheckpointFilesystemRestore.wait()
-		if result.err != nil {
-			log.Debug().Err(result.err).Str("container_id", containerId).Msg("checkpoint filesystem preparation did not complete")
+		if restoreErr := opts.CheckpointFilesystemRestore.wait(); restoreErr != nil {
+			log.Debug().Err(restoreErr).Str("container_id", containerId).Msg("checkpoint filesystem preparation did not complete")
 			if err := opts.CheckpointFilesystemRestore.discard(); err != nil {
 				log.Error().Err(err).Str("container_id", containerId).Msg("failed to discard partial checkpoint filesystem")
 				return
@@ -1363,11 +1360,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	request.ConfigPath = configPath
 
 	outputWriter := containerInstance.OutputWriter
-	restoringCheckpoint := request.Checkpoint != nil &&
-		request.Checkpoint.Status == string(types.CheckpointStatusAvailable) &&
-		containerInstance.Runtime != nil &&
-		containerInstance.Runtime.Capabilities().CheckpointRestore &&
-		s.IsCRIUAvailable(request.GpuCount)
+	restoringCheckpoint := s.canRestoreCheckpoint(request, containerInstance.Runtime)
 
 	// Log metrics
 	go s.workerUsageMetrics.EmitContainerUsage(ctx, request)
@@ -1598,8 +1591,8 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 		defer s.imageClient.untrackContainer(request.ContainerId)
 	}
 
-	supportsCheckpoint := instance.Runtime.Capabilities().CheckpointRestore && s.IsCRIUAvailable(request.GpuCount)
-	restoringCheckpoint := supportsCheckpoint && request.Checkpoint != nil && request.Checkpoint.Status == string(types.CheckpointStatusAvailable)
+	supportsCheckpoint := s.supportsCheckpointRestore(request, instance.Runtime)
+	restoringCheckpoint := supportsCheckpoint && hasAvailableCheckpoint(request)
 	checkpointRestoreStarted := time.Now()
 	if filesystemRestore != nil {
 		checkpointRestoreStarted = filesystemRestore.startedAt
@@ -1696,18 +1689,17 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 
 	// Handle restore from checkpoint if available
 	if restoringCheckpoint {
-		var restoreResult checkpointFilesystemRestoreResult
+		var restoreErr error
 		if filesystemRestore != nil {
-			restoreResult = filesystemRestore.wait()
+			restoreErr = filesystemRestore.wait()
 		} else {
-			restoreResult = s.restoreCheckpointFilesystem(ctx, request, outputLogger, filepath.Dir(request.ConfigPath))
+			restoreErr = s.restoreCheckpointFilesystem(ctx, request, outputLogger, filepath.Dir(request.ConfigPath))
 		}
-		err := restoreResult.err
-		if err != nil {
+		if restoreErr != nil {
 			// A local fetch failure does not prove the checkpoint itself is invalid.
 			if !request.Stub.Type.IsDeployment() {
 				finishRuntimeStarted()
-				return -1, err
+				return -1, restoreErr
 			}
 			fallbackFromCheckpoint(true)
 		} else {

@@ -68,22 +68,18 @@ var checkpointDisabledIOUringSyscalls = []string{
 
 var errCRIUManagerUnavailable = errors.New("checkpoint/restore unavailable: CRIU manager is not initialized")
 
-type checkpointFilesystemRestoreResult struct {
-	err error
-}
-
 type checkpointFilesystemRestore struct {
 	startedAt   time.Time
 	overlayRoot string
 	upperPath   string
 	done        chan struct{}
 	cancel      context.CancelFunc
-	result      checkpointFilesystemRestoreResult
+	err         error
 }
 
-func (r *checkpointFilesystemRestore) wait() checkpointFilesystemRestoreResult {
+func (r *checkpointFilesystemRestore) wait() error {
 	<-r.done
-	return r.result
+	return r.err
 }
 
 func (r *checkpointFilesystemRestore) cleanup() {
@@ -114,19 +110,19 @@ func (s *Worker) startCheckpointFilesystemRestore(request *types.ContainerReques
 
 	go func() {
 		defer cancel()
-		restore.result = s.restoreCheckpointFilesystem(restoreCtx, request, outputLogger, restore.upperPath)
+		restore.err = s.restoreCheckpointFilesystem(restoreCtx, request, outputLogger, restore.upperPath)
 		close(restore.done)
 	}()
 	return restore
 }
 
-func (s *Worker) restoreCheckpointFilesystem(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, destination string) checkpointFilesystemRestoreResult {
+func (s *Worker) restoreCheckpointFilesystem(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, destination string) error {
 	phaseStarted := time.Now()
 	checkpointPath, err := s.ensureCheckpointMaterializedWithLogger(ctx, request, request.Checkpoint, outputLogger)
 	metrics.RecordWorkerStartupPhase("checkpoint_materialization", time.Since(phaseStarted), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 	if err != nil {
 		log.Error().Err(err).Str("container_id", request.ContainerId).Str("checkpoint_id", request.Checkpoint.CheckpointId).Msg("failed to materialize checkpoint")
-		return checkpointFilesystemRestoreResult{err: err}
+		return err
 	}
 
 	phaseStarted = time.Now()
@@ -138,14 +134,14 @@ func (s *Worker) restoreCheckpointFilesystem(ctx context.Context, request *types
 	metrics.RecordWorkerStartupPhase("checkpoint_filesystem_restore", duration, request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 	if err != nil {
 		log.Error().Err(err).Str("container_id", request.ContainerId).Str("checkpoint_id", request.Checkpoint.CheckpointId).Msg("failed to copy checkpoint directory")
-		return checkpointFilesystemRestoreResult{err: err}
+		return err
 	}
 
 	log.Info().Str("container_id", request.ContainerId).Str("checkpoint_id", request.Checkpoint.CheckpointId).Dur("duration", duration).Msg("checkpoint filesystem restored")
 	if outputLogger != nil {
 		outputLogger.Info(fmt.Sprintf("Checkpoint filesystem restored in %s\n", duration.Round(time.Millisecond)))
 	}
-	return checkpointFilesystemRestoreResult{}
+	return nil
 }
 
 func applyCheckpointRuntimeEnvironmentOverrides(env []string, request *types.ContainerRequest, processArgs []string) []string {
@@ -1341,15 +1337,24 @@ func (s *Worker) reportCheckpointRequiredContent(request *types.ContainerRequest
 // shouldCreateCheckpoint checks if a checkpoint should be created for a given container
 // NOTE: this currently only works for deployments since functions can run multiple containers
 func (s *Worker) shouldCreateCheckpoint(request *types.ContainerRequest) bool {
-	if !s.IsCRIUAvailable(request.GpuCount) || !request.CheckpointEnabled {
+	if request == nil || !s.IsCRIUAvailable(request.GpuCount) || !request.CheckpointEnabled {
 		return false
 	}
+	return !hasAvailableCheckpoint(request)
+}
 
-	if request.Checkpoint != nil && request.Checkpoint.Status == string(types.CheckpointStatusAvailable) {
-		return false
-	}
+func hasAvailableCheckpoint(request *types.ContainerRequest) bool {
+	return request != nil && request.Checkpoint != nil &&
+		request.Checkpoint.Status == string(types.CheckpointStatusAvailable)
+}
 
-	return true
+func (s *Worker) supportsCheckpointRestore(request *types.ContainerRequest, rt runtime.Runtime) bool {
+	return request != nil && rt != nil && rt.Capabilities().CheckpointRestore &&
+		s.IsCRIUAvailable(request.GpuCount)
+}
+
+func (s *Worker) canRestoreCheckpoint(request *types.ContainerRequest, rt runtime.Runtime) bool {
+	return s.supportsCheckpointRestore(request, rt) && hasAvailableCheckpoint(request)
 }
 
 type checkpointCreateState struct {
@@ -1363,8 +1368,49 @@ type checkpointCreateState struct {
 	deferredStop             *stopContainerEvent
 }
 
+func (state *checkpointCreateState) deferStop(event stopContainerEvent) bool {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if !state.active || state.containerID != event.ContainerId {
+		return false
+	}
+	if state.deferredStop == nil {
+		deferred := event
+		state.deferredStop = &deferred
+		select {
+		case state.stopReady <- struct{}{}:
+		default:
+		}
+	} else {
+		state.deferredStop.Kill = state.deferredStop.Kill || event.Kill
+	}
+	return true
+}
+
+func (state *checkpointCreateState) markTerminal(containerID string) bool {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if !state.active || state.containerID != containerID || state.deferredStop == nil {
+		return false
+	}
+	state.terminateAfterCheckpoint = true
+	return true
+}
+
 func checkpointCreateKey(request *types.ContainerRequest) string {
 	return fmt.Sprintf("%s:%s", request.WorkspaceId, request.StubId)
+}
+
+func (s *Worker) loadCheckpointCreateState(request *types.ContainerRequest) (*checkpointCreateState, bool) {
+	if request == nil {
+		return nil, false
+	}
+	value, ok := s.checkpointCreateLocks.Load(checkpointCreateKey(request))
+	if !ok {
+		return nil, false
+	}
+	state, ok := value.(*checkpointCreateState)
+	return state, ok
 }
 
 func (s *Worker) acquireCheckpointCreateLock(request *types.ContainerRequest) (*checkpointCreateState, bool) {
@@ -1391,31 +1437,13 @@ func (s *Worker) deferStopForCheckpoint(instance *ContainerInstance, kill bool) 
 
 	request := instance.Request
 	event := stopContainerEvent{ContainerId: request.ContainerId, Kill: kill}
-	value, ok := s.checkpointCreateLocks.Load(checkpointCreateKey(request))
+	state, ok := s.loadCheckpointCreateState(request)
 	if !ok {
 		return false
 	}
-	state, ok := value.(*checkpointCreateState)
-	if !ok {
+	if !state.deferStop(event) {
 		return false
 	}
-
-	state.mu.Lock()
-	if !state.active || state.containerID != event.ContainerId {
-		state.mu.Unlock()
-		return false
-	}
-	if state.deferredStop == nil {
-		deferred := event
-		state.deferredStop = &deferred
-		select {
-		case state.stopReady <- struct{}{}:
-		default:
-		}
-	} else {
-		state.deferredStop.Kill = state.deferredStop.Kill || event.Kill
-	}
-	state.mu.Unlock()
 
 	log.Info().
 		Str("container_id", event.ContainerId).
@@ -1429,25 +1457,12 @@ func (s *Worker) awaitTerminalAutoCheckpointStop(ctx context.Context, request *t
 	if request == nil || rt == nil || rt.Name() != types.ContainerRuntimeRunc.String() {
 		return false
 	}
-	value, ok := s.checkpointCreateLocks.Load(checkpointCreateKey(request))
-	if !ok {
-		return false
-	}
-	state, ok := value.(*checkpointCreateState)
+	state, ok := s.loadCheckpointCreateState(request)
 	if !ok {
 		return false
 	}
 
-	markTerminal := func() bool {
-		state.mu.Lock()
-		defer state.mu.Unlock()
-		if !state.active || state.containerID != request.ContainerId || state.deferredStop == nil {
-			return false
-		}
-		state.terminateAfterCheckpoint = true
-		return true
-	}
-	if markTerminal() {
+	if state.markTerminal(request.ContainerId) {
 		return true
 	}
 	if maxWait <= 0 || !shouldAwaitTerminalCheckpointStop(request) {
@@ -1458,7 +1473,7 @@ func (s *Worker) awaitTerminalAutoCheckpointStop(ctx context.Context, request *t
 	defer timer.Stop()
 	select {
 	case <-state.stopReady:
-		return markTerminal()
+		return state.markTerminal(request.ContainerId)
 	case <-timer.C:
 		return false
 	case <-ctx.Done():
@@ -1475,14 +1490,7 @@ func shouldAwaitTerminalCheckpointStop(request *types.ContainerRequest) bool {
 }
 
 func (s *Worker) waitForTerminalAutoCheckpoint(ctx context.Context, request *types.ContainerRequest) bool {
-	if request == nil {
-		return false
-	}
-	value, ok := s.checkpointCreateLocks.Load(checkpointCreateKey(request))
-	if !ok {
-		return false
-	}
-	state, ok := value.(*checkpointCreateState)
+	state, ok := s.loadCheckpointCreateState(request)
 	if !ok {
 		return false
 	}
@@ -1507,14 +1515,7 @@ func (s *Worker) waitForTerminalAutoCheckpoint(ctx context.Context, request *typ
 }
 
 func (s *Worker) markTerminalCheckpointRuntimeStopped(request *types.ContainerRequest) {
-	if request == nil {
-		return
-	}
-	value, ok := s.checkpointCreateLocks.Load(checkpointCreateKey(request))
-	if !ok {
-		return
-	}
-	state, ok := value.(*checkpointCreateState)
+	state, ok := s.loadCheckpointCreateState(request)
 	if !ok {
 		return
 	}

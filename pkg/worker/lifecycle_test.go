@@ -1367,7 +1367,7 @@ func TestCheckpointFilesystemRestorePreparesInitialUpperLayer(t *testing.T) {
 	restore := worker.startCheckpointFilesystemRestore(request, nil)
 	t.Cleanup(restore.cleanup)
 
-	require.NoError(t, restore.wait().err)
+	require.NoError(t, restore.wait())
 	data, err := os.ReadFile(filepath.Join(restore.upperPath, "state", "ready"))
 	require.NoError(t, err)
 	require.Equal(t, "yes", string(data))
@@ -1385,7 +1385,7 @@ func TestCheckpointFilesystemRestoreDiscardRemovesPartialUpperLayer(t *testing.T
 		overlayRoot: overlayRoot,
 		done:        done,
 		cancel:      cancel,
-		result:      checkpointFilesystemRestoreResult{err: assert.AnError},
+		err:         assert.AnError,
 	}
 
 	require.NoError(t, restore.discard())
