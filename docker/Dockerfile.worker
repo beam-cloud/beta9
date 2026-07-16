@@ -285,7 +285,7 @@ EOT
 
 RUN mkdir -p /etc/criu && printf '%s\n' \
     'compress-region 262144' \
-    'decompress-threads 32' \
+    'decompress-threads 0' \
     > /etc/criu/runc.conf
 
 # Hard-disable any AMDGPU plugin that might exist from base layers or future package updates
