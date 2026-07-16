@@ -125,6 +125,7 @@ type agentConfigWorker struct {
 	HostNetwork                bool                       `json:"hostNetwork"`
 	UseHostResolvConf          bool                       `json:"useHostResolvConf"`
 	ContainerRuntime           string                     `json:"containerRuntime"`
+	ContainerResourceLimits    agentConfigResourceLimits  `json:"containerResourceLimits"`
 	CacheEnabled               bool                       `json:"cacheEnabled"`
 	TerminationGracePeriod     int                        `json:"terminationGracePeriod"`
 	ContainerLogLinesPerHour   int                        `json:"containerLogLinesPerHour"`
@@ -132,6 +133,10 @@ type agentConfigWorker struct {
 	DefaultWorkerMemoryRequest int64                      `json:"defaultWorkerMemoryRequest"`
 	Failover                   agentConfigWorkerFailover  `json:"failover"`
 	Pools                      map[string]agentConfigPool `json:"pools"`
+}
+
+type agentConfigResourceLimits struct {
+	CPUAffinityEnforced bool `json:"cpuAffinityEnforced"`
 }
 
 type agentConfigWorkerFailover struct {
@@ -275,9 +280,12 @@ func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) a
 			ContainerCostHook:        costHookConfigForSlot(bootstrap, poolMode),
 		},
 		Worker: agentConfigWorker{
-			HostNetwork:                true,
-			UseHostResolvConf:          true,
-			ContainerRuntime:           poolRuntime,
+			HostNetwork:       true,
+			UseHostResolvConf: true,
+			ContainerRuntime:  poolRuntime,
+			ContainerResourceLimits: agentConfigResourceLimits{
+				CPUAffinityEnforced: envBool(types.AgentCPUAffinityEnforcedEnv),
+			},
 			CacheEnabled:               true,
 			TerminationGracePeriod:     30,
 			ContainerLogLinesPerHour:   6000,
