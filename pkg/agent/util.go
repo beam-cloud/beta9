@@ -25,8 +25,19 @@ func firstNonZeroUint32(values ...uint32) uint32 {
 }
 
 func envBool(name string) bool {
+	return envBoolDefault(name, false)
+}
+
+func envBoolDefault(name string, defaultValue bool) bool {
 	value := strings.ToLower(strings.TrimSpace(os.Getenv(name)))
-	return value == "1" || value == "true" || value == "yes" || value == "on"
+	switch value {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return defaultValue
+	}
 }
 
 func nextBackoff(current, max time.Duration) time.Duration {
