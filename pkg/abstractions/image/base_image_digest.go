@@ -2,6 +2,8 @@ package image
 
 import (
 	"context"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -10,6 +12,8 @@ import (
 )
 
 const baseImageDigestCacheTTL = 5 * time.Minute
+
+var dockerfileFromLinePattern = regexp.MustCompile(`(?i)^([ \t]*FROM[ \t]+(?:--[^ \t\r\n]+[ \t]+)*)([^ \t\r\n]+)([^\r\n]*)(\r?\n)?$`)
 
 type baseImageDigestCacheEntry struct {
 	digest    string
@@ -48,6 +52,85 @@ func (is *ContainerImageService) resolveBaseImageDigest(ctx context.Context, opt
 	if shared {
 		log.Debug().Str("source_image", sourceImage).Msg("resolved base image digest from shared lookup")
 	}
+}
+
+func pinImageRefToDigest(imageRef, digest string) string {
+	if at := strings.LastIndex(imageRef, "@"); at >= 0 {
+		return imageRef[:at] + "@" + digest
+	}
+
+	lastSlash := strings.LastIndex(imageRef, "/")
+	if colon := strings.LastIndex(imageRef, ":"); colon > lastSlash {
+		imageRef = imageRef[:colon]
+	}
+	return imageRef + "@" + digest
+}
+
+func pinDockerfileFromDigests(dockerfile string, resolve func(string) string) (string, *BaseImage) {
+	lines := strings.SplitAfter(dockerfile, "\n")
+	stages := make(map[string]struct{})
+	var firstBase *BaseImage
+
+	for i, line := range lines {
+		matches := dockerfileFromLinePattern.FindStringSubmatch(line)
+		if matches == nil {
+			continue
+		}
+
+		imageRef := matches[2]
+		rest := matches[3]
+		fields := strings.Fields(rest)
+		alias := ""
+		if len(fields) >= 2 && strings.EqualFold(fields[0], "AS") {
+			alias = fields[1]
+		}
+
+		_, isStage := stages[strings.ToLower(imageRef)]
+		literalBase := !isStage && !strings.EqualFold(imageRef, "scratch") && !strings.ContainsAny(imageRef, "$\\")
+		if literalBase {
+			base, err := ExtractImageNameAndTag(imageRef)
+			if err == nil {
+				digest := base.Digest
+				if digest == "" {
+					digest = resolve(imageRef)
+				}
+				if digest != "" {
+					pinnedRef := pinImageRefToDigest(imageRef, digest)
+					lines[i] = matches[1] + pinnedRef + rest + matches[4]
+					pinnedBase, err := ExtractImageNameAndTag(pinnedRef)
+					if err == nil && firstBase == nil {
+						firstBase = &pinnedBase
+					}
+				}
+			}
+		}
+
+		if alias != "" {
+			stages[strings.ToLower(alias)] = struct{}{}
+		}
+	}
+
+	return strings.Join(lines, ""), firstBase
+}
+
+func (is *ContainerImageService) pinDockerfileBaseImages(ctx context.Context, opts *BuildOpts) {
+	if opts == nil || opts.Dockerfile == "" {
+		return
+	}
+
+	dockerfile, base := pinDockerfileFromDigests(opts.Dockerfile, func(imageRef string) string {
+		digest, _ := is.baseImageDigests.resolve(ctx, imageRef, opts.BaseImageCreds, is.inspectBaseImageDigest)
+		return digest
+	})
+	opts.Dockerfile = dockerfile
+	if base == nil {
+		return
+	}
+
+	opts.BaseImageRegistry = base.Registry
+	opts.BaseImageName = base.Repo
+	opts.BaseImageTag = base.Tag
+	opts.BaseImageDigest = base.Digest
 }
 
 func (c *baseImageDigestCache) resolve(

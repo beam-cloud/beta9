@@ -63,6 +63,7 @@ const (
 	AgentDownloadURLEnv             = "BEAM_AGENT_URL"
 	AgentInstallDockerEnv           = "BEAM_AGENT_INSTALL_DOCKER"
 	AgentStorageModeEnv             = "BEAM_AGENT_WORKSPACE_STORAGE_MODE"
+	AgentCPUAffinityEnforcedEnv     = "BEAM_AGENT_CPU_AFFINITY_ENFORCED"
 	AgentWorkerPlatformEnv          = "BEAM_AGENT_WORKER_PLATFORM"
 	AgentVerboseEnv                 = "BEAM_AGENT_VERBOSE"
 	AgentNoColorEnv                 = "NO_COLOR"

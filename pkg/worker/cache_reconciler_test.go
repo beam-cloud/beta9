@@ -229,6 +229,8 @@ func newCheckpointCacheForTest(t *testing.T, ctx context.Context) (*cache.Server
 	t.Helper()
 
 	cfg := testCacheManagerConfig(t.TempDir()).Cache
+	cfg.Server.PageSizeBytes = 1024 * 1024
+	cfg.Server.DiskCacheEvictWatermarkPct = 1
 	metadataStore := cache.NewMockCacheMetadataStore()
 	server, err := cache.NewServerWithOptions(ctx, cfg, "test", cache.WithServerMetadataStore(metadataStore), cache.WithServerHostID("local-host"))
 	require.NoError(t, err)
@@ -896,7 +898,7 @@ func TestCheckpointMaterializationLockCancellationIsSkipped(t *testing.T) {
 	require.False(t, reconcileStatusIsFailure(status))
 }
 
-func TestEnsureCheckpointMaterializedReportsAlreadyLocalCheckpoint(t *testing.T) {
+func TestEnsureCheckpointMaterializedDoesNotReportAlreadyLocalCheckpoint(t *testing.T) {
 	fake := &fakeEventRepo{}
 	metadata := &claimedMetadataStore{}
 	reporter := newTestReporter(fake)
@@ -929,13 +931,9 @@ func TestEnsureCheckpointMaterializedReportsAlreadyLocalCheckpoint(t *testing.T)
 	require.Equal(t, filepath.Join(checkpointRoot, checkpointID), path)
 	require.Empty(t, worker.cacheManager.reconcileNow)
 
-	require.Equal(t, 1, metadata.recent)
-	require.Equal(t, []string{"default"}, metadata.recentLocalities)
-	require.Len(t, fake.pushed, 1)
-	require.Equal(t, "default", fake.pushed[0].Locality)
-	require.Equal(t, checkpoint.CacheHash, fake.pushed[0].Items[0].Hash)
-	require.Equal(t, checkpoint.CheckpointId, fake.pushed[0].Items[0].CheckpointID)
-	require.Equal(t, checkpoint.OriginKey, fake.pushed[0].Items[0].Source)
+	require.Zero(t, metadata.recent)
+	require.Empty(t, metadata.recentLocalities)
+	require.Empty(t, fake.pushed)
 }
 
 func TestEnsureCheckpointMaterializedRestoresFromEmbeddedCache(t *testing.T) {
@@ -977,6 +975,7 @@ func TestEnsureCheckpointMaterializedRestoresFromEmbeddedCache(t *testing.T) {
 
 	require.NoError(t, err)
 	require.True(t, checkpointMaterialized(path))
+	require.NoFileExists(t, filepath.Join(checkpointRoot, checkpointID+checkpointArchiveExtension))
 	require.Len(t, worker.cacheManager.reconcileNow, 1)
 
 	require.Len(t, fake.pushed, 1)
@@ -1018,6 +1017,7 @@ func TestReconcileCheckpointExtractsEmbeddedCacheArchive(t *testing.T) {
 
 	require.Equal(t, types.CacheAuditStatusMaterialized, status)
 	require.True(t, checkpointMaterialized(filepath.Join(checkpointRoot, checkpointID)))
+	require.NoFileExists(t, filepath.Join(checkpointRoot, checkpointID+checkpointArchiveExtension))
 }
 
 func TestReconcileCheckpointIgnoresSuccessBackoffWhenExtractedPayloadMissing(t *testing.T) {
@@ -1070,6 +1070,7 @@ func TestRequiredContentReportedByOneWorkerReconcilesCheckpointOnPeerInLocality(
 
 	cfg := testCacheManagerConfig(t.TempDir()).Cache
 	cfg.Client.NTopHosts = 2
+	cfg.Server.DiskCacheEvictWatermarkPct = 1
 	metadata := &localityRecentMetadataStore{
 		MockCacheMetadataStore: cache.NewMockCacheMetadataStore(),
 		stubs:                  map[string][]cache.RecentStub{},

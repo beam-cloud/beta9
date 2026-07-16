@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/runtime"
@@ -18,11 +19,50 @@ import (
 )
 
 const (
-	minNvidiaDriverVersion     = 570
-	gvisorCheckpointAttempts   = 4
-	gvisorCheckpointRetryDelay = 250 * time.Millisecond
-	maxRestoreStderrBytes      = 4096
+	minNvidiaDriverVersion           = 570
+	gvisorCheckpointAttempts         = 4
+	gvisorCheckpointRetryDelay       = 250 * time.Millisecond
+	nvidiaRestoreAttempts            = 2
+	nvidiaRestoreRetryDelay          = 250 * time.Millisecond
+	maxRestoreStderrBytes            = 4096
+	maxRestoreCaptureBytes           = 64 << 10
+	checkpointCloseExternalTCPMarker = "beam-close-external-tcp"
 )
+
+type restoreOutputCapture struct {
+	mu         sync.Mutex
+	downstream io.Writer
+	capturing  bool
+	buf        strings.Builder
+}
+
+func newRestoreOutputCapture(downstream io.Writer) *restoreOutputCapture {
+	return &restoreOutputCapture{downstream: downstream, capturing: true}
+}
+
+func (w *restoreOutputCapture) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	if w.capturing && w.buf.Len() < maxRestoreCaptureBytes {
+		remaining := maxRestoreCaptureBytes - w.buf.Len()
+		if len(p) < remaining {
+			remaining = len(p)
+		}
+		_, _ = w.buf.Write(p[:remaining])
+	}
+	w.mu.Unlock()
+
+	if w.downstream != nil {
+		return w.downstream.Write(p)
+	}
+	return len(p), nil
+}
+
+func (w *restoreOutputCapture) stop() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.capturing = false
+	return w.buf.String()
+}
 
 type ErrCRIURestoreFailed struct {
 	Stderr string
@@ -59,9 +99,10 @@ func InitializeNvidiaCRIU(ctx context.Context, config types.CRIUConfig, checkpoi
 	return &NvidiaCRIUManager{checkpointRoot: checkpointRoot, gpuCnt: gpuCnt, available: available}, nil
 }
 
-func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, rt runtime.Runtime, checkpointId string, request *types.ContainerRequest) (string, error) {
+func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, rt runtime.Runtime, checkpointId string, request *types.ContainerRequest, terminateAfterCheckpoint bool) (string, error) {
 	checkpointPath := filepath.Join(c.checkpointRoot, checkpointId)
 	workDir := filepath.Join(types.AgentTmpPath, checkpointId)
+	terminateAfterCheckpoint = terminateAfterCheckpoint && rt.Name() == types.ContainerRuntimeRunc.String()
 
 	// Setup work directory for checkpoint files
 	if err := os.MkdirAll(workDir, 0755); err != nil {
@@ -71,10 +112,10 @@ func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, rt runtime.Run
 	checkpointOpts := &runtime.CheckpointOpts{
 		ImagePath:    checkpointPath,
 		WorkDir:      workDir, // Required for checkpoint files (logs, cache, sockets)
-		LeaveRunning: true,    // Keep container running (hot checkpoint)
-		AllowOpenTCP: true,    // Allow open TCP connections
-		SkipInFlight: true,    // Skip in-flight TCP packets
-		LinkRemap:    true,    // Enable link remapping for file descriptors
+		LeaveRunning: !terminateAfterCheckpoint,
+		AllowOpenTCP: true, // Allow open TCP connections
+		SkipInFlight: true, // Skip in-flight TCP packets
+		LinkRemap:    true, // Enable link remapping for file descriptors
 	}
 
 	attempts := 1
@@ -146,6 +187,12 @@ func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, rt runtime.Ru
 	imagePath := filepath.Join(c.checkpointRoot, opts.checkpoint.CheckpointId)
 	workDir := filepath.Join(types.AgentTmpPath, opts.checkpoint.CheckpointId)
 	preserveOpenTCP := shouldPreservePodTCPOnRestore(opts)
+	if preserveOpenTCP {
+		markerPath := filepath.Join(imagePath, checkpointCloseExternalTCPMarker)
+		if err := os.WriteFile(markerPath, nil, 0600); err != nil {
+			return -1, fmt.Errorf("failed to configure selective TCP restore: %w", err)
+		}
+	}
 
 	// Setup work directory for restore files
 	err := c.setupRestoreWorkDir(workDir)
@@ -153,34 +200,46 @@ func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, rt runtime.Ru
 		return -1, fmt.Errorf("failed to setup restore work directory: %w", err)
 	}
 
-	// Create a buffer to capture stderr while still forwarding to the original writer
-	var stderrBuf strings.Builder
-	var outputWriter io.Writer = &stderrBuf
-
-	if opts.outputWriter != nil {
-		outputWriter = io.MultiWriter(opts.outputWriter, &stderrBuf)
+	attempts := 1
+	if rt.Name() == types.ContainerRuntimeRunc.String() {
+		attempts = nvidiaRestoreAttempts
 	}
 
-	// Restore with all required options for proper CUDA restore
-	exitCode, err := rt.Restore(ctx, opts.request.ContainerId, &runtime.RestoreOpts{
-		ImagePath:    imagePath,       // Path to checkpoint image
-		WorkDir:      workDir,         // Working directory for restore files
-		BundlePath:   bundlePath,      // Container bundle path
-		OutputWriter: outputWriter,    // Output writer for logs
-		Started:      opts.started,    // Channel to signal process start
-		AllowOpenTCP: preserveOpenTCP, // Preserve pod TCP connections across restore
-		TCPClose:     !preserveOpenTCP,
-	})
+	var exitCode int
+	for attempt := 1; attempt <= attempts; attempt++ {
+		outputCapture := newRestoreOutputCapture(opts.outputWriter)
 
-	if err != nil {
-		stderr := stderrBuf.String()
-
-		// Check if this is a CRIU restore failure by looking for specific error patterns in stderr
-		if strings.Contains(stderr, "criu failed") && strings.Contains(stderr, "type RESTORE") {
-			return -1, &ErrCRIURestoreFailed{Stderr: stderr}
+		exitCode, err = rt.Restore(ctx, opts.request.ContainerId, &runtime.RestoreOpts{
+			ImagePath:    imagePath,
+			WorkDir:      workDir,
+			BundlePath:   bundlePath,
+			OutputWriter: outputCapture,
+			Started:      opts.started,
+			AllowOpenTCP: preserveOpenTCP,
+			TCPClose:     !preserveOpenTCP,
+		})
+		stderr := outputCapture.stop()
+		if err == nil {
+			break
 		}
 
-		return exitCode, restoreFailureError(rt.Name(), err, stderr)
+		restoreErr := classifyRestoreError(rt.Name(), err, stderr)
+		if attempt == attempts || !IsCRIURestoreError(restoreErr) {
+			return exitCode, restoreErr
+		}
+		if cleanupErr := deleteFailedRestoreRuntimeContainer(ctx, rt, opts.request.ContainerId); cleanupErr != nil {
+			return exitCode, fmt.Errorf("%w; failed to clean up before retry: %v", restoreErr, cleanupErr)
+		}
+
+		log.Warn().
+			Err(restoreErr).
+			Str("runtime", rt.Name()).
+			Str("checkpoint_id", opts.checkpoint.CheckpointId).
+			Int("attempt", attempt).
+			Msg("retrying checkpoint restore after CRIU failure")
+		if err := waitNvidiaRestoreRetry(ctx); err != nil {
+			return exitCode, err
+		}
 	}
 
 	log.Info().
@@ -191,6 +250,25 @@ func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, rt runtime.Ru
 		Msg("checkpoint restored successfully")
 
 	return exitCode, nil
+}
+
+func classifyRestoreError(runtimeName string, err error, stderr string) error {
+	if strings.Contains(stderr, "criu failed") && strings.Contains(stderr, "type RESTORE") {
+		return &ErrCRIURestoreFailed{Stderr: stderr}
+	}
+	return restoreFailureError(runtimeName, err, stderr)
+}
+
+func waitNvidiaRestoreRetry(ctx context.Context) error {
+	timer := time.NewTimer(nvidiaRestoreRetryDelay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func shouldPreservePodTCPOnRestore(opts *RestoreOpts) bool {

@@ -107,13 +107,16 @@ func (s *Worker) handleStopContainerArgs(stopArgs types.StopContainerArgs, sourc
 
 // stopContainer stops a container. When force is true, a SIGKILL signal is sent to the container.
 func (s *Worker) stopContainer(containerId string, kill bool) error {
-	log.Info().Str("container_id", containerId).Msg("stopping container")
-
 	instance, exists := s.containerInstances.Get(containerId)
 	if !exists {
 		log.Info().Str("container_id", containerId).Msg("container not found")
 		return nil
 	}
+	if s.deferStopForCheckpoint(instance, kill) {
+		return nil
+	}
+
+	log.Info().Str("container_id", containerId).Msg("stopping container")
 
 	signal := syscall.SIGTERM
 	if kill {
@@ -170,6 +173,11 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 	}
 
 	s.containerLock.Lock()
+	if instance, exists := s.containerInstances.Get(containerId); exists {
+		instance.CPUSet = ""
+		instance.RestoreCPUAffinityDeferred = false
+		s.containerInstances.Set(containerId, instance)
+	}
 
 	// De-allocate GPU devices so they are available for new containers
 	if request.Gpu != "" {
@@ -294,6 +302,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	}
 	if existing, exists := s.containerInstances.Get(containerId); exists {
 		instance.StopReason = existing.StopReason
+		instance.CPUSet = existing.CPUSet
 	}
 	s.containerInstances.Set(containerId, instance)
 
@@ -325,6 +334,17 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		request.CheckpointEnabled = false
 		request.Checkpoint = nil
 	}
+
+	var filesystemRestore *checkpointFilesystemRestore
+	if s.canRestoreCheckpoint(request, s.runtime) {
+		filesystemRestore = s.startCheckpointFilesystemRestore(request, outputLogger)
+	}
+	filesystemRestoreHandedOff := false
+	defer func() {
+		if !filesystemRestoreHandedOff {
+			filesystemRestore.cleanup()
+		}
+	}()
 
 	var imageLoaded bool
 	startup.Go(func() error {
@@ -387,12 +407,13 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 	startupPortBindings := startupPortBindingsForRequest(request, requestedPorts, bindPorts)
 	opts := &ContainerOptions{
-		BundlePath:          bundlePath,
-		HostBindPort:        bindPorts[0],
-		BindPorts:           bindPorts,
-		StartupPortBindings: startupPortBindings,
-		InitialSpec:         initialBundleSpec,
-		StartupStartedAt:    startupStartedAt,
+		BundlePath:                  bundlePath,
+		HostBindPort:                bindPorts[0],
+		BindPorts:                   bindPorts,
+		StartupPortBindings:         startupPortBindings,
+		InitialSpec:                 initialBundleSpec,
+		StartupStartedAt:            startupStartedAt,
+		CheckpointFilesystemRestore: filesystemRestore,
 	}
 
 	phaseStart = time.Now()
@@ -432,6 +453,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		// Start the container
 		phaseStart = time.Now()
 		portsHandedOff = true
+		filesystemRestoreHandedOff = true
 		s.containerWg.Add(1)
 		go s.spawn(request, spec, outputLogger, opts)
 		metrics.RecordWorkerStartupPhase("spawn_enqueue", time.Since(phaseStart), request, nil)
@@ -480,7 +502,7 @@ func (s *Worker) setWorkerAddress(ctx context.Context, request *types.ContainerR
 func (s *Worker) loadContainerImage(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger) (time.Duration, bool, error) {
 	outputLogger.Info(fmt.Sprintf("Loading image <%s>...\n", request.ImageId))
 
-	elapsed, err := s.pullLazyWithMetrics(ctx, request, "pull_lazy")
+	elapsed, err := s.pullLazyWithMetrics(ctx, request, "pull_lazy", outputLogger)
 	if err == nil {
 		outputLogger.Info(fmt.Sprintf("Loaded image <%s>, took: %s\n", request.ImageId, elapsed))
 		return elapsed, true, nil
@@ -500,8 +522,12 @@ func (s *Worker) loadContainerImage(ctx context.Context, request *types.Containe
 	if err := s.buildOrPullBaseImageWithMetrics(ctx, request, outputLogger); err != nil {
 		return elapsed, false, err
 	}
+	if !requiresPostBuildImageMaterialization(request, s.config.ImageService.ClipVersion) {
+		outputLogger.Info(fmt.Sprintf("Image <%s> is ready\n", request.ImageId))
+		return 0, true, nil
+	}
 
-	elapsed, err = s.pullLazyWithMetrics(ctx, request, "pull_lazy_after_build")
+	elapsed, err = s.pullLazyWithMetrics(ctx, request, "pull_lazy_after_build", outputLogger)
 	if err != nil {
 		return elapsed, false, err
 	}
@@ -510,9 +536,13 @@ func (s *Worker) loadContainerImage(ctx context.Context, request *types.Containe
 	return elapsed, true, nil
 }
 
-func (s *Worker) pullLazyWithMetrics(ctx context.Context, request *types.ContainerRequest, phase string) (time.Duration, error) {
+func requiresPostBuildImageMaterialization(request *types.ContainerRequest, clipVersion uint32) bool {
+	return clipVersion != uint32(types.ClipVersion2) || !request.IsBuildRequest()
+}
+
+func (s *Worker) pullLazyWithMetrics(ctx context.Context, request *types.ContainerRequest, phase string, outputLogger *slog.Logger) (time.Duration, error) {
 	phaseStart := time.Now()
-	elapsed, err := s.imageClient.PullLazy(ctx, request)
+	elapsed, err := s.imageClient.PullLazy(ctx, request, outputLogger)
 	metrics.RecordWorkerStartupPhase(phase, time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 	spanID := types.ContainerLifecycleImageLoad
 	if phase != "pull_lazy" && phase != "pull_lazy_after_build" {
@@ -783,6 +813,19 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		return nil, fmt.Errorf("container <%s> has empty process args for stub <%s> type <%s>", request.ContainerId, request.StubId, request.Stub.Type)
 	}
 
+	cpuAffinity := ""
+	if s.containerInstances != nil {
+		if instance, exists := s.containerInstances.Get(request.ContainerId); exists {
+			cpuAffinity = instance.CPUSet
+		}
+	}
+	if cpuAffinity != "" {
+		if spec.Linux.Resources.CPU == nil {
+			spec.Linux.Resources.CPU = &specs.LinuxCPU{}
+		}
+		spec.Linux.Resources.CPU.Cpus = cpuAffinity
+	}
+
 	throttlingEnabled := !request.IsBuildRequest() && !request.RequiresGPU()
 	cpuEnforced := s.config.Worker.ContainerResourceLimits.CPUEnforced
 	memoryEnforced := s.config.Worker.ContainerResourceLimits.MemoryEnforced
@@ -792,11 +835,13 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 			return nil, err
 		}
 		if cpuEnforced && resources.CPU != nil {
+			resources.CPU.Cpus = cpuAffinity
 			if s.deferCPUThrottle(request, resources.CPU) {
 				startupCPU := *resources.CPU
 				startupCPU.Quota = nil
 				startupCPU.Burst = nil
 				startupCPU.Period = nil
+				startupCPU.Cpus = ""
 				spec.Linux.Resources.CPU = &startupCPU
 			} else {
 				spec.Linux.Resources.CPU = resources.CPU
@@ -1131,6 +1176,12 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	// Create overlayfs for container
 	overlay := s.createOverlay(request, opts.BundlePath)
+	restoreFilesystemCleanupNeeded := opts.CheckpointFilesystemRestore != nil
+	defer func() {
+		if restoreFilesystemCleanupNeeded {
+			opts.CheckpointFilesystemRestore.cleanup()
+		}
+	}()
 
 	containerInstance, exists := s.containerInstances.Get(containerId)
 	if !exists {
@@ -1150,6 +1201,16 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	// Setup container overlay filesystem
 	var err error
+	if opts.CheckpointFilesystemRestore != nil {
+		if restoreErr := opts.CheckpointFilesystemRestore.wait(); restoreErr != nil {
+			log.Debug().Err(restoreErr).Str("container_id", containerId).Msg("checkpoint filesystem preparation did not complete")
+			if err := opts.CheckpointFilesystemRestore.discard(); err != nil {
+				log.Error().Err(err).Str("container_id", containerId).Msg("failed to discard partial checkpoint filesystem")
+				return
+			}
+			restoreFilesystemCleanupNeeded = false
+		}
+	}
 	phaseStart := time.Now()
 	err = containerInstance.Overlay.Setup()
 	metrics.RecordWorkerStartupPhase("overlay_setup", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
@@ -1159,6 +1220,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		return
 	}
 	defer containerInstance.Overlay.Cleanup()
+	restoreFilesystemCleanupNeeded = false
 
 	spec.Root.Readonly = false
 	spec.Root.Path = containerInstance.Overlay.TopLayerPath()
@@ -1298,11 +1360,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	request.ConfigPath = configPath
 
 	outputWriter := containerInstance.OutputWriter
-	restoringCheckpoint := request.Checkpoint != nil &&
-		request.Checkpoint.Status == string(types.CheckpointStatusAvailable) &&
-		containerInstance.Runtime != nil &&
-		containerInstance.Runtime.Capabilities().CheckpointRestore &&
-		s.IsCRIUAvailable(request.GpuCount)
+	restoringCheckpoint := s.canRestoreCheckpoint(request, containerInstance.Runtime)
 
 	// Log metrics
 	go s.workerUsageMetrics.EmitContainerUsage(ctx, request)
@@ -1410,7 +1468,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		s.setupOOMWatcher(ctx, containerId, pid, spec, request, outputLogger, &isOOMKilled)
 	}()
 
-	exitCode, _ = s.runContainer(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan, opts.StartupStartedAt, opts.StartupPortBindings)
+	exitCode, _ = s.runContainer(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan, opts.StartupStartedAt, opts.StartupPortBindings, opts.CheckpointFilesystemRestore)
 
 	stopReason := types.StopContainerReasonUnknown
 	containerInstance, exists = s.containerInstances.Get(containerId)
@@ -1524,7 +1582,7 @@ func eventStopReason(stopReason types.StopContainerReason) string {
 	return string(stopReason)
 }
 
-func (s *Worker) runContainer(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, outputWriter *common.OutputWriter, startedChan chan int, checkpointPIDChan chan int, startupStartedAt time.Time, startupPortBindings []PortBinding) (int, error) {
+func (s *Worker) runContainer(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, outputWriter *common.OutputWriter, startedChan chan int, checkpointPIDChan chan int, startupStartedAt time.Time, startupPortBindings []PortBinding, filesystemRestore *checkpointFilesystemRestore) (int, error) {
 	instance, exists := s.containerInstances.Get(request.ContainerId)
 	if !exists {
 		return -1, fmt.Errorf("container instance not found")
@@ -1533,8 +1591,12 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 		defer s.imageClient.untrackContainer(request.ContainerId)
 	}
 
-	supportsCheckpoint := instance.Runtime.Capabilities().CheckpointRestore && s.IsCRIUAvailable(request.GpuCount)
-	restoringCheckpoint := supportsCheckpoint && request.Checkpoint != nil && request.Checkpoint.Status == string(types.CheckpointStatusAvailable)
+	supportsCheckpoint := s.supportsCheckpointRestore(request, instance.Runtime)
+	restoringCheckpoint := supportsCheckpoint && hasAvailableCheckpoint(request)
+	checkpointRestoreStarted := time.Now()
+	if filesystemRestore != nil {
+		checkpointRestoreStarted = filesystemRestore.startedAt
+	}
 	bundlePath := filepath.Dir(request.ConfigPath)
 	originalConfig, originalConfigErr := os.ReadFile(request.ConfigPath)
 	if originalConfigErr != nil {
@@ -1549,13 +1611,16 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 			if err := s.updateCheckpointRestored(request.Checkpoint.CheckpointId); err != nil {
 				log.Warn().Err(err).Str("checkpoint_id", request.Checkpoint.CheckpointId).Msg("failed to update checkpoint restore timestamp")
 			}
-			outputLogger.Info("Checkpoint found and restored")
+			duration := time.Since(checkpointRestoreStarted)
+			metrics.RecordWorkerStartupPhase("checkpoint_restore", duration, request, map[string]string{"success": "true"})
+			log.Info().Str("container_id", request.ContainerId).Str("checkpoint_id", request.Checkpoint.CheckpointId).Dur("duration", duration).Msg("checkpoint restore completed")
+			outputLogger.Info(fmt.Sprintf("Checkpoint found and restored in %s\n", duration.Round(time.Millisecond)))
 		})
 	}
 
 	startAutoCheckpoint := func() {
 		if supportsCheckpoint && request.CheckpointEnabled {
-			go s.attemptAutoCheckpoint(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan)
+			s.startAutoCheckpoint(ctx, request, outputLogger, checkpointPIDChan)
 		}
 	}
 	fallbackFromCheckpoint := func(startCheckpoint bool) {
@@ -1624,25 +1689,35 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 
 	// Handle restore from checkpoint if available
 	if restoringCheckpoint {
-		checkpointPath, err := s.ensureCheckpointMaterialized(ctx, request, request.Checkpoint)
-		if err != nil {
-			log.Error().Str("container_id", request.ContainerId).Str("checkpoint_id", request.Checkpoint.CheckpointId).Msgf("failed to materialize checkpoint: %v", err)
+		var restoreErr error
+		if filesystemRestore != nil {
+			restoreErr = filesystemRestore.wait()
 		} else {
-			err = copyDirectory(filepath.Join(checkpointPath, checkpointFsDir), filepath.Dir(request.ConfigPath), []string{})
-			if err != nil {
-				log.Error().Str("container_id", request.ContainerId).Str("checkpoint_id", request.Checkpoint.CheckpointId).Msgf("failed to copy checkpoint directory: %v", err)
-			}
+			restoreErr = s.restoreCheckpointFilesystem(ctx, request, outputLogger, filepath.Dir(request.ConfigPath))
 		}
-		if err != nil {
-			s.markCheckpointRestoreFailed(request, request.Checkpoint)
+		if restoreErr != nil {
+			// A local fetch failure does not prove the checkpoint itself is invalid.
 			if !request.Stub.Type.IsDeployment() {
 				finishRuntimeStarted()
-				return -1, err
+				return -1, restoreErr
 			}
 			fallbackFromCheckpoint(true)
 		} else {
+			if originalConfigErr == nil {
+				if err := s.deferCheckpointRestoreCPUAffinity(request, originalConfig); err != nil {
+					log.Warn().Err(err).Str("container_id", request.ContainerId).Msg("failed to defer CPU affinity for checkpoint restore")
+					if restoreErr := os.WriteFile(request.ConfigPath, originalConfig, 0644); restoreErr != nil {
+						finishRuntimeStarted()
+						return -1, errors.Join(err, fmt.Errorf("restore constrained container config: %w", restoreErr))
+					}
+				}
+			}
 			runtimeStart = time.Now()
+			phaseStarted := time.Now()
 			exitCode, restored, restoreStarted, err := s.attemptRestoreCheckpoint(ctx, request, outputLogger, outputWriter, runtimeStartedChan, checkpointPIDChan)
+			runtimeRestoreDuration := time.Since(phaseStarted)
+			metrics.RecordWorkerStartupPhase("checkpoint_runtime_restore", runtimeRestoreDuration, request, map[string]string{"success": fmt.Sprintf("%t", restored && err == nil)})
+			log.Info().Str("container_id", request.ContainerId).Str("checkpoint_id", request.Checkpoint.CheckpointId).Dur("duration", runtimeRestoreDuration).Bool("restored", restored).Err(err).Msg("checkpoint runtime restore finished")
 			if restored {
 				finishRuntimeStarted()
 				markCheckpointRestored()
@@ -1687,9 +1762,15 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 		Started:       runtimeStartedChan,
 		DockerEnabled: request.DockerEnabled,
 	})
+	terminalCheckpoint := s.waitForTerminalAutoCheckpoint(ctx, request)
 	finishRuntimeStarted()
 	if err != nil {
-		log.Warn().Str("container_id", request.ContainerId).Err(err).Msgf("error running container from bundle, exit code %d", exitCode)
+		if terminalCheckpoint {
+			log.Info().Str("container_id", request.ContainerId).Int("exit_code", exitCode).Msg("container runtime exited after terminal checkpoint")
+			err = nil
+		} else {
+			log.Warn().Str("container_id", request.ContainerId).Err(err).Msgf("error running container from bundle, exit code %d", exitCode)
+		}
 	}
 
 	return exitCode, err
@@ -1731,6 +1812,71 @@ type restoreWaitsForExitRuntime interface {
 func runtimeRestoreWaitsForExit(rt runtime.Runtime) bool {
 	restoreRuntime, ok := rt.(restoreWaitsForExitRuntime)
 	return ok && restoreRuntime.RestoreWaitsForExit()
+}
+
+// CRIU moves CUDA restore helpers into the container cgroup. Let those helpers
+// use the worker CPU set, then restore the workload affinity before publication.
+func (s *Worker) deferCheckpointRestoreCPUAffinity(request *types.ContainerRequest, config []byte) error {
+	if request == nil || request.ConfigPath == "" || len(config) == 0 {
+		return nil
+	}
+	instance, exists := s.containerInstances.Get(request.ContainerId)
+	if !exists || instance.Runtime == nil || instance.CPUSet == "" || runtimeRestoreWaitsForExit(instance.Runtime) {
+		return nil
+	}
+	if _, ok := instance.Runtime.(containerResourceUpdater); !ok {
+		return nil
+	}
+
+	var spec specs.Spec
+	if err := json.Unmarshal(config, &spec); err != nil {
+		return fmt.Errorf("decode container config: %w", err)
+	}
+	if spec.Linux == nil || spec.Linux.Resources == nil || spec.Linux.Resources.CPU == nil || spec.Linux.Resources.CPU.Cpus == "" {
+		return nil
+	}
+
+	spec.Linux.Resources.CPU.Cpus = ""
+	updated, err := json.Marshal(&spec)
+	if err != nil {
+		return fmt.Errorf("encode container config: %w", err)
+	}
+	if err := os.WriteFile(request.ConfigPath, updated, 0644); err != nil {
+		return fmt.Errorf("write restore container config: %w", err)
+	}
+
+	instance.RestoreCPUAffinityDeferred = true
+	s.containerInstances.Set(request.ContainerId, instance)
+	return nil
+}
+
+func (s *Worker) applyDeferredCheckpointRestoreCPUAffinity(ctx context.Context, request *types.ContainerRequest) error {
+	if request == nil {
+		return nil
+	}
+	instance, exists := s.containerInstances.Get(request.ContainerId)
+	if !exists || !instance.RestoreCPUAffinityDeferred {
+		return nil
+	}
+	updater, ok := instance.Runtime.(containerResourceUpdater)
+	if !ok {
+		return fmt.Errorf("runtime %s does not support resource updates", instance.Runtime.Name())
+	}
+
+	updateCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cpuQuotaApplyTimeout)
+	defer cancel()
+	startedAt := time.Now()
+	err := updater.UpdateResources(updateCtx, request.ContainerId, &specs.LinuxResources{
+		CPU: &specs.LinuxCPU{Cpus: instance.CPUSet},
+	})
+	metrics.RecordWorkerStartupPhase("checkpoint_restore_cpu_affinity", time.Since(startedAt), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
+	if err != nil {
+		return err
+	}
+
+	instance.RestoreCPUAffinityDeferred = false
+	s.containerInstances.Set(request.ContainerId, instance)
+	return nil
 }
 
 func (s *Worker) markContainerRunning(ctx context.Context, request *types.ContainerRequest, startupStartedAt time.Time) {
@@ -1844,12 +1990,14 @@ func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath strin
 		rootPath = bundlePath
 	}
 
-	overlayPath := baseConfigPath
-	if s.useMemoryOverlay(request) {
-		overlayPath = "/dev/shm"
-	}
+	return common.NewContainerOverlay(request, rootPath, s.containerOverlayBasePath(request))
+}
 
-	return common.NewContainerOverlay(request, rootPath, overlayPath)
+func (s *Worker) containerOverlayBasePath(request *types.ContainerRequest) string {
+	if s.useMemoryOverlay(request) {
+		return "/dev/shm"
+	}
+	return baseConfigPath
 }
 
 func (s *Worker) getContainerResources(request *types.ContainerRequest) (*specs.LinuxResources, error) {

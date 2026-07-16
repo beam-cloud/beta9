@@ -348,8 +348,30 @@ func TestAgentWorkerConfigDefaultsToPrivateRunc(t *testing.T) {
 	if config.ManagedCompute != nil {
 		t.Fatal("private workers must not receive billing config")
 	}
+	if config.Worker.ContainerResourceLimits.CPUAffinityEnforced {
+		t.Fatal("agent CPU affinity must remain opt-in")
+	}
 	if config.Monitoring.ContainerCostHook != nil {
 		t.Fatal("private workers must not receive cost hook config")
+	}
+}
+
+func TestAgentWorkerConfigCanEnableCPUAffinity(t *testing.T) {
+	t.Setenv(types.AgentCPUAffinityEnforcedEnv, "true")
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := writeWorkerConfig(path, bootstrapConfig{}, &pb.AgentWorkerSlot{PoolName: "private-dev"}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(types.WorkerConfigPathEnv, path)
+	t.Setenv(types.WorkerMinimalConfigEnv, "true")
+	configManager, err := common.NewConfigManager[types.AppConfig]()
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := configManager.GetConfig()
+
+	if !config.Worker.ContainerResourceLimits.CPUAffinityEnforced {
+		t.Fatal("agent CPU affinity opt-in was not propagated to worker config")
 	}
 }
 

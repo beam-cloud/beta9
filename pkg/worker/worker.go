@@ -124,6 +124,8 @@ type ContainerInstance struct {
 	SandboxProcessManager      *goproc.GoProcClient
 	SandboxProcessManagerReady bool
 	DeferredCPUQuota           *specs.LinuxCPU
+	CPUSet                     string
+	RestoreCPUAffinityDeferred bool
 	ProcessManagerReadyOnce    sync.Once
 	ProcessManagerReadyChan    chan struct{}
 	ContainerIp                string
@@ -164,12 +166,13 @@ func (i *ContainerInstance) signalProcessManagerReadiness(ready bool) {
 }
 
 type ContainerOptions struct {
-	BundlePath          string
-	HostBindPort        int
-	BindPorts           []int
-	StartupPortBindings []PortBinding
-	InitialSpec         *specs.Spec
-	StartupStartedAt    time.Time
+	BundlePath                  string
+	HostBindPort                int
+	BindPorts                   []int
+	StartupPortBindings         []PortBinding
+	InitialSpec                 *specs.Spec
+	StartupStartedAt            time.Time
+	CheckpointFilesystemRestore *checkpointFilesystemRestore
 }
 
 type stopContainerEvent struct {
@@ -629,6 +632,7 @@ func (s *Worker) reserveContainerInstance(request *types.ContainerRequest) bool 
 		LogBuffer: common.NewLogBuffer(),
 		Request:   request,
 		Runtime:   s.runtime,
+		CPUSet:    s.allocateContainerCPUSet(request),
 	})
 
 	return true
@@ -889,8 +893,18 @@ func (s *Worker) updateContainerStatusOnce(request *types.ContainerRequest) (boo
 		go func() {
 			time.Sleep(time.Duration(s.config.Worker.TerminationGracePeriod) * time.Second)
 
-			_, exists := s.containerInstances.Get(request.ContainerId)
+			instance, exists := s.containerInstances.Get(request.ContainerId)
 			if !exists {
+				return
+			}
+			rt := instance.Runtime
+			if rt == nil {
+				rt = s.runtime
+			}
+			stateCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			needsStop := runtimeNeedsGraceKill(stateCtx, rt, request.ContainerId)
+			cancel()
+			if !needsStop {
 				return
 			}
 
@@ -913,6 +927,17 @@ func (s *Worker) updateContainerStatusOnce(request *types.ContainerRequest) (boo
 	}
 
 	return false, nil
+}
+
+func runtimeNeedsGraceKill(ctx context.Context, rt runtime.Runtime, containerID string) bool {
+	if rt == nil {
+		return false
+	}
+	state, err := rt.State(ctx, containerID)
+	if err != nil {
+		return !runtimeContainerNotFound(err)
+	}
+	return state.Status == types.RuncContainerStatusRunning
 }
 
 func (s *Worker) processStopContainerEvents() {

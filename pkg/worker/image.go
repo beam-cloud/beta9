@@ -39,6 +39,7 @@ import (
 	"github.com/opencontainers/umoci/oci/layer"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -50,6 +51,8 @@ const (
 	embeddedImageCacheWaitInterval           = 250 * time.Millisecond
 	imageArchiveLockRetryInterval            = 100 * time.Millisecond
 	maxSyncV1ArchiveDataRestoreBytes         = 512 * 1024 * 1024
+	imageLayerPrepareConcurrency             = 8
+	imageLayerProgressInterval               = 3 * time.Second
 )
 
 var (
@@ -269,7 +272,7 @@ func ociStorageInfo(meta *clipCommon.ClipArchiveMetadata) (*clipCommon.OCIStorag
 	return nil, false
 }
 
-func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequest) (time.Duration, error) {
+func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger) (time.Duration, error) {
 	startTime := time.Now()
 
 	// Refresh the recent-stub window on every container start so reconciliation
@@ -298,6 +301,16 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	}
 
 	mountOptions := c.lazyMountOptions(ctx, request, archive)
+	if archive.usesOCIStorage() {
+		mountOptions.Context = ctx
+		mountOptions.PrepareConcurrency = imageLayerPrepareConcurrency
+		mountOptions.PrepareProgress = imageLayerPrepareProgressLogger(outputLogger)
+		if err := clip.PrepareArchiveContent(mountOptions); err != nil {
+			return time.Since(startTime), err
+		}
+		mountOptions.PrepareConcurrency = 0
+		mountOptions.PrepareProgress = nil
+	}
 
 	if elapsed, ok := c.mountedImageHit(startTime, request, "clip_mounted_fuse_hit"); ok {
 		return elapsed, nil
@@ -327,6 +340,38 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	})
 
 	return time.Since(startTime), nil
+}
+
+func imageLayerPrepareProgressLogger(outputLogger *slog.Logger) func(storage.PrepareProgress) {
+	if outputLogger == nil {
+		return nil
+	}
+
+	startedAt := time.Now()
+	var mu sync.Mutex
+	var lastLog time.Time
+	return func(progress storage.PrepareProgress) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		now := time.Now()
+		if progress.Completed == 0 {
+			outputLogger.Info(fmt.Sprintf("Preparing %d image layers (%d concurrent)...\n", progress.Total, imageLayerPrepareConcurrency))
+			lastLog = now
+			return
+		}
+		if progress.Completed < progress.Total && now.Sub(lastLog) < imageLayerProgressInterval {
+			return
+		}
+
+		elapsed := now.Sub(startedAt).Round(100 * time.Millisecond)
+		if progress.Completed == progress.Total {
+			outputLogger.Info(fmt.Sprintf("Prepared %d image layers (%s) in %s\n", progress.Total, formatImageBytes(progress.Bytes), elapsed))
+		} else {
+			outputLogger.Info(fmt.Sprintf("Preparing image layers: %d/%d ready (%s, %s)\n", progress.Completed, progress.Total, formatImageBytes(progress.Bytes), elapsed))
+		}
+		lastLog = now
+	}
 }
 
 type lazyImageArchive struct {
@@ -1961,24 +2006,6 @@ func (c *ImageClient) buildahEnv(runroot, tmpdir, storageConf string) []string {
 	return env
 }
 
-// getBuildRegistryAuthArgs returns buildah authentication arguments for pushing to build registry
-func (c *ImageClient) getBuildRegistryAuthArgs(buildRegistry string, buildRegistryCredentials string) []string {
-	// For localhost, no auth needed
-	if buildRegistry == "localhost" || strings.HasPrefix(buildRegistry, "127.0.0.1") {
-		return nil
-	}
-
-	// Use explicit credentials from BuildOptions if provided (generated fresh in scheduler)
-	if buildRegistryCredentials != "" {
-		log.Info().Str("registry", buildRegistry).Msg("using build registry credentials from request")
-		return []string{"--creds", buildRegistryCredentials}
-	}
-
-	// Fall back to ambient credentials (IAM role, service account, docker config)
-	log.Info().Str("registry", buildRegistry).Msg("using ambient credentials for build registry")
-	return nil
-}
-
 // getBuildahAuthArgs returns buildah authentication arguments from user-provided credentials
 // Expects credentials in username:password format (either directly or in JSON)
 // For ECR/GCR, users should pass pre-generated tokens, not raw AWS/GCP credentials
@@ -2025,73 +2052,95 @@ func formatImageBytes(n int64) string {
 	}
 }
 
-const imageIndexProgressBucketBytes int64 = 256 * 1024 * 1024
+const (
+	imageIndexAggregateBytesBucket int64 = 1 << 30
+	imageIndexProgressInterval           = 10 * time.Second
+)
 
-func imageIndexProgressKey(progress clip.OCIIndexProgress) string {
-	if progress.LayerDigest != "" {
-		return progress.LayerDigest
-	}
-	return fmt.Sprintf("%d", progress.LayerIndex)
+type imageIndexProgressReporter struct {
+	logger           *slog.Logger
+	started          time.Time
+	processedByLayer map[string]int64
+	completedByLayer map[string]bool
+	processedBytes   int64
+	completedLayers  int
+	cachedLayers     int
+	totalLayers      int
+	lastLayerBucket  int
+	lastByteBucket   int64
+	lastReported     time.Time
 }
 
-func shouldLogImageIndexProgress(progress clip.OCIIndexProgress, buckets map[string]int64) bool {
-	key := imageIndexProgressKey(progress)
-	if progress.CompressedBytesTotal > 0 && progress.CompressedBytesProcessed > 0 {
-		bucket := progress.CompressedBytesProcessed * 10 / progress.CompressedBytesTotal
-		if bucket > 10 {
-			bucket = 10
-		}
-		if bucket <= buckets[key] {
-			return false
-		}
-		buckets[key] = bucket
-		return true
+func newImageIndexProgressReporter(logger *slog.Logger) *imageIndexProgressReporter {
+	started := time.Now()
+	return &imageIndexProgressReporter{
+		logger:           logger,
+		started:          started,
+		lastReported:     started,
+		processedByLayer: make(map[string]int64),
+		completedByLayer: make(map[string]bool),
 	}
-
-	bucket := progress.BytesProcessed / imageIndexProgressBucketBytes
-	if bucket == 0 || bucket <= buckets[key] {
-		return false
-	}
-	buckets[key] = bucket
-	return true
 }
 
-func formatImageIndexProgress(progress clip.OCIIndexProgress) string {
-	prefix := fmt.Sprintf("Indexing layer %d/%d", progress.LayerIndex, progress.TotalLayers)
-	if progress.CompressedBytesTotal > 0 && progress.CompressedBytesProcessed > 0 {
-		percent := progress.CompressedBytesProcessed * 100 / progress.CompressedBytesTotal
-		if percent > 100 {
-			percent = 100
+func (r *imageIndexProgressReporter) report(progress clip.OCIIndexProgress) {
+	if progress.TotalLayers > r.totalLayers {
+		r.totalLayers = progress.TotalLayers
+	}
+
+	key := progress.LayerDigest
+	if key == "" {
+		key = fmt.Sprintf("%d", progress.LayerIndex)
+	}
+	processed := progress.BytesProcessed
+	if progress.Stage == "completed" && progress.BytesTotal > processed {
+		processed = progress.BytesTotal
+	}
+	if processed > r.processedByLayer[key] {
+		r.processedBytes += processed - r.processedByLayer[key]
+		r.processedByLayer[key] = processed
+	}
+
+	if progress.Stage == "completed" && !r.completedByLayer[key] {
+		r.completedByLayer[key] = true
+		if progress.CompletedLayers > r.completedLayers {
+			r.completedLayers = progress.CompletedLayers
 		}
-		return fmt.Sprintf("%s... %d%% (%s/%s read, %s indexed)",
-			prefix, percent,
-			formatImageBytes(progress.CompressedBytesProcessed),
-			formatImageBytes(progress.CompressedBytesTotal),
-			formatImageBytes(progress.BytesProcessed))
+		if len(r.completedByLayer) > r.completedLayers {
+			r.completedLayers = len(r.completedByLayer)
+		}
+		if progress.Source == clip.LayerSourceIndexCache || progress.Source == clip.LayerSourceContentCache {
+			r.cachedLayers++
+		}
 	}
-	if progress.BytesProcessed > 0 {
-		return fmt.Sprintf("%s... %s indexed", prefix, formatImageBytes(progress.BytesProcessed))
+
+	layerBucket := 0
+	if r.totalLayers > 0 {
+		layerBucket = r.completedLayers * 10 / r.totalLayers
 	}
-	return prefix + "..."
+	byteBucket := r.processedBytes / imageIndexAggregateBytesBucket
+	if layerBucket <= r.lastLayerBucket && byteBucket <= r.lastByteBucket {
+		return
+	}
+	if r.completedLayers >= r.totalLayers && r.totalLayers > 0 {
+		return
+	}
+	if time.Since(r.lastReported) < imageIndexProgressInterval {
+		return
+	}
+	r.lastLayerBucket = layerBucket
+	r.lastByteBucket = byteBucket
+	r.lastReported = time.Now()
+	r.logger.Info(fmt.Sprintf("Image indexing: %d/%d layers complete, %s processed\n",
+		r.completedLayers, r.totalLayers, formatImageBytes(r.processedBytes)))
 }
 
-func formatImageIndexCompleted(progress clip.OCIIndexProgress) string {
-	indexedBytes := progress.BytesTotal
-	if indexedBytes == 0 {
-		indexedBytes = progress.BytesProcessed
+func (r *imageIndexProgressReporter) finish() {
+	cached := ""
+	if r.cachedLayers > 0 {
+		cached = fmt.Sprintf(", %d cached", r.cachedLayers)
 	}
-
-	if progress.CompressedBytesTotal > 0 && indexedBytes > 0 {
-		return fmt.Sprintf("Indexed layer %d/%d (100%%, %s read, %s indexed)",
-			progress.LayerIndex, progress.TotalLayers,
-			formatImageBytes(progress.CompressedBytesTotal),
-			formatImageBytes(indexedBytes))
-	}
-	if indexedBytes > 0 {
-		return fmt.Sprintf("Indexed layer %d/%d (%s indexed)",
-			progress.LayerIndex, progress.TotalLayers, formatImageBytes(indexedBytes))
-	}
-	return fmt.Sprintf("Indexed layer %d/%d", progress.LayerIndex, progress.TotalLayers)
+	r.logger.Info(fmt.Sprintf("Image indexed in %.1fs: %d layers, %s processed%s\n",
+		time.Since(r.started).Seconds(), r.totalLayers, formatImageBytes(r.processedBytes), cached))
 }
 
 type activeOutputWriter struct {
@@ -2112,25 +2161,29 @@ func (w *activeOutputWriter) Write(p []byte) (int, error) {
 }
 
 const buildOutputHeartbeatInterval = 15 * time.Second
-const buildahCancelGracePeriod = 2 * time.Second
+const imageCommandCancelGracePeriod = 2 * time.Second
 
-func newBuildahCommand(ctx context.Context, args []string, env []string, stdout, stderr io.Writer) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, "buildah", args...)
+func newImageCommand(ctx context.Context, command string, args []string, env []string, stdout, stderr io.Writer) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, command, args...)
 	cmd.Env = env
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.WaitDelay = buildahCancelGracePeriod
+	cmd.WaitDelay = imageCommandCancelGracePeriod
 	cmd.Cancel = func() error {
 		if cmd.Process == nil {
 			return nil
 		}
-		return terminateBuildahProcessGroup(cmd.Process.Pid)
+		return terminateImageProcessGroup(cmd.Process.Pid)
 	}
 	return cmd
 }
 
-func terminateBuildahProcessGroup(pid int) error {
+func newBuildahCommand(ctx context.Context, args []string, env []string, stdout, stderr io.Writer) *exec.Cmd {
+	return newImageCommand(ctx, "buildah", args, env, stdout, stderr)
+}
+
+func terminateImageProcessGroup(pid int) error {
 	pgid, err := syscall.Getpgid(pid)
 	if err != nil {
 		if errors.Is(err, syscall.ESRCH) {
@@ -2143,7 +2196,7 @@ func terminateBuildahProcessGroup(pid int) error {
 		return err
 	}
 
-	time.Sleep(buildahCancelGracePeriod)
+	time.Sleep(imageCommandCancelGracePeriod)
 	if err := syscall.Kill(-pgid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
 		return err
 	}
@@ -2176,21 +2229,16 @@ func startSilentOutputHeartbeat(ctx context.Context, outputLogger *slog.Logger, 
 	return cancel
 }
 
-func (c *ImageClient) createOCIImageWithProgress(ctx context.Context, outputLogger *slog.Logger, request *types.ContainerRequest, imageRef, outputPath string, checkpointMiB int64) error {
-	outputLogger.Info("Indexing image...\n")
+func (c *ImageClient) createOCIImageWithProgress(ctx context.Context, outputLogger *slog.Logger, request *types.ContainerRequest, imageRef, localLayoutPath, outputPath string, checkpointMiB int64) error {
+	outputLogger.Info(fmt.Sprintf("Indexing image (%d concurrent layers)...\n", imageLayerPrepareConcurrency))
 	progressChan := make(chan clip.OCIIndexProgress, 100)
+	reporter := newImageIndexProgressReporter(outputLogger)
 
 	var wg sync.WaitGroup
 	wg.Add(1)
 
-	// Process progress updates in goroutine. Layers index concurrently, so
-	// "starting" events arrive in bursts; per-layer byte progress and
-	// completions (with their source) are surfaced to the user as they happen.
 	go func() {
 		defer wg.Done()
-		cachedLayers := 0
-		var cachedBytes int64
-		progressBuckets := map[string]int64{}
 		for progress := range progressChan {
 			log.Debug().
 				Str("container_id", request.ContainerId).
@@ -2204,40 +2252,22 @@ func (c *ImageClient) createOCIImageWithProgress(ctx context.Context, outputLogg
 				Int64("compressed_bytes_total", progress.CompressedBytesTotal).
 				Msg("image index progress")
 
-			switch progress.Stage {
-			case "progress":
-				if !shouldLogImageIndexProgress(progress, progressBuckets) {
-					continue
-				}
-				outputLogger.Info(formatImageIndexProgress(progress) + "\n")
-			case "completed":
-				if progress.Source == clip.LayerSourceIndexCache || progress.Source == clip.LayerSourceContentCache {
-					cachedLayers++
-					cachedBytes += progress.BytesProcessed
-					continue
-				}
-				outputLogger.Info(formatImageIndexCompleted(progress) + "\n")
-			}
-		}
-		if cachedLayers > 0 {
-			if cachedBytes > 0 {
-				outputLogger.Info(fmt.Sprintf("Indexed %d cached layers (%s)\n", cachedLayers, formatImageBytes(cachedBytes)))
-			} else {
-				outputLogger.Info(fmt.Sprintf("Indexed %d cached layers\n", cachedLayers))
-			}
+			reporter.report(progress)
 		}
 	}()
 
 	// Create index-only clip archive from the OCI image
 	err := clip.CreateFromOCIImage(ctx, clip.CreateFromOCIImageOptions{
-		ImageRef:        imageRef,
-		OutputPath:      outputPath,
-		CheckpointMiB:   checkpointMiB,
-		ProgressChan:    progressChan,
-		CredProvider:    c.getCredentialProviderForImage(ctx, request.ImageId, request),
-		ContentCache:    newImageContentCache(c.cacheClient, request.ImageId, "oci-layer-build"),
-		ContentCacheDir: filepath.Dir(outputPath),
-		LayerIndexCache: newImageLayerIndexCache(c.cacheClient),
+		ImageRef:         imageRef,
+		LocalLayoutPath:  localLayoutPath,
+		OutputPath:       outputPath,
+		CheckpointMiB:    checkpointMiB,
+		ProgressChan:     progressChan,
+		CredProvider:     c.getCredentialProviderForImage(ctx, request.ImageId, request),
+		ContentCache:     newImageContentCache(c.cacheClient, request.ImageId, "oci-layer-build"),
+		ContentCacheDir:  filepath.Dir(outputPath),
+		LayerIndexCache:  newImageLayerIndexCache(c.cacheClient),
+		IndexConcurrency: imageLayerPrepareConcurrency,
 	})
 
 	// Close channel and wait for all progress messages to be logged
@@ -2248,7 +2278,48 @@ func (c *ImageClient) createOCIImageWithProgress(ctx context.Context, outputLogg
 		return err
 	}
 
-	outputLogger.Info("Image indexing completed successfully\n")
+	reporter.finish()
+	return nil
+}
+
+func ociLayoutPushArgs(layoutPath, imageTag, credentials string, insecure bool) []string {
+	args := []string{
+		"copy",
+		"--image-parallel-copies", fmt.Sprintf("%d", imageLayerPrepareConcurrency),
+		"--preserve-digests",
+		"--retry-times", "5",
+		"--retry-delay", "1s",
+	}
+	if insecure {
+		args = append(args, "--dest-tls-verify=false")
+	}
+	if credentials != "" {
+		args = append(args, "--dest-creds", credentials)
+	}
+	return append(args, "oci:"+layoutPath+":latest", "docker://"+imageTag)
+}
+
+func (c *ImageClient) pushOCILayout(ctx context.Context, outputLogger *slog.Logger, layoutPath, imageTag, credentials string) error {
+	outputLogger.Info(fmt.Sprintf("Publishing image (%d concurrent layers)...\n", imageLayerPrepareConcurrency))
+	started := time.Now()
+	heartbeat := newActiveOutputWriter(outputLogger)
+	stopHeartbeat := startSilentOutputHeartbeat(ctx, outputLogger, started, heartbeat, "Still publishing image...")
+	defer stopHeartbeat()
+
+	var commandOutput strings.Builder
+	cmd := newImageCommand(
+		ctx,
+		"skopeo",
+		ociLayoutPushArgs(layoutPath, imageTag, credentials, c.config.ImageService.BuildRegistryInsecure),
+		common.AddSkopeoEnvVars(os.Environ()),
+		&commandOutput,
+		&commandOutput,
+	)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to publish OCI image: %w: %s", err, strings.TrimSpace(commandOutput.String()))
+	}
+
+	outputLogger.Info(fmt.Sprintf("Image published in %.1fs\n", time.Since(started).Seconds()))
 	return nil
 }
 
@@ -2310,13 +2381,6 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	if request.BuildOptions.SourceImage != nil {
 		sourceImage = *request.BuildOptions.SourceImage
 	}
-	seedSourceImageAfterBuild := false
-	defer func() {
-		if seedSourceImageAfterBuild {
-			go c.seedBaseImageBlobsFromRegistry(request, sourceImage)
-		}
-	}()
-
 	dockerfile := *request.BuildOptions.Dockerfile
 	if sourceImage != "" {
 		insecure = c.config.ImageService.BuildRegistryInsecure
@@ -2351,7 +2415,6 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 			if err := cmd.Run(); err != nil {
 				return err
 			}
-			seedSourceImageAfterBuild = true
 		}
 	}
 
@@ -2387,7 +2450,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		}
 	}
 
-	// Clip v2: Build and push directly to registry, skip OCI layout
+	// Clip v2: export once, then publish and index the same local layer blobs.
 	if c.config.ImageService.ClipVersion == uint32(types.ClipVersion2) {
 		archiveName := fmt.Sprintf("%s.%s.tmp", request.ImageId, c.registry.ImageFileExtension)
 		archivePath := filepath.Join(tmpdir, archiveName)
@@ -2408,47 +2471,51 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		}
 		outputLogger.Info(fmt.Sprintf("Image built in %.1fs\n", time.Since(buildStart).Seconds()))
 
-		outputLogger.Info(fmt.Sprintf("Pushing image to registry: %s\n", imageTag))
-
-		pushArgs := []string{"--root", graphroot, "--runroot", runroot, "--storage-driver=" + storageDriver, "push"}
-
-		if c.config.ImageService.BuildRegistryInsecure {
-			pushArgs = append(pushArgs, "--tls-verify=false")
+		if err := os.RemoveAll(ociPath); err != nil {
+			return err
 		}
-
-		pushArgs = append(pushArgs, "--compression-format", "gzip", "--compression-level", "1")
-		pushArgs = append(pushArgs, "--retry", "5")
-		pushArgs = append(pushArgs, "--retry-delay", "1s")
+		outputLogger.Info("Exporting image layers once for publication and indexing...\n")
+		exportArgs := []string{
+			"--root", graphroot,
+			"--runroot", runroot,
+			"--storage-driver=" + storageDriver,
+			"push",
+			"--compression-format", "gzip",
+			"--compression-level", "1",
+			imageTag,
+			"oci:" + ociPath + ":latest",
+		}
+		var exportOutput strings.Builder
+		exportStart := time.Now()
+		exportHeartbeat := newActiveOutputWriter(outputLogger)
+		stopHeartbeat = startSilentOutputHeartbeat(ctx, outputLogger, exportStart, exportHeartbeat, "Still exporting image layers...")
+		cmd = newBuildahCommand(ctx, exportArgs, c.buildahEnv(runroot, tmpdir, storageConf), &exportOutput, &exportOutput)
+		err = cmd.Run()
+		stopHeartbeat()
+		if err != nil {
+			return fmt.Errorf("failed to export OCI image: %w: %s", err, strings.TrimSpace(exportOutput.String()))
+		}
+		outputLogger.Info(fmt.Sprintf("Image layers exported in %.1fs\n", time.Since(exportStart).Seconds()))
 
 		buildRegistryCredentials := request.BuildRegistryCredentials
 		if buildRegistryCredentials == "" {
 			buildRegistryCredentials = c.gatewayRegistryCredentials(ctx, buildRegistry, request)
 		}
-		if authArgs := c.getBuildRegistryAuthArgs(buildRegistry, buildRegistryCredentials); len(authArgs) > 0 {
-			pushArgs = append(pushArgs, authArgs...)
+		if buildRegistry == "localhost" || strings.HasPrefix(buildRegistry, "127.0.0.1") {
+			buildRegistryCredentials = ""
 		}
-
-		pushArgs = append(pushArgs, imageTag, "docker://"+imageTag)
-
-		pushOutput := newActiveOutputWriter(outputLogger)
-		cmd = newBuildahCommand(ctx, pushArgs, c.buildahEnv(runroot, tmpdir, storageConf), pushOutput, pushOutput)
-
-		// buildah push emits no progress for large blobs, so surface a
-		// heartbeat to the user while it runs
-		pushStart := time.Now()
-		stopHeartbeat = startSilentOutputHeartbeat(ctx, outputLogger, pushStart, pushOutput, "Still pushing image...")
-		err = cmd.Run()
-		stopHeartbeat()
-		if err != nil {
-			return err
-		}
-		outputLogger.Info(fmt.Sprintf("Image pushed in %.1fs\n", time.Since(pushStart).Seconds()))
 
 		c.v2ImageRefs.Set(request.ImageId, imageTag)
 		log.Info().Str("image_id", request.ImageId).Str("image_tag", imageTag).Msg("cached image reference")
 
-		// Create the image index (CLIP archive)
-		if err = c.createOCIImageWithProgress(ctx, outputLogger, request, imageTag, archivePath, 2); err != nil {
+		group, groupCtx := errgroup.WithContext(ctx)
+		group.Go(func() error {
+			return c.pushOCILayout(groupCtx, outputLogger, ociPath, imageTag, buildRegistryCredentials)
+		})
+		group.Go(func() error {
+			return c.createOCIImageWithProgress(groupCtx, outputLogger, request, imageTag, ociPath, archivePath, 2)
+		})
+		if err = group.Wait(); err != nil {
 			return err
 		}
 
@@ -2573,7 +2640,7 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 		archivePath := filepath.Join("/dev/shm", archiveName)
 
 		// Create index-only clip from the source docker image reference with progress reporting
-		if err = c.createOCIImageWithProgress(ctx, outputLogger, request, *request.BuildOptions.SourceImage, archivePath, 2); err != nil {
+		if err = c.createOCIImageWithProgress(ctx, outputLogger, request, *request.BuildOptions.SourceImage, copyDir, archivePath, 2); err != nil {
 			return err
 		}
 
