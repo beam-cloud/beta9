@@ -500,6 +500,10 @@ func (s *Worker) loadContainerImage(ctx context.Context, request *types.Containe
 	if err := s.buildOrPullBaseImageWithMetrics(ctx, request, outputLogger); err != nil {
 		return elapsed, false, err
 	}
+	if !requiresPostBuildImageMaterialization(request, s.config.ImageService.ClipVersion) {
+		outputLogger.Info(fmt.Sprintf("Image <%s> is ready\n", request.ImageId))
+		return 0, true, nil
+	}
 
 	elapsed, err = s.pullLazyWithMetrics(ctx, request, "pull_lazy_after_build", outputLogger)
 	if err != nil {
@@ -508,6 +512,10 @@ func (s *Worker) loadContainerImage(ctx context.Context, request *types.Containe
 
 	outputLogger.Info(fmt.Sprintf("Loaded image <%s>, took: %s\n", request.ImageId, elapsed))
 	return elapsed, true, nil
+}
+
+func requiresPostBuildImageMaterialization(request *types.ContainerRequest, clipVersion uint32) bool {
+	return clipVersion != uint32(types.ClipVersion2) || !request.IsBuildRequest()
 }
 
 func (s *Worker) pullLazyWithMetrics(ctx context.Context, request *types.ContainerRequest, phase string, outputLogger *slog.Logger) (time.Duration, error) {

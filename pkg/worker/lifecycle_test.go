@@ -114,6 +114,49 @@ func TestStartupPortBindingsForPodKeepsStartupPorts(t *testing.T) {
 	}, bindings)
 }
 
+func TestRequiresPostBuildImageMaterialization(t *testing.T) {
+	dockerfile := "FROM ubuntu:22.04"
+	sourceImage := "ubuntu:22.04"
+
+	tests := []struct {
+		name        string
+		request     *types.ContainerRequest
+		clipVersion uint32
+		want        bool
+	}{
+		{
+			name:        "v2 dockerfile build",
+			request:     &types.ContainerRequest{BuildOptions: types.BuildOptions{Dockerfile: &dockerfile}},
+			clipVersion: uint32(types.ClipVersion2),
+			want:        false,
+		},
+		{
+			name:        "v2 source image build",
+			request:     &types.ContainerRequest{BuildOptions: types.BuildOptions{SourceImage: &sourceImage}},
+			clipVersion: uint32(types.ClipVersion2),
+			want:        false,
+		},
+		{
+			name:        "v1 build",
+			request:     &types.ContainerRequest{BuildOptions: types.BuildOptions{Dockerfile: &dockerfile}},
+			clipVersion: uint32(types.ClipVersion1),
+			want:        true,
+		},
+		{
+			name:        "runtime image",
+			request:     &types.ContainerRequest{},
+			clipVersion: uint32(types.ClipVersion2),
+			want:        true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, requiresPostBuildImageMaterialization(tt.request, tt.clipVersion))
+		})
+	}
+}
+
 func TestCreateOverlayUsesTmpfsForAgentWorkers(t *testing.T) {
 	worker := &Worker{
 		persistent:     true,
