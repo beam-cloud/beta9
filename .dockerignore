@@ -11,6 +11,8 @@
 !sdk/**
 !deploy/github-builder
 !deploy/github-builder/**
+!docker/patches
+!docker/patches/**
 !bin/volume_cache_*
 !bin/ipbind_*
 !bin/beta9-cli
