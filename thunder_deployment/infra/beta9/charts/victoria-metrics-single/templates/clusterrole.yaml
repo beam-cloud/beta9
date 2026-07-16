@@ -1,0 +1,50 @@
+{{- if and .Values.rbac.create (not .Values.rbac.namespaced) }}
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: {{ template "victoria-metrics.fullname" . }}-clusterrole
+  labels:
+    {{- include "victoria-metrics.common.metaLabels" . | nindent 4 }}
+  {{- if .Values.rbac.extraLabels }}
+{{ toYaml .Values.rbac.extraLabels | indent 4}}
+  {{- end }}
+{{- with .Values.rbac.annotations }}
+  annotations:
+{{ toYaml . | indent 4 }}
+{{- end }}
+{{- if or .Values.rbac.pspEnabled .Values.server.scrape.enabled }}
+rules:
+  {{- if .Values.server.scrape.enabled }}
+  - apiGroups:
+    - discovery.k8s.io
+    resources:
+    - endpointslices
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [ "" ]
+    resources:
+      - nodes
+      - nodes/proxy
+      - nodes/metrics
+      - services
+      - endpoints
+      - pods
+    verbs: [ "get", "list", "watch" ]
+  - apiGroups:
+      - extensions
+      - networking.k8s.io
+    resources:
+      - ingresses
+    verbs: [ "get", "list", "watch" ]
+  - nonResourceURLs: [ "/metrics" ]
+    verbs: [ "get" ]
+  {{- end }}
+  {{- if and .Values.rbac.pspEnabled (.Capabilities.APIVersions.Has "policy/v1beta1/PodSecurityPolicy") }}
+  - apiGroups:      ['extensions']
+    resources:      ['podsecuritypolicies']
+    verbs:          ['use']
+    resourceNames:  [{{ template "victoria-metrics.fullname" . }}]
+  {{- end }}
+{{- else }}
+rules: []
+{{- end }}
+{{- end -}}

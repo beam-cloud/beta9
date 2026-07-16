@@ -1,0 +1,44 @@
+{{- if and .Values.server.enabled .Values.server.serviceMonitor.enabled -}}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  {{- if .Values.server.serviceMonitor.annotations }}
+  annotations:
+{{ toYaml .Values.server.serviceMonitor.annotations | indent 4 }}
+  {{- end }}
+  labels:
+  {{- include "victoria-metrics.server.labels" . | nindent 4 }}
+  {{- if .Values.server.serviceMonitor.extraLabels }}
+{{ toYaml .Values.server.serviceMonitor.extraLabels | indent 4 }}
+  {{- end }}
+  name: {{ template "victoria-metrics.server.fullname" . }}
+  {{- if .Values.server.serviceMonitor.namespace }}
+  namespace: {{ .Values.server.serviceMonitor.namespace }}
+  {{- end }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  selector:
+    matchLabels:
+      {{- include "victoria-metrics.server.matchLabels" . | nindent 6 }} 
+  endpoints:
+    - port: http
+      {{- if .Values.server.serviceMonitor.scheme }}
+      scheme: {{ .Values.server.serviceMonitor.scheme }}
+      {{- end }}
+      {{- if .Values.server.serviceMonitor.interval }}
+      interval: {{ .Values.server.serviceMonitor.interval }}
+      {{- end }}
+      {{- if .Values.server.serviceMonitor.scrapeTimeout }}
+      scrapeTimeout: {{ .Values.server.serviceMonitor.scrapeTimeout }}
+      {{- end }}
+      {{- with .Values.server.serviceMonitor.tlsConfig }}
+      tlsConfig:
+          {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.server.serviceMonitor.relabelings }}
+      relabelings:
+          {{- toYaml . | nindent 8 }}
+      {{- end }}
+  {{- end }}

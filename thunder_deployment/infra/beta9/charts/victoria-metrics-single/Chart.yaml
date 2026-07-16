@@ -1,0 +1,31 @@
+annotations:
+  artifacthub.io/category: monitoring-logging
+  artifacthub.io/changes: '- bump version of VM components to [v1.97.1](https://github.com/VictoriaMetrics/VictoriaMetrics/releases/tag/v1.97.1)'
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/links: |
+    - name: Sources
+      url: https://github.com/VictoriaMetrics/helm-charts
+    - name: Charts repo
+      url: https://victoriametrics.github.io/helm-charts/
+    - name: Docs
+      url: https://docs.victoriametrics.com/Single-server-VictoriaMetrics.html
+apiVersion: v1
+appVersion: v1.97.1
+description: Victoria Metrics Single version - high-performance, cost-effective and
+  scalable TSDB, long-term remote storage for Prometheus
+keywords:
+- victoriametrics
+- vmsingle
+- single
+- monitoring
+- kubernetes
+- observability
+- tsdb
+- metrics
+- metricsql
+- timeseries
+kubeVersion: '>=1.23.0-0'
+name: victoria-metrics-single
+sources:
+- https://github.com/VictoriaMetrics/helm-charts
+version: 0.9.15

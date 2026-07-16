@@ -1,0 +1,51 @@
+{{- if .Values.printNotes }}
+{{- if .Values.server.enabled }}
+The VictoriaMetrics write api can be accessed via port {{ .Values.server.service.servicePort }} on the following DNS name from within your cluster:
+    {{ template "victoria-metrics.server.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local
+
+
+Metrics Ingestion:
+  Get the Victoria Metrics service URL by running these commands in the same shell:
+
+{{- if contains "NodePort" .Values.server.service.type }}
+    export NODE_PORT=$(kubectl get --namespace {{ .Release.Namespace }} -o jsonpath="{.spec.ports[0].nodePort}" services {{ template "victoria-metrics.server.fullname" . }})
+    export NODE_IP=$(kubectl get nodes --namespace {{ .Release.Namespace }} -o jsonpath="{.items[0].status.addresses[0].address}")
+    echo http://$NODE_IP:$NODE_PORT
+{{- else if contains "LoadBalancer" .Values.server.service.type }}
+    NOTE: It may take a few minutes for the LoadBalancer IP to be available.
+      You can watch the status of by running 'kubectl get svc --namespace {{ .Release.Namespace }} -w {{ template "victoria-metrics.server.fullname" . }}'
+
+    export SERVICE_IP=$(kubectl get svc --namespace {{ .Release.Namespace }} {{ template "victoria-metrics.server.fullname" . }} -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+    echo http://$SERVICE_IP:{{ .Values.server.service.servicePort }}
+{{- else if contains "ClusterIP"  .Values.server.service.type }}
+    export POD_NAME=$(kubectl get pods --namespace {{ .Release.Namespace }} -l "app={{ .Values.server.name }}" -o jsonpath="{.items[0].metadata.name}")
+    kubectl --namespace {{ .Release.Namespace }} port-forward $POD_NAME {{ .Values.server.service.servicePort }}
+{{- end }}
+
+  Write url inside the kubernetes cluster:
+    http://{{ template "victoria-metrics.server.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.server.service.servicePort }}/api/v1/write
+
+{{- if .Values.server.scrape.enabled }}
+
+Metrics Scrape:
+  Pull-based scrapes are enabled
+  Scrape config can be displayed by running this command::
+    {{- if eq .Values.server.scrape.configMap "" }}
+    kubectl get cm {{ template "victoria-metrics.server.fullname" . }}-scrapeconfig -n {{ .Release.Namespace }}
+    {{- else }}
+    kubectl get cm .Values.server.scrape.configMap -n {{ .Release.Namespace }}
+    {{- end }}
+
+  The target’s information is accessible via api:
+    Inside cluster:
+      http://{{ template "victoria-metrics.server.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.server.service.servicePort }}/targets
+    Outside cluster:
+      You need to port-forward service (see instructions above) and call
+      http://<service-host-port>/targets
+{{- end }}
+
+Read Data:
+  The following url can be used as the datasource url in Grafana::
+    http://{{ template "victoria-metrics.server.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.server.service.servicePort }}
+{{- end }}
+{{- end }}

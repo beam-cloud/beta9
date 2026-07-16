@@ -1,0 +1,41 @@
+apiVersion: v2
+name: beta9-chart
+description: A Helm chart for Beta9
+type: application
+version: 0.1.714
+appVersion: 0.1.714
+home: https://beta9.dev
+dependencies:
+- name: common
+  repository: https://bjw-s-labs.github.io/helm-charts
+  version: 2.5.0
+- alias: blobcache
+  name: beam-blobcache-chart
+  version: 0.1.2
+  repository: oci://public.ecr.aws/n4e0e1y0
+  condition: blobcache.enabled
+- name: redis
+  version: 18.9.1
+  repository: https://charts.bitnami.com/bitnami
+  condition: redis.enabled
+- alias: juicefs-redis
+  name: redis
+  version: 18.9.1
+  repository: https://charts.bitnami.com/bitnami
+  condition: juicefs-redis.enabled
+- name: postgresql
+  version: 13.4.3
+  repository: https://charts.bitnami.com/bitnami
+  condition: postgresql.enabled
+- name: grafana
+  version: 7.3.0
+  repository: https://grafana.github.io/helm-charts
+  condition: metrics.enabled
+- name: victoria-metrics-single
+  version: 0.9.15
+  repository: https://victoriametrics.github.io/helm-charts
+  condition: metrics.enabled
+- name: victoria-metrics-agent
+  version: 0.9.17
+  repository: https://victoriametrics.github.io/helm-charts
+  condition: metrics.enabled

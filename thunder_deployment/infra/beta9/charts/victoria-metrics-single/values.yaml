@@ -1,0 +1,696 @@
+# Default values for victoria-metrics.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+rbac:
+  create: true
+  # Note: The PSP will only be deployed, if Kubernetes (<1.25) supports the resource.
+  pspEnabled: true
+  namespaced: false
+  extraLabels: {}
+  # annotations: {}
+
+# -- Print chart notes
+printNotes: true
+
+serviceAccount:
+  # -- Create service account.
+  create: true
+  # name:
+  extraLabels: {}
+  # annotations: {}
+  # -- Mount API token to pod directly
+  automountToken: true
+
+automountServiceAccountToken: true
+
+podDisruptionBudget:
+  # -- See `kubectl explain poddisruptionbudget.spec` for more. Ref: [https://kubernetes.io/docs/tasks/run-application/configure-pdb/](https://kubernetes.io/docs/tasks/run-application/configure-pdb/)
+  enabled: false
+  #  minAvailable: 1
+  #  maxUnavailable: 1
+  extraLabels: {}
+
+server:
+  # -- Enable deployment of server component. Deployed as StatefulSet
+  enabled: true
+  # -- Server container name
+  name: server
+  image:
+    # -- Image repository
+    repository: victoriametrics/victoria-metrics
+    # -- Image tag
+    tag: v1.97.1
+    # -- Image pull policy
+    pullPolicy: IfNotPresent
+  # -- Name of Priority Class
+  priorityClassName: ""
+  # -- Overrides the full name of server component
+  fullnameOverride:
+  # -- Data retention period in month
+  retentionPeriod: 1
+  # Extra command line arguments for container of component
+  extraArgs:
+    envflag.enable: "true"
+    envflag.prefix: VM_
+    loggerFormat: json
+
+  # Additional hostPath mounts
+  extraHostPathMounts:
+    []
+     #- name: certs-dir
+     #  mountPath: /etc/kubernetes/certs
+     #  subPath: ""
+     #  hostPath: /etc/kubernetes/certs
+     #  readOnly: true
+
+  # Extra Volumes for the pod
+  extraVolumes:
+    []
+    #- name: example
+    #  configMap:
+    #   name: example
+
+  # Extra Volume Mounts for the container
+  extraVolumeMounts:
+    []
+    # - name: example
+    #   mountPath: /example
+
+  extraContainers:
+    []
+    #- name: config-reloader
+    #  image: reloader-image
+
+  initContainers:
+    []
+    # - name: vmrestore
+    #   image: victoriametrics/vmrestore:latest
+    #   volumeMounts:
+    #   - mountPath: /storage
+    #     name: vmstorage-volume
+    #   - mountPath: /etc/vm/creds
+    #     name: secret-remote-storage-keys
+    #     readOnly: true
+    #   args:
+    #   - -storageDataPath=/storage
+    #   - -src=s3://your_bucket/folder/latest
+    #   - -credsFilePath=/etc/vm/creds/credentials
+
+  # -- Node tolerations for server scheduling to nodes with taints. Ref: [https://kubernetes.io/docs/concepts/configuration/assign-pod-node/](https://kubernetes.io/docs/concepts/configuration/assign-pod-node/)
+  tolerations:
+    []
+    # - key: "key"
+    #   operator: "Equal|Exists"
+    #   value: "value"
+    #   effect: "NoSchedule|PreferNoSchedule"
+
+  # -- Pod's node selector. Ref: [https://kubernetes.io/docs/user-guide/node-selection/](https://kubernetes.io/docs/user-guide/node-selection/)
+  nodeSelector: {}
+
+  # -- Pod affinity
+  affinity: {}
+
+  # -- Env variables
+  # -- Additional environment variables (ex.: secret tokens, flags) https://github.com/VictoriaMetrics/VictoriaMetrics#environment-variables
+  env: []
+
+  envFrom: []
+    #- configMapRef:
+    #    name: special-config
+
+  # -- Container workdir
+  containerWorkingDir: ""
+
+  ## Use an alternate scheduler, e.g. "stork".
+  ## ref: https://kubernetes.io/docs/tasks/administer-cluster/configure-multiple-schedulers/
+  ##
+  # schedulerName:
+
+  persistentVolume:
+    # -- Create/use Persistent Volume Claim for server component. Empty dir if false
+    enabled: true
+
+    # -- Array of access modes. Must match those of existing PV or dynamic provisioner. Ref: [http://kubernetes.io/docs/user-guide/persistent-volumes/](http://kubernetes.io/docs/user-guide/persistent-volumes/)
+    accessModes:
+      - ReadWriteOnce
+    # -- Persistant volume annotations
+    annotations: {}
+
+    # -- StorageClass to use for persistent volume. Requires server.persistentVolume.enabled: true. If defined, PVC created automatically
+    storageClass: ""
+
+    # -- Existing Claim name. If defined, PVC must be created manually before volume will be bound
+    existingClaim: ""
+
+    # -- Bind Persistent Volume by labels. Must match all labels of targeted PV.
+    matchLabels: {}
+
+    # -- Mount path. Server data Persistent Volume mount root path.
+    mountPath: /storage
+    # -- Mount subpath
+    subPath: ""
+    # -- Size of the volume. Should be calculated based on the metrics you send and retention policy you set.
+    size: 16Gi
+
+  # -- Sts/Deploy additional labels
+  extraLabels: {}
+  # -- Pod's additional labels
+  podLabels: {}
+  # -- Pod's annotations
+  podAnnotations: {}
+  # -- Pod's management policy
+  podManagementPolicy: OrderedReady
+
+  # -- Resource object. Ref: [http://kubernetes.io/docs/user-guide/compute-resources/](http://kubernetes.io/docs/user-guide/compute-resources/
+  resources:
+    {}
+    # limits:
+    #   cpu: 500m
+    #   memory: 512Mi
+    # requests:
+    #   cpu: 500m
+    #   memory: 512Mi
+
+  # Indicates whether the Container is ready to service requests. If the readiness probe fails, the endpoints controller removes the Pod's IP address from the endpoints of all Services that match the Pod. The default state of readiness before the initial delay is Failure. If a Container does not provide a readiness probe, the default state is Success.
+  readinessProbe:
+    httpGet:
+      path: /health
+      port: http
+    initialDelaySeconds: 5
+    periodSeconds: 15
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+  # Indicates whether the Container is running. If the liveness probe fails, the kubelet kills the Container, and the Container is subjected to its restart policy. If a Container does not provide a liveness probe, the default state is Success.
+  livenessProbe:
+    httpGet:
+      scheme: HTTP
+      path: /health
+      port: 8428
+    initialDelaySeconds: 30
+    periodSeconds: 30
+    timeoutSeconds: 5
+    failureThreshold: 10
+
+  # Indicates whether the Container is done with potentially costly initialization. If set it is executed first. If it fails Container is restarted. If it succeeds liveness and readiness probes takes over.
+  startupProbe: {}
+    #tcpSocket:
+    #  port: http
+    #failureThreshold: 30
+    #periodSeconds: 15
+    #successThreshold: 1
+    #timeoutSeconds: 5
+
+  # -- Security context to be added to server pods
+  securityContext: {}
+  # -- Pod's security context. Ref: [https://kubernetes.io/docs/tasks/configure-pod-container/security-context/](https://kubernetes.io/docs/tasks/configure-pod-container/security-context/)
+  podSecurityContext: {}
+  ingress:
+    # -- Enable deployment of ingress for server component
+    enabled: false
+    # -- Ingress annotations
+    annotations: {}
+    #   kubernetes.io/ingress.class: nginx
+    #   kubernetes.io/tls-acme: 'true'
+
+    # -- Ingress extra labels
+    extraLabels: {}
+    # -- Array of host objects
+    hosts: []
+    #   - name: vmselect.local
+    #     path: /select
+    #     port: http
+
+    # -- Array of TLS objects
+    tls: []
+    #   - secretName: vmselect-ingress-tls
+    #     hosts:
+    #       - vmselect.local
+    # For Kubernetes >= 1.18 you should specify the ingress-controller via the field ingressClassName
+    # See https://kubernetes.io/blog/2020/04/02/improvements-to-the-ingress-api-in-kubernetes-1.18/#specifying-the-class-of-an-ingress
+    # ingressClassName: nginx
+    # -- pathType is only for k8s >= 1.1=
+    pathType: Prefix
+
+  vmbackupmanager:
+    # -- enable automatic creation of backup via vmbackupmanager. vmbackupmanager is part of Enterprise packages
+    enable: false
+    # -- should be true and means that you have the legal right to run a backup manager
+    # that can either be a signed contract or an email with confirmation to run the service in a trial period
+    # # https://victoriametrics.com/legal/esa/
+    eula: false
+    image:
+      # -- vmbackupmanager image repository
+      repository: victoriametrics/vmbackupmanager
+      # -- vmbackupmanager image tag
+      tag: v1.97.1-enterprise
+    # -- disable hourly backups
+    disableHourly: false
+    # -- disable daily backups
+    disableDaily: false
+    # -- disable weekly backups
+    disableWeekly: false
+    # -- disable monthly backups
+    disableMonthly: false
+    # -- backup destination at S3, GCS or local filesystem. Release name will be included to path!
+    destination: ""
+    # -- backups' retention settings
+    retention:
+      # -- keep last N hourly backups. 0 means delete all existing hourly backups. Specify -1 to turn off
+      keepLastHourly: 2
+      # -- keep last N daily backups. 0 means delete all existing daily backups. Specify -1 to turn off
+      keepLastDaily: 2
+      # -- keep last N weekly backups. 0 means delete all existing weekly backups. Specify -1 to turn off
+      keepLastWeekly: 2
+      # -- keep last N monthly backups. 0 means delete all existing monthly backups. Specify -1 to turn off
+      keepLastMonthly: 2
+    extraArgs:
+      envflag.enable: "true"
+      envflag.prefix: VM_
+      loggerFormat: json
+    # Extra Volume Mounts for the container
+    extraVolumeMounts:
+      []
+      # - name: example
+      #   mountPath: /example
+    # -- Allows to enable restore options for pod.
+    # Read more: https://docs.victoriametrics.com/vmbackupmanager.html#restore-commands
+    restore:
+      onStart:
+        enabled: false
+    resources: {}
+    # -- Additional environment variables (ex.: secret tokens, flags) https://github.com/VictoriaMetrics/VictoriaMetrics#environment-variables
+    env: []
+    readinessProbe:
+      httpGet:
+        path: /health
+        port: manager-http
+      initialDelaySeconds: 5
+      periodSeconds: 15
+      timeoutSeconds: 5
+      failureThreshold: 3
+    livenessProbe:
+      tcpSocket:
+        port: manager-http
+      initialDelaySeconds: 30
+      periodSeconds: 30
+      timeoutSeconds: 5
+      failureThreshold: 10
+  service:
+    # -- Service annotations
+    annotations: {}
+    # -- Service labels
+    labels: {}
+    # -- Service ClusterIP
+    clusterIP: ""
+    # -- Service External IPs. Ref: [https://kubernetes.io/docs/user-guide/services/#external-ips]( https://kubernetes.io/docs/user-guide/services/#external-ips)
+    externalIPs: []
+    # -- Service load balacner IP
+    loadBalancerIP: ""
+    # -- Load balancer source range
+    loadBalancerSourceRanges: []
+    # -- Service port
+    servicePort: 8428
+    # -- Node port
+    # nodePort: 30000
+    # -- Service type
+    type: ClusterIP
+    # Ref: https://kubernetes.io/docs/tasks/access-application-cluster/create-external-load-balancer/#preserving-the-client-source-ip
+    # externalTrafficPolicy: "local"
+    # healthCheckNodePort: 0
+
+  statefulSet:
+    # -- Creates statefulset instead of deployment, useful when you want to keep the cache
+    enabled: true
+    # -- Deploy order policy for StatefulSet pods
+    podManagementPolicy: OrderedReady
+    # Headless service for statefulset
+    service:
+      # -- Headless service annotations
+      annotations: {}
+      # -- Headless service labels
+      labels: {}
+      # -- Headless service port
+      servicePort: 8428
+      # Ref: https://kubernetes.io/docs/tasks/access-application-cluster/create-external-load-balancer/#preserving-the-client-source-ip
+      # externalTrafficPolicy: "local"
+      # healthCheckNodePort: 0
+  # -- Pod's termination grace period in seconds
+  terminationGracePeriodSeconds: 60
+  serviceMonitor:
+    # -- Enable deployment of Service Monitor for server component. This is Prometheus operator object
+    enabled: false
+    # -- Service Monitor labels
+    extraLabels: {}
+    # -- Service Monitor annotations
+    annotations: {}
+    # -- Commented. Prometheus scrape interval for server component
+#    interval: 15s
+    # -- Commented. Prometheus pre-scrape timeout for server component
+#    scrapeTimeout: 5s
+    # -- Commented. HTTP scheme to use for scraping.
+#    scheme: https
+    # -- Commented. TLS configuration to use when scraping the endpoint
+#    tlsConfig:
+#      insecureSkipVerify: true
+    # -- Service Monitor relabelings
+    relabelings: []
+
+  # -- Scrape configuration for victoriametrics
+  scrape:
+    # -- If true scrapes targets, creates config map or use specified one with scrape targets
+    enabled: false
+    # -- Use existing configmap if specified
+    # otherwise .config values will be used
+    configMap: ""
+    # -- Scrape config
+    config:
+      global:
+        scrape_interval: 15s
+
+      # -- Scrape targets
+      scrape_configs:
+        # -- Scrape rule for scrape victoriametrics
+        - job_name: victoriametrics
+          static_configs:
+            - targets: [ "localhost:8428" ]
+
+          ## COPY from Prometheus helm chart https://github.com/helm/charts/blob/master/stable/prometheus/values.yaml
+
+          # -- Scrape config for API servers.
+          #
+          # Kubernetes exposes API servers as endpoints to the default/kubernetes
+          # service so this uses `endpoints` role and uses relabelling to only keep
+          # the endpoints associated with the default/kubernetes service using the
+          # default named port `https`. This works for single API server deployments as
+          # well as HA API server deployments.
+        - job_name: "kubernetes-apiservers"
+          kubernetes_sd_configs:
+            - role: endpoints
+          # Default to scraping over https. If required, just disable this or change to
+          # `http`.
+          scheme: https
+          # This TLS & bearer token file config is used to connect to the actual scrape
+          # endpoints for cluster components. This is separate to discovery auth
+          # configuration because discovery & scraping are two separate concerns in
+          # Prometheus. The discovery auth config is automatic if Prometheus runs inside
+          # the cluster. Otherwise, more config options have to be provided within the
+          # <kubernetes_sd_config>.
+          tls_config:
+            ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+            # If your node certificates are self-signed or use a different CA to the
+            # master CA, then you need to disable certificate verification. Note that
+            # certificate verification is an integral part of a secure infrastructure
+            # so this should only be disabled in a controlled environment. You can
+            # enable certificate verification by commenting the line below.
+            #
+            insecure_skip_verify: true
+          bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+          # Keep only the default/kubernetes service endpoints for the https port. This
+          # will add targets for each API server which Kubernetes adds an endpoint to
+          # the default/kubernetes service.
+          relabel_configs:
+            - source_labels:
+                [
+                    __meta_kubernetes_namespace,
+                    __meta_kubernetes_service_name,
+                    __meta_kubernetes_endpoint_port_name,
+                ]
+              action: keep
+              regex: default;kubernetes;https
+          # -- Scrape rule using kubernetes service discovery for nodes
+        - job_name: "kubernetes-nodes"
+          # Default to scraping over https. If required, just disable this or change to
+          # `http`.
+          scheme: https
+          # This TLS & bearer token file config is used to connect to the actual scrape
+          # endpoints for cluster components. This is separate to discovery auth
+          # configuration because discovery & scraping are two separate concerns in
+          # Prometheus. The discovery auth config is automatic if Prometheus runs inside
+          # the cluster. Otherwise, more config options have to be provided within the
+          # <kubernetes_sd_config>.
+          tls_config:
+            ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+            # If your node certificates are self-signed or use a different CA to the
+            # master CA, then you need to disable certificate verification. Note that
+            # certificate verification is an integral part of a secure infrastructure
+            # so this should only be disabled in a controlled environment. You can
+            # enable certificate verification by commenting the line below.
+            #
+            insecure_skip_verify: true
+          bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+          kubernetes_sd_configs:
+            - role: node
+          relabel_configs:
+            - action: labelmap
+              regex: __meta_kubernetes_node_label_(.+)
+            - target_label: __address__
+              replacement: kubernetes.default.svc:443
+            - source_labels: [ __meta_kubernetes_node_name ]
+              regex: (.+)
+              target_label: __metrics_path__
+              replacement: /api/v1/nodes/$1/proxy/metrics
+          # -- Scrape rule using kubernetes service discovery for cadvisor
+        - job_name: "kubernetes-nodes-cadvisor"
+          # Default to scraping over https. If required, just disable this or change to
+          # `http`.
+          scheme: https
+          # This TLS & bearer token file config is used to connect to the actual scrape
+          # endpoints for cluster components. This is separate to discovery auth
+          # configuration because discovery & scraping are two separate concerns in
+          # Prometheus. The discovery auth config is automatic if Prometheus runs inside
+          # the cluster. Otherwise, more config options have to be provided within the
+          # <kubernetes_sd_config>.
+          tls_config:
+            ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+            # If your node certificates are self-signed or use a different CA to the
+            # master CA, then you need to disable certificate verification. Note that
+            # certificate verification is an integral part of a secure infrastructure
+            # so this should only be disabled in a controlled environment. You can
+            # enable certificate verification by commenting the line below.
+            #
+            insecure_skip_verify: true
+          bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+          kubernetes_sd_configs:
+            - role: node
+          # This configuration will work only on kubelet 1.7.3+
+          # As the scrape endpoints for cAdvisor have changed
+          # if you are using older version you need to change the replacement to
+          # replacement: /api/v1/nodes/$1:4194/proxy/metrics
+          # more info here https://github.com/coreos/prometheus-operator/issues/633
+          relabel_configs:
+            - action: labelmap
+              regex: __meta_kubernetes_node_label_(.+)
+            - target_label: __address__
+              replacement: kubernetes.default.svc:443
+            - source_labels: [ __meta_kubernetes_node_name ]
+              regex: (.+)
+              target_label: __metrics_path__
+              replacement: /api/v1/nodes/$1/proxy/metrics/cadvisor
+          # ignore timestamps of cadvisor's metrics by default
+          # more info here https://github.com/VictoriaMetrics/VictoriaMetrics/issues/4697#issuecomment-1656540535
+          honor_timestamps: false 
+        # -- Scrape config for service endpoints.
+        #
+        # The relabeling allows the actual service scrape endpoint to be configured
+        # via the following annotations:
+        #
+        # * `prometheus.io/scrape`: Only scrape services that have a value of `true`
+        # * `prometheus.io/scheme`: If the metrics endpoint is secured then you will need
+        # to set this to `https` & most likely set the `tls_config` of the scrape config.
+        # * `prometheus.io/path`: If the metrics path is not `/metrics` override this.
+        # * `prometheus.io/port`: If the metrics are exposed on a different port to the
+        # service then set this appropriately.
+        # -- Scrape rule using kubernetes service discovery for endpoints
+        - job_name: "kubernetes-service-endpoints"
+          kubernetes_sd_configs:
+            - role: endpoints
+          relabel_configs:
+            - action: drop
+              source_labels: [ __meta_kubernetes_pod_container_init ]
+              regex: true
+            - action: keep_if_equal
+              source_labels: [ __meta_kubernetes_service_annotation_prometheus_io_port, __meta_kubernetes_pod_container_port_number ]
+            - source_labels:
+                [ __meta_kubernetes_service_annotation_prometheus_io_scrape ]
+              action: keep
+              regex: true
+            - source_labels:
+                [ __meta_kubernetes_service_annotation_prometheus_io_scheme ]
+              action: replace
+              target_label: __scheme__
+              regex: (https?)
+            - source_labels:
+                [ __meta_kubernetes_service_annotation_prometheus_io_path ]
+              action: replace
+              target_label: __metrics_path__
+              regex: (.+)
+            - source_labels:
+                [
+                    __address__,
+                    __meta_kubernetes_service_annotation_prometheus_io_port,
+                ]
+              action: replace
+              target_label: __address__
+              regex: ([^:]+)(?::\d+)?;(\d+)
+              replacement: $1:$2
+            - action: labelmap
+              regex: __meta_kubernetes_service_label_(.+)
+            - source_labels: [ __meta_kubernetes_namespace ]
+              action: replace
+              target_label: kubernetes_namespace
+            - source_labels: [ __meta_kubernetes_service_name ]
+              action: replace
+              target_label: kubernetes_name
+            - source_labels: [ __meta_kubernetes_pod_node_name ]
+              action: replace
+              target_label: kubernetes_node
+        # -- Scrape config for slow service endpoints; same as above, but with a larger
+        # timeout and a larger interval
+        #
+        # The relabeling allows the actual service scrape endpoint to be configured
+        # via the following annotations:
+        #
+        # * `prometheus.io/scrape-slow`: Only scrape services that have a value of `true`
+        # * `prometheus.io/scheme`: If the metrics endpoint is secured then you will need
+        # to set this to `https` & most likely set the `tls_config` of the scrape config.
+        # * `prometheus.io/path`: If the metrics path is not `/metrics` override this.
+        # * `prometheus.io/port`: If the metrics are exposed on a different port to the
+        # service then set this appropriately.
+        - job_name: "kubernetes-service-endpoints-slow"
+          scrape_interval: 5m
+          scrape_timeout: 30s
+          kubernetes_sd_configs:
+            - role: endpoints
+          relabel_configs:
+            - action: drop
+              source_labels: [ __meta_kubernetes_pod_container_init ]
+              regex: true
+            - action: keep_if_equal
+              source_labels: [ __meta_kubernetes_service_annotation_prometheus_io_port, __meta_kubernetes_pod_container_port_number ]
+            - source_labels:
+                [ __meta_kubernetes_service_annotation_prometheus_io_scrape_slow ]
+              action: keep
+              regex: true
+            - source_labels:
+                [ __meta_kubernetes_service_annotation_prometheus_io_scheme ]
+              action: replace
+              target_label: __scheme__
+              regex: (https?)
+            - source_labels:
+                [ __meta_kubernetes_service_annotation_prometheus_io_path ]
+              action: replace
+              target_label: __metrics_path__
+              regex: (.+)
+            - source_labels:
+                [
+                    __address__,
+                    __meta_kubernetes_service_annotation_prometheus_io_port,
+                ]
+              action: replace
+              target_label: __address__
+              regex: ([^:]+)(?::\d+)?;(\d+)
+              replacement: $1:$2
+            - action: labelmap
+              regex: __meta_kubernetes_service_label_(.+)
+            - source_labels: [ __meta_kubernetes_namespace ]
+              action: replace
+              target_label: kubernetes_namespace
+            - source_labels: [ __meta_kubernetes_service_name ]
+              action: replace
+              target_label: kubernetes_name
+            - source_labels: [ __meta_kubernetes_pod_node_name ]
+              action: replace
+              target_label: kubernetes_node
+        # -- Example scrape config for probing services via the Blackbox Exporter.
+        #
+        # The relabeling allows the actual service scrape endpoint to be configured
+        # via the following annotations:
+        #
+        # * `prometheus.io/probe`: Only probe services that have a value of `true`
+        - job_name: "kubernetes-services"
+          metrics_path: /probe
+          params:
+            module: [ http_2xx ]
+          kubernetes_sd_configs:
+            - role: service
+          relabel_configs:
+            - source_labels:
+                [ __meta_kubernetes_service_annotation_prometheus_io_probe ]
+              action: keep
+              regex: true
+            - source_labels: [ __address__ ]
+              target_label: __param_target
+            - target_label: __address__
+              replacement: blackbox
+            - source_labels: [ __param_target ]
+              target_label: instance
+            - action: labelmap
+              regex: __meta_kubernetes_service_label_(.+)
+            - source_labels: [ __meta_kubernetes_namespace ]
+              target_label: kubernetes_namespace
+            - source_labels: [ __meta_kubernetes_service_name ]
+              target_label: kubernetes_name
+        # -- Example scrape config for pods
+        #
+        # The relabeling allows the actual pod scrape endpoint to be configured via the
+        # following annotations:
+        #
+        # * `prometheus.io/scrape`: Only scrape pods that have a value of `true`
+        # * `prometheus.io/path`: If the metrics path is not `/metrics` override this.
+        # * `prometheus.io/port`: Scrape the pod on the indicated port instead of the default of `9102`.
+        - job_name: "kubernetes-pods"
+          kubernetes_sd_configs:
+            - role: pod
+          relabel_configs:
+            - action: drop
+              source_labels: [ __meta_kubernetes_pod_container_init ]
+              regex: true
+            - action: keep_if_equal
+              source_labels: [ __meta_kubernetes_pod_annotation_prometheus_io_port, __meta_kubernetes_pod_container_port_number ]
+            - source_labels: [ __meta_kubernetes_pod_annotation_prometheus_io_scrape ]
+              action: keep
+              regex: true
+            - source_labels: [ __meta_kubernetes_pod_annotation_prometheus_io_path ]
+              action: replace
+              target_label: __metrics_path__
+              regex: (.+)
+            - source_labels:
+                [ __address__, __meta_kubernetes_pod_annotation_prometheus_io_port ]
+              action: replace
+              regex: ([^:]+)(?::\d+)?;(\d+)
+              replacement: $1:$2
+              target_label: __address__
+            - action: labelmap
+              regex: __meta_kubernetes_pod_label_(.+)
+            - source_labels: [ __meta_kubernetes_namespace ]
+              action: replace
+              target_label: kubernetes_namespace
+            - source_labels: [ __meta_kubernetes_pod_name ]
+              action: replace
+              target_label: kubernetes_pod_name
+          ## End of COPY
+
+    # -- Extra scrape configs that will be appended to `server.scrape.config`
+    extraScrapeConfigs: []
+
+# -- Add extra specs dynamically to this chart
+extraObjects: []
+
+# -- Enterprise license key configuration for VictoriaMetrics enterprise.
+# Required only for VictoriaMetrics enterprise.
+# Documentation - https://docs.victoriametrics.com/enterprise.html,
+# for more information, visit https://victoriametrics.com/products/enterprise/ .
+# To request a trial license, go to https://victoriametrics.com/products/enterprise/trial/
+# Supported starting from VictoriaMetrics v1.94.0
+license:
+  # -- License key
+  key: ""
+
+  # -- Use existing secret with license key
+  secret:
+    # -- Existing secret name
+    name: ""
+    # -- Key in secret with license key
+    key: ""

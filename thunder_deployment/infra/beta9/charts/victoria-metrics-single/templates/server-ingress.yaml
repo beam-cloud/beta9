@@ -1,0 +1,50 @@
+{{- if and .Values.server.enabled .Values.server.ingress.enabled  }}
+{{- $ingressApiIsStable := eq (include "victoria-metrics.ingress.isStable" .) "true" -}}
+{{- $ingressSupportsIngressClassName := eq (include "victoria-metrics.ingress.supportsIngressClassName" .) "true" -}}
+{{- $ingressSupportsPathType := eq (include "victoria-metrics.ingress.supportsPathType" .) "true" -}}
+{{- $servicePort := .Values.server.service.servicePort -}}
+{{- $ingressPathType := .Values.server.ingress.pathType -}}
+apiVersion: {{ include "victoria-metrics.ingress.apiVersion" . }}
+kind: Ingress
+metadata:
+{{- if .Values.server.ingress.annotations }}
+  annotations:
+{{ toYaml .Values.server.ingress.annotations | indent 4 }}
+{{- end }}
+  labels:
+  {{- include "victoria-metrics.server.labels" . | nindent 4 }}
+  {{ if .Values.server.ingress.extraLabels }}
+{{ toYaml .Values.server.ingress.extraLabels | indent 4 }}
+  {{ end }}
+  name: {{ template "victoria-metrics.server.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  {{- if and $ingressSupportsIngressClassName .Values.server.ingress.ingressClassName }}
+  ingressClassName: {{ .Values.server.ingress.ingressClassName }}
+  {{- end }}
+  rules:
+  {{- $serviceName := include "victoria-metrics.server.fullname" . }}
+  {{- range .Values.server.ingress.hosts }}
+  - host: {{ .name }}
+    http:
+      paths:
+        - path: {{ .path }}
+          {{- if $ingressSupportsPathType }}
+          pathType: {{ $ingressPathType }}
+          {{- end }}
+          backend:
+            {{- if $ingressApiIsStable }}
+            service:
+              name: {{ $serviceName }}
+              port:
+                number: {{ $servicePort }}
+            {{- else }}
+            serviceName: {{ $serviceName }}
+            servicePort: {{ .port | default "http"}}
+            {{- end }}
+    {{- end -}}
+{{- if .Values.server.ingress.tls }}
+  tls:
+{{ toYaml .Values.server.ingress.tls | indent 4 }}
+{{- end -}}
+{{- end -}}

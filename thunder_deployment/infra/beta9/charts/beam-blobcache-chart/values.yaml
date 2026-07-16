@@ -1,0 +1,60 @@
+---
+# -- See the common values.yaml for all the options you can set.
+# https://github.com/bjw-s/helm-charts/blob/common-2.5.0/charts/library/common/values.yaml
+global:
+  fullnameOverride:
+
+image:
+  repository: public.ecr.aws/n4e0e1y0/beam-blobcache
+  tag: 0.1.2
+
+controllers:
+  main:
+    annotations: {}
+    labels: {}
+    replicas: 1
+    strategy: Recreate # Can be Recreate or RollingUpdate
+    rollingUpdate:
+      unavailable:
+      surge:
+    containers:
+      main:
+        resources:
+          limits: {}
+          requests: {}
+            # cpu: 8000m
+            # memory: 64Gi
+
+persistence:
+  cache:
+    enabled: true
+    type: emptyDir
+    medium: Memory
+    sizeLimit: 60Gi
+
+service:
+  main:
+    enabled: true
+    annotations: {}
+    labels: {}
+    ports:
+      http:
+        port: 2049
+        targetPort: 2049
+        protocol: TCP
+
+ingress:
+  main:
+    enabled: false
+    annotations: {}
+    labels: {}
+    className: # nginx, traefik, etc.
+    hosts:
+    - host: blobcache.local
+      paths:
+      - path: /
+        pathType: Prefix
+        service:
+          name: main # Refers to service key
+          port: 2049
+    tls: []

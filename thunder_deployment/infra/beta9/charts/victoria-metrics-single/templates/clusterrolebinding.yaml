@@ -1,0 +1,23 @@
+{{- if and .Values.rbac.create (not .Values.rbac.namespaced) }}
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: {{ template "victoria-metrics.fullname" . }}-clusterrolebinding
+  labels:
+  {{- include "victoria-metrics.common.metaLabels" . | nindent 4 }}
+  {{- if .Values.rbac.extraLabels }}
+{{ toYaml .Values.rbac.extraLabels | indent 4}}
+  {{- end }}
+{{- with .Values.rbac.annotations }}
+  annotations:
+{{ toYaml . | indent 4 }}
+{{- end }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ template "victoria-metrics.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: {{ template "victoria-metrics.fullname" . }}-clusterrole
+  apiGroup: rbac.authorization.k8s.io
+{{- end -}}

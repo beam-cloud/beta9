@@ -1,0 +1,83 @@
+{{- if .Values.registry.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: beta9-registry
+  labels:
+    {{- include "bjw-s.common.lib.metadata.allLabels" . | nindent 4 }}
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.registry.persistence.size | quote }}
+  {{- if .Values.registry.persistence.storageClass }}
+  storageClassName: {{ .Values.registry.persistence.storageClass | quote }}
+  {{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: beta9-registry
+  labels:
+    {{- include "bjw-s.common.lib.metadata.allLabels" . | nindent 4 }}
+    app.kubernetes.io/component: registry
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/name: {{ include "bjw-s.common.lib.chart.names.name" . }}
+      app.kubernetes.io/component: registry
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/name: {{ include "bjw-s.common.lib.chart.names.name" . }}
+        app.kubernetes.io/component: registry
+    spec:
+      {{- with .Values.registry.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+      - name: registry
+        image: {{ .Values.registry.image.repository }}:{{ .Values.registry.image.tag }}
+        imagePullPolicy: {{ .Values.registry.image.pullPolicy | default "IfNotPresent" }}
+        ports:
+        - name: registry
+          containerPort: 5000
+          protocol: TCP
+        env:
+        - name: REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY
+          value: /var/lib/registry
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/registry
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: beta9-registry
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: beta9-registry
+  labels:
+    {{- include "bjw-s.common.lib.metadata.allLabels" . | nindent 4 }}
+    app.kubernetes.io/component: registry
+spec:
+  type: {{ .Values.registry.service.type | default "ClusterIP" }}
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/name: {{ include "bjw-s.common.lib.chart.names.name" . }}
+    app.kubernetes.io/component: registry
+  ports:
+  - name: registry
+    port: {{ .Values.registry.service.port | default 5000 }}
+    targetPort: 5000
+    protocol: TCP
+    {{- if eq (.Values.registry.service.type | default "ClusterIP") "NodePort" }}
+    nodePort: {{ .Values.registry.service.nodePort }}
+    {{- end }}
+{{- end }}

@@ -1,0 +1,6 @@
+apiVersion: v2
+name: nvidia-runtimeclass
+description: NVIDIA RuntimeClass for containers with GPU requirements, including gVisor support
+type: application
+version: 0.2.0
+appVersion: "1.0.0"

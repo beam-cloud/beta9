@@ -1,0 +1,50 @@
+{{- if .Values.rbac.create -}}
+{{- $namespaced := .Values.rbac.namespaced }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: {{ ternary "Role" "ClusterRole" $namespaced }}
+metadata:
+  name: {{ template "chart.fullname" . }}{{- ternary "" "-clusterrole" $namespaced }}
+  {{- if not $namespaced }}
+  namespace: {{ .Release.Namespace }}
+  {{- end }}
+  labels:
+    {{- include "chart.labels" . | nindent 4 }}
+{{- with .Values.rbac.extraLabels }}
+{{ toYaml . | indent 4}}
+{{- end }}
+  {{- with .Values.rbac.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+rules:
+- apiGroups:
+  - discovery.k8s.io
+  resources:
+  - endpointslices
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources:
+  - nodes
+  - nodes/proxy
+  - nodes/metrics
+  - services
+  - endpoints
+  - pods
+  verbs: ["get", "list", "watch"]
+- apiGroups:
+  - extensions
+  - networking.k8s.io
+  resources:
+  - ingresses
+  verbs: ["get", "list", "watch"]
+{{- if not $namespaced }}
+- nonResourceURLs: ["/metrics"]
+  verbs: ["get"]
+{{- end }}
+{{- if and .Values.rbac.pspEnabled (.Capabilities.APIVersions.Has "policy/v1beta1/PodSecurityPolicy") }}
+- apiGroups:      ['extensions']
+  resources:      ['podsecuritypolicies']
+  verbs:          ['use']
+  resourceNames:  [{{ template "chart.fullname" . }}]
+{{- end }}
+{{- end -}}

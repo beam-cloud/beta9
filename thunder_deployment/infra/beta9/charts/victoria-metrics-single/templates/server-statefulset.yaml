@@ -1,0 +1,282 @@
+{{- if and .Values.server.enabled .Values.server.statefulSet.enabled -}}
+{{ include "victoria-metrics.vmbackupmanager.enforce_license" . }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  namespace: {{ .Release.Namespace }}
+{{- if .Values.server.annotations }}
+  annotations:
+{{ toYaml .Values.server.annotations | indent 4 }}
+{{- end }}
+  labels:
+    {{- include "victoria-metrics.server.labels" . | nindent 4 }}
+    {{- with .Values.server.extraLabels }}
+    {{ toYaml .}}
+    {{- end}}
+  name: {{ template "victoria-metrics.server.fullname" . }}
+spec:
+  serviceName: {{ template "victoria-metrics.server.fullname" . }}
+  selector:
+    matchLabels:
+      {{- include "victoria-metrics.server.matchLabels" . | nindent 6 }}
+  replicas: 1
+  podManagementPolicy: {{ .Values.server.podManagementPolicy }}
+  template:
+    metadata:
+    {{- if .Values.server.podAnnotations }}
+      annotations:
+{{ toYaml .Values.server.podAnnotations | indent 8 }}
+    {{- end }}
+      labels:
+        {{- include "victoria-metrics.server.labels" . | nindent 8 }}
+        {{- range $key, $value := .Values.server.podLabels }}
+        {{ $key }}: {{ $value | quote }}
+        {{- end }}
+    spec:
+{{- if .Values.server.priorityClassName }}
+      priorityClassName: "{{ .Values.server.priorityClassName }}"
+{{- end }}
+{{- if .Values.server.schedulerName }}
+      schedulerName: "{{ .Values.server.schedulerName }}"
+{{- end }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountToken }}
+      {{- if eq (include "victoria-metrics.hasInitContainer" . ) "true" }}
+      initContainers:
+        {{- include "victoria-metrics.initContiners" . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ template "victoria-metrics.name" . }}-{{ .Values.server.name }}
+          {{- with  .Values.server.securityContext }}
+          securityContext: {{- toYaml . | nindent 12 }}
+          {{- end }}
+          image: "{{ .Values.server.image.repository }}:{{ .Values.server.image.tag }}"
+          imagePullPolicy: "{{ .Values.server.image.pullPolicy }}"
+          {{- if .Values.server.containerWorkingDir }}
+          workingDir: {{ .Values.server.containerWorkingDir }}
+          {{- end }}
+          args:
+            - {{ printf "%s=%s" "--retentionPeriod" (toString .Values.server.retentionPeriod) | quote}}
+            - {{ printf "%s=%s" "--storageDataPath" .Values.server.persistentVolume.mountPath | quote}}
+          {{- if .Values.server.scrape.enabled }}
+            - -promscrape.config=/scrapeconfig/scrape.yml
+          {{- end }}
+          {{- range $key, $value := .Values.server.extraArgs }}
+            - --{{ $key }}={{ $value }}
+          {{- end }}
+          {{- with (include "victoria-metrics.license.flag" .) }}
+            - {{ . }}
+          {{- end }}
+          {{- if .Values.server.envFrom }}
+          envFrom:
+            {{- with .Values.server.envFrom -}}
+            {{ toYaml . | nindent 12 }}
+            {{- end }}
+          {{- end }}
+          {{- with .Values.server.env }}
+          env: {{ toYaml . | nindent 10 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: 8428
+          {{- if .Values.server.extraArgs.graphiteListenAddr }}
+            - name: graphite-tcp
+              protocol: TCP
+              containerPort: {{ include "split-host-port" .Values.server.extraArgs.graphiteListenAddr }}
+          {{- end }}
+          {{- if .Values.server.extraArgs.graphiteListenAddr }}
+            - name: graphite-udp
+              protocol: UDP
+              containerPort: {{ include "split-host-port" .Values.server.extraArgs.graphiteListenAddr }}
+          {{- end }}
+          {{- if .Values.server.extraArgs.influxListenAddr }}
+            - name: influx-tcp
+              protocol: TCP
+              containerPort: {{ include "split-host-port" .Values.server.extraArgs.influxListenAddr }}
+          {{- end }}
+          {{- if .Values.server.extraArgs.influxListenAddr }}
+            - name: influx-udp
+              protocol: UDP
+              containerPort: {{ include "split-host-port" .Values.server.extraArgs.influxListenAddr }}
+          {{- end }}
+          {{- if .Values.server.extraArgs.opentsdbHTTPListenAddr }}
+            - name: opentsdbhttp
+              protocol: TCP
+              containerPort: {{ include "split-host-port" .Values.server.extraArgs.opentsdbHTTPListenAddr }}
+          {{- end }}
+          {{- if .Values.server.extraArgs.opentsdbListenAddr }}
+            - name: opentsdb-tcp
+              protocol: TCP
+              containerPort: {{ include "split-host-port" .Values.server.extraArgs.opentsdbListenAddr }}
+          {{- end }}
+          {{- if .Values.server.extraArgs.opentsdbListenAddr }}
+            - name: opentsdb-udp
+              protocol: UDP
+              containerPort: {{ include "split-host-port" .Values.server.extraArgs.opentsdbListenAddr }}
+          {{- end }}
+          {{- with $.Values.server.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $.Values.server.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $.Values.server.startupProbe }}
+          startupProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.server.resources | nindent 12 }}
+          volumeMounts:
+            - name: server-volume
+              mountPath: {{ .Values.server.persistentVolume.mountPath }}
+              subPath: {{ .Values.server.persistentVolume.subPath }}
+          {{- if .Values.server.scrape.enabled }}
+            - name: scrapeconfig
+              mountPath: /scrapeconfig
+          {{- end }}
+          {{- range .Values.server.extraHostPathMounts }}
+            - name: {{ .name }}
+              mountPath: {{ .mountPath }}
+              subPath: {{ .subPath }}
+              readOnly: {{ .readOnly }}
+          {{- end }}
+          {{- range .Values.server.extraConfigmapMounts }}
+            - name: {{ $.Values.server.name }}-{{ .name }}
+              mountPath: {{ .mountPath }}
+              subPath: {{ .subPath }}
+              readOnly: {{ .readOnly }}
+          {{- end }}
+          {{- range .Values.server.extraSecretMounts }}
+            - name: {{ .name }}
+              mountPath: {{ .mountPath }}
+              subPath: {{ .subPath }}
+              readOnly: {{ .readOnly }}
+          {{- end }}
+          {{- include "victoria-metrics.license.mount" . | nindent 12 }}
+          {{- with .Values.server.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+        {{- if .Values.server.vmbackupmanager.enable }}
+        - name: {{ template "victoria-metrics.name" . }}-vmbackupmanager
+          image: "{{ .Values.server.vmbackupmanager.image.repository }}:{{ .Values.server.vmbackupmanager.image.tag }}"
+          imagePullPolicy: "{{ .Values.server.image.pullPolicy }}"
+          args:
+            - {{ printf "%s=%t" "--eula" .Values.server.vmbackupmanager.eula | quote}}
+            - {{ printf "%s=%t" "--disableHourly" .Values.server.vmbackupmanager.disableHourly | quote}}
+            - {{ printf "%s=%t" "--disableDaily" .Values.server.vmbackupmanager.disableDaily | quote}}
+            - {{ printf "%s=%t" "--disableWeekly" .Values.server.vmbackupmanager.disableWeekly | quote}}
+            - {{ printf "%s=%t" "--disableMonthly" .Values.server.vmbackupmanager.disableMonthly | quote}}
+            - {{ printf "%s=%d" "--keepLastHourly" (int .Values.server.vmbackupmanager.retention.keepLastHourly) | quote}}
+            - {{ printf "%s=%d" "--keepLastDaily" (int .Values.server.vmbackupmanager.retention.keepLastDaily) | quote}}
+            - {{ printf "%s=%d" "--keepLastWeekly" (int .Values.server.vmbackupmanager.retention.keepLastWeekly) | quote}}
+            - {{ printf "%s=%d" "--keepLastMonthly" (int .Values.server.vmbackupmanager.retention.keepLastMonthly) | quote}}
+            - {{ printf "%s=%s" "--dst" (printf "%s/%s" .Values.server.vmbackupmanager.destination (include "victoria-metrics.name" .) ) | quote}}
+            - {{ printf "%s=%s" "--storageDataPath" .Values.server.persistentVolume.mountPath | quote}}
+            - "--snapshot.createURL=http://localhost:8428/snapshot/create"
+            - "--snapshot.deleteURL=http://localhost:8428/snapshot/delete"
+            {{- range $key, $value := .Values.server.vmbackupmanager.extraArgs }}
+            - --{{ $key }}={{ $value }}
+            {{- end }}
+            {{- with (include "victoria-metrics.license.flag" .) }}
+            - {{ . }}
+            {{- end }}
+          {{- with .Values.server.vmbackupmanager.resources }}
+          resources: {{ toYaml . | nindent 12  }}
+          {{- end }}
+          {{- with  .Values.server.securityContext }}
+          securityContext: {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $.Values.server.vmbackupmanager.livenessProbe }}
+          livenessProbe: {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $.Values.server.vmbackupmanager.readinessProbe }}
+          readinessProbe: {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.server.vmbackupmanager.env }}
+          env: {{ toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: manager-http
+              containerPort: 8300
+          volumeMounts:
+            - name: server-volume
+              mountPath: {{ .Values.server.persistentVolume.mountPath }}
+              subPath: {{ .Values.server.persistentVolume.subPath }}
+          {{- with .Values.server.vmbackupmanager.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- include "victoria-metrics.license.mount" . | nindent 12 }}
+        {{- end }}
+      {{- with .Values.server.extraContainers }}
+      {{- toYaml . | nindent 8 }}
+      {{- end }}
+    {{- if .Values.imagePullSecrets }}
+      imagePullSecrets:
+       {{ toYaml .Values.imagePullSecrets | indent 2 }}
+    {{- end }}
+    {{- if .Values.server.nodeSelector }}
+      nodeSelector:
+{{ toYaml .Values.server.nodeSelector | indent 8 }}
+    {{- end }}
+    {{- if .Values.server.podSecurityContext }}
+      securityContext:
+{{ toYaml .Values.server.podSecurityContext | indent 8 }}
+    {{- end }}
+      serviceAccountName: {{ template "victoria-metrics.serviceAccountName" . }}
+    {{- if .Values.server.tolerations }}
+      tolerations:
+{{ toYaml .Values.server.tolerations | indent 8 }}
+    {{- end }}
+    {{- with .Values.server.affinity }}
+      affinity: {{ toYaml . | nindent 8 }}
+    {{- end }}
+      terminationGracePeriodSeconds: {{ .Values.server.terminationGracePeriodSeconds }}
+      volumes:
+        {{- if .Values.server.scrape.enabled }}
+        - name: scrapeconfig
+          configMap:
+            name: {{ include "victoria-metrics.server.scrape.configname" . }}
+        {{- end }}
+        {{- if not .Values.server.persistentVolume.enabled }}
+        - name: server-volume
+          emptyDir: {}
+        {{- else }}
+        {{- if .Values.server.persistentVolume.existingClaim }}
+        - name: server-volume
+          persistentVolumeClaim:
+            claimName: {{ .Values.server.persistentVolume.existingClaim }}
+        {{- end }}
+        {{- end }}
+        {{- with .Values.server.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- include "victoria-metrics.license.volume" . | nindent 8 }}
+  {{- if and .Values.server.persistentVolume.enabled (not .Values.server.persistentVolume.existingClaim) }}
+  volumeClaimTemplates:
+    - metadata:
+        name: server-volume
+        {{- if .Values.server.persistentVolume.annotations }}
+        annotations:
+{{ toYaml .Values.server.persistentVolume.annotations | indent 10 }}
+        {{- end }}
+      spec:
+        accessModes:
+{{ toYaml .Values.server.persistentVolume.accessModes | indent 10 }}
+        resources:
+          requests:
+            storage: "{{ .Values.server.persistentVolume.size }}"
+      {{- if .Values.server.persistentVolume.storageClass }}
+      {{- if (eq "-" .Values.server.persistentVolume.storageClass) }}
+        storageClassName: ""
+      {{- else }}
+        storageClassName: "{{ .Values.server.persistentVolume.storageClass }}"
+      {{- end }}
+      {{- end }}
+      {{- with .Values.server.persistentVolume.matchLabels }}
+        selector:
+          matchLabels:
+            {{- toYaml . | nindent 12 }}
+      {{- end }}
+{{- end }}
+{{- end }}

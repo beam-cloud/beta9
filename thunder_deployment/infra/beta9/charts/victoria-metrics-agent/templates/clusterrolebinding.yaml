@@ -1,0 +1,27 @@
+{{- if .Values.rbac.create -}}
+{{- $namespaced := .Values.rbac.namespaced }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: {{ ternary "RoleBinding" "ClusterRoleBinding" $namespaced }}
+metadata:
+  name: {{ template "chart.fullname" . }}{{- ternary "" "-clusterrolebinding" $namespaced }}
+  {{- if not $namespaced }}
+  namespace: {{ .Release.Namespace }}
+  {{- end }}
+  labels:
+    {{- include "chart.labels" . | nindent 4 }}
+{{- with .Values.rbac.extraLabels }}
+{{ toYaml . | indent 4}}
+{{- end }}
+  {{- with .Values.rbac.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: {{ ternary "Role" "ClusterRole" $namespaced }}
+  name: {{ template "chart.fullname" . }}{{- ternary "" "-clusterrole" $namespaced }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ template "chart.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end -}}

@@ -1,0 +1,475 @@
+# -- See the common values.yaml for all the options you can set.
+# https://github.com/bjw-s/helm-charts/blob/common-2.5.0/charts/library/common/values.yaml
+global:
+  labels: {}
+  annotations: {}
+  nameOverride: beta9
+
+# -- Beta9's configuration.
+# https://github.com/beam-cloud/beta9/blob/main/pkg/common/config.default.yaml
+config:
+  gateway:
+    host: beta9-gateway
+    grpc:
+      externalHost: 100.73.254.107
+      externalPort: 31993
+      tls: false
+      port: 1993
+    http:
+      externalHost: 100.73.254.107
+      externalPort: 31994
+      tls: false
+      port: 1994
+  database:
+    postgres:
+      host: postgresql
+      port: 5432
+      username: root
+      password: password
+      name: main
+      timezone: UTC
+      encryptionKey: sk_pKz38fK8v7lz01AneJI8MJnR70akmP2CtDNf1IufKcY=
+    redis:
+      mode: single
+      addrs:
+      - redis-master:6379
+      password: ""
+      enableTLS: false
+      insecureSkipVerify: false
+      dialTimeout: 3s
+  storage:
+    mode: juicefs
+    fsName: beta9-fs
+    fsPath: /data
+    juicefs:
+      redisURI: redis://juicefs-redis-master:6379/0
+      awsS3Bucket: http://localstack:4566/juicefs
+  worker:
+    imageRegistry: public.ecr.aws/n4e0e1y0
+    imageName: beta9-worker
+    imageTag: 0.1.682
+    hostNetwork: true
+    jobResourcesEnforced: true
+    imagePVCName: ""
+    pools:
+      default:
+        mode: local
+        priority: 1
+        imagesPath: /var/lib/beta9/images
+        containerRuntime: gvisor
+        containerStartConcurrency: 32
+        containerRuntimeConfig:
+          gvisorPlatform: systrap
+          gvisorRoot: /run/gvisor
+          gvisorExtraArgs:
+          - --overlay2=none
+          - --file-access=shared
+        networkPreallocation: true
+        networkSlotPoolSize: 32
+        jobSpec:
+          nodeSelector: {}
+        criuEnabled: true
+        poolSizing:
+          defaultWorkerCPU: 2000m
+          defaultWorkerGPUType: ""
+          defaultWorkerMemory: 1Gi
+          minFreeCPU: 0
+          minFreeGPU: 0
+          minFreeMemory: 0
+      build:
+        mode: local
+        requiresPoolSelector: true
+        imagesPath: /var/lib/beta9/images
+        containerRuntime: runc
+        containerRuntimeConfig:
+          gvisorPlatform: systrap
+          gvisorRoot: /run/gvisor
+          gvisorExtraArgs:
+          - --overlay2=none
+          - --file-access=shared
+        networkPreallocation: true
+        networkSlotPoolSize: 32
+        tmpSizeLimit: 50Gi
+        jobSpec:
+          nodeSelector:
+            beta9.node-role: master
+          env:
+          - name: POD_HOSTNAME
+            value: 10.42.0.0
+        poolSizing:
+          defaultWorkerCPU: 8000m
+          defaultWorkerGPUType: ""
+          defaultWorkerMemory: 32Gi
+          minFreeCPU: 8000m
+          minFreeGPU: 0
+          minFreeMemory: 32Gi
+          sharedMemoryLimitPct: 100%
+      a6000:
+        mode: local
+        priority: 100
+        imagesPath: /var/lib/beta9/images
+        gpuType: A6000
+        runtime: nvidia
+        containerRuntime: runc
+        containerStartConcurrency: 8
+        containerRuntimeConfig:
+          gvisorPlatform: systrap
+          gvisorRoot: /run/gvisor
+          gvisorExtraArgs:
+          - --overlay2=none
+          - --file-access=shared
+        networkPreallocation: true
+        networkSlotPoolSize: 32
+        jobSpec:
+          nodeSelector:
+            beta9.node-role: gpu
+            beta9.gpu-type: A6000
+          env:
+          - name: POD_HOSTNAME
+            value: 10.42.2.0
+        poolSizing:
+          defaultWorkerCPU: 8000m
+          defaultWorkerGPUType: A6000
+          defaultWorkerGPUCount: "1"
+          defaultWorkerMemory: 32Gi
+          minFreeCPU: 0
+          minFreeGPU: 0
+          minFreeMemory: 0
+          sharedMemoryLimitPct: 100%
+  monitoring:
+    metricsCollector: none
+    prometheus:
+      scrapeWorkers: false
+      port: 9090
+
+  imageService:
+    registryStore: s3
+    registries:
+      s3:
+        bucketName: beta9-images
+        region: us-east-1
+        accessKey: test
+        secretKey: test
+        endpoint: http://localstack:4566
+        forcePathStyle: true
+    runner:
+      baseImageRegistry: public.ecr.aws/n4e0e1y0
+    buildRegistry: 100.73.254.107:32000
+    buildRegistryInsecure: true
+    buildRepositoryName: beta9-users
+  managedCompute:
+    billableMarginPct: 0.10
+    byoc:
+      pricing:
+        memoryHourlyMicrosPerGB: 4500
+        cpuHourlyMicrosPerVCPU: 9500
+      aws:
+        templateUrl: ""
+    billing:
+      mode: noop
+      endpoint: ""
+      authToken: ""
+      required: false
+      timeout: 5s
+      reconcileInterval: 1m
+      minimumCreditCents: 2500
+
+registry:
+  enabled: true
+  image:
+    repository: registry
+    tag: 2.8.3
+    pullPolicy: IfNotPresent
+  nodeSelector:
+    beta9.node-role: master
+  service:
+    type: NodePort
+    port: 5000
+    nodePort: 32000
+  persistence:
+    enabled: true
+    storageClass: local-path
+    size: 100Gi
+
+images:
+  gateway:
+    repository: public.ecr.aws/n4e0e1y0/beta9-gateway
+    tag: 0.1.714
+    pullPolicy: # Defaults to IfNotPresent
+  worker:
+    repository: public.ecr.aws/n4e0e1y0/beta9-worker
+    tag: 0.1.682
+    pullPolicy: # Defaults to IfNotPresent
+
+cacheServer:
+  enabled: false
+  configSecretName: beta9-config-helm
+  poolName: default
+  locality: default
+  serverPort: 2050
+  hostPath: /var/lib/beta9/cache
+  mountPath: /var/lib/beta9/cache
+  hostNetwork: true
+  priorityClassName:
+  image:
+    repository: # Defaults to images.worker.repository
+    tag:        # Defaults to images.worker.tag or chart app version
+    pullPolicy: # Defaults to images.worker.pullPolicy or IfNotPresent
+  nodeSelector: {}
+  affinity: {}
+  tolerations: []
+  securityContext:
+    privileged: true
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+
+controllers:
+  gateway:
+    annotations: {}
+    labels: {}
+    replicas: 1
+    pod:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      nodeSelector:
+        beta9.node-role: master
+      # 180s gateway shutdownTimeout + 10s readiness propagation + 5s buffer.
+      terminationGracePeriodSeconds: "195"
+    strategy: RollingUpdate
+    rollingUpdate:
+      unavailable: 1
+      surge: "0"
+    containers:
+      main:
+        probes:
+          liveness:
+            enabled: false
+          readiness:
+            enabled: false
+          startup:
+            enabled: false
+    initContainers:
+      wait-on-backends:
+        image:
+          repository: busybox
+          tag: 1.37.0
+        command:
+        - sh
+        - -c
+        - |
+          until nc -z postgresql 5432; do echo "Waiting on PostgreSQL..."; sleep 2; done;
+          until nc -z redis-master 6379; do echo "Waiting on Redis..."; sleep 2; done;
+          until nc -z juicefs-redis-master 6379; do echo "Waiting on Redis (JuiceFS)..."; sleep 2; done;
+          echo "All systems ready!"
+
+persistence:
+  images:
+    enabled: false
+    type: persistentVolumeClaim
+    size: 50Gi
+    storageClass: local-path
+    accessMode: ReadWriteOnce
+
+service:
+  gateway:
+    annotations:
+      prometheus.io/scrape: "true"
+      prometheus.io/port: "9090"
+    labels: {}
+    ports:
+      grpc:
+        port: 1993
+        targetPort: 1993
+        protocol: TCP
+        nodePort: 31993
+      http:
+        primary: true
+        port: 1994
+        targetPort: 1994
+        protocol: TCP
+        nodePort: 31994
+      metrics:
+        port: 9090
+        targetPort: 9090
+        protocol: TCP
+    type: NodePort
+
+ingress:
+  gateway:
+    enabled: false
+    annotations: {}
+    labels: {}
+
+serviceAccount:
+  name: beta9
+  annotations: {}
+  labels: {}
+
+# -- In-memory cache for container images.
+# https://github.com/beam-cloud/blobcache/deploy/charts/blobcache/values.yaml
+blobcache:
+  enabled: false
+
+# -- Needed by Gateway
+redis:
+  enabled: true
+  nameOverride: redis
+  fullnameOverride: redis
+  architecture: standalone
+  auth:
+    enabled: false
+  image:
+    tag: latest
+  volumePermissions:
+    image:
+      tag: latest
+  sysctl:
+    image:
+      tag: latest
+  master:
+    configuration: |
+      activedefrag yes
+      notify-keyspace-events AKE
+    persistence:
+      size: 1Gi
+
+# -- Needed by Gateway
+postgresql:
+  enabled: true
+  nameOverride: postgresql
+  fullnameOverride: postgresql
+  image:
+    tag: latest
+  global:
+    postgresql:
+      auth:
+        username: root
+        password: password
+        database: main
+  primary:
+    extendedConfiguration: |
+      max_connections=400
+      shared_buffers='400MB'
+  volumePermissions:
+    enabled: true
+    image:
+      tag: latest
+  persistence:
+    enabled: true
+    size: 1Gi
+
+# -- Needed by Gateway's file system
+juicefs-redis:
+  enabled: true
+  nameOverride: juicefs-redis
+  fullnameOverride: juicefs-redis
+  architecture: standalone
+  auth:
+    enabled: false
+  image:
+    tag: latest
+  volumePermissions:
+    image:
+      tag: latest
+  sysctl:
+    image:
+      tag: latest
+  master:
+    persistence:
+      size: 1Gi
+
+# -- Enables deployment of victoria-metrics and grafana
+metrics:
+  enabled: false
+
+grafana:
+  nameOverride: grafana
+  fullnameOverride: grafana
+  datasources:
+   datasources.yaml:
+     apiVersion: 1
+     datasources:
+     - name: Victoria Metrics
+       type: prometheus
+       url: http://victoria-metrics-single:8428
+       access: proxy
+       isDefault: true
+
+victoria-metrics-agent:
+  nameOverride: victoria-metrics-agent
+  fullnameOverride: victoria-metrics-agent
+  remoteWriteUrls:
+  - http://victoria-metrics-single:8428/api/v1/write
+  extraScrapeConfigs:
+  - job_name: beta9-pods
+    metrics_path: /metrics
+    scheme: http
+    honor_labels: true
+    scrape_timeout: 10s
+    scrape_interval: 15s
+    kubernetes_sd_configs:
+    - role: pod
+      namespaces:
+        names:
+        - beta9
+    relabel_configs:
+    - source_labels: [__meta_kubernetes_pod_label_prometheus_io_scrape]
+      action: keep
+      regex: true
+    - source_labels: [__meta_kubernetes_pod_container_port_number]
+      action: keep
+      regex: 9090
+
+victoria-metrics-single:
+  server:
+    fullnameOverride: victoria-metrics-single
+
+# -- Used to add any custom manifests
+manifests:
+  resources:
+  - apiVersion: helm.cattle.io/v1
+    kind: HelmChart
+    metadata:
+      name: localstack
+    spec:
+      repo: https://localstack.github.io/helm-charts
+      chart: localstack
+      createNamespace: false
+      version: 0.6.5
+      valuesContent: |-
+        image:
+          tag: 3.8.1
+        extraEnvVars:
+        - name: SERVICES
+          value: s3
+        enableStartupScripts: true
+        startupScriptContent: |
+          #!/bin/bash
+          awslocal s3 mb s3://juicefs
+          awslocal s3 mb s3://beta9-images
+        persistence:
+          enabled: true
+          storageClass: local-path
+          accessModes:
+          - ReadWriteOnce
+          size: 50Gi
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: postgres-postgresql
+    spec:
+      type: ClusterIP
+      ports:
+      - name: tcp-postgresql
+        port: 5432
+        targetPort: tcp-postgresql
+      selector:
+        app.kubernetes.io/component: primary
+        app.kubernetes.io/instance: beta9
+        app.kubernetes.io/name: postgresql
+  templates: []

@@ -1,0 +1,50 @@
+{{- if .Values.ingress.enabled }}
+{{- $ingressApiIsStable := eq (include "vmagent.ingress.isStable" .) "true" -}}
+{{- $ingressSupportsIngressClassName := eq (include "vmagent.ingress.supportsIngressClassName" .) "true" -}}
+{{- $ingressSupportsPathType := eq (include "vmagent.ingress.supportsPathType" .) "true" -}}
+{{- $servicePort := .Values.service.servicePort -}}
+{{- $ingressPathType := .Values.ingress.pathType -}}
+apiVersion: {{ include "vmagent.ingress.apiVersion" . }}
+kind: Ingress
+metadata:
+{{- if .Values.ingress.annotations }}
+  annotations:
+{{ toYaml .Values.ingress.annotations | indent 4 }}
+{{- end }}
+  labels:
+  {{- include "chart.labels" . | nindent 4 }}
+  {{ with .Values.ingress.extraLabels }}
+{{ toYaml . | indent 4 }}
+  {{ end }}
+  name: {{ template "chart.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  {{- if and $ingressSupportsIngressClassName .Values.ingress.ingressClassName }}
+  ingressClassName: {{ .Values.ingress.ingressClassName }}
+  {{- end }}
+  rules:
+  {{- $serviceName := include "chart.fullname" . }}
+  {{- range .Values.ingress.hosts }}
+  - host: {{ .name }}
+    http:
+      paths:
+        - path: {{ .path }}
+          {{- if $ingressSupportsPathType }}
+          pathType: {{ $ingressPathType }}
+          {{- end }}
+          backend:
+            {{- if $ingressApiIsStable }}
+            service:
+              name: {{ $serviceName }}
+              port:
+                number: {{ $servicePort }}
+            {{- else }}
+            serviceName: {{ $serviceName }}
+            servicePort: {{ .port | default "http"}}
+            {{- end }}
+  {{- end -}}
+{{- if .Values.ingress.tls }}
+  tls:
+{{ toYaml .Values.ingress.tls | indent 4 }}
+{{- end -}}
+{{- end -}}

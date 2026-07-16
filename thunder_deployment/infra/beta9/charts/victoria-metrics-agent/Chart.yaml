@@ -1,0 +1,33 @@
+annotations:
+  artifacthub.io/category: monitoring-logging
+  artifacthub.io/changes: '- bump version of VM components to [v1.97.1](https://github.com/VictoriaMetrics/VictoriaMetrics/releases/tag/v1.97.1)'
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/links: |
+    - name: Sources
+      url: https://github.com/VictoriaMetrics/helm-charts
+    - name: Charts repo
+      url: https://victoriametrics.github.io/helm-charts/
+    - name: Docs
+      url: https://docs.victoriametrics.com/vmagent.html
+apiVersion: v1
+appVersion: v1.97.1
+description: Victoria Metrics Agent - collects metrics from various sources and stores
+  them to VictoriaMetrics
+home: https://github.com/VictoriaMetrics/helm-charts
+icon: https://avatars.githubusercontent.com/u/43720803?s=200&v=4
+keywords:
+- victoriametrics
+- vmagent
+- agent
+- collector
+- monitoring
+- kubernetes
+- observability
+- metrics
+- timeseries
+- servicediscovery
+kubeVersion: '>=1.23.0-0'
+name: victoria-metrics-agent
+sources:
+- https://github.com/VictoriaMetrics/helm-charts
+version: 0.9.17

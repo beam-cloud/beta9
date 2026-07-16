@@ -1,0 +1,6 @@
+---
+{{/* Set all variables properly */}}
+{{- include "beta9.init" . -}}
+
+{{/* Render the templates */}}
+{{- include "bjw-s.common.loader.all" . -}}

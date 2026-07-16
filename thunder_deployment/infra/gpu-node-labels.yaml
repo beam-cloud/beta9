@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: Node
+metadata:
+  name: REPLACE_WITH_GPU_NODE_NAME
+  labels:
+    beta9.node-role: gpu
+    beta9.gpu: "true"
+    beta9.gpu-type: A6000
+    beta9.gpu-count: "8"

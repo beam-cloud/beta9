@@ -1,0 +1,92 @@
+{{- if and .Values.service.enabled -}}
+apiVersion: v1
+kind: Service
+metadata:
+{{- with .Values.service.annotations }}
+  annotations:
+{{ toYaml . | indent 4}}
+{{- end }}
+  labels:
+    {{- include "chart.labels" . | nindent 4 }}
+{{- with .Values.service.extraLabels }}
+{{ toYaml . | indent 4}}
+{{- end }}
+  name: {{ template "chart.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+spec:
+{{- if .Values.service.clusterIP }}
+  clusterIP: {{ .Values.service.clusterIP }}
+{{- end }}
+{{- if .Values.service.externalIPs }}
+  externalIPs:
+{{ toYaml .Values.service.externalIPs | indent 4 }}
+{{- end }}
+{{- if .Values.service.loadBalancerIP }}
+  loadBalancerIP: {{ .Values.service.loadBalancerIP }}
+{{- end }}
+{{- if .Values.service.loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+  {{- range $cidr := .Values.service.loadBalancerSourceRanges }}
+    - {{ $cidr }}
+  {{- end }}
+{{- end }}
+  ports:
+    - name: http
+      port: {{ .Values.service.servicePort }}
+      protocol: TCP
+      targetPort: http
+      {{- with .Values.service.nodePort }}
+      nodePort: {{ . }}
+      {{- end }}
+{{- if .Values.extraArgs.graphiteListenAddr }}
+    - name: graphite-tcp
+      protocol: TCP
+      port: {{ include "split-host-port" .Values.extraArgs.graphiteListenAddr }}
+      targetPort: graphite-tcp
+{{- end }}
+{{- if .Values.extraArgs.graphiteListenAddr }}
+    - name: graphite-udp
+      protocol: UDP
+      port: {{ include "split-host-port" .Values.extraArgs.graphiteListenAddr }}
+      targetPort: graphite-udp
+{{- end }}
+{{- if .Values.extraArgs.influxListenAddr }}
+    - name: influx-tcp
+      protocol: TCP
+      port: {{ include "split-host-port" .Values.extraArgs.influxListenAddr }}
+      targetPort: influx-tcp
+{{- end }}
+{{- if .Values.extraArgs.influxListenAddr }}
+    - name: influx-udp
+      protocol: UDP
+      port: {{ include "split-host-port" .Values.extraArgs.influxListenAddr }}
+      targetPort: influx-udp
+{{- end }}
+{{- if .Values.extraArgs.opentsdbHTTPListenAddr }}
+    - name: opentsdbhttp
+      port: {{ include "split-host-port" .Values.extraArgs.opentsdbHTTPListenAddr }}
+      targetPort: opentsdbhttp
+{{- end }}
+{{- if .Values.extraArgs.opentsdbListenAddr }}
+    - name: opentsdb-udp
+      protocol: UDP
+      port: {{ include "split-host-port" .Values.extraArgs.opentsdbListenAddr }}
+      targetPort: opentsdb-udp
+{{- end }}
+{{- if .Values.extraArgs.opentsdbListenAddr }}
+    - name: opentsdb-tcp
+      protocol: TCP
+      port: {{ include "split-host-port" .Values.extraArgs.opentsdbListenAddr }}
+      targetPort: opentsdb-tcp
+{{- end }}
+
+  selector:
+    {{- include "chart.selectorLabels" . | nindent 4 }}
+  type: "{{ .Values.service.type }}"
+  {{- with .Values.service.healthCheckNodePort }}
+  healthCheckNodePort: {{ . }}
+  {{- end }}
+  {{- with .Values.service.externalTrafficPolicy }}
+  externalTrafficPolicy: {{ . }}
+  {{- end }}
+{{- end }}

@@ -1,0 +1,97 @@
+# Helm Chart For Victoria Metrics Agent.
+
+{{ template "chart.typeBadge" . }} {{ template "chart.versionBadge" . }}
+[![Artifact Hub](https://img.shields.io/endpoint?url=https://artifacthub.io/badge/repository/victoriametrics)](https://artifacthub.io/packages/helm/victoriametrics/victoria-metrics-agent)
+[![Slack](https://img.shields.io/badge/join%20slack-%23victoriametrics-brightgreen.svg)](https://slack.victoriametrics.com/)
+
+{{ template "chart.description" . }}
+
+## Prerequisites
+
+* Install the follow packages: ``git``, ``kubectl``, ``helm``, ``helm-docs``. See this [tutorial](../../REQUIREMENTS.md).
+
+## How to install
+
+Access a Kubernetes cluster.
+
+Add a chart helm repository with follow commands:
+
+```console
+helm repo add vm https://victoriametrics.github.io/helm-charts/
+
+helm repo update
+```
+
+List versions of ``vm/victoria-metrics-agent`` chart available to installation:
+
+```console
+helm search repo vm/victoria-metrics-agent -l
+```
+
+Export default values of ``victoria-metrics-agent`` chart to file ``values.yaml``:
+
+```console
+helm show values vm/victoria-metrics-agent > values.yaml
+```
+
+Change the values according to the need of the environment in ``values.yaml`` file.
+
+Test the installation with command:
+
+```console
+helm install vmagent vm/victoria-metrics-agent -f values.yaml -n NAMESPACE --debug --dry-run
+```
+
+Install chart with command:
+
+```console
+helm install vmagent vm/victoria-metrics-agent -f values.yaml -n NAMESPACE
+```
+
+Get the pods lists by running this commands:
+
+```console
+kubectl get pods -A | grep 'agent'
+```
+
+Get the application by running this command:
+
+```console
+helm list -f vmagent -n NAMESPACE
+```
+
+See the history of versions of ``vmagent`` application with command.
+
+```console
+helm history vmagent -n NAMESPACE
+```
+
+## How to uninstall
+
+Remove application with command.
+
+```console
+helm uninstall vmagent -n NAMESPACE
+```
+
+## Documentation of Helm Chart
+
+Install ``helm-docs`` following the instructions on this [tutorial](../../REQUIREMENTS.md).
+
+Generate docs with ``helm-docs`` command.
+
+```bash
+cd charts/victoria-metrics-agent
+
+helm-docs
+```
+
+The markdown generation is entirely go template driven. The tool parses metadata from charts and generates a number of sub-templates that can be referenced in a template file (by default ``README.md.gotmpl``). If no template file is provided, the tool has a default internal template that will generate a reasonably formatted README.
+
+## Parameters
+
+The following tables lists the configurable parameters of the chart and their default values.
+
+Change the values according to the need of the environment in ``victoria-metrics-agent/values.yaml`` file.
+
+{{ template "chart.valuesTable" . }}

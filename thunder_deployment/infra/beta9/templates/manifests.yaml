@@ -1,0 +1,9 @@
+{{- $template := fromYaml (include "manifests.metadata" .) -}}
+{{- range .Values.manifests.resources }}
+---
+{{ toYaml (merge . $template) -}}
+{{- end }}
+{{- range $i, $t := .Values.manifests.templates }}
+---
+{{ toYaml (merge (tpl $t $ | fromYaml) $template) -}}
+{{- end }}

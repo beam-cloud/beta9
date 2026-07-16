@@ -1,0 +1,17 @@
+{{- if and .Values.server.scrape.enabled (eq .Values.server.scrape.configMap "") }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ template "victoria-metrics.server.fullname" . }}-scrapeconfig
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "victoria-metrics.server.labels" . | nindent 4 }}
+data:
+  scrape.yml: |
+    {{- range $k, $v := .Values.server.scrape.config }}
+    {{- if and (eq $k "scrape_configs") ($.Values.server.scrape.extraScrapeConfigs) }}
+    {{ dict $k (concat $v $.Values.server.scrape.extraScrapeConfigs) | toYaml | nindent 4 }}
+    {{- else }}
+    {{ dict $k $v | toYaml | nindent 4 }}
+    {{- end }}
+    {{- end }}
+{{- end }}
