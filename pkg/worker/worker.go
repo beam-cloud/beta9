@@ -77,6 +77,7 @@ type Worker struct {
 	criuManager             CRIUManager
 	containerNetworkManager ContainerNetwork
 	containerGPUManager     GPUManager
+	containerThunderManager GPUManager
 	containerMountManager   *ContainerMountManager
 	imageClient             *ImageClient
 	containerInstances      *common.SafeMap[*ContainerInstance]
@@ -101,6 +102,13 @@ type Worker struct {
 	ctx                     context.Context
 	cancel                  func()
 	config                  types.AppConfig
+}
+
+func (w *Worker) gpuManagerForRequest(request *types.ContainerRequest) GPUManager {
+	if request != nil && request.GpuVirtualized {
+		return w.containerThunderManager
+	}
+	return w.containerGPUManager
 }
 
 type ContainerInstance struct {
@@ -386,6 +394,7 @@ func NewWorker() (_ *Worker, err error) {
 		storageManager:          storageManager,
 		fileCacheManager:        fileCacheManager,
 		containerGPUManager:     NewContainerNvidiaManager(uint32(gpuCount), defaultRuntime.Name()),
+		containerThunderManager: NewContainerThunderManagerFromEnv(),
 		containerNetworkManager: containerNetworkManager,
 		containerMountManager:   NewContainerMountManager(config, poolConfig),
 		podAddr:                 podAddr,

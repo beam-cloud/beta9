@@ -47,13 +47,14 @@ var (
 )
 
 type GPUManager interface {
-	AssignGPUDevices(containerId string, gpuCount uint32) ([]int, error)
+	AssignGPUDevices(request *types.ContainerRequest) ([]int, error)
 	GetContainerGPUDevices(containerId string) []int
 	UnassignGPUDevices(containerId string)
 	CDIDevices(assignedDevices []int) []string
 	InjectEnvVars(env []string) []string
 	InjectAssignedEnvVars(env []string, assignedDevices []int) []string
 	InjectMounts(mounts []specs.Mount) []specs.Mount
+	PrepareContainerFilesystem(request *types.ContainerRequest, rootPath string) error
 }
 
 type ContainerNvidiaManager struct {
@@ -215,8 +216,8 @@ func (c *ContainerNvidiaManager) UnassignGPUDevices(containerId string) {
 	c.gpuAllocationMap.Delete(containerId)
 }
 
-func (c *ContainerNvidiaManager) AssignGPUDevices(containerId string, gpuCount uint32) ([]int, error) {
-	gpuIds, err := c.chooseDevices(containerId, gpuCount)
+func (c *ContainerNvidiaManager) AssignGPUDevices(request *types.ContainerRequest) ([]int, error) {
+	gpuIds, err := c.chooseDevices(request.ContainerId, request.GpuCount)
 	if err != nil {
 		return nil, err
 	}
@@ -354,7 +355,7 @@ func upsertEnvVars(env []string, updates []string) []string {
 	return env
 }
 
-func (c *ContainerNvidiaManager) InjectEnvVars(env []string) []string {
+func injectCudaEnvVars(env []string) []string {
 	cudaEnvVarDefaults := map[string]string{
 		"NVIDIA_DRIVER_CAPABILITIES": "compute,utility,graphics,ngx,video",
 		"NVIDIA_REQUIRE_CUDA":        "",
@@ -418,6 +419,10 @@ func (c *ContainerNvidiaManager) InjectEnvVars(env []string) []string {
 	return modifiedEnv
 }
 
+func (c *ContainerNvidiaManager) InjectEnvVars(env []string) []string {
+	return injectCudaEnvVars(env)
+}
+
 func mergePaths(pathName string, initEnv map[string]string, mergeIn []string) {
 	if initEnv[pathName] == "" {
 		initEnv[pathName] = strings.Join(mergeIn, ":")
@@ -437,7 +442,7 @@ func mergePaths(pathName string, initEnv map[string]string, mergeIn []string) {
 	initEnv[pathName] = strings.Join(pathMembers, ":")
 }
 
-func (c *ContainerNvidiaManager) InjectMounts(mounts []specs.Mount) []specs.Mount {
+func injectCudaMounts(mounts []specs.Mount) []specs.Mount {
 	cudaPaths := []string{fmt.Sprintf("/usr/local/cuda-%s", defaultContainerCudaVersion), "/usr/local/nvidia/lib64"}
 
 	for _, path := range cudaPaths {
@@ -462,4 +467,12 @@ func (c *ContainerNvidiaManager) InjectMounts(mounts []specs.Mount) []specs.Moun
 	}
 
 	return mounts
+}
+
+func (c *ContainerNvidiaManager) InjectMounts(mounts []specs.Mount) []specs.Mount {
+	return injectCudaMounts(mounts)
+}
+
+func (c *ContainerNvidiaManager) PrepareContainerFilesystem(request *types.ContainerRequest, rootPath string) error {
+	return nil
 }

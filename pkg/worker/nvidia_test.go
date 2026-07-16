@@ -14,6 +14,7 @@ import (
 	"time"
 
 	common "github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/tj/assert"
 
@@ -384,7 +385,7 @@ func TestAssignAndUnassignGPUDevices(t *testing.T) {
 	// Assign 2 GPUs to a container
 	gpuCount := 2
 
-	assignedDevices, err := manager.AssignGPUDevices("container1", uint32(gpuCount))
+	assignedDevices, err := manager.AssignGPUDevices(&types.ContainerRequest{ContainerId: "container1", GpuCount: uint32(gpuCount)})
 	if err != nil {
 		t.Fatalf("Failed to assign GPU devices: %v", err)
 	}
@@ -402,7 +403,7 @@ func TestAssignAndUnassignGPUDevices(t *testing.T) {
 	manager.UnassignGPUDevices("container1")
 
 	// Try to assign 4 GPUs to another container, should succeed since the first 2 are unassigned
-	_, err = manager.AssignGPUDevices("container2", 4)
+	_, err = manager.AssignGPUDevices(&types.ContainerRequest{ContainerId: "container2", GpuCount: 4})
 	if err != nil {
 		t.Errorf("Failed to assign GPU devices to container2 after unassigning from container1: %v", err)
 	}
@@ -411,7 +412,7 @@ func TestAssignAndUnassignGPUDevices(t *testing.T) {
 func TestAssignEightGPUDevices(t *testing.T) {
 	manager := NewContainerNvidiaManagerForTest(8)
 
-	assignedDevices, err := manager.AssignGPUDevices("container1", 8)
+	assignedDevices, err := manager.AssignGPUDevices(&types.ContainerRequest{ContainerId: "container1", GpuCount: 8})
 	if err != nil {
 		t.Fatalf("AssignGPUDevices() error = %v", err)
 	}
@@ -430,7 +431,7 @@ func TestAssignMoreGPUsThanAvailable(t *testing.T) {
 	// manager.statFunc = mockStat
 
 	// Attempt to assign 5 GPUs to a container, which exceeds the available count
-	_, err := manager.AssignGPUDevices("container1", 5)
+	_, err := manager.AssignGPUDevices(&types.ContainerRequest{ContainerId: "container1", GpuCount: 5})
 	if err == nil {
 		t.Errorf("Expected an error when requesting more GPUs than available, but got none")
 	}
@@ -526,19 +527,19 @@ func TestAssignGPUsToMultipleContainers(t *testing.T) {
 	manager := NewContainerNvidiaManagerForTest(4) // Assume a machine with 4 GPUs
 
 	// Assign 2 GPUs to the first container
-	_, err := manager.AssignGPUDevices("container1", 2)
+	_, err := manager.AssignGPUDevices(&types.ContainerRequest{ContainerId: "container1", GpuCount: 2})
 	if err != nil {
 		t.Fatalf("Failed to assign GPUs to container1: %v", err)
 	}
 
 	// Attempt to assign 2 more GPUs to a second container
-	_, err = manager.AssignGPUDevices("container2", 2)
+	_, err = manager.AssignGPUDevices(&types.ContainerRequest{ContainerId: "container2", GpuCount: 2})
 	if err != nil {
 		t.Errorf("Failed to assign GPUs to container2: %v", err)
 	}
 
 	// Attempt to assign 1 more GPU to a third container, should fail
-	_, err = manager.AssignGPUDevices("container3", 1)
+	_, err = manager.AssignGPUDevices(&types.ContainerRequest{ContainerId: "container3", GpuCount: 1})
 	if err == nil {
 		t.Errorf("Expected failure when assigning GPUs to container3, but got none")
 	}
@@ -577,7 +578,7 @@ func TestConcurrentlyAssignGPUDevices(t *testing.T) {
 				var err error
 
 				for {
-					assignedDevices, err := manager.AssignGPUDevices(id, uint32(gpusPerContainer))
+					assignedDevices, err := manager.AssignGPUDevices(&types.ContainerRequest{ContainerId: id, GpuCount: uint32(gpusPerContainer)})
 					if err != nil {
 						attempt++
 
