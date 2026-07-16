@@ -8,6 +8,7 @@ from .. import terminal
 from ..abstractions.base.runner import (
     POD_DEPLOYMENT_STUB_TYPE,
     POD_RUN_STUB_TYPE,
+    RUNTIME_PREPARE_FAILED_MSG,
     RunnerAbstraction,
 )
 from ..abstractions.image import Image
@@ -241,7 +242,7 @@ class Pod(RunnerAbstraction, DeployableMixin):
                 container_id="",
                 url="",
                 ok=False,
-                error_msg="Failed to prepare runtime",
+                error_msg=RUNTIME_PREPARE_FAILED_MSG,
             )
 
         terminal.header("Creating container")
@@ -253,7 +254,7 @@ class Pod(RunnerAbstraction, DeployableMixin):
 
         url = ""
         if create_response.ok:
-            terminal.header(f"Container created successfully ===> {create_response.container_id}")
+            terminal.done(f"Container created ===> {create_response.container_id}")
 
             if self.keep_warm_seconds < 0:
                 terminal.header("This container has no timeout, it will run until it completes.")
@@ -348,7 +349,7 @@ class Pod(RunnerAbstraction, DeployableMixin):
         if deploy_response.ok:
             if warn_msg:
                 terminal.warn(warn_msg)
-            terminal.header("Deployed 🎉")
+            terminal.done("Deployed 🎉")
             if invocation_details_func:
                 invocation_details_func(
                     **invocation_details_options,
@@ -358,6 +359,9 @@ class Pod(RunnerAbstraction, DeployableMixin):
                 url_res = self.print_invocation_snippet()
                 if url_res and getattr(url_res, "ok", False):
                     invoke_url = url_res.url.replace("<PORT>", str(self.ports[0]))
+
+        elif deploy_response.err_msg:
+            terminal.error(deploy_response.err_msg, exit=False)
 
         return {
             "deployment_id": deploy_response.deployment_id,

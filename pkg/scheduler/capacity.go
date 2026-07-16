@@ -2,6 +2,27 @@ package scheduler
 
 import "github.com/beam-cloud/beta9/pkg/types"
 
+// HasManagedPoolForGPU reports whether any registered pool that is usable
+// without a pool selector could serve the given GPU type. The check is
+// pool-config-based rather than live-worker-based, so scale-to-zero pools
+// still count as supported. gpuType may be types.GPU_ANY.
+func (s *Scheduler) HasManagedPoolForGPU(gpuType string, allowMarketplace bool) bool {
+	if s == nil || s.workerPoolManager == nil {
+		return false
+	}
+	pools := s.workerPoolManager.GetPoolByFilters(poolFilters{GPUType: gpuType})
+	for _, pool := range pools {
+		if pool.Controller == nil || pool.Controller.RequiresPoolSelector() {
+			continue
+		}
+		if pool.Controller.Mode() == types.PoolModeMarketplace && !allowMarketplace {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 type CapacityCheckResult struct {
 	CanSchedule bool
 	WorkerId    string

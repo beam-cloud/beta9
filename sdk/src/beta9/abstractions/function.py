@@ -192,7 +192,10 @@ class _CallableWrapper(DeployableMixin):
             terminal.error("Exiting shell. Your build was stopped.")
 
         try:
-            with terminal.progress("Working..."):
+            status_text = (
+                f"Scheduling on {self.parent.gpu}..." if self.parent.gpu else "Scheduling..."
+            )
+            with terminal.progress(status_text):
                 return self._call_remote(*args, **kwargs)
         except KeyboardInterrupt:
             if self.parent.headless:
@@ -211,6 +214,7 @@ class _CallableWrapper(DeployableMixin):
 
         terminal.header(f"Running function: <{self.parent.handler}>")
         last_response: Optional[FunctionInvokeResponse] = None
+        running = False
 
         for r in self.parent.function_stub.function_invoke(
             FunctionInvokeRequest(
@@ -219,6 +223,10 @@ class _CallableWrapper(DeployableMixin):
                 headless=self.parent.headless,
             )
         ):
+            if not running:
+                running = True
+                terminal.update_progress("Running...")
+
             if r.output != "":
                 terminal.detail(r.output, end="")
 
@@ -227,7 +235,12 @@ class _CallableWrapper(DeployableMixin):
                 break
 
         if last_response is None or not last_response.done or last_response.exit_code != 0:
-            terminal.error(f"Function failed <{last_response.task_id}> ❌", exit=False)
+            task_id = last_response.task_id if last_response else "unknown"
+            terminal.error(
+                f"Function failed <{task_id}>",
+                exit=False,
+                hint="see the failure reason with 'beta9 task list --filter status=error'",
+            )
             return
 
         terminal.header(f"Function complete <{last_response.task_id}>")
@@ -282,7 +295,8 @@ class _CallableWrapper(DeployableMixin):
             func=self.func,
             stub_type=self.base_stub_type,
         ):
-            terminal.error("Function failed to prepare runtime ❌")
+            # prepare_runtime already reported the specific failure
+            raise SystemExit(1)
 
         iterator = self._threaded_map(inputs)
         yield from iterator

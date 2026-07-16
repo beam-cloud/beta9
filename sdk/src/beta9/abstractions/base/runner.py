@@ -54,6 +54,7 @@ from ...type import (
     normalize_gpu_type,
 )
 from ...utils import TempFile
+from .capacity import handle_capacity_verdict
 from .utils import sdk_timing, timed_lock
 
 CONTAINER_STUB_TYPE = "container"
@@ -81,6 +82,11 @@ BOT_SERVE_STUB_TYPE = "bot/serve"
 POD_DEPLOYMENT_STUB_TYPE = "pod/deployment"
 POD_RUN_STUB_TYPE = "pod/run"
 SANDBOX_STUB_TYPE = "sandbox"
+
+# Sentinel error message for prepare_runtime failures. prepare_runtime prints
+# the specific reason itself, so callers seeing this message should not print
+# another generic error on top of it.
+RUNTIME_PREPARE_FAILED_MSG = "Failed to prepare runtime"
 
 _stub_creation_lock = threading.Lock()
 _stub_created_for_workspace = False
@@ -576,10 +582,16 @@ class RunnerAbstraction(BaseAbstraction):
                 if self.runtime_ready:
                     return True
 
-                if not self._prepare_image():
+                tracker = terminal.StepTracker()
+
+                with tracker.step("Preparing image", "Image ready") as step:
+                    step.ok = self._prepare_image()
+                if not step.ok:
                     return False
 
-                if not self._sync_runtime_files(ignore_patterns):
+                with tracker.step("Syncing files", "Files synced") as step:
+                    step.ok = self._sync_runtime_files(ignore_patterns)
+                if not step.ok:
                     return False
 
                 if not self._prepare_volumes():
@@ -602,7 +614,10 @@ class RunnerAbstraction(BaseAbstraction):
                     with sdk_timing("prepare_runtime.stub"):
                         stub_response = self._get_or_create_stub(stub_request)
 
-                    if not self._apply_stub_response(stub_response):
+                    stub_response = handle_capacity_verdict(
+                        self, stub_request, stub_response, stub_type
+                    )
+                    if stub_response is None or not self._apply_stub_response(stub_response):
                         return False
 
                 self.runtime_ready = True
@@ -621,7 +636,7 @@ class RunnerAbstraction(BaseAbstraction):
             self.image.python_version = image_build_result.python_version
             return True
 
-        terminal.error("Image build failed ❌", exit=False)
+        terminal.error("Image build failed", exit=False)
         return False
 
     def _sync_runtime_files(self, ignore_patterns: Optional[List[str]]) -> bool:

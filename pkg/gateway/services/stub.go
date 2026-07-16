@@ -21,10 +21,18 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// Capacity verdict values reported in GetOrCreateStubResponse.CapacityStatus.
+const (
+	StubCapacityStatusAvailable = "available"
+	StubCapacityStatusLow       = "low"
+	StubCapacityStatusNone      = "none"
+)
+
 func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCreateStubRequest) (*pb.GetOrCreateStubResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
 	var warning string
+	var capacity stubCapacityVerdict
 
 	resourcePolicy, err := gws.stubResourcePolicy(ctx, authInfo.Workspace.ExternalId, in.Pool, in.Name)
 	if err != nil {
@@ -217,6 +225,18 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 			if len(lowCapacityGpus) > 0 {
 				warning = appendWarning(warning, fmt.Sprintf("GPU capacity for %s is currently low.", strings.Join(lowCapacityGpus, ", ")))
 			}
+
+			// Only stubs with no pool config get a capacity verdict: targeting
+			// a pool is an explicit placement choice the scheduler will honor.
+			if resourcePolicy.pool == nil {
+				verdict, err := gws.computeCapacityVerdict(ctx, authInfo.Workspace.ExternalId, gpus, in.AllowMarketplace, len(lowCapacityGpus) > 0)
+				if err != nil {
+					// The verdict is advisory; never fail stub creation over it.
+					log.Warn().Err(err).Str("workspace_id", authInfo.Workspace.ExternalId).Msg("failed to compute stub capacity verdict")
+				} else {
+					capacity = verdict
+				}
+			}
 		}
 	}
 
@@ -323,10 +343,86 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 	}
 
 	return &pb.GetOrCreateStubResponse{
-		Ok:      err == nil,
-		StubId:  stub.ExternalId,
-		WarnMsg: warning,
+		Ok:                 err == nil,
+		StubId:             stub.ExternalId,
+		WarnMsg:            warning,
+		CapacityStatus:     capacity.status,
+		UnsupportedGpus:    capacity.unsupportedGpus,
+		MatchedPrivatePool: capacity.matchedPrivatePool,
 	}, nil
+}
+
+type stubCapacityVerdict struct {
+	status             string
+	unsupportedGpus    []string
+	matchedPrivatePool string
+}
+
+// gpuPoolChecker answers whether any serverless pool config supports a GPU
+// type. Implemented by *scheduler.Scheduler.
+type gpuPoolChecker interface {
+	HasManagedPoolForGPU(gpuType string, allowMarketplace bool) bool
+}
+
+// privatePoolFinder locates ready workspace private pools for a GPU request.
+// Implemented by *compute.Service.
+type privatePoolFinder interface {
+	FindReadyPrivatePoolForGPU(ctx context.Context, workspaceID string, gpus []types.GpuType) (string, error)
+}
+
+func (gws *GatewayService) computeCapacityVerdict(ctx context.Context, workspaceID string, gpus []types.GpuType, allowMarketplace bool, lowCapacity bool) (stubCapacityVerdict, error) {
+	if gws.scheduler == nil {
+		return stubCapacityVerdict{}, nil
+	}
+	var finder privatePoolFinder
+	if gws.computeService != nil {
+		finder = gws.computeService
+	}
+	return computeCapacityVerdict(ctx, gws.scheduler, finder, workspaceID, gpus, allowMarketplace, lowCapacity)
+}
+
+// computeCapacityVerdict determines whether a GPU request can ever be
+// scheduled on serverless pools. It is pool-config-based (mirroring the
+// scheduler's controller selection), so pools scaled to zero still count as
+// available. When no serverless pool supports any requested GPU — a
+// guaranteed scheduling blackhole — it checks the workspace's private pools
+// for ready capacity the client can target instead.
+func computeCapacityVerdict(ctx context.Context, checker gpuPoolChecker, finder privatePoolFinder, workspaceID string, gpus []types.GpuType, allowMarketplace bool, lowCapacity bool) (stubCapacityVerdict, error) {
+	verdict := stubCapacityVerdict{}
+	anySupported := false
+	for _, gpu := range gpus {
+		if gpu == types.NO_GPU {
+			continue
+		}
+		if checker.HasManagedPoolForGPU(gpu.String(), allowMarketplace) {
+			anySupported = true
+			continue
+		}
+		verdict.unsupportedGpus = append(verdict.unsupportedGpus, gpu.String())
+	}
+
+	if anySupported {
+		verdict.status = StubCapacityStatusAvailable
+		if lowCapacity {
+			verdict.status = StubCapacityStatusLow
+		}
+		return verdict, nil
+	}
+
+	if finder != nil {
+		matched, err := finder.FindReadyPrivatePoolForGPU(ctx, workspaceID, gpus)
+		if err != nil {
+			return stubCapacityVerdict{}, err
+		}
+		if matched != "" {
+			verdict.status = StubCapacityStatusAvailable
+			verdict.matchedPrivatePool = matched
+			return verdict, nil
+		}
+	}
+
+	verdict.status = StubCapacityStatusNone
+	return verdict, nil
 }
 
 func gpuTypesForStubRequest(in *pb.GetOrCreateStubRequest) []types.GpuType {

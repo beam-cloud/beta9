@@ -9,6 +9,7 @@ from typing import Callable, Dict, List, Optional, Set, Tuple, Union
 from .. import terminal
 from ..abstractions.base import set_channel, unset_channel
 from ..abstractions.base.runner import (
+    RUNTIME_PREPARE_FAILED_MSG,
     SANDBOX_STUB_TYPE,
     BaseAbstraction,
 )
@@ -398,7 +399,7 @@ class Sandbox(Pod):
             return SandboxInstance(
                 container_id="",
                 ok=False,
-                error_msg="Failed to prepare runtime",
+                error_msg=RUNTIME_PREPARE_FAILED_MSG,
                 stub_id="",
             )
 

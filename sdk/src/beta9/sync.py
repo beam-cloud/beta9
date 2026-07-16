@@ -251,7 +251,7 @@ class FileSyncer:
                             set_workspace_object_id(create_object_response.object_id)
                         object_id = create_object_response.object_id
                     else:
-                        terminal.error("File sync failed ☠️")
+                        terminal.error("File sync failed")
             else:
                 put_response = self.gateway_stub.put_object_stream(stream_requests())
                 if put_response.ok:
@@ -259,11 +259,9 @@ class FileSyncer:
                         set_workspace_object_id(put_response.object_id)
                     object_id = put_response.object_id
                 else:
-                    terminal.error("File sync failed ☠️")
+                    terminal.error("File sync failed")
 
         elif head_response.exists and head_response.ok:
-            terminal.header("Files already synced")
-
             if self.is_workspace_dir and cache_object_id:
                 set_workspace_object_id(head_response.object_id)
             object_id = head_response.object_id
@@ -273,10 +271,9 @@ class FileSyncer:
         os.remove(temp_zip_name)
 
         if object_id is None:
-            terminal.error("File sync failed ☠️")
+            terminal.error("File sync failed")
             return FileSyncResult(success=False, object_id="")
 
-        terminal.header("Files synced")
         return FileSyncResult(success=True, object_id=object_id)
 
 

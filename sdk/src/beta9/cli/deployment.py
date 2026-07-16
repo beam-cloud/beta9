@@ -393,7 +393,7 @@ def create_deployment(
                 url_type=url_type,
             )
             if not ok:
-                terminal.error("Deployment failed ☠️")
+                terminal.error("Deployment failed")
                 return
 
             if hasattr(user_obj, "cleanup_deployment_artifacts"):

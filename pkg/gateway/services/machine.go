@@ -28,6 +28,7 @@ func (gws *GatewayService) ListMachines(ctx context.Context, in *pb.ListMachines
 	if err != nil {
 		return nil, err
 	}
+	supportedGpus := gws.supportedServerlessGpus()
 
 	// Workspace profiles see private/BYOC inventory; admins see the control plane.
 	if authInfo.Token.TokenType != types.TokenTypeClusterAdmin {
@@ -38,7 +39,7 @@ func (gws *GatewayService) ListMachines(ctx context.Context, in *pb.ListMachines
 				return &pb.ListMachinesResponse{Ok: false, ErrMsg: err.Error()}, nil
 			}
 		}
-		return machineListResponse(gpus, machines, in.Limit), nil
+		return machineListResponse(gpus, supportedGpus, machines, in.Limit), nil
 	}
 
 	// Cluster admins see all machines associated with a cluster
@@ -49,7 +50,7 @@ func (gws *GatewayService) ListMachines(ctx context.Context, in *pb.ListMachines
 			return &pb.ListMachinesResponse{Ok: false, ErrMsg: err.Error()}, nil
 		}
 		if handled && in.PoolName != "" {
-			return machineListResponse(gpus, managedMachines, in.Limit), nil
+			return machineListResponse(gpus, supportedGpus, managedMachines, in.Limit), nil
 		}
 		formattedMachines = append(formattedMachines, managedMachines...)
 	}
@@ -109,17 +110,33 @@ func (gws *GatewayService) ListMachines(ctx context.Context, in *pb.ListMachines
 		}
 	}
 
-	return machineListResponse(gpus, formattedMachines, in.Limit), nil
+	return machineListResponse(gpus, supportedGpus, formattedMachines, in.Limit), nil
 }
 
-func machineListResponse(gpus map[string]bool, machines []*pb.Machine, limit uint32) *pb.ListMachinesResponse {
+// supportedServerlessGpus reports pool-config-based serverless support per
+// GPU type, so scale-to-zero pools still show as available.
+func (gws *GatewayService) supportedServerlessGpus() map[string]bool {
+	supported := map[string]bool{}
+	if gws.scheduler == nil {
+		return supported
+	}
+	for _, gpu := range types.AllGPUTypes() {
+		if gpu == types.GPU_ANY {
+			continue
+		}
+		supported[gpu.String()] = gws.scheduler.HasManagedPoolForGPU(gpu.String(), false)
+	}
+	return supported
+}
+
+func machineListResponse(gpus map[string]bool, supportedGpus map[string]bool, machines []*pb.Machine, limit uint32) *pb.ListMachinesResponse {
 	slices.SortFunc(machines, func(i, j *pb.Machine) int {
 		return cmp.Or(cmp.Compare(i.PoolName, j.PoolName), cmp.Compare(i.Id, j.Id))
 	})
 	if limit > 0 && len(machines) > int(limit) {
 		machines = machines[:limit]
 	}
-	return &pb.ListMachinesResponse{Ok: true, Gpus: gpus, Machines: machines}
+	return &pb.ListMachinesResponse{Ok: true, Gpus: gpus, SupportedGpus: supportedGpus, Machines: machines}
 }
 
 func providerMachineToProto(machine *types.ProviderMachine) *pb.Machine {

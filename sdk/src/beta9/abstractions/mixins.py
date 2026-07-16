@@ -1,5 +1,6 @@
 import inspect
 import threading
+import time
 import urllib.parse
 from typing import Any, Callable, ClassVar, Dict, Optional, Tuple
 
@@ -47,6 +48,7 @@ class DeployableMixin:
     ) -> Tuple[Dict[str, Any], bool]:
         self._validate()
 
+        deploy_started_at = time.monotonic()
         self.parent.name = name or self.parent.name
         if not self.parent.name:
             terminal.error(
@@ -86,13 +88,15 @@ class DeployableMixin:
         if deploy_response.ok:
             if warn_msg:
                 terminal.warn(warn_msg)
-            terminal.header("Deployed 🎉")
+            terminal.done("Deployed 🎉", deploy_started_at)
             if invocation_details_func:
                 invocation_details_func(
                     **invocation_details_options,
                 )
             else:
                 self.parent.print_invocation_snippet(**invocation_details_options)
+        elif deploy_response.err_msg:
+            terminal.error(deploy_response.err_msg, exit=False)
 
         return {
             "deployment_id": deploy_response.deployment_id,
@@ -130,7 +134,7 @@ class DeployableMixin:
 
                 if not create_shell_response.ok:
                     return terminal.error(
-                        f"Failed to create shell: {create_shell_response.err_msg} ❌"
+                        f"Failed to create shell: {create_shell_response.err_msg}"
                     )
 
                 username = create_shell_response.username
@@ -150,7 +154,7 @@ class DeployableMixin:
                 )
             )
             if not create_shell_response.ok:
-                return terminal.error(f"Failed to create shell: {create_shell_response.err_msg} ❌")
+                return terminal.error(f"Failed to create shell: {create_shell_response.err_msg}")
 
             container_id = create_shell_response.container_id
             username = create_shell_response.username
@@ -166,7 +170,7 @@ class DeployableMixin:
             )
         )
         if not res.ok:
-            return terminal.error(f"Failed to get shell connection URL: {res.err_msg} ❌")
+            return terminal.error(f"Failed to get shell connection URL: {res.err_msg}")
 
         # Parse the URL to extract the container_id
         parsed_url = urllib.parse.urlparse(res.url)

@@ -171,6 +171,49 @@ func (s *Service) MissingPrivatePoolGPUWarning(ctx context.Context, workspaceID 
 	return fmt.Sprintf("GPU type %s is not available. Private pools in this workspace are configured for %s.", requestedLabel, strings.Join(configured, ", ")), nil
 }
 
+// FindReadyPrivatePoolForGPU returns the name of a private pool in the
+// workspace that is configured for one of the requested GPU types and has at
+// least one connected machine. It lets stub creation route "no managed
+// capacity" workloads onto capacity the user already owns.
+func (s *Service) FindReadyPrivatePoolForGPU(ctx context.Context, workspaceID string, gpus []types.GpuType) (string, error) {
+	if s == nil || s.computeRepo == nil || workspaceID == "" {
+		return "", nil
+	}
+	requested := concreteGPUTypes(gpus)
+	anyGPU := slices.Contains(gpus, types.GPU_ANY)
+	if len(requested) == 0 && !anyGPU {
+		return "", nil
+	}
+
+	pools, err := s.listPrivatePoolStates(ctx, workspaceID, 0)
+	if err != nil {
+		return "", err
+	}
+	now := time.Now()
+	for _, pool := range pools {
+		if !poolStateIsPrivate(pool) {
+			continue
+		}
+		poolGPU := configuredPoolGPU(pool)
+		if poolGPU == "" {
+			continue
+		}
+		if !anyGPU && !slices.Contains(requested, poolGPU) {
+			continue
+		}
+		machines, err := s.computeRepo.ListAgentTokenStates(ctx, workspaceID, pool.Name)
+		if err != nil {
+			return "", err
+		}
+		for _, machine := range machines {
+			if model.AgentMachineConnected(machine, now) {
+				return pool.Name, nil
+			}
+		}
+	}
+	return "", nil
+}
+
 func configuredPoolGPU(pool *model.PoolState) string {
 	if pool == nil || pool.Config == nil {
 		return ""
