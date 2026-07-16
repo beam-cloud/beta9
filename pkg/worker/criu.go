@@ -25,6 +25,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/clients"
+	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/runtime"
 	types "github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
@@ -66,6 +67,86 @@ var checkpointDisabledIOUringSyscalls = []string{
 }
 
 var errCRIUManagerUnavailable = errors.New("checkpoint/restore unavailable: CRIU manager is not initialized")
+
+type checkpointFilesystemRestoreResult struct {
+	err error
+}
+
+type checkpointFilesystemRestore struct {
+	startedAt   time.Time
+	overlayRoot string
+	upperPath   string
+	done        chan struct{}
+	cancel      context.CancelFunc
+	result      checkpointFilesystemRestoreResult
+}
+
+func (r *checkpointFilesystemRestore) wait() checkpointFilesystemRestoreResult {
+	<-r.done
+	return r.result
+}
+
+func (r *checkpointFilesystemRestore) cleanup() {
+	if r != nil {
+		_ = r.discard()
+	}
+}
+
+func (r *checkpointFilesystemRestore) discard() error {
+	if r == nil {
+		return nil
+	}
+	r.cancel()
+	r.wait()
+	return os.RemoveAll(r.overlayRoot)
+}
+
+func (s *Worker) startCheckpointFilesystemRestore(request *types.ContainerRequest, outputLogger *slog.Logger) *checkpointFilesystemRestore {
+	overlayRoot := filepath.Join(s.containerOverlayBasePath(request), request.ContainerId)
+	restoreCtx, cancel := context.WithCancel(s.ctx)
+	restore := &checkpointFilesystemRestore{
+		startedAt:   time.Now(),
+		overlayRoot: overlayRoot,
+		upperPath:   filepath.Join(overlayRoot, "layer-0", "upper"),
+		done:        make(chan struct{}),
+		cancel:      cancel,
+	}
+
+	go func() {
+		defer cancel()
+		restore.result = s.restoreCheckpointFilesystem(restoreCtx, request, outputLogger, restore.upperPath)
+		close(restore.done)
+	}()
+	return restore
+}
+
+func (s *Worker) restoreCheckpointFilesystem(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, destination string) checkpointFilesystemRestoreResult {
+	phaseStarted := time.Now()
+	checkpointPath, err := s.ensureCheckpointMaterializedWithLogger(ctx, request, request.Checkpoint, outputLogger)
+	metrics.RecordWorkerStartupPhase("checkpoint_materialization", time.Since(phaseStarted), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
+	if err != nil {
+		log.Error().Err(err).Str("container_id", request.ContainerId).Str("checkpoint_id", request.Checkpoint.CheckpointId).Msg("failed to materialize checkpoint")
+		return checkpointFilesystemRestoreResult{err: err}
+	}
+
+	phaseStarted = time.Now()
+	if outputLogger != nil {
+		outputLogger.Info("Restoring checkpoint filesystem...\n")
+	}
+	err = copyDirectoryContext(ctx, filepath.Join(checkpointPath, checkpointFsDir), destination, nil)
+	duration := time.Since(phaseStarted)
+	metrics.RecordWorkerStartupPhase("checkpoint_filesystem_restore", duration, request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
+	if err != nil {
+		log.Error().Err(err).Str("container_id", request.ContainerId).Str("checkpoint_id", request.Checkpoint.CheckpointId).Msg("failed to copy checkpoint directory")
+		return checkpointFilesystemRestoreResult{err: err}
+	}
+
+	log.Info().Str("container_id", request.ContainerId).Str("checkpoint_id", request.Checkpoint.CheckpointId).Dur("duration", duration).Msg("checkpoint filesystem restored")
+	if outputLogger != nil {
+		outputLogger.Info(fmt.Sprintf("Checkpoint filesystem restored in %s\n", duration.Round(time.Millisecond)))
+	}
+	return checkpointFilesystemRestoreResult{}
+}
 
 func applyCheckpointRuntimeEnvironmentOverrides(env []string, request *types.ContainerRequest, processArgs []string) []string {
 	if request == nil || !request.CheckpointEnabled {
@@ -1300,10 +1381,16 @@ func (s *Worker) acquireCheckpointCreateLock(request *types.ContainerRequest) (*
 	return state, !loaded
 }
 
-func (s *Worker) deferAutomaticStopForCheckpoint(request *types.ContainerRequest, reason types.StopContainerReason, event stopContainerEvent) bool {
-	if request == nil || (reason != types.StopContainerReasonScheduler && reason != types.StopContainerReasonTtl) {
+func (s *Worker) deferStopForCheckpoint(instance *ContainerInstance, kill bool) bool {
+	if instance == nil || instance.Request == nil {
 		return false
 	}
+	if instance.StopReason != types.StopContainerReasonScheduler && instance.StopReason != types.StopContainerReasonTtl {
+		return false
+	}
+
+	request := instance.Request
+	event := stopContainerEvent{ContainerId: request.ContainerId, Kill: kill}
 	value, ok := s.checkpointCreateLocks.Load(checkpointCreateKey(request))
 	if !ok {
 		return false
@@ -1314,8 +1401,8 @@ func (s *Worker) deferAutomaticStopForCheckpoint(request *types.ContainerRequest
 	}
 
 	state.mu.Lock()
-	defer state.mu.Unlock()
 	if !state.active || state.containerID != event.ContainerId {
+		state.mu.Unlock()
 		return false
 	}
 	if state.deferredStop == nil {
@@ -1328,6 +1415,13 @@ func (s *Worker) deferAutomaticStopForCheckpoint(request *types.ContainerRequest
 	} else {
 		state.deferredStop.Kill = state.deferredStop.Kill || event.Kill
 	}
+	state.mu.Unlock()
+
+	log.Info().
+		Str("container_id", event.ContainerId).
+		Str("reason", string(instance.StopReason)).
+		Bool("kill", event.Kill).
+		Msg("deferring automatic stop until checkpoint creation finishes")
 	return true
 }
 

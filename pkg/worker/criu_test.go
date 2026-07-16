@@ -411,6 +411,10 @@ func TestCheckpointCreateLockIsPerStub(t *testing.T) {
 	}
 }
 
+func checkpointStopInstance(request *types.ContainerRequest, reason types.StopContainerReason) *ContainerInstance {
+	return &ContainerInstance{Request: request, StopReason: reason}
+}
+
 func TestAutomaticStopIsDeferredDuringCheckpoint(t *testing.T) {
 	request := &types.ContainerRequest{ContainerId: "container", WorkspaceId: "workspace", StubId: "stub"}
 	worker := &Worker{
@@ -437,14 +441,15 @@ func TestAutomaticStopIsDeferredDuringCheckpoint(t *testing.T) {
 	if err := worker.stopContainer(request.ContainerId, true); err != nil {
 		t.Fatalf("coalesce scheduler kill: %v", err)
 	}
-	if worker.deferAutomaticStopForCheckpoint(request, types.StopContainerReasonUser, stopContainerEvent{ContainerId: request.ContainerId}) {
+	if worker.deferStopForCheckpoint(checkpointStopInstance(request, types.StopContainerReasonUser), false) {
 		t.Fatal("user stop was deferred")
 	}
-	if worker.deferAutomaticStopForCheckpoint(&types.ContainerRequest{
+	otherRequest := &types.ContainerRequest{
 		ContainerId: "other-container",
 		WorkspaceId: request.WorkspaceId,
 		StubId:      request.StubId,
-	}, types.StopContainerReasonScheduler, stopContainerEvent{ContainerId: "other-container"}) {
+	}
+	if worker.deferStopForCheckpoint(checkpointStopInstance(otherRequest, types.StopContainerReasonScheduler), false) {
 		t.Fatal("stop for a different container was deferred")
 	}
 	if worker.awaitTerminalAutoCheckpointStop(context.Background(), request, NewMockRuntime(types.ContainerRuntimeGvisor.String(), runtime.Capabilities{CheckpointRestore: true}), 0) {
@@ -475,7 +480,7 @@ func TestAutomaticStopIsDeferredDuringCheckpoint(t *testing.T) {
 	default:
 		t.Fatal("deferred stop was not replayed")
 	}
-	if worker.deferAutomaticStopForCheckpoint(request, types.StopContainerReasonScheduler, stopContainerEvent{ContainerId: request.ContainerId}) {
+	if worker.deferStopForCheckpoint(checkpointStopInstance(request, types.StopContainerReasonScheduler), false) {
 		t.Fatal("stop remained deferred after checkpoint completion")
 	}
 	if worker.awaitTerminalAutoCheckpointStop(context.Background(), request, runcRuntime, 0) {
@@ -490,11 +495,7 @@ func TestTerminalCheckpointDoesNotReplaySatisfiedStop(t *testing.T) {
 	if !acquired {
 		t.Fatal("checkpoint lock acquisition failed")
 	}
-	if !worker.deferAutomaticStopForCheckpoint(
-		request,
-		types.StopContainerReasonScheduler,
-		stopContainerEvent{ContainerId: request.ContainerId, Kill: true},
-	) {
+	if !worker.deferStopForCheckpoint(checkpointStopInstance(request, types.StopContainerReasonScheduler), true) {
 		t.Fatal("scheduler stop was not deferred")
 	}
 	if !worker.awaitTerminalAutoCheckpointStop(
@@ -556,11 +557,7 @@ func TestTerminalAutoCheckpointWaitsForScaleToZeroStop(t *testing.T) {
 	case <-time.After(20 * time.Millisecond):
 	}
 
-	if !worker.deferAutomaticStopForCheckpoint(
-		request,
-		types.StopContainerReasonScheduler,
-		stopContainerEvent{ContainerId: request.ContainerId, Kill: true},
-	) {
+	if !worker.deferStopForCheckpoint(checkpointStopInstance(request, types.StopContainerReasonScheduler), true) {
 		t.Fatal("scheduler stop was not deferred")
 	}
 	select {
