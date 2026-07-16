@@ -2052,7 +2052,10 @@ func formatImageBytes(n int64) string {
 	}
 }
 
-const imageIndexAggregateBytesBucket int64 = 1 << 30
+const (
+	imageIndexAggregateBytesBucket int64 = 1 << 30
+	imageIndexProgressInterval           = 10 * time.Second
+)
 
 type imageIndexProgressReporter struct {
 	logger           *slog.Logger
@@ -2065,12 +2068,15 @@ type imageIndexProgressReporter struct {
 	totalLayers      int
 	lastLayerBucket  int
 	lastByteBucket   int64
+	lastReported     time.Time
 }
 
 func newImageIndexProgressReporter(logger *slog.Logger) *imageIndexProgressReporter {
+	started := time.Now()
 	return &imageIndexProgressReporter{
 		logger:           logger,
-		started:          time.Now(),
+		started:          started,
+		lastReported:     started,
 		processedByLayer: make(map[string]int64),
 		completedByLayer: make(map[string]bool),
 	}
@@ -2115,11 +2121,15 @@ func (r *imageIndexProgressReporter) report(progress clip.OCIIndexProgress) {
 	if layerBucket <= r.lastLayerBucket && byteBucket <= r.lastByteBucket {
 		return
 	}
-	r.lastLayerBucket = layerBucket
-	r.lastByteBucket = byteBucket
 	if r.completedLayers >= r.totalLayers && r.totalLayers > 0 {
 		return
 	}
+	if time.Since(r.lastReported) < imageIndexProgressInterval {
+		return
+	}
+	r.lastLayerBucket = layerBucket
+	r.lastByteBucket = byteBucket
+	r.lastReported = time.Now()
 	r.logger.Info(fmt.Sprintf("Image indexing: %d/%d layers complete, %s processed\n",
 		r.completedLayers, r.totalLayers, formatImageBytes(r.processedBytes)))
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os/exec"
@@ -41,6 +42,7 @@ func TestImageIndexProgressReporterEmitsMonotonicAggregateUpdates(t *testing.T) 
 	var output bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&output, nil))
 	reporter := newImageIndexProgressReporter(logger)
+	reporter.lastReported = time.Now().Add(-imageIndexProgressInterval)
 
 	reporter.report(clip.OCIIndexProgress{
 		LayerIndex:      3,
@@ -67,6 +69,43 @@ func TestImageIndexProgressReporterEmitsMonotonicAggregateUpdates(t *testing.T) 
 	require.NotContains(t, logs, "Image indexing: 2/10")
 	require.Contains(t, logs, "Image indexed in")
 	require.Contains(t, logs, "1 cached")
+}
+
+func TestImageIndexProgressReporterCoalescesRapidUpdates(t *testing.T) {
+	var output bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&output, nil))
+	reporter := newImageIndexProgressReporter(logger)
+
+	for layer := 1; layer <= 9; layer++ {
+		reporter.report(clip.OCIIndexProgress{
+			LayerIndex:      layer,
+			LayerDigest:     fmt.Sprintf("layer-%d", layer),
+			Stage:           "completed",
+			CompletedLayers: layer,
+			TotalLayers:     10,
+			BytesProcessed:  1 << 30,
+			Source:          clip.LayerSourceIndexCache,
+		})
+	}
+	require.NotContains(t, output.String(), "Image indexing:")
+
+	reporter.lastReported = time.Now().Add(-imageIndexProgressInterval)
+	reporter.report(clip.OCIIndexProgress{
+		LayerIndex:      9,
+		LayerDigest:     "layer-9",
+		Stage:           "completed",
+		CompletedLayers: 9,
+		TotalLayers:     10,
+		BytesProcessed:  1 << 30,
+		Source:          clip.LayerSourceIndexCache,
+	})
+	reporter.finish()
+
+	logs := output.String()
+	require.Contains(t, logs, "Image indexing: 9/10 layers complete")
+	require.Equal(t, 1, bytes.Count(output.Bytes(), []byte("Image indexing:")))
+	require.Contains(t, logs, "Image indexed in")
+	require.Contains(t, logs, "9 cached")
 }
 
 func TestOCILayoutPushArgsUseEightWayDigestPreservingCopy(t *testing.T) {
