@@ -53,6 +53,40 @@ type containerResourceUpdater interface {
 	UpdateResources(ctx context.Context, containerID string, resources *specs.LinuxResources) error
 }
 
+type checkpointFilesystemRestoreResult struct {
+	err error
+}
+
+type checkpointFilesystemRestore struct {
+	startedAt   time.Time
+	overlayRoot string
+	upperPath   string
+	done        chan struct{}
+	cancel      context.CancelFunc
+	result      checkpointFilesystemRestoreResult
+}
+
+func (r *checkpointFilesystemRestore) wait() checkpointFilesystemRestoreResult {
+	<-r.done
+	return r.result
+}
+
+func (r *checkpointFilesystemRestore) cleanup() {
+	if r == nil {
+		return
+	}
+	_ = r.discard()
+}
+
+func (r *checkpointFilesystemRestore) discard() error {
+	if r == nil {
+		return nil
+	}
+	r.cancel()
+	r.wait()
+	return os.RemoveAll(r.overlayRoot)
+}
+
 func containerResolvConfSource(useHostResolvConf bool, hostPath string) string {
 	if useHostResolvConf && resolvConfHasUsableNameserver(hostPath) {
 		return hostPath
@@ -107,13 +141,17 @@ func (s *Worker) handleStopContainerArgs(stopArgs types.StopContainerArgs, sourc
 
 // stopContainer stops a container. When force is true, a SIGKILL signal is sent to the container.
 func (s *Worker) stopContainer(containerId string, kill bool) error {
-	log.Info().Str("container_id", containerId).Msg("stopping container")
-
 	instance, exists := s.containerInstances.Get(containerId)
 	if !exists {
 		log.Info().Str("container_id", containerId).Msg("container not found")
 		return nil
 	}
+	if s.deferAutomaticStopForCheckpoint(instance.Request, instance.StopReason, stopContainerEvent{ContainerId: containerId, Kill: kill}) {
+		log.Info().Str("container_id", containerId).Str("reason", string(instance.StopReason)).Bool("kill", kill).Msg("deferring automatic stop until checkpoint creation finishes")
+		return nil
+	}
+
+	log.Info().Str("container_id", containerId).Msg("stopping container")
 
 	signal := syscall.SIGTERM
 	if kill {
@@ -326,6 +364,19 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		request.Checkpoint = nil
 	}
 
+	var filesystemRestore *checkpointFilesystemRestore
+	if caps.CheckpointRestore && request.Checkpoint != nil &&
+		request.Checkpoint.Status == string(types.CheckpointStatusAvailable) &&
+		s.IsCRIUAvailable(request.GpuCount) {
+		filesystemRestore = s.startCheckpointFilesystemRestore(request, outputLogger)
+	}
+	filesystemRestoreHandedOff := false
+	defer func() {
+		if !filesystemRestoreHandedOff {
+			filesystemRestore.cleanup()
+		}
+	}()
+
 	var imageLoaded bool
 	startup.Go(func() error {
 		var err error
@@ -387,12 +438,13 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 	startupPortBindings := startupPortBindingsForRequest(request, requestedPorts, bindPorts)
 	opts := &ContainerOptions{
-		BundlePath:          bundlePath,
-		HostBindPort:        bindPorts[0],
-		BindPorts:           bindPorts,
-		StartupPortBindings: startupPortBindings,
-		InitialSpec:         initialBundleSpec,
-		StartupStartedAt:    startupStartedAt,
+		BundlePath:                  bundlePath,
+		HostBindPort:                bindPorts[0],
+		BindPorts:                   bindPorts,
+		StartupPortBindings:         startupPortBindings,
+		InitialSpec:                 initialBundleSpec,
+		StartupStartedAt:            startupStartedAt,
+		CheckpointFilesystemRestore: filesystemRestore,
 	}
 
 	phaseStart = time.Now()
@@ -432,6 +484,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		// Start the container
 		phaseStart = time.Now()
 		portsHandedOff = true
+		filesystemRestoreHandedOff = true
 		s.containerWg.Add(1)
 		go s.spawn(request, spec, outputLogger, opts)
 		metrics.RecordWorkerStartupPhase("spawn_enqueue", time.Since(phaseStart), request, nil)
@@ -1139,6 +1192,12 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	// Create overlayfs for container
 	overlay := s.createOverlay(request, opts.BundlePath)
+	restoreFilesystemCleanupNeeded := opts.CheckpointFilesystemRestore != nil
+	defer func() {
+		if restoreFilesystemCleanupNeeded {
+			opts.CheckpointFilesystemRestore.cleanup()
+		}
+	}()
 
 	containerInstance, exists := s.containerInstances.Get(containerId)
 	if !exists {
@@ -1158,6 +1217,17 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	// Setup container overlay filesystem
 	var err error
+	if opts.CheckpointFilesystemRestore != nil {
+		result := opts.CheckpointFilesystemRestore.wait()
+		if result.err != nil {
+			log.Debug().Err(result.err).Str("container_id", containerId).Msg("checkpoint filesystem preparation did not complete")
+			if err := opts.CheckpointFilesystemRestore.discard(); err != nil {
+				log.Error().Err(err).Str("container_id", containerId).Msg("failed to discard partial checkpoint filesystem")
+				return
+			}
+			restoreFilesystemCleanupNeeded = false
+		}
+	}
 	phaseStart := time.Now()
 	err = containerInstance.Overlay.Setup()
 	metrics.RecordWorkerStartupPhase("overlay_setup", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
@@ -1167,6 +1237,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		return
 	}
 	defer containerInstance.Overlay.Cleanup()
+	restoreFilesystemCleanupNeeded = false
 
 	spec.Root.Readonly = false
 	spec.Root.Path = containerInstance.Overlay.TopLayerPath()
@@ -1418,7 +1489,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		s.setupOOMWatcher(ctx, containerId, pid, spec, request, outputLogger, &isOOMKilled)
 	}()
 
-	exitCode, _ = s.runContainer(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan, opts.StartupStartedAt, opts.StartupPortBindings)
+	exitCode, _ = s.runContainer(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan, opts.StartupStartedAt, opts.StartupPortBindings, opts.CheckpointFilesystemRestore)
 
 	stopReason := types.StopContainerReasonUnknown
 	containerInstance, exists = s.containerInstances.Get(containerId)
@@ -1532,7 +1603,54 @@ func eventStopReason(stopReason types.StopContainerReason) string {
 	return string(stopReason)
 }
 
-func (s *Worker) runContainer(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, outputWriter *common.OutputWriter, startedChan chan int, checkpointPIDChan chan int, startupStartedAt time.Time, startupPortBindings []PortBinding) (int, error) {
+func (s *Worker) startCheckpointFilesystemRestore(request *types.ContainerRequest, outputLogger *slog.Logger) *checkpointFilesystemRestore {
+	overlayRoot := filepath.Join(s.containerOverlayBasePath(request), request.ContainerId)
+	restoreCtx, cancel := context.WithCancel(s.ctx)
+	restore := &checkpointFilesystemRestore{
+		startedAt:   time.Now(),
+		overlayRoot: overlayRoot,
+		upperPath:   filepath.Join(overlayRoot, "layer-0", "upper"),
+		done:        make(chan struct{}),
+		cancel:      cancel,
+	}
+
+	go func() {
+		defer cancel()
+		restore.result = s.restoreCheckpointFilesystem(restoreCtx, request, outputLogger, restore.upperPath)
+		close(restore.done)
+	}()
+	return restore
+}
+
+func (s *Worker) restoreCheckpointFilesystem(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, destination string) checkpointFilesystemRestoreResult {
+	phaseStarted := time.Now()
+	checkpointPath, err := s.ensureCheckpointMaterializedWithLogger(ctx, request, request.Checkpoint, outputLogger)
+	metrics.RecordWorkerStartupPhase("checkpoint_materialization", time.Since(phaseStarted), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
+	if err != nil {
+		log.Error().Err(err).Str("container_id", request.ContainerId).Str("checkpoint_id", request.Checkpoint.CheckpointId).Msg("failed to materialize checkpoint")
+		return checkpointFilesystemRestoreResult{err: err}
+	}
+
+	phaseStarted = time.Now()
+	if outputLogger != nil {
+		outputLogger.Info("Restoring checkpoint filesystem...\n")
+	}
+	err = copyDirectoryContext(ctx, filepath.Join(checkpointPath, checkpointFsDir), destination, nil)
+	duration := time.Since(phaseStarted)
+	metrics.RecordWorkerStartupPhase("checkpoint_filesystem_restore", duration, request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
+	if err != nil {
+		log.Error().Err(err).Str("container_id", request.ContainerId).Str("checkpoint_id", request.Checkpoint.CheckpointId).Msg("failed to copy checkpoint directory")
+		return checkpointFilesystemRestoreResult{err: err}
+	}
+
+	log.Info().Str("container_id", request.ContainerId).Str("checkpoint_id", request.Checkpoint.CheckpointId).Dur("duration", duration).Msg("checkpoint filesystem restored")
+	if outputLogger != nil {
+		outputLogger.Info(fmt.Sprintf("Checkpoint filesystem restored in %s\n", duration.Round(time.Millisecond)))
+	}
+	return checkpointFilesystemRestoreResult{}
+}
+
+func (s *Worker) runContainer(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, outputWriter *common.OutputWriter, startedChan chan int, checkpointPIDChan chan int, startupStartedAt time.Time, startupPortBindings []PortBinding, filesystemRestore *checkpointFilesystemRestore) (int, error) {
 	instance, exists := s.containerInstances.Get(request.ContainerId)
 	if !exists {
 		return -1, fmt.Errorf("container instance not found")
@@ -1543,6 +1661,10 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 
 	supportsCheckpoint := instance.Runtime.Capabilities().CheckpointRestore && s.IsCRIUAvailable(request.GpuCount)
 	restoringCheckpoint := supportsCheckpoint && request.Checkpoint != nil && request.Checkpoint.Status == string(types.CheckpointStatusAvailable)
+	checkpointRestoreStarted := time.Now()
+	if filesystemRestore != nil {
+		checkpointRestoreStarted = filesystemRestore.startedAt
+	}
 	bundlePath := filepath.Dir(request.ConfigPath)
 	originalConfig, originalConfigErr := os.ReadFile(request.ConfigPath)
 	if originalConfigErr != nil {
@@ -1557,13 +1679,16 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 			if err := s.updateCheckpointRestored(request.Checkpoint.CheckpointId); err != nil {
 				log.Warn().Err(err).Str("checkpoint_id", request.Checkpoint.CheckpointId).Msg("failed to update checkpoint restore timestamp")
 			}
-			outputLogger.Info("Checkpoint found and restored")
+			duration := time.Since(checkpointRestoreStarted)
+			metrics.RecordWorkerStartupPhase("checkpoint_restore", duration, request, map[string]string{"success": "true"})
+			log.Info().Str("container_id", request.ContainerId).Str("checkpoint_id", request.Checkpoint.CheckpointId).Dur("duration", duration).Msg("checkpoint restore completed")
+			outputLogger.Info(fmt.Sprintf("Checkpoint found and restored in %s\n", duration.Round(time.Millisecond)))
 		})
 	}
 
 	startAutoCheckpoint := func() {
 		if supportsCheckpoint && request.CheckpointEnabled {
-			go s.attemptAutoCheckpoint(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan)
+			s.startAutoCheckpoint(ctx, request, outputLogger, checkpointPIDChan)
 		}
 	}
 	fallbackFromCheckpoint := func(startCheckpoint bool) {
@@ -1632,17 +1757,15 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 
 	// Handle restore from checkpoint if available
 	if restoringCheckpoint {
-		checkpointPath, err := s.ensureCheckpointMaterialized(ctx, request, request.Checkpoint)
-		if err != nil {
-			log.Error().Str("container_id", request.ContainerId).Str("checkpoint_id", request.Checkpoint.CheckpointId).Msgf("failed to materialize checkpoint: %v", err)
+		var restoreResult checkpointFilesystemRestoreResult
+		if filesystemRestore != nil {
+			restoreResult = filesystemRestore.wait()
 		} else {
-			err = copyDirectory(filepath.Join(checkpointPath, checkpointFsDir), filepath.Dir(request.ConfigPath), []string{})
-			if err != nil {
-				log.Error().Str("container_id", request.ContainerId).Str("checkpoint_id", request.Checkpoint.CheckpointId).Msgf("failed to copy checkpoint directory: %v", err)
-			}
+			restoreResult = s.restoreCheckpointFilesystem(ctx, request, outputLogger, filepath.Dir(request.ConfigPath))
 		}
+		err := restoreResult.err
 		if err != nil {
-			s.markCheckpointRestoreFailed(request, request.Checkpoint)
+			// A local fetch failure does not prove the checkpoint itself is invalid.
 			if !request.Stub.Type.IsDeployment() {
 				finishRuntimeStarted()
 				return -1, err
@@ -1650,7 +1773,11 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 			fallbackFromCheckpoint(true)
 		} else {
 			runtimeStart = time.Now()
+			phaseStarted := time.Now()
 			exitCode, restored, restoreStarted, err := s.attemptRestoreCheckpoint(ctx, request, outputLogger, outputWriter, runtimeStartedChan, checkpointPIDChan)
+			runtimeRestoreDuration := time.Since(phaseStarted)
+			metrics.RecordWorkerStartupPhase("checkpoint_runtime_restore", runtimeRestoreDuration, request, map[string]string{"success": fmt.Sprintf("%t", restored && err == nil)})
+			log.Info().Str("container_id", request.ContainerId).Str("checkpoint_id", request.Checkpoint.CheckpointId).Dur("duration", runtimeRestoreDuration).Bool("restored", restored).Err(err).Msg("checkpoint runtime restore finished")
 			if restored {
 				finishRuntimeStarted()
 				markCheckpointRestored()
@@ -1695,9 +1822,15 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 		Started:       runtimeStartedChan,
 		DockerEnabled: request.DockerEnabled,
 	})
+	terminalCheckpoint := s.waitForTerminalAutoCheckpoint(ctx, request)
 	finishRuntimeStarted()
 	if err != nil {
-		log.Warn().Str("container_id", request.ContainerId).Err(err).Msgf("error running container from bundle, exit code %d", exitCode)
+		if terminalCheckpoint {
+			log.Info().Str("container_id", request.ContainerId).Int("exit_code", exitCode).Msg("container runtime exited after terminal checkpoint")
+			err = nil
+		} else {
+			log.Warn().Str("container_id", request.ContainerId).Err(err).Msgf("error running container from bundle, exit code %d", exitCode)
+		}
 	}
 
 	return exitCode, err
@@ -1852,12 +1985,14 @@ func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath strin
 		rootPath = bundlePath
 	}
 
-	overlayPath := baseConfigPath
-	if s.useMemoryOverlay(request) {
-		overlayPath = "/dev/shm"
-	}
+	return common.NewContainerOverlay(request, rootPath, s.containerOverlayBasePath(request))
+}
 
-	return common.NewContainerOverlay(request, rootPath, overlayPath)
+func (s *Worker) containerOverlayBasePath(request *types.ContainerRequest) string {
+	if s.useMemoryOverlay(request) {
+		return "/dev/shm"
+	}
+	return baseConfigPath
 }
 
 func (s *Worker) getContainerResources(request *types.ContainerRequest) (*specs.LinuxResources, error) {

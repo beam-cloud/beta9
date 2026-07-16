@@ -5,10 +5,21 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestTarXattrArgsPreserveOverlayMetadataOnLinux(t *testing.T) {
+	args := tarXattrArgs()
+	require.Contains(t, args, "--xattrs")
+	if runtime.GOOS == "linux" {
+		require.Contains(t, args, "--xattrs-include=*")
+	} else {
+		require.NotContains(t, args, "--xattrs-include=*")
+	}
+}
 
 func TestForceSymlinkCreatesParentAndReplacesExistingLink(t *testing.T) {
 	root := t.TempDir()
@@ -98,6 +109,17 @@ func TestCopyDirectoryNormalizesNestedExcludePaths(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(dst, "workspace", "data", "keep.txt"))
 	require.NoError(t, err)
 	require.Equal(t, "keep", string(data))
+}
+
+func TestCopyDirectoryContextHonorsCancellation(t *testing.T) {
+	src := t.TempDir()
+	dst := filepath.Join(t.TempDir(), "dst")
+	require.NoError(t, os.WriteFile(filepath.Join(src, "state.bin"), []byte("state"), 0644))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := copyDirectoryContext(ctx, src, dst, nil)
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestCreateTarWithSHA256ReturnsArchiveHashAndSize(t *testing.T) {

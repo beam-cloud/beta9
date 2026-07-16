@@ -18,6 +18,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/runtime"
@@ -29,13 +30,17 @@ import (
 type MockRuntime struct {
 	name             string
 	checkpointCalled bool
+	checkpointOpts   *runtime.CheckpointOpts
 	restoreCalled    bool
+	restoreCalls     int
 	checkpointCalls  int
 	checkpointError  error
 	checkpointErrors []error
 	restoreError     error
+	restoreErrors    []error
 	restoreExitCode  int
 	restoreOpts      *runtime.RestoreOpts
+	deleteCalls      int
 	killCalled       bool
 	killSignal       syscall.Signal
 	capabilities     runtime.Capabilities
@@ -45,15 +50,97 @@ type staticCheckpointManager struct {
 	path string
 }
 
+type restoringCheckpointManager struct{}
+
+type observingCheckpointManager struct {
+	create func() error
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
+type trackingReadCloser struct {
+	reader     io.Reader
+	reachedEOF bool
+	closed     bool
+}
+
+func (b *trackingReadCloser) Read(p []byte) (int, error) {
+	n, err := b.reader.Read(p)
+	if err == io.EOF {
+		b.reachedEOF = true
+	}
+	return n, err
+}
+
+func (b *trackingReadCloser) Close() error {
+	b.closed = true
+	return nil
+}
+
+type checkpointErrorWriter struct{}
+
+func (checkpointErrorWriter) Write([]byte) (int, error) {
+	return 0, errors.New("checkpoint cache write failed")
+}
+
+func TestRestoreOutputCaptureStopsBufferingButKeepsForwarding(t *testing.T) {
+	var downstream bytes.Buffer
+	capture := newRestoreOutputCapture(&downstream)
+	if _, err := capture.Write([]byte("restore output")); err != nil {
+		t.Fatal(err)
+	}
+	if got := capture.stop(); got != "restore output" {
+		t.Fatalf("captured output = %q", got)
+	}
+	if _, err := capture.Write([]byte("container output")); err != nil {
+		t.Fatal(err)
+	}
+	if got := capture.stop(); got != "restore output" {
+		t.Fatalf("capture continued after stop: %q", got)
+	}
+	if got := downstream.String(); got != "restore outputcontainer output" {
+		t.Fatalf("forwarded output = %q", got)
+	}
+}
+
 func (m *staticCheckpointManager) Available() bool {
 	return true
 }
 
-func (m *staticCheckpointManager) CreateCheckpoint(context.Context, runtime.Runtime, string, *types.ContainerRequest) (string, error) {
+func (m *staticCheckpointManager) CreateCheckpoint(context.Context, runtime.Runtime, string, *types.ContainerRequest, bool) (string, error) {
 	return m.path, nil
 }
 
 func (m *staticCheckpointManager) RestoreCheckpoint(context.Context, runtime.Runtime, *RestoreOpts) (int, error) {
+	return -1, errors.New("not implemented")
+}
+
+func (*restoringCheckpointManager) Available() bool {
+	return true
+}
+
+func (*restoringCheckpointManager) CreateCheckpoint(context.Context, runtime.Runtime, string, *types.ContainerRequest, bool) (string, error) {
+	return "", errors.New("not implemented")
+}
+
+func (*restoringCheckpointManager) RestoreCheckpoint(_ context.Context, _ runtime.Runtime, opts *RestoreOpts) (int, error) {
+	opts.started <- 4242
+	return 0, nil
+}
+
+func (*observingCheckpointManager) Available() bool {
+	return true
+}
+
+func (m *observingCheckpointManager) CreateCheckpoint(context.Context, runtime.Runtime, string, *types.ContainerRequest, bool) (string, error) {
+	return "", m.create()
+}
+
+func (*observingCheckpointManager) RestoreCheckpoint(context.Context, runtime.Runtime, *RestoreOpts) (int, error) {
 	return -1, errors.New("not implemented")
 }
 
@@ -92,7 +179,8 @@ func TestCheckpointRuntimeEnvironmentOverrides(t *testing.T) {
 	if !slices.Contains(genericGPUEnv, "UV_USE_IO_URING=0") ||
 		slices.Contains(genericGPUEnv, "MASTER_ADDR=127.0.0.1") ||
 		slices.Contains(genericGPUEnv, "NCCL_SOCKET_IFNAME=lo") ||
-		slices.Contains(genericGPUEnv, "GLOO_SOCKET_IFNAME=lo") {
+		slices.Contains(genericGPUEnv, "GLOO_SOCKET_IFNAME=lo") ||
+		slices.Contains(genericGPUEnv, "OMP_NUM_THREADS=1") {
 		t.Fatalf("generic GPU checkpoint env should not include pod-service loopback overrides: %v", genericGPUEnv)
 	}
 
@@ -159,6 +247,22 @@ func TestCheckpointHTTPReadinessRequiresStatusOK(t *testing.T) {
 	err = worker.checkCheckpointHTTPReady(context.Background(), server.Client(), request, 8000, "/not-ready")
 	if err == nil {
 		t.Fatal("expected non-200 readiness response to fail")
+	}
+}
+
+func TestCheckpointHTTPReadinessClosesConnection(t *testing.T) {
+	body := &trackingReadCloser{reader: strings.NewReader("ready")}
+	requestClose := false
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		requestClose = request.Close
+		return &http.Response{StatusCode: http.StatusOK, Body: body, Header: make(http.Header)}, nil
+	})}
+
+	if err := checkCheckpointHTTPReadyAt(context.Background(), client, "127.0.0.1:8000", "/ready"); err != nil {
+		t.Fatalf("checkCheckpointHTTPReadyAt returned error: %v", err)
+	}
+	if !requestClose || !body.reachedEOF || !body.closed {
+		t.Fatalf("readiness connection not fully closed: request_close=%t reached_eof=%t body_closed=%t", requestClose, body.reachedEOF, body.closed)
 	}
 }
 
@@ -291,18 +395,212 @@ func testHTTPServerHostPort(t *testing.T, server *httptest.Server) (string, int3
 }
 
 func TestCheckpointCreateLockIsPerStub(t *testing.T) {
-	worker := &Worker{}
-	request := &types.ContainerRequest{WorkspaceId: "workspace", StubId: "stub"}
+	worker := &Worker{stopContainerChan: make(chan stopContainerEvent, 1)}
+	request := &types.ContainerRequest{ContainerId: "container", WorkspaceId: "workspace", StubId: "stub"}
 
-	if !worker.acquireCheckpointCreateLock(request) {
+	state, acquired := worker.acquireCheckpointCreateLock(request)
+	if !acquired {
 		t.Fatal("first checkpoint lock acquisition failed")
 	}
-	if worker.acquireCheckpointCreateLock(request) {
+	if _, acquired := worker.acquireCheckpointCreateLock(request); acquired {
 		t.Fatal("second checkpoint lock acquisition succeeded")
 	}
-	worker.releaseCheckpointCreateLock(request)
-	if !worker.acquireCheckpointCreateLock(request) {
+	worker.finishCheckpointCreate(request, state)
+	if _, acquired := worker.acquireCheckpointCreateLock(request); !acquired {
 		t.Fatal("checkpoint lock was not released")
+	}
+}
+
+func TestAutomaticStopIsDeferredDuringCheckpoint(t *testing.T) {
+	request := &types.ContainerRequest{ContainerId: "container", WorkspaceId: "workspace", StubId: "stub"}
+	worker := &Worker{
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		stopContainerChan:  make(chan stopContainerEvent, 1),
+	}
+	worker.containerInstances.Set(request.ContainerId, &ContainerInstance{
+		Id:         request.ContainerId,
+		Request:    request,
+		StopReason: types.StopContainerReasonScheduler,
+	})
+	state, acquired := worker.acquireCheckpointCreateLock(request)
+	if !acquired {
+		t.Fatal("checkpoint lock acquisition failed")
+	}
+	runcRuntime := NewMockRuntime(types.ContainerRuntimeRunc.String(), runtime.Capabilities{CheckpointRestore: true})
+	if worker.awaitTerminalAutoCheckpointStop(context.Background(), request, runcRuntime, 0) {
+		t.Fatal("checkpoint was terminal before a stop was deferred")
+	}
+
+	if err := worker.stopContainer(request.ContainerId, false); err != nil {
+		t.Fatalf("defer scheduler stop: %v", err)
+	}
+	if err := worker.stopContainer(request.ContainerId, true); err != nil {
+		t.Fatalf("coalesce scheduler kill: %v", err)
+	}
+	if worker.deferAutomaticStopForCheckpoint(request, types.StopContainerReasonUser, stopContainerEvent{ContainerId: request.ContainerId}) {
+		t.Fatal("user stop was deferred")
+	}
+	if worker.deferAutomaticStopForCheckpoint(&types.ContainerRequest{
+		ContainerId: "other-container",
+		WorkspaceId: request.WorkspaceId,
+		StubId:      request.StubId,
+	}, types.StopContainerReasonScheduler, stopContainerEvent{ContainerId: "other-container"}) {
+		t.Fatal("stop for a different container was deferred")
+	}
+	if worker.awaitTerminalAutoCheckpointStop(context.Background(), request, NewMockRuntime(types.ContainerRuntimeGvisor.String(), runtime.Capabilities{CheckpointRestore: true}), 0) {
+		t.Fatal("gvisor checkpoint was marked terminal")
+	}
+	if !worker.awaitTerminalAutoCheckpointStop(context.Background(), request, runcRuntime, 0) {
+		t.Fatal("terminal runc checkpoint was not detected")
+	}
+	waitDone := make(chan bool, 1)
+	go func() {
+		waitDone <- worker.waitForTerminalAutoCheckpoint(context.Background(), request)
+	}()
+	select {
+	case <-waitDone:
+		t.Fatal("terminal checkpoint wait returned before completion")
+	default:
+	}
+
+	worker.finishCheckpointCreate(request, state)
+	if runtimeStopped := <-waitDone; runtimeStopped {
+		t.Fatal("non-terminal checkpoint reported a stopped runtime")
+	}
+	select {
+	case event := <-worker.stopContainerChan:
+		if event.ContainerId != request.ContainerId || !event.Kill {
+			t.Fatalf("unexpected deferred stop: %+v", event)
+		}
+	default:
+		t.Fatal("deferred stop was not replayed")
+	}
+	if worker.deferAutomaticStopForCheckpoint(request, types.StopContainerReasonScheduler, stopContainerEvent{ContainerId: request.ContainerId}) {
+		t.Fatal("stop remained deferred after checkpoint completion")
+	}
+	if worker.awaitTerminalAutoCheckpointStop(context.Background(), request, runcRuntime, 0) {
+		t.Fatal("checkpoint remained terminal after completion")
+	}
+}
+
+func TestTerminalCheckpointDoesNotReplaySatisfiedStop(t *testing.T) {
+	request := &types.ContainerRequest{ContainerId: "container", WorkspaceId: "workspace", StubId: "stub"}
+	worker := &Worker{stopContainerChan: make(chan stopContainerEvent, 1)}
+	state, acquired := worker.acquireCheckpointCreateLock(request)
+	if !acquired {
+		t.Fatal("checkpoint lock acquisition failed")
+	}
+	if !worker.deferAutomaticStopForCheckpoint(
+		request,
+		types.StopContainerReasonScheduler,
+		stopContainerEvent{ContainerId: request.ContainerId, Kill: true},
+	) {
+		t.Fatal("scheduler stop was not deferred")
+	}
+	if !worker.awaitTerminalAutoCheckpointStop(
+		context.Background(),
+		request,
+		NewMockRuntime(types.ContainerRuntimeRunc.String(), runtime.Capabilities{CheckpointRestore: true}),
+		0,
+	) {
+		t.Fatal("checkpoint was not marked terminal")
+	}
+
+	waitDone := make(chan bool, 1)
+	go func() {
+		waitDone <- worker.waitForTerminalAutoCheckpoint(context.Background(), request)
+	}()
+	time.Sleep(20 * time.Millisecond)
+	worker.markTerminalCheckpointRuntimeStopped(request)
+	worker.finishCheckpointCreate(request, state)
+	if runtimeStopped := <-waitDone; !runtimeStopped {
+		t.Fatal("terminal checkpoint did not report a stopped runtime")
+	}
+
+	select {
+	case event := <-worker.stopContainerChan:
+		t.Fatalf("terminal checkpoint replayed satisfied stop: %+v", event)
+	default:
+	}
+}
+
+func TestTerminalAutoCheckpointWaitsForScaleToZeroStop(t *testing.T) {
+	request := &types.ContainerRequest{
+		ContainerId: "container",
+		WorkspaceId: "workspace",
+		StubId:      "stub",
+		Stub: types.StubWithRelated{Stub: types.Stub{
+			Type:   types.StubType(types.StubTypePodDeployment),
+			Config: `{"keep_warm_seconds":0}`,
+		}},
+	}
+	worker := &Worker{stopContainerChan: make(chan stopContainerEvent, 1)}
+	state, acquired := worker.acquireCheckpointCreateLock(request)
+	if !acquired {
+		t.Fatal("checkpoint lock acquisition failed")
+	}
+	defer worker.finishCheckpointCreate(request, state)
+
+	result := make(chan bool, 1)
+	go func() {
+		result <- worker.awaitTerminalAutoCheckpointStop(
+			context.Background(),
+			request,
+			NewMockRuntime(types.ContainerRuntimeRunc.String(), runtime.Capabilities{CheckpointRestore: true}),
+			time.Second,
+		)
+	}()
+	select {
+	case <-result:
+		t.Fatal("terminal checkpoint wait returned before the stop arrived")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	if !worker.deferAutomaticStopForCheckpoint(
+		request,
+		types.StopContainerReasonScheduler,
+		stopContainerEvent{ContainerId: request.ContainerId, Kill: true},
+	) {
+		t.Fatal("scheduler stop was not deferred")
+	}
+	select {
+	case terminal := <-result:
+		if !terminal {
+			t.Fatal("checkpoint did not become terminal after deferred stop")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("terminal checkpoint wait did not observe deferred stop")
+	}
+}
+
+func TestTerminalAutoCheckpointDoesNotWaitForEndpoint(t *testing.T) {
+	request := &types.ContainerRequest{
+		ContainerId: "container",
+		WorkspaceId: "workspace",
+		StubId:      "stub",
+		Stub: types.StubWithRelated{Stub: types.Stub{
+			Type:   types.StubType(types.StubTypeEndpointDeployment),
+			Config: `{"keep_warm_seconds":0}`,
+		}},
+	}
+	worker := &Worker{}
+	state, acquired := worker.acquireCheckpointCreateLock(request)
+	if !acquired {
+		t.Fatal("checkpoint lock acquisition failed")
+	}
+	defer worker.finishCheckpointCreate(request, state)
+
+	started := time.Now()
+	if worker.awaitTerminalAutoCheckpointStop(
+		context.Background(),
+		request,
+		NewMockRuntime(types.ContainerRuntimeRunc.String(), runtime.Capabilities{CheckpointRestore: true}),
+		time.Second,
+	) {
+		t.Fatal("endpoint checkpoint was marked terminal without a deferred stop")
+	}
+	if elapsed := time.Since(started); elapsed > 100*time.Millisecond {
+		t.Fatalf("endpoint checkpoint unexpectedly waited for a stop: %s", elapsed)
 	}
 }
 
@@ -340,6 +638,7 @@ func (m *MockRuntime) Kill(ctx context.Context, containerID string, sig syscall.
 }
 
 func (m *MockRuntime) Delete(ctx context.Context, containerID string, opts *runtime.DeleteOpts) error {
+	m.deleteCalls++
 	return nil
 }
 
@@ -356,6 +655,7 @@ func (m *MockRuntime) Events(ctx context.Context, containerID string) (<-chan ru
 func (m *MockRuntime) Checkpoint(ctx context.Context, containerID string, opts *runtime.CheckpointOpts) error {
 	m.checkpointCalled = true
 	m.checkpointCalls++
+	m.checkpointOpts = opts
 	if len(m.checkpointErrors) > 0 {
 		err := m.checkpointErrors[0]
 		m.checkpointErrors = m.checkpointErrors[1:]
@@ -375,7 +675,15 @@ func (m *MockRuntime) Checkpoint(ctx context.Context, containerID string, opts *
 
 func (m *MockRuntime) Restore(ctx context.Context, containerID string, opts *runtime.RestoreOpts) (int, error) {
 	m.restoreCalled = true
+	m.restoreCalls++
 	m.restoreOpts = opts
+	if len(m.restoreErrors) > 0 {
+		err := m.restoreErrors[0]
+		m.restoreErrors = m.restoreErrors[1:]
+		if err != nil {
+			return m.restoreExitCode, err
+		}
+	}
 	if m.restoreError != nil {
 		return m.restoreExitCode, m.restoreError
 	}
@@ -393,8 +701,11 @@ func (m *MockRuntime) Close() error {
 func (m *MockRuntime) Reset() {
 	m.checkpointCalled = false
 	m.checkpointCalls = 0
+	m.checkpointOpts = nil
 	m.restoreCalled = false
+	m.restoreCalls = 0
 	m.restoreOpts = nil
+	m.deleteCalls = 0
 	m.killCalled = false
 	m.killSignal = 0
 }
@@ -437,7 +748,7 @@ func TestNvidiaCRIUManager(t *testing.T) {
 						GpuCount:    1,
 					}
 
-					checkpointPath, err := manager.CreateCheckpoint(context.Background(), mockRuntime, "cuda-checkpoint", request)
+					checkpointPath, err := manager.CreateCheckpoint(context.Background(), mockRuntime, "cuda-checkpoint", request, false)
 					if err != nil {
 						t.Errorf("CreateCheckpoint with CUDA support failed: %v", err)
 					}
@@ -476,7 +787,7 @@ func TestNvidiaCRIUManager(t *testing.T) {
 					ContainerId: fmt.Sprintf("%s-container-1", tc.runtimeName),
 				}
 
-				checkpointPath, err := manager.CreateCheckpoint(context.Background(), mockRuntime, "checkpoint-1", request)
+				checkpointPath, err := manager.CreateCheckpoint(context.Background(), mockRuntime, "checkpoint-1", request, false)
 				if err != nil {
 					t.Errorf("CreateCheckpoint failed: %v", err)
 				}
@@ -487,6 +798,25 @@ func TestNvidiaCRIUManager(t *testing.T) {
 
 				if checkpointPath == "" {
 					t.Error("Expected non-empty checkpoint path")
+				}
+				if mockRuntime.checkpointOpts == nil || !mockRuntime.checkpointOpts.LeaveRunning {
+					t.Fatalf("unexpected hot checkpoint options: %+v", mockRuntime.checkpointOpts)
+				}
+			})
+
+			t.Run("CreateCheckpoint terminal state", func(t *testing.T) {
+				mockRuntime.Reset()
+				request := &types.ContainerRequest{
+					ContainerId: fmt.Sprintf("%s-container-terminal", tc.runtimeName),
+				}
+
+				_, err := manager.CreateCheckpoint(context.Background(), mockRuntime, "checkpoint-terminal-"+tc.runtimeName, request, true)
+				if err != nil {
+					t.Fatalf("CreateCheckpoint failed: %v", err)
+				}
+				wantTerminate := tc.runtimeName == types.ContainerRuntimeRunc.String()
+				if mockRuntime.checkpointOpts == nil || mockRuntime.checkpointOpts.LeaveRunning == wantTerminate {
+					t.Fatalf("unexpected terminal checkpoint options for %s: %+v", tc.runtimeName, mockRuntime.checkpointOpts)
 				}
 			})
 
@@ -525,6 +855,9 @@ func TestNvidiaCRIUManager(t *testing.T) {
 				if mockRuntime.restoreOpts == nil || mockRuntime.restoreOpts.AllowOpenTCP || !mockRuntime.restoreOpts.TCPClose {
 					t.Errorf("Expected generic NVIDIA restore to use tcp-close, got %+v", mockRuntime.restoreOpts)
 				}
+				if _, err := os.Stat(filepath.Join(checkpointPath, checkpointCloseExternalTCPMarker)); !errors.Is(err, os.ErrNotExist) {
+					t.Errorf("Expected endpoint restore not to enable selective TCP restore, got %v", err)
+				}
 
 				if exitCode != 0 {
 					t.Errorf("Expected exit code 0, got %d", exitCode)
@@ -562,6 +895,9 @@ func TestNvidiaCRIUManager(t *testing.T) {
 				if mockRuntime.restoreOpts == nil || !mockRuntime.restoreOpts.AllowOpenTCP || mockRuntime.restoreOpts.TCPClose {
 					t.Errorf("Expected pod NVIDIA restore to preserve open TCP without tcp-close, got %+v", mockRuntime.restoreOpts)
 				}
+				if _, err := os.Stat(filepath.Join(checkpointPath, checkpointCloseExternalTCPMarker)); err != nil {
+					t.Errorf("Expected pod restore to enable selective TCP restore: %v", err)
+				}
 
 				if exitCode != 0 {
 					t.Errorf("Expected exit code 0, got %d", exitCode)
@@ -598,6 +934,9 @@ func TestNvidiaCRIUManager(t *testing.T) {
 
 				if mockRuntime.restoreOpts == nil || !mockRuntime.restoreOpts.AllowOpenTCP || mockRuntime.restoreOpts.TCPClose {
 					t.Errorf("Expected service NVIDIA restore to preserve open TCP without tcp-close, got %+v", mockRuntime.restoreOpts)
+				}
+				if _, err := os.Stat(filepath.Join(checkpointPath, checkpointCloseExternalTCPMarker)); err != nil {
+					t.Errorf("Expected service restore to enable selective TCP restore: %v", err)
 				}
 
 				if exitCode != 0 {
@@ -638,7 +977,7 @@ func TestCheckpointRestoreErrorHandling(t *testing.T) {
 			ContainerId: "failing-container",
 		}
 
-		_, err := manager.CreateCheckpoint(context.Background(), mockRuntime, "failing-checkpoint", request)
+		_, err := manager.CreateCheckpoint(context.Background(), mockRuntime, "failing-checkpoint", request, false)
 		if err == nil {
 			t.Error("Expected error when checkpoint fails")
 		}
@@ -676,6 +1015,9 @@ func TestCheckpointRestoreErrorHandling(t *testing.T) {
 		if exitCode != -1 {
 			t.Errorf("Expected exit code -1, got %d", exitCode)
 		}
+		if mockRuntime.restoreCalls != 1 || mockRuntime.deleteCalls != 0 {
+			t.Errorf("generic restore failure retried: restores=%d cleanups=%d", mockRuntime.restoreCalls, mockRuntime.deleteCalls)
+		}
 	})
 
 	t.Run("CRIU restore specific error", func(t *testing.T) {
@@ -710,7 +1052,44 @@ func TestCheckpointRestoreErrorHandling(t *testing.T) {
 		if !IsCRIURestoreError(err) {
 			t.Error("Expected CRIU restore error")
 		}
+		if mockRuntime.restoreCalls != nvidiaRestoreAttempts || mockRuntime.deleteCalls != nvidiaRestoreAttempts-1 {
+			t.Errorf("CRIU restore attempts=%d cleanups=%d", mockRuntime.restoreCalls, mockRuntime.deleteCalls)
+		}
 	})
+}
+
+func TestNvidiaRestoreRetriesCRIUFailure(t *testing.T) {
+	tmpDir := t.TempDir()
+	checkpoint := &types.Checkpoint{CheckpointId: "checkpoint-retry"}
+	if err := os.MkdirAll(filepath.Join(tmpDir, checkpoint.CheckpointId), 0755); err != nil {
+		t.Fatal(err)
+	}
+	rt := NewMockRuntime(types.ContainerRuntimeRunc.String(), runtime.Capabilities{CheckpointRestore: true})
+	rt.restoreErrors = []error{
+		&ErrCRIURestoreFailed{Stderr: "criu failed: type RESTORE"},
+		nil,
+	}
+	manager := &NvidiaCRIUManager{checkpointRoot: tmpDir}
+
+	exitCode, err := manager.RestoreCheckpoint(context.Background(), rt, &RestoreOpts{
+		request:      &types.ContainerRequest{ContainerId: "container-retry"},
+		checkpoint:   checkpoint,
+		configPath:   filepath.Join(tmpDir, "config.json"),
+		started:      make(chan int, 1),
+		outputWriter: io.Discard,
+	})
+	if err != nil {
+		t.Fatalf("RestoreCheckpoint failed: %v", err)
+	}
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0", exitCode)
+	}
+	if rt.restoreCalls != 2 {
+		t.Fatalf("restore calls = %d, want 2", rt.restoreCalls)
+	}
+	if rt.deleteCalls != 1 {
+		t.Fatalf("cleanup calls = %d, want 1", rt.deleteCalls)
+	}
 }
 
 func TestCheckpointMaterializedRequiresRuntimeAndFilesystemPayload(t *testing.T) {
@@ -862,7 +1241,7 @@ func TestCreateCheckpointRetriesTransientGvisorTCPStateError(t *testing.T) {
 
 	_, err := manager.CreateCheckpoint(context.Background(), rt, "checkpoint-retry", &types.ContainerRequest{
 		ContainerId: "sandbox-retry",
-	})
+	}, false)
 
 	if err != nil {
 		t.Fatalf("CreateCheckpoint error = %v", err)
@@ -879,7 +1258,7 @@ func TestCreateCheckpointDoesNotRetryRuncCheckpointError(t *testing.T) {
 
 	_, err := manager.CreateCheckpoint(context.Background(), rt, "checkpoint-no-retry", &types.ContainerRequest{
 		ContainerId: "sandbox-no-retry",
-	})
+	}, false)
 
 	if err == nil {
 		t.Fatal("expected CreateCheckpoint error")
@@ -977,6 +1356,121 @@ func TestMaterializeCheckpointArchiveRejectsFilesystemOnlyPayload(t *testing.T) 
 	}
 }
 
+func TestMaterializeCheckpointReaderVerifiesAndPublishes(t *testing.T) {
+	root := t.TempDir()
+	checkpointID := "checkpoint-stream"
+	sourcePath := filepath.Join(root, "source", checkpointID)
+	if err := os.MkdirAll(filepath.Join(sourcePath, checkpointFsDir), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourcePath, checkpointFsDir, "state.txt"), []byte("filesystem"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourcePath, "inventory.img"), []byte("runtime"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	archivePath := filepath.Join(root, checkpointID+checkpointArchiveExtension)
+	if err := createTar(sourcePath, archivePath); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := os.ReadFile(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash, size, err := fileSHA256(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	checkpointPath := filepath.Join(root, "materialized", checkpointID)
+	var archiveCopy bytes.Buffer
+	if err := materializeCheckpointReader(context.Background(), bytes.NewReader(archive), hash, size, checkpointPath, checkpointID, &archiveCopy); err != nil {
+		t.Fatal(err)
+	}
+	if !checkpointMaterialized(checkpointPath) {
+		t.Fatal("expected verified checkpoint to be published")
+	}
+	if !bytes.Equal(archive, archiveCopy.Bytes()) {
+		t.Fatal("archive copy does not match streamed checkpoint")
+	}
+
+	bestEffortWriter := &bestEffortCheckpointCacheWriter{writer: checkpointErrorWriter{}}
+	checkpointPath = filepath.Join(root, "materialized-best-effort", checkpointID)
+	if err := materializeCheckpointReader(context.Background(), bytes.NewReader(archive), hash, size, checkpointPath, checkpointID, bestEffortWriter); err != nil {
+		t.Fatalf("best-effort cache write blocked materialization: %v", err)
+	}
+	if bestEffortWriter.err == nil {
+		t.Fatal("expected best-effort cache writer to retain its error")
+	}
+	if !checkpointMaterialized(checkpointPath) {
+		t.Fatal("expected checkpoint to publish despite cache staging failure")
+	}
+}
+
+func TestMaterializeCheckpointReaderRejectsHashMismatch(t *testing.T) {
+	root := t.TempDir()
+	checkpointID := "checkpoint-corrupt"
+	sourcePath := filepath.Join(root, "source", checkpointID)
+	if err := os.MkdirAll(filepath.Join(sourcePath, checkpointFsDir), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourcePath, checkpointFsDir, "state.txt"), []byte("filesystem"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourcePath, "inventory.img"), []byte("runtime"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	archivePath := filepath.Join(root, checkpointID+checkpointArchiveExtension)
+	if err := createTar(sourcePath, archivePath); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := os.ReadFile(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpointPath := filepath.Join(root, "materialized", checkpointID)
+	err = materializeCheckpointReader(context.Background(), bytes.NewReader(archive), strings.Repeat("0", 64), int64(len(archive)), checkpointPath, checkpointID, nil)
+	if err == nil || !strings.Contains(err.Error(), "hash mismatch") {
+		t.Fatalf("expected hash mismatch, got %v", err)
+	}
+	if _, err := os.Stat(checkpointPath); !os.IsNotExist(err) {
+		t.Fatalf("unverified checkpoint was published: %v", err)
+	}
+}
+
+func TestCheckpointCacheReaderBuffersReadAtCalls(t *testing.T) {
+	content := make([]byte, 2*checkpointCacheReadBufferSize+37)
+	for i := range content {
+		content[i] = byte(i % 251)
+	}
+	var offsets []int64
+	reader := newCheckpointCacheReader(context.Background(), "hash", int64(len(content)), func(_ context.Context, _ string, offset int64, dst []byte) (int64, error) {
+		offsets = append(offsets, offset)
+		return int64(copy(dst, content[offset:])), nil
+	})
+	actual, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(actual, content) {
+		t.Fatal("buffered cache reader returned different content")
+	}
+	wantOffsets := []int64{0, checkpointCacheReadBufferSize, 2 * checkpointCacheReadBufferSize}
+	if !slices.Equal(offsets, wantOffsets) {
+		t.Fatalf("read offsets = %v, want %v", offsets, wantOffsets)
+	}
+}
+
+func TestCheckpointCacheReaderRejectsShortRead(t *testing.T) {
+	reader := newCheckpointCacheReader(context.Background(), "hash", 128, func(_ context.Context, _ string, _ int64, dst []byte) (int64, error) {
+		return int64(len(dst) - 1), nil
+	})
+	_, err := reader.Read(make([]byte, 1))
+	if err == nil || !strings.Contains(err.Error(), "short checkpoint cache read") {
+		t.Fatalf("expected short read error, got %v", err)
+	}
+}
+
 func TestCheckpointUploadReaderPreservesSeekableProgress(t *testing.T) {
 	content := []byte("checkpoint upload payload")
 	filePath := filepath.Join(t.TempDir(), "checkpoint.tar")
@@ -1068,7 +1562,7 @@ func TestRuntimeCompatibility(t *testing.T) {
 			}
 
 			checkpointID := fmt.Sprintf("%s-checkpoint", rtInfo.name)
-			checkpointPath, err := manager.CreateCheckpoint(context.Background(), mockRuntime, checkpointID, request)
+			checkpointPath, err := manager.CreateCheckpoint(context.Background(), mockRuntime, checkpointID, request, false)
 			if err != nil {
 				t.Errorf("CreateCheckpoint with %s failed: %v", rtInfo.name, err)
 			}

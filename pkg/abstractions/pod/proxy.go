@@ -985,6 +985,8 @@ func (pb *PodProxyBuffer) discoverContainers() {
 }
 
 func (pb *PodProxyBuffer) readyAddressMap(addressMap map[int32]string) map[int32]string {
+	addressMap = pb.configuredAddressMap(addressMap)
+
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	readyAddressMap := map[int32]string{}
@@ -1005,6 +1007,20 @@ func (pb *PodProxyBuffer) readyAddressMap(addressMap map[int32]string) map[int32
 
 	wg.Wait()
 	return readyAddressMap
+}
+
+func (pb *PodProxyBuffer) configuredAddressMap(addressMap map[int32]string) map[int32]string {
+	if pb.stubConfig == nil || len(pb.stubConfig.Ports) == 0 {
+		return addressMap
+	}
+
+	configured := make(map[int32]string, len(pb.stubConfig.Ports))
+	for _, port := range pb.stubConfig.Ports {
+		if address, ok := addressMap[int32(port)]; ok {
+			configured[int32(port)] = address
+		}
+	}
+	return configured
 }
 
 // checkContainerAvailable checks if a container is available (meaning you can connect to it via a TCP dial)

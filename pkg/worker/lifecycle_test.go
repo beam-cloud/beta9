@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -978,6 +979,49 @@ func TestNormalizeContainerExitCodeMapsExplicitStopReasons(t *testing.T) {
 	}
 }
 
+func TestRuntimeNeedsGraceKill(t *testing.T) {
+	tests := []struct {
+		name  string
+		state func(context.Context, string) (runtime.State, error)
+		want  bool
+	}{
+		{
+			name: "running",
+			state: func(context.Context, string) (runtime.State, error) {
+				return runtime.State{Status: types.RuncContainerStatusRunning}, nil
+			},
+			want: true,
+		},
+		{
+			name: "stopped",
+			state: func(context.Context, string) (runtime.State, error) {
+				return runtime.State{Status: "stopped"}, nil
+			},
+		},
+		{
+			name: "terminal checkpoint removed runtime",
+			state: func(context.Context, string) (runtime.State, error) {
+				return runtime.State{}, runtime.ErrContainerNotFound{ContainerID: "container"}
+			},
+		},
+		{
+			name: "transient state failure still forces stop",
+			state: func(context.Context, string) (runtime.State, error) {
+				return runtime.State{}, errors.New("runtime state temporarily unavailable")
+			},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rt := &mockRuntime{state: tt.state}
+			require.Equal(t, tt.want, runtimeNeedsGraceKill(context.Background(), rt, "container"))
+		})
+	}
+	require.False(t, runtimeNeedsGraceKill(context.Background(), nil, "container"))
+}
+
 func TestContainerExitReasonSeparatesCompletionFromStops(t *testing.T) {
 	require.Equal(t, "COMPLETED", containerExitReason(0, types.StopContainerReasonUnknown, false))
 	require.Equal(t, "SIGKILL", containerExitReason(int(types.ContainerExitCodeOomKill), types.StopContainerReasonUnknown, false))
@@ -1036,6 +1080,7 @@ func TestRunContainerDoesNotCancelRuntimeRunWithWorkerContext(t *testing.T) {
 			make(chan int, 1),
 			make(chan int, 1),
 			time.Now(),
+			nil,
 			nil,
 		)
 		result <- err
@@ -1110,6 +1155,7 @@ func TestRunContainerRestorePublishesAddressFromStartedHandler(t *testing.T) {
 		make(chan int, 1),
 		time.Now(),
 		[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
+		nil,
 	)
 
 	require.NoError(t, err)
@@ -1123,6 +1169,54 @@ func TestRunContainerRestorePublishesAddressFromStartedHandler(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return backendRepoClient.updateCalls == 1 && backendRepoClient.lastUpdate.LastRestoredAt != nil
 	}, time.Second, 10*time.Millisecond)
+}
+
+func TestCheckpointFilesystemRestorePreparesInitialUpperLayer(t *testing.T) {
+	checkpointRoot := t.TempDir()
+	checkpointID := "checkpoint-prepare-upper"
+	checkpointPath := filepath.Join(checkpointRoot, checkpointID)
+	checkpointFilesystem := filepath.Join(checkpointPath, checkpointFsDir)
+	require.NoError(t, os.MkdirAll(filepath.Join(checkpointFilesystem, "state"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(checkpointPath, "inventory.img"), []byte("runtime"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(checkpointFilesystem, "state", "ready"), []byte("yes"), 0644))
+
+	worker := &Worker{
+		ctx:          context.Background(),
+		cacheManager: &WorkerCacheManager{checkpointRoot: checkpointRoot},
+	}
+	request := &types.ContainerRequest{
+		ContainerId: "checkpoint-prepare-upper-test",
+		Checkpoint: &types.Checkpoint{
+			CheckpointId: checkpointID,
+			Status:       string(types.CheckpointStatusAvailable),
+		},
+	}
+	restore := worker.startCheckpointFilesystemRestore(request, nil)
+	t.Cleanup(restore.cleanup)
+
+	require.NoError(t, restore.wait().err)
+	data, err := os.ReadFile(filepath.Join(restore.upperPath, "state", "ready"))
+	require.NoError(t, err)
+	require.Equal(t, "yes", string(data))
+}
+
+func TestCheckpointFilesystemRestoreDiscardRemovesPartialUpperLayer(t *testing.T) {
+	overlayRoot := filepath.Join(t.TempDir(), "overlay")
+	require.NoError(t, os.MkdirAll(filepath.Join(overlayRoot, "layer-0", "upper"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(overlayRoot, "layer-0", "upper", "partial"), []byte("partial"), 0644))
+
+	_, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	close(done)
+	restore := &checkpointFilesystemRestore{
+		overlayRoot: overlayRoot,
+		done:        done,
+		cancel:      cancel,
+		result:      checkpointFilesystemRestoreResult{err: assert.AnError},
+	}
+
+	require.NoError(t, restore.discard())
+	require.NoDirExists(t, overlayRoot)
 }
 
 func TestRunContainerRestoreWaitsForRestoredRuntimeExit(t *testing.T) {
@@ -1195,6 +1289,7 @@ func TestRunContainerRestoreWaitsForRestoredRuntimeExit(t *testing.T) {
 			make(chan int, 1),
 			time.Now(),
 			[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
+			nil,
 		)
 		done <- err
 	}()
@@ -1339,6 +1434,7 @@ func TestRunContainerRestoreFailureCleansRuntimeBeforeFallback(t *testing.T) {
 		make(chan int, 1),
 		time.Now(),
 		[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
+		nil,
 	)
 
 	require.NoError(t, err)
@@ -1405,14 +1501,14 @@ func TestRunContainerMaterializeFailureFallsBackWithoutRestore(t *testing.T) {
 		make(chan int, 1),
 		time.Now(),
 		[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
+		nil,
 	)
 
 	require.NoError(t, err)
 	require.Equal(t, 0, exitCode)
 	require.True(t, rt.runCalled)
 	require.Equal(t, 0, criuManager.restoreCalls)
-	require.Equal(t, 1, backendRepoClient.updateCalls)
-	require.Equal(t, string(types.CheckpointStatusRestoreFailed), backendRepoClient.lastUpdate.Status)
+	require.Equal(t, 0, backendRepoClient.updateCalls)
 	require.Nil(t, request.Checkpoint)
 }
 
@@ -2085,7 +2181,7 @@ func (m *startedCRIUManager) Available() bool {
 	return true
 }
 
-func (m *startedCRIUManager) CreateCheckpoint(ctx context.Context, rt runtime.Runtime, checkpointId string, request *types.ContainerRequest) (string, error) {
+func (m *startedCRIUManager) CreateCheckpoint(ctx context.Context, rt runtime.Runtime, checkpointId string, request *types.ContainerRequest, terminateAfterCheckpoint bool) (string, error) {
 	return "", nil
 }
 
@@ -2103,7 +2199,7 @@ func (m *restoreErrorCRIUManager) Available() bool {
 	return true
 }
 
-func (m *restoreErrorCRIUManager) CreateCheckpoint(ctx context.Context, rt runtime.Runtime, checkpointId string, request *types.ContainerRequest) (string, error) {
+func (m *restoreErrorCRIUManager) CreateCheckpoint(ctx context.Context, rt runtime.Runtime, checkpointId string, request *types.ContainerRequest, terminateAfterCheckpoint bool) (string, error) {
 	return "", nil
 }
 
@@ -2122,7 +2218,7 @@ func (m *observingRestoreErrorCRIUManager) Available() bool {
 	return true
 }
 
-func (m *observingRestoreErrorCRIUManager) CreateCheckpoint(ctx context.Context, rt runtime.Runtime, checkpointId string, request *types.ContainerRequest) (string, error) {
+func (m *observingRestoreErrorCRIUManager) CreateCheckpoint(ctx context.Context, rt runtime.Runtime, checkpointId string, request *types.ContainerRequest, terminateAfterCheckpoint bool) (string, error) {
 	return "", assert.AnError
 }
 

@@ -597,6 +597,47 @@ func TestReadyAddressMapFiltersUnreadyPorts(t *testing.T) {
 	}
 }
 
+func TestReadyAddressMapOnlyWaitsForConfiguredPorts(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	rdb := newPodProxyTestRedis(t)
+	repo := repository.NewContainerRedisRepositoryForTest(rdb)
+	routeID := "machine:worker:container:container:2222"
+	if err := repo.SetBackendRoute(context.Background(), types.BackendRoute{
+		RouteID:   routeID,
+		Port:      2222,
+		Transport: types.BackendRouteTransportDirect,
+		State:     types.BackendRouteStateOpening,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	pb := &PodProxyBuffer{
+		ctx:           context.Background(),
+		stubConfig:    &types.StubConfigV1{Ports: []uint32{8000}},
+		containerRepo: repo,
+	}
+	start := time.Now()
+	ready := pb.readyAddressMap(map[int32]string{
+		8000: listener.Addr().String(),
+		2222: types.BackendRouteAddress(routeID),
+	})
+
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Fatalf("configured port discovery took %s, want below 500ms", elapsed)
+	}
+	if got := ready[8000]; got != listener.Addr().String() {
+		t.Fatalf("ready address = %q, want %q", got, listener.Addr().String())
+	}
+	if _, ok := ready[2222]; ok {
+		t.Fatal("unconfigured management port was included in ready address map")
+	}
+}
+
 func TestPrimeContainerPortMakesPortImmediatelyReservable(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)

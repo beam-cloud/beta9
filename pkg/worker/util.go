@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -42,6 +43,13 @@ func forceSymlink(source, link string) error {
 }
 
 func copyDirectory(src, dst string, excludePaths []string) error {
+	return copyDirectoryContext(context.Background(), src, dst, excludePaths)
+}
+
+func copyDirectoryContext(ctx context.Context, src, dst string, excludePaths []string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if err := os.MkdirAll(dst, 0755); err != nil {
 		return fmt.Errorf("create destination directory %s: %w", dst, err)
 	}
@@ -53,7 +61,7 @@ func copyDirectory(src, dst string, excludePaths []string) error {
 			continue
 		}
 		if strings.Contains(cleanPath, "/") {
-			return copyDirectoryWalk(src, dst, excludePaths)
+			return copyDirectoryWalkContext(ctx, src, dst, excludePaths)
 		}
 		rootExcludes[cleanPath] = struct{}{}
 	}
@@ -63,20 +71,20 @@ func copyDirectory(src, dst string, excludePaths []string) error {
 		return fmt.Errorf("read source directory %s: %w", src, err)
 	}
 
-	tarArgs := []string{"-cf", "-", "-C", src, "--"}
+	tarArgs := append(tarXattrArgs(), "-cf", "-", "-C", src, "--")
 	for _, entry := range entries {
 		if _, excluded := rootExcludes[entry.Name()]; excluded {
 			continue
 		}
 		tarArgs = append(tarArgs, "./"+entry.Name())
 	}
-	if len(tarArgs) == 5 {
+	if len(tarArgs) == len(tarXattrArgs())+5 {
 		return nil
 	}
 
 	reader, writer := io.Pipe()
-	archiveCmd := exec.Command("tar", tarArgs...)
-	extractCmd := exec.Command("tar", "-xf", "-", "-C", dst)
+	archiveCmd := exec.CommandContext(ctx, "tar", tarArgs...)
+	extractCmd := exec.CommandContext(ctx, "tar", append(tarXattrArgs(), "-xf", "-", "-C", dst)...)
 	var archiveStderr, extractStderr bytes.Buffer
 	archiveCmd.Stdout = writer
 	archiveCmd.Stderr = &archiveStderr
@@ -128,10 +136,17 @@ func normalizedCopyExcludePaths(excludePaths []string) map[string]struct{} {
 }
 
 func copyDirectoryWalk(src, dst string, excludePaths []string) error {
+	return copyDirectoryWalkContext(context.Background(), src, dst, excludePaths)
+}
+
+func copyDirectoryWalkContext(ctx context.Context, src, dst string, excludePaths []string) error {
 	excludes := normalizedCopyExcludePaths(excludePaths)
 
 	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
 			return err
 		}
 
@@ -234,7 +249,8 @@ func createTarWithSHA256Progress(ctx context.Context, srcDir, destTar string, pr
 
 		hasher := sha256.New()
 		counter := &countingWriter{progress: progress}
-		cmd := exec.CommandContext(ctx, "tar", "-cf", "-", "-C", filepath.Dir(srcDir), filepath.Base(srcDir))
+		tarArgs := append(tarXattrArgs(), "-cf", "-", "-C", filepath.Dir(srcDir), filepath.Base(srcDir))
+		cmd := exec.CommandContext(ctx, "tar", tarArgs...)
 		var stderr bytes.Buffer
 		cmd.Stdout = io.MultiWriter(out, hasher, counter)
 		cmd.Stderr = &stderr
@@ -289,8 +305,16 @@ func waitForRetry(ctx context.Context, delay time.Duration) error {
 	}
 }
 
+func tarXattrArgs() []string {
+	args := []string{"--xattrs"}
+	if runtime.GOOS == "linux" {
+		args = append(args, "--xattrs-include=*")
+	}
+	return args
+}
+
 func untarTar(srcTar, destDir string) error {
-	cmd := exec.Command("tar", "-xf", srcTar, "-C", destDir)
+	cmd := exec.Command("tar", append(tarXattrArgs(), "-xf", srcTar, "-C", destDir)...)
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
 }

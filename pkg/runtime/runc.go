@@ -3,6 +3,8 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"io"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -14,8 +16,9 @@ import (
 )
 
 const (
-	runcRestoreStateTimeout      = 30 * time.Second
-	runcRestoreStatePollInterval = 25 * time.Millisecond
+	runcRestoreStateTimeout       = 30 * time.Second
+	runcRestoreStatePollInterval  = 25 * time.Millisecond
+	runcRestoreOutputDrainTimeout = 2 * time.Second
 )
 
 type runcCommandResult struct {
@@ -208,44 +211,96 @@ func (r *Runc) Restore(ctx context.Context, containerID string, opts *RestoreOpt
 		return -1, fmt.Errorf("restore options cannot be nil")
 	}
 
-	cmd := exec.CommandContext(context.WithoutCancel(ctx), r.runcCommand(), r.restoreArgs(containerID, opts)...)
+	cmd := exec.Command(r.runcCommand(), r.restoreArgs(containerID, opts)...)
+	var outputRead, outputWrite *os.File
+	var outputDone chan struct{}
 	if opts.OutputWriter != nil {
-		cmd.Stdout = opts.OutputWriter
-		cmd.Stderr = opts.OutputWriter
+		var err error
+		outputRead, outputWrite, err = os.Pipe()
+		if err != nil {
+			return -1, fmt.Errorf("create restore output pipe: %w", err)
+		}
+		cmd.Stdout = outputWrite
+		cmd.Stderr = outputWrite
 	}
 
 	if err := cmd.Start(); err != nil {
+		if outputRead != nil {
+			_ = outputRead.Close()
+			_ = outputWrite.Close()
+		}
 		return -1, err
 	}
+	if outputRead != nil {
+		_ = outputWrite.Close()
+		outputDone = make(chan struct{})
+		go func() {
+			defer close(outputDone)
+			_, _ = io.Copy(opts.OutputWriter, outputRead)
+			_ = outputRead.Close()
+		}()
+	}
 
-	restoreDone := make(chan runcCommandResult, 1)
+	resultCh := make(chan runcCommandResult, 1)
 	go func() {
-		restoreDone <- runcWaitResult(cmd.Wait())
-		close(restoreDone)
+		resultCh <- runcWaitResult(cmd.Wait())
 	}()
 
-	pid, result, err := r.waitForRestoredContainerPID(ctx, containerID, restoreDone)
-	if err != nil {
-		if result != nil {
-			return result.exitCode, result.err
+	var result runcCommandResult
+	var contextErr error
+	select {
+	case result = <-resultCh:
+	case <-ctx.Done():
+		select {
+		case result = <-resultCh:
+		default:
+			_ = cmd.Process.Kill()
+			result = <-resultCh
+			contextErr = ctx.Err()
 		}
-		_ = cmd.Process.Kill()
-		return -1, err
 	}
-	if result != nil {
+	if contextErr != nil {
+		drainRestoreOutput(ctx, outputRead, outputDone)
+		return result.exitCode, contextErr
+	}
+	if result.err != nil {
+		drainRestoreOutput(ctx, outputRead, outputDone)
 		return result.exitCode, result.err
+	}
+
+	pid, _, err := r.waitForRestoredContainerPID(ctx, containerID, nil)
+	if err != nil {
+		return -1, err
 	}
 
 	if opts.Started != nil {
 		select {
 		case opts.Started <- pid:
 		default:
-			_ = cmd.Process.Kill()
 			return -1, fmt.Errorf("restore started but started channel was unavailable")
 		}
 	}
 
-	return 0, nil
+	return result.exitCode, nil
+}
+
+func drainRestoreOutput(ctx context.Context, outputRead *os.File, outputDone <-chan struct{}) {
+	if outputDone == nil {
+		return
+	}
+
+	timer := time.NewTimer(runcRestoreOutputDrainTimeout)
+	defer timer.Stop()
+	select {
+	case <-outputDone:
+		return
+	case <-ctx.Done():
+	case <-timer.C:
+	}
+
+	// A partially restored child may still hold the pipe open. Stop waiting so
+	// the caller can clean up the failed runtime container and retry.
+	_ = outputRead.Close()
 }
 
 func (r *Runc) runcCommand() string {
@@ -257,7 +312,7 @@ func (r *Runc) runcCommand() string {
 
 func (r *Runc) restoreArgs(containerID string, opts *RestoreOpts) []string {
 	args := r.globalArgs()
-	args = append(args, "restore")
+	args = append(args, "restore", "--detach")
 	args = append(args, restoreCheckpointArgs(opts)...)
 	if opts.AllowOpenTCP {
 		args = append(args, "--tcp-established")

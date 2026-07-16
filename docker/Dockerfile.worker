@@ -24,6 +24,8 @@ FROM golang:1.23-bookworm AS runc
 
 WORKDIR /workspace
 
+COPY pkg/worker/patches/runc-criu-production-log-level.patch /tmp/runc-criu-production-log-level.patch
+
 RUN apt-get update && apt-get install -y \
     make \
     btrfs-progs \
@@ -42,7 +44,9 @@ RUN <<EOT
 set -eux
 git clone -b dlm/force-compat-mode-on-restore https://github.com/beam-cloud/runc.git /workspace/runc \
   && cd /workspace/runc \
-  && git reset --hard d85a78033ba2905f5c57afdc81b73a12be72c03c
+  && git reset --hard d85a78033ba2905f5c57afdc81b73a12be72c03c \
+  && git apply --check /tmp/runc-criu-production-log-level.patch \
+  && git apply /tmp/runc-criu-production-log-level.patch
 
 cd /workspace/runc
 make
@@ -235,6 +239,8 @@ ARG CEDANA_VERSION=0.9.240
 ARG CEDANA_BASE_URL=""
 ARG CEDANA_TOKEN=""
 ARG CRIU_COMMIT=b47c692bb3a73ae45ee1c4ab215a8f6869d40efd
+COPY pkg/worker/patches/criu-skip-non-cuda-resume.patch /tmp/criu-skip-non-cuda-resume.patch
+COPY pkg/worker/patches/criu-skip-fresh-zero-pages.patch /tmp/criu-skip-fresh-zero-pages.patch
 
 RUN <<EOT
 set -eux
@@ -260,6 +266,10 @@ if [ "$(uname -m)" = "x86_64" ] || [ "$(uname -m)" = "aarch64" ]; then
     git clone https://github.com/checkpoint-restore/criu.git
     cd criu
     git reset --hard ${CRIU_COMMIT}
+    git apply --check --unidiff-zero /tmp/criu-skip-non-cuda-resume.patch
+    git apply --unidiff-zero /tmp/criu-skip-non-cuda-resume.patch
+    git apply --check /tmp/criu-skip-fresh-zero-pages.patch
+    git apply /tmp/criu-skip-fresh-zero-pages.patch
 
     if [ "$(uname -m)" = "x86_64" ]; then
         make install-lib install-criu install-compel install-cuda_plugin PREFIX=/usr SKIP_PIP_INSTALL=1
@@ -273,7 +283,10 @@ if [ "$(uname -m)" = "x86_64" ] || [ "$(uname -m)" = "aarch64" ]; then
 fi
 EOT
 
-RUN mkdir -p /etc/criu && printf '%s\n' 'compress-region 262144' > /etc/criu/runc.conf
+RUN mkdir -p /etc/criu && printf '%s\n' \
+    'compress-region 262144' \
+    'decompress-threads 32' \
+    > /etc/criu/runc.conf
 
 # Hard-disable any AMDGPU plugin that might exist from base layers or future package updates
 RUN mkdir -p /usr/lib/criu/plugins.disabled && \
