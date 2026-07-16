@@ -284,7 +284,7 @@ func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) a
 			UseHostResolvConf: true,
 			ContainerRuntime:  poolRuntime,
 			ContainerResourceLimits: agentConfigResourceLimits{
-				CPUAffinityEnforced: envBool(types.AgentCPUAffinityEnforcedEnv),
+				CPUAffinityEnforced: envBoolDefault(types.AgentCPUAffinityEnforcedEnv, true),
 			},
 			CacheEnabled:               true,
 			TerminationGracePeriod:     30,
