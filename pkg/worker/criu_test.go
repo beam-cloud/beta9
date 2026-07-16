@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -973,6 +974,51 @@ func TestMaterializeCheckpointArchiveRejectsFilesystemOnlyPayload(t *testing.T) 
 	}
 	if checkpointMaterialized(checkpointPath) {
 		t.Fatal("filesystem-only archive should not materialize checkpoint")
+	}
+}
+
+func TestCheckpointUploadReaderPreservesSeekableProgress(t *testing.T) {
+	content := []byte("checkpoint upload payload")
+	filePath := filepath.Join(t.TempDir(), "checkpoint.tar")
+	if err := os.WriteFile(filePath, content, 0644); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(filePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+
+	var progress int64
+	reader := &checkpointUploadReader{
+		file:     file,
+		total:    int64(len(content)),
+		progress: func(completed int64) { progress = completed },
+	}
+
+	section, err := io.ReadAll(io.NewSectionReader(reader, 4, 10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(section) != string(content[4:14]) {
+		t.Fatalf("section = %q, want %q", section, content[4:14])
+	}
+	if progress != 10 {
+		t.Fatalf("progress = %d, want 10", progress)
+	}
+
+	if _, err := reader.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 4)
+	if _, err := io.ReadFull(reader, buf); err != nil {
+		t.Fatal(err)
+	}
+	if string(buf) != string(content[:4]) {
+		t.Fatalf("prefix = %q, want %q", buf, content[:4])
+	}
+	if progress != 14 {
+		t.Fatalf("progress = %d, want 14", progress)
 	}
 }
 

@@ -116,12 +116,16 @@ EOT
 # ========================
 FROM golang:1.23-bookworm AS nvidia-container-toolkit
 
+ARG NVIDIA_CONTAINER_TOOLKIT_COMMIT=df7cc6c99980c04837a5ddb8ae34ce2211fc9126
+
 WORKDIR /workspace
 
 RUN apt-get update && apt-get install -y build-essential
 
 RUN <<EOT
+set -eux
 git clone https://github.com/beam-cloud/nvidia-container-toolkit.git .
+git reset --hard ${NVIDIA_CONTAINER_TOOLKIT_COMMIT}
 make build
 make binaries
 EOT
@@ -230,6 +234,7 @@ RUN echo 'unqualified-search-registries = ["docker.io"]' > /etc/containers/regis
 ARG CEDANA_VERSION=0.9.240
 ARG CEDANA_BASE_URL=""
 ARG CEDANA_TOKEN=""
+ARG CRIU_COMMIT=b47c692bb3a73ae45ee1c4ab215a8f6869d40efd
 
 RUN <<EOT
 set -eux
@@ -246,6 +251,7 @@ if [ "$(uname -m)" = "x86_64" ] || [ "$(uname -m)" = "aarch64" ]; then
         uuid-dev \
         gnutls-dev \
         libnftables-dev \
+        liblz4-dev \
         pkg-config \
         protobuf-c-compiler \
         protobuf-compiler \
@@ -253,6 +259,7 @@ if [ "$(uname -m)" = "x86_64" ] || [ "$(uname -m)" = "aarch64" ]; then
         git
     git clone https://github.com/checkpoint-restore/criu.git
     cd criu
+    git reset --hard ${CRIU_COMMIT}
 
     if [ "$(uname -m)" = "x86_64" ]; then
         make install-lib install-criu install-compel install-cuda_plugin PREFIX=/usr SKIP_PIP_INSTALL=1
@@ -261,9 +268,12 @@ if [ "$(uname -m)" = "x86_64" ] || [ "$(uname -m)" = "aarch64" ]; then
         make install-lib install-criu install-compel PREFIX=/usr SKIP_PIP_INSTALL=1
     fi
     criu --version
+    ldd "$(command -v criu)" | grep -q liblz4
     cd .. && rm -rf criu
 fi
 EOT
+
+RUN mkdir -p /etc/criu && printf '%s\n' 'compress-region 262144' > /etc/criu/runc.conf
 
 # Hard-disable any AMDGPU plugin that might exist from base layers or future package updates
 RUN mkdir -p /usr/lib/criu/plugins.disabled && \
@@ -283,11 +293,15 @@ RUN MOUNT_S3_URL=$(if [ "$TARGETARCH" = "arm64" ]; then echo $MOUNT_S3_URL_ARM64
     mv mount-s3/bin/mount-s3 /usr/local/bin/ms3 && chmod +x /usr/local/bin/ms3 && \
     rm -rf mount-s3 $TARBALL
 
+ARG CUDA_CHECKPOINT_COMMIT=00d5cce84c628088d6caa203fc4af40c1538b6f7
+ARG CUDA_CHECKPOINT_SHA256=707fa7f54136824d6c1d6dd724b9b1717610f831033c00d06da474de363a06db
+
 RUN <<EOT
 set -eux
 case "$TARGETARCH" in
     amd64)
-        curl -fsSL https://github.com/NVIDIA/cuda-checkpoint/raw/refs/heads/main/bin/x86_64_Linux/cuda-checkpoint -o /usr/local/bin/cuda-checkpoint
+        curl -fsSL https://raw.githubusercontent.com/NVIDIA/cuda-checkpoint/${CUDA_CHECKPOINT_COMMIT}/bin/x86_64_Linux/cuda-checkpoint -o /usr/local/bin/cuda-checkpoint
+        echo "${CUDA_CHECKPOINT_SHA256}  /usr/local/bin/cuda-checkpoint" | sha256sum -c -
         chmod +x /usr/local/bin/cuda-checkpoint
         ;;
     arm64)

@@ -2,6 +2,7 @@ package worker
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -214,6 +215,14 @@ func createTar(srcDir, destTar string) error {
 }
 
 func createTarWithSHA256(srcDir, destTar string) (string, int64, error) {
+	return createTarWithSHA256Progress(context.Background(), srcDir, destTar, nil)
+}
+
+func createTarWithSHA256Progress(ctx context.Context, srcDir, destTar string, progress func(int64)) (string, int64, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	var lastErr error
 	for attempt := 0; attempt < 5; attempt++ {
 		_ = os.Remove(destTar)
@@ -224,8 +233,8 @@ func createTarWithSHA256(srcDir, destTar string) (string, int64, error) {
 		}
 
 		hasher := sha256.New()
-		counter := &countingWriter{}
-		cmd := exec.Command("tar", "-cf", "-", "-C", filepath.Dir(srcDir), filepath.Base(srcDir))
+		counter := &countingWriter{progress: progress}
+		cmd := exec.CommandContext(ctx, "tar", "-cf", "-", "-C", filepath.Dir(srcDir), filepath.Base(srcDir))
 		var stderr bytes.Buffer
 		cmd.Stdout = io.MultiWriter(out, hasher, counter)
 		cmd.Stderr = &stderr
@@ -235,13 +244,17 @@ func createTarWithSHA256(srcDir, destTar string) (string, int64, error) {
 		if runErr != nil {
 			_ = os.Remove(destTar)
 			lastErr = tarCommandError(fmt.Sprintf("archive directory %s", srcDir), runErr, stderr)
-			time.Sleep(time.Duration(attempt+1) * 250 * time.Millisecond)
+			if err := waitForRetry(ctx, time.Duration(attempt+1)*250*time.Millisecond); err != nil {
+				return "", 0, err
+			}
 			continue
 		}
 		if closeErr != nil {
 			_ = os.Remove(destTar)
 			lastErr = fmt.Errorf("close tar archive %s: %w", destTar, closeErr)
-			time.Sleep(time.Duration(attempt+1) * 250 * time.Millisecond)
+			if err := waitForRetry(ctx, time.Duration(attempt+1)*250*time.Millisecond); err != nil {
+				return "", 0, err
+			}
 			continue
 		}
 
@@ -252,12 +265,28 @@ func createTarWithSHA256(srcDir, destTar string) (string, int64, error) {
 }
 
 type countingWriter struct {
-	n int64
+	n        int64
+	progress func(int64)
 }
 
 func (w *countingWriter) Write(p []byte) (int, error) {
 	w.n += int64(len(p))
+	if w.progress != nil {
+		w.progress(w.n)
+	}
 	return len(p), nil
+}
+
+func waitForRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func untarTar(srcTar, destDir string) error {

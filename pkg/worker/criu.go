@@ -16,6 +16,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -40,6 +42,7 @@ const (
 	checkpointArchiveExtension = ".tar"
 	checkpointOriginPrefix     = "checkpoints"
 	checkpointTriggerHTTP      = "http"
+	checkpointProgressInterval = 10 * time.Second
 )
 
 var checkpointRuntimeEnvOverrides = []string{
@@ -163,6 +166,106 @@ type checkpointCacheMetadata struct {
 	originKey   string
 	locality    string
 	accelerator string
+}
+
+type checkpointPersistenceProgress struct {
+	mu           sync.Mutex
+	outputLogger *slog.Logger
+	phase        string
+	total        int64
+	started      time.Time
+	lastLog      time.Time
+}
+
+func newCheckpointPersistenceProgress(outputLogger *slog.Logger, phase string, total int64) *checkpointPersistenceProgress {
+	now := time.Now()
+	return &checkpointPersistenceProgress{
+		outputLogger: outputLogger,
+		phase:        phase,
+		total:        total,
+		started:      now,
+		lastLog:      now,
+	}
+}
+
+func (p *checkpointPersistenceProgress) update(completed int64) {
+	p.report(completed, false)
+}
+
+func (p *checkpointPersistenceProgress) finish(completed int64) {
+	p.report(completed, true)
+}
+
+func (p *checkpointPersistenceProgress) report(completed int64, complete bool) {
+	if p == nil || p.outputLogger == nil {
+		return
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	now := time.Now()
+	elapsed := now.Sub(p.started)
+	if !complete && now.Sub(p.lastLog) < checkpointProgressInterval {
+		return
+	}
+	if p.total > 0 && completed > p.total {
+		completed = p.total
+	}
+	elapsed = elapsed.Round(100 * time.Millisecond)
+
+	if complete {
+		rate := int64(0)
+		if elapsed > 0 {
+			rate = int64(float64(completed) / elapsed.Seconds())
+		}
+		p.outputLogger.Info(fmt.Sprintf("Checkpoint %s complete: %s in %s (%s/s)\n", p.phase, formatImageBytes(completed), elapsed, formatImageBytes(rate)))
+	} else if p.total > 0 {
+		p.outputLogger.Info(fmt.Sprintf("Checkpoint %s: %s / %s (%d%%, %s elapsed)\n", p.phase, formatImageBytes(completed), formatImageBytes(p.total), min(int64(100), completed*100/p.total), elapsed))
+	} else {
+		p.outputLogger.Info(fmt.Sprintf("Checkpoint %s: %s (%s elapsed)\n", p.phase, formatImageBytes(completed), elapsed))
+	}
+	p.lastLog = now
+}
+
+type checkpointUploadReader struct {
+	file        *os.File
+	total       int64
+	transferred atomic.Int64
+	progress    func(int64)
+}
+
+var _ interface {
+	io.Reader
+	io.ReaderAt
+	io.Seeker
+} = (*checkpointUploadReader)(nil)
+
+func (r *checkpointUploadReader) Read(p []byte) (int, error) {
+	n, err := r.file.Read(p)
+	r.report(n)
+	return n, err
+}
+
+func (r *checkpointUploadReader) ReadAt(p []byte, offset int64) (int, error) {
+	n, err := r.file.ReadAt(p, offset)
+	r.report(n)
+	return n, err
+}
+
+func (r *checkpointUploadReader) Seek(offset int64, whence int) (int64, error) {
+	return r.file.Seek(offset, whence)
+}
+
+func (r *checkpointUploadReader) report(n int) {
+	if n <= 0 || r.progress == nil {
+		return
+	}
+	completed := r.transferred.Add(int64(n))
+	if r.total > 0 && completed > r.total {
+		completed = r.total
+	}
+	r.progress(completed)
 }
 
 type RestoreOpts struct {
@@ -567,7 +670,7 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 	if opts.OutputLogger != nil {
 		opts.OutputLogger.Info("Persisting container checkpoint")
 	}
-	metadata, err := s.persistCheckpoint(ctx, opts.Request, opts.CheckpointId, checkpointPath)
+	metadata, err := s.persistCheckpoint(ctx, opts.Request, opts.CheckpointId, checkpointPath, opts.OutputLogger)
 	if err != nil {
 		log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to persist checkpoint: %v", err)
 		if opts.OutputLogger != nil {
@@ -638,7 +741,7 @@ func checkpointAccelerator(request *types.ContainerRequest) string {
 	return "CPU"
 }
 
-func (s *Worker) persistCheckpoint(ctx context.Context, request *types.ContainerRequest, checkpointId, checkpointPath string) (*checkpointCacheMetadata, error) {
+func (s *Worker) persistCheckpoint(ctx context.Context, request *types.ContainerRequest, checkpointId, checkpointPath string, outputLogger *slog.Logger) (*checkpointCacheMetadata, error) {
 	if s.cacheManager == nil || s.cacheManager.client == nil {
 		return nil, fmt.Errorf("cache is required for checkpoint persistence")
 	}
@@ -652,11 +755,18 @@ func (s *Worker) persistCheckpoint(ctx context.Context, request *types.Container
 	}
 	_ = os.Remove(archivePath)
 
-	hash, size, err := createTarWithSHA256(checkpointPath, archivePath)
+	if outputLogger != nil {
+		outputLogger.Info("Creating checkpoint archive...\n")
+	}
+	archiveProgress := newCheckpointPersistenceProgress(outputLogger, "archive", 0)
+	archiveStarted := time.Now()
+	hash, size, err := createTarWithSHA256Progress(ctx, checkpointPath, archivePath, archiveProgress.update)
 	if err != nil {
 		_ = os.Remove(archivePath)
 		return nil, err
 	}
+	archiveProgress.finish(size)
+	log.Info().Str("checkpoint_id", checkpointId).Int64("bytes", size).Dur("duration", time.Since(archiveStarted)).Msg("checkpoint archive created")
 
 	originKey := checkpointOriginKey(checkpointId)
 	storageClient, err := clients.NewWorkspaceStorageClient(ctx, request.Workspace.Name, request.Workspace.Storage)
@@ -669,11 +779,19 @@ func (s *Worker) persistCheckpoint(ctx context.Context, request *types.Container
 		_ = os.Remove(archivePath)
 		return nil, err
 	}
-	if err := storageClient.UploadWithReader(ctx, originKey, f); err != nil {
+	if outputLogger != nil {
+		outputLogger.Info("Uploading checkpoint archive...\n")
+	}
+	uploadProgress := newCheckpointPersistenceProgress(outputLogger, "upload", size)
+	uploadStarted := time.Now()
+	uploadReader := &checkpointUploadReader{file: f, total: size, progress: uploadProgress.update}
+	if err := storageClient.UploadWithReader(ctx, originKey, uploadReader); err != nil {
 		_ = f.Close()
 		_ = os.Remove(archivePath)
 		return nil, err
 	}
+	uploadProgress.finish(size)
+	log.Info().Str("checkpoint_id", checkpointId).Int64("bytes", size).Dur("duration", time.Since(uploadStarted)).Msg("checkpoint archive uploaded")
 	if err := f.Close(); err != nil {
 		log.Warn().Err(err).Str("checkpoint_id", checkpointId).Msg("failed to close uploaded checkpoint archive")
 	}

@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"context"
 	"net"
 	"os"
 	"path/filepath"
@@ -115,4 +116,31 @@ func TestCreateTarWithSHA256ReturnsArchiveHashAndSize(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, actualHash, hash)
 	require.Equal(t, actualSize, size)
+}
+
+func TestCreateTarWithSHA256ReportsProgress(t *testing.T) {
+	root := t.TempDir()
+	src := filepath.Join(root, "checkpoint")
+	archivePath := filepath.Join(root, "checkpoint.tar")
+
+	require.NoError(t, os.MkdirAll(src, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(src, "state.bin"), make([]byte, 2<<20), 0644))
+
+	var updates []int64
+	_, size, err := createTarWithSHA256Progress(context.Background(), src, archivePath, func(completed int64) {
+		updates = append(updates, completed)
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, updates)
+	require.Equal(t, size, updates[len(updates)-1])
+}
+
+func TestCreateTarWithSHA256HonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	archivePath := filepath.Join(t.TempDir(), "checkpoint.tar")
+	_, _, err := createTarWithSHA256Progress(ctx, t.TempDir(), archivePath, nil)
+	require.ErrorIs(t, err, context.Canceled)
+	require.NoFileExists(t, archivePath)
 }
