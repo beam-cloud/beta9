@@ -300,6 +300,36 @@ func (c *Client) localServersSnapshot() []*Server {
 	return servers
 }
 
+type clientLocalStore struct {
+	store  *Store
+	source string
+}
+
+func (c *Client) preferredLocalStores() []clientLocalStore {
+	localServers := c.localServersSnapshot()
+	stores := make([]clientLocalStore, 0, len(localServers)+1)
+	seenPaths := make(map[string]struct{}, len(localServers)+1)
+	appendStore := func(store *Store, source string) {
+		if store == nil {
+			return
+		}
+		cacheDir := filepath.Clean(store.serverConfig.DiskCacheDir)
+		if cacheDir != "." {
+			if _, ok := seenPaths[cacheDir]; ok {
+				return
+			}
+			seenPaths[cacheDir] = struct{}{}
+		}
+		stores = append(stores, clientLocalStore{store: store, source: source})
+	}
+
+	for _, server := range localServers {
+		appendStore(server.cas, "local_server")
+	}
+	appendStore(c.localDiskStore, "local_disk")
+	return stores
+}
+
 func (c *Client) initLocalDiskStore(cfg Config, locality string) {
 	if cfg.Server.DiskCacheDir == "" || cfg.Server.PageSizeBytes <= 0 {
 		return
@@ -1370,6 +1400,12 @@ func (c *Client) ClientLocalPageFileViewsWithTrace(hash string, offset int64, le
 	if offset < 0 || length <= 0 {
 		return nil, trace, nil
 	}
+	if c.clientConfig.PreferLocalCacheHost {
+		if views, host, source, ok := c.clientLocalPageFileViewsFromPreferredStores(hash, offset, length); ok {
+			trace.addAttempt(-1, host, source, "hit", int64(len(views)), time.Since(started), nil)
+			return views, trace, nil
+		}
+	}
 
 	host, err := c.getSelectedHostForRequest(ClientRequestTypeRetrieval, hash, opts.RoutingKey)
 	if err != nil {
@@ -1392,6 +1428,21 @@ func (c *Client) ClientLocalPageFileViewsWithTrace(hash string, offset int64, le
 	trace.addAttempt(0, host, "client_local_page_file", "miss", 0, time.Since(started), ErrContentNotFound)
 	atomic.AddInt64(&cachePathStats.clientLocalPageFileMisses, 1)
 	return nil, trace, ErrContentNotFound
+}
+
+func (c *Client) clientLocalPageFileViewsFromPreferredStores(hash string, offset int64, length int64) ([]ClientLocalPageFileView, *Host, string, bool) {
+	for _, candidate := range c.preferredLocalStores() {
+		if !candidate.store.Exists(hash) {
+			continue
+		}
+		if views, ok := clientLocalPageFileViewsFromStore(candidate.store, hash, offset, length); ok {
+			cacheReadClientLocalPageFileTotal.Inc()
+			atomic.AddInt64(&cachePathStats.clientLocalPageFileHits, 1)
+			atomic.AddInt64(&cachePathStats.clientLocalPageFileBytes, length)
+			return views, candidate.store.currentHost, candidate.source + "_page_file", true
+		}
+	}
+	return nil, nil, "", false
 }
 
 func (c *Client) clientLocalPageFileViewsFromHost(host *Host, hash string, offset int64, length int64) ([]ClientLocalPageFileView, string, bool) {
@@ -1485,6 +1536,11 @@ func (c *Client) ReadContentIntoWithTrace(ctx context.Context, hash string, offs
 	}()
 	atomic.AddInt64(&cachePathStats.clientReadIntoRequests, 1)
 	atomic.AddInt64(&cachePathStats.clientReadIntoBytes, length)
+	if c.clientConfig.PreferLocalCacheHost {
+		if n, ok := c.readContentIntoFromPreferredLocalStores(hash, offset, dst, &trace); ok {
+			return n, trace, nil
+		}
+	}
 
 	if n, err := c.tryReadContentIntoKnownHosts(ctx, hash, offset, dst, opts, &trace); err == nil {
 		return n, trace, nil
@@ -1494,6 +1550,25 @@ func (c *Client) ReadContentIntoWithTrace(ctx context.Context, hash string, offs
 
 	read, err = c.readContentIntoAfterHostRefresh(ctx, hash, offset, dst, opts, &trace)
 	return read, trace, err
+}
+
+func (c *Client) readContentIntoFromPreferredLocalStores(hash string, offset int64, dst []byte, trace *OperationTrace) (int64, bool) {
+	length := int64(len(dst))
+	for _, candidate := range c.preferredLocalStores() {
+		if !candidate.store.Exists(hash) {
+			continue
+		}
+		started := time.Now()
+		n, err := candidate.store.ReadAt(hash, offset, dst)
+		trace.addAttempt(-1, candidate.store.currentHost, candidate.source, operationTraceReadResult(err, n, length), n, time.Since(started), err)
+		if err == nil && n == length {
+			cacheReadLocalTotal.Inc()
+			atomic.AddInt64(&cachePathStats.clientLocalHits, 1)
+			return n, true
+		}
+		atomic.AddInt64(&cachePathStats.clientLocalMisses, 1)
+	}
+	return 0, false
 }
 
 func shouldRefreshReadContentIntoHosts(err error) bool {
