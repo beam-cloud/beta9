@@ -889,6 +889,84 @@ func TestReadContentIntoUsesSelectedLocalServer(t *testing.T) {
 	require.Equal(t, content, dst)
 }
 
+func TestContentReadsPreferMaterializedLocalContentOverSelectedRemoteHost(t *testing.T) {
+	store := newTestStore(t, 5)
+	content := []byte("materialized-local-content")
+	hash, _, err := store.AddReader(context.Background(), bytes.NewReader(content))
+	require.NoError(t, err)
+
+	localHost := &Host{HostId: "local-host", NodeID: "node-a"}
+	remoteHost := &Host{HostId: "remote-host", NodeID: "node-b", Addr: "remote.invalid:443"}
+	store.currentHost = localHost
+	client := &Client{
+		ctx:                   context.Background(),
+		clientConfig:          ClientConfig{NTopHosts: 1, PreferLocalCacheHost: true},
+		grpcClients:           make(map[string]proto.CacheClient),
+		grpcConns:             make(map[string]*grpc.ClientConn),
+		localServers:          make(map[string]*Server),
+		rawReadPools:          make(map[string]*rawReadConnPool),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
+		hasher:                &orderedTestHasher{hosts: []*Host{remoteHost}},
+		maxGetContentAttempts: 1,
+	}
+	client.AttachLocalServer(&Server{cas: store})
+
+	dst := make([]byte, len(content))
+	n, readTrace, err := client.ReadContentIntoWithTrace(context.Background(), hash, 0, dst, ClientOptions{})
+	require.NoError(t, err)
+	require.Equal(t, int64(len(content)), n)
+	require.Equal(t, content, dst)
+	require.Len(t, readTrace.Attempts, 1)
+	require.Equal(t, "local_server", readTrace.Attempts[0].Source)
+	require.Equal(t, "local-host", readTrace.Attempts[0].HostID)
+	require.Equal(t, -1, readTrace.Attempts[0].HostIndex)
+
+	views, pageTrace, err := client.ClientLocalPageFileViewsWithTrace(hash, 0, int64(len(content)), ClientOptions{})
+	require.NoError(t, err)
+	require.NotEmpty(t, views)
+	require.Len(t, pageTrace.Attempts, 1)
+	require.Equal(t, "local_server_page_file", pageTrace.Attempts[0].Source)
+	require.Equal(t, "local-host", pageTrace.Attempts[0].HostID)
+	require.Equal(t, -1, pageTrace.Attempts[0].HostIndex)
+
+	require.NoError(t, os.Remove(store.completeMarkerPath(hash)))
+	_, err = client.ReadContentInto(context.Background(), hash, 0, make([]byte, len(content)), ClientOptions{})
+	require.ErrorIs(t, err, ErrSelectedHostUnavailable)
+	views, err = client.ClientLocalPageFileViews(hash, 0, int64(len(content)), ClientOptions{})
+	require.ErrorIs(t, err, ErrContentNotFound)
+	require.Empty(t, views)
+}
+
+func TestContentReadsKeepSelectedHostRoutingWhenLocalPreferenceDisabled(t *testing.T) {
+	store := newTestStore(t, 5)
+	content := []byte("materialized-local-content")
+	hash, _, err := store.AddReader(context.Background(), bytes.NewReader(content))
+	require.NoError(t, err)
+
+	localHost := &Host{HostId: "local-host", NodeID: "node-a"}
+	remoteHost := &Host{HostId: "remote-host", NodeID: "node-b"}
+	store.currentHost = localHost
+	client := &Client{
+		ctx:                   context.Background(),
+		clientConfig:          ClientConfig{NTopHosts: 1},
+		grpcClients:           make(map[string]proto.CacheClient),
+		grpcConns:             make(map[string]*grpc.ClientConn),
+		localServers:          make(map[string]*Server),
+		rawReadPools:          make(map[string]*rawReadConnPool),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
+		hasher:                &orderedTestHasher{hosts: []*Host{remoteHost}},
+		maxGetContentAttempts: 1,
+	}
+	client.AttachLocalServer(&Server{cas: store})
+
+	_, err = client.ReadContentInto(context.Background(), hash, 0, make([]byte, len(content)), ClientOptions{})
+	require.ErrorIs(t, err, ErrSelectedHostUnavailable)
+
+	views, err := client.ClientLocalPageFileViews(hash, 0, int64(len(content)), ClientOptions{})
+	require.ErrorIs(t, err, ErrContentNotFound)
+	require.Empty(t, views)
+}
+
 func TestContentReadHotPathDoesNotUseCacheFSMetadata(t *testing.T) {
 	store := newTestStore(t, 5)
 	content := []byte("local-cache-content")
