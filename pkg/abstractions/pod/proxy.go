@@ -38,6 +38,7 @@ const (
 	containerPrimeTimeout            time.Duration = time.Second * 3
 	connectionKeepAliveInterval      time.Duration = time.Second * 1
 	connectionReadTimeout            time.Duration = time.Minute * 5
+	backendDialRetryLimit                          = 1
 )
 
 type container struct {
@@ -48,14 +49,16 @@ type container struct {
 }
 
 type connection struct {
-	ctx         echo.Context
-	tc          *tcpConnection
-	done        chan struct{}
-	finishOnce  sync.Once
-	enqueuedAt  time.Time
-	dialTimeout time.Duration
-	llm         *llmRequestInfo
-	state       atomic.Int32
+	ctx              echo.Context
+	tc               *tcpConnection
+	done             chan struct{}
+	finishOnce       sync.Once
+	enqueuedAt       time.Time
+	dialTimeout      time.Duration
+	llm              *llmRequestInfo
+	retryBackendDial bool
+	retryCount       int
+	state            atomic.Int32
 }
 
 const (
@@ -68,6 +71,21 @@ type backendTransportKey struct {
 	targetHost  string
 	dialTimeout time.Duration
 }
+
+// backendDialError identifies failures that happened before a connection was
+// established, so the request body has not been delivered to a backend.
+type backendDialError struct {
+	err error
+}
+
+func (e *backendDialError) Error() string { return e.err.Error() }
+func (e *backendDialError) Unwrap() error { return e.err }
+
+type preservedRequestBody struct {
+	io.ReadCloser
+}
+
+func (preservedRequestBody) Close() error { return nil }
 
 func (c *connection) backendDialTimeout() time.Duration {
 	if c != nil && c.dialTimeout > 0 {
@@ -106,6 +124,7 @@ type PodProxyBuffer struct {
 	buffer                  *abstractions.RingBuffer[*connection]
 	workReady               chan struct{}
 	discoverReady           chan struct{}
+	onBackendUnavailable    func() error
 }
 
 func NewPodProxyBuffer(ctx, drainCtx context.Context,
@@ -186,9 +205,10 @@ func (pb *PodProxyBuffer) ForwardRequest(ctx echo.Context) error {
 
 	done := make(chan struct{})
 	conn := &connection{
-		ctx:  ctx,
-		done: done,
-		llm:  llmInfo,
+		ctx:              ctx,
+		done:             done,
+		llm:              llmInfo,
+		retryBackendDial: true,
 	}
 
 	if ctx.Request().Context().Err() != nil {
@@ -198,7 +218,9 @@ func (pb *PodProxyBuffer) ForwardRequest(ctx echo.Context) error {
 	container, ok, hasContainers, hasPort := pb.reserveContainerForRequest(int32(port), llmInfo)
 	if ok {
 		conn.claim()
-		pb.handleConnection(conn, container, int32(port))
+		if pb.handleConnection(conn, container, int32(port)) {
+			return pb.waitForConnection(conn, ctx.Request().Context().Done())
+		}
 		return nil
 	}
 	if hasContainers && !hasPort {
@@ -582,9 +604,12 @@ func (pb *PodProxyBuffer) primeContainerPort(containerID string, port int32, tim
 	return true
 }
 
-func (pb *PodProxyBuffer) requeueConnection(conn *connection) {
+func (pb *PodProxyBuffer) requeueConnection(conn *connection) bool {
+	if conn == nil || !conn.state.CompareAndSwap(connectionActive, connectionQueued) {
+		return false
+	}
 	pb.enqueueConnection(conn, true)
-	conn.state.CompareAndSwap(connectionActive, connectionQueued)
+	return true
 }
 
 func (pb *PodProxyBuffer) handleTCPConnection(conn *connection, container container) {
@@ -665,9 +690,25 @@ func (pb *PodProxyBuffer) handleTCPConnection(conn *connection, container contai
 	tc.Conn.Close()
 }
 
-func (pb *PodProxyBuffer) handleConnection(conn *connection, container container, port int32) {
-	defer conn.finish()
-	defer pb.decrementContainerConnections(container.id)
+func (pb *PodProxyBuffer) handleConnection(conn *connection, container container, port int32) (requeued bool) {
+	defer func() {
+		if !requeued {
+			conn.finish()
+		}
+	}()
+	var llmTracker *llmRequestTracker
+	attemptReleased := false
+	releaseAttempt := func() {
+		if attemptReleased {
+			return
+		}
+		attemptReleased = true
+		if llmTracker != nil {
+			llmTracker.finish()
+		}
+		_ = pb.decrementContainerConnections(container.id)
+	}
+	defer releaseAttempt()
 	pb.recordQueuedRequestWait(conn, "http")
 
 	request := conn.ctx.Request()
@@ -675,12 +716,9 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection, container container
 	targetHost, ok := container.addressMap[port]
 	if !ok {
 		conn.ctx.String(http.StatusServiceUnavailable, "Port not available")
-		return
+		return false
 	}
-	llmTracker := pb.startLLMRequest(conn.llm, container.id, targetHost)
-	if llmTracker != nil {
-		defer llmTracker.finish()
-	}
+	llmTracker = pb.startLLMRequest(conn.llm, container.id, targetHost)
 
 	subPath := conn.ctx.Param("subPath")
 	if subPath != "" && subPath[0] != '/' {
@@ -696,7 +734,7 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection, container container
 	// If it's a websocket request, upgrade the connection
 	if websocket.IsWebSocketUpgrade(request) {
 		pb.proxyWebSocket(conn, container, targetHost, subPath)
-		return
+		return false
 	}
 
 	defer func() {
@@ -708,19 +746,111 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection, container container
 	proxy, err := pb.backendProxy(targetHost, conn.backendDialTimeout())
 	if err != nil {
 		conn.ctx.String(http.StatusInternalServerError, "Invalid target URL")
-		return
+		return false
 	}
+
+	var retryErr error
 	if llmTracker != nil {
 		proxy.ModifyResponse = func(resp *http.Response) error {
 			llmTracker.markFirstResponse(resp.StatusCode)
 			return nil
 		}
-		proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, err error) {
+	}
+	proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, err error) {
+		var dialErr *backendDialError
+		if conn.retryBackendDial &&
+			conn.retryCount < backendDialRetryLimit &&
+			errors.As(err, &dialErr) &&
+			req.Context().Err() == nil &&
+			!conn.ctx.Response().Committed {
+			retryErr = err
+			return
+		}
+		if llmTracker != nil {
 			llmTracker.markError(err.Error())
-			http.Error(rw, "Backend route unavailable", http.StatusBadGateway)
+		}
+		http.Error(rw, "Backend route unavailable", http.StatusBadGateway)
+	}
+
+	// The transport closes its outbound request body even when dialing fails.
+	// Keep the inbound body open until the one safe pre-connect retry is decided.
+	requestBody := request.Body
+	func() {
+		if conn.retryBackendDial && conn.retryCount < backendDialRetryLimit && requestBody != nil {
+			request.Body = preservedRequestBody{ReadCloser: requestBody}
+			defer func() { request.Body = requestBody }()
+		}
+		proxy.ServeHTTP(conn.ctx.Response(), request)
+	}()
+
+	if retryErr == nil {
+		return false
+	}
+	if llmTracker != nil {
+		llmTracker.markError(retryErr.Error())
+	}
+	releaseAttempt()
+	if pb.retryBackendConnection(conn, container, retryErr) {
+		return true
+	}
+	if !conn.ctx.Response().Committed {
+		http.Error(conn.ctx.Response(), "Backend route unavailable", http.StatusBadGateway)
+	}
+	return false
+}
+
+func (pb *PodProxyBuffer) retryBackendConnection(conn *connection, failed container, err error) bool {
+	if conn == nil || conn.ctx == nil || !conn.retryBackendDial || conn.retryCount >= backendDialRetryLimit || conn.ctx.Request().Context().Err() != nil {
+		return false
+	}
+
+	pb.removeAvailableContainer(failed.id)
+	conn.retryCount++
+	if conn.enqueuedAt.IsZero() {
+		conn.enqueuedAt = time.Now()
+	}
+	if !pb.requeueConnection(conn) {
+		return false
+	}
+
+	log.Warn().
+		Err(err).
+		Str("container_id", failed.id).
+		Str("stub_id", pb.stubId).
+		Msg("backend unavailable before request delivery; requeueing request")
+	pb.signalDiscovery()
+	if pb.onBackendUnavailable != nil {
+		if scaleErr := pb.onBackendUnavailable(); scaleErr != nil {
+			log.Warn().Err(scaleErr).Str("stub_id", pb.stubId).Msg("failed to start replacement after backend became unavailable")
 		}
 	}
-	proxy.ServeHTTP(conn.ctx.Response(), request)
+	pb.signalWork()
+	return true
+}
+
+func (pb *PodProxyBuffer) removeAvailableContainer(containerID string) {
+	if containerID == "" {
+		return
+	}
+
+	pb.availableContainersLock.Lock()
+	available := make([]container, 0, len(pb.availableContainers))
+	removed := false
+	for _, candidate := range pb.availableContainers {
+		if candidate.id == containerID {
+			removed = true
+			continue
+		}
+		available = append(available, candidate)
+	}
+	if removed {
+		pb.availableContainers = available
+	}
+	pb.availableContainersLock.Unlock()
+
+	if removed {
+		pb.pruneBackendTransports(available)
+	}
 }
 
 func (pb *PodProxyBuffer) recordQueuedRequestWait(conn *connection, protocol string) {
@@ -780,8 +910,10 @@ func (pb *PodProxyBuffer) backendTransport(targetHost string, dialTimeout time.D
 			metrics.RecordProxyBackendDialLatency("pod", pb.workspaceName(), pb.stubId, "http", err == nil, time.Since(start))
 			if err == nil {
 				abstractions.SetConnOptions(conn, true, connectionKeepAliveInterval, connectionReadTimeout)
+			} else {
+				return nil, &backendDialError{err: err}
 			}
-			return conn, err
+			return conn, nil
 		},
 	}
 

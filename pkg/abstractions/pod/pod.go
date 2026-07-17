@@ -346,6 +346,11 @@ func (ps *GenericPodService) getOrCreatePodInstance(stubId string, options ...fu
 	if instance.Autoscaler == nil {
 		instance.Autoscaler = abstractions.NewAutoscaler(instance, podAutoscalerSampleFunc, podScaleFunc)
 	}
+	instance.buffer.onBackendUnavailable = func() error {
+		err := instance.ensureReadyForRequest()
+		instance.Autoscaler.Trigger()
+		return err
+	}
 
 	if len(instance.EntryPoint) == 0 {
 		instance.EntryPoint = instance.StubConfig.EntryPoint
