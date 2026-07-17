@@ -144,16 +144,23 @@ func (s *WorkerRepositoryService) workerTokenWorkspaceID(ctx context.Context, wo
 	if !ok || authInfo == nil || authInfo.Token == nil || !types.IsWorkerTokenType(authInfo.Token.TokenType) {
 		return 0, fmt.Errorf("worker token is required")
 	}
-	if authInfo.Workspace == nil || authInfo.Workspace.ExternalId == "" {
-		return 0, fmt.Errorf("worker token is not scoped to a workspace")
+	if workspaceID == "" {
+		return 0, fmt.Errorf("workspace is required")
 	}
-	if workspaceID == "" || workspaceID != authInfo.Workspace.ExternalId {
-		return 0, fmt.Errorf("worker token cannot request credentials for workspace %q", workspaceID)
+
+	if authInfo.Token.TokenType == types.TokenTypeWorkerPrivate {
+		if authInfo.Workspace == nil || authInfo.Workspace.ExternalId == "" {
+			return 0, fmt.Errorf("worker token is not scoped to a workspace")
+		}
+		if workspaceID != authInfo.Workspace.ExternalId {
+			return 0, fmt.Errorf("worker token cannot request credentials for workspace %q", workspaceID)
+		}
 	}
-	if authInfo.Workspace.Id > 0 {
+
+	if authInfo.Workspace != nil && workspaceID == authInfo.Workspace.ExternalId && authInfo.Workspace.Id > 0 {
 		return authInfo.Workspace.Id, nil
 	}
-	if authInfo.Token.WorkspaceId != nil && *authInfo.Token.WorkspaceId > 0 {
+	if authInfo.Workspace != nil && workspaceID == authInfo.Workspace.ExternalId && authInfo.Token.WorkspaceId != nil && *authInfo.Token.WorkspaceId > 0 {
 		return *authInfo.Token.WorkspaceId, nil
 	}
 	if s.backendRepo == nil {
