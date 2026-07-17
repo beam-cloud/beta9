@@ -244,6 +244,7 @@ ARG CEDANA_VERSION=0.9.240
 ARG CEDANA_BASE_URL=""
 ARG CEDANA_TOKEN=""
 ARG CRIU_COMMIT=b47c692bb3a73ae45ee1c4ab215a8f6869d40efd
+COPY docker/patches/criu/criu-network-remap.patch /tmp/criu-network-remap.patch
 COPY docker/patches/criu/criu-skip-non-cuda-resume.patch /tmp/criu-skip-non-cuda-resume.patch
 COPY docker/patches/criu/criu-skip-fresh-zero-pages.patch /tmp/criu-skip-fresh-zero-pages.patch
 
@@ -271,6 +272,8 @@ if [ "$(uname -m)" = "x86_64" ] || [ "$(uname -m)" = "aarch64" ]; then
     git clone https://github.com/checkpoint-restore/criu.git
     cd criu
     git reset --hard ${CRIU_COMMIT}
+    git apply --check /tmp/criu-network-remap.patch
+    git apply /tmp/criu-network-remap.patch
     git apply --check --unidiff-zero /tmp/criu-skip-non-cuda-resume.patch
     git apply --unidiff-zero /tmp/criu-skip-non-cuda-resume.patch
     git apply --check /tmp/criu-skip-fresh-zero-pages.patch
