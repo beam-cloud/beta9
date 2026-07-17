@@ -350,7 +350,7 @@ RUN apt-get remove -y curl && \
 ENV BUILDAH_RUNTIME=/usr/local/sbin/runc
 
 RUN mkdir -p /workspace/etc
-RUN echo "nameserver 8.8.8.8" > /workspace/etc/resolv.conf
+RUN printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\nnameserver 9.9.9.9\noptions timeout:2 attempts:2\n' > /workspace/etc/resolv.conf
 RUN echo '127.0.0.1 localhost' > /workspace/etc/hosts
 RUN echo 'hosts: files dns' > /workspace/etc/nsswitch.conf
 COPY ./bin/beta9-cli /usr/local/bin/beta9

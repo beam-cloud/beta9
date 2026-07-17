@@ -31,6 +31,7 @@ const (
 	provisioningWorkerRequeueDelay time.Duration = 250 * time.Millisecond
 	provisioningReservationHandoff time.Duration = 2 * requestProcessingInterval
 	pendingWorkerReservationTTL    time.Duration = 30 * time.Second
+	checkpointHandoffRetryDelay    time.Duration = time.Second
 )
 
 var (
@@ -380,15 +381,7 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 			// Do nothing
 		}
 	}
-
-	// Add checkpoint state to request if auto checkpoint is enabled and checkpoint is not set
-	if request.CheckpointEnabled && request.Checkpoint == nil {
-		checkpoint, err := s.backendRepo.GetLatestCheckpointByStubId(context.Background(), request.StubId)
-		if err == nil && checkpoint != nil && checkpoint.Status == string(types.CheckpointStatusAvailable) {
-			requestLog(log.Info(), request).Str("checkpoint_id", checkpoint.CheckpointId).Msg("adding checkpoint to request")
-			request.Checkpoint = checkpoint
-		}
-	}
+	s.attachLatestCheckpoint(request)
 
 	requestedEvent := request.Clone()
 	go s.schedulerUsageMetrics.CounterIncContainerRequested(requestedEvent)
@@ -610,6 +603,10 @@ func (s *Scheduler) StartProcessingRequests() {
 }
 
 func (s *Scheduler) processRequest(request *types.ContainerRequest, workers []*types.Worker) {
+	if !s.checkpointSchedulingReady(request) {
+		newSchedulingAttempt(s, request, workers).requeueForWorkerWaitDelay(checkpointHandoffRetryDelay, "checkpoint_handoff")
+		return
+	}
 	newSchedulingAttempt(s, request, workers).run()
 }
 
@@ -625,6 +622,7 @@ func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.Contain
 
 func (s *Scheduler) prepareWorkerRequest(worker *types.Worker, request *types.ContainerRequest) *types.ContainerRequest {
 	workerRequest := request.Clone()
+	s.attachLatestCheckpoint(workerRequest)
 	normalizeGPURequest(workerRequest)
 	workerRequest.Gpu = worker.Gpu
 
@@ -636,6 +634,65 @@ func (s *Scheduler) prepareWorkerRequest(worker *types.Worker, request *types.Co
 	}
 	workerRequest.Timestamp = time.Now()
 	return workerRequest
+}
+
+func (s *Scheduler) checkpointSchedulingReady(request *types.ContainerRequest) bool {
+	if request == nil || !request.CheckpointEnabled || request.Checkpoint != nil || request.StubId == "" {
+		return true
+	}
+	s.attachLatestCheckpoint(request)
+	if request.Checkpoint != nil {
+		return true
+	}
+
+	containers, err := s.containerRepo.GetActiveContainersByStubId(request.StubId)
+	if err != nil {
+		return false
+	}
+
+	for _, container := range containers {
+		if container.ContainerId != request.ContainerId && container.Status == types.ContainerStatusStopping {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Scheduler) attachLatestCheckpoint(request *types.ContainerRequest) {
+	if request == nil || !request.CheckpointEnabled || request.Checkpoint != nil {
+		return
+	}
+	if checkpoint := s.latestAvailableCheckpoint(request.StubId); checkpoint != nil {
+		s.attachCheckpoint(request, checkpoint)
+	}
+}
+
+func (s *Scheduler) latestAvailableCheckpoint(stubID string) *types.Checkpoint {
+	if s == nil || s.backendRepo == nil || stubID == "" {
+		return nil
+	}
+
+	ctx := s.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	checkpoint, err := s.backendRepo.GetLatestCheckpointByStubId(ctx, stubID)
+	if err != nil || checkpoint == nil || checkpoint.Status != string(types.CheckpointStatusAvailable) {
+		return nil
+	}
+	return checkpoint
+}
+
+func (s *Scheduler) attachCheckpoint(request *types.ContainerRequest, checkpoint *types.Checkpoint) {
+	if request == nil || checkpoint == nil {
+		return
+	}
+	if request.Checkpoint == nil || request.Checkpoint.CheckpointId != checkpoint.CheckpointId {
+		requestLog(log.Info(), request).
+			Str("checkpoint_id", checkpoint.CheckpointId).
+			Msg("adding checkpoint to request")
+	}
+	request.Checkpoint = checkpoint
 }
 
 func (s *Scheduler) pushWorkerRequests(worker *types.Worker, requests []*types.ContainerRequest) error {
