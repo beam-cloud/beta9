@@ -764,6 +764,8 @@ func (s *Service) terminateReservation(ctx context.Context, workspaceID string, 
 	if reservation.Status == model.ReservationDeleted || reservation.Status == model.ReservationFailed {
 		return false
 	}
+	// Registration tokens are persistent; kill them whenever a reservation closes.
+	s.revokeReservationJoinToken(ctx, reservation)
 	vendor := vendors[reservation.Provider]
 	if vendor == nil {
 		reservation.Status = model.ReservationTerminating

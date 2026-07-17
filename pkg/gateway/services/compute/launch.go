@@ -164,7 +164,9 @@ func (s *Service) launchPoolCapacityLocked(ctx context.Context, workspaceID, act
 			}
 			machineID := model.ManagedMachineID(workspaceID, pool.Name, machineSeed)
 			nodeName := model.ManagedNodeName(workspaceID, pool.Name, machineID)
-			bootstrapCommand, registrationToken, _, err := s.createPrivatePoolJoinCommandForWorkspace(ctx, workspaceID, pool.Name, poolCreatedAt, "", machineID)
+
+			// Persistent: provider boot times routinely exceed any fixed TTL.
+			bootstrapCommand, registrationToken, err := s.createPersistentPrivatePoolJoinCommandForWorkspace(ctx, workspaceID, pool.Name, poolCreatedAt, machineID)
 			if err != nil {
 				return cleanupLaunchFailure("bootstrap_failed", err), nil
 			}
@@ -414,6 +416,8 @@ func launchPoolError(code, msg string, decision billingDecision) *pb.LaunchPoolC
 func (s *Service) compensatePoolLaunchFailure(ctx context.Context, workspaceID, poolName string, previous *model.PoolState, vendors map[string]model.Vendor, reservations []model.Reservation, cause error) error {
 	failures := []string{}
 	for _, reservation := range reservations {
+		// Rolled-back reservations must not leave live registration tokens.
+		s.revokeReservationJoinToken(ctx, &reservation)
 		vendor := vendors[reservation.Provider]
 		if vendor == nil {
 			failures = append(failures, fmt.Sprintf("vendor %q is not configured", reservation.Provider))
