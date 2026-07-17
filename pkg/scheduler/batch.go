@@ -57,7 +57,7 @@ func (b *schedulingBatch) planRequest(request *types.ContainerRequest) {
 			"planned_count_so_far": fmt.Sprintf("%d", len(b.schedules)),
 		})
 	}()
-	if !b.scheduler.checkpointSchedulingReady(request) {
+	if !b.scheduler.checkpointReady(request) {
 		newSchedulingAttempt(b.scheduler, request, b.workers).requeueForWorkerWaitDelay(checkpointHandoffRetryDelay, "checkpoint_handoff")
 		return
 	}
