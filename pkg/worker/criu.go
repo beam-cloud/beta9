@@ -351,6 +351,7 @@ func (r *checkpointUploadReader) report(n int) {
 type RestoreOpts struct {
 	request      *types.ContainerRequest
 	checkpoint   *types.Checkpoint
+	containerIP  string
 	outputWriter io.Writer
 	started      chan int
 	configPath   string
@@ -463,6 +464,7 @@ func (s *Worker) attemptRestoreCheckpoint(ctx context.Context, request *types.Co
 		exitCode, err := s.criuManager.RestoreCheckpoint(ctx, instance.Runtime, &RestoreOpts{
 			request:      request,
 			checkpoint:   checkpoint,
+			containerIP:  instance.ContainerIp,
 			outputWriter: outputWriter,
 			started:      restoreStarted,
 			configPath:   request.ConfigPath,
@@ -590,20 +592,8 @@ func (s *Worker) prepareRestoreFallback(request *types.ContainerRequest, config 
 
 	instance, exists := s.containerInstances.Get(request.ContainerId)
 	if exists && instance.Overlay != nil {
-		upperDir := filepath.Join(filepath.Dir(instance.Overlay.TopLayerPath()), "upper")
-		entries, err := os.ReadDir(upperDir)
-		if err != nil && !os.IsNotExist(err) {
-			return err
-		}
-		for _, entry := range entries {
-			if err := os.RemoveAll(filepath.Join(upperDir, entry.Name())); err != nil {
-				return err
-			}
-		}
-		for _, dir := range []string{"workspace", "volumes"} {
-			if err := os.MkdirAll(filepath.Join(upperDir, dir), 0755); err != nil {
-				return err
-			}
+		if err := instance.Overlay.Reset(); err != nil {
+			return fmt.Errorf("reset container overlay: %w", err)
 		}
 	}
 

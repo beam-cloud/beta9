@@ -1,18 +1,164 @@
 diff --git a/criu/include/sk-inet.h b/criu/include/sk-inet.h
-index 69ee8589..0a8474d3 100644
+index 69ee8589e61db28597a90f4d658f199a3c6fb59e..0a8474d341404c2c134a4577de65236b0d19f67d 100644
 --- a/criu/include/sk-inet.h
 +++ b/criu/include/sk-inet.h
 @@ -57,0 +58 @@ struct inet_sk_info {
 +	bool close_on_restore;
 diff --git a/criu/sk-inet.c b/criu/sk-inet.c
-index 566d1c23..f7306642 100644
+index 566d1c230e1173ea0f98bf9c2d4388d364da90c4..2df4ae9e3b809a394d4a038d518a8913fa4dcc94 100644
 --- a/criu/sk-inet.c
 +++ b/criu/sk-inet.c
-@@ -46,0 +47 @@
+@@ -9,0 +10,2 @@
++#include <errno.h>
++#include <fcntl.h>
+@@ -11,0 +14 @@
++#include <stdio.h>
+@@ -46,0 +50,4 @@
 +#define BEAM_CLOSE_EXTERNAL_TCP_MARKER "beam-close-external-tcp"
-@@ -53,0 +55 @@ static LIST_HEAD(inet_ports);
++#define BEAM_NETWORK_MAP_FILE "beam-network-map-v1"
++#define BEAM_NETWORK_MAP_VERSION "v1"
++#define BEAM_NETWORK_MAP_BUFFER_SIZE 256
+@@ -53,0 +61,11 @@ static LIST_HEAD(inet_ports);
 +static int close_external_tcp = -1;
-@@ -707,0 +710,27 @@ static inline int tcp_connection(InetSkEntry *ie)
++static int beam_network_map_status = -2;
++
++struct beam_network_map {
++	struct in_addr old_v4;
++	struct in_addr new_v4;
++	struct in6_addr old_v6;
++	struct in6_addr new_v6;
++};
++
++static struct beam_network_map beam_network_map;
+@@ -707,0 +726,158 @@ static inline int tcp_connection(InetSkEntry *ie)
++static int load_beam_network_map(void)
++{
++	char version[8], old_v4[INET_ADDRSTRLEN], new_v4[INET_ADDRSTRLEN];
++	char old_v6[INET6_ADDRSTRLEN], new_v6[INET6_ADDRSTRLEN];
++	char buffer[BEAM_NETWORK_MAP_BUFFER_SIZE];
++	ssize_t bytes_read;
++	int fd;
++
++	if (beam_network_map_status != -2)
++		return beam_network_map_status;
++
++	fd = open(BEAM_NETWORK_MAP_FILE, O_RDONLY | O_CLOEXEC);
++	if (fd < 0) {
++		if (errno == ENOENT) {
++			beam_network_map_status = 0;
++			return 0;
++		}
++		pr_perror("Can't open Beam network map");
++		beam_network_map_status = -1;
++		return -1;
++	}
++
++	bytes_read = read(fd, buffer, sizeof(buffer) - 1);
++	close(fd);
++	if (bytes_read <= 0) {
++		if (bytes_read == 0)
++			errno = EINVAL;
++		pr_perror("Can't read Beam network map");
++		beam_network_map_status = -1;
++		return -1;
++	}
++	buffer[bytes_read] = '\0';
++
++	if (sscanf(buffer, "%7s %15s %15s %45s %45s", version, old_v4, new_v4,
++		   old_v6, new_v6) != 5 ||
++	    strcmp(version, BEAM_NETWORK_MAP_VERSION) != 0 ||
++	    inet_pton(AF_INET, old_v4, &beam_network_map.old_v4) != 1 ||
++	    inet_pton(AF_INET, new_v4, &beam_network_map.new_v4) != 1 ||
++	    inet_pton(AF_INET6, old_v6, &beam_network_map.old_v6) != 1 ||
++	    inet_pton(AF_INET6, new_v6, &beam_network_map.new_v6) != 1) {
++		errno = EINVAL;
++		pr_perror("Invalid Beam network map");
++		beam_network_map_status = -1;
++		return -1;
++	}
++
++	beam_network_map_status = 1;
++	close_external_tcp = 1;
++	pr_info("Container socket addresses will be remapped from %s to %s\n", old_v4, new_v4);
++	return 1;
++}
++
++static bool remap_beam_address(int family, uint32_t *address)
++{
++	struct in6_addr *address_v6;
++
++	if (family == AF_INET) {
++		if (memcmp(address, &beam_network_map.old_v4, sizeof(beam_network_map.old_v4)) != 0)
++			return false;
++		memcpy(address, &beam_network_map.new_v4, sizeof(beam_network_map.new_v4));
++		return true;
++	}
++	if (family != AF_INET6)
++		return false;
++
++	address_v6 = (struct in6_addr *)address;
++	if (memcmp(address_v6, &beam_network_map.old_v6, sizeof(*address_v6)) == 0) {
++		memcpy(address_v6, &beam_network_map.new_v6, sizeof(*address_v6));
++		return true;
++	}
++	if (IN6_IS_ADDR_V4MAPPED(address_v6) &&
++	    memcmp(&address_v6->s6_addr[12], &beam_network_map.old_v4,
++		   sizeof(beam_network_map.old_v4)) == 0) {
++		memcpy(&address_v6->s6_addr[12], &beam_network_map.new_v4,
++		       sizeof(beam_network_map.new_v4));
++		return true;
++	}
++	return false;
++}
++
++static int remap_beam_socket_addresses(InetSkEntry *ie)
++{
++	bool remapped = false;
++	int status = load_beam_network_map();
++
++	if (status <= 0)
++		return status;
++	if (ie->family == AF_INET && ie->n_src_addr >= PB_ALEN_INET &&
++	    ie->n_dst_addr >= PB_ALEN_INET) {
++		remapped |= remap_beam_address(ie->family, ie->src_addr);
++		remapped |= remap_beam_address(ie->family, ie->dst_addr);
++	} else if (ie->family == AF_INET6 && ie->n_src_addr == PB_ALEN_INET6 &&
++		   ie->n_dst_addr == PB_ALEN_INET6) {
++		remapped |= remap_beam_address(ie->family, ie->src_addr);
++		remapped |= remap_beam_address(ie->family, ie->dst_addr);
++	}
++	if (remapped)
++		pr_info("Remapped container address for socket id %x\n", ie->id);
++	return 0;
++}
++
++static bool beam_address_is_local(int family, uint32_t *address)
++{
++	const unsigned char *address_v4;
++	struct in6_addr *address_v6;
++
++	if (family == AF_INET) {
++		address_v4 = (const unsigned char *)address;
++		return address_v4[0] == 127 ||
++		       memcmp(address, &beam_network_map.new_v4,
++			      sizeof(beam_network_map.new_v4)) == 0;
++	}
++	if (family != AF_INET6)
++		return false;
++
++	address_v6 = (struct in6_addr *)address;
++	if (IN6_IS_ADDR_LOOPBACK(address_v6) ||
++	    memcmp(address_v6, &beam_network_map.new_v6, sizeof(*address_v6)) == 0)
++		return true;
++	if (!IN6_IS_ADDR_V4MAPPED(address_v6))
++		return false;
++
++	address_v4 = &address_v6->s6_addr[12];
++	return address_v4[0] == 127 ||
++	       memcmp(address_v4, &beam_network_map.new_v4,
++		      sizeof(beam_network_map.new_v4)) == 0;
++}
++
 +static bool should_close_external_tcp(InetSkEntry *ie)
 +{
 +	size_t address_size;
@@ -27,6 +173,9 @@ index 566d1c23..f7306642 100644
 +	}
 +	if (!close_external_tcp)
 +		return false;
++	if (beam_network_map_status == 1)
++		return !beam_address_is_local(ie->family, ie->src_addr) ||
++		       !beam_address_is_local(ie->family, ie->dst_addr);
 +
 +	if (ie->family == AF_INET && ie->n_src_addr >= PB_ALEN_INET &&
 +	    ie->n_dst_addr >= PB_ALEN_INET)
@@ -40,25 +189,28 @@ index 566d1c23..f7306642 100644
 +	return memcmp(ie->src_addr, ie->dst_addr, address_size) != 0;
 +}
 +
-@@ -713,0 +743,3 @@ static int collect_one_inetsk(void *o, ProtobufCMessage *base, struct cr_img *i)
+@@ -717,0 +894,6 @@ static int collect_one_inetsk(void *o, ProtobufCMessage *base, struct cr_img *i)
++	if (remap_beam_socket_addresses(ii->ie) < 0)
++		return -1;
++
 +	ii->close_on_restore = should_close_external_tcp(ii->ie);
 +	if (ii->close_on_restore)
 +		pr_info("TCP connection id %x has an external peer and will be restored closed\n", ii->ie->id);
-@@ -719 +751 @@ static int collect_one_inetsk(void *o, ProtobufCMessage *base, struct cr_img *i)
+@@ -719 +901 @@ static int collect_one_inetsk(void *o, ProtobufCMessage *base, struct cr_img *i)
 -	if (tcp_connection(ii->ie))
 +	if (tcp_connection(ii->ie) && !ii->close_on_restore)
-@@ -781 +813 @@ static int post_open_inet_sk(struct file_desc *d, int sk)
+@@ -781 +963 @@ static int post_open_inet_sk(struct file_desc *d, int sk)
 -	if (tcp_connection(ii->ie)) {
 +	if (tcp_connection(ii->ie) && !ii->close_on_restore) {
 diff --git a/criu/sk-tcp.c b/criu/sk-tcp.c
-index 9c8bad1c..c67acd0b 100644
+index 9c8bad1c3f54790c391489fd28cdff7ae03bf9b5..c67acd0bbe2a919085313c9e9b8cb2d108072ccf 100644
 --- a/criu/sk-tcp.c
 +++ b/criu/sk-tcp.c
 @@ -464 +464 @@ int restore_one_tcp(int fd, struct inet_sk_info *ii)
 -	if (opts.tcp_close) {
 +	if (opts.tcp_close || ii->close_on_restore) {
 diff --git a/plugins/cuda/cuda_plugin.c b/plugins/cuda/cuda_plugin.c
-index 9ccb0422..b283fb10 100644
+index 9ccb0422498e2870b904e13972c38e8f37704422..b283fb10d70b354886444d478f0f6d5138f8ed28 100644
 --- a/plugins/cuda/cuda_plugin.c
 +++ b/plugins/cuda/cuda_plugin.c
 @@ -5,0 +6 @@

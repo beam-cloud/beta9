@@ -167,6 +167,19 @@ func (co *ContainerOverlay) Cleanup() error {
 	return err
 }
 
+// Reset rebuilds the writable layer without deleting files through a live
+// overlay mount, which would leave stale merged-directory dentries behind.
+func (co *ContainerOverlay) Reset() error {
+	if err := co.Cleanup(); err != nil {
+		return err
+	}
+	if err := co.Setup(); err != nil {
+		_ = co.Cleanup()
+		return err
+	}
+	return nil
+}
+
 func (co *ContainerOverlay) TopLayerPath() string {
 	if len(co.layers) == 0 {
 		return co.root

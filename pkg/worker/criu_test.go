@@ -852,8 +852,9 @@ func TestNvidiaCRIUManager(t *testing.T) {
 				if mockRuntime.restoreOpts == nil || mockRuntime.restoreOpts.AllowOpenTCP || !mockRuntime.restoreOpts.TCPClose {
 					t.Errorf("Expected generic NVIDIA restore to use tcp-close, got %+v", mockRuntime.restoreOpts)
 				}
-				if _, err := os.Stat(filepath.Join(checkpointPath, checkpointCloseExternalTCPMarker)); !errors.Is(err, os.ErrNotExist) {
-					t.Errorf("Expected endpoint restore not to enable selective TCP restore, got %v", err)
+				mapPath := filepath.Join(types.AgentTmpPath, checkpoint.CheckpointId, request.ContainerId, checkpointNetworkMapFile)
+				if _, err := os.Stat(mapPath); !errors.Is(err, os.ErrNotExist) {
+					t.Errorf("Expected endpoint restore not to create a network map, got %v", err)
 				}
 
 				if exitCode != 0 {
@@ -872,16 +873,18 @@ func TestNvidiaCRIUManager(t *testing.T) {
 
 				checkpoint := &types.Checkpoint{
 					CheckpointId: "checkpoint-pod",
+					ContainerIp:  "192.168.0.46",
 				}
 
 				checkpointPath := filepath.Join(tmpDir, checkpoint.CheckpointId)
 				os.MkdirAll(checkpointPath, 0755)
 
 				opts := &RestoreOpts{
-					request:    request,
-					checkpoint: checkpoint,
-					configPath: filepath.Join(tmpDir, "pod-config.json"),
-					started:    make(chan int, 1),
+					request:     request,
+					checkpoint:  checkpoint,
+					containerIP: "192.168.0.73",
+					configPath:  filepath.Join(tmpDir, "pod-config.json"),
+					started:     make(chan int, 1),
 				}
 
 				exitCode, err := manager.RestoreCheckpoint(context.Background(), mockRuntime, opts)
@@ -892,9 +895,15 @@ func TestNvidiaCRIUManager(t *testing.T) {
 				if mockRuntime.restoreOpts == nil || !mockRuntime.restoreOpts.AllowOpenTCP || mockRuntime.restoreOpts.TCPClose {
 					t.Errorf("Expected pod NVIDIA restore to preserve open TCP without tcp-close, got %+v", mockRuntime.restoreOpts)
 				}
-				if _, err := os.Stat(filepath.Join(checkpointPath, checkpointCloseExternalTCPMarker)); err != nil {
-					t.Errorf("Expected pod restore to enable selective TCP restore: %v", err)
+				mapPath := filepath.Join(types.AgentTmpPath, checkpoint.CheckpointId, request.ContainerId, checkpointNetworkMapFile)
+				contents, err := os.ReadFile(mapPath)
+				if err != nil {
+					t.Fatalf("Expected pod restore network map: %v", err)
 				}
+				if got, want := string(contents), "v1 192.168.0.46 192.168.0.73 fd00:abcd::2e fd00:abcd::49\n"; got != want {
+					t.Errorf("network map = %q, want %q", got, want)
+				}
+				t.Cleanup(func() { _ = os.RemoveAll(filepath.Dir(filepath.Dir(mapPath))) })
 
 				if exitCode != 0 {
 					t.Errorf("Expected exit code 0, got %d", exitCode)
@@ -912,16 +921,18 @@ func TestNvidiaCRIUManager(t *testing.T) {
 
 				checkpoint := &types.Checkpoint{
 					CheckpointId: "checkpoint-service",
+					ContainerIp:  "192.168.0.46",
 				}
 
 				checkpointPath := filepath.Join(tmpDir, checkpoint.CheckpointId)
 				os.MkdirAll(checkpointPath, 0755)
 
 				opts := &RestoreOpts{
-					request:    request,
-					checkpoint: checkpoint,
-					configPath: filepath.Join(tmpDir, "service-config.json"),
-					started:    make(chan int, 1),
+					request:     request,
+					checkpoint:  checkpoint,
+					containerIP: "192.168.0.74",
+					configPath:  filepath.Join(tmpDir, "service-config.json"),
+					started:     make(chan int, 1),
 				}
 
 				exitCode, err := manager.RestoreCheckpoint(context.Background(), mockRuntime, opts)
@@ -932,9 +943,11 @@ func TestNvidiaCRIUManager(t *testing.T) {
 				if mockRuntime.restoreOpts == nil || !mockRuntime.restoreOpts.AllowOpenTCP || mockRuntime.restoreOpts.TCPClose {
 					t.Errorf("Expected service NVIDIA restore to preserve open TCP without tcp-close, got %+v", mockRuntime.restoreOpts)
 				}
-				if _, err := os.Stat(filepath.Join(checkpointPath, checkpointCloseExternalTCPMarker)); err != nil {
-					t.Errorf("Expected service restore to enable selective TCP restore: %v", err)
+				mapPath := filepath.Join(types.AgentTmpPath, checkpoint.CheckpointId, request.ContainerId, checkpointNetworkMapFile)
+				if _, err := os.Stat(mapPath); err != nil {
+					t.Errorf("Expected service restore network map: %v", err)
 				}
+				t.Cleanup(func() { _ = os.RemoveAll(filepath.Dir(filepath.Dir(mapPath))) })
 
 				if exitCode != 0 {
 					t.Errorf("Expected exit code 0, got %d", exitCode)
@@ -946,6 +959,13 @@ func TestNvidiaCRIUManager(t *testing.T) {
 				tc.extraTests(t, manager, mockRuntime, tmpDir)
 			}
 		})
+	}
+}
+
+func TestWriteCheckpointNetworkMapRejectsInvalidAddresses(t *testing.T) {
+	err := writeCheckpointNetworkMap(t.TempDir(), "", "192.168.0.2")
+	if err == nil {
+		t.Fatal("expected invalid checkpoint address to fail")
 	}
 }
 
