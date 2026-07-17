@@ -61,13 +61,12 @@ type thunderDeleteClientRequest struct {
 
 type thunderConfigFile struct {
 	DeviceID        string `json:"deviceId"`
-	EnableGRPCTLS   bool   `json:"enableGrpcTls"`
-	EnvironmentType string `json:"environmentType"`
 	GPUCount        int    `json:"gpuCount"`
 	GPUType         string `json:"gpuType"`
-	ManagerAddress  string `json:"managerAddress"`
-	OtelCollector   string `json:"otelCollector"`
-	UVM             bool   `json:"uvm"`
+	EnableGRPCTLS   bool   `json:"enableGrpcTls"`
+	CentralApiUrl   string `json:"centralApiUrl"`
+	CentralZoneId   string `json:"centralZoneId"`
+	CentralApiToken string `json:"centralApiToken"`
 }
 
 func NewContainerThunderManagerFromEnv() GPUManager {
@@ -134,7 +133,7 @@ func (c *ContainerThunderManager) CDIDevices(assignedDevices []int) []string {
 }
 
 func (c *ContainerThunderManager) InjectEnvVars(env []string) []string {
-	return injectCudaEnvVars(env)
+	return withLDPreload(injectCudaEnvVars(env), thunderLibraryPath)
 }
 
 func (c *ContainerThunderManager) InjectAssignedEnvVars(env []string, assignedDevices []int) []string {
@@ -246,7 +245,7 @@ func (c *ContainerThunderManager) InjectThunderFiles(request *types.ContainerReq
 	if err := createThunderToken(rootPath, allocation.Token); err != nil {
 		return err
 	}
-	if err := createThunderConfig(rootPath, request); err != nil {
+	if err := c.createThunderConfig(rootPath, request); err != nil {
 		return err
 	}
 	return nil
@@ -280,16 +279,15 @@ func createThunderToken(rootPath string, token string) error {
 	return writeThunderFile(rootPath, thunderTokenPath, []byte(token), 0644)
 }
 
-func createThunderConfig(rootPath string, request *types.ContainerRequest) error {
+func (c *ContainerThunderManager) createThunderConfig(rootPath string, request *types.ContainerRequest) error {
 	config := thunderConfigFile{
 		DeviceID:        request.ContainerId,
-		EnableGRPCTLS:   false,
-		EnvironmentType: "production",
 		GPUCount:        int(thunderGPUCount(request)),
 		GPUType:         thunderGPUType(request),
-		ManagerAddress:  "",
-		OtelCollector:   "",
-		UVM:             false,
+		EnableGRPCTLS:   false,
+		CentralApiUrl:   c.apiURL,
+		CentralZoneId:   "thunder-beam",
+		CentralApiToken: c.apiToken,
 	}
 
 	contents, err := json.Marshal(config)

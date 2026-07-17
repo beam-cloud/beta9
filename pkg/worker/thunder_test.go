@@ -50,6 +50,12 @@ func TestThunderAssignRegistersClientAndLeavesAssignedEnvUnchanged(t *testing.T)
 	assert.Equal(t, []string{"A=1", "NVIDIA_VISIBLE_DEVICES=void", "WORKER_GPU_DEVICES=0"}, env)
 }
 
+func TestThunderInjectEnvVarsMergesLDPreload(t *testing.T) {
+	manager := NewContainerThunderManager("https://thunder.example", "central-token", nil)
+	env := manager.InjectEnvVars([]string{"LD_PRELOAD=/existing.so"})
+	assert.Contains(t, env, "LD_PRELOAD=/existing.so:/etc/thunder/libthunder.so")
+}
+
 func TestThunderUnassignUsesPostDeleteClient(t *testing.T) {
 	var deletePayload thunderDeleteClientRequest
 	var sawDelete bool
@@ -185,12 +191,11 @@ func TestThunderPrepareContainerFilesystemWritesThunderFiles(t *testing.T) {
 	}
 	assert.Equal(t, thunderConfigFile{
 		DeviceID:        "container-123",
-		EnableGRPCTLS:   false,
-		EnvironmentType: "production",
 		GPUCount:        2,
 		GPUType:         "A100",
-		ManagerAddress:  "",
-		OtelCollector:   "",
-		UVM:             false,
+		EnableGRPCTLS:   false,
+		CentralApiUrl:   server.URL,
+		CentralZoneId:   "thunder-beam",
+		CentralApiToken: "central-token",
 	}, config)
 }

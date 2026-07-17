@@ -43,17 +43,3 @@ docs/*.md
 
 # Riptide artifacts (cloud-synced)
 .humanlayer/tasks/
-
-# Thunder deployment local artifacts
-/thunder_deployment/**/*.env
-/thunder_deployment/**/.env
-/thunder_deployment/**/.venv/
-/thunder_deployment/**/venv/
-/thunder_deployment/**/env/
-/thunder_deployment/**/*.tar
-/thunder_deployment/**/*.tar.gz
-/thunder_deployment/**/*.tgz
-/thunder_deployment/**/*.zip
-/thunder_deployment/provision.exe
-/thunder_deployment/beam-admin-token
-/thunder_deployment/client_workload/__pycache__/

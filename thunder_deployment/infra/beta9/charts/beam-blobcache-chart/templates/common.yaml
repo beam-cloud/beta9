@@ -1,6 +1,0 @@
----
-{{/* Set all variables properly */}}
-{{- include "blobcache.init" . -}}
-
-{{/* Render the templates */}}
-{{- include "bjw-s.common.loader.all" . -}}
