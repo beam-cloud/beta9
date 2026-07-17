@@ -1725,6 +1725,41 @@ func TestDeletePoolIsIdempotentWhenPoolAlreadyGone(t *testing.T) {
 	}
 }
 
+func TestDeletePoolAllowsAnotherTokenInWorkspace(t *testing.T) {
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{
+			"workspace-1": {
+				{
+					Name:             "pool-1",
+					CreatedByTokenID: "creator-token",
+					Mode:             string(types.PoolModePrivate),
+				},
+			},
+			"workspace-2": {
+				{Name: "pool-1", CreatedByTokenID: "other-workspace-token", Mode: string(types.PoolModePrivate)},
+			},
+		},
+	}
+	service := &Service{computeRepo: repo}
+
+	res, err := service.DeletePool(
+		testAuthContext("workspace-1", "current-token"),
+		&pb.DeletePoolRequest{Name: "pool-1"},
+	)
+	if err != nil {
+		t.Fatalf("DeletePool() error = %v", err)
+	}
+	if res == nil || !res.Ok {
+		t.Fatalf("DeletePool() response = %#v", res)
+	}
+	if got := len(repo.pools["workspace-1"]); got != 0 {
+		t.Fatalf("stored pool count = %d, want 0", got)
+	}
+	if got := len(repo.pools["workspace-2"]); got != 1 {
+		t.Fatalf("other workspace pool count = %d, want 1", got)
+	}
+}
+
 func TestScaleBYOCPoolUpdatesAWSAutoScalingGroupAndState(t *testing.T) {
 	ctx := testAuthContext("workspace-1", "owner-token")
 	resourceURL := awsCloudFormationStackURL("us-east-1", "beam-aws-cpu-test")
@@ -4403,7 +4438,7 @@ func TestDeletePoolMachineBYOCMissingMachineIsIdempotentAndCleansDeletedPool(t *
 	}
 }
 
-func TestDeletePoolMachineMissingOwnedPrivateMachineIsIdempotent(t *testing.T) {
+func TestDeletePoolMachineMissingPrivateMachineIsIdempotent(t *testing.T) {
 	ctx := testAuthContext("workspace-1", "owner-token")
 	repo := &fakeComputeRepo{
 		pools: map[string][]*model.PoolState{
@@ -4426,6 +4461,46 @@ func TestDeletePoolMachineMissingOwnedPrivateMachineIsIdempotent(t *testing.T) {
 	}
 	if res == nil || !res.Ok {
 		t.Fatalf("DeletePoolMachine() response = %#v", res)
+	}
+}
+
+func TestDeletePoolMachineAllowsAnotherTokenInWorkspace(t *testing.T) {
+	ctx := testAuthContext("workspace-1", "current-token")
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{
+			"workspace-1": {
+				{
+					Name:             "pool-1",
+					CreatedByTokenID: "creator-token",
+					Mode:             string(types.PoolModePrivate),
+				},
+			},
+		},
+		machines: map[string][]*model.AgentTokenState{
+			fakeComputeKey("workspace-1", "pool-1"): {
+				{WorkspaceID: "workspace-1", PoolName: "pool-1", MachineID: "machine-1"},
+			},
+			fakeComputeKey("workspace-2", "pool-1"): {
+				{WorkspaceID: "workspace-2", PoolName: "pool-1", MachineID: "machine-1"},
+			},
+		},
+	}
+
+	_, res, err := (&Service{computeRepo: repo}).DeletePoolMachine(
+		ctx,
+		&pb.DeleteMachineRequest{PoolName: "pool-1", MachineId: "machine-1"},
+	)
+	if err != nil {
+		t.Fatalf("DeletePoolMachine() error = %v", err)
+	}
+	if res == nil || !res.Ok {
+		t.Fatalf("DeletePoolMachine() response = %#v", res)
+	}
+	if got := len(repo.machines[fakeComputeKey("workspace-1", "pool-1")]); got != 0 {
+		t.Fatalf("stored machine count = %d, want 0", got)
+	}
+	if got := len(repo.machines[fakeComputeKey("workspace-2", "pool-1")]); got != 1 {
+		t.Fatalf("other workspace machine count = %d, want 1", got)
 	}
 }
 
