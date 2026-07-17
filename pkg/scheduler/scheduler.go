@@ -124,7 +124,7 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 			}
 			controllerOptions.ProviderName = pool.Provider
 			controllerOptions.Tailscale = tailscale
-			controller, err = NewLegacyExternalWorkerPoolController(controllerOptions)
+			controller, err = NewProviderWorkerPoolController(controllerOptions)
 		default:
 			log.Error().Str("pool_name", name).Str("mode", string(pool.Mode)).Msg("no valid controller found for pool")
 			continue
@@ -285,7 +285,7 @@ func (s *Scheduler) DeleteAgentPool(workspaceID string, state *compute.PoolState
 }
 
 // DeleteManagedAgentPool removes only the managed controller generation the
-// caller reconciled. It cannot delete a private, local, legacy, or newly
+// caller reconciled. It cannot delete a private, local, provider-backed, or newly
 // recreated controller that happens to reuse the same selector.
 func (s *Scheduler) DeleteManagedAgentPool(selector, instanceID string) {
 	if s == nil || selector == "" {
@@ -380,15 +380,7 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 			// Do nothing
 		}
 	}
-
-	// Add checkpoint state to request if auto checkpoint is enabled and checkpoint is not set
-	if request.CheckpointEnabled && request.Checkpoint == nil {
-		checkpoint, err := s.backendRepo.GetLatestCheckpointByStubId(context.Background(), request.StubId)
-		if err == nil && checkpoint != nil && checkpoint.Status == string(types.CheckpointStatusAvailable) {
-			requestLog(log.Info(), request).Str("checkpoint_id", checkpoint.CheckpointId).Msg("adding checkpoint to request")
-			request.Checkpoint = checkpoint
-		}
-	}
+	s.attachLatestCheckpoint(request)
 
 	requestedEvent := request.Clone()
 	go s.schedulerUsageMetrics.CounterIncContainerRequested(requestedEvent)
@@ -610,6 +602,10 @@ func (s *Scheduler) StartProcessingRequests() {
 }
 
 func (s *Scheduler) processRequest(request *types.ContainerRequest, workers []*types.Worker) {
+	if !s.checkpointReady(request) {
+		newSchedulingAttempt(s, request, workers).requeueForWorkerWaitDelay(checkpointHandoffRetryDelay, "checkpoint_handoff")
+		return
+	}
 	newSchedulingAttempt(s, request, workers).run()
 }
 
@@ -625,6 +621,7 @@ func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.Contain
 
 func (s *Scheduler) prepareWorkerRequest(worker *types.Worker, request *types.ContainerRequest) *types.ContainerRequest {
 	workerRequest := request.Clone()
+	s.attachLatestCheckpoint(workerRequest)
 	normalizeGPURequest(workerRequest)
 	workerRequest.Gpu = worker.Gpu
 

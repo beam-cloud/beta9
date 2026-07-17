@@ -23,54 +23,13 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
-func TestPrivatePoolCreatedByAuthRequiresCreatorToken(t *testing.T) {
-	authInfo := &auth.AuthInfo{
-		Token: &types.Token{ExternalId: "token-owner"},
-	}
-
-	tests := []struct {
-		name  string
-		state *model.PoolState
-		want  bool
-	}{
-		{
-			name:  "matching creator",
-			state: &model.PoolState{CreatedByTokenID: "token-owner"},
-			want:  true,
-		},
-		{
-			name:  "different creator",
-			state: &model.PoolState{CreatedByTokenID: "other-token"},
-			want:  false,
-		},
-		{
-			name:  "missing creator",
-			state: &model.PoolState{},
-			want:  false,
-		},
-		{
-			name:  "nil state",
-			state: nil,
-			want:  false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := computePoolCreatedByAuth(tt.state, authInfo); got != tt.want {
-				t.Fatalf("computePoolCreatedByAuth() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestPrivatePoolReadsAreWorkspaceScoped(t *testing.T) {
 	ctx := testAuthContext("workspace-1", "viewer-token")
 	repo := &fakeComputeRepo{
 		pools: map[string][]*model.PoolState{
 			"workspace-1": {
-				{Name: "owned", CreatedByTokenID: "owner-token", Status: "active"},
-				{Name: "other", CreatedByTokenID: "other-token", Status: "active"},
+				{Name: "owned", Mode: string(types.PoolModePrivate), CreatedByTokenID: "owner-token", Status: "active"},
+				{Name: "other", Mode: string(types.PoolModePrivate), CreatedByTokenID: "other-token", Status: "active"},
 			},
 		},
 		machines: map[string][]*model.AgentTokenState{
@@ -104,13 +63,121 @@ func TestPrivatePoolReadsAreWorkspaceScoped(t *testing.T) {
 	}
 }
 
+func TestPrivatePoolJoinTokenIsWorkspaceOwned(t *testing.T) {
+	now := time.Now().UTC()
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{
+			"workspace-1": {{
+				WorkspaceID:      "workspace-1",
+				Name:             "pool-1",
+				Mode:             string(types.PoolModePrivate),
+				Config:           &pb.PoolConfig{Name: "pool-1", Mode: string(types.PoolModePrivate)},
+				CreatedByTokenID: "creator-token",
+				CreatedAt:        now,
+			}},
+		},
+	}
+	service := &Service{computeRepo: repo}
+
+	created, err := service.CreatePoolJoinToken(
+		testAuthContext("workspace-1", "current-token"),
+		&pb.CreatePoolJoinTokenRequest{PoolName: "pool-1"},
+	)
+	if err != nil || !created.Ok {
+		t.Fatalf("CreatePoolJoinToken() response = %+v, err = %v", created, err)
+	}
+
+	joined, err := service.JoinAgent(context.Background(), &pb.JoinAgentRequest{
+		JoinToken:          created.Token,
+		MachineFingerprint: "fingerprint-1",
+		CpuCount:           4,
+		MemoryMb:           8192,
+		Schedulable:        true,
+	})
+	if err != nil || !joined.Ok {
+		t.Fatalf("JoinAgent() response = %+v, err = %v", joined, err)
+	}
+
+	denied, err := service.RevokePoolJoinToken(
+		testAuthContext("workspace-2", "other-token"),
+		&pb.RevokePoolJoinTokenRequest{Token: created.Token},
+	)
+	if err != nil || denied.Ok || denied.ErrMsg != "join token not found" {
+		t.Fatalf("cross-workspace RevokePoolJoinToken() response = %+v, err = %v", denied, err)
+	}
+
+	revoked, err := service.RevokePoolJoinToken(
+		testAuthContext("workspace-1", "rotated-token"),
+		&pb.RevokePoolJoinTokenRequest{Token: created.Token},
+	)
+	if err != nil || !revoked.Ok {
+		t.Fatalf("same-workspace RevokePoolJoinToken() response = %+v, err = %v", revoked, err)
+	}
+	if state := repo.joinTokens[hashComputeToken(created.Token)]; state == nil || !state.Revoked {
+		t.Fatalf("stored join token = %+v, want revoked", state)
+	}
+}
+
+func TestPrivatePoolJoinTokenCannotCrossWorkspaces(t *testing.T) {
+	service := &Service{computeRepo: &fakeComputeRepo{pools: map[string][]*model.PoolState{
+		"workspace-1": {{Name: "pool-1", Mode: string(types.PoolModePrivate)}},
+	}}}
+
+	response, err := service.CreatePoolJoinToken(
+		testAuthContext("workspace-2", "other-token"),
+		&pb.CreatePoolJoinTokenRequest{PoolName: "pool-1"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Ok || response.ErrMsg != "pool not found" {
+		t.Fatalf("CreatePoolJoinToken() response = %+v", response)
+	}
+}
+
+func TestPrivatePoolJoinTokenCannotJoinRecreatedPool(t *testing.T) {
+	createdAt := time.Now().UTC()
+	repo := &fakeComputeRepo{pools: map[string][]*model.PoolState{
+		"workspace-1": {{
+			WorkspaceID: "workspace-1",
+			Name:        "pool-1",
+			Mode:        string(types.PoolModePrivate),
+			Config:      &pb.PoolConfig{Name: "pool-1", Mode: string(types.PoolModePrivate)},
+			CreatedAt:   createdAt,
+		}},
+	}}
+	service := &Service{computeRepo: repo}
+	created, err := service.CreatePoolJoinToken(
+		testAuthContext("workspace-1", "workspace-token"),
+		&pb.CreatePoolJoinTokenRequest{PoolName: "pool-1"},
+	)
+	if err != nil || !created.Ok {
+		t.Fatalf("CreatePoolJoinToken() response = %+v, err = %v", created, err)
+	}
+
+	repo.pools["workspace-1"][0].CreatedAt = createdAt.Add(time.Second)
+	joined, err := service.JoinAgent(context.Background(), &pb.JoinAgentRequest{
+		JoinToken:          created.Token,
+		MachineFingerprint: "fingerprint-1",
+		CpuCount:           4,
+		MemoryMb:           8192,
+		Schedulable:        true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if joined.Ok || joined.ErrMsg != "join token is invalid or expired" {
+		t.Fatalf("JoinAgent() response = %+v", joined)
+	}
+}
+
 func TestListPrivatePoolsReadyMachineCountUsesAgentConnection(t *testing.T) {
 	now := time.Now().UTC()
 	ctx := testAuthContext("workspace-1", "viewer-token")
 	repo := &fakeComputeRepo{
 		pools: map[string][]*model.PoolState{
 			"workspace-1": {
-				{Name: "private-pool", Status: "active"},
+				{Name: "private-pool", Mode: string(types.PoolModePrivate), Status: "active"},
 			},
 		},
 		machines: map[string][]*model.AgentTokenState{
@@ -148,8 +215,8 @@ func TestFindReadyPrivatePoolForGPU(t *testing.T) {
 	repo := &fakeComputeRepo{
 		pools: map[string][]*model.PoolState{
 			"workspace-1": {
-				{Name: "ondemand-a6000", Status: "active", Config: &pb.PoolConfig{Gpu: []string{"A6000"}}},
-				{Name: "empty-t4", Status: "active", Config: &pb.PoolConfig{Gpu: []string{"T4"}}},
+				{Name: "ondemand-a6000", Mode: string(types.PoolModePrivate), Status: "active", Config: &pb.PoolConfig{Gpu: []string{"A6000"}}},
+				{Name: "empty-t4", Mode: string(types.PoolModePrivate), Status: "active", Config: &pb.PoolConfig{Gpu: []string{"T4"}}},
 			},
 		},
 		machines: map[string][]*model.AgentTokenState{
@@ -196,12 +263,12 @@ func TestFindReadyPrivatePoolForGPU(t *testing.T) {
 	}
 }
 
-func TestCreatePoolConflictsWithWorkspacePoolOwnedByAnotherToken(t *testing.T) {
+func TestCreatePoolCanBeUpdatedByAnotherWorkspaceToken(t *testing.T) {
 	ctx := testAuthContext("workspace-1", "viewer-token")
 	repo := &fakeComputeRepo{
 		pools: map[string][]*model.PoolState{
 			"workspace-1": {
-				{Name: "existing", CreatedByTokenID: "owner-token", Status: "active"},
+				{Name: "existing", Mode: string(types.PoolModePrivate), CreatedByTokenID: "owner-token", Status: "active"},
 			},
 		},
 	}
@@ -213,14 +280,14 @@ func TestCreatePoolConflictsWithWorkspacePoolOwnedByAnotherToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreatePool() error = %v", err)
 	}
-	if res.Ok {
-		t.Fatal("CreatePool() unexpectedly succeeded")
+	if !res.Ok {
+		t.Fatalf("CreatePool() not ok: %s", res.ErrMsg)
 	}
-	if got, want := res.ErrMsg, "pool already exists in this workspace"; got != want {
-		t.Fatalf("CreatePool() error = %q, want %q", got, want)
+	if !repo.savedPool {
+		t.Fatal("CreatePool() did not persist the workspace-owned update")
 	}
-	if repo.savedPool {
-		t.Fatal("CreatePool() saved over a pool owned by another token")
+	if got, want := repo.pools["workspace-1"][0].CreatedByTokenID, "owner-token"; got != want {
+		t.Fatalf("creator audit field = %q, want %q", got, want)
 	}
 }
 
@@ -423,8 +490,8 @@ func TestCreateBYOCPoolCreatesAWSCPUPrivatePool(t *testing.T) {
 	joinTokenHash := ""
 	for _, token := range repo.joinTokens {
 		joinTokenHash = token.TokenHash
-		if token.WorkspaceID != "workspace-1" || token.PoolName != "aws-cpu" || token.CreatedByTokenID != "owner-token" {
-			t.Fatalf("join token identity = %+v, want workspace/pool/owner", token)
+		if token.WorkspaceID != "workspace-1" || token.PoolName != "aws-cpu" {
+			t.Fatalf("join token identity = %+v, want workspace/pool", token)
 		}
 		if !token.ExpiresAt.IsZero() {
 			t.Fatalf("join token expiry = %s, want persistent BYOC bootstrap token", token.ExpiresAt)
@@ -729,33 +796,6 @@ func TestCreateBYOCPoolRejectsNonS3AWSTemplateURL(t *testing.T) {
 	}
 }
 
-func TestCreateBYOCPoolRejectsPoolOwnedByAnotherToken(t *testing.T) {
-	ctx := testAuthContext("workspace-1", "viewer-token")
-	repo := &fakeComputeRepo{
-		pools: map[string][]*model.PoolState{
-			"workspace-1": {
-				{Name: "existing", CreatedByTokenID: "owner-token", Status: "active"},
-			},
-		},
-	}
-	service := &Service{computeRepo: repo}
-
-	res, err := service.CreateBYOCPool(ctx, &pb.CreateBYOCPoolRequest{
-		Provider:  "aws",
-		PoolName:  "existing",
-		AccountId: "123456789012",
-	})
-	if err != nil {
-		t.Fatalf("CreateBYOCPool() error = %v", err)
-	}
-	if res.Ok {
-		t.Fatal("CreateBYOCPool() unexpectedly succeeded")
-	}
-	if got, want := res.ErrMsg, "pool already exists in this workspace"; got != want {
-		t.Fatalf("error = %q, want %q", got, want)
-	}
-}
-
 func TestGetBYOCPoolReportsReadiness(t *testing.T) {
 	now := time.Now().UTC()
 	ctx := testAuthContext("workspace-1", "owner-token")
@@ -765,6 +805,7 @@ func TestGetBYOCPoolReportsReadiness(t *testing.T) {
 			"workspace-1": {
 				{
 					Name:             "aws-cpu",
+					Mode:             string(types.PoolModePrivate),
 					CreatedByTokenID: "owner-token",
 					Source:           model.SourceAWS,
 					BYOC: &model.BYOCProviderState{
@@ -820,6 +861,7 @@ func TestListPrivatePoolsIncludesBYOCState(t *testing.T) {
 			"workspace-1": {
 				{
 					Name:             "aws-cpu",
+					Mode:             string(types.PoolModePrivate),
 					CreatedByTokenID: "owner-token",
 					Source:           model.SourceAWS,
 					Config:           &pb.PoolConfig{Name: "aws-cpu", Regions: []string{"us-east-1"}},
@@ -839,7 +881,7 @@ func TestListPrivatePoolsIncludesBYOCState(t *testing.T) {
 						},
 					},
 				},
-				{Name: "attached-cpu", CreatedByTokenID: "owner-token", Source: model.SourceAttached},
+				{Name: "attached-cpu", Mode: string(types.PoolModePrivate), CreatedByTokenID: "owner-token", Source: model.SourceAttached},
 			},
 		},
 		machines: map[string][]*model.AgentTokenState{
@@ -937,6 +979,7 @@ func TestListPrivatePoolsCleansDeletedBYOCPool(t *testing.T) {
 			"workspace-1": {
 				{
 					Name:             "aws-cpu",
+					Mode:             string(types.PoolModePrivate),
 					CreatedByTokenID: "owner-token",
 					Source:           model.SourceAWS,
 					Config:           &pb.PoolConfig{Name: "aws-cpu", Regions: []string{"us-east-1"}},
@@ -965,10 +1008,9 @@ func TestListPrivatePoolsCleansDeletedBYOCPool(t *testing.T) {
 		},
 		joinTokens: map[string]*model.JoinTokenState{
 			tokenHash: {
-				TokenHash:        tokenHash,
-				WorkspaceID:      "workspace-1",
-				PoolName:         "aws-cpu",
-				CreatedByTokenID: "owner-token",
+				TokenHash:   tokenHash,
+				WorkspaceID: "workspace-1",
+				PoolName:    "aws-cpu",
 			},
 		},
 	}
@@ -1011,6 +1053,7 @@ func TestListPrivatePoolsCleansDeletedBYOCPoolWithoutMachinesWhenProviderResourc
 			"workspace-1": {
 				{
 					Name:             "aws-cpu",
+					Mode:             string(types.PoolModePrivate),
 					CreatedByTokenID: "owner-token",
 					Source:           model.SourceAWS,
 					Config:           &pb.PoolConfig{Name: "aws-cpu", Regions: []string{"us-east-1"}},
@@ -1039,10 +1082,9 @@ func TestListPrivatePoolsCleansDeletedBYOCPoolWithoutMachinesWhenProviderResourc
 		},
 		joinTokens: map[string]*model.JoinTokenState{
 			tokenHash: {
-				TokenHash:        tokenHash,
-				WorkspaceID:      "workspace-1",
-				PoolName:         "aws-cpu",
-				CreatedByTokenID: "owner-token",
+				TokenHash:   tokenHash,
+				WorkspaceID: "workspace-1",
+				PoolName:    "aws-cpu",
 			},
 		},
 	}
@@ -1085,6 +1127,7 @@ func TestListPrivatePoolsKeepsFreshBYOCPoolWhenProviderControlUnavailable(t *tes
 			"workspace-1": {
 				{
 					Name:             "aws-cpu",
+					Mode:             string(types.PoolModePrivate),
 					CreatedByTokenID: "owner-token",
 					Source:           model.SourceAWS,
 					Config:           &pb.PoolConfig{Name: "aws-cpu", Regions: []string{"us-east-1"}},
@@ -1145,6 +1188,7 @@ func TestListPrivatePoolsKeepsFreshBYOCPoolDuringProviderNotFoundRace(t *testing
 			"workspace-1": {
 				{
 					Name:             "aws-cpu",
+					Mode:             string(types.PoolModePrivate),
 					CreatedByTokenID: "owner-token",
 					Source:           model.SourceAWS,
 					Config:           &pb.PoolConfig{Name: "aws-cpu", Regions: []string{"us-east-1"}},
@@ -1203,6 +1247,7 @@ func TestListPrivatePoolsCleansOldNeverJoinedBYOCPoolWhenProviderControlUnavaila
 			"workspace-1": {
 				{
 					Name:             "aws-cpu",
+					Mode:             string(types.PoolModePrivate),
 					CreatedByTokenID: "owner-token",
 					Source:           model.SourceAWS,
 					Config:           &pb.PoolConfig{Name: "aws-cpu", Regions: []string{"us-east-1"}},
@@ -1232,10 +1277,9 @@ func TestListPrivatePoolsCleansOldNeverJoinedBYOCPoolWhenProviderControlUnavaila
 		},
 		joinTokens: map[string]*model.JoinTokenState{
 			tokenHash: {
-				TokenHash:        tokenHash,
-				WorkspaceID:      "workspace-1",
-				PoolName:         "aws-cpu",
-				CreatedByTokenID: "owner-token",
+				TokenHash:   tokenHash,
+				WorkspaceID: "workspace-1",
+				PoolName:    "aws-cpu",
 			},
 		},
 	}
@@ -1274,6 +1318,7 @@ func TestListPrivatePoolsKeepsRecentlyDisconnectedBYOCPool(t *testing.T) {
 			"workspace-1": {
 				{
 					Name:             "aws-cpu",
+					Mode:             string(types.PoolModePrivate),
 					CreatedByTokenID: "owner-token",
 					Source:           model.SourceAWS,
 					Config:           &pb.PoolConfig{Name: "aws-cpu", Regions: []string{"us-east-1"}},
@@ -1335,6 +1380,7 @@ func TestListPrivatePoolsCleansBYOCWhenProviderUnavailableAndMachinesDisconnecte
 			"workspace-1": {
 				{
 					Name:             "aws-cpu",
+					Mode:             string(types.PoolModePrivate),
 					CreatedByTokenID: "owner-token",
 					Source:           model.SourceAWS,
 					Config:           &pb.PoolConfig{Name: "aws-cpu", Regions: []string{"us-east-1"}},
@@ -1407,6 +1453,7 @@ func TestReleasePrivateMachineTerminatesAWSBYOCNode(t *testing.T) {
 	state := &model.PoolState{
 		WorkspaceID:      "workspace-1",
 		Name:             "aws-cpu",
+		Mode:             string(types.PoolModePrivate),
 		CreatedByTokenID: "owner-token",
 		Source:           model.SourceAWS,
 		BYOC: &model.BYOCProviderState{
@@ -1586,6 +1633,7 @@ func TestDeletePoolReleasesAWSBYOCMachines(t *testing.T) {
 			"workspace-1": {
 				{
 					Name:             "aws-cpu",
+					Mode:             string(types.PoolModePrivate),
 					CreatedByTokenID: "owner-token",
 					Source:           model.SourceAWS,
 					BYOC: &model.BYOCProviderState{
@@ -1607,16 +1655,14 @@ func TestDeletePoolReleasesAWSBYOCMachines(t *testing.T) {
 		},
 		joinTokens: map[string]*model.JoinTokenState{
 			hashComputeToken("byoc-token"): {
-				TokenHash:        hashComputeToken("byoc-token"),
-				WorkspaceID:      "workspace-1",
-				PoolName:         "aws-cpu",
-				CreatedByTokenID: "owner-token",
+				TokenHash:   hashComputeToken("byoc-token"),
+				WorkspaceID: "workspace-1",
+				PoolName:    "aws-cpu",
 			},
 			hashComputeToken("old-byoc-token"): {
-				TokenHash:        hashComputeToken("old-byoc-token"),
-				WorkspaceID:      "workspace-1",
-				PoolName:         "aws-cpu",
-				CreatedByTokenID: "owner-token",
+				TokenHash:   hashComputeToken("old-byoc-token"),
+				WorkspaceID: "workspace-1",
+				PoolName:    "aws-cpu",
 			},
 		},
 	}
@@ -1668,6 +1714,7 @@ func TestDeletePoolKeepsMachineThatReconnectsDuringProviderRelease(t *testing.T)
 		pools: map[string][]*model.PoolState{
 			"workspace-1": {{
 				Name:             "aws-cpu",
+				Mode:             string(types.PoolModePrivate),
 				CreatedByTokenID: "owner-token",
 				Source:           model.SourceAWS,
 				BYOC: &model.BYOCProviderState{
@@ -1725,6 +1772,41 @@ func TestDeletePoolIsIdempotentWhenPoolAlreadyGone(t *testing.T) {
 	}
 }
 
+func TestDeletePoolAllowsAnotherTokenInWorkspace(t *testing.T) {
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{
+			"workspace-1": {
+				{
+					Name:             "pool-1",
+					CreatedByTokenID: "creator-token",
+					Mode:             string(types.PoolModePrivate),
+				},
+			},
+			"workspace-2": {
+				{Name: "pool-1", CreatedByTokenID: "other-workspace-token", Mode: string(types.PoolModePrivate)},
+			},
+		},
+	}
+	service := &Service{computeRepo: repo}
+
+	res, err := service.DeletePool(
+		testAuthContext("workspace-1", "current-token"),
+		&pb.DeletePoolRequest{Name: "pool-1"},
+	)
+	if err != nil {
+		t.Fatalf("DeletePool() error = %v", err)
+	}
+	if res == nil || !res.Ok {
+		t.Fatalf("DeletePool() response = %#v", res)
+	}
+	if got := len(repo.pools["workspace-1"]); got != 0 {
+		t.Fatalf("stored pool count = %d, want 0", got)
+	}
+	if got := len(repo.pools["workspace-2"]); got != 1 {
+		t.Fatalf("other workspace pool count = %d, want 1", got)
+	}
+}
+
 func TestScaleBYOCPoolUpdatesAWSAutoScalingGroupAndState(t *testing.T) {
 	ctx := testAuthContext("workspace-1", "owner-token")
 	resourceURL := awsCloudFormationStackURL("us-east-1", "beam-aws-cpu-test")
@@ -1736,6 +1818,7 @@ func TestScaleBYOCPoolUpdatesAWSAutoScalingGroupAndState(t *testing.T) {
 			"workspace-1": {
 				{
 					Name:             "aws-cpu",
+					Mode:             string(types.PoolModePrivate),
 					CreatedByTokenID: "owner-token",
 					Source:           model.SourceAWS,
 					Config:           &pb.PoolConfig{Name: "aws-cpu", Regions: []string{"us-east-1"}},
@@ -1839,6 +1922,7 @@ func TestScaleBYOCPoolPrunesDisconnectedMachinesAboveDesired(t *testing.T) {
 			"workspace-1": {
 				{
 					Name:             "aws-cpu",
+					Mode:             string(types.PoolModePrivate),
 					CreatedByTokenID: "owner-token",
 					Source:           model.SourceAWS,
 					Config:           &pb.PoolConfig{Name: "aws-cpu", Regions: []string{"us-east-1"}},
@@ -1906,6 +1990,7 @@ func TestScaleBYOCPoolRejectsStackWithoutControlRole(t *testing.T) {
 			"workspace-1": {
 				{
 					Name:             "aws-cpu",
+					Mode:             string(types.PoolModePrivate),
 					CreatedByTokenID: "owner-token",
 					Source:           model.SourceAWS,
 					Config:           &pb.PoolConfig{Name: "aws-cpu", Regions: []string{"us-east-1"}},
@@ -2101,11 +2186,11 @@ func TestJoinAgentLocksPoolGPUTypeFromFirstMachine(t *testing.T) {
 		},
 		joinTokens: map[string]*model.JoinTokenState{
 			hashComputeToken("join-token"): {
-				TokenHash:        hashComputeToken("join-token"),
-				WorkspaceID:      "workspace-1",
-				PoolName:         "gpu-pool",
-				CreatedByTokenID: "owner-token",
-				ExpiresAt:        now.Add(time.Hour),
+				TokenHash:     hashComputeToken("join-token"),
+				WorkspaceID:   "workspace-1",
+				PoolName:      "gpu-pool",
+				PoolCreatedAt: now,
+				ExpiresAt:     now.Add(time.Hour),
 			},
 		},
 	}
@@ -2133,6 +2218,7 @@ func TestJoinAgentLocksPoolGPUTypeFromFirstMachine(t *testing.T) {
 }
 
 func TestJoinAgentAcceptsPersistentJoinToken(t *testing.T) {
+	now := time.Now().UTC()
 	repo := &fakeComputeRepo{
 		pools: map[string][]*model.PoolState{
 			"workspace-1": {
@@ -2141,15 +2227,16 @@ func TestJoinAgentAcceptsPersistentJoinToken(t *testing.T) {
 					Name:             "aws-cpu",
 					Config:           &pb.PoolConfig{Name: "aws-cpu"},
 					CreatedByTokenID: "owner-token",
+					CreatedAt:        now,
 				},
 			},
 		},
 		joinTokens: map[string]*model.JoinTokenState{
 			hashComputeToken("byoc-token"): {
-				TokenHash:        hashComputeToken("byoc-token"),
-				WorkspaceID:      "workspace-1",
-				PoolName:         "aws-cpu",
-				CreatedByTokenID: "owner-token",
+				TokenHash:     hashComputeToken("byoc-token"),
+				WorkspaceID:   "workspace-1",
+				PoolName:      "aws-cpu",
+				PoolCreatedAt: now,
 			},
 		},
 	}
@@ -2180,16 +2267,17 @@ func TestJoinAgentRejectsPoolGPUMismatch(t *testing.T) {
 					Name:             "gpu-pool",
 					Config:           &pb.PoolConfig{Name: "gpu-pool", Gpu: []string{"A4000"}},
 					CreatedByTokenID: "owner-token",
+					CreatedAt:        now,
 				},
 			},
 		},
 		joinTokens: map[string]*model.JoinTokenState{
 			hashComputeToken("join-token"): {
-				TokenHash:        hashComputeToken("join-token"),
-				WorkspaceID:      "workspace-1",
-				PoolName:         "gpu-pool",
-				CreatedByTokenID: "owner-token",
-				ExpiresAt:        now.Add(time.Hour),
+				TokenHash:     hashComputeToken("join-token"),
+				WorkspaceID:   "workspace-1",
+				PoolName:      "gpu-pool",
+				PoolCreatedAt: now,
+				ExpiresAt:     now.Add(time.Hour),
 			},
 		},
 	}
@@ -2225,6 +2313,7 @@ func TestJoinAgentRejectsGPUAfterCPUOnlyPoolInitialized(t *testing.T) {
 					Name:             "cpu-pool",
 					Config:           &pb.PoolConfig{Name: "cpu-pool"},
 					CreatedByTokenID: "owner-token",
+					CreatedAt:        now,
 				},
 			},
 		},
@@ -2235,11 +2324,11 @@ func TestJoinAgentRejectsGPUAfterCPUOnlyPoolInitialized(t *testing.T) {
 		},
 		joinTokens: map[string]*model.JoinTokenState{
 			hashComputeToken("join-token"): {
-				TokenHash:        hashComputeToken("join-token"),
-				WorkspaceID:      "workspace-1",
-				PoolName:         "cpu-pool",
-				CreatedByTokenID: "owner-token",
-				ExpiresAt:        now.Add(time.Hour),
+				TokenHash:     hashComputeToken("join-token"),
+				WorkspaceID:   "workspace-1",
+				PoolName:      "cpu-pool",
+				PoolCreatedAt: now,
+				ExpiresAt:     now.Add(time.Hour),
 			},
 		},
 	}
@@ -2275,16 +2364,17 @@ func TestJoinAgentRejectsMixedMachineGPUTypes(t *testing.T) {
 					Name:             "gpu-pool",
 					Config:           &pb.PoolConfig{Name: "gpu-pool"},
 					CreatedByTokenID: "owner-token",
+					CreatedAt:        now,
 				},
 			},
 		},
 		joinTokens: map[string]*model.JoinTokenState{
 			hashComputeToken("join-token"): {
-				TokenHash:        hashComputeToken("join-token"),
-				WorkspaceID:      "workspace-1",
-				PoolName:         "gpu-pool",
-				CreatedByTokenID: "owner-token",
-				ExpiresAt:        now.Add(time.Hour),
+				TokenHash:     hashComputeToken("join-token"),
+				WorkspaceID:   "workspace-1",
+				PoolName:      "gpu-pool",
+				PoolCreatedAt: now,
+				ExpiresAt:     now.Add(time.Hour),
 			},
 		},
 	}
@@ -2804,6 +2894,7 @@ func TestLaunchPoolCapacityAddsReservationToExistingPool(t *testing.T) {
 			"workspace-1": {
 				{
 					Name:                 "pool-1",
+					Mode:                 string(types.PoolModePrivate),
 					Selector:             "pool-1",
 					CreatedByTokenID:     "token-1",
 					ReservedNodes:        1,
@@ -4299,11 +4390,12 @@ func TestReleasePrivateMachineRejectsAmbiguousUnassignedManagedReservations(t *t
 	}
 }
 
-func TestDeletePoolMachineReleasesManagedReservationID(t *testing.T) {
+func TestDeletePrivateMachineReleasesManagedReservationID(t *testing.T) {
 	now := time.Now().UTC()
 	state := &model.PoolState{
 		WorkspaceID:      "workspace-1",
 		Name:             "pool-1",
+		Mode:             string(types.PoolModePrivate),
 		CreatedByTokenID: "token-owner",
 		Reservations: []model.Reservation{
 			{
@@ -4323,18 +4415,18 @@ func TestDeletePoolMachineReleasesManagedReservationID(t *testing.T) {
 	}
 	service := &Service{computeRepo: repo}
 
-	_, res, err := service.DeletePoolMachine(
+	res, err := service.DeletePrivateMachine(
 		testAuthContext("workspace-1", "token-owner"),
 		&pb.DeleteMachineRequest{PoolName: "pool-1", MachineId: "reservation-1"},
 	)
 	if err != nil {
-		t.Fatalf("DeletePoolMachine() error = %v", err)
+		t.Fatalf("DeletePrivateMachine() error = %v", err)
 	}
 	if res == nil || !res.Ok {
-		t.Fatalf("DeletePoolMachine() response = %#v", res)
+		t.Fatalf("DeletePrivateMachine() response = %#v", res)
 	}
 	if !repo.savedPool {
-		t.Fatal("DeletePoolMachine() did not persist the reservation transition")
+		t.Fatal("DeletePrivateMachine() did not persist the reservation transition")
 	}
 	if got, want := state.Reservations[0].Status, model.ReservationTerminating; got != want {
 		t.Fatalf("reservation status = %q, want %q", got, want)
@@ -4347,7 +4439,7 @@ func TestDeletePoolMachineReleasesManagedReservationID(t *testing.T) {
 	}
 }
 
-func TestDeletePoolMachineBYOCMissingMachineIsIdempotentAndCleansDeletedPool(t *testing.T) {
+func TestDeletePrivateMachineBYOCMissingMachineIsIdempotentAndCleansDeletedPool(t *testing.T) {
 	ctx := testAuthContext("workspace-1", "owner-token")
 	resourceURL := awsCloudFormationStackURL("us-east-1", "beam-aws-cpu-test")
 	repo := &fakeComputeRepo{
@@ -4355,6 +4447,7 @@ func TestDeletePoolMachineBYOCMissingMachineIsIdempotentAndCleansDeletedPool(t *
 			"workspace-1": {
 				{
 					Name:             "aws-cpu",
+					Mode:             string(types.PoolModePrivate),
 					CreatedByTokenID: "owner-token",
 					Source:           model.SourceAWS,
 					Config:           &pb.PoolConfig{Name: "aws-cpu", Regions: []string{"us-east-1"}},
@@ -4388,22 +4481,22 @@ func TestDeletePoolMachineBYOCMissingMachineIsIdempotentAndCleansDeletedPool(t *
 		awsBYOCResourceDeleted = oldResourceDeleted
 	}()
 
-	_, res, err := (&Service{computeRepo: repo}).DeletePoolMachine(
+	res, err := (&Service{computeRepo: repo}).DeletePrivateMachine(
 		ctx,
 		&pb.DeleteMachineRequest{PoolName: "aws-cpu", MachineId: "machine-already-gone"},
 	)
 	if err != nil {
-		t.Fatalf("DeletePoolMachine() error = %v", err)
+		t.Fatalf("DeletePrivateMachine() error = %v", err)
 	}
 	if res == nil || !res.Ok {
-		t.Fatalf("DeletePoolMachine() response = %#v", res)
+		t.Fatalf("DeletePrivateMachine() response = %#v", res)
 	}
 	if got := len(repo.pools["workspace-1"]); got != 0 {
 		t.Fatalf("stored pool count = %d, want 0", got)
 	}
 }
 
-func TestDeletePoolMachineMissingOwnedPrivateMachineIsIdempotent(t *testing.T) {
+func TestDeletePrivateMachineMissingPrivateMachineIsIdempotent(t *testing.T) {
 	ctx := testAuthContext("workspace-1", "owner-token")
 	repo := &fakeComputeRepo{
 		pools: map[string][]*model.PoolState{
@@ -4417,23 +4510,64 @@ func TestDeletePoolMachineMissingOwnedPrivateMachineIsIdempotent(t *testing.T) {
 		},
 	}
 
-	_, res, err := (&Service{computeRepo: repo}).DeletePoolMachine(
+	res, err := (&Service{computeRepo: repo}).DeletePrivateMachine(
 		ctx,
 		&pb.DeleteMachineRequest{PoolName: "pool-1", MachineId: "machine-already-deleted"},
 	)
 	if err != nil {
-		t.Fatalf("DeletePoolMachine() error = %v", err)
+		t.Fatalf("DeletePrivateMachine() error = %v", err)
 	}
 	if res == nil || !res.Ok {
-		t.Fatalf("DeletePoolMachine() response = %#v", res)
+		t.Fatalf("DeletePrivateMachine() response = %#v", res)
 	}
 }
 
-func TestDeletePoolMachineReleasesManagedMachineID(t *testing.T) {
+func TestDeletePrivateMachineAllowsAnotherTokenInWorkspace(t *testing.T) {
+	ctx := testAuthContext("workspace-1", "current-token")
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{
+			"workspace-1": {
+				{
+					Name:             "pool-1",
+					CreatedByTokenID: "creator-token",
+					Mode:             string(types.PoolModePrivate),
+				},
+			},
+		},
+		machines: map[string][]*model.AgentTokenState{
+			fakeComputeKey("workspace-1", "pool-1"): {
+				{WorkspaceID: "workspace-1", PoolName: "pool-1", MachineID: "machine-1"},
+			},
+			fakeComputeKey("workspace-2", "pool-1"): {
+				{WorkspaceID: "workspace-2", PoolName: "pool-1", MachineID: "machine-1"},
+			},
+		},
+	}
+
+	res, err := (&Service{computeRepo: repo}).DeletePrivateMachine(
+		ctx,
+		&pb.DeleteMachineRequest{PoolName: "pool-1", MachineId: "machine-1"},
+	)
+	if err != nil {
+		t.Fatalf("DeletePrivateMachine() error = %v", err)
+	}
+	if res == nil || !res.Ok {
+		t.Fatalf("DeletePrivateMachine() response = %#v", res)
+	}
+	if got := len(repo.machines[fakeComputeKey("workspace-1", "pool-1")]); got != 0 {
+		t.Fatalf("stored machine count = %d, want 0", got)
+	}
+	if got := len(repo.machines[fakeComputeKey("workspace-2", "pool-1")]); got != 1 {
+		t.Fatalf("other workspace machine count = %d, want 1", got)
+	}
+}
+
+func TestDeletePrivateMachineReleasesManagedMachineID(t *testing.T) {
 	now := time.Now().UTC()
 	state := &model.PoolState{
 		WorkspaceID:      "workspace-1",
 		Name:             "pool-1",
+		Mode:             string(types.PoolModePrivate),
 		CreatedByTokenID: "token-owner",
 		Reservations: []model.Reservation{
 			{
@@ -4454,26 +4588,27 @@ func TestDeletePoolMachineReleasesManagedMachineID(t *testing.T) {
 	}
 	service := &Service{computeRepo: repo}
 
-	_, res, err := service.DeletePoolMachine(
+	res, err := service.DeletePrivateMachine(
 		testAuthContext("workspace-1", "token-owner"),
 		&pb.DeleteMachineRequest{PoolName: "pool-1", MachineId: "machine-1"},
 	)
 	if err != nil {
-		t.Fatalf("DeletePoolMachine() error = %v", err)
+		t.Fatalf("DeletePrivateMachine() error = %v", err)
 	}
 	if res == nil || !res.Ok {
-		t.Fatalf("DeletePoolMachine() response = %#v", res)
+		t.Fatalf("DeletePrivateMachine() response = %#v", res)
 	}
 	if got, want := state.Reservations[0].Status, model.ReservationTerminating; got != want {
 		t.Fatalf("reservation status = %q, want %q", got, want)
 	}
 }
 
-func TestDeletePoolMachineReleasesManagedProviderInstanceID(t *testing.T) {
+func TestDeletePrivateMachineReleasesManagedProviderInstanceID(t *testing.T) {
 	now := time.Now().UTC()
 	state := &model.PoolState{
 		WorkspaceID:      "workspace-1",
 		Name:             "pool-1",
+		Mode:             string(types.PoolModePrivate),
 		CreatedByTokenID: "token-owner",
 		Reservations: []model.Reservation{
 			{
@@ -4494,26 +4629,27 @@ func TestDeletePoolMachineReleasesManagedProviderInstanceID(t *testing.T) {
 	}
 	service := &Service{computeRepo: repo}
 
-	_, res, err := service.DeletePoolMachine(
+	res, err := service.DeletePrivateMachine(
 		testAuthContext("workspace-1", "token-owner"),
 		&pb.DeleteMachineRequest{PoolName: "pool-1", MachineId: "instance-1"},
 	)
 	if err != nil {
-		t.Fatalf("DeletePoolMachine() error = %v", err)
+		t.Fatalf("DeletePrivateMachine() error = %v", err)
 	}
 	if res == nil || !res.Ok {
-		t.Fatalf("DeletePoolMachine() response = %#v", res)
+		t.Fatalf("DeletePrivateMachine() response = %#v", res)
 	}
 	if got, want := state.Reservations[0].Status, model.ReservationTerminating; got != want {
 		t.Fatalf("reservation status = %q, want %q", got, want)
 	}
 }
 
-func TestDeletePoolMachineByReservationIDCleansLinkedMachine(t *testing.T) {
+func TestDeletePrivateMachineByReservationIDCleansLinkedMachine(t *testing.T) {
 	now := time.Now().UTC()
 	state := &model.PoolState{
 		WorkspaceID:      "workspace-1",
 		Name:             "pool-1",
+		Mode:             string(types.PoolModePrivate),
 		CreatedByTokenID: "token-owner",
 		Reservations: []model.Reservation{
 			{
@@ -4542,32 +4678,33 @@ func TestDeletePoolMachineByReservationIDCleansLinkedMachine(t *testing.T) {
 	}
 	service := &Service{computeRepo: repo}
 
-	_, res, err := service.DeletePoolMachine(
+	res, err := service.DeletePrivateMachine(
 		testAuthContext("workspace-1", "token-owner"),
 		&pb.DeleteMachineRequest{PoolName: "pool-1", MachineId: "reservation-1"},
 	)
 	if err != nil {
-		t.Fatalf("DeletePoolMachine() error = %v", err)
+		t.Fatalf("DeletePrivateMachine() error = %v", err)
 	}
 	if res == nil || !res.Ok {
-		t.Fatalf("DeletePoolMachine() response = %#v", res)
+		t.Fatalf("DeletePrivateMachine() response = %#v", res)
 	}
 	if got, want := state.Reservations[0].Status, model.ReservationTerminating; got != want {
 		t.Fatalf("reservation status = %q, want %q", got, want)
 	}
 	if machine.Schedulable {
-		t.Fatal("DeletePoolMachine() did not mark linked machine unschedulable")
+		t.Fatal("DeletePrivateMachine() did not mark linked machine unschedulable")
 	}
 	if got := len(repo.machines[fakeComputeKey("workspace-1", "pool-1")]); got != 0 {
 		t.Fatalf("machine count after release = %d, want 0", got)
 	}
 }
 
-func TestDeletePoolMachineDismissesFailedManagedReservation(t *testing.T) {
+func TestDeletePrivateMachineDismissesFailedManagedReservation(t *testing.T) {
 	now := time.Now().UTC()
 	state := &model.PoolState{
 		WorkspaceID:      "workspace-1",
 		Name:             "pool-1",
+		Mode:             string(types.PoolModePrivate),
 		CreatedByTokenID: "token-owner",
 		ReservedNodes:    1,
 		Reservations: []model.Reservation{
@@ -4590,18 +4727,18 @@ func TestDeletePoolMachineDismissesFailedManagedReservation(t *testing.T) {
 	}
 	service := &Service{computeRepo: repo}
 
-	_, res, err := service.DeletePoolMachine(
+	res, err := service.DeletePrivateMachine(
 		testAuthContext("workspace-1", "token-owner"),
 		&pb.DeleteMachineRequest{PoolName: "pool-1", MachineId: "machine-1"},
 	)
 	if err != nil {
-		t.Fatalf("DeletePoolMachine() error = %v", err)
+		t.Fatalf("DeletePrivateMachine() error = %v", err)
 	}
 	if res == nil || !res.Ok {
-		t.Fatalf("DeletePoolMachine() response = %#v", res)
+		t.Fatalf("DeletePrivateMachine() response = %#v", res)
 	}
 	if !repo.savedPool {
-		t.Fatal("DeletePoolMachine() did not persist the failed reservation removal")
+		t.Fatal("DeletePrivateMachine() did not persist the failed reservation removal")
 	}
 	if got := len(state.Reservations); got != 0 {
 		t.Fatalf("reservation count after release = %d, want 0", got)
@@ -4611,11 +4748,12 @@ func TestDeletePoolMachineDismissesFailedManagedReservation(t *testing.T) {
 	}
 }
 
-func TestDeletePoolMachineDismissesFailedUnlinkedManagedReservation(t *testing.T) {
+func TestDeletePrivateMachineDismissesFailedUnlinkedManagedReservation(t *testing.T) {
 	now := time.Now().UTC()
 	state := &model.PoolState{
 		WorkspaceID:      "workspace-1",
 		Name:             "pool-1",
+		Mode:             string(types.PoolModePrivate),
 		CreatedByTokenID: "token-owner",
 		ReservedNodes:    1,
 		Reservations: []model.Reservation{
@@ -4637,18 +4775,18 @@ func TestDeletePoolMachineDismissesFailedUnlinkedManagedReservation(t *testing.T
 	}
 	service := &Service{computeRepo: repo}
 
-	_, res, err := service.DeletePoolMachine(
+	res, err := service.DeletePrivateMachine(
 		testAuthContext("workspace-1", "token-owner"),
 		&pb.DeleteMachineRequest{PoolName: "pool-1", MachineId: "reservation-1"},
 	)
 	if err != nil {
-		t.Fatalf("DeletePoolMachine() error = %v", err)
+		t.Fatalf("DeletePrivateMachine() error = %v", err)
 	}
 	if res == nil || !res.Ok {
-		t.Fatalf("DeletePoolMachine() response = %#v", res)
+		t.Fatalf("DeletePrivateMachine() response = %#v", res)
 	}
 	if !repo.savedPool {
-		t.Fatal("DeletePoolMachine() did not persist the failed reservation removal")
+		t.Fatal("DeletePrivateMachine() did not persist the failed reservation removal")
 	}
 	if got := len(state.Reservations); got != 0 {
 		t.Fatalf("reservation count after release = %d, want 0", got)
@@ -5710,7 +5848,7 @@ func TestMarketplaceJoinEnforcesListingGPUType(t *testing.T) {
 	}
 }
 
-func TestMarketplaceJoinCommandUsesPoolOwnerToken(t *testing.T) {
+func TestMarketplaceJoinCommandAllowsAnotherWorkspaceToken(t *testing.T) {
 	repo := &fakeComputeRepo{}
 	service := &Service{computeRepo: repo}
 

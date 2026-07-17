@@ -121,7 +121,7 @@ type JoinTokenState struct {
 	WorkspaceID          string    `json:"workspace_id"`
 	PoolName             string    `json:"pool_name"`
 	MachineID            string    `json:"machine_id,omitempty"`
-	CreatedByTokenID     string    `json:"created_by_token_id"`
+	PoolCreatedAt        time.Time `json:"pool_created_at,omitempty"`
 	CreatedAt            time.Time `json:"created_at"`
 	Mode                 string    `json:"mode,omitempty"`
 	MarketplaceListingID string    `json:"marketplace_listing_id,omitempty"`

@@ -451,9 +451,9 @@ const (
 	WorkerPoolManagementSourceConfig WorkerPoolManagementSource = "config"
 	WorkerPoolManagementSourceAPI    WorkerPoolManagementSource = "api"
 
-	WorkerPoolControllerLocal          WorkerPoolController = "local"
-	WorkerPoolControllerAgent          WorkerPoolController = "agent"
-	WorkerPoolControllerExternalLegacy WorkerPoolController = "external_legacy"
+	WorkerPoolControllerLocal    WorkerPoolController = "local"
+	WorkerPoolControllerAgent    WorkerPoolController = "agent"
+	WorkerPoolControllerProvider WorkerPoolController = "provider"
 )
 
 // AgentHosted reports whether pools of this mode run on agent-managed

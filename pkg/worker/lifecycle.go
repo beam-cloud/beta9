@@ -1623,15 +1623,16 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 			s.startAutoCheckpoint(ctx, request, outputLogger, checkpointPIDChan)
 		}
 	}
-	fallbackFromCheckpoint := func(startCheckpoint bool) {
+	fallbackFromCheckpoint := func(startCheckpoint bool) error {
 		restoringCheckpoint = false
 		request.Checkpoint = nil
 		if err := s.prepareRestoreFallback(request, originalConfig); err != nil {
-			log.Warn().Err(err).Str("container_id", request.ContainerId).Msg("failed to prepare checkpoint restore fallback")
+			return fmt.Errorf("prepare checkpoint restore fallback: %w", err)
 		}
 		if startCheckpoint {
 			startAutoCheckpoint()
 		}
+		return nil
 	}
 
 	if !restoringCheckpoint {
@@ -1701,7 +1702,10 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 				finishRuntimeStarted()
 				return -1, restoreErr
 			}
-			fallbackFromCheckpoint(true)
+			if err := fallbackFromCheckpoint(true); err != nil {
+				finishRuntimeStarted()
+				return -1, err
+			}
 		} else {
 			if originalConfigErr == nil {
 				if err := s.deferCheckpointRestoreCPUAffinity(request, originalConfig); err != nil {
@@ -1738,7 +1742,12 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 			if restoreStarted {
 				finishRuntimeStarted()
 			}
-			fallbackFromCheckpoint(!restoreStarted)
+			if err := fallbackFromCheckpoint(!restoreStarted); err != nil {
+				if !restoreStarted {
+					finishRuntimeStarted()
+				}
+				return exitCode, err
+			}
 		}
 	}
 

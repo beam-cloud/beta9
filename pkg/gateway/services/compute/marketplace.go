@@ -29,7 +29,7 @@ var errMarketplaceListingPoolChanged = errors.New("marketplace listing pool chan
 
 type marketplaceAuthContext struct {
 	workspaceID  string
-	ownerTokenID string
+	actorTokenID string
 }
 
 // marketplaceOfferStats aggregates the live agent machine states behind a
@@ -46,7 +46,7 @@ type marketplaceOfferStats struct {
 
 func (s *Service) CreateMarketplaceListing(ctx context.Context, in *pb.CreateMarketplaceListingRequest) (*pb.CreateMarketplaceListingResponse, error) {
 	authCtx := marketplaceAuthFromContext(ctx)
-	if !authCtx.hasOwner() {
+	if !authCtx.valid() {
 		return &pb.CreateMarketplaceListingResponse{Ok: false, ErrMsg: marketplaceErrMissingAuth}, nil
 	}
 
@@ -59,7 +59,7 @@ func (s *Service) CreateMarketplaceListing(ctx context.Context, in *pb.CreateMar
 	listing.PoolName = model.MarketplacePoolNameForSeller(authCtx.workspaceID, firstNonEmpty(in.GetPoolName(), listing.GPU))
 	listing.CreatedAt = now
 	listing.UpdatedAt = now
-	if err := s.saveMarketplaceListing(ctx, listing, authCtx.ownerTokenID, nil); err != nil {
+	if err := s.saveMarketplaceListing(ctx, listing, authCtx.actorTokenID, nil); err != nil {
 		return &pb.CreateMarketplaceListingResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	return &pb.CreateMarketplaceListingResponse{Ok: true, Listing: s.marketplaceListingToProto(ctx, listing)}, nil
@@ -67,7 +67,7 @@ func (s *Service) CreateMarketplaceListing(ctx context.Context, in *pb.CreateMar
 
 func (s *Service) UpdateMarketplaceListing(ctx context.Context, in *pb.UpdateMarketplaceListingRequest) (*pb.UpdateMarketplaceListingResponse, error) {
 	authCtx := marketplaceAuthFromContext(ctx)
-	if !authCtx.hasOwner() {
+	if !authCtx.valid() {
 		return &pb.UpdateMarketplaceListingResponse{Ok: false, ErrMsg: marketplaceErrMissingAuth}, nil
 	}
 	listingID := strings.TrimSpace(in.GetListingId())
@@ -90,7 +90,7 @@ func (s *Service) UpdateMarketplaceListing(ctx context.Context, in *pb.UpdateMar
 			if err := applyMarketplaceListingUpdate(&updated, in); err != nil {
 				return err
 			}
-			if err := s.saveMarketplaceListingLocked(lockCtx, &updated, authCtx.ownerTokenID, &previous); err != nil {
+			if err := s.saveMarketplaceListingLocked(lockCtx, &updated, authCtx.actorTokenID, &previous); err != nil {
 				return err
 			}
 			listing = &updated
@@ -108,9 +108,9 @@ func (s *Service) UpdateMarketplaceListing(ctx context.Context, in *pb.UpdateMar
 
 func (s *Service) DeleteMarketplaceListing(ctx context.Context, in *pb.DeleteMarketplaceListingRequest) (*pb.DeleteMarketplaceListingResponse, error) {
 	// Deleting releases machines and tears down the pool, so it requires the
-	// same owner-scoped auth as create/update.
+	// same workspace auth as create and update.
 	authCtx := marketplaceAuthFromContext(ctx)
-	if !authCtx.hasOwner() {
+	if !authCtx.valid() {
 		return &pb.DeleteMarketplaceListingResponse{Ok: false, ErrMsg: marketplaceErrMissingAuth}, nil
 	}
 	listingID := strings.TrimSpace(in.GetListingId())
@@ -228,25 +228,24 @@ func (s *Service) ListMarketplaceListings(ctx context.Context, in *pb.ListMarket
 
 func (s *Service) GetMarketplaceJoinCommand(ctx context.Context, in *pb.GetMarketplaceJoinCommandRequest) (*pb.GetMarketplaceJoinCommandResponse, error) {
 	authCtx := marketplaceAuthFromContext(ctx)
-	if !authCtx.hasOwner() {
+	if !authCtx.valid() {
 		return &pb.GetMarketplaceJoinCommandResponse{Ok: false, ErrMsg: marketplaceErrMissingAuth}, nil
 	}
 	listing, errMsg := s.marketplaceListing(ctx, authCtx.workspaceID, in.GetListingId())
 	if errMsg != "" {
 		return &pb.GetMarketplaceJoinCommandResponse{Ok: false, ErrMsg: errMsg}, nil
 	}
-	if err := s.ensureMarketplacePoolState(ctx, listing, authCtx.ownerTokenID); err != nil {
+	if err := s.ensureMarketplacePoolState(ctx, listing, authCtx.actorTokenID); err != nil {
 		return &pb.GetMarketplaceJoinCommandResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	poolState, err := s.computeRepo.GetPoolState(ctx, listing.SellerWorkspaceID, listing.PoolName)
 	if err != nil {
 		return &pb.GetMarketplaceJoinCommandResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
-	ownerTokenID := authCtx.ownerTokenID
-	if poolState != nil {
-		ownerTokenID = firstNonEmpty(poolState.CreatedByTokenID, ownerTokenID)
+	if poolState == nil || poolState.CreatedAt.IsZero() {
+		return &pb.GetMarketplaceJoinCommandResponse{Ok: false, ErrMsg: "listing pool is unavailable"}, nil
 	}
-	token, tokenState, err := s.createMarketplaceJoinTokenState(ctx, listing, ownerTokenID, in.GetTtl())
+	token, tokenState, err := s.createMarketplaceJoinTokenState(ctx, listing, poolState.CreatedAt, in.GetTtl())
 	if err != nil {
 		return &pb.GetMarketplaceJoinCommandResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
@@ -383,7 +382,7 @@ func marketplaceAuthFromContext(ctx context.Context) marketplaceAuthContext {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 	return marketplaceAuthContext{
 		workspaceID:  computeWorkspaceID(authInfo),
-		ownerTokenID: computeOwnerTokenID(authInfo),
+		actorTokenID: computeActorTokenID(authInfo),
 	}
 }
 
@@ -391,8 +390,8 @@ func (a marketplaceAuthContext) hasWorkspace() bool {
 	return a.workspaceID != ""
 }
 
-func (a marketplaceAuthContext) hasOwner() bool {
-	return a.workspaceID != "" && a.ownerTokenID != ""
+func (a marketplaceAuthContext) valid() bool {
+	return a.workspaceID != "" && a.actorTokenID != ""
 }
 
 func applyMarketplaceListingUpdate(listing *model.MarketplaceListingState, in *pb.UpdateMarketplaceListingRequest) error {
@@ -471,23 +470,23 @@ func normalizeMarketplaceGPU(value string) string {
 	return string(types.NormalizeGPUType(strings.TrimSpace(value)))
 }
 
-func (s *Service) saveMarketplaceListing(ctx context.Context, listing *model.MarketplaceListingState, ownerTokenID string, previous *model.MarketplaceListingState) error {
+func (s *Service) saveMarketplaceListing(ctx context.Context, listing *model.MarketplaceListingState, actorTokenID string, previous *model.MarketplaceListingState) error {
 	if err := validateMarketplaceListing(listing); err != nil {
 		return err
 	}
 	return s.withPoolStateLock(ctx, listing.SellerWorkspaceID, listing.PoolName, func(lockCtx context.Context) error {
-		return s.saveMarketplaceListingLocked(lockCtx, listing, ownerTokenID, previous)
+		return s.saveMarketplaceListingLocked(lockCtx, listing, actorTokenID, previous)
 	})
 }
 
-func (s *Service) saveMarketplaceListingLocked(ctx context.Context, listing *model.MarketplaceListingState, ownerTokenID string, previous *model.MarketplaceListingState) error {
+func (s *Service) saveMarketplaceListingLocked(ctx context.Context, listing *model.MarketplaceListingState, actorTokenID string, previous *model.MarketplaceListingState) error {
 	if err := s.validateMarketplacePoolAssignment(ctx, listing); err != nil {
 		return err
 	}
 	if err := s.computeRepo.SaveMarketplaceListing(ctx, listing); err != nil {
 		return err
 	}
-	if err := s.ensureMarketplacePoolStateLocked(ctx, listing, ownerTokenID); err != nil {
+	if err := s.ensureMarketplacePoolStateLocked(ctx, listing, actorTokenID); err != nil {
 		if previous == nil {
 			return errors.Join(err, s.computeRepo.DeleteMarketplaceListing(ctx, listing.SellerWorkspaceID, listing.ID))
 		}
@@ -496,26 +495,26 @@ func (s *Service) saveMarketplaceListingLocked(ctx context.Context, listing *mod
 	return nil
 }
 
-func (s *Service) ensureMarketplacePoolState(ctx context.Context, listing *model.MarketplaceListingState, ownerTokenID string) error {
+func (s *Service) ensureMarketplacePoolState(ctx context.Context, listing *model.MarketplaceListingState, actorTokenID string) error {
 	if listing == nil || listing.PoolName == "" {
 		return fmt.Errorf("listing pool name is required")
 	}
 	return s.withPoolStateLock(ctx, listing.SellerWorkspaceID, listing.PoolName, func(lockCtx context.Context) error {
-		return s.ensureMarketplacePoolStateLocked(lockCtx, listing, ownerTokenID)
+		return s.ensureMarketplacePoolStateLocked(lockCtx, listing, actorTokenID)
 	})
 }
 
-func (s *Service) ensureMarketplacePoolStateLocked(ctx context.Context, listing *model.MarketplaceListingState, ownerTokenID string) error {
+func (s *Service) ensureMarketplacePoolStateLocked(ctx context.Context, listing *model.MarketplaceListingState, actorTokenID string) error {
 	now := time.Now().UTC()
 	existing, err := s.computeRepo.GetPoolState(ctx, listing.SellerWorkspaceID, listing.PoolName)
 	if err != nil {
 		return err
 	}
 	createdAt := now
-	createdBy := ownerTokenID
+	createdBy := actorTokenID
 	if existing != nil {
 		createdAt = existing.CreatedAt
-		createdBy = firstNonEmpty(existing.CreatedByTokenID, ownerTokenID)
+		createdBy = firstNonEmpty(existing.CreatedByTokenID, actorTokenID)
 	}
 	state := marketplacePoolState(listing, createdBy, createdAt, now)
 	if existing != nil {
@@ -574,7 +573,7 @@ func marketplaceListingRuntime(listing *model.MarketplaceListingState) string {
 	return types.MarketplaceContainerRuntimeForGPU(listing.GPU)
 }
 
-func (s *Service) createMarketplaceJoinTokenState(ctx context.Context, listing *model.MarketplaceListingState, ownerTokenID, ttlValue string) (string, *model.JoinTokenState, error) {
+func (s *Service) createMarketplaceJoinTokenState(ctx context.Context, listing *model.MarketplaceListingState, poolCreatedAt time.Time, ttlValue string) (string, *model.JoinTokenState, error) {
 	ttl, err := model.ParseTTL(ttlValue)
 	if err != nil {
 		return "", nil, err
@@ -594,7 +593,7 @@ func (s *Service) createMarketplaceJoinTokenState(ctx context.Context, listing *
 		TokenHash:            hashComputeToken(token),
 		WorkspaceID:          listing.SellerWorkspaceID,
 		PoolName:             listing.PoolName,
-		CreatedByTokenID:     ownerTokenID,
+		PoolCreatedAt:        poolCreatedAt,
 		CreatedAt:            now,
 		ExpiresAt:            now.Add(ttl),
 		Mode:                 string(types.PoolModeMarketplace),

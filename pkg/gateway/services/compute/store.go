@@ -87,7 +87,7 @@ func (s *Service) currentComputeAgentState(ctx context.Context, state *model.Age
 	return current, nil
 }
 
-func (s *Service) getOwnedPrivatePoolState(ctx context.Context, authInfo *auth.AuthInfo, poolName string) (*model.PoolState, error) {
+func (s *Service) getWorkspacePrivatePoolState(ctx context.Context, authInfo *auth.AuthInfo, poolName string) (*model.PoolState, error) {
 	workspaceID := computeWorkspaceID(authInfo)
 	if workspaceID == "" {
 		return nil, fmt.Errorf("missing workspace auth")
@@ -97,20 +97,13 @@ func (s *Service) getOwnedPrivatePoolState(ctx context.Context, authInfo *auth.A
 	if err != nil {
 		return nil, err
 	}
-	if state == nil || !poolStateIsPrivate(state) || !computePoolCreatedByAuth(state, authInfo) {
+	if state == nil || !poolStateIsPrivate(state) {
 		return nil, nil
 	}
 	return state, nil
 }
 
-func computePoolCreatedByAuth(state *model.PoolState, authInfo *auth.AuthInfo) bool {
-	if state == nil || state.CreatedByTokenID == "" {
-		return false
-	}
-	return state.CreatedByTokenID == computeOwnerTokenID(authInfo)
-}
-
-func computeOwnerTokenID(authInfo *auth.AuthInfo) string {
+func computeActorTokenID(authInfo *auth.AuthInfo) string {
 	if authInfo == nil || authInfo.Token == nil {
 		return ""
 	}

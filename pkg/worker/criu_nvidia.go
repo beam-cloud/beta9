@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,14 +20,15 @@ import (
 )
 
 const (
-	minNvidiaDriverVersion           = 570
-	gvisorCheckpointAttempts         = 4
-	gvisorCheckpointRetryDelay       = 250 * time.Millisecond
-	nvidiaRestoreAttempts            = 2
-	nvidiaRestoreRetryDelay          = 250 * time.Millisecond
-	maxRestoreStderrBytes            = 4096
-	maxRestoreCaptureBytes           = 64 << 10
-	checkpointCloseExternalTCPMarker = "beam-close-external-tcp"
+	minNvidiaDriverVersion      = 570
+	gvisorCheckpointAttempts    = 4
+	gvisorCheckpointRetryDelay  = 250 * time.Millisecond
+	nvidiaRestoreAttempts       = 2
+	nvidiaRestoreRetryDelay     = 250 * time.Millisecond
+	maxRestoreStderrBytes       = 4096
+	maxRestoreCaptureBytes      = 64 << 10
+	checkpointNetworkMapFile    = "beam-network-map-v1"
+	checkpointNetworkMapVersion = "v1"
 )
 
 type restoreOutputCapture struct {
@@ -75,6 +77,19 @@ func (e *ErrCRIURestoreFailed) Error() string {
 func IsCRIURestoreError(err error) bool {
 	var criuErr *ErrCRIURestoreFailed
 	return errors.As(err, &criuErr)
+}
+
+type ErrCheckpointHostIncompatible struct {
+	Stderr string
+}
+
+func (e *ErrCheckpointHostIncompatible) Error() string {
+	return fmt.Sprintf("checkpoint is incompatible with this worker: %s", e.Stderr)
+}
+
+func IsCheckpointHostIncompatible(err error) bool {
+	var compatibilityErr *ErrCheckpointHostIncompatible
+	return errors.As(err, &compatibilityErr)
 }
 
 type NvidiaCRIUManager struct {
@@ -185,19 +200,18 @@ func waitCheckpointRetry(ctx context.Context, attempt int) error {
 func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, rt runtime.Runtime, opts *RestoreOpts) (int, error) {
 	bundlePath := filepath.Dir(opts.configPath)
 	imagePath := filepath.Join(c.checkpointRoot, opts.checkpoint.CheckpointId)
-	workDir := filepath.Join(types.AgentTmpPath, opts.checkpoint.CheckpointId)
+	workDir := filepath.Join(types.AgentTmpPath, opts.checkpoint.CheckpointId, opts.request.ContainerId)
 	preserveOpenTCP := shouldPreservePodTCPOnRestore(opts)
-	if preserveOpenTCP {
-		markerPath := filepath.Join(imagePath, checkpointCloseExternalTCPMarker)
-		if err := os.WriteFile(markerPath, nil, 0600); err != nil {
-			return -1, fmt.Errorf("failed to configure selective TCP restore: %w", err)
-		}
-	}
 
 	// Setup work directory for restore files
 	err := c.setupRestoreWorkDir(workDir)
 	if err != nil {
 		return -1, fmt.Errorf("failed to setup restore work directory: %w", err)
+	}
+	if preserveOpenTCP {
+		if err := writeCheckpointNetworkMap(workDir, opts.checkpoint.ContainerIp, opts.containerIP); err != nil {
+			return -1, fmt.Errorf("failed to configure checkpoint network restore: %w", err)
+		}
 	}
 
 	attempts := 1
@@ -208,17 +222,41 @@ func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, rt runtime.Ru
 	var exitCode int
 	for attempt := 1; attempt <= attempts; attempt++ {
 		outputCapture := newRestoreOutputCapture(opts.outputWriter)
+		runtimeStarted := opts.started
+		var pendingStarted chan int
+		if opts.validate != nil {
+			pendingStarted = make(chan int, 1)
+			runtimeStarted = pendingStarted
+		}
 
 		exitCode, err = rt.Restore(ctx, opts.request.ContainerId, &runtime.RestoreOpts{
 			ImagePath:    imagePath,
 			WorkDir:      workDir,
 			BundlePath:   bundlePath,
 			OutputWriter: outputCapture,
-			Started:      opts.started,
+			Started:      runtimeStarted,
 			AllowOpenTCP: preserveOpenTCP,
 			TCPClose:     !preserveOpenTCP,
 		})
 		stderr := outputCapture.stop()
+		if err == nil && pendingStarted != nil {
+			var pid int
+			select {
+			case pid = <-pendingStarted:
+			case <-ctx.Done():
+				err = ctx.Err()
+			}
+			if err == nil {
+				err = opts.validate(ctx, rt)
+			}
+			if err == nil && opts.started != nil {
+				select {
+				case opts.started <- pid:
+				case <-ctx.Done():
+					err = ctx.Err()
+				}
+			}
+		}
 		if err == nil {
 			break
 		}
@@ -254,9 +292,28 @@ func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, rt runtime.Ru
 
 func classifyRestoreError(runtimeName string, err error, stderr string) error {
 	if strings.Contains(stderr, "criu failed") && strings.Contains(stderr, "type RESTORE") {
+		if checkpointHostIncompatible(stderr) {
+			return &ErrCheckpointHostIncompatible{Stderr: stderr}
+		}
 		return &ErrCRIURestoreFailed{Stderr: stderr}
 	}
 	return restoreFailureError(runtimeName, err, stderr)
+}
+
+func checkpointHostIncompatible(stderr string) bool {
+	for _, message := range []string{
+		"CPU instruction capabilities do not match run time",
+		"CPU capabilities do not match run time",
+		"FPU feature required by image is not supported on host",
+		"CPU xfeatures has unsupported bits",
+		"CPU xsave size mismatch",
+		"CPU xsave max size mismatch",
+	} {
+		if strings.Contains(stderr, message) {
+			return true
+		}
+	}
+	return false
 }
 
 func waitNvidiaRestoreRetry(ctx context.Context) error {
@@ -277,6 +334,19 @@ func shouldPreservePodTCPOnRestore(opts *RestoreOpts) bool {
 	}
 
 	return isPodRequest(opts.request)
+}
+
+func writeCheckpointNetworkMap(workDir, oldContainerIP, newContainerIP string) error {
+	oldIPv4 := net.ParseIP(oldContainerIP).To4()
+	newIPv4 := net.ParseIP(newContainerIP).To4()
+	oldIPv6 := checkpointContainerIPv6(oldContainerIP)
+	newIPv6 := checkpointContainerIPv6(newContainerIP)
+	if oldIPv4 == nil || newIPv4 == nil || oldIPv6 == "" || newIPv6 == "" {
+		return fmt.Errorf("invalid container IP mapping %q -> %q", oldContainerIP, newContainerIP)
+	}
+
+	contents := fmt.Sprintf("%s %s %s %s %s\n", checkpointNetworkMapVersion, oldIPv4.String(), newIPv4.String(), oldIPv6, newIPv6)
+	return os.WriteFile(filepath.Join(workDir, checkpointNetworkMapFile), []byte(contents), 0600)
 }
 
 func restoreFailureError(runtimeName string, err error, stderr string) error {
@@ -337,12 +407,8 @@ func crCompatible(gpuCnt int) bool {
 }
 
 func (c *NvidiaCRIUManager) setupRestoreWorkDir(workDir string) error {
-	if _, err := os.Stat(workDir); os.IsNotExist(err) {
-		err := os.MkdirAll(workDir, 0755)
-		if err != nil {
-			return err
-		}
+	if err := os.RemoveAll(workDir); err != nil {
+		return err
 	}
-
-	return nil
+	return os.MkdirAll(workDir, 0755)
 }

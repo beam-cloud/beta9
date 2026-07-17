@@ -24,6 +24,8 @@ import (
 	"github.com/beam-cloud/beta9/pkg/runtime"
 	types "github.com/beam-cloud/beta9/pkg/types"
 	"github.com/opencontainers/runtime-spec/specs-go"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // MockRuntime is a mock implementation of runtime.Runtime for testing
@@ -44,6 +46,8 @@ type MockRuntime struct {
 	killCalled       bool
 	killSignal       syscall.Signal
 	capabilities     runtime.Capabilities
+	state            runtime.State
+	stateErr         error
 }
 
 type staticCheckpointManager struct {
@@ -640,7 +644,7 @@ func (m *MockRuntime) Delete(ctx context.Context, containerID string, opts *runt
 }
 
 func (m *MockRuntime) State(ctx context.Context, containerID string) (runtime.State, error) {
-	return runtime.State{}, nil
+	return m.state, m.stateErr
 }
 
 func (m *MockRuntime) Events(ctx context.Context, containerID string) (<-chan runtime.Event, error) {
@@ -852,8 +856,9 @@ func TestNvidiaCRIUManager(t *testing.T) {
 				if mockRuntime.restoreOpts == nil || mockRuntime.restoreOpts.AllowOpenTCP || !mockRuntime.restoreOpts.TCPClose {
 					t.Errorf("Expected generic NVIDIA restore to use tcp-close, got %+v", mockRuntime.restoreOpts)
 				}
-				if _, err := os.Stat(filepath.Join(checkpointPath, checkpointCloseExternalTCPMarker)); !errors.Is(err, os.ErrNotExist) {
-					t.Errorf("Expected endpoint restore not to enable selective TCP restore, got %v", err)
+				mapPath := filepath.Join(types.AgentTmpPath, checkpoint.CheckpointId, request.ContainerId, checkpointNetworkMapFile)
+				if _, err := os.Stat(mapPath); !errors.Is(err, os.ErrNotExist) {
+					t.Errorf("Expected endpoint restore not to create a network map, got %v", err)
 				}
 
 				if exitCode != 0 {
@@ -872,16 +877,18 @@ func TestNvidiaCRIUManager(t *testing.T) {
 
 				checkpoint := &types.Checkpoint{
 					CheckpointId: "checkpoint-pod",
+					ContainerIp:  "192.168.0.46",
 				}
 
 				checkpointPath := filepath.Join(tmpDir, checkpoint.CheckpointId)
 				os.MkdirAll(checkpointPath, 0755)
 
 				opts := &RestoreOpts{
-					request:    request,
-					checkpoint: checkpoint,
-					configPath: filepath.Join(tmpDir, "pod-config.json"),
-					started:    make(chan int, 1),
+					request:     request,
+					checkpoint:  checkpoint,
+					containerIP: "192.168.0.73",
+					configPath:  filepath.Join(tmpDir, "pod-config.json"),
+					started:     make(chan int, 1),
 				}
 
 				exitCode, err := manager.RestoreCheckpoint(context.Background(), mockRuntime, opts)
@@ -892,9 +899,15 @@ func TestNvidiaCRIUManager(t *testing.T) {
 				if mockRuntime.restoreOpts == nil || !mockRuntime.restoreOpts.AllowOpenTCP || mockRuntime.restoreOpts.TCPClose {
 					t.Errorf("Expected pod NVIDIA restore to preserve open TCP without tcp-close, got %+v", mockRuntime.restoreOpts)
 				}
-				if _, err := os.Stat(filepath.Join(checkpointPath, checkpointCloseExternalTCPMarker)); err != nil {
-					t.Errorf("Expected pod restore to enable selective TCP restore: %v", err)
+				mapPath := filepath.Join(types.AgentTmpPath, checkpoint.CheckpointId, request.ContainerId, checkpointNetworkMapFile)
+				contents, err := os.ReadFile(mapPath)
+				if err != nil {
+					t.Fatalf("Expected pod restore network map: %v", err)
 				}
+				if got, want := string(contents), "v1 192.168.0.46 192.168.0.73 fd00:abcd::2e fd00:abcd::49\n"; got != want {
+					t.Errorf("network map = %q, want %q", got, want)
+				}
+				t.Cleanup(func() { _ = os.RemoveAll(filepath.Dir(filepath.Dir(mapPath))) })
 
 				if exitCode != 0 {
 					t.Errorf("Expected exit code 0, got %d", exitCode)
@@ -912,16 +925,18 @@ func TestNvidiaCRIUManager(t *testing.T) {
 
 				checkpoint := &types.Checkpoint{
 					CheckpointId: "checkpoint-service",
+					ContainerIp:  "192.168.0.46",
 				}
 
 				checkpointPath := filepath.Join(tmpDir, checkpoint.CheckpointId)
 				os.MkdirAll(checkpointPath, 0755)
 
 				opts := &RestoreOpts{
-					request:    request,
-					checkpoint: checkpoint,
-					configPath: filepath.Join(tmpDir, "service-config.json"),
-					started:    make(chan int, 1),
+					request:     request,
+					checkpoint:  checkpoint,
+					containerIP: "192.168.0.74",
+					configPath:  filepath.Join(tmpDir, "service-config.json"),
+					started:     make(chan int, 1),
 				}
 
 				exitCode, err := manager.RestoreCheckpoint(context.Background(), mockRuntime, opts)
@@ -932,9 +947,11 @@ func TestNvidiaCRIUManager(t *testing.T) {
 				if mockRuntime.restoreOpts == nil || !mockRuntime.restoreOpts.AllowOpenTCP || mockRuntime.restoreOpts.TCPClose {
 					t.Errorf("Expected service NVIDIA restore to preserve open TCP without tcp-close, got %+v", mockRuntime.restoreOpts)
 				}
-				if _, err := os.Stat(filepath.Join(checkpointPath, checkpointCloseExternalTCPMarker)); err != nil {
-					t.Errorf("Expected service restore to enable selective TCP restore: %v", err)
+				mapPath := filepath.Join(types.AgentTmpPath, checkpoint.CheckpointId, request.ContainerId, checkpointNetworkMapFile)
+				if _, err := os.Stat(mapPath); err != nil {
+					t.Errorf("Expected service restore network map: %v", err)
 				}
+				t.Cleanup(func() { _ = os.RemoveAll(filepath.Dir(filepath.Dir(mapPath))) })
 
 				if exitCode != 0 {
 					t.Errorf("Expected exit code 0, got %d", exitCode)
@@ -946,6 +963,13 @@ func TestNvidiaCRIUManager(t *testing.T) {
 				tc.extraTests(t, manager, mockRuntime, tmpDir)
 			}
 		})
+	}
+}
+
+func TestWriteCheckpointNetworkMapRejectsInvalidAddresses(t *testing.T) {
+	err := writeCheckpointNetworkMap(t.TempDir(), "", "192.168.0.2")
+	if err == nil {
+		t.Fatal("expected invalid checkpoint address to fail")
 	}
 }
 
@@ -1087,6 +1111,84 @@ func TestNvidiaRestoreRetriesCRIUFailure(t *testing.T) {
 	if rt.deleteCalls != 1 {
 		t.Fatalf("cleanup calls = %d, want 1", rt.deleteCalls)
 	}
+}
+
+func TestNvidiaRestorePublishesStartedAfterValidation(t *testing.T) {
+	tmpDir := t.TempDir()
+	checkpoint := &types.Checkpoint{CheckpointId: "checkpoint-validate"}
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, checkpoint.CheckpointId), 0755))
+	rt := NewMockRuntime(types.ContainerRuntimeRunc.String(), runtime.Capabilities{CheckpointRestore: true})
+	manager := &NvidiaCRIUManager{checkpointRoot: tmpDir}
+	started := make(chan int, 1)
+	validationStarted := make(chan struct{})
+	releaseValidation := make(chan struct{})
+	done := make(chan error, 1)
+
+	go func() {
+		_, err := manager.RestoreCheckpoint(context.Background(), rt, &RestoreOpts{
+			request:      &types.ContainerRequest{ContainerId: "container-validate"},
+			checkpoint:   checkpoint,
+			configPath:   filepath.Join(tmpDir, "config.json"),
+			started:      started,
+			outputWriter: io.Discard,
+			validate: func(context.Context, runtime.Runtime) error {
+				close(validationStarted)
+				<-releaseValidation
+				return nil
+			},
+		})
+		done <- err
+	}()
+
+	<-validationStarted
+	select {
+	case pid := <-started:
+		t.Fatalf("restore published pid %d before validation", pid)
+	default:
+	}
+	close(releaseValidation)
+	require.Equal(t, 12345, <-started)
+	require.NoError(t, <-done)
+}
+
+func TestRestoredCheckpointHTTPReadinessRequiresStableRuntime(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	address := strings.TrimPrefix(server.URL, "http://")
+	containerID := "container-restore-ready"
+	worker := &Worker{containerInstances: common.NewSafeMap[*ContainerInstance]()}
+	worker.containerInstances.Set(containerID, &ContainerInstance{
+		Id:                  containerID,
+		ContainerAddressMap: map[int32]string{8000: address},
+	})
+	request := &types.ContainerRequest{
+		ContainerId: containerID,
+		CheckpointTrigger: &types.CheckpointTrigger{
+			Type:           checkpointTriggerHTTP,
+			HttpPath:       "/ready",
+			HttpPort:       8000,
+			TimeoutSeconds: 2,
+		},
+	}
+	rt := NewMockRuntime(types.ContainerRuntimeRunc.String(), runtime.Capabilities{})
+	rt.state = runtime.State{Status: types.RuncContainerStatusRunning}
+
+	started := time.Now()
+	require.NoError(t, worker.waitForRestoredCheckpointHTTPReadiness(context.Background(), request, request.CheckpointTrigger, rt))
+	require.GreaterOrEqual(t, time.Since(started), restoreReadinessStableFor)
+}
+
+func TestClassifyRestoreErrorDetectsHostIncompatibility(t *testing.T) {
+	err := classifyRestoreError(
+		types.ContainerRuntimeRunc.String(),
+		assert.AnError,
+		"criu failed: type RESTORE: CPU instruction capabilities do not match run time",
+	)
+
+	require.True(t, IsCheckpointHostIncompatible(err))
+	require.False(t, IsCRIURestoreError(err))
 }
 
 func TestCheckpointMaterializedRequiresRuntimeAndFilesystemPayload(t *testing.T) {

@@ -1,0 +1,32 @@
+diff --git a/libcontainer/criu_linux.go b/libcontainer/criu_linux.go
+index c774da45..0d92457c 100644
+--- a/libcontainer/criu_linux.go
++++ b/libcontainer/criu_linux.go
+@@ -27,6 +27,11 @@ import (
+ 	"github.com/opencontainers/runc/libcontainer/utils"
+ )
+ 
++// CRIU's RPC API does not write cpuinfo.img unless CPU_CAP_IMAGE is explicit.
++// Preserve its default FPU and instruction checks and persist the data needed
++// to reject restores onto an incompatible host before any process is resumed.
++const criuCPUCapDefaultWithImage uint32 = (1 << 0) | (1 << 2) | (1 << 3)
++
+ var criuFeatures *criurpc.CriuFeatures
+ 
+ var ErrCriuMissingFeatures = errors.New("criu is missing features")
+@@ -316,6 +322,7 @@ func (c *Container) Checkpoint(criuOpts *CriuOpts) error {
+ 
+ 	rpcOpts := criurpc.CriuOpts{
+ 		ImagesDirFd:       proto.Int32(int32(imageDir.Fd())),
++		CpuCap:            proto.Uint32(criuCPUCapDefaultWithImage),
+ 		LogLevel:          proto.Int32(2),
+ 		LogFile:           proto.String(logFile),
+ 		Root:              proto.String(c.config.Rootfs),
+@@ -674,6 +681,7 @@ func (c *Container) Restore(process *Process, criuOpts *CriuOpts) error {
+ 		Type: &t,
+ 		Opts: &criurpc.CriuOpts{
+ 			ImagesDirFd:       proto.Int32(int32(imageDir.Fd())),
++			CpuCap:            proto.Uint32(criuCPUCapDefaultWithImage),
+ 			EvasiveDevices:    proto.Bool(true),
+ 			LogLevel:          proto.Int32(2),
+ 			LogFile:           proto.String(logFile),

@@ -182,7 +182,7 @@ func (s *Service) commitPrivateAgentJoin(ctx context.Context, token *model.JoinT
 		if pool == nil {
 			return errors.New("pool no longer exists")
 		}
-		if pool.CreatedByTokenID == "" || pool.CreatedByTokenID != token.CreatedByTokenID {
+		if pool.CreatedAt.IsZero() || token.PoolCreatedAt.IsZero() || !pool.CreatedAt.Equal(token.PoolCreatedAt) {
 			return errors.New("join token is invalid or expired")
 		}
 		agent.Mode = firstNonEmpty(token.Mode, pool.Mode)

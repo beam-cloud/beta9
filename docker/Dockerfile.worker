@@ -25,6 +25,7 @@ FROM golang:1.23-bookworm AS runc
 WORKDIR /workspace
 
 COPY docker/patches/runc/runc-criu-production-log-level.patch /tmp/runc-criu-production-log-level.patch
+COPY docker/patches/runc/runc-criu-cpu-compatibility.patch /tmp/runc-criu-cpu-compatibility.patch
 
 RUN apt-get update && apt-get install -y \
     make \
@@ -46,7 +47,9 @@ git clone -b dlm/force-compat-mode-on-restore https://github.com/beam-cloud/runc
   && cd /workspace/runc \
   && git reset --hard d85a78033ba2905f5c57afdc81b73a12be72c03c \
   && git apply --check /tmp/runc-criu-production-log-level.patch \
-  && git apply /tmp/runc-criu-production-log-level.patch
+  && git apply /tmp/runc-criu-production-log-level.patch \
+  && git apply --check /tmp/runc-criu-cpu-compatibility.patch \
+  && git apply /tmp/runc-criu-cpu-compatibility.patch
 
 cd /workspace/runc
 make
@@ -166,9 +169,11 @@ WORKDIR /workspace
 
 RUN apt-get update && \
     apt-get install -y curl gpg && \
-    curl -fsSL https://nvidia.github.io/nvidia-container-runtime/gpgkey | apt-key add - && \
-    curl -s -L https://nvidia.github.io/nvidia-docker/ubuntu22.04/nvidia-docker.list | tee /etc/apt/sources.list.d/nvidia-docker.list && \
-    curl -fsSL https://nvidia.github.io/nvidia-container-runtime/ubuntu22.04/nvidia-container-runtime.list | tee /etc/apt/sources.list.d/nvidia-container-runtime.list && \
+    curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | \
+        gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg && \
+    curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+        sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+        tee /etc/apt/sources.list.d/nvidia-container-toolkit.list && \
     apt-get update && \
     apt-get install -y psmisc tini iproute2 iptables
 
@@ -239,6 +244,7 @@ ARG CEDANA_VERSION=0.9.240
 ARG CEDANA_BASE_URL=""
 ARG CEDANA_TOKEN=""
 ARG CRIU_COMMIT=b47c692bb3a73ae45ee1c4ab215a8f6869d40efd
+COPY docker/patches/criu/criu-network-remap.patch /tmp/criu-network-remap.patch
 COPY docker/patches/criu/criu-skip-non-cuda-resume.patch /tmp/criu-skip-non-cuda-resume.patch
 COPY docker/patches/criu/criu-skip-fresh-zero-pages.patch /tmp/criu-skip-fresh-zero-pages.patch
 
@@ -266,6 +272,8 @@ if [ "$(uname -m)" = "x86_64" ] || [ "$(uname -m)" = "aarch64" ]; then
     git clone https://github.com/checkpoint-restore/criu.git
     cd criu
     git reset --hard ${CRIU_COMMIT}
+    git apply --check --unidiff-zero /tmp/criu-network-remap.patch
+    git apply --unidiff-zero /tmp/criu-network-remap.patch
     git apply --check --unidiff-zero /tmp/criu-skip-non-cuda-resume.patch
     git apply --unidiff-zero /tmp/criu-skip-non-cuda-resume.patch
     git apply --check /tmp/criu-skip-fresh-zero-pages.patch
@@ -342,7 +350,7 @@ RUN apt-get remove -y curl && \
 ENV BUILDAH_RUNTIME=/usr/local/sbin/runc
 
 RUN mkdir -p /workspace/etc
-RUN echo "nameserver 8.8.8.8" > /workspace/etc/resolv.conf
+RUN printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\nnameserver 9.9.9.9\noptions timeout:2 attempts:2\n' > /workspace/etc/resolv.conf
 RUN echo '127.0.0.1 localhost' > /workspace/etc/hosts
 RUN echo 'hosts: files dns' > /workspace/etc/nsswitch.conf
 COPY ./bin/beta9-cli /usr/local/bin/beta9

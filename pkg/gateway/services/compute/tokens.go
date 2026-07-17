@@ -44,7 +44,7 @@ func (s *Service) RevokePoolJoinToken(ctx context.Context, in *pb.RevokePoolJoin
 		return &pb.RevokePoolJoinTokenResponse{Ok: false, ErrMsg: "join token not found"}, nil
 	}
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
-	if state.WorkspaceID != computeWorkspaceID(authInfo) || state.CreatedByTokenID != computeOwnerTokenID(authInfo) {
+	if state.WorkspaceID != computeWorkspaceID(authInfo) {
 		return &pb.RevokePoolJoinTokenResponse{Ok: false, ErrMsg: "join token not found"}, nil
 	}
 	state.Revoked = true
@@ -78,11 +78,7 @@ func (s *Service) createPrivatePoolJoinCommand(ctx context.Context, poolName, tt
 	if authInfo == nil || authInfo.Workspace == nil {
 		return "", "", time.Time{}, fmt.Errorf("missing workspace auth")
 	}
-	ownerTokenID := computeOwnerTokenID(authInfo)
-	if ownerTokenID == "" {
-		return "", "", time.Time{}, fmt.Errorf("missing workspace auth")
-	}
-	state, err := s.getOwnedPrivatePoolState(ctx, authInfo, poolName)
+	state, err := s.getWorkspacePrivatePoolState(ctx, authInfo, poolName)
 	if err != nil {
 		return "", "", time.Time{}, err
 	}
@@ -94,11 +90,11 @@ func (s *Service) createPrivatePoolJoinCommand(ctx context.Context, poolName, tt
 		return "", "", time.Time{}, err
 	}
 
-	return s.createPrivatePoolJoinCommandForOwner(ctx, authInfo.Workspace.ExternalId, ownerTokenID, poolName, ttlValue, "")
+	return s.createPrivatePoolJoinCommandForWorkspace(ctx, authInfo.Workspace.ExternalId, poolName, state.CreatedAt, ttlValue, "")
 }
 
-func (s *Service) createPrivatePoolJoinCommandForOwner(ctx context.Context, workspaceID, ownerTokenID, poolName, ttlValue, machineID string) (string, string, time.Time, error) {
-	token, expiresAt, err := s.createPrivatePoolJoinTokenForOwner(ctx, workspaceID, ownerTokenID, poolName, ttlValue, machineID)
+func (s *Service) createPrivatePoolJoinCommandForWorkspace(ctx context.Context, workspaceID, poolName string, poolCreatedAt time.Time, ttlValue, machineID string) (string, string, time.Time, error) {
+	token, expiresAt, err := s.createPrivatePoolJoinTokenForWorkspace(ctx, workspaceID, poolName, poolCreatedAt, ttlValue, machineID)
 	if err != nil {
 		return "", "", time.Time{}, err
 	}
@@ -130,11 +126,7 @@ func (s *Service) createPrivatePoolJoinToken(ctx context.Context, poolName, ttlV
 	if authInfo == nil || authInfo.Workspace == nil {
 		return "", time.Time{}, fmt.Errorf("missing workspace auth")
 	}
-	ownerTokenID := computeOwnerTokenID(authInfo)
-	if ownerTokenID == "" {
-		return "", time.Time{}, fmt.Errorf("missing workspace auth")
-	}
-	state, err := s.getOwnedPrivatePoolState(ctx, authInfo, poolName)
+	state, err := s.getWorkspacePrivatePoolState(ctx, authInfo, poolName)
 	if err != nil {
 		return "", time.Time{}, err
 	}
@@ -142,15 +134,15 @@ func (s *Service) createPrivatePoolJoinToken(ctx context.Context, poolName, ttlV
 		return "", time.Time{}, fmt.Errorf("pool not found")
 	}
 
-	return s.createPrivatePoolJoinTokenForOwner(ctx, authInfo.Workspace.ExternalId, ownerTokenID, poolName, ttlValue, "")
+	return s.createPrivatePoolJoinTokenForWorkspace(ctx, authInfo.Workspace.ExternalId, poolName, state.CreatedAt, ttlValue, "")
 }
 
-func (s *Service) createPrivatePoolJoinTokenForOwner(ctx context.Context, workspaceID, ownerTokenID, poolName, ttlValue, machineID string) (string, time.Time, error) {
+func (s *Service) createPrivatePoolJoinTokenForWorkspace(ctx context.Context, workspaceID, poolName string, poolCreatedAt time.Time, ttlValue, machineID string) (string, time.Time, error) {
 	poolName = strings.TrimSpace(poolName)
 	if poolName == "" {
 		return "", time.Time{}, fmt.Errorf("pool name is required")
 	}
-	if workspaceID == "" || ownerTokenID == "" {
+	if workspaceID == "" {
 		return "", time.Time{}, fmt.Errorf("missing workspace auth")
 	}
 
@@ -165,19 +157,19 @@ func (s *Service) createPrivatePoolJoinTokenForOwner(ctx context.Context, worksp
 		return "", time.Time{}, fmt.Errorf("join token ttl must be positive")
 	}
 
-	token, tokenState, err := s.createPrivatePoolJoinTokenStateForOwner(ctx, workspaceID, ownerTokenID, poolName, ttl, machineID)
+	token, tokenState, err := s.createPrivatePoolJoinTokenState(ctx, workspaceID, poolName, poolCreatedAt, ttl, machineID)
 	if err != nil {
 		return "", time.Time{}, err
 	}
 	return token, tokenState.ExpiresAt, nil
 }
 
-func (s *Service) createPersistentPrivatePoolJoinTokenForOwner(ctx context.Context, workspaceID, ownerTokenID, poolName, machineID string) (string, *model.JoinTokenState, error) {
-	return s.createPrivatePoolJoinTokenStateForOwner(ctx, workspaceID, ownerTokenID, poolName, 0, machineID)
+func (s *Service) createPersistentPrivatePoolJoinToken(ctx context.Context, workspaceID, poolName string, poolCreatedAt time.Time, machineID string) (string, *model.JoinTokenState, error) {
+	return s.createPrivatePoolJoinTokenState(ctx, workspaceID, poolName, poolCreatedAt, 0, machineID)
 }
 
-func (s *Service) createPrivatePoolJoinTokenStateForOwner(ctx context.Context, workspaceID, ownerTokenID, poolName string, ttl time.Duration, machineID string) (string, *model.JoinTokenState, error) {
-	token, state, err := newPoolJoinToken(workspaceID, ownerTokenID, poolName, ttl, machineID)
+func (s *Service) createPrivatePoolJoinTokenState(ctx context.Context, workspaceID, poolName string, poolCreatedAt time.Time, ttl time.Duration, machineID string) (string, *model.JoinTokenState, error) {
+	token, state, err := newPoolJoinToken(workspaceID, poolName, poolCreatedAt, ttl, machineID)
 	if err != nil {
 		return "", nil, err
 	}
@@ -187,12 +179,12 @@ func (s *Service) createPrivatePoolJoinTokenStateForOwner(ctx context.Context, w
 	return token, state, nil
 }
 
-func newPoolJoinToken(workspaceID, ownerTokenID, poolName string, ttl time.Duration, machineID string) (string, *model.JoinTokenState, error) {
+func newPoolJoinToken(workspaceID, poolName string, poolCreatedAt time.Time, ttl time.Duration, machineID string) (string, *model.JoinTokenState, error) {
 	poolName = strings.TrimSpace(poolName)
 	if poolName == "" {
 		return "", nil, fmt.Errorf("pool name is required")
 	}
-	if workspaceID == "" || ownerTokenID == "" {
+	if workspaceID == "" {
 		return "", nil, fmt.Errorf("missing workspace auth")
 	}
 	if ttl < 0 {
@@ -209,13 +201,13 @@ func newPoolJoinToken(workspaceID, ownerTokenID, poolName string, ttl time.Durat
 		expiresAt = now.Add(ttl)
 	}
 	state := &model.JoinTokenState{
-		TokenHash:        hashComputeToken(token),
-		WorkspaceID:      workspaceID,
-		PoolName:         poolName,
-		MachineID:        strings.TrimSpace(machineID),
-		CreatedByTokenID: ownerTokenID,
-		CreatedAt:        now,
-		ExpiresAt:        expiresAt,
+		TokenHash:     hashComputeToken(token),
+		WorkspaceID:   workspaceID,
+		PoolName:      poolName,
+		MachineID:     strings.TrimSpace(machineID),
+		PoolCreatedAt: poolCreatedAt,
+		CreatedAt:     now,
+		ExpiresAt:     expiresAt,
 	}
 	return token, state, nil
 }
