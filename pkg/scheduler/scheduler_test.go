@@ -512,6 +512,59 @@ func TestFilterWorkersByMachinePinsWorker(t *testing.T) {
 	assert.Len(t, unpinned, 2)
 }
 
+func TestFilterWorkersByWorkspaceScope(t *testing.T) {
+	scheduler := &Scheduler{workerPoolManager: NewWorkerPoolManager(false)}
+	scheduler.workerPoolManager.SetPool("marketplace", types.WorkerPoolConfig{Mode: types.PoolModeMarketplace}, nil)
+
+	workers := []*types.Worker{
+		{Id: "local"},
+		{Id: "owned-private", WorkspaceId: "workspace-1"},
+		{Id: "foreign-private", WorkspaceId: "workspace-2"},
+		{Id: "managed", WorkspaceId: "admin-workspace", ControlPlaneManaged: true},
+		{Id: "marketplace", WorkspaceId: "seller-workspace", PoolName: "marketplace"},
+	}
+
+	filtered := scheduler.filterWorkersByWorkspaceScope(workers, &types.ContainerRequest{WorkspaceId: "workspace-1"})
+	assert.Equal(t, []*types.Worker{workers[0], workers[1], workers[3], workers[4]}, filtered)
+}
+
+func TestSelectorCannotScheduleForeignPrivateWorker(t *testing.T) {
+	scheduler := &Scheduler{workerPoolManager: NewWorkerPoolManager(false)}
+	worker := &types.Worker{
+		Id:                   "private-worker",
+		Status:               types.WorkerStatusAvailable,
+		FreeCpu:              2000,
+		FreeMemory:           2500,
+		PoolName:             "private-pool",
+		PoolSelector:         "private-pool",
+		RequiresPoolSelector: true,
+		WorkspaceId:          "workspace-owner",
+	}
+	request := &types.ContainerRequest{
+		Cpu:          1000,
+		Memory:       1000,
+		PoolSelector: "private-pool",
+		WorkspaceId:  "workspace-other",
+		Workspace:    testWorkspaceWithStorage(),
+	}
+
+	_, err := scheduler.selectWorkerFromWorkers([]*types.Worker{worker}, request)
+	var noWorker *types.ErrNoSuitableWorkerFound
+	assert.Error(t, err)
+	assert.True(t, errors.As(err, &noWorker))
+
+	request.WorkspaceId = worker.WorkspaceId
+	selected, err := scheduler.selectWorkerFromWorkers([]*types.Worker{worker}, request)
+	assert.NoError(t, err)
+	assert.Equal(t, worker, selected)
+
+	request.WorkspaceId = "workspace-other"
+	worker.ControlPlaneManaged = true
+	selected, err = scheduler.selectWorkerFromWorkers([]*types.Worker{worker}, request)
+	assert.NoError(t, err)
+	assert.Equal(t, worker, selected)
+}
+
 // Rented GPUs are invisible to serverless marketplace requests; machine-pinned
 // rental workloads still see the full machine.
 func TestMarketplaceRentalCapacityHiddenFromServerless(t *testing.T) {

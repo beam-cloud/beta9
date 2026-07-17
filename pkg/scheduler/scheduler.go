@@ -969,6 +969,22 @@ func filterWorkersByPoolSelector(workers []*types.Worker, request *types.Contain
 	return filteredWorkers
 }
 
+func (s *Scheduler) filterWorkersByWorkspaceScope(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
+	filteredWorkers := make([]*types.Worker, 0, len(workers))
+	for _, worker := range workers {
+		if worker == nil {
+			continue
+		}
+		// Unmanaged agent capacity belongs to its workspace. Managed and
+		// marketplace workers are admitted by their existing global policies.
+		if worker.WorkspaceId == "" || worker.ControlPlaneManaged || s.isMarketplaceWorker(worker) ||
+			(request != nil && worker.WorkspaceId == request.WorkspaceId) {
+			filteredWorkers = append(filteredWorkers, worker)
+		}
+	}
+	return filteredWorkers
+}
+
 func workerPoolSelector(worker *types.Worker) string {
 	if worker.PoolSelector != "" {
 		return worker.PoolSelector
@@ -1110,6 +1126,7 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 	}
 
 	filteredWorkers := filterWorkersByMachine(workers, request) // Machine-pinned requests only see their machine's worker
+	filteredWorkers = s.filterWorkersByWorkspaceScope(filteredWorkers, request)
 	filteredWorkers = filterWorkersByPoolSelector(filteredWorkers, request)
 	filteredWorkers = s.filterAgentWorkersByStorage(filteredWorkers, request)
 	filteredWorkers = s.filterMarketplaceWorkers(filteredWorkers, request)
