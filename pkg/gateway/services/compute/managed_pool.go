@@ -89,6 +89,8 @@ func normalizeManagedPoolConfig(config types.WorkerPoolConfig) (types.WorkerPool
 		return types.WorkerPoolConfig{}, errors.New("managed pools are agent-backed and cannot set provider")
 	}
 	config.Provider = nil
+	// Selector-bound agent capacity uses private pool state, not managed pools.
+	config.RequiresPoolSelector = false
 	if config.ContainerRuntime == "" {
 		config.ContainerRuntime = types.ContainerRuntimeRunc.String()
 	}

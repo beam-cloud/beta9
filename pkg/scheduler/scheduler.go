@@ -312,6 +312,7 @@ func normalizeAgentWorkerPoolConfig(state *compute.PoolState) types.WorkerPoolCo
 		config := *state.WorkerConfig
 		config.Mode = types.PoolModeExternal
 		config.Provider = nil
+		config.RequiresPoolSelector = false
 		if config.ContainerRuntime == "" {
 			config.ContainerRuntime = types.ContainerRuntimeRunc.String()
 		}

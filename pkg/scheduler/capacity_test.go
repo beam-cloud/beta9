@@ -3,10 +3,24 @@ package scheduler
 import (
 	"testing"
 
+	"github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
 	"github.com/tj/assert"
 )
+
+func TestNormalizeManagedAgentPoolDoesNotRequireSelector(t *testing.T) {
+	config := normalizeAgentWorkerPoolConfig(&compute.PoolState{
+		ManagementSource: types.WorkerPoolManagementSourceAPI,
+		WorkerConfig: &types.WorkerPoolConfig{
+			Mode:                 types.PoolModeExternal,
+			GPUType:              "RTX5090",
+			RequiresPoolSelector: true,
+		},
+	})
+
+	assert.False(t, config.RequiresPoolSelector)
+}
 
 func TestHasManagedPoolForGPU(t *testing.T) {
 	manager := NewWorkerPoolManager(false)
