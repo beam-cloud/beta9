@@ -319,7 +319,12 @@ class RunnerAbstraction(BaseAbstraction):
         if not res.ok:
             return terminal.error("Failed to get invocation URL", exit=False)
 
-        if self.ports or "<PORT>" in res.url or self.tcp:
+        if "<PORT>" in res.url and not self.ports:
+            # The URL is port-templated but no ports were declared: nothing
+            # is actually exposed, so there is no endpoint to print.
+            return res
+
+        if self.ports or self.tcp:
             terminal.header("Exposed endpoints\n")
 
             if self.tcp:
