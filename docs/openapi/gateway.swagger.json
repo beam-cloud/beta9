@@ -2537,6 +2537,9 @@
         "generation": {
           "type": "string",
           "description": "Deterministic identity of the restart-relevant slot specification."
+        },
+        "cpuAffinityEnforced": {
+          "type": "boolean"
         }
       }
     },

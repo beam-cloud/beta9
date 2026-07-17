@@ -1340,6 +1340,8 @@ class AgentWorkerSlot(betterproto.Message):
     generation: str = betterproto.string_field(25)
     """Deterministic identity of the restart-relevant slot specification."""
 
+    cpu_affinity_enforced: bool = betterproto.bool_field(26)
+
 
 @dataclass(eq=False, repr=False)
 class StreamAgentRequest(betterproto.Message):

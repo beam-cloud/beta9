@@ -238,6 +238,10 @@ func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) a
 			priority = 100
 		}
 	}
+	cpuAffinityEnforced := envBoolDefault(types.AgentCPUAffinityEnforcedEnv, true)
+	if poolMode == string(types.PoolModeExternal) {
+		cpuAffinityEnforced = slot.CpuAffinityEnforced
+	}
 
 	return agentWorkerConfig{
 		ClusterName: types.DefaultAgentName,
@@ -284,7 +288,7 @@ func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) a
 			UseHostResolvConf: true,
 			ContainerRuntime:  poolRuntime,
 			ContainerResourceLimits: agentConfigResourceLimits{
-				CPUAffinityEnforced: envBoolDefault(types.AgentCPUAffinityEnforcedEnv, true),
+				CPUAffinityEnforced: cpuAffinityEnforced,
 			},
 			CacheEnabled:               true,
 			TerminationGracePeriod:     30,
