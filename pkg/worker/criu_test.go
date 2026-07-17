@@ -24,6 +24,8 @@ import (
 	"github.com/beam-cloud/beta9/pkg/runtime"
 	types "github.com/beam-cloud/beta9/pkg/types"
 	"github.com/opencontainers/runtime-spec/specs-go"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // MockRuntime is a mock implementation of runtime.Runtime for testing
@@ -44,6 +46,8 @@ type MockRuntime struct {
 	killCalled       bool
 	killSignal       syscall.Signal
 	capabilities     runtime.Capabilities
+	state            runtime.State
+	stateErr         error
 }
 
 type staticCheckpointManager struct {
@@ -640,7 +644,7 @@ func (m *MockRuntime) Delete(ctx context.Context, containerID string, opts *runt
 }
 
 func (m *MockRuntime) State(ctx context.Context, containerID string) (runtime.State, error) {
-	return runtime.State{}, nil
+	return m.state, m.stateErr
 }
 
 func (m *MockRuntime) Events(ctx context.Context, containerID string) (<-chan runtime.Event, error) {
@@ -1107,6 +1111,84 @@ func TestNvidiaRestoreRetriesCRIUFailure(t *testing.T) {
 	if rt.deleteCalls != 1 {
 		t.Fatalf("cleanup calls = %d, want 1", rt.deleteCalls)
 	}
+}
+
+func TestNvidiaRestorePublishesStartedAfterValidation(t *testing.T) {
+	tmpDir := t.TempDir()
+	checkpoint := &types.Checkpoint{CheckpointId: "checkpoint-validate"}
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, checkpoint.CheckpointId), 0755))
+	rt := NewMockRuntime(types.ContainerRuntimeRunc.String(), runtime.Capabilities{CheckpointRestore: true})
+	manager := &NvidiaCRIUManager{checkpointRoot: tmpDir}
+	started := make(chan int, 1)
+	validationStarted := make(chan struct{})
+	releaseValidation := make(chan struct{})
+	done := make(chan error, 1)
+
+	go func() {
+		_, err := manager.RestoreCheckpoint(context.Background(), rt, &RestoreOpts{
+			request:      &types.ContainerRequest{ContainerId: "container-validate"},
+			checkpoint:   checkpoint,
+			configPath:   filepath.Join(tmpDir, "config.json"),
+			started:      started,
+			outputWriter: io.Discard,
+			validate: func(context.Context, runtime.Runtime) error {
+				close(validationStarted)
+				<-releaseValidation
+				return nil
+			},
+		})
+		done <- err
+	}()
+
+	<-validationStarted
+	select {
+	case pid := <-started:
+		t.Fatalf("restore published pid %d before validation", pid)
+	default:
+	}
+	close(releaseValidation)
+	require.Equal(t, 12345, <-started)
+	require.NoError(t, <-done)
+}
+
+func TestRestoredCheckpointHTTPReadinessRequiresStableRuntime(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	address := strings.TrimPrefix(server.URL, "http://")
+	containerID := "container-restore-ready"
+	worker := &Worker{containerInstances: common.NewSafeMap[*ContainerInstance]()}
+	worker.containerInstances.Set(containerID, &ContainerInstance{
+		Id:                  containerID,
+		ContainerAddressMap: map[int32]string{8000: address},
+	})
+	request := &types.ContainerRequest{
+		ContainerId: containerID,
+		CheckpointTrigger: &types.CheckpointTrigger{
+			Type:           checkpointTriggerHTTP,
+			HttpPath:       "/ready",
+			HttpPort:       8000,
+			TimeoutSeconds: 2,
+		},
+	}
+	rt := NewMockRuntime(types.ContainerRuntimeRunc.String(), runtime.Capabilities{})
+	rt.state = runtime.State{Status: types.RuncContainerStatusRunning}
+
+	started := time.Now()
+	require.NoError(t, worker.waitForRestoredCheckpointHTTPReadiness(context.Background(), request, request.CheckpointTrigger, rt))
+	require.GreaterOrEqual(t, time.Since(started), restoreReadinessStableFor)
+}
+
+func TestClassifyRestoreErrorDetectsHostIncompatibility(t *testing.T) {
+	err := classifyRestoreError(
+		types.ContainerRuntimeRunc.String(),
+		assert.AnError,
+		"criu failed: type RESTORE: CPU instruction capabilities do not match run time",
+	)
+
+	require.True(t, IsCheckpointHostIncompatible(err))
+	require.False(t, IsCRIURestoreError(err))
 }
 
 func TestCheckpointMaterializedRequiresRuntimeAndFilesystemPayload(t *testing.T) {

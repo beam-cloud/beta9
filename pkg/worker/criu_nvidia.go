@@ -79,6 +79,19 @@ func IsCRIURestoreError(err error) bool {
 	return errors.As(err, &criuErr)
 }
 
+type ErrCheckpointHostIncompatible struct {
+	Stderr string
+}
+
+func (e *ErrCheckpointHostIncompatible) Error() string {
+	return fmt.Sprintf("checkpoint is incompatible with this worker: %s", e.Stderr)
+}
+
+func IsCheckpointHostIncompatible(err error) bool {
+	var compatibilityErr *ErrCheckpointHostIncompatible
+	return errors.As(err, &compatibilityErr)
+}
+
 type NvidiaCRIUManager struct {
 	checkpointRoot string
 	gpuCnt         int
@@ -209,17 +222,41 @@ func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, rt runtime.Ru
 	var exitCode int
 	for attempt := 1; attempt <= attempts; attempt++ {
 		outputCapture := newRestoreOutputCapture(opts.outputWriter)
+		runtimeStarted := opts.started
+		var pendingStarted chan int
+		if opts.validate != nil {
+			pendingStarted = make(chan int, 1)
+			runtimeStarted = pendingStarted
+		}
 
 		exitCode, err = rt.Restore(ctx, opts.request.ContainerId, &runtime.RestoreOpts{
 			ImagePath:    imagePath,
 			WorkDir:      workDir,
 			BundlePath:   bundlePath,
 			OutputWriter: outputCapture,
-			Started:      opts.started,
+			Started:      runtimeStarted,
 			AllowOpenTCP: preserveOpenTCP,
 			TCPClose:     !preserveOpenTCP,
 		})
 		stderr := outputCapture.stop()
+		if err == nil && pendingStarted != nil {
+			var pid int
+			select {
+			case pid = <-pendingStarted:
+			case <-ctx.Done():
+				err = ctx.Err()
+			}
+			if err == nil {
+				err = opts.validate(ctx, rt)
+			}
+			if err == nil && opts.started != nil {
+				select {
+				case opts.started <- pid:
+				case <-ctx.Done():
+					err = ctx.Err()
+				}
+			}
+		}
 		if err == nil {
 			break
 		}
@@ -255,9 +292,28 @@ func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, rt runtime.Ru
 
 func classifyRestoreError(runtimeName string, err error, stderr string) error {
 	if strings.Contains(stderr, "criu failed") && strings.Contains(stderr, "type RESTORE") {
+		if checkpointHostIncompatible(stderr) {
+			return &ErrCheckpointHostIncompatible{Stderr: stderr}
+		}
 		return &ErrCRIURestoreFailed{Stderr: stderr}
 	}
 	return restoreFailureError(runtimeName, err, stderr)
+}
+
+func checkpointHostIncompatible(stderr string) bool {
+	for _, message := range []string{
+		"CPU instruction capabilities do not match run time",
+		"CPU capabilities do not match run time",
+		"FPU feature required by image is not supported on host",
+		"CPU xfeatures has unsupported bits",
+		"CPU xsave size mismatch",
+		"CPU xsave max size mismatch",
+	} {
+		if strings.Contains(stderr, message) {
+			return true
+		}
+	}
+	return false
 }
 
 func waitNvidiaRestoreRetry(ctx context.Context) error {

@@ -47,6 +47,9 @@ const (
 	checkpointTriggerHTTP      = "http"
 	checkpointProgressInterval = 10 * time.Second
 	terminalCheckpointStopWait = 5 * time.Second
+	restoreReadinessTimeout    = 15 * time.Second
+	restoreReadinessInterval   = 100 * time.Millisecond
+	restoreReadinessStableFor  = 250 * time.Millisecond
 )
 
 var checkpointRuntimeEnvOverrides = []string{
@@ -355,6 +358,7 @@ type RestoreOpts struct {
 	outputWriter io.Writer
 	started      chan int
 	configPath   string
+	validate     func(context.Context, runtime.Runtime) error
 }
 
 type CRIUManager interface {
@@ -468,6 +472,7 @@ func (s *Worker) attemptRestoreCheckpoint(ctx context.Context, request *types.Co
 			outputWriter: outputWriter,
 			started:      restoreStarted,
 			configPath:   request.ConfigPath,
+			validate:     s.checkpointRestoreValidator(request),
 		})
 		restoreDone <- restoreCheckpointResult{exitCode: exitCode, err: err}
 	}()
@@ -516,7 +521,12 @@ func (s *Worker) attemptRestoreCheckpoint(ctx context.Context, request *types.Co
 	if err != nil {
 		log.Error().Str("container_id", request.ContainerId).Str("checkpoint_id", checkpoint.CheckpointId).Msgf("failed to restore checkpoint: %v", err)
 
-		outputLogger.Info("Failed to restore checkpoint")
+		hostIncompatible := IsCheckpointHostIncompatible(err)
+		if hostIncompatible {
+			outputLogger.Info("Checkpoint was created on an incompatible CPU; starting container normally")
+		} else {
+			outputLogger.Info("Failed to restore checkpoint")
+		}
 		if cleanupErr := deleteFailedRestoreRuntimeContainer(ctx, instance.Runtime, request.ContainerId); cleanupErr != nil {
 			log.Warn().
 				Err(cleanupErr).
@@ -524,7 +534,9 @@ func (s *Worker) attemptRestoreCheckpoint(ctx context.Context, request *types.Co
 				Str("checkpoint_id", checkpoint.CheckpointId).
 				Msg("failed to clean up runtime container after checkpoint restore failure")
 		}
-		s.markCheckpointRestoreFailed(request, checkpoint)
+		if !hostIncompatible {
+			s.markCheckpointRestoreFailed(request, checkpoint)
+		}
 
 		return exitCode, false, started, err
 	}
@@ -1621,6 +1633,78 @@ func (s *Worker) waitForCheckpointTrigger(ctx context.Context, request *types.Co
 	}
 
 	return s.waitForCheckpointSignal(ctx, request, outputLogger)
+}
+
+func (s *Worker) checkpointRestoreValidator(request *types.ContainerRequest) func(context.Context, runtime.Runtime) error {
+	trigger := request.CheckpointTrigger
+	if trigger == nil || !strings.EqualFold(trigger.Type, checkpointTriggerHTTP) || trigger.HttpPath == "" {
+		return nil
+	}
+
+	return func(ctx context.Context, rt runtime.Runtime) error {
+		return s.waitForRestoredCheckpointHTTPReadiness(ctx, request, trigger, rt)
+	}
+}
+
+func (s *Worker) waitForRestoredCheckpointHTTPReadiness(ctx context.Context, request *types.ContainerRequest, trigger *types.CheckpointTrigger, rt runtime.Runtime) error {
+	port := int32(trigger.HttpPort)
+	if port == 0 && len(request.Ports) > 0 {
+		port = int32(request.Ports[0])
+	}
+	if port == 0 {
+		return fmt.Errorf("checkpoint HTTP readiness port is required")
+	}
+
+	readinessPath := trigger.HttpPath
+	if !strings.HasPrefix(readinessPath, "/") {
+		readinessPath = "/" + readinessPath
+	}
+	timeout := restoreReadinessTimeout
+	if configured := time.Duration(trigger.TimeoutSeconds) * time.Second; configured > 0 && configured < timeout {
+		timeout = configured
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	transport := &http.Transport{DisableKeepAlives: true}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Timeout: time.Second, Transport: transport}
+	ticker := time.NewTicker(restoreReadinessInterval)
+	defer ticker.Stop()
+
+	var firstReadyAt time.Time
+	var lastErr error
+	for {
+		state, err := rt.State(ctx, request.ContainerId)
+		if err != nil {
+			return fmt.Errorf("restored container exited before readiness: %w", err)
+		}
+		if state.Status != types.RuncContainerStatusRunning {
+			return fmt.Errorf("restored container exited before readiness: runtime status %q", state.Status)
+		}
+
+		if firstReadyAt.IsZero() || time.Since(firstReadyAt) >= restoreReadinessStableFor {
+			lastErr = s.checkCheckpointHTTPReady(ctx, client, request, port, readinessPath)
+			if lastErr == nil {
+				if firstReadyAt.IsZero() {
+					firstReadyAt = time.Now()
+				} else {
+					return nil
+				}
+			} else {
+				firstReadyAt = time.Time{}
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			if lastErr != nil {
+				return fmt.Errorf("restored container did not regain HTTP readiness: %w", lastErr)
+			}
+			return fmt.Errorf("restored container did not remain ready: %w", ctx.Err())
+		case <-ticker.C:
+		}
+	}
 }
 
 func (s *Worker) waitForCheckpointHTTPReadiness(ctx context.Context, request *types.ContainerRequest, trigger *types.CheckpointTrigger, outputLogger *slog.Logger) error {

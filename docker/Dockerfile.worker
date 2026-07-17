@@ -25,6 +25,7 @@ FROM golang:1.23-bookworm AS runc
 WORKDIR /workspace
 
 COPY docker/patches/runc/runc-criu-production-log-level.patch /tmp/runc-criu-production-log-level.patch
+COPY docker/patches/runc/runc-criu-cpu-compatibility.patch /tmp/runc-criu-cpu-compatibility.patch
 
 RUN apt-get update && apt-get install -y \
     make \
@@ -46,7 +47,9 @@ git clone -b dlm/force-compat-mode-on-restore https://github.com/beam-cloud/runc
   && cd /workspace/runc \
   && git reset --hard d85a78033ba2905f5c57afdc81b73a12be72c03c \
   && git apply --check /tmp/runc-criu-production-log-level.patch \
-  && git apply /tmp/runc-criu-production-log-level.patch
+  && git apply /tmp/runc-criu-production-log-level.patch \
+  && git apply --check /tmp/runc-criu-cpu-compatibility.patch \
+  && git apply /tmp/runc-criu-cpu-compatibility.patch
 
 cd /workspace/runc
 make
