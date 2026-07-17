@@ -61,27 +61,61 @@ def _cheapest_offers_by_gpu(offers: Sequence[PoolOffer]) -> Dict[str, PoolOffer]
     return cheapest
 
 
+def _section_header(text: str) -> str:
+    return f"[bold {terminal.BRAND_COLOR}]=> {text}[/bold {terminal.BRAND_COLOR}]"
+
+
 def _machine_list_renderables(
     res: ListMachinesResponse,
     offers: Optional[Sequence[PoolOffer]],
 ) -> List[Any]:
     renderables: List[Any] = [
+        _section_header("GPU inventory"),
         gpu_inventory_table(
             res.gpus,
             res.supported_gpus,
             _cheapest_offers_by_gpu(offers or []),
             offers_available=offers is not None,
         ),
+        "",
+        _section_header("Your machines"),
     ]
-    renderables.append("")
     if res.machines:
-        renderables.append(machine_table(res.machines, title="Your machines"))
+        renderables.append(machine_table(res.machines))
     else:
-        renderables.append(
-            f"[bold {terminal.BRAND_COLOR}]Your machines[/bold {terminal.BRAND_COLOR}]\n"
-            "[dim]  none yet — try 'beta9 machine reserve --gpu <type>'[/dim]"
-        )
+        renderables.append("[dim]  none yet — try 'beta9 machine reserve --gpu <type>'[/dim]")
     return renderables
+
+
+def _fetch_offers_quiet(service: ServiceClient) -> List[PoolOffer]:
+    """Fetch offers without any decorative output, for JSON consumers."""
+    from ..clients.gateway import ListPoolOffersRequest, PoolConfig
+
+    res = service.gateway.list_pool_offers(ListPoolOffersRequest(pool=PoolConfig()))
+    return list(res.offers) if res.ok else []
+
+
+def _inventory_json(
+    res: ListMachinesResponse, offers: Optional[Sequence[PoolOffer]]
+) -> List[Dict[str, Any]]:
+    cheapest = _cheapest_offers_by_gpu(offers or [])
+    inventory = []
+    for gpu_type in sorted(set(res.gpus) | set(res.supported_gpus) | set(cheapest)):
+        if res.gpus.get(gpu_type):
+            serverless = "ready"
+        elif res.supported_gpus.get(gpu_type):
+            serverless = "available"
+        else:
+            serverless = "none"
+        offer = cheapest.get(gpu_type)
+        inventory.append(
+            {
+                "gpu": gpu_type,
+                "serverless": serverless,
+                "on_demand": offer.to_dict(casing=Casing.SNAKE) if offer else None,  # type: ignore
+            }
+        )
+    return inventory
 
 
 @management.command(
@@ -142,10 +176,13 @@ def list_machines(
         terminal.error(res.err_msg)
 
     if format == "json":
+        offers = _fetch_offers_quiet(service) if show_offers else []
         machines = [d.to_dict(casing=Casing.SNAKE) for d in res.machines]  # type:ignore
-        res.gpus = {gpu: res.gpus[gpu] for gpu in sorted(res.gpus)}
         terminal.print_json(
-            {"machines": machines, "gpus": res.gpus, "supported_gpus": res.supported_gpus}
+            {
+                "inventory": _inventory_json(res, offers),
+                "machines": machines,
+            }
         )
         return
 

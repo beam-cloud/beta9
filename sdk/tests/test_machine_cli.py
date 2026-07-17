@@ -82,7 +82,7 @@ def test_gpu_inventory_collapses_empty_gpu_types():
     assert "H100" not in text
     # Hidden GPU types are summarized in the caption, not table rows (long
     # row text would stretch the GPU column).
-    assert table.caption == "2 more GPU types · no capacity"
+    assert table.caption.strip() == "2 more GPU types · no capacity"
 
 
 def test_release_candidates_skips_empty_pools():
@@ -118,6 +118,35 @@ def test_release_options_show_gpu_machines_and_expiry():
 
 def test_release_expiry_handles_missing_expiration():
     assert _release_expiry(PrivatePool(name="p")) == "manual release"
+
+
+def test_inventory_json_shape():
+    from beta9.cli.machine import _inventory_json
+
+    res = ListMachinesResponse(
+        ok=True,
+        gpus={"T4": True},
+        supported_gpus={"T4": True, "A10G": True, "H100": False},
+    )
+    offers = [PoolOffer(id="o1", provider="vast", gpu="A6000", hourly_cost_micros=550_000)]
+
+    inventory = _inventory_json(res, offers)
+    by_gpu = {entry["gpu"]: entry for entry in inventory}
+
+    assert by_gpu["T4"]["serverless"] == "ready"
+    assert by_gpu["A10G"]["serverless"] == "available"
+    assert by_gpu["H100"]["serverless"] == "none"
+    assert by_gpu["A6000"]["serverless"] == "none"
+    assert by_gpu["A6000"]["on_demand"]["id"] == "o1"
+    assert by_gpu["T4"]["on_demand"] is None
+
+
+def test_format_memory_pair_uses_single_unit():
+    from beta9.cli.machine_format import format_memory_pair
+
+    assert format_memory_pair(35533, 65536) == "34.7/64.0GiB"
+    assert format_memory_pair(0, 81920) == "0.0/80.0GiB"
+    assert format_memory_pair(256, 512) == "256/512MiB"
 
 
 def test_cheapest_offers_by_gpu_picks_lowest_price():

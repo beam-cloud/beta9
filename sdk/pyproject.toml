@@ -27,7 +27,7 @@ dependencies = [
     "pyyaml<7.0.0,>=6.0.0",
 ]
 name = "beta9"
-version = "0.1.258"
+version = "0.1.261"
 description = ""
 
 [project.scripts]
