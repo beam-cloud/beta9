@@ -272,8 +272,8 @@ if [ "$(uname -m)" = "x86_64" ] || [ "$(uname -m)" = "aarch64" ]; then
     git clone https://github.com/checkpoint-restore/criu.git
     cd criu
     git reset --hard ${CRIU_COMMIT}
-    git apply --check /tmp/criu-network-remap.patch
-    git apply /tmp/criu-network-remap.patch
+    git apply --check --unidiff-zero /tmp/criu-network-remap.patch
+    git apply --unidiff-zero /tmp/criu-network-remap.patch
     git apply --check --unidiff-zero /tmp/criu-skip-non-cuda-resume.patch
     git apply --unidiff-zero /tmp/criu-skip-non-cuda-resume.patch
     git apply --check /tmp/criu-skip-fresh-zero-pages.patch
