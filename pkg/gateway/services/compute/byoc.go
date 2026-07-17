@@ -164,8 +164,8 @@ func (s *Service) CreateBYOCPool(ctx context.Context, in *pb.CreateBYOCPoolReque
 func (s *Service) prepareBYOCPoolSetup(ctx context.Context, provider byocProvider, raw byocRawPoolRequest) (*byocPoolSetupResult, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 	workspaceID := computeWorkspaceID(authInfo)
-	ownerTokenID := computeOwnerTokenID(authInfo)
-	if workspaceID == "" || ownerTokenID == "" {
+	actorTokenID := computeActorTokenID(authInfo)
+	if workspaceID == "" || actorTokenID == "" {
 		return nil, fmt.Errorf("missing workspace auth")
 	}
 
@@ -187,11 +187,11 @@ func (s *Service) prepareBYOCPoolSetup(ctx context.Context, provider byocProvide
 		return nil, lockErr
 	}
 
-	joinToken, tokenState, err := s.createPersistentPrivatePoolJoinTokenForOwner(
+	joinToken, tokenState, err := s.createPersistentPrivatePoolJoinToken(
 		ctx,
 		workspaceID,
-		ownerTokenID,
 		req.poolName,
+		state.CreatedAt,
 		"",
 	)
 	if err != nil {
@@ -255,7 +255,7 @@ func (s *Service) GetBYOCPool(ctx context.Context, in *pb.GetBYOCPoolRequest) (*
 		return &pb.GetBYOCPoolResponse{Ok: false, ErrMsg: "missing workspace auth"}, nil
 	}
 
-	state, err := s.getOwnedPrivatePoolState(ctx, authInfo, strings.TrimSpace(in.GetPoolName()))
+	state, err := s.getWorkspacePrivatePoolState(ctx, authInfo, strings.TrimSpace(in.GetPoolName()))
 	if err != nil {
 		return &pb.GetBYOCPoolResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
@@ -305,7 +305,7 @@ func (s *Service) ScaleBYOCPool(ctx context.Context, in *pb.ScaleBYOCPoolRequest
 
 	var response *pb.ScaleBYOCPoolResponse
 	lockErr := s.withPoolStateLock(ctx, workspaceID, poolName, func(lockCtx context.Context) error {
-		state, err := s.getOwnedPrivatePoolState(lockCtx, authInfo, poolName)
+		state, err := s.getWorkspacePrivatePoolState(lockCtx, authInfo, poolName)
 		if err != nil {
 			response = &pb.ScaleBYOCPoolResponse{Ok: false, ErrMsg: err.Error()}
 			return nil
@@ -651,7 +651,7 @@ func (s *Service) deleteBYOCPoolLocalState(ctx context.Context, workspaceID stri
 
 func (s *Service) createOrUpdateBYOCPool(ctx context.Context, authInfo *auth.AuthInfo, provider byocProvider, req byocPoolRequest) (*model.PoolState, error) {
 	workspaceID := computeWorkspaceID(authInfo)
-	ownerTokenID := computeOwnerTokenID(authInfo)
+	actorTokenID := computeActorTokenID(authInfo)
 	if _, exists := s.appConfig.Worker.Pools[req.poolName]; exists {
 		return nil, fmt.Errorf("pool %q conflicts with a configured worker pool", req.poolName)
 	}
@@ -659,7 +659,7 @@ func (s *Service) createOrUpdateBYOCPool(ctx context.Context, authInfo *auth.Aut
 	if err != nil {
 		return nil, err
 	}
-	if existing != nil && !computePoolCreatedByAuth(existing, authInfo) {
+	if existing != nil && !poolStateIsPrivate(existing) {
 		return nil, fmt.Errorf("pool already exists in this workspace")
 	}
 	if existing != nil && existing.Source.Canonical() != provider.Source() {
@@ -709,7 +709,7 @@ func (s *Service) createOrUpdateBYOCPool(ctx context.Context, authInfo *auth.Aut
 		Transport:        config.Transport,
 		Fallback:         config.Fallback,
 		Priority:         config.Priority,
-		CreatedByTokenID: ownerTokenID,
+		CreatedByTokenID: actorTokenID,
 		CreatedAt:        now,
 		UpdatedAt:        now,
 		BYOC:             byocState,

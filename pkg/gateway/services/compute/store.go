@@ -87,17 +87,7 @@ func (s *Service) currentComputeAgentState(ctx context.Context, state *model.Age
 	return current, nil
 }
 
-func (s *Service) getOwnedPrivatePoolState(ctx context.Context, authInfo *auth.AuthInfo, poolName string) (*model.PoolState, error) {
-	state, err := s.getWorkspacePrivatePoolState(ctx, authInfo, poolName)
-	if err != nil || state == nil || !computePoolCreatedByAuth(state, authInfo) {
-		return nil, err
-	}
-	return state, nil
-}
-
 func (s *Service) getWorkspacePrivatePoolState(ctx context.Context, authInfo *auth.AuthInfo, poolName string) (*model.PoolState, error) {
-	// Private pools are workspace resources. The token that created one may be
-	// rotated or differ from the workspace token used by the dashboard.
 	workspaceID := computeWorkspaceID(authInfo)
 	if workspaceID == "" {
 		return nil, fmt.Errorf("missing workspace auth")
@@ -113,14 +103,7 @@ func (s *Service) getWorkspacePrivatePoolState(ctx context.Context, authInfo *au
 	return state, nil
 }
 
-func computePoolCreatedByAuth(state *model.PoolState, authInfo *auth.AuthInfo) bool {
-	if state == nil || state.CreatedByTokenID == "" {
-		return false
-	}
-	return state.CreatedByTokenID == computeOwnerTokenID(authInfo)
-}
-
-func computeOwnerTokenID(authInfo *auth.AuthInfo) string {
+func computeActorTokenID(authInfo *auth.AuthInfo) string {
 	if authInfo == nil || authInfo.Token == nil {
 		return ""
 	}

@@ -38,8 +38,8 @@ func (s *Service) ListPoolOffers(ctx context.Context, in *pb.ListPoolOffersReque
 func (s *Service) LaunchPoolCapacity(ctx context.Context, in *pb.LaunchPoolCapacityRequest) (*pb.LaunchPoolCapacityResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 	workspaceID := computeWorkspaceID(authInfo)
-	ownerTokenID := computeOwnerTokenID(authInfo)
-	if workspaceID == "" || ownerTokenID == "" {
+	actorTokenID := computeActorTokenID(authInfo)
+	if workspaceID == "" || actorTokenID == "" {
 		return &pb.LaunchPoolCapacityResponse{Ok: false, ErrMsg: "missing workspace auth"}, nil
 	}
 	config := normalizePoolConfig(in.Pool)
@@ -73,7 +73,7 @@ func (s *Service) LaunchPoolCapacity(ctx context.Context, in *pb.LaunchPoolCapac
 	var response *pb.LaunchPoolCapacityResponse
 	lockErr := s.withPoolStateLock(ctx, workspaceID, pool.Name, func(lockCtx context.Context) error {
 		var err error
-		response, err = s.launchPoolCapacityLocked(lockCtx, authInfo, workspaceID, ownerTokenID, config, pool, offers)
+		response, err = s.launchPoolCapacityLocked(lockCtx, workspaceID, actorTokenID, config, pool, offers)
 		return err
 	})
 	if lockErr != nil {
@@ -82,10 +82,13 @@ func (s *Service) LaunchPoolCapacity(ctx context.Context, in *pb.LaunchPoolCapac
 	return response, nil
 }
 
-func (s *Service) launchPoolCapacityLocked(ctx context.Context, authInfo *auth.AuthInfo, workspaceID, ownerTokenID string, config *pb.PoolConfig, pool model.Pool, offers []model.Offer) (*pb.LaunchPoolCapacityResponse, error) {
+func (s *Service) launchPoolCapacityLocked(ctx context.Context, workspaceID, actorTokenID string, config *pb.PoolConfig, pool model.Pool, offers []model.Offer) (*pb.LaunchPoolCapacityResponse, error) {
 	existing, err := s.getPrivatePoolState(ctx, workspaceID, pool.Name)
 	if err != nil {
 		return &pb.LaunchPoolCapacityResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+	if existing != nil && !poolStateIsPrivate(existing) {
+		return &pb.LaunchPoolCapacityResponse{Ok: false, ErrMsg: "pool already exists in this workspace"}, nil
 	}
 	if existing != nil {
 		// Adding capacity to an existing pool must not rewrite the pool's
@@ -96,8 +99,9 @@ func (s *Service) launchPoolCapacityLocked(ctx context.Context, authInfo *auth.A
 		}
 		config = mergePoolConfigForLaunch(existing.Config, config)
 	}
-	if existing != nil && !computePoolCreatedByAuth(existing, authInfo) {
-		return &pb.LaunchPoolCapacityResponse{Ok: false, ErrMsg: "pool not found"}, nil
+	poolCreatedAt := time.Now()
+	if existing != nil && !existing.CreatedAt.IsZero() {
+		poolCreatedAt = existing.CreatedAt
 	}
 	reservations := []model.Reservation{}
 	if existing != nil {
@@ -160,7 +164,7 @@ func (s *Service) launchPoolCapacityLocked(ctx context.Context, authInfo *auth.A
 			}
 			machineID := model.ManagedMachineID(workspaceID, pool.Name, machineSeed)
 			nodeName := model.ManagedNodeName(workspaceID, pool.Name, machineID)
-			bootstrapCommand, registrationToken, _, err := s.createPrivatePoolJoinCommandForOwner(ctx, workspaceID, ownerTokenID, pool.Name, "", machineID)
+			bootstrapCommand, registrationToken, _, err := s.createPrivatePoolJoinCommandForWorkspace(ctx, workspaceID, pool.Name, poolCreatedAt, "", machineID)
 			if err != nil {
 				return cleanupLaunchFailure("bootstrap_failed", err), nil
 			}
@@ -205,16 +209,13 @@ func (s *Service) launchPoolCapacityLocked(ctx context.Context, authInfo *auth.A
 		Transport:            config.Transport,
 		Fallback:             config.Fallback,
 		Priority:             config.Priority,
-		CreatedByTokenID:     ownerTokenID,
-		CreatedAt:            now,
+		CreatedByTokenID:     actorTokenID,
+		CreatedAt:            poolCreatedAt,
 		UpdatedAt:            now,
 		ExpiresAt:            now.Add(pool.TTL),
 	}
 	if existing != nil {
-		if !existing.CreatedAt.IsZero() {
-			state.CreatedAt = existing.CreatedAt
-			state.CreatedByTokenID = existing.CreatedByTokenID
-		}
+		state.CreatedByTokenID = firstNonEmpty(existing.CreatedByTokenID, actorTokenID)
 		// Adding a machine never shortens the pool's life.
 		if existing.ExpiresAt.After(state.ExpiresAt) {
 			state.ExpiresAt = existing.ExpiresAt

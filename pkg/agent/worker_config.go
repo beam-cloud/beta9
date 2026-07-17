@@ -431,7 +431,7 @@ func (c agentWorkerConfig) sanitizedForAgent() agentWorkerConfig {
 	c.Worker.CacheEnabled = true
 	for name, pool := range c.Worker.Pools {
 		// Agent workers run in private, marketplace, or managed external mode;
-		// cluster-local and legacy provider modes still collapse to private.
+		// any other supplied mode is sanitized to private.
 		if pool.Mode != string(types.PoolModeMarketplace) && pool.Mode != string(types.PoolModeExternal) {
 			pool.Mode = string(types.PoolModePrivate)
 			pool.RequiresPoolSelector = true

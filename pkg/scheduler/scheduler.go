@@ -124,7 +124,7 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 			}
 			controllerOptions.ProviderName = pool.Provider
 			controllerOptions.Tailscale = tailscale
-			controller, err = NewLegacyExternalWorkerPoolController(controllerOptions)
+			controller, err = NewProviderWorkerPoolController(controllerOptions)
 		default:
 			log.Error().Str("pool_name", name).Str("mode", string(pool.Mode)).Msg("no valid controller found for pool")
 			continue
@@ -285,7 +285,7 @@ func (s *Scheduler) DeleteAgentPool(workspaceID string, state *compute.PoolState
 }
 
 // DeleteManagedAgentPool removes only the managed controller generation the
-// caller reconciled. It cannot delete a private, local, legacy, or newly
+// caller reconciled. It cannot delete a private, local, provider-backed, or newly
 // recreated controller that happens to reuse the same selector.
 func (s *Scheduler) DeleteManagedAgentPool(selector, instanceID string) {
 	if s == nil || selector == "" {

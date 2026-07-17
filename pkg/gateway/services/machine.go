@@ -30,87 +30,44 @@ func (gws *GatewayService) ListMachines(ctx context.Context, in *pb.ListMachines
 	}
 	supportedGpus := gws.supportedServerlessGpus()
 
-	// Workspace profiles see private/BYOC inventory; admins see the control plane.
 	if authInfo.Token.TokenType != types.TokenTypeClusterAdmin {
-		machines := []*pb.Machine{}
-		if gws.computeService != nil {
-			machines, err = gws.computeService.ListWorkspaceMachines(ctx, authInfo, in.PoolName, int(in.Limit))
-			if err != nil {
-				return &pb.ListMachinesResponse{Ok: false, ErrMsg: err.Error()}, nil
-			}
+		if gws.computeService == nil {
+			return &pb.ListMachinesResponse{Ok: false, ErrMsg: "compute service is unavailable"}, nil
+		}
+		machines, err := gws.computeService.ListPrivateMachines(ctx, authInfo, in.PoolName, int(in.Limit))
+		if err != nil {
+			return &pb.ListMachinesResponse{Ok: false, ErrMsg: err.Error()}, nil
 		}
 		return machineListResponse(gpus, supportedGpus, machines, in.Limit), nil
 	}
 
-	// Cluster admins see all machines associated with a cluster
-	formattedMachines := []*pb.Machine{}
-	if gws.computeService != nil {
-		managedMachines, handled, err := gws.computeService.ListManagedMachines(ctx, authInfo, in.PoolName)
+	backend, pool := gws.classifyMachinePool(in.PoolName)
+	if backend == machinePoolProvider {
+		machines, err := gws.listProviderMachines(in.PoolName, pool)
 		if err != nil {
 			return &pb.ListMachinesResponse{Ok: false, ErrMsg: err.Error()}, nil
 		}
-		if handled && in.PoolName != "" {
-			return machineListResponse(gpus, supportedGpus, managedMachines, in.Limit), nil
-		}
-		formattedMachines = append(formattedMachines, managedMachines...)
+		return machineListResponse(gpus, supportedGpus, machines, in.Limit), nil
 	}
-	if in.PoolName != "" {
-		pool, ok := gws.appConfig.Worker.Pools[in.PoolName]
-		if !ok {
-			return &pb.ListMachinesResponse{
-				Ok:     false,
-				ErrMsg: "Invalid pool",
-			}, nil
-		}
+	if backend == machinePoolLocal {
+		return &pb.ListMachinesResponse{Ok: false, ErrMsg: fmt.Sprintf("pool %q is managed by its local controller", in.PoolName)}, nil
+	}
+	if gws.computeService == nil {
+		return &pb.ListMachinesResponse{Ok: false, ErrMsg: "compute service is unavailable"}, nil
+	}
 
-		if pool.Provider == nil {
-			return &pb.ListMachinesResponse{
-				Ok:     false,
-				ErrMsg: fmt.Sprintf("Pool %q is controller-managed and does not track machines; use worker commands for its capacity", in.PoolName),
-			}, nil
-		}
-
-		machines, err := gws.providerRepo.ListAllMachines(string(*pool.Provider), in.PoolName, false)
+	machines, err := gws.computeService.ListManagedMachines(ctx, authInfo, in.PoolName)
+	if err != nil {
+		return &pb.ListMachinesResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+	if in.PoolName == "" {
+		providerMachines, err := gws.listAllProviderMachines()
 		if err != nil {
-			return &pb.ListMachinesResponse{
-				Ok:     false,
-				ErrMsg: fmt.Sprintf("Unable to list machines: %s", err.Error()),
-			}, nil
+			return &pb.ListMachinesResponse{Ok: false, ErrMsg: err.Error()}, nil
 		}
-
-		for _, machine := range machines {
-			if machine.Metrics == nil {
-				machine.Metrics = &types.ProviderMachineMetrics{}
-			}
-
-			formattedMachines = append(formattedMachines, providerMachineToProto(machine))
-		}
-
-	} else {
-		for poolName, pool := range gws.appConfig.Worker.Pools {
-			if pool.Provider == nil {
-				continue
-			}
-
-			machines, err := gws.providerRepo.ListAllMachines(string(*pool.Provider), poolName, false)
-			if err != nil {
-				return &pb.ListMachinesResponse{
-					Ok:     false,
-					ErrMsg: fmt.Sprintf("Unable to list machines: %s", err.Error()),
-				}, nil
-			}
-
-			for _, machine := range machines {
-				if machine.Metrics == nil {
-					machine.Metrics = &types.ProviderMachineMetrics{}
-				}
-
-				formattedMachines = append(formattedMachines, providerMachineToProto(machine))
-			}
-		}
+		machines = append(machines, providerMachines...)
 	}
-
-	return machineListResponse(gpus, supportedGpus, formattedMachines, in.Limit), nil
+	return machineListResponse(gpus, supportedGpus, machines, in.Limit), nil
 }
 
 // supportedServerlessGpus reports pool-config-based serverless support per
@@ -139,12 +96,69 @@ func machineListResponse(gpus map[string]bool, supportedGpus map[string]bool, ma
 	return &pb.ListMachinesResponse{Ok: true, Gpus: gpus, SupportedGpus: supportedGpus, Machines: machines}
 }
 
+type machinePoolBackend uint8
+
+const (
+	machinePoolManagedAgent machinePoolBackend = iota
+	machinePoolProvider
+	machinePoolLocal
+)
+
+// classifyMachinePool routes cluster-admin machine operations before any
+// repository call, so one pool can never fall through into another backend.
+func (gws *GatewayService) classifyMachinePool(name string) (machinePoolBackend, types.WorkerPoolConfig) {
+	pool, configured := gws.appConfig.Worker.Pools[name]
+	if !configured || pool.AgentHosted() {
+		return machinePoolManagedAgent, pool
+	}
+	if pool.Mode == types.PoolModeExternal && pool.Provider != nil {
+		return machinePoolProvider, pool
+	}
+	return machinePoolLocal, pool
+}
+
+func (gws *GatewayService) listAllProviderMachines() ([]*pb.Machine, error) {
+	machines := []*pb.Machine{}
+	for name, pool := range gws.appConfig.Worker.Pools {
+		backend, _ := gws.classifyMachinePool(name)
+		if backend != machinePoolProvider {
+			continue
+		}
+		poolMachines, err := gws.listProviderMachines(name, pool)
+		if err != nil {
+			return nil, err
+		}
+		machines = append(machines, poolMachines...)
+	}
+	return machines, nil
+}
+
+func (gws *GatewayService) listProviderMachines(poolName string, pool types.WorkerPoolConfig) ([]*pb.Machine, error) {
+	if gws.providerRepo == nil || pool.Provider == nil {
+		return nil, fmt.Errorf("provider machine repository is unavailable")
+	}
+	machines, err := gws.providerRepo.ListAllMachines(string(*pool.Provider), poolName, false)
+	if err != nil {
+		return nil, fmt.Errorf("unable to list machines: %w", err)
+	}
+	out := make([]*pb.Machine, 0, len(machines))
+	for _, machine := range machines {
+		out = append(out, providerMachineToProto(machine))
+	}
+	return out, nil
+}
+
 func providerMachineToProto(machine *types.ProviderMachine) *pb.Machine {
 	if machine == nil || machine.State == nil {
 		return &pb.Machine{}
 	}
-	if machine.Metrics == nil {
-		machine.Metrics = &types.ProviderMachineMetrics{}
+	metrics := machine.Metrics
+	if metrics == nil {
+		metrics = &types.ProviderMachineMetrics{}
+	}
+	status := machine.State.Status
+	if status == types.MachineStatusReady {
+		status = types.MachineStatusAvailable
 	}
 	return &pb.Machine{
 		Id:            machine.State.MachineId,
@@ -152,32 +166,25 @@ func providerMachineToProto(machine *types.ProviderMachine) *pb.Machine {
 		Memory:        machine.State.Memory,
 		Gpu:           machine.State.Gpu,
 		GpuCount:      machine.State.GpuCount,
-		Status:        string(providerMachineStatus(machine.State.Status)),
+		Status:        string(status),
 		PoolName:      machine.State.PoolName,
 		LastKeepalive: machine.State.LastKeepalive,
 		Created:       machine.State.Created,
 		AgentVersion:  machine.State.AgentVersion,
 		MachineMetrics: &pb.MachineMetrics{
-			TotalCpuAvailable:    int32(machine.Metrics.TotalCpuAvailable),
-			TotalMemoryAvailable: int32(machine.Metrics.TotalMemoryAvailable),
-			CpuUtilizationPct:    float32(machine.Metrics.CpuUtilizationPct),
-			MemoryUtilizationPct: float32(machine.Metrics.MemoryUtilizationPct),
-			WorkerCount:          int32(machine.Metrics.WorkerCount),
-			ContainerCount:       int32(machine.Metrics.ContainerCount),
-			FreeGpuCount:         int32(machine.Metrics.FreeGpuCount),
-			CacheUsagePct:        float32(machine.Metrics.CacheUsagePct),
-			CacheCapacity:        int32(machine.Metrics.CacheCapacity),
-			CacheMemoryUsage:     int32(machine.Metrics.CacheMemoryUsage),
-			CacheCpuUsage:        float32(machine.Metrics.CacheCpuUsage),
+			TotalCpuAvailable:    int32(metrics.TotalCpuAvailable),
+			TotalMemoryAvailable: int32(metrics.TotalMemoryAvailable),
+			CpuUtilizationPct:    float32(metrics.CpuUtilizationPct),
+			MemoryUtilizationPct: float32(metrics.MemoryUtilizationPct),
+			WorkerCount:          int32(metrics.WorkerCount),
+			ContainerCount:       int32(metrics.ContainerCount),
+			FreeGpuCount:         int32(metrics.FreeGpuCount),
+			CacheUsagePct:        float32(metrics.CacheUsagePct),
+			CacheCapacity:        int32(metrics.CacheCapacity),
+			CacheMemoryUsage:     int32(metrics.CacheMemoryUsage),
+			CacheCpuUsage:        float32(metrics.CacheCpuUsage),
 		},
 	}
-}
-
-func providerMachineStatus(status types.MachineStatus) types.MachineStatus {
-	if status == types.MachineStatusReady {
-		return types.MachineStatusAvailable
-	}
-	return status
 }
 
 func (gws *GatewayService) CreateMachine(ctx context.Context, in *pb.CreateMachineRequest) (*pb.CreateMachineResponse, error) {
@@ -194,69 +201,60 @@ func (gws *GatewayService) CreateMachine(ctx context.Context, in *pb.CreateMachi
 		return &pb.CreateMachineResponse{Ok: false, ErrMsg: "machine creation is managed through private pool join or BYOC scaling"}, nil
 	}
 
-	if gws.computeService != nil {
-		bootstrap, handled, err := gws.computeService.CreateManagedMachine(ctx, authInfo, in.PoolName)
-		if err != nil {
-			return &pb.CreateMachineResponse{Ok: false, ErrMsg: err.Error()}, nil
-		}
-		if handled {
-			return &pb.CreateMachineResponse{
-				Ok: true,
-				Machine: &pb.Machine{
-					Id:                bootstrap.MachineID,
-					PoolName:          bootstrap.PoolName,
-					ProviderName:      types.DefaultAgentName,
-					RegistrationToken: bootstrap.Token,
-				},
-				InstallCommand: bootstrap.InstallCommand,
-			}, nil
-		}
+	backend, pool := gws.classifyMachinePool(in.PoolName)
+	if backend == machinePoolProvider {
+		return gws.createProviderMachine(ctx, authInfo, in.PoolName, pool)
 	}
-
-	pool, ok := gws.appConfig.Worker.Pools[in.PoolName]
-	if !ok {
-		return &pb.CreateMachineResponse{
-			Ok:     false,
-			ErrMsg: "Invalid pool name",
-		}, nil
+	if backend == machinePoolLocal {
+		return &pb.CreateMachineResponse{Ok: false, ErrMsg: fmt.Sprintf("pool %q is managed by its local controller", in.PoolName)}, nil
 	}
+	if gws.computeService == nil {
+		return &pb.CreateMachineResponse{Ok: false, ErrMsg: "compute service is unavailable"}, nil
+	}
+	bootstrap, err := gws.computeService.CreateManagedMachine(ctx, authInfo, in.PoolName)
+	if err != nil {
+		return &pb.CreateMachineResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+	return &pb.CreateMachineResponse{
+		Ok: true,
+		Machine: &pb.Machine{
+			Id:                bootstrap.MachineID,
+			PoolName:          bootstrap.PoolName,
+			ProviderName:      types.DefaultAgentName,
+			RegistrationToken: bootstrap.Token,
+		},
+		InstallCommand: bootstrap.InstallCommand,
+	}, nil
+}
 
-	// Create a one-time auth token
+func (gws *GatewayService) createProviderMachine(ctx context.Context, authInfo *auth.AuthInfo, poolName string, pool types.WorkerPoolConfig) (*pb.CreateMachineResponse, error) {
+	if gws.providerRepo == nil || pool.Provider == nil {
+		return &pb.CreateMachineResponse{Ok: false, ErrMsg: "provider machine repository is unavailable"}, nil
+	}
+	if authInfo.Token.WorkspaceId == nil {
+		return &pb.CreateMachineResponse{Ok: false, ErrMsg: "missing admin workspace"}, nil
+	}
 	token, err := gws.backendRepo.CreateToken(ctx, *authInfo.Token.WorkspaceId, types.TokenTypeMachine, true)
 	if err != nil {
-		return &pb.CreateMachineResponse{
-			Ok:     false,
-			ErrMsg: fmt.Sprintf("Unable to create token: %s", err.Error()),
-		}, nil
+		return &pb.CreateMachineResponse{Ok: false, ErrMsg: fmt.Sprintf("unable to create token: %v", err)}, nil
 	}
 
-	if pool.Provider == nil {
-		return &pb.CreateMachineResponse{
-			Ok:     false,
-			ErrMsg: "This pool does not currently support machine creation",
-		}, nil
-	}
-
-	machineId := providers.MachineId()
-	err = gws.providerRepo.AddMachine(string(*pool.Provider), in.PoolName, machineId, &types.ProviderMachineState{
-		PoolName:          in.PoolName,
+	machineID := providers.MachineId()
+	if err := gws.providerRepo.AddMachine(string(*pool.Provider), poolName, machineID, &types.ProviderMachineState{
+		PoolName:          poolName,
 		RegistrationToken: token.Key,
 		Gpu:               pool.GPUType,
 		AutoConsolidate:   false,
-	})
-	if err != nil {
-		return &pb.CreateMachineResponse{
-			Ok:     false,
-			ErrMsg: fmt.Sprintf("Unable to create machine: %s", err.Error()),
-		}, nil
+	}); err != nil {
+		return &pb.CreateMachineResponse{Ok: false, ErrMsg: fmt.Sprintf("unable to create machine: %v", err)}, nil
 	}
 
 	return &pb.CreateMachineResponse{
 		Ok: true,
 		Machine: &pb.Machine{
-			Id:                machineId,
+			Id:                machineID,
 			RegistrationToken: token.Key,
-			PoolName:          in.PoolName,
+			PoolName:          poolName,
 			Gpu:               pool.GPUType,
 			ProviderName:      string(*pool.Provider),
 			TailscaleUrl:      gws.appConfig.Tailscale.ControlURL,
@@ -274,51 +272,30 @@ func (gws *GatewayService) DeleteMachine(ctx context.Context, in *pb.DeleteMachi
 	if !auth.HasPermission(authInfo) {
 		return &pb.DeleteMachineResponse{Ok: false, ErrMsg: "Unauthorized Access"}, nil
 	}
-	clusterAdmin, _ := isClusterAdmin(ctx)
-	if gws.computeService != nil && clusterAdmin {
-		handled, err := gws.computeService.DeleteManagedMachine(ctx, authInfo, in.PoolName, in.MachineId)
-		if err != nil {
-			return &pb.DeleteMachineResponse{Ok: false, ErrMsg: err.Error()}, nil
-		}
-		if handled {
+	if authInfo.Token.TokenType == types.TokenTypeClusterAdmin {
+		backend, pool := gws.classifyMachinePool(in.PoolName)
+		if backend == machinePoolProvider {
+			if gws.providerRepo == nil || pool.Provider == nil {
+				return &pb.DeleteMachineResponse{Ok: false, ErrMsg: "provider machine repository is unavailable"}, nil
+			}
+			if err := gws.providerRepo.RemoveMachine(string(*pool.Provider), in.PoolName, in.MachineId); err != nil {
+				return &pb.DeleteMachineResponse{Ok: false, ErrMsg: fmt.Sprintf("unable to delete machine: %v", err)}, nil
+			}
 			return &pb.DeleteMachineResponse{Ok: true}, nil
 		}
-	}
-
-	if gws.computeService != nil && !clusterAdmin {
-		handled, res, err := gws.computeService.DeletePoolMachine(ctx, in)
-		if handled || err != nil {
-			return res, err
+		if backend == machinePoolLocal {
+			return &pb.DeleteMachineResponse{Ok: false, ErrMsg: fmt.Sprintf("pool %q is managed by its local controller", in.PoolName)}, nil
 		}
+		if gws.computeService == nil {
+			return &pb.DeleteMachineResponse{Ok: false, ErrMsg: "compute service is unavailable"}, nil
+		}
+		if err := gws.computeService.DeleteManagedMachine(ctx, authInfo, in.PoolName, in.MachineId); err != nil {
+			return &pb.DeleteMachineResponse{Ok: false, ErrMsg: err.Error()}, nil
+		}
+		return &pb.DeleteMachineResponse{Ok: true}, nil
 	}
-
-	if authInfo.Token.TokenType != types.TokenTypeClusterAdmin {
-		return &pb.DeleteMachineResponse{
-			Ok:     false,
-			ErrMsg: "This action is not permitted",
-		}, nil
+	if gws.computeService == nil {
+		return &pb.DeleteMachineResponse{Ok: false, ErrMsg: "compute service is unavailable"}, nil
 	}
-
-	pool, ok := gws.appConfig.Worker.Pools[in.PoolName]
-	if !ok {
-		return &pb.DeleteMachineResponse{
-			Ok:     false,
-			ErrMsg: "Invalid pool name",
-		}, nil
-	}
-	if pool.Provider == nil {
-		return &pb.DeleteMachineResponse{Ok: false, ErrMsg: "This pool does not track provider machines"}, nil
-	}
-
-	err := gws.providerRepo.RemoveMachine(string(*pool.Provider), in.PoolName, in.MachineId)
-	if err != nil {
-		return &pb.DeleteMachineResponse{
-			Ok:     false,
-			ErrMsg: fmt.Sprintf("Unable to delete machine: %s", err.Error()),
-		}, nil
-	}
-
-	return &pb.DeleteMachineResponse{
-		Ok: true,
-	}, nil
+	return gws.computeService.DeletePrivateMachine(ctx, in)
 }

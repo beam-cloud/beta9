@@ -250,7 +250,7 @@ worker:
     #     minFreeMemory:
     #     sharedMemoryLimitPct: 100%
     # Agent-backed public/serverless pool. Omitting provider is intentional:
-    # external + provider uses the legacy remote-k3s controller, while
+    # external + provider uses the provider-backed remote Kubernetes controller;
     # external without provider uses the agent controller and `machine create`.
     # public-cpu:
     #   mode: external
