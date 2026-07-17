@@ -173,6 +173,21 @@ func TestCheckpointSchedulingSkipsHandoffCheckWithCheckpoint(t *testing.T) {
 	assert.Equal(t, 0, backend.calls)
 }
 
+func TestCheckpointSchedulingSkipsHandoffCheckWhenDisabled(t *testing.T) {
+	scheduler, err := NewSchedulerForTest()
+	assert.NoError(t, err)
+	backend := &checkpointBackendRepoForTest{BackendRepository: scheduler.backendRepo}
+	scheduler.backendRepo = backend
+	scheduler.containerRepo = nil
+
+	request := &types.ContainerRequest{
+		StubId:            "checkpoint-stub",
+		CheckpointEnabled: false,
+	}
+	assert.True(t, scheduler.checkpointSchedulingReady(request))
+	assert.Equal(t, 0, backend.calls)
+}
+
 func TestPrepareWorkerRequestRefreshesMissingCheckpoint(t *testing.T) {
 	scheduler, err := NewSchedulerForTest()
 	assert.NoError(t, err)
