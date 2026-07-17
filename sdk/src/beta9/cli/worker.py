@@ -10,7 +10,7 @@ from ..cli import extraclick
 from ..clients.gateway import ListWorkersRequest, ListWorkersResponse
 from ..clients.types import Worker
 from .extraclick import ClickCommonGroup, ClickManagementGroup
-from .machine_format import format_memory
+from .machine_format import format_memory_pair
 from .worker_management import apply_worker_action, worker_ids_from_args
 
 
@@ -54,14 +54,18 @@ def _worker_matches_state(worker: Worker, state: str) -> bool:
     return worker.status == state
 
 
-def _worker_resources(worker: Worker) -> str:
-    parts = [
-        f"{worker.free_cpu / 1000:g}/{worker.total_cpu / 1000:g} CPU",
-        f"{format_memory(worker.free_memory)}/{format_memory(worker.total_memory)}",
-    ]
-    if worker.gpu or worker.total_gpu_count:
-        parts.append(f"{worker.free_gpu_count}/{worker.total_gpu_count} {worker.gpu or 'GPU'}")
-    return "\n".join(parts)
+def _worker_cpu(worker: Worker) -> str:
+    return f"{worker.free_cpu / 1000:g}/{worker.total_cpu / 1000:g}"
+
+
+def _worker_memory(worker: Worker) -> str:
+    return format_memory_pair(worker.free_memory, worker.total_memory)
+
+
+def _worker_gpu(worker: Worker) -> str:
+    if not worker.gpu and not worker.total_gpu_count:
+        return "-"
+    return f"{worker.free_gpu_count}/{worker.total_gpu_count} {worker.gpu or 'GPU'}"
 
 
 def _worker_version(worker: Worker) -> str:
@@ -133,12 +137,14 @@ def list_workers(
 
     table = Table(
         Column("ID", no_wrap=True),
-        Column("Pool"),
-        Column("State"),
-        Column("Machine"),
-        Column("Free / total", no_wrap=True),
-        Column("Ctrs", justify="right"),
-        Column("Version"),
+        Column("Pool", no_wrap=True),
+        Column("State", no_wrap=True),
+        Column("Machine", no_wrap=True),
+        Column("CPU", justify="right", no_wrap=True),
+        Column("Memory", justify="right", no_wrap=True),
+        Column("GPU", no_wrap=True),
+        Column("Containers", justify="right"),
+        Column("Version", no_wrap=True),
         box=box.SIMPLE,
     )
     for worker in workers:
@@ -147,12 +153,15 @@ def list_workers(
             worker.pool_name or "-",
             _worker_state(worker),
             worker.machine_id or "-",
-            _worker_resources(worker),
+            _worker_cpu(worker),
+            _worker_memory(worker),
+            _worker_gpu(worker),
             str(len(worker.active_containers)),
             _worker_version(worker),
         )
     table.add_section()
-    table.add_row(f"[bold]{len(workers)} items")
+    count, suffix = terminal.pluralize(workers, "s")
+    table.add_row(f"[bold]{count} worker{suffix}")
     terminal.print(table)
 
 

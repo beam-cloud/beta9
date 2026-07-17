@@ -50,16 +50,14 @@ def gpu_inventory_table(
 
     caption = None
     if hidden > 0:
-        caption = f"{hidden} more GPU types · no capacity"
+        # Leading pad keeps the caption aligned with the table's cell content.
+        caption = f"  {hidden} more GPU types · no capacity"
 
     table = Table(
         Column("GPU", no_wrap=True),
         Column("Serverless", no_wrap=True),
         Column("On-demand", justify="right", no_wrap=True),
         box=box.SIMPLE,
-        title="GPU inventory",
-        title_justify="left",
-        title_style=f"bold {terminal.BRAND_COLOR}",
         caption=caption,
         caption_justify="left",
         caption_style="dim",
@@ -73,7 +71,7 @@ def gpu_inventory_table(
     return table
 
 
-def machine_table(machines: Sequence[Machine], title: str = "") -> Table:
+def machine_table(machines: Sequence[Machine]) -> Table:
     table = Table(
         Column("ID", no_wrap=True),
         Column("Pool"),
@@ -83,9 +81,6 @@ def machine_table(machines: Sequence[Machine], title: str = "") -> Table:
         Column("Last seen"),
         Column("Agent"),
         box=box.SIMPLE,
-        title=title or None,
-        title_justify="left",
-        title_style=f"bold {terminal.BRAND_COLOR}",
     )
     for machine in machines:
         table.add_row(
@@ -117,6 +112,13 @@ def format_memory(memory_mb: int) -> str:
     return f"{memory_mb}MiB"
 
 
+def format_memory_pair(free_mb: int, total_mb: int) -> str:
+    """Compact free/total memory in the total's unit: 34.7/64.0GiB."""
+    if total_mb >= 1024:
+        return f"{free_mb / 1024:.1f}/{total_mb / 1024:.1f}GiB"
+    return f"{free_mb}/{total_mb}MiB"
+
+
 def format_gpu(gpu: str, gpu_count: int = 0) -> str:
     if not gpu:
         return "-"
@@ -133,7 +135,7 @@ def machine_capacity(machine: Machine) -> str:
         parts.append(format_memory(machine.memory))
     if machine.gpu:
         parts.append(format_gpu(machine.gpu, machine.gpu_count))
-    return "\n".join(parts) or "-"
+    return " · ".join(parts) or "-"
 
 
 def machine_load(machine: Machine) -> str:
@@ -147,7 +149,7 @@ def machine_load(machine: Machine) -> str:
         workers = "worker" if metrics.worker_count == 1 else "workers"
         containers = "container" if metrics.container_count == 1 else "containers"
         parts.append(f"{metrics.worker_count} {workers} · {metrics.container_count} {containers}")
-    return "\n".join(parts) or "-"
+    return " · ".join(parts) or "-"
 
 
 def machine_status(status: str) -> str:
