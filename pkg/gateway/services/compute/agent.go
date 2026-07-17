@@ -738,6 +738,7 @@ func agentWorkerSlotState(config types.AppConfig, agentState *model.AgentTokenSt
 	requiresPoolSelector := worker.RequiresPoolSelector
 	priority := worker.Priority
 	preemptable := worker.Preemptable
+	var cpuAffinityEnforced *bool
 
 	// Managed pool configuration is authoritative and may change while the
 	// machine remains connected. Machine capacity still comes from the worker.
@@ -752,6 +753,7 @@ func agentWorkerSlotState(config types.AppConfig, agentState *model.AgentTokenSt
 		requiresPoolSelector = poolConfig.RequiresPoolSelector
 		priority = poolConfig.Priority
 		preemptable = poolConfig.Preemptable
+		cpuAffinityEnforced = &poolConfig.CPUAffinityEnforced
 	}
 	return &model.AgentWorkerSlotState{
 		WorkerID:                  worker.Id,
@@ -763,6 +765,7 @@ func agentWorkerSlotState(config types.AppConfig, agentState *model.AgentTokenSt
 		Mode:                      firstNonEmpty(agentState.Mode, string(types.PoolModePrivate)),
 		ContainerRuntime:          runtimeName,
 		ContainerRuntimeConfig:    poolConfig.ContainerRuntimeConfig.WithDefaults(runtimeName),
+		CPUAffinityEnforced:       cpuAffinityEnforced,
 		MarketplaceListingID:      agentState.MarketplaceListingID,
 		SellerWorkspaceID:         agentState.SellerWorkspaceID,
 		CPU:                       worker.TotalCpu,
@@ -859,6 +862,7 @@ func agentWorkerSlotToProto(slot *model.AgentWorkerSlotState, workerToken string
 		WorkerImage:               slot.WorkerImage,
 		NetworkSlotPoolSize:       slot.NetworkSlotPoolSize,
 		ContainerStartConcurrency: slot.ContainerStartConcurrency,
+		CpuAffinityEnforced:       slot.CPUAffinityEnforced != nil && *slot.CPUAffinityEnforced,
 		RequiresPoolSelector:      slot.RequiresPoolSelector,
 		Priority:                  slot.Priority,
 		PrioritySet:               true,

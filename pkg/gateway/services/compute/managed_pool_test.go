@@ -193,6 +193,16 @@ func TestManagedPoolServiceRejectsForgedClientCapability(t *testing.T) {
 	}
 }
 
+func TestManagedPoolCPUAffinityDefaultsDisabled(t *testing.T) {
+	config, err := normalizeManagedPoolConfig(types.WorkerPoolConfig{Mode: types.PoolModeExternal})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.CPUAffinityEnforced {
+		t.Fatal("managed pool CPU affinity must default to disabled")
+	}
+}
+
 func TestManagedPoolLifecyclePreservesWorkerConfiguration(t *testing.T) {
 	repo := &fakeComputeRepo{}
 	service := managedPoolTestService(types.AppConfig{}, repo)
@@ -200,7 +210,9 @@ func TestManagedPoolLifecyclePreservesWorkerConfiguration(t *testing.T) {
 	config := types.WorkerPoolConfig{
 		Mode:                      types.PoolModeExternal,
 		GPUType:                   "H100",
+		RequiresPoolSelector:      true,
 		ContainerRuntime:          types.ContainerRuntimeRunc.String(),
+		CPUAffinityEnforced:       true,
 		ContainerStartConcurrency: 7,
 		NetworkSlotPoolSize:       48,
 		Priority:                  120,
@@ -227,8 +239,11 @@ func TestManagedPoolLifecyclePreservesWorkerConfiguration(t *testing.T) {
 	if created.Source != types.WorkerPoolManagementSourceAPI || created.Controller != types.WorkerPoolControllerAgent {
 		t.Fatalf("created pool = %+v", created)
 	}
-	if created.Config.Cache.Disk.HostPath != config.Cache.Disk.HostPath || created.Config.ContainerStartConcurrency != 7 {
+	if created.Config.Cache.Disk.HostPath != config.Cache.Disk.HostPath || created.Config.ContainerStartConcurrency != 7 || !created.Config.CPUAffinityEnforced {
 		t.Fatalf("worker config was not preserved: %+v", created.Config)
+	}
+	if created.Config.RequiresPoolSelector {
+		t.Fatal("managed pool must be available to selector-less serverless requests")
 	}
 	state, err := service.managedPoolRepo.GetManagedPoolState(context.Background(), "admin-workspace", "public-h100")
 	if err != nil || state == nil {
@@ -239,6 +254,18 @@ func TestManagedPoolLifecyclePreservesWorkerConfiguration(t *testing.T) {
 	}
 	if state.WorkerConfig == nil || state.WorkerConfig.DurableDisksPath != "/mnt/disks" {
 		t.Fatalf("saved worker config = %+v", state.WorkerConfig)
+	}
+	if !state.WorkerConfig.CPUAffinityEnforced {
+		t.Fatal("persisted managed pool must preserve CPU affinity configuration")
+	}
+	if state.WorkerConfig.RequiresPoolSelector {
+		t.Fatal("persisted managed pool must not require a pool selector")
+	}
+	if err := service.ReconcileManagedPools(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !service.scheduler.HasManagedPoolForGPU("H100", false) {
+		t.Fatal("managed pool was not available to serverless scheduling")
 	}
 	createdInstanceID := state.ManagedInstanceID
 

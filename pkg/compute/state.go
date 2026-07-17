@@ -208,6 +208,7 @@ type AgentWorkerSlotState struct {
 	Mode                      string              `json:"mode,omitempty"`
 	ContainerRuntime          string              `json:"container_runtime,omitempty"`
 	ContainerRuntimeConfig    types.RuntimeConfig `json:"container_runtime_config,omitempty"`
+	CPUAffinityEnforced       *bool               `json:"cpu_affinity_enforced,omitempty"`
 	MarketplaceListingID      string              `json:"marketplace_listing_id,omitempty"`
 	SellerWorkspaceID         string              `json:"seller_workspace_id,omitempty"`
 	CPU                       int64               `json:"cpu"`

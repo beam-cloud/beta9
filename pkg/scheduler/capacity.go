@@ -2,6 +2,53 @@ package scheduler
 
 import "github.com/beam-cloud/beta9/pkg/types"
 
+// GetServerlessGPUAvailability reports live GPU capacity that a selector-less
+// serverless request can actually use. Private and marketplace workers must not
+// leak into the global availability shown to other workspaces.
+func (s *Scheduler) GetServerlessGPUAvailability() (map[string]bool, error) {
+	availability := emptyGPUAvailability()
+	if s == nil || s.workerRepo == nil || s.workerPoolManager == nil {
+		return availability, nil
+	}
+
+	workers, err := s.workerRepo.GetAllWorkers()
+	if err != nil {
+		return nil, err
+	}
+	return s.serverlessGPUAvailability(workers), nil
+}
+
+func (s *Scheduler) serverlessGPUAvailability(workers []*types.Worker) map[string]bool {
+	availability := emptyGPUAvailability()
+	for _, worker := range workers {
+		if worker == nil || worker.Status != types.WorkerStatusAvailable || worker.Gpu == "" || worker.FreeGpuCount == 0 {
+			continue
+		}
+		pool, ok := s.workerPoolManager.GetPool(workerPoolSelector(worker))
+		if !ok || pool.Controller == nil || pool.Controller.RequiresPoolSelector() || worker.RequiresPoolSelector {
+			continue
+		}
+		if pool.Config.Mode == types.PoolModeMarketplace || pool.Config.Mode == types.PoolModePrivate {
+			continue
+		}
+		if worker.WorkspaceId != "" && !worker.ControlPlaneManaged {
+			continue
+		}
+		availability[worker.Gpu] = true
+	}
+	return availability
+}
+
+func emptyGPUAvailability() map[string]bool {
+	availability := make(map[string]bool, len(types.AllGPUTypes()))
+	for _, gpu := range types.AllGPUTypes() {
+		if gpu != types.GPU_ANY {
+			availability[gpu.String()] = false
+		}
+	}
+	return availability
+}
+
 // HasManagedPoolForGPU reports whether any registered pool that is usable
 // without a pool selector could serve the given GPU type. The check is
 // pool-config-based rather than live-worker-based, so scale-to-zero pools

@@ -376,6 +376,22 @@ func TestAgentWorkerConfigCanDisableCPUAffinity(t *testing.T) {
 	}
 }
 
+func TestManagedAgentWorkerConfigDefaultsCPUAffinityOff(t *testing.T) {
+	t.Setenv(types.AgentCPUAffinityEnforcedEnv, "true")
+	slot := &pb.AgentWorkerSlot{PoolName: "serverless", Mode: string(types.PoolModeExternal)}
+
+	config := newAgentWorkerConfig(bootstrapConfig{}, slot).sanitizedForAgent()
+	if config.Worker.ContainerResourceLimits.CPUAffinityEnforced {
+		t.Fatal("managed pool CPU affinity must default to disabled")
+	}
+
+	slot.CpuAffinityEnforced = true
+	config = newAgentWorkerConfig(bootstrapConfig{}, slot).sanitizedForAgent()
+	if !config.Worker.ContainerResourceLimits.CPUAffinityEnforced {
+		t.Fatal("managed pool CPU affinity setting was not propagated")
+	}
+}
+
 func TestAgentWorkerConfigMarketplaceSlotUsesGatewayRuntimeWithBilling(t *testing.T) {
 	slot := &pb.AgentWorkerSlot{
 		PoolName:             "marketplace-listing-1",

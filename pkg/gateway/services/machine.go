@@ -24,7 +24,7 @@ func (gws *GatewayService) ListMachines(ctx context.Context, in *pb.ListMachines
 		}, nil
 	}
 
-	gpus, err := gws.workerRepo.GetGpuAvailability()
+	gpus, err := gws.scheduler.GetServerlessGPUAvailability()
 	if err != nil {
 		return nil, err
 	}

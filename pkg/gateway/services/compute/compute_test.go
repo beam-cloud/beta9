@@ -5388,6 +5388,13 @@ func TestAgentWorkerSlotStateCarriesMarketplaceModeAndRuntime(t *testing.T) {
 	if slot.WorkerImage != "registry.example.com/beta9-worker:same-tag" {
 		t.Fatalf("private slot worker image = %q, want configured image", slot.WorkerImage)
 	}
+	if slot.CPUAffinityEnforced != nil {
+		t.Fatal("private slot must retain agent-level CPU affinity configuration")
+	}
+	privateSlotJSON, err := json.Marshal(slot)
+	if err != nil || strings.Contains(string(privateSlotJSON), "cpu_affinity_enforced") {
+		t.Fatalf("private slot unexpectedly changed its generation input: %s, err=%v", privateSlotJSON, err)
+	}
 
 	managedState := &model.AgentTokenState{
 		WorkspaceID:           "admin-workspace",
@@ -5398,14 +5405,26 @@ func TestAgentWorkerSlotStateCarriesMarketplaceModeAndRuntime(t *testing.T) {
 	}
 	worker.Runtime = types.ContainerRuntimeGvisor.String()
 	worker.Priority = 900
+	defaultManagedSlot := agentWorkerSlotState(config, managedState, worker, types.WorkerPoolConfig{}, "token-id", "token-hash")
+	if defaultManagedSlot.CPUAffinityEnforced == nil || *defaultManagedSlot.CPUAffinityEnforced {
+		t.Fatal("managed slot must carry an explicit disabled CPU affinity default")
+	}
+	managedSlotJSON, err := json.Marshal(defaultManagedSlot)
+	if err != nil || !strings.Contains(string(managedSlotJSON), `"cpu_affinity_enforced":false`) {
+		t.Fatalf("managed slot omitted its disabled CPU affinity generation input: %s, err=%v", managedSlotJSON, err)
+	}
 	slot = agentWorkerSlotState(config, managedState, worker, types.WorkerPoolConfig{
 		ContainerRuntime:          types.ContainerRuntimeRunc.String(),
+		CPUAffinityEnforced:       true,
 		ContainerStartConcurrency: 64,
 		NetworkSlotPoolSize:       128,
 		Priority:                  10,
 	}, "token-id", "token-hash")
-	if slot.ContainerRuntime != types.ContainerRuntimeRunc.String() || slot.ContainerStartConcurrency != 64 || slot.NetworkSlotPoolSize != 128 || slot.Priority != 10 {
+	if slot.ContainerRuntime != types.ContainerRuntimeRunc.String() || slot.CPUAffinityEnforced == nil || !*slot.CPUAffinityEnforced || slot.ContainerStartConcurrency != 64 || slot.NetworkSlotPoolSize != 128 || slot.Priority != 10 {
 		t.Fatalf("managed slot did not use live pool config: %#v", slot)
+	}
+	if wireSlot := agentWorkerSlotToProto(slot, "worker-token"); !wireSlot.CpuAffinityEnforced {
+		t.Fatal("managed slot did not carry CPU affinity configuration to the agent")
 	}
 }
 

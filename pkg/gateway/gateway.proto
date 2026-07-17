@@ -1483,6 +1483,7 @@ message AgentWorkerSlot {
   repeated string gvisor_extra_args = 24;
   // Deterministic identity of the restart-relevant slot specification.
   string generation = 25;
+  bool cpu_affinity_enforced = 26;
 }
 
 message StreamAgentRequest { string agent_token = 1; }

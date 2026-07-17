@@ -1,11 +1,14 @@
 package pod
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -35,6 +38,11 @@ func TestPodBackendURLPreservesDirectAddress(t *testing.T) {
 }
 
 func TestProcessBufferWakesWhenBackendBecomesAvailable(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(backend.Close)
+
 	server, err := miniredis.Run()
 	if err != nil {
 		t.Fatal(err)
@@ -82,8 +90,8 @@ func TestProcessBufferWakesWhenBackendBecomesAvailable(t *testing.T) {
 	pb.availableContainersLock.Lock()
 	pb.availableContainers = []container{{
 		id:              "container-1",
-		addressMap:      map[int32]string{8000: "127.0.0.1:8000"},
-		readyAddressMap: map[int32]string{8000: "127.0.0.1:8000"},
+		addressMap:      map[int32]string{8000: backend.Listener.Addr().String()},
+		readyAddressMap: map[int32]string{8000: backend.Listener.Addr().String()},
 	}}
 	pb.availableContainersLock.Unlock()
 	pb.signalWork()
@@ -241,6 +249,151 @@ func TestForwardRequestProxiesReadyBackendWithoutQueueing(t *testing.T) {
 	if got := pb.containerConnectionCount("container-1"); got != 0 {
 		t.Fatalf("container connections = %d, want released", got)
 	}
+}
+
+func TestForwardRequestRequeuesClosingRouteAndPreservesBody(t *testing.T) {
+	staleRouteID := "stale-route"
+	receivedBody := make(chan string, 1)
+	replacement := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read replacement request body: %v", err)
+		}
+		receivedBody <- string(body)
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	t.Cleanup(replacement.Close)
+
+	e := echo.New()
+	body := &closeSensitiveBody{reader: bytes.NewReader([]byte(`{"request":"preserved"}`))}
+	req := httptest.NewRequest(http.MethodPost, "/", body)
+	rec := httptest.NewRecorder()
+	requestCtx := e.NewContext(req, rec)
+	requestCtx.SetParamNames("port")
+	requestCtx.SetParamValues("8000")
+
+	pb := newBackendRetryTestBuffer(t, staleRouteID)
+	replacementStarts := 0
+	pb.onBackendUnavailable = func() error {
+		replacementStarts++
+		address := replacement.Listener.Addr().String()
+		pb.availableContainersLock.Lock()
+		pb.availableContainers = []container{{
+			id:              "replacement-container",
+			addressMap:      map[int32]string{8000: address},
+			readyAddressMap: map[int32]string{8000: address},
+		}}
+		pb.availableContainersLock.Unlock()
+		return nil
+	}
+	if err := pb.ForwardRequest(requestCtx); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d; body=%q", rec.Code, http.StatusAccepted, rec.Body.String())
+	}
+	if replacementStarts != 1 {
+		t.Fatalf("replacement starts = %d, want 1", replacementStarts)
+	}
+	select {
+	case got := <-receivedBody:
+		if got != `{"request":"preserved"}` {
+			t.Fatalf("replacement body = %q", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("replacement did not receive request")
+	}
+	if got := pb.totalConnectionCount(); got != 0 {
+		t.Fatalf("total connections = %d, want 0", got)
+	}
+}
+
+func TestForwardRequestRetriesBackendDialOnlyOnce(t *testing.T) {
+	e := echo.New()
+	rec := httptest.NewRecorder()
+	requestCtx := e.NewContext(httptest.NewRequest(http.MethodPost, "/", nil), rec)
+	requestCtx.SetParamNames("port")
+	requestCtx.SetParamValues("8000")
+
+	pb := newBackendRetryTestBuffer(t, "stale-route", "broken-replacement-route")
+	replacementStarts := 0
+	pb.onBackendUnavailable = func() error {
+		replacementStarts++
+		address := types.BackendRouteAddress("broken-replacement-route")
+		pb.availableContainersLock.Lock()
+		pb.availableContainers = []container{{
+			id:              "broken-replacement",
+			addressMap:      map[int32]string{8000: address},
+			readyAddressMap: map[int32]string{8000: address},
+		}}
+		pb.availableContainersLock.Unlock()
+		return nil
+	}
+	if err := pb.ForwardRequest(requestCtx); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d; body=%q", rec.Code, http.StatusBadGateway, rec.Body.String())
+	}
+	if replacementStarts != 1 {
+		t.Fatalf("replacement starts = %d, want 1", replacementStarts)
+	}
+}
+
+func newBackendRetryTestBuffer(t *testing.T, routeIDs ...string) *PodProxyBuffer {
+	t.Helper()
+	if len(routeIDs) == 0 {
+		t.Fatal("at least one backend route is required")
+	}
+
+	rdb := newPodProxyTestRedis(t)
+	repo := repository.NewContainerRedisRepositoryForTest(rdb)
+	for _, routeID := range routeIDs {
+		if err := repo.SetBackendRoute(context.Background(), types.BackendRoute{
+			RouteID: routeID,
+			State:   types.BackendRouteStateClosing,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	staleAddress := types.BackendRouteAddress(routeIDs[0])
+	pb := &PodProxyBuffer{
+		ctx:           ctx,
+		workspace:     &types.Workspace{Name: "workspace"},
+		stubId:        "stub",
+		stubConfig:    &types.StubConfigV1{},
+		containerRepo: repo,
+		buffer:        abstractions.NewRingBuffer[*connection](2),
+		workReady:     make(chan struct{}, 1),
+		discoverReady: make(chan struct{}, 1),
+		availableContainers: []container{{
+			id:              "stopping-container",
+			addressMap:      map[int32]string{8000: staleAddress},
+			readyAddressMap: map[int32]string{8000: staleAddress},
+		}},
+	}
+	go pb.processBuffer()
+	return pb
+}
+
+type closeSensitiveBody struct {
+	reader *bytes.Reader
+	closed atomic.Bool
+}
+
+func (b *closeSensitiveBody) Read(p []byte) (int, error) {
+	if b.closed.Load() {
+		return 0, errors.New("request body was closed before retry")
+	}
+	return b.reader.Read(p)
+}
+
+func (b *closeSensitiveBody) Close() error {
+	b.closed.Store(true)
+	return nil
 }
 
 func TestForwardRequestRejectsImmediatelyWhenDraining(t *testing.T) {
