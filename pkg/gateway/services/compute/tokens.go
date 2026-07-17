@@ -98,10 +98,24 @@ func (s *Service) createPrivatePoolJoinCommandForWorkspace(ctx context.Context, 
 	if err != nil {
 		return "", "", time.Time{}, err
 	}
+	return s.joinCommandForToken(token), token, expiresAt, nil
+}
+
+// Non-expiring machine-scoped join command for provider launches: boot time is
+// unbounded, so safety comes from machine/fingerprint scoping and revocation
+// on reservation close rather than a TTL.
+func (s *Service) createPersistentPrivatePoolJoinCommandForWorkspace(ctx context.Context, workspaceID, poolName string, poolCreatedAt time.Time, machineID string) (string, string, error) {
+	token, _, err := s.createPersistentPrivatePoolJoinToken(ctx, workspaceID, poolName, poolCreatedAt, machineID)
+	if err != nil {
+		return "", "", err
+	}
+	return s.joinCommandForToken(token), token, nil
+}
+
+func (s *Service) joinCommandForToken(token string) string {
 	gatewayURL := strings.TrimRight(s.appConfig.GatewayService.HTTP.GetExternalURL(), "/")
 	devMode := isLocalGatewayURL(gatewayURL)
-	command := agentInstallCommand(gatewayURL, token, devMode, agentWorkerImage(s.appConfig))
-	return command, token, expiresAt, nil
+	return agentInstallCommand(gatewayURL, token, devMode, agentWorkerImage(s.appConfig))
 }
 
 func agentInstallCommand(gatewayURL, token string, devMode bool, workerImage string) string {

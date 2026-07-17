@@ -166,8 +166,46 @@ func TestPrivatePoolJoinTokenCannotJoinRecreatedPool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if joined.Ok || joined.ErrMsg != "join token is invalid or expired" {
+	if joined.Ok || joined.ErrMsg != "join token was issued for a previous instance of this pool" {
 		t.Fatalf("JoinAgent() response = %+v", joined)
+	}
+}
+
+// Legacy tokens predate PoolCreatedAt; rejecting their zero value stranded
+// machines provisioned right before a deploy.
+func TestPrivatePoolJoinTokenWithoutPoolCreatedAtStillJoins(t *testing.T) {
+	createdAt := time.Now().UTC()
+	repo := &fakeComputeRepo{pools: map[string][]*model.PoolState{
+		"workspace-1": {{
+			WorkspaceID: "workspace-1",
+			Name:        "pool-1",
+			Mode:        string(types.PoolModePrivate),
+			Config:      &pb.PoolConfig{Name: "pool-1", Mode: string(types.PoolModePrivate)},
+			CreatedAt:   createdAt,
+		}},
+	}}
+	repo.joinTokens = map[string]*model.JoinTokenState{
+		hashComputeToken("legacy-token"): {
+			TokenHash:   hashComputeToken("legacy-token"),
+			WorkspaceID: "workspace-1",
+			PoolName:    "pool-1",
+			// No PoolCreatedAt: minted by a build that predates the field.
+		},
+	}
+	service := &Service{computeRepo: repo}
+
+	joined, err := service.JoinAgent(context.Background(), &pb.JoinAgentRequest{
+		JoinToken:          "legacy-token",
+		MachineFingerprint: "fingerprint-1",
+		CpuCount:           4,
+		MemoryMb:           8192,
+		Schedulable:        true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !joined.Ok {
+		t.Fatalf("JoinAgent() rejected a legacy token: %+v", joined)
 	}
 }
 
