@@ -201,7 +201,6 @@ func NewImageClient(config types.AppConfig, workerId, workerPoolName string, wor
 		clipActive:         make(map[string]*types.ContainerRequest),
 		clipRuntimePIDs:    make(map[int]clipPIDReference),
 		clipPIDCache:       make(map[int]clipPIDReference),
-		clipReadEvents:     make(chan clipCommon.ReadTraceEvent, clipReadEventQueueSize),
 		clipAggregates:     make(map[string]*clipReadAggregate),
 		originCredsCache:   make(map[string]*originCredentials),
 		logger: &ContainerLogger{
@@ -211,9 +210,9 @@ func NewImageClient(config types.AppConfig, workerId, workerPoolName string, wor
 	if c.cacheClient != nil {
 		c.archiveContentMetadata = c.cacheClient.CacheFSMetadata
 	}
-	go c.runClipReadEventReporter()
-
 	if config.DebugMode {
+		c.clipReadEvents = make(chan clipCommon.ReadTraceEvent, clipReadEventQueueSize)
+		go c.runClipReadEventReporter()
 		clip.SetLogLevel("debug")
 	} else {
 		clip.SetLogLevel("info")
@@ -684,7 +683,9 @@ func (c *ImageClient) lazyMountOptions(ctx context.Context, request *types.Conta
 		CachePath:             c.contentCachePath(request, archive),
 		ContentCache:          contentCache,
 		ContentCacheAvailable: contentCache != nil,
-		ReadTraceObserver:     c.observeClipRead,
+	}
+	if c.config.DebugMode {
+		mountOptions.ReadTraceObserver = c.observeClipRead
 	}
 
 	if archive.usesOCIStorage() {

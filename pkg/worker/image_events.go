@@ -576,7 +576,7 @@ func durationUsToMilliseconds(durationUs int64) int64 {
 }
 
 func (c *ImageClient) trackContainerRuntimePID(request *types.ContainerRequest, pid int) {
-	if c == nil || request == nil || pid <= 0 {
+	if c == nil || c.clipReadEvents == nil || request == nil || pid <= 0 {
 		return
 	}
 
