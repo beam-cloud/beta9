@@ -224,16 +224,23 @@ func TestHandleCheckpointEnabledSplitsModelAndCompilerCaches(t *testing.T) {
 	require.ElementsMatch(t, []string{
 		"HF_HOME=/checkpoint-model-cache-qwen",
 		"HF_HUB_CACHE=/checkpoint-model-cache-qwen/hub",
+		"HF_XET_CACHE=/tmp/beam-checkpoint-compile-cache/hf-xet",
 		"TRANSFORMERS_CACHE=/checkpoint-model-cache-qwen",
 		"TRITON_CACHE_DIR=/tmp/beam-checkpoint-compile-cache/triton",
 		"TORCHINDUCTOR_CACHE_DIR=/tmp/beam-checkpoint-compile-cache/torchinductor",
 		"VLLM_CACHE_ROOT=/tmp/beam-checkpoint-compile-cache/vllm",
 		"CUDA_CACHE_PATH=/tmp/beam-checkpoint-compile-cache/cuda",
-		"HF_HUB_DISABLE_XET=1",
-		"HF_HUB_ENABLE_HF_TRANSFER=0",
 		"USER_ENV=1",
 	}, in.Env)
 	require.Len(t, in.Volumes, 1)
 	require.Equal(t, "volume-123", in.Volumes[0].Id)
 	require.Equal(t, "/checkpoint-model-cache-qwen", in.Volumes[0].MountPath)
+}
+
+func TestCheckpointCacheEnvLeavesHubTransportSelectionToRuntime(t *testing.T) {
+	env := checkpointCacheEnv("/model-cache")
+
+	require.NotContains(t, env, "HF_HUB_DISABLE_XET=1")
+	require.NotContains(t, env, "HF_HUB_ENABLE_HF_TRANSFER=0")
+	require.Contains(t, env, "HF_XET_CACHE=/tmp/beam-checkpoint-compile-cache/hf-xet")
 }
