@@ -293,6 +293,30 @@ func (cr *ContainerRedisRepository) UpdateContainerStatus(containerId string, st
 	return nil
 }
 
+var markPendingContainerStoppingIfUnassignedScript = redis.NewScript(`
+if redis.call("HGET", KEYS[1], "status") ~= ARGV[1] then
+	return 0
+end
+local worker_id = redis.call("HGET", KEYS[1], "worker_id")
+if worker_id and worker_id ~= "" then
+	return 0
+end
+redis.call("HSET", KEYS[1], "status", ARGV[2])
+redis.call("EXPIRE", KEYS[1], ARGV[3])
+return 1
+`)
+
+func (cr *ContainerRedisRepository) MarkPendingContainerStoppingIfUnassigned(containerId string, expirySeconds int64) (bool, error) {
+	stateKey := common.RedisKeys.SchedulerContainerState(containerId)
+	marked, err := markPendingContainerStoppingIfUnassignedScript.Run(context.TODO(), cr.rdb, []string{stateKey},
+		string(types.ContainerStatusPending), string(types.ContainerStatusStopping), expirySeconds,
+	).Bool()
+	if err != nil {
+		return false, fmt.Errorf("failed to stop unassigned pending container <%s>: %w", containerId, err)
+	}
+	return marked, nil
+}
+
 func (cr *ContainerRedisRepository) DeleteContainerState(containerId string) error {
 	err := cr.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerContainerLock(containerId), common.RedisLockOptions{TtlS: 10, Retries: 5})
 	if err != nil {

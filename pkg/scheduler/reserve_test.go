@@ -182,6 +182,7 @@ func TestWorkerProvisioningBackoffDoesNotBlockExistingPoolCapacity(t *testing.T)
 		PoolSelector: "beta9-cpu",
 		Timestamp:    time.Now(),
 	}
+	setPendingSchedulerRequests(t, scheduler, scheduleRequest)
 	newSchedulingAttempt(scheduler, scheduleRequest, []*types.Worker{worker}).run()
 
 	queued, err := scheduler.workerRepo.GetNextContainerRequest(worker.Id)
@@ -247,6 +248,7 @@ func TestPrivatePoolMissFallsBackToRegularAvailableWorker(t *testing.T) {
 	assert.Empty(t, fallback.PoolSelector)
 	privateController.hasCapacity = false
 
+	setPendingSchedulerRequests(t, scheduler, request)
 	newSchedulingAttempt(scheduler, request, []*types.Worker{privateWorker, regularWorker}).run()
 
 	queued, err := scheduler.workerRepo.GetNextContainerRequest(regularWorker.Id)
@@ -336,6 +338,7 @@ func TestPrivatePoolMissWithoutRegularCapacityKeepsPrivateSelector(t *testing.T)
 		Timestamp:    time.Now(),
 		Workspace:    testWorkspaceWithStorage(),
 	}
+	setPendingSchedulerRequests(t, scheduler, request)
 	newSchedulingAttempt(scheduler, request, nil).run()
 
 	select {

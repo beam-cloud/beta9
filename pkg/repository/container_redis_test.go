@@ -337,6 +337,70 @@ func TestUpdateContainerStatusDoesNotMoveStoppingBackToRunning(t *testing.T) {
 	}
 }
 
+func TestMarkPendingContainerStoppingIfUnassigned(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repo := NewContainerRedisRepositoryForTest(rdb)
+	for _, test := range []struct {
+		name     string
+		state    *types.ContainerState
+		expected bool
+	}{
+		{
+			name: "unassigned pending container",
+			state: &types.ContainerState{
+				ContainerId: "pending-unassigned",
+				Status:      types.ContainerStatusPending,
+			},
+			expected: true,
+		},
+		{
+			name: "assigned pending container",
+			state: &types.ContainerState{
+				ContainerId: "pending-assigned",
+				Status:      types.ContainerStatusPending,
+				WorkerId:    "worker-1",
+			},
+		},
+		{
+			name: "running container",
+			state: &types.ContainerState{
+				ContainerId: "running",
+				Status:      types.ContainerStatusRunning,
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := repo.SetContainerState(test.state.ContainerId, test.state); err != nil {
+				t.Fatal(err)
+			}
+
+			marked, err := repo.MarkPendingContainerStoppingIfUnassigned(test.state.ContainerId, types.ContainerStateTtlSWhilePending)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if marked != test.expected {
+				t.Fatalf("expected marked=%t, got %t", test.expected, marked)
+			}
+
+			state, err := repo.GetContainerState(test.state.ContainerId)
+			if err != nil {
+				t.Fatal(err)
+			}
+			expectedStatus := test.state.Status
+			if test.expected {
+				expectedStatus = types.ContainerStatusStopping
+			}
+			if state.Status != expectedStatus {
+				t.Fatalf("expected status %s, got %s", expectedStatus, state.Status)
+			}
+		})
+	}
+}
+
 func TestBackendRoutesAreIndexedByMachine(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	if err != nil {

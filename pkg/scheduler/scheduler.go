@@ -492,15 +492,23 @@ func (s *Scheduler) Stop(stopArgs *types.StopContainerArgs) error {
 	}
 	s.eventRepo.PushContainerEvent(event)
 
-	if state != nil && strings.HasPrefix(stopArgs.ContainerId, types.BuildContainerPrefix) && types.ContainerStatus(state.Status) == types.ContainerStatusPending {
+	stoppedBeforeAssignment, err := s.containerRepo.MarkPendingContainerStoppingIfUnassigned(
+		stopArgs.ContainerId,
+		types.ContainerStateTtlSWhilePending,
+	)
+	if err != nil {
+		return err
+	}
+	if stoppedBeforeAssignment {
 		if err := s.containerRepo.DeleteContainerState(stopArgs.ContainerId); err != nil {
 			return err
 		}
-	} else {
-		err := s.containerRepo.UpdateContainerStatus(stopArgs.ContainerId, types.ContainerStatusStopping, types.ContainerStateTtlSWhilePending)
-		if err != nil {
-			return err
-		}
+		return nil
+	}
+
+	err = s.containerRepo.UpdateContainerStatus(stopArgs.ContainerId, types.ContainerStatusStopping, types.ContainerStateTtlSWhilePending)
+	if err != nil {
+		return err
 	}
 
 	eventArgs, err := stopArgs.ToMap()
@@ -519,6 +527,18 @@ func (s *Scheduler) Stop(stopArgs *types.StopContainerArgs) error {
 	}
 
 	return nil
+}
+
+func (s *Scheduler) containerRequestPending(containerID string) (bool, error) {
+	state, err := s.containerRepo.GetContainerState(containerID)
+	if err != nil {
+		notFound := &types.ErrContainerStateNotFound{}
+		if notFound.From(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return state != nil && state.Status == types.ContainerStatusPending, nil
 }
 
 func (s *Scheduler) getControllers(request *types.ContainerRequest) ([]WorkerPoolController, error) {

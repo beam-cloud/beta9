@@ -57,8 +57,12 @@ func (b *schedulingBatch) planRequest(request *types.ContainerRequest) {
 			"planned_count_so_far": fmt.Sprintf("%d", len(b.schedules)),
 		})
 	}()
+	attempt := newSchedulingAttempt(b.scheduler, request, b.workers)
+	if !attempt.runnable() {
+		return
+	}
 	if !b.scheduler.checkpointReady(request) {
-		newSchedulingAttempt(b.scheduler, request, b.workers).requeueForWorkerWaitDelay(checkpointHandoffRetryDelay, "checkpoint_handoff")
+		attempt.requeueForWorkerWaitDelay(checkpointHandoffRetryDelay, "checkpoint_handoff")
 		return
 	}
 
@@ -145,20 +149,19 @@ func (b *schedulingBatch) dispatchSchedules(schedules []plannedSchedule) {
 }
 
 func (b *schedulingBatch) completeSchedule(schedule plannedSchedule, err error) {
+	attempt := newSchedulingAttempt(b.scheduler, schedule.request, b.workers)
 	if err != nil {
 		workerLog(requestLog(log.Error(), schedule.request), schedule.worker).
 			Err(err).
 			Msg("unable to schedule planned request on worker")
 
-		attempt := newSchedulingAttempt(b.scheduler, schedule.request, b.workers)
 		attempt.recordBacklogWait(false, "schedule_failed")
 		metrics.RecordSchedulerWorkerWait(time.Since(schedule.request.Timestamp), schedule.request, "schedule_failed")
-		attempt.retrySoon("schedule_failed")
+		attempt.retryIfRunnable("schedule_failed")
 		return
 	}
 
 	duration := time.Since(schedule.request.Timestamp)
-	attempt := newSchedulingAttempt(b.scheduler, schedule.request, b.workers)
 	attempt.recordBacklogWait(true, "scheduled")
 	metrics.RecordRequestSchedulingDuration(duration, schedule.request)
 	metrics.RecordSchedulerWorkerWait(duration, schedule.request, "scheduled")
