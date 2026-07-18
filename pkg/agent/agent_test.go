@@ -392,6 +392,25 @@ func TestManagedAgentWorkerConfigDefaultsCPUAffinityOff(t *testing.T) {
 	}
 }
 
+func TestGVisorAgentWorkerConfigEnforcesMemory(t *testing.T) {
+	slot := &pb.AgentWorkerSlot{
+		PoolName:         "serverless",
+		Mode:             string(types.PoolModeExternal),
+		ContainerRuntime: types.ContainerRuntimeGvisor.String(),
+	}
+
+	config := newAgentWorkerConfig(bootstrapConfig{}, slot).sanitizedForAgent()
+	if !config.Worker.ContainerResourceLimits.MemoryEnforced {
+		t.Fatal("gVisor agent workloads must receive a bounded memory view")
+	}
+
+	slot.ContainerRuntime = types.ContainerRuntimeRunc.String()
+	config = newAgentWorkerConfig(bootstrapConfig{}, slot).sanitizedForAgent()
+	if config.Worker.ContainerResourceLimits.MemoryEnforced {
+		t.Fatal("runc agent memory enforcement must remain unchanged")
+	}
+}
+
 func TestAgentWorkerConfigMarketplaceSlotUsesGatewayRuntimeWithBilling(t *testing.T) {
 	slot := &pb.AgentWorkerSlot{
 		PoolName:             "marketplace-listing-1",

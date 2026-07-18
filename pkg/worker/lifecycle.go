@@ -826,10 +826,10 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		spec.Linux.Resources.CPU.Cpus = cpuAffinity
 	}
 
-	throttlingEnabled := !request.IsBuildRequest() && !request.RequiresGPU()
-	cpuEnforced := s.config.Worker.ContainerResourceLimits.CPUEnforced
-	memoryEnforced := s.config.Worker.ContainerResourceLimits.MemoryEnforced
-	if throttlingEnabled && (cpuEnforced || memoryEnforced) {
+	resourceLimitsEnabled := !request.IsBuildRequest()
+	cpuEnforced := resourceLimitsEnabled && !request.RequiresGPU() && s.config.Worker.ContainerResourceLimits.CPUEnforced
+	memoryEnforced := resourceLimitsEnabled && s.config.Worker.ContainerResourceLimits.MemoryEnforced
+	if cpuEnforced || memoryEnforced {
 		resources, err := s.getContainerResources(request)
 		if err != nil {
 			return nil, err

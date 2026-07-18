@@ -487,6 +487,38 @@ func TestSpecFromRequestRespectsResourceEnforcementConfig(t *testing.T) {
 	}
 }
 
+func TestSpecFromRequestEnforcesMemoryForGPUWithoutCPUQuota(t *testing.T) {
+	mockRuntime := &mockRuntime{name: types.ContainerRuntimeGvisor.String()}
+	containerInstances := common.NewSafeMap[*ContainerInstance]()
+	containerInstances.Set("container-1", &ContainerInstance{Runtime: mockRuntime})
+	worker := &Worker{
+		config: types.AppConfig{Worker: types.WorkerConfig{
+			ContainerResourceLimits: types.ContainerResourceLimitsConfig{
+				CPUEnforced:    true,
+				MemoryEnforced: true,
+			},
+		}},
+		runtime:            mockRuntime,
+		containerInstances: containerInstances,
+	}
+
+	spec, err := worker.specFromRequest(&types.ContainerRequest{
+		ContainerId: "container-1",
+		EntryPoint:  []string{"sleep", "60"},
+		Cpu:         4000,
+		Memory:      32 * 1024,
+		GpuRequest:  []string{"RTX5090"},
+		GpuCount:    1,
+		Stub: types.StubWithRelated{Stub: types.Stub{
+			Type: types.StubType(types.StubTypePodDeployment),
+		}},
+	}, &ContainerOptions{BindPorts: []int{8001}})
+	require.NoError(t, err)
+	require.Nil(t, spec.Linux.Resources.CPU)
+	require.NotNil(t, spec.Linux.Resources.Memory)
+	require.Equal(t, int64(40*1024*1024*1024), *spec.Linux.Resources.Memory.Limit)
+}
+
 func TestSpecFromRequestReturnsIndependentSpecs(t *testing.T) {
 	worker := &Worker{runtime: &mockRuntime{name: types.ContainerRuntimeRunc.String()}}
 	initialEnv := make([]string, 1, 8)
@@ -556,6 +588,7 @@ func TestSpecFromRequestAppliesCPUAffinityToGPUWorkload(t *testing.T) {
 		ContainerId: "gpu-container",
 		EntryPoint:  []string{"sleep", "60"},
 		Cpu:         1000,
+		GpuRequest:  []string{"RTX5090"},
 		GpuCount:    1,
 		Stub: types.StubWithRelated{Stub: types.Stub{
 			Type: types.StubType(types.StubTypePodDeployment),
