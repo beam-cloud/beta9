@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -21,18 +20,25 @@ import (
 const (
 	runscRestoreStateTimeout      = 30 * time.Second
 	runscRestoreStatePollInterval = 25 * time.Millisecond
+	runscGPUAnnotation            = "com.beam.gvisor.nvproxy"
+	cudaCheckpointContainerPath   = "/usr/local/bin/cuda-checkpoint"
 )
 
 // Runsc implements Runtime using the gVisor runsc runtime
 //
-// CUDA Checkpoint/Restore:
-// For GPU workloads, cuda-checkpoint is bind-mounted from the host and executed
-// inside the container via runsc exec to freeze/unfreeze GPU state before/after
-// checkpoint/restore operations.
+// CUDA Checkpoint/Restore is delegated to runsc. GPU bundles include the
+// cuda-checkpoint helper and are marked so each runtime operation can select
+// nvproxy without sharing mutable state across containers.
 type Runsc struct {
 	cfg                   Config
 	dockerPacketWriteFlag string
-	nvproxyEnabled        bool
+}
+
+type runscState struct {
+	ID     string `json:"id"`
+	Pid    int    `json:"pid"`
+	Status string `json:"status"`
+	Bundle string `json:"bundle"`
 }
 
 type runscCommandResult struct {
@@ -84,10 +90,14 @@ func (r *Runsc) Prepare(ctx context.Context, spec *specs.Spec) error {
 	}
 
 	spec.Linux.Seccomp = nil
-	r.nvproxyEnabled = r.hasGPUDevices(spec)
-
-	if r.nvproxyEnabled {
+	if r.hasGPUDevices(spec) {
+		if spec.Annotations == nil {
+			spec.Annotations = make(map[string]string)
+		}
+		spec.Annotations[runscGPUAnnotation] = "true"
 		r.mountCudaCheckpoint(spec)
+	} else if spec.Annotations != nil {
+		delete(spec.Annotations, runscGPUAnnotation)
 	}
 
 	// gVisor does not use spec.Linux.Devices for device passthrough.
@@ -107,7 +117,7 @@ func (r *Runsc) mountCudaCheckpoint(spec *specs.Spec) {
 	}
 
 	spec.Mounts = append(spec.Mounts, specs.Mount{
-		Destination: "/usr/local/bin/cuda-checkpoint",
+		Destination: cudaCheckpointContainerPath,
 		Type:        "bind",
 		Source:      cudaCheckpointPath,
 		Options:     []string{"bind", "ro"},
@@ -116,7 +126,7 @@ func (r *Runsc) mountCudaCheckpoint(spec *specs.Spec) {
 
 // hasGPUDevices checks if the spec contains GPU device configurations
 func (r *Runsc) hasGPUDevices(spec *specs.Spec) bool {
-	if spec.Linux == nil {
+	if spec == nil || spec.Linux == nil {
 		return false
 	}
 
@@ -137,6 +147,10 @@ func (r *Runsc) hasGPUDevices(spec *specs.Spec) bool {
 
 func (r *Runsc) Run(ctx context.Context, containerID, bundlePath string, opts *RunOpts) (int, error) {
 	dockerEnabled := opts != nil && opts.DockerEnabled
+	nvproxyEnabled, err := r.bundleUsesGPU(bundlePath)
+	if err != nil {
+		return -1, err
+	}
 
 	defer func() {
 		deleteArgs := r.baseArgs(dockerEnabled)
@@ -145,7 +159,7 @@ func (r *Runsc) Run(ctx context.Context, containerID, bundlePath string, opts *R
 	}()
 
 	args := r.baseArgs(dockerEnabled)
-	if r.nvproxyEnabled {
+	if nvproxyEnabled {
 		args = append(args, "--nvproxy=true")
 	}
 	args = append(args, "run", "--bundle", bundlePath, containerID)
@@ -175,7 +189,7 @@ func (r *Runsc) Run(ctx context.Context, containerID, bundlePath string, opts *R
 	}()
 
 	// Wait for exit
-	err := cmd.Wait()
+	err = cmd.Wait()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok {
@@ -289,6 +303,19 @@ func (r *Runsc) Delete(ctx context.Context, containerID string, opts *DeleteOpts
 }
 
 func (r *Runsc) State(ctx context.Context, containerID string) (State, error) {
+	state, err := r.loadState(ctx, containerID)
+	if err != nil {
+		return State{}, err
+	}
+
+	return State{
+		ID:     state.ID,
+		Pid:    state.Pid,
+		Status: state.Status,
+	}, nil
+}
+
+func (r *Runsc) loadState(ctx context.Context, containerID string) (runscState, error) {
 	args := r.baseArgs(false)
 	args = append(args, "state", containerID)
 
@@ -299,27 +326,16 @@ func (r *Runsc) State(ctx context.Context, containerID string) (State, error) {
 
 	if err := cmd.Run(); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
-			return State{}, ErrContainerNotFound{ContainerID: containerID}
+			return runscState{}, ErrContainerNotFound{ContainerID: containerID}
 		}
-		return State{}, fmt.Errorf("failed to get state: %w", err)
+		return runscState{}, fmt.Errorf("failed to get state: %w", err)
 	}
 
-	// Parse the JSON output from runsc state
-	var stateJSON struct {
-		ID     string `json:"id"`
-		Pid    int    `json:"pid"`
-		Status string `json:"status"`
+	var state runscState
+	if err := json.Unmarshal(stdout.Bytes(), &state); err != nil {
+		return runscState{}, fmt.Errorf("failed to parse state output: %w", err)
 	}
-
-	if err := json.Unmarshal(stdout.Bytes(), &stateJSON); err != nil {
-		return State{}, fmt.Errorf("failed to parse state output: %w", err)
-	}
-
-	return State{
-		ID:     stateJSON.ID,
-		Pid:    stateJSON.Pid,
-		Status: stateJSON.Status,
-	}, nil
+	return state, nil
 }
 
 func (r *Runsc) Events(ctx context.Context, containerID string) (<-chan Event, error) {
@@ -336,12 +352,9 @@ func (r *Runsc) Checkpoint(ctx context.Context, containerID string, opts *Checkp
 		return fmt.Errorf("checkpoint options cannot be nil")
 	}
 
-	// Freeze CUDA processes before checkpointing. A failure here means GPU state
-	// cannot be captured, so fail the checkpoint instead of producing a broken image.
-	if r.nvproxyEnabled {
-		if err := r.cudaCheckpointProcesses(ctx, containerID, "checkpoint", opts.OutputWriter); err != nil {
-			return fmt.Errorf("cuda checkpoint failed: %w", err)
-		}
+	nvproxyEnabled, err := r.containerUsesGPU(ctx, containerID)
+	if err != nil {
+		return fmt.Errorf("failed to inspect container bundle: %w", err)
 	}
 
 	// Ensure directories exist
@@ -358,6 +371,9 @@ func (r *Runsc) Checkpoint(ctx context.Context, containerID string, opts *Checkp
 
 	args := r.baseArgs(false)
 	args = append(args, "checkpoint")
+	if nvproxyEnabled {
+		args = append(args, "--cuda-checkpoint-path", cudaCheckpointContainerPath)
+	}
 	if opts.ImagePath != "" {
 		args = append(args, "--image-path", opts.ImagePath)
 	}
@@ -403,6 +419,11 @@ func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOp
 		return -1, fmt.Errorf("restore options cannot be nil")
 	}
 
+	nvproxyEnabled, err := r.bundleUsesGPU(opts.BundlePath)
+	if err != nil {
+		return -1, err
+	}
+
 	cleanupOnFailure := true
 	defer func() {
 		if cleanupOnFailure {
@@ -420,7 +441,7 @@ func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOp
 	}
 
 	args := r.baseArgs(false)
-	if r.nvproxyEnabled {
+	if nvproxyEnabled {
 		args = append(args, "--nvproxy=true")
 	}
 	args = append(args, "restore")
@@ -478,13 +499,9 @@ func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOp
 		return -1, err
 	}
 
-	// Unfreeze CUDA processes after restore. A failure leaves GPU state frozen/broken,
-	// so propagate it and let the caller fall back to a cold boot (restore_failed path).
-	if r.nvproxyEnabled {
-		if err := r.cudaCheckpointProcesses(ctx, containerID, "restore", opts.OutputWriter); err != nil {
-			killRestoreProcess()
-			return -1, fmt.Errorf("cuda restore failed: %w", err)
-		}
+	if err := r.waitForRestore(ctx, containerID); err != nil {
+		killRestoreProcess()
+		return -1, err
 	}
 
 	if opts.Started != nil {
@@ -498,6 +515,14 @@ func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOp
 
 	cleanupOnFailure = false
 	return 0, nil
+}
+
+func (r *Runsc) waitForRestore(ctx context.Context, containerID string) error {
+	args := append(r.baseArgs(false), "wait", "--restore", containerID)
+	if output, err := exec.CommandContext(ctx, r.cfg.RunscPath, args...).CombinedOutput(); err != nil {
+		return fmt.Errorf("failed waiting for restore completion: %w (output: %s)", err, strings.TrimSpace(string(output)))
+	}
+	return nil
 }
 
 func (r *Runsc) waitForRestoredContainerPID(ctx context.Context, containerID string, restoreDone <-chan runscCommandResult) (int, error) {
@@ -565,73 +590,30 @@ func runscWaitResult(err error, stderr, operation string) runscCommandResult {
 	return runscCommandResult{exitCode: -1, err: err}
 }
 
-// cudaCheckpointProcesses runs cuda-checkpoint on all CUDA processes inside the container
-// action should be "checkpoint" (freeze) or "restore" (unfreeze)
-func (r *Runsc) cudaCheckpointProcesses(ctx context.Context, containerID, action string, outputWriter OutputWriter) error {
-	if _, err := exec.LookPath("cuda-checkpoint"); err != nil {
-		return nil
-	}
-
-	pids, err := r.findCUDAProcesses(ctx, containerID)
+func (r *Runsc) containerUsesGPU(ctx context.Context, containerID string) (bool, error) {
+	state, err := r.loadState(ctx, containerID)
 	if err != nil {
-		return err
+		return false, err
 	}
-	if len(pids) == 0 {
-		// No CUDA processes is legitimate (e.g. GPU attached but not used yet)
-		return nil
-	}
-
-	for _, pid := range pids {
-		args := r.baseArgs(false)
-		args = append(args, "exec", containerID, "/usr/local/bin/cuda-checkpoint", action, strconv.Itoa(pid))
-
-		cmd := exec.CommandContext(ctx, r.cfg.RunscPath, args...)
-		if outputWriter != nil {
-			cmd.Stdout = outputWriter
-			cmd.Stderr = outputWriter
-		}
-
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("cuda-checkpoint %s failed for PID %d: %w", action, pid, err)
-		}
-	}
-
-	return nil
+	return r.bundleUsesGPU(state.Bundle)
 }
 
-// findCUDAProcesses finds container PIDs with nvidia device file descriptors
-func (r *Runsc) findCUDAProcesses(ctx context.Context, containerID string) ([]int, error) {
-	args := r.baseArgs(false)
-	args = append(args, "exec", containerID, "sh", "-c",
-		"for pid in /proc/[0-9]*; do "+
-			"[ -d \"$pid/fd\" ] && ls -l $pid/fd 2>/dev/null | grep -q nvidia && basename $pid; "+
-			"done")
-
-	var stderr bytes.Buffer
-	cmd := exec.CommandContext(ctx, r.cfg.RunscPath, args...)
-	cmd.Stderr = &stderr
-	output, err := cmd.Output()
-
-	var pids []int
-	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
-		if pid, err := strconv.Atoi(strings.TrimSpace(line)); err == nil && pid > 0 {
-			pids = append(pids, pid)
-		}
+func (r *Runsc) bundleUsesGPU(bundlePath string) (bool, error) {
+	if bundlePath == "" {
+		return false, fmt.Errorf("container bundle path is empty")
 	}
+
+	config, err := os.Open(filepath.Join(bundlePath, "config.json"))
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
-			if len(pids) > 0 || (strings.TrimSpace(string(output)) == "" && strings.TrimSpace(stderr.String()) == "") {
-				return pids, nil
-			}
-		}
-
-		if message := strings.TrimSpace(stderr.String()); message != "" {
-			return nil, fmt.Errorf("failed to enumerate CUDA processes in container %s: %w (output: %s)", containerID, err, message)
-		}
-		return nil, fmt.Errorf("failed to enumerate CUDA processes in container %s: %w", containerID, err)
+		return false, fmt.Errorf("failed to open container bundle: %w", err)
 	}
+	defer config.Close()
 
-	return pids, nil
+	var spec specs.Spec
+	if err := json.NewDecoder(config).Decode(&spec); err != nil {
+		return false, fmt.Errorf("failed to decode container bundle: %w", err)
+	}
+	return spec.Annotations[runscGPUAnnotation] == "true" || r.hasGPUDevices(&spec), nil
 }
 
 func (r *Runsc) Close() error {
