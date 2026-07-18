@@ -66,6 +66,10 @@ func TestNormalizeCacheConfigDefaultsTopHostsToThree(t *testing.T) {
 	got := normalizeCacheConfig(config, types.WorkerPoolConfig{}, "node-a", "default")
 
 	require.Equal(t, 3, got.Client.NTopHosts)
+	require.Equal(t, int64(64*1024*1024), got.Client.ReadTransport.RequestSizeBytes)
+	require.Equal(t, 8, got.Client.ReadTransport.MaxPartsPerRead)
+	require.Equal(t, int64(4*1024*1024), got.Client.Prefetch.PartLengthBytes)
+	require.Equal(t, 16, got.Client.Prefetch.MaxPartsPerRead)
 }
 
 func TestCacheLocalityUsesEnvThenPoolGroupThenDefault(t *testing.T) {

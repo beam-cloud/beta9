@@ -77,6 +77,77 @@ func TestSamePortRawReadTransportAndGRPC(t *testing.T) {
 	require.Equal(t, Version, state.GetVersion())
 }
 
+func TestRawReadWindowingHonorsServerRequestLimit(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	const maxRequestBytes = 1024 * 1024
+	cfg := Config{
+		Server: ServerConfig{
+			DiskCacheDir:         t.TempDir(),
+			DiskCacheMaxUsagePct: 90,
+			PageSizeBytes:        maxRequestBytes,
+			ObjectTtlS:           300,
+			ReadTransport: ServerReadTransportConfig{
+				Enabled:  true,
+				Sendfile: false,
+			},
+		},
+		Global: GlobalConfig{
+			GRPCMessageSizeBytes: maxRequestBytes,
+			GRPCDialTimeoutS:     1,
+		},
+	}
+	server, err := NewServerWithOptions(ctx, cfg, "test", WithServerMetadataStore(NewMockCacheMetadataStore()), WithServerHostID("windowed-raw-host"))
+	require.NoError(t, err)
+	addr, err := server.Serve("127.0.0.1:0", "")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, server.Close()) })
+
+	content := make([]byte, 2*maxRequestBytes+17)
+	for i := range content {
+		content[i] = byte(i)
+	}
+	sum := sha256.Sum256(content)
+	hash := hex.EncodeToString(sum[:])
+	require.NoError(t, server.cas.Add(ctx, hash, content))
+
+	host := &Host{HostId: "windowed-raw-host", Addr: addr, PrivateAddr: addr}
+	client := &Client{
+		ctx: ctx,
+		clientConfig: ClientConfig{
+			NTopHosts: 1,
+			ReadTransport: ClientReadTransportConfig{
+				Enabled:               true,
+				MaxActiveConnsPerHost: 1,
+				MaxIdleConnsPerHost:   1,
+				RequestSizeBytes:      4 * maxRequestBytes,
+				MaxPartsPerRead:       1,
+			},
+		},
+		globalConfig:          cfg.Global,
+		grpcClients:           make(map[string]proto.CacheClient),
+		grpcConns:             make(map[string]*grpc.ClientConn),
+		localServers:          make(map[string]*Server),
+		rawReadPools:          make(map[string]*rawReadConnPool),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
+		hasher:                &orderedTestHasher{hosts: []*Host{host}},
+		maxGetContentAttempts: 1,
+	}
+	t.Cleanup(func() { require.NoError(t, client.Cleanup()) })
+
+	before := snapshotCachePathStats()
+	dst := make([]byte, len(content))
+	n, err := client.ReadContentInto(ctx, hash, 0, dst, ClientOptions{})
+	require.NoError(t, err)
+	require.Equal(t, int64(len(content)), n)
+	require.Equal(t, content, dst)
+	after := snapshotCachePathStats()
+	diff := diffCachePathStats(after, before)
+	require.Equal(t, int64(3), diff.clientRawRequests)
+	require.Equal(t, int64(3), diff.serverRawRequests)
+}
+
 func TestRawReadUsesCopyForSmallPageBackedRange(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

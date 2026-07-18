@@ -42,6 +42,8 @@ const (
 	cacheDefaultPageFDCacheSize         = 64
 	cacheDefaultRawMaxActiveConns       = 64
 	cacheDefaultRawMaxIdleConns         = 16
+	cacheDefaultRawRequestSize          = 64 * 1024 * 1024
+	cacheDefaultRawMaxParts             = 8
 	cacheDefaultPrefetchAheadBytes      = 64 * 1024 * 1024
 	cacheDefaultPrefetchWorkers         = 4
 	cacheDefaultPrefetchPartLength      = 4 * 1024 * 1024
@@ -928,6 +930,12 @@ func normalizeCacheConfig(config types.AppConfig, poolConfig types.WorkerPoolCon
 	}
 	if cacheConfig.Client.ReadTransport.MaxIdleConnsPerHost == 0 {
 		cacheConfig.Client.ReadTransport.MaxIdleConnsPerHost = cacheDefaultRawMaxIdleConns
+	}
+	if cacheConfig.Client.ReadTransport.RequestSizeBytes == 0 {
+		cacheConfig.Client.ReadTransport.RequestSizeBytes = cacheDefaultRawRequestSize
+	}
+	if cacheConfig.Client.ReadTransport.MaxPartsPerRead == 0 {
+		cacheConfig.Client.ReadTransport.MaxPartsPerRead = cacheDefaultRawMaxParts
 	}
 	cacheConfig.Client.Prefetch.Enabled = true
 	if cacheConfig.Client.Prefetch.AheadBytes == 0 {

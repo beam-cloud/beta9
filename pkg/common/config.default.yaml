@@ -350,6 +350,12 @@ cache:
     nTopHosts: 3
     minRetryLengthBytes: 0 # 0 means retry all cache reads; increase to retry only larger reads.
     maxGetContentAttempts: 3
+    readTransport:
+      enabled: true
+      maxActiveConnsPerHost: 64
+      maxIdleConnsPerHost: 16
+      requestSizeBytes: 67108864 # 64MiB; one request per GeeseFS cache-through window.
+      maxPartsPerRead: 8 # Only applies when a logical read is larger than requestSizeBytes.
     cachefs:
       maxBackgroundTasks: 256
       maxReadAheadKB: 1024

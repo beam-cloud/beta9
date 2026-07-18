@@ -171,6 +171,12 @@ type ClientReadTransportConfig struct {
 	Enabled               bool `key:"enabled" json:"enabled"`
 	MaxActiveConnsPerHost int  `key:"maxActiveConnsPerHost" json:"max_active_conns_per_host"`
 	MaxIdleConnsPerHost   int  `key:"maxIdleConnsPerHost" json:"max_idle_conns_per_host"`
+	// RequestSizeBytes bounds each raw TCP request independently of the
+	// server-side page prefetch part size.
+	RequestSizeBytes int64 `key:"requestSizeBytes" json:"request_size_bytes"`
+	// MaxPartsPerRead only controls fanout when a logical read is larger than
+	// RequestSizeBytes. A logical read that fits remains one wire request.
+	MaxPartsPerRead int `key:"maxPartsPerRead" json:"max_parts_per_read"`
 }
 
 type ReadPrefetchConfig struct {

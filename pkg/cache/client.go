@@ -48,13 +48,16 @@ const (
 	closestHostTimeout              = 30 * time.Second
 	localClientCacheCleanupInterval = 5 * time.Second
 	localClientCacheTTL             = 600 * time.Second
-	defaultRawReadWindowPartBytes   = 4 * 1024 * 1024
+	defaultRawReadWindowPartBytes   = 64 * 1024 * 1024
+	defaultRawReadWindowMaxParts    = 8
 	monitorHostFailureThreshold     = 2
 
 	// NOTE: This value for readAheadKB is separate from the cachefs config since the FUSE library does
 	// weird stuff with the other read_ahead_kb value internally
 	readAheadKB = 32768
 )
+
+var rawReadWindowTraceSequence int64
 
 type RendezvousHasher interface {
 	Add(hosts ...*Host)
@@ -1251,27 +1254,106 @@ func (c *Client) rawReadInto(ctx context.Context, host *Host, hash string, offse
 	return length, nil
 }
 
-func (c *Client) rawReadIntoWindowed(ctx context.Context, host *Host, hash string, offset int64, dst []byte) (int64, error) {
+type rawReadWindowPlan struct {
+	partLength  int
+	chunkCount  int
+	concurrency int
+}
+
+func (c *Client) planRawReadWindows(length int) rawReadWindowPlan {
+	if length <= 0 {
+		return rawReadWindowPlan{}
+	}
+
+	partLength := c.clientConfig.ReadTransport.RequestSizeBytes
+	if partLength <= 0 {
+		partLength = defaultRawReadWindowPartBytes
+	}
+	maxRequestLength := int64(c.globalConfig.GRPCMessageSizeBytes)
+	if maxRequestLength <= 0 {
+		maxRequestLength = defaultRawReadChunkBytes
+	}
+	if partLength > maxRequestLength {
+		partLength = maxRequestLength
+	}
+	if partLength > int64(length) {
+		partLength = int64(length)
+	}
+
+	partLengthInt := int(partLength)
+	chunkCount := (length + partLengthInt - 1) / partLengthInt
+	concurrency := c.clientConfig.ReadTransport.MaxPartsPerRead
+	if concurrency <= 0 {
+		concurrency = defaultRawReadWindowMaxParts
+	}
+	if maxActive := c.clientConfig.ReadTransport.MaxActiveConnsPerHost; maxActive > 0 && concurrency > maxActive {
+		concurrency = maxActive
+	}
+	if concurrency > chunkCount {
+		concurrency = chunkCount
+	}
+	if concurrency < 1 {
+		concurrency = 1
+	}
+
+	return rawReadWindowPlan{
+		partLength:  partLengthInt,
+		chunkCount:  chunkCount,
+		concurrency: concurrency,
+	}
+}
+
+func (c *Client) rawReadIntoWindowed(ctx context.Context, host *Host, hash string, offset int64, dst []byte) (read int64, err error) {
 	if len(dst) == 0 {
 		return 0, nil
 	}
 
-	partLength := c.clientConfig.Prefetch.PartLengthBytes
-	if partLength <= 0 {
-		partLength = defaultRawReadWindowPartBytes
+	plan := c.planRawReadWindows(len(dst))
+	traceSequence := atomic.AddInt64(&rawReadWindowTraceSequence, 1)
+	started := time.Now()
+	traceHostID := ""
+	if host != nil {
+		traceHostID = host.HostId
 	}
-	if partLength > int64(len(dst)) {
-		partLength = int64(len(dst))
-	}
+	defer func() {
+		elapsed := time.Since(started)
+		if shouldTraceCachePath(traceSequence, elapsed, err != nil) {
+			Logger.Debugf(
+				"cache raw client windowed read trace: seq=%d host=%s hash=%s offset=%d length=%d part_length=%d chunks=%d concurrency=%d read=%d err=%v elapsed=%s",
+				traceSequence,
+				traceHostID,
+				hash,
+				offset,
+				len(dst),
+				plan.partLength,
+				plan.chunkCount,
+				plan.concurrency,
+				read,
+				err,
+				elapsed.Truncate(time.Millisecond),
+			)
+		}
+	}()
 
-	maxParts := c.clientConfig.Prefetch.MaxPartsPerRead
-	if maxParts <= 1 || int64(len(dst)) <= partLength {
+	if plan.chunkCount <= 1 {
 		return c.rawReadInto(ctx, host, hash, offset, dst)
 	}
-
-	chunkCount := (len(dst) + int(partLength) - 1) / int(partLength)
-	if maxParts > chunkCount {
-		maxParts = chunkCount
+	if plan.concurrency <= 1 {
+		for off := 0; off < len(dst); off += plan.partLength {
+			n := plan.partLength
+			if remaining := len(dst) - off; remaining < n {
+				n = remaining
+			}
+			chunkRead, chunkErr := c.rawReadInto(ctx, host, hash, offset+int64(off), dst[off:off+n])
+			read += chunkRead
+			if chunkErr != nil {
+				return read, chunkErr
+			}
+			if chunkRead != int64(n) {
+				return read, io.ErrUnexpectedEOF
+			}
+		}
+		return read, nil
 	}
 
 	type chunk struct {
@@ -1286,7 +1368,7 @@ func (c *Client) rawReadIntoWindowed(ctx context.Context, host *Host, hash strin
 	var wg sync.WaitGroup
 	var firstErr error
 	var errMu sync.Mutex
-	var read int64
+	read = 0
 
 	setErr := func(err error) {
 		if err == nil {
@@ -1300,7 +1382,7 @@ func (c *Client) rawReadIntoWindowed(ctx context.Context, host *Host, hash strin
 		errMu.Unlock()
 	}
 
-	for worker := 0; worker < maxParts; worker++ {
+	for worker := 0; worker < plan.concurrency; worker++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -1320,8 +1402,8 @@ func (c *Client) rawReadIntoWindowed(ctx context.Context, host *Host, hash strin
 	}
 
 sendLoop:
-	for off := 0; off < len(dst); off += int(partLength) {
-		n := int(partLength)
+	for off := 0; off < len(dst); off += plan.partLength {
+		n := plan.partLength
 		if remaining := len(dst) - off; remaining < n {
 			n = remaining
 		}
