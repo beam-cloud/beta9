@@ -86,6 +86,7 @@ FROM debian:bookworm AS gvisor
 
 ARG TARGETARCH
 ARG GVISOR_VERSION=20260714.0
+ARG GVISOR_AMD64_RELEASE=release-20260714.0-beam.1
 
 WORKDIR /tmp
 
@@ -97,15 +98,21 @@ set -eux
 # Determine the correct architecture for gVisor
 if [ "$TARGETARCH" = "amd64" ]; then
     GVISOR_ARCH="x86_64"
+    GVISOR_BASE_URL="https://github.com/beam-cloud/gvisor/releases/download/${GVISOR_AMD64_RELEASE}"
+    RUNSC_URL="${GVISOR_BASE_URL}/runsc.${GVISOR_ARCH}"
+    RUNSC_SHA512_URL="${RUNSC_URL}.sha512"
 elif [ "$TARGETARCH" = "arm64" ]; then
     GVISOR_ARCH="aarch64"
+    GVISOR_BASE_URL="https://storage.googleapis.com/gvisor/releases/release/${GVISOR_VERSION}/${GVISOR_ARCH}"
+    RUNSC_URL="${GVISOR_BASE_URL}/runsc"
+    RUNSC_SHA512_URL="${RUNSC_URL}.sha512"
 else
     echo "Unsupported architecture: $TARGETARCH" && exit 1
 fi
 
 # Download runsc and its checksum to /tmp
-curl -fsSL https://storage.googleapis.com/gvisor/releases/release/${GVISOR_VERSION}/${GVISOR_ARCH}/runsc -o /tmp/runsc
-curl -fsSL https://storage.googleapis.com/gvisor/releases/release/${GVISOR_VERSION}/${GVISOR_ARCH}/runsc.sha512 -o /tmp/runsc.sha512
+curl -fsSL "$RUNSC_URL" -o /tmp/runsc
+curl -fsSL "$RUNSC_SHA512_URL" -o /tmp/runsc.sha512
 
 # Verify checksum (cd to /tmp where both files are)
 cd /tmp && sha512sum -c runsc.sha512
