@@ -755,6 +755,7 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 		terminalCheckpointStopWait,
 	)
 	if terminateAfterCheckpoint {
+		s.stopOOMWatcherForTerminalCheckpoint(opts.Request.ContainerId)
 		log.Info().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msg("container will terminate after checkpoint snapshot")
 	}
 
@@ -822,6 +823,14 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 		log.Info().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msg("checkpoint created successfully")
 	}
 	return nil
+}
+
+func (s *Worker) stopOOMWatcherForTerminalCheckpoint(containerID string) {
+	instance, exists := s.containerInstances.Get(containerID)
+	if !exists || instance == nil || instance.OOMWatcher == nil {
+		return
+	}
+	instance.OOMWatcher.Stop()
 }
 
 func (s *Worker) markCheckpointFailed(opts *CreateCheckpointOpts, metadata *checkpointCacheMetadata) {
