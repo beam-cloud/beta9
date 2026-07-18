@@ -3300,3 +3300,30 @@ func TestConcurrencyLimit(t *testing.T) {
 		})
 	}
 }
+
+func TestCalculateBackoffDelay(t *testing.T) {
+	maxDelay := 5 * time.Second
+
+	tests := []struct {
+		retryCount int
+		want       time.Duration
+	}{
+		{retryCount: 0, want: 0},
+		{retryCount: 1, want: 2 * time.Second},
+		{retryCount: 2, want: 4 * time.Second},
+		{retryCount: 3, want: maxDelay},
+		{retryCount: 30, want: maxDelay},
+		// High retry counts (reachable up to maxScheduleRetryCount-1) must
+		// stay clamped at maxDelay rather than overflowing to 0 / negative.
+		{retryCount: 62, want: maxDelay},
+		{retryCount: 63, want: maxDelay},
+		{retryCount: 119, want: maxDelay},
+	}
+
+	for _, tt := range tests {
+		got := calculateBackoffDelay(tt.retryCount)
+		assert.GreaterOrEqual(t, got, time.Duration(0), "retryCount=%d produced a negative delay", tt.retryCount)
+		assert.LessOrEqual(t, got, maxDelay, "retryCount=%d exceeded maxDelay", tt.retryCount)
+		assert.Equal(t, tt.want, got, "retryCount=%d", tt.retryCount)
+	}
+}
