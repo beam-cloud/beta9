@@ -277,6 +277,12 @@ if status ~= "available" then
 end
 
 for i = 6, #ARGV, 4 do
+	if redis.call("HGET", ARGV[i], "status") ~= "PENDING" then
+		return -3
+	end
+end
+
+for i = 6, #ARGV, 4 do
 	local state = ARGV[i]
 	redis.call("RPUSH", KEYS[2], ARGV[i + 1])
 	redis.call("HSET", state,
@@ -1392,6 +1398,9 @@ func (r *WorkerRedisRepository) ScheduleContainerRequests(worker *types.Worker, 
 		}
 		if committed == -1 {
 			return &types.ErrWorkerNotFound{WorkerId: worker.Id}
+		}
+		if committed == -3 {
+			return errors.New("container request is no longer pending")
 		}
 		return fmt.Errorf("worker <%s> is not available", worker.Id)
 	}

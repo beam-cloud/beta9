@@ -27,6 +27,9 @@ func newSchedulingAttempt(scheduler *Scheduler, request *types.ContainerRequest,
 }
 
 func (a *schedulingAttempt) run() {
+	if !a.runnable() {
+		return
+	}
 	normalizeGPURequest(a.request)
 
 	// Keep the scheduling order explicit: use ready capacity first, wait on
@@ -74,7 +77,7 @@ func (a *schedulingAttempt) scheduleOnAvailableWorker() bool {
 			Msg("unable to schedule request on existing worker")
 		a.recordBacklogWait(false, "schedule_failed")
 		metrics.RecordSchedulerWorkerWait(time.Since(a.request.Timestamp), a.request, "schedule_failed")
-		a.retrySoon("schedule_failed")
+		a.retryIfRunnable("schedule_failed")
 		return true
 	}
 
@@ -83,6 +86,22 @@ func (a *schedulingAttempt) scheduleOnAvailableWorker() bool {
 	metrics.RecordRequestSchedulingDuration(duration, a.request)
 	metrics.RecordSchedulerWorkerWait(duration, a.request, "scheduled")
 	return true
+}
+
+func (a *schedulingAttempt) runnable() bool {
+	pending, err := a.scheduler.containerRequestPending(a.request.ContainerId)
+	if err == nil {
+		return pending
+	}
+	requestLog(log.Error(), a.request).Err(err).Msg("failed to verify container request state")
+	a.retrySoon("container_state_lookup_failed")
+	return false
+}
+
+func (a *schedulingAttempt) retryIfRunnable(reason string) {
+	if a.runnable() {
+		a.retrySoon(reason)
+	}
 }
 
 func (a *schedulingAttempt) reservePendingWorkerCapacity() bool {

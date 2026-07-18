@@ -98,6 +98,22 @@ func NewSchedulerForTest() (*Scheduler, error) {
 	}, nil
 }
 
+func setPendingSchedulerRequests(t *testing.T, scheduler *Scheduler, requests ...*types.ContainerRequest) {
+	t.Helper()
+
+	for _, request := range requests {
+		if request.ContainerId == "" {
+			request.ContainerId = uuid.NewString()
+		}
+		assert.NoError(t, scheduler.containerRepo.SetContainerState(request.ContainerId, &types.ContainerState{
+			ContainerId: request.ContainerId,
+			Status:      types.ContainerStatusPending,
+			WorkspaceId: request.WorkspaceId,
+			ScheduledAt: time.Now().Unix(),
+		}))
+	}
+}
+
 func TestPrivateWorkerRequestUsesPoolMode(t *testing.T) {
 	manager := NewWorkerPoolManager(false)
 	privateState := &compute.PoolState{Selector: "private-pool"}
@@ -923,11 +939,12 @@ func TestRunContainer(t *testing.T) {
 	}
 }
 
-func TestStopDeletesPendingBuildContainerState(t *testing.T) {
+func TestStopDeletesUnassignedPendingContainerState(t *testing.T) {
 	wb, err := NewSchedulerForTest()
 	assert.Nil(t, err)
 
-	containerId := types.BuildContainerPrefix + "pending"
+	containerId := "pending-container"
+	request := &types.ContainerRequest{ContainerId: containerId, Timestamp: time.Now()}
 	err = wb.containerRepo.SetContainerState(containerId, &types.ContainerState{
 		ContainerId: containerId,
 		Status:      types.ContainerStatusPending,
@@ -935,6 +952,7 @@ func TestStopDeletesPendingBuildContainerState(t *testing.T) {
 		ScheduledAt: time.Now().Unix(),
 	})
 	assert.Nil(t, err)
+	assert.NoError(t, wb.requestBacklog.Push(request))
 
 	err = wb.Stop(&types.StopContainerArgs{
 		ContainerId: containerId,
@@ -944,7 +962,36 @@ func TestStopDeletesPendingBuildContainerState(t *testing.T) {
 
 	_, err = wb.containerRepo.GetContainerState(containerId)
 	notFound := &types.ErrContainerStateNotFound{}
-	assert.True(t, notFound.From(err), "expected deleted pending build state, got %v", err)
+	assert.True(t, notFound.From(err), "expected deleted pending state, got %v", err)
+
+	popped, err := wb.requestBacklog.Pop()
+	assert.NoError(t, err)
+	wb.processRequestBatch([]*types.ContainerRequest{popped}, nil)
+	assert.Equal(t, int64(0), wb.requestBacklog.Len())
+}
+
+func TestStopPreservesAssignedPendingContainerForWorkerCancellation(t *testing.T) {
+	wb, err := NewSchedulerForTest()
+	assert.NoError(t, err)
+
+	containerID := "assigned-pending-container"
+	assert.NoError(t, wb.containerRepo.SetContainerState(containerID, &types.ContainerState{
+		ContainerId: containerID,
+		Status:      types.ContainerStatusPending,
+		WorkspaceId: "workspace-1",
+		WorkerId:    "worker-1",
+		ScheduledAt: time.Now().Unix(),
+	}))
+
+	assert.NoError(t, wb.Stop(&types.StopContainerArgs{
+		ContainerId: containerID,
+		Reason:      types.StopContainerReasonUser,
+	}))
+
+	state, err := wb.containerRepo.GetContainerState(containerID)
+	assert.NoError(t, err)
+	assert.Equal(t, types.ContainerStatusStopping, state.Status)
+	assert.Equal(t, "worker-1", state.WorkerId)
 }
 
 func TestRunCleansContainerStateWhenBacklogPushFails(t *testing.T) {
@@ -1234,6 +1281,7 @@ func TestProcessRequestUsesInFlightProvisioningForCurrentBatch(t *testing.T) {
 		PoolSelector: "beta9-cpu",
 		Timestamp:    time.Now(),
 	}
+	setPendingSchedulerRequests(t, wb, firstRequest, secondRequest)
 
 	wb.processRequest(firstRequest, nil)
 	select {
@@ -1314,6 +1362,7 @@ func TestProcessRequestTracksPendingWorkerCapacityAcrossBatches(t *testing.T) {
 		PoolSelector: "beta9-a10g",
 		Timestamp:    time.Now(),
 	}
+	setPendingSchedulerRequests(t, wb, firstRequest, secondRequest)
 
 	firstBatchWorkers, err := wb.workerRepo.GetAllWorkers()
 	assert.Nil(t, err)
@@ -1372,6 +1421,7 @@ func TestProcessRequestUpdatesBatchWorkerCapacity(t *testing.T) {
 		Memory:      1,
 		Timestamp:   time.Now(),
 	}
+	setPendingSchedulerRequests(t, wb, firstRequest)
 
 	wb.processRequest(firstRequest, workers)
 
@@ -1422,6 +1472,7 @@ func TestProcessRequestBatchDoesNotOverScheduleWorkerSnapshot(t *testing.T) {
 			Timestamp:   time.Now(),
 		},
 	}
+	setPendingSchedulerRequests(t, wb, requests...)
 
 	wb.processRequestBatch(requests, workers)
 
@@ -1489,6 +1540,7 @@ func TestProcessRequestBatchSpreadsAcrossEqualWorkers(t *testing.T) {
 			Timestamp:   time.Now(),
 		},
 	}
+	setPendingSchedulerRequests(t, wb, requests...)
 
 	wb.processRequestBatch(requests, workers)
 
@@ -1550,6 +1602,7 @@ func TestProcessRequestBatchSchedulesTinySandboxBurstByRequestedCapacity(t *test
 			},
 		}
 	}
+	setPendingSchedulerRequests(t, wb, requests...)
 
 	workerSnapshot, err := wb.workerRepo.GetAllWorkers()
 	assert.Nil(t, err)
@@ -1616,6 +1669,7 @@ func TestProcessRequestBatchKeepsCPUAndGPUCapacitySeparate(t *testing.T) {
 		GpuRequest:  []string{"A10G"},
 		Timestamp:   time.Now(),
 	}
+	setPendingSchedulerRequests(t, wb, gpuRequest, cpuRequest)
 
 	wb.processRequestBatch([]*types.ContainerRequest{gpuRequest, cpuRequest}, workers)
 
@@ -1682,6 +1736,7 @@ func TestProcessRequestKeepsCPUAndGPUWorkersSeparate(t *testing.T) {
 		GpuCount:    1,
 		Timestamp:   time.Now(),
 	}
+	setPendingSchedulerRequests(t, wb, cpuRequest, gpuRequest)
 
 	wb.processRequest(cpuRequest, workers)
 	wb.processRequest(gpuRequest, workers)
@@ -1740,6 +1795,7 @@ func TestProcessRequestDefaultsGPUCountBeforeScheduling(t *testing.T) {
 		GpuRequest:  []string{"A10G"},
 		Timestamp:   time.Now(),
 	}
+	setPendingSchedulerRequests(t, wb, request)
 
 	wb.processRequest(request, workers)
 
@@ -1795,6 +1851,7 @@ func TestProcessRequestStaleReplicaGPUReservationRequeues(t *testing.T) {
 		GpuRequest:  []string{"A10G"},
 		Timestamp:   time.Now(),
 	}
+	setPendingSchedulerRequests(t, firstScheduler, firstRequest, secondRequest)
 
 	firstScheduler.processRequest(firstRequest, firstReplicaWorkers)
 	secondScheduler.processRequest(secondRequest, secondReplicaWorkers)
@@ -1877,6 +1934,7 @@ func TestProcessRequestConcurrentStaleReplicaGPUReservationRequeues(t *testing.T
 		GpuRequest:  []string{"A10G"},
 		Timestamp:   time.Now(),
 	}
+	setPendingSchedulerRequests(t, firstScheduler, firstRequest, secondRequest)
 
 	start := make(chan struct{})
 	var wg sync.WaitGroup
@@ -2422,6 +2480,7 @@ func TestSelectGPUWorker(t *testing.T) {
 	assert.Equal(t, newWorker.Id, worker.Id)
 
 	// Actually schedule the request
+	setPendingSchedulerRequests(t, wb, firstRequest)
 	err = wb.scheduleRequest(worker, firstRequest)
 	assert.Nil(t, err)
 
@@ -2506,6 +2565,7 @@ func TestSelectCPUWorker(t *testing.T) {
 	assert.Nil(t, err)
 
 	// Select a worker for the request
+	setPendingSchedulerRequests(t, wb, firstRequest, secondRequest, thirdRequest)
 	worker, err := wb.selectWorker(firstRequest)
 	assert.Nil(t, err)
 	assert.Equal(t, newWorker.Gpu, worker.Gpu)
@@ -2716,6 +2776,7 @@ func TestSelectWorkersWithBackupGPU(t *testing.T) {
 					assert.True(t, stringInSlice(worker.Gpu, reqGpus))
 				}
 
+				setPendingSchedulerRequests(t, wb, req)
 				err = wb.scheduleRequest(worker, req)
 				assert.Nil(t, err)
 			}
@@ -2823,6 +2884,7 @@ func TestRequiresPoolSelectorWorker(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, newWorkerWithRequiresPoolSelector.Id, worker.Id)
 
+	setPendingSchedulerRequests(t, wb, firstRequest)
 	err = wb.scheduleRequest(worker, firstRequest)
 	assert.Nil(t, err)
 
@@ -2956,6 +3018,7 @@ func TestServerlessPoolFallsBackWhenHighPriorityPoolIsFull(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, gladiatorWorker.Id, worker.Id)
 
+	setPendingSchedulerRequests(t, wb, request)
 	err = wb.scheduleRequest(worker, request)
 	assert.Nil(t, err)
 
@@ -3035,6 +3098,7 @@ func TestSelectBuildWorker(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, newWorker.Gpu, worker.Gpu)
 
+	setPendingSchedulerRequests(t, wb, request)
 	err = wb.scheduleRequest(worker, request)
 	assert.Nil(t, err)
 
