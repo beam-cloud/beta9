@@ -152,13 +152,16 @@ func TestLazyMountOptionsForClipV2UsesGatewayRegistryCredentials(t *testing.T) {
 		StubId:      "stub-id",
 		ImageId:     "image-a",
 	}
+	metadata := &clipCommon.ClipArchiveMetadata{}
 
 	opts := client.lazyMountOptions(context.Background(), request, lazyImageArchive{
 		path:        "/images/cache/image-a.rclip",
 		storageMode: "oci",
+		metadata:    metadata,
 	})
 
 	require.Equal(t, "/images/cache/image-a.rclip", opts.ArchivePath)
+	require.Same(t, metadata, opts.Metadata)
 	require.Equal(t, "/images/cache", opts.CachePath)
 	require.Nil(t, opts.StorageInfo)
 	require.NotNil(t, opts.RegistryCredProvider)

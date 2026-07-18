@@ -378,6 +378,7 @@ type lazyImageArchive struct {
 	path           string
 	sourceRegistry *types.S3ImageRegistryConfig
 	storageMode    string
+	metadata       *clipCommon.ClipArchiveMetadata
 }
 
 func (a lazyImageArchive) usesOCIStorage() bool {
@@ -442,6 +443,7 @@ func (c *ImageClient) prepareLazyImageArchive(ctx context.Context, request *type
 		path:           archivePath,
 		sourceRegistry: sourceRegistry,
 		storageMode:    archiveStorageMode(meta),
+		metadata:       meta,
 	}
 	if archive.usesOCIStorage() {
 		log.Info().Str("image_id", request.ImageId).Str("storage_type", archive.storageMode).Msg("detected CLIP OCI image")
@@ -677,6 +679,7 @@ func (c *ImageClient) lazyMountOptions(ctx context.Context, request *types.Conta
 	contentCache := newImageContentCache(c.cacheClient, request.ImageId, cacheKind, c.imageContentCacheObserver(request))
 	mountOptions := clip.MountOptions{
 		ArchivePath:           archive.path,
+		Metadata:              archive.metadata,
 		MountPoint:            c.imageMountPoint(request.ImageId),
 		CachePath:             c.contentCachePath(request, archive),
 		ContentCache:          contentCache,
