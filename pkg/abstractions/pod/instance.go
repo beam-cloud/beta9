@@ -8,6 +8,7 @@ import (
 	"time"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
@@ -17,6 +18,26 @@ type podInstance struct {
 	*abstractions.AutoscaledInstance
 	buffer                    *PodProxyBuffer
 	durableDiskPlacementRepos abstractions.DurableDiskPlacementRepos
+}
+
+func (i *podInstance) ConsumeContainerEvent(event types.ContainerEvent) {
+	i.AutoscaledInstance.ConsumeContainerEvent(event)
+	if i.buffer == nil || i.ContainerRepo == nil || event.ContainerId == "" {
+		return
+	}
+	if event.Change < 0 {
+		i.buffer.retireAvailableContainer(event.ContainerId)
+		return
+	}
+
+	state, err := i.ContainerRepo.GetContainerState(event.ContainerId)
+	if err != nil {
+		i.buffer.signalDiscovery()
+		return
+	}
+	if state.Status == types.ContainerStatusStopping {
+		i.buffer.retireAvailableContainer(event.ContainerId)
+	}
 }
 
 func (i *podInstance) ensureReadyForRequest() error {
@@ -44,7 +65,14 @@ func (i *podInstance) ensureReadyForRequest() error {
 		return nil
 	}
 
-	return i.HandleScalingEvent(desiredContainers)
+	err = i.HandleScalingEvent(desiredContainers)
+	if common.IsRedisLockNotObtained(err) {
+		if i.Autoscaler != nil {
+			i.Autoscaler.Trigger()
+		}
+		return nil
+	}
+	return err
 }
 
 func (i *podInstance) startContainers(containersToRun int) error {
@@ -176,22 +204,53 @@ func (i *podInstance) stopContainers(containersToStop int) error {
 		return err
 	}
 
-	for c := 0; c < containersToStop && len(containerIds) > 0; c++ {
+	stopped := 0
+	for stopped < containersToStop && len(containerIds) > 0 {
 		idx := rnd.Intn(len(containerIds))
 		containerId := containerIds[idx]
+		containerIds = append(containerIds[:idx], containerIds[idx+1:]...)
+
+		if !i.retireContainerForStop(containerId) {
+			continue
+		}
 
 		err := i.Scheduler.Stop(&types.StopContainerArgs{ContainerId: containerId, Force: true, Reason: types.StopContainerReasonScheduler})
 		if err != nil {
+			if i.buffer != nil {
+				i.buffer.cancelContainerRetirement(containerId)
+			}
 			log.Error().Str("instance_name", i.Name).Err(err).Msg("unable to stop container")
 			return err
 		}
-
-		// Remove the containerId from the containerIds slice to avoid
-		// sending multiple stop requests to the same container
-		containerIds = append(containerIds[:idx], containerIds[idx+1:]...)
+		stopped++
 	}
 
 	return nil
+}
+
+func (i *podInstance) retireContainerForStop(containerId string) bool {
+	if i.buffer == nil {
+		return true
+	}
+
+	// Retire the proxy route before stopping the backend so a new request is
+	// queued for a replacement instead of reusing an idle connection.
+	i.buffer.retireAvailableContainer(containerId)
+	if !i.IsActive {
+		return true
+	}
+	if i.buffer.containerConnectionCount(containerId) > 0 {
+		i.buffer.cancelContainerRetirement(containerId)
+		return false
+	}
+
+	connections, err := i.buffer.sharedContainerConnectionCount(containerId)
+	if err != nil || connections > 0 {
+		i.buffer.cancelContainerRetirement(containerId)
+		return false
+	}
+
+	return true
 }
 
 func (i *podInstance) stoppableContainers() ([]string, error) {
