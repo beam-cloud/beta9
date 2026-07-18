@@ -16,7 +16,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.144.0
 	github.com/aws/aws-sdk-go-v2/service/ecr v1.27.0
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.58.0
-	github.com/beam-cloud/clip v0.0.0-20260718214213-1adbebf071cd
+	github.com/beam-cloud/clip v0.0.0-20260718203452-1feb1704433e
 	github.com/beam-cloud/go-runc v0.0.0-20250911154456-bb45084abfe1
 	github.com/beam-cloud/goproc v0.1.12
 	github.com/beam-cloud/redislock v0.0.0-20250201162619-1b534b3be324
@@ -33,7 +33,7 @@ require (
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
-	github.com/hanwen/go-fuse/v2 v2.10.1
+	github.com/hanwen/go-fuse/v2 v2.5.1
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/jmoiron/sqlx v1.3.5
 	github.com/json-iterator/go v1.1.12
