@@ -114,6 +114,7 @@ type PodProxyBuffer struct {
 	tsConfig                types.TailscaleConfig
 	availableContainers     []container
 	availableContainersLock sync.RWMutex
+	retiringContainers      map[string]struct{}
 	totalConnections        atomic.Int64
 	containerConnections    sync.Map
 	pendingKeepWarmLocks    sync.Map
@@ -853,6 +854,39 @@ func (pb *PodProxyBuffer) removeAvailableContainer(containerID string) {
 	}
 }
 
+func (pb *PodProxyBuffer) retireAvailableContainer(containerID string) {
+	if containerID == "" {
+		return
+	}
+
+	pb.availableContainersLock.Lock()
+	if pb.retiringContainers == nil {
+		pb.retiringContainers = make(map[string]struct{})
+	}
+	pb.retiringContainers[containerID] = struct{}{}
+	available := make([]container, 0, len(pb.availableContainers))
+	for _, candidate := range pb.availableContainers {
+		if candidate.id != containerID {
+			available = append(available, candidate)
+		}
+	}
+	pb.availableContainers = available
+	pb.availableContainersLock.Unlock()
+
+	pb.pruneBackendTransports(available)
+}
+
+func (pb *PodProxyBuffer) cancelContainerRetirement(containerID string) {
+	if containerID == "" {
+		return
+	}
+
+	pb.availableContainersLock.Lock()
+	delete(pb.retiringContainers, containerID)
+	pb.availableContainersLock.Unlock()
+	pb.signalDiscovery()
+}
+
 func (pb *PodProxyBuffer) recordQueuedRequestWait(conn *connection, protocol string) {
 	if conn.enqueuedAt.IsZero() {
 		return
@@ -1037,10 +1071,12 @@ func (pb *PodProxyBuffer) discoverContainers() {
 		containerStates, err := pb.containerRepo.GetActiveContainersByStubId(pb.stubId)
 		if err == nil {
 
+			activeContainerIDs := make(map[string]struct{}, len(containerStates))
 			var wg sync.WaitGroup
 			availableContainersChan := make(chan container, len(containerStates))
 
 			for _, containerState := range containerStates {
+				activeContainerIDs[containerState.ContainerId] = struct{}{}
 				wg.Add(1)
 
 				go func(cs types.ContainerState) {
@@ -1087,11 +1123,7 @@ func (pb *PodProxyBuffer) discoverContainers() {
 				return availableContainers[i].connections < availableContainers[j].connections
 			})
 
-			pb.availableContainersLock.Lock()
-			pb.availableContainers = availableContainers
-			pb.availableContainersLock.Unlock()
-			pb.pruneBackendTransports(availableContainers)
-			pb.signalWork()
+			pb.updateDiscoveredContainers(availableContainers, activeContainerIDs)
 		}
 
 		interval := containerDiscoveryInterval
@@ -1114,6 +1146,27 @@ func (pb *PodProxyBuffer) discoverContainers() {
 		case <-timer.C:
 		}
 	}
+}
+
+func (pb *PodProxyBuffer) updateDiscoveredContainers(discovered []container, activeContainerIDs map[string]struct{}) {
+	pb.availableContainersLock.Lock()
+	for containerID := range pb.retiringContainers {
+		if _, active := activeContainerIDs[containerID]; !active {
+			delete(pb.retiringContainers, containerID)
+		}
+	}
+
+	available := discovered[:0]
+	for _, candidate := range discovered {
+		if _, retiring := pb.retiringContainers[candidate.id]; !retiring {
+			available = append(available, candidate)
+		}
+	}
+	pb.availableContainers = available
+	pb.availableContainersLock.Unlock()
+
+	pb.pruneBackendTransports(available)
+	pb.signalWork()
 }
 
 func (pb *PodProxyBuffer) readyAddressMap(addressMap map[int32]string) map[int32]string {
