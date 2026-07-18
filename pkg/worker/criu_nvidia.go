@@ -117,7 +117,7 @@ func InitializeNvidiaCRIU(ctx context.Context, config types.CRIUConfig, checkpoi
 func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, rt runtime.Runtime, checkpointId string, request *types.ContainerRequest, terminateAfterCheckpoint bool) (string, error) {
 	checkpointPath := filepath.Join(c.checkpointRoot, checkpointId)
 	workDir := filepath.Join(types.AgentTmpPath, checkpointId)
-	terminateAfterCheckpoint = terminateAfterCheckpoint && rt.Name() == types.ContainerRuntimeRunc.String()
+	terminateAfterCheckpoint = terminateAfterCheckpoint && supportsTerminalCheckpoint(rt)
 
 	// Setup work directory for checkpoint files
 	if err := os.MkdirAll(workDir, 0755); err != nil {
