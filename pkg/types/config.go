@@ -528,7 +528,7 @@ func (c RuntimeConfig) WithDefaults(runtime string) RuntimeConfig {
 		c.GVisorRoot = "/run/gvisor"
 	}
 	if len(c.GVisorExtraArgs) == 0 {
-		c.GVisorExtraArgs = []string{"--overlay2=none", "--file-access=shared"}
+		c.GVisorExtraArgs = []string{"--overlay2=none", "--file-access=exclusive"}
 	}
 	return c
 }
