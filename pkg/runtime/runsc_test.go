@@ -36,6 +36,7 @@ case "$cmd" in
     echo "-TESTONLY-allow-packet-endpoint-write"
     ;;
   restore)
+    echo "$*" >> "$RUNSC_FAKE_LOG"
     echo restore-start >> "$RUNSC_FAKE_LOG"
     sleep 0.2
     touch "$RUNSC_FAKE_READY"
@@ -113,6 +114,7 @@ esac
 	require.Contains(t, string(logData), "restore-ready\n")
 	require.Contains(t, string(logData), "wait-done\n")
 	require.NotContains(t, string(logData), "restore-done\n")
+	require.Contains(t, string(logData), "restore --background")
 }
 
 func TestRunscPrepareMarksOnlyGPUBundles(t *testing.T) {
