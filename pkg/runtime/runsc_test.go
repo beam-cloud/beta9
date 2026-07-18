@@ -114,7 +114,7 @@ esac
 	require.Contains(t, string(logData), "restore-ready\n")
 	require.Contains(t, string(logData), "wait-done\n")
 	require.NotContains(t, string(logData), "restore-done\n")
-	require.Contains(t, string(logData), "restore --background")
+	require.Contains(t, string(logData), "restore --background --direct")
 }
 
 func TestRunscPrepareMarksOnlyGPUBundles(t *testing.T) {
