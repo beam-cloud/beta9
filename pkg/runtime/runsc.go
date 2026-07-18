@@ -434,7 +434,7 @@ func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOp
 	if nvproxyEnabled {
 		args = append(args, "--nvproxy=true")
 	}
-	args = append(args, "restore", "--background")
+	args = append(args, "restore", "--background", "--direct")
 	if opts.ImagePath != "" {
 		args = append(args, "--image-path", opts.ImagePath)
 	}
