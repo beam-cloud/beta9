@@ -87,6 +87,7 @@ FROM debian:bookworm AS gvisor
 ARG TARGETARCH
 ARG GVISOR_VERSION=20260714.0
 ARG GVISOR_AMD64_RELEASE=release-20260714.0-beam.1
+ARG GVISOR_AMD64_SHA512=461a7313d5cccb41dc47df3ca5d9faae0d9d0369ea86a10b3442f1befd760a8a91add1c433a3d6da38aa2f5dbc98f257b640c7c9fb433679de686ba058d39900
 
 WORKDIR /tmp
 
@@ -100,7 +101,7 @@ if [ "$TARGETARCH" = "amd64" ]; then
     GVISOR_ARCH="x86_64"
     GVISOR_BASE_URL="https://github.com/beam-cloud/gvisor/releases/download/${GVISOR_AMD64_RELEASE}"
     RUNSC_URL="${GVISOR_BASE_URL}/runsc.${GVISOR_ARCH}"
-    RUNSC_SHA512_URL="${RUNSC_URL}.sha512"
+    RUNSC_SHA512="$GVISOR_AMD64_SHA512"
 elif [ "$TARGETARCH" = "arm64" ]; then
     GVISOR_ARCH="aarch64"
     GVISOR_BASE_URL="https://storage.googleapis.com/gvisor/releases/release/${GVISOR_VERSION}/${GVISOR_ARCH}"
@@ -112,7 +113,11 @@ fi
 
 # Download runsc and its checksum to /tmp
 curl -fsSL "$RUNSC_URL" -o /tmp/runsc
-curl -fsSL "$RUNSC_SHA512_URL" -o /tmp/runsc.sha512
+if [ -n "${RUNSC_SHA512:-}" ]; then
+    printf '%s  runsc\n' "$RUNSC_SHA512" > /tmp/runsc.sha512
+else
+    curl -fsSL "$RUNSC_SHA512_URL" -o /tmp/runsc.sha512
+fi
 
 # Verify checksum (cd to /tmp where both files are)
 cd /tmp && sha512sum -c runsc.sha512
