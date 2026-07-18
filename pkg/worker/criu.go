@@ -61,6 +61,8 @@ var checkpointServiceLoopbackEnvOverrides = []string{
 	"MASTER_ADDR=127.0.0.1",
 	"NCCL_SOCKET_IFNAME=lo",
 	"GLOO_SOCKET_IFNAME=lo",
+	"VLLM_HOST_IP=127.0.0.1",
+	"VLLM_LOOPBACK_IP=127.0.0.1",
 }
 
 var checkpointDisabledIOUringSyscalls = []string{
@@ -1456,7 +1458,7 @@ func (s *Worker) deferStopForCheckpoint(instance *ContainerInstance, kill bool) 
 }
 
 func (s *Worker) awaitTerminalAutoCheckpointStop(ctx context.Context, request *types.ContainerRequest, rt runtime.Runtime, maxWait time.Duration) bool {
-	if request == nil || rt == nil || rt.Name() != types.ContainerRuntimeRunc.String() {
+	if request == nil || !supportsTerminalCheckpoint(rt) {
 		return false
 	}
 	state, ok := s.loadCheckpointCreateState(request)
@@ -1481,6 +1483,14 @@ func (s *Worker) awaitTerminalAutoCheckpointStop(ctx context.Context, request *t
 	case <-ctx.Done():
 		return false
 	}
+}
+
+func supportsTerminalCheckpoint(rt runtime.Runtime) bool {
+	if rt == nil {
+		return false
+	}
+	return rt.Name() == types.ContainerRuntimeRunc.String() ||
+		rt.Name() == types.ContainerRuntimeGvisor.String()
 }
 
 func shouldAwaitTerminalCheckpointStop(request *types.ContainerRequest) bool {

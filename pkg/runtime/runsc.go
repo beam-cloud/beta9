@@ -20,6 +20,7 @@ import (
 const (
 	runscRestoreStateTimeout      = 30 * time.Second
 	runscRestoreStatePollInterval = 25 * time.Millisecond
+	runscDeleteTimeout            = 5 * time.Second
 	runscGPUAnnotation            = "com.beam.gvisor.nvproxy"
 	cudaCheckpointContainerPath   = "/usr/local/bin/cuda-checkpoint"
 )
@@ -153,9 +154,7 @@ func (r *Runsc) Run(ctx context.Context, containerID, bundlePath string, opts *R
 	}
 
 	defer func() {
-		deleteArgs := r.baseArgs(dockerEnabled)
-		deleteArgs = append(deleteArgs, "delete", "--force", containerID)
-		_ = exec.Command(r.cfg.RunscPath, deleteArgs...).Run()
+		r.forceDelete(containerID, dockerEnabled)
 	}()
 
 	args := r.baseArgs(dockerEnabled)
@@ -424,15 +423,6 @@ func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOp
 		return -1, err
 	}
 
-	cleanupOnFailure := true
-	defer func() {
-		if cleanupOnFailure {
-			deleteArgs := r.baseArgs(false)
-			deleteArgs = append(deleteArgs, "delete", "--force", containerID)
-			_ = exec.Command(r.cfg.RunscPath, deleteArgs...).Run()
-		}
-	}()
-
 	// Ensure directories exist
 	if opts.WorkDir != "" {
 		if err := os.MkdirAll(opts.WorkDir, 0755); err != nil {
@@ -459,6 +449,15 @@ func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOp
 
 	cmd := exec.CommandContext(ctx, r.cfg.RunscPath, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cleanupOnFailure := true
+	defer func() {
+		if cleanupOnFailure {
+			r.forceDelete(containerID, false)
+			if cmd.Process != nil {
+				_ = cmd.Process.Kill()
+			}
+		}
+	}()
 
 	// Capture stderr for better error reporting
 	var stderr bytes.Buffer
@@ -477,15 +476,10 @@ func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOp
 		return -1, err
 	}
 
-	killRestoreProcess := func() {
-		if pgid, _ := syscall.Getpgid(cmd.Process.Pid); pgid > 0 {
-			syscall.Kill(-pgid, syscall.SIGKILL)
-		}
-	}
-
 	go func() {
 		<-ctx.Done()
-		killRestoreProcess()
+		r.forceDelete(containerID, false)
+		_ = cmd.Process.Kill()
 	}()
 
 	restoreDone := make(chan runscCommandResult, 1)
@@ -495,12 +489,10 @@ func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOp
 
 	pid, err := r.waitForRestoredContainerPID(ctx, containerID, restoreDone)
 	if err != nil {
-		killRestoreProcess()
 		return -1, err
 	}
 
 	if err := r.waitForRestore(ctx, containerID); err != nil {
-		killRestoreProcess()
 		return -1, err
 	}
 
@@ -508,13 +500,20 @@ func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOp
 		select {
 		case opts.Started <- pid:
 		case <-ctx.Done():
-			killRestoreProcess()
 			return -1, ctx.Err()
 		}
 	}
 
 	cleanupOnFailure = false
 	return 0, nil
+}
+
+func (r *Runsc) forceDelete(containerID string, dockerEnabled bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), runscDeleteTimeout)
+	defer cancel()
+
+	args := append(r.baseArgs(dockerEnabled), "delete", "--force", containerID)
+	_ = exec.CommandContext(ctx, r.cfg.RunscPath, args...).Run()
 }
 
 func (r *Runsc) waitForRestore(ctx context.Context, containerID string) error {

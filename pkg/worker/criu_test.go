@@ -166,6 +166,8 @@ func TestCheckpointRuntimeEnvironmentOverrides(t *testing.T) {
 		"MASTER_ADDR=127.0.0.1",
 		"NCCL_SOCKET_IFNAME=lo",
 		"GLOO_SOCKET_IFNAME=lo",
+		"VLLM_HOST_IP=127.0.0.1",
+		"VLLM_LOOPBACK_IP=127.0.0.1",
 	} {
 		if !slices.Contains(gpuEnv, want) {
 			t.Fatalf("GPU checkpoint env missing %q in %v", want, gpuEnv)
@@ -184,6 +186,7 @@ func TestCheckpointRuntimeEnvironmentOverrides(t *testing.T) {
 		slices.Contains(genericGPUEnv, "MASTER_ADDR=127.0.0.1") ||
 		slices.Contains(genericGPUEnv, "NCCL_SOCKET_IFNAME=lo") ||
 		slices.Contains(genericGPUEnv, "GLOO_SOCKET_IFNAME=lo") ||
+		slices.Contains(genericGPUEnv, "VLLM_HOST_IP=127.0.0.1") ||
 		slices.Contains(genericGPUEnv, "OMP_NUM_THREADS=1") {
 		t.Fatalf("generic GPU checkpoint env should not include pod-service loopback overrides: %v", genericGPUEnv)
 	}
@@ -194,7 +197,8 @@ func TestCheckpointRuntimeEnvironmentOverrides(t *testing.T) {
 	}, []string{"vllm", "serve"})
 	if slices.Contains(nonServiceEnv, "MASTER_ADDR=127.0.0.1") ||
 		slices.Contains(nonServiceEnv, "NCCL_SOCKET_IFNAME=lo") ||
-		slices.Contains(nonServiceEnv, "GLOO_SOCKET_IFNAME=lo") {
+		slices.Contains(nonServiceEnv, "GLOO_SOCKET_IFNAME=lo") ||
+		slices.Contains(nonServiceEnv, "VLLM_HOST_IP=127.0.0.1") {
 		t.Fatalf("non-service checkpoint env should not include pod-service loopback overrides: %v", nonServiceEnv)
 	}
 
@@ -456,8 +460,8 @@ func TestAutomaticStopIsDeferredDuringCheckpoint(t *testing.T) {
 	if worker.deferStopForCheckpoint(checkpointStopInstance(otherRequest, types.StopContainerReasonScheduler), false) {
 		t.Fatal("stop for a different container was deferred")
 	}
-	if worker.awaitTerminalAutoCheckpointStop(context.Background(), request, NewMockRuntime(types.ContainerRuntimeGvisor.String(), runtime.Capabilities{CheckpointRestore: true}), 0) {
-		t.Fatal("gvisor checkpoint was marked terminal")
+	if !worker.awaitTerminalAutoCheckpointStop(context.Background(), request, NewMockRuntime(types.ContainerRuntimeGvisor.String(), runtime.Capabilities{CheckpointRestore: true}), 0) {
+		t.Fatal("terminal gvisor checkpoint was not detected")
 	}
 	if !worker.awaitTerminalAutoCheckpointStop(context.Background(), request, runcRuntime, 0) {
 		t.Fatal("terminal runc checkpoint was not detected")
@@ -815,7 +819,8 @@ func TestNvidiaCRIUManager(t *testing.T) {
 				if err != nil {
 					t.Fatalf("CreateCheckpoint failed: %v", err)
 				}
-				wantTerminate := tc.runtimeName == types.ContainerRuntimeRunc.String()
+				wantTerminate := tc.runtimeName == types.ContainerRuntimeRunc.String() ||
+					tc.runtimeName == types.ContainerRuntimeGvisor.String()
 				if mockRuntime.checkpointOpts == nil || mockRuntime.checkpointOpts.LeaveRunning == wantTerminate {
 					t.Fatalf("unexpected terminal checkpoint options for %s: %+v", tc.runtimeName, mockRuntime.checkpointOpts)
 				}
