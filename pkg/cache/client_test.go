@@ -1513,6 +1513,80 @@ func TestStoreContentFromLocalFileWithHashWritesSelectedRemoteHost(t *testing.T)
 	}, time.Second, 10*time.Millisecond)
 }
 
+func TestStoreContentFromLocalFileUsesSelectedAttachedServerDirectly(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := Config{
+		Server: ServerConfig{
+			DiskCacheDir:         t.TempDir(),
+			DiskCacheMaxUsagePct: 90,
+			PageSizeBytes:        4,
+			ObjectTtlS:           300,
+		},
+		Global: GlobalConfig{
+			GRPCMessageSizeBytes: 1024 * 1024,
+			GRPCDialTimeoutS:     1,
+		},
+	}
+	metadataStore := NewMockCacheMetadataStore()
+	server, err := NewServerWithOptions(
+		ctx,
+		cfg,
+		"test",
+		WithServerMetadataStore(metadataStore),
+		WithServerHostID("local-host"),
+		WithServerAdvertiseAddr("127.0.0.1:1"),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, server.Close()) })
+
+	host := server.Host()
+	require.NotNil(t, host)
+	failingStream := &fakeStoreContentStream{failOnSend: true}
+	client := &Client{
+		ctx:                   ctx,
+		locality:              "test",
+		clientConfig:          ClientConfig{NTopHosts: 1},
+		globalConfig:          cfg.Global,
+		metadataStore:         metadataStore,
+		grpcClients:           map[string]proto.CacheClient{host.HostId: &fakeStoreCacheClient{stream: failingStream}},
+		grpcConns:             make(map[string]*grpc.ClientConn),
+		localServers:          make(map[string]*Server),
+		rawReadPools:          make(map[string]*rawReadConnPool),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
+		hasher:                &orderedTestHasher{hosts: []*Host{host}},
+		maxGetContentAttempts: 1,
+	}
+	client.AttachLocalServer(server)
+
+	content := []byte("stored directly in the attached cache server")
+	sum := sha256.Sum256(content)
+	expectedHash := hex.EncodeToString(sum[:])
+	sourcePath := filepath.Join(t.TempDir(), "source.bin")
+	require.NoError(t, os.WriteFile(sourcePath, content, 0644))
+	cachePath := "/checkpoints/archive.tar.lz4"
+
+	got, trace, err := client.StoreContentFromLocalFileWithTrace(LocalContentSource{
+		Path:      sourcePath,
+		CachePath: cachePath,
+	}, StoreContentOptions{
+		RoutingKey: expectedHash,
+		Lock:       true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, expectedHash, got)
+	require.Equal(t, "stored_missing", trace.Result)
+	requireTraceAttempt(t, trace, "precheck_content_hash_local_server", contentStatusMissing, contentStatusMissing)
+	require.Empty(t, failingStream.sent.Bytes())
+	require.True(t, server.cas.Exists(expectedHash, int64(len(content))))
+
+	metadata, err := metadataStore.GetFsNode(ctx, GenerateFsID(cachePath))
+	require.NoError(t, err)
+	require.Equal(t, expectedHash, metadata.Hash)
+	require.Equal(t, uint64(len(content)), metadata.Size)
+}
+
 func TestStoreContentFromLocalFileRepairsSelectedHostWhenFallbackHasContent(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -300,6 +300,16 @@ func (c *Client) localServersSnapshot() []*Server {
 	return servers
 }
 
+func (c *Client) localServerForHost(host *Host) *Server {
+	if host == nil {
+		return nil
+	}
+
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.localServers[host.HostId]
+}
+
 type clientLocalStore struct {
 	store  *Store
 	source string
@@ -1050,6 +1060,15 @@ func (c *Client) selectedHostContentCheckWithTrace(ctx context.Context, hash str
 			c.removeLocalHostCache(hash, routingKey)
 		}
 		trace.addStoreAttempt(0, host, traceSource+"_local", contentCheckTraceResult(nil, exists, status), 0, expectedSize, status, time.Since(started), nil)
+		return selectedHostContentCheck{exists: exists, status: status, host: host}
+	}
+	if localServer := c.localServerForHost(host); localServer != nil && localServer.cas != nil {
+		status := localServer.cas.ContentStatus(hash, expectedSize)
+		exists := status == contentStatusComplete
+		if !exists {
+			c.removeLocalHostCache(hash, routingKey)
+		}
+		trace.addStoreAttempt(0, host, traceSource+"_local_server", contentCheckTraceResult(nil, exists, status), 0, expectedSize, status, time.Since(started), nil)
 		return selectedHostContentCheck{exists: exists, status: status, host: host}
 	}
 
@@ -2345,7 +2364,10 @@ func (c *Client) storeContentFromReaderWithContextAndTrace(ctx context.Context, 
 		}
 
 		hostStarted := time.Now()
-		_, host, err := c.getGRPCClientForHostIndex(ctx, ClientRequestTypeStorage, routingKey, routingKey, 0)
+		host, err := c.getSelectedHostForRequest(ClientRequestTypeStorage, routingKey, routingKey)
+		if err != nil || c.localServerForHost(host) == nil {
+			_, host, err = c.getGRPCClientForHostIndex(ctx, ClientRequestTypeStorage, routingKey, routingKey, 0)
+		}
 		if err != nil {
 			trace.addStoreAttempt(0, host, "store_host_select", operationTraceStoreResult(err), 0, expectedSize, "", time.Since(hostStarted), err)
 			lastErr = err
@@ -2353,7 +2375,7 @@ func (c *Client) storeContentFromReaderWithContextAndTrace(ctx context.Context, 
 		}
 
 		storeStarted := time.Now()
-		hash, err := c.storeContentFromReaderToHostWithContext(ctx, host, reader, cachePath, fileMetadata)
+		hash, err := c.storeContentFromReaderToHostWithContext(ctx, host, reader, routingKey, cachePath, fileMetadata)
 		storeResult := operationTraceStoreResult(err)
 		if err == nil {
 			trace.addStoreAttempt(0, host, "store_selected_host", storeResult, expectedSize, expectedSize, contentStatusComplete, time.Since(storeStarted), nil)
@@ -2392,9 +2414,26 @@ func storeRepairResult(status string) string {
 	}
 }
 
-func (c *Client) storeContentFromReaderToHostWithContext(ctx context.Context, host *Host, reader io.Reader, cachePath string, fileMetadata *proto.CacheFSMetadata) (string, error) {
+func (c *Client) storeContentFromReaderToHostWithContext(ctx context.Context, host *Host, reader io.Reader, expectedHash string, cachePath string, fileMetadata *proto.CacheFSMetadata) (string, error) {
 	if host == nil {
 		return "", ErrHostNotFound
+	}
+	if !isContentHash(expectedHash) {
+		expectedHash = ""
+	}
+
+	if localServer := c.localServerForHost(host); localServer != nil {
+		hash, size, err := localServer.StoreReader(ctx, reader, expectedHash)
+		if err != nil {
+			return "", err
+		}
+		if localServer.metadataStore != nil && cachePath != "" {
+			metadata := cacheFSFileMetadataFromProto(fileMetadata, hash, size)
+			if err := localServer.storeContentInCacheFS(ctx, cachePath, hash, size, metadata); err != nil {
+				return "", fmt.Errorf("failed to update cachefs metadata: %w", err)
+			}
+		}
+		return hash, nil
 	}
 
 	c.mu.RLock()
