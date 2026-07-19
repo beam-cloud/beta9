@@ -243,6 +243,9 @@ func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) a
 	if poolMode == string(types.PoolModeExternal) {
 		cpuAffinityEnforced = slot.CpuAffinityEnforced
 	}
+	if poolRuntime == types.ContainerRuntimeGvisor.String() {
+		cpuAffinityEnforced = true
+	}
 
 	return agentWorkerConfig{
 		ClusterName: types.DefaultAgentName,

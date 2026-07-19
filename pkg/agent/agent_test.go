@@ -416,7 +416,7 @@ func TestManagedAgentWorkerConfigDefaultsCPUAffinityOff(t *testing.T) {
 	}
 }
 
-func TestGVisorAgentWorkerConfigEnforcesMemory(t *testing.T) {
+func TestGVisorAgentWorkerConfigEnforcesResources(t *testing.T) {
 	slot := &pb.AgentWorkerSlot{
 		PoolName:         "serverless",
 		Mode:             string(types.PoolModeExternal),
@@ -424,6 +424,9 @@ func TestGVisorAgentWorkerConfigEnforcesMemory(t *testing.T) {
 	}
 
 	config := newAgentWorkerConfig(bootstrapConfig{}, slot).sanitizedForAgent()
+	if !config.Worker.ContainerResourceLimits.CPUAffinityEnforced {
+		t.Fatal("gVisor agent workloads must always receive CPU affinity")
+	}
 	if !config.Worker.ContainerResourceLimits.MemoryEnforced {
 		t.Fatal("gVisor agent workloads must receive a bounded memory view")
 	}

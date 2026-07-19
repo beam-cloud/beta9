@@ -99,6 +99,9 @@ func normalizeManagedPoolConfig(config types.WorkerPoolConfig) (types.WorkerPool
 	default:
 		return types.WorkerPoolConfig{}, fmt.Errorf("unsupported container runtime %q", config.ContainerRuntime)
 	}
+	if config.ContainerRuntime == types.ContainerRuntimeGvisor.String() {
+		config.CPUAffinityEnforced = true
+	}
 	if len(config.UserData) > 256*1024 {
 		return types.WorkerPoolConfig{}, fmt.Errorf("user data exceeds 256 KiB")
 	}

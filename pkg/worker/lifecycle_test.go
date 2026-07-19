@@ -612,6 +612,7 @@ func TestContainerCPUAffinityIsOptInAndLoadBalanced(t *testing.T) {
 	worker := &Worker{
 		containerInstances: instances,
 		cpuLimit:           4000,
+		runtime:            &mockRuntime{name: types.ContainerRuntimeRunc.String()},
 	}
 	request := func(id string) *types.ContainerRequest {
 		return &types.ContainerRequest{
@@ -642,6 +643,30 @@ func TestContainerCPUAffinityIsOptInAndLoadBalanced(t *testing.T) {
 	require.Equal(t, 1, firstSet.Size())
 	require.Equal(t, 1, secondSet.Size())
 	require.True(t, firstSet.Intersection(secondSet).IsEmpty())
+}
+
+func TestGVisorContainerCPUAffinityCannotBeDisabled(t *testing.T) {
+	instances := common.NewSafeMap[*ContainerInstance]()
+	worker := &Worker{
+		containerInstances: instances,
+		cpuLimit:           8000,
+		runtime:            &mockRuntime{name: types.ContainerRuntimeGvisor.String()},
+	}
+	request := &types.ContainerRequest{
+		ContainerId: "gvisor-container",
+		EntryPoint:  []string{"sleep", "60"},
+		Cpu:         4000,
+		Stub: types.StubWithRelated{Stub: types.Stub{
+			Type: types.StubType(types.StubTypePodDeployment),
+		}},
+	}
+
+	require.True(t, worker.reserveContainerInstance(request))
+	instance, exists := instances.Get(request.ContainerId)
+	require.True(t, exists)
+	affinity, err := cpuset.Parse(instance.CPUSet)
+	require.NoError(t, err)
+	require.Equal(t, 4, affinity.Size())
 }
 
 func TestCheckpointRestoreCPUAffinityIsDeferredAndApplied(t *testing.T) {

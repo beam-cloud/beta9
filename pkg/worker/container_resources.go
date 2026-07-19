@@ -103,8 +103,15 @@ func processCPUSet(cpuLimit int64) cpuset.CPUSet {
 }
 
 func (s *Worker) allocateContainerCPUSet(request *types.ContainerRequest) string {
-	if s == nil || s.containerInstances == nil || request == nil || request.IsBuildRequest() ||
-		!s.config.Worker.ContainerResourceLimits.CPUAffinityEnforced {
+	if s == nil || s.containerInstances == nil || request == nil || request.IsBuildRequest() {
+		return ""
+	}
+
+	affinityEnforced := s.config.Worker.ContainerResourceLimits.CPUAffinityEnforced
+	if s.runtime != nil && s.runtime.Name() == types.ContainerRuntimeGvisor.String() {
+		affinityEnforced = true
+	}
+	if !affinityEnforced {
 		return ""
 	}
 

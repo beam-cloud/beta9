@@ -201,6 +201,17 @@ func TestManagedPoolCPUAffinityDefaultsDisabled(t *testing.T) {
 	if config.CPUAffinityEnforced {
 		t.Fatal("managed pool CPU affinity must default to disabled")
 	}
+
+	config, err = normalizeManagedPoolConfig(types.WorkerPoolConfig{
+		Mode:             types.PoolModeExternal,
+		ContainerRuntime: types.ContainerRuntimeGvisor.String(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !config.CPUAffinityEnforced {
+		t.Fatal("gVisor managed pools must always enable CPU affinity")
+	}
 }
 
 func TestManagedPoolLifecyclePreservesWorkerConfiguration(t *testing.T) {
