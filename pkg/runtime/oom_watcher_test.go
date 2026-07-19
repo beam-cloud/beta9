@@ -8,15 +8,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestReadProcTreeIncludesNonLeaderChildren(t *testing.T) {
+func TestCgroupOOMWatcherReadsOOMKillCount(t *testing.T) {
 	root := t.TempDir()
-	taskRoot := filepath.Join(root, "100", "task")
-	require.NoError(t, os.MkdirAll(filepath.Join(taskRoot, "100"), 0755))
-	require.NoError(t, os.MkdirAll(filepath.Join(taskRoot, "101"), 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(taskRoot, "100", "children"), nil, 0644))
-	require.NoError(t, os.WriteFile(filepath.Join(taskRoot, "101", "children"), []byte("200 201\n"), 0644))
+	cgroupPath := filepath.Join("containers", "container-id")
+	require.NoError(t, os.MkdirAll(filepath.Join(root, cgroupPath), 0755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, cgroupPath, memoryEventsFile),
+		[]byte("low 0\nhigh 0\nmax 1\noom 1\noom_kill 2\n"),
+		0644,
+	))
 
-	pids, err := readProcTree(root, 100)
+	watcher := &CgroupOOMWatcher{cgroupRoot: root, cgroupPath: cgroupPath}
+	count, err := watcher.readOOMKillCount()
 	require.NoError(t, err)
-	require.ElementsMatch(t, []int32{100, 200, 201}, pids)
+	require.Equal(t, int64(2), count)
 }
