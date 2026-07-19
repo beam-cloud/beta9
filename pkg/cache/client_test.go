@@ -1859,6 +1859,22 @@ func TestSelectedStoreHostAvailableRequiresSelectedEndpointClient(t *testing.T) 
 	require.True(t, client.SelectedStoreHostAvailable("hash", "routing-key"))
 }
 
+func TestSelectedStoreHostAvailableUsesSelectedAttachedServer(t *testing.T) {
+	store := newTestStore(t, 5)
+	host := &Host{HostId: "selected-host"}
+	store.currentHost = host
+	client := &Client{
+		ctx:            context.Background(),
+		clientConfig:   ClientConfig{NTopHosts: 1},
+		localServers:   make(map[string]*Server),
+		localHostCache: make(map[localHostCacheKey]*localClientCache),
+		hasher:         &orderedTestHasher{hosts: []*Host{host}},
+	}
+	client.AttachLocalServer(&Server{cas: store})
+
+	require.True(t, client.SelectedStoreHostAvailable("hash", "routing-key"))
+}
+
 func TestSelectedStoreHostAvailableRefreshesStaleSelectedHost(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

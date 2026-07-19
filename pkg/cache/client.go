@@ -2081,6 +2081,9 @@ func (c *Client) SelectedStoreHostAvailable(hash string, routingKey string) bool
 	for attempt := 0; attempt < 2; attempt++ {
 		host, err := c.getSelectedHostForRequest(ClientRequestTypeStorage, hash, routingKey)
 		if err == nil && host != nil {
+			if c.localServerForHost(host) != nil {
+				return true
+			}
 			if c.localDiskStoreForHost(host) != nil {
 				return true
 			}
