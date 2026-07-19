@@ -494,10 +494,18 @@ func (cas *Store) AddReaderWithExpectedHash(ctx context.Context, reader io.Reade
 	return actualHash, size, nil
 }
 
+func (cas *Store) AddPageSource(ctx context.Context, size int64, concurrency int, readPage func(context.Context, int64, int64, []byte) (int, error)) (string, int64, error) {
+	return cas.addPageSource(ctx, "", size, concurrency, readPage)
+}
+
 func (cas *Store) AddPageSourceWithExpectedHash(ctx context.Context, expectedHash string, size int64, concurrency int, readPage func(context.Context, int64, int64, []byte) (int, error)) (string, int64, error) {
 	if expectedHash == "" {
 		return "", 0, errors.New("expected hash is required")
 	}
+	return cas.addPageSource(ctx, expectedHash, size, concurrency, readPage)
+}
+
+func (cas *Store) addPageSource(ctx context.Context, expectedHash string, size int64, concurrency int, readPage func(context.Context, int64, int64, []byte) (int, error)) (string, int64, error) {
 	if size < 0 {
 		return "", 0, errors.New("invalid content size")
 	}
@@ -510,7 +518,7 @@ func (cas *Store) AddPageSourceWithExpectedHash(ctx context.Context, expectedHas
 	if !cas.diskWriteAllowed() {
 		return "", 0, errors.New("disk cache capacity exceeded")
 	}
-	tmpDir, err := cas.newExpectedHashTempDir(expectedHash)
+	tmpDir, err := cas.newPageSourceTempDir(expectedHash)
 	if err != nil {
 		return "", 0, err
 	}
@@ -520,13 +528,13 @@ func (cas *Store) AddPageSourceWithExpectedHash(ctx context.Context, expectedHas
 	pageCount := (size + pageSize - 1) / pageSize
 	if pageCount == 0 {
 		actualHash := hex.EncodeToString(sha256.New().Sum(nil))
-		if actualHash != expectedHash {
+		if expectedHash != "" && actualHash != expectedHash {
 			return actualHash, 0, fmt.Errorf("stored content hash mismatch: expected %s, got %s", expectedHash, actualHash)
 		}
-		if err := os.MkdirAll(cas.pageDir(expectedHash), 0755); err != nil {
+		if err := os.MkdirAll(cas.pageDir(actualHash), 0755); err != nil {
 			return "", 0, fmt.Errorf("failed to create cache directory: %w", err)
 		}
-		if err := cas.writeCompleteMarker(expectedHash, 0, 0); err != nil {
+		if err := cas.writeCompleteMarker(actualHash, 0, 0); err != nil {
 			return "", 0, err
 		}
 		return actualHash, 0, nil
@@ -591,7 +599,7 @@ func (cas *Store) AddPageSourceWithExpectedHash(ctx context.Context, expectedHas
 					return
 				}
 
-				tmpPath := filepath.Join(tmpDir, cas.pageKey(expectedHash, pageIdx))
+				tmpPath := filepath.Join(tmpDir, pageSourceTempName(pageIdx))
 				if err := writePrivateCacheChunk(tmpPath, page); err != nil {
 					select {
 					case results <- pageResult{pageIdx: pageIdx, err: err}:
@@ -678,18 +686,60 @@ func (cas *Store) AddPageSourceWithExpectedHash(ctx context.Context, expectedHas
 	}
 
 	actualHash := hex.EncodeToString(hasher.Sum(nil))
-	if actualHash != expectedHash {
+	if expectedHash != "" && actualHash != expectedHash {
 		cleanupInstalled()
 		return actualHash, size, fmt.Errorf("stored content hash mismatch: expected %s, got %s", expectedHash, actualHash)
 	}
 
-	if err := cas.publishExpectedHashPages(expectedHash, tmpDir, pageCount, size); err != nil {
+	if err := cas.publishPageSource(actualHash, tmpDir, pageCount, size); err != nil {
 		cleanupInstalled()
 		return "", size, err
 	}
 
-	Logger.Debugf("Added expected-hash object from page source: %s, size: %d bytes", expectedHash, size)
+	Logger.Debugf("Added object from page source: %s, size: %d bytes", actualHash, size)
 	return actualHash, size, nil
+}
+
+func (cas *Store) newPageSourceTempDir(expectedHash string) (string, error) {
+	if expectedHash != "" {
+		return cas.newExpectedHashTempDir(expectedHash)
+	}
+	if err := os.MkdirAll(cas.diskCacheDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create cache directory: %w", err)
+	}
+	return os.MkdirTemp(cas.diskCacheDir, ".page-source-*")
+}
+
+func pageSourceTempName(pageIdx int64) string {
+	return fmt.Sprintf("page-%d", pageIdx)
+}
+
+func (cas *Store) publishPageSource(hash string, tmpDir string, pageCount int64, size int64) error {
+	finalDir := cas.pageDir(hash)
+	if err := os.MkdirAll(finalDir, 0755); err != nil {
+		return fmt.Errorf("failed to create cache directory: %w", err)
+	}
+
+	for pageIdx := int64(0); pageIdx < pageCount; pageIdx++ {
+		tmpPath := filepath.Join(tmpDir, pageSourceTempName(pageIdx))
+		if _, err := os.Stat(tmpPath); err != nil {
+			return fmt.Errorf("missing verified cache chunk %s: %w", tmpPath, err)
+		}
+
+		pagePath := cas.pagePath(hash, pageIdx)
+		pageLock := cas.pageLock(hash, pageIdx)
+		pageLock.Lock()
+		if err := os.Remove(pagePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			pageLock.Unlock()
+			return err
+		}
+		if err := os.Rename(tmpPath, pagePath); err != nil {
+			pageLock.Unlock()
+			return err
+		}
+		pageLock.Unlock()
+	}
+	return cas.writeCompleteMarker(hash, size, pageCount)
 }
 
 func (cas *Store) newExpectedHashTempDir(hash string) (string, error) {

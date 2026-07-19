@@ -8,9 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -2211,6 +2215,172 @@ func TestStoreContentFromS3SourceWaitsForLockedHashAlreadyPublished(t *testing.T
 	got, err := client.StoreContentFromS3Source(S3ContentSource{Path: "objects/source.bin"}, StoreContentOptions{RoutingKey: hash, Lock: true})
 	require.NoError(t, err)
 	require.Equal(t, hash, got)
+}
+
+func TestStoreContentFromS3SourceWaitsForLockedCachePath(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	metadataStore := NewMockCacheMetadataStore()
+	cfg := Config{
+		Server: ServerConfig{DiskCacheDir: t.TempDir(), DiskCacheMaxUsagePct: 90, PageSizeBytes: 4, ObjectTtlS: 300},
+		Global: GlobalConfig{GRPCMessageSizeBytes: 1024 * 1024, GRPCDialTimeoutS: 1},
+	}
+	remoteServer, err := NewServerWithOptions(ctx, cfg, "test", WithServerMetadataStore(metadataStore), WithServerHostID("remote-host"))
+	require.NoError(t, err)
+	addr, err := remoteServer.Serve("127.0.0.1:0", "")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, remoteServer.Close()) })
+	remoteHost := remoteServer.Host()
+	remoteHost.Addr = addr
+	remoteHost.PrivateAddr = addr
+
+	content := []byte("published by another read-through writer")
+	hash, size, err := remoteServer.cas.AddReader(ctx, bytes.NewReader(content))
+	require.NoError(t, err)
+	cachePath := "/geesefs-read-through/object-version"
+	require.NoError(t, remoteServer.StoreSyntheticContentInCacheFS(ctx, cachePath, hash, uint64(size)))
+	require.NoError(t, metadataStore.SetStoreFromContentLock(ctx, "test", cachePath))
+
+	client := &Client{
+		ctx: ctx, locality: "test", clientConfig: ClientConfig{NTopHosts: 1, PreferLocalCacheHost: true}, globalConfig: cfg.Global,
+		metadataStore: metadataStore, grpcClients: make(map[string]proto.CacheClient), grpcConns: make(map[string]*grpc.ClientConn),
+		localServers: make(map[string]*Server), rawReadPools: make(map[string]*rawReadConnPool), localHostCache: make(map[localHostCacheKey]*localClientCache),
+		hasher: &orderedTestHasher{hosts: []*Host{remoteHost}}, maxGetContentAttempts: 1,
+	}
+	require.NoError(t, client.addHost(remoteHost))
+	defer client.Cleanup()
+
+	got, err := client.StoreContentFromS3Source(S3ContentSource{Path: "objects/source.bin", CachePath: cachePath}, StoreContentOptions{RoutingKey: "geesefs-read-through:object-version", Lock: true})
+	require.NoError(t, err)
+	require.Equal(t, hash, got)
+}
+
+func TestMaterializeContentLocallyCopiesFromRoutedHost(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	metadataStore := NewMockCacheMetadataStore()
+	cfg := Config{
+		Server: ServerConfig{DiskCacheDir: t.TempDir(), DiskCacheMaxUsagePct: 90, PageSizeBytes: 4, ObjectTtlS: 300},
+		Global: GlobalConfig{GRPCMessageSizeBytes: 1024 * 1024, GRPCDialTimeoutS: 1},
+	}
+	remoteServer, err := NewServerWithOptions(ctx, cfg, "test", WithServerMetadataStore(metadataStore), WithServerHostID("remote-host"))
+	require.NoError(t, err)
+	addr, err := remoteServer.Serve("127.0.0.1:0", "")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, remoteServer.Close()) })
+	remoteHost := remoteServer.Host()
+	remoteHost.Addr = addr
+	remoteHost.PrivateAddr = addr
+
+	content := []byte("content copied into the worker-local page store")
+	hash, size, err := remoteServer.cas.AddReader(ctx, bytes.NewReader(content))
+	require.NoError(t, err)
+	localStore := newTestStore(t, 4)
+	client := &Client{
+		ctx: ctx, locality: "test", clientConfig: ClientConfig{NTopHosts: 1, PreferLocalCacheHost: true}, globalConfig: cfg.Global,
+		metadataStore: metadataStore, grpcClients: make(map[string]proto.CacheClient), grpcConns: make(map[string]*grpc.ClientConn),
+		localServers: make(map[string]*Server), localDiskStore: localStore, rawReadPools: make(map[string]*rawReadConnPool),
+		localHostCache: make(map[localHostCacheKey]*localClientCache), hasher: &orderedTestHasher{hosts: []*Host{remoteHost}}, maxGetContentAttempts: 1,
+	}
+	require.NoError(t, client.addHost(remoteHost))
+	defer client.Cleanup()
+
+	materialized, err := client.MaterializeContentLocally(ctx, hash, "geesefs-read-through:object-version", size)
+	require.NoError(t, err)
+	require.True(t, materialized)
+	require.True(t, localStore.Exists(hash, size))
+	dst := make([]byte, len(content))
+	n, err := localStore.ReadAt(hash, 0, dst)
+	require.NoError(t, err)
+	require.Equal(t, int64(len(content)), n)
+	require.Equal(t, content, dst)
+}
+
+func TestMaterializeS3LocallyDownloadsConcurrentRangesOnce(t *testing.T) {
+	content := bytes.Repeat([]byte("concurrent-origin-page-"), 16*1024)
+	var active atomic.Int32
+	var maxActive atomic.Int32
+	var getCalls atomic.Int32
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/bucket/objects/model.bin" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Method == http.MethodHead {
+			w.Header().Set("Content-Length", strconv.Itoa(len(content)))
+			w.Header().Set("ETag", `"etag-v1"`)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.Method != http.MethodGet {
+			http.Error(w, "unexpected method", http.StatusMethodNotAllowed)
+			return
+		}
+
+		var start, end int
+		if _, err := fmt.Sscanf(r.Header.Get("Range"), "bytes=%d-%d", &start, &end); err != nil || start < 0 || end < start || end >= len(content) {
+			http.Error(w, "invalid range", http.StatusRequestedRangeNotSatisfiable)
+			return
+		}
+		getCalls.Add(1)
+		current := active.Add(1)
+		for {
+			maximum := maxActive.Load()
+			if current <= maximum || maxActive.CompareAndSwap(maximum, current) {
+				break
+			}
+		}
+		defer active.Add(-1)
+		time.Sleep(5 * time.Millisecond)
+		w.Header().Set("Content-Length", strconv.Itoa(end-start+1))
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(content)))
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write(content[start : end+1])
+	}))
+	defer origin.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	metadataStore := NewMockCacheMetadataStore()
+	cfg := Config{
+		Server: ServerConfig{
+			DiskCacheDir:          t.TempDir(),
+			DiskCacheMaxUsagePct:  90,
+			PageSizeBytes:         16 * 1024,
+			ObjectTtlS:            300,
+			S3DownloadConcurrency: 4,
+		},
+	}
+	localServer, err := NewServerWithOptions(ctx, cfg, "test", WithServerMetadataStore(metadataStore), WithServerHostID("local-host"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, localServer.Close()) })
+	client := &Client{
+		ctx: ctx, locality: "test", clientConfig: ClientConfig{PreferLocalCacheHost: true}, metadataStore: metadataStore,
+		grpcClients: make(map[string]proto.CacheClient), grpcConns: make(map[string]*grpc.ClientConn), localServers: make(map[string]*Server),
+		rawReadPools: make(map[string]*rawReadConnPool), localHostCache: make(map[localHostCacheKey]*localClientCache),
+	}
+	client.AttachLocalServer(localServer)
+	defer client.Cleanup()
+
+	source := S3ContentSource{
+		Path: "objects/model.bin", CachePath: "/geesefs-read-through/etag-v1", BucketName: "bucket", Region: "us-east-1",
+		EndpointURL: origin.URL, AccessKey: "test", SecretKey: "test", ForcePathStyle: true,
+	}
+	hash, err := client.MaterializeS3Locally(ctx, source, StoreContentOptions{RoutingKey: "geesefs-read-through:etag-v1", Lock: true})
+	require.NoError(t, err)
+	sum := sha256.Sum256(content)
+	require.Equal(t, hex.EncodeToString(sum[:]), hash)
+	require.True(t, localServer.HasCompleteContent(hash, int64(len(content))))
+	require.Greater(t, maxActive.Load(), int32(1))
+	firstGetCalls := getCalls.Load()
+	require.Greater(t, firstGetCalls, int32(1))
+
+	secondHash, err := client.MaterializeS3Locally(ctx, source, StoreContentOptions{RoutingKey: "geesefs-read-through:etag-v1", Lock: true})
+	require.NoError(t, err)
+	require.Equal(t, hash, secondHash)
+	require.Equal(t, firstGetCalls, getCalls.Load())
 }
 
 func TestStoreContentUsesSelectedLocalLogicalHost(t *testing.T) {

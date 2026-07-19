@@ -998,18 +998,7 @@ func (cs *Server) storeContentFromSource(ctx context.Context, req *proto.CacheSt
 			return &proto.CacheStoreContentFromSourceResponse{Ok: false, ErrorMsg: err.Error()}, err
 		}
 
-		if req.Source.ExpectedHash != "" {
-			hash, size, err = cs.storeS3SourceWithExpectedHash(ctx, s3Client, req.Source.Path, req.Source.ExpectedHash)
-		} else {
-			var reader io.ReadCloser
-			reader, err = s3Client.Open(ctx, req.Source.Path)
-			if err != nil {
-				Logger.Errorf("StoreFromContent[ERR] - error opening source: %v", err)
-				return &proto.CacheStoreContentFromSourceResponse{Ok: false, ErrorMsg: err.Error()}, err
-			}
-			defer reader.Close()
-			hash, size, err = cs.storeReaderWithExpectedHash(ctx, reader, req.Source.ExpectedHash)
-		}
+		hash, size, err = cs.storeS3Source(ctx, s3Client, req.Source.Path, req.Source.ExpectedHash)
 	}
 
 	if err != nil {
@@ -1046,7 +1035,7 @@ func (cs *Server) storeContentFromSource(ctx context.Context, req *proto.CacheSt
 	return &proto.CacheStoreContentFromSourceResponse{Ok: true, Hash: hash}, nil
 }
 
-func (cs *Server) storeS3SourceWithExpectedHash(ctx context.Context, s3Client *S3Client, path string, expectedHash string) (string, uint64, error) {
+func (cs *Server) storeS3Source(ctx context.Context, s3Client *S3Client, path string, expectedHash string) (string, uint64, error) {
 	ok, head, err := s3Client.Head(ctx, path)
 	if err != nil {
 		return "", 0, err
@@ -1060,9 +1049,16 @@ func (cs *Server) storeS3SourceWithExpectedHash(ctx context.Context, s3Client *S
 	}
 
 	concurrency := int(s3Client.DownloadConcurrency)
-	hash, storedSize, err := cs.cas.AddPageSourceWithExpectedHash(ctx, expectedHash, size, concurrency, func(ctx context.Context, _ int64, start int64, dst []byte) (int, error) {
+	readPage := func(ctx context.Context, _ int64, start int64, dst []byte) (int, error) {
 		return s3Client.ReadRangeInto(ctx, path, start, dst)
-	})
+	}
+	var hash string
+	var storedSize int64
+	if expectedHash == "" {
+		hash, storedSize, err = cs.cas.AddPageSource(ctx, size, concurrency, readPage)
+	} else {
+		hash, storedSize, err = cs.cas.AddPageSourceWithExpectedHash(ctx, expectedHash, size, concurrency, readPage)
+	}
 	return hash, uint64(storedSize), err
 }
 

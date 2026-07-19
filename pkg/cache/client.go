@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -22,6 +23,7 @@ import (
 	rendezvous "github.com/beam-cloud/rendezvous"
 	"github.com/djherbis/atime"
 	"github.com/hanwen/go-fuse/v2/fuse"
+	"golang.org/x/sync/singleflight"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -119,6 +121,7 @@ type Client struct {
 	hostDirectory         HostDirectory
 	minRetryLengthBytes   int64
 	maxGetContentAttempts int64
+	localMaterializations singleflight.Group
 }
 
 type localHostCacheKey struct {
@@ -2585,6 +2588,7 @@ func (c *Client) StoreContentFromLocalSource(source LocalContentSource, opts Sto
 
 func (c *Client) StoreContentFromS3(source struct {
 	Path        string
+	CachePath   string
 	BucketName  string
 	Region      string
 	EndpointURL string
@@ -2596,6 +2600,7 @@ func (c *Client) StoreContentFromS3(source struct {
 }) (string, error) {
 	return c.StoreContentFromS3Source(S3ContentSource{
 		Path:           source.Path,
+		CachePath:      source.CachePath,
 		BucketName:     source.BucketName,
 		Region:         source.Region,
 		EndpointURL:    source.EndpointURL,
@@ -2615,7 +2620,21 @@ func (c *Client) StoreContentFromS3Source(source S3ContentSource, opts StoreCont
 	if opts.RoutingKey == "" {
 		opts.RoutingKey = fmt.Sprintf("%s/%s/%s/%s", source.EndpointURL, source.Region, source.BucketName, source.Path)
 	}
+	req := s3StoreContentRequest(source, opts.RoutingKey)
+	hash, err := c.storeContentFromSource(ctx, req, opts.RoutingKey, opts.RoutingKey, opts.Lock)
+	if errors.Is(err, ErrUnableToAcquireLock) {
+		if isContentHash(opts.RoutingKey) && c.waitForStoredContent(ctx, opts.RoutingKey, opts.RoutingKey, 0, storeContentLockWaitTimeout) {
+			return opts.RoutingKey, nil
+		}
+		if storedHash, ok := c.waitForStoredPath(ctx, source.CachePath, opts.RoutingKey, storeContentLockWaitTimeout); ok {
+			return storedHash, nil
+		}
+		hash, err = c.storeContentFromSource(ctx, req, opts.RoutingKey, opts.RoutingKey, opts.Lock)
+	}
+	return hash, err
+}
 
+func s3StoreContentRequest(source S3ContentSource, routingKey string) *proto.CacheStoreContentFromSourceRequest {
 	req := &proto.CacheStoreContentFromSourceRequest{Source: &proto.CacheSource{
 		Path:           source.Path,
 		CachePath:      source.CachePath,
@@ -2626,17 +2645,136 @@ func (c *Client) StoreContentFromS3Source(source S3ContentSource, opts StoreCont
 		SecretKey:      source.SecretKey,
 		ForcePathStyle: source.ForcePathStyle,
 	}}
-	if isContentHash(opts.RoutingKey) {
-		req.Source.ExpectedHash = opts.RoutingKey
+	if isContentHash(routingKey) {
+		req.Source.ExpectedHash = routingKey
 	}
-	hash, err := c.storeContentFromSource(ctx, req, opts.RoutingKey, opts.RoutingKey, opts.Lock)
-	if errors.Is(err, ErrUnableToAcquireLock) && isContentHash(opts.RoutingKey) {
-		if c.waitForStoredContent(ctx, opts.RoutingKey, opts.RoutingKey, 0, storeContentLockWaitTimeout) {
-			return opts.RoutingKey, nil
+	return req
+}
+
+func (c *Client) waitForStoredPath(ctx context.Context, cachePath, routingKey string, timeout time.Duration) (string, bool) {
+	if cachePath == "" || timeout <= 0 {
+		return "", false
+	}
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(storeContentLockWaitInterval)
+	defer ticker.Stop()
+
+	for {
+		metadata, err := c.CacheFSMetadata(ctx, cachePath)
+		if err == nil && metadata != nil && metadata.Hash != "" {
+			reachable, reachErr := c.IsCachedReachable(metadata.Hash, routingKey)
+			if reachErr == nil && reachable {
+				return metadata.Hash, true
+			}
 		}
-		hash, err = c.storeContentFromSource(ctx, req, opts.RoutingKey, opts.RoutingKey, opts.Lock)
+
+		select {
+		case <-ctx.Done():
+			return "", false
+		case <-deadline.C:
+			return "", false
+		case <-ticker.C:
+		}
 	}
-	return hash, err
+}
+
+// MaterializeS3Locally downloads an origin object directly into this worker's
+// cache. The versioned cache path provides a distributed lock and lets other
+// workers reuse the resulting hash instead of downloading the origin again.
+func (c *Client) MaterializeS3Locally(ctx context.Context, source S3ContentSource, opts StoreContentOptions) (string, error) {
+	if c == nil || source.CachePath == "" {
+		return "", errors.New("cache path is required for local S3 materialization")
+	}
+	if ctx == nil {
+		ctx = c.ctx
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, storeContentRequestTimeout)
+		defer cancel()
+	}
+	if opts.RoutingKey == "" {
+		opts.RoutingKey = source.CachePath
+	}
+
+	result, err, _ := c.localMaterializations.Do("s3:"+source.CachePath, func() (interface{}, error) {
+		if hash, ok, err := c.materializeCachedPathLocally(ctx, source.CachePath, opts.RoutingKey); err != nil || ok {
+			return hash, err
+		}
+
+		servers := c.localServersSnapshot()
+		if len(servers) == 0 {
+			hash, err := c.StoreContentFromS3Source(source, opts)
+			if err != nil {
+				return "", err
+			}
+			return c.ensureCachedPathLocal(ctx, source.CachePath, opts.RoutingKey, hash)
+		}
+
+		store := func() (string, error) {
+			if hash, ok, err := c.materializeCachedPathLocally(ctx, source.CachePath, opts.RoutingKey); err != nil || ok {
+				return hash, err
+			}
+
+			req := s3StoreContentRequest(source, opts.RoutingKey)
+			var lastErr error
+			for _, server := range servers {
+				resp, err := server.StoreContentFromSource(ctx, req)
+				if err != nil {
+					lastErr = err
+					continue
+				}
+				if resp == nil || !resp.Ok || !server.HasCompleteContent(resp.Hash, 0) {
+					lastErr = ErrUnableToPopulateContent
+					continue
+				}
+				return resp.Hash, nil
+			}
+			return "", lastErr
+		}
+
+		hash, err := c.withStoreFromContentLock(ctx, source.CachePath, opts.Lock, store)
+		if !errors.Is(err, ErrUnableToAcquireLock) {
+			return hash, err
+		}
+		storedHash, ok := c.waitForStoredPath(ctx, source.CachePath, opts.RoutingKey, storeContentLockWaitTimeout)
+		if !ok {
+			return "", err
+		}
+		return c.ensureCachedPathLocal(ctx, source.CachePath, opts.RoutingKey, storedHash)
+	})
+	if err != nil {
+		return "", err
+	}
+	hash, _ := result.(string)
+	if hash == "" {
+		return "", ErrUnableToPopulateContent
+	}
+	return hash, nil
+}
+
+func (c *Client) materializeCachedPathLocally(ctx context.Context, cachePath, routingKey string) (string, bool, error) {
+	metadata, err := c.CacheFSMetadata(ctx, cachePath)
+	if err != nil || metadata == nil || metadata.Hash == "" {
+		return "", false, nil
+	}
+	if metadata.Size == 0 || metadata.Size > math.MaxInt64 {
+		return "", false, ErrUnableToPopulateContent
+	}
+	local, err := c.MaterializeContentLocally(ctx, metadata.Hash, routingKey, int64(metadata.Size))
+	return metadata.Hash, local, err
+}
+
+func (c *Client) ensureCachedPathLocal(ctx context.Context, cachePath, routingKey, expectedHash string) (string, error) {
+	hash, local, err := c.materializeCachedPathLocally(ctx, cachePath, routingKey)
+	if err != nil {
+		return "", err
+	}
+	if !local || (expectedHash != "" && hash != expectedHash) {
+		return "", ErrUnableToPopulateContent
+	}
+	return hash, nil
 }
 
 func (c *Client) storeContentFromSource(ctx context.Context, req *proto.CacheStoreContentFromSourceRequest, hash, routingKey string, lock bool) (string, error) {
@@ -2737,6 +2875,59 @@ func (c *Client) RankedReadHosts(routingKey string) []*Host {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.hasher.GetN(c.readReplicaHostCount(), routingKey)
+}
+
+// MaterializeContentLocally copies complete content from its routed cache host
+// into this client's node-local cache. Concurrent requests for the same hash
+// share one transfer.
+func (c *Client) MaterializeContentLocally(ctx context.Context, hash, routingKey string, size int64) (bool, error) {
+	if c == nil || !isContentHash(hash) || size <= 0 {
+		return false, nil
+	}
+	if ctx == nil {
+		ctx = c.ctx
+	}
+	if routingKey == "" {
+		routingKey = hash
+	}
+
+	result, err, _ := c.localMaterializations.Do(hash, func() (interface{}, error) {
+		stores := c.preferredLocalStores()
+		for _, candidate := range stores {
+			if candidate.store.Exists(hash, size) {
+				return true, nil
+			}
+		}
+		if len(stores) == 0 {
+			return false, nil
+		}
+
+		reachable, err := c.IsCachedReachable(hash, routingKey)
+		if err != nil || !reachable {
+			return false, err
+		}
+
+		var lastErr error
+		for _, candidate := range stores {
+			concurrency := int(candidate.store.serverConfig.S3DownloadConcurrency)
+			actualHash, storedSize, err := candidate.store.AddPageSourceWithExpectedHash(ctx, hash, size, concurrency, func(ctx context.Context, _ int64, offset int64, dst []byte) (int, error) {
+				n, err := c.ReadContentInto(ctx, hash, offset, dst, ClientOptions{RoutingKey: routingKey})
+				return int(n), err
+			})
+			if err == nil && actualHash == hash && storedSize == size && candidate.store.Exists(hash, size) {
+				return true, nil
+			}
+			if err != nil {
+				lastErr = err
+			}
+		}
+		return false, lastErr
+	})
+	if err != nil {
+		return false, err
+	}
+	materialized, _ := result.(bool)
+	return materialized, nil
 }
 
 // MaterializeFromReplica streams the content for (hash, routingKey) from a

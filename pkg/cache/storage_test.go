@@ -333,6 +333,30 @@ func TestStoreAddPageSourceWithExpectedHashInstallsPagesOutOfOrder(t *testing.T)
 	require.Equal(t, content, dst)
 }
 
+func TestStoreAddPageSourceComputesHashAndInstallsPagesOutOfOrder(t *testing.T) {
+	store := newTestStore(t, 4)
+	content := []byte("abcdefghijklmnopqr")
+	sum := sha256.Sum256(content)
+	expectedHash := hex.EncodeToString(sum[:])
+
+	hash, size, err := store.AddPageSource(context.Background(), int64(len(content)), 3, func(_ context.Context, pageIdx, start int64, dst []byte) (int, error) {
+		if pageIdx == 0 {
+			time.Sleep(10 * time.Millisecond)
+		}
+		return copy(dst, content[start:start+int64(len(dst))]), nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, expectedHash, hash)
+	require.Equal(t, int64(len(content)), size)
+	require.True(t, store.Exists(expectedHash, int64(len(content))))
+
+	dst := make([]byte, len(content))
+	n, err := store.ReadAt(expectedHash, 0, dst)
+	require.NoError(t, err)
+	require.Equal(t, int64(len(content)), n)
+	require.Equal(t, content, dst)
+}
+
 func TestStoreAddPageSourceWithExpectedHashCleansUpOnMismatch(t *testing.T) {
 	store := newTestStore(t, 4)
 	content := []byte("bad hash content")

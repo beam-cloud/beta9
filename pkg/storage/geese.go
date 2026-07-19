@@ -133,6 +133,8 @@ type geeseContentCache struct {
 var _ cfg.ContentCache = (*geeseContentCache)(nil)
 var _ cfg.ContentCacheReadInto = (*geeseContentCache)(nil)
 var _ cfg.ContentCacheStoreLocalPath = (*geeseContentCache)(nil)
+var _ cfg.ContentCacheMaterializeLocal = (*geeseContentCache)(nil)
+var _ cfg.ContentCacheMaterializeS3Local = (*geeseContentCache)(nil)
 var _ cfg.ContentCacheClientLocalPageFileViews = (*geeseContentCache)(nil)
 
 func newGeeseContentCache(client *cache.Client) *geeseContentCache {
@@ -158,6 +160,7 @@ func (c *geeseContentCache) StoreContent(chunks chan []byte, hash string, opts s
 
 func (c *geeseContentCache) StoreContentFromS3(source struct {
 	Path        string
+	CachePath   string
 	BucketName  string
 	Region      string
 	EndpointURL string
@@ -188,6 +191,34 @@ func (c *geeseContentCache) StoreContentFromLocalPath(source struct {
 		RoutingKey: opts.RoutingKey,
 		Lock:       opts.Lock,
 	})
+}
+
+func (c *geeseContentCache) MaterializeLocal(ctx context.Context, hash string, size int64, opts struct{ RoutingKey string }) (bool, error) {
+	return c.client.MaterializeContentLocally(ctx, hash, opts.RoutingKey, size)
+}
+
+func (c *geeseContentCache) MaterializeS3Local(ctx context.Context, source struct {
+	Path        string
+	CachePath   string
+	BucketName  string
+	Region      string
+	EndpointURL string
+	AccessKey   string
+	SecretKey   string
+}, opts struct {
+	RoutingKey string
+	Lock       bool
+}) (string, error) {
+	return c.client.MaterializeS3Locally(ctx, cache.S3ContentSource{
+		Path:           source.Path,
+		CachePath:      source.CachePath,
+		BucketName:     source.BucketName,
+		Region:         source.Region,
+		EndpointURL:    source.EndpointURL,
+		AccessKey:      source.AccessKey,
+		SecretKey:      source.SecretKey,
+		ForcePathStyle: true,
+	}, cache.StoreContentOptions{RoutingKey: opts.RoutingKey, Lock: opts.Lock})
 }
 
 func (c *geeseContentCache) ClientLocalPageFileViews(hash string, offset int64, length int64, opts struct{ RoutingKey string }) ([]cfg.ClientLocalPageFileView, error) {
