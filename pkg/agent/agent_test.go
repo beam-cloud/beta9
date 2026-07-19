@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -260,7 +261,7 @@ func TestDockerRunArgsUsesConfigurableRouteTargetHost(t *testing.T) {
 		NetworkPrefix:             "10.0.0.0/24",
 		NetworkSlotPoolSize:       64,
 		ContainerStartConcurrency: 12,
-	}, agentWorkerDirs("/tmp/agent-state", "", "worker-one"))
+	}, agentWorkerDirs("/tmp/agent-state", "", "worker-one"), workerContainerResourceLimits{})
 
 	if !containsArg(args, "-e", types.WorkerRouteTargetEnv+"=host.docker.internal") {
 		t.Fatalf("expected route target host env in docker args: %#v", args)
@@ -301,6 +302,9 @@ func TestDockerRunArgsUsesConfigurableRouteTargetHost(t *testing.T) {
 	if !containsArg(args, "--shm-size", "256m") {
 		t.Fatalf("expected shm size to track worker memory: %#v", args)
 	}
+	if slices.Contains(args, "--cpus") || slices.Contains(args, "--memory") {
+		t.Fatalf("default agent worker should not have Docker CPU or memory limits: %#v", args)
+	}
 	if !containsArg(args, "--gpus", `"device=0,1"`) {
 		t.Fatalf("expected GPU device assignment: %#v", args)
 	}
@@ -322,6 +326,26 @@ func TestDockerRunArgsUsesConfigurableRouteTargetHost(t *testing.T) {
 		if !containsArg(args, "--add-host", want) {
 			t.Fatalf("expected %s host alias in docker args: %#v", want, args)
 		}
+	}
+}
+
+func TestDockerRunArgsAppliesExplicitResourceLimits(t *testing.T) {
+	args := dockerRunArgs(
+		"slot-one",
+		"worker:dev",
+		"",
+		"/tmp/config.json",
+		bootstrapConfig{},
+		&pb.AgentWorkerSlot{Cpu: 4000, Memory: 8192},
+		agentWorkerDirs("/tmp/agent-state", "", "worker-one"),
+		workerContainerResourceLimits{cpu: true, memory: true},
+	)
+
+	if !containsArg(args, "--cpus", "4.000") {
+		t.Fatalf("expected explicit CPU limit in Docker args: %#v", args)
+	}
+	if !containsArg(args, "--memory", "8192m") {
+		t.Fatalf("expected explicit memory limit in Docker args: %#v", args)
 	}
 }
 
@@ -389,6 +413,25 @@ func TestManagedAgentWorkerConfigDefaultsCPUAffinityOff(t *testing.T) {
 	config = newAgentWorkerConfig(bootstrapConfig{}, slot).sanitizedForAgent()
 	if !config.Worker.ContainerResourceLimits.CPUAffinityEnforced {
 		t.Fatal("managed pool CPU affinity setting was not propagated")
+	}
+}
+
+func TestGVisorAgentWorkerConfigEnforcesMemory(t *testing.T) {
+	slot := &pb.AgentWorkerSlot{
+		PoolName:         "serverless",
+		Mode:             string(types.PoolModeExternal),
+		ContainerRuntime: types.ContainerRuntimeGvisor.String(),
+	}
+
+	config := newAgentWorkerConfig(bootstrapConfig{}, slot).sanitizedForAgent()
+	if !config.Worker.ContainerResourceLimits.MemoryEnforced {
+		t.Fatal("gVisor agent workloads must receive a bounded memory view")
+	}
+
+	slot.ContainerRuntime = types.ContainerRuntimeRunc.String()
+	config = newAgentWorkerConfig(bootstrapConfig{}, slot).sanitizedForAgent()
+	if config.Worker.ContainerResourceLimits.MemoryEnforced {
+		t.Fatal("runc agent memory enforcement must remain unchanged")
 	}
 }
 

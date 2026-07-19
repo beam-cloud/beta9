@@ -137,6 +137,7 @@ type agentConfigWorker struct {
 
 type agentConfigResourceLimits struct {
 	CPUAffinityEnforced bool `json:"cpuAffinityEnforced"`
+	MemoryEnforced      bool `json:"memoryEnforced"`
 }
 
 type agentConfigWorkerFailover struct {
@@ -289,6 +290,7 @@ func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) a
 			ContainerRuntime:  poolRuntime,
 			ContainerResourceLimits: agentConfigResourceLimits{
 				CPUAffinityEnforced: cpuAffinityEnforced,
+				MemoryEnforced:      poolRuntime == types.ContainerRuntimeGvisor.String(),
 			},
 			CacheEnabled:               true,
 			TerminationGracePeriod:     30,

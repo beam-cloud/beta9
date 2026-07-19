@@ -710,7 +710,6 @@ const (
 type stubCodeEntry struct {
 	path      string
 	lastUsed  time.Time
-	sizeBytes int64
 	temporary bool
 }
 
@@ -764,12 +763,13 @@ func pruneStubCodeCache(root string, ttl time.Duration) (int, int64) {
 		} else if entry.lastUsed.After(cutoff) {
 			continue
 		}
+		sizeBytes := dirSizeBytesRecursive(entry.path)
 		if err := os.RemoveAll(entry.path); err != nil {
 			log.Debug().Err(err).Str("path", entry.path).Msg("failed to prune stub-code cache entry")
 			continue
 		}
 		pruned++
-		freed += entry.sizeBytes
+		freed += sizeBytes
 	}
 	return pruned, freed
 }
@@ -789,12 +789,13 @@ func pressureEvictStubCodeCache(root string, bytesToFree int64) (int, int64) {
 		if entry.temporary && entry.lastUsed.After(tempCutoff) {
 			continue
 		}
+		sizeBytes := dirSizeBytesRecursive(entry.path)
 		if err := os.RemoveAll(entry.path); err != nil {
 			log.Debug().Err(err).Str("path", entry.path).Msg("failed to pressure-evict stub-code cache entry")
 			continue
 		}
 		evicted++
-		freed += entry.sizeBytes
+		freed += sizeBytes
 	}
 	return evicted, freed
 }
@@ -815,9 +816,8 @@ func listStubCodeEntries(root string) []stubCodeEntry {
 			continue
 		}
 		item := stubCodeEntry{
-			path:      path,
-			lastUsed:  info.ModTime(),
-			sizeBytes: dirSizeBytesRecursive(path),
+			path:     path,
+			lastUsed: info.ModTime(),
 		}
 		if strings.Contains(entry.Name(), ".tmp.") {
 			item.temporary = true

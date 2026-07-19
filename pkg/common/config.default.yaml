@@ -174,11 +174,11 @@ worker:
       containerRuntimeConfig:
         gvisorPlatform: systrap
         gvisorRoot: /run/gvisor
-        # Keep gVisor rootfs propagation and external modification detection
-        # defaults config-driven so pool-specific overrides stay explicit.
+        # CLIP image roots are immutable, so gVisor can safely cache their
+        # path metadata. Non-root mounts retain gVisor's shared default.
         gvisorExtraArgs:
           - --overlay2=none
-          - --file-access=shared
+          - --file-access=exclusive
       # Optional per-pool durable disk and cache overrides for nodes with different storage layouts.
       # Defaults to <storagePath>/durable-disks when storagePath is set, otherwise /var/lib/beta9/durable-disks.
       # durableDisksPath: /mnt/nvme/beta9/durable-disks
@@ -209,7 +209,7 @@ worker:
         gvisorRoot: /run/gvisor
         gvisorExtraArgs:
           - --overlay2=none
-          - --file-access=shared
+          - --file-access=exclusive
       # Optional per-pool durable disk and cache overrides.
       # Defaults to <storagePath>/durable-disks when storagePath is set, otherwise /var/lib/beta9/durable-disks.
       # durableDisksPath: /mnt/build-cache/beta9/durable-disks

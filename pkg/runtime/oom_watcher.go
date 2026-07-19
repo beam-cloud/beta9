@@ -16,10 +16,12 @@ import (
 
 const (
 	cgroupV2Root           = "/sys/fs/cgroup"
+	procRoot               = "/proc"
 	memoryEventsFile       = "memory.events"
 	oomWatcherPollInterval = 500 * time.Millisecond
 	// For gVisor memory monitoring, trigger OOM when usage exceeds 95% of limit
-	gvisorOOMThresholdPercent = 95.0
+	gvisorOOMThresholdPercent       = 95.0
+	gvisorOOMProcessRefreshInterval = 5 * time.Second
 )
 
 // OOMWatcher interface for different runtime implementations
@@ -40,10 +42,12 @@ type CgroupOOMWatcher struct {
 // GvisorOOMWatcher watches for OOM by monitoring memory usage vs limits
 // Works for gVisor where cgroup files aren't accessible from host
 type GvisorOOMWatcher struct {
-	pid         int32
-	memoryLimit uint64 // in bytes
-	ctx         context.Context
-	cancel      context.CancelFunc
+	pid                int32
+	memoryLimit        uint64 // in bytes
+	ctx                context.Context
+	cancel             context.CancelFunc
+	processPIDs        []int32
+	nextProcessRefresh time.Time
 }
 
 // NewCgroupOOMWatcher creates a new cgroup-based OOM watcher for runc
@@ -180,48 +184,70 @@ func (w *GvisorOOMWatcher) Stop() {
 	}
 }
 
-// getMemoryUsage returns total RSS memory usage for the process and all children
 func (w *GvisorOOMWatcher) getMemoryUsage() (uint64, error) {
-	proc, err := process.NewProcess(w.pid)
-	if err != nil {
-		return 0, fmt.Errorf("failed to get process: %w", err)
+	now := time.Now()
+	if len(w.processPIDs) == 0 || !now.Before(w.nextProcessRefresh) {
+		// gopsutil.Children scans every host PID; procfs exposes the tree directly.
+		pids, err := readProcTree(procRoot, w.pid)
+		if err == nil {
+			w.processPIDs = pids
+		} else if len(w.processPIDs) == 0 {
+			return 0, err
+		}
+		w.nextProcessRefresh = now.Add(gvisorOOMProcessRefreshInterval)
 	}
 
-	// Get all child processes
-	processes := w.findChildProcesses(proc)
-	processes = append([]*process.Process{proc}, processes...)
-
-	// Sum up memory usage
 	var totalMemory uint64
-	for _, p := range processes {
-		memInfo, err := p.MemoryInfo()
+	for _, pid := range w.processPIDs {
+		proc, err := process.NewProcess(pid)
 		if err != nil {
+			if pid == w.pid {
+				return 0, err
+			}
 			continue
 		}
-		totalMemory += memInfo.RSS
+		memory, err := proc.MemoryInfo()
+		if err == nil {
+			totalMemory += memory.RSS
+		}
 	}
 
 	return totalMemory, nil
 }
 
-// findChildProcesses recursively finds all child processes
-func (w *GvisorOOMWatcher) findChildProcesses(p *process.Process) []*process.Process {
-	children, err := p.Children()
-	if err != nil {
-		return nil
-	}
-
-	processes := []*process.Process{}
-	processes = append(processes, children...)
-
-	for _, child := range children {
-		grandChildren := w.findChildProcesses(child)
-		if grandChildren != nil {
-			processes = append(processes, grandChildren...)
+func readProcTree(root string, rootPID int32) ([]int32, error) {
+	pids := []int32{rootPID}
+	seen := map[int32]struct{}{rootPID: {}}
+	for i := 0; i < len(pids); i++ {
+		pid := pids[i]
+		taskRoot := filepath.Join(root, strconv.Itoa(int(pid)), "task")
+		tasks, err := os.ReadDir(taskRoot)
+		if err != nil {
+			if pid == rootPID {
+				return nil, fmt.Errorf("read process %d tasks: %w", pid, err)
+			}
+			continue
+		}
+		for _, task := range tasks {
+			data, err := os.ReadFile(filepath.Join(taskRoot, task.Name(), "children"))
+			if err != nil {
+				continue
+			}
+			for _, field := range strings.Fields(string(data)) {
+				value, err := strconv.ParseInt(field, 10, 32)
+				child := int32(value)
+				if err != nil || child <= 0 {
+					continue
+				}
+				if _, ok := seen[child]; ok {
+					continue
+				}
+				seen[child] = struct{}{}
+				pids = append(pids, child)
+			}
 		}
 	}
-
-	return processes
+	return pids, nil
 }
 
 // readOOMKillCount reads the oom_kill counter from memory.events

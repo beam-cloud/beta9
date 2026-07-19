@@ -177,6 +177,17 @@ func TestCheckpointRuntimeEnvironmentOverrides(t *testing.T) {
 		t.Fatalf("GPU checkpoint env did not override conflicting values: %v", gpuEnv)
 	}
 
+	podEnv := applyCheckpointRuntimeEnvironmentOverrides(nil, &types.ContainerRequest{
+		CheckpointEnabled: true,
+		Gpu:               "RTX4090",
+		Stub:              testPodStub(t, false),
+	}, []string{"vllm", "serve"})
+	for _, want := range checkpointServiceLoopbackEnvOverrides {
+		if !slices.Contains(podEnv, want) {
+			t.Fatalf("GPU pod checkpoint env missing %q in %v", want, podEnv)
+		}
+	}
+
 	genericGPUEnv := applyCheckpointRuntimeEnvironmentOverrides(nil, &types.ContainerRequest{
 		CheckpointEnabled: true,
 		Gpu:               "RTX4090",

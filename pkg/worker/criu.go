@@ -154,17 +154,17 @@ func applyCheckpointRuntimeEnvironmentOverrides(env []string, request *types.Con
 		return env
 	}
 	env = upsertEnvVars(env, checkpointRuntimeEnvOverrides)
-	if shouldUseLoopbackForPodServiceCheckpoint(request, processArgs, env) {
+	if shouldUseLoopbackForPodCheckpoint(request, processArgs, env) {
 		env = upsertEnvVars(env, checkpointServiceLoopbackEnvOverrides)
 	}
 	return env
 }
 
-func shouldUseLoopbackForPodServiceCheckpoint(request *types.ContainerRequest, processArgs, env []string) bool {
+func shouldUseLoopbackForPodCheckpoint(request *types.ContainerRequest, processArgs, env []string) bool {
 	if request == nil || !request.RequiresGPU() {
 		return false
 	}
-	if !isPodServiceRequest(request) {
+	if !isPodRequest(request) {
 		return false
 	}
 	return hasLoopbackSensitiveGPUBackend(processArgs, env)
@@ -172,17 +172,6 @@ func shouldUseLoopbackForPodServiceCheckpoint(request *types.ContainerRequest, p
 
 func isPodRequest(request *types.ContainerRequest) bool {
 	return request != nil && request.Stub.Type.Kind() == types.StubTypePod
-}
-
-func isPodServiceRequest(request *types.ContainerRequest) bool {
-	if !isPodRequest(request) {
-		return false
-	}
-	config, err := request.Stub.UnmarshalConfig()
-	if err != nil || config == nil {
-		return false
-	}
-	return config.IsService
 }
 
 func hasLoopbackSensitiveGPUBackend(processArgs, env []string) bool {
@@ -748,17 +737,20 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 	}
 	checkpointCtx, checkpointCancel := context.WithTimeout(ctx, defaultCheckpointCreateTTL)
 	defer checkpointCancel()
-	terminateAfterCheckpoint := opts.WaitForSignal && s.awaitTerminalAutoCheckpointStop(
+	completePendingStop := opts.WaitForSignal && s.awaitTerminalAutoCheckpointStop(
 		checkpointCtx,
 		opts.Request,
 		instance.Runtime,
 		terminalCheckpointStopWait,
 	)
-	if terminateAfterCheckpoint {
-		log.Info().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msg("container will terminate after checkpoint snapshot")
+	if completePendingStop {
+		if instance.OOMWatcher != nil {
+			instance.OOMWatcher.Stop()
+		}
+		log.Info().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msg("completing pending automatic stop with checkpoint")
 	}
 
-	checkpointPath, err := s.criuManager.CreateCheckpoint(checkpointCtx, instance.Runtime, opts.CheckpointId, opts.Request, terminateAfterCheckpoint)
+	checkpointPath, err := s.criuManager.CreateCheckpoint(checkpointCtx, instance.Runtime, opts.CheckpointId, opts.Request, completePendingStop)
 	if err != nil {
 		if errors.Is(checkpointCtx.Err(), context.DeadlineExceeded) {
 			err = fmt.Errorf("checkpoint snapshot timed out after %s: %w", defaultCheckpointCreateTTL, err)
@@ -769,7 +761,7 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 
 		return err
 	}
-	if terminateAfterCheckpoint {
+	if completePendingStop {
 		s.markTerminalCheckpointRuntimeStopped(opts.Request)
 	}
 	parentDir := filepath.Dir(instance.Overlay.TopLayerPath())
