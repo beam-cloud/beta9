@@ -154,17 +154,17 @@ func applyCheckpointRuntimeEnvironmentOverrides(env []string, request *types.Con
 		return env
 	}
 	env = upsertEnvVars(env, checkpointRuntimeEnvOverrides)
-	if shouldUseLoopbackForPodServiceCheckpoint(request, processArgs, env) {
+	if shouldUseLoopbackForPodCheckpoint(request, processArgs, env) {
 		env = upsertEnvVars(env, checkpointServiceLoopbackEnvOverrides)
 	}
 	return env
 }
 
-func shouldUseLoopbackForPodServiceCheckpoint(request *types.ContainerRequest, processArgs, env []string) bool {
+func shouldUseLoopbackForPodCheckpoint(request *types.ContainerRequest, processArgs, env []string) bool {
 	if request == nil || !request.RequiresGPU() {
 		return false
 	}
-	if !isPodServiceRequest(request) {
+	if !isPodRequest(request) {
 		return false
 	}
 	return hasLoopbackSensitiveGPUBackend(processArgs, env)
@@ -172,17 +172,6 @@ func shouldUseLoopbackForPodServiceCheckpoint(request *types.ContainerRequest, p
 
 func isPodRequest(request *types.ContainerRequest) bool {
 	return request != nil && request.Stub.Type.Kind() == types.StubTypePod
-}
-
-func isPodServiceRequest(request *types.ContainerRequest) bool {
-	if !isPodRequest(request) {
-		return false
-	}
-	config, err := request.Stub.UnmarshalConfig()
-	if err != nil || config == nil {
-		return false
-	}
-	return config.IsService
 }
 
 func hasLoopbackSensitiveGPUBackend(processArgs, env []string) bool {
