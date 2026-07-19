@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -25,27 +26,19 @@ func (s *Worker) setupOOMWatcher(
 ) {
 	var oomWatcher runtime.OOMWatcher
 
-	// Select appropriate OOM watcher based on runtime
 	if s.runtime.Name() == types.ContainerRuntimeGvisor.String() {
-		// The gVisor watcher observes host-side runsc RSS, which includes runtime
-		// overhead and is not the same as guest workload memory. Do not turn that
-		// approximation into a kill signal when memory enforcement is disabled.
 		if !s.config.Worker.ContainerResourceLimits.MemoryEnforced {
 			return
 		}
-
-		if spec == nil ||
-			spec.Linux == nil ||
-			spec.Linux.Resources == nil ||
-			spec.Linux.Resources.Memory == nil ||
-			spec.Linux.Resources.Memory.Limit == nil {
-			return
+		// runsc places the sandbox and gofer in a cgroup named after the
+		// container. memory.events accounts shared mappings once and only
+		// reports an OOM after the kernel actually enforces the hard limit.
+		cgroupPath := containerId
+		if spec != nil && spec.Linux != nil && spec.Linux.CgroupsPath != "" {
+			cgroupPath = strings.TrimPrefix(spec.Linux.CgroupsPath, "/")
 		}
-
-		memoryLimit := s.getMemoryLimit(spec, request)
-		oomWatcher = runtime.NewGvisorOOMWatcher(ctx, pid, memoryLimit)
+		oomWatcher = runtime.NewCgroupOOMWatcher(ctx, cgroupPath)
 	} else {
-		// For runc: use cgroup-based OOM detection
 		cgroupPath, err := runtime.GetCgroupPathFromPID(pid)
 		if err != nil {
 			log.Warn().Str("container_id", containerId).Err(err).Msg("failed to get cgroup path, OOM detection disabled")
@@ -54,7 +47,6 @@ func (s *Worker) setupOOMWatcher(
 		oomWatcher = runtime.NewCgroupOOMWatcher(ctx, cgroupPath)
 	}
 
-	// Store watcher and start monitoring
 	containerInstance, exists := s.containerInstances.Get(containerId)
 	if !exists {
 		return
@@ -63,7 +55,6 @@ func (s *Worker) setupOOMWatcher(
 	containerInstance.OOMWatcher = oomWatcher
 	s.containerInstances.Set(containerId, containerInstance)
 
-	// Start watching with callback
 	err := oomWatcher.Watch(func() {
 		s.handleOOMKill(ctx, containerId, request, outputLogger, isOOMKilled)
 	})
@@ -71,19 +62,6 @@ func (s *Worker) setupOOMWatcher(
 	if err != nil {
 		log.Warn().Str("container_id", containerId).Err(err).Msg("OOM watcher failed to start")
 	}
-}
-
-// getMemoryLimit extracts memory limit from spec or request
-func (s *Worker) getMemoryLimit(spec *specs.Spec, request *types.ContainerRequest) uint64 {
-	if spec != nil &&
-		spec.Linux != nil &&
-		spec.Linux.Resources != nil &&
-		spec.Linux.Resources.Memory != nil &&
-		spec.Linux.Resources.Memory.Limit != nil {
-		return uint64(*spec.Linux.Resources.Memory.Limit)
-	}
-	// Fallback to request memory (convert MB to bytes)
-	return uint64(request.Memory * 1024 * 1024)
 }
 
 // handleOOMKill handles the OOM kill event

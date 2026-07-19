@@ -12,6 +12,10 @@ import (
 	"k8s.io/utils/ptr"
 )
 
+// gVisor's sandbox and gofer are charged to the container's host cgroup in
+// addition to guest memory.
+const gvisorRuntimeMemoryHeadroomBytes int64 = 2 * 1024 * 1024 * 1024
+
 type ContainerResources interface {
 	GetCPU(request *types.ContainerRequest) *specs.LinuxCPU
 	GetMemory(request *types.ContainerRequest) *specs.LinuxMemory
@@ -164,5 +168,9 @@ func (g *GvisorResources) GetCPU(request *types.ContainerRequest) *specs.LinuxCP
 }
 
 func (g *GvisorResources) GetMemory(request *types.ContainerRequest) *specs.LinuxMemory {
-	return g.StandardResources.GetMemory(request)
+	memory := g.StandardResources.GetMemory(request)
+	hardLimit := *memory.Limit + gvisorRuntimeMemoryHeadroomBytes
+	memory.Limit = ptr.To(hardLimit)
+	memory.Swap = ptr.To(hardLimit)
+	return memory
 }

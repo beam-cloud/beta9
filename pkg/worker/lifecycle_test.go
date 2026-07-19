@@ -516,7 +516,7 @@ func TestSpecFromRequestEnforcesMemoryForGPUWithoutCPUQuota(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, spec.Linux.Resources.CPU)
 	require.NotNil(t, spec.Linux.Resources.Memory)
-	require.Equal(t, int64(40*1024*1024*1024), *spec.Linux.Resources.Memory.Limit)
+	require.Equal(t, int64(42*1024*1024*1024), *spec.Linux.Resources.Memory.Limit)
 }
 
 func TestSpecFromRequestReturnsIndependentSpecs(t *testing.T) {

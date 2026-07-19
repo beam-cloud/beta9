@@ -13,6 +13,29 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestNewRunscDefaultsUnsupportedDriverCompatibility(t *testing.T) {
+	dir := t.TempDir()
+	runscPath := filepath.Join(dir, "runsc")
+	require.NoError(t, os.WriteFile(runscPath, []byte("#!/bin/sh\nexit 0\n"), 0o755))
+
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "enabled by default", want: runscAllowUnsupportedDriver},
+		{name: "explicit opt out", args: []string{runscAllowUnsupportedDriver + "=false"}, want: runscAllowUnsupportedDriver + "=false"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			rt, err := NewRunsc(Config{RunscPath: runscPath, RunscExtraArgs: test.args})
+			require.NoError(t, err)
+			require.Contains(t, rt.cfg.RunscExtraArgs, test.want)
+			require.Len(t, rt.cfg.RunscExtraArgs, 1)
+		})
+	}
+}
+
 func TestRunscRestoreSignalsStartedAfterStateRunning(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "runsc.log")
