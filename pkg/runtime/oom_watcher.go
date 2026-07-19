@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"github.com/shirou/gopsutil/v4/process"
 )
 
 const (
@@ -41,12 +42,12 @@ type CgroupOOMWatcher struct {
 // GvisorOOMWatcher watches for OOM by monitoring memory usage vs limits
 // Works for gVisor where cgroup files aren't accessible from host
 type GvisorOOMWatcher struct {
-	pid                  int32
-	memoryLimit          uint64 // in bytes
-	ctx                  context.Context
-	cancel               context.CancelFunc
-	processPIDs          []int32
-	lastProcessDiscovery time.Time
+	pid                int32
+	memoryLimit        uint64 // in bytes
+	ctx                context.Context
+	cancel             context.CancelFunc
+	processPIDs        []int32
+	nextProcessRefresh time.Time
 }
 
 // NewCgroupOOMWatcher creates a new cgroup-based OOM watcher for runc
@@ -183,131 +184,70 @@ func (w *GvisorOOMWatcher) Stop() {
 	}
 }
 
-// getMemoryUsage returns total RSS memory usage for the process and all children.
-// Linux exposes direct child PIDs in procfs; using it avoids the host-wide /proc
-// scan performed by gopsutil.Children on every poll.
 func (w *GvisorOOMWatcher) getMemoryUsage() (uint64, error) {
-	if len(w.processPIDs) == 0 || time.Since(w.lastProcessDiscovery) >= gvisorOOMProcessRefreshInterval {
-		pids, err := discoverProcessTree(w.pid)
-		if err != nil {
-			if len(w.processPIDs) == 0 {
-				return 0, err
-			}
-			w.lastProcessDiscovery = time.Now()
-		} else {
+	now := time.Now()
+	if len(w.processPIDs) == 0 || !now.Before(w.nextProcessRefresh) {
+		// gopsutil.Children scans every host PID; procfs exposes the tree directly.
+		pids, err := readProcTree(procRoot, w.pid)
+		if err == nil {
 			w.processPIDs = pids
-			w.lastProcessDiscovery = time.Now()
+		} else if len(w.processPIDs) == 0 {
+			return 0, err
 		}
+		w.nextProcessRefresh = now.Add(gvisorOOMProcessRefreshInterval)
 	}
 
 	var totalMemory uint64
 	for _, pid := range w.processPIDs {
-		rss, err := readProcessRSS(pid)
+		proc, err := process.NewProcess(pid)
 		if err != nil {
 			if pid == w.pid {
-				return 0, fmt.Errorf("failed to read process %d memory: %w", pid, err)
+				return 0, err
 			}
 			continue
 		}
-		totalMemory += rss
+		memory, err := proc.MemoryInfo()
+		if err == nil {
+			totalMemory += memory.RSS
+		}
 	}
 
 	return totalMemory, nil
 }
 
-func discoverProcessTree(rootPID int32) ([]int32, error) {
-	stack := []int32{rootPID}
-	seen := make(map[int32]struct{}, 4)
-	pids := make([]int32, 0, 4)
-	for len(stack) > 0 {
-		pid := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
-		if _, ok := seen[pid]; ok {
-			continue
-		}
-		seen[pid] = struct{}{}
-		pids = append(pids, pid)
-
-		children, err := readProcessChildren(pid)
+func readProcTree(root string, rootPID int32) ([]int32, error) {
+	pids := []int32{rootPID}
+	seen := map[int32]struct{}{rootPID: {}}
+	for i := 0; i < len(pids); i++ {
+		pid := pids[i]
+		taskRoot := filepath.Join(root, strconv.Itoa(int(pid)), "task")
+		tasks, err := os.ReadDir(taskRoot)
 		if err != nil {
 			if pid == rootPID {
-				return nil, fmt.Errorf("failed to discover process %d children: %w", pid, err)
+				return nil, fmt.Errorf("read process %d tasks: %w", pid, err)
 			}
 			continue
 		}
-		stack = append(stack, children...)
-	}
-	return pids, nil
-}
-
-func readProcessRSS(pid int32) (uint64, error) {
-	data, err := os.ReadFile(filepath.Join(procRoot, strconv.FormatInt(int64(pid), 10), "statm"))
-	if err != nil {
-		return 0, err
-	}
-	return parseProcessRSS(data, uint64(os.Getpagesize()))
-}
-
-func parseProcessRSS(data []byte, pageSize uint64) (uint64, error) {
-	fields := strings.Fields(string(data))
-	if len(fields) < 2 {
-		return 0, fmt.Errorf("invalid statm contents")
-	}
-	rssPages, err := strconv.ParseUint(fields[1], 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("invalid statm rss: %w", err)
-	}
-	return rssPages * pageSize, nil
-}
-
-func readProcessChildren(pid int32) ([]int32, error) {
-	return readProcessChildrenAt(procRoot, pid)
-}
-
-func readProcessChildrenAt(root string, pid int32) ([]int32, error) {
-	pidString := strconv.FormatInt(int64(pid), 10)
-	taskRoot := filepath.Join(root, pidString, "task")
-	tasks, err := os.ReadDir(taskRoot)
-	if err != nil {
-		return nil, err
-	}
-
-	seen := make(map[int32]struct{})
-	children := make([]int32, 0, 2)
-	for _, task := range tasks {
-		if !task.IsDir() {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(taskRoot, task.Name(), "children"))
-		if err != nil {
-			continue
-		}
-		taskChildren, err := parseProcessChildren(data)
-		if err != nil {
-			continue
-		}
-		for _, child := range taskChildren {
-			if _, ok := seen[child]; ok {
+		for _, task := range tasks {
+			data, err := os.ReadFile(filepath.Join(taskRoot, task.Name(), "children"))
+			if err != nil {
 				continue
 			}
-			seen[child] = struct{}{}
-			children = append(children, child)
+			for _, field := range strings.Fields(string(data)) {
+				value, err := strconv.ParseInt(field, 10, 32)
+				child := int32(value)
+				if err != nil || child <= 0 {
+					continue
+				}
+				if _, ok := seen[child]; ok {
+					continue
+				}
+				seen[child] = struct{}{}
+				pids = append(pids, child)
+			}
 		}
 	}
-	return children, nil
-}
-
-func parseProcessChildren(data []byte) ([]int32, error) {
-	fields := strings.Fields(string(data))
-	children := make([]int32, 0, len(fields))
-	for _, field := range fields {
-		pid, err := strconv.ParseInt(field, 10, 32)
-		if err != nil || pid <= 0 {
-			return nil, fmt.Errorf("invalid child pid %q", field)
-		}
-		children = append(children, int32(pid))
-	}
-	return children, nil
+	return pids, nil
 }
 
 // readOOMKillCount reads the oom_kill counter from memory.events

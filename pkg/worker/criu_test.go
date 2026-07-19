@@ -60,18 +60,6 @@ type observingCheckpointManager struct {
 	create func() error
 }
 
-type trackingOOMWatcher struct {
-	stopped bool
-}
-
-func (*trackingOOMWatcher) Watch(func()) error {
-	return nil
-}
-
-func (w *trackingOOMWatcher) Stop() {
-	w.stopped = true
-}
-
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
@@ -1256,20 +1244,6 @@ func TestCreateCheckpointRequiresCRIUManager(t *testing.T) {
 	if !errors.Is(err, errCRIUManagerUnavailable) {
 		t.Fatalf("createCheckpoint error = %v, want %v", err, errCRIUManagerUnavailable)
 	}
-}
-
-func TestStopOOMWatcherForTerminalCheckpoint(t *testing.T) {
-	containerID := "container-terminal-checkpoint"
-	watcher := &trackingOOMWatcher{}
-	worker := &Worker{containerInstances: common.NewSafeMap[*ContainerInstance]()}
-	worker.containerInstances.Set(containerID, &ContainerInstance{
-		Id:         containerID,
-		OOMWatcher: watcher,
-	})
-
-	worker.stopOOMWatcherForTerminalCheckpoint(containerID)
-
-	require.True(t, watcher.stopped)
 }
 
 func TestCreateCheckpointFailsWhenRuntimeStartSignalCloses(t *testing.T) {

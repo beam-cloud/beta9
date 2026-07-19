@@ -737,18 +737,20 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 	}
 	checkpointCtx, checkpointCancel := context.WithTimeout(ctx, defaultCheckpointCreateTTL)
 	defer checkpointCancel()
-	terminateAfterCheckpoint := opts.WaitForSignal && s.awaitTerminalAutoCheckpointStop(
+	completePendingStop := opts.WaitForSignal && s.awaitTerminalAutoCheckpointStop(
 		checkpointCtx,
 		opts.Request,
 		instance.Runtime,
 		terminalCheckpointStopWait,
 	)
-	if terminateAfterCheckpoint {
-		s.stopOOMWatcherForTerminalCheckpoint(opts.Request.ContainerId)
-		log.Info().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msg("container will terminate after checkpoint snapshot")
+	if completePendingStop {
+		if instance.OOMWatcher != nil {
+			instance.OOMWatcher.Stop()
+		}
+		log.Info().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msg("completing pending automatic stop with checkpoint")
 	}
 
-	checkpointPath, err := s.criuManager.CreateCheckpoint(checkpointCtx, instance.Runtime, opts.CheckpointId, opts.Request, terminateAfterCheckpoint)
+	checkpointPath, err := s.criuManager.CreateCheckpoint(checkpointCtx, instance.Runtime, opts.CheckpointId, opts.Request, completePendingStop)
 	if err != nil {
 		if errors.Is(checkpointCtx.Err(), context.DeadlineExceeded) {
 			err = fmt.Errorf("checkpoint snapshot timed out after %s: %w", defaultCheckpointCreateTTL, err)
@@ -759,7 +761,7 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 
 		return err
 	}
-	if terminateAfterCheckpoint {
+	if completePendingStop {
 		s.markTerminalCheckpointRuntimeStopped(opts.Request)
 	}
 	parentDir := filepath.Dir(instance.Overlay.TopLayerPath())
@@ -812,14 +814,6 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 		log.Info().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msg("checkpoint created successfully")
 	}
 	return nil
-}
-
-func (s *Worker) stopOOMWatcherForTerminalCheckpoint(containerID string) {
-	instance, exists := s.containerInstances.Get(containerID)
-	if !exists || instance == nil || instance.OOMWatcher == nil {
-		return
-	}
-	instance.OOMWatcher.Stop()
 }
 
 func (s *Worker) markCheckpointFailed(opts *CreateCheckpointOpts, metadata *checkpointCacheMetadata) {
