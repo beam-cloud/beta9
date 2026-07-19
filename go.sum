@@ -162,8 +162,8 @@ github.com/beam-cloud/clip v0.0.0-20260718192707-158896b63182 h1:omr1e/AmV9sZO+4
 github.com/beam-cloud/clip v0.0.0-20260718192707-158896b63182/go.mod h1:GdrBOVFiqr/qox9C923iDfyfi41bpeoW+fMetSl+Z4w=
 github.com/beam-cloud/clip v0.0.0-20260718194712-9fe91d4cc8ac h1:JVkKn2ll3CIneJSm6hOT/RbgBSgcH/Cad7r0GHpC7UU=
 github.com/beam-cloud/clip v0.0.0-20260718194712-9fe91d4cc8ac/go.mod h1:GdrBOVFiqr/qox9C923iDfyfi41bpeoW+fMetSl+Z4w=
-github.com/beam-cloud/clip v0.0.0-20260718203452-1feb1704433e h1:eT9pl5j5YEZDGT/XNdAeIdH7JnUCIL5xv0ZN25e1OsE=
-github.com/beam-cloud/clip v0.0.0-20260718203452-1feb1704433e/go.mod h1:GdrBOVFiqr/qox9C923iDfyfi41bpeoW+fMetSl+Z4w=
+github.com/beam-cloud/clip v0.0.0-20260719053512-9b3c7f934586 h1:tOShRnqywsh8aW+FsGlam9S//9sjbLeYarf6UaERYrI=
+github.com/beam-cloud/clip v0.0.0-20260719053512-9b3c7f934586/go.mod h1:wcTRcqToPUQMkTbKIdx/4EmmQaDP+x2StsHF921re0k=
 github.com/beam-cloud/geesefs v0.0.0-20260604132438-6acb73b2cebd h1:qdvWIpwFIHK4yhLV27r7D2HZj80Umq/h3tHGITpgM6g=
 github.com/beam-cloud/geesefs v0.0.0-20260604132438-6acb73b2cebd/go.mod h1:q0qGsu0wiOzf/5m9JGLqZ7WteYDaaLGgBwNmstb3og0=
 github.com/beam-cloud/geesefs v0.0.0-20260716095427-ddd6815a3881 h1:KZr/hTVMERLHFndxFTnQFxdyeqBDMHfVEARTog9uT34=
@@ -433,8 +433,8 @@ github.com/gorilla/websocket v1.5.3 h1:saDtZ6Pbx/0u+bgYQ3q96pZgCzfhKXGPqt7kZ72aN
 github.com/gorilla/websocket v1.5.3/go.mod h1:YR8l580nyteQvAITg2hZ9XVh4b55+EU/adAjf1fMHhE=
 github.com/grpc-ecosystem/grpc-gateway/v2 v2.25.0 h1:kFCTBoqZHhvv0jcxhw7TuK6GxVeOXxoC69bW9tq/NTA=
 github.com/grpc-ecosystem/grpc-gateway/v2 v2.25.0/go.mod h1:RBRO7fro65R6tjKzYgLAFo0t1QEXY1Dp+i/bvpRiqiQ=
-github.com/hanwen/go-fuse/v2 v2.5.1 h1:OQBE8zVemSocRxA4OaFJbjJ5hlpCmIWbGr7r0M4uoQQ=
-github.com/hanwen/go-fuse/v2 v2.5.1/go.mod h1:xKwi1cF7nXAOBCXujD5ie0ZKsxc8GGSA1rlMJc+8IJs=
+github.com/hanwen/go-fuse/v2 v2.10.1 h1:QAqZuc9+aBtTou+OPruU/hkYQYCkgPtQd2QaepHkTTs=
+github.com/hanwen/go-fuse/v2 v2.10.1/go.mod h1:aU7NkGYZUmuJrZapoI3mEcNve7PZTySUOLBuch/vR6U=
 github.com/hashicorp/errwrap v1.1.0 h1:OxrOeh75EUXMY8TBjag2fzXGZ40LB6IKw45YeGUDY2I=
 github.com/hashicorp/errwrap v1.1.0/go.mod h1:YH+1FKiLXxHSkmPseP+kNlulaMuP3n2brvKWEqk/Jc4=
 github.com/hashicorp/go-multierror v1.1.1 h1:H5DkEtf6CXdFp0N0Em5UCwQpXMWke8IA0+lD48awMYo=
