@@ -11,7 +11,12 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
-func dockerRunArgs(name, image, imageID, configPath string, bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot, dirs workerDirs) []string {
+type workerContainerResourceLimits struct {
+	cpu    bool
+	memory bool
+}
+
+func dockerRunArgs(name, image, imageID, configPath string, bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot, dirs workerDirs, limits workerContainerResourceLimits) []string {
 	localTargetHost := firstNonEmpty(os.Getenv(types.AgentTargetHostEnv), types.LoopbackHost)
 	cacheLocality := agentCacheLocality(bootstrap, slot)
 	args := []string{
@@ -35,11 +40,13 @@ func dockerRunArgs(name, image, imageID, configPath string, bootstrap bootstrapC
 		args = append(args, "--add-host", alias)
 	}
 
-	if slot.Cpu > 0 {
+	if limits.cpu && slot.Cpu > 0 {
 		args = append(args, "--cpus", fmt.Sprintf("%.3f", float64(slot.Cpu)/1000.0))
 	}
-	if slot.Memory > 0 {
+	if limits.memory && slot.Memory > 0 {
 		args = append(args, "--memory", fmt.Sprintf("%dm", slot.Memory))
+	}
+	if slot.Memory > 0 {
 		args = append(args, "--shm-size", fmt.Sprintf("%dm", max(slot.Memory/2, 64)))
 	}
 	if slot.GpuCount > 0 {
