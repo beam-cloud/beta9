@@ -684,6 +684,9 @@ func (c *ImageClient) lazyMountOptions(ctx context.Context, request *types.Conta
 		ContentCache:          contentCache,
 		ContentCacheAvailable: contentCache != nil,
 	}
+	if archive.storageMode == string(clipCommon.StorageModeLocal) {
+		mountOptions.StorageModeOverride = clipCommon.StorageModeLocal
+	}
 	if c.config.DebugMode {
 		mountOptions.ReadTraceObserver = c.observeClipRead
 	}
