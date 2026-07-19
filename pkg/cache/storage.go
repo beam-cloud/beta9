@@ -494,7 +494,7 @@ func (cas *Store) AddReaderWithExpectedHash(ctx context.Context, reader io.Reade
 	return actualHash, size, nil
 }
 
-func (cas *Store) AddPageSourceWithExpectedHash(ctx context.Context, expectedHash string, size int64, concurrency int, readPage func(context.Context, int64, int64, int64) ([]byte, error)) (string, int64, error) {
+func (cas *Store) AddPageSourceWithExpectedHash(ctx context.Context, expectedHash string, size int64, concurrency int, readPage func(context.Context, int64, int64, []byte) (int, error)) (string, int64, error) {
 	if expectedHash == "" {
 		return "", 0, errors.New("expected hash is required")
 	}
@@ -545,6 +545,7 @@ func (cas *Store) AddPageSourceWithExpectedHash(ctx context.Context, expectedHas
 		pageIdx int64
 		data    []byte
 		err     error
+		release chan struct{}
 	}
 
 	jobs := make(chan int64)
@@ -555,6 +556,7 @@ func (cas *Store) AddPageSourceWithExpectedHash(ctx context.Context, expectedHas
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			buf := make([]byte, int(pageSize))
 			for pageIdx := range jobs {
 				start := pageIdx * pageSize
 				length := pageSize
@@ -570,25 +572,45 @@ func (cas *Store) AddPageSourceWithExpectedHash(ctx context.Context, expectedHas
 					continue
 				}
 
-				data, err := readPage(ctx, pageIdx, start, length)
+				page := buf[:int(length)]
+				n, err := readPage(ctx, pageIdx, start, page)
 				if err != nil {
-					results <- pageResult{pageIdx: pageIdx, err: err}
+					select {
+					case results <- pageResult{pageIdx: pageIdx, err: err}:
+					case <-ctx.Done():
+					}
 					cancel()
-					continue
+					return
 				}
-				if int64(len(data)) != length {
-					results <- pageResult{pageIdx: pageIdx, err: fmt.Errorf("short page read: page=%d read=%d expected=%d", pageIdx, len(data), length)}
+				if int64(n) != length {
+					select {
+					case results <- pageResult{pageIdx: pageIdx, err: fmt.Errorf("short page read: page=%d read=%d expected=%d", pageIdx, n, length)}:
+					case <-ctx.Done():
+					}
 					cancel()
-					continue
+					return
 				}
 
 				tmpPath := filepath.Join(tmpDir, cas.pageKey(expectedHash, pageIdx))
-				if err := writeCacheChunkAtomic(tmpPath, data); err != nil {
-					results <- pageResult{pageIdx: pageIdx, err: err}
+				if err := writePrivateCacheChunk(tmpPath, page); err != nil {
+					select {
+					case results <- pageResult{pageIdx: pageIdx, err: err}:
+					case <-ctx.Done():
+					}
 					cancel()
-					continue
+					return
 				}
-				results <- pageResult{pageIdx: pageIdx, data: data}
+				release := make(chan struct{})
+				select {
+				case results <- pageResult{pageIdx: pageIdx, data: page, release: release}:
+				case <-ctx.Done():
+					return
+				}
+				select {
+				case <-release:
+				case <-ctx.Done():
+					return
+				}
 			}
 		}()
 	}
@@ -611,11 +633,14 @@ func (cas *Store) AddPageSourceWithExpectedHash(ctx context.Context, expectedHas
 
 	hasher := sha256.New()
 	nextHashPage := int64(0)
-	pending := make(map[int64][]byte, concurrency)
+	pending := make(map[int64]pageResult, concurrency)
 	var firstErr error
 
 	for result := range results {
 		if result.err != nil {
+			if result.release != nil {
+				close(result.release)
+			}
 			if firstErr == nil {
 				firstErr = result.err
 			}
@@ -623,17 +648,18 @@ func (cas *Store) AddPageSourceWithExpectedHash(ctx context.Context, expectedHas
 			continue
 		}
 
-		pending[result.pageIdx] = result.data
+		pending[result.pageIdx] = result
 		for {
-			data, ok := pending[nextHashPage]
+			page, ok := pending[nextHashPage]
 			if !ok {
 				break
 			}
-			if _, err := hasher.Write(data); err != nil && firstErr == nil {
+			if _, err := hasher.Write(page.data); err != nil && firstErr == nil {
 				firstErr = err
 				cancel()
 			}
 			delete(pending, nextHashPage)
+			close(page.release)
 			nextHashPage++
 		}
 	}
@@ -677,6 +703,10 @@ func (cas *Store) newExpectedHashTempDir(hash string) (string, error) {
 		return "", fmt.Errorf("failed to create cache temp directory: %w", err)
 	}
 	return tmpDir, nil
+}
+
+func writePrivateCacheChunk(path string, data []byte) error {
+	return os.WriteFile(path, data, 0644)
 }
 
 func (cas *Store) publishExpectedHashPages(hash string, tmpDir string, pageCount int64, size int64) error {

@@ -1060,8 +1060,8 @@ func (cs *Server) storeS3SourceWithExpectedHash(ctx context.Context, s3Client *S
 	}
 
 	concurrency := int(s3Client.DownloadConcurrency)
-	hash, storedSize, err := cs.cas.AddPageSourceWithExpectedHash(ctx, expectedHash, size, concurrency, func(ctx context.Context, _ int64, start int64, length int64) ([]byte, error) {
-		return s3Client.ReadRange(ctx, path, start, length)
+	hash, storedSize, err := cs.cas.AddPageSourceWithExpectedHash(ctx, expectedHash, size, concurrency, func(ctx context.Context, _ int64, start int64, dst []byte) (int, error) {
+		return s3Client.ReadRangeInto(ctx, path, start, dst)
 	})
 	return hash, uint64(storedSize), err
 }

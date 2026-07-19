@@ -306,11 +306,12 @@ func TestStoreAddPageSourceWithExpectedHashInstallsPagesOutOfOrder(t *testing.T)
 	expectedHash := hex.EncodeToString(sum[:])
 	requested := make(chan int64, 8)
 
-	hash, size, err := store.AddPageSourceWithExpectedHash(context.Background(), expectedHash, int64(len(content)), 3, func(_ context.Context, pageIdx, start, length int64) ([]byte, error) {
+	hash, size, err := store.AddPageSourceWithExpectedHash(context.Background(), expectedHash, int64(len(content)), 3, func(_ context.Context, pageIdx, start int64, dst []byte) (int, error) {
 		requested <- pageIdx
-		chunk := make([]byte, int(length))
-		copy(chunk, content[start:start+length])
-		return chunk, nil
+		if pageIdx == 0 {
+			time.Sleep(10 * time.Millisecond)
+		}
+		return copy(dst, content[start:start+int64(len(dst))]), nil
 	})
 	require.NoError(t, err)
 	require.Equal(t, expectedHash, hash)
@@ -337,10 +338,8 @@ func TestStoreAddPageSourceWithExpectedHashCleansUpOnMismatch(t *testing.T) {
 	content := []byte("bad hash content")
 	wrongHash := strings.Repeat("1", sha256.Size*2)
 
-	hash, size, err := store.AddPageSourceWithExpectedHash(context.Background(), wrongHash, int64(len(content)), 2, func(_ context.Context, _ int64, start, length int64) ([]byte, error) {
-		chunk := make([]byte, int(length))
-		copy(chunk, content[start:start+length])
-		return chunk, nil
+	hash, size, err := store.AddPageSourceWithExpectedHash(context.Background(), wrongHash, int64(len(content)), 2, func(_ context.Context, _ int64, start int64, dst []byte) (int, error) {
+		return copy(dst, content[start:start+int64(len(dst))]), nil
 	})
 	require.Error(t, err)
 	require.NotEqual(t, wrongHash, hash)

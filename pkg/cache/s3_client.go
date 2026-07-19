@@ -98,6 +98,21 @@ func (c *S3Client) ReadRange(ctx context.Context, key string, start int64, lengt
 	if start < 0 || length <= 0 {
 		return nil, fmt.Errorf("invalid range start=%d length=%d", start, length)
 	}
+	if length > int64(int(^uint(0)>>1)) {
+		return nil, fmt.Errorf("range too large: %d", length)
+	}
+	data := make([]byte, int(length))
+	if _, err := c.ReadRangeInto(ctx, key, start, data); err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+func (c *S3Client) ReadRangeInto(ctx context.Context, key string, start int64, dst []byte) (int, error) {
+	length := int64(len(dst))
+	if start < 0 || length <= 0 {
+		return 0, fmt.Errorf("invalid range start=%d length=%d", start, length)
+	}
 	rangeHeader := fmt.Sprintf("bytes=%d-%d", start, start+length-1)
 	resp, err := c.Client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(c.Source.BucketName),
@@ -105,22 +120,18 @@ func (c *S3Client) ReadRange(ctx context.Context, key string, start int64, lengt
 		Range:  aws.String(rangeHeader),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("range request failed for %s: %w", rangeHeader, err)
+		return 0, fmt.Errorf("range request failed for %s: %w", rangeHeader, err)
 	}
 	defer resp.Body.Close()
 
-	if length > int64(int(^uint(0)>>1)) {
-		return nil, fmt.Errorf("range too large: %d", length)
-	}
-	data := make([]byte, int(length))
-	n, err := io.ReadFull(resp.Body, data)
+	n, err := io.ReadFull(resp.Body, dst)
 	if err != nil {
-		return nil, fmt.Errorf("error reading range %s: read %d/%d bytes: %w", rangeHeader, n, length, err)
+		return n, fmt.Errorf("error reading range %s: read %d/%d bytes: %w", rangeHeader, n, length, err)
 	}
 	if int64(n) != length {
-		return nil, fmt.Errorf("short read for range %s: read %d/%d bytes", rangeHeader, n, length)
+		return n, fmt.Errorf("short read for range %s: read %d/%d bytes", rangeHeader, n, length)
 	}
-	return data, nil
+	return n, nil
 }
 
 func (c *S3Client) Head(ctx context.Context, key string) (bool, *s3.HeadObjectOutput, error) {
