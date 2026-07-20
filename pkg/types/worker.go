@@ -57,6 +57,8 @@ type Mount struct {
 	MountType        string                  `json:"mount_type"`
 	MountPointConfig *MountPointConfig       `json:"mountpoint_config"`
 	DurableDisk      *DurableDiskMountConfig `json:"durable_disk,omitempty"`
+	SubPath          string                  `json:"sub_path,omitempty"`
+	MaxStorageBytes  int64                   `json:"max_storage_bytes,omitempty"`
 }
 
 // @go2proto
@@ -98,6 +100,15 @@ func (m *Mount) ToProto() *pb.Mount {
 		}
 	}
 
+	var subPath *string
+	if m.SubPath != "" {
+		subPath = &m.SubPath
+	}
+	var maxStorageBytes *int64
+	if m.MaxStorageBytes != 0 {
+		maxStorageBytes = &m.MaxStorageBytes
+	}
+
 	return &pb.Mount{
 		LocalPath:        m.LocalPath,
 		MountPath:        m.MountPath,
@@ -106,6 +117,8 @@ func (m *Mount) ToProto() *pb.Mount {
 		MountType:        m.MountType,
 		MountPointConfig: mountPointConfig,
 		DurableDisk:      durableDisk,
+		SubPath:          subPath,
+		MaxStorageBytes:  maxStorageBytes,
 	}
 }
 
@@ -125,6 +138,15 @@ func NewMountFromProto(in *pb.Mount) *Mount {
 		}
 	}
 
+	var subPath string
+	if in.SubPath != nil {
+		subPath = *in.SubPath
+	}
+	var maxStorageBytes int64
+	if in.MaxStorageBytes != nil {
+		maxStorageBytes = *in.MaxStorageBytes
+	}
+
 	return &Mount{
 		LocalPath:        in.LocalPath,
 		MountPath:        in.MountPath,
@@ -133,6 +155,8 @@ func NewMountFromProto(in *pb.Mount) *Mount {
 		MountType:        in.MountType,
 		MountPointConfig: mountPointConfig,
 		DurableDisk:      durableDisk,
+		SubPath:          subPath,
+		MaxStorageBytes:  maxStorageBytes,
 	}
 }
 

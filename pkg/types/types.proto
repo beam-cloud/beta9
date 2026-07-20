@@ -176,6 +176,8 @@ message Mount {
   string mount_type = 5;
   MountPointConfig mount_point_config = 6;
   DurableDiskMountConfig durable_disk = 7;
+  optional string sub_path = 8;
+  optional int64 max_storage_bytes = 9;
 }
 
 message MountPointConfig {
