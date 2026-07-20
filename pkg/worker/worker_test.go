@@ -143,6 +143,42 @@ func TestCalculateCPUShares(t *testing.T) {
 	}
 }
 
+func TestEnsureGVisorShmemTHP(t *testing.T) {
+	tests := []struct {
+		name       string
+		policy     string
+		wantChange bool
+		wantPolicy string
+	}{
+		{
+			name:       "enables disabled policy",
+			policy:     "always within_size advise [never] deny force\n",
+			wantChange: true,
+			wantPolicy: "advise",
+		},
+		{
+			name:       "preserves enabled policy",
+			policy:     "always within_size [advise] never deny force\n",
+			wantChange: false,
+			wantPolicy: "always within_size [advise] never deny force\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "shmem_enabled")
+			require.NoError(t, os.WriteFile(path, []byte(tt.policy), 0644))
+
+			changed, err := ensureGVisorShmemTHP(path)
+			require.NoError(t, err)
+			require.Equal(t, tt.wantChange, changed)
+			policy, err := os.ReadFile(path)
+			require.NoError(t, err)
+			require.Equal(t, tt.wantPolicy, string(policy))
+		})
+	}
+}
+
 func TestContainerStartLimitForRuntimeUsesRuntimeName(t *testing.T) {
 	t.Setenv(types.WorkerStartConcurrencyEnv, "")
 
