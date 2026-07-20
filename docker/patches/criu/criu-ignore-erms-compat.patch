@@ -1,0 +1,23 @@
+diff --git a/criu/arch/x86/cpu.c b/criu/arch/x86/cpu.c
+--- a/criu/arch/x86/cpu.c
++++ b/criu/arch/x86/cpu.c
+@@ -106,6 +106,11 @@
+ 
+ #define __ins_bit(__l, __v) (1u << ((__v)-32u * (__l)))
+ 
++/*
++ * ERMS changes the performance of REP MOVSB/STOSB, not their availability,
++ * so it must not make an otherwise compatible restore host fail validation.
++ */
++
+ // clang-format off
+ static uint32_t x86_ins_capability_mask[NCAPINTS] = {
+ 	[CPUID_1_EDX] =
+@@ -164,7 +169,6 @@ static uint32_t x86_ins_capability_mask[NCAPINTS] = {
+ 	__ins_bit(CPUID_7_0_EBX, X86_FEATURE_HLE) |
+ 	__ins_bit(CPUID_7_0_EBX, X86_FEATURE_AVX2) |
+ 	__ins_bit(CPUID_7_0_EBX, X86_FEATURE_BMI2) |
+-	__ins_bit(CPUID_7_0_EBX, X86_FEATURE_ERMS) |
+ 	__ins_bit(CPUID_7_0_EBX, X86_FEATURE_RTM) |
+ 	__ins_bit(CPUID_7_0_EBX, X86_FEATURE_MPX) |
+ 	__ins_bit(CPUID_7_0_EBX, X86_FEATURE_AVX512F) |

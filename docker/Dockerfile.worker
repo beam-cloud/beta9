@@ -260,6 +260,7 @@ ARG CRIU_COMMIT=b47c692bb3a73ae45ee1c4ab215a8f6869d40efd
 COPY docker/patches/criu/criu-network-remap.patch /tmp/criu-network-remap.patch
 COPY docker/patches/criu/criu-skip-non-cuda-resume.patch /tmp/criu-skip-non-cuda-resume.patch
 COPY docker/patches/criu/criu-skip-fresh-zero-pages.patch /tmp/criu-skip-fresh-zero-pages.patch
+COPY docker/patches/criu/criu-ignore-erms-compat.patch /tmp/criu-ignore-erms-compat.patch
 
 RUN <<EOT
 set -eux
@@ -291,6 +292,8 @@ if [ "$(uname -m)" = "x86_64" ] || [ "$(uname -m)" = "aarch64" ]; then
     git apply --unidiff-zero /tmp/criu-skip-non-cuda-resume.patch
     git apply --check /tmp/criu-skip-fresh-zero-pages.patch
     git apply /tmp/criu-skip-fresh-zero-pages.patch
+    git apply --check /tmp/criu-ignore-erms-compat.patch
+    git apply /tmp/criu-ignore-erms-compat.patch
 
     if [ "$(uname -m)" = "x86_64" ]; then
         make install-lib install-criu install-compel install-cuda_plugin PREFIX=/usr SKIP_PIP_INSTALL=1
