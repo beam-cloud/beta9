@@ -172,6 +172,8 @@ github.com/beam-cloud/gofuse v0.0.0-20260720090153-5260f93b4ce4 h1:jYXm7tcWJnjbq
 github.com/beam-cloud/gofuse v0.0.0-20260720090153-5260f93b4ce4/go.mod h1:JYi9iIxdYNgxmMgLwtSHO/hmVnP2kfX1oc+mtx+XWLA=
 github.com/beam-cloud/gofuse v0.0.0-20260720101338-0dee93bddece h1:dFf+R9SiHHkU2HF18BYEG4lwLxwcTrqCRvM2AFQrcAI=
 github.com/beam-cloud/gofuse v0.0.0-20260720101338-0dee93bddece/go.mod h1:JYi9iIxdYNgxmMgLwtSHO/hmVnP2kfX1oc+mtx+XWLA=
+github.com/beam-cloud/gofuse v0.0.0-20260720103157-a7e93f86c1ed h1:NNWfD/4NM73rxnYDgO2CjIA+Bymf2VZ5qR2yOnb6JlQ=
+github.com/beam-cloud/gofuse v0.0.0-20260720103157-a7e93f86c1ed/go.mod h1:JYi9iIxdYNgxmMgLwtSHO/hmVnP2kfX1oc+mtx+XWLA=
 github.com/beam-cloud/goproc v0.1.12 h1:anIN5cRWzXgWbbNdFQuOAZv9+yrUCKWWNTgM6HXcoS4=
 github.com/beam-cloud/goproc v0.1.12/go.mod h1:eis19sZHSHNCmj8PjiRCdHwp3kkc31wdW3hrynKZq8k=
 github.com/beam-cloud/redislock v0.0.0-20250201162619-1b534b3be324 h1:2BWf8G8CaZ8vN0rST9uu5BL8P/bDUBwXJYVLwWwaLVU=

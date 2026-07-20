@@ -337,4 +337,4 @@ replace github.com/aws/aws-sdk-go => github.com/beam-cloud/geesefs/s3ext v0.0.0-
 
 replace github.com/winfsp/cgofuse => github.com/vitalif/cgofuse v0.0.0-20230609211427-22e8fa44f6b8
 
-replace github.com/jacobsa/fuse => github.com/beam-cloud/gofuse v0.0.0-20260720101338-0dee93bddece
+replace github.com/jacobsa/fuse => github.com/beam-cloud/gofuse v0.0.0-20260720103157-a7e93f86c1ed
