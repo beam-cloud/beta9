@@ -122,6 +122,7 @@ type Client struct {
 	hostDirectory         HostDirectory
 	minRetryLengthBytes   int64
 	maxGetContentAttempts int64
+	closed                bool
 }
 
 type localHostCacheKey struct {
@@ -231,12 +232,14 @@ func NewClientWithHostDirectory(ctx context.Context, cfg Config, metadataStore C
 }
 
 func (c *Client) Cleanup() error {
-	if c.clientConfig.CacheFS.Enabled && c.cachefsServer != nil {
-		c.cachefsServer.Unmount()
-	}
-
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	if c.closed {
+		c.mu.Unlock()
+		return nil
+	}
+	c.closed = true
+	cachefsServer := c.cachefsServer
+	c.cachefsServer = nil
 	for hostID, conn := range c.grpcConns {
 		_ = conn.Close()
 		delete(c.grpcConns, hostID)
@@ -246,10 +249,18 @@ func (c *Client) Cleanup() error {
 		pool.close()
 		delete(c.rawReadPools, hostID)
 	}
+	c.mu.Unlock()
+
+	if c.clientConfig.CacheFS.Enabled && cachefsServer != nil {
+		cachefsServer.Unmount()
+	}
+
+	c.mu.Lock()
 	if c.localDiskStore != nil {
 		c.localDiskStore.Cleanup()
 		c.localDiskStore = nil
 	}
+	c.mu.Unlock()
 	return nil
 }
 
@@ -1187,6 +1198,11 @@ func (c *Client) rawReadInto(ctx context.Context, host *Host, hash string, offse
 	}
 
 	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		status = "client_closed"
+		return 0, ErrClientNotFound
+	}
 	pool := c.rawReadPools[host.HostId]
 	if pool == nil {
 		pool = newRawReadConnPool(addr, c.clientConfig.ReadTransport.MaxActiveConnsPerHost, c.clientConfig.ReadTransport.MaxIdleConnsPerHost)
@@ -1228,16 +1244,15 @@ func (c *Client) rawReadInto(ctx context.Context, host *Host, hash string, offse
 			_ = conn.SetDeadline(time.Time{})
 			pool.put(conn)
 		} else {
-			_ = conn.Close()
-			pool.release()
+			pool.discard(conn)
 		}
 	}()
 
-	contextError := func(err error) error {
+	transportError := func(err error) error {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
-		return err
+		return fmt.Errorf("%w: %v", ErrUnableToReachHost, err)
 	}
 
 	length := int64(len(dst))
@@ -1247,7 +1262,7 @@ func (c *Client) rawReadInto(ctx context.Context, host *Host, hash string, offse
 		atomic.AddInt64(&cachePathStats.clientRawHeaderNanos, headerElapsed.Nanoseconds())
 		status = "write_request_error"
 		atomic.AddInt64(&cachePathStats.clientRawErrors, 1)
-		return 0, contextError(err)
+		return 0, transportError(err)
 	}
 	respStatus, responseLength, err := readRawReadResponseHeader(conn)
 	headerElapsed = time.Since(headerStarted)
@@ -1255,7 +1270,7 @@ func (c *Client) rawReadInto(ctx context.Context, host *Host, hash string, offse
 	if err != nil {
 		status = "read_header_error"
 		atomic.AddInt64(&cachePathStats.clientRawErrors, 1)
-		return 0, contextError(err)
+		return 0, transportError(err)
 	}
 	if respStatus == rawReadStatusMiss {
 		status = "miss"
@@ -1272,7 +1287,7 @@ func (c *Client) rawReadInto(ctx context.Context, host *Host, hash string, offse
 	if respStatus != rawReadStatusOK || responseLength != length {
 		status = "bad_response"
 		atomic.AddInt64(&cachePathStats.clientRawErrors, 1)
-		return 0, ErrUnableToReachHost
+		return 0, transportError(fmt.Errorf("unexpected raw response status=%d length=%d want=%d", respStatus, responseLength, length))
 	}
 	bodyStarted := time.Now()
 	if _, err := io.ReadFull(conn, dst); err != nil {
@@ -1280,7 +1295,7 @@ func (c *Client) rawReadInto(ctx context.Context, host *Host, hash string, offse
 		atomic.AddInt64(&cachePathStats.clientRawBodyNanos, bodyElapsed.Nanoseconds())
 		status = "body_error"
 		atomic.AddInt64(&cachePathStats.clientRawErrors, 1)
-		return 0, contextError(err)
+		return 0, transportError(err)
 	}
 	bodyElapsed = time.Since(bodyStarted)
 	atomic.AddInt64(&cachePathStats.clientRawBodyNanos, bodyElapsed.Nanoseconds())
@@ -1685,6 +1700,12 @@ func (c *Client) ReadContentIntoWithTrace(ctx context.Context, hash string, offs
 	if err := ctx.Err(); err != nil {
 		return 0, trace, err
 	}
+	c.mu.RLock()
+	closed := c.closed
+	c.mu.RUnlock()
+	if closed {
+		return 0, trace, ErrClientNotFound
+	}
 	if c.clientConfig.PreferLocalCacheHost {
 		if n, ok := c.readContentIntoFromPreferredLocalStores(hash, offset, dst, &trace); ok {
 			return n, trace, nil
@@ -1732,6 +1753,7 @@ func (c *Client) tryReadContentIntoKnownHosts(ctx context.Context, hash string, 
 	primaryUnavailable := false
 	selectedUnavailable := false
 	contentMissing := false
+	rawReadBusy := false
 	hostCount := c.readContentIntoHostCount(length)
 	checked := make(map[string]struct{}, hostCount)
 
@@ -1796,6 +1818,11 @@ func (c *Client) tryReadContentIntoKnownHosts(ctx context.Context, hash string, 
 			lastErr = ErrContentNotFound
 			continue
 		}
+		if errors.Is(err, ErrRawReadBusy) {
+			rawReadBusy = true
+			lastErr = ErrRawReadBusy
+			continue
+		}
 		if err == ErrHostNotFound {
 			if hostIndex == 0 {
 				primaryUnavailable = true
@@ -1820,6 +1847,9 @@ func (c *Client) tryReadContentIntoKnownHosts(ctx context.Context, hash string, 
 
 	if primaryUnavailable || (selectedUnavailable && !contentMissing) {
 		return 0, ErrSelectedHostUnavailable
+	}
+	if rawReadBusy {
+		return 0, ErrRawReadBusy
 	}
 	if contentMissing {
 		return 0, ErrContentNotFound

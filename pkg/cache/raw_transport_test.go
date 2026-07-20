@@ -99,6 +99,41 @@ func (c *countingRawFallbackClient) GetContent(context.Context, *proto.CacheGetC
 	return nil, io.ErrUnexpectedEOF
 }
 
+// stableOrderedTestHasher preserves a host's rank when removeHost replaces its
+// live endpoint with the corresponding logical-only host. Production rendezvous
+// hashing has the same property because Host.Bytes is based on the stable ID.
+type stableOrderedTestHasher struct {
+	hosts []*Host
+}
+
+func (h *stableOrderedTestHasher) Add(hosts ...*Host) {
+	for _, host := range hosts {
+		if host == nil {
+			continue
+		}
+		replaced := false
+		for i, existing := range h.hosts {
+			if existing != nil && existing.HostId == host.HostId {
+				h.hosts[i] = host
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			h.hosts = append(h.hosts, host)
+		}
+	}
+}
+
+func (h *stableOrderedTestHasher) Remove(*Host) {}
+
+func (h *stableOrderedTestHasher) GetN(n int, _ string) []*Host {
+	if n > len(h.hosts) {
+		n = len(h.hosts)
+	}
+	return h.hosts[:n]
+}
+
 func TestRawReadAdmissionDefaultsPreserveEightMaxSizedRequests(t *testing.T) {
 	admission := newRawReadAdmission(ServerReadTransportConfig{})
 	releases := make([]func(), 0, 8)
@@ -299,6 +334,204 @@ func TestRawReadBusyIsReusableAndRetryableWithoutHostMutation(t *testing.T) {
 		require.Zero(t, grpcFallback.calls.Load())
 		require.True(t, hostMap.Get(host.HostId).HasEndpoint())
 	})
+}
+
+func TestRawReadEstablishedTransportFailureSkipsSameHostGRPC(t *testing.T) {
+	content := []byte("content from the healthy replica")
+	resetListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	var resetAccepts atomic.Int64
+	resetDone := make(chan struct{})
+	go func() {
+		defer close(resetDone)
+		conn, acceptErr := resetListener.Accept()
+		if acceptErr != nil {
+			return
+		}
+		resetAccepts.Add(1)
+		defer conn.Close()
+		magic := make([]byte, len(rawReadMagic))
+		if _, err := io.ReadFull(conn, magic); err != nil || string(magic) != rawReadMagic {
+			return
+		}
+		_, _ = readRawReadRequest(conn)
+		// Close without a response to model an established connection reset/EOF.
+	}()
+	t.Cleanup(func() {
+		_ = resetListener.Close()
+		<-resetDone
+	})
+
+	hitEndpoint := startRawTestEndpoint(t, func(rawReadRequest, int64) (byte, []byte) {
+		return rawReadStatusOK, content
+	})
+	resetHost := &Host{HostId: "reset-host", PrivateAddr: resetListener.Addr().String()}
+	hitHost := &Host{HostId: "hit-host", PrivateAddr: hitEndpoint.addr()}
+	hostMap := NewHostMap(GlobalConfig{}, nil)
+	hostMap.Set(resetHost)
+	hostMap.Set(hitHost)
+	resetGRPC := &countingRawFallbackClient{}
+	hitGRPC := &countingRawFallbackClient{}
+	client := &Client{
+		ctx: context.Background(),
+		clientConfig: ClientConfig{
+			NTopHosts: 2,
+			ReadTransport: ClientReadTransportConfig{
+				Enabled:               true,
+				MaxActiveConnsPerHost: 1,
+				MaxIdleConnsPerHost:   1,
+			},
+		},
+		grpcClients:           map[string]proto.CacheClient{resetHost.HostId: resetGRPC, hitHost.HostId: hitGRPC},
+		grpcConns:             make(map[string]*grpc.ClientConn),
+		localServers:          make(map[string]*Server),
+		rawReadPools:          make(map[string]*rawReadConnPool),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
+		hostMap:               hostMap,
+		hasher:                &stableOrderedTestHasher{hosts: []*Host{resetHost, hitHost}},
+		maxGetContentAttempts: 2,
+	}
+	t.Cleanup(func() { require.NoError(t, client.Cleanup()) })
+
+	dst := make([]byte, len(content))
+	n, trace, err := client.ReadContentIntoWithTrace(context.Background(), "hash", 0, dst, ClientOptions{})
+	require.NoError(t, err)
+	require.Equal(t, int64(len(content)), n)
+	require.Equal(t, content, dst)
+	require.Len(t, trace.Attempts, 2)
+	require.Equal(t, "unavailable", trace.Attempts[0].Result)
+	require.Equal(t, "raw", trace.Attempts[1].Source)
+	require.Zero(t, resetGRPC.calls.Load())
+	require.Zero(t, hitGRPC.calls.Load())
+	require.Equal(t, int64(1), resetAccepts.Load())
+	require.False(t, hostMap.Get(resetHost.HostId).HasEndpoint())
+}
+
+func TestRawReadBusyTakesPrecedenceOverReplicaMiss(t *testing.T) {
+	busyEndpoint := startRawTestEndpoint(t, func(rawReadRequest, int64) (byte, []byte) {
+		return rawReadStatusBusy, nil
+	})
+	missEndpoint := startRawTestEndpoint(t, func(rawReadRequest, int64) (byte, []byte) {
+		return rawReadStatusMiss, nil
+	})
+	busyHost := &Host{HostId: "busy-host", PrivateAddr: busyEndpoint.addr()}
+	missHost := &Host{HostId: "miss-host", PrivateAddr: missEndpoint.addr()}
+	hostMap := NewHostMap(GlobalConfig{}, nil)
+	hostMap.Set(busyHost)
+	hostMap.Set(missHost)
+	busyGRPC := &countingRawFallbackClient{}
+	missGRPC := &countingRawFallbackClient{}
+	var refreshes atomic.Int64
+	client := &Client{
+		ctx: context.Background(),
+		clientConfig: ClientConfig{
+			NTopHosts: 2,
+			ReadTransport: ClientReadTransportConfig{
+				Enabled:               true,
+				MaxActiveConnsPerHost: 1,
+				MaxIdleConnsPerHost:   1,
+			},
+		},
+		grpcClients:    map[string]proto.CacheClient{busyHost.HostId: busyGRPC, missHost.HostId: missGRPC},
+		grpcConns:      make(map[string]*grpc.ClientConn),
+		localServers:   make(map[string]*Server),
+		rawReadPools:   make(map[string]*rawReadConnPool),
+		localHostCache: make(map[localHostCacheKey]*localClientCache),
+		hostMap:        hostMap,
+		hostDirectory: testHostDirectoryFunc(func(context.Context, string) ([]*Host, error) {
+			refreshes.Add(1)
+			return []*Host{busyHost, missHost}, nil
+		}),
+		hasher:                &orderedTestHasher{hosts: []*Host{busyHost, missHost}},
+		maxGetContentAttempts: 2,
+	}
+	t.Cleanup(func() { require.NoError(t, client.Cleanup()) })
+
+	_, trace, err := client.ReadContentIntoWithTrace(context.Background(), "hash", 0, make([]byte, 1), ClientOptions{})
+	require.ErrorIs(t, err, ErrRawReadBusy)
+	require.Equal(t, "busy", trace.Result)
+	require.Equal(t, 1, trace.HostRefreshes)
+	require.Equal(t, int64(1), refreshes.Load())
+	require.Equal(t, int64(2), busyEndpoint.requests.Load())
+	require.Equal(t, int64(2), missEndpoint.requests.Load())
+	require.Zero(t, busyGRPC.calls.Load())
+	require.Zero(t, missGRPC.calls.Load())
+	require.True(t, hostMap.Get(busyHost.HostId).HasEndpoint())
+	require.True(t, hostMap.Get(missHost.HostId).HasEndpoint())
+}
+
+func TestClientCleanupClosesActiveRawConnectionAndPreventsRecreation(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	requestSeen := make(chan struct{})
+	serverDone := make(chan struct{})
+	var accepts atomic.Int64
+	go func() {
+		defer close(serverDone)
+		conn, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			return
+		}
+		accepts.Add(1)
+		defer conn.Close()
+		magic := make([]byte, len(rawReadMagic))
+		if _, err := io.ReadFull(conn, magic); err != nil || string(magic) != rawReadMagic {
+			return
+		}
+		if _, err := readRawReadRequest(conn); err != nil {
+			return
+		}
+		close(requestSeen)
+		_, _ = io.Copy(io.Discard, conn)
+	}()
+	t.Cleanup(func() {
+		_ = listener.Close()
+		<-serverDone
+	})
+
+	client := &Client{
+		ctx: context.Background(),
+		clientConfig: ClientConfig{ReadTransport: ClientReadTransportConfig{
+			Enabled:               true,
+			MaxActiveConnsPerHost: 1,
+			MaxIdleConnsPerHost:   1,
+		}},
+		grpcClients:    make(map[string]proto.CacheClient),
+		grpcConns:      make(map[string]*grpc.ClientConn),
+		localServers:   make(map[string]*Server),
+		rawReadPools:   make(map[string]*rawReadConnPool),
+		localHostCache: make(map[localHostCacheKey]*localClientCache),
+	}
+	host := &Host{HostId: "cleanup-host", PrivateAddr: listener.Addr().String()}
+	readDone := make(chan error, 1)
+	go func() {
+		_, err := client.rawReadInto(context.Background(), host, "hash", 0, make([]byte, 1))
+		readDone <- err
+	}()
+
+	select {
+	case <-requestSeen:
+	case <-time.After(time.Second):
+		t.Fatal("raw request did not reach the blocking endpoint")
+	}
+	require.NoError(t, client.Cleanup())
+	select {
+	case err := <-readDone:
+		require.ErrorIs(t, err, ErrUnableToReachHost)
+	case <-time.After(time.Second):
+		t.Fatal("client cleanup did not close the active raw connection")
+	}
+	select {
+	case <-serverDone:
+	case <-time.After(time.Second):
+		t.Fatal("server did not observe the active connection close")
+	}
+
+	_, err = client.rawReadInto(context.Background(), host, "hash", 0, make([]byte, 1))
+	require.ErrorIs(t, err, ErrClientNotFound)
+	require.Equal(t, int64(1), accepts.Load())
+	require.Empty(t, client.rawReadPools)
+	require.NoError(t, client.Cleanup())
 }
 
 func TestReadContentIntoPropagatesRawContextWithoutHostMutation(t *testing.T) {

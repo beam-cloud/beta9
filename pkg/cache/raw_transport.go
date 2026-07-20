@@ -742,6 +742,7 @@ type rawReadConnPool struct {
 	maxIdle   int
 	mu        sync.Mutex
 	idle      []net.Conn
+	active    map[net.Conn]struct{}
 	tokens    chan struct{}
 	closed    bool
 	closedCh  chan struct{}
@@ -758,6 +759,7 @@ func newRawReadConnPool(addr string, maxActive int, maxIdle int) *rawReadConnPoo
 		addr:      addr,
 		maxActive: maxActive,
 		maxIdle:   maxIdle,
+		active:    make(map[net.Conn]struct{}),
 		tokens:    make(chan struct{}, maxActive),
 		closedCh:  make(chan struct{}),
 	}
@@ -778,6 +780,13 @@ func (p *rawReadConnPool) get(ctx context.Context) (net.Conn, error) {
 	if last >= 0 {
 		conn := p.idle[last]
 		p.idle = p.idle[:last]
+		if err := ctx.Err(); err != nil {
+			p.mu.Unlock()
+			_ = conn.Close()
+			p.release()
+			return nil, err
+		}
+		p.active[conn] = struct{}{}
 		p.mu.Unlock()
 		return conn, nil
 	}
@@ -806,13 +815,17 @@ func (p *rawReadConnPool) get(ctx context.Context) (net.Conn, error) {
 		return nil, err
 	}
 	p.mu.Lock()
-	closed := p.closed
-	p.mu.Unlock()
-	if closed || ctx.Err() != nil {
+	if p.closed || ctx.Err() != nil {
+		p.mu.Unlock()
 		_ = conn.Close()
 		p.release()
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		return nil, ErrUnableToReachHost
 	}
+	p.active[conn] = struct{}{}
+	p.mu.Unlock()
 	return conn, nil
 }
 
@@ -851,6 +864,7 @@ func (p *rawReadConnPool) put(conn net.Conn) {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	delete(p.active, conn)
 	if p.closed {
 		_ = conn.Close()
 		p.release()
@@ -865,16 +879,33 @@ func (p *rawReadConnPool) put(conn net.Conn) {
 	p.release()
 }
 
+func (p *rawReadConnPool) discard(conn net.Conn) {
+	p.mu.Lock()
+	delete(p.active, conn)
+	p.mu.Unlock()
+	if conn != nil {
+		_ = conn.Close()
+	}
+	p.release()
+}
+
 func (p *rawReadConnPool) close() {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	if p.closed {
+		p.mu.Unlock()
 		return
 	}
 	p.closed = true
 	close(p.closedCh)
-	for _, conn := range p.idle {
-		_ = conn.Close()
+	conns := make([]net.Conn, 0, len(p.idle)+len(p.active))
+	conns = append(conns, p.idle...)
+	for conn := range p.active {
+		conns = append(conns, conn)
 	}
 	p.idle = nil
+	p.active = make(map[net.Conn]struct{})
+	p.mu.Unlock()
+	for _, conn := range conns {
+		_ = conn.Close()
+	}
 }
