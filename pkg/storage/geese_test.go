@@ -77,10 +77,10 @@ func TestWithBoundedMountOption(t *testing.T) {
 		options []string
 		want    []string
 	}{
-		{name: "adds absent option", options: []string{"allow_other"}, want: []string{"allow_other", "max_read=524288"}},
-		{name: "clamps larger option", options: []string{"allow_other,max_read=1048576"}, want: []string{"allow_other,max_read=524288"}},
+		{name: "adds absent option", options: []string{"allow_other"}, want: []string{"allow_other", "max_read=1048576"}},
+		{name: "clamps larger option", options: []string{"allow_other,max_read=2097152"}, want: []string{"allow_other,max_read=1048576"}},
 		{name: "preserves smaller option", options: []string{"max_read=262144"}, want: []string{"max_read=262144"}},
-		{name: "replaces invalid option", options: []string{"max_read=invalid"}, want: []string{"max_read=524288"}},
+		{name: "replaces invalid option", options: []string{"max_read=invalid"}, want: []string{"max_read=1048576"}},
 	}
 
 	for _, tt := range tests {

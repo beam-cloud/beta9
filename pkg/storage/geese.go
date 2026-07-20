@@ -29,7 +29,7 @@ const (
 	defaultGeeseFSReadAheadKb      = 32768
 	defaultGeeseFSReadAheadLargeKb = 131072
 	defaultGeeseFSMaxReadBytes     = 1048576
-	defaultGeeseFSSpliceReadBytes  = 512 * 1024
+	defaultGeeseFSSpliceReadBytes  = 1024 * 1024
 	defaultGeeseFSPartSizeBytes    = 64 * 1024 * 1024
 	defaultGeeseFSHashMinFileKb    = 1024
 	defaultGeeseFSMinMemoryLimitMB = 128
