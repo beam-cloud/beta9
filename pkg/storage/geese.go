@@ -57,6 +57,12 @@ type GeeseStorage struct {
 	volumeReporter VolumeContentReporter
 }
 
+func (s *GeeseStorage) volumeCacheScope() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.workspaceID
+}
+
 func (s *GeeseStorage) SetVolumeContentReporter(workspaceID string, reporter VolumeContentReporter) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -128,18 +134,20 @@ func firstInt64Value(data map[string]interface{}, keys ...string) int64 {
 
 type geeseContentCache struct {
 	client *cache.Client
+	scope  func() string
 }
 
 var _ cfg.ContentCache = (*geeseContentCache)(nil)
 var _ cfg.ContentCacheReadInto = (*geeseContentCache)(nil)
 var _ cfg.ContentCacheStoreLocalPath = (*geeseContentCache)(nil)
 var _ cfg.ContentCacheClientLocalPageFileViews = (*geeseContentCache)(nil)
+var _ cfg.ContentCacheObjectHashRegistry = (*geeseContentCache)(nil)
 
-func newGeeseContentCache(client *cache.Client) *geeseContentCache {
+func newGeeseContentCache(client *cache.Client, scope func() string) *geeseContentCache {
 	if client == nil {
 		return nil
 	}
-	return &geeseContentCache{client: client}
+	return &geeseContentCache{client: client, scope: scope}
 }
 
 func (c *geeseContentCache) GetContent(hash string, offset int64, length int64, opts struct{ RoutingKey string }) ([]byte, error) {
@@ -188,6 +196,40 @@ func (c *geeseContentCache) StoreContentFromLocalPath(source struct {
 		RoutingKey: opts.RoutingKey,
 		Lock:       opts.Lock,
 	})
+}
+
+func (c *geeseContentCache) volumeObjectIdentity(identity cfg.ContentCacheObjectIdentity) (cache.VolumeObjectIdentity, error) {
+	scope := ""
+	if c.scope != nil {
+		scope = c.scope()
+	}
+	if scope == "" {
+		return cache.VolumeObjectIdentity{}, errors.New("workspace cache scope is unavailable")
+	}
+	return cache.VolumeObjectIdentity{
+		Scope:    scope,
+		Endpoint: identity.Endpoint,
+		Bucket:   identity.Bucket,
+		Path:     identity.Path,
+		ETag:     identity.ETag,
+		Size:     identity.Size,
+	}, nil
+}
+
+func (c *geeseContentCache) LookupObjectContentHash(ctx context.Context, identity cfg.ContentCacheObjectIdentity) (string, bool, error) {
+	volumeIdentity, err := c.volumeObjectIdentity(identity)
+	if err != nil {
+		return "", false, err
+	}
+	return c.client.LookupVolumeObjectContentHash(ctx, volumeIdentity)
+}
+
+func (c *geeseContentCache) StoreObjectContentHash(ctx context.Context, identity cfg.ContentCacheObjectIdentity, hash string) error {
+	volumeIdentity, err := c.volumeObjectIdentity(identity)
+	if err != nil {
+		return err
+	}
+	return c.client.StoreVolumeObjectContentHash(ctx, volumeIdentity, hash)
 }
 
 func (c *geeseContentCache) ClientLocalPageFileViews(hash string, offset int64, length int64, opts struct{ RoutingKey string }) ([]cfg.ClientLocalPageFileView, error) {
@@ -325,7 +367,7 @@ func (s *GeeseStorage) Mount(localPath string) error {
 
 	// If we have a cache client available, use it
 	if s.cacheClient != nil {
-		flags.ExternalCacheClient = newGeeseContentCache(s.cacheClient)
+		flags.ExternalCacheClient = newGeeseContentCache(s.cacheClient, s.volumeCacheScope)
 		flags.ExternalCacheStreamingEnabled = s.config.CacheStreamingEnabled
 		flags.ExternalCacheDirectIO = s.config.CacheDirectIO
 	}

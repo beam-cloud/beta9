@@ -64,15 +64,15 @@ func (sm *WorkspaceStorageManager) Create(workspaceName string, storage storage.
 }
 
 func (sm *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage *types.WorkspaceStorage) (storage.Storage, error) {
+	unlock := sm.lockWorkspaceMount(workspaceName)
+	defer unlock()
+
 	mountPath := path.Join(sm.config.WorkspaceStorage.BaseMountPath, workspaceName)
 	mount, ok := sm.mounts.Get(workspaceName)
 	if ok && workspaceMountHealthy(mount, mountPath) {
 		sm.mountLastUsed.Set(workspaceName, time.Now())
 		return mount, nil
 	}
-
-	unlock := sm.lockWorkspaceMount(workspaceName)
-	defer unlock()
 
 	mount, ok = sm.mounts.Get(workspaceName)
 	if ok {
@@ -195,15 +195,16 @@ func validateWorkspaceStorage(workspaceStorage *types.WorkspaceStorage) error {
 }
 
 func (sm *WorkspaceStorageManager) Unmount(workspaceName string) error {
-	mount, ok := sm.mounts.Get(workspaceName)
-	if !ok {
-		return nil
-	}
-
 	unlock := sm.lockWorkspaceMount(workspaceName)
 	defer unlock()
+	return sm.unmountLocked(workspaceName)
+}
 
-	mount, ok = sm.mounts.Get(workspaceName)
+// unmountLocked requires the per-workspace mount lock. Keeping the lookup,
+// unmount, path removal, and map deletion in one critical section prevents a
+// task from receiving a mount that cleanup is about to tear down.
+func (sm *WorkspaceStorageManager) unmountLocked(workspaceName string) error {
+	mount, ok := sm.mounts.Get(workspaceName)
 	if !ok {
 		return nil
 	}
@@ -233,6 +234,40 @@ func (sm *WorkspaceStorageManager) Unmount(workspaceName string) error {
 	return nil
 }
 
+func (sm *WorkspaceStorageManager) workspaceActive(workspaceName string) bool {
+	if sm.containerInstances == nil {
+		return false
+	}
+	active := false
+	sm.containerInstances.Range(func(_ string, value *ContainerInstance) bool {
+		if value != nil && value.Request != nil && value.Request.Workspace.Name == workspaceName {
+			active = true
+			return false
+		}
+		return true
+	})
+	return active
+}
+
+// unmountIfIdle revalidates the cleanup decision while holding the same lock
+// used by Mount. A stale cleanup snapshot can therefore neither unmount a mount
+// just handed to a new task nor replace its FUSE source with an empty directory.
+func (sm *WorkspaceStorageManager) unmountIfIdle(workspaceName string, lastUsedBefore time.Time) (bool, error) {
+	unlock := sm.lockWorkspaceMount(workspaceName)
+	defer unlock()
+
+	if _, ok := sm.mounts.Get(workspaceName); !ok {
+		return false, nil
+	}
+	if sm.workspaceActive(workspaceName) {
+		return false, nil
+	}
+	if lastUsed, ok := sm.mountLastUsed.Get(workspaceName); ok && lastUsed.After(lastUsedBefore) {
+		return false, nil
+	}
+	return true, sm.unmountLocked(workspaceName)
+}
+
 func (sm *WorkspaceStorageManager) lockWorkspaceMount(workspaceName string) func() {
 	sm.mountLocksMu.Lock()
 	lock, ok := sm.mountLocks[workspaceName]
@@ -260,33 +295,21 @@ func (sm *WorkspaceStorageManager) Cleanup() error {
 }
 
 func (sm *WorkspaceStorageManager) cleanupUnused(lastUsedBefore time.Time) error {
-	active := make(map[string]struct{})
-
-	sm.containerInstances.Range(func(_ string, value *ContainerInstance) bool {
-		active[value.Request.Workspace.Name] = struct{}{}
-		return true
-	})
-
-	var unused []string
+	var candidates []string
 	sm.mounts.Range(func(workspaceName string, _ storage.Storage) bool {
-		if _, ok := active[workspaceName]; ok {
-			return true
-		}
-		if lastUsed, ok := sm.mountLastUsed.Get(workspaceName); ok && lastUsed.After(lastUsedBefore) {
-			return true
-		}
-		unused = append(unused, workspaceName)
+		candidates = append(candidates, workspaceName)
 		return true
 	})
 
-	for _, workspaceName := range unused {
-		log.Info().Str("workspace_name", workspaceName).Msg("unmounting storage")
-		err := sm.Unmount(workspaceName)
+	for _, workspaceName := range candidates {
+		unmounted, err := sm.unmountIfIdle(workspaceName, lastUsedBefore)
 		if err != nil {
 			log.Error().Str("workspace_name", workspaceName).Err(err).Msg("failed to unmount storage")
 			continue
 		}
-		log.Info().Str("workspace_name", workspaceName).Msg("unmounted storage")
+		if unmounted {
+			log.Info().Str("workspace_name", workspaceName).Msg("unmounted idle workspace storage")
+		}
 	}
 
 	return nil

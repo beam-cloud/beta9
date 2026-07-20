@@ -1135,12 +1135,6 @@ func (s *Worker) shutdown() error {
 	s.waitForActiveContainersBeforeShutdown()
 	s.stopActiveContainersForShutdown()
 
-	if s.cacheManager != nil {
-		if err := s.cacheManager.Close(); err != nil {
-			errs = errors.Join(errs, fmt.Errorf("failed to cleanup cache: %v", err))
-		}
-	}
-
 	if s.containerNetworkManager != nil {
 		if err := s.containerNetworkManager.Close(); err != nil {
 			errs = errors.Join(errs, fmt.Errorf("failed to cleanup preallocated container networks: %v", err))
@@ -1172,6 +1166,15 @@ func (s *Worker) shutdown() error {
 	err = s.storageManager.Cleanup()
 	if err != nil {
 		errs = errors.Join(errs, fmt.Errorf("failed to cleanup workspace storage: %v", err))
+	}
+
+	// Workspace GeeseFS mounts may still be draining lazy read-through stores
+	// and durable identity publications. Keep the cache client alive until every
+	// workspace mount has completed WaitForFlush and unmounted.
+	if s.cacheManager != nil {
+		if err := s.cacheManager.Close(); err != nil {
+			errs = errors.Join(errs, fmt.Errorf("failed to cleanup cache: %v", err))
+		}
 	}
 
 	if err := cleanupImageMountPath(s.imageMountPath); err != nil {
