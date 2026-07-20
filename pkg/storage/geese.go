@@ -29,6 +29,7 @@ const (
 	defaultGeeseFSReadAheadKb      = 32768
 	defaultGeeseFSReadAheadLargeKb = 131072
 	defaultGeeseFSMaxReadBytes     = 1048576
+	defaultGeeseFSSpliceReadBytes  = 512 * 1024
 	defaultGeeseFSPartSizeBytes    = 64 * 1024 * 1024
 	defaultGeeseFSHashMinFileKb    = 1024
 	defaultGeeseFSMinMemoryLimitMB = 128
@@ -304,7 +305,11 @@ func (s *GeeseStorage) Mount(localPath string) error {
 		flags.StatsInterval = 5 * time.Second
 	}
 	flags.FuseReadAheadKB = defaultGeeseFSFuseReadAheadKb
-	flags.MountOptions = withDefaultMountOption(s.config.MountOptions, "max_read", strconv.Itoa(defaultGeeseFSMaxReadBytes))
+	if s.cacheClient != nil && !s.config.DisableVolumeCaching {
+		flags.MountOptions = withBoundedMountOption(s.config.MountOptions, "max_read", defaultGeeseFSSpliceReadBytes)
+	} else {
+		flags.MountOptions = withDefaultMountOption(s.config.MountOptions, "max_read", strconv.Itoa(defaultGeeseFSMaxReadBytes))
+	}
 	flags.PartSizes = []cfg.PartSizeConfig{
 		{PartSize: defaultGeeseFSPartSizeBytes, PartCount: 1000},
 		{PartSize: 128 * 1024 * 1024, PartCount: 8000},
@@ -478,6 +483,41 @@ func withDefaultMountOption(options []string, key, value string) []string {
 	out := make([]string, 0, len(options)+1)
 	out = append(out, options...)
 	out = append(out, fmt.Sprintf("%s=%s", key, value))
+	return out
+}
+
+// withBoundedMountOption adds key=maxValue when absent and clamps an existing
+// larger or invalid value. Smaller explicit values are preserved. Cached
+// volume reads use this to ensure every FUSE response fits in the negotiated
+// splice pipe, including its header and an unaligned source page.
+func withBoundedMountOption(options []string, key string, maxValue int) []string {
+	if maxValue <= 0 {
+		return options
+	}
+	out := append([]string(nil), options...)
+	found := false
+	for optionIndex, option := range out {
+		parts := strings.Split(option, ",")
+		changed := false
+		for partIndex, part := range parts {
+			name, value, hasValue := strings.Cut(part, "=")
+			if name != key {
+				continue
+			}
+			found = true
+			parsed, err := strconv.Atoi(value)
+			if !hasValue || err != nil || parsed <= 0 || parsed > maxValue {
+				parts[partIndex] = fmt.Sprintf("%s=%d", key, maxValue)
+				changed = true
+			}
+		}
+		if changed {
+			out[optionIndex] = strings.Join(parts, ",")
+		}
+	}
+	if !found {
+		out = append(out, fmt.Sprintf("%s=%d", key, maxValue))
+	}
 	return out
 }
 
