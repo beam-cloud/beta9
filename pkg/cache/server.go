@@ -53,6 +53,7 @@ type Server struct {
 	metadataStore CacheMetadataStore
 	grpcServer    *grpc.Server
 	listener      net.Listener
+	rawReadLimits *rawReadAdmission
 	s3ClientCache sync.Map
 	draining      atomic.Bool
 	closeOnce     sync.Once
@@ -153,6 +154,7 @@ func NewServerWithOptions(ctx context.Context, cfg Config, locality string, opti
 		metadataStore: metadataStore,
 		privateIpAddr: privateIpAddr,
 		publicIpAddr:  publicIpAddr,
+		rawReadLimits: newRawReadAdmission(effectiveServerConfig.ReadTransport),
 		s3ClientCache: sync.Map{},
 	}
 

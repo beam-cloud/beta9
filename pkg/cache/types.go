@@ -153,6 +153,12 @@ type ServerConfig struct {
 type ServerReadTransportConfig struct {
 	Enabled  bool `key:"enabled" json:"enabled"`
 	Sendfile bool `key:"sendfile" json:"sendfile"`
+	// MaxRequestSizeBytes is the raw-protocol cap and is independent of gRPC.
+	MaxRequestSizeBytes int64 `key:"maxRequestSizeBytes" json:"max_request_size_bytes"`
+	// MaxInflightBytes is a weighted server-wide admission budget.
+	MaxInflightBytes int64 `key:"maxInflightBytes" json:"max_inflight_bytes"`
+	// MaxConcurrentRequests also bounds requests with very small or empty ranges.
+	MaxConcurrentRequests int `key:"maxConcurrentRequests" json:"max_concurrent_requests"`
 }
 
 type ClientConfig struct {

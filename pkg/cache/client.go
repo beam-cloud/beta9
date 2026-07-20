@@ -1185,7 +1185,7 @@ func (c *Client) rawReadInto(ctx context.Context, host *Host, hash string, offse
 	c.mu.Unlock()
 
 	waitStarted := time.Now()
-	conn, err := pool.get(ctx.Done())
+	conn, err := pool.get(ctx)
 	waitElapsed = time.Since(waitStarted)
 	atomic.AddInt64(&cachePathStats.clientRawWaitNanos, waitElapsed.Nanoseconds())
 	if err != nil {
@@ -1194,8 +1194,25 @@ func (c *Client) rawReadInto(ctx context.Context, host *Host, hash string, offse
 		return 0, ErrUnableToReachHost
 	}
 	reusable := false
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(deadline)
+	}
+	var contextCancelled atomic.Bool
+	cancelDone := make(chan struct{})
+	stopCancellation := context.AfterFunc(ctx, func() {
+		defer close(cancelDone)
+		contextCancelled.Store(true)
+		_ = conn.SetDeadline(time.Now())
+	})
 	defer func() {
+		if !stopCancellation() {
+			<-cancelDone
+		}
+		if contextCancelled.Load() {
+			reusable = false
+		}
 		if reusable {
+			_ = conn.SetDeadline(time.Time{})
 			pool.put(conn)
 		} else {
 			_ = conn.Close()
@@ -1203,9 +1220,11 @@ func (c *Client) rawReadInto(ctx context.Context, host *Host, hash string, offse
 		}
 	}()
 
-	if deadline, ok := ctx.Deadline(); ok {
-		_ = conn.SetDeadline(deadline)
-		defer conn.SetDeadline(time.Time{})
+	contextError := func(err error) error {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		return err
 	}
 
 	length := int64(len(dst))
@@ -1215,7 +1234,7 @@ func (c *Client) rawReadInto(ctx context.Context, host *Host, hash string, offse
 		atomic.AddInt64(&cachePathStats.clientRawHeaderNanos, headerElapsed.Nanoseconds())
 		status = "write_request_error"
 		atomic.AddInt64(&cachePathStats.clientRawErrors, 1)
-		return 0, err
+		return 0, contextError(err)
 	}
 	respStatus, responseLength, err := readRawReadResponseHeader(conn)
 	headerElapsed = time.Since(headerStarted)
@@ -1223,7 +1242,7 @@ func (c *Client) rawReadInto(ctx context.Context, host *Host, hash string, offse
 	if err != nil {
 		status = "read_header_error"
 		atomic.AddInt64(&cachePathStats.clientRawErrors, 1)
-		return 0, err
+		return 0, contextError(err)
 	}
 	if respStatus == rawReadStatusMiss {
 		status = "miss"
@@ -1243,7 +1262,7 @@ func (c *Client) rawReadInto(ctx context.Context, host *Host, hash string, offse
 		atomic.AddInt64(&cachePathStats.clientRawBodyNanos, bodyElapsed.Nanoseconds())
 		status = "body_error"
 		atomic.AddInt64(&cachePathStats.clientRawErrors, 1)
-		return 0, err
+		return 0, contextError(err)
 	}
 	bodyElapsed = time.Since(bodyStarted)
 	atomic.AddInt64(&cachePathStats.clientRawBodyNanos, bodyElapsed.Nanoseconds())

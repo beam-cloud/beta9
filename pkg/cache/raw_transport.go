@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -12,20 +13,29 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"golang.org/x/sync/semaphore"
 )
 
 const (
-	rawReadMagic                    = "B9CR\x01"
-	rawReadVersion             byte = 1
-	rawReadStatusOK            byte = 0
-	rawReadStatusMiss          byte = 1
-	rawReadStatusError         byte = 2
-	rawReadHeaderSize               = 19
-	rawReadRespHeaderSize           = 9
-	defaultRawReadChunkBytes        = 1024 * 1024
-	rawReadSocketBufferBytes        = 16 * 1024 * 1024
-	cacheMuxInitialReadTimeout      = 5 * time.Second
+	rawReadMagic                        = "B9CR\x01"
+	rawReadVersion                 byte = 1
+	rawReadStatusOK                byte = 0
+	rawReadStatusMiss              byte = 1
+	rawReadStatusError             byte = 2
+	rawReadHeaderSize                   = 19
+	rawReadRespHeaderSize               = 9
+	defaultRawReadChunkBytes            = 1024 * 1024
+	rawReadSocketBufferBytes            = 16 * 1024 * 1024
+	cacheMuxInitialReadTimeout          = 5 * time.Second
+	rawReadFallbackBufferBytes          = 4 * 1024 * 1024
+	defaultRawReadMaxRequestBytes       = 64 * 1024 * 1024
+	defaultRawReadMaxInflightBytes      = 8 * defaultRawReadMaxRequestBytes
+	defaultRawReadMaxConcurrent         = 64
+	defaultRawReadAdmissionWait         = 60 * time.Second
 )
+
+var errRawReadAdmissionBusy = errors.New("raw read admission is full")
 
 type cacheMuxListener struct {
 	base       net.Listener
@@ -141,6 +151,74 @@ type rawReadPageRegion struct {
 	length     int
 }
 
+// rawReadAdmission bounds server-side raw transport work independently of the
+// gRPC message limit. The byte budget deliberately admits eight maximum-sized
+// requests so the coordinated GeeseFS pipeline can retain its full fanout. The
+// count gate rejects overload immediately, and byte-budget waits are time-bound.
+type rawReadAdmission struct {
+	maxRequestBytes int64
+	inflightBytes   *semaphore.Weighted
+	concurrent      chan struct{}
+	waitTimeout     time.Duration
+}
+
+func newRawReadAdmission(config ServerReadTransportConfig) *rawReadAdmission {
+	maxRequestBytes := config.MaxRequestSizeBytes
+	if maxRequestBytes <= 0 {
+		maxRequestBytes = defaultRawReadMaxRequestBytes
+	}
+	maxInflightBytes := config.MaxInflightBytes
+	if maxInflightBytes <= 0 {
+		maxInflightBytes = defaultRawReadMaxInflightBytes
+	}
+	if maxRequestBytes > maxInflightBytes {
+		maxRequestBytes = maxInflightBytes
+	}
+	maxConcurrent := config.MaxConcurrentRequests
+	if maxConcurrent <= 0 {
+		maxConcurrent = defaultRawReadMaxConcurrent
+	}
+	return &rawReadAdmission{
+		maxRequestBytes: maxRequestBytes,
+		inflightBytes:   semaphore.NewWeighted(maxInflightBytes),
+		concurrent:      make(chan struct{}, maxConcurrent),
+		waitTimeout:     defaultRawReadAdmissionWait,
+	}
+}
+
+func (a *rawReadAdmission) acquire(ctx context.Context, length int64) (func(), error) {
+	if length < 0 || length > a.maxRequestBytes {
+		return nil, fmt.Errorf("raw read length %d exceeds server limit %d", length, a.maxRequestBytes)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	select {
+	case a.concurrent <- struct{}{}:
+	default:
+		return nil, errRawReadAdmissionBusy
+	}
+	if length > 0 && !a.inflightBytes.TryAcquire(length) {
+		waitCtx := ctx
+		cancel := func() {}
+		if a.waitTimeout > 0 {
+			waitCtx, cancel = context.WithTimeout(ctx, a.waitTimeout)
+		}
+		err := a.inflightBytes.Acquire(waitCtx, length)
+		cancel()
+		if err != nil {
+			<-a.concurrent
+			return nil, err
+		}
+	}
+	return func() {
+		if length > 0 {
+			a.inflightBytes.Release(length)
+		}
+		<-a.concurrent
+	}, nil
+}
+
 func readRawReadRequest(r io.Reader) (rawReadRequest, error) {
 	var hdr [rawReadHeaderSize]byte
 	if _, err := io.ReadFull(r, hdr[:]); err != nil {
@@ -227,12 +305,13 @@ func (cs *Server) serveRawRead(conn net.Conn, req rawReadRequest) {
 	var regionElapsed time.Duration
 	var openElapsed time.Duration
 	var sendElapsed time.Duration
+	var admissionElapsed time.Duration
 	var regionCount int
 	defer func() {
 		elapsed := time.Since(started)
 		if shouldTraceCachePath(reqCount, elapsed, status != "ok") {
 			Logger.Debugf(
-				"cache raw server read trace: seq=%d status=%s method=%s hash=%s offset=%d length=%d bytes=%d regions=%d elapsed=%s region=%s open=%s send=%s",
+				"cache raw server read trace: seq=%d status=%s method=%s hash=%s offset=%d length=%d bytes=%d regions=%d elapsed=%s admission=%s region=%s open=%s send=%s",
 				reqCount,
 				status,
 				method,
@@ -242,22 +321,37 @@ func (cs *Server) serveRawRead(conn net.Conn, req rawReadRequest) {
 				responseBytes,
 				regionCount,
 				elapsed.Truncate(time.Millisecond),
+				admissionElapsed.Truncate(time.Microsecond),
 				regionElapsed.Truncate(time.Microsecond),
 				openElapsed.Truncate(time.Microsecond),
 				sendElapsed.Truncate(time.Microsecond),
 			)
 		}
 	}()
-	maxLength := int64(defaultRawReadChunkBytes)
-	if cs.globalConfig.GRPCMessageSizeBytes > 0 {
-		maxLength = int64(cs.globalConfig.GRPCMessageSizeBytes)
+	admission := cs.rawReadLimits
+	if admission == nil {
+		admission = newRawReadAdmission(cs.serverConfig.ReadTransport)
 	}
-	if req.length < 0 || req.length > maxLength {
+	if req.length < 0 || req.length > admission.maxRequestBytes {
 		status = "invalid_length"
 		atomic.AddInt64(&cachePathStats.serverRawErrors, 1)
 		_ = writeRawReadResponseHeader(conn, rawReadStatusError, 0)
 		return
 	}
+	admissionStarted := time.Now()
+	admissionCtx := cs.ctx
+	if admissionCtx == nil {
+		admissionCtx = context.Background()
+	}
+	releaseAdmission, err := admission.acquire(admissionCtx, req.length)
+	admissionElapsed = time.Since(admissionStarted)
+	if err != nil {
+		status = "admission_error"
+		atomic.AddInt64(&cachePathStats.serverRawErrors, 1)
+		_ = writeRawReadResponseHeader(conn, rawReadStatusError, 0)
+		return
+	}
+	defer releaseAdmission()
 
 	regionStarted := time.Now()
 	regions, responseLength, ok, err := cs.rawReadPageRegions(req)
@@ -365,34 +459,84 @@ func (cs *Server) serveRawRead(conn net.Conn, req rawReadRequest) {
 		return
 	}
 
-	buf := make([]byte, req.length)
-	n64, err := cs.cas.ReadAt(req.hash, req.offset, buf)
-	if err != nil || n64 != req.length {
-		status = "miss"
-		atomic.AddInt64(&cachePathStats.serverRawMisses, 1)
-		_ = writeRawReadResponseHeader(conn, rawReadStatusMiss, 0)
+	if req.length == 0 {
+		if err := writeRawReadResponseHeader(conn, rawReadStatusOK, 0); err != nil {
+			status = "write_header_error"
+			atomic.AddInt64(&cachePathStats.serverRawErrors, 1)
+			return
+		}
+		atomic.AddInt64(&cachePathStats.serverRawReadAtHits, 1)
+		method = "readat_stream"
+		status = "ok"
 		return
 	}
-	if err := writeRawReadResponseHeader(conn, rawReadStatusOK, n64); err != nil {
-		status = "write_header_error"
-		atomic.AddInt64(&cachePathStats.serverRawErrors, 1)
-		return
+
+	bufferLength := min(req.length, int64(rawReadFallbackBufferBytes))
+	buf := make([]byte, int(bufferLength))
+	remaining := req.length
+	readOffset := req.offset
+	headerWritten := false
+	for remaining > 0 {
+		chunkLength := min(remaining, int64(len(buf)))
+		n64, readErr := cs.cas.ReadAt(req.hash, readOffset, buf[:chunkLength])
+		if readErr != nil || n64 != chunkLength {
+			if !headerWritten {
+				status = "miss"
+				atomic.AddInt64(&cachePathStats.serverRawMisses, 1)
+				_ = writeRawReadResponseHeader(conn, rawReadStatusMiss, 0)
+				return
+			}
+			status = "readat_stream_error"
+			atomic.AddInt64(&cachePathStats.serverRawErrors, 1)
+			_ = conn.Close()
+			return
+		}
+		if !headerWritten {
+			if err := writeRawReadResponseHeader(conn, rawReadStatusOK, req.length); err != nil {
+				status = "write_header_error"
+				atomic.AddInt64(&cachePathStats.serverRawErrors, 1)
+				return
+			}
+			headerWritten = true
+		}
+		sendStarted := time.Now()
+		writeErr := writeRawReadBytes(conn, buf[:n64])
+		writeDuration := time.Since(sendStarted)
+		sendElapsed += writeDuration
+		atomic.AddInt64(&cachePathStats.serverRawSendNanos, writeDuration.Nanoseconds())
+		if writeErr != nil {
+			if isRawReadClientAbort(writeErr) {
+				status = "client_abort"
+			} else {
+				status = "write_body_error"
+				atomic.AddInt64(&cachePathStats.serverRawErrors, 1)
+			}
+			return
+		}
+		responseBytes += n64
+		readOffset += n64
+		remaining -= n64
 	}
-	sendStarted := time.Now()
-	if _, err := conn.Write(buf[:n64]); err != nil {
-		sendElapsed = time.Since(sendStarted)
-		atomic.AddInt64(&cachePathStats.serverRawSendNanos, sendElapsed.Nanoseconds())
-		status = "write_body_error"
-		atomic.AddInt64(&cachePathStats.serverRawErrors, 1)
-		return
-	}
-	sendElapsed = time.Since(sendStarted)
-	atomic.AddInt64(&cachePathStats.serverRawSendNanos, sendElapsed.Nanoseconds())
-	responseBytes = n64
-	atomic.AddInt64(&cachePathStats.serverRawBytes, n64)
+	atomic.AddInt64(&cachePathStats.serverRawBytes, responseBytes)
 	atomic.AddInt64(&cachePathStats.serverRawReadAtHits, 1)
-	method = "readat"
+	method = "readat_stream"
 	status = "ok"
+}
+
+func writeRawReadBytes(w io.Writer, data []byte) error {
+	for len(data) > 0 {
+		n, err := w.Write(data)
+		if n > 0 {
+			data = data[n:]
+		}
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return io.ErrShortWrite
+		}
+	}
+	return nil
 }
 
 func isRawReadClientAbort(err error) bool {
@@ -443,6 +587,8 @@ type rawReadConnPool struct {
 	mu        sync.Mutex
 	idle      []net.Conn
 	tokens    chan struct{}
+	closed    bool
+	closedCh  chan struct{}
 }
 
 func newRawReadConnPool(addr string, maxActive int, maxIdle int) *rawReadConnPool {
@@ -457,15 +603,21 @@ func newRawReadConnPool(addr string, maxActive int, maxIdle int) *rawReadConnPoo
 		maxActive: maxActive,
 		maxIdle:   maxIdle,
 		tokens:    make(chan struct{}, maxActive),
+		closedCh:  make(chan struct{}),
 	}
 }
 
-func (p *rawReadConnPool) get(ctxDone <-chan struct{}) (net.Conn, error) {
-	if err := p.acquire(ctxDone); err != nil {
+func (p *rawReadConnPool) get(ctx context.Context) (net.Conn, error) {
+	if err := p.acquire(ctx); err != nil {
 		return nil, err
 	}
 
 	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		p.release()
+		return nil, ErrUnableToReachHost
+	}
 	last := len(p.idle) - 1
 	if last >= 0 {
 		conn := p.idle[last]
@@ -475,34 +627,37 @@ func (p *rawReadConnPool) get(ctxDone <-chan struct{}) (net.Conn, error) {
 	}
 	p.mu.Unlock()
 
-	dialer := &net.Dialer{Timeout: time.Second}
-	type dialResult struct {
-		conn net.Conn
-		err  error
+	dialCtx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	dialer := &net.Dialer{}
+	conn, err := dialer.DialContext(dialCtx, "tcp", p.addr)
+	if err != nil {
+		p.release()
+		return nil, err
 	}
-	ch := make(chan dialResult, 1)
-	go func() {
-		conn, err := dialer.Dial("tcp", p.addr)
-		if err == nil {
-			tuneRawReadConn(conn)
-			_, err = conn.Write([]byte(rawReadMagic))
-			if err != nil {
-				_ = conn.Close()
-				conn = nil
-			}
-		}
-		ch <- dialResult{conn: conn, err: err}
-	}()
-	select {
-	case res := <-ch:
-		if res.err != nil {
-			p.release()
-		}
-		return res.conn, res.err
-	case <-ctxDone:
+	if err := ctx.Err(); err != nil {
+		_ = conn.Close()
+		p.release()
+		return nil, err
+	}
+	tuneRawReadConn(conn)
+	_ = conn.SetWriteDeadline(time.Now().Add(time.Second))
+	err = writeRawReadBytes(conn, []byte(rawReadMagic))
+	_ = conn.SetWriteDeadline(time.Time{})
+	if err != nil {
+		_ = conn.Close()
+		p.release()
+		return nil, err
+	}
+	p.mu.Lock()
+	closed := p.closed
+	p.mu.Unlock()
+	if closed || ctx.Err() != nil {
+		_ = conn.Close()
 		p.release()
 		return nil, ErrUnableToReachHost
 	}
+	return conn, nil
 }
 
 func tuneRawReadConn(conn net.Conn) {
@@ -515,11 +670,13 @@ func tuneRawReadConn(conn net.Conn) {
 	_ = tcpConn.SetWriteBuffer(rawReadSocketBufferBytes)
 }
 
-func (p *rawReadConnPool) acquire(ctxDone <-chan struct{}) error {
+func (p *rawReadConnPool) acquire(ctx context.Context) error {
 	select {
 	case p.tokens <- struct{}{}:
 		return nil
-	case <-ctxDone:
+	case <-ctx.Done():
+		return ErrUnableToReachHost
+	case <-p.closedCh:
 		return ErrUnableToReachHost
 	}
 }
@@ -538,6 +695,11 @@ func (p *rawReadConnPool) put(conn net.Conn) {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.closed {
+		_ = conn.Close()
+		p.release()
+		return
+	}
 	if len(p.idle) >= p.maxIdle {
 		_ = conn.Close()
 		p.release()
@@ -550,6 +712,11 @@ func (p *rawReadConnPool) put(conn net.Conn) {
 func (p *rawReadConnPool) close() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.closed {
+		return
+	}
+	p.closed = true
+	close(p.closedCh)
 	for _, conn := range p.idle {
 		_ = conn.Close()
 	}

@@ -343,6 +343,12 @@ cache:
     objectTtlS: 0
     s3DownloadConcurrency: 16
     s3DownloadChunkSize: 64000000
+    readTransport:
+      enabled: true
+      sendfile: true
+      maxRequestSizeBytes: 67108864 # 64MiB; independent of the gRPC message limit.
+      maxInflightBytes: 536870912 # Eight maximum-sized raw reads server-wide.
+      maxConcurrentRequests: 64 # Also bounds tiny and zero-length raw requests.
     metadata:
       mode: default
       redisInsecureSkipVerify: false
