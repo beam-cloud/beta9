@@ -43,19 +43,24 @@ type Server struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	proto.UnimplementedCacheServer
-	hostId        string
-	locality      string
-	privateIpAddr string
-	publicIpAddr  string
-	cas           *Store
-	serverConfig  ServerConfig
-	globalConfig  GlobalConfig
-	metadataStore CacheMetadataStore
-	grpcServer    *grpc.Server
-	listener      net.Listener
-	s3ClientCache sync.Map
-	draining      atomic.Bool
-	closeOnce     sync.Once
+	hostId          string
+	locality        string
+	privateIpAddr   string
+	publicIpAddr    string
+	cas             *Store
+	serverConfig    ServerConfig
+	globalConfig    GlobalConfig
+	metadataStore   CacheMetadataStore
+	grpcServer      *grpc.Server
+	listener        net.Listener
+	rawReadLimits   *rawReadAdmission
+	rawReadMu       sync.Mutex
+	rawReadConns    map[net.Conn]struct{}
+	rawReadClosing  bool
+	rawReadHandlers sync.WaitGroup
+	s3ClientCache   sync.Map
+	draining        atomic.Bool
+	closeOnce       sync.Once
 }
 
 func NewServer(ctx context.Context, cfg Config, locality string) (*Server, error) {
@@ -153,6 +158,8 @@ func NewServerWithOptions(ctx context.Context, cfg Config, locality string, opti
 		metadataStore: metadataStore,
 		privateIpAddr: privateIpAddr,
 		publicIpAddr:  publicIpAddr,
+		rawReadLimits: newRawReadAdmission(effectiveServerConfig.ReadTransport),
+		rawReadConns:  make(map[net.Conn]struct{}),
 		s3ClientCache: sync.Map{},
 	}
 
@@ -478,6 +485,7 @@ func (cs *Server) StartServer(port uint) error {
 func (cs *Server) Close() error {
 	cs.closeOnce.Do(func() {
 		cs.Drain()
+		cs.closeRawReadConnections()
 		if cs.grpcServer != nil {
 			stopped := make(chan struct{})
 			go func() {
