@@ -1223,9 +1223,9 @@ func (c *Client) rawReadInto(ctx context.Context, host *Host, hash string, offse
 		return 0, ErrUnableToReachHost
 	}
 	reusable := false
-	if deadline, ok := ctx.Deadline(); ok {
-		_ = conn.SetDeadline(deadline)
-	}
+	// Interrupt I/O only after the context is canceled. Setting the socket's
+	// deadline directly can surface an I/O timeout before ctx.Err is observable,
+	// incorrectly turning a caller deadline into a host failure.
 	var contextCancelled atomic.Bool
 	cancelDone := make(chan struct{})
 	stopCancellation := context.AfterFunc(ctx, func() {
