@@ -117,6 +117,47 @@ func TestSetContainerStateCommitsIndexesWithState(t *testing.T) {
 	}
 }
 
+func TestContainerFailureRetentionAndCooldown(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repo := NewContainerRedisRepositoryForTest(rdb)
+	for containerID, exitCode := range map[string]int{
+		"container-success": int(types.ContainerExitCodeSuccess),
+		"container-failure": int(types.ContainerExitCodeUnknownError),
+	} {
+		if err := repo.SetContainerExitCode(containerID, exitCode); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	assertTTL := func(containerID string, want time.Duration) {
+		t.Helper()
+		got, err := rdb.TTL(context.Background(), common.RedisKeys.SchedulerContainerExitCode(containerID)).Result()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Fatalf("%s exit code TTL = %s, want %s", containerID, got, want)
+		}
+	}
+
+	assertTTL("container-success", types.ContainerExitCodeTTL)
+	assertTTL("container-failure", types.ContainerFailureHistoryTTL)
+
+	if err := repo.SetContainerFailureCooldown([]string{"container-failure"}); err != nil {
+		t.Fatal(err)
+	}
+	assertTTL("container-failure", types.ContainerFailureCooldown)
+
+	if err := repo.SetContainerFailureCooldown([]string{"container-failure"}); err != nil {
+		t.Fatal(err)
+	}
+	assertTTL("container-failure", types.ContainerFailureCooldown)
+}
+
 func TestSetContainerStateWithConcurrencyLimitUsesAtomicReservationAfterInit(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	if err != nil {

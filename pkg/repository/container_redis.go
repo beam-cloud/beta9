@@ -209,9 +209,34 @@ func (cr *ContainerRedisRepository) SetContainerState(containerId string, state 
 
 func (cr *ContainerRedisRepository) SetContainerExitCode(containerId string, exitCode int) error {
 	exitCodeKey := common.RedisKeys.SchedulerContainerExitCode(containerId)
-	err := cr.rdb.SetEx(context.TODO(), exitCodeKey, exitCode, time.Duration(types.ContainerExitCodeTtlS)*time.Second).Err()
+	ttl := types.ContainerExitCodeTTL
+	if types.ContainerExitCode(exitCode).IsFailed() {
+		ttl = types.ContainerFailureHistoryTTL
+	}
+	err := cr.rdb.SetEx(context.TODO(), exitCodeKey, exitCode, ttl).Err()
 	if err != nil {
 		return fmt.Errorf("failed to set exit code <%v> for container <%v>: %w", exitCodeKey, containerId, err)
+	}
+
+	return nil
+}
+
+func (cr *ContainerRedisRepository) SetContainerFailureCooldown(containerIds []string) error {
+	const clampTTL = `
+if redis.call("PTTL", KEYS[1]) > tonumber(ARGV[1]) then
+	return redis.call("PEXPIRE", KEYS[1], ARGV[1])
+end
+return 0`
+
+	ctx := context.TODO()
+	pipe := cr.rdb.Pipeline()
+	for _, containerId := range containerIds {
+		key := common.RedisKeys.SchedulerContainerExitCode(containerId)
+		pipe.Eval(ctx, clampTTL, []string{key}, types.ContainerFailureCooldown.Milliseconds())
+	}
+
+	if _, err := pipe.Exec(ctx); err != nil {
+		return fmt.Errorf("failed to set container failure cooldown: %w", err)
 	}
 
 	return nil

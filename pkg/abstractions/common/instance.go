@@ -295,6 +295,9 @@ func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
 
 	if i.FailedContainerThreshold > 0 && len(state.FailedContainers) >= i.FailedContainerThreshold {
 		desiredContainers = 0
+		if err := i.ContainerRepo.SetContainerFailureCooldown(state.FailedContainers); err != nil {
+			log.Warn().Err(err).Str("stub_id", i.Stub.ExternalId).Msg("failed to set container failure cooldown")
+		}
 	}
 
 	if !i.IsActive {

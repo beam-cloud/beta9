@@ -258,17 +258,27 @@ func (i *podInstance) stoppableContainers() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	stopAll := !i.IsActive
+	if !stopAll && i.FailedContainerThreshold > 0 {
+		failedContainers, err := i.ContainerRepo.GetFailedContainersByStubId(i.Stub.ExternalId)
+		if err != nil {
+			return nil, err
+		}
+		stopAll = len(failedContainers) >= i.FailedContainerThreshold
+	}
 
-	// Create a slice to hold the keys
 	keys := make([]string, 0, len(containers))
 	for _, container := range containers {
-		if container.Status == types.ContainerStatusStopping || container.Status == types.ContainerStatusPending {
+		if container.Status == types.ContainerStatusStopping {
 			continue
 		}
 
-		// When deployment is stopped, all containers should be stopped even if they have keep warm
-		if !i.IsActive {
+		// Circuit breaking must cancel pending replacements and ignore keep-warm.
+		if stopAll {
 			keys = append(keys, container.ContainerId)
+			continue
+		}
+		if container.Status == types.ContainerStatusPending {
 			continue
 		}
 
