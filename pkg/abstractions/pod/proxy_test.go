@@ -1275,6 +1275,60 @@ func TestStoppableContainersSkipsPendingKeepWarmLock(t *testing.T) {
 	}
 }
 
+func TestStoppableContainersIncludesPendingAfterFailureThreshold(t *testing.T) {
+	rdb := newPodProxyTestRedis(t)
+	repo := repository.NewContainerRedisRepositoryForTest(rdb)
+	const stubID = "stub"
+	index := common.RedisKeys.SchedulerContainerIndex(stubID)
+
+	addFailure := func(containerID string) {
+		state := common.RedisKeys.SchedulerContainerState(containerID)
+		if err := rdb.SAdd(context.Background(), index, state).Err(); err != nil {
+			t.Fatal(err)
+		}
+		if err := repo.SetContainerExitCode(containerID, int(types.ContainerExitCodeUnknownError)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	const pendingID = "pod-stub-pending"
+	if err := repo.SetContainerState(pendingID, &types.ContainerState{
+		ContainerId: pendingID,
+		StubId:      stubID,
+		WorkspaceId: "workspace",
+		Status:      types.ContainerStatusPending,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	instance := &podInstance{AutoscaledInstance: &abstractions.AutoscaledInstance{
+		Rdb:                      rdb,
+		IsActive:                 true,
+		FailedContainerThreshold: types.FailedDeploymentContainerThreshold,
+		ContainerRepo:            repo,
+		Workspace:                &types.Workspace{Name: "workspace"},
+		Stub:                     &types.StubWithRelated{Stub: types.Stub{ExternalId: stubID}},
+	}}
+
+	addFailure("failed-1")
+	addFailure("failed-2")
+	stoppable, err := instance.stoppableContainers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stoppable) != 0 {
+		t.Fatalf("stoppable containers below threshold = %v, want none", stoppable)
+	}
+
+	addFailure("failed-3")
+	stoppable, err = instance.stoppableContainers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stoppable) != 1 || stoppable[0] != pendingID {
+		t.Fatalf("stoppable containers = %v, want [%s]", stoppable, pendingID)
+	}
+}
+
 func TestRetireContainerForStopRemovesProxyBackend(t *testing.T) {
 	containerID := "pod-stub-container-1"
 	address := types.BackendRouteAddress("route-1")
