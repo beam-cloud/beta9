@@ -1163,6 +1163,16 @@ func (c *Client) rawReadInto(ctx context.Context, host *Host, hash string, offse
 			)
 		}
 	}()
+	if ctx == nil {
+		ctx = c.ctx
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		status = "context_error"
+		return 0, err
+	}
 	if host == nil || !c.clientConfig.ReadTransport.Enabled {
 		status = "disabled_or_missing_host"
 		atomic.AddInt64(&cachePathStats.clientRawErrors, 1)
@@ -1191,6 +1201,9 @@ func (c *Client) rawReadInto(ctx context.Context, host *Host, hash string, offse
 	if err != nil {
 		status = "conn_wait_error"
 		atomic.AddInt64(&cachePathStats.clientRawErrors, 1)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return 0, ctxErr
+		}
 		return 0, ErrUnableToReachHost
 	}
 	reusable := false
@@ -1250,6 +1263,11 @@ func (c *Client) rawReadInto(ctx context.Context, host *Host, hash string, offse
 		atomic.AddInt64(&cachePathStats.clientRawMisses, 1)
 		reusable = true
 		return 0, ErrContentNotFound
+	}
+	if respStatus == rawReadStatusBusy && responseLength == 0 {
+		status = "busy"
+		reusable = true
+		return 0, ErrRawReadBusy
 	}
 	if respStatus != rawReadStatusOK || responseLength != length {
 		status = "bad_response"
@@ -1323,6 +1341,11 @@ func (c *Client) planRawReadWindows(length int) rawReadWindowPlan {
 }
 
 func (c *Client) rawReadIntoWindowed(ctx context.Context, host *Host, hash string, offset int64, dst []byte) (read int64, err error) {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+	}
 	if len(dst) == 0 {
 		return 0, nil
 	}
@@ -1626,6 +1649,9 @@ func (c *Client) ReadContentIntoWithTrace(ctx context.Context, hash string, offs
 	if ctx == nil {
 		ctx = c.ctx
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, getContentRequestTimeout)
@@ -1656,6 +1682,9 @@ func (c *Client) ReadContentIntoWithTrace(ctx context.Context, hash string, offs
 	}()
 	atomic.AddInt64(&cachePathStats.clientReadIntoRequests, 1)
 	atomic.AddInt64(&cachePathStats.clientReadIntoBytes, length)
+	if err := ctx.Err(); err != nil {
+		return 0, trace, err
+	}
 	if c.clientConfig.PreferLocalCacheHost {
 		if n, ok := c.readContentIntoFromPreferredLocalStores(hash, offset, dst, &trace); ok {
 			return n, trace, nil
@@ -1664,6 +1693,8 @@ func (c *Client) ReadContentIntoWithTrace(ctx context.Context, hash string, offs
 
 	if n, err := c.tryReadContentIntoKnownHosts(ctx, hash, offset, dst, opts, &trace); err == nil {
 		return n, trace, nil
+	} else if ctxErr := ctx.Err(); ctxErr != nil {
+		return 0, trace, ctxErr
 	} else if !shouldRefreshReadContentIntoHosts(err) || c.hostDirectory == nil || c.hostMap == nil {
 		return 0, trace, err
 	}
@@ -1692,7 +1723,7 @@ func (c *Client) readContentIntoFromPreferredLocalStores(hash string, offset int
 }
 
 func shouldRefreshReadContentIntoHosts(err error) bool {
-	return errors.Is(err, ErrSelectedHostUnavailable) || errors.Is(err, ErrUnableToReachHost) || errors.Is(err, ErrHostNotFound) || errors.Is(err, ErrClientNotFound)
+	return errors.Is(err, ErrSelectedHostUnavailable) || errors.Is(err, ErrUnableToReachHost) || errors.Is(err, ErrHostNotFound) || errors.Is(err, ErrClientNotFound) || errors.Is(err, ErrRawReadBusy)
 }
 
 func (c *Client) tryReadContentIntoKnownHosts(ctx context.Context, hash string, offset int64, dst []byte, opts ClientOptions, trace *OperationTrace) (int64, error) {
@@ -1705,6 +1736,9 @@ func (c *Client) tryReadContentIntoKnownHosts(ctx context.Context, hash string, 
 	checked := make(map[string]struct{}, hostCount)
 
 	for hostIndex := 0; hostIndex < hostCount; hostIndex++ {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
 		host, err := c.getHostForRequest(&ClientRequest{
 			rt:        ClientRequestTypeRetrieval,
 			hash:      hash,
@@ -1713,7 +1747,7 @@ func (c *Client) tryReadContentIntoKnownHosts(ctx context.Context, hash string, 
 		})
 		if err != nil {
 			if err == ErrHostNotFound {
-				_ = c.refreshRoutableHosts(c.ctx)
+				_ = c.refreshRoutableHosts(ctx)
 				trace.HostRefreshes++
 				host, err = c.getHostForRequest(&ClientRequest{
 					rt:        ClientRequestTypeRetrieval,
@@ -1771,11 +1805,17 @@ func (c *Client) tryReadContentIntoKnownHosts(ctx context.Context, hash string, 
 			continue
 		}
 		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return 0, ctxErr
+			}
 			lastErr = err
 			continue
 		}
 		contentMissing = true
 		lastErr = ErrContentNotFound
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
 	}
 
 	if primaryUnavailable || (selectedUnavailable && !contentMissing) {
@@ -1809,6 +1849,9 @@ func (c *Client) readContentIntoAfterHostRefresh(ctx context.Context, hash strin
 }
 
 func (c *Client) readContentIntoFromHost(ctx context.Context, host *Host, hostIndex int, hash string, offset int64, dst []byte, trace *OperationTrace) (int64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	if host == nil {
 		trace.addAttempt(hostIndex, host, "host_select", "unavailable", 0, 0, ErrHostNotFound)
 		return 0, ErrHostNotFound
@@ -1869,8 +1912,17 @@ func (c *Client) readContentIntoFromHost(ctx context.Context, host *Host, hostIn
 		if err == nil && n == length {
 			return n, nil
 		}
-		if err == ErrContentNotFound {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return 0, ctxErr
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return 0, err
+		}
+		if errors.Is(err, ErrContentNotFound) {
 			c.removeLocalHostCache(hash)
+			return 0, err
+		}
+		if errors.Is(err, ErrRawReadBusy) {
 			return 0, err
 		}
 		if errors.Is(err, ErrUnableToReachHost) {
@@ -1880,6 +1932,9 @@ func (c *Client) readContentIntoFromHost(ctx context.Context, host *Host, hostIn
 		if err != nil {
 			cacheReadRawFallbackTotal.Inc()
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
 	}
 
 	c.mu.RLock()
@@ -1898,6 +1953,12 @@ func (c *Client) readContentIntoFromHost(ctx context.Context, host *Host, hostIn
 		atomic.AddInt64(&cachePathStats.clientGRPCErrors, 1)
 		if c.globalConfig.GRPCPayloadCodecV2 {
 			cacheReadGRPCCodecV2FallbackTotal.Inc()
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return 0, ctxErr
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return 0, err
 		}
 		c.removeHost(host)
 		return 0, ErrSelectedHostUnavailable
