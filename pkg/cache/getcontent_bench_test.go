@@ -5,9 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
 	mathrand "math/rand"
-	"sync"
 	"testing"
 
 	proto "github.com/beam-cloud/beta9/proto"
@@ -310,120 +308,5 @@ func BenchmarkClientRawReadInto(b *testing.B) {
 		if err != nil || n != int64(len(dst)) {
 			b.Fatalf("raw read offset %d: n=%d err=%v", offset, n, err)
 		}
-	}
-}
-
-func BenchmarkClientRawReadIntoOuter8x64MiB(b *testing.B) {
-	InitLogger(false, false)
-	ctx, cancel := context.WithCancel(context.Background())
-	b.Cleanup(cancel)
-
-	const (
-		windowSize      = 64 * 1024 * 1024
-		outerConcurrent = 8
-	)
-	cfg := Config{
-		Server: ServerConfig{
-			DiskCacheDir:         b.TempDir(),
-			DiskCacheMaxUsagePct: 90,
-			MaxCachePct:          0,
-			PageSizeBytes:        4_000_000,
-			ObjectTtlS:           300,
-			ReadTransport: ServerReadTransportConfig{
-				Enabled:  true,
-				Sendfile: false,
-			},
-		},
-		Global: GlobalConfig{
-			GRPCMessageSizeBytes: 1024 * 1024 * 1024,
-			GRPCDialTimeoutS:     1,
-		},
-	}
-	server, err := NewServerWithOptions(ctx, cfg, "local", WithServerMetadataStore(NewMockCacheMetadataStore()), WithServerHostID("raw-outer-bench-host"))
-	if err != nil {
-		b.Fatalf("new server: %v", err)
-	}
-	b.Cleanup(func() { _ = server.Close() })
-	addr, err := server.Serve("127.0.0.1:0", "")
-	if err != nil {
-		b.Fatalf("serve: %v", err)
-	}
-
-	content := make([]byte, windowSize)
-	if _, err := rand.Read(content); err != nil {
-		b.Fatalf("random content: %v", err)
-	}
-	sum := sha256.Sum256(content)
-	hash := hex.EncodeToString(sum[:])
-	if err := server.cas.Add(context.Background(), hash, content); err != nil {
-		b.Fatalf("add content: %v", err)
-	}
-	host := &Host{HostId: "raw-outer-bench-host", Addr: addr, PrivateAddr: addr}
-
-	cases := []struct {
-		name             string
-		requestSizeBytes int64
-		maxPartsPerRead  int
-	}{
-		{name: "request_64MiB", requestSizeBytes: 64 * 1024 * 1024, maxPartsPerRead: 8},
-		{name: "request_4MiB_inner_2", requestSizeBytes: 4 * 1024 * 1024, maxPartsPerRead: 2},
-		{name: "request_4MiB_inner_4", requestSizeBytes: 4 * 1024 * 1024, maxPartsPerRead: 4},
-		{name: "request_4MiB_inner_8", requestSizeBytes: 4 * 1024 * 1024, maxPartsPerRead: 8},
-		{name: "request_4MiB_inner_16", requestSizeBytes: 4 * 1024 * 1024, maxPartsPerRead: 16},
-	}
-	for _, benchmarkCase := range cases {
-		b.Run(benchmarkCase.name, func(b *testing.B) {
-			client := &Client{
-				ctx: context.Background(),
-				clientConfig: ClientConfig{
-					NTopHosts: 1,
-					ReadTransport: ClientReadTransportConfig{
-						Enabled:               true,
-						MaxActiveConnsPerHost: 64,
-						MaxIdleConnsPerHost:   16,
-						RequestSizeBytes:      benchmarkCase.requestSizeBytes,
-						MaxPartsPerRead:       benchmarkCase.maxPartsPerRead,
-					},
-				},
-				globalConfig:          cfg.Global,
-				grpcClients:           make(map[string]proto.CacheClient),
-				grpcConns:             make(map[string]*grpc.ClientConn),
-				localServers:          make(map[string]*Server),
-				rawReadPools:          make(map[string]*rawReadConnPool),
-				localHostCache:        make(map[localHostCacheKey]*localClientCache),
-				hasher:                &orderedTestHasher{hosts: []*Host{host}},
-				maxGetContentAttempts: 1,
-			}
-			b.Cleanup(func() { _ = client.Cleanup() })
-
-			dst := make([][]byte, outerConcurrent)
-			for i := range dst {
-				dst[i] = make([]byte, windowSize)
-			}
-
-			b.ReportAllocs()
-			b.SetBytes(outerConcurrent * windowSize)
-			b.ResetTimer()
-			for iteration := 0; iteration < b.N; iteration++ {
-				var wg sync.WaitGroup
-				errCh := make(chan error, outerConcurrent)
-				for worker := 0; worker < outerConcurrent; worker++ {
-					worker := worker
-					wg.Add(1)
-					go func() {
-						defer wg.Done()
-						n, err := client.ReadContentInto(context.Background(), hash, 0, dst[worker], ClientOptions{})
-						if err != nil || n != windowSize {
-							errCh <- fmt.Errorf("worker %d: n=%d err=%w", worker, n, err)
-						}
-					}()
-				}
-				wg.Wait()
-				close(errCh)
-				if err := <-errCh; err != nil {
-					b.Fatal(err)
-				}
-			}
-		})
 	}
 }

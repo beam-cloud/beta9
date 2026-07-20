@@ -1,9 +1,6 @@
 package storage
 
-import (
-	"reflect"
-	"testing"
-)
+import "testing"
 
 type testVolumeReporter struct {
 	workspaceID string
@@ -68,31 +65,5 @@ func TestHandleGeeseContentEventReportsStoredContent(t *testing.T) {
 	}
 	if reporter.sizeBytes != modelSizeBytes {
 		t.Fatalf("sizeBytes = %d", reporter.sizeBytes)
-	}
-}
-
-func TestWithBoundedMountOption(t *testing.T) {
-	tests := []struct {
-		name    string
-		options []string
-		want    []string
-	}{
-		{name: "adds absent option", options: []string{"allow_other"}, want: []string{"allow_other", "max_read=524288"}},
-		{name: "clamps larger option", options: []string{"allow_other,max_read=1048576"}, want: []string{"allow_other,max_read=524288"}},
-		{name: "preserves smaller option", options: []string{"max_read=262144"}, want: []string{"max_read=262144"}},
-		{name: "replaces invalid option", options: []string{"max_read=invalid"}, want: []string{"max_read=524288"}},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			original := append([]string(nil), tt.options...)
-			got := withBoundedMountOption(tt.options, "max_read", defaultGeeseFSSpliceReadBytes)
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Fatalf("withBoundedMountOption(%v) = %v, want %v", tt.options, got, tt.want)
-			}
-			if !reflect.DeepEqual(tt.options, original) {
-				t.Fatalf("input options mutated from %v to %v", original, tt.options)
-			}
-		})
 	}
 }

@@ -40,30 +40,27 @@ type ServerOpts struct {
 type ServerOption func(*ServerOpts)
 
 type Server struct {
-	ctx           context.Context
-	cancel        context.CancelFunc
-	rawReadCtx    context.Context
-	rawReadCancel context.CancelFunc
+	ctx    context.Context
+	cancel context.CancelFunc
 	proto.UnimplementedCacheServer
-	hostId              string
-	locality            string
-	privateIpAddr       string
-	publicIpAddr        string
-	cas                 *Store
-	serverConfig        ServerConfig
-	globalConfig        GlobalConfig
-	metadataStore       CacheMetadataStore
-	grpcServer          *grpc.Server
-	listener            net.Listener
-	rawReadLimits       *rawReadAdmission
-	rawReadMu           sync.Mutex
-	rawReadConns        map[net.Conn]struct{}
-	rawReadClosing      bool
-	rawReadHandlers     sync.WaitGroup
-	rawReadWriteTimeout time.Duration
-	s3ClientCache       sync.Map
-	draining            atomic.Bool
-	closeOnce           sync.Once
+	hostId          string
+	locality        string
+	privateIpAddr   string
+	publicIpAddr    string
+	cas             *Store
+	serverConfig    ServerConfig
+	globalConfig    GlobalConfig
+	metadataStore   CacheMetadataStore
+	grpcServer      *grpc.Server
+	listener        net.Listener
+	rawReadLimits   *rawReadAdmission
+	rawReadMu       sync.Mutex
+	rawReadConns    map[net.Conn]struct{}
+	rawReadClosing  bool
+	rawReadHandlers sync.WaitGroup
+	s3ClientCache   sync.Map
+	draining        atomic.Bool
+	closeOnce       sync.Once
 }
 
 func NewServer(ctx context.Context, cfg Config, locality string) (*Server, error) {
@@ -150,12 +147,9 @@ func NewServerWithOptions(ctx context.Context, cfg Config, locality string, opti
 		Logger.Infof("Configured and mounted source: %+v", sourceConfig.FilesystemName)
 	}
 
-	rawReadCtx, rawReadCancel := context.WithCancel(serverCtx)
 	cs := &Server{
 		ctx:           serverCtx,
 		cancel:        cancel,
-		rawReadCtx:    rawReadCtx,
-		rawReadCancel: rawReadCancel,
 		hostId:        hostId,
 		locality:      locality,
 		cas:           cas,
@@ -491,9 +485,6 @@ func (cs *Server) StartServer(port uint) error {
 func (cs *Server) Close() error {
 	cs.closeOnce.Do(func() {
 		cs.Drain()
-		if cs.rawReadCancel != nil {
-			cs.rawReadCancel()
-		}
 		cs.closeRawReadConnections()
 		if cs.grpcServer != nil {
 			stopped := make(chan struct{})

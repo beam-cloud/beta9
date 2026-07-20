@@ -49,59 +49,6 @@ func TestHostsAvailableRequiresActiveEndpoint(t *testing.T) {
 	require.True(t, client.HostsAvailable())
 }
 
-func TestPlanRawReadWindowsUsesBoundedDefaults(t *testing.T) {
-	client := &Client{
-		clientConfig: ClientConfig{
-			ReadTransport: ClientReadTransportConfig{MaxActiveConnsPerHost: 64},
-		},
-		globalConfig: GlobalConfig{GRPCMessageSizeBytes: 1024 * 1024 * 1024},
-	}
-
-	plan := client.planRawReadWindows(64 * 1024 * 1024)
-	require.Equal(t, rawReadWindowPlan{
-		partLength:  64 * 1024 * 1024,
-		chunkCount:  1,
-		concurrency: 1,
-	}, plan)
-
-	largePlan := client.planRawReadWindows(1024 * 1024 * 1024)
-	require.Equal(t, rawReadWindowPlan{
-		partLength:  64 * 1024 * 1024,
-		chunkCount:  16,
-		concurrency: 8,
-	}, largePlan)
-}
-
-func TestPlanRawReadWindowsHonorsRequestAndConnectionLimits(t *testing.T) {
-	client := &Client{
-		clientConfig: ClientConfig{
-			ReadTransport: ClientReadTransportConfig{
-				MaxActiveConnsPerHost: 64,
-				RequestSizeBytes:      4 * 1024 * 1024,
-				MaxPartsPerRead:       1,
-			},
-		},
-		globalConfig: GlobalConfig{GRPCMessageSizeBytes: 32 * 1024 * 1024},
-	}
-
-	serial := client.planRawReadWindows(64 * 1024 * 1024)
-	require.Equal(t, 16, serial.chunkCount)
-	require.Equal(t, 1, serial.concurrency)
-
-	client.clientConfig.ReadTransport.RequestSizeBytes = 64 * 1024 * 1024
-	client.clientConfig.ReadTransport.MaxPartsPerRead = 32
-	client.clientConfig.ReadTransport.MaxActiveConnsPerHost = 4
-	limited := client.planRawReadWindows(64 * 1024 * 1024)
-	require.Equal(t, 32*1024*1024, limited.partLength)
-	require.Equal(t, 2, limited.chunkCount)
-	require.Equal(t, 2, limited.concurrency)
-
-	small := client.planRawReadWindows(512 * 1024)
-	require.Equal(t, 512*1024, small.partLength)
-	require.Equal(t, 1, small.chunkCount)
-	require.Equal(t, 1, small.concurrency)
-}
-
 func (m *countingCacheMetadataStore) SetStoreFromContentLock(ctx context.Context, locality string, sourcePath string) error {
 	m.setStoreFromContentLockCalls++
 	return m.MockCacheMetadataStore.SetStoreFromContentLock(ctx, locality, sourcePath)

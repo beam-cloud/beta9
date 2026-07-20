@@ -40,13 +40,8 @@ const (
 	cacheDefaultPageFileBuckets         = 1024
 	cacheDefaultSmallRangeCopyBytes     = 128 * 1024
 	cacheDefaultPageFDCacheSize         = 64
-	cacheDefaultRawServerMaxRequest     = 64 * 1024 * 1024
-	cacheDefaultRawServerInflightBytes  = 8 * cacheDefaultRawServerMaxRequest
-	cacheDefaultRawServerMaxRequests    = 64
 	cacheDefaultRawMaxActiveConns       = 64
 	cacheDefaultRawMaxIdleConns         = 16
-	cacheDefaultRawRequestSize          = 64 * 1024 * 1024
-	cacheDefaultRawMaxParts             = 8
 	cacheDefaultPrefetchAheadBytes      = 64 * 1024 * 1024
 	cacheDefaultPrefetchWorkers         = 4
 	cacheDefaultPrefetchPartLength      = 4 * 1024 * 1024
@@ -901,15 +896,6 @@ func normalizeCacheConfig(config types.AppConfig, poolConfig types.WorkerPoolCon
 	}
 	cacheConfig.Server.ReadTransport.Enabled = true
 	cacheConfig.Server.ReadTransport.Sendfile = true
-	if cacheConfig.Server.ReadTransport.MaxRequestSizeBytes == 0 {
-		cacheConfig.Server.ReadTransport.MaxRequestSizeBytes = cacheDefaultRawServerMaxRequest
-	}
-	if cacheConfig.Server.ReadTransport.MaxInflightBytes == 0 {
-		cacheConfig.Server.ReadTransport.MaxInflightBytes = cacheDefaultRawServerInflightBytes
-	}
-	if cacheConfig.Server.ReadTransport.MaxConcurrentRequests == 0 {
-		cacheConfig.Server.ReadTransport.MaxConcurrentRequests = cacheDefaultRawServerMaxRequests
-	}
 	if cacheConfig.Server.S3DownloadConcurrency == 0 {
 		cacheConfig.Server.S3DownloadConcurrency = cacheDefaultS3Concurrency
 	}
@@ -942,12 +928,6 @@ func normalizeCacheConfig(config types.AppConfig, poolConfig types.WorkerPoolCon
 	}
 	if cacheConfig.Client.ReadTransport.MaxIdleConnsPerHost == 0 {
 		cacheConfig.Client.ReadTransport.MaxIdleConnsPerHost = cacheDefaultRawMaxIdleConns
-	}
-	if cacheConfig.Client.ReadTransport.RequestSizeBytes == 0 {
-		cacheConfig.Client.ReadTransport.RequestSizeBytes = cacheDefaultRawRequestSize
-	}
-	if cacheConfig.Client.ReadTransport.MaxPartsPerRead == 0 {
-		cacheConfig.Client.ReadTransport.MaxPartsPerRead = cacheDefaultRawMaxParts
 	}
 	cacheConfig.Client.Prefetch.Enabled = true
 	if cacheConfig.Client.Prefetch.AheadBytes == 0 {
