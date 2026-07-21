@@ -222,13 +222,6 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 				}, nil
 			}
 
-			// A stub targeting a private/on-demand pool runs on that pool's
-			// capacity; managed GPU scarcity is at most a fallback concern,
-			// so warning about it is just noise.
-			if len(lowCapacityGpus) > 0 && !resourcePolicy.privatePoolTargeted {
-				warning = appendWarning(warning, fmt.Sprintf("GPU capacity for %s is currently low.", strings.Join(lowCapacityGpus, ", ")))
-			}
-
 			// Only stubs with no pool config get a capacity verdict: targeting
 			// a pool is an explicit placement choice the scheduler will honor.
 			if resourcePolicy.pool == nil {
@@ -239,6 +232,14 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 				} else {
 					capacity = verdict
 				}
+			}
+
+			// A stub running on private/on-demand capacity — whether targeted
+			// explicitly or matched via the capacity verdict — doesn't depend
+			// on managed GPU availability, so warning about it is just noise.
+			onPrivateCapacity := resourcePolicy.privatePoolTargeted || capacity.matchedPrivatePool != ""
+			if len(lowCapacityGpus) > 0 && !onPrivateCapacity {
+				warning = appendWarning(warning, fmt.Sprintf("GPU capacity for %s is currently low.", strings.Join(lowCapacityGpus, ", ")))
 			}
 		}
 	}
