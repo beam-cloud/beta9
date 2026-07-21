@@ -118,7 +118,11 @@ class DeployableMixin:
 
     @with_grpc_error_handling
     def shell(
-        self, url_type: str = "", sync_dir: Optional[str] = None, container_id: Optional[str] = None
+        self,
+        url_type: str = "",
+        sync_dir: Optional[str] = None,
+        container_id: Optional[str] = None,
+        machine_id: Optional[str] = None,
     ):
         # First, spin up the shell container
         username = "root"
@@ -151,6 +155,7 @@ class DeployableMixin:
             create_shell_response = self.parent.shell_stub.create_standalone_shell(
                 CreateStandaloneShellRequest(
                     stub_id=self.parent.stub_id,
+                    machine_id=machine_id,
                 )
             )
             if not create_shell_response.ok:

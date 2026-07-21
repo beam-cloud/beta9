@@ -1417,7 +1417,7 @@ func workerFreeCapacityScore(worker *types.Worker, request *types.ContainerReque
 }
 
 const maxScheduleRetryCount = 120
-const maxScheduleRetryDuration = 10 * time.Minute
+const maxScheduleRetryDuration = 20 * time.Minute
 
 func (s *Scheduler) addRequestToBacklog(request *types.ContainerRequest) error {
 	normalizeGPURequest(request)

@@ -45,6 +45,22 @@ def test_database_commands_do_not_expose_unenforced_disk_size():
             assert "size" not in options
 
 
+def test_reserved_hardware_dx_commands_are_registered():
+    cli = load_cli(check_config=False)
+
+    run = cli.common_group.get_command(None, "run")
+    assert {"detach", "machine_id"} <= {param.name for param in run.params}
+
+    deploy = cli.common_group.get_command(None, "deploy")
+    assert "replicas" in {param.name for param in deploy.params}
+
+    machine = cli.management_group.get_command(None, "machine")
+    assert "ssh" in machine.commands
+
+    container = cli.management_group.get_command(None, "container")
+    assert "machine_id" in {param.name for param in container.commands["list"].params}
+
+
 def test_database_exists_error_uses_active_cli_name(monkeypatch):
     monkeypatch.setattr(database_cli, "_deployment_by_name", lambda service, name: object())
 

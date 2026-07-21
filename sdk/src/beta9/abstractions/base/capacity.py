@@ -43,13 +43,47 @@ def requested_gpus(stub_request: GetOrCreateStubRequest) -> List[str]:
     return [g for g in (stub_request.gpu or "").split(",") if g and g != "NO_GPU"]
 
 
+def cli_name() -> str:
+    """The installed CLI executable name ("beta9" or "beam"), for command hints."""
+    from ...config import get_settings
+
+    return (get_settings().name or "beta9").lower()
+
+
 def no_capacity_hint(gpus: List[str]) -> str:
     gpu = gpus[0] if gpus else "<gpu>"
-    return f"run 'beta9 machine reserve --gpu {gpu}' to get hardware, or pick a different GPU"
+    return f"run '{cli_name()} machine reserve --gpu {gpu}' to get hardware, or pick a different GPU"
 
 
 def no_offers_hint() -> str:
-    return "pick a different GPU, or attach your own machine with 'beta9 pool join'"
+    cli = cli_name()
+    return (
+        f"browse available GPUs with '{cli} machine list', "
+        f"or attach your own machine with '{cli} pool join'"
+    )
+
+
+def credits_url() -> Optional[str]:
+    """
+    The dashboard credits page, derived from the SDK's API host so the link
+    follows the environment (app.beam.cloud -> platform.beam.cloud,
+    app.stage.beam.cloud -> platform.stage.beam.cloud). Self-hosted installs
+    have no credits page, so hosts without the app. prefix return None.
+    """
+    from ...config import get_settings
+
+    host = (get_settings().api_host or "").split(":")[0]
+    if host.startswith("app."):
+        return f"https://platform.{host[len('app.'):]}/settings/credits"
+    return None
+
+
+def credit_error_hint(message: str) -> Optional[str]:
+    """A purchase link for credit-related failures; None for everything else."""
+    url = credits_url()
+    if url and "credit" in (message or "").lower():
+        return f"purchase credits at {url}"
+    return None
 
 
 def handle_capacity_verdict(
@@ -82,7 +116,13 @@ def handle_capacity_verdict(
         return _handle_deployment_capacity(runner, stub_request, stub_response, gpus, gpu_label)
 
     if terminal.is_interactive() and not getattr(runner, "headless", False):
-        return _run_interactive_capacity_flow(runner, stub_request, gpus, gpu_label)
+        return _run_interactive_capacity_flow(
+            runner,
+            stub_request,
+            gpus,
+            gpu_label,
+            wait_for_ready=stub_type != "pod/run",
+        )
 
     terminal.error(
         f"No compute capacity supports {gpu_label}, so this workload can never be scheduled.",
@@ -167,6 +207,7 @@ def _run_interactive_capacity_flow(
     gpus: List[str],
     gpu_label: str,
     announce: bool = True,
+    wait_for_ready: bool = True,
 ) -> Optional[GetOrCreateStubResponse]:
     if announce:
         terminal.warn(f"No serverless capacity for {gpu_label}.")
@@ -209,7 +250,7 @@ def _run_interactive_capacity_flow(
         return response
     runner.pool_config = pool
 
-    if not wait_for_pool_ready(runner.gateway_stub, pool.name):
+    if wait_for_ready and not wait_for_pool_ready(runner.gateway_stub, pool.name):
         return None
     return response
 
@@ -341,7 +382,7 @@ def select_ttl(hourly: float, nodes: int = 1, default: str = DEFAULT_ONDEMAND_TT
         terminal.SelectOption(
             label="until I stop it",
             value=INDEFINITE_TTL,
-            description=f"~${hourly * nodes:.2f}/hr until 'beta9 machine release' (30d cap)",
+            description=f"~${hourly * nodes:.2f}/hr until '{cli_name()} machine release' (30d cap)",
         )
     ]
     for ttl in TTL_CHOICES:
@@ -403,13 +444,13 @@ def wait_for_pool_ready(
                 time.sleep(PROVISION_POLL_INTERVAL_S)
     except KeyboardInterrupt:
         terminal.warn(f"Interrupted; pool '{pool_name}' keeps provisioning in the background.")
-        terminal.detail(f"  hint: check progress with 'beta9 pool machines {pool_name}'")
+        terminal.detail(f"  hint: check progress with '{cli_name()} pool machines {pool_name}'")
         return False
 
     terminal.error(
         f"Timed out waiting for pool '{pool_name}' to become ready; it may still be provisioning.",
         exit=False,
-        hint=f"check progress with 'beta9 pool machines {pool_name}' and re-run once a machine is ready",
+        hint=f"check progress with '{cli_name()} pool machines {pool_name}' and re-run once a machine is ready",
     )
     return False
 

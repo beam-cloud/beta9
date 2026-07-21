@@ -9,7 +9,10 @@ service ShellService {
   rpc CreateShellInExistingContainer(CreateShellInExistingContainerRequest) returns (CreateShellInExistingContainerResponse) {}
 }
 
-message CreateStandaloneShellRequest { string stub_id = 1; }
+message CreateStandaloneShellRequest {
+  string stub_id = 1;
+  optional string machine_id = 2;
+}
 
 message CreateStandaloneShellResponse {
   bool ok = 1;

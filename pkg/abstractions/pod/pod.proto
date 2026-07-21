@@ -163,6 +163,7 @@ message CreatePodRequest {
   string stub_id = 1;
   optional string image_id = 2;
   optional string checkpoint_id = 3;
+  optional string machine_id = 4;
 }
 
 message CreatePodResponse {
@@ -170,6 +171,7 @@ message CreatePodResponse {
   string container_id = 2;
   string error_msg = 3;
   string stub_id = 4;
+  string management_url = 5;
 }
 
 message PodSandboxExecRequest {

@@ -26,6 +26,7 @@ func TestSetContainerStateWithConcurrencyLimitSkipsLockWithoutQuota(t *testing.T
 		ContainerId: "sandbox-test-stub-00000000",
 		StubId:      "test-stub",
 		WorkspaceId: "test-workspace",
+		MachineId:   "machine-1",
 		Cpu:         100,
 		Memory:      128,
 		Stub: types.StubWithRelated{
@@ -60,6 +61,9 @@ func TestSetContainerStateWithConcurrencyLimitSkipsLockWithoutQuota(t *testing.T
 	}
 	if state.Status != types.ContainerStatusPending {
 		t.Fatalf("expected pending state, got %s", state.Status)
+	}
+	if state.MachineId != request.MachineId {
+		t.Fatalf("expected pending state on machine %q, got %q", request.MachineId, state.MachineId)
 	}
 }
 

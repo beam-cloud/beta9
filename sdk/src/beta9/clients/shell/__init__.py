@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 @dataclass(eq=False, repr=False)
 class CreateStandaloneShellRequest(betterproto.Message):
     stub_id: str = betterproto.string_field(1)
+    machine_id: Optional[str] = betterproto.string_field(2, optional=True)
 
 
 @dataclass(eq=False, repr=False)

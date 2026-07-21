@@ -38,6 +38,7 @@ from .extraclick import (
     override_config_options,
 )
 
+
 @click.group(cls=ClickCommonGroup)
 def common(**_):
     pass
@@ -105,6 +106,12 @@ def common(**_):
     show_default=True,
     help="Rollout strategy for always-on deployments.",
 )
+@click.option(
+    "--replicas",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Set a fixed replica count (equivalent to matching min/max replicas).",
+)
 @override_config_options
 @extraclick.config_context_option
 @click.pass_context
@@ -116,9 +123,19 @@ def deploy(
     format: str,
     json_output: bool,
     rollout: str,
+    replicas: Optional[int],
     context: str = None,
     **kwargs,
 ):
+    if replicas is not None:
+        for option in ("min_replicas", "max_replicas"):
+            configured = kwargs.get(option)
+            if configured is not None and configured != replicas:
+                raise click.UsageError(
+                    f"--replicas conflicts with --{option.replace('_', '-')}={configured}"
+                )
+            kwargs[option] = replicas
+
     ctx.invoke(
         create_deployment,
         name=name,
@@ -236,9 +253,7 @@ def _generate_service_module(name: Optional[str], kwargs: Dict) -> Service:
         "image": service_image or Image(),
         "env": env_vars_to_dict(kwargs.get("env")),
         "keep_warm_seconds": (
-            DEFAULT_SERVICE_KEEP_WARM_SECONDS
-            if keep_warm_seconds is None
-            else keep_warm_seconds
+            DEFAULT_SERVICE_KEEP_WARM_SECONDS if keep_warm_seconds is None else keep_warm_seconds
         ),
         "min_replicas": kwargs.get("min_replicas") or 0,
         "max_replicas": kwargs.get("max_replicas"),

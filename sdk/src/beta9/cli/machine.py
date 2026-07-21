@@ -7,7 +7,11 @@ from .. import terminal
 from ..abstractions.base.capacity import (
     DEFAULT_ONDEMAND_TTL,
     INDEFINITE_TTL,
+    cli_name,
+    credit_error_hint,
+    credits_url,
     fetch_offers,
+    no_offers_hint,
     offer_options,
     pool_config_for_offer,
     select_ttl,
@@ -15,6 +19,7 @@ from ..abstractions.base.capacity import (
     valid_ttl,
     wait_for_pool_ready,
 )
+from ..abstractions.pod import Pod
 from ..channel import ServiceClient
 from ..cli import extraclick
 from ..clients.gateway import (
@@ -25,6 +30,7 @@ from ..clients.gateway import (
     DeletePoolRequest,
     LaunchPoolCapacityRequest,
     LaunchPoolCapacityResponse,
+    ListContainersRequest,
     ListMachinesRequest,
     ListMachinesResponse,
     ListPrivatePoolsRequest,
@@ -83,7 +89,9 @@ def _machine_list_renderables(
     if res.machines:
         renderables.append(machine_table(res.machines))
     else:
-        renderables.append("[dim]  none yet — try 'beta9 machine reserve --gpu <type>'[/dim]")
+        renderables.append(
+            f"[dim]  none yet — try '{cli_name()} machine reserve --gpu <type>'[/dim]"
+        )
     return renderables
 
 
@@ -195,8 +203,69 @@ def list_machines(
 
     if res.machines:
         terminal.detail(
-            "  hint: reserve on-demand hardware with 'beta9 machine reserve --gpu <type>'"
+            f"  hint: reserve on-demand hardware with '{cli_name()} machine reserve --gpu <type>'"
         )
+
+
+@management.command(
+    name="ssh",
+    help="Open a shell container on a reserved machine.",
+    epilog="""
+    Examples:
+
+      {cli_name} machine ssh 9a8b7c6d
+      \b
+    """,
+)
+@click.argument("machine_id", required=True)
+@extraclick.pass_service_client
+def ssh_machine(service: ServiceClient, machine_id: str):
+    machines_res = service.gateway.list_machines(ListMachinesRequest(limit=100))
+    if not machines_res.ok:
+        return terminal.error(machines_res.err_msg)
+
+    machine = next((m for m in machines_res.machines if m.id == machine_id), None)
+    if machine is None:
+        return terminal.error(f"Machine '{machine_id}' was not found.")
+    if machine.status.lower() not in ("available", "ready"):
+        return terminal.error(f"Machine '{machine_id}' is {machine.status or 'not ready'}.")
+
+    containers_res = service.gateway.list_containers(ListContainersRequest())
+    if not containers_res.ok:
+        return terminal.error(containers_res.error_msg)
+    containers = [
+        c
+        for c in containers_res.containers
+        if c.machine_id == machine_id and c.status.upper() == "RUNNING"
+    ]
+
+    if containers:
+        options = [
+            terminal.SelectOption(
+                label=c.container_id,
+                value=c.container_id,
+                description=f"existing {c.stub_id or 'container'}",
+            )
+            for c in containers
+        ]
+        options.append(
+            terminal.SelectOption(
+                label="New shell container",
+                value="",
+                description="uses the machine's currently free hardware",
+            )
+        )
+        container_id = terminal.select("Where do you want to connect?", options)
+        if container_id:
+            return Pod().shell(container_id=container_id)
+
+    free_gpu_count = max(0, int(machine.machine_metrics.free_gpu_count))
+    pod = Pod(
+        pool=machine.pool_name,
+        gpu=machine.gpu if free_gpu_count > 0 else "",
+        gpu_count=free_gpu_count,
+    )
+    return pod.shell(machine_id=machine_id)
 
 
 @management.command(
@@ -258,7 +327,7 @@ def reserve_machine(
         gpu_label = ", ".join(gpu) if gpu else "your request"
         return terminal.error(
             f"No on-demand offers currently available for {gpu_label}.",
-            hint="pick a different GPU, or attach your own machine with 'beta9 pool join'",
+            hint=no_offers_hint(),
         )
 
     # Scripts and agents get deterministic behavior: cheapest offer, no prompts.
@@ -290,11 +359,16 @@ def reserve_machine(
     res = service.gateway.launch_pool_capacity(LaunchPoolCapacityRequest(pool=pool, nodes=nodes))
     if not res.ok:
         hint = None
-        if res.error_code == "insufficient_credit":
-            hint = (
-                f"requires ${res.required_cents / 100:.2f} in credit, "
-                f"you have ${res.available_cents / 100:.2f}"
-            )
+        if "credit" in (res.error_code or "") or credit_error_hint(res.err_msg):
+            parts = []
+            if res.required_cents:
+                parts.append(
+                    f"requires ${res.required_cents / 100:.2f} in credit, "
+                    f"you have ${res.available_cents / 100:.2f}"
+                )
+            if url := credits_url():
+                parts.append(f"purchase credits at {url}")
+            hint = " — ".join(parts) or None
         return terminal.error(f"Failed to reserve capacity: {res.err_msg}", hint=hint)
 
     if not wait_for_pool_ready(service.gateway, pool.name):
@@ -302,8 +376,8 @@ def reserve_machine(
 
     terminal.done(f"Reserved '{pool.name}'")
     terminal.detail(f'  run on it:    @function(gpu="{offer.gpu}", pool="{pool.name}")')
-    terminal.detail("  check status: beta9 machine list")
-    terminal.detail("  release:      beta9 machine release")
+    terminal.detail(f"  check status: {cli_name()} machine list")
+    terminal.detail(f"  release:      {cli_name()} machine release")
 
 
 def _release_candidates(pools: Sequence[PrivatePool]) -> List[PrivatePool]:

@@ -222,7 +222,10 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 				}, nil
 			}
 
-			if len(lowCapacityGpus) > 0 {
+			// A stub targeting a private/on-demand pool runs on that pool's
+			// capacity; managed GPU scarcity is at most a fallback concern,
+			// so warning about it is just noise.
+			if len(lowCapacityGpus) > 0 && !resourcePolicy.privatePoolTargeted {
 				warning = appendWarning(warning, fmt.Sprintf("GPU capacity for %s is currently low.", strings.Join(lowCapacityGpus, ", ")))
 			}
 

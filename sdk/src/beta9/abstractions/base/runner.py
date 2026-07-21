@@ -54,7 +54,7 @@ from ...type import (
     normalize_gpu_type,
 )
 from ...utils import TempFile
-from .capacity import handle_capacity_verdict
+from .capacity import credit_error_hint, handle_capacity_verdict
 from .utils import sdk_timing, timed_lock
 
 CONTAINER_STUB_TYPE = "container"
@@ -801,7 +801,7 @@ class RunnerAbstraction(BaseAbstraction):
             return True
 
         if err := stub_response.err_msg:
-            terminal.error(err, exit=False)
+            terminal.error(err, exit=False, hint=credit_error_hint(err))
         else:
             terminal.error("Failed to get or create stub", exit=False)
         return False
