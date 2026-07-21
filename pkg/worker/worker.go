@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -53,7 +54,24 @@ const (
 	// nanoseconds) and wrap negative, which would fire the startup timer
 	// immediately and fail every container.
 	maxContainerStartupTimeout time.Duration = 1 * time.Hour
+	gvisorShmemTHPPath                       = "/sys/kernel/mm/transparent_hugepage/shmem_enabled"
 )
+
+func ensureGVisorShmemTHP(path string) (bool, error) {
+	policy, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+
+	current := string(policy)
+	if !strings.Contains(current, "[never]") && !strings.Contains(current, "[deny]") {
+		return false, nil
+	}
+	if err := os.WriteFile(path, []byte("advise"), 0644); err != nil {
+		return false, err
+	}
+	return true, nil
+}
 
 type Worker struct {
 	workerId                string
@@ -296,6 +314,12 @@ func NewWorker() (_ *Worker, err error) {
 	case types.ContainerRuntimeRunc.String():
 		defaultRuntime = runcRuntime
 	case types.ContainerRuntimeGvisor.String():
+		if changed, err := ensureGVisorShmemTHP(gvisorShmemTHPPath); err != nil {
+			log.Warn().Err(err).Msg("failed to enable shmem transparent huge pages for gVisor")
+		} else if changed {
+			log.Info().Msg("enabled shmem transparent huge pages for gVisor")
+		}
+
 		// Get gVisor configuration from pool config
 		gvisorRoot := poolConfig.ContainerRuntimeConfig.GVisorRoot
 		if gvisorRoot == "" {
@@ -1111,12 +1135,6 @@ func (s *Worker) shutdown() error {
 	s.waitForActiveContainersBeforeShutdown()
 	s.stopActiveContainersForShutdown()
 
-	if s.cacheManager != nil {
-		if err := s.cacheManager.Close(); err != nil {
-			errs = errors.Join(errs, fmt.Errorf("failed to cleanup cache: %v", err))
-		}
-	}
-
 	if s.containerNetworkManager != nil {
 		if err := s.containerNetworkManager.Close(); err != nil {
 			errs = errors.Join(errs, fmt.Errorf("failed to cleanup preallocated container networks: %v", err))
@@ -1148,6 +1166,15 @@ func (s *Worker) shutdown() error {
 	err = s.storageManager.Cleanup()
 	if err != nil {
 		errs = errors.Join(errs, fmt.Errorf("failed to cleanup workspace storage: %v", err))
+	}
+
+	// Workspace GeeseFS mounts may still be draining lazy read-through stores
+	// and durable identity publications. Keep the cache client alive until every
+	// workspace mount has completed WaitForFlush and unmounted.
+	if s.cacheManager != nil {
+		if err := s.cacheManager.Close(); err != nil {
+			errs = errors.Join(errs, fmt.Errorf("failed to cleanup cache: %v", err))
+		}
 	}
 
 	if err := cleanupImageMountPath(s.imageMountPath); err != nil {

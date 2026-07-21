@@ -489,6 +489,24 @@ func (m agentMachineWorker) worker() *types.Worker {
 }
 
 func (m agentMachineWorker) applyToWorker(worker *types.Worker) {
+	usedCPU := max(worker.TotalCpu-worker.FreeCpu, 0)
+	usedMemory := max(worker.TotalMemory-worker.FreeMemory, 0)
+	usedGPU := uint32(0)
+	if worker.TotalGpuCount > worker.FreeGpuCount {
+		usedGPU = worker.TotalGpuCount - worker.FreeGpuCount
+	}
+
+	worker.TotalCpu = m.cpu
+	worker.FreeCpu = max(m.cpu-usedCPU, 0)
+	worker.TotalMemory = m.memory
+	worker.FreeMemory = max(m.memory-usedMemory, 0)
+	worker.TotalGpuCount = m.gpuCount
+	if usedGPU >= m.gpuCount {
+		worker.FreeGpuCount = 0
+	} else {
+		worker.FreeGpuCount = m.gpuCount - usedGPU
+	}
+
 	worker.Gpu = m.gpu
 	worker.WorkspaceId = m.workspaceID
 	worker.ControlPlaneManaged = m.controlPlaneManaged

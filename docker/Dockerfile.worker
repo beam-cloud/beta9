@@ -85,7 +85,10 @@ EOT
 FROM debian:bookworm AS gvisor
 
 ARG TARGETARCH
-ARG GVISOR_VERSION=20260520.0
+ARG GVISOR_VERSION=20260714.0
+# beam-cloud/gvisor@5e447de02f83f59b0517ce44979a816a996a5f96
+ARG GVISOR_AMD64_RELEASE=release-20260714.0-beam.3
+ARG GVISOR_AMD64_SHA512=b2836a6760b0d38c797c4674041eaaa3b1494f390c24b03c9cf67f21e822fdcf56faf96a7b7c5b55883149454fa1cf52a3ae3ab0170af8ac422212d6159b7f93
 
 WORKDIR /tmp
 
@@ -97,15 +100,25 @@ set -eux
 # Determine the correct architecture for gVisor
 if [ "$TARGETARCH" = "amd64" ]; then
     GVISOR_ARCH="x86_64"
+    GVISOR_BASE_URL="https://github.com/beam-cloud/gvisor/releases/download/${GVISOR_AMD64_RELEASE}"
+    RUNSC_URL="${GVISOR_BASE_URL}/runsc.${GVISOR_ARCH}"
+    RUNSC_SHA512="$GVISOR_AMD64_SHA512"
 elif [ "$TARGETARCH" = "arm64" ]; then
     GVISOR_ARCH="aarch64"
+    GVISOR_BASE_URL="https://storage.googleapis.com/gvisor/releases/release/${GVISOR_VERSION}/${GVISOR_ARCH}"
+    RUNSC_URL="${GVISOR_BASE_URL}/runsc"
+    RUNSC_SHA512_URL="${RUNSC_URL}.sha512"
 else
     echo "Unsupported architecture: $TARGETARCH" && exit 1
 fi
 
 # Download runsc and its checksum to /tmp
-curl -fsSL https://storage.googleapis.com/gvisor/releases/release/${GVISOR_VERSION}/${GVISOR_ARCH}/runsc -o /tmp/runsc
-curl -fsSL https://storage.googleapis.com/gvisor/releases/release/${GVISOR_VERSION}/${GVISOR_ARCH}/runsc.sha512 -o /tmp/runsc.sha512
+curl -fsSL "$RUNSC_URL" -o /tmp/runsc
+if [ -n "${RUNSC_SHA512:-}" ]; then
+    printf '%s  runsc\n' "$RUNSC_SHA512" > /tmp/runsc.sha512
+else
+    curl -fsSL "$RUNSC_SHA512_URL" -o /tmp/runsc.sha512
+fi
 
 # Verify checksum (cd to /tmp where both files are)
 cd /tmp && sha512sum -c runsc.sha512
@@ -247,6 +260,7 @@ ARG CRIU_COMMIT=b47c692bb3a73ae45ee1c4ab215a8f6869d40efd
 COPY docker/patches/criu/criu-network-remap.patch /tmp/criu-network-remap.patch
 COPY docker/patches/criu/criu-skip-non-cuda-resume.patch /tmp/criu-skip-non-cuda-resume.patch
 COPY docker/patches/criu/criu-skip-fresh-zero-pages.patch /tmp/criu-skip-fresh-zero-pages.patch
+COPY docker/patches/criu/criu-ignore-erms-compat.patch /tmp/criu-ignore-erms-compat.patch
 
 RUN <<EOT
 set -eux
@@ -278,6 +292,8 @@ if [ "$(uname -m)" = "x86_64" ] || [ "$(uname -m)" = "aarch64" ]; then
     git apply --unidiff-zero /tmp/criu-skip-non-cuda-resume.patch
     git apply --check /tmp/criu-skip-fresh-zero-pages.patch
     git apply /tmp/criu-skip-fresh-zero-pages.patch
+    git apply --check /tmp/criu-ignore-erms-compat.patch
+    git apply /tmp/criu-ignore-erms-compat.patch
 
     if [ "$(uname -m)" = "x86_64" ]; then
         make install-lib install-criu install-compel install-cuda_plugin PREFIX=/usr SKIP_PIP_INSTALL=1

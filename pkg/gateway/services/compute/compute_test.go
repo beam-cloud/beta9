@@ -2498,6 +2498,14 @@ func TestValidateAgentTransportConfig(t *testing.T) {
 	}
 }
 
+func TestAgentInstallCommandLeavesCapacityUnboundedByDefault(t *testing.T) {
+	command := agentInstallCommand("https://app.stage.beam.cloud", "join-token", false, "worker:test")
+
+	if strings.Contains(command, "--max-cpu") || strings.Contains(command, "--max-memory") {
+		t.Fatalf("default install command should use detected host capacity, got %s", command)
+	}
+}
+
 func TestAgentInstallCommandDoesNotUseSudoOnDarwin(t *testing.T) {
 	command := agentInstallCommand("https://app.stage.beam.cloud", "join-token", false, "worker:test")
 

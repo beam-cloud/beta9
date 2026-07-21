@@ -209,9 +209,34 @@ func (cr *ContainerRedisRepository) SetContainerState(containerId string, state 
 
 func (cr *ContainerRedisRepository) SetContainerExitCode(containerId string, exitCode int) error {
 	exitCodeKey := common.RedisKeys.SchedulerContainerExitCode(containerId)
-	err := cr.rdb.SetEx(context.TODO(), exitCodeKey, exitCode, time.Duration(types.ContainerExitCodeTtlS)*time.Second).Err()
+	ttl := types.ContainerExitCodeTTL
+	if types.ContainerExitCode(exitCode).IsFailed() {
+		ttl = types.ContainerFailureHistoryTTL
+	}
+	err := cr.rdb.SetEx(context.TODO(), exitCodeKey, exitCode, ttl).Err()
 	if err != nil {
 		return fmt.Errorf("failed to set exit code <%v> for container <%v>: %w", exitCodeKey, containerId, err)
+	}
+
+	return nil
+}
+
+func (cr *ContainerRedisRepository) SetContainerFailureCooldown(containerIds []string) error {
+	const clampTTL = `
+if redis.call("PTTL", KEYS[1]) > tonumber(ARGV[1]) then
+	return redis.call("PEXPIRE", KEYS[1], ARGV[1])
+end
+return 0`
+
+	ctx := context.TODO()
+	pipe := cr.rdb.Pipeline()
+	for _, containerId := range containerIds {
+		key := common.RedisKeys.SchedulerContainerExitCode(containerId)
+		pipe.Eval(ctx, clampTTL, []string{key}, types.ContainerFailureCooldown.Milliseconds())
+	}
+
+	if _, err := pipe.Exec(ctx); err != nil {
+		return fmt.Errorf("failed to set container failure cooldown: %w", err)
 	}
 
 	return nil
@@ -291,6 +316,30 @@ func (cr *ContainerRedisRepository) UpdateContainerStatus(containerId string, st
 	}
 
 	return nil
+}
+
+var markPendingContainerStoppingIfUnassignedScript = redis.NewScript(`
+if redis.call("HGET", KEYS[1], "status") ~= ARGV[1] then
+	return 0
+end
+local worker_id = redis.call("HGET", KEYS[1], "worker_id")
+if worker_id and worker_id ~= "" then
+	return 0
+end
+redis.call("HSET", KEYS[1], "status", ARGV[2])
+redis.call("EXPIRE", KEYS[1], ARGV[3])
+return 1
+`)
+
+func (cr *ContainerRedisRepository) MarkPendingContainerStoppingIfUnassigned(containerId string, expirySeconds int64) (bool, error) {
+	stateKey := common.RedisKeys.SchedulerContainerState(containerId)
+	marked, err := markPendingContainerStoppingIfUnassignedScript.Run(context.TODO(), cr.rdb, []string{stateKey},
+		string(types.ContainerStatusPending), string(types.ContainerStatusStopping), expirySeconds,
+	).Bool()
+	if err != nil {
+		return false, fmt.Errorf("failed to stop unassigned pending container <%s>: %w", containerId, err)
+	}
+	return marked, nil
 }
 
 func (cr *ContainerRedisRepository) DeleteContainerState(containerId string) error {

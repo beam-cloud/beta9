@@ -281,7 +281,10 @@ func (r *workerContainerRuntime) run(ctx context.Context, slot *pb.AgentWorkerSl
 		}
 	}()
 
-	args := dockerRunArgs(name, image, imageID, configPath, r.bootstrap, slot, dirs)
+	args := dockerRunArgs(name, image, imageID, configPath, r.bootstrap, slot, dirs, workerContainerResourceLimits{
+		cpu:    strings.TrimSpace(r.opts.MaxCPU) != "",
+		memory: strings.TrimSpace(r.opts.MaxMemory) != "",
+	})
 	cmd := exec.Command("docker", args...)
 	stdoutLogs := r.telemetry.logWriter(types.AgentTelemetrySourceWorker, slot.WorkerId, types.EventLogStreamStdout)
 	stderrLogs := r.telemetry.logWriter(types.AgentTelemetrySourceWorker, slot.WorkerId, types.EventLogStreamStderr)

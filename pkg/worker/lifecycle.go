@@ -473,14 +473,13 @@ func (s *Worker) mountWorkspaceStorage(ctx context.Context, request *types.Conta
 	if err != nil {
 		return fmt.Errorf("mount workspace storage: %w", err)
 	}
-	if s.cacheManager == nil {
-		return nil
-	}
-	reporter := s.cacheManager.ContentReporter()
-	if reporter == nil {
-		return nil
-	}
 	if aware, ok := mount.(storage.VolumeContentReporterAware); ok {
+		var reporter storage.VolumeContentReporter
+		if s.cacheManager != nil {
+			reporter = s.cacheManager.ContentReporter()
+		}
+		// The workspace id also scopes the durable volume object hash registry.
+		// Set it even when proactive required-content reporting is disabled.
 		aware.SetVolumeContentReporter(request.WorkspaceId, reporter)
 	}
 	return nil
@@ -826,10 +825,10 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		spec.Linux.Resources.CPU.Cpus = cpuAffinity
 	}
 
-	throttlingEnabled := !request.IsBuildRequest() && !request.RequiresGPU()
-	cpuEnforced := s.config.Worker.ContainerResourceLimits.CPUEnforced
-	memoryEnforced := s.config.Worker.ContainerResourceLimits.MemoryEnforced
-	if throttlingEnabled && (cpuEnforced || memoryEnforced) {
+	resourceLimitsEnabled := !request.IsBuildRequest()
+	cpuEnforced := resourceLimitsEnabled && !request.RequiresGPU() && s.config.Worker.ContainerResourceLimits.CPUEnforced
+	memoryEnforced := resourceLimitsEnabled && s.config.Worker.ContainerResourceLimits.MemoryEnforced
+	if cpuEnforced || memoryEnforced {
 		resources, err := s.getContainerResources(request)
 		if err != nil {
 			return nil, err

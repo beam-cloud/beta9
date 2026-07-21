@@ -821,18 +821,17 @@ func checkpointModelCacheVolumeName(in *pb.GetOrCreateStubRequest) string {
 }
 
 func checkpointCacheEnv(modelCachePath string) []string {
-	// Persist model files across checkpoint boots, but keep compiler/JIT artifacts on
-	// local disk so Triton/TorchInductor can compile before the checkpoint is created.
+	// Persist model files across checkpoint boots, but keep compiler/JIT artifacts and
+	// Xet's transfer cache on local disk so they do not inflate the workspace volume.
 	return []string{
 		fmt.Sprintf("HF_HOME=%s", modelCachePath),
 		fmt.Sprintf("HF_HUB_CACHE=%s/hub", modelCachePath),
+		fmt.Sprintf("HF_XET_CACHE=%s/hf-xet", checkpointCompileCacheRoot),
 		fmt.Sprintf("TRANSFORMERS_CACHE=%s", modelCachePath),
 		fmt.Sprintf("TRITON_CACHE_DIR=%s/triton", checkpointCompileCacheRoot),
 		fmt.Sprintf("TORCHINDUCTOR_CACHE_DIR=%s/torchinductor", checkpointCompileCacheRoot),
 		fmt.Sprintf("VLLM_CACHE_ROOT=%s/vllm", checkpointCompileCacheRoot),
 		fmt.Sprintf("CUDA_CACHE_PATH=%s/cuda", checkpointCompileCacheRoot),
-		"HF_HUB_DISABLE_XET=1",
-		"HF_HUB_ENABLE_HF_TRANSFER=0",
 	}
 }
 

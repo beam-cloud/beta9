@@ -1,9 +1,11 @@
+import datetime
 from types import SimpleNamespace
 
 import click
 import pytest
 
 from beta9.cli import database as database_cli
+from beta9.cli import container as container_cli
 from beta9.cli.main import load_cli
 
 
@@ -19,6 +21,15 @@ def test_disk_management_commands_registered():
     assert "format" in {param.name for param in disk.commands["list"].params}
     assert "format" in {param.name for param in disk.commands["snapshots"].params}
     assert "yes" in {param.name for param in disk.commands["delete"].params}
+
+
+def test_container_uptime_ignores_unset_timestamp():
+    now = datetime.datetime(2026, 7, 18, tzinfo=datetime.timezone.utc)
+    epoch = datetime.datetime.fromtimestamp(0, tz=datetime.timezone.utc)
+
+    assert container_cli._format_uptime(None, now) == "N/A"
+    assert container_cli._format_uptime(epoch, now) == "N/A"
+    assert container_cli._format_uptime(now - datetime.timedelta(seconds=5), now) == "5 seconds"
 
 
 def test_database_commands_are_nested_under_db():

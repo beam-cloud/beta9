@@ -715,7 +715,11 @@ func cloneMounts(mounts []Mount) []Mount {
 	return out
 }
 
-const ContainerExitCodeTtlS int = 300
+const (
+	ContainerExitCodeTTL       = 5 * time.Minute
+	ContainerFailureHistoryTTL = time.Hour
+	ContainerFailureCooldown   = time.Minute
+)
 
 const (
 	ContainerDurationEmissionInterval      time.Duration = 5 * time.Second

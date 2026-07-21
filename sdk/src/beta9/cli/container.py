@@ -1,5 +1,5 @@
 import datetime
-from typing import List
+from typing import List, Optional
 
 import click
 from betterproto import Casing
@@ -42,6 +42,17 @@ AVAILABLE_LIST_COLUMNS = {
     "worker_id": "Worker ID",
     "machine_id": "Machine ID",
 }
+
+
+def _format_uptime(
+    started_at: Optional[datetime.datetime], now: datetime.datetime
+) -> str:
+    if started_at is None:
+        return "N/A"
+    epoch = datetime.datetime.fromtimestamp(0, tz=started_at.tzinfo)
+    if started_at <= epoch:
+        return "N/A"
+    return terminal.humanize_duration(now - started_at)
 
 
 @management.command(
@@ -94,9 +105,7 @@ def list_containers(
         containers = []
         for c in res.containers:
             container_dict = c.to_dict(casing=Casing.SNAKE)
-            container_dict["uptime"] = (
-                terminal.humanize_duration(now - c.started_at) if c.started_at else "N/A"
-            )
+            container_dict["uptime"] = _format_uptime(c.started_at, now)
             containers.append(container_dict)
         terminal.print_json(containers)
         return
@@ -127,11 +136,7 @@ def list_containers(
         row = []
         for col in ordered_columns:
             if col == "uptime":
-                value = (
-                    terminal.humanize_duration(now - container.started_at)
-                    if container.started_at
-                    else "N/A"
-                )
+                value = _format_uptime(container.started_at, now)
             else:
                 value = getattr(container, col)
                 if isinstance(value, datetime.datetime):

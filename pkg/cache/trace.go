@@ -102,6 +102,8 @@ func operationTraceReadResult(err error, read int64, length int64) string {
 		return "hit"
 	case errors.Is(err, ErrContentNotFound):
 		return "miss"
+	case errors.Is(err, ErrRawReadBusy):
+		return "busy"
 	case errors.Is(err, ErrSelectedHostUnavailable), errors.Is(err, ErrUnableToReachHost), errors.Is(err, ErrHostNotFound), errors.Is(err, ErrClientNotFound):
 		return "unavailable"
 	case err == nil && read != length:

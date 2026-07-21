@@ -24,7 +24,7 @@ func TestWorkerResourceCleanerRemovesWorkerStateWithoutJobAndRequeuesRequests(t 
 	workerRepo := repo.NewWorkerRedisRepositoryForTest(rdb)
 	worker := cleanerTestWorker("stale-worker", "default", "")
 	assert.Nil(t, workerRepo.AddWorker(worker))
-	assert.Nil(t, workerRepo.ScheduleContainerRequest(worker, cleanerTestRequest("container-1")))
+	scheduleCleanerRequest(t, rdb, workerRepo, worker, cleanerTestRequest("container-1"))
 
 	cleaner := WorkerResourceCleaner{
 		PoolName:   "default",
@@ -77,7 +77,7 @@ func TestWorkerResourceCleanerDeletesCompletedWorkerJob(t *testing.T) {
 	workerRepo := repo.NewWorkerRedisRepositoryForTest(rdb)
 	worker := cleanerTestWorker("completed-worker", "default", "machine-a")
 	assert.Nil(t, workerRepo.AddWorker(worker))
-	assert.Nil(t, workerRepo.ScheduleContainerRequest(worker, cleanerTestRequest("container-1")))
+	scheduleCleanerRequest(t, rdb, workerRepo, worker, cleanerTestRequest("container-1"))
 
 	job := cleanerTestWorkerJob("worker-default-completed-worker", worker.Id, "default", "machine-a")
 	pod := cleanerTestWorkerPod("worker-default-completed-worker-pod", job.Name, worker.Id, "default", "machine-a", corev1.PodSucceeded)
@@ -120,6 +120,16 @@ func cleanerTestRequest(containerId string) *types.ContainerRequest {
 		Cpu:         100,
 		Memory:      100,
 	}
+}
+
+func scheduleCleanerRequest(t *testing.T, rdb *common.RedisClient, workerRepo repo.WorkerRepository, worker *types.Worker, request *types.ContainerRequest) {
+	t.Helper()
+	containerRepo := repo.NewContainerRedisRepositoryForTest(rdb)
+	assert.NoError(t, containerRepo.SetContainerState(request.ContainerId, &types.ContainerState{
+		ContainerId: request.ContainerId,
+		Status:      types.ContainerStatusPending,
+	}))
+	assert.NoError(t, workerRepo.ScheduleContainerRequest(worker, request))
 }
 
 func cleanerTestWorkerJob(name, workerId, poolName, machineId string) *batchv1.Job {
