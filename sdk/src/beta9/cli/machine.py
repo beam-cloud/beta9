@@ -8,10 +8,10 @@ from ..abstractions.base.capacity import (
     DEFAULT_ONDEMAND_TTL,
     INDEFINITE_TTL,
     cli_name,
-    credit_error_hint,
-    credits_url,
     fetch_offers,
-    no_offers_hint,
+    launch_failure_hint,
+    no_offers_error,
+    offer_hardware_label,
     offer_options,
     pool_config_for_offer,
     select_ttl,
@@ -324,11 +324,7 @@ def reserve_machine(
     if offers is None:
         return
     if not offers:
-        gpu_label = ", ".join(gpu) if gpu else "your request"
-        return terminal.error(
-            f"No on-demand offers currently available for {gpu_label}.",
-            hint=no_offers_hint(),
-        )
+        return no_offers_error(", ".join(gpu) if gpu else "your request")
 
     # Scripts and agents get deterministic behavior: cheapest offer, no prompts.
     interactive = terminal.is_interactive() and not yes
@@ -342,11 +338,8 @@ def reserve_machine(
         ttl = select_ttl(hourly, nodes) if interactive else DEFAULT_ONDEMAND_TTL
 
     pool = pool_config_for_offer(offer, name=name, nodes=nodes, ttl=ttl, max_spend=max_spend)
-    hardware = f"{offer.gpu_count or 1}x {offer.gpu}" if offer.gpu else offer.instance_type
-    if nodes > 1:
-        hardware = f"{nodes} nodes of {hardware}"
     summary = (
-        f"Reserve {hardware} for ~${hourly * nodes:.2f}/hr? "
+        f"Reserve {offer_hardware_label(offer, nodes)} for ~${hourly * nodes:.2f}/hr? "
         f"{ttl_label(ttl).capitalize()}, max spend ${pool.max_spend:.2f}."
     )
     if interactive:
@@ -358,18 +351,12 @@ def reserve_machine(
     res: LaunchPoolCapacityResponse
     res = service.gateway.launch_pool_capacity(LaunchPoolCapacityRequest(pool=pool, nodes=nodes))
     if not res.ok:
-        hint = None
-        if "credit" in (res.error_code or "") or credit_error_hint(res.err_msg):
-            parts = []
-            if res.required_cents:
-                parts.append(
-                    f"requires ${res.required_cents / 100:.2f} in credit, "
-                    f"you have ${res.available_cents / 100:.2f}"
-                )
-            if url := credits_url():
-                parts.append(f"purchase credits at {url}")
-            hint = " — ".join(parts) or None
-        return terminal.error(f"Failed to reserve capacity: {res.err_msg}", hint=hint)
+        return terminal.error(
+            f"Failed to reserve capacity: {res.err_msg}",
+            hint=launch_failure_hint(
+                res.err_msg, res.error_code, res.required_cents, res.available_cents
+            ),
+        )
 
     if not wait_for_pool_ready(service.gateway, pool.name):
         return

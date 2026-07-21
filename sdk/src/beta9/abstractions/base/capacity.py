@@ -52,7 +52,9 @@ def cli_name() -> str:
 
 def no_capacity_hint(gpus: List[str]) -> str:
     gpu = gpus[0] if gpus else "<gpu>"
-    return f"run '{cli_name()} machine reserve --gpu {gpu}' to get hardware, or pick a different GPU"
+    return (
+        f"run '{cli_name()} machine reserve --gpu {gpu}' to get hardware, or pick a different GPU"
+    )
 
 
 def no_offers_hint() -> str:
@@ -74,7 +76,7 @@ def credits_url() -> Optional[str]:
 
     host = (get_settings().api_host or "").split(":")[0]
     if host.startswith("app."):
-        return f"https://platform.{host[len('app.'):]}/settings/credits"
+        return f"https://platform.{host[len('app.') :]}/settings/credits"
     return None
 
 
@@ -84,6 +86,51 @@ def credit_error_hint(message: str) -> Optional[str]:
     if url and "credit" in (message or "").lower():
         return f"purchase credits at {url}"
     return None
+
+
+def launch_failure_hint(
+    err_msg: str,
+    error_code: str = "",
+    required_cents: int = 0,
+    available_cents: int = 0,
+) -> Optional[str]:
+    """Actionable hint for a failed capacity launch; currently credit-focused."""
+    if "credit" not in (error_code or "") and not credit_error_hint(err_msg):
+        return None
+
+    parts = []
+    if required_cents:
+        parts.append(
+            f"requires ${required_cents / 100:.2f} in credit, you have ${available_cents / 100:.2f}"
+        )
+    if url := credits_url():
+        parts.append(f"purchase credits at {url}")
+    return " — ".join(parts) or None
+
+
+def offer_hardware_label(offer: PoolOffer, nodes: int = 1) -> str:
+    """Human label for an offer's hardware, e.g. '2 nodes of 4x A6000'."""
+    gpu_count = offer.gpu_count or 1
+    hardware = (
+        f"{gpu_count}x {offer.gpu}"
+        if offer.gpu
+        else (offer.display_name or offer.instance_type or "CPU node")
+    )
+    if nodes > 1:
+        hardware = f"{nodes} nodes of {hardware}"
+    return hardware
+
+
+def no_offers_error(gpu_label: str) -> None:
+    terminal.error(
+        f"No on-demand offers currently available for {gpu_label}.",
+        exit=False,
+        hint=no_offers_hint(),
+    )
+
+
+def _runner_interactive(runner: "RunnerAbstraction") -> bool:
+    return terminal.is_interactive() and not getattr(runner, "headless", False)
 
 
 def handle_capacity_verdict(
@@ -115,7 +162,7 @@ def handle_capacity_verdict(
     if stub_type.endswith("/deployment"):
         return _handle_deployment_capacity(runner, stub_request, stub_response, gpus, gpu_label)
 
-    if terminal.is_interactive() and not getattr(runner, "headless", False):
+    if _runner_interactive(runner):
         return _run_interactive_capacity_flow(
             runner,
             stub_request,
@@ -148,7 +195,7 @@ def _handle_deployment_capacity(
     """
     terminal.warn(f"No compute capacity currently supports {gpu_label}.")
 
-    if not terminal.is_interactive() or getattr(runner, "headless", False):
+    if not _runner_interactive(runner):
         terminal.detail(f"  hint: {no_capacity_hint(gpus)}")
         return stub_response
 
@@ -216,11 +263,7 @@ def _run_interactive_capacity_flow(
     if offers is None:
         return None
     if not offers:
-        terminal.error(
-            f"No on-demand offers currently available for {gpu_label}.",
-            exit=False,
-            hint=no_offers_hint(),
-        )
+        no_offers_error(gpu_label)
         return None
 
     try:
@@ -234,7 +277,7 @@ def _run_interactive_capacity_flow(
         hourly = offer.hourly_cost_micros / 1_000_000
         ttl = select_ttl(hourly)
         if not terminal.confirm(
-            f"Launch {offer.gpu_count or 1}x {offer.gpu} for ~${hourly:.2f}/hr ({ttl_label(ttl)})?",
+            f"Launch {offer_hardware_label(offer)} for ~${hourly:.2f}/hr ({ttl_label(ttl)})?",
             default=True,
         ):
             return None
@@ -275,12 +318,7 @@ def fetch_offers(
 def _offer_columns(offer: PoolOffer) -> tuple:
     hourly = offer.hourly_cost_micros / 1_000_000
     region = offer.region_display_name or offer.region or "any region"
-    gpu_count = offer.gpu_count or 1
-    hardware = (
-        f"{gpu_count}x {offer.gpu}"
-        if offer.gpu
-        else (offer.display_name or offer.instance_type or "CPU node")
-    )
+    hardware = offer_hardware_label(offer)
     details = []
     if offer.cpu_millicores:
         details.append(f"{offer.cpu_millicores // 1000} vCPU")
