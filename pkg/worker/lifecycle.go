@@ -1108,11 +1108,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			return
 		}
 
-		if err := gpuManager.PrepareContainerFilesystem(request, spec.Root.Path); err != nil {
-			log.Error().Str("container_id", request.ContainerId).Msgf("failed to prepare GPU container filesystem: %v", err)
-			return
-		}
-
 		if request.RequiresPhysicalGPU() {
 			// Only use CDI if runtime supports it
 			if s.runtime.Capabilities().CDI {
@@ -1508,6 +1503,13 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 	runtimeStart := time.Now()
 
 	handleRuntimeStarted := func(pid int) {
+		if request.GpuVirtualized {
+			if err := s.installThunderClient(ctx, request); err != nil {
+				log.Error().Err(err).Str("container_id", request.ContainerId).Msg("failed to install Thunder client")
+				s.stopContainer(request.ContainerId, false)
+				return
+			}
+		}
 		if err := s.publishContainerAddresses(ctx, request, startupPortBindings); err != nil {
 			log.Error().Err(err).Str("container_id", request.ContainerId).Msg("failed to publish container address")
 			s.stopContainer(request.ContainerId, false)

@@ -1819,6 +1819,11 @@ func envListToMap(env []string) map[string]string {
 }
 
 // Mock runtime for testing
+type mockExecCall struct {
+	containerID string
+	proc        specs.Process
+}
+
 type mockRuntime struct {
 	name         string
 	capabilities runtime.Capabilities
@@ -1826,6 +1831,8 @@ type mockRuntime struct {
 	signals      []syscall.Signal
 	killOpts     []*runtime.KillOpts
 	killErr      error
+	execCalls    []mockExecCall
+	execErr      error
 }
 
 func (m *mockRuntime) Name() string {
@@ -1845,7 +1852,8 @@ func (m *mockRuntime) Run(ctx context.Context, containerID, bundlePath string, o
 }
 
 func (m *mockRuntime) Exec(ctx context.Context, containerID string, proc specs.Process, opts *runtime.ExecOpts) error {
-	return nil
+	m.execCalls = append(m.execCalls, mockExecCall{containerID: containerID, proc: proc})
+	return m.execErr
 }
 
 func (m *mockRuntime) Kill(ctx context.Context, containerID string, sig syscall.Signal, opts *runtime.KillOpts) error {

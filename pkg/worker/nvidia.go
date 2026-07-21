@@ -54,7 +54,6 @@ type GPUManager interface {
 	InjectEnvVars(env []string) []string
 	InjectAssignedEnvVars(env []string, assignedDevices []int) []string
 	InjectMounts(mounts []specs.Mount) []specs.Mount
-	PrepareContainerFilesystem(request *types.ContainerRequest, rootPath string) error
 }
 
 type ContainerNvidiaManager struct {
@@ -471,8 +470,4 @@ func injectCudaMounts(mounts []specs.Mount) []specs.Mount {
 
 func (c *ContainerNvidiaManager) InjectMounts(mounts []specs.Mount) []specs.Mount {
 	return injectCudaMounts(mounts)
-}
-
-func (c *ContainerNvidiaManager) PrepareContainerFilesystem(request *types.ContainerRequest, rootPath string) error {
-	return nil
 }

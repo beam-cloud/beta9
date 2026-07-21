@@ -1,22 +1,25 @@
 package worker
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"sync/atomic"
 	"testing"
 
+	common "github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/tj/assert"
 )
 
 func TestThunderAssignRegistersClientAndLeavesAssignedEnvUnchanged(t *testing.T) {
-	var registerPayload thunderRegisterClientRequest
+	var registerPayload thunderEnrollmentTokenRequest
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != thunderRegisterClientPath {
-			t.Fatalf("path = %s, want %s", r.URL.Path, thunderRegisterClientPath)
+		if r.URL.Path != thunderEnrollmentTokenPath {
+			t.Fatalf("path = %s, want %s", r.URL.Path, thunderEnrollmentTokenPath)
 		}
 		if r.Method != http.MethodPost {
 			t.Fatalf("method = %s, want POST", r.Method)
@@ -27,11 +30,12 @@ func TestThunderAssignRegistersClientAndLeavesAssignedEnvUnchanged(t *testing.T)
 		if err := json.NewDecoder(r.Body).Decode(&registerPayload); err != nil {
 			t.Fatal(err)
 		}
-		_ = json.NewEncoder(w).Encode(thunderRegisterClientResponse{Token: "client-token"})
+		_ = json.NewEncoder(w).Encode(thunderEnrollmentTokenResponse{EnrollmentTokenID: "token-id", EnrollmentToken: "client-token", ZoneID: "zone-123", Role: thunderEnrollmentRoleClient, GPUType: "a100", GPUCount: 2})
 	}))
 	defer server.Close()
 
 	manager := NewContainerThunderManager(server.URL, "central-token", server.Client())
+	t.Setenv(thunderZoneIDEnv, "zone-123")
 	request := &types.ContainerRequest{
 		ContainerId:    "container-123",
 		Gpu:            "A100",
@@ -44,37 +48,29 @@ func TestThunderAssignRegistersClientAndLeavesAssignedEnvUnchanged(t *testing.T)
 		t.Fatal(err)
 	}
 	assert.Equal(t, []int{}, assigned)
-	assert.Equal(t, thunderRegisterClientRequest{DeviceID: "container-123", GPUType: "A100", GPUCount: 2}, registerPayload)
+	assert.Equal(t, thunderEnrollmentTokenRequest{OrgID: "", ZoneID: "zone-123", Role: thunderEnrollmentRoleClient, GPUType: "a100", GPUCount: 2, ExpiresInSeconds: thunderEnrollmentExpiresSecond}, registerPayload)
 
 	env := manager.InjectAssignedEnvVars([]string{"A=1", "NVIDIA_VISIBLE_DEVICES=void", "WORKER_GPU_DEVICES=0"}, assigned)
 	assert.Equal(t, []string{"A=1", "NVIDIA_VISIBLE_DEVICES=void", "WORKER_GPU_DEVICES=0"}, env)
 }
 
-func TestThunderInjectEnvVarsMergesLDPreload(t *testing.T) {
-	manager := NewContainerThunderManager("https://thunder.example", "central-token", nil)
-	env := manager.InjectEnvVars([]string{"LD_PRELOAD=/existing.so"})
-	assert.Contains(t, env, "LD_PRELOAD=/existing.so:/etc/thunder/libthunder.so")
-}
-
-func TestThunderUnassignUsesPostDeleteClient(t *testing.T) {
-	var deletePayload thunderDeleteClientRequest
+func TestThunderUnassignUsesDeleteEnrollmentTokenNode(t *testing.T) {
+	var deletePath string
 	var sawDelete bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case thunderRegisterClientPath:
-			_ = json.NewEncoder(w).Encode(thunderRegisterClientResponse{Token: "client-token"})
-		case thunderDeleteClientPath:
+		case thunderEnrollmentTokenPath:
+			_ = json.NewEncoder(w).Encode(thunderEnrollmentTokenResponse{EnrollmentTokenID: "token-id", EnrollmentToken: "client-token", ZoneID: "zone-123", Role: thunderEnrollmentRoleClient, GPUType: "a100", GPUCount: 2})
+		case fmt.Sprintf(thunderEnrollmentTokenNodePath, "token-id"):
 			sawDelete = true
-			if r.Method != http.MethodPost {
-				t.Fatalf("method = %s, want POST", r.Method)
+			deletePath = r.URL.Path
+			if r.Method != http.MethodDelete {
+				t.Fatalf("method = %s, want DELETE", r.Method)
 			}
 			if r.Header.Get("Authorization") != "Bearer central-token" {
 				t.Fatalf("authorization header = %q", r.Header.Get("Authorization"))
 			}
-			if err := json.NewDecoder(r.Body).Decode(&deletePayload); err != nil {
-				t.Fatal(err)
-			}
-			_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
+			_ = json.NewEncoder(w).Encode(thunderDeleteEnrollmentTokenNodeResponse{EnrollmentTokenID: "token-id", Role: thunderEnrollmentRoleClient, ClientID: "client-id", NodeDeleted: true})
 		default:
 			t.Fatalf("unexpected path %s", r.URL.Path)
 		}
@@ -82,6 +78,7 @@ func TestThunderUnassignUsesPostDeleteClient(t *testing.T) {
 	defer server.Close()
 
 	manager := NewContainerThunderManager(server.URL, "central-token", server.Client())
+	t.Setenv(thunderZoneIDEnv, "zone-123")
 	request := &types.ContainerRequest{ContainerId: "container-123", Gpu: "H100", GpuCount: 1, GpuVirtualized: true}
 	_, err := manager.AssignGPUDevices(request)
 	if err != nil {
@@ -90,29 +87,59 @@ func TestThunderUnassignUsesPostDeleteClient(t *testing.T) {
 	manager.UnassignGPUDevices(request.ContainerId)
 
 	if !sawDelete {
-		t.Fatal("delete-client was not called")
+		t.Fatal("delete enrollment-token node was not called")
 	}
-	assert.Equal(t, thunderDeleteClientRequest{DeviceID: "container-123", Token: "client-token"}, deletePayload)
+	assert.Equal(t, fmt.Sprintf(thunderEnrollmentTokenNodePath, "token-id"), deletePath)
 }
 
-func TestThunderAssignRetriesUnsuccessfulStatus(t *testing.T) {
+func TestInstallThunderClientExecutesInstaller(t *testing.T) {
+	rt := &mockRuntime{name: "runc"}
+	manager := NewContainerThunderManager("https://worker-default.example", "worker-default-token", nil)
+	manager.allocations.Set("container-123", thunderAllocation{
+		EnrollmentToken: "enroll-token",
+		APIURL:          "https://worker-default.example",
+		APIToken:        "worker-default-token",
+	})
+	instances := common.NewSafeMap[*ContainerInstance]()
+	instances.Set("container-123", &ContainerInstance{
+		Runtime: rt,
+		Spec:    &specs.Spec{Process: &specs.Process{Cwd: "/workspace", Env: []string{"A=1"}}},
+	})
+	worker := &Worker{
+		containerThunderManager: manager,
+		containerInstances:      instances,
+	}
+
+	err := worker.installThunderClient(context.Background(), &types.ContainerRequest{ContainerId: "container-123", GpuVirtualized: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rt.execCalls) != 1 {
+		t.Fatalf("execCalls = %d, want 1", len(rt.execCalls))
+	}
+	call := rt.execCalls[0]
+	assert.Equal(t, "container-123", call.containerID)
+	assert.Equal(t, "/workspace", call.proc.Cwd)
+	assert.Equal(t, []string{"sh", "-c", "curl -fsSL https://get.thundercompute.com/install.sh | sudo THUNDER_INSTALL_MODE=client THUNDER_AUTH_TOKEN='enroll-token' sh"}, call.proc.Args)
+	assert.Contains(t, call.proc.Env, "A=1")
+	assert.Contains(t, call.proc.Env, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+}
+
+func TestThunderAssignReturnsErrorOnUnsuccessfulStatus(t *testing.T) {
 	var attempts int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		attempt := atomic.AddInt32(&attempts, 1)
-		if attempt < 3 {
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-		_ = json.NewEncoder(w).Encode(thunderRegisterClientResponse{Token: "client-token"})
+		atomic.AddInt32(&attempts, 1)
+		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer server.Close()
 
 	manager := NewContainerThunderManager(server.URL, "central-token", server.Client())
+	t.Setenv(thunderZoneIDEnv, "zone-123")
 	_, err := manager.AssignGPUDevices(&types.ContainerRequest{ContainerId: "container-123", GpuRequest: []string{"H100"}, GpuVirtualized: true})
-	if err != nil {
-		t.Fatal(err)
+	if err == nil {
+		t.Fatal("expected Thunder enrollment error")
 	}
-	assert.Equal(t, int32(3), atomic.LoadInt32(&attempts))
+	assert.Equal(t, int32(1), atomic.LoadInt32(&attempts))
 }
 
 func TestThunderAssignRequiresWorkerEnv(t *testing.T) {
@@ -123,79 +150,47 @@ func TestThunderAssignRequiresWorkerEnv(t *testing.T) {
 	}
 }
 
-func TestThunderPrepareContainerFilesystemWritesThunderFiles(t *testing.T) {
-	const libraryContents = "libthunder-bytes"
-	var registerPayload thunderRegisterClientRequest
-	var assetRequested bool
+func TestThunderAssignRequiresZoneID(t *testing.T) {
+	manager := NewContainerThunderManager("https://thunder.example", "central-token", nil)
+	_, err := manager.AssignGPUDevices(&types.ContainerRequest{ContainerId: "container-123", Gpu: "A100", GpuVirtualized: true})
+	if err == nil {
+		t.Fatal("expected missing Thunder zone id error")
+	}
+}
 
+func TestThunderAssignUsesRequestScopedCredentials(t *testing.T) {
+	var authHeader string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case thunderRegisterClientPath:
-			if r.Method != http.MethodPost {
-				t.Fatalf("register method = %s, want POST", r.Method)
-			}
-			if r.Header.Get("Authorization") != "Bearer central-token" {
-				t.Fatalf("authorization header = %q", r.Header.Get("Authorization"))
-			}
-			if err := json.NewDecoder(r.Body).Decode(&registerPayload); err != nil {
-				t.Fatal(err)
-			}
-			_ = json.NewEncoder(w).Encode(thunderRegisterClientResponse{Token: "client-token"})
-		case thunderLibraryAssetPath:
-			assetRequested = true
-			if r.Method != http.MethodGet {
-				t.Fatalf("asset method = %s, want GET", r.Method)
-			}
-			_, _ = w.Write([]byte(libraryContents))
-		default:
-			t.Fatalf("unexpected path %s", r.URL.Path)
-		}
+		authHeader = r.Header.Get("Authorization")
+		_ = json.NewEncoder(w).Encode(thunderEnrollmentTokenResponse{EnrollmentTokenID: "token-id", EnrollmentToken: "client-token", ZoneID: "zone-123", Role: thunderEnrollmentRoleClient, GPUType: "a100", GPUCount: 2})
 	}))
 	defer server.Close()
 
-	manager := NewContainerThunderManager(server.URL, "central-token", server.Client())
+	manager := NewContainerThunderManager("https://worker-default.example", "worker-default-token", server.Client())
+	t.Setenv(thunderZoneIDEnv, "zone-worker")
 	request := &types.ContainerRequest{
 		ContainerId:    "container-123",
 		Gpu:            "A100",
-		GpuCount:       2,
+		GpuCount:       1,
 		GpuVirtualized: true,
+		Env: []string{
+			thunderAPIURLEnv + "=" + server.URL,
+			thunderAPITokenEnv + "=request-token",
+			thunderZoneIDEnv + "=zone-request",
+		},
 	}
-	rootPath := t.TempDir()
 
-	if err := manager.PrepareContainerFilesystem(request, rootPath); err != nil {
-		t.Fatal(err)
-	}
-
-	assert.Equal(t, thunderRegisterClientRequest{DeviceID: "container-123", GPUType: "A100", GPUCount: 2}, registerPayload)
-	assert.True(t, assetRequested)
-
-	library, err := os.ReadFile(thunderHostPath(rootPath, thunderLibraryPath))
+	_, err := manager.AssignGPUDevices(request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	assert.Equal(t, libraryContents, string(library))
+	assert.Equal(t, "Bearer request-token", authHeader)
 
-	token, err := os.ReadFile(thunderHostPath(rootPath, thunderTokenPath))
-	if err != nil {
-		t.Fatal(err)
-	}
-	assert.Equal(t, "client-token", string(token))
-
-	configBytes, err := os.ReadFile(thunderHostPath(rootPath, thunderConfigPath))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var config thunderConfigFile
-	if err := json.Unmarshal(configBytes, &config); err != nil {
-		t.Fatal(err)
-	}
-	assert.Equal(t, thunderConfigFile{
-		DeviceID:        "container-123",
-		GPUCount:        2,
-		GPUType:         "A100",
-		EnableGRPCTLS:   false,
-		CentralApiUrl:   server.URL,
-		CentralZoneId:   "thunder-beam",
-		CentralApiToken: "central-token",
-	}, config)
+	allocation, ok := manager.allocations.Get(request.ContainerId)
+	assert.True(t, ok)
+	assert.Equal(t, server.URL, allocation.APIURL)
+	assert.Equal(t, "request-token", allocation.APIToken)
+	assert.Equal(t, "token-id", allocation.EnrollmentTokenID)
+	assert.Equal(t, "client-token", allocation.EnrollmentToken)
+	assert.Equal(t, "zone-123", allocation.Response.ZoneID)
 }

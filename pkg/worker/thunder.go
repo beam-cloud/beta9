@@ -2,12 +2,11 @@ package worker
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -18,19 +17,13 @@ import (
 )
 
 const (
-	thunderAPIURLEnv          = "THUNDER_API_URL"
-	thunderAPITokenEnv        = "THUNDER_API_TOKEN"
-	thunderRegisterClientPath = "/register-client"
-	thunderDeleteClientPath   = "/delete-client"
-	thunderLibraryAssetPath   = "/assets/libthunder.so"
-	thunderRequestAttempts    = 3
-	thunderRetryDelay         = time.Second
-)
-
-const (
-	thunderConfigPath  = "/etc/thunder/config.json"
-	thunderTokenPath   = "/etc/thunder/token"
-	thunderLibraryPath = "/etc/thunder/libthunder.so"
+	thunderAPIURLEnv               = "THUNDER_API_URL"
+	thunderAPITokenEnv             = "THUNDER_API_TOKEN"
+	thunderZoneIDEnv               = "THUNDER_ZONE_ID"
+	thunderEnrollmentTokenPath     = "/api/v1/enrollment-token"
+	thunderEnrollmentTokenNodePath = "/api/v1/enrollment-tokens/%s/node"
+	thunderEnrollmentRoleClient    = "client"
+	thunderEnrollmentExpiresSecond = 604800
 )
 
 type ContainerThunderManager struct {
@@ -41,32 +34,40 @@ type ContainerThunderManager struct {
 }
 
 type thunderAllocation struct {
-	Token string
+	EnrollmentTokenID string
+	EnrollmentToken   string
+	APIURL            string
+	APIToken          string
+	Response          thunderEnrollmentTokenResponse
 }
 
-type thunderRegisterClientRequest struct {
-	DeviceID string `json:"deviceId"`
-	GPUType  string `json:"gpuType"`
-	GPUCount int    `json:"gpuCount"`
+type thunderEnrollmentTokenRequest struct {
+	OrgID            string `json:"orgId"`
+	ZoneID           string `json:"zoneId"`
+	Role             string `json:"role"`
+	GPUType          string `json:"gpuType"`
+	GPUCount         int    `json:"gpuCount"`
+	ExpiresInSeconds int    `json:"expiresInSeconds"`
 }
 
-type thunderRegisterClientResponse struct {
-	Token string `json:"token"`
+type thunderEnrollmentTokenResponse struct {
+	EnrollmentTokenID string    `json:"enrollmentTokenId"`
+	EnrollmentToken   string    `json:"enrollmentToken"`
+	OrgID             string    `json:"orgId"`
+	ZoneID            string    `json:"zoneId"`
+	Role              string    `json:"role"`
+	GPUType           string    `json:"gpuType"`
+	GPUCount          int       `json:"gpuCount"`
+	ExpiresAt         time.Time `json:"expiresAt"`
 }
 
-type thunderDeleteClientRequest struct {
-	DeviceID string `json:"deviceId"`
-	Token    string `json:"token"`
-}
-
-type thunderConfigFile struct {
-	DeviceID        string `json:"deviceId"`
-	GPUCount        int    `json:"gpuCount"`
-	GPUType         string `json:"gpuType"`
-	EnableGRPCTLS   bool   `json:"enableGrpcTls"`
-	CentralApiUrl   string `json:"centralApiUrl"`
-	CentralZoneId   string `json:"centralZoneId"`
-	CentralApiToken string `json:"centralApiToken"`
+type thunderDeleteEnrollmentTokenNodeResponse struct {
+	EnrollmentTokenID string    `json:"enrollmentTokenId"`
+	Role              string    `json:"role"`
+	ClientID          string    `json:"clientId"`
+	HostID            string    `json:"hostId"`
+	NodeDeleted       bool      `json:"nodeDeleted"`
+	DeletedAt         time.Time `json:"deletedAt"`
 }
 
 func NewContainerThunderManagerFromEnv() GPUManager {
@@ -89,25 +90,41 @@ func (c *ContainerThunderManager) AssignGPUDevices(request *types.ContainerReque
 	if request == nil {
 		return nil, fmt.Errorf("missing container request")
 	}
-	if c.apiURL == "" {
+
+	apiURL, apiToken := c.thunderCredentials(request)
+	if apiURL == "" {
 		return nil, fmt.Errorf("%s is required for virtualized GPU requests", thunderAPIURLEnv)
 	}
-	if c.apiToken == "" {
+	if apiToken == "" {
 		return nil, fmt.Errorf("%s is required for virtualized GPU requests", thunderAPITokenEnv)
 	}
 
-	payload := thunderRegisterClientRequest{
-		DeviceID: request.ContainerId,
-		GPUType:  thunderGPUType(request),
-		GPUCount: int(thunderGPUCount(request)),
+	zoneID := thunderZoneID(request)
+	if zoneID == "" {
+		return nil, fmt.Errorf("%s is required for virtualized GPU requests", thunderZoneIDEnv)
 	}
 
-	var response thunderRegisterClientResponse
-	if err := c.doThunderRequest(http.MethodPost, thunderRegisterClientPath, payload, &response); err != nil {
+	payload := thunderEnrollmentTokenRequest{
+		OrgID:            "",
+		ZoneID:           zoneID,
+		Role:             thunderEnrollmentRoleClient,
+		GPUType:          strings.ToLower(thunderGPUType(request)),
+		GPUCount:         int(thunderGPUCount(request)),
+		ExpiresInSeconds: thunderEnrollmentExpiresSecond,
+	}
+
+	var response thunderEnrollmentTokenResponse
+	if err := c.doThunderRequest(http.MethodPost, apiURL, apiToken, thunderEnrollmentTokenPath, payload, &response); err != nil {
 		return nil, err
 	}
 
-	c.allocations.Set(request.ContainerId, thunderAllocation{Token: response.Token})
+	c.allocations.Set(request.ContainerId, thunderAllocation{
+		EnrollmentTokenID: response.EnrollmentTokenID,
+		EnrollmentToken:   response.EnrollmentToken,
+		APIURL:            apiURL,
+		APIToken:          apiToken,
+		Response:          response,
+	})
 	return []int{}, nil
 }
 
@@ -120,9 +137,14 @@ func (c *ContainerThunderManager) UnassignGPUDevices(containerId string) {
 	if !ok {
 		return
 	}
+	if strings.TrimSpace(allocation.EnrollmentTokenID) == "" {
+		log.Error().Str("container_id", containerId).Msg("missing Thunder enrollment token id for virtual GPU unenrollment")
+		c.allocations.Delete(containerId)
+		return
+	}
 
-	payload := thunderDeleteClientRequest{DeviceID: containerId, Token: allocation.Token}
-	if err := c.doThunderRequest(http.MethodPost, thunderDeleteClientPath, payload, nil); err != nil {
+	path := fmt.Sprintf(thunderEnrollmentTokenNodePath, allocation.EnrollmentTokenID)
+	if err := c.doThunderRequest(http.MethodDelete, allocation.APIURL, allocation.APIToken, path, nil, nil); err != nil {
 		log.Error().Str("container_id", containerId).Err(err).Msg("failed to unregister Thunder virtual GPU client")
 	}
 	c.allocations.Delete(containerId)
@@ -133,7 +155,7 @@ func (c *ContainerThunderManager) CDIDevices(assignedDevices []int) []string {
 }
 
 func (c *ContainerThunderManager) InjectEnvVars(env []string) []string {
-	return withLDPreload(injectCudaEnvVars(env), thunderLibraryPath)
+	return injectCudaEnvVars(env)
 }
 
 func (c *ContainerThunderManager) InjectAssignedEnvVars(env []string, assignedDevices []int) []string {
@@ -144,54 +166,58 @@ func (c *ContainerThunderManager) InjectMounts(mounts []specs.Mount) []specs.Mou
 	return injectCudaMounts(mounts)
 }
 
-func (c *ContainerThunderManager) doThunderRequest(method, path string, payload any, response any) error {
-	endpoint, err := c.thunderEndpoint(path)
+func (c *ContainerThunderManager) doThunderRequest(method, apiURL, apiToken, path string, payload any, response any) error {
+	endpoint, err := thunderEndpoint(apiURL, path)
 	if err != nil {
 		return err
 	}
 
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return err
-	}
-
-	var lastErr error
-	for attempt := 1; attempt <= thunderRequestAttempts; attempt++ {
-		req, err := http.NewRequest(method, endpoint, bytes.NewReader(body))
+	var bodyReader *bytes.Reader
+	if payload != nil {
+		body, err := json.Marshal(payload)
 		if err != nil {
 			return err
 		}
-		req.Header.Set("Authorization", "Bearer "+c.apiToken)
-		req.Header.Set("Content-Type", "application/json")
-
-		resp, err := c.client.Do(req)
-		if err == nil && resp != nil {
-			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-				defer resp.Body.Close()
-				if response == nil {
-					return nil
-				}
-				return json.NewDecoder(resp.Body).Decode(response)
-			}
-			resp.Body.Close()
-			lastErr = fmt.Errorf("Thunder API %s %s returned status %d", method, path, resp.StatusCode)
-		} else if err != nil {
-			lastErr = err
-		}
-
-		if attempt < thunderRequestAttempts {
-			time.Sleep(thunderRetryDelay)
-		}
+		bodyReader = bytes.NewReader(body)
+	} else {
+		bodyReader = bytes.NewReader(nil)
 	}
 
-	return lastErr
+	req, err := http.NewRequest(method, endpoint, bodyReader)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+apiToken)
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		log.Error().Str("method", method).Str("path", path).Err(err).Msg("Thunder API request failed")
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		err = fmt.Errorf("Thunder API %s %s returned status %d", method, path, resp.StatusCode)
+		log.Error().Str("method", method).Str("path", path).Int("status_code", resp.StatusCode).Msg("Thunder API request failed")
+		return err
+	}
+	if response == nil {
+		return nil
+	}
+	if err := json.NewDecoder(resp.Body).Decode(response); err != nil {
+		log.Error().Str("method", method).Str("path", path).Err(err).Msg("Thunder API response decode failed")
+		return err
+	}
+	return nil
 }
 
-func (c *ContainerThunderManager) thunderEndpoint(path string) (string, error) {
+func thunderEndpoint(apiURL, path string) (string, error) {
 	if !strings.HasPrefix(path, "/") {
 		path = "/" + path
 	}
-	return c.apiURL + path, nil
+	return strings.TrimRight(apiURL, "/") + path, nil
 }
 
 func thunderGPUType(request *types.ContainerRequest) string {
@@ -222,132 +248,90 @@ func thunderGPUCount(request *types.ContainerRequest) uint32 {
 	return 0
 }
 
-func (c *ContainerThunderManager) PrepareContainerFilesystem(request *types.ContainerRequest, rootPath string) error {
-	return c.InjectThunderFiles(request, rootPath)
+func (c *ContainerThunderManager) thunderCredentials(request *types.ContainerRequest) (string, string) {
+	apiURL := strings.TrimSpace(c.apiURL)
+	apiToken := strings.TrimSpace(c.apiToken)
+	if request == nil {
+		return apiURL, apiToken
+	}
+
+	if value, ok := thunderRequestEnv(request.Env, thunderAPIURLEnv); ok {
+		apiURL = value
+	}
+	if value, ok := thunderRequestEnv(request.Env, thunderAPITokenEnv); ok {
+		apiToken = value
+	}
+	return apiURL, apiToken
 }
 
-func (c *ContainerThunderManager) InjectThunderFiles(request *types.ContainerRequest, rootPath string) error {
+func thunderZoneID(request *types.ContainerRequest) string {
+	zoneID := strings.TrimSpace(os.Getenv(thunderZoneIDEnv))
 	if request == nil {
-		return fmt.Errorf("missing container request")
+		return zoneID
 	}
-	if rootPath == "" {
-		return fmt.Errorf("missing container root path")
+	if value, ok := thunderRequestEnv(request.Env, thunderZoneIDEnv); ok {
+		zoneID = value
+	}
+	return zoneID
+}
+
+func thunderRequestEnv(env []string, key string) (string, bool) {
+	prefix := key + "="
+	for _, item := range env {
+		if strings.HasPrefix(item, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(item, prefix)), true
+		}
+	}
+	return "", false
+}
+
+func (s *Worker) installThunderClient(ctx context.Context, request *types.ContainerRequest) error {
+	if s == nil || request == nil || !request.GpuVirtualized {
+		return nil
+	}
+	manager, ok := s.containerThunderManager.(*ContainerThunderManager)
+	if !ok || manager == nil {
+		return fmt.Errorf("thunder manager unavailable")
+	}
+	allocation, ok := manager.allocations.Get(request.ContainerId)
+	if !ok || strings.TrimSpace(allocation.EnrollmentToken) == "" {
+		return fmt.Errorf("missing Thunder enrollment token for container %s", request.ContainerId)
+	}
+	instance, ok := s.containerInstances.Get(request.ContainerId)
+	if !ok || instance == nil || instance.Runtime == nil {
+		return fmt.Errorf("container runtime unavailable for Thunder install")
 	}
 
-	allocation, err := c.thunderAllocationForRequest(request)
-	if err != nil {
-		return err
+	env := append([]string(nil), instance.Spec.Process.Env...)
+	if !containsEnvKey(env, "PATH") {
+		env = append(env, "PATH="+strings.Join(defaultContainerPath, ":"))
 	}
-
-	if err := c.createThunderLibrary(rootPath); err != nil {
-		return err
+	cwd := "/"
+	if instance.Spec != nil && instance.Spec.Process != nil {
+		if instance.Spec.Process.Cwd != "" {
+			cwd = instance.Spec.Process.Cwd
+		}
 	}
-	if err := createThunderToken(rootPath, allocation.Token); err != nil {
-		return err
+	cmd := "curl -fsSL https://get.thundercompute.com/install.sh | sudo THUNDER_INSTALL_MODE=client THUNDER_AUTH_TOKEN=" + common.ShellQuote(allocation.EnrollmentToken) + " sh"
+	proc := specs.Process{
+		Args: []string{"sh", "-c", cmd},
+		Cwd:  cwd,
+		Env:  env,
 	}
-	if err := c.createThunderConfig(rootPath, request); err != nil {
-		return err
+	installCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	if err := instance.Runtime.Exec(installCtx, request.ContainerId, proc, nil); err != nil {
+		return fmt.Errorf("failed to install Thunder client: %w", err)
 	}
 	return nil
 }
 
-func (c *ContainerThunderManager) thunderAllocationForRequest(request *types.ContainerRequest) (thunderAllocation, error) {
-	allocation, ok := c.allocations.Get(request.ContainerId)
-	if ok {
-		return allocation, nil
-	}
-
-	if _, err := c.AssignGPUDevices(request); err != nil {
-		return thunderAllocation{}, err
-	}
-	allocation, ok = c.allocations.Get(request.ContainerId)
-	if !ok {
-		return thunderAllocation{}, fmt.Errorf("missing Thunder allocation for container %s", request.ContainerId)
-	}
-	return allocation, nil
-}
-
-func (c *ContainerThunderManager) createThunderLibrary(rootPath string) error {
-	contents, err := c.downloadThunderAsset(thunderLibraryAssetPath)
-	if err != nil {
-		return err
-	}
-	return writeThunderFile(rootPath, thunderLibraryPath, contents, 0644)
-}
-
-func createThunderToken(rootPath string, token string) error {
-	return writeThunderFile(rootPath, thunderTokenPath, []byte(token), 0644)
-}
-
-func (c *ContainerThunderManager) createThunderConfig(rootPath string, request *types.ContainerRequest) error {
-	config := thunderConfigFile{
-		DeviceID:        request.ContainerId,
-		GPUCount:        int(thunderGPUCount(request)),
-		GPUType:         thunderGPUType(request),
-		EnableGRPCTLS:   false,
-		CentralApiUrl:   c.apiURL,
-		CentralZoneId:   "thunder-beam",
-		CentralApiToken: c.apiToken,
-	}
-
-	contents, err := json.Marshal(config)
-	if err != nil {
-		return err
-	}
-	return writeThunderFile(rootPath, thunderConfigPath, contents, 0644)
-}
-
-func writeThunderFile(rootPath string, containerPath string, contents []byte, perm os.FileMode) error {
-	targetPath := thunderHostPath(rootPath, containerPath)
-	if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
-		return err
-	}
-	return os.WriteFile(targetPath, contents, perm)
-}
-
-func thunderHostPath(rootPath string, containerPath string) string {
-	cleanPath := filepath.Clean(containerPath)
-	cleanPath = strings.TrimPrefix(cleanPath, string(os.PathSeparator))
-	return filepath.Join(rootPath, cleanPath)
-}
-
-func (c *ContainerThunderManager) downloadThunderAsset(path string) ([]byte, error) {
-	if c.apiURL == "" {
-		return nil, fmt.Errorf("%s is required for Thunder asset download", thunderAPIURLEnv)
-	}
-
-	endpoint, err := c.thunderEndpoint(path)
-	if err != nil {
-		return nil, err
-	}
-
-	var lastErr error
-	for attempt := 1; attempt <= thunderRequestAttempts; attempt++ {
-		req, err := http.NewRequest(http.MethodGet, endpoint, nil)
-		if err != nil {
-			return nil, err
-		}
-
-		resp, err := c.client.Do(req)
-		if err == nil && resp != nil {
-			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-				contents, readErr := io.ReadAll(resp.Body)
-				resp.Body.Close()
-				if readErr != nil {
-					return nil, readErr
-				}
-				return contents, nil
-			}
-			resp.Body.Close()
-			lastErr = fmt.Errorf("Thunder asset GET %s returned status %d", path, resp.StatusCode)
-		} else if err != nil {
-			lastErr = err
-		}
-
-		if attempt < thunderRequestAttempts {
-			time.Sleep(thunderRetryDelay)
+func containsEnvKey(env []string, key string) bool {
+	prefix := key + "="
+	for _, item := range env {
+		if strings.HasPrefix(item, prefix) {
+			return true
 		}
 	}
-
-	return nil, lastErr
+	return false
 }
