@@ -3,6 +3,7 @@ package abstractions
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -14,7 +15,8 @@ import (
 )
 
 const (
-	flushLogsTimeout = 500 * time.Millisecond
+	flushLogsTimeout          = 500 * time.Millisecond
+	workerAddressPollInterval = time.Second
 )
 
 type ContainerStreamOpts struct {
@@ -68,7 +70,7 @@ func (l *ContainerStream) Stream(ctx context.Context, authInfo *auth.AuthInfo, c
 
 	clientResult := make(chan containerClientResult, 1)
 	go func() {
-		hostname, err := l.containerRepo.GetWorkerAddress(ctx, containerId)
+		hostname, err := l.waitForWorkerAddress(ctx, containerId)
 		if err != nil {
 			clientResult <- containerClientResult{err: err}
 			return
@@ -85,6 +87,29 @@ func (l *ContainerStream) Stream(ctx context.Context, authInfo *auth.AuthInfo, c
 	}()
 
 	return l.handleStreams(ctx, containerId, outputChan, keyEventChan, clientResult)
+}
+
+func (l *ContainerStream) waitForWorkerAddress(ctx context.Context, containerID string) (string, error) {
+	ticker := time.NewTicker(workerAddressPollInterval)
+	defer ticker.Stop()
+
+	for {
+		hostname, err := l.containerRepo.GetWorkerAddress(ctx, containerID)
+		if err == nil && hostname != "" {
+			return hostname, nil
+		}
+
+		state, stateErr := l.containerRepo.GetContainerState(containerID)
+		if stateErr != nil || state == nil || state.Status == types.ContainerStatusStopping {
+			return "", fmt.Errorf("container stopped before it was assigned to a worker")
+		}
+
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 func (l *ContainerStream) handleStreams(

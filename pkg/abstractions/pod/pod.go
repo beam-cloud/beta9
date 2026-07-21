@@ -7,11 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
+	"time"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
+	computemodel "github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
@@ -377,7 +380,7 @@ func (ps *GenericPodService) deletePodInstance(stubId string, instance *podInsta
 	}
 }
 
-func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, stub *types.StubWithRelated, imageId *string, checkpoint *types.Checkpoint) (string, error) {
+func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, stub *types.StubWithRelated, imageId *string, checkpoint *types.Checkpoint, machineID string) (string, error) {
 	if !podRunnableStub(stub.Type) {
 		return "", fmt.Errorf("stub type <%s> cannot be run through pods", stub.Type)
 	}
@@ -388,6 +391,9 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 
 	stubConfig := types.StubConfigV1{}
 	if err := json.Unmarshal([]byte(stub.Config), &stubConfig); err != nil {
+		return "", err
+	}
+	if err := s.configureMachinePlacement(ctx, workspace.ExternalId, machineID, &stubConfig); err != nil {
 		return "", err
 	}
 	if err := s.prepareDurableDiskPlacement(ctx, workspace, &stubConfig); err != nil {
@@ -507,6 +513,42 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 	return containerId, nil
 }
 
+func (s *GenericPodService) configureMachinePlacement(ctx context.Context, workspaceID, machineID string, stubConfig *types.StubConfigV1) error {
+	machineID = strings.TrimSpace(machineID)
+	if machineID == "" {
+		return nil
+	}
+	if s.computeRepo == nil {
+		return fmt.Errorf("machine targeting is unavailable")
+	}
+
+	machine, err := s.computeRepo.GetAgentMachineStateForWorkspace(ctx, workspaceID, machineID)
+	if err != nil {
+		return err
+	}
+	if machine == nil {
+		return fmt.Errorf("machine not found")
+	}
+	if !computemodel.AgentMachineConnected(machine, time.Now()) {
+		return fmt.Errorf("machine is not connected")
+	}
+
+	if selector := stubConfig.PoolSelector(); selector != "" && selector != machine.PoolName {
+		return fmt.Errorf("machine %s does not belong to pool %s", machineID, selector)
+	}
+	stubConfig.Pool = &types.PoolConfig{Name: machine.PoolName, Selector: machine.PoolName}
+	stubConfig.MachineID = machineID
+	return nil
+}
+
+func (s *GenericPodService) containerManagementURL(containerID string) string {
+	template := strings.TrimSpace(s.config.GatewayService.ContainerURLTemplate)
+	if template == "" || !strings.Contains(template, "{container_id}") {
+		return ""
+	}
+	return strings.ReplaceAll(template, "{container_id}", containerID)
+}
+
 func podRunWorkspace(authInfo *auth.AuthInfo, stub *types.StubWithRelated) (*types.Workspace, error) {
 	if authInfo == nil || authInfo.Workspace == nil {
 		return nil, fmt.Errorf("missing workspace auth")
@@ -570,7 +612,7 @@ func (s *GenericPodService) CreatePod(ctx context.Context, in *pb.CreatePodReque
 		}
 	}
 
-	containerId, err := s.run(ctx, authInfo, stub, in.ImageId, checkpoint)
+	containerId, err := s.run(ctx, authInfo, stub, in.ImageId, checkpoint, in.GetMachineId())
 	if err != nil {
 		return &pb.CreatePodResponse{
 			Ok:       false,
@@ -579,9 +621,10 @@ func (s *GenericPodService) CreatePod(ctx context.Context, in *pb.CreatePodReque
 	}
 
 	return &pb.CreatePodResponse{
-		Ok:          true,
-		ContainerId: containerId,
-		StubId:      stub.ExternalId,
+		Ok:            true,
+		ContainerId:   containerId,
+		StubId:        stub.ExternalId,
+		ManagementUrl: s.containerManagementURL(containerId),
 	}, nil
 }
 

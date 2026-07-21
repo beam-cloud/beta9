@@ -77,12 +77,28 @@ def _format_uptime(
       Available columns: container_id, status, stub_id, scheduled_at, deployment_id, uptime
     """,
 )
+@click.option(
+    "--machine",
+    "machine_id",
+    type=click.STRING,
+    default="",
+    help="Only show containers running on this machine.",
+)
 @extraclick.pass_service_client
 @click.pass_context
-def list_containers(ctx: click.Context, service: ServiceClient, format: str, columns: str):
+def list_containers(
+    ctx: click.Context,
+    service: ServiceClient,
+    format: str,
+    columns: str,
+    machine_id: str,
+):
     res = service.gateway.list_containers(ListContainersRequest())
     if not res.ok:
         terminal.error(res.error_msg)
+
+    if machine_id:
+        res.containers = [c for c in res.containers if c.machine_id == machine_id]
 
     now = datetime.datetime.now(datetime.timezone.utc)
     if format == "json":
@@ -95,6 +111,9 @@ def list_containers(ctx: click.Context, service: ServiceClient, format: str, col
         return
 
     user_requested_columns = set(columns.split(","))
+
+    if machine_id:
+        user_requested_columns.add("machine_id")
 
     # If admin columns are present on every container, include them.
     add_admin_columns = all(c.worker_id for c in res.containers)

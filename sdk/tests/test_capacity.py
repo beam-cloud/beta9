@@ -243,6 +243,35 @@ class TestHandleCapacityVerdict(TestCase):
         self.assertGreater(request.pool.max_spend, 0)
         self.assertEqual(runner.pool_config, request.pool)
 
+    def test_pod_run_submits_before_reserved_machine_is_ready(self):
+        runner = _runner()
+        offer = PoolOffer(id="offer-1", provider="vast", gpu="A6000", hourly_cost_micros=450_000)
+        runner.gateway_stub.list_pool_offers.return_value = ListPoolOffersResponse(
+            ok=True, offers=[offer]
+        )
+        reissued = GetOrCreateStubResponse(ok=True, stub_id="stub-2")
+        runner.gateway_stub.get_or_create_stub.return_value = reissued
+
+        with mock.patch.object(terminal, "is_interactive", return_value=True):
+            with mock.patch.object(terminal, "select", side_effect=[offer, "1h"]):
+                with mock.patch.object(terminal, "confirm", return_value=True):
+                    with mock.patch(
+                        "beta9.abstractions.base.capacity.wait_for_pool_ready"
+                    ) as wait_mock:
+                        result = handle_capacity_verdict(
+                            runner,
+                            GetOrCreateStubRequest(gpu="A6000"),
+                            GetOrCreateStubResponse(
+                                ok=True,
+                                stub_id="stub-1",
+                                capacity_status=CAPACITY_STATUS_NONE,
+                            ),
+                            "pod/run",
+                        )
+
+        self.assertIs(result, reissued)
+        wait_mock.assert_not_called()
+
     def test_interactive_tui_confirm_decline_aborts(self):
         runner = _runner()
         offer = PoolOffer(id="offer-1", provider="vast", gpu="A6000", hourly_cost_micros=450_000)
@@ -308,6 +337,31 @@ class TestWaitForPoolReady(TestCase):
                 self.assertFalse(wait_for_pool_ready(gateway_stub, "ondemand-a6000", timeout_s=0.2))
 
         error_mock.assert_called_once()
+
+
+class TestCreditErrorHint(TestCase):
+    def test_credit_errors_link_to_credits_page(self):
+        import beta9.abstractions.base.capacity as capacity
+
+        with mock.patch("beta9.config.get_settings") as settings_mock:
+            settings_mock.return_value.api_host = "app.beam.cloud"
+            hint = capacity.credit_error_hint("not enough credits to launch managed compute")
+            self.assertIn("https://platform.beam.cloud/settings/credits", hint)
+            self.assertIsNone(capacity.credit_error_hint("pool name is required"))
+            self.assertIsNone(capacity.credit_error_hint(""))
+
+    def test_credits_url_follows_environment(self):
+        import beta9.abstractions.base.capacity as capacity
+
+        with mock.patch("beta9.config.get_settings") as settings_mock:
+            settings_mock.return_value.api_host = "app.stage.beam.cloud"
+            self.assertEqual(
+                capacity.credits_url(), "https://platform.stage.beam.cloud/settings/credits"
+            )
+
+            # Self-hosted installs have no credits page.
+            settings_mock.return_value.api_host = "gateway.internal.company.com"
+            self.assertIsNone(capacity.credits_url())
 
 
 class TestTtlSelection(TestCase):

@@ -2,11 +2,13 @@ package abstractions
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
+	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/stretchr/testify/require"
 )
@@ -15,6 +17,57 @@ type testContainerStreamClient struct {
 	started chan struct{}
 	attach  chan struct{}
 	log     common.OutputMsg
+}
+
+type pendingContainerStreamRepo struct {
+	repository.ContainerRepository
+	ready     chan struct{}
+	attempted chan struct{}
+}
+
+func (r *pendingContainerStreamRepo) GetWorkerAddress(context.Context, string) (string, error) {
+	select {
+	case <-r.attempted:
+	default:
+		close(r.attempted)
+	}
+	select {
+	case <-r.ready:
+		return "worker.internal", nil
+	default:
+		return "", errors.New("worker address not assigned")
+	}
+}
+
+func (r *pendingContainerStreamRepo) GetContainerState(string) (*types.ContainerState, error) {
+	return &types.ContainerState{Status: types.ContainerStatusPending}, nil
+}
+
+func TestContainerStreamWaitsForPendingContainerWorker(t *testing.T) {
+	repo := &pendingContainerStreamRepo{ready: make(chan struct{}), attempted: make(chan struct{})}
+	stream := &ContainerStream{containerRepo: repo}
+	type addressResult struct {
+		host string
+		err  error
+	}
+	result := make(chan addressResult, 1)
+
+	go func() {
+		host, err := stream.waitForWorkerAddress(context.Background(), "container-1")
+		result <- addressResult{host: host, err: err}
+	}()
+
+	<-repo.attempted
+	select {
+	case <-result:
+		t.Fatal("returned before the pending container received a worker")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(repo.ready)
+	got := <-result
+	require.NoError(t, got.err)
+	require.Equal(t, "worker.internal", got.host)
 }
 
 func (c *testContainerStreamClient) StreamLogsWithReady(_ context.Context, _ string, output chan common.OutputMsg, ready func()) error {

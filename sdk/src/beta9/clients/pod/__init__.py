@@ -30,6 +30,7 @@ class CreatePodRequest(betterproto.Message):
     stub_id: str = betterproto.string_field(1)
     image_id: Optional[str] = betterproto.string_field(2, optional=True)
     checkpoint_id: Optional[str] = betterproto.string_field(3, optional=True)
+    machine_id: Optional[str] = betterproto.string_field(4, optional=True)
 
 
 @dataclass(eq=False, repr=False)
@@ -38,6 +39,7 @@ class CreatePodResponse(betterproto.Message):
     container_id: str = betterproto.string_field(2)
     error_msg: str = betterproto.string_field(3)
     stub_id: str = betterproto.string_field(4)
+    management_url: str = betterproto.string_field(5)
 
 
 @dataclass(eq=False, repr=False)

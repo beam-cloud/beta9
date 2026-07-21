@@ -927,6 +927,7 @@ func (c *ContainerRedisRepository) SetContainerStateWithConcurrencyLimit(quota *
 		GpuCount:    request.GpuCount,
 		Cpu:         request.Cpu,
 		Memory:      request.Memory,
+		MachineId:   request.MachineId,
 	})
 	if err != nil {
 		if reservedConcurrency {

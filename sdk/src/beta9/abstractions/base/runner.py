@@ -54,7 +54,7 @@ from ...type import (
     normalize_gpu_type,
 )
 from ...utils import TempFile
-from .capacity import handle_capacity_verdict
+from .capacity import credit_error_hint, handle_capacity_verdict
 from .utils import sdk_timing, timed_lock
 
 CONTAINER_STUB_TYPE = "container"
@@ -588,16 +588,19 @@ class RunnerAbstraction(BaseAbstraction):
                     return True
 
                 tracker = terminal.StepTracker()
-
-                with tracker.step("Preparing image", "Image ready") as step:
-                    step.ok = self._prepare_image()
-                if not step.ok:
-                    return False
-
-                with tracker.step("Syncing files", "Files synced") as step:
-                    step.ok = self._sync_runtime_files(ignore_patterns)
-                if not step.ok:
-                    return False
+                prepare_steps = [
+                    ("Preparing image", "Image ready", self._prepare_image),
+                    (
+                        "Syncing files",
+                        "Files synced",
+                        lambda: self._sync_runtime_files(ignore_patterns),
+                    ),
+                ]
+                for step_name, done_name, run_step in prepare_steps:
+                    with tracker.step(step_name, done_name) as step:
+                        step.ok = run_step()
+                    if not step.ok:
+                        return False
 
                 if not self._prepare_volumes():
                     return False
@@ -801,7 +804,7 @@ class RunnerAbstraction(BaseAbstraction):
             return True
 
         if err := stub_response.err_msg:
-            terminal.error(err, exit=False)
+            terminal.error(err, exit=False, hint=credit_error_hint(err))
         else:
             terminal.error("Failed to get or create stub", exit=False)
         return False

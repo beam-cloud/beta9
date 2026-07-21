@@ -8,6 +8,7 @@ from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tupl
 import cloudpickle
 
 from .. import terminal
+from ..abstractions.base.capacity import cli_name
 from ..abstractions.base.runner import (
     FUNCTION_DEPLOYMENT_STUB_TYPE,
     FUNCTION_STUB_TYPE,
@@ -239,7 +240,7 @@ class _CallableWrapper(DeployableMixin):
             terminal.error(
                 f"Function failed <{task_id}>",
                 exit=False,
-                hint="see the failure reason with 'beta9 task list --filter status=error'",
+                hint=f"see the failure reason with '{cli_name()} task list --filter status=error'",
             )
             return
 

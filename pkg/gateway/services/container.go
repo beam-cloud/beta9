@@ -53,8 +53,8 @@ func (gws GatewayService) ListContainers(ctx context.Context, in *pb.ListContain
 			Status:       string(state.Status),
 			ScheduledAt:  containerTimestamp(state.ScheduledAt),
 			StartedAt:    containerTimestamp(state.StartedAt),
-			WorkerId:     containerWorkerMap[state.ContainerId].WorkerId,
-			MachineId:    containerWorkerMap[state.ContainerId].MachineId,
+			WorkerId:     firstContainerDetail(state.WorkerId, containerWorkerMap[state.ContainerId].WorkerId),
+			MachineId:    firstContainerDetail(state.MachineId, containerWorkerMap[state.ContainerId].MachineId),
 			DeploymentId: deploymentId,
 		})
 	}
@@ -63,6 +63,15 @@ func (gws GatewayService) ListContainers(ctx context.Context, in *pb.ListContain
 		Ok:         true,
 		Containers: containers,
 	}, nil
+}
+
+func firstContainerDetail(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func containerTimestamp(unixSeconds int64) *timestamppb.Timestamp {

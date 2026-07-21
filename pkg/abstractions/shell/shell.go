@@ -20,6 +20,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
+	computemodel "github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
@@ -369,6 +370,35 @@ func (ss *SSHShellService) CreateStandaloneShell(ctx context.Context, in *pb.Cre
 		}, nil
 	}
 
+	machineID := strings.TrimSpace(in.GetMachineId())
+	var machineWorker *types.Worker
+	if machineID != "" {
+		if ss.computeRepo == nil || ss.workerRepo == nil {
+			return &pb.CreateStandaloneShellResponse{Ok: false, ErrMsg: "machine shells are unavailable"}, nil
+		}
+		machine, err := ss.computeRepo.GetAgentMachineStateForWorkspace(ctx, authInfo.Workspace.ExternalId, machineID)
+		if err != nil {
+			return &pb.CreateStandaloneShellResponse{Ok: false, ErrMsg: err.Error()}, nil
+		}
+		if machine == nil {
+			return &pb.CreateStandaloneShellResponse{Ok: false, ErrMsg: "machine not found"}, nil
+		}
+		if !computemodel.AgentMachineConnected(machine, time.Now()) {
+			return &pb.CreateStandaloneShellResponse{Ok: false, ErrMsg: "machine is not connected"}, nil
+		}
+		if selector := stubConfig.PoolSelector(); selector != "" && selector != machine.PoolName {
+			return &pb.CreateStandaloneShellResponse{
+				Ok: false, ErrMsg: fmt.Sprintf("machine %s does not belong to pool %s", machineID, selector),
+			}, nil
+		}
+		machineWorker, err = ss.workerRepo.GetWorkerById(computemodel.AgentMachineWorkerID(machineID))
+		if err != nil || machineWorker == nil {
+			return &pb.CreateStandaloneShellResponse{Ok: false, ErrMsg: "machine worker is not ready"}, nil
+		}
+		stubConfig.Pool = &types.PoolConfig{Name: machine.PoolName, Selector: machine.PoolName}
+		stubConfig.MachineID = machineID
+	}
+
 	containerId := ss.genContainerId(stub.ExternalId)
 
 	// Don't allow negative and 0-valued compute requests
@@ -443,23 +473,34 @@ func (ss *SSHShellService) CreateStandaloneShell(ctx context.Context, in *pb.Cre
 	}
 
 	runRequest := &types.ContainerRequest{
-		ContainerId:  containerId,
-		Env:          env,
-		Cpu:          stubConfig.Runtime.Cpu,
-		Memory:       stubConfig.Runtime.Memory,
-		GpuRequest:   gpuRequest,
-		GpuCount:     uint32(gpuCount),
-		ImageId:      stubConfig.Runtime.ImageId,
-		StubId:       stub.ExternalId,
-		AppId:        stub.App.ExternalId,
-		WorkspaceId:  authInfo.Workspace.ExternalId,
-		Workspace:    *authInfo.Workspace,
-		EntryPoint:   entryPoint,
-		Mounts:       mounts,
-		Stub:         *stub,
-		PoolSelector: stubConfig.PoolSelector(),
+		ContainerId:      containerId,
+		Env:              env,
+		Cpu:              stubConfig.Runtime.Cpu,
+		Memory:           stubConfig.Runtime.Memory,
+		GpuRequest:       gpuRequest,
+		GpuCount:         uint32(gpuCount),
+		ImageId:          stubConfig.Runtime.ImageId,
+		StubId:           stub.ExternalId,
+		AppId:            stub.App.ExternalId,
+		WorkspaceId:      authInfo.Workspace.ExternalId,
+		Workspace:        *authInfo.Workspace,
+		EntryPoint:       entryPoint,
+		Mounts:           mounts,
+		Stub:             *stub,
+		PoolSelector:     stubConfig.PoolSelector(),
 		AllowMarketplace: stubConfig.AllowMarketplace,
 		MachineId:        stubConfig.MachineID,
+	}
+	if machineWorker != nil {
+		runRequest.Cpu = max(machineWorker.FreeCpu, defaultContainerCpu)
+		runRequest.Memory = max(machineWorker.FreeMemory, defaultContainerMemory)
+		if machineWorker.FreeGpuCount > 0 && machineWorker.Gpu != "" {
+			runRequest.GpuRequest = []string{machineWorker.Gpu}
+			runRequest.GpuCount = machineWorker.FreeGpuCount
+		} else {
+			runRequest.GpuRequest = nil
+			runRequest.GpuCount = 0
+		}
 	}
 	if err := abstractions.ConfigureContainerRequestNetwork(runRequest, stubConfig); err != nil {
 		return &pb.CreateStandaloneShellResponse{
