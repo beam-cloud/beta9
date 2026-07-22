@@ -8,36 +8,34 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
-func TestConfigureContainerRequestMountsUsesEphemeralSandboxOutputs(t *testing.T) {
+func TestConfigureContainerRequestMountsOmitsSandboxOutputs(t *testing.T) {
 	signingKey := "sk_" + base64.StdEncoding.EncodeToString(make([]byte, 32))
 	workspace := &types.Workspace{Name: "workspace", SigningKey: &signingKey}
+	stub := &types.StubWithRelated{
+		Stub:   types.Stub{ExternalId: "stub-123", Type: types.StubType(types.StubTypeSandbox)},
+		Object: types.Object{ExternalId: "object-123"},
+	}
 
 	mounts, err := ConfigureContainerRequestMounts(
 		"sandbox-123",
-		"object-123",
+		stub,
 		workspace,
 		types.StubConfigV1{},
-		"stub-123",
-		types.StubType(types.StubTypeSandbox),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if mounts[1].LocalPath != types.TempContainerOutputs("sandbox-123") {
-		t.Fatalf("sandbox output path = %q, want %q", mounts[1].LocalPath, types.TempContainerOutputs("sandbox-123"))
-	}
-	if mounts[1].MountType != types.StorageModeLocal {
-		t.Fatalf("sandbox output mount type = %q, want %q", mounts[1].MountType, types.StorageModeLocal)
+	if len(mounts) != 1 || mounts[0].MountPath != types.WorkerUserCodeVolume {
+		t.Fatalf("sandbox mounts = %#v, want only the code mount", mounts)
 	}
 
+	stub.Type = types.StubType(types.StubTypePodRun)
 	podMounts, err := ConfigureContainerRequestMounts(
 		"pod-123",
-		"object-123",
+		stub,
 		workspace,
 		types.StubConfigV1{},
-		"stub-123",
-		types.StubType(types.StubTypePodRun),
 	)
 	if err != nil {
 		t.Fatal(err)

@@ -10,29 +10,25 @@ import (
 
 const defaultExternalVolumesPath string = "/tmp/external-volumes"
 
-func ConfigureContainerRequestMounts(containerId, stubObjectId string, workspace *types.Workspace, config types.StubConfigV1, stubId string, stubType types.StubType) ([]types.Mount, error) {
+func ConfigureContainerRequestMounts(containerId string, stub *types.StubWithRelated, workspace *types.Workspace, config types.StubConfigV1) ([]types.Mount, error) {
 	secretKey, err := common.ParseSecretKey(*workspace.SigningKey)
 	if err != nil {
 		return nil, err
 	}
 
-	outputMount := types.Mount{
-		LocalPath: path.Join(types.DefaultOutputsPath, workspace.Name, stubId),
-		MountPath: types.WorkerUserOutputVolume,
-		ReadOnly:  false,
-	}
-	if stubType.Kind() == types.StubTypeSandbox {
-		outputMount.LocalPath = types.TempContainerOutputs(containerId)
-		outputMount.MountType = types.StorageModeLocal
-	}
-
 	mounts := []types.Mount{
 		{
-			LocalPath: path.Join(types.DefaultObjectPath, workspace.Name, stubObjectId),
+			LocalPath: path.Join(types.DefaultObjectPath, workspace.Name, stub.Object.ExternalId),
 			MountPath: types.WorkerUserCodeVolume,
 			ReadOnly:  false,
 		},
-		outputMount,
+	}
+	if stub.Type.Kind() != types.StubTypeSandbox {
+		mounts = append(mounts, types.Mount{
+			LocalPath: path.Join(types.DefaultOutputsPath, workspace.Name, stub.ExternalId),
+			MountPath: types.WorkerUserOutputVolume,
+			ReadOnly:  false,
+		})
 	}
 
 	for _, v := range config.Volumes {

@@ -491,11 +491,9 @@ func (i *botInstance) run(transitionName, sessionId, taskId string) error {
 
 	mounts, err := abstractions.ConfigureContainerRequestMounts(
 		containerId,
-		i.stub.Object.ExternalId,
+		i.stub,
 		i.authInfo.Workspace,
 		*i.stubConfig,
-		i.stub.ExternalId,
-		i.stub.Type,
 	)
 	if err != nil {
 		return err

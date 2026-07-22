@@ -198,16 +198,16 @@ func (s *GenericPodService) sandboxContainerStatus(ctx context.Context, containe
 	case types.ContainerStatusRunning:
 		return s.sandboxRuntimeStatus(ctx, containerId, authInfo)
 	case types.ContainerStatusStopping:
-		return sandboxStatus("stopping"), nil
+		return sandboxStatus(types.SandboxStatusStopping), nil
 	default:
-		return sandboxStatus("pending"), nil
+		return sandboxStatus(types.SandboxStatusPending), nil
 	}
 }
 
 func (s *GenericPodService) sandboxRuntimeStatus(ctx context.Context, containerId string, authInfo *auth.AuthInfo) (*pb.PodSandboxStatusResponse, error) {
 	client, _, cacheKey, err := s.getClientWithCacheKey(ctx, containerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
 	if err != nil {
-		return sandboxStatus("pending"), nil
+		return sandboxStatus(types.SandboxStatusPending), nil
 	}
 
 	resp, err := client.SandboxStatusContext(ctx, containerId, 0)
@@ -221,20 +221,20 @@ func (s *GenericPodService) sandboxRuntimeStatus(ctx context.Context, containerI
 		}
 	}
 	if err != nil {
-		return sandboxStatus("pending"), nil
+		return sandboxStatus(types.SandboxStatusPending), nil
 	}
 
 	if !resp.Ok {
 		return nil, errors.New(resp.ErrorMsg)
 	}
 
-	return sandboxStatus(resp.Status), nil
+	return sandboxStatus(types.SandboxStatus(resp.Status)), nil
 }
 
-func sandboxStatus(status string) *pb.PodSandboxStatusResponse {
+func sandboxStatus(status types.SandboxStatus) *pb.PodSandboxStatusResponse {
 	return &pb.PodSandboxStatusResponse{
 		Ok:       true,
-		Status:   status,
+		Status:   string(status),
 		ExitCode: -1,
 	}
 }
@@ -811,10 +811,10 @@ func waitForSandboxReady(ctx context.Context, probe func(context.Context) (*pb.C
 			return errors.New(resp.ErrorMsg)
 		}
 		if err == nil {
-			switch resp.Status {
-			case "running":
+			switch types.SandboxStatus(resp.Status) {
+			case types.SandboxStatusRunning:
 				return nil
-			case "stopping", "exited":
+			case types.SandboxStatusStopping, types.SandboxStatusExited:
 				return fmt.Errorf("sandbox stopped before becoming ready: %s", resp.Status)
 			}
 		}

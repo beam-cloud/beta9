@@ -120,13 +120,12 @@ func (c *ContainerMountManager) SetupContainerMounts(ctx context.Context, reques
 	return nil
 }
 
-func (c *ContainerMountManager) ensureBindMountSourceDirs(request *types.ContainerRequest) error {
-	for _, mount := range request.Mounts {
+func (c *ContainerMountManager) ensureBindMountSourceDirs(mounts []types.Mount) error {
+	for _, mount := range mounts {
 		if mount.MountType == storage.StorageModeMountPoint || mount.LocalPath == "" {
 			continue
 		}
-		cacheOutputDir := mount.MountPath == types.WorkerUserOutputVolume && mount.MountType != storage.StorageModeLocal
-		if cacheOutputDir {
+		if mount.MountPath == types.WorkerUserOutputVolume {
 			if _, ready := c.readyOutputDirs.Load(mount.LocalPath); ready {
 				continue
 			}
@@ -134,7 +133,7 @@ func (c *ContainerMountManager) ensureBindMountSourceDirs(request *types.Contain
 		if err := os.MkdirAll(mount.LocalPath, 0755); err != nil {
 			return fmt.Errorf("create bind mount source %s for %s: %w", mount.LocalPath, mount.MountPath, err)
 		}
-		if cacheOutputDir {
+		if mount.MountPath == types.WorkerUserOutputVolume {
 			c.readyOutputDirs.Store(mount.LocalPath, struct{}{})
 		}
 	}
@@ -161,7 +160,7 @@ func (c *ContainerMountManager) RequiresWorkspaceStorageMount(request *types.Con
 			continue
 		}
 
-		if mount.MountType == storage.StorageModeMountPoint || mount.MountType == storage.StorageModeLocal {
+		if mount.MountType == storage.StorageModeMountPoint {
 			continue
 		}
 

@@ -318,7 +318,7 @@ func TestContainerSandboxStatusReportsPendingBeforeProcessManagerReady(t *testin
 
 	require.NoError(t, err)
 	require.True(t, resp.Ok)
-	require.Equal(t, "pending", resp.Status)
+	require.Equal(t, string(types.SandboxStatusPending), resp.Status)
 	require.Equal(t, int32(-1), resp.ExitCode)
 }
 

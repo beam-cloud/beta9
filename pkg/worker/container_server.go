@@ -901,7 +901,7 @@ func (s *ContainerRuntimeServer) ContainerSandboxStatus(ctx context.Context, in 
 		if instance.processManagerReady() {
 			return &pb.ContainerSandboxStatusResponse{
 				Ok:       true,
-				Status:   "running",
+				Status:   string(types.SandboxStatusRunning),
 				ExitCode: -1,
 			}, nil
 		}
@@ -912,7 +912,7 @@ func (s *ContainerRuntimeServer) ContainerSandboxStatus(ctx context.Context, in 
 				if instance.processManagerReady() {
 					return &pb.ContainerSandboxStatusResponse{
 						Ok:       true,
-						Status:   "running",
+						Status:   string(types.SandboxStatusRunning),
 						ExitCode: -1,
 					}, nil
 				}
@@ -926,7 +926,7 @@ func (s *ContainerRuntimeServer) ContainerSandboxStatus(ctx context.Context, in 
 
 		return &pb.ContainerSandboxStatusResponse{
 			Ok:       true,
-			Status:   "pending",
+			Status:   string(types.SandboxStatusPending),
 			ExitCode: -1,
 		}, nil
 	}
@@ -960,14 +960,14 @@ func (s *ContainerRuntimeServer) ContainerSandboxStatus(ctx context.Context, in 
 		exitCode = sandboxMissingProcessExitCode
 	}
 
-	status := "running"
+	sandboxStatus := types.SandboxStatusRunning
 	if exitCode >= 0 {
-		status = "exited"
+		sandboxStatus = types.SandboxStatusExited
 	}
 
 	return &pb.ContainerSandboxStatusResponse{
 		Ok:       true,
-		Status:   status,
+		Status:   string(sandboxStatus),
 		ExitCode: int32(exitCode),
 	}, nil
 }

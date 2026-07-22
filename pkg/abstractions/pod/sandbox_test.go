@@ -24,11 +24,11 @@ func TestWaitForSandboxReadyWaitsThroughPending(t *testing.T) {
 	probes := 0
 	err := waitForSandboxReady(context.Background(), func(context.Context) (*pb.ContainerSandboxStatusResponse, error) {
 		probes++
-		status := "pending"
+		status := types.SandboxStatusPending
 		if probes == 2 {
-			status = "running"
+			status = types.SandboxStatusRunning
 		}
-		return &pb.ContainerSandboxStatusResponse{Ok: true, Status: status}, nil
+		return &pb.ContainerSandboxStatusResponse{Ok: true, Status: string(status)}, nil
 	})
 
 	if err != nil {
@@ -46,7 +46,7 @@ func TestWaitForSandboxReadyRetriesTransientProbeFailure(t *testing.T) {
 		if probes == 1 {
 			return nil, status.Error(codes.Unavailable, "transport is closing")
 		}
-		return &pb.ContainerSandboxStatusResponse{Ok: true, Status: "running"}, nil
+		return &pb.ContainerSandboxStatusResponse{Ok: true, Status: string(types.SandboxStatusRunning)}, nil
 	})
 
 	if err != nil {
@@ -59,7 +59,7 @@ func TestWaitForSandboxReadyRetriesTransientProbeFailure(t *testing.T) {
 
 func TestWaitForSandboxReadyRejectsStoppingContainer(t *testing.T) {
 	err := waitForSandboxReady(context.Background(), func(context.Context) (*pb.ContainerSandboxStatusResponse, error) {
-		return &pb.ContainerSandboxStatusResponse{Ok: true, Status: "stopping"}, nil
+		return &pb.ContainerSandboxStatusResponse{Ok: true, Status: string(types.SandboxStatusStopping)}, nil
 	})
 	if err == nil {
 		t.Fatal("waitForSandboxReady returned nil error for stopping sandbox")
@@ -71,7 +71,7 @@ func TestWaitForSandboxReadyHonorsContextDeadline(t *testing.T) {
 	defer cancel()
 
 	err := waitForSandboxReady(ctx, func(context.Context) (*pb.ContainerSandboxStatusResponse, error) {
-		return &pb.ContainerSandboxStatusResponse{Ok: true, Status: "pending"}, nil
+		return &pb.ContainerSandboxStatusResponse{Ok: true, Status: string(types.SandboxStatusPending)}, nil
 	})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("waitForSandboxReady error = %v, want context deadline exceeded", err)

@@ -34,10 +34,6 @@ func TempContainerWorkspace(containerId string) string {
 	return fmt.Sprintf("/tmp/%s/workspace", containerId)
 }
 
-func TempContainerOutputs(containerId string) string {
-	return fmt.Sprintf("/tmp/%s/outputs", containerId)
-}
-
 type ContainerResourceUsage struct {
 	ContainerID       string `json:"ContainerID"`
 	CpuMillicoresUsed int64  `json:"CpuMillicoresUsed"`
@@ -209,6 +205,15 @@ const (
 	RuncContainerStatusRunning string = "running"
 	RuncContainerStatusPaused  string = "paused"
 	RuncContainerStatusStopped string = "stopped"
+)
+
+type SandboxStatus string
+
+const (
+	SandboxStatusPending  SandboxStatus = "pending"
+	SandboxStatusRunning  SandboxStatus = "running"
+	SandboxStatusStopping SandboxStatus = "stopping"
+	SandboxStatusExited   SandboxStatus = "exited"
 )
 
 // @go2proto
