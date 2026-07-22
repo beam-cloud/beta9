@@ -1684,6 +1684,23 @@ func TestS2ReadEmptyRecognizesStreamNotFoundByCodeAndMessage(t *testing.T) {
 	}
 }
 
+func TestS2EndPositionPastTailFallsBackToLiveTail(t *testing.T) {
+	err := &s2.RangeNotSatisfiableError{S2Error: &s2.S2Error{
+		Status: httpStatusRangeNotSatisfiable,
+		Origin: "server",
+	}}
+	offset, positionErr := logEndPositionTailOffset(100, nil, err)
+	if positionErr != nil || offset != 0 {
+		t.Fatalf("expected live-tail fallback, got offset=%d err=%v", offset, positionErr)
+	}
+
+	batch := &s2.ReadBatch{Records: []s2.SequencedRecord{{SeqNum: 40}}}
+	offset, positionErr = logEndPositionTailOffset(100, batch, nil)
+	if positionErr != nil || offset != 60 {
+		t.Fatalf("expected historical offset 60, got offset=%d err=%v", offset, positionErr)
+	}
+}
+
 func TestAugmentContainerEventResponseBuildsLifecycleSummary(t *testing.T) {
 	now := time.Now().UTC()
 	response := &types.ContainerEventsResponse{
