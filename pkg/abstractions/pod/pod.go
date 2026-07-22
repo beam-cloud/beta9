@@ -409,10 +409,9 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 
 	mounts, err := abstractions.ConfigureContainerRequestMounts(
 		containerId,
-		stub.Object.ExternalId,
+		stub,
 		workspace,
 		stubConfig,
-		stub.ExternalId,
 	)
 	if err != nil {
 		return "", err

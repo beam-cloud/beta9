@@ -141,6 +141,7 @@ type ContainerInstance struct {
 	RuntimeStartedAt           int64
 	SandboxProcessManager      *goproc.GoProcClient
 	SandboxProcessManagerReady bool
+	processManagerReadyMu      sync.RWMutex
 	DeferredCPUQuota           *specs.LinuxCPU
 	CPUSet                     string
 	RestoreCPUAffinityDeferred bool
@@ -169,18 +170,6 @@ func (i *ContainerInstance) containerAddress(port int32) string {
 	i.containerAddressMu.RLock()
 	defer i.containerAddressMu.RUnlock()
 	return i.ContainerAddressMap[port]
-}
-
-func (i *ContainerInstance) signalProcessManagerReadiness(ready bool) {
-	if i.SandboxProcessManagerReady && !ready {
-		return
-	}
-	i.SandboxProcessManagerReady = ready
-	if i.ProcessManagerReadyChan != nil {
-		i.ProcessManagerReadyOnce.Do(func() {
-			close(i.ProcessManagerReadyChan)
-		})
-	}
 }
 
 type ContainerOptions struct {
@@ -650,14 +639,18 @@ func (s *Worker) reserveContainerInstance(request *types.ContainerRequest) bool 
 		return false
 	}
 
-	s.containerInstances.Set(request.ContainerId, &ContainerInstance{
+	instance := &ContainerInstance{
 		Id:        request.ContainerId,
 		StubId:    request.StubId,
 		LogBuffer: common.NewLogBuffer(),
 		Request:   request,
 		Runtime:   s.runtime,
 		CPUSet:    s.allocateContainerCPUSet(request),
-	})
+	}
+	if request.Stub.Type.Kind() == types.StubTypeSandbox {
+		instance.initializeProcessManagerReadiness()
+	}
+	s.containerInstances.Set(request.ContainerId, instance)
 
 	return true
 }
@@ -802,6 +795,7 @@ func (s *Worker) shouldShutDown(lastContainerRequest time.Time) bool {
 			return false
 		}
 		if (time.Since(lastContainerRequest).Seconds() > defaultWorkerSpindownTimeS) && s.containerInstances.Len() == 0 {
+			s.disableSchedulingForShutdown()
 			err := s.storageManager.Cleanup()
 			if err != nil {
 				log.Error().Err(err).Msg("failed to cleanup workspace storage")

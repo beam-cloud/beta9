@@ -207,6 +207,15 @@ const (
 	RuncContainerStatusStopped string = "stopped"
 )
 
+type SandboxStatus string
+
+const (
+	SandboxStatusPending  SandboxStatus = "pending"
+	SandboxStatusRunning  SandboxStatus = "running"
+	SandboxStatusStopping SandboxStatus = "stopping"
+	SandboxStatusExited   SandboxStatus = "exited"
+)
+
 // @go2proto
 type ProcessInfo struct {
 	Running  bool     `json:"running"`

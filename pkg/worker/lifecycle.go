@@ -168,6 +168,9 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 	// Keep the local instance state consistent with the reported exit code.
 	instance, exists := s.containerInstances.Get(containerId)
 	if exists {
+		if request != nil && request.Stub.Type.Kind() == types.StubTypeSandbox {
+			instance.signalProcessManagerReadiness(false)
+		}
 		instance.ExitCode = exitCode
 		s.containerInstances.Set(containerId, instance)
 	}
@@ -293,16 +296,18 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		return fmt.Errorf("runtime %s does not support GPU workloads", s.runtime.Name())
 	}
 
-	instance := &ContainerInstance{
-		Id:        containerId,
-		StubId:    request.StubId,
-		LogBuffer: common.NewLogBuffer(),
-		Request:   request,
-		Runtime:   s.runtime,
-	}
-	if existing, exists := s.containerInstances.Get(containerId); exists {
-		instance.StopReason = existing.StopReason
-		instance.CPUSet = existing.CPUSet
+	instance, exists := s.containerInstances.Get(containerId)
+	if !exists {
+		instance = &ContainerInstance{
+			Id:        containerId,
+			StubId:    request.StubId,
+			LogBuffer: common.NewLogBuffer(),
+			Request:   request,
+			Runtime:   s.runtime,
+		}
+		if request.Stub.Type.Kind() == types.StubTypeSandbox {
+			instance.initializeProcessManagerReadiness()
+		}
 	}
 	s.containerInstances.Set(containerId, instance)
 
@@ -1299,8 +1304,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		}
 
 		instance.SandboxProcessManager = nil
-		instance.SandboxProcessManagerReady = false
-		instance.ProcessManagerReadyChan = make(chan struct{})
 		s.containerInstances.Set(containerId, instance)
 
 		spec.Process.Args = []string{types.WorkerSandboxProcessManagerContainerPath}

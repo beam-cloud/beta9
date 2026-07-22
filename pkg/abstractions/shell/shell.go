@@ -419,10 +419,9 @@ func (ss *SSHShellService) CreateStandaloneShell(ctx context.Context, in *pb.Cre
 
 	mounts, err := abstractions.ConfigureContainerRequestMounts(
 		containerId,
-		stub.Object.ExternalId,
+		stub,
 		authInfo.Workspace,
 		stubConfig,
-		stub.ExternalId,
 	)
 	if err != nil {
 		return &pb.CreateStandaloneShellResponse{
