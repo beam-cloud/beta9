@@ -557,6 +557,37 @@ func TestResolveLogStreamsUsesMultiplexedStubTaskStream(t *testing.T) {
 	}
 }
 
+func TestResolveLogStreamsHonorsExplicitTaskAndContainerScopes(t *testing.T) {
+	repo := &S2EventRepository{streamPrefix: "events"}
+	tests := []struct {
+		name  string
+		query types.LogQuery
+		want  s2.StreamName
+	}{
+		{
+			name:  "task prefers complete app aggregate",
+			query: types.LogQuery{ObjectType: types.GatewayObjectTypeTask, WorkspaceID: "workspace-123", StubID: "stub-456", AppID: "app-789", TaskID: "task-123", ContainerID: "container-abc"},
+			want:  "events/logs/workspaces/workspace-123/apps/app-789",
+		},
+		{
+			name:  "container keeps container stream with task filter",
+			query: types.LogQuery{ObjectType: types.GatewayObjectTypeContainer, WorkspaceID: "workspace-123", StubID: "stub-456", TaskID: "task-123", ContainerID: "container-abc"},
+			want:  "events/logs/workspaces/workspace-123/stubs/stub-456/containers/container-abc",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			streams, err := repo.resolveLogStreams(tt.query)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(streams) != 1 || streams[0] != tt.want {
+				t.Fatalf("streams = %q, want [%q]", streams, tt.want)
+			}
+		})
+	}
+}
+
 func TestResolveLogStreamsFallsBackToLegacyTaskStreamWithoutStub(t *testing.T) {
 	repo := &S2EventRepository{streamPrefix: "events"}
 
@@ -688,6 +719,12 @@ func TestNextTailReadWindow(t *testing.T) {
 	}
 	if offset, count := nextTailReadWindow(0, 250, 0); offset != 250 || count != 250 {
 		t.Fatalf("unexpected zero chunk window: got offset=%d count=%d want offset=250 count=250", offset, count)
+	}
+	// A historical end position skips records appended later instead of
+	// spending the 50k scan budget walking backward from the live tail.
+	start := logTailOffsetBeforeSeq(185443, 125443)
+	if offset, count := nextTailReadWindow(start, 185443, 100); start != 60000 || offset != 60100 || count != 100 {
+		t.Fatalf("unexpected positioned window: start=%d offset=%d count=%d", start, offset, count)
 	}
 }
 

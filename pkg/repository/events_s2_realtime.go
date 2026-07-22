@@ -62,6 +62,14 @@ func reserveS2MetricsRead(remaining *atomic.Int64) uint64 {
 }
 
 func (r *S2EventRepository) GetLogs(ctx context.Context, query types.LogQuery) (*types.LogsResponse, error) {
+	if query.HistoryStart != nil && (query.StartTime == nil || query.StartTime.Before(*query.HistoryStart)) {
+		start := query.HistoryStart.UTC()
+		query.StartTime = &start
+	}
+	if query.HistoryEnd != nil && (query.EndTime == nil || query.EndTime.After(*query.HistoryEnd)) {
+		end := query.HistoryEnd.UTC()
+		query.EndTime = &end
+	}
 	limit := query.Limit
 	if limit == 0 {
 		limit = defaultS2LogReadLimit
@@ -91,18 +99,26 @@ func (r *S2EventRepository) GetLogs(ctx context.Context, query types.LogQuery) (
 		response.Logs = append(response.Logs, logs...)
 	}
 
-	// Tasks that predate the multiplexed stub task stream only have log
-	// records in the legacy per-task log stream.
+	// Fall back from the app aggregate to multiplexed, then legacy task logs.
 	if response.TotalExpected == 0 && query.TaskID != "" && query.WorkspaceID != "" {
-		legacyStream := r.legacyTaskLogStreamName(query.WorkspaceID, query.TaskID)
-		if !responseReadStream(response.Streams, legacyStream) {
-			total, logs, err := r.readLogStreamPage(ctx, legacyStream, query, limit)
+		fallbacks := []s2.StreamName{r.legacyTaskLogStreamName(query.WorkspaceID, query.TaskID)}
+		if query.ObjectType == types.GatewayObjectTypeTask && query.AppID != "" && query.StubID != "" {
+			fallbacks = append([]s2.StreamName{r.stubTaskStreamName(query.WorkspaceID, query.StubID)}, fallbacks...)
+		}
+		for _, streamName := range fallbacks {
+			if responseReadStream(response.Streams, streamName) {
+				continue
+			}
+			total, logs, err := r.readLogStreamPage(ctx, streamName, query, limit)
 			if err != nil {
 				return nil, err
 			}
 			response.TotalExpected += total
-			response.Streams = append(response.Streams, string(legacyStream))
+			response.Streams = append(response.Streams, string(streamName))
 			response.Logs = append(response.Logs, logs...)
+			if response.TotalExpected > 0 {
+				break
+			}
 		}
 	}
 
@@ -595,6 +611,12 @@ func (r *S2EventRepository) resolveLogStreams(query types.LogQuery) ([]s2.Stream
 	}
 
 	switch {
+	case query.ObjectType == types.GatewayObjectTypeContainer:
+		query.ObjectType, query.TaskID = "", ""
+		query.MachineID, query.WorkerID = "", ""
+		return r.resolveLogStreams(query)
+	case query.ObjectType == types.GatewayObjectTypeTask && query.AppID != "" && query.WorkspaceID != "":
+		return addKnown(r.appNamespaceLogStreamName(query.WorkspaceID, query.AppID))
 	case query.MachineID != "":
 		return addKnownMany(r.machineLogStreams(query)...)
 	case query.TaskID != "" && query.WorkspaceID != "" && query.StubID != "":
@@ -647,6 +669,22 @@ func (r *S2EventRepository) readLogStreamPage(ctx context.Context, streamName s2
 		return total, []types.LogRecord{}, nil
 	}
 
+	scannedFromTail := uint64(0)
+	if query.EndTime != nil {
+		endTimestamp := uint64(query.EndTime.UTC().UnixMilli())
+		count, clamp := uint64(1), true
+		batch, err := r.basin.Stream(streamName).Read(ctx, &s2.ReadOptions{Timestamp: &endTimestamp, Count: &count, Clamp: &clamp})
+		if err != nil {
+			if isS2ReadEmpty(err) {
+				return 0, nil, nil
+			}
+			return 0, nil, fmt.Errorf("position s2 log stream %q at end time: %w", streamName, err)
+		}
+		if len(batch.Records) > 0 {
+			scannedFromTail = logTailOffsetBeforeSeq(tail.Tail.SeqNum, batch.Records[0].SeqNum)
+		}
+	}
+
 	targetMatches := int((query.Page + 1) * limit)
 	skipMatches := int(query.Page * limit)
 	chunkSize := limit
@@ -659,7 +697,6 @@ func (r *S2EventRepository) readLogStreamPage(ctx context.Context, streamName s2
 
 	matchesNewestFirst := make([]types.LogRecord, 0, targetMatches)
 	recordsScanned := uint64(0)
-	scannedFromTail := uint64(0)
 	exhausted := false
 	for scannedFromTail < tail.Tail.SeqNum && recordsScanned < s2ReadScanLimit {
 		tailOffset, count := nextTailReadWindow(scannedFromTail, tail.Tail.SeqNum, chunkSize)
@@ -694,6 +731,9 @@ func (r *S2EventRepository) readLogStreamPage(ctx context.Context, streamName s2
 			}
 		}
 		exhausted = uint64(len(batch.Records)) < count || scannedFromTail == tail.Tail.SeqNum
+		if query.StartTime != nil && batch.Records[0].Timestamp < uint64(query.StartTime.UTC().UnixMilli()) {
+			exhausted = true
+		}
 		if len(matchesNewestFirst) >= targetMatches || exhausted {
 			break
 		}
@@ -715,6 +755,13 @@ func (r *S2EventRepository) readLogStreamPage(ctx context.Context, streamName s2
 		filteredTotal = targetMatches + 1
 	}
 	return filteredTotal, logs, nil
+}
+
+func logTailOffsetBeforeSeq(tailSeqNum, endSeqNum uint64) uint64 {
+	if endSeqNum >= tailSeqNum {
+		return 0
+	}
+	return tailSeqNum - endSeqNum
 }
 
 // nextTailReadWindow returns the next tail offset and record count for scanning

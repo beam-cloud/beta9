@@ -761,16 +761,19 @@ func (r *PostgresBackendRepository) ListTasks(ctx context.Context) ([]types.Task
 	return tasks, nil
 }
 
-func (c *PostgresBackendRepository) listTaskWithRelatedQueryBuilder(filters types.TaskFilter) squirrel.SelectBuilder {
-	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
-		"t.*, w.external_id AS \"workspace.external_id\", w.name AS \"workspace.name\", " +
-			"w.created_at AS \"workspace.created_at\", w.updated_at AS \"workspace.updated_at\", " +
-			"s.external_id AS \"stub.external_id\", s.name AS \"stub.name\", s.config AS \"stub.config\", s.type AS \"stub.type\", d.external_id AS \"deployment.external_id\", d.name AS \"deployment.name\", d.version AS \"deployment.version\"",
-	).From("task t").
-		Join("workspace w ON t.workspace_id = w.id").
-		Join("stub s ON t.stub_id = s.id").
-		LeftJoin("deployment d ON s.id = d.stub_id").
-		OrderBy("t.id DESC")
+const taskWithRelatedColumns = "t.*, w.external_id AS \"workspace.external_id\", w.name AS \"workspace.name\", " +
+	"w.created_at AS \"workspace.created_at\", w.updated_at AS \"workspace.updated_at\", " +
+	"s.external_id AS \"stub.external_id\", s.name AS \"stub.name\", s.config AS \"stub.config\", s.type AS \"stub.type\", d.external_id AS \"deployment.external_id\", d.name AS \"deployment.name\", d.version AS \"deployment.version\""
+
+func (c *PostgresBackendRepository) listTaskWithRelatedQueryBuilder(filters types.TaskFilter, pageOnly bool) squirrel.SelectBuilder {
+	columns := taskWithRelatedColumns
+	if pageOnly {
+		columns = "t.id, t.created_at"
+	}
+	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(columns).From("task t").Join("stub s ON t.stub_id = s.id")
+	if !pageOnly {
+		qb = qb.Join("workspace w ON t.workspace_id = w.id").LeftJoin("deployment d ON s.id = d.stub_id").OrderBy("t.id DESC")
+	}
 
 	// Apply filters
 	if filters.All {
@@ -850,6 +853,11 @@ func (c *PostgresBackendRepository) listTaskWithRelatedQueryBuilder(filters type
 
 	if filters.AppId != "" {
 		qb = qb.Join("app a ON s.app_id = a.id")
+		if filters.WorkspaceID > 0 {
+			qb = qb.Where(squirrel.Eq{"a.workspace_id": filters.WorkspaceID})
+		} else if filters.ExternalWorkspaceID > 0 {
+			qb = qb.Where(squirrel.Eq{"a.workspace_id": filters.ExternalWorkspaceID})
+		}
 		qb = qb.Where(squirrel.Eq{"a.external_id": filters.AppId})
 		qb = qb.Where("a.deleted_at IS NULL")
 	}
@@ -934,7 +942,7 @@ func (c *PostgresBackendRepository) AggregateTasksByTimeWindow(ctx context.Conte
 		qb = qb.Where(squirrel.Eq{"t.workspace_id": filters.WorkspaceID})
 	}
 
-	if len(filters.StubIds) > 0 || filters.AppId != "" {
+	if len(filters.StubIds) > 0 {
 		qb = qb.Join("stub s ON t.stub_id = s.id")
 	}
 
@@ -943,8 +951,16 @@ func (c *PostgresBackendRepository) AggregateTasksByTimeWindow(ctx context.Conte
 	}
 
 	if filters.AppId != "" {
-		qb = qb.Join("app a ON s.app_id = a.id")
-		qb = qb.Where(squirrel.Eq{"a.external_id": filters.AppId})
+		appWorkspaceId := filters.WorkspaceID
+		if appWorkspaceId == 0 {
+			appWorkspaceId = filters.ExternalWorkspaceID
+		}
+		appStubIds := squirrel.Select("app_stub.id").From("stub app_stub").
+			Join("app app_scope ON app_stub.app_id = app_scope.id").
+			Where(squirrel.Eq{"app_scope.workspace_id": appWorkspaceId}).
+			Where(squirrel.Eq{"app_scope.external_id": filters.AppId}).
+			Where("app_scope.deleted_at IS NULL")
+		qb = qb.Where(squirrel.Expr("t.stub_id IN (?)", appStubIds))
 	}
 
 	if filters.CreatedAtStart != "" {
@@ -982,7 +998,7 @@ func (c *PostgresBackendRepository) ListTasksWithRelated(ctx context.Context, fi
 		return tasks.Data, nil
 	}
 
-	qb := c.listTaskWithRelatedQueryBuilder(filters)
+	qb := c.listTaskWithRelatedQueryBuilder(filters, false)
 
 	sql, args, err := qb.ToSql()
 	if err != nil {
@@ -1003,7 +1019,18 @@ func (c *PostgresBackendRepository) ListTasksWithRelatedPaginated(ctx context.Co
 		return c.listAllTasksWithRelatedPaginated(ctx, filters)
 	}
 
-	qb := c.listTaskWithRelatedQueryBuilder(filters)
+	pageOnly := filters.AppId != ""
+	qb := c.listTaskWithRelatedQueryBuilder(filters, pageOnly)
+	queryWrapper := func(page squirrel.SelectBuilder, pageSize int) squirrel.SelectBuilder {
+		if !pageOnly {
+			return page
+		}
+		return squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(taskWithRelatedColumns).
+			FromSelect(page, "page").Join("task t ON t.id = page.id").
+			Join("workspace w ON t.workspace_id = w.id").Join("stub s ON t.stub_id = s.id").
+			LeftJoin("LATERAL (SELECT d.external_id, d.name, d.version FROM deployment d WHERE d.stub_id = s.id AND d.deleted_at IS NULL ORDER BY d.created_at DESC, d.id DESC LIMIT 1) d ON true").
+			OrderBy("page.created_at DESC", "page.id DESC").Limit(uint64(pageSize + 1))
+	}
 
 	page, err := common.Paginate(
 		common.SquirrelCursorPaginator[types.TaskWithRelated]{
@@ -1013,6 +1040,7 @@ func (c *PostgresBackendRepository) ListTasksWithRelatedPaginated(ctx context.Co
 			SortColumn:      "created_at",
 			SortQueryPrefix: "t",
 			PageSize:        int(filters.Limit),
+			QueryWrapper:    queryWrapper,
 		},
 		filters.Cursor,
 	)
@@ -1102,9 +1130,9 @@ func (r *PostgresBackendRepository) GetOrCreateStub(ctx context.Context, name, s
 		queryGet := `
     SELECT id, external_id, name, type, config, config_version, object_id, workspace_id, created_at, updated_at, app_id
     FROM stub
-    WHERE name = $1 AND type = $2 AND object_id = $3 AND config::jsonb = $4::jsonb AND workspace_id = $5;
+    WHERE name = $1 AND type = $2 AND object_id = $3 AND config::jsonb = $4::jsonb AND workspace_id = $5 AND app_id = $6;
     `
-		err = r.client.GetContext(ctx, &stub, queryGet, name, stubType, objectId, string(configJSON), workspaceId)
+		err = r.client.GetContext(ctx, &stub, queryGet, name, stubType, objectId, string(configJSON), workspaceId, appId)
 		if err == nil {
 			queryTouch := `
     UPDATE stub

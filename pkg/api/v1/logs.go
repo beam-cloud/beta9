@@ -275,6 +275,14 @@ func (g *LogGroup) authorizeLogQuery(ctx echo.Context, authInfo *auth.AuthInfo, 
 		query.AppID = task.App.ExternalId
 		query.TaskID = task.ExternalId
 		query.ContainerID = task.ContainerId
+		if !task.CreatedAt.Time.IsZero() {
+			start := task.CreatedAt.Time.UTC().Add(-time.Minute)
+			query.HistoryStart = &start
+		}
+		if task.Status.IsCompleted() && task.EndedAt.Valid {
+			end := task.EndedAt.Time.UTC().Add(time.Minute)
+			query.HistoryEnd = &end
+		}
 	case types.GatewayObjectTypeStub:
 		stub, err := g.backendRepo.GetStubByExternalId(ctx.Request().Context(), query.ObjectID, types.QueryFilter{Field: "workspace_id", Value: query.WorkspaceID})
 		if err != nil {

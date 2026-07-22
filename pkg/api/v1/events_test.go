@@ -7,11 +7,51 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
 )
+
+type taskLogBoundsBackend struct {
+	repository.BackendRepository
+	task *types.TaskWithRelated
+}
+
+func (r *taskLogBoundsBackend) GetTaskWithRelated(context.Context, string) (*types.TaskWithRelated, error) {
+	return r.task, nil
+}
+
+func TestAuthorizeCompletedTaskSetsHistoryBounds(t *testing.T) {
+	createdAt := time.Date(2026, 7, 22, 16, 32, 0, 0, time.UTC)
+	endedAt := time.Date(2026, 7, 22, 16, 33, 0, 0, time.UTC)
+	task := &types.TaskWithRelated{
+		Task:      types.Task{ExternalId: "task-1", Status: types.TaskStatusComplete, WorkspaceId: 1, CreatedAt: types.Time{Time: createdAt}, EndedAt: types.NullTime{Time: endedAt, Valid: true}},
+		Workspace: types.Workspace{Id: 1, ExternalId: "workspace-1"},
+		Stub:      types.Stub{ExternalId: "stub-1"},
+		App:       types.App{ExternalId: "app-1"},
+	}
+	group := &LogGroup{backendRepo: &taskLogBoundsBackend{task: task}}
+	e := echo.New()
+	ctx := e.NewContext(httptest.NewRequest(http.MethodGet, "/", nil), httptest.NewRecorder())
+	authInfo := &auth.AuthInfo{Workspace: &types.Workspace{Id: 1, ExternalId: "workspace-1"}}
+	query := types.LogQuery{ObjectID: "task-1", ObjectType: types.GatewayObjectTypeTask, WorkspaceID: "workspace-1"}
+
+	if err := group.authorizeLogQuery(ctx, authInfo, &query); err != nil {
+		t.Fatal(err)
+	}
+	if query.HistoryEnd == nil || !query.HistoryEnd.Equal(endedAt.Add(time.Minute)) {
+		t.Fatalf("history end = %v, want %v", query.HistoryEnd, endedAt.Add(time.Minute))
+	}
+	if query.HistoryStart == nil || !query.HistoryStart.Equal(createdAt.Add(-time.Minute)) {
+		t.Fatalf("history start = %v, want %v", query.HistoryStart, createdAt.Add(-time.Minute))
+	}
+	if query.EndTime != nil {
+		t.Fatalf("authorization must not cap live streams: end_time = %v", query.EndTime)
+	}
+}
 
 func TestSummarizeContainerEventsBatchReturnsCoverageAndBottleneck(t *testing.T) {
 	items := []ContainerEventSummary{
