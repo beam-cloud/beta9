@@ -40,7 +40,7 @@ const (
 	concurrencyCounterRepairInterval   = 5 * time.Second
 	concurrencyReservationInFlightTTL  = 2 * time.Minute
 	workerAddressWaitTimeout           = 5 * time.Minute
-	workerAddressPollInterval          = 250 * time.Millisecond
+	workerAddressPollInterval          = 25 * time.Millisecond
 )
 
 var errConcurrencyCounterRepairing = errors.New("concurrency counter repair in progress")
