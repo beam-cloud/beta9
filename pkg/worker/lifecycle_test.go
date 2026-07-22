@@ -1909,7 +1909,7 @@ func TestEnsureBindMountSourceDirsCreatesMissingSources(t *testing.T) {
 		},
 	}
 
-	require.NoError(t, (&ContainerMountManager{}).ensureBindMountSourceDirs(request.Mounts))
+	require.NoError(t, (&ContainerMountManager{}).ensureBindMountSourceDirs(request))
 	require.DirExists(t, outputPath)
 	require.DirExists(t, mountPointPath)
 }

@@ -314,6 +314,40 @@ func TestRequiresWorkspaceStorageMount(t *testing.T) {
 		require.True(t, manager.RequiresWorkspaceStorageMount(request))
 	})
 
+	t.Run("sandbox output is ephemeral", func(t *testing.T) {
+		request := stubCodeMountRequest("sandbox-direct", "workspace", "object")
+		request.Workspace.Storage = directWorkspaceStorage()
+		request.Stub.Type = types.StubType(types.StubTypeSandbox)
+		request.Mounts = append(request.Mounts, types.Mount{
+			MountPath: types.WorkerUserOutputVolume,
+			LocalPath: types.TempContainerOutputs(request.ContainerId),
+			MountType: types.StorageModeLocal,
+		})
+
+		require.False(t, manager.RequiresWorkspaceStorageMount(request))
+		require.Equal(t, types.WorkerUserCodeVolume, request.Mounts[0].MountPath)
+		require.Equal(t, types.TempContainerOutputs(request.ContainerId), request.Mounts[1].LocalPath)
+	})
+
+	t.Run("sandbox explicit volume still requires workspace storage", func(t *testing.T) {
+		request := stubCodeMountRequest("sandbox-volume", "workspace", "object")
+		request.Workspace.Storage = directWorkspaceStorage()
+		request.Stub.Type = types.StubType(types.StubTypeSandbox)
+		request.Mounts = append(request.Mounts,
+			types.Mount{
+				MountPath: types.WorkerUserOutputVolume,
+				LocalPath: types.TempContainerOutputs(request.ContainerId),
+				MountType: types.StorageModeLocal,
+			},
+			types.Mount{
+				MountPath: types.WorkerContainerVolumePath + "/data",
+				LocalPath: filepath.Join(types.DefaultVolumesPath, request.Workspace.Name, "data"),
+			},
+		)
+
+		require.True(t, manager.RequiresWorkspaceStorageMount(request))
+	})
+
 	t.Run("mountpoint storage", func(t *testing.T) {
 		request := stubCodeMountRequest("container-mountpoint", "workspace", "object")
 		request.Workspace.Storage = directWorkspaceStorage()

@@ -413,6 +413,7 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 		workspace,
 		stubConfig,
 		stub.ExternalId,
+		stub.Type,
 	)
 	if err != nil {
 		return "", err

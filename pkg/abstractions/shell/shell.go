@@ -423,6 +423,7 @@ func (ss *SSHShellService) CreateStandaloneShell(ctx context.Context, in *pb.Cre
 		authInfo.Workspace,
 		stubConfig,
 		stub.ExternalId,
+		stub.Type,
 	)
 	if err != nil {
 		return &pb.CreateStandaloneShellResponse{

@@ -22,6 +22,37 @@ func (s *trackedStorage) Unmount(string) error {
 func (*trackedStorage) Format(string) error { return nil }
 func (*trackedStorage) Mode() string        { return storage.StorageModeLocal }
 
+func TestWorkspaceStorageMountHotPathAllowsConcurrentHealthChecks(t *testing.T) {
+	mount := &trackedStorage{}
+	manager := &WorkspaceStorageManager{
+		mounts:        common.NewSafeMap[storage.Storage](),
+		mountLastUsed: common.NewSafeMap[time.Time](),
+		mountLocks:    make(map[string]*sync.RWMutex),
+		config: types.StorageConfig{WorkspaceStorage: types.WorkspaceStorageConfig{
+			BaseMountPath: t.TempDir(),
+		}},
+	}
+	manager.mounts.Set("workspace-a", mount)
+
+	unlock := manager.rlockWorkspaceMount("workspace-a")
+	defer unlock()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := manager.Mount("workspace-a", nil)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("healthy workspace mount waited behind another health check")
+	}
+}
+
 func TestWorkspaceStorageManagerRejectsLocalStorage(t *testing.T) {
 	base := t.TempDir()
 	manager, err := NewWorkspaceStorageManager(
@@ -55,7 +86,7 @@ func TestWorkspaceStorageMountRemainsWarmUntilIdle(t *testing.T) {
 		mounts:             common.NewSafeMap[storage.Storage](),
 		mountLastUsed:      common.NewSafeMap[time.Time](),
 		containerInstances: common.NewSafeMap[*ContainerInstance](),
-		mountLocks:         make(map[string]*sync.Mutex),
+		mountLocks:         make(map[string]*sync.RWMutex),
 		config: types.StorageConfig{WorkspaceStorage: types.WorkspaceStorageConfig{
 			BaseMountPath: t.TempDir(),
 		}},

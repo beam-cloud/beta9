@@ -34,6 +34,10 @@ func TempContainerWorkspace(containerId string) string {
 	return fmt.Sprintf("/tmp/%s/workspace", containerId)
 }
 
+func TempContainerOutputs(containerId string) string {
+	return fmt.Sprintf("/tmp/%s/outputs", containerId)
+}
+
 type ContainerResourceUsage struct {
 	ContainerID       string `json:"ContainerID"`
 	CpuMillicoresUsed int64  `json:"CpuMillicoresUsed"`

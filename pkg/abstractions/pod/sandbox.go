@@ -21,6 +21,8 @@ import (
 const (
 	sandboxConnectWorkerAddressTimeout = 1500 * time.Millisecond
 	sandboxConnectWorkerDialTimeout    = 2 * time.Second
+	sandboxConnectReadyTimeout         = 25 * time.Second
+	sandboxConnectReadyPollDelay       = 25 * time.Millisecond
 	sandboxExecConnectRetryTimeout     = 3 * time.Second
 	sandboxExecConnectRetryDelay       = 50 * time.Millisecond
 	sandboxStatusMetadataTimeout       = 500 * time.Millisecond
@@ -768,11 +770,25 @@ func (s *GenericPodService) SandboxFindInFiles(ctx context.Context, in *pb.PodSa
 func (s *GenericPodService) SandboxConnect(ctx context.Context, in *pb.PodSandboxConnectRequest) (*pb.PodSandboxConnectResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	_, container, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+	client, container, _, err := s.getClientWithCacheKey(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+	if err == nil {
+		phaseStart := time.Now()
+		readyCtx, cancel := context.WithTimeout(ctx, sandboxConnectReadyTimeout)
+		err = waitForSandboxReady(readyCtx, func(probeCtx context.Context) (*pb.ContainerSandboxStatusResponse, error) {
+			return client.SandboxStatusContext(probeCtx, in.ContainerId, 0)
+		})
+		cancel()
+		failureClass := ""
+		if err != nil {
+			failureClass = "process_manager_unavailable"
+		}
+		metrics.RecordSandboxConnectPhase("process_manager_readiness", authInfo.Workspace.ExternalId, container.StubId, string(container.Status), failureClass, err == nil, time.Since(phaseStart))
+	}
 	if err != nil {
+		logSandboxConnectFailure(err, in.ContainerId)
 		return &pb.PodSandboxConnectResponse{
 			Ok:       false,
-			ErrorMsg: "Failed to connect to sandbox",
+			ErrorMsg: sandboxConnectErrorMessage(err),
 		}, nil
 	}
 
@@ -780,6 +796,41 @@ func (s *GenericPodService) SandboxConnect(ctx context.Context, in *pb.PodSandbo
 		Ok:     true,
 		StubId: container.StubId,
 	}, nil
+}
+
+func waitForSandboxReady(ctx context.Context, probe func(context.Context) (*pb.ContainerSandboxStatusResponse, error)) error {
+	for {
+		resp, err := probe(ctx)
+		if err != nil && !isTransientSandboxConnectFailure(err) {
+			return err
+		}
+		if err == nil && resp == nil {
+			return errors.New("sandbox readiness probe returned no response")
+		}
+		if err == nil && !resp.Ok {
+			return errors.New(resp.ErrorMsg)
+		}
+		if err == nil {
+			switch resp.Status {
+			case "running":
+				return nil
+			case "stopping", "exited":
+				return fmt.Errorf("sandbox stopped before becoming ready: %s", resp.Status)
+			}
+		}
+
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("sandbox did not become ready: %w", err)
+		}
+
+		timer := time.NewTimer(sandboxConnectReadyPollDelay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("sandbox did not become ready: %w", ctx.Err())
+		case <-timer.C:
+		}
+	}
 }
 
 func (s *GenericPodService) getClient(ctx context.Context, containerId, token string, workspaceId string) (*common.ContainerClient, *types.ContainerState, error) {

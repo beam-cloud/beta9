@@ -28,7 +28,7 @@ type WorkspaceStorageManager struct {
 	config             types.StorageConfig
 	poolConfig         types.WorkerPoolConfig
 	containerInstances *common.SafeMap[*ContainerInstance]
-	mountLocks         map[string]*sync.Mutex
+	mountLocks         map[string]*sync.RWMutex
 	mountLocksMu       sync.Mutex
 	cacheClient        *cache.Client
 }
@@ -41,7 +41,7 @@ func NewWorkspaceStorageManager(ctx context.Context, config types.StorageConfig,
 		config:             config,
 		poolConfig:         poolConfig,
 		containerInstances: containerInstances,
-		mountLocks:         make(map[string]*sync.Mutex),
+		mountLocks:         make(map[string]*sync.RWMutex),
 		cacheClient:        cacheClient,
 	}
 
@@ -51,7 +51,10 @@ func NewWorkspaceStorageManager(ctx context.Context, config types.StorageConfig,
 
 	log.Info().Str("storage_mode", sm.poolConfig.StorageMode).Msgf("using storage mode: '%s'", sm.poolConfig.StorageMode)
 
-	go sm.cleanupUnusedMounts()
+	// Workspace mounts are reused for the worker lifetime and cleaned up after
+	// scheduling is disabled during worker shutdown. Background unmounts can
+	// spend up to a minute flushing GeeseFS while holding the workspace lock,
+	// which puts an unrelated new container directly behind that delay.
 	return sm, nil
 }
 
@@ -64,15 +67,18 @@ func (sm *WorkspaceStorageManager) Create(workspaceName string, storage storage.
 }
 
 func (sm *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage *types.WorkspaceStorage) (storage.Storage, error) {
-	unlock := sm.lockWorkspaceMount(workspaceName)
-	defer unlock()
-
 	mountPath := path.Join(sm.config.WorkspaceStorage.BaseMountPath, workspaceName)
+	readUnlock := sm.rlockWorkspaceMount(workspaceName)
 	mount, ok := sm.mounts.Get(workspaceName)
 	if ok && workspaceMountHealthy(mount, mountPath) {
 		sm.mountLastUsed.Set(workspaceName, time.Now())
+		readUnlock()
 		return mount, nil
 	}
+	readUnlock()
+
+	unlock := sm.lockWorkspaceMount(workspaceName)
+	defer unlock()
 
 	mount, ok = sm.mounts.Get(workspaceName)
 	if ok {
@@ -269,16 +275,26 @@ func (sm *WorkspaceStorageManager) unmountIfIdle(workspaceName string, lastUsedB
 }
 
 func (sm *WorkspaceStorageManager) lockWorkspaceMount(workspaceName string) func() {
+	lock := sm.workspaceMountLock(workspaceName)
+	lock.Lock()
+	return lock.Unlock
+}
+
+func (sm *WorkspaceStorageManager) rlockWorkspaceMount(workspaceName string) func() {
+	lock := sm.workspaceMountLock(workspaceName)
+	lock.RLock()
+	return lock.RUnlock
+}
+
+func (sm *WorkspaceStorageManager) workspaceMountLock(workspaceName string) *sync.RWMutex {
 	sm.mountLocksMu.Lock()
 	lock, ok := sm.mountLocks[workspaceName]
 	if !ok {
-		lock = &sync.Mutex{}
+		lock = &sync.RWMutex{}
 		sm.mountLocks[workspaceName] = lock
 	}
 	sm.mountLocksMu.Unlock()
-
-	lock.Lock()
-	return lock.Unlock
+	return lock
 }
 
 func workspaceMountHealthy(mount storage.Storage, mountPath string) bool {

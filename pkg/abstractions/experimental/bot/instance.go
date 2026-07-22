@@ -495,6 +495,7 @@ func (i *botInstance) run(transitionName, sessionId, taskId string) error {
 		i.authInfo.Workspace,
 		*i.stubConfig,
 		i.stub.ExternalId,
+		i.stub.Type,
 	)
 	if err != nil {
 		return err

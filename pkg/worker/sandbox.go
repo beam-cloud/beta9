@@ -171,7 +171,7 @@ func (s *Worker) stopDockerSandbox(containerId string, instance *ContainerInstan
 	if force || instance == nil || instance.Request == nil || !instance.Request.DockerEnabled {
 		return
 	}
-	if instance.SandboxProcessManager == nil || !instance.SandboxProcessManagerReady {
+	if instance.SandboxProcessManager == nil || !instance.processManagerReady() {
 		return
 	}
 

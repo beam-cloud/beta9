@@ -159,6 +159,7 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated, tas
 		&stub.Workspace,
 		stubConfig,
 		stub.ExternalId,
+		stub.Type,
 	)
 	if err != nil {
 		return err

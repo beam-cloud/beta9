@@ -133,6 +133,7 @@ func (i *podInstance) startContainers(containersToRun int) error {
 			i.Workspace,
 			*i.StubConfig,
 			i.Stub.ExternalId,
+			i.Stub.Type,
 		)
 		if err != nil {
 			return err

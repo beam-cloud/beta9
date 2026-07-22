@@ -266,9 +266,8 @@ func TestWaitForSandboxProcessManagerWaitsForLateReadyChannel(t *testing.T) {
 		server.containerInstances.Set(containerId, fresh)
 
 		time.Sleep(25 * time.Millisecond)
-		fresh.SandboxProcessManagerReady = true
+		fresh.signalProcessManagerReadiness(true)
 		server.containerInstances.Set(containerId, fresh)
-		close(ready)
 	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -276,7 +275,7 @@ func TestWaitForSandboxProcessManagerWaitsForLateReadyChannel(t *testing.T) {
 
 	got, err := server.waitForSandboxProcessManager(ctx, containerId, instance)
 	require.NoError(t, err)
-	require.True(t, got.SandboxProcessManagerReady)
+	require.True(t, got.processManagerReady())
 }
 
 func TestContainerSandboxExecDoesNotPollRuntimeStateBeforeProcessManagerReady(t *testing.T) {
@@ -321,6 +320,27 @@ func TestContainerSandboxStatusReportsPendingBeforeProcessManagerReady(t *testin
 	require.True(t, resp.Ok)
 	require.Equal(t, "pending", resp.Status)
 	require.Equal(t, int32(-1), resp.ExitCode)
+}
+
+func TestContainerSandboxStatusReportsFailedProcessManagerInitialization(t *testing.T) {
+	containerId := "sandbox-test"
+	ready := make(chan struct{})
+	close(ready)
+	server := &ContainerRuntimeServer{
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+	}
+	server.containerInstances.Set(containerId, &ContainerInstance{
+		Id:                      containerId,
+		ProcessManagerReadyChan: ready,
+	})
+
+	resp, err := server.ContainerSandboxStatus(context.Background(), &pb.ContainerSandboxStatusRequest{
+		ContainerId: containerId,
+	})
+
+	require.NoError(t, err)
+	require.False(t, resp.Ok)
+	require.Contains(t, resp.ErrorMsg, "failed to become ready")
 }
 
 func TestContainerSandboxStatusRequiresProcessManagerForPid(t *testing.T) {
