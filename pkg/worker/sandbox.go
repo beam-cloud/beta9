@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -37,6 +38,40 @@ const (
 	dockerInfoCommandTimeout      = 2 * time.Second
 	sandboxMissingProcessExitCode = 137
 )
+
+func (i *ContainerInstance) signalProcessManagerReadiness(ready bool) {
+	i.processManagerReadyMu.Lock()
+	defer i.processManagerReadyMu.Unlock()
+	if i.SandboxProcessManagerReady && !ready {
+		return
+	}
+	i.SandboxProcessManagerReady = ready
+	if i.ProcessManagerReadyChan != nil {
+		i.ProcessManagerReadyOnce.Do(func() {
+			close(i.ProcessManagerReadyChan)
+		})
+	}
+}
+
+func (i *ContainerInstance) initializeProcessManagerReadiness() {
+	i.processManagerReadyMu.Lock()
+	defer i.processManagerReadyMu.Unlock()
+	i.SandboxProcessManagerReady = false
+	i.ProcessManagerReadyOnce = sync.Once{}
+	i.ProcessManagerReadyChan = make(chan struct{})
+}
+
+func (i *ContainerInstance) processManagerReady() bool {
+	i.processManagerReadyMu.RLock()
+	defer i.processManagerReadyMu.RUnlock()
+	return i.SandboxProcessManagerReady
+}
+
+func (i *ContainerInstance) processManagerReadyChannel() <-chan struct{} {
+	i.processManagerReadyMu.RLock()
+	defer i.processManagerReadyMu.RUnlock()
+	return i.ProcessManagerReadyChan
+}
 
 type tcpProbeResult struct {
 	Connected  bool
