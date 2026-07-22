@@ -927,6 +927,9 @@ type LogQuery struct {
 	TailOffset  *int64     `json:"tail_offset,omitempty"`
 	WaitSeconds *int32     `json:"wait,omitempty"`
 	Clamp       *bool      `json:"clamp,omitempty"`
+
+	HistoryStart *time.Time `json:"-"`
+	HistoryEnd   *time.Time `json:"-"`
 }
 
 const (
