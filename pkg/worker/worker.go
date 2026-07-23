@@ -521,7 +521,13 @@ containerRequestStream:
 				if request.MachineId == "" {
 					request.MachineId = s.machineID
 				}
-				log.Info().Str("worker_id", s.workerId).Str("container_id", request.ContainerId).Msg("worker received container request")
+				log.Info().
+					Str("worker_id", s.workerId).
+					Str("container_id", request.ContainerId).
+					Str("gpu", request.Gpu).
+					Uint32("gpu_count", request.GpuCount).
+					Bool("gpu_virtualized", request.GpuVirtualized).
+					Msg("worker received container request")
 				if !request.Timestamp.IsZero() {
 					s.recordContainerLifecycle(s.ctx, request, containerLifecycleFromDuration(types.ContainerLifecycleWorkerQueueReceive, request, request.Timestamp, time.Since(request.Timestamp), true, map[string]string{
 						"worker_id": s.workerId,

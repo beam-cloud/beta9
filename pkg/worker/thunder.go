@@ -20,7 +20,7 @@ const (
 	thunderAPIURLEnv               = "THUNDER_API_URL"
 	thunderAPITokenEnv             = "THUNDER_API_TOKEN"
 	thunderZoneIDEnv               = "THUNDER_ZONE_ID"
-	thunderEnrollmentTokenPath     = "/api/v1/enrollment-token"
+	thunderEnrollmentTokenPath     = "/api/v1/enrollment-tokens"
 	thunderEnrollmentTokenNodePath = "/api/v1/enrollment-tokens/%s/node"
 	thunderEnrollmentRoleClient    = "client"
 	thunderEnrollmentExpiresSecond = 604800
@@ -113,8 +113,22 @@ func (c *ContainerThunderManager) AssignGPUDevices(request *types.ContainerReque
 		ExpiresInSeconds: thunderEnrollmentExpiresSecond,
 	}
 
+	log.Info().
+		Str("container_id", request.ContainerId).
+		Str("zone_id", payload.ZoneID).
+		Str("gpu_type", payload.GPUType).
+		Int("gpu_count", payload.GPUCount).
+		Msg("requesting Thunder enrollment token")
+
 	var response thunderEnrollmentTokenResponse
 	if err := c.doThunderRequest(http.MethodPost, apiURL, apiToken, thunderEnrollmentTokenPath, payload, &response); err != nil {
+		log.Error().
+			Str("container_id", request.ContainerId).
+			Str("zone_id", payload.ZoneID).
+			Str("gpu_type", payload.GPUType).
+			Int("gpu_count", payload.GPUCount).
+			Err(err).
+			Msg("failed to assign Thunder virtual GPU")
 		return nil, err
 	}
 
@@ -125,6 +139,14 @@ func (c *ContainerThunderManager) AssignGPUDevices(request *types.ContainerReque
 		APIToken:          apiToken,
 		Response:          response,
 	})
+
+	log.Info().
+		Str("container_id", request.ContainerId).
+		Str("enrollment_token_id", response.EnrollmentTokenID).
+		Str("zone_id", response.ZoneID).
+		Str("gpu_type", response.GPUType).
+		Int("gpu_count", response.GPUCount).
+		Msg("assigned Thunder virtual GPU")
 	return []int{}, nil
 }
 
@@ -135,6 +157,7 @@ func (c *ContainerThunderManager) GetContainerGPUDevices(containerId string) []i
 func (c *ContainerThunderManager) UnassignGPUDevices(containerId string) {
 	allocation, ok := c.allocations.Get(containerId)
 	if !ok {
+		log.Debug().Str("container_id", containerId).Msg("skipping Thunder virtual GPU unassign because no allocation was recorded")
 		return
 	}
 	if strings.TrimSpace(allocation.EnrollmentTokenID) == "" {
@@ -144,8 +167,17 @@ func (c *ContainerThunderManager) UnassignGPUDevices(containerId string) {
 	}
 
 	path := fmt.Sprintf(thunderEnrollmentTokenNodePath, allocation.EnrollmentTokenID)
+	log.Info().
+		Str("container_id", containerId).
+		Str("enrollment_token_id", allocation.EnrollmentTokenID).
+		Msg("unassigning Thunder virtual GPU")
 	if err := c.doThunderRequest(http.MethodDelete, allocation.APIURL, allocation.APIToken, path, nil, nil); err != nil {
 		log.Error().Str("container_id", containerId).Err(err).Msg("failed to unregister Thunder virtual GPU client")
+	} else {
+		log.Info().
+			Str("container_id", containerId).
+			Str("enrollment_token_id", allocation.EnrollmentTokenID).
+			Msg("unassigned Thunder virtual GPU")
 	}
 	c.allocations.Delete(containerId)
 }
@@ -320,9 +352,17 @@ func (s *Worker) installThunderClient(ctx context.Context, request *types.Contai
 	}
 	installCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
+	log.Info().
+		Str("container_id", request.ContainerId).
+		Str("enrollment_token_id", allocation.EnrollmentTokenID).
+		Msg("installing Thunder client in sandbox")
 	if err := instance.Runtime.Exec(installCtx, request.ContainerId, proc, nil); err != nil {
 		return fmt.Errorf("failed to install Thunder client: %w", err)
 	}
+	log.Info().
+		Str("container_id", request.ContainerId).
+		Str("enrollment_token_id", allocation.EnrollmentTokenID).
+		Msg("installed Thunder client in sandbox")
 	return nil
 }
 
