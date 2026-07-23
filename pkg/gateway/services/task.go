@@ -68,6 +68,33 @@ func (gws *GatewayService) StartTask(ctx context.Context, in *pb.StartTaskReques
 		task.ContainerId = in.ContainerId
 	}
 
+	err = gws.taskDispatcher.Claim(ctx, task.Workspace.Name, task.Stub.ExternalId, task.ExternalId, task.ContainerId)
+	if err != nil {
+		log.Warn().
+			Err(err).
+			Str("task_id", task.ExternalId).
+			Str("container_id", task.ContainerId).
+			Str("workspace_id", task.Workspace.ExternalId).
+			Str("workspace_name", task.Workspace.Name).
+			Str("stub_id", task.Stub.ExternalId).
+			Msg("start task failed to claim task")
+		return &pb.StartTaskResponse{Ok: false}, nil
+	}
+
+	if _, err = gws.backendRepo.UpdateTask(ctx, task.ExternalId, task.Task); err != nil {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		releaseErr := gws.taskDispatcher.Release(cleanupCtx, task.Workspace.Name, task.Stub.ExternalId, task.ExternalId)
+		cancel()
+		log.Warn().
+			Err(errors.Join(err, releaseErr)).
+			Str("task_id", task.ExternalId).
+			Str("container_id", task.ContainerId).
+			Str("workspace_id", task.Workspace.ExternalId).
+			Str("stub_id", task.Stub.ExternalId).
+			Msg("start task failed to update task")
+		return &pb.StartTaskResponse{Ok: false}, nil
+	}
+
 	phaseMetrics := taskmetrics.NewPhaseMetrics(gws.redisClient)
 	phaseLabels := taskmetrics.FunctionPhaseLabelsFromTask(task)
 	if err := phaseMetrics.StoreLabels(ctx, task.Workspace.Name, task.ExternalId, phaseLabels); err != nil {
@@ -85,34 +112,7 @@ func (gws *GatewayService) StartTask(ctx context.Context, in *pb.StartTaskReques
 	}
 	gws.recordContainerToStartTaskPhases(ctx, task, startedAt, phaseLabels)
 
-	err = gws.taskDispatcher.Claim(ctx, task.Workspace.Name, task.Stub.ExternalId, task.ExternalId, task.ContainerId)
-	if err != nil {
-		log.Warn().
-			Err(err).
-			Str("task_id", task.ExternalId).
-			Str("container_id", task.ContainerId).
-			Str("workspace_id", task.Workspace.ExternalId).
-			Str("workspace_name", task.Workspace.Name).
-			Str("stub_id", task.Stub.ExternalId).
-			Msg("start task failed to claim task")
-		return &pb.StartTaskResponse{
-			Ok: false,
-		}, nil
-	}
-
-	_, err = gws.backendRepo.UpdateTask(ctx, task.ExternalId, task.Task)
-	if err != nil {
-		log.Warn().
-			Err(err).
-			Str("task_id", task.ExternalId).
-			Str("container_id", task.ContainerId).
-			Str("workspace_id", task.Workspace.ExternalId).
-			Str("stub_id", task.Stub.ExternalId).
-			Msg("start task failed to update task")
-	}
-	return &pb.StartTaskResponse{
-		Ok: err == nil,
-	}, nil
+	return &pb.StartTaskResponse{Ok: true}, nil
 }
 
 func (gws *GatewayService) EndTask(ctx context.Context, in *pb.EndTaskRequest) (*pb.EndTaskResponse, error) {

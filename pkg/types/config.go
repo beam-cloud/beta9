@@ -176,12 +176,13 @@ type ContainerCostHookConfig struct {
 }
 
 type GatewayServiceConfig struct {
-	Host            string        `key:"host" json:"host"`
-	InvokeURLType   string        `key:"invokeURLType" json:"invoke_url_type"`
-	GRPC            GRPCConfig    `key:"grpc" json:"grpc"`
-	HTTP            HTTPConfig    `key:"http" json:"http"`
-	ShutdownTimeout time.Duration `key:"shutdownTimeout" json:"shutdown_timeout"`
-	StubLimits      StubLimits    `key:"stubLimits" json:"stub_limits"`
+	Host                 string        `key:"host" json:"host"`
+	InvokeURLType        string        `key:"invokeURLType" json:"invoke_url_type"`
+	ContainerURLTemplate string        `key:"containerURLTemplate" json:"container_url_template"`
+	GRPC                 GRPCConfig    `key:"grpc" json:"grpc"`
+	HTTP                 HTTPConfig    `key:"http" json:"http"`
+	ShutdownTimeout      time.Duration `key:"shutdownTimeout" json:"shutdown_timeout"`
+	StubLimits           StubLimits    `key:"stubLimits" json:"stub_limits"`
 }
 
 type FileServiceConfig struct {
@@ -423,8 +424,9 @@ type WorkerConfig struct {
 }
 
 type ContainerResourceLimitsConfig struct {
-	CPUEnforced    bool `key:"cpuEnforced" json:"cpu_enforced"`
-	MemoryEnforced bool `key:"memoryEnforced" json:"memory_enforced"`
+	CPUEnforced         bool `key:"cpuEnforced" json:"cpu_enforced"`
+	CPUAffinityEnforced bool `key:"cpuAffinityEnforced" json:"cpu_affinity_enforced"`
+	MemoryEnforced      bool `key:"memoryEnforced" json:"memory_enforced"`
 }
 
 type FailoverConfig struct {
@@ -450,9 +452,9 @@ const (
 	WorkerPoolManagementSourceConfig WorkerPoolManagementSource = "config"
 	WorkerPoolManagementSourceAPI    WorkerPoolManagementSource = "api"
 
-	WorkerPoolControllerLocal          WorkerPoolController = "local"
-	WorkerPoolControllerAgent          WorkerPoolController = "agent"
-	WorkerPoolControllerExternalLegacy WorkerPoolController = "external_legacy"
+	WorkerPoolControllerLocal    WorkerPoolController = "local"
+	WorkerPoolControllerAgent    WorkerPoolController = "agent"
+	WorkerPoolControllerProvider WorkerPoolController = "provider"
 )
 
 // AgentHosted reports whether pools of this mode run on agent-managed
@@ -467,6 +469,7 @@ type WorkerPoolConfig struct {
 	Runtime                   string                            `key:"runtime" json:"runtime"`                                 // Kubernetes RuntimeClass for pod (e.g., "nvidia")
 	ContainerRuntime          string                            `key:"containerRuntime" json:"container_runtime"`              // Pool-specific container runtime: "runc" or "gvisor"
 	ContainerRuntimeConfig    RuntimeConfig                     `key:"containerRuntimeConfig" json:"container_runtime_config"` // Pool-specific container runtime configuration
+	CPUAffinityEnforced       bool                              `key:"cpuAffinityEnforced" json:"cpu_affinity_enforced"`
 	ContainerStartConcurrency int                               `key:"containerStartConcurrency" json:"container_start_concurrency"`
 	NetworkPreallocation      *bool                             `key:"networkPreallocation" json:"network_preallocation"`
 	NetworkSlotPoolSize       int                               `key:"networkSlotPoolSize" json:"network_slot_pool_size"`
@@ -491,10 +494,8 @@ type WorkerPoolConfig struct {
 }
 
 // AgentHosted reports whether this concrete pool uses the agent control path.
-// External pools without a provider are agent-backed; external pools with a
-// provider remain on the legacy remote-k3s controller during migration.
 func (c WorkerPoolConfig) AgentHosted() bool {
-	return c.Mode.AgentHosted() || (c.Mode == PoolModeExternal && c.Provider == nil)
+	return c.Mode.AgentHosted() || (c.Mode == PoolModeExternal && (c.Provider == nil || *c.Provider == ProviderAgent))
 }
 
 type WorkerPoolCacheConfig struct {
@@ -515,6 +516,22 @@ type RuntimeConfig struct {
 	GVisorPlatform  string   `key:"gvisorPlatform" json:"gvisor_platform"`    // "kvm", "systrap", or "ptrace"
 	GVisorRoot      string   `key:"gvisorRoot" json:"gvisor_root"`            // Root directory for gVisor state (default: "/run/gvisor")
 	GVisorExtraArgs []string `key:"gvisorExtraArgs" json:"gvisor_extra_args"` // Additional runsc flags appended for this pool
+}
+
+func (c RuntimeConfig) WithDefaults(runtime string) RuntimeConfig {
+	if runtime != ContainerRuntimeGvisor.String() {
+		return c
+	}
+	if c.GVisorPlatform == "" {
+		c.GVisorPlatform = "systrap"
+	}
+	if c.GVisorRoot == "" {
+		c.GVisorRoot = "/run/gvisor"
+	}
+	if len(c.GVisorExtraArgs) == 0 {
+		c.GVisorExtraArgs = []string{"--dcache=32768", "--overlay2=none", "--file-access=exclusive"}
+	}
+	return c
 }
 
 type WorkerPoolJobSpecConfig struct {
@@ -552,6 +569,7 @@ var (
 	ProviderCrusoe     MachineProvider = "crusoe"
 	ProviderHydra      MachineProvider = "hydra"
 	ProviderGeneric    MachineProvider = "generic"
+	ProviderAgent      MachineProvider = MachineProvider(DefaultAgentName)
 )
 
 type ProviderConfig struct {

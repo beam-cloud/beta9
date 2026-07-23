@@ -126,7 +126,7 @@ func (g *MetricsGroup) GetPoolMetricTimeseries(ctx echo.Context) error {
 		return HTTPBadRequest(err.Error())
 	}
 	bucketSize, err := time.ParseDuration(interval)
-	if err != nil || bucketSize < 5*time.Second || bucketSize > time.Hour || end.Sub(start) > 24*time.Hour || end.Sub(start)/bucketSize > 1000 {
+	if err != nil || bucketSize < 5*time.Second || bucketSize > 2*time.Hour || end.Sub(start) > 8*24*time.Hour || end.Sub(start)/bucketSize > 1000 {
 		return HTTPBadRequest("Invalid pool metrics range or interval")
 	}
 

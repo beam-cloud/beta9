@@ -1,0 +1,21 @@
+diff --git a/libcontainer/criu_linux.go b/libcontainer/criu_linux.go
+index 67d0c595..f3cebb26 100644
+--- a/libcontainer/criu_linux.go
++++ b/libcontainer/criu_linux.go
+@@ -317,6 +317,6 @@ func (c *Container) Checkpoint(criuOpts *CriuOpts) error {
+ 	rpcOpts := criurpc.CriuOpts{
+ 		ImagesDirFd:       proto.Int32(int32(imageDir.Fd())),
+-		LogLevel:          proto.Int32(4),
++		LogLevel:          proto.Int32(2),
+ 		LogFile:           proto.String(logFile),
+ 		Root:              proto.String(c.config.Rootfs),
+ 		ManageCgroups:     proto.Bool(true), // Obsoleted by ManageCgroupsMode.
+@@ -676,7 +676,7 @@ func (c *Container) Restore(process *Process, criuOpts *CriuOpts) error {
+ 		Opts: &criurpc.CriuOpts{
+ 			ImagesDirFd:       proto.Int32(int32(imageDir.Fd())),
+ 			EvasiveDevices:    proto.Bool(true),
+-			LogLevel:          proto.Int32(4),
++			LogLevel:          proto.Int32(2),
+ 			LogFile:           proto.String(logFile),
+ 			RstSibling:        proto.Bool(true),
+ 			Root:              proto.String(root),

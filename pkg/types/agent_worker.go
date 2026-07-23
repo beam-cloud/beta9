@@ -1,9 +1,12 @@
 package types
 
+import "strings"
+
 const (
 	DefaultAgentName                = "agent"
 	DefaultAgentServiceName         = "beam-agent"
 	DefaultAgentServiceDescription  = "Beam Agent"
+	AgentTailnetHostnamePrefix      = "beam-agent-"
 	DefaultAgentBinaryPath          = "/usr/local/bin/beam-agent"
 	DefaultAgentBinaryPattern       = "/usr/local/bin/beam-agent-%s-%s"
 	DefaultAgentStateDir            = "/var/lib/beam/agent"
@@ -60,6 +63,7 @@ const (
 	AgentDownloadURLEnv             = "BEAM_AGENT_URL"
 	AgentInstallDockerEnv           = "BEAM_AGENT_INSTALL_DOCKER"
 	AgentStorageModeEnv             = "BEAM_AGENT_WORKSPACE_STORAGE_MODE"
+	AgentCPUAffinityEnforcedEnv     = "BEAM_AGENT_CPU_AFFINITY_ENFORCED"
 	AgentWorkerPlatformEnv          = "BEAM_AGENT_WORKER_PLATFORM"
 	AgentVerboseEnv                 = "BEAM_AGENT_VERBOSE"
 	AgentNoColorEnv                 = "NO_COLOR"
@@ -95,6 +99,19 @@ const (
 	AgentPreflightSeverityError     = "error"
 )
 
+func WorkerImageVersion(image, fallback string) string {
+	if image == "" {
+		return fallback
+	}
+	if i := strings.LastIndex(image, "@"); i >= 0 {
+		return image[i+1:]
+	}
+	if i := strings.LastIndex(image, ":"); i > strings.LastIndex(image, "/") {
+		return image[i+1:]
+	}
+	return image
+}
+
 const (
 	WorkerConfigPathEnv     = "CONFIG_PATH"
 	WorkerConfigJSONEnv     = "CONFIG_JSON"
@@ -103,6 +120,7 @@ const (
 	WorkerPoolEnv           = "WORKER_POOL_NAME"
 	WorkerMachineEnv        = "WORKER_MACHINE_ID"
 	WorkerPersistentEnv     = "WORKER_PERSISTENT"
+	WorkerGenerationEnv     = "WORKER_GENERATION"
 	WorkerRouteTransportEnv = "WORKER_ROUTE_TRANSPORT"
 	WorkerRouteTargetEnv    = "WORKER_ROUTE_LOCAL_TARGET_HOST"
 	WorkerCPUEnv            = "CPU_LIMIT"
@@ -129,6 +147,8 @@ const (
 	ContainerGatewayHTTPHostEnv = "BETA9_GATEWAY_HOST_HTTP"
 	ContainerGatewayHTTPPortEnv = "BETA9_GATEWAY_PORT_HTTP"
 	ContainerHostnameEnv        = "CONTAINER_HOSTNAME"
+	ContainerRunnerReadyPathEnv = "BETA9_RUNNER_READY_PATH"
+	ContainerRunnerReadyPath    = "/run/beta9/runner-ready"
 )
 
 const (

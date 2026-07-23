@@ -153,6 +153,12 @@ type ServerConfig struct {
 type ServerReadTransportConfig struct {
 	Enabled  bool `key:"enabled" json:"enabled"`
 	Sendfile bool `key:"sendfile" json:"sendfile"`
+	// MaxRequestSizeBytes is the raw-protocol cap and is independent of gRPC.
+	MaxRequestSizeBytes int64 `key:"maxRequestSizeBytes" json:"max_request_size_bytes"`
+	// MaxInflightBytes is a weighted server-wide admission budget.
+	MaxInflightBytes int64 `key:"maxInflightBytes" json:"max_inflight_bytes"`
+	// MaxConcurrentRequests also bounds requests with very small or empty ranges.
+	MaxConcurrentRequests int `key:"maxConcurrentRequests" json:"max_concurrent_requests"`
 }
 
 type ClientConfig struct {
@@ -171,6 +177,12 @@ type ClientReadTransportConfig struct {
 	Enabled               bool `key:"enabled" json:"enabled"`
 	MaxActiveConnsPerHost int  `key:"maxActiveConnsPerHost" json:"max_active_conns_per_host"`
 	MaxIdleConnsPerHost   int  `key:"maxIdleConnsPerHost" json:"max_idle_conns_per_host"`
+	// RequestSizeBytes bounds each raw TCP request independently of the
+	// server-side page prefetch part size.
+	RequestSizeBytes int64 `key:"requestSizeBytes" json:"request_size_bytes"`
+	// MaxPartsPerRead only controls fanout when a logical read is larger than
+	// RequestSizeBytes. A logical read that fits remains one wire request.
+	MaxPartsPerRead int `key:"maxPartsPerRead" json:"max_parts_per_read"`
 }
 
 type ReadPrefetchConfig struct {

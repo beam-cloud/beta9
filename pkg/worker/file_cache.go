@@ -14,6 +14,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/opencontainers/runtime-spec/specs-go"
+	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -24,8 +25,9 @@ const (
 )
 
 type FileCacheManager struct {
-	config types.AppConfig
-	client *cache.Client
+	config              types.AppConfig
+	client              *cache.Client
+	initializationGroup singleflight.Group
 }
 
 func NewFileCacheManager(config types.AppConfig, client *cache.Client) *FileCacheManager {
@@ -139,21 +141,23 @@ func envListContains(value string, item string) bool {
 
 func (cm *FileCacheManager) initWorkspace(workspaceName string) (string, error) {
 	workspaceVolumePath := filepath.Join(types.DefaultVolumesPath, workspaceName)
-	fileName := fmt.Sprintf("%s/.cache", workspaceVolumePath)
+	_, err, _ := cm.initializationGroup.Do(workspaceVolumePath, func() (interface{}, error) {
+		fileName := fmt.Sprintf("%s/.cache", workspaceVolumePath)
+		if cm.client.IsPathCachedReachable(context.Background(), fileName) {
+			return nil, nil
+		}
 
-	if cm.CacheAvailable() && cm.client.IsPathCachedReachable(context.Background(), fileName) {
-		return workspaceVolumePath, nil
-	}
-
-	_, err := cm.client.StoreContentAtPath([]byte{}, fileName, cache.StoreContentOptions{
-		RoutingKey: fileName,
-		Lock:       true,
+		_, err := cm.client.StoreContentAtPath([]byte{}, fileName, cache.StoreContentOptions{
+			RoutingKey: fileName,
+			Lock:       true,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return nil, nil
 	})
-	if err != nil {
-		return "", err
-	}
 
-	return workspaceVolumePath, nil
+	return workspaceVolumePath, err
 }
 
 // GetClient returns the cache client instance.

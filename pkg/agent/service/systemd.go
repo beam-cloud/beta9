@@ -54,8 +54,7 @@ func (m Systemd) Install(ctx context.Context, spec Spec) error {
 	runner := m.runner()
 	for _, args := range [][]string{
 		{"daemon-reload"},
-		{"enable", spec.Name + types.AgentServiceUnitExtension},
-		{"start", spec.Name + types.AgentServiceUnitExtension},
+		{"enable", "--now", spec.Name + types.AgentServiceUnitExtension},
 	} {
 		if err := runner.Run(ctx, types.AgentSystemctlCommand, args...); err != nil {
 			return fmt.Errorf("%s %s: %w", types.AgentSystemctlCommand, strings.Join(args, " "), err)
@@ -81,8 +80,8 @@ func SystemdUnit(spec Spec) string {
 		"Description="+spec.Description,
 		"Wants="+types.AgentSystemdNetworkOnlineTarget+" "+types.AgentSystemdDockerService,
 		"After="+types.AgentSystemdNetworkOnlineTarget+" "+types.AgentSystemdDockerService,
-		"StartLimitIntervalSec=300",
-		"StartLimitBurst=5",
+		"RequiresMountsFor="+systemdPath(spec.StateDir),
+		"StartLimitIntervalSec=0",
 		"",
 		"[Service]",
 		"Type=simple",
@@ -93,7 +92,7 @@ func SystemdUnit(spec Spec) string {
 	}
 	writeLines(&b,
 		"ExecStart="+systemdCommand(append([]string{spec.BinaryPath}, spec.Args...)),
-		"Restart=on-failure",
+		"Restart=always",
 		"RestartSec=30",
 		"KillSignal=SIGINT",
 		"TimeoutStopSec=30",

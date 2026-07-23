@@ -61,6 +61,7 @@ type SquirrelCursorPaginator[DBType any] struct {
 	SortColumn      string
 	SortQueryPrefix string
 	PageSize        int
+	QueryWrapper    func(squirrel.SelectBuilder, int) squirrel.SelectBuilder
 }
 
 func getOperator(sortOrder string) string {
@@ -121,6 +122,9 @@ func Paginate[DBType any](settings SquirrelCursorPaginator[DBType], cursorString
 		operator := getOperator(settings.SortOrder)
 		whereExp := fmt.Sprintf("(%s %s ? OR (%s = ? AND %s %s ?))", sortColumnName, operator, sortColumnName, sortIdColumnName, operator)
 		settings.SelectBuilder = settings.SelectBuilder.Where(squirrel.Expr(whereExp, timeValue, timeValue, cursor.Id))
+	}
+	if settings.QueryWrapper != nil {
+		settings.SelectBuilder = settings.QueryWrapper(settings.SelectBuilder, settings.PageSize)
 	}
 
 	sql, args, err := settings.SelectBuilder.ToSql()

@@ -714,6 +714,16 @@ message GetOrCreateStubResponse {
   string stub_id = 2;
   string err_msg = 3;
   string warn_msg = 4;
+  // Capacity verdict for the requested GPU types, computed at stub creation:
+  // "available", "low", or "none". Empty when no check applies (CPU-only
+  // workloads, private-pool-only stubs, or pool-selector-bound stubs).
+  string capacity_status = 5;
+  // GPU types from the request that no serverless pool supports.
+  repeated string unsupported_gpus = 6;
+  // Name of an existing ready private pool in the workspace that satisfies
+  // the GPU request. Set instead of capacity_status "none" so clients can
+  // re-issue stub creation targeting this pool.
+  string matched_private_pool = 7;
 }
 
 message DeployStubRequest {
@@ -1362,6 +1372,10 @@ message JoinAgentRequest {
   repeated string gpu_ids = 14;
   uint32 network_slot_pool_size = 15;
   uint32 container_start_concurrency = 16;
+  // Optional per-machine worker image override. The gateway remembers the
+  // generated value as a baseline so untouched installs continue to follow
+  // future image tag changes while manually edited values remain pinned.
+  string worker_image = 17;
 }
 
 message JoinAgentResponse {
@@ -1465,6 +1479,12 @@ message AgentWorkerSlot {
   // Distinguishes an explicitly configured zero priority from legacy
   // gateways that did not send scheduling priority metadata.
   bool priority_set = 21;
+  string gvisor_platform = 22;
+  string gvisor_root = 23;
+  repeated string gvisor_extra_args = 24;
+  // Deterministic identity of the restart-relevant slot specification.
+  string generation = 25;
+  bool cpu_affinity_enforced = 26;
 }
 
 message StreamAgentRequest { string agent_token = 1; }
@@ -1579,7 +1599,12 @@ message ListMachinesResponse {
   bool ok = 1;
   string err_msg = 2;
   repeated Machine machines = 3;
+  // gpus reports live worker availability per GPU type (a worker with that
+  // GPU is currently registered).
   map<string, bool> gpus = 4;
+  // supported_gpus reports pool-config-based serverless support per GPU
+  // type: true when a pool could serve the GPU even if scaled to zero.
+  map<string, bool> supported_gpus = 5;
 }
 
 message CreateMachineRequest { string pool_name = 1; }

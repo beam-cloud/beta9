@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	repositoryCommon "github.com/beam-cloud/beta9/pkg/repository/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
@@ -51,6 +52,27 @@ func TestListTaskWithRelated(t *testing.T) {
 	require.Equal(t, 10, len(res.Data))
 	require.Equal(t, secondPageId, res.Data[0].Id)
 	require.NotNil(t, res.Next)
+}
+
+func TestListTasksWithRelatedPaginatedAppliesCursorBeforeHydration(t *testing.T) {
+	repo, mock := NewBackendPostgresRepositoryForTest()
+	cursorTime := time.Date(2026, time.July, 22, 16, 42, 45, 0, time.UTC)
+	cursor := repositoryCommon.EncodeCursor(repositoryCommon.DatetimeCursor{Value: cursorTime.Format(repositoryCommon.CursorTimestampFormat), Id: 77})
+
+	mock.ExpectQuery(`FROM \(SELECT t\.id, t\.created_at FROM task t JOIN stub s ON t\.stub_id = s\.id JOIN app a ON s\.app_id = a\.id WHERE t\.workspace_id = \$1 AND a\.workspace_id = \$2 AND a\.external_id = \$3 AND a\.deleted_at IS NULL AND \(t\.created_at < \$4 OR \(t\.created_at = \$5 AND t\.id < \$6\)\) ORDER BY t\.created_at DESC, t\.id DESC LIMIT 3\) AS page JOIN task t ON t\.id = page\.id JOIN workspace w ON t\.workspace_id = w\.id JOIN stub s ON t\.stub_id = s\.id LEFT JOIN LATERAL \(SELECT d\.external_id, d\.name, d\.version FROM deployment d WHERE d\.stub_id = s\.id AND d\.deleted_at IS NULL ORDER BY d\.created_at DESC, d\.id DESC LIMIT 1\) d ON true ORDER BY page\.created_at DESC, page\.id DESC LIMIT 3`).
+		WithArgs(uint(11), uint(11), "app-external", cursorTime, cursorTime, uint(77)).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}))
+
+	result, err := repo.ListTasksWithRelatedPaginated(context.Background(), types.TaskFilter{
+		WorkspaceID: 11,
+		AppId:       "app-external",
+		Cursor:      cursor,
+		BaseFilter:  types.BaseFilter{Limit: 2},
+	})
+
+	require.NoError(t, err)
+	require.Empty(t, result.Data)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestGetAdminWorkspaceMapsExternalID(t *testing.T) {
@@ -274,7 +296,7 @@ func TestUpdateDeploymentDoesNotMatchDeletedRowsByNumericID(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestGetOrCreateStubTouchesExistingWorkspaceScopedStub(t *testing.T) {
+func TestGetOrCreateStubTouchesExistingAppScopedStub(t *testing.T) {
 	repo, mock := NewBackendPostgresRepositoryForTest()
 	postgresRepo := repo.(*PostgresBackendRepository)
 
@@ -294,8 +316,8 @@ func TestGetOrCreateStubTouchesExistingWorkspaceScopedStub(t *testing.T) {
 		"app_id",
 	}
 
-	mock.ExpectQuery("FROM stub").
-		WithArgs("stub-name", string(types.StubTypeFunction), uint(7), sqlmock.AnyArg(), uint(11)).
+	mock.ExpectQuery(`app_id = \$6`).
+		WithArgs("stub-name", string(types.StubTypeFunction), uint(7), sqlmock.AnyArg(), uint(11), uint(13)).
 		WillReturnRows(sqlmock.NewRows(stubRows).AddRow(
 			uint(5),
 			"stub-external",
@@ -343,6 +365,25 @@ func TestGetOrCreateStubTouchesExistingWorkspaceScopedStub(t *testing.T) {
 	require.Equal(t, uint(5), stub.Id)
 	require.Equal(t, uint(11), stub.WorkspaceId)
 	require.True(t, stub.UpdatedAt.Time.Equal(updatedAt))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestAggregateTasksByTimeWindowScopesAppStubSubquery(t *testing.T) {
+	repo, mock := NewBackendPostgresRepositoryForTest()
+	postgresRepo := repo.(*PostgresBackendRepository)
+
+	mock.ExpectQuery(`FROM task t JOIN stub s ON t\.stub_id = s\.id WHERE t\.workspace_id = \$1 AND s\.external_id IN \(\$2\) AND t\.stub_id IN \(SELECT app_stub\.id FROM stub app_stub JOIN app app_scope ON app_stub\.app_id = app_scope\.id WHERE app_scope\.workspace_id = \$3 AND app_scope\.external_id = \$4 AND app_scope\.deleted_at IS NULL\)`).
+		WithArgs(uint(11), "stub-external", uint(11), "app-external").
+		WillReturnRows(sqlmock.NewRows([]string{"time", "count", "status_counts"}))
+
+	result, err := postgresRepo.AggregateTasksByTimeWindow(context.Background(), types.TaskFilter{
+		WorkspaceID: 11,
+		StubIds:     []string{"stub-external"},
+		AppId:       "app-external",
+	})
+
+	require.NoError(t, err)
+	require.Empty(t, result)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

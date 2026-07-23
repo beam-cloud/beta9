@@ -119,9 +119,12 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 		case types.PoolModeLocal:
 			controller, err = NewLocalKubernetesWorkerPoolController(controllerOptions)
 		case types.PoolModeExternal:
+			if pool.AgentHosted() {
+				continue
+			}
 			controllerOptions.ProviderName = pool.Provider
 			controllerOptions.Tailscale = tailscale
-			controller, err = NewLegacyExternalWorkerPoolController(controllerOptions)
+			controller, err = NewProviderWorkerPoolController(controllerOptions)
 		default:
 			log.Error().Str("pool_name", name).Str("mode", string(pool.Mode)).Msg("no valid controller found for pool")
 			continue
@@ -172,8 +175,11 @@ func (s *Scheduler) EnsureAgentPool(workspaceID string, state *compute.PoolState
 	}
 	s.agentPoolMu.Lock()
 	defer s.agentPoolMu.Unlock()
-	_, err := s.ensureAgentPool(workspaceID, state)
-	return err
+	controller, err := s.ensureAgentPool(workspaceID, state)
+	if err != nil {
+		return err
+	}
+	return controller.reconcileMachines()
 }
 
 func (s *Scheduler) EnsureAgentMachine(workspaceID string, state *compute.PoolState, machineID string) error {
@@ -279,7 +285,7 @@ func (s *Scheduler) DeleteAgentPool(workspaceID string, state *compute.PoolState
 }
 
 // DeleteManagedAgentPool removes only the managed controller generation the
-// caller reconciled. It cannot delete a private, local, legacy, or newly
+// caller reconciled. It cannot delete a private, local, provider-backed, or newly
 // recreated controller that happens to reuse the same selector.
 func (s *Scheduler) DeleteManagedAgentPool(selector, instanceID string) {
 	if s == nil || selector == "" {
@@ -306,6 +312,7 @@ func normalizeAgentWorkerPoolConfig(state *compute.PoolState) types.WorkerPoolCo
 		config := *state.WorkerConfig
 		config.Mode = types.PoolModeExternal
 		config.Provider = nil
+		config.RequiresPoolSelector = false
 		if config.ContainerRuntime == "" {
 			config.ContainerRuntime = types.ContainerRuntimeRunc.String()
 		}
@@ -373,15 +380,7 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 			// Do nothing
 		}
 	}
-
-	// Add checkpoint state to request if auto checkpoint is enabled and checkpoint is not set
-	if request.CheckpointEnabled && request.Checkpoint == nil {
-		checkpoint, err := s.backendRepo.GetLatestCheckpointByStubId(context.Background(), request.StubId)
-		if err == nil && checkpoint != nil && checkpoint.Status == string(types.CheckpointStatusAvailable) {
-			requestLog(log.Info(), request).Str("checkpoint_id", checkpoint.CheckpointId).Msg("adding checkpoint to request")
-			request.Checkpoint = checkpoint
-		}
-	}
+	s.attachLatestCheckpoint(request)
 
 	requestedEvent := request.Clone()
 	go s.schedulerUsageMetrics.CounterIncContainerRequested(requestedEvent)
@@ -493,15 +492,23 @@ func (s *Scheduler) Stop(stopArgs *types.StopContainerArgs) error {
 	}
 	s.eventRepo.PushContainerEvent(event)
 
-	if state != nil && strings.HasPrefix(stopArgs.ContainerId, types.BuildContainerPrefix) && types.ContainerStatus(state.Status) == types.ContainerStatusPending {
+	stoppedBeforeAssignment, err := s.containerRepo.MarkPendingContainerStoppingIfUnassigned(
+		stopArgs.ContainerId,
+		types.ContainerStateTtlSWhilePending,
+	)
+	if err != nil {
+		return err
+	}
+	if stoppedBeforeAssignment {
 		if err := s.containerRepo.DeleteContainerState(stopArgs.ContainerId); err != nil {
 			return err
 		}
-	} else {
-		err := s.containerRepo.UpdateContainerStatus(stopArgs.ContainerId, types.ContainerStatusStopping, types.ContainerStateTtlSWhilePending)
-		if err != nil {
-			return err
-		}
+		return nil
+	}
+
+	err = s.containerRepo.UpdateContainerStatus(stopArgs.ContainerId, types.ContainerStatusStopping, types.ContainerStateTtlSWhilePending)
+	if err != nil {
+		return err
 	}
 
 	eventArgs, err := stopArgs.ToMap()
@@ -520,6 +527,18 @@ func (s *Scheduler) Stop(stopArgs *types.StopContainerArgs) error {
 	}
 
 	return nil
+}
+
+func (s *Scheduler) containerRequestPending(containerID string) (bool, error) {
+	state, err := s.containerRepo.GetContainerState(containerID)
+	if err != nil {
+		notFound := &types.ErrContainerStateNotFound{}
+		if notFound.From(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return state != nil && state.Status == types.ContainerStatusPending, nil
 }
 
 func (s *Scheduler) getControllers(request *types.ContainerRequest) ([]WorkerPoolController, error) {
@@ -603,48 +622,49 @@ func (s *Scheduler) StartProcessingRequests() {
 }
 
 func (s *Scheduler) processRequest(request *types.ContainerRequest, workers []*types.Worker) {
+	if !s.checkpointReady(request) {
+		newSchedulingAttempt(s, request, workers).requeueForWorkerWaitDelay(checkpointHandoffRetryDelay, "checkpoint_handoff")
+		return
+	}
 	newSchedulingAttempt(s, request, workers).run()
 }
 
 func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.ContainerRequest) error {
-	normalizeGPURequest(request)
-
-	if err := s.containerRepo.UpdateAssignedContainerGPU(request.ContainerId, worker.Gpu); err != nil {
-		workerLog(requestLog(log.Error(), request), worker).Err(err).Msg("failed to update assigned container gpu")
+	workerRequest := s.prepareWorkerRequest(worker, request)
+	if err := s.pushWorkerRequests(worker, []*types.ContainerRequest{workerRequest}); err != nil {
 		return err
 	}
 
-	request.Gpu = worker.Gpu
-
-	s.attachImageCredentials(request)
-	s.attachBuildRegistryCredentials(request)
-
-	workerRequest := s.workerRequest(worker, request)
-	workerRequest.Timestamp = time.Now()
-	if err := s.pushWorkerRequest(worker, request, workerRequest); err != nil {
-		return err
-	}
-
-	scheduledEvent := workerRequest.Clone()
-	go s.schedulerUsageMetrics.CounterIncContainerScheduled(scheduledEvent)
+	go s.schedulerUsageMetrics.CounterIncContainerScheduled(workerRequest.Clone())
 	return nil
 }
 
-func (s *Scheduler) pushWorkerRequest(worker *types.Worker, originalRequest, workerRequest *types.ContainerRequest) error {
-	start := time.Now()
-	err := s.workerRepo.ScheduleContainerRequest(worker, workerRequest)
-	s.recordContainerLifecycle(originalRequest, types.ContainerLifecycleSchedulerWorkerQueuePush, start, time.Now(), err == nil, map[string]string{
-		"worker_id": worker.Id,
-	})
-	return err
+func (s *Scheduler) prepareWorkerRequest(worker *types.Worker, request *types.ContainerRequest) *types.ContainerRequest {
+	workerRequest := request.Clone()
+	s.attachLatestCheckpoint(workerRequest)
+	normalizeGPURequest(workerRequest)
+	workerRequest.Gpu = worker.Gpu
+
+	s.attachImageCredentials(workerRequest)
+	s.attachBuildRegistryCredentials(workerRequest)
+
+	if s.privateWorkerRequest(worker, workerRequest) {
+		workerRequest = workerRequest.PrivateWorkerRequest()
+	}
+	workerRequest.Timestamp = time.Now()
+	return workerRequest
 }
 
-func (s *Scheduler) workerRequest(worker *types.Worker, request *types.ContainerRequest) *types.ContainerRequest {
-	workerRequest := request.Clone()
-	if s.privateWorkerRequest(worker, request) {
-		return workerRequest.PrivateWorkerRequest()
+func (s *Scheduler) pushWorkerRequests(worker *types.Worker, requests []*types.ContainerRequest) error {
+	start := time.Now()
+	err := s.workerRepo.ScheduleContainerRequests(worker, requests)
+	end := time.Now()
+	for _, request := range requests {
+		s.recordContainerLifecycle(request, types.ContainerLifecycleSchedulerWorkerQueuePush, start, end, err == nil, map[string]string{
+			"worker_id": worker.Id,
+		})
 	}
-	return workerRequest
+	return err
 }
 
 func (s *Scheduler) privateWorkerRequest(worker *types.Worker, request *types.ContainerRequest) bool {
@@ -899,6 +919,9 @@ func filterControllersByFlags(controllers []WorkerPoolController, request *types
 	filteredControllers := []WorkerPoolController{}
 
 	for _, controller := range controllers {
+		if !request.StorageAvailable() && controllerUsesAgentCapacity(controller) {
+			continue
+		}
 		if !marketplaceControllerAllowed(controller, request) {
 			continue
 		}
@@ -957,6 +980,22 @@ func filterWorkersByPoolSelector(workers []*types.Worker, request *types.Contain
 	for _, worker := range workers {
 		if (request.PoolSelector != "" && workerPoolSelector(worker) == request.PoolSelector) ||
 			(request.PoolSelector == "" && !worker.RequiresPoolSelector) {
+			filteredWorkers = append(filteredWorkers, worker)
+		}
+	}
+	return filteredWorkers
+}
+
+func (s *Scheduler) filterWorkersByWorkspaceScope(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
+	filteredWorkers := make([]*types.Worker, 0, len(workers))
+	for _, worker := range workers {
+		if worker == nil {
+			continue
+		}
+		// Unmanaged agent capacity belongs to its workspace. Managed and
+		// marketplace workers are admitted by their existing global policies.
+		if worker.WorkspaceId == "" || worker.ControlPlaneManaged || s.isMarketplaceWorker(worker) ||
+			(request != nil && worker.WorkspaceId == request.WorkspaceId) {
 			filteredWorkers = append(filteredWorkers, worker)
 		}
 	}
@@ -1104,7 +1143,9 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 	}
 
 	filteredWorkers := filterWorkersByMachine(workers, request) // Machine-pinned requests only see their machine's worker
+	filteredWorkers = s.filterWorkersByWorkspaceScope(filteredWorkers, request)
 	filteredWorkers = filterWorkersByPoolSelector(filteredWorkers, request)
+	filteredWorkers = s.filterAgentWorkersByStorage(filteredWorkers, request)
 	filteredWorkers = s.filterMarketplaceWorkers(filteredWorkers, request)
 	filteredWorkers = s.filterLivePrivateAgentWorkers(filteredWorkers, request)
 	filteredWorkers = filterWorkersByResources(filteredWorkers, request)  // Filter workers resource requirements
@@ -1131,6 +1172,33 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 	})
 
 	return scoredWorkers[0].worker, nil
+}
+
+func (s *Scheduler) filterAgentWorkersByStorage(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
+	if len(workers) == 0 || request == nil || request.StorageAvailable() {
+		return workers
+	}
+
+	filtered := make([]*types.Worker, 0, len(workers))
+	for _, worker := range workers {
+		// Agent controllers persist their scheduling selector on every worker.
+		// Reject it even if this replica has not reconciled the pool yet.
+		if worker.PoolSelector != "" {
+			continue
+		}
+		if s != nil && s.workerPoolManager != nil {
+			selector := workerPoolSelector(worker)
+			pool, ok := s.workerPoolManager.GetPool(selector)
+			if !ok {
+				pool, ok = s.privateAgentPool(request.WorkspaceId, selector)
+			}
+			if ok && pool.Config.AgentHosted() {
+				continue
+			}
+		}
+		filtered = append(filtered, worker)
+	}
+	return filtered
 }
 
 func (s *Scheduler) filterMarketplaceWorkers(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
@@ -1369,7 +1437,7 @@ func workerFreeCapacityScore(worker *types.Worker, request *types.ContainerReque
 }
 
 const maxScheduleRetryCount = 120
-const maxScheduleRetryDuration = 10 * time.Minute
+const maxScheduleRetryDuration = 20 * time.Minute
 
 func (s *Scheduler) addRequestToBacklog(request *types.ContainerRequest) error {
 	normalizeGPURequest(request)
@@ -1417,9 +1485,7 @@ func (s *Scheduler) ensureAgentPoolForRequest(request *types.ContainerRequest) (
 		return nil, nil
 	}
 	if pool, ok := s.privateAgentPool(request.WorkspaceId, request.PoolSelector); ok {
-		if _, agent := pool.Controller.(*AgentWorkerPoolController); !agent || s.computeRepo == nil {
-			return pool, nil
-		}
+		return pool, nil
 	}
 
 	state, err := s.agentPoolStateForRequest(request)

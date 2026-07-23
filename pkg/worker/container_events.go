@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/rs/zerolog/log"
 )
 
 func (s *Worker) recordContainerEvent(ctx context.Context, request *types.ContainerRequest, event types.EventContainerEventSchema) {
@@ -118,5 +119,7 @@ func containerLifecycleFromDuration(id types.ContainerLifecycleID, request *type
 }
 
 func (s *Worker) recordStartupLifecycle(ctx context.Context, request *types.ContainerRequest, id types.ContainerLifecycleID, startedAt time.Time, success bool, attrs map[string]string) {
-	s.recordContainerLifecycle(ctx, request, containerLifecycleFromDuration(id, request, startedAt, time.Since(startedAt), success, attrs))
+	duration := time.Since(startedAt)
+	log.Info().Str("container_id", request.ContainerId).Str("startup_phase", string(id)).Dur("duration", duration).Msg("container startup phase")
+	s.recordContainerLifecycle(ctx, request, containerLifecycleFromDuration(id, request, startedAt, duration, success, attrs))
 }

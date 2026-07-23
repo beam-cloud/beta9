@@ -139,32 +139,47 @@ func (co *ContainerOverlay) AddLayer(upperDir string) error {
 	return nil
 }
 
-func (co *ContainerOverlay) Cleanup() error {
-	var err error = nil
+func (co *ContainerOverlay) cleanupLayers() error {
 	for len(co.layers) > 0 {
 		// Get the last layer index
 		i := len(co.layers) - 1
 		layer := co.layers[i]
 
 		log.Info().Str("layer_path", layer.merged).Msg("unmounting layer")
-		err := exec.Command("umount", "-f", layer.merged).Run()
-		if err != nil {
+		if err := exec.Command("umount", "-f", layer.merged).Run(); err != nil {
 			log.Error().Str("layer_path", layer.merged).Err(err).Msg("unable to unmount layer")
 			return err
 		}
 
 		layerDir := filepath.Join(co.overlayPath, co.containerId, fmt.Sprintf("layer-%d", i))
-		err = os.RemoveAll(layerDir)
-		if err != nil {
+		if err := os.RemoveAll(layerDir); err != nil {
 			return err
 		}
 
 		// Remove the layer from the slice
 		co.layers = co.layers[:i]
 	}
+	return nil
+}
 
-	err = os.RemoveAll(filepath.Join(co.overlayPath, co.containerId))
-	return err
+func (co *ContainerOverlay) Cleanup() error {
+	if err := co.cleanupLayers(); err != nil {
+		return err
+	}
+	return os.RemoveAll(filepath.Join(co.overlayPath, co.containerId))
+}
+
+// Reset rebuilds the writable layer while preserving bundle state that may
+// share the container root, such as config.json and checkpoint signal mounts.
+func (co *ContainerOverlay) Reset() error {
+	if err := co.cleanupLayers(); err != nil {
+		return err
+	}
+	if err := co.Setup(); err != nil {
+		_ = co.cleanupLayers()
+		return err
+	}
+	return nil
 }
 
 func (co *ContainerOverlay) TopLayerPath() string {

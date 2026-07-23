@@ -29,6 +29,7 @@ type agentConfigDatabase struct {
 }
 
 type agentConfigS2 struct {
+	ApiKey            string `json:"apiKey"`
 	Basin             string `json:"basin"`
 	StreamPrefix      string `json:"streamPrefix"`
 	LogApiKey         string `json:"logApiKey"`
@@ -124,6 +125,7 @@ type agentConfigWorker struct {
 	HostNetwork                bool                       `json:"hostNetwork"`
 	UseHostResolvConf          bool                       `json:"useHostResolvConf"`
 	ContainerRuntime           string                     `json:"containerRuntime"`
+	ContainerResourceLimits    agentConfigResourceLimits  `json:"containerResourceLimits"`
 	CacheEnabled               bool                       `json:"cacheEnabled"`
 	TerminationGracePeriod     int                        `json:"terminationGracePeriod"`
 	ContainerLogLinesPerHour   int                        `json:"containerLogLinesPerHour"`
@@ -133,25 +135,37 @@ type agentConfigWorker struct {
 	Pools                      map[string]agentConfigPool `json:"pools"`
 }
 
+type agentConfigResourceLimits struct {
+	CPUAffinityEnforced bool `json:"cpuAffinityEnforced"`
+	MemoryEnforced      bool `json:"memoryEnforced"`
+}
+
 type agentConfigWorkerFailover struct {
 	MaxSchedulingLatencyMs int `json:"maxSchedulingLatencyMs"`
 }
 
 type agentConfigPool struct {
-	Mode                      string           `json:"mode"`
-	GPUType                   string           `json:"gpuType"`
-	ContainerRuntime          string           `json:"containerRuntime"`
-	ContainerStartConcurrency int              `json:"containerStartConcurrency"`
-	NetworkPreallocation      bool             `json:"networkPreallocation"`
-	NetworkSlotPoolSize       int              `json:"networkSlotPoolSize"`
-	RequiresPoolSelector      bool             `json:"requiresPoolSelector"`
-	Priority                  int              `json:"priority"`
-	Preemptable               bool             `json:"preemptable"`
-	CRIUEnabled               bool             `json:"criuEnabled"`
-	TmpSizeLimit              string           `json:"tmpSizeLimit"`
-	StorageMode               string           `json:"storageMode"`
-	CheckpointPath            string           `json:"checkpointPath"`
-	Cache                     agentConfigCache `json:"cache"`
+	Mode                      string                   `json:"mode"`
+	GPUType                   string                   `json:"gpuType"`
+	ContainerRuntime          string                   `json:"containerRuntime"`
+	ContainerRuntimeConfig    agentConfigRuntimeConfig `json:"containerRuntimeConfig"`
+	ContainerStartConcurrency int                      `json:"containerStartConcurrency"`
+	NetworkPreallocation      bool                     `json:"networkPreallocation"`
+	NetworkSlotPoolSize       int                      `json:"networkSlotPoolSize"`
+	RequiresPoolSelector      bool                     `json:"requiresPoolSelector"`
+	Priority                  int                      `json:"priority"`
+	Preemptable               bool                     `json:"preemptable"`
+	CRIUEnabled               bool                     `json:"criuEnabled"`
+	TmpSizeLimit              string                   `json:"tmpSizeLimit"`
+	StorageMode               string                   `json:"storageMode"`
+	CheckpointPath            string                   `json:"checkpointPath"`
+	Cache                     agentConfigCache         `json:"cache"`
+}
+
+type agentConfigRuntimeConfig struct {
+	GVisorPlatform  string   `json:"gvisorPlatform"`
+	GVisorRoot      string   `json:"gvisorRoot"`
+	GVisorExtraArgs []string `json:"gvisorExtraArgs"`
 }
 
 type agentConfigCache struct {
@@ -208,6 +222,16 @@ func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) a
 	cacheLocality := agentCacheLocality(bootstrap, slot)
 	poolMode := slotPoolMode(slot)
 	poolRuntime := slotContainerRuntime(slot)
+	runtimeConfig := types.RuntimeConfig{
+		GVisorPlatform:  slot.GvisorPlatform,
+		GVisorRoot:      slot.GvisorRoot,
+		GVisorExtraArgs: append([]string(nil), slot.GvisorExtraArgs...),
+	}.WithDefaults(poolRuntime)
+	agentRuntimeConfig := agentConfigRuntimeConfig{
+		GVisorPlatform:  runtimeConfig.GVisorPlatform,
+		GVisorRoot:      runtimeConfig.GVisorRoot,
+		GVisorExtraArgs: runtimeConfig.GVisorExtraArgs,
+	}
 	priority := int(slot.Priority)
 	if priority == 0 && !slot.PrioritySet {
 		priority = 1000
@@ -215,20 +239,17 @@ func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) a
 			priority = 100
 		}
 	}
+	cpuAffinityEnforced := envBoolDefault(types.AgentCPUAffinityEnforcedEnv, true)
+	if poolMode == string(types.PoolModeExternal) {
+		cpuAffinityEnforced = slot.CpuAffinityEnforced
+	}
 
 	return agentWorkerConfig{
 		ClusterName: types.DefaultAgentName,
 		DebugMode:   false,
 		PrettyLogs:  true,
 		Database: agentConfigDatabase{
-			S2: agentConfigS2{
-				Basin:             firstNonEmpty(bootstrap.Telemetry.Events.Destination, bootstrap.Telemetry.Logs.Destination),
-				StreamPrefix:      bootstrap.Telemetry.StreamPrefix,
-				LogApiKey:         bootstrap.Telemetry.Logs.Credential,
-				LogStreamPrefix:   bootstrap.Telemetry.Logs.StreamPrefix,
-				EventApiKey:       bootstrap.Telemetry.Events.Credential,
-				EventStreamPrefix: bootstrap.Telemetry.Events.StreamPrefix,
-			},
+			S2: agentS2Config(bootstrap.Telemetry, poolMode),
 		},
 		Gateway: agentConfigGateway{
 			GRPC: agentConfigEndpoint{
@@ -264,9 +285,13 @@ func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) a
 			ContainerCostHook:        costHookConfigForSlot(bootstrap, poolMode),
 		},
 		Worker: agentConfigWorker{
-			HostNetwork:                true,
-			UseHostResolvConf:          true,
-			ContainerRuntime:           poolRuntime,
+			HostNetwork:       true,
+			UseHostResolvConf: true,
+			ContainerRuntime:  poolRuntime,
+			ContainerResourceLimits: agentConfigResourceLimits{
+				CPUAffinityEnforced: cpuAffinityEnforced,
+				MemoryEnforced:      poolRuntime == types.ContainerRuntimeGvisor.String(),
+			},
 			CacheEnabled:               true,
 			TerminationGracePeriod:     30,
 			ContainerLogLinesPerHour:   6000,
@@ -280,6 +305,7 @@ func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) a
 					Mode:                      poolMode,
 					GPUType:                   slot.Gpu,
 					ContainerRuntime:          poolRuntime,
+					ContainerRuntimeConfig:    agentRuntimeConfig,
 					ContainerStartConcurrency: int(slot.ContainerStartConcurrency),
 					NetworkPreallocation:      true,
 					NetworkSlotPoolSize:       int(slot.NetworkSlotPoolSize),
@@ -313,6 +339,25 @@ func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) a
 		},
 		ManagedCompute: managedComputeConfigForSlot(bootstrap, slot, poolMode),
 	}
+}
+
+func agentS2Config(telemetry telemetryConfig, poolMode string) agentConfigS2 {
+	config := agentConfigS2{
+		Basin:             firstNonEmpty(telemetry.Events.Destination, telemetry.Logs.Destination),
+		StreamPrefix:      telemetry.StreamPrefix,
+		LogApiKey:         telemetry.Logs.Credential,
+		LogStreamPrefix:   telemetry.Logs.StreamPrefix,
+		EventApiKey:       telemetry.Events.Credential,
+		EventStreamPrefix: telemetry.Events.StreamPrefix,
+	}
+	if poolMode == string(types.PoolModeExternal) {
+		config.ApiKey = firstNonEmpty(telemetry.Events.Credential, telemetry.Logs.Credential)
+		config.LogApiKey = ""
+		config.LogStreamPrefix = ""
+		config.EventApiKey = ""
+		config.EventStreamPrefix = ""
+	}
+	return config
 }
 
 // slotPoolMode returns the pool mode the gateway assigned to this worker slot,
@@ -388,7 +433,7 @@ func (c agentWorkerConfig) sanitizedForAgent() agentWorkerConfig {
 	c.Worker.CacheEnabled = true
 	for name, pool := range c.Worker.Pools {
 		// Agent workers run in private, marketplace, or managed external mode;
-		// cluster-local and legacy provider modes still collapse to private.
+		// any other supplied mode is sanitized to private.
 		if pool.Mode != string(types.PoolModeMarketplace) && pool.Mode != string(types.PoolModeExternal) {
 			pool.Mode = string(types.PoolModePrivate)
 			pool.RequiresPoolSelector = true

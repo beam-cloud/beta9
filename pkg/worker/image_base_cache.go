@@ -4,12 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
-	"time"
 
 	"log/slog"
 
@@ -25,7 +23,6 @@ import (
 )
 
 const cachedBaseImageTag = "cached"
-const baseImageCacheSeedTimeout = 15 * time.Minute
 
 type ociIndexFile struct {
 	SchemaVersion int             `json:"schemaVersion"`
@@ -217,94 +214,4 @@ func (c *ImageClient) remoteImageAuthenticator(ctx context.Context, request *typ
 		return nil
 	}
 	return authn.FromConfig(*cfg)
-}
-
-// seedBaseImageBlobsFromRegistry best-effort seeds the original compressed
-// source-image layer blobs into the embedded content cache. This runs after a
-// normal buildah pull miss; it duplicates the first pull's network I/O, but it
-// gives subsequent workers a distributed-cache source for the exact compressed
-// blobs buildah needs for the base image.
-func (c *ImageClient) seedBaseImageBlobsFromRegistry(request *types.ContainerRequest, sourceImage string) {
-	if c.cacheClient == nil || request == nil || sourceImage == "" {
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), baseImageCacheSeedTimeout)
-	defer cancel()
-
-	ref, err := name.ParseReference(sourceImage)
-	if err != nil {
-		return
-	}
-
-	remoteOpts := []remote.Option{
-		remote.WithContext(ctx),
-		remote.WithPlatform(v1.Platform{OS: "linux", Architecture: runtime.GOARCH}),
-	}
-	if auth := c.remoteImageAuthenticator(ctx, request, ref); auth != nil {
-		remoteOpts = append(remoteOpts, remote.WithAuth(auth))
-	} else {
-		remoteOpts = append(remoteOpts, remote.WithAuthFromKeychain(authn.DefaultKeychain))
-	}
-
-	img, err := remote.Image(ref, remoteOpts...)
-	if err != nil {
-		log.Debug().Err(err).Str("source_image", sourceImage).Msg("failed to inspect source image for cache seed")
-		return
-	}
-
-	layers, err := img.Layers()
-	if err != nil {
-		return
-	}
-
-	for _, layer := range layers {
-		digest, err := layer.Digest()
-		if err != nil {
-			continue
-		}
-		size, err := layer.Size()
-		if err != nil {
-			continue
-		}
-		key := digest.Hex
-		cachePath := imageLayerContentCachePath(key)
-		if metadata, err := c.cacheClient.CacheFSMetadata(ctx, cachePath); err == nil && metadata != nil && metadata.Hash != "" && int64(metadata.Size) == size {
-			continue
-		}
-
-		rc, err := layer.Compressed()
-		if err != nil {
-			log.Debug().Err(err).Str("layer_digest", digest.String()).Msg("failed to read source image layer for cache seed")
-			continue
-		}
-
-		tmp, err := os.CreateTemp("", "base-layer-*.blob")
-		if err != nil {
-			rc.Close()
-			continue
-		}
-		tmpPath := tmp.Name()
-		_, copyErr := io.Copy(tmp, rc)
-		closeErr := tmp.Close()
-		rc.Close()
-		if copyErr != nil || closeErr != nil {
-			_ = os.Remove(tmpPath)
-			continue
-		}
-
-		_, err = c.cacheClient.StoreContentFromLocalFile(cache.LocalContentSource{
-			Path:      tmpPath,
-			CachePath: cachePath,
-		}, cache.StoreContentOptions{
-			RoutingKey: cachePath,
-			Lock:       true,
-		})
-		_ = os.Remove(tmpPath)
-		if err != nil {
-			log.Debug().Err(err).Str("layer_digest", digest.String()).Msg("failed to seed source image layer cache")
-			continue
-		}
-		log.Debug().Str("layer_digest", digest.String()).Int64("bytes", size).Msg("seeded source image layer in embedded cache")
-	}
 }

@@ -1,9 +1,11 @@
+import datetime
 from types import SimpleNamespace
 
 import click
 import pytest
 
 from beta9.cli import database as database_cli
+from beta9.cli import container as container_cli
 from beta9.cli.main import load_cli
 
 
@@ -19,6 +21,15 @@ def test_disk_management_commands_registered():
     assert "format" in {param.name for param in disk.commands["list"].params}
     assert "format" in {param.name for param in disk.commands["snapshots"].params}
     assert "yes" in {param.name for param in disk.commands["delete"].params}
+
+
+def test_container_uptime_ignores_unset_timestamp():
+    now = datetime.datetime(2026, 7, 18, tzinfo=datetime.timezone.utc)
+    epoch = datetime.datetime.fromtimestamp(0, tz=datetime.timezone.utc)
+
+    assert container_cli._format_uptime(None, now) == "N/A"
+    assert container_cli._format_uptime(epoch, now) == "N/A"
+    assert container_cli._format_uptime(now - datetime.timedelta(seconds=5), now) == "5 seconds"
 
 
 def test_database_commands_are_nested_under_db():
@@ -43,6 +54,22 @@ def test_database_commands_do_not_expose_unenforced_disk_size():
         for command in ("create", "scale"):
             options = {param.name for param in db.commands[product].commands[command].params}
             assert "size" not in options
+
+
+def test_reserved_hardware_dx_commands_are_registered():
+    cli = load_cli(check_config=False)
+
+    run = cli.common_group.get_command(None, "run")
+    assert {"detach", "machine_id"} <= {param.name for param in run.params}
+
+    deploy = cli.common_group.get_command(None, "deploy")
+    assert "replicas" in {param.name for param in deploy.params}
+
+    machine = cli.management_group.get_command(None, "machine")
+    assert "ssh" in machine.commands
+
+    container = cli.management_group.get_command(None, "container")
+    assert "machine_id" in {param.name for param in container.commands["list"].params}
 
 
 def test_database_exists_error_uses_active_cli_name(monkeypatch):

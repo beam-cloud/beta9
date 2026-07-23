@@ -62,6 +62,62 @@ func TestAvailableGPUDevicesAllVisibleDevices(t *testing.T) {
 	assert.Equal(t, []int{0, 1, 2, 3, 4, 5, 6, 7}, devices)
 }
 
+func TestNvidiaInfoClientReusesDeviceInventory(t *testing.T) {
+	originalQueryDevices := queryDevices
+	originalCheckGPUExists := checkGPUExists
+	defer func() {
+		queryDevices = originalQueryDevices
+		checkGPUExists = originalCheckGPUExists
+	}()
+
+	queryCount := 0
+	queryDevices = func() ([]byte, error) {
+		queryCount++
+		return []byte(eightGPUOutput), nil
+	}
+	checkGPUExists = func(string) (bool, error) { return true, nil }
+
+	client := &NvidiaInfoClient{visibleDevices: "all"}
+	devices, err := client.AvailableGPUDevices()
+	assert.NoError(t, err)
+	assert.Len(t, devices, 8)
+	uuids, err := client.DeviceUUIDs()
+	assert.NoError(t, err)
+	assert.Len(t, uuids, 8)
+	_, err = client.AvailableGPUDevices()
+	assert.NoError(t, err)
+	assert.Equal(t, 1, queryCount)
+}
+
+func TestNvidiaInfoClientRetriesFailedInventoryQuery(t *testing.T) {
+	originalQueryDevices := queryDevices
+	originalCheckGPUExists := checkGPUExists
+	defer func() {
+		queryDevices = originalQueryDevices
+		checkGPUExists = originalCheckGPUExists
+	}()
+
+	queryCount := 0
+	queryDevices = func() ([]byte, error) {
+		queryCount++
+		if queryCount == 1 {
+			return nil, errors.New("temporary nvidia-smi failure")
+		}
+		return []byte(eightGPUOutput), nil
+	}
+	checkGPUExists = func(string) (bool, error) { return true, nil }
+
+	client := &NvidiaInfoClient{visibleDevices: "all"}
+	_, err := client.AvailableGPUDevices()
+	assert.Error(t, err)
+	devices, err := client.AvailableGPUDevices()
+	assert.NoError(t, err)
+	assert.Len(t, devices, 8)
+	_, err = client.DeviceUUIDs()
+	assert.NoError(t, err)
+	assert.Equal(t, 2, queryCount)
+}
+
 func TestAvailableGPUDevicesWithNonZeroPCIDomains(t *testing.T) {
 	originalQueryDevices := queryDevices
 	defer func() { queryDevices = originalQueryDevices }()

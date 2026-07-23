@@ -3206,6 +3206,16 @@ type GetOrCreateStubResponse struct {
 	StubId  string `protobuf:"bytes,2,opt,name=stub_id,json=stubId,proto3" json:"stub_id,omitempty"`
 	ErrMsg  string `protobuf:"bytes,3,opt,name=err_msg,json=errMsg,proto3" json:"err_msg,omitempty"`
 	WarnMsg string `protobuf:"bytes,4,opt,name=warn_msg,json=warnMsg,proto3" json:"warn_msg,omitempty"`
+	// Capacity verdict for the requested GPU types, computed at stub creation:
+	// "available", "low", or "none". Empty when no check applies (CPU-only
+	// workloads, private-pool-only stubs, or pool-selector-bound stubs).
+	CapacityStatus string `protobuf:"bytes,5,opt,name=capacity_status,json=capacityStatus,proto3" json:"capacity_status,omitempty"`
+	// GPU types from the request that no serverless pool supports.
+	UnsupportedGpus []string `protobuf:"bytes,6,rep,name=unsupported_gpus,json=unsupportedGpus,proto3" json:"unsupported_gpus,omitempty"`
+	// Name of an existing ready private pool in the workspace that satisfies
+	// the GPU request. Set instead of capacity_status "none" so clients can
+	// re-issue stub creation targeting this pool.
+	MatchedPrivatePool string `protobuf:"bytes,7,opt,name=matched_private_pool,json=matchedPrivatePool,proto3" json:"matched_private_pool,omitempty"`
 }
 
 func (x *GetOrCreateStubResponse) Reset() {
@@ -3264,6 +3274,27 @@ func (x *GetOrCreateStubResponse) GetErrMsg() string {
 func (x *GetOrCreateStubResponse) GetWarnMsg() string {
 	if x != nil {
 		return x.WarnMsg
+	}
+	return ""
+}
+
+func (x *GetOrCreateStubResponse) GetCapacityStatus() string {
+	if x != nil {
+		return x.CapacityStatus
+	}
+	return ""
+}
+
+func (x *GetOrCreateStubResponse) GetUnsupportedGpus() []string {
+	if x != nil {
+		return x.UnsupportedGpus
+	}
+	return nil
+}
+
+func (x *GetOrCreateStubResponse) GetMatchedPrivatePool() string {
+	if x != nil {
+		return x.MatchedPrivatePool
 	}
 	return ""
 }
@@ -9628,6 +9659,10 @@ type JoinAgentRequest struct {
 	GpuIds                    []string               `protobuf:"bytes,14,rep,name=gpu_ids,json=gpuIds,proto3" json:"gpu_ids,omitempty"`
 	NetworkSlotPoolSize       uint32                 `protobuf:"varint,15,opt,name=network_slot_pool_size,json=networkSlotPoolSize,proto3" json:"network_slot_pool_size,omitempty"`
 	ContainerStartConcurrency uint32                 `protobuf:"varint,16,opt,name=container_start_concurrency,json=containerStartConcurrency,proto3" json:"container_start_concurrency,omitempty"`
+	// Optional per-machine worker image override. The gateway remembers the
+	// generated value as a baseline so untouched installs continue to follow
+	// future image tag changes while manually edited values remain pinned.
+	WorkerImage string `protobuf:"bytes,17,opt,name=worker_image,json=workerImage,proto3" json:"worker_image,omitempty"`
 }
 
 func (x *JoinAgentRequest) Reset() {
@@ -9772,6 +9807,13 @@ func (x *JoinAgentRequest) GetContainerStartConcurrency() uint32 {
 		return x.ContainerStartConcurrency
 	}
 	return 0
+}
+
+func (x *JoinAgentRequest) GetWorkerImage() string {
+	if x != nil {
+		return x.WorkerImage
+	}
+	return ""
 }
 
 type JoinAgentResponse struct {
@@ -10526,7 +10568,13 @@ type AgentWorkerSlot struct {
 	Preemptable          bool   `protobuf:"varint,20,opt,name=preemptable,proto3" json:"preemptable,omitempty"`
 	// Distinguishes an explicitly configured zero priority from legacy
 	// gateways that did not send scheduling priority metadata.
-	PrioritySet bool `protobuf:"varint,21,opt,name=priority_set,json=prioritySet,proto3" json:"priority_set,omitempty"`
+	PrioritySet     bool     `protobuf:"varint,21,opt,name=priority_set,json=prioritySet,proto3" json:"priority_set,omitempty"`
+	GvisorPlatform  string   `protobuf:"bytes,22,opt,name=gvisor_platform,json=gvisorPlatform,proto3" json:"gvisor_platform,omitempty"`
+	GvisorRoot      string   `protobuf:"bytes,23,opt,name=gvisor_root,json=gvisorRoot,proto3" json:"gvisor_root,omitempty"`
+	GvisorExtraArgs []string `protobuf:"bytes,24,rep,name=gvisor_extra_args,json=gvisorExtraArgs,proto3" json:"gvisor_extra_args,omitempty"`
+	// Deterministic identity of the restart-relevant slot specification.
+	Generation          string `protobuf:"bytes,25,opt,name=generation,proto3" json:"generation,omitempty"`
+	CpuAffinityEnforced bool   `protobuf:"varint,26,opt,name=cpu_affinity_enforced,json=cpuAffinityEnforced,proto3" json:"cpu_affinity_enforced,omitempty"`
 }
 
 func (x *AgentWorkerSlot) Reset() {
@@ -10704,6 +10752,41 @@ func (x *AgentWorkerSlot) GetPreemptable() bool {
 func (x *AgentWorkerSlot) GetPrioritySet() bool {
 	if x != nil {
 		return x.PrioritySet
+	}
+	return false
+}
+
+func (x *AgentWorkerSlot) GetGvisorPlatform() string {
+	if x != nil {
+		return x.GvisorPlatform
+	}
+	return ""
+}
+
+func (x *AgentWorkerSlot) GetGvisorRoot() string {
+	if x != nil {
+		return x.GvisorRoot
+	}
+	return ""
+}
+
+func (x *AgentWorkerSlot) GetGvisorExtraArgs() []string {
+	if x != nil {
+		return x.GvisorExtraArgs
+	}
+	return nil
+}
+
+func (x *AgentWorkerSlot) GetGeneration() string {
+	if x != nil {
+		return x.Generation
+	}
+	return ""
+}
+
+func (x *AgentWorkerSlot) GetCpuAffinityEnforced() bool {
+	if x != nil {
+		return x.CpuAffinityEnforced
 	}
 	return false
 }
@@ -11758,10 +11841,15 @@ type ListMachinesResponse struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	Ok       bool            `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
-	ErrMsg   string          `protobuf:"bytes,2,opt,name=err_msg,json=errMsg,proto3" json:"err_msg,omitempty"`
-	Machines []*Machine      `protobuf:"bytes,3,rep,name=machines,proto3" json:"machines,omitempty"`
-	Gpus     map[string]bool `protobuf:"bytes,4,rep,name=gpus,proto3" json:"gpus,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"varint,2,opt,name=value,proto3"`
+	Ok       bool       `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
+	ErrMsg   string     `protobuf:"bytes,2,opt,name=err_msg,json=errMsg,proto3" json:"err_msg,omitempty"`
+	Machines []*Machine `protobuf:"bytes,3,rep,name=machines,proto3" json:"machines,omitempty"`
+	// gpus reports live worker availability per GPU type (a worker with that
+	// GPU is currently registered).
+	Gpus map[string]bool `protobuf:"bytes,4,rep,name=gpus,proto3" json:"gpus,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"varint,2,opt,name=value,proto3"`
+	// supported_gpus reports pool-config-based serverless support per GPU
+	// type: true when a pool could serve the GPU even if scaled to zero.
+	SupportedGpus map[string]bool `protobuf:"bytes,5,rep,name=supported_gpus,json=supportedGpus,proto3" json:"supported_gpus,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"varint,2,opt,name=value,proto3"`
 }
 
 func (x *ListMachinesResponse) Reset() {
@@ -11820,6 +11908,13 @@ func (x *ListMachinesResponse) GetMachines() []*Machine {
 func (x *ListMachinesResponse) GetGpus() map[string]bool {
 	if x != nil {
 		return x.Gpus
+	}
+	return nil
+}
+
+func (x *ListMachinesResponse) GetSupportedGpus() map[string]bool {
+	if x != nil {
+		return x.SupportedGpus
 	}
 	return nil
 }
@@ -15896,7 +15991,7 @@ func file_gateway_proto_rawDescGZIP() []byte {
 }
 
 var file_gateway_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_gateway_proto_msgTypes = make([]protoimpl.MessageInfo, 184)
+var file_gateway_proto_msgTypes = make([]protoimpl.MessageInfo, 185)
 var file_gateway_proto_goTypes = []interface{}{
 	(SyncContainerWorkspaceOperation)(0),            // 0: gateway.SyncContainerWorkspaceOperation
 	(*AuthorizeRequest)(nil),                        // 1: gateway.AuthorizeRequest
@@ -16083,13 +16178,14 @@ var file_gateway_proto_goTypes = []interface{}{
 	nil,                                             // 182: gateway.UpdateAgentRouteStatusRequest.AttrsEntry
 	nil,                                             // 183: gateway.AgentEventRecord.AttrsEntry
 	nil,                                             // 184: gateway.ListMachinesResponse.GpusEntry
-	(*Container)(nil),                               // 185: types.Container
-	(*timestamppb.Timestamp)(nil),                   // 186: google.protobuf.Timestamp
-	(*MountPointConfig)(nil),                        // 187: types.MountPointConfig
-	(*PricingPolicy)(nil),                           // 188: types.PricingPolicy
-	(*CheckpointTrigger)(nil),                       // 189: types.CheckpointTrigger
-	(*WorkerPoolState)(nil),                         // 190: types.WorkerPoolState
-	(*Worker)(nil),                                  // 191: types.Worker
+	nil,                                             // 185: gateway.ListMachinesResponse.SupportedGpusEntry
+	(*Container)(nil),                               // 186: types.Container
+	(*timestamppb.Timestamp)(nil),                   // 187: google.protobuf.Timestamp
+	(*MountPointConfig)(nil),                        // 188: types.MountPointConfig
+	(*PricingPolicy)(nil),                           // 189: types.PricingPolicy
+	(*CheckpointTrigger)(nil),                       // 190: types.CheckpointTrigger
+	(*WorkerPoolState)(nil),                         // 191: types.WorkerPoolState
+	(*Worker)(nil),                                  // 192: types.Worker
 }
 var file_gateway_proto_depIdxs = []int32{
 	5,   // 0: gateway.HeadObjectResponse.object_metadata:type_name -> gateway.ObjectMetadata
@@ -16097,16 +16193,16 @@ var file_gateway_proto_depIdxs = []int32{
 	176, // 2: gateway.CreateObjectResponse.put_headers:type_name -> gateway.CreateObjectResponse.PutHeadersEntry
 	5,   // 3: gateway.PutObjectRequest.object_metadata:type_name -> gateway.ObjectMetadata
 	0,   // 4: gateway.SyncContainerWorkspaceRequest.op:type_name -> gateway.SyncContainerWorkspaceOperation
-	185, // 5: gateway.ListContainersResponse.containers:type_name -> types.Container
+	186, // 5: gateway.ListContainersResponse.containers:type_name -> types.Container
 	21,  // 6: gateway.ContainerStreamMessage.attach_request:type_name -> gateway.AttachToContainerRequest
 	12,  // 7: gateway.ContainerStreamMessage.sync_container_workspace:type_name -> gateway.SyncContainerWorkspaceRequest
 	177, // 8: gateway.ListTasksRequest.filters:type_name -> gateway.ListTasksRequest.FiltersEntry
-	186, // 9: gateway.Task.started_at:type_name -> google.protobuf.Timestamp
-	186, // 10: gateway.Task.ended_at:type_name -> google.protobuf.Timestamp
-	186, // 11: gateway.Task.created_at:type_name -> google.protobuf.Timestamp
-	186, // 12: gateway.Task.updated_at:type_name -> google.protobuf.Timestamp
+	187, // 9: gateway.Task.started_at:type_name -> google.protobuf.Timestamp
+	187, // 10: gateway.Task.ended_at:type_name -> google.protobuf.Timestamp
+	187, // 11: gateway.Task.created_at:type_name -> google.protobuf.Timestamp
+	187, // 12: gateway.Task.updated_at:type_name -> google.protobuf.Timestamp
 	29,  // 13: gateway.ListTasksResponse.tasks:type_name -> gateway.Task
-	187, // 14: gateway.Volume.config:type_name -> types.MountPointConfig
+	188, // 14: gateway.Volume.config:type_name -> types.MountPointConfig
 	36,  // 15: gateway.ServingConfig.llm:type_name -> gateway.LLMConfig
 	37,  // 16: gateway.ServingConfig.database:type_name -> gateway.DatabaseServingConfig
 	178, // 17: gateway.Schema.fields:type_name -> gateway.Schema.FieldsEntry
@@ -16115,27 +16211,27 @@ var file_gateway_proto_depIdxs = []int32{
 	34,  // 20: gateway.GetOrCreateStubRequest.secrets:type_name -> gateway.SecretVar
 	35,  // 21: gateway.GetOrCreateStubRequest.autoscaler:type_name -> gateway.Autoscaler
 	40,  // 22: gateway.GetOrCreateStubRequest.task_policy:type_name -> gateway.TaskPolicy
-	188, // 23: gateway.GetOrCreateStubRequest.pricing:type_name -> types.PricingPolicy
+	189, // 23: gateway.GetOrCreateStubRequest.pricing:type_name -> types.PricingPolicy
 	41,  // 24: gateway.GetOrCreateStubRequest.inputs:type_name -> gateway.Schema
 	41,  // 25: gateway.GetOrCreateStubRequest.outputs:type_name -> gateway.Schema
 	61,  // 26: gateway.GetOrCreateStubRequest.pool:type_name -> gateway.PoolConfig
 	38,  // 27: gateway.GetOrCreateStubRequest.serving:type_name -> gateway.ServingConfig
 	39,  // 28: gateway.GetOrCreateStubRequest.disks:type_name -> gateway.DurableDisk
-	189, // 29: gateway.GetOrCreateStubRequest.checkpoint_trigger:type_name -> types.CheckpointTrigger
-	186, // 30: gateway.Deployment.created_at:type_name -> google.protobuf.Timestamp
-	186, // 31: gateway.Deployment.updated_at:type_name -> google.protobuf.Timestamp
+	190, // 29: gateway.GetOrCreateStubRequest.checkpoint_trigger:type_name -> types.CheckpointTrigger
+	187, // 30: gateway.Deployment.created_at:type_name -> google.protobuf.Timestamp
+	187, // 31: gateway.Deployment.updated_at:type_name -> google.protobuf.Timestamp
 	179, // 32: gateway.ListDeploymentsRequest.filters:type_name -> gateway.ListDeploymentsRequest.FiltersEntry
 	47,  // 33: gateway.ListDeploymentsResponse.deployments:type_name -> gateway.Deployment
-	190, // 34: gateway.Pool.state:type_name -> types.WorkerPoolState
+	191, // 34: gateway.Pool.state:type_name -> types.WorkerPoolState
 	180, // 35: gateway.ListPoolsRequest.filters:type_name -> gateway.ListPoolsRequest.FiltersEntry
 	58,  // 36: gateway.ListPoolsResponse.pools:type_name -> gateway.Pool
-	186, // 37: gateway.ProviderInstance.created_at:type_name -> google.protobuf.Timestamp
-	186, // 38: gateway.ProviderInstance.expires_at:type_name -> google.protobuf.Timestamp
-	186, // 39: gateway.ProviderInstance.billing_renewal_at:type_name -> google.protobuf.Timestamp
+	187, // 37: gateway.ProviderInstance.created_at:type_name -> google.protobuf.Timestamp
+	187, // 38: gateway.ProviderInstance.expires_at:type_name -> google.protobuf.Timestamp
+	187, // 39: gateway.ProviderInstance.billing_renewal_at:type_name -> google.protobuf.Timestamp
 	61,  // 40: gateway.PrivatePool.config:type_name -> gateway.PoolConfig
 	63,  // 41: gateway.PrivatePool.reservations:type_name -> gateway.ProviderInstance
-	186, // 42: gateway.PrivatePool.created_at:type_name -> google.protobuf.Timestamp
-	186, // 43: gateway.PrivatePool.expires_at:type_name -> google.protobuf.Timestamp
+	187, // 42: gateway.PrivatePool.created_at:type_name -> google.protobuf.Timestamp
+	187, // 43: gateway.PrivatePool.expires_at:type_name -> google.protobuf.Timestamp
 	73,  // 44: gateway.PrivatePool.byoc:type_name -> gateway.BYOCPoolState
 	61,  // 45: gateway.ListPoolOffersRequest.pool:type_name -> gateway.PoolConfig
 	62,  // 46: gateway.ListPoolOffersResponse.offers:type_name -> gateway.PoolOffer
@@ -16149,16 +16245,16 @@ var file_gateway_proto_depIdxs = []int32{
 	73,  // 54: gateway.GetBYOCPoolResponse.byoc:type_name -> gateway.BYOCPoolState
 	64,  // 55: gateway.ScaleBYOCPoolResponse.pool:type_name -> gateway.PrivatePool
 	73,  // 56: gateway.ScaleBYOCPoolResponse.byoc:type_name -> gateway.BYOCPoolState
-	186, // 57: gateway.MarketplaceListing.created_at:type_name -> google.protobuf.Timestamp
-	186, // 58: gateway.MarketplaceListing.updated_at:type_name -> google.protobuf.Timestamp
-	186, // 59: gateway.MarketplaceOffer.created_at:type_name -> google.protobuf.Timestamp
+	187, // 57: gateway.MarketplaceListing.created_at:type_name -> google.protobuf.Timestamp
+	187, // 58: gateway.MarketplaceListing.updated_at:type_name -> google.protobuf.Timestamp
+	187, // 59: gateway.MarketplaceOffer.created_at:type_name -> google.protobuf.Timestamp
 	78,  // 60: gateway.CreateMarketplaceListingResponse.listing:type_name -> gateway.MarketplaceListing
 	78,  // 61: gateway.UpdateMarketplaceListingResponse.listing:type_name -> gateway.MarketplaceListing
 	78,  // 62: gateway.ListMarketplaceListingsResponse.listings:type_name -> gateway.MarketplaceListing
-	186, // 63: gateway.GetMarketplaceJoinCommandResponse.expires_at:type_name -> google.protobuf.Timestamp
+	187, // 63: gateway.GetMarketplaceJoinCommandResponse.expires_at:type_name -> google.protobuf.Timestamp
 	79,  // 64: gateway.ListMarketplaceOffersResponse.offers:type_name -> gateway.MarketplaceOffer
 	79,  // 65: gateway.GetMarketplaceOfferResponse.offer:type_name -> gateway.MarketplaceOffer
-	186, // 66: gateway.MarketplaceRental.created_at:type_name -> google.protobuf.Timestamp
+	187, // 66: gateway.MarketplaceRental.created_at:type_name -> google.protobuf.Timestamp
 	94,  // 67: gateway.CreateMarketplaceRentalResponse.rental:type_name -> gateway.MarketplaceRental
 	94,  // 68: gateway.ListMarketplaceRentalsResponse.rentals:type_name -> gateway.MarketplaceRental
 	144, // 69: gateway.ListMarketplaceMachinesResponse.machines:type_name -> gateway.Machine
@@ -16166,8 +16262,8 @@ var file_gateway_proto_depIdxs = []int32{
 	61,  // 71: gateway.CreatePoolRequest.pool:type_name -> gateway.PoolConfig
 	64,  // 72: gateway.CreatePoolResponse.pool:type_name -> gateway.PrivatePool
 	64,  // 73: gateway.ExtendPoolCapacityResponse.pool:type_name -> gateway.PrivatePool
-	186, // 74: gateway.CreatePoolJoinTokenResponse.expires_at:type_name -> google.protobuf.Timestamp
-	186, // 75: gateway.GetPoolJoinCommandResponse.expires_at:type_name -> google.protobuf.Timestamp
+	187, // 74: gateway.CreatePoolJoinTokenResponse.expires_at:type_name -> google.protobuf.Timestamp
+	187, // 75: gateway.GetPoolJoinCommandResponse.expires_at:type_name -> google.protobuf.Timestamp
 	144, // 76: gateway.ListPoolMachinesResponse.machines:type_name -> gateway.Machine
 	124, // 77: gateway.AgentBootstrapConfig.telemetry:type_name -> gateway.AgentTelemetryConfig
 	123, // 78: gateway.AgentBootstrapConfig.billing:type_name -> gateway.AgentBillingConfig
@@ -16188,157 +16284,158 @@ var file_gateway_proto_depIdxs = []int32{
 	146, // 93: gateway.MachineMetrics.path_metrics:type_name -> gateway.MachinePathMetrics
 	144, // 94: gateway.ListMachinesResponse.machines:type_name -> gateway.Machine
 	184, // 95: gateway.ListMachinesResponse.gpus:type_name -> gateway.ListMachinesResponse.GpusEntry
-	144, // 96: gateway.CreateMachineResponse.machine:type_name -> gateway.Machine
-	186, // 97: gateway.Token.created_at:type_name -> google.protobuf.Timestamp
-	186, // 98: gateway.Token.updated_at:type_name -> google.protobuf.Timestamp
-	153, // 99: gateway.ListTokensResponse.tokens:type_name -> gateway.Token
-	153, // 100: gateway.CreateTokenResponse.token:type_name -> gateway.Token
-	153, // 101: gateway.ToggleTokenResponse.token:type_name -> gateway.Token
-	191, // 102: gateway.ListWorkersResponse.workers:type_name -> types.Worker
-	27,  // 103: gateway.ListTasksRequest.FiltersEntry.value:type_name -> gateway.StringList
-	42,  // 104: gateway.Schema.FieldsEntry.value:type_name -> gateway.SchemaField
-	27,  // 105: gateway.ListDeploymentsRequest.FiltersEntry.value:type_name -> gateway.StringList
-	27,  // 106: gateway.ListPoolsRequest.FiltersEntry.value:type_name -> gateway.StringList
-	27,  // 107: gateway.ListPrivatePoolsRequest.FiltersEntry.value:type_name -> gateway.StringList
-	1,   // 108: gateway.GatewayService.Authorize:input_type -> gateway.AuthorizeRequest
-	3,   // 109: gateway.GatewayService.SignPayload:input_type -> gateway.SignPayloadRequest
-	6,   // 110: gateway.GatewayService.HeadObject:input_type -> gateway.HeadObjectRequest
-	8,   // 111: gateway.GatewayService.CreateObject:input_type -> gateway.CreateObjectRequest
-	10,  // 112: gateway.GatewayService.PutObjectStream:input_type -> gateway.PutObjectRequest
-	18,  // 113: gateway.GatewayService.CheckpointContainer:input_type -> gateway.CheckpointContainerRequest
-	14,  // 114: gateway.GatewayService.ListContainers:input_type -> gateway.ListContainersRequest
-	16,  // 115: gateway.GatewayService.StopContainer:input_type -> gateway.StopContainerRequest
-	20,  // 116: gateway.GatewayService.AttachToContainer:input_type -> gateway.ContainerStreamMessage
-	23,  // 117: gateway.GatewayService.StartTask:input_type -> gateway.StartTaskRequest
-	25,  // 118: gateway.GatewayService.EndTask:input_type -> gateway.EndTaskRequest
-	31,  // 119: gateway.GatewayService.StopTasks:input_type -> gateway.StopTasksRequest
-	28,  // 120: gateway.GatewayService.ListTasks:input_type -> gateway.ListTasksRequest
-	43,  // 121: gateway.GatewayService.GetOrCreateStub:input_type -> gateway.GetOrCreateStubRequest
-	45,  // 122: gateway.GatewayService.DeployStub:input_type -> gateway.DeployStubRequest
-	162, // 123: gateway.GatewayService.GetURL:input_type -> gateway.GetURLRequest
-	48,  // 124: gateway.GatewayService.ListDeployments:input_type -> gateway.ListDeploymentsRequest
-	50,  // 125: gateway.GatewayService.StopDeployment:input_type -> gateway.StopDeploymentRequest
-	52,  // 126: gateway.GatewayService.StartDeployment:input_type -> gateway.StartDeploymentRequest
-	54,  // 127: gateway.GatewayService.ScaleDeployment:input_type -> gateway.ScaleDeploymentRequest
-	56,  // 128: gateway.GatewayService.DeleteDeployment:input_type -> gateway.DeleteDeploymentRequest
-	59,  // 129: gateway.GatewayService.ListPools:input_type -> gateway.ListPoolsRequest
-	65,  // 130: gateway.GatewayService.ListPoolOffers:input_type -> gateway.ListPoolOffersRequest
-	67,  // 131: gateway.GatewayService.LaunchPoolCapacity:input_type -> gateway.LaunchPoolCapacityRequest
-	69,  // 132: gateway.GatewayService.ListPrivatePools:input_type -> gateway.ListPrivatePoolsRequest
-	71,  // 133: gateway.GatewayService.CreateBYOCPool:input_type -> gateway.CreateBYOCPoolRequest
-	74,  // 134: gateway.GatewayService.GetBYOCPool:input_type -> gateway.GetBYOCPoolRequest
-	76,  // 135: gateway.GatewayService.ScaleBYOCPool:input_type -> gateway.ScaleBYOCPoolRequest
-	80,  // 136: gateway.GatewayService.CreateMarketplaceListing:input_type -> gateway.CreateMarketplaceListingRequest
-	82,  // 137: gateway.GatewayService.UpdateMarketplaceListing:input_type -> gateway.UpdateMarketplaceListingRequest
-	84,  // 138: gateway.GatewayService.DeleteMarketplaceListing:input_type -> gateway.DeleteMarketplaceListingRequest
-	86,  // 139: gateway.GatewayService.ListMarketplaceListings:input_type -> gateway.ListMarketplaceListingsRequest
-	88,  // 140: gateway.GatewayService.GetMarketplaceJoinCommand:input_type -> gateway.GetMarketplaceJoinCommandRequest
-	90,  // 141: gateway.GatewayService.ListMarketplaceOffers:input_type -> gateway.ListMarketplaceOffersRequest
-	92,  // 142: gateway.GatewayService.GetMarketplaceOffer:input_type -> gateway.GetMarketplaceOfferRequest
-	95,  // 143: gateway.GatewayService.CreateMarketplaceRental:input_type -> gateway.CreateMarketplaceRentalRequest
-	97,  // 144: gateway.GatewayService.ListMarketplaceRentals:input_type -> gateway.ListMarketplaceRentalsRequest
-	99,  // 145: gateway.GatewayService.DeleteMarketplaceRental:input_type -> gateway.DeleteMarketplaceRentalRequest
-	101, // 146: gateway.GatewayService.LaunchRentalWorkload:input_type -> gateway.LaunchRentalWorkloadRequest
-	103, // 147: gateway.GatewayService.ListMarketplaceMachines:input_type -> gateway.ListMarketplaceMachinesRequest
-	105, // 148: gateway.GatewayService.ListMachineContainers:input_type -> gateway.ListMachineContainersRequest
-	108, // 149: gateway.GatewayService.CreatePool:input_type -> gateway.CreatePoolRequest
-	110, // 150: gateway.GatewayService.DeletePool:input_type -> gateway.DeletePoolRequest
-	112, // 151: gateway.GatewayService.ExtendPoolCapacity:input_type -> gateway.ExtendPoolCapacityRequest
-	114, // 152: gateway.GatewayService.CreatePoolJoinToken:input_type -> gateway.CreatePoolJoinTokenRequest
-	116, // 153: gateway.GatewayService.RevokePoolJoinToken:input_type -> gateway.RevokePoolJoinTokenRequest
-	118, // 154: gateway.GatewayService.GetPoolJoinCommand:input_type -> gateway.GetPoolJoinCommandRequest
-	120, // 155: gateway.GatewayService.ListPoolMachines:input_type -> gateway.ListPoolMachinesRequest
-	126, // 156: gateway.GatewayService.JoinAgent:input_type -> gateway.JoinAgentRequest
-	130, // 157: gateway.GatewayService.RequestAgentTransportCredential:input_type -> gateway.RequestAgentTransportCredentialRequest
-	132, // 158: gateway.GatewayService.ListAgentRoutes:input_type -> gateway.ListAgentRoutesRequest
-	134, // 159: gateway.GatewayService.UpdateAgentRouteStatus:input_type -> gateway.UpdateAgentRouteStatusRequest
-	174, // 160: gateway.GatewayService.UpdateAgentAvailability:input_type -> gateway.UpdateAgentAvailabilityRequest
-	137, // 161: gateway.GatewayService.StreamAgent:input_type -> gateway.StreamAgentRequest
-	142, // 162: gateway.GatewayService.StreamAgentTelemetry:input_type -> gateway.AgentTelemetryRequest
-	147, // 163: gateway.GatewayService.ListMachines:input_type -> gateway.ListMachinesRequest
-	149, // 164: gateway.GatewayService.CreateMachine:input_type -> gateway.CreateMachineRequest
-	151, // 165: gateway.GatewayService.DeleteMachine:input_type -> gateway.DeleteMachineRequest
-	154, // 166: gateway.GatewayService.ListTokens:input_type -> gateway.ListTokensRequest
-	156, // 167: gateway.GatewayService.CreateToken:input_type -> gateway.CreateTokenRequest
-	158, // 168: gateway.GatewayService.ToggleToken:input_type -> gateway.ToggleTokenRequest
-	160, // 169: gateway.GatewayService.DeleteToken:input_type -> gateway.DeleteTokenRequest
-	164, // 170: gateway.GatewayService.ListWorkers:input_type -> gateway.ListWorkersRequest
-	166, // 171: gateway.GatewayService.CordonWorker:input_type -> gateway.CordonWorkerRequest
-	168, // 172: gateway.GatewayService.UncordonWorker:input_type -> gateway.UncordonWorkerRequest
-	170, // 173: gateway.GatewayService.DrainWorker:input_type -> gateway.DrainWorkerRequest
-	172, // 174: gateway.GatewayService.ExportWorkspaceConfig:input_type -> gateway.ExportWorkspaceConfigRequest
-	2,   // 175: gateway.GatewayService.Authorize:output_type -> gateway.AuthorizeResponse
-	4,   // 176: gateway.GatewayService.SignPayload:output_type -> gateway.SignPayloadResponse
-	7,   // 177: gateway.GatewayService.HeadObject:output_type -> gateway.HeadObjectResponse
-	9,   // 178: gateway.GatewayService.CreateObject:output_type -> gateway.CreateObjectResponse
-	11,  // 179: gateway.GatewayService.PutObjectStream:output_type -> gateway.PutObjectResponse
-	19,  // 180: gateway.GatewayService.CheckpointContainer:output_type -> gateway.CheckpointContainerResponse
-	15,  // 181: gateway.GatewayService.ListContainers:output_type -> gateway.ListContainersResponse
-	17,  // 182: gateway.GatewayService.StopContainer:output_type -> gateway.StopContainerResponse
-	22,  // 183: gateway.GatewayService.AttachToContainer:output_type -> gateway.AttachToContainerResponse
-	24,  // 184: gateway.GatewayService.StartTask:output_type -> gateway.StartTaskResponse
-	26,  // 185: gateway.GatewayService.EndTask:output_type -> gateway.EndTaskResponse
-	32,  // 186: gateway.GatewayService.StopTasks:output_type -> gateway.StopTasksResponse
-	30,  // 187: gateway.GatewayService.ListTasks:output_type -> gateway.ListTasksResponse
-	44,  // 188: gateway.GatewayService.GetOrCreateStub:output_type -> gateway.GetOrCreateStubResponse
-	46,  // 189: gateway.GatewayService.DeployStub:output_type -> gateway.DeployStubResponse
-	163, // 190: gateway.GatewayService.GetURL:output_type -> gateway.GetURLResponse
-	49,  // 191: gateway.GatewayService.ListDeployments:output_type -> gateway.ListDeploymentsResponse
-	51,  // 192: gateway.GatewayService.StopDeployment:output_type -> gateway.StopDeploymentResponse
-	53,  // 193: gateway.GatewayService.StartDeployment:output_type -> gateway.StartDeploymentResponse
-	55,  // 194: gateway.GatewayService.ScaleDeployment:output_type -> gateway.ScaleDeploymentResponse
-	57,  // 195: gateway.GatewayService.DeleteDeployment:output_type -> gateway.DeleteDeploymentResponse
-	60,  // 196: gateway.GatewayService.ListPools:output_type -> gateway.ListPoolsResponse
-	66,  // 197: gateway.GatewayService.ListPoolOffers:output_type -> gateway.ListPoolOffersResponse
-	68,  // 198: gateway.GatewayService.LaunchPoolCapacity:output_type -> gateway.LaunchPoolCapacityResponse
-	70,  // 199: gateway.GatewayService.ListPrivatePools:output_type -> gateway.ListPrivatePoolsResponse
-	72,  // 200: gateway.GatewayService.CreateBYOCPool:output_type -> gateway.CreateBYOCPoolResponse
-	75,  // 201: gateway.GatewayService.GetBYOCPool:output_type -> gateway.GetBYOCPoolResponse
-	77,  // 202: gateway.GatewayService.ScaleBYOCPool:output_type -> gateway.ScaleBYOCPoolResponse
-	81,  // 203: gateway.GatewayService.CreateMarketplaceListing:output_type -> gateway.CreateMarketplaceListingResponse
-	83,  // 204: gateway.GatewayService.UpdateMarketplaceListing:output_type -> gateway.UpdateMarketplaceListingResponse
-	85,  // 205: gateway.GatewayService.DeleteMarketplaceListing:output_type -> gateway.DeleteMarketplaceListingResponse
-	87,  // 206: gateway.GatewayService.ListMarketplaceListings:output_type -> gateway.ListMarketplaceListingsResponse
-	89,  // 207: gateway.GatewayService.GetMarketplaceJoinCommand:output_type -> gateway.GetMarketplaceJoinCommandResponse
-	91,  // 208: gateway.GatewayService.ListMarketplaceOffers:output_type -> gateway.ListMarketplaceOffersResponse
-	93,  // 209: gateway.GatewayService.GetMarketplaceOffer:output_type -> gateway.GetMarketplaceOfferResponse
-	96,  // 210: gateway.GatewayService.CreateMarketplaceRental:output_type -> gateway.CreateMarketplaceRentalResponse
-	98,  // 211: gateway.GatewayService.ListMarketplaceRentals:output_type -> gateway.ListMarketplaceRentalsResponse
-	100, // 212: gateway.GatewayService.DeleteMarketplaceRental:output_type -> gateway.DeleteMarketplaceRentalResponse
-	102, // 213: gateway.GatewayService.LaunchRentalWorkload:output_type -> gateway.LaunchRentalWorkloadResponse
-	104, // 214: gateway.GatewayService.ListMarketplaceMachines:output_type -> gateway.ListMarketplaceMachinesResponse
-	107, // 215: gateway.GatewayService.ListMachineContainers:output_type -> gateway.ListMachineContainersResponse
-	109, // 216: gateway.GatewayService.CreatePool:output_type -> gateway.CreatePoolResponse
-	111, // 217: gateway.GatewayService.DeletePool:output_type -> gateway.DeletePoolResponse
-	113, // 218: gateway.GatewayService.ExtendPoolCapacity:output_type -> gateway.ExtendPoolCapacityResponse
-	115, // 219: gateway.GatewayService.CreatePoolJoinToken:output_type -> gateway.CreatePoolJoinTokenResponse
-	117, // 220: gateway.GatewayService.RevokePoolJoinToken:output_type -> gateway.RevokePoolJoinTokenResponse
-	119, // 221: gateway.GatewayService.GetPoolJoinCommand:output_type -> gateway.GetPoolJoinCommandResponse
-	121, // 222: gateway.GatewayService.ListPoolMachines:output_type -> gateway.ListPoolMachinesResponse
-	127, // 223: gateway.GatewayService.JoinAgent:output_type -> gateway.JoinAgentResponse
-	131, // 224: gateway.GatewayService.RequestAgentTransportCredential:output_type -> gateway.RequestAgentTransportCredentialResponse
-	133, // 225: gateway.GatewayService.ListAgentRoutes:output_type -> gateway.ListAgentRoutesResponse
-	135, // 226: gateway.GatewayService.UpdateAgentRouteStatus:output_type -> gateway.UpdateAgentRouteStatusResponse
-	175, // 227: gateway.GatewayService.UpdateAgentAvailability:output_type -> gateway.UpdateAgentAvailabilityResponse
-	138, // 228: gateway.GatewayService.StreamAgent:output_type -> gateway.StreamAgentResponse
-	143, // 229: gateway.GatewayService.StreamAgentTelemetry:output_type -> gateway.AgentTelemetryResponse
-	148, // 230: gateway.GatewayService.ListMachines:output_type -> gateway.ListMachinesResponse
-	150, // 231: gateway.GatewayService.CreateMachine:output_type -> gateway.CreateMachineResponse
-	152, // 232: gateway.GatewayService.DeleteMachine:output_type -> gateway.DeleteMachineResponse
-	155, // 233: gateway.GatewayService.ListTokens:output_type -> gateway.ListTokensResponse
-	157, // 234: gateway.GatewayService.CreateToken:output_type -> gateway.CreateTokenResponse
-	159, // 235: gateway.GatewayService.ToggleToken:output_type -> gateway.ToggleTokenResponse
-	161, // 236: gateway.GatewayService.DeleteToken:output_type -> gateway.DeleteTokenResponse
-	165, // 237: gateway.GatewayService.ListWorkers:output_type -> gateway.ListWorkersResponse
-	167, // 238: gateway.GatewayService.CordonWorker:output_type -> gateway.CordonWorkerResponse
-	169, // 239: gateway.GatewayService.UncordonWorker:output_type -> gateway.UncordonWorkerResponse
-	171, // 240: gateway.GatewayService.DrainWorker:output_type -> gateway.DrainWorkerResponse
-	173, // 241: gateway.GatewayService.ExportWorkspaceConfig:output_type -> gateway.ExportWorkspaceConfigResponse
-	175, // [175:242] is the sub-list for method output_type
-	108, // [108:175] is the sub-list for method input_type
-	108, // [108:108] is the sub-list for extension type_name
-	108, // [108:108] is the sub-list for extension extendee
-	0,   // [0:108] is the sub-list for field type_name
+	185, // 96: gateway.ListMachinesResponse.supported_gpus:type_name -> gateway.ListMachinesResponse.SupportedGpusEntry
+	144, // 97: gateway.CreateMachineResponse.machine:type_name -> gateway.Machine
+	187, // 98: gateway.Token.created_at:type_name -> google.protobuf.Timestamp
+	187, // 99: gateway.Token.updated_at:type_name -> google.protobuf.Timestamp
+	153, // 100: gateway.ListTokensResponse.tokens:type_name -> gateway.Token
+	153, // 101: gateway.CreateTokenResponse.token:type_name -> gateway.Token
+	153, // 102: gateway.ToggleTokenResponse.token:type_name -> gateway.Token
+	192, // 103: gateway.ListWorkersResponse.workers:type_name -> types.Worker
+	27,  // 104: gateway.ListTasksRequest.FiltersEntry.value:type_name -> gateway.StringList
+	42,  // 105: gateway.Schema.FieldsEntry.value:type_name -> gateway.SchemaField
+	27,  // 106: gateway.ListDeploymentsRequest.FiltersEntry.value:type_name -> gateway.StringList
+	27,  // 107: gateway.ListPoolsRequest.FiltersEntry.value:type_name -> gateway.StringList
+	27,  // 108: gateway.ListPrivatePoolsRequest.FiltersEntry.value:type_name -> gateway.StringList
+	1,   // 109: gateway.GatewayService.Authorize:input_type -> gateway.AuthorizeRequest
+	3,   // 110: gateway.GatewayService.SignPayload:input_type -> gateway.SignPayloadRequest
+	6,   // 111: gateway.GatewayService.HeadObject:input_type -> gateway.HeadObjectRequest
+	8,   // 112: gateway.GatewayService.CreateObject:input_type -> gateway.CreateObjectRequest
+	10,  // 113: gateway.GatewayService.PutObjectStream:input_type -> gateway.PutObjectRequest
+	18,  // 114: gateway.GatewayService.CheckpointContainer:input_type -> gateway.CheckpointContainerRequest
+	14,  // 115: gateway.GatewayService.ListContainers:input_type -> gateway.ListContainersRequest
+	16,  // 116: gateway.GatewayService.StopContainer:input_type -> gateway.StopContainerRequest
+	20,  // 117: gateway.GatewayService.AttachToContainer:input_type -> gateway.ContainerStreamMessage
+	23,  // 118: gateway.GatewayService.StartTask:input_type -> gateway.StartTaskRequest
+	25,  // 119: gateway.GatewayService.EndTask:input_type -> gateway.EndTaskRequest
+	31,  // 120: gateway.GatewayService.StopTasks:input_type -> gateway.StopTasksRequest
+	28,  // 121: gateway.GatewayService.ListTasks:input_type -> gateway.ListTasksRequest
+	43,  // 122: gateway.GatewayService.GetOrCreateStub:input_type -> gateway.GetOrCreateStubRequest
+	45,  // 123: gateway.GatewayService.DeployStub:input_type -> gateway.DeployStubRequest
+	162, // 124: gateway.GatewayService.GetURL:input_type -> gateway.GetURLRequest
+	48,  // 125: gateway.GatewayService.ListDeployments:input_type -> gateway.ListDeploymentsRequest
+	50,  // 126: gateway.GatewayService.StopDeployment:input_type -> gateway.StopDeploymentRequest
+	52,  // 127: gateway.GatewayService.StartDeployment:input_type -> gateway.StartDeploymentRequest
+	54,  // 128: gateway.GatewayService.ScaleDeployment:input_type -> gateway.ScaleDeploymentRequest
+	56,  // 129: gateway.GatewayService.DeleteDeployment:input_type -> gateway.DeleteDeploymentRequest
+	59,  // 130: gateway.GatewayService.ListPools:input_type -> gateway.ListPoolsRequest
+	65,  // 131: gateway.GatewayService.ListPoolOffers:input_type -> gateway.ListPoolOffersRequest
+	67,  // 132: gateway.GatewayService.LaunchPoolCapacity:input_type -> gateway.LaunchPoolCapacityRequest
+	69,  // 133: gateway.GatewayService.ListPrivatePools:input_type -> gateway.ListPrivatePoolsRequest
+	71,  // 134: gateway.GatewayService.CreateBYOCPool:input_type -> gateway.CreateBYOCPoolRequest
+	74,  // 135: gateway.GatewayService.GetBYOCPool:input_type -> gateway.GetBYOCPoolRequest
+	76,  // 136: gateway.GatewayService.ScaleBYOCPool:input_type -> gateway.ScaleBYOCPoolRequest
+	80,  // 137: gateway.GatewayService.CreateMarketplaceListing:input_type -> gateway.CreateMarketplaceListingRequest
+	82,  // 138: gateway.GatewayService.UpdateMarketplaceListing:input_type -> gateway.UpdateMarketplaceListingRequest
+	84,  // 139: gateway.GatewayService.DeleteMarketplaceListing:input_type -> gateway.DeleteMarketplaceListingRequest
+	86,  // 140: gateway.GatewayService.ListMarketplaceListings:input_type -> gateway.ListMarketplaceListingsRequest
+	88,  // 141: gateway.GatewayService.GetMarketplaceJoinCommand:input_type -> gateway.GetMarketplaceJoinCommandRequest
+	90,  // 142: gateway.GatewayService.ListMarketplaceOffers:input_type -> gateway.ListMarketplaceOffersRequest
+	92,  // 143: gateway.GatewayService.GetMarketplaceOffer:input_type -> gateway.GetMarketplaceOfferRequest
+	95,  // 144: gateway.GatewayService.CreateMarketplaceRental:input_type -> gateway.CreateMarketplaceRentalRequest
+	97,  // 145: gateway.GatewayService.ListMarketplaceRentals:input_type -> gateway.ListMarketplaceRentalsRequest
+	99,  // 146: gateway.GatewayService.DeleteMarketplaceRental:input_type -> gateway.DeleteMarketplaceRentalRequest
+	101, // 147: gateway.GatewayService.LaunchRentalWorkload:input_type -> gateway.LaunchRentalWorkloadRequest
+	103, // 148: gateway.GatewayService.ListMarketplaceMachines:input_type -> gateway.ListMarketplaceMachinesRequest
+	105, // 149: gateway.GatewayService.ListMachineContainers:input_type -> gateway.ListMachineContainersRequest
+	108, // 150: gateway.GatewayService.CreatePool:input_type -> gateway.CreatePoolRequest
+	110, // 151: gateway.GatewayService.DeletePool:input_type -> gateway.DeletePoolRequest
+	112, // 152: gateway.GatewayService.ExtendPoolCapacity:input_type -> gateway.ExtendPoolCapacityRequest
+	114, // 153: gateway.GatewayService.CreatePoolJoinToken:input_type -> gateway.CreatePoolJoinTokenRequest
+	116, // 154: gateway.GatewayService.RevokePoolJoinToken:input_type -> gateway.RevokePoolJoinTokenRequest
+	118, // 155: gateway.GatewayService.GetPoolJoinCommand:input_type -> gateway.GetPoolJoinCommandRequest
+	120, // 156: gateway.GatewayService.ListPoolMachines:input_type -> gateway.ListPoolMachinesRequest
+	126, // 157: gateway.GatewayService.JoinAgent:input_type -> gateway.JoinAgentRequest
+	130, // 158: gateway.GatewayService.RequestAgentTransportCredential:input_type -> gateway.RequestAgentTransportCredentialRequest
+	132, // 159: gateway.GatewayService.ListAgentRoutes:input_type -> gateway.ListAgentRoutesRequest
+	134, // 160: gateway.GatewayService.UpdateAgentRouteStatus:input_type -> gateway.UpdateAgentRouteStatusRequest
+	174, // 161: gateway.GatewayService.UpdateAgentAvailability:input_type -> gateway.UpdateAgentAvailabilityRequest
+	137, // 162: gateway.GatewayService.StreamAgent:input_type -> gateway.StreamAgentRequest
+	142, // 163: gateway.GatewayService.StreamAgentTelemetry:input_type -> gateway.AgentTelemetryRequest
+	147, // 164: gateway.GatewayService.ListMachines:input_type -> gateway.ListMachinesRequest
+	149, // 165: gateway.GatewayService.CreateMachine:input_type -> gateway.CreateMachineRequest
+	151, // 166: gateway.GatewayService.DeleteMachine:input_type -> gateway.DeleteMachineRequest
+	154, // 167: gateway.GatewayService.ListTokens:input_type -> gateway.ListTokensRequest
+	156, // 168: gateway.GatewayService.CreateToken:input_type -> gateway.CreateTokenRequest
+	158, // 169: gateway.GatewayService.ToggleToken:input_type -> gateway.ToggleTokenRequest
+	160, // 170: gateway.GatewayService.DeleteToken:input_type -> gateway.DeleteTokenRequest
+	164, // 171: gateway.GatewayService.ListWorkers:input_type -> gateway.ListWorkersRequest
+	166, // 172: gateway.GatewayService.CordonWorker:input_type -> gateway.CordonWorkerRequest
+	168, // 173: gateway.GatewayService.UncordonWorker:input_type -> gateway.UncordonWorkerRequest
+	170, // 174: gateway.GatewayService.DrainWorker:input_type -> gateway.DrainWorkerRequest
+	172, // 175: gateway.GatewayService.ExportWorkspaceConfig:input_type -> gateway.ExportWorkspaceConfigRequest
+	2,   // 176: gateway.GatewayService.Authorize:output_type -> gateway.AuthorizeResponse
+	4,   // 177: gateway.GatewayService.SignPayload:output_type -> gateway.SignPayloadResponse
+	7,   // 178: gateway.GatewayService.HeadObject:output_type -> gateway.HeadObjectResponse
+	9,   // 179: gateway.GatewayService.CreateObject:output_type -> gateway.CreateObjectResponse
+	11,  // 180: gateway.GatewayService.PutObjectStream:output_type -> gateway.PutObjectResponse
+	19,  // 181: gateway.GatewayService.CheckpointContainer:output_type -> gateway.CheckpointContainerResponse
+	15,  // 182: gateway.GatewayService.ListContainers:output_type -> gateway.ListContainersResponse
+	17,  // 183: gateway.GatewayService.StopContainer:output_type -> gateway.StopContainerResponse
+	22,  // 184: gateway.GatewayService.AttachToContainer:output_type -> gateway.AttachToContainerResponse
+	24,  // 185: gateway.GatewayService.StartTask:output_type -> gateway.StartTaskResponse
+	26,  // 186: gateway.GatewayService.EndTask:output_type -> gateway.EndTaskResponse
+	32,  // 187: gateway.GatewayService.StopTasks:output_type -> gateway.StopTasksResponse
+	30,  // 188: gateway.GatewayService.ListTasks:output_type -> gateway.ListTasksResponse
+	44,  // 189: gateway.GatewayService.GetOrCreateStub:output_type -> gateway.GetOrCreateStubResponse
+	46,  // 190: gateway.GatewayService.DeployStub:output_type -> gateway.DeployStubResponse
+	163, // 191: gateway.GatewayService.GetURL:output_type -> gateway.GetURLResponse
+	49,  // 192: gateway.GatewayService.ListDeployments:output_type -> gateway.ListDeploymentsResponse
+	51,  // 193: gateway.GatewayService.StopDeployment:output_type -> gateway.StopDeploymentResponse
+	53,  // 194: gateway.GatewayService.StartDeployment:output_type -> gateway.StartDeploymentResponse
+	55,  // 195: gateway.GatewayService.ScaleDeployment:output_type -> gateway.ScaleDeploymentResponse
+	57,  // 196: gateway.GatewayService.DeleteDeployment:output_type -> gateway.DeleteDeploymentResponse
+	60,  // 197: gateway.GatewayService.ListPools:output_type -> gateway.ListPoolsResponse
+	66,  // 198: gateway.GatewayService.ListPoolOffers:output_type -> gateway.ListPoolOffersResponse
+	68,  // 199: gateway.GatewayService.LaunchPoolCapacity:output_type -> gateway.LaunchPoolCapacityResponse
+	70,  // 200: gateway.GatewayService.ListPrivatePools:output_type -> gateway.ListPrivatePoolsResponse
+	72,  // 201: gateway.GatewayService.CreateBYOCPool:output_type -> gateway.CreateBYOCPoolResponse
+	75,  // 202: gateway.GatewayService.GetBYOCPool:output_type -> gateway.GetBYOCPoolResponse
+	77,  // 203: gateway.GatewayService.ScaleBYOCPool:output_type -> gateway.ScaleBYOCPoolResponse
+	81,  // 204: gateway.GatewayService.CreateMarketplaceListing:output_type -> gateway.CreateMarketplaceListingResponse
+	83,  // 205: gateway.GatewayService.UpdateMarketplaceListing:output_type -> gateway.UpdateMarketplaceListingResponse
+	85,  // 206: gateway.GatewayService.DeleteMarketplaceListing:output_type -> gateway.DeleteMarketplaceListingResponse
+	87,  // 207: gateway.GatewayService.ListMarketplaceListings:output_type -> gateway.ListMarketplaceListingsResponse
+	89,  // 208: gateway.GatewayService.GetMarketplaceJoinCommand:output_type -> gateway.GetMarketplaceJoinCommandResponse
+	91,  // 209: gateway.GatewayService.ListMarketplaceOffers:output_type -> gateway.ListMarketplaceOffersResponse
+	93,  // 210: gateway.GatewayService.GetMarketplaceOffer:output_type -> gateway.GetMarketplaceOfferResponse
+	96,  // 211: gateway.GatewayService.CreateMarketplaceRental:output_type -> gateway.CreateMarketplaceRentalResponse
+	98,  // 212: gateway.GatewayService.ListMarketplaceRentals:output_type -> gateway.ListMarketplaceRentalsResponse
+	100, // 213: gateway.GatewayService.DeleteMarketplaceRental:output_type -> gateway.DeleteMarketplaceRentalResponse
+	102, // 214: gateway.GatewayService.LaunchRentalWorkload:output_type -> gateway.LaunchRentalWorkloadResponse
+	104, // 215: gateway.GatewayService.ListMarketplaceMachines:output_type -> gateway.ListMarketplaceMachinesResponse
+	107, // 216: gateway.GatewayService.ListMachineContainers:output_type -> gateway.ListMachineContainersResponse
+	109, // 217: gateway.GatewayService.CreatePool:output_type -> gateway.CreatePoolResponse
+	111, // 218: gateway.GatewayService.DeletePool:output_type -> gateway.DeletePoolResponse
+	113, // 219: gateway.GatewayService.ExtendPoolCapacity:output_type -> gateway.ExtendPoolCapacityResponse
+	115, // 220: gateway.GatewayService.CreatePoolJoinToken:output_type -> gateway.CreatePoolJoinTokenResponse
+	117, // 221: gateway.GatewayService.RevokePoolJoinToken:output_type -> gateway.RevokePoolJoinTokenResponse
+	119, // 222: gateway.GatewayService.GetPoolJoinCommand:output_type -> gateway.GetPoolJoinCommandResponse
+	121, // 223: gateway.GatewayService.ListPoolMachines:output_type -> gateway.ListPoolMachinesResponse
+	127, // 224: gateway.GatewayService.JoinAgent:output_type -> gateway.JoinAgentResponse
+	131, // 225: gateway.GatewayService.RequestAgentTransportCredential:output_type -> gateway.RequestAgentTransportCredentialResponse
+	133, // 226: gateway.GatewayService.ListAgentRoutes:output_type -> gateway.ListAgentRoutesResponse
+	135, // 227: gateway.GatewayService.UpdateAgentRouteStatus:output_type -> gateway.UpdateAgentRouteStatusResponse
+	175, // 228: gateway.GatewayService.UpdateAgentAvailability:output_type -> gateway.UpdateAgentAvailabilityResponse
+	138, // 229: gateway.GatewayService.StreamAgent:output_type -> gateway.StreamAgentResponse
+	143, // 230: gateway.GatewayService.StreamAgentTelemetry:output_type -> gateway.AgentTelemetryResponse
+	148, // 231: gateway.GatewayService.ListMachines:output_type -> gateway.ListMachinesResponse
+	150, // 232: gateway.GatewayService.CreateMachine:output_type -> gateway.CreateMachineResponse
+	152, // 233: gateway.GatewayService.DeleteMachine:output_type -> gateway.DeleteMachineResponse
+	155, // 234: gateway.GatewayService.ListTokens:output_type -> gateway.ListTokensResponse
+	157, // 235: gateway.GatewayService.CreateToken:output_type -> gateway.CreateTokenResponse
+	159, // 236: gateway.GatewayService.ToggleToken:output_type -> gateway.ToggleTokenResponse
+	161, // 237: gateway.GatewayService.DeleteToken:output_type -> gateway.DeleteTokenResponse
+	165, // 238: gateway.GatewayService.ListWorkers:output_type -> gateway.ListWorkersResponse
+	167, // 239: gateway.GatewayService.CordonWorker:output_type -> gateway.CordonWorkerResponse
+	169, // 240: gateway.GatewayService.UncordonWorker:output_type -> gateway.UncordonWorkerResponse
+	171, // 241: gateway.GatewayService.DrainWorker:output_type -> gateway.DrainWorkerResponse
+	173, // 242: gateway.GatewayService.ExportWorkspaceConfig:output_type -> gateway.ExportWorkspaceConfigResponse
+	176, // [176:243] is the sub-list for method output_type
+	109, // [109:176] is the sub-list for method input_type
+	109, // [109:109] is the sub-list for extension type_name
+	109, // [109:109] is the sub-list for extension extendee
+	0,   // [0:109] is the sub-list for field type_name
 }
 
 func init() { file_gateway_proto_init() }
@@ -18462,7 +18559,7 @@ func file_gateway_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_gateway_proto_rawDesc,
 			NumEnums:      1,
-			NumMessages:   184,
+			NumMessages:   185,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

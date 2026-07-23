@@ -4,67 +4,99 @@ from typing import Dict, Optional, Sequence
 from rich.table import Column, Table, box
 
 from .. import terminal
-from ..clients.gateway import Machine
+from ..clients.gateway import Machine, PoolOffer
 
 
-def gpu_availability_table(gpus: Dict[str, bool]) -> Table:
+def gpu_inventory_table(
+    live_gpus: Dict[str, bool],
+    supported_gpus: Dict[str, bool],
+    cheapest_offers: Dict[str, PoolOffer],
+    offers_available: bool = True,
+) -> Table:
+    """
+    One row per GPU type that has any capacity signal: live serverless
+    workers, a serverless pool config (scale-to-zero), or an on-demand offer.
+    GPU types with no capacity anywhere are summarized in the caption so
+    they never stretch the table.
+    """
+    gpu_types = sorted(set(live_gpus) | set(supported_gpus) | set(cheapest_offers))
+    hidden = 0
+    rows = []
+    for gpu_type in gpu_types:
+        live = live_gpus.get(gpu_type, False)
+        supported = supported_gpus.get(gpu_type, False)
+        offer = cheapest_offers.get(gpu_type)
+
+        if not live and not supported and offer is None:
+            hidden += 1
+            continue
+
+        if live:
+            serverless = "[green]●[/green] ready"
+        elif supported:
+            serverless = "[cyan]●[/cyan] available"
+        else:
+            serverless = "[dim]—[/dim]"
+
+        if offer is not None:
+            hourly = offer.hourly_cost_micros / 1_000_000
+            on_demand = f"${hourly:.2f}/hr"
+        elif offers_available:
+            on_demand = "[dim]—[/dim]"
+        else:
+            on_demand = "[dim]?[/dim]"
+
+        rows.append((gpu_type, serverless, on_demand))
+
+    caption = None
+    if hidden > 0:
+        # Leading pad keeps the caption aligned with the table's cell content.
+        caption = f"  {hidden} more GPU types · no capacity"
+
     table = Table(
-        Column("GPU Type"),
-        Column("Available", justify="center"),
+        Column("GPU", no_wrap=True),
+        Column("Serverless", no_wrap=True),
+        Column("On-demand", justify="right", no_wrap=True),
         box=box.SIMPLE,
+        caption=caption,
+        caption_justify="left",
+        caption_style="dim",
     )
-    for gpu_type, gpu_available in sorted(gpus.items()):
-        table.add_row(gpu_type, "✅" if gpu_available else "❌")
-    if not gpus:
-        table.add_row("-", "-")
-    table.add_section()
-    table.add_row(f"[bold]{len(gpus)} items")
+
+    for row in rows:
+        table.add_row(*row)
+    if not rows:
+        table.add_row("[dim]—[/dim]", "[dim]no capacity visible[/dim]", "[dim]—[/dim]")
+
     return table
 
 
 def machine_table(machines: Sequence[Machine]) -> Table:
     table = Table(
-        Column("ID"),
-        Column("CPU"),
-        Column("Memory"),
-        Column("GPU"),
-        Column("Status"),
+        Column("ID", no_wrap=True),
         Column("Pool"),
-        Column("Created"),
-        Column("Last Keepalive"),
-        Column("Agent Version"),
-        Column("Free GPU Count"),
+        Column("State"),
+        Column("Capacity", no_wrap=True),
+        Column("Load", no_wrap=True),
+        Column("Last seen"),
+        Column("Agent"),
         box=box.SIMPLE,
     )
     for machine in machines:
         table.add_row(
             machine.id,
-            machine_cpu(machine),
-            machine_memory(machine),
-            machine_gpu(machine),
-            machine_status(machine.status),
             machine.pool_name or "-",
-            machine_created(machine.created),
+            machine_status(machine.status),
+            machine_capacity(machine),
+            machine_load(machine),
             machine_last_keepalive(machine.last_keepalive),
             f"v{machine.agent_version}" if machine.agent_version else "-",
-            machine_free_gpu_count(machine),
         )
 
     table.add_section()
-    table.add_row(f"[bold]{len(machines)} items")
+    count, suffix = terminal.pluralize(machines, "s")
+    table.add_row(f"[bold]{count} machine{suffix}")
     return table
-
-
-def machine_cpu(machine: Machine) -> str:
-    if machine.cpu <= 0:
-        return "-"
-    return f"{machine.cpu:,}m"
-
-
-def machine_memory(machine: Machine) -> str:
-    if machine.memory <= 0:
-        return "-"
-    return terminal.humanize_memory(machine.memory * 1024 * 1024)
 
 
 def format_cpu(millicores: int) -> str:
@@ -80,8 +112,11 @@ def format_memory(memory_mb: int) -> str:
     return f"{memory_mb}MiB"
 
 
-def machine_gpu(machine: Machine) -> str:
-    return format_gpu(machine.gpu, machine.gpu_count)
+def format_memory_pair(free_mb: int, total_mb: int) -> str:
+    """Compact free/total memory in the total's unit: 34.7/64.0GiB."""
+    if total_mb >= 1024:
+        return f"{free_mb / 1024:.1f}/{total_mb / 1024:.1f}GiB"
+    return f"{free_mb}/{total_mb}MiB"
 
 
 def format_gpu(gpu: str, gpu_count: int = 0) -> str:
@@ -92,11 +127,29 @@ def format_gpu(gpu: str, gpu_count: int = 0) -> str:
     return f"{gpu} x {gpu_count}"
 
 
-def machine_free_gpu_count(machine: Machine) -> str:
+def machine_capacity(machine: Machine) -> str:
+    parts = []
+    if machine.cpu > 0:
+        parts.append(format_cpu(machine.cpu))
+    if machine.memory > 0:
+        parts.append(format_memory(machine.memory))
+    if machine.gpu:
+        parts.append(format_gpu(machine.gpu, machine.gpu_count))
+    return " · ".join(parts) or "-"
+
+
+def machine_load(machine: Machine) -> str:
     metrics = getattr(machine, "machine_metrics", None)
     if metrics is None:
         return "-"
-    return str(metrics.free_gpu_count)
+    parts = []
+    if machine.gpu_count:
+        parts.append(f"{metrics.free_gpu_count}/{machine.gpu_count} GPU free")
+    if metrics.worker_count or metrics.container_count:
+        workers = "worker" if metrics.worker_count == 1 else "workers"
+        containers = "container" if metrics.container_count == 1 else "containers"
+        parts.append(f"{metrics.worker_count} {workers} · {metrics.container_count} {containers}")
+    return " · ".join(parts) or "-"
 
 
 def machine_status(status: str) -> str:
@@ -115,11 +168,6 @@ def machine_status(status: str) -> str:
     if not status or not style:
         return status or "-"
     return f"[{style}]{status}[/{style}]"
-
-
-def machine_created(value: str) -> str:
-    created = machine_datetime(value)
-    return terminal.humanize_date(created) if created else "-"
 
 
 def machine_last_keepalive(value: str) -> str:

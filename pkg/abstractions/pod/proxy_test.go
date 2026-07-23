@@ -1,11 +1,14 @@
 package pod
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -35,6 +38,11 @@ func TestPodBackendURLPreservesDirectAddress(t *testing.T) {
 }
 
 func TestProcessBufferWakesWhenBackendBecomesAvailable(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(backend.Close)
+
 	server, err := miniredis.Run()
 	if err != nil {
 		t.Fatal(err)
@@ -82,8 +90,8 @@ func TestProcessBufferWakesWhenBackendBecomesAvailable(t *testing.T) {
 	pb.availableContainersLock.Lock()
 	pb.availableContainers = []container{{
 		id:              "container-1",
-		addressMap:      map[int32]string{8000: "127.0.0.1:8000"},
-		readyAddressMap: map[int32]string{8000: "127.0.0.1:8000"},
+		addressMap:      map[int32]string{8000: backend.Listener.Addr().String()},
+		readyAddressMap: map[int32]string{8000: backend.Listener.Addr().String()},
 	}}
 	pb.availableContainersLock.Unlock()
 	pb.signalWork()
@@ -91,6 +99,73 @@ func TestProcessBufferWakesWhenBackendBecomesAvailable(t *testing.T) {
 	waitForCondition(t, 50*time.Millisecond, func() bool {
 		return pb.buffer.Len() == 0
 	})
+}
+
+func TestForwardRequestWakesContainerDiscovery(t *testing.T) {
+	e := echo.New()
+	requestCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx := e.NewContext(httptest.NewRequest(http.MethodGet, "/", nil).WithContext(requestCtx), httptest.NewRecorder())
+	ctx.SetParamNames("port")
+	ctx.SetParamValues("8000")
+
+	pb := &PodProxyBuffer{
+		ctx:           context.Background(),
+		stubConfig:    &types.StubConfigV1{},
+		buffer:        abstractions.NewRingBuffer[*connection](1),
+		workReady:     make(chan struct{}, 1),
+		discoverReady: make(chan struct{}, 1),
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- pb.ForwardRequest(ctx) }()
+
+	select {
+	case <-pb.discoverReady:
+	case <-time.After(time.Second):
+		t.Fatal("queued request did not wake container discovery")
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDeletePodInstancePreservesReplacement(t *testing.T) {
+	service := &GenericPodService{podInstances: common.NewSafeMap[*podInstance]()}
+	oldInstance := &podInstance{}
+	replacement := &podInstance{}
+	service.podInstances.Set("stub", replacement)
+
+	service.deletePodInstance("stub", oldInstance)
+	if current, exists := service.podInstances.Get("stub"); !exists || current != replacement {
+		t.Fatal("stale instance cleanup deleted its replacement")
+	}
+
+	service.deletePodInstance("stub", replacement)
+	if _, exists := service.podInstances.Get("stub"); exists {
+		t.Fatal("current instance was not deleted")
+	}
+}
+
+func TestDrainDoesNotRejectClaimedConnection(t *testing.T) {
+	e := echo.New()
+	recorder := httptest.NewRecorder()
+	conn := &connection{
+		ctx:  e.NewContext(httptest.NewRequest(http.MethodGet, "/", nil), recorder),
+		done: make(chan struct{}),
+	}
+	if !conn.claim() {
+		t.Fatal("connection was not claimed")
+	}
+
+	pb := &PodProxyBuffer{}
+	if pb.failQueuedConnection(conn, http.StatusServiceUnavailable, "Service is draining") {
+		t.Fatal("claimed connection was rejected as queued")
+	}
+	if recorder.Body.Len() != 0 {
+		t.Fatal("drain wrote to an active response")
+	}
 }
 
 func TestEnqueueConnectionFailsOverwrittenHTTPConnection(t *testing.T) {
@@ -174,6 +249,151 @@ func TestForwardRequestProxiesReadyBackendWithoutQueueing(t *testing.T) {
 	if got := pb.containerConnectionCount("container-1"); got != 0 {
 		t.Fatalf("container connections = %d, want released", got)
 	}
+}
+
+func TestForwardRequestRequeuesClosingRouteAndPreservesBody(t *testing.T) {
+	staleRouteID := "stale-route"
+	receivedBody := make(chan string, 1)
+	replacement := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read replacement request body: %v", err)
+		}
+		receivedBody <- string(body)
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	t.Cleanup(replacement.Close)
+
+	e := echo.New()
+	body := &closeSensitiveBody{reader: bytes.NewReader([]byte(`{"request":"preserved"}`))}
+	req := httptest.NewRequest(http.MethodPost, "/", body)
+	rec := httptest.NewRecorder()
+	requestCtx := e.NewContext(req, rec)
+	requestCtx.SetParamNames("port")
+	requestCtx.SetParamValues("8000")
+
+	pb := newBackendRetryTestBuffer(t, staleRouteID)
+	replacementStarts := 0
+	pb.onBackendUnavailable = func() error {
+		replacementStarts++
+		address := replacement.Listener.Addr().String()
+		pb.availableContainersLock.Lock()
+		pb.availableContainers = []container{{
+			id:              "replacement-container",
+			addressMap:      map[int32]string{8000: address},
+			readyAddressMap: map[int32]string{8000: address},
+		}}
+		pb.availableContainersLock.Unlock()
+		return nil
+	}
+	if err := pb.ForwardRequest(requestCtx); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d; body=%q", rec.Code, http.StatusAccepted, rec.Body.String())
+	}
+	if replacementStarts != 1 {
+		t.Fatalf("replacement starts = %d, want 1", replacementStarts)
+	}
+	select {
+	case got := <-receivedBody:
+		if got != `{"request":"preserved"}` {
+			t.Fatalf("replacement body = %q", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("replacement did not receive request")
+	}
+	if got := pb.totalConnectionCount(); got != 0 {
+		t.Fatalf("total connections = %d, want 0", got)
+	}
+}
+
+func TestForwardRequestRetriesBackendDialOnlyOnce(t *testing.T) {
+	e := echo.New()
+	rec := httptest.NewRecorder()
+	requestCtx := e.NewContext(httptest.NewRequest(http.MethodPost, "/", nil), rec)
+	requestCtx.SetParamNames("port")
+	requestCtx.SetParamValues("8000")
+
+	pb := newBackendRetryTestBuffer(t, "stale-route", "broken-replacement-route")
+	replacementStarts := 0
+	pb.onBackendUnavailable = func() error {
+		replacementStarts++
+		address := types.BackendRouteAddress("broken-replacement-route")
+		pb.availableContainersLock.Lock()
+		pb.availableContainers = []container{{
+			id:              "broken-replacement",
+			addressMap:      map[int32]string{8000: address},
+			readyAddressMap: map[int32]string{8000: address},
+		}}
+		pb.availableContainersLock.Unlock()
+		return nil
+	}
+	if err := pb.ForwardRequest(requestCtx); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d; body=%q", rec.Code, http.StatusBadGateway, rec.Body.String())
+	}
+	if replacementStarts != 1 {
+		t.Fatalf("replacement starts = %d, want 1", replacementStarts)
+	}
+}
+
+func newBackendRetryTestBuffer(t *testing.T, routeIDs ...string) *PodProxyBuffer {
+	t.Helper()
+	if len(routeIDs) == 0 {
+		t.Fatal("at least one backend route is required")
+	}
+
+	rdb := newPodProxyTestRedis(t)
+	repo := repository.NewContainerRedisRepositoryForTest(rdb)
+	for _, routeID := range routeIDs {
+		if err := repo.SetBackendRoute(context.Background(), types.BackendRoute{
+			RouteID: routeID,
+			State:   types.BackendRouteStateClosing,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	staleAddress := types.BackendRouteAddress(routeIDs[0])
+	pb := &PodProxyBuffer{
+		ctx:           ctx,
+		workspace:     &types.Workspace{Name: "workspace"},
+		stubId:        "stub",
+		stubConfig:    &types.StubConfigV1{},
+		containerRepo: repo,
+		buffer:        abstractions.NewRingBuffer[*connection](2),
+		workReady:     make(chan struct{}, 1),
+		discoverReady: make(chan struct{}, 1),
+		availableContainers: []container{{
+			id:              "stopping-container",
+			addressMap:      map[int32]string{8000: staleAddress},
+			readyAddressMap: map[int32]string{8000: staleAddress},
+		}},
+	}
+	go pb.processBuffer()
+	return pb
+}
+
+type closeSensitiveBody struct {
+	reader *bytes.Reader
+	closed atomic.Bool
+}
+
+func (b *closeSensitiveBody) Read(p []byte) (int, error) {
+	if b.closed.Load() {
+		return 0, errors.New("request body was closed before retry")
+	}
+	return b.reader.Read(p)
+}
+
+func (b *closeSensitiveBody) Close() error {
+	b.closed.Store(true)
+	return nil
 }
 
 func TestForwardRequestRejectsImmediatelyWhenDraining(t *testing.T) {
@@ -527,6 +747,47 @@ func TestReadyAddressMapFiltersUnreadyPorts(t *testing.T) {
 	}
 	if _, ok := ready[9000]; ok {
 		t.Fatal("unready port was included in ready address map")
+	}
+}
+
+func TestReadyAddressMapOnlyWaitsForConfiguredPorts(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	rdb := newPodProxyTestRedis(t)
+	repo := repository.NewContainerRedisRepositoryForTest(rdb)
+	routeID := "machine:worker:container:container:2222"
+	if err := repo.SetBackendRoute(context.Background(), types.BackendRoute{
+		RouteID:   routeID,
+		Port:      2222,
+		Transport: types.BackendRouteTransportDirect,
+		State:     types.BackendRouteStateOpening,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	pb := &PodProxyBuffer{
+		ctx:           context.Background(),
+		stubConfig:    &types.StubConfigV1{Ports: []uint32{8000}},
+		containerRepo: repo,
+	}
+	start := time.Now()
+	ready := pb.readyAddressMap(map[int32]string{
+		8000: listener.Addr().String(),
+		2222: types.BackendRouteAddress(routeID),
+	})
+
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Fatalf("configured port discovery took %s, want below 500ms", elapsed)
+	}
+	if got := ready[8000]; got != listener.Addr().String() {
+		t.Fatalf("ready address = %q, want %q", got, listener.Addr().String())
+	}
+	if _, ok := ready[2222]; ok {
+		t.Fatal("unconfigured management port was included in ready address map")
 	}
 }
 
@@ -1011,6 +1272,278 @@ func TestStoppableContainersSkipsPendingKeepWarmLock(t *testing.T) {
 	}
 	if len(stoppable) != 0 {
 		t.Fatalf("stoppable containers = %v, want none", stoppable)
+	}
+}
+
+func TestStoppableContainersIncludesPendingAfterFailureThreshold(t *testing.T) {
+	rdb := newPodProxyTestRedis(t)
+	repo := repository.NewContainerRedisRepositoryForTest(rdb)
+	const stubID = "stub"
+	index := common.RedisKeys.SchedulerContainerIndex(stubID)
+
+	addFailure := func(containerID string) {
+		state := common.RedisKeys.SchedulerContainerState(containerID)
+		if err := rdb.SAdd(context.Background(), index, state).Err(); err != nil {
+			t.Fatal(err)
+		}
+		if err := repo.SetContainerExitCode(containerID, int(types.ContainerExitCodeUnknownError)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	const pendingID = "pod-stub-pending"
+	if err := repo.SetContainerState(pendingID, &types.ContainerState{
+		ContainerId: pendingID,
+		StubId:      stubID,
+		WorkspaceId: "workspace",
+		Status:      types.ContainerStatusPending,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	instance := &podInstance{AutoscaledInstance: &abstractions.AutoscaledInstance{
+		Rdb:                      rdb,
+		IsActive:                 true,
+		FailedContainerThreshold: types.FailedDeploymentContainerThreshold,
+		ContainerRepo:            repo,
+		Workspace:                &types.Workspace{Name: "workspace"},
+		Stub:                     &types.StubWithRelated{Stub: types.Stub{ExternalId: stubID}},
+	}}
+
+	addFailure("failed-1")
+	addFailure("failed-2")
+	stoppable, err := instance.stoppableContainers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stoppable) != 0 {
+		t.Fatalf("stoppable containers below threshold = %v, want none", stoppable)
+	}
+
+	addFailure("failed-3")
+	stoppable, err = instance.stoppableContainers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stoppable) != 1 || stoppable[0] != pendingID {
+		t.Fatalf("stoppable containers = %v, want [%s]", stoppable, pendingID)
+	}
+}
+
+func TestRetireContainerForStopRemovesProxyBackend(t *testing.T) {
+	containerID := "pod-stub-container-1"
+	address := types.BackendRouteAddress("route-1")
+	pb := &PodProxyBuffer{
+		availableContainers: []container{{
+			id:              containerID,
+			addressMap:      map[int32]string{8000: address},
+			readyAddressMap: map[int32]string{8000: address},
+		}},
+		discoverReady: make(chan struct{}, 1),
+	}
+	transportKey := backendTransportKey{targetHost: address, dialTimeout: time.Second}
+	pb.backendTransports.Store(transportKey, &http.Transport{})
+
+	instance := &podInstance{
+		AutoscaledInstance: &abstractions.AutoscaledInstance{IsActive: true},
+		buffer:             pb,
+	}
+	if !instance.retireContainerForStop(containerID) {
+		t.Fatal("idle container was not prepared for stop")
+	}
+	if got := pb.availableContainerSnapshot(); len(got) != 0 {
+		t.Fatalf("available containers = %v, want none", got)
+	}
+	if _, ok := pb.backendTransports.Load(transportKey); ok {
+		t.Fatal("idle backend transport was not pruned")
+	}
+}
+
+func TestEnsureReadyForRequestAllowsConcurrentScaling(t *testing.T) {
+	rdb := newPodProxyTestRedis(t)
+	lockKey := "pod:stub:instance"
+	holder := common.NewRedisLock(rdb)
+	if err := holder.Acquire(context.Background(), lockKey, common.RedisLockOptions{TtlS: 10}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = holder.Release(lockKey) })
+
+	instance := &podInstance{AutoscaledInstance: &abstractions.AutoscaledInstance{
+		Ctx:             context.Background(),
+		IsActive:        true,
+		Lock:            common.NewRedisLock(rdb),
+		InstanceLockKey: lockKey,
+		ContainerRepo:   repository.NewContainerRedisRepositoryForTest(rdb),
+		Stub: &types.StubWithRelated{Stub: types.Stub{
+			ExternalId: "stub",
+			Type:       types.StubType(types.StubTypePod),
+		}},
+		StubConfig: &types.StubConfigV1{},
+	}}
+
+	if err := instance.ensureReadyForRequest(); err != nil {
+		t.Fatalf("concurrent scaling returned an error: %v", err)
+	}
+}
+
+func TestContainerEventRetiresStoppingProxyBackend(t *testing.T) {
+	rdb := newPodProxyTestRedis(t)
+	repo := repository.NewContainerRedisRepositoryForTest(rdb)
+	containerID := "pod-stub-container-1"
+	if err := repo.SetContainerState(containerID, &types.ContainerState{
+		ContainerId: containerID,
+		StubId:      "stub",
+		WorkspaceId: "workspace",
+		Status:      types.ContainerStatusRunning,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	pb := &PodProxyBuffer{
+		availableContainers: []container{{id: containerID}},
+		discoverReady:       make(chan struct{}, 1),
+	}
+	instance := &podInstance{
+		AutoscaledInstance: &abstractions.AutoscaledInstance{
+			Ctx:                context.Background(),
+			ContainerEventChan: make(chan types.ContainerEvent, 1),
+			ContainerRepo:      repo,
+		},
+		buffer: pb,
+	}
+
+	if err := repo.UpdateContainerStatus(containerID, types.ContainerStatusStopping, int64(types.ContainerStateTtlSWhilePending)); err != nil {
+		t.Fatal(err)
+	}
+	instance.ConsumeContainerEvent(types.ContainerEvent{ContainerId: containerID, Change: 1})
+	if got := pb.availableContainerSnapshot(); len(got) != 0 {
+		t.Fatalf("available containers = %v, want stopping container retired", got)
+	}
+}
+
+func TestRunningContainerEventDoesNotCancelRetirement(t *testing.T) {
+	rdb := newPodProxyTestRedis(t)
+	repo := repository.NewContainerRedisRepositoryForTest(rdb)
+	containerID := "pod-stub-container-1"
+	if err := repo.SetContainerState(containerID, &types.ContainerState{
+		ContainerId: containerID,
+		StubId:      "stub",
+		WorkspaceId: "workspace",
+		Status:      types.ContainerStatusRunning,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	pb := &PodProxyBuffer{
+		availableContainers: []container{{id: containerID}},
+		discoverReady:       make(chan struct{}, 1),
+	}
+	pb.retireAvailableContainer(containerID)
+	instance := &podInstance{
+		AutoscaledInstance: &abstractions.AutoscaledInstance{
+			Ctx:                context.Background(),
+			ContainerEventChan: make(chan types.ContainerEvent, 1),
+			ContainerRepo:      repo,
+		},
+		buffer: pb,
+	}
+
+	instance.ConsumeContainerEvent(types.ContainerEvent{ContainerId: containerID, Change: 1})
+	pb.updateDiscoveredContainers([]container{{id: containerID}}, map[string]struct{}{containerID: {}})
+	if got := pb.availableContainerSnapshot(); len(got) != 0 {
+		t.Fatalf("available containers = %v, want retiring container excluded after running heartbeat", got)
+	}
+}
+
+func TestDiscoveryDoesNotReaddRetiringContainer(t *testing.T) {
+	containerID := "pod-stub-container-1"
+	discovered := []container{{id: containerID}}
+	active := map[string]struct{}{containerID: {}}
+	pb := &PodProxyBuffer{
+		availableContainers: discovered,
+	}
+
+	pb.retireAvailableContainer(containerID)
+	pb.updateDiscoveredContainers(discovered, active)
+	if got := pb.availableContainerSnapshot(); len(got) != 0 {
+		t.Fatalf("available containers = %v, want retiring container excluded", got)
+	}
+
+	pb.cancelContainerRetirement(containerID)
+	pb.updateDiscoveredContainers(discovered, active)
+	if got := pb.availableContainerSnapshot(); len(got) != 1 || got[0].id != containerID {
+		t.Fatalf("available containers = %v, want canceled retirement restored", got)
+	}
+}
+
+func TestRetireContainerForStopRejectsNewLocalConnection(t *testing.T) {
+	containerID := "pod-stub-container-1"
+	pb := &PodProxyBuffer{
+		availableContainers: []container{{id: containerID}},
+		discoverReady:       make(chan struct{}, 1),
+	}
+	counter, _ := pb.containerConnectionCounter(containerID)
+	counter.Store(1)
+
+	instance := &podInstance{
+		AutoscaledInstance: &abstractions.AutoscaledInstance{IsActive: true},
+		buffer:             pb,
+	}
+	if instance.retireContainerForStop(containerID) {
+		t.Fatal("busy local container was prepared for stop")
+	}
+	select {
+	case <-pb.discoverReady:
+	default:
+		t.Fatal("container discovery was not requested after stop was rejected")
+	}
+}
+
+func TestRetireContainerForStopRejectsNewSharedConnection(t *testing.T) {
+	rdb := newPodProxyTestRedis(t)
+	workspace := &types.Workspace{Name: "workspace"}
+	containerID := "pod-stub-container-1"
+	remote := &PodProxyBuffer{
+		rdb:       rdb,
+		workspace: workspace,
+		stubId:    "stub",
+		proxyId:   "remote-proxy",
+	}
+	remote.publishContainerConnectionSnapshot(containerID, 1)
+
+	pb := &PodProxyBuffer{
+		rdb:                 rdb,
+		workspace:           workspace,
+		stubId:              "stub",
+		proxyId:             "local-proxy",
+		availableContainers: []container{{id: containerID}},
+		discoverReady:       make(chan struct{}, 1),
+	}
+	instance := &podInstance{
+		AutoscaledInstance: &abstractions.AutoscaledInstance{IsActive: true},
+		buffer:             pb,
+	}
+	if instance.retireContainerForStop(containerID) {
+		t.Fatal("container with a connection on another proxy was prepared for stop")
+	}
+}
+
+func TestRetireContainerForStopAllowsExplicitStopWithConnection(t *testing.T) {
+	containerID := "pod-stub-container-1"
+	pb := &PodProxyBuffer{
+		availableContainers: []container{{id: containerID}},
+	}
+	counter, _ := pb.containerConnectionCounter(containerID)
+	counter.Store(1)
+	instance := &podInstance{
+		AutoscaledInstance: &abstractions.AutoscaledInstance{IsActive: false},
+		buffer:             pb,
+	}
+
+	if !instance.retireContainerForStop(containerID) {
+		t.Fatal("explicit stop was blocked by an active connection")
+	}
+	if got := pb.availableContainerSnapshot(); len(got) != 0 {
+		t.Fatalf("available containers = %v, want explicitly stopped container retired", got)
 	}
 }
 

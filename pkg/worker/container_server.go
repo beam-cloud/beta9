@@ -237,6 +237,9 @@ func (s *ContainerRuntimeServer) ContainerStreamLogs(req *pb.ContainerStreamLogs
 	if !exists {
 		return errors.New("container not found")
 	}
+	if err := stream.SendHeader(nil); err != nil {
+		return err
+	}
 
 	buffer := make([]byte, 4096)
 	logEntry := &pb.ContainerLogEntry{}
@@ -655,7 +658,7 @@ func (s *ContainerRuntimeServer) handleSandboxExec(ctx context.Context, in *pb.C
 		return &pb.ContainerSandboxExecResponse{Ok: false, Pid: -1, ErrorMsg: err.Error()}, nil
 	}
 
-	if !instance.SandboxProcessManagerReady {
+	if !instance.processManagerReady() {
 		instance.signalProcessManagerReadiness(true)
 		s.containerInstances.Set(in.ContainerId, instance)
 	}
@@ -822,14 +825,14 @@ func (s *ContainerRuntimeServer) waitForSandboxProcessManager(ctx context.Contex
 
 	for {
 		instance = s.refreshContainerInstance(containerId, instance)
-		if instance.SandboxProcessManagerReady {
+		if instance.processManagerReady() {
 			return instance, nil
 		}
 
 		select {
-		case <-instance.ProcessManagerReadyChan:
+		case <-instance.processManagerReadyChannel():
 			instance = s.refreshContainerInstance(containerId, instance)
-			if instance.SandboxProcessManagerReady {
+			if instance.processManagerReady() {
 				return instance, nil
 			}
 			return instance, errors.New("Process manager failed to become ready")
@@ -895,19 +898,40 @@ func (s *ContainerRuntimeServer) ContainerSandboxStatus(ctx context.Context, in 
 	}
 
 	if in.Pid == 0 {
-		status := "pending"
-		if instance.SandboxProcessManagerReady {
-			status = "running"
+		if instance.processManagerReady() {
+			return &pb.ContainerSandboxStatusResponse{
+				Ok:       true,
+				Status:   string(types.SandboxStatusRunning),
+				ExitCode: -1,
+			}, nil
+		}
+
+		if ready := instance.processManagerReadyChannel(); ready != nil {
+			select {
+			case <-ready:
+				if instance.processManagerReady() {
+					return &pb.ContainerSandboxStatusResponse{
+						Ok:       true,
+						Status:   string(types.SandboxStatusRunning),
+						ExitCode: -1,
+					}, nil
+				}
+				return &pb.ContainerSandboxStatusResponse{
+					Ok:       false,
+					ErrorMsg: "Sandbox process manager failed to become ready",
+				}, nil
+			default:
+			}
 		}
 
 		return &pb.ContainerSandboxStatusResponse{
 			Ok:       true,
-			Status:   status,
+			Status:   string(types.SandboxStatusPending),
 			ExitCode: -1,
 		}, nil
 	}
 
-	if !instance.SandboxProcessManagerReady {
+	if !instance.processManagerReady() {
 		return &pb.ContainerSandboxStatusResponse{
 			Ok:       false,
 			ErrorMsg: "Sandbox process manager is not ready",
@@ -936,14 +960,14 @@ func (s *ContainerRuntimeServer) ContainerSandboxStatus(ctx context.Context, in 
 		exitCode = sandboxMissingProcessExitCode
 	}
 
-	status := "running"
+	sandboxStatus := types.SandboxStatusRunning
 	if exitCode >= 0 {
-		status = "exited"
+		sandboxStatus = types.SandboxStatusExited
 	}
 
 	return &pb.ContainerSandboxStatusResponse{
 		Ok:       true,
-		Status:   status,
+		Status:   string(sandboxStatus),
 		ExitCode: int32(exitCode),
 	}, nil
 }
@@ -957,7 +981,7 @@ func (s *ContainerRuntimeServer) ContainerSandboxStdout(ctx context.Context, in 
 		}, nil
 	}
 
-	if !instance.SandboxProcessManagerReady {
+	if !instance.processManagerReady() {
 		return &pb.ContainerSandboxStdoutResponse{
 			Ok:       false,
 			ErrorMsg: "Sandbox process manager is not ready",
@@ -996,7 +1020,7 @@ func (s *ContainerRuntimeServer) ContainerSandboxStderr(ctx context.Context, in 
 		}, nil
 	}
 
-	if !instance.SandboxProcessManagerReady {
+	if !instance.processManagerReady() {
 		return &pb.ContainerSandboxStderrResponse{
 			Ok:       false,
 			ErrorMsg: "Sandbox process manager is not ready",
@@ -1034,7 +1058,7 @@ func (s *ContainerRuntimeServer) ContainerSandboxKill(ctx context.Context, in *p
 		return &pb.ContainerSandboxKillResponse{Ok: false, ErrorMsg: "Container not found"}, nil
 	}
 
-	if !instance.SandboxProcessManagerReady {
+	if !instance.processManagerReady() {
 		return &pb.ContainerSandboxKillResponse{Ok: false, ErrorMsg: "Sandbox process manager is not ready"}, nil
 	}
 
@@ -1406,14 +1430,16 @@ func (s *ContainerRuntimeServer) ContainerSandboxExposePort(ctx context.Context,
 		return &pb.ContainerSandboxExposePortResponse{Ok: true}, nil
 	}
 
-	bindPort, err := getRandomFreePort()
-	if err != nil {
-		return &pb.ContainerSandboxExposePortResponse{Ok: false, ErrorMsg: err.Error()}, nil
-	}
-
 	if s.containerNetworkManager == nil {
 		return &pb.ContainerSandboxExposePortResponse{Ok: false, ErrorMsg: "container network manager unavailable"}, nil
 	}
+
+	bindPorts, err := s.containerNetworkManager.ReservePorts(in.ContainerId, 1)
+	if err != nil {
+		return &pb.ContainerSandboxExposePortResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+	defer s.containerNetworkManager.ReleasePortReservations(in.ContainerId)
+	bindPort := bindPorts[0]
 
 	binding := PortBinding{HostPort: bindPort, ContainerPort: int(in.Port)}
 	err = s.containerNetworkManager.ExposePort(in.ContainerId, binding.HostPort, binding.ContainerPort)

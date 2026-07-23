@@ -54,6 +54,7 @@ from ...type import (
     normalize_gpu_type,
 )
 from ...utils import TempFile
+from .capacity import credit_error_hint, handle_capacity_verdict
 from .utils import sdk_timing, timed_lock
 
 CONTAINER_STUB_TYPE = "container"
@@ -81,6 +82,11 @@ BOT_SERVE_STUB_TYPE = "bot/serve"
 POD_DEPLOYMENT_STUB_TYPE = "pod/deployment"
 POD_RUN_STUB_TYPE = "pod/run"
 SANDBOX_STUB_TYPE = "sandbox"
+
+# Sentinel error message for prepare_runtime failures. prepare_runtime prints
+# the specific reason itself, so callers seeing this message should not print
+# another generic error on top of it.
+RUNTIME_PREPARE_FAILED_MSG = "Failed to prepare runtime"
 
 _stub_creation_lock = threading.Lock()
 _stub_created_for_workspace = False
@@ -315,7 +321,12 @@ class RunnerAbstraction(BaseAbstraction):
         if not res.ok:
             return terminal.error("Failed to get invocation URL", exit=False)
 
-        if self.ports or "<PORT>" in res.url or self.tcp:
+        if "<PORT>" in res.url and not self.ports:
+            # The URL is port-templated but no ports were declared: nothing
+            # is actually exposed, so there is no endpoint to print.
+            return res
+
+        if self.ports or self.tcp:
             terminal.header("Exposed endpoints\n")
 
             if self.tcp:
@@ -578,11 +589,20 @@ class RunnerAbstraction(BaseAbstraction):
                 if self.runtime_ready:
                     return True
 
-                if not self._prepare_image():
-                    return False
-
-                if not self._sync_runtime_files(ignore_patterns):
-                    return False
+                tracker = terminal.StepTracker()
+                prepare_steps = [
+                    ("Preparing image", "Image ready", self._prepare_image),
+                    (
+                        "Syncing files",
+                        "Files synced",
+                        lambda: self._sync_runtime_files(ignore_patterns),
+                    ),
+                ]
+                for step_name, done_name, run_step in prepare_steps:
+                    with tracker.step(step_name, done_name) as step:
+                        step.ok = run_step()
+                    if not step.ok:
+                        return False
 
                 if not self._prepare_volumes():
                     return False
@@ -604,7 +624,10 @@ class RunnerAbstraction(BaseAbstraction):
                     with sdk_timing("prepare_runtime.stub"):
                         stub_response = self._get_or_create_stub(stub_request)
 
-                    if not self._apply_stub_response(stub_response):
+                    stub_response = handle_capacity_verdict(
+                        self, stub_request, stub_response, stub_type
+                    )
+                    if stub_response is None or not self._apply_stub_response(stub_response):
                         return False
 
                 self.runtime_ready = True
@@ -623,7 +646,7 @@ class RunnerAbstraction(BaseAbstraction):
             self.image.python_version = image_build_result.python_version
             return True
 
-        terminal.error("Image build failed ❌", exit=False)
+        terminal.error("Image build failed", exit=False)
         return False
 
     def _sync_runtime_files(self, ignore_patterns: Optional[List[str]]) -> bool:
@@ -784,7 +807,7 @@ class RunnerAbstraction(BaseAbstraction):
             return True
 
         if err := stub_response.err_msg:
-            terminal.error(err, exit=False)
+            terminal.error(err, exit=False, hint=credit_error_hint(err))
         else:
             terminal.error("Failed to get or create stub", exit=False)
         return False

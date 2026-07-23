@@ -846,6 +846,12 @@ func (g *StubGroup) ListSandboxes(ctx echo.Context) error {
 	if err != nil {
 		return HTTPInternalServerError("Failed to list sandboxes")
 	}
+	if len(page.Data) == 0 {
+		return ctx.JSON(http.StatusOK, SandboxListResponse{
+			Data: []SandboxRow{},
+			Next: page.Next,
+		})
+	}
 
 	containersByStub := g.activeContainersByStub(workspaceID)
 	summaries, err := g.sandboxStatsContainerSummariesResult(
@@ -895,6 +901,23 @@ func (g *StubGroup) GetSandboxStats(ctx echo.Context) error {
 		return HTTPInternalServerError("Failed to list sandboxes")
 	}
 
+	statusCounts := map[string]int{
+		SandboxStatusRunning:  0,
+		SandboxStatusPending:  0,
+		SandboxStatusStopping: 0,
+		SandboxStatusStopped:  0,
+		SandboxStatusFailed:   0,
+	}
+	if len(stubs) == 0 {
+		return ctx.JSON(http.StatusOK, SandboxStatsResponse{
+			Concurrent:     0,
+			TotalCreated:   0,
+			RatePerSecond:  0,
+			StatusCounts:   statusCounts,
+			CreatedBuckets: buildSandboxSummaryCreatedBuckets(nil, ctx.QueryParam("chart_range")),
+		})
+	}
+
 	containersByStub := g.activeContainersByStub(workspaceID)
 
 	appID := ctx.QueryParam("app_id")
@@ -903,14 +926,6 @@ func (g *StubGroup) GetSandboxStats(ctx echo.Context) error {
 		return sandboxHistoryUnavailable(ctx, err)
 	}
 	sandboxRows := g.buildSandboxStatsRowsWithSummaries(ctx.Request().Context(), workspaceID, stubs, containersByStub, summaries)
-
-	statusCounts := map[string]int{
-		SandboxStatusRunning:  0,
-		SandboxStatusPending:  0,
-		SandboxStatusStopping: 0,
-		SandboxStatusStopped:  0,
-		SandboxStatusFailed:   0,
-	}
 
 	concurrent := 0
 	var earliest, latest time.Time

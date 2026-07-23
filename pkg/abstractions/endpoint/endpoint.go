@@ -168,6 +168,14 @@ func (es *HttpEndpointService) forwardRequest(
 		return err
 	}
 
+	// Fail fast instead of queueing until timeout when the stub's GPU has no
+	// supporting pool; requests start succeeding as soon as capacity joins.
+	if reason := instance.UnschedulableReason(); reason != "" {
+		return ctx.JSON(http.StatusServiceUnavailable, map[string]interface{}{
+			"error": reason,
+		})
+	}
+
 	tasksInFlight, err := es.taskRepo.TasksInFlight(ctx.Request().Context(), instance.Workspace.Name, stubId)
 	if err != nil {
 		return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
@@ -232,7 +240,7 @@ func (es *HttpEndpointService) GetInstance(stubId string) (abstractions.IAutosca
 
 func (es *HttpEndpointService) getOrCreateEndpointInstance(ctx context.Context, stubId string, options ...func(*endpointInstance)) (*endpointInstance, error) {
 	instance, exists := es.endpointInstances.Get(stubId)
-	if exists {
+	if exists && instance.Ctx.Err() == nil {
 		return instance, nil
 	}
 
@@ -245,8 +253,11 @@ func (es *HttpEndpointService) getOrCreateEndpointInstance(ctx context.Context, 
 	defer es.mu.Unlock()
 
 	instance, exists = es.endpointInstances.Get(stubId)
-	if exists {
+	if exists && instance.Ctx.Err() == nil {
 		return instance, nil
+	}
+	if exists {
+		es.endpointInstances.Delete(stubId)
 	}
 
 	stub, err := es.backendRepo.GetStubByExternalId(es.ctx, stubId)
@@ -301,8 +312,6 @@ func (es *HttpEndpointService) getOrCreateEndpointInstance(ctx context.Context, 
 		instance.isASGI = true
 	}
 
-	instance.buffer = NewRequestBuffer(autoscaledInstance.Ctx, es.rdb, &stub.Workspace, stubId, requestBufferSize, es.containerRepo, es.keyEventManager, stubConfig, es.tailscale, es.config.Tailscale, instance.isASGI)
-
 	// Embed autoscaled instance struct
 	instance.AutoscaledInstance = autoscaledInstance
 
@@ -319,6 +328,11 @@ func (es *HttpEndpointService) getOrCreateEndpointInstance(ctx context.Context, 
 		}
 	}
 
+	instance.buffer = NewRequestBuffer(autoscaledInstance.Ctx, es.rdb, &stub.Workspace, stubId, requestBufferSize, es.containerRepo, es.keyEventManager, stubConfig, es.tailscale, es.config.Tailscale, instance.isASGI)
+	if instance.Autoscaler != nil {
+		instance.buffer.onTaskQueued = instance.Autoscaler.Trigger
+	}
+
 	if len(instance.EntryPoint) == 0 {
 		instance.EntryPoint = []string{instance.StubConfig.PythonVersion, "-m", "beta9.runner.endpoint"}
 	}
@@ -329,10 +343,19 @@ func (es *HttpEndpointService) getOrCreateEndpointInstance(ctx context.Context, 
 	go instance.Monitor()
 	go func(i *endpointInstance) {
 		<-i.Ctx.Done()
-		es.endpointInstances.Delete(stubId)
+		es.deleteEndpointInstance(stubId, i)
 	}(instance)
 
 	return instance, nil
+}
+
+func (es *HttpEndpointService) deleteEndpointInstance(stubId string, instance *endpointInstance) {
+	es.mu.Lock()
+	defer es.mu.Unlock()
+
+	if current, exists := es.endpointInstances.Get(stubId); exists && current == instance {
+		es.endpointInstances.Delete(stubId)
+	}
 }
 
 var Keys = &keys{}

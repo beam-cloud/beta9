@@ -41,14 +41,36 @@ type sandboxRowsEventRepo struct {
 
 type sandboxHistoryBackendRepo struct {
 	repository.BackendRepository
+	stubs []types.StubWithRelated
 }
 
-func (sandboxHistoryBackendRepo) ListStubs(context.Context, types.StubFilter) ([]types.StubWithRelated, error) {
-	return nil, nil
+func (r sandboxHistoryBackendRepo) ListStubs(context.Context, types.StubFilter) ([]types.StubWithRelated, error) {
+	return r.stubs, nil
 }
 
-func (sandboxHistoryBackendRepo) ListStubsPaginated(context.Context, types.StubFilter) (repocommon.CursorPaginationInfo[types.StubWithRelated], error) {
-	return repocommon.CursorPaginationInfo[types.StubWithRelated]{}, nil
+func (r sandboxHistoryBackendRepo) ListStubsPaginated(context.Context, types.StubFilter) (repocommon.CursorPaginationInfo[types.StubWithRelated], error) {
+	return repocommon.CursorPaginationInfo[types.StubWithRelated]{Data: r.stubs}, nil
+}
+
+type unexpectedSandboxRealtimeRepo struct {
+	repository.EventRepository
+	repository.ContainerRepository
+	calls int
+}
+
+func (r *unexpectedSandboxRealtimeRepo) GetEventHistory(context.Context, types.EventQuery) (*types.EventHistoryResponse, error) {
+	r.calls++
+	return nil, errors.New("unexpected sandbox event history query")
+}
+
+func (r *unexpectedSandboxRealtimeRepo) GetContainerEvents(context.Context, string, types.EventQuery) (*types.ContainerEventsResponse, error) {
+	r.calls++
+	return nil, errors.New("unexpected sandbox container event query")
+}
+
+func (r *unexpectedSandboxRealtimeRepo) GetActiveContainersByWorkspaceId(string) ([]types.ContainerState, error) {
+	r.calls++
+	return nil, errors.New("unexpected active container query")
 }
 
 func (r *sandboxRowsEventRepo) GetEventHistory(_ context.Context, query types.EventQuery) (*types.EventHistoryResponse, error) {
@@ -161,7 +183,7 @@ func TestSandboxHistoryCapacityReturnsRetryableError(t *testing.T) {
 	for name, handler := range handlers {
 		t.Run(name, func(t *testing.T) {
 			group := &StubGroup{
-				backendRepo: sandboxHistoryBackendRepo{},
+				backendRepo: sandboxHistoryBackendRepo{stubs: []types.StubWithRelated{{Stub: types.Stub{ExternalId: "sandbox-stub"}}}},
 				eventRepo:   &sandboxRowsEventRepo{history: &types.EventHistoryResponse{}},
 			}
 			e := echo.New()
@@ -180,6 +202,55 @@ func TestSandboxHistoryCapacityReturnsRetryableError(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestEmptySandboxHandlersSkipRealtimeRepositories(t *testing.T) {
+	run := func(t *testing.T, url string, handler func(*StubGroup, echo.Context) error) *httptest.ResponseRecorder {
+		t.Helper()
+		realtimeRepo := &unexpectedSandboxRealtimeRepo{}
+		group := &StubGroup{
+			backendRepo:   sandboxHistoryBackendRepo{},
+			eventRepo:     realtimeRepo,
+			containerRepo: realtimeRepo,
+		}
+		recorder := httptest.NewRecorder()
+		ctx := echo.New().NewContext(httptest.NewRequest(http.MethodGet, url, nil), recorder)
+		ctx.SetParamNames("workspaceId")
+		ctx.SetParamValues("workspace")
+		if err := handler(group, ctx); err != nil {
+			t.Fatalf("handler returned error: %v", err)
+		}
+		if recorder.Code != http.StatusOK || realtimeRepo.calls != 0 {
+			t.Fatalf("status = %d, realtime calls = %d; want 200 and 0", recorder.Code, realtimeRepo.calls)
+		}
+		return recorder
+	}
+
+	t.Run("list", func(t *testing.T) {
+		recorder := run(t, "/?app_id=app-1", func(group *StubGroup, ctx echo.Context) error { return group.ListSandboxes(ctx) })
+		if got := recorder.Body.String(); got != "{\"data\":[],\"next\":\"\"}\n" {
+			t.Fatalf("response = %q, want an empty data array", got)
+		}
+	})
+
+	t.Run("stats", func(t *testing.T) {
+		recorder := run(t, "/?app_id=app-1&chart_range=last_day", func(group *StubGroup, ctx echo.Context) error { return group.GetSandboxStats(ctx) })
+		var response SandboxStatsResponse
+		if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		if response.Concurrent != 0 || response.TotalCreated != 0 || response.RatePerSecond != 0 {
+			t.Fatalf("non-zero empty stats response: %#v", response)
+		}
+		if len(response.StatusCounts) != 5 || len(response.CreatedBuckets) != 60 {
+			t.Fatalf("empty stats shape = %d statuses, %d buckets; want 5 and 60", len(response.StatusCounts), len(response.CreatedBuckets))
+		}
+		for _, bucket := range response.CreatedBuckets {
+			if bucket.Timestamp.IsZero() || bucket.Count != 0 {
+				t.Fatalf("invalid empty bucket: %#v", bucket)
+			}
+		}
+	})
 }
 
 func TestBuildSandboxRowsDoesNotReloadPreloadedEmptyHistory(t *testing.T) {

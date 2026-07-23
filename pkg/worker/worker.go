@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -34,6 +35,7 @@ const (
 	defaultCacheWaitTime           time.Duration = 30 * time.Second
 	containerStatusUpdateInterval  time.Duration = 30 * time.Second
 	containerRequestStreamInterval time.Duration = 100 * time.Millisecond
+	containerRequestAckTimeout     time.Duration = 5 * time.Second
 	completedRequestRetryTimeout   time.Duration = 30 * time.Second
 	completedRequestRetryInterval  time.Duration = 200 * time.Millisecond
 	workerEventStreamReconnectMin  time.Duration = time.Second
@@ -52,11 +54,29 @@ const (
 	// nanoseconds) and wrap negative, which would fire the startup timer
 	// immediately and fail every container.
 	maxContainerStartupTimeout time.Duration = 1 * time.Hour
+	gvisorShmemTHPPath                       = "/sys/kernel/mm/transparent_hugepage/shmem_enabled"
 )
+
+func ensureGVisorShmemTHP(path string) (bool, error) {
+	policy, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+
+	current := string(policy)
+	if !strings.Contains(current, "[never]") && !strings.Contains(current, "[deny]") {
+		return false, nil
+	}
+	if err := os.WriteFile(path, []byte("advise"), 0644); err != nil {
+		return false, err
+	}
+	return true, nil
+}
 
 type Worker struct {
 	workerId                string
 	workerToken             string
+	workerGeneration        string
 	poolName                string
 	machineID               string
 	poolConfig              types.WorkerPoolConfig
@@ -129,7 +149,10 @@ type ContainerInstance struct {
 	RuntimeStartedAt           int64
 	SandboxProcessManager      *goproc.GoProcClient
 	SandboxProcessManagerReady bool
+	processManagerReadyMu      sync.RWMutex
 	DeferredCPUQuota           *specs.LinuxCPU
+	CPUSet                     string
+	RestoreCPUAffinityDeferred bool
 	ProcessManagerReadyOnce    sync.Once
 	ProcessManagerReadyChan    chan struct{}
 	ContainerIp                string
@@ -157,25 +180,14 @@ func (i *ContainerInstance) containerAddress(port int32) string {
 	return i.ContainerAddressMap[port]
 }
 
-func (i *ContainerInstance) signalProcessManagerReadiness(ready bool) {
-	if i.SandboxProcessManagerReady && !ready {
-		return
-	}
-	i.SandboxProcessManagerReady = ready
-	if i.ProcessManagerReadyChan != nil {
-		i.ProcessManagerReadyOnce.Do(func() {
-			close(i.ProcessManagerReadyChan)
-		})
-	}
-}
-
 type ContainerOptions struct {
-	BundlePath          string
-	HostBindPort        int
-	BindPorts           []int
-	StartupPortBindings []PortBinding
-	InitialSpec         *specs.Spec
-	StartupStartedAt    time.Time
+	BundlePath                  string
+	HostBindPort                int
+	BindPorts                   []int
+	StartupPortBindings         []PortBinding
+	InitialSpec                 *specs.Spec
+	StartupStartedAt            time.Time
+	CheckpointFilesystemRestore *checkpointFilesystemRestore
 }
 
 type stopContainerEvent struct {
@@ -196,6 +208,7 @@ func NewWorker() (_ *Worker, err error) {
 	gpuType := os.Getenv(types.WorkerGPUEnv)
 	workerId := os.Getenv(types.WorkerIDEnv)
 	workerToken := os.Getenv(types.WorkerTokenEnv)
+	workerGeneration := os.Getenv(types.WorkerGenerationEnv)
 	workerPoolName := os.Getenv(types.WorkerPoolEnv)
 	machineID := os.Getenv(types.WorkerMachineEnv)
 	podHostName := os.Getenv(types.WorkerHostnameEnv)
@@ -247,7 +260,7 @@ func NewWorker() (_ *Worker, err error) {
 		return nil, err
 	}
 
-	eventRepo := repo.NewEventClientRepo(config)
+	eventRepo := repo.NewWorkerEventClientRepo(config, workerRepoClient, workerId)
 
 	poolConfig, poolFound := config.Worker.Pools[workerPoolName]
 	if !poolFound {
@@ -298,6 +311,12 @@ func NewWorker() (_ *Worker, err error) {
 	case types.ContainerRuntimeRunc.String():
 		defaultRuntime = runcRuntime
 	case types.ContainerRuntimeGvisor.String():
+		if changed, err := ensureGVisorShmemTHP(gvisorShmemTHPPath); err != nil {
+			log.Warn().Err(err).Msg("failed to enable shmem transparent huge pages for gVisor")
+		} else if changed {
+			log.Info().Msg("enabled shmem transparent huge pages for gVisor")
+		}
+
 		// Get gVisor configuration from pool config
 		gvisorRoot := poolConfig.ContainerRuntimeConfig.GVisorRoot
 		if gvisorRoot == "" {
@@ -377,6 +396,7 @@ func NewWorker() (_ *Worker, err error) {
 		ctx:                     ctx,
 		workerId:                workerId,
 		workerToken:             workerToken,
+		workerGeneration:        workerGeneration,
 		poolName:                workerPoolName,
 		machineID:               machineID,
 		poolConfig:              poolConfig,
@@ -483,6 +503,7 @@ func (s *Worker) Run() error {
 	go s.processStopContainerEvents()
 
 	lastContainerRequest := time.Now()
+	reconnectDelay := containerRequestStreamInterval
 
 	// Listen for container requests
 containerRequestStream:
@@ -491,12 +512,15 @@ containerRequestStream:
 			WorkerId: s.workerId,
 		})
 		if err != nil {
-			if s.ctx.Err() == context.Canceled {
+			if s.ctx.Err() != nil {
 				break
 			}
 
 			log.Warn().Err(err).Str("worker_id", s.workerId).Msg("worker container request stream failed to connect")
-			time.Sleep(containerRequestStreamInterval)
+			if !waitForReconnect(s.ctx, reconnectDelay) {
+				break
+			}
+			reconnectDelay = nextReconnectDelay(reconnectDelay, workerEventStreamReconnectMax)
 			continue
 		}
 		log.Info().Str("worker_id", s.workerId).Msg("worker container request stream connected")
@@ -511,9 +535,9 @@ containerRequestStream:
 			}
 			if !response.Ok {
 				log.Warn().Str("worker_id", s.workerId).Str("error", response.ErrorMsg).Msg("worker container request stream returned error")
-				time.Sleep(containerRequestStreamInterval)
 				break
 			}
+			reconnectDelay = containerRequestStreamInterval
 
 			if response.ContainerRequest != nil {
 				lastContainerRequest = time.Now()
@@ -533,6 +557,11 @@ containerRequestStream:
 						"worker_id": s.workerId,
 					}))
 				}
+				if err := s.acknowledgeContainerRequest(request.ContainerId, response.DeliveryToken); err != nil {
+					log.Warn().Err(err).Str("worker_id", s.workerId).Str("container_id", request.ContainerId).Msg("failed to acknowledge container request")
+					s.completedRequests <- request
+					break
+				}
 				s.handleContainerRequest(request)
 			}
 
@@ -540,9 +569,41 @@ containerRequestStream:
 				break containerRequestStream
 			}
 		}
+		if !waitForReconnect(s.ctx, reconnectDelay) {
+			break
+		}
+		reconnectDelay = nextReconnectDelay(reconnectDelay, workerEventStreamReconnectMax)
 	}
 
 	return s.shutdown()
+}
+
+func (s *Worker) acknowledgeContainerRequest(containerID, deliveryToken string) error {
+	request := &pb.AddContainerToWorkerRequest{
+		WorkerId:      s.workerId,
+		ContainerId:   containerID,
+		PoolName:      s.poolName,
+		PodHostname:   s.podHostName,
+		DeliveryToken: deliveryToken,
+	}
+
+	for {
+		ctx, cancel := context.WithTimeout(s.ctx, containerRequestAckTimeout)
+		response, err := s.workerRepoClient.AddContainerToWorker(ctx, request)
+		cancel()
+		if err == nil {
+			if response != nil && response.Ok {
+				return nil
+			}
+			if response == nil {
+				return errors.New("empty container request acknowledgement")
+			}
+			return errors.New(response.ErrorMsg)
+		}
+		if !waitForReconnect(s.ctx, containerRequestStreamInterval) {
+			return s.ctx.Err()
+		}
+	}
 }
 
 func containerStartLimitForRuntime(runtimeType string) int {
@@ -593,59 +654,24 @@ func (s *Worker) reserveContainerInstance(request *types.ContainerRequest) bool 
 		return false
 	}
 
-	s.containerInstances.Set(request.ContainerId, &ContainerInstance{
+	instance := &ContainerInstance{
 		Id:        request.ContainerId,
 		StubId:    request.StubId,
 		LogBuffer: common.NewLogBuffer(),
 		Request:   request,
 		Runtime:   s.runtime,
-	})
-
-	return true
-}
-
-func (s *Worker) dropCancelledContainerRequest(request *types.ContainerRequest) bool {
-	if s.containerRepoClient == nil {
-		return false
+		CPUSet:    s.allocateContainerCPUSet(request),
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	resp, err := handleGRPCResponse(s.containerRepoClient.GetContainerState(ctx, &pb.GetContainerStateRequest{
-		ContainerId: request.ContainerId,
-	}))
-	if err != nil {
-		notFoundErr := &types.ErrContainerStateNotFound{}
-		if notFoundErr.From(err) {
-			log.Info().Str("container_id", request.ContainerId).Msg("dropping container request because state is missing")
-			s.completedRequests <- request
-			return true
-		}
-
-		log.Warn().Str("container_id", request.ContainerId).Err(err).Msg("unable to check container state before start")
-		return false
+	if request.Stub.Type.Kind() == types.StubTypeSandbox {
+		instance.initializeProcessManagerReadiness()
 	}
+	s.containerInstances.Set(request.ContainerId, instance)
 
-	if resp.State == nil || types.ContainerStatus(resp.State.Status) != types.ContainerStatusStopping {
-		return false
-	}
-
-	log.Info().Str("container_id", request.ContainerId).Msg("dropping container request because state is already stopping")
-	if _, err := handleGRPCResponse(s.containerRepoClient.DeleteContainerState(ctx, &pb.DeleteContainerStateRequest{ContainerId: request.ContainerId})); err != nil {
-		log.Debug().Str("container_id", request.ContainerId).Err(err).Msg("failed to remove stopping container state")
-	}
-
-	s.completedRequests <- request
 	return true
 }
 
 // handleContainerRequest handles an individual container request.
 func (s *Worker) handleContainerRequest(request *types.ContainerRequest) {
-	if s.dropCancelledContainerRequest(request) {
-		return
-	}
-
 	if !s.reserveContainerInstance(request) {
 		return
 	}
@@ -673,21 +699,6 @@ func (s *Worker) runContainerRequest(request *types.ContainerRequest) {
 	}
 
 	run := func() error {
-		if s.containerMountManager.RequiresWorkspaceStorageMount(request) {
-			log.Info().Str("container_id", containerId).Msg("mounting workspace storage")
-			mount, err := s.storageManager.Mount(request.Workspace.Name, request.Workspace.Storage)
-			if err != nil {
-				log.Error().Str("container_id", containerId).Str("workspace_id", request.Workspace.ExternalId).Err(err).Msg("unable to mount workspace storage")
-				return err
-			}
-			if s.cacheManager != nil {
-				if reporter := s.cacheManager.ContentReporter(); reporter != nil {
-					if aware, ok := mount.(storage.VolumeContentReporterAware); ok {
-						aware.SetVolumeContentReporter(request.WorkspaceId, reporter)
-					}
-				}
-			}
-		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -746,7 +757,7 @@ func (s *Worker) failContainerRequest(containerId string, request *types.Contain
 		exitCode = int(serr.ExitCode)
 	}
 
-	s.clearContainer(containerId, request, exitCode)
+	s.clearContainer(containerId, request, exitCode, false)
 }
 
 // cancelBuildIfAlreadyStopping checks if a build has already been cancelled and cancels the context if it has.
@@ -799,6 +810,7 @@ func (s *Worker) shouldShutDown(lastContainerRequest time.Time) bool {
 			return false
 		}
 		if (time.Since(lastContainerRequest).Seconds() > defaultWorkerSpindownTimeS) && s.containerInstances.Len() == 0 {
+			s.disableSchedulingForShutdown()
 			err := s.storageManager.Cleanup()
 			if err != nil {
 				log.Error().Err(err).Msg("failed to cleanup workspace storage")
@@ -914,8 +926,18 @@ func (s *Worker) updateContainerStatusOnce(request *types.ContainerRequest) (boo
 		go func() {
 			time.Sleep(time.Duration(s.config.Worker.TerminationGracePeriod) * time.Second)
 
-			_, exists := s.containerInstances.Get(request.ContainerId)
+			instance, exists := s.containerInstances.Get(request.ContainerId)
 			if !exists {
+				return
+			}
+			rt := instance.Runtime
+			if rt == nil {
+				rt = s.runtime
+			}
+			stateCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			needsStop := runtimeNeedsGraceKill(stateCtx, rt, request.ContainerId)
+			cancel()
+			if !needsStop {
 				return
 			}
 
@@ -938,6 +960,17 @@ func (s *Worker) updateContainerStatusOnce(request *types.ContainerRequest) (boo
 	}
 
 	return false, nil
+}
+
+func runtimeNeedsGraceKill(ctx context.Context, rt runtime.Runtime, containerID string) bool {
+	if rt == nil {
+		return false
+	}
+	state, err := rt.State(ctx, containerID)
+	if err != nil {
+		return !runtimeContainerNotFound(err)
+	}
+	return state.Status == types.RuncContainerStatusRunning
 }
 
 func (s *Worker) processStopContainerEvents() {
@@ -1075,7 +1108,8 @@ func (s *Worker) startup() error {
 		return err
 	}
 	_, err := handleGRPCResponse(s.workerRepoClient.ToggleWorkerAvailable(s.ctx, &pb.ToggleWorkerAvailableRequest{
-		WorkerId: s.workerId,
+		WorkerId:   s.workerId,
+		Generation: s.workerGeneration,
 	}))
 	if err != nil {
 		return err
@@ -1110,12 +1144,6 @@ func (s *Worker) shutdown() error {
 	s.waitForActiveContainersBeforeShutdown()
 	s.stopActiveContainersForShutdown()
 
-	if s.cacheManager != nil {
-		if err := s.cacheManager.Close(); err != nil {
-			errs = errors.Join(errs, fmt.Errorf("failed to cleanup cache: %v", err))
-		}
-	}
-
 	if s.containerNetworkManager != nil {
 		if err := s.containerNetworkManager.Close(); err != nil {
 			errs = errors.Join(errs, fmt.Errorf("failed to cleanup preallocated container networks: %v", err))
@@ -1147,6 +1175,15 @@ func (s *Worker) shutdown() error {
 	err = s.storageManager.Cleanup()
 	if err != nil {
 		errs = errors.Join(errs, fmt.Errorf("failed to cleanup workspace storage: %v", err))
+	}
+
+	// Workspace GeeseFS mounts may still be draining lazy read-through stores
+	// and durable identity publications. Keep the cache client alive until every
+	// workspace mount has completed WaitForFlush and unmounted.
+	if s.cacheManager != nil {
+		if err := s.cacheManager.Close(); err != nil {
+			errs = errors.Join(errs, fmt.Errorf("failed to cleanup cache: %v", err))
+		}
 	}
 
 	if err := cleanupImageMountPath(s.imageMountPath); err != nil {

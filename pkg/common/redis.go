@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -164,35 +165,115 @@ func (r *RedisClient) Publish(ctx context.Context, channel string, message inter
 
 func (r *RedisClient) PSubscribe(ctx context.Context, channels ...string) (<-chan *redis.Message, <-chan error, func()) {
 	outCh := make(chan *redis.Message, redisPubSubChannelBufferSize)
-	errCh := make(chan error, 1)
-	onSubscribe := make(chan bool, 1)
+	errCh := make(chan error, 64)
+	ctx, cancel := context.WithCancel(ctx)
+	ready := make(chan error, 64)
+	started := make(chan struct{})
+	done := make(chan struct{})
 
 	go func() {
-		switch client := r.UniversalClient.(type) {
-		case *redis.Client:
-			r.handleChannelSubs(ctx, client.PSubscribe, onSubscribe, outCh, errCh, channels...)
-
-		case *redis.ClusterClient:
-			// Shared pattern subscribe doesn't exist yet, use ForEachMaster here
-			err := client.ForEachMaster(ctx, func(ctx context.Context, rdb *redis.Client) error {
-				r.handleChannelSubs(ctx, rdb.PSubscribe, onSubscribe, outCh, errCh, channels...)
-				return nil
-			})
-
-			if err != nil {
-				errCh <- err
-			}
-		}
-	}()
-
-	<-onSubscribe
-
-	close := func() {
+		defer close(done)
 		defer close(outCh)
 		defer close(errCh)
+
+		var subscriptions sync.WaitGroup
+		start := func(subscribe func(context.Context, ...string) *redis.PubSub) {
+			subscriptions.Add(1)
+			go func() {
+				defer subscriptions.Done()
+				r.handlePatternSub(ctx, subscribe, ready, outCh, errCh, channels...)
+			}()
+		}
+
+		var count atomic.Int32
+		switch client := r.UniversalClient.(type) {
+		case *redis.Client:
+			count.Store(1)
+			start(client.PSubscribe)
+
+		case *redis.ClusterClient:
+			// Keyspace notifications are node-local, so pattern subscriptions must
+			// remain active on every master in the cluster.
+			err := client.ForEachMaster(ctx, func(_ context.Context, master *redis.Client) error {
+				count.Add(1)
+				start(master.PSubscribe)
+				return nil
+			})
+			if err != nil {
+				sendRedisSubscriptionError(ctx, errCh, err)
+			}
+		}
+
+		for range count.Load() {
+			if err := <-ready; err != nil {
+				sendRedisSubscriptionError(ctx, errCh, err)
+			}
+		}
+		close(started)
+		subscriptions.Wait()
+	}()
+
+	<-started
+
+	var closeOnce sync.Once
+	close := func() {
+		closeOnce.Do(func() {
+			cancel()
+			<-done
+		})
 	}
 
 	return outCh, errCh, close
+}
+
+func (r *RedisClient) handlePatternSub(
+	ctx context.Context,
+	subscribe func(context.Context, ...string) *redis.PubSub,
+	ready chan<- error,
+	outCh chan<- *redis.Message,
+	errCh chan<- error,
+	channels ...string,
+) {
+	pubsub := subscribe(ctx, channels...)
+	defer pubsub.Close()
+	if _, err := pubsub.Receive(ctx); err != nil {
+		ready <- err
+		return
+	}
+	ready <- nil
+
+	messages := pubsub.Channel(
+		redis.WithChannelSize(redisPubSubChannelBufferSize),
+		redis.WithChannelSendTimeout(3*time.Second),
+		redis.WithChannelHealthCheckInterval(3*time.Second),
+	)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case message, ok := <-messages:
+			if !ok {
+				sendRedisSubscriptionError(ctx, errCh, ErrChannelClosed)
+				return
+			}
+			if message == nil {
+				sendRedisSubscriptionError(ctx, errCh, ErrNilMessage)
+				return
+			}
+			select {
+			case outCh <- message:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}
+}
+
+func sendRedisSubscriptionError(ctx context.Context, errCh chan<- error, err error) {
+	select {
+	case errCh <- err:
+	case <-ctx.Done():
+	}
 }
 
 func (r *RedisClient) Subscribe(ctx context.Context, channels ...string) (<-chan *redis.Message, <-chan error) {
@@ -394,9 +475,6 @@ func (l *RedisLock) Refresh(ctx context.Context, key string, ttl time.Duration) 
 }
 
 func (l *RedisLock) ReleaseWithToken(key string, token string) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
 	rc := redislock.New(l.client)
 	lock, err := rc.RetrieveLock(context.Background(), key, token)
 	if err != nil {
@@ -408,19 +486,22 @@ func (l *RedisLock) ReleaseWithToken(key string, token string) error {
 
 func (l *RedisLock) Release(key string) error {
 	l.mu.Lock()
-	defer l.mu.Unlock()
+	lock, ok := l.locks[key]
+	l.mu.Unlock()
 
-	// Check if the lock is available in memory and release if so
-	if lock, ok := l.locks[key]; ok {
-		err := lock.Release(context.Background())
-		if err != nil {
-			return err
-		}
-		delete(l.locks, key)
-		return nil
+	if !ok {
+		return redislock.ErrLockNotHeld
+	}
+	if err := lock.Release(context.Background()); err != nil {
+		return err
 	}
 
-	return redislock.ErrLockNotHeld
+	l.mu.Lock()
+	if l.locks[key] == lock {
+		delete(l.locks, key)
+	}
+	l.mu.Unlock()
+	return nil
 }
 
 func CopyStruct(src, dst any) error {

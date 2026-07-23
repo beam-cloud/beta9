@@ -2521,6 +2521,25 @@
         "prioritySet": {
           "type": "boolean",
           "description": "Distinguishes an explicitly configured zero priority from legacy\ngateways that did not send scheduling priority metadata."
+        },
+        "gvisorPlatform": {
+          "type": "string"
+        },
+        "gvisorRoot": {
+          "type": "string"
+        },
+        "gvisorExtraArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "generation": {
+          "type": "string",
+          "description": "Deterministic identity of the restart-relevant slot specification."
+        },
+        "cpuAffinityEnforced": {
+          "type": "boolean"
         }
       }
     },
@@ -3521,6 +3540,21 @@
         },
         "warnMsg": {
           "type": "string"
+        },
+        "capacityStatus": {
+          "type": "string",
+          "description": "Capacity verdict for the requested GPU types, computed at stub creation:\n\"available\", \"low\", or \"none\". Empty when no check applies (CPU-only\nworkloads, private-pool-only stubs, or pool-selector-bound stubs)."
+        },
+        "unsupportedGpus": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "GPU types from the request that no serverless pool supports."
+        },
+        "matchedPrivatePool": {
+          "type": "string",
+          "description": "Name of an existing ready private pool in the workspace that satisfies\nthe GPU request. Set instead of capacity_status \"none\" so clients can\nre-issue stub creation targeting this pool."
         }
       }
     },
@@ -3648,6 +3682,10 @@
         "containerStartConcurrency": {
           "type": "integer",
           "format": "int64"
+        },
+        "workerImage": {
+          "type": "string",
+          "description": "Optional per-machine worker image override. The gateway remembers the\ngenerated value as a baseline so untouched installs continue to follow\nfuture image tag changes while manually edited values remain pinned."
         }
       }
     },
@@ -3870,7 +3908,15 @@
           "type": "object",
           "additionalProperties": {
             "type": "boolean"
-          }
+          },
+          "description": "gpus reports live worker availability per GPU type (a worker with that\nGPU is currently registered)."
+        },
+        "supportedGpus": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "description": "supported_gpus reports pool-config-based serverless support per GPU\ntype: true when a pool could serve the GPU even if scaled to zero."
         }
       }
     },
@@ -5497,6 +5543,18 @@
           "type": "string"
         },
         "poolSelector": {
+          "type": "string"
+        },
+        "cordonRequested": {
+          "type": "boolean"
+        },
+        "rolloutGeneration": {
+          "type": "string"
+        },
+        "rolloutBuildVersion": {
+          "type": "string"
+        },
+        "workerImageOverride": {
           "type": "string"
         }
       }

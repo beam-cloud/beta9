@@ -29,9 +29,9 @@ func newTelemetryCredentialIssuer(config types.S2Config) telemetryCredentialIssu
 
 const telemetryCredentialIssueTimeout = 10 * time.Second
 
-func (s *Service) scopedTelemetryConfig(ctx context.Context, workspaceID string) (*pb.AgentTelemetryConfig, error) {
+func (s *Service) agentTelemetryConfig(ctx context.Context, workspaceID string, platformManaged bool) (*pb.AgentTelemetryConfig, error) {
 	config := s.appConfig.Database.S2
-	if config.ApiKey == "" || config.Basin == "" || s.telemetryCredentials == nil {
+	if config.ApiKey == "" || config.Basin == "" {
 		return nil, nil
 	}
 
@@ -39,6 +39,26 @@ func (s *Service) scopedTelemetryConfig(ctx context.Context, workspaceID string)
 	if streamPrefix == "" {
 		streamPrefix = "events"
 	}
+	if platformManaged {
+		return &pb.AgentTelemetryConfig{
+			Enabled:      true,
+			StreamPrefix: streamPrefix,
+			Logs: &pb.AgentTelemetrySinkConfig{
+				Destination:  config.Basin,
+				Credential:   config.ApiKey,
+				StreamPrefix: fmt.Sprintf("%s/logs/workspaces", streamPrefix),
+			},
+			Events: &pb.AgentTelemetrySinkConfig{
+				Destination:  config.Basin,
+				Credential:   config.ApiKey,
+				StreamPrefix: fmt.Sprintf("%s/workspaces", streamPrefix),
+			},
+		}, nil
+	}
+	if s.telemetryCredentials == nil {
+		return nil, nil
+	}
+
 	logPrefix := fmt.Sprintf("%s/logs/workspaces/%s", streamPrefix, eventStreamPart(workspaceID))
 	eventPrefix := fmt.Sprintf("%s/workspaces/%s", streamPrefix, eventStreamPart(workspaceID))
 

@@ -2249,6 +2249,10 @@ type Worker struct {
 	ActiveContainers     []*Container `protobuf:"bytes,17,rep,name=active_containers,json=activeContainers,proto3" json:"active_containers,omitempty"`
 	Runtime              string       `protobuf:"bytes,18,opt,name=runtime,proto3" json:"runtime,omitempty"`
 	PoolSelector         string       `protobuf:"bytes,19,opt,name=pool_selector,json=poolSelector,proto3" json:"pool_selector,omitempty"`
+	CordonRequested      bool         `protobuf:"varint,20,opt,name=cordon_requested,json=cordonRequested,proto3" json:"cordon_requested,omitempty"`
+	RolloutGeneration    string       `protobuf:"bytes,21,opt,name=rollout_generation,json=rolloutGeneration,proto3" json:"rollout_generation,omitempty"`
+	RolloutBuildVersion  string       `protobuf:"bytes,22,opt,name=rollout_build_version,json=rolloutBuildVersion,proto3" json:"rollout_build_version,omitempty"`
+	WorkerImageOverride  string       `protobuf:"bytes,23,opt,name=worker_image_override,json=workerImageOverride,proto3" json:"worker_image_override,omitempty"`
 }
 
 func (x *Worker) Reset() {
@@ -2412,6 +2416,34 @@ func (x *Worker) GetRuntime() string {
 func (x *Worker) GetPoolSelector() string {
 	if x != nil {
 		return x.PoolSelector
+	}
+	return ""
+}
+
+func (x *Worker) GetCordonRequested() bool {
+	if x != nil {
+		return x.CordonRequested
+	}
+	return false
+}
+
+func (x *Worker) GetRolloutGeneration() string {
+	if x != nil {
+		return x.RolloutGeneration
+	}
+	return ""
+}
+
+func (x *Worker) GetRolloutBuildVersion() string {
+	if x != nil {
+		return x.RolloutBuildVersion
+	}
+	return ""
+}
+
+func (x *Worker) GetWorkerImageOverride() string {
+	if x != nil {
+		return x.WorkerImageOverride
 	}
 	return ""
 }

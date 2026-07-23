@@ -183,6 +183,24 @@ func TestEvictionCandidateUsesInMemoryTouchWhenFresher(t *testing.T) {
 	require.True(t, store.Exists(hash))
 }
 
+func TestEvictionCandidateUsesCompleteMarkerSize(t *testing.T) {
+	store := newTestStore(t, 5)
+	content := "content-spanning-pages"
+	hash := addEvictionTestContent(t, store, content, time.Now().Add(-time.Hour))
+
+	var candidate *evictionCandidate
+	for _, item := range store.evictionCandidates() {
+		if item.hash == hash {
+			item := item
+			candidate = &item
+			break
+		}
+	}
+
+	require.NotNil(t, candidate)
+	require.Equal(t, int64(len(content)), candidate.sizeBytes)
+}
+
 func TestEvictionSkipsTemporaryAndIncompleteContentDirs(t *testing.T) {
 	store := newTestStore(t, 5)
 

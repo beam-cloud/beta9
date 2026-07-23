@@ -94,6 +94,9 @@ func TestTasklessASGIRequestProxiesWithoutTaskHeader(t *testing.T) {
 		maxTokens:     1,
 		isASGI:        true,
 		workReady:     make(chan struct{}, 1),
+		onTaskQueued: func() {
+			t.Fatal("taskless request notified the autoscaler")
+		},
 		availableContainers: []container{{
 			id:      "container-1",
 			address: backendURL.Host,
@@ -137,8 +140,8 @@ func TestRouteHTTPClientReusesTransportForSameAddressAndTimeout(t *testing.T) {
 	}
 
 	readiness := rb.getHttpClient(routeAddress, checkAddressIsReadyTimeout)
-	if readiness.Transport == first.Transport {
-		t.Fatal("expected readiness and request clients to use separate transports")
+	if readiness.Transport != first.Transport {
+		t.Fatal("expected readiness and request clients to share a transport")
 	}
 }
 
@@ -152,10 +155,10 @@ func TestPruneBackendTransportsRemovesStaleAddresses(t *testing.T) {
 
 	rb.pruneBackendTransports([]container{{address: activeAddress}})
 
-	if _, ok := rb.backendTransports.Load(backendTransportKey{address: activeAddress, timeout: handleHttpRequestClientTimeout}); !ok {
+	if _, ok := rb.backendTransports.Load(activeAddress); !ok {
 		t.Fatal("expected active address transport to remain")
 	}
-	if _, ok := rb.backendTransports.Load(backendTransportKey{address: staleAddress, timeout: handleHttpRequestClientTimeout}); ok {
+	if _, ok := rb.backendTransports.Load(staleAddress); ok {
 		t.Fatal("expected stale address transport to be pruned")
 	}
 }
@@ -188,6 +191,70 @@ func TestForwardRequestTimesOutWhenNoBackendContainersAreReady(t *testing.T) {
 	}
 	if body["error"] != "Timed out waiting for a backend container" {
 		t.Fatalf("error = %q, want timeout message", body["error"])
+	}
+}
+
+func TestForwardRequestNotifiesAfterTaskIsQueued(t *testing.T) {
+	e := echo.New()
+	ctx := e.NewContext(httptest.NewRequest(http.MethodPost, "/", nil), httptest.NewRecorder())
+	rb := &RequestBuffer{
+		ctx:        context.Background(),
+		buffer:     abstractions.NewRingBuffer[*request](1),
+		stubConfig: &types.StubConfigV1{TaskPolicy: types.TaskPolicy{Timeout: 30}},
+	}
+
+	called := false
+	rb.onTaskQueued = func() {
+		called = true
+		if rb.buffer.Len() != 1 {
+			t.Fatal("notification ran before the request entered the buffer")
+		}
+		queued, ok := rb.buffer.Pop()
+		if !ok {
+			t.Fatal("queued request is missing")
+		}
+		close(queued.done)
+	}
+	err := rb.ForwardRequest(ctx, &EndpointTask{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("enqueue callback was not called")
+	}
+}
+
+func TestForwardRequestFailsWhenBufferIsClosed(t *testing.T) {
+	bufferContext, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	e := echo.New()
+	ctx := e.NewContext(httptest.NewRequest(http.MethodPost, "/", nil), httptest.NewRecorder())
+	rb := &RequestBuffer{
+		ctx:        bufferContext,
+		buffer:     abstractions.NewRingBuffer[*request](1),
+		stubConfig: &types.StubConfigV1{TaskPolicy: types.TaskPolicy{Timeout: 30}},
+	}
+
+	if err := rb.ForwardRequest(ctx, nil); err != context.Canceled {
+		t.Fatalf("ForwardRequest() error = %v, want context canceled", err)
+	}
+}
+
+func TestDeleteEndpointInstancePreservesReplacement(t *testing.T) {
+	es := &HttpEndpointService{endpointInstances: common.NewSafeMap[*endpointInstance]()}
+	oldInstance := &endpointInstance{}
+	replacement := &endpointInstance{}
+	es.endpointInstances.Set("stub", replacement)
+
+	es.deleteEndpointInstance("stub", oldInstance)
+
+	if current, exists := es.endpointInstances.Get("stub"); !exists || current != replacement {
+		t.Fatal("stale instance cleanup deleted its replacement")
+	}
+	es.deleteEndpointInstance("stub", replacement)
+	if _, exists := es.endpointInstances.Get("stub"); exists {
+		t.Fatal("current instance was not deleted")
 	}
 }
 

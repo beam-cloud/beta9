@@ -29,6 +29,7 @@ const (
 	defaultGeeseFSReadAheadKb      = 32768
 	defaultGeeseFSReadAheadLargeKb = 131072
 	defaultGeeseFSMaxReadBytes     = 1048576
+	defaultGeeseFSSpliceReadBytes  = 512 * 1024
 	defaultGeeseFSPartSizeBytes    = 64 * 1024 * 1024
 	defaultGeeseFSHashMinFileKb    = 1024
 	defaultGeeseFSMinMemoryLimitMB = 128
@@ -55,6 +56,12 @@ type GeeseStorage struct {
 	cacheClient    *cache.Client
 	workspaceID    string
 	volumeReporter VolumeContentReporter
+}
+
+func (s *GeeseStorage) volumeCacheScope() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.workspaceID
 }
 
 func (s *GeeseStorage) SetVolumeContentReporter(workspaceID string, reporter VolumeContentReporter) {
@@ -128,18 +135,20 @@ func firstInt64Value(data map[string]interface{}, keys ...string) int64 {
 
 type geeseContentCache struct {
 	client *cache.Client
+	scope  func() string
 }
 
 var _ cfg.ContentCache = (*geeseContentCache)(nil)
 var _ cfg.ContentCacheReadInto = (*geeseContentCache)(nil)
 var _ cfg.ContentCacheStoreLocalPath = (*geeseContentCache)(nil)
 var _ cfg.ContentCacheClientLocalPageFileViews = (*geeseContentCache)(nil)
+var _ cfg.ContentCacheObjectHashRegistry = (*geeseContentCache)(nil)
 
-func newGeeseContentCache(client *cache.Client) *geeseContentCache {
+func newGeeseContentCache(client *cache.Client, scope func() string) *geeseContentCache {
 	if client == nil {
 		return nil
 	}
-	return &geeseContentCache{client: client}
+	return &geeseContentCache{client: client, scope: scope}
 }
 
 func (c *geeseContentCache) GetContent(hash string, offset int64, length int64, opts struct{ RoutingKey string }) ([]byte, error) {
@@ -188,6 +197,40 @@ func (c *geeseContentCache) StoreContentFromLocalPath(source struct {
 		RoutingKey: opts.RoutingKey,
 		Lock:       opts.Lock,
 	})
+}
+
+func (c *geeseContentCache) volumeObjectIdentity(identity cfg.ContentCacheObjectIdentity) (cache.VolumeObjectIdentity, error) {
+	scope := ""
+	if c.scope != nil {
+		scope = c.scope()
+	}
+	if scope == "" {
+		return cache.VolumeObjectIdentity{}, errors.New("workspace cache scope is unavailable")
+	}
+	return cache.VolumeObjectIdentity{
+		Scope:    scope,
+		Endpoint: identity.Endpoint,
+		Bucket:   identity.Bucket,
+		Path:     identity.Path,
+		ETag:     identity.ETag,
+		Size:     identity.Size,
+	}, nil
+}
+
+func (c *geeseContentCache) LookupObjectContentHash(ctx context.Context, identity cfg.ContentCacheObjectIdentity) (string, bool, error) {
+	volumeIdentity, err := c.volumeObjectIdentity(identity)
+	if err != nil {
+		return "", false, err
+	}
+	return c.client.LookupVolumeObjectContentHash(ctx, volumeIdentity)
+}
+
+func (c *geeseContentCache) StoreObjectContentHash(ctx context.Context, identity cfg.ContentCacheObjectIdentity, hash string) error {
+	volumeIdentity, err := c.volumeObjectIdentity(identity)
+	if err != nil {
+		return err
+	}
+	return c.client.StoreVolumeObjectContentHash(ctx, volumeIdentity, hash)
 }
 
 func (c *geeseContentCache) ClientLocalPageFileViews(hash string, offset int64, length int64, opts struct{ RoutingKey string }) ([]cfg.ClientLocalPageFileView, error) {
@@ -262,7 +305,11 @@ func (s *GeeseStorage) Mount(localPath string) error {
 		flags.StatsInterval = 5 * time.Second
 	}
 	flags.FuseReadAheadKB = defaultGeeseFSFuseReadAheadKb
-	flags.MountOptions = withDefaultMountOption(s.config.MountOptions, "max_read", strconv.Itoa(defaultGeeseFSMaxReadBytes))
+	if s.cacheClient != nil && !s.config.DisableVolumeCaching {
+		flags.MountOptions = withBoundedMountOption(s.config.MountOptions, "max_read", defaultGeeseFSSpliceReadBytes)
+	} else {
+		flags.MountOptions = withDefaultMountOption(s.config.MountOptions, "max_read", strconv.Itoa(defaultGeeseFSMaxReadBytes))
+	}
 	flags.PartSizes = []cfg.PartSizeConfig{
 		{PartSize: defaultGeeseFSPartSizeBytes, PartCount: 1000},
 		{PartSize: 128 * 1024 * 1024, PartCount: 8000},
@@ -325,7 +372,7 @@ func (s *GeeseStorage) Mount(localPath string) error {
 
 	// If we have a cache client available, use it
 	if s.cacheClient != nil {
-		flags.ExternalCacheClient = newGeeseContentCache(s.cacheClient)
+		flags.ExternalCacheClient = newGeeseContentCache(s.cacheClient, s.volumeCacheScope)
 		flags.ExternalCacheStreamingEnabled = s.config.CacheStreamingEnabled
 		flags.ExternalCacheDirectIO = s.config.CacheDirectIO
 	}
@@ -436,6 +483,41 @@ func withDefaultMountOption(options []string, key, value string) []string {
 	out := make([]string, 0, len(options)+1)
 	out = append(out, options...)
 	out = append(out, fmt.Sprintf("%s=%s", key, value))
+	return out
+}
+
+// withBoundedMountOption adds key=maxValue when absent and clamps an existing
+// larger or invalid value. Smaller explicit values are preserved. Cached
+// volume reads use this to ensure every FUSE response fits in the negotiated
+// splice pipe, including its header and an unaligned source page.
+func withBoundedMountOption(options []string, key string, maxValue int) []string {
+	if maxValue <= 0 {
+		return options
+	}
+	out := append([]string(nil), options...)
+	found := false
+	for optionIndex, option := range out {
+		parts := strings.Split(option, ",")
+		changed := false
+		for partIndex, part := range parts {
+			name, value, hasValue := strings.Cut(part, "=")
+			if name != key {
+				continue
+			}
+			found = true
+			parsed, err := strconv.Atoi(value)
+			if !hasValue || err != nil || parsed <= 0 || parsed > maxValue {
+				parts[partIndex] = fmt.Sprintf("%s=%d", key, maxValue)
+				changed = true
+			}
+		}
+		if changed {
+			out[optionIndex] = strings.Join(parts, ",")
+		}
+	}
+	if !found {
+		out = append(out, fmt.Sprintf("%s=%d", key, maxValue))
+	}
 	return out
 }
 

@@ -249,6 +249,60 @@ func TestGetContainerRuntimeCredentialsUsesWorkerTokenWorkspaceID(t *testing.T) 
 	require.Zero(t, backendRepo.workspaceByExternalIDCalls)
 }
 
+func TestGetContainerRuntimeCredentialsAllowsTrustedWorkerAcrossWorkspaces(t *testing.T) {
+	storageID := uint(1)
+	storageBucket := "target-bucket"
+	backendRepo := &workerRuntimeCredentialsBackendRepo{
+		workspace: &types.Workspace{
+			Id:         9,
+			ExternalId: "target-workspace",
+			Storage: &types.WorkspaceStorage{
+				Id:         &storageID,
+				BucketName: &storageBucket,
+			},
+		},
+	}
+	service := &WorkerRepositoryService{backendRepo: backendRepo}
+	adminWorkspaceID := uint(7)
+	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
+		Workspace: &types.Workspace{Id: adminWorkspaceID, ExternalId: "admin-workspace"},
+		Token:     &types.Token{TokenType: types.TokenTypeWorker, WorkspaceId: &adminWorkspaceID},
+	})
+
+	resp, err := service.GetContainerRuntimeCredentials(ctx, &pb.GetContainerRuntimeCredentialsRequest{
+		WorkspaceId:      "target-workspace",
+		WorkspaceStorage: true,
+	})
+
+	require.NoError(t, err)
+	require.True(t, resp.Ok)
+	require.NotNil(t, resp.WorkspaceStorage)
+	require.Equal(t, storageBucket, resp.WorkspaceStorage.BucketName)
+	require.Equal(t, 2, backendRepo.workspaceByExternalIDCalls)
+}
+
+func TestGetContainerRuntimeCredentialsRejectsPrivateWorkerAcrossWorkspaces(t *testing.T) {
+	service := &WorkerRepositoryService{
+		backendRepo: &workerRuntimeCredentialsBackendRepo{
+			workspace: &types.Workspace{Id: 9, ExternalId: "target-workspace"},
+		},
+	}
+	privateWorkspaceID := uint(7)
+	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
+		Workspace: &types.Workspace{Id: privateWorkspaceID, ExternalId: "private-workspace"},
+		Token:     &types.Token{TokenType: types.TokenTypeWorkerPrivate, WorkspaceId: &privateWorkspaceID},
+	})
+
+	resp, err := service.GetContainerRuntimeCredentials(ctx, &pb.GetContainerRuntimeCredentialsRequest{
+		WorkspaceId:      "target-workspace",
+		WorkspaceStorage: true,
+	})
+
+	require.NoError(t, err)
+	require.False(t, resp.Ok)
+	require.Contains(t, resp.ErrorMsg, "cannot request credentials")
+}
+
 func TestGetContainerRuntimeCredentialsRetriesContainerStateLockContention(t *testing.T) {
 	workspaceID := uint(7)
 	containerRepo := &workerRuntimeCredentialsContainerRepo{

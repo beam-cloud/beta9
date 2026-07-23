@@ -154,6 +154,36 @@ func TestAgentWorkerPoolControllerAddWorkerCreatesDesiredSlot(t *testing.T) {
 		t.Fatalf("second worker = %q, want stable worker %q", secondWorker.Id, worker.Id)
 	}
 
+	secondWorker.FreeCpu -= 2000
+	secondWorker.FreeMemory -= 1024
+	secondWorker.FreeGpuCount--
+	if err := workerRepo.AddWorker(secondWorker); err != nil {
+		t.Fatal(err)
+	}
+	machine.CPUCount = 16
+	machine.CPUMillicores = 16000
+	machine.MemoryMB = 65536
+	machine.GPUCount = 4
+	if err := computeRepo.SaveAgentTokenState(ctx, machine, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.ensureMachine(machine.MachineID); err != nil {
+		t.Fatal(err)
+	}
+	resizedWorker, err := workerRepo.GetWorkerById(worker.Id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resizedWorker.TotalCpu != 16000 || resizedWorker.FreeCpu != 14000 {
+		t.Fatalf("resized worker cpu = %d/%d, want 16000/14000", resizedWorker.TotalCpu, resizedWorker.FreeCpu)
+	}
+	if resizedWorker.TotalMemory != 65536 || resizedWorker.FreeMemory != 64512 {
+		t.Fatalf("resized worker memory = %d/%d, want 65536/64512", resizedWorker.TotalMemory, resizedWorker.FreeMemory)
+	}
+	if resizedWorker.TotalGpuCount != 4 || resizedWorker.FreeGpuCount != 3 {
+		t.Fatalf("resized worker gpu = %d/%d, want 4/3", resizedWorker.TotalGpuCount, resizedWorker.FreeGpuCount)
+	}
+
 	if err := workerRepo.UpdateWorkerStatus(worker.Id, types.WorkerStatusDisabled); err != nil {
 		t.Fatal(err)
 	}

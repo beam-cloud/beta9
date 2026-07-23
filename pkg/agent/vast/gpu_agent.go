@@ -24,7 +24,11 @@ func RunGPUAgent(ctx context.Context, opts GPUAgentOptions) error {
 	if opts.GatewayURL == "" {
 		return fmt.Errorf("gateway is required")
 	}
-	if strings.TrimSpace(opts.JoinToken) == "" && strings.TrimSpace(opts.JoinTokenFile) == "" {
+	joinToken, err := readSecret(opts.JoinToken, opts.JoinTokenFile)
+	if err != nil {
+		return err
+	}
+	if joinToken == "" {
 		return fmt.Errorf("join-token or join-token-file is required")
 	}
 	opts.StateDir = firstNonEmpty(strings.TrimSpace(opts.StateDir), DefaultStateDir)
@@ -65,10 +69,11 @@ func RunGPUAgent(ctx context.Context, opts GPUAgentOptions) error {
 	if opts.MaxCPU != "" || opts.MaxMemory != "" {
 		fmt.Fprintf(opts.Stdout, "advertising max_cpu=%s max_memory=%s\n", firstNonEmpty(opts.MaxCPU, "unset"), firstNonEmpty(opts.MaxMemory, "unset"))
 	}
+	// The token file belongs to the whole GPU service template. Passing its
+	// value keeps one instance from deleting it before the others join.
 	return agent.RunJoin(ctx, types.AgentJoinOptions{
 		GatewayURL:                opts.GatewayURL,
-		JoinToken:                 opts.JoinToken,
-		JoinTokenFile:             opts.JoinTokenFile,
+		JoinToken:                 joinToken,
 		GPUIDs:                    gpu.UUID,
 		MaxCPU:                    opts.MaxCPU,
 		MaxMemory:                 opts.MaxMemory,

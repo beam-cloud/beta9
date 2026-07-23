@@ -64,8 +64,9 @@ type fakeManagedPoolWorkerPoolRepo struct {
 }
 
 type fakeManagedPoolRepo struct {
-	repo  *fakeComputeRepo
-	saved chan struct{}
+	repo   *fakeComputeRepo
+	saved  chan struct{}
+	getErr error
 }
 
 func (*fakeManagedPoolRepo) WithManagedPoolStateLock(ctx context.Context, _, _ string, fn func(context.Context) error) error {
@@ -81,6 +82,9 @@ func (r *fakeManagedPoolRepo) SaveManagedPoolState(ctx context.Context, workspac
 	return nil
 }
 func (r *fakeManagedPoolRepo) GetManagedPoolState(ctx context.Context, workspaceID, name string) (*model.PoolState, error) {
+	if r.getErr != nil {
+		return nil, r.getErr
+	}
 	return r.repo.GetPoolState(ctx, workspaceID, name)
 }
 func (r *fakeManagedPoolRepo) ListManagedPoolStates(ctx context.Context, workspaceID string, limit int) ([]*model.PoolState, error) {
@@ -178,14 +182,24 @@ func TestManagedPoolServiceRejectsForgedClientCapability(t *testing.T) {
 	if err := service.DeleteManagedPool(ctx, nonAdmin, "forged"); !errors.Is(err, model.ErrManagedPermissionDenied) {
 		t.Fatal(err)
 	}
-	if _, _, err := service.CreateManagedMachine(ctx, nonAdmin, "forged"); !errors.Is(err, model.ErrManagedPermissionDenied) {
+	if _, err := service.CreateManagedMachine(ctx, nonAdmin, "forged"); !errors.Is(err, model.ErrManagedPermissionDenied) {
 		t.Fatal(err)
 	}
-	if _, _, err := service.ListManagedMachines(ctx, nonAdmin, "forged"); !errors.Is(err, model.ErrManagedPermissionDenied) {
+	if _, err := service.ListManagedMachines(ctx, nonAdmin, "forged"); !errors.Is(err, model.ErrManagedPermissionDenied) {
 		t.Fatal(err)
 	}
-	if _, err := service.DeleteManagedMachine(ctx, nonAdmin, "forged", "machine-forged"); !errors.Is(err, model.ErrManagedPermissionDenied) {
+	if err := service.DeleteManagedMachine(ctx, nonAdmin, "forged", "machine-forged"); !errors.Is(err, model.ErrManagedPermissionDenied) {
 		t.Fatal(err)
+	}
+}
+
+func TestManagedPoolCPUAffinityDefaultsDisabled(t *testing.T) {
+	config, err := normalizeManagedPoolConfig(types.WorkerPoolConfig{Mode: types.PoolModeExternal})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.CPUAffinityEnforced {
+		t.Fatal("managed pool CPU affinity must default to disabled")
 	}
 }
 
@@ -196,7 +210,9 @@ func TestManagedPoolLifecyclePreservesWorkerConfiguration(t *testing.T) {
 	config := types.WorkerPoolConfig{
 		Mode:                      types.PoolModeExternal,
 		GPUType:                   "H100",
+		RequiresPoolSelector:      true,
 		ContainerRuntime:          types.ContainerRuntimeRunc.String(),
+		CPUAffinityEnforced:       true,
 		ContainerStartConcurrency: 7,
 		NetworkSlotPoolSize:       48,
 		Priority:                  120,
@@ -223,8 +239,11 @@ func TestManagedPoolLifecyclePreservesWorkerConfiguration(t *testing.T) {
 	if created.Source != types.WorkerPoolManagementSourceAPI || created.Controller != types.WorkerPoolControllerAgent {
 		t.Fatalf("created pool = %+v", created)
 	}
-	if created.Config.Cache.Disk.HostPath != config.Cache.Disk.HostPath || created.Config.ContainerStartConcurrency != 7 {
+	if created.Config.Cache.Disk.HostPath != config.Cache.Disk.HostPath || created.Config.ContainerStartConcurrency != 7 || !created.Config.CPUAffinityEnforced {
 		t.Fatalf("worker config was not preserved: %+v", created.Config)
+	}
+	if created.Config.RequiresPoolSelector {
+		t.Fatal("managed pool must be available to selector-less serverless requests")
 	}
 	state, err := service.managedPoolRepo.GetManagedPoolState(context.Background(), "admin-workspace", "public-h100")
 	if err != nil || state == nil {
@@ -235,6 +254,18 @@ func TestManagedPoolLifecyclePreservesWorkerConfiguration(t *testing.T) {
 	}
 	if state.WorkerConfig == nil || state.WorkerConfig.DurableDisksPath != "/mnt/disks" {
 		t.Fatalf("saved worker config = %+v", state.WorkerConfig)
+	}
+	if !state.WorkerConfig.CPUAffinityEnforced {
+		t.Fatal("persisted managed pool must preserve CPU affinity configuration")
+	}
+	if state.WorkerConfig.RequiresPoolSelector {
+		t.Fatal("persisted managed pool must not require a pool selector")
+	}
+	if err := service.ReconcileManagedPools(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !service.scheduler.HasManagedPoolForGPU("H100", false) {
+		t.Fatal("managed pool was not available to serverless scheduling")
 	}
 	createdInstanceID := state.ManagedInstanceID
 
@@ -247,8 +278,8 @@ func TestManagedPoolLifecyclePreservesWorkerConfiguration(t *testing.T) {
 		t.Fatalf("priority = %d, want 250", updated.Config.Priority)
 	}
 	state, err = service.managedPoolRepo.GetManagedPoolState(context.Background(), "admin-workspace", "public-h100")
-	if err != nil || state == nil || state.ManagedInstanceID == createdInstanceID {
-		t.Fatalf("updated generation = %+v, err = %v", state, err)
+	if err != nil || state == nil || state.ManagedInstanceID != createdInstanceID {
+		t.Fatalf("updated pool identity = %+v, err = %v", state, err)
 	}
 
 	repo.machines = map[string][]*model.AgentTokenState{
@@ -257,8 +288,9 @@ func TestManagedPoolLifecyclePreservesWorkerConfiguration(t *testing.T) {
 		},
 	}
 	config.Priority = 300
-	if _, err := service.UpdateManagedPool(context.Background(), clusterAdminAuth(), "public-h100", config); !errors.Is(err, model.ErrManagedPoolInUse) {
-		t.Fatalf("update with inventory error = %v, want in-use", err)
+	updated, err = service.UpdateManagedPool(context.Background(), clusterAdminAuth(), "public-h100", config)
+	if err != nil || updated.Config.Priority != 300 {
+		t.Fatalf("live update = %+v, err = %v", updated, err)
 	}
 	if err := service.DeleteManagedPool(context.Background(), clusterAdminAuth(), "public-h100"); !errors.Is(err, model.ErrManagedPoolInUse) {
 		t.Fatalf("delete with inventory error = %v, want in-use", err)
@@ -380,12 +412,14 @@ func TestManagedExternalWorkerUsesItsPersistedWorkspace(t *testing.T) {
 	}
 }
 
-func TestReconcileManagedPoolsOnlyMaterializesProviderlessExternalPools(t *testing.T) {
-	legacyProvider := types.ProviderEC2
+func TestReconcileManagedPoolsOnlyMaterializesAgentExternalPools(t *testing.T) {
+	providerBacked := types.ProviderEC2
+	agentProvider := types.ProviderAgent
 	service := managedPoolTestService(types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
-		"local":        {Mode: types.PoolModeLocal},
-		"legacy":       {Mode: types.PoolModeExternal, Provider: &legacyProvider},
-		"public-agent": {Mode: types.PoolModeExternal, Priority: 10},
+		"local":                {Mode: types.PoolModeLocal},
+		"provider-backed":      {Mode: types.PoolModeExternal, Provider: &providerBacked},
+		"providerless-agent":   {Mode: types.PoolModeExternal, Priority: 10},
+		"named-agent-provider": {Mode: types.PoolModeExternal, Provider: &agentProvider, Priority: 20},
 	}}}, &fakeComputeRepo{})
 
 	if err := service.ReconcileManagedPools(context.Background()); err != nil {
@@ -395,8 +429,43 @@ func TestReconcileManagedPoolsOnlyMaterializesProviderlessExternalPools(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(states) != 1 || states[0].Name != "public-agent" || states[0].ManagementSource != types.WorkerPoolManagementSourceConfig {
+	if len(states) != 2 {
 		t.Fatalf("reconciled states = %+v", states)
+	}
+	names := map[string]struct{}{}
+	for _, state := range states {
+		if state.ManagementSource != types.WorkerPoolManagementSourceConfig || state.WorkerConfig == nil || state.WorkerConfig.Provider != nil {
+			t.Fatalf("reconciled state = %+v", state)
+		}
+		names[state.Name] = struct{}{}
+	}
+	for _, name := range []string{"providerless-agent", "named-agent-provider"} {
+		if _, ok := names[name]; !ok {
+			t.Fatalf("missing reconciled pool %q in %+v", name, states)
+		}
+	}
+}
+
+func TestListManagedPoolsReportsConfiguredControllerType(t *testing.T) {
+	provider := types.ProviderEC2
+	service := managedPoolTestService(types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
+		"local":           {Mode: types.PoolModeLocal},
+		"managed-agent":   {Mode: types.PoolModeExternal},
+		"provider-backed": {Mode: types.PoolModeExternal, Provider: &provider},
+	}}}, &fakeComputeRepo{})
+
+	pools, err := service.ListManagedPools(context.Background(), clusterAdminAuth())
+	if err != nil {
+		t.Fatal(err)
+	}
+	controllers := map[string]types.WorkerPoolController{}
+	for _, pool := range pools {
+		controllers[pool.Name] = pool.Controller
+	}
+	if controllers["local"] != types.WorkerPoolControllerLocal ||
+		controllers["managed-agent"] != types.WorkerPoolControllerAgent ||
+		controllers["provider-backed"] != types.WorkerPoolControllerProvider {
+		t.Fatalf("configured pool controllers = %+v", controllers)
 	}
 }
 
@@ -583,9 +652,9 @@ func TestManagedPoolMachineMaintenance(t *testing.T) {
 			if err != nil || definition == nil {
 				t.Fatalf("managed definition was changed: state=%+v err=%v", definition, err)
 			}
-			legacy, err := repo.ListAllPoolStates(context.Background(), 0)
-			if err != nil || len(legacy) != 0 {
-				t.Fatalf("managed definition leaked into tenant state: states=%+v err=%v", legacy, err)
+			tenantStates, err := repo.ListAllPoolStates(context.Background(), 0)
+			if err != nil || len(tenantStates) != 0 {
+				t.Fatalf("managed definition leaked into tenant state: states=%+v err=%v", tenantStates, err)
 			}
 		})
 	}
@@ -613,11 +682,11 @@ func TestReconcileManagedPoolsDoesNotActivateStaleConfigStateWithInventory(t *te
 	if getErr != nil || state == nil {
 		t.Fatalf("stale state should remain available for draining: state=%+v err=%v", state, getErr)
 	}
-	if _, handled, createErr := service.CreateManagedMachine(context.Background(), clusterAdminAuth(), "changed-to-local"); createErr != nil || handled {
-		t.Fatalf("CreateManagedMachine() handled = %v, err = %v; stale pool must not accept inventory", handled, createErr)
+	if _, createErr := service.CreateManagedMachine(context.Background(), clusterAdminAuth(), "changed-to-local"); !errors.Is(createErr, model.ErrManagedPoolNotFound) {
+		t.Fatalf("CreateManagedMachine() error = %v, want pool not found", createErr)
 	}
-	if handled, deleteErr := service.DeleteManagedMachine(context.Background(), clusterAdminAuth(), "changed-to-local", "machine-1"); deleteErr != nil || !handled {
-		t.Fatalf("DeleteManagedMachine() handled = %v, err = %v; stale inventory must remain drainable", handled, deleteErr)
+	if deleteErr := service.DeleteManagedMachine(context.Background(), clusterAdminAuth(), "changed-to-local", "machine-1"); deleteErr != nil {
+		t.Fatalf("DeleteManagedMachine() error = %v; stale inventory must remain drainable", deleteErr)
 	}
 }
 
@@ -629,9 +698,9 @@ func TestCreateManagedMachineUsesMachineBoundToken(t *testing.T) {
 	if _, err := service.CreateManagedPool(context.Background(), clusterAdminAuth(), "public-cpu", types.WorkerPoolConfig{Mode: types.PoolModeExternal}); err != nil {
 		t.Fatal(err)
 	}
-	bootstrap, handled, err := service.CreateManagedMachine(context.Background(), clusterAdminAuth(), "public-cpu")
-	if err != nil || !handled {
-		t.Fatalf("CreateManagedMachine() handled = %v, err = %v", handled, err)
+	bootstrap, err := service.CreateManagedMachine(context.Background(), clusterAdminAuth(), "public-cpu")
+	if err != nil {
+		t.Fatalf("CreateManagedMachine() error = %v", err)
 	}
 	if bootstrap.MachineID == "" || !strings.Contains(bootstrap.InstallCommand, "/install/agent") {
 		t.Fatalf("bootstrap = %+v", bootstrap)
@@ -663,9 +732,9 @@ func TestDeletedManagedPoolTokenCannotJoinRecreatedPool(t *testing.T) {
 	if _, err := service.CreateManagedPool(context.Background(), clusterAdminAuth(), "public-cpu", types.WorkerPoolConfig{Mode: types.PoolModeExternal}); err != nil {
 		t.Fatal(err)
 	}
-	bootstrap, handled, err := service.CreateManagedMachine(context.Background(), clusterAdminAuth(), "public-cpu")
-	if err != nil || !handled {
-		t.Fatalf("CreateManagedMachine() handled = %v, err = %v", handled, err)
+	bootstrap, err := service.CreateManagedMachine(context.Background(), clusterAdminAuth(), "public-cpu")
+	if err != nil {
+		t.Fatalf("CreateManagedMachine() error = %v", err)
 	}
 	oldTokenState := repo.joinTokens[hashComputeToken(bootstrap.Token)]
 	if oldTokenState == nil || oldTokenState.ManagedPoolInstanceID == "" {
@@ -725,9 +794,9 @@ func TestManagedPoolDeleteAndJoinCannotCreateOrphanMachine(t *testing.T) {
 		if _, err := creator.CreateManagedPool(context.Background(), clusterAdminAuth(), name, types.WorkerPoolConfig{Mode: types.PoolModeExternal}); err != nil {
 			t.Fatal(err)
 		}
-		bootstrap, handled, err := creator.CreateManagedMachine(context.Background(), clusterAdminAuth(), name)
-		if err != nil || !handled {
-			t.Fatalf("CreateManagedMachine() handled=%v err=%v", handled, err)
+		bootstrap, err := creator.CreateManagedMachine(context.Background(), clusterAdminAuth(), name)
+		if err != nil {
+			t.Fatalf("CreateManagedMachine() error=%v", err)
 		}
 
 		start := make(chan struct{})
@@ -794,7 +863,6 @@ func TestManagedJoinTokenCannotJoinUnmanagedPool(t *testing.T) {
 		TokenHash:             hashComputeToken(rawToken),
 		WorkspaceID:           "admin-workspace",
 		PoolName:              "tenant-private",
-		CreatedByTokenID:      "operator-token",
 		ManagedPoolInstanceID: "wrong-managed-pool-instance",
 		Mode:                  string(types.PoolModeExternal),
 	}

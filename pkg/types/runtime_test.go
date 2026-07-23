@@ -1,6 +1,25 @@
 package types
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
+
+func TestGVisorRuntimeDefaultsUseExclusiveRootfs(t *testing.T) {
+	config := (RuntimeConfig{}).WithDefaults(ContainerRuntimeGvisor.String())
+	want := []string{"--dcache=32768", "--overlay2=none", "--file-access=exclusive"}
+	if !reflect.DeepEqual(config.GVisorExtraArgs, want) {
+		t.Fatalf("gVisor extra args = %#v, want %#v", config.GVisorExtraArgs, want)
+	}
+}
+
+func TestGVisorRuntimeDefaultsPreserveExplicitFileAccess(t *testing.T) {
+	want := []string{"--file-access=shared"}
+	config := (RuntimeConfig{GVisorExtraArgs: want}).WithDefaults(ContainerRuntimeGvisor.String())
+	if !reflect.DeepEqual(config.GVisorExtraArgs, want) {
+		t.Fatalf("gVisor extra args = %#v, want %#v", config.GVisorExtraArgs, want)
+	}
+}
 
 func TestMarketplaceContainerRuntimeForGPU(t *testing.T) {
 	tests := []struct {

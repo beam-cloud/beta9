@@ -38,6 +38,8 @@ type AgentWorkerPoolControllerOptions struct {
 
 type agentMachineWorker struct {
 	id                   string
+	workspaceID          string
+	controlPlaneManaged  bool
 	cpu                  int64
 	memory               int64
 	gpu                  string
@@ -50,6 +52,8 @@ type agentMachineWorker struct {
 	preemptable          bool
 	runtime              string
 	buildVersion         string
+	workerImageOverride  string
+	cordoned             bool
 }
 
 type AgentPoolCapacityError struct {
@@ -240,6 +244,31 @@ func (wpc *AgentWorkerPoolController) ensureMachine(machineID string) error {
 	return err
 }
 
+func (wpc *AgentWorkerPoolController) reconcileMachines() error {
+	machines, err := wpc.computeRepo.ListAgentTokenStates(wpc.ctx, wpc.workspaceID, wpc.poolName())
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, machine := range machines {
+		if machine == nil {
+			continue
+		}
+		if !wpc.machineSchedulable(machine) {
+			worker, workerErr := wpc.machineWorker(machine)
+			if workerErr != nil {
+				errs = append(errs, workerErr)
+			} else if worker != nil {
+				errs = append(errs, wpc.workerRepo.UpdateWorkerStatus(worker.Id, types.WorkerStatusDisabled))
+			}
+			continue
+		}
+		_, workerErr := wpc.ensureMachineWorker(machine)
+		errs = append(errs, workerErr)
+	}
+	return errors.Join(errs...)
+}
+
 func (wpc *AgentWorkerPoolController) findMachine(match func(*compute.AgentTokenState) bool) (*compute.AgentTokenState, error) {
 	machines, err := wpc.computeRepo.ListAgentTokenStates(wpc.ctx, wpc.workspaceID, wpc.poolName())
 	if err != nil {
@@ -345,6 +374,9 @@ func (wpc *AgentWorkerPoolController) machineAvailableCapacity(machine *compute.
 	case types.WorkerStatusPending:
 		return worker.TotalCpu, worker.TotalMemory, worker.TotalGpuCount
 	case types.WorkerStatusDisabled:
+		if worker.CordonRequested || worker.RolloutGeneration != "" {
+			return 0, 0, 0
+		}
 		return capacity.cpu, capacity.memory, capacity.gpuCount
 	default:
 		return 0, 0, 0
@@ -375,9 +407,26 @@ func (wpc *AgentWorkerPoolController) ensureMachineWorker(machine *compute.Agent
 	if err != nil {
 		return nil, err
 	}
-	if worker != nil && worker.Status != types.WorkerStatusDisabled {
+	if worker != nil {
 		spec.applyToWorker(worker)
-		return worker, wpc.workerRepo.AddWorker(worker)
+		if worker.CordonRequested || worker.RolloutGeneration != "" {
+			worker.Status = types.WorkerStatusDisabled
+			return worker, wpc.workerRepo.AddWorker(worker)
+		}
+		if worker.Status != types.WorkerStatusDisabled {
+			return worker, wpc.workerRepo.AddWorker(worker)
+		}
+		// A disabled worker without durable cordon/rollout intent was disabled
+		// by transient health reconciliation. Recreate it as pending while
+		// preserving the last acknowledged runtime generation.
+		next := spec.worker()
+		if worker.BuildVersion != "" {
+			next.BuildVersion = worker.BuildVersion
+		}
+		if err := wpc.workerRepo.AddWorker(next); err != nil {
+			return nil, err
+		}
+		return next, nil
 	}
 
 	next := spec.worker()
@@ -398,6 +447,8 @@ func (wpc *AgentWorkerPoolController) agentMachineWorker(machine *compute.AgentT
 	}
 	return agentMachineWorker{
 		id:                   compute.AgentMachineWorkerID(machine.MachineID),
+		workspaceID:          machine.WorkspaceID,
+		controlPlaneManaged:  machine.ManagedPoolInstanceID != "" && machine.Mode == string(types.PoolModeExternal),
 		cpu:                  cpu,
 		memory:               int64(machine.MemoryMB),
 		gpu:                  gpu,
@@ -409,33 +460,65 @@ func (wpc *AgentWorkerPoolController) agentMachineWorker(machine *compute.AgentT
 		priority:             wpc.workerPoolConfig.Priority,
 		preemptable:          wpc.workerPoolConfig.Preemptable,
 		runtime:              wpc.ContainerRuntime(),
-		buildVersion:         wpc.config.Worker.ImageTag,
+		buildVersion:         types.WorkerImageVersion(machine.WorkerImageOverride, wpc.config.Worker.ImageTag),
+		workerImageOverride:  machine.WorkerImageOverride,
+		cordoned:             machine.Cordoned,
 	}
 }
 
 func (m agentMachineWorker) worker() *types.Worker {
 	worker := &types.Worker{
-		Id:            m.id,
-		Status:        types.WorkerStatusPending,
-		TotalCpu:      m.cpu,
-		TotalMemory:   m.memory,
-		TotalGpuCount: m.gpuCount,
-		FreeCpu:       m.cpu,
-		FreeMemory:    m.memory,
-		FreeGpuCount:  m.gpuCount,
-		MachineId:     m.machineID,
+		Id:                  m.id,
+		Status:              types.WorkerStatusPending,
+		TotalCpu:            m.cpu,
+		TotalMemory:         m.memory,
+		TotalGpuCount:       m.gpuCount,
+		FreeCpu:             m.cpu,
+		FreeMemory:          m.memory,
+		FreeGpuCount:        m.gpuCount,
+		MachineId:           m.machineID,
+		WorkspaceId:         m.workspaceID,
+		ControlPlaneManaged: m.controlPlaneManaged,
+		CordonRequested:     m.cordoned,
+	}
+	if m.cordoned {
+		worker.Status = types.WorkerStatusDisabled
 	}
 	m.applyToWorker(worker)
 	return worker
 }
 
 func (m agentMachineWorker) applyToWorker(worker *types.Worker) {
+	usedCPU := max(worker.TotalCpu-worker.FreeCpu, 0)
+	usedMemory := max(worker.TotalMemory-worker.FreeMemory, 0)
+	usedGPU := uint32(0)
+	if worker.TotalGpuCount > worker.FreeGpuCount {
+		usedGPU = worker.TotalGpuCount - worker.FreeGpuCount
+	}
+
+	worker.TotalCpu = m.cpu
+	worker.FreeCpu = max(m.cpu-usedCPU, 0)
+	worker.TotalMemory = m.memory
+	worker.FreeMemory = max(m.memory-usedMemory, 0)
+	worker.TotalGpuCount = m.gpuCount
+	if usedGPU >= m.gpuCount {
+		worker.FreeGpuCount = 0
+	} else {
+		worker.FreeGpuCount = m.gpuCount - usedGPU
+	}
+
 	worker.Gpu = m.gpu
+	worker.WorkspaceId = m.workspaceID
+	worker.ControlPlaneManaged = m.controlPlaneManaged
 	worker.PoolName = m.poolName
 	worker.PoolSelector = m.poolSelector
 	worker.RequiresPoolSelector = m.requiresPoolSelector
 	worker.Priority = m.priority
 	worker.Preemptable = m.preemptable
 	worker.Runtime = m.runtime
-	worker.BuildVersion = m.buildVersion
+	worker.WorkerImageOverride = m.workerImageOverride
+	worker.CordonRequested = m.cordoned
+	if worker.BuildVersion == "" {
+		worker.BuildVersion = m.buildVersion
+	}
 }

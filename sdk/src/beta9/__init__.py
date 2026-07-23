@@ -1,109 +1,77 @@
-from . import env, schema
-from .abstractions import experimental, integrations
-from .abstractions.base.container import Container
-from .abstractions.endpoint import ASGI as asgi
-from .abstractions.endpoint import Endpoint as endpoint
-from .abstractions.endpoint import RealtimeASGI as realtime
-from .abstractions.experimental.bot.bot import Bot, BotEventType, BotLocation
-from .abstractions.experimental.bot.types import BotContext
-from .abstractions.function import Function as function
-from .abstractions.function import Schedule as schedule
-from .abstractions.image import Image
-from .abstractions.map import Map
-from .abstractions.output import Output
-from .abstractions.pod import Pod
-from .abstractions.queue import SimpleQueue as Queue
-from .abstractions.sandbox import (
-    Sandbox,
-    SandboxConnectionError,
-    SandboxFileInfo,
-    SandboxFilePosition,
-    SandboxFileSearchMatch,
-    SandboxFileSearchRange,
-    SandboxFileSearchResult,
-    SandboxFileSystem,
-    SandboxFileSystemError,
-    SandboxInstance,
-    SandboxProcess,
-    SandboxProcessError,
-    SandboxProcessManager,
-    SandboxProcessResponse,
-    SandboxProcessStream,
-)
-from .abstractions.service import Service
-from .abstractions.taskqueue import TaskQueue as task_queue
-from .abstractions.volume import CloudBucket, CloudBucketConfig, Volume
-from .client.client import Client
-from .client.deployment import Deployment
-from .client.task import Task
-from .type import (
-    DatabaseServingConfig,
-    DurableDisk,
-    GpuType,
-    LLMConfig,
-    LLMTokenPressureAutoscaler,
-    Pool,
-    PricingPolicy,
-    PricingPolicyCostModel,
-    PythonVersion,
-    QueueDepthAutoscaler,
-    ServingConfig,
-    TaskPolicy,
-)
+from importlib import import_module
 
-__all__ = [
-    "Map",
-    "Image",
-    "Queue",
-    "Volume",
-    "CloudBucket",
-    "CloudBucketConfig",
-    "task_queue",
-    "function",
-    "endpoint",
-    "asgi",
-    "realtime",
-    "Container",
-    "env",
-    "GpuType",
-    "DatabaseServingConfig",
-    "DurableDisk",
-    "LLMConfig",
-    "LLMTokenPressureAutoscaler",
-    "Pool",
-    "PythonVersion",
-    "Output",
-    "QueueDepthAutoscaler",
-    "ServingConfig",
-    "experimental",
-    "integrations",
-    "schedule",
-    "TaskPolicy",
-    "Bot",
-    "BotLocation",
-    "BotEventType",
-    "BotContext",
-    "Pod",
-    "Service",
-    "PricingPolicy",
-    "PricingPolicyCostModel",
-    "Client",
-    "Task",
-    "Deployment",
-    "schema",
-    "Sandbox",
-    "SandboxInstance",
-    "SandboxProcess",
-    "SandboxProcessStream",
-    "SandboxProcessManager",
-    "SandboxProcessResponse",
-    "SandboxConnectionError",
-    "SandboxProcessError",
-    "SandboxFileSystemError",
-    "SandboxFilePosition",
-    "SandboxFileSearchRange",
-    "SandboxFileSearchMatch",
-    "SandboxFileInfo",
-    "SandboxFileSystem",
-    "SandboxFileSearchResult",
-]
+
+_EXPORTS = {
+    "Map": (".abstractions.map", "Map"),
+    "Image": (".abstractions.image", "Image"),
+    "Queue": (".abstractions.queue", "SimpleQueue"),
+    "Volume": (".abstractions.volume", "Volume"),
+    "CloudBucket": (".abstractions.volume", "CloudBucket"),
+    "CloudBucketConfig": (".abstractions.volume", "CloudBucketConfig"),
+    "task_queue": (".abstractions.taskqueue", "TaskQueue"),
+    "function": (".abstractions.function", "Function"),
+    "endpoint": (".abstractions.endpoint", "Endpoint"),
+    "asgi": (".abstractions.endpoint", "ASGI"),
+    "realtime": (".abstractions.endpoint", "RealtimeASGI"),
+    "Container": (".abstractions.base.container", "Container"),
+    "env": (".env", None),
+    "GpuType": (".type", "GpuType"),
+    "DatabaseServingConfig": (".type", "DatabaseServingConfig"),
+    "DurableDisk": (".type", "DurableDisk"),
+    "LLMConfig": (".type", "LLMConfig"),
+    "LLMTokenPressureAutoscaler": (".type", "LLMTokenPressureAutoscaler"),
+    "Pool": (".type", "Pool"),
+    "PythonVersion": (".type", "PythonVersion"),
+    "Output": (".abstractions.output", "Output"),
+    "QueueDepthAutoscaler": (".type", "QueueDepthAutoscaler"),
+    "ServingConfig": (".type", "ServingConfig"),
+    "experimental": (".abstractions.experimental", None),
+    "integrations": (".abstractions.integrations", None),
+    "schedule": (".abstractions.function", "Schedule"),
+    "TaskPolicy": (".type", "TaskPolicy"),
+    "Bot": (".abstractions.experimental.bot.bot", "Bot"),
+    "BotLocation": (".abstractions.experimental.bot.bot", "BotLocation"),
+    "BotEventType": (".abstractions.experimental.bot.bot", "BotEventType"),
+    "BotContext": (".abstractions.experimental.bot.types", "BotContext"),
+    "Pod": (".abstractions.pod", "Pod"),
+    "Service": (".abstractions.service", "Service"),
+    "PricingPolicy": (".type", "PricingPolicy"),
+    "PricingPolicyCostModel": (".type", "PricingPolicyCostModel"),
+    "Client": (".client.client", "Client"),
+    "Task": (".client.task", "Task"),
+    "Deployment": (".client.deployment", "Deployment"),
+    "schema": (".schema", None),
+    "Sandbox": (".abstractions.sandbox", "Sandbox"),
+    "SandboxInstance": (".abstractions.sandbox", "SandboxInstance"),
+    "SandboxProcess": (".abstractions.sandbox", "SandboxProcess"),
+    "SandboxProcessStream": (".abstractions.sandbox", "SandboxProcessStream"),
+    "SandboxProcessManager": (".abstractions.sandbox", "SandboxProcessManager"),
+    "SandboxProcessResponse": (".abstractions.sandbox", "SandboxProcessResponse"),
+    "SandboxConnectionError": (".abstractions.sandbox", "SandboxConnectionError"),
+    "SandboxProcessError": (".abstractions.sandbox", "SandboxProcessError"),
+    "SandboxFileSystemError": (".abstractions.sandbox", "SandboxFileSystemError"),
+    "SandboxFilePosition": (".abstractions.sandbox", "SandboxFilePosition"),
+    "SandboxFileSearchRange": (".abstractions.sandbox", "SandboxFileSearchRange"),
+    "SandboxFileSearchMatch": (".abstractions.sandbox", "SandboxFileSearchMatch"),
+    "SandboxFileInfo": (".abstractions.sandbox", "SandboxFileInfo"),
+    "SandboxFileSystem": (".abstractions.sandbox", "SandboxFileSystem"),
+    "SandboxFileSearchResult": (".abstractions.sandbox", "SandboxFileSearchResult"),
+}
+
+__all__ = list(_EXPORTS)
+
+
+def __getattr__(name):
+    try:
+        module_name, attribute = _EXPORTS[name]
+    except KeyError as error:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}") from error
+
+    module = import_module(module_name, __name__)
+    value = module if attribute is None else getattr(module, attribute)
+    globals()[name] = value
+    return value
+
+
+def __dir__():
+    return sorted((*globals(), *__all__))

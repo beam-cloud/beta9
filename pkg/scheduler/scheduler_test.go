@@ -18,9 +18,13 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
-	"github.com/knadh/koanf/providers/rawbytes"
 	"github.com/tj/assert"
 )
+
+func testWorkspaceWithStorage() types.Workspace {
+	id := uint(1)
+	return types.Workspace{Storage: &types.WorkspaceStorage{Id: &id}}
+}
 
 func NewSchedulerForTest() (*Scheduler, error) {
 	s, err := miniredis.Run()
@@ -47,9 +51,16 @@ func NewSchedulerForTest() (*Scheduler, error) {
 		return nil, err
 	}
 
-	poolJson := []byte(`{"worker":{"pools":{"beta9-build":{},"beta9-cpu":{},"beta9-a10g":{"gpuType": "A10G"},"beta9-t4":{"gpuType": "T4"}}}}}`)
-	configManager.LoadConfig(common.YAMLConfigFormat, rawbytes.Provider(poolJson))
 	config := configManager.GetConfig()
+	defaultPool := config.Worker.Pools["default"]
+	defaultPool.Priority = 1
+	config.Worker.Pools = map[string]types.WorkerPoolConfig{
+		"default":     defaultPool,
+		"beta9-build": {RequiresPoolSelector: true},
+		"beta9-cpu":   {},
+		"beta9-a10g":  {GPUType: "A10G"},
+		"beta9-t4":    {GPUType: "T4"},
+	}
 	eventRepo := repo.NewEventClientRepo(config)
 
 	schedulerUsageMetrics := SchedulerUsageMetrics{
@@ -85,6 +96,22 @@ func NewSchedulerForTest() (*Scheduler, error) {
 		workerProvisioningBackoff: newWorkerProvisioningBackoff(),
 		credentials:               newSchedulerCredentialCache(),
 	}, nil
+}
+
+func setPendingSchedulerRequests(t *testing.T, scheduler *Scheduler, requests ...*types.ContainerRequest) {
+	t.Helper()
+
+	for _, request := range requests {
+		if request.ContainerId == "" {
+			request.ContainerId = uuid.NewString()
+		}
+		assert.NoError(t, scheduler.containerRepo.SetContainerState(request.ContainerId, &types.ContainerState{
+			ContainerId: request.ContainerId,
+			Status:      types.ContainerStatusPending,
+			WorkspaceId: request.WorkspaceId,
+			ScheduledAt: time.Now().Unix(),
+		}))
+	}
 }
 
 func TestPrivateWorkerRequestUsesPoolMode(t *testing.T) {
@@ -133,6 +160,7 @@ func TestPrivateGPUWorkerCapacityRequiresRequestedGPUCount(t *testing.T) {
 		GpuRequest:   []string{"H100"},
 		GpuCount:     8,
 		PoolSelector: "private-gpu-pool",
+		Workspace:    testWorkspaceWithStorage(),
 	}
 
 	worker, err := scheduler.selectWorkerFromWorkers([]*types.Worker{{
@@ -192,7 +220,7 @@ func TestPreemptibleMarketplaceCapacityReachableWithAllowMarketplace(t *testing.
 		mode:        types.PoolModeMarketplace,
 		preemptable: true,
 	}
-	request := &types.ContainerRequest{AllowMarketplace: true}
+	request := &types.ContainerRequest{AllowMarketplace: true, Workspace: testWorkspaceWithStorage()}
 	assert.Equal(
 		t,
 		[]WorkerPoolController{preemptibleMarketplace},
@@ -231,6 +259,7 @@ func TestPreemptibleMarketplaceCapacityReachableWithAllowMarketplace(t *testing.
 		GpuRequest:       []string{"A10G"},
 		GpuCount:         1,
 		AllowMarketplace: true,
+		Workspace:        testWorkspaceWithStorage(),
 	})
 	assert.NoError(t, err)
 	assert.Equal(t, preemptibleWorker.Id, worker.Id)
@@ -258,11 +287,12 @@ func TestPreemptibleMarketplaceCapacityReachableWithAllowMarketplace(t *testing.
 func TestMarketplaceControllersRequireExplicitSafeOptIn(t *testing.T) {
 	marketplace := &LocalWorkerPoolControllerForTest{name: "marketplace", mode: types.PoolModeMarketplace}
 	regular := &LocalWorkerPoolControllerForTest{name: "regular", mode: types.PoolModeLocal}
+	workspace := testWorkspaceWithStorage()
 
-	assert.Equal(t, []WorkerPoolController{regular}, filterControllersByFlags([]WorkerPoolController{marketplace, regular}, &types.ContainerRequest{}))
-	assert.Equal(t, []WorkerPoolController{marketplace, regular}, filterControllersByFlags([]WorkerPoolController{marketplace, regular}, &types.ContainerRequest{AllowMarketplace: true}))
-	assert.Equal(t, []WorkerPoolController{regular}, filterControllersByFlags([]WorkerPoolController{marketplace, regular}, &types.ContainerRequest{AllowMarketplace: true, DockerEnabled: true}))
-	assert.Equal(t, []WorkerPoolController{regular}, filterControllersByFlags([]WorkerPoolController{marketplace, regular}, &types.ContainerRequest{AllowMarketplace: true, PoolSelector: "regular"}))
+	assert.Equal(t, []WorkerPoolController{regular}, filterControllersByFlags([]WorkerPoolController{marketplace, regular}, &types.ContainerRequest{Workspace: workspace}))
+	assert.Equal(t, []WorkerPoolController{marketplace, regular}, filterControllersByFlags([]WorkerPoolController{marketplace, regular}, &types.ContainerRequest{AllowMarketplace: true, Workspace: workspace}))
+	assert.Equal(t, []WorkerPoolController{regular}, filterControllersByFlags([]WorkerPoolController{marketplace, regular}, &types.ContainerRequest{AllowMarketplace: true, DockerEnabled: true, Workspace: workspace}))
+	assert.Equal(t, []WorkerPoolController{regular}, filterControllersByFlags([]WorkerPoolController{marketplace, regular}, &types.ContainerRequest{AllowMarketplace: true, PoolSelector: "regular", Workspace: workspace}))
 }
 
 func TestMarketplaceWorkersRequireExplicitSafeOptIn(t *testing.T) {
@@ -285,45 +315,41 @@ func TestMarketplaceWorkersRequireExplicitSafeOptIn(t *testing.T) {
 		RequiresPoolSelector: false,
 	}, nil)
 
-	baseRequest := &types.ContainerRequest{Cpu: 1000, Memory: 512, GpuRequest: []string{"A10G"}, GpuCount: 1}
+	baseRequest := &types.ContainerRequest{Cpu: 1000, Memory: 512, GpuRequest: []string{"A10G"}, GpuCount: 1, Workspace: testWorkspaceWithStorage()}
 
 	_, err := scheduler.selectWorkerFromWorkers([]*types.Worker{marketplaceWorker}, baseRequest.Clone())
 	assert.Error(t, err)
 
-	worker, err := scheduler.selectWorkerFromWorkers([]*types.Worker{marketplaceWorker}, &types.ContainerRequest{Cpu: 1000, Memory: 512, GpuRequest: []string{"A10G"}, GpuCount: 1, AllowMarketplace: true})
+	allowed := baseRequest.Clone()
+	allowed.AllowMarketplace = true
+	worker, err := scheduler.selectWorkerFromWorkers([]*types.Worker{marketplaceWorker}, allowed)
 	assert.NoError(t, err)
 	assert.Equal(t, marketplaceWorker.Id, worker.Id)
 
-	_, err = scheduler.selectWorkerFromWorkers([]*types.Worker{marketplaceWorker}, &types.ContainerRequest{Cpu: 1000, Memory: 512, GpuRequest: []string{"A10G"}, GpuCount: 1, AllowMarketplace: true, DockerEnabled: true})
+	docker := allowed.Clone()
+	docker.DockerEnabled = true
+	_, err = scheduler.selectWorkerFromWorkers([]*types.Worker{marketplaceWorker}, docker)
 	assert.Error(t, err)
 
-	_, err = scheduler.selectWorkerFromWorkers([]*types.Worker{marketplaceWorker}, &types.ContainerRequest{Cpu: 1000, Memory: 512, GpuRequest: []string{"A10G"}, GpuCount: 1, AllowMarketplace: true, PoolSelector: "marketplace"})
+	selected := allowed.Clone()
+	selected.PoolSelector = "marketplace"
+	_, err = scheduler.selectWorkerFromWorkers([]*types.Worker{marketplaceWorker}, selected)
 	assert.Error(t, err)
 
-	_, err = scheduler.selectWorkerFromWorkers([]*types.Worker{marketplaceWorker}, &types.ContainerRequest{
-		Cpu:              1000,
-		Memory:           512,
-		GpuRequest:       []string{"A10G"},
-		GpuCount:         1,
-		AllowMarketplace: true,
-		Mounts: []types.Mount{{
-			LocalPath: "/var/run/docker.sock",
-			MountPath: "/var/run/docker.sock",
-		}},
-	})
+	dockerMount := allowed.Clone()
+	dockerMount.Mounts = []types.Mount{{
+		LocalPath: "/var/run/docker.sock",
+		MountPath: "/var/run/docker.sock",
+	}}
+	_, err = scheduler.selectWorkerFromWorkers([]*types.Worker{marketplaceWorker}, dockerMount)
 	assert.Error(t, err)
 
-	_, err = scheduler.selectWorkerFromWorkers([]*types.Worker{marketplaceWorker}, &types.ContainerRequest{
-		Cpu:              1000,
-		Memory:           512,
-		GpuRequest:       []string{"A10G"},
-		GpuCount:         1,
-		AllowMarketplace: true,
-		Mounts: []types.Mount{{
-			LocalPath: "/data/objects/workspace/stub",
-			MountPath: "/mnt/code",
-		}},
-	})
+	codeMount := allowed.Clone()
+	codeMount.Mounts = []types.Mount{{
+		LocalPath: "/data/objects/workspace/stub",
+		MountPath: "/mnt/code",
+	}}
+	_, err = scheduler.selectWorkerFromWorkers([]*types.Worker{marketplaceWorker}, codeMount)
 	assert.NoError(t, err)
 }
 
@@ -369,6 +395,45 @@ func TestEnsureAgentPoolNormalizesPersistedManagedConfig(t *testing.T) {
 	assert.Equal(t, int32(7), pool.Config.Priority)
 }
 
+func TestEnsureAgentPoolReconcilesExistingMachineWorkers(t *testing.T) {
+	s, err := NewSchedulerForTest()
+	assert.NoError(t, err)
+	s.workerPoolManager = NewWorkerPoolManager(false)
+
+	state := &compute.PoolState{
+		Name:              "api-pool",
+		Selector:          "api-pool",
+		ManagementSource:  types.WorkerPoolManagementSourceAPI,
+		ManagedInstanceID: "instance-1",
+		WorkerConfig: &types.WorkerPoolConfig{
+			Mode:             types.PoolModeExternal,
+			ContainerRuntime: types.ContainerRuntimeGvisor.String(),
+		},
+	}
+	machine := &compute.AgentTokenState{
+		WorkspaceID:     "admin-workspace",
+		PoolName:        state.Name,
+		MachineID:       "machine-1",
+		CPUCount:        4,
+		MemoryMB:        8192,
+		Executor:        types.DefaultAgentWorkerContainerMode,
+		Schedulable:     true,
+		LastHeartbeatAt: time.Now(),
+	}
+	assert.NoError(t, s.computeRepo.SaveAgentTokenState(context.Background(), machine, time.Hour))
+	assert.NoError(t, s.EnsureAgentPool(machine.WorkspaceID, state))
+
+	worker, err := s.workerRepo.GetWorkerById(compute.AgentMachineWorkerID(machine.MachineID))
+	assert.NoError(t, err)
+	assert.Equal(t, types.ContainerRuntimeGvisor.String(), worker.Runtime)
+
+	state.WorkerConfig.ContainerRuntime = types.ContainerRuntimeRunc.String()
+	assert.NoError(t, s.EnsureAgentPool(machine.WorkspaceID, state))
+	worker, err = s.workerRepo.GetWorkerById(worker.Id)
+	assert.NoError(t, err)
+	assert.Equal(t, types.ContainerRuntimeRunc.String(), worker.Runtime)
+}
+
 func TestTenantAgentPoolsUseWorkspaceScopedControllerKeys(t *testing.T) {
 	scheduler, err := NewSchedulerForTest()
 	assert.NoError(t, err)
@@ -400,6 +465,48 @@ func TestTenantAgentPoolsUseWorkspaceScopedControllerKeys(t *testing.T) {
 	assert.Equal(t, types.PoolModeLocal, global.Config.Mode)
 }
 
+func TestLoadedPrivatePoolDoesNotReconcileOnRequest(t *testing.T) {
+	scheduler, err := NewSchedulerForTest()
+	assert.NoError(t, err)
+	scheduler.workerPoolManager = NewWorkerPoolManager(false)
+
+	const workspaceID = "workspace-private"
+	state := &compute.PoolState{
+		Name:     "private-pool",
+		Selector: "private-selector",
+		Mode:     string(types.PoolModePrivate),
+		Config:   &pb.PoolConfig{Name: "private-pool", Selector: "private-selector", Mode: string(types.PoolModePrivate)},
+	}
+	machine := &compute.AgentTokenState{
+		WorkspaceID:     workspaceID,
+		PoolName:        state.Name,
+		MachineID:       "machine-private",
+		CPUCount:        4,
+		MemoryMB:        8192,
+		Executor:        types.DefaultAgentWorkerContainerMode,
+		Schedulable:     true,
+		LastHeartbeatAt: time.Now(),
+	}
+	assert.NoError(t, scheduler.computeRepo.SavePoolState(context.Background(), workspaceID, state))
+	assert.NoError(t, scheduler.computeRepo.SaveAgentTokenState(context.Background(), machine, time.Hour))
+
+	request := &types.ContainerRequest{WorkspaceId: workspaceID, PoolSelector: state.Selector}
+	_, err = scheduler.ensureAgentPoolForRequest(request)
+	assert.NoError(t, err)
+
+	worker, err := scheduler.workerRepo.GetWorkerById(compute.AgentMachineWorkerID(machine.MachineID))
+	assert.NoError(t, err)
+	assert.NoError(t, scheduler.workerRepo.UpdateWorkerStatus(worker.Id, types.WorkerStatusAvailable))
+	assert.NoError(t, scheduler.workerRepo.UpdateWorkerCapacity(worker, &types.ContainerRequest{Cpu: 100, Memory: 100}, types.RemoveCapacity))
+	version := worker.ResourceVersion
+
+	_, err = scheduler.ensureAgentPoolForRequest(request)
+	assert.NoError(t, err)
+	worker, err = scheduler.workerRepo.GetWorkerById(worker.Id)
+	assert.NoError(t, err)
+	assert.Equal(t, version, worker.ResourceVersion)
+}
+
 // Machine-pinned requests (marketplace rentals) must only ever see the pinned
 // machine's worker, regardless of pool selector requirements.
 func TestFilterWorkersByMachinePinsWorker(t *testing.T) {
@@ -419,6 +526,59 @@ func TestFilterWorkersByMachinePinsWorker(t *testing.T) {
 
 	unpinned := filterWorkersByMachine(workers, &types.ContainerRequest{})
 	assert.Len(t, unpinned, 2)
+}
+
+func TestFilterWorkersByWorkspaceScope(t *testing.T) {
+	scheduler := &Scheduler{workerPoolManager: NewWorkerPoolManager(false)}
+	scheduler.workerPoolManager.SetPool("marketplace", types.WorkerPoolConfig{Mode: types.PoolModeMarketplace}, nil)
+
+	workers := []*types.Worker{
+		{Id: "local"},
+		{Id: "owned-private", WorkspaceId: "workspace-1"},
+		{Id: "foreign-private", WorkspaceId: "workspace-2"},
+		{Id: "managed", WorkspaceId: "admin-workspace", ControlPlaneManaged: true},
+		{Id: "marketplace", WorkspaceId: "seller-workspace", PoolName: "marketplace"},
+	}
+
+	filtered := scheduler.filterWorkersByWorkspaceScope(workers, &types.ContainerRequest{WorkspaceId: "workspace-1"})
+	assert.Equal(t, []*types.Worker{workers[0], workers[1], workers[3], workers[4]}, filtered)
+}
+
+func TestSelectorCannotScheduleForeignPrivateWorker(t *testing.T) {
+	scheduler := &Scheduler{workerPoolManager: NewWorkerPoolManager(false)}
+	worker := &types.Worker{
+		Id:                   "private-worker",
+		Status:               types.WorkerStatusAvailable,
+		FreeCpu:              2000,
+		FreeMemory:           2500,
+		PoolName:             "private-pool",
+		PoolSelector:         "private-pool",
+		RequiresPoolSelector: true,
+		WorkspaceId:          "workspace-owner",
+	}
+	request := &types.ContainerRequest{
+		Cpu:          1000,
+		Memory:       1000,
+		PoolSelector: "private-pool",
+		WorkspaceId:  "workspace-other",
+		Workspace:    testWorkspaceWithStorage(),
+	}
+
+	_, err := scheduler.selectWorkerFromWorkers([]*types.Worker{worker}, request)
+	var noWorker *types.ErrNoSuitableWorkerFound
+	assert.Error(t, err)
+	assert.True(t, errors.As(err, &noWorker))
+
+	request.WorkspaceId = worker.WorkspaceId
+	selected, err := scheduler.selectWorkerFromWorkers([]*types.Worker{worker}, request)
+	assert.NoError(t, err)
+	assert.Equal(t, worker, selected)
+
+	request.WorkspaceId = "workspace-other"
+	worker.ControlPlaneManaged = true
+	selected, err = scheduler.selectWorkerFromWorkers([]*types.Worker{worker}, request)
+	assert.NoError(t, err)
+	assert.Equal(t, worker, selected)
 }
 
 // Rented GPUs are invisible to serverless marketplace requests; machine-pinned
@@ -779,11 +939,12 @@ func TestRunContainer(t *testing.T) {
 	}
 }
 
-func TestStopDeletesPendingBuildContainerState(t *testing.T) {
+func TestStopDeletesUnassignedPendingContainerState(t *testing.T) {
 	wb, err := NewSchedulerForTest()
 	assert.Nil(t, err)
 
-	containerId := types.BuildContainerPrefix + "pending"
+	containerId := "pending-container"
+	request := &types.ContainerRequest{ContainerId: containerId, Timestamp: time.Now()}
 	err = wb.containerRepo.SetContainerState(containerId, &types.ContainerState{
 		ContainerId: containerId,
 		Status:      types.ContainerStatusPending,
@@ -791,6 +952,7 @@ func TestStopDeletesPendingBuildContainerState(t *testing.T) {
 		ScheduledAt: time.Now().Unix(),
 	})
 	assert.Nil(t, err)
+	assert.NoError(t, wb.requestBacklog.Push(request))
 
 	err = wb.Stop(&types.StopContainerArgs{
 		ContainerId: containerId,
@@ -800,7 +962,36 @@ func TestStopDeletesPendingBuildContainerState(t *testing.T) {
 
 	_, err = wb.containerRepo.GetContainerState(containerId)
 	notFound := &types.ErrContainerStateNotFound{}
-	assert.True(t, notFound.From(err), "expected deleted pending build state, got %v", err)
+	assert.True(t, notFound.From(err), "expected deleted pending state, got %v", err)
+
+	popped, err := wb.requestBacklog.Pop()
+	assert.NoError(t, err)
+	wb.processRequestBatch([]*types.ContainerRequest{popped}, nil)
+	assert.Equal(t, int64(0), wb.requestBacklog.Len())
+}
+
+func TestStopPreservesAssignedPendingContainerForWorkerCancellation(t *testing.T) {
+	wb, err := NewSchedulerForTest()
+	assert.NoError(t, err)
+
+	containerID := "assigned-pending-container"
+	assert.NoError(t, wb.containerRepo.SetContainerState(containerID, &types.ContainerState{
+		ContainerId: containerID,
+		Status:      types.ContainerStatusPending,
+		WorkspaceId: "workspace-1",
+		WorkerId:    "worker-1",
+		ScheduledAt: time.Now().Unix(),
+	}))
+
+	assert.NoError(t, wb.Stop(&types.StopContainerArgs{
+		ContainerId: containerID,
+		Reason:      types.StopContainerReasonUser,
+	}))
+
+	state, err := wb.containerRepo.GetContainerState(containerID)
+	assert.NoError(t, err)
+	assert.Equal(t, types.ContainerStatusStopping, state.Status)
+	assert.Equal(t, "worker-1", state.WorkerId)
 }
 
 func TestRunCleansContainerStateWhenBacklogPushFails(t *testing.T) {
@@ -1090,6 +1281,7 @@ func TestProcessRequestUsesInFlightProvisioningForCurrentBatch(t *testing.T) {
 		PoolSelector: "beta9-cpu",
 		Timestamp:    time.Now(),
 	}
+	setPendingSchedulerRequests(t, wb, firstRequest, secondRequest)
 
 	wb.processRequest(firstRequest, nil)
 	select {
@@ -1155,19 +1347,22 @@ func TestProcessRequestTracksPendingWorkerCapacityAcrossBatches(t *testing.T) {
 	assert.Nil(t, err)
 
 	firstRequest := &types.ContainerRequest{
-		ContainerId: uuid.New().String(),
-		Cpu:         1000,
-		Memory:      1000,
-		GpuRequest:  []string{"A10G"},
-		Timestamp:   time.Now(),
+		ContainerId:  uuid.New().String(),
+		Cpu:          1000,
+		Memory:       1000,
+		GpuRequest:   []string{"A10G"},
+		PoolSelector: "beta9-a10g",
+		Timestamp:    time.Now(),
 	}
 	secondRequest := &types.ContainerRequest{
-		ContainerId: uuid.New().String(),
-		Cpu:         1000,
-		Memory:      1000,
-		GpuRequest:  []string{"A10G"},
-		Timestamp:   time.Now(),
+		ContainerId:  uuid.New().String(),
+		Cpu:          1000,
+		Memory:       1000,
+		GpuRequest:   []string{"A10G"},
+		PoolSelector: "beta9-a10g",
+		Timestamp:    time.Now(),
 	}
+	setPendingSchedulerRequests(t, wb, firstRequest, secondRequest)
 
 	firstBatchWorkers, err := wb.workerRepo.GetAllWorkers()
 	assert.Nil(t, err)
@@ -1226,6 +1421,7 @@ func TestProcessRequestUpdatesBatchWorkerCapacity(t *testing.T) {
 		Memory:      1,
 		Timestamp:   time.Now(),
 	}
+	setPendingSchedulerRequests(t, wb, firstRequest)
 
 	wb.processRequest(firstRequest, workers)
 
@@ -1276,6 +1472,7 @@ func TestProcessRequestBatchDoesNotOverScheduleWorkerSnapshot(t *testing.T) {
 			Timestamp:   time.Now(),
 		},
 	}
+	setPendingSchedulerRequests(t, wb, requests...)
 
 	wb.processRequestBatch(requests, workers)
 
@@ -1343,6 +1540,7 @@ func TestProcessRequestBatchSpreadsAcrossEqualWorkers(t *testing.T) {
 			Timestamp:   time.Now(),
 		},
 	}
+	setPendingSchedulerRequests(t, wb, requests...)
 
 	wb.processRequestBatch(requests, workers)
 
@@ -1404,6 +1602,7 @@ func TestProcessRequestBatchSchedulesTinySandboxBurstByRequestedCapacity(t *test
 			},
 		}
 	}
+	setPendingSchedulerRequests(t, wb, requests...)
 
 	workerSnapshot, err := wb.workerRepo.GetAllWorkers()
 	assert.Nil(t, err)
@@ -1470,6 +1669,7 @@ func TestProcessRequestBatchKeepsCPUAndGPUCapacitySeparate(t *testing.T) {
 		GpuRequest:  []string{"A10G"},
 		Timestamp:   time.Now(),
 	}
+	setPendingSchedulerRequests(t, wb, gpuRequest, cpuRequest)
 
 	wb.processRequestBatch([]*types.ContainerRequest{gpuRequest, cpuRequest}, workers)
 
@@ -1536,6 +1736,7 @@ func TestProcessRequestKeepsCPUAndGPUWorkersSeparate(t *testing.T) {
 		GpuCount:    1,
 		Timestamp:   time.Now(),
 	}
+	setPendingSchedulerRequests(t, wb, cpuRequest, gpuRequest)
 
 	wb.processRequest(cpuRequest, workers)
 	wb.processRequest(gpuRequest, workers)
@@ -1594,6 +1795,7 @@ func TestProcessRequestDefaultsGPUCountBeforeScheduling(t *testing.T) {
 		GpuRequest:  []string{"A10G"},
 		Timestamp:   time.Now(),
 	}
+	setPendingSchedulerRequests(t, wb, request)
 
 	wb.processRequest(request, workers)
 
@@ -1649,6 +1851,7 @@ func TestProcessRequestStaleReplicaGPUReservationRequeues(t *testing.T) {
 		GpuRequest:  []string{"A10G"},
 		Timestamp:   time.Now(),
 	}
+	setPendingSchedulerRequests(t, firstScheduler, firstRequest, secondRequest)
 
 	firstScheduler.processRequest(firstRequest, firstReplicaWorkers)
 	secondScheduler.processRequest(secondRequest, secondReplicaWorkers)
@@ -1687,7 +1890,7 @@ func TestProcessRequestStaleReplicaGPUReservationRequeues(t *testing.T) {
 
 	assert.Equal(t, secondRequest.ContainerId, requeuedRequest.ContainerId)
 	assert.Equal(t, uint32(1), requeuedRequest.GpuCount)
-	assert.Equal(t, "A10G", requeuedRequest.Gpu)
+	assert.Empty(t, requeuedRequest.Gpu)
 }
 
 func TestProcessRequestConcurrentStaleReplicaGPUReservationRequeues(t *testing.T) {
@@ -1731,6 +1934,7 @@ func TestProcessRequestConcurrentStaleReplicaGPUReservationRequeues(t *testing.T
 		GpuRequest:  []string{"A10G"},
 		Timestamp:   time.Now(),
 	}
+	setPendingSchedulerRequests(t, firstScheduler, firstRequest, secondRequest)
 
 	start := make(chan struct{})
 	var wg sync.WaitGroup
@@ -1793,7 +1997,7 @@ func TestProcessRequestConcurrentStaleReplicaGPUReservationRequeues(t *testing.T
 	_, requeuedWasAlreadyQueued := queuedIds[requeuedRequest.ContainerId]
 	assert.False(t, requeuedWasAlreadyQueued)
 	assert.Equal(t, uint32(1), requeuedRequest.GpuCount)
-	assert.Equal(t, "A10G", requeuedRequest.Gpu)
+	assert.Empty(t, requeuedRequest.Gpu)
 
 	extraRequeuedRequest, err := firstScheduler.requestBacklog.Pop()
 	assert.Error(t, err)
@@ -1971,6 +2175,7 @@ func TestAgentHostedProvisioningUsesRequestSizing(t *testing.T) {
 		GpuCount:     1,
 		PoolSelector: "private-pool",
 		Timestamp:    time.Now(),
+		Workspace:    testWorkspaceWithStorage(),
 	}
 
 	controllers, err := wb.getControllers(request)
@@ -2120,6 +2325,7 @@ func TestGetControllersRegistersAgentPoolFromRepository(t *testing.T) {
 		PoolSelector: poolState.Selector,
 		Cpu:          1000,
 		Memory:       1000,
+		Workspace:    testWorkspaceWithStorage(),
 	}
 
 	controllers, err := wb.getControllers(request)
@@ -2218,6 +2424,7 @@ func TestSelectPrivateAgentWorkerIgnoresStaleMachine(t *testing.T) {
 		PoolSelector: poolState.Selector,
 		Cpu:          1000,
 		Memory:       1000,
+		Workspace:    testWorkspaceWithStorage(),
 	})
 	assert.NoError(t, err)
 	assert.Equal(t, compute.AgentMachineWorkerID("live-machine"), worker.Id)
@@ -2273,6 +2480,7 @@ func TestSelectGPUWorker(t *testing.T) {
 	assert.Equal(t, newWorker.Id, worker.Id)
 
 	// Actually schedule the request
+	setPendingSchedulerRequests(t, wb, firstRequest)
 	err = wb.scheduleRequest(worker, firstRequest)
 	assert.Nil(t, err)
 
@@ -2357,6 +2565,7 @@ func TestSelectCPUWorker(t *testing.T) {
 	assert.Nil(t, err)
 
 	// Select a worker for the request
+	setPendingSchedulerRequests(t, wb, firstRequest, secondRequest, thirdRequest)
 	worker, err := wb.selectWorker(firstRequest)
 	assert.Nil(t, err)
 	assert.Equal(t, newWorker.Gpu, worker.Gpu)
@@ -2567,6 +2776,7 @@ func TestSelectWorkersWithBackupGPU(t *testing.T) {
 					assert.True(t, stringInSlice(worker.Gpu, reqGpus))
 				}
 
+				setPendingSchedulerRequests(t, wb, req)
 				err = wb.scheduleRequest(worker, req)
 				assert.Nil(t, err)
 			}
@@ -2674,6 +2884,7 @@ func TestRequiresPoolSelectorWorker(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, newWorkerWithRequiresPoolSelector.Id, worker.Id)
 
+	setPendingSchedulerRequests(t, wb, firstRequest)
 	err = wb.scheduleRequest(worker, firstRequest)
 	assert.Nil(t, err)
 
@@ -2767,35 +2978,33 @@ func TestPreemptableWorker(t *testing.T) {
 	assert.Equal(t, worker.Id, newNonPreemptableWorker.Id)
 }
 
-func TestPoolPriority(t *testing.T) {
+func TestServerlessPoolFallsBackWhenHighPriorityPoolIsFull(t *testing.T) {
 	wb, err := NewSchedulerForTest()
 	assert.Nil(t, err)
 	assert.NotNil(t, wb)
 
-	newWorkerWithLowPriority := &types.Worker{
-		Id:         "worker1",
+	defaultWorker := &types.Worker{
+		Id:         "worker-default",
 		Status:     types.WorkerStatusAvailable,
 		FreeCpu:    2000,
 		FreeMemory: 2500,
-		Gpu:        "",
-		PoolName:   "cpu",
-		Priority:   0,
+		PoolName:   "default",
+		Priority:   100,
 	}
 
-	newWorkerWithHigherPriority := &types.Worker{
-		Id:         "worker2",
+	gladiatorWorker := &types.Worker{
+		Id:         "worker-gladiator",
 		Status:     types.WorkerStatusAvailable,
 		FreeCpu:    2000,
 		FreeMemory: 2500,
-		Gpu:        "",
-		PoolName:   "cpu2",
-		Priority:   1,
+		PoolName:   "gladiator",
+		Priority:   1000,
 	}
 
-	err = wb.workerRepo.AddWorker(newWorkerWithLowPriority)
+	err = wb.workerRepo.AddWorker(defaultWorker)
 	assert.Nil(t, err)
 
-	err = wb.workerRepo.AddWorker(newWorkerWithHigherPriority)
+	err = wb.workerRepo.AddWorker(gladiatorWorker)
 	assert.Nil(t, err)
 
 	request := &types.ContainerRequest{
@@ -2804,12 +3013,12 @@ func TestPoolPriority(t *testing.T) {
 		Gpu:    "",
 	}
 
-	// Select a worker for the request, this one should land on worker2
-	// since it has higher priority
+	// Unselected serverless work prefers gladiator while it has capacity.
 	worker, err := wb.selectWorker(request)
 	assert.Nil(t, err)
-	assert.Equal(t, newWorkerWithHigherPriority.Id, worker.Id)
+	assert.Equal(t, gladiatorWorker.Id, worker.Id)
 
+	setPendingSchedulerRequests(t, wb, request)
 	err = wb.scheduleRequest(worker, request)
 	assert.Nil(t, err)
 
@@ -2819,10 +3028,44 @@ func TestPoolPriority(t *testing.T) {
 		Gpu:    "",
 	}
 
-	// Select a worker for the second request, this one should land on worker1
+	// Gladiator now has only 1000m free, so the request falls through to the
+	// lower-priority default serverless pool.
 	worker, err = wb.selectWorker(secondRequest)
 	assert.Nil(t, err)
-	assert.Equal(t, newWorkerWithLowPriority.Id, worker.Id)
+	assert.Equal(t, defaultWorker.Id, worker.Id)
+}
+
+func TestAgentManagedCapacityRequiresWorkspaceStorage(t *testing.T) {
+	scheduler, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+
+	agentController := &AgentWorkerPoolController{
+		name:             "gladiator",
+		workerPoolConfig: types.WorkerPoolConfig{Mode: types.PoolModeExternal},
+	}
+	localController := &LocalWorkerPoolControllerForTest{name: "default"}
+	request := &types.ContainerRequest{Cpu: 1000, Memory: 1000}
+
+	assert.Equal(t, []WorkerPoolController{localController}, filterControllersByFlags(
+		[]WorkerPoolController{agentController, localController}, request,
+	))
+
+	workers := []*types.Worker{
+		{Id: "gladiator", PoolName: "gladiator", PoolSelector: "gladiator", Status: types.WorkerStatusAvailable, FreeCpu: 2000, FreeMemory: 2500, Priority: 1000},
+		{Id: "default", PoolName: "default", Status: types.WorkerStatusAvailable, FreeCpu: 2000, FreeMemory: 2500, Priority: 3},
+	}
+
+	worker, err := scheduler.selectWorkerFromWorkers(workers, request)
+	assert.Nil(t, err)
+	assert.Equal(t, "default", worker.Id)
+
+	request.Workspace = testWorkspaceWithStorage()
+	worker, err = scheduler.selectWorkerFromWorkers(workers, request)
+	assert.Nil(t, err)
+	assert.Equal(t, "gladiator", worker.Id)
+	assert.Equal(t, []WorkerPoolController{agentController, localController}, filterControllersByFlags(
+		[]WorkerPoolController{agentController, localController}, request,
+	))
 }
 
 func TestSelectBuildWorker(t *testing.T) {
@@ -2855,6 +3098,7 @@ func TestSelectBuildWorker(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, newWorker.Gpu, worker.Gpu)
 
+	setPendingSchedulerRequests(t, wb, request)
 	err = wb.scheduleRequest(worker, request)
 	assert.Nil(t, err)
 

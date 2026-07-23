@@ -12,23 +12,23 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
-type failingLegacyProviderRepo struct {
+type failingProviderRepo struct {
 	repository.ProviderRepository
 }
 
-func (failingLegacyProviderRepo) ListAllMachines(string, string, bool) ([]*types.ProviderMachine, error) {
+func (failingProviderRepo) ListAllMachines(string, string, bool) ([]*types.ProviderMachine, error) {
 	return nil, errors.New("list machines failed")
 }
 
-type namedLegacyProvider struct {
+type namedProvider struct {
 	providers.Provider
 }
 
-func (namedLegacyProvider) GetName() string {
+func (namedProvider) GetName() string {
 	return "test-provider"
 }
 
-func TestLegacyMachineGPUCompatible(t *testing.T) {
+func TestProviderMachineGPUCompatible(t *testing.T) {
 	tests := []struct {
 		name           string
 		machineGPU     string
@@ -45,14 +45,14 @@ func TestLegacyMachineGPUCompatible(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if got := legacyMachineGPUCompatible(test.machineGPU, test.requestedGPU, test.requestedCount); got != test.want {
-				t.Fatalf("legacyMachineGPUCompatible() = %v, want %v", got, test.want)
+			if got := providerMachineGPUCompatible(test.machineGPU, test.requestedGPU, test.requestedCount); got != test.want {
+				t.Fatalf("providerMachineGPUCompatible() = %v, want %v", got, test.want)
 			}
 		})
 	}
 }
 
-func TestLegacyCleanupReleasesLockWhenMachineListingFails(t *testing.T) {
+func TestProviderCleanupReleasesLockWhenMachineListingFails(t *testing.T) {
 	redisServer, err := miniredis.Run()
 	if err != nil {
 		t.Fatal(err)
@@ -68,11 +68,11 @@ func TestLegacyCleanupReleasesLockWhenMachineListingFails(t *testing.T) {
 	}
 
 	poolRepo := repository.NewWorkerPoolRedisRepository(redisClient)
-	controller := &LegacyExternalWorkerPoolController{
+	controller := &ProviderWorkerPoolController{
 		ctx:            context.Background(),
-		name:           "legacy-pool",
-		provider:       namedLegacyProvider{},
-		providerRepo:   failingLegacyProviderRepo{},
+		name:           "provider-pool",
+		provider:       namedProvider{},
+		providerRepo:   failingProviderRepo{},
 		workerPoolRepo: poolRepo,
 	}
 	controller.cleanupWorkers(&WorkerResourceCleaner{})

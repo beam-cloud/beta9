@@ -78,10 +78,9 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 
 		mounts, err := abstractions.ConfigureContainerRequestMounts(
 			containerId,
-			i.Stub.Object.ExternalId,
+			i.Stub,
 			i.Workspace,
 			*i.StubConfig,
-			i.Stub.ExternalId,
 		)
 		if err != nil {
 			return err

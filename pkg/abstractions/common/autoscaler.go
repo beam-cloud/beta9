@@ -15,10 +15,12 @@ type Autoscaler[I IAutoscaledInstance, S AutoscalerSample] struct {
 	mostRecentSample S
 	sampleFunc       func(I) (S, error)
 	scaleFunc        func(I, S) *AutoscalerResult
+	trigger          chan struct{}
 }
 
 type IAutoscaler interface {
 	Start(ctx context.Context)
+	Trigger()
 }
 
 const (
@@ -33,6 +35,14 @@ func NewAutoscaler[I IAutoscaledInstance, S AutoscalerSample](instance I, sample
 		instance:   instance,
 		sampleFunc: sampleFunc,
 		scaleFunc:  scaleFunc,
+		trigger:    make(chan struct{}, 1),
+	}
+}
+
+func (as *Autoscaler[I, S]) Trigger() {
+	select {
+	case as.trigger <- struct{}{}:
+	default:
 	}
 }
 
@@ -46,17 +56,19 @@ func (as *Autoscaler[I, S]) Start(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			sample, err := as.sampleFunc(as.instance)
-			if err != nil {
-				continue
-			}
+		case <-as.trigger:
+		}
 
-			as.mostRecentSample = sample
+		sample, err := as.sampleFunc(as.instance)
+		if err != nil {
+			continue
+		}
 
-			scaleResult := as.scaleFunc(as.instance, sample)
-			if scaleResult != nil && scaleResult.ResultValid {
-				as.instance.ConsumeScaleResult(scaleResult) // Send autoscaling result back to instance
-			}
+		as.mostRecentSample = sample
+
+		scaleResult := as.scaleFunc(as.instance, sample)
+		if scaleResult != nil && scaleResult.ResultValid {
+			as.instance.ConsumeScaleResult(scaleResult)
 		}
 	}
 }

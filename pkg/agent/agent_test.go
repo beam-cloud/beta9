@@ -12,6 +12,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -95,6 +97,49 @@ func TestRouteProxyMarksRouteReadyForReachableLocalTarget(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("route was not marked ready for reachable local target")
+	}
+}
+
+func TestRouteProxyPollsOpeningRouteWithoutBackoff(t *testing.T) {
+	reserved, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := reserved.Addr().String()
+	_ = reserved.Close()
+
+	backend := make(chan net.Listener, 1)
+	backendErr := make(chan error, 1)
+	go func() {
+		time.Sleep(350 * time.Millisecond)
+		listener, err := net.Listen("tcp", target)
+		if err != nil {
+			backendErr <- err
+			return
+		}
+		backend <- listener
+	}()
+
+	updates := make(chan *pb.UpdateAgentRouteStatusRequest, 1)
+	proxy := newRouteProxy(&routeStatusClient{updates: updates}, "agent-token", nil, "agent.tailnet:29443", nil, io.Discard, io.Discard)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	proxy.setRoute("route-one", target)
+	proxy.ensureRouteReady(ctx, "route-one", target)
+
+	select {
+	case listener := <-backend:
+		t.Cleanup(func() { _ = listener.Close() })
+	case err := <-backendErr:
+		t.Fatal(err)
+	case <-time.After(time.Second):
+		t.Fatal("backend did not start")
+	}
+
+	select {
+	case <-updates:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("route readiness polling backed off after the backend started")
 	}
 }
 
@@ -216,7 +261,7 @@ func TestDockerRunArgsUsesConfigurableRouteTargetHost(t *testing.T) {
 		NetworkPrefix:             "10.0.0.0/24",
 		NetworkSlotPoolSize:       64,
 		ContainerStartConcurrency: 12,
-	}, agentWorkerDirs("/tmp/agent-state", "", "worker-one"))
+	}, agentWorkerDirs("/tmp/agent-state", "", "worker-one"), workerContainerResourceLimits{})
 
 	if !containsArg(args, "-e", types.WorkerRouteTargetEnv+"=host.docker.internal") {
 		t.Fatalf("expected route target host env in docker args: %#v", args)
@@ -257,6 +302,9 @@ func TestDockerRunArgsUsesConfigurableRouteTargetHost(t *testing.T) {
 	if !containsArg(args, "--shm-size", "256m") {
 		t.Fatalf("expected shm size to track worker memory: %#v", args)
 	}
+	if slices.Contains(args, "--cpus") || slices.Contains(args, "--memory") {
+		t.Fatalf("default agent worker should not have Docker CPU or memory limits: %#v", args)
+	}
 	if !containsArg(args, "--gpus", `"device=0,1"`) {
 		t.Fatalf("expected GPU device assignment: %#v", args)
 	}
@@ -281,7 +329,28 @@ func TestDockerRunArgsUsesConfigurableRouteTargetHost(t *testing.T) {
 	}
 }
 
+func TestDockerRunArgsAppliesExplicitResourceLimits(t *testing.T) {
+	args := dockerRunArgs(
+		"slot-one",
+		"worker:dev",
+		"",
+		"/tmp/config.json",
+		bootstrapConfig{},
+		&pb.AgentWorkerSlot{Cpu: 4000, Memory: 8192},
+		agentWorkerDirs("/tmp/agent-state", "", "worker-one"),
+		workerContainerResourceLimits{cpu: true, memory: true},
+	)
+
+	if !containsArg(args, "--cpus", "4.000") {
+		t.Fatalf("expected explicit CPU limit in Docker args: %#v", args)
+	}
+	if !containsArg(args, "--memory", "8192m") {
+		t.Fatalf("expected explicit memory limit in Docker args: %#v", args)
+	}
+}
+
 func TestAgentWorkerConfigDefaultsToPrivateRunc(t *testing.T) {
+	t.Setenv(types.AgentCPUAffinityEnforcedEnv, "")
 	slot := &pb.AgentWorkerSlot{PoolName: "private-dev", Cpu: 4000, Memory: 8192}
 	config := newAgentWorkerConfig(bootstrapConfig{}, slot).sanitizedForAgent()
 
@@ -304,8 +373,65 @@ func TestAgentWorkerConfigDefaultsToPrivateRunc(t *testing.T) {
 	if config.ManagedCompute != nil {
 		t.Fatal("private workers must not receive billing config")
 	}
+	if !config.Worker.ContainerResourceLimits.CPUAffinityEnforced {
+		t.Fatal("agent CPU affinity must default to enabled")
+	}
 	if config.Monitoring.ContainerCostHook != nil {
 		t.Fatal("private workers must not receive cost hook config")
+	}
+}
+
+func TestAgentWorkerConfigCanDisableCPUAffinity(t *testing.T) {
+	t.Setenv(types.AgentCPUAffinityEnforcedEnv, "false")
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := writeWorkerConfig(path, bootstrapConfig{}, &pb.AgentWorkerSlot{PoolName: "private-dev"}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(types.WorkerConfigPathEnv, path)
+	t.Setenv(types.WorkerMinimalConfigEnv, "true")
+	configManager, err := common.NewConfigManager[types.AppConfig]()
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := configManager.GetConfig()
+
+	if config.Worker.ContainerResourceLimits.CPUAffinityEnforced {
+		t.Fatal("agent CPU affinity opt-out was not propagated to worker config")
+	}
+}
+
+func TestManagedAgentWorkerConfigDefaultsCPUAffinityOff(t *testing.T) {
+	t.Setenv(types.AgentCPUAffinityEnforcedEnv, "true")
+	slot := &pb.AgentWorkerSlot{PoolName: "serverless", Mode: string(types.PoolModeExternal)}
+
+	config := newAgentWorkerConfig(bootstrapConfig{}, slot).sanitizedForAgent()
+	if config.Worker.ContainerResourceLimits.CPUAffinityEnforced {
+		t.Fatal("managed pool CPU affinity must default to disabled")
+	}
+
+	slot.CpuAffinityEnforced = true
+	config = newAgentWorkerConfig(bootstrapConfig{}, slot).sanitizedForAgent()
+	if !config.Worker.ContainerResourceLimits.CPUAffinityEnforced {
+		t.Fatal("managed pool CPU affinity setting was not propagated")
+	}
+}
+
+func TestGVisorAgentWorkerConfigEnforcesMemory(t *testing.T) {
+	slot := &pb.AgentWorkerSlot{
+		PoolName:         "serverless",
+		Mode:             string(types.PoolModeExternal),
+		ContainerRuntime: types.ContainerRuntimeGvisor.String(),
+	}
+
+	config := newAgentWorkerConfig(bootstrapConfig{}, slot).sanitizedForAgent()
+	if !config.Worker.ContainerResourceLimits.MemoryEnforced {
+		t.Fatal("gVisor agent workloads must receive a bounded memory view")
+	}
+
+	slot.ContainerRuntime = types.ContainerRuntimeRunc.String()
+	config = newAgentWorkerConfig(bootstrapConfig{}, slot).sanitizedForAgent()
+	if config.Worker.ContainerResourceLimits.MemoryEnforced {
+		t.Fatal("runc agent memory enforcement must remain unchanged")
 	}
 }
 
@@ -646,9 +772,14 @@ func TestDetailLogWriterReportsUnconsumedBytesOnFlushError(t *testing.T) {
 	}
 }
 
-func TestResolveAgentIdentityDoesNotFallbackWhenJoinRejected(t *testing.T) {
+func TestResolveAgentIdentityFallsBackWhenBootstrapTokenExpires(t *testing.T) {
 	t.Setenv(types.AgentStateDirEnv, t.TempDir())
-	if err := saveRuntimeState("http://gateway.local", &joinResponse{
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(joinResponse{Ok: false, ErrMsg: "join token revoked"})
+	}))
+	t.Cleanup(server.Close)
+
+	if err := saveRuntimeState(server.URL, &joinResponse{
 		Ok:          true,
 		WorkspaceID: "workspace-one",
 		PoolName:    "pool-one",
@@ -658,23 +789,31 @@ func TestResolveAgentIdentityDoesNotFallbackWhenJoinRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(joinResponse{Ok: false, ErrMsg: "join token revoked"})
-	}))
-	t.Cleanup(server.Close)
-
-	_, err := resolveAgentIdentity(context.Background(), NewClient(server.URL), types.AgentJoinOptions{
+	resolved, err := resolveAgentIdentity(context.Background(), NewClient(server.URL), types.AgentJoinOptions{
 		GatewayURL: server.URL,
 		JoinToken:  "bad-token",
 		DevMode:    true,
 		Stdout:     io.Discard,
 		Stderr:     io.Discard,
 	})
-	if err == nil {
-		t.Fatal("expected rejected join token error")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "join token revoked") {
-		t.Fatalf("unexpected error: %v", err)
+	if resolved.AgentToken != "saved-token" {
+		t.Fatalf("agent token = %q, want saved identity", resolved.AgentToken)
+	}
+}
+
+func TestNormalizeJoinOptionsAllowsConsumedTokenFile(t *testing.T) {
+	opts, err := normalizeJoinOptions(types.AgentJoinOptions{
+		GatewayURL:    "https://gateway.beam.cloud",
+		JoinTokenFile: filepath.Join(t.TempDir(), "consumed-token"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.JoinToken != "" {
+		t.Fatalf("join token = %q, want empty", opts.JoinToken)
 	}
 }
 
@@ -780,6 +919,65 @@ func (w *closeTrackingWriter) Close() error {
 	return nil
 }
 
+func testWorkerSlot() *pb.AgentWorkerSlot {
+	return &pb.AgentWorkerSlot{
+		PoolName:                  "private-dev",
+		MachineId:                 "machine-a",
+		ContainerRuntime:          types.ContainerRuntimeGvisor.String(),
+		GvisorPlatform:            "kvm",
+		GvisorRoot:                "/run/gvisor-test",
+		GvisorExtraArgs:           []string{"--overlay2=none", "--file-access=exclusive"},
+		Cpu:                       500,
+		Memory:                    256,
+		NetworkPrefix:             "10.0.0.0/24",
+		NetworkSlotPoolSize:       64,
+		ContainerStartConcurrency: 12,
+	}
+}
+
+func TestAgentS2ConfigUsesClusterCredentialsOnlyForPlatformPools(t *testing.T) {
+	telemetry := telemetryConfig{
+		StreamPrefix: "events",
+		Logs: telemetrySinkConfig{
+			Destination:  "basin",
+			Credential:   "cluster-key",
+			StreamPrefix: "events/logs/workspaces",
+		},
+		Events: telemetrySinkConfig{
+			Destination:  "basin",
+			Credential:   "cluster-key",
+			StreamPrefix: "events/workspaces",
+		},
+	}
+
+	platform := agentS2Config(telemetry, string(types.PoolModeExternal))
+	if platform.ApiKey != "cluster-key" || platform.LogApiKey != "" || platform.EventApiKey != "" {
+		t.Fatalf("unexpected platform S2 config: %#v", platform)
+	}
+
+	private := agentS2Config(telemetry, string(types.PoolModePrivate))
+	if private.ApiKey != "" || private.LogApiKey != "cluster-key" || private.EventApiKey != "cluster-key" {
+		t.Fatalf("unexpected private S2 config: %#v", private)
+	}
+}
+
+func assertGVisorRuntimeConfig(t *testing.T, config map[string]any, slot *pb.AgentWorkerSlot) {
+	t.Helper()
+	if got := config["gvisorPlatform"]; got != slot.GvisorPlatform {
+		t.Fatalf("gVisor platform = %v, want %q", got, slot.GvisorPlatform)
+	}
+	if got := config["gvisorRoot"]; got != slot.GvisorRoot {
+		t.Fatalf("gVisor root = %v, want %q", got, slot.GvisorRoot)
+	}
+	wantExtraArgs := make([]any, len(slot.GvisorExtraArgs))
+	for i, arg := range slot.GvisorExtraArgs {
+		wantExtraArgs[i] = arg
+	}
+	if got := config["gvisorExtraArgs"]; !reflect.DeepEqual(got, wantExtraArgs) {
+		t.Fatalf("gVisor extra args = %#v, want %#v", got, wantExtraArgs)
+	}
+}
+
 type errorWriter struct{}
 
 func (errorWriter) Write([]byte) (int, error) {
@@ -807,15 +1005,7 @@ func TestAgentLockRejectsSecondAgentForSameStateDir(t *testing.T) {
 
 func TestWriteWorkerConfigUsesGatewayBootstrapParts(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
-	slot := &pb.AgentWorkerSlot{
-		PoolName:                  "private-dev",
-		MachineId:                 "machine-a",
-		Cpu:                       500,
-		Memory:                    256,
-		NetworkPrefix:             "10.0.0.0/24",
-		NetworkSlotPoolSize:       64,
-		ContainerStartConcurrency: 12,
-	}
+	slot := testWorkerSlot()
 
 	if err := writeWorkerConfig(path, bootstrapConfig{
 		GatewayHTTPURL:  "http://host.docker.internal:1994",
@@ -859,6 +1049,7 @@ func TestWriteWorkerConfigUsesGatewayBootstrapParts(t *testing.T) {
 	if got := poolConfig["criuEnabled"]; got != true {
 		t.Fatalf("private pool criuEnabled = %v, want true", got)
 	}
+	assertGVisorRuntimeConfig(t, poolConfig["containerRuntimeConfig"].(map[string]any), slot)
 }
 
 func TestAgentLocalRegistryForwardTargetUsesLocalK3DPort(t *testing.T) {
@@ -1037,15 +1228,7 @@ func TestNvidiaProcDriverStateAllowsHealthyDetectedGPUs(t *testing.T) {
 
 func TestWriteWorkerConfigUsesGeeseForWorkspaceStorage(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
-	slot := &pb.AgentWorkerSlot{
-		PoolName:                  "private-dev",
-		MachineId:                 "machine-a",
-		Cpu:                       500,
-		Memory:                    256,
-		NetworkPrefix:             "10.0.0.0/24",
-		NetworkSlotPoolSize:       64,
-		ContainerStartConcurrency: 12,
-	}
+	slot := testWorkerSlot()
 
 	if err := writeWorkerConfig(path, bootstrapConfig{
 		ImageRegistryStore:     reg.S3ImageRegistryStore,
@@ -1079,6 +1262,8 @@ func TestWriteWorkerConfigUsesGeeseForWorkspaceStorage(t *testing.T) {
 	if got := workspaceStorage["defaultStorageMode"]; got != types.StorageModeGeese {
 		t.Fatalf("workspace storage mode = %v, want %q", got, types.StorageModeGeese)
 	}
+	poolConfig := config["worker"].(map[string]any)["pools"].(map[string]any)[slot.PoolName].(map[string]any)
+	assertGVisorRuntimeConfig(t, poolConfig["containerRuntimeConfig"].(map[string]any), slot)
 
 	imageConfig := config["imageService"].(map[string]any)
 	if got := imageConfig["registryStore"]; got != reg.S3ImageRegistryStore {

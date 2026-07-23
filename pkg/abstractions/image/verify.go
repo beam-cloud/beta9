@@ -139,11 +139,12 @@ func (is *ContainerImageService) prepareBuildOptionsForImageID(ctx context.Conte
 		opts.addPythonRequirements()
 	}
 
-	is.resolveBaseImageDigest(ctx, opts, in.ExistingImageUri == "")
-
 	if in.Dockerfile != "" {
+		is.pinDockerfileBaseImages(ctx, opts)
 		opts.addPythonRequirements()
 	}
+
+	is.resolveBaseImageDigest(ctx, opts, in.ExistingImageUri == "")
 
 	if is.config.ImageService.ClipVersion != uint32(types.ClipVersion2) {
 		return nil

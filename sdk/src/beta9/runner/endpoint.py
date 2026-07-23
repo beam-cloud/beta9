@@ -7,6 +7,7 @@ import traceback
 import types
 from contextlib import asynccontextmanager
 from http import HTTPStatus
+from multiprocessing import Value
 from typing import Any, Dict, Optional, Tuple, Union
 
 from fastapi import Depends, FastAPI, Request
@@ -40,6 +41,8 @@ from ..runner.common import (
 from ..runner.common import config as cfg
 from ..type import LifeCycleMethod, TaskStatus
 from .common import is_asgi3
+
+workers_ready = Value("i", 0) if cfg.checkpoint_enabled else None
 
 
 class EndpointFilter(logging.Filter):
@@ -99,7 +102,7 @@ class GunicornApplication(BaseApplication):
 
             # If checkpointing is enabled, wait for all workers to be ready before creating a checkpoint
             if cfg.checkpoint_enabled:
-                wait_for_checkpoint()
+                wait_for_checkpoint(workers_ready)
 
         except EOFError:
             return

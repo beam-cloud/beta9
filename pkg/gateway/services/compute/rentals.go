@@ -39,7 +39,7 @@ const (
 // capacity, and only the buyer's machine-pinned workloads consume it.
 func (s *Service) CreateMarketplaceRental(ctx context.Context, in *pb.CreateMarketplaceRentalRequest) (*pb.CreateMarketplaceRentalResponse, error) {
 	authCtx := marketplaceAuthFromContext(ctx)
-	if !authCtx.hasOwner() {
+	if !authCtx.valid() {
 		return &pb.CreateMarketplaceRentalResponse{Ok: false, ErrMsg: marketplaceErrMissingAuth}, nil
 	}
 
@@ -126,7 +126,7 @@ func (s *Service) ListMarketplaceRentals(ctx context.Context, in *pb.ListMarketp
 // machine are stopped and the GPUs return to the serverless pool.
 func (s *Service) DeleteMarketplaceRental(ctx context.Context, in *pb.DeleteMarketplaceRentalRequest) (*pb.DeleteMarketplaceRentalResponse, error) {
 	authCtx := marketplaceAuthFromContext(ctx)
-	if !authCtx.hasOwner() {
+	if !authCtx.valid() {
 		return &pb.DeleteMarketplaceRentalResponse{Ok: false, ErrMsg: marketplaceErrMissingAuth}, nil
 	}
 	rental, err := s.computeRepo.GetMarketplaceRental(ctx, authCtx.workspaceID, strings.TrimSpace(in.GetRentalId()))

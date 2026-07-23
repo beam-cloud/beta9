@@ -8,6 +8,7 @@ from .. import terminal
 from ..abstractions.base.runner import (
     POD_DEPLOYMENT_STUB_TYPE,
     POD_RUN_STUB_TYPE,
+    RUNTIME_PREPARE_FAILED_MSG,
     RunnerAbstraction,
 )
 from ..abstractions.image import Image
@@ -48,6 +49,7 @@ class PodInstance(BaseAbstraction):
     url: str
     ok: bool = field(default=False)
     error_msg: str = field(default="")
+    management_url: str = field(default="")
     gateway_stub: "GatewayServiceStub" = field(init=False)
 
     def __post_init__(self):
@@ -217,7 +219,7 @@ class Pod(RunnerAbstraction, DeployableMixin):
         image.ignore_python = True
         return image
 
-    def create(self, entrypoint: List[str] = []) -> PodInstance:
+    def create(self, entrypoint: List[str] = [], machine_id: str = "") -> PodInstance:
         """
         Create a new container that will run until either it completes normally, or times out.
 
@@ -246,19 +248,20 @@ class Pod(RunnerAbstraction, DeployableMixin):
                 container_id="",
                 url="",
                 ok=False,
-                error_msg="Failed to prepare runtime",
+                error_msg=RUNTIME_PREPARE_FAILED_MSG,
             )
 
         terminal.header("Creating container")
         create_response: CreatePodResponse = self.stub.create_pod(
             CreatePodRequest(
                 stub_id=self.stub_id,
+                machine_id=machine_id or None,
             )
         )
 
         url = ""
         if create_response.ok:
-            terminal.header(f"Container created successfully ===> {create_response.container_id}")
+            terminal.done(f"Container created ===> {create_response.container_id}")
 
             if self.keep_warm_seconds < 0:
                 terminal.header("This container has no timeout, it will run until it completes.")
@@ -277,6 +280,7 @@ class Pod(RunnerAbstraction, DeployableMixin):
             url=url,
             ok=create_response.ok,
             error_msg=create_response.error_msg,
+            management_url=create_response.management_url,
         )
 
     def deploy(
@@ -353,7 +357,7 @@ class Pod(RunnerAbstraction, DeployableMixin):
         if deploy_response.ok:
             if warn_msg:
                 terminal.warn(warn_msg)
-            terminal.header("Deployed 🎉")
+            terminal.done("Deployed 🎉")
             if invocation_details_func:
                 invocation_details_func(
                     **invocation_details_options,
@@ -363,6 +367,9 @@ class Pod(RunnerAbstraction, DeployableMixin):
                 url_res = self.print_invocation_snippet()
                 if url_res and getattr(url_res, "ok", False):
                     invoke_url = url_res.url.replace("<PORT>", str(self.ports[0]))
+
+        elif deploy_response.err_msg:
+            terminal.error(deploy_response.err_msg, exit=False)
 
         return {
             "deployment_id": deploy_response.deployment_id,
@@ -436,10 +443,19 @@ app = Pod(
 
     @with_grpc_error_handling
     def shell(
-        self, url_type: str = "", sync_dir: Optional[str] = None, container_id: Optional[str] = None
+        self,
+        url_type: str = "",
+        sync_dir: Optional[str] = None,
+        container_id: Optional[str] = None,
+        machine_id: Optional[str] = None,
     ):
         self.authorized = True
-        super().shell(url_type=url_type, sync_dir=sync_dir, container_id=container_id)
+        super().shell(
+            url_type=url_type,
+            sync_dir=sync_dir,
+            container_id=container_id,
+            machine_id=machine_id,
+        )
 
     def serve(self, **kwargs):
         terminal.error("Serve has not yet been implemented for Pods.")

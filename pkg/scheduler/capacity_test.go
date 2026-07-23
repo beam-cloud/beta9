@@ -3,10 +3,89 @@ package scheduler
 import (
 	"testing"
 
+	"github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
 	"github.com/tj/assert"
 )
+
+func TestNormalizeManagedAgentPoolDoesNotRequireSelector(t *testing.T) {
+	config := normalizeAgentWorkerPoolConfig(&compute.PoolState{
+		ManagementSource: types.WorkerPoolManagementSourceAPI,
+		WorkerConfig: &types.WorkerPoolConfig{
+			Mode:                 types.PoolModeExternal,
+			GPUType:              "RTX5090",
+			RequiresPoolSelector: true,
+		},
+	})
+
+	assert.False(t, config.RequiresPoolSelector)
+}
+
+func TestHasManagedPoolForGPU(t *testing.T) {
+	manager := NewWorkerPoolManager(false)
+	manager.SetPool("beta9-t4", types.WorkerPoolConfig{GPUType: "T4"}, &LocalWorkerPoolControllerForTest{name: "beta9-t4"})
+	manager.SetPool("private-h100", types.WorkerPoolConfig{GPUType: "H100", Mode: types.PoolModePrivate}, &LocalWorkerPoolControllerForTest{
+		name:             "private-h100",
+		mode:             types.PoolModePrivate,
+		requiresSelector: true,
+	})
+	manager.SetPool("marketplace-a6000", types.WorkerPoolConfig{GPUType: "A6000", Mode: types.PoolModeMarketplace}, &LocalWorkerPoolControllerForTest{
+		name: "marketplace-a6000",
+		mode: types.PoolModeMarketplace,
+	})
+	scheduler := &Scheduler{workerPoolManager: manager}
+
+	// Pool-config-based: a pool with zero live workers still counts.
+	assert.True(t, scheduler.HasManagedPoolForGPU("T4", false))
+
+	// Pools requiring a pool selector can't serve selector-less workloads.
+	assert.False(t, scheduler.HasManagedPoolForGPU("H100", false))
+
+	// Marketplace pools only count when the workload opted in.
+	assert.False(t, scheduler.HasManagedPoolForGPU("A6000", false))
+	assert.True(t, scheduler.HasManagedPoolForGPU("A6000", true))
+
+	// GPU_ANY matches any GPU pool usable without a selector.
+	assert.True(t, scheduler.HasManagedPoolForGPU(string(types.GPU_ANY), false))
+
+	// Unknown GPU type: guaranteed blackhole.
+	assert.False(t, scheduler.HasManagedPoolForGPU("B200", false))
+}
+
+func TestServerlessGPUAvailabilityExcludesPrivateAndMarketplaceWorkers(t *testing.T) {
+	manager := NewWorkerPoolManager(false)
+	manager.SetPool("serverless-t4", types.WorkerPoolConfig{GPUType: "T4"}, &LocalWorkerPoolControllerForTest{name: "serverless-t4"})
+	manager.SetPool("managed-rtx5090", types.WorkerPoolConfig{GPUType: "RTX5090", Mode: types.PoolModeExternal}, &LocalWorkerPoolControllerForTest{name: "managed-rtx5090"})
+	manager.SetPool("private-h100", types.WorkerPoolConfig{GPUType: "H100", Mode: types.PoolModePrivate}, &LocalWorkerPoolControllerForTest{
+		name:             "private-h100",
+		mode:             types.PoolModePrivate,
+		requiresSelector: true,
+	})
+	manager.SetPool("marketplace-a6000", types.WorkerPoolConfig{GPUType: "A6000", Mode: types.PoolModeMarketplace}, &LocalWorkerPoolControllerForTest{
+		name: "marketplace-a6000",
+		mode: types.PoolModeMarketplace,
+	})
+	scheduler := &Scheduler{workerPoolManager: manager}
+
+	availability := scheduler.serverlessGPUAvailability([]*types.Worker{
+		{Id: "serverless", PoolName: "serverless-t4", Status: types.WorkerStatusAvailable, Gpu: "T4", FreeGpuCount: 1},
+		{Id: "managed", PoolName: "managed-rtx5090", WorkspaceId: "admin", ControlPlaneManaged: true, Status: types.WorkerStatusAvailable, Gpu: "RTX5090", FreeGpuCount: 1},
+		{Id: "foreign-private", PoolName: "managed-rtx5090", WorkspaceId: "other-workspace", Status: types.WorkerStatusAvailable, Gpu: "L40S", FreeGpuCount: 1},
+		{Id: "private", PoolName: "private-h100", WorkspaceId: "owner", RequiresPoolSelector: true, Status: types.WorkerStatusAvailable, Gpu: "H100", FreeGpuCount: 1},
+		{Id: "marketplace", PoolName: "marketplace-a6000", WorkspaceId: "seller", Status: types.WorkerStatusAvailable, Gpu: "A6000", FreeGpuCount: 1},
+		{Id: "busy", PoolName: "serverless-t4", Status: types.WorkerStatusAvailable, Gpu: "A10", FreeGpuCount: 0},
+		{Id: "disabled", PoolName: "serverless-t4", Status: types.WorkerStatusDisabled, Gpu: "L4", FreeGpuCount: 1},
+	})
+
+	assert.True(t, availability["T4"])
+	assert.True(t, availability["RTX5090"])
+	assert.False(t, availability["L40S"])
+	assert.False(t, availability["H100"])
+	assert.False(t, availability["A6000"])
+	assert.False(t, availability["A10"])
+	assert.False(t, availability["L4"])
+}
 
 func TestCheckCapacityRestoresPaddedMemoryForReplacement(t *testing.T) {
 	s, err := NewSchedulerForTest()

@@ -212,7 +212,11 @@ func createDurableDiskDirectorySnapshot(ctx context.Context, store durableDiskSn
 		case info.Mode().IsRegular():
 			file.Type = "file"
 			previousFile := previousFiles[file.Path]
-			if durableDiskSnapshotFileReusable(previousFile, file) {
+			reusable, err := durableDiskSnapshotFileReusable(name, previousFile, file)
+			if err != nil {
+				return err
+			}
+			if reusable {
 				file.Chunks = append([]types.DiskSnapshotChunk(nil), previousFile.Chunks...)
 			} else if durableDiskSnapshotAppendOnlyFile(manifest.Format, file.Path) && durableDiskSnapshotFileAppendReusable(previousFile, file) {
 				reusePrefix, err := durableDiskSnapshotFileChunksReusable(name, previousFile)
@@ -315,8 +319,8 @@ func durableDiskSnapshotFile(name string, info os.FileInfo) types.DiskSnapshotFi
 	return file
 }
 
-func durableDiskSnapshotFileReusable(previous, current types.DiskSnapshotFile) bool {
-	return previous.Type == current.Type &&
+func durableDiskSnapshotFileReusable(filename string, previous, current types.DiskSnapshotFile) (bool, error) {
+	metadataMatches := previous.Type == current.Type &&
 		previous.Mode == current.Mode &&
 		previous.Uid == current.Uid &&
 		previous.Gid == current.Gid &&
@@ -325,6 +329,10 @@ func durableDiskSnapshotFileReusable(previous, current types.DiskSnapshotFile) b
 		previous.ChangeUnixNano == current.ChangeUnixNano &&
 		durableDiskSnapshotSameIdentity(previous, current) &&
 		len(previous.Chunks) > 0
+	if !metadataMatches {
+		return false, nil
+	}
+	return durableDiskSnapshotFileChunksReusable(filename, previous)
 }
 
 func durableDiskSnapshotSameIdentity(previous, current types.DiskSnapshotFile) bool {

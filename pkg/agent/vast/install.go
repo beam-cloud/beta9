@@ -72,8 +72,7 @@ func RunInstall(ctx context.Context, opts InstallOptions) error {
 	}
 	for _, args := range [][]string{
 		{"daemon-reload"},
-		{"enable", opts.HostServiceName + ".service"},
-		{"start", opts.HostServiceName + ".service"},
+		{"enable", "--now", opts.HostServiceName + ".service"},
 	} {
 		if err := runSystemctl(ctx, args...); err != nil {
 			return err
@@ -186,13 +185,15 @@ func systemdUnit(spec systemdUnitSpec) string {
 		"Description="+spec.Description,
 		"Wants="+types.AgentSystemdNetworkOnlineTarget+" "+types.AgentSystemdDockerService,
 		"After="+types.AgentSystemdNetworkOnlineTarget+" "+types.AgentSystemdDockerService,
+		"RequiresMountsFor="+systemdPath(spec.WorkingDir),
+		"StartLimitIntervalSec=0",
 		"",
 		"[Service]",
 		"Type=simple",
 		"WorkingDirectory="+systemdPath(spec.WorkingDir),
 		"Environment="+systemdQuote(types.AgentPathEnv+"="+types.AgentServiceDefaultPath),
 		"ExecStart="+systemdCommand(spec.ExecStart),
-		"Restart=on-failure",
+		"Restart=always",
 		"RestartSec=10",
 		"KillSignal=SIGINT",
 		"TimeoutStopSec=65",

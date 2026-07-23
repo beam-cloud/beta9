@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -16,6 +17,73 @@ func TestSandboxConnectErrorMessageDoesNotLeakDetails(t *testing.T) {
 	got := sandboxConnectErrorMessage(errors.New("container state not found: sandbox-123 on worker 10.0.0.12"))
 	if got != "Failed to connect to sandbox" {
 		t.Fatalf("sandboxConnectErrorMessage leaked details: %q", got)
+	}
+}
+
+func TestWaitForSandboxReadyWaitsThroughPending(t *testing.T) {
+	probes := 0
+	err := waitForSandboxReady(context.Background(), func(context.Context) (*pb.ContainerSandboxStatusResponse, error) {
+		probes++
+		status := types.SandboxStatusPending
+		if probes == 2 {
+			status = types.SandboxStatusRunning
+		}
+		return &pb.ContainerSandboxStatusResponse{Ok: true, Status: string(status)}, nil
+	})
+
+	if err != nil {
+		t.Fatalf("waitForSandboxReady returned error: %v", err)
+	}
+	if probes != 2 {
+		t.Fatalf("waitForSandboxReady probes = %d, want 2", probes)
+	}
+}
+
+func TestWaitForSandboxReadyRetriesTransientProbeFailure(t *testing.T) {
+	probes := 0
+	err := waitForSandboxReady(context.Background(), func(context.Context) (*pb.ContainerSandboxStatusResponse, error) {
+		probes++
+		if probes == 1 {
+			return nil, status.Error(codes.Unavailable, "transport is closing")
+		}
+		return &pb.ContainerSandboxStatusResponse{Ok: true, Status: string(types.SandboxStatusRunning)}, nil
+	})
+
+	if err != nil {
+		t.Fatalf("waitForSandboxReady returned error: %v", err)
+	}
+	if probes != 2 {
+		t.Fatalf("waitForSandboxReady probes = %d, want 2", probes)
+	}
+}
+
+func TestWaitForSandboxReadyRejectsStoppingContainer(t *testing.T) {
+	err := waitForSandboxReady(context.Background(), func(context.Context) (*pb.ContainerSandboxStatusResponse, error) {
+		return &pb.ContainerSandboxStatusResponse{Ok: true, Status: string(types.SandboxStatusStopping)}, nil
+	})
+	if err == nil {
+		t.Fatal("waitForSandboxReady returned nil error for stopping sandbox")
+	}
+}
+
+func TestWaitForSandboxReadyHonorsContextDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+
+	err := waitForSandboxReady(ctx, func(context.Context) (*pb.ContainerSandboxStatusResponse, error) {
+		return &pb.ContainerSandboxStatusResponse{Ok: true, Status: string(types.SandboxStatusPending)}, nil
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("waitForSandboxReady error = %v, want context deadline exceeded", err)
+	}
+}
+
+func TestWaitForSandboxReadyReturnsWorkerFailure(t *testing.T) {
+	err := waitForSandboxReady(context.Background(), func(context.Context) (*pb.ContainerSandboxStatusResponse, error) {
+		return &pb.ContainerSandboxStatusResponse{Ok: false, ErrorMsg: "process manager failed"}, nil
+	})
+	if err == nil || err.Error() != "process manager failed" {
+		t.Fatalf("waitForSandboxReady error = %v, want worker failure", err)
 	}
 }
 
