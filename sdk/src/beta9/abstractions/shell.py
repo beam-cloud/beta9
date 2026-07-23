@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import socket
 import ssl
@@ -15,12 +17,17 @@ if is_local():
 
 
 def create_socket(
-    proxy_host: str, proxy_port: int, path: str, container_id: str, auth_token: str
+    proxy_host: str,
+    proxy_port: int,
+    path: str,
+    container_id: str,
+    auth_token: str,
+    timeout: float = 10,
 ) -> socket.socket:
     """
     Create a socket connection to the server and authenticate with the given token.
     """
-    sock = socket.create_connection((proxy_host, proxy_port), timeout=60)
+    sock = socket.create_connection((proxy_host, proxy_port), timeout=timeout)
     if proxy_port == 443:
         sock = ssl.create_default_context().wrap_socket(sock=sock, server_hostname=proxy_host)
 
@@ -31,27 +38,45 @@ def create_socket(
         "\r\n"
     )
 
-    sock.sendall(request.encode())
-
-    wait_for_ok(sock)
+    try:
+        sock.sendall(request.encode())
+        wait_for_ok(sock)
+        # The connect timeout must not become a lifetime limit for an
+        # interactive session. Paramiko manages its own SSH keepalives after
+        # the tunnel opens.
+        sock.settimeout(None)
+    except BaseException:
+        sock.close()
+        raise
 
     return sock
 
 
-def wait_for_ok(sock: socket.socket, max_retries: int = 5, delay: float = 0.25):
-    """
-    Wait until 'OK' is received from a socket.
-    """
-    for _ in range(max_retries):
-        if data := sock.recv(4096).decode():
-            if "OK" in data:
-                return
-            elif "ERROR" in data:
-                raise ConnectionError(f"Error received from server: {data.lstrip('ERROR: ')}")
-        delay *= 2
-        time.sleep(delay)
+def wait_for_ok(sock: socket.socket):
+    """Read the two-byte tunnel preamble without consuming the SSH banner."""
 
-    raise ConnectionError(f"Failed to setup socket after {max_retries} retries")
+    preamble = bytearray()
+    while len(preamble) < 2:
+        chunk = sock.recv(2 - len(preamble))
+        if not chunk:
+            raise ConnectionError("Shell proxy closed the connection during setup")
+        preamble.extend(chunk)
+    if bytes(preamble) == b"OK":
+        return
+
+    response = preamble
+    while len(response) < 4096 and b"\r\n\r\n" not in response:
+        chunk = sock.recv(min(4096 - len(response), 1024))
+        if not chunk:
+            break
+        response.extend(chunk)
+    message = bytes(response).decode("utf-8", errors="replace").strip()
+    if message.startswith("ERROR"):
+        message = message.removeprefix("ERROR:").strip()
+    elif message.startswith("HTTP/"):
+        status_line, _, body = message.partition("\r\n")
+        message = f"{status_line}: {body.rsplit(chr(10), 1)[-1].strip()}"
+    raise ConnectionError(f"Shell proxy rejected the connection: {message}")
 
 
 EXIT_STATUS_CTRL_C = 130
@@ -70,12 +95,13 @@ class SSHShell:
     auth_token: str
     username: str
     password: str
+    socket: Optional[socket.socket] = None
+    channel: Optional["paramiko.Channel"] = None
     transport: Optional["paramiko.Transport"] = None
+    max_reconnect_attempts: int = 5
 
     def _open(self):
-        self.socket: Optional[socket.socket] = None
-        self.channel: Optional["paramiko.Channel"] = None
-
+        self._close()
         try:
             self.socket = create_socket(
                 self.host,
@@ -84,48 +110,53 @@ class SSHShell:
                 self.container_id,
                 self.auth_token,
             )
+            self.transport = paramiko.Transport(self.socket)
+            self.transport.set_keepalive(15)
+            self.transport.connect(username=self.username, password=self.password)
+            self.channel = self.transport.open_session()
+
+            # Get terminal size - https://stackoverflow.com/a/943921
+            rows, columns = os.popen("stty size", "r").read().split()
+
+            self.channel.get_pty(
+                term=os.getenv("TERM", "xterm-256color"), width=int(columns), height=int(rows)
+            )
+            self.channel.invoke_shell()
         except BaseException:
-            return terminal.error("Failed to establish ssh tunnel.")
-
-        self.transport = paramiko.Transport(self.socket)
-        self.transport.connect(username=self.username, password=self.password)
-        self.channel = self.transport.open_session()
-
-        # Get terminal size - https://stackoverflow.com/a/943921
-        rows, columns = os.popen("stty size", "r").read().split()
-
-        self.channel.get_pty(
-            term=os.getenv("TERM", "xterm-256color"), width=int(columns), height=int(rows)
-        )
-        self.channel.invoke_shell()
+            self._close()
+            raise
 
     def _close(self):
-        if self.channel:
-            self.channel.close()
-
-        if self.transport:
-            self.transport.close()
-
-        if self.socket:
+        channel, self.channel = self.channel, None
+        transport, self.transport = self.transport, None
+        sock, self.socket = self.socket, None
+        if channel:
+            try:
+                channel.close()
+            except OSError:
+                pass
+        if transport:
+            transport.close()
+        if sock:
             try:
                 # Set SO_LINGER to zero to forcefully close the socket
-                self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
-                self.socket.shutdown(socket.SHUT_RDWR)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+                sock.shutdown(socket.SHUT_RDWR)
             except OSError:
                 pass  # Ignore any errors that occur after the socket is already closed
             finally:
-                self.socket.close()
+                sock.close()
 
     def __enter__(self):
         try:
             with terminal.progress("Connecting..."):
                 self._open()
-        except paramiko.SSHException:
+        except paramiko.SSHException as exc:
             self._close()
-            terminal.error("SSH error occurred.")
-        except BaseException:
+            terminal.error(f"SSH connection failed: {exc}")
+        except Exception as exc:
             self._close()
-            terminal.error("Unexpected error occurred in shell.")
+            terminal.error(f"Failed to establish shell: {exc}")
 
         return self
 
@@ -134,30 +165,31 @@ class SSHShell:
 
     def start(self):
         """Start the interactive shell session."""
-        try:
-            interactive_shell(self.channel)
-
-            # Check the exit status after the shell session ends
-            exit_status = self.channel.recv_exit_status()
-            if (
-                exit_status != 0
-                and exit_status != EXIT_STATUS_CTRL_C
-                and exit_status != EXIT_STATUS_NOT_FOUND
-            ):
-                terminal.warn("Lost connection to shell, attempting to reconnect in 5 seconds...")
-                time.sleep(5)
-
-                with terminal.progress("Connecting..."):
-                    self._open()
-
-                self.start()
-
-        except paramiko.SSHException:
+        while True:
+            try:
+                interactive_shell(self.channel)
+                exit_status = self.channel.recv_exit_status()
+                if exit_status in (0, EXIT_STATUS_CTRL_C, EXIT_STATUS_NOT_FOUND):
+                    return
+            except (EOFError, OSError, paramiko.SSHException):
+                pass
             self._close()
-            terminal.error("SSH error occurred in shell.")
-        except BaseException:
-            self._close()
-            terminal.error("Unexpected error occurred in shell.")
+            for reconnect_attempt in range(1, self.max_reconnect_attempts + 1):
+                delay = min(2 ** (reconnect_attempt - 1), 5)
+                terminal.warn(
+                    "Lost connection to shell, attempting to reconnect "
+                    f"in {delay} second{'s' if delay != 1 else ''} "
+                    f"({reconnect_attempt}/{self.max_reconnect_attempts})..."
+                )
+                time.sleep(delay)
+                try:
+                    with terminal.progress("Connecting..."):
+                        self._open()
+                except (ConnectionError, OSError, paramiko.SSHException) as exc:
+                    if reconnect_attempt == self.max_reconnect_attempts:
+                        terminal.error(f"Failed to reconnect to shell: {exc}")
+                    continue
+                break
 
 
 """

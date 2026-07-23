@@ -14,8 +14,17 @@ from ..type import TaskStatus
 from .common import FunctionContext, end_task_and_send_callback, send_callback
 
 
+def task_status(exit_code: int, *, killed: bool) -> TaskStatus:
+    if exit_code == 0:
+        return TaskStatus.Complete
+    if killed:
+        return TaskStatus.Cancelled
+    return TaskStatus.Error
+
+
 class ContainerManager:
     def __init__(self, cmd: str) -> None:
+        self.cmd = cmd
         self.process: Union[subprocess.Popen, None] = None
         self.pid: int = os.getpid()
         self.exit_code: int = 0
@@ -37,7 +46,7 @@ class ContainerManager:
                 )
 
                 self.process = subprocess.Popen(
-                    ["/bin/bash", "-c", cmd],
+                    ["/bin/bash", "-c", self.cmd],
                     shell=False,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
@@ -50,6 +59,7 @@ class ContainerManager:
                         continue
                     print(line.strip().decode("utf-8"))
 
+                self.exit_code = int(self.process.returncode or 0)
                 if not self.killed:
                     end_task_and_send_callback(
                         gateway_stub=stub,
@@ -57,7 +67,7 @@ class ContainerManager:
                         end_task_request=EndTaskRequest(
                             task_id=self.task_id,
                             container_id=config.container_id,
-                            task_status=TaskStatus.Complete,
+                            task_status=task_status(self.exit_code, killed=False),
                         ),
                     )
                 else:
@@ -69,10 +79,11 @@ class ContainerManager:
                             on_start_value=None,
                         ),
                         payload={},
-                        task_status=TaskStatus.Cancelled,
+                        task_status=task_status(self.exit_code, killed=True),
                     )
 
         run_sync(_run())
+        return self.exit_code
 
     def shutdown(self, *_, **__):
         if self.process:
@@ -84,4 +95,4 @@ if __name__ == "__main__":
     cmd = base64.b64decode(sys.argv[1]).decode("utf-8")
     print(f"Running command: {cmd}")
     container = ContainerManager(cmd)
-    container.start()
+    sys.exit(container.start())

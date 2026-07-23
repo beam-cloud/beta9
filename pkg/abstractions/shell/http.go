@@ -41,6 +41,17 @@ func (g *shellGroup) ShellConnect(ctx echo.Context) error {
 		return apiv1.HTTPNotFound()
 	}
 
+	containerState, err := g.ss.containerRepo.GetContainerState(containerId)
+	if err != nil {
+		return ctx.String(http.StatusBadGateway, "Failed to retrieve container state")
+	}
+	if containerState.StubId != stub.ExternalId {
+		return apiv1.HTTPNotFound()
+	}
+	if containerState.Status != types.ContainerStatusRunning {
+		return ctx.String(http.StatusGone, "Container is not running")
+	}
+
 	addressMap, err := g.ss.containerRepo.GetContainerAddressMap(containerId)
 	if err != nil {
 		return ctx.String(http.StatusBadGateway, "Failed to connect to container")
@@ -53,7 +64,9 @@ func (g *shellGroup) ShellConnect(ctx echo.Context) error {
 
 	done := make(chan struct{})
 
-	go g.ss.keepAlive(ctx.Request().Context(), containerId, done)
+	if IsStandaloneContainer(containerId) {
+		go g.ss.keepAlive(ctx.Request().Context(), containerId, done)
+	}
 
 	// Hijack the connection
 	hijacker, ok := ctx.Response().Writer.(http.Hijacker)

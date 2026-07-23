@@ -6,9 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-
-	"github.com/rs/zerolog/log"
-
 	"strings"
 	"time"
 
@@ -35,13 +32,17 @@ const (
 	shellKeepAliveIntervalS       time.Duration = 60 * time.Second
 	defaultContainerCpu           int64         = 100
 	defaultContainerMemory        int64         = 128
-	containerDialTimeoutDurationS time.Duration = 300 * time.Second
+	containerDialTimeoutDurationS time.Duration = 10 * time.Second
 	containerWaitTimeoutDurationS time.Duration = 5 * time.Minute
 	containerWaitPollIntervalS    time.Duration = 1 * time.Second
 	containerKeepAliveIntervalS   time.Duration = 5 * time.Second
-	sshBannerTimeoutDurationS     time.Duration = 2 * time.Second
+	sshProbeTimeoutDurationS      time.Duration = 500 * time.Millisecond
+	sshBannerTimeoutDurationS     time.Duration = 500 * time.Millisecond
+	sshStartupTimeoutDurationS    time.Duration = 10 * time.Second
+	sshStartupPollIntervalS       time.Duration = 100 * time.Millisecond
 	// Remove systemd from nsswitch.conf to prevent systemd from being used as credential provider by dropbear
 	startupScript    string = `SHELL=$(ls /bin/bash || ls /bin/sh); sed -i 's/systemd//g' /etc/nsswitch.conf; /usr/local/bin/dropbear -e -c "export PATH=$PATH:/usr/local/bin && cd /mnt/code && $SHELL" -p %d -R -E -F 2>> /etc/dropbear/logs.txt`
+	podStartupScript string = `SHELL=$(ls /bin/bash || ls /bin/sh); sed -i 's/systemd//g' /etc/nsswitch.conf; /usr/local/bin/dropbear -e -c "export PATH=$PATH:/usr/local/bin && cd /mnt/code && $SHELL" -p %d -R -E 2>> /etc/dropbear/logs.txt`
 	createUserScript string = `SHELL=$(ls /bin/bash || ls /bin/sh); \
 (command -v useradd >/dev/null && useradd -m -s $SHELL -u 0 -g 0 "$USERNAME" 2>> /etc/dropbear/logs.txt) || \
 (command -v adduser >/dev/null && adduser --disabled-password --gecos "" --shell $SHELL --uid 0 --gid 0 "$USERNAME" 2>> /etc/dropbear/logs.txt) || \
@@ -204,7 +205,7 @@ func (ss *SSHShellService) ensureShellPortExposed(ctx context.Context, container
 }
 
 func (ss *SSHShellService) checkForExistingSSHServer(ctx context.Context, addr string) bool {
-	conn, err := network.ConnectToBackend(ctx, addr, time.Second*30, ss.tailscale, ss.config.Tailscale, ss.containerRepo)
+	conn, err := network.ConnectToBackend(ctx, addr, sshProbeTimeoutDurationS, ss.tailscale, ss.config.Tailscale, ss.containerRepo)
 	if err != nil {
 		return false
 	}
@@ -242,6 +243,21 @@ func (ss *SSHShellService) checkForExistingSSHServer(ctx context.Context, addr s
 			return false
 		}
 	}
+}
+
+func (ss *SSHShellService) waitForSSHServer(ctx context.Context, addr string) bool {
+	deadline := time.Now().Add(sshStartupTimeoutDurationS)
+	for time.Now().Before(deadline) {
+		if ss.checkForExistingSSHServer(ctx, addr) {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(sshStartupPollIntervalS):
+		}
+	}
+	return false
 }
 
 func (ss *SSHShellService) getOrCreateSSHUser(ctx context.Context, containerId string, client *common.ContainerClient) (string, string, error) {
@@ -325,13 +341,29 @@ func (ss *SSHShellService) CreateShellInExistingContainer(ctx context.Context, i
 
 	ok := ss.checkForExistingSSHServer(ctx, shellAddr)
 	if !ok {
-		go func() {
-			// This only dies if the container is stopped
-			_, err = containerClient.Exec(containerId, fmt.Sprintf(startupScript, types.WorkerShellPort), []string{})
-			if err != nil {
-				log.Error().Msgf("Failed to execute startup script: %v", err)
-			}
-		}()
+		response, execErr := containerClient.Exec(
+			containerId,
+			fmt.Sprintf(podStartupScript, types.WorkerShellPort),
+			[]string{},
+		)
+		if execErr != nil {
+			return &pb.CreateShellInExistingContainerResponse{
+				Ok:     false,
+				ErrMsg: fmt.Sprintf("Failed to start SSH server: %v", execErr),
+			}, nil
+		}
+		if response == nil || !response.Ok {
+			return &pb.CreateShellInExistingContainerResponse{
+				Ok:     false,
+				ErrMsg: "Container rejected SSH server startup",
+			}, nil
+		}
+		if !ss.waitForSSHServer(ctx, shellAddr) {
+			return &pb.CreateShellInExistingContainerResponse{
+				Ok:     false,
+				ErrMsg: "SSH server did not become ready",
+			}, nil
+		}
 	}
 
 	username, password, err := ss.getOrCreateSSHUser(ctx, containerId, containerClient)
@@ -549,6 +581,10 @@ func (ss *SSHShellService) genContainerId(stubId string) string {
 
 func ContainerIDForStub(stubId string) string {
 	return fmt.Sprintf("%s-%s-%s", shellContainerPrefix, stubId, uuid.New().String()[:8])
+}
+
+func IsStandaloneContainer(containerId string) bool {
+	return strings.HasPrefix(containerId, shellContainerPrefix+"-")
 }
 
 // StandaloneEntryPoint is the dropbear-based startup used by standalone

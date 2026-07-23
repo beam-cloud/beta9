@@ -1,5 +1,6 @@
 import os
 import shlex
+import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
@@ -19,8 +20,10 @@ from ..clients.gateway import (
     DeployStubRequest,
     DeployStubResponse,
     GatewayServiceStub,
+    ListTasksRequest,
     StopContainerRequest,
     StopContainerResponse,
+    StringList,
 )
 from ..clients.pod import (
     CreatePodRequest,
@@ -30,7 +33,15 @@ from ..clients.pod import (
 from ..config import ConfigContext, get_settings
 from ..runner.common import USER_CODE_DIR
 from ..sync import FileSyncer
-from ..type import DurableDisk, GpuType, GpuTypeAlias, LLMConfig, Pool, ServingConfig
+from ..type import (
+    DurableDisk,
+    GpuType,
+    GpuTypeAlias,
+    LLMConfig,
+    Pool,
+    ServingConfig,
+    TaskStatus,
+)
 from ..utils import get_init_args_kwargs
 from .base import BaseAbstraction
 
@@ -67,6 +78,43 @@ class PodInstance(BaseAbstraction):
             StopContainerRequest(container_id=self.container_id)
         )
         return res.ok
+
+    def status(self) -> TaskStatus:
+        """Return the current status of this Pod run's task."""
+
+        if not self.task_id:
+            raise RuntimeError("Pod instance does not have a task ID")
+        response = self.gateway_stub.list_tasks(
+            ListTasksRequest(
+                filters={"id": StringList(values=[self.task_id])},
+                limit=1,
+            )
+        )
+        if not response.ok:
+            raise RuntimeError(response.err_msg or "Failed to retrieve Pod task status")
+        if not response.tasks:
+            raise RuntimeError(f"Pod task not found: {self.task_id}")
+        return TaskStatus(response.tasks[0].status.upper())
+
+    def wait(self, timeout: float = 120, poll_interval: float = 1) -> TaskStatus:
+        """Wait for this Pod run to reach a terminal task status."""
+
+        if timeout <= 0:
+            raise ValueError("timeout must be greater than zero")
+        if poll_interval <= 0:
+            raise ValueError("poll_interval must be greater than zero")
+
+        deadline = time.monotonic() + timeout
+        while True:
+            status = self.status()
+            if status.is_complete():
+                return status
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(
+                    f"Pod task {self.task_id} did not complete within {timeout:g} seconds"
+                )
+            time.sleep(min(poll_interval, remaining))
 
 
 class Pod(RunnerAbstraction, DeployableMixin):
