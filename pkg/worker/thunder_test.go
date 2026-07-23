@@ -120,7 +120,7 @@ func TestInstallThunderClientExecutesInstaller(t *testing.T) {
 	call := rt.execCalls[0]
 	assert.Equal(t, "container-123", call.containerID)
 	assert.Equal(t, "/workspace", call.proc.Cwd)
-	assert.Equal(t, []string{"sh", "-c", "curl -fsSL https://get.thundercompute.com/install.sh | sudo THUNDER_INSTALL_MODE=client THUNDER_AUTH_TOKEN='enroll-token' sh"}, call.proc.Args)
+	assert.Equal(t, []string{"sh", "-c", "curl -fsSL https://get.thundercompute.com/install.sh | sudo THUNDER_NOWARN=1 THUNDER_INSTALL_MODE=client THUNDER_CENTRAL_URL='https://worker-default.example' THUNDER_ENROLLMENT_TOKEN='enroll-token' sh"}, call.proc.Args)
 	assert.Contains(t, call.proc.Env, "A=1")
 	assert.Contains(t, call.proc.Env, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 }

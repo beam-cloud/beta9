@@ -187,7 +187,7 @@ func (c *ContainerThunderManager) CDIDevices(assignedDevices []int) []string {
 }
 
 func (c *ContainerThunderManager) InjectEnvVars(env []string) []string {
-	return injectCudaEnvVars(env)
+	return (&ContainerNvidiaManager{}).InjectEnvVars(env)
 }
 
 func (c *ContainerThunderManager) InjectAssignedEnvVars(env []string, assignedDevices []int) []string {
@@ -195,7 +195,7 @@ func (c *ContainerThunderManager) InjectAssignedEnvVars(env []string, assignedDe
 }
 
 func (c *ContainerThunderManager) InjectMounts(mounts []specs.Mount) []specs.Mount {
-	return injectCudaMounts(mounts)
+	return (&ContainerNvidiaManager{}).InjectMounts(mounts)
 }
 
 func (c *ContainerThunderManager) doThunderRequest(method, apiURL, apiToken, path string, payload any, response any) error {
@@ -344,20 +344,26 @@ func (s *Worker) installThunderClient(ctx context.Context, request *types.Contai
 			cwd = instance.Spec.Process.Cwd
 		}
 	}
-	cmd := "curl -fsSL https://get.thundercompute.com/install.sh | sudo THUNDER_INSTALL_MODE=client THUNDER_AUTH_TOKEN=" + common.ShellQuote(allocation.EnrollmentToken) + " sh"
-	proc := specs.Process{
-		Args: []string{"sh", "-c", cmd},
-		Cwd:  cwd,
-		Env:  env,
-	}
+	cmd := "curl -fsSL https://get.thundercompute.com/install.sh | sudo THUNDER_NOWARN=1 THUNDER_INSTALL_MODE=client THUNDER_CENTRAL_URL=" + common.ShellQuote(allocation.APIURL) + " THUNDER_ENROLLMENT_TOKEN=" + common.ShellQuote(allocation.EnrollmentToken) + " sh"
 	installCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	log.Info().
 		Str("container_id", request.ContainerId).
 		Str("enrollment_token_id", allocation.EnrollmentTokenID).
 		Msg("installing Thunder client in sandbox")
-	if err := instance.Runtime.Exec(installCtx, request.ContainerId, proc, nil); err != nil {
-		return fmt.Errorf("failed to install Thunder client: %w", err)
+	if instance.SandboxProcessManager != nil && instance.SandboxProcessManagerReady {
+		if err := runSandboxProcessManagerCommand(installCtx, instance.SandboxProcessManager, []string{"sh", "-c", cmd}, cwd, env, "Thunder client install"); err != nil {
+			return fmt.Errorf("failed to install Thunder client: %w", err)
+		}
+	} else {
+		proc := specs.Process{
+			Args: []string{"sh", "-c", cmd},
+			Cwd:  cwd,
+			Env:  env,
+		}
+		if err := instance.Runtime.Exec(installCtx, request.ContainerId, proc, nil); err != nil {
+			return fmt.Errorf("failed to install Thunder client: %w", err)
+		}
 	}
 	log.Info().
 		Str("container_id", request.ContainerId).
