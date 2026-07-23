@@ -43,13 +43,16 @@ class PodInstance(BaseAbstraction):
     Attributes:
         container_id: The unique ID of the created container.
         url: The URL for accessing the container over HTTP (if ports were exposed).
+        task_id: The ID of the task tracking this run (if the run is task-tracked).
+        app_id: The ID of the app this run belongs to.
     """
 
     container_id: str
     url: str
     ok: bool = field(default=False)
     error_msg: str = field(default="")
-    management_url: str = field(default="")
+    task_id: str = field(default="")
+    app_id: str = field(default="")
     gateway_stub: "GatewayServiceStub" = field(init=False)
 
     def __post_init__(self):
@@ -275,7 +278,8 @@ class Pod(RunnerAbstraction, DeployableMixin):
             url=url,
             ok=create_response.ok,
             error_msg=create_response.error_msg,
-            management_url=create_response.management_url,
+            task_id=create_response.task_id,
+            app_id=create_response.app_id,
         )
 
     def deploy(
@@ -312,6 +316,7 @@ class Pod(RunnerAbstraction, DeployableMixin):
             terminal.error(
                 "You must specify an app name (either in the decorator or via the --name argument)."
             )
+            return {}, False
 
         is_custom_image = self._uses_custom_image_entrypoint()
 

@@ -101,6 +101,10 @@ def run(
         _print_detached_run(result, pod_spec)
         return
 
+    # Print the app/task links up front so the run can be tracked on the
+    # dashboard even while attached (or after detaching with Ctrl+C)
+    _print_run_links(result)
+
     sync_dir = None
     if sync:
         sync_dir = "./"
@@ -115,11 +119,32 @@ def run(
         raise SystemExit(0)
 
 
+def _get_cli_name() -> str:
+    return click.get_current_context().command_path.split()[0]
+
+
+def _app_dashboard_url(app_id: str) -> str:
+    from ..config import get_settings
+
+    template = get_settings().app_url_template
+    if not app_id or not template:
+        return ""
+    return template.format(app_id=app_id)
+
+
+def _print_run_links(result: PodInstance) -> None:
+    cli_name = _get_cli_name()
+    if app_url := _app_dashboard_url(result.app_id):
+        terminal.detail(f"  app:       {app_url}")
+    if result.task_id:
+        terminal.detail(f"  task:      {result.task_id} ({cli_name} task list)")
+
+
 def _print_detached_run(result: PodInstance, pod_spec: Pod) -> None:
-    cli_name = click.get_current_context().command_path.split()[0]
+    cli_name = _get_cli_name()
     terminal.success(f"Detached; container {result.container_id} keeps running")
-    if result.management_url:
-        terminal.detail(f"  dashboard: {result.management_url}")
+    _print_run_links(result)
+    terminal.detail(f"  shell:     {cli_name} shell --container-id {result.container_id}")
     terminal.detail(f"  reattach:  {cli_name} container attach {result.container_id}")
     terminal.detail(f"  stop:      {cli_name} container stop {result.container_id}")
 

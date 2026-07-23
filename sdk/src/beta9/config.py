@@ -48,6 +48,10 @@ class SDKSettings:
     ascii_logo: str = DEFAULT_ASCII_LOGO
     use_defaults_in_prompt: bool = False
     api_token: Optional[str] = os.getenv("BETA9_TOKEN")
+    # Dashboard link template for an app's overview page, e.g.
+    # "https://platform.beam.cloud/app/{app_id}/overview". Empty when there is
+    # no dashboard to link to (plain beta9 installs without one).
+    app_url_template: str = os.getenv("BETA9_APP_URL_TEMPLATE", "")
 
     def __post_init__(self, **kwargs):
         if p := os.getenv("CONFIG_PATH"):
@@ -63,6 +67,12 @@ class SDKSettings:
             self.config_path = Path("~/.beam/config.ini").expanduser()
             self.use_defaults_in_prompt = True
             self.api_token = os.getenv("BEAM_TOKEN")
+
+            # The dashboard lives at platform.<domain>, mirroring the api host
+            # at app.<domain> (e.g. app.beam.cloud -> platform.beam.cloud)
+            host = self.api_host.split(":")[0]
+            if not self.app_url_template and host.startswith("app."):
+                self.app_url_template = f"https://platform.{host[len('app.'):]}/app/{{app_id}}/overview"
 
 
 @dataclass
@@ -159,7 +169,7 @@ def get_config_context(name: str = DEFAULT_CONTEXT_NAME) -> ConfigContext:
     settings = get_settings()
 
     gateway_host = os.getenv("BETA9_GATEWAY_HOST", settings.gateway_host)
-    gateway_port = os.getenv("BETA9_GATEWAY_PORT", settings.gateway_port)
+    gateway_port = int(os.getenv("BETA9_GATEWAY_PORT", settings.gateway_port))
     token = os.getenv("BETA9_TOKEN", settings.api_token)
 
     if gateway_host and gateway_port and token:

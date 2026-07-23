@@ -171,7 +171,8 @@ message CreatePodResponse {
   string container_id = 2;
   string error_msg = 3;
   string stub_id = 4;
-  string management_url = 5;
+  string task_id = 5;
+  string app_id = 6;
 }
 
 message PodSandboxExecRequest {

@@ -373,8 +373,10 @@ func (g *TaskGroup) stopTask(ctx context.Context, task *types.TaskWithRelated) e
 		return errors.New("failed to cancel task")
 	}
 
-	// If the stub type is function and we have the container id, force stop the container immediately
-	if task.Stub.Type.Kind() == types.StubTypeFunction && task.ContainerId != "" {
+	// If the stub runs one container per task (functions, pod runs) and we have
+	// the container id, force stop the container immediately
+	kind := task.Stub.Type.Kind()
+	if (kind == types.StubTypeFunction || kind == types.StubTypePod) && task.ContainerId != "" {
 		err = g.scheduler.Stop(&types.StopContainerArgs{
 			ContainerId: task.ContainerId,
 			Reason:      types.StopContainerReasonUser,
