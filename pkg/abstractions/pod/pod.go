@@ -581,16 +581,6 @@ func (s *GenericPodService) containerManagementURL(containerID string) string {
 	return strings.ReplaceAll(template, "{container_id}", containerID)
 }
 
-// appManagementURL returns a dashboard link to the app's overview page, built
-// from the configured template (e.g. "https://platform.example.com/app/{app_id}/overview").
-func (s *GenericPodService) appManagementURL(appID string) string {
-	template := strings.TrimSpace(s.config.GatewayService.AppURLTemplate)
-	if appID == "" || template == "" || !strings.Contains(template, "{app_id}") {
-		return ""
-	}
-	return strings.ReplaceAll(template, "{app_id}", appID)
-}
-
 func podRunWorkspace(authInfo *auth.AuthInfo, stub *types.StubWithRelated) (*types.Workspace, error) {
 	if authInfo == nil || authInfo.Workspace == nil {
 		return nil, fmt.Errorf("missing workspace auth")
@@ -696,7 +686,7 @@ func (s *GenericPodService) CreatePod(ctx context.Context, in *pb.CreatePodReque
 		StubId:        stub.ExternalId,
 		ManagementUrl: s.containerManagementURL(containerId),
 		TaskId:        taskId,
-		AppUrl:        s.appManagementURL(appId),
+		AppId:         appId,
 	}, nil
 }
 

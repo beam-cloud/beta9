@@ -1037,7 +1037,7 @@
         "taskId": {
           "type": "string"
         },
-        "appUrl": {
+        "appId": {
           "type": "string"
         }
       }

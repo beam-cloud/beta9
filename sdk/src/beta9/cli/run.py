@@ -123,10 +123,19 @@ def _get_cli_name() -> str:
     return click.get_current_context().command_path.split()[0]
 
 
+def _app_dashboard_url(app_id: str) -> str:
+    from ..config import get_settings
+
+    template = get_settings().app_url_template
+    if not app_id or not template:
+        return ""
+    return template.format(app_id=app_id)
+
+
 def _print_run_links(result: PodInstance) -> None:
     cli_name = _get_cli_name()
-    if result.app_url:
-        terminal.detail(f"  app:       {result.app_url}")
+    if app_url := _app_dashboard_url(result.app_id):
+        terminal.detail(f"  app:       {app_url}")
     if result.task_id:
         terminal.detail(f"  task:      {result.task_id} ({cli_name} task list)")
 

@@ -94,12 +94,3 @@ func TestTrackRunAsTask(t *testing.T) {
 	require.True(t, service.trackRunAsTask(runStub))
 	require.False(t, service.trackRunAsTask(deploymentStub))
 }
-
-func TestAppManagementURLIsOptionalAndServerDefined(t *testing.T) {
-	service := &GenericPodService{}
-	require.Empty(t, service.appManagementURL("app-1"))
-
-	service.config.GatewayService.AppURLTemplate = "https://console.example/app/{app_id}/overview"
-	require.Equal(t, "https://console.example/app/app-1/overview", service.appManagementURL("app-1"))
-	require.Empty(t, service.appManagementURL(""))
-}

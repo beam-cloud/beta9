@@ -179,7 +179,6 @@ type GatewayServiceConfig struct {
 	Host                 string        `key:"host" json:"host"`
 	InvokeURLType        string        `key:"invokeURLType" json:"invoke_url_type"`
 	ContainerURLTemplate string        `key:"containerURLTemplate" json:"container_url_template"`
-	AppURLTemplate       string        `key:"appURLTemplate" json:"app_url_template"`
 	GRPC                 GRPCConfig    `key:"grpc" json:"grpc"`
 	HTTP                 HTTPConfig    `key:"http" json:"http"`
 	ShutdownTimeout      time.Duration `key:"shutdownTimeout" json:"shutdown_timeout"`

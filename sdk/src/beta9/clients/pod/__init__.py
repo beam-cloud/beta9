@@ -41,7 +41,7 @@ class CreatePodResponse(betterproto.Message):
     stub_id: str = betterproto.string_field(4)
     management_url: str = betterproto.string_field(5)
     task_id: str = betterproto.string_field(6)
-    app_url: str = betterproto.string_field(7)
+    app_id: str = betterproto.string_field(7)
 
 
 @dataclass(eq=False, repr=False)
