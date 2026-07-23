@@ -16,7 +16,9 @@ from .shell import SSHShell
 
 
 class DeployableMixin:
-    func: Callable
+    # Some deployables (e.g. Pod) deploy an entrypoint rather than a function;
+    # _validate() enforces callability for the ones that require it.
+    func: Optional[Callable]
     parent: RunnerAbstraction
     deployment_id: Optional[str] = None
     deployment_stub_type: ClassVar[str]
