@@ -268,6 +268,8 @@ func (s *Worker) markContainerStopping(containerId string) {
 }
 
 func (s *Worker) deleteContainer(containerId string) {
+	s.thunderSetupTracker.Delete(containerId)
+
 	if instance, exists := s.containerInstances.Get(containerId); exists && instance.SandboxProcessManager != nil {
 		if err := instance.SandboxProcessManager.Cleanup(); err != nil {
 			log.Debug().Str("container_id", containerId).Err(err).Msg("failed to cleanup sandbox process manager client")
@@ -307,6 +309,9 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		}
 		if request.Stub.Type.Kind() == types.StubTypeSandbox {
 			instance.initializeProcessManagerReadiness()
+			if request.GpuVirtualized {
+				s.thunderSetupTracker.Begin(request.ContainerId)
+			}
 		}
 	}
 	s.containerInstances.Set(containerId, instance)
@@ -924,6 +929,10 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	}
 	s.enableVolumeCaching(request, volumeCacheMap, spec)
 
+	if request.RequiresGPU() && request.GpuVirtualized {
+		spec.Mounts = s.gpuManagerForRequest(request).InjectMounts(spec.Mounts)
+	}
+
 	// Configure resolv.conf
 	resolvMount := specs.Mount{
 		Type:        "none",
@@ -1452,6 +1461,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 			if request.GpuVirtualized {
 				if err := s.installThunderClient(ctx, request); err != nil {
+					s.thunderSetupTracker.Complete(request.ContainerId, err)
 					log.Error().Err(err).Str("container_id", request.ContainerId).Msg("failed to install Thunder client")
 					s.stopContainer(request.ContainerId, false)
 					select {
@@ -1460,6 +1470,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 					}
 					return
 				}
+				s.thunderSetupTracker.Complete(request.ContainerId, nil)
 				select {
 				case thunderInstallResult <- nil:
 				default:

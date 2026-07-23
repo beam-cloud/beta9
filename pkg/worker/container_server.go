@@ -59,6 +59,7 @@ type ContainerRuntimeServer struct {
 	killedSandboxProcesses  sync.Map
 	containerRepoClient     pb.ContainerRepositoryServiceClient
 	containerNetworkManager ContainerNetwork
+	thunderSetupTracker     *thunderSetupTracker
 	imageClient             *ImageClient
 	runtime                 runtime.Runtime // The worker's configured runtime (from pool config)
 	eventRepo               processLogEventRepository
@@ -81,6 +82,7 @@ type ContainerRuntimeServerOpts struct {
 	ImageClient             *ImageClient
 	ContainerRepoClient     pb.ContainerRepositoryServiceClient
 	ContainerNetworkManager ContainerNetwork
+	ThunderSetupTracker     *thunderSetupTracker
 	EventRepo               repository.EventRepository
 	WorkerID                string
 	BackendRoute            backendRouteFunc
@@ -107,6 +109,7 @@ func NewContainerRuntimeServer(opts *ContainerRuntimeServerOpts) (*ContainerRunt
 		imageClient:             opts.ImageClient,
 		containerRepoClient:     opts.ContainerRepoClient,
 		containerNetworkManager: opts.ContainerNetworkManager,
+		thunderSetupTracker:     opts.ThunderSetupTracker,
 		eventRepo:               opts.EventRepo,
 		workerID:                opts.WorkerID,
 		backendRoute:            opts.BackendRoute,
@@ -613,8 +616,6 @@ func (s *ContainerRuntimeServer) getHostPathFromContainerPath(containerPath stri
 // Sandbox methods follow (these are runtime-agnostic and work with the sandbox process manager)
 
 func (s *ContainerRuntimeServer) ContainerSandboxExec(ctx context.Context, in *pb.ContainerSandboxExecRequest) (*pb.ContainerSandboxExecResponse, error) {
-	log.Info().Str("container_id", in.ContainerId).Str("cmd", in.Cmd).Msg("running sandbox command")
-
 	parsedCmd, err := shlex.Split(in.Cmd)
 	if err != nil {
 		return &pb.ContainerSandboxExecResponse{Ok: false, ErrorMsg: err.Error()}, nil
@@ -630,6 +631,10 @@ func (s *ContainerRuntimeServer) ContainerSandboxExec(ctx context.Context, in *p
 		return &pb.ContainerSandboxExecResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
+	if err := s.thunderSetupTracker.Wait(ctx, in.ContainerId); err != nil {
+		return &pb.ContainerSandboxExecResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
 	if instance.Spec == nil || instance.Spec.Process == nil {
 		return &pb.ContainerSandboxExecResponse{Ok: false, ErrorMsg: "Container spec not ready"}, nil
 	}
@@ -642,6 +647,7 @@ func (s *ContainerRuntimeServer) ContainerSandboxExec(ctx context.Context, in *p
 
 	env = append(env, formattedEnv...)
 
+	log.Info().Str("container_id", in.ContainerId).Str("cmd", in.Cmd).Msg("running sandbox command")
 	return s.handleSandboxExec(ctx, in, instance, env, parsedCmd, in.Cwd)
 }
 

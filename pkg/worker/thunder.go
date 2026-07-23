@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	common "github.com/beam-cloud/beta9/pkg/common"
@@ -24,7 +25,126 @@ const (
 	thunderEnrollmentTokenNodePath = "/api/v1/enrollment-tokens/%s/node"
 	thunderEnrollmentRoleClient    = "client"
 	thunderEnrollmentExpiresSecond = 604800
+	thunderLibraryPath             = "/etc/thunder/libthunder.so"
+	thunderNvidiaSMIPath           = "/usr/bin/nvidia-smi"
+	thunderNvidiaMLLibraryPath     = "/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1"
 )
+
+type thunderSetupState int
+
+const (
+	thunderSetupPending thunderSetupState = iota
+	thunderSetupReady
+	thunderSetupFailed
+)
+
+type thunderSetupStatus struct {
+	done chan struct{}
+	once sync.Once
+
+	mu    sync.RWMutex
+	state thunderSetupState
+	err   error
+}
+
+func newThunderSetupStatus() *thunderSetupStatus {
+	return &thunderSetupStatus{
+		done:  make(chan struct{}),
+		state: thunderSetupPending,
+	}
+}
+
+func (s *thunderSetupStatus) complete(err error) {
+	s.once.Do(func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if err != nil {
+			s.state = thunderSetupFailed
+			s.err = err
+		} else {
+			s.state = thunderSetupReady
+		}
+		close(s.done)
+	})
+}
+
+func (s *thunderSetupStatus) wait(ctx context.Context) error {
+	select {
+	case <-s.done:
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+		if s.state == thunderSetupFailed {
+			if s.err != nil {
+				return fmt.Errorf("Thunder client setup failed: %w", s.err)
+			}
+			return fmt.Errorf("Thunder client setup failed")
+		}
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("Thunder client setup did not complete: %w", ctx.Err())
+	}
+}
+
+type thunderSetupTracker struct {
+	mu       sync.Mutex
+	statuses map[string]*thunderSetupStatus
+}
+
+func newThunderSetupTracker() *thunderSetupTracker {
+	return &thunderSetupTracker{statuses: map[string]*thunderSetupStatus{}}
+}
+
+func (t *thunderSetupTracker) Begin(containerId string) {
+	if t == nil || containerId == "" {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if _, exists := t.statuses[containerId]; exists {
+		return
+	}
+	t.statuses[containerId] = newThunderSetupStatus()
+}
+
+func (t *thunderSetupTracker) Complete(containerId string, err error) {
+	if t == nil || containerId == "" {
+		return
+	}
+	t.mu.Lock()
+	status, exists := t.statuses[containerId]
+	if !exists {
+		status = newThunderSetupStatus()
+		t.statuses[containerId] = status
+	}
+	t.mu.Unlock()
+	status.complete(err)
+}
+
+func (t *thunderSetupTracker) Wait(ctx context.Context, containerId string) error {
+	if t == nil || containerId == "" {
+		return nil
+	}
+	t.mu.Lock()
+	status := t.statuses[containerId]
+	t.mu.Unlock()
+	if status == nil {
+		return nil
+	}
+	return status.wait(ctx)
+}
+
+func (t *thunderSetupTracker) Delete(containerId string) {
+	if t == nil || containerId == "" {
+		return
+	}
+	t.mu.Lock()
+	status := t.statuses[containerId]
+	delete(t.statuses, containerId)
+	t.mu.Unlock()
+	if status != nil {
+		status.complete(fmt.Errorf("Thunder client setup cancelled"))
+	}
+}
 
 type ContainerThunderManager struct {
 	apiURL      string
@@ -187,7 +307,7 @@ func (c *ContainerThunderManager) CDIDevices(assignedDevices []int) []string {
 }
 
 func (c *ContainerThunderManager) InjectEnvVars(env []string) []string {
-	return (&ContainerNvidiaManager{}).InjectEnvVars(env)
+	return withLDPreload((&ContainerNvidiaManager{}).InjectEnvVars(env), thunderLibraryPath)
 }
 
 func (c *ContainerThunderManager) InjectAssignedEnvVars(env []string, assignedDevices []int) []string {
@@ -195,7 +315,25 @@ func (c *ContainerThunderManager) InjectAssignedEnvVars(env []string, assignedDe
 }
 
 func (c *ContainerThunderManager) InjectMounts(mounts []specs.Mount) []specs.Mount {
-	return (&ContainerNvidiaManager{}).InjectMounts(mounts)
+	mounts = (&ContainerNvidiaManager{}).InjectMounts(mounts)
+	mounts = append(mounts, thunderBindMount(thunderNvidiaSMIPath))
+	mounts = append(mounts, thunderBindMount(thunderNvidiaMLLibraryPath))
+	return mounts
+}
+
+func thunderBindMount(path string) specs.Mount {
+	return specs.Mount{
+		Type:        "bind",
+		Source:      path,
+		Destination: path,
+		Options: []string{
+			"rbind",
+			"rprivate",
+			"nosuid",
+			"nodev",
+			"rw",
+		},
+	}
 }
 
 func (c *ContainerThunderManager) doThunderRequest(method, apiURL, apiToken, path string, payload any, response any) error {

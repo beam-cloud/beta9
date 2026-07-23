@@ -3,17 +3,102 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	common "github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/tj/assert"
 )
+
+func TestThunderSetupTrackerWaitsUntilComplete(t *testing.T) {
+	tracker := newThunderSetupTracker()
+	tracker.Begin("container-123")
+
+	done := make(chan error, 1)
+	go func() {
+		done <- tracker.Wait(context.Background(), "container-123")
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("wait returned before completion: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	tracker.Complete("container-123", nil)
+	requireNoErrorEventually(t, done)
+}
+
+func TestThunderSetupTrackerReturnsFailure(t *testing.T) {
+	tracker := newThunderSetupTracker()
+	tracker.Begin("container-123")
+	tracker.Complete("container-123", errors.New("install failed"))
+
+	err := tracker.Wait(context.Background(), "container-123")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "install failed")
+}
+
+func TestThunderSetupTrackerDeleteWakesWaiters(t *testing.T) {
+	tracker := newThunderSetupTracker()
+	tracker.Begin("container-123")
+	tracker.mu.Lock()
+	status := tracker.statuses["container-123"]
+	tracker.mu.Unlock()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- status.wait(context.Background())
+	}()
+
+	tracker.Delete("container-123")
+	err := <-done
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "cancelled")
+}
+
+func requireNoErrorEventually(t *testing.T, done <-chan error) {
+	t.Helper()
+	select {
+	case err := <-done:
+		assert.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Thunder setup wait")
+	}
+}
+
+func TestThunderInjectEnvVarsAddsThunderLDPreload(t *testing.T) {
+	manager := NewContainerThunderManager("", "", nil)
+
+	env := manager.InjectEnvVars([]string{"A=1"})
+
+	assert.Contains(t, env, "LD_PRELOAD=/etc/thunder/libthunder.so")
+}
+
+func TestThunderInjectEnvVarsAppendsThunderLDPreload(t *testing.T) {
+	manager := NewContainerThunderManager("", "", nil)
+
+	env := manager.InjectEnvVars([]string{"LD_PRELOAD=/lib/existing.so"})
+
+	assert.Contains(t, env, "LD_PRELOAD=/lib/existing.so:/etc/thunder/libthunder.so")
+}
+
+func TestThunderInjectMountsAddsNvidiaSMIAndNVML(t *testing.T) {
+	manager := NewContainerThunderManager("", "", nil)
+	initialMounts := []specs.Mount{{Type: "bind", Source: "/src", Destination: "/dst"}}
+
+	mounts := manager.InjectMounts(initialMounts)
+
+	assert.Contains(t, mounts, thunderBindMount("/usr/bin/nvidia-smi"))
+	assert.Contains(t, mounts, thunderBindMount("/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1"))
+}
 
 func TestThunderAssignRegistersClientAndLeavesAssignedEnvUnchanged(t *testing.T) {
 	var registerPayload thunderEnrollmentTokenRequest

@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -303,6 +304,66 @@ func TestContainerSandboxExecDoesNotPollRuntimeStateBeforeProcessManagerReady(t 
 	require.False(t, resp.Ok)
 	require.Contains(t, resp.ErrorMsg, "Process manager failed")
 	require.Equal(t, int32(0), rt.stateCalls.Load())
+}
+
+func TestContainerSandboxExecWaitsForThunderSetup(t *testing.T) {
+	containerId := "sandbox-test"
+	ready := make(chan struct{})
+	close(ready)
+	tracker := newThunderSetupTracker()
+	tracker.Begin(containerId)
+
+	server := &ContainerRuntimeServer{
+		containerInstances:  common.NewSafeMap[*ContainerInstance](),
+		thunderSetupTracker: tracker,
+	}
+	server.containerInstances.Set(containerId, &ContainerInstance{
+		Id:                         containerId,
+		SandboxProcessManagerReady: true,
+		ProcessManagerReadyChan:    ready,
+		Spec:                       &specs.Spec{Process: &specs.Process{}},
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	resp, err := server.ContainerSandboxExec(ctx, &pb.ContainerSandboxExecRequest{
+		ContainerId: containerId,
+		Cmd:         "true",
+	})
+
+	require.NoError(t, err)
+	require.False(t, resp.Ok)
+	require.Contains(t, resp.ErrorMsg, "Thunder client setup did not complete")
+}
+
+func TestContainerSandboxExecReturnsThunderSetupFailure(t *testing.T) {
+	containerId := "sandbox-test"
+	ready := make(chan struct{})
+	close(ready)
+	tracker := newThunderSetupTracker()
+	tracker.Begin(containerId)
+	tracker.Complete(containerId, errors.New("install failed"))
+
+	server := &ContainerRuntimeServer{
+		containerInstances:  common.NewSafeMap[*ContainerInstance](),
+		thunderSetupTracker: tracker,
+	}
+	server.containerInstances.Set(containerId, &ContainerInstance{
+		Id:                         containerId,
+		SandboxProcessManagerReady: true,
+		ProcessManagerReadyChan:    ready,
+		Spec:                       &specs.Spec{Process: &specs.Process{}},
+	})
+
+	resp, err := server.ContainerSandboxExec(context.Background(), &pb.ContainerSandboxExecRequest{
+		ContainerId: containerId,
+		Cmd:         "true",
+	})
+
+	require.NoError(t, err)
+	require.False(t, resp.Ok)
+	require.Contains(t, resp.ErrorMsg, "Thunder client setup failed")
+	require.Contains(t, resp.ErrorMsg, "install failed")
 }
 
 func TestContainerSandboxStatusReportsPendingBeforeProcessManagerReady(t *testing.T) {
