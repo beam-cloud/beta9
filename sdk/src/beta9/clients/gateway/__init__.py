@@ -275,6 +275,8 @@ class Volume(betterproto.Message):
     config: Optional["_types__.MountPointConfig"] = betterproto.message_field(
         3, optional=True
     )
+    sub_path: str = betterproto.string_field(4)
+    max_storage_bytes: int = betterproto.int64_field(5)
 
 
 @dataclass(eq=False, repr=False)

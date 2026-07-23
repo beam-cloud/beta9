@@ -1533,6 +1533,8 @@ type Mount struct {
 	MountType        string                  `protobuf:"bytes,5,opt,name=mount_type,json=mountType,proto3" json:"mount_type,omitempty"`
 	MountPointConfig *MountPointConfig       `protobuf:"bytes,6,opt,name=mount_point_config,json=mountPointConfig,proto3" json:"mount_point_config,omitempty"`
 	DurableDisk      *DurableDiskMountConfig `protobuf:"bytes,7,opt,name=durable_disk,json=durableDisk,proto3" json:"durable_disk,omitempty"`
+	SubPath          *string                 `protobuf:"bytes,8,opt,name=sub_path,json=subPath,proto3,oneof" json:"sub_path,omitempty"`
+	MaxStorageBytes  *int64                  `protobuf:"varint,9,opt,name=max_storage_bytes,json=maxStorageBytes,proto3,oneof" json:"max_storage_bytes,omitempty"`
 }
 
 func (x *Mount) Reset() {
@@ -1614,6 +1616,20 @@ func (x *Mount) GetDurableDisk() *DurableDiskMountConfig {
 		return x.DurableDisk
 	}
 	return nil
+}
+
+func (x *Mount) GetSubPath() string {
+	if x != nil && x.SubPath != nil {
+		return *x.SubPath
+	}
+	return ""
+}
+
+func (x *Mount) GetMaxStorageBytes() int64 {
+	if x != nil && x.MaxStorageBytes != nil {
+		return *x.MaxStorageBytes
+	}
+	return 0
 }
 
 type MountPointConfig struct {

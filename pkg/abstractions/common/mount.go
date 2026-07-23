@@ -1,6 +1,7 @@
 package abstractions
 
 import (
+	"os"
 	"path"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -32,11 +33,22 @@ func ConfigureContainerRequestMounts(containerId string, stub *types.StubWithRel
 	}
 
 	for _, v := range config.Volumes {
+		localPath := path.Join(types.DefaultVolumesPath, workspace.Name, v.Id)
+		subPath := v.GetSubPath()
+		if subPath != "" {
+			localPath = path.Join(localPath, subPath)
+			if err := os.MkdirAll(localPath, 0755); err != nil {
+				return nil, err
+			}
+		}
+
 		mount := types.Mount{
-			LocalPath: path.Join(types.DefaultVolumesPath, workspace.Name, v.Id),
-			LinkPath:  path.Join(types.TempContainerWorkspace(containerId), v.MountPath),
-			MountPath: path.Join(types.WorkerContainerVolumePath, v.MountPath),
-			ReadOnly:  false,
+			LocalPath:       localPath,
+			LinkPath:        path.Join(types.TempContainerWorkspace(containerId), v.MountPath),
+			MountPath:       path.Join(types.WorkerContainerVolumePath, v.MountPath),
+			ReadOnly:        false,
+			SubPath:         subPath,
+			MaxStorageBytes: v.GetMaxStorageBytes(),
 		}
 
 		if v.Config != nil {
@@ -55,7 +67,14 @@ func ConfigureContainerRequestMounts(containerId string, stub *types.StubWithRel
 				ReadOnly:       v.Config.ReadOnly,
 				ForcePathStyle: v.Config.ForcePathStyle,
 			}
-			mount.LocalPath = path.Join(defaultExternalVolumesPath, workspace.Name, v.Id)
+			localPath = path.Join(defaultExternalVolumesPath, workspace.Name, v.Id)
+			if subPath != "" {
+				localPath = path.Join(localPath, subPath)
+				if err := os.MkdirAll(localPath, 0755); err != nil {
+					return nil, err
+				}
+			}
+			mount.LocalPath = localPath
 			mount.MountType = storage.StorageModeMountPoint
 		}
 

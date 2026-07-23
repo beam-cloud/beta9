@@ -16,7 +16,7 @@ elif [ "$(uname -m)" = "x86_64" ]; then
   arch="amd64"
 fi
 
-k8s_version=$(curl -sSfL https://cdn.dl.k8s.io/release/stable-1.29.txt)
+k8s_version=$(curl -sSfL https://dl.k8s.io/release/stable-1.29.txt)
 k3d_version="5.8.1"
 kustomize_version="5.6.0"
 stern_version="1.32.0"

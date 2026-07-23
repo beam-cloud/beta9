@@ -597,6 +597,8 @@ message Volume {
   string id = 1;
   string mount_path = 2;
   optional types.MountPointConfig config = 3;
+  optional string sub_path = 4;
+  optional int64 max_storage_bytes = 5;
 }
 
 message SecretVar { string name = 1; }

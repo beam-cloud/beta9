@@ -1,5 +1,7 @@
+import math
+import re
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Union
 
 from ..abstractions.base import BaseAbstraction
 from ..clients.gateway import Volume as VolumeGateway
@@ -7,11 +9,53 @@ from ..clients.types import MountPointConfig as VolumeConfigGateway
 from ..clients.volume import GetOrCreateVolumeRequest, GetOrCreateVolumeResponse, VolumeServiceStub
 
 
+def parse_storage_to_bytes(storage_str: str) -> int:
+    """Parse storage strings into bytes."""
+    if not isinstance(storage_str, str):
+        return storage_str
+
+    storage = storage_str.strip().lower()
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)([a-z]*)", storage)
+    if not match:
+        raise ValueError("Unsupported storage format")
+
+    amount = float(match.group(1))
+    unit = match.group(2) or "b"
+    units = {
+        "b": 1,
+        "k": 1000,
+        "kb": 1000,
+        "ki": 1024,
+        "kib": 1024,
+        "m": 1000 * 1000,
+        "mb": 1000 * 1000,
+        "mi": 1024 * 1024,
+        "mib": 1024 * 1024,
+        "g": 1000 * 1000 * 1000,
+        "gb": 1000 * 1000 * 1000,
+        "gi": 1024 * 1024 * 1024,
+        "gib": 1024 * 1024 * 1024,
+        "t": 1000 * 1000 * 1000 * 1000,
+        "tb": 1000 * 1000 * 1000 * 1000,
+        "ti": 1024 * 1024 * 1024 * 1024,
+        "tib": 1024 * 1024 * 1024 * 1024,
+    }
+    if unit not in units:
+        raise ValueError("Unsupported storage format")
+
+    storage_bytes = math.ceil(amount * units[unit])
+    if storage_bytes <= 0:
+        raise ValueError("storage must be greater than 0")
+    return storage_bytes
+
+
 class Volume(BaseAbstraction):
     def __init__(
         self,
         name: str,
         mount_path: str,
+        sub_path: Optional[str] = None,
+        max_storage: Optional[Union[int, str]] = None,
     ) -> None:
         """
         Creates a Volume instance.
@@ -44,6 +88,8 @@ class Volume(BaseAbstraction):
         self.ready = False
         self.volume_id = None
         self.mount_path = mount_path
+        self.sub_path = sub_path
+        self.max_storage_bytes = parse_storage_to_bytes(max_storage)
         self._stub: Optional[VolumeServiceStub] = None
 
     @property
@@ -71,6 +117,8 @@ class Volume(BaseAbstraction):
         vol = VolumeGateway(
             id=self.volume_id,
             mount_path=self.mount_path,
+            sub_path=self.sub_path,
+            max_storage_bytes=self.max_storage_bytes,
         )
 
         return vol
@@ -105,7 +153,14 @@ class CloudBucketConfig:
 
 
 class CloudBucket(Volume):
-    def __init__(self, name: str, mount_path: str, config: CloudBucketConfig) -> None:
+    def __init__(
+        self,
+        name: str,
+        mount_path: str,
+        config: CloudBucketConfig,
+        sub_path: Optional[str] = None,
+        max_storage: Optional[Union[int, str]] = None,
+    ) -> None:
         """
         Creates a CloudBucket instance.
 
@@ -139,7 +194,7 @@ class CloudBucket(Volume):
                 pass
             ```
         """
-        super().__init__(name, mount_path)
+        super().__init__(name, mount_path, sub_path=sub_path, max_storage=max_storage)
         self.config = config
 
     def get_or_create(self) -> bool:

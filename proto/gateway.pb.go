@@ -2077,9 +2077,11 @@ type Volume struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	Id        string            `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	MountPath string            `protobuf:"bytes,2,opt,name=mount_path,json=mountPath,proto3" json:"mount_path,omitempty"`
-	Config    *MountPointConfig `protobuf:"bytes,3,opt,name=config,proto3,oneof" json:"config,omitempty"`
+	Id              string            `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	MountPath       string            `protobuf:"bytes,2,opt,name=mount_path,json=mountPath,proto3" json:"mount_path,omitempty"`
+	Config          *MountPointConfig `protobuf:"bytes,3,opt,name=config,proto3,oneof" json:"config,omitempty"`
+	SubPath         *string           `protobuf:"bytes,4,opt,name=sub_path,json=subPath,proto3,oneof" json:"sub_path,omitempty"`
+	MaxStorageBytes *int64            `protobuf:"varint,5,opt,name=max_storage_bytes,json=maxStorageBytes,proto3,oneof" json:"max_storage_bytes,omitempty"`
 }
 
 func (x *Volume) Reset() {
@@ -2133,6 +2135,20 @@ func (x *Volume) GetConfig() *MountPointConfig {
 		return x.Config
 	}
 	return nil
+}
+
+func (x *Volume) GetSubPath() string {
+	if x != nil && x.SubPath != nil {
+		return *x.SubPath
+	}
+	return ""
+}
+
+func (x *Volume) GetMaxStorageBytes() int64 {
+	if x != nil && x.MaxStorageBytes != nil {
+		return *x.MaxStorageBytes
+	}
+	return 0
 }
 
 type SecretVar struct {
