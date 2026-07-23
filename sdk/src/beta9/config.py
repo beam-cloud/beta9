@@ -169,7 +169,7 @@ def get_config_context(name: str = DEFAULT_CONTEXT_NAME) -> ConfigContext:
     settings = get_settings()
 
     gateway_host = os.getenv("BETA9_GATEWAY_HOST", settings.gateway_host)
-    gateway_port = os.getenv("BETA9_GATEWAY_PORT", settings.gateway_port)
+    gateway_port = int(os.getenv("BETA9_GATEWAY_PORT", settings.gateway_port))
     token = os.getenv("BETA9_TOKEN", settings.api_token)
 
     if gateway_host and gateway_port and token:
