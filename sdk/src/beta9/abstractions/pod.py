@@ -316,6 +316,7 @@ class Pod(RunnerAbstraction, DeployableMixin):
             terminal.error(
                 "You must specify an app name (either in the decorator or via the --name argument)."
             )
+            return {}, False
 
         is_custom_image = self._uses_custom_image_entrypoint()
 
