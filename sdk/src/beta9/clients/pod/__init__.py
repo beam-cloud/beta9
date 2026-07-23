@@ -39,8 +39,8 @@ class CreatePodResponse(betterproto.Message):
     container_id: str = betterproto.string_field(2)
     error_msg: str = betterproto.string_field(3)
     stub_id: str = betterproto.string_field(4)
-    task_id: str = betterproto.string_field(6)
-    app_id: str = betterproto.string_field(7)
+    task_id: str = betterproto.string_field(5)
+    app_id: str = betterproto.string_field(6)
 
 
 @dataclass(eq=False, repr=False)

@@ -171,10 +171,8 @@ message CreatePodResponse {
   string container_id = 2;
   string error_msg = 3;
   string stub_id = 4;
-  reserved 5; // was management_url, a server-built dashboard link; clients now build links from ids
-  reserved "management_url";
-  string task_id = 6;
-  string app_id = 7;
+  string task_id = 5;
+  string app_id = 6;
 }
 
 message PodSandboxExecRequest {
