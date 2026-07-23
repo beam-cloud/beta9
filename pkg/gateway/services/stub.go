@@ -630,33 +630,22 @@ func (gws *GatewayService) stubResourcePolicy(ctx context.Context, workspaceID s
 	return policy, nil
 }
 
-func (p stubResourcePolicy) privatePoolOnly() bool {
-	return p.privatePoolTargeted && (p.fallback == types.PrivatePoolFallbackFail || p.fallback == types.PrivatePoolFallbackWait)
-}
-
 func (p stubResourcePolicy) checkManagedGPUCapacity() bool {
-	return !p.privatePoolOnly()
+	return !p.privatePoolTargeted
 }
 
 func (p stubResourcePolicy) maxReplicasLimit(defaultLimit uint64) uint64 {
-	if p.privatePoolOnly() {
+	if p.privatePoolTargeted {
 		return 0
 	}
 	return defaultLimit
 }
 
 func (p stubResourcePolicy) validateManagedLimits(gws *GatewayService, in *pb.GetOrCreateStubRequest, workspace *types.Workspace) string {
-	if p.privatePoolOnly() {
-		return ""
-	}
-	errMsg := gws.managedStubLimitError(in, workspace)
-	if errMsg == "" {
-		return ""
-	}
 	if p.privatePoolTargeted {
-		return "private pool workloads that exceed managed stub limits must set pool fallback to fail or wait"
+		return ""
 	}
-	return errMsg
+	return gws.managedStubLimitError(in, workspace)
 }
 
 func privatePoolFallback(pool *types.PoolConfig) string {
