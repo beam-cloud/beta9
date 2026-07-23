@@ -74,6 +74,7 @@ gateway:
   host: beta9-gateway
   invokeURLType: path
   containerURLTemplate: ""
+  appURLTemplate: ""
   grpc:
     externalHost: beta9-gateway
     externalPort: 1993

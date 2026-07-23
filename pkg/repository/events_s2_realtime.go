@@ -674,14 +674,12 @@ func (r *S2EventRepository) readLogStreamPage(ctx context.Context, streamName s2
 		endTimestamp := uint64(query.EndTime.UTC().UnixMilli())
 		count, clamp := uint64(1), true
 		batch, err := r.basin.Stream(streamName).Read(ctx, &s2.ReadOptions{Timestamp: &endTimestamp, Count: &count, Clamp: &clamp})
-		if err != nil {
-			if isS2ReadEmpty(err) {
-				return 0, nil, nil
-			}
-			return 0, nil, fmt.Errorf("position s2 log stream %q at end time: %w", streamName, err)
+		if isS2StreamNotFound(err) {
+			return 0, nil, nil
 		}
-		if len(batch.Records) > 0 {
-			scannedFromTail = logTailOffsetBeforeSeq(tail.Tail.SeqNum, batch.Records[0].SeqNum)
+		scannedFromTail, err = logEndPositionTailOffset(tail.Tail.SeqNum, batch, err)
+		if err != nil {
+			return 0, nil, fmt.Errorf("position s2 log stream %q at end time: %w", streamName, err)
 		}
 	}
 
@@ -762,6 +760,18 @@ func logTailOffsetBeforeSeq(tailSeqNum, endSeqNum uint64) uint64 {
 		return 0
 	}
 	return tailSeqNum - endSeqNum
+}
+
+func logEndPositionTailOffset(tailSeqNum uint64, batch *s2.ReadBatch, err error) (uint64, error) {
+	// S2 returns 416 when the requested timestamp is newer than the stream
+	// tail. Scanning from the live tail is already the correct end position.
+	if isS2RangeNotSatisfiable(err) {
+		return 0, nil
+	}
+	if err != nil || batch == nil || len(batch.Records) == 0 {
+		return 0, err
+	}
+	return logTailOffsetBeforeSeq(tailSeqNum, batch.Records[0].SeqNum), nil
 }
 
 // nextTailReadWindow returns the next tail offset and record count for scanning

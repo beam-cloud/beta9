@@ -17,6 +17,7 @@ var (
 	podLLMEngineMetrics     string = "pod:%s:%s:llm_engine_metrics:%s"
 	podLLMAffinity          string = "pod:%s:%s:llm_affinity:%s"
 	podLLMPrefixAffinity    string = "pod:%s:%s:llm_prefix_affinity:%s"
+	podRunTask              string = "pod:run_task:%s"
 )
 
 var Keys = &keys{}
@@ -61,4 +62,8 @@ func (k *keys) podLLMAffinity(workspaceName, stubId, affinityKey string) string 
 
 func (k *keys) podLLMPrefixAffinity(workspaceName, stubId, prefixKey string) string {
 	return fmt.Sprintf(podLLMPrefixAffinity, workspaceName, stubId, prefixKey)
+}
+
+func (k *keys) podRunTask(containerId string) string {
+	return fmt.Sprintf(podRunTask, containerId)
 }

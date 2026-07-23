@@ -18,6 +18,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
+	"github.com/beam-cloud/beta9/pkg/task"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/google/uuid"
@@ -38,6 +39,7 @@ type PodServiceOpts struct {
 	RedisClient    *common.RedisClient
 	EventRepo      repository.EventRepository
 	RouteGroup     *echo.Group
+	TaskDispatcher *task.Dispatcher
 	DrainContext   context.Context
 }
 
@@ -66,6 +68,7 @@ type GenericPodService struct {
 	workerRepo      repository.WorkerRepository
 	workerPoolRepo  repository.WorkerPoolRepository
 	scheduler       *scheduler.Scheduler
+	taskDispatcher  *task.Dispatcher
 	keyEventManager *common.KeyEventManager
 	rdb             *common.RedisClient
 	tailscale       *network.Tailscale
@@ -115,6 +118,14 @@ func NewPodService(
 		return nil, err
 	}
 	eventManager.Listen()
+
+	// Register the pod run task executor so `pod/run` containers are tracked as
+	// tasks, and watch container lifecycle events to drive task state.
+	if opts.TaskDispatcher != nil {
+		ps.taskDispatcher = opts.TaskDispatcher
+		ps.taskDispatcher.Register(string(types.ExecutorContainer), ps.podTaskFactory)
+		go ps.watchPodRunTaskContainers()
+	}
 
 	// Initialize deployment manager
 	ps.controller = abstractions.NewInstanceController(
@@ -380,7 +391,19 @@ func (ps *GenericPodService) deletePodInstance(stubId string, instance *podInsta
 	}
 }
 
-func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, stub *types.StubWithRelated, imageId *string, checkpoint *types.Checkpoint, machineID string) (string, error) {
+// runOptions carries the optional inputs for scheduling a pod container.
+// taskId/containerId are set when the run is tracked as a task (pod/run stubs),
+// in which case the container id is pre-generated so the task record can
+// reference it before scheduling.
+type runOptions struct {
+	imageId     *string
+	checkpoint  *types.Checkpoint
+	machineId   string
+	taskId      string
+	containerId string
+}
+
+func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, stub *types.StubWithRelated, opts runOptions) (string, error) {
 	if !podRunnableStub(stub.Type) {
 		return "", fmt.Errorf("stub type <%s> cannot be run through pods", stub.Type)
 	}
@@ -389,11 +412,14 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 		return "", err
 	}
 
+	imageId := opts.imageId
+	checkpoint := opts.checkpoint
+
 	stubConfig := types.StubConfigV1{}
 	if err := json.Unmarshal([]byte(stub.Config), &stubConfig); err != nil {
 		return "", err
 	}
-	if err := s.configureMachinePlacement(ctx, workspace.ExternalId, machineID, &stubConfig); err != nil {
+	if err := s.configureMachinePlacement(ctx, workspace.ExternalId, opts.machineId, &stubConfig); err != nil {
 		return "", err
 	}
 	if err := s.prepareDurableDiskPlacement(ctx, workspace, &stubConfig); err != nil {
@@ -405,7 +431,10 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 		return "", err
 	}
 
-	containerId := s.generateContainerId(stub.ExternalId, stub.Type)
+	containerId := opts.containerId
+	if containerId == "" {
+		containerId = s.generateContainerId(stub.ExternalId, stub.Type)
+	}
 
 	mounts, err := abstractions.ConfigureContainerRequestMounts(
 		containerId,
@@ -426,6 +455,9 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 		fmt.Sprintf("STUB_TYPE=%s", stub.Type),
 		fmt.Sprintf("KEEP_WARM_SECONDS=%d", stubConfig.KeepWarmSeconds),
 	}...)
+	if opts.taskId != "" {
+		env = append(env, fmt.Sprintf("TASK_ID=%s", opts.taskId))
+	}
 
 	gpuRequest := types.GpuTypesToStrings(stubConfig.Runtime.Gpus)
 	if stubConfig.Runtime.Gpu != "" {
@@ -467,6 +499,7 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 	runRequest := &types.ContainerRequest{
 		ContainerId:       containerId,
 		StubId:            stub.ExternalId,
+		TaskId:            opts.taskId,
 		AppId:             appId,
 		Env:               env,
 		Cpu:               stubConfig.Runtime.Cpu,
@@ -548,6 +581,16 @@ func (s *GenericPodService) containerManagementURL(containerID string) string {
 	return strings.ReplaceAll(template, "{container_id}", containerID)
 }
 
+// appManagementURL returns a dashboard link to the app's overview page, built
+// from the configured template (e.g. "https://platform.example.com/app/{app_id}/overview").
+func (s *GenericPodService) appManagementURL(appID string) string {
+	template := strings.TrimSpace(s.config.GatewayService.AppURLTemplate)
+	if appID == "" || template == "" || !strings.Contains(template, "{app_id}") {
+		return ""
+	}
+	return strings.ReplaceAll(template, "{app_id}", appID)
+}
+
 func podRunWorkspace(authInfo *auth.AuthInfo, stub *types.StubWithRelated) (*types.Workspace, error) {
 	if authInfo == nil || authInfo.Workspace == nil {
 		return nil, fmt.Errorf("missing workspace auth")
@@ -611,12 +654,40 @@ func (s *GenericPodService) CreatePod(ctx context.Context, in *pb.CreatePodReque
 		}
 	}
 
-	containerId, err := s.run(ctx, authInfo, stub, in.ImageId, checkpoint, in.GetMachineId())
-	if err != nil {
-		return &pb.CreatePodResponse{
-			Ok:       false,
-			ErrorMsg: err.Error(),
-		}, nil
+	opts := runOptions{
+		imageId:    in.ImageId,
+		checkpoint: checkpoint,
+		machineId:  in.GetMachineId(),
+	}
+
+	var containerId, taskId string
+	if s.trackRunAsTask(stub) {
+		// Track this run as a task: the dispatcher creates the task record and
+		// PodTask.Execute schedules the container.
+		podTask, err := s.taskDispatcher.SendAndExecute(ctx, string(types.ExecutorContainer), authInfo, stub.ExternalId, &types.TaskPayload{}, podRunTaskPolicy(), authInfo, stub, opts)
+		if err != nil {
+			return &pb.CreatePodResponse{
+				Ok:       false,
+				ErrorMsg: err.Error(),
+			}, nil
+		}
+
+		metadata := podTask.Metadata()
+		containerId = metadata.ContainerId
+		taskId = metadata.TaskId
+	} else {
+		containerId, err = s.run(ctx, authInfo, stub, opts)
+		if err != nil {
+			return &pb.CreatePodResponse{
+				Ok:       false,
+				ErrorMsg: err.Error(),
+			}, nil
+		}
+	}
+
+	appId := ""
+	if stub.App != nil {
+		appId = stub.App.ExternalId
 	}
 
 	return &pb.CreatePodResponse{
@@ -624,7 +695,16 @@ func (s *GenericPodService) CreatePod(ctx context.Context, in *pb.CreatePodReque
 		ContainerId:   containerId,
 		StubId:        stub.ExternalId,
 		ManagementUrl: s.containerManagementURL(containerId),
+		TaskId:        taskId,
+		AppUrl:        s.appManagementURL(appId),
 	}, nil
+}
+
+// trackRunAsTask reports whether a stub's containers should be tracked with
+// task records. Only one-shot `pod/run` stubs qualify -- deployments are
+// long-running services, and sandboxes/shells are interactive sessions.
+func (s *GenericPodService) trackRunAsTask(stub *types.StubWithRelated) bool {
+	return string(stub.Type) == types.StubTypePodRun && s.taskDispatcher != nil
 }
 
 func (s *GenericPodService) generateContainerId(stubId string, stubType types.StubType) string {

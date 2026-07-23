@@ -487,6 +487,7 @@ func (g *Gateway) registerServices() error {
 			WorkspaceRepo:  g.WorkspaceRepo,
 			WorkerRepo:     g.workerRepo,
 			WorkerPoolRepo: g.WorkerPoolRepo,
+			TaskDispatcher: g.TaskDispatcher,
 			DrainContext:   g.drainCtx,
 		},
 	)

@@ -1033,6 +1033,12 @@
         },
         "managementUrl": {
           "type": "string"
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "appUrl": {
+          "type": "string"
         }
       }
     },
