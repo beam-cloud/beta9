@@ -73,6 +73,7 @@ func (t *PodTask) Execute(ctx context.Context, options ...interface{}) error {
 		ContainerId: containerId,
 	})
 	if err != nil {
+		t.ps.taskDispatcher.Complete(ctx, t.msg.WorkspaceName, t.msg.StubId, t.msg.TaskId)
 		return err
 	}
 
@@ -83,6 +84,7 @@ func (t *PodTask) Execute(ctx context.Context, options ...interface{}) error {
 	// watcher can never observe a container event without a resolvable task.
 	if err := t.ps.setPodRunTaskMapping(ctx, containerId, t.msg); err != nil {
 		t.failTask(ctx, task, err.Error())
+		t.ps.taskDispatcher.Complete(ctx, t.msg.WorkspaceName, t.msg.StubId, t.msg.TaskId)
 		return err
 	}
 
@@ -173,13 +175,7 @@ func (t *PodTask) Cancel(ctx context.Context, reason types.TaskCancellationReaso
 	case types.TaskExceededRetryLimit:
 		// The container disappeared without the watcher finalizing the task
 		// (e.g. missed key event). Try to recover the real exit status.
-		task.Status = types.TaskStatusError
-		task.FailureReason = "Container exited unexpectedly"
-		if task.ContainerId != "" {
-			if exitCode, err := t.ps.containerRepo.GetContainerExitCode(task.ContainerId); err == nil {
-				task.Status, task.FailureReason = podRunTaskTerminalStatus(types.ContainerExitCode(exitCode))
-			}
-		}
+		task.Status, task.FailureReason = t.ps.podRunExitStatus(task.ContainerId)
 	case types.TaskRequestCancelled:
 		task.Status = types.TaskStatusCancelled
 	default:
@@ -243,6 +239,19 @@ func (t *PodTask) Metadata() types.TaskMetadata {
 
 func (t *PodTask) Message() *types.TaskMessage {
 	return t.msg
+}
+
+// podRunExitStatus resolves a terminal task status for a pod run container from
+// its recorded exit code. If the exit code is missing or expired, the run is
+// assumed to have failed.
+func (ps *GenericPodService) podRunExitStatus(containerId string) (types.TaskStatus, string) {
+	if containerId != "" {
+		if exitCode, err := ps.containerRepo.GetContainerExitCode(containerId); err == nil {
+			return podRunTaskTerminalStatus(types.ContainerExitCode(exitCode))
+		}
+	}
+
+	return types.TaskStatusError, "Container exited unexpectedly"
 }
 
 // podRunTaskTerminalStatus maps a container exit code to a terminal task state.
@@ -373,14 +382,7 @@ func (ps *GenericPodService) handlePodRunContainerExit(ctx context.Context, cont
 	}
 
 	if !task.Status.IsCompleted() {
-		status := types.TaskStatusError
-		failureReason := "Container exited unexpectedly"
-		if exitCode, err := ps.containerRepo.GetContainerExitCode(containerId); err == nil {
-			status, failureReason = podRunTaskTerminalStatus(types.ContainerExitCode(exitCode))
-		}
-
-		task.Status = status
-		task.FailureReason = failureReason
+		task.Status, task.FailureReason = ps.podRunExitStatus(containerId)
 		task.EndedAt = types.NullTime{}.Now()
 		if _, err := ps.backendRepo.UpdateTask(ctx, task.ExternalId, *task); err != nil {
 			log.Error().Str("task_id", task.ExternalId).Err(err).Msg("failed to finalize pod run task")
