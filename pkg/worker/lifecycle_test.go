@@ -833,6 +833,7 @@ func TestRunContainerDoesNotCancelRuntimeRunWithWorkerContext(t *testing.T) {
 			common.NewOutputWriter(func(string) {}),
 			make(chan int, 1),
 			make(chan int, 1),
+			nil,
 			time.Now(),
 			nil,
 		)
@@ -906,6 +907,7 @@ func TestRunContainerRestorePublishesAddressFromStartedHandler(t *testing.T) {
 		common.NewOutputWriter(func(string) {}),
 		make(chan int, 1),
 		make(chan int, 1),
+		nil,
 		time.Now(),
 		[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
 	)
@@ -991,6 +993,7 @@ func TestRunContainerRestoreWaitsForRestoredRuntimeExit(t *testing.T) {
 			common.NewOutputWriter(func(string) {}),
 			make(chan int, 1),
 			make(chan int, 1),
+			nil,
 			time.Now(),
 			[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
 		)
@@ -1135,6 +1138,7 @@ func TestRunContainerRestoreFailureCleansRuntimeBeforeFallback(t *testing.T) {
 		common.NewOutputWriter(func(string) {}),
 		make(chan int, 1),
 		make(chan int, 1),
+		nil,
 		time.Now(),
 		[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
 	)
@@ -1201,6 +1205,7 @@ func TestRunContainerMaterializeFailureFallsBackWithoutRestore(t *testing.T) {
 		common.NewOutputWriter(func(string) {}),
 		make(chan int, 1),
 		make(chan int, 1),
+		nil,
 		time.Now(),
 		[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
 	)

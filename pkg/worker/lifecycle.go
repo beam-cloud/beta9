@@ -1263,6 +1263,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	startedChan := make(chan int, 1)
 	checkpointPIDChan := make(chan int, 1)
 	monitorPIDChan := make(chan int, 1)
+	thunderInstallResult := make(chan error, 1)
 
 	defer func() {
 		// Close in reverse order of dependency
@@ -1323,6 +1324,22 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 				return
 			}
 
+			if request.GpuVirtualized {
+				if err := s.installThunderClient(ctx, request); err != nil {
+					log.Error().Err(err).Str("container_id", request.ContainerId).Msg("failed to install Thunder client")
+					s.stopContainer(request.ContainerId, false)
+					select {
+					case thunderInstallResult <- err:
+					default:
+					}
+					return
+				}
+				select {
+				case thunderInstallResult <- nil:
+				default:
+				}
+			}
+
 			if request.DockerEnabled {
 				go s.startDockerDaemon(ctx, containerId, instance)
 			}
@@ -1336,7 +1353,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		s.setupOOMWatcher(ctx, containerId, pid, spec, request, outputLogger, &isOOMKilled)
 	}()
 
-	exitCode, _ = s.runContainer(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan, opts.StartupStartedAt, opts.StartupPortBindings)
+	exitCode, _ = s.runContainer(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan, thunderInstallResult, opts.StartupStartedAt, opts.StartupPortBindings)
 
 	stopReason := types.StopContainerReasonUnknown
 	containerInstance, exists = s.containerInstances.Get(containerId)
@@ -1441,7 +1458,7 @@ func eventStopReason(stopReason types.StopContainerReason) string {
 	return string(stopReason)
 }
 
-func (s *Worker) runContainer(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, outputWriter *common.OutputWriter, startedChan chan int, checkpointPIDChan chan int, startupStartedAt time.Time, startupPortBindings []PortBinding) (int, error) {
+func (s *Worker) runContainer(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, outputWriter *common.OutputWriter, startedChan chan int, checkpointPIDChan chan int, thunderInstallResult chan error, startupStartedAt time.Time, startupPortBindings []PortBinding) (int, error) {
 	instance, exists := s.containerInstances.Get(request.ContainerId)
 	if !exists {
 		return -1, fmt.Errorf("container instance not found")
@@ -1503,13 +1520,6 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 	runtimeStart := time.Now()
 
 	handleRuntimeStarted := func(pid int) {
-		if request.GpuVirtualized {
-			if err := s.installThunderClient(ctx, request); err != nil {
-				log.Error().Err(err).Str("container_id", request.ContainerId).Msg("failed to install Thunder client")
-				s.stopContainer(request.ContainerId, false)
-				return
-			}
-		}
 		if err := s.publishContainerAddresses(ctx, request, startupPortBindings); err != nil {
 			log.Error().Err(err).Str("container_id", request.ContainerId).Msg("failed to publish container address")
 			s.stopContainer(request.ContainerId, false)
@@ -1537,6 +1547,18 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 		case <-ctx.Done():
 			return
 		}
+
+		if request.Stub.Type.Kind() == types.StubTypeSandbox && request.GpuVirtualized {
+			select {
+			case err := <-thunderInstallResult:
+				if err != nil {
+					return
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+
 		s.markContainerRunning(ctx, request, startupStartedAt)
 	}
 
