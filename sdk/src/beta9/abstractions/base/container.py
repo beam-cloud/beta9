@@ -76,7 +76,7 @@ class Container(BaseAbstraction):
                 break
 
         if r is None:
-            terminal.error("Container failed ❌")
+            terminal.error("Container failed")
             return ContainerAttachResult(done=False, exit_code=1)
 
         result = ContainerAttachResult(
@@ -86,13 +86,13 @@ class Container(BaseAbstraction):
         )
 
         if r.exit_code != 0:
-            terminal.error(f"\nContainer exited with code {r.exit_code} ❌", exit=False)
+            terminal.error(f"\nContainer exited with code {r.exit_code}", exit=False)
             if exit_on_error:
                 raise SystemExit(r.exit_code)
             return result
 
         if not r.done:
-            terminal.error(f"\n{r.output} ❌")
+            terminal.error(f"\n{r.output}")
             return result
 
         if not hide_logs:

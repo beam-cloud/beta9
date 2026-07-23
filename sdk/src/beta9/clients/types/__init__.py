@@ -286,6 +286,10 @@ class Worker(betterproto.Message):
     active_containers: List["Container"] = betterproto.message_field(17)
     runtime: str = betterproto.string_field(18)
     pool_selector: str = betterproto.string_field(19)
+    cordon_requested: bool = betterproto.bool_field(20)
+    rollout_generation: str = betterproto.string_field(21)
+    rollout_build_version: str = betterproto.string_field(22)
+    worker_image_override: str = betterproto.string_field(23)
 
 
 @dataclass(eq=False, repr=False)

@@ -1,16 +1,48 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/stretchr/testify/require"
 )
+
+type synchronizedBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+type gatedWriter struct {
+	once    sync.Once
+	started chan struct{}
+	release <-chan struct{}
+	buffer  synchronizedBuffer
+}
+
+func (w *gatedWriter) Write(p []byte) (int, error) {
+	w.once.Do(func() { close(w.started) })
+	<-w.release
+	return w.buffer.Write(p)
+}
+
+func (b *synchronizedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.Write(p)
+}
+
+func (b *synchronizedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.String()
+}
 
 func TestRestoreArgs(t *testing.T) {
 	tests := []struct {
@@ -36,6 +68,7 @@ func TestRestoreArgs(t *testing.T) {
 
 			require.Equal(t, []string{
 				"restore",
+				"--detach",
 				"--image-path", "/checkpoints/container-1",
 				"--work-path", "/tmp/restore-work",
 				"--link-remap",
@@ -88,10 +121,11 @@ func TestPollRestoredContainerPIDFailsWhenStateUnavailable(t *testing.T) {
 	require.Contains(t, err.Error(), "restore succeeded but restored container state was unavailable")
 }
 
-func TestRuncRestoreReturnsAfterStateRunning(t *testing.T) {
+func TestRuncRestoreSignalsStartedAfterRestoreCompletes(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "runc.log")
 	readyPath := filepath.Join(dir, "restore-ready")
+	releasePath := filepath.Join(dir, "restore-release")
 	runcPath := filepath.Join(dir, "runc")
 	require.NoError(t, os.WriteFile(runcPath, []byte(`#!/bin/sh
 set -eu
@@ -107,9 +141,12 @@ done
 case "$cmd" in
   restore)
     echo restore-start >> "$RUNC_FAKE_LOG"
+		echo restore-output-start
     touch "$RUNC_FAKE_READY"
-    sleep 1
+		while [ ! -f "$RUNC_FAKE_RELEASE" ]; do sleep 0.01; done
+		(sleep 0.25; echo container-output) &
     echo restore-done >> "$RUNC_FAKE_LOG"
+		echo restore-output-done
     ;;
   state)
     echo state >> "$RUNC_FAKE_LOG"
@@ -126,38 +163,127 @@ esac
 `), 0o755))
 	t.Setenv("RUNC_FAKE_LOG", logPath)
 	t.Setenv("RUNC_FAKE_READY", readyPath)
+	t.Setenv("RUNC_FAKE_RELEASE", releasePath)
 
 	rt, err := NewRunc(Config{RuncPath: runcPath})
 	require.NoError(t, err)
 
 	started := make(chan int, 1)
 	result := make(chan error, 1)
+	output := &synchronizedBuffer{}
 	go func() {
 		_, err := rt.Restore(context.Background(), "container-1", &RestoreOpts{
-			ImagePath:  filepath.Join(dir, "checkpoint"),
-			BundlePath: filepath.Join(dir, "bundle"),
-			Started:    started,
+			ImagePath:    filepath.Join(dir, "checkpoint"),
+			BundlePath:   filepath.Join(dir, "bundle"),
+			Started:      started,
+			OutputWriter: output,
 		})
 		result <- err
 	}()
 
+	require.Eventually(t, func() bool {
+		data, err := os.ReadFile(logPath)
+		return err == nil && bytes.Contains(data, []byte("restore-start\n"))
+	}, 5*time.Second, 10*time.Millisecond)
+	select {
+	case pid := <-started:
+		t.Fatalf("restore signaled PID %d before runc restore completed", pid)
+	default:
+	}
+	require.NoError(t, os.WriteFile(releasePath, nil, 0o644))
+
 	select {
 	case pid := <-started:
 		require.Equal(t, 4321, pid)
-	case <-time.After(time.Second):
-		t.Fatal("restore did not signal started from restored runtime state")
+	case <-time.After(3 * time.Second):
+		select {
+		case err := <-result:
+			t.Fatalf("restore returned before signaling started: %v", err)
+		default:
+			t.Fatal("restore did not signal started from restored runtime state")
+		}
 	}
 
 	select {
 	case err := <-result:
 		require.NoError(t, err)
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("restore waited for the restored process to exit")
+	case <-time.After(3 * time.Second):
+		t.Fatal("restore did not return after detached restore completed")
 	}
+	require.Contains(t, output.String(), "restore-output-done\n")
+	require.NotContains(t, output.String(), "container-output\n")
+	require.Eventually(t, func() bool {
+		return bytes.Contains([]byte(output.String()), []byte("container-output\n"))
+	}, time.Second, 10*time.Millisecond, "restored container output did not remain connected")
 
 	logData, err := os.ReadFile(logPath)
 	require.NoError(t, err)
 	require.Contains(t, string(logData), "restore-start\n")
+	require.Contains(t, string(logData), "restore-done\n")
 	require.Contains(t, string(logData), "state\n")
-	require.NotContains(t, string(logData), "restore-done\n")
+}
+
+func TestRuncRestoreStopsWhenContextIsCanceled(t *testing.T) {
+	dir := t.TempDir()
+	runcPath := filepath.Join(dir, "runc")
+	require.NoError(t, os.WriteFile(runcPath, []byte(`#!/bin/sh
+set -eu
+sleep 10
+`), 0o755))
+
+	rt, err := NewRunc(Config{RuncPath: runcPath})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err = rt.Restore(ctx, "container-1", &RestoreOpts{
+		ImagePath:  filepath.Join(dir, "checkpoint"),
+		BundlePath: filepath.Join(dir, "bundle"),
+	})
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
+func TestRuncRestoreDrainsFailedCommandOutput(t *testing.T) {
+	dir := t.TempDir()
+	runcPath := filepath.Join(dir, "runc")
+	require.NoError(t, os.WriteFile(runcPath, []byte(`#!/bin/sh
+set -eu
+echo 'criu failed: type RESTORE' >&2
+exit 1
+`), 0o755))
+
+	rt, err := NewRunc(Config{RuncPath: runcPath})
+	require.NoError(t, err)
+
+	release := make(chan struct{})
+	output := &gatedWriter{started: make(chan struct{}), release: release}
+	result := make(chan error, 1)
+	go func() {
+		_, err := rt.Restore(context.Background(), "container-1", &RestoreOpts{
+			ImagePath:    filepath.Join(dir, "checkpoint"),
+			BundlePath:   filepath.Join(dir, "bundle"),
+			OutputWriter: output,
+		})
+		result <- err
+	}()
+
+	select {
+	case <-output.started:
+	case <-time.After(time.Second):
+		t.Fatal("restore output was not forwarded")
+	}
+	select {
+	case err := <-result:
+		t.Fatalf("restore returned before failed command output drained: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case err := <-result:
+		require.Error(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("restore did not return after failed command output drained")
+	}
+	require.Contains(t, output.buffer.String(), "criu failed: type RESTORE")
 }

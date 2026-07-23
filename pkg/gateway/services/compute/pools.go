@@ -65,17 +65,14 @@ func (s *Service) ListPrivatePools(ctx context.Context, in *pb.ListPrivatePoolsR
 }
 
 func poolStateIsPrivate(state *model.PoolState) bool {
-	if state == nil {
-		return false
-	}
-	return state.Mode == "" || state.Mode == string(types.PoolModePrivate)
+	return state != nil && state.Mode == string(types.PoolModePrivate)
 }
 
 func (s *Service) CreatePool(ctx context.Context, in *pb.CreatePoolRequest) (*pb.CreatePoolResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 	workspaceID := computeWorkspaceID(authInfo)
-	ownerTokenID := computeOwnerTokenID(authInfo)
-	if workspaceID == "" || ownerTokenID == "" {
+	actorTokenID := computeActorTokenID(authInfo)
+	if workspaceID == "" || actorTokenID == "" {
 		return &pb.CreatePoolResponse{Ok: false, ErrMsg: "missing workspace auth"}, nil
 	}
 	if in.Pool == nil {
@@ -105,7 +102,7 @@ func (s *Service) CreatePool(ctx context.Context, in *pb.CreatePoolRequest) (*pb
 		if err != nil {
 			return err
 		}
-		if existing != nil && !computePoolCreatedByAuth(existing, authInfo) {
+		if existing != nil && !poolStateIsPrivate(existing) {
 			return fmt.Errorf("pool already exists in this workspace")
 		}
 
@@ -120,7 +117,7 @@ func (s *Service) CreatePool(ctx context.Context, in *pb.CreatePoolRequest) (*pb
 			Transport:        config.Transport,
 			Fallback:         config.Fallback,
 			Priority:         config.Priority,
-			CreatedByTokenID: ownerTokenID,
+			CreatedByTokenID: actorTokenID,
 			CreatedAt:        now,
 			UpdatedAt:        now,
 		}
@@ -156,6 +153,9 @@ func (s *Service) CreatePool(ctx context.Context, in *pb.CreatePoolRequest) (*pb
 
 func (s *Service) DeletePool(ctx context.Context, in *pb.DeletePoolRequest) (*pb.DeletePoolResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
+	if !auth.HasPermission(authInfo) {
+		return &pb.DeletePoolResponse{Ok: false, ErrMsg: "Unauthorized Access"}, nil
+	}
 	workspaceID := computeWorkspaceID(authInfo)
 	if workspaceID == "" {
 		return &pb.DeletePoolResponse{Ok: false, ErrMsg: "missing workspace auth"}, nil
@@ -163,7 +163,7 @@ func (s *Service) DeletePool(ctx context.Context, in *pb.DeletePoolRequest) (*pb
 	var state *model.PoolState
 	err := s.withPoolStateLock(ctx, workspaceID, in.Name, func(lockCtx context.Context) error {
 		var err error
-		state, err = s.getOwnedPrivatePoolState(lockCtx, authInfo, in.Name)
+		state, err = s.getWorkspacePrivatePoolState(lockCtx, authInfo, in.Name)
 		if err != nil || state == nil {
 			return err
 		}
@@ -248,7 +248,7 @@ func (s *Service) ExtendPoolCapacity(ctx context.Context, in *pb.ExtendPoolCapac
 
 	var response *pb.ExtendPoolCapacityResponse
 	lockErr := s.withPoolStateLock(ctx, workspaceID, in.Name, func(lockCtx context.Context) error {
-		state, err := s.getOwnedPrivatePoolState(lockCtx, authInfo, in.Name)
+		state, err := s.getWorkspacePrivatePoolState(lockCtx, authInfo, in.Name)
 		if err != nil {
 			response = &pb.ExtendPoolCapacityResponse{Ok: false, ErrMsg: err.Error()}
 			return nil
@@ -317,38 +317,62 @@ func (s *Service) extendManagedReservations(ctx context.Context, state *model.Po
 
 func (s *Service) ListPoolMachines(ctx context.Context, in *pb.ListPoolMachinesRequest) (*pb.ListPoolMachinesResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
+	machines, err := s.ListPrivateMachines(ctx, authInfo, in.PoolName, int(in.Limit))
+	if err != nil {
+		return &pb.ListPoolMachinesResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+	return &pb.ListPoolMachinesResponse{Ok: true, Machines: machines}, nil
+}
+
+// ListPrivateMachines lists private and BYOC inventory in one workspace.
+func (s *Service) ListPrivateMachines(ctx context.Context, authInfo *auth.AuthInfo, poolName string, limit int) ([]*pb.Machine, error) {
 	workspaceID := computeWorkspaceID(authInfo)
 	if workspaceID == "" {
-		return &pb.ListPoolMachinesResponse{Ok: false, ErrMsg: "missing workspace auth"}, nil
-	}
-	state, err := s.getPrivatePoolState(ctx, workspaceID, in.PoolName)
-	if err != nil {
-		return &pb.ListPoolMachinesResponse{Ok: false, ErrMsg: err.Error()}, nil
-	}
-	if state == nil || !poolStateIsPrivate(state) {
-		return &pb.ListPoolMachinesResponse{Ok: false, ErrMsg: "pool not found"}, nil
+		return nil, errors.New("missing workspace auth")
 	}
 
-	machines, err := s.computeRepo.ListAgentTokenStates(ctx, workspaceID, state.Name)
-	if err != nil {
-		return &pb.ListPoolMachinesResponse{Ok: false, ErrMsg: err.Error()}, nil
-	}
-	machines, deleted, err := s.reconcileBYOCPoolMachinesForRead(ctx, workspaceID, state, machines, time.Now().UTC())
-	if err != nil {
-		return &pb.ListPoolMachinesResponse{Ok: false, ErrMsg: err.Error()}, nil
-	}
-	if deleted {
-		return &pb.ListPoolMachinesResponse{Ok: true, Machines: nil}, nil
-	}
-	if limit := int(in.Limit); limit > 0 && len(machines) > limit {
-		machines = machines[:limit]
+	var states []*model.PoolState
+	if poolName != "" {
+		state, err := s.getPrivatePoolState(ctx, workspaceID, poolName)
+		if err != nil {
+			return nil, err
+		}
+		if state == nil || !poolStateIsPrivate(state) {
+			return nil, errors.New("pool not found")
+		}
+		states = []*model.PoolState{state}
+	} else {
+		var err error
+		states, err = s.listPrivatePoolStates(ctx, workspaceID, 0)
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	out := make([]*pb.Machine, 0, len(machines))
-	for _, machine := range machines {
-		out = append(out, s.agentMachineToProto(machine))
+	out := []*pb.Machine{}
+	for _, state := range states {
+		if !poolStateIsPrivate(state) {
+			continue
+		}
+		machines, err := s.computeRepo.ListAgentTokenStates(ctx, workspaceID, state.Name)
+		if err != nil {
+			return nil, err
+		}
+		machines, deleted, err := s.reconcileBYOCPoolMachinesForRead(ctx, workspaceID, state, machines, time.Now().UTC())
+		if err != nil {
+			return nil, err
+		}
+		if deleted {
+			continue
+		}
+		for _, machine := range machines {
+			out = append(out, s.agentMachineToProto(machine))
+			if limit > 0 && len(out) == limit {
+				return out, nil
+			}
+		}
 	}
-	return &pb.ListPoolMachinesResponse{Ok: true, Machines: out}, nil
+	return out, nil
 }
 
 // ListMachineContainers lists the active containers scheduled on one machine.
@@ -367,14 +391,36 @@ func (s *Service) ListMachineContainers(ctx context.Context, in *pb.ListMachineC
 		return &pb.ListMachineContainersResponse{Ok: false, ErrMsg: "pool name and machine id are required"}, nil
 	}
 
-	state, err := s.getPrivatePoolState(ctx, workspaceID, poolName)
-	if err != nil {
-		return &pb.ListMachineContainersResponse{Ok: false, ErrMsg: err.Error()}, nil
+	ownerWorkspaceID := workspaceID
+	poolFound := false
+	if requireClusterAdmin(authInfo) == nil && s.managedPoolRepo != nil {
+		// Serverless (managed) pools are not private pool states — they live
+		// in the managed pool store under the admin workspace. Cluster admins
+		// can inspect their machines from any workspace.
+		adminID, err := s.adminWorkspaceID(ctx)
+		if err != nil {
+			return &pb.ListMachineContainersResponse{Ok: false, ErrMsg: err.Error()}, nil
+		}
+		managed, err := s.managedPoolRepo.GetManagedPoolState(ctx, adminID, poolName)
+		if err != nil {
+			return &pb.ListMachineContainersResponse{Ok: false, ErrMsg: err.Error()}, nil
+		}
+		if managed != nil {
+			ownerWorkspaceID = adminID
+			poolFound = true
+		}
 	}
-	if state == nil {
+	if !poolFound {
+		state, err := s.getPrivatePoolState(ctx, workspaceID, poolName)
+		if err != nil {
+			return &pb.ListMachineContainersResponse{Ok: false, ErrMsg: err.Error()}, nil
+		}
+		poolFound = state != nil
+	}
+	if !poolFound {
 		return &pb.ListMachineContainersResponse{Ok: false, ErrMsg: "pool not found"}, nil
 	}
-	machine, err := s.computeRepo.GetAgentMachineState(ctx, workspaceID, state.Name, machineID)
+	machine, err := s.computeRepo.GetAgentMachineState(ctx, ownerWorkspaceID, poolName, machineID)
 	if err != nil {
 		return &pb.ListMachineContainersResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
@@ -408,65 +454,53 @@ func (s *Service) ListMachineContainers(ctx context.Context, in *pb.ListMachineC
 	return &pb.ListMachineContainersResponse{Ok: true, Containers: out}, nil
 }
 
-func (s *Service) DeletePoolMachine(ctx context.Context, in *pb.DeleteMachineRequest) (bool, *pb.DeleteMachineResponse, error) {
+func (s *Service) DeletePrivateMachine(ctx context.Context, in *pb.DeleteMachineRequest) (*pb.DeleteMachineResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 	workspaceID := computeWorkspaceID(authInfo)
-	if workspaceID == "" || in.MachineId == "" {
-		return false, nil, nil
+	if workspaceID == "" {
+		return &pb.DeleteMachineResponse{Ok: false, ErrMsg: "missing workspace auth"}, nil
+	}
+	if strings.TrimSpace(in.MachineId) == "" {
+		return &pb.DeleteMachineResponse{Ok: false, ErrMsg: "machine id is required"}, nil
 	}
 
-	machine, handled, err := s.privateMachineForDelete(ctx, authInfo, workspaceID, in.PoolName, in.MachineId)
+	machine, poolName, err := s.privateMachineForDelete(ctx, workspaceID, in.PoolName, in.MachineId)
 	if err != nil {
-		return true, &pb.DeleteMachineResponse{Ok: false, ErrMsg: err.Error()}, nil
+		return &pb.DeleteMachineResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
-	if machine == nil {
-		if handled {
-			reconciled, err := s.reconcileMissingBYOCMachineForDelete(ctx, authInfo, workspaceID, in.PoolName)
-			if err != nil {
-				return true, &pb.DeleteMachineResponse{Ok: false, ErrMsg: err.Error()}, nil
-			}
-			if reconciled {
-				return true, &pb.DeleteMachineResponse{Ok: true}, nil
-			}
-			released, err := s.releasePrivateReservationForDelete(ctx, authInfo, workspaceID, in.PoolName, in.MachineId)
-			if err != nil {
-				return true, &pb.DeleteMachineResponse{Ok: false, ErrMsg: err.Error()}, nil
-			}
-			if released {
-				return true, &pb.DeleteMachineResponse{Ok: true}, nil
-			}
-			deleted, err := s.missingOwnedPrivateMachineDeleted(ctx, authInfo, in.PoolName)
-			if err != nil {
-				return true, &pb.DeleteMachineResponse{Ok: false, ErrMsg: err.Error()}, nil
-			}
-			if deleted {
-				return true, &pb.DeleteMachineResponse{Ok: true}, nil
-			}
-			return true, &pb.DeleteMachineResponse{Ok: false, ErrMsg: "machine not found"}, nil
+	if machine != nil {
+		if err := s.releasePrivateMachine(ctx, machine); err != nil {
+			return &pb.DeleteMachineResponse{Ok: false, ErrMsg: err.Error()}, nil
 		}
-		return false, nil, nil
+		return &pb.DeleteMachineResponse{Ok: true}, nil
 	}
 
-	if err := s.releasePrivateMachine(ctx, machine); err != nil {
-		return true, &pb.DeleteMachineResponse{Ok: false, ErrMsg: err.Error()}, nil
+	if poolName == "" {
+		return &pb.DeleteMachineResponse{Ok: false, ErrMsg: "machine not found"}, nil
 	}
-	return true, &pb.DeleteMachineResponse{Ok: true}, nil
+	reconciled, err := s.reconcileMissingBYOCMachineForDelete(ctx, workspaceID, poolName)
+	if err != nil {
+		return &pb.DeleteMachineResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+	if reconciled {
+		return &pb.DeleteMachineResponse{Ok: true}, nil
+	}
+	released, err := s.releasePrivateReservationForDelete(ctx, workspaceID, poolName, in.MachineId)
+	if err != nil {
+		return &pb.DeleteMachineResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+	if released {
+		return &pb.DeleteMachineResponse{Ok: true}, nil
+	}
+	return &pb.DeleteMachineResponse{Ok: true}, nil
 }
 
-func (s *Service) missingOwnedPrivateMachineDeleted(ctx context.Context, authInfo *auth.AuthInfo, poolName string) (bool, error) {
+func (s *Service) reconcileMissingBYOCMachineForDelete(ctx context.Context, workspaceID, poolName string) (bool, error) {
 	if poolName == "" {
 		return false, nil
 	}
-	state, err := s.getOwnedPrivatePoolState(ctx, authInfo, poolName)
-	return state != nil, err
-}
-
-func (s *Service) reconcileMissingBYOCMachineForDelete(ctx context.Context, authInfo *auth.AuthInfo, workspaceID, poolName string) (bool, error) {
-	if poolName == "" {
-		return false, nil
-	}
-	state, err := s.getOwnedPrivatePoolState(ctx, authInfo, poolName)
-	if err != nil || state == nil || state.BYOC == nil {
+	state, err := s.getPrivatePoolState(ctx, workspaceID, poolName)
+	if err != nil || state == nil || !poolStateIsPrivate(state) || state.BYOC == nil {
 		return false, err
 	}
 	machines, err := s.computeRepo.ListAgentTokenStates(ctx, workspaceID, state.Name)
@@ -479,7 +513,7 @@ func (s *Service) reconcileMissingBYOCMachineForDelete(ctx context.Context, auth
 	return true, nil
 }
 
-func (s *Service) releasePrivateReservationForDelete(ctx context.Context, authInfo *auth.AuthInfo, workspaceID, poolName, targetID string) (bool, error) {
+func (s *Service) releasePrivateReservationForDelete(ctx context.Context, workspaceID, poolName, targetID string) (bool, error) {
 	if poolName == "" || targetID == "" {
 		return false, nil
 	}
@@ -487,8 +521,8 @@ func (s *Service) releasePrivateReservationForDelete(ctx context.Context, authIn
 	found := false
 	machineID := ""
 	err := s.withPoolStateLock(ctx, workspaceID, poolName, func(lockCtx context.Context) error {
-		state, err := s.getOwnedPrivatePoolState(lockCtx, authInfo, poolName)
-		if err != nil || state == nil {
+		state, err := s.getPrivatePoolState(lockCtx, workspaceID, poolName)
+		if err != nil || state == nil || !poolStateIsPrivate(state) {
 			return err
 		}
 		reservationIndex := managedReservationIndexForDeleteTarget(state, targetID)
@@ -520,25 +554,20 @@ func (s *Service) releasePrivateReservationForDelete(ctx context.Context, authIn
 	return true, s.removePrivateMachine(ctx, machine)
 }
 
-func (s *Service) privateMachineForDelete(ctx context.Context, authInfo *auth.AuthInfo, workspaceID, poolName, machineID string) (*model.AgentTokenState, bool, error) {
-	if poolName != "" {
-		pool, err := s.getPrivatePoolState(ctx, workspaceID, poolName)
-		if err != nil || pool == nil || !poolStateIsPrivate(pool) {
-			return nil, pool != nil, err
+func (s *Service) privateMachineForDelete(ctx context.Context, workspaceID, poolName, machineID string) (*model.AgentTokenState, string, error) {
+	poolName = strings.TrimSpace(poolName)
+	if poolName == "" {
+		machine, err := s.computeRepo.GetAgentMachineStateForWorkspace(ctx, workspaceID, machineID)
+		if err != nil || machine == nil {
+			return machine, "", err
 		}
-		if !computePoolCreatedByAuth(pool, authInfo) {
-			return nil, true, nil
-		}
-		machine, err := s.computeRepo.GetAgentMachineState(ctx, workspaceID, poolName, machineID)
-		return machine, true, err
+		poolName = machine.PoolName
 	}
-	machine, err := s.computeRepo.GetAgentMachineStateForWorkspace(ctx, workspaceID, machineID)
-	if err != nil || machine == nil {
-		return machine, false, err
+
+	pool, err := s.getPrivatePoolState(ctx, workspaceID, poolName)
+	if err != nil || pool == nil || !poolStateIsPrivate(pool) {
+		return nil, "", err
 	}
-	pool, err := s.getOwnedPrivatePoolState(ctx, authInfo, machine.PoolName)
-	if err != nil || pool == nil {
-		return nil, true, err
-	}
-	return machine, true, nil
+	machine, err := s.computeRepo.GetAgentMachineState(ctx, workspaceID, poolName, machineID)
+	return machine, poolName, err
 }

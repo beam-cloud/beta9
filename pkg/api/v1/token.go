@@ -94,11 +94,12 @@ func (g *TokenGroup) ClusterAdminUpdateAllWorkspaceTokens(ctx echo.Context) erro
 			return HTTPInternalServerError("Unable to update token")
 		}
 
-		if req.Disabled {
-			err = g.workspaceRepo.RevokeToken(token.Key)
-			if err != nil {
-				return HTTPInternalServerError("Failed to revoke token")
-			}
+		// Evict both enabled and disabled token state. Otherwise, re-enabling a
+		// token can leave a cached disabled authorization in place for the full
+		// cache TTL.
+		err = g.workspaceRepo.RevokeToken(token.Key)
+		if err != nil {
+			return HTTPInternalServerError("Failed to revoke token")
 		}
 	}
 

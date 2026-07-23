@@ -1,10 +1,13 @@
 import datetime
+import os
 import sys
 import threading
+import time
 from contextlib import contextmanager
+from dataclasses import dataclass
 from io import BytesIO
 from os import PathLike
-from typing import Any, Generator, Literal, Optional, Sequence, Tuple, Union
+from typing import Any, Generator, List, Literal, Optional, Sequence, Tuple, Union
 
 import rich
 import rich.columns
@@ -72,15 +75,17 @@ def detail(text: str, dim: bool = True, **kwargs) -> None:
 
 
 def success(text: str) -> None:
-    _console.print(Text(text, style="bold green"))
+    _console.print(Text("✓ ", style="bold green").append(text, style="bold green"))
 
 
 def warn(text: str) -> None:
-    _console.print(Text(text, style="bold yellow"))
+    _console.print(Text("! ", style="bold yellow").append(text, style="bold yellow"))
 
 
-def error(text: str, exit: bool = True) -> None:
-    _console.print(Text(text, style="bold red"))
+def error(text: str, exit: bool = True, hint: Optional[str] = None) -> None:
+    _console.print(Text("✗ ", style="bold red").append(text, style="bold red"))
+    if hint:
+        _console.print(Text(f"  hint: {hint}", style="dim"))
 
     if exit:
         reset_terminal()
@@ -109,6 +114,13 @@ def progress(task_name: str) -> Generator[rich.status.Status, None, None]:
             if _status_count == 0:
                 _current_status.stop()
                 _current_status = None
+
+
+def update_progress(text: str) -> None:
+    """Update the text of the currently active progress spinner, if any."""
+    with _status_lock:
+        if _current_status is not None:
+            _current_status.update(text)
 
 
 def progress_open(file: Union[str, PathLike, bytes], mode: str, **kwargs: Any) -> BytesIO:
@@ -253,6 +265,248 @@ def StyledProgress() -> CustomProgress:
         refresh_per_second=60,
         disable=False,
     )
+
+
+BRAND_COLOR = "#4CCACC"
+
+
+def is_interactive() -> bool:
+    """True when both stdin and stdout are TTYs and the terminal isn't dumb."""
+    try:
+        return sys.stdin.isatty() and sys.stdout.isatty() and os.environ.get("TERM", "") != "dumb"
+    except Exception:
+        return False
+
+
+@dataclass
+class SelectOption:
+    label: str
+    value: Any = None
+    description: str = ""
+
+    def __post_init__(self):
+        if self.value is None:
+            self.value = self.label
+
+
+def select(
+    title: str,
+    options: Sequence[Union[str, SelectOption]],
+    default_index: int = 0,
+) -> Any:
+    """
+    Arrow-key single-select prompt. Returns the chosen option's value.
+
+    Falls back to a numbered prompt when the terminal can't do raw-mode
+    input (non-TTY, CI, dumb terminals). Raises KeyboardInterrupt on ctrl-c.
+    """
+    opts: List[SelectOption] = [
+        o if isinstance(o, SelectOption) else SelectOption(label=o) for o in options
+    ]
+    if not opts:
+        raise ValueError("select() requires at least one option")
+
+    if is_interactive():
+        try:
+            return _select_arrow_keys(title, opts, default_index)
+        except KeyboardInterrupt:
+            raise
+        except Exception:
+            # Fall back to numbered input if raw mode fails. Collect any
+            # coroutine prompt_toolkit abandoned mid-failure while warnings
+            # are suppressed, so no RuntimeWarning leaks to the user.
+            import gc
+            import warnings
+
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                gc.collect()
+
+    return _select_numbered(title, opts, default_index)
+
+
+def _select_arrow_keys(title: str, opts: List[SelectOption], default_index: int) -> Any:
+    from prompt_toolkit.application import Application
+    from prompt_toolkit.formatted_text import FormattedText
+    from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.layout import HSplit, Layout, Window
+    from prompt_toolkit.layout.controls import FormattedTextControl
+
+    index = [max(0, min(default_index, len(opts) - 1))]
+
+    def render() -> FormattedText:
+        fragments = [("bold", title), ("fg:#808080", "   ↑/↓ move · enter select\n")]
+        for i, opt in enumerate(opts):
+            selected = i == index[0]
+            pointer = "❯ " if selected else "  "
+            style = f"bold {BRAND_COLOR}" if selected else ""
+            fragments.append((style, f"{pointer}{opt.label}"))
+            if opt.description:
+                fragments.append(("fg:#808080", f"   {opt.description}"))
+            fragments.append(("", "\n"))
+        return FormattedText(fragments)
+
+    bindings = KeyBindings()
+
+    @bindings.add("up")
+    @bindings.add("k")
+    def _up(event):
+        index[0] = (index[0] - 1) % len(opts)
+
+    @bindings.add("down")
+    @bindings.add("j")
+    def _down(event):
+        index[0] = (index[0] + 1) % len(opts)
+
+    @bindings.add("enter")
+    def _enter(event):
+        event.app.exit(result=index[0])
+
+    @bindings.add("c-c")
+    @bindings.add("q")
+    def _cancel(event):
+        event.app.exit(exception=KeyboardInterrupt())
+
+    control = FormattedTextControl(render, focusable=True, show_cursor=False)
+    app = Application(
+        layout=Layout(HSplit([Window(control, always_hide_cursor=True)])),
+        key_bindings=bindings,
+        full_screen=False,
+        erase_when_done=True,
+        mouse_support=False,
+    )
+    # Run in a dedicated thread with its own event loop: the SDK drives gRPC
+    # through the main thread's asyncio loop (see aio.run_sync), which
+    # Application.run() would otherwise try to reuse and crash on.
+    chosen = app.run(in_thread=True)
+    choice = opts[chosen]
+    # Collapse any column padding in the label for the single-line echo.
+    chosen_label = " ".join(choice.label.split())
+    _console.print(
+        Text("✓ ", style="bold green")
+        .append(title, style="bold")
+        .append("  ")
+        .append(chosen_label, style=BRAND_COLOR)
+    )
+    return choice.value
+
+
+def _select_numbered(title: str, opts: List[SelectOption], default_index: int) -> Any:
+    _console.print(Text(title, style="bold"))
+    for i, opt in enumerate(opts):
+        line = Text(f"  {i + 1}) {opt.label}")
+        if opt.description:
+            line.append(f"  {opt.description}", style="dim")
+        _console.print(line)
+
+    default = default_index + 1
+    while True:
+        raw = prompt(text=f"Select an option [1-{len(opts)}]", default=default)
+        try:
+            picked = int(raw)
+        except (TypeError, ValueError):
+            warn("Enter a number.")
+            continue
+        if 1 <= picked <= len(opts):
+            return opts[picked - 1].value
+        warn(f"Enter a number between 1 and {len(opts)}.")
+
+
+def confirm(text: str, default: bool = True) -> bool:
+    """
+    Single-keypress y/n confirmation. Falls back to line input when the
+    terminal can't do raw-mode reads.
+    """
+    suffix = "[Y/n]" if default else "[y/N]"
+    prompt_text = Text(text, style="bold").append(f" {suffix} ", style="dim")
+
+    if is_interactive():
+        try:
+            import click
+
+            _console.print(prompt_text, end="")
+            char = click.getchar()
+            _console.print(Text(char if char in "ynYN" else "", style=BRAND_COLOR))
+            if char in ("\r", "\n"):
+                return default
+            if char in ("y", "Y"):
+                return True
+            if char in ("n", "N"):
+                return False
+            if char == "\x03":  # ctrl-c
+                raise KeyboardInterrupt
+            return default
+        except KeyboardInterrupt:
+            raise
+        except Exception:
+            pass
+
+    raw = prompt(text=f"{text} {suffix}", default="y" if default else "n")
+    return str(raw).strip().lower() in ("y", "yes", "true", "1")
+
+
+@dataclass
+class Step:
+    """Handle yielded by StepTracker.step; set ok=False to mark the step failed."""
+
+    ok: bool = True
+
+
+class StepTracker:
+    """
+    Step narration: a ✓/✗ line with the elapsed time when each step
+    completes. Steps print no start line of their own — the work inside a
+    step announces itself (e.g. `=> Building image`), keeping one consistent
+    gutter — and they hold no rich live display, so code inside a step can
+    safely start its own spinners and progress bars.
+    """
+
+    def __init__(self, title: str = ""):
+        self._started_at = time.monotonic()
+        if title:
+            header(title)
+
+    @contextmanager
+    def step(self, name: str, done_name: str = ""):
+        start = time.monotonic()
+        handle = Step()
+        try:
+            yield handle
+        except BaseException:
+            handle.ok = False
+            self._finish(name, "", start, ok=False)
+            raise
+        self._finish(name, done_name, start, ok=handle.ok)
+
+    def _finish(self, name: str, done_name: str, start: float, ok: bool) -> None:
+        if ok:
+            line = Text("✓ ", style="bold green").append(done_name or name)
+        else:
+            line = Text("✗ ", style="bold red").append(name)
+        line.append(f" ({_format_elapsed(start)})", style="dim")
+        _console.print(line)
+
+    def note(self, text: str) -> None:
+        _console.print(Text(f"  {text}", style="dim"))
+
+    def elapsed(self) -> float:
+        return time.monotonic() - self._started_at
+
+
+def _format_elapsed(start: float) -> str:
+    seconds = time.monotonic() - start
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    minutes, secs = divmod(int(seconds), 60)
+    return f"{minutes}m{secs:02d}s"
+
+
+def done(text: str, start_time: Optional[float] = None) -> None:
+    """End-of-command summary line, e.g. `✓ Deployed in 4.2s`."""
+    line = Text("✓ ", style="bold green").append(text, style="bold")
+    if start_time is not None:
+        line.append(f" in {_format_elapsed(start_time)}", style="dim")
+    _console.print(line)
 
 
 @contextmanager

@@ -15,6 +15,69 @@ type checkpointVolumeBackendRepo struct {
 	repository.BackendRepository
 }
 
+type fakeGpuPoolChecker struct {
+	supported map[string]bool
+}
+
+func (f fakeGpuPoolChecker) HasManagedPoolForGPU(gpuType string, allowMarketplace bool) bool {
+	return f.supported[gpuType]
+}
+
+type fakePrivatePoolFinder struct {
+	pool string
+	err  error
+}
+
+func (f fakePrivatePoolFinder) FindReadyPrivatePoolForGPU(ctx context.Context, workspaceID string, gpus []types.GpuType) (string, error) {
+	return f.pool, f.err
+}
+
+func TestComputeCapacityVerdictAvailableWhenAnyGPUSupported(t *testing.T) {
+	checker := fakeGpuPoolChecker{supported: map[string]bool{"T4": true}}
+
+	verdict, err := computeCapacityVerdict(context.Background(), checker, nil, "ws-1", []types.GpuType{types.GpuType("A6000"), types.GpuType("T4")}, false, false)
+	require.NoError(t, err)
+	require.Equal(t, StubCapacityStatusAvailable, verdict.status)
+	require.Equal(t, []string{"A6000"}, verdict.unsupportedGpus)
+	require.Empty(t, verdict.matchedPrivatePool)
+}
+
+func TestComputeCapacityVerdictLowCapacity(t *testing.T) {
+	checker := fakeGpuPoolChecker{supported: map[string]bool{"T4": true}}
+
+	verdict, err := computeCapacityVerdict(context.Background(), checker, nil, "ws-1", []types.GpuType{types.GpuType("T4")}, false, true)
+	require.NoError(t, err)
+	require.Equal(t, StubCapacityStatusLow, verdict.status)
+}
+
+func TestComputeCapacityVerdictNoneWhenNoPoolSupportsGPU(t *testing.T) {
+	checker := fakeGpuPoolChecker{supported: map[string]bool{}}
+
+	verdict, err := computeCapacityVerdict(context.Background(), checker, nil, "ws-1", []types.GpuType{types.GpuType("A6000")}, false, false)
+	require.NoError(t, err)
+	require.Equal(t, StubCapacityStatusNone, verdict.status)
+	require.Equal(t, []string{"A6000"}, verdict.unsupportedGpus)
+}
+
+func TestComputeCapacityVerdictMatchesReadyPrivatePool(t *testing.T) {
+	checker := fakeGpuPoolChecker{supported: map[string]bool{}}
+	finder := fakePrivatePoolFinder{pool: "ondemand-a6000"}
+
+	verdict, err := computeCapacityVerdict(context.Background(), checker, finder, "ws-1", []types.GpuType{types.GpuType("A6000")}, false, false)
+	require.NoError(t, err)
+	require.Equal(t, StubCapacityStatusAvailable, verdict.status)
+	require.Equal(t, "ondemand-a6000", verdict.matchedPrivatePool)
+}
+
+func TestComputeCapacityVerdictSkipsNoGPU(t *testing.T) {
+	checker := fakeGpuPoolChecker{supported: map[string]bool{}}
+
+	verdict, err := computeCapacityVerdict(context.Background(), checker, nil, "ws-1", []types.GpuType{types.NO_GPU, types.GpuType("A6000")}, false, false)
+	require.NoError(t, err)
+	require.Equal(t, StubCapacityStatusNone, verdict.status)
+	require.Equal(t, []string{"A6000"}, verdict.unsupportedGpus)
+}
+
 func (r *checkpointVolumeBackendRepo) GetOrCreateVolume(ctx context.Context, workspaceId uint, name string) (*types.Volume, error) {
 	return &types.Volume{ExternalId: "volume-123", WorkspaceId: workspaceId, Name: name}, nil
 }
@@ -161,16 +224,23 @@ func TestHandleCheckpointEnabledSplitsModelAndCompilerCaches(t *testing.T) {
 	require.ElementsMatch(t, []string{
 		"HF_HOME=/checkpoint-model-cache-qwen",
 		"HF_HUB_CACHE=/checkpoint-model-cache-qwen/hub",
+		"HF_XET_CACHE=/tmp/beam-checkpoint-compile-cache/hf-xet",
 		"TRANSFORMERS_CACHE=/checkpoint-model-cache-qwen",
 		"TRITON_CACHE_DIR=/tmp/beam-checkpoint-compile-cache/triton",
 		"TORCHINDUCTOR_CACHE_DIR=/tmp/beam-checkpoint-compile-cache/torchinductor",
 		"VLLM_CACHE_ROOT=/tmp/beam-checkpoint-compile-cache/vllm",
 		"CUDA_CACHE_PATH=/tmp/beam-checkpoint-compile-cache/cuda",
-		"HF_HUB_DISABLE_XET=1",
-		"HF_HUB_ENABLE_HF_TRANSFER=0",
 		"USER_ENV=1",
 	}, in.Env)
 	require.Len(t, in.Volumes, 1)
 	require.Equal(t, "volume-123", in.Volumes[0].Id)
 	require.Equal(t, "/checkpoint-model-cache-qwen", in.Volumes[0].MountPath)
+}
+
+func TestCheckpointCacheEnvLeavesHubTransportSelectionToRuntime(t *testing.T) {
+	env := checkpointCacheEnv("/model-cache")
+
+	require.NotContains(t, env, "HF_HUB_DISABLE_XET=1")
+	require.NotContains(t, env, "HF_HUB_ENABLE_HF_TRANSFER=0")
+	require.Contains(t, env, "HF_XET_CACHE=/tmp/beam-checkpoint-compile-cache/hf-xet")
 }

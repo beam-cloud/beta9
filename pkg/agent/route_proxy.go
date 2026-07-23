@@ -17,9 +17,11 @@ import (
 )
 
 const (
-	routeProxyPrefaceTimeout   = 10 * time.Second
-	routeProxyLocalDialTimeout = 2 * time.Second
-	routeProxyReadyDialTimeout = 250 * time.Millisecond
+	routeProxyPrefaceTimeout    = 10 * time.Second
+	routeProxyLocalDialTimeout  = 2 * time.Second
+	routeProxyReadyDialTimeout  = 250 * time.Millisecond
+	routeProxyReadyPollInterval = 50 * time.Millisecond
+	routeStatusConcurrency      = 16
 
 	// routeProxyMaxConsecutiveFailures is how many local dials must fail in a
 	// row before the route is dropped and reported degraded.
@@ -44,6 +46,7 @@ func newRouteProxy(client pb.GatewayServiceClient, agentToken string, listener n
 		routes:          map[string]string{},
 		readinessChecks: map[string]string{},
 		failureCounts:   map[string]int{},
+		statusSlots:     make(chan struct{}, routeStatusConcurrency),
 	}
 }
 
@@ -63,6 +66,7 @@ type routeProxy struct {
 
 	// routeID -> consecutive local dial failures.
 	failureCounts map[string]int
+	statusSlots   chan struct{}
 }
 
 func (p *routeProxy) run(ctx context.Context) error {
@@ -212,7 +216,7 @@ func (p *routeProxy) ensureRouteReady(ctx context.Context, routeID, localTarget 
 func (p *routeProxy) waitForRouteReady(ctx context.Context, routeID, localTarget string) {
 	defer p.clearReadinessCheck(routeID, localTarget)
 
-	backoff := 100 * time.Millisecond
+	statusRetry := 100 * time.Millisecond
 	for {
 		if ctx.Err() != nil || !p.routeTargetMatches(routeID, localTarget) {
 			return
@@ -220,7 +224,9 @@ func (p *routeProxy) waitForRouteReady(ctx context.Context, routeID, localTarget
 
 		dialLatency, err := checkLocalTargetReady(localTarget)
 		if err != nil {
-			backoff = p.waitBeforeNextReadinessCheck(ctx, backoff)
+			if !waitForRouteRetry(ctx, routeProxyReadyPollInterval) {
+				return
+			}
 			continue
 		}
 
@@ -229,12 +235,15 @@ func (p *routeProxy) waitForRouteReady(ctx context.Context, routeID, localTarget
 			"proxy_target":  p.proxyTarget,
 			"local_dial_ms": fmt.Sprintf("%d", dialLatency.Milliseconds()),
 		}
-		if err := updateRouteStatus(ctx, p.client, p.agentToken, routeID, types.BackendRouteStateReady, p.proxyTarget, "", attrs); err != nil {
+		if err := p.updateRouteStatus(ctx, routeID, types.BackendRouteStateReady, "", attrs); err != nil {
 			if ctx.Err() != nil {
 				return
 			}
 			fmt.Fprintf(p.stderr, "route %s ready status update failed: %v\n", routeID, err)
-			backoff = p.waitBeforeNextReadinessCheck(ctx, backoff)
+			if !waitForRouteRetry(ctx, statusRetry) {
+				return
+			}
+			statusRetry = nextBackoff(statusRetry, time.Second)
 			continue
 		}
 
@@ -242,12 +251,16 @@ func (p *routeProxy) waitForRouteReady(ctx context.Context, routeID, localTarget
 	}
 }
 
-func (p *routeProxy) waitBeforeNextReadinessCheck(ctx context.Context, backoff time.Duration) time.Duration {
+func waitForRouteRetry(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
 	select {
 	case <-ctx.Done():
-	case <-time.After(backoff):
+		return false
+	case <-timer.C:
+		return true
 	}
-	return nextBackoff(backoff, time.Second)
 }
 
 func (p *routeProxy) routeTargetMatches(routeID, localTarget string) bool {
@@ -370,7 +383,7 @@ func (p *routeProxy) markRouteDegraded(routeID, localTarget string, dialLatency 
 	if dialLatency > 0 {
 		attrs["local_dial_ms"] = fmt.Sprintf("%d", dialLatency.Milliseconds())
 	}
-	if err := updateRouteStatus(ctx, p.client, p.agentToken, routeID, types.BackendRouteStateDegraded, p.proxyTarget, cause.Error(), attrs); err != nil && !isLocalTargetUnavailable(cause) {
+	if err := p.updateRouteStatus(ctx, routeID, types.BackendRouteStateDegraded, cause.Error(), attrs); err != nil && !isLocalTargetUnavailable(cause) {
 		fmt.Fprintf(p.stderr, "route %s status update failed: %v\n", routeID, err)
 	}
 }
@@ -483,4 +496,14 @@ func updateRouteStatus(ctx context.Context, client pb.GatewayServiceClient, agen
 		return fmt.Errorf("%s", res.ErrMsg)
 	}
 	return nil
+}
+
+func (p *routeProxy) updateRouteStatus(ctx context.Context, routeID, state, errMsg string, attrs map[string]string) error {
+	select {
+	case p.statusSlots <- struct{}{}:
+		defer func() { <-p.statusSlots }()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return updateRouteStatus(ctx, p.client, p.agentToken, routeID, state, p.proxyTarget, errMsg, attrs)
 }

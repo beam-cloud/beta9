@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"runtime"
 	"strconv"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -13,6 +14,8 @@ import (
 )
 
 func main() {
+	configureGOMAXPROCS()
+
 	configManager, err := common.NewConfigManager[types.AppConfig]()
 	if err != nil {
 		log.Fatal().Err(err).Msg("error creating config manager")
@@ -56,4 +59,19 @@ func main() {
 
 		log.Fatal().Err(err).Msg("worker failed to run")
 	}
+}
+
+func configureGOMAXPROCS() {
+	if os.Getenv("GOMAXPROCS") != "" {
+		return
+	}
+
+	cpuMillis, err := strconv.ParseInt(os.Getenv(types.WorkerCPUEnv), 10, 64)
+	if err != nil || cpuMillis <= 0 {
+		return
+	}
+
+	// Go 1.23 does not derive GOMAXPROCS from cgroup CPU quotas.
+	maxProcs := int((cpuMillis + 999) / 1000)
+	runtime.GOMAXPROCS(maxProcs)
 }

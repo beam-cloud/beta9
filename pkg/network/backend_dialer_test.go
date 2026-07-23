@@ -54,6 +54,13 @@ func withFastRoutePolling(t *testing.T) {
 	t.Cleanup(func() { backendRouteReadyPollInterval = previous })
 }
 
+func withFastRouteDialRetry(t *testing.T) {
+	t.Helper()
+	previous := backendRouteDialRetryInterval
+	backendRouteDialRetryInterval = 10 * time.Millisecond
+	t.Cleanup(func() { backendRouteDialRetryInterval = previous })
+}
+
 func withFastPeerAdvisory(t *testing.T) {
 	t.Helper()
 	previous := tailnetPeerAdvisoryTimeout
@@ -158,6 +165,7 @@ func (f *tsnetRouteResolver) GetBackendRoute(ctx context.Context, routeID string
 
 func TestBackendDialerTSNetRetriesTransientDialFailures(t *testing.T) {
 	withFastRoutePolling(t)
+	withFastRouteDialRetry(t)
 	withFastPeerPolling(t)
 
 	ts := testTailscale(t, statusWithPeers("beam-agent-machine"))
@@ -215,6 +223,7 @@ func TestBackendDialerTSNetRetriesTransientDialFailures(t *testing.T) {
 func newMissingPeerBackendDialer(t *testing.T, dialTimeout time.Duration) (*Tailscale, *BackendDialer) {
 	t.Helper()
 	withFastRoutePolling(t)
+	withFastRouteDialRetry(t)
 	withFastPeerPolling(t)
 	withFastPeerAdvisory(t)
 
@@ -270,6 +279,28 @@ func TestBackendDialerTSNetIncludesPeerMissWhenDialFails(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "netmap") || !strings.Contains(err.Error(), "deadline exceeded") {
 		t.Fatalf("dial error = %v, want netmap miss and dial failure", err)
+	}
+}
+
+func TestBackendDialerTSNetChecksPeerAfterDialConsumesBudget(t *testing.T) {
+	ts, dialer := newMissingPeerBackendDialer(t, 100*time.Millisecond)
+	dialer.tsnetDial = func(ctx context.Context, addr string, timeout time.Duration) (net.Conn, error) {
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-timer.C:
+			return nil, context.DeadlineExceeded
+		}
+	}
+
+	_, err := dialer.Dial(context.Background(), types.BackendRouteAddress("route-ts"))
+	if err == nil || !strings.Contains(err.Error(), "netmap") {
+		t.Fatalf("dial error = %v, want netmap miss after exhausted dial", err)
+	}
+	if ts.staleNetmap.misses < 1 {
+		t.Fatalf("netmap misses = %d, want at least 1", ts.staleNetmap.misses)
 	}
 }
 

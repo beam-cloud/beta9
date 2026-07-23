@@ -51,10 +51,10 @@ func (gws GatewayService) ListContainers(ctx context.Context, in *pb.ListContain
 			StubId:       state.StubId,
 			WorkspaceId:  state.WorkspaceId,
 			Status:       string(state.Status),
-			ScheduledAt:  timestamppb.New(time.Unix(state.ScheduledAt, 0)),
-			StartedAt:    timestamppb.New(time.Unix(state.StartedAt, 0)),
-			WorkerId:     containerWorkerMap[state.ContainerId].WorkerId,
-			MachineId:    containerWorkerMap[state.ContainerId].MachineId,
+			ScheduledAt:  containerTimestamp(state.ScheduledAt),
+			StartedAt:    containerTimestamp(state.StartedAt),
+			WorkerId:     firstContainerDetail(state.WorkerId, containerWorkerMap[state.ContainerId].WorkerId),
+			MachineId:    firstContainerDetail(state.MachineId, containerWorkerMap[state.ContainerId].MachineId),
 			DeploymentId: deploymentId,
 		})
 	}
@@ -63,6 +63,22 @@ func (gws GatewayService) ListContainers(ctx context.Context, in *pb.ListContain
 		Ok:         true,
 		Containers: containers,
 	}, nil
+}
+
+func firstContainerDetail(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func containerTimestamp(unixSeconds int64) *timestamppb.Timestamp {
+	if unixSeconds <= 0 {
+		return nil
+	}
+	return timestamppb.New(time.Unix(unixSeconds, 0))
 }
 
 type containerDetails struct {

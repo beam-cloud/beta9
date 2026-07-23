@@ -10,7 +10,7 @@ import (
 
 const defaultExternalVolumesPath string = "/tmp/external-volumes"
 
-func ConfigureContainerRequestMounts(containerId, stubObjectId string, workspace *types.Workspace, config types.StubConfigV1, stubId string) ([]types.Mount, error) {
+func ConfigureContainerRequestMounts(containerId string, stub *types.StubWithRelated, workspace *types.Workspace, config types.StubConfigV1) ([]types.Mount, error) {
 	secretKey, err := common.ParseSecretKey(*workspace.SigningKey)
 	if err != nil {
 		return nil, err
@@ -18,15 +18,17 @@ func ConfigureContainerRequestMounts(containerId, stubObjectId string, workspace
 
 	mounts := []types.Mount{
 		{
-			LocalPath: path.Join(types.DefaultObjectPath, workspace.Name, stubObjectId),
+			LocalPath: path.Join(types.DefaultObjectPath, workspace.Name, stub.Object.ExternalId),
 			MountPath: types.WorkerUserCodeVolume,
 			ReadOnly:  false,
 		},
-		{
-			LocalPath: path.Join(types.DefaultOutputsPath, workspace.Name, stubId),
+	}
+	if stub.Type.Kind() != types.StubTypeSandbox {
+		mounts = append(mounts, types.Mount{
+			LocalPath: path.Join(types.DefaultOutputsPath, workspace.Name, stub.ExternalId),
 			MountPath: types.WorkerUserOutputVolume,
 			ReadOnly:  false,
-		},
+		})
 	}
 
 	for _, v := range config.Volumes {

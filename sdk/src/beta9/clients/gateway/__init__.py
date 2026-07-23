@@ -408,6 +408,22 @@ class GetOrCreateStubResponse(betterproto.Message):
     stub_id: str = betterproto.string_field(2)
     err_msg: str = betterproto.string_field(3)
     warn_msg: str = betterproto.string_field(4)
+    capacity_status: str = betterproto.string_field(5)
+    """
+    Capacity verdict for the requested GPU types, computed at stub creation:
+     "available", "low", or "none". Empty when no check applies (CPU-only
+     workloads, private-pool-only stubs, or pool-selector-bound stubs).
+    """
+
+    unsupported_gpus: List[str] = betterproto.string_field(6)
+    """GPU types from the request that no serverless pool supports."""
+
+    matched_private_pool: str = betterproto.string_field(7)
+    """
+    Name of an existing ready private pool in the workspace that satisfies
+     the GPU request. Set instead of capacity_status "none" so clients can
+     re-issue stub creation targeting this pool.
+    """
 
 
 @dataclass(eq=False, repr=False)
@@ -1186,6 +1202,12 @@ class JoinAgentRequest(betterproto.Message):
     gpu_ids: List[str] = betterproto.string_field(14)
     network_slot_pool_size: int = betterproto.uint32_field(15)
     container_start_concurrency: int = betterproto.uint32_field(16)
+    worker_image: str = betterproto.string_field(17)
+    """
+    Optional per-machine worker image override. The gateway remembers the
+     generated value as a baseline so untouched installs continue to follow
+     future image tag changes while manually edited values remain pinned.
+    """
 
 
 @dataclass(eq=False, repr=False)
@@ -1311,6 +1333,14 @@ class AgentWorkerSlot(betterproto.Message):
     Distinguishes an explicitly configured zero priority from legacy
      gateways that did not send scheduling priority metadata.
     """
+
+    gvisor_platform: str = betterproto.string_field(22)
+    gvisor_root: str = betterproto.string_field(23)
+    gvisor_extra_args: List[str] = betterproto.string_field(24)
+    generation: str = betterproto.string_field(25)
+    """Deterministic identity of the restart-relevant slot specification."""
+
+    cpu_affinity_enforced: bool = betterproto.bool_field(26)
 
 
 @dataclass(eq=False, repr=False)
@@ -1444,6 +1474,18 @@ class ListMachinesResponse(betterproto.Message):
     gpus: Dict[str, bool] = betterproto.map_field(
         4, betterproto.TYPE_STRING, betterproto.TYPE_BOOL
     )
+    """
+    gpus reports live worker availability per GPU type (a worker with that
+     GPU is currently registered).
+    """
+
+    supported_gpus: Dict[str, bool] = betterproto.map_field(
+        5, betterproto.TYPE_STRING, betterproto.TYPE_BOOL
+    )
+    """
+    supported_gpus reports pool-config-based serverless support per GPU
+     type: true when a pool could serve the GPU even if scaled to zero.
+    """
 
 
 @dataclass(eq=False, repr=False)

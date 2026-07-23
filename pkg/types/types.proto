@@ -260,6 +260,10 @@ message Worker {
   repeated Container active_containers = 17;
   string runtime = 18;
   string pool_selector = 19;
+  bool cordon_requested = 20;
+  string rollout_generation = 21;
+  string rollout_build_version = 22;
+  string worker_image_override = 23;
 }
 
 message WorkerPoolState {

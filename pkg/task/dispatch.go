@@ -170,6 +170,10 @@ func (d *Dispatcher) Claim(ctx context.Context, workspaceName, stubId, taskId, c
 	return d.taskRepo.ClaimTask(ctx, workspaceName, stubId, taskId, containerId)
 }
 
+func (d *Dispatcher) Release(ctx context.Context, workspaceName, stubId, taskId string) error {
+	return d.taskRepo.RemoveTaskClaim(ctx, workspaceName, stubId, taskId)
+}
+
 func (d *Dispatcher) monitor(ctx context.Context) {
 	monitorRate := time.Duration(5) * time.Second
 	ticker := time.NewTicker(monitorRate)
@@ -254,7 +258,7 @@ func (d *Dispatcher) RetryTask(ctx context.Context, task types.TaskInterface) er
 	}
 
 	// Remove task claim so other replicas of Dispatcher don't try to retry the same task
-	err = d.taskRepo.RemoveTaskClaim(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId)
+	err = d.Release(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId)
 	if err != nil {
 		log.Error().Str("task_id", task.Metadata().TaskId).Err(err).Msg("dispatcher failed to remove task claim")
 		return err

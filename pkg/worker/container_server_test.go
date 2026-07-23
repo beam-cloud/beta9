@@ -18,8 +18,34 @@ import (
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
+
+type logAttachmentStream struct {
+	pb.ContainerService_ContainerStreamLogsServer
+	attached bool
+}
+
+func (s *logAttachmentStream) SendHeader(metadata.MD) error {
+	s.attached = true
+	return nil
+}
+
+func (s *logAttachmentStream) Context() context.Context {
+	return context.Background()
+}
+
+func TestContainerStreamLogsAcknowledgesAttachment(t *testing.T) {
+	logBuffer := common.NewLogBuffer()
+	logBuffer.Close()
+	server := &ContainerRuntimeServer{containerInstances: common.NewSafeMap[*ContainerInstance]()}
+	server.containerInstances.Set("container-id", &ContainerInstance{LogBuffer: logBuffer})
+	stream := &logAttachmentStream{}
+
+	require.NoError(t, server.ContainerStreamLogs(&pb.ContainerStreamLogsRequest{ContainerId: "container-id"}, stream))
+	require.True(t, stream.attached)
+}
 
 func TestWaitForSandboxProcessManagerDoesNotProceedBeforeReadySignal(t *testing.T) {
 	containerId := "sandbox-test"
@@ -240,9 +266,8 @@ func TestWaitForSandboxProcessManagerWaitsForLateReadyChannel(t *testing.T) {
 		server.containerInstances.Set(containerId, fresh)
 
 		time.Sleep(25 * time.Millisecond)
-		fresh.SandboxProcessManagerReady = true
+		fresh.signalProcessManagerReadiness(true)
 		server.containerInstances.Set(containerId, fresh)
-		close(ready)
 	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -250,7 +275,7 @@ func TestWaitForSandboxProcessManagerWaitsForLateReadyChannel(t *testing.T) {
 
 	got, err := server.waitForSandboxProcessManager(ctx, containerId, instance)
 	require.NoError(t, err)
-	require.True(t, got.SandboxProcessManagerReady)
+	require.True(t, got.processManagerReady())
 }
 
 func TestContainerSandboxExecDoesNotPollRuntimeStateBeforeProcessManagerReady(t *testing.T) {
@@ -293,8 +318,29 @@ func TestContainerSandboxStatusReportsPendingBeforeProcessManagerReady(t *testin
 
 	require.NoError(t, err)
 	require.True(t, resp.Ok)
-	require.Equal(t, "pending", resp.Status)
+	require.Equal(t, string(types.SandboxStatusPending), resp.Status)
 	require.Equal(t, int32(-1), resp.ExitCode)
+}
+
+func TestContainerSandboxStatusReportsFailedProcessManagerInitialization(t *testing.T) {
+	containerId := "sandbox-test"
+	ready := make(chan struct{})
+	close(ready)
+	server := &ContainerRuntimeServer{
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+	}
+	server.containerInstances.Set(containerId, &ContainerInstance{
+		Id:                      containerId,
+		ProcessManagerReadyChan: ready,
+	})
+
+	resp, err := server.ContainerSandboxStatus(context.Background(), &pb.ContainerSandboxStatusRequest{
+		ContainerId: containerId,
+	})
+
+	require.NoError(t, err)
+	require.False(t, resp.Ok)
+	require.Contains(t, resp.ErrorMsg, "failed to become ready")
 }
 
 func TestContainerSandboxStatusRequiresProcessManagerForPid(t *testing.T) {
@@ -547,6 +593,16 @@ func (f *fakeContainerNetworkController) ExposePorts(containerId string, binding
 	}
 	return nil
 }
+
+func (f *fakeContainerNetworkController) ReservePorts(_ string, count int) ([]int, error) {
+	ports := make([]int, count)
+	for i := range ports {
+		ports[i] = 30000 + i
+	}
+	return ports, nil
+}
+
+func (f *fakeContainerNetworkController) ReleasePortReservations(string) {}
 
 func (f *fakeContainerNetworkController) Setup(containerId string, spec *specs.Spec, request *types.ContainerRequest) error {
 	return nil

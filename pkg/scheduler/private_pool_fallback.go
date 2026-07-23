@@ -66,24 +66,26 @@ func (a *schedulingAttempt) privatePoolFallbackRequest() (*types.ContainerReques
 		return nil, "", false
 	}
 
-	checker, ok := pool.Controller.(privatePoolCapacityChecker)
-	if !ok {
-		return nil, "", false
-	}
+	if a.request.StorageAvailable() {
+		checker, ok := pool.Controller.(privatePoolCapacityChecker)
+		if !ok {
+			return nil, "", false
+		}
 
-	cpu := a.scheduler.workerCPUForControllerRequest(pool.Controller, a.request)
-	memory := a.scheduler.workerMemoryForControllerRequest(pool.Controller, a.request)
-	gpuCount := a.scheduler.workerGPUCountForControllerRequest(pool.Controller, a.request)
-	hasCapacity, err := checker.HasWorkerCapacity(cpu, memory, gpuCount)
-	if err != nil {
-		requestLog(log.Debug(), a.request).
-			Str("pool_name", pool.Name).
-			Err(err).
-			Msg("unable to check private pool capacity for fallback")
-		return nil, "", false
-	}
-	if hasCapacity {
-		return nil, "", false
+		cpu := a.scheduler.workerCPUForControllerRequest(pool.Controller, a.request)
+		memory := a.scheduler.workerMemoryForControllerRequest(pool.Controller, a.request)
+		gpuCount := a.scheduler.workerGPUCountForControllerRequest(pool.Controller, a.request)
+		hasCapacity, err := checker.HasWorkerCapacity(cpu, memory, gpuCount)
+		if err != nil {
+			requestLog(log.Debug(), a.request).
+				Str("pool_name", pool.Name).
+				Err(err).
+				Msg("unable to check private pool capacity for fallback")
+			return nil, "", false
+		}
+		if hasCapacity {
+			return nil, "", false
+		}
 	}
 
 	fallback := a.request.Clone()

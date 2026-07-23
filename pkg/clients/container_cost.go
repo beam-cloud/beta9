@@ -43,11 +43,12 @@ type ContainerCostQuote struct {
 }
 
 type ContainerCostRequest struct {
-	Cpu      int64  `json:"cpu"`
-	Memory   int64  `json:"memory"`
-	Gpu      string `json:"gpu"`
-	GpuCount uint32 `json:"gpu_count"`
-	Sandbox  bool   `json:"sandbox"`
+	WorkspaceId string `json:"workspace_id,omitempty"`
+	Cpu         int64  `json:"cpu"`
+	Memory      int64  `json:"memory"`
+	Gpu         string `json:"gpu"`
+	GpuCount    uint32 `json:"gpu_count"`
+	Sandbox     bool   `json:"sandbox"`
 }
 
 type containerCostCacheEntry struct {
@@ -85,7 +86,7 @@ func NewContainerCostClient(config types.ContainerCostHookConfig) *ContainerCost
 	}
 }
 
-// GetContainerCostQuote caches by resources for five minutes (or valid_until).
+// GetContainerCostQuote caches by workspace and resources for five minutes (or valid_until).
 // A failed refresh returns the last good quote and retries on a later lookup.
 func (c *ContainerCostClient) GetContainerCostQuote(ctx context.Context, request *types.ContainerRequest) (ContainerCostQuote, error) {
 	if c == nil {
@@ -99,7 +100,8 @@ func (c *ContainerCostClient) GetContainerCostQuote(ctx context.Context, request
 	}
 
 	key := ContainerCostRequest{
-		Cpu: request.Cpu, Memory: request.Memory,
+		WorkspaceId: request.WorkspaceId,
+		Cpu:         request.Cpu, Memory: request.Memory,
 		Gpu: strings.TrimSpace(request.Gpu), GpuCount: request.GpuCount,
 		Sandbox: request.Stub.Type.Kind() == types.StubTypeSandbox,
 	}

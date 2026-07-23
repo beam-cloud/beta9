@@ -133,7 +133,7 @@ func TestContainerCostClientCachesByResourcesAndFallsBackToLastGoodQuote(t *test
 	}
 }
 
-func TestContainerCostClientSeparatesSandboxQuotes(t *testing.T) {
+func TestContainerCostClientSeparatesWorkspaceAndSandboxQuotes(t *testing.T) {
 	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
@@ -142,6 +142,9 @@ func TestContainerCostClientSeparatesSandboxQuotes(t *testing.T) {
 			t.Fatal(err)
 		}
 		cost := "0.1"
+		if request.WorkspaceId == "workspace-b" {
+			cost = "0.2"
+		}
 		if request.Sandbox {
 			cost = "0.3"
 		}
@@ -150,22 +153,25 @@ func TestContainerCostClientSeparatesSandboxQuotes(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	client := NewContainerCostClient(types.ContainerCostHookConfig{Endpoint: server.URL, Token: "test-token"})
-	standard := &types.ContainerRequest{Cpu: 1_000, Memory: 1_024}
+	standard := &types.ContainerRequest{WorkspaceId: "workspace-a", Cpu: 1_000, Memory: 1_024}
+	otherWorkspace := &types.ContainerRequest{WorkspaceId: "workspace-b", Cpu: 1_000, Memory: 1_024}
 	sandbox := &types.ContainerRequest{
-		Cpu:    1_000,
-		Memory: 1_024,
-		Stub:   types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)}},
+		WorkspaceId: "workspace-a",
+		Cpu:         1_000,
+		Memory:      1_024,
+		Stub:        types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)}},
 	}
 	standardQuote, standardErr := client.GetContainerCostQuote(context.Background(), standard)
+	otherQuote, otherErr := client.GetContainerCostQuote(context.Background(), otherWorkspace)
 	sandboxQuote, sandboxErr := client.GetContainerCostQuote(context.Background(), sandbox)
-	if standardErr != nil || sandboxErr != nil {
-		t.Fatalf("standard/sandbox quote errors = %v/%v", standardErr, sandboxErr)
+	if standardErr != nil || otherErr != nil || sandboxErr != nil {
+		t.Fatalf("standard/workspace/sandbox quote errors = %v/%v/%v", standardErr, otherErr, sandboxErr)
 	}
-	if standardQuote.CostPerMs != 0.1 || sandboxQuote.CostPerMs != 0.3 {
-		t.Fatalf("standard/sandbox quotes = %v/%v", standardQuote.CostPerMs, sandboxQuote.CostPerMs)
+	if standardQuote.CostPerMs != 0.1 || otherQuote.CostPerMs != 0.2 || sandboxQuote.CostPerMs != 0.3 {
+		t.Fatalf("standard/workspace/sandbox quotes = %v/%v/%v", standardQuote.CostPerMs, otherQuote.CostPerMs, sandboxQuote.CostPerMs)
 	}
-	if calls.Load() != 2 {
-		t.Fatalf("quote calls = %d, want separate standard and sandbox quotes", calls.Load())
+	if calls.Load() != 3 {
+		t.Fatalf("quote calls = %d, want separate workspace and sandbox quotes", calls.Load())
 	}
 }
 

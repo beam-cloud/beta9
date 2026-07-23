@@ -1010,6 +1010,9 @@
         },
         "checkpointId": {
           "type": "string"
+        },
+        "machineId": {
+          "type": "string"
         }
       }
     },
@@ -1026,6 +1029,9 @@
           "type": "string"
         },
         "stubId": {
+          "type": "string"
+        },
+        "managementUrl": {
           "type": "string"
         }
       }

@@ -2,6 +2,8 @@ package compute
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -61,6 +63,14 @@ func (s *Service) JoinAgent(ctx context.Context, in *pb.JoinAgentRequest) (*pb.J
 	if machineID == "" {
 		machineID = model.AgentMachineID(tokenState.WorkspaceID, tokenState.PoolName, in.MachineFingerprint)
 	}
+	existing, err := s.computeRepo.GetAgentMachineState(ctx, tokenState.WorkspaceID, tokenState.PoolName, machineID)
+	if err != nil {
+		return &pb.JoinAgentResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+	workerImageOverride := strings.TrimSpace(in.WorkerImage)
+	if workerImageOverride == agentWorkerImage(s.appConfig) {
+		workerImageOverride = ""
+	}
 	now := time.Now()
 	agentState := &model.AgentTokenState{
 		TokenHash:                 hashComputeToken(agentToken),
@@ -84,11 +94,18 @@ func (s *Service) JoinAgent(ctx context.Context, in *pb.JoinAgentRequest) (*pb.J
 		Executor:                  firstNonEmpty(in.Executor, defaultPrivateExecutor),
 		NetworkSlotPoolSize:       in.NetworkSlotPoolSize,
 		ContainerStartConcurrency: in.ContainerStartConcurrency,
+		WorkerImageOverride:       workerImageOverride,
 		Schedulable:               in.Schedulable,
 		Preflight:                 preflightChecksFromProto(in.Preflight),
 		CreatedAt:                 now,
 		LastJoinAt:                now,
 		LastHeartbeatAt:           now,
+	}
+	if existing != nil {
+		agentState.Cordoned = existing.Cordoned
+		if !existing.CreatedAt.IsZero() {
+			agentState.CreatedAt = existing.CreatedAt
+		}
 	}
 	if poolState != nil && poolState.ManagementSource != "" && poolState.WorkerConfig != nil {
 		if poolState.WorkerConfig.NetworkSlotPoolSize > 0 {
@@ -165,8 +182,11 @@ func (s *Service) commitPrivateAgentJoin(ctx context.Context, token *model.JoinT
 		if pool == nil {
 			return errors.New("pool no longer exists")
 		}
-		if pool.CreatedByTokenID == "" || pool.CreatedByTokenID != token.CreatedByTokenID {
-			return errors.New("join token is invalid or expired")
+		// Reject tokens minted for a previous incarnation of the pool. Only
+		// compare when both timestamps exist: legacy tokens carry a zero value
+		// and rejecting them bricked already-provisioned machines on deploy.
+		if !token.PoolCreatedAt.IsZero() && !pool.CreatedAt.IsZero() && !pool.CreatedAt.Equal(token.PoolCreatedAt) {
+			return errors.New("join token was issued for a previous instance of this pool")
 		}
 		agent.Mode = firstNonEmpty(token.Mode, pool.Mode)
 		agent.MarketplaceListingID = firstNonEmpty(token.MarketplaceListingID, pool.MarketplaceListingID)
@@ -327,7 +347,7 @@ func (s *Service) RequestAgentTransportCredential(ctx context.Context, in *pb.Re
 		Ok:         true,
 		AuthKey:    s.appConfig.Tailscale.AgentAuthKey,
 		ControlUrl: s.appConfig.Tailscale.ControlURL,
-		Hostname:   "beam-agent-" + agentState.MachineID,
+		Hostname:   types.AgentTailnetHostnamePrefix + agentState.MachineID,
 		Ephemeral:  true,
 	}, nil
 }
@@ -394,8 +414,8 @@ func (s *Service) StreamAgent(in *pb.StreamAgentRequest, stream pb.GatewayServic
 
 	events := make(chan common.KeyEvent, 32)
 	if s.keyEventManager != nil {
-		routeRevisionKey := agentRouteRevisionKey(agentState)
-		if err := s.keyEventManager.ListenForPublishedPattern(ctx, routeRevisionKey, events); err != nil {
+		revisionKey := agentSnapshotRevisionKey(agentState)
+		if err := s.keyEventManager.ListenForPublishedPattern(ctx, revisionKey, events); err != nil {
 			return err
 		}
 	}
@@ -505,36 +525,49 @@ func (s *Service) agentRoutesForMachine(ctx context.Context, agentState *model.A
 }
 
 func (s *Service) listAgentRoutesForMachine(ctx context.Context, agentState *model.AgentTokenState) ([]types.BackendRoute, error) {
-	if agentMarketplaceMode(agentState) {
-		return s.containerRepo.ListBackendRoutesByMachineID(ctx, agentState.MachineID)
-	}
-	return s.containerRepo.ListBackendRoutesByMachine(ctx, agentState.WorkspaceID, agentState.PoolName, agentState.MachineID)
+	return s.containerRepo.ListBackendRoutesByMachineID(ctx, agentState.MachineID)
 }
 
-func agentRouteRevisionKey(agentState *model.AgentTokenState) string {
-	if agentMarketplaceMode(agentState) {
-		return common.RedisKeys.SchedulerBackendRouteMachineIDRevision(agentState.MachineID)
-	}
-	return common.RedisKeys.SchedulerBackendRouteMachineRevision(agentState.WorkspaceID, agentState.PoolName, agentState.MachineID)
+func agentSnapshotRevisionKey(agentState *model.AgentTokenState) string {
+	return common.RedisKeys.SchedulerBackendRouteMachineIDRevision(agentState.MachineID)
 }
 
-func agentMarketplaceMode(agentState *model.AgentTokenState) bool {
-	return agentState != nil && agentState.Mode == string(types.PoolModeMarketplace)
+func (s *Service) notifyAgentPool(ctx context.Context, workspaceID, poolName string) error {
+	if s.redisClient == nil || s.computeRepo == nil {
+		return nil
+	}
+	machines, err := s.computeRepo.ListAgentTokenStates(ctx, workspaceID, poolName)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, machine := range machines {
+		if machine == nil || machine.MachineID == "" {
+			continue
+		}
+		err := s.redisClient.Publish(ctx, agentSnapshotRevisionKey(machine), common.KeyOperationSet).Err()
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
 }
 
 func agentCanManageRoute(agentState *model.AgentTokenState, route types.BackendRoute) bool {
 	if agentState == nil {
 		return false
 	}
-	if agentMarketplaceMode(agentState) {
-		return route.MachineID == agentState.MachineID && route.PoolName == agentState.PoolName
-	}
-	return route.WorkspaceID == agentState.WorkspaceID &&
-		route.PoolName == agentState.PoolName &&
+	return route.PoolName == agentState.PoolName &&
 		route.MachineID == agentState.MachineID
 }
 
 func (s *Service) agentSlotsForMachine(ctx context.Context, agentState *model.AgentTokenState) ([]*pb.AgentWorkerSlot, error) {
+	poolState, err := s.getAgentPoolState(ctx, agentState)
+	if err != nil {
+		return nil, err
+	}
+	var poolConfig types.WorkerPoolConfig
+	if poolState != nil && poolState.WorkerConfig != nil {
+		poolConfig = *poolState.WorkerConfig
+	}
 	slots, err := s.computeRepo.ListAgentWorkerSlotStates(ctx, agentState.WorkspaceID, agentState.PoolName, agentState.MachineID)
 	if err != nil {
 		return nil, err
@@ -550,7 +583,7 @@ func (s *Service) agentSlotsForMachine(ctx context.Context, agentState *model.Ag
 		return nil, nil
 	}
 
-	slot, workerToken, err := s.ensureAgentWorkerSlot(ctx, agentState, worker, slots)
+	slot, workerToken, err := s.ensureAgentWorkerSlot(ctx, agentState, worker, poolConfig, slots)
 	if err != nil {
 		return nil, err
 	}
@@ -569,13 +602,16 @@ func (s *Service) agentMachineWorker(agentState *model.AgentTokenState) (*types.
 		}
 		return nil, err
 	}
-	if worker.MachineId != agentState.MachineID || worker.PoolName != agentState.PoolName || worker.Status == types.WorkerStatusDisabled {
+	if worker.MachineId != agentState.MachineID || worker.PoolName != agentState.PoolName {
+		return nil, nil
+	}
+	if worker.Status == types.WorkerStatusDisabled && !agentState.Cordoned && worker.RolloutGeneration == "" {
 		return nil, nil
 	}
 	return worker, nil
 }
 
-func (s *Service) ensureAgentWorkerSlot(ctx context.Context, agentState *model.AgentTokenState, worker *types.Worker, slots []*model.AgentWorkerSlotState) (*model.AgentWorkerSlotState, string, error) {
+func (s *Service) ensureAgentWorkerSlot(ctx context.Context, agentState *model.AgentTokenState, worker *types.Worker, poolConfig types.WorkerPoolConfig, slots []*model.AgentWorkerSlotState) (*model.AgentWorkerSlotState, string, error) {
 	var existing *model.AgentWorkerSlotState
 	for _, slot := range slots {
 		if slot != nil && slot.WorkerID == worker.Id {
@@ -593,9 +629,24 @@ func (s *Service) ensureAgentWorkerSlot(ctx context.Context, agentState *model.A
 		return nil, "", err
 	}
 
-	slot := agentWorkerSlotState(s.appConfig, agentState, worker, tokenID, tokenHash)
+	slot := agentWorkerSlotState(s.appConfig, agentState, worker, poolConfig, tokenID, tokenHash)
+	if err := setAgentWorkerSlotGeneration(slot); err != nil {
+		return nil, "", err
+	}
 	if existing != nil {
 		slot.CreatedAt = existing.CreatedAt
+	}
+	if existing != nil && existing.Generation == slot.Generation {
+		return existing, token, nil
+	}
+	if existing != nil {
+		prepared, err := s.workerRepo.PrepareWorkerRollout(worker.Id, slot.Generation)
+		if err != nil {
+			return nil, "", err
+		}
+		if !prepared {
+			return existing, token, nil
+		}
 	}
 	if err := s.computeRepo.SaveAgentWorkerSlotState(ctx, slot); err != nil {
 		return nil, "", err
@@ -683,7 +734,30 @@ func (s *Service) pruneAgentWorkerSlots(ctx context.Context, agentState *model.A
 	return nil
 }
 
-func agentWorkerSlotState(config types.AppConfig, agentState *model.AgentTokenState, worker *types.Worker, tokenID, tokenHash string) *model.AgentWorkerSlotState {
+func agentWorkerSlotState(config types.AppConfig, agentState *model.AgentTokenState, worker *types.Worker, poolConfig types.WorkerPoolConfig, tokenID, tokenHash string) *model.AgentWorkerSlotState {
+	runtimeName := agentWorkerRuntime(agentState, worker)
+	networkSlots := agentState.NetworkSlotPoolSize
+	startConcurrency := agentState.ContainerStartConcurrency
+	requiresPoolSelector := worker.RequiresPoolSelector
+	priority := worker.Priority
+	preemptable := worker.Preemptable
+	var cpuAffinityEnforced *bool
+
+	// Managed pool configuration is authoritative and may change while the
+	// machine remains connected. Machine capacity still comes from the worker.
+	if agentState.ManagedPoolInstanceID != "" {
+		runtimeName = firstNonEmpty(poolConfig.ContainerRuntime, types.ContainerRuntimeRunc.String())
+		if poolConfig.NetworkSlotPoolSize > 0 {
+			networkSlots = uint32(poolConfig.NetworkSlotPoolSize)
+		}
+		if poolConfig.ContainerStartConcurrency > 0 {
+			startConcurrency = uint32(poolConfig.ContainerStartConcurrency)
+		}
+		requiresPoolSelector = poolConfig.RequiresPoolSelector
+		priority = poolConfig.Priority
+		preemptable = poolConfig.Preemptable
+		cpuAffinityEnforced = &poolConfig.CPUAffinityEnforced
+	}
 	return &model.AgentWorkerSlotState{
 		WorkerID:                  worker.Id,
 		WorkerTokenID:             tokenID,
@@ -692,7 +766,9 @@ func agentWorkerSlotState(config types.AppConfig, agentState *model.AgentTokenSt
 		PoolName:                  agentState.PoolName,
 		MachineID:                 agentState.MachineID,
 		Mode:                      firstNonEmpty(agentState.Mode, string(types.PoolModePrivate)),
-		ContainerRuntime:          agentWorkerRuntime(agentState, worker),
+		ContainerRuntime:          runtimeName,
+		ContainerRuntimeConfig:    poolConfig.ContainerRuntimeConfig.WithDefaults(runtimeName),
+		CPUAffinityEnforced:       cpuAffinityEnforced,
 		MarketplaceListingID:      agentState.MarketplaceListingID,
 		SellerWorkspaceID:         agentState.SellerWorkspaceID,
 		CPU:                       worker.TotalCpu,
@@ -701,13 +777,30 @@ func agentWorkerSlotState(config types.AppConfig, agentState *model.AgentTokenSt
 		GPUCount:                  worker.TotalGpuCount,
 		GPUAssignment:             strings.Join(agentState.GPUIDs, ","),
 		NetworkPrefix:             common.WorkerNetworkPrefix(config.ClusterName, agentState.MachineID),
-		WorkerImage:               agentWorkerImage(config),
-		NetworkSlotPoolSize:       agentState.NetworkSlotPoolSize,
-		ContainerStartConcurrency: agentState.ContainerStartConcurrency,
-		RequiresPoolSelector:      worker.RequiresPoolSelector,
-		Priority:                  worker.Priority,
-		Preemptable:               worker.Preemptable,
+		WorkerImage:               firstNonEmpty(agentState.WorkerImageOverride, agentWorkerImage(config)),
+		NetworkSlotPoolSize:       networkSlots,
+		ContainerStartConcurrency: startConcurrency,
+		RequiresPoolSelector:      requiresPoolSelector,
+		Priority:                  priority,
+		Preemptable:               preemptable,
 	}
+}
+
+func setAgentWorkerSlotGeneration(slot *model.AgentWorkerSlotState) error {
+	if slot == nil {
+		return fmt.Errorf("agent worker slot is unavailable")
+	}
+	copy := *slot
+	copy.Generation = ""
+	copy.CreatedAt = time.Time{}
+	copy.UpdatedAt = time.Time{}
+	data, err := json.Marshal(copy)
+	if err != nil {
+		return err
+	}
+	sum := sha256.Sum256(data)
+	slot.Generation = fmt.Sprintf("%x", sum[:])
+	return nil
 }
 
 // agentWorkerRuntime picks the container runtime for an agent worker slot.
@@ -751,12 +844,16 @@ func agentWorkerImageWithTag(config types.AppConfig, tag string) string {
 
 func agentWorkerSlotToProto(slot *model.AgentWorkerSlotState, workerToken string) *pb.AgentWorkerSlot {
 	return &pb.AgentWorkerSlot{
+		Generation:                slot.Generation,
 		WorkerId:                  slot.WorkerID,
 		WorkerToken:               workerToken,
 		PoolName:                  slot.PoolName,
 		MachineId:                 slot.MachineID,
 		Mode:                      slot.Mode,
 		ContainerRuntime:          slot.ContainerRuntime,
+		GvisorPlatform:            slot.ContainerRuntimeConfig.GVisorPlatform,
+		GvisorRoot:                slot.ContainerRuntimeConfig.GVisorRoot,
+		GvisorExtraArgs:           append([]string(nil), slot.ContainerRuntimeConfig.GVisorExtraArgs...),
 		MarketplaceListingId:      slot.MarketplaceListingID,
 		SellerWorkspaceId:         slot.SellerWorkspaceID,
 		Cpu:                       slot.CPU,
@@ -768,6 +865,7 @@ func agentWorkerSlotToProto(slot *model.AgentWorkerSlotState, workerToken string
 		WorkerImage:               slot.WorkerImage,
 		NetworkSlotPoolSize:       slot.NetworkSlotPoolSize,
 		ContainerStartConcurrency: slot.ContainerStartConcurrency,
+		CpuAffinityEnforced:       slot.CPUAffinityEnforced != nil && *slot.CPUAffinityEnforced,
 		RequiresPoolSelector:      slot.RequiresPoolSelector,
 		Priority:                  slot.Priority,
 		PrioritySet:               true,
@@ -886,7 +984,7 @@ func (s *Service) UpdateAgentAvailability(ctx context.Context, in *pb.UpdateAgen
 
 func (s *Service) agentBootstrapConfig(ctx context.Context, workspaceID string, poolState *model.PoolState) (*pb.AgentBootstrapConfig, error) {
 	config := normalizePoolConfig(poolState.Config)
-	telemetryConfig, err := s.scopedTelemetryConfig(ctx, workspaceID)
+	telemetryConfig, err := s.agentTelemetryConfig(ctx, workspaceID, poolState.ManagementSource != "")
 	if err != nil {
 		return nil, err
 	}

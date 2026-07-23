@@ -121,7 +121,7 @@ type JoinTokenState struct {
 	WorkspaceID          string    `json:"workspace_id"`
 	PoolName             string    `json:"pool_name"`
 	MachineID            string    `json:"machine_id,omitempty"`
-	CreatedByTokenID     string    `json:"created_by_token_id"`
+	PoolCreatedAt        time.Time `json:"pool_created_at,omitempty"`
 	CreatedAt            time.Time `json:"created_at"`
 	Mode                 string    `json:"mode,omitempty"`
 	MarketplaceListingID string    `json:"marketplace_listing_id,omitempty"`
@@ -158,6 +158,8 @@ type AgentTokenState struct {
 	Executor                  string                `json:"executor"`
 	NetworkSlotPoolSize       uint32                `json:"network_slot_pool_size"`
 	ContainerStartConcurrency uint32                `json:"container_start_concurrency"`
+	WorkerImageOverride       string                `json:"worker_image_override,omitempty"`
+	Cordoned                  bool                  `json:"cordoned,omitempty"`
 	Schedulable               bool                  `json:"schedulable"`
 	AvailabilityReason        string                `json:"availability_reason,omitempty"`
 	AvailabilityUpdatedAt     time.Time             `json:"availability_updated_at,omitempty"`
@@ -196,30 +198,33 @@ type AgentPathMetric struct {
 }
 
 type AgentWorkerSlotState struct {
-	WorkerID                  string    `json:"worker_id"`
-	WorkerTokenID             string    `json:"worker_token_id"`
-	WorkerTokenHash           string    `json:"worker_token_hash"`
-	WorkspaceID               string    `json:"workspace_id"`
-	PoolName                  string    `json:"pool_name"`
-	MachineID                 string    `json:"machine_id"`
-	Mode                      string    `json:"mode,omitempty"`
-	ContainerRuntime          string    `json:"container_runtime,omitempty"`
-	MarketplaceListingID      string    `json:"marketplace_listing_id,omitempty"`
-	SellerWorkspaceID         string    `json:"seller_workspace_id,omitempty"`
-	CPU                       int64     `json:"cpu"`
-	Memory                    int64     `json:"memory"`
-	GPU                       string    `json:"gpu"`
-	GPUCount                  uint32    `json:"gpu_count"`
-	GPUAssignment             string    `json:"gpu_assignment"`
-	NetworkPrefix             string    `json:"network_prefix"`
-	WorkerImage               string    `json:"worker_image"`
-	NetworkSlotPoolSize       uint32    `json:"network_slot_pool_size"`
-	ContainerStartConcurrency uint32    `json:"container_start_concurrency"`
-	RequiresPoolSelector      bool      `json:"requires_pool_selector"`
-	Priority                  int32     `json:"priority"`
-	Preemptable               bool      `json:"preemptable"`
-	CreatedAt                 time.Time `json:"created_at"`
-	UpdatedAt                 time.Time `json:"updated_at"`
+	Generation                string              `json:"generation"`
+	WorkerID                  string              `json:"worker_id"`
+	WorkerTokenID             string              `json:"worker_token_id"`
+	WorkerTokenHash           string              `json:"worker_token_hash"`
+	WorkspaceID               string              `json:"workspace_id"`
+	PoolName                  string              `json:"pool_name"`
+	MachineID                 string              `json:"machine_id"`
+	Mode                      string              `json:"mode,omitempty"`
+	ContainerRuntime          string              `json:"container_runtime,omitempty"`
+	ContainerRuntimeConfig    types.RuntimeConfig `json:"container_runtime_config,omitempty"`
+	CPUAffinityEnforced       *bool               `json:"cpu_affinity_enforced,omitempty"`
+	MarketplaceListingID      string              `json:"marketplace_listing_id,omitempty"`
+	SellerWorkspaceID         string              `json:"seller_workspace_id,omitempty"`
+	CPU                       int64               `json:"cpu"`
+	Memory                    int64               `json:"memory"`
+	GPU                       string              `json:"gpu"`
+	GPUCount                  uint32              `json:"gpu_count"`
+	GPUAssignment             string              `json:"gpu_assignment"`
+	NetworkPrefix             string              `json:"network_prefix"`
+	WorkerImage               string              `json:"worker_image"`
+	NetworkSlotPoolSize       uint32              `json:"network_slot_pool_size"`
+	ContainerStartConcurrency uint32              `json:"container_start_concurrency"`
+	RequiresPoolSelector      bool                `json:"requires_pool_selector"`
+	Priority                  int32               `json:"priority"`
+	Preemptable               bool                `json:"preemptable"`
+	CreatedAt                 time.Time           `json:"created_at"`
+	UpdatedAt                 time.Time           `json:"updated_at"`
 }
 
 type PreflightCheckState struct {

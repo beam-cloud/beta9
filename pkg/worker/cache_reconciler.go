@@ -23,6 +23,7 @@ package worker
 import (
 	"compress/gzip"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -709,7 +710,6 @@ const (
 type stubCodeEntry struct {
 	path      string
 	lastUsed  time.Time
-	sizeBytes int64
 	temporary bool
 }
 
@@ -763,12 +763,13 @@ func pruneStubCodeCache(root string, ttl time.Duration) (int, int64) {
 		} else if entry.lastUsed.After(cutoff) {
 			continue
 		}
+		sizeBytes := dirSizeBytesRecursive(entry.path)
 		if err := os.RemoveAll(entry.path); err != nil {
 			log.Debug().Err(err).Str("path", entry.path).Msg("failed to prune stub-code cache entry")
 			continue
 		}
 		pruned++
-		freed += entry.sizeBytes
+		freed += sizeBytes
 	}
 	return pruned, freed
 }
@@ -788,12 +789,13 @@ func pressureEvictStubCodeCache(root string, bytesToFree int64) (int, int64) {
 		if entry.temporary && entry.lastUsed.After(tempCutoff) {
 			continue
 		}
+		sizeBytes := dirSizeBytesRecursive(entry.path)
 		if err := os.RemoveAll(entry.path); err != nil {
 			log.Debug().Err(err).Str("path", entry.path).Msg("failed to pressure-evict stub-code cache entry")
 			continue
 		}
 		evicted++
-		freed += entry.sizeBytes
+		freed += sizeBytes
 	}
 	return evicted, freed
 }
@@ -814,9 +816,8 @@ func listStubCodeEntries(root string) []stubCodeEntry {
 			continue
 		}
 		item := stubCodeEntry{
-			path:      path,
-			lastUsed:  info.ModTime(),
-			sizeBytes: dirSizeBytesRecursive(path),
+			path:     path,
+			lastUsed: info.ModTime(),
 		}
 		if strings.Contains(entry.Name(), ".tmp.") {
 			item.temporary = true
@@ -1498,12 +1499,11 @@ func (m *WorkerCacheManager) extractCheckpointArchive(ctx context.Context, serve
 	if checkpointMaterialized(checkpointPath) {
 		return nil
 	}
-	archivePath := filepath.Join(m.checkpointRoot, item.CheckpointID+checkpointArchiveExtension)
-	if err := writeLocalCacheContentFile(ctx, server, archivePath, item.Hash, item.SizeBytes); err != nil {
-		return err
+	if server == nil {
+		return fmt.Errorf("cache server is unavailable")
 	}
-	defer os.Remove(archivePath)
-	return materializeCheckpointArchive(archivePath, checkpointPath, item.CheckpointID)
+	reader := newCheckpointCacheReader(ctx, item.Hash, item.SizeBytes, server.ReadContentInto)
+	return materializeCheckpointReader(ctx, reader, item.Hash, item.SizeBytes, checkpointPath, item.CheckpointID, nil)
 }
 
 // materializeWorkspaceObject fetches a workspace object from object storage using

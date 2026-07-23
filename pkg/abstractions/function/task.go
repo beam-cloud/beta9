@@ -155,10 +155,9 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated, tas
 
 	mounts, err := abstractions.ConfigureContainerRequestMounts(
 		t.containerId,
-		stub.Object.ExternalId,
+		stub,
 		&stub.Workspace,
 		stubConfig,
-		stub.ExternalId,
 	)
 	if err != nil {
 		return err

@@ -474,7 +474,7 @@ def delete_volume(service: ServiceClient, name: str):
         "refer to this volume should be updated before it is deleted."
     )
 
-    if terminal.prompt(text="Are you sure? (y/n)", default="n") not in ["y", "yes"]:
+    if not terminal.confirm("Are you sure?", default=False):
         return
 
     res: DeleteVolumeResponse

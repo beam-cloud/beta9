@@ -24,6 +24,9 @@ FROM golang:1.23-bookworm AS runc
 
 WORKDIR /workspace
 
+COPY docker/patches/runc/runc-criu-production-log-level.patch /tmp/runc-criu-production-log-level.patch
+COPY docker/patches/runc/runc-criu-cpu-compatibility.patch /tmp/runc-criu-cpu-compatibility.patch
+
 RUN apt-get update && apt-get install -y \
     make \
     btrfs-progs \
@@ -42,7 +45,11 @@ RUN <<EOT
 set -eux
 git clone -b dlm/force-compat-mode-on-restore https://github.com/beam-cloud/runc.git /workspace/runc \
   && cd /workspace/runc \
-  && git reset --hard d85a78033ba2905f5c57afdc81b73a12be72c03c
+  && git reset --hard d85a78033ba2905f5c57afdc81b73a12be72c03c \
+  && git apply --check /tmp/runc-criu-production-log-level.patch \
+  && git apply /tmp/runc-criu-production-log-level.patch \
+  && git apply --check /tmp/runc-criu-cpu-compatibility.patch \
+  && git apply /tmp/runc-criu-cpu-compatibility.patch
 
 cd /workspace/runc
 make
@@ -78,7 +85,10 @@ EOT
 FROM debian:bookworm AS gvisor
 
 ARG TARGETARCH
-ARG GVISOR_VERSION=20260520.0
+ARG GVISOR_VERSION=20260714.0
+# beam-cloud/gvisor@5e447de02f83f59b0517ce44979a816a996a5f96
+ARG GVISOR_AMD64_RELEASE=release-20260714.0-beam.3
+ARG GVISOR_AMD64_SHA512=b2836a6760b0d38c797c4674041eaaa3b1494f390c24b03c9cf67f21e822fdcf56faf96a7b7c5b55883149454fa1cf52a3ae3ab0170af8ac422212d6159b7f93
 
 WORKDIR /tmp
 
@@ -90,15 +100,25 @@ set -eux
 # Determine the correct architecture for gVisor
 if [ "$TARGETARCH" = "amd64" ]; then
     GVISOR_ARCH="x86_64"
+    GVISOR_BASE_URL="https://github.com/beam-cloud/gvisor/releases/download/${GVISOR_AMD64_RELEASE}"
+    RUNSC_URL="${GVISOR_BASE_URL}/runsc.${GVISOR_ARCH}"
+    RUNSC_SHA512="$GVISOR_AMD64_SHA512"
 elif [ "$TARGETARCH" = "arm64" ]; then
     GVISOR_ARCH="aarch64"
+    GVISOR_BASE_URL="https://storage.googleapis.com/gvisor/releases/release/${GVISOR_VERSION}/${GVISOR_ARCH}"
+    RUNSC_URL="${GVISOR_BASE_URL}/runsc"
+    RUNSC_SHA512_URL="${RUNSC_URL}.sha512"
 else
     echo "Unsupported architecture: $TARGETARCH" && exit 1
 fi
 
 # Download runsc and its checksum to /tmp
-curl -fsSL https://storage.googleapis.com/gvisor/releases/release/${GVISOR_VERSION}/${GVISOR_ARCH}/runsc -o /tmp/runsc
-curl -fsSL https://storage.googleapis.com/gvisor/releases/release/${GVISOR_VERSION}/${GVISOR_ARCH}/runsc.sha512 -o /tmp/runsc.sha512
+curl -fsSL "$RUNSC_URL" -o /tmp/runsc
+if [ -n "${RUNSC_SHA512:-}" ]; then
+    printf '%s  runsc\n' "$RUNSC_SHA512" > /tmp/runsc.sha512
+else
+    curl -fsSL "$RUNSC_SHA512_URL" -o /tmp/runsc.sha512
+fi
 
 # Verify checksum (cd to /tmp where both files are)
 cd /tmp && sha512sum -c runsc.sha512
@@ -116,12 +136,16 @@ EOT
 # ========================
 FROM golang:1.23-bookworm AS nvidia-container-toolkit
 
+ARG NVIDIA_CONTAINER_TOOLKIT_COMMIT=df7cc6c99980c04837a5ddb8ae34ce2211fc9126
+
 WORKDIR /workspace
 
 RUN apt-get update && apt-get install -y build-essential
 
 RUN <<EOT
+set -eux
 git clone https://github.com/beam-cloud/nvidia-container-toolkit.git .
+git reset --hard ${NVIDIA_CONTAINER_TOOLKIT_COMMIT}
 make build
 make binaries
 EOT
@@ -158,9 +182,11 @@ WORKDIR /workspace
 
 RUN apt-get update && \
     apt-get install -y curl gpg && \
-    curl -fsSL https://nvidia.github.io/nvidia-container-runtime/gpgkey | apt-key add - && \
-    curl -s -L https://nvidia.github.io/nvidia-docker/ubuntu22.04/nvidia-docker.list | tee /etc/apt/sources.list.d/nvidia-docker.list && \
-    curl -fsSL https://nvidia.github.io/nvidia-container-runtime/ubuntu22.04/nvidia-container-runtime.list | tee /etc/apt/sources.list.d/nvidia-container-runtime.list && \
+    curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | \
+        gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg && \
+    curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+        sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+        tee /etc/apt/sources.list.d/nvidia-container-toolkit.list && \
     apt-get update && \
     apt-get install -y psmisc tini iproute2 iptables
 
@@ -230,6 +256,11 @@ RUN echo 'unqualified-search-registries = ["docker.io"]' > /etc/containers/regis
 ARG CEDANA_VERSION=0.9.240
 ARG CEDANA_BASE_URL=""
 ARG CEDANA_TOKEN=""
+ARG CRIU_COMMIT=b47c692bb3a73ae45ee1c4ab215a8f6869d40efd
+COPY docker/patches/criu/criu-network-remap.patch /tmp/criu-network-remap.patch
+COPY docker/patches/criu/criu-skip-non-cuda-resume.patch /tmp/criu-skip-non-cuda-resume.patch
+COPY docker/patches/criu/criu-skip-fresh-zero-pages.patch /tmp/criu-skip-fresh-zero-pages.patch
+COPY docker/patches/criu/criu-ignore-erms-compat.patch /tmp/criu-ignore-erms-compat.patch
 
 RUN <<EOT
 set -eux
@@ -246,6 +277,7 @@ if [ "$(uname -m)" = "x86_64" ] || [ "$(uname -m)" = "aarch64" ]; then
         uuid-dev \
         gnutls-dev \
         libnftables-dev \
+        liblz4-dev \
         pkg-config \
         protobuf-c-compiler \
         protobuf-compiler \
@@ -253,6 +285,15 @@ if [ "$(uname -m)" = "x86_64" ] || [ "$(uname -m)" = "aarch64" ]; then
         git
     git clone https://github.com/checkpoint-restore/criu.git
     cd criu
+    git reset --hard ${CRIU_COMMIT}
+    git apply --check --unidiff-zero /tmp/criu-network-remap.patch
+    git apply --unidiff-zero /tmp/criu-network-remap.patch
+    git apply --check --unidiff-zero /tmp/criu-skip-non-cuda-resume.patch
+    git apply --unidiff-zero /tmp/criu-skip-non-cuda-resume.patch
+    git apply --check /tmp/criu-skip-fresh-zero-pages.patch
+    git apply /tmp/criu-skip-fresh-zero-pages.patch
+    git apply --check /tmp/criu-ignore-erms-compat.patch
+    git apply /tmp/criu-ignore-erms-compat.patch
 
     if [ "$(uname -m)" = "x86_64" ]; then
         make install-lib install-criu install-compel install-cuda_plugin PREFIX=/usr SKIP_PIP_INSTALL=1
@@ -261,9 +302,15 @@ if [ "$(uname -m)" = "x86_64" ] || [ "$(uname -m)" = "aarch64" ]; then
         make install-lib install-criu install-compel PREFIX=/usr SKIP_PIP_INSTALL=1
     fi
     criu --version
+    ldd "$(command -v criu)" | grep -q liblz4
     cd .. && rm -rf criu
 fi
 EOT
+
+RUN mkdir -p /etc/criu && printf '%s\n' \
+    'compress-region 262144' \
+    'decompress-threads 32' \
+    > /etc/criu/runc.conf
 
 # Hard-disable any AMDGPU plugin that might exist from base layers or future package updates
 RUN mkdir -p /usr/lib/criu/plugins.disabled && \
@@ -283,11 +330,15 @@ RUN MOUNT_S3_URL=$(if [ "$TARGETARCH" = "arm64" ]; then echo $MOUNT_S3_URL_ARM64
     mv mount-s3/bin/mount-s3 /usr/local/bin/ms3 && chmod +x /usr/local/bin/ms3 && \
     rm -rf mount-s3 $TARBALL
 
+ARG CUDA_CHECKPOINT_COMMIT=00d5cce84c628088d6caa203fc4af40c1538b6f7
+ARG CUDA_CHECKPOINT_SHA256=707fa7f54136824d6c1d6dd724b9b1717610f831033c00d06da474de363a06db
+
 RUN <<EOT
 set -eux
 case "$TARGETARCH" in
     amd64)
-        curl -fsSL https://github.com/NVIDIA/cuda-checkpoint/raw/refs/heads/main/bin/x86_64_Linux/cuda-checkpoint -o /usr/local/bin/cuda-checkpoint
+        curl -fsSL https://raw.githubusercontent.com/NVIDIA/cuda-checkpoint/${CUDA_CHECKPOINT_COMMIT}/bin/x86_64_Linux/cuda-checkpoint -o /usr/local/bin/cuda-checkpoint
+        echo "${CUDA_CHECKPOINT_SHA256}  /usr/local/bin/cuda-checkpoint" | sha256sum -c -
         chmod +x /usr/local/bin/cuda-checkpoint
         ;;
     arm64)
@@ -315,7 +366,7 @@ RUN apt-get remove -y curl && \
 ENV BUILDAH_RUNTIME=/usr/local/sbin/runc
 
 RUN mkdir -p /workspace/etc
-RUN echo "nameserver 8.8.8.8" > /workspace/etc/resolv.conf
+RUN printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\nnameserver 9.9.9.9\noptions timeout:2 attempts:2\n' > /workspace/etc/resolv.conf
 RUN echo '127.0.0.1 localhost' > /workspace/etc/hosts
 RUN echo 'hosts: files dns' > /workspace/etc/nsswitch.conf
 COPY ./bin/beta9-cli /usr/local/bin/beta9

@@ -330,6 +330,34 @@ func (c *imageContentCache) ReadContentInto(hash string, offset int64, dest []by
 	return read, nil
 }
 
+func (c *imageContentCache) GetContentStream(hash string, opts struct{ RoutingKey string }) (<-chan []byte, int64, error) {
+	if c == nil || c.client == nil {
+		return nil, 0, cache.ErrClientNotFound
+	}
+	if opts.RoutingKey == "" {
+		opts.RoutingKey = hash
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), imageContentCacheReadTimeout)
+	defer cancel()
+	metadata, err := c.client.CacheFSMetadata(ctx, imageLayerContentCachePath(hash))
+	if err != nil {
+		return nil, 0, imageContentCacheError(err)
+	}
+	size := int64(metadata.Size)
+	if metadata.Hash != hash || size <= 0 {
+		return nil, 0, fmt.Errorf("%w: incomplete image layer metadata", clipStorage.ErrContentCacheMiss)
+	}
+
+	chunks, err := c.client.GetContentStream(hash, 0, size, struct{ RoutingKey string }{RoutingKey: opts.RoutingKey})
+	if err != nil {
+		return nil, 0, imageContentCacheError(err)
+	}
+	return chunks, size, nil
+}
+
+var _ clipStorage.ContentCacheStream = (*imageContentCache)(nil)
+
 func imageContentCacheError(err error) error {
 	if err == nil {
 		return nil

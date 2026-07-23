@@ -26,6 +26,7 @@ func TestSetContainerStateWithConcurrencyLimitSkipsLockWithoutQuota(t *testing.T
 		ContainerId: "sandbox-test-stub-00000000",
 		StubId:      "test-stub",
 		WorkspaceId: "test-workspace",
+		MachineId:   "machine-1",
 		Cpu:         100,
 		Memory:      128,
 		Stub: types.StubWithRelated{
@@ -60,6 +61,9 @@ func TestSetContainerStateWithConcurrencyLimitSkipsLockWithoutQuota(t *testing.T
 	}
 	if state.Status != types.ContainerStatusPending {
 		t.Fatalf("expected pending state, got %s", state.Status)
+	}
+	if state.MachineId != request.MachineId {
+		t.Fatalf("expected pending state on machine %q, got %q", request.MachineId, state.MachineId)
 	}
 }
 
@@ -115,6 +119,47 @@ func TestSetContainerStateCommitsIndexesWithState(t *testing.T) {
 	if len(byWorkspace) != 1 || byWorkspace[0].ContainerId != state.ContainerId {
 		t.Fatalf("expected workspace index to return container %q, got %+v", state.ContainerId, byWorkspace)
 	}
+}
+
+func TestContainerFailureRetentionAndCooldown(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repo := NewContainerRedisRepositoryForTest(rdb)
+	for containerID, exitCode := range map[string]int{
+		"container-success": int(types.ContainerExitCodeSuccess),
+		"container-failure": int(types.ContainerExitCodeUnknownError),
+	} {
+		if err := repo.SetContainerExitCode(containerID, exitCode); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	assertTTL := func(containerID string, want time.Duration) {
+		t.Helper()
+		got, err := rdb.TTL(context.Background(), common.RedisKeys.SchedulerContainerExitCode(containerID)).Result()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Fatalf("%s exit code TTL = %s, want %s", containerID, got, want)
+		}
+	}
+
+	assertTTL("container-success", types.ContainerExitCodeTTL)
+	assertTTL("container-failure", types.ContainerFailureHistoryTTL)
+
+	if err := repo.SetContainerFailureCooldown([]string{"container-failure"}); err != nil {
+		t.Fatal(err)
+	}
+	assertTTL("container-failure", types.ContainerFailureCooldown)
+
+	if err := repo.SetContainerFailureCooldown([]string{"container-failure"}); err != nil {
+		t.Fatal(err)
+	}
+	assertTTL("container-failure", types.ContainerFailureCooldown)
 }
 
 func TestSetContainerStateWithConcurrencyLimitUsesAtomicReservationAfterInit(t *testing.T) {
@@ -334,6 +379,70 @@ func TestUpdateContainerStatusDoesNotMoveStoppingBackToRunning(t *testing.T) {
 	}
 	if state.Status != types.ContainerStatusStopping {
 		t.Fatalf("expected STOPPING status to win over late RUNNING update, got %s", state.Status)
+	}
+}
+
+func TestMarkPendingContainerStoppingIfUnassigned(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repo := NewContainerRedisRepositoryForTest(rdb)
+	for _, test := range []struct {
+		name     string
+		state    *types.ContainerState
+		expected bool
+	}{
+		{
+			name: "unassigned pending container",
+			state: &types.ContainerState{
+				ContainerId: "pending-unassigned",
+				Status:      types.ContainerStatusPending,
+			},
+			expected: true,
+		},
+		{
+			name: "assigned pending container",
+			state: &types.ContainerState{
+				ContainerId: "pending-assigned",
+				Status:      types.ContainerStatusPending,
+				WorkerId:    "worker-1",
+			},
+		},
+		{
+			name: "running container",
+			state: &types.ContainerState{
+				ContainerId: "running",
+				Status:      types.ContainerStatusRunning,
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := repo.SetContainerState(test.state.ContainerId, test.state); err != nil {
+				t.Fatal(err)
+			}
+
+			marked, err := repo.MarkPendingContainerStoppingIfUnassigned(test.state.ContainerId, types.ContainerStateTtlSWhilePending)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if marked != test.expected {
+				t.Fatalf("expected marked=%t, got %t", test.expected, marked)
+			}
+
+			state, err := repo.GetContainerState(test.state.ContainerId)
+			if err != nil {
+				t.Fatal(err)
+			}
+			expectedStatus := test.state.Status
+			if test.expected {
+				expectedStatus = types.ContainerStatusStopping
+			}
+			if state.Status != expectedStatus {
+				t.Fatalf("expected status %s, got %s", expectedStatus, state.Status)
+			}
+		})
 	}
 }
 

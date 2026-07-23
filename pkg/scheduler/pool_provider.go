@@ -31,10 +31,9 @@ const (
 	externalWorkerNamespace string = "default"
 )
 
-// LegacyExternalWorkerPoolController manages the deprecated remote-k3s worker
-// pools. New externally attached machines are managed by
-// AgentWorkerPoolController in pool_external.go.
-type LegacyExternalWorkerPoolController struct {
+// ProviderWorkerPoolController manages provider-backed external pools whose
+// workers run in a remote Kubernetes cluster.
+type ProviderWorkerPoolController struct {
 	ctx              context.Context
 	name             string
 	config           types.AppConfig
@@ -51,7 +50,7 @@ type LegacyExternalWorkerPoolController struct {
 	workspace        *types.Workspace
 }
 
-func NewLegacyExternalWorkerPoolController(opts WorkerPoolControllerOptions) (WorkerPoolController, error) {
+func NewProviderWorkerPoolController(opts WorkerPoolControllerOptions) (WorkerPoolController, error) {
 	var provider providers.Provider = nil
 	var err error = nil
 
@@ -80,7 +79,7 @@ func NewLegacyExternalWorkerPoolController(opts WorkerPoolControllerOptions) (Wo
 	}
 
 	workerPoolConfig := opts.Config.Worker.Pools[workerPoolName]
-	wpc := &LegacyExternalWorkerPoolController{
+	wpc := &ProviderWorkerPoolController{
 		ctx:              opts.Context,
 		name:             workerPoolName,
 		config:           opts.Config,
@@ -127,35 +126,35 @@ func NewLegacyExternalWorkerPoolController(opts WorkerPoolControllerOptions) (Wo
 	return wpc, nil
 }
 
-func (wpc *LegacyExternalWorkerPoolController) Context() context.Context {
+func (wpc *ProviderWorkerPoolController) Context() context.Context {
 	return wpc.ctx
 }
 
-func (wpc *LegacyExternalWorkerPoolController) IsPreemptable() bool {
+func (wpc *ProviderWorkerPoolController) IsPreemptable() bool {
 	return wpc.workerPoolConfig.Preemptable
 }
 
-func (wpc *LegacyExternalWorkerPoolController) State() (*types.WorkerPoolState, error) {
+func (wpc *ProviderWorkerPoolController) State() (*types.WorkerPoolState, error) {
 	return wpc.workerPoolRepo.GetWorkerPoolState(wpc.ctx, wpc.name)
 }
 
-func (wpc *LegacyExternalWorkerPoolController) Mode() types.PoolMode {
+func (wpc *ProviderWorkerPoolController) Mode() types.PoolMode {
 	return wpc.workerPoolConfig.Mode
 }
 
-func (wpc *LegacyExternalWorkerPoolController) Name() string {
+func (wpc *ProviderWorkerPoolController) Name() string {
 	return wpc.name
 }
 
-func (wpc *LegacyExternalWorkerPoolController) ContainerRuntime() string {
+func (wpc *ProviderWorkerPoolController) ContainerRuntime() string {
 	return wpc.workerPoolConfig.ContainerRuntime
 }
 
-func (wpc *LegacyExternalWorkerPoolController) RequiresPoolSelector() bool {
+func (wpc *ProviderWorkerPoolController) RequiresPoolSelector() bool {
 	return wpc.workerPoolConfig.RequiresPoolSelector
 }
 
-func (wpc *LegacyExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuCount uint32) (*types.Worker, error) {
+func (wpc *ProviderWorkerPoolController) AddWorker(cpu int64, memory int64, gpuCount uint32) (*types.Worker, error) {
 	workerId := GenerateWorkerId()
 
 	machines, err := wpc.providerRepo.ListAllMachines(wpc.provider.GetName(), wpc.name, true)
@@ -219,7 +218,7 @@ func (wpc *LegacyExternalWorkerPoolController) AddWorker(cpu int64, memory int64
 	return worker, nil
 }
 
-func (wpc *LegacyExternalWorkerPoolController) AddWorkerToMachine(cpu int64, memory int64, gpuType string, gpuCount uint32, machineId string) (*types.Worker, error) {
+func (wpc *ProviderWorkerPoolController) AddWorkerToMachine(cpu int64, memory int64, gpuType string, gpuCount uint32, machineId string) (*types.Worker, error) {
 	workerId := GenerateWorkerId()
 
 	machine, err := wpc.providerRepo.GetMachine(wpc.provider.GetName(), wpc.name, machineId)
@@ -235,7 +234,7 @@ func (wpc *LegacyExternalWorkerPoolController) AddWorkerToMachine(cpu int64, mem
 	return worker, nil
 }
 
-func (wpc *LegacyExternalWorkerPoolController) attemptToAssignWorkerToMachine(workerId string, cpu int64, memory int64, gpuType string, gpuCount uint32, machine *types.ProviderMachine) (*types.Worker, error) {
+func (wpc *ProviderWorkerPoolController) attemptToAssignWorkerToMachine(workerId string, cpu int64, memory int64, gpuType string, gpuCount uint32, machine *types.ProviderMachine) (*types.Worker, error) {
 	err := wpc.providerRepo.SetMachineLock(wpc.provider.GetName(), wpc.name, machine.State.MachineId)
 	if err != nil {
 		return nil, err
@@ -261,7 +260,7 @@ func (wpc *LegacyExternalWorkerPoolController) attemptToAssignWorkerToMachine(wo
 		remainingMachineGpuCount -= uint32(worker.TotalGpuCount)
 	}
 
-	if remainingMachineCpu >= int64(cpu) && remainingMachineMemory >= int64(memory) && legacyMachineGPUCompatible(machine.State.Gpu, gpuType, gpuCount) && remainingMachineGpuCount >= gpuCount {
+	if remainingMachineCpu >= int64(cpu) && remainingMachineMemory >= int64(memory) && providerMachineGPUCompatible(machine.State.Gpu, gpuType, gpuCount) && remainingMachineGpuCount >= gpuCount {
 		log.Info().Str("machine_id", machine.State.MachineId).Str("hostname", machine.State.HostName).Msg("using existing machine")
 
 		// If there is only one GPU available on the machine, give the worker access to everything
@@ -284,7 +283,7 @@ func (wpc *LegacyExternalWorkerPoolController) attemptToAssignWorkerToMachine(wo
 	return nil, nil
 }
 
-func (wpc *LegacyExternalWorkerPoolController) createWorkerOnMachine(workerId, machineId string, machineState *types.ProviderMachineState, cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error) {
+func (wpc *ProviderWorkerPoolController) createWorkerOnMachine(workerId, machineId string, machineState *types.ProviderMachineState, cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error) {
 	if wpc.workspace == nil {
 		adminWorkspace, err := wpc.backendRepo.GetAdminWorkspace(wpc.ctx)
 		if err != nil {
@@ -329,7 +328,7 @@ func (wpc *LegacyExternalWorkerPoolController) createWorkerOnMachine(workerId, m
 	return worker, nil
 }
 
-func (wpc *LegacyExternalWorkerPoolController) createWorkerJob(workerId, machineId string, cpu int64, memory int64, gpuType string, gpuCount uint32, token string) (*batchv1.Job, *types.Worker, error) {
+func (wpc *ProviderWorkerPoolController) createWorkerJob(workerId, machineId string, cpu int64, memory int64, gpuType string, gpuCount uint32, token string) (*batchv1.Job, *types.Worker, error) {
 	jobName := fmt.Sprintf("%s-%s-%s", Beta9WorkerJobPrefix, wpc.name, workerId)
 	labels := map[string]string{
 		"app":                       Beta9WorkerLabelValue,
@@ -437,7 +436,7 @@ func (wpc *LegacyExternalWorkerPoolController) createWorkerJob(workerId, machine
 	}, nil
 }
 
-func (wpc *LegacyExternalWorkerPoolController) getWorkerEnvironment(workerId, machineId string, cpu int64, memory int64, gpuType string, gpuCount uint32, token string) ([]corev1.EnvVar, error) {
+func (wpc *ProviderWorkerPoolController) getWorkerEnvironment(workerId, machineId string, cpu int64, memory int64, gpuType string, gpuCount uint32, token string) ([]corev1.EnvVar, error) {
 	// HOTFIX: clean up the way we pass tailscale hostname to remote worker
 	podHostname := fmt.Sprintf("machine-%s.%s", machineId, wpc.config.Tailscale.HostName)
 	if wpc.config.Tailscale.User != "" {
@@ -553,7 +552,7 @@ func (wpc *LegacyExternalWorkerPoolController) getWorkerEnvironment(workerId, ma
 	return envVars, nil
 }
 
-func (wpc *LegacyExternalWorkerPoolController) getWorkerVolumes(workerMemory int64) []corev1.Volume {
+func (wpc *ProviderWorkerPoolController) getWorkerVolumes(workerMemory int64) []corev1.Volume {
 	hostPathType := corev1.HostPathDirectoryOrCreate
 	sharedMemoryLimit := calculateMemoryQuantity(wpc.workerPoolConfig.PoolSizing.SharedMemoryLimitPct, workerMemory)
 	tmpSizeLimit := parseTmpSizeLimit(wpc.workerPoolConfig.TmpSizeLimit, wpc.config.Worker.TmpSizeLimit)
@@ -635,7 +634,7 @@ func (wpc *LegacyExternalWorkerPoolController) getWorkerVolumes(workerMemory int
 	return volumes
 }
 
-func (wpc *LegacyExternalWorkerPoolController) getWorkerVolumeMounts() []corev1.VolumeMount {
+func (wpc *ProviderWorkerPoolController) getWorkerVolumeMounts() []corev1.VolumeMount {
 	volumeMounts := []corev1.VolumeMount{
 		{
 			Name:      tmpVolumeName,
@@ -684,7 +683,7 @@ func (wpc *LegacyExternalWorkerPoolController) getWorkerVolumeMounts() []corev1.
 	return volumeMounts
 }
 
-func (wpc *LegacyExternalWorkerPoolController) getProxiedClient(hostname, token string) (*kubernetes.Clientset, error) {
+func (wpc *ProviderWorkerPoolController) getProxiedClient(hostname, token string) (*kubernetes.Clientset, error) {
 	// Create a custom transport to skip tls & use tsnet for dialing
 	transport := &http.Transport{
 		DialContext:     wpc.tailscale.Dial,
@@ -708,11 +707,11 @@ func (wpc *LegacyExternalWorkerPoolController) getProxiedClient(hostname, token 
 	return kubeClient, nil
 }
 
-func (wpc *LegacyExternalWorkerPoolController) FreeCapacity() (*WorkerPoolCapacity, error) {
+func (wpc *ProviderWorkerPoolController) FreeCapacity() (*WorkerPoolCapacity, error) {
 	return freePoolCapacity(wpc.workerRepo, wpc.name)
 }
 
-func (wpc *LegacyExternalWorkerPoolController) monitorAndCleanupWorkers() {
+func (wpc *ProviderWorkerPoolController) monitorAndCleanupWorkers() {
 	cleaner := WorkerResourceCleaner{
 		PoolName:   wpc.name,
 		Config:     wpc.config.Worker,
@@ -733,11 +732,11 @@ func (wpc *LegacyExternalWorkerPoolController) monitorAndCleanupWorkers() {
 	}
 }
 
-func legacyMachineGPUCompatible(machineGPU, requestedGPU string, requestedCount uint32) bool {
+func providerMachineGPUCompatible(machineGPU, requestedGPU string, requestedCount uint32) bool {
 	return requestedCount == 0 || requestedGPU == "" || strings.EqualFold(requestedGPU, string(types.GPU_ANY)) || strings.EqualFold(machineGPU, requestedGPU)
 }
 
-func (wpc *LegacyExternalWorkerPoolController) cleanupWorkers(cleaner *WorkerResourceCleaner) {
+func (wpc *ProviderWorkerPoolController) cleanupWorkers(cleaner *WorkerResourceCleaner) {
 	if err := wpc.workerPoolRepo.SetWorkerCleanerLock(wpc.name); err != nil {
 		return
 	}

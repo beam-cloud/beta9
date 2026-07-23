@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -556,6 +557,37 @@ func TestResolveLogStreamsUsesMultiplexedStubTaskStream(t *testing.T) {
 	}
 }
 
+func TestResolveLogStreamsHonorsExplicitTaskAndContainerScopes(t *testing.T) {
+	repo := &S2EventRepository{streamPrefix: "events"}
+	tests := []struct {
+		name  string
+		query types.LogQuery
+		want  s2.StreamName
+	}{
+		{
+			name:  "task prefers complete app aggregate",
+			query: types.LogQuery{ObjectType: types.GatewayObjectTypeTask, WorkspaceID: "workspace-123", StubID: "stub-456", AppID: "app-789", TaskID: "task-123", ContainerID: "container-abc"},
+			want:  "events/logs/workspaces/workspace-123/apps/app-789",
+		},
+		{
+			name:  "container keeps container stream with task filter",
+			query: types.LogQuery{ObjectType: types.GatewayObjectTypeContainer, WorkspaceID: "workspace-123", StubID: "stub-456", TaskID: "task-123", ContainerID: "container-abc"},
+			want:  "events/logs/workspaces/workspace-123/stubs/stub-456/containers/container-abc",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			streams, err := repo.resolveLogStreams(tt.query)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(streams) != 1 || streams[0] != tt.want {
+				t.Fatalf("streams = %q, want [%q]", streams, tt.want)
+			}
+		})
+	}
+}
+
 func TestResolveLogStreamsFallsBackToLegacyTaskStreamWithoutStub(t *testing.T) {
 	repo := &S2EventRepository{streamPrefix: "events"}
 
@@ -687,6 +719,12 @@ func TestNextTailReadWindow(t *testing.T) {
 	}
 	if offset, count := nextTailReadWindow(0, 250, 0); offset != 250 || count != 250 {
 		t.Fatalf("unexpected zero chunk window: got offset=%d count=%d want offset=250 count=250", offset, count)
+	}
+	// A historical end position skips records appended later instead of
+	// spending the 50k scan budget walking backward from the live tail.
+	start := logTailOffsetBeforeSeq(185443, 125443)
+	if offset, count := nextTailReadWindow(start, 185443, 100); start != 60000 || offset != 60100 || count != 100 {
+		t.Fatalf("unexpected positioned window: start=%d offset=%d count=%d", start, offset, count)
 	}
 }
 
@@ -1358,6 +1396,43 @@ func TestS2MetricsScanBudgetReportsExhaustion(t *testing.T) {
 	}
 }
 
+func TestReserveS2MetricsReadIsAtomic(t *testing.T) {
+	remaining := atomic.Int64{}
+	remaining.Store(s2ReadScanLimit)
+	reservations := make(chan uint64, 100)
+
+	for range 100 {
+		go func() {
+			reservations <- reserveS2MetricsRead(&remaining)
+		}()
+	}
+
+	var reserved uint64
+	for range 100 {
+		reservation := <-reservations
+		if reservation > s2MetricsReadLimit {
+			t.Fatalf("reservation = %d, want at most %d", reservation, s2MetricsReadLimit)
+		}
+		reserved += reservation
+	}
+	if reserved != s2ReadScanLimit || remaining.Load() != 0 {
+		t.Fatalf("reserved = %d, remaining = %d; want %d, 0", reserved, remaining.Load(), s2ReadScanLimit)
+	}
+}
+
+func TestPoolMetricsBucketKeyUsesContainingInterval(t *testing.T) {
+	interval := 5 * time.Minute
+	alignedEnd := time.Date(2026, 7, 14, 10, 5, 0, 0, time.UTC)
+	partialEnd := alignedEnd.Add(2 * time.Minute)
+
+	if got, want := poolMetricsBucketKey(alignedEnd, interval), alignedEnd.Add(-interval).UnixMilli(); got != want {
+		t.Fatalf("aligned bucket key = %d, want %d", got, want)
+	}
+	if got, want := poolMetricsBucketKey(partialEnd, interval), alignedEnd.UnixMilli(); got != want {
+		t.Fatalf("partial bucket key = %d, want %d", got, want)
+	}
+}
+
 func TestComputePoolSnapshotFromS2(t *testing.T) {
 	body, err := json.Marshal(map[string]any{
 		"type": types.EventComputePool,
@@ -1606,6 +1681,23 @@ func TestS2ReadEmptyRecognizesStreamNotFoundByCodeAndMessage(t *testing.T) {
 	})
 	if isS2ReadEmpty(genericNotFound) {
 		t.Fatal("generic not_found should not be treated as an empty stream read")
+	}
+}
+
+func TestS2EndPositionPastTailFallsBackToLiveTail(t *testing.T) {
+	err := &s2.RangeNotSatisfiableError{S2Error: &s2.S2Error{
+		Status: httpStatusRangeNotSatisfiable,
+		Origin: "server",
+	}}
+	offset, positionErr := logEndPositionTailOffset(100, nil, err)
+	if positionErr != nil || offset != 0 {
+		t.Fatalf("expected live-tail fallback, got offset=%d err=%v", offset, positionErr)
+	}
+
+	batch := &s2.ReadBatch{Records: []s2.SequencedRecord{{SeqNum: 40}}}
+	offset, positionErr = logEndPositionTailOffset(100, batch, nil)
+	if positionErr != nil || offset != 60 {
+		t.Fatalf("expected historical offset 60, got offset=%d err=%v", offset, positionErr)
 	}
 }
 

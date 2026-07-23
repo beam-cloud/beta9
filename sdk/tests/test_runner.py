@@ -12,9 +12,11 @@ from beta9.abstractions.function import Function, Schedule
 from beta9.abstractions.image import ImageBuildResult
 from beta9.abstractions.integrations.fastmcp import MCPServer
 from beta9.abstractions.integrations.vllm import VLLM
+from beta9.abstractions.pod import Pod
 from beta9.abstractions.sandbox import Sandbox
 from beta9.abstractions.taskqueue import TaskQueue
 from beta9.clients.gateway import GetOrCreateStubResponse
+from beta9.clients.pod import CreatePodResponse
 from beta9.sync import FileSyncResult
 from beta9.type import DurableDisk
 
@@ -140,3 +142,22 @@ class TestRunner(unittest.TestCase):
             VLLM,
         ):
             self.assertIn("disks", signature(cls.__init__).parameters, cls.__name__)
+
+    def test_pod_create_passes_machine_and_returns_management_url(self):
+        pod = Pod(entrypoint=["echo", "hello"])
+        pod.prepare_runtime = MagicMock(return_value=True)
+        pod.stub = MagicMock()
+        pod.stub.create_pod.return_value = CreatePodResponse(
+            ok=True,
+            container_id="pod-1",
+            stub_id="stub-1",
+            management_url="https://console.example/containers/pod-1",
+        )
+        pod.stub_id = "stub-1"
+        pod.print_invocation_snippet = MagicMock(return_value=MagicMock(url=""))
+
+        result = pod.create(machine_id="machine-1")
+
+        request = pod.stub.create_pod.call_args.args[0]
+        self.assertEqual(request.machine_id, "machine-1")
+        self.assertEqual(result.management_url, "https://console.example/containers/pod-1")

@@ -8,12 +8,14 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
 	"github.com/s2-streamstore/s2-sdk-go/s2"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -21,6 +23,15 @@ const (
 	maxS2LogReadLimit     = 1000
 	s2MetricsReadLimit    = 1000
 	s2ReadScanLimit       = 50000
+
+	// Ranges longer than this switch from a full sequential scan to per-bucket
+	// tail sampling; scanning every heartbeat over long windows blows through
+	// the scan budget and truncates results.
+	poolMetricsSampledSpanThreshold = 6 * time.Hour
+	// How far back from each bucket's end to sample. Must comfortably exceed
+	// the heartbeat cadence so every pool/machine reports at least once.
+	poolMetricsSampleTailWindow  = 3 * time.Minute
+	poolMetricsSampleConcurrency = 12
 )
 
 type s2MetricsScanBudget uint64
@@ -37,7 +48,28 @@ func (b s2MetricsScanBudget) state() (uint64, bool) {
 	return uint64(s2ReadScanLimit) - uint64(b), b == 0
 }
 
+func reserveS2MetricsRead(remaining *atomic.Int64) uint64 {
+	for {
+		available := remaining.Load()
+		if available <= 0 {
+			return 0
+		}
+		reserved := min(available, int64(s2MetricsReadLimit))
+		if remaining.CompareAndSwap(available, available-reserved) {
+			return uint64(reserved)
+		}
+	}
+}
+
 func (r *S2EventRepository) GetLogs(ctx context.Context, query types.LogQuery) (*types.LogsResponse, error) {
+	if query.HistoryStart != nil && (query.StartTime == nil || query.StartTime.Before(*query.HistoryStart)) {
+		start := query.HistoryStart.UTC()
+		query.StartTime = &start
+	}
+	if query.HistoryEnd != nil && (query.EndTime == nil || query.EndTime.After(*query.HistoryEnd)) {
+		end := query.HistoryEnd.UTC()
+		query.EndTime = &end
+	}
 	limit := query.Limit
 	if limit == 0 {
 		limit = defaultS2LogReadLimit
@@ -67,18 +99,26 @@ func (r *S2EventRepository) GetLogs(ctx context.Context, query types.LogQuery) (
 		response.Logs = append(response.Logs, logs...)
 	}
 
-	// Tasks that predate the multiplexed stub task stream only have log
-	// records in the legacy per-task log stream.
+	// Fall back from the app aggregate to multiplexed, then legacy task logs.
 	if response.TotalExpected == 0 && query.TaskID != "" && query.WorkspaceID != "" {
-		legacyStream := r.legacyTaskLogStreamName(query.WorkspaceID, query.TaskID)
-		if !responseReadStream(response.Streams, legacyStream) {
-			total, logs, err := r.readLogStreamPage(ctx, legacyStream, query, limit)
+		fallbacks := []s2.StreamName{r.legacyTaskLogStreamName(query.WorkspaceID, query.TaskID)}
+		if query.ObjectType == types.GatewayObjectTypeTask && query.AppID != "" && query.StubID != "" {
+			fallbacks = append([]s2.StreamName{r.stubTaskStreamName(query.WorkspaceID, query.StubID)}, fallbacks...)
+		}
+		for _, streamName := range fallbacks {
+			if responseReadStream(response.Streams, streamName) {
+				continue
+			}
+			total, logs, err := r.readLogStreamPage(ctx, streamName, query, limit)
 			if err != nil {
 				return nil, err
 			}
 			response.TotalExpected += total
-			response.Streams = append(response.Streams, string(legacyStream))
+			response.Streams = append(response.Streams, string(streamName))
 			response.Logs = append(response.Logs, logs...)
+			if response.TotalExpected > 0 {
+				break
+			}
 		}
 	}
 
@@ -157,8 +197,17 @@ func (r *S2EventRepository) GetPoolMetricsTimeseries(ctx context.Context, query 
 		return nil, fmt.Errorf("invalid pool metrics interval %q", interval)
 	}
 
+	// Long windows sample each bucket's tail instead of scanning every
+	// heartbeat; a week of 5s heartbeats is millions of records.
+	sampled := end.Sub(start) > poolMetricsSampledSpanThreshold
+
+	readStream := r.getPoolMetricsTimeseries
+	if sampled {
+		readStream = r.getPoolMetricsTimeseriesSampled
+	}
+
 	scanBudget := s2MetricsScanBudget(s2ReadScanLimit)
-	response, scanBudget, err = r.getPoolMetricsTimeseries(ctx, r.workspacePoolMetricsStreamName(query.WorkspaceID), start, end, bucketSize, scanBudget)
+	response, scanBudget, err = readStream(ctx, r.workspacePoolMetricsStreamName(query.WorkspaceID), start, end, bucketSize, scanBudget)
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +219,7 @@ func (r *S2EventRepository) GetPoolMetricsTimeseries(ctx context.Context, query 
 		// The dedicated stream is new. Fill any prefix written before rollout
 		// from the workspace stream; once the requested range is fully covered,
 		// this fallback disappears without a migration flag.
-		legacy, remaining, err := r.getPoolMetricsTimeseries(ctx, r.workspaceStreamName(query.WorkspaceID), start, legacyEnd, bucketSize, scanBudget)
+		legacy, remaining, err := readStream(ctx, r.workspaceStreamName(query.WorkspaceID), start, legacyEnd, bucketSize, scanBudget)
 		if err != nil {
 			return nil, err
 		}
@@ -180,6 +229,116 @@ func (r *S2EventRepository) GetPoolMetricsTimeseries(ctx context.Context, query 
 	response.Workspaces = []string{query.WorkspaceID}
 	response.ScannedRecords, response.Truncated = scanBudget.state()
 	return response, nil
+}
+
+// getPoolMetricsTimeseriesSampled reads only the trailing window of every
+// bucket rather than the full stream, bounding work for long ranges. Each
+// bucket's value is the latest heartbeat per pool/machine inside that window,
+// which matches what the full scan would keep anyway (buckets store the last
+// sample per key).
+func (r *S2EventRepository) getPoolMetricsTimeseriesSampled(ctx context.Context, streamName s2.StreamName, start, end time.Time, bucketSize time.Duration, scanBudget s2MetricsScanBudget) (*types.PoolMetricsTimeseriesResponse, s2MetricsScanBudget, error) {
+	response := &types.PoolMetricsTimeseriesResponse{}
+
+	bucketEnds := make([]time.Time, 0, int(end.Sub(start)/bucketSize)+1)
+	for bucketStart := start.UTC().Truncate(bucketSize); bucketStart.Before(end); bucketStart = bucketStart.Add(bucketSize) {
+		bucketEnd := bucketStart.Add(bucketSize)
+		if bucketEnd.After(end) {
+			bucketEnd = end
+		}
+		bucketEnds = append(bucketEnds, bucketEnd)
+	}
+
+	remaining := atomic.Int64{}
+	remaining.Store(int64(scanBudget))
+	results := make([]*poolMetricsBucket, len(bucketEnds))
+
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.SetLimit(poolMetricsSampleConcurrency)
+	for index, bucketEnd := range bucketEnds {
+		group.Go(func() error {
+			sampleStart := bucketEnd.Add(-poolMetricsSampleTailWindow)
+			bucketStart := bucketEnd.Add(-bucketSize)
+			if sampleStart.Before(bucketStart) {
+				sampleStart = bucketStart
+			}
+			if sampleStart.Before(start) {
+				sampleStart = start
+			}
+
+			samples := map[string]types.EventComputeSchema{}
+			seqNum := uint64(0)
+			startMs := uint64(sampleStart.UTC().UnixMilli())
+			endMs := uint64(bucketEnd.UTC().UnixMilli())
+
+			for {
+				readLimit := reserveS2MetricsRead(&remaining)
+				if readLimit == 0 {
+					break
+				}
+				opts := &s2.ReadOptions{SeqNum: &seqNum, Count: countOption(readLimit), Until: &endMs}
+				if seqNum == 0 {
+					opts.Timestamp = &startMs
+					opts.SeqNum = nil
+				}
+				batch, err := r.basin.Stream(streamName).Read(groupCtx, opts)
+				if err != nil {
+					remaining.Add(int64(readLimit))
+					if isS2ReadEmpty(err) {
+						break
+					}
+					return fmt.Errorf("read pool metrics from s2 stream %q: %w", streamName, err)
+				}
+				remaining.Add(int64(readLimit) - int64(len(batch.Records)))
+				if len(batch.Records) == 0 {
+					break
+				}
+
+				for _, record := range batch.Records {
+					sample, eventTime, ok := computePoolMetricFromS2(record)
+					if !ok || eventTime.Before(sampleStart) || !eventTime.Before(bucketEnd) {
+						continue
+					}
+					sampleKey := sample.PoolName + "\x00" + sample.MachineID
+					if sample.Action == types.EventComputeActionPoolHeartbeat {
+						sampleKey = sample.PoolName + "\x00"
+					}
+					samples[sampleKey] = sample
+				}
+
+				last := batch.Records[len(batch.Records)-1]
+				seqNum = last.SeqNum + 1
+				if uint64(len(batch.Records)) < readLimit {
+					break
+				}
+			}
+
+			if len(samples) > 0 {
+				results[index] = &poolMetricsBucket{
+					key:     poolMetricsBucketKey(bucketEnd, bucketSize),
+					samples: samples,
+				}
+			}
+			return nil
+		})
+	}
+	if err := group.Wait(); err != nil {
+		return nil, scanBudget, err
+	}
+
+	response.Points = make([]types.PoolMetricsPoint, 0, len(results))
+	for _, result := range results {
+		if result == nil {
+			continue
+		}
+		response.Points = append(response.Points, result.point(bucketSize))
+	}
+	sort.Slice(response.Points, func(i, j int) bool { return response.Points[i].Timestamp < response.Points[j].Timestamp })
+
+	left := remaining.Load()
+	if left < 0 {
+		left = 0
+	}
+	return response, s2MetricsScanBudget(left), nil
 }
 
 func (r *S2EventRepository) getPoolMetricsTimeseries(ctx context.Context, streamName s2.StreamName, start, end time.Time, bucketSize time.Duration, scanBudget s2MetricsScanBudget) (*types.PoolMetricsTimeseriesResponse, s2MetricsScanBudget, error) {
@@ -271,6 +430,10 @@ func computePoolMetricFromS2(record s2.SequencedRecord) (types.EventComputeSchem
 type poolMetricsBucket struct {
 	key     int64
 	samples map[string]types.EventComputeSchema
+}
+
+func poolMetricsBucketKey(end time.Time, size time.Duration) int64 {
+	return end.Add(-time.Nanosecond).UTC().Truncate(size).UnixMilli()
 }
 
 func (b *poolMetricsBucket) point(bucketSize time.Duration) types.PoolMetricsPoint {
@@ -448,6 +611,12 @@ func (r *S2EventRepository) resolveLogStreams(query types.LogQuery) ([]s2.Stream
 	}
 
 	switch {
+	case query.ObjectType == types.GatewayObjectTypeContainer:
+		query.ObjectType, query.TaskID = "", ""
+		query.MachineID, query.WorkerID = "", ""
+		return r.resolveLogStreams(query)
+	case query.ObjectType == types.GatewayObjectTypeTask && query.AppID != "" && query.WorkspaceID != "":
+		return addKnown(r.appNamespaceLogStreamName(query.WorkspaceID, query.AppID))
 	case query.MachineID != "":
 		return addKnownMany(r.machineLogStreams(query)...)
 	case query.TaskID != "" && query.WorkspaceID != "" && query.StubID != "":
@@ -500,6 +669,20 @@ func (r *S2EventRepository) readLogStreamPage(ctx context.Context, streamName s2
 		return total, []types.LogRecord{}, nil
 	}
 
+	scannedFromTail := uint64(0)
+	if query.EndTime != nil {
+		endTimestamp := uint64(query.EndTime.UTC().UnixMilli())
+		count, clamp := uint64(1), true
+		batch, err := r.basin.Stream(streamName).Read(ctx, &s2.ReadOptions{Timestamp: &endTimestamp, Count: &count, Clamp: &clamp})
+		if isS2StreamNotFound(err) {
+			return 0, nil, nil
+		}
+		scannedFromTail, err = logEndPositionTailOffset(tail.Tail.SeqNum, batch, err)
+		if err != nil {
+			return 0, nil, fmt.Errorf("position s2 log stream %q at end time: %w", streamName, err)
+		}
+	}
+
 	targetMatches := int((query.Page + 1) * limit)
 	skipMatches := int(query.Page * limit)
 	chunkSize := limit
@@ -512,7 +695,6 @@ func (r *S2EventRepository) readLogStreamPage(ctx context.Context, streamName s2
 
 	matchesNewestFirst := make([]types.LogRecord, 0, targetMatches)
 	recordsScanned := uint64(0)
-	scannedFromTail := uint64(0)
 	exhausted := false
 	for scannedFromTail < tail.Tail.SeqNum && recordsScanned < s2ReadScanLimit {
 		tailOffset, count := nextTailReadWindow(scannedFromTail, tail.Tail.SeqNum, chunkSize)
@@ -547,6 +729,9 @@ func (r *S2EventRepository) readLogStreamPage(ctx context.Context, streamName s2
 			}
 		}
 		exhausted = uint64(len(batch.Records)) < count || scannedFromTail == tail.Tail.SeqNum
+		if query.StartTime != nil && batch.Records[0].Timestamp < uint64(query.StartTime.UTC().UnixMilli()) {
+			exhausted = true
+		}
 		if len(matchesNewestFirst) >= targetMatches || exhausted {
 			break
 		}
@@ -568,6 +753,25 @@ func (r *S2EventRepository) readLogStreamPage(ctx context.Context, streamName s2
 		filteredTotal = targetMatches + 1
 	}
 	return filteredTotal, logs, nil
+}
+
+func logTailOffsetBeforeSeq(tailSeqNum, endSeqNum uint64) uint64 {
+	if endSeqNum >= tailSeqNum {
+		return 0
+	}
+	return tailSeqNum - endSeqNum
+}
+
+func logEndPositionTailOffset(tailSeqNum uint64, batch *s2.ReadBatch, err error) (uint64, error) {
+	// S2 returns 416 when the requested timestamp is newer than the stream
+	// tail. Scanning from the live tail is already the correct end position.
+	if isS2RangeNotSatisfiable(err) {
+		return 0, nil
+	}
+	if err != nil || batch == nil || len(batch.Records) == 0 {
+		return 0, err
+	}
+	return logTailOffsetBeforeSeq(tailSeqNum, batch.Records[0].SeqNum), nil
 }
 
 // nextTailReadWindow returns the next tail offset and record count for scanning

@@ -15,6 +15,8 @@ type ContainerNetwork interface {
 	TearDown(containerId string) error
 	ExposePort(containerId string, hostPort, containerPort int) error
 	ExposePorts(containerId string, bindings []PortBinding) error
+	ReservePorts(containerId string, count int) ([]int, error)
+	ReleasePortReservations(containerId string)
 	UpdateNetworkPermissions(containerId string, request *types.ContainerRequest) error
 	ContainerPortAddress(containerId string, binding PortBinding) (string, error)
 	ContainerPortAddressMap(containerId string, bindings []PortBinding) (map[int32]string, error)

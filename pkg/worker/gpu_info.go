@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 )
@@ -27,6 +28,9 @@ type GPUMemoryUsageStats struct {
 
 type NvidiaInfoClient struct {
 	visibleDevices string
+	devicesMu      sync.Mutex
+	devicesLoaded  bool
+	devices        []nvidiaSMIDevice
 }
 
 const defaultDeviceCheckpointPath = types.HostKubeletDeviceCheckpointPath
@@ -166,7 +170,7 @@ func deviceVisible(visibleDevices, uuid, index string) bool {
 
 func (c *NvidiaInfoClient) AvailableGPUDevices() ([]int, error) {
 	visibleDevices := c.visibleDevices
-	devices, err := nvidiaSMIDevices()
+	devices, err := c.deviceInventory()
 	if err != nil {
 		return nil, err
 	}
@@ -188,7 +192,7 @@ func (c *NvidiaInfoClient) AvailableGPUDevices() ([]int, error) {
 // DeviceUUIDs returns the index-to-UUID mapping for all devices from a single
 // nvidia-smi query, so callers can resolve many devices without re-querying.
 func (c *NvidiaInfoClient) DeviceUUIDs() (map[int]string, error) {
-	devices, err := nvidiaSMIDevices()
+	devices, err := c.deviceInventory()
 	if err != nil {
 		return nil, err
 	}
@@ -198,6 +202,22 @@ func (c *NvidiaInfoClient) DeviceUUIDs() (map[int]string, error) {
 		uuids[device.Index] = device.UUID
 	}
 	return uuids, nil
+}
+
+func (c *NvidiaInfoClient) deviceInventory() ([]nvidiaSMIDevice, error) {
+	c.devicesMu.Lock()
+	defer c.devicesMu.Unlock()
+	if c.devicesLoaded {
+		return c.devices, nil
+	}
+
+	devices, err := nvidiaSMIDevices()
+	if err != nil {
+		return nil, err
+	}
+	c.devices = devices
+	c.devicesLoaded = true
+	return c.devices, nil
 }
 
 func nvidiaSMIDevices() ([]nvidiaSMIDevice, error) {

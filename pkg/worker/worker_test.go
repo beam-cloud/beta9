@@ -3,6 +3,8 @@ package worker
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"testing"
@@ -21,6 +23,54 @@ type shutdownSignalRuntime struct {
 	mu      sync.Mutex
 	signals []syscall.Signal
 	onKill  func(syscall.Signal)
+}
+
+type acknowledgementWorkerRepoClient struct {
+	pb.WorkerRepositoryServiceClient
+	mu       sync.Mutex
+	failures int
+	calls    int
+	request  *pb.AddContainerToWorkerRequest
+	response *pb.AddContainerToWorkerResponse
+}
+
+func (c *acknowledgementWorkerRepoClient) AddContainerToWorker(_ context.Context, request *pb.AddContainerToWorkerRequest, _ ...grpc.CallOption) (*pb.AddContainerToWorkerResponse, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calls++
+	c.request = request
+	if c.calls <= c.failures {
+		return nil, context.DeadlineExceeded
+	}
+	return c.response, nil
+}
+
+func TestAcknowledgeContainerRequestRetriesAmbiguousTransportFailure(t *testing.T) {
+	client := &acknowledgementWorkerRepoClient{
+		failures: 1,
+		response: &pb.AddContainerToWorkerResponse{Ok: true},
+	}
+	worker := &Worker{
+		ctx:              context.Background(),
+		workerId:         "worker-1",
+		poolName:         "pool-1",
+		podHostName:      "host-1",
+		workerRepoClient: client,
+	}
+
+	require.NoError(t, worker.acknowledgeContainerRequest("container-1", "delivery-1"))
+	require.Equal(t, 2, client.calls)
+	require.Equal(t, "delivery-1", client.request.DeliveryToken)
+}
+
+func TestAcknowledgeContainerRequestReturnsAuthoritativeRejection(t *testing.T) {
+	client := &acknowledgementWorkerRepoClient{
+		response: &pb.AddContainerToWorkerResponse{ErrorMsg: "stale delivery"},
+	}
+	worker := &Worker{ctx: context.Background(), workerRepoClient: client}
+
+	require.EqualError(t, worker.acknowledgeContainerRequest("container-1", "delivery-1"), "stale delivery")
+	require.Equal(t, 1, client.calls)
 }
 
 func (m *shutdownSignalRuntime) Kill(ctx context.Context, containerID string, sig syscall.Signal, opts *runtime.KillOpts) error {
@@ -89,6 +139,42 @@ func TestCalculateCPUShares(t *testing.T) {
 			if gotQuota != test.wantQuota {
 				t.Errorf("calculateCPUQuota(%d) = %d, want %d", test.millicores, gotQuota, test.wantQuota)
 			}
+		})
+	}
+}
+
+func TestEnsureGVisorShmemTHP(t *testing.T) {
+	tests := []struct {
+		name       string
+		policy     string
+		wantChange bool
+		wantPolicy string
+	}{
+		{
+			name:       "enables disabled policy",
+			policy:     "always within_size advise [never] deny force\n",
+			wantChange: true,
+			wantPolicy: "advise",
+		},
+		{
+			name:       "preserves enabled policy",
+			policy:     "always within_size [advise] never deny force\n",
+			wantChange: false,
+			wantPolicy: "always within_size [advise] never deny force\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "shmem_enabled")
+			require.NoError(t, os.WriteFile(path, []byte(tt.policy), 0644))
+
+			changed, err := ensureGVisorShmemTHP(path)
+			require.NoError(t, err)
+			require.Equal(t, tt.wantChange, changed)
+			policy, err := os.ReadFile(path)
+			require.NoError(t, err)
+			require.Equal(t, tt.wantPolicy, string(policy))
 		})
 	}
 }
@@ -322,78 +408,47 @@ func TestMarkContainerStoppingUsesStoppingTTL(t *testing.T) {
 	require.Equal(t, int64(types.ContainerStateTtlSWhilePending), repoClient.lastUpdateStatus.ExpirySeconds)
 }
 
-func TestDropCancelledContainerRequestDeletesStoppingStateAndReleasesCapacity(t *testing.T) {
-	repoClient := &fakeContainerRepoClient{
-		state: &pb.ContainerState{
-			ContainerId: "build-1",
-			Status:      string(types.ContainerStatusStopping),
-		},
-	}
-	request := &types.ContainerRequest{ContainerId: "build-1"}
+func TestFailContainerRequestReportsExitCode(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	repoClient := &fakeContainerRepoClient{}
+	request := &types.ContainerRequest{ContainerId: "container-failed-start-cleanup"}
+	tempDir := filepath.Join(baseConfigPath, request.ContainerId)
+	require.NoError(t, os.MkdirAll(tempDir, 0o755))
+	t.Cleanup(func() { _ = os.RemoveAll(tempDir) })
 	worker := &Worker{
-		containerRepoClient: repoClient,
-		completedRequests:   make(chan *types.ContainerRequest, 1),
+		ctx:                     ctx,
+		containerRepoClient:     repoClient,
+		containerInstances:      common.NewSafeMap[*ContainerInstance](),
+		containerNetworkManager: &fakeContainerNetworkController{},
+		completedRequests:       make(chan *types.ContainerRequest, 1),
 	}
 
-	require.True(t, worker.dropCancelledContainerRequest(request))
-	require.Equal(t, 1, repoClient.getStateCalls)
-	require.Equal(t, 1, repoClient.deleteStateCalls)
-	require.Equal(t, "build-1", repoClient.lastDeleteContainerID)
+	worker.failContainerRequest(request.ContainerId, request, errors.New("startup failed"))
 
-	select {
-	case got := <-worker.completedRequests:
-		require.Equal(t, request, got)
-	default:
-		t.Fatal("expected skipped request to release capacity")
-	}
-}
-
-func TestDropCancelledContainerRequestReleasesCapacityForMissingState(t *testing.T) {
-	repoClient := &fakeContainerRepoClient{
-		getStateErrorMsg: (&types.ErrContainerStateNotFound{ContainerId: "build-1"}).Error(),
-	}
-	request := &types.ContainerRequest{ContainerId: "build-1"}
-	worker := &Worker{
-		containerRepoClient: repoClient,
-		completedRequests:   make(chan *types.ContainerRequest, 1),
-	}
-
-	require.True(t, worker.dropCancelledContainerRequest(request))
-	require.Equal(t, 1, repoClient.getStateCalls)
-	require.Equal(t, 0, repoClient.deleteStateCalls)
-
-	select {
-	case got := <-worker.completedRequests:
-		require.Equal(t, request, got)
-	default:
-		t.Fatal("expected skipped request to release capacity")
-	}
+	require.Equal(t, 1, repoClient.setExitCodeCalls)
+	require.Equal(t, request.ContainerId, repoClient.lastSetExitCode.ContainerId)
+	require.Equal(t, int32(1), repoClient.lastSetExitCode.ExitCode)
+	require.NoDirExists(t, tempDir)
 }
 
 type fakeContainerRepoClient struct {
-	state                 *pb.ContainerState
-	getStateErrorMsg      string
-	getStateCalls         int
-	deleteStateCalls      int
-	lastDeleteContainerID string
-	updateStatusCalls     int
-	lastUpdateStatus      *pb.UpdateContainerStatusRequest
-	addressMap            map[int32]string
-	setAddressCalls       int
-	lastSetAddress        *pb.SetContainerAddressRequest
-	setAddressMapCalls    int
-	lastSetAddressMap     *pb.SetContainerAddressMapRequest
+	state              *pb.ContainerState
+	getStateCalls      int
+	updateStatusCalls  int
+	lastUpdateStatus   *pb.UpdateContainerStatusRequest
+	addressMap         map[int32]string
+	setAddressCalls    int
+	lastSetAddress     *pb.SetContainerAddressRequest
+	setAddressMapCalls int
+	lastSetAddressMap  *pb.SetContainerAddressMapRequest
+	setExitCodeCalls   int
+	lastSetExitCode    *pb.SetContainerExitCodeRequest
 }
 
 func (f *fakeContainerRepoClient) GetContainerState(ctx context.Context, in *pb.GetContainerStateRequest, opts ...grpc.CallOption) (*pb.GetContainerStateResponse, error) {
 	f.getStateCalls++
-	if f.getStateErrorMsg != "" {
-		return &pb.GetContainerStateResponse{
-			Ok:       false,
-			ErrorMsg: f.getStateErrorMsg,
-		}, nil
-	}
-
 	return &pb.GetContainerStateResponse{
 		Ok:          true,
 		ContainerId: in.ContainerId,
@@ -402,8 +457,6 @@ func (f *fakeContainerRepoClient) GetContainerState(ctx context.Context, in *pb.
 }
 
 func (f *fakeContainerRepoClient) DeleteContainerState(ctx context.Context, in *pb.DeleteContainerStateRequest, opts ...grpc.CallOption) (*pb.DeleteContainerStateResponse, error) {
-	f.deleteStateCalls++
-	f.lastDeleteContainerID = in.ContainerId
 	return &pb.DeleteContainerStateResponse{Ok: true}, nil
 }
 
@@ -414,6 +467,8 @@ func (f *fakeContainerRepoClient) UpdateContainerStatus(ctx context.Context, in 
 }
 
 func (f *fakeContainerRepoClient) SetContainerExitCode(ctx context.Context, in *pb.SetContainerExitCodeRequest, opts ...grpc.CallOption) (*pb.SetContainerExitCodeResponse, error) {
+	f.setExitCodeCalls++
+	f.lastSetExitCode = in
 	return &pb.SetContainerExitCodeResponse{Ok: true}, nil
 }
 

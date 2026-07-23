@@ -221,7 +221,7 @@ def delete_disk(service: ServiceClient, name: str, yes: bool):
             "refer to this disk should be updated before it is deleted."
         )
 
-        if terminal.prompt(text="Are you sure? (y/n)", default="n") not in ["y", "yes"]:
+        if not terminal.confirm("Are you sure?", default=False):
             return
 
     res: DeleteDiskResponse

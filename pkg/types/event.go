@@ -555,6 +555,7 @@ const (
 	ContainerLifecycleSetWorkerAddress            ContainerLifecycleID = "worker.set_worker_address"
 	ContainerLifecyclePortAllocation              ContainerLifecycleID = "worker.port_allocation"
 	ContainerLifecycleReadBundleConfig            ContainerLifecycleID = "worker.read_bundle_config"
+	ContainerLifecycleWorkspaceMount              ContainerLifecycleID = "mount.workspace"
 	ContainerLifecycleSetupMounts                 ContainerLifecycleID = "mount.setup"
 	ContainerLifecycleSpecFromRequest             ContainerLifecycleID = "worker.spec_from_request"
 	ContainerLifecycleSetContainerAddr            ContainerLifecycleID = "worker.set_container_address"
@@ -577,6 +578,7 @@ const (
 	ContainerLifecycleStartQueueWait              ContainerLifecycleID = "worker.start_queue_wait"
 	ContainerLifecycleRuntimeStartToPID           ContainerLifecycleID = "runtime.start_to_pid"
 	ContainerLifecycleSandboxApplyCPUQuota        ContainerLifecycleID = "sandbox.apply_cpu_quota"
+	ContainerLifecycleRunnerApplyCPUQuota         ContainerLifecycleID = "runner.apply_cpu_quota"
 	ContainerLifecycleSandboxProcessManagerTCP    ContainerLifecycleID = "sandbox.process_manager_tcp_ready"
 	ContainerLifecycleSandboxProcessManagerReady  ContainerLifecycleID = "sandbox.process_manager_ready"
 	ContainerLifecycleServeReady                  ContainerLifecycleID = "serve.ready"
@@ -637,6 +639,7 @@ var ContainerLifecycleDefinitions = map[ContainerLifecycleID]ContainerLifecycleD
 	ContainerLifecycleSetWorkerAddress:            {ID: ContainerLifecycleSetWorkerAddress, Domain: EventDomainWorker, ParentID: ContainerLifecycleStartup, Label: "Set worker address"},
 	ContainerLifecyclePortAllocation:              {ID: ContainerLifecyclePortAllocation, Domain: EventDomainWorker, ParentID: ContainerLifecycleStartup, Label: "Port allocation"},
 	ContainerLifecycleReadBundleConfig:            {ID: ContainerLifecycleReadBundleConfig, Domain: EventDomainWorker, ParentID: ContainerLifecycleStartup, Label: "Read bundle config"},
+	ContainerLifecycleWorkspaceMount:              {ID: ContainerLifecycleWorkspaceMount, Domain: EventDomainMount, ParentID: ContainerLifecycleStartup, Label: "Mount workspace storage"},
 	ContainerLifecycleSetupMounts:                 {ID: ContainerLifecycleSetupMounts, Domain: EventDomainMount, ParentID: ContainerLifecycleStartup, Label: "Setup mounts"},
 	ContainerLifecycleSpecFromRequest:             {ID: ContainerLifecycleSpecFromRequest, Domain: EventDomainWorker, ParentID: ContainerLifecycleStartup, Label: "Spec from request"},
 	ContainerLifecycleSetContainerAddr:            {ID: ContainerLifecycleSetContainerAddr, Domain: EventDomainWorker, ParentID: ContainerLifecycleStartup, Label: "Set container address"},
@@ -659,6 +662,7 @@ var ContainerLifecycleDefinitions = map[ContainerLifecycleID]ContainerLifecycleD
 	ContainerLifecycleStartQueueWait:              {ID: ContainerLifecycleStartQueueWait, Domain: EventDomainWorker, ParentID: ContainerLifecycleStartup, Label: "Worker start queue wait"},
 	ContainerLifecycleRuntimeStartToPID:           {ID: ContainerLifecycleRuntimeStartToPID, Domain: EventDomainRuntime, ParentID: ContainerLifecycleStartup, Label: "Runtime start to PID", Required: true},
 	ContainerLifecycleSandboxApplyCPUQuota:        {ID: ContainerLifecycleSandboxApplyCPUQuota, Domain: EventDomainRuntime, ParentID: ContainerLifecycleStartup, Label: "Apply sandbox CPU quota"},
+	ContainerLifecycleRunnerApplyCPUQuota:         {ID: ContainerLifecycleRunnerApplyCPUQuota, Domain: EventDomainRuntime, ParentID: ContainerLifecycleStartup, Label: "Apply function CPU quota"},
 	ContainerLifecycleSandboxProcessManagerTCP:    {ID: ContainerLifecycleSandboxProcessManagerTCP, Domain: EventDomainNetwork, ParentID: ContainerLifecycleSandboxProcessManagerReady, Label: "Sandbox process manager TCP ready"},
 	ContainerLifecycleSandboxProcessManagerReady:  {ID: ContainerLifecycleSandboxProcessManagerReady, Domain: EventDomainRuntime, ParentID: ContainerLifecycleStartup, Label: "Sandbox process manager ready"},
 	ContainerLifecycleServeReady:                  {ID: ContainerLifecycleServeReady, Domain: EventDomainServe, ParentID: ContainerLifecycleStartup, Label: "Serve ready"},
@@ -923,6 +927,9 @@ type LogQuery struct {
 	TailOffset  *int64     `json:"tail_offset,omitempty"`
 	WaitSeconds *int32     `json:"wait,omitempty"`
 	Clamp       *bool      `json:"clamp,omitempty"`
+
+	HistoryStart *time.Time `json:"-"`
+	HistoryEnd   *time.Time `json:"-"`
 }
 
 const (

@@ -20,14 +20,20 @@ type WorkerRepository interface {
 	CordonAllPendingWorkersInPool(poolName string) error
 	GetAllWorkersOnMachine(machineId string) ([]*types.Worker, error)
 	AddWorker(w *types.Worker) error
-	ToggleWorkerAvailable(workerId string) error
+	ToggleWorkerAvailable(workerId, generation string) error
+	SetWorkerCordon(workerId string, cordoned bool) error
+	PrepareWorkerRollout(workerId, generation string) (bool, error)
 	UpdateWorkerStatus(workerId string, status types.WorkerStatus) error
 	RemoveWorker(workerId string) error
 	SetWorkerKeepAlive(workerId string, keepAlive types.WorkerKeepAlive) error
 	UpdateWorkerCapacity(w *types.Worker, cr *types.ContainerRequest, ut types.CapacityUpdateType) error
 	ScheduleContainerRequest(worker *types.Worker, request *types.ContainerRequest) error
+	ScheduleContainerRequests(worker *types.Worker, requests []*types.ContainerRequest) error
 	GetNextContainerRequest(workerId string) (*types.ContainerRequest, error)
-	AddContainerToWorker(workerId string, containerId string) error
+	GetNextContainerRequests(workerId string, limit int) ([]*types.ContainerRequest, error)
+	RecoverPendingContainerRequests(workerId string) error
+	RequeueContainerRequests(workerId string, requests []*types.ContainerRequest) error
+	AddContainerToWorker(workerId, containerId, deliveryToken string) error
 	RemoveContainerFromWorker(workerId string, containerId string) error
 	SetContainerResourceValues(workerId string, containerId string, usage types.ContainerResourceUsage) error
 	SetImagePullLock(workerId, imageId string) (string, error)
@@ -50,17 +56,19 @@ type ContainerRepository interface {
 	GetContainerState(string) (*types.ContainerState, error)
 	SetContainerState(string, *types.ContainerState) error
 	SetContainerExitCode(string, int) error
+	SetContainerFailureCooldown([]string) error
 	GetContainerExitCode(string) (int, error)
 	SetContainerAddress(containerId string, addr string) error
 	GetContainerAddress(containerId string) (string, error)
 	SetBackendRoute(ctx context.Context, route types.BackendRoute) error
+	SetBackendRoutes(ctx context.Context, routes []types.BackendRoute) error
 	GetBackendRoute(ctx context.Context, routeID string) (*types.BackendRoute, error)
 	ListBackendRoutesByMachine(ctx context.Context, workspaceID, poolName, machineID string) ([]types.BackendRoute, error)
 	ListBackendRoutesByMachineID(ctx context.Context, machineID string) ([]types.BackendRoute, error)
 	DeleteBackendRoutesByContainerID(ctx context.Context, containerID string) error
 	DeleteBackendRoutesByMachine(ctx context.Context, workspaceID, poolName, machineID string) error
 	UpdateContainerStatus(string, types.ContainerStatus, int64) error
-	UpdateAssignedContainerGPU(string, string) error
+	MarkPendingContainerStoppingIfUnassigned(containerId string, expirySeconds int64) (bool, error)
 	DeleteContainerState(containerId string) error
 	SetContainerRequestStatus(containerId string, status types.ContainerRequestStatus) error
 	SetWorkerAddress(containerId string, addr string) error

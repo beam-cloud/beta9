@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -15,7 +16,7 @@ func isSendfileRetryable(err error) bool {
 	return errors.Is(err, unix.EAGAIN) || errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EINTR)
 }
 
-func sendFileToConn(conn net.Conn, file *os.File, offset int64, length int64) (int64, error) {
+func sendFileToConn(conn net.Conn, file *os.File, offset int64, length int64, progressTimeout time.Duration) (int64, error) {
 	tcpConn, ok := conn.(*net.TCPConn)
 	if !ok || length <= 0 {
 		return 0, nil
@@ -31,6 +32,11 @@ func sendFileToConn(conn net.Conn, file *os.File, offset int64, length int64) (i
 	off := offset
 	sent := int64(0)
 	for remaining > 0 {
+		if progressTimeout > 0 {
+			if err := tcpConn.SetWriteDeadline(time.Now().Add(progressTimeout)); err != nil {
+				return sent, err
+			}
+		}
 		chunk := remaining
 		if chunk > 1<<30 {
 			chunk = 1 << 30
@@ -48,6 +54,12 @@ func sendFileToConn(conn net.Conn, file *os.File, offset int64, length int64) (i
 				progressed = true
 			}
 			if remaining == 0 {
+				sendErr = nil
+				return true
+			}
+			if progressed {
+				// Return to the outer loop after every successful send so the
+				// progress deadline is renewed before waiting for writability.
 				sendErr = nil
 				return true
 			}

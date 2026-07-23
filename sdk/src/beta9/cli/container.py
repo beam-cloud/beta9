@@ -1,5 +1,5 @@
 import datetime
-from typing import List
+from typing import List, Optional
 
 import click
 from betterproto import Casing
@@ -44,6 +44,17 @@ AVAILABLE_LIST_COLUMNS = {
 }
 
 
+def _format_uptime(
+    started_at: Optional[datetime.datetime], now: datetime.datetime
+) -> str:
+    if started_at is None:
+        return "N/A"
+    epoch = datetime.datetime.fromtimestamp(0, tz=started_at.tzinfo)
+    if started_at <= epoch:
+        return "N/A"
+    return terminal.humanize_duration(now - started_at)
+
+
 @management.command(
     name="list",
     help="""
@@ -66,26 +77,43 @@ AVAILABLE_LIST_COLUMNS = {
       Available columns: container_id, status, stub_id, scheduled_at, deployment_id, uptime
     """,
 )
+@click.option(
+    "--machine",
+    "machine_id",
+    type=click.STRING,
+    default="",
+    help="Only show containers running on this machine.",
+)
 @extraclick.pass_service_client
 @click.pass_context
-def list_containers(ctx: click.Context, service: ServiceClient, format: str, columns: str):
+def list_containers(
+    ctx: click.Context,
+    service: ServiceClient,
+    format: str,
+    columns: str,
+    machine_id: str,
+):
     res = service.gateway.list_containers(ListContainersRequest())
     if not res.ok:
         terminal.error(res.error_msg)
+
+    if machine_id:
+        res.containers = [c for c in res.containers if c.machine_id == machine_id]
 
     now = datetime.datetime.now(datetime.timezone.utc)
     if format == "json":
         containers = []
         for c in res.containers:
             container_dict = c.to_dict(casing=Casing.SNAKE)
-            container_dict["uptime"] = (
-                terminal.humanize_duration(now - c.started_at) if c.started_at else "N/A"
-            )
+            container_dict["uptime"] = _format_uptime(c.started_at, now)
             containers.append(container_dict)
         terminal.print_json(containers)
         return
 
     user_requested_columns = set(columns.split(","))
+
+    if machine_id:
+        user_requested_columns.add("machine_id")
 
     # If admin columns are present on every container, include them.
     add_admin_columns = all(c.worker_id for c in res.containers)
@@ -108,11 +136,7 @@ def list_containers(ctx: click.Context, service: ServiceClient, format: str, col
         row = []
         for col in ordered_columns:
             if col == "uptime":
-                value = (
-                    terminal.humanize_duration(now - container.started_at)
-                    if container.started_at
-                    else "N/A"
-                )
+                value = _format_uptime(container.started_at, now)
             else:
                 value = getattr(container, col)
                 if isinstance(value, datetime.datetime):

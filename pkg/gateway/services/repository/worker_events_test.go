@@ -96,6 +96,27 @@ func TestWorkerEventBrokerConvertsStopBuildEvents(t *testing.T) {
 	require.Equal(t, "build-1", stopBuild.ContainerId)
 }
 
+func TestWorkerEventBrokerWakesOnlyTargetWorker(t *testing.T) {
+	broker, _ := newWorkerEventBrokerForTest(t)
+
+	sinkAID, sinkA := broker.registerRequests("worker-a")
+	defer broker.unregister(sinkAID)
+	sinkBID, sinkB := broker.registerRequests("worker-b")
+	defer broker.unregister(sinkBID)
+
+	broker.wakeRequests("worker-a")
+	select {
+	case <-sinkA:
+	case <-time.After(time.Second):
+		t.Fatal("target worker was not woken")
+	}
+	select {
+	case <-sinkB:
+		t.Fatal("unrelated worker was woken")
+	default:
+	}
+}
+
 func TestStreamWorkerEventsRejectsInvalidRequests(t *testing.T) {
 	service := &WorkerRepositoryService{ctx: context.Background()}
 

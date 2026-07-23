@@ -1,7 +1,8 @@
 package worker
 
-// These parameters are set when containerResourcesEnforced is enabled in the worker config
-var cgroupV2Parameters map[string]string = map[string]string{
-	// When an OOM occurs within a container, the kernel will kill the container and all procceses within it.
-	"memory.oom.group": "1",
+func cgroupV2Parameters() map[string]string {
+	return map[string]string{
+		// Kill every process in the container cgroup when it runs out of memory.
+		"memory.oom.group": "1",
+	}
 }

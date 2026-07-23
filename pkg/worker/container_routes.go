@@ -57,19 +57,6 @@ func (s *Worker) registerContainerPorts(ctx context.Context, request *types.Cont
 		return fmt.Errorf("container %s has no address for port %d", request.ContainerId, primaryPort)
 	}
 
-	addressPhaseStart := time.Now()
-	if _, err := handleGRPCResponse(s.containerRepoClient.SetContainerAddress(context.Background(), &pb.SetContainerAddressRequest{
-		ContainerId: request.ContainerId,
-		Address:     primaryTarget,
-		Route:       s.backendRouteFor(request, types.BackendRouteKindContainer, primaryPort, primaryTarget),
-	})); err != nil {
-		metrics.RecordWorkerStartupPhase("set_container_address", time.Since(addressPhaseStart), request, map[string]string{"success": "false"})
-		s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSetContainerAddr, addressPhaseStart, false, nil)
-		return err
-	}
-	metrics.RecordWorkerStartupPhase("set_container_address", time.Since(addressPhaseStart), request, map[string]string{"success": "true"})
-	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSetContainerAddr, addressPhaseStart, true, nil)
-
 	routes := make([]*pb.BackendRoute, 0, len(bindings))
 	for _, binding := range bindings {
 		containerPort := int32(binding.ContainerPort)
@@ -84,6 +71,7 @@ func (s *Worker) registerContainerPorts(ctx context.Context, request *types.Cont
 		ContainerId: request.ContainerId,
 		AddressMap:  addressMap,
 		Routes:      routes,
+		PrimaryPort: primaryPort,
 	})); err != nil {
 		metrics.RecordWorkerStartupPhase("set_container_address_map", time.Since(mapPhaseStart), request, map[string]string{"success": "false"})
 		s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSetAddressMap, mapPhaseStart, false, map[string]string{"port_count": fmt.Sprintf("%d", len(addressMap))})

@@ -21,10 +21,18 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// Capacity verdict values reported in GetOrCreateStubResponse.CapacityStatus.
+const (
+	StubCapacityStatusAvailable = "available"
+	StubCapacityStatusLow       = "low"
+	StubCapacityStatusNone      = "none"
+)
+
 func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCreateStubRequest) (*pb.GetOrCreateStubResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
 	var warning string
+	var capacity stubCapacityVerdict
 
 	resourcePolicy, err := gws.stubResourcePolicy(ctx, authInfo.Workspace.ExternalId, in.Pool, in.Name)
 	if err != nil {
@@ -214,7 +222,23 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 				}, nil
 			}
 
-			if len(lowCapacityGpus) > 0 {
+			// Only stubs with no pool config get a capacity verdict: targeting
+			// a pool is an explicit placement choice the scheduler will honor.
+			if resourcePolicy.pool == nil {
+				verdict, err := gws.computeCapacityVerdict(ctx, authInfo.Workspace.ExternalId, gpus, in.AllowMarketplace, len(lowCapacityGpus) > 0)
+				if err != nil {
+					// The verdict is advisory; never fail stub creation over it.
+					log.Warn().Err(err).Str("workspace_id", authInfo.Workspace.ExternalId).Msg("failed to compute stub capacity verdict")
+				} else {
+					capacity = verdict
+				}
+			}
+
+			// A stub running on private/on-demand capacity — whether targeted
+			// explicitly or matched via the capacity verdict — doesn't depend
+			// on managed GPU availability, so warning about it is just noise.
+			onPrivateCapacity := resourcePolicy.privatePoolTargeted || capacity.matchedPrivatePool != ""
+			if len(lowCapacityGpus) > 0 && !onPrivateCapacity {
 				warning = appendWarning(warning, fmt.Sprintf("GPU capacity for %s is currently low.", strings.Join(lowCapacityGpus, ", ")))
 			}
 		}
@@ -323,10 +347,86 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 	}
 
 	return &pb.GetOrCreateStubResponse{
-		Ok:      err == nil,
-		StubId:  stub.ExternalId,
-		WarnMsg: warning,
+		Ok:                 err == nil,
+		StubId:             stub.ExternalId,
+		WarnMsg:            warning,
+		CapacityStatus:     capacity.status,
+		UnsupportedGpus:    capacity.unsupportedGpus,
+		MatchedPrivatePool: capacity.matchedPrivatePool,
 	}, nil
+}
+
+type stubCapacityVerdict struct {
+	status             string
+	unsupportedGpus    []string
+	matchedPrivatePool string
+}
+
+// gpuPoolChecker answers whether any serverless pool config supports a GPU
+// type. Implemented by *scheduler.Scheduler.
+type gpuPoolChecker interface {
+	HasManagedPoolForGPU(gpuType string, allowMarketplace bool) bool
+}
+
+// privatePoolFinder locates ready workspace private pools for a GPU request.
+// Implemented by *compute.Service.
+type privatePoolFinder interface {
+	FindReadyPrivatePoolForGPU(ctx context.Context, workspaceID string, gpus []types.GpuType) (string, error)
+}
+
+func (gws *GatewayService) computeCapacityVerdict(ctx context.Context, workspaceID string, gpus []types.GpuType, allowMarketplace bool, lowCapacity bool) (stubCapacityVerdict, error) {
+	if gws.scheduler == nil {
+		return stubCapacityVerdict{}, nil
+	}
+	var finder privatePoolFinder
+	if gws.computeService != nil {
+		finder = gws.computeService
+	}
+	return computeCapacityVerdict(ctx, gws.scheduler, finder, workspaceID, gpus, allowMarketplace, lowCapacity)
+}
+
+// computeCapacityVerdict determines whether a GPU request can ever be
+// scheduled on serverless pools. It is pool-config-based (mirroring the
+// scheduler's controller selection), so pools scaled to zero still count as
+// available. When no serverless pool supports any requested GPU — a
+// guaranteed scheduling blackhole — it checks the workspace's private pools
+// for ready capacity the client can target instead.
+func computeCapacityVerdict(ctx context.Context, checker gpuPoolChecker, finder privatePoolFinder, workspaceID string, gpus []types.GpuType, allowMarketplace bool, lowCapacity bool) (stubCapacityVerdict, error) {
+	verdict := stubCapacityVerdict{}
+	anySupported := false
+	for _, gpu := range gpus {
+		if gpu == types.NO_GPU {
+			continue
+		}
+		if checker.HasManagedPoolForGPU(gpu.String(), allowMarketplace) {
+			anySupported = true
+			continue
+		}
+		verdict.unsupportedGpus = append(verdict.unsupportedGpus, gpu.String())
+	}
+
+	if anySupported {
+		verdict.status = StubCapacityStatusAvailable
+		if lowCapacity {
+			verdict.status = StubCapacityStatusLow
+		}
+		return verdict, nil
+	}
+
+	if finder != nil {
+		matched, err := finder.FindReadyPrivatePoolForGPU(ctx, workspaceID, gpus)
+		if err != nil {
+			return stubCapacityVerdict{}, err
+		}
+		if matched != "" {
+			verdict.status = StubCapacityStatusAvailable
+			verdict.matchedPrivatePool = matched
+			return verdict, nil
+		}
+	}
+
+	verdict.status = StubCapacityStatusNone
+	return verdict, nil
 }
 
 func gpuTypesForStubRequest(in *pb.GetOrCreateStubRequest) []types.GpuType {
@@ -722,18 +822,17 @@ func checkpointModelCacheVolumeName(in *pb.GetOrCreateStubRequest) string {
 }
 
 func checkpointCacheEnv(modelCachePath string) []string {
-	// Persist model files across checkpoint boots, but keep compiler/JIT artifacts on
-	// local disk so Triton/TorchInductor can compile before the checkpoint is created.
+	// Persist model files across checkpoint boots, but keep compiler/JIT artifacts and
+	// Xet's transfer cache on local disk so they do not inflate the workspace volume.
 	return []string{
 		fmt.Sprintf("HF_HOME=%s", modelCachePath),
 		fmt.Sprintf("HF_HUB_CACHE=%s/hub", modelCachePath),
+		fmt.Sprintf("HF_XET_CACHE=%s/hf-xet", checkpointCompileCacheRoot),
 		fmt.Sprintf("TRANSFORMERS_CACHE=%s", modelCachePath),
 		fmt.Sprintf("TRITON_CACHE_DIR=%s/triton", checkpointCompileCacheRoot),
 		fmt.Sprintf("TORCHINDUCTOR_CACHE_DIR=%s/torchinductor", checkpointCompileCacheRoot),
 		fmt.Sprintf("VLLM_CACHE_ROOT=%s/vllm", checkpointCompileCacheRoot),
 		fmt.Sprintf("CUDA_CACHE_PATH=%s/cuda", checkpointCompileCacheRoot),
-		"HF_HUB_DISABLE_XET=1",
-		"HF_HUB_ENABLE_HF_TRANSFER=0",
 	}
 }
 

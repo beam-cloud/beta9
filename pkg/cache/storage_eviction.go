@@ -8,6 +8,7 @@ package cache
 // hard write gate.
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -393,11 +394,22 @@ func (cas *Store) appendCandidate(candidates []evictionCandidate, hash, dir stri
 	}
 	cas.accessTouchMu.Unlock()
 
+	sizeBytes := int64(0)
+	if filepath.Clean(dir) == filepath.Clean(cas.pageDir(hash)) {
+		if markerSize, _, _, ok := cas.completeMarker(hash); ok {
+			sizeBytes = markerSize
+		} else {
+			sizeBytes = dirSizeBytes(dir)
+		}
+	} else {
+		sizeBytes = dirSizeBytes(dir)
+	}
+
 	return append(candidates, evictionCandidate{
 		hash:       hash,
 		dir:        dir,
 		lastAccess: lastAccess,
-		sizeBytes:  dirSizeBytes(dir),
+		sizeBytes:  sizeBytes,
 	})
 }
 
@@ -423,11 +435,25 @@ func (cas *Store) removeContent(candidate evictionCandidate) error {
 }
 
 func dirSizeBytes(dir string) int64 {
+	directory, err := os.Open(dir)
+	if err != nil {
+		return 0
+	}
+	defer directory.Close()
+
 	var total int64
-	entries, _ := os.ReadDir(dir)
-	for _, entry := range entries {
-		if info, err := entry.Info(); err == nil && !info.IsDir() {
-			total += info.Size()
+	for {
+		entries, readErr := directory.ReadDir(256)
+		for _, entry := range entries {
+			if info, err := entry.Info(); err == nil && !info.IsDir() {
+				total += info.Size()
+			}
+		}
+		if readErr != nil {
+			if readErr != io.EOF {
+				return total
+			}
+			break
 		}
 	}
 	return total

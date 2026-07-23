@@ -300,9 +300,21 @@ func (c *ContainerClient) Kill(containerId string) (*pb.ContainerKillResponse, e
 }
 
 func (c *ContainerClient) StreamLogs(ctx context.Context, containerId string, outputChan chan OutputMsg) error {
+	return c.StreamLogsWithReady(ctx, containerId, outputChan, nil)
+}
+
+// StreamLogsWithReady reports when the stream attachment attempt completes.
+// Callers can use ready to keep exit handling from racing log backfill.
+func (c *ContainerClient) StreamLogsWithReady(ctx context.Context, containerId string, outputChan chan OutputMsg, ready func()) error {
 	stream, err := c.client.ContainerStreamLogs(ctx, &pb.ContainerStreamLogsRequest{ContainerId: containerId})
 	if err != nil {
 		return fmt.Errorf("error creating log stream: %w", err)
+	}
+	if _, err := stream.Header(); err != nil {
+		return fmt.Errorf("error attaching log stream: %w", err)
+	}
+	if ready != nil {
+		ready()
 	}
 
 	// Keepalive for streaming logs
