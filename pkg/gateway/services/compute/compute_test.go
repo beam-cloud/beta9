@@ -4927,7 +4927,10 @@ func TestAssignManagedReservationToMachineRequiresRepository(t *testing.T) {
 func testAuthContext(workspaceID, tokenID string) context.Context {
 	return auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
 		Workspace: &types.Workspace{ExternalId: workspaceID},
-		Token:     &types.Token{ExternalId: tokenID},
+		Token: &types.Token{
+			ExternalId: tokenID,
+			TokenType:  types.TokenTypeWorkspace,
+		},
 	})
 }
 
@@ -6438,6 +6441,25 @@ func TestMarketplaceRentalLifecycle(t *testing.T) {
 	}
 	if stolen.Ok || stolen.ErrMsg != rentalErrNotFound {
 		t.Fatalf("cross-buyer launch = %+v, want rental not found", stolen)
+	}
+
+	restrictedBuyer := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
+		Workspace: &types.Workspace{ExternalId: "buyer-1"},
+		Token: &types.Token{
+			ExternalId: "runtime-token",
+			TokenType:  types.TokenTypeWorkspaceRestricted,
+		},
+	})
+	denied, err := service.LaunchRentalWorkload(restrictedBuyer, &pb.LaunchRentalWorkloadRequest{
+		RentalId: rental.Rental.Id,
+		Kind:     "shell",
+		ImageId:  "image-1",
+	})
+	if err != nil {
+		t.Fatalf("restricted LaunchRentalWorkload() error = %v", err)
+	}
+	if denied.Ok || denied.ErrMsg != marketplaceErrMissingAuth {
+		t.Fatalf("restricted launch = %+v, want authorization error", denied)
 	}
 
 	// Release returns the capacity.

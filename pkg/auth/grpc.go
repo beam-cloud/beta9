@@ -194,3 +194,22 @@ func ContextWithAuthInfo(ctx context.Context, authInfo *AuthInfo) context.Contex
 func HasPermission(authInfo *AuthInfo) bool {
 	return authInfo != nil && authInfo.Token != nil && authInfo.Token.TokenType != types.TokenTypeWorkspaceRestricted
 }
+
+// HasInteractivePermission limits user-controlled interactive sessions to
+// user and administrator credentials. Worker, machine, and workload tokens
+// must never be able to turn their infrastructure access into an interactive
+// root shell.
+func HasInteractivePermission(authInfo *AuthInfo) bool {
+	if authInfo == nil || authInfo.Token == nil {
+		return false
+	}
+
+	switch authInfo.Token.TokenType {
+	case types.TokenTypeClusterAdmin,
+		types.TokenTypeWorkspacePrimary,
+		types.TokenTypeWorkspace:
+		return true
+	default:
+		return false
+	}
+}

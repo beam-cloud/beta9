@@ -1,6 +1,8 @@
 package shell
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -26,14 +28,17 @@ func registerShellRoutes(g *echo.Group, ss *SSHShellService) *shellGroup {
 }
 
 func (g *shellGroup) ShellConnect(ctx echo.Context) error {
-	cc, _ := ctx.(*auth.HttpAuthContext)
+	cc, ok := ctx.(*auth.HttpAuthContext)
+	if !ok || !hasShellPermission(cc.AuthInfo) {
+		return apiv1.HTTPUnauthorized("Shell access requires an unrestricted workspace token")
+	}
 
 	containerId := ctx.Param("containerId")
 	stubId := ctx.Param("stubId")
 
 	stub, err := g.ss.backendRepo.GetStubByExternalId(ctx.Request().Context(), stubId, types.QueryFilter{
 		Field: "workspace_id",
-		Value: cc.AuthInfo.Token.Workspace.ExternalId,
+		Value: cc.AuthInfo.Workspace.ExternalId,
 	})
 	if err != nil {
 		return apiv1.HTTPInternalServerError("Failed to retrieve stub")
@@ -45,7 +50,11 @@ func (g *shellGroup) ShellConnect(ctx echo.Context) error {
 	if err != nil {
 		return ctx.String(http.StatusBadGateway, "Failed to retrieve container state")
 	}
-	if containerState.StubId != stub.ExternalId {
+	if containerState == nil {
+		return ctx.String(http.StatusGone, "Container is no longer running")
+	}
+	if containerState.StubId != stub.ExternalId ||
+		containerState.WorkspaceId != cc.AuthInfo.Workspace.ExternalId {
 		return apiv1.HTTPNotFound()
 	}
 	if containerState.Status != types.ContainerStatusRunning {
@@ -62,10 +71,18 @@ func (g *shellGroup) ShellConnect(ctx echo.Context) error {
 		return ctx.String(http.StatusBadGateway, "Failed to connect to container")
 	}
 
-	done := make(chan struct{})
-
-	if IsStandaloneContainer(containerId) {
-		go g.ss.keepAlive(ctx.Request().Context(), containerId, done)
+	standalone := IsStandaloneContainer(containerId)
+	if standalone {
+		if err := RefreshContainerTTL(
+			ctx.Request().Context(),
+			g.ss.rdb,
+			containerId,
+		); err != nil {
+			if errors.Is(err, ErrShellLeaseExpired) {
+				return ctx.String(http.StatusGone, "Shell lease expired")
+			}
+			return ctx.String(http.StatusBadGateway, "Failed to refresh shell lease")
+		}
 	}
 
 	// Hijack the connection
@@ -84,7 +101,9 @@ func (g *shellGroup) ShellConnect(ctx echo.Context) error {
 	containerConn, err := network.ConnectToBackend(ctx.Request().Context(), containerAddress, containerDialTimeoutDurationS, g.ss.tailscale, g.ss.config.Tailscale, g.ss.containerRepo)
 	if err != nil {
 		fmt.Fprintf(clientConn, "ERROR: %s", err.Error())
-		return err
+		// The HTTP connection is already hijacked, so Echo must not attempt to
+		// render another response on it.
+		return nil
 	}
 	defer containerConn.Close()
 
@@ -93,10 +112,31 @@ func (g *shellGroup) ShellConnect(ctx echo.Context) error {
 
 	// Tell the client to proceed now that everything is set up
 	if _, err = clientConn.Write([]byte("OK")); err != nil {
-		return err
+		return nil
 	}
 
 	// Start proxying data
+	done := make(chan struct{})
+	if standalone {
+		go g.ss.keepAlive(ctx.Request().Context(), containerId, done)
+	}
+	proxyShellConnections(
+		ctx.Request().Context(),
+		g.ss.ctx,
+		clientConn,
+		containerConn,
+		done,
+	)
+	return nil
+}
+
+func proxyShellConnections(
+	requestCtx context.Context,
+	serviceCtx context.Context,
+	clientConn net.Conn,
+	containerConn net.Conn,
+	done chan struct{},
+) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 
@@ -106,6 +146,19 @@ func (g *shellGroup) ShellConnect(ctx echo.Context) error {
 		containerConn.Close()
 		close(done)
 	}
+
+	// Hijacked connections are no longer managed by net/http. Explicitly
+	// close both sides when the request or gateway shuts down so proxy
+	// goroutines cannot outlive the service indefinitely.
+	go func() {
+		select {
+		case <-requestCtx.Done():
+			once.Do(closeConnections)
+		case <-serviceCtx.Done():
+			once.Do(closeConnections)
+		case <-done:
+		}
+	}()
 
 	// Proxy the connection in both directions
 	for _, pair := range []struct {
@@ -123,13 +176,4 @@ func (g *shellGroup) ShellConnect(ctx echo.Context) error {
 	}
 
 	wg.Wait()
-
-	select {
-	case <-done:
-		return nil
-	case <-ctx.Request().Context().Done():
-		return nil
-	case <-g.ss.ctx.Done():
-		return nil
-	}
 }

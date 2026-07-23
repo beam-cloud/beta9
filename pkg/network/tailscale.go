@@ -117,9 +117,10 @@ type Tailscale struct {
 	tailscaleRepo repository.TailscaleRepository
 	staleNetmap   staleNetmapDetector
 
-	// statusFunc and pingFunc override tailnet operations in tests.
+	// statusFunc, pingFunc, and dialFunc override tailnet operations in tests.
 	statusFunc func(ctx context.Context) (*ipnstate.Status, error)
 	pingFunc   func(ctx context.Context, ip netip.Addr) error
+	dialFunc   func(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
 func (t *Tailscale) logF(format string, v ...interface{}) {
@@ -281,6 +282,9 @@ func (t *Tailscale) Serve(ctx context.Context, service types.InternalService) (n
 
 // Dial attempts to establish a TCP connection to a tailscale service
 func (t *Tailscale) Dial(ctx context.Context, network, addr string) (net.Conn, error) {
+	if t.dialFunc != nil {
+		return t.dialFunc(ctx, network, addr)
+	}
 	if err := t.ensureUp(ctx); err != nil {
 		return nil, err
 	}

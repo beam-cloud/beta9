@@ -1,7 +1,6 @@
 import inspect
 import threading
 import time
-import urllib.parse
 from typing import Any, Callable, ClassVar, Dict, Optional, Tuple
 
 from .. import terminal
@@ -12,7 +11,7 @@ from ..clients.gateway import DeployStubRequest, DeployStubResponse, GetUrlReque
 from ..clients.shell import CreateShellInExistingContainerRequest, CreateStandaloneShellRequest
 from ..config import ConfigContext
 from .base.runner import RunnerAbstraction
-from .shell import SSHShell
+from .shell import SSHShell, parse_shell_connection_url
 
 
 class DeployableMixin:
@@ -168,23 +167,30 @@ class DeployableMixin:
             password = create_shell_response.password
 
         # Then, we can retrieve the URL and establish a tunnel
+        requested_url_type = (url_type or "path").lstrip("/")
+        if requested_url_type not in {"host", "path"}:
+            return terminal.error(f"Unsupported shell URL type: {requested_url_type}")
+        if requested_url_type == "host":
+            terminal.warn("Shell connections use path URLs; ignoring --url-type host.")
+        shell_url_type = "path"
         res: GetUrlResponse = self.parent.gateway_stub.get_url(
             GetUrlRequest(
                 stub_id=self.parent.stub_id,
                 deployment_id=getattr(self, "deployment_id", ""),
-                url_type="/path",
+                url_type=shell_url_type,
                 is_shell=True,
             )
         )
         if not res.ok:
             return terminal.error(f"Failed to get shell connection URL: {res.err_msg}")
 
-        # Parse the URL to extract the container_id
-        parsed_url = urllib.parse.urlparse(res.url)
-        proxy_host, proxy_port = parsed_url.hostname, parsed_url.port
-
-        if not proxy_port:
-            proxy_port = 443 if parsed_url.scheme == "https" else 80
+        try:
+            connection = parse_shell_connection_url(res.url)
+        except ValueError as exc:
+            return terminal.error(f"Failed to get shell connection URL: {exc}")
+        auth_token = self.parent.config_context.token
+        if not auth_token:
+            return terminal.error("Failed to establish shell: missing authentication token")
 
         if sync_dir:
             threading.Thread(
@@ -194,13 +200,15 @@ class DeployableMixin:
             ).start()
 
         with SSHShell(
-            host=proxy_host,
-            port=proxy_port,
-            path=parsed_url.path,
+            host=connection.host,
+            port=connection.port,
+            path=connection.path,
             container_id=container_id,
             stub_id=self.parent.stub_id,
-            auth_token=self.parent.config_context.token,
+            auth_token=auth_token,
             username=username,
             password=password,
+            host_header=connection.host_header,
+            use_tls=connection.use_tls,
         ) as shell:
-            shell.start()
+            return shell.start()

@@ -149,7 +149,7 @@ func (s *Service) DeleteMarketplaceRental(ctx context.Context, in *pb.DeleteMark
 // only reachable through an owned rental, never through the public stub API.
 func (s *Service) LaunchRentalWorkload(ctx context.Context, in *pb.LaunchRentalWorkloadRequest) (*pb.LaunchRentalWorkloadResponse, error) {
 	authInfo, authenticated := auth.AuthInfoFromContext(ctx)
-	if !authenticated || authInfo.Workspace == nil || authInfo.Token == nil {
+	if !authenticated || authInfo.Workspace == nil || !auth.HasInteractivePermission(authInfo) {
 		return &pb.LaunchRentalWorkloadResponse{Ok: false, ErrMsg: marketplaceErrMissingAuth}, nil
 	}
 
@@ -438,7 +438,10 @@ func (s *Service) launchRentalShell(
 		return &pb.LaunchRentalWorkloadResponse{Ok: false, ErrMsg: "shell launches are unavailable"}, nil
 	}
 
-	username, password := shellpkg.CredentialsForToken(*authInfo.Token)
+	username, password, err := shellpkg.GenerateShellCredentials()
+	if err != nil {
+		return &pb.LaunchRentalWorkloadResponse{Ok: false, ErrMsg: "failed to generate shell credentials"}, nil
+	}
 	containerId := shellpkg.ContainerIDForStub(stub.ExternalId)
 	env := []string{
 		fmt.Sprintf("USERNAME=%s", username),
@@ -452,11 +455,18 @@ func (s *Service) launchRentalShell(
 		return &pb.LaunchRentalWorkloadResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	if err := s.scheduler.Run(request); err != nil {
+		_ = shellpkg.ClearContainerTTL(ctx, s.redisClient, containerId)
 		return &pb.LaunchRentalWorkloadResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	if err := s.waitForRentalContainer(ctx, containerId, rentalShellWaitTimeout); err != nil {
-		s.scheduler.Stop(&types.StopContainerArgs{ContainerId: containerId, Force: true, Reason: types.StopContainerReasonTtl})
+		_ = s.scheduler.Stop(&types.StopContainerArgs{ContainerId: containerId, Force: true, Reason: types.StopContainerReasonTtl})
+		_ = shellpkg.ClearContainerTTL(context.Background(), s.redisClient, containerId)
 		return &pb.LaunchRentalWorkloadResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+	if err := shellpkg.RefreshPendingContainerTTL(ctx, s.redisClient, containerId); err != nil {
+		_ = s.scheduler.Stop(&types.StopContainerArgs{ContainerId: containerId, Force: true, Reason: types.StopContainerReasonTtl})
+		_ = shellpkg.ClearContainerTTL(context.Background(), s.redisClient, containerId)
+		return &pb.LaunchRentalWorkloadResponse{Ok: false, ErrMsg: "shell lease expired before connection"}, nil
 	}
 
 	return &pb.LaunchRentalWorkloadResponse{

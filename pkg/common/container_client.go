@@ -107,7 +107,11 @@ func (c *ContainerClient) Status(containerId string) (*pb.ContainerStatusRespons
 }
 
 func (c *ContainerClient) Exec(containerId, cmd string, env []string) (*pb.ContainerExecResponse, error) {
-	resp, err := c.client.ContainerExec(context.TODO(), &pb.ContainerExecRequest{ContainerId: containerId, Cmd: cmd, Env: env})
+	return c.ExecContext(context.Background(), containerId, cmd, env)
+}
+
+func (c *ContainerClient) ExecContext(ctx context.Context, containerId, cmd string, env []string) (*pb.ContainerExecResponse, error) {
+	resp, err := c.client.ContainerExec(ctx, &pb.ContainerExecRequest{ContainerId: containerId, Cmd: cmd, Env: env})
 	if err != nil {
 		return resp, err
 	}
@@ -272,7 +276,11 @@ func (c *ContainerClient) SandboxFindInFiles(containerId, containerPath, pattern
 }
 
 func (c *ContainerClient) SandboxExposePort(containerId string, port int32) (*pb.ContainerSandboxExposePortResponse, error) {
-	resp, err := c.client.ContainerSandboxExposePort(context.TODO(), &pb.ContainerSandboxExposePortRequest{ContainerId: containerId, Port: port})
+	return c.SandboxExposePortContext(context.Background(), containerId, port)
+}
+
+func (c *ContainerClient) SandboxExposePortContext(ctx context.Context, containerId string, port int32) (*pb.ContainerSandboxExposePortResponse, error) {
+	resp, err := c.client.ContainerSandboxExposePort(ctx, &pb.ContainerSandboxExposePortRequest{ContainerId: containerId, Port: port})
 	if err != nil {
 		return resp, err
 	}

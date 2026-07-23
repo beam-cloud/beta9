@@ -498,7 +498,7 @@ app = Pod(
         machine_id: Optional[str] = None,
     ):
         self.authorized = True
-        super().shell(
+        return super().shell(
             url_type=url_type,
             sync_dir=sync_dir,
             container_id=container_id,

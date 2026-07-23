@@ -2,12 +2,15 @@ package network
 
 import (
 	"context"
+	"errors"
+	"net"
 	"net/netip"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/types"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/types/key"
 )
@@ -40,6 +43,40 @@ func withFastPeerPolling(t *testing.T) {
 	prev := tailnetPeerPollInterval
 	tailnetPeerPollInterval = time.Millisecond
 	t.Cleanup(func() { tailnetPeerPollInterval = prev })
+}
+
+func TestConnectToHostRetriesDialWhenPeerIsMissingFromNetmap(t *testing.T) {
+	withFastPeerPolling(t)
+
+	ts := testTailscale(t, statusWithPeers())
+	dialAttempts := 0
+	var peer net.Conn
+	ts.dialFunc = func(context.Context, string, string) (net.Conn, error) {
+		dialAttempts++
+		if dialAttempts == 1 {
+			return nil, errors.New("initial dial failed")
+		}
+		client, server := net.Pipe()
+		peer = server
+		return client, nil
+	}
+
+	conn, err := ConnectToHost(
+		context.Background(),
+		"worker.tailnet:2222",
+		500*time.Millisecond,
+		ts,
+		types.TailscaleConfig{Enabled: true, HostName: "tailnet"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	defer peer.Close()
+
+	if dialAttempts != 2 {
+		t.Fatalf("dial attempts = %d, want initial dial plus retry", dialAttempts)
+	}
 }
 
 func TestWarmPeersPingsOnlyMatchingOnlinePeers(t *testing.T) {

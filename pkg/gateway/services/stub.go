@@ -1016,6 +1016,12 @@ func (gws *GatewayService) hasStubAccess(ctx context.Context, authInfo *auth.Aut
 
 func (gws *GatewayService) GetURL(ctx context.Context, in *pb.GetURLRequest) (*pb.GetURLResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
+	if in.IsShell && !auth.HasInteractivePermission(authInfo) {
+		return &pb.GetURLResponse{
+			Ok:     false,
+			ErrMsg: "Unauthorized access",
+		}, nil
+	}
 
 	stub, err := gws.backendRepo.GetStubByExternalId(ctx, in.StubId)
 	if err != nil || stub == nil {
@@ -1041,7 +1047,11 @@ func (gws *GatewayService) GetURL(ctx context.Context, in *pb.GetURLRequest) (*p
 		}, nil
 	}
 
-	if in.UrlType == "" {
+	if in.IsShell {
+		// Shell HTTP hijacking is registered on the path router. Host-style
+		// URLs bypass that route and cannot establish a tunnel.
+		in.UrlType = common.InvokeUrlTypePath
+	} else if in.UrlType == "" {
 		in.UrlType = gws.appConfig.GatewayService.InvokeURLType
 	}
 
