@@ -51,7 +51,6 @@ class PodInstance(BaseAbstraction):
     url: str
     ok: bool = field(default=False)
     error_msg: str = field(default="")
-    management_url: str = field(default="")
     task_id: str = field(default="")
     app_id: str = field(default="")
     gateway_stub: "GatewayServiceStub" = field(init=False)
@@ -279,7 +278,6 @@ class Pod(RunnerAbstraction, DeployableMixin):
             url=url,
             ok=create_response.ok,
             error_msg=create_response.error_msg,
-            management_url=create_response.management_url,
             task_id=create_response.task_id,
             app_id=create_response.app_id,
         )

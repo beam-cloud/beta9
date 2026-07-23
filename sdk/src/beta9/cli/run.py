@@ -144,8 +144,6 @@ def _print_detached_run(result: PodInstance, pod_spec: Pod) -> None:
     cli_name = _get_cli_name()
     terminal.success(f"Detached; container {result.container_id} keeps running")
     _print_run_links(result)
-    if result.management_url:
-        terminal.detail(f"  dashboard: {result.management_url}")
     terminal.detail(f"  shell:     {cli_name} shell --container-id {result.container_id}")
     terminal.detail(f"  reattach:  {cli_name} container attach {result.container_id}")
     terminal.detail(f"  stop:      {cli_name} container stop {result.container_id}")

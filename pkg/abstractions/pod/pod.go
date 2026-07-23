@@ -573,14 +573,6 @@ func (s *GenericPodService) configureMachinePlacement(ctx context.Context, works
 	return nil
 }
 
-func (s *GenericPodService) containerManagementURL(containerID string) string {
-	template := strings.TrimSpace(s.config.GatewayService.ContainerURLTemplate)
-	if template == "" || !strings.Contains(template, "{container_id}") {
-		return ""
-	}
-	return strings.ReplaceAll(template, "{container_id}", containerID)
-}
-
 func podRunWorkspace(authInfo *auth.AuthInfo, stub *types.StubWithRelated) (*types.Workspace, error) {
 	if authInfo == nil || authInfo.Workspace == nil {
 		return nil, fmt.Errorf("missing workspace auth")
@@ -684,9 +676,8 @@ func (s *GenericPodService) CreatePod(ctx context.Context, in *pb.CreatePodReque
 		Ok:            true,
 		ContainerId:   containerId,
 		StubId:        stub.ExternalId,
-		ManagementUrl: s.containerManagementURL(containerId),
-		TaskId:        taskId,
-		AppId:         appId,
+		TaskId: taskId,
+		AppId:  appId,
 	}, nil
 }
 

@@ -1031,9 +1031,6 @@
         "stubId": {
           "type": "string"
         },
-        "managementUrl": {
-          "type": "string"
-        },
         "taskId": {
           "type": "string"
         },
