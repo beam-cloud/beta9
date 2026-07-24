@@ -28,6 +28,7 @@ const (
 	thunderLibraryPath             = "/etc/thunder/libthunder.so"
 	thunderNvidiaSMIPath           = "/usr/bin/nvidia-smi"
 	thunderNvidiaMLLibraryPath     = "/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1"
+	thunderCudaDriverLibraryPath   = "/usr/lib/x86_64-linux-gnu/libcuda.so.1"
 )
 
 type thunderSetupState int
@@ -318,6 +319,7 @@ func (c *ContainerThunderManager) InjectMounts(mounts []specs.Mount) []specs.Mou
 	mounts = (&ContainerNvidiaManager{}).InjectMounts(mounts)
 	mounts = append(mounts, thunderBindMount(thunderNvidiaSMIPath))
 	mounts = append(mounts, thunderBindMount(thunderNvidiaMLLibraryPath))
+	mounts = append(mounts, thunderBindMount(thunderCudaDriverLibraryPath))
 	return mounts
 }
 

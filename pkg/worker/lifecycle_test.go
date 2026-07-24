@@ -540,6 +540,7 @@ func TestSpecFromRequestInjectsThunderMounts(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, spec.Mounts, thunderBindMount("/usr/bin/nvidia-smi"))
 	require.Contains(t, spec.Mounts, thunderBindMount("/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1"))
+	require.Contains(t, spec.Mounts, thunderBindMount("/usr/lib/x86_64-linux-gnu/libcuda.so.1"))
 }
 
 func TestSpecFromRequestReturnsIndependentSpecs(t *testing.T) {

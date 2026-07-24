@@ -90,7 +90,7 @@ func TestThunderInjectEnvVarsAppendsThunderLDPreload(t *testing.T) {
 	assert.Contains(t, env, "LD_PRELOAD=/lib/existing.so:/etc/thunder/libthunder.so")
 }
 
-func TestThunderInjectMountsAddsNvidiaSMIAndNVML(t *testing.T) {
+func TestThunderInjectMountsAddsNvidiaSMINVMLAndCUDA(t *testing.T) {
 	manager := NewContainerThunderManager("", "", nil)
 	initialMounts := []specs.Mount{{Type: "bind", Source: "/src", Destination: "/dst"}}
 
@@ -98,6 +98,7 @@ func TestThunderInjectMountsAddsNvidiaSMIAndNVML(t *testing.T) {
 
 	assert.Contains(t, mounts, thunderBindMount("/usr/bin/nvidia-smi"))
 	assert.Contains(t, mounts, thunderBindMount("/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1"))
+	assert.Contains(t, mounts, thunderBindMount("/usr/lib/x86_64-linux-gnu/libcuda.so.1"))
 }
 
 func TestThunderAssignRegistersClientAndLeavesAssignedEnvUnchanged(t *testing.T) {
