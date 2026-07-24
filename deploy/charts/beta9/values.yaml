@@ -146,6 +146,23 @@ redis:
   nameOverride: redis
   fullnameOverride: redis
   architecture: standalone
+  # Bitnami removed the immutable tags used by this pinned chart version from
+  # its primary repository. Keep the tested versions available without a
+  # post-render rewrite or an implicit Redis major-version upgrade.
+  image:
+    repository: bitnamilegacy/redis
+  sentinel:
+    image:
+      repository: bitnamilegacy/redis-sentinel
+  metrics:
+    image:
+      repository: bitnamilegacy/redis-exporter
+  volumePermissions:
+    image:
+      repository: bitnamilegacy/os-shell
+  sysctl:
+    image:
+      repository: bitnamilegacy/os-shell
   auth:
     enabled: false
   master:
@@ -160,6 +177,9 @@ postgresql:
   enabled: true
   nameOverride: postgresql
   fullnameOverride: postgresql
+  # Match the immutable PostgreSQL and helper tags selected by chart 13.4.3.
+  image:
+    repository: bitnamilegacy/postgresql
   global:
     postgresql:
       auth:
@@ -172,6 +192,11 @@ postgresql:
       shared_buffers='400MB'
   volumePermissions:
     enabled: true
+    image:
+      repository: bitnamilegacy/os-shell
+  metrics:
+    image:
+      repository: bitnamilegacy/postgres-exporter
   persistence:
     enabled: true
     size: 1Gi
@@ -182,6 +207,21 @@ juicefs-redis:
   nameOverride: juicefs-redis
   fullnameOverride: juicefs-redis
   architecture: standalone
+  # Use the same resolvable immutable images as the gateway Redis deployment.
+  image:
+    repository: bitnamilegacy/redis
+  sentinel:
+    image:
+      repository: bitnamilegacy/redis-sentinel
+  metrics:
+    image:
+      repository: bitnamilegacy/redis-exporter
+  volumePermissions:
+    image:
+      repository: bitnamilegacy/os-shell
+  sysctl:
+    image:
+      repository: bitnamilegacy/os-shell
   auth:
     enabled: false
   master:
