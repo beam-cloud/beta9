@@ -527,6 +527,182 @@ func TestBackendRoutesAreIndexedByMachine(t *testing.T) {
 	}
 }
 
+func TestReadyWorkerRouteSurvivesOneHundredConcurrentRegistrations(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repo := NewContainerRedisRepositoryForTest(rdb)
+	ctx := context.Background()
+	ready := testReadyWorkerRoute("machine-one", "worker-one")
+	if err := repo.SetBackendRoute(ctx, ready); err != nil {
+		t.Fatal(err)
+	}
+
+	opening := ready
+	opening.WorkspaceID = "buyer-workspace"
+	opening.ProxyTarget = ""
+	opening.State = types.BackendRouteStateOpening
+	opening.UpdatedAt = 0
+
+	const starts = 100
+	start := make(chan struct{})
+	errs := make(chan error, starts)
+	var wg sync.WaitGroup
+	for range starts {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			errs <- repo.SetBackendRoute(ctx, opening)
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent route registration failed: %v", err)
+		}
+	}
+
+	got, err := repo.GetBackendRoute(ctx, ready.RouteID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != types.BackendRouteStateReady {
+		t.Fatalf("route state = %q, want ready", got.State)
+	}
+	if got.ProxyTarget != ready.ProxyTarget {
+		t.Fatalf("proxy target = %q, want %q", got.ProxyTarget, ready.ProxyTarget)
+	}
+	if got.UpdatedAt != ready.UpdatedAt {
+		t.Fatalf("updated at = %d, want %d", got.UpdatedAt, ready.UpdatedAt)
+	}
+}
+
+func TestReadyWorkerRoutesRemainIndependentDuringSameHostBurst(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repo := NewContainerRedisRepositoryForTest(rdb)
+	ctx := context.Background()
+	const (
+		workers         = 4
+		startsPerWorker = 25
+	)
+	routes := make([]types.BackendRoute, 0, workers)
+	for workerIndex := range workers {
+		route := testReadyWorkerRoute("shared-machine", fmt.Sprintf("worker-%d", workerIndex))
+		if err := repo.SetBackendRoute(ctx, route); err != nil {
+			t.Fatal(err)
+		}
+		routes = append(routes, route)
+	}
+
+	start := make(chan struct{})
+	errs := make(chan error, workers*startsPerWorker)
+	var wg sync.WaitGroup
+	for _, ready := range routes {
+		opening := ready
+		opening.ProxyTarget = ""
+		opening.State = types.BackendRouteStateOpening
+		opening.UpdatedAt = 0
+		for range startsPerWorker {
+			wg.Add(1)
+			go func(route types.BackendRoute) {
+				defer wg.Done()
+				<-start
+				errs <- repo.SetBackendRoute(ctx, route)
+			}(opening)
+		}
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent route registration failed: %v", err)
+		}
+	}
+	for _, ready := range routes {
+		got, err := repo.GetBackendRoute(ctx, ready.RouteID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.State != types.BackendRouteStateReady || got.ProxyTarget != ready.ProxyTarget {
+			t.Fatalf("route %s = state %q target %q, want ready target %q", got.RouteID, got.State, got.ProxyTarget, ready.ProxyTarget)
+		}
+	}
+}
+
+func TestChangedWorkerRouteReopens(t *testing.T) {
+	tests := []struct {
+		name   string
+		change func(*types.BackendRoute)
+	}{
+		{
+			name: "local target",
+			change: func(route *types.BackendRoute) {
+				route.LocalTarget = "127.0.0.1:32001"
+			},
+		},
+		{
+			name: "transport",
+			change: func(route *types.BackendRoute) {
+				route.Transport = types.BackendRouteTransportLocalDirect
+			},
+		},
+		{
+			name: "pool",
+			change: func(route *types.BackendRoute) {
+				route.PoolName = "pool-two"
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			rdb, err := NewRedisClientForTest()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			repo := NewContainerRedisRepositoryForTest(rdb)
+			ctx := context.Background()
+			ready := testReadyWorkerRoute("machine-one", "worker-one")
+			if err := repo.SetBackendRoute(ctx, ready); err != nil {
+				t.Fatal(err)
+			}
+
+			opening := ready
+			opening.ProxyTarget = ""
+			opening.State = types.BackendRouteStateOpening
+			opening.UpdatedAt = 0
+			test.change(&opening)
+			if err := repo.SetBackendRoute(ctx, opening); err != nil {
+				t.Fatal(err)
+			}
+
+			got, err := repo.GetBackendRoute(ctx, ready.RouteID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.State != types.BackendRouteStateOpening {
+				t.Fatalf("route state = %q, want opening", got.State)
+			}
+			if got.ProxyTarget != "" {
+				t.Fatalf("proxy target = %q, want empty", got.ProxyTarget)
+			}
+		})
+	}
+}
+
 func TestBackendRoutesAreIndexedByMachineID(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	if err != nil {
@@ -684,6 +860,23 @@ func TestDeleteBackendRoutesByContainerIDKeepsSiblingContainerRoutesOnSameMachin
 	}
 	if _, err := repo.GetBackendRoute(ctx, routeB.RouteID); err != nil {
 		t.Fatalf("sibling route was removed: %v", err)
+	}
+}
+
+func testReadyWorkerRoute(machineID, workerID string) types.BackendRoute {
+	return types.BackendRoute{
+		RouteID:     types.BackendRouteID(machineID, workerID, "", types.BackendRouteKindWorker, 0),
+		WorkspaceID: "workspace-one",
+		PoolName:    "pool-one",
+		MachineID:   machineID,
+		WorkerID:    workerID,
+		Kind:        types.BackendRouteKindWorker,
+		Protocol:    types.BackendRouteProtocolTCP,
+		Transport:   types.BackendRouteTransportTSNet,
+		LocalTarget: "127.0.0.1:32000",
+		ProxyTarget: machineID + ".tailnet:29443",
+		State:       types.BackendRouteStateReady,
+		UpdatedAt:   123,
 	}
 }
 
