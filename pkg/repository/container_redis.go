@@ -45,6 +45,38 @@ const (
 
 var errConcurrencyCounterRepairing = errors.New("concurrency counter repair in progress")
 
+// Opening worker routes are republished for every container startup. Once the
+// agent has made an identical shared route ready, those registrations must not
+// demote it or erase its proxy target. WorkspaceID is deliberately not part of
+// the target identity because marketplace workers can serve buyer workspaces.
+var setOpeningWorkerBackendRouteScript = redis.NewScript(`
+local incoming = cjson.decode(ARGV[1])
+local current = redis.call("GET", KEYS[1])
+
+if current ~= false then
+	local decoded, existing = pcall(cjson.decode, current)
+	if decoded and
+		existing.state == ARGV[2] and
+		existing.proxy_target and
+		existing.proxy_target ~= "" and
+		existing.route_id == incoming.route_id and
+		existing.pool_name == incoming.pool_name and
+		existing.machine_id == incoming.machine_id and
+		existing.worker_id == incoming.worker_id and
+		existing.container_id == incoming.container_id and
+		existing.kind == incoming.kind and
+		existing.port == incoming.port and
+		existing.protocol == incoming.protocol and
+		existing.transport == incoming.transport and
+		existing.local_target == incoming.local_target then
+		return 0
+	end
+end
+
+redis.call("SET", KEYS[1], ARGV[1])
+return 1
+`)
+
 // Workspace concurrency accounting must stay O(1) during bursts. The old
 // implementation scanned every active container while holding a workspace lock
 // for each request. Instead, the first quota-bearing request rebuilds an
@@ -447,7 +479,20 @@ func (cr *ContainerRedisRepository) SetBackendRoutes(ctx context.Context, routes
 	_, err := cr.rdb.Pipelined(ctx, func(pipe redis.Pipeliner) error {
 		for _, item := range encoded {
 			route := item.route
-			pipe.Set(ctx, common.RedisKeys.SchedulerBackendRoute(route.RouteID), item.data, 0)
+			routeKey := common.RedisKeys.SchedulerBackendRoute(route.RouteID)
+			if route.Kind == types.BackendRouteKindWorker &&
+				route.ContainerID == "" &&
+				route.State == types.BackendRouteStateOpening {
+				setOpeningWorkerBackendRouteScript.Eval(
+					ctx,
+					pipe,
+					[]string{routeKey},
+					item.data,
+					types.BackendRouteStateReady,
+				)
+			} else {
+				pipe.Set(ctx, routeKey, item.data, 0)
+			}
 			if route.ContainerID != "" {
 				pipe.SAdd(ctx, common.RedisKeys.SchedulerBackendRouteIndex(route.ContainerID), route.RouteID)
 			}

@@ -3,10 +3,14 @@ package pod
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"google.golang.org/grpc/codes"
@@ -123,6 +127,78 @@ func TestSandboxClientCacheKeyKeepsDifferentWorkerAddressesDistinct(t *testing.T
 	keyB := sandboxClientCacheKey("route://worker-b", "token")
 	if keyA == keyB {
 		t.Fatalf("worker route cache keys unexpectedly matched: %q", keyA)
+	}
+}
+
+func TestEvictClientDoesNotDeleteNewerReplacement(t *testing.T) {
+	service := &GenericPodService{}
+	stale := &common.ContainerClient{}
+	replacement := &common.ContainerClient{}
+	service.clientCache.Store("worker:token", replacement)
+
+	service.evictClient("worker:token", stale)
+
+	got, ok := service.clientCache.Load("worker:token")
+	if !ok || got != replacement {
+		t.Fatal("evicting a stale client deleted its newer replacement")
+	}
+}
+
+func TestSandboxClientDialIsSingleFlightPerWorkerDuringBurst(t *testing.T) {
+	const (
+		workerCount         = 4
+		containersPerWorker = 25
+	)
+
+	service := &GenericPodService{}
+	start := make(chan struct{})
+	releaseCreates := make(chan struct{})
+	createStarted := make(chan struct{}, workerCount)
+	var createCount atomic.Int32
+	var wg sync.WaitGroup
+	errs := make(chan error, workerCount*containersPerWorker)
+
+	for worker := 0; worker < workerCount; worker++ {
+		cacheKey := fmt.Sprintf("route://machine-a:worker-%d::worker:0:token", worker)
+		for container := 0; container < containersPerWorker; container++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				client, _, err := service.loadOrCreateSandboxClient(context.Background(), cacheKey, func() (*common.ContainerClient, error) {
+					createCount.Add(1)
+					createStarted <- struct{}{}
+					<-releaseCreates
+					return &common.ContainerClient{}, nil
+				})
+				if err != nil {
+					errs <- err
+					return
+				}
+				if client == nil {
+					errs <- errors.New("nil sandbox client")
+				}
+			}()
+		}
+	}
+
+	close(start)
+	for worker := 0; worker < workerCount; worker++ {
+		select {
+		case <-createStarted:
+		case <-time.After(time.Second):
+			t.Fatal("worker client dial did not start")
+		}
+	}
+	close(releaseCreates)
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		t.Fatal(err)
+	}
+	if got := createCount.Load(); got != workerCount {
+		t.Fatalf("client creates = %d, want one per worker (%d)", got, workerCount)
 	}
 }
 

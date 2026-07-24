@@ -24,6 +24,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/sync/singleflight"
 )
 
 type PodServiceOpts struct {
@@ -76,6 +77,7 @@ type GenericPodService struct {
 	controller      *abstractions.InstanceController
 	podInstances    *common.SafeMap[*podInstance]
 	clientCache     sync.Map
+	clientDialGroup singleflight.Group
 	tcpServer       *PodTCPServer
 	drainCtx        context.Context
 }

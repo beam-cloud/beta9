@@ -143,6 +143,39 @@ func TestRouteProxyPollsOpeningRouteWithoutBackoff(t *testing.T) {
 	}
 }
 
+func TestRouteProxyRechecksOpeningRouteThatRacesReadyUpdate(t *testing.T) {
+	backend := startEchoListener(t, "127.0.0.1:0")
+	target := backend.Addr().String()
+	client := &blockingRouteStatusClient{
+		updates:      make(chan *pb.UpdateAgentRouteStatusRequest, 2),
+		releaseFirst: make(chan struct{}),
+	}
+	proxy := newRouteProxy(client, "agent-token", nil, "agent.tailnet:29443", nil, io.Discard, io.Discard)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	proxy.setRoute("route-one", target)
+	proxy.ensureRouteReady(ctx, "route-one", target)
+
+	select {
+	case <-client.updates:
+	case <-time.After(time.Second):
+		t.Fatal("first route readiness update did not start")
+	}
+
+	// This models an opening snapshot arriving while the previous ready update
+	// is still in flight. The second check must not be lost when the first exits.
+	proxy.ensureRouteReady(ctx, "route-one", target)
+	close(client.releaseFirst)
+
+	select {
+	case <-client.updates:
+	case <-time.After(time.Second):
+		t.Fatal("opening route was not rechecked after the active ready update")
+	}
+}
+
 func TestDialLocalTargetFallsBackToLoopback(t *testing.T) {
 	backend := startEchoListener(t, "127.0.0.1:0")
 	_, port, err := net.SplitHostPort(backend.Addr().String())
@@ -167,6 +200,36 @@ func (c *routeStatusClient) UpdateAgentRouteStatus(ctx context.Context, in *pb.U
 	case c.updates <- in:
 	case <-ctx.Done():
 		return nil, ctx.Err()
+	}
+	return &pb.UpdateAgentRouteStatusResponse{Ok: true}, nil
+}
+
+type blockingRouteStatusClient struct {
+	pb.GatewayServiceClient
+	mu           sync.Mutex
+	calls        int
+	updates      chan *pb.UpdateAgentRouteStatusRequest
+	releaseFirst chan struct{}
+}
+
+func (c *blockingRouteStatusClient) UpdateAgentRouteStatus(ctx context.Context, in *pb.UpdateAgentRouteStatusRequest, _ ...grpc.CallOption) (*pb.UpdateAgentRouteStatusResponse, error) {
+	c.mu.Lock()
+	c.calls++
+	call := c.calls
+	c.mu.Unlock()
+
+	select {
+	case c.updates <- in:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+
+	if call == 1 {
+		select {
+		case <-c.releaseFirst:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
 	return &pb.UpdateAgentRouteStatusResponse{Ok: true}, nil
 }
