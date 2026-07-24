@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 
@@ -83,7 +84,7 @@ func (s *GenericPodService) sandboxExecWithConnectRetry(ctx context.Context, in 
 			return nil, err
 		}
 
-		client, _, cacheKey, err := s.getClientWithCacheKey(ctx, in.ContainerId, token, workspaceID)
+		client, _, err := s.getClient(ctx, in.ContainerId, token, workspaceID)
 		retryable := false
 		if err != nil {
 			logSandboxConnectFailure(err, in.ContainerId)
@@ -96,9 +97,6 @@ func (s *GenericPodService) sandboxExecWithConnectRetry(ctx context.Context, in 
 			}
 			lastErr = err
 			retryable = isTransientSandboxConnectFailure(err)
-			if retryable {
-				s.evictClient(cacheKey, client)
-			}
 		}
 
 		if !retryable || time.Now().Add(sandboxExecConnectRetryDelay).After(deadline) {
@@ -145,7 +143,7 @@ func (s *GenericPodService) SandboxStatus(ctx context.Context, in *pb.PodSandbox
 		return resp, nil
 	}
 
-	client, _, cacheKey, err := s.getClientWithCacheKey(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
 	if err != nil {
 		return &pb.PodSandboxStatusResponse{
 			Ok:       false,
@@ -154,15 +152,6 @@ func (s *GenericPodService) SandboxStatus(ctx context.Context, in *pb.PodSandbox
 	}
 
 	resp, err := client.SandboxStatusContext(ctx, in.ContainerId, in.Pid)
-	if err != nil && isTransientSandboxConnectFailure(err) {
-		s.evictClient(cacheKey, client)
-		client, _, retryErr := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
-		if retryErr != nil {
-			err = retryErr
-		} else {
-			resp, err = client.SandboxStatusContext(ctx, in.ContainerId, in.Pid)
-		}
-	}
 	if err != nil {
 		return &pb.PodSandboxStatusResponse{
 			Ok:       false,
@@ -205,21 +194,12 @@ func (s *GenericPodService) sandboxContainerStatus(ctx context.Context, containe
 }
 
 func (s *GenericPodService) sandboxRuntimeStatus(ctx context.Context, containerId string, authInfo *auth.AuthInfo) (*pb.PodSandboxStatusResponse, error) {
-	client, _, cacheKey, err := s.getClientWithCacheKey(ctx, containerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+	client, _, err := s.getClient(ctx, containerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
 	if err != nil {
 		return sandboxStatus(types.SandboxStatusPending), nil
 	}
 
 	resp, err := client.SandboxStatusContext(ctx, containerId, 0)
-	if err != nil && isTransientSandboxConnectFailure(err) {
-		s.evictClient(cacheKey, client)
-		client, _, retryErr := s.getClient(ctx, containerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
-		if retryErr != nil {
-			err = retryErr
-		} else {
-			resp, err = client.SandboxStatusContext(ctx, containerId, 0)
-		}
-	}
 	if err != nil {
 		return sandboxStatus(types.SandboxStatusPending), nil
 	}
@@ -770,31 +750,29 @@ func (s *GenericPodService) SandboxFindInFiles(ctx context.Context, in *pb.PodSa
 func (s *GenericPodService) SandboxConnect(ctx context.Context, in *pb.PodSandboxConnectRequest) (*pb.PodSandboxConnectResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	client, container, cacheKey, err := s.getClientWithCacheKey(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
-	if err == nil {
-		phaseStart := time.Now()
-		readyCtx, cancel := context.WithTimeout(ctx, sandboxConnectReadyTimeout)
-		err = waitForSandboxReady(readyCtx, func(probeCtx context.Context) (*pb.ContainerSandboxStatusResponse, error) {
-			resp, probeErr := client.SandboxStatusContext(probeCtx, in.ContainerId, 0)
-			if !isTransientSandboxConnectFailure(probeErr) {
-				return resp, probeErr
-			}
-
-			s.evictClient(cacheKey, client)
-			refreshedClient, _, refreshedCacheKey, refreshErr := s.getClientWithCacheKey(
+	var client *common.ContainerClient
+	var container *types.ContainerState
+	phaseStart := time.Now()
+	readyCtx, cancel := context.WithTimeout(ctx, sandboxConnectReadyTimeout)
+	err := waitForSandboxReady(readyCtx, func(probeCtx context.Context) (*pb.ContainerSandboxStatusResponse, error) {
+		if client == nil {
+			acquiredClient, acquiredContainer, acquireErr := s.getClient(
 				probeCtx,
 				in.ContainerId,
 				authInfo.Token.Key,
 				authInfo.Workspace.ExternalId,
 			)
-			if refreshErr != nil {
-				return nil, refreshErr
+			if acquireErr != nil {
+				return nil, acquireErr
 			}
-			client = refreshedClient
-			cacheKey = refreshedCacheKey
-			return client.SandboxStatusContext(probeCtx, in.ContainerId, 0)
-		})
-		cancel()
+			client = acquiredClient
+			container = acquiredContainer
+		}
+		return client.SandboxStatusContext(probeCtx, in.ContainerId, 0)
+	})
+	cancel()
+
+	if container != nil {
 		failureClass := ""
 		if err != nil {
 			failureClass = "process_manager_unavailable"
@@ -851,26 +829,21 @@ func waitForSandboxReady(ctx context.Context, probe func(context.Context) (*pb.C
 }
 
 func (s *GenericPodService) getClient(ctx context.Context, containerId, token string, workspaceId string) (*common.ContainerClient, *types.ContainerState, error) {
-	client, container, _, err := s.getClientWithCacheKey(ctx, containerId, token, workspaceId)
-	return client, container, err
-}
-
-func (s *GenericPodService) getClientWithCacheKey(ctx context.Context, containerId, token string, workspaceId string) (*common.ContainerClient, *types.ContainerState, string, error) {
 	phaseStart := time.Now()
 	container, err := s.containerRepo.GetContainerState(containerId)
 	if err != nil {
 		metrics.RecordSandboxConnectPhase("container_state_lookup", workspaceId, "", "", "state_lookup_failed", false, time.Since(phaseStart))
-		return nil, nil, "", err
+		return nil, nil, err
 	}
 
 	if container == nil {
 		metrics.RecordSandboxConnectPhase("container_state_lookup", workspaceId, "", "", "container_not_found", false, time.Since(phaseStart))
-		return nil, nil, "", errors.New("container not found")
+		return nil, nil, errors.New("container not found")
 	}
 
 	if container.WorkspaceId != workspaceId {
 		metrics.RecordSandboxConnectPhase("container_state_lookup", workspaceId, container.StubId, string(container.Status), "invalid_workspace", false, time.Since(phaseStart))
-		return nil, nil, "", errors.New("invalid workspace")
+		return nil, nil, errors.New("invalid workspace")
 	}
 	metrics.RecordSandboxConnectPhase("container_state_lookup", workspaceId, container.StubId, string(container.Status), "", true, time.Since(phaseStart))
 
@@ -880,24 +853,27 @@ func (s *GenericPodService) getClientWithCacheKey(ctx context.Context, container
 	cancel()
 	if err != nil {
 		metrics.RecordSandboxConnectPhase("worker_address_lookup", workspaceId, container.StubId, string(container.Status), "worker_address_unavailable", false, time.Since(phaseStart))
-		return nil, nil, "", err
+		return nil, nil, err
 	}
 	metrics.RecordSandboxConnectPhase("worker_address_lookup", workspaceId, container.StubId, string(container.Status), "", true, time.Since(phaseStart))
 
 	cacheKey := sandboxClientCacheKey(hostname, token)
 	client, cached, err := s.loadOrCreateSandboxClient(ctx, cacheKey, func() (*common.ContainerClient, error) {
-		phaseStart := time.Now()
 		dialCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sandboxConnectWorkerDialTimeout)
 		defer cancel()
-		conn, dialErr := network.ConnectToBackend(dialCtx, hostname, sandboxConnectWorkerDialTimeout, s.tailscale, s.config.Tailscale, s.containerRepo)
-		if dialErr != nil {
-			metrics.RecordSandboxConnectPhase("worker_dial", workspaceId, container.StubId, string(container.Status), "worker_dial_failed", false, time.Since(phaseStart))
-			return nil, dialErr
+		dialer := func(connectCtx context.Context, _ string) (net.Conn, error) {
+			phaseStart := time.Now()
+			conn, dialErr := network.ConnectToBackend(connectCtx, hostname, sandboxConnectWorkerDialTimeout, s.tailscale, s.config.Tailscale, s.containerRepo)
+			failureClass := ""
+			if dialErr != nil {
+				failureClass = "worker_dial_failed"
+			}
+			metrics.RecordSandboxConnectPhase("worker_dial", workspaceId, container.StubId, string(container.Status), failureClass, dialErr == nil, time.Since(phaseStart))
+			return conn, dialErr
 		}
-		metrics.RecordSandboxConnectPhase("worker_dial", workspaceId, container.StubId, string(container.Status), "", true, time.Since(phaseStart))
 
 		phaseStart = time.Now()
-		created, createErr := common.NewContainerClient(hostname, token, conn)
+		created, createErr := common.NewContainerClientWithDialer(dialCtx, hostname, token, dialer)
 		if createErr != nil {
 			metrics.RecordSandboxConnectPhase("client_create", workspaceId, container.StubId, string(container.Status), "client_create_failed", false, time.Since(phaseStart))
 			return nil, createErr
@@ -906,12 +882,12 @@ func (s *GenericPodService) getClientWithCacheKey(ctx context.Context, container
 		return created, nil
 	})
 	if err != nil {
-		return nil, nil, "", err
+		return nil, nil, err
 	}
 	if cached {
 		metrics.RecordSandboxConnectPhase("client_cache", workspaceId, container.StubId, string(container.Status), "", true, 0)
 	}
-	return client, container, cacheKey, nil
+	return client, container, nil
 }
 
 type sandboxClientLoadResult struct {
@@ -962,13 +938,6 @@ func (s *GenericPodService) loadOrCreateSandboxClient(
 
 func sandboxClientCacheKey(workerAddress, token string) string {
 	return workerAddress + ":" + token
-}
-
-func (s *GenericPodService) evictClient(cacheKey string, client *common.ContainerClient) {
-	if client == nil || !s.clientCache.CompareAndDelete(cacheKey, client) {
-		return
-	}
-	_ = client.Close()
 }
 
 func sandboxConnectErrorMessage(_ error) string {
