@@ -22,7 +22,6 @@ import (
 	types "github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	clipCommon "github.com/beam-cloud/clip/pkg/common"
-	securejoin "github.com/cyphar/filepath-securejoin"
 	"tags.cncf.io/container-device-interface/pkg/cdi"
 
 	"github.com/opencontainers/runtime-spec/specs-go"
@@ -1150,117 +1149,6 @@ func validateContainerSpec(spec *specs.Spec) error {
 	return nil
 }
 
-func pruneUnavailablePythonSDKMounts(request *types.ContainerRequest, spec *specs.Spec) int {
-	// CRIU externalizes bind mounts by destination. Keep the legacy mount map
-	// stable for both checkpoint creation and restore compatibility.
-	if request == nil || request.Stub.Type.Kind() != types.StubTypeSandbox ||
-		request.CheckpointEnabled || request.Checkpoint != nil ||
-		spec == nil || spec.Root == nil || spec.Root.Path == "" {
-		return 0
-	}
-	if info, err := os.Stat(spec.Root.Path); err != nil || !info.IsDir() {
-		return 0
-	}
-
-	rootPaths := newContainerRootPathCache(spec.Root.Path)
-	mounts := spec.Mounts[:0]
-	pruned := 0
-	for _, mount := range spec.Mounts {
-		if mount.Source != types.WorkerPythonSDKPath {
-			mounts = append(mounts, mount)
-			continue
-		}
-
-		if pythonSDKMountTargetAvailable(rootPaths, mount.Destination) {
-			mounts = append(mounts, mount)
-			continue
-		}
-		pruned++
-	}
-	spec.Mounts = mounts
-	return pruned
-}
-
-type containerRootPathInfo struct {
-	exists bool
-	isDir  bool
-	known  bool
-}
-
-type containerRootPathCache struct {
-	rootPath string
-	paths    map[string]containerRootPathInfo
-}
-
-func newContainerRootPathCache(rootPath string) *containerRootPathCache {
-	return &containerRootPathCache{
-		rootPath: rootPath,
-		paths:    make(map[string]containerRootPathInfo),
-	}
-}
-
-func (c *containerRootPathCache) inspect(containerPath string) containerRootPathInfo {
-	containerPath = filepath.Clean(string(filepath.Separator) + containerPath)
-	if info, ok := c.paths[containerPath]; ok {
-		return info
-	}
-
-	resolvedPath, err := securejoin.SecureJoin(c.rootPath, containerPath)
-	if err != nil {
-		info := containerRootPathInfo{}
-		c.paths[containerPath] = info
-		return info
-	}
-
-	fileInfo, err := os.Stat(resolvedPath)
-	info := containerRootPathInfo{known: err == nil || os.IsNotExist(err)}
-	if err == nil {
-		info.exists = true
-		info.isDir = fileInfo.IsDir()
-	}
-	c.paths[containerPath] = info
-	return info
-}
-
-func pythonSDKMountTargetAvailable(rootPaths *containerRootPathCache, destination string) bool {
-	destination = filepath.Clean(destination)
-	parent := filepath.Dir(destination)
-	parentInfo := rootPaths.inspect(parent)
-	if !parentInfo.known || parentInfo.exists && parentInfo.isDir {
-		return true
-	}
-
-	const pythonLibSegment = "/lib/python"
-	segmentIndex := strings.Index(destination, pythonLibSegment)
-	if segmentIndex < 0 {
-		return false
-	}
-	environmentRoot := destination[:segmentIndex]
-	versionPath := destination[segmentIndex+len("/lib/"):]
-	pythonVersion, _, ok := strings.Cut(versionPath, "/")
-	if !ok || !strings.HasPrefix(pythonVersion, "python") {
-		return false
-	}
-
-	candidates := []string{
-		filepath.Join(environmentRoot, "lib", pythonVersion),
-		filepath.Join(environmentRoot, "bin", pythonVersion),
-	}
-	if environmentRoot == "/usr/local" {
-		candidates = append(candidates,
-			filepath.Join("/usr/bin", pythonVersion),
-			filepath.Join("/usr/lib", pythonVersion),
-		)
-	}
-	for _, candidate := range candidates {
-		info := rootPaths.inspect(candidate)
-		if !info.known || info.exists {
-			return true
-		}
-	}
-	return false
-}
-
 // spawn a container using runc binary
 func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, outputLogger *slog.Logger, opts *ContainerOptions) {
 	ctx, cancel := context.WithCancel(s.ctx)
@@ -1340,13 +1228,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	spec.Root.Readonly = false
 	spec.Root.Path = containerInstance.Overlay.TopLayerPath()
-	prunedSDKMounts := pruneUnavailablePythonSDKMounts(request, spec)
-	if prunedSDKMounts > 0 {
-		log.Debug().
-			Str("container_id", containerId).
-			Int("pruned_mounts", prunedSDKMounts).
-			Msg("pruned unavailable Python SDK mount targets")
-	}
 
 	// Setup container network namespace / devices
 	phaseStart = time.Now()

@@ -677,11 +677,11 @@ func (s *GenericPodService) CreatePod(ctx context.Context, in *pb.CreatePodReque
 	}
 
 	return &pb.CreatePodResponse{
-		Ok:          true,
-		ContainerId: containerId,
-		StubId:      stub.ExternalId,
-		TaskId:      taskId,
-		AppId:       appId,
+		Ok:            true,
+		ContainerId:   containerId,
+		StubId:        stub.ExternalId,
+		TaskId: taskId,
+		AppId:  appId,
 	}, nil
 }
 

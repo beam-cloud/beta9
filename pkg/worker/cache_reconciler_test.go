@@ -1,7 +1,6 @@
 package worker
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -16,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alicebob/miniredis/v2"
 	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/registry"
@@ -25,43 +23,9 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 	clip "github.com/beam-cloud/clip/pkg/clip"
 	clipCommon "github.com/beam-cloud/clip/pkg/common"
-	redis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 )
 
-func newReconcileCacheServerForTest(
-	t *testing.T,
-	ctx context.Context,
-	cfg cache.Config,
-	metadata cache.CacheMetadataStore,
-	locality string,
-	hostID string,
-) (*cache.Server, *cache.Host) {
-	t.Helper()
-
-	serverCfg := cfg
-	serverCfg.Server.DiskCacheDir = t.TempDir()
-	server, err := cache.NewServerWithOptions(
-		ctx,
-		serverCfg,
-		locality,
-		cache.WithServerMetadataStore(metadata),
-		cache.WithServerHostID(hostID),
-	)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, server.Close()) })
-
-	addr, err := server.Serve("127.0.0.1:0", "")
-	require.NoError(t, err)
-	host := server.Host()
-	require.NotNil(t, host)
-	host.Addr = addr
-	host.PrivateAddr = addr
-	return server, host
-}
-
-// fakeEventRepo captures required-content events. It embeds the EventRepository
-// interface so only the methods exercised by the reporter need implementations.
 type fakeEventRepo struct {
 	repo.EventRepository
 	mu          sync.Mutex
@@ -146,6 +110,18 @@ func newTestReporter(eventRepo repo.EventRepository) *cacheContentReporter {
 		pendingRecentStubs: make(map[reporterStubKey]struct{}),
 		reported:           make(map[string]struct{}),
 	}
+}
+
+func TestReconcileLockTTLOutlivesMaterialization(t *testing.T) {
+	manager := &WorkerCacheManager{}
+	require.Greater(
+		t,
+		time.Duration(manager.reconcileLockTTLSeconds())*time.Second,
+		reconcileItemTimeout,
+	)
+
+	manager.config.Cache.Reconciliation.LockTTLSeconds = 900
+	require.Equal(t, 900, manager.reconcileLockTTLSeconds())
 }
 
 func TestAuditCacheChurnEventIncludesMachineFields(t *testing.T) {
@@ -260,47 +236,6 @@ func TestPressureProtectedContentPrioritizesCheckpointWithinStub(t *testing.T) {
 	require.NotContains(t, protected, "volume")
 }
 
-func TestHotReconciliationDiskGateUsesResumeWatermark(t *testing.T) {
-	const maxUsage = 0.80
-	require.False(t, hotReconciliationBlockedByDiskUsage(
-		cache.DiskUsage{TotalBytes: 100, UsedBytes: 76, AvailableBytes: 24, UsagePct: 0.76},
-		maxUsage,
-		0,
-		false,
-	))
-	require.True(t, hotReconciliationBlockedByDiskUsage(
-		cache.DiskUsage{TotalBytes: 100, UsedBytes: 77, AvailableBytes: 23, UsagePct: 0.77},
-		maxUsage,
-		0,
-		false,
-	))
-	require.True(t, hotReconciliationBlockedByDiskUsage(
-		cache.DiskUsage{TotalBytes: 100, UsedBytes: 76, AvailableBytes: 24, UsagePct: 0.76},
-		maxUsage,
-		25,
-		false,
-	))
-	require.True(t, hotReconciliationBlockedByDiskUsage(
-		cache.DiskUsage{TotalBytes: 100, UsedBytes: 76, AvailableBytes: 24, UsagePct: 0.76},
-		maxUsage,
-		0,
-		true,
-	))
-	require.True(t, hotReconciliationBlockedByDiskUsage(cache.DiskUsage{}, maxUsage, 0, false))
-}
-
-func TestHotReconciliationOnlyHandlesClipV2Replicas(t *testing.T) {
-	items := []types.CacheRequiredContentItem{
-		{Hash: "clip-v1", Kind: types.CacheContentKindClipV1},
-		{Hash: "clip-v2", Kind: types.CacheContentKindClipV2},
-		{Hash: "checkpoint", Kind: types.CacheContentKindCheckpoint},
-		{Hash: "volume", Kind: types.CacheContentKindVolume},
-		{Hash: "snapshot", Kind: types.CacheContentKindDiskSnapshot},
-	}
-
-	require.Equal(t, []types.CacheRequiredContentItem{items[1]}, hotReconcileItems(items))
-}
-
 func newCheckpointCacheForTest(t *testing.T, ctx context.Context) (*cache.Server, *cache.Client) {
 	t.Helper()
 
@@ -360,11 +295,8 @@ func createCheckpointArchiveForTest(t *testing.T, checkpointID string) (archiveP
 
 type claimedMetadataStore struct {
 	cache.CacheMetadataStore
-	claimed          bool
-	marked           int
 	recent           int
 	recentErr        error
-	markedLocalities []string
 	recentLocalities []string
 }
 
@@ -407,24 +339,6 @@ func (m *localityRecentMetadataStore) ListRecentStubs(_ context.Context, localit
 	return stubs, nil
 }
 
-func (m *claimedMetadataStore) MarkStubReported(_ context.Context, locality, _ string, _ time.Duration) (bool, error) {
-	m.marked++
-	m.markedLocalities = append(m.markedLocalities, locality)
-	return m.claimed, nil
-}
-
-func (m *claimedMetadataStore) AcquireStubReport(_ context.Context, _ string, _ string, _ string, _ time.Duration) (cache.StubReportClaim, error) {
-	return cache.StubReportAcquired, nil
-}
-
-func (m *claimedMetadataStore) CompleteStubReport(_ context.Context, _ string, _ string, _ string, _ time.Duration) (bool, error) {
-	return true, nil
-}
-
-func (m *claimedMetadataStore) ReleaseStubReport(_ context.Context, _ string, _ string, _ string) (bool, error) {
-	return true, nil
-}
-
 func (m *claimedMetadataStore) AddRecentStub(_ context.Context, locality, _, _ string, _ time.Duration) error {
 	m.recent++
 	m.recentLocalities = append(m.recentLocalities, locality)
@@ -438,14 +352,6 @@ func TestReporterGeneratesOncePerStub(t *testing.T) {
 	require.True(t, r.shouldGenerateRequiredContent("stub-a"))
 	require.False(t, r.shouldGenerateRequiredContent("stub-a"))
 	require.True(t, r.shouldGenerateRequiredContent("stub-b"))
-}
-
-func TestReporterRedisMarkerIsAdvisory(t *testing.T) {
-	r := newTestReporter(&fakeEventRepo{})
-	r.metadata = &claimedMetadataStore{claimed: false}
-
-	require.True(t, r.shouldGenerateRequiredContent("stub-a"))
-	require.False(t, r.shouldGenerateRequiredContent("stub-a"))
 }
 
 func TestReporterCoalescesConcurrentRecentStubTouches(t *testing.T) {
@@ -578,167 +484,38 @@ func TestReporterSeparatesByKind(t *testing.T) {
 	require.Len(t, fake.pushed, 2)
 }
 
-func TestReporterDynamicRequiredContentDoesNotClaimImageReport(t *testing.T) {
+func TestReporterPublishesBeforeIndexingRecentStub(t *testing.T) {
 	fake := &fakeEventRepo{}
-	metadata := &claimedMetadataStore{claimed: true}
+	metadata := &claimedMetadataStore{}
 	r := newTestReporter(fake)
 	r.metadata = metadata
 	r.locality = "locality-a"
 
 	r.reportItems("ws", "stub", types.CacheContentKindClipV1, []types.CacheRequiredContentItem{{Hash: "h1"}})
 	require.Zero(t, metadata.recent)
-	require.Zero(t, metadata.marked)
 
 	r.flush()
 	require.Len(t, fake.pushed, 1)
 	require.Equal(t, 1, metadata.recent)
-	require.Zero(t, metadata.marked)
 	require.Equal(t, []string{"locality-a"}, metadata.recentLocalities)
 	require.Equal(t, "locality-a", fake.pushed[0].Locality)
 }
 
 func TestReporterRetriesRequiredContentWhenEventWriteFails(t *testing.T) {
 	fake := &fakeEventRepo{err: errors.New("s2 unavailable")}
-	metadata := &claimedMetadataStore{claimed: true}
+	metadata := &claimedMetadataStore{}
 	r := newTestReporter(fake)
 	r.metadata = metadata
 
 	r.reportItems("ws", "stub", types.CacheContentKindClipV1, []types.CacheRequiredContentItem{{Hash: "h1"}})
 	r.flush()
 	require.Empty(t, fake.pushed)
-	require.Zero(t, metadata.marked)
 	require.Zero(t, metadata.recent, "a failed S2 write must not make the stub visible to reconciliation")
 
 	fake.err = nil
 	r.flush()
 	require.Len(t, fake.pushed, 1)
-	require.Zero(t, metadata.marked)
 	require.Equal(t, 1, metadata.recent)
-}
-
-func TestReporterClusterCoalescesImmutableImageWrite(t *testing.T) {
-	fake := &fakeEventRepo{}
-	server, err := miniredis.Run()
-	require.NoError(t, err)
-	t.Cleanup(server.Close)
-	rdb := redis.NewClient(&redis.Options{Addr: server.Addr()})
-	t.Cleanup(func() { require.NoError(t, rdb.Close()) })
-	metadata := cache.NewRedisCacheMetadataStoreWithClient(cache.GlobalConfig{}, cache.ServerConfig{}, rdb)
-
-	reporters := make([]*cacheContentReporter, 26)
-	for i := range reporters {
-		reporters[i] = newTestReporter(fake)
-		reporters[i].metadata = metadata
-		reporters[i].recentStubTTL = time.Hour
-		reporters[i].reportBatches("ws", "stub", []requiredContentReport{{
-			kind:           types.CacheContentKindClipV2,
-			immutableImage: true,
-			items:          []types.CacheRequiredContentItem{{Hash: "layer"}},
-		}})
-	}
-
-	var wg sync.WaitGroup
-	for _, reporter := range reporters {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			reporter.flush()
-		}()
-	}
-	wg.Wait()
-
-	fake.mu.Lock()
-	require.Len(t, fake.pushed, 1)
-	require.Equal(t, "stub", fake.pushed[0].StubID)
-	fake.mu.Unlock()
-
-	claim, err := metadata.AcquireStubReport(context.Background(), "default", "stub", "verification-worker", time.Minute)
-	require.NoError(t, err)
-	require.Equal(t, cache.StubReportComplete, claim)
-}
-
-func TestReporterFailedWinnerReleasesClaimForPeer(t *testing.T) {
-	fake := &fakeEventRepo{err: errors.New("s2 unavailable")}
-	metadata := cache.NewMockCacheMetadataStore()
-	queue := func(r *cacheContentReporter) {
-		r.metadata = metadata
-		r.recentStubTTL = time.Hour
-		r.reportBatches("ws", "stub", []requiredContentReport{{
-			kind:           types.CacheContentKindClipV2,
-			immutableImage: true,
-			items:          []types.CacheRequiredContentItem{{Hash: "layer"}},
-		}})
-	}
-
-	failedWinner := newTestReporter(fake)
-	queue(failedWinner)
-	failedWinner.flush()
-	require.Empty(t, fake.pushed)
-
-	fake.err = nil
-	recoveryPeer := newTestReporter(fake)
-	queue(recoveryPeer)
-	recoveryPeer.flush()
-	require.Len(t, fake.pushed, 1)
-
-	// The original winner retained its batch, but the completed marker now
-	// causes it to drop the retry rather than publish a duplicate.
-	failedWinner.flush()
-	require.Len(t, fake.pushed, 1)
-}
-
-func TestReporterRecoversAbandonedImageClaimAfterLeaseExpiry(t *testing.T) {
-	server, err := miniredis.Run()
-	require.NoError(t, err)
-	t.Cleanup(server.Close)
-	rdb := redis.NewClient(&redis.Options{Addr: server.Addr()})
-	t.Cleanup(func() { require.NoError(t, rdb.Close()) })
-	metadata := cache.NewRedisCacheMetadataStoreWithClient(cache.GlobalConfig{}, cache.ServerConfig{}, rdb)
-
-	claim, err := metadata.AcquireStubReport(context.Background(), "default", "stub", "crashed-worker", reporterClaimLeaseTTL)
-	require.NoError(t, err)
-	require.Equal(t, cache.StubReportAcquired, claim)
-	server.FastForward(reporterClaimLeaseTTL + time.Second)
-
-	fake := &fakeEventRepo{}
-	recoveryPeer := newTestReporter(fake)
-	recoveryPeer.metadata = metadata
-	recoveryPeer.recentStubTTL = time.Hour
-	recoveryPeer.reportBatches("ws", "stub", []requiredContentReport{{
-		kind:           types.CacheContentKindClipV2,
-		immutableImage: true,
-		items:          []types.CacheRequiredContentItem{{Hash: "layer"}},
-	}})
-	recoveryPeer.flush()
-
-	require.Len(t, fake.pushed, 1)
-}
-
-func TestReporterDynamicKindsRemainPublishableAfterImageCompletion(t *testing.T) {
-	fake := &fakeEventRepo{}
-	metadata := cache.NewMockCacheMetadataStore()
-	claim, err := metadata.AcquireStubReport(context.Background(), "default", "stub", "image-worker", time.Minute)
-	require.NoError(t, err)
-	require.Equal(t, cache.StubReportAcquired, claim)
-	completed, err := metadata.CompleteStubReport(context.Background(), "default", "stub", "image-worker", time.Hour)
-	require.NoError(t, err)
-	require.True(t, completed)
-
-	r := newTestReporter(fake)
-	r.metadata = metadata
-	for i, kind := range []types.CacheContentKind{
-		types.CacheContentKindCheckpoint,
-		types.CacheContentKindVolume,
-		types.CacheContentKindDiskSnapshot,
-	} {
-		r.reportItems("ws", "stub", kind, []types.CacheRequiredContentItem{{
-			Hash: fmt.Sprintf("dynamic-%d", i),
-			Kind: kind,
-		}})
-	}
-	r.flush()
-
-	require.Len(t, fake.pushed, 3)
 }
 
 func TestReporterVolumeRespectsSizeThreshold(t *testing.T) {
@@ -911,95 +688,6 @@ func TestReconcileOnceUsesOnlyCurrentLocalityRecentStubs(t *testing.T) {
 	require.Equal(t, []string{"workspace-b|stub-b"}, fake.readKeys)
 }
 
-func TestReconcileHotOnceBoundsNewestWindowAndRetriesEmptyOrFailedReads(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	cfg := testCacheManagerConfig(t.TempDir()).Cache
-	metadata := &localityRecentMetadataStore{
-		MockCacheMetadataStore: cache.NewMockCacheMetadataStore(),
-		stubs:                  map[string][]cache.RecentStub{"test": {}},
-	}
-	for i := 0; i < reconcileHotMaxStubs+3; i++ {
-		metadata.stubs["test"] = append(metadata.stubs["test"], cache.RecentStub{
-			WorkspaceID: "workspace",
-			StubID:      fmt.Sprintf("stub-%d", i),
-			LastSeen:    time.Now().Add(-time.Duration(i) * time.Second),
-		})
-	}
-
-	server, host := newReconcileCacheServerForTest(t, ctx, cfg, metadata, "test", "local-host")
-	clientCfg := cfg
-	clientCfg.Server.DiskCacheDir = t.TempDir()
-	client, err := cache.NewClientWithHostDirectory(
-		ctx,
-		clientCfg,
-		metadata,
-		testHostDirectoryFunc(func(context.Context, string) ([]*cache.Host, error) {
-			return []*cache.Host{host}, nil
-		}),
-		"test",
-	)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, client.Cleanup()) })
-
-	events := &fakeEventRepo{readErr: errors.New("required-content stream unavailable")}
-	manager := &WorkerCacheManager{
-		ctx:                ctx,
-		config:             types.AppConfig{Cache: cfg},
-		locality:           "test",
-		metadataStore:      metadata,
-		eventRepo:          events,
-		client:             client,
-		server:             server,
-		reconcileFailures:  make(map[string]time.Time),
-		reconcileSuccesses: make(map[string]time.Time),
-		ownerLastLive:      make(map[string]time.Time),
-	}
-
-	manager.reconcileHotOnce()
-	events.readErr = nil
-	manager.reconcileHotOnce()
-	manager.reconcileHotOnce()
-
-	require.Eventually(t, func() bool {
-		ranked := client.RankedReadHosts(strings.Repeat("a", 64))
-		return len(ranked) == 1 && ranked[0].HostId == host.HostId
-	}, 3*time.Second, 20*time.Millisecond)
-	hash := strings.Repeat("a", 64)
-	events.items = []types.CacheRequiredContentItem{{
-		Kind:       types.CacheContentKindClipV2,
-		Hash:       hash,
-		RoutingKey: hash,
-		SizeBytes:  1,
-	}}
-	acquired, err := metadata.AcquireReconcileLock(ctx, "test", server.HostID(), hash, 300)
-	require.NoError(t, err)
-	require.True(t, acquired)
-	t.Cleanup(func() {
-		require.NoError(t, metadata.ReleaseReconcileLock(context.Background(), "test", server.HostID(), hash))
-	})
-
-	// Lock contention leaves the item incomplete, so both polls must reread it.
-	manager.reconcileHotOnce()
-	manager.reconcileHotOnce()
-
-	require.Equal(t, []int{
-		reconcileHotMaxStubs,
-		reconcileHotMaxStubs,
-		reconcileHotMaxStubs,
-		reconcileHotMaxStubs,
-		reconcileHotMaxStubs,
-	}, metadata.limits)
-	require.Len(t, events.readKeys, reconcileHotMaxStubs*5)
-	for pass := 0; pass < 5; pass++ {
-		for i := 0; i < reconcileHotMaxStubs; i++ {
-			require.Equal(t, fmt.Sprintf("workspace|stub-%d", i), events.readKeys[pass*reconcileHotMaxStubs+i])
-		}
-	}
-	require.NotContains(t, events.readKeys, fmt.Sprintf("workspace|stub-%d", reconcileHotMaxStubs))
-}
-
 func TestLocalHostOwnsForReconcileKeepsOwnershipThroughBriefEndpointLoss(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1076,414 +764,6 @@ func TestLocalHostOwnsForReconcileKeepsOwnershipThroughBriefEndpointLoss(t *test
 	// fail over to the next-ranked live host so the system still self-heals.
 	manager.ownerLastLive[peerHost.HostId] = time.Now().Add(-cacheReconcileOwnerGracePeriod - time.Minute)
 	require.True(t, manager.localHostOwnsForReconcile(localHost.HostId, peerKey))
-}
-
-func TestReconcileStubClipV2ReplicaCountUsesTopNOnly(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	cfg := testCacheManagerConfig(t.TempDir()).Cache
-	cfg.Client.NTopHosts = 3
-	cfg.Reconciliation.ClipV2ReplicaCount = 2
-	metadata := cache.NewMockCacheMetadataStore()
-	hostA := &cache.Host{HostId: "host-a", Addr: "127.0.0.1:1", PrivateAddr: "127.0.0.1:1"}
-	localHost := &cache.Host{HostId: "host-local", Addr: "127.0.0.1:1", PrivateAddr: "127.0.0.1:1"}
-	hostC := &cache.Host{HostId: "host-c", Addr: "127.0.0.1:1", PrivateAddr: "127.0.0.1:1"}
-
-	clientCfg := cfg
-	clientCfg.Server.DiskCacheDir = t.TempDir()
-	client, err := cache.NewClientWithHostDirectory(
-		ctx,
-		clientCfg,
-		metadata,
-		testHostDirectoryFunc(func(context.Context, string) ([]*cache.Host, error) {
-			return []*cache.Host{hostA, localHost, hostC}, nil
-		}),
-		"test",
-	)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, client.Cleanup()) })
-	require.Eventually(t, func() bool {
-		return len(client.RankedReadHosts("probe")) == 3
-	}, 3*time.Second, 20*time.Millisecond)
-
-	routingKey := ""
-	for i := 0; i < 1024; i++ {
-		candidate := fmt.Sprintf("clip-v2-replica-route-%d", i)
-		ranked := client.RankedReadHosts(candidate)
-		if len(ranked) == 3 && ranked[1].HostId == localHost.HostId {
-			routingKey = candidate
-			break
-		}
-	}
-	require.NotEmpty(t, routingKey, "expected a key with the local host at replica rank 1")
-
-	manager := &WorkerCacheManager{
-		ctx:           ctx,
-		config:        types.AppConfig{Cache: cfg},
-		locality:      "test",
-		client:        client,
-		ownerLastLive: make(map[string]time.Time),
-	}
-
-	require.True(t, manager.localHostReconcilesContent(localHost.HostId, routingKey, types.CacheContentKindClipV2))
-	for _, kind := range []types.CacheContentKind{
-		types.CacheContentKindClipV1,
-		types.CacheContentKindVolume,
-		types.CacheContentKindDiskSnapshot,
-	} {
-		require.False(t, manager.localHostReconcilesContent(localHost.HostId, routingKey, kind))
-	}
-
-	for _, replicaCount := range []int{0, 1} {
-		singleOwnerCfg := cfg
-		singleOwnerCfg.Reconciliation.ClipV2ReplicaCount = replicaCount
-		manager.config = types.AppConfig{Cache: singleOwnerCfg}
-		require.False(
-			t,
-			manager.localHostReconcilesContent(localHost.HostId, routingKey, types.CacheContentKindClipV2),
-			"replica count %d must preserve rank-0-only placement",
-			replicaCount,
-		)
-	}
-}
-
-func TestReconcileStubCompletionRetriesUntilLocalHostAppearsInPlacementRing(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	cfg := testCacheManagerConfig(t.TempDir()).Cache
-	cfg.Client.NTopHosts = 2
-	peerHost := &cache.Host{HostId: "host-peer", Addr: "127.0.0.1:1", PrivateAddr: "127.0.0.1:1"}
-	localHost := &cache.Host{HostId: "host-local", Addr: "127.0.0.1:1", PrivateAddr: "127.0.0.1:1"}
-
-	clientCfg := cfg
-	clientCfg.Server.DiskCacheDir = t.TempDir()
-	client, err := cache.NewClientWithHostDirectory(
-		ctx,
-		clientCfg,
-		cache.NewMockCacheMetadataStore(),
-		testHostDirectoryFunc(func(context.Context, string) ([]*cache.Host, error) {
-			return []*cache.Host{peerHost, localHost}, nil
-		}),
-		"test",
-	)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, client.Cleanup()) })
-	require.Eventually(t, func() bool {
-		return len(client.RankedReadHosts("probe")) == 2
-	}, 3*time.Second, 20*time.Millisecond)
-
-	routingKey := ""
-	for i := 0; i < 256; i++ {
-		candidate := fmt.Sprintf("partial-ring-route-%d", i)
-		ranked := client.RankedReadHosts(candidate)
-		if len(ranked) == 2 &&
-			ranked[0].HostId == peerHost.HostId &&
-			ranked[1].HostId == localHost.HostId {
-			routingKey = candidate
-			break
-		}
-	}
-	require.NotEmpty(t, routingKey)
-
-	manager := &WorkerCacheManager{
-		ctx:           ctx,
-		config:        types.AppConfig{Cache: cfg},
-		client:        client,
-		ownerLastLive: make(map[string]time.Time),
-	}
-	items := []types.CacheRequiredContentItem{{
-		Kind:       types.CacheContentKindClipV1,
-		Hash:       strings.Repeat("a", 64),
-		RoutingKey: routingKey,
-		SizeBytes:  1,
-	}}
-
-	_, complete := manager.reconcileStubContentWithCompletion(
-		nil,
-		"host-not-yet-discovered",
-		cache.RecentStub{},
-		items,
-		newReconcileBudget(1),
-		nil,
-	)
-	require.False(t, complete, "an omitted local host may indicate a partially discovered ring")
-
-	_, complete = manager.reconcileStubContentWithCompletion(
-		nil,
-		localHost.HostId,
-		cache.RecentStub{},
-		items,
-		newReconcileBudget(1),
-		nil,
-	)
-	require.True(t, complete, "a known non-owner has no work for this item")
-}
-
-func TestReconcileStubCompletionRecognizesHostOutsideReadWindow(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	cfg := testCacheManagerConfig(t.TempDir()).Cache
-	cfg.Client.NTopHosts = 3
-	cfg.Reconciliation.ClipV2ReplicaCount = 3
-	localHost := &cache.Host{HostId: "host-local", Addr: "127.0.0.1:1", PrivateAddr: "127.0.0.1:1"}
-	hosts := []*cache.Host{
-		{HostId: "host-a", Addr: "127.0.0.1:1", PrivateAddr: "127.0.0.1:1"},
-		{HostId: "host-b", Addr: "127.0.0.1:1", PrivateAddr: "127.0.0.1:1"},
-		{HostId: "host-c", Addr: "127.0.0.1:1", PrivateAddr: "127.0.0.1:1"},
-		localHost,
-	}
-
-	clientCfg := cfg
-	clientCfg.Server.DiskCacheDir = t.TempDir()
-	client, err := cache.NewClientWithHostDirectory(
-		ctx,
-		clientCfg,
-		cache.NewMockCacheMetadataStore(),
-		testHostDirectoryFunc(func(context.Context, string) ([]*cache.Host, error) {
-			return hosts, nil
-		}),
-		"test",
-	)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, client.Cleanup()) })
-	require.Eventually(t, func() bool {
-		return client.HasHost(localHost.HostId) && len(client.RankedReadHosts("probe")) == cfg.Client.NTopHosts
-	}, 3*time.Second, 20*time.Millisecond)
-
-	routingKey := ""
-	for i := 0; i < 1024; i++ {
-		candidate := fmt.Sprintf("outside-window-route-%d", i)
-		ranked := client.RankedReadHosts(candidate)
-		found := false
-		for _, host := range ranked {
-			found = found || host.HostId == localHost.HostId
-		}
-		if len(ranked) == cfg.Client.NTopHosts && !found {
-			routingKey = candidate
-			break
-		}
-	}
-	require.NotEmpty(t, routingKey)
-
-	manager := &WorkerCacheManager{
-		ctx:           ctx,
-		config:        types.AppConfig{Cache: cfg},
-		client:        client,
-		ownerLastLive: make(map[string]time.Time),
-	}
-	_, complete := manager.reconcileStubContentWithCompletion(
-		nil,
-		localHost.HostId,
-		cache.RecentStub{},
-		[]types.CacheRequiredContentItem{{
-			Kind:       types.CacheContentKindClipV2,
-			Hash:       strings.Repeat("a", 64),
-			RoutingKey: routingKey,
-			SizeBytes:  1,
-		}},
-		newReconcileBudget(1),
-		nil,
-	)
-	require.True(t, complete, "a known host outside the bounded read window has no work for this item")
-}
-
-func TestReconcileStubClipV2ReplicaPlacementReservesBrieflyUnavailableRanks(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	cfg := testCacheManagerConfig(t.TempDir()).Cache
-	cfg.Client.NTopHosts = 3
-	cfg.Reconciliation.ClipV2ReplicaCount = 2
-	metadata := cache.NewMockCacheMetadataStore()
-	liveHost := &cache.Host{HostId: "host-live", Addr: "127.0.0.1:1", PrivateAddr: "127.0.0.1:1"}
-	localHost := &cache.Host{HostId: "host-local", Addr: "127.0.0.1:1", PrivateAddr: "127.0.0.1:1"}
-	unavailableHost := &cache.Host{
-		HostId:      "host-unavailable",
-		Locality:    "test",
-		NodeID:      "node-unavailable",
-		CachePathID: "path-unavailable",
-	}
-
-	clientCfg := cfg
-	clientCfg.Server.DiskCacheDir = t.TempDir()
-	client, err := cache.NewClientWithHostDirectory(
-		ctx,
-		clientCfg,
-		metadata,
-		testHostDirectoryFunc(func(context.Context, string) ([]*cache.Host, error) {
-			return []*cache.Host{liveHost, localHost, unavailableHost}, nil
-		}),
-		"test",
-	)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, client.Cleanup()) })
-	require.Eventually(t, func() bool {
-		return len(client.RankedReadHosts("probe")) == 3
-	}, 3*time.Second, 20*time.Millisecond)
-
-	routingKey := ""
-	for i := 0; i < 4096; i++ {
-		candidate := fmt.Sprintf("clip-v2-grace-route-%d", i)
-		ranked := client.RankedReadHosts(candidate)
-		if len(ranked) == 3 &&
-			ranked[0].HostId == unavailableHost.HostId &&
-			ranked[1].HostId == liveHost.HostId &&
-			ranked[2].HostId == localHost.HostId {
-			routingKey = candidate
-			break
-		}
-	}
-	require.NotEmpty(t, routingKey, "expected unavailable, live, local replica ordering")
-
-	manager := &WorkerCacheManager{
-		ctx:           ctx,
-		config:        types.AppConfig{Cache: cfg},
-		locality:      "test",
-		client:        client,
-		ownerLastLive: make(map[string]time.Time),
-	}
-
-	require.False(
-		t,
-		manager.localHostReconcilesContent(localHost.HostId, routingKey, types.CacheContentKindClipV2),
-		"a briefly unavailable rank must keep its replica slot",
-	)
-
-	manager.ownerLastLive[unavailableHost.HostId] = time.Now().Add(-cacheReconcileOwnerGracePeriod - time.Minute)
-	require.True(
-		t,
-		manager.localHostReconcilesContent(localHost.HostId, routingKey, types.CacheContentKindClipV2),
-		"a stale unavailable rank must yield its replica slot to the next live host",
-	)
-}
-
-func TestReconcileStubClipV2ResolvesExactSizeFromLayerCacheMetadataBeforeReplicaCopy(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	cfg := testCacheManagerConfig(t.TempDir()).Cache
-	cfg.Client.NTopHosts = 2
-	cfg.Reconciliation.ClipV2ReplicaCount = 2
-	cfg.Reconciliation.OriginFallbackEnabled = false
-	cfg.Server.DiskCacheEvictWatermarkPct = 1
-	cfg.Server.PageSizeBytes = 4096
-	metadata := &localityRecentMetadataStore{
-		MockCacheMetadataStore: cache.NewMockCacheMetadataStore(),
-		stubs: map[string][]cache.RecentStub{
-			"test": {{
-				WorkspaceID: "workspace",
-				StubID:      "stub",
-				LastSeen:    time.Now(),
-			}},
-		},
-	}
-
-	sourceServer, sourceHost := newReconcileCacheServerForTest(t, ctx, cfg, metadata, "test", "host-source")
-	destinationCfg := cfg
-	destinationCfg.Server.DiskCacheDir = t.TempDir()
-	destinationServer, err := cache.NewServerWithOptions(
-		ctx,
-		destinationCfg,
-		"test",
-		cache.WithServerMetadataStore(metadata),
-		cache.WithServerHostID("host-destination"),
-	)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, destinationServer.Close()) })
-	destinationHost := destinationServer.Host()
-	require.NotNil(t, destinationHost)
-	// The destination only needs a live placement endpoint in this test; writes
-	// go directly through MaterializeFromReplica's local server argument.
-	destinationHost.Addr = sourceHost.Addr
-	destinationHost.PrivateAddr = sourceHost.PrivateAddr
-
-	clientCfg := cfg
-	clientCfg.Server.DiskCacheDir = t.TempDir()
-	client, err := cache.NewClientWithHostDirectory(
-		ctx,
-		clientCfg,
-		metadata,
-		testHostDirectoryFunc(func(context.Context, string) ([]*cache.Host, error) {
-			return []*cache.Host{sourceHost, destinationHost}, nil
-		}),
-		"test",
-	)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, client.Cleanup()) })
-	client.AttachLocalServer(destinationServer)
-	require.Eventually(t, func() bool {
-		return len(client.RankedReadHosts("probe")) == 2
-	}, 3*time.Second, 20*time.Millisecond)
-
-	var content []byte
-	hash := ""
-	for i := 0; i < 256; i++ {
-		candidate := bytes.Repeat([]byte(fmt.Sprintf("clip-v2-layer-%d/", i)), 512)
-		sum := sha256.Sum256(candidate)
-		candidateHash := hex.EncodeToString(sum[:])
-		ranked := client.RankedReadHosts(candidateHash)
-		if len(ranked) == 2 && ranked[0].HostId == sourceHost.HostId {
-			content = candidate
-			hash = candidateHash
-			break
-		}
-	}
-	require.NotEmpty(t, hash, "expected a content hash owned by the source host")
-
-	actualHash, size, err := sourceServer.StoreReader(ctx, bytes.NewReader(content), hash)
-	require.NoError(t, err)
-	require.Equal(t, hash, actualHash)
-	require.Equal(t, uint64(len(content)), size)
-	require.NoError(t, sourceServer.StoreSyntheticContentInCacheFS(
-		ctx,
-		imageLayerContentCachePath(hash),
-		hash,
-		size,
-	))
-	require.False(t, destinationServer.HasCompleteContent(hash, int64(size)))
-
-	fake := &fakeEventRepo{items: []types.CacheRequiredContentItem{{
-		Kind:       types.CacheContentKindClipV2,
-		Hash:       hash,
-		RoutingKey: hash,
-		SizeBytes:  0,
-	}}}
-	manager := &WorkerCacheManager{
-		ctx:                ctx,
-		config:             types.AppConfig{Cache: cfg},
-		locality:           "test",
-		metadataStore:      metadata,
-		eventRepo:          fake,
-		client:             client,
-		server:             destinationServer,
-		checkpointRoot:     t.TempDir(),
-		reconcileFailures:  make(map[string]time.Time),
-		reconcileSuccesses: make(map[string]time.Time),
-		ownerLastLive:      make(map[string]time.Time),
-	}
-
-	manager.reconcileHotOnce()
-	manager.reconcileHotOnce()
-
-	metadata.mu.Lock()
-	metadata.stubs["test"][0].LastSeen = metadata.stubs["test"][0].LastSeen.Add(time.Second)
-	metadata.mu.Unlock()
-	manager.reconcileHotOnce()
-
-	require.True(t, destinationServer.HasCompleteContent(hash, int64(size)))
-	require.Len(t, fake.cacheEvents, 1)
-	require.Equal(t, types.CacheAuditStatusMaterialized, fake.cacheEvents[0].Status)
-	require.Equal(t, []string{"test", "test", "test"}, metadata.listed)
-	require.Equal(t, []int{
-		reconcileHotMaxStubs,
-		reconcileHotMaxStubs,
-		reconcileHotMaxStubs,
-	}, metadata.limits)
-	require.Equal(t, []string{"workspace|stub", "workspace|stub"}, fake.readKeys)
-	require.Len(t, manager.hotReconciled, 1)
 }
 
 func TestReconcileStubSkipsRecentlyMaterializedMissingContent(t *testing.T) {

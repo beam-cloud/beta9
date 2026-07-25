@@ -554,55 +554,6 @@ func TestSupportsAtomicContainerAdmissionRejectsClusterClient(t *testing.T) {
 	}
 }
 
-func TestGetContainerStatusesReturnsExistingStatusesAndOmitsMissing(t *testing.T) {
-	rdb, err := NewRedisClientForTest()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	repo := NewContainerRedisRepositoryForTest(rdb)
-	pending := &types.ContainerState{
-		ContainerId: "pending-container",
-		StubId:      "stub-1",
-		WorkspaceId: "workspace-1",
-		Status:      types.ContainerStatusPending,
-	}
-	running := &types.ContainerState{
-		ContainerId: "running-container",
-		StubId:      "stub-1",
-		WorkspaceId: "workspace-1",
-		Status:      types.ContainerStatusRunning,
-	}
-	if err := repo.SetContainerState(pending.ContainerId, pending); err != nil {
-		t.Fatal(err)
-	}
-	if err := repo.SetContainerState(running.ContainerId, running); err != nil {
-		t.Fatal(err)
-	}
-
-	statuses, failures := repo.(*ContainerRedisRepository).GetContainerStatuses([]string{
-		pending.ContainerId,
-		running.ContainerId,
-		pending.ContainerId,
-		"missing-container",
-	})
-	if len(failures) != 0 {
-		t.Fatalf("unexpected status read failures: %v", failures)
-	}
-	if len(statuses) != 2 {
-		t.Fatalf("expected 2 existing statuses, got %d", len(statuses))
-	}
-	if status := statuses[pending.ContainerId]; status != types.ContainerStatusPending {
-		t.Fatalf("expected pending status, got %q", status)
-	}
-	if status := statuses[running.ContainerId]; status != types.ContainerStatusRunning {
-		t.Fatalf("expected running status, got %q", status)
-	}
-	if _, ok := statuses["missing-container"]; ok {
-		t.Fatal("missing container unexpectedly returned a status")
-	}
-}
-
 func TestGetContainerStatusesIsolatesCommandErrors(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	if err != nil {

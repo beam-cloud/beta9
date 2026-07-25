@@ -26,20 +26,9 @@ type CacheMetadataStore interface {
 	AddRecentStub(ctx context.Context, locality, workspaceID, stubID string, ttl time.Duration) error
 	ListRecentStubs(ctx context.Context, locality string, ttl time.Duration, limit int) ([]RecentStub, error)
 	MarkStubReported(ctx context.Context, locality, stubID string, ttl time.Duration) (bool, error)
-	AcquireStubReport(ctx context.Context, locality, stubID, token string, ttl time.Duration) (StubReportClaim, error)
-	CompleteStubReport(ctx context.Context, locality, stubID, token string, ttl time.Duration) (bool, error)
-	ReleaseStubReport(ctx context.Context, locality, stubID, token string) (bool, error)
 	AcquireReconcileLock(ctx context.Context, locality, logicalHost, hash string, ttlSeconds int) (bool, error)
 	ReleaseReconcileLock(ctx context.Context, locality, logicalHost, hash string) error
 }
-
-type StubReportClaim int
-
-const (
-	StubReportInFlight StubReportClaim = iota
-	StubReportAcquired
-	StubReportComplete
-)
 
 type RedisCacheMetadataStore struct {
 	metadata *Metadata
@@ -139,18 +128,6 @@ func (c *RedisCacheMetadataStore) ListRecentStubsAnyLocality(ctx context.Context
 
 func (c *RedisCacheMetadataStore) MarkStubReported(ctx context.Context, locality, stubID string, ttl time.Duration) (bool, error) {
 	return c.metadata.MarkStubReported(ctx, locality, stubID, ttl)
-}
-
-func (c *RedisCacheMetadataStore) AcquireStubReport(ctx context.Context, locality, stubID, token string, ttl time.Duration) (StubReportClaim, error) {
-	return c.metadata.AcquireStubReport(ctx, locality, stubID, token, ttl)
-}
-
-func (c *RedisCacheMetadataStore) CompleteStubReport(ctx context.Context, locality, stubID, token string, ttl time.Duration) (bool, error) {
-	return c.metadata.CompleteStubReport(ctx, locality, stubID, token, ttl)
-}
-
-func (c *RedisCacheMetadataStore) ReleaseStubReport(ctx context.Context, locality, stubID, token string) (bool, error) {
-	return c.metadata.ReleaseStubReport(ctx, locality, stubID, token)
 }
 
 func (c *RedisCacheMetadataStore) AcquireReconcileLock(ctx context.Context, locality, logicalHost, hash string, ttlSeconds int) (bool, error) {

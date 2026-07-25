@@ -136,51 +136,6 @@ func (s *gatewayCacheMetadataStore) MarkStubReported(ctx context.Context, locali
 	return resp.Claimed, nil
 }
 
-func (s *gatewayCacheMetadataStore) AcquireStubReport(ctx context.Context, locality, stubID, token string, ttl time.Duration) (cache.StubReportClaim, error) {
-	resp, err := handleGRPCResponse(s.client.AcquireCacheStubReport(ctx, &pb.AcquireCacheStubReportRequest{
-		Locality:   locality,
-		StubId:     stubID,
-		Token:      token,
-		TtlSeconds: int64(ttl / time.Second),
-	}))
-	if err != nil {
-		return cache.StubReportInFlight, err
-	}
-	switch {
-	case resp.Completed:
-		return cache.StubReportComplete, nil
-	case resp.Acquired:
-		return cache.StubReportAcquired, nil
-	default:
-		return cache.StubReportInFlight, nil
-	}
-}
-
-func (s *gatewayCacheMetadataStore) CompleteStubReport(ctx context.Context, locality, stubID, token string, ttl time.Duration) (bool, error) {
-	resp, err := handleGRPCResponse(s.client.CompleteCacheStubReport(ctx, &pb.CompleteCacheStubReportRequest{
-		Locality:   locality,
-		StubId:     stubID,
-		Token:      token,
-		TtlSeconds: int64(ttl / time.Second),
-	}))
-	if err != nil {
-		return false, err
-	}
-	return resp.Completed, nil
-}
-
-func (s *gatewayCacheMetadataStore) ReleaseStubReport(ctx context.Context, locality, stubID, token string) (bool, error) {
-	resp, err := handleGRPCResponse(s.client.ReleaseCacheStubReport(ctx, &pb.ReleaseCacheStubReportRequest{
-		Locality: locality,
-		StubId:   stubID,
-		Token:    token,
-	}))
-	if err != nil {
-		return false, err
-	}
-	return resp.Released, nil
-}
-
 func (s *gatewayCacheMetadataStore) AcquireReconcileLock(ctx context.Context, locality, logicalHost, hash string, ttlSeconds int) (bool, error) {
 	resp, err := handleGRPCResponse(s.client.AcquireCacheReconcileLock(ctx, &pb.AcquireCacheReconcileLockRequest{
 		Locality:    locality,

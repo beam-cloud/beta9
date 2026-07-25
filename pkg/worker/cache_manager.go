@@ -105,8 +105,6 @@ type WorkerCacheManager struct {
 	checkpointLocks       map[string]*checkpointMaterializationLock
 	ownerLastLiveMu       sync.Mutex
 	ownerLastLive         map[string]time.Time
-	hotReconciledMu       sync.Mutex
-	hotReconciled         map[reporterStubKey]time.Time
 	reconcilePausedAt     time.Time
 	reconcileNow          chan struct{}
 	client                *cache.Client
@@ -249,13 +247,12 @@ func (m *WorkerCacheManager) startReconciliation(cacheConfig cache.Config) {
 		m.requestReconcile,
 	)
 
-	m.wg.Add(3)
+	m.wg.Add(2)
 	go func() {
 		defer m.wg.Done()
 		m.reporter.run()
 	}()
 	go m.runReconciliation()
-	go m.runHotReconciliation()
 
 	log.Info().
 		Str("locality", m.locality).

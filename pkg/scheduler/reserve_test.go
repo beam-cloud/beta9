@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
@@ -29,56 +28,6 @@ func TestRetrySoonIncrementsRetryCount(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, request.ContainerId, requeuedRequest.ContainerId)
 	assert.Equal(t, 1, requeuedRequest.RetryCount)
-}
-
-func TestPendingWorkerRequeueUsesBoundedFastRetryWindow(t *testing.T) {
-	scheduler, err := NewSchedulerForTest()
-	assert.Nil(t, err)
-
-	pendingWorker := &types.Worker{
-		Id:          uuid.NewString(),
-		Status:      types.WorkerStatusPending,
-		TotalCpu:    100,
-		FreeCpu:     100,
-		TotalMemory: 125,
-		FreeMemory:  125,
-	}
-
-	fastRequest := &types.ContainerRequest{
-		ContainerId: uuid.NewString(),
-		Cpu:         100,
-		Memory:      100,
-		Timestamp:   time.Now(),
-	}
-	assert.True(t, newSchedulingAttempt(scheduler, fastRequest, []*types.Worker{pendingWorker}).reservePendingWorkerCapacity())
-
-	time.Sleep(requestProcessingInterval + 10*time.Millisecond)
-	requeuedRequest, err := scheduler.requestBacklog.Pop()
-	assert.Nil(t, err)
-	assert.Equal(t, fastRequest.ContainerId, requeuedRequest.ContainerId)
-
-	slowRequest := &types.ContainerRequest{
-		ContainerId: uuid.NewString(),
-		Cpu:         100,
-		Memory:      100,
-		Timestamp:   time.Now().Add(-pendingWorkerFastRetryWindow - time.Second),
-	}
-	slowWorker := *pendingWorker
-	slowWorker.Id = uuid.NewString()
-	slowWorker.FreeCpu = slowWorker.TotalCpu
-	slowWorker.FreeMemory = slowWorker.TotalMemory
-	requeueStarted := time.Now()
-	assert.True(t, newSchedulingAttempt(scheduler, slowRequest, []*types.Worker{&slowWorker}).reservePendingWorkerCapacity())
-
-	queued, err := scheduler.requestBacklog.rdb.ZRangeWithScores(
-		context.Background(),
-		common.RedisKeys.SchedulerContainerRequests(),
-		0,
-		-1,
-	).Result()
-	assert.Nil(t, err)
-	assert.Equal(t, 1, len(queued))
-	assert.GreaterOrEqual(t, int64(queued[0].Score), requeueStarted.Add(provisioningWorkerRequeueDelay).UnixNano())
 }
 
 func TestFirstScheduleFailureRetriesImmediately(t *testing.T) {

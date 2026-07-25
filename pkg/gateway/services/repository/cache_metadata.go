@@ -134,60 +134,6 @@ func (s *WorkerRepositoryService) MarkCacheStubReported(ctx context.Context, req
 	return &pb.MarkCacheStubReportedResponse{Ok: true, Claimed: claimed}, nil
 }
 
-func (s *WorkerRepositoryService) AcquireCacheStubReport(ctx context.Context, req *pb.AcquireCacheStubReportRequest) (*pb.AcquireCacheStubReportResponse, error) {
-	if err := s.authorizeCacheMetadata(ctx); err != nil {
-		return &pb.AcquireCacheStubReportResponse{Ok: false, ErrorMsg: err.Error()}, nil
-	}
-	claim, err := s.cacheMetadata.AcquireStubReport(
-		ctx,
-		s.scopedCacheLocality(ctx, req.Locality),
-		req.StubId,
-		req.Token,
-		time.Duration(req.TtlSeconds)*time.Second,
-	)
-	if err != nil {
-		return &pb.AcquireCacheStubReportResponse{Ok: false, ErrorMsg: err.Error()}, nil
-	}
-	return &pb.AcquireCacheStubReportResponse{
-		Ok:        true,
-		Acquired:  claim == cache.StubReportAcquired,
-		Completed: claim == cache.StubReportComplete,
-	}, nil
-}
-
-func (s *WorkerRepositoryService) CompleteCacheStubReport(ctx context.Context, req *pb.CompleteCacheStubReportRequest) (*pb.CompleteCacheStubReportResponse, error) {
-	if err := s.authorizeCacheMetadata(ctx); err != nil {
-		return &pb.CompleteCacheStubReportResponse{Ok: false, ErrorMsg: err.Error()}, nil
-	}
-	completed, err := s.cacheMetadata.CompleteStubReport(
-		ctx,
-		s.scopedCacheLocality(ctx, req.Locality),
-		req.StubId,
-		req.Token,
-		time.Duration(req.TtlSeconds)*time.Second,
-	)
-	if err != nil {
-		return &pb.CompleteCacheStubReportResponse{Ok: false, ErrorMsg: err.Error()}, nil
-	}
-	return &pb.CompleteCacheStubReportResponse{Ok: true, Completed: completed}, nil
-}
-
-func (s *WorkerRepositoryService) ReleaseCacheStubReport(ctx context.Context, req *pb.ReleaseCacheStubReportRequest) (*pb.ReleaseCacheStubReportResponse, error) {
-	if err := s.authorizeCacheMetadata(ctx); err != nil {
-		return &pb.ReleaseCacheStubReportResponse{Ok: false, ErrorMsg: err.Error()}, nil
-	}
-	released, err := s.cacheMetadata.ReleaseStubReport(
-		ctx,
-		s.scopedCacheLocality(ctx, req.Locality),
-		req.StubId,
-		req.Token,
-	)
-	if err != nil {
-		return &pb.ReleaseCacheStubReportResponse{Ok: false, ErrorMsg: err.Error()}, nil
-	}
-	return &pb.ReleaseCacheStubReportResponse{Ok: true, Released: released}, nil
-}
-
 func (s *WorkerRepositoryService) AcquireCacheReconcileLock(ctx context.Context, req *pb.AcquireCacheReconcileLockRequest) (*pb.AcquireCacheReconcileLockResponse, error) {
 	if err := s.authorizeCacheMetadata(ctx); err != nil {
 		return &pb.AcquireCacheReconcileLockResponse{Ok: false, ErrorMsg: err.Error()}, nil

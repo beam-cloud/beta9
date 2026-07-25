@@ -43,18 +43,16 @@ import (
 )
 
 const (
-	imageBundlePath                            string = "/dev/shm/images"
-	imageTmpDir                                string = types.AgentTmpPath
-	metricsSourceLabel                                = "image_client"
-	pullLazyBackoff                                   = 1000 * time.Millisecond
-	embeddedImageCacheLockWaitTimeout                 = 2 * time.Second
-	embeddedImageCacheWaitInterval                    = 250 * time.Millisecond
-	imageArchiveLockRetryInterval                     = 100 * time.Millisecond
-	maxSyncV1ArchiveDataRestoreBytes                  = 512 * 1024 * 1024
-	imageLayerPrepareConcurrency                      = 8
-	imageLayerProgressInterval                        = 3 * time.Second
-	ociImageContentCacheReadAheadWindowBytes          = 256 * 1024
-	ociImageContentCacheReadAheadRetainedBytes        = 32 * 1024 * 1024
+	imageBundlePath                   string = "/dev/shm/images"
+	imageTmpDir                       string = types.AgentTmpPath
+	metricsSourceLabel                       = "image_client"
+	pullLazyBackoff                          = 1000 * time.Millisecond
+	embeddedImageCacheLockWaitTimeout        = 2 * time.Second
+	embeddedImageCacheWaitInterval           = 250 * time.Millisecond
+	imageArchiveLockRetryInterval            = 100 * time.Millisecond
+	maxSyncV1ArchiveDataRestoreBytes         = 512 * 1024 * 1024
+	imageLayerPrepareConcurrency             = 8
+	imageLayerProgressInterval               = 3 * time.Second
 )
 
 var (
@@ -283,7 +281,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		c.contentReporter.touchRecentStub(cacheRequestWorkspaceID(request), cacheRequestStubID(request))
 		// A mounted image can serve a newly-created stub without re-entering
 		// archive preparation. Reuse cached OCI metadata so that stub still
-		// publishes its immutable layer set for proactive replica warming.
+		// publishes its immutable layer set for normal reconciliation.
 		if c.v2ArchiveMetadata != nil {
 			if meta, ok := c.v2ArchiveMetadata.Get(request.ImageId); ok {
 				c.reportRequiredContent(ctx, request, meta)
@@ -519,7 +517,6 @@ func (c *ImageClient) publishRequiredContent(request *types.ContainerRequest, re
 	}
 
 	workspaceID := cacheRequestWorkspaceID(request)
-	report.immutableImage = true
 	c.contentReporter.reportBatches(workspaceID, stubID, []requiredContentReport{report})
 
 	log.Debug().
@@ -701,10 +698,6 @@ func (c *ImageClient) lazyMountOptions(ctx context.Context, request *types.Conta
 		cacheKind = "oci-layer-runtime"
 	}
 	contentCache := newImageContentCache(c.cacheClient, request.ImageId, cacheKind, c.imageContentCacheObserver(request))
-	if contentCache != nil && archive.usesOCIStorage() {
-		contentCache.replicaCount = configuredClipV2ReplicaCount(c.config.Cache)
-		contentCache.replicaKey = c.workerId
-	}
 	mountOptions := clip.MountOptions{
 		ArchivePath:           archive.path,
 		Metadata:              archive.metadata,
@@ -712,11 +705,6 @@ func (c *ImageClient) lazyMountOptions(ctx context.Context, request *types.Conta
 		CachePath:             c.contentCachePath(request, archive),
 		ContentCache:          contentCache,
 		ContentCacheAvailable: contentCache != nil,
-	}
-	if archive.usesOCIStorage() {
-		// OCI mounts are shared by image ID across stub kinds. Keep immutable
-		// mount behavior independent of whichever kind happens to mount first.
-		mountOptions.ContentCacheReadAhead = ociImageContentCacheReadAheadOptions()
 	}
 	if archive.storageMode == string(clipCommon.StorageModeLocal) {
 		mountOptions.StorageModeOverride = clipCommon.StorageModeLocal
@@ -750,13 +738,6 @@ func (c *ImageClient) lazyMountOptions(ctx context.Context, request *types.Conta
 	}
 
 	return mountOptions
-}
-
-func ociImageContentCacheReadAheadOptions() storage.ContentCacheReadAheadOptions {
-	return storage.ContentCacheReadAheadOptions{
-		WindowBytes: ociImageContentCacheReadAheadWindowBytes,
-		MaxWindows:  ociImageContentCacheReadAheadRetainedBytes / ociImageContentCacheReadAheadWindowBytes,
-	}
 }
 
 func (c *ImageClient) contentCachePath(request *types.ContainerRequest, archive lazyImageArchive) string {

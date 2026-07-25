@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/cache"
-	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/registry"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/beam-cloud/clip/pkg/clip"
@@ -26,57 +25,6 @@ import (
 	zerologlog "github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 )
-
-func TestOCIImageContentCacheReadAheadUsesSmallWindowsWithBoundedRetention(t *testing.T) {
-	options := ociImageContentCacheReadAheadOptions()
-
-	require.Equal(t, int64(256*1024), options.WindowBytes)
-	require.Equal(t, 128, options.MaxWindows)
-	require.Equal(t, int64(32*1024*1024), options.WindowBytes*int64(options.MaxWindows))
-}
-
-func TestOCILazyMountPolicyDoesNotDependOnFirstStubKind(t *testing.T) {
-	cacheClient := newImageArchiveCacheTestClient(t)
-	client := &ImageClient{
-		cacheClient:    cacheClient,
-		imageCachePath: t.TempDir(),
-		imageMountPath: t.TempDir(),
-		workerId:       "worker-a",
-		v2ImageRefs:    common.NewSafeMap[string](),
-		config: types.AppConfig{
-			Cache: cache.Config{
-				Client: cache.ClientConfig{NTopHosts: 3},
-				Reconciliation: cache.ReconciliationConfig{
-					ClipV2ReplicaCount: 3,
-				},
-			},
-		},
-	}
-	archive := lazyImageArchive{storageMode: string(clipCommon.StorageModeOCI)}
-
-	var expectedReadAhead clipStorage.ContentCacheReadAheadOptions
-	for _, kind := range []types.StubType{types.StubType(types.StubTypeSandbox), types.StubType(types.StubTypeEndpoint)} {
-		request := &types.ContainerRequest{
-			ImageId: "shared-oci-image",
-			Stub: types.StubWithRelated{
-				Stub: types.Stub{Type: kind},
-			},
-		}
-		options := client.lazyMountOptions(context.Background(), request, archive)
-		contentCache, ok := options.ContentCache.(*imageContentCache)
-		require.True(t, ok)
-		require.Equal(t, 3, contentCache.replicaCount)
-		require.Equal(t, "worker-a", contentCache.replicaKey)
-		require.Equal(t, int64(256*1024), options.ContentCacheReadAhead.WindowBytes)
-		require.Equal(t, 128, options.ContentCacheReadAhead.MaxWindows)
-
-		if expectedReadAhead.WindowBytes == 0 {
-			expectedReadAhead = options.ContentCacheReadAhead
-		} else {
-			require.Equal(t, expectedReadAhead, options.ContentCacheReadAhead)
-		}
-	}
-}
 
 func TestPrepareLazyArchiveContentSkipsSandboxOCIArchive(t *testing.T) {
 	mountOptions := clip.MountOptions{}

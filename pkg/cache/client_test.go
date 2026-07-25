@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -48,54 +47,6 @@ func TestHostsAvailableRequiresActiveEndpoint(t *testing.T) {
 
 	client.hostMap.Set(&Host{HostId: "logical-host", PrivateAddr: "127.0.0.1:2049"})
 	require.True(t, client.HostsAvailable())
-}
-
-func TestHasHostUsesFullHostMap(t *testing.T) {
-	client := &Client{
-		clientConfig: ClientConfig{NTopHosts: 1},
-		hostMap:      NewHostMap(GlobalConfig{}, nil),
-	}
-
-	client.hostMap.Set(&Host{HostId: "rank-zero", PrivateAddr: "rank-zero:2049"})
-	client.hostMap.Set((&Host{HostId: "outside-read-window"}).LogicalOnly())
-
-	require.True(t, client.HasHost("rank-zero"))
-	require.True(t, client.HasHost("outside-read-window"))
-	require.False(t, client.HasHost(""))
-	require.False(t, client.HasHost("unknown"))
-	require.False(t, (*Client)(nil).HasHost("rank-zero"))
-
-	_, removed := client.hostMap.RemoveLogicalHost("outside-read-window")
-	require.True(t, removed)
-	require.False(t, client.HasHost("outside-read-window"))
-}
-
-func TestHasHostIsSafeDuringHostMapUpdates(t *testing.T) {
-	client := &Client{hostMap: NewHostMap(GlobalConfig{}, nil)}
-	const hostID = "concurrent-host"
-
-	start := make(chan struct{})
-	var readers sync.WaitGroup
-	for range 8 {
-		readers.Add(1)
-		go func() {
-			defer readers.Done()
-			<-start
-			for range 1_000 {
-				_ = client.HasHost(hostID)
-			}
-		}()
-	}
-
-	close(start)
-	for range 1_000 {
-		client.hostMap.Set((&Host{HostId: hostID}).LogicalOnly())
-		client.hostMap.RemoveLogicalHost(hostID)
-	}
-	readers.Wait()
-
-	client.hostMap.Set((&Host{HostId: hostID}).LogicalOnly())
-	require.True(t, client.HasHost(hostID))
 }
 
 func TestChannelReaderReturnsWhenContextIsCanceled(t *testing.T) {
@@ -769,86 +720,6 @@ func TestReadContentIntoFallsBackToRankedReplicaHost(t *testing.T) {
 	require.Equal(t, content, dst)
 }
 
-func TestPreferredReadHostIndexIsDeterministicAndDistributesReplicaKeys(t *testing.T) {
-	client := &Client{localNodeID: "node-a"}
-	const replicaCount = 3
-
-	opts := ClientOptions{
-		RoutingKey:   "/images/shared.clip",
-		ReplicaCount: replicaCount,
-		ReplicaKey:   "worker-17",
-	}
-	expected := client.preferredReadHostIndex(opts, replicaCount)
-	for range 10 {
-		require.Equal(t, expected, client.preferredReadHostIndex(opts, replicaCount))
-	}
-
-	seen := make(map[int]struct{}, replicaCount)
-	for index := range 256 {
-		opts.ReplicaKey = fmt.Sprintf("worker-%d", index)
-		hostIndex := client.preferredReadHostIndex(opts, replicaCount)
-		require.GreaterOrEqual(t, hostIndex, 0)
-		require.Less(t, hostIndex, replicaCount)
-		seen[hostIndex] = struct{}{}
-	}
-	require.Len(t, seen, replicaCount)
-}
-
-func TestReadContentIntoStartsAtSelectedReplicaAndFallsBackToNextReplica(t *testing.T) {
-	content := []byte("content-on-next-selected-replica")
-	sum := sha256.Sum256(content)
-	expectedHash := hex.EncodeToString(sum[:])
-	hosts := []*Host{
-		{HostId: "replica-a"},
-		{HostId: "replica-b"},
-		{HostId: "replica-c"},
-	}
-	stores := make([]*Store, len(hosts))
-	for index, host := range hosts {
-		stores[index] = newTestStore(t, 5)
-		stores[index].currentHost = host
-	}
-
-	client := &Client{
-		ctx:                   context.Background(),
-		clientConfig:          ClientConfig{NTopHosts: len(hosts)},
-		grpcClients:           make(map[string]proto.CacheClient),
-		grpcConns:             make(map[string]*grpc.ClientConn),
-		localServers:          make(map[string]*Server),
-		rawReadPools:          make(map[string]*rawReadConnPool),
-		localHostCache:        make(map[localHostCacheKey]*localClientCache),
-		hasher:                &orderedTestHasher{hosts: hosts},
-		maxGetContentAttempts: int64(len(hosts)),
-	}
-	for index := range hosts {
-		client.AttachLocalServer(&Server{cas: stores[index]})
-	}
-
-	opts := ClientOptions{
-		RoutingKey:   "/images/shared.clip",
-		ReplicaCount: len(hosts),
-		ReplicaKey:   "worker-17",
-	}
-	preferredIndex := client.preferredReadHostIndex(opts, len(hosts))
-	fallbackIndex := (preferredIndex + 1) % len(hosts)
-	hash, _, err := stores[fallbackIndex].AddReader(context.Background(), bytes.NewReader(content))
-	require.NoError(t, err)
-	require.Equal(t, expectedHash, hash)
-
-	dst := make([]byte, len(content))
-	n, trace, err := client.ReadContentIntoWithTrace(context.Background(), hash, 0, dst, opts)
-	require.NoError(t, err)
-	require.Equal(t, int64(len(content)), n)
-	require.Equal(t, content, dst)
-	require.Len(t, trace.Attempts, 2)
-	require.Equal(t, preferredIndex, trace.Attempts[0].HostIndex)
-	require.Equal(t, hosts[preferredIndex].HostId, trace.Attempts[0].HostID)
-	require.Equal(t, "miss", trace.Attempts[0].Result)
-	require.Equal(t, fallbackIndex, trace.Attempts[1].HostIndex)
-	require.Equal(t, hosts[fallbackIndex].HostId, trace.Attempts[1].HostID)
-	require.Equal(t, "hit", trace.Attempts[1].Result)
-}
-
 func TestReadContentIntoDoesNotRetrySmallReadsBelowMinRetryLength(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1046,32 +917,23 @@ func TestContentReadsPreferMaterializedLocalContentOverSelectedRemoteHost(t *tes
 	require.NoError(t, err)
 
 	localHost := &Host{HostId: "local-host", NodeID: "node-a"}
-	remoteHosts := []*Host{
-		{HostId: "remote-host-a", NodeID: "node-b", Addr: "remote-a.invalid:443"},
-		{HostId: "remote-host-b", NodeID: "node-c", Addr: "remote-b.invalid:443"},
-		{HostId: "remote-host-c", NodeID: "node-d", Addr: "remote-c.invalid:443"},
-	}
+	remoteHost := &Host{HostId: "remote-host", NodeID: "node-b", Addr: "remote.invalid:443"}
 	store.currentHost = localHost
 	client := &Client{
 		ctx:                   context.Background(),
-		clientConfig:          ClientConfig{NTopHosts: len(remoteHosts), PreferLocalCacheHost: true},
+		clientConfig:          ClientConfig{NTopHosts: 1, PreferLocalCacheHost: true},
 		grpcClients:           make(map[string]proto.CacheClient),
 		grpcConns:             make(map[string]*grpc.ClientConn),
 		localServers:          make(map[string]*Server),
 		rawReadPools:          make(map[string]*rawReadConnPool),
 		localHostCache:        make(map[localHostCacheKey]*localClientCache),
-		hasher:                &orderedTestHasher{hosts: remoteHosts},
-		maxGetContentAttempts: int64(len(remoteHosts)),
+		hasher:                &orderedTestHasher{hosts: []*Host{remoteHost}},
+		maxGetContentAttempts: 1,
 	}
 	client.AttachLocalServer(&Server{cas: store})
-	opts := ClientOptions{
-		RoutingKey:   "/images/shared.clip",
-		ReplicaCount: len(remoteHosts),
-		ReplicaKey:   "worker-17",
-	}
 
 	dst := make([]byte, len(content))
-	n, readTrace, err := client.ReadContentIntoWithTrace(context.Background(), hash, 0, dst, opts)
+	n, readTrace, err := client.ReadContentIntoWithTrace(context.Background(), hash, 0, dst, ClientOptions{})
 	require.NoError(t, err)
 	require.Equal(t, int64(len(content)), n)
 	require.Equal(t, content, dst)
@@ -1080,7 +942,7 @@ func TestContentReadsPreferMaterializedLocalContentOverSelectedRemoteHost(t *tes
 	require.Equal(t, "local-host", readTrace.Attempts[0].HostID)
 	require.Equal(t, -1, readTrace.Attempts[0].HostIndex)
 
-	views, pageTrace, err := client.ClientLocalPageFileViewsWithTrace(hash, 0, int64(len(content)), opts)
+	views, pageTrace, err := client.ClientLocalPageFileViewsWithTrace(hash, 0, int64(len(content)), ClientOptions{})
 	require.NoError(t, err)
 	require.NotEmpty(t, views)
 	require.Len(t, pageTrace.Attempts, 1)
@@ -1089,9 +951,9 @@ func TestContentReadsPreferMaterializedLocalContentOverSelectedRemoteHost(t *tes
 	require.Equal(t, -1, pageTrace.Attempts[0].HostIndex)
 
 	require.NoError(t, os.Remove(store.completeMarkerPath(hash)))
-	_, err = client.ReadContentInto(context.Background(), hash, 0, make([]byte, len(content)), opts)
+	_, err = client.ReadContentInto(context.Background(), hash, 0, make([]byte, len(content)), ClientOptions{})
 	require.ErrorIs(t, err, ErrSelectedHostUnavailable)
-	views, err = client.ClientLocalPageFileViews(hash, 0, int64(len(content)), opts)
+	views, err = client.ClientLocalPageFileViews(hash, 0, int64(len(content)), ClientOptions{})
 	require.ErrorIs(t, err, ErrContentNotFound)
 	require.Empty(t, views)
 }

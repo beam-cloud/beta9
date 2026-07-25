@@ -62,9 +62,6 @@ const (
 	WorkerRepositoryService_GetContainerIps_FullMethodName                  = "/WorkerRepositoryService/GetContainerIps"
 	WorkerRepositoryService_GetContainerIpAssignments_FullMethodName        = "/WorkerRepositoryService/GetContainerIpAssignments"
 	WorkerRepositoryService_RemoveContainerIp_FullMethodName                = "/WorkerRepositoryService/RemoveContainerIp"
-	WorkerRepositoryService_AcquireCacheStubReport_FullMethodName           = "/WorkerRepositoryService/AcquireCacheStubReport"
-	WorkerRepositoryService_CompleteCacheStubReport_FullMethodName          = "/WorkerRepositoryService/CompleteCacheStubReport"
-	WorkerRepositoryService_ReleaseCacheStubReport_FullMethodName           = "/WorkerRepositoryService/ReleaseCacheStubReport"
 )
 
 // WorkerRepositoryServiceClient is the client API for WorkerRepositoryService service.
@@ -114,9 +111,6 @@ type WorkerRepositoryServiceClient interface {
 	GetContainerIps(ctx context.Context, in *GetContainerIpsRequest, opts ...grpc.CallOption) (*GetContainerIpsResponse, error)
 	GetContainerIpAssignments(ctx context.Context, in *GetContainerIpAssignmentsRequest, opts ...grpc.CallOption) (*GetContainerIpAssignmentsResponse, error)
 	RemoveContainerIp(ctx context.Context, in *RemoveContainerIpRequest, opts ...grpc.CallOption) (*RemoveContainerIpResponse, error)
-	AcquireCacheStubReport(ctx context.Context, in *AcquireCacheStubReportRequest, opts ...grpc.CallOption) (*AcquireCacheStubReportResponse, error)
-	CompleteCacheStubReport(ctx context.Context, in *CompleteCacheStubReportRequest, opts ...grpc.CallOption) (*CompleteCacheStubReportResponse, error)
-	ReleaseCacheStubReport(ctx context.Context, in *ReleaseCacheStubReportRequest, opts ...grpc.CallOption) (*ReleaseCacheStubReportResponse, error)
 }
 
 type workerRepositoryServiceClient struct {
@@ -560,33 +554,6 @@ func (c *workerRepositoryServiceClient) RemoveContainerIp(ctx context.Context, i
 	return out, nil
 }
 
-func (c *workerRepositoryServiceClient) AcquireCacheStubReport(ctx context.Context, in *AcquireCacheStubReportRequest, opts ...grpc.CallOption) (*AcquireCacheStubReportResponse, error) {
-	out := new(AcquireCacheStubReportResponse)
-	err := c.cc.Invoke(ctx, WorkerRepositoryService_AcquireCacheStubReport_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *workerRepositoryServiceClient) CompleteCacheStubReport(ctx context.Context, in *CompleteCacheStubReportRequest, opts ...grpc.CallOption) (*CompleteCacheStubReportResponse, error) {
-	out := new(CompleteCacheStubReportResponse)
-	err := c.cc.Invoke(ctx, WorkerRepositoryService_CompleteCacheStubReport_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *workerRepositoryServiceClient) ReleaseCacheStubReport(ctx context.Context, in *ReleaseCacheStubReportRequest, opts ...grpc.CallOption) (*ReleaseCacheStubReportResponse, error) {
-	out := new(ReleaseCacheStubReportResponse)
-	err := c.cc.Invoke(ctx, WorkerRepositoryService_ReleaseCacheStubReport_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 // WorkerRepositoryServiceServer is the server API for WorkerRepositoryService service.
 // All implementations must embed UnimplementedWorkerRepositoryServiceServer
 // for forward compatibility
@@ -634,9 +601,6 @@ type WorkerRepositoryServiceServer interface {
 	GetContainerIps(context.Context, *GetContainerIpsRequest) (*GetContainerIpsResponse, error)
 	GetContainerIpAssignments(context.Context, *GetContainerIpAssignmentsRequest) (*GetContainerIpAssignmentsResponse, error)
 	RemoveContainerIp(context.Context, *RemoveContainerIpRequest) (*RemoveContainerIpResponse, error)
-	AcquireCacheStubReport(context.Context, *AcquireCacheStubReportRequest) (*AcquireCacheStubReportResponse, error)
-	CompleteCacheStubReport(context.Context, *CompleteCacheStubReportRequest) (*CompleteCacheStubReportResponse, error)
-	ReleaseCacheStubReport(context.Context, *ReleaseCacheStubReportRequest) (*ReleaseCacheStubReportResponse, error)
 	mustEmbedUnimplementedWorkerRepositoryServiceServer()
 }
 
@@ -772,15 +736,6 @@ func (UnimplementedWorkerRepositoryServiceServer) GetContainerIpAssignments(cont
 }
 func (UnimplementedWorkerRepositoryServiceServer) RemoveContainerIp(context.Context, *RemoveContainerIpRequest) (*RemoveContainerIpResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RemoveContainerIp not implemented")
-}
-func (UnimplementedWorkerRepositoryServiceServer) AcquireCacheStubReport(context.Context, *AcquireCacheStubReportRequest) (*AcquireCacheStubReportResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method AcquireCacheStubReport not implemented")
-}
-func (UnimplementedWorkerRepositoryServiceServer) CompleteCacheStubReport(context.Context, *CompleteCacheStubReportRequest) (*CompleteCacheStubReportResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method CompleteCacheStubReport not implemented")
-}
-func (UnimplementedWorkerRepositoryServiceServer) ReleaseCacheStubReport(context.Context, *ReleaseCacheStubReportRequest) (*ReleaseCacheStubReportResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ReleaseCacheStubReport not implemented")
 }
 func (UnimplementedWorkerRepositoryServiceServer) mustEmbedUnimplementedWorkerRepositoryServiceServer() {
 }
@@ -1576,60 +1531,6 @@ func _WorkerRepositoryService_RemoveContainerIp_Handler(srv interface{}, ctx con
 	return interceptor(ctx, in, info, handler)
 }
 
-func _WorkerRepositoryService_AcquireCacheStubReport_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(AcquireCacheStubReportRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(WorkerRepositoryServiceServer).AcquireCacheStubReport(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: WorkerRepositoryService_AcquireCacheStubReport_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(WorkerRepositoryServiceServer).AcquireCacheStubReport(ctx, req.(*AcquireCacheStubReportRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _WorkerRepositoryService_CompleteCacheStubReport_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(CompleteCacheStubReportRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(WorkerRepositoryServiceServer).CompleteCacheStubReport(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: WorkerRepositoryService_CompleteCacheStubReport_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(WorkerRepositoryServiceServer).CompleteCacheStubReport(ctx, req.(*CompleteCacheStubReportRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _WorkerRepositoryService_ReleaseCacheStubReport_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ReleaseCacheStubReportRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(WorkerRepositoryServiceServer).ReleaseCacheStubReport(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: WorkerRepositoryService_ReleaseCacheStubReport_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(WorkerRepositoryServiceServer).ReleaseCacheStubReport(ctx, req.(*ReleaseCacheStubReportRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 // WorkerRepositoryService_ServiceDesc is the grpc.ServiceDesc for WorkerRepositoryService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1800,18 +1701,6 @@ var WorkerRepositoryService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RemoveContainerIp",
 			Handler:    _WorkerRepositoryService_RemoveContainerIp_Handler,
-		},
-		{
-			MethodName: "AcquireCacheStubReport",
-			Handler:    _WorkerRepositoryService_AcquireCacheStubReport_Handler,
-		},
-		{
-			MethodName: "CompleteCacheStubReport",
-			Handler:    _WorkerRepositoryService_CompleteCacheStubReport_Handler,
-		},
-		{
-			MethodName: "ReleaseCacheStubReport",
-			Handler:    _WorkerRepositoryService_ReleaseCacheStubReport_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

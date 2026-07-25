@@ -18,7 +18,6 @@ const (
 	WorkerContainerVolumePath                string        = "/volumes"
 	WorkerContainerUploadsHostPath           string        = "/tmp/container-uploads"
 	WorkerContainerUploadsMountPath          string        = "/tmp/.beta9"
-	WorkerPythonSDKPath                      string        = "/workspace/sdk"
 	WorkerDurationEmissionInterval           time.Duration = 30 * time.Second
 	WorkerKeepAliveInterval                  time.Duration = 15 * time.Second
 	WorkerShellPort                          int32         = 2222
