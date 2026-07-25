@@ -17,6 +17,7 @@ import (
 	cloudevents "github.com/cloudevents/sdk-go/v2"
 	"github.com/rs/zerolog/log"
 	"github.com/s2-streamstore/s2-sdk-go/s2"
+	"golang.org/x/sync/semaphore"
 )
 
 const (
@@ -64,7 +65,7 @@ type scopedS2EventTarget struct {
 }
 
 type stubCacheRequiredContentState struct {
-	mu         sync.Mutex
+	gate       *semaphore.Weighted
 	nextSeqNum uint64
 	items      map[string]types.CacheRequiredContentItem
 }
@@ -1621,8 +1622,10 @@ func (r *S2EventRepository) ReadStubCacheRequiredContent(ctx context.Context, wo
 
 	streamName := r.stubCacheStreamName(workspaceID, stubID)
 	state := r.stubCacheRequiredContentState(streamName)
-	state.mu.Lock()
-	defer state.mu.Unlock()
+	if err := state.gate.Acquire(ctx, 1); err != nil {
+		return nil, err
+	}
+	defer state.gate.Release(1)
 
 	if state.items == nil {
 		state.items = map[string]types.CacheRequiredContentItem{}
@@ -1674,7 +1677,7 @@ func (r *S2EventRepository) stubCacheRequiredContentState(streamName s2.StreamNa
 	}
 	state := r.stubCacheContent[streamName]
 	if state == nil {
-		state = &stubCacheRequiredContentState{}
+		state = &stubCacheRequiredContentState{gate: semaphore.NewWeighted(1)}
 		r.stubCacheContent[streamName] = state
 	}
 	return state

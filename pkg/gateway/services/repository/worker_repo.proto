@@ -81,6 +81,12 @@ service WorkerRepositoryService {
       returns (GetContainerIpAssignmentsResponse) {}
   rpc RemoveContainerIp(RemoveContainerIpRequest)
       returns (RemoveContainerIpResponse) {}
+  rpc AcquireCacheStubReport(AcquireCacheStubReportRequest)
+      returns (AcquireCacheStubReportResponse) {}
+  rpc CompleteCacheStubReport(CompleteCacheStubReportRequest)
+      returns (CompleteCacheStubReportResponse) {}
+  rpc ReleaseCacheStubReport(ReleaseCacheStubReportRequest)
+      returns (ReleaseCacheStubReportResponse) {}
 }
 
 message GetNextContainerRequestRequest { string worker_id = 1; }
@@ -620,4 +626,43 @@ message PushContainerLifecycleEventsRequest {
 message PushContainerLifecycleEventsResponse {
   bool ok = 1;
   string error_msg = 2;
+}
+
+message AcquireCacheStubReportRequest {
+  string locality = 1;
+  string stub_id = 2;
+  string token = 3;
+  int64 ttl_seconds = 4;
+}
+
+message AcquireCacheStubReportResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  bool acquired = 3;
+  bool completed = 4;
+}
+
+message CompleteCacheStubReportRequest {
+  string locality = 1;
+  string stub_id = 2;
+  string token = 3;
+  int64 ttl_seconds = 4;
+}
+
+message CompleteCacheStubReportResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  bool completed = 3;
+}
+
+message ReleaseCacheStubReportRequest {
+  string locality = 1;
+  string stub_id = 2;
+  string token = 3;
+}
+
+message ReleaseCacheStubReportResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  bool released = 3;
 }

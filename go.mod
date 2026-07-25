@@ -18,7 +18,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.144.0
 	github.com/aws/aws-sdk-go-v2/service/ecr v1.27.0
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.58.0
-	github.com/beam-cloud/clip v0.0.0-20260719172249-3d5d23817200
+	github.com/beam-cloud/clip v0.0.0-20260725104024-5863dc584a32
 	github.com/beam-cloud/go-runc v0.0.0-20250911154456-bb45084abfe1
 	github.com/beam-cloud/goproc v0.1.12
 	github.com/beam-cloud/redislock v0.0.0-20250201162619-1b534b3be324
@@ -27,6 +27,7 @@ require (
 	github.com/cloudevents/sdk-go/v2 v2.15.2
 	github.com/cockroachdb/redact v1.1.8
 	github.com/coreos/go-iptables v0.7.1-0.20240112124308-65c67c9f46e6
+	github.com/cyphar/filepath-securejoin v0.3.5
 	github.com/go-faker/faker/v4 v4.6.0
 	github.com/go-playground/validator/v10 v10.26.0
 	github.com/go-viper/mapstructure/v2 v2.2.1
@@ -180,7 +181,6 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/coder/websocket v1.8.12 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.5 // indirect
-	github.com/cyphar/filepath-securejoin v0.3.5 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/dblohm7/wingoes v0.0.0-20240119213807-a09d6be7affa // indirect
 	github.com/deckarep/golang-set/v2 v2.6.0

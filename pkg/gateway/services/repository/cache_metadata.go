@@ -134,6 +134,60 @@ func (s *WorkerRepositoryService) MarkCacheStubReported(ctx context.Context, req
 	return &pb.MarkCacheStubReportedResponse{Ok: true, Claimed: claimed}, nil
 }
 
+func (s *WorkerRepositoryService) AcquireCacheStubReport(ctx context.Context, req *pb.AcquireCacheStubReportRequest) (*pb.AcquireCacheStubReportResponse, error) {
+	if err := s.authorizeCacheMetadata(ctx); err != nil {
+		return &pb.AcquireCacheStubReportResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+	claim, err := s.cacheMetadata.AcquireStubReport(
+		ctx,
+		s.scopedCacheLocality(ctx, req.Locality),
+		req.StubId,
+		req.Token,
+		time.Duration(req.TtlSeconds)*time.Second,
+	)
+	if err != nil {
+		return &pb.AcquireCacheStubReportResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+	return &pb.AcquireCacheStubReportResponse{
+		Ok:        true,
+		Acquired:  claim == cache.StubReportAcquired,
+		Completed: claim == cache.StubReportComplete,
+	}, nil
+}
+
+func (s *WorkerRepositoryService) CompleteCacheStubReport(ctx context.Context, req *pb.CompleteCacheStubReportRequest) (*pb.CompleteCacheStubReportResponse, error) {
+	if err := s.authorizeCacheMetadata(ctx); err != nil {
+		return &pb.CompleteCacheStubReportResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+	completed, err := s.cacheMetadata.CompleteStubReport(
+		ctx,
+		s.scopedCacheLocality(ctx, req.Locality),
+		req.StubId,
+		req.Token,
+		time.Duration(req.TtlSeconds)*time.Second,
+	)
+	if err != nil {
+		return &pb.CompleteCacheStubReportResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+	return &pb.CompleteCacheStubReportResponse{Ok: true, Completed: completed}, nil
+}
+
+func (s *WorkerRepositoryService) ReleaseCacheStubReport(ctx context.Context, req *pb.ReleaseCacheStubReportRequest) (*pb.ReleaseCacheStubReportResponse, error) {
+	if err := s.authorizeCacheMetadata(ctx); err != nil {
+		return &pb.ReleaseCacheStubReportResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+	released, err := s.cacheMetadata.ReleaseStubReport(
+		ctx,
+		s.scopedCacheLocality(ctx, req.Locality),
+		req.StubId,
+		req.Token,
+	)
+	if err != nil {
+		return &pb.ReleaseCacheStubReportResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+	return &pb.ReleaseCacheStubReportResponse{Ok: true, Released: released}, nil
+}
+
 func (s *WorkerRepositoryService) AcquireCacheReconcileLock(ctx context.Context, req *pb.AcquireCacheReconcileLockRequest) (*pb.AcquireCacheReconcileLockResponse, error) {
 	if err := s.authorizeCacheMetadata(ctx); err != nil {
 		return &pb.AcquireCacheReconcileLockResponse{Ok: false, ErrorMsg: err.Error()}, nil
@@ -173,6 +227,17 @@ func (s *WorkerRepositoryService) GetCacheOriginCredentials(ctx context.Context,
 		return &pb.GetCacheOriginCredentialsResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
+	registryCredentials := s.registryOriginCredentials(ctx, req.WorkspaceId, req.ImageId, req.Registry)
+	if req.Registry != "" {
+		// Direct OCI pulls only need registry credentials. Resolving workspace
+		// storage and presigning image archives here adds database and object
+		// store round trips to every cold mount without producing used data.
+		return &pb.GetCacheOriginCredentialsResponse{
+			Ok:                  true,
+			RegistryCredentials: registryCredentials,
+		}, nil
+	}
+
 	imageArchiveObjectKey, imageArchiveURL, imageArchiveDataURL := s.imageArchiveCredentials(ctx, req.ImageId)
 	return &pb.GetCacheOriginCredentialsResponse{
 		Ok:                    true,
@@ -183,7 +248,7 @@ func (s *WorkerRepositoryService) GetCacheOriginCredentials(ctx context.Context,
 		// Short-lived registry credentials for direct OCI pulls. Private image
 		// credentials are resolved by image/workspace; build-registry credentials
 		// are vended only for the exact configured build registry host.
-		RegistryCredentials: s.registryOriginCredentials(ctx, req.WorkspaceId, req.ImageId, req.Registry),
+		RegistryCredentials: registryCredentials,
 	}, nil
 }
 

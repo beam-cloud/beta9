@@ -25,6 +25,9 @@ func TestAuthInterceptorLetsCacheRepositoryMethodsSelfAuthenticate(t *testing.T)
 		pb.WorkerRepositoryService_RemoveCacheFsNode_FullMethodName,
 		pb.WorkerRepositoryService_RemoveCacheFsNodeChild_FullMethodName,
 		pb.WorkerRepositoryService_GetCacheFsNodeChildren_FullMethodName,
+		pb.WorkerRepositoryService_AcquireCacheStubReport_FullMethodName,
+		pb.WorkerRepositoryService_CompleteCacheStubReport_FullMethodName,
+		pb.WorkerRepositoryService_ReleaseCacheStubReport_FullMethodName,
 	} {
 		if interceptor.isAuthRequired(method) {
 			t.Fatalf("method %s requires interceptor auth, want service-level cache auth", method)

@@ -381,6 +381,7 @@ cache:
     maxItemsPerCycle: 32
     volumeMinBytes: 134217728 # 128MiB; only large geesefs volume objects are reconciled
     originFallbackEnabled: false
+    clipV2ReplicaCount: 3 # spread burst reads for immutable OCI layers across the top cache hosts
 
 providers:
   ec2:

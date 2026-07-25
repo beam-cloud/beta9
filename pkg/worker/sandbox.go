@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -38,6 +39,16 @@ const (
 	dockerInfoCommandTimeout      = 2 * time.Second
 	sandboxMissingProcessExitCode = 137
 )
+
+func preloadSandboxProcessManagerBinary(path string) (int64, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return 0, err
+	}
+	defer file.Close()
+
+	return io.Copy(io.Discard, file)
+}
 
 func (i *ContainerInstance) signalProcessManagerReadiness(ready bool) {
 	i.processManagerReadyMu.Lock()

@@ -180,7 +180,7 @@ func (c *geeseContentCache) StoreContentFromS3(source struct {
 }
 
 func (c *geeseContentCache) ReadContentInto(ctx context.Context, hash string, offset int64, dst []byte, opts struct{ RoutingKey string }) (int64, error) {
-	return c.client.ReadContentInto(ctx, hash, offset, dst, opts)
+	return c.client.ReadContentInto(ctx, hash, offset, dst, cache.ClientOptions{RoutingKey: opts.RoutingKey})
 }
 
 func (c *geeseContentCache) StoreContentFromLocalPath(source struct {
@@ -234,7 +234,7 @@ func (c *geeseContentCache) StoreObjectContentHash(ctx context.Context, identity
 }
 
 func (c *geeseContentCache) ClientLocalPageFileViews(hash string, offset int64, length int64, opts struct{ RoutingKey string }) ([]cfg.ClientLocalPageFileView, error) {
-	views, err := c.client.ClientLocalPageFileViews(hash, offset, length, opts)
+	views, err := c.client.ClientLocalPageFileViews(hash, offset, length, cache.ClientOptions{RoutingKey: opts.RoutingKey})
 	if err != nil {
 		return nil, err
 	}

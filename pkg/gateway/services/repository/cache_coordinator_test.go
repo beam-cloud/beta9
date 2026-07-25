@@ -477,6 +477,73 @@ func TestCacheMetadataKeepsClusterWorkerMarkersUnscoped(t *testing.T) {
 	require.False(t, second.Claimed)
 }
 
+func TestCacheMetadataStubReportLeaseLifecycle(t *testing.T) {
+	server, err := miniredis.Run()
+	require.NoError(t, err)
+	t.Cleanup(server.Close)
+
+	rdb := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+
+	service := &WorkerRepositoryService{
+		cacheMetadata: cache.NewRedisCacheMetadataStoreWithClient(cache.GlobalConfig{}, cache.ServerConfig{}, rdb),
+	}
+	ctx := cacheRepositoryAuthContext(types.TokenTypeWorker)
+
+	acquired, err := service.AcquireCacheStubReport(ctx, &pb.AcquireCacheStubReportRequest{
+		Locality:   "managed-locality",
+		StubId:     "stub",
+		Token:      "worker-a",
+		TtlSeconds: 30,
+	})
+	require.NoError(t, err)
+	require.True(t, acquired.Ok, acquired.ErrorMsg)
+	require.True(t, acquired.Acquired)
+	require.False(t, acquired.Completed)
+
+	inFlight, err := service.AcquireCacheStubReport(ctx, &pb.AcquireCacheStubReportRequest{
+		Locality:   "managed-locality",
+		StubId:     "stub",
+		Token:      "worker-b",
+		TtlSeconds: 30,
+	})
+	require.NoError(t, err)
+	require.True(t, inFlight.Ok, inFlight.ErrorMsg)
+	require.False(t, inFlight.Acquired)
+	require.False(t, inFlight.Completed)
+
+	stale, err := service.CompleteCacheStubReport(ctx, &pb.CompleteCacheStubReportRequest{
+		Locality:   "managed-locality",
+		StubId:     "stub",
+		Token:      "worker-b",
+		TtlSeconds: 3600,
+	})
+	require.NoError(t, err)
+	require.True(t, stale.Ok, stale.ErrorMsg)
+	require.False(t, stale.Completed)
+
+	completed, err := service.CompleteCacheStubReport(ctx, &pb.CompleteCacheStubReportRequest{
+		Locality:   "managed-locality",
+		StubId:     "stub",
+		Token:      "worker-a",
+		TtlSeconds: 3600,
+	})
+	require.NoError(t, err)
+	require.True(t, completed.Ok, completed.ErrorMsg)
+	require.True(t, completed.Completed)
+
+	alreadyComplete, err := service.AcquireCacheStubReport(ctx, &pb.AcquireCacheStubReportRequest{
+		Locality:   "managed-locality",
+		StubId:     "stub",
+		Token:      "worker-c",
+		TtlSeconds: 30,
+	})
+	require.NoError(t, err)
+	require.True(t, alreadyComplete.Ok, alreadyComplete.ErrorMsg)
+	require.False(t, alreadyComplete.Acquired)
+	require.True(t, alreadyComplete.Completed)
+}
+
 func TestPruneStaleCacheCheckpointsUsesRecentStubsAcrossLocalities(t *testing.T) {
 	server, err := miniredis.Run()
 	require.NoError(t, err)
@@ -628,6 +695,20 @@ func TestGetCacheOriginCredentialsVendsImageRegistrySecret(t *testing.T) {
 	}
 	service := &WorkerRepositoryService{
 		backendRepo: backendRepo,
+		appConfig: types.AppConfig{
+			ImageService: types.ImageServiceConfig{
+				RegistryStore: reg.S3ImageRegistryStore,
+				Registries: types.ImageRegistriesConfig{
+					S3: types.S3ImageRegistryConfig{
+						BucketName: "image-bucket",
+						Region:     "us-east-1",
+						Endpoint:   "https://objects.example.com",
+						AccessKey:  "access",
+						SecretKey:  "secret",
+					},
+				},
+			},
+		},
 	}
 
 	resp, err := service.GetCacheOriginCredentials(
@@ -643,9 +724,13 @@ func TestGetCacheOriginCredentialsVendsImageRegistrySecret(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, resp.Ok)
 	require.Equal(t, "registry-user:registry-pass", resp.RegistryCredentials)
+	require.Nil(t, resp.WorkspaceStorage)
+	require.Empty(t, resp.ImageArchiveObjectKey)
+	require.Empty(t, resp.ImageArchiveUrl)
+	require.Empty(t, resp.ImageArchiveDataUrl)
 	require.Equal(t, 1, backendRepo.workspaceWithSigningCalls)
-	require.Equal(t, 1, backendRepo.workspaceByExternalCalls)
-	require.Equal(t, 1, backendRepo.workspaceCalls)
+	require.Zero(t, backendRepo.workspaceByExternalCalls)
+	require.Zero(t, backendRepo.workspaceCalls)
 }
 
 func TestGetCacheOriginCredentialsDoesNotDecryptImageRegistrySecretWithoutSigningKey(t *testing.T) {

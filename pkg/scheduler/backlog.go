@@ -50,14 +50,21 @@ func (rb *RequestBacklog) PushAfter(request *types.ContainerRequest, delay time.
 		readyAt = request.Timestamp
 	}
 
-	if err := rb.rdb.ZAdd(context.TODO(), common.RedisKeys.SchedulerContainerRequests(), redis.Z{Score: float64(readyAt.UnixNano()), Member: jsonData}).Err(); err != nil {
+	ctx := context.TODO()
+	pipe := rb.rdb.Pipeline()
+	add := pipe.ZAdd(ctx, common.RedisKeys.SchedulerContainerRequests(), redis.Z{Score: float64(readyAt.UnixNano()), Member: jsonData})
+	depth := pipe.ZCard(ctx, common.RedisKeys.SchedulerContainerRequests())
+	_, _ = pipe.Exec(ctx)
+	if err := add.Err(); err != nil {
 		return err
 	}
 
 	if delay <= 0 {
 		rb.signalReady()
 	}
-	metrics.RecordSchedulerBacklogDepth(rb.rdb.ZCard(context.TODO(), common.RedisKeys.SchedulerContainerRequests()).Val())
+	if err := depth.Err(); err == nil {
+		metrics.RecordSchedulerBacklogDepth(depth.Val())
+	}
 	return nil
 }
 

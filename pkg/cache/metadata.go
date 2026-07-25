@@ -16,6 +16,34 @@ const (
 	storeFromContentLockTtlS = 30
 )
 
+var acquireStubReportScript = redis.NewScript(`
+local current = redis.call("GET", KEYS[1])
+if current == false then
+  redis.call("SET", KEYS[1], "lease:" .. ARGV[1], "EX", ARGV[2])
+  return 1
+end
+if string.sub(current, 1, 6) ~= "lease:" then
+  return 2
+end
+return 0
+`)
+
+var completeStubReportScript = redis.NewScript(`
+if redis.call("GET", KEYS[1]) ~= "lease:" .. ARGV[1] then
+  return 0
+end
+redis.call("SET", KEYS[1], "1", "EX", ARGV[2])
+return 1
+`)
+
+var releaseStubReportScript = redis.NewScript(`
+if redis.call("GET", KEYS[1]) ~= "lease:" .. ARGV[1] then
+  return 0
+end
+redis.call("DEL", KEYS[1])
+return 1
+`)
+
 type Metadata struct {
 	rdb  *RedisClient
 	lock *RedisLock
@@ -299,17 +327,74 @@ func (m *Metadata) ListRecentStubsAnyLocality(ctx context.Context, ttl time.Dura
 	return m.listRecentStubsFromKey(ctx, MetadataKeys.MetadataReconcileRecentAll(), ttl, 0)
 }
 
-// MarkStubReported atomically claims the one-time required-content generation
-// for a stub. It returns true only for the first caller (cluster-wide), so the
-// expensive enumeration + S2 write happens once per stub rather than on every
-// container start. The marker is set once with the given TTL and is not
-// refreshed by later callers; once it expires the content may be regenerated,
-// which is idempotent.
+// MarkStubReported writes the legacy durable completion marker. New publishers
+// use the leased Acquire/Complete protocol below so a crash before the S2 write
+// cannot leave a false completion marker behind.
 func (m *Metadata) MarkStubReported(ctx context.Context, locality, stubID string, ttl time.Duration) (bool, error) {
 	if ttl <= 0 {
 		ttl = time.Hour
 	}
 	return m.rdb.SetNX(ctx, MetadataKeys.MetadataReconcileReported(locality, stubID), "1", ttl).Result()
+}
+
+// AcquireStubReport takes a short, token-owned lease for publishing immutable
+// image required-content. Completion replaces the lease state on the same
+// Redis key after the S2 write succeeds; an abandoned lease expires so another
+// worker can recover without losing the report.
+func (m *Metadata) AcquireStubReport(ctx context.Context, locality, stubID, token string, ttl time.Duration) (StubReportClaim, error) {
+	if token == "" {
+		return StubReportInFlight, errors.New("stub report token is required")
+	}
+	result, err := acquireStubReportScript.Run(
+		ctx,
+		m.rdb,
+		[]string{MetadataKeys.MetadataReconcileReported(locality, stubID)},
+		token,
+		redisTTLSeconds(ttl),
+	).Int()
+	if err != nil {
+		return StubReportInFlight, err
+	}
+	return StubReportClaim(result), nil
+}
+
+// CompleteStubReport promotes a caller's live lease to the durable completed
+// marker. A stale publisher cannot complete over a newer publisher's lease.
+func (m *Metadata) CompleteStubReport(ctx context.Context, locality, stubID, token string, ttl time.Duration) (bool, error) {
+	if token == "" {
+		return false, errors.New("stub report token is required")
+	}
+	result, err := completeStubReportScript.Run(
+		ctx,
+		m.rdb,
+		[]string{MetadataKeys.MetadataReconcileReported(locality, stubID)},
+		token,
+		redisTTLSeconds(ttl),
+	).Int()
+	return result == 1, err
+}
+
+// ReleaseStubReport relinquishes only the caller's lease. Token comparison
+// prevents a timed-out publisher from deleting a newer worker's lease.
+func (m *Metadata) ReleaseStubReport(ctx context.Context, locality, stubID, token string) (bool, error) {
+	if token == "" {
+		return false, errors.New("stub report token is required")
+	}
+	result, err := releaseStubReportScript.Run(
+		ctx,
+		m.rdb,
+		[]string{MetadataKeys.MetadataReconcileReported(locality, stubID)},
+		token,
+	).Int()
+	return result == 1, err
+}
+
+func redisTTLSeconds(ttl time.Duration) int64 {
+	seconds := int64(ttl / time.Second)
+	if seconds < 1 {
+		return 1
+	}
+	return seconds
 }
 
 // AcquireReconcileLock takes a short lifecycle lock so only one materialization

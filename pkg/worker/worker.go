@@ -1089,10 +1089,21 @@ func (s *Worker) profile() {
 func (s *Worker) startup() error {
 	log.Info().Msg("worker starting up")
 
+	preloadStart := time.Now()
+	preloadedBytes, err := preloadSandboxProcessManagerBinary(types.WorkerSandboxProcessManagerWorkerPath)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to preload sandbox process manager binary")
+	} else {
+		log.Debug().
+			Int64("bytes", preloadedBytes).
+			Dur("duration", time.Since(preloadStart)).
+			Msg("preloaded sandbox process manager binary")
+	}
+
 	if err := s.setWorkerKeepAlive(); err != nil {
 		return err
 	}
-	_, err := handleGRPCResponse(s.workerRepoClient.ToggleWorkerAvailable(s.ctx, &pb.ToggleWorkerAvailableRequest{
+	_, err = handleGRPCResponse(s.workerRepoClient.ToggleWorkerAvailable(s.ctx, &pb.ToggleWorkerAvailableRequest{
 		WorkerId:   s.workerId,
 		Generation: s.workerGeneration,
 	}))

@@ -23,12 +23,14 @@ import (
 	repo "github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/sync/singleflight"
 )
 
 const (
 	requestProcessingInterval      time.Duration = 50 * time.Millisecond
 	requestProcessingBatchSize                   = 512
 	provisioningWorkerRequeueDelay time.Duration = 250 * time.Millisecond
+	pendingWorkerFastRetryWindow   time.Duration = provisioningWorkerRequeueDelay
 	provisioningReservationHandoff time.Duration = 2 * requestProcessingInterval
 	pendingWorkerReservationTTL    time.Duration = 30 * time.Second
 )
@@ -72,12 +74,17 @@ type Scheduler struct {
 	workerProvisioningBackoff *workerProvisioningBackoff
 	credentials               *schedulerCredentialCache
 	agentPoolMu               sync.Mutex
+	concurrencyLimitLookup    singleflight.Group
 }
 
 type schedulerCredentialAttachResult struct {
 	hasCredentials bool
 	cacheHit       bool
 	source         string
+}
+
+type concurrencyLimitLookupResult struct {
+	quota *types.ConcurrencyLimit
 }
 
 func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *common.RedisClient, usageRepo repo.UsageMetricsRepository, backendRepo repo.BackendRepository, workspaceRepo repo.WorkspaceRepository, tailscale *network.Tailscale) (*Scheduler, error) {
@@ -371,29 +378,20 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 
 	request.Timestamp = time.Now()
 
-	containerState, err := s.containerRepo.GetContainerState(request.ContainerId)
-	if err == nil {
-		switch types.ContainerStatus(containerState.Status) {
-		case types.ContainerStatusPending, types.ContainerStatusRunning:
-			return &types.ContainerAlreadyScheduledError{Msg: "a container with this id is already running or pending"}
-		default:
-			// Do nothing
-		}
-	}
-	s.attachLatestCheckpoint(request)
-
-	requestedEvent := request.Clone()
-	go s.schedulerUsageMetrics.CounterIncContainerRequested(requestedEvent)
-
 	quota, err := s.getConcurrencyLimit(request)
 	if err != nil {
 		return err
 	}
 
-	err = s.containerRepo.SetContainerStateWithConcurrencyLimit(quota, request)
+	err = s.containerRepo.CreateContainerStateWithConcurrencyLimit(quota, request)
 	if err != nil {
 		return err
 	}
+
+	s.attachLatestCheckpoint(request)
+
+	requestedEvent := request.Clone()
+	go s.schedulerUsageMetrics.CounterIncContainerRequested(requestedEvent)
 
 	queueStart := time.Now()
 	err = s.addRequestToBacklog(request)
@@ -418,15 +416,36 @@ func (s *Scheduler) getConcurrencyLimit(request *types.ContainerRequest) (*types
 }
 
 func (s *Scheduler) managedConcurrencyLimit(request *types.ContainerRequest) (*types.ConcurrencyLimit, error) {
+	value, err, _ := s.concurrencyLimitLookup.Do(request.WorkspaceId, func() (interface{}, error) {
+		quota, err := s.loadManagedConcurrencyLimit(request.WorkspaceId)
+		return concurrencyLimitLookupResult{quota: quota}, err
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	result, ok := value.(concurrencyLimitLookupResult)
+	if !ok {
+		return nil, fmt.Errorf("unexpected concurrency limit lookup value: %T", value)
+	}
+	if result.quota == nil {
+		return nil, nil
+	}
+
+	quota := *result.quota
+	return &quota, nil
+}
+
+func (s *Scheduler) loadManagedConcurrencyLimit(workspaceId string) (*types.ConcurrencyLimit, error) {
 	// First try to get the cached quota
 	var quota *types.ConcurrencyLimit
-	quota, err := s.workspaceRepo.GetConcurrencyLimitByWorkspaceId(request.WorkspaceId)
+	quota, err := s.workspaceRepo.GetConcurrencyLimitByWorkspaceId(workspaceId)
 	if err != nil {
 		return nil, err
 	}
 
 	if quota == nil {
-		quota, err = s.backendRepo.GetConcurrencyLimitByWorkspaceId(s.ctx, request.WorkspaceId)
+		quota, err = s.backendRepo.GetConcurrencyLimitByWorkspaceId(s.ctx, workspaceId)
 		if err != nil && err == sql.ErrNoRows {
 			return nil, nil // No quota set for this workspace
 		}
@@ -434,7 +453,7 @@ func (s *Scheduler) managedConcurrencyLimit(request *types.ContainerRequest) (*t
 			return nil, err
 		}
 
-		err = s.workspaceRepo.SetConcurrencyLimitByWorkspaceId(request.WorkspaceId, quota)
+		err = s.workspaceRepo.SetConcurrencyLimitByWorkspaceId(workspaceId, quota)
 		if err != nil {
 			return nil, err
 		}
@@ -1444,14 +1463,17 @@ func workerFreeCapacityScore(worker *types.Worker, request *types.ContainerReque
 	return score
 }
 
-const maxScheduleRetryCount = 120
-const maxScheduleRetryDuration = 20 * time.Minute
+const (
+	firstSchedulingAttemptRetryCount = 1
+	maxScheduleRetryCount            = 120
+	maxScheduleRetryDuration         = 20 * time.Minute
+)
 
 func (s *Scheduler) addRequestToBacklog(request *types.ContainerRequest) error {
 	normalizeGPURequest(request)
 
 	if request.RetryCount == 0 {
-		request.RetryCount++
+		request.RetryCount = firstSchedulingAttemptRetryCount
 		return s.pushBacklog(request, 0)
 	}
 

@@ -752,6 +752,12 @@ func (e *ErrContainerStateNotFound) From(err error) bool {
 	return false
 }
 
+type ErrContainerRequestNotPending struct{}
+
+func (e *ErrContainerRequestNotPending) Error() string {
+	return "container request is no longer pending"
+}
+
 type ErrInvalidWorkerStatus struct {
 }
 

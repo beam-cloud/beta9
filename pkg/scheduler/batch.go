@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -25,6 +26,10 @@ type plannedSchedule struct {
 	request *types.ContainerRequest
 }
 
+type containerStatusBatchReader interface {
+	GetContainerStatuses(containerIds []string) (map[string]types.ContainerStatus, map[string]error)
+}
+
 func newSchedulingBatch(scheduler *Scheduler, workers []*types.Worker, batchSize int) *schedulingBatch {
 	return &schedulingBatch{
 		scheduler: scheduler,
@@ -41,12 +46,49 @@ func (s *Scheduler) processRequestBatch(requests []*types.ContainerRequest, work
 }
 
 func (b *schedulingBatch) plan(requests []*types.ContainerRequest) {
+	if statuses, failures, supported := b.loadContainerStatuses(requests); supported {
+		for _, request := range requests {
+			if failures[request.ContainerId] != nil {
+				b.planRequest(request)
+				continue
+			}
+			b.planRequestWithRunnableState(request, statuses[request.ContainerId] == types.ContainerStatusPending)
+		}
+		return
+	}
+
 	for _, request := range requests {
 		b.planRequest(request)
 	}
 }
 
+func (b *schedulingBatch) loadContainerStatuses(requests []*types.ContainerRequest) (map[string]types.ContainerStatus, map[string]error, bool) {
+	reader, ok := b.scheduler.containerRepo.(containerStatusBatchReader)
+	if !ok {
+		return nil, nil, false
+	}
+
+	containerIds := make([]string, 0, len(requests))
+	for _, request := range requests {
+		if request != nil && request.ContainerId != "" {
+			containerIds = append(containerIds, request.ContainerId)
+		}
+	}
+
+	statuses, failures := reader.GetContainerStatuses(containerIds)
+	return statuses, failures, true
+}
+
 func (b *schedulingBatch) planRequest(request *types.ContainerRequest) {
+	attempt := newSchedulingAttempt(b.scheduler, request, b.workers)
+	b.planRequestWithAttempt(request, attempt, attempt.runnable())
+}
+
+func (b *schedulingBatch) planRequestWithRunnableState(request *types.ContainerRequest, runnable bool) {
+	b.planRequestWithAttempt(request, newSchedulingAttempt(b.scheduler, request, b.workers), runnable)
+}
+
+func (b *schedulingBatch) planRequestWithAttempt(request *types.ContainerRequest, attempt *schedulingAttempt, runnable bool) {
 	planStart := time.Now()
 	planned := false
 	defer func() {
@@ -57,12 +99,13 @@ func (b *schedulingBatch) planRequest(request *types.ContainerRequest) {
 			"planned_count_so_far": fmt.Sprintf("%d", len(b.schedules)),
 		})
 	}()
-	attempt := newSchedulingAttempt(b.scheduler, request, b.workers)
-	if !attempt.runnable() {
+	if !runnable {
 		return
 	}
 	if !b.scheduler.checkpointReady(request) {
-		attempt.requeueForWorkerWaitDelay(checkpointHandoffRetryDelay, "checkpoint_handoff")
+		if attempt.runnable() {
+			attempt.requeueForWorkerWaitDelay(checkpointHandoffRetryDelay, "checkpoint_handoff")
+		}
 		return
 	}
 
@@ -74,7 +117,9 @@ func (b *schedulingBatch) planRequest(request *types.ContainerRequest) {
 		"candidate_workers": fmt.Sprintf("%d", len(b.workers)),
 	})
 	if err != nil || worker == nil {
-		newSchedulingAttempt(b.scheduler, request, b.workers).runWaitingOrProvisioning()
+		if attempt.runnable() {
+			attempt.runWaitingOrProvisioning()
+		}
 		return
 	}
 
@@ -85,7 +130,9 @@ func (b *schedulingBatch) planRequest(request *types.ContainerRequest) {
 		"worker_id": worker.Id,
 	})
 	if !reserved {
-		newSchedulingAttempt(b.scheduler, request, b.workers).runWaitingOrProvisioning()
+		if attempt.runnable() {
+			attempt.runWaitingOrProvisioning()
+		}
 		return
 	}
 
@@ -138,6 +185,13 @@ func (b *schedulingBatch) dispatchSchedules(schedules []plannedSchedule) {
 		workerRequests[i] = b.scheduler.prepareWorkerRequest(schedule.worker, schedule.request)
 	}
 	err := b.scheduler.pushWorkerRequests(schedules[0].worker, workerRequests)
+	var notPending *types.ErrContainerRequestNotPending
+	if len(schedules) > 1 && errors.As(err, &notPending) {
+		middle := len(schedules) / 2
+		b.dispatchSchedules(schedules[:middle])
+		b.dispatchSchedules(schedules[middle:])
+		return
+	}
 	if err == nil {
 		for _, request := range workerRequests {
 			go b.scheduler.schedulerUsageMetrics.CounterIncContainerScheduled(request.Clone())

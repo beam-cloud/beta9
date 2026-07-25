@@ -41,6 +41,10 @@ type ReconciliationConfig struct {
 	MaxItemsPerCycle      int   `key:"maxItemsPerCycle" json:"max_items_per_cycle"`
 	VolumeMinBytes        int64 `key:"volumeMinBytes" json:"volume_min_bytes"`
 	OriginFallbackEnabled bool  `key:"originFallbackEnabled" json:"origin_fallback_enabled"`
+	// ClipV2ReplicaCount controls how many of the cache client's top-ranked
+	// hosts proactively retain immutable OCI layers. Reads are spread across
+	// those replicas and retain the normal ranked-host fallback path.
+	ClipV2ReplicaCount int `key:"clipV2ReplicaCount" json:"clip_v2_replica_count"`
 	// MaxDiskUsagePct is the soft pressure watermark (0-1). Above it, the
 	// cache owner evicts lower-priority content and pauses proactive
 	// reconciliation. Near it, reconciliation is limited to the ranked recent

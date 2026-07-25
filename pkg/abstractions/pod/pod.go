@@ -50,6 +50,7 @@ const (
 	podRoutePrefix         string = "/pod"
 	sandboxRoutePrefix     string = "/sandbox"
 	podProxyBufferSize            = 300
+	podStubLoadTimeout            = 10 * time.Second
 )
 
 type PodService interface {
@@ -76,6 +77,7 @@ type GenericPodService struct {
 	eventRepo       repository.EventRepository
 	controller      *abstractions.InstanceController
 	podInstances    *common.SafeMap[*podInstance]
+	stubLoadGroup   singleflight.Group
 	clientCache     sync.Map
 	clientDialGroup singleflight.Group
 	tcpServer       *PodTCPServer
@@ -630,7 +632,7 @@ func (s *GenericPodService) CreatePod(ctx context.Context, in *pb.CreatePodReque
 	}
 
 	if stub == nil {
-		stub, err = s.backendRepo.GetStubByExternalId(ctx, in.StubId)
+		stub, err = s.loadStub(ctx, in.StubId)
 		if err != nil {
 			return &pb.CreatePodResponse{
 				Ok: false,
@@ -675,12 +677,46 @@ func (s *GenericPodService) CreatePod(ctx context.Context, in *pb.CreatePodReque
 	}
 
 	return &pb.CreatePodResponse{
-		Ok:            true,
-		ContainerId:   containerId,
-		StubId:        stub.ExternalId,
-		TaskId: taskId,
-		AppId:  appId,
+		Ok:          true,
+		ContainerId: containerId,
+		StubId:      stub.ExternalId,
+		TaskId:      taskId,
+		AppId:       appId,
 	}, nil
+}
+
+// loadStub collapses simultaneous reads for the same immutable stub revision.
+// Sandbox bursts otherwise fan one logical lookup out into one Postgres query
+// (and potentially one new database connection) per container.
+func (s *GenericPodService) loadStub(ctx context.Context, stubId string) (*types.StubWithRelated, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	result := s.stubLoadGroup.DoChan(stubId, func() (interface{}, error) {
+		loadCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), podStubLoadTimeout)
+		defer cancel()
+		return s.backendRepo.GetStubByExternalId(loadCtx, stubId)
+	})
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case loaded := <-result:
+		if loaded.Err != nil {
+			return nil, loaded.Err
+		}
+		stub, ok := loaded.Val.(*types.StubWithRelated)
+		if !ok || stub == nil {
+			return nil, nil
+		}
+		return cloneStubWithRelated(stub), nil
+	}
+}
+
+func cloneStubWithRelated(stub *types.StubWithRelated) *types.StubWithRelated {
+	clone := *stub
+	return &clone
 }
 
 // trackRunAsTask reports whether a stub's containers should be tracked with

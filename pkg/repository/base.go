@@ -76,6 +76,7 @@ type ContainerRepository interface {
 	SetContainerAddressMap(containerId string, addressMap map[int32]string) error
 	GetContainerAddressMap(containerId string) (map[int32]string, error)
 	CheckContainerConcurrencyLimit(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error
+	CreateContainerStateWithConcurrencyLimit(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error
 	SetContainerStateWithConcurrencyLimit(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error
 	GetActiveContainersByStubId(stubId string) ([]types.ContainerState, error)
 	GetActiveContainersByWorkspaceId(workspaceId string) ([]types.ContainerState, error)

@@ -104,6 +104,47 @@ func TestContainerClientWithDialerDoesNotBlockSharedCacheFill(t *testing.T) {
 	require.Less(t, time.Since(releasedAt), 500*time.Millisecond)
 }
 
+func TestContainerClientDoesNotTreatPortEndingIn443AsTLS(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = listener.Close() })
+
+	server := grpc.NewServer()
+	pb.RegisterContainerServiceServer(server, readyContainerServer{})
+	go func() {
+		_ = server.Serve(listener)
+	}()
+	t.Cleanup(server.Stop)
+
+	dialer := func(ctx context.Context, _ string) (net.Conn, error) {
+		var netDialer net.Dialer
+		return netDialer.DialContext(ctx, "tcp", listener.Addr().String())
+	}
+	client, err := NewContainerClientWithDialer(
+		context.Background(),
+		"127.0.0.1:42443",
+		"token",
+		dialer,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = client.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	resp, err := client.SandboxStatusContext(ctx, "sandbox-1", 0)
+	require.NoError(t, err)
+	require.True(t, resp.Ok)
+}
+
+func TestContainerClientUsesTLSOnlyOnExactPort443(t *testing.T) {
+	require.True(t, containerClientUsesTLS("gateway.example.com:443"))
+	require.True(t, containerClientUsesTLS("[2001:db8::1]:443"))
+	require.False(t, containerClientUsesTLS("127.0.0.1:42443"))
+	require.False(t, containerClientUsesTLS("[2001:db8::1]:42443"))
+	require.False(t, containerClientUsesTLS("gateway.example.com:8443"))
+	require.False(t, containerClientUsesTLS("route://worker"))
+}
+
 type attachmentClientStream struct {
 	pb.ContainerService_ContainerStreamLogsClient
 	attach <-chan struct{}

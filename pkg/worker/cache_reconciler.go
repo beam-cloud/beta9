@@ -7,8 +7,9 @@ package worker
 //     (coalesced to S2) and refreshes the per-stub recency window. It never
 //     decides placement or moves bytes.
 //   - WorkerCacheManager reconcile loop: on the node that currently hosts the
-//     cache server, materializes content the local host owns (HRW), except
-//     checkpoints which materialize on every matching accelerator in locality.
+//     cache server, materializes content the local host owns (HRW). Immutable
+//     CLIP v2 layers may use a small top-ranked replica set, while checkpoints
+//     materialize on every matching accelerator in locality.
 //     Ownership has hysteresis: an owner that is briefly endpoint-less (e.g. a
 //     rolling deploy) keeps its keys; only after a grace period do its keys
 //     fail over to the next-ranked live host. Under disk pressure,
@@ -40,6 +41,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -47,8 +49,19 @@ import (
 const (
 	reporterFlushInterval    = 5 * time.Second
 	reporterMaxItemsPerEvent = 512
+	reporterClaimLeaseTTL    = 30 * time.Second
 	reconcileItemTimeout     = 5 * time.Minute
 	originCredentialsTTL     = 5 * time.Minute
+	// The full reconciliation pass intentionally scans the complete recent
+	// working set so it can protect and prune content safely. Keep a separate,
+	// small hot lane for newly-touched stubs so that scan cannot delay burst
+	// image replication.
+	reconcileHotInterval = reporterFlushInterval
+	reconcileHotMaxStubs = 8
+	reconcileHotMaxItems = 16
+	// Keep one hot pass shorter than its polling interval. A slow coordinator
+	// or cache peer must not pin the only hot-lane goroutine and starve newer stubs.
+	reconcileHotPassTimeout = 4 * time.Second
 	// reconcileFailureBackoff throttles retries (and logs) for items that fail
 	// to materialize, e.g. an unresolvable origin source.
 	reconcileFailureBackoff = 15 * time.Minute
@@ -123,6 +136,22 @@ func reconcileResumeDiskUsagePct(pct float64) float64 {
 	return resume
 }
 
+func configuredClipV2ReplicaCount(cacheConfig cache.Config) int {
+	replicaCount := cacheConfig.Reconciliation.ClipV2ReplicaCount
+	if replicaCount <= 0 {
+		replicaCount = 1
+	}
+
+	maxReplicas := cacheConfig.Client.NTopHosts
+	if maxReplicas <= 0 {
+		maxReplicas = cacheDefaultNTopHosts
+	}
+	if replicaCount > maxReplicas {
+		replicaCount = maxReplicas
+	}
+	return replicaCount
+}
+
 // cacheContentReporter coalesces required-content reports per (stub, kind) and
 // flushes them to S2 as bounded events, while keeping a fast-moving recent-stub
 // index in Redis. It is created only when reconciliation is enabled; when nil,
@@ -137,15 +166,18 @@ type cacheContentReporter struct {
 	activeStubs    func(workspaceID string) []string
 	reconcileNow   func()
 
-	mu       sync.Mutex
-	pending  map[reporterKey]map[string]types.CacheRequiredContentItem
-	reported map[string]struct{}
+	flushMu            sync.Mutex
+	mu                 sync.Mutex
+	pending            map[reporterKey]map[string]types.CacheRequiredContentItem
+	pendingRecentStubs map[reporterStubKey]struct{}
+	reported           map[string]struct{}
 }
 
 type reporterKey struct {
-	workspaceID string
-	stubID      string
-	kind        types.CacheContentKind
+	workspaceID    string
+	stubID         string
+	kind           types.CacheContentKind
+	immutableImage bool
 }
 
 type reporterStubKey struct {
@@ -154,8 +186,9 @@ type reporterStubKey struct {
 }
 
 type requiredContentReport struct {
-	kind  types.CacheContentKind
-	items []types.CacheRequiredContentItem
+	kind           types.CacheContentKind
+	items          []types.CacheRequiredContentItem
+	immutableImage bool
 }
 
 func newCacheContentReporter(
@@ -169,31 +202,43 @@ func newCacheContentReporter(
 	reconcileNow func(),
 ) *cacheContentReporter {
 	r := &cacheContentReporter{
-		ctx:            ctx,
-		eventRepo:      eventRepo,
-		metadata:       metadata,
-		locality:       locality,
-		recentStubTTL:  recentStubTTL,
-		volumeMinBytes: volumeMinBytes,
-		activeStubs:    activeStubs,
-		reconcileNow:   reconcileNow,
-		pending:        make(map[reporterKey]map[string]types.CacheRequiredContentItem),
-		reported:       make(map[string]struct{}),
+		ctx:                ctx,
+		eventRepo:          eventRepo,
+		metadata:           metadata,
+		locality:           locality,
+		recentStubTTL:      recentStubTTL,
+		volumeMinBytes:     volumeMinBytes,
+		activeStubs:        activeStubs,
+		reconcileNow:       reconcileNow,
+		pending:            make(map[reporterKey]map[string]types.CacheRequiredContentItem),
+		pendingRecentStubs: make(map[reporterStubKey]struct{}),
+		reported:           make(map[string]struct{}),
 	}
-	go r.run()
 	return r
 }
 
-// touchRecentStub refreshes the recent-stub window so reconciliation keeps a
-// stub's content warm for RecentStubTTL after its most recent container. It is
-// cheap and is called on every container start (unlike content generation).
+// touchRecentStub queues a refresh of the recent-stub window so reconciliation
+// keeps a stub's content warm for RecentStubTTL after its most recent container.
+// It is called on every container start, so duplicate touches are coalesced and
+// flushed asynchronously instead of issuing a gateway RPC on the startup path.
 func (r *cacheContentReporter) touchRecentStub(workspaceID, stubID string) {
 	if r == nil || r.metadata == nil || workspaceID == "" || stubID == "" {
 		return
 	}
-	if err := r.metadata.AddRecentStub(r.ctx, r.locality, workspaceID, stubID, r.recentStubTTL); err != nil {
-		log.Debug().Err(err).Str("workspace_id", workspaceID).Str("stub_id", stubID).Msg("failed to refresh recent stub for cache reconciliation")
+
+	r.mu.Lock()
+	r.queueRecentStubLocked(workspaceID, stubID)
+	r.mu.Unlock()
+}
+
+func (r *cacheContentReporter) queueRecentStubLocked(workspaceID, stubID string) {
+	if r.metadata == nil || workspaceID == "" || stubID == "" {
+		return
 	}
+	if r.pendingRecentStubs == nil {
+		r.pendingRecentStubs = make(map[reporterStubKey]struct{})
+	}
+	r.pendingRecentStubs[reporterStubKey{workspaceID: workspaceID, stubID: stubID}] = struct{}{}
 }
 
 // shouldGenerateRequiredContent reports whether this worker process has already
@@ -243,19 +288,19 @@ func (r *cacheContentReporter) reportBatches(workspaceID, stubID string, reports
 		return
 	}
 
-	if r.metadata != nil {
-		if err := r.metadata.AddRecentStub(r.ctx, r.locality, workspaceID, stubID, r.recentStubTTL); err != nil {
-			log.Debug().Err(err).Str("workspace_id", workspaceID).Str("stub_id", stubID).Msg("failed to record recent stub for cache reconciliation")
-		}
-	}
-
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.queueRecentStubLocked(workspaceID, stubID)
 	for _, report := range reports {
 		if len(report.items) == 0 {
 			continue
 		}
-		key := reporterKey{workspaceID: workspaceID, stubID: stubID, kind: report.kind}
+		key := reporterKey{
+			workspaceID:    workspaceID,
+			stubID:         stubID,
+			kind:           report.kind,
+			immutableImage: report.immutableImage,
+		}
 		bucket := r.pending[key]
 		if bucket == nil {
 			bucket = make(map[string]types.CacheRequiredContentItem)
@@ -278,74 +323,205 @@ func (r *cacheContentReporter) flush() {
 		return
 	}
 
+	r.flushMu.Lock()
+	defer r.flushMu.Unlock()
+
 	r.mu.Lock()
 	pending := r.pending
+	pendingRecentStubs := r.pendingRecentStubs
 	r.pending = make(map[reporterKey]map[string]types.CacheRequiredContentItem)
+	r.pendingRecentStubs = make(map[reporterStubKey]struct{})
 	r.mu.Unlock()
 
 	if r.eventRepo == nil {
+		r.requeue(pending)
+		r.requeueRecentStubs(pendingRecentStubs)
 		return
 	}
 
 	failed := make(map[reporterKey]map[string]types.CacheRequiredContentItem)
-	stubOK := make(map[reporterStubKey]bool)
-	published := false
+
+	// Dynamic records (checkpoints, volumes, and disk snapshots) intentionally
+	// bypass the image claim: they may gain new generations after the first
+	// container. Only immutable CLIP image records are cluster-coalesced.
 	for key, bucket := range pending {
-		if len(bucket) == 0 {
+		if len(bucket) == 0 || key.immutableImage {
+			continue
+		}
+		if !r.publishBucket(key, bucket) {
+			failed[key] = bucket
+		}
+	}
+
+	imagePending := make(map[reporterStubKey]map[reporterKey]map[string]types.CacheRequiredContentItem)
+	for key, bucket := range pending {
+		if len(bucket) == 0 || !key.immutableImage {
 			continue
 		}
 		stubKey := reporterStubKey{workspaceID: key.workspaceID, stubID: key.stubID}
-		if _, ok := stubOK[stubKey]; !ok {
-			stubOK[stubKey] = true
+		buckets := imagePending[stubKey]
+		if buckets == nil {
+			buckets = make(map[reporterKey]map[string]types.CacheRequiredContentItem)
+			imagePending[stubKey] = buckets
+		}
+		buckets[key] = bucket
+	}
+
+	for stubKey, buckets := range imagePending {
+		if r.metadata == nil {
+			for key, bucket := range buckets {
+				if !r.publishBucket(key, bucket) {
+					failed[key] = bucket
+				}
+			}
+			continue
 		}
 
-		items := make([]types.CacheRequiredContentItem, 0, len(bucket))
-		for _, item := range bucket {
-			items = append(items, item)
+		token := uuid.NewString()
+		ctx, cancel := r.coordinatorContext()
+		claim, err := r.metadata.AcquireStubReport(ctx, r.locality, stubKey.stubID, token, reporterClaimLeaseTTL)
+		cancel()
+		if err != nil {
+			log.Debug().Err(err).Str("stub_id", stubKey.stubID).Msg("failed to acquire required-content report lease")
+			// The RPC may have committed before its response was lost. A
+			// compare-token release is harmless if it did not and avoids
+			// waiting the full lease before another reporter can recover.
+			r.releaseStubReportClaim(stubKey.stubID, token)
+			r.mergeFailed(failed, buckets)
+			continue
 		}
+		if claim == cache.StubReportComplete {
+			continue
+		}
+		if claim != cache.StubReportAcquired {
+			r.mergeFailed(failed, buckets)
+			continue
+		}
+
 		ok := true
-		for start := 0; start < len(items); start += reporterMaxItemsPerEvent {
-			end := min(start+reporterMaxItemsPerEvent, len(items))
-			if err := r.eventRepo.PushStubCacheRequiredContent(types.EventStubCacheRequiredContentSchema{
-				WorkspaceID: key.workspaceID,
-				StubID:      key.stubID,
-				Locality:    r.locality,
-				Kind:        key.kind,
-				Items:       items[start:end],
-			}); err != nil {
-				log.Debug().Err(err).Str("workspace_id", key.workspaceID).Str("stub_id", key.stubID).Str("kind", string(key.kind)).Msg("failed to publish required-content event")
-				ok = false
-				break
+		for key, bucket := range buckets {
+			ok = r.publishBucket(key, bucket) && ok
+		}
+		if ok {
+			ctx, cancel = r.coordinatorContext()
+			ok, err = r.metadata.CompleteStubReport(ctx, r.locality, stubKey.stubID, token, r.recentStubTTL)
+			cancel()
+			if err != nil {
+				log.Debug().Err(err).Str("stub_id", stubKey.stubID).Msg("failed to complete required-content report lease")
 			}
 		}
 		if !ok {
-			stubOK[stubKey] = false
-			failed[key] = bucket
-			continue
-		}
-		published = true
-	}
-
-	for stubKey, ok := range stubOK {
-		if ok {
-			r.markStubReported(stubKey.stubID)
+			// The S2 event is idempotent. Requeueing after an ambiguous
+			// completion may duplicate it, but can never durably lose it.
+			r.releaseStubReportClaim(stubKey.stubID, token)
+			r.mergeFailed(failed, buckets)
 		}
 	}
 
 	if len(failed) > 0 {
 		r.requeue(failed)
 	}
-	if published && r.reconcileNow != nil {
+
+	// A recent-stub entry is the visibility edge for reconciliation. Publish
+	// required content first, then advance LastSeen only after every detached
+	// bucket for that stub is durable (or an immutable report is already
+	// complete). Otherwise a cache host can read the old stream, remember the
+	// new LastSeen as complete, and skip the newly-published content.
+	for key := range failed {
+		stubKey := reporterStubKey{workspaceID: key.workspaceID, stubID: key.stubID}
+		delete(pendingRecentStubs, stubKey)
+	}
+	indexed := r.flushRecentStubs(pendingRecentStubs)
+	if indexed && r.reconcileNow != nil {
 		r.reconcileNow()
 	}
 }
 
-func (r *cacheContentReporter) markStubReported(stubID string) {
-	if r == nil || r.metadata == nil || stubID == "" {
+func (r *cacheContentReporter) publishBucket(key reporterKey, bucket map[string]types.CacheRequiredContentItem) bool {
+	items := make([]types.CacheRequiredContentItem, 0, len(bucket))
+	for _, item := range bucket {
+		items = append(items, item)
+	}
+	for start := 0; start < len(items); start += reporterMaxItemsPerEvent {
+		end := min(start+reporterMaxItemsPerEvent, len(items))
+		if err := r.eventRepo.PushStubCacheRequiredContent(types.EventStubCacheRequiredContentSchema{
+			WorkspaceID: key.workspaceID,
+			StubID:      key.stubID,
+			Locality:    r.locality,
+			Kind:        key.kind,
+			Items:       items[start:end],
+		}); err != nil {
+			log.Debug().Err(err).Str("workspace_id", key.workspaceID).Str("stub_id", key.stubID).Str("kind", string(key.kind)).Msg("failed to publish required-content event")
+			return false
+		}
+	}
+	return true
+}
+
+func (r *cacheContentReporter) coordinatorContext() (context.Context, context.CancelFunc) {
+	ctx := r.ctx
+	if ctx == nil || ctx.Err() != nil {
+		ctx = context.Background()
+	}
+	return context.WithTimeout(ctx, cacheCoordinatorRPCTimeout)
+}
+
+func (r *cacheContentReporter) releaseStubReportClaim(stubID, token string) {
+	if r == nil || r.metadata == nil || stubID == "" || token == "" {
 		return
 	}
-	if _, err := r.metadata.MarkStubReported(r.ctx, r.locality, stubID, r.recentStubTTL); err != nil {
-		log.Debug().Err(err).Str("stub_id", stubID).Msg("failed to mark required-content report complete")
+	ctx, cancel := r.coordinatorContext()
+	defer cancel()
+	if _, err := r.metadata.ReleaseStubReport(ctx, r.locality, stubID, token); err != nil {
+		log.Debug().Err(err).Str("stub_id", stubID).Msg("failed to release required-content report lease")
+	}
+}
+
+func (r *cacheContentReporter) mergeFailed(
+	failed map[reporterKey]map[string]types.CacheRequiredContentItem,
+	buckets map[reporterKey]map[string]types.CacheRequiredContentItem,
+) {
+	for key, bucket := range buckets {
+		failed[key] = bucket
+	}
+}
+
+func (r *cacheContentReporter) flushRecentStubs(stubs map[reporterStubKey]struct{}) bool {
+	if r == nil || r.metadata == nil || len(stubs) == 0 {
+		return false
+	}
+
+	ctx := r.ctx
+	if ctx == nil || ctx.Err() != nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, cacheCoordinatorRPCTimeout)
+	defer cancel()
+
+	failed := make(map[reporterStubKey]struct{})
+	indexed := false
+	for key := range stubs {
+		if err := r.metadata.AddRecentStub(ctx, r.locality, key.workspaceID, key.stubID, r.recentStubTTL); err != nil {
+			log.Debug().Err(err).Str("workspace_id", key.workspaceID).Str("stub_id", key.stubID).Msg("failed to refresh recent stub for cache reconciliation")
+			failed[key] = struct{}{}
+		} else {
+			indexed = true
+		}
+	}
+	if len(failed) > 0 {
+		r.requeueRecentStubs(failed)
+	}
+	return indexed
+}
+
+func (r *cacheContentReporter) requeueRecentStubs(stubs map[reporterStubKey]struct{}) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.pendingRecentStubs == nil {
+		r.pendingRecentStubs = make(map[reporterStubKey]struct{}, len(stubs))
+	}
+	for key := range stubs {
+		r.pendingRecentStubs[key] = struct{}{}
 	}
 }
 
@@ -364,6 +540,7 @@ func (r *cacheContentReporter) requeue(items map[reporterKey]map[string]types.Ca
 		for itemKey, item := range bucket {
 			current[itemKey] = item
 		}
+		r.queueRecentStubLocked(key.workspaceID, key.stubID)
 	}
 }
 
@@ -446,6 +623,166 @@ func (m *WorkerCacheManager) runReconciliation() {
 	}
 }
 
+// runHotReconciliation polls a bounded newest-stub window independently of the
+// full protection/pruning pass. Required-content publication happens on an
+// ordinary worker, so its process-local reconcile wakeup cannot wake the
+// cache-server daemonset that owns proactive materialization.
+func (m *WorkerCacheManager) runHotReconciliation() {
+	defer m.wg.Done()
+
+	m.reconcileHotOnce()
+	ticker := time.NewTicker(reconcileHotInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-m.ctx.Done():
+			return
+		case <-ticker.C:
+			m.reconcileHotOnce()
+		}
+	}
+}
+
+// reconcileHotOnce immediately reconciles a small newest-first stub window.
+// Empty streams, read errors, and incomplete reconciliation are deliberately
+// not remembered: a recent-stub touch can become visible just before its S2
+// report or placement view, and the next bounded poll must retry it.
+func (m *WorkerCacheManager) reconcileHotOnce() {
+	if m.client == nil || m.metadataStore == nil || m.eventRepo == nil {
+		return
+	}
+
+	m.mu.Lock()
+	server := m.server
+	draining := m.draining
+	m.mu.Unlock()
+	if draining || server == nil {
+		return
+	}
+
+	localHostID := server.HostID()
+	if localHostID == "" || m.hotReconciliationUnderDiskPressure(server, localHostID) {
+		return
+	}
+
+	passCtx, cancel := context.WithTimeout(m.ctx, reconcileHotPassTimeout)
+	defer cancel()
+
+	stubs, err := m.metadataStore.ListRecentStubs(
+		passCtx,
+		m.locality,
+		m.recentStubTTL(),
+		reconcileHotMaxStubs,
+	)
+	if err != nil {
+		log.Debug().Err(err).Str("locality", m.locality).Msg("hot cache reconciliation failed to list recent stubs")
+		return
+	}
+	m.retainHotReconciledWindow(stubs)
+
+	budget := newReconcileBudget(reconcileHotMaxItems)
+	for _, stub := range stubs {
+		if m.hotReconcileCompletedAt(stub) {
+			continue
+		}
+		items, err := m.eventRepo.ReadStubCacheRequiredContent(passCtx, stub.WorkspaceID, stub.StubID)
+		if err != nil {
+			log.Debug().Err(err).Str("workspace_id", stub.WorkspaceID).Str("stub_id", stub.StubID).Msg("hot cache reconciliation failed to read required content")
+			continue
+		}
+		if len(items) == 0 {
+			continue
+		}
+		hotItems := hotReconcileItems(items)
+		if len(hotItems) == 0 {
+			m.recordHotReconcileCompletion(stub)
+			continue
+		}
+		_, complete := m.reconcileStubContentWithCompletionContext(passCtx, server, localHostID, stub, hotItems, budget, nil, true)
+		if complete {
+			m.recordHotReconcileCompletion(stub)
+		}
+		if budget.exhausted() {
+			return
+		}
+	}
+}
+
+func hotReconcileItems(items []types.CacheRequiredContentItem) []types.CacheRequiredContentItem {
+	hotItems := make([]types.CacheRequiredContentItem, 0, len(items))
+	for _, item := range items {
+		if item.Kind == types.CacheContentKindClipV2 {
+			hotItems = append(hotItems, item)
+		}
+	}
+	return hotItems
+}
+
+func (m *WorkerCacheManager) retainHotReconciledWindow(stubs []cache.RecentStub) {
+	window := make(map[reporterStubKey]struct{}, len(stubs))
+	for _, stub := range stubs {
+		window[reporterStubKey{workspaceID: stub.WorkspaceID, stubID: stub.StubID}] = struct{}{}
+	}
+
+	m.hotReconciledMu.Lock()
+	defer m.hotReconciledMu.Unlock()
+	for key := range m.hotReconciled {
+		if _, ok := window[key]; !ok {
+			delete(m.hotReconciled, key)
+		}
+	}
+}
+
+func (m *WorkerCacheManager) hotReconcileCompletedAt(stub cache.RecentStub) bool {
+	key := reporterStubKey{workspaceID: stub.WorkspaceID, stubID: stub.StubID}
+	m.hotReconciledMu.Lock()
+	defer m.hotReconciledMu.Unlock()
+	lastSeen, ok := m.hotReconciled[key]
+	return ok && lastSeen.Equal(stub.LastSeen)
+}
+
+func (m *WorkerCacheManager) recordHotReconcileCompletion(stub cache.RecentStub) {
+	key := reporterStubKey{workspaceID: stub.WorkspaceID, stubID: stub.StubID}
+	m.hotReconciledMu.Lock()
+	defer m.hotReconciledMu.Unlock()
+	if m.hotReconciled == nil {
+		m.hotReconciled = make(map[reporterStubKey]time.Time, reconcileHotMaxStubs)
+	}
+	if _, ok := m.hotReconciled[key]; !ok && len(m.hotReconciled) >= reconcileHotMaxStubs {
+		for staleKey := range m.hotReconciled {
+			delete(m.hotReconciled, staleKey)
+			break
+		}
+	}
+	m.hotReconciled[key] = stub.LastSeen
+}
+
+func (m *WorkerCacheManager) hotReconciliationUnderDiskPressure(server *cache.Server, localHostID string) bool {
+	usage, err := server.RefreshDiskUsage()
+	if err != nil {
+		log.Debug().Err(err).Str("locality", m.locality).Str("logical_host", localHostID).Msg("hot cache reconciliation failed to refresh disk usage")
+		return true
+	}
+	return hotReconciliationBlockedByDiskUsage(
+		usage,
+		m.reconcileMaxDiskUsagePct(),
+		server.DiskMinFreeBytes(),
+		server.DiskPressureExceeded(),
+	)
+}
+
+func hotReconciliationBlockedByDiskUsage(usage cache.DiskUsage, maxUsagePct float64, minFreeBytes int64, hardPressure bool) bool {
+	if usage.TotalBytes == 0 || usage.UsagePct >= reconcileResumeDiskUsagePct(maxUsagePct) {
+		return true
+	}
+	return reconcilePressureBytesToFree(
+		usage,
+		maxUsagePct,
+		minFreeBytes,
+	) > 0 || hardPressure
+}
+
 func (m *WorkerCacheManager) reconcileOnce() {
 	if m.client == nil || m.metadataStore == nil {
 		return
@@ -519,11 +856,24 @@ func (m *WorkerCacheManager) reconcileStub(server *cache.Server, localHostID str
 }
 
 func (m *WorkerCacheManager) reconcileStubContent(server *cache.Server, localHostID string, stub cache.RecentStub, items []types.CacheRequiredContentItem, budget *reconcileBudget, allowlist map[string]struct{}) []string {
+	checkpointIDs, _ := m.reconcileStubContentWithCompletion(server, localHostID, stub, items, budget, allowlist)
+	return checkpointIDs
+}
+
+func (m *WorkerCacheManager) reconcileStubContentWithCompletion(server *cache.Server, localHostID string, stub cache.RecentStub, items []types.CacheRequiredContentItem, budget *reconcileBudget, allowlist map[string]struct{}) ([]string, bool) {
+	return m.reconcileStubContentWithCompletionContext(m.ctx, server, localHostID, stub, items, budget, allowlist, false)
+}
+
+func (m *WorkerCacheManager) reconcileStubContentWithCompletionContext(ctx context.Context, server *cache.Server, localHostID string, stub cache.RecentStub, items []types.CacheRequiredContentItem, budget *reconcileBudget, allowlist map[string]struct{}, replicaOnly bool) ([]string, bool) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	checkpointIDs := []string{}
+	complete := true
 	for _, item := range orderedRequiredContentItems(items) {
 		select {
-		case <-m.ctx.Done():
-			return checkpointIDs
+		case <-ctx.Done():
+			return checkpointIDs, false
 		default:
 		}
 
@@ -544,14 +894,24 @@ func (m *WorkerCacheManager) reconcileStubContent(server *cache.Server, localHos
 			if item.CheckpointID != "" {
 				checkpointIDs = append(checkpointIDs, item.CheckpointID)
 			}
-		} else if !m.localHostOwnsForReconcile(localHostID, routingKey) {
-			continue
+		} else {
+			reconciles, present := m.localHostReconcileState(localHostID, routingKey, item.Kind)
+			if !reconciles {
+				// A partially discovered placement ring is not proof that this
+				// host has no responsibility for the item. Only remember a
+				// completed hot pass once this host is explicitly represented.
+				if !present {
+					complete = false
+				}
+				continue
+			}
 		}
 
 		if m.requiredContentComplete(server, item, routingKey) {
 			continue
 		}
 		if reconcileSuccessBackoffApplies(item) && m.reconcileRecentlySucceeded(item.Hash, routingKey) {
+			complete = false
 			continue
 		}
 
@@ -559,15 +919,19 @@ func (m *WorkerCacheManager) reconcileStubContent(server *cache.Server, localHos
 		// unresolvable origin source) so they are not retried and re-logged
 		// every cycle.
 		if m.reconcileBackingOff(item.Hash, routingKey, stub.LastSeen) {
+			complete = false
 			continue
 		}
 		if !budget.take() {
-			return checkpointIDs
+			return checkpointIDs, false
 		}
 
-		m.materializeOwnedItem(server, localHostID, stub, item, routingKey)
+		m.materializeOwnedItem(ctx, server, localHostID, stub, item, routingKey, replicaOnly)
+		if !m.requiredContentComplete(server, item, routingKey) {
+			complete = false
+		}
 	}
-	return checkpointIDs
+	return checkpointIDs, complete
 }
 
 type recentStubContent struct {
@@ -999,22 +1363,63 @@ func maxInt64(a, b int64) int64 {
 // falls through to the next-ranked live host, preserving self-healing when a
 // node is really gone. Hosts that stay gone also age out of the ring itself.
 func (m *WorkerCacheManager) localHostOwnsForReconcile(localHostID, routingKey string) bool {
+	return m.localHostReplicatesForReconcile(localHostID, routingKey, 1)
+}
+
+func (m *WorkerCacheManager) localHostReconcilesContent(localHostID, routingKey string, kind types.CacheContentKind) bool {
+	reconciles, _ := m.localHostReconcileState(localHostID, routingKey, kind)
+	return reconciles
+}
+
+func (m *WorkerCacheManager) localHostReconcileState(localHostID, routingKey string, kind types.CacheContentKind) (bool, bool) {
+	replicaCount := 1
+	if kind == types.CacheContentKindClipV2 {
+		replicaCount = configuredClipV2ReplicaCount(m.config.Cache)
+	}
+	return m.localHostReplicaState(localHostID, routingKey, replicaCount)
+}
+
+func (m *WorkerCacheManager) localHostReplicatesForReconcile(localHostID, routingKey string, replicaCount int) bool {
+	replicates, _ := m.localHostReplicaState(localHostID, routingKey, replicaCount)
+	return replicates
+}
+
+func (m *WorkerCacheManager) localHostReplicaState(localHostID, routingKey string, replicaCount int) (bool, bool) {
+	hosts := m.client.RankedReadHosts(routingKey)
+	// Membership must come from the full discovered host map, not the bounded
+	// read window. Most cache hosts are intentionally outside the top-N for a
+	// given key and should complete the hot pass without polling S2 forever.
+	present := m.client.HasHost(localHostID)
+	if replicaCount <= 0 {
+		return false, present
+	}
+
 	now := time.Now()
-	for _, host := range m.client.RankedReadHosts(routingKey) {
+	rank := 0
+	for _, host := range hosts {
 		switch {
 		case host == nil:
 			continue
 		case host.HasEndpoint():
 			m.ownerSeenLive(host.HostId, now)
-			return host.HostId == localHostID
 		case now.Sub(m.ownerLastLiveAt(host.HostId, now)) < cacheReconcileOwnerGracePeriod:
-			// The owner is endpoint-less but within grace: nobody takes over
-			// its keys yet
-			return host.HostId == localHostID
+			// A replica that is endpoint-less but still within grace retains
+			// its rank so a rolling restart does not reshuffle its key range.
+		default:
+			// Endpoint-less past grace: fill this replica rank from the next
+			// host in rendezvous order.
+			continue
 		}
-		// Owner endpoint-less past grace: fall through to the next-ranked host
+
+		if host.HostId == localHostID {
+			return true, present
+		}
+		rank++
+		if rank >= replicaCount {
+			return false, present
+		}
 	}
-	return false
+	return false, present
 }
 
 func (m *WorkerCacheManager) ownerSeenLive(hostID string, now time.Time) {
@@ -1069,15 +1474,23 @@ func (b *reconcileBudget) exhausted() bool {
 	return b != nil && b.empty
 }
 
-func (m *WorkerCacheManager) materializeOwnedItem(server *cache.Server, localHostID string, stub cache.RecentStub, item types.CacheRequiredContentItem, routingKey string) {
-	acquired, err := m.metadataStore.AcquireReconcileLock(m.ctx, m.locality, localHostID, item.Hash, m.reconcileLockTTLSeconds())
+func (m *WorkerCacheManager) materializeOwnedItem(ctx context.Context, server *cache.Server, localHostID string, stub cache.RecentStub, item types.CacheRequiredContentItem, routingKey string, replicaOnly bool) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	acquired, err := m.metadataStore.AcquireReconcileLock(ctx, m.locality, localHostID, item.Hash, m.reconcileLockTTLSeconds())
 	if err != nil || !acquired {
 		// Another materialization is already in flight for this item (or the
 		// coordinator is unavailable); try again next cycle.
 		return
 	}
 	defer func() {
-		if err := m.metadataStore.ReleaseReconcileLock(m.ctx, m.locality, localHostID, item.Hash); err != nil {
+		// Release remains best-effort even when the pass deadline or manager
+		// context expires; otherwise a four-second hot pass could strand a
+		// five-minute lock and delay the next healthy attempt.
+		releaseCtx, cancel := context.WithTimeout(context.Background(), cacheCoordinatorRPCTimeout)
+		defer cancel()
+		if err := m.metadataStore.ReleaseReconcileLock(releaseCtx, m.locality, localHostID, item.Hash); err != nil {
 			log.Debug().Err(err).Str("hash", item.Hash).Msg("failed to release cache reconciliation lock")
 		}
 	}()
@@ -1087,7 +1500,7 @@ func (m *WorkerCacheManager) materializeOwnedItem(server *cache.Server, localHos
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(m.ctx, reconcileItemTimeout)
+	itemCtx, cancel := context.WithTimeout(ctx, reconcileItemTimeout)
 	defer cancel()
 
 	m.reconcileLogFields(log.Debug(), localHostID, stub, item).
@@ -1096,7 +1509,7 @@ func (m *WorkerCacheManager) materializeOwnedItem(server *cache.Server, localHos
 		Msg("reconciling missing cache content")
 
 	startedAt := time.Now()
-	status := m.materialize(ctx, server, stub, item, routingKey)
+	status := m.materialize(itemCtx, server, stub, item, routingKey, replicaOnly)
 	elapsed := time.Since(startedAt)
 
 	switch {
@@ -1329,17 +1742,21 @@ func (m *WorkerCacheManager) reconcileLogFields(event *zerolog.Event, localHostI
 // materialize copies content for an owned item onto the local cache server. It
 // prefers a reachable replica and otherwise fetches from the item's origin in
 // the same way the read path does. It never persists credentials in Redis or S2.
-func (m *WorkerCacheManager) materialize(ctx context.Context, server *cache.Server, stub cache.RecentStub, item types.CacheRequiredContentItem, routingKey string) string {
+func (m *WorkerCacheManager) materialize(ctx context.Context, server *cache.Server, stub cache.RecentStub, item types.CacheRequiredContentItem, routingKey string, replicaOnly bool) string {
 	if item.Kind == types.CacheContentKindCheckpoint {
 		return m.materializeCheckpoint(ctx, server, stub, item, routingKey)
 	}
 
-	if ok, err := m.client.MaterializeFromReplica(ctx, server, item.Hash, routingKey, item.SizeBytes); err != nil {
+	replicaSize := m.replicaMaterializationSize(ctx, item)
+	if ok, err := m.client.MaterializeFromReplica(ctx, server, item.Hash, routingKey, replicaSize); err != nil {
 		log.Debug().Err(err).Str("hash", item.Hash).Msg("cache reconciliation replica copy failed")
 	} else if ok {
 		return types.CacheAuditStatusMaterialized
 	}
 
+	if replicaOnly {
+		return types.CacheAuditStatusMiss
+	}
 	if !m.config.Cache.Reconciliation.OriginFallbackEnabled || item.Source == "" {
 		return types.CacheAuditStatusMiss
 	}
@@ -1360,6 +1777,28 @@ func (m *WorkerCacheManager) materialize(ctx context.Context, server *cache.Serv
 	default:
 		return types.CacheAuditStatusMiss
 	}
+}
+
+// replicaMaterializationSize resolves the exact byte length required by the
+// bounded replica stream. CLIP v2 reports intentionally stay off the startup
+// critical path and therefore may not include a size; the build/runtime cache
+// already records the exact layer size under its cachefs metadata path.
+func (m *WorkerCacheManager) replicaMaterializationSize(ctx context.Context, item types.CacheRequiredContentItem) int64 {
+	if item.SizeBytes > 0 {
+		return item.SizeBytes
+	}
+	if item.Kind != types.CacheContentKindClipV2 || m.client == nil || item.Hash == "" {
+		return 0
+	}
+
+	metadata, err := m.client.CacheFSMetadata(ctx, imageLayerContentCachePath(item.Hash))
+	if err != nil || metadata == nil || metadata.Hash != item.Hash || metadata.Size == 0 {
+		return 0
+	}
+	if metadata.Size > uint64(^uint64(0)>>1) {
+		return 0
+	}
+	return int64(metadata.Size)
 }
 
 // materializeArchiveObject re-fetches the whole CLIP v1 archive from the image

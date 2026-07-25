@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -56,6 +57,146 @@ func TestWaitForRuntimeStartedReturnsWhenRuntimeDoneWithoutPID(t *testing.T) {
 	})
 
 	require.False(t, handled)
+}
+
+func sandboxContainerRequest() *types.ContainerRequest {
+	return &types.ContainerRequest{
+		Stub: types.StubWithRelated{
+			Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)},
+		},
+	}
+}
+
+func TestPruneUnavailablePythonSDKMounts(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "usr/local/lib/python3.11/site-packages"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "opt/venvs"), 0o755))
+	require.NoError(t, os.Symlink("../../usr/local/lib/python3.11", filepath.Join(root, "opt/venvs/python")))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "usr/bin"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "usr/bin/python3.10"), nil, 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "opt/conda/bin"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "opt/conda/bin/python3.12"), nil, 0o755))
+
+	spec := &specs.Spec{
+		Root: &specs.Root{Path: root},
+		Mounts: []specs.Mount{
+			{Source: types.WorkerPythonSDKPath, Destination: "/usr/local/lib/python3.9/site-packages/beta9"},
+			{Source: types.WorkerPythonSDKPath, Destination: "/usr/local/lib/python3.10/site-packages/beta9"},
+			{Source: types.WorkerPythonSDKPath, Destination: "/usr/local/lib/python3.11/site-packages/beta9"},
+			{Source: types.WorkerPythonSDKPath, Destination: "/usr/local/lib/python3.11/site-packages/beam"},
+			{Source: types.WorkerPythonSDKPath, Destination: "/opt/venvs/python/site-packages/beta9"},
+			{Source: types.WorkerPythonSDKPath, Destination: "/opt/conda/lib/python3.12/site-packages/beta9"},
+			{Source: "/workspace/etc/hosts", Destination: "/etc/hosts"},
+		},
+	}
+
+	require.Equal(t, 1, pruneUnavailablePythonSDKMounts(sandboxContainerRequest(), spec))
+	require.Equal(t, []specs.Mount{
+		{Source: types.WorkerPythonSDKPath, Destination: "/usr/local/lib/python3.10/site-packages/beta9"},
+		{Source: types.WorkerPythonSDKPath, Destination: "/usr/local/lib/python3.11/site-packages/beta9"},
+		{Source: types.WorkerPythonSDKPath, Destination: "/usr/local/lib/python3.11/site-packages/beam"},
+		{Source: types.WorkerPythonSDKPath, Destination: "/opt/venvs/python/site-packages/beta9"},
+		{Source: types.WorkerPythonSDKPath, Destination: "/opt/conda/lib/python3.12/site-packages/beta9"},
+		{Source: "/workspace/etc/hosts", Destination: "/etc/hosts"},
+	}, spec.Mounts)
+}
+
+func TestPruneUnavailablePythonSDKMountsResolvesAbsoluteSymlinksInsideRoot(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "usr"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "opt/python/lib/python3.11/site-packages"), 0o755))
+	require.NoError(t, os.Symlink("/opt/python", filepath.Join(root, "usr/local")))
+
+	spec := &specs.Spec{
+		Root: &specs.Root{Path: root},
+		Mounts: []specs.Mount{{
+			Source:      types.WorkerPythonSDKPath,
+			Destination: "/usr/local/lib/python3.11/site-packages/beta9",
+		}},
+	}
+
+	require.Zero(t, pruneUnavailablePythonSDKMounts(sandboxContainerRequest(), spec))
+	require.Len(t, spec.Mounts, 1)
+}
+
+func TestPruneUnavailablePythonSDKMountsDoesNotFollowAbsoluteSymlinkOutsideRoot(t *testing.T) {
+	root := t.TempDir()
+	hostPath := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(hostPath, "lib/python3.11/site-packages"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "usr"), 0o755))
+	require.NoError(t, os.Symlink(hostPath, filepath.Join(root, "usr/local")))
+
+	spec := &specs.Spec{
+		Root: &specs.Root{Path: root},
+		Mounts: []specs.Mount{{
+			Source:      types.WorkerPythonSDKPath,
+			Destination: "/usr/local/lib/python3.11/site-packages/beta9",
+		}},
+	}
+
+	require.Equal(t, 1, pruneUnavailablePythonSDKMounts(sandboxContainerRequest(), spec))
+	require.Empty(t, spec.Mounts)
+}
+
+func TestPruneUnavailablePythonSDKMountsPreservesSpecWhenRootIsUnavailable(t *testing.T) {
+	spec := &specs.Spec{
+		Root: &specs.Root{Path: filepath.Join(t.TempDir(), "missing")},
+		Mounts: []specs.Mount{{
+			Source:      types.WorkerPythonSDKPath,
+			Destination: "/usr/local/lib/python3.11/site-packages/beta9",
+		}},
+	}
+
+	require.Zero(t, pruneUnavailablePythonSDKMounts(sandboxContainerRequest(), spec))
+	require.Len(t, spec.Mounts, 1)
+}
+
+func TestPruneUnavailablePythonSDKMountsRemovesNodeImageCompatibilityMounts(t *testing.T) {
+	var spec specs.Spec
+	require.NoError(t, json.Unmarshal([]byte(runtime.BaseRuncConfigRaw), &spec))
+	spec.Root.Path = t.TempDir()
+
+	require.Equal(t, 38, pruneUnavailablePythonSDKMounts(sandboxContainerRequest(), &spec))
+	require.Len(t, spec.Mounts, 16)
+	for _, mount := range spec.Mounts {
+		require.NotEqual(t, types.WorkerPythonSDKPath, mount.Source)
+	}
+}
+
+func TestPruneUnavailablePythonSDKMountsPreservesCheckpointMountMap(t *testing.T) {
+	for _, request := range []*types.ContainerRequest{
+		{
+			Stub:              sandboxContainerRequest().Stub,
+			CheckpointEnabled: true,
+		},
+		{
+			Stub:       sandboxContainerRequest().Stub,
+			Checkpoint: &types.Checkpoint{},
+		},
+	} {
+		var spec specs.Spec
+		require.NoError(t, json.Unmarshal([]byte(runtime.BaseRuncConfigRaw), &spec))
+		spec.Root.Path = t.TempDir()
+		mounts := append([]specs.Mount(nil), spec.Mounts...)
+
+		require.Zero(t, pruneUnavailablePythonSDKMounts(request, &spec))
+		require.Equal(t, mounts, spec.Mounts)
+	}
+}
+
+func TestPruneUnavailablePythonSDKMountsPreservesNonSandboxMounts(t *testing.T) {
+	var spec specs.Spec
+	require.NoError(t, json.Unmarshal([]byte(runtime.BaseRuncConfigRaw), &spec))
+	spec.Root.Path = t.TempDir()
+	mounts := append([]specs.Mount(nil), spec.Mounts...)
+
+	request := &types.ContainerRequest{
+		Stub: types.StubWithRelated{
+			Stub: types.Stub{Type: types.StubType(types.StubTypePodRun)},
+		},
+	}
+	require.Zero(t, pruneUnavailablePythonSDKMounts(request, &spec))
+	require.Equal(t, mounts, spec.Mounts)
 }
 
 func TestContainerResolvConfSourceFallsBackForLoopbackHostResolver(t *testing.T) {
@@ -1257,6 +1398,116 @@ func TestDeleteRuntimeContainerUsesFreshCleanupContext(t *testing.T) {
 	require.NoError(t, rt.deleteCtxErr)
 }
 
+func TestRunContainerHoldsStartSlotUntilInitPIDAndReleasesBeforeAddressPublish(t *testing.T) {
+	bundleDir := t.TempDir()
+	configPath := filepath.Join(bundleDir, specBaseName)
+	require.NoError(t, os.WriteFile(configPath, []byte("{}"), 0o644))
+
+	rt := &controlledInitPIDRuntime{
+		mockRuntime: mockRuntime{name: types.ContainerRuntimeRunc.String()},
+		runEntered:  make(chan struct{}),
+		startInit:   make(chan struct{}),
+		exit:        make(chan struct{}),
+	}
+	repoClient := &blockingAddressContainerRepoClient{
+		fakeContainerRepoClient: &fakeContainerRepoClient{
+			state: &pb.ContainerState{Status: string(types.ContainerStatusPending)},
+		},
+		entered: make(chan struct{}),
+		unblock: make(chan struct{}),
+	}
+	worker := &Worker{
+		podAddr:             "10.42.0.10",
+		containerRepoClient: repoClient,
+		containerInstances:  common.NewSafeMap[*ContainerInstance](),
+	}
+	request := &types.ContainerRequest{
+		ContainerId: "container-1",
+		ConfigPath:  configPath,
+	}
+	worker.containerInstances.Set(request.ContainerId, &ContainerInstance{
+		Id:      request.ContainerId,
+		Runtime: rt,
+	})
+
+	startSem := make(chan struct{}, 1)
+	startSem <- struct{}{}
+	slotReleased := make(chan struct{})
+	var releaseOnce sync.Once
+	queuedAcquired := make(chan struct{})
+	go func() {
+		startSem <- struct{}{}
+		close(queuedAcquired)
+	}()
+
+	type runResult struct {
+		exitCode int
+		err      error
+	}
+	result := make(chan runResult, 1)
+	go func() {
+		exitCode, err := worker.runContainer(
+			context.Background(),
+			request,
+			slog.New(slog.NewTextHandler(io.Discard, nil)),
+			common.NewOutputWriter(func(string) {}),
+			make(chan int, 1),
+			make(chan int, 1),
+			func() {
+				releaseOnce.Do(func() {
+					<-startSem
+					close(slotReleased)
+				})
+			},
+			time.Time{},
+			[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
+			nil,
+		)
+		result <- runResult{exitCode: exitCode, err: err}
+	}()
+
+	select {
+	case <-rt.runEntered:
+	case <-time.After(time.Second):
+		t.Fatal("runtime Run was not called")
+	}
+	select {
+	case <-slotReleased:
+		t.Fatal("start slot released before the runtime reported its init PID")
+	case <-queuedAcquired:
+		t.Fatal("queued start acquired the slot before the runtime reported its init PID")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(rt.startInit)
+	select {
+	case <-repoClient.entered:
+	case <-time.After(time.Second):
+		t.Fatal("init PID did not reach address publication")
+	}
+	select {
+	case <-slotReleased:
+	default:
+		t.Fatal("start slot was not released before address publication blocked")
+	}
+	select {
+	case <-queuedAcquired:
+	case <-time.After(time.Second):
+		t.Fatal("queued start did not acquire the released slot")
+	}
+
+	close(repoClient.unblock)
+	close(rt.exit)
+	select {
+	case got := <-result:
+		require.NoError(t, got.err)
+		require.Zero(t, got.exitCode)
+	case <-time.After(time.Second):
+		t.Fatal("runContainer did not return")
+	}
+	<-startSem
+}
+
 func TestRunContainerDoesNotCancelRuntimeRunWithWorkerContext(t *testing.T) {
 	outerCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1276,6 +1527,8 @@ func TestRunContainerDoesNotCancelRuntimeRunWithWorkerContext(t *testing.T) {
 		Runtime: rt,
 	})
 
+	slotReleased := make(chan struct{})
+	var releaseOnce sync.Once
 	result := make(chan error, 1)
 	go func() {
 		_, err := worker.runContainer(
@@ -1285,6 +1538,11 @@ func TestRunContainerDoesNotCancelRuntimeRunWithWorkerContext(t *testing.T) {
 			common.NewOutputWriter(func(string) {}),
 			make(chan int, 1),
 			make(chan int, 1),
+			func() {
+				releaseOnce.Do(func() {
+					close(slotReleased)
+				})
+			},
 			time.Now(),
 			nil,
 			nil,
@@ -1294,6 +1552,16 @@ func TestRunContainerDoesNotCancelRuntimeRunWithWorkerContext(t *testing.T) {
 
 	<-rt.entered
 	cancel()
+	select {
+	case <-slotReleased:
+	case <-time.After(time.Second):
+		t.Fatal("start slot was not released when startup context was canceled")
+	}
+	select {
+	case err := <-result:
+		t.Fatalf("runtime Run returned before its uncancelled context was released: %v", err)
+	default:
+	}
 	close(rt.release)
 
 	require.NoError(t, <-rt.ctxErr)
@@ -1359,6 +1627,7 @@ func TestRunContainerRestorePublishesAddressFromStartedHandler(t *testing.T) {
 		common.NewOutputWriter(func(string) {}),
 		make(chan int, 1),
 		make(chan int, 1),
+		nil,
 		time.Now(),
 		[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
 		nil,
@@ -1493,6 +1762,7 @@ func TestRunContainerRestoreWaitsForRestoredRuntimeExit(t *testing.T) {
 			common.NewOutputWriter(func(string) {}),
 			make(chan int, 1),
 			make(chan int, 1),
+			nil,
 			time.Now(),
 			[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
 			nil,
@@ -1682,6 +1952,7 @@ func TestRunContainerRestoreFailureCleansRuntimeBeforeFallback(t *testing.T) {
 		common.NewOutputWriter(func(string) {}),
 		make(chan int, 1),
 		make(chan int, 1),
+		nil,
 		time.Now(),
 		[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
 		nil,
@@ -1749,6 +2020,7 @@ func TestRunContainerMaterializeFailureFallsBackWithoutRestore(t *testing.T) {
 		common.NewOutputWriter(func(string) {}),
 		make(chan int, 1),
 		make(chan int, 1),
+		nil,
 		time.Now(),
 		[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
 		nil,
@@ -2295,6 +2567,32 @@ func TestMountedImageReadyTracksMountedServer(t *testing.T) {
 	assert.True(t, imageClient.mountedImageReady(imageId))
 }
 
+func TestPullLazyMountedImageReportsCachedOCIContentForNewStub(t *testing.T) {
+	const imageID = "warm-image"
+	events := &fakeEventRepo{}
+	reporter := newTestReporter(events)
+	imageClient := &ImageClient{
+		contentReporter:    reporter,
+		mountedFuseServers: common.NewSafeMap[*fuse.Server](),
+		v2ArchiveMetadata:  common.NewSafeMap[*clipCommon.ClipArchiveMetadata](),
+	}
+	imageClient.mountedFuseServers.Set(imageID, nil)
+	imageClient.v2ArchiveMetadata.Set(imageID, testClipV2Metadata())
+
+	_, err := imageClient.PullLazy(context.Background(), &types.ContainerRequest{
+		ImageId:     imageID,
+		WorkspaceId: "workspace",
+		StubId:      "new-stub",
+	}, nil)
+	require.NoError(t, err)
+
+	reporter.flush()
+	require.Len(t, events.pushed, 1)
+	require.Equal(t, "new-stub", events.pushed[0].StubID)
+	require.Equal(t, types.CacheContentKindClipV2, events.pushed[0].Kind)
+	require.Len(t, events.pushed[0].Items, 2)
+}
+
 func TestPullImageFromRegistryKeepsPersistentLockFile(t *testing.T) {
 	dir := t.TempDir()
 	archivePath := filepath.Join(dir, "image.clip")
@@ -2579,6 +2877,52 @@ type runContextRuntime struct {
 	entered chan struct{}
 	release chan struct{}
 	ctxErr  chan error
+}
+
+type controlledInitPIDRuntime struct {
+	mockRuntime
+	runEntered chan struct{}
+	startInit  chan struct{}
+	exit       chan struct{}
+}
+
+func (m *controlledInitPIDRuntime) Run(ctx context.Context, containerID, bundlePath string, opts *runtime.RunOpts) (int, error) {
+	close(m.runEntered)
+	select {
+	case <-m.startInit:
+	case <-ctx.Done():
+		return -1, ctx.Err()
+	}
+	if opts == nil || opts.Started == nil {
+		return -1, errors.New("runtime Started channel is required")
+	}
+	select {
+	case opts.Started <- 1234:
+	case <-ctx.Done():
+		return -1, ctx.Err()
+	}
+	select {
+	case <-m.exit:
+		return 0, nil
+	case <-ctx.Done():
+		return -1, ctx.Err()
+	}
+}
+
+type blockingAddressContainerRepoClient struct {
+	*fakeContainerRepoClient
+	entered chan struct{}
+	unblock chan struct{}
+}
+
+func (c *blockingAddressContainerRepoClient) SetContainerAddressMap(ctx context.Context, request *pb.SetContainerAddressMapRequest, opts ...grpc.CallOption) (*pb.SetContainerAddressMapResponse, error) {
+	close(c.entered)
+	select {
+	case <-c.unblock:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return c.fakeContainerRepoClient.SetContainerAddressMap(ctx, request, opts...)
 }
 
 func (m *runContextRuntime) Run(ctx context.Context, containerID, bundlePath string, opts *runtime.RunOpts) (int, error) {

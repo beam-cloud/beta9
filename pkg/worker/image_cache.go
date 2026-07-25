@@ -151,10 +151,12 @@ func (c *imageLayerIndexCache) PutLayerIndex(ctx context.Context, key string, da
 var _ clipStorage.LayerIndexCache = (*imageLayerIndexCache)(nil)
 
 type imageContentCache struct {
-	client  *cache.Client
-	imageID string
-	kind    string
-	observe imageContentCacheObserver
+	client       *cache.Client
+	imageID      string
+	kind         string
+	replicaCount int
+	replicaKey   string
+	observe      imageContentCacheObserver
 
 	readRequests     atomic.Int64
 	readBytes        atomic.Int64
@@ -226,6 +228,14 @@ func newImageContentCache(client *cache.Client, imageID string, kind string, obs
 		observer = observers[0]
 	}
 	return &imageContentCache{client: client, imageID: imageID, kind: cacheKind, observe: observer}
+}
+
+func (c *imageContentCache) readClientOptions(routingKey string) cache.ClientOptions {
+	return cache.ClientOptions{
+		RoutingKey:   routingKey,
+		ReplicaCount: c.replicaCount,
+		ReplicaKey:   c.replicaKey,
+	}
 }
 
 func imageLayerContentCachePath(hash string) string {
@@ -323,7 +333,7 @@ func (c *imageContentCache) ReadContentInto(hash string, offset int64, dest []by
 	ctx, cancel := context.WithTimeout(context.Background(), imageContentCacheReadTimeout)
 	defer cancel()
 
-	read, cacheTrace, err = c.client.ReadContentIntoWithTrace(ctx, hash, offset, dest, cache.ClientOptions{RoutingKey: opts.RoutingKey})
+	read, cacheTrace, err = c.client.ReadContentIntoWithTrace(ctx, hash, offset, dest, c.readClientOptions(opts.RoutingKey))
 	if err != nil {
 		return read, imageContentCacheError(err)
 	}
@@ -534,7 +544,7 @@ func (c *imageContentCache) ClientLocalPageFileViews(hash string, offset int64, 
 		})
 	}()
 
-	localViews, cacheTrace, err := c.client.ClientLocalPageFileViewsWithTrace(hash, offset, length, cache.ClientOptions{RoutingKey: opts.RoutingKey})
+	localViews, cacheTrace, err := c.client.ClientLocalPageFileViewsWithTrace(hash, offset, length, c.readClientOptions(opts.RoutingKey))
 	if err != nil {
 		if errors.Is(err, cache.ErrContentNotFound) {
 			return nil, nil

@@ -43,16 +43,18 @@ import (
 )
 
 const (
-	imageBundlePath                   string = "/dev/shm/images"
-	imageTmpDir                       string = types.AgentTmpPath
-	metricsSourceLabel                       = "image_client"
-	pullLazyBackoff                          = 1000 * time.Millisecond
-	embeddedImageCacheLockWaitTimeout        = 2 * time.Second
-	embeddedImageCacheWaitInterval           = 250 * time.Millisecond
-	imageArchiveLockRetryInterval            = 100 * time.Millisecond
-	maxSyncV1ArchiveDataRestoreBytes         = 512 * 1024 * 1024
-	imageLayerPrepareConcurrency             = 8
-	imageLayerProgressInterval               = 3 * time.Second
+	imageBundlePath                            string = "/dev/shm/images"
+	imageTmpDir                                string = types.AgentTmpPath
+	metricsSourceLabel                                = "image_client"
+	pullLazyBackoff                                   = 1000 * time.Millisecond
+	embeddedImageCacheLockWaitTimeout                 = 2 * time.Second
+	embeddedImageCacheWaitInterval                    = 250 * time.Millisecond
+	imageArchiveLockRetryInterval                     = 100 * time.Millisecond
+	maxSyncV1ArchiveDataRestoreBytes                  = 512 * 1024 * 1024
+	imageLayerPrepareConcurrency                      = 8
+	imageLayerProgressInterval                        = 3 * time.Second
+	ociImageContentCacheReadAheadWindowBytes          = 256 * 1024
+	ociImageContentCacheReadAheadRetainedBytes        = 32 * 1024 * 1024
 )
 
 var (
@@ -279,6 +281,14 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	// container. This is cheap and independent of one-time content generation.
 	if c.contentReporter != nil && request != nil {
 		c.contentReporter.touchRecentStub(cacheRequestWorkspaceID(request), cacheRequestStubID(request))
+		// A mounted image can serve a newly-created stub without re-entering
+		// archive preparation. Reuse cached OCI metadata so that stub still
+		// publishes its immutable layer set for proactive replica warming.
+		if c.v2ArchiveMetadata != nil {
+			if meta, ok := c.v2ArchiveMetadata.Get(request.ImageId); ok {
+				c.reportRequiredContent(ctx, request, meta)
+			}
+		}
 	}
 
 	if elapsed, ok := c.mountedImageHit(startTime, request, "clip_mounted_fuse_hit"); ok {
@@ -300,15 +310,8 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	}
 
 	mountOptions := c.lazyMountOptions(ctx, request, archive)
-	if archive.usesOCIStorage() {
-		mountOptions.Context = ctx
-		mountOptions.PrepareConcurrency = imageLayerPrepareConcurrency
-		mountOptions.PrepareProgress = imageLayerPrepareProgressLogger(outputLogger)
-		if err := clip.PrepareArchiveContent(mountOptions); err != nil {
-			return time.Since(startTime), err
-		}
-		mountOptions.PrepareConcurrency = 0
-		mountOptions.PrepareProgress = nil
+	if err := prepareLazyArchiveContent(ctx, request, archive, &mountOptions, outputLogger); err != nil {
+		return time.Since(startTime), err
 	}
 
 	if elapsed, ok := c.mountedImageHit(startTime, request, "clip_mounted_fuse_hit"); ok {
@@ -339,6 +342,28 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	})
 
 	return time.Since(startTime), nil
+}
+
+func prepareLazyArchiveContent(
+	ctx context.Context,
+	request *types.ContainerRequest,
+	archive lazyImageArchive,
+	mountOptions *clip.MountOptions,
+	outputLogger *slog.Logger,
+) error {
+	if !archive.usesOCIStorage() || request.Stub.Type.Kind() == types.StubTypeSandbox {
+		return nil
+	}
+
+	mountOptions.Context = ctx
+	mountOptions.PrepareConcurrency = imageLayerPrepareConcurrency
+	mountOptions.PrepareProgress = imageLayerPrepareProgressLogger(outputLogger)
+	if err := clip.PrepareArchiveContent(*mountOptions); err != nil {
+		return err
+	}
+	mountOptions.PrepareConcurrency = 0
+	mountOptions.PrepareProgress = nil
+	return nil
 }
 
 func imageLayerPrepareProgressLogger(outputLogger *slog.Logger) func(storage.PrepareProgress) {
@@ -494,8 +519,8 @@ func (c *ImageClient) publishRequiredContent(request *types.ContainerRequest, re
 	}
 
 	workspaceID := cacheRequestWorkspaceID(request)
+	report.immutableImage = true
 	c.contentReporter.reportBatches(workspaceID, stubID, []requiredContentReport{report})
-	c.contentReporter.flush()
 
 	log.Debug().
 		Str("workspace_id", workspaceID).
@@ -676,6 +701,10 @@ func (c *ImageClient) lazyMountOptions(ctx context.Context, request *types.Conta
 		cacheKind = "oci-layer-runtime"
 	}
 	contentCache := newImageContentCache(c.cacheClient, request.ImageId, cacheKind, c.imageContentCacheObserver(request))
+	if contentCache != nil && archive.usesOCIStorage() {
+		contentCache.replicaCount = configuredClipV2ReplicaCount(c.config.Cache)
+		contentCache.replicaKey = c.workerId
+	}
 	mountOptions := clip.MountOptions{
 		ArchivePath:           archive.path,
 		Metadata:              archive.metadata,
@@ -683,6 +712,11 @@ func (c *ImageClient) lazyMountOptions(ctx context.Context, request *types.Conta
 		CachePath:             c.contentCachePath(request, archive),
 		ContentCache:          contentCache,
 		ContentCacheAvailable: contentCache != nil,
+	}
+	if archive.usesOCIStorage() {
+		// OCI mounts are shared by image ID across stub kinds. Keep immutable
+		// mount behavior independent of whichever kind happens to mount first.
+		mountOptions.ContentCacheReadAhead = ociImageContentCacheReadAheadOptions()
 	}
 	if archive.storageMode == string(clipCommon.StorageModeLocal) {
 		mountOptions.StorageModeOverride = clipCommon.StorageModeLocal
@@ -716,6 +750,13 @@ func (c *ImageClient) lazyMountOptions(ctx context.Context, request *types.Conta
 	}
 
 	return mountOptions
+}
+
+func ociImageContentCacheReadAheadOptions() storage.ContentCacheReadAheadOptions {
+	return storage.ContentCacheReadAheadOptions{
+		WindowBytes: ociImageContentCacheReadAheadWindowBytes,
+		MaxWindows:  ociImageContentCacheReadAheadRetainedBytes / ociImageContentCacheReadAheadWindowBytes,
+	}
 }
 
 func (c *ImageClient) contentCachePath(request *types.ContainerRequest, archive lazyImageArchive) string {
@@ -1503,6 +1544,14 @@ func (c *ImageClient) pullImageArchiveFromEmbeddedCache(ctx context.Context, arc
 		c.recordImageLifecycle(request, types.ContainerLifecycleImageEmbeddedCacheMetadata, metadataStart, time.Since(metadataStart), true, map[string]string{"hit": "false"})
 	}
 
+	// A sandbox needs the small archive immediately and can seed the shared
+	// cache asynchronously after a direct origin pull. Synchronously filling a
+	// cold cache host and then reading the same archive back adds two network
+	// transfers to TTI.
+	if request.Stub.Type.Kind() == types.StubTypeSandbox {
+		return false, nil, nil
+	}
+
 	cachePath := c.imageArchiveCachePath(imageId)
 	routingKey := cachePath
 	key := fmt.Sprintf("%s.%s", imageId, c.registry.ImageFileExtension)
@@ -1675,14 +1724,6 @@ func (c *ImageClient) copyImageArchiveFromContentCachePath(ctx context.Context, 
 	}
 	if metadata.Size > uint64(^uint(0)>>1) {
 		return false, fmt.Errorf("image archive too large for local restore: %d bytes", metadata.Size)
-	}
-
-	exists, err := c.cacheClient.IsCachedReachableContext(ctx, metadata.Hash, cachePath)
-	if err != nil {
-		return false, err
-	}
-	if !exists {
-		return false, nil
 	}
 
 	if err := c.writeImageArchiveFromContentCache(ctx, archivePath, imageId, metadata.Hash, int64(metadata.Size), cachePath); err != nil {

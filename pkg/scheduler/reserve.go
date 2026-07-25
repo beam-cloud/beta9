@@ -115,7 +115,7 @@ func (a *schedulingAttempt) reservePendingWorkerCapacity() bool {
 	}
 
 	metrics.RecordSchedulerWorkerWait(time.Since(a.request.Timestamp), a.request, "waiting_for_worker")
-	a.requeueForWorkerWait()
+	a.requeueForPendingWorker()
 	return true
 }
 
@@ -145,6 +145,16 @@ func (a *schedulingAttempt) provisionWorker() {
 
 func (a *schedulingAttempt) requeueForWorkerWait() {
 	a.requeueForWorkerWaitDelay(provisioningWorkerRequeueDelay, "worker_capacity_wait")
+}
+
+// A pending worker may become available during the initial scheduling burst.
+// Retry that handoff quickly, but retain the provisioning backoff for slow starts.
+func (a *schedulingAttempt) requeueForPendingWorker() {
+	delay := provisioningWorkerRequeueDelay
+	if !a.request.Timestamp.IsZero() && time.Since(a.request.Timestamp) < pendingWorkerFastRetryWindow {
+		delay = requestProcessingInterval
+	}
+	a.requeueForWorkerWaitDelay(delay, "worker_capacity_wait")
 }
 
 func (a *schedulingAttempt) requeueForWorkerWaitDelay(delay time.Duration, reason string) {
@@ -181,7 +191,7 @@ func (a *schedulingAttempt) retryScheduleFailure() {
 	}
 
 	delay := requestProcessingInterval
-	if a.request.RetryCount == 0 {
+	if a.request.RetryCount <= firstSchedulingAttemptRetryCount {
 		delay = 0
 	}
 	a.retryAfter("schedule_failed", delay)

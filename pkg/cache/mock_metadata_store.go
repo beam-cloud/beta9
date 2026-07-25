@@ -10,19 +10,23 @@ import (
 // MockCacheMetadataStore is a simple in-memory metadataStore for testing
 // Does not require Redis or any external dependencies
 type MockCacheMetadataStore struct {
-	hosts      map[string]map[string]*Host // locality -> hostId -> host
-	fsNodes    map[string]*FSMetadata      // id -> metadata
-	fsChildren map[string][]string         // parent id -> child ids
-	locks      map[string]bool             // lock keys
-	mu         sync.RWMutex
+	hosts        map[string]map[string]*Host // locality -> hostId -> host
+	fsNodes      map[string]*FSMetadata      // id -> metadata
+	fsChildren   map[string][]string         // parent id -> child ids
+	locks        map[string]bool             // lock keys
+	reportLeases map[string]string
+	reported     map[string]bool
+	mu           sync.RWMutex
 }
 
 func NewMockCacheMetadataStore() *MockCacheMetadataStore {
 	return &MockCacheMetadataStore{
-		hosts:      make(map[string]map[string]*Host),
-		fsNodes:    make(map[string]*FSMetadata),
-		fsChildren: make(map[string][]string),
-		locks:      make(map[string]bool),
+		hosts:        make(map[string]map[string]*Host),
+		fsNodes:      make(map[string]*FSMetadata),
+		fsChildren:   make(map[string][]string),
+		locks:        make(map[string]bool),
+		reportLeases: make(map[string]string),
+		reported:     make(map[string]bool),
 	}
 }
 
@@ -204,10 +208,54 @@ func (m *MockCacheMetadataStore) MarkStubReported(ctx context.Context, locality,
 	defer m.mu.Unlock()
 
 	key := "reported:" + locality + ":" + stubID
-	if m.locks[key] {
+	if m.locks[key] || m.reported[locality+":"+stubID] {
 		return false, nil
 	}
 	m.locks[key] = true
+	if m.reported == nil {
+		m.reported = make(map[string]bool)
+	}
+	m.reported[locality+":"+stubID] = true
+	return true, nil
+}
+
+func (m *MockCacheMetadataStore) AcquireStubReport(_ context.Context, locality, stubID, token string, _ time.Duration) (StubReportClaim, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := locality + ":" + stubID
+	if m.reported[key] {
+		return StubReportComplete, nil
+	}
+	if _, ok := m.reportLeases[key]; ok {
+		return StubReportInFlight, nil
+	}
+	if m.reportLeases == nil {
+		m.reportLeases = make(map[string]string)
+	}
+	m.reportLeases[key] = token
+	return StubReportAcquired, nil
+}
+
+func (m *MockCacheMetadataStore) CompleteStubReport(_ context.Context, locality, stubID, token string, _ time.Duration) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := locality + ":" + stubID
+	if m.reportLeases[key] != token {
+		return false, nil
+	}
+	delete(m.reportLeases, key)
+	m.reported[key] = true
+	return true, nil
+}
+
+func (m *MockCacheMetadataStore) ReleaseStubReport(_ context.Context, locality, stubID, token string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := locality + ":" + stubID
+	if m.reportLeases[key] != token {
+		return false, nil
+	}
+	delete(m.reportLeases, key)
 	return true, nil
 }
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -96,6 +97,28 @@ func NewSchedulerForTest() (*Scheduler, error) {
 		workerProvisioningBackoff: newWorkerProvisioningBackoff(),
 		credentials:               newSchedulerCredentialCache(),
 	}, nil
+}
+
+func newSchedulerReplicaForTest(source *Scheduler) *Scheduler {
+	return &Scheduler{
+		ctx:                       source.ctx,
+		config:                    source.config,
+		backendRepo:               source.backendRepo,
+		providerRepo:              source.providerRepo,
+		workerRepo:                source.workerRepo,
+		workerPoolRepo:            source.workerPoolRepo,
+		computeRepo:               source.computeRepo,
+		workerPoolManager:         source.workerPoolManager,
+		requestBacklog:            source.requestBacklog,
+		containerRepo:             source.containerRepo,
+		workspaceRepo:             source.workspaceRepo,
+		eventRepo:                 source.eventRepo,
+		schedulerUsageMetrics:     source.schedulerUsageMetrics,
+		eventBus:                  source.eventBus,
+		provisioning:              newProvisioningTracker(),
+		workerProvisioningBackoff: newWorkerProvisioningBackoff(),
+		credentials:               newSchedulerCredentialCache(),
+	}
 }
 
 func setPendingSchedulerRequests(t *testing.T, scheduler *Scheduler, requests ...*types.ContainerRequest) {
@@ -936,6 +959,174 @@ func TestRunContainer(t *testing.T) {
 		assert.True(t, ok, "error is not of type *types.ContainerAlreadyScheduledError")
 	} else {
 		t.Error("Expected error, but got nil")
+	}
+}
+
+func TestRunContainerConcurrentDuplicateAdmitsOnce(t *testing.T) {
+	wb, err := NewSchedulerForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const workspaceID = "concurrent-admission-workspace"
+	quota := &types.ConcurrencyLimit{GPULimit: 0, CPUMillicoreLimit: 10_000}
+	if err := wb.workspaceRepo.SetConcurrencyLimitByWorkspaceId(workspaceID, quota); err != nil {
+		t.Fatal(err)
+	}
+	request := &types.ContainerRequest{
+		ContainerId: "concurrent-admission-container",
+		StubId:      "concurrent-admission-stub",
+		WorkspaceId: workspaceID,
+		Cpu:         100,
+		Memory:      128,
+		Stub: types.StubWithRelated{
+			Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)},
+		},
+	}
+
+	const callers = 32
+	results := make(chan error, callers)
+	var wg sync.WaitGroup
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results <- wb.Run(request.Clone())
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	successes := 0
+	duplicates := 0
+	for err := range results {
+		if err == nil {
+			successes++
+			continue
+		}
+		var duplicate *types.ContainerAlreadyScheduledError
+		if errors.As(err, &duplicate) {
+			duplicates++
+			continue
+		}
+		t.Fatalf("unexpected run error: %v", err)
+	}
+	if successes != 1 || duplicates != callers-1 {
+		t.Fatalf("successes = %d, duplicates = %d, want 1 and %d", successes, duplicates, callers-1)
+	}
+	if backlogSize := wb.requestBacklog.Len(); backlogSize != 1 {
+		t.Fatalf("backlog size = %d, want 1", backlogSize)
+	}
+
+	usageKey := common.RedisKeys.WorkspaceConcurrencyLimitUsage(workspaceID)
+	usedCPU, err := wb.requestBacklog.rdb.HGet(context.Background(), usageKey, "cpu").Int64()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usedCPU != request.Cpu {
+		t.Fatalf("concurrent duplicate reserved %d CPU, want %d", usedCPU, request.Cpu)
+	}
+}
+
+type blockingConcurrencyLimitWorkspaceRepository struct {
+	repo.WorkspaceRepository
+	calls   atomic.Int64
+	limit   *types.ConcurrencyLimit
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (r *blockingConcurrencyLimitWorkspaceRepository) GetConcurrencyLimitByWorkspaceId(string) (*types.ConcurrencyLimit, error) {
+	r.calls.Add(1)
+	r.once.Do(func() { close(r.entered) })
+	<-r.release
+	return r.limit, nil
+}
+
+func TestManagedConcurrencyLimitCoalescesOnlyOverlappingReads(t *testing.T) {
+	wb, err := NewSchedulerForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	workspaceRepo := &blockingConcurrencyLimitWorkspaceRepository{
+		WorkspaceRepository: wb.workspaceRepo,
+		limit:               &types.ConcurrencyLimit{GPULimit: 2, CPUMillicoreLimit: 2_000},
+		entered:             make(chan struct{}),
+		release:             make(chan struct{}),
+	}
+	wb.workspaceRepo = workspaceRepo
+	request := &types.ContainerRequest{WorkspaceId: "singleflight-workspace"}
+
+	const callers = 100
+	type lookupResult struct {
+		quota *types.ConcurrencyLimit
+		err   error
+	}
+	results := make(chan lookupResult, callers)
+	start := make(chan struct{})
+	var ready sync.WaitGroup
+	ready.Add(callers)
+	for i := 0; i < callers; i++ {
+		go func() {
+			ready.Done()
+			<-start
+			quota, err := wb.managedConcurrencyLimit(request)
+			results <- lookupResult{quota: quota, err: err}
+		}()
+	}
+	ready.Wait()
+	close(start)
+
+	select {
+	case <-workspaceRepo.entered:
+	case <-time.After(time.Second):
+		close(workspaceRepo.release)
+		t.Fatal("concurrency limit lookup did not start")
+	}
+	// Keep the underlying read in flight long enough for every simultaneously
+	// released caller to join the same singleflight.
+	time.Sleep(50 * time.Millisecond)
+	close(workspaceRepo.release)
+
+	quotas := make([]*types.ConcurrencyLimit, 0, callers)
+	for i := 0; i < callers; i++ {
+		result := <-results
+		if result.err != nil {
+			t.Fatalf("lookup failed: %v", result.err)
+		}
+		if result.quota == nil || result.quota.GPULimit != 2 || result.quota.CPUMillicoreLimit != 2_000 {
+			t.Fatalf("unexpected quota: %+v", result.quota)
+		}
+		quotas = append(quotas, result.quota)
+	}
+	if calls := workspaceRepo.calls.Load(); calls != 1 {
+		t.Fatalf("underlying quota reads = %d, want 1", calls)
+	}
+
+	pointers := make(map[*types.ConcurrencyLimit]struct{}, callers)
+	for _, quota := range quotas {
+		pointers[quota] = struct{}{}
+	}
+	if len(pointers) != callers {
+		t.Fatalf("quota results shared pointers: got %d unique pointers for %d callers", len(pointers), callers)
+	}
+	quotas[0].CPUMillicoreLimit = 1
+	if quotas[1].CPUMillicoreLimit != 2_000 {
+		t.Fatal("mutating one caller's quota changed another caller's result")
+	}
+
+	workspaceRepo.limit = &types.ConcurrencyLimit{GPULimit: 3, CPUMillicoreLimit: 3_000}
+	fresh, err := wb.managedConcurrencyLimit(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls := workspaceRepo.calls.Load(); calls != 2 {
+		t.Fatalf("sequential quota lookup was cached: underlying reads = %d, want 2", calls)
+	}
+	if fresh == nil || fresh.GPULimit != 3 || fresh.CPUMillicoreLimit != 3_000 {
+		t.Fatalf("sequential lookup did not return fresh quota: %+v", fresh)
 	}
 }
 
@@ -1814,8 +2005,7 @@ func TestProcessRequestStaleReplicaGPUReservationRequeues(t *testing.T) {
 	firstScheduler, err := NewSchedulerForTest()
 	assert.Nil(t, err)
 
-	secondScheduler := *firstScheduler
-	secondScheduler.provisioning = newProvisioningTracker()
+	secondScheduler := newSchedulerReplicaForTest(firstScheduler)
 
 	worker := &types.Worker{
 		Id:            uuid.New().String(),
@@ -1897,8 +2087,7 @@ func TestProcessRequestConcurrentStaleReplicaGPUReservationRequeues(t *testing.T
 	firstScheduler, err := NewSchedulerForTest()
 	assert.Nil(t, err)
 
-	secondScheduler := *firstScheduler
-	secondScheduler.provisioning = newProvisioningTracker()
+	secondScheduler := newSchedulerReplicaForTest(firstScheduler)
 
 	worker := &types.Worker{
 		Id:            uuid.New().String(),

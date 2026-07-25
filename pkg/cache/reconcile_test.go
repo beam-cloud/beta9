@@ -90,13 +90,19 @@ func TestPrimaryReadHostErrorsWithoutReachableHosts(t *testing.T) {
 
 func newTestMetadata(t *testing.T) *Metadata {
 	t.Helper()
+	metadata, _ := newTestMetadataWithServer(t)
+	return metadata
+}
+
+func newTestMetadataWithServer(t *testing.T) (*Metadata, *miniredis.Miniredis) {
+	t.Helper()
 	server, err := miniredis.Run()
 	require.NoError(t, err)
 	t.Cleanup(server.Close)
 
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	t.Cleanup(func() { _ = client.Close() })
-	return NewMetadataWithRedisClient(client)
+	return NewMetadataWithRedisClient(client), server
 }
 
 func TestRecentStubsListNewestFirst(t *testing.T) {
@@ -172,6 +178,75 @@ func TestMarkStubReportedClaimsOnce(t *testing.T) {
 	claimed, err = m.MarkStubReported(ctx, "default", "other", time.Hour)
 	require.NoError(t, err)
 	require.True(t, claimed)
+}
+
+func TestStubReportLeaseCompletesExactlyOnce(t *testing.T) {
+	ctx := context.Background()
+	m := newTestMetadata(t)
+
+	claim, err := m.AcquireStubReport(ctx, "default", "stub", "worker-a", 15*time.Second)
+	require.NoError(t, err)
+	require.Equal(t, StubReportAcquired, claim)
+
+	claim, err = m.AcquireStubReport(ctx, "default", "stub", "worker-b", 15*time.Second)
+	require.NoError(t, err)
+	require.Equal(t, StubReportInFlight, claim)
+
+	completed, err := m.CompleteStubReport(ctx, "default", "stub", "worker-b", time.Hour)
+	require.NoError(t, err)
+	require.False(t, completed, "a stale token must not complete another worker's lease")
+
+	released, err := m.ReleaseStubReport(ctx, "default", "stub", "worker-b")
+	require.NoError(t, err)
+	require.False(t, released, "a stale token must not release another worker's lease")
+
+	completed, err = m.CompleteStubReport(ctx, "default", "stub", "worker-a", time.Hour)
+	require.NoError(t, err)
+	require.True(t, completed)
+
+	claim, err = m.AcquireStubReport(ctx, "default", "stub", "worker-c", 15*time.Second)
+	require.NoError(t, err)
+	require.Equal(t, StubReportComplete, claim)
+}
+
+func TestStubReportLeaseExpiryAllowsFailureRecovery(t *testing.T) {
+	ctx := context.Background()
+	m, server := newTestMetadataWithServer(t)
+
+	claim, err := m.AcquireStubReport(ctx, "default", "stub", "crashed-worker", time.Second)
+	require.NoError(t, err)
+	require.Equal(t, StubReportAcquired, claim)
+
+	server.FastForward(2 * time.Second)
+
+	claim, err = m.AcquireStubReport(ctx, "default", "stub", "recovery-worker", time.Second)
+	require.NoError(t, err)
+	require.Equal(t, StubReportAcquired, claim)
+
+	released, err := m.ReleaseStubReport(ctx, "default", "stub", "crashed-worker")
+	require.NoError(t, err)
+	require.False(t, released, "expired owner must not release the recovery lease")
+
+	completed, err := m.CompleteStubReport(ctx, "default", "stub", "crashed-worker", time.Hour)
+	require.NoError(t, err)
+	require.False(t, completed, "expired owner must not complete over the recovery lease")
+
+	completed, err = m.CompleteStubReport(ctx, "default", "stub", "recovery-worker", time.Hour)
+	require.NoError(t, err)
+	require.True(t, completed)
+}
+
+func TestStubReportLeaseRecognizesLegacyCompletedMarker(t *testing.T) {
+	ctx := context.Background()
+	m := newTestMetadata(t)
+
+	marked, err := m.MarkStubReported(ctx, "default", "stub", time.Hour)
+	require.NoError(t, err)
+	require.True(t, marked)
+
+	claim, err := m.AcquireStubReport(ctx, "default", "stub", "worker", time.Second)
+	require.NoError(t, err)
+	require.Equal(t, StubReportComplete, claim)
 }
 
 func TestReconcileLockIsExclusive(t *testing.T) {

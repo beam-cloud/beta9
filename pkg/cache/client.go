@@ -63,7 +63,9 @@ type RendezvousHasher interface {
 }
 
 type ClientOptions = struct {
-	RoutingKey string
+	RoutingKey   string
+	ReplicaCount int
+	ReplicaKey   string
 }
 
 type StoreContentOptions struct {
@@ -842,6 +844,35 @@ func (c *Client) readReplicaHostCount() int {
 	return c.clientConfig.NTopHosts
 }
 
+// preferredReadHostIndex spreads immutable-content reads over the configured
+// replica set without changing the rendezvous ranking. ReplicaKey is normally
+// a worker ID, so multiple workers on one machine do not stampede the same
+// cache host. Callers that do not opt in retain rank zero as their first choice.
+func (c *Client) preferredReadHostIndex(opts ClientOptions, hostCount int) int {
+	replicaCount := opts.ReplicaCount
+	if replicaCount > hostCount {
+		replicaCount = hostCount
+	}
+	if replicaCount <= 1 {
+		return 0
+	}
+
+	replicaKey := opts.ReplicaKey
+	if replicaKey == "" {
+		replicaKey = c.localNodeID
+	}
+	if replicaKey == "" {
+		return 0
+	}
+
+	sum := sha256.Sum256([]byte(replicaKey + "\x00" + opts.RoutingKey))
+	var value uint64
+	for _, b := range sum[:8] {
+		value = value<<8 | uint64(b)
+	}
+	return int(value % uint64(replicaCount))
+}
+
 func (c *Client) readContentIntoHostCount(length int64) int {
 	attempts := c.getContentAttempts(length)
 	hostCount := c.readReplicaHostCount()
@@ -952,6 +983,9 @@ func (c *Client) IsCachedReachableContext(ctx context.Context, hash string, rout
 	if ctx == nil {
 		ctx = c.ctx
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if routingKey == "" {
 		routingKey = hash
 	}
@@ -975,6 +1009,9 @@ func (c *Client) IsCachedReachableContext(ctx context.Context, hash string, rout
 
 		resp, err := client.HasContent(ctx, &proto.CacheHasContentRequest{Hash: hash})
 		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return false, ctxErr
+			}
 			c.removeHost(host)
 			return false, err
 		}
@@ -987,6 +1024,9 @@ func (c *Client) IsCachedReachableContext(ctx context.Context, hash string, rout
 	}
 
 	for hostIndex := 0; hostIndex < c.clientConfig.NTopHosts; hostIndex++ {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
 		client, host, err := c.getGRPCClient(&ClientRequest{
 			rt:        ClientRequestTypeRetrieval,
 			hash:      hash,
@@ -1000,6 +1040,9 @@ func (c *Client) IsCachedReachableContext(ctx context.Context, hash string, rout
 		checked[host.HostId] = struct{}{}
 		resp, err := client.HasContent(ctx, &proto.CacheHasContentRequest{Hash: hash})
 		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return false, ctxErr
+			}
 			c.removeHost(host)
 			continue
 		}
@@ -1015,6 +1058,9 @@ func (c *Client) IsCachedReachableContext(ctx context.Context, hash string, rout
 		exists, _ := checkHost(host)
 		if exists {
 			return true, nil
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return false, ctxErr
 		}
 	}
 
@@ -1477,25 +1523,35 @@ func (c *Client) ClientLocalPageFileViewsWithTrace(hash string, offset int64, le
 		}
 	}
 
-	host, err := c.getSelectedHostForRequest(ClientRequestTypeRetrieval, hash, opts.RoutingKey)
+	hostIndex := c.preferredReadHostIndex(opts, c.readReplicaHostCount())
+	host, err := c.getHostForRequest(&ClientRequest{
+		rt:        ClientRequestTypeRetrieval,
+		hash:      hash,
+		key:       opts.RoutingKey,
+		hostIndex: hostIndex,
+	})
 	if err != nil {
 		if err == ErrHostNotFound {
 			_ = c.refreshRoutableHosts(c.ctx)
 			trace.HostRefreshes++
-			host, err = c.getSelectedHostForRequest(ClientRequestTypeRetrieval, hash, opts.RoutingKey)
+			host, err = c.getHostForRequest(&ClientRequest{
+				rt:        ClientRequestTypeRetrieval,
+				hash:      hash,
+				key:       opts.RoutingKey,
+				hostIndex: hostIndex,
+			})
 		}
 		if err != nil {
-			trace.addAttempt(0, host, "host_select", operationTraceReadResult(err, 0, length), 0, time.Since(started), err)
+			trace.addAttempt(hostIndex, host, "host_select", operationTraceReadResult(err, 0, length), 0, time.Since(started), err)
 			atomic.AddInt64(&cachePathStats.clientLocalPageFileMisses, 1)
 			return nil, trace, err
 		}
 	}
 	if views, source, ok := c.clientLocalPageFileViewsFromHost(host, hash, offset, length); ok {
-		trace.addAttempt(0, host, source, "hit", int64(len(views)), time.Since(started), nil)
+		trace.addAttempt(hostIndex, host, source, "hit", int64(len(views)), time.Since(started), nil)
 		return views, trace, nil
 	}
-
-	trace.addAttempt(0, host, "client_local_page_file", "miss", 0, time.Since(started), ErrContentNotFound)
+	trace.addAttempt(hostIndex, host, "client_local_page_file", "miss", 0, time.Since(started), ErrContentNotFound)
 	atomic.AddInt64(&cachePathStats.clientLocalPageFileMisses, 1)
 	return nil, trace, ErrContentNotFound
 }
@@ -1662,17 +1718,19 @@ func shouldRefreshReadContentIntoHosts(err error) bool {
 func (c *Client) tryReadContentIntoKnownHosts(ctx context.Context, hash string, offset int64, dst []byte, opts ClientOptions, trace *OperationTrace) (int64, error) {
 	length := int64(len(dst))
 	var lastErr error
-	primaryUnavailable := false
+	preferredUnavailable := false
 	selectedUnavailable := false
 	contentMissing := false
 	rawReadBusy := false
 	hostCount := c.readContentIntoHostCount(length)
 	checked := make(map[string]struct{}, hostCount)
+	preferredHostIndex := c.preferredReadHostIndex(opts, hostCount)
 
-	for hostIndex := 0; hostIndex < hostCount; hostIndex++ {
+	for attempt := 0; attempt < hostCount; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return 0, err
 		}
+		hostIndex := (preferredHostIndex + attempt) % hostCount
 		host, err := c.getHostForRequest(&ClientRequest{
 			rt:        ClientRequestTypeRetrieval,
 			hash:      hash,
@@ -1693,8 +1751,8 @@ func (c *Client) tryReadContentIntoKnownHosts(ctx context.Context, hash string, 
 			if err != nil {
 				trace.addAttempt(hostIndex, host, "host_select", operationTraceReadResult(err, 0, length), 0, 0, err)
 				if errors.Is(err, ErrSelectedHostUnavailable) || errors.Is(err, ErrUnableToReachHost) || errors.Is(err, ErrHostNotFound) {
-					if hostIndex == 0 {
-						primaryUnavailable = true
+					if attempt == 0 {
+						preferredUnavailable = true
 					}
 					selectedUnavailable = true
 					lastErr = ErrSelectedHostUnavailable
@@ -1718,8 +1776,8 @@ func (c *Client) tryReadContentIntoKnownHosts(ctx context.Context, hash string, 
 			return n, nil
 		}
 		if errors.Is(err, ErrSelectedHostUnavailable) || errors.Is(err, ErrUnableToReachHost) || errors.Is(err, ErrHostNotFound) {
-			if hostIndex == 0 {
-				primaryUnavailable = true
+			if attempt == 0 {
+				preferredUnavailable = true
 			}
 			selectedUnavailable = true
 			lastErr = ErrSelectedHostUnavailable
@@ -1749,7 +1807,7 @@ func (c *Client) tryReadContentIntoKnownHosts(ctx context.Context, hash string, 
 		return 0, err
 	}
 
-	if primaryUnavailable || (selectedUnavailable && !contentMissing) {
+	if preferredUnavailable || (selectedUnavailable && !contentMissing) {
 		return 0, ErrSelectedHostUnavailable
 	}
 	if rawReadBusy {
@@ -1967,7 +2025,22 @@ func (c *Client) GetContent(hash string, offset int64, length int64, opts struct
 func (c *Client) GetContentStream(hash string, offset int64, length int64, opts struct {
 	RoutingKey string
 }) (chan []byte, error) {
-	ctx, cancel := context.WithTimeout(c.ctx, getContentStreamRequestTimeout)
+	return c.GetContentStreamContext(c.ctx, hash, offset, length, opts)
+}
+
+// GetContentStreamContext is the context-aware form used by bounded
+// reconciliation. The legacy wrapper above retains the client's lifetime as
+// its parent for existing cachefs and volume callers.
+func (c *Client) GetContentStreamContext(parent context.Context, hash string, offset int64, length int64, opts struct {
+	RoutingKey string
+}) (chan []byte, error) {
+	if parent == nil {
+		parent = c.ctx
+	}
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, getContentStreamRequestTimeout)
 	contentChan := make(chan []byte)
 
 	if opts.RoutingKey == "" {
@@ -2005,11 +2078,17 @@ func (c *Client) GetContentStream(hash string, offset int64, length int64, opts 
 				}
 
 				if err != nil || !resp.Ok {
-					c.removeLocalHostCache(hash)
+					if ctx.Err() == nil {
+						c.removeLocalHostCache(hash)
+					}
 					break
 				}
 
-				contentChan <- resp.Content
+				select {
+				case contentChan <- resp.Content:
+				case <-ctx.Done():
+					return
+				}
 			}
 		}
 	}()
@@ -2820,11 +2899,10 @@ func (c *Client) PrimaryReadHost(routingKey string) (*Host, error) {
 	return nil, ErrHostNotFound
 }
 
-// RankedReadHosts returns the HRW-ranked hosts for routingKey, including
-// hosts whose endpoints are currently unavailable. Callers that make
-// placement decisions (e.g. proactive reconciliation) need the full ranking
-// so they can apply their own liveness policy; reads should keep using
-// PrimaryReadHost, which prefers reachable hosts.
+// RankedReadHosts returns the configured HRW read window for routingKey,
+// including hosts whose endpoints are currently unavailable. Placement
+// decisions can apply their own liveness policy within the same window reads
+// use; PrimaryReadHost keeps preferring the first reachable host.
 func (c *Client) RankedReadHosts(routingKey string) []*Host {
 	if routingKey == "" {
 		return nil
@@ -2833,6 +2911,13 @@ func (c *Client) RankedReadHosts(routingKey string) []*Host {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.hasher.GetN(c.readReplicaHostCount(), routingKey)
+}
+
+// HasHost reports whether hostID is currently tracked in the full host map.
+// Logical-only hosts count as present because they retain placement membership
+// while their endpoint is unavailable.
+func (c *Client) HasHost(hostID string) bool {
+	return c != nil && hostID != "" && c.hostMap != nil && c.hostMap.Get(hostID) != nil
 }
 
 // MaterializeFromReplica streams the content for (hash, routingKey) from a
@@ -2853,7 +2938,7 @@ func (c *Client) MaterializeFromReplica(ctx context.Context, server *Server, has
 		return false, nil
 	}
 
-	reachable, err := c.IsCachedReachable(hash, routingKey)
+	reachable, err := c.IsCachedReachableContext(ctx, hash, routingKey)
 	if err != nil {
 		return false, err
 	}
@@ -2861,11 +2946,11 @@ func (c *Client) MaterializeFromReplica(ctx context.Context, server *Server, has
 		return false, nil
 	}
 
-	contentChan, err := c.GetContentStream(hash, 0, size, struct{ RoutingKey string }{RoutingKey: routingKey})
+	contentChan, err := c.GetContentStreamContext(ctx, hash, 0, size, struct{ RoutingKey string }{RoutingKey: routingKey})
 	if err != nil {
 		return false, err
 	}
-	reader := newChannelReader(contentChan)
+	reader := newChannelReader(ctx, contentChan)
 	defer reader.drain()
 
 	if _, _, err := server.StoreReader(ctx, reader, hash); err != nil {
@@ -2876,21 +2961,29 @@ func (c *Client) MaterializeFromReplica(ctx context.Context, server *Server, has
 
 // channelReader adapts a chan []byte (from GetContentStream) to an io.Reader.
 type channelReader struct {
-	ch  chan []byte
+	ctx context.Context
+	ch  <-chan []byte
 	buf []byte
 }
 
-func newChannelReader(ch chan []byte) *channelReader {
-	return &channelReader{ch: ch}
+func newChannelReader(ctx context.Context, ch <-chan []byte) *channelReader {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return &channelReader{ctx: ctx, ch: ch}
 }
 
 func (r *channelReader) Read(p []byte) (int, error) {
 	for len(r.buf) == 0 {
-		chunk, ok := <-r.ch
-		if !ok {
-			return 0, io.EOF
+		select {
+		case <-r.ctx.Done():
+			return 0, r.ctx.Err()
+		case chunk, ok := <-r.ch:
+			if !ok {
+				return 0, io.EOF
+			}
+			r.buf = chunk
 		}
-		r.buf = chunk
 	}
 	n := copy(p, r.buf)
 	r.buf = r.buf[n:]
@@ -2898,7 +2991,15 @@ func (r *channelReader) Read(p []byte) (int, error) {
 }
 
 func (r *channelReader) drain() {
-	for range r.ch {
+	for {
+		select {
+		case <-r.ctx.Done():
+			return
+		case _, ok := <-r.ch:
+			if !ok {
+				return
+			}
+		}
 	}
 }
 
