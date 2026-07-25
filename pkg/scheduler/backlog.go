@@ -14,7 +14,8 @@ import (
 )
 
 type RequestBacklog struct {
-	rdb *common.RedisClient
+	rdb   *common.RedisClient
+	ready chan struct{}
 }
 
 var popReadyBacklogScript = redis.NewScript(`
@@ -27,7 +28,10 @@ return requests
 `)
 
 func NewRequestBacklog(rdb *common.RedisClient) *RequestBacklog {
-	return &RequestBacklog{rdb: rdb}
+	return &RequestBacklog{
+		rdb:   rdb,
+		ready: make(chan struct{}, 1),
+	}
 }
 
 // Pushes a new container request into the sorted set
@@ -50,8 +54,28 @@ func (rb *RequestBacklog) PushAfter(request *types.ContainerRequest, delay time.
 		return err
 	}
 
+	if delay <= 0 {
+		rb.signalReady()
+	}
 	metrics.RecordSchedulerBacklogDepth(rb.rdb.ZCard(context.TODO(), common.RedisKeys.SchedulerContainerRequests()).Val())
 	return nil
+}
+
+func (rb *RequestBacklog) signalReady() {
+	if rb == nil || rb.ready == nil {
+		return
+	}
+	select {
+	case rb.ready <- struct{}{}:
+	default:
+	}
+}
+
+func (rb *RequestBacklog) readySignal() <-chan struct{} {
+	if rb == nil {
+		return nil
+	}
+	return rb.ready
 }
 
 // Pops the oldest container request from the sorted set

@@ -598,7 +598,15 @@ func (s *Scheduler) StartProcessingRequests() {
 
 		requests, err := s.requestBacklog.PopN(requestProcessingBatchSize)
 		if err != nil {
-			time.Sleep(requestProcessingInterval)
+			timer := time.NewTimer(requestProcessingInterval)
+			select {
+			case <-s.ctx.Done():
+				timer.Stop()
+				return
+			case <-s.requestBacklog.readySignal():
+				timer.Stop()
+			case <-timer.C:
+			}
 			continue
 		}
 

@@ -12,11 +12,27 @@ import (
 	"path/filepath"
 	"testing"
 
+	abstractionscommon "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/storage"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/stretchr/testify/require"
 )
+
+func TestSetupContainerMountsUsesLocalWorkspaceForEmptySandbox(t *testing.T) {
+	manager := NewContainerMountManager(types.AppConfig{})
+	manager.codeCacheRoot = filepath.Join(t.TempDir(), "code-cache")
+
+	request := stubCodeMountRequest("sandbox-empty-code", "workspace-empty", "object-empty")
+	request.Stub.Type = types.StubType(types.StubTypeSandbox)
+	request.Stub.Object.Hash = abstractionscommon.EmptyStubObjectHash()
+	t.Cleanup(func() { _ = os.RemoveAll(filepath.Dir(types.TempContainerWorkspace(request.ContainerId))) })
+
+	require.NoError(t, manager.SetupContainerMounts(context.Background(), request, discardLogger()))
+	require.DirExists(t, request.Mounts[0].LocalPath)
+	require.FileExists(t, filepath.Join(filepath.Dir(request.Mounts[0].LocalPath), ".workspace-ready"))
+	require.NoDirExists(t, manager.codeCacheRoot)
+}
 
 func TestSetupContainerMountsCachesStubCodeWithoutSharingContainerWorkspaces(t *testing.T) {
 	manager := NewContainerMountManager(types.AppConfig{

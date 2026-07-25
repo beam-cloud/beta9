@@ -859,8 +859,6 @@ func (s *GenericPodService) getClient(ctx context.Context, containerId, token st
 
 	cacheKey := sandboxClientCacheKey(hostname, token)
 	client, cached, err := s.loadOrCreateSandboxClient(ctx, cacheKey, func() (*common.ContainerClient, error) {
-		dialCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sandboxConnectWorkerDialTimeout)
-		defer cancel()
 		dialer := func(connectCtx context.Context, _ string) (net.Conn, error) {
 			phaseStart := time.Now()
 			conn, dialErr := network.ConnectToBackend(connectCtx, hostname, sandboxConnectWorkerDialTimeout, s.tailscale, s.config.Tailscale, s.containerRepo)
@@ -873,7 +871,7 @@ func (s *GenericPodService) getClient(ctx context.Context, containerId, token st
 		}
 
 		phaseStart = time.Now()
-		created, createErr := common.NewContainerClientWithDialer(dialCtx, hostname, token, dialer)
+		created, createErr := common.NewContainerClientWithDialer(context.WithoutCancel(ctx), hostname, token, dialer)
 		if createErr != nil {
 			metrics.RecordSandboxConnectPhase("client_create", workspaceId, container.StubId, string(container.Status), "client_create_failed", false, time.Since(phaseStart))
 			return nil, createErr

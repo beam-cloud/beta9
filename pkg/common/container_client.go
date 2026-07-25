@@ -61,6 +61,8 @@ func NewContainerClient(serviceUrl, serviceToken string, existingConn net.Conn) 
 
 // NewContainerClientWithDialer creates a client whose cached gRPC channel can
 // open a fresh backend connection whenever its transport needs to reconnect.
+// Channel creation is deliberately non-blocking: callers use WaitForReady on
+// readiness RPCs while gRPC establishes or repairs the backend transport.
 func NewContainerClientWithDialer(
 	ctx context.Context,
 	serviceUrl string,
@@ -75,7 +77,6 @@ func NewContainerClientWithDialer(
 		serviceUrl,
 		serviceToken,
 		grpc.WithContextDialer(dialer),
-		grpc.WithBlock(),
 		grpc.WithConnectParams(grpc.ConnectParams{
 			Backoff: backoff.Config{
 				BaseDelay:  containerClientReconnectBaseDelay,

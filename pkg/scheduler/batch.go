@@ -157,7 +157,7 @@ func (b *schedulingBatch) completeSchedule(schedule plannedSchedule, err error) 
 
 		attempt.recordBacklogWait(false, "schedule_failed")
 		metrics.RecordSchedulerWorkerWait(time.Since(schedule.request.Timestamp), schedule.request, "schedule_failed")
-		attempt.retryIfRunnable("schedule_failed")
+		attempt.retryScheduleFailure()
 		return
 	}
 

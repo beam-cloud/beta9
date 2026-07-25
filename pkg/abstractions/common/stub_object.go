@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path"
+	"sync"
 
 	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/repository"
@@ -24,14 +25,44 @@ func emptyStubObjectBytes() ([]byte, string, error) {
 	return buf.Bytes(), hex.EncodeToString(sum[:]), nil
 }
 
+type emptyStubObject struct {
+	data []byte
+	hash string
+}
+
+var canonicalEmptyStubObject = sync.OnceValues(func() (emptyStubObject, error) {
+	data, hash, err := emptyStubObjectBytes()
+	return emptyStubObject{data: data, hash: hash}, err
+})
+
+// EmptyStubObjectHash returns the content hash of the canonical empty build
+// context used by stubs that do not contain user code.
+func EmptyStubObjectHash() string {
+	object, err := canonicalEmptyStubObject()
+	if err != nil {
+		return ""
+	}
+	return object.hash
+}
+
+// IsEmptyStubObject reports whether object is the canonical empty build
+// context. Content identity is used instead of archive size so non-empty
+// objects can never take the empty-workspace fast path.
+func IsEmptyStubObject(object types.Object) bool {
+	hash := EmptyStubObjectHash()
+	return hash != "" && object.Hash == hash
+}
+
 // EnsureEmptyStubObject returns the workspace's canonical empty build-context
 // object, creating and uploading it if needed. Stubs created without user
 // code (dashboard launches, gateway-orchestrated workloads) point at it.
 func EnsureEmptyStubObject(ctx context.Context, backendRepo repository.BackendRepository, workspace *types.Workspace) (types.Object, error) {
-	data, hash, err := emptyStubObjectBytes()
+	emptyObject, err := canonicalEmptyStubObject()
 	if err != nil {
 		return types.Object{}, err
 	}
+	data := emptyObject.data
+	hash := emptyObject.hash
 
 	object, err := backendRepo.GetObjectByHash(ctx, hash, workspace.Id)
 	if err != nil {

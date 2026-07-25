@@ -168,6 +168,26 @@ func (a *schedulingAttempt) retry(reason string) {
 }
 
 func (a *schedulingAttempt) retrySoon(reason string) {
+	a.retryAfter(reason, requestProcessingInterval)
+}
+
+// A stale worker snapshot can invalidate a whole per-worker dispatch after
+// capacity was planned. Retry the first such failure immediately with a fresh
+// worker snapshot; subsequent failures keep the normal delay to avoid a hot
+// retry loop during a real outage.
+func (a *schedulingAttempt) retryScheduleFailure() {
+	if !a.runnable() {
+		return
+	}
+
+	delay := requestProcessingInterval
+	if a.request.RetryCount == 0 {
+		delay = 0
+	}
+	a.retryAfter("schedule_failed", delay)
+}
+
+func (a *schedulingAttempt) retryAfter(reason string, delay time.Duration) {
 	if a.request.RetryCount >= maxScheduleRetryCount {
 		a.fail(types.ContainerSchedulingFailureRetryLimit)
 		return
@@ -180,7 +200,7 @@ func (a *schedulingAttempt) retrySoon(reason string) {
 
 	a.request.RetryCount++
 	metrics.RecordRequestRetry(a.request)
-	if err := a.scheduler.pushBacklog(a.request, requestProcessingInterval); err != nil {
+	if err := a.scheduler.pushBacklog(a.request, delay); err != nil {
 		requestLog(log.Error(), a.request).
 			Str("reason", reason).
 			Err(err).
