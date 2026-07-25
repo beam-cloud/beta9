@@ -1258,15 +1258,15 @@ func TestDeleteRuntimeContainerUsesFreshCleanupContext(t *testing.T) {
 	require.NoError(t, rt.deleteCtxErr)
 }
 
-func TestRunContainerHoldsStartSlotUntilInitPIDAndReleasesBeforeAddressPublish(t *testing.T) {
+func TestRunContainerReleasesStartSlotBeforeAddressPublish(t *testing.T) {
 	bundleDir := t.TempDir()
 	configPath := filepath.Join(bundleDir, specBaseName)
 	require.NoError(t, os.WriteFile(configPath, []byte("{}"), 0o644))
 
-	rt := &controlledInitPIDRuntime{
+	rt := &controlledStartRuntime{
 		mockRuntime: mockRuntime{name: types.ContainerRuntimeRunc.String()},
 		runEntered:  make(chan struct{}),
-		startInit:   make(chan struct{}),
+		started:     make(chan struct{}),
 		exit:        make(chan struct{}),
 	}
 	repoClient := &blockingAddressContainerRepoClient{
@@ -1333,17 +1333,17 @@ func TestRunContainerHoldsStartSlotUntilInitPIDAndReleasesBeforeAddressPublish(t
 	}
 	select {
 	case <-slotReleased:
-		t.Fatal("start slot released before the runtime reported its init PID")
+		t.Fatal("start slot released before the runtime started")
 	case <-queuedAcquired:
-		t.Fatal("queued start acquired the slot before the runtime reported its init PID")
+		t.Fatal("queued start acquired the slot before the runtime started")
 	case <-time.After(50 * time.Millisecond):
 	}
 
-	close(rt.startInit)
+	close(rt.started)
 	select {
 	case <-repoClient.entered:
 	case <-time.After(time.Second):
-		t.Fatal("init PID did not reach address publication")
+		t.Fatal("runtime start did not reach address publication")
 	}
 	select {
 	case <-slotReleased:
@@ -2739,17 +2739,17 @@ type runContextRuntime struct {
 	ctxErr  chan error
 }
 
-type controlledInitPIDRuntime struct {
+type controlledStartRuntime struct {
 	mockRuntime
 	runEntered chan struct{}
-	startInit  chan struct{}
+	started    chan struct{}
 	exit       chan struct{}
 }
 
-func (m *controlledInitPIDRuntime) Run(ctx context.Context, containerID, bundlePath string, opts *runtime.RunOpts) (int, error) {
+func (m *controlledStartRuntime) Run(ctx context.Context, containerID, bundlePath string, opts *runtime.RunOpts) (int, error) {
 	close(m.runEntered)
 	select {
-	case <-m.startInit:
+	case <-m.started:
 	case <-ctx.Done():
 		return -1, ctx.Err()
 	}

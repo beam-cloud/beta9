@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -20,9 +19,6 @@ const (
 	runcRestoreStateTimeout       = 30 * time.Second
 	runcRestoreStatePollInterval  = 25 * time.Millisecond
 	runcRestoreOutputDrainTimeout = 2 * time.Second
-	runcInitPIDFileName           = "runc-init.pid"
-	runcInitPIDMemoryDir          = "/dev/shm"
-	runcInitPIDPollInterval       = 5 * time.Millisecond
 )
 
 type runcCommandResult struct {
@@ -87,126 +83,11 @@ func (r *Runc) Run(ctx context.Context, containerID, bundlePath string, opts *Ru
 			runcOpts.OutputWriter = opts.OutputWriter
 		}
 		if opts.Started != nil {
-			pidDir, err := createRuncInitPIDDir()
-			if err != nil {
-				return -1, fmt.Errorf("create runc pid directory: %w", err)
-			}
-			pidFile := filepath.Join(pidDir, runcInitPIDFileName)
-
-			commandStarted := make(chan int, 1)
-			stopWatching := make(chan struct{})
-			watcherDone := make(chan struct{})
-			runcOpts.PidFile = pidFile
-			runcOpts.Started = commandStarted
-
-			go watchRuncInitPID(ctx, pidFile, commandStarted, stopWatching, watcherDone, opts.Started)
-			defer func() {
-				close(stopWatching)
-				<-watcherDone
-				_ = os.RemoveAll(pidDir)
-			}()
+			runcOpts.Started = opts.Started
 		}
 	}
 
 	return r.handle.Run(ctx, containerID, bundlePath, runcOpts)
-}
-
-func createRuncInitPIDDir() (string, error) {
-	var lastErr error
-	for _, parent := range []string{runcInitPIDMemoryDir, ""} {
-		dir, err := os.MkdirTemp(parent, "beta9-runc-init-")
-		if err == nil {
-			return dir, nil
-		}
-		lastErr = err
-	}
-	return "", lastErr
-}
-
-func watchRuncInitPID(
-	ctx context.Context,
-	pidFile string,
-	commandStarted <-chan int,
-	stop <-chan struct{},
-	done chan<- struct{},
-	started chan<- int,
-) {
-	defer close(done)
-
-	select {
-	case <-commandStarted:
-	case <-ctx.Done():
-		return
-	case <-stop:
-		select {
-		case <-commandStarted:
-		default:
-		}
-		forwardRuncInitPIDNonBlocking(ctx, pidFile, started)
-		return
-	}
-
-	ticker := time.NewTicker(runcInitPIDPollInterval)
-	defer ticker.Stop()
-
-	for {
-		if pid, ok := readRuncInitPID(pidFile); ok {
-			select {
-			case started <- pid:
-				_ = removeRuncPIDFiles(pidFile)
-				return
-			case <-ctx.Done():
-				return
-			case <-stop:
-				// Preserve the file for the final non-blocking delivery below.
-			}
-		}
-
-		select {
-		case <-ticker.C:
-		case <-ctx.Done():
-			return
-		case <-stop:
-			// runc can create the pid file and exit between poll ticks.
-			// Read once more and deliver without blocking Run's cleanup.
-			forwardRuncInitPIDNonBlocking(ctx, pidFile, started)
-			return
-		}
-	}
-}
-
-func forwardRuncInitPIDNonBlocking(ctx context.Context, pidFile string, started chan<- int) {
-	pid, ok := readRuncInitPID(pidFile)
-	if !ok {
-		return
-	}
-	select {
-	case started <- pid:
-		_ = removeRuncPIDFiles(pidFile)
-	case <-ctx.Done():
-	default:
-	}
-}
-
-func readRuncInitPID(pidFile string) (int, bool) {
-	pid, err := runc.ReadPidFile(pidFile)
-	if err != nil || pid <= 0 {
-		return 0, false
-	}
-	return pid, true
-}
-
-func removeRuncPIDFiles(pidFile string) error {
-	temporaryPIDFile := filepath.Join(filepath.Dir(pidFile), "."+filepath.Base(pidFile))
-	for _, path := range []string{pidFile, temporaryPIDFile} {
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			return err
-		}
-	}
-	if err := os.Remove(filepath.Dir(pidFile)); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	return nil
 }
 
 func (r *Runc) Exec(ctx context.Context, containerID string, proc specs.Process, opts *ExecOpts) error {
