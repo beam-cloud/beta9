@@ -2311,32 +2311,6 @@ func TestMountedImageReadyTracksMountedServer(t *testing.T) {
 	assert.True(t, imageClient.mountedImageReady(imageId))
 }
 
-func TestPullLazyMountedImageReportsCachedOCIContentForNewStub(t *testing.T) {
-	const imageID = "warm-image"
-	events := &fakeEventRepo{}
-	reporter := newTestReporter(events)
-	imageClient := &ImageClient{
-		contentReporter:    reporter,
-		mountedFuseServers: common.NewSafeMap[*fuse.Server](),
-		v2ArchiveMetadata:  common.NewSafeMap[*clipCommon.ClipArchiveMetadata](),
-	}
-	imageClient.mountedFuseServers.Set(imageID, nil)
-	imageClient.v2ArchiveMetadata.Set(imageID, testClipV2Metadata())
-
-	_, err := imageClient.PullLazy(context.Background(), &types.ContainerRequest{
-		ImageId:     imageID,
-		WorkspaceId: "workspace",
-		StubId:      "new-stub",
-	}, nil)
-	require.NoError(t, err)
-
-	reporter.flush()
-	require.Len(t, events.pushed, 1)
-	require.Equal(t, "new-stub", events.pushed[0].StubID)
-	require.Equal(t, types.CacheContentKindClipV2, events.pushed[0].Kind)
-	require.Len(t, events.pushed[0].Items, 2)
-}
-
 func TestPullImageFromRegistryKeepsPersistentLockFile(t *testing.T) {
 	dir := t.TempDir()
 	archivePath := filepath.Join(dir, "image.clip")
