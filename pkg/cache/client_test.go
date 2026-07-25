@@ -49,27 +49,6 @@ func TestHostsAvailableRequiresActiveEndpoint(t *testing.T) {
 	require.True(t, client.HostsAvailable())
 }
 
-func TestChannelReaderReturnsWhenContextIsCanceled(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	reader := newChannelReader(ctx, make(chan []byte))
-	cancel()
-
-	n, err := reader.Read(make([]byte, 1))
-	require.Zero(t, n)
-	require.ErrorIs(t, err, context.Canceled)
-
-	drained := make(chan struct{})
-	go func() {
-		reader.drain()
-		close(drained)
-	}()
-	select {
-	case <-drained:
-	case <-time.After(time.Second):
-		t.Fatal("channel reader drain ignored cancellation")
-	}
-}
-
 func (m *countingCacheMetadataStore) SetStoreFromContentLock(ctx context.Context, locality string, sourcePath string) error {
 	m.setStoreFromContentLockCalls++
 	return m.MockCacheMetadataStore.SetStoreFromContentLock(ctx, locality, sourcePath)

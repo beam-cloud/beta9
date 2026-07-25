@@ -706,17 +706,9 @@ func (s *GenericPodService) loadStub(ctx context.Context, stubId string) (*types
 		if loaded.Err != nil {
 			return nil, loaded.Err
 		}
-		stub, ok := loaded.Val.(*types.StubWithRelated)
-		if !ok || stub == nil {
-			return nil, nil
-		}
-		return cloneStubWithRelated(stub), nil
+		stub, _ := loaded.Val.(*types.StubWithRelated)
+		return stub, nil
 	}
-}
-
-func cloneStubWithRelated(stub *types.StubWithRelated) *types.StubWithRelated {
-	clone := *stub
-	return &clone
 }
 
 // trackRunAsTask reports whether a stub's containers should be tracked with

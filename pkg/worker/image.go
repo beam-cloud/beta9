@@ -308,8 +308,15 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	}
 
 	mountOptions := c.lazyMountOptions(ctx, request, archive)
-	if err := prepareLazyArchiveContent(ctx, request, archive, &mountOptions, outputLogger); err != nil {
-		return time.Since(startTime), err
+	if archive.usesOCIStorage() && request.Stub.Type.Kind() != types.StubTypeSandbox {
+		mountOptions.Context = ctx
+		mountOptions.PrepareConcurrency = imageLayerPrepareConcurrency
+		mountOptions.PrepareProgress = imageLayerPrepareProgressLogger(outputLogger)
+		if err := clip.PrepareArchiveContent(mountOptions); err != nil {
+			return time.Since(startTime), err
+		}
+		mountOptions.PrepareConcurrency = 0
+		mountOptions.PrepareProgress = nil
 	}
 
 	if elapsed, ok := c.mountedImageHit(startTime, request, "clip_mounted_fuse_hit"); ok {
@@ -340,28 +347,6 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	})
 
 	return time.Since(startTime), nil
-}
-
-func prepareLazyArchiveContent(
-	ctx context.Context,
-	request *types.ContainerRequest,
-	archive lazyImageArchive,
-	mountOptions *clip.MountOptions,
-	outputLogger *slog.Logger,
-) error {
-	if !archive.usesOCIStorage() || request.Stub.Type.Kind() == types.StubTypeSandbox {
-		return nil
-	}
-
-	mountOptions.Context = ctx
-	mountOptions.PrepareConcurrency = imageLayerPrepareConcurrency
-	mountOptions.PrepareProgress = imageLayerPrepareProgressLogger(outputLogger)
-	if err := clip.PrepareArchiveContent(*mountOptions); err != nil {
-		return err
-	}
-	mountOptions.PrepareConcurrency = 0
-	mountOptions.PrepareProgress = nil
-	return nil
 }
 
 func imageLayerPrepareProgressLogger(outputLogger *slog.Logger) func(storage.PrepareProgress) {

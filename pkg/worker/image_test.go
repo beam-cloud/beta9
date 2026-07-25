@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -15,184 +14,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/beam-cloud/beta9/pkg/cache"
-	"github.com/beam-cloud/beta9/pkg/registry"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/beam-cloud/clip/pkg/clip"
-	clipCommon "github.com/beam-cloud/clip/pkg/common"
 	clipStorage "github.com/beam-cloud/clip/pkg/storage"
 	"github.com/rs/zerolog"
 	zerologlog "github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 )
-
-func TestPrepareLazyArchiveContentSkipsSandboxOCIArchive(t *testing.T) {
-	mountOptions := clip.MountOptions{}
-	err := prepareLazyArchiveContent(
-		context.Background(),
-		&types.ContainerRequest{Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)}}},
-		lazyImageArchive{storageMode: string(clipCommon.StorageModeOCI)},
-		&mountOptions,
-		nil,
-	)
-
-	require.NoError(t, err)
-	require.Nil(t, mountOptions.Context)
-	require.Zero(t, mountOptions.PrepareConcurrency)
-	require.Nil(t, mountOptions.PrepareProgress)
-}
-
-func TestPrepareLazyArchiveContentStillEagerlyPreparesNonSandboxOCIArchive(t *testing.T) {
-	mountOptions := clip.MountOptions{}
-	err := prepareLazyArchiveContent(
-		context.Background(),
-		&types.ContainerRequest{Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeEndpoint)}}},
-		lazyImageArchive{storageMode: string(clipCommon.StorageModeOCI)},
-		&mountOptions,
-		nil,
-	)
-
-	require.Error(t, err, "invalid mount options must reach clip.PrepareArchiveContent")
-	require.NotNil(t, mountOptions.Context)
-	require.Equal(t, imageLayerPrepareConcurrency, mountOptions.PrepareConcurrency)
-}
-
-func TestSandboxEmbeddedImageArchiveCacheHitStillRestoresArchive(t *testing.T) {
-	cacheClient := newImageArchiveCacheTestClient(t)
-	imageID := "sandbox-cache-hit"
-	cachePath := fmt.Sprintf("%s/%s.%s", types.AgentImagesPath, imageID, registry.LocalImageFileExtension)
-	sourcePath := createImageArchiveForCacheTest(t)
-
-	_, err := cacheClient.StoreContentFromLocalFile(cache.LocalContentSource{
-		Path:      sourcePath,
-		CachePath: cachePath,
-	}, cache.StoreContentOptions{RoutingKey: cachePath, Lock: true})
-	require.NoError(t, err)
-
-	client := &ImageClient{
-		cacheClient: cacheClient,
-		registry:    &registry.ImageRegistry{ImageFileExtension: registry.LocalImageFileExtension},
-	}
-	destinationPath := filepath.Join(t.TempDir(), imageID+"."+registry.LocalImageFileExtension)
-	hit, _, err := client.pullImageArchiveFromEmbeddedCache(context.Background(), destinationPath, sandboxImageRequest(imageID))
-
-	require.NoError(t, err)
-	require.True(t, hit)
-	require.FileExists(t, destinationPath)
-	source, err := os.ReadFile(sourcePath)
-	require.NoError(t, err)
-	restored, err := os.ReadFile(destinationPath)
-	require.NoError(t, err)
-	require.Equal(t, source, restored)
-}
-
-func TestSandboxEmbeddedImageArchiveCacheMissFallsThroughWithoutSynchronousFill(t *testing.T) {
-	cacheClient := newImageArchiveCacheTestClient(t)
-	imageID := "sandbox-cache-miss"
-	client := &ImageClient{
-		cacheClient: cacheClient,
-		registry:    &registry.ImageRegistry{ImageFileExtension: registry.LocalImageFileExtension},
-		config: types.AppConfig{
-			ImageService: types.ImageServiceConfig{
-				RegistryStore: registry.S3ImageRegistryStore,
-				Registries: types.ImageRegistriesConfig{
-					S3: types.S3ImageRegistryConfig{
-						BucketName:     "sandbox-origin",
-						Region:         "us-east-1",
-						Endpoint:       "http://127.0.0.1:1",
-						AccessKey:      "access",
-						SecretKey:      "secret",
-						ForcePathStyle: true,
-					},
-				},
-			},
-		},
-	}
-	destinationPath := filepath.Join(t.TempDir(), imageID+"."+registry.LocalImageFileExtension)
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	hit, sourceRegistry, err := client.pullImageArchiveFromEmbeddedCache(
-		ctx,
-		destinationPath,
-		sandboxImageRequest(imageID),
-	)
-
-	require.NoError(t, err)
-	require.False(t, hit)
-	require.Nil(t, sourceRegistry)
-	require.NoFileExists(t, destinationPath)
-}
-
-func sandboxImageRequest(imageID string) *types.ContainerRequest {
-	return &types.ContainerRequest{
-		ImageId: imageID,
-		Stub: types.StubWithRelated{
-			Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)},
-		},
-	}
-}
-
-func createImageArchiveForCacheTest(t *testing.T) string {
-	t.Helper()
-
-	sourceDir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(sourceDir, "hello.txt"), []byte("hello from cache"), 0644))
-
-	archivePath := filepath.Join(t.TempDir(), "image.clip")
-	require.NoError(t, clip.NewClipArchiver().Create(clip.ClipArchiverOptions{
-		SourcePath:  sourceDir,
-		OutputFile:  archivePath,
-		ArchivePath: archivePath,
-	}))
-	return archivePath
-}
-
-func newImageArchiveCacheTestClient(t *testing.T) *cache.Client {
-	t.Helper()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cfg := testCacheManagerConfig(t.TempDir()).Cache
-	metadataStore := cache.NewMockCacheMetadataStore()
-	server, err := cache.NewServerWithOptions(
-		ctx,
-		cfg,
-		"image-test",
-		cache.WithServerMetadataStore(metadataStore),
-		cache.WithServerHostID("image-test-host"),
-	)
-	require.NoError(t, err)
-	addr, err := server.Serve("127.0.0.1:0", "")
-	require.NoError(t, err)
-
-	host := server.Host()
-	require.NotNil(t, host)
-	host.Addr = addr
-	host.PrivateAddr = addr
-
-	client, err := cache.NewClientWithHostDirectory(
-		ctx,
-		cfg,
-		metadataStore,
-		testHostDirectoryFunc(func(context.Context, string) ([]*cache.Host, error) {
-			return []*cache.Host{host}, nil
-		}),
-		"image-test",
-	)
-	require.NoError(t, err)
-	client.AttachLocalServer(server)
-	require.Eventually(t, func() bool {
-		primary, err := client.PrimaryReadHost("image-test-probe")
-		return err == nil && primary != nil && primary.HostId == host.HostId
-	}, 3*time.Second, 20*time.Millisecond)
-
-	t.Cleanup(func() {
-		require.NoError(t, client.Cleanup())
-		require.NoError(t, server.Close())
-		cancel()
-	})
-	return client
-}
 
 func TestImageLayerPrepareProgressLoggerEmitsAggregateUpdates(t *testing.T) {
 	var output bytes.Buffer

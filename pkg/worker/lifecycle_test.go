@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -1258,116 +1257,6 @@ func TestDeleteRuntimeContainerUsesFreshCleanupContext(t *testing.T) {
 	require.NoError(t, rt.deleteCtxErr)
 }
 
-func TestRunContainerReleasesStartSlotBeforeAddressPublish(t *testing.T) {
-	bundleDir := t.TempDir()
-	configPath := filepath.Join(bundleDir, specBaseName)
-	require.NoError(t, os.WriteFile(configPath, []byte("{}"), 0o644))
-
-	rt := &controlledStartRuntime{
-		mockRuntime: mockRuntime{name: types.ContainerRuntimeRunc.String()},
-		runEntered:  make(chan struct{}),
-		started:     make(chan struct{}),
-		exit:        make(chan struct{}),
-	}
-	repoClient := &blockingAddressContainerRepoClient{
-		fakeContainerRepoClient: &fakeContainerRepoClient{
-			state: &pb.ContainerState{Status: string(types.ContainerStatusPending)},
-		},
-		entered: make(chan struct{}),
-		unblock: make(chan struct{}),
-	}
-	worker := &Worker{
-		podAddr:             "10.42.0.10",
-		containerRepoClient: repoClient,
-		containerInstances:  common.NewSafeMap[*ContainerInstance](),
-	}
-	request := &types.ContainerRequest{
-		ContainerId: "container-1",
-		ConfigPath:  configPath,
-	}
-	worker.containerInstances.Set(request.ContainerId, &ContainerInstance{
-		Id:      request.ContainerId,
-		Runtime: rt,
-	})
-
-	startSem := make(chan struct{}, 1)
-	startSem <- struct{}{}
-	slotReleased := make(chan struct{})
-	var releaseOnce sync.Once
-	queuedAcquired := make(chan struct{})
-	go func() {
-		startSem <- struct{}{}
-		close(queuedAcquired)
-	}()
-
-	type runResult struct {
-		exitCode int
-		err      error
-	}
-	result := make(chan runResult, 1)
-	go func() {
-		exitCode, err := worker.runContainer(
-			context.Background(),
-			request,
-			slog.New(slog.NewTextHandler(io.Discard, nil)),
-			common.NewOutputWriter(func(string) {}),
-			make(chan int, 1),
-			make(chan int, 1),
-			func() {
-				releaseOnce.Do(func() {
-					<-startSem
-					close(slotReleased)
-				})
-			},
-			time.Time{},
-			[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
-			nil,
-		)
-		result <- runResult{exitCode: exitCode, err: err}
-	}()
-
-	select {
-	case <-rt.runEntered:
-	case <-time.After(time.Second):
-		t.Fatal("runtime Run was not called")
-	}
-	select {
-	case <-slotReleased:
-		t.Fatal("start slot released before the runtime started")
-	case <-queuedAcquired:
-		t.Fatal("queued start acquired the slot before the runtime started")
-	case <-time.After(50 * time.Millisecond):
-	}
-
-	close(rt.started)
-	select {
-	case <-repoClient.entered:
-	case <-time.After(time.Second):
-		t.Fatal("runtime start did not reach address publication")
-	}
-	select {
-	case <-slotReleased:
-	default:
-		t.Fatal("start slot was not released before address publication blocked")
-	}
-	select {
-	case <-queuedAcquired:
-	case <-time.After(time.Second):
-		t.Fatal("queued start did not acquire the released slot")
-	}
-
-	close(repoClient.unblock)
-	close(rt.exit)
-	select {
-	case got := <-result:
-		require.NoError(t, got.err)
-		require.Zero(t, got.exitCode)
-	case <-time.After(time.Second):
-		t.Fatal("runContainer did not return")
-	}
-	<-startSem
-}
-
 func TestRunContainerDoesNotCancelRuntimeRunWithWorkerContext(t *testing.T) {
 	outerCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1388,7 +1277,6 @@ func TestRunContainerDoesNotCancelRuntimeRunWithWorkerContext(t *testing.T) {
 	})
 
 	slotReleased := make(chan struct{})
-	var releaseOnce sync.Once
 	result := make(chan error, 1)
 	go func() {
 		_, err := worker.runContainer(
@@ -1398,11 +1286,7 @@ func TestRunContainerDoesNotCancelRuntimeRunWithWorkerContext(t *testing.T) {
 			common.NewOutputWriter(func(string) {}),
 			make(chan int, 1),
 			make(chan int, 1),
-			func() {
-				releaseOnce.Do(func() {
-					close(slotReleased)
-				})
-			},
+			func() { close(slotReleased) },
 			time.Now(),
 			nil,
 			nil,
@@ -2737,52 +2621,6 @@ type runContextRuntime struct {
 	entered chan struct{}
 	release chan struct{}
 	ctxErr  chan error
-}
-
-type controlledStartRuntime struct {
-	mockRuntime
-	runEntered chan struct{}
-	started    chan struct{}
-	exit       chan struct{}
-}
-
-func (m *controlledStartRuntime) Run(ctx context.Context, containerID, bundlePath string, opts *runtime.RunOpts) (int, error) {
-	close(m.runEntered)
-	select {
-	case <-m.started:
-	case <-ctx.Done():
-		return -1, ctx.Err()
-	}
-	if opts == nil || opts.Started == nil {
-		return -1, errors.New("runtime Started channel is required")
-	}
-	select {
-	case opts.Started <- 1234:
-	case <-ctx.Done():
-		return -1, ctx.Err()
-	}
-	select {
-	case <-m.exit:
-		return 0, nil
-	case <-ctx.Done():
-		return -1, ctx.Err()
-	}
-}
-
-type blockingAddressContainerRepoClient struct {
-	*fakeContainerRepoClient
-	entered chan struct{}
-	unblock chan struct{}
-}
-
-func (c *blockingAddressContainerRepoClient) SetContainerAddressMap(ctx context.Context, request *pb.SetContainerAddressMapRequest, opts ...grpc.CallOption) (*pb.SetContainerAddressMapResponse, error) {
-	close(c.entered)
-	select {
-	case <-c.unblock:
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-	return c.fakeContainerRepoClient.SetContainerAddressMap(ctx, request, opts...)
 }
 
 func (m *runContextRuntime) Run(ctx context.Context, containerID, bundlePath string, opts *runtime.RunOpts) (int, error) {

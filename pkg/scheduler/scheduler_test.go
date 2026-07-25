@@ -98,28 +98,6 @@ func NewSchedulerForTest() (*Scheduler, error) {
 	}, nil
 }
 
-func newSchedulerReplicaForTest(source *Scheduler) *Scheduler {
-	return &Scheduler{
-		ctx:                       source.ctx,
-		config:                    source.config,
-		backendRepo:               source.backendRepo,
-		providerRepo:              source.providerRepo,
-		workerRepo:                source.workerRepo,
-		workerPoolRepo:            source.workerPoolRepo,
-		computeRepo:               source.computeRepo,
-		workerPoolManager:         source.workerPoolManager,
-		requestBacklog:            source.requestBacklog,
-		containerRepo:             source.containerRepo,
-		workspaceRepo:             source.workspaceRepo,
-		eventRepo:                 source.eventRepo,
-		schedulerUsageMetrics:     source.schedulerUsageMetrics,
-		eventBus:                  source.eventBus,
-		provisioning:              newProvisioningTracker(),
-		workerProvisioningBackoff: newWorkerProvisioningBackoff(),
-		credentials:               newSchedulerCredentialCache(),
-	}
-}
-
 func setPendingSchedulerRequests(t *testing.T, scheduler *Scheduler, requests ...*types.ContainerRequest) {
 	t.Helper()
 
@@ -1836,7 +1814,8 @@ func TestProcessRequestStaleReplicaGPUReservationRequeues(t *testing.T) {
 	firstScheduler, err := NewSchedulerForTest()
 	assert.Nil(t, err)
 
-	secondScheduler := newSchedulerReplicaForTest(firstScheduler)
+	secondScheduler := *firstScheduler
+	secondScheduler.provisioning = newProvisioningTracker()
 
 	worker := &types.Worker{
 		Id:            uuid.New().String(),
@@ -1918,7 +1897,8 @@ func TestProcessRequestConcurrentStaleReplicaGPUReservationRequeues(t *testing.T
 	firstScheduler, err := NewSchedulerForTest()
 	assert.Nil(t, err)
 
-	secondScheduler := newSchedulerReplicaForTest(firstScheduler)
+	secondScheduler := *firstScheduler
+	secondScheduler.provisioning = newProvisioningTracker()
 
 	worker := &types.Worker{
 		Id:            uuid.New().String(),

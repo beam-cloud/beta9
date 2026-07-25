@@ -59,10 +59,7 @@ func NewContainerClient(serviceUrl, serviceToken string, existingConn net.Conn) 
 	return client, err
 }
 
-// NewContainerClientWithDialer creates a client whose cached gRPC channel can
-// open a fresh backend connection whenever its transport needs to reconnect.
-// Channel creation is deliberately non-blocking: callers use WaitForReady on
-// readiness RPCs while gRPC establishes or repairs the backend transport.
+// NewContainerClientWithDialer creates a reconnectable cached gRPC channel.
 func NewContainerClientWithDialer(
 	ctx context.Context,
 	serviceUrl string,
@@ -102,7 +99,7 @@ func newContainerClient(
 
 	grpcOption := grpc.WithTransportCredentials(insecure.NewCredentials())
 
-	isTLS := containerClientUsesTLS(serviceUrl)
+	isTLS := strings.HasSuffix(serviceUrl, "443")
 	if isTLS {
 		h2creds := credentials.NewTLS(&tls.Config{NextProtos: []string{"h2"}})
 		grpcOption = grpc.WithTransportCredentials(h2creds)
@@ -128,11 +125,6 @@ func newContainerClient(
 	client.conn = conn
 	client.client = pb.NewContainerServiceClient(conn)
 	return client, nil
-}
-
-func containerClientUsesTLS(serviceUrl string) bool {
-	_, port, err := net.SplitHostPort(serviceUrl)
-	return err == nil && port == "443"
 }
 
 func (c *ContainerClient) Close() error {

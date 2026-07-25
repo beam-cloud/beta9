@@ -45,11 +45,10 @@ import (
 )
 
 const (
-	reporterFlushInterval     = 5 * time.Second
-	reporterMaxItemsPerEvent  = 512
-	reconcileItemTimeout      = 5 * time.Minute
-	reconcileLockExpiryMargin = time.Minute
-	originCredentialsTTL      = 5 * time.Minute
+	reporterFlushInterval    = 5 * time.Second
+	reporterMaxItemsPerEvent = 512
+	reconcileItemTimeout     = 5 * time.Minute
+	originCredentialsTTL     = 5 * time.Minute
 	// reconcileFailureBackoff throttles retries (and logs) for items that fail
 	// to materialize, e.g. an unresolvable origin source.
 	reconcileFailureBackoff = 15 * time.Minute
@@ -88,16 +87,14 @@ func (m *WorkerCacheManager) recentStubTTL() time.Duration {
 	return time.Duration(seconds) * time.Second
 }
 
-// reconcileLockTTLSeconds keeps the lease beyond the bounded materialization
-// lifetime. This prevents a normal timeout from expiring and being reacquired
-// before the original holder returns and releases it.
+// reconcileLockTTLSeconds bounds how long a single materialization may hold the
+// per-item lifecycle lock.
 func (m *WorkerCacheManager) reconcileLockTTLSeconds() int {
 	seconds := m.config.Cache.Reconciliation.LockTTLSeconds
 	if seconds <= 0 {
 		seconds = cacheDefaultReconcileLockTTLS
 	}
-	minimum := int((reconcileItemTimeout + reconcileLockExpiryMargin) / time.Second)
-	return max(seconds, minimum)
+	return seconds
 }
 
 func (m *WorkerCacheManager) reconcileMaxItemsPerCycle() int {
@@ -140,11 +137,10 @@ type cacheContentReporter struct {
 	activeStubs    func(workspaceID string) []string
 	reconcileNow   func()
 
-	flushMu            sync.Mutex
-	mu                 sync.Mutex
-	pending            map[reporterKey]map[string]types.CacheRequiredContentItem
-	pendingRecentStubs map[reporterStubKey]struct{}
-	reported           map[string]struct{}
+	mu       sync.Mutex
+	pending  map[reporterKey]map[string]types.CacheRequiredContentItem
+	recent   map[reporterStubKey]struct{}
+	reported map[string]struct{}
 }
 
 type reporterKey struct {
@@ -174,48 +170,35 @@ func newCacheContentReporter(
 	reconcileNow func(),
 ) *cacheContentReporter {
 	r := &cacheContentReporter{
-		ctx:                ctx,
-		eventRepo:          eventRepo,
-		metadata:           metadata,
-		locality:           locality,
-		recentStubTTL:      recentStubTTL,
-		volumeMinBytes:     volumeMinBytes,
-		activeStubs:        activeStubs,
-		reconcileNow:       reconcileNow,
-		pending:            make(map[reporterKey]map[string]types.CacheRequiredContentItem),
-		pendingRecentStubs: make(map[reporterStubKey]struct{}),
-		reported:           make(map[string]struct{}),
+		ctx:            ctx,
+		eventRepo:      eventRepo,
+		metadata:       metadata,
+		locality:       locality,
+		recentStubTTL:  recentStubTTL,
+		volumeMinBytes: volumeMinBytes,
+		activeStubs:    activeStubs,
+		reconcileNow:   reconcileNow,
+		pending:        make(map[reporterKey]map[string]types.CacheRequiredContentItem),
+		recent:         make(map[reporterStubKey]struct{}),
+		reported:       make(map[string]struct{}),
 	}
+	go r.run()
 	return r
 }
 
-// touchRecentStub queues a refresh of the recent-stub window so reconciliation
-// keeps a stub's content warm for RecentStubTTL after its most recent container.
-// It is called on every container start, so duplicate touches are coalesced and
-// flushed asynchronously instead of issuing a gateway RPC on the startup path.
+// touchRecentStub coalesces burst traffic into the reporter's periodic flush.
 func (r *cacheContentReporter) touchRecentStub(workspaceID, stubID string) {
 	if r == nil || r.metadata == nil || workspaceID == "" || stubID == "" {
 		return
 	}
-
 	r.mu.Lock()
-	r.queueRecentStubLocked(workspaceID, stubID)
+	r.recent[reporterStubKey{workspaceID: workspaceID, stubID: stubID}] = struct{}{}
 	r.mu.Unlock()
-}
-
-func (r *cacheContentReporter) queueRecentStubLocked(workspaceID, stubID string) {
-	if r.metadata == nil || workspaceID == "" || stubID == "" {
-		return
-	}
-	if r.pendingRecentStubs == nil {
-		r.pendingRecentStubs = make(map[reporterStubKey]struct{})
-	}
-	r.pendingRecentStubs[reporterStubKey{workspaceID: workspaceID, stubID: stubID}] = struct{}{}
 }
 
 // shouldGenerateRequiredContent reports whether this worker process has already
 // enumerated a stub's required content. The durable S2 stream is the source of
-// truth; this process-local guard only avoids duplicate enumeration.
+// truth, so Redis is marked only after a successful event write.
 func (r *cacheContentReporter) shouldGenerateRequiredContent(stubID string) bool {
 	if r == nil || stubID == "" {
 		return false
@@ -252,8 +235,9 @@ func (r *cacheContentReporter) reportItems(workspaceID, stubID string, kind type
 	r.reportBatches(workspaceID, stubID, []requiredContentReport{{kind: kind, items: items}})
 }
 
-// reportBatches records all required-content kinds for a stub under one lock so
-// the periodic flush cannot detach a partial image report while it is built.
+// reportBatches records all required-content kinds for a stub under one lock.
+// This prevents the periodic flush from publishing one image kind, marking the
+// stub as reported, and missing another kind from the same image load.
 func (r *cacheContentReporter) reportBatches(workspaceID, stubID string, reports []requiredContentReport) {
 	if r == nil || workspaceID == "" || stubID == "" || len(reports) == 0 {
 		return
@@ -261,7 +245,7 @@ func (r *cacheContentReporter) reportBatches(workspaceID, stubID string, reports
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.queueRecentStubLocked(workspaceID, stubID)
+	r.recent[reporterStubKey{workspaceID: workspaceID, stubID: stubID}] = struct{}{}
 	for _, report := range reports {
 		if len(report.items) == 0 {
 			continue
@@ -289,107 +273,86 @@ func (r *cacheContentReporter) flush() {
 		return
 	}
 
-	r.flushMu.Lock()
-	defer r.flushMu.Unlock()
-
 	r.mu.Lock()
 	pending := r.pending
-	pendingRecentStubs := r.pendingRecentStubs
+	recent := r.recent
 	r.pending = make(map[reporterKey]map[string]types.CacheRequiredContentItem)
-	r.pendingRecentStubs = make(map[reporterStubKey]struct{})
+	r.recent = make(map[reporterStubKey]struct{})
 	r.mu.Unlock()
 
 	if r.eventRepo == nil {
-		r.requeue(pending)
-		r.requeueRecentStubs(pendingRecentStubs)
 		return
 	}
 
 	failed := make(map[reporterKey]map[string]types.CacheRequiredContentItem)
+	stubOK := make(map[reporterStubKey]bool)
+	published := false
 	for key, bucket := range pending {
 		if len(bucket) == 0 {
 			continue
 		}
-		if !r.publishBucket(key, bucket) {
+		stubKey := reporterStubKey{workspaceID: key.workspaceID, stubID: key.stubID}
+		if _, ok := stubOK[stubKey]; !ok {
+			stubOK[stubKey] = true
+		}
+
+		items := make([]types.CacheRequiredContentItem, 0, len(bucket))
+		for _, item := range bucket {
+			items = append(items, item)
+		}
+		ok := true
+		for start := 0; start < len(items); start += reporterMaxItemsPerEvent {
+			end := min(start+reporterMaxItemsPerEvent, len(items))
+			if err := r.eventRepo.PushStubCacheRequiredContent(types.EventStubCacheRequiredContentSchema{
+				WorkspaceID: key.workspaceID,
+				StubID:      key.stubID,
+				Locality:    r.locality,
+				Kind:        key.kind,
+				Items:       items[start:end],
+			}); err != nil {
+				log.Debug().Err(err).Str("workspace_id", key.workspaceID).Str("stub_id", key.stubID).Str("kind", string(key.kind)).Msg("failed to publish required-content event")
+				ok = false
+				break
+			}
+		}
+		if !ok {
+			stubOK[stubKey] = false
 			failed[key] = bucket
+			continue
+		}
+		published = true
+	}
+
+	for stubKey, ok := range stubOK {
+		if ok {
+			r.markStubReported(stubKey.stubID)
 		}
 	}
 
 	if len(failed) > 0 {
 		r.requeue(failed)
 	}
-
-	// A recent-stub entry is the visibility edge for reconciliation. Publish
-	// required content first, then advance LastSeen only after every detached
-	// bucket for that stub is durable. This ensures the immediate reconciliation
-	// wake observes the content instead of waiting for the next periodic cycle.
-	for key := range failed {
-		stubKey := reporterStubKey{workspaceID: key.workspaceID, stubID: key.stubID}
-		delete(pendingRecentStubs, stubKey)
+	indexed := false
+	if r.metadata != nil {
+		for key := range recent {
+			if err := r.metadata.AddRecentStub(r.ctx, r.locality, key.workspaceID, key.stubID, r.recentStubTTL); err != nil {
+				log.Debug().Err(err).Str("workspace_id", key.workspaceID).Str("stub_id", key.stubID).Msg("failed to refresh recent stub for cache reconciliation")
+				continue
+			}
+			indexed = true
+		}
 	}
-	indexed := r.flushRecentStubs(pendingRecentStubs)
-	if indexed && r.reconcileNow != nil {
+	if (published || indexed) && r.reconcileNow != nil {
 		r.reconcileNow()
 	}
 }
 
-func (r *cacheContentReporter) publishBucket(key reporterKey, bucket map[string]types.CacheRequiredContentItem) bool {
-	items := make([]types.CacheRequiredContentItem, 0, len(bucket))
-	for _, item := range bucket {
-		items = append(items, item)
+func (r *cacheContentReporter) markStubReported(stubID string) {
+	if r == nil || r.metadata == nil || stubID == "" {
+		return
 	}
-	for start := 0; start < len(items); start += reporterMaxItemsPerEvent {
-		end := min(start+reporterMaxItemsPerEvent, len(items))
-		if err := r.eventRepo.PushStubCacheRequiredContent(types.EventStubCacheRequiredContentSchema{
-			WorkspaceID: key.workspaceID,
-			StubID:      key.stubID,
-			Locality:    r.locality,
-			Kind:        key.kind,
-			Items:       items[start:end],
-		}); err != nil {
-			log.Debug().Err(err).Str("workspace_id", key.workspaceID).Str("stub_id", key.stubID).Str("kind", string(key.kind)).Msg("failed to publish required-content event")
-			return false
-		}
-	}
-	return true
-}
-
-func (r *cacheContentReporter) flushRecentStubs(stubs map[reporterStubKey]struct{}) bool {
-	if r == nil || r.metadata == nil || len(stubs) == 0 {
-		return false
-	}
-
-	ctx := r.ctx
-	if ctx == nil || ctx.Err() != nil {
-		ctx = context.Background()
-	}
-	ctx, cancel := context.WithTimeout(ctx, cacheCoordinatorRPCTimeout)
-	defer cancel()
-
-	failed := make(map[reporterStubKey]struct{})
-	indexed := false
-	for key := range stubs {
-		if err := r.metadata.AddRecentStub(ctx, r.locality, key.workspaceID, key.stubID, r.recentStubTTL); err != nil {
-			log.Debug().Err(err).Str("workspace_id", key.workspaceID).Str("stub_id", key.stubID).Msg("failed to refresh recent stub for cache reconciliation")
-			failed[key] = struct{}{}
-		} else {
-			indexed = true
-		}
-	}
-	if len(failed) > 0 {
-		r.requeueRecentStubs(failed)
-	}
-	return indexed
-}
-
-func (r *cacheContentReporter) requeueRecentStubs(stubs map[reporterStubKey]struct{}) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.pendingRecentStubs == nil {
-		r.pendingRecentStubs = make(map[reporterStubKey]struct{}, len(stubs))
-	}
-	for key := range stubs {
-		r.pendingRecentStubs[key] = struct{}{}
+	if _, err := r.metadata.MarkStubReported(r.ctx, r.locality, stubID, r.recentStubTTL); err != nil {
+		log.Debug().Err(err).Str("stub_id", stubID).Msg("failed to mark required-content report complete")
 	}
 }
 
@@ -408,7 +371,6 @@ func (r *cacheContentReporter) requeue(items map[reporterKey]map[string]types.Ca
 		for itemKey, item := range bucket {
 			current[itemKey] = item
 		}
-		r.queueRecentStubLocked(key.workspaceID, key.stubID)
 	}
 }
 

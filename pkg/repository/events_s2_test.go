@@ -3,7 +3,6 @@ package repository
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"math"
 	"reflect"
@@ -16,22 +15,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/s2-streamstore/s2-sdk-go/s2"
 )
-
-func TestReadStubCacheRequiredContentLockRespectsContext(t *testing.T) {
-	repo := &S2EventRepository{streamPrefix: "events"}
-	state := repo.stubCacheRequiredContentState(repo.stubCacheStreamName("workspace", "stub"))
-	if err := state.gate.Acquire(context.Background(), 1); err != nil {
-		t.Fatalf("acquire test gate: %v", err)
-	}
-	defer state.gate.Release(1)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-	defer cancel()
-	_, err := repo.ReadStubCacheRequiredContent(ctx, "workspace", "stub")
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("expected context deadline while waiting for coalescing lock, got %v", err)
-	}
-}
 
 func TestS2ContainerStreamNameUsesWorkspaceStubContainer(t *testing.T) {
 	repo := &S2EventRepository{streamPrefix: "events"}

@@ -247,11 +247,7 @@ func (m *WorkerCacheManager) startReconciliation(cacheConfig cache.Config) {
 		m.requestReconcile,
 	)
 
-	m.wg.Add(2)
-	go func() {
-		defer m.wg.Done()
-		m.reporter.run()
-	}()
+	m.wg.Add(1)
 	go m.runReconciliation()
 
 	log.Info().
@@ -275,10 +271,6 @@ func (m *WorkerCacheManager) Close() error {
 	var errs error
 	errs = errors.Join(errs, m.Drain())
 	m.cancel()
-	// The reporter performs one final flush when cancellation is observed.
-	// Join it and the reconciliation loops before closing the cache client and
-	// server they may still be using.
-	m.wg.Wait()
 
 	m.mu.Lock()
 	server := m.server
@@ -310,6 +302,7 @@ func (m *WorkerCacheManager) Close() error {
 		}
 	}
 
+	m.wg.Wait()
 	return errs
 }
 

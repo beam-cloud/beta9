@@ -26,6 +26,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// fakeEventRepo captures required-content events. It embeds the EventRepository
+// interface so only the methods exercised by the reporter need implementations.
 type fakeEventRepo struct {
 	repo.EventRepository
 	mu          sync.Mutex
@@ -79,10 +81,10 @@ func (f *fakeEventRepo) PushPlatformCacheEvent(schema types.EventPlatformCacheSc
 func (f *fakeEventRepo) ReadStubCacheRequiredContent(ctx context.Context, workspaceID, stubID string) ([]types.CacheRequiredContentItem, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.readKeys = append(f.readKeys, workspaceID+"|"+stubID)
 	if f.readErr != nil {
 		return nil, f.readErr
 	}
+	f.readKeys = append(f.readKeys, workspaceID+"|"+stubID)
 	if f.itemsByStub != nil {
 		if bucket := f.itemsByStub[workspaceID+"|"+stubID]; len(bucket) > 0 {
 			items := make([]types.CacheRequiredContentItem, 0, len(bucket))
@@ -103,25 +105,13 @@ func (f testHostDirectoryFunc) GetAvailableHosts(ctx context.Context, locality s
 
 func newTestReporter(eventRepo repo.EventRepository) *cacheContentReporter {
 	return &cacheContentReporter{
-		ctx:                context.Background(),
-		eventRepo:          eventRepo,
-		locality:           "default",
-		pending:            make(map[reporterKey]map[string]types.CacheRequiredContentItem),
-		pendingRecentStubs: make(map[reporterStubKey]struct{}),
-		reported:           make(map[string]struct{}),
+		ctx:       context.Background(),
+		eventRepo: eventRepo,
+		locality:  "default",
+		pending:   make(map[reporterKey]map[string]types.CacheRequiredContentItem),
+		recent:    make(map[reporterStubKey]struct{}),
+		reported:  make(map[string]struct{}),
 	}
-}
-
-func TestReconcileLockTTLOutlivesMaterialization(t *testing.T) {
-	manager := &WorkerCacheManager{}
-	require.Greater(
-		t,
-		time.Duration(manager.reconcileLockTTLSeconds())*time.Second,
-		reconcileItemTimeout,
-	)
-
-	manager.config.Cache.Reconciliation.LockTTLSeconds = 900
-	require.Equal(t, 900, manager.reconcileLockTTLSeconds())
 }
 
 func TestAuditCacheChurnEventIncludesMachineFields(t *testing.T) {
@@ -295,8 +285,10 @@ func createCheckpointArchiveForTest(t *testing.T, checkpointID string) (archiveP
 
 type claimedMetadataStore struct {
 	cache.CacheMetadataStore
+	claimed          bool
+	marked           int
 	recent           int
-	recentErr        error
+	markedLocalities []string
 	recentLocalities []string
 }
 
@@ -305,7 +297,6 @@ type localityRecentMetadataStore struct {
 	mu     sync.Mutex
 	stubs  map[string][]cache.RecentStub
 	listed []string
-	limits []int
 }
 
 func (m *localityRecentMetadataStore) AddRecentStub(_ context.Context, locality, workspaceID, stubID string, _ time.Duration) error {
@@ -331,7 +322,6 @@ func (m *localityRecentMetadataStore) ListRecentStubs(_ context.Context, localit
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.listed = append(m.listed, locality)
-	m.limits = append(m.limits, limit)
 	stubs := append([]cache.RecentStub(nil), m.stubs[locality]...)
 	if limit > 0 && len(stubs) > limit {
 		stubs = stubs[:limit]
@@ -339,10 +329,16 @@ func (m *localityRecentMetadataStore) ListRecentStubs(_ context.Context, localit
 	return stubs, nil
 }
 
+func (m *claimedMetadataStore) MarkStubReported(_ context.Context, locality, _ string, _ time.Duration) (bool, error) {
+	m.marked++
+	m.markedLocalities = append(m.markedLocalities, locality)
+	return m.claimed, nil
+}
+
 func (m *claimedMetadataStore) AddRecentStub(_ context.Context, locality, _, _ string, _ time.Duration) error {
 	m.recent++
 	m.recentLocalities = append(m.recentLocalities, locality)
-	return m.recentErr
+	return nil
 }
 
 func TestReporterGeneratesOncePerStub(t *testing.T) {
@@ -354,96 +350,12 @@ func TestReporterGeneratesOncePerStub(t *testing.T) {
 	require.True(t, r.shouldGenerateRequiredContent("stub-b"))
 }
 
-func TestReporterCoalescesConcurrentRecentStubTouches(t *testing.T) {
-	metadata := &claimedMetadataStore{}
+func TestReporterRedisMarkerIsAdvisory(t *testing.T) {
 	r := newTestReporter(&fakeEventRepo{})
-	r.metadata = metadata
+	r.metadata = &claimedMetadataStore{claimed: false}
 
-	var wg sync.WaitGroup
-	for range 100 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			r.touchRecentStub("ws", "stub")
-		}()
-	}
-	wg.Wait()
-
-	require.Zero(t, metadata.recent, "touches must not issue metadata RPCs on the caller path")
-	r.flush()
-	require.Equal(t, 1, metadata.recent)
-
-	r.flush()
-	require.Equal(t, 1, metadata.recent, "an empty flush must not repeat a successful touch")
-}
-
-func TestReporterRetriesFailedRecentStubTouch(t *testing.T) {
-	metadata := &claimedMetadataStore{recentErr: errors.New("metadata unavailable")}
-	r := newTestReporter(&fakeEventRepo{})
-	r.metadata = metadata
-
-	r.touchRecentStub("ws", "stub")
-	r.flush()
-	require.Equal(t, 1, metadata.recent)
-
-	metadata.recentErr = nil
-	r.flush()
-	require.Equal(t, 2, metadata.recent, "failed touches must be requeued for the next flush")
-
-	r.flush()
-	require.Equal(t, 2, metadata.recent)
-}
-
-func TestReporterFlushesRecentStubOnShutdown(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	metadata := &claimedMetadataStore{}
-	r := newTestReporter(&fakeEventRepo{})
-	r.ctx = ctx
-	r.metadata = metadata
-	r.touchRecentStub("ws", "stub")
-
-	done := make(chan struct{})
-	go func() {
-		r.run()
-		close(done)
-	}()
-	cancel()
-
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("reporter did not finish its shutdown flush")
-	}
-	require.Equal(t, 1, metadata.recent)
-}
-
-func TestWorkerCacheManagerCloseWaitsForReporterFinalFlush(t *testing.T) {
-	manager := NewWorkerCacheManager(
-		context.Background(),
-		types.AppConfig{},
-		types.WorkerPoolConfig{},
-		nil,
-		nil,
-		nil,
-		"worker",
-		"default",
-		"127.0.0.1",
-	)
-	fake := &fakeEventRepo{}
-	metadata := &claimedMetadataStore{}
-	manager.eventRepo = fake
-	manager.metadataStore = metadata
-
-	cacheConfig := cache.Config{}
-	cacheConfig.Reconciliation.Enabled = true
-	manager.startReconciliation(cacheConfig)
-	manager.reporter.reportItems("ws", "stub", types.CacheContentKindVolume, []types.CacheRequiredContentItem{{
-		Hash: "volume",
-	}})
-
-	require.NoError(t, manager.Close())
-	require.Len(t, fake.pushed, 1)
-	require.Equal(t, 1, metadata.recent)
+	require.True(t, r.shouldGenerateRequiredContent("stub-a"))
+	require.False(t, r.shouldGenerateRequiredContent("stub-a"))
 }
 
 func TestReporterCoalescesItemsPerStubKind(t *testing.T) {
@@ -484,38 +396,42 @@ func TestReporterSeparatesByKind(t *testing.T) {
 	require.Len(t, fake.pushed, 2)
 }
 
-func TestReporterPublishesBeforeIndexingRecentStub(t *testing.T) {
+func TestReporterMarksRedisAfterSuccessfulRequiredContentWrite(t *testing.T) {
 	fake := &fakeEventRepo{}
-	metadata := &claimedMetadataStore{}
+	metadata := &claimedMetadataStore{claimed: true}
 	r := newTestReporter(fake)
 	r.metadata = metadata
 	r.locality = "locality-a"
 
+	for range 100 {
+		r.touchRecentStub("ws", "stub")
+	}
 	r.reportItems("ws", "stub", types.CacheContentKindClipV1, []types.CacheRequiredContentItem{{Hash: "h1"}})
-	require.Zero(t, metadata.recent)
+	require.Zero(t, metadata.marked)
 
 	r.flush()
 	require.Len(t, fake.pushed, 1)
-	require.Equal(t, 1, metadata.recent)
+	require.Equal(t, 1, metadata.marked)
 	require.Equal(t, []string{"locality-a"}, metadata.recentLocalities)
+	require.Equal(t, []string{"locality-a"}, metadata.markedLocalities)
 	require.Equal(t, "locality-a", fake.pushed[0].Locality)
 }
 
 func TestReporterRetriesRequiredContentWhenEventWriteFails(t *testing.T) {
 	fake := &fakeEventRepo{err: errors.New("s2 unavailable")}
-	metadata := &claimedMetadataStore{}
+	metadata := &claimedMetadataStore{claimed: true}
 	r := newTestReporter(fake)
 	r.metadata = metadata
 
 	r.reportItems("ws", "stub", types.CacheContentKindClipV1, []types.CacheRequiredContentItem{{Hash: "h1"}})
 	r.flush()
 	require.Empty(t, fake.pushed)
-	require.Zero(t, metadata.recent, "a failed S2 write must not make the stub visible to reconciliation")
+	require.Zero(t, metadata.marked)
 
 	fake.err = nil
 	r.flush()
 	require.Len(t, fake.pushed, 1)
-	require.Equal(t, 1, metadata.recent)
+	require.Equal(t, 1, metadata.marked)
 }
 
 func TestReporterVolumeRespectsSizeThreshold(t *testing.T) {
@@ -1600,12 +1516,10 @@ func TestReportRequiredContentUsesNestedRequestIDs(t *testing.T) {
 	require.Len(t, fake.pushed[0].Items, 2)
 }
 
-func TestReportRequiredContentQueuesWithoutSynchronousRepositoryCalls(t *testing.T) {
+func TestReportRequiredContentQueuesReconciliation(t *testing.T) {
 	fake := &fakeEventRepo{}
-	metadata := &claimedMetadataStore{}
 	requested := false
 	reporter := newTestReporter(fake)
-	reporter.metadata = metadata
 	reporter.reconcileNow = func() { requested = true }
 	client := &ImageClient{contentReporter: reporter}
 	request := &types.ContainerRequest{
@@ -1615,16 +1529,10 @@ func TestReportRequiredContentQueuesWithoutSynchronousRepositoryCalls(t *testing
 	}
 
 	client.reportRequiredContent(context.Background(), request, testClipV2Metadata())
-
-	require.False(t, requested)
-	require.Empty(t, fake.pushed)
-	require.Zero(t, metadata.recent)
-
 	reporter.flush()
 
 	require.True(t, requested)
 	require.Len(t, fake.pushed, 1)
-	require.Equal(t, 1, metadata.recent)
 	require.Equal(t, types.CacheContentKindClipV2, fake.pushed[0].Kind)
 	require.Len(t, fake.pushed[0].Items, 2)
 }

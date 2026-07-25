@@ -35,8 +35,6 @@ const (
 	concurrencyReservationRepairing    = "repairing"
 	concurrencyReservationGPUExceeded  = "gpu"
 	concurrencyReservationCPUExceeded  = "cpu"
-	containerAdmissionAlreadyScheduled = "already_scheduled"
-	containerAdmissionLocked           = "locked"
 	concurrencyCounterInitTimeout      = 15 * time.Second
 	concurrencyCounterInitPollInterval = 100 * time.Millisecond
 	concurrencyCounterRepairInterval   = 5 * time.Second
@@ -46,7 +44,6 @@ const (
 )
 
 var errConcurrencyCounterRepairing = errors.New("concurrency counter repair in progress")
-var errContainerAdmissionLocked = errors.New("container state write lock is held")
 
 // Opening worker routes are republished for every container startup. Once the
 // agent has made an identical shared route ready, those registrations must not
@@ -120,115 +117,6 @@ redis.call("HSET", KEYS[2],
 	"cpu", request_cpu,
 	"created_at", ARGV[7])
 redis.call("SADD", KEYS[3], ARGV[6])
-return "ok"
-`)
-
-// createContainerStateScript is the steady-state scheduler admission path for
-// a single Redis server. It combines the duplicate check, quota reservation,
-// pending state, TTL, and indexes in one atomic round trip.
-//
-// These keys intentionally retain their existing names and do not share a
-// Redis Cluster hash tag. Cluster clients use the lock-scoped fallback below
-// instead of attempting this cross-slot script.
-var createContainerStateScript = redis.NewScript(`
-local function key_type(key)
-	local result = redis.call("TYPE", key)
-	return result["ok"]
-end
-
-if redis.call("EXISTS", KEYS[7]) == 1 then
-	return "locked"
-end
-
-local state_type = key_type(KEYS[4])
-if state_type ~= "none" and state_type ~= "hash" then
-	return redis.error_reply("container state key has invalid type")
-end
-
-local current_status = redis.call("HGET", KEYS[4], "status")
-if current_status == ARGV[10] or current_status == ARGV[11] then
-	return "already_scheduled"
-end
-
-local stub_index_type = key_type(KEYS[5])
-if stub_index_type ~= "none" and stub_index_type ~= "set" then
-	return redis.error_reply("container stub index key has invalid type")
-end
-local workspace_index_type = key_type(KEYS[6])
-if workspace_index_type ~= "none" and workspace_index_type ~= "set" then
-	return redis.error_reply("container workspace index key has invalid type")
-end
-
-local reserve = false
-if ARGV[1] == "1" then
-	local usage_type = key_type(KEYS[1])
-	if usage_type ~= "none" and usage_type ~= "hash" then
-		return redis.error_reply("concurrency usage key has invalid type")
-	end
-	local reservation_type = key_type(KEYS[2])
-	if reservation_type ~= "none" and reservation_type ~= "hash" then
-		return redis.error_reply("concurrency reservation key has invalid type")
-	end
-	local reservation_index_type = key_type(KEYS[3])
-	if reservation_index_type ~= "none" and reservation_index_type ~= "set" then
-		return redis.error_reply("concurrency reservation index key has invalid type")
-	end
-
-	if redis.call("EXISTS", KEYS[2]) == 0 then
-		if redis.call("HGET", KEYS[1], "initialized") ~= "1" then
-			return "repairing"
-		end
-
-		local used_gpu = tonumber(redis.call("HGET", KEYS[1], "gpu_count") or "0")
-		local used_cpu = tonumber(redis.call("HGET", KEYS[1], "cpu") or "0")
-		local gpu_limit = tonumber(ARGV[2])
-		local cpu_limit = tonumber(ARGV[3])
-		local request_gpu = tonumber(ARGV[4])
-		local request_cpu = tonumber(ARGV[5])
-		if used_gpu == nil or used_cpu == nil or gpu_limit == nil or cpu_limit == nil or
-			request_gpu == nil or request_cpu == nil then
-			return redis.error_reply("concurrency usage contains a non-numeric value")
-		end
-		if used_gpu + request_gpu > gpu_limit then
-			return "gpu"
-		end
-		if used_cpu + request_cpu > cpu_limit then
-			return "cpu"
-		end
-		reserve = true
-	end
-end
-
-if reserve then
-	redis.call("HINCRBY", KEYS[1], "gpu_count", ARGV[4])
-	redis.call("HINCRBY", KEYS[1], "cpu", ARGV[5])
-	redis.call("HSET", KEYS[1], "initialized", "1", "updated_at", ARGV[9])
-	redis.call("HSET", KEYS[2],
-		"workspace_id", ARGV[6],
-		"container_id", ARGV[7],
-		"gpu_count", ARGV[4],
-		"cpu", ARGV[5],
-		"created_at", ARGV[9])
-end
-if ARGV[1] == "1" then
-	redis.call("SADD", KEYS[3], ARGV[7])
-end
-
-redis.call("HSET", KEYS[4],
-	"container_id", ARGV[7],
-	"status", ARGV[10],
-	"scheduled_at", ARGV[9],
-	"stub_id", ARGV[12],
-	"workspace_id", ARGV[6],
-	"gpu", ARGV[13],
-	"gpu_count", ARGV[4],
-	"cpu", ARGV[5],
-	"memory", ARGV[14],
-	"worker_id", "",
-	"machine_id", ARGV[15])
-redis.call("EXPIRE", KEYS[4], ARGV[8])
-redis.call("SADD", KEYS[5], KEYS[4])
-redis.call("SADD", KEYS[6], KEYS[4])
 return "ok"
 `)
 
@@ -1146,118 +1034,6 @@ func pendingContainerState(request *types.ContainerRequest, scheduledAt int64) *
 }
 
 func (c *ContainerRedisRepository) CreateContainerStateWithConcurrencyLimit(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error {
-	if !supportsAtomicContainerAdmission(c.rdb.UniversalClient) {
-		return c.createContainerStateWithConcurrencyLimitCluster(quota, request)
-	}
-
-	reason, err := c.tryCreateContainerStateWithLockRetry(quota, request)
-	if errors.Is(err, errConcurrencyCounterRepairing) {
-		if err := c.ensureWorkspaceConcurrencyCounter(request.WorkspaceId); err != nil {
-			return err
-		}
-		reason, err = c.tryCreateContainerStateWithLockRetry(quota, request)
-	}
-	if err == nil {
-		return nil
-	}
-
-	var throttled *types.ThrottledByConcurrencyLimitError
-	if !errors.As(err, &throttled) {
-		return err
-	}
-
-	repaired, repairErr := c.repairWorkspaceConcurrencyCounterAfterThrottle(request.WorkspaceId)
-	if repairErr != nil {
-		return repairErr
-	}
-	if repaired {
-		reason, err = c.tryCreateContainerStateWithLockRetry(quota, request)
-	}
-	if err != nil && reason != "" {
-		var finalThrottle *types.ThrottledByConcurrencyLimitError
-		if errors.As(err, &finalThrottle) {
-			metrics.RecordConcurrencyLimitThrottle(reason, request)
-		}
-	}
-	return err
-}
-
-func supportsAtomicContainerAdmission(client redis.UniversalClient) bool {
-	_, cluster := client.(*redis.ClusterClient)
-	return !cluster
-}
-
-func (c *ContainerRedisRepository) tryCreateContainerStateWithLockRetry(quota *types.ConcurrencyLimit, request *types.ContainerRequest) (string, error) {
-	for attempt := 0; ; attempt++ {
-		reason, err := c.tryCreateContainerState(quota, request)
-		if !errors.Is(err, errContainerAdmissionLocked) {
-			return reason, err
-		}
-		if attempt >= containerStateLockRetries {
-			return "", redislock.ErrNotObtained
-		}
-		time.Sleep(containerStateLockInterval)
-	}
-}
-
-func (c *ContainerRedisRepository) tryCreateContainerState(quota *types.ConcurrencyLimit, request *types.ContainerRequest) (string, error) {
-	quotaEnabled := 0
-	var gpuLimit uint32
-	var cpuLimit uint32
-	if quota != nil {
-		quotaEnabled = 1
-		gpuLimit = quota.GPULimit
-		cpuLimit = quota.CPUMillicoreLimit
-	}
-
-	result, err := createContainerStateScript.Run(context.TODO(), c.rdb, []string{
-		common.RedisKeys.WorkspaceConcurrencyLimitUsage(request.WorkspaceId),
-		common.RedisKeys.WorkspaceConcurrencyLimitReservation(request.WorkspaceId, request.ContainerId),
-		common.RedisKeys.WorkspaceConcurrencyLimitReservationIndex(request.WorkspaceId),
-		common.RedisKeys.SchedulerContainerState(request.ContainerId),
-		common.RedisKeys.SchedulerContainerIndex(request.StubId),
-		common.RedisKeys.SchedulerContainerWorkspaceIndex(request.WorkspaceId),
-		common.RedisKeys.SchedulerContainerLock(request.ContainerId),
-	},
-		quotaEnabled,
-		int64(gpuLimit),
-		int64(cpuLimit),
-		int64(request.GpuCount),
-		request.Cpu,
-		request.WorkspaceId,
-		request.ContainerId,
-		types.ContainerStateTtlSWhilePending,
-		time.Now().Unix(),
-		string(types.ContainerStatusPending),
-		string(types.ContainerStatusRunning),
-		request.StubId,
-		request.Gpu,
-		request.Memory,
-		request.MachineId,
-	).Text()
-	if err != nil {
-		return "", fmt.Errorf("failed to create container state: %w", err)
-	}
-
-	switch result {
-	case concurrencyReservationOK:
-		return "", nil
-	case containerAdmissionAlreadyScheduled:
-		return "", &types.ContainerAlreadyScheduledError{Msg: "a container with this id is already running or pending"}
-	case containerAdmissionLocked:
-		return "", errContainerAdmissionLocked
-	case concurrencyReservationRepairing:
-		return "repairing", errConcurrencyCounterRepairing
-	case concurrencyReservationGPUExceeded:
-		return "gpu", &types.ThrottledByConcurrencyLimitError{Reason: "gpu quota exceeded"}
-	case concurrencyReservationCPUExceeded:
-		return "cpu", &types.ThrottledByConcurrencyLimitError{Reason: "cpu quota exceeded"}
-	default:
-		return "", fmt.Errorf("unexpected container admission result: %s", result)
-	}
-}
-
-func (c *ContainerRedisRepository) createContainerStateWithConcurrencyLimitCluster(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error {
 	lockKey := common.RedisKeys.SchedulerContainerLock(request.ContainerId)
 	if err := c.lock.Acquire(context.TODO(), lockKey, containerStateLockOptions); err != nil {
 		return err

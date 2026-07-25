@@ -1400,7 +1400,7 @@ func (r *WorkerRedisRepository) ScheduleContainerRequests(worker *types.Worker, 
 			return &types.ErrWorkerNotFound{WorkerId: worker.Id}
 		}
 		if committed == -3 {
-			return &types.ErrContainerRequestNotPending{}
+			return errors.New("container request is no longer pending")
 		}
 		return fmt.Errorf("worker <%s> is not available", worker.Id)
 	}

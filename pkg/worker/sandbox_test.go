@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -15,19 +13,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
-
-func TestPreloadSandboxProcessManagerBinary(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "goproc")
-	content := []byte("sandbox process manager")
-	require.NoError(t, os.WriteFile(path, content, 0o755))
-
-	bytesRead, err := preloadSandboxProcessManagerBinary(path)
-	require.NoError(t, err)
-	require.Equal(t, int64(len(content)), bytesRead)
-
-	_, err = preloadSandboxProcessManagerBinary(path + ".missing")
-	require.Error(t, err)
-}
 
 func TestDockerStartupCanceledClassification(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())

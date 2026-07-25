@@ -1,7 +1,6 @@
 package scheduler
 
 import (
-	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -46,49 +45,30 @@ func (s *Scheduler) processRequestBatch(requests []*types.ContainerRequest, work
 }
 
 func (b *schedulingBatch) plan(requests []*types.ContainerRequest) {
-	if statuses, failures, supported := b.loadContainerStatuses(requests); supported {
+	var statuses map[string]types.ContainerStatus
+	var failures map[string]error
+	reader, batched := b.scheduler.containerRepo.(containerStatusBatchReader)
+	if batched {
+		containerIds := make([]string, 0, len(requests))
 		for _, request := range requests {
-			if failures[request.ContainerId] != nil {
-				b.planRequest(request)
-				continue
-			}
-			b.planRequestWithRunnableState(request, statuses[request.ContainerId] == types.ContainerStatusPending)
-		}
-		return
-	}
-
-	for _, request := range requests {
-		b.planRequest(request)
-	}
-}
-
-func (b *schedulingBatch) loadContainerStatuses(requests []*types.ContainerRequest) (map[string]types.ContainerStatus, map[string]error, bool) {
-	reader, ok := b.scheduler.containerRepo.(containerStatusBatchReader)
-	if !ok {
-		return nil, nil, false
-	}
-
-	containerIds := make([]string, 0, len(requests))
-	for _, request := range requests {
-		if request != nil && request.ContainerId != "" {
 			containerIds = append(containerIds, request.ContainerId)
 		}
+		statuses, failures = reader.GetContainerStatuses(containerIds)
 	}
 
-	statuses, failures := reader.GetContainerStatuses(containerIds)
-	return statuses, failures, true
+	for _, request := range requests {
+		attempt := newSchedulingAttempt(b.scheduler, request, b.workers)
+		runnable := false
+		if batched && failures[request.ContainerId] == nil {
+			runnable = statuses[request.ContainerId] == types.ContainerStatusPending
+		} else {
+			runnable = attempt.runnable()
+		}
+		b.planRequest(request, attempt, runnable)
+	}
 }
 
-func (b *schedulingBatch) planRequest(request *types.ContainerRequest) {
-	attempt := newSchedulingAttempt(b.scheduler, request, b.workers)
-	b.planRequestWithAttempt(request, attempt, attempt.runnable())
-}
-
-func (b *schedulingBatch) planRequestWithRunnableState(request *types.ContainerRequest, runnable bool) {
-	b.planRequestWithAttempt(request, newSchedulingAttempt(b.scheduler, request, b.workers), runnable)
-}
-
-func (b *schedulingBatch) planRequestWithAttempt(request *types.ContainerRequest, attempt *schedulingAttempt, runnable bool) {
+func (b *schedulingBatch) planRequest(request *types.ContainerRequest, attempt *schedulingAttempt, runnable bool) {
 	planStart := time.Now()
 	planned := false
 	defer func() {
@@ -185,13 +165,6 @@ func (b *schedulingBatch) dispatchSchedules(schedules []plannedSchedule) {
 		workerRequests[i] = b.scheduler.prepareWorkerRequest(schedule.worker, schedule.request)
 	}
 	err := b.scheduler.pushWorkerRequests(schedules[0].worker, workerRequests)
-	var notPending *types.ErrContainerRequestNotPending
-	if len(schedules) > 1 && errors.As(err, &notPending) {
-		middle := len(schedules) / 2
-		b.dispatchSchedules(schedules[:middle])
-		b.dispatchSchedules(schedules[middle:])
-		return
-	}
 	if err == nil {
 		for _, request := range workerRequests {
 			go b.scheduler.schedulerUsageMetrics.CounterIncContainerScheduled(request.Clone())
@@ -211,7 +184,7 @@ func (b *schedulingBatch) completeSchedule(schedule plannedSchedule, err error) 
 
 		attempt.recordBacklogWait(false, "schedule_failed")
 		metrics.RecordSchedulerWorkerWait(time.Since(schedule.request.Timestamp), schedule.request, "schedule_failed")
-		attempt.retryScheduleFailure()
+		attempt.retryIfRunnable("schedule_failed")
 		return
 	}
 

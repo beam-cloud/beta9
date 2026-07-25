@@ -191,68 +191,27 @@ func TestSandboxClientDialIsSingleFlightPerWorkerDuringBurst(t *testing.T) {
 	}
 }
 
-type burstStubBackendRepository struct {
+type burstStubRepository struct {
 	repository.BackendRepository
-	stub    *types.StubWithRelated
-	started chan struct{}
-	release chan struct{}
+	release <-chan struct{}
 	calls   atomic.Int32
 }
 
-func (r *burstStubBackendRepository) GetStubByExternalId(context.Context, string, ...types.QueryFilter) (*types.StubWithRelated, error) {
-	if r.calls.Add(1) == 1 {
-		close(r.started)
-	}
+func (r *burstStubRepository) GetStubByExternalId(context.Context, string, ...types.QueryFilter) (*types.StubWithRelated, error) {
+	r.calls.Add(1)
 	<-r.release
-	return r.stub, nil
-}
-
-func TestSandboxStubLoadCanceledContextDoesNotStartLookup(t *testing.T) {
-	repo := &burstStubBackendRepository{
-		started: make(chan struct{}),
-		release: make(chan struct{}),
-	}
-	service := &GenericPodService{backendRepo: repo}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	_, err := service.loadStub(ctx, "stub-id")
-
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("loadStub error = %v, want context canceled", err)
-	}
-	if calls := repo.calls.Load(); calls != 0 {
-		t.Fatalf("stub reads = %d, want 0", calls)
-	}
+	return &types.StubWithRelated{}, nil
 }
 
 func TestSandboxStubLoadIsSingleFlightDuringBurst(t *testing.T) {
 	const callers = 100
-
-	storageID := uint(1)
-	accessKey := "access-key"
-	repo := &burstStubBackendRepository{
-		stub: &types.StubWithRelated{
-			Stub: types.Stub{ExternalId: "stub-id", Type: types.StubType(types.StubTypeSandbox)},
-			Workspace: types.Workspace{
-				ExternalId: "workspace-id",
-				Storage: &types.WorkspaceStorage{
-					Id:        &storageID,
-					AccessKey: &accessKey,
-				},
-			},
-			App: &types.App{ExternalId: "app-id"},
-		},
-		started: make(chan struct{}),
-		release: make(chan struct{}),
-	}
+	release := make(chan struct{})
+	repo := &burstStubRepository{release: release}
 	service := &GenericPodService{backendRepo: repo}
 	start := make(chan struct{})
+	var wg sync.WaitGroup
 	ready := sync.WaitGroup{}
 	ready.Add(callers)
-	results := make(chan *types.StubWithRelated, callers)
-	errs := make(chan error, callers)
-	var wg sync.WaitGroup
 
 	for range callers {
 		wg.Add(1)
@@ -260,100 +219,19 @@ func TestSandboxStubLoadIsSingleFlightDuringBurst(t *testing.T) {
 			defer wg.Done()
 			ready.Done()
 			<-start
-			stub, err := service.loadStub(context.Background(), "stub-id")
-			if err != nil {
-				errs <- err
-				return
+			if _, err := service.loadStub(context.Background(), "stub"); err != nil {
+				t.Error(err)
 			}
-			results <- stub
 		}()
 	}
-
 	ready.Wait()
 	close(start)
-	select {
-	case <-repo.started:
-	case <-time.After(time.Second):
-		t.Fatal("stub load did not start")
-	}
 	time.Sleep(20 * time.Millisecond)
-	close(repo.release)
+	close(release)
 	wg.Wait()
-	close(results)
-	close(errs)
 
-	for err := range errs {
-		t.Fatal(err)
-	}
-	if got := repo.calls.Load(); got != 1 {
-		t.Fatalf("stub reads = %d, want 1", got)
-	}
-
-	loaded := make([]*types.StubWithRelated, 0, callers)
-	for stub := range results {
-		loaded = append(loaded, stub)
-	}
-	if len(loaded) != callers {
-		t.Fatalf("loaded stubs = %d, want %d", len(loaded), callers)
-	}
-	if loaded[0] == loaded[1] {
-		t.Fatal("singleflight callers received the same stub pointer")
-	}
-}
-
-func TestSandboxStubLoadDoesNotInheritLeaderCancellation(t *testing.T) {
-	storageID := uint(1)
-	accessKey := "access-key"
-	repo := &burstStubBackendRepository{
-		stub: &types.StubWithRelated{
-			Stub: types.Stub{ExternalId: "stub-id", Type: types.StubType(types.StubTypeSandbox)},
-			Workspace: types.Workspace{
-				ExternalId: "workspace-id",
-				Storage: &types.WorkspaceStorage{
-					Id:        &storageID,
-					AccessKey: &accessKey,
-				},
-			},
-			App: &types.App{ExternalId: "app-id"},
-		},
-		started: make(chan struct{}),
-		release: make(chan struct{}),
-	}
-	service := &GenericPodService{backendRepo: repo}
-
-	leaderCtx, cancelLeader := context.WithCancel(context.Background())
-	leaderResult := make(chan error, 1)
-	go func() {
-		_, err := service.loadStub(leaderCtx, "stub-id")
-		leaderResult <- err
-	}()
-
-	select {
-	case <-repo.started:
-	case <-time.After(time.Second):
-		t.Fatal("stub load did not start")
-	}
-	cancelLeader()
-	if err := <-leaderResult; !errors.Is(err, context.Canceled) {
-		t.Fatalf("leader error = %v, want context canceled", err)
-	}
-
-	followerResult := make(chan error, 1)
-	go func() {
-		stub, err := service.loadStub(context.Background(), "stub-id")
-		if err == nil && stub == nil {
-			err = errors.New("stub load returned no stub")
-		}
-		followerResult <- err
-	}()
-	time.Sleep(20 * time.Millisecond)
-	close(repo.release)
-
-	if err := <-followerResult; err != nil {
-		t.Fatal(err)
-	}
-	if got := repo.calls.Load(); got != 1 {
-		t.Fatalf("stub reads = %d, want 1", got)
+	if calls := repo.calls.Load(); calls != 1 {
+		t.Fatalf("stub reads = %d, want 1", calls)
 	}
 }
 

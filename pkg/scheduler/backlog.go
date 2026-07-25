@@ -50,39 +50,18 @@ func (rb *RequestBacklog) PushAfter(request *types.ContainerRequest, delay time.
 		readyAt = request.Timestamp
 	}
 
-	ctx := context.TODO()
-	pipe := rb.rdb.Pipeline()
-	add := pipe.ZAdd(ctx, common.RedisKeys.SchedulerContainerRequests(), redis.Z{Score: float64(readyAt.UnixNano()), Member: jsonData})
-	depth := pipe.ZCard(ctx, common.RedisKeys.SchedulerContainerRequests())
-	_, _ = pipe.Exec(ctx)
-	if err := add.Err(); err != nil {
+	if err := rb.rdb.ZAdd(context.TODO(), common.RedisKeys.SchedulerContainerRequests(), redis.Z{Score: float64(readyAt.UnixNano()), Member: jsonData}).Err(); err != nil {
 		return err
 	}
 
 	if delay <= 0 {
-		rb.signalReady()
+		select {
+		case rb.ready <- struct{}{}:
+		default:
+		}
 	}
-	if err := depth.Err(); err == nil {
-		metrics.RecordSchedulerBacklogDepth(depth.Val())
-	}
+	metrics.RecordSchedulerBacklogDepth(rb.rdb.ZCard(context.TODO(), common.RedisKeys.SchedulerContainerRequests()).Val())
 	return nil
-}
-
-func (rb *RequestBacklog) signalReady() {
-	if rb == nil || rb.ready == nil {
-		return
-	}
-	select {
-	case rb.ready <- struct{}{}:
-	default:
-	}
-}
-
-func (rb *RequestBacklog) readySignal() <-chan struct{} {
-	if rb == nil {
-		return nil
-	}
-	return rb.ready
 }
 
 // Pops the oldest container request from the sorted set

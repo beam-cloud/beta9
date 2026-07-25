@@ -30,29 +30,6 @@ func TestRetrySoonIncrementsRetryCount(t *testing.T) {
 	assert.Equal(t, 1, requeuedRequest.RetryCount)
 }
 
-func TestFirstScheduleFailureRetriesImmediately(t *testing.T) {
-	scheduler, err := NewSchedulerForTest()
-	assert.Nil(t, err)
-
-	request := &types.ContainerRequest{
-		ContainerId: uuid.New().String(),
-		Timestamp:   time.Now(),
-	}
-	setPendingSchedulerRequests(t, scheduler, request)
-
-	assert.Nil(t, scheduler.addRequestToBacklog(request))
-	initialRequest, err := scheduler.requestBacklog.Pop()
-	assert.Nil(t, err)
-	assert.Equal(t, firstSchedulingAttemptRetryCount, initialRequest.RetryCount)
-
-	newSchedulingAttempt(scheduler, initialRequest, nil).retryScheduleFailure()
-
-	requeuedRequest, err := scheduler.requestBacklog.Pop()
-	assert.Nil(t, err)
-	assert.Equal(t, request.ContainerId, requeuedRequest.ContainerId)
-	assert.Equal(t, firstSchedulingAttemptRetryCount+1, requeuedRequest.RetryCount)
-}
-
 func TestProvisioningFailureBackoffSkipsImmediateAddWorkerRetry(t *testing.T) {
 	scheduler, err := NewSchedulerForTest()
 	assert.Nil(t, err)
