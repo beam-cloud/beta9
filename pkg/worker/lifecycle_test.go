@@ -1268,7 +1268,9 @@ func TestRunContainerDoesNotCancelRuntimeRunWithWorkerContext(t *testing.T) {
 		ctxErr:      make(chan error, 1),
 	}
 	worker := &Worker{
-		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		containerInstances:  common.NewSafeMap[*ContainerInstance](),
+		containerStartSem:   make(chan struct{}, 1),
+		containerStartLimit: 1,
 	}
 	request := &types.ContainerRequest{ContainerId: "container-1"}
 	worker.containerInstances.Set("container-1", &ContainerInstance{
@@ -1276,7 +1278,6 @@ func TestRunContainerDoesNotCancelRuntimeRunWithWorkerContext(t *testing.T) {
 		Runtime: rt,
 	})
 
-	slotReleased := make(chan struct{})
 	result := make(chan error, 1)
 	go func() {
 		_, err := worker.runContainer(
@@ -1286,7 +1287,6 @@ func TestRunContainerDoesNotCancelRuntimeRunWithWorkerContext(t *testing.T) {
 			common.NewOutputWriter(func(string) {}),
 			make(chan int, 1),
 			make(chan int, 1),
-			func() { close(slotReleased) },
 			time.Now(),
 			nil,
 			nil,
@@ -1297,7 +1297,8 @@ func TestRunContainerDoesNotCancelRuntimeRunWithWorkerContext(t *testing.T) {
 	<-rt.entered
 	cancel()
 	select {
-	case <-slotReleased:
+	case worker.containerStartSem <- struct{}{}:
+		<-worker.containerStartSem
 	case <-time.After(time.Second):
 		t.Fatal("start slot was not released when startup context was canceled")
 	}
@@ -1371,7 +1372,6 @@ func TestRunContainerRestorePublishesAddressFromStartedHandler(t *testing.T) {
 		common.NewOutputWriter(func(string) {}),
 		make(chan int, 1),
 		make(chan int, 1),
-		nil,
 		time.Now(),
 		[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
 		nil,
@@ -1506,7 +1506,6 @@ func TestRunContainerRestoreWaitsForRestoredRuntimeExit(t *testing.T) {
 			common.NewOutputWriter(func(string) {}),
 			make(chan int, 1),
 			make(chan int, 1),
-			nil,
 			time.Now(),
 			[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
 			nil,
@@ -1696,7 +1695,6 @@ func TestRunContainerRestoreFailureCleansRuntimeBeforeFallback(t *testing.T) {
 		common.NewOutputWriter(func(string) {}),
 		make(chan int, 1),
 		make(chan int, 1),
-		nil,
 		time.Now(),
 		[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
 		nil,
@@ -1764,7 +1762,6 @@ func TestRunContainerMaterializeFailureFallsBackWithoutRestore(t *testing.T) {
 		common.NewOutputWriter(func(string) {}),
 		make(chan int, 1),
 		make(chan int, 1),
-		nil,
 		time.Now(),
 		[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
 		nil,

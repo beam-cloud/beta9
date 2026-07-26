@@ -1367,27 +1367,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	// Log metrics
 	go s.workerUsageMetrics.EmitContainerUsage(ctx, request)
 
-	phaseStart = time.Now()
-	releaseStartupSlot := func() {}
-	if s.containerStartSem != nil {
-		select {
-		case s.containerStartSem <- struct{}{}:
-		case <-ctx.Done():
-			return
-		}
-		var releaseOnce sync.Once
-		releaseStartupSlot = func() {
-			releaseOnce.Do(func() {
-				<-s.containerStartSem
-			})
-		}
-		defer releaseStartupSlot()
-	}
-	metrics.RecordWorkerStartupPhase("worker_start_queue_wait", time.Since(phaseStart), request, map[string]string{
-		"limit": fmt.Sprintf("%d", s.containerStartLimit),
-	})
-	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleStartQueueWait, phaseStart, true, map[string]string{"limit": fmt.Sprintf("%d", s.containerStartLimit)})
-
 	startedChan := make(chan int, 1)
 	checkpointPIDChan := make(chan int, 1)
 	monitorPIDChan := make(chan int, 1)
@@ -1472,7 +1451,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		s.setupOOMWatcher(ctx, containerId, pid, spec, request, outputLogger, &isOOMKilled)
 	}()
 
-	exitCode, _ = s.runContainer(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan, releaseStartupSlot, opts.StartupStartedAt, opts.StartupPortBindings, opts.CheckpointFilesystemRestore)
+	exitCode, _ = s.runContainer(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan, opts.StartupStartedAt, opts.StartupPortBindings, opts.CheckpointFilesystemRestore)
 
 	stopReason := types.StopContainerReasonUnknown
 	containerInstance, exists = s.containerInstances.Get(containerId)
@@ -1586,10 +1565,27 @@ func eventStopReason(stopReason types.StopContainerReason) string {
 	return string(stopReason)
 }
 
-func (s *Worker) runContainer(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, outputWriter *common.OutputWriter, startedChan chan int, checkpointPIDChan chan int, releaseStartupSlot func(), startupStartedAt time.Time, startupPortBindings []PortBinding, filesystemRestore *checkpointFilesystemRestore) (int, error) {
-	if releaseStartupSlot == nil {
-		releaseStartupSlot = func() {}
+func (s *Worker) runContainer(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, outputWriter *common.OutputWriter, startedChan chan int, checkpointPIDChan chan int, startupStartedAt time.Time, startupPortBindings []PortBinding, filesystemRestore *checkpointFilesystemRestore) (int, error) {
+	phaseStart := time.Now()
+	releaseStartupSlot := func() {}
+	if s.containerStartSem != nil {
+		select {
+		case s.containerStartSem <- struct{}{}:
+		case <-ctx.Done():
+			return -1, ctx.Err()
+		}
+		var releaseOnce sync.Once
+		releaseStartupSlot = func() {
+			releaseOnce.Do(func() {
+				<-s.containerStartSem
+			})
+		}
+		defer releaseStartupSlot()
 	}
+	metrics.RecordWorkerStartupPhase("worker_start_queue_wait", time.Since(phaseStart), request, map[string]string{
+		"limit": fmt.Sprintf("%d", s.containerStartLimit),
+	})
+	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleStartQueueWait, phaseStart, true, map[string]string{"limit": fmt.Sprintf("%d", s.containerStartLimit)})
 
 	instance, exists := s.containerInstances.Get(request.ContainerId)
 	if !exists {
