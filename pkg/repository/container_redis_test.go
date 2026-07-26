@@ -121,6 +121,68 @@ func TestSetContainerStateCommitsIndexesWithState(t *testing.T) {
 	}
 }
 
+func TestCreateContainerStateAdmitsOneDuplicate(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := NewContainerRedisRepositoryForTest(rdb)
+	request := testContainerRequest("sandbox-duplicate", "workspace", 100)
+
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for range 2 {
+		go func() {
+			<-start
+			results <- repo.CreateContainerStateWithConcurrencyLimit(nil, request.Clone())
+		}()
+	}
+	close(start)
+
+	var admitted, duplicate int
+	for range 2 {
+		err := <-results
+		var alreadyScheduled *types.ContainerAlreadyScheduledError
+		switch {
+		case err == nil:
+			admitted++
+		case errors.As(err, &alreadyScheduled):
+			duplicate++
+		default:
+			t.Fatal(err)
+		}
+	}
+	if admitted != 1 || duplicate != 1 {
+		t.Fatalf("admitted=%d duplicate=%d, want 1 each", admitted, duplicate)
+	}
+}
+
+func TestGetContainerStateDoesNotWaitForWriteLock(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := NewContainerRedisRepositoryForTest(rdb)
+	request := testContainerRequest("sandbox-read", "workspace", 100)
+	if err := repo.SetContainerState(request.ContainerId, pendingContainerState(request, time.Now().Unix())); err != nil {
+		t.Fatal(err)
+	}
+
+	lock, err := redislock.Obtain(context.Background(), rdb, common.RedisKeys.SchedulerContainerLock(request.ContainerId), time.Second, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Release(context.Background())
+
+	started := time.Now()
+	if _, err := repo.GetContainerState(request.ContainerId); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(started); elapsed > 100*time.Millisecond {
+		t.Fatalf("state read waited for write lock: %s", elapsed)
+	}
+}
+
 func TestContainerFailureRetentionAndCooldown(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	if err != nil {

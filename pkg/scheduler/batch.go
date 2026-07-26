@@ -25,6 +25,10 @@ type plannedSchedule struct {
 	request *types.ContainerRequest
 }
 
+type containerStatusBatchReader interface {
+	GetContainerStatuses(containerIds []string) (map[string]types.ContainerStatus, map[string]error)
+}
+
 func newSchedulingBatch(scheduler *Scheduler, workers []*types.Worker, batchSize int) *schedulingBatch {
 	return &schedulingBatch{
 		scheduler: scheduler,
@@ -41,12 +45,30 @@ func (s *Scheduler) processRequestBatch(requests []*types.ContainerRequest, work
 }
 
 func (b *schedulingBatch) plan(requests []*types.ContainerRequest) {
+	var statuses map[string]types.ContainerStatus
+	var failures map[string]error
+	reader, batched := b.scheduler.containerRepo.(containerStatusBatchReader)
+	if batched {
+		containerIds := make([]string, 0, len(requests))
+		for _, request := range requests {
+			containerIds = append(containerIds, request.ContainerId)
+		}
+		statuses, failures = reader.GetContainerStatuses(containerIds)
+	}
+
 	for _, request := range requests {
-		b.planRequest(request)
+		attempt := newSchedulingAttempt(b.scheduler, request, b.workers)
+		runnable := false
+		if batched && failures[request.ContainerId] == nil {
+			runnable = statuses[request.ContainerId] == types.ContainerStatusPending
+		} else {
+			runnable = attempt.runnable()
+		}
+		b.planRequest(request, attempt, runnable)
 	}
 }
 
-func (b *schedulingBatch) planRequest(request *types.ContainerRequest) {
+func (b *schedulingBatch) planRequest(request *types.ContainerRequest, attempt *schedulingAttempt, runnable bool) {
 	planStart := time.Now()
 	planned := false
 	defer func() {
@@ -57,12 +79,13 @@ func (b *schedulingBatch) planRequest(request *types.ContainerRequest) {
 			"planned_count_so_far": fmt.Sprintf("%d", len(b.schedules)),
 		})
 	}()
-	attempt := newSchedulingAttempt(b.scheduler, request, b.workers)
-	if !attempt.runnable() {
+	if !runnable {
 		return
 	}
 	if !b.scheduler.checkpointReady(request) {
-		attempt.requeueForWorkerWaitDelay(checkpointHandoffRetryDelay, "checkpoint_handoff")
+		if attempt.runnable() {
+			attempt.requeueForWorkerWaitDelay(checkpointHandoffRetryDelay, "checkpoint_handoff")
+		}
 		return
 	}
 
@@ -74,7 +97,9 @@ func (b *schedulingBatch) planRequest(request *types.ContainerRequest) {
 		"candidate_workers": fmt.Sprintf("%d", len(b.workers)),
 	})
 	if err != nil || worker == nil {
-		newSchedulingAttempt(b.scheduler, request, b.workers).runWaitingOrProvisioning()
+		if attempt.runnable() {
+			attempt.runWaitingOrProvisioning()
+		}
 		return
 	}
 
@@ -85,7 +110,9 @@ func (b *schedulingBatch) planRequest(request *types.ContainerRequest) {
 		"worker_id": worker.Id,
 	})
 	if !reserved {
-		newSchedulingAttempt(b.scheduler, request, b.workers).runWaitingOrProvisioning()
+		if attempt.runnable() {
+			attempt.runWaitingOrProvisioning()
+		}
 		return
 	}
 

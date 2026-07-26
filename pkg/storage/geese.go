@@ -35,6 +35,13 @@ const (
 	defaultGeeseFSMinMemoryLimitMB = 128
 )
 
+// effectiveGeeseExternalCacheDirectIO deliberately preserves normal FUSE page
+// cache semantics. Direct I/O rejects mmap(2) with ENODEV, which breaks common
+// model formats and runtimes such as safetensors.
+func effectiveGeeseExternalCacheDirectIO(_ bool) bool {
+	return false
+}
+
 // VolumeContentReporter receives workspace object content above the configured
 // size threshold so the cache reconciliation loop can keep it warm. It is
 // implemented by the worker's required-content reporter.
@@ -366,7 +373,8 @@ func (s *GeeseStorage) Mount(localPath string) error {
 		Uint64("min_file_size_for_hash_kb", flags.MinFileSizeForHashKB).
 		Bool("cache_through", flags.CacheThroughModeEnabled).
 		Bool("external_cache", s.cacheClient != nil).
-		Bool("cache_direct_io", s.config.CacheDirectIO).
+		Bool("cache_direct_io_requested", s.config.CacheDirectIO).
+		Bool("cache_direct_io", effectiveGeeseExternalCacheDirectIO(s.config.CacheDirectIO)).
 		Bool("staged_write", flags.StagedWriteModeEnabled).
 		Msg("geesefs mount performance config")
 
@@ -374,7 +382,16 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	if s.cacheClient != nil {
 		flags.ExternalCacheClient = newGeeseContentCache(s.cacheClient, s.volumeCacheScope)
 		flags.ExternalCacheStreamingEnabled = s.config.CacheStreamingEnabled
-		flags.ExternalCacheDirectIO = s.config.CacheDirectIO
+		// FUSE direct I/O makes read-only mmap(2) fail with ENODEV. Model
+		// runtimes routinely mmap weights and safetensors, so Beta9 Volumes
+		// must preserve the normal filesystem contract even when a worker
+		// configuration still requests the old direct-I/O fast path.
+		flags.ExternalCacheDirectIO = effectiveGeeseExternalCacheDirectIO(s.config.CacheDirectIO)
+		if s.config.CacheDirectIO {
+			log.Warn().
+				Str("local_path", localPath).
+				Msg("ignoring geesefs cache direct I/O because it is incompatible with mmap")
+		}
 	}
 
 	mountCtx, cancel := context.WithTimeout(context.Background(), defaultGeeseFSMountTimeout)

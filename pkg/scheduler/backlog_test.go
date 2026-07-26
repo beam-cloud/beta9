@@ -12,7 +12,26 @@ import (
 )
 
 func NewRequestBacklogForTest(rdb *common.RedisClient) *RequestBacklog {
-	return &RequestBacklog{rdb: rdb}
+	return NewRequestBacklog(rdb)
+}
+
+func TestRequestBacklogSignalsImmediatelyReadyPush(t *testing.T) {
+	s, err := miniredis.Run()
+	assert.NotNil(t, s)
+	assert.NoError(t, err)
+
+	redisClient, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{s.Addr()}, Mode: types.RedisModeSingle})
+	assert.NotNil(t, redisClient)
+	assert.NoError(t, err)
+
+	rb := NewRequestBacklogForTest(redisClient)
+	assert.NoError(t, rb.Push(&types.ContainerRequest{ContainerId: "ready"}))
+
+	select {
+	case <-rb.ready:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("ready backlog push did not wake the local scheduler")
+	}
 }
 
 func TestRequestBacklogOrdering(t *testing.T) {

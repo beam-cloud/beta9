@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"strings"
+	"sync"
 	"time"
 
 	reg "github.com/beam-cloud/beta9/pkg/registry"
@@ -18,7 +19,20 @@ func (c *ImageClient) gatewayCredentialProviderForImage(ctx context.Context, ima
 	if creds == nil || creds.registryCredentials == "" {
 		return nil
 	}
-	return c.parseAndCreateProvider(ctx, creds.registryCredentials, registry, imageID, "gateway-vended")
+	provider := c.parseAndCreateProvider(ctx, creds.registryCredentials, registry, imageID, "gateway-vended")
+	if provider == nil {
+		return nil
+	}
+	return &gatewayRegistryCredentialProvider{
+		client:         c,
+		workspaceID:    cacheRequestWorkspaceID(request),
+		stubID:         cacheRequestStubID(request),
+		imageID:        imageID,
+		registry:       registry,
+		provider:       provider,
+		credentialsAt:  creds.fetchedAt,
+		preventAmbient: c.brokeredImageAccessRequest(request),
+	}
 }
 
 func (c *ImageClient) gatewayRegistryCredentials(ctx context.Context, registry string, request *types.ContainerRequest) string {
@@ -42,7 +56,14 @@ func (c *ImageClient) originCredentials(ctx context.Context, request *types.Cont
 		return nil
 	}
 
-	stubID := cacheRequestStubID(request)
+	return c.originCredentialsForScope(ctx, workspaceID, cacheRequestStubID(request), imageID, registry)
+}
+
+func (c *ImageClient) originCredentialsForScope(ctx context.Context, workspaceID, stubID, imageID, registry string) *originCredentials {
+	if c.workerRepoClient == nil || workspaceID == "" {
+		return nil
+	}
+
 	key := strings.Join([]string{workspaceID, stubID, imageID, registry}, "\x00")
 	c.originCredsMu.Lock()
 	if cached, ok := c.originCredsCache[key]; ok && time.Since(cached.fetchedAt) < originCredentialsTTL {
@@ -78,9 +99,55 @@ func (c *ImageClient) originCredentials(ctx context.Context, request *types.Cont
 		fetchedAt:             time.Now(),
 	}
 	c.originCredsMu.Lock()
+	if c.originCredsCache == nil {
+		c.originCredsCache = make(map[string]*originCredentials)
+	}
 	c.originCredsCache[key] = creds
 	c.originCredsMu.Unlock()
 	return creds
+}
+
+// gatewayRegistryCredentialProvider refreshes gateway-vended credentials as a
+// lazy OCI mount reads new layers. The last valid provider remains available
+// during a transient gateway failure, and agent workers never fall back to an
+// ambient node keychain.
+type gatewayRegistryCredentialProvider struct {
+	client         *ImageClient
+	workspaceID    string
+	stubID         string
+	imageID        string
+	registry       string
+	mu             sync.Mutex
+	provider       clipCommon.RegistryCredentialProvider
+	credentialsAt  time.Time
+	preventAmbient bool
+}
+
+func (p *gatewayRegistryCredentialProvider) GetCredentials(ctx context.Context, registry, scope string) (*authn.AuthConfig, error) {
+	creds := p.client.originCredentialsForScope(ctx, p.workspaceID, p.stubID, p.imageID, p.registry)
+
+	p.mu.Lock()
+	if creds != nil && creds.registryCredentials != "" && creds.fetchedAt.After(p.credentialsAt) {
+		if provider := p.client.parseAndCreateProvider(ctx, creds.registryCredentials, p.registry, p.imageID, "gateway-vended refresh"); provider != nil {
+			p.provider = provider
+			p.credentialsAt = creds.fetchedAt
+		}
+	}
+	provider := p.provider
+	p.mu.Unlock()
+
+	if provider == nil {
+		return nil, clipCommon.ErrNoCredentials
+	}
+	authConfig, err := provider.GetCredentials(ctx, registry, scope)
+	if p.preventAmbient && (err != nil || authConfig == nil) {
+		return &authn.AuthConfig{}, nil
+	}
+	return authConfig, err
+}
+
+func (*gatewayRegistryCredentialProvider) Name() string {
+	return "gateway-vended"
 }
 
 func registryFromImageRef(imageRef string) string {

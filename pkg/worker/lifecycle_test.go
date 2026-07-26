@@ -1268,7 +1268,9 @@ func TestRunContainerDoesNotCancelRuntimeRunWithWorkerContext(t *testing.T) {
 		ctxErr:      make(chan error, 1),
 	}
 	worker := &Worker{
-		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		containerInstances:  common.NewSafeMap[*ContainerInstance](),
+		containerStartSem:   make(chan struct{}, 1),
+		containerStartLimit: 1,
 	}
 	request := &types.ContainerRequest{ContainerId: "container-1"}
 	worker.containerInstances.Set("container-1", &ContainerInstance{
@@ -1294,6 +1296,17 @@ func TestRunContainerDoesNotCancelRuntimeRunWithWorkerContext(t *testing.T) {
 
 	<-rt.entered
 	cancel()
+	select {
+	case worker.containerStartSem <- struct{}{}:
+		<-worker.containerStartSem
+	case <-time.After(time.Second):
+		t.Fatal("start slot was not released when startup context was canceled")
+	}
+	select {
+	case err := <-result:
+		t.Fatalf("runtime Run returned before its uncancelled context was released: %v", err)
+	default:
+	}
 	close(rt.release)
 
 	require.NoError(t, <-rt.ctxErr)

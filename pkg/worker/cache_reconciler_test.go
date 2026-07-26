@@ -109,6 +109,7 @@ func newTestReporter(eventRepo repo.EventRepository) *cacheContentReporter {
 		eventRepo: eventRepo,
 		locality:  "default",
 		pending:   make(map[reporterKey]map[string]types.CacheRequiredContentItem),
+		recent:    make(map[reporterStubKey]struct{}),
 		reported:  make(map[string]struct{}),
 	}
 }
@@ -402,6 +403,9 @@ func TestReporterMarksRedisAfterSuccessfulRequiredContentWrite(t *testing.T) {
 	r.metadata = metadata
 	r.locality = "locality-a"
 
+	for range 100 {
+		r.touchRecentStub("ws", "stub")
+	}
 	r.reportItems("ws", "stub", types.CacheContentKindClipV1, []types.CacheRequiredContentItem{{Hash: "h1"}})
 	require.Zero(t, metadata.marked)
 
@@ -1512,7 +1516,7 @@ func TestReportRequiredContentUsesNestedRequestIDs(t *testing.T) {
 	require.Len(t, fake.pushed[0].Items, 2)
 }
 
-func TestReportRequiredContentFlushesAndRequestsReconcile(t *testing.T) {
+func TestReportRequiredContentQueuesReconciliation(t *testing.T) {
 	fake := &fakeEventRepo{}
 	requested := false
 	reporter := newTestReporter(fake)
@@ -1525,6 +1529,7 @@ func TestReportRequiredContentFlushesAndRequestsReconcile(t *testing.T) {
 	}
 
 	client.reportRequiredContent(context.Background(), request, testClipV2Metadata())
+	reporter.flush()
 
 	require.True(t, requested)
 	require.Len(t, fake.pushed, 1)

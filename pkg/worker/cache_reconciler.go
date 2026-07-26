@@ -139,6 +139,7 @@ type cacheContentReporter struct {
 
 	mu       sync.Mutex
 	pending  map[reporterKey]map[string]types.CacheRequiredContentItem
+	recent   map[reporterStubKey]struct{}
 	reported map[string]struct{}
 }
 
@@ -178,22 +179,21 @@ func newCacheContentReporter(
 		activeStubs:    activeStubs,
 		reconcileNow:   reconcileNow,
 		pending:        make(map[reporterKey]map[string]types.CacheRequiredContentItem),
+		recent:         make(map[reporterStubKey]struct{}),
 		reported:       make(map[string]struct{}),
 	}
 	go r.run()
 	return r
 }
 
-// touchRecentStub refreshes the recent-stub window so reconciliation keeps a
-// stub's content warm for RecentStubTTL after its most recent container. It is
-// cheap and is called on every container start (unlike content generation).
+// touchRecentStub coalesces burst traffic into the reporter's periodic flush.
 func (r *cacheContentReporter) touchRecentStub(workspaceID, stubID string) {
 	if r == nil || r.metadata == nil || workspaceID == "" || stubID == "" {
 		return
 	}
-	if err := r.metadata.AddRecentStub(r.ctx, r.locality, workspaceID, stubID, r.recentStubTTL); err != nil {
-		log.Debug().Err(err).Str("workspace_id", workspaceID).Str("stub_id", stubID).Msg("failed to refresh recent stub for cache reconciliation")
-	}
+	r.mu.Lock()
+	r.recent[reporterStubKey{workspaceID: workspaceID, stubID: stubID}] = struct{}{}
+	r.mu.Unlock()
 }
 
 // shouldGenerateRequiredContent reports whether this worker process has already
@@ -243,14 +243,9 @@ func (r *cacheContentReporter) reportBatches(workspaceID, stubID string, reports
 		return
 	}
 
-	if r.metadata != nil {
-		if err := r.metadata.AddRecentStub(r.ctx, r.locality, workspaceID, stubID, r.recentStubTTL); err != nil {
-			log.Debug().Err(err).Str("workspace_id", workspaceID).Str("stub_id", stubID).Msg("failed to record recent stub for cache reconciliation")
-		}
-	}
-
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.recent[reporterStubKey{workspaceID: workspaceID, stubID: stubID}] = struct{}{}
 	for _, report := range reports {
 		if len(report.items) == 0 {
 			continue
@@ -280,7 +275,9 @@ func (r *cacheContentReporter) flush() {
 
 	r.mu.Lock()
 	pending := r.pending
+	recent := r.recent
 	r.pending = make(map[reporterKey]map[string]types.CacheRequiredContentItem)
+	r.recent = make(map[reporterStubKey]struct{})
 	r.mu.Unlock()
 
 	if r.eventRepo == nil {
@@ -335,7 +332,17 @@ func (r *cacheContentReporter) flush() {
 	if len(failed) > 0 {
 		r.requeue(failed)
 	}
-	if published && r.reconcileNow != nil {
+	indexed := false
+	if r.metadata != nil {
+		for key := range recent {
+			if err := r.metadata.AddRecentStub(r.ctx, r.locality, key.workspaceID, key.stubID, r.recentStubTTL); err != nil {
+				log.Debug().Err(err).Str("workspace_id", key.workspaceID).Str("stub_id", key.stubID).Msg("failed to refresh recent stub for cache reconciliation")
+				continue
+			}
+			indexed = true
+		}
+	}
+	if (published || indexed) && r.reconcileNow != nil {
 		r.reconcileNow()
 	}
 }

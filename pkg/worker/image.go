@@ -27,11 +27,12 @@ import (
 	"github.com/beam-cloud/beta9/pkg/registry"
 	reg "github.com/beam-cloud/beta9/pkg/registry"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
+	beta9Storage "github.com/beam-cloud/beta9/pkg/storage"
 	types "github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/beam-cloud/clip/pkg/clip"
 	clipCommon "github.com/beam-cloud/clip/pkg/common"
-	"github.com/beam-cloud/clip/pkg/storage"
+	clipStorage "github.com/beam-cloud/clip/pkg/storage"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/opencontainers/umoci"
 	"github.com/opencontainers/umoci/oci/cas/dir"
@@ -53,6 +54,8 @@ const (
 	maxSyncV1ArchiveDataRestoreBytes         = 512 * 1024 * 1024
 	imageLayerPrepareConcurrency             = 8
 	imageLayerProgressInterval               = 3 * time.Second
+	imageMountReadyTimeout                   = 5 * time.Second
+	imageMountReadyPollInterval              = 5 * time.Millisecond
 )
 
 var (
@@ -160,6 +163,7 @@ type ImageClient struct {
 	// Cache source image references for v2 images (imageId -> sourceImageRef)
 	v2ImageRefs       *common.SafeMap[string]
 	v2ArchiveMetadata *common.SafeMap[*clipCommon.ClipArchiveMetadata]
+	requiredContent   *common.SafeMap[requiredContentReport]
 	clipRuntimeMu     sync.RWMutex
 	clipActive        map[string]*types.ContainerRequest
 	clipRuntimePIDs   map[int]clipPIDReference
@@ -198,6 +202,7 @@ func NewImageClient(config types.AppConfig, workerId, workerPoolName string, wor
 		mountLocks:         make(map[string]*sync.Mutex),
 		v2ImageRefs:        common.NewSafeMap[string](),
 		v2ArchiveMetadata:  common.NewSafeMap[*clipCommon.ClipArchiveMetadata](),
+		requiredContent:    common.NewSafeMap[requiredContentReport](),
 		clipActive:         make(map[string]*types.ContainerRequest),
 		clipRuntimePIDs:    make(map[int]clipPIDReference),
 		clipPIDCache:       make(map[int]clipPIDReference),
@@ -279,6 +284,11 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	// container. This is cheap and independent of one-time content generation.
 	if c.contentReporter != nil && request != nil {
 		c.contentReporter.touchRecentStub(cacheRequestWorkspaceID(request), cacheRequestStubID(request))
+		if c.requiredContent != nil {
+			if report, ok := c.requiredContent.Get(request.ImageId); ok {
+				c.publishRequiredContent(request, report)
+			}
+		}
 	}
 
 	if elapsed, ok := c.mountedImageHit(startTime, request, "clip_mounted_fuse_hit"); ok {
@@ -300,7 +310,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	}
 
 	mountOptions := c.lazyMountOptions(ctx, request, archive)
-	if archive.usesOCIStorage() {
+	if archive.usesOCIStorage() && request.Stub.Type.Kind() != types.StubTypeSandbox {
 		mountOptions.Context = ctx
 		mountOptions.PrepareConcurrency = imageLayerPrepareConcurrency
 		mountOptions.PrepareProgress = imageLayerPrepareProgressLogger(outputLogger)
@@ -328,7 +338,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	}
 
 	mountStart := time.Now()
-	if err := c.mountLazyImageArchive(request, mountOptions); err != nil {
+	if err := c.mountLazyImageArchive(ctx, request, mountOptions); err != nil {
 		c.recordImageLifecycle(request, types.ContainerLifecycleID("image.mount_archive"), mountStart, time.Since(mountStart), false, map[string]string{
 			"storage_mode": archive.storageMode,
 		})
@@ -341,7 +351,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	return time.Since(startTime), nil
 }
 
-func imageLayerPrepareProgressLogger(outputLogger *slog.Logger) func(storage.PrepareProgress) {
+func imageLayerPrepareProgressLogger(outputLogger *slog.Logger) func(clipStorage.PrepareProgress) {
 	if outputLogger == nil {
 		return nil
 	}
@@ -349,7 +359,7 @@ func imageLayerPrepareProgressLogger(outputLogger *slog.Logger) func(storage.Pre
 	startedAt := time.Now()
 	var mu sync.Mutex
 	var lastLog time.Time
-	return func(progress storage.PrepareProgress) {
+	return func(progress clipStorage.PrepareProgress) {
 		mu.Lock()
 		defer mu.Unlock()
 
@@ -456,28 +466,22 @@ func (c *ImageClient) prepareLazyImageArchive(ctx context.Context, request *type
 			archive.storageMode = string(clipCommon.StorageModeLocal)
 		}
 	}
-	if report, ok := c.imageRequiredContent(ctx, request, meta); ok {
-		c.publishRequiredContent(request, report)
-	}
+	c.reportRequiredContent(ctx, request, meta)
 
 	return archive, nil
 }
 
-// reportRequiredContent enumerates the content a stub's image requires and feeds
-// it to the cache reconciliation reporter. It runs at image-load time (off the
-// read hot path) and is a no-op when reconciliation is disabled.
 func (c *ImageClient) reportRequiredContent(ctx context.Context, request *types.ContainerRequest, meta *clipCommon.ClipArchiveMetadata) {
 	if request == nil || meta == nil {
 		return
 	}
-
 	report, ok := c.imageRequiredContent(ctx, request, meta)
 	if !ok {
-		// Nothing to report; do not claim the one-time generation so a later
-		// load that does yield content can still publish it.
 		return
 	}
-
+	if c.requiredContent != nil {
+		c.requiredContent.Set(request.ImageId, report)
+	}
 	c.publishRequiredContent(request, report)
 }
 
@@ -495,7 +499,6 @@ func (c *ImageClient) publishRequiredContent(request *types.ContainerRequest, re
 
 	workspaceID := cacheRequestWorkspaceID(request)
 	c.contentReporter.reportBatches(workspaceID, stubID, []requiredContentReport{report})
-	c.contentReporter.flush()
 
 	log.Debug().
 		Str("workspace_id", workspaceID).
@@ -700,8 +703,8 @@ func (c *ImageClient) lazyMountOptions(ctx context.Context, request *types.Conta
 	// Only override the archive's storage info when a usable S3 source is
 	// known; an empty bucket would poison every lazy data read.
 	if archive.sourceRegistry != nil && archive.sourceRegistry.BucketName != "" {
-		mountOptions.Credentials = storage.ClipStorageCredentials{
-			S3: &storage.S3ClipStorageCredentials{
+		mountOptions.Credentials = clipStorage.ClipStorageCredentials{
+			S3: &clipStorage.S3ClipStorageCredentials{
 				AccessKey: archive.sourceRegistry.AccessKey,
 				SecretKey: archive.sourceRegistry.SecretKey,
 			},
@@ -950,9 +953,9 @@ func (c *ImageClient) acquireRemoteImageMountLock(imageId string) (func(), error
 	}, nil
 }
 
-func (c *ImageClient) mountLazyImageArchive(request *types.ContainerRequest, mountOptions clip.MountOptions) error {
+func (c *ImageClient) mountLazyImageArchive(ctx context.Context, request *types.ContainerRequest, mountOptions clip.MountOptions) error {
 	phaseStart := time.Now()
-	startServer, _, server, err := clip.MountArchive(mountOptions)
+	startServer, serverErrors, server, err := clip.MountArchive(mountOptions)
 	metrics.RecordWorkerStartupPhase("clip_mount_archive_init", time.Since(phaseStart), request, map[string]string{
 		"clip_version": fmt.Sprintf("%d", c.config.ImageService.ClipVersion),
 		"success":      fmt.Sprintf("%t", err == nil),
@@ -974,8 +977,81 @@ func (c *ImageClient) mountLazyImageArchive(request *types.ContainerRequest, mou
 		return err
 	}
 
+	if err := waitForImageMount(ctx, mountOptions.MountPoint, serverErrors, beta9Storage.IsMounted, probeImageMount, imageMountReadyTimeout); err != nil {
+		if server != nil {
+			_ = server.Unmount()
+		}
+		_ = forceUnmountImageMount(mountOptions.MountPoint)
+		return err
+	}
+
 	c.mountedFuseServers.Set(request.ImageId, server)
+	go c.watchImageMount(request.ImageId, server, serverErrors)
 	return nil
+}
+
+func waitForImageMount(
+	ctx context.Context,
+	mountPoint string,
+	serverErrors <-chan error,
+	mounted func(string) bool,
+	probe func(string) error,
+	timeout time.Duration,
+) error {
+	startProbe := func() <-chan error {
+		result := make(chan error, 1)
+		go func() {
+			result <- probe(mountPoint)
+		}()
+		return result
+	}
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	ticker := time.NewTicker(imageMountReadyPollInterval)
+	defer ticker.Stop()
+
+	var ready <-chan error
+	if mounted(mountPoint) {
+		ready = startProbe()
+	}
+	for {
+		select {
+		case err, ok := <-serverErrors:
+			if !ok {
+				return fmt.Errorf("image mount server stopped before %s was ready", mountPoint)
+			}
+			return fmt.Errorf("image mount failed: %w", err)
+		case err := <-ready:
+			if err != nil {
+				return fmt.Errorf("image mount readiness probe failed: %w", err)
+			}
+			return nil
+		case <-ticker.C:
+			if ready == nil && mounted(mountPoint) {
+				ready = startProbe()
+			}
+		case <-timer.C:
+			return fmt.Errorf("image mount was not ready after %s: %s", timeout, mountPoint)
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+func probeImageMount(mountPoint string) error {
+	var stat syscall.Stat_t
+	return syscall.Stat(mountPoint, &stat)
+}
+
+func (c *ImageClient) watchImageMount(imageID string, server *fuse.Server, serverErrors <-chan error) {
+	err, ok := <-serverErrors
+	if current, mounted := c.mountedFuseServers.Get(imageID); mounted && current == server {
+		c.mountedFuseServers.Delete(imageID)
+	}
+	if ok && err != nil {
+		log.Error().Err(err).Str("image_id", imageID).Msg("image mount server failed")
+	}
 }
 
 // processPulledArchive extracts metadata and moves v2 OCI archives to canonical location
@@ -1303,9 +1379,14 @@ func (c *ImageClient) pullImageFromRegistry(ctx context.Context, archivePath str
 			return brokeredRegistry, nil
 		} else if err != nil {
 			log.Warn().Err(err).Str("image_id", imageId).Msg("brokered image archive origin unavailable for agent worker")
-			return nil, err
+			return c.recoverSandboxArchiveFromCache(ctx, archivePath, request, err)
 		}
-		return nil, fmt.Errorf("gateway-brokered image archive origin is unavailable for agent worker image %s", imageId)
+		return c.recoverSandboxArchiveFromCache(
+			ctx,
+			archivePath,
+			request,
+			fmt.Errorf("gateway-brokered image archive origin is unavailable for agent worker image %s", imageId),
+		)
 	}
 
 	err = c.registry.Pull(ctx, tempPath, imageId)
@@ -1322,7 +1403,7 @@ func (c *ImageClient) pullImageFromRegistry(ctx context.Context, archivePath str
 
 	if err != nil {
 		logImageRegistryPullFailure(err, imageId, request)
-		return nil, err
+		return c.recoverSandboxArchiveFromCache(ctx, archivePath, request, err)
 	}
 
 	if err := os.Rename(tempPath, archivePath); err != nil {
@@ -1503,6 +1584,14 @@ func (c *ImageClient) pullImageArchiveFromEmbeddedCache(ctx context.Context, arc
 		c.recordImageLifecycle(request, types.ContainerLifecycleImageEmbeddedCacheMetadata, metadataStart, time.Since(metadataStart), true, map[string]string{"hit": "false"})
 	}
 
+	// Remote .rclip archives contain metadata only. Sandboxes pull that small
+	// object directly and seed the shared cache asynchronously, avoiding a
+	// store-then-read round trip without bypassing cache coordination for full
+	// local .clip archives.
+	if c.directSandboxArchivePull(request) {
+		return false, nil, nil
+	}
+
 	cachePath := c.imageArchiveCachePath(imageId)
 	routingKey := cachePath
 	key := fmt.Sprintf("%s.%s", imageId, c.registry.ImageFileExtension)
@@ -1586,6 +1675,37 @@ func (c *ImageClient) pullImageArchiveFromEmbeddedCache(ctx context.Context, arc
 	c.recordImageLifecycle(request, types.ContainerLifecycleImageEmbeddedCacheRestore, restoreStart, time.Since(restoreStart), true, map[string]string{"size_bytes": fmt.Sprintf("%d", size)})
 
 	return true, sourceRegistry, nil
+}
+
+func (c *ImageClient) directSandboxArchivePull(request *types.ContainerRequest) bool {
+	return request != nil &&
+		request.Stub.Type.Kind() == types.StubTypeSandbox &&
+		c.registry != nil &&
+		c.registry.ImageFileExtension == reg.RemoteImageFileExtension
+}
+
+func (c *ImageClient) recoverSandboxArchiveFromCache(
+	ctx context.Context,
+	archivePath string,
+	request *types.ContainerRequest,
+	originErr error,
+) (*types.S3ImageRegistryConfig, error) {
+	if !c.directSandboxArchivePull(request) || c.cacheClient == nil {
+		return nil, originErr
+	}
+
+	startedAt := time.Now()
+	ok, err := c.waitForImageArchiveContentCache(ctx, archivePath, request.ImageId)
+	attrs := map[string]string{"reason": "origin_unavailable"}
+	c.recordImageLifecycle(request, types.ContainerLifecycleImageEmbeddedCacheWait, startedAt, time.Since(startedAt), ok, attrs)
+	if ok {
+		log.Info().Str("image_id", request.ImageId).Msg("recovered image archive from embedded cache after origin failure")
+		return c.imageArchiveSourceRegistry(ctx, request), nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%w; embedded cache recovery failed: %v", originErr, err)
+	}
+	return nil, originErr
 }
 
 func (c *ImageClient) imageArchiveSourceRegistry(ctx context.Context, request *types.ContainerRequest) *types.S3ImageRegistryConfig {
@@ -1675,14 +1795,6 @@ func (c *ImageClient) copyImageArchiveFromContentCachePath(ctx context.Context, 
 	}
 	if metadata.Size > uint64(^uint(0)>>1) {
 		return false, fmt.Errorf("image archive too large for local restore: %d bytes", metadata.Size)
-	}
-
-	exists, err := c.cacheClient.IsCachedReachableContext(ctx, metadata.Hash, cachePath)
-	if err != nil {
-		return false, err
-	}
-	if !exists {
-		return false, nil
 	}
 
 	if err := c.writeImageArchiveFromContentCache(ctx, archivePath, imageId, metadata.Hash, int64(metadata.Size), cachePath); err != nil {
@@ -2745,8 +2857,8 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath *PathInfo, imageId
 		err = clip.CreateAndUploadArchive(ctx, clip.CreateOptions{
 			InputPath:  bundlePath.Path,
 			OutputPath: archivePath,
-			Credentials: storage.ClipStorageCredentials{
-				S3: &storage.S3ClipStorageCredentials{
+			Credentials: clipStorage.ClipStorageCredentials{
+				S3: &clipStorage.S3ClipStorageCredentials{
 					AccessKey: c.config.ImageService.Registries.S3.AccessKey,
 					SecretKey: c.config.ImageService.Registries.S3.SecretKey,
 				},
