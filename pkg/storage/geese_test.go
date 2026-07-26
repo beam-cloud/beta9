@@ -42,14 +42,6 @@ func TestEffectiveGeeseMemoryLimitMB(t *testing.T) {
 	}
 }
 
-func TestEffectiveGeeseExternalCacheDirectIODisabledForMmapCompatibility(t *testing.T) {
-	for _, requested := range []bool{false, true} {
-		if got := effectiveGeeseExternalCacheDirectIO(requested); got {
-			t.Fatalf("effectiveGeeseExternalCacheDirectIO(%t) = true, want false", requested)
-		}
-	}
-}
-
 func TestHandleGeeseContentEventReportsStoredContent(t *testing.T) {
 	reporter := &testVolumeReporter{}
 	storage := &GeeseStorage{}

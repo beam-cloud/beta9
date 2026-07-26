@@ -25,8 +25,7 @@ func (c *ImageClient) gatewayCredentialProviderForImage(ctx context.Context, ima
 	}
 	return &gatewayRegistryCredentialProvider{
 		client:         c,
-		workspaceID:    cacheRequestWorkspaceID(request),
-		stubID:         cacheRequestStubID(request),
+		request:        request,
 		imageID:        imageID,
 		registry:       registry,
 		provider:       provider,
@@ -56,14 +55,7 @@ func (c *ImageClient) originCredentials(ctx context.Context, request *types.Cont
 		return nil
 	}
 
-	return c.originCredentialsForScope(ctx, workspaceID, cacheRequestStubID(request), imageID, registry)
-}
-
-func (c *ImageClient) originCredentialsForScope(ctx context.Context, workspaceID, stubID, imageID, registry string) *originCredentials {
-	if c.workerRepoClient == nil || workspaceID == "" {
-		return nil
-	}
-
+	stubID := cacheRequestStubID(request)
 	key := strings.Join([]string{workspaceID, stubID, imageID, registry}, "\x00")
 	c.originCredsMu.Lock()
 	if cached, ok := c.originCredsCache[key]; ok && time.Since(cached.fetchedAt) < originCredentialsTTL {
@@ -107,14 +99,9 @@ func (c *ImageClient) originCredentialsForScope(ctx context.Context, workspaceID
 	return creds
 }
 
-// gatewayRegistryCredentialProvider refreshes gateway-vended credentials as a
-// lazy OCI mount reads new layers. The last valid provider remains available
-// during a transient gateway failure, and agent workers never fall back to an
-// ambient node keychain.
 type gatewayRegistryCredentialProvider struct {
 	client         *ImageClient
-	workspaceID    string
-	stubID         string
+	request        *types.ContainerRequest
 	imageID        string
 	registry       string
 	mu             sync.Mutex
@@ -124,22 +111,20 @@ type gatewayRegistryCredentialProvider struct {
 }
 
 func (p *gatewayRegistryCredentialProvider) GetCredentials(ctx context.Context, registry, scope string) (*authn.AuthConfig, error) {
-	creds := p.client.originCredentialsForScope(ctx, p.workspaceID, p.stubID, p.imageID, p.registry)
+	creds := p.client.originCredentials(ctx, p.request, p.imageID, p.registry)
 
 	p.mu.Lock()
+	defer p.mu.Unlock()
 	if creds != nil && creds.registryCredentials != "" && creds.fetchedAt.After(p.credentialsAt) {
 		if provider := p.client.parseAndCreateProvider(ctx, creds.registryCredentials, p.registry, p.imageID, "gateway-vended refresh"); provider != nil {
 			p.provider = provider
 			p.credentialsAt = creds.fetchedAt
 		}
 	}
-	provider := p.provider
-	p.mu.Unlock()
-
-	if provider == nil {
+	if p.provider == nil {
 		return nil, clipCommon.ErrNoCredentials
 	}
-	authConfig, err := provider.GetCredentials(ctx, registry, scope)
+	authConfig, err := p.provider.GetCredentials(ctx, registry, scope)
 	if p.preventAmbient && (err != nil || authConfig == nil) {
 		return &authn.AuthConfig{}, nil
 	}

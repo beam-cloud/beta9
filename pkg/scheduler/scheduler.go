@@ -29,7 +29,6 @@ const (
 	requestProcessingInterval      time.Duration = 50 * time.Millisecond
 	requestProcessingBatchSize                   = 512
 	provisioningWorkerRequeueDelay time.Duration = 250 * time.Millisecond
-	pendingWorkerFastRetryWindow   time.Duration = provisioningWorkerRequeueDelay
 	provisioningReservationHandoff time.Duration = 2 * requestProcessingInterval
 	pendingWorkerReservationTTL    time.Duration = 30 * time.Second
 )
@@ -590,14 +589,11 @@ func (s *Scheduler) StartProcessingRequests() {
 
 		requests, err := s.requestBacklog.PopN(requestProcessingBatchSize)
 		if err != nil {
-			timer := time.NewTimer(requestProcessingInterval)
 			select {
 			case <-s.ctx.Done():
-				timer.Stop()
 				return
 			case <-s.requestBacklog.ready:
-				timer.Stop()
-			case <-timer.C:
+			case <-time.After(requestProcessingInterval):
 			}
 			continue
 		}

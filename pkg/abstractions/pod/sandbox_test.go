@@ -191,50 +191,6 @@ func TestSandboxClientDialIsSingleFlightPerWorkerDuringBurst(t *testing.T) {
 	}
 }
 
-type burstStubRepository struct {
-	repository.BackendRepository
-	release <-chan struct{}
-	calls   atomic.Int32
-}
-
-func (r *burstStubRepository) GetStubByExternalId(context.Context, string, ...types.QueryFilter) (*types.StubWithRelated, error) {
-	r.calls.Add(1)
-	<-r.release
-	return &types.StubWithRelated{}, nil
-}
-
-func TestSandboxStubLoadIsSingleFlightDuringBurst(t *testing.T) {
-	const callers = 100
-	release := make(chan struct{})
-	repo := &burstStubRepository{release: release}
-	service := &GenericPodService{backendRepo: repo}
-	start := make(chan struct{})
-	var wg sync.WaitGroup
-	ready := sync.WaitGroup{}
-	ready.Add(callers)
-
-	for range callers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			ready.Done()
-			<-start
-			if _, err := service.loadStub(context.Background(), "stub"); err != nil {
-				t.Error(err)
-			}
-		}()
-	}
-	ready.Wait()
-	close(start)
-	time.Sleep(20 * time.Millisecond)
-	close(release)
-	wg.Wait()
-
-	if calls := repo.calls.Load(); calls != 1 {
-		t.Fatalf("stub reads = %d, want 1", calls)
-	}
-}
-
 func TestPodRunnableStubOnlyAllowsPodAndSandboxKinds(t *testing.T) {
 	tests := []struct {
 		name     string

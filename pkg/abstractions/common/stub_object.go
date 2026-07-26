@@ -35,8 +35,6 @@ var canonicalEmptyStubObject = sync.OnceValues(func() (emptyStubObject, error) {
 	return emptyStubObject{data: data, hash: hash}, err
 })
 
-// EmptyStubObjectHash returns the content hash of the canonical empty build
-// context used by stubs that do not contain user code.
 func EmptyStubObjectHash() string {
 	object, err := canonicalEmptyStubObject()
 	if err != nil {
@@ -45,9 +43,6 @@ func EmptyStubObjectHash() string {
 	return object.hash
 }
 
-// IsEmptyStubObject reports whether object is the canonical empty build
-// context. Content identity is used instead of archive size so non-empty
-// objects can never take the empty-workspace fast path.
 func IsEmptyStubObject(object types.Object) bool {
 	hash := EmptyStubObjectHash()
 	return hash != "" && object.Hash == hash
