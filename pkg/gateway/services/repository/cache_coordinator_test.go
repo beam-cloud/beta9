@@ -628,20 +628,6 @@ func TestGetCacheOriginCredentialsVendsImageRegistrySecret(t *testing.T) {
 	}
 	service := &WorkerRepositoryService{
 		backendRepo: backendRepo,
-		appConfig: types.AppConfig{
-			ImageService: types.ImageServiceConfig{
-				RegistryStore: reg.S3ImageRegistryStore,
-				Registries: types.ImageRegistriesConfig{
-					S3: types.S3ImageRegistryConfig{
-						BucketName: "image-bucket",
-						Region:     "us-east-1",
-						Endpoint:   "https://objects.example.com",
-						AccessKey:  "access",
-						SecretKey:  "secret",
-					},
-				},
-			},
-		},
 	}
 
 	resp, err := service.GetCacheOriginCredentials(
@@ -657,10 +643,6 @@ func TestGetCacheOriginCredentialsVendsImageRegistrySecret(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, resp.Ok)
 	require.Equal(t, "registry-user:registry-pass", resp.RegistryCredentials)
-	require.Nil(t, resp.WorkspaceStorage)
-	require.Empty(t, resp.ImageArchiveObjectKey)
-	require.Empty(t, resp.ImageArchiveUrl)
-	require.Empty(t, resp.ImageArchiveDataUrl)
 	require.Equal(t, 1, backendRepo.workspaceWithSigningCalls)
 	require.Zero(t, backendRepo.workspaceByExternalCalls)
 	require.Zero(t, backendRepo.workspaceCalls)

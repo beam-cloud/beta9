@@ -69,30 +69,6 @@ func TestGatewayCredentialProviderForImageFetchesScopedCredentials(t *testing.T)
 	if len(repo.requests) != 1 {
 		t.Fatalf("credential requests after cache hit = %d, want 1", len(repo.requests))
 	}
-}
-
-func TestGatewayCredentialProviderRefreshesExpiredCredentials(t *testing.T) {
-	repo := &fakeImageCredentialWorkerRepo{
-		resp: &pb.GetCacheOriginCredentialsResponse{
-			Ok:                  true,
-			RegistryCredentials: "first-user:first-pass",
-		},
-	}
-	client := &ImageClient{
-		workerRepoClient: repo,
-		originCredsCache: make(map[string]*originCredentials),
-	}
-	request := &types.ContainerRequest{
-		WorkspaceId: "workspace-id",
-		StubId:      "stub-id",
-		ImageId:     "image-a",
-	}
-
-	provider := client.gatewayCredentialProviderForImage(context.Background(), "image-a", "registry.example.com", request)
-	require.NotNil(t, provider)
-	cfg, err := provider.GetCredentials(context.Background(), "registry.example.com", "team/image")
-	require.NoError(t, err)
-	require.Equal(t, "first-user", cfg.Username)
 
 	client.originCredsMu.Lock()
 	for _, cached := range client.originCredsCache {
@@ -104,7 +80,7 @@ func TestGatewayCredentialProviderRefreshesExpiredCredentials(t *testing.T) {
 		RegistryCredentials: "second-user:second-pass",
 	}
 
-	cfg, err = provider.GetCredentials(context.Background(), "registry.example.com", "team/image")
+	cfg, err := provider.GetCredentials(context.Background(), "registry.example.com", "team/image")
 	require.NoError(t, err)
 	require.Equal(t, "second-user", cfg.Username)
 	require.Equal(t, "second-pass", cfg.Password)

@@ -28,10 +28,7 @@ return requests
 `)
 
 func NewRequestBacklog(rdb *common.RedisClient) *RequestBacklog {
-	return &RequestBacklog{
-		rdb:   rdb,
-		ready: make(chan struct{}, 1),
-	}
+	return &RequestBacklog{rdb: rdb, ready: make(chan struct{}, 1)}
 }
 
 // Pushes a new container request into the sorted set

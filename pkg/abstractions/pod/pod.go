@@ -677,37 +677,29 @@ func (s *GenericPodService) CreatePod(ctx context.Context, in *pb.CreatePodReque
 	}
 
 	return &pb.CreatePodResponse{
-		Ok:            true,
-		ContainerId:   containerId,
-		StubId:        stub.ExternalId,
-		TaskId: taskId,
-		AppId:  appId,
+		Ok:          true,
+		ContainerId: containerId,
+		StubId:      stub.ExternalId,
+		TaskId:      taskId,
+		AppId:       appId,
 	}, nil
 }
 
-// loadStub collapses simultaneous reads for the same immutable stub revision.
-// Sandbox bursts otherwise fan one logical lookup out into one Postgres query
-// (and potentially one new database connection) per container.
 func (s *GenericPodService) loadStub(ctx context.Context, stubId string) (*types.StubWithRelated, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 
-	result := s.stubLoadGroup.DoChan(stubId, func() (interface{}, error) {
-		loadCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), podStubLoadTimeout)
-		defer cancel()
-		return s.backendRepo.GetStubByExternalId(loadCtx, stubId)
-	})
-
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	case loaded := <-result:
-		if loaded.Err != nil {
-			return nil, loaded.Err
-		}
+	case loaded := <-s.stubLoadGroup.DoChan(stubId, func() (interface{}, error) {
+		loadCtx, cancel := context.WithTimeout(context.Background(), podStubLoadTimeout)
+		defer cancel()
+		return s.backendRepo.GetStubByExternalId(loadCtx, stubId)
+	}):
 		stub, _ := loaded.Val.(*types.StubWithRelated)
-		return stub, nil
+		return stub, loaded.Err
 	}
 }
 

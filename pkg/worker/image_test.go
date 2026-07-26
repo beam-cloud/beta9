@@ -10,17 +10,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
 
-	"github.com/beam-cloud/beta9/pkg/common"
-	reg "github.com/beam-cloud/beta9/pkg/registry"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/beam-cloud/clip/pkg/clip"
 	clipStorage "github.com/beam-cloud/clip/pkg/storage"
-	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/rs/zerolog"
 	zerologlog "github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
@@ -40,138 +36,6 @@ func TestImageLayerPrepareProgressLoggerEmitsAggregateUpdates(t *testing.T) {
 	require.Contains(t, logs, "Preparing 4 image layers (8 concurrent)")
 	require.Contains(t, logs, "Prepared 4 image layers (4.0 MiB)")
 	require.NotContains(t, logs, "1/4 ready", "rapid per-layer updates should be coalesced")
-}
-
-func TestWaitForImageMountWaitsForMountInfo(t *testing.T) {
-	var mounted atomic.Bool
-	go func() {
-		time.Sleep(10 * time.Millisecond)
-		mounted.Store(true)
-	}()
-
-	err := waitForImageMount(
-		context.Background(),
-		"/images/test",
-		make(chan error),
-		func(string) bool { return mounted.Load() },
-		func(string) error { return nil },
-		100*time.Millisecond,
-	)
-
-	require.NoError(t, err)
-}
-
-func TestWaitForImageMountReturnsServerError(t *testing.T) {
-	serverErrors := make(chan error, 1)
-	serverErrors <- errors.New("fuse failed")
-
-	err := waitForImageMount(
-		context.Background(),
-		"/images/test",
-		serverErrors,
-		func(string) bool { return false },
-		func(string) error { return nil },
-		100*time.Millisecond,
-	)
-
-	require.ErrorContains(t, err, "fuse failed")
-}
-
-func TestWaitForImageMountTimesOut(t *testing.T) {
-	err := waitForImageMount(
-		context.Background(),
-		"/images/test",
-		make(chan error),
-		func(string) bool { return false },
-		func(string) error { return nil },
-		15*time.Millisecond,
-	)
-
-	require.ErrorContains(t, err, "was not ready")
-}
-
-func TestWatchImageMountRemovesStoppedServer(t *testing.T) {
-	client := &ImageClient{mountedFuseServers: common.NewSafeMap[*fuse.Server]()}
-	serverErrors := make(chan error)
-	client.mountedFuseServers.Set("image", nil)
-	close(serverErrors)
-
-	client.watchImageMount("image", nil, serverErrors)
-
-	require.False(t, client.mountedImageReady("image"))
-}
-
-func TestDirectSandboxArchivePullOnlyUsesRemoteMetadataArchive(t *testing.T) {
-	request := &types.ContainerRequest{
-		Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)}},
-	}
-	client := &ImageClient{registry: &reg.ImageRegistry{ImageFileExtension: reg.RemoteImageFileExtension}}
-	require.True(t, client.directSandboxArchivePull(request))
-
-	client.registry.ImageFileExtension = reg.LocalImageFileExtension
-	require.False(t, client.directSandboxArchivePull(request))
-
-	request.Stub.Type = types.StubType(types.StubTypeFunction)
-	client.registry.ImageFileExtension = reg.RemoteImageFileExtension
-	require.False(t, client.directSandboxArchivePull(request))
-}
-
-func TestPullLazyMountedImageReportsCachedContentForNewStub(t *testing.T) {
-	v2Info, ok := ociStorageInfo(testClipV2Metadata())
-	require.True(t, ok)
-	tests := []struct {
-		name   string
-		kind   types.CacheContentKind
-		report requiredContentReport
-	}{
-		{
-			name: "v2",
-			kind: types.CacheContentKindClipV2,
-			report: requiredContentReport{
-				kind:  types.CacheContentKindClipV2,
-				items: ociRequiredContentItems("warm-image", v2Info),
-			},
-		},
-		{
-			name: "v1",
-			kind: types.CacheContentKindClipV1,
-			report: requiredContentReport{
-				kind: types.CacheContentKindClipV1,
-				items: []types.CacheRequiredContentItem{{
-					Hash:       "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-					RoutingKey: "/images/warm-image.clip",
-					ImageID:    "warm-image",
-					Kind:       types.CacheContentKindClipV1,
-				}},
-			},
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			events := &fakeEventRepo{}
-			reporter := newTestReporter(events)
-			client := &ImageClient{
-				contentReporter:    reporter,
-				mountedFuseServers: common.NewSafeMap[*fuse.Server](),
-				requiredContent:    common.NewSafeMap[requiredContentReport](),
-			}
-			client.mountedFuseServers.Set("warm-image", nil)
-			client.requiredContent.Set("warm-image", test.report)
-
-			_, err := client.PullLazy(context.Background(), &types.ContainerRequest{
-				ImageId:     "warm-image",
-				WorkspaceId: "workspace",
-				StubId:      "new-stub",
-			}, nil)
-			require.NoError(t, err)
-
-			reporter.flush()
-			require.Len(t, events.pushed, 1)
-			require.Equal(t, test.kind, events.pushed[0].Kind)
-			require.Len(t, events.pushed[0].Items, len(test.report.items))
-		})
-	}
 }
 
 func TestImageIndexProgressReporterEmitsMonotonicAggregateUpdates(t *testing.T) {

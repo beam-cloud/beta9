@@ -26,7 +26,7 @@ type plannedSchedule struct {
 }
 
 type containerStatusBatchReader interface {
-	GetContainerStatuses(containerIds []string) (map[string]types.ContainerStatus, map[string]error)
+	GetContainerStatuses(containerIds []string) (map[string]types.ContainerStatus, error)
 }
 
 func newSchedulingBatch(scheduler *Scheduler, workers []*types.Worker, batchSize int) *schedulingBatch {
@@ -46,20 +46,21 @@ func (s *Scheduler) processRequestBatch(requests []*types.ContainerRequest, work
 
 func (b *schedulingBatch) plan(requests []*types.ContainerRequest) {
 	var statuses map[string]types.ContainerStatus
-	var failures map[string]error
 	reader, batched := b.scheduler.containerRepo.(containerStatusBatchReader)
 	if batched {
 		containerIds := make([]string, 0, len(requests))
 		for _, request := range requests {
 			containerIds = append(containerIds, request.ContainerId)
 		}
-		statuses, failures = reader.GetContainerStatuses(containerIds)
+		var err error
+		statuses, err = reader.GetContainerStatuses(containerIds)
+		batched = err == nil
 	}
 
 	for _, request := range requests {
 		attempt := newSchedulingAttempt(b.scheduler, request, b.workers)
 		runnable := false
-		if batched && failures[request.ContainerId] == nil {
+		if batched {
 			runnable = statuses[request.ContainerId] == types.ContainerStatusPending
 		} else {
 			runnable = attempt.runnable()

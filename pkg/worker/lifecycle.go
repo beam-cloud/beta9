@@ -546,7 +546,7 @@ func requiresPostBuildImageMaterialization(request *types.ContainerRequest, clip
 
 func (s *Worker) pullLazyWithMetrics(ctx context.Context, request *types.ContainerRequest, phase string, outputLogger *slog.Logger) (time.Duration, error) {
 	phaseStart := time.Now()
-	elapsed, err := s.imageClient.PullLazy(ctx, request, outputLogger)
+	elapsed, err := s.imageClient.PullLazy(ctx, request, outputLogger, request.CheckpointEnabled || request.Stub.Type.IsDeployment())
 	metrics.RecordWorkerStartupPhase(phase, time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 	spanID := types.ContainerLifecycleImageLoad
 	if phase != "pull_lazy" && phase != "pull_lazy_after_build" {
@@ -1574,12 +1574,7 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 		case <-ctx.Done():
 			return -1, ctx.Err()
 		}
-		var releaseOnce sync.Once
-		releaseStartupSlot = func() {
-			releaseOnce.Do(func() {
-				<-s.containerStartSem
-			})
-		}
+		releaseStartupSlot = sync.OnceFunc(func() { <-s.containerStartSem })
 		defer releaseStartupSlot()
 	}
 	metrics.RecordWorkerStartupPhase("worker_start_queue_wait", time.Since(phaseStart), request, map[string]string{
