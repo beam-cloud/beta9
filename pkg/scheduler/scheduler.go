@@ -371,29 +371,20 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 
 	request.Timestamp = time.Now()
 
-	containerState, err := s.containerRepo.GetContainerState(request.ContainerId)
-	if err == nil {
-		switch types.ContainerStatus(containerState.Status) {
-		case types.ContainerStatusPending, types.ContainerStatusRunning:
-			return &types.ContainerAlreadyScheduledError{Msg: "a container with this id is already running or pending"}
-		default:
-			// Do nothing
-		}
-	}
-	s.attachLatestCheckpoint(request)
-
-	requestedEvent := request.Clone()
-	go s.schedulerUsageMetrics.CounterIncContainerRequested(requestedEvent)
-
 	quota, err := s.getConcurrencyLimit(request)
 	if err != nil {
 		return err
 	}
 
-	err = s.containerRepo.SetContainerStateWithConcurrencyLimit(quota, request)
+	err = s.containerRepo.CreateContainerStateWithConcurrencyLimit(quota, request)
 	if err != nil {
 		return err
 	}
+
+	s.attachLatestCheckpoint(request)
+
+	requestedEvent := request.Clone()
+	go s.schedulerUsageMetrics.CounterIncContainerRequested(requestedEvent)
 
 	queueStart := time.Now()
 	err = s.addRequestToBacklog(request)
@@ -598,7 +589,12 @@ func (s *Scheduler) StartProcessingRequests() {
 
 		requests, err := s.requestBacklog.PopN(requestProcessingBatchSize)
 		if err != nil {
-			time.Sleep(requestProcessingInterval)
+			select {
+			case <-s.ctx.Done():
+				return
+			case <-s.requestBacklog.ready:
+			case <-time.After(requestProcessingInterval):
+			}
 			continue
 		}
 
@@ -1436,8 +1432,10 @@ func workerFreeCapacityScore(worker *types.Worker, request *types.ContainerReque
 	return score
 }
 
-const maxScheduleRetryCount = 120
-const maxScheduleRetryDuration = 20 * time.Minute
+const (
+	maxScheduleRetryCount    = 120
+	maxScheduleRetryDuration = 20 * time.Minute
+)
 
 func (s *Scheduler) addRequestToBacklog(request *types.ContainerRequest) error {
 	normalizeGPURequest(request)

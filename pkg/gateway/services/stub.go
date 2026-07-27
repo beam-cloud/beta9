@@ -630,33 +630,22 @@ func (gws *GatewayService) stubResourcePolicy(ctx context.Context, workspaceID s
 	return policy, nil
 }
 
-func (p stubResourcePolicy) privatePoolOnly() bool {
-	return p.privatePoolTargeted && (p.fallback == types.PrivatePoolFallbackFail || p.fallback == types.PrivatePoolFallbackWait)
-}
-
 func (p stubResourcePolicy) checkManagedGPUCapacity() bool {
-	return !p.privatePoolOnly()
+	return !p.privatePoolTargeted
 }
 
 func (p stubResourcePolicy) maxReplicasLimit(defaultLimit uint64) uint64 {
-	if p.privatePoolOnly() {
+	if p.privatePoolTargeted {
 		return 0
 	}
 	return defaultLimit
 }
 
 func (p stubResourcePolicy) validateManagedLimits(gws *GatewayService, in *pb.GetOrCreateStubRequest, workspace *types.Workspace) string {
-	if p.privatePoolOnly() {
-		return ""
-	}
-	errMsg := gws.managedStubLimitError(in, workspace)
-	if errMsg == "" {
-		return ""
-	}
 	if p.privatePoolTargeted {
-		return "private pool workloads that exceed managed stub limits must set pool fallback to fail or wait"
+		return ""
 	}
-	return errMsg
+	return gws.managedStubLimitError(in, workspace)
 }
 
 func privatePoolFallback(pool *types.PoolConfig) string {
@@ -1027,6 +1016,12 @@ func (gws *GatewayService) hasStubAccess(ctx context.Context, authInfo *auth.Aut
 
 func (gws *GatewayService) GetURL(ctx context.Context, in *pb.GetURLRequest) (*pb.GetURLResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
+	if in.IsShell && !auth.HasInteractivePermission(authInfo) {
+		return &pb.GetURLResponse{
+			Ok:     false,
+			ErrMsg: "Unauthorized access",
+		}, nil
+	}
 
 	stub, err := gws.backendRepo.GetStubByExternalId(ctx, in.StubId)
 	if err != nil || stub == nil {
@@ -1052,7 +1047,11 @@ func (gws *GatewayService) GetURL(ctx context.Context, in *pb.GetURLRequest) (*p
 		}, nil
 	}
 
-	if in.UrlType == "" {
+	if in.IsShell {
+		// Shell HTTP hijacking is registered on the path router. Host-style
+		// URLs bypass that route and cannot establish a tunnel.
+		in.UrlType = common.InvokeUrlTypePath
+	} else if in.UrlType == "" {
 		in.UrlType = gws.appConfig.GatewayService.InvokeURLType
 	}
 

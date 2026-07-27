@@ -12,7 +12,7 @@ import (
 )
 
 func NewRequestBacklogForTest(rdb *common.RedisClient) *RequestBacklog {
-	return &RequestBacklog{rdb: rdb}
+	return NewRequestBacklog(rdb)
 }
 
 func TestRequestBacklogOrdering(t *testing.T) {
@@ -34,6 +34,11 @@ func TestRequestBacklogOrdering(t *testing.T) {
 	// Push them in out of order
 	if err := rb.Push(req2); err != nil {
 		t.Fatalf("Could not push request: %v", err)
+	}
+	select {
+	case <-rb.ready:
+	default:
+		t.Fatal("ready push did not wake scheduler")
 	}
 	if err := rb.Push(req1); err != nil {
 		t.Fatalf("Could not push request: %v", err)

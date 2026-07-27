@@ -27,6 +27,16 @@ type logAttachmentStream struct {
 	attached bool
 }
 
+type execCapturingRuntime struct {
+	mockRuntime
+	processes []specs.Process
+}
+
+func (r *execCapturingRuntime) Exec(_ context.Context, _ string, process specs.Process, _ *betaruntime.ExecOpts) error {
+	r.processes = append(r.processes, process)
+	return nil
+}
+
 func (s *logAttachmentStream) SendHeader(metadata.MD) error {
 	s.attached = true
 	return nil
@@ -45,6 +55,111 @@ func TestContainerStreamLogsAcknowledgesAttachment(t *testing.T) {
 
 	require.NoError(t, server.ContainerStreamLogs(&pb.ContainerStreamLogsRequest{ContainerId: "container-id"}, stream))
 	require.True(t, stream.attached)
+}
+
+func TestContainerExecDoesNotMutateBaseOrInstanceProcess(t *testing.T) {
+	containerId := "container-exec-isolated"
+	instanceEnv := []string{"INSTANCE=original"}
+	capturingRuntime := &execCapturingRuntime{}
+	server := &ContainerRuntimeServer{
+		baseConfigSpec: specs.Spec{
+			Process: &specs.Process{
+				Args: []string{"base-command"},
+				Cwd:  "/base",
+				Env:  []string{"BASE=original"},
+			},
+		},
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		runtime:            capturingRuntime,
+	}
+	server.containerInstances.Set(containerId, &ContainerInstance{
+		Spec: &specs.Spec{
+			Process: &specs.Process{
+				Cwd: "/workspace",
+				Env: instanceEnv,
+			},
+		},
+		Request: &types.ContainerRequest{},
+	})
+
+	response, err := server.ContainerExec(context.Background(), &pb.ContainerExecRequest{
+		ContainerId: containerId,
+		Cmd:         "echo isolated",
+		Env:         []string{"REQUEST=isolated"},
+	})
+
+	require.NoError(t, err)
+	require.True(t, response.Ok)
+	require.Len(t, capturingRuntime.processes, 1)
+	require.Equal(t, []string{"base-command"}, server.baseConfigSpec.Process.Args)
+	require.Equal(t, "/base", server.baseConfigSpec.Process.Cwd)
+	require.Equal(t, []string{"BASE=original"}, server.baseConfigSpec.Process.Env)
+	require.Equal(t, []string{"INSTANCE=original"}, instanceEnv)
+
+	capturingRuntime.processes[0].Args[0] = "mutated-command"
+	capturingRuntime.processes[0].Env[0] = "INSTANCE=mutated"
+	require.Equal(t, []string{"base-command"}, server.baseConfigSpec.Process.Args)
+	require.Equal(t, []string{"BASE=original"}, server.baseConfigSpec.Process.Env)
+	require.Equal(t, []string{"INSTANCE=original"}, instanceEnv)
+}
+
+func TestContainerExecProcessesDoNotShareMutableState(t *testing.T) {
+	containerId := "container-exec-repeated"
+	instanceEnv := make([]string, 1, 4)
+	instanceEnv[0] = "INSTANCE=shared-source"
+	instanceProcess := &specs.Process{
+		Cwd: "/first",
+		Env: instanceEnv,
+	}
+	capturingRuntime := &execCapturingRuntime{}
+	server := &ContainerRuntimeServer{
+		baseConfigSpec: specs.Spec{
+			Process: &specs.Process{
+				Args: []string{"base-command"},
+				Cwd:  "/base",
+				Env:  []string{"BASE=original"},
+			},
+		},
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		runtime:            capturingRuntime,
+	}
+	server.containerInstances.Set(containerId, &ContainerInstance{
+		Spec:    &specs.Spec{Process: instanceProcess},
+		Request: &types.ContainerRequest{},
+	})
+
+	first, err := server.ContainerExec(context.Background(), &pb.ContainerExecRequest{
+		ContainerId: containerId,
+		Cmd:         "echo first",
+		Env:         []string{"REQUEST=first"},
+	})
+	require.NoError(t, err)
+	require.True(t, first.Ok)
+
+	instanceProcess.Cwd = "/second"
+	second, err := server.ContainerExec(context.Background(), &pb.ContainerExecRequest{
+		ContainerId: containerId,
+		Cmd:         "echo second",
+		Env:         []string{"REQUEST=second"},
+	})
+	require.NoError(t, err)
+	require.True(t, second.Ok)
+
+	require.Len(t, capturingRuntime.processes, 2)
+	firstProcess := &capturingRuntime.processes[0]
+	secondProcess := &capturingRuntime.processes[1]
+	require.Equal(t, []string{"sh", "-c", "echo first"}, firstProcess.Args)
+	require.Equal(t, "/first", firstProcess.Cwd)
+	require.Equal(t, []string{"INSTANCE=shared-source", "REQUEST=first"}, firstProcess.Env)
+	require.Equal(t, []string{"sh", "-c", "echo second"}, secondProcess.Args)
+	require.Equal(t, "/second", secondProcess.Cwd)
+	require.Equal(t, []string{"INSTANCE=shared-source", "REQUEST=second"}, secondProcess.Env)
+
+	firstProcess.Args[0] = "mutated"
+	firstProcess.Env[0] = "INSTANCE=mutated"
+	require.Equal(t, []string{"sh", "-c", "echo second"}, secondProcess.Args)
+	require.Equal(t, []string{"INSTANCE=shared-source", "REQUEST=second"}, secondProcess.Env)
+	require.Equal(t, []string{"INSTANCE=shared-source"}, instanceEnv)
 }
 
 func TestWaitForSandboxProcessManagerDoesNotProceedBeforeReadySignal(t *testing.T) {

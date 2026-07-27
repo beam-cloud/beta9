@@ -36,17 +36,18 @@ func newRouteProxy(client pb.GatewayServiceClient, agentToken string, listener n
 		stderr = io.Discard
 	}
 	return &routeProxy{
-		agentToken:      agentToken,
-		client:          client,
-		listener:        listener,
-		proxyTarget:     proxyTarget,
-		workers:         workers,
-		stdout:          stdout,
-		stderr:          stderr,
-		routes:          map[string]string{},
-		readinessChecks: map[string]string{},
-		failureCounts:   map[string]int{},
-		statusSlots:     make(chan struct{}, routeStatusConcurrency),
+		agentToken:       agentToken,
+		client:           client,
+		listener:         listener,
+		proxyTarget:      proxyTarget,
+		workers:          workers,
+		stdout:           stdout,
+		stderr:           stderr,
+		routes:           map[string]string{},
+		readinessChecks:  map[string]string{},
+		readinessPending: map[string]string{},
+		failureCounts:    map[string]int{},
+		statusSlots:      make(chan struct{}, routeStatusConcurrency),
 	}
 }
 
@@ -63,6 +64,10 @@ type routeProxy struct {
 
 	// routeID -> local target currently being probed for readiness.
 	readinessChecks map[string]string
+
+	// routeID -> local target that must be probed again after the active check.
+	// A repeated opening snapshot can race the active check's ready update.
+	readinessPending map[string]string
 
 	// routeID -> consecutive local dial failures.
 	failureCounts map[string]int
@@ -163,8 +168,12 @@ func (p *routeProxy) setRoute(routeID, localTarget string) {
 	if p.readinessChecks == nil {
 		p.readinessChecks = map[string]string{}
 	}
+	if p.readinessPending == nil {
+		p.readinessPending = map[string]string{}
+	}
 	if previous := p.routes[routeID]; previous != "" && previous != localTarget {
 		delete(p.readinessChecks, routeID)
+		delete(p.readinessPending, routeID)
 	}
 	p.routes[routeID] = localTarget
 	p.mu.Unlock()
@@ -174,6 +183,7 @@ func (p *routeProxy) deleteRoute(routeID string) {
 	p.mu.Lock()
 	delete(p.routes, routeID)
 	delete(p.readinessChecks, routeID)
+	delete(p.readinessPending, routeID)
 	delete(p.failureCounts, routeID)
 	p.mu.Unlock()
 }
@@ -185,6 +195,7 @@ func (p *routeProxy) deleteRoutesNotIn(seen map[string]struct{}) {
 		if _, ok := seen[routeID]; !ok {
 			delete(p.routes, routeID)
 			delete(p.readinessChecks, routeID)
+			delete(p.readinessPending, routeID)
 			delete(p.failureCounts, routeID)
 		}
 	}
@@ -204,9 +215,11 @@ func (p *routeProxy) ensureRouteReady(ctx context.Context, routeID, localTarget 
 		return
 	}
 	if p.readinessChecks[routeID] == localTarget {
+		p.readinessPending[routeID] = localTarget
 		p.mu.Unlock()
 		return
 	}
+	delete(p.readinessPending, routeID)
 	p.readinessChecks[routeID] = localTarget
 	p.mu.Unlock()
 
@@ -214,7 +227,7 @@ func (p *routeProxy) ensureRouteReady(ctx context.Context, routeID, localTarget 
 }
 
 func (p *routeProxy) waitForRouteReady(ctx context.Context, routeID, localTarget string) {
-	defer p.clearReadinessCheck(routeID, localTarget)
+	defer p.finishReadinessCheck(ctx, routeID, localTarget)
 
 	statusRetry := 100 * time.Millisecond
 	for {
@@ -274,6 +287,29 @@ func (p *routeProxy) clearReadinessCheck(routeID, localTarget string) {
 	defer p.mu.Unlock()
 	if p.readinessChecks[routeID] == localTarget {
 		delete(p.readinessChecks, routeID)
+	}
+	if p.readinessPending[routeID] == localTarget {
+		delete(p.readinessPending, routeID)
+	}
+}
+
+func (p *routeProxy) finishReadinessCheck(ctx context.Context, routeID, localTarget string) {
+	p.mu.Lock()
+	if p.readinessChecks[routeID] != localTarget {
+		p.mu.Unlock()
+		return
+	}
+	delete(p.readinessChecks, routeID)
+
+	recheck := p.routes[routeID] == localTarget && p.readinessPending[routeID] == localTarget
+	delete(p.readinessPending, routeID)
+	if recheck {
+		p.readinessChecks[routeID] = localTarget
+	}
+	p.mu.Unlock()
+
+	if recheck {
+		go p.waitForRouteReady(ctx, routeID, localTarget)
 	}
 }
 

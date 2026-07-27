@@ -546,7 +546,7 @@ func requiresPostBuildImageMaterialization(request *types.ContainerRequest, clip
 
 func (s *Worker) pullLazyWithMetrics(ctx context.Context, request *types.ContainerRequest, phase string, outputLogger *slog.Logger) (time.Duration, error) {
 	phaseStart := time.Now()
-	elapsed, err := s.imageClient.PullLazy(ctx, request, outputLogger)
+	elapsed, err := s.imageClient.PullLazy(ctx, request, outputLogger, request.CheckpointEnabled || request.Stub.Type.IsDeployment())
 	metrics.RecordWorkerStartupPhase(phase, time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 	spanID := types.ContainerLifecycleImageLoad
 	if phase != "pull_lazy" && phase != "pull_lazy_after_build" {
@@ -1367,23 +1367,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	// Log metrics
 	go s.workerUsageMetrics.EmitContainerUsage(ctx, request)
 
-	phaseStart = time.Now()
-	releaseStartupSlot := func() {}
-	if s.containerStartSem != nil {
-		s.containerStartSem <- struct{}{}
-		var releaseOnce sync.Once
-		releaseStartupSlot = func() {
-			releaseOnce.Do(func() {
-				<-s.containerStartSem
-			})
-		}
-		defer releaseStartupSlot()
-	}
-	metrics.RecordWorkerStartupPhase("worker_start_queue_wait", time.Since(phaseStart), request, map[string]string{
-		"limit": fmt.Sprintf("%d", s.containerStartLimit),
-	})
-	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleStartQueueWait, phaseStart, true, map[string]string{"limit": fmt.Sprintf("%d", s.containerStartLimit)})
-
 	startedChan := make(chan int, 1)
 	checkpointPIDChan := make(chan int, 1)
 	monitorPIDChan := make(chan int, 1)
@@ -1401,8 +1384,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		if !ok {
 			return
 		}
-
-		releaseStartupSlot()
 
 		monitorPIDChan <- pid
 		checkpointPIDChan <- pid
@@ -1585,6 +1566,22 @@ func eventStopReason(stopReason types.StopContainerReason) string {
 }
 
 func (s *Worker) runContainer(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, outputWriter *common.OutputWriter, startedChan chan int, checkpointPIDChan chan int, startupStartedAt time.Time, startupPortBindings []PortBinding, filesystemRestore *checkpointFilesystemRestore) (int, error) {
+	phaseStart := time.Now()
+	releaseStartupSlot := func() {}
+	if s.containerStartSem != nil {
+		select {
+		case s.containerStartSem <- struct{}{}:
+		case <-ctx.Done():
+			return -1, ctx.Err()
+		}
+		releaseStartupSlot = sync.OnceFunc(func() { <-s.containerStartSem })
+		defer releaseStartupSlot()
+	}
+	metrics.RecordWorkerStartupPhase("worker_start_queue_wait", time.Since(phaseStart), request, map[string]string{
+		"limit": fmt.Sprintf("%d", s.containerStartLimit),
+	})
+	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleStartQueueWait, phaseStart, true, map[string]string{"limit": fmt.Sprintf("%d", s.containerStartLimit)})
+
 	instance, exists := s.containerInstances.Get(request.ContainerId)
 	if !exists {
 		return -1, fmt.Errorf("container instance not found")
@@ -1654,6 +1651,7 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 	runtimeStart := time.Now()
 
 	handleRuntimeStarted := func(pid int) {
+		releaseStartupSlot()
 		if err := s.publishContainerAddresses(ctx, request, startupPortBindings); err != nil {
 			log.Error().Err(err).Str("container_id", request.ContainerId).Msg("failed to publish container address")
 			s.stopContainer(request.ContainerId, false)
@@ -1687,6 +1685,7 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 
 	go func() {
 		defer close(runtimeStartedHandled)
+		defer releaseStartupSlot()
 		waitForRuntimeStarted(ctx, runtimeStartedChan, runtimeStartedDone, handleRuntimeStarted)
 	}()
 

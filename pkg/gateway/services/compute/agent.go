@@ -395,6 +395,17 @@ func (s *Service) StreamAgent(in *pb.StreamAgentRequest, stream pb.GatewayServic
 		return stream.Send(&pb.StreamAgentResponse{Ok: true, Routes: routes, Slots: slots})
 	}
 
+	// Subscribe before the initial snapshot so a route registration cannot be
+	// lost between reading Redis and starting the event listener. Events that
+	// race the snapshot stay buffered and trigger a second reconciliation.
+	events := make(chan common.KeyEvent, 32)
+	if s.keyEventManager != nil {
+		revisionKey := agentSnapshotRevisionKey(agentState)
+		if err := s.keyEventManager.ListenForPublishedPattern(ctx, revisionKey, events); err != nil {
+			return err
+		}
+	}
+
 	for {
 		if err := sendSnapshot(); err != nil {
 			if !isAgentSnapshotTransient(err) {
@@ -410,14 +421,6 @@ func (s *Service) StreamAgent(in *pb.StreamAgentRequest, stream pb.GatewayServic
 			}
 		}
 		break
-	}
-
-	events := make(chan common.KeyEvent, 32)
-	if s.keyEventManager != nil {
-		revisionKey := agentSnapshotRevisionKey(agentState)
-		if err := s.keyEventManager.ListenForPublishedPattern(ctx, revisionKey, events); err != nil {
-			return err
-		}
 	}
 
 	ticker := time.NewTicker(agentStreamRefresh)

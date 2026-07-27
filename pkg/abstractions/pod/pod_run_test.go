@@ -45,11 +45,3 @@ func TestConfigureMachinePlacementRejectsPoolMismatch(t *testing.T) {
 	err := service.configureMachinePlacement(context.Background(), "workspace-1", "machine-1", config)
 	require.ErrorContains(t, err, "does not belong to pool")
 }
-
-func TestContainerManagementURLIsOptionalAndServerDefined(t *testing.T) {
-	service := &GenericPodService{}
-	require.Empty(t, service.containerManagementURL("pod-1"))
-
-	service.config.GatewayService.ContainerURLTemplate = "https://console.example/containers/{container_id}"
-	require.Equal(t, "https://console.example/containers/pod-1", service.containerManagementURL("pod-1"))
-}

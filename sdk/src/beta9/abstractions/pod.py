@@ -1,5 +1,6 @@
 import os
 import shlex
+import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
@@ -19,8 +20,10 @@ from ..clients.gateway import (
     DeployStubRequest,
     DeployStubResponse,
     GatewayServiceStub,
+    ListTasksRequest,
     StopContainerRequest,
     StopContainerResponse,
+    StringList,
 )
 from ..clients.pod import (
     CreatePodRequest,
@@ -30,7 +33,15 @@ from ..clients.pod import (
 from ..config import ConfigContext, get_settings
 from ..runner.common import USER_CODE_DIR
 from ..sync import FileSyncer
-from ..type import DurableDisk, GpuType, GpuTypeAlias, LLMConfig, Pool, ServingConfig
+from ..type import (
+    DurableDisk,
+    GpuType,
+    GpuTypeAlias,
+    LLMConfig,
+    Pool,
+    ServingConfig,
+    TaskStatus,
+)
 from ..utils import get_init_args_kwargs
 from .base import BaseAbstraction
 
@@ -43,13 +54,16 @@ class PodInstance(BaseAbstraction):
     Attributes:
         container_id: The unique ID of the created container.
         url: The URL for accessing the container over HTTP (if ports were exposed).
+        task_id: The ID of the task tracking this run (if the run is task-tracked).
+        app_id: The ID of the app this run belongs to.
     """
 
     container_id: str
     url: str
     ok: bool = field(default=False)
     error_msg: str = field(default="")
-    management_url: str = field(default="")
+    task_id: str = field(default="")
+    app_id: str = field(default="")
     gateway_stub: "GatewayServiceStub" = field(init=False)
 
     def __post_init__(self):
@@ -64,6 +78,43 @@ class PodInstance(BaseAbstraction):
             StopContainerRequest(container_id=self.container_id)
         )
         return res.ok
+
+    def status(self) -> TaskStatus:
+        """Return the current status of this Pod run's task."""
+
+        if not self.task_id:
+            raise RuntimeError("Pod instance does not have a task ID")
+        response = self.gateway_stub.list_tasks(
+            ListTasksRequest(
+                filters={"id": StringList(values=[self.task_id])},
+                limit=1,
+            )
+        )
+        if not response.ok:
+            raise RuntimeError(response.err_msg or "Failed to retrieve Pod task status")
+        if not response.tasks:
+            raise RuntimeError(f"Pod task not found: {self.task_id}")
+        return TaskStatus(response.tasks[0].status.upper())
+
+    def wait(self, timeout: float = 120, poll_interval: float = 1) -> TaskStatus:
+        """Wait for this Pod run to reach a terminal task status."""
+
+        if timeout <= 0:
+            raise ValueError("timeout must be greater than zero")
+        if poll_interval <= 0:
+            raise ValueError("poll_interval must be greater than zero")
+
+        deadline = time.monotonic() + timeout
+        while True:
+            status = self.status()
+            if status.is_complete():
+                return status
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(
+                    f"Pod task {self.task_id} did not complete within {timeout:g} seconds"
+                )
+            time.sleep(min(poll_interval, remaining))
 
 
 class Pod(RunnerAbstraction, DeployableMixin):
@@ -275,7 +326,8 @@ class Pod(RunnerAbstraction, DeployableMixin):
             url=url,
             ok=create_response.ok,
             error_msg=create_response.error_msg,
-            management_url=create_response.management_url,
+            task_id=create_response.task_id,
+            app_id=create_response.app_id,
         )
 
     def deploy(
@@ -312,6 +364,7 @@ class Pod(RunnerAbstraction, DeployableMixin):
             terminal.error(
                 "You must specify an app name (either in the decorator or via the --name argument)."
             )
+            return {}, False
 
         is_custom_image = self._uses_custom_image_entrypoint()
 
@@ -445,7 +498,7 @@ app = Pod(
         machine_id: Optional[str] = None,
     ):
         self.authorized = True
-        super().shell(
+        return super().shell(
             url_type=url_type,
             sync_dir=sync_dir,
             container_id=container_id,

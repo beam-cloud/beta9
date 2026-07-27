@@ -3,6 +3,7 @@ package common
 import (
 	"context"
 	"io"
+	"net"
 	"testing"
 	"time"
 
@@ -11,6 +12,19 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 )
+
+func TestContainerClientWithDialerDoesNotBlockSharedCacheFill(t *testing.T) {
+	dialer := func(ctx context.Context, _ string) (net.Conn, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+
+	started := time.Now()
+	client, err := NewContainerClientWithDialer(context.Background(), "route://worker", "token", dialer)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = client.Close() })
+	require.Less(t, time.Since(started), 100*time.Millisecond)
+}
 
 type attachmentClientStream struct {
 	pb.ContainerService_ContainerStreamLogsClient

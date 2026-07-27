@@ -1,6 +1,8 @@
 package pod
 
 import (
+	"net/http"
+
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	apiv1 "github.com/beam-cloud/beta9/pkg/api/v1"
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -81,14 +83,30 @@ func (g *podGroup) PodRun(ctx echo.Context) error {
 		return apiv1.HTTPNotFound()
 	}
 
-	_, err = g.ps.run(
+	if g.ps.trackRunAsTask(stub) {
+		podTask, err := g.ps.taskDispatcher.SendAndExecute(ctx.Request().Context(), string(types.ExecutorContainer), cc.AuthInfo, stub.ExternalId, &types.TaskPayload{}, podRunTaskPolicy(), cc.AuthInfo, stub, runOptions{})
+		if err != nil {
+			return err
+		}
+
+		metadata := podTask.Metadata()
+		return ctx.JSON(http.StatusOK, map[string]string{
+			"container_id": metadata.ContainerId,
+			"task_id":      metadata.TaskId,
+		})
+	}
+
+	containerId, err := g.ps.run(
 		ctx.Request().Context(),
 		cc.AuthInfo,
 		stub,
-		nil,
-		nil,
-		"",
+		runOptions{},
 	)
+	if err != nil {
+		return err
+	}
 
-	return err
+	return ctx.JSON(http.StatusOK, map[string]string{
+		"container_id": containerId,
+	})
 }

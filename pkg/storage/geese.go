@@ -366,7 +366,7 @@ func (s *GeeseStorage) Mount(localPath string) error {
 		Uint64("min_file_size_for_hash_kb", flags.MinFileSizeForHashKB).
 		Bool("cache_through", flags.CacheThroughModeEnabled).
 		Bool("external_cache", s.cacheClient != nil).
-		Bool("cache_direct_io", s.config.CacheDirectIO).
+		Bool("cache_direct_io", false).
 		Bool("staged_write", flags.StagedWriteModeEnabled).
 		Msg("geesefs mount performance config")
 
@@ -374,7 +374,7 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	if s.cacheClient != nil {
 		flags.ExternalCacheClient = newGeeseContentCache(s.cacheClient, s.volumeCacheScope)
 		flags.ExternalCacheStreamingEnabled = s.config.CacheStreamingEnabled
-		flags.ExternalCacheDirectIO = s.config.CacheDirectIO
+		flags.ExternalCacheDirectIO = false
 	}
 
 	mountCtx, cancel := context.WithTimeout(context.Background(), defaultGeeseFSMountTimeout)

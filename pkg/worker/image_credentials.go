@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"strings"
+	"sync"
 	"time"
 
 	reg "github.com/beam-cloud/beta9/pkg/registry"
@@ -18,7 +19,19 @@ func (c *ImageClient) gatewayCredentialProviderForImage(ctx context.Context, ima
 	if creds == nil || creds.registryCredentials == "" {
 		return nil
 	}
-	return c.parseAndCreateProvider(ctx, creds.registryCredentials, registry, imageID, "gateway-vended")
+	provider := c.parseAndCreateProvider(ctx, creds.registryCredentials, registry, imageID, "gateway-vended")
+	if provider == nil {
+		return nil
+	}
+	return &gatewayRegistryCredentialProvider{
+		client:         c,
+		request:        request,
+		imageID:        imageID,
+		registry:       registry,
+		provider:       provider,
+		credentialsAt:  creds.fetchedAt,
+		preventAmbient: c.brokeredImageAccessRequest(request),
+	}
 }
 
 func (c *ImageClient) gatewayRegistryCredentials(ctx context.Context, registry string, request *types.ContainerRequest) string {
@@ -78,9 +91,48 @@ func (c *ImageClient) originCredentials(ctx context.Context, request *types.Cont
 		fetchedAt:             time.Now(),
 	}
 	c.originCredsMu.Lock()
+	if c.originCredsCache == nil {
+		c.originCredsCache = make(map[string]*originCredentials)
+	}
 	c.originCredsCache[key] = creds
 	c.originCredsMu.Unlock()
 	return creds
+}
+
+type gatewayRegistryCredentialProvider struct {
+	client         *ImageClient
+	request        *types.ContainerRequest
+	imageID        string
+	registry       string
+	mu             sync.Mutex
+	provider       clipCommon.RegistryCredentialProvider
+	credentialsAt  time.Time
+	preventAmbient bool
+}
+
+func (p *gatewayRegistryCredentialProvider) GetCredentials(ctx context.Context, registry, scope string) (*authn.AuthConfig, error) {
+	creds := p.client.originCredentials(ctx, p.request, p.imageID, p.registry)
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if creds != nil && creds.registryCredentials != "" && creds.fetchedAt.After(p.credentialsAt) {
+		if provider := p.client.parseAndCreateProvider(ctx, creds.registryCredentials, p.registry, p.imageID, "gateway-vended refresh"); provider != nil {
+			p.provider = provider
+			p.credentialsAt = creds.fetchedAt
+		}
+	}
+	if p.provider == nil {
+		return nil, clipCommon.ErrNoCredentials
+	}
+	authConfig, err := p.provider.GetCredentials(ctx, registry, scope)
+	if p.preventAmbient && (err != nil || authConfig == nil) {
+		return &authn.AuthConfig{}, nil
+	}
+	return authConfig, err
+}
+
+func (*gatewayRegistryCredentialProvider) Name() string {
+	return "gateway-vended"
 }
 
 func registryFromImageRef(imageRef string) string {

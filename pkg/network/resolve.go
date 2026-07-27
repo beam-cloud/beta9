@@ -15,28 +15,55 @@ func ConnectToHost(ctx context.Context, host string, timeout time.Duration, tail
 	var conn net.Conn = nil
 
 	if tsConfig.Enabled && tailscale != nil && strings.Contains(host, tsConfig.HostName) {
-		// Advisory netmap check: a MagicDNS dial for a peer missing from the
-		// netmap falls back to the system resolver and fails with a misleading
-		// NXDOMAIN, but tsnet.Status can also omit peers that tsnet.Dial can
-		// still reach — so enrich the error rather than gate the dial.
+		dialCtx := ctx
+		cancel := func() {}
+		deadline := time.Time{}
+		if timeout > 0 {
+			dialCtx, cancel = context.WithTimeout(ctx, timeout)
+			deadline = time.Now().Add(timeout)
+		}
+		defer cancel()
+
+		// Dial first because tsnet.Status can omit peers that are nevertheless
+		// reachable. After a fast failure, spend only a bounded part of the
+		// remaining budget enriching the error, then retry the actual dial.
+		dialTimeout := timeout
+		if !deadline.IsZero() {
+			dialTimeout = time.Until(deadline)
+		}
+		conn, dialErr := tailscale.DialContextTimeout(dialCtx, "tcp", host, dialTimeout)
+		if dialErr == nil {
+			return conn, nil
+		}
+
 		var peerErr error
-		if peerHost := tailnetHostFromAddr(host); peerHost != "" {
-			peerWait := tailnetPeerAdvisoryTimeout
-			if timeout > 0 {
-				peerWait = min(peerWait, timeout)
-			}
-			peerErr = tailscale.WaitForPeer(ctx, peerHost, peerWait)
+		remaining := tailnetPeerAdvisoryTimeout
+		if !deadline.IsZero() {
+			remaining = time.Until(deadline)
+		}
+		if peerHost := tailnetHostFromAddr(host); peerHost != "" && remaining > 0 {
+			peerErr = tailscale.WaitForPeer(
+				dialCtx,
+				peerHost,
+				tsnetPeerProbeReserve(remaining),
+			)
 		}
 
-		conn, err := tailscale.DialContextTimeout(ctx, "tcp", host, timeout)
-		if err != nil {
-			if peerErr != nil {
-				return nil, fmt.Errorf("%w; tsnet dial failed: %w", peerErr, err)
+		if !deadline.IsZero() {
+			dialTimeout = time.Until(deadline)
+		}
+		if deadline.IsZero() || dialTimeout > 0 {
+			conn, retryErr := tailscale.DialContextTimeout(dialCtx, "tcp", host, dialTimeout)
+			if retryErr == nil {
+				return conn, nil
 			}
-			return nil, err
+			dialErr = retryErr
 		}
 
-		return conn, err
+		if peerErr != nil {
+			return nil, fmt.Errorf("%w; tsnet dial failed: %w", peerErr, dialErr)
+		}
+		return nil, dialErr
 	}
 
 	dialCtx := ctx
