@@ -364,6 +364,8 @@ func (s *GeeseStorage) Mount(localPath string) error {
 		Int("max_flushers", int(flags.MaxFlushers)).
 		Int("max_parallel_parts", flags.MaxParallelParts).
 		Dur("http_timeout", flags.HTTPTimeout).
+		Dur("metadata_http_timeout", flags.MetadataHTTPTimeout).
+		Int("read_retry_attempts", flags.ReadRetryAttempts).
 		Uint64("multipart_part_size_bytes", flags.PartSizes[0].PartSize).
 		Uint64("min_file_size_for_hash_kb", flags.MinFileSizeForHashKB).
 		Bool("cache_through", flags.CacheThroughModeEnabled).
