@@ -8,16 +8,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestDefaultWorkspaceGeeseReadPolicyIsBounded(t *testing.T) {
+func TestDefaultWorkspaceGeeseHTTPTimeout(t *testing.T) {
 	t.Setenv("CONFIG_PATH", "")
 	t.Setenv(types.WorkerMinimalConfigEnv, "true")
 
 	manager, err := NewConfigManager[types.AppConfig]()
 	require.NoError(t, err)
-	config := manager.GetConfig()
-
-	require.Equal(t, 60*time.Second, config.Storage.WorkspaceStorage.Geese.HTTPTimeout)
-	require.Equal(t, 3, config.Storage.WorkspaceStorage.Geese.ReadRetryAttempts)
+	require.Equal(t, time.Minute, manager.GetConfig().Storage.WorkspaceStorage.Geese.HTTPTimeout)
 }
 
 func TestMinimalConfigEnabled(t *testing.T) {

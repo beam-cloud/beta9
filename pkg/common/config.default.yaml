@@ -55,12 +55,7 @@ storage:
       memoryLimit: 2048
       maxFlushers: 16
       maxParallelParts: 8
-      # Volume metadata and range reads must fail over promptly on marketplace
-      # nodes instead of pinning a FUSE caller behind one HTTP request.
       httpTimeout: 60s
-      # Keep the worker policy explicit even though GeeseFS now also enforces
-      # a finite fallback when this value is zero or unset.
-      readRetryAttempts: 3
       dirMode: 0777
       fileMode: 0666
       listType: 1

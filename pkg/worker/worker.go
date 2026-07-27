@@ -48,32 +48,10 @@ const (
 	shutdownForceWait              time.Duration = 5 * time.Second
 	shutdownCleanupReserve         time.Duration = 5 * time.Second
 	workerShutdownRPCTimeout       time.Duration = 5 * time.Second
-	// A cold marketplace worker may need several minutes to materialize a large
-	// ML image before runc can start it. Keep this deadline separate from the
-	// scheduler's failover threshold and never let that threshold shorten the
-	// worker startup budget below a realistic cold-start window.
 	defaultContainerStartupTimeout time.Duration = 15 * time.Minute
-	// maxContainerStartupTimeout bounds the configurable startup timeout so a
-	// large/sentinel maxSchedulingLatencyMs cannot overflow time.Duration (int64
-	// nanoseconds) and wrap negative, which would fire the startup timer
-	// immediately and fail every container.
-	maxContainerStartupTimeout time.Duration = 1 * time.Hour
-	gvisorShmemTHPPath                       = "/sys/kernel/mm/transparent_hugepage/shmem_enabled"
+	maxContainerStartupTimeout     time.Duration = time.Hour
+	gvisorShmemTHPPath                           = "/sys/kernel/mm/transparent_hugepage/shmem_enabled"
 )
-
-func effectiveContainerStartupTimeout(maxSchedulingLatencyMs int64) time.Duration {
-	if maxSchedulingLatencyMs <= 0 {
-		return defaultContainerStartupTimeout
-	}
-	if maxSchedulingLatencyMs > maxContainerStartupTimeout.Milliseconds() {
-		maxSchedulingLatencyMs = maxContainerStartupTimeout.Milliseconds()
-	}
-	configured := time.Duration(maxSchedulingLatencyMs) * time.Millisecond
-	if configured < defaultContainerStartupTimeout {
-		return defaultContainerStartupTimeout
-	}
-	return configured
-}
 
 func ensureGVisorShmemTHP(path string) (bool, error) {
 	policy, err := os.ReadFile(path)
@@ -139,6 +117,14 @@ type Worker struct {
 	ctx                     context.Context
 	cancel                  func()
 	config                  types.AppConfig
+}
+
+func (s *Worker) containerStartupTimeout() time.Duration {
+	timeoutMs := s.config.Worker.Failover.MaxSchedulingLatencyMs
+	if timeoutMs < defaultContainerStartupTimeout.Milliseconds() {
+		return defaultContainerStartupTimeout
+	}
+	return time.Duration(min(timeoutMs, maxContainerStartupTimeout.Milliseconds())) * time.Millisecond
 }
 
 type ContainerInstance struct {
@@ -713,7 +699,7 @@ func (s *Worker) runContainerRequest(request *types.ContainerRequest) {
 	if request.IsBuildRequest() {
 		err = run()
 	} else {
-		timeout := effectiveContainerStartupTimeout(s.config.Worker.Failover.MaxSchedulingLatencyMs)
+		timeout := s.containerStartupTimeout()
 
 		errCh := make(chan error, 1)
 		go func() {

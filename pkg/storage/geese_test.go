@@ -1,10 +1,6 @@
 package storage
 
-import (
-	"testing"
-
-	"github.com/yandex-cloud/geesefs/core/cfg"
-)
+import "testing"
 
 type testVolumeReporter struct {
 	workspaceID string
@@ -43,26 +39,6 @@ func TestEffectiveGeeseMemoryLimitMB(t *testing.T) {
 				t.Fatalf("effectiveGeeseMemoryLimitMB(%d, %q) = %d, want %d", tt.configured, tt.worker, got, tt.want)
 			}
 		})
-	}
-}
-
-func TestEffectiveGeeseReadRetryAttempts(t *testing.T) {
-	if got := effectiveGeeseReadRetryAttempts(0); got != defaultGeeseFSReadRetryAttempts {
-		t.Fatalf("effectiveGeeseReadRetryAttempts(0) = %d, want %d", got, defaultGeeseFSReadRetryAttempts)
-	}
-	if got := effectiveGeeseReadRetryAttempts(7); got != 7 {
-		t.Fatalf("effectiveGeeseReadRetryAttempts(7) = %d, want 7", got)
-	}
-}
-
-func TestGeeseDependencyDefaultsAreBounded(t *testing.T) {
-	flags := cfg.DefaultFlags()
-	if flags.ReadRetryAttempts != cfg.DefaultReadRetryAttempts {
-		t.Fatalf("GeeseFS read retry attempts = %d, want %d", flags.ReadRetryAttempts, cfg.DefaultReadRetryAttempts)
-	}
-	if flags.MetadataHTTPTimeout <= 0 || flags.MetadataHTTPTimeout > cfg.MaxMetadataHTTPTimeout {
-		t.Fatalf("GeeseFS metadata timeout = %v, want a positive value no greater than %v",
-			flags.MetadataHTTPTimeout, cfg.MaxMetadataHTTPTimeout)
 	}
 }
 

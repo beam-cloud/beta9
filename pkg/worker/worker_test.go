@@ -73,36 +73,23 @@ func TestAcknowledgeContainerRequestReturnsAuthoritativeRejection(t *testing.T) 
 	require.Equal(t, 1, client.calls)
 }
 
-func TestEffectiveContainerStartupTimeout(t *testing.T) {
+func TestWorkerContainerStartupTimeout(t *testing.T) {
 	tests := []struct {
-		name                   string
-		maxSchedulingLatencyMs int64
-		want                   time.Duration
+		name      string
+		timeoutMs int64
+		want      time.Duration
 	}{
-		{
-			name: "uses cold start budget when unset",
-			want: defaultContainerStartupTimeout,
-		},
-		{
-			name:                   "does not inherit a shorter failover threshold",
-			maxSchedulingLatencyMs: (5 * time.Minute).Milliseconds(),
-			want:                   defaultContainerStartupTimeout,
-		},
-		{
-			name:                   "honors a longer configured budget",
-			maxSchedulingLatencyMs: (30 * time.Minute).Milliseconds(),
-			want:                   30 * time.Minute,
-		},
-		{
-			name:                   "clamps values before duration conversion",
-			maxSchedulingLatencyMs: int64(^uint64(0) >> 1),
-			want:                   maxContainerStartupTimeout,
-		},
+		{name: "unset", want: defaultContainerStartupTimeout},
+		{name: "shorter", timeoutMs: (5 * time.Minute).Milliseconds(), want: defaultContainerStartupTimeout},
+		{name: "longer", timeoutMs: (30 * time.Minute).Milliseconds(), want: 30 * time.Minute},
+		{name: "clamped", timeoutMs: 1<<63 - 1, want: maxContainerStartupTimeout},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			require.Equal(t, tt.want, effectiveContainerStartupTimeout(tt.maxSchedulingLatencyMs))
+			worker := &Worker{}
+			worker.config.Worker.Failover.MaxSchedulingLatencyMs = tt.timeoutMs
+			require.Equal(t, tt.want, worker.containerStartupTimeout())
 		})
 	}
 }

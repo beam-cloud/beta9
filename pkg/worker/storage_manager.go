@@ -125,7 +125,6 @@ func (sm *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage 
 				MaxFlushers:            sm.config.WorkspaceStorage.Geese.MaxFlushers,
 				MaxParallelParts:       sm.config.WorkspaceStorage.Geese.MaxParallelParts,
 				HTTPTimeout:            sm.config.WorkspaceStorage.Geese.HTTPTimeout,
-				ReadRetryAttempts:      sm.config.WorkspaceStorage.Geese.ReadRetryAttempts,
 				DirMode:                sm.config.WorkspaceStorage.Geese.DirMode,
 				FileMode:               sm.config.WorkspaceStorage.Geese.FileMode,
 				ListType:               sm.config.WorkspaceStorage.Geese.ListType,
