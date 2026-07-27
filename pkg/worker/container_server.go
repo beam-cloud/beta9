@@ -196,12 +196,11 @@ func (s *ContainerRuntimeServer) ContainerExec(ctx context.Context, in *pb.Conta
 		return &pb.ContainerExecResponse{Ok: false}, nil
 	}
 
-	process := s.baseConfigSpec.Process
-	process.Args = parsedCmd
-	process.Cwd = instance.Spec.Process.Cwd
-
 	instanceSpec := instance.Spec.Process
-	process.Env = append(instanceSpec.Env, in.Env...)
+	process := *s.baseConfigSpec.Process
+	process.Args = slices.Clone(parsedCmd)
+	process.Cwd = instanceSpec.Cwd
+	process.Env = slices.Concat(instanceSpec.Env, in.Env)
 
 	if instance.Request.IsBuildRequest() {
 		// For build containers, use background context to prevent cancellation issues
@@ -211,7 +210,7 @@ func (s *ContainerRuntimeServer) ContainerExec(ctx context.Context, in *pb.Conta
 
 	// Use the worker's configured runtime for exec
 	rt := s.getRuntime()
-	err = rt.Exec(ctx, in.ContainerId, *process, &runtime.ExecOpts{
+	err = rt.Exec(ctx, in.ContainerId, process, &runtime.ExecOpts{
 		OutputWriter: instance.OutputWriter,
 	})
 
@@ -1409,7 +1408,7 @@ func (s *ContainerRuntimeServer) ContainerSandboxExposePort(ctx context.Context,
 	s.exposePortMu.Lock()
 	defer s.exposePortMu.Unlock()
 
-	getAddressMapResponse, err := handleGRPCResponse(s.containerRepoClient.GetContainerAddressMap(context.Background(), &pb.GetContainerAddressMapRequest{
+	getAddressMapResponse, err := handleGRPCResponse(s.containerRepoClient.GetContainerAddressMap(ctx, &pb.GetContainerAddressMapRequest{
 		ContainerId: in.ContainerId,
 	}))
 	if err != nil {
@@ -1420,7 +1419,7 @@ func (s *ContainerRuntimeServer) ContainerSandboxExposePort(ctx context.Context,
 	port := int32(in.Port)
 	if existingTarget, exists := addressMap[port]; exists {
 		if route := s.backendRouteForContainerPort(instance, port, existingTarget); route != nil {
-			setAddressMapResponse, err := handleGRPCResponse(s.containerRepoClient.SetContainerAddressMap(context.Background(), &pb.SetContainerAddressMapRequest{
+			setAddressMapResponse, err := handleGRPCResponse(s.containerRepoClient.SetContainerAddressMap(ctx, &pb.SetContainerAddressMapRequest{
 				ContainerId: in.ContainerId,
 				AddressMap:  addressMap,
 				Routes:      []*pb.BackendRoute{route},
@@ -1463,7 +1462,7 @@ func (s *ContainerRuntimeServer) ContainerSandboxExposePort(ctx context.Context,
 	if route := s.backendRouteForContainerPort(instance, port, localTarget); route != nil {
 		routes = append(routes, route)
 	}
-	setAddressMapResponse, err := handleGRPCResponse(s.containerRepoClient.SetContainerAddressMap(context.Background(), &pb.SetContainerAddressMapRequest{
+	setAddressMapResponse, err := handleGRPCResponse(s.containerRepoClient.SetContainerAddressMap(ctx, &pb.SetContainerAddressMapRequest{
 		ContainerId: in.ContainerId,
 		AddressMap:  addressMap,
 		Routes:      routes,

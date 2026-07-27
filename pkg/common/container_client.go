@@ -12,6 +12,7 @@ import (
 
 	pb "github.com/beam-cloud/beta9/proto"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -21,77 +22,109 @@ const (
 	containerClientSandboxStatusTimeout = 5 * time.Second
 	containerClientSandboxOutputTimeout = 5 * time.Second
 	containerClientExistingConnTimeout  = 1 * time.Second
+	containerClientReconnectBaseDelay   = 20 * time.Millisecond
+	containerClientReconnectMaxDelay    = 100 * time.Millisecond
+	containerClientReconnectMinTimeout  = 2 * time.Second
 )
+
+type ContainerClientDialer func(context.Context, string) (net.Conn, error)
 
 type ContainerClient struct {
 	ServiceUrl   string
 	ServiceToken string
 	conn         *grpc.ClientConn
 	client       pb.ContainerServiceClient
-	existingConn net.Conn
 }
 
 func NewContainerClient(serviceUrl, serviceToken string, existingConn net.Conn) (*ContainerClient, error) {
+	dialCtx := context.Background()
+	cancel := func() {}
+	dialOptions := []grpc.DialOption{}
+	if existingConn != nil {
+		dialCtx, cancel = context.WithTimeout(dialCtx, containerClientExistingConnTimeout)
+		dialOptions = append(
+			dialOptions,
+			grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
+				return existingConn, nil
+			}),
+			grpc.WithBlock(),
+		)
+	}
+	defer cancel()
+
+	client, err := newContainerClient(dialCtx, serviceUrl, serviceToken, dialOptions...)
+	if err != nil && existingConn != nil {
+		_ = existingConn.Close()
+	}
+	return client, err
+}
+
+// NewContainerClientWithDialer creates a reconnectable cached gRPC channel.
+func NewContainerClientWithDialer(
+	ctx context.Context,
+	serviceUrl string,
+	serviceToken string,
+	dialer ContainerClientDialer,
+) (*ContainerClient, error) {
+	if dialer == nil {
+		return nil, errors.New("container client dialer is required")
+	}
+	return newContainerClient(
+		ctx,
+		serviceUrl,
+		serviceToken,
+		grpc.WithContextDialer(dialer),
+		grpc.WithConnectParams(grpc.ConnectParams{
+			Backoff: backoff.Config{
+				BaseDelay:  containerClientReconnectBaseDelay,
+				Multiplier: 1.6,
+				Jitter:     0.2,
+				MaxDelay:   containerClientReconnectMaxDelay,
+			},
+			MinConnectTimeout: containerClientReconnectMinTimeout,
+		}),
+	)
+}
+
+func newContainerClient(
+	ctx context.Context,
+	serviceUrl string,
+	serviceToken string,
+	additionalDialOptions ...grpc.DialOption,
+) (*ContainerClient, error) {
 	client := &ContainerClient{
 		ServiceUrl:   serviceUrl,
 		ServiceToken: serviceToken,
-		existingConn: existingConn,
 	}
 
-	err := client.connect()
-	if err != nil {
-		return nil, err
-	}
-
-	return client, nil
-}
-
-func (c *ContainerClient) connect() error {
 	grpcOption := grpc.WithTransportCredentials(insecure.NewCredentials())
 
-	isTLS := strings.HasSuffix(c.ServiceUrl, "443")
+	isTLS := strings.HasSuffix(serviceUrl, "443")
 	if isTLS {
 		h2creds := credentials.NewTLS(&tls.Config{NextProtos: []string{"h2"}})
 		grpcOption = grpc.WithTransportCredentials(h2creds)
 	}
 
-	var dialOpts = []grpc.DialOption{grpcOption}
-
-	// Use existingConn if provided
-	if c.existingConn != nil {
-		dialOpts = append(dialOpts, grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
-			return c.existingConn, nil
-		}))
-	}
+	dialOptions := []grpc.DialOption{grpcOption}
 
 	maxMessageSize := 1 << 30 // 1Gi
-	if c.ServiceToken != "" {
-		dialOpts = append(dialOpts, grpc.WithUnaryInterceptor(GRPCClientAuthInterceptor(c.ServiceToken)),
+	if serviceToken != "" {
+		dialOptions = append(dialOptions, grpc.WithUnaryInterceptor(GRPCClientAuthInterceptor(serviceToken)),
 			grpc.WithDefaultCallOptions(
 				grpc.MaxCallRecvMsgSize(maxMessageSize),
 				grpc.MaxCallSendMsgSize(maxMessageSize),
 			))
 	}
+	dialOptions = append(dialOptions, additionalDialOptions...)
 
-	dialCtx := context.Background()
-	cancel := func() {}
-	if c.existingConn != nil {
-		dialOpts = append(dialOpts, grpc.WithBlock())
-		dialCtx, cancel = context.WithTimeout(dialCtx, containerClientExistingConnTimeout)
-	}
-	defer cancel()
-
-	conn, err := grpc.DialContext(dialCtx, c.ServiceUrl, dialOpts...)
+	conn, err := grpc.DialContext(ctx, serviceUrl, dialOptions...)
 	if err != nil {
-		if c.existingConn != nil {
-			_ = c.existingConn.Close()
-		}
-		return err
+		return nil, err
 	}
 
-	c.conn = conn
-	c.client = pb.NewContainerServiceClient(conn)
-	return nil
+	client.conn = conn
+	client.client = pb.NewContainerServiceClient(conn)
+	return client, nil
 }
 
 func (c *ContainerClient) Close() error {
@@ -107,7 +140,11 @@ func (c *ContainerClient) Status(containerId string) (*pb.ContainerStatusRespons
 }
 
 func (c *ContainerClient) Exec(containerId, cmd string, env []string) (*pb.ContainerExecResponse, error) {
-	resp, err := c.client.ContainerExec(context.TODO(), &pb.ContainerExecRequest{ContainerId: containerId, Cmd: cmd, Env: env})
+	return c.ExecContext(context.Background(), containerId, cmd, env)
+}
+
+func (c *ContainerClient) ExecContext(ctx context.Context, containerId, cmd string, env []string) (*pb.ContainerExecResponse, error) {
+	resp, err := c.client.ContainerExec(ctx, &pb.ContainerExecRequest{ContainerId: containerId, Cmd: cmd, Env: env})
 	if err != nil {
 		return resp, err
 	}
@@ -153,7 +190,11 @@ func (c *ContainerClient) SandboxStatusContext(ctx context.Context, containerId 
 	ctx, cancel := context.WithTimeout(ctx, containerClientSandboxStatusTimeout)
 	defer cancel()
 
-	resp, err := c.client.ContainerSandboxStatus(ctx, &pb.ContainerSandboxStatusRequest{ContainerId: containerId, Pid: pid})
+	resp, err := c.client.ContainerSandboxStatus(
+		ctx,
+		&pb.ContainerSandboxStatusRequest{ContainerId: containerId, Pid: pid},
+		grpc.WaitForReady(true),
+	)
 	if err != nil {
 		return resp, err
 	}
@@ -272,7 +313,11 @@ func (c *ContainerClient) SandboxFindInFiles(containerId, containerPath, pattern
 }
 
 func (c *ContainerClient) SandboxExposePort(containerId string, port int32) (*pb.ContainerSandboxExposePortResponse, error) {
-	resp, err := c.client.ContainerSandboxExposePort(context.TODO(), &pb.ContainerSandboxExposePortRequest{ContainerId: containerId, Port: port})
+	return c.SandboxExposePortContext(context.Background(), containerId, port)
+}
+
+func (c *ContainerClient) SandboxExposePortContext(ctx context.Context, containerId string, port int32) (*pb.ContainerSandboxExposePortResponse, error) {
+	resp, err := c.client.ContainerSandboxExposePort(ctx, &pb.ContainerSandboxExposePortRequest{ContainerId: containerId, Port: port})
 	if err != nil {
 		return resp, err
 	}

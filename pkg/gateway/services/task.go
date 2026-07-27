@@ -389,6 +389,19 @@ func (gws *GatewayService) stopTask(ctx context.Context, authInfo *auth.AuthInfo
 		return errors.New("failed to cancel task")
 	}
 
+	// Pod run containers have no runner inside listening for task cancellation,
+	// so force stop the container directly
+	if task.Stub.Type.Kind() == types.StubTypePod && task.ContainerId != "" && gws.scheduler != nil {
+		err = gws.scheduler.Stop(&types.StopContainerArgs{
+			ContainerId: task.ContainerId,
+			Reason:      types.StopContainerReasonUser,
+			Force:       true,
+		})
+		if err != nil {
+			log.Error().Str("container_id", task.ContainerId).Err(err).Msg("failed to stop pod run container")
+		}
+	}
+
 	task.Status = types.TaskStatusCancelled
 	task.EndedAt = types.NullTime{}.Now()
 	if _, err := gws.backendRepo.UpdateTask(ctx, task.ExternalId, task.Task); err != nil {

@@ -89,7 +89,7 @@ func TestConfigurePoolSelectorNamesReservedPool(t *testing.T) {
 	}
 }
 
-func TestPrivatePoolPolicyRequiresStrictFallbackForManagedLimitBypass(t *testing.T) {
+func TestPrivatePoolPolicyBypassesManagedLimitsRegardlessOfFallback(t *testing.T) {
 	gws := &GatewayService{
 		appConfig: types.AppConfig{GatewayService: types.GatewayServiceConfig{StubLimits: types.StubLimits{
 			Cpu:         1000,
@@ -110,23 +110,23 @@ func TestPrivatePoolPolicyRequiresStrictFallbackForManagedLimitBypass(t *testing
 	if !policy.privatePoolTargeted {
 		t.Fatal("expected existing private pool to be targeted")
 	}
-	if policy.privatePoolOnly() {
-		t.Fatal("expected internal fallback to keep managed limits enforced")
-	}
 	if policy.fallback != types.PrivatePoolFallbackInternal {
 		t.Fatal("expected omitted fallback to default to internal")
 	}
 	request := &pb.GetOrCreateStubRequest{Cpu: 2000, Memory: 2048, Gpu: "H100", GpuCount: 8}
-	if got := policy.validateManagedLimits(gws, request, &types.Workspace{}); got == "" {
-		t.Fatal("expected managed stub limit error")
+	if got := policy.validateManagedLimits(gws, request, &types.Workspace{}); got != "" {
+		t.Fatalf("managed limit error = %q, want empty", got)
+	}
+	if policy.checkManagedGPUCapacity() {
+		t.Fatal("private pool should not check managed GPU capacity")
+	}
+	if got := policy.maxReplicasLimit(3); got != 0 {
+		t.Fatalf("private pool max replicas limit = %d, want unlimited", got)
 	}
 
 	failPolicy, err := gws.stubResourcePolicy(context.Background(), "workspace-1", &pb.PoolConfig{Name: "large-gpu-pool-fail"}, "handler")
 	if err != nil {
 		t.Fatal(err)
-	}
-	if !failPolicy.privatePoolOnly() {
-		t.Fatal("expected fail fallback private pool to bypass managed limits")
 	}
 	if got := failPolicy.validateManagedLimits(gws, request, &types.Workspace{}); got != "" {
 		t.Fatalf("managed limit error = %q, want empty", got)
@@ -136,11 +136,22 @@ func TestPrivatePoolPolicyRequiresStrictFallbackForManagedLimitBypass(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !selectorPolicy.privatePoolOnly() {
-		t.Fatal("expected selector-only private pool lookup to bypass managed limits")
-	}
 	if got := selectorPolicy.validateManagedLimits(gws, request, &types.Workspace{}); got != "" {
 		t.Fatalf("selector managed limit error = %q, want empty", got)
+	}
+
+	managedPolicy, err := gws.stubResourcePolicy(context.Background(), "workspace-1", nil, "handler")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := managedPolicy.validateManagedLimits(gws, request, &types.Workspace{}); got == "" {
+		t.Fatal("managed workload should still enforce stub limits")
+	}
+	if !managedPolicy.checkManagedGPUCapacity() {
+		t.Fatal("managed workload should check managed GPU capacity")
+	}
+	if got := managedPolicy.maxReplicasLimit(3); got != 3 {
+		t.Fatalf("managed max replicas limit = %d, want 3", got)
 	}
 }
 

@@ -158,6 +158,8 @@ github.com/beam-cloud/geesefs v0.0.0-20260720093729-d255c4efaf69 h1:lXWhZrRYRR3K
 github.com/beam-cloud/geesefs v0.0.0-20260720093729-d255c4efaf69/go.mod h1:q0qGsu0wiOzf/5m9JGLqZ7WteYDaaLGgBwNmstb3og0=
 github.com/beam-cloud/geesefs v0.0.0-20260720101030-d576e2759495 h1:05LaGWWUu2x+r32ZGY3zzyrE5Rg6IKB9JRYui8DeuXk=
 github.com/beam-cloud/geesefs v0.0.0-20260720101030-d576e2759495/go.mod h1:q0qGsu0wiOzf/5m9JGLqZ7WteYDaaLGgBwNmstb3og0=
+github.com/beam-cloud/geesefs v0.0.0-20260725134842-7c49fca59376 h1:cDrs42P0NLoYAeBb4aGfFC6KDHfm3Z6xW++sXD6nW6w=
+github.com/beam-cloud/geesefs v0.0.0-20260725134842-7c49fca59376/go.mod h1:q0qGsu0wiOzf/5m9JGLqZ7WteYDaaLGgBwNmstb3og0=
 github.com/beam-cloud/geesefs/s3ext v0.0.0-20250606164905-2f3593d03f4f h1:XzHOu+erxeBO6D3fKVbd5DAlipl+PYZ3u+Ywb8m7Ovk=
 github.com/beam-cloud/geesefs/s3ext v0.0.0-20250606164905-2f3593d03f4f/go.mod h1:YT41ScwaZw9hYfM0WbYZ64sQLNhPxWZFOXJOPug7O5M=
 github.com/beam-cloud/go-runc v0.0.0-20250911154456-bb45084abfe1 h1:EUB/gApGrZW0SzPdyk0jQILJk4Q8wUsWevTHGMkWU58=

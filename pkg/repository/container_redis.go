@@ -45,6 +45,38 @@ const (
 
 var errConcurrencyCounterRepairing = errors.New("concurrency counter repair in progress")
 
+// Opening worker routes are republished for every container startup. Once the
+// agent has made an identical shared route ready, those registrations must not
+// demote it or erase its proxy target. WorkspaceID is deliberately not part of
+// the target identity because marketplace workers can serve buyer workspaces.
+var setOpeningWorkerBackendRouteScript = redis.NewScript(`
+local incoming = cjson.decode(ARGV[1])
+local current = redis.call("GET", KEYS[1])
+
+if current ~= false then
+	local decoded, existing = pcall(cjson.decode, current)
+	if decoded and
+		existing.state == ARGV[2] and
+		existing.proxy_target and
+		existing.proxy_target ~= "" and
+		existing.route_id == incoming.route_id and
+		existing.pool_name == incoming.pool_name and
+		existing.machine_id == incoming.machine_id and
+		existing.worker_id == incoming.worker_id and
+		existing.container_id == incoming.container_id and
+		existing.kind == incoming.kind and
+		existing.port == incoming.port and
+		existing.protocol == incoming.protocol and
+		existing.transport == incoming.transport and
+		existing.local_target == incoming.local_target then
+		return 0
+	end
+end
+
+redis.call("SET", KEYS[1], ARGV[1])
+return 1
+`)
+
 // Workspace concurrency accounting must stay O(1) during bursts. The old
 // implementation scanned every active container while holding a workspace lock
 // for each request. Instead, the first quota-bearing request rebuilds an
@@ -143,12 +175,6 @@ func NewContainerRedisRepository(r *common.RedisClient) ContainerRepository {
 }
 
 func (cr *ContainerRedisRepository) GetContainerState(containerId string) (*types.ContainerState, error) {
-	err := cr.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerContainerLock(containerId), containerStateLockOptions)
-	if err != nil {
-		return nil, err
-	}
-	defer cr.lock.Release(common.RedisKeys.SchedulerContainerLock(containerId))
-
 	stateKey := common.RedisKeys.SchedulerContainerState(containerId)
 
 	res, err := cr.rdb.HGetAll(context.TODO(), stateKey).Result()
@@ -168,6 +194,32 @@ func (cr *ContainerRedisRepository) GetContainerState(containerId string) (*type
 	return state, nil
 }
 
+func (cr *ContainerRedisRepository) GetContainerStatuses(containerIds []string) (map[string]types.ContainerStatus, error) {
+	statuses := make(map[string]types.ContainerStatus, len(containerIds))
+	ctx := context.TODO()
+	pipe := cr.rdb.Pipeline()
+	commands := make(map[string]*redis.StringCmd, len(containerIds))
+	for _, containerId := range containerIds {
+		if containerId == "" || commands[containerId] != nil {
+			continue
+		}
+		commands[containerId] = pipe.HGet(ctx, common.RedisKeys.SchedulerContainerState(containerId), "status")
+	}
+	if len(commands) == 0 {
+		return statuses, nil
+	}
+	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
+		return nil, err
+	}
+
+	for containerId, command := range commands {
+		if command.Err() == nil {
+			statuses[containerId] = types.ContainerStatus(command.Val())
+		}
+	}
+	return statuses, nil
+}
+
 func (cr *ContainerRedisRepository) SetContainerState(containerId string, state *types.ContainerState) error {
 	err := cr.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerContainerLock(containerId), containerStateLockOptions)
 	if err != nil {
@@ -175,6 +227,10 @@ func (cr *ContainerRedisRepository) SetContainerState(containerId string, state 
 	}
 	defer cr.lock.Release(common.RedisKeys.SchedulerContainerLock(containerId))
 
+	return cr.setContainerState(containerId, state)
+}
+
+func (cr *ContainerRedisRepository) setContainerState(containerId string, state *types.ContainerState) error {
 	ctx := context.TODO()
 	stateKey := common.RedisKeys.SchedulerContainerState(containerId)
 	stubIndexKey := common.RedisKeys.SchedulerContainerIndex(state.StubId)
@@ -200,7 +256,7 @@ func (cr *ContainerRedisRepository) SetContainerState(containerId string, state 
 	pipe.Expire(ctx, stateKey, time.Duration(types.ContainerStateTtlSWhilePending)*time.Second)
 	pipe.SAdd(ctx, stubIndexKey, stateKey)
 	pipe.SAdd(ctx, workspaceIndexKey, stateKey)
-	if _, err = pipe.Exec(ctx); err != nil {
+	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("failed to set container state and indexes <%v>: %w", stateKey, err)
 	}
 
@@ -447,7 +503,20 @@ func (cr *ContainerRedisRepository) SetBackendRoutes(ctx context.Context, routes
 	_, err := cr.rdb.Pipelined(ctx, func(pipe redis.Pipeliner) error {
 		for _, item := range encoded {
 			route := item.route
-			pipe.Set(ctx, common.RedisKeys.SchedulerBackendRoute(route.RouteID), item.data, 0)
+			routeKey := common.RedisKeys.SchedulerBackendRoute(route.RouteID)
+			if route.Kind == types.BackendRouteKindWorker &&
+				route.ContainerID == "" &&
+				route.State == types.BackendRouteStateOpening {
+				setOpeningWorkerBackendRouteScript.Eval(
+					ctx,
+					pipe,
+					[]string{routeKey},
+					item.data,
+					types.BackendRouteStateReady,
+				)
+			} else {
+				pipe.Set(ctx, routeKey, item.data, 0)
+			}
 			if route.ContainerID != "" {
 				pipe.SAdd(ctx, common.RedisKeys.SchedulerBackendRouteIndex(route.ContainerID), route.RouteID)
 			}
@@ -909,36 +978,56 @@ func (cr *ContainerRedisRepository) GetFailedContainersByStubId(stubId string) (
 }
 
 func (c *ContainerRedisRepository) SetContainerStateWithConcurrencyLimit(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error {
-	reservedConcurrency := quota != nil
-	if reservedConcurrency {
+	return c.createContainerState(quota, request, false)
+}
+
+func (c *ContainerRedisRepository) CreateContainerStateWithConcurrencyLimit(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error {
+	return c.createContainerState(quota, request, true)
+}
+
+func (c *ContainerRedisRepository) createContainerState(quota *types.ConcurrencyLimit, request *types.ContainerRequest, rejectDuplicate bool) error {
+	setState := c.SetContainerState
+	if rejectDuplicate {
+		lockKey := common.RedisKeys.SchedulerContainerLock(request.ContainerId)
+		if err := c.lock.Acquire(context.TODO(), lockKey, containerStateLockOptions); err != nil {
+			return err
+		}
+		defer c.lock.Release(lockKey)
+		status, err := c.rdb.HGet(context.TODO(), common.RedisKeys.SchedulerContainerState(request.ContainerId), "status").Result()
+		if err != nil && err != redis.Nil {
+			return fmt.Errorf("failed to get container status: %w", err)
+		}
+		if status == string(types.ContainerStatusPending) || status == string(types.ContainerStatusRunning) {
+			return &types.ContainerAlreadyScheduledError{Msg: "a container with this id is already running or pending"}
+		}
+		setState = c.setContainerState
+	}
+	if quota != nil {
 		if err := c.reserveContainerConcurrency(quota, request); err != nil {
 			return err
 		}
 	}
-
-	err := c.SetContainerState(request.ContainerId, &types.ContainerState{
+	err := setState(request.ContainerId, &types.ContainerState{
 		ContainerId: request.ContainerId,
 		StubId:      request.StubId,
-		Status:      types.ContainerStatusPending,
 		WorkspaceId: request.WorkspaceId,
+		Status:      types.ContainerStatusPending,
 		ScheduledAt: time.Now().Unix(),
-		StartedAt:   0,
 		Gpu:         request.Gpu,
 		GpuCount:    request.GpuCount,
 		Cpu:         request.Cpu,
 		Memory:      request.Memory,
 		MachineId:   request.MachineId,
 	})
-	if err != nil {
-		if reservedConcurrency {
-			if releaseErr := c.releaseContainerConcurrencyReservation(context.TODO(), request.WorkspaceId, request.ContainerId); releaseErr != nil {
-				return errors.Join(err, fmt.Errorf("failed to release concurrency reservation after container state error: %w", releaseErr))
-			}
-		}
-		return err
+	if err == nil {
+		return nil
 	}
-
-	return nil
+	if quota != nil {
+		if releaseErr := c.releaseContainerConcurrencyReservation(context.TODO(), request.WorkspaceId, request.ContainerId); releaseErr != nil {
+			return errors.Join(err, fmt.Errorf("failed to release concurrency reservation after container state error: %w", releaseErr))
+		}
+	}
+	return err
 }
 
 func (c *ContainerRedisRepository) CheckContainerConcurrencyLimit(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error {

@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	abstractionscommon "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/singleflight"
 
@@ -179,6 +180,13 @@ func (c *ContainerMountManager) setupUserCodeMount(ctx context.Context, request 
 		return destPath, nil
 	}
 
+	if request.Stub.Type.Kind() == types.StubTypeSandbox && abstractionscommon.IsEmptyStubObject(request.Stub.Object) {
+		if err := createEmptyContainerWorkspace(destPath, readyPath); err != nil {
+			return "", err
+		}
+		return destPath, nil
+	}
+
 	cachePath, err := c.ensureStubCodeCache(ctx, request)
 	if err != nil {
 		return "", err
@@ -189,6 +197,19 @@ func (c *ContainerMountManager) setupUserCodeMount(ctx context.Context, request 
 	}
 
 	return destPath, nil
+}
+
+func createEmptyContainerWorkspace(destPath, readyPath string) error {
+	if err := os.RemoveAll(destPath); err != nil {
+		return err
+	}
+	if err := os.Remove(readyPath); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.MkdirAll(destPath, 0755); err != nil {
+		return err
+	}
+	return os.WriteFile(readyPath, []byte("ok"), 0644)
 }
 
 func (c *ContainerMountManager) ensureStubCodeCache(ctx context.Context, request *types.ContainerRequest) (string, error) {

@@ -143,7 +143,9 @@ class TestRunner(unittest.TestCase):
         ):
             self.assertIn("disks", signature(cls.__init__).parameters, cls.__name__)
 
-    def test_pod_create_passes_machine_and_returns_management_url(self):
+    def test_pod_create_passes_machine_and_returns_ids(self):
+        # management_url was dropped from CreatePodResponse; the server
+        # returns task_id/app_id and the SDK builds any dashboard URL itself.
         pod = Pod(entrypoint=["echo", "hello"])
         pod.prepare_runtime = MagicMock(return_value=True)
         pod.stub = MagicMock()
@@ -151,7 +153,8 @@ class TestRunner(unittest.TestCase):
             ok=True,
             container_id="pod-1",
             stub_id="stub-1",
-            management_url="https://console.example/containers/pod-1",
+            task_id="task-1",
+            app_id="app-1",
         )
         pod.stub_id = "stub-1"
         pod.print_invocation_snippet = MagicMock(return_value=MagicMock(url=""))
@@ -160,4 +163,6 @@ class TestRunner(unittest.TestCase):
 
         request = pod.stub.create_pod.call_args.args[0]
         self.assertEqual(request.machine_id, "machine-1")
-        self.assertEqual(result.management_url, "https://console.example/containers/pod-1")
+        self.assertEqual(result.container_id, "pod-1")
+        self.assertEqual(result.task_id, "task-1")
+        self.assertEqual(result.app_id, "app-1")

@@ -644,8 +644,8 @@ func TestGetCacheOriginCredentialsVendsImageRegistrySecret(t *testing.T) {
 	require.True(t, resp.Ok)
 	require.Equal(t, "registry-user:registry-pass", resp.RegistryCredentials)
 	require.Equal(t, 1, backendRepo.workspaceWithSigningCalls)
-	require.Equal(t, 1, backendRepo.workspaceByExternalCalls)
-	require.Equal(t, 1, backendRepo.workspaceCalls)
+	require.Zero(t, backendRepo.workspaceByExternalCalls)
+	require.Zero(t, backendRepo.workspaceCalls)
 }
 
 func TestGetCacheOriginCredentialsDoesNotDecryptImageRegistrySecretWithoutSigningKey(t *testing.T) {

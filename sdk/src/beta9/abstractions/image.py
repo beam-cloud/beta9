@@ -338,6 +338,7 @@ class Image(BaseAbstraction):
         self.secrets = []
         self._stub: Optional[ImageServiceStub] = None
         self.dockerfile = ""
+        self.dockerfile_path = ""
         self.build_ctx_object = ""
         self.gpu = GpuType.NoGPU
         self.ignore_python = False
@@ -427,6 +428,7 @@ class Image(BaseAbstraction):
         with open(path, "r") as f:
             dockerfile = f.read()
         image.dockerfile = dockerfile
+        image.dockerfile_path = path
         return image
 
     def sync_files(self, context_dir: Optional[str] = None, cache_object_id: bool = True) -> None:

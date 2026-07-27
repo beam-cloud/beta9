@@ -173,6 +173,17 @@ func (s *WorkerRepositoryService) GetCacheOriginCredentials(ctx context.Context,
 		return &pb.GetCacheOriginCredentialsResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
+	registryCredentials := s.registryOriginCredentials(ctx, req.WorkspaceId, req.ImageId, req.Registry)
+	if req.Registry != "" {
+		// Direct OCI pulls only need registry credentials. Resolving workspace
+		// storage and presigning image archives here adds database and object
+		// store round trips to every cold mount without producing used data.
+		return &pb.GetCacheOriginCredentialsResponse{
+			Ok:                  true,
+			RegistryCredentials: registryCredentials,
+		}, nil
+	}
+
 	imageArchiveObjectKey, imageArchiveURL, imageArchiveDataURL := s.imageArchiveCredentials(ctx, req.ImageId)
 	return &pb.GetCacheOriginCredentialsResponse{
 		Ok:                    true,
@@ -183,7 +194,7 @@ func (s *WorkerRepositoryService) GetCacheOriginCredentials(ctx context.Context,
 		// Short-lived registry credentials for direct OCI pulls. Private image
 		// credentials are resolved by image/workspace; build-registry credentials
 		// are vended only for the exact configured build registry host.
-		RegistryCredentials: s.registryOriginCredentials(ctx, req.WorkspaceId, req.ImageId, req.Registry),
+		RegistryCredentials: registryCredentials,
 	}, nil
 }
 
