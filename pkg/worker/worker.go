@@ -48,7 +48,11 @@ const (
 	shutdownForceWait              time.Duration = 5 * time.Second
 	shutdownCleanupReserve         time.Duration = 5 * time.Second
 	workerShutdownRPCTimeout       time.Duration = 5 * time.Second
-	defaultContainerStartupTimeout time.Duration = 5 * time.Minute
+	// A cold marketplace worker may need several minutes to materialize a large
+	// ML image before runc can start it. Keep this deadline separate from the
+	// scheduler's failover threshold and never let that threshold shorten the
+	// worker startup budget below a realistic cold-start window.
+	defaultContainerStartupTimeout time.Duration = 15 * time.Minute
 	// maxContainerStartupTimeout bounds the configurable startup timeout so a
 	// large/sentinel maxSchedulingLatencyMs cannot overflow time.Duration (int64
 	// nanoseconds) and wrap negative, which would fire the startup timer
@@ -56,6 +60,20 @@ const (
 	maxContainerStartupTimeout time.Duration = 1 * time.Hour
 	gvisorShmemTHPPath                       = "/sys/kernel/mm/transparent_hugepage/shmem_enabled"
 )
+
+func effectiveContainerStartupTimeout(maxSchedulingLatencyMs int64) time.Duration {
+	if maxSchedulingLatencyMs <= 0 {
+		return defaultContainerStartupTimeout
+	}
+	if maxSchedulingLatencyMs > maxContainerStartupTimeout.Milliseconds() {
+		maxSchedulingLatencyMs = maxContainerStartupTimeout.Milliseconds()
+	}
+	configured := time.Duration(maxSchedulingLatencyMs) * time.Millisecond
+	if configured < defaultContainerStartupTimeout {
+		return defaultContainerStartupTimeout
+	}
+	return configured
+}
 
 func ensureGVisorShmemTHP(path string) (bool, error) {
 	policy, err := os.ReadFile(path)
@@ -695,17 +713,7 @@ func (s *Worker) runContainerRequest(request *types.ContainerRequest) {
 	if request.IsBuildRequest() {
 		err = run()
 	} else {
-		timeout := defaultContainerStartupTimeout
-		if ms := s.config.Worker.Failover.MaxSchedulingLatencyMs; ms > 0 {
-			// Clamp before converting to a nanosecond duration: ms is an int64 of
-			// milliseconds, so large/sentinel values (e.g. a misconfigured
-			// maxSchedulingLatencyMs) would overflow and wrap negative, making the
-			// timer fire immediately and fail every container startup.
-			if ms > maxContainerStartupTimeout.Milliseconds() {
-				ms = maxContainerStartupTimeout.Milliseconds()
-			}
-			timeout = time.Duration(ms) * time.Millisecond
-		}
+		timeout := effectiveContainerStartupTimeout(s.config.Worker.Failover.MaxSchedulingLatencyMs)
 
 		errCh := make(chan error, 1)
 		go func() {

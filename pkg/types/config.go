@@ -313,6 +313,7 @@ type GeeseConfig struct {
 	MaxFlushers            int           `key:"maxFlushers" json:"max_flushers"`                   // --max-flushers
 	MaxParallelParts       int           `key:"maxParallelParts" json:"max_parallel_parts"`        // --max-parallel-parts
 	HTTPTimeout            time.Duration `key:"httpTimeout" json:"http_timeout"`                   // --http-timeout
+	ReadRetryAttempts      int           `key:"readRetryAttempts" json:"read_retry_attempts"`      // --read-retry-attempts
 	ReadAheadKB            int           `key:"readAheadKB" json:"read_ahead_kb"`                  // --read-ahead-kb
 	ReadAheadLargeKB       int           `key:"readAheadLargeKB" json:"read_ahead_large_kb"`       // --read-ahead-large-kb
 	ReadAheadParallelKB    int           `key:"readAheadParallelKB" json:"read_ahead_parallel_kb"` // --read-ahead-parallel-kb

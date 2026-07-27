@@ -19,20 +19,21 @@ import (
 )
 
 const (
-	defaultGeeseFSDirMode          = 0755
-	defaultGeeseFSFileMode         = 0644
-	defaultGeeseFSMountTimeout     = 30 * time.Second
-	defaultGeeseFSRequestTimeout   = 60 * time.Second
-	defaultGeeseFSFlushTimeout     = 60 * time.Second
-	defaultGeeseFSUnmountTimeout   = 10 * time.Second
-	defaultGeeseFSFuseReadAheadKb  = 32768
-	defaultGeeseFSReadAheadKb      = 32768
-	defaultGeeseFSReadAheadLargeKb = 131072
-	defaultGeeseFSMaxReadBytes     = 1048576
-	defaultGeeseFSSpliceReadBytes  = 512 * 1024
-	defaultGeeseFSPartSizeBytes    = 64 * 1024 * 1024
-	defaultGeeseFSHashMinFileKb    = 1024
-	defaultGeeseFSMinMemoryLimitMB = 128
+	defaultGeeseFSDirMode           = 0755
+	defaultGeeseFSFileMode          = 0644
+	defaultGeeseFSMountTimeout      = 30 * time.Second
+	defaultGeeseFSRequestTimeout    = 60 * time.Second
+	defaultGeeseFSReadRetryAttempts = 3
+	defaultGeeseFSFlushTimeout      = 60 * time.Second
+	defaultGeeseFSUnmountTimeout    = 10 * time.Second
+	defaultGeeseFSFuseReadAheadKb   = 32768
+	defaultGeeseFSReadAheadKb       = 32768
+	defaultGeeseFSReadAheadLargeKb  = 131072
+	defaultGeeseFSMaxReadBytes      = 1048576
+	defaultGeeseFSSpliceReadBytes   = 512 * 1024
+	defaultGeeseFSPartSizeBytes     = 64 * 1024 * 1024
+	defaultGeeseFSHashMinFileKb     = 1024
+	defaultGeeseFSMinMemoryLimitMB  = 128
 )
 
 // VolumeContentReporter receives workspace object content above the configured
@@ -300,6 +301,7 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	if s.config.HTTPTimeout > 0 {
 		flags.HTTPTimeout = s.config.HTTPTimeout
 	}
+	flags.ReadRetryAttempts = effectiveGeeseReadRetryAttempts(s.config.ReadRetryAttempts)
 	flags.NoPreloadDir = true
 	if s.config.Debug {
 		flags.StatsInterval = 5 * time.Second
@@ -409,6 +411,13 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	s.mu.Unlock()
 
 	return nil
+}
+
+func effectiveGeeseReadRetryAttempts(configured int) int {
+	if configured > 0 {
+		return configured
+	}
+	return defaultGeeseFSReadRetryAttempts
 }
 
 func effectiveGeeseMemoryLimitMB(configuredLimitMB int64, workerLimitText string) int64 {

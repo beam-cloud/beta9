@@ -42,6 +42,15 @@ func TestEffectiveGeeseMemoryLimitMB(t *testing.T) {
 	}
 }
 
+func TestEffectiveGeeseReadRetryAttempts(t *testing.T) {
+	if got := effectiveGeeseReadRetryAttempts(0); got != defaultGeeseFSReadRetryAttempts {
+		t.Fatalf("effectiveGeeseReadRetryAttempts(0) = %d, want %d", got, defaultGeeseFSReadRetryAttempts)
+	}
+	if got := effectiveGeeseReadRetryAttempts(7); got != 7 {
+		t.Fatalf("effectiveGeeseReadRetryAttempts(7) = %d, want 7", got)
+	}
+}
+
 func TestHandleGeeseContentEventReportsStoredContent(t *testing.T) {
 	reporter := &testVolumeReporter{}
 	storage := &GeeseStorage{}
