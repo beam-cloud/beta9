@@ -55,7 +55,7 @@ storage:
       memoryLimit: 2048
       maxFlushers: 16
       maxParallelParts: 8
-      httpTimeout: 15m
+      httpTimeout: 60s
       dirMode: 0777
       fileMode: 0666
       listType: 1
