@@ -329,6 +329,25 @@ func (wpc *ProviderWorkerPoolController) createWorkerOnMachine(workerId, machine
 }
 
 func (wpc *ProviderWorkerPoolController) createWorkerJob(workerId, machineId string, cpu int64, memory int64, gpuType string, gpuCount uint32, token string) (*batchv1.Job, *types.Worker, error) {
+	workerGpuType := wpc.workerPoolConfig.GPUType
+	env, err := wpc.getWorkerEnvironment(workerId, machineId, cpu, memory, workerGpuType, gpuCount, token)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	job, worker := wpc.buildWorkerJob(workerId, machineId, cpu, memory, workerGpuType, gpuCount, env)
+	return job, worker, nil
+}
+
+func (wpc *ProviderWorkerPoolController) buildWorkerJob(
+	workerId string,
+	machineId string,
+	workerCpu int64,
+	workerMemory int64,
+	workerGpuType string,
+	workerGpuCount uint32,
+	env []corev1.EnvVar,
+) (*batchv1.Job, *types.Worker) {
 	jobName := fmt.Sprintf("%s-%s-%s", Beta9WorkerJobPrefix, wpc.name, workerId)
 	labels := map[string]string{
 		"app":                       Beta9WorkerLabelValue,
@@ -339,11 +358,6 @@ func (wpc *ProviderWorkerPoolController) createWorkerJob(workerId, machineId str
 		PrometheusScrapeKey:         strconv.FormatBool(wpc.config.Monitoring.Prometheus.ScrapeWorkers),
 	}
 
-	workerCpu := cpu
-	workerMemory := memory
-	workerGpuType := wpc.workerPoolConfig.GPUType
-	workerGpuCount := gpuCount
-
 	workerImage := fmt.Sprintf("%s/%s:%s",
 		wpc.config.Worker.ImageRegistry,
 		wpc.config.Worker.ImageName,
@@ -353,16 +367,11 @@ func (wpc *ProviderWorkerPoolController) createWorkerJob(workerId, machineId str
 	resources := corev1.ResourceRequirements{}
 	if workerGpuType != "" {
 		resources.Requests = corev1.ResourceList{
-			"nvidia.com/gpu": *resource.NewQuantity(int64(gpuCount), resource.DecimalSI),
+			"nvidia.com/gpu": *resource.NewQuantity(int64(workerGpuCount), resource.DecimalSI),
 		}
 		resources.Limits = corev1.ResourceList{
-			"nvidia.com/gpu": *resource.NewQuantity(int64(gpuCount), resource.DecimalSI),
+			"nvidia.com/gpu": *resource.NewQuantity(int64(workerGpuCount), resource.DecimalSI),
 		}
-	}
-
-	env, err := wpc.getWorkerEnvironment(workerId, machineId, workerCpu, workerMemory, workerGpuType, workerGpuCount, token)
-	if err != nil {
-		return nil, nil, err
 	}
 
 	containers := []corev1.Container{
@@ -393,7 +402,7 @@ func (wpc *ProviderWorkerPoolController) createWorkerJob(workerId, machineId str
 			HostNetwork:                   true,
 			ImagePullSecrets:              imagePullSecrets,
 			RestartPolicy:                 corev1.RestartPolicyOnFailure,
-			NodeSelector:                  wpc.workerPoolConfig.JobSpec.NodeSelector,
+			NodeSelector:                  workerNodeSelector(wpc.workerPoolConfig.JobSpec, workerGpuCount),
 			Containers:                    containers,
 			Volumes:                       wpc.getWorkerVolumes(workerMemory),
 			EnableServiceLinks:            ptr.To(false),
@@ -433,7 +442,7 @@ func (wpc *ProviderWorkerPoolController) createWorkerJob(workerId, machineId str
 		Runtime:       wpc.workerPoolConfig.ContainerRuntime,
 		BuildVersion:  wpc.config.Worker.ImageTag,
 		Preemptable:   wpc.workerPoolConfig.Preemptable,
-	}, nil
+	}
 }
 
 func (wpc *ProviderWorkerPoolController) getWorkerEnvironment(workerId, machineId string, cpu int64, memory int64, gpuType string, gpuCount uint32, token string) ([]corev1.EnvVar, error) {

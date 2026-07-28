@@ -76,6 +76,28 @@ type WorkerPoolCapacity struct {
 	PendingGpu    uint
 }
 
+func workerNodeSelector(jobSpec types.WorkerPoolJobSpecConfig, gpuCount uint32) map[string]string {
+	var selector map[string]string
+	if len(jobSpec.NodeSelector) > 0 {
+		selector = make(map[string]string, len(jobSpec.NodeSelector))
+		for key, value := range jobSpec.NodeSelector {
+			selector[key] = value
+		}
+	}
+
+	if gpuCount != 1 || len(jobSpec.SingleGPUNodeSelector) == 0 {
+		return selector
+	}
+
+	if selector == nil {
+		selector = make(map[string]string, len(jobSpec.SingleGPUNodeSelector))
+	}
+	for key, value := range jobSpec.SingleGPUNodeSelector {
+		selector[key] = value
+	}
+	return selector
+}
+
 type WorkerPoolControllerOptions struct {
 	Name            string
 	Context         context.Context

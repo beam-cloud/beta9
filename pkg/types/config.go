@@ -534,8 +534,9 @@ func (c RuntimeConfig) WithDefaults(runtime string) RuntimeConfig {
 }
 
 type WorkerPoolJobSpecConfig struct {
-	NodeSelector map[string]string `key:"nodeSelector" json:"node_selector"`
-	Env          []corev1.EnvVar   `key:"env" json:"env"`
+	NodeSelector          map[string]string `key:"nodeSelector" json:"node_selector"`
+	SingleGPUNodeSelector map[string]string `key:"singleGpuNodeSelector" json:"single_gpu_node_selector"`
+	Env                   []corev1.EnvVar   `key:"env" json:"env"`
 
 	// Mimics corev1.Volume since that type doesn't currently serialize correctly
 	Volumes []struct {
