@@ -171,7 +171,8 @@ func (s *Worker) snapshotDurableDiskMount(request *types.ContainerRequest, mount
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	sizeBytes, _ := durableDiskSizeBytes(mount.DurableDisk.Size)
+	ctx, cancel := context.WithTimeout(ctx, durableDiskTransferTimeout(sizeBytes))
 	defer cancel()
 
 	if err := s.ensureDurableDiskSnapshotStorage(ctx, request); err != nil {
@@ -185,7 +186,6 @@ func (s *Worker) snapshotDurableDiskMount(request *types.ContainerRequest, mount
 	parentSnapshot, previousManifest := s.latestDurableDiskSnapshotManifest(ctx, request, mount, store)
 
 	generation := time.Now().UnixNano()
-	sizeBytes, _ := durableDiskSizeBytes(mount.DurableDisk.Size)
 	snapshot, manifest, err := createDurableDiskDirectorySnapshot(
 		ctx,
 		store,
@@ -268,12 +268,6 @@ func (s *Worker) restoreDurableDiskSnapshot(request *types.ContainerRequest, mou
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
-	defer cancel()
-
-	if err := s.ensureDurableDiskSnapshotStorage(ctx, request); err != nil {
-		return err
-	}
 
 	resp, err := handleGRPCResponse(s.backendRepoClient.GetLatestDiskSnapshot(ctx, &pb.GetLatestDiskSnapshotRequest{
 		WorkspaceId: cacheRequestWorkspaceID(request),
@@ -303,10 +297,17 @@ func (s *Worker) restoreDurableDiskSnapshot(request *types.ContainerRequest, mou
 		return fmt.Errorf("durable disk %q has an active or incomplete local payload", mount.DurableDisk.Name)
 	}
 
+	ctx, cancel := context.WithTimeout(ctx, durableDiskTransferTimeout(max(snapshot.LogicalSizeBytes, snapshot.StoredSizeBytes)))
+	defer cancel()
+
+	if err := s.ensureDurableDiskSnapshotStorage(ctx, request); err != nil {
+		return err
+	}
 	store, err := newDurableDiskSnapshotReadStore(ctx, request, snapshot.BucketName)
 	if err != nil {
 		return err
 	}
+	startedAt := time.Now()
 	manifest, err := restoreDurableDiskDirectorySnapshotWithCache(ctx, store, s.durableDiskSnapshotCacheReader(), snapshot.ManifestKey, snapshot.ManifestDigest, snapshot.ManifestSizeBytes, mount.LocalPath)
 	if err != nil {
 		return fmt.Errorf("restore durable disk snapshot %s: %w", snapshot.ExternalId, err)
@@ -315,6 +316,12 @@ func (s *Worker) restoreDurableDiskSnapshot(request *types.ContainerRequest, mou
 		_ = os.RemoveAll(mount.LocalPath)
 		return fmt.Errorf("restore durable disk snapshot %s produced an invalid payload", snapshot.ExternalId)
 	}
+	s.reportDurableDiskSnapshotContent(request, snapshot, manifest)
+	log.Info().
+		Str("disk", mount.DurableDisk.Name).
+		Int64("bytes", snapshot.LogicalSizeBytes).
+		Dur("elapsed", time.Since(startedAt)).
+		Msg("restored durable disk snapshot")
 	return writeDurableDiskMarker(mount.LocalPath, durableDiskMarker{
 		Driver:         types.DurableDiskDriverSnapshot,
 		State:          durableDiskStateClean,
@@ -322,6 +329,12 @@ func (s *Worker) restoreDurableDiskSnapshot(request *types.ContainerRequest, mou
 		ManifestDigest: snapshot.ManifestDigest,
 		Generation:     snapshot.Generation,
 	})
+}
+
+func durableDiskTransferTimeout(sizeBytes int64) time.Duration {
+	// Allow two minutes of overhead plus one second per 16 MiB.
+	seconds := min(max(sizeBytes, 0)/(16<<20), int64((time.Hour-2*time.Minute)/time.Second))
+	return max(5*time.Minute, 2*time.Minute+time.Duration(seconds)*time.Second)
 }
 
 func (s *Worker) ensureDurableDiskSnapshotStorage(ctx context.Context, request *types.ContainerRequest) error {
