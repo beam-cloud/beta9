@@ -18,6 +18,18 @@ import (
 
 const adminWorkspaceQueryPattern = `SELECT w\.id, w\.external_id.*WHERE w\.is_cluster_admin`
 
+func TestGenerateDSNSSLMode(t *testing.T) {
+	t.Run("disabled", func(t *testing.T) {
+		dsn := GenerateDSN(types.PostgresConfig{EnableTLS: false})
+		require.Contains(t, dsn, "sslmode=disable")
+	})
+
+	t.Run("required", func(t *testing.T) {
+		dsn := GenerateDSN(types.PostgresConfig{EnableTLS: true})
+		require.Contains(t, dsn, "sslmode=require")
+	})
+}
+
 func TestListTaskWithRelated(t *testing.T) {
 	// Remove this skip if you are testing on local data
 	t.Skip()
