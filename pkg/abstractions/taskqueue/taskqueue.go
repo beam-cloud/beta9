@@ -80,10 +80,7 @@ func NewRedisTaskQueueService(
 	ctx context.Context,
 	opts TaskQueueServiceOpts,
 ) (TaskQueueService, error) {
-	keyEventManager, err := common.NewKeyEventManager(opts.RedisClient)
-	if err != nil {
-		return nil, err
-	}
+	keyEventManager := common.NewKeyEventManager(opts.RedisClient)
 
 	tq := &RedisTaskQueue{
 		ctx:                ctx,

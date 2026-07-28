@@ -103,6 +103,11 @@ func TestSetContainerStateCommitsIndexesWithState(t *testing.T) {
 	} else if !ok {
 		t.Fatal("expected state key to be present in workspace index")
 	}
+	if score, err := rdb.ZScore(context.Background(), common.RedisKeys.SchedulerContainerStateIndex(), stateKey).Result(); err != nil {
+		t.Fatal(err)
+	} else if score <= float64(time.Now().Unix()) {
+		t.Fatal("expected state key to have a future expiry in the global index")
+	}
 
 	byStub, err := repo.GetActiveContainersByStubId(state.StubId)
 	if err != nil {
@@ -1399,6 +1404,42 @@ func TestContainerRepositoryKeepWarmLocksApplySharedSemantics(t *testing.T) {
 	}
 	if ttl != -1 {
 		t.Fatalf("pod keep-warm ttl = %s, want no expiration", ttl)
+	}
+}
+
+func TestRefreshBuildContainerTTLDoesNotRecreateExpiredLease(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repo := NewContainerRedisRepositoryForTest(rdb)
+	const containerId = "build-expired"
+
+	if err := repo.SetBuildContainerTTL(containerId, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	refreshed, err := repo.RefreshBuildContainerTTL(containerId, 2*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !refreshed {
+		t.Fatal("expected existing lease to refresh")
+	}
+
+	if err := rdb.Del(context.Background(), common.RedisKeys.ImageBuildContainerTTL(containerId)).Err(); err != nil {
+		t.Fatal(err)
+	}
+	refreshed, err = repo.RefreshBuildContainerTTL(containerId, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exists, err := rdb.Exists(context.Background(), common.RedisKeys.ImageBuildContainerTTL(containerId)).Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refreshed || exists != 0 {
+		t.Fatal("expired lease was recreated")
 	}
 }
 

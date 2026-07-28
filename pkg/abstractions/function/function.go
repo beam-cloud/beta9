@@ -77,10 +77,7 @@ type FunctionServiceOpts struct {
 func NewContainerFunctionService(ctx context.Context,
 	opts FunctionServiceOpts,
 ) (FunctionService, error) {
-	keyEventManager, err := common.NewKeyEventManager(opts.RedisClient)
-	if err != nil {
-		return nil, err
-	}
+	keyEventManager := common.NewKeyEventManager(opts.RedisClient)
 
 	fs := &ContainerFunctionService{
 		ctx:              ctx,

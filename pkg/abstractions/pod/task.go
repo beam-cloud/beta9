@@ -313,7 +313,7 @@ func (ps *GenericPodService) deletePodRunTaskMapping(ctx context.Context, contai
 // container state key finalizes the task from the recorded exit code.
 func (ps *GenericPodService) watchPodRunTaskContainers() {
 	eventChan := make(chan common.KeyEvent, podRunTaskEventBufferSize)
-	err := ps.keyEventManager.ListenForPattern(ps.ctx, common.RedisKeys.SchedulerContainerState(podContainerPrefix), eventChan)
+	err := ps.keyEventManager.ListenForContainerPattern(ps.ctx, podContainerPrefix, eventChan)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to listen for pod run container events")
 		return

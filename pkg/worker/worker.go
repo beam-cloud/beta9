@@ -678,7 +678,7 @@ func (s *Worker) runContainerRequest(request *types.ContainerRequest) {
 	if request.IsBuildRequest() {
 		s.registerBuildCancel(containerId, cancel)
 		defer s.unregisterBuildCancel(containerId)
-		go s.cancelBuildIfAlreadyStopping(ctx, cancel, containerId)
+		go s.cancelBuildIfAlreadyStopping(cancel, containerId)
 	}
 
 	if err := s.hydrateRuntimeCredentials(ctx, request); err != nil {
@@ -740,7 +740,7 @@ func (s *Worker) failContainerRequest(containerId string, request *types.Contain
 }
 
 // cancelBuildIfAlreadyStopping checks if a build has already been cancelled and cancels the context if it has.
-func (s *Worker) cancelBuildIfAlreadyStopping(ctx context.Context, cancel context.CancelFunc, containerId string) {
+func (s *Worker) cancelBuildIfAlreadyStopping(cancel context.CancelFunc, containerId string) {
 	containerState, err := handleGRPCResponse(s.containerRepoClient.GetContainerState(context.Background(), &pb.GetContainerStateRequest{ContainerId: containerId}))
 	if err != nil {
 		log.Error().Str("container_id", containerId).Err(err).Msg("failed to get container state")

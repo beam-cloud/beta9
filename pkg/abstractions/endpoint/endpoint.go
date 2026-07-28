@@ -81,10 +81,7 @@ func NewHTTPEndpointService(
 	ctx context.Context,
 	opts EndpointServiceOpts,
 ) (EndpointService, error) {
-	keyEventManager, err := common.NewKeyEventManager(opts.RedisClient)
-	if err != nil {
-		return nil, err
-	}
+	keyEventManager := common.NewKeyEventManager(opts.RedisClient)
 
 	es := &HttpEndpointService{
 		ctx:               ctx,

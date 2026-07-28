@@ -189,10 +189,7 @@ func NewGateway() (*Gateway, error) {
 	gateway.workerRepo = workerRepo
 	gateway.DefaultStorageClient = storageClient
 
-	keyEventManager, err := common.NewKeyEventManager(redisClient)
-	if err != nil {
-		return nil, err
-	}
+	keyEventManager := common.NewKeyEventManager(redisClient)
 	gateway.ComputeService = computesvc.New(computesvc.Options{
 		Config:           config,
 		BackendRepo:      backendRepo,
