@@ -1495,12 +1495,12 @@ func TestProcessRequestBatchDoesNotOverScheduleWorkerSnapshot(t *testing.T) {
 	assert.Equal(t, int64(2), updatedWorker.ResourceVersion)
 }
 
-func TestProcessRequestBatchSpreadsAcrossEqualWorkers(t *testing.T) {
+func TestProcessRequestBatchPacksOntoEqualWorkers(t *testing.T) {
 	wb, err := NewSchedulerForTest()
 	assert.Nil(t, err)
 
 	firstWorker := &types.Worker{
-		Id:          uuid.New().String(),
+		Id:          "worker-a",
 		Status:      types.WorkerStatusAvailable,
 		TotalCpu:    200,
 		TotalMemory: 250,
@@ -1512,7 +1512,7 @@ func TestProcessRequestBatchSpreadsAcrossEqualWorkers(t *testing.T) {
 	assert.Nil(t, err)
 
 	secondWorker := &types.Worker{
-		Id:          uuid.New().String(),
+		Id:          "worker-b",
 		Status:      types.WorkerStatusAvailable,
 		TotalCpu:    200,
 		TotalMemory: 250,
@@ -1544,17 +1544,21 @@ func TestProcessRequestBatchSpreadsAcrossEqualWorkers(t *testing.T) {
 
 	wb.processRequestBatch(requests, workers)
 
-	firstQueued, err := wb.workerRepo.GetNextContainerRequest(firstWorker.Id)
+	for i := 0; i < len(requests); i++ {
+		queued, err := wb.workerRepo.GetNextContainerRequest(firstWorker.Id)
+		assert.Nil(t, err)
+		assert.NotNil(t, queued)
+	}
+	firstExtra, err := wb.workerRepo.GetNextContainerRequest(firstWorker.Id)
 	assert.Nil(t, err)
+	assert.Nil(t, firstExtra)
+
 	secondQueued, err := wb.workerRepo.GetNextContainerRequest(secondWorker.Id)
 	assert.Nil(t, err)
-
-	assert.NotNil(t, firstQueued)
-	assert.NotNil(t, secondQueued)
-	assert.NotEqual(t, firstQueued.ContainerId, secondQueued.ContainerId)
+	assert.Nil(t, secondQueued)
 }
 
-func TestProcessRequestBatchSchedulesTinySandboxBurstByRequestedCapacity(t *testing.T) {
+func TestProcessRequestBatchPacksTinySandboxBurstByRequestedCapacity(t *testing.T) {
 	wb, err := NewSchedulerForTest()
 	assert.Nil(t, err)
 
@@ -1565,7 +1569,7 @@ func TestProcessRequestBatchSchedulesTinySandboxBurstByRequestedCapacity(t *test
 
 	workers := []*types.Worker{
 		{
-			Id:          uuid.New().String(),
+			Id:          "worker-a",
 			Status:      types.WorkerStatusAvailable,
 			TotalCpu:    16000,
 			TotalMemory: 32000,
@@ -1575,7 +1579,7 @@ func TestProcessRequestBatchSchedulesTinySandboxBurstByRequestedCapacity(t *test
 			Runtime:     types.ContainerRuntimeRunc.String(),
 		},
 		{
-			Id:          uuid.New().String(),
+			Id:          "worker-b",
 			Status:      types.WorkerStatusAvailable,
 			TotalCpu:    16000,
 			TotalMemory: 32000,
@@ -1608,7 +1612,7 @@ func TestProcessRequestBatchSchedulesTinySandboxBurstByRequestedCapacity(t *test
 	assert.Nil(t, err)
 	wb.processRequestBatch(requests, workerSnapshot)
 
-	for _, worker := range workers {
+	for index, worker := range workers {
 		queued := 0
 		for {
 			request, err := wb.workerRepo.GetNextContainerRequest(worker.Id)
@@ -1618,7 +1622,11 @@ func TestProcessRequestBatchSchedulesTinySandboxBurstByRequestedCapacity(t *test
 			}
 			queued++
 		}
-		assert.Equal(t, 35, queued)
+		if index == 0 {
+			assert.Equal(t, len(requests), queued)
+		} else {
+			assert.Equal(t, 0, queued)
+		}
 	}
 }
 
@@ -2824,8 +2832,8 @@ func TestSelectGPUWorkerDoesNotMutatePriority(t *testing.T) {
 	t4Worker := &types.Worker{
 		Id:           uuid.New().String(),
 		Status:       types.WorkerStatusAvailable,
-		FreeCpu:      1000,
-		FreeMemory:   1250,
+		FreeCpu:      2000,
+		FreeMemory:   2500,
 		FreeGpuCount: 1,
 		Gpu:          "T4",
 		Priority:     7,
@@ -2842,6 +2850,111 @@ func TestSelectGPUWorkerDoesNotMutatePriority(t *testing.T) {
 	assert.Equal(t, t4Worker.Id, worker.Id)
 	assert.Equal(t, int32(7), a10gWorker.Priority)
 	assert.Equal(t, int32(7), t4Worker.Priority)
+}
+
+func TestSelectWorkerBestFitTieBreak(t *testing.T) {
+	wb, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+
+	request := &types.ContainerRequest{Cpu: 1000, Memory: 1000}
+	roomyWorker := &types.Worker{
+		Id:         "roomy",
+		Status:     types.WorkerStatusAvailable,
+		FreeCpu:    4000,
+		FreeMemory: 8000,
+		Priority:   7,
+	}
+	bestFitWorker := &types.Worker{
+		Id:         "best-fit",
+		Status:     types.WorkerStatusAvailable,
+		FreeCpu:    1500,
+		FreeMemory: 2000,
+		Priority:   7,
+	}
+
+	worker, err := wb.selectWorkerFromWorkers([]*types.Worker{roomyWorker, bestFitWorker}, request)
+	assert.Nil(t, err)
+	assert.Equal(t, bestFitWorker.Id, worker.Id)
+}
+
+func TestSelectWorkerBestFitPreservesPriority(t *testing.T) {
+	wb, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+
+	request := &types.ContainerRequest{Cpu: 1000, Memory: 1000}
+	highPriorityWorker := &types.Worker{
+		Id:         "high-priority",
+		Status:     types.WorkerStatusAvailable,
+		FreeCpu:    4000,
+		FreeMemory: 8000,
+		Priority:   8,
+	}
+	bestFitWorker := &types.Worker{
+		Id:         "best-fit",
+		Status:     types.WorkerStatusAvailable,
+		FreeCpu:    1000,
+		FreeMemory: 1000,
+		Priority:   7,
+	}
+
+	worker, err := wb.selectWorkerFromWorkers([]*types.Worker{bestFitWorker, highPriorityWorker}, request)
+	assert.Nil(t, err)
+	assert.Equal(t, highPriorityWorker.Id, worker.Id)
+}
+
+func TestSelectWorkerBestFitPreservesAvailability(t *testing.T) {
+	wb, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+
+	request := &types.ContainerRequest{Cpu: 1000, Memory: 1000}
+	availableWorker := &types.Worker{
+		Id:         "available",
+		Status:     types.WorkerStatusAvailable,
+		FreeCpu:    4000,
+		FreeMemory: 8000,
+		Priority:   7,
+	}
+	pendingBestFitWorker := &types.Worker{
+		Id:         "pending-best-fit",
+		Status:     types.WorkerStatusPending,
+		FreeCpu:    1000,
+		FreeMemory: 1000,
+		Priority:   7,
+	}
+
+	worker, err := wb.selectWorkerFromWorkersByStatus(
+		[]*types.Worker{pendingBestFitWorker, availableWorker},
+		request,
+		types.WorkerStatusAvailable,
+		types.WorkerStatusPending,
+	)
+	assert.Nil(t, err)
+	assert.Equal(t, availableWorker.Id, worker.Id)
+}
+
+func TestSelectWorkerBestFitUsesWorkerIDForDeterministicTies(t *testing.T) {
+	wb, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+
+	request := &types.ContainerRequest{Cpu: 1000, Memory: 1000}
+	workerB := &types.Worker{
+		Id:         "worker-b",
+		Status:     types.WorkerStatusAvailable,
+		FreeCpu:    2000,
+		FreeMemory: 2000,
+		Priority:   7,
+	}
+	workerA := &types.Worker{
+		Id:         "worker-a",
+		Status:     types.WorkerStatusAvailable,
+		FreeCpu:    2000,
+		FreeMemory: 2000,
+		Priority:   7,
+	}
+
+	worker, err := wb.selectWorkerFromWorkers([]*types.Worker{workerB, workerA}, request)
+	assert.Nil(t, err)
+	assert.Equal(t, workerA.Id, worker.Id)
 }
 
 func TestRequiresPoolSelectorWorker(t *testing.T) {

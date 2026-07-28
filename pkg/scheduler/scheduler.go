@@ -1164,7 +1164,12 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 		if scoredWorkers[i].score != scoredWorkers[j].score {
 			return scoredWorkers[i].score > scoredWorkers[j].score
 		}
-		return workerFreeCapacityScore(scoredWorkers[i].worker, request) > workerFreeCapacityScore(scoredWorkers[j].worker, request)
+		iCapacity := workerFreeCapacityScore(scoredWorkers[i].worker, request)
+		jCapacity := workerFreeCapacityScore(scoredWorkers[j].worker, request)
+		if iCapacity != jCapacity {
+			return iCapacity < jCapacity
+		}
+		return scoredWorkers[i].worker.Id < scoredWorkers[j].worker.Id
 	})
 
 	return scoredWorkers[0].worker, nil
