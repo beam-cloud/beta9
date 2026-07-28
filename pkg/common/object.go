@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/types"
-	"github.com/mholt/archiver/v3"
 	"github.com/rs/zerolog/log"
 )
 
@@ -28,12 +27,13 @@ func ExtractObjectFile(ctx context.Context, objectPath, destPath string) error {
 		return err
 	}
 
-	zip := archiver.NewZip()
-	if err := zip.Unarchive(objectPath, destPath); err != nil {
+	zipReader, err := zip.OpenReader(objectPath)
+	if err != nil {
 		return err
 	}
+	defer zipReader.Close()
 
-	return nil
+	return extractZipFiles(destPath, zipReader.File)
 }
 
 func UnzipBytesToPath(destPath string, objBytes []byte, request *types.ContainerRequest) error {
@@ -51,8 +51,11 @@ func UnzipBytesToPath(destPath string, objBytes []byte, request *types.Container
 		return err
 	}
 
-	// Extract each file
-	for _, zipFile := range zipReader.File {
+	return extractZipFiles(destPath, zipReader.File)
+}
+
+func extractZipFiles(destPath string, zipFiles []*zip.File) error {
+	for _, zipFile := range zipFiles {
 		filePath := filepath.Join(destPath, zipFile.Name)
 
 		if !strings.HasPrefix(filePath, filepath.Clean(destPath)+string(os.PathSeparator)) {
