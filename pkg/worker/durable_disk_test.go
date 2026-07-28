@@ -338,10 +338,8 @@ func TestDurableDiskSnapshotRequiredContentItems(t *testing.T) {
 
 func TestRestoreDurableDiskDirectorySnapshotDownloadsChunksInParallel(t *testing.T) {
 	source := t.TempDir()
-	for i := 0; i < durableDiskRestoreConcurrency*2; i++ {
-		name := fmt.Sprintf("file-%02d", i)
-		require.NoError(t, os.WriteFile(filepath.Join(source, name), []byte(name), 0o600))
-	}
+	payload := []byte(strings.Repeat("parallel restore ", durableDiskRestoreConcurrency))
+	require.NoError(t, os.WriteFile(filepath.Join(source, "model"), payload, 0o600))
 
 	store := &fakeDurableDiskSnapshotStore{}
 	snapshot, _, err := createDurableDiskDirectorySnapshot(
@@ -357,7 +355,6 @@ func TestRestoreDurableDiskDirectorySnapshotDownloadsChunksInParallel(t *testing
 
 	parallelStore := &parallelDownloadDurableDiskSnapshotStore{
 		fakeDurableDiskSnapshotStore: store,
-		delay:                        20 * time.Millisecond,
 	}
 	target := filepath.Join(t.TempDir(), "restored")
 	_, err = restoreDurableDiskDirectorySnapshotWithCache(
@@ -371,12 +368,9 @@ func TestRestoreDurableDiskDirectorySnapshotDownloadsChunksInParallel(t *testing
 	)
 	require.NoError(t, err)
 	require.Greater(t, parallelStore.maxActive, 1)
-	for i := 0; i < durableDiskRestoreConcurrency*2; i++ {
-		name := fmt.Sprintf("file-%02d", i)
-		data, err := os.ReadFile(filepath.Join(target, name))
-		require.NoError(t, err)
-		require.Equal(t, name, string(data))
-	}
+	restored, err := os.ReadFile(filepath.Join(target, "model"))
+	require.NoError(t, err)
+	require.Equal(t, payload, restored)
 }
 
 func TestRestoreDurableDiskDirectorySnapshotPreservesTargetOnFailure(t *testing.T) {
@@ -421,9 +415,9 @@ func TestRestoreDurableDiskDirectorySnapshotPreservesTargetOnFailure(t *testing.
 }
 
 func TestDurableDiskTransferTimeoutScalesWithSnapshotSize(t *testing.T) {
-	require.Equal(t, durableDiskTransferMinTimeout, durableDiskTransferTimeout(0))
-	require.Greater(t, durableDiskTransferTimeout(16<<30), durableDiskTransferMinTimeout)
-	require.Equal(t, durableDiskTransferMaxTimeout, durableDiskTransferTimeout(1<<40))
+	require.Equal(t, 5*time.Minute, durableDiskTransferTimeout(0))
+	require.Greater(t, durableDiskTransferTimeout(16<<30), 5*time.Minute)
+	require.Equal(t, time.Hour, durableDiskTransferTimeout(1<<40))
 }
 
 func snapshotTestFile(manifest *types.DiskSnapshotManifest, name string) types.DiskSnapshotFile {
@@ -457,7 +451,6 @@ type parallelDownloadDurableDiskSnapshotStore struct {
 	mu        sync.Mutex
 	active    int
 	maxActive int
-	delay     time.Duration
 }
 
 func (s *parallelDownloadDurableDiskSnapshotStore) DownloadWithReader(ctx context.Context, key string) (io.ReadCloser, error) {
@@ -469,11 +462,7 @@ func (s *parallelDownloadDurableDiskSnapshotStore) DownloadWithReader(ctx contex
 	s.active++
 	s.maxActive = max(s.maxActive, s.active)
 	s.mu.Unlock()
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case <-time.After(s.delay):
-	}
+	time.Sleep(20 * time.Millisecond)
 	s.mu.Lock()
 	s.active--
 	s.mu.Unlock()

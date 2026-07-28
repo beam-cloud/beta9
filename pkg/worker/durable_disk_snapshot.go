@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -518,13 +517,9 @@ func restoreDurableDiskDirectorySnapshotWithCache(ctx context.Context, store dur
 		return nil, fmt.Errorf("download durable disk snapshot manifest %s: %w", manifestKey, err)
 	}
 
-	parent := filepath.Dir(filepath.Clean(targetDir))
-	if err := os.MkdirAll(parent, 0755); err != nil {
-		return nil, fmt.Errorf("create durable disk restore parent %s: %w", parent, err)
-	}
-	stagingDir, err := os.MkdirTemp(parent, "."+filepath.Base(targetDir)+".restore-")
+	stagingDir, err := os.MkdirTemp(filepath.Dir(targetDir), "."+filepath.Base(targetDir)+".restore-")
 	if err != nil {
-		return nil, fmt.Errorf("create durable disk restore staging directory: %w", err)
+		return nil, err
 	}
 	defer os.RemoveAll(stagingDir)
 
@@ -532,10 +527,10 @@ func restoreDurableDiskDirectorySnapshotWithCache(ctx context.Context, store dur
 		return nil, err
 	}
 	if err := os.RemoveAll(targetDir); err != nil {
-		return nil, fmt.Errorf("replace durable disk restore directory %s: %w", targetDir, err)
+		return nil, err
 	}
 	if err := os.Rename(stagingDir, targetDir); err != nil {
-		return nil, fmt.Errorf("activate durable disk restore directory %s: %w", targetDir, err)
+		return nil, err
 	}
 	return manifest, nil
 }
@@ -548,7 +543,6 @@ func restoreDurableDiskDirectoryManifest(ctx context.Context, store durableDiskS
 		return fmt.Errorf("create durable disk restore directory %s: %w", targetDir, err)
 	}
 
-	files := make(map[string]*os.File)
 	for _, file := range manifest.Files {
 		targetPath, err := durableDiskRestoreTarget(targetDir, file.Path)
 		if err != nil {
@@ -568,46 +562,11 @@ func restoreDurableDiskDirectoryManifest(ctx context.Context, store durableDiskS
 				return err
 			}
 		case "file":
-			if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
+			if err := restoreDurableDiskManifestFile(ctx, store, cacheReader, file, targetPath, mode.Perm()); err != nil {
 				return err
 			}
-			out, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode.Perm())
-			if err != nil {
-				return err
-			}
-			if err := out.Truncate(file.SizeBytes); err != nil {
-				_ = out.Close()
-				return err
-			}
-			files[file.Path] = out
 		default:
 			continue
-		}
-	}
-
-	group, groupCtx := errgroup.WithContext(ctx)
-	group.SetLimit(durableDiskRestoreConcurrency)
-	for _, file := range manifest.Files {
-		out := files[file.Path]
-		for _, chunk := range file.Chunks {
-			chunk := chunk
-			group.Go(func() error {
-				return restoreDurableDiskManifestChunk(groupCtx, store, cacheReader, out, file.Path, chunk)
-			})
-		}
-	}
-	restoreErr := group.Wait()
-	for _, out := range files {
-		restoreErr = errors.Join(restoreErr, out.Close())
-	}
-	if restoreErr != nil {
-		return restoreErr
-	}
-
-	for _, file := range manifest.Files {
-		targetPath, err := durableDiskRestoreTarget(targetDir, file.Path)
-		if err != nil {
-			return err
 		}
 		_ = os.Chown(targetPath, file.Uid, file.Gid)
 		if file.ModTimeUnixNano > 0 {
@@ -618,35 +577,45 @@ func restoreDurableDiskDirectoryManifest(ctx context.Context, store durableDiskS
 	return nil
 }
 
-func restoreDurableDiskManifestChunk(ctx context.Context, store durableDiskSnapshotStore, cacheReader durableDiskSnapshotCacheReader, out *os.File, filename string, chunk types.DiskSnapshotChunk) error {
-	if out == nil {
-		return fmt.Errorf("durable disk snapshot file %s has chunks but is not a regular file", filename)
+func restoreDurableDiskManifestFile(ctx context.Context, store durableDiskSnapshotStore, cacheReader durableDiskSnapshotCacheReader, file types.DiskSnapshotFile, targetPath string, mode os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
+		return err
+	}
+	out, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	if err != nil {
+		return err
+	}
+	if err := out.Truncate(file.SizeBytes); err != nil {
+		_ = out.Close()
+		return err
 	}
 
-	hash := strings.TrimPrefix(chunk.Digest, "sha256:")
-	if cacheReader != nil && hash != "" && chunk.SizeBytes > 0 {
-		data := make([]byte, chunk.SizeBytes)
-		if n, err := cacheReader.ReadContentInto(ctx, hash, 0, data, cache.ClientOptions{RoutingKey: hash}); err == nil && n == chunk.SizeBytes {
-			if digest := sha256.Sum256(data); hex.EncodeToString(digest[:]) == hash {
-				_, err := out.WriteAt(data, chunk.OffsetBytes)
-				return err
-			}
-		}
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.SetLimit(durableDiskRestoreConcurrency)
+	for _, chunk := range file.Chunks {
+		chunk := chunk
+		group.Go(func() error {
+			return restoreDurableDiskManifestChunk(groupCtx, store, cacheReader, out, chunk)
+		})
 	}
+	if err := group.Wait(); err != nil {
+		_ = out.Close()
+		return err
+	}
+	return out.Close()
+}
 
-	reader, err := store.DownloadWithReader(ctx, chunk.ObjectKey)
+func restoreDurableDiskManifestChunk(ctx context.Context, store durableDiskSnapshotStore, cacheReader durableDiskSnapshotCacheReader, out *os.File, chunk types.DiskSnapshotChunk) error {
+	reader, err := durableDiskSnapshotObjectReader(ctx, store, cacheReader, chunk.ObjectKey, chunk.Digest, chunk.SizeBytes)
 	if err != nil {
 		return fmt.Errorf("download durable disk snapshot chunk %s: %w", chunk.ObjectKey, err)
 	}
+	defer reader.Close()
+
 	sum := sha256.New()
-	writer := io.MultiWriter(io.NewOffsetWriter(out, chunk.OffsetBytes), sum)
-	n, copyErr := io.CopyN(writer, reader, chunk.SizeBytes)
-	closeErr := reader.Close()
-	if copyErr != nil {
-		return fmt.Errorf("restore durable disk snapshot chunk %s: copied %d of %d bytes: %w", chunk.ObjectKey, n, chunk.SizeBytes, copyErr)
-	}
-	if closeErr != nil {
-		return fmt.Errorf("close durable disk snapshot chunk %s: %w", chunk.ObjectKey, closeErr)
+	n, err := io.CopyN(io.MultiWriter(io.NewOffsetWriter(out, chunk.OffsetBytes), sum), reader, chunk.SizeBytes)
+	if err != nil {
+		return fmt.Errorf("restore durable disk snapshot chunk %s: copied %d of %d bytes: %w", chunk.ObjectKey, n, chunk.SizeBytes, err)
 	}
 	if digest := "sha256:" + hex.EncodeToString(sum.Sum(nil)); digest != chunk.Digest {
 		return fmt.Errorf("durable disk snapshot chunk %s digest mismatch: got %s want %s", chunk.ObjectKey, digest, chunk.Digest)
