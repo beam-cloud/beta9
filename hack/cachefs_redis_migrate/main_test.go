@@ -41,20 +41,4 @@ func TestMigrateBatch(t *testing.T) {
 	if rdb.ZScore(context.Background(), cache.MetadataKeys.MetadataFsNodeIndex(want.ID), want.ID).Err() != nil {
 		t.Fatal("node was not indexed")
 	}
-
-	if err := restoreMetadata.Load(context.Background(), rdb).Err(); err != nil {
-		t.Fatal(err)
-	}
-	rollback := &report{}
-	if err := rollbackShard(context.Background(), rdb, cache.FSMetadataShard(want.ID), 10, 0, rollback); err != nil {
-		t.Fatal(err)
-	}
-	legacy := &cache.FSMetadata{}
-	if err := cache.ToStruct(rdb.HGetAll(context.Background(), key).Val(), legacy); err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(legacy, want) || rollback.Restored != 1 ||
-		rdb.HExists(context.Background(), cache.MetadataKeys.MetadataFsNodeData(want.ID), want.ID).Val() {
-		t.Fatalf("rollback got %#v, restored %d", legacy, rollback.Restored)
-	}
 }

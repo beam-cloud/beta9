@@ -25,10 +25,12 @@ func (r *monitorTaskRepository) DeleteTaskState(context.Context, string, string,
 
 func TestMonitorKeepsTasksUntilExecutorRegisters(t *testing.T) {
 	repo := &monitorTaskRepository{}
-	(&Dispatcher{
+	if err := (&Dispatcher{
 		taskRepo:  repo,
 		executors: common.NewSafeMap[func(context.Context, types.TaskMessage) (types.TaskInterface, error)](),
-	}).monitorTasks(context.Background())
+	}).monitorTasks(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	if repo.deleted {
 		t.Fatal("monitor deleted a task before its executor registered")
 	}

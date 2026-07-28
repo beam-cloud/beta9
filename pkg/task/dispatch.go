@@ -38,10 +38,6 @@ type Dispatcher struct {
 	storageClientCache sync.Map
 }
 
-type taskMonitorLeaser interface {
-	WithTaskMonitorLease(context.Context, func(context.Context) error) error
-}
-
 var taskMessagePool = sync.Pool{
 	New: func() interface{} {
 		return &types.TaskMessage{
@@ -188,23 +184,15 @@ func (d *Dispatcher) monitor(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			run := func(leaseCtx context.Context) error {
-				d.monitorTasks(leaseCtx)
-				return nil
-			}
-			if leaser, ok := d.taskRepo.(taskMonitorLeaser); ok {
-				_ = leaser.WithTaskMonitorLease(ctx, run)
-			} else {
-				_ = run(ctx)
-			}
+			_ = d.taskRepo.WithTaskMonitorLease(ctx, d.monitorTasks)
 		}
 	}
 }
 
-func (d *Dispatcher) monitorTasks(ctx context.Context) {
+func (d *Dispatcher) monitorTasks(ctx context.Context) error {
 	tasks, err := d.taskRepo.GetTasksInFlight(ctx)
 	if err != nil {
-		return
+		return err
 	}
 	for _, taskMessage := range tasks {
 		taskFactory, exists := d.executors.Get(taskMessage.Executor)
@@ -233,6 +221,7 @@ func (d *Dispatcher) monitorTasks(ctx context.Context) {
 			d.RetryTask(ctx, task)
 		}
 	}
+	return nil
 }
 
 func (d *Dispatcher) RetryTask(ctx context.Context, task types.TaskInterface) error {

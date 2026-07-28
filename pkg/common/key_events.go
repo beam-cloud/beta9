@@ -31,12 +31,8 @@ const (
 	KeyOperationExpired string = "expired"
 )
 
-func NewKeyEventManager(rdb *RedisClient) (*KeyEventManager, error) {
-	return &KeyEventManager{rdb: rdb}, nil
-}
-
-func (kem *KeyEventManager) TrimKeyspacePrefix(key string) string {
-	return strings.TrimPrefix(key, keyspacePrefix)
+func NewKeyEventManager(rdb *RedisClient) *KeyEventManager {
+	return &KeyEventManager{rdb: rdb}
 }
 
 // ListenForPatternEvents watches future keyspace events without replaying
@@ -109,9 +105,14 @@ func (kem *KeyEventManager) listenForSubscriptionPattern(
 			return err
 		}
 		for _, key := range keys {
-			keyEventChan <- KeyEvent{
+			select {
+			case keyEventChan <- KeyEvent{
 				Key:       key,
 				Operation: KeyOperationSet,
+			}:
+			case <-ctx.Done():
+				close()
+				return ctx.Err()
 			}
 		}
 	}

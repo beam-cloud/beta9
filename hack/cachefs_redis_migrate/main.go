@@ -1,5 +1,5 @@
 // cachefs_redis_migrate converts CacheFS metadata hashes to the compact v2
-// encoding. It is a dry run unless --apply or --rollback is supplied.
+// encoding. It is a dry run unless --apply is supplied.
 package main
 
 import (
@@ -35,35 +35,18 @@ redis.call("DEL", KEYS[1])
 return 1
 `)
 
-var restoreMetadata = redis.NewScript(`
-local current = redis.call("HGET", KEYS[1], ARGV[1])
-if not current then
-	return 0
-end
-if current ~= ARGV[2] then
-	return -1
-end
-redis.call("HSET", KEYS[3], unpack(ARGV, 3))
-redis.call("HDEL", KEYS[1], ARGV[1])
-redis.call("ZREM", KEYS[2], ARGV[1])
-return 1
-`)
-
 type report struct {
-	Apply            bool  `json:"apply"`
-	Rollback         bool  `json:"rollback"`
-	Scanned          int64 `json:"scanned"`
-	Legacy           int64 `json:"legacy_hashes"`
-	Compact          int64 `json:"compact_values"`
-	Children         int64 `json:"children_sets"`
-	Invalid          int64 `json:"invalid"`
-	Converted        int64 `json:"converted"`
-	Restored         int64 `json:"restored"`
-	Changed          int64 `json:"changed_during_migration"`
-	RemainingCompact int64 `json:"remaining_compact_values"`
-	LegacyBytes      int64 `json:"legacy_bytes"`
-	CompactBytes     int64 `json:"compact_payload_bytes"`
-	EstimatedSaved   int64 `json:"estimated_bytes_saved"`
+	Apply          bool  `json:"apply"`
+	Scanned        int64 `json:"scanned"`
+	Legacy         int64 `json:"legacy_hashes"`
+	Compact        int64 `json:"compact_values"`
+	Children       int64 `json:"children_sets"`
+	Invalid        int64 `json:"invalid"`
+	Converted      int64 `json:"converted"`
+	Changed        int64 `json:"changed_during_migration"`
+	LegacyBytes    int64 `json:"legacy_bytes"`
+	CompactBytes   int64 `json:"compact_payload_bytes"`
+	EstimatedSaved int64 `json:"estimated_bytes_saved"`
 }
 
 type metadataRecord struct {
@@ -76,15 +59,10 @@ type metadataRecord struct {
 
 func main() {
 	apply := flag.Bool("apply", false, "enable v2 and replace legacy hashes")
-	rollback := flag.Bool("rollback", false, "disable v2 and restore legacy hashes")
 	batchSize := flag.Int("batch-size", defaultBatchSize, "keys processed per pipeline")
 	pause := flag.Duration("pause", 10*time.Millisecond, "pause between batches")
 	flag.Parse()
 
-	if *apply && *rollback {
-		fmt.Fprintln(os.Stderr, "--apply and --rollback are mutually exclusive")
-		os.Exit(2)
-	}
 	if *batchSize < 1 || *batchSize > 5000 || *pause < 0 {
 		fmt.Fprintln(os.Stderr, "invalid batch size or pause")
 		os.Exit(2)
@@ -105,30 +83,7 @@ func main() {
 	if err != nil {
 		exit("count compact metadata", err)
 	}
-	result := &report{Apply: *apply, Rollback: *rollback, Compact: compact}
-	if *rollback {
-		if err := restoreMetadata.Load(ctx, rdb).Err(); err != nil {
-			exit("load rollback script", err)
-		}
-		if err := rdb.Del(ctx, cache.MetadataKeys.MetadataFsFormat()).Err(); err != nil {
-			exit("disable compact format", err)
-		}
-		for shard := range cache.FSMetadataShardCount {
-			if err := rollbackShard(ctx, rdb, shard, *batchSize, *pause, result); err != nil {
-				exit("rollback shard", err)
-			}
-		}
-		result.RemainingCompact, err = compactNodeCount(ctx, rdb)
-		if err != nil {
-			exit("count remaining compact metadata", err)
-		}
-		writeReport(result)
-		if result.RemainingCompact != 0 {
-			os.Exit(1)
-		}
-		return
-	}
-
+	result := &report{Apply: *apply, Compact: compact}
 	if *apply {
 		if err := replaceMetadata.Load(ctx, rdb).Err(); err != nil {
 			exit("load migration script", err)
@@ -268,58 +223,6 @@ func migrateBatch(ctx context.Context, rdb *common.RedisClient, keys []string, a
 		case int64(-1):
 			result.Changed++
 		}
-	}
-	return nil
-}
-
-func rollbackShard(ctx context.Context, rdb *common.RedisClient, shard, batchSize int, pause time.Duration, result *report) error {
-	dataKey := cache.MetadataKeys.MetadataFsNodeDataShard(shard)
-	indexKey := cache.MetadataKeys.MetadataFsNodeIndexShard(shard)
-	var values []string
-	var cursor uint64
-	for {
-		batch, next, err := rdb.HScan(ctx, dataKey, cursor, "*", scanCount).Result()
-		if err != nil {
-			return err
-		}
-		values = append(values, batch...)
-		cursor = next
-		if cursor == 0 {
-			break
-		}
-	}
-
-	for start := 0; start < len(values); start += 2 * batchSize {
-		end := min(start+2*batchSize, len(values))
-		pipe := rdb.Pipeline()
-		commands := make([]*redis.Cmd, 0, (end-start)/2)
-		for i := start; i+1 < end; i += 2 {
-			id, encoded := values[i], []byte(values[i+1])
-			metadata, err := cache.UnmarshalFSMetadata(encoded)
-			if err != nil || metadata.ID != id {
-				result.Invalid++
-				continue
-			}
-			args := []interface{}{id, encoded}
-			args = append(args, cache.ToSlice(metadata)...)
-			commands = append(commands, restoreMetadata.EvalSha(ctx, pipe, []string{
-				dataKey,
-				indexKey,
-				cache.MetadataKeys.MetadataFsNode(id),
-			}, args...))
-		}
-		if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
-			return err
-		}
-		for _, command := range commands {
-			switch command.Val() {
-			case int64(1):
-				result.Restored++
-			case int64(-1):
-				result.Changed++
-			}
-		}
-		time.Sleep(pause)
 	}
 	return nil
 }

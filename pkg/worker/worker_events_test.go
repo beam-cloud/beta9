@@ -15,8 +15,11 @@ func TestHandleWorkerEventStopsOwnedContainer(t *testing.T) {
 	worker := &Worker{
 		workerId:           "worker-1",
 		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		buildCancels:       common.NewSafeMap[context.CancelFunc](),
 		stopContainerChan:  make(chan stopContainerEvent, 1),
 	}
+	ctx, cancel := context.WithCancel(context.Background())
+	worker.registerBuildCancel("container-1", cancel)
 	worker.containerInstances.Set("container-1", &ContainerInstance{
 		Id: "container-1",
 		Request: &types.ContainerRequest{
@@ -38,6 +41,7 @@ func TestHandleWorkerEventStopsOwnedContainer(t *testing.T) {
 	instance, ok := worker.containerInstances.Get("container-1")
 	require.True(t, ok)
 	require.Equal(t, types.StopContainerReasonUser, instance.StopReason)
+	require.ErrorIs(t, ctx.Err(), context.Canceled)
 
 	select {
 	case event := <-worker.stopContainerChan:
@@ -109,21 +113,29 @@ func TestHandleWorkerEventCancelsMatchingBuild(t *testing.T) {
 	}
 }
 
-func TestCancelBuildIfAlreadyStoppingCancelsContext(t *testing.T) {
+func TestReconnectCancelsStoppingBuilds(t *testing.T) {
 	repoClient := &fakeContainerRepoClient{
 		state: &pb.ContainerState{
 			ContainerId: "build-1",
 			Status:      string(types.ContainerStatusStopping),
 		},
 	}
-	worker := &Worker{containerRepoClient: repoClient}
-	ctx, cancel := context.WithCancel(context.Background())
+	worker := &Worker{
+		containerRepoClient: repoClient,
+		buildCancels:        common.NewSafeMap[context.CancelFunc](),
+	}
+	first, cancelFirst := context.WithCancel(context.Background())
+	second, cancelSecond := context.WithCancel(context.Background())
+	worker.registerBuildCancel("build-1", cancelFirst)
+	worker.registerBuildCancel("build-2", cancelSecond)
 
-	worker.cancelBuildIfAlreadyStopping(ctx, cancel, "build-1")
+	worker.cancelStoppingBuilds()
 
-	select {
-	case <-ctx.Done():
-	case <-time.After(time.Second):
-		t.Fatal("expected build context to be cancelled")
+	for _, done := range []<-chan struct{}{first.Done(), second.Done()} {
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("expected build context to be cancelled")
+		}
 	}
 }

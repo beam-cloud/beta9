@@ -4,8 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strings"
 
+	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
@@ -29,9 +29,6 @@ type ContainerImageService struct {
 	builder          *Builder
 	config           types.AppConfig
 	backendRepo      repository.BackendRepository
-	containerRepo    repository.ContainerRepository
-	keyEventChan     chan common.KeyEvent
-	keyEventManager  *common.KeyEventManager
 	baseImageDigests baseImageDigestCache
 }
 
@@ -61,24 +58,24 @@ func NewContainerImageService(
 		return nil, err
 	}
 
-	keyEventManager, err := common.NewKeyEventManager(opts.RedisClient)
-	if err != nil {
-		return nil, err
-	}
-
 	is := ContainerImageService{
 		builder:          builder,
 		config:           opts.Config,
 		backendRepo:      opts.BackendRepo,
-		containerRepo:    opts.ContainerRepo,
-		keyEventChan:     make(chan common.KeyEvent),
-		keyEventManager:  keyEventManager,
 		baseImageDigests: newBaseImageDigestCache(),
 	}
 
-	go is.monitorImageContainers(ctx)
-	go is.keyEventManager.ListenForPatternEvents(ctx, common.RedisKeys.ImageBuildContainerTTL(""), is.keyEventChan)
-	go is.keyEventManager.ListenForContainerPattern(ctx, types.BuildContainerPrefix, is.keyEventChan)
+	leases := abstractions.NewContainerLeaseManager(
+		opts.RedisClient,
+		opts.Scheduler,
+		types.BuildContainerPrefix,
+		common.RedisKeys.ImageBuildContainerTTL,
+	)
+	go func() {
+		if err := leases.Run(ctx); err != nil {
+			log.Error().Err(err).Msg("image container lease manager stopped")
+		}
+	}()
 
 	return &is, nil
 }
@@ -248,39 +245,6 @@ func (is *ContainerImageService) retrieveBuildSecrets(ctx context.Context, secre
 		}
 	}
 	return buildSecrets, nil
-}
-
-func (is *ContainerImageService) monitorImageContainers(ctx context.Context) {
-	for {
-		select {
-		case event := <-is.keyEventChan:
-			switch event.Operation {
-			case common.KeyOperationSet:
-				if strings.Contains(event.Key, common.RedisKeys.SchedulerContainerState("")) {
-					containerId := strings.TrimPrefix(is.keyEventManager.TrimKeyspacePrefix(event.Key), common.RedisKeys.SchedulerContainerState(""))
-
-					if !is.containerRepo.HasBuildContainerTTL(containerId) {
-						is.builder.scheduler.Stop(&types.StopContainerArgs{
-							ContainerId: containerId,
-							Force:       true,
-							Reason:      types.StopContainerReasonTtl,
-						})
-					}
-				}
-			case common.KeyOperationExpired:
-				if strings.Contains(event.Key, common.RedisKeys.ImageBuildContainerTTL("")) {
-					containerId := strings.TrimPrefix(is.keyEventManager.TrimKeyspacePrefix(event.Key), common.RedisKeys.ImageBuildContainerTTL(""))
-					is.builder.scheduler.Stop(&types.StopContainerArgs{
-						ContainerId: containerId,
-						Force:       true,
-						Reason:      types.StopContainerReasonTtl,
-					})
-				}
-			}
-		case <-ctx.Done():
-			return
-		}
-	}
 }
 
 func convertBuildSteps(buildSteps []*pb.BuildStep) []BuildStep {

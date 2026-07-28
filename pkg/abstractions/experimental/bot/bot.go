@@ -68,10 +68,7 @@ type PetriBotService struct {
 }
 
 func NewPetriBotService(ctx context.Context, opts BotServiceOpts) (BotService, error) {
-	keyEventManager, err := common.NewKeyEventManager(opts.RedisClient)
-	if err != nil {
-		return nil, err
-	}
+	keyEventManager := common.NewKeyEventManager(opts.RedisClient)
 
 	pbs := &PetriBotService{
 		ctx:             ctx,

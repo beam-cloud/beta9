@@ -36,16 +36,12 @@ func (r *TaskRedisRepository) ClaimTask(ctx context.Context, workspaceName, stub
 	if entryTTL := r.rdb.TTL(ctx, common.RedisKeys.TaskEntry(workspaceName, stubId, taskId)).Val(); entryTTL > 0 {
 		ttl = entryTTL
 	}
-	err := r.rdb.Set(ctx, claimKey, containerId, ttl).Err()
-	if err != nil {
+	pipe := r.rdb.TxPipeline()
+	pipe.Set(ctx, claimKey, containerId, ttl)
+	pipe.SAdd(ctx, claimIndexKey, taskId)
+	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("failed to claim task <%v>: %w", claimKey, err)
 	}
-
-	err = r.rdb.SAdd(ctx, claimIndexKey, taskId).Err()
-	if err != nil {
-		return fmt.Errorf("failed to add task to claim index <%v>: %w", claimIndexKey, err)
-	}
-
 	return nil
 }
 
@@ -53,16 +49,12 @@ func (r *TaskRedisRepository) RemoveTaskClaim(ctx context.Context, workspaceName
 	claimKey := common.RedisKeys.TaskClaim(workspaceName, stubId, taskId)
 	claimIndexKey := common.RedisKeys.TaskClaimIndex(workspaceName, stubId)
 
-	err := r.rdb.Del(ctx, claimKey).Err()
-	if err != nil {
+	pipe := r.rdb.TxPipeline()
+	pipe.Del(ctx, claimKey)
+	pipe.SRem(ctx, claimIndexKey, taskId)
+	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("failed to remove task claim <%v>: %w", claimKey, err)
 	}
-
-	err = r.rdb.SRem(ctx, claimIndexKey, taskId).Err()
-	if err != nil {
-		return fmt.Errorf("failed to remove task from claim index <%v>: %w", claimIndexKey, err)
-	}
-
 	return nil
 }
 
@@ -90,22 +82,14 @@ func (r *TaskRedisRepository) SetTaskState(ctx context.Context, workspaceName, s
 	stubIndexKey := common.RedisKeys.TaskIndexByStub(workspaceName, stubId)
 	entryKey := common.RedisKeys.TaskEntry(workspaceName, stubId, taskId)
 
-	err := r.rdb.SAdd(ctx, indexKey, entryKey).Err()
-	if err != nil {
-		return fmt.Errorf("failed to add task key to index <%v>: %w", indexKey, err)
-	}
-
-	err = r.rdb.Set(ctx, entryKey, msg, taskStateTTL(msg)).Err()
-	if err != nil {
+	pipe := r.rdb.TxPipeline()
+	pipe.SAdd(ctx, indexKey, entryKey)
+	pipe.Set(ctx, entryKey, msg, taskStateTTL(msg))
+	pipe.SAdd(ctx, stubIndexKey, taskId)
+	if _, err := pipe.Exec(ctx); err != nil {
 		r.DeleteTaskState(ctx, workspaceName, stubId, taskId)
 		return err
 	}
-
-	err = r.rdb.SAdd(ctx, stubIndexKey, taskId).Err()
-	if err != nil {
-		return fmt.Errorf("failed to add task key to stub index <%v>: %w", indexKey, err)
-	}
-
 	return nil
 }
 

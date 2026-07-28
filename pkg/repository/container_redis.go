@@ -429,30 +429,14 @@ func (cr *ContainerRedisRepository) DeleteContainerState(containerId string) err
 		}
 	}
 
-	err = cr.rdb.Del(context.TODO(), stateKey).Err()
-	if err != nil {
-		return fmt.Errorf("failed to delete container state <%v>: %w", stateKey, err)
-	}
-	if err := cr.rdb.ZRem(context.TODO(), common.RedisKeys.SchedulerContainerStateIndex(), stateKey).Err(); err != nil {
-		return fmt.Errorf("failed to remove container state index <%v>: %w", stateKey, err)
-	}
-
 	addrKey := common.RedisKeys.SchedulerContainerAddress(containerId)
-	err = cr.rdb.Del(context.TODO(), addrKey).Err()
-	if err != nil {
-		return fmt.Errorf("failed to delete container addr <%v>: %w", addrKey, err)
-	}
-
 	addrMapKey := common.RedisKeys.SchedulerContainerAddressMap(containerId)
-	err = cr.rdb.Del(context.TODO(), addrMapKey).Err()
-	if err != nil {
-		return fmt.Errorf("failed to delete container addrMap <%v>: %w", addrMapKey, err)
-	}
-
 	workerAddrKey := common.RedisKeys.SchedulerWorkerAddress(containerId)
-	err = cr.rdb.Del(context.TODO(), workerAddrKey).Err()
-	if err != nil {
-		return fmt.Errorf("failed to delete worker addr <%v>: %w", workerAddrKey, err)
+	pipe := cr.rdb.TxPipeline()
+	pipe.Del(context.TODO(), stateKey, addrKey, addrMapKey, workerAddrKey)
+	pipe.ZRem(context.TODO(), common.RedisKeys.SchedulerContainerStateIndex(), stateKey)
+	if _, err := pipe.Exec(context.TODO()); err != nil {
+		return fmt.Errorf("failed to delete container state <%v>: %w", stateKey, err)
 	}
 
 	if err := cr.DeleteBackendRoutesByContainerID(context.TODO(), containerId); err != nil {
@@ -1464,8 +1448,8 @@ func (cr *ContainerRedisRepository) SetBuildContainerTTL(containerId string, ttl
 	return cr.rdb.Set(context.TODO(), common.RedisKeys.ImageBuildContainerTTL(containerId), "1", ttl).Err()
 }
 
-func (cr *ContainerRedisRepository) HasBuildContainerTTL(containerId string) bool {
-	return cr.rdb.Exists(context.TODO(), common.RedisKeys.ImageBuildContainerTTL(containerId)).Val() != 0
+func (cr *ContainerRedisRepository) RefreshBuildContainerTTL(containerId string, ttl time.Duration) (bool, error) {
+	return cr.rdb.ExpireXX(context.TODO(), common.RedisKeys.ImageBuildContainerTTL(containerId), ttl).Result()
 }
 
 func (c *ContainerRedisRepository) SetPodKeepWarmLock(ctx context.Context, workspaceName, stubId, containerId string, keepWarmSeconds int) error {

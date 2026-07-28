@@ -1407,6 +1407,42 @@ func TestContainerRepositoryKeepWarmLocksApplySharedSemantics(t *testing.T) {
 	}
 }
 
+func TestRefreshBuildContainerTTLDoesNotRecreateExpiredLease(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repo := NewContainerRedisRepositoryForTest(rdb)
+	const containerId = "build-expired"
+
+	if err := repo.SetBuildContainerTTL(containerId, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	refreshed, err := repo.RefreshBuildContainerTTL(containerId, 2*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !refreshed {
+		t.Fatal("expected existing lease to refresh")
+	}
+
+	if err := rdb.Del(context.Background(), common.RedisKeys.ImageBuildContainerTTL(containerId)).Err(); err != nil {
+		t.Fatal(err)
+	}
+	refreshed, err = repo.RefreshBuildContainerTTL(containerId, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exists, err := rdb.Exists(context.Background(), common.RedisKeys.ImageBuildContainerTTL(containerId)).Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refreshed || exists != 0 {
+		t.Fatal("expired lease was recreated")
+	}
+}
+
 func testContainerRequest(containerId, workspaceId string, cpu int64) *types.ContainerRequest {
 	return &types.ContainerRequest{
 		ContainerId: containerId,

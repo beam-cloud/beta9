@@ -33,8 +33,7 @@ func TestKeyEventManagerListensForExistingKey(t *testing.T) {
 	require.NoError(t, rdb.Set(context.Background(), key, 0, time.Minute).Err())
 
 	events := make(chan KeyEvent, 1)
-	manager, err := NewKeyEventManager(rdb)
-	require.NoError(t, err)
+	manager := NewKeyEventManager(rdb)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	require.NoError(t, manager.ListenForKey(ctx, key, events))
@@ -74,8 +73,7 @@ func TestKeyEventManagerReplaysIndexedContainerState(t *testing.T) {
 	).Err())
 
 	events := make(chan KeyEvent, 1)
-	manager, err := NewKeyEventManager(rdb)
-	require.NoError(t, err)
+	manager := NewKeyEventManager(rdb)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	require.NoError(t, manager.ListenForContainerPattern(ctx, "pod-", events))
