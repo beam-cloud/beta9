@@ -93,7 +93,7 @@ func NewPetriBotService(ctx context.Context, opts BotServiceOpts) (BotService, e
 	}
 
 	// Listen for container events with a bot container prefix
-	go keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerState(botContainerPrefix), pbs.keyEventChan)
+	go keyEventManager.ListenForContainerPattern(ctx, botContainerPrefix, pbs.keyEventChan)
 	go pbs.handleBotContainerEvents(ctx)
 
 	// Register task dispatcher

@@ -256,6 +256,10 @@ func (cr *ContainerRedisRepository) setContainerState(containerId string, state 
 	pipe.Expire(ctx, stateKey, time.Duration(types.ContainerStateTtlSWhilePending)*time.Second)
 	pipe.SAdd(ctx, stubIndexKey, stateKey)
 	pipe.SAdd(ctx, workspaceIndexKey, stateKey)
+	pipe.ZAdd(ctx, common.RedisKeys.SchedulerContainerStateIndex(), redis.Z{
+		Score:  float64(time.Now().Add(time.Duration(types.ContainerStateTtlSWhilePending) * time.Second).Unix()),
+		Member: stateKey,
+	})
 	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("failed to set container state and indexes <%v>: %w", stateKey, err)
 	}
@@ -352,14 +356,14 @@ func (cr *ContainerRedisRepository) UpdateContainerStatus(containerId string, st
 	state.Status = status
 
 	// Save state to database
-	err = cr.rdb.HSet(context.TODO(), stateKey, common.ToSlice(state)).Err()
-	if err != nil {
-		return fmt.Errorf("failed to update container state status <%v>: %w", stateKey, err)
-	}
-
-	// Set ttl on state
-	err = cr.rdb.Expire(context.TODO(), stateKey, expiry).Err()
-	if err != nil {
+	pipe := cr.rdb.TxPipeline()
+	pipe.HSet(context.TODO(), stateKey, common.ToSlice(state))
+	pipe.Expire(context.TODO(), stateKey, expiry)
+	pipe.ZAdd(context.TODO(), common.RedisKeys.SchedulerContainerStateIndex(), redis.Z{
+		Score:  float64(time.Now().Add(expiry).Unix()),
+		Member: stateKey,
+	})
+	if _, err = pipe.Exec(context.TODO()); err != nil {
 		return fmt.Errorf("failed to set container state ttl <%v>: %w", stateKey, err)
 	}
 
@@ -384,13 +388,18 @@ if worker_id and worker_id ~= "" then
 end
 redis.call("HSET", KEYS[1], "status", ARGV[2])
 redis.call("EXPIRE", KEYS[1], ARGV[3])
+redis.call("ZADD", KEYS[2], ARGV[4], KEYS[1])
 return 1
 `)
 
 func (cr *ContainerRedisRepository) MarkPendingContainerStoppingIfUnassigned(containerId string, expirySeconds int64) (bool, error) {
 	stateKey := common.RedisKeys.SchedulerContainerState(containerId)
-	marked, err := markPendingContainerStoppingIfUnassignedScript.Run(context.TODO(), cr.rdb, []string{stateKey},
+	marked, err := markPendingContainerStoppingIfUnassignedScript.Run(context.TODO(), cr.rdb, []string{
+		stateKey,
+		common.RedisKeys.SchedulerContainerStateIndex(),
+	},
 		string(types.ContainerStatusPending), string(types.ContainerStatusStopping), expirySeconds,
+		time.Now().Add(time.Duration(expirySeconds)*time.Second).Unix(),
 	).Bool()
 	if err != nil {
 		return false, fmt.Errorf("failed to stop unassigned pending container <%s>: %w", containerId, err)
@@ -423,6 +432,9 @@ func (cr *ContainerRedisRepository) DeleteContainerState(containerId string) err
 	err = cr.rdb.Del(context.TODO(), stateKey).Err()
 	if err != nil {
 		return fmt.Errorf("failed to delete container state <%v>: %w", stateKey, err)
+	}
+	if err := cr.rdb.ZRem(context.TODO(), common.RedisKeys.SchedulerContainerStateIndex(), stateKey).Err(); err != nil {
+		return fmt.Errorf("failed to remove container state index <%v>: %w", stateKey, err)
 	}
 
 	addrKey := common.RedisKeys.SchedulerContainerAddress(containerId)

@@ -36,7 +36,7 @@ func NewContainerEventManager(ctx context.Context, containerPrefixes []string, k
 
 func (em *ContainerEventManager) Listen() {
 	for _, prefix := range em.containerPrefixes {
-		go em.keyEventManager.ListenForPattern(em.ctx, common.RedisKeys.SchedulerContainerState(prefix), em.keyEventChans[prefix])
+		go em.keyEventManager.ListenForContainerPattern(em.ctx, prefix, em.keyEventChans[prefix])
 		go em.handleContainerEventsForPrefix(em.ctx, prefix)
 	}
 }

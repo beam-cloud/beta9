@@ -77,8 +77,8 @@ func NewContainerImageService(
 	}
 
 	go is.monitorImageContainers(ctx)
-	go is.keyEventManager.ListenForPattern(ctx, common.RedisKeys.ImageBuildContainerTTL("*"), is.keyEventChan)
-	go is.keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerState(types.BuildContainerPrefix+"*"), is.keyEventChan)
+	go is.keyEventManager.ListenForPatternEvents(ctx, common.RedisKeys.ImageBuildContainerTTL(""), is.keyEventChan)
+	go is.keyEventManager.ListenForContainerPattern(ctx, types.BuildContainerPrefix, is.keyEventChan)
 
 	return &is, nil
 }

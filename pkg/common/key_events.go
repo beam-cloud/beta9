@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog/log"
 )
 
@@ -37,33 +39,45 @@ func (kem *KeyEventManager) TrimKeyspacePrefix(key string) string {
 	return strings.TrimPrefix(key, keyspacePrefix)
 }
 
-func (kem *KeyEventManager) fetchExistingKeys(patternPrefix string) ([]string, error) {
-	pattern := fmt.Sprintf("%s*", patternPrefix)
-
-	keys, err := kem.rdb.Scan(context.Background(), pattern)
-	if err != nil {
-		return nil, err
-	}
-
-	trimmedKeys := make([]string, len(keys))
-	for i, key := range keys {
-		trimmedKeys[i] = strings.TrimPrefix(key, patternPrefix)
-	}
-
-	return trimmedKeys, nil
+// ListenForPatternEvents watches future keyspace events without replaying
+// existing keys. Use it when only expiry/delete events are meaningful.
+func (kem *KeyEventManager) ListenForPatternEvents(ctx context.Context, patternPrefix string, keyEventChan chan KeyEvent) error {
+	return kem.listenForSubscriptionPattern(ctx, patternPrefix, keyspacePrefix+patternPrefix+"*", keyEventChan, nil)
 }
 
-func (kem *KeyEventManager) ListenForPattern(ctx context.Context, patternPrefix string, keyEventChan chan KeyEvent) error {
-	keyspacePattern := fmt.Sprintf("%s%s*", keyspacePrefix, patternPrefix)
-	return kem.listenForSubscriptionPattern(ctx, patternPrefix, keyspacePattern, keyEventChan, func() ([]string, error) {
-		return kem.fetchExistingKeys(patternPrefix)
+// ListenForContainerPattern replays active container state from its explicit
+// index instead of scanning the entire Redis keyspace.
+func (kem *KeyEventManager) ListenForContainerPattern(ctx context.Context, containerPrefix string, keyEventChan chan KeyEvent) error {
+	patternPrefix := RedisKeys.SchedulerContainerState(containerPrefix)
+	return kem.listenForSubscriptionPattern(ctx, patternPrefix, keyspacePrefix+patternPrefix+"*", keyEventChan, func() ([]string, error) {
+		now := fmt.Sprint(time.Now().Unix())
+		pipe := kem.rdb.TxPipeline()
+		active := pipe.ZRangeByScore(ctx, RedisKeys.SchedulerContainerStateIndex(), &redis.ZRangeBy{
+			Min: now,
+			Max: "+inf",
+		})
+		pipe.ZRemRangeByScore(ctx, RedisKeys.SchedulerContainerStateIndex(), "-inf", now)
+		if _, err := pipe.Exec(ctx); err != nil {
+			return nil, err
+		}
+		keys := active.Val()
+		existing := make([]string, 0, len(keys))
+		for _, key := range keys {
+			if strings.HasPrefix(key, patternPrefix) {
+				existing = append(existing, strings.TrimPrefix(key, patternPrefix))
+			}
+		}
+		return existing, nil
 	})
 }
 
-func (kem *KeyEventManager) ListenForPublishedPattern(ctx context.Context, patternPrefix string, keyEventChan chan KeyEvent) error {
-	pattern := fmt.Sprintf("%s*", patternPrefix)
-	return kem.listenForSubscriptionPattern(ctx, patternPrefix, pattern, keyEventChan, func() ([]string, error) {
-		return kem.fetchExistingKeys(patternPrefix)
+func (kem *KeyEventManager) ListenForPublishedKey(ctx context.Context, key string, keyEventChan chan KeyEvent) error {
+	return kem.listenForSubscriptionPattern(ctx, key, key, keyEventChan, func() ([]string, error) {
+		exists, err := kem.rdb.Exists(ctx, key).Result()
+		if err != nil || exists == 0 {
+			return nil, err
+		}
+		return []string{""}, nil
 	})
 }
 
@@ -88,16 +102,17 @@ func (kem *KeyEventManager) listenForSubscriptionPattern(
 ) error {
 	messages, errs, close := kem.rdb.PSubscribe(ctx, pattern)
 
-	keys, err := existingKeys()
-	if err != nil {
-		close()
-		return err
-	}
-
-	for _, key := range keys {
-		keyEventChan <- KeyEvent{
-			Key:       key,
-			Operation: KeyOperationSet,
+	if existingKeys != nil {
+		keys, err := existingKeys()
+		if err != nil {
+			close()
+			return err
+		}
+		for _, key := range keys {
+			keyEventChan <- KeyEvent{
+				Key:       key,
+				Operation: KeyOperationSet,
+			}
 		}
 	}
 

@@ -44,7 +44,6 @@ const (
 	pendingShellTTL               time.Duration = 5 * time.Minute
 	containerWaitPollIntervalS    time.Duration = 1 * time.Second
 	containerKeepAliveIntervalS   time.Duration = 5 * time.Second
-	shellReconcileInterval        time.Duration = 30 * time.Second
 	sshProbeTimeoutDurationS      time.Duration = 500 * time.Millisecond
 	sshBannerTimeoutDurationS     time.Duration = 500 * time.Millisecond
 	sshStartupTimeoutDurationS    time.Duration = 10 * time.Second
@@ -135,7 +134,7 @@ func NewSSHShellService(
 
 	// Listen for shell container ttl events
 	go func() {
-		if err := ss.keyEventManager.ListenForPattern(
+		if err := ss.keyEventManager.ListenForPatternEvents(
 			ss.ctx,
 			Keys.shellContainerTTL(""),
 			ss.ttlEventChan,
@@ -144,9 +143,9 @@ func NewSSHShellService(
 		}
 	}()
 	go func() {
-		if err := ss.keyEventManager.ListenForPattern(
+		if err := ss.keyEventManager.ListenForContainerPattern(
 			ss.ctx,
-			common.RedisKeys.SchedulerContainerState(shellContainerPrefix),
+			shellContainerPrefix,
 			ss.containerEventChan,
 		); err != nil {
 			log.Error().Err(err).Msg("shell container event listener stopped")
@@ -167,9 +166,6 @@ func (ss *SSHShellService) durableDiskPlacementRepos() abstractions.DurableDiskP
 }
 
 func (ss *SSHShellService) handleTTLEvents() {
-	reconcileTicker := time.NewTicker(shellReconcileInterval)
-	defer reconcileTicker.Stop()
-
 	for {
 		select {
 		case event := <-ss.ttlEventChan:
@@ -182,24 +178,9 @@ func (ss *SSHShellService) handleTTLEvents() {
 				// subscribed to their TTL events.
 				ss.stopShellWithoutLease(shellContainerPrefix + event.Key)
 			}
-		case <-reconcileTicker.C:
-			ss.reconcileShellLeases()
 		case <-ss.ctx.Done():
 			return
 		}
-	}
-}
-
-func (ss *SSHShellService) reconcileShellLeases() {
-	statePrefix := common.RedisKeys.SchedulerContainerState(shellContainerPrefix)
-	stateKeys, err := ss.rdb.Scan(ss.ctx, statePrefix+"*")
-	if err != nil {
-		log.Error().Err(err).Msg("failed to reconcile shell leases")
-		return
-	}
-	for _, stateKey := range stateKeys {
-		containerId := shellContainerPrefix + strings.TrimPrefix(stateKey, statePrefix)
-		ss.stopShellWithoutLease(containerId)
 	}
 }
 

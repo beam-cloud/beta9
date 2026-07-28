@@ -103,6 +103,11 @@ func TestSetContainerStateCommitsIndexesWithState(t *testing.T) {
 	} else if !ok {
 		t.Fatal("expected state key to be present in workspace index")
 	}
+	if score, err := rdb.ZScore(context.Background(), common.RedisKeys.SchedulerContainerStateIndex(), stateKey).Result(); err != nil {
+		t.Fatal(err)
+	} else if score <= float64(time.Now().Unix()) {
+		t.Fatal("expected state key to have a future expiry in the global index")
+	}
 
 	byStub, err := repo.GetActiveContainersByStubId(state.StubId)
 	if err != nil {

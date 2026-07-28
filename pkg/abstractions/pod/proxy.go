@@ -293,7 +293,12 @@ func (pb *PodProxyBuffer) waitForConnection(conn *connection, requestDone <-chan
 		case <-conn.done:
 			return nil
 		case <-requestDone:
-			return nil
+			if conn.cancelQueued() {
+				return nil
+			}
+			// An active proxy goroutine owns the response writer. Wait for it
+			// to observe request cancellation before net/http finalizes headers.
+			requestDone = nil
 		}
 	}
 }
@@ -492,6 +497,18 @@ func (c *connection) finish() {
 
 func (c *connection) claim() bool {
 	return c != nil && c.state.CompareAndSwap(connectionQueued, connectionActive)
+}
+
+func (c *connection) cancelQueued() bool {
+	if c == nil || !c.state.CompareAndSwap(connectionQueued, connectionFinished) {
+		return false
+	}
+	c.finishOnce.Do(func() {
+		if c.done != nil {
+			close(c.done)
+		}
+	})
+	return true
 }
 
 func (pb *PodProxyBuffer) availableContainerSnapshot() []container {
