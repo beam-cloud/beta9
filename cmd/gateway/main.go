@@ -33,6 +33,8 @@ func main() {
 		log.Fatal().Err(err).Msg("error creating gateway service")
 	}
 
-	gw.Start()
+	if err := gw.Start(); err != nil {
+		log.Fatal().Err(err).Msg("gateway stopped unexpectedly")
+	}
 	log.Info().Msg("Gateway stopped")
 }

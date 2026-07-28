@@ -2,8 +2,10 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -16,6 +18,11 @@ type TaskRedisRepository struct {
 	lock *common.RedisLock
 }
 
+const (
+	taskStateCleanupGrace = 10 * time.Minute
+	taskMonitorLease      = 15 * time.Second
+)
+
 func NewTaskRedisRepository(r *common.RedisClient) TaskRepository {
 	lock := common.NewRedisLock(r)
 	return &TaskRedisRepository{rdb: r, lock: lock}
@@ -25,16 +32,16 @@ func (r *TaskRedisRepository) ClaimTask(ctx context.Context, workspaceName, stub
 	claimKey := common.RedisKeys.TaskClaim(workspaceName, stubId, taskId)
 	claimIndexKey := common.RedisKeys.TaskClaimIndex(workspaceName, stubId)
 
-	err := r.rdb.Set(ctx, claimKey, containerId, 0).Err()
-	if err != nil {
+	ttl := time.Duration(types.MaxTaskTTL) * time.Second
+	if entryTTL := r.rdb.TTL(ctx, common.RedisKeys.TaskEntry(workspaceName, stubId, taskId)).Val(); entryTTL > 0 {
+		ttl = entryTTL
+	}
+	pipe := r.rdb.TxPipeline()
+	pipe.Set(ctx, claimKey, containerId, ttl)
+	pipe.SAdd(ctx, claimIndexKey, taskId)
+	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("failed to claim task <%v>: %w", claimKey, err)
 	}
-
-	err = r.rdb.SAdd(ctx, claimIndexKey, taskId).Err()
-	if err != nil {
-		return fmt.Errorf("failed to add task to claim index <%v>: %w", claimIndexKey, err)
-	}
-
 	return nil
 }
 
@@ -42,16 +49,12 @@ func (r *TaskRedisRepository) RemoveTaskClaim(ctx context.Context, workspaceName
 	claimKey := common.RedisKeys.TaskClaim(workspaceName, stubId, taskId)
 	claimIndexKey := common.RedisKeys.TaskClaimIndex(workspaceName, stubId)
 
-	err := r.rdb.Del(ctx, claimKey).Err()
-	if err != nil {
+	pipe := r.rdb.TxPipeline()
+	pipe.Del(ctx, claimKey)
+	pipe.SRem(ctx, claimIndexKey, taskId)
+	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("failed to remove task claim <%v>: %w", claimKey, err)
 	}
-
-	err = r.rdb.SRem(ctx, claimIndexKey, taskId).Err()
-	if err != nil {
-		return fmt.Errorf("failed to remove task from claim index <%v>: %w", claimIndexKey, err)
-	}
-
 	return nil
 }
 
@@ -79,23 +82,36 @@ func (r *TaskRedisRepository) SetTaskState(ctx context.Context, workspaceName, s
 	stubIndexKey := common.RedisKeys.TaskIndexByStub(workspaceName, stubId)
 	entryKey := common.RedisKeys.TaskEntry(workspaceName, stubId, taskId)
 
-	err := r.rdb.SAdd(ctx, indexKey, entryKey).Err()
-	if err != nil {
-		return fmt.Errorf("failed to add task key to index <%v>: %w", indexKey, err)
-	}
-
-	err = r.rdb.Set(ctx, entryKey, msg, 0).Err()
-	if err != nil {
+	pipe := r.rdb.TxPipeline()
+	pipe.SAdd(ctx, indexKey, entryKey)
+	pipe.Set(ctx, entryKey, msg, taskStateTTL(msg))
+	pipe.SAdd(ctx, stubIndexKey, taskId)
+	if _, err := pipe.Exec(ctx); err != nil {
 		r.DeleteTaskState(ctx, workspaceName, stubId, taskId)
 		return err
 	}
-
-	err = r.rdb.SAdd(ctx, stubIndexKey, taskId).Err()
-	if err != nil {
-		return fmt.Errorf("failed to add task key to stub index <%v>: %w", indexKey, err)
-	}
-
 	return nil
+}
+
+func taskStateTTL(msg []byte) time.Duration {
+	var state struct {
+		Policy struct {
+			Expires time.Time `json:"expires"`
+		} `json:"policy"`
+	}
+	if json.Unmarshal(msg, &state) == nil && !state.Policy.Expires.IsZero() {
+		if ttl := time.Until(state.Policy.Expires) + taskStateCleanupGrace; ttl > time.Minute {
+			return ttl
+		}
+		return time.Minute
+	}
+	return time.Duration(types.MaxTaskTTL)*time.Second + taskStateCleanupGrace
+}
+
+func (r *TaskRedisRepository) WithTaskMonitorLease(ctx context.Context, fn func(context.Context) error) error {
+	return r.lock.WithLease(ctx, common.RedisKeys.TaskMonitorLock(), common.RedisLockOptions{
+		TtlS: int(taskMonitorLease.Seconds()),
+	}, fn)
 }
 
 func (r *TaskRedisRepository) GetTaskState(ctx context.Context, workspaceName, stubId, taskId string) (*types.TaskMessage, error) {

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/bsm/redislock"
@@ -17,8 +18,10 @@ const (
 )
 
 type Metadata struct {
-	rdb  *RedisClient
-	lock *RedisLock
+	rdb           *RedisClient
+	lock          *RedisLock
+	compactReads  atomic.Bool
+	compactWrites atomic.Bool
 }
 
 func NewMetadata(cfg MetadataConfig) (*Metadata, error) {
@@ -69,13 +72,35 @@ func (m *Metadata) RemoveClientLock(ctx context.Context, clientId, hash string) 
 }
 
 func (m *Metadata) GetFsNode(ctx context.Context, id string) (*FSMetadata, error) {
-	key := MetadataKeys.MetadataFsNode(id)
-
-	res, err := m.rdb.HGetAll(ctx, key).Result()
-	if err != nil && err != redis.Nil {
+	compactFirst := m.compactReads.Load()
+	if compactFirst {
+		metadata, err := m.getCompactFsNode(ctx, id)
+		var notFound *ErrNodeNotFound
+		if !errors.As(err, &notFound) {
+			return metadata, err
+		}
+	}
+	metadata, err := m.getLegacyFsNode(ctx, id)
+	var notFound *ErrNodeNotFound
+	if !errors.As(err, &notFound) {
+		return metadata, err
+	}
+	if compactFirst {
 		return nil, err
 	}
+	metadata, err = m.getCompactFsNode(ctx, id)
+	if err == nil {
+		m.compactReads.Store(true)
+	}
+	return metadata, err
+}
 
+func (m *Metadata) getLegacyFsNode(ctx context.Context, id string) (*FSMetadata, error) {
+	key := MetadataKeys.MetadataFsNode(id)
+	res, err := m.rdb.HGetAll(ctx, key).Result()
+	if err != nil {
+		return nil, err
+	}
 	if len(res) == 0 {
 		return nil, &ErrNodeNotFound{Id: id}
 	}
@@ -88,30 +113,78 @@ func (m *Metadata) GetFsNode(ctx context.Context, id string) (*FSMetadata, error
 	return metadata, nil
 }
 
+func (m *Metadata) getCompactFsNode(ctx context.Context, id string) (*FSMetadata, error) {
+	key := MetadataKeys.MetadataFsNodeData(id)
+	data, err := m.rdb.HGet(ctx, key, id).Bytes()
+	if err == redis.Nil {
+		return nil, &ErrNodeNotFound{Id: id}
+	}
+	if err != nil {
+		return nil, err
+	}
+	metadata, err := UnmarshalFSMetadata(data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to deserialize cachefs node metadata <%v>: %w", key, err)
+	}
+	return metadata, nil
+}
+
 func (m *Metadata) SetFsNode(ctx context.Context, id string, metadata *FSMetadata) error {
 	key := MetadataKeys.MetadataFsNode(id)
 
-	// If metadata exists, increment inode generation #
-	res, err := m.rdb.HGetAll(ctx, key).Result()
-	if err != nil && err != redis.Nil {
+	existing, err := m.GetFsNode(ctx, id)
+	var notFound *ErrNodeNotFound
+	if err != nil && !errors.As(err, &notFound) {
+		return err
+	}
+	if existing != nil {
+		metadata.Gen = existing.Gen + 1
+	}
+
+	compact, err := m.compactEnabled(ctx)
+	if err != nil {
 		return err
 	}
 
-	if len(res) > 0 {
-		existingMetadata := &FSMetadata{}
-		if err = ToStruct(res, existingMetadata); err != nil {
+	pipe := m.rdb.TxPipeline()
+	if compact {
+		data, err := MarshalFSMetadata(metadata)
+		if err != nil {
 			return err
 		}
-
-		metadata.Gen = existingMetadata.Gen + 1
+		pipe.HSet(ctx, MetadataKeys.MetadataFsNodeData(id), id, data)
+		pipe.Del(ctx, key)
+		pipe.ZAdd(ctx, MetadataKeys.MetadataFsNodeIndex(id), redis.Z{
+			Score:  float64(time.Now().Unix()),
+			Member: id,
+		})
+	} else {
+		pipe.HSet(ctx, key, ToSlice(metadata))
 	}
-
-	err = m.rdb.HSet(ctx, key, ToSlice(metadata)).Err()
-	if err != nil {
+	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("failed to set cachefs node metadata <%v>: %w", key, err)
 	}
 
 	return nil
+}
+
+func (m *Metadata) compactEnabled(ctx context.Context) (bool, error) {
+	if m.compactWrites.Load() {
+		return true, nil
+	}
+	version, err := m.rdb.Get(ctx, MetadataKeys.MetadataFsFormat()).Result()
+	if err == redis.Nil {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if version == FSMetadataFormatCompact {
+		m.compactReads.Store(true)
+		m.compactWrites.Store(true)
+		return true, nil
+	}
+	return false, nil
 }
 
 func (m *Metadata) GetFsNodeChildren(ctx context.Context, id string) ([]*FSMetadata, error) {
@@ -212,7 +285,13 @@ func (m *Metadata) AddFsNodeChild(ctx context.Context, pid, id string) error {
 }
 
 func (m *Metadata) RemoveFsNode(ctx context.Context, id string) error {
-	return m.rdb.Del(ctx, MetadataKeys.MetadataFsNode(id)).Err()
+	_, err := m.rdb.Pipelined(ctx, func(pipe redis.Pipeliner) error {
+		pipe.Del(ctx, MetadataKeys.MetadataFsNode(id))
+		pipe.HDel(ctx, MetadataKeys.MetadataFsNodeData(id), id)
+		pipe.ZRem(ctx, MetadataKeys.MetadataFsNodeIndex(id), id)
+		return nil
+	})
+	return err
 }
 
 func (m *Metadata) RemoveFsNodeChild(ctx context.Context, pid, id string) error {
@@ -367,12 +446,20 @@ var (
 	metadataLocation             string = "cache:location:%s"
 	metadataFsNode               string = "cache:fs:node:%s"
 	metadataFsNodeChildren       string = "cache:fs:node:%s:children"
+	metadataFsNodeData           string = "cache:fs:nodes:%02x"
+	metadataFsNodeIndex          string = "cache:fs:nodes:%02x:mtime"
+	metadataFsFormat             string = "cache:fs:format"
 	metadataHostKeepAlive        string = "cache:host:keepalive:%s:%s"
 	metadataStoreFromContentLock string = "cache:store_from_content_lock:%s:%s"
 	metadataReconcileRecent      string = "cache:reconcile:recent:%s"
 	metadataReconcileRecentAll   string = "cache:reconcile:recent"
 	metadataReconcileLock        string = "cache:reconcile:lock:%s:%s:%s"
 	metadataReconcileReported    string = "cache:reconcile:reported:%s:%s"
+)
+
+const (
+	FSMetadataFormatCompact = "2"
+	FSMetadataShardCount    = 256
 )
 
 // Metadata keys
@@ -398,6 +485,26 @@ func (k *metadataKeys) MetadataFsNode(id string) string {
 
 func (k *metadataKeys) MetadataFsNodeChildren(id string) string {
 	return fmt.Sprintf(metadataFsNodeChildren, id)
+}
+
+func (k *metadataKeys) MetadataFsNodeData(id string) string {
+	return k.MetadataFsNodeDataShard(FSMetadataShard(id))
+}
+
+func (k *metadataKeys) MetadataFsNodeDataShard(shard int) string {
+	return fmt.Sprintf(metadataFsNodeData, shard)
+}
+
+func (k *metadataKeys) MetadataFsNodeIndex(id string) string {
+	return k.MetadataFsNodeIndexShard(FSMetadataShard(id))
+}
+
+func (k *metadataKeys) MetadataFsNodeIndexShard(shard int) string {
+	return fmt.Sprintf(metadataFsNodeIndex, shard)
+}
+
+func (k *metadataKeys) MetadataFsFormat() string {
+	return metadataFsFormat
 }
 
 func (k *metadataKeys) MetadataClientLock(hostId, hash string) string {

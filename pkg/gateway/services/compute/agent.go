@@ -401,7 +401,7 @@ func (s *Service) StreamAgent(in *pb.StreamAgentRequest, stream pb.GatewayServic
 	events := make(chan common.KeyEvent, 32)
 	if s.keyEventManager != nil {
 		revisionKey := agentSnapshotRevisionKey(agentState)
-		if err := s.keyEventManager.ListenForPublishedPattern(ctx, revisionKey, events); err != nil {
+		if err := s.keyEventManager.ListenForPublishedKey(ctx, revisionKey, events); err != nil {
 			return err
 		}
 	}

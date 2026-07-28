@@ -8,9 +8,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/stretchr/testify/require"
 )
@@ -140,7 +142,6 @@ func TestCreateDurableDiskDirectorySnapshotDedupesChunks(t *testing.T) {
 	restored := filepath.Join(t.TempDir(), "restored")
 	_, err = restoreDurableDiskDirectorySnapshotWithCache(ctx, store, cacheReader, second.ManifestKey, second.ManifestDigest, second.ManifestSizeBytes, restored)
 	require.NoError(t, err)
-	require.GreaterOrEqual(t, cacheReader.calls, 1)
 	require.Equal(t, 1, cacheReader.hits)
 	data, err := os.ReadFile(filepath.Join(restored, "pgdata", "base", "1"))
 	require.NoError(t, err)
@@ -334,6 +335,90 @@ func TestDurableDiskSnapshotRequiredContentItems(t *testing.T) {
 	require.Equal(t, int64(7), items[1].SnapshotGeneration)
 }
 
+func TestRestoreDurableDiskDirectorySnapshotDownloadsChunksInParallel(t *testing.T) {
+	source := t.TempDir()
+	payload := []byte(strings.Repeat("parallel restore ", durableDiskRestoreConcurrency))
+	require.NoError(t, os.WriteFile(filepath.Join(source, "model"), payload, 0o600))
+
+	store := &fakeDurableDiskSnapshotStore{}
+	snapshot, _, err := createDurableDiskDirectorySnapshot(
+		context.Background(),
+		store,
+		source,
+		"durable-disks/data/snapshots/1",
+		types.DiskSnapshot{DiskName: "data"},
+		4,
+		nil,
+	)
+	require.NoError(t, err)
+
+	parallelStore := &parallelDownloadDurableDiskSnapshotStore{
+		fakeDurableDiskSnapshotStore: store,
+	}
+	target := filepath.Join(t.TempDir(), "restored")
+	_, err = restoreDurableDiskDirectorySnapshotWithCache(
+		context.Background(),
+		parallelStore,
+		nil,
+		snapshot.ManifestKey,
+		snapshot.ManifestDigest,
+		snapshot.ManifestSizeBytes,
+		target,
+	)
+	require.NoError(t, err)
+	require.Greater(t, parallelStore.maxActive, 1)
+	restored, err := os.ReadFile(filepath.Join(target, "model"))
+	require.NoError(t, err)
+	require.Equal(t, payload, restored)
+}
+
+func TestRestoreDurableDiskDirectorySnapshotPreservesTargetOnFailure(t *testing.T) {
+	source := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(source, "new"), []byte("new payload"), 0o600))
+
+	store := &fakeDurableDiskSnapshotStore{}
+	snapshot, manifest, err := createDurableDiskDirectorySnapshot(
+		context.Background(),
+		store,
+		source,
+		"durable-disks/data/snapshots/1",
+		types.DiskSnapshot{DiskName: "data"},
+		4,
+		nil,
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, manifest.Files[0].Chunks)
+	delete(store.objects, manifest.Files[0].Chunks[0].ObjectKey)
+
+	parent := t.TempDir()
+	target := filepath.Join(parent, "restored")
+	require.NoError(t, os.MkdirAll(target, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(target, "old"), []byte("old payload"), 0o600))
+
+	_, err = restoreDurableDiskDirectorySnapshotWithCache(
+		context.Background(),
+		store,
+		nil,
+		snapshot.ManifestKey,
+		snapshot.ManifestDigest,
+		snapshot.ManifestSizeBytes,
+		target,
+	)
+	require.Error(t, err)
+	data, readErr := os.ReadFile(filepath.Join(target, "old"))
+	require.NoError(t, readErr)
+	require.Equal(t, "old payload", string(data))
+	staging, globErr := filepath.Glob(filepath.Join(parent, ".restored.restore-*"))
+	require.NoError(t, globErr)
+	require.Empty(t, staging)
+}
+
+func TestDurableDiskTransferTimeoutScalesWithSnapshotSize(t *testing.T) {
+	require.Equal(t, 5*time.Minute, durableDiskTransferTimeout(0))
+	require.Greater(t, durableDiskTransferTimeout(16<<30), 5*time.Minute)
+	require.Equal(t, time.Hour, durableDiskTransferTimeout(1<<40))
+}
+
 func snapshotTestFile(manifest *types.DiskSnapshotManifest, name string) types.DiskSnapshotFile {
 	for _, file := range manifest.Files {
 		if file.Path == name {
@@ -358,6 +443,29 @@ type fakeDurableDiskSnapshotStore struct {
 	objects     map[string][]byte
 	existsCalls int
 	uploadCalls int
+}
+
+type parallelDownloadDurableDiskSnapshotStore struct {
+	*fakeDurableDiskSnapshotStore
+	mu        sync.Mutex
+	active    int
+	maxActive int
+}
+
+func (s *parallelDownloadDurableDiskSnapshotStore) DownloadWithReader(ctx context.Context, key string) (io.ReadCloser, error) {
+	if strings.HasSuffix(key, "/manifest.json") {
+		return s.fakeDurableDiskSnapshotStore.DownloadWithReader(ctx, key)
+	}
+
+	s.mu.Lock()
+	s.active++
+	s.maxActive = max(s.maxActive, s.active)
+	s.mu.Unlock()
+	time.Sleep(20 * time.Millisecond)
+	s.mu.Lock()
+	s.active--
+	s.mu.Unlock()
+	return s.fakeDurableDiskSnapshotStore.DownloadWithReader(ctx, key)
 }
 
 func (s *fakeDurableDiskSnapshotStore) Exists(_ context.Context, key string) (bool, error) {
@@ -389,20 +497,23 @@ func (s *fakeDurableDiskSnapshotStore) DownloadWithReader(_ context.Context, key
 
 type fakeDurableDiskSnapshotCacheReader struct {
 	objects map[string][]byte
+	mu      sync.Mutex
 	calls   int
 	hits    int
 }
 
-func (s *fakeDurableDiskSnapshotCacheReader) GetContent(hash string, offset int64, length int64, _ struct{ RoutingKey string }) ([]byte, error) {
+func (s *fakeDurableDiskSnapshotCacheReader) ReadContentInto(_ context.Context, hash string, offset int64, dest []byte, _ cache.ClientOptions) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.calls++
 	data, ok := s.objects[hash]
 	if !ok {
-		return nil, fmt.Errorf("cache miss")
+		return 0, fmt.Errorf("cache miss")
 	}
 	s.hits++
-	end := offset + length
+	end := offset + int64(len(dest))
 	if offset < 0 || end > int64(len(data)) {
-		return nil, fmt.Errorf("invalid cache range")
+		return 0, fmt.Errorf("invalid cache range")
 	}
-	return append([]byte(nil), data[offset:end]...), nil
+	return int64(copy(dest, data[offset:end])), nil
 }

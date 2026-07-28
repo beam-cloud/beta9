@@ -31,6 +31,7 @@ func (s *Worker) listenForWorkerEvents() {
 		}
 
 		delay = workerEventStreamReconnectMin
+		s.cancelStoppingBuilds()
 
 		for {
 			event, err := stream.Recv()
@@ -142,4 +143,15 @@ func (s *Worker) cancelBuild(containerID string) bool {
 	log.Info().Str("container_id", containerID).Msg("received stop build event")
 	cancel()
 	return true
+}
+
+func (s *Worker) cancelStoppingBuilds() {
+	if s.buildCancels == nil {
+		return
+	}
+	s.buildCancels.Range(func(containerID string, cancel context.CancelFunc) bool {
+		// One slow state lookup must not delay the rest of a burst.
+		go s.cancelBuildIfAlreadyStopping(cancel, containerID)
+		return true
+	})
 }

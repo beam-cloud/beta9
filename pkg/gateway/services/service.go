@@ -58,10 +58,7 @@ type GatewayServiceOpts struct {
 }
 
 func NewGatewayService(opts *GatewayServiceOpts) (*GatewayService, error) {
-	keyEventManager, err := common.NewKeyEventManager(opts.RedisClient)
-	if err != nil {
-		return nil, err
-	}
+	keyEventManager := common.NewKeyEventManager(opts.RedisClient)
 	computeRepo := opts.ComputeRepo
 	if computeRepo == nil {
 		if opts.RedisClient == nil {

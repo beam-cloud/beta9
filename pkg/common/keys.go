@@ -17,6 +17,7 @@ var (
 	schedulerWorkerState              string = "scheduler:worker:state:%s"
 	schedulerContainerConfig          string = "scheduler:container:config:%s"
 	schedulerContainerState           string = "scheduler:container:state:%s"
+	schedulerContainerStateIndex      string = "scheduler:container:state_index"
 	schedulerContainerAddress         string = "scheduler:container:container_addr:%s"
 	schedulerContainerAddressMap      string = "scheduler:container:container_addr_map:%s"
 	schedulerBackendRoute             string = "scheduler:route:%s"
@@ -72,6 +73,7 @@ var (
 	taskClaim       string = "task:%s:%s:%s:claim"
 	taskCancel      string = "task:%s:%s:%s:cancel"
 	taskRetryLock   string = "task:%s:%s:%s:retry_lock"
+	taskMonitorLock string = "task:monitor_lock"
 	taskPhase       string = "task:%s:%s:phase:%s"
 	taskPhaseLabels string = "task:%s:%s:phase_labels"
 )
@@ -204,6 +206,10 @@ func (rk *redisKeys) SchedulerServeLock(workspaceName, stubId string) string {
 
 func (rk *redisKeys) SchedulerContainerState(containerId string) string {
 	return fmt.Sprintf(schedulerContainerState, containerId)
+}
+
+func (rk *redisKeys) SchedulerContainerStateIndex() string {
+	return schedulerContainerStateIndex
 }
 
 func (rk *redisKeys) SchedulerContainerConfig(containerId string) string {
@@ -465,6 +471,10 @@ func (rk *redisKeys) TaskClaimIndex(workspaceName, stubId string) string {
 
 func (rk *redisKeys) TaskEntry(workspaceName, stubId, taskId string) string {
 	return fmt.Sprintf(taskEntry, workspaceName, stubId, taskId)
+}
+
+func (rk *redisKeys) TaskMonitorLock() string {
+	return taskMonitorLock
 }
 
 func (rk *redisKeys) TaskClaim(workspaceName, stubId, taskId string) string {

@@ -120,7 +120,7 @@ func NewRequestBuffer(
 	go rb.processRequests()
 
 	// Listen for heartbeat key events
-	go rb.keyEventManager.ListenForPattern(rb.ctx, Keys.endpointRequestHeartbeat(rb.workspace.Name, rb.stubId, "*", "*"), rb.keyEventChan)
+	go rb.keyEventManager.ListenForPatternEvents(rb.ctx, Keys.endpointRequestHeartbeat(rb.workspace.Name, rb.stubId, "*", "*"), rb.keyEventChan)
 	go rb.handleHeartbeatEvents()
 
 	return rb

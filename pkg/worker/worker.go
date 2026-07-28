@@ -48,13 +48,9 @@ const (
 	shutdownForceWait              time.Duration = 5 * time.Second
 	shutdownCleanupReserve         time.Duration = 5 * time.Second
 	workerShutdownRPCTimeout       time.Duration = 5 * time.Second
-	defaultContainerStartupTimeout time.Duration = 5 * time.Minute
-	// maxContainerStartupTimeout bounds the configurable startup timeout so a
-	// large/sentinel maxSchedulingLatencyMs cannot overflow time.Duration (int64
-	// nanoseconds) and wrap negative, which would fire the startup timer
-	// immediately and fail every container.
-	maxContainerStartupTimeout time.Duration = 1 * time.Hour
-	gvisorShmemTHPPath                       = "/sys/kernel/mm/transparent_hugepage/shmem_enabled"
+	defaultContainerStartupTimeout time.Duration = 15 * time.Minute
+	maxContainerStartupTimeout     time.Duration = time.Hour
+	gvisorShmemTHPPath                           = "/sys/kernel/mm/transparent_hugepage/shmem_enabled"
 )
 
 func ensureGVisorShmemTHP(path string) (bool, error) {
@@ -130,6 +126,14 @@ func (w *Worker) gpuManagerForRequest(request *types.ContainerRequest) GPUManage
 		return w.containerThunderManager
 	}
 	return w.containerGPUManager
+}
+
+func (s *Worker) containerStartupTimeout() time.Duration {
+	timeoutMs := s.config.Worker.Failover.MaxSchedulingLatencyMs
+	if timeoutMs < defaultContainerStartupTimeout.Milliseconds() {
+		return defaultContainerStartupTimeout
+	}
+	return time.Duration(min(timeoutMs, maxContainerStartupTimeout.Milliseconds())) * time.Millisecond
 }
 
 type ContainerInstance struct {
@@ -696,7 +700,7 @@ func (s *Worker) runContainerRequest(request *types.ContainerRequest) {
 	if request.IsBuildRequest() {
 		s.registerBuildCancel(containerId, cancel)
 		defer s.unregisterBuildCancel(containerId)
-		go s.cancelBuildIfAlreadyStopping(ctx, cancel, containerId)
+		go s.cancelBuildIfAlreadyStopping(cancel, containerId)
 	}
 
 	if err := s.hydrateRuntimeCredentials(ctx, request); err != nil {
@@ -717,17 +721,7 @@ func (s *Worker) runContainerRequest(request *types.ContainerRequest) {
 	if request.IsBuildRequest() {
 		err = run()
 	} else {
-		timeout := defaultContainerStartupTimeout
-		if ms := s.config.Worker.Failover.MaxSchedulingLatencyMs; ms > 0 {
-			// Clamp before converting to a nanosecond duration: ms is an int64 of
-			// milliseconds, so large/sentinel values (e.g. a misconfigured
-			// maxSchedulingLatencyMs) would overflow and wrap negative, making the
-			// timer fire immediately and fail every container startup.
-			if ms > maxContainerStartupTimeout.Milliseconds() {
-				ms = maxContainerStartupTimeout.Milliseconds()
-			}
-			timeout = time.Duration(ms) * time.Millisecond
-		}
+		timeout := s.containerStartupTimeout()
 
 		errCh := make(chan error, 1)
 		go func() {
@@ -768,7 +762,7 @@ func (s *Worker) failContainerRequest(containerId string, request *types.Contain
 }
 
 // cancelBuildIfAlreadyStopping checks if a build has already been cancelled and cancels the context if it has.
-func (s *Worker) cancelBuildIfAlreadyStopping(ctx context.Context, cancel context.CancelFunc, containerId string) {
+func (s *Worker) cancelBuildIfAlreadyStopping(cancel context.CancelFunc, containerId string) {
 	containerState, err := handleGRPCResponse(s.containerRepoClient.GetContainerState(context.Background(), &pb.GetContainerStateRequest{ContainerId: containerId}))
 	if err != nil {
 		log.Error().Str("container_id", containerId).Err(err).Msg("failed to get container state")

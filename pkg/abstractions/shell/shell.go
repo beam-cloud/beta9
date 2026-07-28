@@ -44,7 +44,6 @@ const (
 	pendingShellTTL               time.Duration = 5 * time.Minute
 	containerWaitPollIntervalS    time.Duration = 1 * time.Second
 	containerKeepAliveIntervalS   time.Duration = 5 * time.Second
-	shellReconcileInterval        time.Duration = 30 * time.Second
 	sshProbeTimeoutDurationS      time.Duration = 500 * time.Millisecond
 	sshBannerTimeoutDurationS     time.Duration = 500 * time.Millisecond
 	sshStartupTimeoutDurationS    time.Duration = 10 * time.Second
@@ -71,21 +70,18 @@ func hasShellPermission(authInfo *auth.AuthInfo) bool {
 
 type SSHShellService struct {
 	pb.UnimplementedShellServiceServer
-	ctx                context.Context
-	config             types.AppConfig
-	rdb                *common.RedisClient
-	keyEventManager    *common.KeyEventManager
-	scheduler          *scheduler.Scheduler
-	backendRepo        repository.BackendRepository
-	computeRepo        repository.ComputeRepository
-	workspaceRepo      repository.WorkspaceRepository
-	containerRepo      repository.ContainerRepository
-	workerRepo         repository.WorkerRepository
-	workerPoolRepo     repository.WorkerPoolRepository
-	eventRepo          repository.EventRepository
-	tailscale          *network.Tailscale
-	ttlEventChan       chan common.KeyEvent
-	containerEventChan chan common.KeyEvent
+	ctx            context.Context
+	config         types.AppConfig
+	rdb            *common.RedisClient
+	scheduler      *scheduler.Scheduler
+	backendRepo    repository.BackendRepository
+	computeRepo    repository.ComputeRepository
+	workspaceRepo  repository.WorkspaceRepository
+	containerRepo  repository.ContainerRepository
+	workerRepo     repository.WorkerRepository
+	workerPoolRepo repository.WorkerPoolRepository
+	eventRepo      repository.EventRepository
+	tailscale      *network.Tailscale
 }
 
 type ShellServiceOpts struct {
@@ -107,52 +103,35 @@ func NewSSHShellService(
 	ctx context.Context,
 	opts ShellServiceOpts,
 ) (ShellService, error) {
-	keyEventManager, err := common.NewKeyEventManager(opts.RedisClient)
-	if err != nil {
-		return nil, err
-	}
-
 	ss := &SSHShellService{
-		ctx:                ctx,
-		config:             opts.Config,
-		rdb:                opts.RedisClient,
-		keyEventManager:    keyEventManager,
-		scheduler:          opts.Scheduler,
-		backendRepo:        opts.BackendRepo,
-		computeRepo:        opts.ComputeRepo,
-		workspaceRepo:      opts.WorkspaceRepo,
-		containerRepo:      opts.ContainerRepo,
-		workerRepo:         opts.WorkerRepo,
-		workerPoolRepo:     opts.WorkerPoolRepo,
-		tailscale:          opts.Tailscale,
-		eventRepo:          opts.EventRepo,
-		ttlEventChan:       make(chan common.KeyEvent),
-		containerEventChan: make(chan common.KeyEvent),
+		ctx:            ctx,
+		config:         opts.Config,
+		rdb:            opts.RedisClient,
+		scheduler:      opts.Scheduler,
+		backendRepo:    opts.BackendRepo,
+		computeRepo:    opts.ComputeRepo,
+		workspaceRepo:  opts.WorkspaceRepo,
+		containerRepo:  opts.ContainerRepo,
+		workerRepo:     opts.WorkerRepo,
+		workerPoolRepo: opts.WorkerPoolRepo,
+		tailscale:      opts.Tailscale,
+		eventRepo:      opts.EventRepo,
 	}
 
 	authMiddleware := auth.AuthMiddleware(opts.BackendRepo, opts.WorkspaceRepo)
 	registerShellRoutes(opts.RouteGroup.Group(shellRoutePrefix, authMiddleware), ss)
 
-	// Listen for shell container ttl events
+	leases := abstractions.NewContainerLeaseManager(
+		opts.RedisClient,
+		opts.Scheduler,
+		shellContainerPrefix,
+		Keys.shellContainerTTL,
+	)
 	go func() {
-		if err := ss.keyEventManager.ListenForPattern(
-			ss.ctx,
-			Keys.shellContainerTTL(""),
-			ss.ttlEventChan,
-		); err != nil {
-			log.Error().Err(err).Msg("shell TTL event listener stopped")
+		if err := leases.Run(ctx); err != nil {
+			log.Error().Err(err).Msg("shell container lease manager stopped")
 		}
 	}()
-	go func() {
-		if err := ss.keyEventManager.ListenForPattern(
-			ss.ctx,
-			common.RedisKeys.SchedulerContainerState(shellContainerPrefix),
-			ss.containerEventChan,
-		); err != nil {
-			log.Error().Err(err).Msg("shell container event listener stopped")
-		}
-	}()
-	go ss.handleTTLEvents()
 
 	return ss, nil
 }
@@ -163,66 +142,6 @@ func (ss *SSHShellService) durableDiskPlacementRepos() abstractions.DurableDiskP
 		ComputeRepo:    ss.computeRepo,
 		WorkerRepo:     ss.workerRepo,
 		WorkerPoolRepo: ss.workerPoolRepo,
-	}
-}
-
-func (ss *SSHShellService) handleTTLEvents() {
-	reconcileTicker := time.NewTicker(shellReconcileInterval)
-	defer reconcileTicker.Stop()
-
-	for {
-		select {
-		case event := <-ss.ttlEventChan:
-			if event.Operation == common.KeyOperationExpired {
-				ss.stopShellWithoutLease(event.Key)
-			}
-		case event := <-ss.containerEventChan:
-			if event.Operation == common.KeyOperationSet {
-				// Reconcile shell containers left behind while no gateway was
-				// subscribed to their TTL events.
-				ss.stopShellWithoutLease(shellContainerPrefix + event.Key)
-			}
-		case <-reconcileTicker.C:
-			ss.reconcileShellLeases()
-		case <-ss.ctx.Done():
-			return
-		}
-	}
-}
-
-func (ss *SSHShellService) reconcileShellLeases() {
-	statePrefix := common.RedisKeys.SchedulerContainerState(shellContainerPrefix)
-	stateKeys, err := ss.rdb.Scan(ss.ctx, statePrefix+"*")
-	if err != nil {
-		log.Error().Err(err).Msg("failed to reconcile shell leases")
-		return
-	}
-	for _, stateKey := range stateKeys {
-		containerId := shellContainerPrefix + strings.TrimPrefix(stateKey, statePrefix)
-		ss.stopShellWithoutLease(containerId)
-	}
-}
-
-func (ss *SSHShellService) stopShellWithoutLease(containerId string) {
-	if !IsStandaloneContainer(containerId) {
-		return
-	}
-
-	exists, err := ss.rdb.Exists(ss.ctx, Keys.shellContainerTTL(containerId)).Result()
-	if err != nil {
-		log.Error().Err(err).Str("container_id", containerId).Msg("failed to inspect shell TTL")
-		return
-	}
-	// Ignore a stale expiry notification if a valid lease is present.
-	if exists != 0 {
-		return
-	}
-	if err := ss.scheduler.Stop(&types.StopContainerArgs{
-		ContainerId: containerId,
-		Force:       true,
-		Reason:      types.StopContainerReasonTtl,
-	}); err != nil {
-		log.Error().Err(err).Str("container_id", containerId).Msg("failed to stop expired shell")
 	}
 }
 
