@@ -209,7 +209,6 @@ func (d *Dispatcher) monitorTasks(ctx context.Context) {
 	for _, taskMessage := range tasks {
 		taskFactory, exists := d.executors.Get(taskMessage.Executor)
 		if !exists {
-			d.Complete(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId)
 			continue
 		}
 		task, err := taskFactory(ctx, *taskMessage)
