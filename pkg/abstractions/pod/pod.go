@@ -88,10 +88,7 @@ func NewPodService(
 	ctx context.Context,
 	opts PodServiceOpts,
 ) (PodService, error) {
-	keyEventManager, err := common.NewKeyEventManager(opts.RedisClient)
-	if err != nil {
-		return nil, err
-	}
+	keyEventManager := common.NewKeyEventManager(opts.RedisClient)
 
 	ps := &GenericPodService{
 		ctx:             ctx,

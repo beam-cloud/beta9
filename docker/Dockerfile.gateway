@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7-labs
 
-FROM golang:1.23-bullseye AS base
+FROM golang:1.25-bullseye AS base
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends fuse3

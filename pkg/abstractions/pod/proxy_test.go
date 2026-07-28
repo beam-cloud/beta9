@@ -37,6 +37,33 @@ func TestPodBackendURLPreservesDirectAddress(t *testing.T) {
 	}
 }
 
+func TestWaitForConnectionWaitsForActiveWriterAfterCancellation(t *testing.T) {
+	pb := &PodProxyBuffer{ctx: context.Background()}
+	conn := &connection{done: make(chan struct{})}
+	if !conn.claim() {
+		t.Fatal("failed to claim connection")
+	}
+	requestDone := make(chan struct{})
+	close(requestDone)
+	returned := make(chan struct{})
+	go func() {
+		_ = pb.waitForConnection(conn, requestDone)
+		close(returned)
+	}()
+
+	select {
+	case <-returned:
+		t.Fatal("returned while the response writer was still active")
+	case <-time.After(20 * time.Millisecond):
+	}
+	conn.finish()
+	select {
+	case <-returned:
+	case <-time.After(time.Second):
+		t.Fatal("did not return after the response writer finished")
+	}
+}
+
 func TestProcessBufferWakesWhenBackendBecomesAvailable(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)

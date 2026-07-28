@@ -1,10 +1,13 @@
 package cache
 
 import (
+	"fmt"
+	"hash/crc32"
 	"os"
 	"time"
 
 	proto "github.com/beam-cloud/beta9/proto"
+	gproto "google.golang.org/protobuf/proto"
 )
 
 const (
@@ -292,6 +295,34 @@ type FSMetadata struct {
 	Uid       uint32 `redis:"uid" json:"uid"`
 	Gid       uint32 `redis:"gid" json:"gid"`
 	Gen       uint64 `redis:"gen" json:"gen"`
+}
+
+const fsMetadataEncodingVersion byte = 1
+
+func FSMetadataShard(id string) int {
+	return int(crc32.ChecksumIEEE([]byte(id)) % FSMetadataShardCount)
+}
+
+func MarshalFSMetadata(metadata *FSMetadata) ([]byte, error) {
+	if metadata == nil {
+		return nil, fmt.Errorf("cachefs metadata is nil")
+	}
+	data, err := gproto.Marshal(metadata.ToWorkerCacheProto())
+	if err != nil {
+		return nil, err
+	}
+	return append([]byte{fsMetadataEncodingVersion}, data...), nil
+}
+
+func UnmarshalFSMetadata(data []byte) (*FSMetadata, error) {
+	if len(data) == 0 || data[0] != fsMetadataEncodingVersion {
+		return nil, fmt.Errorf("unsupported cachefs metadata encoding")
+	}
+	metadata := &proto.WorkerCacheFSMetadata{}
+	if err := gproto.Unmarshal(data[1:], metadata); err != nil {
+		return nil, err
+	}
+	return FSMetadataFromWorkerCacheProto(metadata), nil
 }
 
 func (m *FSMetadata) ToProto() *proto.CacheFSMetadata {

@@ -86,7 +86,7 @@ type ContainerRepository interface {
 	SetStubState(stubId, state string) error
 	DeleteStubState(stubId string) error
 	SetBuildContainerTTL(containerId string, ttl time.Duration) error
-	HasBuildContainerTTL(containerId string) bool
+	RefreshBuildContainerTTL(containerId string, ttl time.Duration) (bool, error)
 	GetEndpointRequestTokens(ctx context.Context, workspaceName, stubId, containerId string, maxTokens int, ttl time.Duration) (int, error)
 	AcquireEndpointRequestToken(ctx context.Context, workspaceName, stubId, containerId string, maxTokens int, ttl time.Duration) (bool, error)
 	ReleaseEndpointRequestToken(ctx context.Context, workspaceName, stubId, containerId, taskId string, maxTokens int, ttl time.Duration) error
@@ -276,6 +276,7 @@ type BackendRepository interface {
 }
 
 type TaskRepository interface {
+	WithTaskMonitorLease(ctx context.Context, fn func(context.Context) error) error
 	GetTaskState(ctx context.Context, workspaceName, stubId, taskId string) (*types.TaskMessage, error)
 	SetTaskState(ctx context.Context, workspaceName, stubId, taskId string, msg []byte) error
 	DeleteTaskState(ctx context.Context, workspaceName, stubId, taskId string) error

@@ -17,13 +17,18 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-const defaultDurableDiskSnapshotChunkSize int64 = 64 << 20
+const (
+	defaultDurableDiskSnapshotChunkSize int64 = 64 << 20
+	durableDiskRestoreConcurrency             = 8
+)
 
 type durableDiskSnapshotStore interface {
 	Exists(ctx context.Context, key string) (bool, error)
@@ -33,7 +38,7 @@ type durableDiskSnapshotStore interface {
 }
 
 type durableDiskSnapshotCacheReader interface {
-	GetContent(hash string, offset int64, length int64, opts struct{ RoutingKey string }) ([]byte, error)
+	ReadContentInto(ctx context.Context, hash string, offset int64, dest []byte, opts cache.ClientOptions) (int64, error)
 }
 
 type durableDiskSnapshotBucketStore struct {
@@ -116,8 +121,11 @@ func durableDiskSnapshotChunkPrefix(objectPrefix string) string {
 func durableDiskSnapshotObjectReader(ctx context.Context, store durableDiskSnapshotStore, cacheReader durableDiskSnapshotCacheReader, key, digest string, sizeBytes int64) (io.ReadCloser, error) {
 	hash := strings.TrimPrefix(digest, "sha256:")
 	if cacheReader != nil && hash != "" && sizeBytes > 0 {
-		data, err := cacheReader.GetContent(hash, 0, sizeBytes, struct{ RoutingKey string }{RoutingKey: hash})
-		if err == nil && int64(len(data)) == sizeBytes {
+		cacheCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		data := make([]byte, sizeBytes)
+		n, err := cacheReader.ReadContentInto(cacheCtx, hash, 0, data, cache.ClientOptions{RoutingKey: hash})
+		cancel()
+		if err == nil && n == sizeBytes {
 			return io.NopCloser(bytes.NewReader(data)), nil
 		}
 	}
@@ -510,7 +518,23 @@ func restoreDurableDiskDirectorySnapshotWithCache(ctx context.Context, store dur
 	if err != nil {
 		return nil, fmt.Errorf("download durable disk snapshot manifest %s: %w", manifestKey, err)
 	}
-	return manifest, restoreDurableDiskDirectoryManifest(ctx, store, cacheReader, manifest, targetDir)
+
+	stagingDir, err := os.MkdirTemp(filepath.Dir(targetDir), "."+filepath.Base(targetDir)+".restore-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(stagingDir)
+
+	if err := restoreDurableDiskDirectoryManifest(ctx, store, cacheReader, manifest, stagingDir); err != nil {
+		return nil, err
+	}
+	if err := os.RemoveAll(targetDir); err != nil {
+		return nil, err
+	}
+	if err := os.Rename(stagingDir, targetDir); err != nil {
+		return nil, err
+	}
+	return manifest, nil
 }
 
 func restoreDurableDiskDirectoryManifest(ctx context.Context, store durableDiskSnapshotStore, cacheReader durableDiskSnapshotCacheReader, manifest *types.DiskSnapshotManifest, targetDir string) error {
@@ -563,37 +587,42 @@ func restoreDurableDiskManifestFile(ctx context.Context, store durableDiskSnapsh
 	if err != nil {
 		return err
 	}
-	for _, chunk := range file.Chunks {
-		if _, err := out.Seek(chunk.OffsetBytes, io.SeekStart); err != nil {
-			_ = out.Close()
-			return err
-		}
-		reader, err := durableDiskSnapshotObjectReader(ctx, store, cacheReader, chunk.ObjectKey, chunk.Digest, chunk.SizeBytes)
-		if err != nil {
-			_ = out.Close()
-			return fmt.Errorf("download durable disk snapshot chunk %s: %w", chunk.ObjectKey, err)
-		}
-		sum := sha256.New()
-		n, copyErr := io.CopyN(out, io.TeeReader(reader, sum), chunk.SizeBytes)
-		closeErr := reader.Close()
-		if copyErr != nil {
-			_ = out.Close()
-			return fmt.Errorf("restore durable disk snapshot chunk %s: copied %d of %d bytes: %w", chunk.ObjectKey, n, chunk.SizeBytes, copyErr)
-		}
-		if closeErr != nil {
-			_ = out.Close()
-			return fmt.Errorf("close durable disk snapshot chunk %s: %w", chunk.ObjectKey, closeErr)
-		}
-		if digest := "sha256:" + hex.EncodeToString(sum.Sum(nil)); digest != chunk.Digest {
-			_ = out.Close()
-			return fmt.Errorf("durable disk snapshot chunk %s digest mismatch: got %s want %s", chunk.ObjectKey, digest, chunk.Digest)
-		}
-	}
 	if err := out.Truncate(file.SizeBytes); err != nil {
 		_ = out.Close()
 		return err
 	}
+
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.SetLimit(durableDiskRestoreConcurrency)
+	for _, chunk := range file.Chunks {
+		chunk := chunk
+		group.Go(func() error {
+			return restoreDurableDiskManifestChunk(groupCtx, store, cacheReader, out, chunk)
+		})
+	}
+	if err := group.Wait(); err != nil {
+		_ = out.Close()
+		return err
+	}
 	return out.Close()
+}
+
+func restoreDurableDiskManifestChunk(ctx context.Context, store durableDiskSnapshotStore, cacheReader durableDiskSnapshotCacheReader, out *os.File, chunk types.DiskSnapshotChunk) error {
+	reader, err := durableDiskSnapshotObjectReader(ctx, store, cacheReader, chunk.ObjectKey, chunk.Digest, chunk.SizeBytes)
+	if err != nil {
+		return fmt.Errorf("download durable disk snapshot chunk %s: %w", chunk.ObjectKey, err)
+	}
+	defer reader.Close()
+
+	sum := sha256.New()
+	n, err := io.CopyN(io.MultiWriter(io.NewOffsetWriter(out, chunk.OffsetBytes), sum), reader, chunk.SizeBytes)
+	if err != nil {
+		return fmt.Errorf("restore durable disk snapshot chunk %s: copied %d of %d bytes: %w", chunk.ObjectKey, n, chunk.SizeBytes, err)
+	}
+	if digest := "sha256:" + hex.EncodeToString(sum.Sum(nil)); digest != chunk.Digest {
+		return fmt.Errorf("durable disk snapshot chunk %s digest mismatch: got %s want %s", chunk.ObjectKey, digest, chunk.Digest)
+	}
+	return nil
 }
 
 func durableDiskRestoreTarget(root, name string) (string, error) {

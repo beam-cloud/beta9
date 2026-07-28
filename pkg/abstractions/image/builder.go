@@ -474,8 +474,13 @@ func (b *Builder) refreshBuildContainerTTL(ctx context.Context, containerId stri
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := b.containerRepo.SetBuildContainerTTL(containerId, time.Duration(imageContainerTtlS)*time.Second); err != nil {
-				log.Error().Str("container_id", containerId).Err(err).Msg("failed to set build container ttl")
+			refreshed, err := b.containerRepo.RefreshBuildContainerTTL(containerId, time.Duration(imageContainerTtlS)*time.Second)
+			if err != nil {
+				log.Error().Str("container_id", containerId).Err(err).Msg("failed to refresh build container ttl")
+				continue
+			}
+			if !refreshed {
+				return
 			}
 		}
 	}

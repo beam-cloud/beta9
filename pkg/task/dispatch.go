@@ -184,53 +184,44 @@ func (d *Dispatcher) monitor(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			tasks, err := d.taskRepo.GetTasksInFlight(ctx)
-			if err != nil {
-				continue
-			}
-
-			for _, taskMessage := range tasks {
-				taskFactory, exists := d.executors.Get(taskMessage.Executor)
-				if !exists {
-					d.Complete(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId)
-					continue
-				}
-
-				task, err := taskFactory(ctx, *taskMessage)
-				if err != nil {
-					continue
-				}
-
-				claimed, err := d.taskRepo.IsClaimed(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId)
-				if err != nil {
-					continue
-				}
-
-				if !claimed {
-					if time.Now().After(taskMessage.Policy.Expires) {
-						err = task.Cancel(ctx, types.TaskExpired)
-						if err != nil {
-							log.Error().Str("task_id", task.Metadata().TaskId).Err(err).Msg("dispatcher unable to cancel task")
-						}
-
-						d.Complete(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId)
-					}
-
-					continue
-				}
-
-				heartbeat, err := task.HeartBeat(ctx)
-				if err != nil {
-					continue
-				}
-
-				if !heartbeat {
-					d.RetryTask(ctx, task)
-					continue
-				}
-			}
+			_ = d.taskRepo.WithTaskMonitorLease(ctx, d.monitorTasks)
 		}
 	}
+}
+
+func (d *Dispatcher) monitorTasks(ctx context.Context) error {
+	tasks, err := d.taskRepo.GetTasksInFlight(ctx)
+	if err != nil {
+		return err
+	}
+	for _, taskMessage := range tasks {
+		taskFactory, exists := d.executors.Get(taskMessage.Executor)
+		if !exists {
+			continue
+		}
+		task, err := taskFactory(ctx, *taskMessage)
+		if err != nil {
+			continue
+		}
+		claimed, err := d.taskRepo.IsClaimed(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId)
+		if err != nil {
+			continue
+		}
+		if !claimed {
+			if time.Now().After(taskMessage.Policy.Expires) {
+				if err := task.Cancel(ctx, types.TaskExpired); err != nil {
+					log.Error().Str("task_id", task.Metadata().TaskId).Err(err).Msg("dispatcher unable to cancel task")
+				}
+				d.Complete(ctx, taskMessage.WorkspaceName, taskMessage.StubId, taskMessage.TaskId)
+			}
+			continue
+		}
+		heartbeat, err := task.HeartBeat(ctx)
+		if err == nil && !heartbeat {
+			d.RetryTask(ctx, task)
+		}
+	}
+	return nil
 }
 
 func (d *Dispatcher) RetryTask(ctx context.Context, task types.TaskInterface) error {

@@ -73,6 +73,27 @@ func TestAcknowledgeContainerRequestReturnsAuthoritativeRejection(t *testing.T) 
 	require.Equal(t, 1, client.calls)
 }
 
+func TestWorkerContainerStartupTimeout(t *testing.T) {
+	tests := []struct {
+		name      string
+		timeoutMs int64
+		want      time.Duration
+	}{
+		{name: "unset", want: defaultContainerStartupTimeout},
+		{name: "shorter", timeoutMs: (5 * time.Minute).Milliseconds(), want: defaultContainerStartupTimeout},
+		{name: "longer", timeoutMs: (30 * time.Minute).Milliseconds(), want: 30 * time.Minute},
+		{name: "clamped", timeoutMs: 1<<63 - 1, want: maxContainerStartupTimeout},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			worker := &Worker{}
+			worker.config.Worker.Failover.MaxSchedulingLatencyMs = tt.timeoutMs
+			require.Equal(t, tt.want, worker.containerStartupTimeout())
+		})
+	}
+}
+
 func (m *shutdownSignalRuntime) Kill(ctx context.Context, containerID string, sig syscall.Signal, opts *runtime.KillOpts) error {
 	m.mu.Lock()
 	m.signals = append(m.signals, sig)
