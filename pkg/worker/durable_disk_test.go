@@ -142,7 +142,6 @@ func TestCreateDurableDiskDirectorySnapshotDedupesChunks(t *testing.T) {
 	restored := filepath.Join(t.TempDir(), "restored")
 	_, err = restoreDurableDiskDirectorySnapshotWithCache(ctx, store, cacheReader, second.ManifestKey, second.ManifestDigest, second.ManifestSizeBytes, restored)
 	require.NoError(t, err)
-	require.Equal(t, 1, cacheReader.calls)
 	require.Equal(t, 1, cacheReader.hits)
 	data, err := os.ReadFile(filepath.Join(restored, "pgdata", "base", "1"))
 	require.NoError(t, err)
@@ -501,13 +500,6 @@ type fakeDurableDiskSnapshotCacheReader struct {
 	mu      sync.Mutex
 	calls   int
 	hits    int
-}
-
-func (s *fakeDurableDiskSnapshotCacheReader) IsCachedReachableContext(_ context.Context, hash string, _ string) (bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	_, ok := s.objects[hash]
-	return ok, nil
 }
 
 func (s *fakeDurableDiskSnapshotCacheReader) ReadContentInto(_ context.Context, hash string, offset int64, dest []byte, _ cache.ClientOptions) (int64, error) {

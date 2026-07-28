@@ -38,7 +38,6 @@ type durableDiskSnapshotStore interface {
 }
 
 type durableDiskSnapshotCacheReader interface {
-	IsCachedReachableContext(ctx context.Context, hash string, routingKey string) (bool, error)
 	ReadContentInto(ctx context.Context, hash string, offset int64, dest []byte, opts cache.ClientOptions) (int64, error)
 }
 
@@ -123,14 +122,12 @@ func durableDiskSnapshotObjectReader(ctx context.Context, store durableDiskSnaps
 	hash := strings.TrimPrefix(digest, "sha256:")
 	if cacheReader != nil && hash != "" && sizeBytes > 0 {
 		cacheCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		if exists, _ := cacheReader.IsCachedReachableContext(cacheCtx, hash, hash); exists {
-			data := make([]byte, sizeBytes)
-			if n, err := cacheReader.ReadContentInto(cacheCtx, hash, 0, data, cache.ClientOptions{RoutingKey: hash}); err == nil && n == sizeBytes {
-				cancel()
-				return io.NopCloser(bytes.NewReader(data)), nil
-			}
-		}
+		data := make([]byte, sizeBytes)
+		n, err := cacheReader.ReadContentInto(cacheCtx, hash, 0, data, cache.ClientOptions{RoutingKey: hash})
 		cancel()
+		if err == nil && n == sizeBytes {
+			return io.NopCloser(bytes.NewReader(data)), nil
+		}
 	}
 	return store.DownloadWithReader(ctx, key)
 }
