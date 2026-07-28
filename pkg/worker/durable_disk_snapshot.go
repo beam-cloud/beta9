@@ -38,6 +38,7 @@ type durableDiskSnapshotStore interface {
 }
 
 type durableDiskSnapshotCacheReader interface {
+	IsCachedReachableContext(ctx context.Context, hash string, routingKey string) (bool, error)
 	ReadContentInto(ctx context.Context, hash string, offset int64, dest []byte, opts cache.ClientOptions) (int64, error)
 }
 
@@ -121,11 +122,15 @@ func durableDiskSnapshotChunkPrefix(objectPrefix string) string {
 func durableDiskSnapshotObjectReader(ctx context.Context, store durableDiskSnapshotStore, cacheReader durableDiskSnapshotCacheReader, key, digest string, sizeBytes int64) (io.ReadCloser, error) {
 	hash := strings.TrimPrefix(digest, "sha256:")
 	if cacheReader != nil && hash != "" && sizeBytes > 0 {
-		data := make([]byte, sizeBytes)
-		n, err := cacheReader.ReadContentInto(ctx, hash, 0, data, cache.ClientOptions{RoutingKey: hash})
-		if err == nil && n == sizeBytes {
-			return io.NopCloser(bytes.NewReader(data)), nil
+		cacheCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		if exists, _ := cacheReader.IsCachedReachableContext(cacheCtx, hash, hash); exists {
+			data := make([]byte, sizeBytes)
+			if n, err := cacheReader.ReadContentInto(cacheCtx, hash, 0, data, cache.ClientOptions{RoutingKey: hash}); err == nil && n == sizeBytes {
+				cancel()
+				return io.NopCloser(bytes.NewReader(data)), nil
+			}
 		}
+		cancel()
 	}
 	return store.DownloadWithReader(ctx, key)
 }

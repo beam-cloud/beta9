@@ -307,6 +307,7 @@ func (s *Worker) restoreDurableDiskSnapshot(request *types.ContainerRequest, mou
 	if err != nil {
 		return err
 	}
+	startedAt := time.Now()
 	manifest, err := restoreDurableDiskDirectorySnapshotWithCache(ctx, store, s.durableDiskSnapshotCacheReader(), snapshot.ManifestKey, snapshot.ManifestDigest, snapshot.ManifestSizeBytes, mount.LocalPath)
 	if err != nil {
 		return fmt.Errorf("restore durable disk snapshot %s: %w", snapshot.ExternalId, err)
@@ -316,6 +317,11 @@ func (s *Worker) restoreDurableDiskSnapshot(request *types.ContainerRequest, mou
 		return fmt.Errorf("restore durable disk snapshot %s produced an invalid payload", snapshot.ExternalId)
 	}
 	s.reportDurableDiskSnapshotContent(request, snapshot, manifest)
+	log.Info().
+		Str("disk", mount.DurableDisk.Name).
+		Int64("bytes", snapshot.LogicalSizeBytes).
+		Dur("elapsed", time.Since(startedAt)).
+		Msg("restored durable disk snapshot")
 	return writeDurableDiskMarker(mount.LocalPath, durableDiskMarker{
 		Driver:         types.DurableDiskDriverSnapshot,
 		State:          durableDiskStateClean,
