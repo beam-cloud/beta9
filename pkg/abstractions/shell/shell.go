@@ -562,6 +562,7 @@ func (ss *SSHShellService) CreateStandaloneShell(ctx context.Context, in *pb.Cre
 		Memory:           stubConfig.Runtime.Memory,
 		GpuRequest:       gpuRequest,
 		GpuCount:         uint32(gpuCount),
+		GpuVirtualized:   stubConfig.Runtime.GpuVirtualized,
 		ImageId:          stubConfig.Runtime.ImageId,
 		StubId:           stub.ExternalId,
 		AppId:            "",

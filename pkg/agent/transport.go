@@ -80,9 +80,16 @@ func runTSNetRouteProxy(ctx context.Context, client pb.GatewayServiceClient, age
 
 	hostname := credential.Hostname
 	if localClient, err := server.LocalClient(); err == nil {
-		if status, err := localClient.Status(ctx); err == nil && status.Self != nil && status.Self.DNSName != "" {
-			hostname = strings.TrimSuffix(status.Self.DNSName, ".")
+		if status, err := localClient.Status(ctx); err == nil {
+			if status.Self != nil && status.Self.DNSName != "" {
+				hostname = strings.TrimSuffix(status.Self.DNSName, ".")
+			}
 		}
+	}
+	if err := setupThunderNode(ctx, client, agentToken, hostTailscaleIPs(), stdout, stderr); err != nil {
+		fmt.Fprintf(stderr, "Thunder node enrollment skipped: %v\n", err)
+	} else {
+		defer deleteThunderNodeEnrollment(context.Background(), client, agentToken, stderr)
 	}
 
 	listener, err := server.Listen("tcp", fmt.Sprintf(":%d", types.DefaultAgentTSNetRouteProxyPort))

@@ -470,6 +470,15 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 		gpuCount = 1
 	}
 
+	log.Info().
+		Str("stub_id", stub.ExternalId).
+		Str("container_id", containerId).
+		Str("gpu", stubConfig.Runtime.Gpu.String()).
+		Strs("gpu_request", gpuRequest).
+		Uint32("gpu_count", uint32(gpuCount)).
+		Bool("gpu_virtualized", stubConfig.Runtime.GpuVirtualized).
+		Msg("pod service built sandbox run request from stub config")
+
 	checkpointEnabled := stubConfig.CheckpointEnabled
 	if gpuCount > 1 {
 		checkpointEnabled = false
@@ -507,6 +516,7 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 		Memory:            stubConfig.Runtime.Memory,
 		GpuRequest:        gpuRequest,
 		GpuCount:          uint32(gpuCount),
+		GpuVirtualized:    stubConfig.Runtime.GpuVirtualized,
 		Mounts:            mounts,
 		Stub:              *stub,
 		ImageId:           *imageId,

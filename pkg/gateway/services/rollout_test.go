@@ -10,6 +10,28 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
+func TestRolloutContainerRequestPropagatesGpuVirtualized(t *testing.T) {
+	request := rolloutContainerRequest(deploymentRolloutInput{
+		workspace: &types.Workspace{ExternalId: "workspace-1"},
+		stub:      &types.StubWithRelated{Stub: types.Stub{ExternalId: "stub-1"}},
+		config: &types.StubConfigV1{Runtime: types.Runtime{
+			Cpu:            1_000,
+			Memory:         2_048,
+			Gpus:           []types.GpuType{types.GPU_A10G},
+			GpuCount:       1,
+			GpuVirtualized: true,
+			ImageId:        "image-1",
+		}},
+	})
+
+	if !request.GpuVirtualized {
+		t.Fatal("expected virtualized GPU flag to propagate")
+	}
+	if request.GpuCount != 1 || len(request.GpuRequest) != 1 || request.GpuRequest[0] != string(types.GPU_A10G) {
+		t.Fatalf("gpu scheduling fields = count %d request %v, want A10G x1", request.GpuCount, request.GpuRequest)
+	}
+}
+
 func TestDeploymentRolloutAppliesToAnyAlwaysOnDeployment(t *testing.T) {
 	latestConfig := types.StubConfigV1{
 		Autoscaler: &types.Autoscaler{MinContainers: 1},

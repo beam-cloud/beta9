@@ -290,6 +290,7 @@ type ContainerRequest struct {
 	MachineId         string             `json:"machine_id,omitempty"`
 	CheckpointTrigger *CheckpointTrigger `json:"checkpoint_trigger,omitempty"`
 	TaskId            string             `json:"task_id,omitempty"`
+	GpuVirtualized    bool               `json:"gpu_virtualized"`
 	DeliveryToken     string             `json:"-" go2proto:"ignore"`
 }
 
@@ -343,6 +344,10 @@ func (c *ContainerRequest) RequiresGPU() bool {
 		}
 	}
 	return c.Gpu != "" && c.Gpu != string(NO_GPU)
+}
+
+func (c *ContainerRequest) RequiresPhysicalGPU() bool {
+	return c.RequiresGPU() && !c.GpuVirtualized
 }
 
 func WorkerStartConcurrencyForPool(poolConfig WorkerPoolConfig, globalRuntime, runtimeType string, workerCPU int64) int {
@@ -600,6 +605,7 @@ func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 		Gpu:                      c.Gpu,
 		GpuRequest:               c.GpuRequest,
 		GpuCount:                 c.GpuCount,
+		GpuVirtualized:           c.GpuVirtualized,
 		ImageId:                  c.ImageId,
 		Mounts:                   mounts,
 		StubId:                   c.StubId,
@@ -660,6 +666,7 @@ func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
 		Gpu:                      in.Gpu,
 		GpuRequest:               in.GpuRequest,
 		GpuCount:                 in.GpuCount,
+		GpuVirtualized:           in.GpuVirtualized,
 		ImageId:                  in.ImageId,
 		Mounts:                   mounts,
 		WorkspaceId:              in.WorkspaceId,

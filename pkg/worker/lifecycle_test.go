@@ -498,8 +498,9 @@ func TestSpecFromRequestEnforcesMemoryForGPUWithoutCPUQuota(t *testing.T) {
 				MemoryEnforced: true,
 			},
 		}},
-		runtime:            mockRuntime,
-		containerInstances: containerInstances,
+		runtime:             mockRuntime,
+		containerInstances:  containerInstances,
+		containerGPUManager: &testGPUManager{},
 	}
 
 	spec, err := worker.specFromRequest(&types.ContainerRequest{
@@ -517,6 +518,29 @@ func TestSpecFromRequestEnforcesMemoryForGPUWithoutCPUQuota(t *testing.T) {
 	require.Nil(t, spec.Linux.Resources.CPU)
 	require.NotNil(t, spec.Linux.Resources.Memory)
 	require.Equal(t, int64(42*1024*1024*1024), *spec.Linux.Resources.Memory.Limit)
+}
+
+func TestSpecFromRequestInjectsThunderMounts(t *testing.T) {
+	worker := &Worker{
+		runtime:                 &mockRuntime{name: types.ContainerRuntimeGvisor.String()},
+		containerThunderManager: NewContainerThunderManager(nil),
+	}
+
+	spec, err := worker.specFromRequest(&types.ContainerRequest{
+		ContainerId:    "container-1",
+		EntryPoint:     []string{"sleep", "60"},
+		GpuRequest:     []string{"H100"},
+		GpuCount:       1,
+		GpuVirtualized: true,
+		Stub: types.StubWithRelated{Stub: types.Stub{
+			Type: types.StubType(types.StubTypePodDeployment),
+		}},
+	}, &ContainerOptions{BindPorts: []int{8001}})
+
+	require.NoError(t, err)
+	require.Contains(t, spec.Mounts, thunderBindMount("/usr/bin/nvidia-smi"))
+	require.Contains(t, spec.Mounts, thunderBindMount("/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1"))
+	require.Contains(t, spec.Mounts, thunderBindMount("/usr/lib/x86_64-linux-gnu/libcuda.so.1"))
 }
 
 func TestSpecFromRequestReturnsIndependentSpecs(t *testing.T) {
@@ -580,9 +604,10 @@ func TestSpecFromRequestAppliesCPUAffinityToGPUWorkload(t *testing.T) {
 		config: types.AppConfig{Worker: types.WorkerConfig{
 			ContainerResourceLimits: types.ContainerResourceLimitsConfig{CPUAffinityEnforced: true},
 		}},
-		containerInstances: instances,
-		cpuLimit:           4000,
-		runtime:            &mockRuntime{name: types.ContainerRuntimeRunc.String()},
+		containerInstances:  instances,
+		cpuLimit:            4000,
+		runtime:             &mockRuntime{name: types.ContainerRuntimeRunc.String()},
+		containerGPUManager: &testGPUManager{},
 	}
 	request := &types.ContainerRequest{
 		ContainerId: "gpu-container",
@@ -1287,6 +1312,7 @@ func TestRunContainerDoesNotCancelRuntimeRunWithWorkerContext(t *testing.T) {
 			common.NewOutputWriter(func(string) {}),
 			make(chan int, 1),
 			make(chan int, 1),
+			nil,
 			time.Now(),
 			nil,
 			nil,
@@ -1372,6 +1398,7 @@ func TestRunContainerRestorePublishesAddressFromStartedHandler(t *testing.T) {
 		common.NewOutputWriter(func(string) {}),
 		make(chan int, 1),
 		make(chan int, 1),
+		nil,
 		time.Now(),
 		[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
 		nil,
@@ -1506,6 +1533,7 @@ func TestRunContainerRestoreWaitsForRestoredRuntimeExit(t *testing.T) {
 			common.NewOutputWriter(func(string) {}),
 			make(chan int, 1),
 			make(chan int, 1),
+			nil,
 			time.Now(),
 			[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
 			nil,
@@ -1695,6 +1723,7 @@ func TestRunContainerRestoreFailureCleansRuntimeBeforeFallback(t *testing.T) {
 		common.NewOutputWriter(func(string) {}),
 		make(chan int, 1),
 		make(chan int, 1),
+		nil,
 		time.Now(),
 		[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
 		nil,
@@ -1762,6 +1791,7 @@ func TestRunContainerMaterializeFailureFallsBackWithoutRestore(t *testing.T) {
 		common.NewOutputWriter(func(string) {}),
 		make(chan int, 1),
 		make(chan int, 1),
+		nil,
 		time.Now(),
 		[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
 		nil,
@@ -2372,7 +2402,42 @@ func envListToMap(env []string) map[string]string {
 	return out
 }
 
+type testGPUManager struct {
+	mounts []specs.Mount
+}
+
+func (m *testGPUManager) AssignGPUDevices(request *types.ContainerRequest) ([]int, error) {
+	return []int{}, nil
+}
+
+func (m *testGPUManager) GetContainerGPUDevices(containerId string) []int {
+	return []int{}
+}
+
+func (m *testGPUManager) UnassignGPUDevices(containerId string) {}
+
+func (m *testGPUManager) CDIDevices(assignedDevices []int) []string {
+	return []string{}
+}
+
+func (m *testGPUManager) InjectEnvVars(env []string) []string {
+	return env
+}
+
+func (m *testGPUManager) InjectAssignedEnvVars(env []string, assignedDevices []int) []string {
+	return env
+}
+
+func (m *testGPUManager) InjectMounts(mounts []specs.Mount) []specs.Mount {
+	return append(mounts, m.mounts...)
+}
+
 // Mock runtime for testing
+type mockExecCall struct {
+	containerID string
+	proc        specs.Process
+}
+
 type mockRuntime struct {
 	name         string
 	capabilities runtime.Capabilities
@@ -2380,6 +2445,8 @@ type mockRuntime struct {
 	signals      []syscall.Signal
 	killOpts     []*runtime.KillOpts
 	killErr      error
+	execCalls    []mockExecCall
+	execErr      error
 }
 
 func (m *mockRuntime) Name() string {
@@ -2399,7 +2466,8 @@ func (m *mockRuntime) Run(ctx context.Context, containerID, bundlePath string, o
 }
 
 func (m *mockRuntime) Exec(ctx context.Context, containerID string, proc specs.Process, opts *runtime.ExecOpts) error {
-	return nil
+	m.execCalls = append(m.execCalls, mockExecCall{containerID: containerID, proc: proc})
+	return m.execErr
 }
 
 func (m *mockRuntime) Kill(ctx context.Context, containerID string, sig syscall.Signal, opts *runtime.KillOpts) error {

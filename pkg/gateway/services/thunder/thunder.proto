@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package thunder;
+
+option go_package = "github.com/beam-cloud/beta9/proto";
+
+service ThunderService {
+  rpc CreateClientEnrollment(CreateClientEnrollmentRequest)
+      returns (CreateClientEnrollmentResponse);
+  rpc DeleteClientEnrollment(DeleteClientEnrollmentRequest)
+      returns (DeleteClientEnrollmentResponse);
+}
+
+message CreateClientEnrollmentRequest { string container_id = 1; }
+
+message CreateClientEnrollmentResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  string install_command = 3;
+}
+
+message DeleteClientEnrollmentRequest { string container_id = 1; }
+
+message DeleteClientEnrollmentResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}

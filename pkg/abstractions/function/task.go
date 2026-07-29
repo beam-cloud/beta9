@@ -47,6 +47,7 @@ func (t *FunctionTask) Execute(ctx context.Context, options ...interface{}) erro
 		if err := t.fs.scheduler.CheckConcurrencyLimit(&types.ContainerRequest{
 			Cpu:              cpu,
 			GpuCount:         uint32(gpuCount),
+			GpuVirtualized:   stubConfig.Runtime.GpuVirtualized,
 			WorkspaceId:      stub.Workspace.ExternalId,
 			Workspace:        stub.Workspace,
 			StubId:           stub.ExternalId,
@@ -204,22 +205,23 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated, tas
 	}
 
 	runRequest := &types.ContainerRequest{
-		ContainerId:  t.containerId,
-		Env:          env,
-		Cpu:          stubConfig.Runtime.Cpu,
-		Memory:       stubConfig.Runtime.Memory,
-		GpuRequest:   gpuRequest,
-		GpuCount:     uint32(gpuCount),
-		ImageId:      stubConfig.Runtime.ImageId,
-		StubId:       stub.ExternalId,
-		TaskId:       task.ExternalId,
-		AppId:        stub.App.ExternalId,
-		WorkspaceId:  stub.Workspace.ExternalId,
-		Workspace:    stub.Workspace,
-		EntryPoint:   []string{stubConfig.PythonVersion, "-m", "beta9.runner.function"},
-		Mounts:       mounts,
-		Stub:         *stub,
-		PoolSelector: stubConfig.PoolSelector(),
+		ContainerId:    t.containerId,
+		Env:            env,
+		Cpu:            stubConfig.Runtime.Cpu,
+		Memory:         stubConfig.Runtime.Memory,
+		GpuRequest:     gpuRequest,
+		GpuCount:       uint32(gpuCount),
+		GpuVirtualized: stubConfig.Runtime.GpuVirtualized,
+		ImageId:        stubConfig.Runtime.ImageId,
+		StubId:         stub.ExternalId,
+		TaskId:         task.ExternalId,
+		AppId:          stub.App.ExternalId,
+		WorkspaceId:    stub.Workspace.ExternalId,
+		Workspace:      stub.Workspace,
+		EntryPoint:     []string{stubConfig.PythonVersion, "-m", "beta9.runner.function"},
+		Mounts:         mounts,
+		Stub:           *stub,
+		PoolSelector:   stubConfig.PoolSelector(),
 	}
 	if err := abstractions.ConfigureContainerRequestNetwork(runRequest, stubConfig); err != nil {
 		return err

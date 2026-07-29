@@ -7,6 +7,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	computesvc "github.com/beam-cloud/beta9/pkg/gateway/services/compute"
+	thundersvc "github.com/beam-cloud/beta9/pkg/gateway/services/thunder"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
@@ -30,6 +31,7 @@ type GatewayService struct {
 	workerPoolRepo   repository.WorkerPoolRepository
 	computeRepo      repository.ComputeRepository
 	computeService   *computesvc.Service
+	thunderService   *thundersvc.Service
 	usageMetricsRepo repository.UsageMetricsRepository
 	tailscale        *network.Tailscale
 	keyEventManager  *common.KeyEventManager
@@ -52,6 +54,7 @@ type GatewayServiceOpts struct {
 	WorkerPoolRepo   repository.WorkerPoolRepository
 	ComputeRepo      repository.ComputeRepository
 	ComputeService   *computesvc.Service
+	ThunderService   *thundersvc.Service
 	UsageMetricsRepo repository.UsageMetricsRepository
 	Tailscale        *network.Tailscale
 	KeyEventManager  *common.KeyEventManager
@@ -105,6 +108,7 @@ func NewGatewayService(opts *GatewayServiceOpts) (*GatewayService, error) {
 		workerPoolRepo:   opts.WorkerPoolRepo,
 		computeRepo:      computeRepo,
 		computeService:   computeService,
+		thunderService:   opts.ThunderService,
 		usageMetricsRepo: opts.UsageMetricsRepo,
 		tailscale:        opts.Tailscale,
 		keyEventManager:  keyEventManager,

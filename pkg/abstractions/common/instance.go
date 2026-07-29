@@ -337,6 +337,7 @@ func (i *AutoscaledInstance) CheckConcurrencyLimit() error {
 	request := &types.ContainerRequest{
 		Cpu:              i.StubConfig.Runtime.Cpu,
 		GpuCount:         uint32(gpuCount),
+		GpuVirtualized:   i.StubConfig.Runtime.GpuVirtualized,
 		WorkspaceId:      i.Workspace.ExternalId,
 		Workspace:        *i.Workspace,
 		AllowMarketplace: i.StubConfig.AllowMarketplace,

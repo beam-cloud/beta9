@@ -400,6 +400,7 @@ class GetOrCreateStubRequest(betterproto.Message):
     disks: List["DurableDisk"] = betterproto.message_field(44)
     allow_marketplace: bool = betterproto.bool_field(45)
     checkpoint_trigger: "_types__.CheckpointTrigger" = betterproto.message_field(46)
+    gpu_virtualized: bool = betterproto.bool_field(47)
 
 
 @dataclass(eq=False, repr=False)

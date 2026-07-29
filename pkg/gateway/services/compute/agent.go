@@ -285,6 +285,14 @@ func (s *Service) bindJoinTokenFingerprint(ctx context.Context, tokenState *mode
 // requireAgentState resolves an agent token to its current machine state,
 // returning a user-facing error message when the token is invalid or stale.
 // Shared by every agent-token-authenticated RPC in this file.
+func (s *Service) ResolveAgentState(ctx context.Context, token string) (*model.AgentTokenState, error) {
+	agentState, errMsg := s.requireAgentState(ctx, token)
+	if errMsg != "" {
+		return nil, errors.New(errMsg)
+	}
+	return agentState, nil
+}
+
 func (s *Service) requireAgentState(ctx context.Context, token string) (*model.AgentTokenState, string) {
 	agentState, err := s.getCurrentComputeAgentTokenState(ctx, token)
 	if err != nil {

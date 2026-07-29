@@ -184,8 +184,8 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 	}
 
 	// De-allocate GPU devices so they are available for new containers
-	if request.Gpu != "" {
-		s.containerGPUManager.UnassignGPUDevices(containerId)
+	if request != nil && request.RequiresGPU() {
+		s.gpuManagerForRequest(request).UnassignGPUDevices(containerId)
 	}
 
 	// Tear down container network components - best effort
@@ -269,6 +269,8 @@ func (s *Worker) markContainerStopping(containerId string) {
 }
 
 func (s *Worker) deleteContainer(containerId string) {
+	s.thunderSetupTracker.Delete(containerId)
+
 	if instance, exists := s.containerInstances.Get(containerId); exists && instance.SandboxProcessManager != nil {
 		if err := instance.SandboxProcessManager.Cleanup(); err != nil {
 			log.Debug().Str("container_id", containerId).Err(err).Msg("failed to cleanup sandbox process manager client")
@@ -293,7 +295,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 	caps := s.runtime.Capabilities()
 
-	if request.RequiresGPU() && !caps.GPU {
+	if request.RequiresPhysicalGPU() && !caps.GPU {
 		return fmt.Errorf("runtime %s does not support GPU workloads", s.runtime.Name())
 	}
 
@@ -308,6 +310,9 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		}
 		if request.Stub.Type.Kind() == types.StubTypeSandbox {
 			instance.initializeProcessManagerReadiness()
+			if request.GpuVirtualized {
+				s.thunderSetupTracker.Begin(request.ContainerId)
+			}
 		}
 	}
 	s.containerInstances.Set(containerId, instance)
@@ -876,8 +881,8 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	if runnerReadySignal {
 		env = append(env, types.ContainerRunnerReadyPathEnv+"="+types.ContainerRunnerReadyPath)
 	}
-	if request.Gpu != "" {
-		env = s.containerGPUManager.InjectEnvVars(env)
+	if request.RequiresGPU() {
+		env = s.gpuManagerForRequest(request).InjectEnvVars(env)
 	}
 	env = s.applyRuntimeEnvironmentOverrides(env, request, spec.Process.Args)
 
@@ -924,6 +929,10 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		return nil, err
 	}
 	s.enableVolumeCaching(request, volumeCacheMap, spec)
+
+	if request.RequiresGPU() && request.GpuVirtualized {
+		spec.Mounts = s.gpuManagerForRequest(request).InjectMounts(spec.Mounts)
+	}
 
 	// Configure resolv.conf
 	resolvMount := specs.Mount{
@@ -1240,11 +1249,13 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		return
 	}
 
-	// Only inject GPU devices if runtime supports GPU
-	if request.RequiresGPU() && s.runtime.Capabilities().GPU {
-		// Assign n-number of GPUs to a container
+	// Virtualized GPU requests register with Thunder but never receive physical
+	// device mounts, CDI devices, or NVIDIA_VISIBLE_DEVICES pinning.
+	if request.RequiresGPU() && (request.GpuVirtualized || s.runtime.Capabilities().GPU) {
+		gpuManager := s.gpuManagerForRequest(request)
+
 		phaseStart = time.Now()
-		assignedDevices, err := s.containerGPUManager.AssignGPUDevices(request.ContainerId, request.GpuCount)
+		assignedDevices, err := gpuManager.AssignGPUDevices(request)
 		metrics.RecordWorkerStartupPhase("gpu_assignment", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 		s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleGPUAssignment, phaseStart, err == nil, map[string]string{"gpu_count": fmt.Sprintf("%d", request.GpuCount)})
 		if err != nil {
@@ -1252,25 +1263,25 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			return
 		}
 
-		// Only use CDI if runtime supports it
-		if s.runtime.Capabilities().CDI {
-			cdiCache := cdi.GetDefaultCache()
-			devicesToInject := s.containerGPUManager.CDIDevices(assignedDevices)
+		if request.RequiresPhysicalGPU() {
+			// Only use CDI if runtime supports it
+			if s.runtime.Capabilities().CDI {
+				cdiCache := cdi.GetDefaultCache()
+				devicesToInject := gpuManager.CDIDevices(assignedDevices)
 
-			unresolvable, err := cdiCache.InjectDevices(spec, devicesToInject...)
-			if err != nil {
-				log.Error().Str("container_id", request.ContainerId).Msgf("failed to inject devices: %v", err)
-				return
-			}
-			if len(unresolvable) > 0 {
-				log.Error().Str("container_id", request.ContainerId).Msgf("unresolvable devices: %v", unresolvable)
-				return
+				unresolvable, err := cdiCache.InjectDevices(spec, devicesToInject...)
+				if err != nil {
+					log.Error().Str("container_id", request.ContainerId).Msgf("failed to inject devices: %v", err)
+					return
+				}
+				if len(unresolvable) > 0 {
+					log.Error().Str("container_id", request.ContainerId).Msgf("unresolvable devices: %v", unresolvable)
+					return
+				}
 			}
 		}
 
-		// Pin env vars to the assigned devices regardless of CDI support; for
-		// non-CDI runtimes this is the only thing scoping the container's GPUs.
-		spec.Process.Env = s.containerGPUManager.InjectAssignedEnvVars(spec.Process.Env, assignedDevices)
+		spec.Process.Env = gpuManager.InjectAssignedEnvVars(spec.Process.Env, assignedDevices)
 	}
 
 	// Expose the bind ports
@@ -1371,6 +1382,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	startedChan := make(chan int, 1)
 	checkpointPIDChan := make(chan int, 1)
 	monitorPIDChan := make(chan int, 1)
+	thunderInstallResult := make(chan error, 1)
 
 	defer func() {
 		// Close in reverse order of dependency
@@ -1429,6 +1441,24 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 				return
 			}
 
+			if request.GpuVirtualized {
+				if err := s.installThunderClient(ctx, request); err != nil {
+					s.thunderSetupTracker.Complete(request.ContainerId, err)
+					log.Error().Err(err).Str("container_id", request.ContainerId).Msg("failed to install Thunder client")
+					s.stopContainer(request.ContainerId, false)
+					select {
+					case thunderInstallResult <- err:
+					default:
+					}
+					return
+				}
+				s.thunderSetupTracker.Complete(request.ContainerId, nil)
+				select {
+				case thunderInstallResult <- nil:
+				default:
+				}
+			}
+
 			if request.DockerEnabled {
 				go s.startDockerDaemon(ctx, containerId, instance)
 			}
@@ -1452,7 +1482,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		s.setupOOMWatcher(ctx, containerId, pid, spec, request, outputLogger, &isOOMKilled)
 	}()
 
-	exitCode, _ = s.runContainer(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan, opts.StartupStartedAt, opts.StartupPortBindings, opts.CheckpointFilesystemRestore)
+	exitCode, _ = s.runContainer(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan, thunderInstallResult, opts.StartupStartedAt, opts.StartupPortBindings, opts.CheckpointFilesystemRestore)
 
 	stopReason := types.StopContainerReasonUnknown
 	containerInstance, exists = s.containerInstances.Get(containerId)
@@ -1566,7 +1596,7 @@ func eventStopReason(stopReason types.StopContainerReason) string {
 	return string(stopReason)
 }
 
-func (s *Worker) runContainer(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, outputWriter *common.OutputWriter, startedChan chan int, checkpointPIDChan chan int, startupStartedAt time.Time, startupPortBindings []PortBinding, filesystemRestore *checkpointFilesystemRestore) (int, error) {
+func (s *Worker) runContainer(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, outputWriter *common.OutputWriter, startedChan chan int, checkpointPIDChan chan int, thunderInstallResult chan error, startupStartedAt time.Time, startupPortBindings []PortBinding, filesystemRestore *checkpointFilesystemRestore) (int, error) {
 	phaseStart := time.Now()
 	releaseStartupSlot := func() {}
 	if s.containerStartSem != nil {
@@ -1681,6 +1711,18 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 		case <-ctx.Done():
 			return
 		}
+
+		if request.Stub.Type.Kind() == types.StubTypeSandbox && request.GpuVirtualized {
+			select {
+			case err := <-thunderInstallResult:
+				if err != nil {
+					return
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+
 		s.markContainerRunning(ctx, request, startupStartedAt)
 	}
 

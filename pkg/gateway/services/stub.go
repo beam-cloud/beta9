@@ -46,6 +46,15 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 
 	autoscaler := autoscalerFromProto(in.Autoscaler)
 
+	log.Info().
+		Str("stub_name", in.Name).
+		Str("stub_type", in.StubType).
+		Str("workspace_id", authInfo.Workspace.ExternalId).
+		Strs("gpus", types.GpuTypesToStrings(gpus)).
+		Uint32("gpu_count", in.GpuCount).
+		Bool("gpu_virtualized", in.GpuVirtualized).
+		Msg("gateway received GetOrCreateStub request")
+
 	keepWarmSeconds := normalizeKeepWarmSeconds(in.KeepWarmSeconds, types.StubType(in.StubType))
 
 	// Pod keep-warm semantics:
@@ -119,11 +128,12 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 
 	stubConfig := types.StubConfigV1{
 		Runtime: types.Runtime{
-			Cpu:      in.Cpu,
-			Gpus:     gpus,
-			GpuCount: in.GpuCount,
-			Memory:   in.Memory,
-			ImageId:  in.ImageId,
+			Cpu:            in.Cpu,
+			Gpus:           gpus,
+			GpuCount:       in.GpuCount,
+			GpuVirtualized: in.GpuVirtualized,
+			Memory:         in.Memory,
+			ImageId:        in.ImageId,
 		},
 		Handler:            in.Handler,
 		OnStart:            in.OnStart,
@@ -164,6 +174,14 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 	if stubConfig.RequiresGPU() && in.GpuCount == 0 {
 		stubConfig.Runtime.GpuCount = 1
 	}
+
+	log.Info().
+		Str("stub_name", in.Name).
+		Str("stub_type", in.StubType).
+		Strs("gpus", types.GpuTypesToStrings(gpus)).
+		Uint32("gpu_count", stubConfig.Runtime.GpuCount).
+		Bool("gpu_virtualized", stubConfig.Runtime.GpuVirtualized).
+		Msg("gateway built stub config")
 
 	if stubConfig.RequiresGPU() {
 		if gws.computeService != nil {

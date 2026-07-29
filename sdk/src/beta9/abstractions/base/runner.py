@@ -110,6 +110,7 @@ class RunnerAbstraction(BaseAbstraction):
         gpu: Union[GpuTypeAlias, List[GpuTypeAlias]] = GpuType.NoGPU,
         gpu_count: int = 0,
         image: Image = Image(),
+        gpu_virtualized: bool = False,
         workers: int = 1,
         concurrent_requests: int = 1,
         keep_warm_seconds: float = 0.0,
@@ -199,6 +200,7 @@ class RunnerAbstraction(BaseAbstraction):
         self.checkpoint_readiness_timeout = checkpoint_readiness_timeout
         self.checkpoint_readiness_interval = checkpoint_readiness_interval
         self.docker_enabled = docker_enabled
+        self.gpu_virtualized = gpu_virtualized
         self.allow_marketplace = allow_marketplace
         self.is_service = False
         self.serving = ServingConfig.from_options(
@@ -717,6 +719,7 @@ class RunnerAbstraction(BaseAbstraction):
             memory=self.memory,
             gpu=self.gpu,
             gpu_count=self.gpu_count,
+            gpu_virtualized=self.gpu_virtualized,
             handler=self.handler,
             on_start=self.on_start,
             on_deploy=self.on_deploy.parent.handler if self.on_deploy else "",

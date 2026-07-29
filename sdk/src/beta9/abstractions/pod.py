@@ -145,6 +145,9 @@ class Pod(RunnerAbstraction, DeployableMixin):
         gpu_count (int):
             The number of GPUs allocated to the pod. Default is 0. If a GPU is
             specified but this value is set to 0, it will be automatically updated to 1.
+        gpu_virtualized (bool):
+            If true, preserve GPU scheduling and image selection but do not expose physical GPU devices
+            inside the container. Default is False.
         image (Union[Image, dict]):
             The container image used for the task execution. Default is [Image](#image).
         volumes (Optional[List[Union[Volume, CloudBucket]]]):
@@ -185,6 +188,7 @@ class Pod(RunnerAbstraction, DeployableMixin):
         gpu: Union[GpuTypeAlias, List[GpuTypeAlias]] = GpuType.NoGPU,
         gpu_count: int = 0,
         image: Image = Image(),
+        gpu_virtualized: bool = False,
         volumes: Optional[List[Union[Volume, CloudBucket]]] = None,
         disks: Optional[List[DurableDisk]] = None,
         secrets: Optional[List[str]] = None,
@@ -212,6 +216,7 @@ class Pod(RunnerAbstraction, DeployableMixin):
             memory=memory,
             gpu=gpu,
             gpu_count=gpu_count,
+            gpu_virtualized=gpu_virtualized,
             image=image,
             volumes=volumes,
             disks=disks,

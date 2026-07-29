@@ -509,6 +509,7 @@ func (s *Service) rentalContainerRequest(
 		Memory:           stubConfig.Runtime.Memory,
 		GpuRequest:       []string{rental.GPU},
 		GpuCount:         stubConfig.Runtime.GpuCount,
+		GpuVirtualized:   stubConfig.Runtime.GpuVirtualized,
 		ImageId:          stubConfig.Runtime.ImageId,
 		WorkspaceId:      authInfo.Workspace.ExternalId,
 		Workspace:        *authInfo.Workspace,
