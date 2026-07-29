@@ -2,8 +2,6 @@ package thunder
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -25,13 +23,17 @@ type ThunderClient interface {
 	ClientInstallCommand(enrollmentToken string) (string, error)
 }
 
+type AgentStateValidator interface {
+	ResolveAgentState(ctx context.Context, agentToken string) (*model.AgentTokenState, error)
+}
+
 type ServiceOpts struct {
-	Repository    Repository
-	RedisClient   *common.RedisClient
-	Client        ThunderClient
-	ContainerRepo repository.ContainerRepository
-	WorkerRepo    repository.WorkerRepository
-	ComputeRepo   repository.ComputeRepository
+	Repository          Repository
+	RedisClient         *common.RedisClient
+	Client              ThunderClient
+	ContainerRepo       repository.ContainerRepository
+	WorkerRepo          repository.WorkerRepository
+	AgentStateValidator AgentStateValidator
 }
 
 var errThunderClientEnrollmentExists = errors.New("Thunder client enrollment already exists for container")
@@ -39,11 +41,11 @@ var errThunderClientEnrollmentExists = errors.New("Thunder client enrollment alr
 type Service struct {
 	pb.UnimplementedThunderServiceServer
 
-	repo          Repository
-	client        ThunderClient
-	containerRepo repository.ContainerRepository
-	workerRepo    repository.WorkerRepository
-	computeRepo   repository.ComputeRepository
+	repo           Repository
+	client         ThunderClient
+	containerRepo  repository.ContainerRepository
+	workerRepo     repository.WorkerRepository
+	agentValidator AgentStateValidator
 }
 
 func NewService(opts ServiceOpts) (*Service, error) {
@@ -70,11 +72,11 @@ func NewService(opts ServiceOpts) (*Service, error) {
 	}
 
 	return &Service{
-		repo:          repo,
-		client:        client,
-		containerRepo: opts.ContainerRepo,
-		workerRepo:    opts.WorkerRepo,
-		computeRepo:   opts.ComputeRepo,
+		repo:           repo,
+		client:         client,
+		containerRepo:  opts.ContainerRepo,
+		workerRepo:     opts.WorkerRepo,
+		agentValidator: opts.AgentStateValidator,
 	}, nil
 }
 
@@ -357,30 +359,10 @@ func (s *Service) requireAgentState(ctx context.Context, agentToken string) (*mo
 	if agentToken == "" {
 		return nil, fmt.Errorf("agent token is required")
 	}
-	if s == nil || s.computeRepo == nil {
-		return nil, fmt.Errorf("compute repository is unavailable")
+	if s == nil || s.agentValidator == nil {
+		return nil, fmt.Errorf("agent state validator is unavailable")
 	}
-
-	state, err := s.computeRepo.GetAgentTokenState(ctx, hashThunderComputeToken(agentToken))
-	if err != nil {
-		return nil, err
-	}
-	if state == nil {
-		return nil, fmt.Errorf("invalid agent token")
-	}
-	current, err := s.computeRepo.GetAgentMachineState(ctx, state.WorkspaceID, state.PoolName, state.MachineID)
-	if err != nil {
-		return nil, err
-	}
-	if current == nil || current.TokenHash != state.TokenHash {
-		return nil, fmt.Errorf("invalid agent token")
-	}
-	return current, nil
-}
-
-func hashThunderComputeToken(token string) string {
-	sum := sha256.Sum256([]byte(token))
-	return hex.EncodeToString(sum[:])
+	return s.agentValidator.ResolveAgentState(ctx, agentToken)
 }
 
 func requireWorkerToken(ctx context.Context, workspaceID string) error {

@@ -383,11 +383,11 @@ func (g *Gateway) registerServices() error {
 
 	// Register Thunder service
 	ts, err := thundersvc.NewService(thundersvc.ServiceOpts{
-		RedisClient:   g.RedisClient,
-		Client:        thundersvc.NewClientFromEnv(nil),
-		ContainerRepo: g.ContainerRepo,
-		WorkerRepo:    g.workerRepo,
-		ComputeRepo:   g.ComputeRepo,
+		RedisClient:         g.RedisClient,
+		Client:              thundersvc.NewClientFromEnv(nil),
+		ContainerRepo:       g.ContainerRepo,
+		WorkerRepo:          g.workerRepo,
+		AgentStateValidator: g.ComputeService,
 	})
 	if err != nil {
 		return err

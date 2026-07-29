@@ -3,11 +3,11 @@ package thunder
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	model "github.com/beam-cloud/beta9/pkg/compute"
@@ -256,9 +256,8 @@ func TestServiceCreateAndDeleteNodeEnrollment(t *testing.T) {
 	defer rdb.Close()
 
 	repo := NewRedisRepository(rdb)
-	computeRepo := repository.NewComputeRedisRepository(rdb)
 	agentToken := "agent-token"
-	saveThunderAgentTokenState(t, computeRepo, agentToken, "workspace-1", "pool-1", "machine-1")
+	validator := &fakeAgentStateValidator{state: &model.AgentTokenState{WorkspaceID: "workspace-1", PoolName: "pool-1", MachineID: "machine-1"}}
 
 	var createZoneCalls int
 	var createTokenCalls int
@@ -304,11 +303,11 @@ func TestServiceCreateAndDeleteNodeEnrollment(t *testing.T) {
 	defer server.Close()
 
 	service, err := NewService(ServiceOpts{
-		Repository:    repo,
-		Client:        NewClient(server.URL, "central-token", server.Client()),
-		ContainerRepo: repository.NewContainerRedisRepositoryForTest(rdb),
-		WorkerRepo:    repository.NewWorkerRedisRepositoryForTest(rdb),
-		ComputeRepo:   computeRepo,
+		Repository:          repo,
+		Client:              NewClient(server.URL, "central-token", server.Client()),
+		ContainerRepo:       repository.NewContainerRedisRepositoryForTest(rdb),
+		WorkerRepo:          repository.NewWorkerRedisRepositoryForTest(rdb),
+		AgentStateValidator: validator,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -361,19 +360,18 @@ func TestServiceCreateNodeEnrollmentWithExistingStateIsIdempotent(t *testing.T) 
 	defer rdb.Close()
 
 	repo := NewRedisRepository(rdb)
-	computeRepo := repository.NewComputeRedisRepository(rdb)
 	agentToken := "agent-token"
-	saveThunderAgentTokenState(t, computeRepo, agentToken, "workspace-1", "pool-1", "machine-1")
+	validator := &fakeAgentStateValidator{state: &model.AgentTokenState{WorkspaceID: "workspace-1", PoolName: "pool-1", MachineID: "machine-1"}}
 	if err := repo.SaveNodeEnrollment(context.Background(), &NodeEnrollmentState{WorkspaceID: "workspace-1", PoolName: "pool-1", MachineID: "machine-1", EnrollmentTokenID: "node-token-existing"}, 0); err != nil {
 		t.Fatal(err)
 	}
 
 	service, err := NewService(ServiceOpts{
-		Repository:    repo,
-		Client:        NewClient("https://central.example", "central-token", nil),
-		ContainerRepo: repository.NewContainerRedisRepositoryForTest(rdb),
-		WorkerRepo:    repository.NewWorkerRedisRepositoryForTest(rdb),
-		ComputeRepo:   computeRepo,
+		Repository:          repo,
+		Client:              NewClient("https://central.example", "central-token", nil),
+		ContainerRepo:       repository.NewContainerRedisRepositoryForTest(rdb),
+		WorkerRepo:          repository.NewWorkerRedisRepositoryForTest(rdb),
+		AgentStateValidator: validator,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -391,11 +389,11 @@ func TestServiceCreateNodeEnrollmentRequiresValidAgentToken(t *testing.T) {
 	rdb := newThunderRedisClient(t)
 	defer rdb.Close()
 	service, err := NewService(ServiceOpts{
-		Repository:    NewRedisRepository(rdb),
-		Client:        NewClient("https://central.example", "central-token", nil),
-		ContainerRepo: repository.NewContainerRedisRepositoryForTest(rdb),
-		WorkerRepo:    repository.NewWorkerRedisRepositoryForTest(rdb),
-		ComputeRepo:   repository.NewComputeRedisRepository(rdb),
+		Repository:          NewRedisRepository(rdb),
+		Client:              NewClient("https://central.example", "central-token", nil),
+		ContainerRepo:       repository.NewContainerRedisRepositoryForTest(rdb),
+		WorkerRepo:          repository.NewWorkerRedisRepositoryForTest(rdb),
+		AgentStateValidator: &fakeAgentStateValidator{err: errors.New("managed pool no longer exists")},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -404,21 +402,23 @@ func TestServiceCreateNodeEnrollmentRequiresValidAgentToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.Ok || !strings.Contains(resp.ErrorMsg, "invalid agent token") {
+	if resp.Ok || !strings.Contains(resp.ErrorMsg, "managed pool no longer exists") {
 		t.Fatalf("CreateNodeEnrollment() = %+v", resp)
 	}
 }
 
-func saveThunderAgentTokenState(t *testing.T, repo repository.ComputeRepository, agentToken, workspaceID, poolName, machineID string) {
-	t.Helper()
-	if err := repo.SaveAgentTokenState(context.Background(), &model.AgentTokenState{
-		TokenHash:   hashThunderComputeToken(agentToken),
-		WorkspaceID: workspaceID,
-		PoolName:    poolName,
-		MachineID:   machineID,
-	}, time.Hour); err != nil {
-		t.Fatal(err)
+type fakeAgentStateValidator struct {
+	state *model.AgentTokenState
+	err   error
+	token string
+}
+
+func (v *fakeAgentStateValidator) ResolveAgentState(ctx context.Context, agentToken string) (*model.AgentTokenState, error) {
+	v.token = agentToken
+	if v.err != nil {
+		return nil, v.err
 	}
+	return v.state, nil
 }
 
 func thunderWorkerAuthContext(tokenType, workspaceID string) context.Context {
