@@ -319,6 +319,10 @@ service GatewayService {
       body : "*"
     };
   }
+  rpc CreateNodeEnrollment(CreateNodeEnrollmentRequest)
+      returns (CreateNodeEnrollmentResponse);
+  rpc DeleteNodeEnrollment(DeleteNodeEnrollmentRequest)
+      returns (DeleteNodeEnrollmentResponse);
   rpc ListAgentRoutes(ListAgentRoutesRequest)
       returns (ListAgentRoutesResponse) {
     option (google.api.http) = {
@@ -1425,6 +1429,21 @@ message RequestAgentTransportCredentialResponse {
   string control_url = 4;
   string hostname = 5;
   bool ephemeral = 6;
+}
+
+message CreateNodeEnrollmentRequest { string agent_token = 1; }
+
+message CreateNodeEnrollmentResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  string enrollment_token = 3;
+}
+
+message DeleteNodeEnrollmentRequest { string agent_token = 1; }
+
+message DeleteNodeEnrollmentResponse {
+  bool ok = 1;
+  string error_msg = 2;
 }
 
 message ListAgentRoutesRequest { string agent_token = 1; }

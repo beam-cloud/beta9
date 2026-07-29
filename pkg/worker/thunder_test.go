@@ -2,19 +2,17 @@ package worker
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"net/http"
-	"net/http/httptest"
-	"sync/atomic"
+	"strings"
 	"testing"
 	"time"
 
 	common "github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
+	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/tj/assert"
+	"google.golang.org/grpc"
 )
 
 func TestThunderSetupTrackerWaitsUntilComplete(t *testing.T) {
@@ -75,7 +73,7 @@ func requireNoErrorEventually(t *testing.T, done <-chan error) {
 }
 
 func TestThunderInjectEnvVarsAddsThunderLDPreload(t *testing.T) {
-	manager := NewContainerThunderManager("", "", nil)
+	manager := NewContainerThunderManager(nil)
 
 	env := manager.InjectEnvVars([]string{"A=1"})
 
@@ -83,7 +81,7 @@ func TestThunderInjectEnvVarsAddsThunderLDPreload(t *testing.T) {
 }
 
 func TestThunderInjectEnvVarsAppendsThunderLDPreload(t *testing.T) {
-	manager := NewContainerThunderManager("", "", nil)
+	manager := NewContainerThunderManager(nil)
 
 	env := manager.InjectEnvVars([]string{"LD_PRELOAD=/lib/existing.so"})
 
@@ -91,7 +89,7 @@ func TestThunderInjectEnvVarsAppendsThunderLDPreload(t *testing.T) {
 }
 
 func TestThunderInjectMountsAddsNvidiaSMINVMLAndCUDA(t *testing.T) {
-	manager := NewContainerThunderManager("", "", nil)
+	manager := NewContainerThunderManager(nil)
 	initialMounts := []specs.Mount{{Type: "bind", Source: "/src", Destination: "/dst"}}
 
 	mounts := manager.InjectMounts(initialMounts)
@@ -101,91 +99,81 @@ func TestThunderInjectMountsAddsNvidiaSMINVMLAndCUDA(t *testing.T) {
 	assert.Contains(t, mounts, thunderBindMount("/usr/lib/x86_64-linux-gnu/libcuda.so.1"))
 }
 
-func TestThunderAssignRegistersClientAndLeavesAssignedEnvUnchanged(t *testing.T) {
-	var registerPayload thunderEnrollmentTokenRequest
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != thunderEnrollmentTokenPath {
-			t.Fatalf("path = %s, want %s", r.URL.Path, thunderEnrollmentTokenPath)
-		}
-		if r.Method != http.MethodPost {
-			t.Fatalf("method = %s, want POST", r.Method)
-		}
-		if r.Header.Get("Authorization") != "Bearer central-token" {
-			t.Fatalf("authorization header = %q", r.Header.Get("Authorization"))
-		}
-		if err := json.NewDecoder(r.Body).Decode(&registerPayload); err != nil {
-			t.Fatal(err)
-		}
-		_ = json.NewEncoder(w).Encode(thunderEnrollmentTokenResponse{EnrollmentTokenID: "token-id", EnrollmentToken: "client-token", ZoneID: "zone-123", Role: thunderEnrollmentRoleClient, GPUType: "a100", GPUCount: 2})
-	}))
-	defer server.Close()
-
-	manager := NewContainerThunderManager(server.URL, "central-token", server.Client())
-	t.Setenv(thunderZoneIDEnv, "zone-123")
-	request := &types.ContainerRequest{
-		ContainerId:    "container-123",
-		Gpu:            "A100",
-		GpuCount:       2,
-		GpuVirtualized: true,
+func TestThunderAssignCreatesClientEnrollmentAndCachesInstallCommand(t *testing.T) {
+	client := &fakeThunderServiceClient{
+		createResp: &pb.CreateClientEnrollmentResponse{Ok: true, InstallCommand: "curl install thunder"},
 	}
+	manager := NewContainerThunderManager(client)
+	request := &types.ContainerRequest{ContainerId: "container-123", GpuVirtualized: true}
 
 	assigned, err := manager.AssignGPUDevices(request)
 	if err != nil {
 		t.Fatal(err)
 	}
 	assert.Equal(t, []int{}, assigned)
-	assert.Equal(t, thunderEnrollmentTokenRequest{OrgID: "", ZoneID: "zone-123", Role: thunderEnrollmentRoleClient, GPUType: "a100", GPUCount: 2, ExpiresInSeconds: thunderEnrollmentExpiresSecond}, registerPayload)
+	if len(client.createReqs) != 1 || client.createReqs[0].ContainerId != "container-123" {
+		t.Fatalf("create requests = %+v", client.createReqs)
+	}
+	cmd, ok := manager.installCache.Get("container-123")
+	assert.True(t, ok)
+	assert.Equal(t, "curl install thunder", cmd)
 
 	env := manager.InjectAssignedEnvVars([]string{"A=1", "NVIDIA_VISIBLE_DEVICES=void", "WORKER_GPU_DEVICES=0"}, assigned)
 	assert.Equal(t, []string{"A=1", "NVIDIA_VISIBLE_DEVICES=void", "WORKER_GPU_DEVICES=0"}, env)
 }
 
-func TestThunderUnassignUsesDeleteEnrollmentTokenNode(t *testing.T) {
-	var deletePath string
-	var sawDelete bool
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case thunderEnrollmentTokenPath:
-			_ = json.NewEncoder(w).Encode(thunderEnrollmentTokenResponse{EnrollmentTokenID: "token-id", EnrollmentToken: "client-token", ZoneID: "zone-123", Role: thunderEnrollmentRoleClient, GPUType: "a100", GPUCount: 2})
-		case fmt.Sprintf(thunderEnrollmentTokenNodePath, "token-id"):
-			sawDelete = true
-			deletePath = r.URL.Path
-			if r.Method != http.MethodDelete {
-				t.Fatalf("method = %s, want DELETE", r.Method)
-			}
-			if r.Header.Get("Authorization") != "Bearer central-token" {
-				t.Fatalf("authorization header = %q", r.Header.Get("Authorization"))
-			}
-			_ = json.NewEncoder(w).Encode(thunderDeleteEnrollmentTokenNodeResponse{EnrollmentTokenID: "token-id", Role: thunderEnrollmentRoleClient, ClientID: "client-id", NodeDeleted: true})
-		default:
-			t.Fatalf("unexpected path %s", r.URL.Path)
-		}
-	}))
-	defer server.Close()
+func TestThunderAssignReturnsGatewayError(t *testing.T) {
+	manager := NewContainerThunderManager(&fakeThunderServiceClient{
+		createResp: &pb.CreateClientEnrollmentResponse{ErrorMsg: "gateway refused enrollment"},
+	})
 
-	manager := NewContainerThunderManager(server.URL, "central-token", server.Client())
-	t.Setenv(thunderZoneIDEnv, "zone-123")
-	request := &types.ContainerRequest{ContainerId: "container-123", Gpu: "H100", GpuCount: 1, GpuVirtualized: true}
-	_, err := manager.AssignGPUDevices(request)
-	if err != nil {
-		t.Fatal(err)
+	_, err := manager.AssignGPUDevices(&types.ContainerRequest{ContainerId: "container-123", GpuVirtualized: true})
+	if err == nil {
+		t.Fatal("expected Thunder enrollment error")
 	}
-	manager.UnassignGPUDevices(request.ContainerId)
-
-	if !sawDelete {
-		t.Fatal("delete enrollment-token node was not called")
-	}
-	assert.Equal(t, fmt.Sprintf(thunderEnrollmentTokenNodePath, "token-id"), deletePath)
+	assert.Contains(t, err.Error(), "gateway refused enrollment")
 }
 
-func TestInstallThunderClientExecutesInstaller(t *testing.T) {
-	rt := &mockRuntime{name: "runc"}
-	manager := NewContainerThunderManager("https://worker-default.example", "worker-default-token", nil)
-	manager.allocations.Set("container-123", thunderAllocation{
-		EnrollmentToken: "enroll-token",
-		APIURL:          "https://worker-default.example",
-		APIToken:        "worker-default-token",
+func TestThunderAssignRequiresServiceClient(t *testing.T) {
+	manager := NewContainerThunderManager(nil)
+	_, err := manager.AssignGPUDevices(&types.ContainerRequest{ContainerId: "container-123", GpuVirtualized: true})
+	if err == nil {
+		t.Fatal("expected missing Thunder client error")
+	}
+	assert.Contains(t, err.Error(), "Thunder service client")
+}
+
+func TestThunderAssignRequiresInstallCommand(t *testing.T) {
+	manager := NewContainerThunderManager(&fakeThunderServiceClient{
+		createResp: &pb.CreateClientEnrollmentResponse{Ok: true},
 	})
+	_, err := manager.AssignGPUDevices(&types.ContainerRequest{ContainerId: "container-123", GpuVirtualized: true})
+	if err == nil {
+		t.Fatal("expected missing install command error")
+	}
+	assert.Contains(t, err.Error(), "install command")
+}
+
+func TestThunderUnassignDeletesClientEnrollment(t *testing.T) {
+	client := &fakeThunderServiceClient{
+		deleteResp: &pb.DeleteClientEnrollmentResponse{Ok: true},
+	}
+	manager := NewContainerThunderManager(client)
+	manager.installCache.Set("container-123", "curl install thunder")
+
+	manager.UnassignGPUDevices("container-123")
+
+	if len(client.deleteReqs) != 1 || client.deleteReqs[0].ContainerId != "container-123" {
+		t.Fatalf("delete requests = %+v", client.deleteReqs)
+	}
+	_, ok := manager.installCache.Get("container-123")
+	assert.False(t, ok)
+}
+
+func TestInstallThunderClientExecutesCachedInstaller(t *testing.T) {
+	rt := &mockRuntime{name: "runc"}
+	manager := NewContainerThunderManager(nil)
+	manager.installCache.Set("container-123", "curl -fsSL https://get.thundercompute.com/install.sh | sudo THUNDER_NOWARN=1 THUNDER_INSTALL_MODE=client THUNDER_CENTRAL_URL='https://gateway.example' THUNDER_ENROLLMENT_TOKEN='enroll-token' sh")
 	instances := common.NewSafeMap[*ContainerInstance]()
 	instances.Set("container-123", &ContainerInstance{
 		Runtime: rt,
@@ -206,77 +194,49 @@ func TestInstallThunderClientExecutesInstaller(t *testing.T) {
 	call := rt.execCalls[0]
 	assert.Equal(t, "container-123", call.containerID)
 	assert.Equal(t, "/workspace", call.proc.Cwd)
-	assert.Equal(t, []string{"sh", "-c", "curl -fsSL https://get.thundercompute.com/install.sh | sudo THUNDER_NOWARN=1 THUNDER_INSTALL_MODE=client THUNDER_CENTRAL_URL='https://worker-default.example' THUNDER_ENROLLMENT_TOKEN='enroll-token' sh"}, call.proc.Args)
+	assert.Equal(t, []string{"sh", "-c", "curl -fsSL https://get.thundercompute.com/install.sh | sudo THUNDER_NOWARN=1 THUNDER_INSTALL_MODE=client THUNDER_CENTRAL_URL='https://gateway.example' THUNDER_ENROLLMENT_TOKEN='enroll-token' sh"}, call.proc.Args)
 	assert.Contains(t, call.proc.Env, "A=1")
 	assert.Contains(t, call.proc.Env, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 }
 
-func TestThunderAssignReturnsErrorOnUnsuccessfulStatus(t *testing.T) {
-	var attempts int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&attempts, 1)
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer server.Close()
-
-	manager := NewContainerThunderManager(server.URL, "central-token", server.Client())
-	t.Setenv(thunderZoneIDEnv, "zone-123")
-	_, err := manager.AssignGPUDevices(&types.ContainerRequest{ContainerId: "container-123", GpuRequest: []string{"H100"}, GpuVirtualized: true})
-	if err == nil {
-		t.Fatal("expected Thunder enrollment error")
+func TestInstallThunderClientRequiresCachedInstaller(t *testing.T) {
+	worker := &Worker{
+		containerThunderManager: NewContainerThunderManager(nil),
+		containerInstances:      common.NewSafeMap[*ContainerInstance](),
 	}
-	assert.Equal(t, int32(1), atomic.LoadInt32(&attempts))
-}
-
-func TestThunderAssignRequiresWorkerEnv(t *testing.T) {
-	manager := NewContainerThunderManager("", "", nil)
-	_, err := manager.AssignGPUDevices(&types.ContainerRequest{ContainerId: "container-123", Gpu: "A100", GpuVirtualized: true})
-	if err == nil {
-		t.Fatal("expected missing Thunder configuration error")
+	err := worker.installThunderClient(context.Background(), &types.ContainerRequest{ContainerId: "container-123", GpuVirtualized: true})
+	if err == nil || !strings.Contains(err.Error(), "install command") {
+		t.Fatalf("installThunderClient() error = %v", err)
 	}
 }
 
-func TestThunderAssignRequiresZoneID(t *testing.T) {
-	manager := NewContainerThunderManager("https://thunder.example", "central-token", nil)
-	_, err := manager.AssignGPUDevices(&types.ContainerRequest{ContainerId: "container-123", Gpu: "A100", GpuVirtualized: true})
-	if err == nil {
-		t.Fatal("expected missing Thunder zone id error")
-	}
+type fakeThunderServiceClient struct {
+	createResp *pb.CreateClientEnrollmentResponse
+	createErr  error
+	createReqs []*pb.CreateClientEnrollmentRequest
+	deleteResp *pb.DeleteClientEnrollmentResponse
+	deleteErr  error
+	deleteReqs []*pb.DeleteClientEnrollmentRequest
 }
 
-func TestThunderAssignUsesRequestScopedCredentials(t *testing.T) {
-	var authHeader string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		authHeader = r.Header.Get("Authorization")
-		_ = json.NewEncoder(w).Encode(thunderEnrollmentTokenResponse{EnrollmentTokenID: "token-id", EnrollmentToken: "client-token", ZoneID: "zone-123", Role: thunderEnrollmentRoleClient, GPUType: "a100", GPUCount: 2})
-	}))
-	defer server.Close()
-
-	manager := NewContainerThunderManager("https://worker-default.example", "worker-default-token", server.Client())
-	t.Setenv(thunderZoneIDEnv, "zone-worker")
-	request := &types.ContainerRequest{
-		ContainerId:    "container-123",
-		Gpu:            "A100",
-		GpuCount:       1,
-		GpuVirtualized: true,
-		Env: []string{
-			thunderAPIURLEnv + "=" + server.URL,
-			thunderAPITokenEnv + "=request-token",
-			thunderZoneIDEnv + "=zone-request",
-		},
+func (f *fakeThunderServiceClient) CreateClientEnrollment(ctx context.Context, in *pb.CreateClientEnrollmentRequest, opts ...grpc.CallOption) (*pb.CreateClientEnrollmentResponse, error) {
+	f.createReqs = append(f.createReqs, in)
+	if f.createErr != nil {
+		return nil, f.createErr
 	}
-
-	_, err := manager.AssignGPUDevices(request)
-	if err != nil {
-		t.Fatal(err)
+	if f.createResp != nil {
+		return f.createResp, nil
 	}
-	assert.Equal(t, "Bearer request-token", authHeader)
+	return &pb.CreateClientEnrollmentResponse{Ok: true, InstallCommand: "curl install thunder"}, nil
+}
 
-	allocation, ok := manager.allocations.Get(request.ContainerId)
-	assert.True(t, ok)
-	assert.Equal(t, server.URL, allocation.APIURL)
-	assert.Equal(t, "request-token", allocation.APIToken)
-	assert.Equal(t, "token-id", allocation.EnrollmentTokenID)
-	assert.Equal(t, "client-token", allocation.EnrollmentToken)
-	assert.Equal(t, "zone-123", allocation.Response.ZoneID)
+func (f *fakeThunderServiceClient) DeleteClientEnrollment(ctx context.Context, in *pb.DeleteClientEnrollmentRequest, opts ...grpc.CallOption) (*pb.DeleteClientEnrollmentResponse, error) {
+	f.deleteReqs = append(f.deleteReqs, in)
+	if f.deleteErr != nil {
+		return nil, f.deleteErr
+	}
+	if f.deleteResp != nil {
+		return f.deleteResp, nil
+	}
+	return &pb.DeleteClientEnrollmentResponse{Ok: true}, nil
 }

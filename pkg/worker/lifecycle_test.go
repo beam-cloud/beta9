@@ -523,7 +523,7 @@ func TestSpecFromRequestEnforcesMemoryForGPUWithoutCPUQuota(t *testing.T) {
 func TestSpecFromRequestInjectsThunderMounts(t *testing.T) {
 	worker := &Worker{
 		runtime:                 &mockRuntime{name: types.ContainerRuntimeGvisor.String()},
-		containerThunderManager: NewContainerThunderManager("", "", nil),
+		containerThunderManager: NewContainerThunderManager(nil),
 	}
 
 	spec, err := worker.specFromRequest(&types.ContainerRequest{

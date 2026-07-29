@@ -118,6 +118,20 @@ func (gws *GatewayService) RequestAgentTransportCredential(ctx context.Context, 
 	return gws.computeService.RequestAgentTransportCredential(ctx, in)
 }
 
+func (gws *GatewayService) CreateNodeEnrollment(ctx context.Context, in *pb.CreateNodeEnrollmentRequest) (*pb.CreateNodeEnrollmentResponse, error) {
+	if gws.thunderService == nil {
+		return &pb.CreateNodeEnrollmentResponse{ErrorMsg: "Thunder service is unavailable"}, nil
+	}
+	return gws.thunderService.CreateNodeEnrollment(ctx, in)
+}
+
+func (gws *GatewayService) DeleteNodeEnrollment(ctx context.Context, in *pb.DeleteNodeEnrollmentRequest) (*pb.DeleteNodeEnrollmentResponse, error) {
+	if gws.thunderService == nil {
+		return &pb.DeleteNodeEnrollmentResponse{ErrorMsg: "Thunder service is unavailable"}, nil
+	}
+	return gws.thunderService.DeleteNodeEnrollment(ctx, in)
+}
+
 func (gws *GatewayService) StreamAgent(in *pb.StreamAgentRequest, stream pb.GatewayService_StreamAgentServer) error {
 	return gws.computeService.StreamAgent(in, stream)
 }

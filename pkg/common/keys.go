@@ -144,6 +144,16 @@ var (
 )
 
 var (
+	thunderClientEnrollment      string = "thunder:client:%s"
+	thunderClientEnrollmentIndex string = "thunder:clients"
+	thunderNodeEnrollment        string = "thunder:{%s}:pool:%s:machine:%s:node"
+	thunderNodeEnrollmentIndex   string = "thunder:{%s}:pool:%s:nodes"
+	thunderZone                  string = "thunder:{%s}:pool:%s:zone"
+	thunderZoneIndex             string = "thunder:{%s}:zones"
+	thunderPoolLock              string = "thunder:{%s}:pool:%s:lock"
+)
+
+var (
 	containerName string = "%s-%s-%s" // prefix, stub-id, containerId
 )
 
@@ -588,6 +598,35 @@ func (rk *redisKeys) ProviderMachineIndex(providerName, poolName string) string 
 
 func (rk *redisKeys) ProviderMachineLock(providerName, poolName, machineId string) string {
 	return fmt.Sprintf(providerMachineLock, providerName, poolName, machineId)
+}
+
+// Thunder keys
+func (rk *redisKeys) ThunderClientEnrollment(containerID string) string {
+	return fmt.Sprintf(thunderClientEnrollment, containerID)
+}
+
+func (rk *redisKeys) ThunderClientEnrollmentIndex() string {
+	return thunderClientEnrollmentIndex
+}
+
+func (rk *redisKeys) ThunderNodeEnrollment(workspaceID, poolName, machineID string) string {
+	return fmt.Sprintf(thunderNodeEnrollment, workspaceID, poolName, machineID)
+}
+
+func (rk *redisKeys) ThunderNodeEnrollmentIndex(workspaceID, poolName string) string {
+	return fmt.Sprintf(thunderNodeEnrollmentIndex, workspaceID, poolName)
+}
+
+func (rk *redisKeys) ThunderZone(workspaceID, poolName string) string {
+	return fmt.Sprintf(thunderZone, workspaceID, poolName)
+}
+
+func (rk *redisKeys) ThunderZoneIndex(workspaceID string) string {
+	return fmt.Sprintf(thunderZoneIndex, workspaceID)
+}
+
+func (rk *redisKeys) ThunderPoolLock(workspaceID, poolName string) string {
+	return fmt.Sprintf(thunderPoolLock, workspaceID, poolName)
 }
 
 func (rk *redisKeys) ContainerName(prefix string, stubId string, containerId string) string {
