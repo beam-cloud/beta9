@@ -31,6 +31,45 @@ func (r *ComputeRedisRepository) WithPoolStateLock(ctx context.Context, workspac
 	}, fn)
 }
 
+func (r *ComputeRedisRepository) WithMachineSSHStateLock(ctx context.Context, workspaceID, poolName, machineID string, fn func(context.Context) error) error {
+	return r.lock.WithLease(ctx, common.RedisKeys.ComputeMachineSSHStateLock(workspaceID, poolName, machineID), common.RedisLockOptions{
+		TtlS:          30,
+		Retries:       100,
+		RetryInterval: 100 * time.Millisecond,
+	}, fn)
+}
+
+func (r *ComputeRedisRepository) SaveMachineSSHState(ctx context.Context, state *compute.MachineSSHState) error {
+	if state == nil || state.WorkspaceID == "" || state.PoolName == "" || state.MachineID == "" {
+		return fmt.Errorf("machine SSH state workspace, pool, and machine are required")
+	}
+	state.UpdatedAt = time.Now().UTC()
+	data, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+	return r.rdb.Set(ctx, common.RedisKeys.ComputeMachineSSHState(state.WorkspaceID, state.PoolName, state.MachineID), data, 0).Err()
+}
+
+func (r *ComputeRedisRepository) GetMachineSSHState(ctx context.Context, workspaceID, poolName, machineID string) (*compute.MachineSSHState, error) {
+	data, err := r.rdb.Get(ctx, common.RedisKeys.ComputeMachineSSHState(workspaceID, poolName, machineID)).Bytes()
+	if err != nil {
+		if err == redis.Nil {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var state compute.MachineSSHState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return nil, err
+	}
+	return &state, nil
+}
+
+func (r *ComputeRedisRepository) DeleteMachineSSHState(ctx context.Context, workspaceID, poolName, machineID string) error {
+	return r.rdb.Del(ctx, common.RedisKeys.ComputeMachineSSHState(workspaceID, poolName, machineID)).Err()
+}
+
 func (r *ComputeRedisRepository) SavePoolState(ctx context.Context, workspaceID string, state *compute.PoolState) error {
 	state.WorkspaceID = workspaceID
 	data, err := json.Marshal(state)

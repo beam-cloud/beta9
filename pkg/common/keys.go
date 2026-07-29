@@ -131,6 +131,8 @@ var (
 	computeAgentMachine                  string = "compute:{%s}:pool:%s:machine:%s"
 	computeAgentMachinePool              string = "compute:{%s}:machine:%s:pool"
 	computeAgentMachineIndex             string = "compute:{%s}:pool:%s:machines"
+	computeMachineSSHState               string = "compute:{%s}:pool:%s:machine:%s:ssh"
+	computeMachineSSHStateLock           string = "compute:{%s}:pool:%s:machine:%s:ssh:lock"
 	computeAgentSlot                     string = "compute:{%s}:pool:%s:machine:%s:worker:%s"
 	computeAgentSlotIndex                string = "compute:{%s}:pool:%s:machine:%s:workers"
 	computeMarketplaceListing            string = "compute:marketplace:{%s}:listing:%s"
@@ -406,6 +408,14 @@ func (rk *redisKeys) ComputeAgentMachinePool(workspaceID, machineID string) stri
 
 func (rk *redisKeys) ComputeAgentMachineIndex(workspaceID, poolName string) string {
 	return fmt.Sprintf(computeAgentMachineIndex, workspaceID, poolName)
+}
+
+func (rk *redisKeys) ComputeMachineSSHState(workspaceID, poolName, machineID string) string {
+	return fmt.Sprintf(computeMachineSSHState, workspaceID, poolName, machineID)
+}
+
+func (rk *redisKeys) ComputeMachineSSHStateLock(workspaceID, poolName, machineID string) string {
+	return fmt.Sprintf(computeMachineSSHStateLock, workspaceID, poolName, machineID)
 }
 
 func (rk *redisKeys) ComputeAgentSlot(workspaceID, poolName, machineID, workerID string) string {

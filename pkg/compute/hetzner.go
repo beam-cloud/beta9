@@ -280,6 +280,9 @@ func (c *HetznerClient) CreateReservation(ctx context.Context, req ReservationRe
 		CreatedAt:        now,
 		ExpiresAt:        now.Add(req.TTL),
 		BillingRenewalAt: now.Add(time.Hour),
+		PublicIP:         server.PublicIPv4,
+		SSHHost:          server.PublicIPv4,
+		SSHPort:          22,
 	}, nil
 }
 
@@ -308,6 +311,9 @@ func (c *HetznerClient) GetReservation(ctx context.Context, id string) (*Reserva
 		MemoryMB:      server.MemoryMB,
 		StorageMB:     server.StorageMB,
 		Status:        hetznerReservationStatus(server.Status),
+		PublicIP:      server.PublicIPv4,
+		SSHHost:       server.PublicIPv4,
+		SSHPort:       22,
 	}, nil
 }
 
@@ -625,6 +631,7 @@ type hetznerServer struct {
 	CPUMillicores  int64
 	MemoryMB       int64
 	StorageMB      int64
+	PublicIPv4     string
 }
 
 func hetznerServerFromResponse(raw map[string]any) hetznerServer {
@@ -637,6 +644,8 @@ func hetznerServerFromResponse(raw map[string]any) hetznerServer {
 func hetznerServerFromMap(m map[string]any) hetznerServer {
 	serverType, _ := m["server_type"].(map[string]any)
 	location, _ := m["location"].(map[string]any)
+	publicNet, _ := m["public_net"].(map[string]any)
+	ipv4, _ := publicNet["ipv4"].(map[string]any)
 	id := jsonString(m, "id")
 	if id == "" {
 		if numericID := jsonInt64(m, "id"); numericID > 0 {
@@ -653,6 +662,7 @@ func hetznerServerFromMap(m map[string]any) hetznerServer {
 		CPUMillicores:  int64(jsonFloat64(serverType, "cores") * 1000),
 		MemoryMB:       int64(jsonFloat64(serverType, "memory") * 1024),
 		StorageMB:      int64(jsonFloat64(serverType, "disk") * 1024),
+		PublicIPv4:     jsonString(ipv4, "ip"),
 	}
 }
 

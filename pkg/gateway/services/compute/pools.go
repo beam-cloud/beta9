@@ -179,6 +179,11 @@ func (s *Service) DeletePool(ctx context.Context, in *pb.DeletePoolRequest) (*pb
 			if reservation.Source.IsAttached() || reservation.Source == model.SourceAutosolver {
 				continue
 			}
+			if reservation.MachineID != "" {
+				if err := s.computeRepo.DeleteMachineSSHState(lockCtx, workspaceID, state.Name, reservation.MachineID); err != nil {
+					return err
+				}
+			}
 			if vendor := vendors[reservation.Provider]; vendor != nil {
 				_ = vendor.DeleteReservation(lockCtx, computeReservationInstanceID(reservation))
 			}
@@ -366,7 +371,17 @@ func (s *Service) ListPrivateMachines(ctx context.Context, authInfo *auth.AuthIn
 			continue
 		}
 		for _, machine := range machines {
-			out = append(out, s.agentMachineToProto(machine))
+			protoMachine := s.agentMachineToProto(machine)
+			if auth.HasInteractivePermission(authInfo) && s.appConfig.ManagedCompute.SSH.Enabled {
+				sshState, err := s.computeRepo.GetMachineSSHState(ctx, workspaceID, state.Name, machine.MachineID)
+				if err != nil {
+					return nil, err
+				}
+				if sshState != nil {
+					protoMachine.Ssh = machineSSHAccessToProto(sshState)
+				}
+			}
+			out = append(out, protoMachine)
 			if limit > 0 && len(out) == limit {
 				return out, nil
 			}

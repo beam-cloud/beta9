@@ -152,6 +152,9 @@ type ComputeReservation struct {
 	LastError             string
 	TerminatingReason     string
 	RegistrationTokenHash string
+	PublicIP              string
+	SSHHost               string
+	SSHPort               uint32
 }
 
 func (r ComputeReservation) ActiveAt(now time.Time) bool {

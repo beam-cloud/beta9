@@ -176,12 +176,12 @@ type ContainerCostHookConfig struct {
 }
 
 type GatewayServiceConfig struct {
-	Host                 string        `key:"host" json:"host"`
-	InvokeURLType        string        `key:"invokeURLType" json:"invoke_url_type"`
-	GRPC                 GRPCConfig    `key:"grpc" json:"grpc"`
-	HTTP                 HTTPConfig    `key:"http" json:"http"`
-	ShutdownTimeout      time.Duration `key:"shutdownTimeout" json:"shutdown_timeout"`
-	StubLimits           StubLimits    `key:"stubLimits" json:"stub_limits"`
+	Host            string        `key:"host" json:"host"`
+	InvokeURLType   string        `key:"invokeURLType" json:"invoke_url_type"`
+	GRPC            GRPCConfig    `key:"grpc" json:"grpc"`
+	HTTP            HTTPConfig    `key:"http" json:"http"`
+	ShutdownTimeout time.Duration `key:"shutdownTimeout" json:"shutdown_timeout"`
+	StubLimits      StubLimits    `key:"stubLimits" json:"stub_limits"`
 }
 
 type FileServiceConfig struct {
@@ -706,11 +706,16 @@ type ManagedComputeConfig struct {
 	BillableMarginPct *float64                    `key:"billableMarginPct" json:"billable_margin_pct"`
 	Billing           ManagedComputeBillingConfig `key:"billing" json:"billing"`
 	BYOC              ManagedComputeBYOCConfig    `key:"byoc" json:"byoc"`
+	SSH               ManagedComputeSSHConfig     `key:"ssh" json:"ssh"`
 	// Marketplace identity of the machine this worker runs on, set by the
 	// agent in the generated worker config. Buyer usage on the worker is
 	// billed against this listing.
 	MarketplaceListingID string `key:"marketplaceListingID" json:"marketplace_listing_id"`
 	SellerWorkspaceID    string `key:"sellerWorkspaceID" json:"seller_workspace_id"`
+}
+
+type ManagedComputeSSHConfig struct {
+	Enabled bool `key:"enabled" json:"enabled"`
 }
 
 func (c ManagedComputeConfig) BillableMarginPctOrDefault() float64 {

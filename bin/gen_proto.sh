@@ -45,13 +45,21 @@ ensure_go_tool_version protoc-gen-openapiv2 "github.com/grpc-ecosystem/grpc-gate
 ensure_go_tool_version go2proto "github.com/beam-cloud/go2proto" "$GO2PROTO_VERSION"
 
 if command -v uv >/dev/null 2>&1; then
-    sdk_bin="$(
+    compiler_env="$(
         uv run --project ./sdk --locked \
+            --with "betterproto-beta9[compiler]==${PYTHON_BETTERPROTO_VERSION}" \
             --with "black==${PYTHON_BLACK_VERSION}" \
             --with "isort==${PYTHON_ISORT_VERSION}" \
-            python -c 'import sysconfig; print(sysconfig.get_path("scripts"))'
+            python -c 'import os, sys, sysconfig; print(sysconfig.get_path("scripts") + "|" + os.pathsep.join(sys.path))'
     )"
-    export PATH="$sdk_bin:$PATH"
+    sdk_bin="${compiler_env%%|*}"
+    sdk_pythonpath="${compiler_env#*|}"
+    # uv's --with environment contains compiler-only dependencies while the
+    # plugin entrypoint is installed in the project venv. Expose both: relying
+    # on only sysconfig's scripts path makes copied worktrees intermittently
+    # miss the plugin or its black/jinja2 imports.
+    export PATH="$repo_root/sdk/.venv/bin:$sdk_bin:$PATH"
+    export PYTHONPATH="$sdk_pythonpath${PYTHONPATH:+:$PYTHONPATH}"
 elif ! command -v protoc-gen-python_betterproto_beta9 >/dev/null 2>&1; then
     echo "protoc-gen-python_betterproto_beta9 is not installed and uv is unavailable" >&2
     exit 1

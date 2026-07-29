@@ -98,7 +98,7 @@ func TestCreateReservationConfiguresShadeformStartupScript(t *testing.T) {
 func TestGetReservationMapsShadeformStatus(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/instances/reservation-123/info", r.URL.Path)
-		_, _ = w.Write([]byte(`{"id":"reservation-123","status":"pending","status_details":"Running startup script...","cloud":"paperspace","configuration":{"gpu_type":"A4000","num_gpus":1,"vcpus":8,"memory_in_gb":45}}`))
+		_, _ = w.Write([]byte(`{"id":"reservation-123","status":"pending","status_details":"Running startup script...","cloud":"paperspace","ip":"203.0.113.7","ssh_host":"ssh.paperspace.example","ssh_port":30222,"configuration":{"gpu_type":"A4000","num_gpus":1,"vcpus":8,"memory_in_gb":45}}`))
 	}))
 	defer server.Close()
 
@@ -108,6 +108,9 @@ func TestGetReservationMapsShadeformStatus(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, ReservationPending, reservation.Status)
 	require.Equal(t, "Running startup script...", reservation.LastStatusMessage)
+	require.Equal(t, "203.0.113.7", reservation.PublicIP)
+	require.Equal(t, "ssh.paperspace.example", reservation.SSHHost)
+	require.Equal(t, uint32(30222), reservation.SSHPort)
 }
 
 func TestShadeformReservationStatusMapping(t *testing.T) {

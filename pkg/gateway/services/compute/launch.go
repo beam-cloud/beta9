@@ -193,6 +193,9 @@ func (s *Service) launchPoolCapacityLocked(ctx context.Context, workspaceID, act
 			reservation.Name = firstNonEmpty(reservation.Name, nodeName)
 			reservation.RegistrationTokenHash = hashComputeToken(registrationToken)
 			createdReservations = append(createdReservations, *reservation)
+			if err := s.createMachineSSHState(ctx, workspaceID, pool.Name, machineID, reservation); err != nil {
+				return cleanupLaunchFailure("ssh_bootstrap_failed", err), nil
+			}
 			newReservations = append(newReservations, *reservation)
 		}
 	}
@@ -418,6 +421,11 @@ func (s *Service) compensatePoolLaunchFailure(ctx context.Context, workspaceID, 
 	for _, reservation := range reservations {
 		// Rolled-back reservations must not leave live registration tokens.
 		s.revokeReservationJoinToken(ctx, &reservation)
+		if reservation.MachineID != "" && s.computeRepo != nil {
+			if err := s.computeRepo.DeleteMachineSSHState(ctx, workspaceID, poolName, reservation.MachineID); err != nil {
+				failures = append(failures, fmt.Sprintf("delete SSH state for %q: %v", reservation.MachineID, err))
+			}
+		}
 		vendor := vendors[reservation.Provider]
 		if vendor == nil {
 			failures = append(failures, fmt.Sprintf("vendor %q is not configured", reservation.Provider))

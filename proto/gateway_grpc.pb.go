@@ -67,10 +67,14 @@ const (
 	GatewayService_RevokePoolJoinToken_FullMethodName             = "/gateway.GatewayService/RevokePoolJoinToken"
 	GatewayService_GetPoolJoinCommand_FullMethodName              = "/gateway.GatewayService/GetPoolJoinCommand"
 	GatewayService_ListPoolMachines_FullMethodName                = "/gateway.GatewayService/ListPoolMachines"
+	GatewayService_DownloadMachineSSHKey_FullMethodName           = "/gateway.GatewayService/DownloadMachineSSHKey"
+	GatewayService_RotateMachineSSHKey_FullMethodName             = "/gateway.GatewayService/RotateMachineSSHKey"
+	GatewayService_ActivateMachineSSHKey_FullMethodName           = "/gateway.GatewayService/ActivateMachineSSHKey"
 	GatewayService_JoinAgent_FullMethodName                       = "/gateway.GatewayService/JoinAgent"
 	GatewayService_RequestAgentTransportCredential_FullMethodName = "/gateway.GatewayService/RequestAgentTransportCredential"
 	GatewayService_ListAgentRoutes_FullMethodName                 = "/gateway.GatewayService/ListAgentRoutes"
 	GatewayService_UpdateAgentRouteStatus_FullMethodName          = "/gateway.GatewayService/UpdateAgentRouteStatus"
+	GatewayService_UpdateAgentSSHStatus_FullMethodName            = "/gateway.GatewayService/UpdateAgentSSHStatus"
 	GatewayService_UpdateAgentAvailability_FullMethodName         = "/gateway.GatewayService/UpdateAgentAvailability"
 	GatewayService_StreamAgent_FullMethodName                     = "/gateway.GatewayService/StreamAgent"
 	GatewayService_StreamAgentTelemetry_FullMethodName            = "/gateway.GatewayService/StreamAgentTelemetry"
@@ -148,10 +152,14 @@ type GatewayServiceClient interface {
 	RevokePoolJoinToken(ctx context.Context, in *RevokePoolJoinTokenRequest, opts ...grpc.CallOption) (*RevokePoolJoinTokenResponse, error)
 	GetPoolJoinCommand(ctx context.Context, in *GetPoolJoinCommandRequest, opts ...grpc.CallOption) (*GetPoolJoinCommandResponse, error)
 	ListPoolMachines(ctx context.Context, in *ListPoolMachinesRequest, opts ...grpc.CallOption) (*ListPoolMachinesResponse, error)
+	DownloadMachineSSHKey(ctx context.Context, in *DownloadMachineSSHKeyRequest, opts ...grpc.CallOption) (*DownloadMachineSSHKeyResponse, error)
+	RotateMachineSSHKey(ctx context.Context, in *RotateMachineSSHKeyRequest, opts ...grpc.CallOption) (*RotateMachineSSHKeyResponse, error)
+	ActivateMachineSSHKey(ctx context.Context, in *ActivateMachineSSHKeyRequest, opts ...grpc.CallOption) (*ActivateMachineSSHKeyResponse, error)
 	JoinAgent(ctx context.Context, in *JoinAgentRequest, opts ...grpc.CallOption) (*JoinAgentResponse, error)
 	RequestAgentTransportCredential(ctx context.Context, in *RequestAgentTransportCredentialRequest, opts ...grpc.CallOption) (*RequestAgentTransportCredentialResponse, error)
 	ListAgentRoutes(ctx context.Context, in *ListAgentRoutesRequest, opts ...grpc.CallOption) (*ListAgentRoutesResponse, error)
 	UpdateAgentRouteStatus(ctx context.Context, in *UpdateAgentRouteStatusRequest, opts ...grpc.CallOption) (*UpdateAgentRouteStatusResponse, error)
+	UpdateAgentSSHStatus(ctx context.Context, in *UpdateAgentSSHStatusRequest, opts ...grpc.CallOption) (*UpdateAgentSSHStatusResponse, error)
 	UpdateAgentAvailability(ctx context.Context, in *UpdateAgentAvailabilityRequest, opts ...grpc.CallOption) (*UpdateAgentAvailabilityResponse, error)
 	StreamAgent(ctx context.Context, in *StreamAgentRequest, opts ...grpc.CallOption) (GatewayService_StreamAgentClient, error)
 	StreamAgentTelemetry(ctx context.Context, opts ...grpc.CallOption) (GatewayService_StreamAgentTelemetryClient, error)
@@ -660,6 +668,33 @@ func (c *gatewayServiceClient) ListPoolMachines(ctx context.Context, in *ListPoo
 	return out, nil
 }
 
+func (c *gatewayServiceClient) DownloadMachineSSHKey(ctx context.Context, in *DownloadMachineSSHKeyRequest, opts ...grpc.CallOption) (*DownloadMachineSSHKeyResponse, error) {
+	out := new(DownloadMachineSSHKeyResponse)
+	err := c.cc.Invoke(ctx, GatewayService_DownloadMachineSSHKey_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) RotateMachineSSHKey(ctx context.Context, in *RotateMachineSSHKeyRequest, opts ...grpc.CallOption) (*RotateMachineSSHKeyResponse, error) {
+	out := new(RotateMachineSSHKeyResponse)
+	err := c.cc.Invoke(ctx, GatewayService_RotateMachineSSHKey_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) ActivateMachineSSHKey(ctx context.Context, in *ActivateMachineSSHKeyRequest, opts ...grpc.CallOption) (*ActivateMachineSSHKeyResponse, error) {
+	out := new(ActivateMachineSSHKeyResponse)
+	err := c.cc.Invoke(ctx, GatewayService_ActivateMachineSSHKey_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *gatewayServiceClient) JoinAgent(ctx context.Context, in *JoinAgentRequest, opts ...grpc.CallOption) (*JoinAgentResponse, error) {
 	out := new(JoinAgentResponse)
 	err := c.cc.Invoke(ctx, GatewayService_JoinAgent_FullMethodName, in, out, opts...)
@@ -690,6 +725,15 @@ func (c *gatewayServiceClient) ListAgentRoutes(ctx context.Context, in *ListAgen
 func (c *gatewayServiceClient) UpdateAgentRouteStatus(ctx context.Context, in *UpdateAgentRouteStatusRequest, opts ...grpc.CallOption) (*UpdateAgentRouteStatusResponse, error) {
 	out := new(UpdateAgentRouteStatusResponse)
 	err := c.cc.Invoke(ctx, GatewayService_UpdateAgentRouteStatus_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) UpdateAgentSSHStatus(ctx context.Context, in *UpdateAgentSSHStatusRequest, opts ...grpc.CallOption) (*UpdateAgentSSHStatusResponse, error) {
+	out := new(UpdateAgentSSHStatusResponse)
+	err := c.cc.Invoke(ctx, GatewayService_UpdateAgentSSHStatus_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -939,10 +983,14 @@ type GatewayServiceServer interface {
 	RevokePoolJoinToken(context.Context, *RevokePoolJoinTokenRequest) (*RevokePoolJoinTokenResponse, error)
 	GetPoolJoinCommand(context.Context, *GetPoolJoinCommandRequest) (*GetPoolJoinCommandResponse, error)
 	ListPoolMachines(context.Context, *ListPoolMachinesRequest) (*ListPoolMachinesResponse, error)
+	DownloadMachineSSHKey(context.Context, *DownloadMachineSSHKeyRequest) (*DownloadMachineSSHKeyResponse, error)
+	RotateMachineSSHKey(context.Context, *RotateMachineSSHKeyRequest) (*RotateMachineSSHKeyResponse, error)
+	ActivateMachineSSHKey(context.Context, *ActivateMachineSSHKeyRequest) (*ActivateMachineSSHKeyResponse, error)
 	JoinAgent(context.Context, *JoinAgentRequest) (*JoinAgentResponse, error)
 	RequestAgentTransportCredential(context.Context, *RequestAgentTransportCredentialRequest) (*RequestAgentTransportCredentialResponse, error)
 	ListAgentRoutes(context.Context, *ListAgentRoutesRequest) (*ListAgentRoutesResponse, error)
 	UpdateAgentRouteStatus(context.Context, *UpdateAgentRouteStatusRequest) (*UpdateAgentRouteStatusResponse, error)
+	UpdateAgentSSHStatus(context.Context, *UpdateAgentSSHStatusRequest) (*UpdateAgentSSHStatusResponse, error)
 	UpdateAgentAvailability(context.Context, *UpdateAgentAvailabilityRequest) (*UpdateAgentAvailabilityResponse, error)
 	StreamAgent(*StreamAgentRequest, GatewayService_StreamAgentServer) error
 	StreamAgentTelemetry(GatewayService_StreamAgentTelemetryServer) error
@@ -1113,6 +1161,15 @@ func (UnimplementedGatewayServiceServer) GetPoolJoinCommand(context.Context, *Ge
 func (UnimplementedGatewayServiceServer) ListPoolMachines(context.Context, *ListPoolMachinesRequest) (*ListPoolMachinesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListPoolMachines not implemented")
 }
+func (UnimplementedGatewayServiceServer) DownloadMachineSSHKey(context.Context, *DownloadMachineSSHKeyRequest) (*DownloadMachineSSHKeyResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DownloadMachineSSHKey not implemented")
+}
+func (UnimplementedGatewayServiceServer) RotateMachineSSHKey(context.Context, *RotateMachineSSHKeyRequest) (*RotateMachineSSHKeyResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RotateMachineSSHKey not implemented")
+}
+func (UnimplementedGatewayServiceServer) ActivateMachineSSHKey(context.Context, *ActivateMachineSSHKeyRequest) (*ActivateMachineSSHKeyResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ActivateMachineSSHKey not implemented")
+}
 func (UnimplementedGatewayServiceServer) JoinAgent(context.Context, *JoinAgentRequest) (*JoinAgentResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method JoinAgent not implemented")
 }
@@ -1124,6 +1181,9 @@ func (UnimplementedGatewayServiceServer) ListAgentRoutes(context.Context, *ListA
 }
 func (UnimplementedGatewayServiceServer) UpdateAgentRouteStatus(context.Context, *UpdateAgentRouteStatusRequest) (*UpdateAgentRouteStatusResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method UpdateAgentRouteStatus not implemented")
+}
+func (UnimplementedGatewayServiceServer) UpdateAgentSSHStatus(context.Context, *UpdateAgentSSHStatusRequest) (*UpdateAgentSSHStatusResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateAgentSSHStatus not implemented")
 }
 func (UnimplementedGatewayServiceServer) UpdateAgentAvailability(context.Context, *UpdateAgentAvailabilityRequest) (*UpdateAgentAvailabilityResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method UpdateAgentAvailability not implemented")
@@ -2063,6 +2123,60 @@ func _GatewayService_ListPoolMachines_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _GatewayService_DownloadMachineSSHKey_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DownloadMachineSSHKeyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).DownloadMachineSSHKey(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_DownloadMachineSSHKey_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).DownloadMachineSSHKey(ctx, req.(*DownloadMachineSSHKeyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_RotateMachineSSHKey_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RotateMachineSSHKeyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).RotateMachineSSHKey(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_RotateMachineSSHKey_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).RotateMachineSSHKey(ctx, req.(*RotateMachineSSHKeyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_ActivateMachineSSHKey_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ActivateMachineSSHKeyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).ActivateMachineSSHKey(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_ActivateMachineSSHKey_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).ActivateMachineSSHKey(ctx, req.(*ActivateMachineSSHKeyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _GatewayService_JoinAgent_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(JoinAgentRequest)
 	if err := dec(in); err != nil {
@@ -2131,6 +2245,24 @@ func _GatewayService_UpdateAgentRouteStatus_Handler(srv interface{}, ctx context
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(GatewayServiceServer).UpdateAgentRouteStatus(ctx, req.(*UpdateAgentRouteStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_UpdateAgentSSHStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateAgentSSHStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).UpdateAgentSSHStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_UpdateAgentSSHStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).UpdateAgentSSHStatus(ctx, req.(*UpdateAgentSSHStatusRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2608,6 +2740,18 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _GatewayService_ListPoolMachines_Handler,
 		},
 		{
+			MethodName: "DownloadMachineSSHKey",
+			Handler:    _GatewayService_DownloadMachineSSHKey_Handler,
+		},
+		{
+			MethodName: "RotateMachineSSHKey",
+			Handler:    _GatewayService_RotateMachineSSHKey_Handler,
+		},
+		{
+			MethodName: "ActivateMachineSSHKey",
+			Handler:    _GatewayService_ActivateMachineSSHKey_Handler,
+		},
+		{
 			MethodName: "JoinAgent",
 			Handler:    _GatewayService_JoinAgent_Handler,
 		},
@@ -2622,6 +2766,10 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UpdateAgentRouteStatus",
 			Handler:    _GatewayService_UpdateAgentRouteStatus_Handler,
+		},
+		{
+			MethodName: "UpdateAgentSSHStatus",
+			Handler:    _GatewayService_UpdateAgentSSHStatus_Handler,
 		},
 		{
 			MethodName: "UpdateAgentAvailability",

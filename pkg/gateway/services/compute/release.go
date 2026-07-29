@@ -99,6 +99,9 @@ func (s *Service) removePrivateMachine(ctx context.Context, machine *model.Agent
 	if err := s.computeRepo.DeleteAgentMachineState(ctx, machine.WorkspaceID, machine.PoolName, machine.MachineID); err != nil {
 		return err
 	}
+	if err := s.computeRepo.DeleteMachineSSHState(ctx, machine.WorkspaceID, machine.PoolName, machine.MachineID); err != nil {
+		return err
+	}
 	if s.containerRepo != nil {
 		// Clean up the machine's backend routes so they do not leak after release.
 		if err := s.containerRepo.DeleteBackendRoutesByMachine(ctx, machine.WorkspaceID, machine.PoolName, machine.MachineID); err != nil {
