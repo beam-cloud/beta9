@@ -2900,12 +2900,18 @@ func TestSelectGPUWorkerDoesNotMutatePriority(t *testing.T) {
 
 func TestSelectWorkerCapacityTieBreakHonorsPackingPreference(t *testing.T) {
 	tests := []struct {
-		name          string
-		enableBestFit bool
-		expectedID    string
+		name             string
+		omitWorkerConfig bool
+		enableBestFit    bool
+		expectedID       string
 	}{
 		{
-			name:       "spread by default",
+			name:             "spread when setting is omitted",
+			omitWorkerConfig: true,
+			expectedID:       "roomy",
+		},
+		{
+			name:       "spread from default config",
 			expectedID: "roomy",
 		},
 		{
@@ -2920,6 +2926,9 @@ func TestSelectWorkerCapacityTieBreakHonorsPackingPreference(t *testing.T) {
 			wb, err := NewSchedulerForTest()
 			assert.Nil(t, err)
 			assert.False(t, wb.config.Worker.PreferBestFit)
+			if test.omitWorkerConfig {
+				wb.config.Worker = types.WorkerConfig{}
+			}
 			if test.enableBestFit {
 				wb.config.Worker.PreferBestFit = true
 			}
