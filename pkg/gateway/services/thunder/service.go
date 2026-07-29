@@ -13,6 +13,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"github.com/rs/zerolog/log"
 )
 
 type ThunderClient interface {
@@ -133,11 +134,7 @@ func (s *Service) CreateClientEnrollment(ctx context.Context, req *pb.CreateClie
 			}
 			return err
 		}
-		if previousEnrollmentTokenID != "" && previousEnrollmentTokenID != enrollment.EnrollmentTokenID {
-			if _, err := s.client.DeleteEnrollmentTokenNode(ctx, previousEnrollmentTokenID); err != nil && !isThunderNotFound(err) {
-				return fmt.Errorf("failed to revoke previous Thunder client enrollment token %q: %w", previousEnrollmentTokenID, err)
-			}
-		}
+		s.revokePreviousEnrollmentToken(ctx, previousEnrollmentTokenID, enrollment.EnrollmentTokenID, attrs.workspaceID, attrs.poolName, "container", containerID)
 		return nil
 	})
 	if err != nil {
@@ -145,6 +142,24 @@ func (s *Service) CreateClientEnrollment(ctx context.Context, req *pb.CreateClie
 	}
 
 	return &pb.CreateClientEnrollmentResponse{Ok: true, InstallCommand: installCommand}, nil
+}
+
+func (s *Service) revokePreviousEnrollmentToken(ctx context.Context, previousEnrollmentTokenID, currentEnrollmentTokenID, workspaceID, poolName, ownerType, ownerID string) {
+	previousEnrollmentTokenID = strings.TrimSpace(previousEnrollmentTokenID)
+	currentEnrollmentTokenID = strings.TrimSpace(currentEnrollmentTokenID)
+	if previousEnrollmentTokenID == "" || previousEnrollmentTokenID == currentEnrollmentTokenID {
+		return
+	}
+	if _, err := s.client.DeleteEnrollmentTokenNode(ctx, previousEnrollmentTokenID); err != nil && !isThunderNotFound(err) {
+		log.Warn().
+			Err(err).
+			Str("workspace_id", workspaceID).
+			Str("pool_name", poolName).
+			Str("owner_type", ownerType).
+			Str("owner_id", ownerID).
+			Str("enrollment_token_id", previousEnrollmentTokenID).
+			Msg("failed to revoke previous Thunder enrollment token")
+	}
 }
 
 func (s *Service) DeleteClientEnrollment(ctx context.Context, req *pb.DeleteClientEnrollmentRequest) (*pb.DeleteClientEnrollmentResponse, error) {
@@ -167,13 +182,35 @@ func (s *Service) DeleteClientEnrollment(ctx context.Context, req *pb.DeleteClie
 		return &pb.DeleteClientEnrollmentResponse{ErrorMsg: err.Error()}, nil
 	}
 
-	if strings.TrimSpace(state.EnrollmentTokenID) != "" {
-		_, err = s.client.DeleteEnrollmentTokenNode(ctx, state.EnrollmentTokenID)
-		if err != nil && !isThunderNotFound(err) {
-			return &pb.DeleteClientEnrollmentResponse{ErrorMsg: err.Error()}, nil
+	initialEnrollmentTokenID := strings.TrimSpace(state.EnrollmentTokenID)
+	err = s.repo.WithPoolLock(ctx, state.WorkspaceID, state.PoolName, func(ctx context.Context) error {
+		current, found, err := s.repo.GetClientEnrollment(ctx, containerID)
+		if err != nil {
+			return err
 		}
-	}
-	if err := s.repo.DeleteClientEnrollment(ctx, containerID); err != nil {
+		if !found {
+			return nil
+		}
+		if current.WorkspaceID != state.WorkspaceID || current.PoolName != state.PoolName {
+			return nil
+		}
+		if err := requireWorkerToken(ctx, current.WorkspaceID); err != nil {
+			return err
+		}
+
+		currentEnrollmentTokenID := strings.TrimSpace(current.EnrollmentTokenID)
+		if currentEnrollmentTokenID != initialEnrollmentTokenID {
+			return nil
+		}
+		if currentEnrollmentTokenID != "" {
+			_, err = s.client.DeleteEnrollmentTokenNode(ctx, currentEnrollmentTokenID)
+			if err != nil && !isThunderNotFound(err) {
+				return err
+			}
+		}
+		return s.repo.DeleteClientEnrollment(ctx, containerID)
+	})
+	if err != nil {
 		return &pb.DeleteClientEnrollmentResponse{ErrorMsg: err.Error()}, nil
 	}
 	return &pb.DeleteClientEnrollmentResponse{Ok: true}, nil
@@ -217,11 +254,7 @@ func (s *Service) CreateNodeEnrollment(ctx context.Context, req *pb.CreateNodeEn
 			}
 			return err
 		}
-		if previousEnrollmentTokenID != "" && previousEnrollmentTokenID != enrollment.EnrollmentTokenID {
-			if _, err := s.client.DeleteEnrollmentTokenNode(ctx, previousEnrollmentTokenID); err != nil && !isThunderNotFound(err) {
-				return fmt.Errorf("failed to revoke previous Thunder node enrollment token %q: %w", previousEnrollmentTokenID, err)
-			}
-		}
+		s.revokePreviousEnrollmentToken(ctx, previousEnrollmentTokenID, enrollment.EnrollmentTokenID, agentState.WorkspaceID, agentState.PoolName, "machine", agentState.MachineID)
 		enrollmentToken = enrollment.EnrollmentToken
 		return nil
 	})
@@ -245,14 +278,30 @@ func (s *Service) DeleteNodeEnrollment(ctx context.Context, req *pb.DeleteNodeEn
 	if !found {
 		return &pb.DeleteNodeEnrollmentResponse{Ok: true}, nil
 	}
+	initialEnrollmentTokenID := strings.TrimSpace(state.EnrollmentTokenID)
 
-	if strings.TrimSpace(state.EnrollmentTokenID) != "" {
-		_, err = s.client.DeleteEnrollmentTokenNode(ctx, state.EnrollmentTokenID)
-		if err != nil && !isThunderNotFound(err) {
-			return &pb.DeleteNodeEnrollmentResponse{ErrorMsg: err.Error()}, nil
+	err = s.repo.WithPoolLock(ctx, agentState.WorkspaceID, agentState.PoolName, func(ctx context.Context) error {
+		current, found, err := s.repo.GetNodeEnrollment(ctx, agentState.WorkspaceID, agentState.PoolName, agentState.MachineID)
+		if err != nil {
+			return err
 		}
-	}
-	if err := s.repo.DeleteNodeEnrollment(ctx, agentState.WorkspaceID, agentState.PoolName, agentState.MachineID); err != nil {
+		if !found {
+			return nil
+		}
+
+		currentEnrollmentTokenID := strings.TrimSpace(current.EnrollmentTokenID)
+		if currentEnrollmentTokenID != initialEnrollmentTokenID {
+			return nil
+		}
+		if currentEnrollmentTokenID != "" {
+			_, err = s.client.DeleteEnrollmentTokenNode(ctx, currentEnrollmentTokenID)
+			if err != nil && !isThunderNotFound(err) {
+				return err
+			}
+		}
+		return s.repo.DeleteNodeEnrollment(ctx, agentState.WorkspaceID, agentState.PoolName, agentState.MachineID)
+	})
+	if err != nil {
 		return &pb.DeleteNodeEnrollmentResponse{ErrorMsg: err.Error()}, nil
 	}
 	return &pb.DeleteNodeEnrollmentResponse{Ok: true}, nil
