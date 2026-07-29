@@ -265,6 +265,11 @@ func NewWorker() (_ *Worker, err error) {
 		return nil, err
 	}
 
+	thunderClient, err := NewThunderServiceClient(context.TODO(), config, workerToken)
+	if err != nil {
+		return nil, err
+	}
+
 	eventRepo := repo.NewWorkerEventClientRepo(config, workerRepoClient, workerId)
 
 	poolConfig, poolFound := config.Worker.Pools[workerPoolName]
@@ -420,7 +425,7 @@ func NewWorker() (_ *Worker, err error) {
 		storageManager:          storageManager,
 		fileCacheManager:        fileCacheManager,
 		containerGPUManager:     NewContainerNvidiaManager(uint32(gpuCount), defaultRuntime.Name()),
-		containerThunderManager: NewContainerThunderManagerFromEnv(),
+		containerThunderManager: NewContainerThunderManager(thunderClient),
 		thunderSetupTracker:     thunderSetupTracker,
 		containerNetworkManager: containerNetworkManager,
 		containerMountManager:   NewContainerMountManager(config, poolConfig),

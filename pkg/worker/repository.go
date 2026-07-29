@@ -61,6 +61,17 @@ func NewBackendRepositoryClient(ctx context.Context, config types.AppConfig, tok
 	return pb.NewBackendRepositoryServiceClient(conn), nil
 }
 
+// NewThunderServiceClient creates a new Thunder service client.
+func NewThunderServiceClient(ctx context.Context, config types.AppConfig, token string) (pb.ThunderServiceClient, error) {
+	host := fmt.Sprintf("%s:%d", config.GatewayService.GRPC.ExternalHost, config.GatewayService.GRPC.ExternalPort)
+	conn, err := newGRPCConn(host, token)
+	if err != nil {
+		return nil, err
+	}
+
+	return pb.NewThunderServiceClient(conn), nil
+}
+
 // newGRPCConn creates a new gRPC connection (with or without TLS/Auth) to the provided host
 func newGRPCConn(host string, token string) (*grpc.ClientConn, error) {
 	creds := insecure.NewCredentials()
