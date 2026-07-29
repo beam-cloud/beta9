@@ -407,6 +407,7 @@ type WorkerConfig struct {
 	Namespace                    string                        `key:"namespace" json:"namespace"`
 	ServiceAccountName           string                        `key:"serviceAccountName" json:"service_account_name"`
 	JobResourcesEnforced         bool                          `key:"jobResourcesEnforced" json:"job_resources_enforced"`
+	PreferBestFit                bool                          `key:"preferBestFit" json:"prefer_best_fit"`
 	ContainerResourceLimits      ContainerResourceLimitsConfig `key:"containerResourceLimits" json:"container_resource_limits"`
 	DefaultWorkerCPURequest      int64                         `key:"defaultWorkerCPURequest" json:"default_worker_cpu_request"`
 	DefaultWorkerMemoryRequest   int64                         `key:"defaultWorkerMemoryRequest" json:"default_worker_memory_request"`

@@ -1166,6 +1166,9 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 		}
 		iCapacity := workerFreeCapacityScore(scoredWorkers[i].worker, request)
 		jCapacity := workerFreeCapacityScore(scoredWorkers[j].worker, request)
+		if !s.config.Worker.PreferBestFit {
+			return iCapacity > jCapacity
+		}
 		if iCapacity != jCapacity {
 			return iCapacity < jCapacity
 		}
