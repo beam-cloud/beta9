@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/netip"
 	"sort"
 	"strconv"
 	"strings"
@@ -80,16 +79,14 @@ func runTSNetRouteProxy(ctx context.Context, client pb.GatewayServiceClient, age
 	}
 
 	hostname := credential.Hostname
-	var tailscaleIPs []netip.Addr
 	if localClient, err := server.LocalClient(); err == nil {
 		if status, err := localClient.Status(ctx); err == nil {
-			tailscaleIPs = append(tailscaleIPs, status.TailscaleIPs...)
 			if status.Self != nil && status.Self.DNSName != "" {
 				hostname = strings.TrimSuffix(status.Self.DNSName, ".")
 			}
 		}
 	}
-	if err := setupThunderNode(ctx, client, agentToken, tailscaleIPs, stdout, stderr); err != nil {
+	if err := setupThunderNode(ctx, client, agentToken, hostTailscaleIPs(), stdout, stderr); err != nil {
 		fmt.Fprintf(stderr, "Thunder node enrollment skipped: %v\n", err)
 	} else {
 		defer deleteThunderNodeEnrollment(context.Background(), client, agentToken, stderr)

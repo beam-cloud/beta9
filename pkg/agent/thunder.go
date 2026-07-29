@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/netip"
 	"os/exec"
 	"strings"
@@ -92,6 +93,30 @@ func thunderReachableNodeIP(ips []netip.Addr) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("tailscale IP address is required for Thunder node enrollment")
+}
+
+func hostTailscaleIPs() []netip.Addr {
+	iface, err := net.InterfaceByName("tailscale0")
+	if err != nil {
+		return nil
+	}
+	addrs, err := iface.Addrs()
+	if err != nil {
+		return nil
+	}
+
+	ips := make([]netip.Addr, 0, len(addrs))
+	for _, addr := range addrs {
+		prefix, err := netip.ParsePrefix(addr.String())
+		if err == nil {
+			ips = append(ips, prefix.Addr())
+			continue
+		}
+		if ip, err := netip.ParseAddr(addr.String()); err == nil {
+			ips = append(ips, ip)
+		}
+	}
+	return ips
 }
 
 func thunderNodeInstallCommand(reachableIP, enrollmentToken string) string {
