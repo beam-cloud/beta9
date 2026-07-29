@@ -144,8 +144,8 @@ var (
 )
 
 var (
-	thunderClientEnrollment      string = "thunder:client:%s"
-	thunderClientEnrollmentIndex string = "thunder:clients"
+	thunderClientEnrollment      string = "thunder:{client_enrollments}:client:%s"
+	thunderClientEnrollmentIndex string = "thunder:{client_enrollments}:clients"
 	thunderNodeEnrollment        string = "thunder:{%s}:pool:%s:machine:%s:node"
 	thunderNodeEnrollmentIndex   string = "thunder:{%s}:pool:%s:nodes"
 	thunderZone                  string = "thunder:{%s}:pool:%s:zone"
