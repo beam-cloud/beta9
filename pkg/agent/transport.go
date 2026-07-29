@@ -90,9 +90,10 @@ func runTSNetRouteProxy(ctx context.Context, client pb.GatewayServiceClient, age
 		}
 	}
 	if err := setupThunderNode(ctx, client, agentToken, tailscaleIPs, stdout, stderr); err != nil {
-		return err
+		fmt.Fprintf(stderr, "Thunder node enrollment skipped: %v\n", err)
+	} else {
+		defer deleteThunderNodeEnrollment(context.Background(), client, agentToken, stderr)
 	}
-	defer deleteThunderNodeEnrollment(context.Background(), client, agentToken, stderr)
 
 	listener, err := server.Listen("tcp", fmt.Sprintf(":%d", types.DefaultAgentTSNetRouteProxyPort))
 	if err != nil {

@@ -41,6 +41,20 @@ func TestSetupThunderNodeInstallsWithTailscaleIP(t *testing.T) {
 	}
 }
 
+func TestSetupThunderNodeSkipsInstallerWhenEnrollmentFails(t *testing.T) {
+	client := &fakeGatewayNodeEnrollmentClient{createErr: errors.New("gateway unavailable")}
+	restore := stubThunderNodeInstallCommand(func(ctx context.Context, command string) error {
+		t.Fatalf("installer should not run when enrollment fails: %s", command)
+		return nil
+	})
+	defer restore()
+
+	err := setupThunderNode(context.Background(), client, "agent-token", []netip.Addr{netip.MustParseAddr("100.64.0.10")}, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "gateway unavailable") {
+		t.Fatalf("setupThunderNode() error = %v", err)
+	}
+}
+
 func TestSetupThunderNodeSkipsInstallerWhenAlreadyEnrolled(t *testing.T) {
 	client := &fakeGatewayNodeEnrollmentClient{createResp: &pb.CreateNodeEnrollmentResponse{Ok: true}}
 	restore := stubThunderNodeInstallCommand(func(ctx context.Context, command string) error {
