@@ -176,12 +176,12 @@ type ContainerCostHookConfig struct {
 }
 
 type GatewayServiceConfig struct {
-	Host            string        `key:"host" json:"host"`
-	InvokeURLType   string        `key:"invokeURLType" json:"invoke_url_type"`
-	GRPC            GRPCConfig    `key:"grpc" json:"grpc"`
-	HTTP            HTTPConfig    `key:"http" json:"http"`
-	ShutdownTimeout time.Duration `key:"shutdownTimeout" json:"shutdown_timeout"`
-	StubLimits      StubLimits    `key:"stubLimits" json:"stub_limits"`
+	Host                 string        `key:"host" json:"host"`
+	InvokeURLType        string        `key:"invokeURLType" json:"invoke_url_type"`
+	GRPC                 GRPCConfig    `key:"grpc" json:"grpc"`
+	HTTP                 HTTPConfig    `key:"http" json:"http"`
+	ShutdownTimeout      time.Duration `key:"shutdownTimeout" json:"shutdown_timeout"`
+	StubLimits           StubLimits    `key:"stubLimits" json:"stub_limits"`
 }
 
 type FileServiceConfig struct {

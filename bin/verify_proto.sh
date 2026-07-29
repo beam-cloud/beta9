@@ -10,12 +10,7 @@ tmpWorkDir=$(mktemp -d -t 'twd.XXXXXX')
 mkdir "$tmpWorkDir/beta9"
 tmpWorkDir="$tmpWorkDir/beta9"
 cp -r . "$tmpWorkDir"
-# A linked worktree's .git is a pointer back to the source checkout; carrying
-# it into the copy would make the verifier's snapshot commit mutate the source
-# worktree. uv virtualenvs are also not relocatable on macOS.
-rm -rf "$tmpWorkDir/.git" "$tmpWorkDir/sdk/.venv"
 pushd "$tmpWorkDir"
-git init
 git add -A
 git -c user.name="proto verifier" -c user.email="proto-verifier@example.com" commit --allow-empty -m init
 ./bin/gen_proto.sh

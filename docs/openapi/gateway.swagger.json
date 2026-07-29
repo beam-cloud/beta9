@@ -2204,7 +2204,8 @@
       }
     },
     "GatewayServiceDownloadMachineSSHKeyBody": {
-      "type": "object"
+      "type": "object",
+      "description": "Managed SSH messages live at the end of this file so adding the feature\ndoes not renumber every existing generated message implementation."
     },
     "GatewayServiceExtendPoolCapacityBody": {
       "type": "object",

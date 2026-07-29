@@ -1138,50 +1138,6 @@ class ListPoolMachinesResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class DownloadMachineSshKeyRequest(betterproto.Message):
-    pool_name: str = betterproto.string_field(1)
-    machine_id: str = betterproto.string_field(2)
-
-
-@dataclass(eq=False, repr=False)
-class DownloadMachineSshKeyResponse(betterproto.Message):
-    ok: bool = betterproto.bool_field(1)
-    err_msg: str = betterproto.string_field(2)
-    private_key: str = betterproto.string_field(3)
-    filename: str = betterproto.string_field(4)
-    generation: int = betterproto.uint64_field(5)
-    fingerprint: str = betterproto.string_field(6)
-    activation_required: bool = betterproto.bool_field(7)
-
-
-@dataclass(eq=False, repr=False)
-class RotateMachineSshKeyRequest(betterproto.Message):
-    pool_name: str = betterproto.string_field(1)
-    machine_id: str = betterproto.string_field(2)
-
-
-@dataclass(eq=False, repr=False)
-class RotateMachineSshKeyResponse(betterproto.Message):
-    ok: bool = betterproto.bool_field(1)
-    err_msg: str = betterproto.string_field(2)
-    ssh: "MachineSshAccess" = betterproto.message_field(3)
-
-
-@dataclass(eq=False, repr=False)
-class ActivateMachineSshKeyRequest(betterproto.Message):
-    pool_name: str = betterproto.string_field(1)
-    machine_id: str = betterproto.string_field(2)
-    generation: int = betterproto.uint64_field(3)
-
-
-@dataclass(eq=False, repr=False)
-class ActivateMachineSshKeyResponse(betterproto.Message):
-    ok: bool = betterproto.bool_field(1)
-    err_msg: str = betterproto.string_field(2)
-    ssh: "MachineSshAccess" = betterproto.message_field(3)
-
-
-@dataclass(eq=False, repr=False)
 class AgentBootstrapConfig(betterproto.Message):
     gateway_http_url: str = betterproto.string_field(1)
     gateway_grpc_host: str = betterproto.string_field(2)
@@ -1404,32 +1360,6 @@ class StreamAgentResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class AgentSshConfig(betterproto.Message):
-    enabled: bool = betterproto.bool_field(1)
-    username: str = betterproto.string_field(2)
-    public_key: str = betterproto.string_field(3)
-    key_fingerprint: str = betterproto.string_field(4)
-    generation: int = betterproto.uint64_field(5)
-
-
-@dataclass(eq=False, repr=False)
-class UpdateAgentSshStatusRequest(betterproto.Message):
-    agent_token: str = betterproto.string_field(1)
-    generation: int = betterproto.uint64_field(2)
-    status: str = betterproto.string_field(3)
-    public_ip: str = betterproto.string_field(4)
-    host_key_fingerprint: str = betterproto.string_field(5)
-    error: str = betterproto.string_field(6)
-    listen_port: int = betterproto.uint32_field(7)
-
-
-@dataclass(eq=False, repr=False)
-class UpdateAgentSshStatusResponse(betterproto.Message):
-    ok: bool = betterproto.bool_field(1)
-    err_msg: str = betterproto.string_field(2)
-
-
-@dataclass(eq=False, repr=False)
 class AgentLogRecord(betterproto.Message):
     source: str = betterproto.string_field(1)
     worker_id: str = betterproto.string_field(2)
@@ -1501,28 +1431,6 @@ class Machine(betterproto.Message):
     machine_metrics: "MachineMetrics" = betterproto.message_field(15)
     user_data: str = betterproto.string_field(16)
     ssh: "MachineSshAccess" = betterproto.message_field(17)
-
-
-@dataclass(eq=False, repr=False)
-class MachineSshAccess(betterproto.Message):
-    supported: bool = betterproto.bool_field(1)
-    status: str = betterproto.string_field(2)
-    public_ip: str = betterproto.string_field(3)
-    host: str = betterproto.string_field(4)
-    port: int = betterproto.uint32_field(5)
-    username: str = betterproto.string_field(6)
-    active_generation: int = betterproto.uint64_field(7)
-    applied_generation: int = betterproto.uint64_field(8)
-    key_fingerprint: str = betterproto.string_field(9)
-    host_key_fingerprint: str = betterproto.string_field(10)
-    private_key_available: bool = betterproto.bool_field(11)
-    pending_rotation: bool = betterproto.bool_field(12)
-    pending_generation: int = betterproto.uint64_field(13)
-    pending_fingerprint: str = betterproto.string_field(14)
-    pending_key_available: bool = betterproto.bool_field(15)
-    pending_key_downloaded: bool = betterproto.bool_field(16)
-    error: str = betterproto.string_field(17)
-    updated_at: datetime = betterproto.message_field(18)
 
 
 @dataclass(eq=False, repr=False)
@@ -1767,6 +1675,103 @@ class UpdateAgentAvailabilityRequest(betterproto.Message):
 class UpdateAgentAvailabilityResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class DownloadMachineSshKeyRequest(betterproto.Message):
+    """
+    Managed SSH messages live at the end of this file so adding the feature
+     does not renumber every existing generated message implementation.
+    """
+
+    pool_name: str = betterproto.string_field(1)
+    machine_id: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class DownloadMachineSshKeyResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    private_key: str = betterproto.string_field(3)
+    filename: str = betterproto.string_field(4)
+    generation: int = betterproto.uint64_field(5)
+    fingerprint: str = betterproto.string_field(6)
+    activation_required: bool = betterproto.bool_field(7)
+
+
+@dataclass(eq=False, repr=False)
+class RotateMachineSshKeyRequest(betterproto.Message):
+    pool_name: str = betterproto.string_field(1)
+    machine_id: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class RotateMachineSshKeyResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    ssh: "MachineSshAccess" = betterproto.message_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class ActivateMachineSshKeyRequest(betterproto.Message):
+    pool_name: str = betterproto.string_field(1)
+    machine_id: str = betterproto.string_field(2)
+    generation: int = betterproto.uint64_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class ActivateMachineSshKeyResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    ssh: "MachineSshAccess" = betterproto.message_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class AgentSshConfig(betterproto.Message):
+    enabled: bool = betterproto.bool_field(1)
+    username: str = betterproto.string_field(2)
+    public_key: str = betterproto.string_field(3)
+    key_fingerprint: str = betterproto.string_field(4)
+    generation: int = betterproto.uint64_field(5)
+
+
+@dataclass(eq=False, repr=False)
+class UpdateAgentSshStatusRequest(betterproto.Message):
+    agent_token: str = betterproto.string_field(1)
+    generation: int = betterproto.uint64_field(2)
+    status: str = betterproto.string_field(3)
+    public_ip: str = betterproto.string_field(4)
+    host_key_fingerprint: str = betterproto.string_field(5)
+    error: str = betterproto.string_field(6)
+    listen_port: int = betterproto.uint32_field(7)
+
+
+@dataclass(eq=False, repr=False)
+class UpdateAgentSshStatusResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class MachineSshAccess(betterproto.Message):
+    supported: bool = betterproto.bool_field(1)
+    status: str = betterproto.string_field(2)
+    public_ip: str = betterproto.string_field(3)
+    host: str = betterproto.string_field(4)
+    port: int = betterproto.uint32_field(5)
+    username: str = betterproto.string_field(6)
+    active_generation: int = betterproto.uint64_field(7)
+    applied_generation: int = betterproto.uint64_field(8)
+    key_fingerprint: str = betterproto.string_field(9)
+    host_key_fingerprint: str = betterproto.string_field(10)
+    private_key_available: bool = betterproto.bool_field(11)
+    pending_rotation: bool = betterproto.bool_field(12)
+    pending_generation: int = betterproto.uint64_field(13)
+    pending_fingerprint: str = betterproto.string_field(14)
+    pending_key_available: bool = betterproto.bool_field(15)
+    pending_key_downloaded: bool = betterproto.bool_field(16)
+    error: str = betterproto.string_field(17)
+    updated_at: datetime = betterproto.message_field(18)
 
 
 class GatewayServiceStub(SyncServiceStub):
