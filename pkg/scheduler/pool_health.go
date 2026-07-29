@@ -2,8 +2,8 @@ package scheduler
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,7 +16,7 @@ import (
 type PoolHealthMonitorOptions struct {
 	Controller       WorkerPoolController
 	WorkerPoolConfig types.WorkerPoolConfig
-	WorkerConfig     types.WorkerConfig
+	FailoverHealth   types.FailoverHealthConfig
 	WorkerRepo       repository.WorkerRepository
 	WorkerPoolRepo   repository.WorkerPoolRepository
 	ProviderRepo     repository.ProviderRepository
@@ -29,13 +29,17 @@ type PoolHealthMonitor struct {
 	ctx              context.Context
 	wpc              WorkerPoolController
 	workerPoolConfig types.WorkerPoolConfig
-	workerConfig     types.WorkerConfig
+	health           types.FailoverHealthConfig
 	workerRepo       repository.WorkerRepository
 	workerPoolRepo   repository.WorkerPoolRepository
 	containerRepo    repository.ContainerRepository
 	providerRepo     repository.ProviderRepository
 	eventRepo        repository.EventRepository
 	pushMetrics      func(types.EventComputeSchema)
+
+	// lastSchedulable is the schedulability reported by the previous tick, so
+	// that only transitions are emitted. Nil until the first tick completes.
+	lastSchedulable *bool
 }
 
 func NewPoolHealthMonitor(opts PoolHealthMonitorOptions) *PoolHealthMonitor {
@@ -43,7 +47,7 @@ func NewPoolHealthMonitor(opts PoolHealthMonitorOptions) *PoolHealthMonitor {
 		ctx:              opts.Controller.Context(),
 		wpc:              opts.Controller,
 		workerPoolConfig: opts.WorkerPoolConfig,
-		workerConfig:     opts.WorkerConfig,
+		health:           opts.FailoverHealth,
 		workerRepo:       opts.WorkerRepo,
 		containerRepo:    opts.ContainerRepo,
 		providerRepo:     opts.ProviderRepo,
@@ -74,12 +78,6 @@ func (p *PoolHealthMonitor) Start() {
 					return
 				}
 
-				err = p.updatePoolStatus(poolState)
-				if err != nil {
-					log.Error().Str("pool_name", p.wpc.Name()).Err(err).Msg("failed to update pool status")
-					return
-				}
-
 				err = p.workerPoolRepo.SetWorkerPoolState(p.ctx, p.wpc.Name(), poolState)
 				if err != nil {
 					log.Error().Str("pool_name", p.wpc.Name()).Err(err).Msg("failed to set pool state")
@@ -87,6 +85,7 @@ func (p *PoolHealthMonitor) Start() {
 				}
 				if p.pushMetrics != nil {
 					p.pushMetrics(poolMetricsEvent(p.wpc.Name(), p.workerPoolConfig, poolState, workers))
+					p.emitSchedulabilityTransition(poolState)
 				}
 			}()
 		}
@@ -218,6 +217,49 @@ func (p *PoolHealthMonitor) getPoolState() (*types.WorkerPoolState, []*types.Wor
 	}, workers, nil
 }
 
+// schedulability reports whether a pool currently looks able to take new work,
+// along with the thresholds it violates. This is an observability signal only:
+// placement decisions are made from live worker capacity, never from here.
+func (p *PoolHealthMonitor) schedulability(state *types.WorkerPoolState) (bool, []string) {
+	reasons := []string{}
+
+	if limit := p.health.MaxPendingWorkers; limit > 0 && state.PendingWorkers > limit {
+		reasons = append(reasons, fmt.Sprintf("pending_workers=%d exceeds %d", state.PendingWorkers, limit))
+	}
+	if limit := p.health.MaxSchedulingLatencyMs; limit > 0 && state.SchedulingLatency > limit {
+		reasons = append(reasons, fmt.Sprintf("scheduling_latency_ms=%d exceeds %d", state.SchedulingLatency, limit))
+	}
+	// Machine counts are only meaningful for pools backed by machines the
+	// control plane tracks; local (in-cluster) pools report zero.
+	if limit := p.health.MinMachinesAvailable; limit > 0 && p.wpc.Mode() != types.PoolModeLocal && state.ReadyMachines < limit {
+		reasons = append(reasons, fmt.Sprintf("ready_machines=%d below %d", state.ReadyMachines, limit))
+	}
+
+	return len(reasons) == 0, reasons
+}
+
+func (p *PoolHealthMonitor) emitSchedulabilityTransition(state *types.WorkerPoolState) {
+	schedulable, reasons := p.schedulability(state)
+	if p.lastSchedulable != nil && *p.lastSchedulable == schedulable {
+		return
+	}
+	p.lastSchedulable = &schedulable
+
+	action := types.EventComputeActionPoolUnschedulable
+	if schedulable {
+		action = types.EventComputeActionPoolSchedulable
+	}
+
+	p.pushMetrics(types.EventComputeSchema{
+		PoolName: p.wpc.Name(),
+		Action:   action,
+		Attrs: map[string]string{
+			types.EventComputeAttrPoolMode: string(p.workerPoolConfig.Mode),
+			types.EventComputeAttrReasons:  strings.Join(reasons, "; "),
+		},
+	})
+}
+
 func poolMetricsEvent(poolName string, config types.WorkerPoolConfig, state *types.WorkerPoolState, workers []*types.Worker) types.EventComputeSchema {
 	var totalCPU, freeCPU, totalMemory, freeMemory int64
 	var totalGPU, freeGPU uint32
@@ -243,7 +285,7 @@ func poolMetricsEvent(poolName string, config types.WorkerPoolConfig, state *typ
 		}
 		return float64(total-min(free, total)) / float64(total) * 100
 	}
-	hourlyCostMicros := types.ComputeDollarsToMicros(config.DefaultMachineCost * 3600 * float64(len(machines)))
+	hourlyCostCents := config.HourlyCostCents * int64(len(machines))
 	return types.EventComputeSchema{
 		PoolName:     poolName,
 		Action:       types.EventComputeActionPoolHeartbeat,
@@ -258,7 +300,7 @@ func poolMetricsEvent(poolName string, config types.WorkerPoolConfig, state *typ
 			types.EventComputeAttrCPUUtilizationPct:     fmt.Sprintf("%.2f", percentage(freeCPU, totalCPU)),
 			types.EventComputeAttrMemoryUsedMB:          fmt.Sprintf("%d", totalMemory-min(freeMemory, totalMemory)),
 			types.EventComputeAttrMemoryUtilizationPct:  fmt.Sprintf("%.2f", percentage(freeMemory, totalMemory)),
-			types.EventComputeAttrHourlyCostMicros:      fmt.Sprintf("%d", hourlyCostMicros),
+			types.EventComputeAttrHourlyCostCents:       fmt.Sprintf("%d", hourlyCostCents),
 			types.EventComputeAttrWorkerCount:           fmt.Sprintf("%d", len(workers)),
 			types.EventComputeAttrAvailableWorkerCount:  fmt.Sprintf("%d", state.AvailableWorkers),
 			types.EventComputeAttrPendingWorkerCount:    fmt.Sprintf("%d", state.PendingWorkers),
@@ -299,56 +341,4 @@ func newPoolMetricsPusher(ctx context.Context, backendRepo repository.BackendRep
 		event.Timestamp = now
 		eventRepo.PushComputeEvent(types.EventComputePool, event)
 	}
-}
-
-// updatePoolStatus updates the status of the pool based on the current state
-func (p *PoolHealthMonitor) updatePoolStatus(nextState *types.WorkerPoolState) error {
-	status := types.WorkerPoolStatusHealthy
-	failoverReasons := []string{}
-
-	// Go through each condition that could trigger a degraded status
-	if nextState.PendingWorkers >= p.workerConfig.Failover.MaxPendingWorkers &&
-		nextState.SchedulingLatency > p.workerConfig.Failover.MaxSchedulingLatencyMs {
-		status = types.WorkerPoolStatusDegraded
-		failoverReasons = append(failoverReasons, "exceeded max pending workers with high scheduling latency")
-	}
-
-	if (nextState.ReadyMachines < p.workerConfig.Failover.MinMachinesAvailable) && p.wpc.Mode() == types.PoolModeExternal {
-		status = types.WorkerPoolStatusDegraded
-		failoverReasons = append(failoverReasons, "not enough ready machines")
-	}
-
-	nextState.Status = status
-
-	// Retrieve the previous state to compare against
-	previousState, err := p.wpc.State()
-	if err != nil {
-		var notFoundErr *types.ErrWorkerPoolStateNotFound
-		if errors.As(err, &notFoundErr) {
-			previousState = &types.WorkerPoolState{
-				Status: types.WorkerPoolStatusHealthy,
-			}
-		} else {
-			return err
-		}
-	}
-
-	if p.workerConfig.Failover.Enabled {
-		// If failover is enabled and status is degraded, we need to cordon all workers in the pool
-		if previousState.Status != status && nextState.Status == types.WorkerPoolStatusDegraded {
-			p.eventRepo.PushWorkerPoolDegradedEvent(p.wpc.Name(), failoverReasons, nextState)
-
-			log.Warn().Str("pool_name", p.wpc.Name()).Msg("pool is degraded, cordoning all workers")
-
-			err = p.workerRepo.CordonAllPendingWorkersInPool(p.wpc.Name())
-			if err != nil {
-				log.Error().Str("pool_name", p.wpc.Name()).Err(err).Msg("failed to cordon all workers in pool")
-				return err
-			}
-		} else if previousState.Status != status && nextState.Status == types.WorkerPoolStatusHealthy {
-			p.eventRepo.PushWorkerPoolHealthyEvent(p.wpc.Name(), nextState)
-		}
-	}
-
-	return nil
 }

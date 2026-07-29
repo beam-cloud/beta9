@@ -105,7 +105,7 @@ func NewProviderWorkerPoolController(opts WorkerPoolControllerOptions) (WorkerPo
 	err = MonitorPoolHealth(PoolHealthMonitorOptions{
 		Controller:       wpc,
 		WorkerPoolConfig: workerPoolConfig,
-		WorkerConfig:     wpc.config.Worker,
+		FailoverHealth:   wpc.config.Scheduling.Failover.Health,
 		WorkerRepo:       wpc.workerRepo,
 		ProviderRepo:     wpc.providerRepo,
 		WorkerPoolRepo:   wpc.workerPoolRepo,

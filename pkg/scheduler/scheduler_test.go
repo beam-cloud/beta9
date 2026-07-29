@@ -67,7 +67,7 @@ func NewSchedulerForTest() (*Scheduler, error) {
 		UsageRepo: nil,
 	}
 
-	workerPoolManager := NewWorkerPoolManager(false)
+	workerPoolManager := NewWorkerPoolManager()
 	for name, pool := range config.Worker.Pools {
 		workerPoolManager.SetPool(name, pool, &LocalWorkerPoolControllerForTest{
 			ctx:        context.Background(),
@@ -115,7 +115,7 @@ func setPendingSchedulerRequests(t *testing.T, scheduler *Scheduler, requests ..
 }
 
 func TestPrivateWorkerRequestUsesPoolMode(t *testing.T) {
-	manager := NewWorkerPoolManager(false)
+	manager := NewWorkerPoolManager()
 	privateState := &compute.PoolState{Selector: "private-pool"}
 	manager.SetPoolAt(agentPoolControllerKey("workspace-1", privateState), "private-pool", types.WorkerPoolConfig{Mode: types.PoolModePrivate}, nil)
 	manager.SetPool("local-pool", types.WorkerPoolConfig{Mode: types.PoolModeLocal}, nil)
@@ -128,7 +128,7 @@ func TestPrivateWorkerRequestUsesPoolMode(t *testing.T) {
 }
 
 func TestPrivatePoolRequestsBypassManagedQuotaLookup(t *testing.T) {
-	manager := NewWorkerPoolManager(false)
+	manager := NewWorkerPoolManager()
 	privateState := &compute.PoolState{Selector: "private-gpu-pool"}
 	manager.SetPoolAt(agentPoolControllerKey("workspace-1", privateState), "private-gpu-pool", types.WorkerPoolConfig{Mode: types.PoolModePrivate}, nil)
 	scheduler := &Scheduler{workerPoolManager: manager}
@@ -152,7 +152,7 @@ func TestPrivatePoolRequestsBypassManagedQuotaLookup(t *testing.T) {
 }
 
 func TestPrivateGPUWorkerCapacityRequiresRequestedGPUCount(t *testing.T) {
-	scheduler := &Scheduler{workerPoolManager: NewWorkerPoolManager(false)}
+	scheduler := &Scheduler{workerPoolManager: NewWorkerPoolManager()}
 	scheduler.workerPoolManager.SetPool("private-gpu-pool", types.WorkerPoolConfig{Mode: types.PoolModePrivate, GPUType: "H100"}, nil)
 	request := &types.ContainerRequest{
 		Cpu:          1000,
@@ -205,7 +205,7 @@ func TestDockerEnabledRequestsCanUseRuncWorkersAndControllers(t *testing.T) {
 		{Id: "gvisor-worker", Runtime: types.ContainerRuntimeGvisor.String()},
 	}
 
-	scheduler := &Scheduler{workerPoolManager: NewWorkerPoolManager(false)}
+	scheduler := &Scheduler{workerPoolManager: NewWorkerPoolManager()}
 	filteredWorkers := scheduler.filterWorkersByFlags(workers, request)
 	assert.Equal(t, workers, filteredWorkers)
 }
@@ -232,7 +232,7 @@ func TestPreemptibleMarketplaceCapacityReachableWithAllowMarketplace(t *testing.
 	preemptibleSpot := &LocalWorkerPoolControllerForTest{name: "spot", preemptable: true}
 	assert.Empty(t, filterControllersByFlags([]WorkerPoolController{preemptibleSpot}, request))
 
-	scheduler := &Scheduler{workerPoolManager: NewWorkerPoolManager(false)}
+	scheduler := &Scheduler{workerPoolManager: NewWorkerPoolManager()}
 	scheduler.workerPoolManager.SetPool("marketplace", types.WorkerPoolConfig{
 		Mode:        types.PoolModeMarketplace,
 		GPUType:     "A10G",
@@ -308,7 +308,7 @@ func TestMarketplaceWorkersRequireExplicitSafeOptIn(t *testing.T) {
 		FreeGpuCount:  1,
 		Gpu:           "A10G",
 	}
-	scheduler := &Scheduler{workerPoolManager: NewWorkerPoolManager(false)}
+	scheduler := &Scheduler{workerPoolManager: NewWorkerPoolManager()}
 	scheduler.workerPoolManager.SetPool("marketplace", types.WorkerPoolConfig{
 		Mode:                 types.PoolModeMarketplace,
 		GPUType:              "A10G",
@@ -371,7 +371,7 @@ func TestMarketplacePoolRuntimeFallsBackForUnsupportedGPU(t *testing.T) {
 func TestEnsureAgentPoolNormalizesPersistedManagedConfig(t *testing.T) {
 	scheduler, err := NewSchedulerForTest()
 	assert.NoError(t, err)
-	scheduler.workerPoolManager = NewWorkerPoolManager(false)
+	scheduler.workerPoolManager = NewWorkerPoolManager()
 
 	provider := types.ProviderGeneric
 	err = scheduler.EnsureAgentPool("admin-workspace", &compute.PoolState{
@@ -398,7 +398,7 @@ func TestEnsureAgentPoolNormalizesPersistedManagedConfig(t *testing.T) {
 func TestEnsureAgentPoolReconcilesExistingMachineWorkers(t *testing.T) {
 	s, err := NewSchedulerForTest()
 	assert.NoError(t, err)
-	s.workerPoolManager = NewWorkerPoolManager(false)
+	s.workerPoolManager = NewWorkerPoolManager()
 
 	state := &compute.PoolState{
 		Name:              "api-pool",
@@ -437,7 +437,7 @@ func TestEnsureAgentPoolReconcilesExistingMachineWorkers(t *testing.T) {
 func TestTenantAgentPoolsUseWorkspaceScopedControllerKeys(t *testing.T) {
 	scheduler, err := NewSchedulerForTest()
 	assert.NoError(t, err)
-	scheduler.workerPoolManager = NewWorkerPoolManager(false)
+	scheduler.workerPoolManager = NewWorkerPoolManager()
 	scheduler.workerPoolManager.SetPool("shared", types.WorkerPoolConfig{Mode: types.PoolModeLocal}, nil)
 
 	for _, workspaceID := range []string{"workspace-a", "workspace-b"} {
@@ -468,7 +468,7 @@ func TestTenantAgentPoolsUseWorkspaceScopedControllerKeys(t *testing.T) {
 func TestLoadedPrivatePoolDoesNotReconcileOnRequest(t *testing.T) {
 	scheduler, err := NewSchedulerForTest()
 	assert.NoError(t, err)
-	scheduler.workerPoolManager = NewWorkerPoolManager(false)
+	scheduler.workerPoolManager = NewWorkerPoolManager()
 
 	const workspaceID = "workspace-private"
 	state := &compute.PoolState{
@@ -529,7 +529,7 @@ func TestFilterWorkersByMachinePinsWorker(t *testing.T) {
 }
 
 func TestFilterWorkersByWorkspaceScope(t *testing.T) {
-	scheduler := &Scheduler{workerPoolManager: NewWorkerPoolManager(false)}
+	scheduler := &Scheduler{workerPoolManager: NewWorkerPoolManager()}
 	scheduler.workerPoolManager.SetPool("marketplace", types.WorkerPoolConfig{Mode: types.PoolModeMarketplace}, nil)
 
 	workers := []*types.Worker{
@@ -545,7 +545,7 @@ func TestFilterWorkersByWorkspaceScope(t *testing.T) {
 }
 
 func TestSelectorCannotScheduleForeignPrivateWorker(t *testing.T) {
-	scheduler := &Scheduler{workerPoolManager: NewWorkerPoolManager(false)}
+	scheduler := &Scheduler{workerPoolManager: NewWorkerPoolManager()}
 	worker := &types.Worker{
 		Id:                   "private-worker",
 		Status:               types.WorkerStatusAvailable,
@@ -601,7 +601,7 @@ func TestMarketplaceRentalCapacityHiddenFromServerless(t *testing.T) {
 		GPUCount:         2,
 	}))
 
-	scheduler := &Scheduler{workerPoolManager: NewWorkerPoolManager(false), computeRepo: computeRepo}
+	scheduler := &Scheduler{workerPoolManager: NewWorkerPoolManager(), computeRepo: computeRepo}
 	scheduler.workerPoolManager.SetPool("marketplace-a100", types.WorkerPoolConfig{
 		Mode: types.PoolModeMarketplace,
 	}, nil)
@@ -2282,7 +2282,7 @@ func TestGetController(t *testing.T) {
 func TestGetControllersRegistersAgentPoolFromRepository(t *testing.T) {
 	wb, err := NewSchedulerForTest()
 	assert.NoError(t, err)
-	wb.workerPoolManager = NewWorkerPoolManager(false)
+	wb.workerPoolManager = NewWorkerPoolManager()
 
 	ctx := context.Background()
 	workspaceID := "workspace-lazy-pool"
@@ -2352,7 +2352,7 @@ func TestGetControllersRegistersAgentPoolFromRepository(t *testing.T) {
 func TestSelectPrivateAgentWorkerIgnoresStaleMachine(t *testing.T) {
 	wb, err := NewSchedulerForTest()
 	assert.NoError(t, err)
-	wb.workerPoolManager = NewWorkerPoolManager(false)
+	wb.workerPoolManager = NewWorkerPoolManager()
 
 	ctx := context.Background()
 	workspaceID := "workspace-private-select"
@@ -2802,10 +2802,10 @@ func TestSelectorBoundAnyGPUAcceptsUncataloguedHardware(t *testing.T) {
 		PoolSelector: "my-pool",
 	}
 
-	assert.Equal(t, []*types.Worker{worker}, filterWorkersByResources([]*types.Worker{worker}, request))
+	assert.Equal(t, []*types.Worker{worker}, filterWorkersByResources([]*types.Worker{worker}, request, nil))
 
 	request.PoolSelector = ""
-	assert.Empty(t, filterWorkersByResources([]*types.Worker{worker}, request))
+	assert.Empty(t, filterWorkersByResources([]*types.Worker{worker}, request, nil))
 }
 
 func TestSelectGPUWorkerDoesNotMutatePriority(t *testing.T) {

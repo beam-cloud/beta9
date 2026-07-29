@@ -131,17 +131,12 @@ type agentConfigWorker struct {
 	ContainerLogLinesPerHour   int                        `json:"containerLogLinesPerHour"`
 	DefaultWorkerCPURequest    int64                      `json:"defaultWorkerCPURequest"`
 	DefaultWorkerMemoryRequest int64                      `json:"defaultWorkerMemoryRequest"`
-	Failover                   agentConfigWorkerFailover  `json:"failover"`
 	Pools                      map[string]agentConfigPool `json:"pools"`
 }
 
 type agentConfigResourceLimits struct {
 	CPUAffinityEnforced bool `json:"cpuAffinityEnforced"`
 	MemoryEnforced      bool `json:"memoryEnforced"`
-}
-
-type agentConfigWorkerFailover struct {
-	MaxSchedulingLatencyMs int `json:"maxSchedulingLatencyMs"`
 }
 
 type agentConfigPool struct {
@@ -297,9 +292,6 @@ func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) a
 			ContainerLogLinesPerHour:   6000,
 			DefaultWorkerCPURequest:    slot.Cpu,
 			DefaultWorkerMemoryRequest: slot.Memory,
-			Failover: agentConfigWorkerFailover{
-				MaxSchedulingLatencyMs: 300000,
-			},
 			Pools: map[string]agentConfigPool{
 				slot.PoolName: {
 					Mode:                      poolMode,

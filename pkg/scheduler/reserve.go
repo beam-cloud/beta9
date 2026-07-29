@@ -83,6 +83,7 @@ func (a *schedulingAttempt) scheduleOnAvailableWorker() bool {
 
 	duration := time.Since(a.request.Timestamp)
 	a.recordBacklogWait(true, "scheduled")
+	a.scheduler.emitContainerPlaced(worker, a.request, a.scheduler.failoverChainFor(a.request))
 	metrics.RecordRequestSchedulingDuration(duration, a.request)
 	metrics.RecordSchedulerWorkerWait(duration, a.request, "scheduled")
 	return true
@@ -131,6 +132,10 @@ func (a *schedulingAttempt) provisionWorker() {
 
 	controller, delay := a.scheduler.workerProvisioningController(controllers)
 	if controller == nil {
+		// Every eligible pool, primary and failover alike, recently refused to
+		// provision. That is the serverless estate being exhausted, and the
+		// only trigger for on-demand hardware.
+		a.scheduler.noteFailoverDemand(a.request, a.scheduler.failoverChainFor(a.request), controllerNames(controllers))
 		a.recordBacklogWait(false, "worker_provisioning_backoff")
 		a.requeueForWorkerWaitDelay(delay, "worker_provisioning_backoff")
 		return

@@ -72,6 +72,10 @@ type Scheduler struct {
 	workerProvisioningBackoff *workerProvisioningBackoff
 	credentials               *schedulerCredentialCache
 	agentPoolMu               sync.Mutex
+
+	// pushComputeEvent ships placement and capacity events to the admin
+	// workspace's compute stream, the same path pool heartbeats take.
+	pushComputeEvent func(types.EventComputeSchema)
 }
 
 type schedulerCredentialAttachResult struct {
@@ -81,6 +85,12 @@ type schedulerCredentialAttachResult struct {
 }
 
 func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *common.RedisClient, usageRepo repo.UsageMetricsRepository, backendRepo repo.BackendRepository, workspaceRepo repo.WorkspaceRepository, tailscale *network.Tailscale) (*Scheduler, error) {
+	// A malformed failover chain would silently misroute placement, so refuse
+	// to start rather than guess at the operator's intent.
+	if err := config.Scheduling.Failover.Validate(config.Worker.Pools); err != nil {
+		return nil, err
+	}
+
 	eventBus := common.NewEventBus(redisClient)
 	workerRepo := repo.NewWorkerRedisRepository(redisClient, config.Worker)
 	providerRepo := repo.NewProviderRedisRepository(redisClient)
@@ -93,7 +103,7 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 	pushPoolMetrics := newPoolMetricsPusher(ctx, backendRepo, eventRepo)
 
 	// Load worker pools
-	workerPoolManager := NewWorkerPoolManager(config.Worker.Failover.Enabled)
+	workerPoolManager := NewWorkerPoolManager()
 	for name, pool := range config.Worker.Pools {
 		if pool.AgentHosted() {
 			log.Debug().Str("pool_name", name).Str("mode", string(pool.Mode)).Msg("deferring agent-hosted pool until workspace state is reconciled")
@@ -157,6 +167,7 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 		provisioning:              newProvisioningTracker(),
 		workerProvisioningBackoff: newWorkerProvisioningBackoff(),
 		credentials:               newSchedulerCredentialCache(),
+		pushComputeEvent:          pushPoolMetrics,
 	}, nil
 }
 
@@ -568,6 +579,10 @@ func (s *Scheduler) getControllers(request *types.ContainerRequest) ([]WorkerPoo
 			}
 		}
 	}
+
+	// Failover pools come last, so provisioning always tries the requested GPU
+	// type before widening.
+	controllers = append(controllers, s.failoverControllers(s.failoverChainFor(request), controllers)...)
 
 	controllers = filterControllersByFlags(controllers, request)
 	if len(controllers) == 0 {
@@ -1005,7 +1020,7 @@ func workerPoolSelector(worker *types.Worker) string {
 	return worker.PoolName
 }
 
-func filterWorkersByResources(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
+func filterWorkersByResources(workers []*types.Worker, request *types.ContainerRequest, chain *failoverChain) []*types.Worker {
 	filteredWorkers := []*types.Worker{}
 	gpuRequestsMap := map[string]int{}
 	requiresGPU := request.RequiresGPU()
@@ -1049,6 +1064,9 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 			// Validate GPU resource availability
 			_, validGpu := gpuRequestsMap[worker.Gpu]
 			validGpu = validGpu || (anyGPU && request.PoolSelector != "")
+			// Failover widens eligibility to the chain's pools, whatever GPU
+			// they host. Scoring keeps them behind the requested GPU type.
+			validGpu = validGpu || chain.contains(worker.PoolName)
 			if !validGpu || worker.FreeGpuCount < gpuCount {
 				continue
 			}
@@ -1138,15 +1156,19 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 		return nil, &types.ErrNoSuitableWorkerFound{}
 	}
 
+	// Resolved once per selection from in-memory config; nil when the request
+	// binds no chain, which makes every failover seam below a no-op.
+	chain := s.failoverChainFor(request)
+
 	filteredWorkers := filterWorkersByMachine(workers, request) // Machine-pinned requests only see their machine's worker
 	filteredWorkers = s.filterWorkersByWorkspaceScope(filteredWorkers, request)
 	filteredWorkers = filterWorkersByPoolSelector(filteredWorkers, request)
 	filteredWorkers = s.filterAgentWorkersByStorage(filteredWorkers, request)
 	filteredWorkers = s.filterMarketplaceWorkers(filteredWorkers, request)
 	filteredWorkers = s.filterLivePrivateAgentWorkers(filteredWorkers, request)
-	filteredWorkers = filterWorkersByResources(filteredWorkers, request)  // Filter workers resource requirements
-	filteredWorkers = s.filterWorkersByFlags(filteredWorkers, request)    // Filter workers by flags
-	filteredWorkers = filterWorkersByStatus(filteredWorkers, statuses...) // Filter workers by lifecycle status
+	filteredWorkers = filterWorkersByResources(filteredWorkers, request, chain) // Filter workers resource requirements
+	filteredWorkers = s.filterWorkersByFlags(filteredWorkers, request)          // Filter workers by flags
+	filteredWorkers = filterWorkersByStatus(filteredWorkers, statuses...)       // Filter workers by lifecycle status
 
 	if len(filteredWorkers) == 0 {
 		return nil, &types.ErrNoSuitableWorkerFound{}
@@ -1155,7 +1177,7 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 	// Score workers based on status and priority
 	scoredWorkers := []scoredWorker{}
 	for _, worker := range filteredWorkers {
-		score := scoreWorkerForRequest(worker, request)
+		score := scoreWorkerForRequest(worker, request, chain)
 		scoredWorkers = append(scoredWorkers, scoredWorker{worker: worker, score: score})
 	}
 
@@ -1394,7 +1416,7 @@ func (s *Scheduler) filterLivePrivateAgentWorkers(workers []*types.Worker, reque
 	return filteredWorkers
 }
 
-func scoreWorkerForRequest(worker *types.Worker, request *types.ContainerRequest) int32 {
+func scoreWorkerForRequest(worker *types.Worker, request *types.ContainerRequest, chain *failoverChain) int32 {
 	score := worker.Priority
 	if worker.Status == types.WorkerStatusAvailable {
 		score += scoreAvailableWorker
@@ -1402,6 +1424,7 @@ func scoreWorkerForRequest(worker *types.Worker, request *types.ContainerRequest
 	if request.RequiresGPU() {
 		score -= int32(gpuPriorityModifier(request, worker.Gpu))
 	}
+	score -= chain.rank(worker.PoolName) * scoreFailoverStep
 	return score
 }
 

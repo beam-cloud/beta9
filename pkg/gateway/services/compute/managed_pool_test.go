@@ -117,7 +117,7 @@ func managedPoolTestService(config types.AppConfig, repo *fakeComputeRepo) *Serv
 	return &Service{
 		appConfig:            config,
 		backendRepo:          &fakeManagedPoolBackendRepo{},
-		scheduler:            scheduler.NewSchedulerForCapacityChecks(workers, repo, scheduler.NewWorkerPoolManager(false)),
+		scheduler:            scheduler.NewSchedulerForCapacityChecks(workers, repo, scheduler.NewWorkerPoolManager()),
 		computeRepo:          repo,
 		managedPoolRepo:      &fakeManagedPoolRepo{repo: managedStates},
 		workerRepo:           workers,
@@ -135,7 +135,7 @@ func TestServiceStartDoesNotWaitForManagedPoolReconciliation(t *testing.T) {
 			}},
 		},
 		backendRepo:          backend,
-		scheduler:            scheduler.NewSchedulerForCapacityChecks(&fakeWorkerRepo{}, &fakeComputeRepo{}, scheduler.NewWorkerPoolManager(false)),
+		scheduler:            scheduler.NewSchedulerForCapacityChecks(&fakeWorkerRepo{}, &fakeComputeRepo{}, scheduler.NewWorkerPoolManager()),
 		computeRepo:          &fakeComputeRepo{},
 		managedPoolRepo:      &fakeManagedPoolRepo{repo: &fakeComputeRepo{}},
 		managedPoolInstances: map[string]string{},
@@ -318,7 +318,7 @@ func TestManagedPoolsConvergeAcrossGatewayReplicas(t *testing.T) {
 	}
 	computeRepo := repository.NewComputeRedisRepository(rdb)
 	newReplica := func() (*Service, *scheduler.WorkerPoolManager) {
-		manager := scheduler.NewWorkerPoolManager(false)
+		manager := scheduler.NewWorkerPoolManager()
 		workers := &fakeWorkerRepo{}
 		return &Service{
 			appConfig: types.AppConfig{
@@ -473,7 +473,7 @@ func TestConfigManagedPoolsUseReplicaLocalConfigWithoutSharedRewrite(t *testing.
 	computeRepo := &fakeComputeRepo{}
 	managedRepo := &fakeManagedPoolRepo{repo: &fakeComputeRepo{}}
 	makeReplica := func(priority int32) (*Service, *scheduler.WorkerPoolManager) {
-		manager := scheduler.NewWorkerPoolManager(false)
+		manager := scheduler.NewWorkerPoolManager()
 		return &Service{
 			appConfig: types.AppConfig{
 				Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{

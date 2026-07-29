@@ -94,7 +94,7 @@ func (s *Service) reconcileManagedComputeWithClock(ctx context.Context, nowFunc 
 	if nowFunc != nil {
 		now = nowFunc().UTC()
 	}
-	return s.reconcileManagedPoolMachines(ctx, now)
+	return errors.Join(s.reconcileManagedPoolMachines(ctx, now), s.reconcileOnDemandFailover(ctx, now))
 }
 
 func (s *Service) reconcileManagedPoolMachines(ctx context.Context, now time.Time) error {

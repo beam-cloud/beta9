@@ -463,7 +463,7 @@ func (b *poolMetricsBucket) point(bucketSize time.Duration) types.PoolMetricsPoi
 	point := types.PoolMetricsPoint{Timestamp: b.key, Pools: make([]types.PoolMetrics, 0, len(names))}
 	for _, name := range names {
 		metric := types.PoolMetrics{PoolName: name}
-		var cpuWeighted, cpuWeight, memoryUsed, memoryTotal, diskUsed, diskTotal, hourlyCostMicros float64
+		var cpuWeighted, cpuWeight, memoryUsed, memoryTotal, diskUsed, diskTotal, hourlyCostCents float64
 		for _, sample := range byPool[name] {
 			metric.WorkspaceID = sample.WorkspaceID
 			if sample.Action == types.EventComputeActionPoolHeartbeat {
@@ -485,7 +485,7 @@ func (b *poolMetricsBucket) point(bucketSize time.Duration) types.PoolMetricsPoi
 			memoryTotal += float64(sample.MemoryMB)
 			diskUsed += metricAttrFloat(sample.Attrs, types.EventComputeAttrDiskUsedMB)
 			diskTotal += metricAttrFloat(sample.Attrs, types.EventComputeAttrDiskTotalMB)
-			hourlyCostMicros += metricAttrFloat(sample.Attrs, types.EventComputeAttrHourlyCostMicros)
+			hourlyCostCents += metricAttrFloat(sample.Attrs, types.EventComputeAttrHourlyCostCents)
 		}
 		if cpuWeight > 0 {
 			metric.CPUUtilizationPct = cpuWeighted / cpuWeight
@@ -500,7 +500,7 @@ func (b *poolMetricsBucket) point(bucketSize time.Duration) types.PoolMetricsPoi
 			free := min(metric.FreeGPUCount, metric.GPUCount)
 			metric.GPUUtilizationPct = float64(metric.GPUCount-free) / float64(metric.GPUCount) * 100
 		}
-		metric.HourlyCost = hourlyCostMicros / 1_000_000
+		metric.HourlyCost = hourlyCostCents / 100
 		metric.EstimatedCost = metric.HourlyCost * bucketSize.Hours()
 		point.Pools = append(point.Pools, metric)
 	}

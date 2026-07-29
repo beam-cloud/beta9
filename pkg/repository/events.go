@@ -989,31 +989,6 @@ func (r *EventClientRepo) PushStubStateUnhealthy(workspaceId string, stubId stri
 	)
 }
 
-func (r *EventClientRepo) PushWorkerPoolDegradedEvent(poolName string, reasons []string, poolState *types.WorkerPoolState) {
-	r.pushEvent(
-		types.EventWorkerPoolDegraded,
-		types.EventWorkerPoolStateSchemaVersion,
-		types.EventWorkerPoolStateSchema{
-			PoolName:  poolName,
-			Reasons:   reasons,
-			Status:    string(types.WorkerPoolStatusDegraded),
-			PoolState: poolState,
-		},
-	)
-}
-
-func (r *EventClientRepo) PushWorkerPoolHealthyEvent(poolName string, poolState *types.WorkerPoolState) {
-	r.pushEvent(
-		types.EventWorkerPoolHealthy,
-		types.EventWorkerPoolStateSchemaVersion,
-		types.EventWorkerPoolStateSchema{
-			PoolName:  poolName,
-			Status:    string(types.WorkerPoolStatusHealthy),
-			PoolState: poolState,
-		},
-	)
-}
-
 func (r *EventClientRepo) PushGatewayEndpointCalledEvent(method, path, workspaceID string, statusCode int, userAgent, remoteIP, requestID, contentType, accept, errorMessage string) {
 	r.pushEvent(
 		types.EventGatewayEndpointCalled,
@@ -1176,8 +1151,6 @@ func eventMetadataFromData(data interface{}) eventMetadata {
 		return eventMetadata{StubID: d.ID, WorkspaceID: d.WorkspaceID}
 	case types.EventWorkerLifecycleSchema:
 		return eventMetadata{WorkerID: d.WorkerID, MachineID: d.MachineID, PoolName: d.PoolName}
-	case types.EventWorkerPoolStateSchema:
-		return eventMetadata{PoolName: d.PoolName}
 	case types.EventGatewayEndpointSchema:
 		return eventMetadata{WorkspaceID: d.WorkspaceID}
 	case types.EventComputeSchema:

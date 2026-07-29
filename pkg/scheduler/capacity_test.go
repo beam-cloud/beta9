@@ -23,7 +23,7 @@ func TestNormalizeManagedAgentPoolDoesNotRequireSelector(t *testing.T) {
 }
 
 func TestHasManagedPoolForGPU(t *testing.T) {
-	manager := NewWorkerPoolManager(false)
+	manager := NewWorkerPoolManager()
 	manager.SetPool("beta9-t4", types.WorkerPoolConfig{GPUType: "T4"}, &LocalWorkerPoolControllerForTest{name: "beta9-t4"})
 	manager.SetPool("private-h100", types.WorkerPoolConfig{GPUType: "H100", Mode: types.PoolModePrivate}, &LocalWorkerPoolControllerForTest{
 		name:             "private-h100",
@@ -54,7 +54,7 @@ func TestHasManagedPoolForGPU(t *testing.T) {
 }
 
 func TestServerlessGPUAvailabilityExcludesPrivateAndMarketplaceWorkers(t *testing.T) {
-	manager := NewWorkerPoolManager(false)
+	manager := NewWorkerPoolManager()
 	manager.SetPool("serverless-t4", types.WorkerPoolConfig{GPUType: "T4"}, &LocalWorkerPoolControllerForTest{name: "serverless-t4"})
 	manager.SetPool("managed-rtx5090", types.WorkerPoolConfig{GPUType: "RTX5090", Mode: types.PoolModeExternal}, &LocalWorkerPoolControllerForTest{name: "managed-rtx5090"})
 	manager.SetPool("private-h100", types.WorkerPoolConfig{GPUType: "H100", Mode: types.PoolModePrivate}, &LocalWorkerPoolControllerForTest{

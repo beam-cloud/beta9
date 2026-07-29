@@ -48,8 +48,7 @@ const (
 	shutdownForceWait              time.Duration = 5 * time.Second
 	shutdownCleanupReserve         time.Duration = 5 * time.Second
 	workerShutdownRPCTimeout       time.Duration = 5 * time.Second
-	defaultContainerStartupTimeout time.Duration = 15 * time.Minute
-	maxContainerStartupTimeout     time.Duration = time.Hour
+	containerStartupTimeout        time.Duration = 15 * time.Minute
 	gvisorShmemTHPPath                           = "/sys/kernel/mm/transparent_hugepage/shmem_enabled"
 )
 
@@ -117,14 +116,6 @@ type Worker struct {
 	ctx                     context.Context
 	cancel                  func()
 	config                  types.AppConfig
-}
-
-func (s *Worker) containerStartupTimeout() time.Duration {
-	timeoutMs := s.config.Worker.Failover.MaxSchedulingLatencyMs
-	if timeoutMs < defaultContainerStartupTimeout.Milliseconds() {
-		return defaultContainerStartupTimeout
-	}
-	return time.Duration(min(timeoutMs, maxContainerStartupTimeout.Milliseconds())) * time.Millisecond
 }
 
 type ContainerInstance struct {
@@ -699,21 +690,19 @@ func (s *Worker) runContainerRequest(request *types.ContainerRequest) {
 	if request.IsBuildRequest() {
 		err = run()
 	} else {
-		timeout := s.containerStartupTimeout()
-
 		errCh := make(chan error, 1)
 		go func() {
 			errCh <- run()
 		}()
 
-		timer := time.NewTimer(timeout)
+		timer := time.NewTimer(containerStartupTimeout)
 		defer timer.Stop()
 
 		select {
 		case err = <-errCh:
 		case <-timer.C:
 			cancel()
-			err = fmt.Errorf("container startup timed out after %s", timeout)
+			err = fmt.Errorf("container startup timed out after %s", containerStartupTimeout)
 		case <-s.ctx.Done():
 			cancel()
 			err = fmt.Errorf("worker shutting down before container startup completed: %w", s.ctx.Err())
