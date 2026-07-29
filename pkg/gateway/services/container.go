@@ -247,8 +247,12 @@ func (gws *GatewayService) AttachToContainer(stream pb.GatewayService_AttachToCo
 		return stream.Send(containerNotFoundResponse)
 	}
 
+	if !auth.HasInteractivePermission(authInfo) || authInfo.Workspace == nil {
+		return stream.Send(containerNotFoundResponse)
+	}
+
 	container, err := gws.containerRepo.GetContainerState(attachReq.ContainerId)
-	if err != nil {
+	if err != nil || container == nil || container.WorkspaceId != authInfo.Workspace.ExternalId {
 		return stream.Send(containerNotFoundResponse)
 	}
 
@@ -353,11 +357,16 @@ func (gws *GatewayService) AttachToContainer(stream pb.GatewayService_AttachToCo
 
 			switch payload := inMsg.Payload.(type) {
 			case *pb.ContainerStreamMessage_SyncContainerWorkspace:
+				syncRequest := bindSyncRequestToContainer(payload.SyncContainerWorkspace, container.ContainerId)
+				if syncRequest == nil {
+					continue
+				}
+
 				if types.StubType(stub.Type).IsServe() {
 					gws.redisClient.Expire(ctx, common.RedisKeys.SchedulerServeLock(stub.Workspace.Name, stub.ExternalId), serveTimeout)
 				}
 
-				syncQueue <- payload.SyncContainerWorkspace
+				syncQueue <- syncRequest
 			default:
 			}
 		}
@@ -371,4 +380,14 @@ func (gws *GatewayService) AttachToContainer(stream pb.GatewayService_AttachToCo
 		cancel()
 		return err
 	}
+}
+
+func bindSyncRequestToContainer(request *pb.SyncContainerWorkspaceRequest, containerId string) *pb.SyncContainerWorkspaceRequest {
+	if request == nil {
+		return nil
+	}
+
+	boundRequest := *request
+	boundRequest.ContainerId = containerId
+	return &boundRequest
 }
