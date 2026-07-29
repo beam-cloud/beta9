@@ -36,8 +36,6 @@ type ServiceOpts struct {
 	AgentStateValidator AgentStateValidator
 }
 
-var errThunderClientEnrollmentExists = errors.New("Thunder client enrollment already exists for container")
-
 type Service struct {
 	pb.UnimplementedThunderServiceServer
 
@@ -99,10 +97,11 @@ func (s *Service) CreateClientEnrollment(ctx context.Context, req *pb.CreateClie
 
 	var installCommand string
 	err = s.repo.WithPoolLock(ctx, attrs.workspaceID, attrs.poolName, func(ctx context.Context) error {
+		var previousEnrollmentTokenID string
 		if existing, found, err := s.repo.GetClientEnrollment(ctx, containerID); err != nil {
 			return err
-		} else if found && existing.EnrollmentTokenID != "" {
-			return errThunderClientEnrollmentExists
+		} else if found {
+			previousEnrollmentTokenID = strings.TrimSpace(existing.EnrollmentTokenID)
 		}
 
 		zoneID, err := s.ensureZoneLocked(ctx, attrs.workspaceID, attrs.poolName)
@@ -133,6 +132,11 @@ func (s *Service) CreateClientEnrollment(ctx context.Context, req *pb.CreateClie
 				return fmt.Errorf("failed to save Thunder client enrollment: %w; additionally failed to revoke Thunder enrollment token %q: %v", err, enrollment.EnrollmentTokenID, deleteErr)
 			}
 			return err
+		}
+		if previousEnrollmentTokenID != "" && previousEnrollmentTokenID != enrollment.EnrollmentTokenID {
+			if _, err := s.client.DeleteEnrollmentTokenNode(ctx, previousEnrollmentTokenID); err != nil && !isThunderNotFound(err) {
+				return fmt.Errorf("failed to revoke previous Thunder client enrollment token %q: %w", previousEnrollmentTokenID, err)
+			}
 		}
 		return nil
 	})
@@ -183,10 +187,11 @@ func (s *Service) CreateNodeEnrollment(ctx context.Context, req *pb.CreateNodeEn
 
 	var enrollmentToken string
 	err = s.repo.WithPoolLock(ctx, agentState.WorkspaceID, agentState.PoolName, func(ctx context.Context) error {
+		var previousEnrollmentTokenID string
 		if existing, found, err := s.repo.GetNodeEnrollment(ctx, agentState.WorkspaceID, agentState.PoolName, agentState.MachineID); err != nil {
 			return err
-		} else if found && strings.TrimSpace(existing.EnrollmentTokenID) != "" {
-			return nil
+		} else if found {
+			previousEnrollmentTokenID = strings.TrimSpace(existing.EnrollmentTokenID)
 		}
 
 		zoneID, err := s.ensureZoneLocked(ctx, agentState.WorkspaceID, agentState.PoolName)
@@ -211,6 +216,11 @@ func (s *Service) CreateNodeEnrollment(ctx context.Context, req *pb.CreateNodeEn
 				return fmt.Errorf("failed to save Thunder node enrollment: %w; additionally failed to revoke Thunder enrollment token %q: %v", err, enrollment.EnrollmentTokenID, deleteErr)
 			}
 			return err
+		}
+		if previousEnrollmentTokenID != "" && previousEnrollmentTokenID != enrollment.EnrollmentTokenID {
+			if _, err := s.client.DeleteEnrollmentTokenNode(ctx, previousEnrollmentTokenID); err != nil && !isThunderNotFound(err) {
+				return fmt.Errorf("failed to revoke previous Thunder node enrollment token %q: %w", previousEnrollmentTokenID, err)
+			}
 		}
 		enrollmentToken = enrollment.EnrollmentToken
 		return nil

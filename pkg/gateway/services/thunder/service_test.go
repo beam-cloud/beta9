@@ -188,6 +188,68 @@ func TestServiceCreateClientEnrollmentReusesExistingZone(t *testing.T) {
 	}
 }
 
+func TestServiceCreateClientEnrollmentReplacesExistingToken(t *testing.T) {
+	rdb := newThunderRedisClient(t)
+	defer rdb.Close()
+
+	containerRepo := repository.NewContainerRedisRepositoryForTest(rdb)
+	workerRepo := repository.NewWorkerRedisRepositoryForTest(rdb)
+	if err := workerRepo.AddWorker(&types.Worker{Id: "worker-1", PoolName: "pool-1", MachineId: "machine-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := containerRepo.SetContainerState("container-1", &types.ContainerState{ContainerId: "container-1", WorkspaceId: "workspace-1", WorkerId: "worker-1", MachineId: "machine-1", Gpu: "H100", GpuCount: 1}); err != nil {
+		t.Fatal(err)
+	}
+	repo := NewRedisRepository(rdb)
+	if err := repo.SaveZone(context.Background(), &ZoneState{WorkspaceID: "workspace-1", PoolName: "pool-1", ThunderZoneID: "zone-existing"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SaveClientEnrollment(context.Background(), &ClientEnrollmentState{ContainerID: "container-1", WorkspaceID: "workspace-1", WorkerID: "worker-1", MachineID: "machine-1", PoolName: "pool-1", EnrollmentTokenID: "token-old"}, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	var createTokenCalls int
+	var deleted []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == thunderEnrollmentTokenPath:
+			createTokenCalls++
+			_ = json.NewEncoder(w).Encode(EnrollmentToken{EnrollmentTokenID: "token-new", EnrollmentToken: "tr_client_new", ZoneID: "zone-existing", Role: thunderEnrollmentRoleClient})
+		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/v1/enrollment-tokens/"):
+			deleted = append(deleted, strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/v1/enrollment-tokens/"), "/node"))
+			_ = json.NewEncoder(w).Encode(DeleteEnrollmentTokenNodeResponse{NodeDeleted: true})
+		default:
+			t.Fatalf("unexpected request = %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	service, err := NewService(ServiceOpts{Repository: repo, Client: NewClient(server.URL, "central-token", server.Client()), ContainerRepo: containerRepo, WorkerRepo: workerRepo})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := service.CreateClientEnrollment(thunderWorkerAuthContext(types.TokenTypeWorker, ""), &pb.CreateClientEnrollmentRequest{ContainerId: "container-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.Ok || resp.ErrorMsg != "" || !strings.Contains(resp.InstallCommand, "tr_client_new") {
+		t.Fatalf("CreateClientEnrollment() = %+v", resp)
+	}
+	if createTokenCalls != 1 {
+		t.Fatalf("createTokenCalls = %d", createTokenCalls)
+	}
+	if len(deleted) != 1 || deleted[0] != "token-old" {
+		t.Fatalf("deleted tokens = %+v", deleted)
+	}
+	state, found, err := repo.GetClientEnrollment(context.Background(), "container-1")
+	if err != nil || !found {
+		t.Fatalf("GetClientEnrollment() found=%v err=%v", found, err)
+	}
+	if state.EnrollmentTokenID != "token-new" {
+		t.Fatalf("client enrollment state = %+v", state)
+	}
+}
+
 func TestServiceCreateClientEnrollmentRequiresWorkerToken(t *testing.T) {
 	service := &Service{}
 	resp, err := service.CreateClientEnrollment(context.Background(), &pb.CreateClientEnrollmentRequest{ContainerId: "container-1"})
@@ -355,20 +417,46 @@ func TestServiceCreateAndDeleteNodeEnrollment(t *testing.T) {
 	}
 }
 
-func TestServiceCreateNodeEnrollmentWithExistingStateIsIdempotent(t *testing.T) {
+func TestServiceCreateNodeEnrollmentReplacesExistingToken(t *testing.T) {
 	rdb := newThunderRedisClient(t)
 	defer rdb.Close()
 
 	repo := NewRedisRepository(rdb)
 	agentToken := "agent-token"
 	validator := &fakeAgentStateValidator{state: &model.AgentTokenState{WorkspaceID: "workspace-1", PoolName: "pool-1", MachineID: "machine-1"}}
-	if err := repo.SaveNodeEnrollment(context.Background(), &NodeEnrollmentState{WorkspaceID: "workspace-1", PoolName: "pool-1", MachineID: "machine-1", EnrollmentTokenID: "node-token-existing"}, 0); err != nil {
+	if err := repo.SaveZone(context.Background(), &ZoneState{WorkspaceID: "workspace-1", PoolName: "pool-1", ThunderZoneID: "zone-existing"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SaveNodeEnrollment(context.Background(), &NodeEnrollmentState{WorkspaceID: "workspace-1", PoolName: "pool-1", MachineID: "machine-1", EnrollmentTokenID: "node-token-old"}, 0); err != nil {
 		t.Fatal(err)
 	}
 
+	var createTokenCalls int
+	var deleted []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == thunderEnrollmentTokenPath:
+			createTokenCalls++
+			payload := map[string]any{}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload["zoneId"] != "zone-existing" || payload["role"] != thunderEnrollmentRoleServer {
+				t.Fatalf("node enrollment payload = %+v", payload)
+			}
+			_ = json.NewEncoder(w).Encode(EnrollmentToken{EnrollmentTokenID: "node-token-new", EnrollmentToken: "tr_node_new", ZoneID: "zone-existing", Role: thunderEnrollmentRoleServer})
+		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/v1/enrollment-tokens/"):
+			deleted = append(deleted, strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/v1/enrollment-tokens/"), "/node"))
+			_ = json.NewEncoder(w).Encode(DeleteEnrollmentTokenNodeResponse{NodeDeleted: true})
+		default:
+			t.Fatalf("unexpected request = %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
 	service, err := NewService(ServiceOpts{
 		Repository:          repo,
-		Client:              NewClient("https://central.example", "central-token", nil),
+		Client:              NewClient(server.URL, "central-token", server.Client()),
 		ContainerRepo:       repository.NewContainerRedisRepositoryForTest(rdb),
 		WorkerRepo:          repository.NewWorkerRedisRepositoryForTest(rdb),
 		AgentStateValidator: validator,
@@ -380,8 +468,21 @@ func TestServiceCreateNodeEnrollmentWithExistingStateIsIdempotent(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !resp.Ok || resp.ErrorMsg != "" || resp.EnrollmentToken != "" {
+	if !resp.Ok || resp.ErrorMsg != "" || resp.EnrollmentToken != "tr_node_new" {
 		t.Fatalf("CreateNodeEnrollment() = %+v", resp)
+	}
+	if createTokenCalls != 1 {
+		t.Fatalf("createTokenCalls = %d", createTokenCalls)
+	}
+	if len(deleted) != 1 || deleted[0] != "node-token-old" {
+		t.Fatalf("deleted tokens = %+v", deleted)
+	}
+	state, found, err := repo.GetNodeEnrollment(context.Background(), "workspace-1", "pool-1", "machine-1")
+	if err != nil || !found {
+		t.Fatalf("GetNodeEnrollment() found=%v err=%v", found, err)
+	}
+	if state.EnrollmentTokenID != "node-token-new" {
+		t.Fatalf("node enrollment state = %+v", state)
 	}
 }
 
