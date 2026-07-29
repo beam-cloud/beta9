@@ -176,34 +176,38 @@ func ensureOpenSSHServer(ctx context.Context) (string, error) {
 	if path, err := exec.LookPath("sshd"); err == nil {
 		return path, nil
 	}
-	switch {
-	case commandExists("apt-get"):
-		if err := runManagedSSHCommand(ctx, "apt-get", "update"); err != nil {
+	commands, err := managedSSHInstallCommands(commandExists)
+	if err != nil {
+		return "", err
+	}
+	for _, command := range commands {
+		if err := runManagedSSHCommand(ctx, command[0], command[1:]...); err != nil {
 			return "", err
 		}
-		if err := runManagedSSHCommand(ctx, "apt-get", "install", "-y", "openssh-server", "sudo"); err != nil {
-			return "", err
-		}
-	case commandExists("dnf"):
-		if err := runManagedSSHCommand(ctx, "dnf", "install", "-y", "openssh-server", "sudo"); err != nil {
-			return "", err
-		}
-	case commandExists("yum"):
-		if err := runManagedSSHCommand(ctx, "yum", "install", "-y", "openssh-server", "sudo"); err != nil {
-			return "", err
-		}
-	case commandExists("apk"):
-		if err := runManagedSSHCommand(ctx, "apk", "add", "--no-cache", "openssh-server", "sudo"); err != nil {
-			return "", err
-		}
-	default:
-		return "", errors.New("no supported package manager found (apt, dnf/yum, or apk)")
 	}
 	path, err := exec.LookPath("sshd")
 	if err != nil {
 		return "", errors.New("openssh-server installed but sshd was not found")
 	}
 	return path, nil
+}
+
+func managedSSHInstallCommands(available func(string) bool) ([][]string, error) {
+	switch {
+	case available("apt-get"):
+		return [][]string{
+			{"apt-get", "update"},
+			{"apt-get", "install", "-y", "openssh-server", "sudo"},
+		}, nil
+	case available("dnf"):
+		return [][]string{{"dnf", "install", "-y", "openssh-server", "sudo"}}, nil
+	case available("yum"):
+		return [][]string{{"yum", "install", "-y", "openssh-server", "sudo"}}, nil
+	case available("apk"):
+		return [][]string{{"apk", "add", "--no-cache", "openssh-server", "sudo"}}, nil
+	default:
+		return nil, errors.New("no supported package manager found (apt, dnf/yum, or apk)")
+	}
 }
 
 func ensureManagedSSHUser(ctx context.Context) error {
@@ -391,9 +395,9 @@ func (m *hostSSHManager) reloadOrSuperviseSSHD(ctx context.Context, sshdPath str
 		}
 		m.sshdProcess = nil
 	}
-	// This daemon belongs to the agent process, not to an individual stream.
-	// A gateway reconnect must not cancel host SSH.
-	cmd := exec.Command(sshdPath, "-D", "-e")
+	// watchRoutes passes the agent-lifetime context across stream reconnects,
+	// so this daemon survives reconnects but is reaped when the agent exits.
+	cmd := exec.CommandContext(ctx, sshdPath, "-D", "-e")
 	cmd.Stdout = m.stderr
 	cmd.Stderr = m.stderr
 	if err := cmd.Start(); err != nil {

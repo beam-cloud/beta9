@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -81,6 +82,51 @@ func TestEnsureManagedSSHDConfigIncludedIsIdempotent(t *testing.T) {
 	include := "Include " + dropIn
 	if !strings.HasPrefix(string(data), include+"\n") || strings.Count(string(data), include) != 1 {
 		t.Fatalf("managed include was not prepended exactly once: %q", data)
+	}
+}
+
+func TestManagedSSHInstallCommandsSupportsLinuxPackageManagers(t *testing.T) {
+	tests := map[string]struct {
+		available []string
+		want      [][]string
+	}{
+		"apt": {
+			available: []string{"apt-get"},
+			want: [][]string{
+				{"apt-get", "update"},
+				{"apt-get", "install", "-y", "openssh-server", "sudo"},
+			},
+		},
+		"dnf": {
+			available: []string{"dnf"},
+			want:      [][]string{{"dnf", "install", "-y", "openssh-server", "sudo"}},
+		},
+		"yum": {
+			available: []string{"yum"},
+			want:      [][]string{{"yum", "install", "-y", "openssh-server", "sudo"}},
+		},
+		"apk": {
+			available: []string{"apk"},
+			want:      [][]string{{"apk", "add", "--no-cache", "openssh-server", "sudo"}},
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			available := map[string]bool{}
+			for _, command := range test.available {
+				available[command] = true
+			}
+			got, err := managedSSHInstallCommands(func(command string) bool { return available[command] })
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("commands = %#v, want %#v", got, test.want)
+			}
+		})
+	}
+	if _, err := managedSSHInstallCommands(func(string) bool { return false }); err == nil {
+		t.Fatal("unsupported package manager configuration was accepted")
 	}
 }
 
