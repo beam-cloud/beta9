@@ -143,6 +143,9 @@ var (
 	computeMarketplaceRentalMachineIndex string = "compute:marketplace:rental:machine:%s"
 	computeMarketplaceRentalMachineLock  string = "compute:marketplace:rental:machine:%s:lock"
 	computeMarketplaceRentalGlobal       string = "compute:marketplace:rentals"
+	computeFailoverDemand                string = "compute:failover:demand:%s"
+	computeFailoverDemandIndex           string = "compute:failover:demand"
+	computeOnDemandSpend                 string = "compute:ondemand:spend:%s"
 )
 
 var (
@@ -462,6 +465,20 @@ func (rk *redisKeys) ComputeMarketplaceRentalMachineLock(machineID string) strin
 
 func (rk *redisKeys) ComputeMarketplaceRentalGlobalIndex() string {
 	return computeMarketplaceRentalGlobal
+}
+
+func (rk *redisKeys) ComputeFailoverDemand(gpu string) string {
+	return fmt.Sprintf(computeFailoverDemand, gpu)
+}
+
+func (rk *redisKeys) ComputeFailoverDemandIndex() string {
+	return computeFailoverDemandIndex
+}
+
+// ComputeOnDemandSpend buckets platform spend on failover hardware by hour
+// (bucket format "2006010215"), so a rolling window is a small key scan.
+func (rk *redisKeys) ComputeOnDemandSpend(hourBucket string) string {
+	return fmt.Sprintf(computeOnDemandSpend, hourBucket)
 }
 
 // Task keys

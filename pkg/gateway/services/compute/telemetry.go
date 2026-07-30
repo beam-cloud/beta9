@@ -223,12 +223,8 @@ func (s *Service) recordAgentMetrics(ctx context.Context, agentState *model.Agen
 				break
 			}
 		}
-		if hourlyCostMicros == 0 && poolState.WorkerConfig != nil {
-			// DefaultMachineCost is the existing per-machine, per-second usage rate.
-			hourlyCostMicros = model.DollarsToMicros(poolState.WorkerConfig.DefaultMachineCost * 3600)
-		}
 		if hourlyCostMicros > 0 {
-			attrs[types.EventComputeAttrHourlyCostMicros] = fmt.Sprintf("%d", hourlyCostMicros)
+			attrs[types.EventComputeAttrHourlyCostCents] = fmt.Sprintf("%d", types.MicrosToCents(hourlyCostMicros))
 		}
 	}
 

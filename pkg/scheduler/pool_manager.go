@@ -18,29 +18,14 @@ type WorkerPool struct {
 // WorkerPoolManager manages a collection of WorkerPools using a thread-safe SafeMap.
 // It provides additional functionality to filter and retrieve pools based on specific criteria, such as GPU type.
 type WorkerPoolManager struct {
-	poolMap         *common.SafeMap[*WorkerPool]
-	failoverEnabled bool
+	poolMap *common.SafeMap[*WorkerPool]
 }
 
 // NewWorkerPoolManager creates a new WorkerPoolManager.
-func NewWorkerPoolManager(failoverEnabled bool) *WorkerPoolManager {
+func NewWorkerPoolManager() *WorkerPoolManager {
 	return &WorkerPoolManager{
-		poolMap:         common.NewSafeMap[*WorkerPool](),
-		failoverEnabled: failoverEnabled,
+		poolMap: common.NewSafeMap[*WorkerPool](),
 	}
-}
-
-// isPoolHealthy encapsulates the failover logic
-// If failoverEnabled is set, the pool is only considered healthy if its Controller.State()
-// returns a non-degraded status and no error occurred
-func (m *WorkerPoolManager) isPoolHealthy(pool *WorkerPool) bool {
-	if m.failoverEnabled {
-		state, err := pool.Controller.State()
-		if err != nil || state.Status == types.WorkerPoolStatusDegraded {
-			return false
-		}
-	}
-	return true
 }
 
 // GetPool retrieves a WorkerPool by its name.
@@ -72,10 +57,6 @@ func (m *WorkerPoolManager) GetPoolByFilters(filters poolFilters) []*WorkerPool 
 			return true
 		}
 
-		if !m.isPoolHealthy(pool) {
-			return true
-		}
-
 		pools = append(pools, pool)
 		return true
 	})
@@ -88,17 +69,13 @@ func (m *WorkerPoolManager) GetPoolByFilters(filters poolFilters) []*WorkerPool 
 }
 
 // GetPoolByGPU retrieves a WorkerPool by its GPU type.
-// It returns the first matching WorkerPool found that is healthy (if failover is enabled).
+// It returns the first matching WorkerPool found.
 func (m *WorkerPoolManager) GetPoolByGPU(gpuType string) (*WorkerPool, bool) {
 	var wp *WorkerPool
 	var found bool
 
 	m.poolMap.Range(func(key string, pool *WorkerPool) bool {
 		if pool.Config.GPUType != gpuType {
-			return true
-		}
-
-		if !m.isPoolHealthy(pool) {
 			return true
 		}
 

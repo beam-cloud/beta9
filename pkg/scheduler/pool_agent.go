@@ -16,6 +16,7 @@ import (
 // through the agent protocol, including private and managed external pools.
 type AgentWorkerPoolController struct {
 	ctx              context.Context
+	cancel           context.CancelFunc
 	name             string
 	workspaceID      string
 	config           types.AppConfig
@@ -26,14 +27,18 @@ type AgentWorkerPoolController struct {
 }
 
 type AgentWorkerPoolControllerOptions struct {
-	Context     context.Context
-	Name        string
-	WorkspaceID string
-	Config      types.AppConfig
-	WorkerPool  types.WorkerPoolConfig
-	PoolState   *compute.PoolState
-	WorkerRepo  repository.WorkerRepository
-	ComputeRepo repository.ComputeRepository
+	Context        context.Context
+	Name           string
+	WorkspaceID    string
+	Config         types.AppConfig
+	WorkerPool     types.WorkerPoolConfig
+	PoolState      *compute.PoolState
+	WorkerRepo     repository.WorkerRepository
+	ComputeRepo    repository.ComputeRepository
+	WorkerPoolRepo repository.WorkerPoolRepository
+	ProviderRepo   repository.ProviderRepository
+	ContainerRepo  repository.ContainerRepository
+	PushMetrics    func(types.EventComputeSchema)
 }
 
 type agentMachineWorker struct {
@@ -101,8 +106,10 @@ func NewAgentWorkerPoolController(opts AgentWorkerPoolControllerOptions) (*Agent
 		return nil, errors.New("compute repository is required")
 	}
 
+	ctx, cancel := context.WithCancel(opts.Context)
 	wpc := &AgentWorkerPoolController{
-		ctx:              opts.Context,
+		ctx:              ctx,
+		cancel:           cancel,
 		name:             opts.Name,
 		workspaceID:      opts.WorkspaceID,
 		config:           opts.Config,
@@ -111,7 +118,31 @@ func NewAgentWorkerPoolController(opts AgentWorkerPoolControllerOptions) (*Agent
 		workerRepo:       opts.WorkerRepo,
 		computeRepo:      opts.ComputeRepo,
 	}
+	if opts.PoolState.ManagementSource != "" &&
+		opts.WorkerPoolRepo != nil &&
+		opts.ContainerRepo != nil &&
+		opts.PushMetrics != nil {
+		if err := MonitorPoolHealth(PoolHealthMonitorOptions{
+			Controller:       wpc,
+			WorkerPoolConfig: opts.WorkerPool,
+			FailoverHealth:   opts.Config.Scheduling.Failover.Health,
+			WorkerRepo:       opts.WorkerRepo,
+			WorkerPoolRepo:   opts.WorkerPoolRepo,
+			ProviderRepo:     opts.ProviderRepo,
+			ContainerRepo:    opts.ContainerRepo,
+			PushMetrics:      opts.PushMetrics,
+		}); err != nil {
+			cancel()
+			return nil, err
+		}
+	}
 	return wpc, nil
+}
+
+func (wpc *AgentWorkerPoolController) close() {
+	if wpc != nil && wpc.cancel != nil {
+		wpc.cancel()
+	}
 }
 
 func (wpc *AgentWorkerPoolController) Context() context.Context {

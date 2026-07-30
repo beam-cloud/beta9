@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 
 type fakeManagedPoolBackendRepo struct {
 	repository.BackendRepository
+	mu                sync.Mutex
 	workspace         *types.Workspace
 	workspaceFailures int
 	workspaceCalls    int
@@ -25,23 +27,35 @@ type fakeManagedPoolBackendRepo struct {
 }
 
 func (r *fakeManagedPoolBackendRepo) GetAdminWorkspace(ctx context.Context) (*types.Workspace, error) {
+	r.mu.Lock()
 	r.workspaceCalls++
-	if r.started != nil {
+	started := r.started
+	if r.workspaceFailures > 0 {
+		r.workspaceFailures--
+		r.mu.Unlock()
+		return nil, errors.New("workspace temporarily unavailable")
+	}
+	workspace := r.workspace
+	r.mu.Unlock()
+
+	if started != nil {
 		select {
-		case r.started <- struct{}{}:
+		case started <- struct{}{}:
 		default:
 		}
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}
-	if r.workspaceFailures > 0 {
-		r.workspaceFailures--
-		return nil, errors.New("workspace temporarily unavailable")
-	}
-	if r.workspace != nil {
-		return r.workspace, nil
+	if workspace != nil {
+		return workspace, nil
 	}
 	return &types.Workspace{ExternalId: "admin-workspace"}, nil
+}
+
+func (r *fakeManagedPoolBackendRepo) calls() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.workspaceCalls
 }
 
 type managedPoolWorkerTokenBackend struct {
@@ -117,7 +131,7 @@ func managedPoolTestService(config types.AppConfig, repo *fakeComputeRepo) *Serv
 	return &Service{
 		appConfig:            config,
 		backendRepo:          &fakeManagedPoolBackendRepo{},
-		scheduler:            scheduler.NewSchedulerForCapacityChecks(workers, repo, scheduler.NewWorkerPoolManager(false)),
+		scheduler:            scheduler.NewSchedulerForCapacityChecks(workers, repo, scheduler.NewWorkerPoolManager()),
 		computeRepo:          repo,
 		managedPoolRepo:      &fakeManagedPoolRepo{repo: managedStates},
 		workerRepo:           workers,
@@ -135,7 +149,7 @@ func TestServiceStartDoesNotWaitForManagedPoolReconciliation(t *testing.T) {
 			}},
 		},
 		backendRepo:          backend,
-		scheduler:            scheduler.NewSchedulerForCapacityChecks(&fakeWorkerRepo{}, &fakeComputeRepo{}, scheduler.NewWorkerPoolManager(false)),
+		scheduler:            scheduler.NewSchedulerForCapacityChecks(&fakeWorkerRepo{}, &fakeComputeRepo{}, scheduler.NewWorkerPoolManager()),
 		computeRepo:          &fakeComputeRepo{},
 		managedPoolRepo:      &fakeManagedPoolRepo{repo: &fakeComputeRepo{}},
 		managedPoolInstances: map[string]string{},
@@ -297,6 +311,21 @@ func TestManagedPoolLifecyclePreservesWorkerConfiguration(t *testing.T) {
 	}
 
 	repo.machines = nil
+	state.Reservations = []model.Reservation{{
+		ID:       "reservation-1",
+		Provider: "shadeform",
+		Status:   model.ReservationPending,
+	}}
+	if err := service.managedPoolRepo.SaveManagedPoolState(context.Background(), "admin-workspace", state); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.DeleteManagedPool(context.Background(), clusterAdminAuth(), "public-h100"); !errors.Is(err, model.ErrManagedPoolInUse) {
+		t.Fatalf("delete with open reservation error = %v, want in-use", err)
+	}
+	state.Reservations = nil
+	if err := service.managedPoolRepo.SaveManagedPoolState(context.Background(), "admin-workspace", state); err != nil {
+		t.Fatal(err)
+	}
 	workerPoolRepo := &fakeManagedPoolWorkerPoolRepo{}
 	service.workerPoolRepo = workerPoolRepo
 	if err := service.DeleteManagedPool(context.Background(), clusterAdminAuth(), "public-h100"); err != nil {
@@ -318,7 +347,7 @@ func TestManagedPoolsConvergeAcrossGatewayReplicas(t *testing.T) {
 	}
 	computeRepo := repository.NewComputeRedisRepository(rdb)
 	newReplica := func() (*Service, *scheduler.WorkerPoolManager) {
-		manager := scheduler.NewWorkerPoolManager(false)
+		manager := scheduler.NewWorkerPoolManager()
 		workers := &fakeWorkerRepo{}
 		return &Service{
 			appConfig: types.AppConfig{
@@ -473,7 +502,7 @@ func TestConfigManagedPoolsUseReplicaLocalConfigWithoutSharedRewrite(t *testing.
 	computeRepo := &fakeComputeRepo{}
 	managedRepo := &fakeManagedPoolRepo{repo: &fakeComputeRepo{}}
 	makeReplica := func(priority int32) (*Service, *scheduler.WorkerPoolManager) {
-		manager := scheduler.NewWorkerPoolManager(false)
+		manager := scheduler.NewWorkerPoolManager()
 		return &Service{
 			appConfig: types.AppConfig{
 				Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
@@ -544,8 +573,8 @@ func TestManagedPoolReconciliationRetriesStartupFailure(t *testing.T) {
 	if err != nil || state == nil {
 		t.Fatalf("pool was not restored after retry: state=%+v err=%v", state, err)
 	}
-	if backend.workspaceCalls != 2 {
-		t.Fatalf("workspace calls = %d, want 2", backend.workspaceCalls)
+	if calls := backend.calls(); calls != 2 {
+		t.Fatalf("workspace calls = %d, want 2", calls)
 	}
 }
 

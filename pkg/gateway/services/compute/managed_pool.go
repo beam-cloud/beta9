@@ -191,6 +191,9 @@ func (s *Service) activeManagedPoolState(state *model.PoolState) (*model.PoolSta
 	if err != nil {
 		return nil, err
 	}
+	if state.CreatedByTokenID == types.FailoverOnDemandPoolCreator {
+		normalized.RequiresPoolSelector = true
+	}
 	return managedPoolStateWithConfig(state, normalized), nil
 }
 
@@ -571,6 +574,12 @@ func (s *Service) CreateManagedPool(ctx context.Context, authInfo *auth.AuthInfo
 }
 
 func (s *Service) managedPoolHasInventory(ctx context.Context, state *model.PoolState) (bool, error) {
+	for i := range state.Reservations {
+		reservation := &state.Reservations[i]
+		if reservation.Managed() && !reservationClosed(reservation.Status) {
+			return true, nil
+		}
+	}
 	if s.computeRepo == nil {
 		return false, errors.New("compute repository is unavailable")
 	}
