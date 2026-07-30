@@ -121,8 +121,17 @@ func (a *schedulingAttempt) reservePendingWorkerCapacity() bool {
 }
 
 func (a *schedulingAttempt) provisionWorker() {
+	chain := a.scheduler.failoverChainFor(a.request)
 	controllers, err := a.scheduler.getControllers(a.request)
 	if err != nil {
+		// On-demand may be the only capacity source for a retired GPU.
+		if chain != nil && chain.onDemand {
+			a.scheduler.noteFailoverDemand(a.request, chain, nil)
+			a.recordBacklogWait(false, "serverless_capacity_exhausted")
+			a.requeueForWorkerWaitDelay(provisioningWorkerRequeueDelay, "serverless_capacity_exhausted")
+			return
+		}
+
 		requestLog(log.Error(), a.request).
 			Err(err).
 			Msg("no controller found for request")
@@ -135,7 +144,7 @@ func (a *schedulingAttempt) provisionWorker() {
 		// Every eligible pool, primary and failover alike, recently refused to
 		// provision. That is the serverless estate being exhausted, and the
 		// only trigger for on-demand hardware.
-		a.scheduler.noteFailoverDemand(a.request, a.scheduler.failoverChainFor(a.request), controllerNames(controllers))
+		a.scheduler.noteFailoverDemand(a.request, chain, controllerNames(controllers))
 		a.recordBacklogWait(false, "worker_provisioning_backoff")
 		a.requeueForWorkerWaitDelay(delay, "worker_provisioning_backoff")
 		return

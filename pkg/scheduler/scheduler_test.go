@@ -1554,6 +1554,46 @@ func TestProcessRequestBatchSpreadsAcrossEqualWorkers(t *testing.T) {
 	assert.NotEqual(t, firstQueued.ContainerId, secondQueued.ContainerId)
 }
 
+func TestProcessRequestBatchEmitsContainerPlaced(t *testing.T) {
+	wb, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+
+	worker := &types.Worker{
+		Id:          uuid.New().String(),
+		Status:      types.WorkerStatusAvailable,
+		TotalCpu:    200,
+		TotalMemory: 250,
+		FreeCpu:     200,
+		FreeMemory:  250,
+		PoolName:    "beta9-cpu",
+	}
+	assert.NoError(t, wb.workerRepo.AddWorker(worker))
+
+	request := &types.ContainerRequest{
+		ContainerId: uuid.New().String(),
+		Cpu:         100,
+		Memory:      100,
+		Timestamp:   time.Now(),
+	}
+	setPendingSchedulerRequests(t, wb, request)
+
+	var events []types.EventComputeSchema
+	wb.pushComputeEvent = func(event types.EventComputeSchema) {
+		events = append(events, event)
+	}
+	workers, err := wb.workerRepo.GetAllWorkers()
+	assert.NoError(t, err)
+
+	wb.processRequestBatch([]*types.ContainerRequest{request}, workers)
+
+	assert.Len(t, events, 1)
+	if len(events) == 1 {
+		assert.Equal(t, types.EventComputeActionContainerPlaced, events[0].Action)
+		assert.Equal(t, request.ContainerId, events[0].ContainerID)
+		assert.Equal(t, worker.PoolName, events[0].PoolName)
+	}
+}
+
 func TestProcessRequestBatchSchedulesTinySandboxBurstByRequestedCapacity(t *testing.T) {
 	wb, err := NewSchedulerForTest()
 	assert.Nil(t, err)
@@ -1810,12 +1850,34 @@ func TestProcessRequestDefaultsGPUCountBeforeScheduling(t *testing.T) {
 	assert.Equal(t, uint32(0), updatedWorker.FreeGpuCount)
 }
 
+func schedulerReplicaForTest(source *Scheduler) *Scheduler {
+	return &Scheduler{
+		ctx:                       source.ctx,
+		config:                    source.config,
+		backendRepo:               source.backendRepo,
+		providerRepo:              source.providerRepo,
+		workerRepo:                source.workerRepo,
+		workerPoolRepo:            source.workerPoolRepo,
+		computeRepo:               source.computeRepo,
+		workerPoolManager:         source.workerPoolManager,
+		requestBacklog:            source.requestBacklog,
+		containerRepo:             source.containerRepo,
+		workspaceRepo:             source.workspaceRepo,
+		eventRepo:                 source.eventRepo,
+		schedulerUsageMetrics:     source.schedulerUsageMetrics,
+		eventBus:                  source.eventBus,
+		provisioning:              newProvisioningTracker(),
+		workerProvisioningBackoff: newWorkerProvisioningBackoff(),
+		credentials:               newSchedulerCredentialCache(),
+		pushComputeEvent:          source.pushComputeEvent,
+	}
+}
+
 func TestProcessRequestStaleReplicaGPUReservationRequeues(t *testing.T) {
 	firstScheduler, err := NewSchedulerForTest()
 	assert.Nil(t, err)
 
-	secondScheduler := *firstScheduler
-	secondScheduler.provisioning = newProvisioningTracker()
+	secondScheduler := schedulerReplicaForTest(firstScheduler)
 
 	worker := &types.Worker{
 		Id:            uuid.New().String(),
@@ -1897,8 +1959,7 @@ func TestProcessRequestConcurrentStaleReplicaGPUReservationRequeues(t *testing.T
 	firstScheduler, err := NewSchedulerForTest()
 	assert.Nil(t, err)
 
-	secondScheduler := *firstScheduler
-	secondScheduler.provisioning = newProvisioningTracker()
+	secondScheduler := schedulerReplicaForTest(firstScheduler)
 
 	worker := &types.Worker{
 		Id:            uuid.New().String(),

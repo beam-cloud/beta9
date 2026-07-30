@@ -12,13 +12,6 @@ import (
 )
 
 const (
-	// scoreFailoverStep is deducted once per position in a failover chain, so
-	// primary pools outrank the first failover pool, which outranks the
-	// second, and so on. It is deliberately far smaller than
-	// scoreAvailableWorker: an idle failover worker must beat a primary worker
-	// that is still booting, because capacity now beats capacity soon.
-	scoreFailoverStep int32 = 1
-
 	// failoverDemandTTL is how long a demand record survives without being
 	// rewritten. It spans several reconcile ticks, so a request that keeps
 	// failing to place keeps demand alive, while a request that places lets it
@@ -83,6 +76,13 @@ func (s *Scheduler) failoverChainFor(request *types.ContainerRequest) *failoverC
 		for _, poolName := range chain.Pools {
 			// A chain pool that no longer exists is skipped rather than
 			// failing the request: config and live pools drift independently.
+			if _, ok := s.workerPoolManager.GetPool(poolName); ok {
+				resolved.pools = append(resolved.pools, poolName)
+			}
+		}
+		// Append the managed on-demand pool as the final failover target.
+		if resolved.onDemand {
+			poolName := types.FailoverOnDemandPoolName(gpu)
 			if _, ok := s.workerPoolManager.GetPool(poolName); ok {
 				resolved.pools = append(resolved.pools, poolName)
 			}

@@ -261,9 +261,11 @@ func (s *Service) createPlanReservations(ctx context.Context, workspaceID string
 				BootstrapCommand:  bootstrapCommand,
 			})
 			if err != nil {
+				_ = s.revokeComputeJoinTokenHash(ctx, hashComputeToken(registrationToken))
 				return created, launchErrorProviderFailure, err
 			}
 			if reservation == nil {
+				_ = s.revokeComputeJoinTokenHash(ctx, hashComputeToken(registrationToken))
 				return created, launchErrorProviderFailure, fmt.Errorf("vendor returned empty reservation")
 			}
 			reservation.MachineID = firstNonEmpty(reservation.MachineID, machineID)

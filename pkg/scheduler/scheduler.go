@@ -257,17 +257,22 @@ func (s *Scheduler) ensureAgentPool(workspaceID string, state *compute.PoolState
 			reflect.DeepEqual(current.Config, config) {
 			return controller, nil
 		}
+		controller.close()
 	}
 
 	created, err := NewAgentWorkerPoolController(AgentWorkerPoolControllerOptions{
-		Context:     s.ctx,
-		Name:        selector,
-		WorkspaceID: workspaceID,
-		Config:      s.config,
-		WorkerPool:  config,
-		PoolState:   state,
-		WorkerRepo:  s.workerRepo,
-		ComputeRepo: s.computeRepo,
+		Context:        s.ctx,
+		Name:           selector,
+		WorkspaceID:    workspaceID,
+		Config:         s.config,
+		WorkerPool:     config,
+		PoolState:      state,
+		WorkerRepo:     s.workerRepo,
+		ComputeRepo:    s.computeRepo,
+		WorkerPoolRepo: s.workerPoolRepo,
+		ProviderRepo:   s.providerRepo,
+		ContainerRepo:  s.containerRepo,
+		PushMetrics:    s.pushComputeEvent,
 	})
 	if err != nil {
 		return nil, err
@@ -292,6 +297,7 @@ func (s *Scheduler) DeleteAgentPool(workspaceID string, state *compute.PoolState
 	if !ok || !controller.owns(workspaceID, selector, state) || controller.poolState.ManagementSource != "" {
 		return
 	}
+	controller.close()
 	s.workerPoolManager.DeletePool(key)
 }
 
@@ -315,6 +321,7 @@ func (s *Scheduler) DeleteManagedAgentPool(selector, instanceID string) {
 	if instanceID != "" && controller.poolState.ManagedInstanceID != instanceID {
 		return
 	}
+	controller.close()
 	s.workerPoolManager.DeletePool(selector)
 }
 
@@ -323,7 +330,7 @@ func normalizeAgentWorkerPoolConfig(state *compute.PoolState) types.WorkerPoolCo
 		config := *state.WorkerConfig
 		config.Mode = types.PoolModeExternal
 		config.Provider = nil
-		config.RequiresPoolSelector = false
+		config.RequiresPoolSelector = state.CreatedByTokenID == types.FailoverOnDemandPoolCreator
 		if config.ContainerRuntime == "" {
 			config.ContainerRuntime = types.ContainerRuntimeRunc.String()
 		}
@@ -580,11 +587,13 @@ func (s *Scheduler) getControllers(request *types.ContainerRequest) ([]WorkerPoo
 		}
 	}
 
+	chain := s.failoverChainFor(request)
+	// Re-add selector-bound pools only through the explicit failover chain.
+	controllers = filterControllersByFlags(controllers, request)
 	// Failover pools come last, so provisioning always tries the requested GPU
 	// type before widening.
-	controllers = append(controllers, s.failoverControllers(s.failoverChainFor(request), controllers)...)
-
-	controllers = filterControllersByFlags(controllers, request)
+	controllers = append(controllers, s.failoverControllers(chain, controllers)...)
+	controllers = filterControllersByFlagsForFailover(controllers, request, chain)
 	if len(controllers) == 0 {
 		return nil, errors.New("no controller found for request")
 	}
@@ -927,6 +936,10 @@ func isLocalBuildRegistry(buildRegistry string) bool {
 }
 
 func filterControllersByFlags(controllers []WorkerPoolController, request *types.ContainerRequest) []WorkerPoolController {
+	return filterControllersByFlagsForFailover(controllers, request, nil)
+}
+
+func filterControllersByFlagsForFailover(controllers []WorkerPoolController, request *types.ContainerRequest, chain *failoverChain) []WorkerPoolController {
 	filteredControllers := []WorkerPoolController{}
 
 	for _, controller := range controllers {
@@ -945,7 +958,7 @@ func filterControllersByFlags(controllers []WorkerPoolController, request *types
 		}
 
 		if (request.PoolSelector != "" && controller.Name() != request.PoolSelector) ||
-			(request.PoolSelector == "" && controller.RequiresPoolSelector()) {
+			(request.PoolSelector == "" && controller.RequiresPoolSelector() && !chain.contains(controller.Name())) {
 			continue
 		}
 
@@ -982,6 +995,10 @@ func filterWorkersByMachine(workers []*types.Worker, request *types.ContainerReq
 }
 
 func filterWorkersByPoolSelector(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
+	return filterWorkersByPoolSelectorForFailover(workers, request, nil)
+}
+
+func filterWorkersByPoolSelectorForFailover(workers []*types.Worker, request *types.ContainerRequest, chain *failoverChain) []*types.Worker {
 	if request.MachineId != "" {
 		// The machine pin already selected the worker; its pool may require a
 		// selector the request doesn't carry.
@@ -990,7 +1007,7 @@ func filterWorkersByPoolSelector(workers []*types.Worker, request *types.Contain
 	filteredWorkers := []*types.Worker{}
 	for _, worker := range workers {
 		if (request.PoolSelector != "" && workerPoolSelector(worker) == request.PoolSelector) ||
-			(request.PoolSelector == "" && !worker.RequiresPoolSelector) {
+			(request.PoolSelector == "" && (!worker.RequiresPoolSelector || chain.contains(workerPoolSelector(worker)))) {
 			filteredWorkers = append(filteredWorkers, worker)
 		}
 	}
@@ -1127,8 +1144,9 @@ func filterWorkersByStatus(workers []*types.Worker, statuses ...types.WorkerStat
 }
 
 type scoredWorker struct {
-	worker *types.Worker
-	score  int32
+	worker       *types.Worker
+	score        int32
+	failoverRank int32
 }
 
 // Constants used for scoring workers
@@ -1162,7 +1180,7 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 
 	filteredWorkers := filterWorkersByMachine(workers, request) // Machine-pinned requests only see their machine's worker
 	filteredWorkers = s.filterWorkersByWorkspaceScope(filteredWorkers, request)
-	filteredWorkers = filterWorkersByPoolSelector(filteredWorkers, request)
+	filteredWorkers = filterWorkersByPoolSelectorForFailover(filteredWorkers, request, chain)
 	filteredWorkers = s.filterAgentWorkersByStorage(filteredWorkers, request)
 	filteredWorkers = s.filterMarketplaceWorkers(filteredWorkers, request)
 	filteredWorkers = s.filterLivePrivateAgentWorkers(filteredWorkers, request)
@@ -1177,12 +1195,19 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 	// Score workers based on status and priority
 	scoredWorkers := []scoredWorker{}
 	for _, worker := range filteredWorkers {
-		score := scoreWorkerForRequest(worker, request, chain)
-		scoredWorkers = append(scoredWorkers, scoredWorker{worker: worker, score: score})
+		score := scoreWorkerForRequest(worker, request)
+		scoredWorkers = append(scoredWorkers, scoredWorker{
+			worker:       worker,
+			score:        score,
+			failoverRank: chain.rank(worker.PoolName),
+		})
 	}
 
-	// Select the worker with the highest score
+	// Chain rank takes precedence over pool priority.
 	sort.Slice(scoredWorkers, func(i, j int) bool {
+		if scoredWorkers[i].failoverRank != scoredWorkers[j].failoverRank {
+			return scoredWorkers[i].failoverRank < scoredWorkers[j].failoverRank
+		}
 		if scoredWorkers[i].score != scoredWorkers[j].score {
 			return scoredWorkers[i].score > scoredWorkers[j].score
 		}
@@ -1416,7 +1441,7 @@ func (s *Scheduler) filterLivePrivateAgentWorkers(workers []*types.Worker, reque
 	return filteredWorkers
 }
 
-func scoreWorkerForRequest(worker *types.Worker, request *types.ContainerRequest, chain *failoverChain) int32 {
+func scoreWorkerForRequest(worker *types.Worker, request *types.ContainerRequest) int32 {
 	score := worker.Priority
 	if worker.Status == types.WorkerStatusAvailable {
 		score += scoreAvailableWorker
@@ -1424,7 +1449,6 @@ func scoreWorkerForRequest(worker *types.Worker, request *types.ContainerRequest
 	if request.RequiresGPU() {
 		score -= int32(gpuPriorityModifier(request, worker.Gpu))
 	}
-	score -= chain.rank(worker.PoolName) * scoreFailoverStep
 	return score
 }
 

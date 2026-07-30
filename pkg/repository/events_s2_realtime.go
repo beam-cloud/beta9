@@ -464,6 +464,7 @@ func (b *poolMetricsBucket) point(bucketSize time.Duration) types.PoolMetricsPoi
 	for _, name := range names {
 		metric := types.PoolMetrics{PoolName: name}
 		var cpuWeighted, cpuWeight, memoryUsed, memoryTotal, diskUsed, diskTotal, hourlyCostCents float64
+		hourlyCostReported := false
 		for _, sample := range byPool[name] {
 			metric.WorkspaceID = sample.WorkspaceID
 			if sample.Action == types.EventComputeActionPoolHeartbeat {
@@ -485,7 +486,15 @@ func (b *poolMetricsBucket) point(bucketSize time.Duration) types.PoolMetricsPoi
 			memoryTotal += float64(sample.MemoryMB)
 			diskUsed += metricAttrFloat(sample.Attrs, types.EventComputeAttrDiskUsedMB)
 			diskTotal += metricAttrFloat(sample.Attrs, types.EventComputeAttrDiskTotalMB)
-			hourlyCostCents += metricAttrFloat(sample.Attrs, types.EventComputeAttrHourlyCostCents)
+			if _, ok := sample.Attrs[types.EventComputeAttrHourlyCostCents]; ok {
+				hourlyCostReported = true
+				hourlyCostCents += metricAttrFloat(sample.Attrs, types.EventComputeAttrHourlyCostCents)
+			}
+		}
+		if !hourlyCostReported {
+			if snapshot, ok := poolSnapshots[name]; ok {
+				hourlyCostCents = metricAttrFloat(snapshot.Attrs, types.EventComputeAttrHourlyCostCents)
+			}
 		}
 		if cpuWeight > 0 {
 			metric.CPUUtilizationPct = cpuWeighted / cpuWeight

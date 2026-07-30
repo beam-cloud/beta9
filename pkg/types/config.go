@@ -178,12 +178,12 @@ type ContainerCostHookConfig struct {
 }
 
 type GatewayServiceConfig struct {
-	Host                 string        `key:"host" json:"host"`
-	InvokeURLType        string        `key:"invokeURLType" json:"invoke_url_type"`
-	GRPC                 GRPCConfig    `key:"grpc" json:"grpc"`
-	HTTP                 HTTPConfig    `key:"http" json:"http"`
-	ShutdownTimeout      time.Duration `key:"shutdownTimeout" json:"shutdown_timeout"`
-	StubLimits           StubLimits    `key:"stubLimits" json:"stub_limits"`
+	Host            string        `key:"host" json:"host"`
+	InvokeURLType   string        `key:"invokeURLType" json:"invoke_url_type"`
+	GRPC            GRPCConfig    `key:"grpc" json:"grpc"`
+	HTTP            HTTPConfig    `key:"http" json:"http"`
+	ShutdownTimeout time.Duration `key:"shutdownTimeout" json:"shutdown_timeout"`
+	StubLimits      StubLimits    `key:"stubLimits" json:"stub_limits"`
 }
 
 type FileServiceConfig struct {
@@ -525,6 +525,9 @@ type FailoverConfig struct {
 	OnDemand OnDemandConfig `key:"onDemand" json:"on_demand"`
 }
 
+// FailoverOnDemandPoolCreator marks pools owned by the failover reconciler.
+const FailoverOnDemandPoolCreator = "scheduling.failover"
+
 // FailoverChain is the failover preference order for one GPU type. Pools
 // matching the requested GPU type are always preferred over any chain entry.
 type FailoverChain struct {
@@ -541,6 +544,13 @@ type FailoverOnDemandStep struct {
 	GPUs      []GpuType         `key:"gpus" json:"gpus"`
 	Providers []MachineProvider `key:"providers" json:"providers"`
 	MaxNodes  int               `key:"maxNodes" json:"max_nodes"`
+}
+
+const failoverOnDemandPoolPrefix = "ondemand-"
+
+// FailoverOnDemandPoolName returns the managed pool name for a GPU chain.
+func FailoverOnDemandPoolName(gpu string) string {
+	return failoverOnDemandPoolPrefix + strings.ToLower(strings.TrimSpace(gpu))
 }
 
 type FailoverHealthConfig struct {
@@ -586,13 +596,36 @@ func (c FailoverConfig) Validate(pools map[string]WorkerPoolConfig) error {
 		return nil
 	}
 
+	if c.Health.MaxPendingWorkers < 0 || c.Health.MaxSchedulingLatencyMs < 0 || c.Health.MinMachinesAvailable < 0 {
+		return fmt.Errorf("failover health thresholds cannot be negative")
+	}
+	if c.OnDemand.Budget.MaxHourlyCents < 0 || c.OnDemand.Budget.MaxDailyCents < 0 {
+		return fmt.Errorf("failover onDemand budgets cannot be negative")
+	}
+	if c.OnDemand.ScaleDownAfterIdle < 0 {
+		return fmt.Errorf("failover onDemand scaleDownAfterIdle cannot be negative")
+	}
+
+	chainNames := map[string]string{}
 	for gpu, chain := range c.Chains {
+		normalizedGPU := strings.ToUpper(strings.TrimSpace(gpu))
+		if normalizedGPU == "" {
+			return fmt.Errorf("failover chain GPU cannot be empty")
+		}
+		if previous, duplicate := chainNames[normalizedGPU]; duplicate {
+			return fmt.Errorf("failover chains %q and %q name the same GPU", previous, gpu)
+		}
+		chainNames[normalizedGPU] = gpu
+
 		if len(chain.Pools) == 0 && chain.OnDemand == nil {
 			return fmt.Errorf("failover chain %s has no pools and no onDemand step", gpu)
 		}
 
 		seen := map[string]bool{}
 		for _, poolName := range chain.Pools {
+			if strings.TrimSpace(poolName) == "" {
+				return fmt.Errorf("failover chain %s contains an empty pool name", gpu)
+			}
 			if seen[poolName] {
 				return fmt.Errorf("failover chain %s lists pool %q twice", gpu, poolName)
 			}
@@ -605,6 +638,15 @@ func (c FailoverConfig) Validate(pools map[string]WorkerPoolConfig) error {
 
 		if chain.OnDemand != nil && chain.OnDemand.MaxNodes <= 0 {
 			return fmt.Errorf("failover chain %s onDemand step requires maxNodes > 0", gpu)
+		}
+		if chain.OnDemand != nil {
+			poolName := FailoverOnDemandPoolName(gpu)
+			if seen[poolName] {
+				return fmt.Errorf("failover chain %s lists managed onDemand pool %q explicitly", gpu, poolName)
+			}
+			if _, conflict := pools[poolName]; conflict {
+				return fmt.Errorf("failover chain %s onDemand pool %q conflicts with a configured worker pool", gpu, poolName)
+			}
 		}
 	}
 

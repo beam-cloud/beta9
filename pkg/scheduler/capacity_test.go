@@ -22,6 +22,19 @@ func TestNormalizeManagedAgentPoolDoesNotRequireSelector(t *testing.T) {
 	assert.False(t, config.RequiresPoolSelector)
 }
 
+func TestNormalizeFailoverManagedAgentPoolRequiresSelector(t *testing.T) {
+	config := normalizeAgentWorkerPoolConfig(&compute.PoolState{
+		ManagementSource: types.WorkerPoolManagementSourceAPI,
+		CreatedByTokenID: types.FailoverOnDemandPoolCreator,
+		WorkerConfig: &types.WorkerPoolConfig{
+			Mode:    types.PoolModeExternal,
+			GPUType: "A10G",
+		},
+	})
+
+	assert.True(t, config.RequiresPoolSelector)
+}
+
 func TestHasManagedPoolForGPU(t *testing.T) {
 	manager := NewWorkerPoolManager()
 	manager.SetPool("beta9-t4", types.WorkerPoolConfig{GPUType: "T4"}, &LocalWorkerPoolControllerForTest{name: "beta9-t4"})

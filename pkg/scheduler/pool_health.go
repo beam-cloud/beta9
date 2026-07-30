@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -21,7 +22,6 @@ type PoolHealthMonitorOptions struct {
 	WorkerPoolRepo   repository.WorkerPoolRepository
 	ProviderRepo     repository.ProviderRepository
 	ContainerRepo    repository.ContainerRepository
-	EventRepo        repository.EventRepository
 	PushMetrics      func(types.EventComputeSchema)
 }
 
@@ -34,12 +34,7 @@ type PoolHealthMonitor struct {
 	workerPoolRepo   repository.WorkerPoolRepository
 	containerRepo    repository.ContainerRepository
 	providerRepo     repository.ProviderRepository
-	eventRepo        repository.EventRepository
 	pushMetrics      func(types.EventComputeSchema)
-
-	// lastSchedulable is the schedulability reported by the previous tick, so
-	// that only transitions are emitted. Nil until the first tick completes.
-	lastSchedulable *bool
 }
 
 func NewPoolHealthMonitor(opts PoolHealthMonitorOptions) *PoolHealthMonitor {
@@ -52,7 +47,6 @@ func NewPoolHealthMonitor(opts PoolHealthMonitorOptions) *PoolHealthMonitor {
 		containerRepo:    opts.ContainerRepo,
 		providerRepo:     opts.ProviderRepo,
 		workerPoolRepo:   opts.WorkerPoolRepo,
-		eventRepo:        opts.EventRepo,
 		pushMetrics:      opts.PushMetrics,
 	}
 }
@@ -72,10 +66,25 @@ func (p *PoolHealthMonitor) Start() {
 				}
 				defer p.workerPoolRepo.RemoveWorkerPoolStateLock(p.wpc.Name())
 
+				previousState, err := p.workerPoolRepo.GetWorkerPoolState(p.ctx, p.wpc.Name())
+				if err != nil {
+					var notFound *types.ErrWorkerPoolStateNotFound
+					if !errors.As(err, &notFound) {
+						log.Error().Str("pool_name", p.wpc.Name()).Err(err).Msg("failed to get previous pool state")
+						return
+					}
+					previousState = nil
+				}
+
 				poolState, workers, err := p.getPoolState()
 				if err != nil {
 					log.Error().Str("pool_name", p.wpc.Name()).Err(err).Msg("failed to get pool state")
 					return
+				}
+				schedulable, reasons := p.schedulability(poolState)
+				poolState.Status = types.WorkerPoolStatusDegraded
+				if schedulable {
+					poolState.Status = types.WorkerPoolStatusHealthy
 				}
 
 				err = p.workerPoolRepo.SetWorkerPoolState(p.ctx, p.wpc.Name(), poolState)
@@ -85,7 +94,7 @@ func (p *PoolHealthMonitor) Start() {
 				}
 				if p.pushMetrics != nil {
 					p.pushMetrics(poolMetricsEvent(p.wpc.Name(), p.workerPoolConfig, poolState, workers))
-					p.emitSchedulabilityTransition(poolState)
+					p.emitSchedulabilityTransition(previousState, schedulable, reasons)
 				}
 			}()
 		}
@@ -217,9 +226,7 @@ func (p *PoolHealthMonitor) getPoolState() (*types.WorkerPoolState, []*types.Wor
 	}, workers, nil
 }
 
-// schedulability reports whether a pool currently looks able to take new work,
-// along with the thresholds it violates. This is an observability signal only:
-// placement decisions are made from live worker capacity, never from here.
+// schedulability evaluates the configured pool-health thresholds.
 func (p *PoolHealthMonitor) schedulability(state *types.WorkerPoolState) (bool, []string) {
 	reasons := []string{}
 
@@ -238,12 +245,14 @@ func (p *PoolHealthMonitor) schedulability(state *types.WorkerPoolState) (bool, 
 	return len(reasons) == 0, reasons
 }
 
-func (p *PoolHealthMonitor) emitSchedulabilityTransition(state *types.WorkerPoolState) {
-	schedulable, reasons := p.schedulability(state)
-	if p.lastSchedulable != nil && *p.lastSchedulable == schedulable {
+func (p *PoolHealthMonitor) emitSchedulabilityTransition(previous *types.WorkerPoolState, schedulable bool, reasons []string) {
+	status := types.WorkerPoolStatusDegraded
+	if schedulable {
+		status = types.WorkerPoolStatusHealthy
+	}
+	if previous != nil && previous.Status == status {
 		return
 	}
-	p.lastSchedulable = &schedulable
 
 	action := types.EventComputeActionPoolUnschedulable
 	if schedulable {
@@ -265,11 +274,17 @@ func poolMetricsEvent(poolName string, config types.WorkerPoolConfig, state *typ
 	var totalGPU, freeGPU uint32
 	machines := map[string]struct{}{}
 	for _, worker := range workers {
-		if worker == nil || worker.Status != types.WorkerStatusAvailable {
+		if worker == nil {
 			continue
 		}
-		if id := firstNonEmpty(worker.MachineId, worker.Id); id != "" {
+		// Pending workers with machine IDs are already billable.
+		if id := worker.MachineId; id != "" {
 			machines[id] = struct{}{}
+		} else if worker.Status == types.WorkerStatusAvailable && worker.Id != "" {
+			machines[worker.Id] = struct{}{}
+		}
+		if worker.Status != types.WorkerStatusAvailable {
+			continue
 		}
 		totalCPU += max(worker.TotalCpu, 0)
 		freeCPU += max(worker.FreeCpu, 0)
@@ -285,7 +300,15 @@ func poolMetricsEvent(poolName string, config types.WorkerPoolConfig, state *typ
 		}
 		return float64(total-min(free, total)) / float64(total) * 100
 	}
-	hourlyCostCents := config.HourlyCostCents * int64(len(machines))
+	machineCount := int64(len(machines))
+	switch {
+	case (config.Mode == types.PoolModeExternal || config.Mode == types.PoolModePrivate) && config.Provider == nil:
+		machineCount = max(machineCount, state.RegisteredMachines)
+	case config.Mode == types.PoolModeExternal && config.Provider != nil:
+		tracked := state.RegisteredMachines + state.PendingMachines + state.ReadyMachines
+		machineCount = max(machineCount, tracked)
+	}
+	hourlyCostCents := config.HourlyCostCents * machineCount
 	return types.EventComputeSchema{
 		PoolName:     poolName,
 		Action:       types.EventComputeActionPoolHeartbeat,
@@ -293,7 +316,7 @@ func poolMetricsEvent(poolName string, config types.WorkerPoolConfig, state *typ
 		CPUCount:     uint32((totalCPU + 999) / 1000),
 		MemoryMB:     uint64(totalMemory),
 		GPUCount:     totalGPU,
-		MachineCount: uint32(len(machines)),
+		MachineCount: uint32(max(machineCount, 0)),
 		Attrs: map[string]string{
 			types.EventComputeAttrContainerCount:        fmt.Sprintf("%d", state.RunningContainers),
 			types.EventComputeAttrFreeGPUCount:          fmt.Sprintf("%d", freeGPU),

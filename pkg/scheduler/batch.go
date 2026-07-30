@@ -191,6 +191,11 @@ func (b *schedulingBatch) completeSchedule(schedule plannedSchedule, err error) 
 
 	duration := time.Since(schedule.request.Timestamp)
 	attempt.recordBacklogWait(true, "scheduled")
+	b.scheduler.emitContainerPlaced(
+		schedule.worker,
+		schedule.request,
+		b.scheduler.failoverChainFor(schedule.request),
+	)
 	metrics.RecordRequestSchedulingDuration(duration, schedule.request)
 	metrics.RecordSchedulerWorkerWait(duration, schedule.request, "scheduled")
 }

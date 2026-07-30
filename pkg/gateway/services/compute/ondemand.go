@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -14,13 +15,9 @@ import (
 )
 
 const (
-	// onDemandPoolPrefix names the managed pool that holds failover hardware
-	// for one GPU type, e.g. "ondemand-a10g".
-	onDemandPoolPrefix = "ondemand-"
-
 	// onDemandPoolCreator marks pools the failover system owns, distinguishing
 	// them from pools an operator created through the admin API.
-	onDemandPoolCreator = "scheduling.failover"
+	onDemandPoolCreator = types.FailoverOnDemandPoolCreator
 
 	// onDemandIdleReason is the termination reason recorded on scale-down.
 	onDemandIdleReason = "ondemand_idle"
@@ -43,7 +40,7 @@ const (
 // capacity is exhausted, within the cluster budget.
 func (s *Service) reconcileOnDemandFailover(ctx context.Context, now time.Time) error {
 	failover := s.appConfig.Scheduling.Failover
-	if !failover.Enabled || s.computeRepo == nil || s.managedPoolRepo == nil {
+	if s.computeRepo == nil || s.managedPoolRepo == nil {
 		return nil
 	}
 	gpus := onDemandGPUs(failover)
@@ -56,14 +53,16 @@ func (s *Service) reconcileOnDemandFailover(ctx context.Context, now time.Time) 
 		return err
 	}
 
-	demand, err := s.computeRepo.ListFailoverDemand(ctx)
-	if err != nil {
-		return err
-	}
 	demandByGPU := map[string]*model.FailoverDemand{}
-	for _, record := range demand {
-		if record != nil {
-			demandByGPU[strings.ToUpper(record.GPU)] = record
+	if failover.Enabled {
+		demand, err := s.computeRepo.ListFailoverDemand(ctx)
+		if err != nil {
+			return err
+		}
+		for _, record := range demand {
+			if record != nil {
+				demandByGPU[strings.ToUpper(record.GPU)] = record
+			}
 		}
 	}
 
@@ -88,7 +87,7 @@ func onDemandGPUs(failover types.FailoverConfig) []string {
 }
 
 func onDemandPoolName(gpu string) string {
-	return onDemandPoolPrefix + strings.ToLower(gpu)
+	return types.FailoverOnDemandPoolName(gpu)
 }
 
 // reconcileOnDemandPool runs the full lifecycle for one GPU type's pool under
@@ -102,7 +101,7 @@ func (s *Service) reconcileOnDemandPool(ctx context.Context, workspaceID, gpu st
 	poolName := onDemandPoolName(gpu)
 
 	return s.withManagedPoolStateLock(ctx, workspaceID, poolName, func(lockCtx context.Context) error {
-		state, err := s.onDemandPoolState(lockCtx, workspaceID, gpu, poolName, now)
+		state, err := s.onDemandPoolState(lockCtx, workspaceID, gpu, poolName, demand != nil, now)
 		if err != nil || state == nil {
 			return err
 		}
@@ -110,18 +109,16 @@ func (s *Service) reconcileOnDemandPool(ctx context.Context, workspaceID, gpu st
 		changed := s.recordOnDemandSpend(lockCtx, state, now)
 		changed = s.reclaimOnDemandMachines(lockCtx, workspaceID, state, failover, demand != nil, now) || changed
 
+		var launchedReservations []model.Reservation
 		if demand != nil {
+			reservationCount := len(state.Reservations)
 			launched, err := s.launchOnDemandCapacity(lockCtx, workspaceID, state, gpu, step, failover, now)
 			changed = launched || changed
+			if launched {
+				launchedReservations = append(launchedReservations, state.Reservations[reservationCount:]...)
+			}
 			if err != nil {
 				log.Warn().Err(err).Str("pool_name", poolName).Msg("failed to launch on-demand failover capacity")
-			}
-			if launched {
-				// Demand is satisfied for now; the scheduler rewrites the
-				// record if requests are still waiting after the machine boots.
-				if err := s.computeRepo.DeleteFailoverDemand(lockCtx, demand.GPU); err != nil {
-					log.Warn().Err(err).Str("gpu", demand.GPU).Msg("failed to clear on-demand demand record")
-				}
 			}
 		}
 
@@ -131,15 +128,32 @@ func (s *Service) reconcileOnDemandPool(ctx context.Context, workspaceID, gpu st
 		state.Reservations = pruneClosedOnDemandReservations(state.Reservations)
 		state.ReservedNodes = activeReservationNodes(state.Reservations, now)
 		state.UpdatedAt = now
-		return s.managedPoolRepo.SaveManagedPoolState(lockCtx, workspaceID, state)
+		if err := s.managedPoolRepo.SaveManagedPoolState(lockCtx, workspaceID, state); err != nil {
+			if failures := s.releaseReservations(lockCtx, s.computeVendors(), launchedReservations); len(failures) > 0 {
+				return fmt.Errorf("save on-demand pool state: %w; cleanup failed: %s", err, strings.Join(failures, "; "))
+			}
+			return fmt.Errorf("save on-demand pool state: %w", err)
+		}
+		if len(launchedReservations) > 0 {
+			for _, reservation := range launchedReservations {
+				s.emitOnDemandEvent(workspaceID, state, types.EventComputeActionOnDemandCreated, now, map[string]string{
+					types.EventComputeAttrGPU:             reservation.GPU,
+					types.EventComputeAttrRequestedGPU:    gpu,
+					types.EventComputeAttrProvider:        reservation.Provider,
+					types.EventComputeAttrNodeCount:       fmt.Sprintf("%d", max(reservation.NodeCount, 1)),
+					types.EventComputeAttrHourlyCostCents: fmt.Sprintf("%d", types.MicrosToCents(reservation.HourlyCostMicros)),
+				})
+			}
+			if err := s.computeRepo.DeleteFailoverDemand(lockCtx, demand.GPU); err != nil {
+				log.Warn().Err(err).Str("gpu", demand.GPU).Msg("failed to clear on-demand demand record")
+			}
+		}
+		return nil
 	})
 }
 
-// onDemandPoolState returns the managed pool that holds this GPU type's
-// failover hardware, creating it on first use. It is an ordinary
-// control-plane-managed pool, so its machines are schedulable by every
-// workspace exactly like configured serverless capacity.
-func (s *Service) onDemandPoolState(ctx context.Context, workspaceID, gpu, poolName string, now time.Time) (*model.PoolState, error) {
+// onDemandPoolState returns or creates the selector-bound pool for a GPU chain.
+func (s *Service) onDemandPoolState(ctx context.Context, workspaceID, gpu, poolName string, create bool, now time.Time) (*model.PoolState, error) {
 	existing, err := s.managedPoolRepo.GetManagedPoolState(ctx, workspaceID, poolName)
 	if err != nil {
 		return nil, err
@@ -148,7 +162,13 @@ func (s *Service) onDemandPoolState(ctx context.Context, workspaceID, gpu, poolN
 		if existing.ManagementSource != types.WorkerPoolManagementSourceAPI {
 			return nil, fmt.Errorf("pool %q is not control-plane managed", poolName)
 		}
+		if existing.CreatedByTokenID != onDemandPoolCreator {
+			return nil, fmt.Errorf("pool %q is not owned by scheduling.failover", poolName)
+		}
 		return existing, nil
+	}
+	if !create {
+		return nil, nil
 	}
 	if _, conflict := s.appConfig.Worker.Pools[poolName]; conflict {
 		return nil, fmt.Errorf("pool %q conflicts with a configured worker pool", poolName)
@@ -161,6 +181,7 @@ func (s *Service) onDemandPoolState(ctx context.Context, workspaceID, gpu, poolN
 	if err != nil {
 		return nil, err
 	}
+	config.RequiresPoolSelector = true
 	state := newManagedPoolState(workspaceID, poolName, types.WorkerPoolManagementSourceAPI, onDemandPoolCreator, config, now)
 	if err := s.managedPoolRepo.SaveManagedPoolState(ctx, workspaceID, state); err != nil {
 		return nil, err
@@ -184,16 +205,21 @@ func (s *Service) launchOnDemandCapacity(ctx context.Context, workspaceID string
 	}
 	// The headroom becomes the solver's and the vendor's spend ceiling, so an
 	// offer the budget cannot afford is never chosen in the first place.
-	headroomMicros := types.CentsToMicros(headroomCents)
+	maxSpendMicros := onDemandMaxSpendMicros(headroomCents, onDemandReservationTTL)
 
+	eligibleGPUs := onDemandStepGPUs(gpu, step)
+	if len(active) > 0 && state.WorkerConfig != nil && state.WorkerConfig.GPUType != "" {
+		// Keep all nodes in a managed pool on the same physical GPU.
+		eligibleGPUs = []string{state.WorkerConfig.GPUType}
+	}
 	pool := model.Pool{
 		Name:           state.Name,
 		Selector:       state.Name,
-		GPUs:           onDemandStepGPUs(gpu, step),
+		GPUs:           eligibleGPUs,
 		Nodes:          1,
 		TTL:            onDemandReservationTTL,
 		Providers:      onDemandStepProviders(step),
-		MaxSpendMicros: headroomMicros,
+		MaxSpendMicros: maxSpendMicros,
 	}
 	offers, err := s.collectPoolOffers(ctx, pool)
 	if err != nil {
@@ -214,14 +240,28 @@ func (s *Service) launchOnDemandCapacity(ctx context.Context, workspaceID string
 		Now:    now,
 	})
 	if !plan.Feasible {
+		if plan.Reason == "max spend would be exceeded" && failover.OnDemand.Budget.MaxHourlyCents > 0 {
+			s.emitOnDemandEvent(state.WorkspaceID, state, types.EventComputeActionOnDemandBudgetExhausted, now, map[string]string{
+				types.EventComputeAttrBudgetHourlyCents:    fmt.Sprintf("%d", failover.OnDemand.Budget.MaxHourlyCents-headroomCents),
+				types.EventComputeAttrBudgetHourlyMaxCents: fmt.Sprintf("%d", failover.OnDemand.Budget.MaxHourlyCents),
+			})
+			return false, nil
+		}
 		return false, fmt.Errorf("no compatible on-demand capacity: %s", plan.Reason)
+	}
+	actualGPU, err := onDemandPlanGPU(plan)
+	if err != nil {
+		return false, err
+	}
+	if err := s.setOnDemandPoolGPU(ctx, workspaceID, state, actualGPU, now); err != nil {
+		return false, err
 	}
 
 	created, code, err := s.createPlanReservations(ctx, workspaceID, plan, s.computeVendors(), poolLaunchSpec{
 		poolName:       state.Name,
 		selector:       state.Name,
 		ttl:            pool.TTL,
-		maxSpendMicros: headroomMicros,
+		maxSpendMicros: maxSpendMicros,
 		bootstrap: func(ctx context.Context, machineID string) (string, string, error) {
 			return s.onDemandJoinCommand(ctx, state, machineID)
 		},
@@ -240,16 +280,67 @@ func (s *Service) launchOnDemandCapacity(ctx context.Context, workspaceID string
 		created[i].BillingCursorAt = now
 	}
 	state.Reservations = append(state.Reservations, created...)
-
-	for _, reservation := range created {
-		s.emitOnDemandEvent(workspaceID, state, types.EventComputeActionOnDemandCreated, now, map[string]string{
-			types.EventComputeAttrGPU:             gpu,
-			types.EventComputeAttrProvider:        reservation.Provider,
-			types.EventComputeAttrNodeCount:       fmt.Sprintf("%d", max(reservation.NodeCount, 1)),
-			types.EventComputeAttrHourlyCostCents: fmt.Sprintf("%d", types.MicrosToCents(reservation.HourlyCostMicros)),
-		})
-	}
 	return true, nil
+}
+
+func onDemandPlanGPU(plan model.SolvePlan) (string, error) {
+	actualGPU := ""
+	for _, action := range plan.Actions {
+		if action.Type != model.ActionCreate || action.Count == 0 {
+			continue
+		}
+		gpu := strings.TrimSpace(action.Offer.GPU)
+		if gpu == "" {
+			return "", errors.New("on-demand offer has no GPU type")
+		}
+		if actualGPU != "" && !strings.EqualFold(actualGPU, gpu) {
+			return "", fmt.Errorf("on-demand plan mixes GPU types %q and %q", actualGPU, gpu)
+		}
+		actualGPU = gpu
+	}
+	if actualGPU == "" {
+		return "", errors.New("on-demand plan creates no GPU capacity")
+	}
+	return actualGPU, nil
+}
+
+// setOnDemandPoolGPU records the physical GPU before a vendor node can join.
+func (s *Service) setOnDemandPoolGPU(ctx context.Context, workspaceID string, state *model.PoolState, gpu string, now time.Time) error {
+	if state == nil || state.WorkerConfig == nil {
+		return errors.New("on-demand pool has no worker config")
+	}
+	if strings.EqualFold(state.WorkerConfig.GPUType, gpu) {
+		return nil
+	}
+	config := *state.WorkerConfig
+	config.GPUType = gpu
+	updated := managedPoolStateWithConfig(state, config)
+	updated.UpdatedAt = now
+	if err := s.managedPoolRepo.SaveManagedPoolState(ctx, workspaceID, updated); err != nil {
+		return fmt.Errorf("save on-demand pool hardware profile: %w", err)
+	}
+	*state = *updated
+	if s.scheduler != nil {
+		if err := s.scheduler.EnsureAgentPool(workspaceID, state); err != nil {
+			return fmt.Errorf("hydrate on-demand pool hardware profile: %w", err)
+		}
+	}
+	return nil
+}
+
+// onDemandMaxSpendMicros converts hourly headroom to the reservation TTL.
+func onDemandMaxSpendMicros(hourlyCents int64, ttl time.Duration) int64 {
+	if hourlyCents <= 0 {
+		return 0
+	}
+	hours := model.WholeHours(ttl)
+	if hours <= 0 {
+		hours = 1
+	}
+	if hourlyCents > math.MaxInt64/types.MicrosPerCent/hours {
+		return math.MaxInt64
+	}
+	return types.CentsToMicros(hourlyCents) * hours
 }
 
 // onDemandJoinCommand mints the same persistent managed-pool join token an
@@ -326,7 +417,7 @@ func (s *Service) onDemandHourlyCents(ctx context.Context, now time.Time) (int64
 
 	micros := int64(0)
 	for _, state := range states {
-		if state == nil || !strings.HasPrefix(state.Name, onDemandPoolPrefix) {
+		if state == nil || state.CreatedByTokenID != onDemandPoolCreator {
 			continue
 		}
 		for _, reservation := range activeOnDemandReservations(state, now) {
@@ -350,7 +441,7 @@ func (s *Service) recordOnDemandSpend(ctx context.Context, state *model.PoolStat
 			start = reservation.CreatedAt
 		}
 		end := now
-		if !reservation.ActiveAt(now) {
+		if reservationClosed(reservation.Status) {
 			// A closed reservation stops accruing at its expiry.
 			if reservation.ExpiresAt.IsZero() || reservation.ExpiresAt.After(now) {
 				continue
@@ -385,7 +476,17 @@ func (s *Service) reclaimOnDemandMachines(ctx context.Context, workspaceID strin
 	changed := false
 	for i := range state.Reservations {
 		reservation := &state.Reservations[i]
-		if !reservation.Managed() || reservation.Status != model.ReservationActive {
+		if !reservation.Managed() || reservationClosed(reservation.Status) {
+			continue
+		}
+		if reservation.Status == model.ReservationTerminating {
+			if !reservation.LastReconcileAt.IsZero() && now.Sub(reservation.LastReconcileAt) < reconcileStatusCheckInterval {
+				continue
+			}
+			reservation.LastReconcileAt = now
+			reason := firstNonEmpty(reservation.TerminatingReason, "terminating")
+			message := firstNonEmpty(reservation.LastStatusMessage, "on-demand failover reservation terminating")
+			changed = s.terminateOnDemandReservation(ctx, workspaceID, state, reservation, vendors, reason, message, now) || changed
 			continue
 		}
 
@@ -420,6 +521,10 @@ func (s *Service) reclaimOnDemandMachines(ctx context.Context, workspaceID strin
 func (s *Service) terminateOnDemandReservation(ctx context.Context, workspaceID string, state *model.PoolState, reservation *model.Reservation, vendors map[string]model.Vendor, reason, message string, now time.Time) bool {
 	if !s.terminateReservation(ctx, workspaceID, state, reservation, vendors, reason, message) {
 		return false
+	}
+	if reservation.Status == model.ReservationTerminating {
+		reservation.LastStatusMessage = message
+		return true
 	}
 
 	s.releaseOnDemandMachine(ctx, workspaceID, state.Name, reservation.MachineID)
@@ -469,7 +574,8 @@ func (s *Service) onDemandMachineBusy(ctx context.Context, workspaceID, poolName
 func activeOnDemandReservations(state *model.PoolState, now time.Time) []model.Reservation {
 	active := make([]model.Reservation, 0, len(state.Reservations))
 	for _, reservation := range state.Reservations {
-		if reservation.Managed() && reservation.ActiveAt(now) {
+		if reservation.Managed() && !reservationClosed(reservation.Status) &&
+			(reservation.ExpiresAt.IsZero() || reservation.ExpiresAt.After(now)) {
 			active = append(active, reservation)
 		}
 	}
@@ -481,7 +587,7 @@ func activeOnDemandReservations(state *model.PoolState, now time.Time) []model.R
 func pruneClosedOnDemandReservations(reservations []model.Reservation) []model.Reservation {
 	kept := make([]model.Reservation, 0, len(reservations))
 	for _, reservation := range reservations {
-		if reservation.Status == model.ReservationDeleted && reservation.LastError == "" {
+		if reservationClosed(reservation.Status) && reservation.LastError == "" {
 			continue
 		}
 		kept = append(kept, reservation)

@@ -78,7 +78,6 @@ func NewLocalKubernetesWorkerPoolController(opts WorkerPoolControllerOptions) (W
 		ProviderRepo:     opts.ProviderRepo,
 		WorkerPoolRepo:   wpc.workerPoolRepo,
 		ContainerRepo:    wpc.containerRepo,
-		EventRepo:        opts.EventRepo,
 		PushMetrics:      opts.PushPoolMetrics,
 	})
 	if err != nil {

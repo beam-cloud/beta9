@@ -110,7 +110,6 @@ func NewProviderWorkerPoolController(opts WorkerPoolControllerOptions) (WorkerPo
 		ProviderRepo:     wpc.providerRepo,
 		WorkerPoolRepo:   wpc.workerPoolRepo,
 		ContainerRepo:    wpc.containerRepo,
-		EventRepo:        wpc.eventRepo,
 		PushMetrics:      opts.PushPoolMetrics,
 	})
 	if err != nil {

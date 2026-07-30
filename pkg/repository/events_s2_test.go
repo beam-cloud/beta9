@@ -1494,6 +1494,40 @@ func TestPoolMetricsBucketAggregatesLatestMachineState(t *testing.T) {
 	}
 }
 
+func TestPoolMetricsBucketFallsBackToPoolCost(t *testing.T) {
+	bucket := &poolMetricsBucket{key: 1_000, samples: map[string]types.EventComputeSchema{
+		"pool-a\x00": {
+			WorkspaceID:  "workspace-1",
+			PoolName:     "pool-a",
+			Action:       types.EventComputeActionPoolHeartbeat,
+			MachineCount: 1,
+			Attrs: map[string]string{
+				types.EventComputeAttrHourlyCostCents: "80",
+			},
+		},
+		"pool-a\x00machine-1": {
+			WorkspaceID: "workspace-1",
+			PoolName:    "pool-a",
+			MachineID:   "machine-1",
+			GPUCount:    1,
+			Attrs: map[string]string{
+				types.EventComputeAttrFreeGPUCount: "1",
+			},
+		},
+	}}
+
+	metrics := bucket.point(time.Hour).Pools
+	if len(metrics) != 1 {
+		t.Fatalf("pool count = %d, want 1", len(metrics))
+	}
+	if got, want := metrics[0].HourlyCost, 0.8; got != want {
+		t.Fatalf("hourly cost = %v, want %v: %+v", got, want, metrics[0])
+	}
+	if got, want := metrics[0].EstimatedCost, 0.8; got != want {
+		t.Fatalf("estimated cost = %v, want %v: %+v", got, want, metrics[0])
+	}
+}
+
 func TestEventQueryAllowsType(t *testing.T) {
 	query := types.EventQuery{EventTypes: []string{types.EventContainerEvent, types.EventTaskUpdated}}
 

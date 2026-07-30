@@ -664,10 +664,12 @@ func (r *ComputeRedisRepository) RecordOnDemandSpend(ctx context.Context, at tim
 		return nil
 	}
 	key := common.RedisKeys.ComputeOnDemandSpend(at.UTC().Format(onDemandSpendBucketFormat))
-	if err := r.rdb.IncrByFloat(ctx, key, cents).Err(); err != nil {
-		return err
-	}
-	return r.rdb.Expire(ctx, key, onDemandSpendBucketTTL).Err()
+	_, err := r.rdb.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+		pipe.IncrByFloat(ctx, key, cents)
+		pipe.Expire(ctx, key, onDemandSpendBucketTTL)
+		return nil
+	})
+	return err
 }
 
 // OnDemandSpendCents sums the hourly buckets covering the trailing window.
