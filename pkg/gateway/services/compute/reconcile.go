@@ -684,6 +684,9 @@ func (s *Service) reconcileReservationStatus(ctx context.Context, workspaceID st
 	changed := reservation.Status != current.Status ||
 		reservation.LastStatusMessage != current.LastStatusMessage ||
 		reservation.MachineID != current.MachineID ||
+		(current.PublicIP != "" && reservation.PublicIP != current.PublicIP) ||
+		(current.SSHHost != "" && reservation.SSHHost != current.SSHHost) ||
+		(current.SSHPort != 0 && reservation.SSHPort != current.SSHPort) ||
 		(current.Cloud != "" && reservation.Cloud != current.Cloud) ||
 		(current.Region != "" && reservation.Region != current.Region) ||
 		reservation.ExpiresAt != current.ExpiresAt
@@ -697,6 +700,19 @@ func (s *Service) reconcileReservationStatus(ctx context.Context, workspaceID st
 	reservation.LastStatusMessage = current.LastStatusMessage
 	if current.MachineID != "" {
 		reservation.MachineID = current.MachineID
+	}
+	if current.PublicIP != "" {
+		reservation.PublicIP = current.PublicIP
+	}
+	if current.SSHHost != "" {
+		reservation.SSHHost = current.SSHHost
+	}
+	if current.SSHPort != 0 {
+		reservation.SSHPort = current.SSHPort
+	}
+	if err := s.updateMachineSSHProviderEndpoint(ctx, workspaceID, state.Name, reservation.MachineID, current.PublicIP, current.SSHHost, current.SSHPort); err != nil {
+		reservation.LastError = fmt.Sprintf("update SSH endpoint: %v", err)
+		return true
 	}
 	if !current.ExpiresAt.IsZero() {
 		reservation.ExpiresAt = current.ExpiresAt
@@ -725,6 +741,10 @@ func (s *Service) reconcileClosedReservationMachine(ctx context.Context, workspa
 		return true
 	}
 	if machine == nil {
+		if err := s.computeRepo.DeleteMachineSSHState(ctx, workspaceID, state.Name, reservation.MachineID); err != nil {
+			reservation.LastError = err.Error()
+			return true
+		}
 		return false
 	}
 	if err := s.removePrivateMachine(ctx, machine); err != nil {
@@ -783,6 +803,11 @@ func (s *Service) terminateReservation(ctx context.Context, workspaceID string, 
 	reservation.TerminatingReason = reason
 	reservation.LastStatusMessage = message
 	reservation.LastError = ""
+	if reservation.MachineID != "" {
+		if err := s.computeRepo.DeleteMachineSSHState(ctx, workspaceID, state.Name, reservation.MachineID); err != nil {
+			reservation.LastError = fmt.Sprintf("delete SSH state: %v", err)
+		}
+	}
 	s.emitComputeEvent(types.EventComputePool, computeReservationEvent(workspaceID, state, *reservation, types.EventComputeActionReservationTerminating, reason))
 	return true
 }

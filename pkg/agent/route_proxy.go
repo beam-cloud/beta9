@@ -48,6 +48,7 @@ func newRouteProxy(client pb.GatewayServiceClient, agentToken string, listener n
 		readinessPending: map[string]string{},
 		failureCounts:    map[string]int{},
 		statusSlots:      make(chan struct{}, routeStatusConcurrency),
+		hostSSH:          newHostSSHManager(client, agentToken, stderr),
 	}
 }
 
@@ -72,6 +73,7 @@ type routeProxy struct {
 	// routeID -> consecutive local dial failures.
 	failureCounts map[string]int
 	statusSlots   chan struct{}
+	hostSSH       *hostSSHManager
 }
 
 func (p *routeProxy) run(ctx context.Context) error {
@@ -138,6 +140,9 @@ func (p *routeProxy) watchRoutesOnce(ctx context.Context) error {
 			if err := p.workers.reconcile(ctx, msg.Slots); err != nil {
 				fmt.Fprintf(p.stderr, "worker slot reconcile failed: %v\n", err)
 			}
+		}
+		if p.hostSSH != nil && msg.Ssh != nil {
+			p.hostSSH.reconcile(ctx, msg.Ssh)
 		}
 	}
 }

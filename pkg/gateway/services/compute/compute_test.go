@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -4985,6 +4986,8 @@ type fakeComputeRepo struct {
 	joinTokens map[string]*model.JoinTokenState
 	listings   map[string][]*model.MarketplaceListingState
 	rentals    map[string][]*model.MarketplaceRentalState
+	sshStates  map[string]*model.MachineSSHState
+	sshMu      sync.Mutex
 	demand     map[string]*model.FailoverDemand
 	spendCents float64
 	savedPool  bool
@@ -5092,6 +5095,33 @@ func (r *fakeComputeRepo) WithPoolStateLock(ctx context.Context, workspaceID, na
 
 func (r *fakeComputeRepo) PruneAgentMachineIndex(ctx context.Context, workspaceID, poolName string) error {
 	return nil
+}
+
+func (r *fakeComputeRepo) WithMachineSSHStateLock(ctx context.Context, workspaceID, poolName, machineID string, fn func(context.Context) error) error {
+	r.sshMu.Lock()
+	defer r.sshMu.Unlock()
+	return fn(ctx)
+}
+
+func (r *fakeComputeRepo) SaveMachineSSHState(ctx context.Context, state *model.MachineSSHState) error {
+	if r.sshStates == nil {
+		r.sshStates = map[string]*model.MachineSSHState{}
+	}
+	r.sshStates[fakeComputeSSHKey(state.WorkspaceID, state.PoolName, state.MachineID)] = state
+	return nil
+}
+
+func (r *fakeComputeRepo) GetMachineSSHState(ctx context.Context, workspaceID, poolName, machineID string) (*model.MachineSSHState, error) {
+	return r.sshStates[fakeComputeSSHKey(workspaceID, poolName, machineID)], nil
+}
+
+func (r *fakeComputeRepo) DeleteMachineSSHState(ctx context.Context, workspaceID, poolName, machineID string) error {
+	delete(r.sshStates, fakeComputeSSHKey(workspaceID, poolName, machineID))
+	return nil
+}
+
+func fakeComputeSSHKey(workspaceID, poolName, machineID string) string {
+	return workspaceID + "\x00" + poolName + "\x00" + machineID
 }
 
 func (r *fakeComputeRepo) SavePoolState(ctx context.Context, workspaceID string, state *model.PoolState) error {

@@ -152,6 +152,9 @@ func join(ctx context.Context, client *Client, opts types.AgentJoinOptions) (*jo
 		ContainerStartConcurrency: capacity.ContainerStartConcurrency,
 		WorkerImage:               strings.TrimSpace(opts.WorkerImage),
 	}
+	if runtime.GOOS == "linux" {
+		req.Capabilities = []string{compute.AgentCapabilityManagedHostSSHV1}
+	}
 
 	res := joinResponse{}
 	if err := client.http.Do(ctx, http.MethodPost, "/api/v1/gateway/agent/join", req, &res); err != nil {

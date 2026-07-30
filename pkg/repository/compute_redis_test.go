@@ -2,11 +2,73 @@ package repository
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/compute"
 )
+
+func TestComputeMachineSSHStateStorageAndLock(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := NewComputeRedisRepository(rdb)
+	ctx := context.Background()
+	state := &compute.MachineSSHState{
+		WorkspaceID:               "workspace-one",
+		PoolName:                  "pool-one",
+		MachineID:                 "machine-one",
+		Username:                  "beam",
+		ActivePublicKey:           "ssh-ed25519 public",
+		ActivePrivateKeyEncrypted: "ciphertext-only",
+		ActiveFingerprint:         "SHA256:key",
+		ActiveGeneration:          1,
+	}
+	if err := repo.SaveMachineSSHState(ctx, state); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := repo.GetMachineSSHState(ctx, state.WorkspaceID, state.PoolName, state.MachineID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored == nil || stored.ActivePrivateKeyEncrypted != "ciphertext-only" {
+		t.Fatalf("stored SSH state = %#v", stored)
+	}
+
+	var inside atomic.Int32
+	var maxInside atomic.Int32
+	done := make(chan error, 2)
+	for range 2 {
+		go func() {
+			done <- repo.WithMachineSSHStateLock(ctx, state.WorkspaceID, state.PoolName, state.MachineID, func(context.Context) error {
+				current := inside.Add(1)
+				if current > maxInside.Load() {
+					maxInside.Store(current)
+				}
+				time.Sleep(20 * time.Millisecond)
+				inside.Add(-1)
+				return nil
+			})
+		}()
+	}
+	for range 2 {
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := maxInside.Load(); got != 1 {
+		t.Fatalf("concurrent SSH lock entrants = %d, want 1", got)
+	}
+	if err := repo.DeleteMachineSSHState(ctx, state.WorkspaceID, state.PoolName, state.MachineID); err != nil {
+		t.Fatal(err)
+	}
+	stored, err = repo.GetMachineSSHState(ctx, state.WorkspaceID, state.PoolName, state.MachineID)
+	if err != nil || stored != nil {
+		t.Fatalf("SSH state after delete = %#v, %v", stored, err)
+	}
+}
 
 func TestComputeAgentStateIndexesMachinesAndWorkers(t *testing.T) {
 	rdb, err := NewRedisClientForTest()

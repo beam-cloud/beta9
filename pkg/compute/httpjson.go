@@ -88,6 +88,14 @@ func jsonInt64(m map[string]any, keys ...string) int64 {
 	return jsonLookup(m, keys, jsonInt64Value)
 }
 
+func jsonPort(m map[string]any, keys ...string) uint32 {
+	value := jsonInt64(m, keys...)
+	if value <= 0 || value > 65535 {
+		return 0
+	}
+	return uint32(value)
+}
+
 func jsonFloat64(m map[string]any, keys ...string) float64 {
 	return jsonLookup(m, keys, jsonFloat64Value)
 }

@@ -18,6 +18,7 @@ type joinRequest struct {
 	NetworkSlotPoolSize       uint32   `json:"networkSlotPoolSize"`
 	ContainerStartConcurrency uint32   `json:"containerStartConcurrency"`
 	WorkerImage               string   `json:"workerImage,omitempty"`
+	Capabilities              []string `json:"capabilities,omitempty"`
 }
 
 type joinResponse struct {

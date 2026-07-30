@@ -849,11 +849,16 @@ type ManagedComputeConfig struct {
 	BillableMarginPct *float64                    `key:"billableMarginPct" json:"billable_margin_pct"`
 	Billing           ManagedComputeBillingConfig `key:"billing" json:"billing"`
 	BYOC              ManagedComputeBYOCConfig    `key:"byoc" json:"byoc"`
+	SSH               ManagedComputeSSHConfig     `key:"ssh" json:"ssh"`
 	// Marketplace identity of the machine this worker runs on, set by the
 	// agent in the generated worker config. Buyer usage on the worker is
 	// billed against this listing.
 	MarketplaceListingID string `key:"marketplaceListingID" json:"marketplace_listing_id"`
 	SellerWorkspaceID    string `key:"sellerWorkspaceID" json:"seller_workspace_id"`
+}
+
+type ManagedComputeSSHConfig struct {
+	Enabled bool `key:"enabled" json:"enabled"`
 }
 
 func (c ManagedComputeConfig) BillableMarginPctOrDefault() float64 {

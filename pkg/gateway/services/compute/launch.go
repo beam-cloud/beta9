@@ -157,6 +157,13 @@ func (s *Service) launchPoolCapacityLocked(ctx context.Context, workspaceID, act
 		err = s.compensatePoolLaunchFailure(ctx, workspaceID, pool.Name, existing, vendors, createdReservations, err)
 		return launchPoolError(code, err.Error(), billingDecision{}), nil
 	}
+	for i := range createdReservations {
+		reservation := &createdReservations[i]
+		if err := s.createMachineSSHState(ctx, workspaceID, pool.Name, reservation.MachineID, reservation); err != nil {
+			err = s.compensatePoolLaunchFailure(ctx, workspaceID, pool.Name, existing, vendors, createdReservations, err)
+			return launchPoolError("ssh_bootstrap_failed", err.Error(), billingDecision{}), nil
+		}
+	}
 	newReservations := append(append([]model.Reservation{}, reservations...), createdReservations...)
 
 	now := time.Now()
@@ -471,6 +478,13 @@ func launchPoolError(code, msg string, decision billingDecision) *pb.LaunchPoolC
 
 func (s *Service) compensatePoolLaunchFailure(ctx context.Context, workspaceID, poolName string, previous *model.PoolState, vendors map[string]model.Vendor, reservations []model.Reservation, cause error) error {
 	failures := s.releaseReservations(ctx, vendors, reservations)
+	for _, reservation := range reservations {
+		if reservation.MachineID != "" && s.computeRepo != nil {
+			if err := s.computeRepo.DeleteMachineSSHState(ctx, workspaceID, poolName, reservation.MachineID); err != nil {
+				failures = append(failures, fmt.Sprintf("delete SSH state for %q: %v", reservation.MachineID, err))
+			}
+		}
+	}
 
 	if err := s.rollbackPoolState(ctx, workspaceID, poolName, previous, nil); err != nil {
 		failures = append(failures, fmt.Sprintf("restore pool state: %v", err))

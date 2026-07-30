@@ -63,3 +63,24 @@ func TestCreateReservationConfiguresVastOnstart(t *testing.T) {
 	require.Equal(t, "beam-workspace-training-machine-123", reservation.Name)
 	require.Contains(t, body["onstart"], "--join-token token")
 }
+
+func TestGetReservationPreservesVastMappedSSHEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/instances/instance-123/", r.URL.Path)
+		_, _ = w.Write([]byte(`{
+			"id":"instance-123",
+			"gpu_name":"H100",
+			"num_gpus":1,
+			"public_ipaddr":"198.51.100.10",
+			"ssh_host":"ssh4.vast.ai",
+			"ssh_port":24567
+		}`))
+	}))
+	defer server.Close()
+
+	reservation, err := NewVast(VastConfig{APIKey: "test-key", BaseURL: server.URL}).GetReservation(context.Background(), "instance-123")
+	require.NoError(t, err)
+	require.Equal(t, "198.51.100.10", reservation.PublicIP)
+	require.Equal(t, "ssh4.vast.ai", reservation.SSHHost)
+	require.Equal(t, uint32(24567), reservation.SSHPort)
+}

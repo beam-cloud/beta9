@@ -154,6 +154,9 @@ func (c *ShadeformClient) CreateReservation(ctx context.Context, req Reservation
 		CreatedAt:        now,
 		ExpiresAt:        now.Add(req.TTL),
 		BillingRenewalAt: now.Add(time.Hour),
+		PublicIP:         jsonString(raw, "ip", "public_ip"),
+		SSHHost:          jsonString(raw, "ssh_host", "ip", "public_ip", "dns"),
+		SSHPort:          jsonPort(raw, "ssh_port"),
 	}, nil
 }
 
@@ -180,6 +183,9 @@ func (c *ShadeformClient) GetReservation(ctx context.Context, id string) (*Reser
 		Status:           shadeformReservationStatus(jsonString(raw, "status")),
 		// e.g. "Running startup script..." while the node boots
 		LastStatusMessage: jsonString(raw, "status_details"),
+		PublicIP:          jsonString(raw, "ip", "public_ip"),
+		SSHHost:           jsonString(raw, "ssh_host", "ip", "public_ip", "dns"),
+		SSHPort:           jsonPort(raw, "ssh_port"),
 	}, nil
 }
 

@@ -95,6 +95,7 @@ func (s *Service) JoinAgent(ctx context.Context, in *pb.JoinAgentRequest) (*pb.J
 		NetworkSlotPoolSize:       in.NetworkSlotPoolSize,
 		ContainerStartConcurrency: in.ContainerStartConcurrency,
 		WorkerImageOverride:       workerImageOverride,
+		Capabilities:              append([]string(nil), in.Capabilities...),
 		Schedulable:               in.Schedulable,
 		Preflight:                 preflightChecksFromProto(in.Preflight),
 		CreatedAt:                 now,
@@ -203,6 +204,9 @@ func (s *Service) commitPrivateAgentJoin(ctx context.Context, token *model.JoinT
 			return err
 		}
 		if err := s.assignManagedReservationToMachineLocked(lockCtx, pool, token, agent); err != nil {
+			return errors.Join(err, s.computeRepo.DeleteAgentMachineState(lockCtx, agent.WorkspaceID, agent.PoolName, agent.MachineID))
+		}
+		if err := s.ensureMachineSSHStateForJoin(lockCtx, pool, agent); err != nil {
 			return errors.Join(err, s.computeRepo.DeleteAgentMachineState(lockCtx, agent.WorkspaceID, agent.PoolName, agent.MachineID))
 		}
 		if err := s.ensureAgentMachine(lockCtx, agent, pool); err != nil {
@@ -392,7 +396,11 @@ func (s *Service) StreamAgent(in *pb.StreamAgentRequest, stream pb.GatewayServic
 		if err != nil {
 			return err
 		}
-		return stream.Send(&pb.StreamAgentResponse{Ok: true, Routes: routes, Slots: slots})
+		sshConfig, err := s.agentSSHConfig(ctx, agentState)
+		if err != nil {
+			return err
+		}
+		return stream.Send(&pb.StreamAgentResponse{Ok: true, Routes: routes, Slots: slots, Ssh: sshConfig})
 	}
 
 	// Subscribe before the initial snapshot so a route registration cannot be

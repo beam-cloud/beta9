@@ -44,6 +44,7 @@ func NewAuthInterceptor(config types.AppConfig, backendRepo repository.BackendRe
 			pb.GatewayService_StreamAgent_FullMethodName:                     true,
 			pb.GatewayService_StreamAgentTelemetry_FullMethodName:            true,
 			pb.GatewayService_UpdateAgentRouteStatus_FullMethodName:          true,
+			pb.GatewayService_UpdateAgentSSHStatus_FullMethodName:            true,
 			// Marketplace browse is public: offers expose only what the authed UI
 			// already shows (listing id, seller workspace external id, GPU specs) —
 			// no join tokens or machine internals. Seller/management RPCs stay

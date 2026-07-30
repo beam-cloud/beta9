@@ -153,6 +153,9 @@ func (c *VastClient) GetReservation(ctx context.Context, id string) (*Reservatio
 		MemoryMB:         offer.MemoryMB,
 		HourlyCostMicros: offer.HourlyCostMicros,
 		Status:           ReservationActive,
+		PublicIP:         jsonString(raw, "public_ipaddr", "public_ip"),
+		SSHHost:          jsonString(raw, "ssh_host"),
+		SSHPort:          jsonPort(raw, "ssh_port"),
 	}, nil
 }
 

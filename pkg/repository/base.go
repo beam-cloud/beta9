@@ -124,6 +124,10 @@ type ComputeRepository interface {
 	ListAgentTokenStates(ctx context.Context, workspaceID, poolName string) ([]*compute.AgentTokenState, error)
 	DeleteAgentMachineState(ctx context.Context, workspaceID, poolName, machineID string) error
 	PruneAgentMachineIndex(ctx context.Context, workspaceID, poolName string) error
+	WithMachineSSHStateLock(ctx context.Context, workspaceID, poolName, machineID string, fn func(context.Context) error) error
+	SaveMachineSSHState(ctx context.Context, state *compute.MachineSSHState) error
+	GetMachineSSHState(ctx context.Context, workspaceID, poolName, machineID string) (*compute.MachineSSHState, error)
+	DeleteMachineSSHState(ctx context.Context, workspaceID, poolName, machineID string) error
 	SaveAgentWorkerSlotState(ctx context.Context, state *compute.AgentWorkerSlotState) error
 	ListAgentWorkerSlotStates(ctx context.Context, workspaceID, poolName, machineID string) ([]*compute.AgentWorkerSlotState, error)
 	DeleteAgentWorkerSlotState(ctx context.Context, workspaceID, poolName, machineID, workerID string) error
