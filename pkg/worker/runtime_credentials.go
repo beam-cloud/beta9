@@ -15,6 +15,8 @@ func (s *Worker) hydrateRuntimeCredentials(ctx context.Context, request *types.C
 		return s.hydrateBuildWorkspaceStorageCredentials(ctx, request)
 	}
 
+	// Credential hydration follows the request, not the worker mode. Private
+	// requests may be reassigned to serverless capacity after sanitization.
 	credentialRequest := runtimeCredentialsRequest(request)
 	if !hasRuntimeCredentialRequest(credentialRequest) {
 		return nil
