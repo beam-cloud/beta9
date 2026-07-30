@@ -29,8 +29,8 @@ const (
 	// 4. Wait up to 30s for dockerd to be ready (usually takes 2-5s)
 	goprocReadyTimeout            = 30 * time.Second
 	goprocReadyProbeTimeout       = 50 * time.Millisecond
-	goprocInitialBackoff          = 10 * time.Millisecond
-	goprocMaxBackoff              = 50 * time.Millisecond
+	goprocInitialBackoff          = 5 * time.Millisecond
+	goprocMaxBackoff              = 15 * time.Millisecond
 	goprocBackoffMultiplier       = 1.5
 	sandboxSetupCommandTimeout    = 10 * time.Second
 	dockerDaemonStartupTimeout    = 30 * time.Second
