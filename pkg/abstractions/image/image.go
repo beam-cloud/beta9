@@ -62,7 +62,7 @@ func NewContainerImageService(
 		builder:          builder,
 		config:           opts.Config,
 		backendRepo:      opts.BackendRepo,
-		baseImageDigests: newBaseImageDigestCache(),
+		baseImageDigests: newBaseImageDigestCache(opts.RedisClient),
 	}
 
 	leases := abstractions.NewContainerLeaseManager(

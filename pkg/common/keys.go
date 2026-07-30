@@ -2,6 +2,7 @@ package common
 
 import (
 	"fmt"
+	"time"
 )
 
 var (
@@ -43,6 +44,7 @@ var (
 	gatewayDefaultDeployment           string = "gateway:default_deployment:%s"
 	gatewayDeploymentMinContainerCount string = "gateway:min_containers:%s"
 	gatewayAuthKey                     string = "gateway:auth:%s:%s"
+	gatewayPreparedStub                string = "gateway:prepared_stub:%s:%s"
 )
 
 var (
@@ -149,9 +151,15 @@ var (
 
 var (
 	imageBuildContainerTTL string = "image:build_container_ttl:%s"
+	imageBaseDigest        string = "image:base_digest:%s"
 )
 
 var RedisKeys = &redisKeys{}
+
+const (
+	PreparedStubCacheMetadata = "preparation-cache-key"
+	PreparedStubCacheTTL      = 5 * time.Minute
+)
 
 type redisKeys struct{}
 
@@ -297,6 +305,10 @@ func (rk *redisKeys) GatewayDeploymentMinContainerCount(appId string) string {
 	return fmt.Sprintf(gatewayDeploymentMinContainerCount, appId)
 }
 
+func (rk *redisKeys) GatewayPreparedStub(workspaceId, cacheKey string) string {
+	return fmt.Sprintf(gatewayPreparedStub, workspaceId, cacheKey)
+}
+
 // Worker keys
 func (rk *redisKeys) WorkerPrefix() string {
 	return workerPrefix
@@ -308,6 +320,10 @@ func (rk *redisKeys) WorkerContainerResourceUsage(workerId string, containerId s
 
 func (rk *redisKeys) WorkerImageLock(workerId string, imageId string) string {
 	return fmt.Sprintf(workerImageLock, workerId, imageId)
+}
+
+func (rk *redisKeys) ImageBaseDigest(sourceImage string) string {
+	return fmt.Sprintf(imageBaseDigest, sourceImage)
 }
 
 func (rk *redisKeys) WorkerNetworkLock(networkPrefix string) string {

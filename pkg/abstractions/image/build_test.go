@@ -216,7 +216,7 @@ func TestPrepareBuildOptionsForImageID_V2ExistingImageAddsRuntimeRequirements(t 
 		builder: &Builder{
 			config: cfg,
 		},
-		baseImageDigests: newBaseImageDigestCache(),
+		baseImageDigests: newBaseImageDigestCache(nil),
 	}
 	req := &pb.VerifyImageBuildRequest{
 		PythonVersion:    "python3.10",
@@ -254,7 +254,7 @@ func TestPrepareBuildOptionsForImageID_V2ExistingImageIgnorePythonSkipsRuntimeRe
 		builder: &Builder{
 			config: cfg,
 		},
-		baseImageDigests: newBaseImageDigestCache(),
+		baseImageDigests: newBaseImageDigestCache(nil),
 	}
 	req := &pb.VerifyImageBuildRequest{
 		PythonVersion:    "python3.10",
@@ -297,7 +297,7 @@ func TestPrepareBuildOptionsForImageID_V2ExistingImageIgnorePythonKeepsUserPacka
 		builder: &Builder{
 			config: cfg,
 		},
-		baseImageDigests: newBaseImageDigestCache(),
+		baseImageDigests: newBaseImageDigestCache(nil),
 	}
 	req := &pb.VerifyImageBuildRequest{
 		PythonVersion:    "python3.10",

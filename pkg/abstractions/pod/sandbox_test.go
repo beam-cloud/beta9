@@ -17,8 +17,33 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
+
+func TestPreparedStubID(t *testing.T) {
+	rdb, err := repository.NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = rdb.Close() })
+
+	key := common.RedisKeys.GatewayPreparedStub("workspace-1", "cache-key")
+	if err := rdb.Set(context.Background(), key, "stub-1", time.Minute).Err(); err != nil {
+		t.Fatal(err)
+	}
+	ctx := metadata.NewIncomingContext(
+		context.Background(),
+		metadata.Pairs(common.PreparedStubCacheMetadata, "cache-key"),
+	)
+
+	if got := (&GenericPodService{rdb: rdb}).preparedStubID(ctx, "workspace-1"); got != "stub-1" {
+		t.Fatalf("preparedStubID() = %q, want stub-1", got)
+	}
+	if ttl := rdb.TTL(context.Background(), key).Val(); ttl < 4*time.Minute {
+		t.Fatalf("prepared stub TTL = %s, want refreshed TTL", ttl)
+	}
+}
 
 func TestSandboxConnectErrorMessageDoesNotLeakDetails(t *testing.T) {
 	got := sandboxConnectErrorMessage(errors.New("container state not found: sandbox-123 on worker 10.0.0.12"))

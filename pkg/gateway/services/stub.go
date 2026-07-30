@@ -19,6 +19,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/rs/zerolog/log"
+	"google.golang.org/grpc/metadata"
 )
 
 // Capacity verdict values reported in GetOrCreateStubResponse.CapacityStatus.
@@ -346,6 +347,8 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		}
 	}
 
+	gws.cachePreparedStub(ctx, authInfo.Workspace.ExternalId, stub.ExternalId)
+
 	return &pb.GetOrCreateStubResponse{
 		Ok:                 err == nil,
 		StubId:             stub.ExternalId,
@@ -354,6 +357,23 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		UnsupportedGpus:    capacity.unsupportedGpus,
 		MatchedPrivatePool: capacity.matchedPrivatePool,
 	}, nil
+}
+
+func (gws *GatewayService) cachePreparedStub(ctx context.Context, workspaceID, stubID string) {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok || gws.redisClient == nil {
+		return
+	}
+	cacheKeys := md.Get(common.PreparedStubCacheMetadata)
+	if len(cacheKeys) == 0 || cacheKeys[0] == "" {
+		return
+	}
+	_ = gws.redisClient.SetEx(
+		ctx,
+		common.RedisKeys.GatewayPreparedStub(workspaceID, cacheKeys[0]),
+		stubID,
+		common.PreparedStubCacheTTL,
+	).Err()
 }
 
 type stubCapacityVerdict struct {
