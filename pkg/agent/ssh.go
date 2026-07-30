@@ -34,6 +34,7 @@ const (
 	managedSSHDMainConfig    = "/etc/ssh/sshd_config"
 	managedSSHDConfig        = "/etc/ssh/sshd_config.d/90-beam-managed.conf"
 	managedSSHHostPublicKey  = "/etc/ssh/ssh_host_ed25519_key.pub"
+	managedSSHPasswordMarker = "NP"
 )
 
 type hostSSHManager struct {
@@ -50,6 +51,33 @@ type hostSSHManager struct {
 	applied        uint64
 	lastStatusSent time.Time
 	sshdProcess    *exec.Cmd
+}
+
+type managedSSHCommand struct {
+	name  string
+	args  []string
+	stdin string
+}
+
+type managedSSHHost struct {
+	lookPath func(string) (string, error)
+	run      func(context.Context, string, string, ...string) error
+}
+
+func newManagedSSHHost() managedSSHHost {
+	return managedSSHHost{
+		lookPath: exec.LookPath,
+		run:      runManagedSSHCommandInput,
+	}
+}
+
+func (h managedSSHHost) commandExists(name string) bool {
+	_, err := h.lookPath(name)
+	return err == nil
+}
+
+func (h managedSSHHost) runCommand(ctx context.Context, command managedSSHCommand) error {
+	return h.run(ctx, command.stdin, command.name, command.args...)
 }
 
 func newHostSSHManager(client pb.GatewayServiceClient, agentToken string, stderr io.Writer) *hostSSHManager {
@@ -140,11 +168,12 @@ func (m *hostSSHManager) apply(ctx context.Context, desired *pb.AgentSSHConfig) 
 		return "", fmt.Errorf("invalid desired SSH public key: %w", err)
 	}
 
-	sshdPath, err := ensureOpenSSHServer(ctx)
+	host := newManagedSSHHost()
+	sshdPath, err := host.ensureOpenSSHServer(ctx)
 	if err != nil {
 		return "", err
 	}
-	if err := ensureManagedSSHUser(ctx); err != nil {
+	if err := host.ensureUser(ctx); err != nil {
 		return "", err
 	}
 	if err := ensureManagedSSHFiles(desired.PublicKey); err != nil {
@@ -172,76 +201,82 @@ func (m *hostSSHManager) apply(ctx context.Context, desired *pb.AgentSSHConfig) 
 	return managedSSHHostFingerprint()
 }
 
-func ensureOpenSSHServer(ctx context.Context) (string, error) {
-	if path, err := exec.LookPath("sshd"); err == nil {
+func (h managedSSHHost) ensureOpenSSHServer(ctx context.Context) (string, error) {
+	if path, err := h.lookPath("sshd"); err == nil {
 		return path, nil
 	}
-	commands, err := managedSSHInstallCommands(commandExists)
+	commands, err := h.installCommands()
 	if err != nil {
 		return "", err
 	}
 	for _, command := range commands {
-		if err := runManagedSSHCommand(ctx, command[0], command[1:]...); err != nil {
+		if err := h.runCommand(ctx, command); err != nil {
 			return "", err
 		}
 	}
-	path, err := exec.LookPath("sshd")
+	path, err := h.lookPath("sshd")
 	if err != nil {
 		return "", errors.New("openssh-server installed but sshd was not found")
 	}
 	return path, nil
 }
 
-func managedSSHInstallCommands(available func(string) bool) ([][]string, error) {
+func (h managedSSHHost) installCommands() ([]managedSSHCommand, error) {
 	switch {
-	case available("apt-get"):
-		return [][]string{
-			{"apt-get", "update"},
-			{"apt-get", "install", "-y", "openssh-server", "sudo"},
+	case h.commandExists("apt-get"):
+		return []managedSSHCommand{
+			{name: "apt-get", args: []string{"update"}},
+			{name: "apt-get", args: []string{"install", "-y", "openssh-server", "sudo"}},
 		}, nil
-	case available("dnf"):
-		return [][]string{{"dnf", "install", "-y", "openssh-server", "sudo"}}, nil
-	case available("yum"):
-		return [][]string{{"yum", "install", "-y", "openssh-server", "sudo"}}, nil
-	case available("apk"):
-		return [][]string{{"apk", "add", "--no-cache", "openssh-server", "sudo"}}, nil
+	case h.commandExists("dnf"):
+		return []managedSSHCommand{{name: "dnf", args: []string{"install", "-y", "openssh-server", "sudo"}}}, nil
+	case h.commandExists("yum"):
+		return []managedSSHCommand{{name: "yum", args: []string{"install", "-y", "openssh-server", "sudo"}}}, nil
+	case h.commandExists("apk"):
+		return []managedSSHCommand{{name: "apk", args: []string{"add", "--no-cache", "openssh-server", "sudo"}}}, nil
 	default:
 		return nil, errors.New("no supported package manager found (apt, dnf/yum, or apk)")
 	}
 }
 
-func ensureManagedSSHUser(ctx context.Context) error {
-	if err := runManagedSSHCommand(ctx, "id", "-u", "beam"); err != nil {
+func (h managedSSHHost) ensureUser(ctx context.Context) error {
+	if err := h.runCommand(ctx, managedSSHCommand{name: "id", args: []string{"-u", "beam"}}); err != nil {
+		var command managedSSHCommand
 		switch {
-		case commandExists("useradd"):
-			if err := runManagedSSHCommand(ctx, "useradd", "--create-home", "--shell", "/bin/bash", "beam"); err != nil {
-				return fmt.Errorf("create beam user: %w", err)
-			}
-		case commandExists("adduser"):
-			if err := runManagedSSHCommand(ctx, "adduser", "-D", "-s", "/bin/sh", "beam"); err != nil {
-				return fmt.Errorf("create beam user: %w", err)
-			}
+		case h.commandExists("useradd"):
+			command = managedSSHCommand{name: "useradd", args: []string{"--create-home", "--shell", "/bin/bash", "beam"}}
+		case h.commandExists("adduser"):
+			command = managedSSHCommand{name: "adduser", args: []string{"-D", "-s", "/bin/sh", "beam"}}
 		default:
 			return errors.New("neither useradd nor adduser is available")
 		}
+		if err := h.runCommand(ctx, command); err != nil {
+			return fmt.Errorf("create beam user: %w", err)
+		}
 	}
-	if commandExists("passwd") {
-		if err := runManagedSSHCommand(ctx, "passwd", "-l", "beam"); err != nil {
-			if !commandExists("usermod") {
-				return fmt.Errorf("lock beam password: %w", err)
-			}
-			if fallbackErr := runManagedSSHCommand(ctx, "usermod", "-L", "beam"); fallbackErr != nil {
-				return fmt.Errorf("lock beam password: %w", errors.Join(err, fallbackErr))
-			}
-		}
-	} else if commandExists("usermod") {
-		if err := runManagedSSHCommand(ctx, "usermod", "-L", "beam"); err != nil {
-			return fmt.Errorf("lock beam password: %w", err)
-		}
-	} else {
-		return errors.New("neither passwd nor usermod is available to lock the beam account")
+	command, err := h.disablePasswordCommand()
+	if err != nil {
+		return err
+	}
+	if err := h.runCommand(ctx, command); err != nil {
+		return fmt.Errorf("disable beam password: %w", err)
 	}
 	return nil
+}
+
+func (h managedSSHHost) disablePasswordCommand() (managedSSHCommand, error) {
+	// A leading "!" locks the entire account on Linux, causing sshd to reject
+	// public-key authentication before it evaluates authorized_keys. Use a
+	// deliberately invalid password hash instead; sshd separately disables
+	// password and keyboard-interactive authentication.
+	switch {
+	case h.commandExists("usermod"):
+		return managedSSHCommand{name: "usermod", args: []string{"-p", managedSSHPasswordMarker, "beam"}}, nil
+	case h.commandExists("chpasswd"):
+		return managedSSHCommand{name: "chpasswd", args: []string{"-e"}, stdin: "beam:" + managedSSHPasswordMarker + "\n"}, nil
+	default:
+		return managedSSHCommand{}, errors.New("neither usermod nor chpasswd is available to disable the beam password")
+	}
 }
 
 func ensureManagedSSHFiles(publicKey string) error {
@@ -416,14 +451,27 @@ func (m *hostSSHManager) reloadOrSuperviseSSHD(ctx context.Context, sshdPath str
 }
 
 func runManagedSSHCommand(ctx context.Context, name string, args ...string) error {
-	_, err := managedSSHCommandOutput(ctx, name, args...)
+	_, err := managedSSHCommandOutputWithInput(ctx, "", name, args...)
 	return err
 }
 
 func managedSSHCommandOutput(ctx context.Context, name string, args ...string) (string, error) {
+	return managedSSHCommandOutputWithInput(ctx, "", name, args...)
+}
+
+func runManagedSSHCommandInput(ctx context.Context, input, name string, args ...string) error {
+	_, err := managedSSHCommandOutputWithInput(ctx, input, name, args...)
+	return err
+}
+
+func managedSSHCommandOutputWithInput(ctx context.Context, input, name string, args ...string) (string, error) {
 	commandCtx, cancel := context.WithTimeout(ctx, managedSSHCommandTimeout)
 	defer cancel()
-	output, err := exec.CommandContext(commandCtx, name, args...).CombinedOutput()
+	command := exec.CommandContext(commandCtx, name, args...)
+	if input != "" {
+		command.Stdin = strings.NewReader(input)
+	}
+	output, err := command.CombinedOutput()
 	if err != nil {
 		message := strings.TrimSpace(string(output))
 		if message != "" {

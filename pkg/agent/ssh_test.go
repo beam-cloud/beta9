@@ -88,26 +88,26 @@ func TestEnsureManagedSSHDConfigIncludedIsIdempotent(t *testing.T) {
 func TestManagedSSHInstallCommandsSupportsLinuxPackageManagers(t *testing.T) {
 	tests := map[string]struct {
 		available []string
-		want      [][]string
+		want      []managedSSHCommand
 	}{
 		"apt": {
 			available: []string{"apt-get"},
-			want: [][]string{
-				{"apt-get", "update"},
-				{"apt-get", "install", "-y", "openssh-server", "sudo"},
+			want: []managedSSHCommand{
+				{name: "apt-get", args: []string{"update"}},
+				{name: "apt-get", args: []string{"install", "-y", "openssh-server", "sudo"}},
 			},
 		},
 		"dnf": {
 			available: []string{"dnf"},
-			want:      [][]string{{"dnf", "install", "-y", "openssh-server", "sudo"}},
+			want:      []managedSSHCommand{{name: "dnf", args: []string{"install", "-y", "openssh-server", "sudo"}}},
 		},
 		"yum": {
 			available: []string{"yum"},
-			want:      [][]string{{"yum", "install", "-y", "openssh-server", "sudo"}},
+			want:      []managedSSHCommand{{name: "yum", args: []string{"install", "-y", "openssh-server", "sudo"}}},
 		},
 		"apk": {
 			available: []string{"apk"},
-			want:      [][]string{{"apk", "add", "--no-cache", "openssh-server", "sudo"}},
+			want:      []managedSSHCommand{{name: "apk", args: []string{"add", "--no-cache", "openssh-server", "sudo"}}},
 		},
 	}
 	for name, test := range tests {
@@ -116,7 +116,8 @@ func TestManagedSSHInstallCommandsSupportsLinuxPackageManagers(t *testing.T) {
 			for _, command := range test.available {
 				available[command] = true
 			}
-			got, err := managedSSHInstallCommands(func(command string) bool { return available[command] })
+			host := managedSSHHost{lookPath: fakeLookPath(available)}
+			got, err := host.installCommands()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -125,8 +126,40 @@ func TestManagedSSHInstallCommandsSupportsLinuxPackageManagers(t *testing.T) {
 			}
 		})
 	}
-	if _, err := managedSSHInstallCommands(func(string) bool { return false }); err == nil {
+	if _, err := (managedSSHHost{lookPath: fakeLookPath(nil)}).installCommands(); err == nil {
 		t.Fatal("unsupported package manager configuration was accepted")
+	}
+}
+
+func TestManagedSSHDisablePasswordCommandKeepsAccountAvailableForPublicKeys(t *testing.T) {
+	command, err := (managedSSHHost{lookPath: fakeLookPath(map[string]bool{"usermod": true})}).disablePasswordCommand()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := managedSSHCommand{name: "usermod", args: []string{"-p", "NP", "beam"}}
+	if !reflect.DeepEqual(command, want) {
+		t.Fatalf("command = %#v, want %#v", command, want)
+	}
+	if strings.HasPrefix(command.args[1], "!") {
+		t.Fatalf("password marker %q locks the entire account", command.args[1])
+	}
+
+	command, err = (managedSSHHost{lookPath: fakeLookPath(map[string]bool{"chpasswd": true})}).disablePasswordCommand()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = managedSSHCommand{name: "chpasswd", args: []string{"-e"}, stdin: "beam:NP\n"}
+	if !reflect.DeepEqual(command, want) {
+		t.Fatalf("command = %#v, want %#v", command, want)
+	}
+}
+
+func fakeLookPath(available map[string]bool) func(string) (string, error) {
+	return func(command string) (string, error) {
+		if available[command] {
+			return "/usr/bin/" + command, nil
+		}
+		return "", os.ErrNotExist
 	}
 }
 
