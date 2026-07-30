@@ -75,7 +75,7 @@ func RunJoin(ctx context.Context, opts types.AgentJoinOptions) error {
 	}
 
 	transport := normalizeTransport(firstNonEmpty(opts.TransportOverride, res.Bootstrap.Transport))
-	if err := runRouteProxy(ctx, grpcClient, res.AgentToken, transport, workers, telemetry, agentStdout, agentStderr); err != nil {
+	if err := runRouteProxy(ctx, grpcClient, res.AgentToken, res.MachineID, transport, workers, telemetry, agentStdout, agentStderr); err != nil {
 		if agentInterrupted(ctx, err) {
 			statusf(agentStdout, "Disconnecting machine %q", res.MachineID)
 			return ErrInterrupted

@@ -30,16 +30,23 @@ const (
 	managedSSHCommandTimeout = 2 * time.Minute
 	managedSSHPublicIPLookup = "https://api.ipify.org?format=text"
 	managedSSHAuthorizedKeys = "/home/beam/.ssh/authorized_keys"
+	managedSSHHushLogin      = "/home/beam/.hushlogin"
 	managedSSHSudoers        = "/etc/sudoers.d/90-beam-managed"
 	managedSSHDMainConfig    = "/etc/ssh/sshd_config"
 	managedSSHDConfig        = "/etc/ssh/sshd_config.d/90-beam-managed.conf"
 	managedSSHHostPublicKey  = "/etc/ssh/ssh_host_ed25519_key.pub"
 	managedSSHPasswordMarker = "NP"
+	managedSSHHostnamePath   = "/etc/hostname"
+	managedSSHHostsPath      = "/etc/hosts"
+	managedSSHHostnamePrefix = "beam-"
+	managedSSHHostsBegin     = "# BEGIN BEAM MANAGED HOSTNAME"
+	managedSSHHostsEnd       = "# END BEAM MANAGED HOSTNAME"
 )
 
 type hostSSHManager struct {
 	client      pb.GatewayServiceClient
 	agentToken  string
+	machineID   string
 	stderr      io.Writer
 	httpClient  *http.Client
 	publicIPURL string
@@ -60,14 +67,20 @@ type managedSSHCommand struct {
 }
 
 type managedSSHHost struct {
-	lookPath func(string) (string, error)
-	run      func(context.Context, string, string, ...string) error
+	lookPath     func(string) (string, error)
+	run          func(context.Context, string, string, ...string) error
+	hostname     func() (string, error)
+	hostnamePath string
+	hostsPath    string
 }
 
 func newManagedSSHHost() managedSSHHost {
 	return managedSSHHost{
-		lookPath: exec.LookPath,
-		run:      runManagedSSHCommandInput,
+		lookPath:     exec.LookPath,
+		run:          runManagedSSHCommandInput,
+		hostname:     os.Hostname,
+		hostnamePath: managedSSHHostnamePath,
+		hostsPath:    managedSSHHostsPath,
 	}
 }
 
@@ -80,13 +93,14 @@ func (h managedSSHHost) runCommand(ctx context.Context, command managedSSHComman
 	return h.run(ctx, command.stdin, command.name, command.args...)
 }
 
-func newHostSSHManager(client pb.GatewayServiceClient, agentToken string, stderr io.Writer) *hostSSHManager {
+func newHostSSHManager(client pb.GatewayServiceClient, agentToken, machineID string, stderr io.Writer) *hostSSHManager {
 	if stderr == nil {
 		stderr = io.Discard
 	}
 	return &hostSSHManager{
 		client:      client,
 		agentToken:  agentToken,
+		machineID:   machineID,
 		stderr:      stderr,
 		httpClient:  &http.Client{Timeout: 3 * time.Second},
 		publicIPURL: managedSSHPublicIPLookup,
@@ -174,6 +188,9 @@ func (m *hostSSHManager) apply(ctx context.Context, desired *pb.AgentSSHConfig) 
 		return "", err
 	}
 	if err := host.ensureUser(ctx); err != nil {
+		return "", err
+	}
+	if err := host.ensureHostname(ctx, m.machineID); err != nil {
 		return "", err
 	}
 	if err := ensureManagedSSHFiles(desired.PublicKey); err != nil {
@@ -279,6 +296,119 @@ func (h managedSSHHost) disablePasswordCommand() (managedSSHCommand, error) {
 	}
 }
 
+func managedSSHHostname(machineID string) string {
+	// The control-plane machine ID is stable and provider-neutral, unlike the
+	// hostname baked into many provider images.
+	var value strings.Builder
+	lastHyphen := false
+	for _, char := range strings.ToLower(strings.TrimSpace(machineID)) {
+		valid := char >= 'a' && char <= 'z' || char >= '0' && char <= '9'
+		if valid {
+			value.WriteRune(char)
+			lastHyphen = false
+			continue
+		}
+		if value.Len() > 0 && !lastHyphen {
+			value.WriteByte('-')
+			lastHyphen = true
+		}
+	}
+	suffix := strings.Trim(value.String(), "-")
+	if suffix == "" {
+		suffix = "instance"
+	}
+	const maxSuffixLength = 63 - len(managedSSHHostnamePrefix)
+	if len(suffix) > maxSuffixLength {
+		suffix = strings.TrimRight(suffix[:maxSuffixLength], "-")
+	}
+	return managedSSHHostnamePrefix + suffix
+}
+
+func (h managedSSHHost) ensureHostname(ctx context.Context, machineID string) error {
+	desired := managedSSHHostname(machineID)
+	current, err := h.hostname()
+	if err != nil {
+		return fmt.Errorf("read current hostname: %w", err)
+	}
+	if current != desired {
+		var setErr error
+		if h.commandExists("hostnamectl") {
+			setErr = h.runCommand(ctx, managedSSHCommand{name: "hostnamectl", args: []string{"set-hostname", desired}})
+		}
+		if setErr != nil || !h.commandExists("hostnamectl") {
+			if !h.commandExists("hostname") {
+				return errors.New("neither a working hostnamectl nor hostname command is available")
+			}
+			if err := h.runCommand(ctx, managedSSHCommand{name: "hostname", args: []string{desired}}); err != nil {
+				return fmt.Errorf("set managed hostname: %w", err)
+			}
+		}
+	}
+	if err := writeManagedFilePreservingMetadata(h.hostnamePath, []byte(desired+"\n"), 0o644); err != nil {
+		return fmt.Errorf("persist managed hostname: %w", err)
+	}
+	if err := ensureManagedHostnameMapping(h.hostsPath, desired); err != nil {
+		return fmt.Errorf("map managed hostname: %w", err)
+	}
+	return nil
+}
+
+func ensureManagedHostnameMapping(path, hostname string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	lines := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
+	begin, end := -1, -1
+	for index, line := range lines {
+		switch strings.TrimSpace(line) {
+		case managedSSHHostsBegin:
+			if begin != -1 {
+				return errors.New("multiple managed hostname blocks in hosts file")
+			}
+			begin = index
+		case managedSSHHostsEnd:
+			if end != -1 {
+				return errors.New("multiple managed hostname blocks in hosts file")
+			}
+			end = index
+		}
+	}
+	if (begin == -1) != (end == -1) || end < begin {
+		return errors.New("malformed managed hostname block in hosts file")
+	}
+	filtered := make([]string, 0, len(lines)+3)
+	if begin == -1 {
+		filtered = append(filtered, lines...)
+	} else {
+		filtered = append(filtered, lines[:begin]...)
+		filtered = append(filtered, lines[end+1:]...)
+	}
+	for len(filtered) > 0 && strings.TrimSpace(filtered[len(filtered)-1]) == "" {
+		filtered = filtered[:len(filtered)-1]
+	}
+	filtered = append(filtered,
+		managedSSHHostsBegin,
+		"127.0.1.1 "+hostname,
+		managedSSHHostsEnd,
+	)
+	return writeManagedFilePreservingMetadata(path, []byte(strings.Join(filtered, "\n")+"\n"), 0o644)
+}
+
+func writeManagedFilePreservingMetadata(path string, data []byte, defaultMode os.FileMode) error {
+	mode := defaultMode
+	uid, gid := os.Getuid(), os.Getgid()
+	if info, err := os.Stat(path); err == nil {
+		mode = info.Mode().Perm()
+		if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+			uid, gid = int(stat.Uid), int(stat.Gid)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return writeManagedFileAtomic(path, data, mode, uid, gid)
+}
+
 func ensureManagedSSHFiles(publicKey string) error {
 	account, err := user.Lookup("beam")
 	if err != nil {
@@ -304,6 +434,9 @@ func ensureManagedSSHFiles(publicKey string) error {
 		return err
 	}
 	if err := writeManagedFileAtomic(managedSSHAuthorizedKeys, []byte(strings.TrimSpace(publicKey)+"\n"), 0o600, uid, gid); err != nil {
+		return err
+	}
+	if err := writeManagedFileAtomic(managedSSHHushLogin, nil, 0o600, uid, gid); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(managedSSHSudoers), 0o750); err != nil {
