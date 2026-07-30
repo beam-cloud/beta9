@@ -100,39 +100,31 @@ func TestHydrateRuntimeCredentialsForBuildOnlyRequestsWorkspaceStorage(t *testin
 func TestHydrateRuntimeCredentialsAcrossPoolTypes(t *testing.T) {
 	tests := []struct {
 		name   string
-		worker func(*fakeRuntimeCredentialsWorkerRepo) *Worker
+		worker Worker
 	}{
 		{
 			name: "private agent pool",
-			worker: func(repo *fakeRuntimeCredentialsWorkerRepo) *Worker {
-				return &Worker{
-					workerRepoClient: repo,
-					persistent:       true,
-					machineID:        "private-machine",
-					poolName:         "private-pool",
-					poolConfig:       types.WorkerPoolConfig{Mode: types.PoolModePrivate},
-					routeTransport:   types.BackendRouteTransportTSNet,
-				}
+			worker: Worker{
+				persistent:     true,
+				machineID:      "private-machine",
+				poolName:       "private-pool",
+				poolConfig:     types.WorkerPoolConfig{Mode: types.PoolModePrivate},
+				routeTransport: types.BackendRouteTransportTSNet,
 			},
 		},
 		{
 			name: "admin-managed serverless agent pool",
-			worker: func(repo *fakeRuntimeCredentialsWorkerRepo) *Worker {
-				return &Worker{
-					workerRepoClient: repo,
-					persistent:       true,
-					machineID:        "serverless-machine",
-					poolName:         "serverless-pool",
-					poolConfig:       types.WorkerPoolConfig{Mode: types.PoolModeExternal},
-					routeTransport:   types.BackendRouteTransportTSNet,
-				}
+			worker: Worker{
+				persistent:     true,
+				machineID:      "serverless-machine",
+				poolName:       "serverless-pool",
+				poolConfig:     types.WorkerPoolConfig{Mode: types.PoolModeExternal},
+				routeTransport: types.BackendRouteTransportTSNet,
 			},
 		},
 		{
-			name: "managed fallback pool",
-			worker: func(repo *fakeRuntimeCredentialsWorkerRepo) *Worker {
-				return &Worker{workerRepoClient: repo, poolName: "default"}
-			},
+			name:   "managed fallback pool",
+			worker: Worker{poolName: "default"},
 		},
 	}
 
@@ -151,8 +143,10 @@ func TestHydrateRuntimeCredentialsAcrossPoolTypes(t *testing.T) {
 				RuntimeSecretNames:   []string{"SECRET"},
 				RuntimeTokenRequired: true,
 			}
+			worker := test.worker
+			worker.workerRepoClient = repo
 
-			require.NoError(t, test.worker(repo).hydrateRuntimeCredentials(context.Background(), request))
+			require.NoError(t, worker.hydrateRuntimeCredentials(context.Background(), request))
 
 			require.NotNil(t, repo.lastReq)
 			require.True(t, repo.lastReq.RuntimeToken)
