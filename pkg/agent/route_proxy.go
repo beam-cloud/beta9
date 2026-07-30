@@ -28,7 +28,7 @@ const (
 	routeProxyMaxConsecutiveFailures = 3
 )
 
-func newRouteProxy(client pb.GatewayServiceClient, agentToken string, listener net.Listener, proxyTarget string, workers *workerRuntimeManager, stdout, stderr io.Writer) *routeProxy {
+func newRouteProxy(client pb.GatewayServiceClient, agentToken, machineID string, listener net.Listener, proxyTarget string, workers *workerRuntimeManager, stdout, stderr io.Writer) *routeProxy {
 	if stdout == nil {
 		stdout = io.Discard
 	}
@@ -48,7 +48,7 @@ func newRouteProxy(client pb.GatewayServiceClient, agentToken string, listener n
 		readinessPending: map[string]string{},
 		failureCounts:    map[string]int{},
 		statusSlots:      make(chan struct{}, routeStatusConcurrency),
-		hostSSH:          newHostSSHManager(client, agentToken, stderr),
+		hostSSH:          newHostSSHManager(client, agentToken, machineID, stderr),
 	}
 }
 

@@ -76,7 +76,7 @@ func TestRouteProxyMarksRouteReadyForReachableLocalTarget(t *testing.T) {
 	target := backend.Addr().String()
 	updates := make(chan *pb.UpdateAgentRouteStatusRequest, 1)
 	client := &routeStatusClient{updates: updates}
-	proxy := newRouteProxy(client, "agent-token", nil, "agent.tailnet:29443", nil, io.Discard, io.Discard)
+	proxy := newRouteProxy(client, "agent-token", "machine-one", nil, "agent.tailnet:29443", nil, io.Discard, io.Discard)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -121,7 +121,7 @@ func TestRouteProxyPollsOpeningRouteWithoutBackoff(t *testing.T) {
 	}()
 
 	updates := make(chan *pb.UpdateAgentRouteStatusRequest, 1)
-	proxy := newRouteProxy(&routeStatusClient{updates: updates}, "agent-token", nil, "agent.tailnet:29443", nil, io.Discard, io.Discard)
+	proxy := newRouteProxy(&routeStatusClient{updates: updates}, "agent-token", "machine-one", nil, "agent.tailnet:29443", nil, io.Discard, io.Discard)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	proxy.setRoute("route-one", target)
@@ -150,7 +150,7 @@ func TestRouteProxyRechecksOpeningRouteThatRacesReadyUpdate(t *testing.T) {
 		updates:      make(chan *pb.UpdateAgentRouteStatusRequest, 2),
 		releaseFirst: make(chan struct{}),
 	}
-	proxy := newRouteProxy(client, "agent-token", nil, "agent.tailnet:29443", nil, io.Discard, io.Discard)
+	proxy := newRouteProxy(client, "agent-token", "machine-one", nil, "agent.tailnet:29443", nil, io.Discard, io.Discard)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
