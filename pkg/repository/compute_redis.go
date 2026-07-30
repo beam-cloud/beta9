@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -621,6 +622,129 @@ func (r *ComputeRedisRepository) DeleteMarketplaceRental(ctx context.Context, st
 		return err
 	}
 	return r.rdb.SRem(ctx, common.RedisKeys.ComputeMarketplaceRentalGlobalIndex(), member).Err()
+}
+
+// onDemandSpendBucketFormat buckets spend by clock hour.
+const onDemandSpendBucketFormat = "2006010215"
+
+// onDemandSpendBucketTTL keeps one extra hour beyond the 24h window so the
+// oldest bucket is still readable while it is being aged out.
+const onDemandSpendBucketTTL = 25 * time.Hour
+
+func (r *ComputeRedisRepository) PushFailoverDemand(ctx context.Context, demand *compute.FailoverDemand, ttl time.Duration) error {
+	if demand == nil || demand.GPU == "" {
+		return nil
+	}
+	if ttl <= 0 {
+		ttl = time.Minute
+	}
+	if demand.CreatedAt.IsZero() {
+		demand.CreatedAt = time.Now().UTC()
+	}
+	// One record per GPU type, keyed case-insensitively so config and request
+	// spellings converge on the same demand signal.
+	demand.GPU = strings.ToUpper(demand.GPU)
+
+	data, err := json.Marshal(demand)
+	if err != nil {
+		return err
+	}
+	if err := r.rdb.Set(ctx, common.RedisKeys.ComputeFailoverDemand(demand.GPU), data, ttl).Err(); err != nil {
+		return err
+	}
+	return r.rdb.SAdd(ctx, common.RedisKeys.ComputeFailoverDemandIndex(), demand.GPU).Err()
+}
+
+// ListFailoverDemand returns the unexpired demand records and prunes index
+// entries whose records have already expired.
+func (r *ComputeRedisRepository) ListFailoverDemand(ctx context.Context) ([]*compute.FailoverDemand, error) {
+	gpus, err := r.rdb.SMembers(ctx, common.RedisKeys.ComputeFailoverDemandIndex()).Result()
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(gpus)
+
+	demand := make([]*compute.FailoverDemand, 0, len(gpus))
+	for _, gpu := range gpus {
+		data, err := r.rdb.Get(ctx, common.RedisKeys.ComputeFailoverDemand(gpu)).Bytes()
+		if err == redis.Nil {
+			if err := r.rdb.SRem(ctx, common.RedisKeys.ComputeFailoverDemandIndex(), gpu).Err(); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+
+		var record compute.FailoverDemand
+		if err := json.Unmarshal(data, &record); err != nil {
+			log.Warn().Err(err).Str("gpu", gpu).Msg("skipping corrupt on-demand demand record")
+			continue
+		}
+		demand = append(demand, &record)
+	}
+	return demand, nil
+}
+
+func (r *ComputeRedisRepository) DeleteFailoverDemand(ctx context.Context, gpu string) error {
+	if gpu == "" {
+		return nil
+	}
+	gpu = strings.ToUpper(gpu)
+	if err := r.rdb.Del(ctx, common.RedisKeys.ComputeFailoverDemand(gpu)).Err(); err != nil {
+		return err
+	}
+	return r.rdb.SRem(ctx, common.RedisKeys.ComputeFailoverDemandIndex(), gpu).Err()
+}
+
+func (r *ComputeRedisRepository) RecordOnDemandSpend(ctx context.Context, at time.Time, cents float64) error {
+	if cents <= 0 {
+		return nil
+	}
+	key := common.RedisKeys.ComputeOnDemandSpend(at.UTC().Format(onDemandSpendBucketFormat))
+	_, err := r.rdb.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+		pipe.IncrByFloat(ctx, key, cents)
+		pipe.Expire(ctx, key, onDemandSpendBucketTTL)
+		return nil
+	})
+	return err
+}
+
+// OnDemandSpendCents sums the hourly buckets covering the trailing window.
+func (r *ComputeRedisRepository) OnDemandSpendCents(ctx context.Context, window time.Duration) (float64, error) {
+	if window <= 0 {
+		return 0, nil
+	}
+
+	now := time.Now().UTC()
+	hours := int(window.Hours())
+	if hours < 1 {
+		hours = 1
+	}
+	keys := make([]string, 0, hours)
+	for hour := 0; hour < hours; hour++ {
+		keys = append(keys, common.RedisKeys.ComputeOnDemandSpend(now.Add(-time.Duration(hour)*time.Hour).Format(onDemandSpendBucketFormat)))
+	}
+
+	values, err := r.rdb.MGet(ctx, keys...).Result()
+	if err != nil {
+		return 0, err
+	}
+
+	total := float64(0)
+	for _, value := range values {
+		data, ok := stateBytes(value)
+		if !ok {
+			continue
+		}
+		cents, err := strconv.ParseFloat(string(data), 64)
+		if err != nil {
+			continue
+		}
+		total += cents
+	}
+	return total, nil
 }
 
 func (r *ComputeRedisRepository) poolStates(ctx context.Context, keys []string) ([]*compute.PoolState, error) {

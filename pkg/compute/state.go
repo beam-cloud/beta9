@@ -67,6 +67,19 @@ const (
 	MarketplaceListingStatusInactive = "inactive"
 )
 
+// FailoverDemand records that the entire serverless estate refused a request
+// whose failover chain ends in on-demand hardware. The scheduler writes one
+// short-lived record per GPU type; the reconcile loop consumes it. Records
+// expire on their own, so a resolved backlog stops provisioning with no
+// bookkeeping.
+type FailoverDemand struct {
+	GPU string `json:"gpu"`
+	// Pools are the serverless pools that refused, recorded for observability.
+	Pools     []string  `json:"pools,omitempty"`
+	GPUCount  uint32    `json:"gpu_count,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 // MarketplaceRentalState is a buyer's exclusive hold on GPUs of one seller
 // machine. Rented GPUs are invisible to serverless marketplace scheduling;
 // only the buyer's machine-pinned workloads consume them.

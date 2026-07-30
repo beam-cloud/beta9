@@ -86,7 +86,7 @@ func TestProvisioningFailureBackoffSkipsImmediateAddWorkerRetry(t *testing.T) {
 func TestProvisioningAttemptDoesNotFailOverWithinReservation(t *testing.T) {
 	scheduler, err := NewSchedulerForTest()
 	assert.Nil(t, err)
-	scheduler.workerPoolManager = NewWorkerPoolManager(false)
+	scheduler.workerPoolManager = NewWorkerPoolManager()
 
 	primaryStarted := make(chan struct{}, 1)
 	secondaryStarted := make(chan struct{}, 1)
@@ -307,7 +307,7 @@ func TestPrivatePoolMissWithDurableDiskDoesNotFallback(t *testing.T) {
 func TestPrivatePoolMissWithoutRegularCapacityKeepsPrivateSelector(t *testing.T) {
 	scheduler, err := NewSchedulerForTest()
 	assert.Nil(t, err)
-	scheduler.workerPoolManager = NewWorkerPoolManager(false)
+	scheduler.workerPoolManager = NewWorkerPoolManager()
 	workspaceID := "workspace-private-no-capacity"
 
 	started := make(chan struct{}, 1)

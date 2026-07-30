@@ -194,8 +194,6 @@ func internalAPICallbackEventTypes() []string {
 		types.EventStubServe,
 		types.EventStubRun,
 		types.EventStubClone,
-		types.EventWorkerPoolDegraded,
-		types.EventWorkerPoolHealthy,
 		types.EventGatewayEndpointCalled,
 	}
 }

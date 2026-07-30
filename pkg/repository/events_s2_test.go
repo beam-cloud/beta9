@@ -1272,8 +1272,8 @@ func TestS2PlatformEventStreamsUseEntityMetadata(t *testing.T) {
 			want:      "events/workers/worker-1",
 		},
 		{
-			name:      "worker pool state",
-			eventType: types.EventWorkerPoolDegraded,
+			name:      "pool scoped event",
+			eventType: types.EventWorkerLifecycle,
 			metadata:  eventMetadata{PoolName: "gpu/default"},
 			want:      "events/worker-pools/gpu_default",
 		},
@@ -1452,19 +1452,19 @@ func TestPoolMetricsBucketAggregatesLatestMachineState(t *testing.T) {
 	bucket := &poolMetricsBucket{key: 1_000, samples: map[string]types.EventComputeSchema{}}
 	bucket.samples["pool-a\x00"] = types.EventComputeSchema{
 		WorkspaceID: "workspace-1", PoolName: "pool-a", Action: types.EventComputeActionPoolHeartbeat, MachineCount: 20, CPUCount: 100, MemoryMB: 100_000, GPUCount: 20,
-		Attrs: map[string]string{"container_count": "30", "free_gpu_count": "10", "cpu_utilization_pct": "99", "memory_used_mb": "99000", "hourly_cost_micros": "20000000"},
+		Attrs: map[string]string{"container_count": "30", "free_gpu_count": "10", "cpu_utilization_pct": "99", "memory_used_mb": "99000", "hourly_cost_cents": "2000"},
 	}
 	bucket.samples["pool-a\x00machine-1"] = types.EventComputeSchema{
 		WorkspaceID: "workspace-1", PoolName: "pool-a", MachineID: "machine-1", CPUCount: 4, MemoryMB: 8_000, GPUCount: 2,
-		Attrs: map[string]string{"container_count": "3", "free_gpu_count": "1", "cpu_utilization_pct": "60", "memory_used_mb": "4000", "disk_used_mb": "100", "disk_total_mb": "200", "hourly_cost_micros": "2000000"},
+		Attrs: map[string]string{"container_count": "3", "free_gpu_count": "1", "cpu_utilization_pct": "60", "memory_used_mb": "4000", "disk_used_mb": "100", "disk_total_mb": "200", "hourly_cost_cents": "200"},
 	}
 	bucket.samples["pool-a\x00machine-2"] = types.EventComputeSchema{
 		WorkspaceID: "workspace-1", PoolName: "pool-a", MachineID: "machine-2", CPUCount: 8, MemoryMB: 16_000, GPUCount: 2,
-		Attrs: map[string]string{"container_count": "5", "free_gpu_count": "0", "cpu_utilization_pct": "30", "memory_used_mb": "12000", "disk_used_mb": "300", "disk_total_mb": "600", "hourly_cost_micros": "3000000"},
+		Attrs: map[string]string{"container_count": "5", "free_gpu_count": "0", "cpu_utilization_pct": "30", "memory_used_mb": "12000", "disk_used_mb": "300", "disk_total_mb": "600", "hourly_cost_cents": "300"},
 	}
 	bucket.samples["pool-b\x00"] = types.EventComputeSchema{
 		WorkspaceID: "workspace-1", PoolName: "pool-b", Action: types.EventComputeActionPoolHeartbeat, MachineCount: 3, CPUCount: 12, MemoryMB: 24_000, GPUCount: 4,
-		Attrs: map[string]string{"container_count": "7", "free_gpu_count": "2", "cpu_utilization_pct": "25", "memory_used_mb": "6000", "hourly_cost_micros": "6000000"},
+		Attrs: map[string]string{"container_count": "7", "free_gpu_count": "2", "cpu_utilization_pct": "25", "memory_used_mb": "6000", "hourly_cost_cents": "600"},
 	}
 
 	metrics := bucket.point(time.Minute).Pools
@@ -1491,6 +1491,40 @@ func TestPoolMetricsBucketAggregatesLatestMachineState(t *testing.T) {
 	pool := metrics[1]
 	if pool.PoolName != "pool-b" || pool.MachineCount != 3 || pool.GPUCount != 4 || pool.FreeGPUCount != 2 || pool.ContainerCount != 7 {
 		t.Fatalf("unexpected pool snapshot: %+v", pool)
+	}
+}
+
+func TestPoolMetricsBucketFallsBackToPoolCost(t *testing.T) {
+	bucket := &poolMetricsBucket{key: 1_000, samples: map[string]types.EventComputeSchema{
+		"pool-a\x00": {
+			WorkspaceID:  "workspace-1",
+			PoolName:     "pool-a",
+			Action:       types.EventComputeActionPoolHeartbeat,
+			MachineCount: 1,
+			Attrs: map[string]string{
+				types.EventComputeAttrHourlyCostCents: "80",
+			},
+		},
+		"pool-a\x00machine-1": {
+			WorkspaceID: "workspace-1",
+			PoolName:    "pool-a",
+			MachineID:   "machine-1",
+			GPUCount:    1,
+			Attrs: map[string]string{
+				types.EventComputeAttrFreeGPUCount: "1",
+			},
+		},
+	}}
+
+	metrics := bucket.point(time.Hour).Pools
+	if len(metrics) != 1 {
+		t.Fatalf("pool count = %d, want 1", len(metrics))
+	}
+	if got, want := metrics[0].HourlyCost, 0.8; got != want {
+		t.Fatalf("hourly cost = %v, want %v: %+v", got, want, metrics[0])
+	}
+	if got, want := metrics[0].EstimatedCost, 0.8; got != want {
+		t.Fatalf("estimated cost = %v, want %v: %+v", got, want, metrics[0])
 	}
 }
 
@@ -1546,9 +1580,9 @@ func TestEventRecordMatchesQueryFiltersByScopeAndTime(t *testing.T) {
 
 func TestEventMetadataPoolNameRoundTrip(t *testing.T) {
 	repo := &EventClientRepo{}
-	event, err := repo.createEventObject(types.EventWorkerPoolDegraded, types.EventWorkerPoolStateSchemaVersion, types.EventWorkerPoolStateSchema{
+	event, err := repo.createEventObject(types.EventWorkerLifecycle, types.EventWorkerLifecycleSchemaVersion, types.EventWorkerLifecycleSchema{
 		PoolName: "default",
-		Status:   string(types.WorkerPoolStatusDegraded),
+		Status:   types.EventWorkerLifecycleDeleted,
 	})
 	if err != nil {
 		t.Fatal(err)

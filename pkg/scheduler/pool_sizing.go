@@ -7,7 +7,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/beam-cloud/redislock"
-	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -47,15 +46,6 @@ func (s *WorkerPoolSizer) Start() {
 	ticker := time.NewTicker(poolMonitoringInterval)
 	defer ticker.Stop()
 
-	sampledLogger := log.Sample(zerolog.LevelSampler{
-		WarnSampler: &zerolog.BurstSampler{
-			Burst:       1,
-			Period:      10 * time.Second,
-			NextSampler: nil,
-		},
-	})
-
-	previousState := &types.WorkerPoolState{}
 	for range ticker.C {
 		select {
 		case <-ctx.Done():
@@ -71,24 +61,6 @@ func (s *WorkerPoolSizer) Start() {
 				return
 			}
 			defer s.workerPoolRepo.RemoveWorkerPoolSizerLock(s.controller.Name())
-
-			nextState, err := s.controller.State() // Get the current state of the pool
-			if err != nil {
-				return
-			}
-
-			if previousState.Status != nextState.Status && nextState.Status == types.WorkerPoolStatusDegraded {
-				sampledLogger.Warn().Str("pool_name", s.controller.Name()).Msg("pool is degraded, skipping pool sizing")
-			} else if previousState.Status != nextState.Status && nextState.Status == types.WorkerPoolStatusHealthy {
-				sampledLogger.Info().Str("pool_name", s.controller.Name()).Msg("pool is healthy, resuming pool sizing")
-			}
-
-			previousState = nextState
-
-			// If the pool is degraded, we don't want to keep adding more workers
-			if nextState.Status == types.WorkerPoolStatusDegraded {
-				return
-			}
 
 			// Get the current free capacity of the pool
 			freeCapacity, err := s.controller.FreeCapacity()

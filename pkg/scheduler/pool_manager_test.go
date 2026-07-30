@@ -8,7 +8,7 @@ import (
 )
 
 func TestWorkerPoolManager_GetPoolByFilters(t *testing.T) {
-	manager := NewWorkerPoolManager(false)
+	manager := NewWorkerPoolManager()
 
 	controller := &LocalWorkerPoolControllerForTest{
 		preemptable: true,

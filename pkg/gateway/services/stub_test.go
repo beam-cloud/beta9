@@ -5,10 +5,12 @@ import (
 	"testing"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/metadata"
 )
 
 type checkpointVolumeBackendRepo struct {
@@ -30,6 +32,25 @@ type fakePrivatePoolFinder struct {
 
 func (f fakePrivatePoolFinder) FindReadyPrivatePoolForGPU(ctx context.Context, workspaceID string, gpus []types.GpuType) (string, error) {
 	return f.pool, f.err
+}
+
+func TestCachePreparedStub(t *testing.T) {
+	rdb, err := repository.NewRedisClientForTest()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = rdb.Close() })
+
+	ctx := metadata.NewIncomingContext(
+		context.Background(),
+		metadata.Pairs(common.PreparedStubCacheMetadata, "cache-key"),
+	)
+	(&GatewayService{redisClient: rdb}).cachePreparedStub(ctx, "workspace-1", "stub-1")
+
+	stubID, err := rdb.Get(
+		context.Background(),
+		common.RedisKeys.GatewayPreparedStub("workspace-1", "cache-key"),
+	).Result()
+	require.NoError(t, err)
+	require.Equal(t, "stub-1", stubID)
 }
 
 func TestComputeCapacityVerdictAvailableWhenAnyGPUSupported(t *testing.T) {

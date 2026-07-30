@@ -1158,26 +1158,6 @@ func (r *WorkerRedisRepository) GetAllWorkersInPool(poolName string) ([]*types.W
 	}), nil
 }
 
-func (r *WorkerRedisRepository) CordonAllPendingWorkersInPool(poolName string) error {
-	workers, err := r.GetAllWorkersInPool(poolName)
-	if err != nil {
-		return err
-	}
-
-	for _, w := range workers {
-		if w.Status != types.WorkerStatusPending {
-			continue
-		}
-
-		err := r.UpdateWorkerStatus(w.Id, types.WorkerStatusDisabled)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
 func (r *WorkerRedisRepository) GetAllWorkersOnMachine(machineId string) ([]*types.Worker, error) {
 	indexKey := common.RedisKeys.SchedulerWorkerMachineIndex(machineId)
 	keys, err := r.rdb.SMembers(context.TODO(), indexKey).Result()

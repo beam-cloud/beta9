@@ -111,7 +111,7 @@ func TestSchedulerPushBacklogSanitizesPrivatePoolRequests(t *testing.T) {
 	assert.NotNil(t, redisClient)
 	assert.NoError(t, err)
 
-	manager := NewWorkerPoolManager(false)
+	manager := NewWorkerPoolManager()
 	manager.SetPool("private-pool", types.WorkerPoolConfig{Mode: types.PoolModePrivate}, nil)
 
 	storageID := uint(1)

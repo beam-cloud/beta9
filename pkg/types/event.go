@@ -35,9 +35,6 @@ var (
 	EventStubRun            = "stub.run"
 	EventStubClone          = "stub.clone"
 
-	EventWorkerPoolDegraded = "workerpool.degraded"
-	EventWorkerPoolHealthy  = "workerpool.healthy"
-
 	EventGatewayEndpointCalled = "gateway.endpoint.called"
 	EventLLMRoute              = "llm.route"
 
@@ -212,6 +209,12 @@ const (
 	EventComputeActionReservationTerminating     = "reservation.terminating"
 	EventComputeActionReservationStatusUpdated   = "reservation.status_updated"
 	EventComputeActionPoolHeartbeat              = "pool.heartbeat"
+	EventComputeActionPoolSchedulable            = "pool.schedulable"
+	EventComputeActionPoolUnschedulable          = "pool.unschedulable"
+	EventComputeActionContainerPlaced            = "container.placed"
+	EventComputeActionOnDemandCreated            = "ondemand.reservation_created"
+	EventComputeActionOnDemandTerminated         = "ondemand.reservation_terminated"
+	EventComputeActionOnDemandBudgetExhausted    = "ondemand.budget_exhausted"
 	EventComputeActionJoinTokenCreated           = "join_token.created"
 	EventComputeActionJoinTokenRevoked           = "join_token.revoked"
 	EventComputeActionMachineJoined              = "machine.joined"
@@ -245,7 +248,7 @@ const (
 	EventComputeAttrHostCPUUtilizationPct    = "host_cpu_utilization_pct"
 	EventComputeAttrHostMemoryUsedMB         = "host_memory_used_mb"
 	EventComputeAttrHostMemoryUtilizationPct = "host_memory_utilization_pct"
-	EventComputeAttrHourlyCostMicros         = "hourly_cost_micros"
+	EventComputeAttrHourlyCostCents          = "hourly_cost_cents"
 	EventComputeAttrMemoryUsedMB             = "memory_used_mb"
 	EventComputeAttrMemoryUtilizationPct     = "memory_utilization_pct"
 	EventComputeAttrPendingContainerCount    = "pending_container_count"
@@ -254,6 +257,23 @@ const (
 	EventComputeAttrSchedulingLatencyMs      = "scheduling_latency_ms"
 	EventComputeAttrTransport                = "transport"
 	EventComputeAttrWorkerCount              = "worker_count"
+
+	// Failover and on-demand attrs. All money is denominated in cents.
+	EventComputeAttrReasons              = "reasons"
+	EventComputeAttrChain                = "chain"
+	EventComputeAttrFailover             = "failover"
+	EventComputeAttrRequestedGPU         = "requested_gpu"
+	EventComputeAttrPlacedGPU            = "placed_gpu"
+	EventComputeAttrWaitMs               = "wait_ms"
+	EventComputeAttrProvider             = "provider"
+	EventComputeAttrGPU                  = "gpu"
+	EventComputeAttrNodeCount            = "node_count"
+	EventComputeAttrBudgetHourlyCents    = "budget_hourly_cents"
+	EventComputeAttrBudgetHourlyMaxCents = "budget_hourly_max_cents"
+	EventComputeAttrBudgetDailyCents     = "budget_daily_cents"
+	EventComputeAttrBudgetDailyMaxCents  = "budget_daily_max_cents"
+	EventComputeAttrOnDemandHourlyCents  = "ondemand_hourly_cost_cents"
+	EventComputeAttrOnDemandNodeCount    = "ondemand_node_count"
 )
 
 type EventComputeSchema struct {
@@ -337,15 +357,6 @@ type EventStubStateSchema struct {
 	PreviousState    string   `json:"previous_state"`
 	Reason           string   `json:"reason"`
 	FailedContainers []string `json:"failed_containers"`
-}
-
-var EventWorkerPoolStateSchemaVersion = "1.0"
-
-type EventWorkerPoolStateSchema struct {
-	PoolName  string           `json:"pool_name"`
-	Reasons   []string         `json:"reasons"`
-	Status    string           `json:"status"`
-	PoolState *WorkerPoolState `json:"pool_state"`
 }
 
 var EventGatewayEndpointSchemaVersion = "1.0"

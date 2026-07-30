@@ -395,7 +395,7 @@ func TestCreatePoolRejectsConfiguredWorkerPoolIdentity(t *testing.T) {
 func TestCreatePoolRollsBackFailedRegistration(t *testing.T) {
 	ctx := testAuthContext("workspace-1", "owner-token")
 	repo := &fakeComputeRepo{}
-	manager := scheduler.NewWorkerPoolManager(false)
+	manager := scheduler.NewWorkerPoolManager()
 	s := scheduler.NewSchedulerForCapacityChecks(nil, repo, manager)
 	if err := s.EnsureAgentPool("workspace-1", &model.PoolState{
 		Name: "selector-owner", Selector: "shared", Mode: string(types.PoolModePrivate),
@@ -434,7 +434,7 @@ func TestCreatePoolRemovesOldSelectorAfterReplacement(t *testing.T) {
 		Name: "private", Selector: "old", Mode: string(types.PoolModePrivate), CreatedByTokenID: "owner-token",
 	}
 	repo := &fakeComputeRepo{pools: map[string][]*model.PoolState{"workspace-1": {previous}}}
-	s := scheduler.NewSchedulerForCapacityChecks(nil, repo, scheduler.NewWorkerPoolManager(false))
+	s := scheduler.NewSchedulerForCapacityChecks(nil, repo, scheduler.NewWorkerPoolManager())
 	if err := s.EnsureAgentPool("workspace-1", previous); err != nil {
 		t.Fatal(err)
 	}
@@ -576,7 +576,7 @@ func TestCreateBYOCPoolCreatesAWSCPUPrivatePool(t *testing.T) {
 func TestCreateBYOCPoolRollsBackFailedRegistration(t *testing.T) {
 	ctx := testAuthContext("workspace-1", "owner-token")
 	repo := &fakeComputeRepo{}
-	s := scheduler.NewSchedulerForCapacityChecks(nil, repo, scheduler.NewWorkerPoolManager(false))
+	s := scheduler.NewSchedulerForCapacityChecks(nil, repo, scheduler.NewWorkerPoolManager())
 	if err := s.EnsureAgentPool("workspace-1", &model.PoolState{
 		Name: "selector-owner", Selector: "aws-cpu", Mode: string(types.PoolModePrivate),
 	}); err != nil {
@@ -4988,7 +4988,39 @@ type fakeComputeRepo struct {
 	rentals    map[string][]*model.MarketplaceRentalState
 	sshStates  map[string]*model.MachineSSHState
 	sshMu      sync.Mutex
+	demand     map[string]*model.FailoverDemand
+	spendCents float64
 	savedPool  bool
+}
+
+func (r *fakeComputeRepo) PushFailoverDemand(ctx context.Context, demand *model.FailoverDemand, ttl time.Duration) error {
+	if r.demand == nil {
+		r.demand = map[string]*model.FailoverDemand{}
+	}
+	r.demand[demand.GPU] = demand
+	return nil
+}
+
+func (r *fakeComputeRepo) ListFailoverDemand(ctx context.Context) ([]*model.FailoverDemand, error) {
+	out := []*model.FailoverDemand{}
+	for _, demand := range r.demand {
+		out = append(out, demand)
+	}
+	return out, nil
+}
+
+func (r *fakeComputeRepo) DeleteFailoverDemand(ctx context.Context, gpu string) error {
+	delete(r.demand, gpu)
+	return nil
+}
+
+func (r *fakeComputeRepo) RecordOnDemandSpend(ctx context.Context, at time.Time, cents float64) error {
+	r.spendCents += cents
+	return nil
+}
+
+func (r *fakeComputeRepo) OnDemandSpendCents(ctx context.Context, window time.Duration) (float64, error) {
+	return r.spendCents, nil
 }
 
 func (r *fakeComputeRepo) LockMachineRentals(ctx context.Context, machineID string) error {
@@ -6595,7 +6627,7 @@ func TestMarketplacePoolStateRollsBackFailedRegistration(t *testing.T) {
 	ctx := context.Background()
 	repo := &fakeComputeRepo{}
 	poolName := model.MarketplacePoolNameForSeller("seller-1", "a100")
-	manager := scheduler.NewWorkerPoolManager(false)
+	manager := scheduler.NewWorkerPoolManager()
 	manager.SetPool(poolName, types.WorkerPoolConfig{Mode: types.PoolModeLocal}, nil)
 	service := &Service{
 		computeRepo: repo,
@@ -6617,7 +6649,7 @@ func TestMarketplaceListingRollsBackFailedRegistration(t *testing.T) {
 	ctx := testAuthContext("seller-1", "owner-token")
 	repo := &fakeComputeRepo{}
 	poolName := model.MarketplacePoolNameForSeller("seller-1", "a100")
-	manager := scheduler.NewWorkerPoolManager(false)
+	manager := scheduler.NewWorkerPoolManager()
 	manager.SetPool(poolName, types.WorkerPoolConfig{Mode: types.PoolModeLocal}, nil)
 	service := &Service{
 		computeRepo: repo,
@@ -6668,7 +6700,7 @@ func TestMarketplaceUpdateRestoresListingAndPoolAfterFailedRegistration(t *testi
 	if err := repo.SavePoolState(ctx, "seller-1", marketplacePoolState(listing, "owner-token", now, now)); err != nil {
 		t.Fatal(err)
 	}
-	manager := scheduler.NewWorkerPoolManager(false)
+	manager := scheduler.NewWorkerPoolManager()
 	manager.SetPool(poolName, types.WorkerPoolConfig{Mode: types.PoolModeLocal}, nil)
 	service := &Service{
 		computeRepo: repo,

@@ -296,11 +296,6 @@ worker:
   cleanupPendingWorkerAgeLimit: 10m
   cacheEnabled: true
   containerLogLinesPerHour: 6000
-  failover:
-    enabled: true
-    maxPendingWorkers: 10
-    maxSchedulingLatencyMs: 300000 # 5 minutes
-    minMachinesAvailable: 1 # minMachinesAvailable only applies to external pools
   criu:
     mode: nvidia
 
