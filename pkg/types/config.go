@@ -176,12 +176,12 @@ type ContainerCostHookConfig struct {
 }
 
 type GatewayServiceConfig struct {
-	Host                 string        `key:"host" json:"host"`
-	InvokeURLType        string        `key:"invokeURLType" json:"invoke_url_type"`
-	GRPC                 GRPCConfig    `key:"grpc" json:"grpc"`
-	HTTP                 HTTPConfig    `key:"http" json:"http"`
-	ShutdownTimeout      time.Duration `key:"shutdownTimeout" json:"shutdown_timeout"`
-	StubLimits           StubLimits    `key:"stubLimits" json:"stub_limits"`
+	Host            string        `key:"host" json:"host"`
+	InvokeURLType   string        `key:"invokeURLType" json:"invoke_url_type"`
+	GRPC            GRPCConfig    `key:"grpc" json:"grpc"`
+	HTTP            HTTPConfig    `key:"http" json:"http"`
+	ShutdownTimeout time.Duration `key:"shutdownTimeout" json:"shutdown_timeout"`
+	StubLimits      StubLimits    `key:"stubLimits" json:"stub_limits"`
 }
 
 type FileServiceConfig struct {
@@ -407,6 +407,7 @@ type WorkerConfig struct {
 	Namespace                    string                        `key:"namespace" json:"namespace"`
 	ServiceAccountName           string                        `key:"serviceAccountName" json:"service_account_name"`
 	JobResourcesEnforced         bool                          `key:"jobResourcesEnforced" json:"job_resources_enforced"`
+	PreferBestFit                bool                          `key:"preferBestFit" json:"prefer_best_fit"`
 	ContainerResourceLimits      ContainerResourceLimitsConfig `key:"containerResourceLimits" json:"container_resource_limits"`
 	DefaultWorkerCPURequest      int64                         `key:"defaultWorkerCPURequest" json:"default_worker_cpu_request"`
 	DefaultWorkerMemoryRequest   int64                         `key:"defaultWorkerMemoryRequest" json:"default_worker_memory_request"`
@@ -534,8 +535,9 @@ func (c RuntimeConfig) WithDefaults(runtime string) RuntimeConfig {
 }
 
 type WorkerPoolJobSpecConfig struct {
-	NodeSelector map[string]string `key:"nodeSelector" json:"node_selector"`
-	Env          []corev1.EnvVar   `key:"env" json:"env"`
+	NodeSelector          map[string]string `key:"nodeSelector" json:"node_selector"`
+	SingleGPUNodeSelector map[string]string `key:"singleGpuNodeSelector" json:"single_gpu_node_selector"`
+	Env                   []corev1.EnvVar   `key:"env" json:"env"`
 
 	// Mimics corev1.Volume since that type doesn't currently serialize correctly
 	Volumes []struct {

@@ -1495,130 +1495,184 @@ func TestProcessRequestBatchDoesNotOverScheduleWorkerSnapshot(t *testing.T) {
 	assert.Equal(t, int64(2), updatedWorker.ResourceVersion)
 }
 
-func TestProcessRequestBatchSpreadsAcrossEqualWorkers(t *testing.T) {
-	wb, err := NewSchedulerForTest()
-	assert.Nil(t, err)
-
-	firstWorker := &types.Worker{
-		Id:          uuid.New().String(),
-		Status:      types.WorkerStatusAvailable,
-		TotalCpu:    200,
-		TotalMemory: 250,
-		FreeCpu:     200,
-		FreeMemory:  250,
-		PoolName:    "beta9-cpu",
-	}
-	err = wb.workerRepo.AddWorker(firstWorker)
-	assert.Nil(t, err)
-
-	secondWorker := &types.Worker{
-		Id:          uuid.New().String(),
-		Status:      types.WorkerStatusAvailable,
-		TotalCpu:    200,
-		TotalMemory: 250,
-		FreeCpu:     200,
-		FreeMemory:  250,
-		PoolName:    "beta9-cpu",
-	}
-	err = wb.workerRepo.AddWorker(secondWorker)
-	assert.Nil(t, err)
-
-	workers, err := wb.workerRepo.GetAllWorkers()
-	assert.Nil(t, err)
-
-	requests := []*types.ContainerRequest{
+func TestProcessRequestBatchHonorsPackingPreference(t *testing.T) {
+	tests := []struct {
+		name           string
+		enableBestFit  bool
+		expectedFirst  int
+		expectedSecond int
+	}{
 		{
-			ContainerId: uuid.New().String(),
-			Cpu:         100,
-			Memory:      100,
-			Timestamp:   time.Now(),
+			name:           "spread by default",
+			expectedFirst:  1,
+			expectedSecond: 1,
 		},
 		{
-			ContainerId: uuid.New().String(),
-			Cpu:         100,
-			Memory:      100,
-			Timestamp:   time.Now(),
+			name:           "best-fit when enabled",
+			enableBestFit:  true,
+			expectedFirst:  2,
+			expectedSecond: 0,
 		},
 	}
-	setPendingSchedulerRequests(t, wb, requests...)
 
-	wb.processRequestBatch(requests, workers)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			wb, err := NewSchedulerForTest()
+			assert.Nil(t, err)
+			assert.False(t, wb.config.Worker.PreferBestFit)
+			if test.enableBestFit {
+				wb.config.Worker.PreferBestFit = true
+			}
 
-	firstQueued, err := wb.workerRepo.GetNextContainerRequest(firstWorker.Id)
-	assert.Nil(t, err)
-	secondQueued, err := wb.workerRepo.GetNextContainerRequest(secondWorker.Id)
-	assert.Nil(t, err)
+			workers := []*types.Worker{
+				{
+					Id:          "worker-a",
+					Status:      types.WorkerStatusAvailable,
+					TotalCpu:    200,
+					TotalMemory: 250,
+					FreeCpu:     200,
+					FreeMemory:  250,
+					PoolName:    "beta9-cpu",
+				},
+				{
+					Id:          "worker-b",
+					Status:      types.WorkerStatusAvailable,
+					TotalCpu:    200,
+					TotalMemory: 250,
+					FreeCpu:     200,
+					FreeMemory:  250,
+					PoolName:    "beta9-cpu",
+				},
+			}
+			for _, worker := range workers {
+				err = wb.workerRepo.AddWorker(worker)
+				assert.Nil(t, err)
+			}
 
-	assert.NotNil(t, firstQueued)
-	assert.NotNil(t, secondQueued)
-	assert.NotEqual(t, firstQueued.ContainerId, secondQueued.ContainerId)
+			workerSnapshot, err := wb.workerRepo.GetAllWorkers()
+			assert.Nil(t, err)
+			requests := []*types.ContainerRequest{
+				{
+					ContainerId: uuid.New().String(),
+					Cpu:         100,
+					Memory:      100,
+					Timestamp:   time.Now(),
+				},
+				{
+					ContainerId: uuid.New().String(),
+					Cpu:         100,
+					Memory:      100,
+					Timestamp:   time.Now(),
+				},
+			}
+			setPendingSchedulerRequests(t, wb, requests...)
+			wb.processRequestBatch(requests, workerSnapshot)
+
+			queuedCounts := make([]int, len(workers))
+			for index, worker := range workers {
+				for {
+					request, err := wb.workerRepo.GetNextContainerRequest(worker.Id)
+					assert.Nil(t, err)
+					if request == nil {
+						break
+					}
+					queuedCounts[index]++
+				}
+			}
+			assert.Equal(t, test.expectedFirst, queuedCounts[0])
+			assert.Equal(t, test.expectedSecond, queuedCounts[1])
+		})
+	}
 }
 
-func TestProcessRequestBatchSchedulesTinySandboxBurstByRequestedCapacity(t *testing.T) {
-	wb, err := NewSchedulerForTest()
-	assert.Nil(t, err)
-
-	wb.config.Worker.Pools["beta9-cpu"] = types.WorkerPoolConfig{
-		ContainerRuntime:          types.ContainerRuntimeRunc.String(),
-		ContainerStartConcurrency: 32,
-	}
-
-	workers := []*types.Worker{
+func TestProcessRequestBatchHonorsPackingPreferenceForTinySandboxBurst(t *testing.T) {
+	tests := []struct {
+		name              string
+		enableBestFit     bool
+		expectedPerWorker []int
+	}{
 		{
-			Id:          uuid.New().String(),
-			Status:      types.WorkerStatusAvailable,
-			TotalCpu:    16000,
-			TotalMemory: 32000,
-			FreeCpu:     16000,
-			FreeMemory:  32000,
-			PoolName:    "beta9-cpu",
-			Runtime:     types.ContainerRuntimeRunc.String(),
+			name:              "spread by default",
+			expectedPerWorker: []int{35, 35},
 		},
 		{
-			Id:          uuid.New().String(),
-			Status:      types.WorkerStatusAvailable,
-			TotalCpu:    16000,
-			TotalMemory: 32000,
-			FreeCpu:     16000,
-			FreeMemory:  32000,
-			PoolName:    "beta9-cpu",
-			Runtime:     types.ContainerRuntimeRunc.String(),
+			name:              "best-fit when enabled",
+			enableBestFit:     true,
+			expectedPerWorker: []int{70, 0},
 		},
 	}
-	for _, worker := range workers {
-		err = wb.workerRepo.AddWorker(worker)
-		assert.Nil(t, err)
-	}
 
-	requests := make([]*types.ContainerRequest, 70)
-	for i := range requests {
-		requests[i] = &types.ContainerRequest{
-			ContainerId: uuid.New().String(),
-			Cpu:         100,
-			Memory:      100,
-			Timestamp:   time.Now(),
-			Stub: types.StubWithRelated{
-				Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)},
-			},
-		}
-	}
-	setPendingSchedulerRequests(t, wb, requests...)
-
-	workerSnapshot, err := wb.workerRepo.GetAllWorkers()
-	assert.Nil(t, err)
-	wb.processRequestBatch(requests, workerSnapshot)
-
-	for _, worker := range workers {
-		queued := 0
-		for {
-			request, err := wb.workerRepo.GetNextContainerRequest(worker.Id)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			wb, err := NewSchedulerForTest()
 			assert.Nil(t, err)
-			if request == nil {
-				break
+			assert.False(t, wb.config.Worker.PreferBestFit)
+			if test.enableBestFit {
+				wb.config.Worker.PreferBestFit = true
 			}
-			queued++
-		}
-		assert.Equal(t, 35, queued)
+			wb.config.Worker.Pools["beta9-cpu"] = types.WorkerPoolConfig{
+				ContainerRuntime:          types.ContainerRuntimeRunc.String(),
+				ContainerStartConcurrency: 32,
+			}
+
+			workers := []*types.Worker{
+				{
+					Id:          "worker-a",
+					Status:      types.WorkerStatusAvailable,
+					TotalCpu:    16000,
+					TotalMemory: 32000,
+					FreeCpu:     16000,
+					FreeMemory:  32000,
+					PoolName:    "beta9-cpu",
+					Runtime:     types.ContainerRuntimeRunc.String(),
+				},
+				{
+					Id:          "worker-b",
+					Status:      types.WorkerStatusAvailable,
+					TotalCpu:    16000,
+					TotalMemory: 32000,
+					FreeCpu:     16000,
+					FreeMemory:  32000,
+					PoolName:    "beta9-cpu",
+					Runtime:     types.ContainerRuntimeRunc.String(),
+				},
+			}
+			for _, worker := range workers {
+				err = wb.workerRepo.AddWorker(worker)
+				assert.Nil(t, err)
+			}
+
+			requests := make([]*types.ContainerRequest, 70)
+			for i := range requests {
+				requests[i] = &types.ContainerRequest{
+					ContainerId: uuid.New().String(),
+					Cpu:         100,
+					Memory:      100,
+					Timestamp:   time.Now(),
+					Stub: types.StubWithRelated{
+						Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)},
+					},
+				}
+			}
+			setPendingSchedulerRequests(t, wb, requests...)
+
+			workerSnapshot, err := wb.workerRepo.GetAllWorkers()
+			assert.Nil(t, err)
+			wb.processRequestBatch(requests, workerSnapshot)
+
+			for index, worker := range workers {
+				queued := 0
+				for {
+					request, err := wb.workerRepo.GetNextContainerRequest(worker.Id)
+					assert.Nil(t, err)
+					if request == nil {
+						break
+					}
+					queued++
+				}
+				assert.Equal(t, test.expectedPerWorker[index], queued)
+			}
+		})
 	}
 }
 
@@ -2824,8 +2878,8 @@ func TestSelectGPUWorkerDoesNotMutatePriority(t *testing.T) {
 	t4Worker := &types.Worker{
 		Id:           uuid.New().String(),
 		Status:       types.WorkerStatusAvailable,
-		FreeCpu:      1000,
-		FreeMemory:   1250,
+		FreeCpu:      2000,
+		FreeMemory:   2500,
 		FreeGpuCount: 1,
 		Gpu:          "T4",
 		Priority:     7,
@@ -2842,6 +2896,147 @@ func TestSelectGPUWorkerDoesNotMutatePriority(t *testing.T) {
 	assert.Equal(t, t4Worker.Id, worker.Id)
 	assert.Equal(t, int32(7), a10gWorker.Priority)
 	assert.Equal(t, int32(7), t4Worker.Priority)
+}
+
+func TestSelectWorkerCapacityTieBreakHonorsPackingPreference(t *testing.T) {
+	tests := []struct {
+		name             string
+		omitWorkerConfig bool
+		enableBestFit    bool
+		expectedID       string
+	}{
+		{
+			name:             "spread when setting is omitted",
+			omitWorkerConfig: true,
+			expectedID:       "roomy",
+		},
+		{
+			name:       "spread from default config",
+			expectedID: "roomy",
+		},
+		{
+			name:          "best-fit when enabled",
+			enableBestFit: true,
+			expectedID:    "best-fit",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			wb, err := NewSchedulerForTest()
+			assert.Nil(t, err)
+			assert.False(t, wb.config.Worker.PreferBestFit)
+			if test.omitWorkerConfig {
+				wb.config.Worker = types.WorkerConfig{}
+			}
+			if test.enableBestFit {
+				wb.config.Worker.PreferBestFit = true
+			}
+
+			request := &types.ContainerRequest{Cpu: 1000, Memory: 1000}
+			roomyWorker := &types.Worker{
+				Id:         "roomy",
+				Status:     types.WorkerStatusAvailable,
+				FreeCpu:    4000,
+				FreeMemory: 8000,
+				Priority:   7,
+			}
+			bestFitWorker := &types.Worker{
+				Id:         "best-fit",
+				Status:     types.WorkerStatusAvailable,
+				FreeCpu:    1500,
+				FreeMemory: 2000,
+				Priority:   7,
+			}
+
+			worker, err := wb.selectWorkerFromWorkers([]*types.Worker{roomyWorker, bestFitWorker}, request)
+			assert.Nil(t, err)
+			assert.Equal(t, test.expectedID, worker.Id)
+		})
+	}
+}
+
+func TestSelectWorkerBestFitPreservesPriorityWhenEnabled(t *testing.T) {
+	wb, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+	wb.config.Worker.PreferBestFit = true
+
+	request := &types.ContainerRequest{Cpu: 1000, Memory: 1000}
+	highPriorityWorker := &types.Worker{
+		Id:         "high-priority",
+		Status:     types.WorkerStatusAvailable,
+		FreeCpu:    4000,
+		FreeMemory: 8000,
+		Priority:   8,
+	}
+	bestFitWorker := &types.Worker{
+		Id:         "best-fit",
+		Status:     types.WorkerStatusAvailable,
+		FreeCpu:    1000,
+		FreeMemory: 1000,
+		Priority:   7,
+	}
+
+	worker, err := wb.selectWorkerFromWorkers([]*types.Worker{bestFitWorker, highPriorityWorker}, request)
+	assert.Nil(t, err)
+	assert.Equal(t, highPriorityWorker.Id, worker.Id)
+}
+
+func TestSelectWorkerBestFitPreservesAvailabilityWhenEnabled(t *testing.T) {
+	wb, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+	wb.config.Worker.PreferBestFit = true
+
+	request := &types.ContainerRequest{Cpu: 1000, Memory: 1000}
+	availableWorker := &types.Worker{
+		Id:         "available",
+		Status:     types.WorkerStatusAvailable,
+		FreeCpu:    4000,
+		FreeMemory: 8000,
+		Priority:   7,
+	}
+	pendingBestFitWorker := &types.Worker{
+		Id:         "pending-best-fit",
+		Status:     types.WorkerStatusPending,
+		FreeCpu:    1000,
+		FreeMemory: 1000,
+		Priority:   7,
+	}
+
+	worker, err := wb.selectWorkerFromWorkersByStatus(
+		[]*types.Worker{pendingBestFitWorker, availableWorker},
+		request,
+		types.WorkerStatusAvailable,
+		types.WorkerStatusPending,
+	)
+	assert.Nil(t, err)
+	assert.Equal(t, availableWorker.Id, worker.Id)
+}
+
+func TestSelectWorkerBestFitUsesWorkerIDForDeterministicTiesWhenEnabled(t *testing.T) {
+	wb, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+	wb.config.Worker.PreferBestFit = true
+
+	request := &types.ContainerRequest{Cpu: 1000, Memory: 1000}
+	workerB := &types.Worker{
+		Id:         "worker-b",
+		Status:     types.WorkerStatusAvailable,
+		FreeCpu:    2000,
+		FreeMemory: 2000,
+		Priority:   7,
+	}
+	workerA := &types.Worker{
+		Id:         "worker-a",
+		Status:     types.WorkerStatusAvailable,
+		FreeCpu:    2000,
+		FreeMemory: 2000,
+		Priority:   7,
+	}
+
+	worker, err := wb.selectWorkerFromWorkers([]*types.Worker{workerB, workerA}, request)
+	assert.Nil(t, err)
+	assert.Equal(t, workerA.Id, worker.Id)
 }
 
 func TestRequiresPoolSelectorWorker(t *testing.T) {
