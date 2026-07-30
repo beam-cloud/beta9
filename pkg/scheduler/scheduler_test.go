@@ -118,13 +118,54 @@ func TestPrivateWorkerRequestUsesPoolMode(t *testing.T) {
 	manager := NewWorkerPoolManager()
 	privateState := &compute.PoolState{Selector: "private-pool"}
 	manager.SetPoolAt(agentPoolControllerKey("workspace-1", privateState), "private-pool", types.WorkerPoolConfig{Mode: types.PoolModePrivate}, nil)
+	manager.SetPool("serverless-pool", types.WorkerPoolConfig{Mode: types.PoolModeExternal}, nil)
 	manager.SetPool("local-pool", types.WorkerPoolConfig{Mode: types.PoolModeLocal}, nil)
 	scheduler := &Scheduler{workerPoolManager: manager}
 
 	request := &types.ContainerRequest{WorkspaceId: "workspace-1"}
 	assert.True(t, scheduler.privateWorkerRequest(&types.Worker{PoolName: "private-pool"}, request))
+	assert.False(t, scheduler.privateWorkerRequest(&types.Worker{PoolName: "serverless-pool", ControlPlaneManaged: true}, request))
 	assert.False(t, scheduler.privateWorkerRequest(&types.Worker{PoolName: "local-pool"}, request))
 	assert.False(t, scheduler.privateWorkerRequest(&types.Worker{PoolName: "missing-pool"}, request))
+}
+
+func TestPrepareWorkerRequestCredentialsByPoolMode(t *testing.T) {
+	manager := NewWorkerPoolManager()
+	privateState := &compute.PoolState{Selector: "private-pool"}
+	manager.SetPoolAt(agentPoolControllerKey("workspace-1", privateState), "private-pool", types.WorkerPoolConfig{Mode: types.PoolModePrivate}, nil)
+	manager.SetPool("serverless-pool", types.WorkerPoolConfig{Mode: types.PoolModeExternal}, nil)
+	scheduler := &Scheduler{
+		workerPoolManager: manager,
+		credentials:       newSchedulerCredentialCache(),
+	}
+	stubConfig, err := json.Marshal(types.StubConfigV1{
+		Secrets: []types.Secret{{Name: "SECRET"}},
+	})
+	assert.NoError(t, err)
+	request := &types.ContainerRequest{
+		ContainerId: "container-1",
+		WorkspaceId: "workspace-1",
+		Env:         []string{"BETA9_TOKEN=inline-token", "SECRET=inline-secret", "SAFE=value"},
+		Stub: types.StubWithRelated{
+			Stub: types.Stub{Config: string(stubConfig)},
+		},
+	}
+
+	privateRequest := scheduler.prepareWorkerRequest(
+		&types.Worker{PoolName: "private-pool", PoolSelector: "private-pool"},
+		request,
+	)
+	assert.Equal(t, []string{"SAFE=value"}, privateRequest.Env)
+	assert.Equal(t, []string{"SECRET"}, privateRequest.RuntimeSecretNames)
+	assert.True(t, privateRequest.RuntimeTokenRequired)
+
+	serverlessRequest := scheduler.prepareWorkerRequest(
+		&types.Worker{PoolName: "serverless-pool", PoolSelector: "serverless-pool", ControlPlaneManaged: true},
+		request,
+	)
+	assert.Equal(t, request.Env, serverlessRequest.Env)
+	assert.Empty(t, serverlessRequest.RuntimeSecretNames)
+	assert.False(t, serverlessRequest.RuntimeTokenRequired)
 }
 
 func TestPrivatePoolRequestsBypassManagedQuotaLookup(t *testing.T) {
