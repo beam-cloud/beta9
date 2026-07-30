@@ -27,7 +27,6 @@ const (
 	StubCapacityStatusAvailable = "available"
 	StubCapacityStatusLow       = "low"
 	StubCapacityStatusNone      = "none"
-	preparedStubCacheTTL        = 5 * time.Minute
 )
 
 func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCreateStubRequest) (*pb.GetOrCreateStubResponse, error) {
@@ -373,7 +372,7 @@ func (gws *GatewayService) cachePreparedStub(ctx context.Context, workspaceID, s
 		ctx,
 		common.RedisKeys.GatewayPreparedStub(workspaceID, cacheKeys[0]),
 		stubID,
-		preparedStubCacheTTL,
+		common.PreparedStubCacheTTL,
 	).Err()
 }
 

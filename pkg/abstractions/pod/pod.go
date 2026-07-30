@@ -697,9 +697,10 @@ func (s *GenericPodService) preparedStubID(ctx context.Context, workspaceID stri
 	if len(cacheKeys) == 0 {
 		return ""
 	}
-	stubID, _ := s.rdb.Get(
+	stubID, _ := s.rdb.GetEx(
 		ctx,
 		common.RedisKeys.GatewayPreparedStub(workspaceID, cacheKeys[0]),
+		common.PreparedStubCacheTTL,
 	).Result()
 	return stubID
 }

@@ -40,6 +40,9 @@ func TestPreparedStubID(t *testing.T) {
 	if got := (&GenericPodService{rdb: rdb}).preparedStubID(ctx, "workspace-1"); got != "stub-1" {
 		t.Fatalf("preparedStubID() = %q, want stub-1", got)
 	}
+	if ttl := rdb.TTL(context.Background(), key).Val(); ttl < 4*time.Minute {
+		t.Fatalf("prepared stub TTL = %s, want refreshed TTL", ttl)
+	}
 }
 
 func TestSandboxConnectErrorMessageDoesNotLeakDetails(t *testing.T) {

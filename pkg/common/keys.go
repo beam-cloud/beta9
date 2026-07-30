@@ -2,6 +2,7 @@ package common
 
 import (
 	"fmt"
+	"time"
 )
 
 var (
@@ -155,7 +156,10 @@ var (
 
 var RedisKeys = &redisKeys{}
 
-const PreparedStubCacheMetadata = "preparation-cache-key"
+const (
+	PreparedStubCacheMetadata = "preparation-cache-key"
+	PreparedStubCacheTTL      = 5 * time.Minute
+)
 
 type redisKeys struct{}
 
