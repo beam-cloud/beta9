@@ -15,10 +15,6 @@ func (s *Worker) hydrateRuntimeCredentials(ctx context.Context, request *types.C
 		return s.hydrateBuildWorkspaceStorageCredentials(ctx, request)
 	}
 
-	if !s.agentWorker() {
-		return nil
-	}
-
 	credentialRequest := runtimeCredentialsRequest(request)
 	if !hasRuntimeCredentialRequest(credentialRequest) {
 		return nil

@@ -97,6 +97,28 @@ func TestHydrateRuntimeCredentialsForBuildOnlyRequestsWorkspaceStorage(t *testin
 	require.Equal(t, "https://storage.example", *request.Workspace.Storage.EndpointUrl)
 }
 
+func TestHydrateRuntimeCredentialsForManagedFallback(t *testing.T) {
+	repo := &fakeRuntimeCredentialsWorkerRepo{
+		resp: &pb.GetContainerRuntimeCredentialsResponse{
+			Ok:  true,
+			Env: []string{"BETA9_TOKEN=restricted-runtime-token"},
+		},
+	}
+	request := &types.ContainerRequest{
+		ContainerId:          "container-1",
+		WorkspaceId:          "workspace-1",
+		StubId:               "stub-1",
+		RuntimeTokenRequired: true,
+	}
+	worker := &Worker{workerRepoClient: repo}
+
+	require.NoError(t, worker.hydrateRuntimeCredentials(context.Background(), request))
+
+	require.NotNil(t, repo.lastReq)
+	require.True(t, repo.lastReq.RuntimeToken)
+	require.Equal(t, []string{"BETA9_TOKEN=restricted-runtime-token"}, request.Env)
+}
+
 type fakeRuntimeCredentialsWorkerRepo struct {
 	pb.WorkerRepositoryServiceClient
 	lastReq *pb.GetContainerRuntimeCredentialsRequest
