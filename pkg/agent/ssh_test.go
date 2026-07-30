@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -154,6 +155,109 @@ func TestManagedSSHDisablePasswordCommandKeepsAccountAvailableForPublicKeys(t *t
 	}
 }
 
+func TestManagedSSHHostnameIsStableAndPortable(t *testing.T) {
+	longHostname := managedSSHHostname(strings.Repeat("a", 80) + "-ignored")
+	tests := map[string]string{
+		"3fbb8cb7":             "beam-3fbb8cb7",
+		"  INSTANCE_ABC/123  ": "beam-instance-abc-123",
+		"":                     "beam-instance",
+	}
+	for machineID, want := range tests {
+		if got := managedSSHHostname(machineID); got != want {
+			t.Errorf("managedSSHHostname(%q) = %q, want %q", machineID, got, want)
+		}
+	}
+	if len(longHostname) != 63 || strings.Trim(longHostname, "abcdefghijklmnopqrstuvwxyz0123456789-") != "" {
+		t.Errorf("long managed hostname = %q, want a portable 63-character hostname", longHostname)
+	}
+}
+
+func TestEnsureManagedSSHHostnameIsIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	hostnamePath := filepath.Join(dir, "hostname")
+	hostsPath := filepath.Join(dir, "hosts")
+	if err := os.WriteFile(hostnamePath, []byte("shadecloud\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hostsPath, []byte("127.0.0.1 localhost\n127.0.1.1 shadecloud\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var commands []managedSSHCommand
+	currentHostname := "shadecloud"
+	host := managedSSHHost{
+		lookPath: fakeLookPath(map[string]bool{"hostnamectl": true}),
+		run: func(_ context.Context, stdin, name string, args ...string) error {
+			commands = append(commands, managedSSHCommand{name: name, args: args, stdin: stdin})
+			currentHostname = args[len(args)-1]
+			return nil
+		},
+		hostname:     func() (string, error) { return currentHostname, nil },
+		hostnamePath: hostnamePath,
+		hostsPath:    hostsPath,
+	}
+	for range 2 {
+		if err := host.ensureHostname(context.Background(), "3fbb8cb7"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(commands) != 1 {
+		t.Fatalf("hostname commands = %d, want one", len(commands))
+	}
+	wantCommand := managedSSHCommand{name: "hostnamectl", args: []string{"set-hostname", "beam-3fbb8cb7"}}
+	if !reflect.DeepEqual(commands[0], wantCommand) {
+		t.Fatalf("hostname command = %#v, want %#v", commands[0], wantCommand)
+	}
+	data, err := os.ReadFile(hostnamePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "beam-3fbb8cb7\n" {
+		t.Fatalf("hostname file = %q", data)
+	}
+	data, err = os.ReadFile(hostsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(data), managedSSHHostsBegin) != 1 ||
+		strings.Count(string(data), "127.0.1.1 beam-3fbb8cb7") != 1 ||
+		!strings.Contains(string(data), "127.0.1.1 shadecloud") {
+		t.Fatalf("managed hosts mapping is not idempotent: %q", data)
+	}
+}
+
+func TestEnsureManagedSSHHostnameFallsBackWithoutSystemd(t *testing.T) {
+	dir := t.TempDir()
+	hostnamePath := filepath.Join(dir, "hostname")
+	hostsPath := filepath.Join(dir, "hosts")
+	if err := os.WriteFile(hostnamePath, []byte("provider-host\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hostsPath, []byte("127.0.0.1 localhost\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var got managedSSHCommand
+	host := managedSSHHost{
+		lookPath: fakeLookPath(map[string]bool{"hostnamectl": true, "hostname": true}),
+		run: func(_ context.Context, stdin, name string, args ...string) error {
+			if name == "hostnamectl" {
+				return errors.New("systemd is not running")
+			}
+			got = managedSSHCommand{name: name, args: args, stdin: stdin}
+			return nil
+		},
+		hostname:     func() (string, error) { return "provider-host", nil },
+		hostnamePath: hostnamePath,
+		hostsPath:    hostsPath,
+	}
+	if err := host.ensureHostname(context.Background(), "machine-one"); err != nil {
+		t.Fatal(err)
+	}
+	want := managedSSHCommand{name: "hostname", args: []string{"beam-machine-one"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("fallback command = %#v, want %#v", got, want)
+	}
+}
+
 func fakeLookPath(available map[string]bool) func(string) (string, error) {
 	return func(command string) (string, error) {
 		if available[command] {
@@ -187,7 +291,7 @@ func TestHostSSHManagerRefreshIsNonFatal(t *testing.T) {
 	}))
 	defer server.Close()
 	client := &recordingSSHStatusClient{requests: make(chan *pb.UpdateAgentSSHStatusRequest, 1)}
-	manager := newHostSSHManager(client, "agent-token", io.Discard)
+	manager := newHostSSHManager(client, "agent-token", "machine-one", io.Discard)
 	manager.applied = 7
 	manager.httpClient = server.Client()
 	manager.publicIPURL = server.URL
