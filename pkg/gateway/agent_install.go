@@ -33,6 +33,7 @@ SERVICE_NAME="${BEAM_AGENT_SERVICE_NAME:-beam-agent}"
 STATE_DIR="${BEAM_AGENT_STATE_DIR:-}"
 CACHE_DIR="${BEAM_AGENT_CACHE_DIR:-}"
 INSTALL_DOCKER="${BEAM_AGENT_INSTALL_DOCKER:-auto}"
+INSTALL_NVIDIA_TOOLKIT="${BEAM_AGENT_INSTALL_NVIDIA_TOOLKIT:-auto}"
 TRANSPORT=""
 EXECUTOR="${BEAM_AGENT_EXECUTOR:-}"
 WORKER_IMAGE="${BEAM_WORKER_IMAGE:-}"
@@ -75,6 +76,7 @@ main() {
   fi
 
   ensure_linux_docker
+  ensure_linux_nvidia_container_runtime
 
   if use_source_agent; then
     say "Starting Beam agent from source"
@@ -317,6 +319,86 @@ ensure_linux_docker() {
   fi
   if ! docker_ready; then
     fail "Docker is installed but not running. Start Docker and rerun this command." 1
+  fi
+}
+
+ensure_linux_nvidia_container_runtime() {
+  if [ "$OS" != "linux" ] || ! needs_worker_container; then
+    return
+  fi
+  if ! command -v nvidia-smi >/dev/null 2>&1; then
+    return
+  fi
+  if ! NVIDIA_GPU_IDS="$(nvidia-smi --query-gpu=index --format=csv,noheader,nounits 2>/dev/null)" || [ -z "$NVIDIA_GPU_IDS" ]; then
+    fail "nvidia-smi is installed but did not report any usable GPUs. Repair the NVIDIA driver and rerun this command." 1
+  fi
+  if docker_has_nvidia_runtime; then
+    return
+  fi
+  if ! command -v nvidia-ctk >/dev/null 2>&1; then
+    if [ "$DEV" = "1" ] || is_false "$INSTALL_NVIDIA_TOOLKIT"; then
+      fail "NVIDIA GPUs were detected but NVIDIA Container Toolkit is missing. Install nvidia-container-toolkit or rerun with BEAM_AGENT_INSTALL_NVIDIA_TOOLKIT=1." 1
+    fi
+    install_nvidia_container_toolkit
+  fi
+
+  say "Configuring NVIDIA Container Toolkit"
+  nvidia-ctk runtime configure --runtime=docker >/dev/null
+  restart_linux_docker
+  if ! docker_has_nvidia_runtime; then
+    fail "NVIDIA Container Toolkit is installed but Docker does not expose the nvidia runtime." 1
+  fi
+}
+
+install_nvidia_container_toolkit() {
+  say "Installing NVIDIA Container Toolkit"
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl gnupg
+    install -d -m 0755 /usr/share/keyrings /etc/apt/sources.list.d
+    NVIDIA_KEY_TMP="$(mktemp)"
+    NVIDIA_LIST_TMP="$(mktemp)"
+    download_file "https://nvidia.github.io/libnvidia-container/gpgkey" "$NVIDIA_KEY_TMP"
+    download_file "https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list" "$NVIDIA_LIST_TMP"
+    gpg --dearmor --yes -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg "$NVIDIA_KEY_TMP"
+    sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' "$NVIDIA_LIST_TMP" > /etc/apt/sources.list.d/nvidia-container-toolkit.list
+    rm -f "$NVIDIA_KEY_TMP" "$NVIDIA_LIST_TMP"
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y nvidia-container-toolkit
+    return
+  fi
+
+  if command -v dnf >/dev/null 2>&1 || command -v yum >/dev/null 2>&1; then
+    install -d -m 0755 /etc/yum.repos.d
+    NVIDIA_REPO_TMP="$(mktemp)"
+    download_file "https://nvidia.github.io/libnvidia-container/stable/rpm/nvidia-container-toolkit.repo" "$NVIDIA_REPO_TMP"
+    install -m 0644 "$NVIDIA_REPO_TMP" /etc/yum.repos.d/nvidia-container-toolkit.repo
+    rm -f "$NVIDIA_REPO_TMP"
+    if command -v dnf >/dev/null 2>&1; then
+      dnf install -y nvidia-container-toolkit
+    else
+      yum install -y nvidia-container-toolkit
+    fi
+    return
+  fi
+
+  fail "NVIDIA GPUs were detected but this Linux distribution cannot install NVIDIA Container Toolkit automatically. Install nvidia-container-toolkit and rerun this command." 1
+}
+
+docker_has_nvidia_runtime() {
+  docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -q '"nvidia"'
+}
+
+restart_linux_docker() {
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl restart docker
+  elif command -v service >/dev/null 2>&1; then
+    service docker restart
+  else
+    fail "NVIDIA Container Toolkit was configured, but Docker could not be restarted automatically." 1
+  fi
+  if ! docker_ready; then
+    fail "Docker did not become ready after configuring NVIDIA Container Toolkit." 1
   fi
 }
 

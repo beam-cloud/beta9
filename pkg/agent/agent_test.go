@@ -1338,7 +1338,7 @@ func TestResolveAgentCapacityDefaultsToDetectedGPUIDs(t *testing.T) {
 	}
 }
 
-func TestDetectNvidiaGPUDevicesSkipsFailedProcAdapter(t *testing.T) {
+func TestDetectNvidiaGPUDevicesSkipsExcludedProcAdapter(t *testing.T) {
 	previousQuery := queryNvidiaGPUDevices
 	queryNvidiaGPUDevices = func() ([]byte, error) {
 		return []byte(`0, GPU-bad, NVIDIA GeForce RTX 4090, 0x0000, 00000000:01:00.0
@@ -1347,8 +1347,8 @@ func TestDetectNvidiaGPUDevicesSkipsFailedProcAdapter(t *testing.T) {
 	t.Cleanup(func() { queryNvidiaGPUDevices = previousQuery })
 
 	root := t.TempDir()
-	writeNvidiaProcGPUInfo(t, root, "0000:01:00.0", "GPU-bad", "N/A", "??.??.??.??.?")
-	writeNvidiaProcGPUInfo(t, root, "0000:24:00.0", "GPU-good", "580.126.18", "95.02.3c.40.b8")
+	writeNvidiaProcGPUInfo(t, root, "0000:01:00.0", "GPU-bad", "N/A", "??.??.??.??.?", true)
+	writeNvidiaProcGPUInfo(t, root, "0000:24:00.0", "GPU-good", "580.126.18", "95.02.3c.40.b8", false)
 
 	previousRoot := nvidiaProcGPUInfoRoot
 	nvidiaProcGPUInfoRoot = root
@@ -1363,10 +1363,30 @@ func TestDetectNvidiaGPUDevicesSkipsFailedProcAdapter(t *testing.T) {
 	}
 }
 
+func TestDetectNvidiaGPUDevicesAllowsUnknownVideoBIOS(t *testing.T) {
+	previousQuery := queryNvidiaGPUDevices
+	queryNvidiaGPUDevices = func() ([]byte, error) {
+		return []byte(`0, GPU-a, NVIDIA GeForce RTX 4090, 0x0000, 00000000:01:00.0`), nil
+	}
+	t.Cleanup(func() { queryNvidiaGPUDevices = previousQuery })
+
+	root := t.TempDir()
+	writeNvidiaProcGPUInfo(t, root, "0000:01:00.0", "GPU-a", "N/A", "??.??.??.??.?", false)
+
+	previousRoot := nvidiaProcGPUInfoRoot
+	nvidiaProcGPUInfoRoot = root
+	t.Cleanup(func() { nvidiaProcGPUInfoRoot = previousRoot })
+
+	devices := detectNvidiaGPUDevices()
+	if len(devices) != 1 {
+		t.Fatalf("devices = %#v, want GPU with working nvidia-smi despite unknown Video BIOS metadata", devices)
+	}
+}
+
 func TestNvidiaProcDriverStateReportsFailedAdapterWithoutHardFail(t *testing.T) {
 	root := t.TempDir()
-	writeNvidiaProcGPUInfo(t, root, "0000:01:00.0", "GPU-bad", "N/A", "??.??.??.??.?")
-	writeNvidiaProcGPUInfo(t, root, "0000:24:00.0", "GPU-good", "580.126.18", "95.02.3c.40.b8")
+	writeNvidiaProcGPUInfo(t, root, "0000:01:00.0", "GPU-bad", "N/A", "??.??.??.??.?", true)
+	writeNvidiaProcGPUInfo(t, root, "0000:24:00.0", "GPU-good", "580.126.18", "95.02.3c.40.b8", false)
 
 	previous := nvidiaProcGPUInfoRoot
 	nvidiaProcGPUInfoRoot = root
@@ -1386,8 +1406,8 @@ func TestNvidiaProcDriverStateReportsFailedAdapterWithoutHardFail(t *testing.T) 
 
 func TestNvidiaProcDriverStateReportsProcSmiMismatchWithoutHardFail(t *testing.T) {
 	root := t.TempDir()
-	writeNvidiaProcGPUInfo(t, root, "0000:24:00.0", "GPU-a", "580.126.18", "95.02.3c.40.b8")
-	writeNvidiaProcGPUInfo(t, root, "0000:41:00.0", "GPU-b", "580.126.18", "95.02.3c.40.b8")
+	writeNvidiaProcGPUInfo(t, root, "0000:24:00.0", "GPU-a", "580.126.18", "95.02.3c.40.b8", false)
+	writeNvidiaProcGPUInfo(t, root, "0000:41:00.0", "GPU-b", "580.126.18", "95.02.3c.40.b8", false)
 
 	previous := nvidiaProcGPUInfoRoot
 	nvidiaProcGPUInfoRoot = root
@@ -1404,7 +1424,7 @@ func TestNvidiaProcDriverStateReportsProcSmiMismatchWithoutHardFail(t *testing.T
 
 func TestNvidiaProcDriverStateAllowsHealthyDetectedGPUs(t *testing.T) {
 	root := t.TempDir()
-	writeNvidiaProcGPUInfo(t, root, "0000:24:00.0", "GPU-a", "580.126.18", "95.02.3c.40.b8")
+	writeNvidiaProcGPUInfo(t, root, "0000:24:00.0", "GPU-a", "580.126.18", "95.02.3c.40.b8", false)
 
 	previous := nvidiaProcGPUInfoRoot
 	nvidiaProcGPUInfoRoot = root
@@ -1531,7 +1551,7 @@ func TestWriteWorkerConfigUsesGeeseForWorkspaceStorage(t *testing.T) {
 	}
 }
 
-func writeNvidiaProcGPUInfo(t *testing.T, root, busID, uuid, firmware, videoBIOS string) {
+func writeNvidiaProcGPUInfo(t *testing.T, root, busID, uuid, firmware, videoBIOS string, excluded bool) {
 	t.Helper()
 	dir := filepath.Join(root, busID)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -1544,6 +1564,7 @@ func writeNvidiaProcGPUInfo(t *testing.T, root, busID, uuid, firmware, videoBIOS
 		"Bus Location: \t " + busID,
 		"Device Minor: \t 0",
 		"GPU Firmware: \t " + firmware,
+		fmt.Sprintf("GPU Excluded:\t %v", map[bool]string{true: "Yes", false: "No"}[excluded]),
 	}, "\n")
 	if err := os.WriteFile(filepath.Join(dir, "information"), []byte(info), 0644); err != nil {
 		t.Fatal(err)
