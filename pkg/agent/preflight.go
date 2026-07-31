@@ -303,8 +303,8 @@ func nvidiaProcInfoLooksFailed(info string) bool {
 		}
 		value = strings.TrimSpace(value)
 		switch strings.TrimSpace(name) {
-		case "Video BIOS":
-			if value == "" || strings.HasPrefix(value, "??") {
+		case "GPU Excluded":
+			if strings.EqualFold(value, "yes") {
 				return true
 			}
 		}
