@@ -276,8 +276,12 @@ type AgentWorkerSlotState struct {
 	RequiresPoolSelector      bool                `json:"requires_pool_selector"`
 	Priority                  int32               `json:"priority"`
 	Preemptable               bool                `json:"preemptable"`
-	CreatedAt                 time.Time           `json:"created_at"`
-	UpdatedAt                 time.Time           `json:"updated_at"`
+	// PoolConfig is present only for managed agent pools. Its presence makes
+	// pool runtime and host-path settings authoritative while preserving the
+	// installer-level defaults used by private and older agent slots.
+	PoolConfig *types.WorkerPoolConfig `json:"pool_config,omitempty"`
+	CreatedAt  time.Time               `json:"created_at"`
+	UpdatedAt  time.Time               `json:"updated_at"`
 }
 
 type PreflightCheckState struct {

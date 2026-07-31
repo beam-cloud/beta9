@@ -261,6 +261,8 @@ worker:
     #   containerStartConcurrency: 4
     #   networkSlotPoolSize: 32
     #   tmpSizeLimit: 50Gi
+    #   # On agent-backed pools these are host paths on each joined machine.
+    #   # Empty values fall back to the agent installer's state/cache dirs.
     #   storagePath: /var/lib/beta9/storage
     #   imagesPath: /var/lib/beta9/images
     #   durableDisksPath: /var/lib/beta9/durable-disks

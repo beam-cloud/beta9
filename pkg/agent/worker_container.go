@@ -62,11 +62,13 @@ func dockerRunArgs(name, image, imageID, configPath string, bootstrap bootstrapC
 		dirs.Tmp + ":" + types.AgentTmpPath,
 		dirs.Data + ":" + types.AgentDataPath,
 		dirs.Workspace + ":" + types.AgentWorkspacePath,
-		dirs.Cache + ":" + types.AgentCachePath,
 		dirs.Checkpoints + ":" + types.AgentCheckpointPath,
 		dirs.DurableDisk + ":" + types.DefaultDurableDisksPath,
 		dirs.Logs + ":" + types.AgentLogsPath,
 		configPath + ":" + types.AgentConfigPath + ":ro",
+	}
+	if dirs.CacheEnabled {
+		volumeArgs = append(volumeArgs, dirs.Cache+":"+dirs.CacheMount)
 	}
 	if pathExists(types.HostKubeletDevicePluginsPath) {
 		volumeArgs = append(volumeArgs, types.HostKubeletDevicePluginsPath+":"+types.HostKubeletDevicePluginsPath+":ro")

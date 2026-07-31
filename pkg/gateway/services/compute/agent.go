@@ -753,10 +753,13 @@ func agentWorkerSlotState(config types.AppConfig, agentState *model.AgentTokenSt
 	priority := worker.Priority
 	preemptable := worker.Preemptable
 	var cpuAffinityEnforced *bool
+	var authoritativePoolConfig *types.WorkerPoolConfig
 
 	// Managed pool configuration is authoritative and may change while the
 	// machine remains connected. Machine capacity still comes from the worker.
 	if agentState.ManagedPoolInstanceID != "" {
+		poolConfigCopy := poolConfig
+		authoritativePoolConfig = &poolConfigCopy
 		runtimeName = firstNonEmpty(poolConfig.ContainerRuntime, types.ContainerRuntimeRunc.String())
 		if poolConfig.NetworkSlotPoolSize > 0 {
 			networkSlots = uint32(poolConfig.NetworkSlotPoolSize)
@@ -794,6 +797,7 @@ func agentWorkerSlotState(config types.AppConfig, agentState *model.AgentTokenSt
 		RequiresPoolSelector:      requiresPoolSelector,
 		Priority:                  priority,
 		Preemptable:               preemptable,
+		PoolConfig:                authoritativePoolConfig,
 	}
 }
 
@@ -881,6 +885,51 @@ func agentWorkerSlotToProto(slot *model.AgentWorkerSlotState, workerToken string
 		Priority:                  slot.Priority,
 		PrioritySet:               true,
 		Preemptable:               slot.Preemptable,
+		PoolConfig:                agentPoolRuntimeConfigToProto(slot.PoolConfig),
+	}
+}
+
+func agentPoolRuntimeConfigToProto(config *types.WorkerPoolConfig) *pb.AgentPoolRuntimeConfig {
+	if config == nil {
+		return nil
+	}
+
+	networkPreallocation := true
+	if config.NetworkPreallocation != nil {
+		networkPreallocation = *config.NetworkPreallocation
+	}
+	cacheEnabled := true
+	if config.Cache.Enabled != nil {
+		cacheEnabled = *config.Cache.Enabled
+	}
+	cacheDiskEnabled := true
+	if config.Cache.Disk.Enabled != nil {
+		cacheDiskEnabled = *config.Cache.Disk.Enabled
+	}
+	cacheMaxUsagePct := config.Cache.Disk.MaxUsagePct
+	if cacheMaxUsagePct == 0 {
+		cacheMaxUsagePct = 0.95
+	}
+
+	return &pb.AgentPoolRuntimeConfig{
+		NetworkPreallocation: networkPreallocation,
+		CriuEnabled:          config.CRIUEnabled,
+		TmpSizeLimit:         firstNonEmpty(config.TmpSizeLimit, types.AgentTmpSizeLimit),
+		StorageMode:          config.StorageMode,
+		StoragePath:          config.StoragePath,
+		ImagesPath:           config.ImagesPath,
+		DurableDisksPath:     config.DurableDisksPath,
+		ConfigGroup:          config.ConfigGroup,
+		Cache: &pb.AgentPoolCacheConfig{
+			Enabled: cacheEnabled,
+			Disk: &pb.AgentPoolCacheDiskConfig{
+				Enabled:      cacheDiskEnabled,
+				HostPath:     config.Cache.Disk.HostPath,
+				MountPath:    firstNonEmpty(config.Cache.Disk.MountPath, types.AgentCachePath),
+				MaxUsagePct:  cacheMaxUsagePct,
+				MinFreeBytes: config.Cache.Disk.MinFreeBytes,
+			},
+		},
 	}
 }
 

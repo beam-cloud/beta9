@@ -2530,6 +2530,72 @@
         }
       }
     },
+    "gatewayAgentPoolCacheConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "disk": {
+          "$ref": "#/definitions/gatewayAgentPoolCacheDiskConfig"
+        }
+      }
+    },
+    "gatewayAgentPoolCacheDiskConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "hostPath": {
+          "type": "string"
+        },
+        "mountPath": {
+          "type": "string"
+        },
+        "maxUsagePct": {
+          "type": "number",
+          "format": "double"
+        },
+        "minFreeBytes": {
+          "type": "string",
+          "format": "int64"
+        }
+      },
+      "description": "Host-backed runtime settings for an agent worker. Presence of this message\nmeans the managed pool configuration is authoritative; older gateways omit\nit and agents retain their installer-level state/cache defaults."
+    },
+    "gatewayAgentPoolRuntimeConfig": {
+      "type": "object",
+      "properties": {
+        "networkPreallocation": {
+          "type": "boolean"
+        },
+        "criuEnabled": {
+          "type": "boolean"
+        },
+        "tmpSizeLimit": {
+          "type": "string"
+        },
+        "storageMode": {
+          "type": "string"
+        },
+        "storagePath": {
+          "type": "string"
+        },
+        "imagesPath": {
+          "type": "string"
+        },
+        "durableDisksPath": {
+          "type": "string"
+        },
+        "cache": {
+          "$ref": "#/definitions/gatewayAgentPoolCacheConfig"
+        },
+        "configGroup": {
+          "type": "string"
+        }
+      }
+    },
     "gatewayAgentPreflightCheck": {
       "type": "object",
       "properties": {
@@ -2755,6 +2821,9 @@
         },
         "cpuAffinityEnforced": {
           "type": "boolean"
+        },
+        "poolConfig": {
+          "$ref": "#/definitions/gatewayAgentPoolRuntimeConfig"
         }
       }
     },

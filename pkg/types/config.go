@@ -477,11 +477,11 @@ type WorkerPoolConfig struct {
 	CRIUEnabled               bool                              `key:"criuEnabled" json:"criu_enabled"`
 	TmpSizeLimit              string                            `key:"tmpSizeLimit" json:"tmp_size_limit"`
 	ConfigGroup               string                            `key:"configGroup" json:"config_group"`
-	K3sInstallDir             string                            `key:"k3sInstallDir" json:"k3s_install_dir"`
-	StoragePath               string                            `key:"storagePath" json:"storage_path"`
+	K3sInstallDir             string                            `key:"k3sInstallDir" json:"k3s_install_dir"` // Provider/Kubernetes install path; agent-hosted pools do not run K3s.
+	StoragePath               string                            `key:"storagePath" json:"storage_path"`      // Host storage root; agent workers mount it at /data.
 	StorageMode               string                            `key:"storageMode" json:"storage_mode"`
-	ImagesPath                string                            `key:"imagesPath" json:"images_path"`              // Host path backing the worker's /images volume (clip layer cache + image mounts); defaults to /images
-	DurableDisksPath          string                            `key:"durableDisksPath" json:"durable_disks_path"` // Host path backing durable disks; defaults to /var/lib/beta9/durable-disks
+	ImagesPath                string                            `key:"imagesPath" json:"images_path"`              // Host path backing the worker's /images volume; agent pools fall back to the installer state dir.
+	DurableDisksPath          string                            `key:"durableDisksPath" json:"durable_disks_path"` // Host path backing durable disks; agent pools fall back to storagePath or the installer state dir.
 	Cache                     WorkerPoolCacheConfig             `key:"cache" json:"cache"`
 	HourlyCostCents           int64                             `key:"hourlyCostCents" json:"hourly_cost_cents"` // Cost of one machine in this pool, in cents per hour (e.g. 120 for $1.20/hr)
 }

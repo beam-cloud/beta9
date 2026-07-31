@@ -1513,6 +1513,7 @@ message AgentWorkerSlot {
   // Deterministic identity of the restart-relevant slot specification.
   string generation = 25;
   bool cpu_affinity_enforced = 26;
+  AgentPoolRuntimeConfig pool_config = 27;
 }
 
 message StreamAgentRequest { string agent_token = 1; }
@@ -1855,4 +1856,32 @@ message MachineSSHAccess {
   bool pending_key_downloaded = 16;
   string error = 17;
   google.protobuf.Timestamp updated_at = 18;
+}
+
+// Host-backed runtime settings for an agent worker. Presence of this message
+// means the managed pool configuration is authoritative; older gateways omit
+// it and agents retain their installer-level state/cache defaults.
+message AgentPoolCacheDiskConfig {
+  bool enabled = 1;
+  string host_path = 2;
+  string mount_path = 3;
+  double max_usage_pct = 4;
+  int64 min_free_bytes = 5;
+}
+
+message AgentPoolCacheConfig {
+  bool enabled = 1;
+  AgentPoolCacheDiskConfig disk = 2;
+}
+
+message AgentPoolRuntimeConfig {
+  bool network_preallocation = 1;
+  bool criu_enabled = 2;
+  string tmp_size_limit = 3;
+  string storage_mode = 4;
+  string storage_path = 5;
+  string images_path = 6;
+  string durable_disks_path = 7;
+  AgentPoolCacheConfig cache = 8;
+  string config_group = 9;
 }
