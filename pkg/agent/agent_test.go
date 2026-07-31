@@ -392,6 +392,92 @@ func TestDockerRunArgsUsesConfigurableRouteTargetHost(t *testing.T) {
 	}
 }
 
+func TestManagedPoolPathsOverrideAgentInstallerDirectories(t *testing.T) {
+	slot := &pb.AgentWorkerSlot{
+		WorkerId:  "worker-one",
+		PoolName:  "serverless",
+		MachineId: "machine-one",
+		PoolConfig: &pb.AgentPoolRuntimeConfig{
+			StoragePath:      "/mnt/raid/storage",
+			ImagesPath:       "/mnt/raid/images",
+			DurableDisksPath: "/mnt/raid/durable-disks",
+			Cache: &pb.AgentPoolCacheConfig{
+				Enabled: true,
+				Disk: &pb.AgentPoolCacheDiskConfig{
+					Enabled:   true,
+					HostPath:  "/mnt/raid/cache",
+					MountPath: "/var/lib/beta9/cache",
+				},
+			},
+		},
+	}
+	dirs := agentWorkerDirsForSlot("/var/lib/beam/agent", "/installer/cache", slot)
+	for label, gotWant := range map[string][2]string{
+		"images":        {dirs.Images, "/mnt/raid/images"},
+		"data":          {dirs.Data, "/mnt/raid/storage"},
+		"workspace":     {dirs.Workspace, "/mnt/raid/storage/workspace-data"},
+		"checkpoints":   {dirs.Checkpoints, "/mnt/raid/storage/checkpoints"},
+		"durable disks": {dirs.DurableDisk, "/mnt/raid/durable-disks"},
+		"cache":         {dirs.Cache, "/mnt/raid/cache"},
+		"cache mount":   {dirs.CacheMount, "/var/lib/beta9/cache"},
+	} {
+		if gotWant[0] != gotWant[1] {
+			t.Fatalf("%s path = %q, want %q", label, gotWant[0], gotWant[1])
+		}
+	}
+
+	args := dockerRunArgs(
+		"slot-one",
+		"worker:dev",
+		"",
+		"/tmp/config.json",
+		bootstrapConfig{},
+		slot,
+		dirs,
+		workerContainerResourceLimits{},
+	)
+	for _, volume := range []string{
+		"/mnt/raid/images:" + types.AgentImagesPath,
+		"/mnt/raid/storage:" + types.AgentDataPath,
+		"/mnt/raid/storage/workspace-data:" + types.AgentWorkspacePath,
+		"/mnt/raid/storage/checkpoints:" + types.AgentCheckpointPath,
+		"/mnt/raid/durable-disks:" + types.DefaultDurableDisksPath,
+		"/mnt/raid/cache:" + types.AgentCachePath,
+	} {
+		if !containsArg(args, "-v", volume) {
+			t.Fatalf("expected %s volume in Docker args: %#v", volume, args)
+		}
+	}
+}
+
+func TestManagedPoolCanDisableAgentDiskCacheMount(t *testing.T) {
+	slot := &pb.AgentWorkerSlot{
+		WorkerId: "worker-one",
+		PoolConfig: &pb.AgentPoolRuntimeConfig{
+			Cache: &pb.AgentPoolCacheConfig{
+				Enabled: false,
+				Disk: &pb.AgentPoolCacheDiskConfig{
+					Enabled:  true,
+					HostPath: "/mnt/raid/cache",
+				},
+			},
+		},
+	}
+	dirs := agentWorkerDirsForSlot("/var/lib/beam/agent", "", slot)
+	if dirs.CacheEnabled {
+		t.Fatal("cache mount remained enabled")
+	}
+	for _, dir := range dirs.All() {
+		if dir == "/mnt/raid/cache" {
+			t.Fatal("disabled cache directory should not be created")
+		}
+	}
+	args := dockerRunArgs("slot-one", "worker:dev", "", "/tmp/config.json", bootstrapConfig{}, slot, dirs, workerContainerResourceLimits{})
+	if containsArg(args, "-v", "/mnt/raid/cache:"+types.AgentCachePath) {
+		t.Fatalf("disabled cache was mounted: %#v", args)
+	}
+}
+
 func TestDockerRunArgsAppliesExplicitResourceLimits(t *testing.T) {
 	args := dockerRunArgs(
 		"slot-one",
@@ -577,6 +663,47 @@ func TestAgentWorkerConfigManagedExternalPreservesPoolSemantics(t *testing.T) {
 	}
 	if pool.NetworkSlotPoolSize != 64 || pool.ContainerStartConcurrency != 8 {
 		t.Fatalf("agent capacity config = %+v", pool)
+	}
+}
+
+func TestAgentWorkerConfigUsesManagedPoolRuntimeAndCacheSettings(t *testing.T) {
+	slot := &pb.AgentWorkerSlot{
+		PoolName:  "public-h100",
+		MachineId: "machine-one",
+		Mode:      string(types.PoolModeExternal),
+		PoolConfig: &pb.AgentPoolRuntimeConfig{
+			NetworkPreallocation: false,
+			CriuEnabled:          false,
+			TmpSizeLimit:         "50Gi",
+			StorageMode:          types.StorageModeAlluxio,
+			ConfigGroup:          "raid-cache",
+			Cache: &pb.AgentPoolCacheConfig{
+				Enabled: true,
+				Disk: &pb.AgentPoolCacheDiskConfig{
+					Enabled:      true,
+					HostPath:     "/mnt/raid/cache",
+					MountPath:    "/var/lib/beta9/cache",
+					MaxUsagePct:  0.9,
+					MinFreeBytes: 1 << 30,
+				},
+			},
+		},
+	}
+	config := newAgentWorkerConfig(bootstrapConfig{WorkspaceID: "admin-workspace"}, slot).sanitizedForAgent()
+	pool := config.Worker.Pools[slot.PoolName]
+
+	if pool.NetworkPreallocation || pool.CRIUEnabled || pool.TmpSizeLimit != "50Gi" || pool.StorageMode != types.StorageModeAlluxio {
+		t.Fatalf("managed pool runtime settings were not preserved: %#v", pool)
+	}
+	if !config.Cache.Enabled || !config.Worker.CacheEnabled ||
+		config.Cache.Disk.HostPath != "/mnt/raid/cache" ||
+		config.Cache.Disk.MountPath != "/var/lib/beta9/cache" ||
+		config.Cache.Disk.MaxUsagePct != 0.9 ||
+		config.Cache.Disk.MinFreeBytes != 1<<30 {
+		t.Fatalf("managed pool cache settings were not preserved: %#v", config.Cache)
+	}
+	if config.Cache.Global == nil || config.Cache.Global.DefaultLocality != "raid-cache" {
+		t.Fatalf("cache locality = %#v, want config group", config.Cache.Global)
 	}
 }
 

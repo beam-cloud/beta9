@@ -217,6 +217,56 @@ func TestManagedPoolCPUAffinityDefaultsDisabled(t *testing.T) {
 	}
 }
 
+func TestManagedGPUPoolDefaultsToNvidiaRuntime(t *testing.T) {
+	config, err := normalizeManagedPoolConfig(types.WorkerPoolConfig{
+		Mode:    types.PoolModeExternal,
+		GPUType: "RTX4090",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Runtime != "nvidia" {
+		t.Fatalf("GPU runtime = %q, want nvidia", config.Runtime)
+	}
+
+	config, err = normalizeManagedPoolConfig(types.WorkerPoolConfig{
+		Mode:    types.PoolModeExternal,
+		GPUType: "RTX4090",
+		Runtime: "custom-nvidia",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Runtime != "custom-nvidia" {
+		t.Fatalf("explicit GPU runtime = %q, want custom-nvidia", config.Runtime)
+	}
+}
+
+func TestManagedPoolRejectsRelativeHostPaths(t *testing.T) {
+	for name, config := range map[string]types.WorkerPoolConfig{
+		"storage":       {StoragePath: "data/storage"},
+		"images":        {ImagesPath: "data/images"},
+		"durable disks": {DurableDisksPath: "data/disks"},
+		"cache host": {
+			Cache: types.WorkerPoolCacheConfig{
+				Disk: types.WorkerPoolCacheDiskConfig{HostPath: "data/cache"},
+			},
+		},
+		"cache mount": {
+			Cache: types.WorkerPoolCacheConfig{
+				Disk: types.WorkerPoolCacheDiskConfig{MountPath: "var/lib/beta9/cache"},
+			},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			config.Mode = types.PoolModeExternal
+			if _, err := normalizeManagedPoolConfig(config); err == nil {
+				t.Fatal("relative path was accepted")
+			}
+		})
+	}
+}
+
 func TestManagedPoolLifecyclePreservesWorkerConfiguration(t *testing.T) {
 	repo := &fakeComputeRepo{}
 	service := managedPoolTestService(types.AppConfig{}, repo)

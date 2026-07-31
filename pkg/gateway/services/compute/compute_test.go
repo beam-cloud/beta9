@@ -5662,18 +5662,54 @@ func TestAgentWorkerSlotStateCarriesMarketplaceModeAndRuntime(t *testing.T) {
 	if err != nil || !strings.Contains(string(managedSlotJSON), `"cpu_affinity_enforced":false`) {
 		t.Fatalf("managed slot omitted its disabled CPU affinity generation input: %s, err=%v", managedSlotJSON, err)
 	}
+	cacheEnabled := true
+	diskEnabled := true
+	networkPreallocation := false
 	slot = agentWorkerSlotState(config, managedState, worker, types.WorkerPoolConfig{
 		ContainerRuntime:          types.ContainerRuntimeRunc.String(),
 		CPUAffinityEnforced:       true,
 		ContainerStartConcurrency: 64,
 		NetworkSlotPoolSize:       128,
+		NetworkPreallocation:      &networkPreallocation,
 		Priority:                  10,
+		CRIUEnabled:               false,
+		TmpSizeLimit:              "50Gi",
+		ConfigGroup:               "raid-cache",
+		StoragePath:               "/mnt/raid/storage",
+		ImagesPath:                "/mnt/raid/images",
+		DurableDisksPath:          "/mnt/raid/disks",
+		Cache: types.WorkerPoolCacheConfig{
+			Enabled: &cacheEnabled,
+			Disk: types.WorkerPoolCacheDiskConfig{
+				Enabled:      &diskEnabled,
+				HostPath:     "/mnt/raid/cache",
+				MountPath:    "/var/lib/beta9/cache",
+				MaxUsagePct:  0.9,
+				MinFreeBytes: 1024,
+			},
+		},
 	}, "token-id", "token-hash")
 	if slot.ContainerRuntime != types.ContainerRuntimeRunc.String() || slot.CPUAffinityEnforced == nil || !*slot.CPUAffinityEnforced || slot.ContainerStartConcurrency != 64 || slot.NetworkSlotPoolSize != 128 || slot.Priority != 10 {
 		t.Fatalf("managed slot did not use live pool config: %#v", slot)
 	}
-	if wireSlot := agentWorkerSlotToProto(slot, "worker-token"); !wireSlot.CpuAffinityEnforced {
+	wireSlot = agentWorkerSlotToProto(slot, "worker-token")
+	if !wireSlot.CpuAffinityEnforced {
 		t.Fatal("managed slot did not carry CPU affinity configuration to the agent")
+	}
+	if wireSlot.PoolConfig == nil ||
+		wireSlot.PoolConfig.NetworkPreallocation ||
+		wireSlot.PoolConfig.CriuEnabled ||
+		wireSlot.PoolConfig.StoragePath != "/mnt/raid/storage" ||
+		wireSlot.PoolConfig.ImagesPath != "/mnt/raid/images" ||
+		wireSlot.PoolConfig.DurableDisksPath != "/mnt/raid/disks" ||
+		wireSlot.PoolConfig.ConfigGroup != "raid-cache" {
+		t.Fatalf("managed slot did not carry pool runtime config: %#v", wireSlot.PoolConfig)
+	}
+	if wireSlot.PoolConfig.Cache == nil || wireSlot.PoolConfig.Cache.Disk == nil ||
+		wireSlot.PoolConfig.Cache.Disk.HostPath != "/mnt/raid/cache" ||
+		wireSlot.PoolConfig.Cache.Disk.MountPath != "/var/lib/beta9/cache" ||
+		wireSlot.PoolConfig.Cache.Disk.MinFreeBytes != 1024 {
+		t.Fatalf("managed slot did not carry cache config: %#v", wireSlot.PoolConfig.Cache)
 	}
 }
 
