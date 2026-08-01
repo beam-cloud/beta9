@@ -144,6 +144,56 @@ func TestCacheServerLockAllowsSingleNodeLocalOwner(t *testing.T) {
 	require.NoError(t, releaseCacheServerLock(second))
 }
 
+func TestCleanupStaleCacheRootsRemovesOnlyUnlockedCacheRoots(t *testing.T) {
+	mountPath := t.TempDir()
+	localityRoot := filepath.Join(mountPath, "skynet")
+	current := filepath.Join(localityRoot, "current")
+	stale := filepath.Join(localityRoot, "stale")
+	busy := filepath.Join(localityRoot, "busy")
+	unowned := filepath.Join(localityRoot, "unowned")
+	require.NoError(t, os.MkdirAll(current, 0o755))
+	require.NoError(t, os.MkdirAll(unowned, 0o755))
+
+	staleLock, acquired, err := acquireCacheServerLock(stale)
+	require.NoError(t, err)
+	require.True(t, acquired)
+	require.NoError(t, releaseCacheServerLock(staleLock))
+	require.NoError(t, os.WriteFile(filepath.Join(stale, "content"), []byte("cached"), 0o600))
+
+	busyLock, acquired, err := acquireCacheServerLock(busy)
+	require.NoError(t, err)
+	require.True(t, acquired)
+	defer func() { require.NoError(t, releaseCacheServerLock(busyLock)) }()
+
+	removed, err := cleanupStaleCacheRoots(cache.Config{
+		Disk:   cache.DiskConfig{MountPath: mountPath},
+		Server: cache.ServerConfig{DiskCacheDir: current},
+	}, "skynet", "current")
+	require.NoError(t, err)
+	require.Equal(t, 1, removed)
+	require.NoDirExists(t, stale)
+	require.DirExists(t, current)
+	require.DirExists(t, busy)
+	require.DirExists(t, unowned)
+}
+
+func TestCleanupStaleCacheRootsRejectsTraversalComponents(t *testing.T) {
+	mountPath := t.TempDir()
+	stale := filepath.Join(mountPath, "stale")
+	lock, acquired, err := acquireCacheServerLock(stale)
+	require.NoError(t, err)
+	require.True(t, acquired)
+	require.NoError(t, releaseCacheServerLock(lock))
+
+	removed, err := cleanupStaleCacheRoots(cache.Config{
+		Disk:   cache.DiskConfig{MountPath: mountPath},
+		Server: cache.ServerConfig{DiskCacheDir: filepath.Join(mountPath, "current")},
+	}, ".", "current")
+	require.NoError(t, err)
+	require.Zero(t, removed)
+	require.DirExists(t, stale)
+}
+
 func TestEmbeddedWorkerSkipsCacheServerWhenDaemonSetMarkerFresh(t *testing.T) {
 	t.Setenv(types.CacheServerOnlyEnv, "false")
 

@@ -605,6 +605,8 @@ func TestReconcileOnceUsesOnlyCurrentLocalityRecentStubs(t *testing.T) {
 }
 
 func TestLocalHostOwnsForReconcileKeepsOwnershipThroughBriefEndpointLoss(t *testing.T) {
+	require.Equal(t, cacheDefaultRegistrationTTL, cacheReconcileOwnerGracePeriod)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -1448,6 +1450,12 @@ func testClipV2Metadata() *clipCommon.ClipArchiveMetadata {
 	}
 }
 
+func reportRequiredContentForTest(client *ImageClient, request *types.ContainerRequest, metadata *clipCommon.ClipArchiveMetadata) {
+	if report, ok := client.imageRequiredContent(context.Background(), request, metadata); ok {
+		client.publishRequiredContent(request, report)
+	}
+}
+
 func TestReportRequiredContentClipV1EmitsSingleArchiveObject(t *testing.T) {
 	fake := &fakeEventRepo{}
 	client := newTestV1ImageClient(newTestReporter(fake), &cache.FSMetadata{Hash: "archive-hash", Size: 4096})
@@ -1457,7 +1465,7 @@ func TestReportRequiredContentClipV1EmitsSingleArchiveObject(t *testing.T) {
 		ImageId:     "image",
 	}
 
-	client.reportRequiredContent(context.Background(), request, testClipV1Metadata(t))
+	reportRequiredContentForTest(client, request, testClipV1Metadata(t))
 	client.contentReporter.flush()
 
 	require.Len(t, fake.pushed, 1)
@@ -1487,7 +1495,7 @@ func TestReportRequiredContentClipV1SkipsWhenArchiveUncached(t *testing.T) {
 		ImageId:     "image",
 	}
 
-	client.reportRequiredContent(context.Background(), request, testClipV1Metadata(t))
+	reportRequiredContentForTest(client, request, testClipV1Metadata(t))
 	client.contentReporter.flush()
 
 	require.Empty(t, fake.pushed)
@@ -1506,7 +1514,7 @@ func TestReportRequiredContentUsesNestedRequestIDs(t *testing.T) {
 		},
 	}
 
-	client.reportRequiredContent(context.Background(), request, testClipV2Metadata())
+	reportRequiredContentForTest(client, request, testClipV2Metadata())
 	client.contentReporter.flush()
 
 	require.Len(t, fake.pushed, 1)
@@ -1528,7 +1536,7 @@ func TestReportRequiredContentQueuesReconciliation(t *testing.T) {
 		ImageId:     "image",
 	}
 
-	client.reportRequiredContent(context.Background(), request, testClipV2Metadata())
+	reportRequiredContentForTest(client, request, testClipV2Metadata())
 	reporter.flush()
 
 	require.True(t, requested)
@@ -1587,7 +1595,7 @@ func TestEnsureV1ArchiveDataCacheUsesExistingLocalArchive(t *testing.T) {
 			ImageService: types.ImageServiceConfig{RegistryStore: registry.S3ImageRegistryStore},
 		},
 	}
-	path, ok := client.ensureV1ArchiveDataCache(context.Background(), &types.ContainerRequest{ImageId: "image"}, nil)
+	path, ok := client.restoreV1ArchiveDataCache(context.Background(), &types.ContainerRequest{ImageId: "image"}, nil)
 	require.True(t, ok)
 	require.Equal(t, archivePath, path)
 }
@@ -1652,6 +1660,62 @@ func TestPressureEvictStubCodeCacheSkipsActiveTempEntries(t *testing.T) {
 	require.NoFileExists(t, oldReady)
 	require.NoDirExists(t, filepath.Dir(oldReady))
 	require.DirExists(t, activeTmpDir)
+}
+
+func TestEvictImageCacheProtectsRecentAndMountedImages(t *testing.T) {
+	cacheRoot := t.TempDir()
+	mountRoot := filepath.Join(t.TempDir(), "mnt")
+	activeHash := strings.Repeat("a", 64)
+	recentHash := strings.Repeat("b", 64)
+	staleHash := strings.Repeat("c", 64)
+
+	require.NoError(t, os.MkdirAll(filepath.Join(mountRoot, "worker", "active"), 0o755))
+	oci := &clipCommon.OCIStorageInfo{DecompressedHashByLayer: map[string]string{"sha256:active": activeHash}}
+	meta := testClipV1Metadata(t)
+	meta.StorageInfo = oci
+	require.NoError(t, clip.NewClipArchiver().CreateRemoteArchive(oci, meta, filepath.Join(cacheRoot, "active.rclip")))
+	for _, name := range []string{activeHash, recentHash, staleHash, "recent.rclip", "stale.rclip"} {
+		require.NoError(t, os.WriteFile(filepath.Join(cacheRoot, name), []byte("cached"), 0o600))
+	}
+	old := time.Now().Add(-2 * time.Hour)
+	for _, entry := range listImageCacheEntries(cacheRoot) {
+		require.NoError(t, os.Chtimes(entry.path, old, old))
+	}
+
+	protected := protectedImageCache([]recentStubContent{{items: []types.CacheRequiredContentItem{{
+		ImageID: "recent", Hash: recentHash, Kind: types.CacheContentKindClipV2,
+	}}}}, nil, cacheRoot, mountRoot)
+	evicted, _ := evictImageCache(cacheRoot, protected, time.Now().Add(-time.Hour), 0)
+
+	require.True(t, protected.complete)
+	require.Equal(t, 2, evicted)
+	require.FileExists(t, filepath.Join(cacheRoot, activeHash))
+	require.FileExists(t, filepath.Join(cacheRoot, recentHash))
+	require.FileExists(t, filepath.Join(cacheRoot, "active.rclip"))
+	require.FileExists(t, filepath.Join(cacheRoot, "recent.rclip"))
+	require.NoFileExists(t, filepath.Join(cacheRoot, staleHash))
+	require.NoFileExists(t, filepath.Join(cacheRoot, "stale.rclip"))
+}
+
+func TestEvictImageCacheFailsClosedForLayersWithoutMountedMetadata(t *testing.T) {
+	cacheRoot := t.TempDir()
+	mountRoot := filepath.Join(t.TempDir(), "mnt")
+	layerHash := strings.Repeat("d", 64)
+	require.NoError(t, os.MkdirAll(filepath.Join(mountRoot, "worker", "active-without-metadata"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(cacheRoot, layerHash), []byte("layer"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(cacheRoot, "stale.clip"), []byte("archive"), 0o600))
+	old := time.Now().Add(-2 * time.Hour)
+	for _, entry := range listImageCacheEntries(cacheRoot) {
+		require.NoError(t, os.Chtimes(entry.path, old, old))
+	}
+
+	protected := protectedImageCache(nil, nil, cacheRoot, mountRoot)
+	evicted, _ := evictImageCache(cacheRoot, protected, time.Now().Add(-time.Hour), 0)
+
+	require.False(t, protected.complete)
+	require.Zero(t, evicted)
+	require.FileExists(t, filepath.Join(cacheRoot, layerHash))
+	require.FileExists(t, filepath.Join(cacheRoot, "stale.clip"))
 }
 
 func writeStubCodeCacheEntry(t *testing.T, root, name string, readyTime time.Time) string {

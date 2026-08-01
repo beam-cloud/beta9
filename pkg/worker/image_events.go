@@ -186,6 +186,10 @@ func (a *clipReadAggregate) add(event clipCommon.ReadTraceEvent) {
 	if event.StartedAt.IsZero() {
 		event.StartedAt = time.Now().Add(-event.Duration)
 	}
+	if isExpectedClipContentCacheMiss(event) {
+		event.Success = true
+		event.Error = ""
+	}
 	endedAt := event.StartedAt.Add(event.Duration)
 	if !event.Success {
 		a.success = false
@@ -236,6 +240,9 @@ func (a *clipReadAggregate) add(event clipCommon.ReadTraceEvent) {
 func (a *clipReadAggregate) addContentCache(event imageContentCacheTrace) {
 	if a == nil {
 		return
+	}
+	if event.Result == imageContentCacheResultMiss {
+		event.Error = ""
 	}
 
 	durationUs := event.Duration.Microseconds()
@@ -369,7 +376,7 @@ func (a *clipReadAggregate) addCacheRollup(target map[string]*clipCacheRollup, k
 	}
 
 	rollup.Count++
-	if err != "" || result == imageContentCacheResultMiss || result == imageContentCacheResultUnavailable || result == imageContentCacheResultError {
+	if (err != "" && result != imageContentCacheResultMiss) || result == imageContentCacheResultUnavailable || result == imageContentCacheResultError {
 		rollup.ErrorCount++
 	}
 	rollup.TotalUs += durationUs
@@ -490,6 +497,11 @@ func clipReadCacheResult(event clipCommon.ReadTraceEvent) string {
 		event.Attrs["cache_result"],
 		event.Attrs["content_cache_result"],
 	)
+}
+
+func isExpectedClipContentCacheMiss(event clipCommon.ReadTraceEvent) bool {
+	return event.Operation == string(types.ContainerLifecycleClipContentCacheRead) &&
+		clipReadCacheResult(event) == imageContentCacheResultMiss
 }
 
 func clipReadRollupKey(parts ...string) string {

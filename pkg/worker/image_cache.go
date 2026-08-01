@@ -213,19 +213,11 @@ type imageContentCacheStoreTrace struct {
 	trace      cache.OperationTrace
 }
 
-func newImageContentCache(client *cache.Client, imageID string, kind string, observers ...imageContentCacheObserver) *imageContentCache {
+func newImageContentCache(client *cache.Client, imageID, kind string, observer imageContentCacheObserver) *imageContentCache {
 	if client == nil {
 		return nil
 	}
-	cacheKind := "content"
-	if kind != "" {
-		cacheKind = kind
-	}
-	var observer imageContentCacheObserver
-	if len(observers) > 0 {
-		observer = observers[0]
-	}
-	return &imageContentCache{client: client, imageID: imageID, kind: cacheKind, observe: observer}
+	return &imageContentCache{client: client, imageID: imageID, kind: kind, observe: observer}
 }
 
 func imageLayerContentCachePath(hash string) string {
@@ -275,7 +267,7 @@ func (c *imageContentCache) ReadContentInto(hash string, offset int64, dest []by
 		case imageContentCacheResultShortRead:
 			c.readShortReads.Add(1)
 		}
-		if err != nil || read != length {
+		if result != imageContentCacheResultHit && result != imageContentCacheResultMiss {
 			c.readErrors.Add(1)
 			log.Warn().
 				Err(err).
@@ -301,6 +293,10 @@ func (c *imageContentCache) ReadContentInto(hash string, offset int64, dest []by
 				Dur("elapsed", elapsed).
 				Msg("clip image content cache slow read")
 		}
+		traceErr := err
+		if result == imageContentCacheResultMiss {
+			traceErr = nil
+		}
 		c.maybeLogSummary()
 		c.observeContentCacheTrace(imageContentCacheTrace{
 			Operation:  imageContentCacheOperationReadInto,
@@ -315,7 +311,7 @@ func (c *imageContentCache) ReadContentInto(hash string, offset int64, dest []by
 			Bytes:      read,
 			StartedAt:  started,
 			Duration:   elapsed,
-			Error:      imageContentCacheErrorString(err),
+			Error:      imageContentCacheErrorString(traceErr),
 			Trace:      cacheTrace,
 		})
 	}()
@@ -789,7 +785,7 @@ func (c *imageContentCache) maybeLogSummary() {
 }
 
 func (c *imageContentCache) bestEffortRuntimeStore() bool {
-	return c != nil && (c.kind == "legacy-file-runtime" || c.kind == "oci-layer-runtime")
+	return c != nil && c.kind == "oci-layer-runtime"
 }
 
 func (c *imageContentCache) skipRuntimeStoreWhenUnavailable(hash string, routingKey string) bool {
