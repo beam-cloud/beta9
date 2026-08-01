@@ -41,6 +41,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -153,6 +154,7 @@ type ImageClient struct {
 	logger             *ContainerLogger
 	eventRepo          repo.EventRepository
 	contentReporter    *cacheContentReporter
+	v1CacheGroup       singleflight.Group
 	originCredsMu      sync.Mutex
 	originCredsCache   map[string]*originCredentials
 	// archiveContentMetadata resolves the cached image archive object (hash/size)
@@ -275,11 +277,9 @@ func ociStorageInfo(meta *clipCommon.ClipArchiveMetadata) (*clipCommon.OCIStorag
 
 func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, preload bool) (time.Duration, error) {
 	startTime := time.Now()
-	if c.contentReporter != nil && request != nil {
-		c.contentReporter.touchRecentStub(cacheRequestWorkspaceID(request), cacheRequestStubID(request))
-	}
 
 	if elapsed, ok := c.mountedImageHit(startTime, request, "clip_mounted_fuse_hit"); ok {
+		c.recordSuccessfulImageLoad(ctx, request, nil)
 		return elapsed, nil
 	}
 
@@ -289,6 +289,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	defer unlockMount()
 
 	if elapsed, ok := c.mountedImageHit(startTime, request, "clip_mounted_fuse_hit_after_local_lock"); ok {
+		c.recordSuccessfulImageLoad(ctx, request, nil)
 		return elapsed, nil
 	}
 
@@ -310,6 +311,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	}
 
 	if elapsed, ok := c.mountedImageHit(startTime, request, "clip_mounted_fuse_hit"); ok {
+		c.recordSuccessfulImageLoad(ctx, request, archive.metadata)
 		return elapsed, nil
 	}
 
@@ -322,6 +324,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	defer releaseImageLock()
 
 	if elapsed, ok := c.mountedImageHit(startTime, request, "clip_mounted_fuse_hit_after_lock"); ok {
+		c.recordSuccessfulImageLoad(ctx, request, archive.metadata)
 		return elapsed, nil
 	}
 
@@ -335,8 +338,29 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	c.recordImageLifecycle(request, types.ContainerLifecycleID("image.mount_archive"), mountStart, time.Since(mountStart), true, map[string]string{
 		"storage_mode": archive.storageMode,
 	})
+	c.recordSuccessfulImageLoad(ctx, request, archive.metadata)
 
 	return time.Since(startTime), nil
+}
+
+// recordSuccessfulImageLoad activates reconciliation only in a locality that
+// actually served the workload. A failed failover attempt must not retain or
+// proactively materialize that stub's content.
+func (c *ImageClient) recordSuccessfulImageLoad(ctx context.Context, request *types.ContainerRequest, meta *clipCommon.ClipArchiveMetadata) {
+	if c == nil || c.contentReporter == nil || request == nil {
+		return
+	}
+	if meta == nil && c.v2ArchiveMetadata != nil {
+		meta, _ = c.v2ArchiveMetadata.Get(request.ImageId)
+	}
+	if _, isOCI := ociStorageInfo(meta); isOCI {
+		if report, ok := c.imageRequiredContent(ctx, request, meta); ok {
+			c.publishRequiredContent(request, report)
+		}
+	} else {
+		c.queueV1ArchiveCache(request)
+	}
+	c.contentReporter.touchRecentStub(cacheRequestWorkspaceID(request), cacheRequestStubID(request))
 }
 
 func imageLayerPrepareProgressLogger(outputLogger *slog.Logger) func(clipStorage.PrepareProgress) {
@@ -448,33 +472,13 @@ func (c *ImageClient) prepareLazyImageArchive(ctx context.Context, request *type
 		if archive.sourceRegistry == nil || archive.sourceRegistry.BucketName == "" {
 			archive.sourceRegistry = c.imageArchiveSourceRegistry(ctx, request)
 		}
-		if localArchivePath, ok := c.ensureV1ArchiveDataCache(ctx, request, archive.sourceRegistry); ok {
+		if localArchivePath, ok := c.restoreV1ArchiveDataCache(ctx, request, archive.sourceRegistry); ok {
 			archive.path = localArchivePath
 			archive.sourceRegistry = nil
 			archive.storageMode = string(clipCommon.StorageModeLocal)
 		}
 	}
-	c.reportRequiredContent(ctx, request, meta)
-
 	return archive, nil
-}
-
-// reportRequiredContent enumerates the content a stub's image requires and feeds
-// it to the cache reconciliation reporter. It runs at image-load time (off the
-// read hot path) and is a no-op when reconciliation is disabled.
-func (c *ImageClient) reportRequiredContent(ctx context.Context, request *types.ContainerRequest, meta *clipCommon.ClipArchiveMetadata) {
-	if request == nil || meta == nil {
-		return
-	}
-
-	report, ok := c.imageRequiredContent(ctx, request, meta)
-	if !ok {
-		// Nothing to report; do not claim the one-time generation so a later
-		// load that does yield content can still publish it.
-		return
-	}
-
-	c.publishRequiredContent(request, report)
 }
 
 func (c *ImageClient) publishRequiredContent(request *types.ContainerRequest, report requiredContentReport) {
@@ -595,13 +599,6 @@ func (c *ImageClient) clipV1ArchiveRequiredContent(ctx context.Context, request 
 	}, true
 }
 
-// imageArchiveSourceKey returns the image registry object key for a stub's
-// archive (e.g. "{imageId}.rclip"), matching the key used by the embedded-cache
-// pull that originally stored it.
-func (c *ImageClient) imageArchiveSourceKey(imageId string) string {
-	return fmt.Sprintf("%s.%s", imageId, c.registry.ImageFileExtension)
-}
-
 // ociLayerReference builds a fully-qualified, non-secret OCI layer digest
 // reference (registry/repository@sha256:...) used as the required-content source
 // descriptor so a cache host can fetch and decompress the layer from origin.
@@ -666,16 +663,16 @@ func isOCIStorageMode(mode string) bool {
 }
 
 func (c *ImageClient) lazyMountOptions(ctx context.Context, request *types.ContainerRequest, archive lazyImageArchive) clip.MountOptions {
-	cacheKind := "legacy-file-runtime"
+	cachePath := c.contentCachePath(request, archive)
+	var contentCache *imageContentCache
 	if archive.usesOCIStorage() {
-		cacheKind = "oci-layer-runtime"
+		contentCache = newImageContentCache(c.cacheClient, request.ImageId, "oci-layer-runtime", c.imageContentCacheObserver(request))
 	}
-	contentCache := newImageContentCache(c.cacheClient, request.ImageId, cacheKind, c.imageContentCacheObserver(request))
 	mountOptions := clip.MountOptions{
 		ArchivePath:           archive.path,
 		Metadata:              archive.metadata,
 		MountPoint:            c.imageMountPoint(request.ImageId),
-		CachePath:             c.contentCachePath(request, archive),
+		CachePath:             cachePath,
 		ContentCache:          contentCache,
 		ContentCacheAvailable: contentCache != nil,
 	}
@@ -729,7 +726,7 @@ func (c *ImageClient) contentCachePath(request *types.ContainerRequest, archive 
 	return ""
 }
 
-func (c *ImageClient) ensureV1ArchiveDataCache(ctx context.Context, request *types.ContainerRequest, sourceRegistry *types.S3ImageRegistryConfig) (string, bool) {
+func (c *ImageClient) restoreV1ArchiveDataCache(ctx context.Context, request *types.ContainerRequest, sourceRegistry *types.S3ImageRegistryConfig) (path string, ok bool) {
 	if request == nil || c.config.ImageService.RegistryStore != registry.S3ImageRegistryStore {
 		return "", false
 	}
@@ -737,140 +734,157 @@ func (c *ImageClient) ensureV1ArchiveDataCache(ctx context.Context, request *typ
 	imageID := request.ImageId
 	targetPath := c.clipV1ArchiveDataCachePath(imageID)
 	if c.localImageArchiveReady(targetPath, imageID) {
+		c.recordImageLifecycle(request, types.ContainerLifecycleImageV1DataCacheRestore, time.Now(), 0, true, map[string]string{"source": "local"})
 		return targetPath, true
 	}
 
 	cachePath := c.clipV1ArchiveCachePath(imageID)
-	if sourceRegistry == nil || sourceRegistry.BucketName == "" {
-		sourceRegistry = c.imageArchiveSourceRegistry(ctx, request)
-	}
-
-	if deferRestore, size := c.deferV1ArchiveDataRestore(ctx, imageID, cachePath, sourceRegistry); deferRestore {
-		attrs := map[string]string{
-			"reason":          "large_archive_with_remote_source",
-			"size_bytes":      fmt.Sprintf("%d", size),
-			"threshold_bytes": fmt.Sprintf("%d", maxSyncV1ArchiveDataRestoreBytes),
+	var metadata *cache.FSMetadata
+	if c.cacheClient != nil && c.archiveContentMetadata != nil {
+		var err error
+		metadata, err = c.archiveContentMetadata(ctx, cachePath)
+		if err != nil && !isEmbeddedImageCacheMiss(err) {
+			log.Debug().Err(err).Str("image_id", imageID).Str("cache_path", cachePath).Msg("v1 image data archive cache metadata unavailable")
 		}
-		c.recordImageLifecycle(request, types.ContainerLifecycleImageV1DataCacheDeferred, time.Now(), 0, true, attrs)
-		c.warmV1ArchiveDataCacheAsync(imageID, targetPath, cachePath, *sourceRegistry)
-		return "", false
 	}
 
-	restoreStart := time.Now()
-	path, ok := c.materializeV1ArchiveDataCache(ctx, request, imageID, targetPath, cachePath, sourceRegistry)
-	c.recordImageLifecycle(request, types.ContainerLifecycleImageV1DataCacheRestore, restoreStart, time.Since(restoreStart), ok, nil)
-	return path, ok
-}
-
-func (c *ImageClient) materializeV1ArchiveDataCache(ctx context.Context, request *types.ContainerRequest, imageID, targetPath, cachePath string, sourceRegistry *types.S3ImageRegistryConfig) (string, bool) {
-	unlock, err := lockImageArchiveFile(ctx, targetPath)
+	brokeredOnly := (sourceRegistry == nil || sourceRegistry.BucketName == "") && c.brokeredImageAccessRequest(request)
+	lockWait := embeddedImageCacheLockWaitTimeout
+	if brokeredOnly {
+		// URL-only workers cannot fall back to a credentialed remote mount. Wait
+		// for the current downloader, then recheck the archive under its lock.
+		lockWait = imageArchiveDownloadTimeout
+	}
+	startedAt := time.Now()
+	lockCtx, cancel := context.WithTimeout(ctx, lockWait)
+	unlock, err := lockImageArchiveFile(lockCtx, targetPath)
+	cancel()
 	if err != nil {
-		log.Debug().Err(err).Str("image_id", imageID).Str("path", targetPath).Msg("v1 image data archive lock failed")
+		c.recordImageLifecycle(request, types.ContainerLifecycleImageV1DataCacheDeferred, startedAt, time.Since(startedAt), true, map[string]string{"reason": "archive_lock_busy"})
 		return "", false
 	}
 	defer unlock()
-
 	if c.localImageArchiveReady(targetPath, imageID) {
+		c.recordImageLifecycle(request, types.ContainerLifecycleImageV1DataCacheRestore, startedAt, time.Since(startedAt), true, map[string]string{"source": "local_after_lock"})
 		return targetPath, true
 	}
-
-	if c.cacheClient != nil {
-		if ok, err := c.copyImageArchiveFromContentCachePath(ctx, targetPath, imageID, cachePath); err != nil {
-			log.Debug().Err(err).Str("image_id", imageID).Str("cache_path", cachePath).Msg("v1 image data archive content cache restore failed")
-		} else if ok {
-			return targetPath, true
+	if info, statErr := os.Stat(targetPath); statErr == nil && (info.IsDir() || info.Size() > 0) {
+		if err := os.RemoveAll(targetPath); err != nil {
+			log.Debug().Err(err).Str("image_id", imageID).Str("path", targetPath).Msg("v1 image data archive cleanup failed")
+			return "", false
 		}
 	}
 
-	if sourceRegistry == nil || sourceRegistry.BucketName == "" {
-		if request != nil && c.downloadV1ArchiveDataFromBrokeredURL(ctx, request, targetPath, cachePath) {
-			return targetPath, true
+	if metadata != nil && metadata.Hash != "" && metadata.Size > 0 {
+		if metadata.Size > maxSyncV1ArchiveDataRestoreBytes && sourceRegistry != nil && sourceRegistry.BucketName != "" {
+			c.recordImageLifecycle(request, types.ContainerLifecycleImageV1DataCacheDeferred, startedAt, time.Since(startedAt), true, map[string]string{
+				"reason":          "large_archive_with_remote_source",
+				"size_bytes":      fmt.Sprintf("%d", metadata.Size),
+				"threshold_bytes": fmt.Sprintf("%d", maxSyncV1ArchiveDataRestoreBytes),
+			})
+			return "", false
 		}
-		return "", false
-	}
-	if c.cacheClient == nil {
-		return "", false
-	}
-
-	key := c.clipV1ArchiveDataSourceKey(imageID)
-	routingKey := cachePath
-	hash, err := c.cacheClient.StoreContentFromS3Source(cache.S3ContentSource{
-		Path:           key,
-		CachePath:      cachePath,
-		BucketName:     sourceRegistry.BucketName,
-		Region:         sourceRegistry.Region,
-		EndpointURL:    sourceRegistry.Endpoint,
-		AccessKey:      sourceRegistry.AccessKey,
-		SecretKey:      sourceRegistry.SecretKey,
-		ForcePathStyle: sourceRegistry.ForcePathStyle,
-	}, cache.StoreContentOptions{RoutingKey: routingKey, Lock: true})
-	if err != nil {
-		if errors.Is(err, cache.ErrUnableToAcquireLock) {
-			if ok, waitErr := c.waitForImageArchiveContentCachePath(ctx, targetPath, imageID, cachePath); ok {
+		if metadata.Size <= uint64(^uint(0)>>1) {
+			err := c.writeImageArchiveFromContentCache(ctx, targetPath, imageID, metadata.Hash, int64(metadata.Size), cachePath)
+			if err == nil {
+				c.recordImageLifecycle(request, types.ContainerLifecycleImageV1DataCacheRestore, startedAt, time.Since(startedAt), true, map[string]string{"source": "content_cache"})
 				return targetPath, true
-			} else if waitErr != nil {
-				log.Debug().Err(waitErr).Str("image_id", imageID).Str("cache_path", cachePath).Msg("v1 image data archive content cache lock wait failed")
 			}
-		} else {
-			log.Debug().Err(err).Str("image_id", imageID).Str("cache_path", cachePath).Str("source", key).Msg("v1 image data archive content cache store failed")
-		}
-		return "", false
-	}
-
-	size, err := c.imageArchiveSize(ctx, imageID, key, sourceRegistry)
-	if err != nil {
-		log.Debug().Err(err).Str("image_id", imageID).Str("source", key).Msg("v1 image data archive size lookup failed")
-		return "", false
-	}
-	if err := c.writeImageArchiveFromContentCache(ctx, targetPath, imageID, hash, size, routingKey); err != nil {
-		log.Debug().Err(err).Str("image_id", imageID).Str("cache_path", cachePath).Msg("v1 image data archive content cache write failed")
-		return "", false
-	}
-	return targetPath, true
-}
-
-func (c *ImageClient) deferV1ArchiveDataRestore(ctx context.Context, imageID, cachePath string, sourceRegistry *types.S3ImageRegistryConfig) (bool, int64) {
-	if sourceRegistry == nil || sourceRegistry.BucketName == "" {
-		return false, 0
-	}
-
-	if c.cacheClient != nil {
-		if metadata, err := c.cacheClient.CacheFSMetadata(ctx, cachePath); err == nil && metadata != nil && metadata.Size > 0 {
-			size := int64(metadata.Size)
-			return size > maxSyncV1ArchiveDataRestoreBytes, size
+			if !isEmbeddedImageCacheMiss(err) {
+				log.Debug().Err(err).Str("image_id", imageID).Str("cache_path", cachePath).Msg("v1 image data archive content cache restore failed")
+				c.recordImageLifecycle(request, types.ContainerLifecycleImageV1DataCacheRestore, startedAt, time.Since(startedAt), false, nil)
+			}
 		}
 	}
 
-	size, err := c.imageArchiveSize(ctx, imageID, c.clipV1ArchiveDataSourceKey(imageID), sourceRegistry)
-	if err != nil {
-		return false, 0
+	if brokeredOnly {
+		if c.downloadV1ArchiveDataFromBrokeredURL(ctx, request, targetPath) {
+			c.recordImageLifecycle(request, types.ContainerLifecycleImageV1DataCacheRestore, startedAt, time.Since(startedAt), true, map[string]string{"source": "brokered_url"})
+			return targetPath, true
+		}
+		c.recordImageLifecycle(request, types.ContainerLifecycleImageV1DataCacheRestore, startedAt, time.Since(startedAt), false, map[string]string{"source": "brokered_url"})
 	}
-	return size > maxSyncV1ArchiveDataRestoreBytes, size
+	// S3-backed v1 images are mounted remotely. CLIP owns the only origin
+	// downloader and atomically fills CachePath after the mount is live.
+	return "", false
 }
 
-func (c *ImageClient) warmV1ArchiveDataCacheAsync(imageID, targetPath, cachePath string, sourceRegistry types.S3ImageRegistryConfig) {
-	if c.cacheClient == nil || imageID == "" || targetPath == "" || sourceRegistry.BucketName == "" {
+func (c *ImageClient) queueV1ArchiveCache(request *types.ContainerRequest) {
+	workspaceID := cacheRequestWorkspaceID(request)
+	stubID := cacheRequestStubID(request)
+	if request == nil || request.ImageId == "" || workspaceID == "" || stubID == "" ||
+		c.cacheClient == nil || c.archiveContentMetadata == nil ||
+		c.config.ImageService.RegistryStore != registry.S3ImageRegistryStore {
 		return
 	}
 
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), imageArchiveDownloadTimeout)
-		defer cancel()
+	go c.completeV1ArchiveCache(&types.ContainerRequest{
+		WorkspaceId: workspaceID,
+		StubId:      stubID,
+		ImageId:     request.ImageId,
+	})
+}
 
-		if c.localImageArchiveReady(targetPath, imageID) {
+// completeV1ArchiveCache waits for CLIP to atomically fill the whole v1
+// archive, coalesces cache seeding by image, then publishes this stub's normal
+// required-content report. Each caller owns its timeout, so a late workload
+// cannot be lost at the boundary of an earlier cache attempt.
+func (c *ImageClient) completeV1ArchiveCache(request *types.ContainerRequest) {
+	ctx, cancel := context.WithTimeout(context.Background(), imageArchiveDownloadTimeout)
+	defer cancel()
+
+	imageID := request.ImageId
+	for ctx.Err() == nil {
+		result := c.v1CacheGroup.DoChan(imageID, func() (any, error) {
+			return c.waitForV1ArchiveCache(imageID)
+		})
+		select {
+		case <-ctx.Done():
 			return
+		case outcome := <-result:
+			if item, ok := outcome.Val.(types.CacheRequiredContentItem); outcome.Err == nil && ok && item.Hash != "" {
+				c.publishRequiredContent(request, requiredContentReport{kind: types.CacheContentKindClipV1, items: []types.CacheRequiredContentItem{item}})
+				return
+			}
 		}
-		if _, ok := c.materializeV1ArchiveDataCache(ctx, nil, imageID, targetPath, cachePath, &sourceRegistry); !ok {
-			log.Debug().Str("image_id", imageID).Str("cache_path", cachePath).Msg("background v1 image data archive warm skipped")
+	}
+}
+
+// waitForV1ArchiveCache is the single shared retry loop for an image. A late
+// caller that joins an expiring flight can start a fresh flight using its own
+// remaining deadline, without multiplying cache metadata traffic.
+func (c *ImageClient) waitForV1ArchiveCache(imageID string) (types.CacheRequiredContentItem, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), imageArchiveDownloadTimeout)
+	defer cancel()
+
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	request := &types.ContainerRequest{ImageId: imageID}
+	localPath := c.clipV1ArchiveDataCachePath(imageID)
+	cachePath := c.clipV1ArchiveCachePath(imageID)
+	localReady, seeded := false, false
+	for {
+		if item, ok := c.clipV1ArchiveRequiredContent(ctx, request); ok {
+			return item, nil
 		}
-	}()
+		if !localReady {
+			localReady = c.localImageArchiveReady(localPath, imageID)
+		}
+		if localReady && !seeded {
+			seeded = c.seedV1ArchiveDataInEmbeddedCache(localPath, cachePath, imageID) == nil
+		}
+		select {
+		case <-ctx.Done():
+			return types.CacheRequiredContentItem{}, ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 // downloadV1ArchiveDataFromBrokeredURL restores the CLIP v1 data archive
 // through a gateway-presigned URL when no S3 source is available. Agent-hosted
-// pools hold no image registry credentials, so the archive lands on local disk
-// and is then seeded into the embedded cache off the hot path.
-func (c *ImageClient) downloadV1ArchiveDataFromBrokeredURL(ctx context.Context, request *types.ContainerRequest, targetPath, cachePath string) bool {
+// pools hold no image registry credentials, so the archive lands on local disk.
+func (c *ImageClient) downloadV1ArchiveDataFromBrokeredURL(ctx context.Context, request *types.ContainerRequest, targetPath string) bool {
 	if !c.brokeredImageAccessRequest(request) {
 		return false
 	}
@@ -890,21 +904,22 @@ func (c *ImageClient) downloadV1ArchiveDataFromBrokeredURL(ctx context.Context, 
 		return false
 	}
 
-	go c.seedV1ArchiveDataInEmbeddedCache(targetPath, cachePath, request.ImageId)
 	log.Info().Str("image_id", request.ImageId).Msg("restored v1 image data archive from brokered URL")
 	return true
 }
 
-func (c *ImageClient) seedV1ArchiveDataInEmbeddedCache(localPath, cachePath, imageId string) {
+func (c *ImageClient) seedV1ArchiveDataInEmbeddedCache(localPath, cachePath, imageId string) error {
 	if c.cacheClient == nil {
-		return
+		return errors.New("image content cache is disabled")
 	}
-	if _, err := c.cacheClient.StoreContentFromLocalFile(cache.LocalContentSource{
+	_, err := c.cacheClient.StoreContentFromLocalFile(cache.LocalContentSource{
 		Path:      localPath,
 		CachePath: cachePath,
-	}, cache.StoreContentOptions{RoutingKey: cachePath, Lock: true}); err != nil {
+	}, cache.StoreContentOptions{RoutingKey: cachePath, Lock: true})
+	if err != nil {
 		log.Debug().Err(err).Str("image_id", imageId).Str("cache_path", cachePath).Msg("v1 image data archive embedded cache seed failed")
 	}
+	return err
 }
 
 func (c *ImageClient) localImageArchiveReady(archivePath, imageID string) bool {
@@ -913,12 +928,10 @@ func (c *ImageClient) localImageArchiveReady(archivePath, imageID string) bool {
 		return false
 	}
 	if info.IsDir() || info.Size() <= 0 {
-		_ = os.RemoveAll(archivePath)
 		return false
 	}
 	if err := c.validateRestoredImageArchive(archivePath, imageID, info.Size()); err != nil {
-		log.Debug().Err(err).Str("image_id", imageID).Str("path", archivePath).Msg("discarding invalid local image archive")
-		_ = os.Remove(archivePath)
+		log.Debug().Err(err).Str("image_id", imageID).Str("path", archivePath).Msg("local image archive is not ready")
 		return false
 	}
 	return true
@@ -2289,7 +2302,7 @@ func (c *ImageClient) createOCIImageWithProgress(ctx context.Context, outputLogg
 		CheckpointMiB:    checkpointMiB,
 		ProgressChan:     progressChan,
 		CredProvider:     c.getCredentialProviderForImage(ctx, request.ImageId, request),
-		ContentCache:     newImageContentCache(c.cacheClient, request.ImageId, "oci-layer-build"),
+		ContentCache:     newImageContentCache(c.cacheClient, request.ImageId, "oci-layer-build", nil),
 		ContentCacheDir:  filepath.Dir(outputPath),
 		LayerIndexCache:  newImageLayerIndexCache(c.cacheClient),
 		IndexConcurrency: imageLayerPrepareConcurrency,
