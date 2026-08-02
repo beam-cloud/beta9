@@ -31,7 +31,10 @@ USER_CACHE_DIR = "/cache"
 LIFECYCLE_RPC_TIMEOUT_SECONDS = 5
 END_TASK_MAX_ATTEMPTS = 3
 END_TASK_RETRY_DELAY_SECONDS = 1
-CALLBACK_HTTP_TIMEOUT_SECONDS = 10
+CALLBACK_HTTP_CONNECT_TIMEOUT_SECONDS = 10
+CALLBACK_HTTP_READ_TIMEOUT_SECONDS = 30
+CALLBACK_MAX_ATTEMPTS = 3
+CALLBACK_RETRY_INITIAL_DELAY_SECONDS = 0.5
 
 PICKLE_SUFFIX = ".pkl"
 
@@ -523,24 +526,51 @@ def send_callback(
             "X-Task-Signature": sign_payload_resp.signature,
             "X-Task-Timestamp": str(sign_payload_resp.timestamp),
         }
+        request_body = {"json": body} if use_json else {"data": body}
 
-        start = time.time()
-        if use_json:
-            requests.post(
-                callback_url,
-                json=body,
-                headers=headers,
-                timeout=CALLBACK_HTTP_TIMEOUT_SECONDS,
-            )
-        else:
-            requests.post(
-                callback_url,
-                data=body,
-                headers=headers,
-                timeout=CALLBACK_HTTP_TIMEOUT_SECONDS,
-            )
+        for attempt in range(1, CALLBACK_MAX_ATTEMPTS + 1):
+            start = time.time()
+            response = None
+            try:
+                response = requests.post(
+                    callback_url,
+                    **request_body,
+                    headers=headers,
+                    timeout=(
+                        CALLBACK_HTTP_CONNECT_TIMEOUT_SECONDS,
+                        CALLBACK_HTTP_READ_TIMEOUT_SECONDS,
+                    ),
+                )
+                response.raise_for_status()
+                print(
+                    f"Callback request attempt {attempt}/{CALLBACK_MAX_ATTEMPTS} "
+                    f"took {time.time() - start} seconds"
+                )
+                return
+            except requests.ReadTimeout:
+                # A read timeout is ambiguous: the receiver may have committed
+                # the callback while its response was lost. Do not duplicate it.
+                print(
+                    f"Callback delivery status unknown for task <{context.task_id}> after "
+                    "read timeout; not retrying to avoid duplicates"
+                )
+                return
+            except requests.RequestException as exc:
+                status_code = response.status_code if response is not None else None
+                retryable = (
+                    isinstance(exc, requests.ConnectionError)
+                    or status_code in (408, 425, 429)
+                    or (status_code is not None and status_code >= 500)
+                )
+                if not retryable or attempt == CALLBACK_MAX_ATTEMPTS:
+                    raise
 
-        print(f"Callback request took {time.time() - start} seconds")
+                delay = CALLBACK_RETRY_INITIAL_DELAY_SECONDS * (2 ** (attempt - 1))
+                print(
+                    f"Callback request attempt {attempt}/{CALLBACK_MAX_ATTEMPTS} failed; "
+                    f"retrying in {delay:g}s: {exc}"
+                )
+                time.sleep(delay)
     except Exception:
         print(f"Unable to send callback: {traceback.format_exc()}")
 
