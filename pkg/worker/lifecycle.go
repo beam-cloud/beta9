@@ -87,7 +87,7 @@ func (s *Worker) handleStopContainerArgs(stopArgs types.StopContainerArgs, sourc
 
 	if containerInstance, exists := s.containerInstances.Get(stopArgs.ContainerId); exists {
 		log.Info().Str("container_id", stopArgs.ContainerId).Msg("received stop container event")
-		containerInstance.StopReason = reason
+		containerInstance.setStopReason(reason)
 		s.containerInstances.Set(stopArgs.ContainerId, containerInstance)
 		s.recordContainerEvent(context.Background(), containerInstance.Request, types.EventContainerEventSchema{
 			ID:          types.ContainerEventWorkerStopEventReceived,
@@ -172,7 +172,7 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 		if request != nil && request.Stub.Type.Kind() == types.StubTypeSandbox {
 			instance.signalProcessManagerReadiness(false)
 		}
-		instance.ExitCode = exitCode
+		instance.setExitCode(exitCode)
 		s.containerInstances.Set(containerId, instance)
 	}
 
@@ -1200,7 +1200,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	containerInstance.BundlePath = opts.BundlePath
 	containerInstance.Overlay = overlay
 	containerInstance.Spec = spec
-	containerInstance.ExitCode = -1
+	containerInstance.setExitCode(-1)
 	containerInstance.OutputWriter = common.NewOutputWriter(func(s string) {
 		outputLogger.Info(s, "done", false, "success", false)
 	})
@@ -1461,8 +1461,11 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	stopReason := types.StopContainerReasonUnknown
 	containerInstance, exists = s.containerInstances.Get(containerId)
-	if exists && containerInstance.StopReason != "" {
-		stopReason = types.StopContainerReason(containerInstance.StopReason)
+	if exists {
+		_, instanceStopReason := containerInstance.lifecycleState()
+		if instanceStopReason != "" {
+			stopReason = instanceStopReason
+		}
 	}
 	rawExitCode := exitCode
 

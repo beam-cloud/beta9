@@ -403,7 +403,11 @@ func (s *Worker) dockerStartupCanceled(ctx context.Context, containerId string, 
 	if !exists {
 		return true
 	}
-	return instance != nil && instance.StopReason != ""
+	if instance == nil {
+		return false
+	}
+	_, stopReason := instance.lifecycleState()
+	return stopReason != ""
 }
 
 func dockerStartupCanceled(ctx context.Context, err error) bool {
