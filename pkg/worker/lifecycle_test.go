@@ -1443,7 +1443,7 @@ func TestRunContainerRestoreWaitsForRestoredRuntimeExit(t *testing.T) {
 	tmpDir := t.TempDir()
 	checkpointId := "checkpoint-1"
 	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "checkpoints", checkpointId, checkpointFsDir), 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "checkpoints", checkpointId, "inventory.img"), []byte("runtime payload"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "checkpoints", checkpointId, "checkpoint.img"), []byte("runtime payload"), 0644))
 
 	bundleDir := filepath.Join(tmpDir, "bundle")
 	require.NoError(t, os.MkdirAll(bundleDir, 0755))
