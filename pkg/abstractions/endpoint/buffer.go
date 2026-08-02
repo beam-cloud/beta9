@@ -36,16 +36,44 @@ const (
 	checkAddressIsReadyTimeout     time.Duration = 2 * time.Second
 	handleHttpRequestClientTimeout time.Duration = 175 * time.Second
 	backendConnectTimeout          time.Duration = 10 * time.Second
+	// Worker startup has its own 15-minute watchdog. Give a scheduled task a
+	// small control-plane cushion so the worker, rather than the endpoint queue,
+	// reports the authoritative startup result. Task execution keeps the stub's
+	// independent TaskPolicy timeout after a backend is ready.
+	backendContainerStartupTimeout time.Duration = 15*time.Minute + 30*time.Second
+	// Once a backend is selected, leave enough time for the runner's bounded
+	// StartTask retries to claim the task before the unclaimed-task monitor can
+	// expire it at the queue deadline.
+	backendTaskClaimGrace time.Duration = 30 * time.Second
+)
+
+const (
+	requestStatePending uint32 = iota
+	requestStateDispatched
+	requestStateAbandoned
 )
 
 type request struct {
 	ctx        echo.Context
+	clientCtx  context.Context
 	task       *EndpointTask
 	requestID  string
 	done       chan struct{}
 	started    chan struct{}
-	abandoned  atomic.Bool
+	state      atomic.Uint32
 	enqueuedAt time.Time
+}
+
+func (r *request) tryDispatch() bool {
+	return r != nil && r.state.CompareAndSwap(requestStatePending, requestStateDispatched)
+}
+
+func (r *request) tryAbandon() bool {
+	return r != nil && r.state.CompareAndSwap(requestStatePending, requestStateAbandoned)
+}
+
+func (r *request) isAbandoned() bool {
+	return r != nil && r.state.Load() == requestStateAbandoned
 }
 
 type container struct {
@@ -151,6 +179,10 @@ func (rb *RequestBuffer) handleHeartbeatEvents() {
 
 func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, task *EndpointTask) error {
 	ctx.Set("stubId", rb.stubId)
+	if err := rb.extendTaskStartupExpiry(task); err != nil {
+		rb.cancelInFlightTask(task, types.TaskRequestCancelled)
+		return fmt.Errorf("extend endpoint task startup expiry: %w", err)
+	}
 
 	requestID := uuid.NewString()
 	if task != nil && task.msg != nil && task.msg.TaskId != "" {
@@ -161,6 +193,7 @@ func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, task *EndpointTask) er
 	started := make(chan struct{})
 	req := &request{
 		ctx:        ctx,
+		clientCtx:  ctx.Request().Context(),
 		done:       done,
 		started:    started,
 		task:       task,
@@ -174,23 +207,46 @@ func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, task *EndpointTask) er
 	rb.signalDiscovery()
 	rb.signalWork()
 
-	waitTimer := time.NewTimer(rb.requestQueueTimeout())
+	waitTimer := time.NewTimer(rb.requestQueueTimeout(req.task))
 	defer waitTimer.Stop()
+	clientDone := req.clientCtx.Done()
 
 	for {
 		select {
 		case <-rb.ctx.Done():
-			return rb.ctx.Err()
-		case <-ctx.Request().Context().Done():
-			select {
-			case <-started:
-			default:
-				req.abandoned.Store(true)
+			if req.tryAbandon() {
 				rb.cancelInFlightTask(req.task, types.TaskRequestCancelled)
+				return rb.ctx.Err()
 			}
+			if req.isAbandoned() {
+				<-done
+				return nil
+			}
+			// A dispatched handler owns the Echo context until its backend work
+			// finishes. The worker-shutdown cancellation below makes that bounded.
+			<-done
+			return rb.ctx.Err()
+		case <-clientDone:
+			if !req.tryAbandon() {
+				if req.isAbandoned() {
+					<-done
+					return nil
+				}
+				started = nil
+				clientDone = nil
+				if !waitTimer.Stop() {
+					select {
+					case <-waitTimer.C:
+					default:
+					}
+				}
+				continue
+			}
+			rb.cancelInFlightTask(req.task, types.TaskRequestCancelled)
 			return nil
 		case <-started:
 			started = nil
+			clientDone = nil
 			if !waitTimer.Stop() {
 				select {
 				case <-waitTimer.C:
@@ -198,7 +254,15 @@ func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, task *EndpointTask) er
 				}
 			}
 		case <-waitTimer.C:
-			req.abandoned.Store(true)
+			if !req.tryAbandon() {
+				if req.isAbandoned() {
+					<-done
+					return nil
+				}
+				started = nil
+				clientDone = nil
+				continue
+			}
 			rb.cancelInFlightTask(req.task, types.TaskExpired)
 			ctx.JSON(http.StatusGatewayTimeout, map[string]interface{}{
 				"error": "Timed out waiting for a backend container",
@@ -210,11 +274,58 @@ func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, task *EndpointTask) er
 	}
 }
 
-func (rb *RequestBuffer) requestQueueTimeout() time.Duration {
+func (rb *RequestBuffer) requestExecutionTimeout() time.Duration {
 	if rb.stubConfig != nil && rb.stubConfig.TaskPolicy.Timeout > 0 {
 		return time.Duration(rb.stubConfig.TaskPolicy.Timeout) * time.Second
 	}
 	return handleHttpRequestClientTimeout
+}
+
+func (rb *RequestBuffer) requestQueueTimeout(task *EndpointTask) time.Duration {
+	// Taskless probes retain their short request timeout and do not provision a
+	// backend. A real task may need to hydrate a large image before the handler's
+	// execution budget should begin.
+	if task != nil {
+		return backendContainerStartupTimeout
+	}
+	return rb.requestExecutionTimeout()
+}
+
+func (rb *RequestBuffer) extendTaskStartupExpiry(task *EndpointTask) error {
+	if task == nil || task.msg == nil || task.es == nil || task.es.taskRepo == nil {
+		return nil
+	}
+
+	startupExpiry := time.Now().Add(rb.requestQueueTimeout(task) + backendTaskClaimGrace)
+	if !task.msg.Policy.Expires.IsZero() && !task.msg.Policy.Expires.Before(startupExpiry) {
+		return nil
+	}
+
+	previousExpiry := task.msg.Policy.Expires
+	task.msg.Policy.Expires = startupExpiry
+	encoded, err := task.msg.Encode()
+	if err != nil {
+		task.msg.Policy.Expires = previousExpiry
+		return err
+	}
+
+	baseCtx := rb.ctx
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
+	persistCtx, cancel := context.WithTimeout(baseCtx, backendConnectTimeout)
+	defer cancel()
+	if err := task.es.taskRepo.SetTaskState(
+		persistCtx,
+		task.msg.WorkspaceName,
+		task.msg.StubId,
+		task.msg.TaskId,
+		encoded,
+	); err != nil {
+		task.msg.Policy.Expires = previousExpiry
+		return err
+	}
+	return nil
 }
 
 func (rb *RequestBuffer) processRequests() {
@@ -230,13 +341,15 @@ func (rb *RequestBuffer) processRequests() {
 				}
 				rb.recordBufferOccupancy()
 
-				if req.abandoned.Load() {
+				if req.isAbandoned() {
 					rb.closeRequest(req)
 					continue
 				}
 
-				if req.ctx.Request().Context().Err() != nil {
-					rb.cancelInFlightTask(req.task, types.TaskRequestCancelled)
+				if req.clientCtx != nil && req.clientCtx.Err() != nil {
+					if req.tryAbandon() {
+						rb.cancelInFlightTask(req.task, types.TaskRequestCancelled)
+					}
 					rb.closeRequest(req)
 					continue
 				}
@@ -283,12 +396,16 @@ func (rb *RequestBuffer) failQueuedRequest(req *request, status int, message str
 		return
 	}
 
-	req.abandoned.Store(true)
-	rb.cancelInFlightTask(req.task, reason)
-	if req.ctx != nil && !req.ctx.Response().Committed {
-		_ = req.ctx.JSON(status, map[string]interface{}{
-			"error": message,
-		})
+	if req.tryAbandon() {
+		rb.cancelInFlightTask(req.task, reason)
+		if req.ctx != nil && !req.ctx.Response().Committed {
+			_ = req.ctx.JSON(status, map[string]interface{}{
+				"error": message,
+			})
+		}
+	}
+	if !req.isAbandoned() {
+		return
 	}
 	rb.closeRequest(req)
 }
@@ -593,12 +710,7 @@ func (rb *RequestBuffer) pruneBackendTransports(containers []container) {
 func (rb *RequestBuffer) handleRequest(req *request, c container) {
 	defer rb.afterRequest(req, c.id)
 
-	if req.abandoned.Load() {
-		return
-	}
-
-	if req.ctx.Request().Context().Err() != nil {
-		rb.cancelInFlightTask(req.task, types.TaskRequestCancelled)
+	if !req.tryDispatch() {
 		return
 	}
 
@@ -694,7 +806,7 @@ func (rb *RequestBuffer) handleHttpRequest(req *request, c container) {
 		requestBody = io.NopCloser(bytes.NewReader(payloadBytes))
 	}
 
-	httpClient := rb.getHttpClient(c.address, handleHttpRequestClientTimeout)
+	httpClient := rb.getHttpClient(c.address, rb.requestExecutionTimeout())
 	containerUrl := backendHTTPURL("http", c.address, req.ctx.Param("subPath"), "")
 
 	// Forward query params to the container if ASGI
@@ -702,7 +814,11 @@ func (rb *RequestBuffer) handleHttpRequest(req *request, c container) {
 		containerUrl = backendHTTPURL("http", c.address, req.ctx.Param("subPath"), req.ctx.QueryString())
 	}
 
-	httpReq, err := http.NewRequestWithContext(request.Context(), request.Method, containerUrl, requestBody)
+	backendCtx, cancel := context.WithTimeout(context.WithoutCancel(request.Context()), rb.requestExecutionTimeout())
+	defer cancel()
+	stopShutdownCancel := context.AfterFunc(rb.ctx, cancel)
+	defer stopShutdownCancel()
+	httpReq, err := http.NewRequestWithContext(backendCtx, request.Method, containerUrl, requestBody)
 	if err != nil {
 		req.ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
 			"error": "Internal server error",
@@ -720,10 +836,6 @@ func (rb *RequestBuffer) handleHttpRequest(req *request, c container) {
 
 	resp, err := httpClient.Do(httpReq)
 	if err != nil {
-		if req.ctx.Request().Context().Err() == context.Canceled {
-			rb.cancelInFlightTask(req.task, types.TaskRequestCancelled)
-			return
-		}
 		req.ctx.JSON(http.StatusBadGateway, map[string]interface{}{
 			"error": "Backend route unavailable",
 		})
@@ -792,7 +904,6 @@ func (rb *RequestBuffer) heartBeat(req *request, containerId string) {
 		return
 	}
 
-	ctx := req.ctx.Request().Context()
 	ticker := time.NewTicker(endpointRequestHeartbeatInterval)
 	defer ticker.Stop()
 
@@ -805,8 +916,6 @@ func (rb *RequestBuffer) heartBeat(req *request, containerId string) {
 	rb.refreshRequestTokenTTL(containerId)
 	for {
 		select {
-		case <-ctx.Done():
-			return
 		case <-rb.ctx.Done():
 			return
 		case <-req.done:
@@ -861,16 +970,26 @@ func (rb *RequestBuffer) proxyWebsocketConnection(r *request, c container, diale
 	if err != nil {
 		return err
 	}
+	defer wsSrc.Close()
 
 	headers := http.Header{}
 	if r.task != nil && r.task.msg != nil && r.task.msg.TaskId != "" {
 		headers.Set("X-TASK-ID", r.task.msg.TaskId)
 	}
 
-	wsDst, resp, err := dialer.Dial(dstAddress, headers)
+	wsDst, resp, err := dialer.DialContext(rb.ctx, dstAddress, headers)
 	if err != nil {
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
 		return err
 	}
+	defer wsDst.Close()
+	stopShutdownClose := context.AfterFunc(rb.ctx, func() {
+		_ = wsSrc.Close()
+		_ = wsDst.Close()
+	})
+	defer stopShutdownClose()
 
 	if resp.StatusCode != http.StatusSwitchingProtocols {
 		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
