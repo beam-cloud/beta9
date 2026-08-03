@@ -1147,6 +1147,7 @@ type scoredWorker struct {
 	worker       *types.Worker
 	score        int32
 	failoverRank int32
+	storageRank  int32
 }
 
 // Constants used for scoring workers
@@ -1199,14 +1200,21 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 		scoredWorkers = append(scoredWorkers, scoredWorker{
 			worker:       worker,
 			score:        score,
-			failoverRank: chain.rank(worker.PoolName),
+			failoverRank: failoverRankForWorker(chain, worker, request),
+			storageRank:  s.storagePreferenceRank(worker, request),
 		})
 	}
 
-	// Chain rank takes precedence over pool priority.
+	// Native requested GPUs take precedence over failover capacity. Within the
+	// same tier, storage-backed work prefers agent capacity so legacy workers
+	// remain available to workspaces that cannot run on agents. Explicit chain
+	// order still takes precedence over ordinary pool priority.
 	sort.Slice(scoredWorkers, func(i, j int) bool {
 		if scoredWorkers[i].failoverRank != scoredWorkers[j].failoverRank {
 			return scoredWorkers[i].failoverRank < scoredWorkers[j].failoverRank
+		}
+		if scoredWorkers[i].storageRank != scoredWorkers[j].storageRank {
+			return scoredWorkers[i].storageRank < scoredWorkers[j].storageRank
 		}
 		if scoredWorkers[i].score != scoredWorkers[j].score {
 			return scoredWorkers[i].score > scoredWorkers[j].score
@@ -1215,6 +1223,36 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 	})
 
 	return scoredWorkers[0].worker, nil
+}
+
+func failoverRankForWorker(chain *failoverChain, worker *types.Worker, request *types.ContainerRequest) int32 {
+	if chain == nil || worker == nil || request == nil {
+		return 0
+	}
+
+	// A pool can be both native capacity for one explicitly requested GPU and
+	// a configured failover target for another. Treat it as native in that
+	// case; otherwise an unrelated pool outside the chain gets rank zero and
+	// incorrectly jumps ahead of it regardless of priority.
+	if slices.Contains(gpuRequestsForScheduling(request), worker.Gpu) {
+		return 0
+	}
+	return chain.rank(worker.PoolName)
+}
+
+func (s *Scheduler) storagePreferenceRank(worker *types.Worker, request *types.ContainerRequest) int32 {
+	if worker == nil || request == nil || !request.StorageAvailable() {
+		return 0
+	}
+	if worker.ControlPlaneManaged {
+		return 0
+	}
+	if s != nil && s.workerPoolManager != nil {
+		if pool, ok := s.workerPoolManager.GetPool(workerPoolSelector(worker)); ok && pool.Config.AgentHosted() {
+			return 0
+		}
+	}
+	return 1
 }
 
 func (s *Scheduler) filterAgentWorkersByStorage(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
