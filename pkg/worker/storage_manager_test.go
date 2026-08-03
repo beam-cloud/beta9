@@ -12,7 +12,10 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
-type trackedStorage struct{ unmounted bool }
+type trackedStorage struct {
+	unmounted bool
+	mode      string
+}
 
 func (*trackedStorage) Mount(string) error { return nil }
 func (s *trackedStorage) Unmount(string) error {
@@ -20,7 +23,12 @@ func (s *trackedStorage) Unmount(string) error {
 	return nil
 }
 func (*trackedStorage) Format(string) error { return nil }
-func (*trackedStorage) Mode() string        { return storage.StorageModeLocal }
+func (s *trackedStorage) Mode() string {
+	if s.mode != "" {
+		return s.mode
+	}
+	return storage.StorageModeLocal
+}
 
 func TestWorkspaceStorageMountHotPathAllowsConcurrentHealthChecks(t *testing.T) {
 	mount := &trackedStorage{}

@@ -97,7 +97,7 @@ type Worker struct {
 	containerMountManager   *ContainerMountManager
 	imageClient             *ImageClient
 	containerInstances      *common.SafeMap[*ContainerInstance]
-	buildCancels            *common.SafeMap[context.CancelFunc]
+	containerCancels        *common.SafeMap[context.CancelFunc]
 	containerLock           sync.Mutex
 	checkpointCreateLocks   sync.Map
 	containerStartSem       chan struct{}
@@ -431,7 +431,7 @@ func NewWorker() (_ *Worker, err error) {
 		criuManager:             criuManager,
 		podHostName:             podHostName,
 		containerInstances:      containerInstances,
-		buildCancels:            common.NewSafeMap[context.CancelFunc](),
+		containerCancels:        common.NewSafeMap[context.CancelFunc](),
 		containerLock:           sync.Mutex{},
 		containerStartSem:       make(chan struct{}, containerStartLimit),
 		containerStartLimit:     containerStartLimit,
@@ -688,11 +688,9 @@ func (s *Worker) runContainerRequest(request *types.ContainerRequest) {
 	ctx, cancel := context.WithCancel(s.ctx)
 	defer cancel()
 
-	if request.IsBuildRequest() {
-		s.registerBuildCancel(containerId, cancel)
-		defer s.unregisterBuildCancel(containerId)
-		go s.cancelBuildIfAlreadyStopping(cancel, containerId)
-	}
+	s.registerContainerCancel(containerId, cancel)
+	defer s.unregisterContainerCancel(containerId)
+	go s.cancelContainerIfAlreadyStopping(cancel, containerId)
 
 	if err := s.hydrateRuntimeCredentials(ctx, request); err != nil {
 		log.Error().Str("container_id", containerId).Err(err).Msg("unable to hydrate runtime credentials")
@@ -750,16 +748,39 @@ func (s *Worker) failContainerRequest(containerId string, request *types.Contain
 	s.clearContainer(containerId, request, exitCode, false)
 }
 
-// cancelBuildIfAlreadyStopping checks if a build has already been cancelled and cancels the context if it has.
-func (s *Worker) cancelBuildIfAlreadyStopping(cancel context.CancelFunc, containerId string) {
-	containerState, err := handleGRPCResponse(s.containerRepoClient.GetContainerState(context.Background(), &pb.GetContainerStateRequest{ContainerId: containerId}))
+// cancelContainerIfAlreadyStopping closes the startup race where a stop is
+// persisted before this worker registers the in-memory cancellation callback.
+func (s *Worker) cancelContainerIfAlreadyStopping(cancel context.CancelFunc, containerId string) {
+	// A stop event can land after the instance is reserved but before the
+	// startup cancellation callback is registered. Prefer the local lifecycle
+	// state so that race does not depend on another repository round trip.
+	if s.containerInstances != nil {
+		if instance, exists := s.containerInstances.Get(containerId); exists && instance != nil {
+			_, stopReason := instance.lifecycleState()
+			if stopReason != "" {
+				log.Info().Str("container_id", containerId).Msg("container stopped before startup cancellation was registered")
+				cancel()
+				return
+			}
+		}
+	}
+
+	// The worker event stream may have disconnected before delivering the stop
+	// event. Reconcile against persisted state, but keep the lookup bounded so a
+	// repository outage cannot leak one goroutine per startup or reconnect.
+	if s.containerRepoClient == nil {
+		return
+	}
+	stateCtx, stateCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer stateCancel()
+	containerState, err := handleGRPCResponse(s.containerRepoClient.GetContainerState(stateCtx, &pb.GetContainerStateRequest{ContainerId: containerId}))
 	if err != nil {
 		log.Error().Str("container_id", containerId).Err(err).Msg("failed to get container state")
 		return
 	}
 
 	if types.ContainerStatus(containerState.State.Status) == types.ContainerStatusStopping {
-		log.Info().Str("container_id", containerId).Msg("incoming container state is stopping, cancelling context")
+		log.Info().Str("container_id", containerId).Msg("incoming container state is stopping, cancelling startup context")
 		cancel()
 		return
 	}
@@ -936,25 +957,23 @@ func (s *Worker) updateContainerStatusOnce(request *types.ContainerRequest) (boo
 			stateCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			needsStop := runtimeNeedsGraceKill(stateCtx, rt, request.ContainerId)
 			cancel()
-			if !needsStop {
-				return
-			}
-
-			log.Info().Str("container_id", request.ContainerId).Int64("grace_period_seconds", s.config.Worker.TerminationGracePeriod).Msg("container still running after stop event")
-			_, stopReason := instance.lifecycleState()
-			s.recordContainerEvent(context.Background(), request, types.EventContainerEventSchema{
-				ID:          types.ContainerEventWorkerStoppingGraceKill,
-				ContainerID: request.ContainerId,
-				Reason:      string(stopReason),
-				Source:      types.EventSourceWorkerStatusHeartbeat.String(),
-				Message:     types.EventMessageStoppingGraceKill.String(),
-				Attrs: map[string]string{
-					types.EventAttrGracePeriodSeconds: fmt.Sprintf("%d", s.config.Worker.TerminationGracePeriod),
-				},
-			})
-			s.stopContainerChan <- stopContainerEvent{
-				ContainerId: request.ContainerId,
-				Kill:        true,
+			if needsStop {
+				log.Info().Str("container_id", request.ContainerId).Int64("grace_period_seconds", s.config.Worker.TerminationGracePeriod).Msg("container still running after stop event")
+				_, stopReason := instance.lifecycleState()
+				s.recordContainerEvent(context.Background(), request, types.EventContainerEventSchema{
+					ID:          types.ContainerEventWorkerStoppingGraceKill,
+					ContainerID: request.ContainerId,
+					Reason:      string(stopReason),
+					Source:      types.EventSourceWorkerStatusHeartbeat.String(),
+					Message:     types.EventMessageStoppingGraceKill.String(),
+					Attrs: map[string]string{
+						types.EventAttrGracePeriodSeconds: fmt.Sprintf("%d", s.config.Worker.TerminationGracePeriod),
+					},
+				})
+				s.stopContainerChan <- stopContainerEvent{
+					ContainerId: request.ContainerId,
+					Kill:        true,
+				}
 			}
 
 			select {
@@ -962,27 +981,41 @@ func (s *Worker) updateContainerStatusOnce(request *types.ContainerRequest) (boo
 			case <-s.ctx.Done():
 				return
 			}
-			stateCtx, cancel = context.WithTimeout(context.Background(), 2*time.Second)
-			stillRunning := runtimeNeedsGraceKill(stateCtx, rt, request.ContainerId)
-			cancel()
-			if !stillRunning || s.storageManager == nil || s.storageManager.poolConfig.StorageMode != storage.StorageModeGeese {
-				return
-			}
-			unlock := s.storageManager.lockWorkspaceMount(request.Workspace.Name)
-			if !s.workspaceOnlyStopping(request.Workspace.Name) {
-				unlock()
-				return
-			}
-			log.Warn().Str("container_id", request.ContainerId).Str("workspace", request.Workspace.Name).Msg("aborting stuck workspace mount after SIGKILL timeout")
-			err := s.storageManager.unmountLocked(request.Workspace.Name)
-			unlock()
-			if err != nil {
-				log.Warn().Err(err).Str("workspace", request.Workspace.Name).Msg("stuck workspace mount recovery completed with errors")
-			}
+			s.abortStuckWorkspaceMount(request)
 		}()
 	}
 
 	return false, nil
+}
+
+// abortStuckWorkspaceMount recovers the shutdown path even when the runtime
+// was never created (or has already disappeared). The local lifecycle state is
+// authoritative here: a nonterminal instance with a stop reason is still
+// waiting for its cleanup defers, commonly on a wedged FUSE flush.
+func (s *Worker) abortStuckWorkspaceMount(request *types.ContainerRequest) {
+	if request == nil || s.containerInstances == nil || s.storageManager == nil || s.storageManager.poolConfig.StorageMode != storage.StorageModeGeese {
+		return
+	}
+	instance, exists := s.containerInstances.Get(request.ContainerId)
+	if !exists || instance == nil {
+		return
+	}
+	exitCode, stopReason := instance.lifecycleState()
+	if exitCode >= 0 || stopReason == "" {
+		return
+	}
+
+	workspaceName := request.Workspace.Name
+	unlock := s.storageManager.lockWorkspaceMount(workspaceName)
+	defer unlock()
+	if !s.workspaceOnlyStopping(workspaceName) {
+		return
+	}
+
+	log.Warn().Str("container_id", request.ContainerId).Str("workspace", workspaceName).Msg("aborting stuck workspace mount after SIGKILL timeout")
+	if err := s.storageManager.unmountLocked(workspaceName); err != nil {
+		log.Warn().Err(err).Str("workspace", workspaceName).Msg("stuck workspace mount recovery completed with errors")
+	}
 }
 
 func (s *Worker) workspaceOnlyStopping(workspaceName string) bool {
