@@ -12,6 +12,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/runtime"
+	"github.com/beam-cloud/beta9/pkg/storage"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/stretchr/testify/require"
@@ -318,6 +319,40 @@ func TestWorkspaceOnlyStoppingProtectsRunningSiblings(t *testing.T) {
 	require.True(t, worker.workspaceOnlyStopping("shared"))
 }
 
+func TestAbortStuckWorkspaceMountWithoutRuntimeState(t *testing.T) {
+	workspaceName := "shared"
+	request := &types.ContainerRequest{
+		ContainerId: "container-1",
+		Workspace:   types.Workspace{Name: workspaceName},
+	}
+	instances := common.NewSafeMap[*ContainerInstance]()
+	instances.Set(request.ContainerId, &ContainerInstance{
+		ExitCode:   -1,
+		StopReason: types.StopContainerReasonUser,
+		Request:    request,
+	})
+	mount := &trackedStorage{mode: storage.StorageModeGeese}
+	manager := &WorkspaceStorageManager{
+		mounts:             common.NewSafeMap[storage.Storage](),
+		mountLastUsed:      common.NewSafeMap[time.Time](),
+		containerInstances: instances,
+		mountLocks:         make(map[string]*sync.RWMutex),
+		poolConfig:         types.WorkerPoolConfig{StorageMode: storage.StorageModeGeese},
+		config: types.StorageConfig{WorkspaceStorage: types.WorkspaceStorageConfig{
+			BaseMountPath: t.TempDir(),
+		}},
+	}
+	manager.mounts.Set(workspaceName, mount)
+	manager.mountLastUsed.Set(workspaceName, time.Now())
+	worker := &Worker{containerInstances: instances, storageManager: manager}
+
+	worker.abortStuckWorkspaceMount(request)
+
+	require.True(t, mount.unmounted)
+	_, mounted := manager.mounts.Get(workspaceName)
+	require.False(t, mounted)
+}
+
 func TestShutdownWaitDrainsWithoutStoppingActiveContainer(t *testing.T) {
 	worker := &Worker{
 		containerInstances: common.NewSafeMap[*ContainerInstance](),
@@ -457,6 +492,7 @@ func TestFailContainerRequestReportsExitCode(t *testing.T) {
 }
 
 type fakeContainerRepoClient struct {
+	mu                 sync.Mutex
 	state              *pb.ContainerState
 	getStateCalls      int
 	updateStatusCalls  int
@@ -471,6 +507,8 @@ type fakeContainerRepoClient struct {
 }
 
 func (f *fakeContainerRepoClient) GetContainerState(ctx context.Context, in *pb.GetContainerStateRequest, opts ...grpc.CallOption) (*pb.GetContainerStateResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.getStateCalls++
 	return &pb.GetContainerStateResponse{
 		Ok:          true,

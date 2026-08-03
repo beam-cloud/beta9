@@ -15,11 +15,11 @@ func TestHandleWorkerEventStopsOwnedContainer(t *testing.T) {
 	worker := &Worker{
 		workerId:           "worker-1",
 		containerInstances: common.NewSafeMap[*ContainerInstance](),
-		buildCancels:       common.NewSafeMap[context.CancelFunc](),
+		containerCancels:   common.NewSafeMap[context.CancelFunc](),
 		stopContainerChan:  make(chan stopContainerEvent, 1),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	worker.registerBuildCancel("container-1", cancel)
+	worker.registerContainerCancel("container-1", cancel)
 	worker.containerInstances.Set("container-1", &ContainerInstance{
 		Id: "container-1",
 		Request: &types.ContainerRequest{
@@ -94,10 +94,10 @@ func TestHandleWorkerEventIgnoresHeartbeat(t *testing.T) {
 
 func TestHandleWorkerEventCancelsMatchingBuild(t *testing.T) {
 	worker := &Worker{
-		buildCancels: common.NewSafeMap[context.CancelFunc](),
+		containerCancels: common.NewSafeMap[context.CancelFunc](),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	worker.registerBuildCancel("build-1", cancel)
+	worker.registerContainerCancel("build-1", cancel)
 
 	worker.handleWorkerEvent(&pb.WorkerEvent{
 		EventId: "event-1",
@@ -113,7 +113,7 @@ func TestHandleWorkerEventCancelsMatchingBuild(t *testing.T) {
 	}
 }
 
-func TestReconnectCancelsStoppingBuilds(t *testing.T) {
+func TestReconnectCancelsStoppingContainers(t *testing.T) {
 	repoClient := &fakeContainerRepoClient{
 		state: &pb.ContainerState{
 			ContainerId: "build-1",
@@ -122,20 +122,35 @@ func TestReconnectCancelsStoppingBuilds(t *testing.T) {
 	}
 	worker := &Worker{
 		containerRepoClient: repoClient,
-		buildCancels:        common.NewSafeMap[context.CancelFunc](),
+		containerCancels:    common.NewSafeMap[context.CancelFunc](),
 	}
 	first, cancelFirst := context.WithCancel(context.Background())
 	second, cancelSecond := context.WithCancel(context.Background())
-	worker.registerBuildCancel("build-1", cancelFirst)
-	worker.registerBuildCancel("build-2", cancelSecond)
+	worker.registerContainerCancel("container-1", cancelFirst)
+	worker.registerContainerCancel("container-2", cancelSecond)
 
-	worker.cancelStoppingBuilds()
+	worker.cancelStoppingContainers()
 
 	for _, done := range []<-chan struct{}{first.Done(), second.Done()} {
 		select {
 		case <-done:
 		case <-time.After(time.Second):
-			t.Fatal("expected build context to be cancelled")
+			t.Fatal("expected container context to be cancelled")
 		}
 	}
+}
+
+func TestStartupRegistrationRaceUsesLocalStopState(t *testing.T) {
+	worker := &Worker{
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+	}
+	worker.containerInstances.Set("container-1", &ContainerInstance{
+		ExitCode:   -1,
+		StopReason: types.StopContainerReasonUser,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+
+	worker.cancelContainerIfAlreadyStopping(cancel, "container-1")
+
+	require.ErrorIs(t, ctx.Err(), context.Canceled)
 }

@@ -99,7 +99,7 @@ func (s *Worker) handleStopContainerArgs(stopArgs types.StopContainerArgs, sourc
 				types.EventAttrForce: fmt.Sprintf("%t", stopArgs.Force),
 			},
 		})
-		s.cancelBuild(stopArgs.ContainerId)
+		s.cancelContainer(stopArgs.ContainerId)
 		s.stopContainerChan <- stopContainerEvent{ContainerId: stopArgs.ContainerId, Kill: stopArgs.Force}
 	}
 
