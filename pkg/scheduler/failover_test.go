@@ -322,6 +322,50 @@ func TestFailoverRankOverridesPoolPriority(t *testing.T) {
 	assert.Equal(t, first.Id, worker.Id)
 }
 
+func TestExplicitlyRequestedGPUIsNotDemotedByAnotherGPUFailoverChain(t *testing.T) {
+	scheduler := failoverSchedulerForTest(t, nil)
+	configured := failoverWorker("configured-4090", "beta9-4090", "RTX4090", 1)
+	configured.Priority = 2
+	legacyOutsideChain := failoverWorker("legacy-failover-4090", "legacy-failover", "RTX4090", 1)
+	legacyOutsideChain.Priority = -1
+
+	request := &types.ContainerRequest{
+		GpuRequest: []string{"RTX4090", "A10G"},
+		GpuCount:   1,
+		Cpu:        1000,
+		Memory:     1000,
+	}
+	worker, err := scheduler.selectWorkerFromWorkers([]*types.Worker{legacyOutsideChain, configured}, request)
+	assert.Nil(t, err)
+	assert.Equal(t, configured.Id, worker.Id)
+}
+
+func TestStorageBackedRequestPrefersManagedAgentCapacity(t *testing.T) {
+	scheduler := failoverSchedulerForTest(t, nil)
+	agent := failoverWorker("managed-agent", "agent-4090", "RTX4090", 1)
+	agent.ControlPlaneManaged = true
+	agent.PoolSelector = "agent-4090"
+	agent.Priority = 2
+	legacy := failoverWorker("legacy-4090", "legacy-4090", "RTX4090", 1)
+	legacy.Priority = 3
+
+	request := &types.ContainerRequest{
+		GpuRequest: []string{"RTX4090", "A10G"},
+		GpuCount:   1,
+		Cpu:        1000,
+		Memory:     1000,
+		Workspace:  testWorkspaceWithStorage(),
+	}
+	worker, err := scheduler.selectWorkerFromWorkers([]*types.Worker{legacy, agent}, request)
+	assert.Nil(t, err)
+	assert.Equal(t, agent.Id, worker.Id)
+
+	request.Workspace = types.Workspace{}
+	worker, err = scheduler.selectWorkerFromWorkers([]*types.Worker{legacy, agent}, request)
+	assert.Nil(t, err)
+	assert.Equal(t, legacy.Id, worker.Id)
+}
+
 // TestFailoverDemandRecordedOnEstateExhaustion covers the only trigger for
 // on-demand hardware: every pool the request could provision into, primary and
 // failover alike, has recently refused for capacity.
