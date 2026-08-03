@@ -295,6 +295,29 @@ func TestUpdateContainerStatusOnceReconcilesStartedPendingContainer(t *testing.T
 	require.Equal(t, int64(types.ContainerStateTtlS), repoClient.lastUpdateStatus.ExpirySeconds)
 }
 
+func TestWorkspaceOnlyStoppingProtectsRunningSiblings(t *testing.T) {
+	worker := &Worker{containerInstances: common.NewSafeMap[*ContainerInstance]()}
+	request := &types.ContainerRequest{Workspace: types.Workspace{Name: "shared"}}
+	worker.containerInstances.Set("stopping", &ContainerInstance{ExitCode: -1, StopReason: types.StopContainerReasonTtl, Request: request})
+	worker.containerInstances.Set("running", &ContainerInstance{ExitCode: -1, Request: request})
+	require.False(t, worker.workspaceOnlyStopping("shared"))
+
+	instance, _ := worker.containerInstances.Get("running")
+	done := make(chan struct{})
+	go func() {
+		for range 1000 {
+			instance.setStopReason(types.StopContainerReasonUser)
+			instance.setExitCode(-1)
+		}
+		close(done)
+	}()
+	for range 1000 {
+		_ = worker.workspaceOnlyStopping("shared")
+	}
+	<-done
+	require.True(t, worker.workspaceOnlyStopping("shared"))
+}
+
 func TestShutdownWaitDrainsWithoutStoppingActiveContainer(t *testing.T) {
 	worker := &Worker{
 		containerInstances: common.NewSafeMap[*ContainerInstance](),

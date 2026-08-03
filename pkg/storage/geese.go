@@ -543,6 +543,9 @@ func (s *GeeseStorage) Unmount(localPath string) error {
 		case <-time.After(defaultGeeseFSFlushTimeout):
 			errs = errors.Join(errs, fmt.Errorf("timed out waiting for geesefs files to flush after %s", defaultGeeseFSFlushTimeout))
 			log.Warn().Str("local_path", localPath).Dur("timeout", defaultGeeseFSFlushTimeout).Msg("geesefs: flush wait timed out during unmount")
+			if err := abortFuseConnection(localPath); err != nil {
+				errs = errors.Join(errs, fmt.Errorf("abort stuck geesefs connection: %w", err))
+			}
 		}
 	}
 
@@ -558,6 +561,34 @@ func (s *GeeseStorage) Unmount(localPath string) error {
 	s.fs = nil
 
 	return errs
+}
+
+func abortFuseConnection(localPath string) error {
+	mountInfo, err := os.ReadFile("/proc/self/mountinfo")
+	if err != nil {
+		return err
+	}
+	connectionID := fuseConnectionID(string(mountInfo), localPath)
+	if connectionID == "" {
+		return fmt.Errorf("fuse connection not found for %s", localPath)
+	}
+	const connectionsPath = "/sys/fs/fuse/connections"
+	_ = exec.Command("mount", "-t", "fusectl", "fusectl", connectionsPath).Run()
+	return os.WriteFile(connectionsPath+"/"+connectionID+"/abort", []byte("1"), 0200)
+}
+
+func fuseConnectionID(mountInfo, localPath string) string {
+	target := cleanMountInfoPath(localPath)
+	for _, line := range strings.Split(mountInfo, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 7 || !strings.Contains(line, " - fuse.") || cleanMountInfoPath(unescapeMountInfoPath(fields[4])) != target {
+			continue
+		}
+		if _, minor, ok := strings.Cut(fields[2], ":"); ok {
+			return minor
+		}
+	}
+	return ""
 }
 
 func unmountGeeseFS(mfs core.MountedFS, localPath string) error {

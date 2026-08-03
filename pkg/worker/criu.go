@@ -1554,7 +1554,8 @@ func (s *Worker) deferStopForCheckpoint(instance *ContainerInstance, kill bool) 
 	if instance == nil || instance.Request == nil {
 		return false
 	}
-	if instance.StopReason != types.StopContainerReasonScheduler && instance.StopReason != types.StopContainerReasonTtl {
+	_, stopReason := instance.lifecycleState()
+	if stopReason != types.StopContainerReasonScheduler && stopReason != types.StopContainerReasonTtl {
 		return false
 	}
 
@@ -1570,7 +1571,7 @@ func (s *Worker) deferStopForCheckpoint(instance *ContainerInstance, kill bool) 
 
 	log.Info().
 		Str("container_id", event.ContainerId).
-		Str("reason", string(instance.StopReason)).
+		Str("reason", string(stopReason)).
 		Bool("kill", event.Kill).
 		Msg("deferring automatic stop until checkpoint creation finishes")
 	return true
