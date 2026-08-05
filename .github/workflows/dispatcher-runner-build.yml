@@ -13,19 +13,28 @@ permissions:
   contents: read
 
 jobs:
-  build_and_release_worker:
+  build_and_release_runner:
     environment: Release
-    runs-on: ubuntu-latest
+    name: build (${{ matrix.image }}, ${{ matrix.architecture.platform }})
+    runs-on: ${{ matrix.architecture.runner }}
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ['py38', 'py39', 'py310', 'py311', 'py312']
+        image: ['py38', 'py39', 'py310', 'py311', 'py312']
+        architecture:
+          - platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4.1.1
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v1
+        uses: docker/setup-buildx-action@v3
 
       - name: Log in to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
@@ -38,16 +47,47 @@ jobs:
           mask-password: 'true'
           registry-type: public
 
-      - name: Build and push Docker image for ${{ matrix.python-version }}
-        uses: docker/build-push-action@v4
+      - name: Build and push Docker image for ${{ matrix.image }}
+        uses: docker/build-push-action@v5
         with:
           context: .
           file: ./docker/Dockerfile.runner
           push: true
-          tags:  ${{ secrets.ECR_REGISTRY }}/beta9-runner:${{ matrix.python-version }}-${{ inputs.tag }}
-          target: ${{ matrix.python-version }}
+          tags: ${{ secrets.ECR_REGISTRY }}/beta9-runner:${{ matrix.image }}-${{ inputs.tag }}-${{ matrix.architecture.arch }}
+          target: ${{ matrix.image }}
+          platforms: ${{ matrix.architecture.platform }}
           load: false
-          registry: ${{ steps.login-ecr.outputs.registry }}
-          repository: ${{ steps.login-ecr.outputs.registry }}/beta9-runner
-          add_git_labels: true
-          tag_with_ref: true
+
+  publish_runner_manifests:
+    needs: build_and_release_runner
+    environment: Release
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ['py38', 'py39', 'py310', 'py311', 'py312']
+
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+        id: login-ecr
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+        with:
+          mask-password: 'true'
+          registry-type: public
+
+      - name: Publish multi-platform image manifest
+        env:
+          IMAGE: ${{ secrets.ECR_REGISTRY }}/beta9-runner
+          IMAGE_TAG: ${{ matrix.image }}-${{ inputs.tag }}
+        run: |
+          docker buildx imagetools create \
+            --tag "${IMAGE}:${IMAGE_TAG}" \
+            "${IMAGE}:${IMAGE_TAG}-amd64" \
+            "${IMAGE}:${IMAGE_TAG}-arm64"
