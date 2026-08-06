@@ -524,14 +524,14 @@ func TestSpecFromRequestInjectsThunderMounts(t *testing.T) {
 	worker := &Worker{
 		runtime:                 &mockRuntime{name: types.ContainerRuntimeGvisor.String()},
 		containerThunderManager: NewContainerThunderManager(nil),
+		gpuVirtualized:          true,
 	}
 
 	spec, err := worker.specFromRequest(&types.ContainerRequest{
-		ContainerId:    "container-1",
-		EntryPoint:     []string{"sleep", "60"},
-		GpuRequest:     []string{"H100"},
-		GpuCount:       1,
-		GpuVirtualized: true,
+		ContainerId: "container-1",
+		EntryPoint:  []string{"sleep", "60"},
+		GpuRequest:  []string{"H100"},
+		GpuCount:    1,
 		Stub: types.StubWithRelated{Stub: types.Stub{
 			Type: types.StubType(types.StubTypePodDeployment),
 		}},

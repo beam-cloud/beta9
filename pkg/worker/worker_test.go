@@ -19,6 +19,22 @@ import (
 	"google.golang.org/grpc"
 )
 
+func TestGpuManagerForRequestUsesWorkerVirtualizationFlag(t *testing.T) {
+	physical := &testGPUManager{}
+	thunder := &testGPUManager{}
+	worker := &Worker{
+		gpuVirtualized:          true,
+		containerGPUManager:     physical,
+		containerThunderManager: thunder,
+	}
+
+	require.Same(t, thunder, worker.gpuManagerForRequest(&types.ContainerRequest{GpuRequest: []string{"H100"}}))
+	require.Same(t, physical, worker.gpuManagerForRequest(&types.ContainerRequest{}))
+
+	worker.gpuVirtualized = false
+	require.Same(t, physical, worker.gpuManagerForRequest(&types.ContainerRequest{GpuRequest: []string{"H100"}}))
+}
+
 type shutdownSignalRuntime struct {
 	mockRuntime
 	mu      sync.Mutex

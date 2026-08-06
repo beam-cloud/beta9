@@ -97,6 +97,7 @@ func dockerRunArgs(name, image, imageID, configPath string, bootstrap bootstrapC
 		types.WorkerMemoryEnv:         strconv.FormatInt(slot.Memory, 10),
 		types.WorkerGPUEnv:            slot.Gpu,
 		types.WorkerGPUCountEnv:       strconv.FormatUint(uint64(slot.GpuCount), 10),
+		types.WorkerGPUVirtualizedEnv: strconv.FormatBool(slot.GetPoolConfig().GetGpuVirtualized()),
 		types.WorkerMinimalConfigEnv:  "true",
 		types.WorkerPodHostEnv:        types.LoopbackHost,
 		types.WorkerPodIPEnv:          types.LoopbackHost,

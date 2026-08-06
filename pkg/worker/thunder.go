@@ -236,7 +236,7 @@ func thunderBindMount(path string) specs.Mount {
 }
 
 func (s *Worker) installThunderClient(ctx context.Context, request *types.ContainerRequest) error {
-	if s == nil || request == nil || !request.GpuVirtualized {
+	if s == nil || request == nil || !s.gpuVirtualizedForRequest(request) {
 		return nil
 	}
 	manager, ok := s.containerThunderManager.(*ContainerThunderManager)

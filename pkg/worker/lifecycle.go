@@ -295,7 +295,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 	caps := s.runtime.Capabilities()
 
-	if request.RequiresPhysicalGPU() && !caps.GPU {
+	if request.RequiresGPU() && !s.gpuVirtualizedForRequest(request) && !caps.GPU {
 		return fmt.Errorf("runtime %s does not support GPU workloads", s.runtime.Name())
 	}
 
@@ -310,7 +310,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		}
 		if request.Stub.Type.Kind() == types.StubTypeSandbox {
 			instance.initializeProcessManagerReadiness()
-			if request.GpuVirtualized {
+			if s.gpuVirtualizedForRequest(request) {
 				s.thunderSetupTracker.Begin(request.ContainerId)
 			}
 		}
@@ -935,7 +935,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	}
 	s.enableVolumeCaching(request, volumeCacheMap, spec)
 
-	if request.RequiresGPU() && request.GpuVirtualized {
+	if request.RequiresGPU() && s.gpuVirtualizedForRequest(request) {
 		spec.Mounts = s.gpuManagerForRequest(request).InjectMounts(spec.Mounts)
 	}
 
@@ -1256,7 +1256,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	// Virtualized GPU requests register with Thunder but never receive physical
 	// device mounts, CDI devices, or NVIDIA_VISIBLE_DEVICES pinning.
-	if request.RequiresGPU() && (request.GpuVirtualized || s.runtime.Capabilities().GPU) {
+	if request.RequiresGPU() && (s.gpuVirtualizedForRequest(request) || s.runtime.Capabilities().GPU) {
 		gpuManager := s.gpuManagerForRequest(request)
 
 		phaseStart = time.Now()
@@ -1268,7 +1268,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			return
 		}
 
-		if request.RequiresPhysicalGPU() {
+		if request.RequiresGPU() && !s.gpuVirtualizedForRequest(request) {
 			// Only use CDI if runtime supports it
 			if s.runtime.Capabilities().CDI {
 				cdiCache := cdi.GetDefaultCache()
@@ -1446,7 +1446,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 				return
 			}
 
-			if request.GpuVirtualized {
+			if s.gpuVirtualizedForRequest(request) {
 				if err := s.installThunderClient(ctx, request); err != nil {
 					s.thunderSetupTracker.Complete(request.ContainerId, err)
 					log.Error().Err(err).Str("container_id", request.ContainerId).Msg("failed to install Thunder client")
@@ -1725,7 +1725,7 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 			publishRuntimeStarted(pid)
 		}
 
-		if request.Stub.Type.Kind() == types.StubTypeSandbox && request.GpuVirtualized {
+		if request.Stub.Type.Kind() == types.StubTypeSandbox && s.gpuVirtualizedForRequest(request) {
 			select {
 			case err := <-thunderInstallResult:
 				if err != nil {

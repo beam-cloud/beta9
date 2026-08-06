@@ -81,6 +81,7 @@ type Worker struct {
 	memoryLimit             int64
 	gpuType                 string
 	gpuCount                uint32
+	gpuVirtualized          bool
 	podAddr                 string
 	podHostName             string
 	routeLocalTargetHost    string
@@ -122,8 +123,12 @@ type Worker struct {
 	config                  types.AppConfig
 }
 
+func (w *Worker) gpuVirtualizedForRequest(request *types.ContainerRequest) bool {
+	return w != nil && w.gpuVirtualized && request != nil && request.RequiresGPU()
+}
+
 func (w *Worker) gpuManagerForRequest(request *types.ContainerRequest) GPUManager {
-	if request != nil && request.GpuVirtualized {
+	if w.gpuVirtualizedForRequest(request) {
 		return w.containerThunderManager
 	}
 	return w.containerGPUManager
@@ -256,6 +261,7 @@ func NewWorker() (_ *Worker, err error) {
 	if err != nil {
 		return nil, err
 	}
+	gpuVirtualized := envBool(types.WorkerGPUVirtualizedEnv)
 
 	configManager, err := common.NewConfigManager[types.AppConfig]()
 	if err != nil {
@@ -431,6 +437,7 @@ func NewWorker() (_ *Worker, err error) {
 		memoryLimit:             memoryLimit,
 		gpuType:                 gpuType,
 		gpuCount:                uint32(gpuCount),
+		gpuVirtualized:          gpuVirtualized,
 		runtime:                 defaultRuntime,
 		runcRuntime:             runcRuntime,
 		gvisorRuntime:           gvisorRuntime,
@@ -576,7 +583,7 @@ containerRequestStream:
 					Str("container_id", request.ContainerId).
 					Str("gpu", request.Gpu).
 					Uint32("gpu_count", request.GpuCount).
-					Bool("gpu_virtualized", request.GpuVirtualized).
+					Bool("gpu_virtualized", s.gpuVirtualizedForRequest(request)).
 					Msg("worker received container request")
 				if !request.Timestamp.IsZero() {
 					s.recordContainerLifecycle(s.ctx, request, containerLifecycleFromDuration(types.ContainerLifecycleWorkerQueueReceive, request, request.Timestamp, time.Since(request.Timestamp), true, map[string]string{
@@ -690,7 +697,7 @@ func (s *Worker) reserveContainerInstance(request *types.ContainerRequest) bool 
 	}
 	if request.Stub.Type.Kind() == types.StubTypeSandbox {
 		instance.initializeProcessManagerReadiness()
-		if request.GpuVirtualized {
+		if s.gpuVirtualizedForRequest(request) {
 			s.thunderSetupTracker.Begin(request.ContainerId)
 		}
 	}

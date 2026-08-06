@@ -324,6 +324,7 @@ func TestDockerRunArgsUsesConfigurableRouteTargetHost(t *testing.T) {
 		NetworkPrefix:             "10.0.0.0/24",
 		NetworkSlotPoolSize:       64,
 		ContainerStartConcurrency: 12,
+		PoolConfig:                &pb.AgentPoolRuntimeConfig{GpuVirtualized: true},
 	}, agentWorkerDirs("/tmp/agent-state", "", "worker-one"), workerContainerResourceLimits{})
 
 	if !containsArg(args, "-e", types.WorkerRouteTargetEnv+"=host.docker.internal") {
@@ -345,6 +346,7 @@ func TestDockerRunArgsUsesConfigurableRouteTargetHost(t *testing.T) {
 		types.NvidiaVisibleDevicesEnv + "=0,1",
 		types.WorkerStartConcurrencyEnv + "=12",
 		types.WorkerNetworkSlotsEnv + "=64",
+		types.WorkerGPUVirtualizedEnv + "=true",
 	} {
 		if !containsArg(args, "-e", want) {
 			t.Fatalf("expected %s env in docker args: %#v", want, args)

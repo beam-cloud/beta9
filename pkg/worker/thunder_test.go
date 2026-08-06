@@ -104,7 +104,7 @@ func TestThunderAssignCreatesClientEnrollmentAndCachesInstallCommand(t *testing.
 		createResp: &pb.CreateClientEnrollmentResponse{Ok: true, InstallCommand: "curl install thunder"},
 	}
 	manager := NewContainerThunderManager(client)
-	request := &types.ContainerRequest{ContainerId: "container-123", GpuVirtualized: true}
+	request := &types.ContainerRequest{ContainerId: "container-123", GpuRequest: []string{"H100"}}
 
 	assigned, err := manager.AssignGPUDevices(request)
 	if err != nil {
@@ -127,7 +127,7 @@ func TestThunderAssignReturnsGatewayError(t *testing.T) {
 		createResp: &pb.CreateClientEnrollmentResponse{ErrorMsg: "gateway refused enrollment"},
 	})
 
-	_, err := manager.AssignGPUDevices(&types.ContainerRequest{ContainerId: "container-123", GpuVirtualized: true})
+	_, err := manager.AssignGPUDevices(&types.ContainerRequest{ContainerId: "container-123", GpuRequest: []string{"H100"}})
 	if err == nil {
 		t.Fatal("expected Thunder enrollment error")
 	}
@@ -136,7 +136,7 @@ func TestThunderAssignReturnsGatewayError(t *testing.T) {
 
 func TestThunderAssignRequiresServiceClient(t *testing.T) {
 	manager := NewContainerThunderManager(nil)
-	_, err := manager.AssignGPUDevices(&types.ContainerRequest{ContainerId: "container-123", GpuVirtualized: true})
+	_, err := manager.AssignGPUDevices(&types.ContainerRequest{ContainerId: "container-123", GpuRequest: []string{"H100"}})
 	if err == nil {
 		t.Fatal("expected missing Thunder client error")
 	}
@@ -147,7 +147,7 @@ func TestThunderAssignRequiresInstallCommand(t *testing.T) {
 	manager := NewContainerThunderManager(&fakeThunderServiceClient{
 		createResp: &pb.CreateClientEnrollmentResponse{Ok: true},
 	})
-	_, err := manager.AssignGPUDevices(&types.ContainerRequest{ContainerId: "container-123", GpuVirtualized: true})
+	_, err := manager.AssignGPUDevices(&types.ContainerRequest{ContainerId: "container-123", GpuRequest: []string{"H100"}})
 	if err == nil {
 		t.Fatal("expected missing install command error")
 	}
@@ -182,9 +182,10 @@ func TestInstallThunderClientExecutesCachedInstaller(t *testing.T) {
 	worker := &Worker{
 		containerThunderManager: manager,
 		containerInstances:      instances,
+		gpuVirtualized:          true,
 	}
 
-	err := worker.installThunderClient(context.Background(), &types.ContainerRequest{ContainerId: "container-123", GpuVirtualized: true})
+	err := worker.installThunderClient(context.Background(), &types.ContainerRequest{ContainerId: "container-123", GpuRequest: []string{"H100"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,8 +204,9 @@ func TestInstallThunderClientRequiresCachedInstaller(t *testing.T) {
 	worker := &Worker{
 		containerThunderManager: NewContainerThunderManager(nil),
 		containerInstances:      common.NewSafeMap[*ContainerInstance](),
+		gpuVirtualized:          true,
 	}
-	err := worker.installThunderClient(context.Background(), &types.ContainerRequest{ContainerId: "container-123", GpuVirtualized: true})
+	err := worker.installThunderClient(context.Background(), &types.ContainerRequest{ContainerId: "container-123", GpuRequest: []string{"H100"}})
 	if err == nil || !strings.Contains(err.Error(), "install command") {
 		t.Fatalf("installThunderClient() error = %v", err)
 	}
