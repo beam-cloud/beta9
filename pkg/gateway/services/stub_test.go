@@ -121,34 +121,6 @@ func (r *getOrCreateStubBackendRepo) GetOrCreateStub(ctx context.Context, name, 
 	return types.Stub{Id: 4, ExternalId: "stub-123", Name: name, Type: types.StubType(stubType), ObjectId: objectId, WorkspaceId: workspaceId, AppId: appId}, nil
 }
 
-func TestGetOrCreateStubPersistsGpuVirtualizedRuntimeConfig(t *testing.T) {
-	backend := &getOrCreateStubBackendRepo{}
-	gws := &GatewayService{
-		backendRepo: backend,
-		appConfig: types.AppConfig{GatewayService: types.GatewayServiceConfig{StubLimits: types.StubLimits{
-			Cpu:         1000,
-			Memory:      1024,
-			MaxGpuCount: 1,
-		}}},
-	}
-	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{Workspace: &types.Workspace{Id: 1, ExternalId: "workspace-1"}})
-
-	resp, err := gws.GetOrCreateStub(ctx, &pb.GetOrCreateStubRequest{
-		Name:           "sandbox",
-		StubType:       types.StubTypeSandbox,
-		ObjectId:       "object-123",
-		AppName:        "app",
-		Cpu:            1000,
-		Memory:         1024,
-		GpuVirtualized: true,
-	})
-
-	require.NoError(t, err)
-	require.True(t, resp.Ok)
-	require.Equal(t, "stub-123", resp.StubId)
-	require.True(t, backend.stubConfig.Runtime.GpuVirtualized)
-}
-
 func TestConfigureDurableDiskPlacementDefaultsSnapshotDriver(t *testing.T) {
 	config := &types.StubConfigV1{
 		Disks: []*pb.DurableDisk{{Name: "pg-data"}},

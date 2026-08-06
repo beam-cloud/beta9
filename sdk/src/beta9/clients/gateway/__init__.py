@@ -400,7 +400,6 @@ class GetOrCreateStubRequest(betterproto.Message):
     disks: List["DurableDisk"] = betterproto.message_field(44)
     allow_marketplace: bool = betterproto.bool_field(45)
     checkpoint_trigger: "_types__.CheckpointTrigger" = betterproto.message_field(46)
-    gpu_virtualized: bool = betterproto.bool_field(47)
 
 
 @dataclass(eq=False, repr=False)
@@ -1808,6 +1807,7 @@ class AgentPoolRuntimeConfig(betterproto.Message):
     durable_disks_path: str = betterproto.string_field(7)
     cache: "AgentPoolCacheConfig" = betterproto.message_field(8)
     config_group: str = betterproto.string_field(9)
+    gpu_virtualized: bool = betterproto.bool_field(10)
 
 
 class GatewayServiceStub(SyncServiceStub):

@@ -2718,7 +2718,6 @@ type GetOrCreateStubRequest struct {
 	Disks              []*DurableDisk         `protobuf:"bytes,44,rep,name=disks,proto3" json:"disks,omitempty"`
 	AllowMarketplace   bool                   `protobuf:"varint,45,opt,name=allow_marketplace,json=allowMarketplace,proto3" json:"allow_marketplace,omitempty"`
 	CheckpointTrigger  *CheckpointTrigger     `protobuf:"bytes,46,opt,name=checkpoint_trigger,json=checkpointTrigger,proto3" json:"checkpoint_trigger,omitempty"`
-	GpuVirtualized     bool                   `protobuf:"varint,47,opt,name=gpu_virtualized,json=gpuVirtualized,proto3" json:"gpu_virtualized,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -3066,13 +3065,6 @@ func (x *GetOrCreateStubRequest) GetCheckpointTrigger() *CheckpointTrigger {
 		return x.CheckpointTrigger
 	}
 	return nil
-}
-
-func (x *GetOrCreateStubRequest) GetGpuVirtualized() bool {
-	if x != nil {
-		return x.GpuVirtualized
-	}
-	return false
 }
 
 type GetOrCreateStubResponse struct {
@@ -14450,7 +14442,7 @@ const file_gateway_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\v2\x14.gateway.SchemaFieldR\x05value:\x028\x01\"J\n" +
 	"\vSchemaField\x12\x12\n" +
 	"\x04type\x18\x01 \x01(\tR\x04type\x12'\n" +
-	"\x06fields\x18\x02 \x01(\v2\x0f.gateway.SchemaR\x06fields\"\xed\f\n" +
+	"\x06fields\x18\x02 \x01(\v2\x0f.gateway.SchemaR\x06fields\"\xca\f\n" +
 	"\x16GetOrCreateStubRequest\x12\x1b\n" +
 	"\tobject_id\x18\x01 \x01(\tR\bobjectId\x12\x19\n" +
 	"\bimage_id\x18\x02 \x01(\tR\aimageId\x12\x1b\n" +
@@ -14506,8 +14498,7 @@ const file_gateway_proto_rawDesc = "" +
 	"\aserving\x18+ \x01(\v2\x16.gateway.ServingConfigR\aserving\x12*\n" +
 	"\x05disks\x18, \x03(\v2\x14.gateway.DurableDiskR\x05disks\x12+\n" +
 	"\x11allow_marketplace\x18- \x01(\bR\x10allowMarketplace\x12G\n" +
-	"\x12checkpoint_trigger\x18. \x01(\v2\x18.types.CheckpointTriggerR\x11checkpointTrigger\x12'\n" +
-	"\x0fgpu_virtualized\x18/ \x01(\bR\x0egpuVirtualized\"\xfc\x01\n" +
+	"\x12checkpoint_trigger\x18. \x01(\v2\x18.types.CheckpointTriggerR\x11checkpointTriggerJ\x04\b/\x100\"\xfc\x01\n" +
 	"\x17GetOrCreateStubResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x17\n" +
 	"\astub_id\x18\x02 \x01(\tR\x06stubId\x12\x17\n" +

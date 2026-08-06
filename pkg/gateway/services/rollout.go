@@ -168,18 +168,17 @@ func rolloutContainerRequest(in deploymentRolloutInput) *types.ContainerRequest 
 		workspaceID = in.workspace.ExternalId
 	}
 	return &types.ContainerRequest{
-		Cpu:            in.config.Runtime.Cpu,
-		Memory:         in.config.Runtime.Memory,
-		Gpu:            string(in.config.Runtime.Gpu),
-		GpuRequest:     types.GpuTypesToStrings(in.config.Runtime.Gpus),
-		GpuCount:       in.config.Runtime.GpuCount,
-		GpuVirtualized: in.config.Runtime.GpuVirtualized,
-		ImageId:        in.config.Runtime.ImageId,
-		StubId:         in.stub.ExternalId,
-		WorkspaceId:    workspaceID,
-		Stub:           *in.stub,
-		PoolSelector:   in.config.PoolSelector(),
-		MachineId:      in.config.MachineID,
+		Cpu:          in.config.Runtime.Cpu,
+		Memory:       in.config.Runtime.Memory,
+		Gpu:          string(in.config.Runtime.Gpu),
+		GpuRequest:   types.GpuTypesToStrings(in.config.Runtime.Gpus),
+		GpuCount:     in.config.Runtime.GpuCount,
+		ImageId:      in.config.Runtime.ImageId,
+		StubId:       in.stub.ExternalId,
+		WorkspaceId:  workspaceID,
+		Stub:         *in.stub,
+		PoolSelector: in.config.PoolSelector(),
+		MachineId:    in.config.MachineID,
 	}
 }
 

@@ -112,7 +112,6 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 			Memory:            i.StubConfig.Runtime.Memory,
 			GpuRequest:        gpuRequest,
 			GpuCount:          uint32(gpuCount),
-			GpuVirtualized:    i.StubConfig.Runtime.GpuVirtualized,
 			AppId:             i.Stub.App.ExternalId,
 			ImageId:           i.StubConfig.Runtime.ImageId,
 			StubId:            i.Stub.ExternalId,

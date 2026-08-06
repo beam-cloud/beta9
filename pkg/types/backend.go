@@ -995,13 +995,12 @@ type Image struct {
 }
 
 type Runtime struct {
-	Cpu            int64     `json:"cpu"`
-	Gpu            GpuType   `json:"gpu"`
-	GpuCount       uint32    `json:"gpu_count"`
-	GpuVirtualized bool      `json:"gpu_virtualized"`
-	Memory         int64     `json:"memory"`
-	ImageId        string    `json:"image_id"`
-	Gpus           []GpuType `json:"gpus"`
+	Cpu      int64     `json:"cpu"`
+	Gpu      GpuType   `json:"gpu"`
+	GpuCount uint32    `json:"gpu_count"`
+	Memory   int64     `json:"memory"`
+	ImageId  string    `json:"image_id"`
+	Gpus     []GpuType `json:"gpus"`
 }
 
 // FilterFieldMapping represents a mapping between a client-provided field and

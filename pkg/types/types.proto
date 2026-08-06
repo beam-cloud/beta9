@@ -112,7 +112,6 @@ message ContainerRequest {
   string machine_id = 34;
   CheckpointTrigger checkpoint_trigger = 35;
   string task_id = 36;
-  bool gpu_virtualized = 37;
 }
 
 message ContainerState {

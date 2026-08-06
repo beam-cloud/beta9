@@ -53,7 +53,6 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		Str("workspace_id", authInfo.Workspace.ExternalId).
 		Strs("gpus", types.GpuTypesToStrings(gpus)).
 		Uint32("gpu_count", in.GpuCount).
-		Bool("gpu_virtualized", in.GpuVirtualized).
 		Msg("gateway received GetOrCreateStub request")
 
 	keepWarmSeconds := normalizeKeepWarmSeconds(in.KeepWarmSeconds, types.StubType(in.StubType))
@@ -129,12 +128,11 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 
 	stubConfig := types.StubConfigV1{
 		Runtime: types.Runtime{
-			Cpu:            in.Cpu,
-			Gpus:           gpus,
-			GpuCount:       in.GpuCount,
-			GpuVirtualized: in.GpuVirtualized,
-			Memory:         in.Memory,
-			ImageId:        in.ImageId,
+			Cpu:      in.Cpu,
+			Gpus:     gpus,
+			GpuCount: in.GpuCount,
+			Memory:   in.Memory,
+			ImageId:  in.ImageId,
 		},
 		Handler:            in.Handler,
 		OnStart:            in.OnStart,
@@ -181,7 +179,6 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		Str("stub_type", in.StubType).
 		Strs("gpus", types.GpuTypesToStrings(gpus)).
 		Uint32("gpu_count", stubConfig.Runtime.GpuCount).
-		Bool("gpu_virtualized", stubConfig.Runtime.GpuVirtualized).
 		Msg("gateway built stub config")
 
 	if stubConfig.RequiresGPU() {
