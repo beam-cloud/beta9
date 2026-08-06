@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -48,8 +49,8 @@ const (
 	shutdownForceWait              time.Duration = 5 * time.Second
 	shutdownCleanupReserve         time.Duration = 5 * time.Second
 	workerShutdownRPCTimeout       time.Duration = 5 * time.Second
-	defaultContainerStartupTimeout time.Duration = 15 * time.Minute
-	maxContainerStartupTimeout     time.Duration = time.Hour
+	containerStartupTimeout        time.Duration = 15 * time.Minute
+	stuckContainerAbortDelay       time.Duration = 2 * time.Minute
 	gvisorShmemTHPPath                           = "/sys/kernel/mm/transparent_hugepage/shmem_enabled"
 )
 
@@ -98,7 +99,7 @@ type Worker struct {
 	containerMountManager   *ContainerMountManager
 	imageClient             *ImageClient
 	containerInstances      *common.SafeMap[*ContainerInstance]
-	buildCancels            *common.SafeMap[context.CancelFunc]
+	containerCancels        *common.SafeMap[context.CancelFunc]
 	containerLock           sync.Mutex
 	checkpointCreateLocks   sync.Map
 	containerStartSem       chan struct{}
@@ -126,14 +127,6 @@ func (w *Worker) gpuManagerForRequest(request *types.ContainerRequest) GPUManage
 		return w.containerThunderManager
 	}
 	return w.containerGPUManager
-}
-
-func (s *Worker) containerStartupTimeout() time.Duration {
-	timeoutMs := s.config.Worker.Failover.MaxSchedulingLatencyMs
-	if timeoutMs < defaultContainerStartupTimeout.Milliseconds() {
-		return defaultContainerStartupTimeout
-	}
-	return time.Duration(min(timeoutMs, maxContainerStartupTimeout.Milliseconds())) * time.Millisecond
 }
 
 type ContainerInstance struct {
@@ -165,6 +158,26 @@ type ContainerInstance struct {
 	ContainerAddressMap        map[int32]string
 	Runtime                    runtime.Runtime
 	OOMWatcher                 runtime.OOMWatcher
+	StopEscalationStarted      atomic.Bool
+	stateMu                    sync.RWMutex
+}
+
+func (i *ContainerInstance) lifecycleState() (int, types.StopContainerReason) {
+	i.stateMu.RLock()
+	defer i.stateMu.RUnlock()
+	return i.ExitCode, i.StopReason
+}
+
+func (i *ContainerInstance) setExitCode(exitCode int) {
+	i.stateMu.Lock()
+	defer i.stateMu.Unlock()
+	i.ExitCode = exitCode
+}
+
+func (i *ContainerInstance) setStopReason(reason types.StopContainerReason) {
+	i.stateMu.Lock()
+	defer i.stateMu.Unlock()
+	i.StopReason = reason
 }
 
 func (i *ContainerInstance) setContainerAddressMap(addressMap map[int32]string) {
@@ -435,7 +448,7 @@ func NewWorker() (_ *Worker, err error) {
 		criuManager:             criuManager,
 		podHostName:             podHostName,
 		containerInstances:      containerInstances,
-		buildCancels:            common.NewSafeMap[context.CancelFunc](),
+		containerCancels:        common.NewSafeMap[context.CancelFunc](),
 		containerLock:           sync.Mutex{},
 		containerStartSem:       make(chan struct{}, containerStartLimit),
 		containerStartLimit:     containerStartLimit,
@@ -702,11 +715,9 @@ func (s *Worker) runContainerRequest(request *types.ContainerRequest) {
 	ctx, cancel := context.WithCancel(s.ctx)
 	defer cancel()
 
-	if request.IsBuildRequest() {
-		s.registerBuildCancel(containerId, cancel)
-		defer s.unregisterBuildCancel(containerId)
-		go s.cancelBuildIfAlreadyStopping(cancel, containerId)
-	}
+	s.registerContainerCancel(containerId, cancel)
+	defer s.unregisterContainerCancel(containerId)
+	go s.cancelContainerIfAlreadyStopping(cancel, containerId)
 
 	if err := s.hydrateRuntimeCredentials(ctx, request); err != nil {
 		log.Error().Str("container_id", containerId).Err(err).Msg("unable to hydrate runtime credentials")
@@ -726,21 +737,19 @@ func (s *Worker) runContainerRequest(request *types.ContainerRequest) {
 	if request.IsBuildRequest() {
 		err = run()
 	} else {
-		timeout := s.containerStartupTimeout()
-
 		errCh := make(chan error, 1)
 		go func() {
 			errCh <- run()
 		}()
 
-		timer := time.NewTimer(timeout)
+		timer := time.NewTimer(containerStartupTimeout)
 		defer timer.Stop()
 
 		select {
 		case err = <-errCh:
 		case <-timer.C:
 			cancel()
-			err = fmt.Errorf("container startup timed out after %s", timeout)
+			err = fmt.Errorf("container startup timed out after %s", containerStartupTimeout)
 		case <-s.ctx.Done():
 			cancel()
 			err = fmt.Errorf("worker shutting down before container startup completed: %w", s.ctx.Err())
@@ -766,16 +775,39 @@ func (s *Worker) failContainerRequest(containerId string, request *types.Contain
 	s.clearContainer(containerId, request, exitCode, false)
 }
 
-// cancelBuildIfAlreadyStopping checks if a build has already been cancelled and cancels the context if it has.
-func (s *Worker) cancelBuildIfAlreadyStopping(cancel context.CancelFunc, containerId string) {
-	containerState, err := handleGRPCResponse(s.containerRepoClient.GetContainerState(context.Background(), &pb.GetContainerStateRequest{ContainerId: containerId}))
+// cancelContainerIfAlreadyStopping closes the startup race where a stop is
+// persisted before this worker registers the in-memory cancellation callback.
+func (s *Worker) cancelContainerIfAlreadyStopping(cancel context.CancelFunc, containerId string) {
+	// A stop event can land after the instance is reserved but before the
+	// startup cancellation callback is registered. Prefer the local lifecycle
+	// state so that race does not depend on another repository round trip.
+	if s.containerInstances != nil {
+		if instance, exists := s.containerInstances.Get(containerId); exists && instance != nil {
+			_, stopReason := instance.lifecycleState()
+			if stopReason != "" {
+				log.Info().Str("container_id", containerId).Msg("container stopped before startup cancellation was registered")
+				cancel()
+				return
+			}
+		}
+	}
+
+	// The worker event stream may have disconnected before delivering the stop
+	// event. Reconcile against persisted state, but keep the lookup bounded so a
+	// repository outage cannot leak one goroutine per startup or reconnect.
+	if s.containerRepoClient == nil {
+		return
+	}
+	stateCtx, stateCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer stateCancel()
+	containerState, err := handleGRPCResponse(s.containerRepoClient.GetContainerState(stateCtx, &pb.GetContainerStateRequest{ContainerId: containerId}))
 	if err != nil {
 		log.Error().Str("container_id", containerId).Err(err).Msg("failed to get container state")
 		return
 	}
 
 	if types.ContainerStatus(containerState.State.Status) == types.ContainerStatusStopping {
-		log.Info().Str("container_id", containerId).Msg("incoming container state is stopping, cancelling context")
+		log.Info().Str("container_id", containerId).Msg("incoming container state is stopping, cancelling startup context")
 		cancel()
 		return
 	}
@@ -855,10 +887,11 @@ func (s *Worker) updateContainerStatusOnce(request *types.ContainerRequest) (boo
 		return true, nil
 	}
 
-	if instance.ExitCode >= 0 {
+	exitCode, _ := instance.lifecycleState()
+	if exitCode >= 0 {
 		log.Debug().
 			Str("container_id", request.ContainerId).
-			Int("exit_code", instance.ExitCode).
+			Int("exit_code", exitCode).
 			Msg("container exited, stopping status heartbeat")
 		return true, nil
 	}
@@ -870,7 +903,7 @@ func (s *Worker) updateContainerStatusOnce(request *types.ContainerRequest) (boo
 	if err != nil {
 		notFoundErr := &types.ErrContainerStateNotFound{}
 		if notFoundErr.From(err) {
-			instance.StopReason = types.StopContainerReasonUnknown
+			instance.setStopReason(types.StopContainerReasonUnknown)
 			s.containerInstances.Set(request.ContainerId, instance)
 			s.stopContainerChan <- stopContainerEvent{ContainerId: request.ContainerId, Kill: true}
 			go s.recordContainerEvent(context.Background(), request, types.EventContainerEventSchema{
@@ -929,6 +962,14 @@ func (s *Worker) updateContainerStatusOnce(request *types.ContainerRequest) (boo
 	// If container is supposed to be stopped, but isn't gone after TerminationGracePeriod seconds
 	// ensure it is killed after that
 	if status == types.ContainerStatusStopping {
+		_, stopReason := instance.lifecycleState()
+		if stopReason == "" {
+			instance.setStopReason(types.StopContainerReasonUnknown)
+			s.containerInstances.Set(request.ContainerId, instance)
+		}
+		if !instance.StopEscalationStarted.CompareAndSwap(false, true) {
+			return false, nil
+		}
 		go func() {
 			time.Sleep(time.Duration(s.config.Worker.TerminationGracePeriod) * time.Second)
 
@@ -943,29 +984,84 @@ func (s *Worker) updateContainerStatusOnce(request *types.ContainerRequest) (boo
 			stateCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			needsStop := runtimeNeedsGraceKill(stateCtx, rt, request.ContainerId)
 			cancel()
-			if !needsStop {
-				return
+			if needsStop {
+				log.Info().Str("container_id", request.ContainerId).Int64("grace_period_seconds", s.config.Worker.TerminationGracePeriod).Msg("container still running after stop event")
+				_, stopReason := instance.lifecycleState()
+				s.recordContainerEvent(context.Background(), request, types.EventContainerEventSchema{
+					ID:          types.ContainerEventWorkerStoppingGraceKill,
+					ContainerID: request.ContainerId,
+					Reason:      string(stopReason),
+					Source:      types.EventSourceWorkerStatusHeartbeat.String(),
+					Message:     types.EventMessageStoppingGraceKill.String(),
+					Attrs: map[string]string{
+						types.EventAttrGracePeriodSeconds: fmt.Sprintf("%d", s.config.Worker.TerminationGracePeriod),
+					},
+				})
+				s.stopContainerChan <- stopContainerEvent{
+					ContainerId: request.ContainerId,
+					Kill:        true,
+				}
 			}
 
-			log.Info().Str("container_id", request.ContainerId).Int64("grace_period_seconds", s.config.Worker.TerminationGracePeriod).Msg("container still running after stop event")
-			s.recordContainerEvent(context.Background(), request, types.EventContainerEventSchema{
-				ID:          types.ContainerEventWorkerStoppingGraceKill,
-				ContainerID: request.ContainerId,
-				Reason:      string(instance.StopReason),
-				Source:      types.EventSourceWorkerStatusHeartbeat.String(),
-				Message:     types.EventMessageStoppingGraceKill.String(),
-				Attrs: map[string]string{
-					types.EventAttrGracePeriodSeconds: fmt.Sprintf("%d", s.config.Worker.TerminationGracePeriod),
-				},
-			})
-			s.stopContainerChan <- stopContainerEvent{
-				ContainerId: request.ContainerId,
-				Kill:        true,
+			select {
+			case <-time.After(stuckContainerAbortDelay):
+			case <-s.ctx.Done():
+				return
 			}
+			s.abortStuckWorkspaceMount(request)
 		}()
 	}
 
 	return false, nil
+}
+
+// abortStuckWorkspaceMount recovers the shutdown path even when the runtime
+// was never created (or has already disappeared). The local lifecycle state is
+// authoritative here: a nonterminal instance with a stop reason is still
+// waiting for its cleanup defers, commonly on a wedged FUSE flush.
+func (s *Worker) abortStuckWorkspaceMount(request *types.ContainerRequest) {
+	if request == nil || s.containerInstances == nil || s.storageManager == nil || s.storageManager.poolConfig.StorageMode != storage.StorageModeGeese {
+		return
+	}
+	instance, exists := s.containerInstances.Get(request.ContainerId)
+	if !exists || instance == nil {
+		return
+	}
+	exitCode, stopReason := instance.lifecycleState()
+	if exitCode >= 0 || stopReason == "" {
+		return
+	}
+
+	workspaceName := request.Workspace.Name
+	unlock := s.storageManager.lockWorkspaceMount(workspaceName)
+	defer unlock()
+	if !s.workspaceOnlyStopping(workspaceName) {
+		return
+	}
+
+	log.Warn().Str("container_id", request.ContainerId).Str("workspace", workspaceName).Msg("aborting stuck workspace mount after SIGKILL timeout")
+	if err := s.storageManager.unmountLocked(workspaceName); err != nil {
+		log.Warn().Err(err).Str("workspace", workspaceName).Msg("stuck workspace mount recovery completed with errors")
+	}
+}
+
+func (s *Worker) workspaceOnlyStopping(workspaceName string) bool {
+	safe := workspaceName != ""
+	s.containerInstances.Range(func(_ string, instance *ContainerInstance) bool {
+		if instance == nil || instance.Request == nil || instance.Request.Workspace.Name != workspaceName {
+			return true
+		}
+		exitCode, stopReason := instance.lifecycleState()
+		if exitCode >= 0 {
+			return true
+		}
+		if stopReason == "" {
+			safe = false
+			return false
+		}
+		return true
+	})
+	return safe
 }
 
 func runtimeNeedsGraceKill(ctx context.Context, rt runtime.Runtime, containerID string) bool {
@@ -1249,7 +1345,7 @@ func (s *Worker) stopActiveContainersForShutdown() {
 
 	for _, id := range ids {
 		if instance, exists := s.containerInstances.Get(id); exists {
-			instance.StopReason = types.StopContainerReasonAdmin
+			instance.setStopReason(types.StopContainerReasonAdmin)
 			s.containerInstances.Set(id, instance)
 		}
 		if err := s.stopContainer(id, false); err != nil {

@@ -40,7 +40,7 @@ type tsnetSnapshotReporter struct {
 	lastFailureEvent time.Time
 }
 
-func runRouteProxy(ctx context.Context, client pb.GatewayServiceClient, agentToken, transport string, workers *workerRuntimeManager, telemetry *agentTelemetry, stdout, stderr io.Writer) error {
+func runRouteProxy(ctx context.Context, client pb.GatewayServiceClient, agentToken, machineID, transport string, workers *workerRuntimeManager, telemetry *agentTelemetry, stdout, stderr io.Writer) error {
 	if stdout == nil {
 		stdout = io.Discard
 	}
@@ -50,13 +50,13 @@ func runRouteProxy(ctx context.Context, client pb.GatewayServiceClient, agentTok
 	transport = normalizeTransport(transport)
 	switch transport {
 	case types.BackendRouteTransportTSNet:
-		return runTSNetRouteProxy(ctx, client, agentToken, transport, workers, telemetry, stdout, stderr)
+		return runTSNetRouteProxy(ctx, client, agentToken, machineID, transport, workers, telemetry, stdout, stderr)
 	default:
 		return fmt.Errorf("unsupported agent transport %q", transport)
 	}
 }
 
-func runTSNetRouteProxy(ctx context.Context, client pb.GatewayServiceClient, agentToken, transport string, workers *workerRuntimeManager, telemetry *agentTelemetry, stdout, stderr io.Writer) error {
+func runTSNetRouteProxy(ctx context.Context, client pb.GatewayServiceClient, agentToken, machineID, transport string, workers *workerRuntimeManager, telemetry *agentTelemetry, stdout, stderr io.Writer) error {
 	credential, err := requestTransportCredential(ctx, client, agentToken, transport)
 	if err != nil {
 		return err
@@ -110,7 +110,7 @@ func runTSNetRouteProxy(ctx context.Context, client pb.GatewayServiceClient, age
 	if localClient, err := server.LocalClient(); err == nil {
 		go emitTSNetSnapshots(ctx, telemetry, localClient, proxyTarget)
 	}
-	return newRouteProxy(client, agentToken, listener, proxyTarget, workers, stdout, stderr).run(ctx)
+	return newRouteProxy(client, agentToken, machineID, listener, proxyTarget, workers, stdout, stderr).run(ctx)
 }
 
 func emitTSNetSnapshots(ctx context.Context, telemetry *agentTelemetry, client tsnetStatusClient, proxyTarget string) {

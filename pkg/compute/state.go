@@ -67,6 +67,19 @@ const (
 	MarketplaceListingStatusInactive = "inactive"
 )
 
+// FailoverDemand records that the entire serverless estate refused a request
+// whose failover chain ends in on-demand hardware. The scheduler writes one
+// short-lived record per GPU type; the reconcile loop consumes it. Records
+// expire on their own, so a resolved backlog stops provisioning with no
+// bookkeeping.
+type FailoverDemand struct {
+	GPU string `json:"gpu"`
+	// Pools are the serverless pools that refused, recorded for observability.
+	Pools     []string  `json:"pools,omitempty"`
+	GPUCount  uint32    `json:"gpu_count,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 // MarketplaceRentalState is a buyer's exclusive hold on GPUs of one seller
 // machine. Rented GPUs are invisible to serverless marketplace scheduling;
 // only the buyer's machine-pinned workloads consume them.
@@ -159,6 +172,7 @@ type AgentTokenState struct {
 	NetworkSlotPoolSize       uint32                `json:"network_slot_pool_size"`
 	ContainerStartConcurrency uint32                `json:"container_start_concurrency"`
 	WorkerImageOverride       string                `json:"worker_image_override,omitempty"`
+	Capabilities              []string              `json:"capabilities,omitempty"`
 	Cordoned                  bool                  `json:"cordoned,omitempty"`
 	Schedulable               bool                  `json:"schedulable"`
 	AvailabilityReason        string                `json:"availability_reason,omitempty"`
@@ -170,6 +184,45 @@ type AgentTokenState struct {
 	LastHeartbeatAt           time.Time             `json:"last_heartbeat_at"`
 	LastDisconnectAt          time.Time             `json:"last_disconnect_at"`
 	BillingCursorAt           time.Time             `json:"billing_cursor_at,omitempty"`
+}
+
+const (
+	AgentCapabilityManagedHostSSHV1 = "managed_host_ssh_v1"
+
+	MachineSSHStatusInstalling       = "installing"
+	MachineSSHStatusAwaitingEndpoint = "awaiting_endpoint"
+	MachineSSHStatusReady            = "ready"
+	MachineSSHStatusRotating         = "rotating"
+	MachineSSHStatusError            = "error"
+)
+
+// MachineSSHState is deliberately stored separately from machine state so
+// private key material can never leak through machine listing paths.
+type MachineSSHState struct {
+	WorkspaceID                string    `json:"workspace_id"`
+	PoolName                   string    `json:"pool_name"`
+	MachineID                  string    `json:"machine_id"`
+	Username                   string    `json:"username"`
+	PublicIP                   string    `json:"public_ip,omitempty"`
+	ProviderHost               string    `json:"provider_host,omitempty"`
+	ProviderPort               uint32    `json:"provider_port,omitempty"`
+	AgentPort                  uint32    `json:"agent_port,omitempty"`
+	Status                     string    `json:"status"`
+	Error                      string    `json:"error,omitempty"`
+	HostKeyFingerprint         string    `json:"host_key_fingerprint,omitempty"`
+	ActivePublicKey            string    `json:"active_public_key"`
+	ActivePrivateKeyEncrypted  string    `json:"active_private_key_encrypted,omitempty"`
+	ActiveFingerprint          string    `json:"active_fingerprint"`
+	ActiveGeneration           uint64    `json:"active_generation"`
+	AppliedGeneration          uint64    `json:"applied_generation,omitempty"`
+	PendingPublicKey           string    `json:"pending_public_key,omitempty"`
+	PendingPrivateKeyEncrypted string    `json:"pending_private_key_encrypted,omitempty"`
+	PendingFingerprint         string    `json:"pending_fingerprint,omitempty"`
+	PendingGeneration          uint64    `json:"pending_generation,omitempty"`
+	PendingDownloadedAt        time.Time `json:"pending_downloaded_at,omitempty"`
+	CreatedAt                  time.Time `json:"created_at"`
+	UpdatedAt                  time.Time `json:"updated_at"`
+	AgentUpdatedAt             time.Time `json:"agent_updated_at,omitempty"`
 }
 
 type AgentMachineMetrics struct {
@@ -223,8 +276,12 @@ type AgentWorkerSlotState struct {
 	RequiresPoolSelector      bool                `json:"requires_pool_selector"`
 	Priority                  int32               `json:"priority"`
 	Preemptable               bool                `json:"preemptable"`
-	CreatedAt                 time.Time           `json:"created_at"`
-	UpdatedAt                 time.Time           `json:"updated_at"`
+	// PoolConfig is present only for managed agent pools. Its presence makes
+	// pool runtime and host-path settings authoritative while preserving the
+	// installer-level defaults used by private and older agent slots.
+	PoolConfig *types.WorkerPoolConfig `json:"pool_config,omitempty"`
+	CreatedAt  time.Time               `json:"created_at"`
+	UpdatedAt  time.Time               `json:"updated_at"`
 }
 
 type PreflightCheckState struct {

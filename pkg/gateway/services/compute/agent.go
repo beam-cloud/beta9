@@ -95,6 +95,7 @@ func (s *Service) JoinAgent(ctx context.Context, in *pb.JoinAgentRequest) (*pb.J
 		NetworkSlotPoolSize:       in.NetworkSlotPoolSize,
 		ContainerStartConcurrency: in.ContainerStartConcurrency,
 		WorkerImageOverride:       workerImageOverride,
+		Capabilities:              append([]string(nil), in.Capabilities...),
 		Schedulable:               in.Schedulable,
 		Preflight:                 preflightChecksFromProto(in.Preflight),
 		CreatedAt:                 now,
@@ -203,6 +204,9 @@ func (s *Service) commitPrivateAgentJoin(ctx context.Context, token *model.JoinT
 			return err
 		}
 		if err := s.assignManagedReservationToMachineLocked(lockCtx, pool, token, agent); err != nil {
+			return errors.Join(err, s.computeRepo.DeleteAgentMachineState(lockCtx, agent.WorkspaceID, agent.PoolName, agent.MachineID))
+		}
+		if err := s.ensureMachineSSHStateForJoin(lockCtx, pool, agent); err != nil {
 			return errors.Join(err, s.computeRepo.DeleteAgentMachineState(lockCtx, agent.WorkspaceID, agent.PoolName, agent.MachineID))
 		}
 		if err := s.ensureAgentMachine(lockCtx, agent, pool); err != nil {
@@ -400,7 +404,11 @@ func (s *Service) StreamAgent(in *pb.StreamAgentRequest, stream pb.GatewayServic
 		if err != nil {
 			return err
 		}
-		return stream.Send(&pb.StreamAgentResponse{Ok: true, Routes: routes, Slots: slots})
+		sshConfig, err := s.agentSSHConfig(ctx, agentState)
+		if err != nil {
+			return err
+		}
+		return stream.Send(&pb.StreamAgentResponse{Ok: true, Routes: routes, Slots: slots, Ssh: sshConfig})
 	}
 
 	// Subscribe before the initial snapshot so a route registration cannot be
@@ -753,10 +761,13 @@ func agentWorkerSlotState(config types.AppConfig, agentState *model.AgentTokenSt
 	priority := worker.Priority
 	preemptable := worker.Preemptable
 	var cpuAffinityEnforced *bool
+	var authoritativePoolConfig *types.WorkerPoolConfig
 
 	// Managed pool configuration is authoritative and may change while the
 	// machine remains connected. Machine capacity still comes from the worker.
 	if agentState.ManagedPoolInstanceID != "" {
+		poolConfigCopy := poolConfig
+		authoritativePoolConfig = &poolConfigCopy
 		runtimeName = firstNonEmpty(poolConfig.ContainerRuntime, types.ContainerRuntimeRunc.String())
 		if poolConfig.NetworkSlotPoolSize > 0 {
 			networkSlots = uint32(poolConfig.NetworkSlotPoolSize)
@@ -794,6 +805,7 @@ func agentWorkerSlotState(config types.AppConfig, agentState *model.AgentTokenSt
 		RequiresPoolSelector:      requiresPoolSelector,
 		Priority:                  priority,
 		Preemptable:               preemptable,
+		PoolConfig:                authoritativePoolConfig,
 	}
 }
 
@@ -881,6 +893,51 @@ func agentWorkerSlotToProto(slot *model.AgentWorkerSlotState, workerToken string
 		Priority:                  slot.Priority,
 		PrioritySet:               true,
 		Preemptable:               slot.Preemptable,
+		PoolConfig:                agentPoolRuntimeConfigToProto(slot.PoolConfig),
+	}
+}
+
+func agentPoolRuntimeConfigToProto(config *types.WorkerPoolConfig) *pb.AgentPoolRuntimeConfig {
+	if config == nil {
+		return nil
+	}
+
+	networkPreallocation := true
+	if config.NetworkPreallocation != nil {
+		networkPreallocation = *config.NetworkPreallocation
+	}
+	cacheEnabled := true
+	if config.Cache.Enabled != nil {
+		cacheEnabled = *config.Cache.Enabled
+	}
+	cacheDiskEnabled := true
+	if config.Cache.Disk.Enabled != nil {
+		cacheDiskEnabled = *config.Cache.Disk.Enabled
+	}
+	cacheMaxUsagePct := config.Cache.Disk.MaxUsagePct
+	if cacheMaxUsagePct == 0 {
+		cacheMaxUsagePct = 0.95
+	}
+
+	return &pb.AgentPoolRuntimeConfig{
+		NetworkPreallocation: networkPreallocation,
+		CriuEnabled:          config.CRIUEnabled,
+		TmpSizeLimit:         firstNonEmpty(config.TmpSizeLimit, types.AgentTmpSizeLimit),
+		StorageMode:          config.StorageMode,
+		StoragePath:          config.StoragePath,
+		ImagesPath:           config.ImagesPath,
+		DurableDisksPath:     config.DurableDisksPath,
+		ConfigGroup:          config.ConfigGroup,
+		Cache: &pb.AgentPoolCacheConfig{
+			Enabled: cacheEnabled,
+			Disk: &pb.AgentPoolCacheDiskConfig{
+				Enabled:      cacheDiskEnabled,
+				HostPath:     config.Cache.Disk.HostPath,
+				MountPath:    firstNonEmpty(config.Cache.Disk.MountPath, types.AgentCachePath),
+				MaxUsagePct:  cacheMaxUsagePct,
+				MinFreeBytes: config.Cache.Disk.MinFreeBytes,
+			},
+		},
 	}
 }
 

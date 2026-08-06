@@ -65,13 +65,10 @@ const (
 	cacheDefaultReconcileMaxDiskUsagePct = 0.80
 	cacheDefaultStubCodeEvictWatermark   = 0.80
 	cacheReconcileDiskUsageHysteresisPct = 0.03
-	// cacheReconcileOwnerGracePeriod is how long a key's HRW owner may be
-	// endpoint-less (rolling deploy, pod cycle) before its keys fail over to
-	// the next-ranked host for proactive materialization. Short blips keep
-	// ownership stable so an entire key range isn't duplicated onto peers;
-	// hosts that disappear for good also age out of the ring itself via the
-	// coordinator TTL.
-	cacheReconcileOwnerGracePeriod   = 10 * time.Minute
+	// cacheReconcileOwnerGracePeriod preserves placement for one full owner
+	// lease, then lets a live peer rehydrate recent content. Waiting longer
+	// leaves failover workers routed to an endpoint-less logical host.
+	cacheReconcileOwnerGracePeriod   = cacheDefaultRegistrationTTL
 	cacheDefaultVolumeReportMinBytes = 128 * 1024 * 1024
 	cacheReconcileSuccessBackoff     = time.Hour
 )
@@ -490,6 +487,11 @@ func (s nodeCacheServer) Start() (bool, error) {
 	if err != nil || !acquired {
 		return false, err
 	}
+	if removed, err := cleanupStaleCacheRoots(s.config, m.locality, m.nodeID); err != nil {
+		log.Warn().Err(err).Msg("failed to clean stale node cache roots")
+	} else if removed > 0 {
+		log.Info().Int("removed", removed).Msg("cleaned stale node cache roots")
+	}
 
 	server, advertisedAddr, err := m.createEmbeddedServer(s.config, s.hostID)
 	if err != nil {
@@ -706,6 +708,97 @@ func acquireCacheServerLock(cacheDir string) (*os.File, bool, error) {
 	lockPath := filepath.Join(cacheDir, ".cache-server.lock")
 	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
+		return nil, false, err
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = lock.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	return lock, true, nil
+}
+
+// cleanupStaleCacheRoots reclaims cache directories left by prior machine IDs.
+// It only runs while this node owns the canonical <mount>/<locality>/<node>
+// cache, and skips any sibling still owned by another cache server.
+func cleanupStaleCacheRoots(config cache.Config, locality, nodeID string) (int, error) {
+	mountRoot := filepath.Clean(config.Disk.MountPath)
+	localityName, nodeName := safeCacheName(locality), safeCacheName(nodeID)
+	if localityName == "." || localityName == ".." || nodeName == "." || nodeName == ".." {
+		return 0, nil
+	}
+	localityRoot := filepath.Join(mountRoot, localityName)
+	rel, err := filepath.Rel(mountRoot, localityRoot)
+	if err != nil || rel == "." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return 0, nil
+	}
+	current := filepath.Clean(config.Server.DiskCacheDir)
+	expected := filepath.Join(localityRoot, nodeName)
+	if current != expected {
+		return 0, nil
+	}
+
+	entries, err := os.ReadDir(localityRoot)
+	if err != nil {
+		return 0, err
+	}
+	quarantines := make([]string, 0)
+	defer func() { removeCacheRootsAsync(quarantines) }()
+	removed := 0
+	for _, entry := range entries {
+		if entry.Type()&os.ModeSymlink != 0 || !entry.IsDir() {
+			continue
+		}
+		if strings.HasPrefix(entry.Name(), ".beta9-stale-cache-") {
+			quarantines = append(quarantines, filepath.Join(localityRoot, entry.Name()))
+			continue
+		}
+		if entry.Name() == filepath.Base(current) || strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+
+		stalePath := filepath.Join(localityRoot, entry.Name())
+		lock, acquired, err := acquireExistingCacheServerLock(stalePath)
+		if err != nil {
+			return removed, err
+		}
+		if !acquired {
+			continue
+		}
+
+		quarantine := filepath.Join(localityRoot, fmt.Sprintf(".beta9-stale-cache-%d", time.Now().UnixNano()))
+		if err := os.Rename(stalePath, quarantine); err != nil {
+			_ = releaseCacheServerLock(lock)
+			return removed, err
+		}
+		_ = releaseCacheServerLock(lock)
+		quarantines = append(quarantines, quarantine)
+		removed++
+	}
+	return removed, nil
+}
+
+func removeCacheRootsAsync(paths []string) {
+	if len(paths) == 0 {
+		return
+	}
+	go func() {
+		for _, path := range paths {
+			if err := os.RemoveAll(path); err != nil {
+				log.Warn().Err(err).Str("path", path).Msg("failed to remove quarantined cache root")
+			}
+		}
+	}()
+}
+
+func acquireExistingCacheServerLock(cacheDir string) (*os.File, bool, error) {
+	lock, err := os.OpenFile(filepath.Join(cacheDir, ".cache-server.lock"), os.O_RDWR, 0)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, false, nil
+		}
 		return nil, false, err
 	}
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {

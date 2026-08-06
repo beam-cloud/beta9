@@ -97,6 +97,88 @@ func TestHydrateRuntimeCredentialsForBuildOnlyRequestsWorkspaceStorage(t *testin
 	require.Equal(t, "https://storage.example", *request.Workspace.Storage.EndpointUrl)
 }
 
+func TestHydrateRuntimeCredentialsAcrossPoolTypes(t *testing.T) {
+	tests := []struct {
+		name   string
+		worker Worker
+	}{
+		{
+			name: "private agent pool",
+			worker: Worker{
+				persistent:     true,
+				machineID:      "private-machine",
+				poolName:       "private-pool",
+				poolConfig:     types.WorkerPoolConfig{Mode: types.PoolModePrivate},
+				routeTransport: types.BackendRouteTransportTSNet,
+			},
+		},
+		{
+			name: "admin-managed serverless agent pool",
+			worker: Worker{
+				persistent:     true,
+				machineID:      "serverless-machine",
+				poolName:       "serverless-pool",
+				poolConfig:     types.WorkerPoolConfig{Mode: types.PoolModeExternal},
+				routeTransport: types.BackendRouteTransportTSNet,
+			},
+		},
+		{
+			name:   "managed fallback pool",
+			worker: Worker{poolName: "default"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repo := &fakeRuntimeCredentialsWorkerRepo{
+				resp: &pb.GetContainerRuntimeCredentialsResponse{
+					Ok:  true,
+					Env: []string{"BETA9_TOKEN=restricted-runtime-token", "SECRET=runtime-secret"},
+				},
+			}
+			request := &types.ContainerRequest{
+				ContainerId:          "container-1",
+				WorkspaceId:          "workspace-1",
+				StubId:               "stub-1",
+				RuntimeSecretNames:   []string{"SECRET"},
+				RuntimeTokenRequired: true,
+			}
+			worker := test.worker
+			worker.workerRepoClient = repo
+
+			require.NoError(t, worker.hydrateRuntimeCredentials(context.Background(), request))
+
+			require.NotNil(t, repo.lastReq)
+			require.True(t, repo.lastReq.RuntimeToken)
+			require.Equal(t, []string{"SECRET"}, repo.lastReq.SecretNames)
+			require.Equal(t, []string{"BETA9_TOKEN=restricted-runtime-token", "SECRET=runtime-secret"}, request.Env)
+		})
+	}
+}
+
+func TestHydrateRuntimeCredentialsSkipsInlineServerlessCredentials(t *testing.T) {
+	repo := &fakeRuntimeCredentialsWorkerRepo{}
+	request := &types.ContainerRequest{
+		ContainerId: "container-1",
+		WorkspaceId: "workspace-1",
+		StubId:      "stub-1",
+		Env:         []string{"BETA9_TOKEN=inline-token", "SECRET=inline-secret"},
+	}
+	worker := &Worker{
+		workerRepoClient: repo,
+		persistent:       true,
+		machineID:        "serverless-machine",
+		poolName:         "serverless-pool",
+		poolConfig:       types.WorkerPoolConfig{Mode: types.PoolModeExternal},
+		routeTransport:   types.BackendRouteTransportTSNet,
+	}
+
+	require.NoError(t, worker.hydrateRuntimeCredentials(context.Background(), request))
+
+	require.Nil(t, repo.lastReq)
+	require.Equal(t, []string{"BETA9_TOKEN=inline-token", "SECRET=inline-secret"}, request.Env)
+}
+
 type fakeRuntimeCredentialsWorkerRepo struct {
 	pb.WorkerRepositoryServiceClient
 	lastReq *pb.GetContainerRuntimeCredentialsRequest

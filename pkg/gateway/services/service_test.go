@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	model "github.com/beam-cloud/beta9/pkg/compute"
+	computesvc "github.com/beam-cloud/beta9/pkg/gateway/services/compute"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
@@ -66,6 +67,24 @@ func TestNewGatewayServiceDoesNotCreateManagedRepositoryWithoutRedis(t *testing.
 	}
 	if err := gatewayService.computeService.ReconcileManagedPools(context.Background()); err == nil || !strings.Contains(err.Error(), "repository is unavailable") {
 		t.Fatalf("managed pool reconciliation error = %v, want repository unavailable", err)
+	}
+}
+
+func TestGatewayServiceForwardsManagedSSHMethods(t *testing.T) {
+	service := &GatewayService{computeService: computesvc.New(computesvc.Options{})}
+	ctx := context.Background()
+
+	if response, err := service.DownloadMachineSSHKey(ctx, &pb.DownloadMachineSSHKeyRequest{}); err != nil || response == nil {
+		t.Fatalf("DownloadMachineSSHKey() = %+v, %v", response, err)
+	}
+	if response, err := service.RotateMachineSSHKey(ctx, &pb.RotateMachineSSHKeyRequest{}); err != nil || response == nil {
+		t.Fatalf("RotateMachineSSHKey() = %+v, %v", response, err)
+	}
+	if response, err := service.ActivateMachineSSHKey(ctx, &pb.ActivateMachineSSHKeyRequest{}); err != nil || response == nil {
+		t.Fatalf("ActivateMachineSSHKey() = %+v, %v", response, err)
+	}
+	if response, err := service.UpdateAgentSSHStatus(ctx, &pb.UpdateAgentSSHStatusRequest{}); err != nil || response == nil {
+		t.Fatalf("UpdateAgentSSHStatus() = %+v, %v", response, err)
 	}
 }
 

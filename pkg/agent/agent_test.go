@@ -76,7 +76,7 @@ func TestRouteProxyMarksRouteReadyForReachableLocalTarget(t *testing.T) {
 	target := backend.Addr().String()
 	updates := make(chan *pb.UpdateAgentRouteStatusRequest, 1)
 	client := &routeStatusClient{updates: updates}
-	proxy := newRouteProxy(client, "agent-token", nil, "agent.tailnet:29443", nil, io.Discard, io.Discard)
+	proxy := newRouteProxy(client, "agent-token", "machine-one", nil, "agent.tailnet:29443", nil, io.Discard, io.Discard)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -121,7 +121,7 @@ func TestRouteProxyPollsOpeningRouteWithoutBackoff(t *testing.T) {
 	}()
 
 	updates := make(chan *pb.UpdateAgentRouteStatusRequest, 1)
-	proxy := newRouteProxy(&routeStatusClient{updates: updates}, "agent-token", nil, "agent.tailnet:29443", nil, io.Discard, io.Discard)
+	proxy := newRouteProxy(&routeStatusClient{updates: updates}, "agent-token", "machine-one", nil, "agent.tailnet:29443", nil, io.Discard, io.Discard)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	proxy.setRoute("route-one", target)
@@ -150,7 +150,7 @@ func TestRouteProxyRechecksOpeningRouteThatRacesReadyUpdate(t *testing.T) {
 		updates:      make(chan *pb.UpdateAgentRouteStatusRequest, 2),
 		releaseFirst: make(chan struct{}),
 	}
-	proxy := newRouteProxy(client, "agent-token", nil, "agent.tailnet:29443", nil, io.Discard, io.Discard)
+	proxy := newRouteProxy(client, "agent-token", "machine-one", nil, "agent.tailnet:29443", nil, io.Discard, io.Discard)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -392,6 +392,92 @@ func TestDockerRunArgsUsesConfigurableRouteTargetHost(t *testing.T) {
 	}
 }
 
+func TestManagedPoolPathsOverrideAgentInstallerDirectories(t *testing.T) {
+	slot := &pb.AgentWorkerSlot{
+		WorkerId:  "worker-one",
+		PoolName:  "serverless",
+		MachineId: "machine-one",
+		PoolConfig: &pb.AgentPoolRuntimeConfig{
+			StoragePath:      "/mnt/raid/storage",
+			ImagesPath:       "/mnt/raid/images",
+			DurableDisksPath: "/mnt/raid/durable-disks",
+			Cache: &pb.AgentPoolCacheConfig{
+				Enabled: true,
+				Disk: &pb.AgentPoolCacheDiskConfig{
+					Enabled:   true,
+					HostPath:  "/mnt/raid/cache",
+					MountPath: "/var/lib/beta9/cache",
+				},
+			},
+		},
+	}
+	dirs := agentWorkerDirsForSlot("/var/lib/beam/agent", "/installer/cache", slot)
+	for label, gotWant := range map[string][2]string{
+		"images":        {dirs.Images, "/mnt/raid/images"},
+		"data":          {dirs.Data, "/mnt/raid/storage"},
+		"workspace":     {dirs.Workspace, "/mnt/raid/storage/workspace-data"},
+		"checkpoints":   {dirs.Checkpoints, "/mnt/raid/storage/checkpoints"},
+		"durable disks": {dirs.DurableDisk, "/mnt/raid/durable-disks"},
+		"cache":         {dirs.Cache, "/mnt/raid/cache"},
+		"cache mount":   {dirs.CacheMount, "/var/lib/beta9/cache"},
+	} {
+		if gotWant[0] != gotWant[1] {
+			t.Fatalf("%s path = %q, want %q", label, gotWant[0], gotWant[1])
+		}
+	}
+
+	args := dockerRunArgs(
+		"slot-one",
+		"worker:dev",
+		"",
+		"/tmp/config.json",
+		bootstrapConfig{},
+		slot,
+		dirs,
+		workerContainerResourceLimits{},
+	)
+	for _, volume := range []string{
+		"/mnt/raid/images:" + types.AgentImagesPath,
+		"/mnt/raid/storage:" + types.AgentDataPath,
+		"/mnt/raid/storage/workspace-data:" + types.AgentWorkspacePath,
+		"/mnt/raid/storage/checkpoints:" + types.AgentCheckpointPath,
+		"/mnt/raid/durable-disks:" + types.DefaultDurableDisksPath,
+		"/mnt/raid/cache:" + types.AgentCachePath,
+	} {
+		if !containsArg(args, "-v", volume) {
+			t.Fatalf("expected %s volume in Docker args: %#v", volume, args)
+		}
+	}
+}
+
+func TestManagedPoolCanDisableAgentDiskCacheMount(t *testing.T) {
+	slot := &pb.AgentWorkerSlot{
+		WorkerId: "worker-one",
+		PoolConfig: &pb.AgentPoolRuntimeConfig{
+			Cache: &pb.AgentPoolCacheConfig{
+				Enabled: false,
+				Disk: &pb.AgentPoolCacheDiskConfig{
+					Enabled:  true,
+					HostPath: "/mnt/raid/cache",
+				},
+			},
+		},
+	}
+	dirs := agentWorkerDirsForSlot("/var/lib/beam/agent", "", slot)
+	if dirs.CacheEnabled {
+		t.Fatal("cache mount remained enabled")
+	}
+	for _, dir := range dirs.All() {
+		if dir == "/mnt/raid/cache" {
+			t.Fatal("disabled cache directory should not be created")
+		}
+	}
+	args := dockerRunArgs("slot-one", "worker:dev", "", "/tmp/config.json", bootstrapConfig{}, slot, dirs, workerContainerResourceLimits{})
+	if containsArg(args, "-v", "/mnt/raid/cache:"+types.AgentCachePath) {
+		t.Fatalf("disabled cache was mounted: %#v", args)
+	}
+}
+
 func TestDockerRunArgsAppliesExplicitResourceLimits(t *testing.T) {
 	args := dockerRunArgs(
 		"slot-one",
@@ -577,6 +663,47 @@ func TestAgentWorkerConfigManagedExternalPreservesPoolSemantics(t *testing.T) {
 	}
 	if pool.NetworkSlotPoolSize != 64 || pool.ContainerStartConcurrency != 8 {
 		t.Fatalf("agent capacity config = %+v", pool)
+	}
+}
+
+func TestAgentWorkerConfigUsesManagedPoolRuntimeAndCacheSettings(t *testing.T) {
+	slot := &pb.AgentWorkerSlot{
+		PoolName:  "public-h100",
+		MachineId: "machine-one",
+		Mode:      string(types.PoolModeExternal),
+		PoolConfig: &pb.AgentPoolRuntimeConfig{
+			NetworkPreallocation: false,
+			CriuEnabled:          false,
+			TmpSizeLimit:         "50Gi",
+			StorageMode:          types.StorageModeAlluxio,
+			ConfigGroup:          "raid-cache",
+			Cache: &pb.AgentPoolCacheConfig{
+				Enabled: true,
+				Disk: &pb.AgentPoolCacheDiskConfig{
+					Enabled:      true,
+					HostPath:     "/mnt/raid/cache",
+					MountPath:    "/var/lib/beta9/cache",
+					MaxUsagePct:  0.9,
+					MinFreeBytes: 1 << 30,
+				},
+			},
+		},
+	}
+	config := newAgentWorkerConfig(bootstrapConfig{WorkspaceID: "admin-workspace"}, slot).sanitizedForAgent()
+	pool := config.Worker.Pools[slot.PoolName]
+
+	if pool.NetworkPreallocation || pool.CRIUEnabled || pool.TmpSizeLimit != "50Gi" || pool.StorageMode != types.StorageModeAlluxio {
+		t.Fatalf("managed pool runtime settings were not preserved: %#v", pool)
+	}
+	if !config.Cache.Enabled || !config.Worker.CacheEnabled ||
+		config.Cache.Disk.HostPath != "/mnt/raid/cache" ||
+		config.Cache.Disk.MountPath != "/var/lib/beta9/cache" ||
+		config.Cache.Disk.MaxUsagePct != 0.9 ||
+		config.Cache.Disk.MinFreeBytes != 1<<30 {
+		t.Fatalf("managed pool cache settings were not preserved: %#v", config.Cache)
+	}
+	if config.Cache.Global == nil || config.Cache.Global.DefaultLocality != "raid-cache" {
+		t.Fatalf("cache locality = %#v, want config group", config.Cache.Global)
 	}
 }
 
@@ -1211,7 +1338,7 @@ func TestResolveAgentCapacityDefaultsToDetectedGPUIDs(t *testing.T) {
 	}
 }
 
-func TestDetectNvidiaGPUDevicesSkipsFailedProcAdapter(t *testing.T) {
+func TestDetectNvidiaGPUDevicesSkipsExcludedProcAdapter(t *testing.T) {
 	previousQuery := queryNvidiaGPUDevices
 	queryNvidiaGPUDevices = func() ([]byte, error) {
 		return []byte(`0, GPU-bad, NVIDIA GeForce RTX 4090, 0x0000, 00000000:01:00.0
@@ -1220,8 +1347,8 @@ func TestDetectNvidiaGPUDevicesSkipsFailedProcAdapter(t *testing.T) {
 	t.Cleanup(func() { queryNvidiaGPUDevices = previousQuery })
 
 	root := t.TempDir()
-	writeNvidiaProcGPUInfo(t, root, "0000:01:00.0", "GPU-bad", "N/A", "??.??.??.??.?")
-	writeNvidiaProcGPUInfo(t, root, "0000:24:00.0", "GPU-good", "580.126.18", "95.02.3c.40.b8")
+	writeNvidiaProcGPUInfo(t, root, "0000:01:00.0", "GPU-bad", "N/A", "??.??.??.??.?", true)
+	writeNvidiaProcGPUInfo(t, root, "0000:24:00.0", "GPU-good", "580.126.18", "95.02.3c.40.b8", false)
 
 	previousRoot := nvidiaProcGPUInfoRoot
 	nvidiaProcGPUInfoRoot = root
@@ -1236,10 +1363,30 @@ func TestDetectNvidiaGPUDevicesSkipsFailedProcAdapter(t *testing.T) {
 	}
 }
 
+func TestDetectNvidiaGPUDevicesAllowsUnknownVideoBIOS(t *testing.T) {
+	previousQuery := queryNvidiaGPUDevices
+	queryNvidiaGPUDevices = func() ([]byte, error) {
+		return []byte(`0, GPU-a, NVIDIA GeForce RTX 4090, 0x0000, 00000000:01:00.0`), nil
+	}
+	t.Cleanup(func() { queryNvidiaGPUDevices = previousQuery })
+
+	root := t.TempDir()
+	writeNvidiaProcGPUInfo(t, root, "0000:01:00.0", "GPU-a", "N/A", "??.??.??.??.?", false)
+
+	previousRoot := nvidiaProcGPUInfoRoot
+	nvidiaProcGPUInfoRoot = root
+	t.Cleanup(func() { nvidiaProcGPUInfoRoot = previousRoot })
+
+	devices := detectNvidiaGPUDevices()
+	if len(devices) != 1 {
+		t.Fatalf("devices = %#v, want GPU with working nvidia-smi despite unknown Video BIOS metadata", devices)
+	}
+}
+
 func TestNvidiaProcDriverStateReportsFailedAdapterWithoutHardFail(t *testing.T) {
 	root := t.TempDir()
-	writeNvidiaProcGPUInfo(t, root, "0000:01:00.0", "GPU-bad", "N/A", "??.??.??.??.?")
-	writeNvidiaProcGPUInfo(t, root, "0000:24:00.0", "GPU-good", "580.126.18", "95.02.3c.40.b8")
+	writeNvidiaProcGPUInfo(t, root, "0000:01:00.0", "GPU-bad", "N/A", "??.??.??.??.?", true)
+	writeNvidiaProcGPUInfo(t, root, "0000:24:00.0", "GPU-good", "580.126.18", "95.02.3c.40.b8", false)
 
 	previous := nvidiaProcGPUInfoRoot
 	nvidiaProcGPUInfoRoot = root
@@ -1259,8 +1406,8 @@ func TestNvidiaProcDriverStateReportsFailedAdapterWithoutHardFail(t *testing.T) 
 
 func TestNvidiaProcDriverStateReportsProcSmiMismatchWithoutHardFail(t *testing.T) {
 	root := t.TempDir()
-	writeNvidiaProcGPUInfo(t, root, "0000:24:00.0", "GPU-a", "580.126.18", "95.02.3c.40.b8")
-	writeNvidiaProcGPUInfo(t, root, "0000:41:00.0", "GPU-b", "580.126.18", "95.02.3c.40.b8")
+	writeNvidiaProcGPUInfo(t, root, "0000:24:00.0", "GPU-a", "580.126.18", "95.02.3c.40.b8", false)
+	writeNvidiaProcGPUInfo(t, root, "0000:41:00.0", "GPU-b", "580.126.18", "95.02.3c.40.b8", false)
 
 	previous := nvidiaProcGPUInfoRoot
 	nvidiaProcGPUInfoRoot = root
@@ -1277,7 +1424,7 @@ func TestNvidiaProcDriverStateReportsProcSmiMismatchWithoutHardFail(t *testing.T
 
 func TestNvidiaProcDriverStateAllowsHealthyDetectedGPUs(t *testing.T) {
 	root := t.TempDir()
-	writeNvidiaProcGPUInfo(t, root, "0000:24:00.0", "GPU-a", "580.126.18", "95.02.3c.40.b8")
+	writeNvidiaProcGPUInfo(t, root, "0000:24:00.0", "GPU-a", "580.126.18", "95.02.3c.40.b8", false)
 
 	previous := nvidiaProcGPUInfoRoot
 	nvidiaProcGPUInfoRoot = root
@@ -1404,7 +1551,7 @@ func TestWriteWorkerConfigUsesGeeseForWorkspaceStorage(t *testing.T) {
 	}
 }
 
-func writeNvidiaProcGPUInfo(t *testing.T, root, busID, uuid, firmware, videoBIOS string) {
+func writeNvidiaProcGPUInfo(t *testing.T, root, busID, uuid, firmware, videoBIOS string, excluded bool) {
 	t.Helper()
 	dir := filepath.Join(root, busID)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -1417,6 +1564,7 @@ func writeNvidiaProcGPUInfo(t *testing.T, root, busID, uuid, firmware, videoBIOS
 		"Bus Location: \t " + busID,
 		"Device Minor: \t 0",
 		"GPU Firmware: \t " + firmware,
+		fmt.Sprintf("GPU Excluded:\t %v", map[bool]string{true: "Yes", false: "No"}[excluded]),
 	}, "\n")
 	if err := os.WriteFile(filepath.Join(dir, "information"), []byte(info), 0644); err != nil {
 		t.Fatal(err)

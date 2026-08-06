@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -394,7 +395,7 @@ func TestCreatePoolRejectsConfiguredWorkerPoolIdentity(t *testing.T) {
 func TestCreatePoolRollsBackFailedRegistration(t *testing.T) {
 	ctx := testAuthContext("workspace-1", "owner-token")
 	repo := &fakeComputeRepo{}
-	manager := scheduler.NewWorkerPoolManager(false)
+	manager := scheduler.NewWorkerPoolManager()
 	s := scheduler.NewSchedulerForCapacityChecks(nil, repo, manager)
 	if err := s.EnsureAgentPool("workspace-1", &model.PoolState{
 		Name: "selector-owner", Selector: "shared", Mode: string(types.PoolModePrivate),
@@ -433,7 +434,7 @@ func TestCreatePoolRemovesOldSelectorAfterReplacement(t *testing.T) {
 		Name: "private", Selector: "old", Mode: string(types.PoolModePrivate), CreatedByTokenID: "owner-token",
 	}
 	repo := &fakeComputeRepo{pools: map[string][]*model.PoolState{"workspace-1": {previous}}}
-	s := scheduler.NewSchedulerForCapacityChecks(nil, repo, scheduler.NewWorkerPoolManager(false))
+	s := scheduler.NewSchedulerForCapacityChecks(nil, repo, scheduler.NewWorkerPoolManager())
 	if err := s.EnsureAgentPool("workspace-1", previous); err != nil {
 		t.Fatal(err)
 	}
@@ -575,7 +576,7 @@ func TestCreateBYOCPoolCreatesAWSCPUPrivatePool(t *testing.T) {
 func TestCreateBYOCPoolRollsBackFailedRegistration(t *testing.T) {
 	ctx := testAuthContext("workspace-1", "owner-token")
 	repo := &fakeComputeRepo{}
-	s := scheduler.NewSchedulerForCapacityChecks(nil, repo, scheduler.NewWorkerPoolManager(false))
+	s := scheduler.NewSchedulerForCapacityChecks(nil, repo, scheduler.NewWorkerPoolManager())
 	if err := s.EnsureAgentPool("workspace-1", &model.PoolState{
 		Name: "selector-owner", Selector: "aws-cpu", Mode: string(types.PoolModePrivate),
 	}); err != nil {
@@ -4985,7 +4986,41 @@ type fakeComputeRepo struct {
 	joinTokens map[string]*model.JoinTokenState
 	listings   map[string][]*model.MarketplaceListingState
 	rentals    map[string][]*model.MarketplaceRentalState
+	sshStates  map[string]*model.MachineSSHState
+	sshMu      sync.Mutex
+	demand     map[string]*model.FailoverDemand
+	spendCents float64
 	savedPool  bool
+}
+
+func (r *fakeComputeRepo) PushFailoverDemand(ctx context.Context, demand *model.FailoverDemand, ttl time.Duration) error {
+	if r.demand == nil {
+		r.demand = map[string]*model.FailoverDemand{}
+	}
+	r.demand[demand.GPU] = demand
+	return nil
+}
+
+func (r *fakeComputeRepo) ListFailoverDemand(ctx context.Context) ([]*model.FailoverDemand, error) {
+	out := []*model.FailoverDemand{}
+	for _, demand := range r.demand {
+		out = append(out, demand)
+	}
+	return out, nil
+}
+
+func (r *fakeComputeRepo) DeleteFailoverDemand(ctx context.Context, gpu string) error {
+	delete(r.demand, gpu)
+	return nil
+}
+
+func (r *fakeComputeRepo) RecordOnDemandSpend(ctx context.Context, at time.Time, cents float64) error {
+	r.spendCents += cents
+	return nil
+}
+
+func (r *fakeComputeRepo) OnDemandSpendCents(ctx context.Context, window time.Duration) (float64, error) {
+	return r.spendCents, nil
 }
 
 func (r *fakeComputeRepo) LockMachineRentals(ctx context.Context, machineID string) error {
@@ -5060,6 +5095,33 @@ func (r *fakeComputeRepo) WithPoolStateLock(ctx context.Context, workspaceID, na
 
 func (r *fakeComputeRepo) PruneAgentMachineIndex(ctx context.Context, workspaceID, poolName string) error {
 	return nil
+}
+
+func (r *fakeComputeRepo) WithMachineSSHStateLock(ctx context.Context, workspaceID, poolName, machineID string, fn func(context.Context) error) error {
+	r.sshMu.Lock()
+	defer r.sshMu.Unlock()
+	return fn(ctx)
+}
+
+func (r *fakeComputeRepo) SaveMachineSSHState(ctx context.Context, state *model.MachineSSHState) error {
+	if r.sshStates == nil {
+		r.sshStates = map[string]*model.MachineSSHState{}
+	}
+	r.sshStates[fakeComputeSSHKey(state.WorkspaceID, state.PoolName, state.MachineID)] = state
+	return nil
+}
+
+func (r *fakeComputeRepo) GetMachineSSHState(ctx context.Context, workspaceID, poolName, machineID string) (*model.MachineSSHState, error) {
+	return r.sshStates[fakeComputeSSHKey(workspaceID, poolName, machineID)], nil
+}
+
+func (r *fakeComputeRepo) DeleteMachineSSHState(ctx context.Context, workspaceID, poolName, machineID string) error {
+	delete(r.sshStates, fakeComputeSSHKey(workspaceID, poolName, machineID))
+	return nil
+}
+
+func fakeComputeSSHKey(workspaceID, poolName, machineID string) string {
+	return workspaceID + "\x00" + poolName + "\x00" + machineID
 }
 
 func (r *fakeComputeRepo) SavePoolState(ctx context.Context, workspaceID string, state *model.PoolState) error {
@@ -5600,18 +5662,54 @@ func TestAgentWorkerSlotStateCarriesMarketplaceModeAndRuntime(t *testing.T) {
 	if err != nil || !strings.Contains(string(managedSlotJSON), `"cpu_affinity_enforced":false`) {
 		t.Fatalf("managed slot omitted its disabled CPU affinity generation input: %s, err=%v", managedSlotJSON, err)
 	}
+	cacheEnabled := true
+	diskEnabled := true
+	networkPreallocation := false
 	slot = agentWorkerSlotState(config, managedState, worker, types.WorkerPoolConfig{
 		ContainerRuntime:          types.ContainerRuntimeRunc.String(),
 		CPUAffinityEnforced:       true,
 		ContainerStartConcurrency: 64,
 		NetworkSlotPoolSize:       128,
+		NetworkPreallocation:      &networkPreallocation,
 		Priority:                  10,
+		CRIUEnabled:               false,
+		TmpSizeLimit:              "50Gi",
+		ConfigGroup:               "raid-cache",
+		StoragePath:               "/mnt/raid/storage",
+		ImagesPath:                "/mnt/raid/images",
+		DurableDisksPath:          "/mnt/raid/disks",
+		Cache: types.WorkerPoolCacheConfig{
+			Enabled: &cacheEnabled,
+			Disk: types.WorkerPoolCacheDiskConfig{
+				Enabled:      &diskEnabled,
+				HostPath:     "/mnt/raid/cache",
+				MountPath:    "/var/lib/beta9/cache",
+				MaxUsagePct:  0.9,
+				MinFreeBytes: 1024,
+			},
+		},
 	}, "token-id", "token-hash")
 	if slot.ContainerRuntime != types.ContainerRuntimeRunc.String() || slot.CPUAffinityEnforced == nil || !*slot.CPUAffinityEnforced || slot.ContainerStartConcurrency != 64 || slot.NetworkSlotPoolSize != 128 || slot.Priority != 10 {
 		t.Fatalf("managed slot did not use live pool config: %#v", slot)
 	}
-	if wireSlot := agentWorkerSlotToProto(slot, "worker-token"); !wireSlot.CpuAffinityEnforced {
+	wireSlot = agentWorkerSlotToProto(slot, "worker-token")
+	if !wireSlot.CpuAffinityEnforced {
 		t.Fatal("managed slot did not carry CPU affinity configuration to the agent")
+	}
+	if wireSlot.PoolConfig == nil ||
+		wireSlot.PoolConfig.NetworkPreallocation ||
+		wireSlot.PoolConfig.CriuEnabled ||
+		wireSlot.PoolConfig.StoragePath != "/mnt/raid/storage" ||
+		wireSlot.PoolConfig.ImagesPath != "/mnt/raid/images" ||
+		wireSlot.PoolConfig.DurableDisksPath != "/mnt/raid/disks" ||
+		wireSlot.PoolConfig.ConfigGroup != "raid-cache" {
+		t.Fatalf("managed slot did not carry pool runtime config: %#v", wireSlot.PoolConfig)
+	}
+	if wireSlot.PoolConfig.Cache == nil || wireSlot.PoolConfig.Cache.Disk == nil ||
+		wireSlot.PoolConfig.Cache.Disk.HostPath != "/mnt/raid/cache" ||
+		wireSlot.PoolConfig.Cache.Disk.MountPath != "/var/lib/beta9/cache" ||
+		wireSlot.PoolConfig.Cache.Disk.MinFreeBytes != 1024 {
+		t.Fatalf("managed slot did not carry cache config: %#v", wireSlot.PoolConfig.Cache)
 	}
 }
 
@@ -6565,7 +6663,7 @@ func TestMarketplacePoolStateRollsBackFailedRegistration(t *testing.T) {
 	ctx := context.Background()
 	repo := &fakeComputeRepo{}
 	poolName := model.MarketplacePoolNameForSeller("seller-1", "a100")
-	manager := scheduler.NewWorkerPoolManager(false)
+	manager := scheduler.NewWorkerPoolManager()
 	manager.SetPool(poolName, types.WorkerPoolConfig{Mode: types.PoolModeLocal}, nil)
 	service := &Service{
 		computeRepo: repo,
@@ -6587,7 +6685,7 @@ func TestMarketplaceListingRollsBackFailedRegistration(t *testing.T) {
 	ctx := testAuthContext("seller-1", "owner-token")
 	repo := &fakeComputeRepo{}
 	poolName := model.MarketplacePoolNameForSeller("seller-1", "a100")
-	manager := scheduler.NewWorkerPoolManager(false)
+	manager := scheduler.NewWorkerPoolManager()
 	manager.SetPool(poolName, types.WorkerPoolConfig{Mode: types.PoolModeLocal}, nil)
 	service := &Service{
 		computeRepo: repo,
@@ -6638,7 +6736,7 @@ func TestMarketplaceUpdateRestoresListingAndPoolAfterFailedRegistration(t *testi
 	if err := repo.SavePoolState(ctx, "seller-1", marketplacePoolState(listing, "owner-token", now, now)); err != nil {
 		t.Fatal(err)
 	}
-	manager := scheduler.NewWorkerPoolManager(false)
+	manager := scheduler.NewWorkerPoolManager()
 	manager.SetPool(poolName, types.WorkerPoolConfig{Mode: types.PoolModeLocal}, nil)
 	service := &Service{
 		computeRepo: repo,

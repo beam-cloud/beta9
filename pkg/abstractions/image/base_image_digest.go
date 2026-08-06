@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/singleflight"
 )
@@ -24,11 +25,13 @@ type baseImageDigestCache struct {
 	mu      sync.Mutex
 	entries map[string]baseImageDigestCacheEntry
 	group   singleflight.Group
+	rdb     *common.RedisClient
 }
 
-func newBaseImageDigestCache() baseImageDigestCache {
+func newBaseImageDigestCache(rdb *common.RedisClient) baseImageDigestCache {
 	return baseImageDigestCache{
 		entries: make(map[string]baseImageDigestCacheEntry),
+		rdb:     rdb,
 	}
 }
 
@@ -139,18 +142,18 @@ func (c *baseImageDigestCache) resolve(
 	creds string,
 	inspect func(context.Context, string, string) string,
 ) (string, bool) {
-	if digest := c.get(sourceImage); digest != "" {
+	if digest := c.get(ctx, sourceImage); digest != "" {
 		return digest, false
 	}
 
 	digest, _, shared := c.group.Do(sourceImage, func() (interface{}, error) {
-		if digest := c.get(sourceImage); digest != "" {
+		if digest := c.get(ctx, sourceImage); digest != "" {
 			return digest, nil
 		}
 
 		digest := inspect(ctx, sourceImage, creds)
 		if digest != "" {
-			c.set(sourceImage, digest)
+			c.set(ctx, sourceImage, digest)
 		}
 		return digest, nil
 	})
@@ -175,22 +178,38 @@ func (is *ContainerImageService) inspectBaseImageDigest(ctx context.Context, sou
 	return metadata.Digest
 }
 
-func (c *baseImageDigestCache) get(sourceImage string) string {
+func (c *baseImageDigestCache) get(ctx context.Context, sourceImage string) string {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	entry, ok := c.entries[sourceImage]
-	if !ok {
-		return ""
+	if ok && time.Now().Before(entry.expiresAt) {
+		c.mu.Unlock()
+		return entry.digest
 	}
-	if time.Now().After(entry.expiresAt) {
+	if ok {
 		delete(c.entries, sourceImage)
+	}
+	c.mu.Unlock()
+
+	if c.rdb == nil {
 		return ""
 	}
-	return entry.digest
+
+	digest, err := c.rdb.Get(ctx, common.RedisKeys.ImageBaseDigest(sourceImage)).Result()
+	if err != nil {
+		return ""
+	}
+	c.setLocal(sourceImage, digest)
+	return digest
 }
 
-func (c *baseImageDigestCache) set(sourceImage, digest string) {
+func (c *baseImageDigestCache) set(ctx context.Context, sourceImage, digest string) {
+	c.setLocal(sourceImage, digest)
+	if c.rdb != nil {
+		_ = c.rdb.SetEx(ctx, common.RedisKeys.ImageBaseDigest(sourceImage), digest, baseImageDigestCacheTTL).Err()
+	}
+}
+
+func (c *baseImageDigestCache) setLocal(sourceImage, digest string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 

@@ -1210,6 +1210,8 @@ class JoinAgentRequest(betterproto.Message):
      future image tag changes while manually edited values remain pinned.
     """
 
+    capabilities: List[str] = betterproto.string_field(18)
+
 
 @dataclass(eq=False, repr=False)
 class JoinAgentResponse(betterproto.Message):
@@ -1342,6 +1344,7 @@ class AgentWorkerSlot(betterproto.Message):
     """Deterministic identity of the restart-relevant slot specification."""
 
     cpu_affinity_enforced: bool = betterproto.bool_field(26)
+    pool_config: "AgentPoolRuntimeConfig" = betterproto.message_field(27)
 
 
 @dataclass(eq=False, repr=False)
@@ -1355,6 +1358,7 @@ class StreamAgentResponse(betterproto.Message):
     err_msg: str = betterproto.string_field(2)
     routes: List["AgentRoute"] = betterproto.message_field(3)
     slots: List["AgentWorkerSlot"] = betterproto.message_field(4)
+    ssh: "AgentSshConfig" = betterproto.message_field(5)
 
 
 @dataclass(eq=False, repr=False)
@@ -1428,6 +1432,7 @@ class Machine(betterproto.Message):
     agent_version: str = betterproto.string_field(14)
     machine_metrics: "MachineMetrics" = betterproto.message_field(15)
     user_data: str = betterproto.string_field(16)
+    ssh: "MachineSshAccess" = betterproto.message_field(17)
 
 
 @dataclass(eq=False, repr=False)
@@ -1672,6 +1677,137 @@ class UpdateAgentAvailabilityRequest(betterproto.Message):
 class UpdateAgentAvailabilityResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class DownloadMachineSshKeyRequest(betterproto.Message):
+    """
+    Managed SSH messages live at the end of this file so adding the feature
+     does not renumber every existing generated message implementation.
+    """
+
+    pool_name: str = betterproto.string_field(1)
+    machine_id: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class DownloadMachineSshKeyResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    private_key: str = betterproto.string_field(3)
+    filename: str = betterproto.string_field(4)
+    generation: int = betterproto.uint64_field(5)
+    fingerprint: str = betterproto.string_field(6)
+    activation_required: bool = betterproto.bool_field(7)
+
+
+@dataclass(eq=False, repr=False)
+class RotateMachineSshKeyRequest(betterproto.Message):
+    pool_name: str = betterproto.string_field(1)
+    machine_id: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class RotateMachineSshKeyResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    ssh: "MachineSshAccess" = betterproto.message_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class ActivateMachineSshKeyRequest(betterproto.Message):
+    pool_name: str = betterproto.string_field(1)
+    machine_id: str = betterproto.string_field(2)
+    generation: int = betterproto.uint64_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class ActivateMachineSshKeyResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    ssh: "MachineSshAccess" = betterproto.message_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class AgentSshConfig(betterproto.Message):
+    enabled: bool = betterproto.bool_field(1)
+    username: str = betterproto.string_field(2)
+    public_key: str = betterproto.string_field(3)
+    key_fingerprint: str = betterproto.string_field(4)
+    generation: int = betterproto.uint64_field(5)
+
+
+@dataclass(eq=False, repr=False)
+class UpdateAgentSshStatusRequest(betterproto.Message):
+    agent_token: str = betterproto.string_field(1)
+    generation: int = betterproto.uint64_field(2)
+    status: str = betterproto.string_field(3)
+    public_ip: str = betterproto.string_field(4)
+    host_key_fingerprint: str = betterproto.string_field(5)
+    error: str = betterproto.string_field(6)
+    listen_port: int = betterproto.uint32_field(7)
+
+
+@dataclass(eq=False, repr=False)
+class UpdateAgentSshStatusResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class MachineSshAccess(betterproto.Message):
+    supported: bool = betterproto.bool_field(1)
+    status: str = betterproto.string_field(2)
+    public_ip: str = betterproto.string_field(3)
+    host: str = betterproto.string_field(4)
+    port: int = betterproto.uint32_field(5)
+    username: str = betterproto.string_field(6)
+    active_generation: int = betterproto.uint64_field(7)
+    applied_generation: int = betterproto.uint64_field(8)
+    key_fingerprint: str = betterproto.string_field(9)
+    host_key_fingerprint: str = betterproto.string_field(10)
+    private_key_available: bool = betterproto.bool_field(11)
+    pending_rotation: bool = betterproto.bool_field(12)
+    pending_generation: int = betterproto.uint64_field(13)
+    pending_fingerprint: str = betterproto.string_field(14)
+    pending_key_available: bool = betterproto.bool_field(15)
+    pending_key_downloaded: bool = betterproto.bool_field(16)
+    error: str = betterproto.string_field(17)
+    updated_at: datetime = betterproto.message_field(18)
+
+
+@dataclass(eq=False, repr=False)
+class AgentPoolCacheDiskConfig(betterproto.Message):
+    """
+    Host-backed runtime settings for an agent worker. Presence of this message
+     means the managed pool configuration is authoritative; older gateways omit
+     it and agents retain their installer-level state/cache defaults.
+    """
+
+    enabled: bool = betterproto.bool_field(1)
+    host_path: str = betterproto.string_field(2)
+    mount_path: str = betterproto.string_field(3)
+    max_usage_pct: float = betterproto.double_field(4)
+    min_free_bytes: int = betterproto.int64_field(5)
+
+
+@dataclass(eq=False, repr=False)
+class AgentPoolCacheConfig(betterproto.Message):
+    enabled: bool = betterproto.bool_field(1)
+    disk: "AgentPoolCacheDiskConfig" = betterproto.message_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class AgentPoolRuntimeConfig(betterproto.Message):
+    network_preallocation: bool = betterproto.bool_field(1)
+    criu_enabled: bool = betterproto.bool_field(2)
+    tmp_size_limit: str = betterproto.string_field(3)
+    storage_mode: str = betterproto.string_field(4)
+    storage_path: str = betterproto.string_field(5)
+    images_path: str = betterproto.string_field(6)
+    durable_disks_path: str = betterproto.string_field(7)
+    cache: "AgentPoolCacheConfig" = betterproto.message_field(8)
+    config_group: str = betterproto.string_field(9)
 
 
 class GatewayServiceStub(SyncServiceStub):
@@ -2098,6 +2234,33 @@ class GatewayServiceStub(SyncServiceStub):
             ListPoolMachinesResponse,
         )(list_pool_machines_request)
 
+    def download_machine_ssh_key(
+        self, download_machine_ssh_key_request: "DownloadMachineSshKeyRequest"
+    ) -> "DownloadMachineSshKeyResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/DownloadMachineSSHKey",
+            DownloadMachineSshKeyRequest,
+            DownloadMachineSshKeyResponse,
+        )(download_machine_ssh_key_request)
+
+    def rotate_machine_ssh_key(
+        self, rotate_machine_ssh_key_request: "RotateMachineSshKeyRequest"
+    ) -> "RotateMachineSshKeyResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/RotateMachineSSHKey",
+            RotateMachineSshKeyRequest,
+            RotateMachineSshKeyResponse,
+        )(rotate_machine_ssh_key_request)
+
+    def activate_machine_ssh_key(
+        self, activate_machine_ssh_key_request: "ActivateMachineSshKeyRequest"
+    ) -> "ActivateMachineSshKeyResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/ActivateMachineSSHKey",
+            ActivateMachineSshKeyRequest,
+            ActivateMachineSshKeyResponse,
+        )(activate_machine_ssh_key_request)
+
     def join_agent(self, join_agent_request: "JoinAgentRequest") -> "JoinAgentResponse":
         return self._unary_unary(
             "/gateway.GatewayService/JoinAgent",
@@ -2132,6 +2295,15 @@ class GatewayServiceStub(SyncServiceStub):
             UpdateAgentRouteStatusRequest,
             UpdateAgentRouteStatusResponse,
         )(update_agent_route_status_request)
+
+    def update_agent_ssh_status(
+        self, update_agent_ssh_status_request: "UpdateAgentSshStatusRequest"
+    ) -> "UpdateAgentSshStatusResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/UpdateAgentSSHStatus",
+            UpdateAgentSshStatusRequest,
+            UpdateAgentSshStatusResponse,
+        )(update_agent_ssh_status_request)
 
     def update_agent_availability(
         self, update_agent_availability_request: "UpdateAgentAvailabilityRequest"

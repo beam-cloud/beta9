@@ -49,6 +49,9 @@ cacheServer:
   serverPort: 2050
   hostPath: /var/lib/beta9/cache
   mountPath: /var/lib/beta9/cache
+  # Must match the host path mounted at /images on workers in this locality.
+  # Ignored when config.worker.imagePVCName is set.
+  imagesHostPath: /images
   hostNetwork: true
   priorityClassName:
   image:

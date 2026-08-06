@@ -37,6 +37,7 @@ import (
 	repo "github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"github.com/beam-cloud/clip/pkg/clip"
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
@@ -497,7 +498,7 @@ func (m *WorkerCacheManager) reconcileOnce() {
 	}
 	m.pruneOwnerStubCodeCache(server)
 
-	gated, reconcileAllowlist := m.reconcileGatedByDiskUsage(server, localHostID, protectedContent, stubContent, requiredContentComplete)
+	gated, reconcileAllowlist := m.reconcileGatedByDiskUsage(server, localHostID, protectedContent, stubContent, protectedSetComplete)
 	if gated {
 		return
 	}
@@ -709,6 +710,194 @@ func (m *WorkerCacheManager) pruneOwnerLocalCache(server *cache.Server, protecte
 	m.pruneStaleCacheCheckpoints()
 }
 
+type imageCacheProtection struct {
+	names    map[string]struct{}
+	complete bool
+}
+
+type imageCacheEntry struct {
+	path     string
+	name     string
+	size     int64
+	modified time.Time
+}
+
+func (m *WorkerCacheManager) pruneOwnerImageCache(stubs []recentStubContent, softWatermark float64, minFreeBytes int64) int64 {
+	root := getImageCachePath()
+	usage, err := fastDiskUsage(root)
+	if err != nil {
+		return 0
+	}
+	bytesToFree := maxInt64(reconcilePressureBytesToFree(usage, softWatermark, minFreeBytes), 0)
+	var allowlist map[string]struct{}
+	if bytesToFree > 0 {
+		allowlist = pressureProtectedContentFromRecentStubs(stubs, m.accelerator, usage, softWatermark, minFreeBytes)
+	}
+	protected := protectedImageCache(stubs, allowlist, root, filepath.Join(types.AgentImagesPath, "mnt"))
+	evicted, freed := evictImageCache(root, protected, time.Now().Add(-m.recentStubTTL()), bytesToFree)
+	if evicted > 0 {
+		event := log.Info()
+		message := "pruned stale image cache content"
+		if bytesToFree > 0 {
+			event = log.Warn()
+			message = "pressure-evicted image cache content"
+		}
+		event.
+			Int("evicted", evicted).
+			Int64("freed_bytes", freed).
+			Int64("target_free_bytes", bytesToFree).
+			Float64("disk_usage_pct", usage.UsagePct).
+			Bool("mount_protection_complete", protected.complete).
+			Msg(message)
+	}
+	return freed
+}
+
+func protectedImageCache(stubs []recentStubContent, allowlist map[string]struct{}, cacheRoot, mountRoot string) imageCacheProtection {
+	protected := imageCacheProtection{names: map[string]struct{}{}, complete: true}
+	protectImage := func(imageID string) {
+		if imageID == "" {
+			return
+		}
+		for _, suffix := range []string{".clip", ".rclip", ".cache"} {
+			protected.names[imageID+suffix] = struct{}{}
+		}
+	}
+
+	for _, stub := range stubs {
+		for _, item := range stub.items {
+			if allowlist != nil {
+				if _, ok := allowlist[item.Hash]; !ok {
+					continue
+				}
+			}
+			protectImage(item.ImageID)
+			if item.Kind == types.CacheContentKindClipV2 && isSHA256HexDigest(item.Hash) {
+				protected.names[item.Hash] = struct{}{}
+			}
+		}
+	}
+
+	workers, err := os.ReadDir(mountRoot)
+	if err != nil {
+		protected.complete = false
+		return protected
+	}
+	for _, worker := range workers {
+		if !worker.IsDir() || worker.Type()&os.ModeSymlink != 0 {
+			continue
+		}
+		images, err := os.ReadDir(filepath.Join(mountRoot, worker.Name()))
+		if err != nil {
+			protected.complete = false
+			continue
+		}
+		for _, image := range images {
+			if !image.IsDir() || image.Type()&os.ModeSymlink != 0 {
+				continue
+			}
+			protectImage(image.Name())
+			layers, ok := activeImageLayers(cacheRoot, image.Name())
+			if !ok {
+				protected.complete = false
+				continue
+			}
+			for _, hash := range layers {
+				protected.names[hash] = struct{}{}
+			}
+		}
+	}
+	return protected
+}
+
+func activeImageLayers(cacheRoot, imageID string) ([]string, bool) {
+	for _, suffix := range []string{".rclip", ".clip"} {
+		path := filepath.Join(cacheRoot, imageID+suffix)
+		info, err := os.Stat(path)
+		if err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
+			continue
+		}
+		meta, err := clip.NewClipArchiver().ExtractMetadata(path)
+		if err != nil {
+			continue
+		}
+		oci, ok := ociStorageInfo(meta)
+		if !ok {
+			return nil, true
+		}
+		layers := make([]string, 0, len(oci.DecompressedHashByLayer))
+		for _, hash := range oci.DecompressedHashByLayer {
+			if isSHA256HexDigest(hash) {
+				layers = append(layers, hash)
+			}
+		}
+		return layers, true
+	}
+	return nil, false
+}
+
+func evictImageCache(root string, protected imageCacheProtection, cutoff time.Time, bytesToFree int64) (int, int64) {
+	if !protected.complete || cutoff.IsZero() && bytesToFree <= 0 {
+		return 0, 0
+	}
+	scanStarted := time.Now()
+	entries := listImageCacheEntries(root)
+	sort.Slice(entries, func(i, j int) bool { return entries[i].modified.Before(entries[j].modified) })
+
+	evicted := 0
+	var freed int64
+	lockCtx, cancelLocks := context.WithCancel(context.Background())
+	cancelLocks()
+	for _, entry := range entries {
+		stale := !cutoff.IsZero() && entry.modified.Before(cutoff)
+		pressure := bytesToFree > 0 && freed < bytesToFree
+		if !stale && !pressure {
+			continue
+		}
+		if _, ok := protected.names[entry.name]; ok {
+			continue
+		}
+
+		unlock, err := lockImageArchiveFile(lockCtx, entry.path)
+		if err != nil {
+			continue
+		}
+		info, statErr := os.Stat(entry.path)
+		unchanged := statErr == nil && info.Mode().IsRegular() && info.Size() == entry.size && info.ModTime().Equal(entry.modified) && !info.ModTime().After(scanStarted)
+		if unchanged && os.Remove(entry.path) == nil {
+			evicted++
+			freed += entry.size
+		}
+		unlock()
+	}
+	return evicted, freed
+}
+
+func listImageCacheEntries(root string) []imageCacheEntry {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil
+	}
+	out := make([]imageCacheEntry, 0, len(entries))
+	for _, entry := range entries {
+		name := entry.Name()
+		layer := isSHA256HexDigest(name)
+		if !layer {
+			switch filepath.Ext(name) {
+			case ".clip", ".rclip", ".cache":
+			default:
+				continue
+			}
+		}
+		info, err := entry.Info()
+		if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 {
+			continue
+		}
+		out = append(out, imageCacheEntry{path: filepath.Join(root, name), name: name, size: info.Size(), modified: info.ModTime()})
+	}
+	return out
+}
+
 const (
 	stubCodeReadyMarker      = ".beta9-cache-ready"
 	stubCodeTempDirGraceTime = 30 * time.Minute
@@ -878,7 +1067,7 @@ func fastDiskUsage(path string) (cache.DiskUsage, error) {
 // pauses the current cycle; between the resume and soft watermarks it reconciles
 // only that ranked set. This avoids download/evict loops while still favoring
 // the newest useful content on a mostly-full node.
-func (m *WorkerCacheManager) reconcileGatedByDiskUsage(server *cache.Server, localHostID string, protected map[string]struct{}, stubContent []recentStubContent, requiredContentComplete bool) (bool, map[string]struct{}) {
+func (m *WorkerCacheManager) reconcileGatedByDiskUsage(server *cache.Server, localHostID string, protected map[string]struct{}, stubContent []recentStubContent, protectedSetComplete bool) (bool, map[string]struct{}) {
 	usage, err := server.RefreshDiskUsage()
 	if err != nil {
 		log.Debug().Err(err).Str("locality", m.locality).Str("logical_host", localHostID).Msg("cache reconciliation failed to refresh disk usage")
@@ -890,6 +1079,11 @@ func (m *WorkerCacheManager) reconcileGatedByDiskUsage(server *cache.Server, loc
 
 	softWatermark := m.reconcileMaxDiskUsagePct()
 	resumeWatermark := reconcileResumeDiskUsagePct(softWatermark)
+	if protectedSetComplete && m.pruneOwnerImageCache(stubContent, softWatermark, server.DiskMinFreeBytes()) > 0 {
+		if refreshed, refreshErr := server.RefreshDiskUsage(); refreshErr == nil {
+			usage = refreshed
+		}
+	}
 	pressureMode := usage.UsagePct >= resumeWatermark
 	if !m.reconcilePausedAt.IsZero() {
 		if usage.UsagePct > resumeWatermark {
@@ -917,7 +1111,7 @@ func (m *WorkerCacheManager) reconcileGatedByDiskUsage(server *cache.Server, loc
 	}
 
 	bytesToFree := reconcilePressureBytesToFree(usage, softWatermark, server.DiskMinFreeBytes())
-	if bytesToFree > 0 && !requiredContentComplete {
+	if bytesToFree > 0 && !protectedSetComplete {
 		server.SetProtectedContent(protected)
 		if m.reconcilePausedAt.IsZero() {
 			m.reconcilePausedAt = time.Now()

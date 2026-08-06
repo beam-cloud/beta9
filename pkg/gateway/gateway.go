@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -322,7 +323,7 @@ func (g *Gateway) initGrpcProxy(grpcAddr string) error {
 	g.httpServer.RegisterOnShutdown(func() {
 		cancel()
 	})
-	mux := runtime.NewServeMux()
+	mux := runtime.NewServeMux(runtime.WithOutgoingHeaderMatcher(gatewayOutgoingHeaderMatcher))
 	opts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
 	if err := pb.RegisterPodServiceHandlerFromEndpoint(ctx, mux, grpcAddr, opts); err != nil {
 		return err
@@ -345,6 +346,19 @@ func (g *Gateway) initGrpcProxy(grpcAddr string) error {
 	wrappedHandler := gatewaymiddleware.GatewayEvents(g.EventRepo, g.BackendRepo, g.WorkspaceRepo)(http.StripPrefix(apiv1.HttpServerBaseRoute+"/gateway", mux))
 	g.baseRouteGroup.Any("/gateway/*", wrappedHandler)
 	return nil
+}
+
+func gatewayOutgoingHeaderMatcher(key string) (string, bool) {
+	switch strings.ToLower(key) {
+	case "cache-control":
+		return "Cache-Control", true
+	case "pragma":
+		return "Pragma", true
+	case "content-disposition":
+		return "Content-Disposition", true
+	default:
+		return runtime.DefaultHeaderMatcher(key)
+	}
 }
 
 // Register repository services

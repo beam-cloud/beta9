@@ -72,6 +72,10 @@ type Scheduler struct {
 	workerProvisioningBackoff *workerProvisioningBackoff
 	credentials               *schedulerCredentialCache
 	agentPoolMu               sync.Mutex
+
+	// pushComputeEvent ships placement and capacity events to the admin
+	// workspace's compute stream, the same path pool heartbeats take.
+	pushComputeEvent func(types.EventComputeSchema)
 }
 
 type schedulerCredentialAttachResult struct {
@@ -81,6 +85,12 @@ type schedulerCredentialAttachResult struct {
 }
 
 func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *common.RedisClient, usageRepo repo.UsageMetricsRepository, backendRepo repo.BackendRepository, workspaceRepo repo.WorkspaceRepository, tailscale *network.Tailscale) (*Scheduler, error) {
+	// A malformed failover chain would silently misroute placement, so refuse
+	// to start rather than guess at the operator's intent.
+	if err := config.Scheduling.Failover.Validate(config.Worker.Pools); err != nil {
+		return nil, err
+	}
+
 	eventBus := common.NewEventBus(redisClient)
 	workerRepo := repo.NewWorkerRedisRepository(redisClient, config.Worker)
 	providerRepo := repo.NewProviderRedisRepository(redisClient)
@@ -93,7 +103,7 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 	pushPoolMetrics := newPoolMetricsPusher(ctx, backendRepo, eventRepo)
 
 	// Load worker pools
-	workerPoolManager := NewWorkerPoolManager(config.Worker.Failover.Enabled)
+	workerPoolManager := NewWorkerPoolManager()
 	for name, pool := range config.Worker.Pools {
 		if pool.AgentHosted() {
 			log.Debug().Str("pool_name", name).Str("mode", string(pool.Mode)).Msg("deferring agent-hosted pool until workspace state is reconciled")
@@ -157,6 +167,7 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 		provisioning:              newProvisioningTracker(),
 		workerProvisioningBackoff: newWorkerProvisioningBackoff(),
 		credentials:               newSchedulerCredentialCache(),
+		pushComputeEvent:          pushPoolMetrics,
 	}, nil
 }
 
@@ -246,17 +257,22 @@ func (s *Scheduler) ensureAgentPool(workspaceID string, state *compute.PoolState
 			reflect.DeepEqual(current.Config, config) {
 			return controller, nil
 		}
+		controller.close()
 	}
 
 	created, err := NewAgentWorkerPoolController(AgentWorkerPoolControllerOptions{
-		Context:     s.ctx,
-		Name:        selector,
-		WorkspaceID: workspaceID,
-		Config:      s.config,
-		WorkerPool:  config,
-		PoolState:   state,
-		WorkerRepo:  s.workerRepo,
-		ComputeRepo: s.computeRepo,
+		Context:        s.ctx,
+		Name:           selector,
+		WorkspaceID:    workspaceID,
+		Config:         s.config,
+		WorkerPool:     config,
+		PoolState:      state,
+		WorkerRepo:     s.workerRepo,
+		ComputeRepo:    s.computeRepo,
+		WorkerPoolRepo: s.workerPoolRepo,
+		ProviderRepo:   s.providerRepo,
+		ContainerRepo:  s.containerRepo,
+		PushMetrics:    s.pushComputeEvent,
 	})
 	if err != nil {
 		return nil, err
@@ -281,6 +297,7 @@ func (s *Scheduler) DeleteAgentPool(workspaceID string, state *compute.PoolState
 	if !ok || !controller.owns(workspaceID, selector, state) || controller.poolState.ManagementSource != "" {
 		return
 	}
+	controller.close()
 	s.workerPoolManager.DeletePool(key)
 }
 
@@ -304,6 +321,7 @@ func (s *Scheduler) DeleteManagedAgentPool(selector, instanceID string) {
 	if instanceID != "" && controller.poolState.ManagedInstanceID != instanceID {
 		return
 	}
+	controller.close()
 	s.workerPoolManager.DeletePool(selector)
 }
 
@@ -312,7 +330,7 @@ func normalizeAgentWorkerPoolConfig(state *compute.PoolState) types.WorkerPoolCo
 		config := *state.WorkerConfig
 		config.Mode = types.PoolModeExternal
 		config.Provider = nil
-		config.RequiresPoolSelector = false
+		config.RequiresPoolSelector = state.CreatedByTokenID == types.FailoverOnDemandPoolCreator
 		if config.ContainerRuntime == "" {
 			config.ContainerRuntime = types.ContainerRuntimeRunc.String()
 		}
@@ -569,7 +587,13 @@ func (s *Scheduler) getControllers(request *types.ContainerRequest) ([]WorkerPoo
 		}
 	}
 
+	chain := s.failoverChainFor(request)
+	// Re-add selector-bound pools only through the explicit failover chain.
 	controllers = filterControllersByFlags(controllers, request)
+	// Failover pools come last, so provisioning always tries the requested GPU
+	// type before widening.
+	controllers = append(controllers, s.failoverControllers(chain, controllers)...)
+	controllers = filterControllersByFlagsForFailover(controllers, request, chain)
 	if len(controllers) == 0 {
 		return nil, errors.New("no controller found for request")
 	}
@@ -912,6 +936,10 @@ func isLocalBuildRegistry(buildRegistry string) bool {
 }
 
 func filterControllersByFlags(controllers []WorkerPoolController, request *types.ContainerRequest) []WorkerPoolController {
+	return filterControllersByFlagsForFailover(controllers, request, nil)
+}
+
+func filterControllersByFlagsForFailover(controllers []WorkerPoolController, request *types.ContainerRequest, chain *failoverChain) []WorkerPoolController {
 	filteredControllers := []WorkerPoolController{}
 
 	for _, controller := range controllers {
@@ -930,7 +958,7 @@ func filterControllersByFlags(controllers []WorkerPoolController, request *types
 		}
 
 		if (request.PoolSelector != "" && controller.Name() != request.PoolSelector) ||
-			(request.PoolSelector == "" && controller.RequiresPoolSelector()) {
+			(request.PoolSelector == "" && controller.RequiresPoolSelector() && !chain.contains(controller.Name())) {
 			continue
 		}
 
@@ -967,6 +995,10 @@ func filterWorkersByMachine(workers []*types.Worker, request *types.ContainerReq
 }
 
 func filterWorkersByPoolSelector(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
+	return filterWorkersByPoolSelectorForFailover(workers, request, nil)
+}
+
+func filterWorkersByPoolSelectorForFailover(workers []*types.Worker, request *types.ContainerRequest, chain *failoverChain) []*types.Worker {
 	if request.MachineId != "" {
 		// The machine pin already selected the worker; its pool may require a
 		// selector the request doesn't carry.
@@ -975,7 +1007,7 @@ func filterWorkersByPoolSelector(workers []*types.Worker, request *types.Contain
 	filteredWorkers := []*types.Worker{}
 	for _, worker := range workers {
 		if (request.PoolSelector != "" && workerPoolSelector(worker) == request.PoolSelector) ||
-			(request.PoolSelector == "" && !worker.RequiresPoolSelector) {
+			(request.PoolSelector == "" && (!worker.RequiresPoolSelector || chain.contains(workerPoolSelector(worker)))) {
 			filteredWorkers = append(filteredWorkers, worker)
 		}
 	}
@@ -1005,7 +1037,7 @@ func workerPoolSelector(worker *types.Worker) string {
 	return worker.PoolName
 }
 
-func filterWorkersByResources(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
+func filterWorkersByResources(workers []*types.Worker, request *types.ContainerRequest, chain *failoverChain) []*types.Worker {
 	filteredWorkers := []*types.Worker{}
 	gpuRequestsMap := map[string]int{}
 	requiresGPU := request.RequiresGPU()
@@ -1049,6 +1081,9 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 			// Validate GPU resource availability
 			_, validGpu := gpuRequestsMap[worker.Gpu]
 			validGpu = validGpu || (anyGPU && request.PoolSelector != "")
+			// Failover widens eligibility to the chain's pools, whatever GPU
+			// they host. Scoring keeps them behind the requested GPU type.
+			validGpu = validGpu || chain.contains(worker.PoolName)
 			if !validGpu || worker.FreeGpuCount < gpuCount {
 				continue
 			}
@@ -1109,8 +1144,10 @@ func filterWorkersByStatus(workers []*types.Worker, statuses ...types.WorkerStat
 }
 
 type scoredWorker struct {
-	worker *types.Worker
-	score  int32
+	worker       *types.Worker
+	score        int32
+	failoverRank int32
+	storageRank  int32
 }
 
 // Constants used for scoring workers
@@ -1138,15 +1175,19 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 		return nil, &types.ErrNoSuitableWorkerFound{}
 	}
 
+	// Resolved once per selection from in-memory config; nil when the request
+	// binds no chain, which makes every failover seam below a no-op.
+	chain := s.failoverChainFor(request)
+
 	filteredWorkers := filterWorkersByMachine(workers, request) // Machine-pinned requests only see their machine's worker
 	filteredWorkers = s.filterWorkersByWorkspaceScope(filteredWorkers, request)
-	filteredWorkers = filterWorkersByPoolSelector(filteredWorkers, request)
+	filteredWorkers = filterWorkersByPoolSelectorForFailover(filteredWorkers, request, chain)
 	filteredWorkers = s.filterAgentWorkersByStorage(filteredWorkers, request)
 	filteredWorkers = s.filterMarketplaceWorkers(filteredWorkers, request)
 	filteredWorkers = s.filterLivePrivateAgentWorkers(filteredWorkers, request)
-	filteredWorkers = filterWorkersByResources(filteredWorkers, request)  // Filter workers resource requirements
-	filteredWorkers = s.filterWorkersByFlags(filteredWorkers, request)    // Filter workers by flags
-	filteredWorkers = filterWorkersByStatus(filteredWorkers, statuses...) // Filter workers by lifecycle status
+	filteredWorkers = filterWorkersByResources(filteredWorkers, request, chain) // Filter workers resource requirements
+	filteredWorkers = s.filterWorkersByFlags(filteredWorkers, request)          // Filter workers by flags
+	filteredWorkers = filterWorkersByStatus(filteredWorkers, statuses...)       // Filter workers by lifecycle status
 
 	if len(filteredWorkers) == 0 {
 		return nil, &types.ErrNoSuitableWorkerFound{}
@@ -1156,11 +1197,25 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 	scoredWorkers := []scoredWorker{}
 	for _, worker := range filteredWorkers {
 		score := scoreWorkerForRequest(worker, request)
-		scoredWorkers = append(scoredWorkers, scoredWorker{worker: worker, score: score})
+		scoredWorkers = append(scoredWorkers, scoredWorker{
+			worker:       worker,
+			score:        score,
+			failoverRank: failoverRankForWorker(chain, worker, request),
+			storageRank:  s.storagePreferenceRank(worker, request),
+		})
 	}
 
-	// Select the worker with the highest score
+	// Native requested GPUs take precedence over failover capacity. Within the
+	// same tier, storage-backed work prefers agent capacity so legacy workers
+	// remain available to workspaces that cannot run on agents. Explicit chain
+	// order still takes precedence over ordinary pool priority.
 	sort.Slice(scoredWorkers, func(i, j int) bool {
+		if scoredWorkers[i].failoverRank != scoredWorkers[j].failoverRank {
+			return scoredWorkers[i].failoverRank < scoredWorkers[j].failoverRank
+		}
+		if scoredWorkers[i].storageRank != scoredWorkers[j].storageRank {
+			return scoredWorkers[i].storageRank < scoredWorkers[j].storageRank
+		}
 		if scoredWorkers[i].score != scoredWorkers[j].score {
 			return scoredWorkers[i].score > scoredWorkers[j].score
 		}
@@ -1168,6 +1223,36 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 	})
 
 	return scoredWorkers[0].worker, nil
+}
+
+func failoverRankForWorker(chain *failoverChain, worker *types.Worker, request *types.ContainerRequest) int32 {
+	if chain == nil || worker == nil || request == nil {
+		return 0
+	}
+
+	// A pool can be both native capacity for one explicitly requested GPU and
+	// a configured failover target for another. Treat it as native in that
+	// case; otherwise an unrelated pool outside the chain gets rank zero and
+	// incorrectly jumps ahead of it regardless of priority.
+	if slices.Contains(gpuRequestsForScheduling(request), worker.Gpu) {
+		return 0
+	}
+	return chain.rank(worker.PoolName)
+}
+
+func (s *Scheduler) storagePreferenceRank(worker *types.Worker, request *types.ContainerRequest) int32 {
+	if worker == nil || request == nil || !request.StorageAvailable() {
+		return 0
+	}
+	if worker.ControlPlaneManaged {
+		return 0
+	}
+	if s != nil && s.workerPoolManager != nil {
+		if pool, ok := s.workerPoolManager.GetPool(workerPoolSelector(worker)); ok && pool.Config.AgentHosted() {
+			return 0
+		}
+	}
+	return 1
 }
 
 func (s *Scheduler) filterAgentWorkersByStorage(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {

@@ -143,59 +143,28 @@ func (s *Service) launchPoolCapacityLocked(ctx context.Context, workspaceID, act
 	}
 
 	vendors := s.computeVendors()
-	newReservations := append([]model.Reservation{}, reservations...)
-	createdReservations := []model.Reservation{}
-	cleanupLaunchFailure := func(code string, cause error) *pb.LaunchPoolCapacityResponse {
-		err := s.compensatePoolLaunchFailure(ctx, workspaceID, pool.Name, existing, vendors, createdReservations, cause)
-		return launchPoolError(code, err.Error(), billingDecision{})
-	}
-	for _, action := range plan.Actions {
-		if action.Type != model.ActionCreate {
-			continue
-		}
-		vendor := vendors[action.Offer.Provider]
-		if vendor == nil {
-			return launchPoolError("provider_unavailable", fmt.Sprintf("vendor %q is not configured", action.Offer.Provider), billingDecision{}), nil
-		}
-		for i := uint32(0); i < action.Count; i++ {
-			machineSeed, err := generateComputeToken()
-			if err != nil {
-				return cleanupLaunchFailure("bootstrap_failed", err), nil
-			}
-			machineID := model.ManagedMachineID(workspaceID, pool.Name, machineSeed)
-			nodeName := model.ManagedNodeName(workspaceID, pool.Name, machineID)
-
+	createdReservations, code, err := s.createPlanReservations(ctx, workspaceID, plan, vendors, poolLaunchSpec{
+		poolName:       pool.Name,
+		selector:       pool.Selector,
+		ttl:            pool.TTL,
+		maxSpendMicros: providerMaxSpendMicros,
+		bootstrap: func(ctx context.Context, machineID string) (string, string, error) {
 			// Persistent: provider boot times routinely exceed any fixed TTL.
-			bootstrapCommand, registrationToken, err := s.createPersistentPrivatePoolJoinCommandForWorkspace(ctx, workspaceID, pool.Name, poolCreatedAt, machineID)
-			if err != nil {
-				return cleanupLaunchFailure("bootstrap_failed", err), nil
-			}
-			reservation, err := vendor.CreateReservation(ctx, model.ReservationRequest{
-				PoolName:          pool.Name,
-				MachineID:         machineID,
-				Name:              nodeName,
-				Selector:          pool.Selector,
-				Offer:             action.Offer,
-				Count:             1,
-				TTL:               pool.TTL,
-				MaxSpendMicros:    providerMaxSpendMicros,
-				Source:            model.SourceCLIReservation,
-				RegistrationToken: registrationToken,
-				BootstrapCommand:  bootstrapCommand,
-			})
-			if err != nil {
-				return cleanupLaunchFailure("provider_failure", err), nil
-			}
-			if reservation == nil {
-				return cleanupLaunchFailure("provider_failure", fmt.Errorf("vendor returned empty reservation")), nil
-			}
-			reservation.MachineID = firstNonEmpty(reservation.MachineID, machineID)
-			reservation.Name = firstNonEmpty(reservation.Name, nodeName)
-			reservation.RegistrationTokenHash = hashComputeToken(registrationToken)
-			createdReservations = append(createdReservations, *reservation)
-			newReservations = append(newReservations, *reservation)
+			return s.createPersistentPrivatePoolJoinCommandForWorkspace(ctx, workspaceID, pool.Name, poolCreatedAt, machineID)
+		},
+	})
+	if err != nil {
+		err = s.compensatePoolLaunchFailure(ctx, workspaceID, pool.Name, existing, vendors, createdReservations, err)
+		return launchPoolError(code, err.Error(), billingDecision{}), nil
+	}
+	for i := range createdReservations {
+		reservation := &createdReservations[i]
+		if err := s.createMachineSSHState(ctx, workspaceID, pool.Name, reservation.MachineID, reservation); err != nil {
+			err = s.compensatePoolLaunchFailure(ctx, workspaceID, pool.Name, existing, vendors, createdReservations, err)
+			return launchPoolError("ssh_bootstrap_failed", err.Error(), billingDecision{}), nil
 		}
 	}
+	newReservations := append(append([]model.Reservation{}, reservations...), createdReservations...)
 
 	now := time.Now()
 	state := &model.PoolState{
@@ -239,6 +208,100 @@ func (s *Service) launchPoolCapacityLocked(ctx context.Context, workspaceID, act
 	s.emitComputeEvent(types.EventComputePool, computePoolEvent(workspaceID, state, types.EventComputeActionPoolReserved, ""))
 
 	return &pb.LaunchPoolCapacityResponse{Ok: true, Pool: s.privatePoolStateToProto(state)}, nil
+}
+
+// poolLaunchSpec is the pool-shaped half of a launch: where machines land and
+// how they bootstrap. Tenant launches join a private pool; on-demand failover
+// capacity joins a control-plane managed pool. Everything else about creating
+// reservations is identical, so both paths share createPlanReservations.
+type poolLaunchSpec struct {
+	poolName       string
+	selector       string
+	ttl            time.Duration
+	maxSpendMicros int64
+	// bootstrap returns the machine's install command and registration token.
+	bootstrap func(ctx context.Context, machineID string) (command string, token string, err error)
+}
+
+const (
+	launchErrorProviderUnavailable = "provider_unavailable"
+	launchErrorBootstrapFailed     = "bootstrap_failed"
+	launchErrorProviderFailure     = "provider_failure"
+)
+
+// createPlanReservations executes a solved plan's create actions against the
+// vendors. On failure it returns the reservations created so far, so the caller
+// can release them with the rollback appropriate to its pool state.
+func (s *Service) createPlanReservations(ctx context.Context, workspaceID string, plan model.SolvePlan, vendors map[string]model.Vendor, spec poolLaunchSpec) ([]model.Reservation, string, error) {
+	created := []model.Reservation{}
+	for _, action := range plan.Actions {
+		if action.Type != model.ActionCreate {
+			continue
+		}
+		vendor := vendors[action.Offer.Provider]
+		if vendor == nil {
+			return created, launchErrorProviderUnavailable, fmt.Errorf("vendor %q is not configured", action.Offer.Provider)
+		}
+		for i := uint32(0); i < action.Count; i++ {
+			machineSeed, err := generateComputeToken()
+			if err != nil {
+				return created, launchErrorBootstrapFailed, err
+			}
+			machineID := model.ManagedMachineID(workspaceID, spec.poolName, machineSeed)
+			nodeName := model.ManagedNodeName(workspaceID, spec.poolName, machineID)
+
+			bootstrapCommand, registrationToken, err := spec.bootstrap(ctx, machineID)
+			if err != nil {
+				return created, launchErrorBootstrapFailed, err
+			}
+			reservation, err := vendor.CreateReservation(ctx, model.ReservationRequest{
+				PoolName:          spec.poolName,
+				MachineID:         machineID,
+				Name:              nodeName,
+				Selector:          spec.selector,
+				Offer:             action.Offer,
+				Count:             1,
+				TTL:               spec.ttl,
+				MaxSpendMicros:    spec.maxSpendMicros,
+				Source:            model.SourceCLIReservation,
+				RegistrationToken: registrationToken,
+				BootstrapCommand:  bootstrapCommand,
+			})
+			if err != nil {
+				_ = s.revokeComputeJoinTokenHash(ctx, hashComputeToken(registrationToken))
+				return created, launchErrorProviderFailure, err
+			}
+			if reservation == nil {
+				_ = s.revokeComputeJoinTokenHash(ctx, hashComputeToken(registrationToken))
+				return created, launchErrorProviderFailure, fmt.Errorf("vendor returned empty reservation")
+			}
+			reservation.MachineID = firstNonEmpty(reservation.MachineID, machineID)
+			reservation.Name = firstNonEmpty(reservation.Name, nodeName)
+			reservation.RegistrationTokenHash = hashComputeToken(registrationToken)
+			created = append(created, *reservation)
+		}
+	}
+	return created, "", nil
+}
+
+// releaseReservations revokes registration tokens and deletes machines at the
+// vendor, reporting whatever it could not clean up.
+func (s *Service) releaseReservations(ctx context.Context, vendors map[string]model.Vendor, reservations []model.Reservation) []string {
+	failures := []string{}
+	for _, reservation := range reservations {
+		// Rolled-back reservations must not leave live registration tokens.
+		s.revokeReservationJoinToken(ctx, &reservation)
+		vendor := vendors[reservation.Provider]
+		if vendor == nil {
+			failures = append(failures, fmt.Sprintf("vendor %q is not configured", reservation.Provider))
+			continue
+		}
+		instanceID := computeReservationInstanceID(reservation)
+		if err := vendor.DeleteReservation(ctx, instanceID); err != nil {
+			failures = append(failures, fmt.Sprintf("delete reservation %q: %v", instanceID, err))
+		}
+	}
+	return failures
 }
 
 // validatePoolLaunchCompatible rejects launches that would change the node
@@ -414,18 +477,12 @@ func launchPoolError(code, msg string, decision billingDecision) *pb.LaunchPoolC
 }
 
 func (s *Service) compensatePoolLaunchFailure(ctx context.Context, workspaceID, poolName string, previous *model.PoolState, vendors map[string]model.Vendor, reservations []model.Reservation, cause error) error {
-	failures := []string{}
+	failures := s.releaseReservations(ctx, vendors, reservations)
 	for _, reservation := range reservations {
-		// Rolled-back reservations must not leave live registration tokens.
-		s.revokeReservationJoinToken(ctx, &reservation)
-		vendor := vendors[reservation.Provider]
-		if vendor == nil {
-			failures = append(failures, fmt.Sprintf("vendor %q is not configured", reservation.Provider))
-			continue
-		}
-		instanceID := computeReservationInstanceID(reservation)
-		if err := vendor.DeleteReservation(ctx, instanceID); err != nil {
-			failures = append(failures, fmt.Sprintf("delete reservation %q: %v", instanceID, err))
+		if reservation.MachineID != "" && s.computeRepo != nil {
+			if err := s.computeRepo.DeleteMachineSSHState(ctx, workspaceID, poolName, reservation.MachineID); err != nil {
+				failures = append(failures, fmt.Sprintf("delete SSH state for %q: %v", reservation.MachineID, err))
+			}
 		}
 	}
 

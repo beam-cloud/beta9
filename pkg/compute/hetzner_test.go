@@ -129,9 +129,9 @@ func TestHetznerCreateGetDeleteReservation(t *testing.T) {
 			}`))
 		case r.Method == http.MethodPost && r.URL.Path == "/servers":
 			require.NoError(t, json.Unmarshal(body, &createBody))
-			_, _ = w.Write([]byte(`{"server":{"id":42,"name":"beam-workspace-cpu-pool-machine-1","status":"initializing","location":{"name":"ash"},"server_type":{"id":45,"name":"cpx31","cores":4,"memory":8,"disk":160}}}`))
+			_, _ = w.Write([]byte(`{"server":{"id":42,"name":"beam-workspace-cpu-pool-machine-1","status":"initializing","location":{"name":"ash"},"public_net":{"ipv4":{"ip":"192.0.2.10"}},"server_type":{"id":45,"name":"cpx31","cores":4,"memory":8,"disk":160}}}`))
 		case r.Method == http.MethodGet && r.URL.Path == "/servers/42":
-			_, _ = w.Write([]byte(`{"server":{"id":42,"name":"beam-workspace-cpu-pool-machine-1","status":"running","location":{"name":"ash"},"server_type":{"id":45,"name":"cpx31","cores":4,"memory":8,"disk":160}}}`))
+			_, _ = w.Write([]byte(`{"server":{"id":42,"name":"beam-workspace-cpu-pool-machine-1","status":"running","location":{"name":"ash"},"public_net":{"ipv4":{"ip":"192.0.2.10"}},"server_type":{"id":45,"name":"cpx31","cores":4,"memory":8,"disk":160}}}`))
 		case r.Method == http.MethodDelete && r.URL.Path == "/servers/42":
 			sawDelete = true
 			_, _ = w.Write([]byte(`{"action":{"id":1,"status":"running","command":"delete_server"}}`))
@@ -170,6 +170,8 @@ func TestHetznerCreateGetDeleteReservation(t *testing.T) {
 	require.Equal(t, int64(4000), reservation.CPUMillicores)
 	require.Equal(t, int64(8192), reservation.MemoryMB)
 	require.Equal(t, int64(163840), reservation.StorageMB)
+	require.Equal(t, "192.0.2.10", reservation.PublicIP)
+	require.Equal(t, uint32(22), reservation.SSHPort)
 	require.Equal(t, "cpx31", createBody["server_type"])
 	require.Equal(t, "ubuntu-24.04", createBody["image"])
 	require.Equal(t, "ash", createBody["location"])
@@ -184,6 +186,8 @@ func TestHetznerCreateGetDeleteReservation(t *testing.T) {
 	require.Equal(t, ReservationActive, current.Status)
 	require.Equal(t, "ash", current.Region)
 	require.Equal(t, "cpx31", current.OfferID)
+	require.Equal(t, "192.0.2.10", current.SSHHost)
+	require.Equal(t, uint32(22), current.SSHPort)
 
 	require.NoError(t, client.DeleteReservation(context.Background(), "42"))
 	require.True(t, sawDelete)

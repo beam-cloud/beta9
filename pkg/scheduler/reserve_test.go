@@ -86,7 +86,7 @@ func TestProvisioningFailureBackoffSkipsImmediateAddWorkerRetry(t *testing.T) {
 func TestProvisioningAttemptDoesNotFailOverWithinReservation(t *testing.T) {
 	scheduler, err := NewSchedulerForTest()
 	assert.Nil(t, err)
-	scheduler.workerPoolManager = NewWorkerPoolManager(false)
+	scheduler.workerPoolManager = NewWorkerPoolManager()
 
 	primaryStarted := make(chan struct{}, 1)
 	secondaryStarted := make(chan struct{}, 1)
@@ -241,11 +241,15 @@ func TestPrivatePoolMissFallsBackToRegularAvailableWorker(t *testing.T) {
 	}
 	withoutStorage := request.Clone()
 	withoutStorage.Workspace = types.Workspace{}
+	withoutStorage.Env = []string{"BETA9_TOKEN=user-token"}
+	withoutStorage = withoutStorage.PrivateWorkerRequest()
 	privateController.hasCapacity = true
 	fallback, poolName, ok := newSchedulingAttempt(scheduler, withoutStorage, nil).privatePoolFallbackRequest()
 	assert.True(t, ok)
 	assert.Equal(t, "private-cpu", poolName)
 	assert.Empty(t, fallback.PoolSelector)
+	assert.True(t, fallback.RuntimeTokenRequired)
+	assert.Empty(t, fallback.Env)
 	privateController.hasCapacity = false
 
 	setPendingSchedulerRequests(t, scheduler, request)
@@ -307,7 +311,7 @@ func TestPrivatePoolMissWithDurableDiskDoesNotFallback(t *testing.T) {
 func TestPrivatePoolMissWithoutRegularCapacityKeepsPrivateSelector(t *testing.T) {
 	scheduler, err := NewSchedulerForTest()
 	assert.Nil(t, err)
-	scheduler.workerPoolManager = NewWorkerPoolManager(false)
+	scheduler.workerPoolManager = NewWorkerPoolManager()
 	workspaceID := "workspace-private-no-capacity"
 
 	started := make(chan struct{}, 1)

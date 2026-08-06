@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	pathpkg "path"
+	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/registry"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -131,17 +132,12 @@ type agentConfigWorker struct {
 	ContainerLogLinesPerHour   int                        `json:"containerLogLinesPerHour"`
 	DefaultWorkerCPURequest    int64                      `json:"defaultWorkerCPURequest"`
 	DefaultWorkerMemoryRequest int64                      `json:"defaultWorkerMemoryRequest"`
-	Failover                   agentConfigWorkerFailover  `json:"failover"`
 	Pools                      map[string]agentConfigPool `json:"pools"`
 }
 
 type agentConfigResourceLimits struct {
 	CPUAffinityEnforced bool `json:"cpuAffinityEnforced"`
 	MemoryEnforced      bool `json:"memoryEnforced"`
-}
-
-type agentConfigWorkerFailover struct {
-	MaxSchedulingLatencyMs int `json:"maxSchedulingLatencyMs"`
 }
 
 type agentConfigPool struct {
@@ -178,10 +174,11 @@ type agentConfigCache struct {
 }
 
 type agentConfigCacheDisk struct {
-	Enabled     bool    `json:"enabled"`
-	HostPath    string  `json:"hostPath"`
-	MountPath   string  `json:"mountPath"`
-	MaxUsagePct float64 `json:"maxUsagePct"`
+	Enabled      bool    `json:"enabled"`
+	HostPath     string  `json:"hostPath"`
+	MountPath    string  `json:"mountPath"`
+	MaxUsagePct  float64 `json:"maxUsagePct"`
+	MinFreeBytes int64   `json:"minFreeBytes"`
 }
 
 type agentConfigCacheMemory struct {
@@ -215,10 +212,11 @@ func writeWorkerConfig(path string, bootstrap bootstrapConfig, slot *pb.AgentWor
 }
 
 func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) agentWorkerConfig {
-	workspaceStorageMode := firstNonEmpty(os.Getenv(types.AgentStorageModeEnv), types.StorageModeGeese)
-	cache := agentDiskCacheConfig()
+	poolConfig := slot.GetPoolConfig()
+	workspaceStorageMode := firstNonEmpty(poolConfig.GetStorageMode(), os.Getenv(types.AgentStorageModeEnv), types.StorageModeGeese)
+	cache := agentDiskCacheConfig(slot)
 	httpHost, httpPort, httpTLS := agentGatewayHTTPParts(bootstrap)
-	cacheFSEnabled := !envBool(types.AgentInContainerEnv)
+	cacheFSEnabled := cache.Enabled && !envBool(types.AgentInContainerEnv)
 	cacheLocality := agentCacheLocality(bootstrap, slot)
 	poolMode := slotPoolMode(slot)
 	poolRuntime := slotContainerRuntime(slot)
@@ -242,6 +240,14 @@ func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) a
 	cpuAffinityEnforced := envBoolDefault(types.AgentCPUAffinityEnforcedEnv, true)
 	if poolMode == string(types.PoolModeExternal) {
 		cpuAffinityEnforced = slot.CpuAffinityEnforced
+	}
+	networkPreallocation := true
+	criuEnabled := true
+	tmpSizeLimit := types.AgentTmpSizeLimit
+	if poolConfig != nil {
+		networkPreallocation = poolConfig.NetworkPreallocation
+		criuEnabled = poolConfig.CriuEnabled
+		tmpSizeLimit = firstNonEmpty(poolConfig.TmpSizeLimit, types.AgentTmpSizeLimit)
 	}
 
 	return agentWorkerConfig{
@@ -292,14 +298,11 @@ func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) a
 				CPUAffinityEnforced: cpuAffinityEnforced,
 				MemoryEnforced:      poolRuntime == types.ContainerRuntimeGvisor.String(),
 			},
-			CacheEnabled:               true,
+			CacheEnabled:               cache.Enabled,
 			TerminationGracePeriod:     30,
 			ContainerLogLinesPerHour:   6000,
 			DefaultWorkerCPURequest:    slot.Cpu,
 			DefaultWorkerMemoryRequest: slot.Memory,
-			Failover: agentConfigWorkerFailover{
-				MaxSchedulingLatencyMs: 300000,
-			},
 			Pools: map[string]agentConfigPool{
 				slot.PoolName: {
 					Mode:                      poolMode,
@@ -307,13 +310,13 @@ func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) a
 					ContainerRuntime:          poolRuntime,
 					ContainerRuntimeConfig:    agentRuntimeConfig,
 					ContainerStartConcurrency: int(slot.ContainerStartConcurrency),
-					NetworkPreallocation:      true,
+					NetworkPreallocation:      networkPreallocation,
 					NetworkSlotPoolSize:       int(slot.NetworkSlotPoolSize),
 					RequiresPoolSelector:      slot.RequiresPoolSelector || poolMode == string(types.PoolModePrivate),
 					Priority:                  priority,
 					Preemptable:               slot.Preemptable,
-					CRIUEnabled:               true,
-					TmpSizeLimit:              types.AgentTmpSizeLimit,
+					CRIUEnabled:               criuEnabled,
+					TmpSizeLimit:              tmpSizeLimit,
 					StorageMode:               workspaceStorageMode,
 					CheckpointPath:            types.AgentCheckpointPath,
 					Cache:                     cache,
@@ -321,14 +324,14 @@ func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) a
 			},
 		},
 		Cache: agentConfigCache{
-			Enabled: true,
+			Enabled: cache.Enabled,
 			Disk:    cache.Disk,
 			Memory:  &agentConfigCacheMemory{Enabled: false},
 			Global: &agentConfigCacheGlobal{
 				DefaultLocality: cacheLocality,
 			},
 			Server: &agentConfigCacheServer{
-				DiskCacheDir: pathpkg.Join(types.AgentCachePath, sanitizeDockerName(cacheLocality), sanitizeDockerName(slot.MachineId)),
+				DiskCacheDir: pathpkg.Join(cache.Disk.MountPath, sanitizeDockerName(cacheLocality), sanitizeDockerName(slot.MachineId)),
 			},
 			Client: &agentConfigCacheClient{
 				CacheFS: agentConfigCacheFS{
@@ -414,6 +417,11 @@ func managedComputeConfigForSlot(bootstrap bootstrapConfig, slot *pb.AgentWorker
 }
 
 func agentCacheLocality(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) string {
+	if slot != nil && slot.GetPoolConfig() != nil {
+		if group := strings.TrimSpace(slot.GetPoolConfig().GetConfigGroup()); group != "" {
+			return group
+		}
+	}
 	poolName := firstNonEmpty(bootstrap.PoolName, types.DefaultAgentName)
 	if slot != nil && slot.PoolName != "" {
 		poolName = slot.PoolName
@@ -430,7 +438,6 @@ func (c agentWorkerConfig) sanitizedForAgent() agentWorkerConfig {
 	c.Monitoring.Prometheus = agentConfigPrometheus{}
 	c.Worker.HostNetwork = true
 	c.Worker.UseHostResolvConf = true
-	c.Worker.CacheEnabled = true
 	for name, pool := range c.Worker.Pools {
 		// Agent workers run in private, marketplace, or managed external mode;
 		// any other supplied mode is sanitized to private.
@@ -438,16 +445,13 @@ func (c agentWorkerConfig) sanitizedForAgent() agentWorkerConfig {
 			pool.Mode = string(types.PoolModePrivate)
 			pool.RequiresPoolSelector = true
 		}
-		pool.CRIUEnabled = true
-		pool.Cache.Enabled = true
-		pool.Cache.Disk.Enabled = true
 		c.Worker.Pools[name] = pool
 	}
 	return c
 }
 
-func agentDiskCacheConfig() agentConfigCache {
-	return agentConfigCache{
+func agentDiskCacheConfig(slot *pb.AgentWorkerSlot) agentConfigCache {
+	config := agentConfigCache{
 		Enabled: true,
 		Disk: agentConfigCacheDisk{
 			Enabled:     true,
@@ -456,4 +460,20 @@ func agentDiskCacheConfig() agentConfigCache {
 			MaxUsagePct: 0.95,
 		},
 	}
+	if slot == nil || slot.GetPoolConfig() == nil || slot.GetPoolConfig().GetCache() == nil {
+		return config
+	}
+	poolCache := slot.GetPoolConfig().GetCache()
+	config.Enabled = poolCache.GetEnabled()
+	if disk := poolCache.GetDisk(); disk != nil {
+		config.Disk.Enabled = disk.GetEnabled()
+		config.Disk.HostPath = firstNonEmpty(disk.GetHostPath(), types.AgentCachePath)
+		config.Disk.MountPath = firstNonEmpty(disk.GetMountPath(), types.AgentCachePath)
+		config.Disk.MaxUsagePct = disk.GetMaxUsagePct()
+		if config.Disk.MaxUsagePct == 0 {
+			config.Disk.MaxUsagePct = 0.95
+		}
+		config.Disk.MinFreeBytes = disk.GetMinFreeBytes()
+	}
+	return config
 }

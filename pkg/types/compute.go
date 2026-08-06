@@ -148,10 +148,14 @@ type ComputeReservation struct {
 	LastStatusCheckAt     time.Time
 	LastBillingCheckAt    time.Time
 	LastReconcileAt       time.Time
+	IdleSince             time.Time // First tick with no work on on-demand failover capacity; cleared when work lands, drives scale-down
 	LastStatusMessage     string
 	LastError             string
 	TerminatingReason     string
 	RegistrationTokenHash string
+	PublicIP              string
+	SSHHost               string
+	SSHPort               uint32
 }
 
 func (r ComputeReservation) ActiveAt(now time.Time) bool {

@@ -90,6 +90,18 @@ func (gws *GatewayService) ListPoolMachines(ctx context.Context, in *pb.ListPool
 	return gws.computeService.ListPoolMachines(ctx, in)
 }
 
+func (gws *GatewayService) DownloadMachineSSHKey(ctx context.Context, in *pb.DownloadMachineSSHKeyRequest) (*pb.DownloadMachineSSHKeyResponse, error) {
+	return gws.computeService.DownloadMachineSSHKey(ctx, in)
+}
+
+func (gws *GatewayService) RotateMachineSSHKey(ctx context.Context, in *pb.RotateMachineSSHKeyRequest) (*pb.RotateMachineSSHKeyResponse, error) {
+	return gws.computeService.RotateMachineSSHKey(ctx, in)
+}
+
+func (gws *GatewayService) ActivateMachineSSHKey(ctx context.Context, in *pb.ActivateMachineSSHKeyRequest) (*pb.ActivateMachineSSHKeyResponse, error) {
+	return gws.computeService.ActivateMachineSSHKey(ctx, in)
+}
+
 func (gws *GatewayService) ListPoolOffers(ctx context.Context, in *pb.ListPoolOffersRequest) (*pb.ListPoolOffersResponse, error) {
 	return gws.computeService.ListPoolOffers(ctx, in)
 }
@@ -142,6 +154,10 @@ func (gws *GatewayService) UpdateAgentRouteStatus(ctx context.Context, in *pb.Up
 
 func (gws *GatewayService) UpdateAgentAvailability(ctx context.Context, in *pb.UpdateAgentAvailabilityRequest) (*pb.UpdateAgentAvailabilityResponse, error) {
 	return gws.computeService.UpdateAgentAvailability(ctx, in)
+}
+
+func (gws *GatewayService) UpdateAgentSSHStatus(ctx context.Context, in *pb.UpdateAgentSSHStatusRequest) (*pb.UpdateAgentSSHStatusResponse, error) {
+	return gws.computeService.UpdateAgentSSHStatus(ctx, in)
 }
 
 func (gws *GatewayService) StreamAgentTelemetry(stream pb.GatewayService_StreamAgentTelemetryServer) error {

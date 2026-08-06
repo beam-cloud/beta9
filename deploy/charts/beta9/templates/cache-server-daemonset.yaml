@@ -96,6 +96,8 @@ spec:
           readOnly: true
         - name: cache
           mountPath: {{ .Values.cacheServer.mountPath }}
+        - name: images
+          mountPath: /images
         {{- with .Values.cacheServer.resources }}
         resources:
           {{- toYaml . | nindent 10 }}
@@ -108,4 +110,13 @@ spec:
         hostPath:
           path: {{ .Values.cacheServer.hostPath }}
           type: DirectoryOrCreate
+      - name: images
+        {{- if .Values.config.worker.imagePVCName }}
+        persistentVolumeClaim:
+          claimName: {{ .Values.config.worker.imagePVCName }}
+        {{- else }}
+        hostPath:
+          path: {{ .Values.cacheServer.imagesHostPath }}
+          type: DirectoryOrCreate
+        {{- end }}
 {{- end -}}

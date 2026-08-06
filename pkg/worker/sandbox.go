@@ -29,8 +29,8 @@ const (
 	// 4. Wait up to 30s for dockerd to be ready (usually takes 2-5s)
 	goprocReadyTimeout            = 30 * time.Second
 	goprocReadyProbeTimeout       = 50 * time.Millisecond
-	goprocInitialBackoff          = 10 * time.Millisecond
-	goprocMaxBackoff              = 50 * time.Millisecond
+	goprocInitialBackoff          = 5 * time.Millisecond
+	goprocMaxBackoff              = 15 * time.Millisecond
 	goprocBackoffMultiplier       = 1.5
 	sandboxSetupCommandTimeout    = 10 * time.Second
 	dockerDaemonStartupTimeout    = 30 * time.Second
@@ -403,7 +403,11 @@ func (s *Worker) dockerStartupCanceled(ctx context.Context, containerId string, 
 	if !exists {
 		return true
 	}
-	return instance != nil && instance.StopReason != ""
+	if instance == nil {
+		return false
+	}
+	_, stopReason := instance.lifecycleState()
+	return stopReason != ""
 }
 
 func dockerStartupCanceled(ctx context.Context, err error) bool {

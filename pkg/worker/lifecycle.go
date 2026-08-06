@@ -87,7 +87,7 @@ func (s *Worker) handleStopContainerArgs(stopArgs types.StopContainerArgs, sourc
 
 	if containerInstance, exists := s.containerInstances.Get(stopArgs.ContainerId); exists {
 		log.Info().Str("container_id", stopArgs.ContainerId).Msg("received stop container event")
-		containerInstance.StopReason = reason
+		containerInstance.setStopReason(reason)
 		s.containerInstances.Set(stopArgs.ContainerId, containerInstance)
 		s.recordContainerEvent(context.Background(), containerInstance.Request, types.EventContainerEventSchema{
 			ID:          types.ContainerEventWorkerStopEventReceived,
@@ -99,7 +99,7 @@ func (s *Worker) handleStopContainerArgs(stopArgs types.StopContainerArgs, sourc
 				types.EventAttrForce: fmt.Sprintf("%t", stopArgs.Force),
 			},
 		})
-		s.cancelBuild(stopArgs.ContainerId)
+		s.cancelContainer(stopArgs.ContainerId)
 		s.stopContainerChan <- stopContainerEvent{ContainerId: stopArgs.ContainerId, Kill: stopArgs.Force}
 	}
 
@@ -172,7 +172,7 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 		if request != nil && request.Stub.Type.Kind() == types.StubTypeSandbox {
 			instance.signalProcessManagerReadiness(false)
 		}
-		instance.ExitCode = exitCode
+		instance.setExitCode(exitCode)
 		s.containerInstances.Set(containerId, instance)
 	}
 
@@ -552,7 +552,12 @@ func requiresPostBuildImageMaterialization(request *types.ContainerRequest, clip
 
 func (s *Worker) pullLazyWithMetrics(ctx context.Context, request *types.ContainerRequest, phase string, outputLogger *slog.Logger) (time.Duration, error) {
 	phaseStart := time.Now()
-	elapsed, err := s.imageClient.PullLazy(ctx, request, outputLogger, request.CheckpointEnabled || request.Stub.Type.IsDeployment())
+	// A deployment must not eagerly inflate every OCI layer before its runtime
+	// can start. Large model images can spend tens of minutes on one compressed
+	// layer even when the entrypoint only needs a small working set. Checkpoint
+	// creation still requires a fully materialized root filesystem; ordinary
+	// deployments use CLIP's lazy, content-addressed read path.
+	elapsed, err := s.imageClient.PullLazy(ctx, request, outputLogger, request.CheckpointEnabled)
 	metrics.RecordWorkerStartupPhase(phase, time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 	spanID := types.ContainerLifecycleImageLoad
 	if phase != "pull_lazy" && phase != "pull_lazy_after_build" {
@@ -1204,7 +1209,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	containerInstance.BundlePath = opts.BundlePath
 	containerInstance.Overlay = overlay
 	containerInstance.Spec = spec
-	containerInstance.ExitCode = -1
+	containerInstance.setExitCode(-1)
 	containerInstance.OutputWriter = common.NewOutputWriter(func(s string) {
 		outputLogger.Info(s, "done", false, "success", false)
 	})
@@ -1486,8 +1491,11 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	stopReason := types.StopContainerReasonUnknown
 	containerInstance, exists = s.containerInstances.Get(containerId)
-	if exists && containerInstance.StopReason != "" {
-		stopReason = types.StopContainerReason(containerInstance.StopReason)
+	if exists {
+		_, instanceStopReason := containerInstance.lifecycleState()
+		if instanceStopReason != "" {
+			stopReason = instanceStopReason
+		}
 	}
 	rawExitCode := exitCode
 
@@ -1653,15 +1661,13 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 			s.startAutoCheckpoint(ctx, request, outputLogger, checkpointPIDChan)
 		}
 	}
-	fallbackFromCheckpoint := func(startCheckpoint bool) error {
+	fallbackFromCheckpoint := func() error {
 		restoringCheckpoint = false
 		request.Checkpoint = nil
 		if err := s.prepareRestoreFallback(request, originalConfig); err != nil {
 			return fmt.Errorf("prepare checkpoint restore fallback: %w", err)
 		}
-		if startCheckpoint {
-			startAutoCheckpoint()
-		}
+		startAutoCheckpoint()
 		return nil
 	}
 
@@ -1670,24 +1676,29 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 	}
 
 	runtimeStartedChan := make(chan int, 1)
-	runtimeStartedDone := make(chan struct{})
-	runtimeStartedHandled := make(chan struct{})
-	var runtimeStartedOnce sync.Once
-	finishRuntimeStarted := func() {
-		runtimeStartedOnce.Do(func() {
-			close(runtimeStartedDone)
-			<-runtimeStartedHandled
-		})
-	}
 	runtimeStart := time.Now()
+	var runtimeStartedPublished sync.Once
+	var runtimeStartedPID atomic.Int64
+	runtimeStartedPID.Store(-1)
 
-	handleRuntimeStarted := func(pid int) {
-		releaseStartupSlot()
+	publishRuntimeStarted := func(pid int) {
 		if err := s.publishContainerAddresses(ctx, request, startupPortBindings); err != nil {
 			log.Error().Err(err).Str("container_id", request.ContainerId).Msg("failed to publish container address")
 			s.stopContainer(request.ContainerId, false)
 			return
 		}
+		runtimeStartedPublished.Do(func() {
+			select {
+			case startedChan <- pid:
+			case <-ctx.Done():
+			}
+		})
+		s.markContainerRunning(ctx, request, startupStartedAt)
+	}
+
+	handleRuntimeStarted := func(pid int) {
+		releaseStartupSlot()
+		runtimeStartedPID.Store(int64(pid))
 		if instance, exists := s.containerInstances.Get(request.ContainerId); exists {
 			instance.RuntimeStarted = true
 			instance.RuntimePid = pid
@@ -1706,10 +1717,12 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 			"runtime": instance.Runtime.Name(),
 			"pid":     fmt.Sprintf("%d", pid),
 		}))
-		select {
-		case startedChan <- pid:
-		case <-ctx.Done():
-			return
+
+		// A restore can emit a PID and still fail. Do not consume the one-shot
+		// startup notification until the restore is known-good; a cold fallback
+		// must publish its own PID to monitoring and checkpoint consumers.
+		if !restoringCheckpoint {
+			publishRuntimeStarted(pid)
 		}
 
 		if request.Stub.Type.Kind() == types.StubTypeSandbox && request.GpuVirtualized {
@@ -1726,11 +1739,23 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 		s.markContainerRunning(ctx, request, startupStartedAt)
 	}
 
-	go func() {
-		defer close(runtimeStartedHandled)
-		defer releaseStartupSlot()
-		waitForRuntimeStarted(ctx, runtimeStartedChan, runtimeStartedDone, handleRuntimeStarted)
-	}()
+	startRuntimeStartedHandler := func() func() {
+		runtimeStartedDone := make(chan struct{})
+		runtimeStartedHandled := make(chan struct{})
+		var runtimeStartedOnce sync.Once
+		go func() {
+			defer close(runtimeStartedHandled)
+			defer releaseStartupSlot()
+			waitForRuntimeStarted(ctx, runtimeStartedChan, runtimeStartedDone, handleRuntimeStarted)
+		}()
+		return func() {
+			runtimeStartedOnce.Do(func() {
+				close(runtimeStartedDone)
+				<-runtimeStartedHandled
+			})
+		}
+	}
+	finishRuntimeStarted := startRuntimeStartedHandler()
 
 	// Handle restore from checkpoint if available
 	if restoringCheckpoint {
@@ -1746,7 +1771,7 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 				finishRuntimeStarted()
 				return -1, restoreErr
 			}
-			if err := fallbackFromCheckpoint(true); err != nil {
+			if err := fallbackFromCheckpoint(); err != nil {
 				finishRuntimeStarted()
 				return -1, err
 			}
@@ -1768,6 +1793,11 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 			log.Info().Str("container_id", request.ContainerId).Str("checkpoint_id", request.Checkpoint.CheckpointId).Dur("duration", runtimeRestoreDuration).Bool("restored", restored).Err(err).Msg("checkpoint runtime restore finished")
 			if restored {
 				finishRuntimeStarted()
+				if restoredPID := int(runtimeStartedPID.Load()); restoredPID > 0 {
+					publishRuntimeStarted(restoredPID)
+				} else {
+					return exitCode, fmt.Errorf("checkpoint restore completed without a valid runtime pid")
+				}
 				markCheckpointRestored()
 				if runtimeRestoreWaitsForExit(instance.Runtime) {
 					return exitCode, err
@@ -1785,8 +1815,9 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 			}
 			if restoreStarted {
 				finishRuntimeStarted()
+				finishRuntimeStarted = startRuntimeStartedHandler()
 			}
-			if err := fallbackFromCheckpoint(!restoreStarted); err != nil {
+			if err := fallbackFromCheckpoint(); err != nil {
 				if !restoreStarted {
 					finishRuntimeStarted()
 				}

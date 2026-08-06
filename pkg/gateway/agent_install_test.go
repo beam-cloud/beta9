@@ -31,8 +31,13 @@ func TestAgentInstallScriptDownloadsAgentFromGateway(t *testing.T) {
 		"${GATEWAY}/install/agent/${OS_NAME}/${ARCH_NAME}",
 		"${GATEWAY}/install/agent/linux/${ARCH}",
 		"ensure_linux_docker",
+		"ensure_linux_nvidia_container_runtime",
 		"--cache-dir",
 		"BEAM_AGENT_CACHE_DIR",
+		"BEAM_AGENT_INSTALL_NVIDIA_TOOLKIT",
+		"https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list",
+		"https://nvidia.github.io/libnvidia-container/stable/rpm/nvidia-container-toolkit.repo",
+		"nvidia-ctk runtime configure --runtime=docker",
 	} {
 		if !strings.Contains(agentInstallScript, want) {
 			t.Fatalf("install script missing %q", want)
@@ -108,6 +113,70 @@ func TestAgentInstallScriptDefaultsMacOSWorkerPlatform(t *testing.T) {
 		if !strings.Contains(agentInstallScript, want) {
 			t.Fatalf("install script missing %q", want)
 		}
+	}
+}
+
+func TestAgentInstallScriptConfiguresExistingNvidiaToolkit(t *testing.T) {
+	tmp := t.TempDir()
+	binDir := filepath.Join(tmp, "bin")
+	if err := os.MkdirAll(binDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	runtimeMarker := filepath.Join(tmp, "nvidia-runtime")
+	restartMarker := filepath.Join(tmp, "docker-restart")
+	fakes := map[string]string{
+		"nvidia-smi": `#!/bin/sh
+set -eu
+[ "${1:-}" = "--query-gpu=index" ]
+printf '0\n'
+`,
+		"docker": `#!/bin/sh
+set -eu
+[ "${1:-}" = "info" ]
+if [ -f "$NVIDIA_RUNTIME_MARKER" ]; then
+  printf '{"nvidia":{}}\n'
+else
+  printf '{"runc":{}}\n'
+fi
+`,
+		"nvidia-ctk": `#!/bin/sh
+set -eu
+[ "$*" = "runtime configure --runtime=docker" ]
+printf 'configured\n' > "$NVIDIA_RUNTIME_MARKER"
+`,
+		"systemctl": `#!/bin/sh
+set -eu
+printf '%s\n' "$*" > "$NVIDIA_RESTART_MARKER"
+`,
+	}
+	for name, contents := range fakes {
+		if err := os.WriteFile(filepath.Join(binDir, name), []byte(contents), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	script := strings.TrimSuffix(agentInstallScript, "\nmain \"$@\"\n") + `
+OS=linux
+EXECUTOR=worker-container
+ensure_linux_nvidia_container_runtime
+`
+	cmd := exec.Command("sh")
+	cmd.Stdin = strings.NewReader(script)
+	cmd.Env = append(os.Environ(),
+		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"NVIDIA_RUNTIME_MARKER="+runtimeMarker,
+		"NVIDIA_RESTART_MARKER="+restartMarker,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("NVIDIA runtime configuration failed: %v\n%s", err, out)
+	}
+	if data, err := os.ReadFile(runtimeMarker); err != nil || string(data) != "configured\n" {
+		t.Fatalf("runtime marker = %q, %v", data, err)
+	}
+	if data, err := os.ReadFile(restartMarker); err != nil || string(data) != "restart docker\n" {
+		t.Fatalf("restart marker = %q, %v", data, err)
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/runtime"
+	"github.com/beam-cloud/beta9/pkg/storage"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/stretchr/testify/require"
@@ -71,27 +72,6 @@ func TestAcknowledgeContainerRequestReturnsAuthoritativeRejection(t *testing.T) 
 
 	require.EqualError(t, worker.acknowledgeContainerRequest("container-1", "delivery-1"), "stale delivery")
 	require.Equal(t, 1, client.calls)
-}
-
-func TestWorkerContainerStartupTimeout(t *testing.T) {
-	tests := []struct {
-		name      string
-		timeoutMs int64
-		want      time.Duration
-	}{
-		{name: "unset", want: defaultContainerStartupTimeout},
-		{name: "shorter", timeoutMs: (5 * time.Minute).Milliseconds(), want: defaultContainerStartupTimeout},
-		{name: "longer", timeoutMs: (30 * time.Minute).Milliseconds(), want: 30 * time.Minute},
-		{name: "clamped", timeoutMs: 1<<63 - 1, want: maxContainerStartupTimeout},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			worker := &Worker{}
-			worker.config.Worker.Failover.MaxSchedulingLatencyMs = tt.timeoutMs
-			require.Equal(t, tt.want, worker.containerStartupTimeout())
-		})
-	}
 }
 
 func (m *shutdownSignalRuntime) Kill(ctx context.Context, containerID string, sig syscall.Signal, opts *runtime.KillOpts) error {
@@ -316,6 +296,63 @@ func TestUpdateContainerStatusOnceReconcilesStartedPendingContainer(t *testing.T
 	require.Equal(t, int64(types.ContainerStateTtlS), repoClient.lastUpdateStatus.ExpirySeconds)
 }
 
+func TestWorkspaceOnlyStoppingProtectsRunningSiblings(t *testing.T) {
+	worker := &Worker{containerInstances: common.NewSafeMap[*ContainerInstance]()}
+	request := &types.ContainerRequest{Workspace: types.Workspace{Name: "shared"}}
+	worker.containerInstances.Set("stopping", &ContainerInstance{ExitCode: -1, StopReason: types.StopContainerReasonTtl, Request: request})
+	worker.containerInstances.Set("running", &ContainerInstance{ExitCode: -1, Request: request})
+	require.False(t, worker.workspaceOnlyStopping("shared"))
+
+	instance, _ := worker.containerInstances.Get("running")
+	done := make(chan struct{})
+	go func() {
+		for range 1000 {
+			instance.setStopReason(types.StopContainerReasonUser)
+			instance.setExitCode(-1)
+		}
+		close(done)
+	}()
+	for range 1000 {
+		_ = worker.workspaceOnlyStopping("shared")
+	}
+	<-done
+	require.True(t, worker.workspaceOnlyStopping("shared"))
+}
+
+func TestAbortStuckWorkspaceMountWithoutRuntimeState(t *testing.T) {
+	workspaceName := "shared"
+	request := &types.ContainerRequest{
+		ContainerId: "container-1",
+		Workspace:   types.Workspace{Name: workspaceName},
+	}
+	instances := common.NewSafeMap[*ContainerInstance]()
+	instances.Set(request.ContainerId, &ContainerInstance{
+		ExitCode:   -1,
+		StopReason: types.StopContainerReasonUser,
+		Request:    request,
+	})
+	mount := &trackedStorage{mode: storage.StorageModeGeese}
+	manager := &WorkspaceStorageManager{
+		mounts:             common.NewSafeMap[storage.Storage](),
+		mountLastUsed:      common.NewSafeMap[time.Time](),
+		containerInstances: instances,
+		mountLocks:         make(map[string]*sync.RWMutex),
+		poolConfig:         types.WorkerPoolConfig{StorageMode: storage.StorageModeGeese},
+		config: types.StorageConfig{WorkspaceStorage: types.WorkspaceStorageConfig{
+			BaseMountPath: t.TempDir(),
+		}},
+	}
+	manager.mounts.Set(workspaceName, mount)
+	manager.mountLastUsed.Set(workspaceName, time.Now())
+	worker := &Worker{containerInstances: instances, storageManager: manager}
+
+	worker.abortStuckWorkspaceMount(request)
+
+	require.True(t, mount.unmounted)
+	_, mounted := manager.mounts.Get(workspaceName)
+	require.False(t, mounted)
+}
+
 func TestShutdownWaitDrainsWithoutStoppingActiveContainer(t *testing.T) {
 	worker := &Worker{
 		containerInstances: common.NewSafeMap[*ContainerInstance](),
@@ -455,6 +492,7 @@ func TestFailContainerRequestReportsExitCode(t *testing.T) {
 }
 
 type fakeContainerRepoClient struct {
+	mu                 sync.Mutex
 	state              *pb.ContainerState
 	getStateCalls      int
 	updateStatusCalls  int
@@ -469,6 +507,8 @@ type fakeContainerRepoClient struct {
 }
 
 func (f *fakeContainerRepoClient) GetContainerState(ctx context.Context, in *pb.GetContainerStateRequest, opts ...grpc.CallOption) (*pb.GetContainerStateResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.getStateCalls++
 	return &pb.GetContainerStateResponse{
 		Ok:          true,

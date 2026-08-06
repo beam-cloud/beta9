@@ -17,7 +17,6 @@ type WorkerRepository interface {
 	GetWorkerById(workerId string) (*types.Worker, error)
 	GetAllWorkers() ([]*types.Worker, error)
 	GetAllWorkersInPool(poolName string) ([]*types.Worker, error)
-	CordonAllPendingWorkersInPool(poolName string) error
 	GetAllWorkersOnMachine(machineId string) ([]*types.Worker, error)
 	AddWorker(w *types.Worker) error
 	ToggleWorkerAvailable(workerId, generation string) error
@@ -125,6 +124,10 @@ type ComputeRepository interface {
 	ListAgentTokenStates(ctx context.Context, workspaceID, poolName string) ([]*compute.AgentTokenState, error)
 	DeleteAgentMachineState(ctx context.Context, workspaceID, poolName, machineID string) error
 	PruneAgentMachineIndex(ctx context.Context, workspaceID, poolName string) error
+	WithMachineSSHStateLock(ctx context.Context, workspaceID, poolName, machineID string, fn func(context.Context) error) error
+	SaveMachineSSHState(ctx context.Context, state *compute.MachineSSHState) error
+	GetMachineSSHState(ctx context.Context, workspaceID, poolName, machineID string) (*compute.MachineSSHState, error)
+	DeleteMachineSSHState(ctx context.Context, workspaceID, poolName, machineID string) error
 	SaveAgentWorkerSlotState(ctx context.Context, state *compute.AgentWorkerSlotState) error
 	ListAgentWorkerSlotStates(ctx context.Context, workspaceID, poolName, machineID string) ([]*compute.AgentWorkerSlotState, error)
 	DeleteAgentWorkerSlotState(ctx context.Context, workspaceID, poolName, machineID, workerID string) error
@@ -142,6 +145,11 @@ type ComputeRepository interface {
 	ListMarketplaceRentalsForMachine(ctx context.Context, machineID string) ([]*compute.MarketplaceRentalState, error)
 	ListAllMarketplaceRentals(ctx context.Context) ([]*compute.MarketplaceRentalState, error)
 	DeleteMarketplaceRental(ctx context.Context, state *compute.MarketplaceRentalState) error
+	PushFailoverDemand(ctx context.Context, demand *compute.FailoverDemand, ttl time.Duration) error
+	ListFailoverDemand(ctx context.Context) ([]*compute.FailoverDemand, error)
+	DeleteFailoverDemand(ctx context.Context, gpu string) error
+	RecordOnDemandSpend(ctx context.Context, at time.Time, cents float64) error
+	OnDemandSpendCents(ctx context.Context, window time.Duration) (float64, error)
 }
 
 // ManagedPoolRepository keeps managed pool definitions separate from
@@ -367,8 +375,6 @@ type EventRepository interface {
 	PushTaskUpdatedEvent(task *types.TaskWithRelated)
 	PushTaskCreatedEvent(task *types.TaskWithRelated)
 	PushStubStateUnhealthy(workspaceId string, stubId string, currentState, previousState string, reason string, failedContainers []string)
-	PushWorkerPoolDegradedEvent(poolName string, reasons []string, poolState *types.WorkerPoolState)
-	PushWorkerPoolHealthyEvent(poolName string, poolState *types.WorkerPoolState)
 	PushGatewayEndpointCalledEvent(method, path, workspaceID string, statusCode int, userAgent, remoteIP, requestID, contentType, accept, errorMessage string)
 	PushStubCacheRequiredContent(schema types.EventStubCacheRequiredContentSchema) error
 	PushPlatformCacheEvent(schema types.EventPlatformCacheSchema)

@@ -25,6 +25,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/singleflight"
+	"google.golang.org/grpc/metadata"
 )
 
 type PodServiceOpts struct {
@@ -639,6 +640,9 @@ func (s *GenericPodService) CreatePod(ctx context.Context, in *pb.CreatePodReque
 	}
 
 	if stub == nil {
+		if in.StubId == "" {
+			in.StubId = s.preparedStubID(ctx, authInfo.Workspace.ExternalId)
+		}
 		stub, err = s.loadStub(ctx, in.StubId)
 		if err != nil {
 			return &pb.CreatePodResponse{
@@ -662,6 +666,7 @@ func (s *GenericPodService) CreatePod(ctx context.Context, in *pb.CreatePodReque
 			return &pb.CreatePodResponse{
 				Ok:       false,
 				ErrorMsg: err.Error(),
+				StubId:   stub.ExternalId,
 			}, nil
 		}
 
@@ -674,6 +679,7 @@ func (s *GenericPodService) CreatePod(ctx context.Context, in *pb.CreatePodReque
 			return &pb.CreatePodResponse{
 				Ok:       false,
 				ErrorMsg: err.Error(),
+				StubId:   stub.ExternalId,
 			}, nil
 		}
 	}
@@ -690,6 +696,23 @@ func (s *GenericPodService) CreatePod(ctx context.Context, in *pb.CreatePodReque
 		TaskId:      taskId,
 		AppId:       appId,
 	}, nil
+}
+
+func (s *GenericPodService) preparedStubID(ctx context.Context, workspaceID string) string {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok || s.rdb == nil {
+		return ""
+	}
+	cacheKeys := md.Get(common.PreparedStubCacheMetadata)
+	if len(cacheKeys) == 0 {
+		return ""
+	}
+	stubID, _ := s.rdb.GetEx(
+		ctx,
+		common.RedisKeys.GatewayPreparedStub(workspaceID, cacheKeys[0]),
+		common.PreparedStubCacheTTL,
+	).Result()
+	return stubID
 }
 
 func (s *GenericPodService) loadStub(ctx context.Context, stubId string) (*types.StubWithRelated, error) {

@@ -124,6 +124,19 @@ func (o *OpenMeterUsageMetricsRepository) sendEvent(name string, data map[string
 // pricing metadata are deliberately excluded: neither changes the logical
 // resource usage if the same container interval is emitted again.
 func openMeterEventID(source, name string, data map[string]interface{}) string {
+	// Public task count/cost events are emitted from EndTask, whose response can
+	// be lost after OpenMeter accepts the event but before task state persists.
+	// Keep one stable identity for the logical task regardless of a caller's
+	// repeated duration/value calculation so a safe EndTask retry cannot bill it
+	// twice.
+	if taskID, ok := data["task_id"].(string); ok && taskID != "" {
+		identity, _ := json.Marshal([]interface{}{
+			source, name, data["workspace_id"], taskID, data["stub_id"], data["app_id"],
+		})
+		sum := sha256.Sum256(identity)
+		return fmt.Sprintf("%x", sum)
+	}
+
 	start, startOK := data["interval_start"].(string)
 	if !startOK {
 		return uuid.New().String()

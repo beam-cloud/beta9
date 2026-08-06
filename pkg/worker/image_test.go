@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -14,6 +15,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/cache"
+	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/registry"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/beam-cloud/clip/pkg/clip"
 	clipStorage "github.com/beam-cloud/clip/pkg/storage"
@@ -166,6 +170,100 @@ func TestEmbeddedImageCacheFallbackLogLevel(t *testing.T) {
 	logEmbeddedImageCacheFallback(errors.New("cache unavailable"), "runtime-image", &types.ContainerRequest{})
 	require.Contains(t, buf.String(), `"level":"warn"`)
 	require.Contains(t, buf.String(), "falling back to registry")
+}
+
+func TestLazyMountOptionsUsesWholeArchiveCacheOnlyForV1(t *testing.T) {
+	client := &ImageClient{
+		cacheClient:    &cache.Client{},
+		imageCachePath: "/images/cache",
+		config: types.AppConfig{ImageService: types.ImageServiceConfig{
+			RegistryStore: registry.S3ImageRegistryStore,
+		}},
+	}
+	request := &types.ContainerRequest{ImageId: "image-v1"}
+
+	options := client.lazyMountOptions(context.Background(), request, lazyImageArchive{})
+
+	require.Equal(t, "/images/cache/image-v1.clip", options.CachePath)
+	require.Nil(t, options.ContentCache)
+	require.False(t, options.ContentCacheAvailable)
+}
+
+func TestLazyMountOptionsRetainsPerLayerCacheForOCI(t *testing.T) {
+	client := &ImageClient{
+		cacheClient:    &cache.Client{},
+		imageCachePath: "/images/cache",
+		v2ImageRefs:    common.NewSafeMap[string](),
+	}
+	request := &types.ContainerRequest{ImageId: "image-v2"}
+
+	options := client.lazyMountOptions(context.Background(), request, lazyImageArchive{storageMode: "oci"})
+
+	require.NotNil(t, options.ContentCache)
+	require.True(t, options.ContentCacheAvailable)
+}
+
+func TestSuccessfulImageLoadActivatesExecutingLocality(t *testing.T) {
+	reporter := &cacheContentReporter{
+		metadata: cache.NewMockCacheMetadataStore(),
+		recent:   make(map[reporterStubKey]struct{}),
+	}
+	client := &ImageClient{contentReporter: reporter}
+	request := &types.ContainerRequest{WorkspaceId: "workspace", StubId: "stub"}
+
+	client.recordSuccessfulImageLoad(context.Background(), request, nil)
+
+	reporter.mu.Lock()
+	defer reporter.mu.Unlock()
+	require.Contains(t, reporter.recent, reporterStubKey{workspaceID: "workspace", stubID: "stub"})
+}
+
+func TestLocalImageArchiveReadyPreservesInProgressPlaceholder(t *testing.T) {
+	archivePath := filepath.Join(t.TempDir(), "image.clip")
+	require.NoError(t, os.WriteFile(archivePath, nil, 0o600))
+
+	client := &ImageClient{}
+	require.False(t, client.localImageArchiveReady(archivePath, "image"))
+	require.FileExists(t, archivePath)
+}
+
+func TestRestoreV1ArchiveDataCacheRemovesDirectoryTarget(t *testing.T) {
+	cacheDir := t.TempDir()
+	targetPath := filepath.Join(cacheDir, "image.clip")
+	require.NoError(t, os.Mkdir(targetPath, 0o700))
+
+	client := &ImageClient{
+		imageCachePath: cacheDir,
+		config: types.AppConfig{ImageService: types.ImageServiceConfig{
+			RegistryStore: registry.S3ImageRegistryStore,
+		}},
+	}
+	_, ok := client.restoreV1ArchiveDataCache(context.Background(), &types.ContainerRequest{ImageId: "image"}, nil)
+
+	require.False(t, ok)
+	require.NoDirExists(t, targetPath)
+}
+
+func TestRestoreV1ArchiveDataCacheDefersLargeRemoteArchive(t *testing.T) {
+	client := &ImageClient{
+		cacheClient:    &cache.Client{},
+		imageCachePath: t.TempDir(),
+		config: types.AppConfig{ImageService: types.ImageServiceConfig{
+			RegistryStore: registry.S3ImageRegistryStore,
+		}},
+		archiveContentMetadata: func(context.Context, string) (*cache.FSMetadata, error) {
+			return &cache.FSMetadata{Hash: "archive", Size: maxSyncV1ArchiveDataRestoreBytes + 1}, nil
+		},
+	}
+
+	path, ok := client.restoreV1ArchiveDataCache(
+		context.Background(),
+		&types.ContainerRequest{ImageId: "image"},
+		&types.S3ImageRegistryConfig{BucketName: "images"},
+	)
+
+	require.False(t, ok)
+	require.Empty(t, path)
 }
 
 func TestGetBuildContextDoesNotFallBackToWorkspaceFuseMount(t *testing.T) {

@@ -31,7 +31,7 @@ func (s *Worker) listenForWorkerEvents() {
 		}
 
 		delay = workerEventStreamReconnectMin
-		s.cancelStoppingBuilds()
+		s.cancelStoppingContainers()
 
 		for {
 			event, err := stream.Recv()
@@ -101,7 +101,7 @@ func (s *Worker) handleWorkerEvent(event *pb.WorkerEvent) {
 			return
 		}
 
-		s.cancelBuild(e.StopBuild.ContainerId)
+		s.cancelContainer(e.StopBuild.ContainerId)
 	default:
 		log.Warn().Str("event_id", event.EventId).Msg("received unknown worker event")
 	}
@@ -114,44 +114,44 @@ func (s *Worker) storageNodeID() string {
 	return types.StableStorageNodeID(s.machineID, s.workerId)
 }
 
-func (s *Worker) registerBuildCancel(containerID string, cancel context.CancelFunc) {
-	if s.buildCancels == nil {
-		s.buildCancels = common.NewSafeMap[context.CancelFunc]()
+func (s *Worker) registerContainerCancel(containerID string, cancel context.CancelFunc) {
+	if s.containerCancels == nil {
+		s.containerCancels = common.NewSafeMap[context.CancelFunc]()
 	}
 
-	s.buildCancels.Set(containerID, cancel)
+	s.containerCancels.Set(containerID, cancel)
 }
 
-func (s *Worker) unregisterBuildCancel(containerID string) {
-	if s.buildCancels == nil {
+func (s *Worker) unregisterContainerCancel(containerID string) {
+	if s.containerCancels == nil {
 		return
 	}
 
-	s.buildCancels.Delete(containerID)
+	s.containerCancels.Delete(containerID)
 }
 
-func (s *Worker) cancelBuild(containerID string) bool {
-	if s.buildCancels == nil {
+func (s *Worker) cancelContainer(containerID string) bool {
+	if s.containerCancels == nil {
 		return false
 	}
 
-	cancel, ok := s.buildCancels.Get(containerID)
+	cancel, ok := s.containerCancels.Get(containerID)
 	if !ok {
 		return false
 	}
 
-	log.Info().Str("container_id", containerID).Msg("received stop build event")
+	log.Info().Str("container_id", containerID).Msg("cancelling container startup context")
 	cancel()
 	return true
 }
 
-func (s *Worker) cancelStoppingBuilds() {
-	if s.buildCancels == nil {
+func (s *Worker) cancelStoppingContainers() {
+	if s.containerCancels == nil {
 		return
 	}
-	s.buildCancels.Range(func(containerID string, cancel context.CancelFunc) bool {
+	s.containerCancels.Range(func(containerID string, cancel context.CancelFunc) bool {
 		// One slow state lookup must not delay the rest of a burst.
-		go s.cancelBuildIfAlreadyStopping(cancel, containerID)
+		go s.cancelContainerIfAlreadyStopping(cancel, containerID)
 		return true
 	})
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -91,6 +92,13 @@ func normalizeManagedPoolConfig(config types.WorkerPoolConfig) (types.WorkerPool
 	config.Provider = nil
 	// Selector-bound agent capacity uses private pool state, not managed pools.
 	config.RequiresPoolSelector = false
+	// Runtime is the Kubernetes RuntimeClass used by provider-backed workers.
+	// Agent-backed workers use Docker GPU injection, but keeping the canonical
+	// NVIDIA default in the stored config makes GPU pool behavior consistent
+	// across the API, config files, and the dashboard editor.
+	if strings.TrimSpace(config.GPUType) != "" && strings.TrimSpace(config.Runtime) == "" {
+		config.Runtime = "nvidia"
+	}
 	if config.ContainerRuntime == "" {
 		config.ContainerRuntime = types.ContainerRuntimeRunc.String()
 	}
@@ -101,6 +109,17 @@ func normalizeManagedPoolConfig(config types.WorkerPoolConfig) (types.WorkerPool
 	}
 	if len(config.UserData) > 256*1024 {
 		return types.WorkerPoolConfig{}, fmt.Errorf("user data exceeds 256 KiB")
+	}
+	for field, path := range map[string]string{
+		"storage_path":          config.StoragePath,
+		"images_path":           config.ImagesPath,
+		"durable_disks_path":    config.DurableDisksPath,
+		"cache.disk.host_path":  config.Cache.Disk.HostPath,
+		"cache.disk.mount_path": config.Cache.Disk.MountPath,
+	} {
+		if path = strings.TrimSpace(path); path != "" && !filepath.IsAbs(path) {
+			return types.WorkerPoolConfig{}, fmt.Errorf("%s must be an absolute path", field)
+		}
 	}
 	return config, nil
 }
@@ -190,6 +209,9 @@ func (s *Service) activeManagedPoolState(state *model.PoolState) (*model.PoolSta
 	normalized, err := normalizeManagedPoolConfig(config)
 	if err != nil {
 		return nil, err
+	}
+	if state.CreatedByTokenID == types.FailoverOnDemandPoolCreator {
+		normalized.RequiresPoolSelector = true
 	}
 	return managedPoolStateWithConfig(state, normalized), nil
 }
@@ -571,6 +593,12 @@ func (s *Service) CreateManagedPool(ctx context.Context, authInfo *auth.AuthInfo
 }
 
 func (s *Service) managedPoolHasInventory(ctx context.Context, state *model.PoolState) (bool, error) {
+	for i := range state.Reservations {
+		reservation := &state.Reservations[i]
+		if reservation.Managed() && !reservationClosed(reservation.Status) {
+			return true, nil
+		}
+	}
 	if s.computeRepo == nil {
 		return false, errors.New("compute repository is unavailable")
 	}

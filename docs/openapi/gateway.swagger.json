@@ -144,6 +144,38 @@
         ]
       }
     },
+    "/agent/ssh/status": {
+      "post": {
+        "operationId": "GatewayService_UpdateAgentSSHStatus",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayUpdateAgentSSHStatusResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/gatewayUpdateAgentSSHStatusRequest"
+            }
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
     "/agent/transport-credential": {
       "post": {
         "operationId": "GatewayService_RequestAgentTransportCredential",
@@ -1462,6 +1494,138 @@
         ]
       }
     },
+    "/pools/{poolName}/machines/{machineId}/ssh/key:activate": {
+      "post": {
+        "operationId": "GatewayService_ActivateMachineSSHKey",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayActivateMachineSSHKeyResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "poolName",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "machineId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/GatewayServiceActivateMachineSSHKeyBody"
+            }
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/pools/{poolName}/machines/{machineId}/ssh/key:download": {
+      "post": {
+        "operationId": "GatewayService_DownloadMachineSSHKey",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayDownloadMachineSSHKeyResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "poolName",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "machineId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/GatewayServiceDownloadMachineSSHKeyBody"
+            }
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/pools/{poolName}/machines/{machineId}/ssh/key:rotate": {
+      "post": {
+        "operationId": "GatewayService_RotateMachineSSHKey",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayRotateMachineSSHKeyResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "poolName",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "machineId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/GatewayServiceRotateMachineSSHKeyBody"
+            }
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
     "/pools:launch": {
       "post": {
         "operationId": "GatewayService_LaunchPoolCapacity",
@@ -2022,6 +2186,15 @@
     }
   },
   "definitions": {
+    "GatewayServiceActivateMachineSSHKeyBody": {
+      "type": "object",
+      "properties": {
+        "generation": {
+          "type": "string",
+          "format": "uint64"
+        }
+      }
+    },
     "GatewayServiceCreatePoolJoinTokenBody": {
       "type": "object",
       "properties": {
@@ -2029,6 +2202,10 @@
           "type": "string"
         }
       }
+    },
+    "GatewayServiceDownloadMachineSSHKeyBody": {
+      "type": "object",
+      "description": "Managed SSH messages live at the end of this file so adding the feature\ndoes not renumber every existing generated message implementation."
     },
     "GatewayServiceExtendPoolCapacityBody": {
       "type": "object",
@@ -2093,6 +2270,9 @@
         }
       }
     },
+    "GatewayServiceRotateMachineSSHKeyBody": {
+      "type": "object"
+    },
     "GatewayServiceScaleBYOCPoolBody": {
       "type": "object",
       "properties": {
@@ -2146,6 +2326,20 @@
         "pricePerGpuHourCents": {
           "type": "integer",
           "format": "int64"
+        }
+      }
+    },
+    "gatewayActivateMachineSSHKeyResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        },
+        "ssh": {
+          "$ref": "#/definitions/gatewayMachineSSHAccess"
         }
       }
     },
@@ -2336,6 +2530,72 @@
         }
       }
     },
+    "gatewayAgentPoolCacheConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "disk": {
+          "$ref": "#/definitions/gatewayAgentPoolCacheDiskConfig"
+        }
+      }
+    },
+    "gatewayAgentPoolCacheDiskConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "hostPath": {
+          "type": "string"
+        },
+        "mountPath": {
+          "type": "string"
+        },
+        "maxUsagePct": {
+          "type": "number",
+          "format": "double"
+        },
+        "minFreeBytes": {
+          "type": "string",
+          "format": "int64"
+        }
+      },
+      "description": "Host-backed runtime settings for an agent worker. Presence of this message\nmeans the managed pool configuration is authoritative; older gateways omit\nit and agents retain their installer-level state/cache defaults."
+    },
+    "gatewayAgentPoolRuntimeConfig": {
+      "type": "object",
+      "properties": {
+        "networkPreallocation": {
+          "type": "boolean"
+        },
+        "criuEnabled": {
+          "type": "boolean"
+        },
+        "tmpSizeLimit": {
+          "type": "string"
+        },
+        "storageMode": {
+          "type": "string"
+        },
+        "storagePath": {
+          "type": "string"
+        },
+        "imagesPath": {
+          "type": "string"
+        },
+        "durableDisksPath": {
+          "type": "string"
+        },
+        "cache": {
+          "$ref": "#/definitions/gatewayAgentPoolCacheConfig"
+        },
+        "configGroup": {
+          "type": "string"
+        }
+      }
+    },
     "gatewayAgentPreflightCheck": {
       "type": "object",
       "properties": {
@@ -2402,6 +2662,27 @@
         "updatedAt": {
           "type": "string",
           "format": "int64"
+        }
+      }
+    },
+    "gatewayAgentSSHConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "username": {
+          "type": "string"
+        },
+        "publicKey": {
+          "type": "string"
+        },
+        "keyFingerprint": {
+          "type": "string"
+        },
+        "generation": {
+          "type": "string",
+          "format": "uint64"
         }
       }
     },
@@ -2540,6 +2821,9 @@
         },
         "cpuAffinityEnforced": {
           "type": "boolean"
+        },
+        "poolConfig": {
+          "$ref": "#/definitions/gatewayAgentPoolRuntimeConfig"
         }
       }
     },
@@ -3173,6 +3457,33 @@
         }
       }
     },
+    "gatewayDownloadMachineSSHKeyResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        },
+        "privateKey": {
+          "type": "string"
+        },
+        "filename": {
+          "type": "string"
+        },
+        "generation": {
+          "type": "string",
+          "format": "uint64"
+        },
+        "fingerprint": {
+          "type": "string"
+        },
+        "activationRequired": {
+          "type": "boolean"
+        }
+      }
+    },
     "gatewayDrainWorkerResponse": {
       "type": "object",
       "properties": {
@@ -3686,6 +3997,12 @@
         "workerImage": {
           "type": "string",
           "description": "Optional per-machine worker image override. The gateway remembers the\ngenerated value as a baseline so untouched installs continue to follow\nfuture image tag changes while manually edited values remain pinned."
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       }
     },
@@ -4183,6 +4500,9 @@
         },
         "userData": {
           "type": "string"
+        },
+        "ssh": {
+          "$ref": "#/definitions/gatewayMachineSSHAccess"
         }
       }
     },
@@ -4326,6 +4646,70 @@
         "usagePct": {
           "type": "number",
           "format": "float"
+        }
+      }
+    },
+    "gatewayMachineSSHAccess": {
+      "type": "object",
+      "properties": {
+        "supported": {
+          "type": "boolean"
+        },
+        "status": {
+          "type": "string"
+        },
+        "publicIp": {
+          "type": "string"
+        },
+        "host": {
+          "type": "string"
+        },
+        "port": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "username": {
+          "type": "string"
+        },
+        "activeGeneration": {
+          "type": "string",
+          "format": "uint64"
+        },
+        "appliedGeneration": {
+          "type": "string",
+          "format": "uint64"
+        },
+        "keyFingerprint": {
+          "type": "string"
+        },
+        "hostKeyFingerprint": {
+          "type": "string"
+        },
+        "privateKeyAvailable": {
+          "type": "boolean"
+        },
+        "pendingRotation": {
+          "type": "boolean"
+        },
+        "pendingGeneration": {
+          "type": "string",
+          "format": "uint64"
+        },
+        "pendingFingerprint": {
+          "type": "string"
+        },
+        "pendingKeyAvailable": {
+          "type": "boolean"
+        },
+        "pendingKeyDownloaded": {
+          "type": "boolean"
+        },
+        "error": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
         }
       }
     },
@@ -4885,6 +5269,20 @@
         }
       }
     },
+    "gatewayRotateMachineSSHKeyResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        },
+        "ssh": {
+          "$ref": "#/definitions/gatewayMachineSSHAccess"
+        }
+      }
+    },
     "gatewayScaleBYOCPoolResponse": {
       "type": "object",
       "properties": {
@@ -5084,6 +5482,9 @@
             "type": "object",
             "$ref": "#/definitions/gatewayAgentWorkerSlot"
           }
+        },
+        "ssh": {
+          "$ref": "#/definitions/gatewayAgentSSHConfig"
         }
       }
     },
@@ -5304,6 +5705,45 @@
       }
     },
     "gatewayUpdateAgentRouteStatusResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        }
+      }
+    },
+    "gatewayUpdateAgentSSHStatusRequest": {
+      "type": "object",
+      "properties": {
+        "agentToken": {
+          "type": "string"
+        },
+        "generation": {
+          "type": "string",
+          "format": "uint64"
+        },
+        "status": {
+          "type": "string"
+        },
+        "publicIp": {
+          "type": "string"
+        },
+        "hostKeyFingerprint": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "listenPort": {
+          "type": "integer",
+          "format": "int64"
+        }
+      }
+    },
+    "gatewayUpdateAgentSSHStatusResponse": {
       "type": "object",
       "properties": {
         "ok": {

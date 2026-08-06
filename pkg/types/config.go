@@ -2,6 +2,7 @@ package types
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/cache"
@@ -20,6 +21,7 @@ type AppConfig struct {
 	ImageService   ImageServiceConfig   `key:"imageService" json:"image_service"`
 	Storage        StorageConfig        `key:"storage" json:"storage"`
 	Worker         WorkerConfig         `key:"worker" json:"worker"`
+	Scheduling     SchedulingConfig     `key:"scheduling" json:"scheduling"`
 	Providers      ProviderConfig       `key:"providers" json:"providers"`
 	Tailscale      TailscaleConfig      `key:"tailscale" json:"tailscale"`
 	Proxy          ProxyConfig          `key:"proxy" json:"proxy"`
@@ -176,12 +178,12 @@ type ContainerCostHookConfig struct {
 }
 
 type GatewayServiceConfig struct {
-	Host                 string        `key:"host" json:"host"`
-	InvokeURLType        string        `key:"invokeURLType" json:"invoke_url_type"`
-	GRPC                 GRPCConfig    `key:"grpc" json:"grpc"`
-	HTTP                 HTTPConfig    `key:"http" json:"http"`
-	ShutdownTimeout      time.Duration `key:"shutdownTimeout" json:"shutdown_timeout"`
-	StubLimits           StubLimits    `key:"stubLimits" json:"stub_limits"`
+	Host            string        `key:"host" json:"host"`
+	InvokeURLType   string        `key:"invokeURLType" json:"invoke_url_type"`
+	GRPC            GRPCConfig    `key:"grpc" json:"grpc"`
+	HTTP            HTTPConfig    `key:"http" json:"http"`
+	ShutdownTimeout time.Duration `key:"shutdownTimeout" json:"shutdown_timeout"`
+	StubLimits      StubLimits    `key:"stubLimits" json:"stub_limits"`
 }
 
 type FileServiceConfig struct {
@@ -418,7 +420,6 @@ type WorkerConfig struct {
 	CRIU                         CRIUConfig                    `key:"criu" json:"criu"`
 	TmpSizeLimit                 string                        `key:"tmpSizeLimit" json:"tmp_size_limit"`
 	ContainerLogLinesPerHour     int                           `key:"containerLogLinesPerHour" json:"container_log_lines_per_hour"`
-	Failover                     FailoverConfig                `key:"failover" json:"failover"`
 	ContainerRuntime             string                        `key:"containerRuntime" json:"container_runtime"`
 }
 
@@ -426,13 +427,6 @@ type ContainerResourceLimitsConfig struct {
 	CPUEnforced         bool `key:"cpuEnforced" json:"cpu_enforced"`
 	CPUAffinityEnforced bool `key:"cpuAffinityEnforced" json:"cpu_affinity_enforced"`
 	MemoryEnforced      bool `key:"memoryEnforced" json:"memory_enforced"`
-}
-
-type FailoverConfig struct {
-	Enabled                bool  `key:"enabled" json:"enabled"`
-	MaxPendingWorkers      int64 `key:"maxPendingWorkers" json:"max_pending_workers"`
-	MaxSchedulingLatencyMs int64 `key:"maxSchedulingLatencyMs" json:"max_scheduling_latency_ms"`
-	MinMachinesAvailable   int64 `key:"minMachinesAvailable" json:"min_machines_available"`
 }
 
 type PoolMode string
@@ -476,7 +470,6 @@ type WorkerPoolConfig struct {
 	Provider                  *MachineProvider                  `key:"provider" json:"provider"`
 	JobSpec                   WorkerPoolJobSpecConfig           `key:"jobSpec" json:"job_spec"`
 	PoolSizing                WorkerPoolJobSpecPoolSizingConfig `key:"poolSizing" json:"pool_sizing"`
-	DefaultMachineCost        float64                           `key:"defaultMachineCost" json:"default_machine_cost"`
 	RequiresPoolSelector      bool                              `key:"requiresPoolSelector" json:"requires_pool_selector"`
 	Priority                  int32                             `key:"priority" json:"priority"`
 	Preemptable               bool                              `key:"preemptable" json:"preemptable"`
@@ -484,12 +477,13 @@ type WorkerPoolConfig struct {
 	CRIUEnabled               bool                              `key:"criuEnabled" json:"criu_enabled"`
 	TmpSizeLimit              string                            `key:"tmpSizeLimit" json:"tmp_size_limit"`
 	ConfigGroup               string                            `key:"configGroup" json:"config_group"`
-	K3sInstallDir             string                            `key:"k3sInstallDir" json:"k3s_install_dir"`
-	StoragePath               string                            `key:"storagePath" json:"storage_path"`
+	K3sInstallDir             string                            `key:"k3sInstallDir" json:"k3s_install_dir"` // Provider/Kubernetes install path; agent-hosted pools do not run K3s.
+	StoragePath               string                            `key:"storagePath" json:"storage_path"`      // Host storage root; agent workers mount it at /data.
 	StorageMode               string                            `key:"storageMode" json:"storage_mode"`
-	ImagesPath                string                            `key:"imagesPath" json:"images_path"`              // Host path backing the worker's /images volume (clip layer cache + image mounts); defaults to /images
-	DurableDisksPath          string                            `key:"durableDisksPath" json:"durable_disks_path"` // Host path backing durable disks; defaults to /var/lib/beta9/durable-disks
+	ImagesPath                string                            `key:"imagesPath" json:"images_path"`              // Host path backing the worker's /images volume; agent pools fall back to the installer state dir.
+	DurableDisksPath          string                            `key:"durableDisksPath" json:"durable_disks_path"` // Host path backing durable disks; agent pools fall back to storagePath or the installer state dir.
 	Cache                     WorkerPoolCacheConfig             `key:"cache" json:"cache"`
+	HourlyCostCents           int64                             `key:"hourlyCostCents" json:"hourly_cost_cents"` // Cost of one machine in this pool, in cents per hour (e.g. 120 for $1.20/hr)
 }
 
 // AgentHosted reports whether this concrete pool uses the agent control path.
@@ -508,6 +502,155 @@ type WorkerPoolCacheDiskConfig struct {
 	MountPath    string  `key:"mountPath" json:"mount_path"`
 	MaxUsagePct  float64 `key:"maxUsagePct" json:"max_usage_pct"`
 	MinFreeBytes int64   `key:"minFreeBytes" json:"min_free_bytes"`
+}
+
+type SchedulingConfig struct {
+	Failover FailoverConfig `key:"failover" json:"failover"`
+}
+
+// FailoverConfig routes container requests to alternate pools when the pools
+// matching the requested GPU have no free capacity. Capacity decides placement,
+// never a clock: a chain is a preference order, not a schedule.
+type FailoverConfig struct {
+	Enabled bool `key:"enabled" json:"enabled"`
+
+	// Chains is keyed by GPU type (e.g. "A10G"). A request binds to the chain
+	// of the first GPU in its request list that has one.
+	Chains map[string]FailoverChain `key:"chains" json:"chains"`
+
+	// Health thresholds drive pool.schedulable/unschedulable events. They are
+	// observability only and are never an input to placement decisions.
+	Health FailoverHealthConfig `key:"health" json:"health"`
+
+	OnDemand OnDemandConfig `key:"onDemand" json:"on_demand"`
+}
+
+// FailoverOnDemandPoolCreator marks pools owned by the failover reconciler.
+const FailoverOnDemandPoolCreator = "scheduling.failover"
+
+// FailoverChain is the failover preference order for one GPU type. Pools
+// matching the requested GPU type are always preferred over any chain entry.
+type FailoverChain struct {
+	// Pools are tried in order once the requested GPU type lacks free capacity.
+	Pools []string `key:"pools" json:"pools"`
+
+	// OnDemand, when set, is the terminal step: real hardware is reserved only
+	// once every pool in {requested GPU pools ∪ Pools} has refused for capacity.
+	OnDemand *FailoverOnDemandStep `key:"onDemand" json:"on_demand"`
+}
+
+// FailoverOnDemandStep bounds what the control plane may reserve for a chain.
+type FailoverOnDemandStep struct {
+	GPUs      []GpuType         `key:"gpus" json:"gpus"`
+	Providers []MachineProvider `key:"providers" json:"providers"`
+	MaxNodes  int               `key:"maxNodes" json:"max_nodes"`
+}
+
+const failoverOnDemandPoolPrefix = "ondemand-"
+
+// FailoverOnDemandPoolName returns the managed pool name for a GPU chain.
+func FailoverOnDemandPoolName(gpu string) string {
+	return failoverOnDemandPoolPrefix + strings.ToLower(strings.TrimSpace(gpu))
+}
+
+type FailoverHealthConfig struct {
+	MaxPendingWorkers      int64 `key:"maxPendingWorkers" json:"max_pending_workers"`
+	MaxSchedulingLatencyMs int64 `key:"maxSchedulingLatencyMs" json:"max_scheduling_latency_ms"`
+	MinMachinesAvailable   int64 `key:"minMachinesAvailable" json:"min_machines_available"`
+}
+
+type OnDemandConfig struct {
+	Budget             OnDemandBudgetConfig `key:"budget" json:"budget"`
+	ScaleDownAfterIdle time.Duration        `key:"scaleDownAfterIdle" json:"scale_down_after_idle"`
+}
+
+// OnDemandBudgetConfig caps platform spend on failover hardware. Operators type
+// cents; micro-dollars stay internal to the reservation wire format.
+type OnDemandBudgetConfig struct {
+	MaxHourlyCents int64 `key:"maxHourlyCents" json:"max_hourly_cents"`
+	MaxDailyCents  int64 `key:"maxDailyCents" json:"max_daily_cents"`
+}
+
+// MicrosPerCent converts between the operator-facing unit (cents) and the
+// micro-dollars used internally by reservations and offers.
+const MicrosPerCent = 10_000
+
+func CentsToMicros(cents int64) int64 { return cents * MicrosPerCent }
+
+func MicrosToCents(micros int64) int64 {
+	if micros <= 0 {
+		return 0
+	}
+	return (micros + MicrosPerCent/2) / MicrosPerCent
+}
+
+// Validate reports configuration that can never behave as an operator intends:
+// an empty chain, a pool listed twice, a chain that fails over to a pool
+// already serving the chain's own GPU type, or an on-demand step with no cap.
+//
+// A name that matches no configured pool is not an error: chains may target
+// pools created through the managed-pool API, which are absent from the config
+// file. The scheduler skips chain pools it cannot resolve.
+func (c FailoverConfig) Validate(pools map[string]WorkerPoolConfig) error {
+	if !c.Enabled {
+		return nil
+	}
+
+	if c.Health.MaxPendingWorkers < 0 || c.Health.MaxSchedulingLatencyMs < 0 || c.Health.MinMachinesAvailable < 0 {
+		return fmt.Errorf("failover health thresholds cannot be negative")
+	}
+	if c.OnDemand.Budget.MaxHourlyCents < 0 || c.OnDemand.Budget.MaxDailyCents < 0 {
+		return fmt.Errorf("failover onDemand budgets cannot be negative")
+	}
+	if c.OnDemand.ScaleDownAfterIdle < 0 {
+		return fmt.Errorf("failover onDemand scaleDownAfterIdle cannot be negative")
+	}
+
+	chainNames := map[string]string{}
+	for gpu, chain := range c.Chains {
+		normalizedGPU := strings.ToUpper(strings.TrimSpace(gpu))
+		if normalizedGPU == "" {
+			return fmt.Errorf("failover chain GPU cannot be empty")
+		}
+		if previous, duplicate := chainNames[normalizedGPU]; duplicate {
+			return fmt.Errorf("failover chains %q and %q name the same GPU", previous, gpu)
+		}
+		chainNames[normalizedGPU] = gpu
+
+		if len(chain.Pools) == 0 && chain.OnDemand == nil {
+			return fmt.Errorf("failover chain %s has no pools and no onDemand step", gpu)
+		}
+
+		seen := map[string]bool{}
+		for _, poolName := range chain.Pools {
+			if strings.TrimSpace(poolName) == "" {
+				return fmt.Errorf("failover chain %s contains an empty pool name", gpu)
+			}
+			if seen[poolName] {
+				return fmt.Errorf("failover chain %s lists pool %q twice", gpu, poolName)
+			}
+			seen[poolName] = true
+
+			if pool, ok := pools[poolName]; ok && strings.EqualFold(pool.GPUType, gpu) {
+				return fmt.Errorf("failover chain %s references pool %q, which already serves %s", gpu, poolName, gpu)
+			}
+		}
+
+		if chain.OnDemand != nil && chain.OnDemand.MaxNodes <= 0 {
+			return fmt.Errorf("failover chain %s onDemand step requires maxNodes > 0", gpu)
+		}
+		if chain.OnDemand != nil {
+			poolName := FailoverOnDemandPoolName(gpu)
+			if seen[poolName] {
+				return fmt.Errorf("failover chain %s lists managed onDemand pool %q explicitly", gpu, poolName)
+			}
+			if _, conflict := pools[poolName]; conflict {
+				return fmt.Errorf("failover chain %s onDemand pool %q conflicts with a configured worker pool", gpu, poolName)
+			}
+		}
+	}
+
+	return nil
 }
 
 type RuntimeConfig struct {
@@ -706,11 +849,16 @@ type ManagedComputeConfig struct {
 	BillableMarginPct *float64                    `key:"billableMarginPct" json:"billable_margin_pct"`
 	Billing           ManagedComputeBillingConfig `key:"billing" json:"billing"`
 	BYOC              ManagedComputeBYOCConfig    `key:"byoc" json:"byoc"`
+	SSH               ManagedComputeSSHConfig     `key:"ssh" json:"ssh"`
 	// Marketplace identity of the machine this worker runs on, set by the
 	// agent in the generated worker config. Buyer usage on the worker is
 	// billed against this listing.
 	MarketplaceListingID string `key:"marketplaceListingID" json:"marketplace_listing_id"`
 	SellerWorkspaceID    string `key:"sellerWorkspaceID" json:"seller_workspace_id"`
+}
+
+type ManagedComputeSSHConfig struct {
+	Enabled bool `key:"enabled" json:"enabled"`
 }
 
 func (c ManagedComputeConfig) BillableMarginPctOrDefault() float64 {

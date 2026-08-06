@@ -1,8 +1,12 @@
 package image
 
 import (
+	"context"
 	"testing"
 
+	"github.com/alicebob/miniredis/v2"
+	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 )
 
@@ -54,4 +58,22 @@ func TestPinImageRefToDigestPreservesRegistryPort(t *testing.T) {
 		"registry.example.com:5000/team/image@"+digest,
 		pinImageRefToDigest("registry.example.com:5000/team/image:latest", digest),
 	)
+}
+
+func TestBaseImageDigestCacheSharedAcrossInstances(t *testing.T) {
+	server := miniredis.RunT(t)
+	rdb := &common.RedisClient{UniversalClient: redis.NewClient(&redis.Options{Addr: server.Addr()})}
+	first := newBaseImageDigestCache(rdb)
+	second := newBaseImageDigestCache(rdb)
+	lookups := 0
+	inspect := func(context.Context, string, string) string {
+		lookups++
+		return "sha256:digest"
+	}
+
+	digest, _ := first.resolve(context.Background(), "node:20-slim", "", inspect)
+	require.Equal(t, "sha256:digest", digest)
+	digest, _ = second.resolve(context.Background(), "node:20-slim", "", inspect)
+	require.Equal(t, "sha256:digest", digest)
+	require.Equal(t, 1, lookups)
 }
