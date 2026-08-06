@@ -1904,4 +1904,5 @@ message AgentPoolRuntimeConfig {
   string durable_disks_path = 7;
   AgentPoolCacheConfig cache = 8;
   string config_group = 9;
+  bool gpu_virtualized = 10;
 }

@@ -928,6 +928,7 @@ func agentPoolRuntimeConfigToProto(config *types.WorkerPoolConfig) *pb.AgentPool
 		ImagesPath:           config.ImagesPath,
 		DurableDisksPath:     config.DurableDisksPath,
 		ConfigGroup:          config.ConfigGroup,
+		GpuVirtualized:       config.GpuVirtualized,
 		Cache: &pb.AgentPoolCacheConfig{
 			Enabled: cacheEnabled,
 			Disk: &pb.AgentPoolCacheDiskConfig{

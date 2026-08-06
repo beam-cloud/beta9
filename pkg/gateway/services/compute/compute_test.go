@@ -5671,6 +5671,7 @@ func TestAgentWorkerSlotStateCarriesMarketplaceModeAndRuntime(t *testing.T) {
 		ContainerStartConcurrency: 64,
 		NetworkSlotPoolSize:       128,
 		NetworkPreallocation:      &networkPreallocation,
+		GpuVirtualized:            true,
 		Priority:                  10,
 		CRIUEnabled:               false,
 		TmpSizeLimit:              "50Gi",
@@ -5698,6 +5699,7 @@ func TestAgentWorkerSlotStateCarriesMarketplaceModeAndRuntime(t *testing.T) {
 	}
 	if wireSlot.PoolConfig == nil ||
 		wireSlot.PoolConfig.NetworkPreallocation ||
+		!wireSlot.PoolConfig.GpuVirtualized ||
 		wireSlot.PoolConfig.CriuEnabled ||
 		wireSlot.PoolConfig.StoragePath != "/mnt/raid/storage" ||
 		wireSlot.PoolConfig.ImagesPath != "/mnt/raid/images" ||
