@@ -108,6 +108,15 @@ func (s *Worker) handleStopContainerArgs(stopArgs types.StopContainerArgs, sourc
 
 // stopContainer stops a container. When force is true, a SIGKILL signal is sent to the container.
 func (s *Worker) stopContainer(containerId string, kill bool) error {
+	ctx, cancel := context.WithTimeout(context.Background(), runtimeStopTimeout)
+	defer cancel()
+	return s.stopContainerWithContext(ctx, containerId, kill)
+}
+
+// stopContainerWithContext keeps runtime control calls bounded. A wedged
+// runsc kill command must not monopolize processStopContainerEvents and block
+// every other container on the worker from receiving its stop signal.
+func (s *Worker) stopContainerWithContext(ctx context.Context, containerId string, kill bool) error {
 	instance, exists := s.containerInstances.Get(containerId)
 	if !exists {
 		log.Info().Str("container_id", containerId).Msg("container not found")
@@ -131,15 +140,23 @@ func (s *Worker) stopContainer(containerId string, kill bool) error {
 	if rt == nil {
 		rt = s.runtime
 	}
+	if rt == nil {
+		return fmt.Errorf("runtime unavailable for container %s", containerId)
+	}
 
 	// Kill the container - this will cause the runtime.Run() call to exit
 	// which triggers all the defers (overlay cleanup, mount cleanup, etc.)
-	err := rt.Kill(context.Background(), instance.Id, signal, &runtime.KillOpts{All: true})
+	err := rt.Kill(ctx, instance.Id, signal, &runtime.KillOpts{All: true})
 	if err != nil {
-		log.Debug().Str("container_id", containerId).Err(err).Msg("error killing container (may already be stopped)")
+		if runtimeContainerNotFound(err) {
+			log.Debug().Str("container_id", containerId).Err(err).Msg("container runtime already stopped")
+			return nil
+		}
+		log.Warn().Str("container_id", containerId).Str("signal", signal.String()).Err(err).Msg("runtime stop command failed")
+		return err
 	}
 
-	log.Info().Str("container_id", containerId).Msg("container stop signal sent")
+	log.Info().Str("container_id", containerId).Str("signal", signal.String()).Msg("container stop signal sent")
 	return nil
 }
 
@@ -154,6 +171,12 @@ func (s *Worker) finalizeContainer(containerId string, request *types.ContainerR
 }
 
 func (s *Worker) clearContainer(containerId string, request *types.ContainerRequest, exitCode int, exitReported bool) {
+	// The startup context stays registered after RunContainer hands work to the
+	// spawn goroutine. Keep it alive for stop events until all runtime work has
+	// ended, then release it here on every success and failure path.
+	s.cancelContainer(containerId)
+	s.unregisterContainerCancel(containerId)
+
 	if request != nil && request.HasDurableDiskMount() {
 		if err := s.syncDurableDiskMounts(request); err != nil {
 			log.Error().Str("container_id", containerId).Err(err).Msg("failed to sync durable disks during container cleanup")
@@ -343,7 +366,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 	var filesystemRestore *checkpointFilesystemRestore
 	if s.canRestoreCheckpoint(request, s.runtime) {
-		filesystemRestore = s.startCheckpointFilesystemRestore(request, outputLogger)
+		filesystemRestore = s.startCheckpointFilesystemRestore(ctx, request, outputLogger)
 	}
 	filesystemRestoreHandedOff := false
 	defer func() {
@@ -461,7 +484,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		portsHandedOff = true
 		filesystemRestoreHandedOff = true
 		s.containerWg.Add(1)
-		go s.spawn(request, spec, outputLogger, opts)
+		go s.spawn(ctx, request, spec, outputLogger, opts)
 		metrics.RecordWorkerStartupPhase("spawn_enqueue", time.Since(phaseStart), request, nil)
 	}
 
@@ -520,7 +543,7 @@ func (s *Worker) loadContainerImage(ctx context.Context, request *types.Containe
 
 	select {
 	case <-ctx.Done():
-		return elapsed, false, nil
+		return elapsed, false, ctx.Err()
 	default:
 	}
 
@@ -1156,8 +1179,8 @@ func validateContainerSpec(spec *specs.Spec) error {
 }
 
 // spawn a container using runc binary
-func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, outputLogger *slog.Logger, opts *ContainerOptions) {
-	ctx, cancel := context.WithCancel(s.ctx)
+func (s *Worker) spawn(parentCtx context.Context, request *types.ContainerRequest, spec *specs.Spec, outputLogger *slog.Logger, opts *ContainerOptions) {
+	ctx, cancel := context.WithCancel(parentCtx)
 	defer s.containerNetworkManager.ReleasePortReservations(request.ContainerId)
 
 	defer func() {
@@ -1219,7 +1242,13 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 				return
 			}
 			restoreFilesystemCleanupNeeded = false
+			if ctx.Err() != nil {
+				return
+			}
 		}
+	}
+	if ctx.Err() != nil {
+		return
 	}
 	phaseStart := time.Now()
 	err = containerInstance.Overlay.Setup()
@@ -1247,6 +1276,9 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	// Only inject GPU devices if runtime supports GPU
 	if request.RequiresGPU() && s.runtime.Capabilities().GPU {
+		if ctx.Err() != nil {
+			return
+		}
 		// Assign n-number of GPUs to a container
 		phaseStart = time.Now()
 		assignedDevices, err := s.containerGPUManager.AssignGPUDevices(request.ContainerId, request.GpuCount)
@@ -1936,7 +1968,15 @@ func (s *Worker) markContainerRunning(ctx context.Context, request *types.Contai
 
 	if resp.State.Status == string(types.ContainerStatusStopping) {
 		log.Info().Str("container_id", containerId).Msg("container started after stop request, sending stop signal")
+		if instance, exists := s.containerInstances.Get(containerId); exists {
+			// A grace timer may have fired before the runtime existed. Starting a
+			// runtime is a new enforcement point, so it must receive its own
+			// SIGTERM-to-SIGKILL escalation.
+			instance.StopEscalationStarted.Store(false)
+			s.containerInstances.Set(containerId, instance)
+		}
 		s.stopContainer(containerId, false)
+		s.ensureContainerStopEscalation(request)
 		return
 	}
 
