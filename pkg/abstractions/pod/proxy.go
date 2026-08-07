@@ -1030,7 +1030,7 @@ func (pb *PodProxyBuffer) proxyWebSocket(conn *connection, container container, 
 		Subprotocols: subprotocols,
 	}
 
-	serverConn, _, err := dstDialer.Dial(wsURL.String(), nil)
+	serverConn, _, err := dstDialer.Dial(wsURL.String(), forwardedWebSocketHeaders(conn.ctx.Request()))
 	if err != nil {
 		return err
 	}
@@ -1039,8 +1039,27 @@ func (pb *PodProxyBuffer) proxyWebSocket(conn *connection, container container, 
 	wg := sync.WaitGroup{}
 	wg.Add(2)
 
+	// Either direction ending has to take the other down with it, or the wait
+	// below never returns and neither connection is ever closed.
+	//
+	// A client that goes away ends the direction reading from it. The other
+	// direction is parked in a read on a backend that has nothing left to say,
+	// and a parked read does not come back on its own: keepalive pings are the
+	// only thing an idle backend sends, and gorilla answers those inside
+	// ReadMessage rather than returning them. Closing both sockets is what
+	// unblocks it.
+	//
+	// Left unclosed, the backend keeps serving a client that no longer exists,
+	// along with whatever it allots per client. ttyd hands out a PTY and a
+	// shell, and once its client limit is full it refuses everyone else by
+	// accepting the socket and immediately closing it — which its client reads
+	// as a dropped connection and answers by reconnecting, forever. So a few
+	// abandoned browser tabs make the terminal permanently unreachable on a
+	// machine that is otherwise perfectly healthy.
 	proxyMessages := func(src, dst *websocket.Conn) {
 		defer wg.Done()
+		defer src.Close()
+		defer dst.Close()
 
 		for {
 			messageType, message, err := src.ReadMessage()
@@ -1058,6 +1077,35 @@ func (pb *PodProxyBuffer) proxyWebSocket(conn *connection, container container, 
 
 	wg.Wait()
 	return nil
+}
+
+// handshakeHeaders are set by the dialer itself. Passing them through a second
+// time makes it refuse the dial, so they are dropped from the copy.
+var handshakeHeaders = []string{
+	"Upgrade",
+	"Connection",
+	"Sec-Websocket-Key",
+	"Sec-Websocket-Version",
+	"Sec-Websocket-Extensions",
+	"Sec-Websocket-Protocol",
+}
+
+// forwardedWebSocketHeaders carries the client's handshake headers through to
+// the backend.
+//
+// Without this the backend sees a handshake with no Origin, no cookies and no
+// authorization, which servers that check any of those reject — a websocket
+// that fails only when proxied, and only for some backends.
+func forwardedWebSocketHeaders(request *http.Request) http.Header {
+	forwarded := request.Header.Clone()
+	if forwarded == nil {
+		return nil
+	}
+
+	for _, header := range handshakeHeaders {
+		forwarded.Del(header)
+	}
+	return forwarded
 }
 
 func podBackendURL(scheme, address, path, rawQuery string) string {

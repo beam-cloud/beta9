@@ -641,6 +641,44 @@
         ]
       }
     },
+    "/pods/{containerId}/snapshot-disks": {
+      "post": {
+        "operationId": "PodService_SandboxSnapshotDisks",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/podPodSandboxSnapshotDisksResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "containerId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/PodServiceSandboxSnapshotDisksBody"
+            }
+          }
+        ],
+        "tags": [
+          "PodService"
+        ]
+      }
+    },
     "/pods/{containerId}/snapshot-memory": {
       "post": {
         "operationId": "PodService_SandboxSnapshotMemory",
@@ -949,6 +987,14 @@
         }
       }
     },
+    "PodServiceSandboxSnapshotDisksBody": {
+      "type": "object",
+      "properties": {
+        "stubId": {
+          "type": "string"
+        }
+      }
+    },
     "PodServiceSandboxSnapshotMemoryBody": {
       "type": "object",
       "properties": {
@@ -1097,6 +1143,21 @@
         },
         "errorMsg": {
           "type": "string"
+        }
+      }
+    },
+    "podPodSandboxDiskSnapshot": {
+      "type": "object",
+      "properties": {
+        "snapshotId": {
+          "type": "string"
+        },
+        "diskName": {
+          "type": "string"
+        },
+        "generation": {
+          "type": "string",
+          "format": "int64"
         }
       }
     },
@@ -1280,6 +1341,24 @@
         },
         "errorMsg": {
           "type": "string"
+        }
+      }
+    },
+    "podPodSandboxSnapshotDisksResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errorMsg": {
+          "type": "string"
+        },
+        "snapshots": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/podPodSandboxDiskSnapshot"
+          }
         }
       }
     },

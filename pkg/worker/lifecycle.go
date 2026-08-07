@@ -35,6 +35,7 @@ const (
 	specBaseName                  string = "config.json"
 	initialSpecBaseName           string = "initial_config.json"
 	containerInnerPort            int    = 8001 // Use a fixed port inside the container
+	maxHostnameLength             int    = 63   // RFC 1123 label limit
 	markRunningRetryTimeout              = 15 * time.Second
 	markRunningRetryInterval             = 100 * time.Millisecond
 	runtimeDeleteTimeout                 = 30 * time.Second
@@ -155,7 +156,9 @@ func (s *Worker) finalizeContainer(containerId string, request *types.ContainerR
 
 func (s *Worker) clearContainer(containerId string, request *types.ContainerRequest, exitCode int, exitReported bool) {
 	if request != nil && request.HasDurableDiskMount() {
-		if err := s.syncDurableDiskMounts(request); err != nil {
+		// Unconditional: a stop is a point in the disk's history whether or not
+		// anything was written, and callers wait for the generation it produces.
+		if _, err := s.syncDurableDiskMounts(request, false); err != nil {
 			log.Error().Str("container_id", containerId).Err(err).Msg("failed to sync durable disks during container cleanup")
 		}
 	}
@@ -784,6 +787,11 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	if err != nil {
 		return nil, err
 	}
+	// Opt-in: the base specs name the runtime, so a stub that says nothing
+	// keeps calling itself "runc" or "runsc" the way it always has.
+	if hostname := sanitizeHostname(request.Hostname); hostname != "" {
+		spec.Hostname = hostname
+	}
 
 	spec.Process.Cwd = defaultContainerDirectory
 	spec.Process.Args = append([]string(nil), request.EntryPoint...)
@@ -1126,6 +1134,29 @@ func (s *Worker) newSpecTemplate() (*specs.Spec, error) {
 		return nil, fmt.Errorf("runtime <%s> has an incomplete base OCI spec", s.runtime.Name())
 	}
 	return &newSpec, nil
+}
+
+// sanitizeHostname reduces a requested hostname to an RFC 1123 label. What
+// callers send is free text and routinely carries capitals, dots and slashes,
+// none of which belong in a hostname. An empty result means there is nothing
+// usable to set, and the container keeps the runtime's own name.
+func sanitizeHostname(name string) string {
+	label := make([]byte, 0, maxHostnameLength)
+	for index := 0; index < len(name) && len(label) < maxHostnameLength; index++ {
+		character := name[index]
+		switch {
+		case character >= 'A' && character <= 'Z':
+			label = append(label, character+('a'-'A'))
+		case character >= 'a' && character <= 'z', character >= '0' && character <= '9':
+			label = append(label, character)
+		case len(label) > 0 && label[len(label)-1] != '-':
+			// A run of unrepresentable characters collapses to a single dash,
+			// so "app/v1.2" reads as "app-v1-2" rather than "app---v1-2". The
+			// guard on an empty label is also what keeps the leading dash off.
+			label = append(label, '-')
+		}
+	}
+	return strings.TrimRight(string(label), "-")
 }
 
 func validateContainerSpec(spec *specs.Spec) error {
@@ -1833,7 +1864,12 @@ func (s *Worker) waitForRestoredContainerExit(ctx context.Context, rt runtime.Ru
 			}
 			return -1, nil
 		}
-		if state.Status != types.RuncContainerStatusRunning {
+		// A checkpoint freezes the container's cgroup, and runc reports a frozen
+		// container as paused until the dump finishes. Reading that as an exit
+		// tears down a container that is only being dumped — and taking its
+		// cgroup away fails the dump too, so the machine loses both its memory
+		// image and the process that was running.
+		if state.Status != types.RuncContainerStatusRunning && state.Status != types.RuncContainerStatusPaused {
 			return -1, nil
 		}
 		observedRunning = true

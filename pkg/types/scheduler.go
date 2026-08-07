@@ -291,6 +291,10 @@ type ContainerRequest struct {
 	CheckpointTrigger *CheckpointTrigger `json:"checkpoint_trigger,omitempty"`
 	TaskId            string             `json:"task_id,omitempty"`
 	DeliveryToken     string             `json:"-" go2proto:"ignore"`
+	// Hostname reported inside the container. Empty leaves the runtime's own
+	// name in place. It has to be stable across a checkpoint and its restore,
+	// since the dumped process reads the value back from its UTS namespace.
+	Hostname string `json:"hostname,omitempty"`
 }
 
 // @go2proto
@@ -626,6 +630,7 @@ func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 		RuntimeSecretNames:       c.RuntimeSecretNames,
 		RuntimeTokenRequired:     c.RuntimeTokenRequired,
 		CheckpointTrigger:        c.CheckpointTrigger.ToProto(),
+		Hostname:                 c.Hostname,
 	}
 }
 
@@ -686,6 +691,7 @@ func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
 		RuntimeSecretNames:       in.RuntimeSecretNames,
 		RuntimeTokenRequired:     in.RuntimeTokenRequired,
 		CheckpointTrigger:        NewCheckpointTriggerFromProto(in.CheckpointTrigger),
+		Hostname:                 in.Hostname,
 	}
 }
 

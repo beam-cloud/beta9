@@ -156,6 +156,7 @@ func (i *podInstance) startContainers(containersToRun int) error {
 			CheckpointTrigger: i.StubConfig.CheckpointTrigger,
 			Ports:             ports,
 			PoolSelector:      i.StubConfig.PoolSelector(),
+			Hostname:          i.StubConfig.Hostname,
 		}
 		if err := abstractions.ConfigureContainerRequestNetwork(runRequest, *i.StubConfig); err != nil {
 			return err

@@ -18,6 +18,7 @@ service BackendRepositoryService {
       returns (CreateDiskSnapshotResponse);
   rpc GetLatestDiskSnapshot(GetLatestDiskSnapshotRequest)
       returns (GetLatestDiskSnapshotResponse);
+  rpc GetDiskSnapshot(GetDiskSnapshotRequest) returns (GetDiskSnapshotResponse);
 }
 
 message GetCheckpointByIdRequest { string checkpoint_id = 1; }
@@ -122,6 +123,17 @@ message GetLatestDiskSnapshotRequest {
 }
 
 message GetLatestDiskSnapshotResponse {
+  bool ok = 1;
+  DiskSnapshot snapshot = 2;
+  string error_msg = 3;
+}
+
+message GetDiskSnapshotRequest {
+  string workspace_id = 1;
+  string snapshot_id = 2;
+}
+
+message GetDiskSnapshotResponse {
   bool ok = 1;
   DiskSnapshot snapshot = 2;
   string error_msg = 3;

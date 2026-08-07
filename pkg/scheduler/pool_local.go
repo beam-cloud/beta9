@@ -225,12 +225,18 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 			SecurityContext: &corev1.SecurityContext{
 				Privileged: ptr.To(true),
 			},
-			Ports: []corev1.ContainerPort{
-				{
-					Name:          "metrics",
-					ContainerPort: int32(wpc.config.Monitoring.Prometheus.Port),
-				},
-			},
+			// No Ports declaration on purpose. Workers run with hostNetwork,
+			// where every declared containerPort counts as a hostPort claim
+			// and the kube scheduler will not co-locate two pods claiming the
+			// same port — which limited the cluster to one worker per node.
+			// Nothing binds the Prometheus port on the worker (metrics are
+			// pushed, not scraped; see monitoring.victoriametrics.pushURL),
+			// and all real listeners pick free ports at bind time: the
+			// container runtime server listens on :0, container port
+			// bindings go through getRandomFreePort, and the cache server
+			// falls back to an ephemeral port when its default is taken.
+			// Scrape discovery, where enabled, uses the prometheus.io/port
+			// pod label, which does not require a declared containerPort.
 			Env:          wpc.getWorkerEnvironment(workerId, workerCpu, workerMemory, workerGpuType, workerGpuCount, token),
 			VolumeMounts: wpc.getWorkerVolumeMounts(),
 		},

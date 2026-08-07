@@ -65,6 +65,8 @@ type DurableDiskMountConfig struct {
 	Size       string `json:"size"`
 	Filesystem string `json:"filesystem"`
 	Driver     string `json:"driver"`
+	// Where a disk with no history of its own gets its first contents from.
+	SourceSnapshotId string `json:"source_snapshot_id,omitempty"`
 }
 
 func NewDurableDiskMountConfigFromProto(in *pb.DurableDisk) *DurableDiskMountConfig {
@@ -73,10 +75,11 @@ func NewDurableDiskMountConfigFromProto(in *pb.DurableDisk) *DurableDiskMountCon
 	}
 
 	config := &DurableDiskMountConfig{
-		Name:       in.Name,
-		Size:       in.Size,
-		Filesystem: in.Filesystem,
-		Driver:     in.Driver,
+		Name:             in.Name,
+		Size:             in.Size,
+		Filesystem:       in.Filesystem,
+		Driver:           in.Driver,
+		SourceSnapshotId: in.SourceSnapshotId,
 	}
 
 	return config
@@ -91,10 +94,11 @@ func (m *Mount) ToProto() *pb.Mount {
 	var durableDisk *pb.DurableDiskMountConfig
 	if m.DurableDisk != nil {
 		durableDisk = &pb.DurableDiskMountConfig{
-			Name:       m.DurableDisk.Name,
-			Size:       m.DurableDisk.Size,
-			Filesystem: m.DurableDisk.Filesystem,
-			Driver:     m.DurableDisk.Driver,
+			Name:             m.DurableDisk.Name,
+			Size:             m.DurableDisk.Size,
+			Filesystem:       m.DurableDisk.Filesystem,
+			Driver:           m.DurableDisk.Driver,
+			SourceSnapshotId: m.DurableDisk.SourceSnapshotId,
 		}
 	}
 
@@ -118,10 +122,11 @@ func NewMountFromProto(in *pb.Mount) *Mount {
 	var durableDisk *DurableDiskMountConfig
 	if in.DurableDisk != nil {
 		durableDisk = &DurableDiskMountConfig{
-			Name:       in.DurableDisk.Name,
-			Size:       in.DurableDisk.Size,
-			Filesystem: in.DurableDisk.Filesystem,
-			Driver:     in.DurableDisk.Driver,
+			Name:             in.DurableDisk.Name,
+			Size:             in.DurableDisk.Size,
+			Filesystem:       in.DurableDisk.Filesystem,
+			Driver:           in.DurableDisk.Driver,
+			SourceSnapshotId: in.DurableDisk.SourceSnapshotId,
 		}
 	}
 

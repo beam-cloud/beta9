@@ -212,34 +212,45 @@ func (r *Runc) Restore(ctx context.Context, containerID string, opts *RestoreOpt
 	}
 
 	cmd := exec.Command(r.runcCommand(), r.restoreArgs(containerID, opts)...)
-	var outputRead, outputWrite *os.File
-	var outputDone chan struct{}
-	if opts.OutputWriter != nil {
-		var err error
-		outputRead, outputWrite, err = os.Pipe()
-		if err != nil {
-			return -1, fmt.Errorf("create restore output pipe: %w", err)
-		}
-		cmd.Stdout = outputWrite
-		cmd.Stderr = outputWrite
+
+	// `runc restore --detach` gives the restored init its own standard streams,
+	// so a stream left nil here becomes /dev/null opened in the worker's mount
+	// namespace. The container cannot see that mount, and every later
+	// checkpoint of it dies on the dangling reference: "Can't lookup mount for
+	// fd=0 path=/dev/null". A pipe belongs to no mount at all, which is both
+	// what the container gets on first boot and what CRIU can dump.
+	stdinRead, stdinWrite, err := os.Pipe()
+	if err != nil {
+		return -1, fmt.Errorf("create restore stdin pipe: %w", err)
 	}
+	defer stdinRead.Close()
+	defer stdinWrite.Close()
+	cmd.Stdin = stdinRead
+
+	outputRead, outputWrite, err := os.Pipe()
+	if err != nil {
+		return -1, fmt.Errorf("create restore output pipe: %w", err)
+	}
+	cmd.Stdout = outputWrite
+	cmd.Stderr = outputWrite
 
 	if err := cmd.Start(); err != nil {
-		if outputRead != nil {
-			_ = outputRead.Close()
-			_ = outputWrite.Close()
-		}
+		_ = outputRead.Close()
+		_ = outputWrite.Close()
 		return -1, err
 	}
-	if outputRead != nil {
-		_ = outputWrite.Close()
-		outputDone = make(chan struct{})
-		go func() {
-			defer close(outputDone)
-			_, _ = io.Copy(opts.OutputWriter, outputRead)
-			_ = outputRead.Close()
-		}()
-	}
+	_ = outputWrite.Close()
+
+	outputDone := make(chan struct{})
+	go func() {
+		defer close(outputDone)
+		writer := opts.OutputWriter
+		if writer == nil {
+			writer = io.Discard
+		}
+		_, _ = io.Copy(writer, outputRead)
+		_ = outputRead.Close()
+	}()
 
 	resultCh := make(chan runcCommandResult, 1)
 	go func() {

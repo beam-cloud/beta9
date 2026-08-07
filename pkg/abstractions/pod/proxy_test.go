@@ -18,6 +18,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
+	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
 )
 
@@ -34,6 +35,32 @@ func TestPodBackendURLPreservesDirectAddress(t *testing.T) {
 	got := podBackendURL("http", "127.0.0.1:8001", "metrics", "")
 	if got != "http://127.0.0.1:8001/metrics" {
 		t.Fatalf("direct backend url = %q", got)
+	}
+}
+
+func TestForwardedWebSocketHeadersKeepsOriginAndDropsHandshake(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/websockify", nil)
+	request.Header.Set("Origin", "https://app.example.com")
+	request.Header.Set("Cookie", "session=abc")
+	request.Header.Set("Upgrade", "websocket")
+	request.Header.Set("Connection", "Upgrade")
+	request.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+	request.Header.Set("Sec-WebSocket-Version", "13")
+	request.Header.Set("Sec-WebSocket-Protocol", "binary")
+	request.Header.Set("Sec-WebSocket-Extensions", "permessage-deflate")
+
+	forwarded := forwardedWebSocketHeaders(request)
+
+	if got := forwarded.Get("Origin"); got != "https://app.example.com" {
+		t.Fatalf("origin = %q, want it forwarded", got)
+	}
+	if got := forwarded.Get("Cookie"); got != "session=abc" {
+		t.Fatalf("cookie = %q, want it forwarded", got)
+	}
+	for _, header := range handshakeHeaders {
+		if got := forwarded.Get(header); got != "" {
+			t.Fatalf("%s = %q, want it dropped so the dialer can set it", header, got)
+		}
 	}
 }
 
@@ -558,6 +585,81 @@ func TestForwardContainerRequestProxiesPinnedContainerWithoutQueueing(t *testing
 	}
 	if got := pb.containerConnectionCount(containerId); got != 0 {
 		t.Fatalf("container connections = %d, want released", got)
+	}
+}
+
+// A client that goes away has to take the backend session with it, because
+// nothing else will. The direction reading from the backend is parked on a
+// socket with nothing left to say, and an idle backend sends only keepalive
+// pings, which gorilla answers inside ReadMessage rather than returning. So a
+// proxy that waits for both directions before closing either waits forever.
+//
+// Left open, the backend goes on serving a client that no longer exists, along
+// with whatever it allots per client. ttyd hands out a PTY and a shell, and
+// once its client limit is full it refuses everyone else by accepting the
+// socket and closing it immediately — which its client reads as a dropped
+// connection and answers by reconnecting, forever. A few abandoned browser
+// tabs are then enough to make the terminal permanently unreachable on a
+// machine that is otherwise perfectly healthy.
+func TestProxyWebSocketReleasesBackendWhenTheClientVanishes(t *testing.T) {
+	released := make(chan struct{})
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("backend upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		// Idle, the way a shell nobody is typing at is idle. This read returns
+		// only once the proxy lets the socket go.
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				break
+			}
+		}
+		close(released)
+	}))
+	t.Cleanup(backend.Close)
+
+	rdb := newPodProxyTestRedis(t)
+	repo := repository.NewContainerRedisRepositoryForTest(rdb)
+	containerId := "sandbox-e9c29586-c465-4a67-9c9b-25293d1ce77b-abc12345"
+	if err := repo.SetContainerAddressMap(containerId, map[int32]string{
+		8765: backend.Listener.Addr().String(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	pb := &PodProxyBuffer{
+		ctx:           context.Background(),
+		rdb:           rdb,
+		workspace:     &types.Workspace{Name: "workspace"},
+		stubId:        "e9c29586-c465-4a67-9c9b-25293d1ce77b",
+		stubConfig:    &types.StubConfigV1{},
+		containerRepo: repo,
+	}
+
+	e := echo.New()
+	e.GET("/:port/:subPath", func(ctx echo.Context) error {
+		return pb.ForwardContainerRequest(ctx, containerId)
+	})
+	front := httptest.NewServer(e)
+	t.Cleanup(front.Close)
+
+	client, _, err := websocket.DefaultDialer.Dial("ws://"+front.Listener.Addr().String()+"/8765/ws", nil)
+	if err != nil {
+		t.Fatalf("dial through the proxy: %v", err)
+	}
+
+	// Gone without a goodbye, the way a slept laptop or a dropped VPN goes.
+	client.Close()
+
+	select {
+	case <-released:
+	case <-time.After(15 * time.Second):
+		t.Fatal("the backend is still holding a session open for a client that has gone")
 	}
 }
 

@@ -149,7 +149,14 @@ func loadDurableDiskSnapshotManifest(ctx context.Context, store durableDiskSnaps
 	return &manifest, nil
 }
 
-func createDurableDiskDirectorySnapshot(ctx context.Context, store durableDiskSnapshotStore, sourceDir, objectPrefix string, snapshot types.DiskSnapshot, chunkSize int64, previous *types.DiskSnapshotManifest) (*types.DiskSnapshot, *types.DiskSnapshotManifest, error) {
+// createDurableDiskDirectorySnapshot writes a new generation of a disk.
+//
+// When skipUnchanged is set and the directory holds exactly what the previous
+// generation holds, it returns a nil snapshot instead: no manifest is uploaded
+// and the caller is expected to keep using the parent. That is what stops a
+// caller snapshotting on a timer from accumulating a generation every few
+// minutes for a disk nobody has written to.
+func createDurableDiskDirectorySnapshot(ctx context.Context, store durableDiskSnapshotStore, sourceDir, objectPrefix string, snapshot types.DiskSnapshot, chunkSize int64, previous *types.DiskSnapshotManifest, skipUnchanged bool) (*types.DiskSnapshot, *types.DiskSnapshotManifest, error) {
 	if store == nil {
 		return nil, nil, fmt.Errorf("durable disk snapshot store is nil")
 	}
@@ -255,6 +262,14 @@ func createDurableDiskDirectorySnapshot(ctx context.Context, store durableDiskSn
 	manifest.LogicalSizeBytes = logicalSizeBytes
 	manifest.StoredSizeBytes = storedSizeBytes
 
+	// Checked here rather than before the walk, because there is no way to know
+	// whether anything moved without looking. The walk reuses the previous
+	// generation's chunks for files whose metadata is unchanged, so this costs a
+	// directory traversal and nothing else.
+	if skipUnchanged && durableDiskSnapshotContentsMatch(previous, manifest) {
+		return nil, nil, nil
+	}
+
 	manifestKey := path.Join(objectPrefix, "manifest.json")
 	manifestDigest, manifestSizeBytes, err := uploadDurableDiskSnapshotManifest(ctx, store, manifestKey, manifest)
 	if err != nil {
@@ -271,6 +286,61 @@ func createDurableDiskDirectorySnapshot(ctx context.Context, store durableDiskSn
 	snapshot.LogicalSizeBytes = manifest.LogicalSizeBytes
 	snapshot.StoredSizeBytes = manifest.StoredSizeBytes
 	return &snapshot, manifest, nil
+}
+
+// durableDiskSnapshotContentsMatch reports whether restoring either manifest
+// would produce the same directory.
+//
+// Compared field by field rather than by hashing the manifests, because a
+// manifest carries its generation, its parent and the time it was written, so
+// two of them are never byte-identical however little the disk moved.
+//
+// Device and inode numbers are left out: they identify a file on the filesystem
+// it happens to be sitting on, and a restore builds a fresh one, so an unchanged
+// disk would otherwise read as different the first time it was captured after
+// coming back. Change time is left out for the same reason it is not restored —
+// it moves on metadata operations that leave the contents alone. Everything a
+// restore does reproduce is compared, modification time included.
+func durableDiskSnapshotContentsMatch(previous, current *types.DiskSnapshotManifest) bool {
+	if previous == nil || current == nil {
+		return false
+	}
+	if previous.Format != current.Format || len(previous.Files) != len(current.Files) {
+		return false
+	}
+
+	// Both are sorted by path, so this walks two views of the same tree.
+	for i, before := range previous.Files {
+		after := current.Files[i]
+		if before.Path != after.Path ||
+			before.Type != after.Type ||
+			before.Mode != after.Mode ||
+			before.Uid != after.Uid ||
+			before.Gid != after.Gid ||
+			before.SizeBytes != after.SizeBytes ||
+			before.ModTimeUnixNano != after.ModTimeUnixNano ||
+			before.LinkName != after.LinkName ||
+			!durableDiskSnapshotChunksMatch(before.Chunks, after.Chunks) {
+			return false
+		}
+	}
+	return true
+}
+
+// Digests and offsets, not object keys: the same bytes stored under a different
+// key are still the same bytes.
+func durableDiskSnapshotChunksMatch(previous, current []types.DiskSnapshotChunk) bool {
+	if len(previous) != len(current) {
+		return false
+	}
+	for i, before := range previous {
+		after := current[i]
+		if before.Digest != after.Digest || before.OffsetBytes != after.OffsetBytes ||
+			before.SizeBytes != after.SizeBytes {
+			return false
+		}
+	}
+	return true
 }
 
 func durableDiskSnapshotFilesByPath(manifest *types.DiskSnapshotManifest) map[string]types.DiskSnapshotFile {

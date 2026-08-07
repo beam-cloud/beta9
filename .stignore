@@ -32,3 +32,9 @@ bin/worker
 bin/gateway
 sdk
 benchmarks
+
+# stray worktrees and build output that have no business in the dev container
+.codex-*
+.htmlcov
+node_modules
+.next

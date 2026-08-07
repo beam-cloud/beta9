@@ -147,6 +147,23 @@ func (s *BackendRepositoryService) GetLatestDiskSnapshot(ctx context.Context, re
 	return &pb.GetLatestDiskSnapshotResponse{Ok: true, Snapshot: diskSnapshotToProto(snapshot)}, nil
 }
 
+func (s *BackendRepositoryService) GetDiskSnapshot(ctx context.Context, req *pb.GetDiskSnapshotRequest) (*pb.GetDiskSnapshotResponse, error) {
+	workspace, err := s.backendRepo.GetWorkspaceByExternalId(ctx, req.WorkspaceId)
+	if err != nil {
+		return &pb.GetDiskSnapshotResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	snapshot, err := s.backendRepo.GetDiskSnapshot(ctx, workspace.Id, req.SnapshotId)
+	if err != nil {
+		var notFound *types.ErrDiskSnapshotNotFound
+		if errors.As(err, &notFound) {
+			return &pb.GetDiskSnapshotResponse{Ok: true}, nil
+		}
+		return &pb.GetDiskSnapshotResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+	return &pb.GetDiskSnapshotResponse{Ok: true, Snapshot: diskSnapshotToProto(snapshot)}, nil
+}
+
 func diskSnapshotToProto(snapshot *types.DiskSnapshot) *pb.DiskSnapshot {
 	if snapshot == nil {
 		return nil

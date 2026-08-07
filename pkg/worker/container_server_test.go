@@ -57,6 +57,41 @@ func TestContainerStreamLogsAcknowledgesAttachment(t *testing.T) {
 	require.True(t, stream.attached)
 }
 
+func TestContainerSnapshotDisksReportsWhatItCaptured(t *testing.T) {
+	request := &types.ContainerRequest{ContainerId: "container-id"}
+	var snapshotted *types.ContainerRequest
+	server := &ContainerRuntimeServer{
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		snapshotDisks: func(request *types.ContainerRequest) ([]*types.DiskSnapshot, error) {
+			snapshotted = request
+			return []*types.DiskSnapshot{{ExternalId: "snapshot-1", DiskName: "home", Generation: 7}}, nil
+		},
+	}
+	server.containerInstances.Set("container-id", &ContainerInstance{Request: request})
+
+	response, err := server.ContainerSnapshotDisks(context.Background(), &pb.ContainerSnapshotDisksRequest{ContainerId: "container-id"})
+
+	require.NoError(t, err)
+	require.True(t, response.Ok)
+	require.Same(t, request, snapshotted)
+	// The caller gets the ID back rather than having to poll for a generation
+	// it hopes is the one it just asked for.
+	require.Len(t, response.Snapshots, 1)
+	require.Equal(t, "snapshot-1", response.Snapshots[0].SnapshotId)
+	require.Equal(t, "home", response.Snapshots[0].DiskName)
+	require.Equal(t, int64(7), response.Snapshots[0].Generation)
+}
+
+func TestContainerSnapshotDisksRefusesAnUnknownContainer(t *testing.T) {
+	server := &ContainerRuntimeServer{containerInstances: common.NewSafeMap[*ContainerInstance]()}
+
+	response, err := server.ContainerSnapshotDisks(context.Background(), &pb.ContainerSnapshotDisksRequest{ContainerId: "gone"})
+
+	require.NoError(t, err)
+	require.False(t, response.Ok)
+	require.Contains(t, response.ErrorMsg, "not found")
+}
+
 func TestContainerExecDoesNotMutateBaseOrInstanceProcess(t *testing.T) {
 	containerId := "container-exec-isolated"
 	instanceEnv := []string{"INSTANCE=original"}

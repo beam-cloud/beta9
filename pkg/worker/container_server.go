@@ -67,6 +67,7 @@ type ContainerRuntimeServer struct {
 	podAddr                 string
 	backendRoute            backendRouteFunc
 	createCheckpoint        func(ctx context.Context, opts *CreateCheckpointOpts) error
+	snapshotDisks           func(request *types.ContainerRequest) ([]*types.DiskSnapshot, error)
 	grpcServer              *grpc.Server
 	mu                      sync.Mutex
 	exposePortMu            sync.Mutex
@@ -85,6 +86,7 @@ type ContainerRuntimeServerOpts struct {
 	WorkerID                string
 	BackendRoute            backendRouteFunc
 	CreateCheckpoint        func(ctx context.Context, opts *CreateCheckpointOpts) error
+	SnapshotDisks           func(request *types.ContainerRequest) ([]*types.DiskSnapshot, error)
 }
 
 // NewContainerRuntimeServer creates a new runtime-agnostic container server
@@ -111,6 +113,7 @@ func NewContainerRuntimeServer(opts *ContainerRuntimeServerOpts) (*ContainerRunt
 		workerID:                opts.WorkerID,
 		backendRoute:            opts.BackendRoute,
 		createCheckpoint:        opts.CreateCheckpoint,
+		snapshotDisks:           opts.SnapshotDisks,
 	}, nil
 }
 
@@ -301,6 +304,36 @@ func (s *ContainerRuntimeServer) ContainerCheckpoint(ctx context.Context, in *pb
 	}
 
 	return &pb.ContainerCheckpointResponse{Ok: true, CheckpointId: checkpointId}, nil
+}
+
+// ContainerSnapshotDisks snapshots the container's durable disks without
+// stopping it. The same snapshot happens on container cleanup; doing it on
+// demand is what lets a caller capture the filesystem of a container it means
+// to keep running, such as when cloning one.
+func (s *ContainerRuntimeServer) ContainerSnapshotDisks(ctx context.Context, in *pb.ContainerSnapshotDisksRequest) (*pb.ContainerSnapshotDisksResponse, error) {
+	instance, exists := s.containerInstances.Get(in.ContainerId)
+	if !exists {
+		return &pb.ContainerSnapshotDisksResponse{Ok: false, ErrorMsg: "Container not found"}, nil
+	}
+	if s.snapshotDisks == nil {
+		return &pb.ContainerSnapshotDisksResponse{Ok: false, ErrorMsg: "Durable disks are not available on this worker"}, nil
+	}
+
+	snapshots, err := s.snapshotDisks(instance.Request)
+	if err != nil {
+		log.Error().Str("container_id", in.ContainerId).Msgf("failed to snapshot durable disks: %v", err)
+		return &pb.ContainerSnapshotDisksResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	response := &pb.ContainerSnapshotDisksResponse{Ok: true}
+	for _, snapshot := range snapshots {
+		response.Snapshots = append(response.Snapshots, &pb.ContainerDiskSnapshot{
+			SnapshotId: snapshot.ExternalId,
+			DiskName:   snapshot.DiskName,
+			Generation: snapshot.Generation,
+		})
+	}
+	return response, nil
 }
 
 // ContainerArchive archives a container's filesystem
