@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	common "github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/runtime"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/opencontainers/runtime-spec/specs-go"
@@ -20,122 +20,6 @@ const (
 	thunderNvidiaMLLibraryPath   = "/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1"
 	thunderCudaDriverLibraryPath = "/usr/lib/x86_64-linux-gnu/libcuda.so.1"
 )
-
-type thunderSetupState int
-
-const (
-	thunderSetupPending thunderSetupState = iota
-	thunderSetupReady
-	thunderSetupFailed
-)
-
-type thunderSetupStatus struct {
-	done chan struct{}
-	once sync.Once
-
-	mu    sync.RWMutex
-	state thunderSetupState
-	err   error
-}
-
-func newThunderSetupStatus() *thunderSetupStatus {
-	return &thunderSetupStatus{
-		done:  make(chan struct{}),
-		state: thunderSetupPending,
-	}
-}
-
-func (s *thunderSetupStatus) complete(err error) {
-	s.once.Do(func() {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		if err != nil {
-			s.state = thunderSetupFailed
-			s.err = err
-		} else {
-			s.state = thunderSetupReady
-		}
-		close(s.done)
-	})
-}
-
-func (s *thunderSetupStatus) wait(ctx context.Context) error {
-	select {
-	case <-s.done:
-		s.mu.RLock()
-		defer s.mu.RUnlock()
-		if s.state == thunderSetupFailed {
-			if s.err != nil {
-				return fmt.Errorf("Thunder client setup failed: %w", s.err)
-			}
-			return fmt.Errorf("Thunder client setup failed")
-		}
-		return nil
-	case <-ctx.Done():
-		return fmt.Errorf("Thunder client setup did not complete: %w", ctx.Err())
-	}
-}
-
-type thunderSetupTracker struct {
-	mu       sync.Mutex
-	statuses map[string]*thunderSetupStatus
-}
-
-func newThunderSetupTracker() *thunderSetupTracker {
-	return &thunderSetupTracker{statuses: map[string]*thunderSetupStatus{}}
-}
-
-func (t *thunderSetupTracker) Begin(containerId string) {
-	if t == nil || containerId == "" {
-		return
-	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if _, exists := t.statuses[containerId]; exists {
-		return
-	}
-	t.statuses[containerId] = newThunderSetupStatus()
-}
-
-func (t *thunderSetupTracker) Complete(containerId string, err error) {
-	if t == nil || containerId == "" {
-		return
-	}
-	t.mu.Lock()
-	status, exists := t.statuses[containerId]
-	if !exists {
-		status = newThunderSetupStatus()
-		t.statuses[containerId] = status
-	}
-	t.mu.Unlock()
-	status.complete(err)
-}
-
-func (t *thunderSetupTracker) Wait(ctx context.Context, containerId string) error {
-	if t == nil || containerId == "" {
-		return nil
-	}
-	t.mu.Lock()
-	status := t.statuses[containerId]
-	t.mu.Unlock()
-	if status == nil {
-		return nil
-	}
-	return status.wait(ctx)
-}
-
-func (t *thunderSetupTracker) Delete(containerId string) {
-	if t == nil || containerId == "" {
-		return
-	}
-	t.mu.Lock()
-	status := t.statuses[containerId]
-	delete(t.statuses, containerId)
-	t.mu.Unlock()
-	if status != nil {
-		status.complete(fmt.Errorf("Thunder client setup cancelled"))
-	}
-}
 
 type ContainerThunderManager struct {
 	client       pb.ThunderServiceClient
@@ -235,52 +119,40 @@ func thunderBindMount(path string) specs.Mount {
 	}
 }
 
-func (s *Worker) installThunderClient(ctx context.Context, request *types.ContainerRequest) error {
+func (s *Worker) thunderStartupHook(request *types.ContainerRequest, spec *specs.Spec) (runtime.StartupHook, error) {
 	if s == nil || request == nil || !s.gpuVirtualizedForRequest(request) {
-		return nil
+		return nil, nil
 	}
 	manager, ok := s.containerThunderManager.(*ContainerThunderManager)
 	if !ok || manager == nil {
-		return fmt.Errorf("thunder manager unavailable")
+		return nil, fmt.Errorf("thunder manager unavailable")
 	}
 	cmd, ok := manager.installCache.Get(request.ContainerId)
 	if !ok || strings.TrimSpace(cmd) == "" {
-		return fmt.Errorf("missing Thunder install command for container %s", request.ContainerId)
+		return nil, fmt.Errorf("missing Thunder install command for container %s", request.ContainerId)
 	}
-	instance, ok := s.containerInstances.Get(request.ContainerId)
-	if !ok || instance == nil || instance.Runtime == nil {
-		return fmt.Errorf("container runtime unavailable for Thunder install")
+	if spec == nil || spec.Process == nil {
+		return nil, fmt.Errorf("container spec unavailable for Thunder install")
 	}
 
-	env := append([]string(nil), instance.Spec.Process.Env...)
+	env := append([]string(nil), spec.Process.Env...)
 	if !containsEnvKey(env, "PATH") {
 		env = append(env, "PATH="+strings.Join(defaultContainerPath, ":"))
 	}
 	cwd := "/"
-	if instance.Spec != nil && instance.Spec.Process != nil {
-		if instance.Spec.Process.Cwd != "" {
-			cwd = instance.Spec.Process.Cwd
-		}
+	if spec.Process.Cwd != "" {
+		cwd = spec.Process.Cwd
 	}
-	installCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-	defer cancel()
-	log.Info().Str("container_id", request.ContainerId).Msg("installing Thunder client in sandbox")
-	if instance.SandboxProcessManager != nil && instance.SandboxProcessManagerReady {
-		if err := runSandboxProcessManagerCommand(installCtx, instance.SandboxProcessManager, []string{"sh", "-c", cmd}, cwd, env, "Thunder client install"); err != nil {
-			return fmt.Errorf("failed to install Thunder client: %w", err)
-		}
-	} else {
-		proc := specs.Process{
+
+	return runtime.StartupExecHook{
+		HookName: "thunder_client_install",
+		Process: specs.Process{
 			Args: []string{"sh", "-c", cmd},
 			Cwd:  cwd,
 			Env:  env,
-		}
-		if err := instance.Runtime.Exec(installCtx, request.ContainerId, proc, nil); err != nil {
-			return fmt.Errorf("failed to install Thunder client: %w", err)
-		}
-	}
-	log.Info().Str("container_id", request.ContainerId).Msg("installed Thunder client in sandbox")
-	return nil
+		},
+		Timeout: 2 * time.Minute,
+	}, nil
 }
 
 func containsEnvKey(env []string, key string) bool {

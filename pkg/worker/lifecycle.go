@@ -269,8 +269,6 @@ func (s *Worker) markContainerStopping(containerId string) {
 }
 
 func (s *Worker) deleteContainer(containerId string) {
-	s.thunderSetupTracker.Delete(containerId)
-
 	if instance, exists := s.containerInstances.Get(containerId); exists && instance.SandboxProcessManager != nil {
 		if err := instance.SandboxProcessManager.Cleanup(); err != nil {
 			log.Debug().Str("container_id", containerId).Err(err).Msg("failed to cleanup sandbox process manager client")
@@ -310,9 +308,6 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		}
 		if request.Stub.Type.Kind() == types.StubTypeSandbox {
 			instance.initializeProcessManagerReadiness()
-			if s.gpuVirtualizedForRequest(request) {
-				s.thunderSetupTracker.Begin(request.ContainerId)
-			}
 		}
 	}
 	s.containerInstances.Set(containerId, instance)
@@ -1289,6 +1284,16 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		spec.Process.Env = gpuManager.InjectAssignedEnvVars(spec.Process.Env, assignedDevices)
 	}
 
+	if request.Stub.Type.Kind() == types.StubTypeSandbox && s.gpuVirtualizedForRequest(request) {
+		hook, err := s.thunderStartupHook(request, spec)
+		if err != nil {
+			log.Error().Str("container_id", request.ContainerId).Msgf("failed to prepare Thunder startup hook: %v", err)
+			return
+		}
+		containerInstance.Runtime = runtime.WithStartupHooks(containerInstance.Runtime, hook)
+		s.containerInstances.Set(containerId, containerInstance)
+	}
+
 	// Expose the bind ports
 	phaseStart = time.Now()
 	err = s.containerNetworkManager.ExposePorts(containerId, opts.StartupPortBindings)
@@ -1387,8 +1392,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	startedChan := make(chan int, 1)
 	checkpointPIDChan := make(chan int, 1)
 	monitorPIDChan := make(chan int, 1)
-	thunderInstallResult := make(chan error, 1)
-
 	defer func() {
 		// Close in reverse order of dependency
 		close(checkpointPIDChan)
@@ -1446,24 +1449,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 				return
 			}
 
-			if s.gpuVirtualizedForRequest(request) {
-				if err := s.installThunderClient(ctx, request); err != nil {
-					s.thunderSetupTracker.Complete(request.ContainerId, err)
-					log.Error().Err(err).Str("container_id", request.ContainerId).Msg("failed to install Thunder client")
-					s.stopContainer(request.ContainerId, false)
-					select {
-					case thunderInstallResult <- err:
-					default:
-					}
-					return
-				}
-				s.thunderSetupTracker.Complete(request.ContainerId, nil)
-				select {
-				case thunderInstallResult <- nil:
-				default:
-				}
-			}
-
 			if request.DockerEnabled {
 				go s.startDockerDaemon(ctx, containerId, instance)
 			}
@@ -1487,7 +1472,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		s.setupOOMWatcher(ctx, containerId, pid, spec, request, outputLogger, &isOOMKilled)
 	}()
 
-	exitCode, _ = s.runContainer(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan, thunderInstallResult, opts.StartupStartedAt, opts.StartupPortBindings, opts.CheckpointFilesystemRestore)
+	exitCode, _ = s.runContainer(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan, opts.StartupStartedAt, opts.StartupPortBindings, opts.CheckpointFilesystemRestore)
 
 	stopReason := types.StopContainerReasonUnknown
 	containerInstance, exists = s.containerInstances.Get(containerId)
@@ -1604,7 +1589,7 @@ func eventStopReason(stopReason types.StopContainerReason) string {
 	return string(stopReason)
 }
 
-func (s *Worker) runContainer(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, outputWriter *common.OutputWriter, startedChan chan int, checkpointPIDChan chan int, thunderInstallResult chan error, startupStartedAt time.Time, startupPortBindings []PortBinding, filesystemRestore *checkpointFilesystemRestore) (int, error) {
+func (s *Worker) runContainer(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, outputWriter *common.OutputWriter, startedChan chan int, checkpointPIDChan chan int, startupStartedAt time.Time, startupPortBindings []PortBinding, filesystemRestore *checkpointFilesystemRestore) (int, error) {
 	phaseStart := time.Now()
 	releaseStartupSlot := func() {}
 	if s.containerStartSem != nil {
@@ -1725,18 +1710,6 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 			publishRuntimeStarted(pid)
 		}
 
-		if request.Stub.Type.Kind() == types.StubTypeSandbox && s.gpuVirtualizedForRequest(request) {
-			select {
-			case err := <-thunderInstallResult:
-				if err != nil {
-					return
-				}
-			case <-ctx.Done():
-				return
-			}
-		}
-
-		s.markContainerRunning(ctx, request, startupStartedAt)
 	}
 
 	startRuntimeStartedHandler := func() func() {

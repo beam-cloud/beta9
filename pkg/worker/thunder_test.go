@@ -2,75 +2,18 @@ package worker
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"testing"
 	"time"
 
-	common "github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/runtime"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/opencontainers/runtime-spec/specs-go"
+	"github.com/stretchr/testify/require"
 	"github.com/tj/assert"
 	"google.golang.org/grpc"
 )
-
-func TestThunderSetupTrackerWaitsUntilComplete(t *testing.T) {
-	tracker := newThunderSetupTracker()
-	tracker.Begin("container-123")
-
-	done := make(chan error, 1)
-	go func() {
-		done <- tracker.Wait(context.Background(), "container-123")
-	}()
-
-	select {
-	case err := <-done:
-		t.Fatalf("wait returned before completion: %v", err)
-	case <-time.After(25 * time.Millisecond):
-	}
-
-	tracker.Complete("container-123", nil)
-	requireNoErrorEventually(t, done)
-}
-
-func TestThunderSetupTrackerReturnsFailure(t *testing.T) {
-	tracker := newThunderSetupTracker()
-	tracker.Begin("container-123")
-	tracker.Complete("container-123", errors.New("install failed"))
-
-	err := tracker.Wait(context.Background(), "container-123")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "install failed")
-}
-
-func TestThunderSetupTrackerDeleteWakesWaiters(t *testing.T) {
-	tracker := newThunderSetupTracker()
-	tracker.Begin("container-123")
-	tracker.mu.Lock()
-	status := tracker.statuses["container-123"]
-	tracker.mu.Unlock()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- status.wait(context.Background())
-	}()
-
-	tracker.Delete("container-123")
-	err := <-done
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "cancelled")
-}
-
-func requireNoErrorEventually(t *testing.T, done <-chan error) {
-	t.Helper()
-	select {
-	case err := <-done:
-		assert.NoError(t, err)
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for Thunder setup wait")
-	}
-}
 
 func TestThunderInjectEnvVarsAddsThunderLDPreload(t *testing.T) {
 	manager := NewContainerThunderManager(nil)
@@ -170,45 +113,39 @@ func TestThunderUnassignDeletesClientEnrollment(t *testing.T) {
 	assert.False(t, ok)
 }
 
-func TestInstallThunderClientExecutesCachedInstaller(t *testing.T) {
-	rt := &mockRuntime{name: "runc"}
+func TestThunderStartupHookUsesCachedInstaller(t *testing.T) {
 	manager := NewContainerThunderManager(nil)
 	manager.installCache.Set("container-123", "curl -fsSL https://get.thundercompute.com/install.sh | sudo THUNDER_NOWARN=1 THUNDER_INSTALL_MODE=client THUNDER_CENTRAL_URL='https://gateway.example' THUNDER_ENROLLMENT_TOKEN='enroll-token' sh")
-	instances := common.NewSafeMap[*ContainerInstance]()
-	instances.Set("container-123", &ContainerInstance{
-		Runtime: rt,
-		Spec:    &specs.Spec{Process: &specs.Process{Cwd: "/workspace", Env: []string{"A=1"}}},
-	})
 	worker := &Worker{
 		containerThunderManager: manager,
-		containerInstances:      instances,
 		gpuVirtualized:          true,
 	}
 
-	err := worker.installThunderClient(context.Background(), &types.ContainerRequest{ContainerId: "container-123", GpuRequest: []string{"H100"}})
+	hook, err := worker.thunderStartupHook(&types.ContainerRequest{ContainerId: "container-123", GpuRequest: []string{"H100"}}, &specs.Spec{Process: &specs.Process{Cwd: "/workspace", Env: []string{"A=1"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rt.execCalls) != 1 {
-		t.Fatalf("execCalls = %d, want 1", len(rt.execCalls))
-	}
-	call := rt.execCalls[0]
-	assert.Equal(t, "container-123", call.containerID)
-	assert.Equal(t, "/workspace", call.proc.Cwd)
-	assert.Equal(t, []string{"sh", "-c", "curl -fsSL https://get.thundercompute.com/install.sh | sudo THUNDER_NOWARN=1 THUNDER_INSTALL_MODE=client THUNDER_CENTRAL_URL='https://gateway.example' THUNDER_ENROLLMENT_TOKEN='enroll-token' sh"}, call.proc.Args)
-	assert.Contains(t, call.proc.Env, "A=1")
-	assert.Contains(t, call.proc.Env, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+
+	execHook, ok := hook.(runtime.StartupExecHook)
+	require.True(t, ok)
+	assert.Equal(t, "thunder_client_install", execHook.HookName)
+	assert.Equal(t, 2*time.Minute, execHook.Timeout)
+	assert.Equal(t, "/workspace", execHook.Process.Cwd)
+	assert.Equal(t, []string{"sh", "-c", "curl -fsSL https://get.thundercompute.com/install.sh | sudo THUNDER_NOWARN=1 THUNDER_INSTALL_MODE=client THUNDER_CENTRAL_URL='https://gateway.example' THUNDER_ENROLLMENT_TOKEN='enroll-token' sh"}, execHook.Process.Args)
+	assert.Contains(t, execHook.Process.Env, "A=1")
+	assert.Contains(t, execHook.Process.Env, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 }
 
-func TestInstallThunderClientRequiresCachedInstaller(t *testing.T) {
+func TestThunderStartupHookRequiresCachedInstaller(t *testing.T) {
 	worker := &Worker{
 		containerThunderManager: NewContainerThunderManager(nil),
-		containerInstances:      common.NewSafeMap[*ContainerInstance](),
 		gpuVirtualized:          true,
 	}
-	err := worker.installThunderClient(context.Background(), &types.ContainerRequest{ContainerId: "container-123", GpuRequest: []string{"H100"}})
+
+	hook, err := worker.thunderStartupHook(&types.ContainerRequest{ContainerId: "container-123", GpuRequest: []string{"H100"}}, &specs.Spec{Process: &specs.Process{}})
+	require.Nil(t, hook)
 	if err == nil || !strings.Contains(err.Error(), "install command") {
-		t.Fatalf("installThunderClient() error = %v", err)
+		t.Fatalf("thunderStartupHook() error = %v", err)
 	}
 }
 
