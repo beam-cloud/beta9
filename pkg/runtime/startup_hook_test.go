@@ -90,6 +90,42 @@ func TestStartupHookRuntimeRunsHooksInOrder(t *testing.T) {
 	}
 }
 
+func TestStartupHookRuntimeRunsHooksWhenRuntimeReturnsAfterStarted(t *testing.T) {
+	for i := 0; i < 100; i++ {
+		rt := newStartupHookMockRuntime(2468)
+		rt.finishRun()
+		calls := []string{}
+		wrapped := WithStartupHooks(rt, &recordingStartupHook{name: "install", calls: &calls})
+
+		started := make(chan int, 1)
+		exitCode, err := wrapped.Run(context.Background(), "container-1", "/bundle", &RunOpts{Started: started})
+
+		require.NoError(t, err)
+		require.Equal(t, 0, exitCode)
+		require.Equal(t, []string{"install"}, calls)
+		select {
+		case pid := <-started:
+			require.Equal(t, 2468, pid)
+		default:
+			t.Fatal("started was not published after hook completion")
+		}
+	}
+}
+
+func TestWaitForStartupPIDPrioritizesStartedWhenDoneReady(t *testing.T) {
+	started := make(chan int, 1)
+	done := make(chan startupHookRunResult, 1)
+	started <- 1357
+	done <- startupHookRunResult{exitCode: 0}
+
+	pid, completed, ok, err := waitForStartupPID(context.Background(), started, done)
+
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, 1357, pid)
+	require.Nil(t, completed)
+}
+
 func TestStartupHookRuntimeWithholdsRestoreStartedUntilHooksComplete(t *testing.T) {
 	rt := newStartupHookMockRuntime(5678)
 	hook := &blockingStartupHook{

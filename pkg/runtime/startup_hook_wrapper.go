@@ -81,29 +81,30 @@ func (r *startupHookRuntime) runWithStartedHook(ctx context.Context, containerID
 		done <- startupHookRunResult{exitCode: exitCode, err: err}
 	}()
 
-	var pid int
-	select {
-	case result := <-done:
-		return result.exitCode, result.err
-	case pid = <-started:
-	case <-ctx.Done():
-		return -1, ctx.Err()
+	pid, completed, ok, err := waitForStartupPID(ctx, started, done)
+	if err != nil {
+		return -1, err
+	}
+	if !ok {
+		return completed.exitCode, completed.err
 	}
 
 	for _, hook := range r.hooks {
 		if err := hook.Run(ctx, r.Runtime, containerID); err != nil {
-			return r.failStartupHook(ctx, containerID, done, hook, err)
+			return r.failStartupHook(ctx, containerID, done, completed, hook, err)
 		}
 	}
 
 	if originalStarted != nil {
 		select {
-		case result := <-done:
-			return result.exitCode, result.err
 		case originalStarted <- pid:
 		case <-ctx.Done():
 			return -1, ctx.Err()
 		}
+	}
+
+	if completed != nil {
+		return completed.exitCode, completed.err
 	}
 
 	select {
@@ -114,15 +115,41 @@ func (r *startupHookRuntime) runWithStartedHook(ctx context.Context, containerID
 	}
 }
 
-func (r *startupHookRuntime) failStartupHook(ctx context.Context, containerID string, done <-chan startupHookRunResult, hook StartupHook, hookErr error) (int, error) {
+func waitForStartupPID(ctx context.Context, started <-chan int, done <-chan startupHookRunResult) (int, *startupHookRunResult, bool, error) {
+	for {
+		select {
+		case pid := <-started:
+			return pid, nil, true, nil
+		default:
+		}
+
+		select {
+		case pid := <-started:
+			return pid, nil, true, nil
+		case result := <-done:
+			select {
+			case pid := <-started:
+				return pid, &result, true, nil
+			default:
+				return 0, &result, false, nil
+			}
+		case <-ctx.Done():
+			return 0, nil, false, ctx.Err()
+		}
+	}
+}
+
+func (r *startupHookRuntime) failStartupHook(ctx context.Context, containerID string, done <-chan startupHookRunResult, completed *startupHookRunResult, hook StartupHook, hookErr error) (int, error) {
 	_ = r.Runtime.Kill(context.Background(), containerID, syscall.SIGKILL, &KillOpts{All: true})
 
 	waitCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), startupHookShutdownTimeout)
 	defer cancel()
 
-	select {
-	case <-done:
-	case <-waitCtx.Done():
+	if completed == nil {
+		select {
+		case <-done:
+		case <-waitCtx.Done():
+		}
 	}
 
 	return -1, fmt.Errorf("startup hook %q failed: %w", hook.Name(), hookErr)
