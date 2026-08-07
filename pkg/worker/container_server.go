@@ -59,7 +59,6 @@ type ContainerRuntimeServer struct {
 	killedSandboxProcesses  sync.Map
 	containerRepoClient     pb.ContainerRepositoryServiceClient
 	containerNetworkManager ContainerNetwork
-	thunderSetupTracker     *thunderSetupTracker
 	imageClient             *ImageClient
 	runtime                 runtime.Runtime // The worker's configured runtime (from pool config)
 	eventRepo               processLogEventRepository
@@ -82,7 +81,6 @@ type ContainerRuntimeServerOpts struct {
 	ImageClient             *ImageClient
 	ContainerRepoClient     pb.ContainerRepositoryServiceClient
 	ContainerNetworkManager ContainerNetwork
-	ThunderSetupTracker     *thunderSetupTracker
 	EventRepo               repository.EventRepository
 	WorkerID                string
 	BackendRoute            backendRouteFunc
@@ -109,7 +107,6 @@ func NewContainerRuntimeServer(opts *ContainerRuntimeServerOpts) (*ContainerRunt
 		imageClient:             opts.ImageClient,
 		containerRepoClient:     opts.ContainerRepoClient,
 		containerNetworkManager: opts.ContainerNetworkManager,
-		thunderSetupTracker:     opts.ThunderSetupTracker,
 		eventRepo:               opts.EventRepo,
 		workerID:                opts.WorkerID,
 		backendRoute:            opts.BackendRoute,
@@ -627,10 +624,6 @@ func (s *ContainerRuntimeServer) ContainerSandboxExec(ctx context.Context, in *p
 
 	instance, err = s.waitForSandboxProcessManager(ctx, in.ContainerId, instance)
 	if err != nil {
-		return &pb.ContainerSandboxExecResponse{Ok: false, ErrorMsg: err.Error()}, nil
-	}
-
-	if err := s.thunderSetupTracker.Wait(ctx, in.ContainerId); err != nil {
 		return &pb.ContainerSandboxExecResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
