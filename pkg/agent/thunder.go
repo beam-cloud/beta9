@@ -4,13 +4,12 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net"
-	"net/netip"
 	"os/exec"
 	"strings"
 	"time"
 
-	"github.com/beam-cloud/beta9/pkg/common"
+	thundersdk "github.com/Thunder-Compute/thunder-sdk"
+	"github.com/beam-cloud/beta9/pkg/cache"
 	pb "github.com/beam-cloud/beta9/proto"
 	"google.golang.org/grpc"
 )
@@ -18,18 +17,19 @@ import (
 const thunderNodeInstallTimeout = 2 * time.Minute
 
 var runThunderNodeInstallCommand = defaultRunThunderNodeInstallCommand
+var discoverThunderNodeIP = defaultDiscoverThunderNodeIP
 
 type nodeEnrollmentGatewayClient interface {
 	CreateNodeEnrollment(context.Context, *pb.CreateNodeEnrollmentRequest, ...grpc.CallOption) (*pb.CreateNodeEnrollmentResponse, error)
 	DeleteNodeEnrollment(context.Context, *pb.DeleteNodeEnrollmentRequest, ...grpc.CallOption) (*pb.DeleteNodeEnrollmentResponse, error)
 }
 
-func setupThunderNode(ctx context.Context, client nodeEnrollmentGatewayClient, agentToken string, tailscaleIPs []netip.Addr, stdout, stderr io.Writer) error {
+func setupThunderNode(ctx context.Context, client nodeEnrollmentGatewayClient, agentToken string, stdout, stderr io.Writer) error {
 	if client == nil {
 		return fmt.Errorf("gateway client is required for Thunder node enrollment")
 	}
 
-	reachableIP, err := thunderReachableNodeIP(tailscaleIPs)
+	reachableIP, err := discoverThunderNodeIP()
 	if err != nil {
 		return err
 	}
@@ -81,46 +81,23 @@ func deleteThunderNodeEnrollment(ctx context.Context, client nodeEnrollmentGatew
 	}
 }
 
-func thunderReachableNodeIP(ips []netip.Addr) (string, error) {
-	for _, ip := range ips {
-		if ip.IsValid() && ip.Is4() {
-			return ip.String(), nil
-		}
-	}
-	for _, ip := range ips {
-		if ip.IsValid() {
-			return ip.String(), nil
-		}
-	}
-	return "", fmt.Errorf("tailscale IP address is required for Thunder node enrollment")
-}
-
-func hostTailscaleIPs() []netip.Addr {
-	iface, err := net.InterfaceByName("tailscale0")
+func defaultDiscoverThunderNodeIP() (string, error) {
+	ip, err := cache.GetPrivateIpAddr()
 	if err != nil {
-		return nil
+		return "", fmt.Errorf("cache locality private IP address is required for Thunder node enrollment: %w", err)
 	}
-	addrs, err := iface.Addrs()
-	if err != nil {
-		return nil
+	ip = strings.TrimSpace(ip)
+	if ip == "" {
+		return "", fmt.Errorf("cache locality private IP address is required for Thunder node enrollment")
 	}
-
-	ips := make([]netip.Addr, 0, len(addrs))
-	for _, addr := range addrs {
-		prefix, err := netip.ParsePrefix(addr.String())
-		if err == nil {
-			ips = append(ips, prefix.Addr())
-			continue
-		}
-		if ip, err := netip.ParseAddr(addr.String()); err == nil {
-			ips = append(ips, ip)
-		}
-	}
-	return ips
+	return ip, nil
 }
 
 func thunderNodeInstallCommand(reachableIP, enrollmentToken string) string {
-	return "curl -fsSL https://get.thundercompute.com/install.sh | sudo THUNDER_INSTALL_MODE=thunderd THUNDERD_IP=" + common.ShellQuote(reachableIP) + " THUNDER_ENROLLMENT_TOKEN=" + common.ShellQuote(enrollmentToken) + " sh"
+	return thundersdk.NewClient("", "").ServerEnrollmentCommand(thundersdk.ServerEnrollmentCommandRequest{
+		EnrollmentToken: enrollmentToken,
+		IP:              reachableIP,
+	})
 }
 
 func defaultRunThunderNodeInstallCommand(ctx context.Context, command string) error {

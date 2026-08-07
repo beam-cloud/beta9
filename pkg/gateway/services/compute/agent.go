@@ -364,6 +364,19 @@ func (s *Service) RequestAgentTransportCredential(ctx context.Context, in *pb.Re
 	}, nil
 }
 
+func (s *Service) GetAgentPoolVirtualization(ctx context.Context, in *pb.GetAgentPoolVirtualizationRequest) (*pb.GetAgentPoolVirtualizationResponse, error) {
+	agentState, errMsg := s.requireAgentState(ctx, in.GetAgentToken())
+	if errMsg != "" {
+		return &pb.GetAgentPoolVirtualizationResponse{Ok: false, ErrMsg: errMsg}, nil
+	}
+
+	gpuVirtualized, err := s.agentPoolGPUVirtualized(ctx, agentState)
+	if err != nil {
+		return &pb.GetAgentPoolVirtualizationResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+	return &pb.GetAgentPoolVirtualizationResponse{Ok: true, GpuVirtualized: gpuVirtualized}, nil
+}
+
 func (s *Service) StreamAgent(in *pb.StreamAgentRequest, stream pb.GatewayService_StreamAgentServer) error {
 	ctx := stream.Context()
 	agentState, errMsg := s.requireAgentState(ctx, in.AgentToken)
@@ -1102,6 +1115,14 @@ func (s *Service) agentBillingConfig(poolState *model.PoolState) *pb.AgentBillin
 		CostHookToken:     s.appConfig.Monitoring.ContainerCostHookConfig.Token,
 		BillableMarginPct: s.appConfig.ManagedCompute.BillableMarginPctOrDefault(),
 	}
+}
+
+func (s *Service) agentPoolGPUVirtualized(ctx context.Context, agentState *model.AgentTokenState) (bool, error) {
+	poolState, err := s.getAgentPoolState(ctx, agentState)
+	if err != nil || poolState == nil || poolState.WorkerConfig == nil {
+		return false, err
+	}
+	return poolState.WorkerConfig.GpuVirtualized, nil
 }
 
 func (s *Service) validateAgentTransportConfig(transport string) error {

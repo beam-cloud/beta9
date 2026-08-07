@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"errors"
-	"net/netip"
 	"strings"
 	"testing"
 
@@ -11,8 +10,10 @@ import (
 	"google.golang.org/grpc"
 )
 
-func TestSetupThunderNodeInstallsWithTailscaleIP(t *testing.T) {
+func TestSetupThunderNodeInstallsWithCacheLocalityPrivateIP(t *testing.T) {
 	client := &fakeGatewayNodeEnrollmentClient{createResp: &pb.CreateNodeEnrollmentResponse{Ok: true, EnrollmentToken: "tr_node"}}
+	restoreIP := stubThunderNodeIP("10.0.0.10", nil)
+	defer restoreIP()
 	var commands []string
 	restore := stubThunderNodeInstallCommand(func(ctx context.Context, command string) error {
 		commands = append(commands, command)
@@ -20,17 +21,14 @@ func TestSetupThunderNodeInstallsWithTailscaleIP(t *testing.T) {
 	})
 	defer restore()
 
-	err := setupThunderNode(context.Background(), client, "agent-token", []netip.Addr{
-		netip.MustParseAddr("fd7a:115c:a1e0::1"),
-		netip.MustParseAddr("100.64.0.10"),
-	}, nil, nil)
+	err := setupThunderNode(context.Background(), client, "agent-token", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(commands) != 1 {
 		t.Fatalf("install command count = %d", len(commands))
 	}
-	if !strings.Contains(commands[0], "THUNDER_INSTALL_MODE=thunderd") || !strings.Contains(commands[0], "THUNDERD_IP='100.64.0.10'") || !strings.Contains(commands[0], "THUNDER_ENROLLMENT_TOKEN='tr_node'") {
+	if !strings.Contains(commands[0], "THUNDER_INSTALL_MODE=thunderd") || !strings.Contains(commands[0], "THUNDERD_IP='10.0.0.10'") || !strings.Contains(commands[0], "THUNDER_ENROLLMENT_TOKEN='tr_node'") {
 		t.Fatalf("install command = %q", commands[0])
 	}
 	if client.createAgentToken != "agent-token" {
@@ -43,13 +41,15 @@ func TestSetupThunderNodeInstallsWithTailscaleIP(t *testing.T) {
 
 func TestSetupThunderNodeSkipsInstallerWhenEnrollmentFails(t *testing.T) {
 	client := &fakeGatewayNodeEnrollmentClient{createErr: errors.New("gateway unavailable")}
+	restoreIP := stubThunderNodeIP("10.0.0.10", nil)
+	defer restoreIP()
 	restore := stubThunderNodeInstallCommand(func(ctx context.Context, command string) error {
 		t.Fatalf("installer should not run when enrollment fails: %s", command)
 		return nil
 	})
 	defer restore()
 
-	err := setupThunderNode(context.Background(), client, "agent-token", []netip.Addr{netip.MustParseAddr("100.64.0.10")}, nil, nil)
+	err := setupThunderNode(context.Background(), client, "agent-token", nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "gateway unavailable") {
 		t.Fatalf("setupThunderNode() error = %v", err)
 	}
@@ -57,25 +57,29 @@ func TestSetupThunderNodeSkipsInstallerWhenEnrollmentFails(t *testing.T) {
 
 func TestSetupThunderNodeSkipsInstallerWhenAlreadyEnrolled(t *testing.T) {
 	client := &fakeGatewayNodeEnrollmentClient{createResp: &pb.CreateNodeEnrollmentResponse{Ok: true}}
+	restoreIP := stubThunderNodeIP("10.0.0.10", nil)
+	defer restoreIP()
 	restore := stubThunderNodeInstallCommand(func(ctx context.Context, command string) error {
 		t.Fatalf("installer should not run for an existing enrollment: %s", command)
 		return nil
 	})
 	defer restore()
 
-	if err := setupThunderNode(context.Background(), client, "agent-token", []netip.Addr{netip.MustParseAddr("100.64.0.10")}, nil, nil); err != nil {
+	if err := setupThunderNode(context.Background(), client, "agent-token", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestSetupThunderNodeDeletesEnrollmentWhenInstallFails(t *testing.T) {
 	client := &fakeGatewayNodeEnrollmentClient{createResp: &pb.CreateNodeEnrollmentResponse{Ok: true, EnrollmentToken: "tr_node"}, deleteResp: &pb.DeleteNodeEnrollmentResponse{Ok: true}}
+	restoreIP := stubThunderNodeIP("10.0.0.10", nil)
+	defer restoreIP()
 	restore := stubThunderNodeInstallCommand(func(ctx context.Context, command string) error {
 		return errors.New("install failed")
 	})
 	defer restore()
 
-	err := setupThunderNode(context.Background(), client, "agent-token", []netip.Addr{netip.MustParseAddr("100.64.0.10")}, nil, nil)
+	err := setupThunderNode(context.Background(), client, "agent-token", nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "install failed") {
 		t.Fatalf("setupThunderNode() error = %v", err)
 	}
@@ -84,17 +88,28 @@ func TestSetupThunderNodeDeletesEnrollmentWhenInstallFails(t *testing.T) {
 	}
 }
 
-func TestThunderReachableNodeIPPrefersIPv4(t *testing.T) {
-	got, err := thunderReachableNodeIP([]netip.Addr{
-		netip.MustParseAddr("fd7a:115c:a1e0::1"),
-		netip.MustParseAddr("100.64.0.10"),
+func TestSetupThunderNodeSkipsInstallerWhenPrivateIPMissing(t *testing.T) {
+	client := &fakeGatewayNodeEnrollmentClient{createResp: &pb.CreateNodeEnrollmentResponse{Ok: true, EnrollmentToken: "tr_node"}}
+	restoreIP := stubThunderNodeIP("", errors.New("no private ip"))
+	defer restoreIP()
+	restoreInstall := stubThunderNodeInstallCommand(func(ctx context.Context, command string) error {
+		t.Fatalf("installer should not run without a private IP: %s", command)
+		return nil
 	})
-	if err != nil {
-		t.Fatal(err)
+	defer restoreInstall()
+
+	err := setupThunderNode(context.Background(), client, "agent-token", nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "no private ip") {
+		t.Fatalf("setupThunderNode() error = %v", err)
 	}
-	if got != "100.64.0.10" {
-		t.Fatalf("reachable IP = %q", got)
+}
+
+func stubThunderNodeIP(ip string, err error) func() {
+	old := discoverThunderNodeIP
+	discoverThunderNodeIP = func() (string, error) {
+		return ip, err
 	}
+	return func() { discoverThunderNodeIP = old }
 }
 
 func stubThunderNodeInstallCommand(fn func(context.Context, string) error) func() {

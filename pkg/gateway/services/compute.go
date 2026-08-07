@@ -130,6 +130,10 @@ func (gws *GatewayService) RequestAgentTransportCredential(ctx context.Context, 
 	return gws.computeService.RequestAgentTransportCredential(ctx, in)
 }
 
+func (gws *GatewayService) GetAgentPoolVirtualization(ctx context.Context, in *pb.GetAgentPoolVirtualizationRequest) (*pb.GetAgentPoolVirtualizationResponse, error) {
+	return gws.computeService.GetAgentPoolVirtualization(ctx, in)
+}
+
 func (gws *GatewayService) CreateNodeEnrollment(ctx context.Context, in *pb.CreateNodeEnrollmentRequest) (*pb.CreateNodeEnrollmentResponse, error) {
 	if gws.thunderService == nil {
 		return &pb.CreateNodeEnrollmentResponse{ErrorMsg: "Thunder service is unavailable"}, nil

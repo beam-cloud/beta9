@@ -72,6 +72,7 @@ const (
 	GatewayService_ActivateMachineSSHKey_FullMethodName           = "/gateway.GatewayService/ActivateMachineSSHKey"
 	GatewayService_JoinAgent_FullMethodName                       = "/gateway.GatewayService/JoinAgent"
 	GatewayService_RequestAgentTransportCredential_FullMethodName = "/gateway.GatewayService/RequestAgentTransportCredential"
+	GatewayService_GetAgentPoolVirtualization_FullMethodName      = "/gateway.GatewayService/GetAgentPoolVirtualization"
 	GatewayService_CreateNodeEnrollment_FullMethodName            = "/gateway.GatewayService/CreateNodeEnrollment"
 	GatewayService_DeleteNodeEnrollment_FullMethodName            = "/gateway.GatewayService/DeleteNodeEnrollment"
 	GatewayService_ListAgentRoutes_FullMethodName                 = "/gateway.GatewayService/ListAgentRoutes"
@@ -159,6 +160,7 @@ type GatewayServiceClient interface {
 	ActivateMachineSSHKey(ctx context.Context, in *ActivateMachineSSHKeyRequest, opts ...grpc.CallOption) (*ActivateMachineSSHKeyResponse, error)
 	JoinAgent(ctx context.Context, in *JoinAgentRequest, opts ...grpc.CallOption) (*JoinAgentResponse, error)
 	RequestAgentTransportCredential(ctx context.Context, in *RequestAgentTransportCredentialRequest, opts ...grpc.CallOption) (*RequestAgentTransportCredentialResponse, error)
+	GetAgentPoolVirtualization(ctx context.Context, in *GetAgentPoolVirtualizationRequest, opts ...grpc.CallOption) (*GetAgentPoolVirtualizationResponse, error)
 	CreateNodeEnrollment(ctx context.Context, in *CreateNodeEnrollmentRequest, opts ...grpc.CallOption) (*CreateNodeEnrollmentResponse, error)
 	DeleteNodeEnrollment(ctx context.Context, in *DeleteNodeEnrollmentRequest, opts ...grpc.CallOption) (*DeleteNodeEnrollmentResponse, error)
 	ListAgentRoutes(ctx context.Context, in *ListAgentRoutesRequest, opts ...grpc.CallOption) (*ListAgentRoutesResponse, error)
@@ -726,6 +728,16 @@ func (c *gatewayServiceClient) RequestAgentTransportCredential(ctx context.Conte
 	return out, nil
 }
 
+func (c *gatewayServiceClient) GetAgentPoolVirtualization(ctx context.Context, in *GetAgentPoolVirtualizationRequest, opts ...grpc.CallOption) (*GetAgentPoolVirtualizationResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetAgentPoolVirtualizationResponse)
+	err := c.cc.Invoke(ctx, GatewayService_GetAgentPoolVirtualization_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *gatewayServiceClient) CreateNodeEnrollment(ctx context.Context, in *CreateNodeEnrollmentRequest, opts ...grpc.CallOption) (*CreateNodeEnrollmentResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CreateNodeEnrollmentResponse)
@@ -1002,6 +1014,7 @@ type GatewayServiceServer interface {
 	ActivateMachineSSHKey(context.Context, *ActivateMachineSSHKeyRequest) (*ActivateMachineSSHKeyResponse, error)
 	JoinAgent(context.Context, *JoinAgentRequest) (*JoinAgentResponse, error)
 	RequestAgentTransportCredential(context.Context, *RequestAgentTransportCredentialRequest) (*RequestAgentTransportCredentialResponse, error)
+	GetAgentPoolVirtualization(context.Context, *GetAgentPoolVirtualizationRequest) (*GetAgentPoolVirtualizationResponse, error)
 	CreateNodeEnrollment(context.Context, *CreateNodeEnrollmentRequest) (*CreateNodeEnrollmentResponse, error)
 	DeleteNodeEnrollment(context.Context, *DeleteNodeEnrollmentRequest) (*DeleteNodeEnrollmentResponse, error)
 	ListAgentRoutes(context.Context, *ListAgentRoutesRequest) (*ListAgentRoutesResponse, error)
@@ -1194,6 +1207,9 @@ func (UnimplementedGatewayServiceServer) JoinAgent(context.Context, *JoinAgentRe
 }
 func (UnimplementedGatewayServiceServer) RequestAgentTransportCredential(context.Context, *RequestAgentTransportCredentialRequest) (*RequestAgentTransportCredentialResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RequestAgentTransportCredential not implemented")
+}
+func (UnimplementedGatewayServiceServer) GetAgentPoolVirtualization(context.Context, *GetAgentPoolVirtualizationRequest) (*GetAgentPoolVirtualizationResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetAgentPoolVirtualization not implemented")
 }
 func (UnimplementedGatewayServiceServer) CreateNodeEnrollment(context.Context, *CreateNodeEnrollmentRequest) (*CreateNodeEnrollmentResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateNodeEnrollment not implemented")
@@ -2208,6 +2224,24 @@ func _GatewayService_RequestAgentTransportCredential_Handler(srv interface{}, ct
 	return interceptor(ctx, in, info, handler)
 }
 
+func _GatewayService_GetAgentPoolVirtualization_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetAgentPoolVirtualizationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).GetAgentPoolVirtualization(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_GetAgentPoolVirtualization_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).GetAgentPoolVirtualization(ctx, req.(*GetAgentPoolVirtualizationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _GatewayService_CreateNodeEnrollment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CreateNodeEnrollmentRequest)
 	if err := dec(in); err != nil {
@@ -2760,6 +2794,10 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RequestAgentTransportCredential",
 			Handler:    _GatewayService_RequestAgentTransportCredential_Handler,
+		},
+		{
+			MethodName: "GetAgentPoolVirtualization",
+			Handler:    _GatewayService_GetAgentPoolVirtualization_Handler,
 		},
 		{
 			MethodName: "CreateNodeEnrollment",

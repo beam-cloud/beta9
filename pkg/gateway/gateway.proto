@@ -340,6 +340,8 @@ service GatewayService {
       body : "*"
     };
   }
+  rpc GetAgentPoolVirtualization(GetAgentPoolVirtualizationRequest)
+      returns (GetAgentPoolVirtualizationResponse);
   rpc CreateNodeEnrollment(CreateNodeEnrollmentRequest)
       returns (CreateNodeEnrollmentResponse);
   rpc DeleteNodeEnrollment(DeleteNodeEnrollmentRequest)
@@ -1905,4 +1907,12 @@ message AgentPoolRuntimeConfig {
   AgentPoolCacheConfig cache = 8;
   string config_group = 9;
   bool gpu_virtualized = 10;
+}
+
+message GetAgentPoolVirtualizationRequest { string agent_token = 1; }
+
+message GetAgentPoolVirtualizationResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  bool gpu_virtualized = 3;
 }

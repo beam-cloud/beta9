@@ -41,6 +41,7 @@ func NewAuthInterceptor(config types.AppConfig, backendRepo repository.BackendRe
 			pb.GatewayService_JoinAgent_FullMethodName:                       true,
 			pb.GatewayService_ListAgentRoutes_FullMethodName:                 true,
 			pb.GatewayService_RequestAgentTransportCredential_FullMethodName: true,
+			pb.GatewayService_GetAgentPoolVirtualization_FullMethodName:      true,
 			pb.GatewayService_CreateNodeEnrollment_FullMethodName:            true,
 			pb.GatewayService_DeleteNodeEnrollment_FullMethodName:            true,
 			pb.GatewayService_StreamAgent_FullMethodName:                     true,
