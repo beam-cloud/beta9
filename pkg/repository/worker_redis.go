@@ -327,6 +327,39 @@ local version = redis.call("HINCRBY", KEYS[1], "resource_version", ARGV[4])
 return {1, redis.call("HGET", KEYS[1], "machine_id") or "", free_cpu, free_memory, free_gpu, version}
 `)
 
+// updateExistingWorkerScript updates controller-owned worker fields without
+// replacing live scheduler capacity. It runs atomically with capacity updates,
+// preserving the resources already in use if the machine's totals changed.
+var updateExistingWorkerScript = redis.NewScript(`
+if redis.call("EXISTS", KEYS[1]) == 0 then
+    return 0
+end
+
+local old_total_cpu = tonumber(redis.call("HGET", KEYS[1], "total_cpu") or "0")
+local old_total_memory = tonumber(redis.call("HGET", KEYS[1], "total_memory") or "0")
+local old_total_gpu = tonumber(redis.call("HGET", KEYS[1], "total_gpu_count") or "0")
+local old_free_cpu = tonumber(redis.call("HGET", KEYS[1], "free_cpu") or "0")
+local old_free_memory = tonumber(redis.call("HGET", KEYS[1], "free_memory") or "0")
+local old_free_gpu = tonumber(redis.call("HGET", KEYS[1], "gpu_count") or "0")
+
+local used_cpu = math.max(old_total_cpu - old_free_cpu, 0)
+local used_memory = math.max(old_total_memory - old_free_memory, 0)
+local used_gpu = math.max(old_total_gpu - old_free_gpu, 0)
+
+for i = 4, #ARGV, 2 do
+    redis.call("HSET", KEYS[1], ARGV[i], ARGV[i + 1])
+end
+
+local new_total_cpu = tonumber(ARGV[1])
+local new_total_memory = tonumber(ARGV[2])
+local new_total_gpu = tonumber(ARGV[3])
+redis.call("HSET", KEYS[1],
+    "free_cpu", math.max(new_total_cpu - used_cpu, 0),
+    "free_memory", math.max(new_total_memory - used_memory, 0),
+    "gpu_count", math.max(new_total_gpu - used_gpu, 0))
+return 1
+`)
+
 func NewWorkerRedisRepository(r *common.RedisClient, config types.WorkerConfig) WorkerRepository {
 	lock := common.NewRedisLock(r)
 	return &WorkerRedisRepository{rdb: r, lock: lock, config: config}
@@ -368,10 +401,26 @@ func (r *WorkerRedisRepository) AddWorker(worker *types.Worker) error {
 		}
 	}
 
-	worker.ResourceVersion = 0
-
 	pipe := r.rdb.TxPipeline()
-	pipe.HSet(ctx, stateKey, common.ToSlice(worker))
+	if oldWorker == nil {
+		worker.ResourceVersion = 0
+		pipe.HSet(ctx, stateKey, common.ToSlice(worker))
+	} else {
+		fields := make([]interface{}, 0)
+		allFields := common.ToSlice(worker)
+		for i := 0; i < len(allFields); i += 2 {
+			name := allFields[i].(string)
+			if name == "free_cpu" || name == "free_memory" || name == "gpu_count" || name == "resource_version" {
+				continue
+			}
+			fields = append(fields, name, allFields[i+1])
+		}
+		args := []interface{}{worker.TotalCpu, worker.TotalMemory, worker.TotalGpuCount}
+		args = append(args, fields...)
+		if err := updateExistingWorkerScript.Run(ctx, r.rdb, []string{stateKey}, args...).Err(); err != nil {
+			return fmt.Errorf("failed to update existing worker <%s>: %w", stateKey, err)
+		}
+	}
 	pipe.Expire(ctx, stateKey, r.config.CleanupPendingWorkerAgeLimit)
 	for _, indexKey := range r.workerIndexKeys(worker) {
 		pipe.SAdd(ctx, indexKey, stateKey)
@@ -841,7 +890,13 @@ func (r *WorkerRedisRepository) workerHasOutstandingWork(ctx context.Context, wo
 		if err != nil {
 			return false, err
 		}
-		if exists && state != nil {
+		// STOPPING is not live work that should block an agent slot rollout.
+		// The agent stops and removes the old worker container before starting
+		// its replacement, so any runtime still lingering behind a STOPPING
+		// record is terminated without overlapping the replacement worker.
+		// Keep scheduler capacity accounting separate: capacity is still held
+		// until the runtime itself exits and completes the container.
+		if exists && state != nil && state.Status != types.ContainerStatusStopping {
 			return true, nil
 		}
 	}

@@ -1410,13 +1410,76 @@ func TestCheckpointFilesystemRestorePreparesInitialUpperLayer(t *testing.T) {
 			Status:       string(types.CheckpointStatusAvailable),
 		},
 	}
-	restore := worker.startCheckpointFilesystemRestore(request, nil)
+	restore := worker.startCheckpointFilesystemRestore(context.Background(), request, nil)
 	t.Cleanup(restore.cleanup)
 
 	require.NoError(t, restore.wait())
 	data, err := os.ReadFile(filepath.Join(restore.upperPath, "state", "ready"))
 	require.NoError(t, err)
 	require.Equal(t, "yes", string(data))
+}
+
+func TestCheckpointFilesystemRestoreUsesContainerContext(t *testing.T) {
+	checkpointRoot := t.TempDir()
+	checkpointID := "checkpoint-cancelled-restore"
+	checkpointPath := filepath.Join(checkpointRoot, checkpointID)
+	require.NoError(t, os.MkdirAll(filepath.Join(checkpointPath, checkpointFsDir), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(checkpointPath, "inventory.img"), []byte("runtime"), 0644))
+
+	worker := &Worker{
+		ctx:          context.Background(),
+		cacheManager: &WorkerCacheManager{checkpointRoot: checkpointRoot},
+	}
+	request := &types.ContainerRequest{
+		ContainerId: "checkpoint-cancelled-restore-test",
+		Checkpoint: &types.Checkpoint{
+			CheckpointId: checkpointID,
+			Status:       string(types.CheckpointStatusAvailable),
+		},
+	}
+	containerCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	restore := worker.startCheckpointFilesystemRestore(containerCtx, request, nil)
+	t.Cleanup(restore.cleanup)
+
+	require.ErrorIs(t, restore.wait(), context.Canceled)
+}
+
+func TestMarkContainerRunningRearmsEscalationAfterPreRuntimeStop(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	containerID := "container-started-after-stop"
+	killNotify := make(chan syscall.Signal, 2)
+	rt := &mockRuntime{
+		state: func(context.Context, string) (runtime.State, error) {
+			return runtime.State{Status: types.RuncContainerStatusRunning}, nil
+		},
+		killNotify: killNotify,
+	}
+	repoClient := &fakeContainerRepoClient{state: &pb.ContainerState{
+		ContainerId: containerID,
+		Status:      string(types.ContainerStatusStopping),
+	}}
+	worker := &Worker{
+		ctx:                 ctx,
+		runtime:             rt,
+		containerInstances:  common.NewSafeMap[*ContainerInstance](),
+		containerRepoClient: repoClient,
+		stopContainerChan:   make(chan stopContainerEvent, 1),
+	}
+	instance := &ContainerInstance{Id: containerID, Runtime: rt, ExitCode: -1}
+	instance.StopEscalationStarted.Store(true) // the pre-runtime timer was already consumed
+	worker.containerInstances.Set(containerID, instance)
+
+	worker.markContainerRunning(context.Background(), &types.ContainerRequest{ContainerId: containerID}, time.Time{})
+
+	require.Equal(t, syscall.SIGTERM, <-killNotify)
+	select {
+	case signal := <-killNotify:
+		require.Equal(t, syscall.SIGKILL, signal)
+	case <-time.After(time.Second):
+		t.Fatal("runtime start did not re-arm SIGKILL escalation")
+	}
 }
 
 func TestCheckpointFilesystemRestoreDiscardRemovesPartialUpperLayer(t *testing.T) {
@@ -2380,6 +2443,109 @@ type mockRuntime struct {
 	signals      []syscall.Signal
 	killOpts     []*runtime.KillOpts
 	killErr      error
+	killNotify   chan syscall.Signal
+}
+
+type stuckControlRuntime struct {
+	mockRuntime
+	killFn       func(context.Context) error
+	stopOnDelete bool
+	deleted      atomic.Bool
+	killCalls    atomic.Int32
+	deleteCalls  atomic.Int32
+}
+
+func (m *stuckControlRuntime) Kill(ctx context.Context, _ string, _ syscall.Signal, _ *runtime.KillOpts) error {
+	m.killCalls.Add(1)
+	if m.killFn != nil {
+		return m.killFn(ctx)
+	}
+	return nil
+}
+
+func (m *stuckControlRuntime) Delete(context.Context, string, *runtime.DeleteOpts) error {
+	m.deleteCalls.Add(1)
+	m.deleted.Store(true)
+	return nil
+}
+
+func (m *stuckControlRuntime) State(context.Context, string) (runtime.State, error) {
+	if m.stopOnDelete && m.deleted.Load() {
+		return runtime.State{}, runtime.ErrContainerNotFound{ContainerID: "container-1"}
+	}
+	return runtime.State{Status: types.RuncContainerStatusRunning}, nil
+}
+
+func TestStopContainerRuntimeControlHonorsDeadline(t *testing.T) {
+	rt := &stuckControlRuntime{
+		mockRuntime: mockRuntime{name: types.ContainerRuntimeGvisor.String()},
+		killFn: func(ctx context.Context) error {
+			<-ctx.Done()
+			return ctx.Err()
+		},
+	}
+	worker := &Worker{containerInstances: common.NewSafeMap[*ContainerInstance](), runtime: rt}
+	worker.containerInstances.Set("container-1", &ContainerInstance{Id: "container-1", Runtime: rt})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	err := worker.stopContainerWithContext(ctx, "container-1", false)
+
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Less(t, time.Since(started), time.Second)
+	require.Equal(t, int32(1), rt.killCalls.Load())
+}
+
+func TestForceStopRuntimeRetriesThenForceDeletes(t *testing.T) {
+	rt := &stuckControlRuntime{
+		mockRuntime:  mockRuntime{name: types.ContainerRuntimeGvisor.String()},
+		stopOnDelete: true,
+	}
+	worker := &Worker{
+		ctx:                context.Background(),
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		runtime:            rt,
+	}
+	worker.containerInstances.Set("container-1", &ContainerInstance{Id: "container-1", Runtime: rt})
+	policy := runtimeStopPolicy{
+		controlTimeout: 25 * time.Millisecond,
+		verifyTimeout:  5 * time.Millisecond,
+		verifyInterval: time.Millisecond,
+		deleteTimeout:  25 * time.Millisecond,
+		killAttempts:   2,
+	}
+
+	require.True(t, worker.forceStopRuntime("container-1", policy))
+	require.Equal(t, int32(2), rt.killCalls.Load())
+	require.Equal(t, int32(1), rt.deleteCalls.Load())
+}
+
+func TestStuckRuntimeRecoveryRestartsWorkerWithoutReleasingCapacity(t *testing.T) {
+	rt := &stuckControlRuntime{mockRuntime: mockRuntime{name: types.ContainerRuntimeGvisor.String()}}
+	workerCtx, cancel := context.WithCancel(context.Background())
+	worker := &Worker{
+		ctx:                workerCtx,
+		cancel:             cancel,
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		runtime:            rt,
+		completedRequests:  make(chan *types.ContainerRequest, 1),
+	}
+	worker.containerInstances.Set("container-1", &ContainerInstance{Id: "container-1", Runtime: rt})
+	policy := runtimeStopPolicy{
+		controlTimeout: 25 * time.Millisecond,
+		verifyTimeout:  5 * time.Millisecond,
+		verifyInterval: time.Millisecond,
+		deleteTimeout:  25 * time.Millisecond,
+		killAttempts:   1,
+	}
+
+	require.False(t, worker.forceStopRuntime("container-1", policy))
+	worker.restartWorkerForStuckRuntime("container-1")
+
+	require.ErrorIs(t, workerCtx.Err(), context.Canceled)
+	require.Len(t, worker.completedRequests, 0)
+	require.Equal(t, 1, worker.containerInstances.Len())
 }
 
 func (m *mockRuntime) Name() string {
@@ -2404,6 +2570,9 @@ func (m *mockRuntime) Exec(ctx context.Context, containerID string, proc specs.P
 
 func (m *mockRuntime) Kill(ctx context.Context, containerID string, sig syscall.Signal, opts *runtime.KillOpts) error {
 	m.signals = append(m.signals, sig)
+	if m.killNotify != nil {
+		m.killNotify <- sig
+	}
 	if opts == nil {
 		opts = &runtime.KillOpts{}
 	}

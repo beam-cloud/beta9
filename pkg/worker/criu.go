@@ -102,9 +102,9 @@ func (r *checkpointFilesystemRestore) discard() error {
 	return os.RemoveAll(r.overlayRoot)
 }
 
-func (s *Worker) startCheckpointFilesystemRestore(request *types.ContainerRequest, outputLogger *slog.Logger) *checkpointFilesystemRestore {
+func (s *Worker) startCheckpointFilesystemRestore(parentCtx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger) *checkpointFilesystemRestore {
 	overlayRoot := filepath.Join(s.containerOverlayBasePath(request), request.ContainerId)
-	restoreCtx, cancel := context.WithCancel(s.ctx)
+	restoreCtx, cancel := context.WithCancel(parentCtx)
 	restore := &checkpointFilesystemRestore{
 		startedAt:   time.Now(),
 		overlayRoot: overlayRoot,
@@ -115,7 +115,11 @@ func (s *Worker) startCheckpointFilesystemRestore(request *types.ContainerReques
 
 	go func() {
 		defer cancel()
-		restore.err = s.restoreCheckpointFilesystem(restoreCtx, request, outputLogger, restore.upperPath)
+		if err := restoreCtx.Err(); err != nil {
+			restore.err = err
+		} else {
+			restore.err = s.restoreCheckpointFilesystem(restoreCtx, request, outputLogger, restore.upperPath)
+		}
 		close(restore.done)
 	}()
 	return restore
