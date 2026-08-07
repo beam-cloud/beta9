@@ -81,6 +81,7 @@ type Worker struct {
 	memoryLimit             int64
 	gpuType                 string
 	gpuCount                uint32
+	gpuVirtualized          bool
 	podAddr                 string
 	podHostName             string
 	routeLocalTargetHost    string
@@ -94,6 +95,7 @@ type Worker struct {
 	criuManager             CRIUManager
 	containerNetworkManager ContainerNetwork
 	containerGPUManager     GPUManager
+	containerThunderManager GPUManager
 	containerMountManager   *ContainerMountManager
 	imageClient             *ImageClient
 	containerInstances      *common.SafeMap[*ContainerInstance]
@@ -118,6 +120,17 @@ type Worker struct {
 	ctx                     context.Context
 	cancel                  func()
 	config                  types.AppConfig
+}
+
+func (w *Worker) gpuVirtualizedForRequest(request *types.ContainerRequest) bool {
+	return w != nil && w.gpuVirtualized && request != nil && request.RequiresGPU()
+}
+
+func (w *Worker) gpuManagerForRequest(request *types.ContainerRequest) GPUManager {
+	if w.gpuVirtualizedForRequest(request) {
+		return w.containerThunderManager
+	}
+	return w.containerGPUManager
 }
 
 type ContainerInstance struct {
@@ -247,6 +260,7 @@ func NewWorker() (_ *Worker, err error) {
 	if err != nil {
 		return nil, err
 	}
+	gpuVirtualized := envBool(types.WorkerGPUVirtualizedEnv)
 
 	configManager, err := common.NewConfigManager[types.AppConfig]()
 	if err != nil {
@@ -265,6 +279,11 @@ func NewWorker() (_ *Worker, err error) {
 	}
 
 	backendRepoClient, err := NewBackendRepositoryClient(context.TODO(), config, workerToken)
+	if err != nil {
+		return nil, err
+	}
+
+	thunderClient, err := NewThunderServiceClient(context.TODO(), config, workerToken)
 	if err != nil {
 		return nil, err
 	}
@@ -400,7 +419,6 @@ func NewWorker() (_ *Worker, err error) {
 		return nil, err
 	}
 	containerNetworkManager := newContainerNetwork(baseContainerNetworkManager, podAddr, persistent, machineID, routeTransport, routeLocalTargetHost)
-
 	worker := &Worker{
 		ctx:                     ctx,
 		workerId:                workerId,
@@ -416,6 +434,7 @@ func NewWorker() (_ *Worker, err error) {
 		memoryLimit:             memoryLimit,
 		gpuType:                 gpuType,
 		gpuCount:                uint32(gpuCount),
+		gpuVirtualized:          gpuVirtualized,
 		runtime:                 defaultRuntime,
 		runcRuntime:             runcRuntime,
 		gvisorRuntime:           gvisorRuntime,
@@ -423,6 +442,7 @@ func NewWorker() (_ *Worker, err error) {
 		storageManager:          storageManager,
 		fileCacheManager:        fileCacheManager,
 		containerGPUManager:     NewContainerNvidiaManager(uint32(gpuCount), defaultRuntime.Name()),
+		containerThunderManager: NewContainerThunderManager(thunderClient),
 		containerNetworkManager: containerNetworkManager,
 		containerMountManager:   NewContainerMountManager(config, poolConfig),
 		podAddr:                 podAddr,
@@ -553,7 +573,13 @@ containerRequestStream:
 				if request.MachineId == "" {
 					request.MachineId = s.machineID
 				}
-				log.Info().Str("worker_id", s.workerId).Str("container_id", request.ContainerId).Msg("worker received container request")
+				log.Info().
+					Str("worker_id", s.workerId).
+					Str("container_id", request.ContainerId).
+					Str("gpu", request.Gpu).
+					Uint32("gpu_count", request.GpuCount).
+					Bool("gpu_virtualized", s.gpuVirtualizedForRequest(request)).
+					Msg("worker received container request")
 				if !request.Timestamp.IsZero() {
 					s.recordContainerLifecycle(s.ctx, request, containerLifecycleFromDuration(types.ContainerLifecycleWorkerQueueReceive, request, request.Timestamp, time.Since(request.Timestamp), true, map[string]string{
 						"worker_id": s.workerId,

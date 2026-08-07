@@ -612,8 +612,6 @@ func (s *ContainerRuntimeServer) getHostPathFromContainerPath(containerPath stri
 // Sandbox methods follow (these are runtime-agnostic and work with the sandbox process manager)
 
 func (s *ContainerRuntimeServer) ContainerSandboxExec(ctx context.Context, in *pb.ContainerSandboxExecRequest) (*pb.ContainerSandboxExecResponse, error) {
-	log.Info().Str("container_id", in.ContainerId).Str("cmd", in.Cmd).Msg("running sandbox command")
-
 	parsedCmd, err := shlex.Split(in.Cmd)
 	if err != nil {
 		return &pb.ContainerSandboxExecResponse{Ok: false, ErrorMsg: err.Error()}, nil
@@ -641,6 +639,7 @@ func (s *ContainerRuntimeServer) ContainerSandboxExec(ctx context.Context, in *p
 
 	env = append(env, formattedEnv...)
 
+	log.Info().Str("container_id", in.ContainerId).Str("cmd", in.Cmd).Msg("running sandbox command")
 	return s.handleSandboxExec(ctx, in, instance, env, parsedCmd, in.Cwd)
 }
 

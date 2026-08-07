@@ -1807,6 +1807,7 @@ class AgentPoolRuntimeConfig(betterproto.Message):
     durable_disks_path: str = betterproto.string_field(7)
     cache: "AgentPoolCacheConfig" = betterproto.message_field(8)
     config_group: str = betterproto.string_field(9)
+    gpu_virtualized: bool = betterproto.bool_field(10)
 
 
 class GatewayServiceStub(SyncServiceStub):

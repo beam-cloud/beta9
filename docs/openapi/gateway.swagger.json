@@ -2593,6 +2593,9 @@
         },
         "configGroup": {
           "type": "string"
+        },
+        "gpuVirtualized": {
+          "type": "boolean"
         }
       }
     },

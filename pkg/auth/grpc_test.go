@@ -61,6 +61,20 @@ func TestAuthInterceptorAllowsPublicMarketplaceBrowse(t *testing.T) {
 	}
 }
 
+func TestAuthInterceptorLetsAgentTokenRPCsSelfAuthenticate(t *testing.T) {
+	interceptor := NewAuthInterceptor(types.AppConfig{}, nil, nil)
+
+	for _, method := range []string{
+		pb.GatewayService_GetAgentPoolVirtualization_FullMethodName,
+		pb.GatewayService_CreateNodeEnrollment_FullMethodName,
+		pb.GatewayService_DeleteNodeEnrollment_FullMethodName,
+	} {
+		if interceptor.isAuthRequired(method) {
+			t.Fatalf("method %s requires interceptor auth, want agent token auth", method)
+		}
+	}
+}
+
 func TestAuthInterceptorStillRequiresAuthForNonCacheRepositoryMethods(t *testing.T) {
 	interceptor := NewAuthInterceptor(types.AppConfig{}, nil, nil)
 

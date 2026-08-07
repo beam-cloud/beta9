@@ -47,7 +47,7 @@ var (
 )
 
 type GPUManager interface {
-	AssignGPUDevices(containerId string, gpuCount uint32) ([]int, error)
+	AssignGPUDevices(request *types.ContainerRequest) ([]int, error)
 	GetContainerGPUDevices(containerId string) []int
 	UnassignGPUDevices(containerId string)
 	CDIDevices(assignedDevices []int) []string
@@ -215,8 +215,8 @@ func (c *ContainerNvidiaManager) UnassignGPUDevices(containerId string) {
 	c.gpuAllocationMap.Delete(containerId)
 }
 
-func (c *ContainerNvidiaManager) AssignGPUDevices(containerId string, gpuCount uint32) ([]int, error) {
-	gpuIds, err := c.chooseDevices(containerId, gpuCount)
+func (c *ContainerNvidiaManager) AssignGPUDevices(request *types.ContainerRequest) ([]int, error) {
+	gpuIds, err := c.chooseDevices(request.ContainerId, request.GpuCount)
 	if err != nil {
 		return nil, err
 	}

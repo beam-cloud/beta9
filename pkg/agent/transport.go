@@ -13,6 +13,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"google.golang.org/grpc"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tsnet"
 	"tailscale.com/types/key"
@@ -80,8 +81,20 @@ func runTSNetRouteProxy(ctx context.Context, client pb.GatewayServiceClient, age
 
 	hostname := credential.Hostname
 	if localClient, err := server.LocalClient(); err == nil {
-		if status, err := localClient.Status(ctx); err == nil && status.Self != nil && status.Self.DNSName != "" {
-			hostname = strings.TrimSuffix(status.Self.DNSName, ".")
+		if status, err := localClient.Status(ctx); err == nil {
+			if status.Self != nil && status.Self.DNSName != "" {
+				hostname = strings.TrimSuffix(status.Self.DNSName, ".")
+			}
+		}
+	}
+	poolVirtualized, err := requestAgentPoolGPUVirtualized(ctx, client, agentToken)
+	if err != nil {
+		fmt.Fprintf(stderr, "Thunder node enrollment skipped: %v\n", err)
+	} else if shouldSetupThunderNode(poolVirtualized) {
+		if err := setupThunderNode(ctx, client, agentToken, stdout, stderr); err != nil {
+			fmt.Fprintf(stderr, "Thunder node enrollment skipped: %v\n", err)
+		} else {
+			defer deleteThunderNodeEnrollment(context.Background(), client, agentToken, stderr)
 		}
 	}
 
@@ -104,6 +117,10 @@ func runTSNetRouteProxy(ctx context.Context, client pb.GatewayServiceClient, age
 		go emitTSNetSnapshots(ctx, telemetry, localClient, proxyTarget)
 	}
 	return newRouteProxy(client, agentToken, machineID, listener, proxyTarget, workers, stdout, stderr).run(ctx)
+}
+
+func shouldSetupThunderNode(gpuVirtualized bool) bool {
+	return gpuVirtualized
 }
 
 func emitTSNetSnapshots(ctx context.Context, telemetry *agentTelemetry, client tsnetStatusClient, proxyTarget string) {
@@ -312,6 +329,21 @@ func agentTSNetLogf(stderr io.Writer) func(string, ...any) {
 	return func(format string, args ...any) {
 		verbosef(stderr, format+"\n", args...)
 	}
+}
+
+type agentPoolVirtualizationGatewayClient interface {
+	GetAgentPoolVirtualization(context.Context, *pb.GetAgentPoolVirtualizationRequest, ...grpc.CallOption) (*pb.GetAgentPoolVirtualizationResponse, error)
+}
+
+func requestAgentPoolGPUVirtualized(ctx context.Context, client agentPoolVirtualizationGatewayClient, agentToken string) (bool, error) {
+	res, err := client.GetAgentPoolVirtualization(ctx, &pb.GetAgentPoolVirtualizationRequest{AgentToken: agentToken})
+	if err != nil {
+		return false, err
+	}
+	if !res.GetOk() {
+		return false, fmt.Errorf("%s", res.GetErrMsg())
+	}
+	return res.GetGpuVirtualized(), nil
 }
 
 func requestTransportCredential(ctx context.Context, client pb.GatewayServiceClient, agentToken, transport string) (*transportCredentialResponse, error) {

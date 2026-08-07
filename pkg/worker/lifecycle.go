@@ -184,8 +184,8 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 	}
 
 	// De-allocate GPU devices so they are available for new containers
-	if request.Gpu != "" {
-		s.containerGPUManager.UnassignGPUDevices(containerId)
+	if request != nil && request.RequiresGPU() {
+		s.gpuManagerForRequest(request).UnassignGPUDevices(containerId)
 	}
 
 	// Tear down container network components - best effort
@@ -293,7 +293,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 	caps := s.runtime.Capabilities()
 
-	if request.RequiresGPU() && !caps.GPU {
+	if request.RequiresGPU() && !s.gpuVirtualizedForRequest(request) && !caps.GPU {
 		return fmt.Errorf("runtime %s does not support GPU workloads", s.runtime.Name())
 	}
 
@@ -881,8 +881,8 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	if runnerReadySignal {
 		env = append(env, types.ContainerRunnerReadyPathEnv+"="+types.ContainerRunnerReadyPath)
 	}
-	if request.Gpu != "" {
-		env = s.containerGPUManager.InjectEnvVars(env)
+	if request.RequiresGPU() {
+		env = s.gpuManagerForRequest(request).InjectEnvVars(env)
 	}
 	env = s.applyRuntimeEnvironmentOverrides(env, request, spec.Process.Args)
 
@@ -929,6 +929,10 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		return nil, err
 	}
 	s.enableVolumeCaching(request, volumeCacheMap, spec)
+
+	if request.RequiresGPU() && s.gpuVirtualizedForRequest(request) {
+		spec.Mounts = s.gpuManagerForRequest(request).InjectMounts(spec.Mounts)
+	}
 
 	// Configure resolv.conf
 	resolvMount := specs.Mount{
@@ -1245,11 +1249,13 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		return
 	}
 
-	// Only inject GPU devices if runtime supports GPU
-	if request.RequiresGPU() && s.runtime.Capabilities().GPU {
-		// Assign n-number of GPUs to a container
+	// Virtualized GPU requests register with Thunder but never receive physical
+	// device mounts, CDI devices, or NVIDIA_VISIBLE_DEVICES pinning.
+	if request.RequiresGPU() && (s.gpuVirtualizedForRequest(request) || s.runtime.Capabilities().GPU) {
+		gpuManager := s.gpuManagerForRequest(request)
+
 		phaseStart = time.Now()
-		assignedDevices, err := s.containerGPUManager.AssignGPUDevices(request.ContainerId, request.GpuCount)
+		assignedDevices, err := gpuManager.AssignGPUDevices(request)
 		metrics.RecordWorkerStartupPhase("gpu_assignment", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 		s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleGPUAssignment, phaseStart, err == nil, map[string]string{"gpu_count": fmt.Sprintf("%d", request.GpuCount)})
 		if err != nil {
@@ -1257,25 +1263,35 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			return
 		}
 
-		// Only use CDI if runtime supports it
-		if s.runtime.Capabilities().CDI {
-			cdiCache := cdi.GetDefaultCache()
-			devicesToInject := s.containerGPUManager.CDIDevices(assignedDevices)
+		if request.RequiresGPU() && !s.gpuVirtualizedForRequest(request) {
+			// Only use CDI if runtime supports it
+			if s.runtime.Capabilities().CDI {
+				cdiCache := cdi.GetDefaultCache()
+				devicesToInject := gpuManager.CDIDevices(assignedDevices)
 
-			unresolvable, err := cdiCache.InjectDevices(spec, devicesToInject...)
-			if err != nil {
-				log.Error().Str("container_id", request.ContainerId).Msgf("failed to inject devices: %v", err)
-				return
-			}
-			if len(unresolvable) > 0 {
-				log.Error().Str("container_id", request.ContainerId).Msgf("unresolvable devices: %v", unresolvable)
-				return
+				unresolvable, err := cdiCache.InjectDevices(spec, devicesToInject...)
+				if err != nil {
+					log.Error().Str("container_id", request.ContainerId).Msgf("failed to inject devices: %v", err)
+					return
+				}
+				if len(unresolvable) > 0 {
+					log.Error().Str("container_id", request.ContainerId).Msgf("unresolvable devices: %v", unresolvable)
+					return
+				}
 			}
 		}
 
-		// Pin env vars to the assigned devices regardless of CDI support; for
-		// non-CDI runtimes this is the only thing scoping the container's GPUs.
-		spec.Process.Env = s.containerGPUManager.InjectAssignedEnvVars(spec.Process.Env, assignedDevices)
+		spec.Process.Env = gpuManager.InjectAssignedEnvVars(spec.Process.Env, assignedDevices)
+	}
+
+	if request.Stub.Type.Kind() == types.StubTypeSandbox && s.gpuVirtualizedForRequest(request) {
+		hook, err := s.thunderStartupHook(request, spec)
+		if err != nil {
+			log.Error().Str("container_id", request.ContainerId).Msgf("failed to prepare Thunder startup hook: %v", err)
+			return
+		}
+		containerInstance.Runtime = runtime.WithStartupHooks(containerInstance.Runtime, hook)
+		s.containerInstances.Set(containerId, containerInstance)
 	}
 
 	// Expose the bind ports
@@ -1376,7 +1392,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	startedChan := make(chan int, 1)
 	checkpointPIDChan := make(chan int, 1)
 	monitorPIDChan := make(chan int, 1)
-
 	defer func() {
 		// Close in reverse order of dependency
 		close(checkpointPIDChan)
@@ -1694,6 +1709,7 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 		if !restoringCheckpoint {
 			publishRuntimeStarted(pid)
 		}
+
 	}
 
 	startRuntimeStartedHandler := func() func() {
