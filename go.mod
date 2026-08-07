@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/Masterminds/squirrel v1.5.4
+	github.com/Thunder-Compute/thunder-sdk v0.1.0
 	github.com/VictoriaMetrics/metrics v1.37.0
 	github.com/alicebob/miniredis/v2 v2.30.5
 	github.com/aws/aws-sdk-go-v2 v1.31.0
@@ -326,3 +327,5 @@ replace github.com/aws/aws-sdk-go => github.com/beam-cloud/geesefs/s3ext v0.0.0-
 replace github.com/winfsp/cgofuse => github.com/vitalif/cgofuse v0.0.0-20230609211427-22e8fa44f6b8
 
 replace github.com/jacobsa/fuse => github.com/beam-cloud/gofuse v0.0.0-20260720132319-1a907975017e
+
+replace github.com/Thunder-Compute/thunder-sdk => ../../thunder-sdk

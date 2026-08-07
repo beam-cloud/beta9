@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	thundersdk "github.com/Thunder-Compute/thunder-sdk"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	model "github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/repository"
@@ -45,29 +46,29 @@ func TestServiceCreateAndDeleteClientEnrollment(t *testing.T) {
 			t.Fatalf("authorization = %q", got)
 		}
 		switch {
-		case r.Method == http.MethodPost && r.URL.Path == thunderZonesPath:
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/zones/ensure":
 			createZoneCalls++
-			var payload createZoneRequest
+			var payload thundersdk.CreateZoneRequest
 			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 				t.Fatal(err)
 			}
 			if payload.DisplayName != "workspace-1-pool-1" {
 				t.Fatalf("zone displayName = %q", payload.DisplayName)
 			}
-			_ = json.NewEncoder(w).Encode(Zone{ZoneID: "zone-1", DisplayName: payload.DisplayName})
-		case r.Method == http.MethodPost && r.URL.Path == thunderEnrollmentTokenPath:
+			_ = json.NewEncoder(w).Encode(thundersdk.CreateZoneResponse{ZoneID: "zone-1", DisplayName: payload.DisplayName})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/enrollment-tokens":
 			createTokenCalls++
 			payload := map[string]any{}
 			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 				t.Fatal(err)
 			}
-			if payload["zoneId"] != "zone-1" || payload["role"] != thunderEnrollmentRoleClient || payload["gpuType"] != "h100" || payload["gpuCount"] != float64(2) {
+			if payload["zoneId"] != "zone-1" || payload["role"] != thundersdk.RoleClient || payload["gpuType"] != "h100" || payload["gpuCount"] != float64(2) {
 				t.Fatalf("client enrollment payload = %+v", payload)
 			}
-			_ = json.NewEncoder(w).Encode(EnrollmentToken{EnrollmentTokenID: "token-1", EnrollmentToken: "tr_client", ZoneID: "zone-1", Role: thunderEnrollmentRoleClient, GPUType: "h100", GPUCount: 2})
+			_ = json.NewEncoder(w).Encode(thundersdk.EnrollmentToken{EnrollmentTokenID: "token-1", EnrollmentToken: "tr_client", ZoneID: "zone-1", Role: thundersdk.RoleClient, GPUType: "h100", GPUCount: 2})
 		case r.Method == http.MethodDelete && r.URL.Path == "/api/v1/enrollment-tokens/token-1/node":
 			deleteTokenCalls++
-			_ = json.NewEncoder(w).Encode(DeleteEnrollmentTokenNodeResponse{EnrollmentTokenID: "token-1", Role: thunderEnrollmentRoleClient, NodeDeleted: true})
+			_ = json.NewEncoder(w).Encode(thundersdk.DeleteEnrollmentServerResponse{EnrollmentTokenID: "token-1", Role: thundersdk.RoleClient, ServerDeleted: true})
 		default:
 			t.Fatalf("unexpected request = %s %s", r.Method, r.URL.Path)
 		}
@@ -76,7 +77,7 @@ func TestServiceCreateAndDeleteClientEnrollment(t *testing.T) {
 
 	service, err := NewService(ServiceOpts{
 		Repository:    NewRedisRepository(rdb),
-		Client:        NewClient(server.URL, "central-token", server.Client()),
+		Client:        thundersdk.NewClient(server.URL, "central-token", thundersdk.WithHTTPClient(server.Client())),
 		ContainerRepo: containerRepo,
 		WorkerRepo:    workerRepo,
 	})
@@ -155,11 +156,11 @@ func TestServiceCreateClientEnrollmentReusesExistingZone(t *testing.T) {
 
 	var createZoneCalls int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && r.URL.Path == thunderZonesPath {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/v1/zones/ensure" {
 			createZoneCalls++
 			t.Fatal("CreateZone should not be called for an existing zone")
 		}
-		if r.Method != http.MethodPost || r.URL.Path != thunderEnrollmentTokenPath {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/enrollment-tokens" {
 			t.Fatalf("unexpected request = %s %s", r.Method, r.URL.Path)
 		}
 		payload := map[string]any{}
@@ -169,11 +170,11 @@ func TestServiceCreateClientEnrollmentReusesExistingZone(t *testing.T) {
 		if payload["zoneId"] != "zone-existing" {
 			t.Fatalf("zoneId = %v", payload["zoneId"])
 		}
-		_ = json.NewEncoder(w).Encode(EnrollmentToken{EnrollmentTokenID: "token-1", EnrollmentToken: "tr_client", ZoneID: "zone-existing", Role: thunderEnrollmentRoleClient})
+		_ = json.NewEncoder(w).Encode(thundersdk.EnrollmentToken{EnrollmentTokenID: "token-1", EnrollmentToken: "tr_client", ZoneID: "zone-existing", Role: thundersdk.RoleClient})
 	}))
 	defer server.Close()
 
-	service, err := NewService(ServiceOpts{Repository: repo, Client: NewClient(server.URL, "central-token", server.Client()), ContainerRepo: containerRepo, WorkerRepo: workerRepo})
+	service, err := NewService(ServiceOpts{Repository: repo, Client: thundersdk.NewClient(server.URL, "central-token", thundersdk.WithHTTPClient(server.Client())), ContainerRepo: containerRepo, WorkerRepo: workerRepo})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,19 +214,19 @@ func TestServiceCreateClientEnrollmentReplacesExistingToken(t *testing.T) {
 	var deleted []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodPost && r.URL.Path == thunderEnrollmentTokenPath:
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/enrollment-tokens":
 			createTokenCalls++
-			_ = json.NewEncoder(w).Encode(EnrollmentToken{EnrollmentTokenID: "token-new", EnrollmentToken: "tr_client_new", ZoneID: "zone-existing", Role: thunderEnrollmentRoleClient})
+			_ = json.NewEncoder(w).Encode(thundersdk.EnrollmentToken{EnrollmentTokenID: "token-new", EnrollmentToken: "tr_client_new", ZoneID: "zone-existing", Role: thundersdk.RoleClient})
 		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/v1/enrollment-tokens/"):
 			deleted = append(deleted, strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/v1/enrollment-tokens/"), "/node"))
-			_ = json.NewEncoder(w).Encode(DeleteEnrollmentTokenNodeResponse{NodeDeleted: true})
+			_ = json.NewEncoder(w).Encode(thundersdk.DeleteEnrollmentServerResponse{ServerDeleted: true})
 		default:
 			t.Fatalf("unexpected request = %s %s", r.Method, r.URL.Path)
 		}
 	}))
 	defer server.Close()
 
-	service, err := NewService(ServiceOpts{Repository: repo, Client: NewClient(server.URL, "central-token", server.Client()), ContainerRepo: containerRepo, WorkerRepo: workerRepo})
+	service, err := NewService(ServiceOpts{Repository: repo, Client: thundersdk.NewClient(server.URL, "central-token", thundersdk.WithHTTPClient(server.Client())), ContainerRepo: containerRepo, WorkerRepo: workerRepo})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,12 +272,22 @@ func TestServiceCreateClientEnrollmentSucceedsWhenPreviousTokenRevokeFails(t *te
 		t.Fatal(err)
 	}
 
-	client := &recordingThunderClient{
-		clientEnrollment: &EnrollmentToken{EnrollmentTokenID: "token-new", EnrollmentToken: "tr_client_new", ZoneID: "zone-existing", Role: thunderEnrollmentRoleClient},
-		installCommand:   "curl install thunder",
-		deleteErr:        errors.New("Thunder delete failed"),
-	}
-	service, err := NewService(ServiceOpts{Repository: repo, Client: client, ContainerRepo: containerRepo, WorkerRepo: workerRepo})
+	var deleted []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/enrollment-tokens":
+			_ = json.NewEncoder(w).Encode(thundersdk.EnrollmentToken{EnrollmentTokenID: "token-new", EnrollmentToken: "tr_client_new", ZoneID: "zone-existing", Role: thundersdk.RoleClient})
+		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/v1/enrollment-tokens/"):
+			deleted = append(deleted, strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/v1/enrollment-tokens/"), "/node"))
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "internal", "message": "delete failed"})
+		default:
+			t.Fatalf("unexpected request = %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	service, err := NewService(ServiceOpts{Repository: repo, Client: thundersdk.NewClient(server.URL, "central-token", thundersdk.WithHTTPClient(server.Client())), ContainerRepo: containerRepo, WorkerRepo: workerRepo})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,11 +296,11 @@ func TestServiceCreateClientEnrollmentSucceedsWhenPreviousTokenRevokeFails(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !resp.Ok || resp.ErrorMsg != "" || resp.InstallCommand != "curl install thunder" {
+	if !resp.Ok || resp.ErrorMsg != "" || !strings.Contains(resp.InstallCommand, "tr_client_new") {
 		t.Fatalf("CreateClientEnrollment() = %+v", resp)
 	}
-	if len(client.deletedEnrollmentTokenIDs) != 1 || client.deletedEnrollmentTokenIDs[0] != "token-old" {
-		t.Fatalf("deleted enrollment token ids = %+v", client.deletedEnrollmentTokenIDs)
+	if len(deleted) != 1 || deleted[0] != "token-old" {
+		t.Fatalf("deleted enrollment token ids = %+v", deleted)
 	}
 	state, found, err := repo.GetClientEnrollment(context.Background(), "container-1")
 	if err != nil || !found {
@@ -316,7 +327,7 @@ func TestServiceDeleteClientEnrollmentIsIdempotent(t *testing.T) {
 	defer rdb.Close()
 	service, err := NewService(ServiceOpts{
 		Repository:    NewRedisRepository(rdb),
-		Client:        NewClient("https://central.example", "central-token", nil),
+		Client:        thundersdk.NewClient("https://central.example", "central-token"),
 		ContainerRepo: repository.NewContainerRedisRepositoryForTest(rdb),
 		WorkerRepo:    repository.NewWorkerRedisRepositoryForTest(rdb),
 	})
@@ -346,7 +357,7 @@ func TestServicePrivateWorkerTokenIsWorkspaceScoped(t *testing.T) {
 	}
 	service, err := NewService(ServiceOpts{
 		Repository:    NewRedisRepository(rdb),
-		Client:        NewClient("https://central.example", "central-token", nil),
+		Client:        thundersdk.NewClient("https://central.example", "central-token"),
 		ContainerRepo: containerRepo,
 		WorkerRepo:    workerRepo,
 	})
@@ -379,23 +390,23 @@ func TestServiceCreateAndDeleteNodeEnrollment(t *testing.T) {
 			t.Fatalf("authorization = %q", got)
 		}
 		switch {
-		case r.Method == http.MethodPost && r.URL.Path == thunderZonesPath:
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/zones/ensure":
 			createZoneCalls++
-			var payload createZoneRequest
+			var payload thundersdk.CreateZoneRequest
 			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 				t.Fatal(err)
 			}
 			if payload.DisplayName != "workspace-1-pool-1" {
 				t.Fatalf("zone displayName = %q", payload.DisplayName)
 			}
-			_ = json.NewEncoder(w).Encode(Zone{ZoneID: "zone-1", DisplayName: payload.DisplayName})
-		case r.Method == http.MethodPost && r.URL.Path == thunderEnrollmentTokenPath:
+			_ = json.NewEncoder(w).Encode(thundersdk.CreateZoneResponse{ZoneID: "zone-1", DisplayName: payload.DisplayName})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/enrollment-tokens":
 			createTokenCalls++
 			payload := map[string]any{}
 			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 				t.Fatal(err)
 			}
-			if payload["zoneId"] != "zone-1" || payload["role"] != thunderEnrollmentRoleServer {
+			if payload["zoneId"] != "zone-1" || payload["role"] != thundersdk.RoleServer {
 				t.Fatalf("node enrollment payload = %+v", payload)
 			}
 			if _, ok := payload["gpuType"]; ok {
@@ -404,10 +415,10 @@ func TestServiceCreateAndDeleteNodeEnrollment(t *testing.T) {
 			if _, ok := payload["gpuCount"]; ok {
 				t.Fatalf("node enrollment payload included gpuCount: %+v", payload)
 			}
-			_ = json.NewEncoder(w).Encode(EnrollmentToken{EnrollmentTokenID: "node-token-1", EnrollmentToken: "tr_node", ZoneID: "zone-1", Role: thunderEnrollmentRoleServer})
+			_ = json.NewEncoder(w).Encode(thundersdk.EnrollmentToken{EnrollmentTokenID: "node-token-1", EnrollmentToken: "tr_node", ZoneID: "zone-1", Role: thundersdk.RoleServer})
 		case r.Method == http.MethodDelete && r.URL.Path == "/api/v1/enrollment-tokens/node-token-1/node":
 			deleteTokenCalls++
-			_ = json.NewEncoder(w).Encode(DeleteEnrollmentTokenNodeResponse{EnrollmentTokenID: "node-token-1", Role: thunderEnrollmentRoleServer, NodeDeleted: true})
+			_ = json.NewEncoder(w).Encode(thundersdk.DeleteEnrollmentServerResponse{EnrollmentTokenID: "node-token-1", Role: thundersdk.RoleServer, ServerDeleted: true})
 		default:
 			t.Fatalf("unexpected request = %s %s", r.Method, r.URL.Path)
 		}
@@ -416,7 +427,7 @@ func TestServiceCreateAndDeleteNodeEnrollment(t *testing.T) {
 
 	service, err := NewService(ServiceOpts{
 		Repository:          repo,
-		Client:              NewClient(server.URL, "central-token", server.Client()),
+		Client:              thundersdk.NewClient(server.URL, "central-token", thundersdk.WithHTTPClient(server.Client())),
 		ContainerRepo:       repository.NewContainerRedisRepositoryForTest(rdb),
 		WorkerRepo:          repository.NewWorkerRedisRepositoryForTest(rdb),
 		AgentStateValidator: validator,
@@ -485,19 +496,19 @@ func TestServiceCreateNodeEnrollmentReplacesExistingToken(t *testing.T) {
 	var deleted []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodPost && r.URL.Path == thunderEnrollmentTokenPath:
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/enrollment-tokens":
 			createTokenCalls++
 			payload := map[string]any{}
 			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 				t.Fatal(err)
 			}
-			if payload["zoneId"] != "zone-existing" || payload["role"] != thunderEnrollmentRoleServer {
+			if payload["zoneId"] != "zone-existing" || payload["role"] != thundersdk.RoleServer {
 				t.Fatalf("node enrollment payload = %+v", payload)
 			}
-			_ = json.NewEncoder(w).Encode(EnrollmentToken{EnrollmentTokenID: "node-token-new", EnrollmentToken: "tr_node_new", ZoneID: "zone-existing", Role: thunderEnrollmentRoleServer})
+			_ = json.NewEncoder(w).Encode(thundersdk.EnrollmentToken{EnrollmentTokenID: "node-token-new", EnrollmentToken: "tr_node_new", ZoneID: "zone-existing", Role: thundersdk.RoleServer})
 		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/v1/enrollment-tokens/"):
 			deleted = append(deleted, strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/v1/enrollment-tokens/"), "/node"))
-			_ = json.NewEncoder(w).Encode(DeleteEnrollmentTokenNodeResponse{NodeDeleted: true})
+			_ = json.NewEncoder(w).Encode(thundersdk.DeleteEnrollmentServerResponse{ServerDeleted: true})
 		default:
 			t.Fatalf("unexpected request = %s %s", r.Method, r.URL.Path)
 		}
@@ -506,7 +517,7 @@ func TestServiceCreateNodeEnrollmentReplacesExistingToken(t *testing.T) {
 
 	service, err := NewService(ServiceOpts{
 		Repository:          repo,
-		Client:              NewClient(server.URL, "central-token", server.Client()),
+		Client:              thundersdk.NewClient(server.URL, "central-token", thundersdk.WithHTTPClient(server.Client())),
 		ContainerRepo:       repository.NewContainerRedisRepositoryForTest(rdb),
 		WorkerRepo:          repository.NewWorkerRedisRepositoryForTest(rdb),
 		AgentStateValidator: validator,
@@ -548,13 +559,24 @@ func TestServiceCreateNodeEnrollmentSucceedsWhenPreviousTokenRevokeFails(t *test
 		t.Fatal(err)
 	}
 
-	client := &recordingThunderClient{
-		serverEnrollment: &EnrollmentToken{EnrollmentTokenID: "node-token-new", EnrollmentToken: "tr_node_new", ZoneID: "zone-existing", Role: thunderEnrollmentRoleServer},
-		deleteErr:        errors.New("Thunder delete failed"),
-	}
+	var deleted []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/enrollment-tokens":
+			_ = json.NewEncoder(w).Encode(thundersdk.EnrollmentToken{EnrollmentTokenID: "node-token-new", EnrollmentToken: "tr_node_new", ZoneID: "zone-existing", Role: thundersdk.RoleServer})
+		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/v1/enrollment-tokens/"):
+			deleted = append(deleted, strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/v1/enrollment-tokens/"), "/node"))
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "internal", "message": "delete failed"})
+		default:
+			t.Fatalf("unexpected request = %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
 	service, err := NewService(ServiceOpts{
 		Repository:          repo,
-		Client:              client,
+		Client:              thundersdk.NewClient(server.URL, "central-token", thundersdk.WithHTTPClient(server.Client())),
 		ContainerRepo:       repository.NewContainerRedisRepositoryForTest(rdb),
 		WorkerRepo:          repository.NewWorkerRedisRepositoryForTest(rdb),
 		AgentStateValidator: &fakeAgentStateValidator{state: &model.AgentTokenState{WorkspaceID: "workspace-1", PoolName: "pool-1", MachineID: "machine-1"}},
@@ -570,8 +592,8 @@ func TestServiceCreateNodeEnrollmentSucceedsWhenPreviousTokenRevokeFails(t *test
 	if !resp.Ok || resp.ErrorMsg != "" || resp.EnrollmentToken != "tr_node_new" {
 		t.Fatalf("CreateNodeEnrollment() = %+v", resp)
 	}
-	if len(client.deletedEnrollmentTokenIDs) != 1 || client.deletedEnrollmentTokenIDs[0] != "node-token-old" {
-		t.Fatalf("deleted enrollment token ids = %+v", client.deletedEnrollmentTokenIDs)
+	if len(deleted) != 1 || deleted[0] != "node-token-old" {
+		t.Fatalf("deleted enrollment token ids = %+v", deleted)
 	}
 	state, found, err := repo.GetNodeEnrollment(context.Background(), "workspace-1", "pool-1", "machine-1")
 	if err != nil || !found {
@@ -597,8 +619,7 @@ func TestServiceDeleteClientEnrollmentSkipsChangedTokenUnderPoolLock(t *testing.
 			EnrollmentTokenID: "token-new",
 		},
 	}
-	client := &recordingThunderClient{}
-	service := &Service{repo: repo, client: client}
+	service := &Service{repo: repo, client: thundersdk.NewClient("https://central.example", "central-token")}
 
 	resp, err := service.DeleteClientEnrollment(thunderWorkerAuthContext(types.TokenTypeWorker, ""), &pb.DeleteClientEnrollmentRequest{ContainerId: "container-1"})
 	if err != nil {
@@ -615,9 +636,6 @@ func TestServiceDeleteClientEnrollmentSkipsChangedTokenUnderPoolLock(t *testing.
 	}
 	if repo.deletedClientID != "" {
 		t.Fatalf("deleted client id = %q", repo.deletedClientID)
-	}
-	if len(client.deletedEnrollmentTokenIDs) != 0 {
-		t.Fatalf("deleted enrollment token ids = %+v", client.deletedEnrollmentTokenIDs)
 	}
 }
 
@@ -636,10 +654,9 @@ func TestServiceDeleteNodeEnrollmentSkipsChangedTokenUnderPoolLock(t *testing.T)
 			EnrollmentTokenID: "node-token-new",
 		},
 	}
-	client := &recordingThunderClient{}
 	service := &Service{
 		repo:           repo,
-		client:         client,
+		client:         thundersdk.NewClient("https://central.example", "central-token"),
 		agentValidator: &fakeAgentStateValidator{state: &model.AgentTokenState{WorkspaceID: "workspace-1", PoolName: "pool-1", MachineID: "machine-1"}},
 	}
 
@@ -659,9 +676,6 @@ func TestServiceDeleteNodeEnrollmentSkipsChangedTokenUnderPoolLock(t *testing.T)
 	if repo.deletedNodeMachineID != "" {
 		t.Fatalf("deleted node machine id = %q", repo.deletedNodeMachineID)
 	}
-	if len(client.deletedEnrollmentTokenIDs) != 0 {
-		t.Fatalf("deleted enrollment token ids = %+v", client.deletedEnrollmentTokenIDs)
-	}
 }
 
 func TestServiceCreateNodeEnrollmentRequiresValidAgentToken(t *testing.T) {
@@ -669,7 +683,7 @@ func TestServiceCreateNodeEnrollmentRequiresValidAgentToken(t *testing.T) {
 	defer rdb.Close()
 	service, err := NewService(ServiceOpts{
 		Repository:          NewRedisRepository(rdb),
-		Client:              NewClient("https://central.example", "central-token", nil),
+		Client:              thundersdk.NewClient("https://central.example", "central-token"),
 		ContainerRepo:       repository.NewContainerRedisRepositoryForTest(rdb),
 		WorkerRepo:          repository.NewWorkerRedisRepositoryForTest(rdb),
 		AgentStateValidator: &fakeAgentStateValidator{err: errors.New("managed pool no longer exists")},
@@ -684,54 +698,6 @@ func TestServiceCreateNodeEnrollmentRequiresValidAgentToken(t *testing.T) {
 	if resp.Ok || !strings.Contains(resp.ErrorMsg, "managed pool no longer exists") {
 		t.Fatalf("CreateNodeEnrollment() = %+v", resp)
 	}
-}
-
-type recordingThunderClient struct {
-	zone                      *Zone
-	clientEnrollment          *EnrollmentToken
-	serverEnrollment          *EnrollmentToken
-	installCommand            string
-	deleteErr                 error
-	deletedEnrollmentTokenIDs []string
-}
-
-func (c *recordingThunderClient) CreateZone(ctx context.Context, displayName string) (*Zone, error) {
-	if c.zone == nil {
-		return nil, errors.New("unexpected CreateZone call")
-	}
-	zone := *c.zone
-	return &zone, nil
-}
-
-func (c *recordingThunderClient) CreateClientEnrollmentToken(ctx context.Context, zoneID, gpuType string, gpuCount int) (*EnrollmentToken, error) {
-	if c.clientEnrollment == nil {
-		return nil, errors.New("unexpected CreateClientEnrollmentToken call")
-	}
-	enrollment := *c.clientEnrollment
-	return &enrollment, nil
-}
-
-func (c *recordingThunderClient) CreateServerEnrollmentToken(ctx context.Context, zoneID string) (*EnrollmentToken, error) {
-	if c.serverEnrollment == nil {
-		return nil, errors.New("unexpected CreateServerEnrollmentToken call")
-	}
-	enrollment := *c.serverEnrollment
-	return &enrollment, nil
-}
-
-func (c *recordingThunderClient) DeleteEnrollmentTokenNode(ctx context.Context, enrollmentTokenID string) (*DeleteEnrollmentTokenNodeResponse, error) {
-	c.deletedEnrollmentTokenIDs = append(c.deletedEnrollmentTokenIDs, enrollmentTokenID)
-	if c.deleteErr != nil {
-		return nil, c.deleteErr
-	}
-	return &DeleteEnrollmentTokenNodeResponse{EnrollmentTokenID: enrollmentTokenID, NodeDeleted: true}, nil
-}
-
-func (c *recordingThunderClient) ClientInstallCommand(enrollmentToken string) (string, error) {
-	if c.installCommand == "" {
-		return "", errors.New("unexpected ClientInstallCommand call")
-	}
-	return c.installCommand, nil
 }
 
 type lockingThunderRepository struct {

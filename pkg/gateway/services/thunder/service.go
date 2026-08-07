@@ -2,11 +2,11 @@ package thunder
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"net/http"
+	"os"
 	"strings"
 
+	thundersdk "github.com/Thunder-Compute/thunder-sdk"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	model "github.com/beam-cloud/beta9/pkg/compute"
@@ -16,14 +16,6 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-type ThunderClient interface {
-	CreateZone(ctx context.Context, displayName string) (*Zone, error)
-	CreateClientEnrollmentToken(ctx context.Context, zoneID, gpuType string, gpuCount int) (*EnrollmentToken, error)
-	CreateServerEnrollmentToken(ctx context.Context, zoneID string) (*EnrollmentToken, error)
-	DeleteEnrollmentTokenNode(ctx context.Context, enrollmentTokenID string) (*DeleteEnrollmentTokenNodeResponse, error)
-	ClientInstallCommand(enrollmentToken string) (string, error)
-}
-
 type AgentStateValidator interface {
 	ResolveAgentState(ctx context.Context, agentToken string) (*model.AgentTokenState, error)
 }
@@ -31,7 +23,7 @@ type AgentStateValidator interface {
 type ServiceOpts struct {
 	Repository          Repository
 	RedisClient         *common.RedisClient
-	Client              ThunderClient
+	Client              *thundersdk.Client
 	ContainerRepo       repository.ContainerRepository
 	WorkerRepo          repository.WorkerRepository
 	AgentStateValidator AgentStateValidator
@@ -41,7 +33,7 @@ type Service struct {
 	pb.UnimplementedThunderServiceServer
 
 	repo           Repository
-	client         ThunderClient
+	client         *thundersdk.Client
 	containerRepo  repository.ContainerRepository
 	workerRepo     repository.WorkerRepository
 	agentValidator AgentStateValidator
@@ -58,7 +50,7 @@ func NewService(opts ServiceOpts) (*Service, error) {
 
 	client := opts.Client
 	if client == nil {
-		client = NewClientFromEnv(nil)
+		client = thundersdk.NewClient(os.Getenv("THUNDER_API_URL"), os.Getenv("THUNDER_API_TOKEN"))
 	}
 	if client == nil {
 		return nil, fmt.Errorf("Thunder client is required")
@@ -110,17 +102,14 @@ func (s *Service) CreateClientEnrollment(ctx context.Context, req *pb.CreateClie
 			return err
 		}
 
-		enrollment, err := s.client.CreateClientEnrollmentToken(ctx, zoneID, attrs.gpuType, attrs.gpuCount)
+		enrollment, err := s.client.CreateClientEnrollment(ctx, thundersdk.CreateClientEnrollmentRequest{ZoneID: zoneID, GPUType: attrs.gpuType, GPUCount: uint64(attrs.gpuCount)})
 		if err != nil {
 			return err
 		}
-		if enrollment == nil || strings.TrimSpace(enrollment.EnrollmentTokenID) == "" || strings.TrimSpace(enrollment.EnrollmentToken) == "" {
+		if strings.TrimSpace(enrollment.EnrollmentTokenID) == "" || strings.TrimSpace(enrollment.EnrollmentToken) == "" {
 			return fmt.Errorf("Thunder client enrollment response was incomplete")
 		}
-		installCommand, err = s.client.ClientInstallCommand(enrollment.EnrollmentToken)
-		if err != nil {
-			return err
-		}
+		installCommand = s.client.ClientEnrollmentCommand(enrollment.EnrollmentToken)
 		if err := s.repo.SaveClientEnrollment(ctx, &ClientEnrollmentState{
 			ContainerID:       containerID,
 			WorkspaceID:       attrs.workspaceID,
@@ -129,7 +118,7 @@ func (s *Service) CreateClientEnrollment(ctx context.Context, req *pb.CreateClie
 			PoolName:          attrs.poolName,
 			EnrollmentTokenID: enrollment.EnrollmentTokenID,
 		}, 0); err != nil {
-			if _, deleteErr := s.client.DeleteEnrollmentTokenNode(ctx, enrollment.EnrollmentTokenID); deleteErr != nil && !isThunderNotFound(deleteErr) {
+			if _, deleteErr := s.client.DeleteEnrollmentServer(ctx, enrollment.EnrollmentTokenID); deleteErr != nil && !thundersdk.IsNotFound(deleteErr) {
 				return fmt.Errorf("failed to save Thunder client enrollment: %w; additionally failed to revoke Thunder enrollment token %q: %v", err, enrollment.EnrollmentTokenID, deleteErr)
 			}
 			return err
@@ -150,7 +139,7 @@ func (s *Service) revokePreviousEnrollmentToken(ctx context.Context, previousEnr
 	if previousEnrollmentTokenID == "" || previousEnrollmentTokenID == currentEnrollmentTokenID {
 		return
 	}
-	if _, err := s.client.DeleteEnrollmentTokenNode(ctx, previousEnrollmentTokenID); err != nil && !isThunderNotFound(err) {
+	if _, err := s.client.DeleteEnrollmentServer(ctx, previousEnrollmentTokenID); err != nil && !thundersdk.IsNotFound(err) {
 		log.Warn().
 			Err(err).
 			Str("workspace_id", workspaceID).
@@ -203,8 +192,8 @@ func (s *Service) DeleteClientEnrollment(ctx context.Context, req *pb.DeleteClie
 			return nil
 		}
 		if currentEnrollmentTokenID != "" {
-			_, err = s.client.DeleteEnrollmentTokenNode(ctx, currentEnrollmentTokenID)
-			if err != nil && !isThunderNotFound(err) {
+			_, err = s.client.DeleteEnrollmentServer(ctx, currentEnrollmentTokenID)
+			if err != nil && !thundersdk.IsNotFound(err) {
 				return err
 			}
 		}
@@ -236,11 +225,11 @@ func (s *Service) CreateNodeEnrollment(ctx context.Context, req *pb.CreateNodeEn
 			return err
 		}
 
-		enrollment, err := s.client.CreateServerEnrollmentToken(ctx, zoneID)
+		enrollment, err := s.client.CreateServerEnrollment(ctx, thundersdk.CreateServerEnrollmentRequest{ZoneID: zoneID})
 		if err != nil {
 			return err
 		}
-		if enrollment == nil || strings.TrimSpace(enrollment.EnrollmentTokenID) == "" || strings.TrimSpace(enrollment.EnrollmentToken) == "" {
+		if strings.TrimSpace(enrollment.EnrollmentTokenID) == "" || strings.TrimSpace(enrollment.EnrollmentToken) == "" {
 			return fmt.Errorf("Thunder node enrollment response was incomplete")
 		}
 		if err := s.repo.SaveNodeEnrollment(ctx, &NodeEnrollmentState{
@@ -249,7 +238,7 @@ func (s *Service) CreateNodeEnrollment(ctx context.Context, req *pb.CreateNodeEn
 			MachineID:         agentState.MachineID,
 			EnrollmentTokenID: enrollment.EnrollmentTokenID,
 		}, 0); err != nil {
-			if _, deleteErr := s.client.DeleteEnrollmentTokenNode(ctx, enrollment.EnrollmentTokenID); deleteErr != nil && !isThunderNotFound(deleteErr) {
+			if _, deleteErr := s.client.DeleteEnrollmentServer(ctx, enrollment.EnrollmentTokenID); deleteErr != nil && !thundersdk.IsNotFound(deleteErr) {
 				return fmt.Errorf("failed to save Thunder node enrollment: %w; additionally failed to revoke Thunder enrollment token %q: %v", err, enrollment.EnrollmentTokenID, deleteErr)
 			}
 			return err
@@ -294,8 +283,8 @@ func (s *Service) DeleteNodeEnrollment(ctx context.Context, req *pb.DeleteNodeEn
 			return nil
 		}
 		if currentEnrollmentTokenID != "" {
-			_, err = s.client.DeleteEnrollmentTokenNode(ctx, currentEnrollmentTokenID)
-			if err != nil && !isThunderNotFound(err) {
+			_, err = s.client.DeleteEnrollmentServer(ctx, currentEnrollmentTokenID)
+			if err != nil && !thundersdk.IsNotFound(err) {
 				return err
 			}
 		}
@@ -387,11 +376,11 @@ func (s *Service) ensureZoneLocked(ctx context.Context, workspaceID, poolName st
 		return state.ThunderZoneID, nil
 	}
 
-	zone, err := s.client.CreateZone(ctx, thunderZoneDisplayName(workspaceID, poolName))
+	zone, err := s.client.CreateZone(ctx, thundersdk.CreateZoneRequest{DisplayName: thunderZoneDisplayName(workspaceID, poolName)})
 	if err != nil {
 		return "", err
 	}
-	if zone == nil || strings.TrimSpace(zone.ZoneID) == "" {
+	if strings.TrimSpace(zone.ZoneID) == "" {
 		return "", fmt.Errorf("Thunder zone response did not include a zone id")
 	}
 	return zone.ZoneID, s.repo.SaveZone(ctx, &ZoneState{
@@ -438,9 +427,4 @@ func requireWorkerToken(ctx context.Context, workspaceID string) error {
 		}
 	}
 	return nil
-}
-
-func isThunderNotFound(err error) bool {
-	var thunderErr *ThunderError
-	return errors.As(err, &thunderErr) && thunderErr.StatusCode == http.StatusNotFound
 }
