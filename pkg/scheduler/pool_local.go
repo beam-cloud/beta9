@@ -167,16 +167,17 @@ func (wpc *LocalKubernetesWorkerPoolController) addWorkerWithId(workerId string,
 
 func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string, cpu int64, memory int64, gpuType string, gpuCount uint32, token string) (*batchv1.Job, *types.Worker) {
 	jobName := fmt.Sprintf("%s-%s-%s", Beta9WorkerJobPrefix, wpc.name, workerId)
-	workerConfig := wpc.workerProcessConfig()
-	prometheusEnabled := workerConfig.Monitoring.MetricsCollector == string(types.MetricsCollectorPrometheus)
+	workerConfig := wpc.workerPodConfig()
+	prometheusScrapeEnabled := workerConfig.Monitoring.MetricsCollector == string(types.MetricsCollectorPrometheus) &&
+		workerConfig.Monitoring.Prometheus.ScrapeWorkers
 	labels := map[string]string{
 		"app":                       Beta9WorkerLabelValue,
 		Beta9WorkerLabelKey:         Beta9WorkerLabelValue,
 		Beta9WorkerLabelPoolNameKey: wpc.name,
 		Beta9WorkerLabelIDKey:       workerId,
-		PrometheusScrapeKey:         strconv.FormatBool(prometheusEnabled && workerConfig.Monitoring.Prometheus.ScrapeWorkers),
+		PrometheusScrapeKey:         strconv.FormatBool(prometheusScrapeEnabled),
 	}
-	if prometheusEnabled {
+	if prometheusScrapeEnabled {
 		labels[PrometheusPortKey] = fmt.Sprintf("%d", workerConfig.Monitoring.Prometheus.Port)
 	}
 
@@ -296,11 +297,10 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 	}
 }
 
-// workerProcessConfig disables the pull-based usage collector for local
-// host-network workers. It binds a fixed node port, which prevents safe worker
-// co-location. The worker's VictoriaMetrics registry remains push-based and is
-// initialized independently by cmd/worker.
-func (wpc *LocalKubernetesWorkerPoolController) workerProcessConfig() types.AppConfig {
+// workerPodConfig disables pull-based Prometheus metrics for host-network
+// workers so a fixed node port does not prevent worker co-location. The
+// VictoriaMetrics push registry is configured independently.
+func (wpc *LocalKubernetesWorkerPoolController) workerPodConfig() types.AppConfig {
 	config := wpc.config
 	if config.Worker.HostNetwork && config.Monitoring.MetricsCollector == string(types.MetricsCollectorPrometheus) {
 		config.Monitoring.MetricsCollector = string(types.MetricsCollectorNone)
@@ -588,12 +588,11 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId st
 		envVars = append(envVars, wpc.workerPoolConfig.JobSpec.Env...)
 	}
 
-	// Serialize the AppConfig struct to JSON
-	configJson, err := json.MarshalIndent(wpc.workerProcessConfig(), "", "  ")
+	configJSON, err := json.MarshalIndent(wpc.workerPodConfig(), "", "  ")
 	if err == nil {
 		envVars = append(envVars, corev1.EnvVar{
 			Name:  "CONFIG_JSON",
-			Value: string(configJson),
+			Value: string(configJSON),
 		})
 	}
 

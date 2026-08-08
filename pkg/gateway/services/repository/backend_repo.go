@@ -131,8 +131,8 @@ func (s *BackendRepositoryService) CreateDiskSnapshot(ctx context.Context, req *
 }
 
 func (s *BackendRepositoryService) GetLatestDiskSnapshot(ctx context.Context, req *pb.GetLatestDiskSnapshotRequest) (*pb.GetLatestDiskSnapshotResponse, error) {
-	snapshot, err := s.getDiskSnapshot(ctx, req.WorkspaceId, func(ctx context.Context, workspaceId uint) (*types.DiskSnapshot, error) {
-		return s.backendRepo.GetLatestDiskSnapshot(ctx, workspaceId, req.DiskName)
+	snapshot, err := s.findDiskSnapshot(ctx, req.WorkspaceId, func(ctx context.Context, workspaceID uint) (*types.DiskSnapshot, error) {
+		return s.backendRepo.GetLatestDiskSnapshot(ctx, workspaceID, req.DiskName)
 	})
 	if err != nil {
 		return &pb.GetLatestDiskSnapshotResponse{Ok: false, ErrorMsg: err.Error()}, nil
@@ -141,8 +141,8 @@ func (s *BackendRepositoryService) GetLatestDiskSnapshot(ctx context.Context, re
 }
 
 func (s *BackendRepositoryService) GetDiskSnapshot(ctx context.Context, req *pb.GetDiskSnapshotRequest) (*pb.GetDiskSnapshotResponse, error) {
-	snapshot, err := s.getDiskSnapshot(ctx, req.WorkspaceId, func(ctx context.Context, workspaceId uint) (*types.DiskSnapshot, error) {
-		return s.backendRepo.GetDiskSnapshot(ctx, workspaceId, req.SnapshotId)
+	snapshot, err := s.findDiskSnapshot(ctx, req.WorkspaceId, func(ctx context.Context, workspaceID uint) (*types.DiskSnapshot, error) {
+		return s.backendRepo.GetDiskSnapshot(ctx, workspaceID, req.SnapshotId)
 	})
 	if err != nil {
 		return &pb.GetDiskSnapshotResponse{Ok: false, ErrorMsg: err.Error()}, nil
@@ -150,12 +150,12 @@ func (s *BackendRepositoryService) GetDiskSnapshot(ctx context.Context, req *pb.
 	return &pb.GetDiskSnapshotResponse{Ok: true, Snapshot: diskSnapshotToProto(snapshot)}, nil
 }
 
-func (s *BackendRepositoryService) getDiskSnapshot(
+func (s *BackendRepositoryService) findDiskSnapshot(
 	ctx context.Context,
-	workspaceExternalId string,
+	workspaceExternalID string,
 	lookup func(context.Context, uint) (*types.DiskSnapshot, error),
 ) (*types.DiskSnapshot, error) {
-	workspace, err := s.backendRepo.GetWorkspaceByExternalId(ctx, workspaceExternalId)
+	workspace, err := s.backendRepo.GetWorkspaceByExternalId(ctx, workspaceExternalID)
 	if err != nil {
 		return nil, err
 	}

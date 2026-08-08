@@ -107,7 +107,10 @@ func TestContainerSnapshotDisksReportsPartialSuccess(t *testing.T) {
 	server := &ContainerRuntimeServer{
 		containerInstances: common.NewSafeMap[*ContainerInstance](),
 		snapshotDisks: func(_ context.Context, _ *types.ContainerRequest) ([]*types.DiskSnapshot, error) {
-			return []*types.DiskSnapshot{{ExternalId: "captured-before-failure", DiskName: "first", Generation: 9}}, errors.New("second disk failed")
+			return []*types.DiskSnapshot{
+				nil,
+				{ExternalId: "captured-before-failure", DiskName: "first", Generation: 9},
+			}, errors.New("second disk failed")
 		},
 	}
 	server.containerInstances.Set("container-id", &ContainerInstance{Request: request})

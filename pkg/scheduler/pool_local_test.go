@@ -12,6 +12,7 @@ func TestLocalWorkerPrometheusConfigurationSupportsHostNetworkBinPacking(t *test
 		name                string
 		collector           string
 		hostNetwork         bool
+		scrapeWorkers       bool
 		wantScrape          string
 		wantPortLabel       bool
 		wantWorkerCollector string
@@ -20,6 +21,7 @@ func TestLocalWorkerPrometheusConfigurationSupportsHostNetworkBinPacking(t *test
 			name:                "host network disables pull collector",
 			collector:           string(types.MetricsCollectorPrometheus),
 			hostNetwork:         true,
+			scrapeWorkers:       true,
 			wantScrape:          "false",
 			wantPortLabel:       false,
 			wantWorkerCollector: string(types.MetricsCollectorNone),
@@ -27,14 +29,23 @@ func TestLocalWorkerPrometheusConfigurationSupportsHostNetworkBinPacking(t *test
 		{
 			name:                "pod network retains pull collector without declaring a port",
 			collector:           string(types.MetricsCollectorPrometheus),
+			scrapeWorkers:       true,
 			wantScrape:          "true",
 			wantPortLabel:       true,
+			wantWorkerCollector: string(types.MetricsCollectorPrometheus),
+		},
+		{
+			name:                "disabled scraping does not advertise a port",
+			collector:           string(types.MetricsCollectorPrometheus),
+			wantScrape:          "false",
+			wantPortLabel:       false,
 			wantWorkerCollector: string(types.MetricsCollectorPrometheus),
 		},
 		{
 			name:                "openmeter remains unchanged",
 			collector:           string(types.MetricsCollectorOpenMeter),
 			hostNetwork:         true,
+			scrapeWorkers:       true,
 			wantScrape:          "false",
 			wantPortLabel:       false,
 			wantWorkerCollector: string(types.MetricsCollectorOpenMeter),
@@ -50,7 +61,7 @@ func TestLocalWorkerPrometheusConfigurationSupportsHostNetworkBinPacking(t *test
 						MetricsCollector: tt.collector,
 						Prometheus: types.PrometheusConfig{
 							Port:          9090,
-							ScrapeWorkers: true,
+							ScrapeWorkers: tt.scrapeWorkers,
 						},
 					},
 					Worker: types.WorkerConfig{HostNetwork: tt.hostNetwork},

@@ -45,8 +45,8 @@ func (s *Worker) prepareDurableDiskMount(request *types.ContainerRequest, mount 
 	driver := durableDiskDriver(mount.DurableDisk.Driver)
 	switch driver {
 	case types.DurableDiskDriverSnapshot:
-		var ctx context.Context
-		if s != nil {
+		ctx := context.Background()
+		if s != nil && s.ctx != nil {
 			ctx = s.ctx
 		}
 		return withDurableDiskLock(ctx, mount, func() error {
@@ -147,9 +147,19 @@ func (s *Worker) syncDurableDiskMounts(ctx context.Context, request *types.Conta
 				return nil
 			})
 			if err != nil {
-				log.Warn().Str("container_id", request.ContainerId).Str("disk", mount.DurableDisk.Name).Err(err).Msg("failed to sync durable disk")
+				log.Warn().
+					Str("container_id", request.ContainerId).
+					Str("disk", mount.DurableDisk.Name).
+					Err(err).
+					Msg("failed to sync durable disk")
 				syncErrs = append(syncErrs, err)
 			}
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			if len(syncErrs) == 0 || !errors.Is(syncErrs[len(syncErrs)-1], ctxErr) {
+				syncErrs = append(syncErrs, ctxErr)
+			}
+			break
 		}
 	}
 
@@ -403,14 +413,14 @@ func (s *Worker) restoreDurableDiskSnapshot(request *types.ContainerRequest, mou
 // from. Absent or unreadable seeds leave the disk empty rather than failing the
 // container, because an empty disk is recoverable and a refused start is not.
 func (s *Worker) seedDurableDiskSnapshot(ctx context.Context, request *types.ContainerRequest, mount *types.Mount) (*types.DiskSnapshot, error) {
-	sourceId := mount.DurableDisk.SourceSnapshotId
-	if sourceId == "" {
+	sourceID := mount.DurableDisk.SourceSnapshotId
+	if sourceID == "" {
 		return nil, nil
 	}
 
 	resp, err := handleGRPCResponse(s.backendRepoClient.GetDiskSnapshot(ctx, &pb.GetDiskSnapshotRequest{
 		WorkspaceId: cacheRequestWorkspaceID(request),
-		SnapshotId:  sourceId,
+		SnapshotId:  sourceID,
 	}))
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -418,7 +428,7 @@ func (s *Worker) seedDurableDiskSnapshot(ctx context.Context, request *types.Con
 		}
 		log.Warn().
 			Str("disk", mount.DurableDisk.Name).
-			Str("source_snapshot_id", sourceId).
+			Str("source_snapshot_id", sourceID).
 			Err(err).
 			Msg("unable to resolve durable disk source snapshot; starting from local or empty state")
 		return nil, nil
@@ -428,14 +438,14 @@ func (s *Worker) seedDurableDiskSnapshot(ctx context.Context, request *types.Con
 	if seed == nil || seed.ManifestKey == "" {
 		log.Warn().
 			Str("disk", mount.DurableDisk.Name).
-			Str("source_snapshot_id", sourceId).
+			Str("source_snapshot_id", sourceID).
 			Msg("durable disk source snapshot is missing; starting empty")
 		return nil, nil
 	}
 
 	log.Info().
 		Str("disk", mount.DurableDisk.Name).
-		Str("source_snapshot_id", sourceId).
+		Str("source_snapshot_id", sourceID).
 		Str("source_disk", seed.DiskName).
 		Msg("seeding durable disk from another disk's snapshot")
 	return seed, nil

@@ -61,7 +61,7 @@ func TestForwardedWebSocketHeadersKeepsOriginAndDropsHandshake(t *testing.T) {
 	if got := forwarded.Get("Host"); got != "app.example.com" {
 		t.Fatalf("host = %q, want the incoming request host", got)
 	}
-	for _, header := range handshakeHeaders {
+	for _, header := range webSocketHandshakeHeaders {
 		if got := forwarded.Get(header); got != "" {
 			t.Fatalf("%s = %q, want it dropped so the dialer can set it", header, got)
 		}

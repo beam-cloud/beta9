@@ -66,14 +66,18 @@ type ContainerRuntimeServer struct {
 	port                    int
 	podAddr                 string
 	backendRoute            backendRouteFunc
-	createCheckpoint        func(ctx context.Context, opts *CreateCheckpointOpts) error
-	snapshotDisks           func(ctx context.Context, request *types.ContainerRequest) ([]*types.DiskSnapshot, error)
+	createCheckpoint        createCheckpointFunc
+	snapshotDisks           snapshotDisksFunc
 	grpcServer              *grpc.Server
 	mu                      sync.Mutex
 	exposePortMu            sync.Mutex
 }
 
-type backendRouteFunc func(request *types.ContainerRequest, kind string, port int32, localTarget string) *pb.BackendRoute
+type (
+	backendRouteFunc     func(request *types.ContainerRequest, kind string, port int32, localTarget string) *pb.BackendRoute
+	createCheckpointFunc func(ctx context.Context, opts *CreateCheckpointOpts) error
+	snapshotDisksFunc    func(ctx context.Context, request *types.ContainerRequest) ([]*types.DiskSnapshot, error)
+)
 
 type ContainerRuntimeServerOpts struct {
 	PodAddr                 string
@@ -85,8 +89,8 @@ type ContainerRuntimeServerOpts struct {
 	EventRepo               repository.EventRepository
 	WorkerID                string
 	BackendRoute            backendRouteFunc
-	CreateCheckpoint        func(ctx context.Context, opts *CreateCheckpointOpts) error
-	SnapshotDisks           func(ctx context.Context, request *types.ContainerRequest) ([]*types.DiskSnapshot, error)
+	CreateCheckpoint        createCheckpointFunc
+	SnapshotDisks           snapshotDisksFunc
 }
 
 // NewContainerRuntimeServer creates a new runtime-agnostic container server
@@ -322,6 +326,9 @@ func (s *ContainerRuntimeServer) ContainerSnapshotDisks(ctx context.Context, in 
 	snapshots, err := s.snapshotDisks(ctx, instance.Request)
 	response := &pb.ContainerSnapshotDisksResponse{Ok: err == nil}
 	for _, snapshot := range snapshots {
+		if snapshot == nil {
+			continue
+		}
 		response.Snapshots = append(response.Snapshots, &pb.ContainerDiskSnapshot{
 			SnapshotId: snapshot.ExternalId,
 			DiskName:   snapshot.DiskName,
@@ -329,10 +336,9 @@ func (s *ContainerRuntimeServer) ContainerSnapshotDisks(ctx context.Context, in 
 		})
 	}
 	if err != nil {
-		// Snapshotting disks is intentionally best-effort across mounts. Preserve
-		// the IDs that were created before another mount failed so callers can
+		// Preserve snapshots created before another mount failed so callers can
 		// still use or clean up those persisted generations.
-		log.Error().Str("container_id", in.ContainerId).Msgf("failed to snapshot durable disks: %v", err)
+		log.Error().Err(err).Str("container_id", in.ContainerId).Msg("failed to snapshot durable disks")
 		response.ErrorMsg = err.Error()
 	}
 	return response, nil
