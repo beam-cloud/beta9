@@ -3,6 +3,7 @@ package storage
 import (
 	"bufio"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -10,7 +11,6 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/types"
-	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -78,6 +78,13 @@ func unescapeMountInfoPath(path string) string {
 	return replacer.Replace(path)
 }
 
+// NewStorage mounts one filesystem and hands it back.
+//
+// Every failure here is returned rather than fatal. Workers call this per
+// workspace on the container path, so exiting on a bad mount would take down
+// every unrelated container already running on that worker for the sake of the
+// one request that could not be served. Boot-time callers pass the error up and
+// still refuse to start.
 func NewStorage(config types.StorageConfig, cacheClient *cache.Client) (Storage, error) {
 	switch config.Mode {
 	case StorageModeJuiceFS:
@@ -90,13 +97,13 @@ func NewStorage(config types.StorageConfig, cacheClient *cache.Client) (Storage,
 		// NOTE: this is a no-op if already formatted
 		err = s.Format(config.FilesystemName)
 		if err != nil {
-			log.Fatal().Err(err).Msg("unable to format filesystem")
+			return nil, fmt.Errorf("unable to format filesystem: %w", err)
 		}
 
 		// Mount filesystem
 		err = s.Mount(config.FilesystemPath)
 		if err != nil {
-			log.Fatal().Err(err).Msg("unable to mount filesystem")
+			return nil, fmt.Errorf("unable to mount filesystem: %w", err)
 		}
 
 		return s, nil
@@ -109,7 +116,7 @@ func NewStorage(config types.StorageConfig, cacheClient *cache.Client) (Storage,
 		// Mount filesystem
 		err = s.Mount(config.FilesystemPath)
 		if err != nil {
-			log.Fatal().Err(err).Msg("unable to mount filesystem")
+			return nil, fmt.Errorf("unable to mount filesystem: %w", err)
 		}
 
 		return s, nil
@@ -122,7 +129,7 @@ func NewStorage(config types.StorageConfig, cacheClient *cache.Client) (Storage,
 		// Mount filesystem
 		err = s.Mount(config.FilesystemPath)
 		if err != nil {
-			log.Fatal().Err(err).Msg("unable to mount filesystem")
+			return nil, fmt.Errorf("unable to mount filesystem: %w", err)
 		}
 
 		return s, nil
@@ -135,7 +142,7 @@ func NewStorage(config types.StorageConfig, cacheClient *cache.Client) (Storage,
 		// Mount filesystem
 		err = s.Mount(config.FilesystemPath)
 		if err != nil {
-			log.Fatal().Err(err).Msg("unable to mount filesystem")
+			return nil, fmt.Errorf("unable to mount filesystem: %w", err)
 		}
 
 		return s, nil

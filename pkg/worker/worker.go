@@ -464,6 +464,12 @@ func NewWorker() (_ *Worker, err error) {
 		WorkerID:                workerId,
 		BackendRoute:            worker.backendRouteFor,
 		CreateCheckpoint:        worker.createCheckpoint,
+		// On demand, so an unchanged disk reports the generation it already has
+		// rather than gaining an identical one. A caller snapshotting on a timer
+		// would otherwise leave one every few minutes for an idle machine.
+		SnapshotDisks: func(ctx context.Context, request *types.ContainerRequest) ([]*types.DiskSnapshot, error) {
+			return worker.syncDurableDiskMounts(ctx, request, true)
+		},
 	})
 	if err != nil {
 		cancel()

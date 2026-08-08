@@ -66,13 +66,18 @@ type ContainerRuntimeServer struct {
 	port                    int
 	podAddr                 string
 	backendRoute            backendRouteFunc
-	createCheckpoint        func(ctx context.Context, opts *CreateCheckpointOpts) error
+	createCheckpoint        createCheckpointFunc
+	snapshotDisks           snapshotDisksFunc
 	grpcServer              *grpc.Server
 	mu                      sync.Mutex
 	exposePortMu            sync.Mutex
 }
 
-type backendRouteFunc func(request *types.ContainerRequest, kind string, port int32, localTarget string) *pb.BackendRoute
+type (
+	backendRouteFunc     func(request *types.ContainerRequest, kind string, port int32, localTarget string) *pb.BackendRoute
+	createCheckpointFunc func(ctx context.Context, opts *CreateCheckpointOpts) error
+	snapshotDisksFunc    func(ctx context.Context, request *types.ContainerRequest) ([]*types.DiskSnapshot, error)
+)
 
 type ContainerRuntimeServerOpts struct {
 	PodAddr                 string
@@ -84,7 +89,8 @@ type ContainerRuntimeServerOpts struct {
 	EventRepo               repository.EventRepository
 	WorkerID                string
 	BackendRoute            backendRouteFunc
-	CreateCheckpoint        func(ctx context.Context, opts *CreateCheckpointOpts) error
+	CreateCheckpoint        createCheckpointFunc
+	SnapshotDisks           snapshotDisksFunc
 }
 
 // NewContainerRuntimeServer creates a new runtime-agnostic container server
@@ -111,6 +117,7 @@ func NewContainerRuntimeServer(opts *ContainerRuntimeServerOpts) (*ContainerRunt
 		workerID:                opts.WorkerID,
 		backendRoute:            opts.BackendRoute,
 		createCheckpoint:        opts.CreateCheckpoint,
+		snapshotDisks:           opts.SnapshotDisks,
 	}, nil
 }
 
@@ -301,6 +308,40 @@ func (s *ContainerRuntimeServer) ContainerCheckpoint(ctx context.Context, in *pb
 	}
 
 	return &pb.ContainerCheckpointResponse{Ok: true, CheckpointId: checkpointId}, nil
+}
+
+// ContainerSnapshotDisks snapshots the container's durable disks without
+// stopping it. The same snapshot happens on container cleanup; doing it on
+// demand is what lets a caller capture the filesystem of a container it means
+// to keep running, such as when cloning one.
+func (s *ContainerRuntimeServer) ContainerSnapshotDisks(ctx context.Context, in *pb.ContainerSnapshotDisksRequest) (*pb.ContainerSnapshotDisksResponse, error) {
+	instance, exists := s.containerInstances.Get(in.ContainerId)
+	if !exists {
+		return &pb.ContainerSnapshotDisksResponse{Ok: false, ErrorMsg: "Container not found"}, nil
+	}
+	if s.snapshotDisks == nil {
+		return &pb.ContainerSnapshotDisksResponse{Ok: false, ErrorMsg: "Durable disks are not available on this worker"}, nil
+	}
+
+	snapshots, err := s.snapshotDisks(ctx, instance.Request)
+	response := &pb.ContainerSnapshotDisksResponse{Ok: err == nil}
+	for _, snapshot := range snapshots {
+		if snapshot == nil {
+			continue
+		}
+		response.Snapshots = append(response.Snapshots, &pb.ContainerDiskSnapshot{
+			SnapshotId: snapshot.ExternalId,
+			DiskName:   snapshot.DiskName,
+			Generation: snapshot.Generation,
+		})
+	}
+	if err != nil {
+		// Preserve snapshots created before another mount failed so callers can
+		// still use or clean up those persisted generations.
+		log.Error().Err(err).Str("container_id", in.ContainerId).Msg("failed to snapshot durable disks")
+		response.ErrorMsg = err.Error()
+	}
+	return response, nil
 }
 
 // ContainerArchive archives a container's filesystem

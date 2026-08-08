@@ -546,6 +546,10 @@ type StubConfigV1 struct {
 	AllowList          []string           `json:"allow_list"`
 	DockerEnabled      bool               `json:"docker_enabled"`
 	AllowMarketplace   bool               `json:"allow_marketplace"`
+	// Hostname reported inside the container. Empty leaves the runtime's own
+	// name ("runc" or "runsc") in place, which is what a stub that never asked
+	// still gets.
+	Hostname string `json:"hostname,omitempty"`
 	// MachineID pins the stub's containers to one agent machine. Only set by
 	// the gateway for marketplace rental workloads; not exposed to the SDK.
 	MachineID string            `json:"machine_id,omitempty"`

@@ -122,6 +122,7 @@ class ContainerRequest(betterproto.Message):
     machine_id: str = betterproto.string_field(34)
     checkpoint_trigger: "CheckpointTrigger" = betterproto.message_field(35)
     task_id: str = betterproto.string_field(36)
+    hostname: str = betterproto.string_field(38)
 
 
 @dataclass(eq=False, repr=False)
@@ -146,6 +147,7 @@ class DurableDiskMountConfig(betterproto.Message):
     size: str = betterproto.string_field(2)
     filesystem: str = betterproto.string_field(3)
     driver: str = betterproto.string_field(4)
+    source_snapshot_id: str = betterproto.string_field(5)
 
 
 @dataclass(eq=False, repr=False)

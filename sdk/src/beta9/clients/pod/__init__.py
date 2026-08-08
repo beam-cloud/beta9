@@ -326,6 +326,26 @@ class PodSandboxSnapshotMemoryResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
+class PodSandboxSnapshotDisksRequest(betterproto.Message):
+    stub_id: str = betterproto.string_field(1)
+    container_id: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class PodSandboxDiskSnapshot(betterproto.Message):
+    snapshot_id: str = betterproto.string_field(1)
+    disk_name: str = betterproto.string_field(2)
+    generation: int = betterproto.int64_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class PodSandboxSnapshotDisksResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    error_msg: str = betterproto.string_field(2)
+    snapshots: List["PodSandboxDiskSnapshot"] = betterproto.message_field(3)
+
+
+@dataclass(eq=False, repr=False)
 class PodSandboxListProcessesRequest(betterproto.Message):
     container_id: str = betterproto.string_field(1)
 
@@ -549,6 +569,15 @@ class PodServiceStub(SyncServiceStub):
             PodSandboxSnapshotMemoryRequest,
             PodSandboxSnapshotMemoryResponse,
         )(pod_sandbox_snapshot_memory_request)
+
+    def sandbox_snapshot_disks(
+        self, pod_sandbox_snapshot_disks_request: "PodSandboxSnapshotDisksRequest"
+    ) -> "PodSandboxSnapshotDisksResponse":
+        return self._unary_unary(
+            "/pod.PodService/SandboxSnapshotDisks",
+            PodSandboxSnapshotDisksRequest,
+            PodSandboxSnapshotDisksResponse,
+        )(pod_sandbox_snapshot_disks_request)
 
     def sandbox_list_urls(
         self, pod_sandbox_list_urls_request: "PodSandboxListUrlsRequest"

@@ -1463,6 +1463,16 @@ func (s *Worker) shouldCreateCheckpoint(request *types.ContainerRequest) bool {
 	if request == nil || !s.IsCRIUAvailable(request.GpuCount) || !request.CheckpointEnabled {
 		return false
 	}
+
+	// Sandboxes checkpoint on demand, through ContainerCheckpoint, because
+	// there is no point in their execution that means "warm and ready to be
+	// frozen" the way there is for a deployment serving its first request.
+	// Auto-checkpointing one means waiting for a readiness signal nothing will
+	// ever send, and the container stays unreachable for the whole deadline.
+	if request.Stub.Type.Kind() == types.StubTypeSandbox {
+		return false
+	}
+
 	return !hasAvailableCheckpoint(request)
 }
 

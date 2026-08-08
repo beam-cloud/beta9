@@ -223,6 +223,94 @@ esac
 	require.Contains(t, string(logData), "state\n")
 }
 
+// `runc restore --detach` passes its own standard streams down to the restored
+// container's init. Anything Go leaves nil becomes the worker's /dev/null,
+// which sits on a mount the container cannot see, and CRIU then refuses to
+// dump that container ever again: "Can't lookup mount for fd=0 path=/dev/null".
+// Pipes belong to no mount, so all three streams have to be pipes even when the
+// caller wants no output.
+func TestRuncRestoreHandsRuncPipesForEveryStandardStream(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "streams")
+	runcPath := filepath.Join(dir, "runc")
+	require.NoError(t, os.WriteFile(runcPath, []byte(`#!/bin/sh
+set -eu
+for arg in "$@"; do
+  case "$arg" in
+    state)
+      printf '{"id":"container-1","pid":4321,"status":"running"}'
+      exit 0
+      ;;
+  esac
+done
+for fd in 0 1 2; do
+  if [ -p /dev/fd/$fd ]; then
+    echo "$fd=pipe" >> "$RUNC_FAKE_LOG"
+  else
+    echo "$fd=$(cd /dev/fd && ls -l $fd 2>/dev/null || echo unknown)" >> "$RUNC_FAKE_LOG"
+  fi
+done
+`), 0o755))
+	t.Setenv("RUNC_FAKE_LOG", logPath)
+
+	rt, err := NewRunc(Config{RuncPath: runcPath})
+	require.NoError(t, err)
+
+	// No OutputWriter, which is the case that used to leave stdout and stderr
+	// on /dev/null as well.
+	_, err = rt.Restore(context.Background(), "container-1", &RestoreOpts{
+		ImagePath:  filepath.Join(dir, "checkpoint"),
+		BundlePath: filepath.Join(dir, "bundle"),
+	})
+	require.NoError(t, err)
+
+	streams, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	require.Equal(t, "0=pipe\n1=pipe\n2=pipe\n", string(streams))
+}
+
+func TestRuncRestoreClosesStdinWriterAfterStart(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "stdin")
+	runcPath := filepath.Join(dir, "runc")
+	require.NoError(t, os.WriteFile(runcPath, []byte(`#!/bin/sh
+set -eu
+for arg in "$@"; do
+  case "$arg" in
+    restore)
+      if IFS= read -r input; then
+        echo "input=$input" > "$RUNC_FAKE_LOG"
+      else
+        echo eof > "$RUNC_FAKE_LOG"
+      fi
+      exit 0
+      ;;
+    state)
+      printf '{"id":"container-1","pid":4321,"status":"running"}'
+      exit 0
+      ;;
+  esac
+done
+exit 1
+`), 0o755))
+	t.Setenv("RUNC_FAKE_LOG", logPath)
+
+	rt, err := NewRunc(Config{RuncPath: runcPath})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err = rt.Restore(ctx, "container-1", &RestoreOpts{
+		ImagePath:  filepath.Join(dir, "checkpoint"),
+		BundlePath: filepath.Join(dir, "bundle"),
+	})
+	require.NoError(t, err)
+
+	stdinState, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	require.Equal(t, "eof\n", string(stdinState))
+}
+
 func TestRuncRestoreStopsWhenContextIsCanceled(t *testing.T) {
 	dir := t.TempDir()
 	runcPath := filepath.Join(dir, "runc")
@@ -286,4 +374,44 @@ exit 1
 		t.Fatal("restore did not return after failed command output drained")
 	}
 	require.Contains(t, output.buffer.String(), "criu failed: type RESTORE")
+}
+
+func TestRuncRestoreClosesOutputWhenRestoredStateIsUnavailable(t *testing.T) {
+	dir := t.TempDir()
+	runcPath := filepath.Join(dir, "runc")
+	require.NoError(t, os.WriteFile(runcPath, []byte(`#!/bin/sh
+set -eu
+for arg in "$@"; do
+  case "$arg" in
+    restore)
+      (sleep 1; echo late-container-output) &
+      exit 0
+      ;;
+    state)
+      exit 1
+      ;;
+  esac
+done
+exit 1
+`), 0o755))
+
+	rt, err := NewRunc(Config{RuncPath: runcPath})
+	require.NoError(t, err)
+
+	output := &synchronizedBuffer{}
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	_, err = rt.Restore(ctx, "container-1", &RestoreOpts{
+		ImagePath:    filepath.Join(dir, "checkpoint"),
+		BundlePath:   filepath.Join(dir, "bundle"),
+		OutputWriter: output,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "restored container state was unavailable")
+
+	// The failed restore must close the read end before returning. Otherwise
+	// the detached child still holding the write end can deliver output after
+	// the caller has already received the failure.
+	time.Sleep(650 * time.Millisecond)
+	require.Empty(t, output.String())
 }

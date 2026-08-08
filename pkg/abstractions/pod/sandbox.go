@@ -1096,6 +1096,38 @@ func (s *GenericPodService) SandboxSnapshotMemory(ctx context.Context, in *pb.Po
 	}, nil
 }
 
+func (s *GenericPodService) SandboxSnapshotDisks(ctx context.Context, in *pb.PodSandboxSnapshotDisksRequest) (*pb.PodSandboxSnapshotDisksResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+	if err != nil {
+		return &pb.PodSandboxSnapshotDisksResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to connect to sandbox",
+		}, nil
+	}
+
+	resp, err := client.SnapshotDisks(ctx, in.ContainerId)
+	if err != nil {
+		return &pb.PodSandboxSnapshotDisksResponse{
+			Ok:       false,
+			ErrorMsg: err.Error(),
+		}, nil
+	}
+	response := &pb.PodSandboxSnapshotDisksResponse{Ok: resp.Ok, ErrorMsg: resp.ErrorMsg}
+	for _, snapshot := range resp.Snapshots {
+		if snapshot == nil {
+			continue
+		}
+		response.Snapshots = append(response.Snapshots, &pb.PodSandboxDiskSnapshot{
+			SnapshotId: snapshot.SnapshotId,
+			DiskName:   snapshot.DiskName,
+			Generation: snapshot.Generation,
+		})
+	}
+	return response, nil
+}
+
 func (s *GenericPodService) SandboxListUrls(ctx context.Context, in *pb.PodSandboxListUrlsRequest) (*pb.PodSandboxListUrlsResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 

@@ -427,6 +427,10 @@ func (c *ContainerClient) Checkpoint(ctx context.Context, containerId string) (*
 	return resp, nil
 }
 
+func (c *ContainerClient) SnapshotDisks(ctx context.Context, containerId string) (*pb.ContainerSnapshotDisksResponse, error) {
+	return c.client.ContainerSnapshotDisks(ctx, &pb.ContainerSnapshotDisksRequest{ContainerId: containerId})
+}
+
 func (c *ContainerClient) Archive(ctx context.Context, containerId, imageId string, outputChan chan OutputMsg) error {
 	outputChan <- OutputMsg{Archiving: true, Done: false, Success: false, Msg: "\nSaving image, this may take a few minutes...\n"}
 	stream, err := c.client.ContainerArchive(ctx, &pb.ContainerArchiveRequest{ContainerId: containerId,
