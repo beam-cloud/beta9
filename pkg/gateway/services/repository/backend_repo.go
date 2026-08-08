@@ -131,37 +131,45 @@ func (s *BackendRepositoryService) CreateDiskSnapshot(ctx context.Context, req *
 }
 
 func (s *BackendRepositoryService) GetLatestDiskSnapshot(ctx context.Context, req *pb.GetLatestDiskSnapshotRequest) (*pb.GetLatestDiskSnapshotResponse, error) {
-	workspace, err := s.backendRepo.GetWorkspaceByExternalId(ctx, req.WorkspaceId)
+	snapshot, err := s.getDiskSnapshot(ctx, req.WorkspaceId, func(ctx context.Context, workspaceId uint) (*types.DiskSnapshot, error) {
+		return s.backendRepo.GetLatestDiskSnapshot(ctx, workspaceId, req.DiskName)
+	})
 	if err != nil {
-		return &pb.GetLatestDiskSnapshotResponse{Ok: false, ErrorMsg: err.Error()}, nil
-	}
-
-	snapshot, err := s.backendRepo.GetLatestDiskSnapshot(ctx, workspace.Id, req.DiskName)
-	if err != nil {
-		var notFound *types.ErrDiskSnapshotNotFound
-		if errors.As(err, &notFound) {
-			return &pb.GetLatestDiskSnapshotResponse{Ok: true}, nil
-		}
 		return &pb.GetLatestDiskSnapshotResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 	return &pb.GetLatestDiskSnapshotResponse{Ok: true, Snapshot: diskSnapshotToProto(snapshot)}, nil
 }
 
 func (s *BackendRepositoryService) GetDiskSnapshot(ctx context.Context, req *pb.GetDiskSnapshotRequest) (*pb.GetDiskSnapshotResponse, error) {
-	workspace, err := s.backendRepo.GetWorkspaceByExternalId(ctx, req.WorkspaceId)
+	snapshot, err := s.getDiskSnapshot(ctx, req.WorkspaceId, func(ctx context.Context, workspaceId uint) (*types.DiskSnapshot, error) {
+		return s.backendRepo.GetDiskSnapshot(ctx, workspaceId, req.SnapshotId)
+	})
 	if err != nil {
-		return &pb.GetDiskSnapshotResponse{Ok: false, ErrorMsg: err.Error()}, nil
-	}
-
-	snapshot, err := s.backendRepo.GetDiskSnapshot(ctx, workspace.Id, req.SnapshotId)
-	if err != nil {
-		var notFound *types.ErrDiskSnapshotNotFound
-		if errors.As(err, &notFound) {
-			return &pb.GetDiskSnapshotResponse{Ok: true}, nil
-		}
 		return &pb.GetDiskSnapshotResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 	return &pb.GetDiskSnapshotResponse{Ok: true, Snapshot: diskSnapshotToProto(snapshot)}, nil
+}
+
+func (s *BackendRepositoryService) getDiskSnapshot(
+	ctx context.Context,
+	workspaceExternalId string,
+	lookup func(context.Context, uint) (*types.DiskSnapshot, error),
+) (*types.DiskSnapshot, error) {
+	workspace, err := s.backendRepo.GetWorkspaceByExternalId(ctx, workspaceExternalId)
+	if err != nil {
+		return nil, err
+	}
+
+	snapshot, err := lookup(ctx, workspace.Id)
+	if err != nil {
+		var notFound *types.ErrDiskSnapshotNotFound
+		if errors.As(err, &notFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	return snapshot, nil
 }
 
 func diskSnapshotToProto(snapshot *types.DiskSnapshot) *pb.DiskSnapshot {

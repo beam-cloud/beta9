@@ -158,7 +158,7 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 	if request != nil && request.HasDurableDiskMount() {
 		// Unconditional: a stop is a point in the disk's history whether or not
 		// anything was written, and callers wait for the generation it produces.
-		if _, err := s.syncDurableDiskMounts(request, false); err != nil {
+		if _, err := s.syncDurableDiskMounts(s.ctx, request, false); err != nil {
 			log.Error().Str("container_id", containerId).Err(err).Msg("failed to sync durable disks during container cleanup")
 		}
 	}
@@ -1142,21 +1142,27 @@ func (s *Worker) newSpecTemplate() (*specs.Spec, error) {
 // usable to set, and the container keeps the runtime's own name.
 func sanitizeHostname(name string) string {
 	label := make([]byte, 0, maxHostnameLength)
+	separatorPending := false
 	for index := 0; index < len(name) && len(label) < maxHostnameLength; index++ {
 		character := name[index]
-		switch {
-		case character >= 'A' && character <= 'Z':
-			label = append(label, character+('a'-'A'))
-		case character >= 'a' && character <= 'z', character >= '0' && character <= '9':
+		if character >= 'A' && character <= 'Z' {
+			character += 'a' - 'A'
+		}
+
+		if (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9') {
+			if separatorPending && len(label)+1 < maxHostnameLength {
+				label = append(label, '-')
+			}
 			label = append(label, character)
-		case len(label) > 0 && label[len(label)-1] != '-':
-			// A run of unrepresentable characters collapses to a single dash,
-			// so "app/v1.2" reads as "app-v1-2" rather than "app---v1-2". The
-			// guard on an empty label is also what keeps the leading dash off.
-			label = append(label, '-')
+			separatorPending = false
+		} else if len(label) > 0 {
+			// Delay separators until the following usable character is known.
+			// Besides avoiding a trailing dash, this lets that character use the
+			// final byte when there is no room for both it and the dash.
+			separatorPending = true
 		}
 	}
-	return strings.TrimRight(string(label), "-")
+	return string(label)
 }
 
 func validateContainerSpec(spec *specs.Spec) error {

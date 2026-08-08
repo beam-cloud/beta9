@@ -3,6 +3,7 @@ package worker
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -80,6 +81,91 @@ func TestSeedDurableDiskSnapshotStartsEmptyWhenTheSourceIsGone(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Nil(t, seed)
+}
+
+func TestSeedDurableDiskSnapshotFailsOpenWhenLookupIsUnavailable(t *testing.T) {
+	backendRepo := &fakeBackendRepoClient{getDiskSnapshotErr: fmt.Errorf("backend unavailable")}
+	worker := &Worker{ctx: context.Background(), backendRepoClient: backendRepo}
+	localPath := filepath.Join(t.TempDir(), "fork")
+	require.NoError(t, os.MkdirAll(localPath, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(localPath, "already-restored"), []byte("payload"), 0o600))
+	mount := &types.Mount{
+		LocalPath: localPath,
+		DurableDisk: &types.DurableDiskMountConfig{
+			Name:             "the-fork-disk",
+			SourceSnapshotId: "snapshot-temporarily-unavailable",
+		},
+	}
+
+	seed, err := worker.seedDurableDiskSnapshot(context.Background(), &types.ContainerRequest{}, mount)
+
+	require.NoError(t, err)
+	require.Nil(t, seed)
+	// The existing payload remains usable when a prior session already restored
+	// the fork but the source lookup is temporarily unavailable now.
+	require.NoError(t, worker.restoreDurableDiskSnapshot(&types.ContainerRequest{}, mount))
+	require.FileExists(t, filepath.Join(localPath, "already-restored"))
+}
+
+func TestSeedDurableDiskSnapshotStillHonorsCancellation(t *testing.T) {
+	backendRepo := &fakeBackendRepoClient{getDiskSnapshotErr: fmt.Errorf("backend unavailable")}
+	worker := &Worker{backendRepoClient: backendRepo}
+	mount := &types.Mount{DurableDisk: &types.DurableDiskMountConfig{
+		Name:             "fork",
+		SourceSnapshotId: "source",
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	seed, err := worker.seedDurableDiskSnapshot(ctx, &types.ContainerRequest{}, mount)
+
+	require.Nil(t, seed)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestLatestDurableDiskSnapshotManifestPreservesEmptyTree(t *testing.T) {
+	manifest := &types.DiskSnapshotManifest{Version: 1, Format: types.DiskSnapshotFormatDirV1}
+	manifestData, err := json.Marshal(manifest)
+	require.NoError(t, err)
+	store := &fakeDurableDiskSnapshotStore{objects: map[string][]byte{"empty/manifest.json": manifestData}}
+	backendRepo := &fakeBackendRepoClient{latestSnapshot: &pb.DiskSnapshot{
+		ExternalId:  "empty-snapshot",
+		DiskName:    "empty-disk",
+		Format:      types.DiskSnapshotFormatDirV1,
+		ManifestKey: "empty/manifest.json",
+	}}
+	worker := &Worker{backendRepoClient: backendRepo}
+	mount := &types.Mount{DurableDisk: &types.DurableDiskMountConfig{Name: "empty-disk"}}
+
+	parent, previous := worker.latestDurableDiskSnapshotManifest(context.Background(), &types.ContainerRequest{}, mount, store)
+
+	require.Equal(t, "empty-snapshot", parent.ExternalId)
+	require.NotNil(t, previous)
+	require.Empty(t, previous.Files)
+
+	// Keeping the empty manifest lets the normal unchanged comparison suppress
+	// a duplicate generation for another still-empty on-demand snapshot.
+	emptySource := t.TempDir()
+	snapshot, _, err := createDurableDiskDirectorySnapshot(
+		context.Background(), store, emptySource, "empty/snapshots/2",
+		types.DiskSnapshot{DiskName: "empty-disk", Format: types.DiskSnapshotFormatDirV1},
+		4, previous, true,
+	)
+	require.NoError(t, err)
+	require.Nil(t, snapshot)
+}
+
+func TestSyncDurableDiskMountsHonorsCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	request := &types.ContainerRequest{Mounts: []types.Mount{{
+		DurableDisk: &types.DurableDiskMountConfig{Name: "disk"},
+	}}}
+
+	snapshots, err := (&Worker{}).syncDurableDiskMounts(ctx, request, true)
+
+	require.Empty(t, snapshots)
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestAddRequestMountsPreparesDurableDisk(t *testing.T) {

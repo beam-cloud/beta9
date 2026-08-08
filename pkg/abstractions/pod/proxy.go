@@ -1098,9 +1098,10 @@ var handshakeHeaders = []string{
 // that fails only when proxied, and only for some backends.
 func forwardedWebSocketHeaders(request *http.Request) http.Header {
 	forwarded := request.Header.Clone()
-	if forwarded == nil {
-		return nil
-	}
+	// Host lives on Request rather than in Header. Preserve it explicitly so
+	// backends that use gorilla's default origin check compare the browser's
+	// Origin with the public host, not the proxy's internal destination.
+	forwarded.Set("Host", request.Host)
 
 	for _, header := range handshakeHeaders {
 		forwarded.Del(header)

@@ -239,6 +239,10 @@ func (r *Runc) Restore(ctx context.Context, containerID string, opts *RestoreOpt
 		_ = outputWrite.Close()
 		return -1, err
 	}
+	// The restored process inherits the read end, but there is no source of
+	// stdin data. Close the parent's writer immediately so reads in the
+	// restored container observe EOF instead of blocking until Restore exits.
+	_ = stdinWrite.Close()
 	_ = outputWrite.Close()
 
 	outputDone := make(chan struct{})
@@ -281,6 +285,7 @@ func (r *Runc) Restore(ctx context.Context, containerID string, opts *RestoreOpt
 
 	pid, _, err := r.waitForRestoredContainerPID(ctx, containerID, nil)
 	if err != nil {
+		drainRestoreOutput(ctx, outputRead, outputDone)
 		return -1, err
 	}
 

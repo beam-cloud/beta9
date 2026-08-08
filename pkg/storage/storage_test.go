@@ -1,9 +1,11 @@
 package storage
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -14,16 +16,15 @@ import (
 // Exiting instead would take every unrelated container on the worker with it,
 // and this test would not fail so much as kill the package's test binary.
 func TestNewStorageReturnsMountFailuresInsteadOfExiting(t *testing.T) {
-	// MkdirAll cannot build a directory underneath a regular file, which is a
-	// mount failure that needs no S3 and no fuse to reproduce.
+	// LocalStorage.Mount calls MkdirAll directly, so this exercises the error
+	// path without depending on an object store or an external mount binary.
 	blocked := filepath.Join(t.TempDir(), "not-a-directory")
 	if err := os.WriteFile(blocked, nil, 0644); err != nil {
 		t.Fatalf("failed to seed the test: %v", err)
 	}
 
 	storage, err := NewStorage(types.StorageConfig{
-		Mode:           StorageModeMountPoint,
-		FilesystemName: "workspace",
+		Mode:           StorageModeLocal,
 		FilesystemPath: filepath.Join(blocked, "workspace"),
 	}, nil)
 
@@ -33,8 +34,8 @@ func TestNewStorageReturnsMountFailuresInsteadOfExiting(t *testing.T) {
 	if storage != nil {
 		t.Fatal("expected no storage to be handed back alongside the error")
 	}
-	if !strings.Contains(err.Error(), "unable to mount filesystem") {
-		t.Fatalf("expected the error to say the mount failed, got %v", err)
+	if !errors.Is(err, syscall.ENOTDIR) {
+		t.Fatalf("expected the filesystem error from Mount, got %v", err)
 	}
 }
 

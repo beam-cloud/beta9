@@ -40,6 +40,7 @@ func TestPodBackendURLPreservesDirectAddress(t *testing.T) {
 
 func TestForwardedWebSocketHeadersKeepsOriginAndDropsHandshake(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/websockify", nil)
+	request.Host = "app.example.com"
 	request.Header.Set("Origin", "https://app.example.com")
 	request.Header.Set("Cookie", "session=abc")
 	request.Header.Set("Upgrade", "websocket")
@@ -57,11 +58,63 @@ func TestForwardedWebSocketHeadersKeepsOriginAndDropsHandshake(t *testing.T) {
 	if got := forwarded.Get("Cookie"); got != "session=abc" {
 		t.Fatalf("cookie = %q, want it forwarded", got)
 	}
+	if got := forwarded.Get("Host"); got != "app.example.com" {
+		t.Fatalf("host = %q, want the incoming request host", got)
+	}
 	for _, header := range handshakeHeaders {
 		if got := forwarded.Get(header); got != "" {
 			t.Fatalf("%s = %q, want it dropped so the dialer can set it", header, got)
 		}
 	}
+}
+
+func TestProxyWebSocketPreservesHostForBackendOriginCheck(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("backend upgrade: %v", err)
+			return
+		}
+		conn.Close()
+	}))
+	t.Cleanup(backend.Close)
+
+	rdb := newPodProxyTestRedis(t)
+	repo := repository.NewContainerRedisRepositoryForTest(rdb)
+	containerId := "sandbox-e9c29586-c465-4a67-9c9b-25293d1ce77b-origin"
+	if err := repo.SetContainerAddressMap(containerId, map[int32]string{
+		8765: backend.Listener.Addr().String(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	pb := &PodProxyBuffer{
+		ctx:           context.Background(),
+		rdb:           rdb,
+		workspace:     &types.Workspace{Name: "workspace"},
+		stubId:        "e9c29586-c465-4a67-9c9b-25293d1ce77b",
+		stubConfig:    &types.StubConfigV1{},
+		containerRepo: repo,
+	}
+
+	e := echo.New()
+	e.GET("/:port/:subPath", func(ctx echo.Context) error {
+		return pb.ForwardContainerRequest(ctx, containerId)
+	})
+	front := httptest.NewServer(e)
+	t.Cleanup(front.Close)
+
+	frontURL := "ws://" + front.Listener.Addr().String() + "/8765/ws"
+	headers := http.Header{"Origin": []string{"http://" + front.Listener.Addr().String()}}
+	conn, response, err := websocket.DefaultDialer.Dial(frontURL, headers)
+	if err != nil {
+		if response != nil {
+			t.Fatalf("dial through proxy: %v (status %s)", err, response.Status)
+		}
+		t.Fatalf("dial through proxy: %v", err)
+	}
+	conn.Close()
 }
 
 func TestWaitForConnectionWaitsForActiveWriterAfterCancellation(t *testing.T) {

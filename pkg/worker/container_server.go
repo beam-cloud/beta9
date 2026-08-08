@@ -67,7 +67,7 @@ type ContainerRuntimeServer struct {
 	podAddr                 string
 	backendRoute            backendRouteFunc
 	createCheckpoint        func(ctx context.Context, opts *CreateCheckpointOpts) error
-	snapshotDisks           func(request *types.ContainerRequest) ([]*types.DiskSnapshot, error)
+	snapshotDisks           func(ctx context.Context, request *types.ContainerRequest) ([]*types.DiskSnapshot, error)
 	grpcServer              *grpc.Server
 	mu                      sync.Mutex
 	exposePortMu            sync.Mutex
@@ -86,7 +86,7 @@ type ContainerRuntimeServerOpts struct {
 	WorkerID                string
 	BackendRoute            backendRouteFunc
 	CreateCheckpoint        func(ctx context.Context, opts *CreateCheckpointOpts) error
-	SnapshotDisks           func(request *types.ContainerRequest) ([]*types.DiskSnapshot, error)
+	SnapshotDisks           func(ctx context.Context, request *types.ContainerRequest) ([]*types.DiskSnapshot, error)
 }
 
 // NewContainerRuntimeServer creates a new runtime-agnostic container server
@@ -319,19 +319,21 @@ func (s *ContainerRuntimeServer) ContainerSnapshotDisks(ctx context.Context, in 
 		return &pb.ContainerSnapshotDisksResponse{Ok: false, ErrorMsg: "Durable disks are not available on this worker"}, nil
 	}
 
-	snapshots, err := s.snapshotDisks(instance.Request)
-	if err != nil {
-		log.Error().Str("container_id", in.ContainerId).Msgf("failed to snapshot durable disks: %v", err)
-		return &pb.ContainerSnapshotDisksResponse{Ok: false, ErrorMsg: err.Error()}, nil
-	}
-
-	response := &pb.ContainerSnapshotDisksResponse{Ok: true}
+	snapshots, err := s.snapshotDisks(ctx, instance.Request)
+	response := &pb.ContainerSnapshotDisksResponse{Ok: err == nil}
 	for _, snapshot := range snapshots {
 		response.Snapshots = append(response.Snapshots, &pb.ContainerDiskSnapshot{
 			SnapshotId: snapshot.ExternalId,
 			DiskName:   snapshot.DiskName,
 			Generation: snapshot.Generation,
 		})
+	}
+	if err != nil {
+		// Snapshotting disks is intentionally best-effort across mounts. Preserve
+		// the IDs that were created before another mount failed so callers can
+		// still use or clean up those persisted generations.
+		log.Error().Str("container_id", in.ContainerId).Msgf("failed to snapshot durable disks: %v", err)
+		response.ErrorMsg = err.Error()
 	}
 	return response, nil
 }

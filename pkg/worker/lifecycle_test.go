@@ -928,6 +928,12 @@ func TestSpecFromRequestSetsHostnameOnlyWhenRequested(t *testing.T) {
 			hostname:     strings.Repeat("a", 80),
 			wantHostname: strings.Repeat("a", maxHostnameLength),
 		},
+		{
+			name:         "a separator at the length boundary does not hide the following character",
+			runtime:      types.ContainerRuntimeGvisor.String(),
+			hostname:     strings.Repeat("a", maxHostnameLength-1) + "-b",
+			wantHostname: strings.Repeat("a", maxHostnameLength-1) + "b",
+		},
 	}
 
 	for _, test := range tests {
@@ -2640,6 +2646,8 @@ type fakeBackendRepoClient struct {
 	createCalls         int
 	lastCreate          *pb.CreateCheckpointRequest
 	sourceSnapshot      *pb.DiskSnapshot
+	latestSnapshot      *pb.DiskSnapshot
+	getDiskSnapshotErr  error
 	requestedSnapshotId string
 }
 
@@ -2672,12 +2680,12 @@ func (f *fakeBackendRepoClient) CreateDiskSnapshot(ctx context.Context, in *pb.C
 }
 
 func (f *fakeBackendRepoClient) GetLatestDiskSnapshot(ctx context.Context, in *pb.GetLatestDiskSnapshotRequest, opts ...grpc.CallOption) (*pb.GetLatestDiskSnapshotResponse, error) {
-	return &pb.GetLatestDiskSnapshotResponse{Ok: true}, nil
+	return &pb.GetLatestDiskSnapshotResponse{Ok: true, Snapshot: f.latestSnapshot}, nil
 }
 
 func (f *fakeBackendRepoClient) GetDiskSnapshot(ctx context.Context, in *pb.GetDiskSnapshotRequest, opts ...grpc.CallOption) (*pb.GetDiskSnapshotResponse, error) {
 	f.requestedSnapshotId = in.SnapshotId
-	return &pb.GetDiskSnapshotResponse{Ok: true, Snapshot: f.sourceSnapshot}, nil
+	return &pb.GetDiskSnapshotResponse{Ok: true, Snapshot: f.sourceSnapshot}, f.getDiskSnapshotErr
 }
 
 type mockResourceRuntime struct {

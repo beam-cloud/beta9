@@ -167,13 +167,17 @@ func (wpc *LocalKubernetesWorkerPoolController) addWorkerWithId(workerId string,
 
 func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string, cpu int64, memory int64, gpuType string, gpuCount uint32, token string) (*batchv1.Job, *types.Worker) {
 	jobName := fmt.Sprintf("%s-%s-%s", Beta9WorkerJobPrefix, wpc.name, workerId)
+	workerConfig := wpc.workerProcessConfig()
+	prometheusEnabled := workerConfig.Monitoring.MetricsCollector == string(types.MetricsCollectorPrometheus)
 	labels := map[string]string{
 		"app":                       Beta9WorkerLabelValue,
 		Beta9WorkerLabelKey:         Beta9WorkerLabelValue,
 		Beta9WorkerLabelPoolNameKey: wpc.name,
 		Beta9WorkerLabelIDKey:       workerId,
-		PrometheusPortKey:           fmt.Sprintf("%d", wpc.config.Monitoring.Prometheus.Port),
-		PrometheusScrapeKey:         strconv.FormatBool(wpc.config.Monitoring.Prometheus.ScrapeWorkers),
+		PrometheusScrapeKey:         strconv.FormatBool(prometheusEnabled && workerConfig.Monitoring.Prometheus.ScrapeWorkers),
+	}
+	if prometheusEnabled {
+		labels[PrometheusPortKey] = fmt.Sprintf("%d", workerConfig.Monitoring.Prometheus.Port)
 	}
 
 	workerCpu := cpu
@@ -225,18 +229,6 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 			SecurityContext: &corev1.SecurityContext{
 				Privileged: ptr.To(true),
 			},
-			// No Ports declaration on purpose. Workers run with hostNetwork,
-			// where every declared containerPort counts as a hostPort claim
-			// and the kube scheduler will not co-locate two pods claiming the
-			// same port — which limited the cluster to one worker per node.
-			// Nothing binds the Prometheus port on the worker (metrics are
-			// pushed, not scraped; see monitoring.victoriametrics.pushURL),
-			// and all real listeners pick free ports at bind time: the
-			// container runtime server listens on :0, container port
-			// bindings go through getRandomFreePort, and the cache server
-			// falls back to an ephemeral port when its default is taken.
-			// Scrape discovery, where enabled, uses the prometheus.io/port
-			// pod label, which does not require a declared containerPort.
 			Env:          wpc.getWorkerEnvironment(workerId, workerCpu, workerMemory, workerGpuType, workerGpuCount, token),
 			VolumeMounts: wpc.getWorkerVolumeMounts(),
 		},
@@ -302,6 +294,19 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 		BuildVersion:  wpc.config.Worker.ImageTag,
 		Preemptable:   wpc.workerPoolConfig.Preemptable,
 	}
+}
+
+// workerProcessConfig disables the pull-based usage collector for local
+// host-network workers. It binds a fixed node port, which prevents safe worker
+// co-location. The worker's VictoriaMetrics registry remains push-based and is
+// initialized independently by cmd/worker.
+func (wpc *LocalKubernetesWorkerPoolController) workerProcessConfig() types.AppConfig {
+	config := wpc.config
+	if config.Worker.HostNetwork && config.Monitoring.MetricsCollector == string(types.MetricsCollectorPrometheus) {
+		config.Monitoring.MetricsCollector = string(types.MetricsCollectorNone)
+		config.Monitoring.Prometheus.ScrapeWorkers = false
+	}
+	return config
 }
 
 func (wpc *LocalKubernetesWorkerPoolController) createJobInCluster(job *batchv1.Job) error {
@@ -584,7 +589,7 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId st
 	}
 
 	// Serialize the AppConfig struct to JSON
-	configJson, err := json.MarshalIndent(wpc.config, "", "  ")
+	configJson, err := json.MarshalIndent(wpc.workerProcessConfig(), "", "  ")
 	if err == nil {
 		envVars = append(envVars, corev1.EnvVar{
 			Name:  "CONFIG_JSON",

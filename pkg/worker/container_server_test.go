@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -62,7 +63,7 @@ func TestContainerSnapshotDisksReportsWhatItCaptured(t *testing.T) {
 	var snapshotted *types.ContainerRequest
 	server := &ContainerRuntimeServer{
 		containerInstances: common.NewSafeMap[*ContainerInstance](),
-		snapshotDisks: func(request *types.ContainerRequest) ([]*types.DiskSnapshot, error) {
+		snapshotDisks: func(_ context.Context, request *types.ContainerRequest) ([]*types.DiskSnapshot, error) {
 			snapshotted = request
 			return []*types.DiskSnapshot{{ExternalId: "snapshot-1", DiskName: "home", Generation: 7}}, nil
 		},
@@ -80,6 +81,44 @@ func TestContainerSnapshotDisksReportsWhatItCaptured(t *testing.T) {
 	require.Equal(t, "snapshot-1", response.Snapshots[0].SnapshotId)
 	require.Equal(t, "home", response.Snapshots[0].DiskName)
 	require.Equal(t, int64(7), response.Snapshots[0].Generation)
+}
+
+func TestContainerSnapshotDisksPropagatesRequestContext(t *testing.T) {
+	request := &types.ContainerRequest{ContainerId: "container-id"}
+	server := &ContainerRuntimeServer{
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		snapshotDisks: func(ctx context.Context, _ *types.ContainerRequest) ([]*types.DiskSnapshot, error) {
+			return nil, ctx.Err()
+		},
+	}
+	server.containerInstances.Set("container-id", &ContainerInstance{Request: request})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	response, err := server.ContainerSnapshotDisks(ctx, &pb.ContainerSnapshotDisksRequest{ContainerId: "container-id"})
+
+	require.NoError(t, err)
+	require.False(t, response.Ok)
+	require.Contains(t, response.ErrorMsg, context.Canceled.Error())
+}
+
+func TestContainerSnapshotDisksReportsPartialSuccess(t *testing.T) {
+	request := &types.ContainerRequest{ContainerId: "container-id"}
+	server := &ContainerRuntimeServer{
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		snapshotDisks: func(_ context.Context, _ *types.ContainerRequest) ([]*types.DiskSnapshot, error) {
+			return []*types.DiskSnapshot{{ExternalId: "captured-before-failure", DiskName: "first", Generation: 9}}, errors.New("second disk failed")
+		},
+	}
+	server.containerInstances.Set("container-id", &ContainerInstance{Request: request})
+
+	response, err := server.ContainerSnapshotDisks(context.Background(), &pb.ContainerSnapshotDisksRequest{ContainerId: "container-id"})
+
+	require.NoError(t, err)
+	require.False(t, response.Ok)
+	require.Equal(t, "second disk failed", response.ErrorMsg)
+	require.Len(t, response.Snapshots, 1)
+	require.Equal(t, "captured-before-failure", response.Snapshots[0].SnapshotId)
 }
 
 func TestContainerSnapshotDisksRefusesAnUnknownContainer(t *testing.T) {

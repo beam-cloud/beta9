@@ -1114,14 +1114,7 @@ func (s *GenericPodService) SandboxSnapshotDisks(ctx context.Context, in *pb.Pod
 			ErrorMsg: err.Error(),
 		}, nil
 	}
-	if !resp.Ok {
-		return &pb.PodSandboxSnapshotDisksResponse{
-			Ok:       false,
-			ErrorMsg: resp.ErrorMsg,
-		}, nil
-	}
-
-	response := &pb.PodSandboxSnapshotDisksResponse{Ok: true}
+	response := &pb.PodSandboxSnapshotDisksResponse{Ok: resp.Ok, ErrorMsg: resp.ErrorMsg}
 	for _, snapshot := range resp.Snapshots {
 		response.Snapshots = append(response.Snapshots, &pb.PodSandboxDiskSnapshot{
 			SnapshotId: snapshot.SnapshotId,
