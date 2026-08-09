@@ -1633,10 +1633,11 @@ func TestAttemptRestoreCheckpointTreatsGenericErrorAsRestoreFailure(t *testing.T
 		},
 	}
 
+	var output strings.Builder
 	exitCode, restored, started, err := worker.attemptRestoreCheckpoint(
 		context.Background(),
 		request,
-		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		slog.New(slog.NewTextHandler(&output, nil)),
 		common.NewOutputWriter(func(string) {}),
 		make(chan int, 1),
 		make(chan int, 1),
@@ -1650,6 +1651,7 @@ func TestAttemptRestoreCheckpointTreatsGenericErrorAsRestoreFailure(t *testing.T
 	require.Equal(t, request.Checkpoint.CheckpointId, backendRepoClient.lastUpdate.CheckpointId)
 	require.Equal(t, string(types.CheckpointStatusRestoreFailed), backendRepoClient.lastUpdate.Status)
 	require.Nil(t, backendRepoClient.lastUpdate.LastRestoredAt)
+	require.Contains(t, output.String(), restoreErr.Error())
 }
 
 func TestAttemptRestoreCheckpointKeepsHostIncompatibleCheckpointAvailable(t *testing.T) {

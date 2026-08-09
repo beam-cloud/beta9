@@ -548,7 +548,11 @@ func (s *Worker) attemptRestoreCheckpoint(ctx context.Context, request *types.Co
 		if hostIncompatible {
 			outputLogger.Info("Checkpoint was created on an incompatible CPU; starting container normally")
 		} else {
-			outputLogger.Info("Failed to restore checkpoint")
+			// Preserve the runtime error in container logs. In particular,
+			// runsc reports background CUDA resume failures from `wait --restore`,
+			// after its stderr pipe has closed, so a generic message here otherwise
+			// discards the only actionable diagnostic.
+			outputLogger.Error(fmt.Sprintf("Failed to restore checkpoint: %v", err))
 		}
 		if cleanupErr := deleteFailedRestoreRuntimeContainer(ctx, instance.Runtime, request.ContainerId); cleanupErr != nil {
 			log.Warn().
