@@ -31,6 +31,11 @@ const (
 	provisioningWorkerRequeueDelay time.Duration = 250 * time.Millisecond
 	provisioningReservationHandoff time.Duration = 2 * requestProcessingInterval
 	pendingWorkerReservationTTL    time.Duration = 30 * time.Second
+	// A healthy worker normally returns capacity as soon as its runtime exits.
+	// This delayed absolute repair covers the other case: the worker process
+	// restarted after accepting a container and therefore cannot acknowledge a
+	// later stop for that now-unknown local instance.
+	stoppingCapacityRepairBuffer time.Duration = 5 * time.Second
 )
 
 var (
@@ -535,7 +540,30 @@ func (s *Scheduler) Stop(stopArgs *types.StopContainerArgs) error {
 		return err
 	}
 
+	if state != nil && state.WorkerId != "" {
+		go s.reconcileCapacityAfterStop(state.WorkerId, stopArgs.ContainerId)
+	}
+
 	return nil
+}
+
+func (s *Scheduler) reconcileCapacityAfterStop(workerID, containerID string) {
+	grace := time.Duration(max(s.config.Worker.TerminationGracePeriod, 0)) * time.Second
+	timer := time.NewTimer(grace + stoppingCapacityRepairBuffer)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+	case <-s.ctx.Done():
+		return
+	}
+
+	if err := s.workerRepo.ReconcileWorkerCapacity(workerID); err != nil {
+		var notFound *types.ErrWorkerNotFound
+		if !errors.As(err, &notFound) {
+			log.Warn().Err(err).Str("worker_id", workerID).Str("container_id", containerID).
+				Msg("failed to reconcile worker capacity after container stop")
+		}
+	}
 }
 
 func (s *Scheduler) containerRequestPending(containerID string) (bool, error) {

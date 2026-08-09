@@ -3,6 +3,7 @@ package worker
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -25,6 +26,30 @@ import (
 	zerologlog "github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 )
+
+func TestBuildahRegistryCredentialsUsePrivateAuthFile(t *testing.T) {
+	args, cleanup, err := getBuildahAuthArgs(
+		"docker.io/beamcloud/private:latest",
+		`{"USERNAME":"alice","PASSWORD":"top-secret"}`,
+		t.TempDir(),
+	)
+	require.NoError(t, err)
+	require.Len(t, args, 2)
+	require.Equal(t, "--authfile", args[0])
+	require.NotContains(t, args, "top-secret")
+
+	info, err := os.Stat(args[1])
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0600), info.Mode().Perm())
+	contents, err := os.ReadFile(args[1])
+	require.NoError(t, err)
+	require.NotContains(t, string(contents), "top-secret")
+	require.Contains(t, string(contents), base64.StdEncoding.EncodeToString([]byte("alice:top-secret")))
+
+	cleanup()
+	_, err = os.Stat(args[1])
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
 
 func TestImageLayerPrepareProgressLoggerEmitsAggregateUpdates(t *testing.T) {
 	var output bytes.Buffer

@@ -481,6 +481,49 @@ func TestV2Dockerfile_OnlyHashesDockerfileAndContext(t *testing.T) {
 	assert.Equal(t, id1, id2, "V2 builds with same Dockerfile should produce same image ID regardless of intermediate build options")
 }
 
+func TestV2Dockerfile_BuildSecretFingerprintAffectsImageID(t *testing.T) {
+	base := BuildOpts{
+		Dockerfile:     "FROM scratch\nARG TOKEN\nRUN test -n \"$TOKEN\"\n",
+		BuildCtxObject: "context",
+		ClipVersion:    2,
+	}
+
+	first := base
+	first.BuildSecrets = []string{"TOKEN=plaintext-is-not-hashed-directly"}
+	first.BuildSecretsFingerprint = "workspace-keyed-fingerprint-one"
+	second := base
+	second.BuildSecrets = []string{"TOKEN=another-plaintext-value"}
+	second.BuildSecretsFingerprint = "workspace-keyed-fingerprint-two"
+
+	firstID, err := getImageID(&first)
+	require.NoError(t, err)
+	secondID, err := getImageID(&second)
+	require.NoError(t, err)
+	assert.NotEqual(t, firstID, secondID)
+
+	// The decrypted build argument itself never participates directly. Image
+	// identity consumes only the server-computed keyed fingerprint.
+	third := first
+	third.BuildSecrets = []string{"TOKEN=not-part-of-image-identity"}
+	thirdID, err := getImageID(&third)
+	require.NoError(t, err)
+	assert.Equal(t, firstID, thirdID)
+}
+
+func TestBuildSecretIdentityKeepsExistingNonSecretCacheKeys(t *testing.T) {
+	base := BuildOpts{Dockerfile: "FROM scratch\n", BuildCtxObject: "context", ClipVersion: 2}
+	legacyID, err := getImageID(&base)
+	require.NoError(t, err)
+
+	// Raw material is intentionally ignored and an empty fingerprint takes the
+	// exact legacy hashing path, so deploying this change does not rebuild every
+	// image that never used secrets.
+	base.BuildSecrets = []string{"TOKEN=value"}
+	unchangedID, err := getImageID(&base)
+	require.NoError(t, err)
+	assert.Equal(t, legacyID, unchangedID)
+}
+
 // TestV1Build_HashesBuildOptions ensures V1 builds still hash all build options
 func TestV1Build_HashesBuildOptions(t *testing.T) {
 	// V1 builds don't have Dockerfiles, so they hash all the build options

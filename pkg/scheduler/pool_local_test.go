@@ -102,3 +102,46 @@ func TestLocalWorkerPrometheusConfigurationSupportsHostNetworkBinPacking(t *test
 		})
 	}
 }
+
+func TestLocalWorkerConfigUsesGatewayServiceHostname(t *testing.T) {
+	controller := &LocalKubernetesWorkerPoolController{
+		config: types.AppConfig{
+			GatewayService: types.GatewayServiceConfig{
+				Host: "beta9-gateway",
+				GRPC: types.GRPCConfig{
+					ExternalHost: "0.tcp.ngrok.io",
+					ExternalPort: 12345,
+					TLS:          true,
+					Port:         1993,
+				},
+				HTTP: types.HTTPConfig{
+					ExternalHost: "public.example.com",
+					ExternalPort: 443,
+					TLS:          true,
+					Port:         1994,
+				},
+			},
+			Worker: types.WorkerConfig{UseGatewayServiceHostname: true},
+		},
+	}
+
+	workerConfig := controller.workerPodConfig()
+	if got := workerConfig.GatewayService.GRPC.ExternalHost; got != "beta9-gateway" {
+		t.Fatalf("worker gRPC host = %q, want in-cluster gateway", got)
+	}
+	if got := workerConfig.GatewayService.GRPC.ExternalPort; got != 1993 {
+		t.Fatalf("worker gRPC port = %d, want 1993", got)
+	}
+	if workerConfig.GatewayService.GRPC.TLS {
+		t.Fatal("worker in-cluster gRPC endpoint unexpectedly enables TLS")
+	}
+	if got := workerConfig.GatewayService.HTTP.ExternalHost; got != "beta9-gateway" {
+		t.Fatalf("worker HTTP host = %q, want in-cluster gateway", got)
+	}
+	if got := workerConfig.GatewayService.HTTP.ExternalPort; got != 1994 {
+		t.Fatalf("worker HTTP port = %d, want 1994", got)
+	}
+	if workerConfig.GatewayService.HTTP.TLS {
+		t.Fatal("worker in-cluster HTTP endpoint unexpectedly enables TLS")
+	}
+}

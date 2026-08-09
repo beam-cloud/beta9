@@ -4,6 +4,7 @@ import (
 	"context"
 
 	pb "github.com/beam-cloud/beta9/proto"
+	"github.com/rs/zerolog/log"
 )
 
 func (gws *GatewayService) ListPrivatePools(ctx context.Context, in *pb.ListPrivatePoolsRequest) (*pb.ListPrivatePoolsResponse, error) {
@@ -123,7 +124,14 @@ func (gws *GatewayService) GetPoolJoinCommand(ctx context.Context, in *pb.GetPoo
 }
 
 func (gws *GatewayService) JoinAgent(ctx context.Context, in *pb.JoinAgentRequest) (*pb.JoinAgentResponse, error) {
-	return gws.computeService.JoinAgent(ctx, in)
+	response, err := gws.computeService.JoinAgent(ctx, in)
+	if err == nil && response != nil && !response.Ok {
+		// Join tokens are credentials and deliberately stay out of logs. The
+		// structured rejection is safe operational context, and without it an
+		// installer retry looks like a successful HTTP 200 forever.
+		log.Warn().Str("reason", response.ErrMsg).Msg("agent join rejected")
+	}
+	return response, err
 }
 
 func (gws *GatewayService) RequestAgentTransportCredential(ctx context.Context, in *pb.RequestAgentTransportCredentialRequest) (*pb.RequestAgentTransportCredentialResponse, error) {

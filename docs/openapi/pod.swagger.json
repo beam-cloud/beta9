@@ -938,6 +938,13 @@
         },
         "wait": {
           "type": "boolean"
+        },
+        "secrets": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Names resolved in the authenticated workspace. Missing names are ignored\nso the launched command can emit its own useful provider-specific warning."
         }
       }
     },

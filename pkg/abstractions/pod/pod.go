@@ -622,11 +622,24 @@ func (s *GenericPodService) CreatePod(ctx context.Context, in *pb.CreatePodReque
 			}, nil
 		}
 
-		stub, err = s.cloneStub(ctx, authInfo.Workspace, originalStub)
-		if err != nil {
-			return &pb.CreatePodResponse{
-				Ok: false,
-			}, nil
+		// A normal resume names the checkpoint's own stub and gets an
+		// ephemeral clone of it. Tama template forks deliberately name a new
+		// stub whose durable disk is seeded from the paired disk snapshot. Use
+		// that requested recipe so CRIU restores the processes onto the fork's
+		// independent disk instead of cloning the source machine's writable
+		// volume back in.
+		if in.StubId != "" && in.StubId != originalStub.ExternalId {
+			stub, err = s.loadStub(ctx, in.StubId)
+			if err != nil || authInfo == nil || authInfo.Workspace == nil || stub.WorkspaceId != authInfo.Workspace.Id {
+				return &pb.CreatePodResponse{Ok: false}, nil
+			}
+		} else {
+			stub, err = s.cloneStub(ctx, authInfo.Workspace, originalStub)
+			if err != nil {
+				return &pb.CreatePodResponse{
+					Ok: false,
+				}, nil
+			}
 		}
 	}
 

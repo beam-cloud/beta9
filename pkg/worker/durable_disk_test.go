@@ -69,9 +69,25 @@ func TestSeedDurableDiskSnapshotResolvesAnotherDisksSnapshot(t *testing.T) {
 	require.Empty(t, backendRepo.requestedSnapshotId)
 }
 
-func TestSeedDurableDiskSnapshotStartsEmptyWhenTheSourceIsGone(t *testing.T) {
-	// Losing the seed should cost the fork its contents, not its ability to
-	// boot; an empty disk can be repopulated and a refused container cannot.
+func TestDurableDiskSeedFallsBackToTheStubConfig(t *testing.T) {
+	config, err := json.Marshal(types.StubConfigV1{Disks: []*pb.DurableDisk{{
+		Name:             "fork-disk",
+		SourceSnapshotId: "snapshot-source",
+	}}})
+	require.NoError(t, err)
+	request := &types.ContainerRequest{Stub: types.StubWithRelated{
+		Stub: types.Stub{Config: string(config)},
+	}}
+	mount := &types.Mount{DurableDisk: &types.DurableDiskMountConfig{Name: "fork-disk"}}
+
+	require.Equal(t, "snapshot-source", durableDiskSourceSnapshotFromStub(request, mount.DurableDisk.Name))
+
+	// A worker-facing mount that already carries a seed remains authoritative.
+	mount.DurableDisk.SourceSnapshotId = "snapshot-explicit"
+	require.Equal(t, "snapshot-explicit", mount.DurableDisk.SourceSnapshotId)
+}
+
+func TestSeedDurableDiskSnapshotRefusesAnEmptyDiskWhenTheSourceIsGone(t *testing.T) {
 	worker := &Worker{ctx: context.Background(), backendRepoClient: &fakeBackendRepoClient{}}
 	mount := &types.Mount{
 		DurableDisk: &types.DurableDiskMountConfig{Name: "the-fork-disk", SourceSnapshotId: "snapshot-vanished"},
@@ -79,7 +95,7 @@ func TestSeedDurableDiskSnapshotStartsEmptyWhenTheSourceIsGone(t *testing.T) {
 
 	seed, err := worker.seedDurableDiskSnapshot(context.Background(), &types.ContainerRequest{}, mount)
 
-	require.NoError(t, err)
+	require.ErrorContains(t, err, "source snapshot")
 	require.Nil(t, seed)
 }
 

@@ -70,6 +70,7 @@ func TestCreateDiskSnapshotStoresManifestReference(t *testing.T) {
 			now,
 			nil,
 			nil,
+			false,
 		))
 
 	snapshot, err := postgresRepo.CreateDiskSnapshot(context.Background(), &types.DiskSnapshot{
@@ -154,6 +155,7 @@ func TestCreateDiskSnapshotSetsCompletedAtForTerminalStatus(t *testing.T) {
 			now,
 			now,
 			nil,
+			false,
 		))
 
 	snapshot, err := postgresRepo.CreateDiskSnapshot(context.Background(), &types.DiskSnapshot{
@@ -221,6 +223,7 @@ func TestUpdateDiskSnapshotFinalizesManifestReference(t *testing.T) {
 			completedAt,
 			completedAt,
 			nil,
+			true,
 		))
 
 	snapshot, err := postgresRepo.UpdateDiskSnapshot(context.Background(), &types.DiskSnapshot{
@@ -234,6 +237,7 @@ func TestUpdateDiskSnapshotFinalizesManifestReference(t *testing.T) {
 		StoredSizeBytes:   3 << 30,
 		BucketName:        "beta9-workspace-disk-pg-data",
 		ObjectPrefix:      "snapshots/workspace/pg-data/snap-1",
+		Public:            true,
 	})
 
 	require.NoError(t, err)
@@ -241,6 +245,7 @@ func TestUpdateDiskSnapshotFinalizesManifestReference(t *testing.T) {
 	require.Equal(t, "snapshots/workspace/pg-data/snap-1/manifest.json", snapshot.ManifestKey)
 	require.Equal(t, int64(128), snapshot.ChunkCount)
 	require.True(t, snapshot.CompletedAt.Valid)
+	require.True(t, snapshot.Public)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -280,6 +285,7 @@ func TestGetLatestDiskSnapshotOrdersByGeneration(t *testing.T) {
 			now,
 			now,
 			nil,
+			false,
 		))
 
 	snapshot, err := postgresRepo.GetLatestDiskSnapshot(context.Background(), 7, "pg-data")
@@ -320,5 +326,6 @@ func diskSnapshotRows() *sqlmock.Rows {
 		"updated_at",
 		"completed_at",
 		"deleted_at",
+		"public",
 	})
 }

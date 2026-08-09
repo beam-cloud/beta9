@@ -1,6 +1,7 @@
 package disk
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 
@@ -22,10 +23,45 @@ func registerDiskRoutes(g *echo.Group, gds *GlobalDiskService) *diskGroup {
 
 	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.ListDisks))
 	g.GET("/:workspaceId/snapshots", auth.WithWorkspaceAuth(group.ListSnapshots))
+	g.POST("/:workspaceId/snapshots/:snapshotId/publish", auth.WithStrictWorkspaceAuth(group.PublishSnapshot))
 	g.POST("/:workspaceId/create/:diskName", auth.WithStrictWorkspaceAuth(group.CreateDisk))
 	g.DELETE("/:workspaceId/rm/:diskName", auth.WithStrictWorkspaceAuth(group.DeleteDisk))
 
 	return group
+}
+
+func (g *diskGroup) PublishSnapshot(ctx echo.Context) error {
+	workspaceID := ctx.Param("workspaceId")
+	workspace, err := g.gds.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceID)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid workspace ID")
+	}
+
+	snapshotID := strings.TrimSpace(ctx.Param("snapshotId"))
+	if snapshotID == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid snapshot ID")
+	}
+
+	// Get also resolves public snapshots for workers, so retain the explicit
+	// owner check before mutating. A direct lookup avoids the list endpoint's
+	// pagination making an older, valid snapshot impossible to publish.
+	snapshot, err := g.gds.backendRepo.GetDiskSnapshot(ctx.Request().Context(), workspace.Id, snapshotID)
+	if err != nil {
+		var notFound *types.ErrDiskSnapshotNotFound
+		if errors.As(err, &notFound) {
+			return echo.NewHTTPError(http.StatusNotFound, "Disk snapshot not found")
+		}
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to find disk snapshot")
+	}
+	if snapshot.WorkspaceId != workspace.Id {
+		return echo.NewHTTPError(http.StatusNotFound, "Disk snapshot not found")
+	}
+
+	snapshot.Public = true
+	if _, err := g.gds.backendRepo.UpdateDiskSnapshot(ctx.Request().Context(), snapshot); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to publish disk snapshot")
+	}
+	return ctx.JSON(http.StatusOK, map[string]any{"ok": true, "err_msg": ""})
 }
 
 func (g *diskGroup) ListDisks(ctx echo.Context) error {

@@ -2,8 +2,12 @@ package image
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
+	"sort"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -232,19 +236,57 @@ func streamImageBuildOutput(ctx context.Context, outputChan <-chan common.Output
 	}
 }
 
-func (is *ContainerImageService) retrieveBuildSecrets(ctx context.Context, secrets []string, authInfo *auth.AuthInfo) ([]string, error) {
-	var buildSecrets []string
-	if secrets != nil {
-		secrets, err := is.backendRepo.GetSecretsByNameDecrypted(ctx, authInfo.Workspace, secrets)
-		if err != nil {
-			return nil, err
-		}
+func (is *ContainerImageService) retrieveBuildSecrets(
+	ctx context.Context,
+	names []string,
+	authInfo *auth.AuthInfo,
+) ([]string, string, error) {
+	if len(names) == 0 {
+		return nil, "", nil
+	}
 
-		for _, secret := range secrets {
-			buildSecrets = append(buildSecrets, fmt.Sprintf("%s=%s", secret.Name, secret.Value))
+	secrets, err := is.backendRepo.GetSecretsByNameDecrypted(ctx, authInfo.Workspace, names)
+	if err != nil {
+		return nil, "", err
+	}
+	byName := make(map[string]string, len(secrets))
+	for _, secret := range secrets {
+		byName[secret.Name] = secret.Value
+	}
+
+	unique := make(map[string]struct{}, len(names))
+	ordered := make([]string, 0, len(names))
+	for _, name := range names {
+		if _, seen := unique[name]; seen {
+			continue
+		}
+		unique[name] = struct{}{}
+		ordered = append(ordered, name)
+	}
+	sort.Strings(ordered)
+	for _, name := range ordered {
+		if _, exists := byName[name]; !exists {
+			return nil, "", fmt.Errorf("build secret %q does not exist in this workspace", name)
 		}
 	}
-	return buildSecrets, nil
+
+	if authInfo.Workspace.SigningKey == nil || *authInfo.Workspace.SigningKey == "" {
+		return nil, "", errors.New("workspace signing key is required for build secrets")
+	}
+	key, err := common.ParseSecretKey(*authInfo.Workspace.SigningKey)
+	if err != nil {
+		return nil, "", err
+	}
+	fingerprint := hmac.New(sha256.New, key)
+	buildSecrets := make([]string, 0, len(ordered))
+	for _, name := range ordered {
+		value := byName[name]
+		// Length-prefix both fields so distinct name/value boundaries cannot
+		// produce the same input. Only the keyed digest reaches image identity.
+		fmt.Fprintf(fingerprint, "%d:%s%d:%s", len(name), name, len(value), value)
+		buildSecrets = append(buildSecrets, fmt.Sprintf("%s=%s", name, value))
+	}
+	return buildSecrets, hex.EncodeToString(fingerprint.Sum(nil)), nil
 }
 
 func convertBuildSteps(buildSteps []*pb.BuildStep) []BuildStep {

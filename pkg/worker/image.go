@@ -3,7 +3,9 @@ package worker
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -1419,10 +1421,27 @@ func (c *ImageClient) pullImageArchiveFromBrokeredOrigin(ctx context.Context, ar
 	}
 	if creds.imageArchiveURL != "" {
 		if err := downloadImageArchiveURL(ctx, creds.imageArchiveURL, archivePath); err != nil {
-			return false, nil, err
+			// Presigned URLs and their backing endpoints can expire or rotate
+			// inside the ordinary credential cache TTL. Refresh once on an
+			// actual transfer failure instead of failing the whole sandbox with
+			// a URL the gateway no longer vends.
+			c.invalidateOriginCredentials(request, request.ImageId, "")
+			creds = c.originCredentials(ctx, request, request.ImageId, "")
+			if creds == nil {
+				return false, nil, err
+			}
+			if creds.imageArchiveURL != "" {
+				if retryErr := downloadImageArchiveURL(ctx, creds.imageArchiveURL, archivePath); retryErr != nil {
+					return false, nil, fmt.Errorf("image archive download failed after refreshing credentials: %w", retryErr)
+				}
+				log.Info().Str("image_id", request.ImageId).Msg("pulled image archive after refreshing brokered URL")
+				return true, nil, nil
+			}
 		}
-		log.Info().Str("image_id", request.ImageId).Msg("pulled image archive from brokered URL")
-		return true, nil, nil
+		if creds.imageArchiveURL != "" {
+			log.Info().Str("image_id", request.ImageId).Msg("pulled image archive from brokered URL")
+			return true, nil, nil
+		}
 	}
 
 	if creds.imageArchiveStorage == nil || creds.imageArchiveObjectKey == "" {
@@ -2044,38 +2063,75 @@ func (c *ImageClient) buildahEnv(runroot, tmpdir, storageConf string) []string {
 	return env
 }
 
-// getBuildahAuthArgs returns buildah authentication arguments from user-provided credentials
-// Expects credentials in username:password format (either directly or in JSON)
-// For ECR/GCR, users should pass pre-generated tokens, not raw AWS/GCP credentials
-func (c *ImageClient) getBuildahAuthArgs(ctx context.Context, imageRef string, creds string) []string {
+// getBuildahAuthArgs writes user-provided registry credentials to a private
+// auth file. Passing them through --creds would expose the password to every
+// process on the worker through /proc and ordinary process listings.
+func getBuildahAuthArgs(imageRef, creds, directory string) ([]string, func(), error) {
+	cleanup := func() {}
 	if creds == "" {
-		return nil
+		return nil, cleanup, nil
 	}
 
-	// Parse credentials - supports both JSON and username:password formats
 	parsedCreds, err := reg.ParseCredentialsFromJSON(creds)
 	if err != nil {
 		log.Warn().Err(err).Str("image_ref", imageRef).Msg("failed to parse credentials for buildah")
-		return nil
+		return nil, cleanup, nil
 	}
 
-	// Check for basic username/password auth (covers most registries including pre-generated ECR/GCR tokens)
-	if username, ok := parsedCreds["USERNAME"]; ok {
-		if password, ok := parsedCreds["PASSWORD"]; ok {
-			return []string{"--creds", fmt.Sprintf("%s:%s", username, password)}
+	var username, password string
+	for _, keys := range [][2]string{
+		{"USERNAME", "PASSWORD"},
+		{"DOCKER_USERNAME", "DOCKER_PASSWORD"},
+		{"REGISTRY_USERNAME", "REGISTRY_PASSWORD"},
+		// Retain compatibility with structured credentials created before the
+		// registry credential parser began filtering flat environment maps.
+		{"DOCKERHUB_USERNAME", "DOCKERHUB_PASSWORD"},
+	} {
+		username, password = parsedCreds[keys[0]], parsedCreds[keys[1]]
+		if username != "" && password != "" {
+			break
 		}
 	}
-
-	// Check for Docker Hub credentials
-	if username, ok := parsedCreds["DOCKERHUB_USERNAME"]; ok {
-		if password, ok := parsedCreds["DOCKERHUB_PASSWORD"]; ok {
-			return []string{"--creds", fmt.Sprintf("%s:%s", username, password)}
-		}
+	if username == "" || password == "" {
+		log.Warn().Str("image_ref", imageRef).Msg("credentials provided but no valid username:password found")
+		return nil, cleanup, nil
 	}
 
-	// No valid username:password found
-	log.Warn().Str("image_ref", imageRef).Msg("credentials provided but no valid username:password found")
-	return nil
+	registryHost := reg.ParseRegistry(imageRef)
+	if registryHost == "" {
+		registryHost = "docker.io"
+	}
+	payload := struct {
+		Auths map[string]struct {
+			Auth string `json:"auth"`
+		} `json:"auths"`
+	}{Auths: map[string]struct {
+		Auth string `json:"auth"`
+	}{
+		registryHost: {Auth: base64.StdEncoding.EncodeToString([]byte(username + ":" + password))},
+	}}
+
+	file, err := os.CreateTemp(directory, "buildah-auth-*.json")
+	if err != nil {
+		return nil, cleanup, err
+	}
+	path := file.Name()
+	cleanup = func() { _ = os.Remove(path) }
+	if err := file.Chmod(0600); err != nil {
+		_ = file.Close()
+		cleanup()
+		return nil, func() {}, err
+	}
+	if err := json.NewEncoder(file).Encode(payload); err != nil {
+		_ = file.Close()
+		cleanup()
+		return nil, func() {}, err
+	}
+	if err := file.Close(); err != nil {
+		cleanup()
+		return nil, func() {}, err
+	}
+	return []string{"--authfile", path}, cleanup, nil
 }
 
 // formatImageBytes renders a byte count for user-facing build output.
@@ -2419,6 +2475,11 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	if request.BuildOptions.SourceImage != nil {
 		sourceImage = *request.BuildOptions.SourceImage
 	}
+	authArgs, cleanupAuth, err := getBuildahAuthArgs(sourceImage, request.BuildOptions.SourceImageCreds, runroot)
+	if err != nil {
+		return fmt.Errorf("prepare registry credentials: %w", err)
+	}
+	defer cleanupAuth()
 	dockerfile := *request.BuildOptions.Dockerfile
 	if sourceImage != "" {
 		insecure = c.config.ImageService.BuildRegistryInsecure
@@ -2438,7 +2499,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 			}
 
 			// Add credentials if provided
-			if authArgs := c.getBuildahAuthArgs(ctx, sourceImage, request.BuildOptions.SourceImageCreds); len(authArgs) > 0 {
+			if len(authArgs) > 0 {
 				pullArgs = append(pullArgs, authArgs...)
 			}
 
@@ -2475,7 +2536,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	budArgs = append(budArgs, "--jobs", "8")        // Use parallel jobs for faster layer processing
 
 	// Add credentials for multi-stage builds and private base images
-	if authArgs := c.getBuildahAuthArgs(ctx, sourceImage, request.BuildOptions.SourceImageCreds); len(authArgs) > 0 {
+	if len(authArgs) > 0 {
 		budArgs = append(budArgs, authArgs...)
 	}
 

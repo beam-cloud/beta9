@@ -44,7 +44,7 @@ func (s *Service) enforcePoolGPUType(ctx context.Context, pool *model.PoolState,
 	if machineGPU == "" {
 		return fmt.Errorf("pool %q requires GPU type %q, but machine %q has no GPUs", pool.Name, poolGPU, agent.MachineID)
 	}
-	if machineGPU != poolGPU {
+	if !gpuRequirementSatisfiedBy(poolGPU, machineGPU) {
 		return fmt.Errorf("pool %q requires GPU type %q, but machine %q reported %q", pool.Name, poolGPU, agent.MachineID, machineGPU)
 	}
 	return nil
@@ -133,7 +133,9 @@ func (s *Service) ValidatePrivatePoolGPURequest(ctx context.Context, workspaceID
 	}
 
 	poolGPU := configuredPoolGPU(pool)
-	if poolGPU == "" || slices.Contains(requested, poolGPU) {
+	if poolGPU == "" || slices.ContainsFunc(requested, func(required string) bool {
+		return gpuRequirementSatisfiedBy(required, poolGPU)
+	}) {
 		return nil
 	}
 	return fmt.Errorf("pool %q is configured for GPU type %q, but this workload requests %s", poolName, poolGPU, strings.Join(requested, ", "))
@@ -156,7 +158,9 @@ func (s *Service) MissingPrivatePoolGPUWarning(ctx context.Context, workspaceID 
 		if gpu == "" {
 			continue
 		}
-		if slices.Contains(requested, gpu) {
+		if slices.ContainsFunc(requested, func(required string) bool {
+			return gpuRequirementSatisfiedBy(required, gpu)
+		}) {
 			return "", nil
 		}
 		if !slices.Contains(configured, gpu) {
@@ -198,7 +202,9 @@ func (s *Service) FindReadyPrivatePoolForGPU(ctx context.Context, workspaceID st
 		if poolGPU == "" {
 			continue
 		}
-		if !anyGPU && !slices.Contains(requested, poolGPU) {
+		if !anyGPU && !slices.ContainsFunc(requested, func(required string) bool {
+			return gpuRequirementSatisfiedBy(required, poolGPU)
+		}) {
 			continue
 		}
 		machines, err := s.computeRepo.ListAgentTokenStates(ctx, workspaceID, pool.Name)
@@ -243,6 +249,27 @@ func concreteGPUTypes(gpus []types.GpuType) []string {
 		}
 	}
 	return out
+}
+
+// gpuRequirementSatisfiedBy is deliberately directional. A request for the
+// A100 family accepts the concrete memory-qualified model a provider reports,
+// while a request for A100-80 must not silently land on A100-40. Providers
+// commonly advertise a generic family before launch and the NVIDIA driver
+// reports the concrete model once the machine boots.
+func gpuRequirementSatisfiedBy(required, available string) bool {
+	required = types.NormalizeGPUType(required).String()
+	available = types.NormalizeGPUType(available).String()
+	if required == available {
+		return true
+	}
+	switch required {
+	case types.GPU_A100.String():
+		return available == types.GPU_A100_40.String() || available == types.GPU_A100_80.String()
+	case types.GPU_V100.String():
+		return available == types.GPU_V100_32.String()
+	default:
+		return false
+	}
 }
 
 func singleGPUType(gpus []string, gpuCount uint32) (string, error) {

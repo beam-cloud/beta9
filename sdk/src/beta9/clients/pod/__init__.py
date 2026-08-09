@@ -52,6 +52,11 @@ class PodSandboxExecRequest(betterproto.Message):
         4, betterproto.TYPE_STRING, betterproto.TYPE_STRING
     )
     wait: bool = betterproto.bool_field(5)
+    secrets: List[str] = betterproto.string_field(6)
+    """
+    Names resolved in the authenticated workspace. Missing names are ignored
+     so the launched command can emit its own useful provider-specific warning.
+    """
 
 
 @dataclass(eq=False, repr=False)

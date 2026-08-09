@@ -41,6 +41,13 @@ func (s *Worker) prepareDurableDiskMount(request *types.ContainerRequest, mount 
 	if mount.LocalPath == "" {
 		return fmt.Errorf("durable disk %q has no local path", mount.DurableDisk.Name)
 	}
+	// The mount is the worker-facing copy, but the immutable stub config is also
+	// carried on every container request. Recover from older/private-worker
+	// serialization paths that omitted the new seed field instead of silently
+	// treating a template fork as an empty disk.
+	if mount.DurableDisk.SourceSnapshotId == "" {
+		mount.DurableDisk.SourceSnapshotId = durableDiskSourceSnapshotFromStub(request, mount.DurableDisk.Name)
+	}
 
 	driver := durableDiskDriver(mount.DurableDisk.Driver)
 	switch driver {
@@ -73,6 +80,23 @@ func (s *Worker) prepareDurableDiskMount(request *types.ContainerRequest, mount 
 	default:
 		return fmt.Errorf("durable disk %q requested unsupported driver %q", mount.DurableDisk.Name, driver)
 	}
+}
+
+func durableDiskSourceSnapshotFromStub(request *types.ContainerRequest, diskName string) string {
+	if request == nil || strings.TrimSpace(request.Stub.Config) == "" {
+		return ""
+	}
+	config, err := request.Stub.UnmarshalConfig()
+	if err != nil || config == nil {
+		return ""
+	}
+	name := types.SafeDurableDiskName(diskName)
+	for _, disk := range config.Disks {
+		if disk != nil && types.SafeDurableDiskName(disk.Name) == name {
+			return strings.TrimSpace(disk.SourceSnapshotId)
+		}
+	}
+	return ""
 }
 
 func durableDiskDriver(configured string) string {
@@ -410,8 +434,10 @@ func (s *Worker) restoreDurableDiskSnapshot(request *types.ContainerRequest, mou
 }
 
 // seedDurableDiskSnapshot resolves the snapshot a fresh disk was told to start
-// from. Absent or unreadable seeds leave the disk empty rather than failing the
-// container, because an empty disk is recoverable and a refused start is not.
+// from. An explicit seed is part of the disk's correctness contract: silently
+// booting an empty disk makes a template or fork look healthy while discarding
+// the state it was created to carry. A prior local payload remains usable during
+// a transient lookup outage, but a genuinely fresh disk must resolve its seed.
 func (s *Worker) seedDurableDiskSnapshot(ctx context.Context, request *types.ContainerRequest, mount *types.Mount) (*types.DiskSnapshot, error) {
 	sourceID := mount.DurableDisk.SourceSnapshotId
 	if sourceID == "" {
@@ -426,12 +452,20 @@ func (s *Worker) seedDurableDiskSnapshot(ctx context.Context, request *types.Con
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
+		if durableDiskHasRestorablePayload(mount, mount.LocalPath) {
+			log.Warn().
+				Str("disk", mount.DurableDisk.Name).
+				Str("source_snapshot_id", sourceID).
+				Err(err).
+				Msg("unable to resolve durable disk source snapshot; keeping existing local state")
+			return nil, nil
+		}
 		log.Warn().
 			Str("disk", mount.DurableDisk.Name).
 			Str("source_snapshot_id", sourceID).
 			Err(err).
-			Msg("unable to resolve durable disk source snapshot; starting from local or empty state")
-		return nil, nil
+			Msg("unable to resolve durable disk source snapshot")
+		return nil, fmt.Errorf("resolve durable disk source snapshot %s: %w", sourceID, err)
 	}
 
 	seed := durableDiskSnapshotFromProto(resp.Snapshot)
@@ -439,8 +473,8 @@ func (s *Worker) seedDurableDiskSnapshot(ctx context.Context, request *types.Con
 		log.Warn().
 			Str("disk", mount.DurableDisk.Name).
 			Str("source_snapshot_id", sourceID).
-			Msg("durable disk source snapshot is missing; starting empty")
-		return nil, nil
+			Msg("durable disk source snapshot is missing")
+		return nil, fmt.Errorf("durable disk source snapshot %s is missing", sourceID)
 	}
 
 	log.Info().

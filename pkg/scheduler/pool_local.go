@@ -302,6 +302,19 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 // VictoriaMetrics push registry is configured independently.
 func (wpc *LocalKubernetesWorkerPoolController) workerPodConfig() types.AppConfig {
 	config := wpc.config
+	// Local workers must use the in-cluster gateway for their own repository
+	// clients when service-hostname routing is enabled. The pod environment
+	// already advertises this endpoint to child containers; keep CONFIG_JSON in
+	// sync so a development/public tunnel is only used by genuinely remote
+	// workers instead of hairpinning local build workers through it.
+	if config.Worker.UseGatewayServiceHostname {
+		config.GatewayService.GRPC.ExternalHost = config.GatewayService.Host
+		config.GatewayService.GRPC.ExternalPort = config.GatewayService.GRPC.Port
+		config.GatewayService.GRPC.TLS = false
+		config.GatewayService.HTTP.ExternalHost = config.GatewayService.Host
+		config.GatewayService.HTTP.ExternalPort = config.GatewayService.HTTP.Port
+		config.GatewayService.HTTP.TLS = false
+	}
 	if config.Worker.HostNetwork && config.Monitoring.MetricsCollector == string(types.MetricsCollectorPrometheus) {
 		config.Monitoring.MetricsCollector = string(types.MetricsCollectorNone)
 		config.Monitoring.Prometheus.ScrapeWorkers = false

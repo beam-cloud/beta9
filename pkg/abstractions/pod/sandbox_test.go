@@ -140,6 +140,134 @@ func TestSandboxExecFailureMessageKeepsConnectErrorsRetryable(t *testing.T) {
 	}
 }
 
+type sandboxSecretBackendRepository struct {
+	repository.BackendRepository
+	secrets []types.Secret
+}
+
+func (r *sandboxSecretBackendRepository) GetSecretsByNameDecrypted(
+	context.Context,
+	*types.Workspace,
+	[]string,
+) ([]types.Secret, error) {
+	return r.secrets, nil
+}
+
+func TestSandboxExecEnvironmentInjectsOnlySecretsThatExist(t *testing.T) {
+	service := &GenericPodService{backendRepo: &sandboxSecretBackendRepository{
+		secrets: []types.Secret{{Name: "OPENAI_API_KEY", Value: "workspace-value"}},
+	}}
+	env, err := service.sandboxExecEnvironment(
+		context.Background(),
+		&types.Workspace{},
+		map[string]string{"MODE": "fast"},
+		[]string{"CODEX_API_KEY", "OPENAI_API_KEY"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env["OPENAI_API_KEY"] != "workspace-value" || env["MODE"] != "fast" {
+		t.Fatalf("sandbox exec environment = %#v", env)
+	}
+	if _, exists := env["CODEX_API_KEY"]; exists {
+		t.Fatal("missing workspace secret was injected")
+	}
+}
+
+type sandboxStatusContainerRepository struct {
+	repository.ContainerRepository
+	stateErr     error
+	exitCode     int
+	exitCodeErr  error
+	exitCodeRead bool
+}
+
+func (r *sandboxStatusContainerRepository) GetContainerState(string) (*types.ContainerState, error) {
+	return nil, r.stateErr
+}
+
+func (r *sandboxStatusContainerRepository) GetContainerExitCode(string) (int, error) {
+	r.exitCodeRead = true
+	return r.exitCode, r.exitCodeErr
+}
+
+type sandboxStatusBackendRepository struct {
+	repository.BackendRepository
+	stub *types.StubWithRelated
+	err  error
+}
+
+func (r *sandboxStatusBackendRepository) GetStubByExternalId(context.Context, string, ...types.QueryFilter) (*types.StubWithRelated, error) {
+	return r.stub, r.err
+}
+
+func TestSandboxContainerStatusRecoversExitedContainer(t *testing.T) {
+	const containerId = "sandbox-11111111-2222-3333-4444-555555555555-deadbeef"
+	stateErr := &types.ErrContainerStateNotFound{ContainerId: containerId}
+	containerRepo := &sandboxStatusContainerRepository{stateErr: stateErr, exitCode: 1}
+	service := &GenericPodService{
+		containerRepo: containerRepo,
+		backendRepo: &sandboxStatusBackendRepository{stub: &types.StubWithRelated{
+			Stub: types.Stub{ExternalId: "11111111-2222-3333-4444-555555555555", WorkspaceId: 7},
+		}},
+	}
+
+	resp, err := service.sandboxContainerStatus(context.Background(), containerId, &auth.AuthInfo{
+		Workspace: &types.Workspace{Id: 7, ExternalId: "workspace-7"},
+	})
+	if err != nil {
+		t.Fatalf("sandboxContainerStatus returned error: %v", err)
+	}
+	if !resp.Ok || resp.Status != string(types.SandboxStatusExited) || resp.ExitCode != 1 {
+		t.Fatalf("sandboxContainerStatus response = %#v, want exited with code 1", resp)
+	}
+}
+
+func TestSandboxContainerStatusDoesNotLeakExitCodeAcrossWorkspaces(t *testing.T) {
+	const containerId = "sandbox-11111111-2222-3333-4444-555555555555-deadbeef"
+	containerRepo := &sandboxStatusContainerRepository{
+		stateErr: &types.ErrContainerStateNotFound{ContainerId: containerId},
+		exitCode: 23,
+	}
+	service := &GenericPodService{
+		containerRepo: containerRepo,
+		backendRepo: &sandboxStatusBackendRepository{stub: &types.StubWithRelated{
+			Stub: types.Stub{ExternalId: "11111111-2222-3333-4444-555555555555", WorkspaceId: 7},
+		}},
+	}
+
+	resp, err := service.sandboxContainerStatus(context.Background(), containerId, &auth.AuthInfo{
+		Workspace: &types.Workspace{Id: 8, ExternalId: "workspace-8"},
+	})
+	if resp != nil || err == nil {
+		t.Fatalf("sandboxContainerStatus = (%#v, %v), want workspace error", resp, err)
+	}
+	if containerRepo.exitCodeRead {
+		t.Fatal("sandboxContainerStatus read exit code before verifying workspace ownership")
+	}
+}
+
+func TestSandboxContainerStatusKeepsNotFoundWhenExitCodeExpired(t *testing.T) {
+	const containerId = "sandbox-11111111-2222-3333-4444-555555555555-deadbeef"
+	stateErr := &types.ErrContainerStateNotFound{ContainerId: containerId}
+	service := &GenericPodService{
+		containerRepo: &sandboxStatusContainerRepository{
+			stateErr:    stateErr,
+			exitCodeErr: errors.New("exit code not found"),
+		},
+		backendRepo: &sandboxStatusBackendRepository{stub: &types.StubWithRelated{
+			Stub: types.Stub{ExternalId: "11111111-2222-3333-4444-555555555555", WorkspaceId: 7},
+		}},
+	}
+
+	resp, err := service.sandboxContainerStatus(context.Background(), containerId, &auth.AuthInfo{
+		Workspace: &types.Workspace{Id: 7, ExternalId: "workspace-7"},
+	})
+	if resp != nil || !errors.Is(err, stateErr) {
+		t.Fatalf("sandboxContainerStatus = (%#v, %v), want original state error", resp, err)
+	}
+}
+
 func TestSandboxClientCacheKeyUsesStableWorkerRouteAddress(t *testing.T) {
 	address := types.BackendRouteAddress(types.BackendRouteID("machine-a", "worker-a", "", types.BackendRouteKindWorker, 0))
 
