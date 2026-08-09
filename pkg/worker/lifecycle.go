@@ -333,6 +333,13 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 	// Gate checkpointing based on runtime capabilities, and let the user know if it was disabled
 	if request.CheckpointEnabled && !caps.CheckpointRestore {
+		if request.Checkpoint != nil {
+			return fmt.Errorf(
+				"cannot restore checkpoint %q with runtime %q: checkpoint restore is unsupported",
+				request.Checkpoint.CheckpointId,
+				s.runtime.Name(),
+			)
+		}
 		log.Info().Str("container_id", containerId).
 			Str("runtime", s.runtime.Name()).
 			Msg("disabling checkpoint for runtime without CRIU support")

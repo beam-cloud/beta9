@@ -572,6 +572,11 @@ class PoolConfig(betterproto.Message):
     fallback: str = betterproto.string_field(12)
     priority: int = betterproto.int32_field(13)
     offer_id: str = betterproto.string_field(14)
+    container_runtime: str = betterproto.string_field(15)
+    """
+    Runtime every worker in this pool must use. Checkpoint-backed clients use
+     gVisor so a restore cannot silently land on a runc worker.
+    """
 
 
 @dataclass(eq=False, repr=False)

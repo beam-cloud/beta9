@@ -359,6 +359,9 @@ func normalizeAgentWorkerPoolConfig(state *compute.PoolState) types.WorkerPoolCo
 		if len(state.Config.Gpu) > 0 {
 			config.GPUType = state.Config.Gpu[0]
 		}
+		if state.Config.ContainerRuntime != "" {
+			config.ContainerRuntime = state.Config.ContainerRuntime
+		}
 		if state.Config.Priority != 0 {
 			config.Priority = state.Config.Priority
 		}
@@ -1057,6 +1060,12 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 	}
 
 	for _, worker := range workers {
+		// An explicit checkpoint is a restore request, not a hint. Only a
+		// checkpoint-capable runtime may accept it; otherwise the worker used to
+		// erase the checkpoint and cold-start the workload.
+		if request.Checkpoint != nil && worker.Runtime != types.ContainerRuntimeGvisor.String() {
+			continue
+		}
 		isGpuWorker := worker.Gpu != ""
 		cpu := request.Cpu
 		memory := capacityMemoryForScheduling(request)

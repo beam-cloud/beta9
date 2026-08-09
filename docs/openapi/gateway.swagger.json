@@ -5001,6 +5001,10 @@
         },
         "offerId": {
           "type": "string"
+        },
+        "containerRuntime": {
+          "type": "string",
+          "description": "Runtime every worker in this pool must use. Checkpoint-backed clients use\ngVisor so a restore cannot silently land on a runc worker."
         }
       }
     },

@@ -33,6 +33,9 @@ func normalizePoolConfig(in *pb.PoolConfig) *pb.PoolConfig {
 	if out.Priority == 0 {
 		out.Priority = defaultPrivatePriority
 	}
+	if out.ContainerRuntime == "" {
+		out.ContainerRuntime = types.ContainerRuntimeRunc.String()
+	}
 	return out
 }
 
@@ -52,6 +55,11 @@ func computePoolFromProto(in *pb.PoolConfig, nodeCount uint32, requireReservatio
 	case "", types.PrivatePoolFallbackInternal, types.PrivatePoolFallbackWait, types.PrivatePoolFallbackFail:
 	default:
 		return model.Pool{}, fmt.Errorf("unsupported private pool fallback %q", in.Fallback)
+	}
+	switch in.ContainerRuntime {
+	case "", types.ContainerRuntimeRunc.String(), types.ContainerRuntimeGvisor.String():
+	default:
+		return model.Pool{}, fmt.Errorf("unsupported container runtime %q", in.ContainerRuntime)
 	}
 	ttl, err := model.ParseTTL(in.Ttl)
 	if err != nil {
@@ -172,7 +180,26 @@ func (s *Service) privatePoolStateToProto(state *model.PoolState) *pb.PrivatePoo
 }
 
 func (s *Service) privatePoolStateToProtoWithMachines(state *model.PoolState, machines []*model.AgentTokenState) *pb.PrivatePool {
-	return privatePoolStateToProtoWithMachines(state, machines, s.billableMicros, s.appConfig.ManagedCompute)
+	pool := privatePoolStateToProtoWithMachines(state, machines, s.billableMicros, s.appConfig.ManagedCompute)
+	if state == nil || state.Config == nil || state.Config.ContainerRuntime != types.ContainerRuntimeGvisor.String() {
+		return pool
+	}
+
+	// A connected host is not enough for a restore pool: the agent may still
+	// be downloading or restarting its worker. Report capacity ready only after
+	// the gVisor worker itself is available, so clients cannot race a restore
+	// onto stale or runc capacity.
+	pool.ReadyMachineCount = 0
+	now := time.Now()
+	for _, machine := range machines {
+		worker := s.agentMachineStatusWorker(machine)
+		if model.AgentMachineConnected(machine, now) && worker != nil &&
+			worker.Status == types.WorkerStatusAvailable &&
+			worker.Runtime == types.ContainerRuntimeGvisor.String() {
+			pool.ReadyMachineCount++
+		}
+	}
+	return pool
 }
 
 func privatePoolStateToProtoWithMachines(state *model.PoolState, machines []*model.AgentTokenState, projectCost computeCostProjector, managedCompute types.ManagedComputeConfig) *pb.PrivatePool {

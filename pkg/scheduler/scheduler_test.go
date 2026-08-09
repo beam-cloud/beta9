@@ -2910,6 +2910,32 @@ func TestSelectorBoundAnyGPUAcceptsUncataloguedHardware(t *testing.T) {
 	assert.Empty(t, filterWorkersByResources([]*types.Worker{worker}, request, nil))
 }
 
+func TestExplicitCheckpointOnlyUsesRestoreCapableRuntime(t *testing.T) {
+	request := &types.ContainerRequest{
+		Cpu:               1000,
+		Memory:            1000,
+		GpuRequest:        []string{"RTX5090"},
+		GpuCount:          1,
+		CheckpointEnabled: true,
+		Checkpoint:        &types.Checkpoint{CheckpointId: "checkpoint-1"},
+	}
+	worker := func(id, runtimeName string) *types.Worker {
+		return &types.Worker{
+			Id:           id,
+			Status:       types.WorkerStatusAvailable,
+			FreeCpu:      1000,
+			FreeMemory:   2000,
+			FreeGpuCount: 1,
+			Gpu:          "RTX5090",
+			Runtime:      runtimeName,
+		}
+	}
+	runc := worker("runc", types.ContainerRuntimeRunc.String())
+	gvisor := worker("gvisor", types.ContainerRuntimeGvisor.String())
+
+	assert.Equal(t, []*types.Worker{gvisor}, filterWorkersByResources([]*types.Worker{runc, gvisor}, request, nil))
+}
+
 func TestSelectGPUWorkerDoesNotMutatePriority(t *testing.T) {
 	wb, err := NewSchedulerForTest()
 	assert.Nil(t, err)

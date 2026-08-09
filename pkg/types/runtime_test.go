@@ -32,7 +32,8 @@ func TestMarketplaceContainerRuntimeForGPU(t *testing.T) {
 		{gpu: "H100", want: ContainerRuntimeGvisor.String()},
 		{gpu: "Tesla T4", want: ContainerRuntimeGvisor.String()},
 		{gpu: "Tesla V100-SXM2-16GB", want: ContainerRuntimeRunc.String()},
-		{gpu: "RTX5090", want: ContainerRuntimeRunc.String()},
+		{gpu: "RTX4090", want: ContainerRuntimeGvisor.String()},
+		{gpu: "RTX5090", want: ContainerRuntimeGvisor.String()},
 	}
 
 	for _, test := range tests {
