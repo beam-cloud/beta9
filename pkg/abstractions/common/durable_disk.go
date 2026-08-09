@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -155,8 +156,24 @@ func latestRestorableDurableDiskSnapshots(ctx context.Context, repos DurableDisk
 		if disk == nil || disk.Name == "" {
 			continue
 		}
-		snapshot, err := repos.BackendRepo.GetLatestDiskSnapshot(ctx, workspaceID, disk.Name)
+		// A fork/template seed belongs to the source disk, not to this brand-new
+		// destination name. During private-pool registration there is a brief
+		// window where the gateway chooses snapshot fallback even though the
+		// reserved worker is about to become ready. Looking up the destination's
+		// latest generation in that window can never succeed; honor the explicit
+		// immutable seed exactly as the worker-side restore path does.
+		sourceSnapshotID := strings.TrimSpace(disk.SourceSnapshotId)
+		var snapshot *types.DiskSnapshot
+		var err error
+		if sourceSnapshotID != "" {
+			snapshot, err = repos.BackendRepo.GetDiskSnapshot(ctx, workspaceID, sourceSnapshotID)
+		} else {
+			snapshot, err = repos.BackendRepo.GetLatestDiskSnapshot(ctx, workspaceID, disk.Name)
+		}
 		if err != nil {
+			if sourceSnapshotID != "" {
+				return nil, fmt.Errorf("durable disk %q source snapshot %q is not restorable: %w", disk.Name, sourceSnapshotID, err)
+			}
 			return nil, fmt.Errorf("durable disk %q has no restorable snapshot: %w", disk.Name, err)
 		}
 		if snapshot == nil || snapshot.ManifestKey == "" || !types.IsDiskSnapshotFilesystemFormat(snapshot.Format) {
