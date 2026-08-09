@@ -35,6 +35,7 @@ const (
 	specBaseName                  string = "config.json"
 	initialSpecBaseName           string = "initial_config.json"
 	containerInnerPort            int    = 8001 // Use a fixed port inside the container
+	maxHostnameLength             int    = 63   // RFC 1123 label limit
 	markRunningRetryTimeout              = 15 * time.Second
 	markRunningRetryInterval             = 100 * time.Millisecond
 	runtimeDeleteTimeout                 = 30 * time.Second
@@ -155,7 +156,7 @@ func (s *Worker) finalizeContainer(containerId string, request *types.ContainerR
 
 func (s *Worker) clearContainer(containerId string, request *types.ContainerRequest, exitCode int, exitReported bool) {
 	if request != nil && request.HasDurableDiskMount() {
-		if err := s.syncDurableDiskMounts(request); err != nil {
+		if _, err := s.syncDurableDiskMounts(s.durableDiskCleanupContext(), request, false); err != nil {
 			log.Error().Str("container_id", containerId).Err(err).Msg("failed to sync durable disks during container cleanup")
 		}
 	}
@@ -784,6 +785,10 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	if err != nil {
 		return nil, err
 	}
+	// Preserve the runtime default unless a hostname is requested.
+	if hostname := sanitizeHostname(request.Hostname); hostname != "" {
+		spec.Hostname = hostname
+	}
 
 	spec.Process.Cwd = defaultContainerDirectory
 	spec.Process.Args = append([]string(nil), request.EntryPoint...)
@@ -1126,6 +1131,30 @@ func (s *Worker) newSpecTemplate() (*specs.Spec, error) {
 		return nil, fmt.Errorf("runtime <%s> has an incomplete base OCI spec", s.runtime.Name())
 	}
 	return &newSpec, nil
+}
+
+// sanitizeHostname returns an RFC 1123 label.
+func sanitizeHostname(name string) string {
+	label := make([]byte, 0, maxHostnameLength)
+	separatorPending := false
+	for index := 0; index < len(name) && len(label) < maxHostnameLength; index++ {
+		character := name[index]
+		if character >= 'A' && character <= 'Z' {
+			character += 'a' - 'A'
+		}
+
+		if (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9') {
+			if separatorPending && len(label)+1 < maxHostnameLength {
+				label = append(label, '-')
+			}
+			label = append(label, character)
+			separatorPending = false
+		} else if len(label) > 0 {
+			// Defer separators to avoid trailing or overlong labels.
+			separatorPending = true
+		}
+	}
+	return string(label)
 }
 
 func validateContainerSpec(spec *specs.Spec) error {
@@ -1833,7 +1862,8 @@ func (s *Worker) waitForRestoredContainerExit(ctx context.Context, rt runtime.Ru
 			}
 			return -1, nil
 		}
-		if state.Status != types.RuncContainerStatusRunning {
+		// A checkpoint temporarily reports the container as paused.
+		if state.Status != types.RuncContainerStatusRunning && state.Status != types.RuncContainerStatusPaused {
 			return -1, nil
 		}
 		observedRunning = true

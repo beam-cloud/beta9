@@ -155,6 +155,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		AllowList:          in.AllowList,
 		DockerEnabled:      in.DockerEnabled,
 		AllowMarketplace:   in.AllowMarketplace,
+		Hostname:           in.Hostname,
 		IsService:          in.IsService,
 		Serving:            servingConfig,
 		Pool:               resourcePolicy.pool,
@@ -246,15 +247,19 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 	}
 
 	// Get secrets
-	for _, secret := range in.Secrets {
-		secret, err := gws.backendRepo.GetSecretByName(ctx, authInfo.Workspace, secret.Name)
+	for _, requestedSecret := range in.Secrets {
+		secret, err := gws.backendRepo.GetSecretByName(ctx, authInfo.Workspace, requestedSecret.Name)
 		if err != nil {
 			if err == sql.ErrNoRows {
-				continue // Skip secret if not found
+				return &pb.GetOrCreateStubResponse{
+					Ok:     false,
+					ErrMsg: fmt.Sprintf("Secret %q does not exist in this workspace.", requestedSecret.Name),
+				}, nil
 			}
 
 			return &pb.GetOrCreateStubResponse{
-				Ok: false,
+				Ok:     false,
+				ErrMsg: "Failed to resolve workspace secrets.",
 			}, nil
 		}
 
@@ -318,6 +323,8 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		object, err = gws.backendRepo.GetObjectByExternalId(ctx, in.ObjectId, authInfo.Workspace.Id)
 	}
 	if err != nil {
+		log.Error().Err(err).Str("workspace_id", authInfo.Workspace.ExternalId).
+			Msg("failed to prepare canonical stub object")
 		return &pb.GetOrCreateStubResponse{
 			Ok:     false,
 			ErrMsg: "Failed to prepare stub object",

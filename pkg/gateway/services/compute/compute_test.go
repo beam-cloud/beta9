@@ -2208,6 +2208,51 @@ func TestValidatePrivatePoolGPURequestAllowsWorkloadPreferenceList(t *testing.T)
 	}
 }
 
+func TestGPURequirementSatisfiedByConcreteMemoryVariant(t *testing.T) {
+	tests := []struct {
+		name      string
+		required  string
+		available string
+		want      bool
+	}{
+		{name: "generic A100 accepts 40 GB", required: "A100", available: "A100-40", want: true},
+		{name: "generic A100 accepts 80 GB", required: "A100", available: "NVIDIA A100 80GB PCI", want: true},
+		{name: "generic V100 accepts 32 GB", required: "V100", available: "V100-32", want: true},
+		{name: "80 GB requirement rejects 40 GB", required: "A100-80", available: "A100-40", want: false},
+		{name: "different family rejected", required: "A4000", available: "H100", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := gpuRequirementSatisfiedBy(tt.required, tt.available); got != tt.want {
+				t.Fatalf("gpuRequirementSatisfiedBy(%q, %q) = %v, want %v", tt.required, tt.available, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEnforcePoolGPUTypeAcceptsConcreteVariantForGenericPool(t *testing.T) {
+	service := &Service{}
+	pool := &model.PoolState{
+		Name:   "gpu-pool",
+		Config: &pb.PoolConfig{Name: "gpu-pool", Gpu: []string{"A100"}},
+	}
+	agent := &model.AgentTokenState{
+		MachineID: "machine-1",
+		GPUs:      []string{"A100-40"},
+		GPUCount:  1,
+	}
+
+	if err := service.enforcePoolGPUType(context.Background(), pool, agent); err != nil {
+		t.Fatalf("enforcePoolGPUType() error = %v", err)
+	}
+
+	pool.Config.Gpu = []string{"A100-80"}
+	if err := service.enforcePoolGPUType(context.Background(), pool, agent); err == nil {
+		t.Fatal("enforcePoolGPUType() accepted A100-40 for an A100-80 requirement")
+	}
+}
+
 func TestJoinAgentLocksPoolGPUTypeFromFirstMachine(t *testing.T) {
 	now := time.Now().UTC()
 	repo := &fakeComputeRepo{

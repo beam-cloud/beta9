@@ -2,6 +2,7 @@ package gatewayservices
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -15,6 +16,14 @@ import (
 
 type checkpointVolumeBackendRepo struct {
 	repository.BackendRepository
+}
+
+type missingSecretBackendRepo struct {
+	repository.BackendRepository
+}
+
+func (r *missingSecretBackendRepo) GetSecretByName(context.Context, *types.Workspace, string) (*types.Secret, error) {
+	return nil, sql.ErrNoRows
 }
 
 type fakeGpuPoolChecker struct {
@@ -51,6 +60,21 @@ func TestCachePreparedStub(t *testing.T) {
 	).Result()
 	require.NoError(t, err)
 	require.Equal(t, "stub-1", stubID)
+}
+
+func TestGetOrCreateStubReportsMissingSecret(t *testing.T) {
+	service := &GatewayService{
+		appConfig:   types.AppConfig{GatewayService: types.GatewayServiceConfig{StubLimits: types.StubLimits{Cpu: 2, Memory: 2}}},
+		backendRepo: &missingSecretBackendRepo{},
+	}
+	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{Workspace: &types.Workspace{ExternalId: "workspace-1"}})
+
+	resp, err := service.GetOrCreateStub(ctx, &pb.GetOrCreateStubRequest{
+		Cpu: 1, Memory: 1, Secrets: []*pb.SecretVar{{Name: "HF_TOKEN"}},
+	})
+	require.NoError(t, err)
+	require.False(t, resp.Ok)
+	require.Equal(t, `Secret "HF_TOKEN" does not exist in this workspace.`, resp.ErrMsg)
 }
 
 func TestComputeCapacityVerdictAvailableWhenAnyGPUSupported(t *testing.T) {

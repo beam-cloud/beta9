@@ -673,6 +673,8 @@ message DurableDisk {
   string filesystem = 4;
   string driver = 5;
   bool read_only = 6;
+  // Snapshot used to initialize a disk with no snapshot history.
+  string source_snapshot_id = 7;
 }
 
 message TaskPolicy {
@@ -734,6 +736,8 @@ message GetOrCreateStubRequest {
   repeated DurableDisk disks = 44;
   bool allow_marketplace = 45;
   types.CheckpointTrigger checkpoint_trigger = 46;
+  // Hostname to set inside the container.
+  string hostname = 47;
 }
 
 message GetOrCreateStubResponse {

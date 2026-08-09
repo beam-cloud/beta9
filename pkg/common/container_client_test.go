@@ -26,6 +26,18 @@ func TestContainerClientWithDialerDoesNotBlockSharedCacheFill(t *testing.T) {
 	require.Less(t, time.Since(started), 100*time.Millisecond)
 }
 
+func TestContainerClientUsesTLS(t *testing.T) {
+	if !containerClientUsesTLS("127.0.0.1:443") {
+		t.Fatal("port 443 should use TLS")
+	}
+	if !containerClientUsesTLS("[::1]:443") {
+		t.Fatal("IPv6 port 443 should use TLS")
+	}
+	if containerClientUsesTLS("127.0.0.1:51443") {
+		t.Fatal("port 51443 should not use TLS")
+	}
+}
+
 type attachmentClientStream struct {
 	pb.ContainerService_ContainerStreamLogsClient
 	attach <-chan struct{}

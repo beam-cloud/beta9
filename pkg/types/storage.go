@@ -114,6 +114,7 @@ type DiskSnapshot struct {
 	UpdatedAt           Time               `db:"updated_at" json:"updated_at"`
 	CompletedAt         NullTime           `db:"completed_at" json:"completed_at,omitempty"`
 	DeletedAt           NullTime           `db:"deleted_at" json:"deleted_at,omitempty"`
+	Public              bool               `db:"public" json:"public"`
 }
 
 type DiskSnapshotFilter struct {

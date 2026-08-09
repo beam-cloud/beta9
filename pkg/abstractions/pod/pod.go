@@ -521,6 +521,7 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 		PoolSelector:      stubConfig.PoolSelector(),
 		AllowMarketplace:  stubConfig.AllowMarketplace,
 		MachineId:         stubConfig.MachineID,
+		Hostname:          stubConfig.Hostname,
 	}
 	if err := abstractions.ConfigureContainerRequestNetwork(runRequest, stubConfig); err != nil {
 		return "", err
@@ -621,11 +622,18 @@ func (s *GenericPodService) CreatePod(ctx context.Context, in *pb.CreatePodReque
 			}, nil
 		}
 
-		stub, err = s.cloneStub(ctx, authInfo.Workspace, originalStub)
-		if err != nil {
-			return &pb.CreatePodResponse{
-				Ok: false,
-			}, nil
+		if in.StubId != "" && in.StubId != originalStub.ExternalId {
+			stub, err = s.loadStub(ctx, in.StubId)
+			if err != nil || authInfo == nil || authInfo.Workspace == nil || stub == nil || stub.WorkspaceId != authInfo.Workspace.Id {
+				return &pb.CreatePodResponse{Ok: false}, nil
+			}
+		} else {
+			stub, err = s.cloneStub(ctx, authInfo.Workspace, originalStub)
+			if err != nil {
+				return &pb.CreatePodResponse{
+					Ok: false,
+				}, nil
+			}
 		}
 	}
 

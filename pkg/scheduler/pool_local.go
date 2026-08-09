@@ -167,13 +167,18 @@ func (wpc *LocalKubernetesWorkerPoolController) addWorkerWithId(workerId string,
 
 func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string, cpu int64, memory int64, gpuType string, gpuCount uint32, token string) (*batchv1.Job, *types.Worker) {
 	jobName := fmt.Sprintf("%s-%s-%s", Beta9WorkerJobPrefix, wpc.name, workerId)
+	workerConfig := wpc.workerPodConfig()
+	prometheusScrapeEnabled := workerConfig.Monitoring.MetricsCollector == string(types.MetricsCollectorPrometheus) &&
+		workerConfig.Monitoring.Prometheus.ScrapeWorkers
 	labels := map[string]string{
 		"app":                       Beta9WorkerLabelValue,
 		Beta9WorkerLabelKey:         Beta9WorkerLabelValue,
 		Beta9WorkerLabelPoolNameKey: wpc.name,
 		Beta9WorkerLabelIDKey:       workerId,
-		PrometheusPortKey:           fmt.Sprintf("%d", wpc.config.Monitoring.Prometheus.Port),
-		PrometheusScrapeKey:         strconv.FormatBool(wpc.config.Monitoring.Prometheus.ScrapeWorkers),
+		PrometheusScrapeKey:         strconv.FormatBool(prometheusScrapeEnabled),
+	}
+	if prometheusScrapeEnabled {
+		labels[PrometheusPortKey] = fmt.Sprintf("%d", workerConfig.Monitoring.Prometheus.Port)
 	}
 
 	workerCpu := cpu
@@ -225,13 +230,7 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 			SecurityContext: &corev1.SecurityContext{
 				Privileged: ptr.To(true),
 			},
-			Ports: []corev1.ContainerPort{
-				{
-					Name:          "metrics",
-					ContainerPort: int32(wpc.config.Monitoring.Prometheus.Port),
-				},
-			},
-			Env:          wpc.getWorkerEnvironment(workerId, workerCpu, workerMemory, workerGpuType, workerGpuCount, token),
+			Env:          wpc.getWorkerEnvironment(workerId, workerCpu, workerMemory, workerGpuType, workerGpuCount, token, workerConfig),
 			VolumeMounts: wpc.getWorkerVolumeMounts(),
 		},
 	}
@@ -296,6 +295,23 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 		BuildVersion:  wpc.config.Worker.ImageTag,
 		Preemptable:   wpc.workerPoolConfig.Preemptable,
 	}
+}
+
+func (wpc *LocalKubernetesWorkerPoolController) workerPodConfig() types.AppConfig {
+	config := wpc.config
+	if config.Worker.UseGatewayServiceHostname {
+		config.GatewayService.GRPC.ExternalHost = config.GatewayService.Host
+		config.GatewayService.GRPC.ExternalPort = config.GatewayService.GRPC.Port
+		config.GatewayService.GRPC.TLS = false
+		config.GatewayService.HTTP.ExternalHost = config.GatewayService.Host
+		config.GatewayService.HTTP.ExternalPort = config.GatewayService.HTTP.Port
+		config.GatewayService.HTTP.TLS = false
+	}
+	if config.Worker.HostNetwork && config.Monitoring.MetricsCollector == string(types.MetricsCollectorPrometheus) {
+		config.Monitoring.MetricsCollector = string(types.MetricsCollectorNone)
+		config.Monitoring.Prometheus.ScrapeWorkers = false
+	}
+	return config
 }
 
 func (wpc *LocalKubernetesWorkerPoolController) createJobInCluster(job *batchv1.Job) error {
@@ -436,7 +452,7 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerVolumeMounts() []corev1
 	return volumeMounts
 }
 
-func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId string, cpu int64, memory int64, gpuType string, gpuCount uint32, token string) []corev1.EnvVar {
+func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId string, cpu int64, memory int64, gpuType string, gpuCount uint32, token string, workerConfig types.AppConfig) []corev1.EnvVar {
 	locality := wpc.workerPoolConfig.ConfigGroup
 	if locality == "" {
 		locality = wpc.config.Cache.Global.DefaultLocality
@@ -577,12 +593,11 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId st
 		envVars = append(envVars, wpc.workerPoolConfig.JobSpec.Env...)
 	}
 
-	// Serialize the AppConfig struct to JSON
-	configJson, err := json.MarshalIndent(wpc.config, "", "  ")
+	configJSON, err := json.MarshalIndent(workerConfig, "", "  ")
 	if err == nil {
 		envVars = append(envVars, corev1.EnvVar{
 			Name:  "CONFIG_JSON",
-			Value: string(configJson),
+			Value: string(configJSON),
 		})
 	}
 

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path"
 	"path/filepath"
@@ -46,6 +47,12 @@ type durableDiskSnapshotBucketStore struct {
 	bucket string
 }
 
+type durableDiskSnapshotURLStore struct {
+	resolveURL  func(context.Context, *pb.GetDiskSnapshotDownloadURLRequest) (*pb.GetDiskSnapshotDownloadURLResponse, error)
+	workspaceID string
+	snapshotID  string
+}
+
 func newDurableDiskSnapshotWriteStore(ctx context.Context, request *types.ContainerRequest) (*durableDiskSnapshotBucketStore, error) {
 	client, err := newDurableDiskSnapshotStorageClient(ctx, request)
 	if err != nil {
@@ -59,11 +66,28 @@ func newDurableDiskSnapshotWriteStore(ctx context.Context, request *types.Contai
 	return &durableDiskSnapshotBucketStore{client: client, bucket: bucketName}, nil
 }
 
-func newDurableDiskSnapshotReadStore(ctx context.Context, request *types.ContainerRequest, bucketName string) (*durableDiskSnapshotBucketStore, error) {
+func newDurableDiskSnapshotReadStore(ctx context.Context, request *types.ContainerRequest, snapshot *types.DiskSnapshot, backendRepoClient pb.BackendRepositoryServiceClient) (durableDiskSnapshotStore, error) {
+	if snapshot == nil {
+		return nil, fmt.Errorf("durable disk snapshot is required")
+	}
+	if snapshot.Public {
+		if backendRepoClient == nil {
+			return nil, fmt.Errorf("backend repository client is required for public disk snapshots")
+		}
+		return &durableDiskSnapshotURLStore{
+			resolveURL: func(ctx context.Context, req *pb.GetDiskSnapshotDownloadURLRequest) (*pb.GetDiskSnapshotDownloadURLResponse, error) {
+				return backendRepoClient.GetDiskSnapshotDownloadURL(ctx, req)
+			},
+			workspaceID: cacheRequestWorkspaceID(request),
+			snapshotID:  snapshot.ExternalId,
+		}, nil
+	}
+
 	client, err := newDurableDiskSnapshotStorageClient(ctx, request)
 	if err != nil {
 		return nil, err
 	}
+	bucketName := snapshot.BucketName
 	if bucketName == "" {
 		bucketName = client.BucketName()
 	}
@@ -96,6 +120,42 @@ func (s *durableDiskSnapshotBucketStore) UploadWithReader(ctx context.Context, k
 
 func (s *durableDiskSnapshotBucketStore) DownloadWithReader(ctx context.Context, key string) (io.ReadCloser, error) {
 	return s.client.StorageClient.DownloadWithReader(ctx, key, s.bucket)
+}
+
+func (s *durableDiskSnapshotURLStore) Exists(context.Context, string) (bool, error) {
+	return false, fmt.Errorf("public disk snapshot store is read-only")
+}
+
+func (s *durableDiskSnapshotURLStore) Upload(context.Context, string, []byte) error {
+	return fmt.Errorf("public disk snapshot store is read-only")
+}
+
+func (s *durableDiskSnapshotURLStore) UploadWithReader(context.Context, string, io.Reader) error {
+	return fmt.Errorf("public disk snapshot store is read-only")
+}
+
+func (s *durableDiskSnapshotURLStore) DownloadWithReader(ctx context.Context, key string) (io.ReadCloser, error) {
+	resp, err := handleGRPCResponse(s.resolveURL(ctx, &pb.GetDiskSnapshotDownloadURLRequest{
+		WorkspaceId: s.workspaceID,
+		SnapshotId:  s.snapshotID,
+		ObjectKey:   key,
+	}))
+	if err != nil {
+		return nil, fmt.Errorf("resolve public disk snapshot object: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, resp.Url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create public disk snapshot request: %w", err)
+	}
+	httpResp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("download public disk snapshot object: %w", err)
+	}
+	if httpResp.StatusCode != http.StatusOK {
+		httpResp.Body.Close()
+		return nil, fmt.Errorf("download public disk snapshot object: status %d", httpResp.StatusCode)
+	}
+	return httpResp.Body, nil
 }
 
 func uploadDurableDiskSnapshotManifest(ctx context.Context, store durableDiskSnapshotStore, manifestKey string, manifest *types.DiskSnapshotManifest) (string, int64, error) {
@@ -149,7 +209,8 @@ func loadDurableDiskSnapshotManifest(ctx context.Context, store durableDiskSnaps
 	return &manifest, nil
 }
 
-func createDurableDiskDirectorySnapshot(ctx context.Context, store durableDiskSnapshotStore, sourceDir, objectPrefix string, snapshot types.DiskSnapshot, chunkSize int64, previous *types.DiskSnapshotManifest) (*types.DiskSnapshot, *types.DiskSnapshotManifest, error) {
+// createDurableDiskDirectorySnapshot returns nil when skipUnchanged finds no changes.
+func createDurableDiskDirectorySnapshot(ctx context.Context, store durableDiskSnapshotStore, sourceDir, objectPrefix string, snapshot types.DiskSnapshot, chunkSize int64, previous *types.DiskSnapshotManifest, skipUnchanged bool) (*types.DiskSnapshot, *types.DiskSnapshotManifest, error) {
 	if store == nil {
 		return nil, nil, fmt.Errorf("durable disk snapshot store is nil")
 	}
@@ -255,6 +316,10 @@ func createDurableDiskDirectorySnapshot(ctx context.Context, store durableDiskSn
 	manifest.LogicalSizeBytes = logicalSizeBytes
 	manifest.StoredSizeBytes = storedSizeBytes
 
+	if skipUnchanged && durableDiskSnapshotContentsMatch(previous, manifest) {
+		return nil, nil, nil
+	}
+
 	manifestKey := path.Join(objectPrefix, "manifest.json")
 	manifestDigest, manifestSizeBytes, err := uploadDurableDiskSnapshotManifest(ctx, store, manifestKey, manifest)
 	if err != nil {
@@ -271,6 +336,46 @@ func createDurableDiskDirectorySnapshot(ctx context.Context, store durableDiskSn
 	snapshot.LogicalSizeBytes = manifest.LogicalSizeBytes
 	snapshot.StoredSizeBytes = manifest.StoredSizeBytes
 	return &snapshot, manifest, nil
+}
+
+func durableDiskSnapshotContentsMatch(previous, current *types.DiskSnapshotManifest) bool {
+	if previous == nil || current == nil {
+		return false
+	}
+	if previous.Format != current.Format || len(previous.Files) != len(current.Files) {
+		return false
+	}
+
+	for i, before := range previous.Files {
+		after := current.Files[i]
+		if before.Path != after.Path ||
+			before.Type != after.Type ||
+			before.Mode != after.Mode ||
+			before.Uid != after.Uid ||
+			before.Gid != after.Gid ||
+			before.SizeBytes != after.SizeBytes ||
+			before.ModTimeUnixNano != after.ModTimeUnixNano ||
+			before.LinkName != after.LinkName ||
+			!durableDiskSnapshotChunksMatch(before.Chunks, after.Chunks) {
+			return false
+		}
+	}
+	return true
+}
+
+// durableDiskSnapshotChunksMatch ignores storage object keys.
+func durableDiskSnapshotChunksMatch(previous, current []types.DiskSnapshotChunk) bool {
+	if len(previous) != len(current) {
+		return false
+	}
+	for i, before := range previous {
+		after := current[i]
+		if before.Digest != after.Digest || before.OffsetBytes != after.OffsetBytes ||
+			before.SizeBytes != after.SizeBytes {
+			return false
+		}
+	}
+	return true
 }
 
 func durableDiskSnapshotFilesByPath(manifest *types.DiskSnapshotManifest) map[string]types.DiskSnapshotFile {
@@ -667,6 +772,7 @@ func durableDiskSnapshotToProto(snapshot *types.DiskSnapshot) *pb.DiskSnapshot {
 		SourceStorageNodeId: snapshot.SourceStorageNodeId,
 		CreatedAt:           timestamppb.New(snapshot.CreatedAt.Time),
 		UpdatedAt:           timestamppb.New(snapshot.UpdatedAt.Time),
+		Public:              snapshot.Public,
 	}
 }
 
@@ -697,5 +803,6 @@ func durableDiskSnapshotFromProto(in *pb.DiskSnapshot) *types.DiskSnapshot {
 		SourcePool:          in.SourcePool,
 		SourceWorkerId:      in.SourceWorkerId,
 		SourceStorageNodeId: in.SourceStorageNodeId,
+		Public:              in.Public,
 	}
 }

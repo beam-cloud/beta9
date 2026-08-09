@@ -1030,7 +1030,7 @@ func (pb *PodProxyBuffer) proxyWebSocket(conn *connection, container container, 
 		Subprotocols: subprotocols,
 	}
 
-	serverConn, _, err := dstDialer.Dial(wsURL.String(), nil)
+	serverConn, _, err := dstDialer.Dial(wsURL.String(), forwardedWebSocketHeaders(conn.ctx.Request()))
 	if err != nil {
 		return err
 	}
@@ -1039,8 +1039,11 @@ func (pb *PodProxyBuffer) proxyWebSocket(conn *connection, container container, 
 	wg := sync.WaitGroup{}
 	wg.Add(2)
 
+	// Close both sockets: ReadMessage consumes keepalive pings and can otherwise block forever.
 	proxyMessages := func(src, dst *websocket.Conn) {
 		defer wg.Done()
+		defer src.Close()
+		defer dst.Close()
 
 		for {
 			messageType, message, err := src.ReadMessage()
@@ -1058,6 +1061,26 @@ func (pb *PodProxyBuffer) proxyWebSocket(conn *connection, container container, 
 
 	wg.Wait()
 	return nil
+}
+
+var webSocketHandshakeHeaders = []string{
+	"Upgrade",
+	"Connection",
+	"Sec-Websocket-Key",
+	"Sec-Websocket-Version",
+	"Sec-Websocket-Extensions",
+	"Sec-Websocket-Protocol",
+}
+
+func forwardedWebSocketHeaders(request *http.Request) http.Header {
+	forwarded := request.Header.Clone()
+	// Preserve the public host for backend origin checks.
+	forwarded.Set("Host", request.Host)
+
+	for _, header := range webSocketHandshakeHeaders {
+		forwarded.Del(header)
+	}
+	return forwarded
 }
 
 func podBackendURL(scheme, address, path, rawQuery string) string {

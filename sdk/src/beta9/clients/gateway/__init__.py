@@ -331,6 +331,8 @@ class DurableDisk(betterproto.Message):
     filesystem: str = betterproto.string_field(4)
     driver: str = betterproto.string_field(5)
     read_only: bool = betterproto.bool_field(6)
+    source_snapshot_id: str = betterproto.string_field(7)
+    """Snapshot used to initialize a disk with no snapshot history."""
 
 
 @dataclass(eq=False, repr=False)
@@ -400,6 +402,8 @@ class GetOrCreateStubRequest(betterproto.Message):
     disks: List["DurableDisk"] = betterproto.message_field(44)
     allow_marketplace: bool = betterproto.bool_field(45)
     checkpoint_trigger: "_types__.CheckpointTrigger" = betterproto.message_field(46)
+    hostname: str = betterproto.string_field(47)
+    """Hostname to set inside the container."""
 
 
 @dataclass(eq=False, repr=False)

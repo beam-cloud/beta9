@@ -14,6 +14,8 @@ service ContainerService {
   rpc ContainerStreamLogs(ContainerStreamLogsRequest) returns (stream ContainerLogEntry) {}
   rpc ContainerArchive(ContainerArchiveRequest) returns (stream ContainerArchiveResponse) {}
   rpc ContainerCheckpoint(ContainerCheckpointRequest) returns (ContainerCheckpointResponse) {}
+  rpc ContainerSnapshotDisks(ContainerSnapshotDisksRequest)
+      returns (ContainerSnapshotDisksResponse) {}
   rpc ContainerSyncWorkspace(gateway.SyncContainerWorkspaceRequest)
       returns (gateway.SyncContainerWorkspaceResponse) {}
   rpc ContainerSandboxExec(ContainerSandboxExecRequest)
@@ -92,6 +94,20 @@ message ContainerCheckpointResponse {
   bool ok = 1;
   string checkpoint_id = 2;
   string error_msg = 3;
+}
+
+message ContainerSnapshotDisksRequest { string container_id = 1; }
+
+message ContainerDiskSnapshot {
+  string snapshot_id = 1;
+  string disk_name = 2;
+  int64 generation = 3;
+}
+
+message ContainerSnapshotDisksResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  repeated ContainerDiskSnapshot snapshots = 3;
 }
 
 message ContainerSandboxExecRequest {

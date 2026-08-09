@@ -3515,6 +3515,10 @@
         },
         "readOnly": {
           "type": "boolean"
+        },
+        "sourceSnapshotId": {
+          "type": "string",
+          "description": "Snapshot used to initialize a disk with no snapshot history."
         }
       }
     },
@@ -3831,6 +3835,10 @@
         },
         "checkpointTrigger": {
           "$ref": "#/definitions/typesCheckpointTrigger"
+        },
+        "hostname": {
+          "type": "string",
+          "description": "Hostname to set inside the container."
         }
       }
     },

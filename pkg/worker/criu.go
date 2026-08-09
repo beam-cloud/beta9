@@ -1463,6 +1463,12 @@ func (s *Worker) shouldCreateCheckpoint(request *types.ContainerRequest) bool {
 	if request == nil || !s.IsCRIUAvailable(request.GpuCount) || !request.CheckpointEnabled {
 		return false
 	}
+
+	// Sandboxes checkpoint only on demand.
+	if request.Stub.Type.Kind() == types.StubTypeSandbox {
+		return false
+	}
+
 	return !hasAvailableCheckpoint(request)
 }
 
