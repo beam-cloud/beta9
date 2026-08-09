@@ -51,8 +51,32 @@ const (
 	workerShutdownRPCTimeout       time.Duration = 5 * time.Second
 	containerStartupTimeout        time.Duration = 15 * time.Minute
 	stuckContainerAbortDelay       time.Duration = 2 * time.Minute
+	runtimeStopTimeout             time.Duration = 5 * time.Second
+	runtimeStopVerifyTimeout       time.Duration = 2 * time.Second
+	runtimeStopVerifyInterval      time.Duration = 100 * time.Millisecond
+	runtimeForceDeleteTimeout      time.Duration = 10 * time.Second
+	runtimeForceStopRetryDelay     time.Duration = time.Second
+	runtimeForceStopAttempts                     = 2
 	gvisorShmemTHPPath                           = "/sys/kernel/mm/transparent_hugepage/shmem_enabled"
 )
+
+type runtimeStopPolicy struct {
+	controlTimeout time.Duration
+	verifyTimeout  time.Duration
+	verifyInterval time.Duration
+	retryDelay     time.Duration
+	deleteTimeout  time.Duration
+	killAttempts   int
+}
+
+var defaultRuntimeStopPolicy = runtimeStopPolicy{
+	controlTimeout: runtimeStopTimeout,
+	verifyTimeout:  runtimeStopVerifyTimeout,
+	verifyInterval: runtimeStopVerifyInterval,
+	retryDelay:     runtimeForceStopRetryDelay,
+	deleteTimeout:  runtimeForceDeleteTimeout,
+	killAttempts:   runtimeForceStopAttempts,
+}
 
 func ensureGVisorShmemTHP(path string) (bool, error) {
 	policy, err := os.ReadFile(path)
@@ -689,10 +713,8 @@ func (s *Worker) runContainerRequest(request *types.ContainerRequest) {
 	log.Info().Str("container_id", containerId).Msg("running container")
 
 	ctx, cancel := context.WithCancel(s.ctx)
-	defer cancel()
 
 	s.registerContainerCancel(containerId, cancel)
-	defer s.unregisterContainerCancel(containerId)
 	go s.cancelContainerIfAlreadyStopping(cancel, containerId)
 
 	if err := s.hydrateRuntimeCredentials(ctx, request); err != nil {
@@ -938,57 +960,74 @@ func (s *Worker) updateContainerStatusOnce(request *types.ContainerRequest) (boo
 	// If container is supposed to be stopped, but isn't gone after TerminationGracePeriod seconds
 	// ensure it is killed after that
 	if status == types.ContainerStatusStopping {
-		_, stopReason := instance.lifecycleState()
-		if stopReason == "" {
-			instance.setStopReason(types.StopContainerReasonUnknown)
-			s.containerInstances.Set(request.ContainerId, instance)
-		}
-		if !instance.StopEscalationStarted.CompareAndSwap(false, true) {
-			return false, nil
-		}
-		go func() {
-			time.Sleep(time.Duration(s.config.Worker.TerminationGracePeriod) * time.Second)
-
-			instance, exists := s.containerInstances.Get(request.ContainerId)
-			if !exists {
-				return
-			}
-			rt := instance.Runtime
-			if rt == nil {
-				rt = s.runtime
-			}
-			stateCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			needsStop := runtimeNeedsGraceKill(stateCtx, rt, request.ContainerId)
-			cancel()
-			if needsStop {
-				log.Info().Str("container_id", request.ContainerId).Int64("grace_period_seconds", s.config.Worker.TerminationGracePeriod).Msg("container still running after stop event")
-				_, stopReason := instance.lifecycleState()
-				s.recordContainerEvent(context.Background(), request, types.EventContainerEventSchema{
-					ID:          types.ContainerEventWorkerStoppingGraceKill,
-					ContainerID: request.ContainerId,
-					Reason:      string(stopReason),
-					Source:      types.EventSourceWorkerStatusHeartbeat.String(),
-					Message:     types.EventMessageStoppingGraceKill.String(),
-					Attrs: map[string]string{
-						types.EventAttrGracePeriodSeconds: fmt.Sprintf("%d", s.config.Worker.TerminationGracePeriod),
-					},
-				})
-				s.stopContainerChan <- stopContainerEvent{
-					ContainerId: request.ContainerId,
-					Kill:        true,
-				}
-			}
-
-			select {
-			case <-time.After(stuckContainerAbortDelay):
-			case <-s.ctx.Done():
-				return
-			}
-			s.abortStuckWorkspaceMount(request)
-		}()
+		s.ensureContainerStopEscalation(request)
 	}
 
 	return false, nil
+}
+
+func (s *Worker) ensureContainerStopEscalation(request *types.ContainerRequest) {
+	instance, exists := s.containerInstances.Get(request.ContainerId)
+	if !exists {
+		return
+	}
+	_, stopReason := instance.lifecycleState()
+	if stopReason == "" {
+		instance.setStopReason(types.StopContainerReasonUnknown)
+		s.containerInstances.Set(request.ContainerId, instance)
+	}
+	if !instance.StopEscalationStarted.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		timer := time.NewTimer(time.Duration(s.config.Worker.TerminationGracePeriod) * time.Second)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-s.ctx.Done():
+			return
+		}
+
+		instance, exists := s.containerInstances.Get(request.ContainerId)
+		if !exists {
+			return
+		}
+		rt := instance.Runtime
+		if rt == nil {
+			rt = s.runtime
+		}
+		stateCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		needsStop := runtimeNeedsGraceKill(stateCtx, rt, request.ContainerId)
+		cancel()
+		if needsStop {
+			log.Info().Str("container_id", request.ContainerId).Int64("grace_period_seconds", s.config.Worker.TerminationGracePeriod).Msg("container still running after stop event")
+			_, stopReason := instance.lifecycleState()
+			s.recordContainerEvent(context.Background(), request, types.EventContainerEventSchema{
+				ID:          types.ContainerEventWorkerStoppingGraceKill,
+				ContainerID: request.ContainerId,
+				Reason:      string(stopReason),
+				Source:      types.EventSourceWorkerStatusHeartbeat.String(),
+				Message:     types.EventMessageStoppingGraceKill.String(),
+				Attrs: map[string]string{
+					types.EventAttrGracePeriodSeconds: fmt.Sprintf("%d", s.config.Worker.TerminationGracePeriod),
+				},
+			})
+			// Do not queue the force kill behind the original stop call. This
+			// goroutine is independent so one wedged runtime control process
+			// cannot prevent every other container from escalating.
+			if !s.forceStopRuntime(request.ContainerId, defaultRuntimeStopPolicy) {
+				s.restartWorkerForStuckRuntime(request.ContainerId)
+				return
+			}
+		}
+
+		select {
+		case <-time.After(stuckContainerAbortDelay):
+		case <-s.ctx.Done():
+			return
+		}
+		s.abortStuckWorkspaceMount(request)
+	}()
 }
 
 // abortStuckWorkspaceMount recovers the shutdown path even when the runtime
@@ -1049,6 +1088,113 @@ func runtimeNeedsGraceKill(ctx context.Context, rt runtime.Runtime, containerID 
 		return !runtimeContainerNotFound(err)
 	}
 	return state.Status == types.RuncContainerStatusRunning
+}
+
+// forceStopRuntime retries a bounded SIGKILL, verifies local runtime state,
+// then uses the runtime's force-delete path as a final container-scoped
+// recovery. It returns false only when the runtime still appears live after
+// every bounded operation, in which case the worker process must be replaced.
+func (s *Worker) forceStopRuntime(containerID string, policy runtimeStopPolicy) bool {
+	if policy.killAttempts < 1 {
+		policy.killAttempts = 1
+	}
+	for attempt := 1; attempt <= policy.killAttempts; attempt++ {
+		if _, exists := s.containerInstances.Get(containerID); !exists {
+			return true
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), policy.controlTimeout)
+		err := s.stopContainerWithContext(ctx, containerID, true)
+		cancel()
+		if err != nil {
+			log.Warn().Str("container_id", containerID).Int("attempt", attempt).Err(err).Msg("force stop attempt failed")
+		}
+		if s.waitForRuntimeStopped(containerID, policy.verifyTimeout, policy.verifyInterval) {
+			return true
+		}
+		if attempt < policy.killAttempts && policy.retryDelay > 0 {
+			timer := time.NewTimer(policy.retryDelay)
+			var workerDone <-chan struct{}
+			if s.ctx != nil {
+				workerDone = s.ctx.Done()
+			}
+			select {
+			case <-timer.C:
+			case <-workerDone:
+				timer.Stop()
+				return true
+			}
+		}
+	}
+
+	instance, exists := s.containerInstances.Get(containerID)
+	if !exists {
+		return true
+	}
+	rt := instance.Runtime
+	if rt == nil {
+		rt = s.runtime
+	}
+	if rt == nil {
+		return false
+	}
+	deleteCtx, deleteCancel := context.WithTimeout(context.Background(), policy.deleteTimeout)
+	err := rt.Delete(deleteCtx, instance.Id, &runtime.DeleteOpts{Force: true})
+	deleteCancel()
+	if err != nil && !runtimeContainerNotFound(err) {
+		log.Warn().Str("container_id", containerID).Err(err).Msg("runtime force delete failed")
+	}
+	return s.waitForRuntimeStopped(containerID, policy.verifyTimeout, policy.verifyInterval)
+}
+
+func (s *Worker) waitForRuntimeStopped(containerID string, timeout, interval time.Duration) bool {
+	instance, exists := s.containerInstances.Get(containerID)
+	if !exists {
+		return true
+	}
+	rt := instance.Runtime
+	if rt == nil {
+		rt = s.runtime
+	}
+	if rt == nil {
+		return true
+	}
+	if timeout <= 0 {
+		timeout = time.Millisecond
+	}
+	if interval <= 0 {
+		interval = time.Millisecond
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		if !runtimeNeedsGraceKill(ctx, rt, instance.Id) {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-ticker.C:
+		}
+	}
+}
+
+func (s *Worker) restartWorkerForStuckRuntime(containerID string) {
+	log.Error().
+		Str("container_id", containerID).
+		Msg("runtime survived bounded SIGKILL and force delete; restarting worker")
+	// Stop new scheduling before ending the worker process. Agent-managed
+	// workers are then restarted by their supervisor; ephemeral workers are
+	// replaced by the pool controller. Neither path releases container
+	// capacity until the old worker process is actually gone.
+	if s.workerRepoClient != nil {
+		s.disableSchedulingForShutdown()
+	}
+	if s.cancel != nil {
+		s.cancel()
+	}
 }
 
 func (s *Worker) processStopContainerEvents() {

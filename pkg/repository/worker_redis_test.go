@@ -33,6 +33,43 @@ func TestNewWorkerRedisRepository(t *testing.T) {
 	assert.NotNil(t, repo)
 }
 
+func TestPrepareWorkerRolloutDoesNotBlockOnStoppingContainerState(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	assert.NoError(t, err)
+	repo := NewWorkerRedisRepositoryForTest(rdb)
+	worker := &types.Worker{
+		Id:         "worker-stopping-rollout",
+		Status:     types.WorkerStatusAvailable,
+		FreeCpu:    1000,
+		FreeMemory: 1000,
+	}
+	assert.NoError(t, repo.AddWorker(worker))
+
+	stoppingKey := common.RedisKeys.SchedulerContainerState("container-stopping-rollout")
+	assert.NoError(t, rdb.HSet(context.Background(), stoppingKey,
+		"container_id", "container-stopping-rollout",
+		"worker_id", worker.Id,
+		"status", string(types.ContainerStatusStopping),
+	).Err())
+	assert.NoError(t, rdb.SAdd(context.Background(), common.RedisKeys.SchedulerContainerWorkerIndex(worker.Id), stoppingKey).Err())
+
+	prepared, err := repo.PrepareWorkerRollout(worker.Id, "generation-stopping")
+	assert.NoError(t, err)
+	assert.True(t, prepared)
+
+	runningKey := common.RedisKeys.SchedulerContainerState("container-running-rollout")
+	assert.NoError(t, rdb.HSet(context.Background(), runningKey,
+		"container_id", "container-running-rollout",
+		"worker_id", worker.Id,
+		"status", string(types.ContainerStatusRunning),
+	).Err())
+	assert.NoError(t, rdb.SAdd(context.Background(), common.RedisKeys.SchedulerContainerWorkerIndex(worker.Id), runningKey).Err())
+
+	prepared, err = repo.PrepareWorkerRollout(worker.Id, "generation-running")
+	assert.NoError(t, err)
+	assert.False(t, prepared)
+}
+
 func TestAddAndRemoveWorker(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	assert.NotNil(t, rdb)
@@ -66,6 +103,56 @@ func TestAddAndRemoveWorker(t *testing.T) {
 
 	_, ok := err.(*types.ErrWorkerNotFound)
 	assert.True(t, ok) // assert that error is of type ErrWorkerNotFound
+}
+
+func TestAddWorkerDoesNotOverwriteLiveCapacityWithStaleSnapshot(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	assert.NotNil(t, rdb)
+	assert.NoError(t, err)
+
+	repo := NewWorkerRedisRepositoryForTest(rdb)
+	worker := &types.Worker{
+		Id:                  "worker-stale-reconcile",
+		Status:              types.WorkerStatusAvailable,
+		TotalCpu:            8_000,
+		TotalMemory:         8_000,
+		TotalGpuCount:       8,
+		FreeCpu:             8_000,
+		FreeMemory:          8_000,
+		FreeGpuCount:        8,
+		Runtime:             "runc",
+		ControlPlaneManaged: true,
+	}
+	assert.NoError(t, repo.AddWorker(worker))
+
+	stale, err := repo.GetWorkerById(worker.Id)
+	assert.NoError(t, err)
+	assert.NoError(t, repo.UpdateWorkerCapacity(worker, &types.ContainerRequest{
+		Cpu:      1_000,
+		Memory:   100,
+		Gpu:      "RTX4090",
+		GpuCount: 2,
+	}, types.RemoveCapacity))
+
+	// Simulate managed-pool reconciliation using a snapshot read before the
+	// scheduler reserved resources. Spec changes must still apply, but the
+	// stale free-capacity fields must not.
+	stale.Runtime = "gvisor"
+	stale.TotalCpu = 10_000
+	stale.TotalMemory = 10_000
+	stale.TotalGpuCount = 10
+	stale.FreeCpu = stale.TotalCpu
+	stale.FreeMemory = stale.TotalMemory
+	stale.FreeGpuCount = stale.TotalGpuCount
+	assert.NoError(t, repo.AddWorker(stale))
+
+	updated, err := repo.GetWorkerById(worker.Id)
+	assert.NoError(t, err)
+	assert.Equal(t, "gvisor", updated.Runtime)
+	assert.Equal(t, int64(9_000), updated.FreeCpu)
+	assert.Equal(t, int64(9_875), updated.FreeMemory)
+	assert.Equal(t, uint32(8), updated.FreeGpuCount)
+	assert.Equal(t, int64(1), updated.ResourceVersion)
 }
 
 func TestRemoveWorkerRequeuesPendingWorkerRequests(t *testing.T) {

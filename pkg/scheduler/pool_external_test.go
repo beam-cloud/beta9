@@ -154,10 +154,15 @@ func TestAgentWorkerPoolControllerAddWorkerCreatesDesiredSlot(t *testing.T) {
 		t.Fatalf("second worker = %q, want stable worker %q", secondWorker.Id, worker.Id)
 	}
 
-	secondWorker.FreeCpu -= 2000
-	secondWorker.FreeMemory -= 1024
-	secondWorker.FreeGpuCount--
-	if err := workerRepo.AddWorker(secondWorker); err != nil {
+	// Reserve resources through the scheduler's atomic capacity path. AddWorker
+	// is a controller spec refresh and must not accept a stale free-capacity
+	// snapshot for an existing worker.
+	if err := workerRepo.UpdateWorkerCapacity(secondWorker, &types.ContainerRequest{
+		Cpu:      2000,
+		Memory:   1024,
+		Gpu:      "A10G",
+		GpuCount: 1,
+	}, types.RemoveCapacity); err != nil {
 		t.Fatal(err)
 	}
 	machine.CPUCount = 16
@@ -177,8 +182,9 @@ func TestAgentWorkerPoolControllerAddWorkerCreatesDesiredSlot(t *testing.T) {
 	if resizedWorker.TotalCpu != 16000 || resizedWorker.FreeCpu != 14000 {
 		t.Fatalf("resized worker cpu = %d/%d, want 16000/14000", resizedWorker.TotalCpu, resizedWorker.FreeCpu)
 	}
-	if resizedWorker.TotalMemory != 65536 || resizedWorker.FreeMemory != 64512 {
-		t.Fatalf("resized worker memory = %d/%d, want 65536/64512", resizedWorker.TotalMemory, resizedWorker.FreeMemory)
+	// Memory capacity reserves the runtime's 1.25x cgroup hard limit.
+	if resizedWorker.TotalMemory != 65536 || resizedWorker.FreeMemory != 64256 {
+		t.Fatalf("resized worker memory = %d/%d, want 65536/64256", resizedWorker.TotalMemory, resizedWorker.FreeMemory)
 	}
 	if resizedWorker.TotalGpuCount != 4 || resizedWorker.FreeGpuCount != 3 {
 		t.Fatalf("resized worker gpu = %d/%d, want 4/3", resizedWorker.TotalGpuCount, resizedWorker.FreeGpuCount)
