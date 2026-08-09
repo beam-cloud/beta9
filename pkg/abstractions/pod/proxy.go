@@ -1039,7 +1039,7 @@ func (pb *PodProxyBuffer) proxyWebSocket(conn *connection, container container, 
 	wg := sync.WaitGroup{}
 	wg.Add(2)
 
-	// Closing either side unblocks both copy loops.
+	// Close both sockets: ReadMessage consumes keepalive pings and can otherwise block forever.
 	proxyMessages := func(src, dst *websocket.Conn) {
 		defer wg.Done()
 		defer src.Close()

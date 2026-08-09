@@ -330,3 +330,42 @@ exit 1
 	}
 	require.Contains(t, output.buffer.String(), "criu failed: type RESTORE")
 }
+
+func TestRuncRestoreClosesOutputWhenRestoredStateIsUnavailable(t *testing.T) {
+	dir := t.TempDir()
+	runcPath := filepath.Join(dir, "runc")
+	require.NoError(t, os.WriteFile(runcPath, []byte(`#!/bin/sh
+set -eu
+for arg in "$@"; do
+  case "$arg" in
+    restore)
+      (sleep 1; echo late-container-output) &
+      exit 0
+      ;;
+    state)
+      exit 1
+      ;;
+  esac
+done
+exit 1
+`), 0o755))
+
+	rt, err := NewRunc(Config{RuncPath: runcPath})
+	require.NoError(t, err)
+
+	output := &synchronizedBuffer{}
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	_, err = rt.Restore(ctx, "container-1", &RestoreOpts{
+		ImagePath:    filepath.Join(dir, "checkpoint"),
+		BundlePath:   filepath.Join(dir, "bundle"),
+		OutputWriter: output,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "restored container state was unavailable")
+
+	// The failed restore must close the read end before returning. Otherwise
+	// the detached child can deliver output after the failure.
+	time.Sleep(650 * time.Millisecond)
+	require.Empty(t, output.String())
+}

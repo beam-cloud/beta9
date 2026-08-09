@@ -188,10 +188,8 @@ func (s *BackendRepositoryService) diskSnapshotDownloadURL(ctx context.Context, 
 	if req == nil {
 		return "", fmt.Errorf("request is required")
 	}
-	if authInfo, ok := auth.AuthInfoFromContext(ctx); ok && authInfo != nil && authInfo.Token != nil && authInfo.Token.TokenType == types.TokenTypeWorkerPrivate {
-		if authInfo.Workspace == nil || authInfo.Workspace.ExternalId != req.WorkspaceId {
-			return "", fmt.Errorf("worker token cannot access workspace %q", req.WorkspaceId)
-		}
+	if err := authorizeDiskSnapshotWorkspace(ctx, req.WorkspaceId); err != nil {
+		return "", err
 	}
 
 	workspace, err := s.backendRepo.GetWorkspaceByExternalId(ctx, req.WorkspaceId)
@@ -227,6 +225,20 @@ func (s *BackendRepositoryService) diskSnapshotDownloadURL(ctx context.Context, 
 	return storageClient.StorageClient.GeneratePresignedGetURL(ctx, req.ObjectKey, int64(diskSnapshotURLExpiry.Seconds()), snapshot.BucketName)
 }
 
+func authorizeDiskSnapshotWorkspace(ctx context.Context, workspaceID string) error {
+	authInfo, ok := auth.AuthInfoFromContext(ctx)
+	if !ok || authInfo == nil || authInfo.Token == nil {
+		return fmt.Errorf("authorization is required")
+	}
+	if authInfo.Token.TokenType == types.TokenTypeClusterAdmin || authInfo.Token.TokenType == types.TokenTypeWorker {
+		return nil
+	}
+	if authInfo.Workspace == nil || authInfo.Workspace.ExternalId != workspaceID {
+		return fmt.Errorf("token cannot access workspace %q", workspaceID)
+	}
+	return nil
+}
+
 func (s *BackendRepositoryService) diskSnapshotObjectAllowed(ctx context.Context, snapshot *types.DiskSnapshot, storageClient *clients.WorkspaceStorageClient, objectKey string) (bool, error) {
 	if !diskSnapshotObjectKeyValid(snapshot, objectKey) {
 		return false, nil
@@ -244,21 +256,15 @@ func (s *BackendRepositoryService) diskSnapshotObjectAllowed(ctx context.Context
 
 func (s *BackendRepositoryService) diskSnapshotChunkKeys(ctx context.Context, snapshot *types.DiskSnapshot, storageClient *clients.WorkspaceStorageClient) (map[string]struct{}, error) {
 	now := time.Now()
-	s.diskSnapshotObjectMu.Lock()
-	entry, ok := s.diskSnapshotObjectCache[snapshot.ExternalId]
-	s.diskSnapshotObjectMu.Unlock()
-	if ok && entry.digest == snapshot.ManifestDigest && now.Before(entry.expiresAt) {
-		return entry.keys, nil
+	if keys, ok := s.getCachedDiskSnapshotChunkKeys(snapshot, now); ok {
+		return keys, nil
 	}
 
 	cacheKey := snapshot.ExternalId + ":" + snapshot.ManifestDigest
 	value, err, _ := s.diskSnapshotObjectGroup.Do(cacheKey, func() (any, error) {
 		now := time.Now()
-		s.diskSnapshotObjectMu.Lock()
-		entry, ok := s.diskSnapshotObjectCache[snapshot.ExternalId]
-		s.diskSnapshotObjectMu.Unlock()
-		if ok && entry.digest == snapshot.ManifestDigest && now.Before(entry.expiresAt) {
-			return entry.keys, nil
+		if keys, ok := s.getCachedDiskSnapshotChunkKeys(snapshot, now); ok {
+			return keys, nil
 		}
 
 		data, err := storageClient.StorageClient.Download(ctx, snapshot.ManifestKey, snapshot.BucketName)
@@ -296,6 +302,17 @@ func (s *BackendRepositoryService) diskSnapshotChunkKeys(ctx context.Context, sn
 		return nil, err
 	}
 	return value.(map[string]struct{}), nil
+}
+
+func (s *BackendRepositoryService) getCachedDiskSnapshotChunkKeys(snapshot *types.DiskSnapshot, now time.Time) (map[string]struct{}, bool) {
+	s.diskSnapshotObjectMu.Lock()
+	defer s.diskSnapshotObjectMu.Unlock()
+
+	entry, ok := s.diskSnapshotObjectCache[snapshot.ExternalId]
+	if !ok || entry.digest != snapshot.ManifestDigest || !now.Before(entry.expiresAt) {
+		return nil, false
+	}
+	return entry.keys, true
 }
 
 func diskSnapshotObjectKeyValid(snapshot *types.DiskSnapshot, objectKey string) bool {

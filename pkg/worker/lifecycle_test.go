@@ -897,7 +897,9 @@ func TestSpecFromRequestSetsHostnameOnlyWhenRequested(t *testing.T) {
 		{name: "runsc default", runtime: types.ContainerRuntimeGvisor.String(), wantHostname: "runsc"},
 		{name: "requested", runtime: types.ContainerRuntimeGvisor.String(), hostname: "brisk-canyon-a1b2", wantHostname: "brisk-canyon-a1b2"},
 		{name: "sanitized", runtime: types.ContainerRuntimeGvisor.String(), hostname: "MyApp/v1.2", wantHostname: "myapp-v1-2"},
+		{name: "trimmed", runtime: types.ContainerRuntimeGvisor.String(), hostname: "--wrapped__", wantHostname: "wrapped"},
 		{name: "invalid", runtime: types.ContainerRuntimeRunc.String(), hostname: "///", wantHostname: "runc"},
+		{name: "truncated", runtime: types.ContainerRuntimeGvisor.String(), hostname: strings.Repeat("a", 80), wantHostname: strings.Repeat("a", maxHostnameLength)},
 		{name: "bounded", runtime: types.ContainerRuntimeGvisor.String(), hostname: strings.Repeat("a", maxHostnameLength-1) + "-b", wantHostname: strings.Repeat("a", maxHostnameLength-1) + "b"},
 	}
 
