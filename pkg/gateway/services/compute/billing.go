@@ -26,10 +26,28 @@ const (
 
 var errManagedBillingUnavailable = errors.New("managed compute billing is not configured")
 
+var errManagedBillingRouteUnavailable = errors.New("managed compute billing route could not be resolved")
+
 type managedComputeBillingClient interface {
 	CheckLaunchCredit(context.Context, billingCreditRequest) (billingDecision, error)
 	CheckBalance(context.Context, string) (billingDecision, error)
 	RecordManagedUsage(context.Context, managedUsage) error
+}
+
+type workspaceBillingRouteResolver interface {
+	GetWorkspaceByExternalId(context.Context, string) (types.Workspace, error)
+}
+
+type routedManagedBilling struct {
+	defaultClient managedComputeBillingClient
+	routes        []managedBillingRoute
+	resolver      workspaceBillingRouteResolver
+}
+
+type managedBillingRoute struct {
+	workspaceIDs        map[string]struct{}
+	workspaceNamePrefix string
+	client              managedComputeBillingClient
 }
 
 type billingCreditRequest struct {
@@ -88,6 +106,98 @@ func newManagedComputeBillingClient(config types.ManagedComputeBillingConfig) ma
 		return disabledManagedBilling{}
 	}
 	return noopManagedBilling{minimumCents: config.MinimumCreditCentsOrDefault()}
+}
+
+func newRoutedManagedComputeBillingClient(
+	config types.ManagedComputeBillingConfig,
+	resolver workspaceBillingRouteResolver,
+) managedComputeBillingClient {
+	defaultClient := newManagedComputeBillingClient(config)
+	if len(config.Routes) == 0 {
+		return defaultClient
+	}
+
+	routes := make([]managedBillingRoute, 0, len(config.Routes))
+	for _, configured := range config.Routes {
+		workspaceIDs := make(map[string]struct{}, len(configured.WorkspaceIDs))
+		for _, workspaceID := range configured.WorkspaceIDs {
+			if workspaceID = strings.TrimSpace(workspaceID); workspaceID != "" {
+				workspaceIDs[workspaceID] = struct{}{}
+			}
+		}
+		prefix := strings.TrimSpace(configured.WorkspaceNamePrefix)
+		if len(workspaceIDs) == 0 && prefix == "" {
+			continue
+		}
+		routes = append(routes, managedBillingRoute{
+			workspaceIDs:        workspaceIDs,
+			workspaceNamePrefix: prefix,
+			client:              newManagedComputeBillingClient(configured.BillingConfig(config)),
+		})
+	}
+	if len(routes) == 0 {
+		return defaultClient
+	}
+	return &routedManagedBilling{defaultClient: defaultClient, routes: routes, resolver: resolver}
+}
+
+func (r *routedManagedBilling) clientFor(ctx context.Context, workspaceID string) (managedComputeBillingClient, error) {
+	for _, route := range r.routes {
+		if _, ok := route.workspaceIDs[workspaceID]; ok {
+			return route.client, nil
+		}
+	}
+
+	needsWorkspace := false
+	for _, route := range r.routes {
+		if route.workspaceNamePrefix != "" {
+			needsWorkspace = true
+			break
+		}
+	}
+	if !needsWorkspace {
+		return r.defaultClient, nil
+	}
+	if r.resolver == nil {
+		return nil, errManagedBillingRouteUnavailable
+	}
+	workspace, err := r.resolver.GetWorkspaceByExternalId(ctx, workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", errManagedBillingRouteUnavailable, err)
+	}
+	for _, route := range r.routes {
+		if route.workspaceNamePrefix != "" && strings.HasPrefix(workspace.Name, route.workspaceNamePrefix) {
+			return route.client, nil
+		}
+	}
+	return r.defaultClient, nil
+}
+
+func (r *routedManagedBilling) CheckLaunchCredit(
+	ctx context.Context,
+	req billingCreditRequest,
+) (billingDecision, error) {
+	client, err := r.clientFor(ctx, req.WorkspaceID)
+	if err != nil {
+		return billingDecision{OK: false, ErrorCode: launchErrorBillingUnavailable, RequiredCents: req.RequiredCents}, err
+	}
+	return client.CheckLaunchCredit(ctx, req)
+}
+
+func (r *routedManagedBilling) CheckBalance(ctx context.Context, workspaceID string) (billingDecision, error) {
+	client, err := r.clientFor(ctx, workspaceID)
+	if err != nil {
+		return billingDecision{OK: false, ErrorCode: launchErrorBillingUnavailable}, err
+	}
+	return client.CheckBalance(ctx, workspaceID)
+}
+
+func (r *routedManagedBilling) RecordManagedUsage(ctx context.Context, usage managedUsage) error {
+	client, err := r.clientFor(ctx, usage.WorkspaceID)
+	if err != nil {
+		return err
+	}
+	return client.RecordManagedUsage(ctx, usage)
 }
 
 type noopManagedBilling struct {

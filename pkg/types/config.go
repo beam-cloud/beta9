@@ -901,16 +901,43 @@ type ManagedComputeBYOCAWSConfig struct {
 }
 
 type ManagedComputeBillingConfig struct {
-	Mode               string        `key:"mode" json:"mode"`
-	Endpoint           string        `key:"endpoint" json:"endpoint"`
-	AuthToken          string        `key:"authToken" json:"auth_token"`
-	Required           bool          `key:"required" json:"required"`
-	Timeout            time.Duration `key:"timeout" json:"timeout"`
-	ReconcileInterval  time.Duration `key:"reconcileInterval" json:"reconcile_interval"`
-	MinimumCreditCents int64         `key:"minimumCreditCents" json:"minimum_credit_cents"`
+	Mode               string                             `key:"mode" json:"mode"`
+	Endpoint           string                             `key:"endpoint" json:"endpoint"`
+	AuthToken          string                             `key:"authToken" json:"auth_token"`
+	Routes             []ManagedComputeBillingRouteConfig `key:"routes" json:"routes"`
+	Required           bool                               `key:"required" json:"required"`
+	Timeout            time.Duration                      `key:"timeout" json:"timeout"`
+	ReconcileInterval  time.Duration                      `key:"reconcileInterval" json:"reconcile_interval"`
+	MinimumCreditCents int64                              `key:"minimumCreditCents" json:"minimum_credit_cents"`
 	// FailureGracePeriod is how long balance checks may fail before managed
 	// reservations are terminated.
 	FailureGracePeriod time.Duration `key:"failureGracePeriod" json:"failure_grace_period"`
+}
+
+// ManagedComputeBillingRouteConfig keeps whitelabel workspaces on their own
+// ledger while a shared Beta9 cluster continues billing every other workspace
+// through the deployment-wide endpoint. Exact IDs are for pre-existing
+// workspaces; newly provisioned tenants should use a trusted name prefix.
+type ManagedComputeBillingRouteConfig struct {
+	WorkspaceIDs        []string `key:"workspaceIDs" json:"workspace_ids"`
+	WorkspaceNamePrefix string   `key:"workspaceNamePrefix" json:"workspace_name_prefix"`
+	Endpoint            string   `key:"endpoint" json:"endpoint"`
+	AuthToken           string   `key:"authToken" json:"auth_token"`
+	MinimumCreditCents  int64    `key:"minimumCreditCents" json:"minimum_credit_cents"`
+}
+
+func (r ManagedComputeBillingRouteConfig) BillingConfig(base ManagedComputeBillingConfig) ManagedComputeBillingConfig {
+	base.Routes = nil
+	if strings.TrimSpace(r.Endpoint) != "" {
+		base.Endpoint = r.Endpoint
+	}
+	if strings.TrimSpace(r.AuthToken) != "" {
+		base.AuthToken = r.AuthToken
+	}
+	if r.MinimumCreditCents > 0 {
+		base.MinimumCreditCents = r.MinimumCreditCents
+	}
+	return base
 }
 
 func (c ManagedComputeBillingConfig) MinimumCreditCentsOrDefault() int64 {

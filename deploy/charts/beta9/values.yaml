@@ -26,6 +26,7 @@ config:
       mode: noop
       endpoint: ""
       authToken: ""
+      routes: []
       required: false
       timeout: 5s
       reconcileInterval: 1m

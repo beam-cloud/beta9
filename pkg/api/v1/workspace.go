@@ -41,6 +41,10 @@ func NewWorkspaceGroup(g *echo.Group, backendRepo repository.BackendRepository, 
 }
 
 type CreateWorkspaceRequest struct {
+	// NamePrefix is accepted only on this cluster-admin route. It marks
+	// whitelabel tenants for workspace-scoped services such as billing without
+	// exposing a user-selectable billing switch.
+	NamePrefix string `json:"name_prefix" validate:"omitempty,lowercase,alphanum,max=24"`
 }
 
 func (g *WorkspaceGroup) CreateWorkspace(ctx echo.Context) error {
@@ -53,8 +57,12 @@ func (g *WorkspaceGroup) CreateWorkspace(ctx echo.Context) error {
 	if err := ctx.Bind(&request); err != nil {
 		return HTTPBadRequest("Invalid payload")
 	}
+	request.NamePrefix = strings.TrimSpace(request.NamePrefix)
+	if err := validator.New().Struct(request); err != nil {
+		return HTTPBadRequest("Invalid workspace name prefix")
+	}
 
-	workspace, err := g.backendRepo.CreateWorkspace(ctx.Request().Context())
+	workspace, err := g.backendRepo.CreateWorkspace(ctx.Request().Context(), request.NamePrefix)
 	if err != nil {
 		return HTTPInternalServerError("Unable to create workspace")
 	}

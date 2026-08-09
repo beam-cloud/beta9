@@ -73,7 +73,7 @@ func New(opts Options) *Service {
 		managedPoolRepo:      opts.ManagedPoolRepo,
 		keyEventManager:      opts.KeyEventManager,
 		redisClient:          opts.RedisClient,
-		billing:              newManagedComputeBillingClient(opts.Config.ManagedCompute.Billing),
+		billing:              newRoutedManagedComputeBillingClient(opts.Config.ManagedCompute.Billing, opts.BackendRepo),
 		rentalUsage:          clients.NewMarketplaceUsageClient(opts.Config.ManagedCompute.Billing),
 		tailscale:            opts.Tailscale,
 		routePrewarm:         routePrewarmer{lastAttempt: map[string]time.Time{}},
