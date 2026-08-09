@@ -15,80 +15,19 @@ import (
 // build context. For V1 builds and V2 builds without Dockerfiles, we hash all
 // the individual build options that will be used to construct the image.
 func getImageID(opts *BuildOpts) (string, error) {
-	// Preserve every pre-secret image ID byte-for-byte. Adding an empty field to
-	// a hashstructure input changes the hash even though no build semantics
-	// changed, which would invalidate the entire existing image cache.
-	if opts.BuildSecretsFingerprint == "" {
-		if opts.ClipVersion == uint32(types.ClipVersion2) && opts.Dockerfile != "" {
-			hashInput := struct {
-				ClipVersion    uint32
-				Dockerfile     string
-				BuildCtxObject string
-				EnvVars        []string
-			}{
-				ClipVersion:    opts.ClipVersion,
-				Dockerfile:     opts.Dockerfile,
-				BuildCtxObject: opts.BuildCtxObject,
-				EnvVars:        opts.EnvVars,
-			}
-			hash, err := hashstructure.Hash(hashInput, hashstructure.FormatV2, nil)
-			if err != nil {
-				return "", err
-			}
-			return fmt.Sprintf("%016x", hash), nil
-		}
-
-		hashInput := struct {
-			ClipVersion       uint32
-			BaseImageName     string
-			BaseImageTag      string
-			BaseImageDigest   string
-			BaseImageRegistry string
-			ExistingImageUri  string
-			PythonVersion     string
-			PythonPackages    []string
-			Commands          []string
-			BuildSteps        []BuildStep
-			EnvVars           []string
-			Dockerfile        string
-			BuildCtxObject    string
-		}{
-			ClipVersion:       opts.ClipVersion,
-			BaseImageName:     opts.BaseImageName,
-			BaseImageTag:      opts.BaseImageTag,
-			BaseImageDigest:   opts.BaseImageDigest,
-			BaseImageRegistry: opts.BaseImageRegistry,
-			ExistingImageUri:  opts.ExistingImageUri,
-			PythonVersion:     opts.PythonVersion,
-			PythonPackages:    opts.PythonPackages,
-			Commands:          opts.Commands,
-			BuildSteps:        opts.BuildSteps,
-			EnvVars:           opts.EnvVars,
-			Dockerfile:        opts.Dockerfile,
-			BuildCtxObject:    opts.BuildCtxObject,
-		}
-		hash, err := hashstructure.Hash(hashInput, hashstructure.FormatV2, nil)
-		if err != nil {
-			return "", err
-		}
-		return fmt.Sprintf("%016x", hash), nil
-	}
-
 	// For V2 builds with a Dockerfile, the Dockerfile contains all the build instructions
 	// Base the image ID primarily on the Dockerfile content and build context
 	if opts.ClipVersion == uint32(types.ClipVersion2) && opts.Dockerfile != "" {
 		hashInput := struct {
-			ClipVersion             uint32
-			Dockerfile              string
-			BuildCtxObject          string
-			EnvVars                 []string
-			BuildSecretsFingerprint string
+			ClipVersion    uint32
+			Dockerfile     string
+			BuildCtxObject string
+			EnvVars        []string
 		}{
-			ClipVersion:             opts.ClipVersion,
-			Dockerfile:              opts.Dockerfile,
-			BuildCtxObject:          opts.BuildCtxObject,
-			EnvVars:                 opts.EnvVars,
-			BuildSecretsFingerprint: opts.BuildSecretsFingerprint,
+			ClipVersion:    opts.ClipVersion,
+			Dockerfile:     opts.Dockerfile,
+			BuildCtxObject: opts.BuildCtxObject,
+			EnvVars:        opts.EnvVars,
 		}
 
 		hash, err := hashstructure.Hash(hashInput, hashstructure.FormatV2, nil)
@@ -102,35 +41,33 @@ func getImageID(opts *BuildOpts) (string, error) {
 	// For V1 builds and V2 builds without Dockerfiles, hash all build options
 	// Order matters for consistency, so we use a struct with defined field order
 	hashInput := struct {
-		ClipVersion             uint32
-		BaseImageName           string
-		BaseImageTag            string
-		BaseImageDigest         string
-		BaseImageRegistry       string
-		ExistingImageUri        string
-		PythonVersion           string
-		PythonPackages          []string
-		Commands                []string
-		BuildSteps              []BuildStep
-		EnvVars                 []string
-		Dockerfile              string
-		BuildCtxObject          string
-		BuildSecretsFingerprint string
+		ClipVersion       uint32
+		BaseImageName     string
+		BaseImageTag      string
+		BaseImageDigest   string
+		BaseImageRegistry string
+		ExistingImageUri  string
+		PythonVersion     string
+		PythonPackages    []string
+		Commands          []string
+		BuildSteps        []BuildStep
+		EnvVars           []string
+		Dockerfile        string
+		BuildCtxObject    string
 	}{
-		ClipVersion:             opts.ClipVersion,
-		BaseImageName:           opts.BaseImageName,
-		BaseImageTag:            opts.BaseImageTag,
-		BaseImageDigest:         opts.BaseImageDigest,
-		BaseImageRegistry:       opts.BaseImageRegistry,
-		ExistingImageUri:        opts.ExistingImageUri,
-		PythonVersion:           opts.PythonVersion,
-		PythonPackages:          opts.PythonPackages,
-		Commands:                opts.Commands,
-		BuildSteps:              opts.BuildSteps,
-		EnvVars:                 opts.EnvVars,
-		Dockerfile:              opts.Dockerfile,
-		BuildCtxObject:          opts.BuildCtxObject,
-		BuildSecretsFingerprint: opts.BuildSecretsFingerprint,
+		ClipVersion:       opts.ClipVersion,
+		BaseImageName:     opts.BaseImageName,
+		BaseImageTag:      opts.BaseImageTag,
+		BaseImageDigest:   opts.BaseImageDigest,
+		BaseImageRegistry: opts.BaseImageRegistry,
+		ExistingImageUri:  opts.ExistingImageUri,
+		PythonVersion:     opts.PythonVersion,
+		PythonPackages:    opts.PythonPackages,
+		Commands:          opts.Commands,
+		BuildSteps:        opts.BuildSteps,
+		EnvVars:           opts.EnvVars,
+		Dockerfile:        opts.Dockerfile,
+		BuildCtxObject:    opts.BuildCtxObject,
 	}
 
 	hash, err := hashstructure.Hash(hashInput, hashstructure.FormatV2, nil)

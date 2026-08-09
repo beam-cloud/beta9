@@ -2,7 +2,6 @@ package abstractions
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 
@@ -140,20 +139,7 @@ func durableDiskSnapshotFallbackNeeded(ctx context.Context, repos DurableDiskPla
 		return false, nil
 	}
 	_, err := latestRestorableDurableDiskSnapshots(ctx, repos, workspace, disks)
-	if err == nil {
-		return true, nil
-	}
-
-	// Snapshot fallback is opportunistic, never mandatory. A brand-new durable
-	// disk has no snapshot to restore, so keep it pinned to the requested pool and
-	// let that pool's worker become schedulable. Treating this expected state as
-	// a placement error makes a just-connected on-demand worker race a lagging
-	// pool-health snapshot and permanently fail its first workload.
-	var snapshotNotFound *types.ErrDiskSnapshotNotFound
-	if errors.As(err, &snapshotNotFound) {
-		return false, nil
-	}
-	return false, err
+	return err == nil, err
 }
 
 func latestRestorableDurableDiskSnapshots(ctx context.Context, repos DurableDiskPlacementRepos, workspace *types.Workspace, disks []*pb.DurableDisk) ([]*types.DiskSnapshot, error) {
@@ -218,14 +204,10 @@ func privatePoolHasAvailableWorkers(ctx context.Context, repos DurableDiskPlacem
 	}
 	if repos.WorkerPoolRepo != nil {
 		state, err := repos.WorkerPoolRepo.GetWorkerPoolState(ctx, poolName)
-		if err == nil && state != nil && state.ReadyMachines > 0 {
-			return true
+		if err == nil && state != nil {
+			return state.ReadyMachines > 0
 		}
 	}
-	// Pool health is periodically cached and can briefly report zero after an
-	// agent has connected. A positive cache entry is sufficient, but a zero is
-	// not authoritative; confirm against the live worker registry before
-	// deciding snapshot fallback is needed.
 	workers, err := repos.WorkerRepo.GetAllWorkersInPool(poolName)
 	if err != nil {
 		return true

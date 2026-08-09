@@ -2,54 +2,27 @@ package scheduler
 
 import (
 	"encoding/json"
+	"strconv"
 	"testing"
 
 	"github.com/beam-cloud/beta9/pkg/types"
+	corev1 "k8s.io/api/core/v1"
 )
 
 func TestLocalWorkerPrometheusConfigurationSupportsHostNetworkBinPacking(t *testing.T) {
+	prometheus := string(types.MetricsCollectorPrometheus)
+	none := string(types.MetricsCollectorNone)
+	openmeter := string(types.MetricsCollectorOpenMeter)
 	tests := []struct {
-		name                string
-		collector           string
-		hostNetwork         bool
-		scrapeWorkers       bool
-		wantScrape          string
-		wantPortLabel       bool
-		wantWorkerCollector string
+		name, collector            string
+		hostNetwork, scrapeWorkers bool
+		wantPort, wantConfigScrape bool
+		wantCollector              string
 	}{
-		{
-			name:                "host network disables pull collector",
-			collector:           string(types.MetricsCollectorPrometheus),
-			hostNetwork:         true,
-			scrapeWorkers:       true,
-			wantScrape:          "false",
-			wantPortLabel:       false,
-			wantWorkerCollector: string(types.MetricsCollectorNone),
-		},
-		{
-			name:                "pod network retains pull collector without declaring a port",
-			collector:           string(types.MetricsCollectorPrometheus),
-			scrapeWorkers:       true,
-			wantScrape:          "true",
-			wantPortLabel:       true,
-			wantWorkerCollector: string(types.MetricsCollectorPrometheus),
-		},
-		{
-			name:                "disabled scraping does not advertise a port",
-			collector:           string(types.MetricsCollectorPrometheus),
-			wantScrape:          "false",
-			wantPortLabel:       false,
-			wantWorkerCollector: string(types.MetricsCollectorPrometheus),
-		},
-		{
-			name:                "openmeter remains unchanged",
-			collector:           string(types.MetricsCollectorOpenMeter),
-			hostNetwork:         true,
-			scrapeWorkers:       true,
-			wantScrape:          "false",
-			wantPortLabel:       false,
-			wantWorkerCollector: string(types.MetricsCollectorOpenMeter),
-		},
+		{"host network", prometheus, true, true, false, false, none},
+		{"pod network", prometheus, false, true, true, true, prometheus},
+		{"scraping disabled", prometheus, false, false, false, false, prometheus},
+		{"openmeter", openmeter, true, true, false, true, openmeter},
 	}
 
 	for _, tt := range tests {
@@ -59,89 +32,62 @@ func TestLocalWorkerPrometheusConfigurationSupportsHostNetworkBinPacking(t *test
 				config: types.AppConfig{
 					Monitoring: types.MonitoringConfig{
 						MetricsCollector: tt.collector,
-						Prometheus: types.PrometheusConfig{
-							Port:          9090,
-							ScrapeWorkers: tt.scrapeWorkers,
-						},
+						Prometheus:       types.PrometheusConfig{Port: 9090, ScrapeWorkers: tt.scrapeWorkers},
 					},
 					Worker: types.WorkerConfig{HostNetwork: tt.hostNetwork},
 				},
 			}
 
 			job, _ := controller.createWorkerJob("worker-1", 0, 0, "", 0, "token")
-			if got := job.Spec.Template.Labels[PrometheusScrapeKey]; got != tt.wantScrape {
-				t.Fatalf("scrape label = %q, want %q", got, tt.wantScrape)
-			}
-			_, hasPortLabel := job.Spec.Template.Labels[PrometheusPortKey]
-			if hasPortLabel != tt.wantPortLabel {
-				t.Fatalf("port label present = %t, want %t", hasPortLabel, tt.wantPortLabel)
-			}
-
 			container := job.Spec.Template.Spec.Containers[0]
-			if len(container.Ports) != 0 {
-				t.Fatalf("worker declares ports that constrain bin packing: %+v", container.Ports)
+			if got := job.Spec.Template.Labels[PrometheusScrapeKey]; got != strconv.FormatBool(tt.wantPort) {
+				t.Fatalf("scrape label = %q", got)
+			}
+			_, hasPort := job.Spec.Template.Labels[PrometheusPortKey]
+			if hasPort != tt.wantPort || len(container.Ports) != 0 {
+				t.Fatalf("port label = %t, ports = %+v", hasPort, container.Ports)
 			}
 
-			var configJSON string
-			for _, env := range container.Env {
-				if env.Name == "CONFIG_JSON" {
-					configJSON = env.Value
-					break
-				}
-			}
-			if configJSON == "" {
-				t.Fatal("worker CONFIG_JSON environment variable is missing")
-			}
-			var workerConfig types.AppConfig
-			if err := json.Unmarshal([]byte(configJSON), &workerConfig); err != nil {
-				t.Fatalf("unmarshal worker config: %v", err)
-			}
-			if got := workerConfig.Monitoring.MetricsCollector; got != tt.wantWorkerCollector {
-				t.Fatalf("worker metrics collector = %q, want %q", got, tt.wantWorkerCollector)
+			config := workerConfigFromEnvironment(t, container.Env)
+			if got := config.Monitoring; got.MetricsCollector != tt.wantCollector || got.Prometheus.ScrapeWorkers != tt.wantConfigScrape {
+				t.Fatalf("worker monitoring config = %+v", got)
 			}
 		})
 	}
 }
 
 func TestLocalWorkerConfigUsesGatewayServiceHostname(t *testing.T) {
-	controller := &LocalKubernetesWorkerPoolController{
-		config: types.AppConfig{
-			GatewayService: types.GatewayServiceConfig{
-				Host: "beta9-gateway",
-				GRPC: types.GRPCConfig{
-					ExternalHost: "0.tcp.ngrok.io",
-					ExternalPort: 12345,
-					TLS:          true,
-					Port:         1993,
-				},
-				HTTP: types.HTTPConfig{
-					ExternalHost: "public.example.com",
-					ExternalPort: 443,
-					TLS:          true,
-					Port:         1994,
-				},
-			},
-			Worker: types.WorkerConfig{UseGatewayServiceHostname: true},
-		},
-	}
+	controller := &LocalKubernetesWorkerPoolController{config: types.AppConfig{
+		GatewayService: types.GatewayServiceConfig{Host: "beta9-gateway"},
+		Worker:         types.WorkerConfig{UseGatewayServiceHostname: true},
+	}}
+	controller.config.GatewayService.GRPC = types.GRPCConfig{ExternalHost: "0.tcp.ngrok.io", ExternalPort: 12345, TLS: true, Port: 1993}
+	controller.config.GatewayService.HTTP = types.HTTPConfig{ExternalHost: "public.example.com", ExternalPort: 443, TLS: true, Port: 1994}
 
-	workerConfig := controller.workerPodConfig()
-	if got := workerConfig.GatewayService.GRPC.ExternalHost; got != "beta9-gateway" {
-		t.Fatalf("worker gRPC host = %q, want in-cluster gateway", got)
+	job, _ := controller.createWorkerJob("worker-1", 0, 0, "", 0, "token")
+	config := workerConfigFromEnvironment(t, job.Spec.Template.Spec.Containers[0].Env)
+	grpc := config.GatewayService.GRPC
+	if grpc.ExternalHost != "beta9-gateway" || grpc.ExternalPort != 1993 || grpc.TLS {
+		t.Fatalf("worker gRPC config = %+v", grpc)
 	}
-	if got := workerConfig.GatewayService.GRPC.ExternalPort; got != 1993 {
-		t.Fatalf("worker gRPC port = %d, want 1993", got)
+	http := config.GatewayService.HTTP
+	if http.ExternalHost != "beta9-gateway" || http.ExternalPort != 1994 || http.TLS {
+		t.Fatalf("worker HTTP config = %+v", http)
 	}
-	if workerConfig.GatewayService.GRPC.TLS {
-		t.Fatal("worker in-cluster gRPC endpoint unexpectedly enables TLS")
+}
+
+func workerConfigFromEnvironment(t *testing.T, env []corev1.EnvVar) types.AppConfig {
+	t.Helper()
+	for _, variable := range env {
+		if variable.Name != "CONFIG_JSON" {
+			continue
+		}
+		var config types.AppConfig
+		if err := json.Unmarshal([]byte(variable.Value), &config); err != nil {
+			t.Fatalf("unmarshal worker config: %v", err)
+		}
+		return config
 	}
-	if got := workerConfig.GatewayService.HTTP.ExternalHost; got != "beta9-gateway" {
-		t.Fatalf("worker HTTP host = %q, want in-cluster gateway", got)
-	}
-	if got := workerConfig.GatewayService.HTTP.ExternalPort; got != 1994 {
-		t.Fatalf("worker HTTP port = %d, want 1994", got)
-	}
-	if workerConfig.GatewayService.HTTP.TLS {
-		t.Fatal("worker in-cluster HTTP endpoint unexpectedly enables TLS")
-	}
+	t.Fatal("CONFIG_JSON is missing")
+	return types.AppConfig{}
 }

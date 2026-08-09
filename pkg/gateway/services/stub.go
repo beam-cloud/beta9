@@ -247,13 +247,13 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 	}
 
 	// Get secrets
-	for _, secret := range in.Secrets {
-		secret, err := gws.backendRepo.GetSecretByName(ctx, authInfo.Workspace, secret.Name)
+	for _, requestedSecret := range in.Secrets {
+		secret, err := gws.backendRepo.GetSecretByName(ctx, authInfo.Workspace, requestedSecret.Name)
 		if err != nil {
 			if err == sql.ErrNoRows {
 				return &pb.GetOrCreateStubResponse{
 					Ok:     false,
-					ErrMsg: fmt.Sprintf("Secret %q does not exist in this workspace.", secret.Name),
+					ErrMsg: fmt.Sprintf("Secret %q does not exist in this workspace.", requestedSecret.Name),
 				}, nil
 			}
 

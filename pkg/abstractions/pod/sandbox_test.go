@@ -119,42 +119,75 @@ func TestWaitForSandboxReadyReturnsWorkerFailure(t *testing.T) {
 	}
 }
 
-func TestSandboxExecFailureMessageKeepsTransientErrorsRetryable(t *testing.T) {
-	got := sandboxExecFailureMessage(status.Error(codes.Unavailable, "transport is closing"))
-	if got != "Failed to connect to sandbox" {
-		t.Fatalf("transient exec error message = %q, want retryable connect message", got)
+func TestSandboxExecFailureMessage(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"transient", status.Error(codes.Unavailable, "transport is closing"), "Failed to connect to sandbox"},
+		{"command", errors.New("permission denied"), "Failed to execute command"},
+		{"connect", sandboxConnectionError{err: errors.New("container not found")}, "Failed to connect to sandbox"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := sandboxExecFailureMessage(tt.err); got != tt.want {
+				t.Fatalf("sandboxExecFailureMessage() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
-func TestSandboxExecFailureMessageKeepsCommandErrorsGeneric(t *testing.T) {
-	got := sandboxExecFailureMessage(errors.New("permission denied"))
-	if got != "Failed to execute command" {
-		t.Fatalf("command exec error message = %q, want generic command failure", got)
+func TestSandboxExecRequiresAuth(t *testing.T) {
+	_, err := (&GenericPodService{}).SandboxExec(context.Background(), &pb.PodSandboxExecRequest{})
+	if status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("SandboxExec() error = %v, want unauthenticated", err)
 	}
 }
 
-func TestSandboxExecFailureMessageKeepsConnectErrorsRetryable(t *testing.T) {
-	got := sandboxExecFailureMessage(sandboxConnectionError{err: errors.New("container not found")})
-	if got != "Failed to connect to sandbox" {
-		t.Fatalf("connect error message = %q, want retryable connect message", got)
-	}
-}
-
-type sandboxSecretBackendRepository struct {
+type sandboxBackendRepository struct {
 	repository.BackendRepository
-	secrets []types.Secret
+	secrets   []types.Secret
+	secretErr error
+	stub      *types.StubWithRelated
+	stubErr   error
 }
 
-func (r *sandboxSecretBackendRepository) GetSecretsByNameDecrypted(
+func (r *sandboxBackendRepository) GetSecretsByNameDecrypted(
 	context.Context,
 	*types.Workspace,
 	[]string,
 ) ([]types.Secret, error) {
-	return r.secrets, nil
+	return r.secrets, r.secretErr
+}
+
+func (r *sandboxBackendRepository) GetStubByExternalId(context.Context, string, ...types.QueryFilter) (*types.StubWithRelated, error) {
+	return r.stub, r.stubErr
+}
+
+func (r *sandboxBackendRepository) GetCheckpointById(context.Context, string) (*types.Checkpoint, error) {
+	return &types.Checkpoint{StubId: 1}, nil
+}
+
+func (r *sandboxBackendRepository) GetStubById(context.Context, uint, ...types.QueryFilter) (*types.StubWithRelated, error) {
+	return &types.StubWithRelated{Stub: types.Stub{ExternalId: "source-stub"}}, nil
+}
+
+func TestSandboxExecReportsSecretResolutionFailure(t *testing.T) {
+	service := &GenericPodService{backendRepo: &sandboxBackendRepository{secretErr: errors.New("decrypt failed")}}
+	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
+		Token:     &types.Token{Key: "token"},
+		Workspace: &types.Workspace{ExternalId: "workspace-1"},
+	})
+
+	resp, err := service.SandboxExec(ctx, &pb.PodSandboxExecRequest{Secrets: []string{"HF_TOKEN"}})
+	if err != nil || resp.Ok || resp.ErrorMsg != "Failed to resolve secrets" {
+		t.Fatalf("SandboxExec() = (%#v, %v)", resp, err)
+	}
 }
 
 func TestSandboxExecEnvironmentInjectsOnlySecretsThatExist(t *testing.T) {
-	service := &GenericPodService{backendRepo: &sandboxSecretBackendRepository{
+	service := &GenericPodService{backendRepo: &sandboxBackendRepository{
 		secrets: []types.Secret{{Name: "OPENAI_API_KEY", Value: "workspace-value"}},
 	}}
 	env, err := service.sandboxExecEnvironment(
@@ -191,80 +224,68 @@ func (r *sandboxStatusContainerRepository) GetContainerExitCode(string) (int, er
 	return r.exitCode, r.exitCodeErr
 }
 
-type sandboxStatusBackendRepository struct {
-	repository.BackendRepository
-	stub *types.StubWithRelated
-	err  error
-}
-
-func (r *sandboxStatusBackendRepository) GetStubByExternalId(context.Context, string, ...types.QueryFilter) (*types.StubWithRelated, error) {
-	return r.stub, r.err
-}
-
-func TestSandboxContainerStatusRecoversExitedContainer(t *testing.T) {
+func TestSandboxContainerStatusAfterStateExpiry(t *testing.T) {
 	const containerId = "sandbox-11111111-2222-3333-4444-555555555555-deadbeef"
-	stateErr := &types.ErrContainerStateNotFound{ContainerId: containerId}
-	containerRepo := &sandboxStatusContainerRepository{stateErr: stateErr, exitCode: 1}
-	service := &GenericPodService{
-		containerRepo: containerRepo,
-		backendRepo: &sandboxStatusBackendRepository{stub: &types.StubWithRelated{
-			Stub: types.Stub{ExternalId: "11111111-2222-3333-4444-555555555555", WorkspaceId: 7},
-		}},
+	ownedStub := &types.StubWithRelated{Stub: types.Stub{WorkspaceId: 7}}
+	tests := []struct {
+		name         string
+		workspaceID  uint
+		stub         *types.StubWithRelated
+		exitCode     int
+		exitCodeErr  error
+		wantExited   bool
+		wantStateErr bool
+		wantExitRead bool
+	}{
+		{name: "exited", workspaceID: 7, stub: ownedStub, exitCode: 1, wantExited: true, wantExitRead: true},
+		{name: "other workspace", workspaceID: 8, stub: ownedStub},
+		{name: "expired exit code", workspaceID: 7, stub: ownedStub, exitCodeErr: errors.New("not found"), wantStateErr: true, wantExitRead: true},
+		{name: "missing stub", workspaceID: 7, wantStateErr: true},
 	}
 
-	resp, err := service.sandboxContainerStatus(context.Background(), containerId, &auth.AuthInfo{
-		Workspace: &types.Workspace{Id: 7, ExternalId: "workspace-7"},
-	})
-	if err != nil {
-		t.Fatalf("sandboxContainerStatus returned error: %v", err)
-	}
-	if !resp.Ok || resp.Status != string(types.SandboxStatusExited) || resp.ExitCode != 1 {
-		t.Fatalf("sandboxContainerStatus response = %#v, want exited with code 1", resp)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stateErr := &types.ErrContainerStateNotFound{ContainerId: containerId}
+			containerRepo := &sandboxStatusContainerRepository{
+				stateErr: stateErr, exitCode: tt.exitCode, exitCodeErr: tt.exitCodeErr,
+			}
+			service := &GenericPodService{
+				containerRepo: containerRepo,
+				backendRepo:   &sandboxBackendRepository{stub: tt.stub},
+			}
+			resp, err := service.sandboxContainerStatus(context.Background(), containerId, &auth.AuthInfo{
+				Workspace: &types.Workspace{Id: tt.workspaceID},
+			})
+
+			switch {
+			case tt.wantExited:
+				if err != nil || resp == nil || !resp.Ok || resp.Status != string(types.SandboxStatusExited) || resp.ExitCode != int32(tt.exitCode) {
+					t.Fatalf("sandboxContainerStatus() = (%#v, %v)", resp, err)
+				}
+			case tt.wantStateErr:
+				if resp != nil || !errors.Is(err, stateErr) {
+					t.Fatalf("sandboxContainerStatus() = (%#v, %v)", resp, err)
+				}
+			default:
+				if resp != nil || err == nil {
+					t.Fatalf("sandboxContainerStatus() = (%#v, %v)", resp, err)
+				}
+			}
+			if containerRepo.exitCodeRead != tt.wantExitRead {
+				t.Fatalf("exit code read = %t, want %t", containerRepo.exitCodeRead, tt.wantExitRead)
+			}
+		})
 	}
 }
 
-func TestSandboxContainerStatusDoesNotLeakExitCodeAcrossWorkspaces(t *testing.T) {
-	const containerId = "sandbox-11111111-2222-3333-4444-555555555555-deadbeef"
-	containerRepo := &sandboxStatusContainerRepository{
-		stateErr: &types.ErrContainerStateNotFound{ContainerId: containerId},
-		exitCode: 23,
-	}
-	service := &GenericPodService{
-		containerRepo: containerRepo,
-		backendRepo: &sandboxStatusBackendRepository{stub: &types.StubWithRelated{
-			Stub: types.Stub{ExternalId: "11111111-2222-3333-4444-555555555555", WorkspaceId: 7},
-		}},
-	}
+func TestCreatePodRejectsMissingForkStub(t *testing.T) {
+	checkpointID := "checkpoint-1"
+	service := &GenericPodService{backendRepo: &sandboxBackendRepository{}}
+	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{Workspace: &types.Workspace{Id: 7}})
 
-	resp, err := service.sandboxContainerStatus(context.Background(), containerId, &auth.AuthInfo{
-		Workspace: &types.Workspace{Id: 8, ExternalId: "workspace-8"},
-	})
-	if resp != nil || err == nil {
-		t.Fatalf("sandboxContainerStatus = (%#v, %v), want workspace error", resp, err)
-	}
-	if containerRepo.exitCodeRead {
-		t.Fatal("sandboxContainerStatus read exit code before verifying workspace ownership")
-	}
-}
-
-func TestSandboxContainerStatusKeepsNotFoundWhenExitCodeExpired(t *testing.T) {
-	const containerId = "sandbox-11111111-2222-3333-4444-555555555555-deadbeef"
-	stateErr := &types.ErrContainerStateNotFound{ContainerId: containerId}
-	service := &GenericPodService{
-		containerRepo: &sandboxStatusContainerRepository{
-			stateErr:    stateErr,
-			exitCodeErr: errors.New("exit code not found"),
-		},
-		backendRepo: &sandboxStatusBackendRepository{stub: &types.StubWithRelated{
-			Stub: types.Stub{ExternalId: "11111111-2222-3333-4444-555555555555", WorkspaceId: 7},
-		}},
-	}
-
-	resp, err := service.sandboxContainerStatus(context.Background(), containerId, &auth.AuthInfo{
-		Workspace: &types.Workspace{Id: 7, ExternalId: "workspace-7"},
-	})
-	if resp != nil || !errors.Is(err, stateErr) {
-		t.Fatalf("sandboxContainerStatus = (%#v, %v), want original state error", resp, err)
+	resp, err := service.CreatePod(ctx, &pb.CreatePodRequest{CheckpointId: &checkpointID, StubId: "fork-stub"})
+	if err != nil || resp.Ok {
+		t.Fatalf("CreatePod() = (%#v, %v)", resp, err)
 	}
 }
 
@@ -435,7 +456,10 @@ func TestSandboxKillRejectsMissingAuthContext(t *testing.T) {
 	}
 }
 
-const sandboxReconnectTarget = 500 * time.Millisecond
+const (
+	sandboxReconnectTarget  = 500 * time.Millisecond
+	sandboxReconnectTimeout = 5 * time.Second
+)
 
 type sandboxReconnectTestRepository struct {
 	repository.ContainerRepository
@@ -499,6 +523,7 @@ type sandboxReconnectStatusServer struct {
 
 	mu                   sync.Mutex
 	unavailableResponses int
+	statusCalls          atomic.Int32
 }
 
 func (s *sandboxReconnectStatusServer) failNextStatusCalls(count int) {
@@ -511,6 +536,7 @@ func (s *sandboxReconnectStatusServer) ContainerSandboxStatus(
 	context.Context,
 	*pb.ContainerSandboxStatusRequest,
 ) (*pb.ContainerSandboxStatusResponse, error) {
+	s.statusCalls.Add(1)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.unavailableResponses > 0 {
@@ -624,7 +650,7 @@ func TestSandboxConnectBurstRedialsDroppedTransportUnderTarget(t *testing.T) {
 	const burstSize = 100
 
 	harness := newSandboxReconnectTestHarness(t)
-	primeCtx, primeCancel := context.WithTimeout(harness.context, time.Second)
+	primeCtx, primeCancel := context.WithTimeout(harness.context, sandboxReconnectTimeout)
 	defer primeCancel()
 	harness.connect(t, primeCtx)
 	firstConnection := harness.listener.nextConnection(t)
@@ -638,7 +664,7 @@ func TestSandboxConnectBurstRedialsDroppedTransportUnderTarget(t *testing.T) {
 		go func() {
 			defer waitGroup.Done()
 			<-start
-			callCtx, cancel := context.WithTimeout(harness.context, time.Second)
+			callCtx, cancel := context.WithTimeout(harness.context, sandboxReconnectTimeout)
 			defer cancel()
 			resp, err := harness.service.SandboxConnect(callCtx, &pb.PodSandboxConnectRequest{
 				ContainerId: harness.containerID,
@@ -682,14 +708,14 @@ func TestSandboxConnectBurstRedialsDroppedTransportUnderTarget(t *testing.T) {
 
 func TestSandboxConnectApplicationUnavailableKeepsSharedClient(t *testing.T) {
 	harness := newSandboxReconnectTestHarness(t)
-	primeCtx, primeCancel := context.WithTimeout(harness.context, time.Second)
+	primeCtx, primeCancel := context.WithTimeout(harness.context, sandboxReconnectTimeout)
 	defer primeCancel()
 	harness.connect(t, primeCtx)
 	_ = harness.listener.nextConnection(t)
 	cachedClient := harness.cachedClient(t)
 	harness.server.failNextStatusCalls(1)
 
-	retryCtx, retryCancel := context.WithTimeout(harness.context, time.Second)
+	retryCtx, retryCancel := context.WithTimeout(harness.context, sandboxReconnectTimeout)
 	defer retryCancel()
 	started := time.Now()
 	harness.connect(t, retryCtx)
@@ -704,13 +730,16 @@ func TestSandboxConnectApplicationUnavailableKeepsSharedClient(t *testing.T) {
 	if retriedClient := harness.cachedClient(t); retriedClient != cachedClient {
 		t.Fatal("application Unavailable replaced the cached ContainerClient")
 	}
+	if got := harness.server.statusCalls.Load(); got != 3 {
+		t.Fatalf("status calls = %d, want prime, failure, and retry", got)
+	}
 }
 
 func TestSandboxConnectRetriesInitialAddressLookupUnderTarget(t *testing.T) {
 	harness := newSandboxReconnectTestHarness(t)
 	harness.repository.addressFailures.Store(1)
 
-	connectCtx, cancel := context.WithTimeout(harness.context, time.Second)
+	connectCtx, cancel := context.WithTimeout(harness.context, sandboxReconnectTimeout)
 	defer cancel()
 	started := time.Now()
 	harness.connect(t, connectCtx)

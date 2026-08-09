@@ -213,12 +213,7 @@ func (r *Runc) Restore(ctx context.Context, containerID string, opts *RestoreOpt
 
 	cmd := exec.Command(r.runcCommand(), r.restoreArgs(containerID, opts)...)
 
-	// `runc restore --detach` gives the restored init its own standard streams,
-	// so a stream left nil here becomes /dev/null opened in the worker's mount
-	// namespace. The container cannot see that mount, and every later
-	// checkpoint of it dies on the dangling reference: "Can't lookup mount for
-	// fd=0 path=/dev/null". A pipe belongs to no mount at all, which is both
-	// what the container gets on first boot and what CRIU can dump.
+	// Detached restores inherit these checkpoint-safe pipes as standard streams.
 	stdinRead, stdinWrite, err := os.Pipe()
 	if err != nil {
 		return -1, fmt.Errorf("create restore stdin pipe: %w", err)
@@ -239,9 +234,7 @@ func (r *Runc) Restore(ctx context.Context, containerID string, opts *RestoreOpt
 		_ = outputWrite.Close()
 		return -1, err
 	}
-	// The restored process inherits the read end, but there is no source of
-	// stdin data. Close the parent's writer immediately so reads in the
-	// restored container observe EOF instead of blocking until Restore exits.
+	// Close the stdin writer so the restored process observes EOF.
 	_ = stdinWrite.Close()
 	_ = outputWrite.Close()
 

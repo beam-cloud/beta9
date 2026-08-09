@@ -291,9 +291,7 @@ type ContainerRequest struct {
 	CheckpointTrigger *CheckpointTrigger `json:"checkpoint_trigger,omitempty"`
 	TaskId            string             `json:"task_id,omitempty"`
 	DeliveryToken     string             `json:"-" go2proto:"ignore"`
-	// Hostname reported inside the container. Empty leaves the runtime's own
-	// name in place. It has to be stable across a checkpoint and its restore,
-	// since the dumped process reads the value back from its UTS namespace.
+	// Hostname preserved across checkpoint and restore.
 	Hostname string `json:"hostname,omitempty"`
 }
 

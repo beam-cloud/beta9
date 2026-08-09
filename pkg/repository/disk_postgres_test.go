@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
@@ -9,6 +10,17 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/stretchr/testify/require"
 )
+
+func TestGetDiskSnapshotOnlySharesAvailableSnapshots(t *testing.T) {
+	repo, mock := NewBackendPostgresRepositoryForTest()
+	mock.ExpectQuery(`public = TRUE AND status = \$3`).
+		WithArgs(uint(7), "snapshot-1", types.DiskSnapshotStatusAvailable).
+		WillReturnError(sql.ErrNoRows)
+
+	_, err := repo.GetDiskSnapshot(context.Background(), 7, "snapshot-1")
+	require.ErrorAs(t, err, new(*types.ErrDiskSnapshotNotFound))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
 
 func TestCreateDiskSnapshotStoresManifestReference(t *testing.T) {
 	repo, mock := NewBackendPostgresRepositoryForTest()

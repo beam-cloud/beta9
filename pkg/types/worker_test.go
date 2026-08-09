@@ -6,10 +6,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// A fork declares a brand new disk and names the snapshot it should start out
-// holding. That name only matters if it survives the trip to the worker, and
-// when it did not the fork came up with an empty disk and no error anywhere to
-// say why.
 func TestMountProtoRoundTripKeepsTheDurableDiskSeed(t *testing.T) {
 	mount := &Mount{
 		LocalPath: "/var/lib/beta9/durable-disks/workspace/the-fork-disk",

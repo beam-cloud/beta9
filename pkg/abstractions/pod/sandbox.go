@@ -45,12 +45,21 @@ func sandboxAuthInfoFromContext(ctx context.Context) (*auth.AuthInfo, bool) {
 }
 
 func (s *GenericPodService) SandboxExec(ctx context.Context, in *pb.PodSandboxExecRequest) (*pb.PodSandboxExecResponse, error) {
-	authInfo, _ := auth.AuthInfoFromContext(ctx)
+	if in == nil {
+		return nil, status.Error(codes.InvalidArgument, "missing sandbox exec request")
+	}
+
+	authInfo, ok := sandboxAuthInfoFromContext(ctx)
+	if !ok {
+		return nil, status.Error(codes.Unauthenticated, "invalid or missing token")
+	}
+
 	env, err := s.sandboxExecEnvironment(ctx, authInfo.Workspace, in.Env, in.Secrets)
 	if err != nil {
+		log.Error().Err(err).Str("workspace_id", authInfo.Workspace.ExternalId).Msg("failed to resolve sandbox exec secrets")
 		return &pb.PodSandboxExecResponse{
 			Ok:       false,
-			ErrorMsg: sandboxExecFailureMessage(err),
+			ErrorMsg: "Failed to resolve secrets",
 		}, nil
 	}
 	in.Env = env
@@ -80,10 +89,6 @@ func (s *GenericPodService) SandboxExec(ctx context.Context, in *pb.PodSandboxEx
 	}, nil
 }
 
-// Resolves secret names at the last responsible moment, inside Beta9 and in
-// the authenticated workspace. Tama never receives the values. An absent name
-// is deliberately not an error: agent launchers print a provider-specific
-// warning and still start, which is much more useful than a generic exec error.
 func (s *GenericPodService) sandboxExecEnvironment(
 	ctx context.Context,
 	workspace *types.Workspace,
@@ -236,10 +241,6 @@ func (s *GenericPodService) sandboxContainerStatus(ctx context.Context, containe
 	}
 }
 
-// sandboxExitedStatus recovers terminal status after the scheduler has removed a
-// container's short-lived state. Exit codes outlive container state briefly, but
-// must only be exposed after resolving the container's stub and verifying its
-// workspace ownership.
 func (s *GenericPodService) sandboxExitedStatus(ctx context.Context, containerId string, authInfo *auth.AuthInfo, stateErr error) (*pb.PodSandboxStatusResponse, error) {
 	if authInfo == nil || authInfo.Workspace == nil {
 		return nil, errors.New("missing auth info")
@@ -253,6 +254,9 @@ func (s *GenericPodService) sandboxExitedStatus(ctx context.Context, containerId
 	stub, err := s.backendRepo.GetStubByExternalId(ctx, stubId)
 	if err != nil {
 		return nil, err
+	}
+	if stub == nil {
+		return nil, stateErr
 	}
 	if stub.WorkspaceId != authInfo.Workspace.Id {
 		return nil, errors.New("invalid workspace")

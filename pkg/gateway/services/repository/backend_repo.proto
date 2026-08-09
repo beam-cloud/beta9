@@ -19,6 +19,8 @@ service BackendRepositoryService {
   rpc GetLatestDiskSnapshot(GetLatestDiskSnapshotRequest)
       returns (GetLatestDiskSnapshotResponse);
   rpc GetDiskSnapshot(GetDiskSnapshotRequest) returns (GetDiskSnapshotResponse);
+  rpc GetDiskSnapshotDownloadURL(GetDiskSnapshotDownloadURLRequest)
+      returns (GetDiskSnapshotDownloadURLResponse);
 }
 
 message GetCheckpointByIdRequest { string checkpoint_id = 1; }
@@ -103,6 +105,7 @@ message DiskSnapshot {
   google.protobuf.Timestamp created_at = 22;
   google.protobuf.Timestamp updated_at = 23;
   google.protobuf.Timestamp completed_at = 24;
+  bool public = 25;
 }
 
 message CreateDiskSnapshotRequest {
@@ -136,5 +139,17 @@ message GetDiskSnapshotRequest {
 message GetDiskSnapshotResponse {
   bool ok = 1;
   DiskSnapshot snapshot = 2;
+  string error_msg = 3;
+}
+
+message GetDiskSnapshotDownloadURLRequest {
+  string workspace_id = 1;
+  string snapshot_id = 2;
+  string object_key = 3;
+}
+
+message GetDiskSnapshotDownloadURLResponse {
+  bool ok = 1;
+  string url = 2;
   string error_msg = 3;
 }

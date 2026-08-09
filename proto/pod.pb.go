@@ -189,8 +189,7 @@ type PodSandboxExecRequest struct {
 	Cwd         string            `protobuf:"bytes,3,opt,name=cwd,proto3" json:"cwd,omitempty"`
 	Env         map[string]string `protobuf:"bytes,4,rep,name=env,proto3" json:"env,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
 	Wait        bool              `protobuf:"varint,5,opt,name=wait,proto3" json:"wait,omitempty"`
-	// Names resolved in the authenticated workspace. Missing names are ignored
-	// so the launched command can emit its own useful provider-specific warning.
+	// Secret names to resolve in the authenticated workspace.
 	Secrets []string `protobuf:"bytes,6,rep,name=secrets,proto3" json:"secrets,omitempty"`
 }
 

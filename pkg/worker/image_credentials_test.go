@@ -345,40 +345,6 @@ func TestPullImageArchiveFromBrokeredOriginUsesURL(t *testing.T) {
 	require.Equal(t, "image-a", repo.requests[0].ImageId)
 }
 
-func TestPullImageArchiveFromBrokeredOriginRefreshesFailedCachedURL(t *testing.T) {
-	stale := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "gone", http.StatusGone)
-	}))
-	defer stale.Close()
-	fresh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte("fresh-archive"))
-	}))
-	defer fresh.Close()
-
-	request := &types.ContainerRequest{WorkspaceId: "workspace-id", StubId: "stub-id", ImageId: "image-a"}
-	key := originCredentialsKey(request.WorkspaceId, request.StubId, request.ImageId, "")
-	repo := &fakeImageCredentialWorkerRepo{resp: &pb.GetCacheOriginCredentialsResponse{
-		Ok: true, ImageArchiveUrl: fresh.URL + "/image.rclip",
-	}}
-	client := &ImageClient{
-		workerRepoClient: repo,
-		originCredsCache: map[string]*originCredentials{
-			key: {imageArchiveURL: stale.URL + "/image.rclip", fetchedAt: time.Now()},
-		},
-	}
-	path := filepath.Join(t.TempDir(), "image.rclip.tmp")
-
-	pulled, sourceRegistry, err := client.pullImageArchiveFromBrokeredOrigin(context.Background(), path, request)
-
-	require.NoError(t, err)
-	require.True(t, pulled)
-	require.Nil(t, sourceRegistry)
-	require.Len(t, repo.requests, 1, "the failed cached URL should force one immediate refresh")
-	got, err := os.ReadFile(path)
-	require.NoError(t, err)
-	require.Equal(t, []byte("fresh-archive"), got)
-}
-
 func TestPullImageFromRegistryAgentPoolsRequireBrokeredOrigin(t *testing.T) {
 	for _, mode := range []types.PoolMode{types.PoolModePrivate, types.PoolModeMarketplace, types.PoolModeExternal} {
 		t.Run(string(mode), func(t *testing.T) {

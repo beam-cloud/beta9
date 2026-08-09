@@ -26,13 +26,9 @@ type BuildOpts struct {
 	ForceRebuild       bool
 	EnvVars            []string
 	BuildSecrets       []string
-	// A keyed digest of build secret names and values. It participates in the
-	// image identity without exposing secret material through an image ID or
-	// logs, and changes when a workspace rotates a secret.
-	BuildSecretsFingerprint string
-	Gpu                     string
-	IgnorePython            bool
-	ClipVersion             uint32
+	Gpu                string
+	IgnorePython       bool
+	ClipVersion        uint32
 }
 
 func (o *BuildOpts) String() string {

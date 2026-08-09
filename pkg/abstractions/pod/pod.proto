@@ -188,8 +188,7 @@ message PodSandboxExecRequest {
   string cwd = 3;
   map<string, string> env = 4;
   bool wait = 5;
-  // Names resolved in the authenticated workspace. Missing names are ignored
-  // so the launched command can emit its own useful provider-specific warning.
+  // Secret names to resolve in the authenticated workspace.
   repeated string secrets = 6;
 }
 

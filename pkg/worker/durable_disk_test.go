@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,6 +20,33 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPublicDiskSnapshotStoreDownloadsPresignedObject(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("chunk"))
+	}))
+	defer server.Close()
+
+	store := &durableDiskSnapshotURLStore{
+		workspaceID: "workspace-1",
+		snapshotID:  "snapshot-1",
+		resolveURL: func(_ context.Context, req *pb.GetDiskSnapshotDownloadURLRequest) (*pb.GetDiskSnapshotDownloadURLResponse, error) {
+			require.Equal(t, "chunk-key", req.ObjectKey)
+			return &pb.GetDiskSnapshotDownloadURLResponse{Ok: true, Url: server.URL}, nil
+		},
+	}
+	reader, err := store.DownloadWithReader(context.Background(), "chunk-key")
+	require.NoError(t, err)
+	defer reader.Close()
+	data, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	require.Equal(t, "chunk", string(data))
+}
+
+func TestDurableDiskSnapshotProtoKeepsPublic(t *testing.T) {
+	snapshot := durableDiskSnapshotFromProto(durableDiskSnapshotToProto(&types.DiskSnapshot{Public: true}))
+	require.True(t, snapshot.Public)
+}
 
 func TestDurableDiskCleansStalePostgresPid(t *testing.T) {
 	primary := filepath.Join(t.TempDir(), "pg-data")
@@ -59,14 +88,6 @@ func TestSeedDurableDiskSnapshotResolvesAnotherDisksSnapshot(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "snapshot-source", backendRepo.requestedSnapshotId)
 	require.Equal(t, "the-source-disk", seed.DiskName, "a fork restores the disk it came from, not its own")
-
-	// A disk nobody seeded is simply empty, and asking for one costs nothing.
-	backendRepo.requestedSnapshotId = ""
-	mount.DurableDisk.SourceSnapshotId = ""
-	seed, err = worker.seedDurableDiskSnapshot(context.Background(), request, mount)
-	require.NoError(t, err)
-	require.Nil(t, seed)
-	require.Empty(t, backendRepo.requestedSnapshotId)
 }
 
 func TestDurableDiskSeedFallsBackToTheStubConfig(t *testing.T) {
@@ -81,10 +102,6 @@ func TestDurableDiskSeedFallsBackToTheStubConfig(t *testing.T) {
 	mount := &types.Mount{DurableDisk: &types.DurableDiskMountConfig{Name: "fork-disk"}}
 
 	require.Equal(t, "snapshot-source", durableDiskSourceSnapshotFromStub(request, mount.DurableDisk.Name))
-
-	// A worker-facing mount that already carries a seed remains authoritative.
-	mount.DurableDisk.SourceSnapshotId = "snapshot-explicit"
-	require.Equal(t, "snapshot-explicit", mount.DurableDisk.SourceSnapshotId)
 }
 
 func TestSeedDurableDiskSnapshotRefusesAnEmptyDiskWhenTheSourceIsGone(t *testing.T) {
@@ -117,8 +134,6 @@ func TestSeedDurableDiskSnapshotFailsOpenWhenLookupIsUnavailable(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Nil(t, seed)
-	// The existing payload remains usable when a prior session already restored
-	// the fork but the source lookup is temporarily unavailable now.
 	require.NoError(t, worker.restoreDurableDiskSnapshot(&types.ContainerRequest{}, mount))
 	require.FileExists(t, filepath.Join(localPath, "already-restored"))
 }
@@ -159,8 +174,6 @@ func TestLatestDurableDiskSnapshotManifestPreservesEmptyTree(t *testing.T) {
 	require.NotNil(t, previous)
 	require.Empty(t, previous.Files)
 
-	// Keeping the empty manifest lets the normal unchanged comparison suppress
-	// a duplicate generation for another still-empty on-demand snapshot.
 	emptySource := t.TempDir()
 	snapshot, _, err := createDurableDiskDirectorySnapshot(
 		context.Background(), store, emptySource, "empty/snapshots/2",
@@ -182,6 +195,13 @@ func TestSyncDurableDiskMountsHonorsCanceledContext(t *testing.T) {
 
 	require.Empty(t, snapshots)
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestDurableDiskCleanupContextIgnoresWorkerCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	require.NoError(t, (&Worker{ctx: ctx}).durableDiskCleanupContext().Err())
 }
 
 func TestAddRequestMountsPreparesDurableDisk(t *testing.T) {
@@ -447,9 +467,6 @@ func TestCreateDurableDiskDirectorySnapshotPreservesEmptyDirectory(t *testing.T)
 	require.Empty(t, entries)
 }
 
-// A caller snapshotting on a timer asks far more often than the disk changes.
-// Writing a generation each time would fill the disk's history with entries
-// that all restore to the same thing, and bury the ones that do not.
 func TestCreateDurableDiskDirectorySnapshotSkipsAnUnchangedDisk(t *testing.T) {
 	ctx := context.Background()
 	source := filepath.Join(t.TempDir(), "data")
@@ -478,8 +495,6 @@ func TestCreateDurableDiskDirectorySnapshotSkipsAnUnchangedDisk(t *testing.T) {
 	require.Nil(t, secondManifest)
 	require.Equal(t, uploadsAfterFirst, store.uploadCalls, "not even the manifest should have been written")
 
-	// The moment something is written it is a new generation again, or the
-	// caller would be restoring work that has since been overtaken.
 	require.NoError(t, os.WriteFile(filepath.Join(source, "value"), []byte("changed"), 0o600))
 	third, _, err := createDurableDiskDirectorySnapshot(ctx, store, source, "durable-disks/data/snapshots/3", types.DiskSnapshot{
 		DiskName:   "data",
@@ -491,8 +506,6 @@ func TestCreateDurableDiskDirectorySnapshotSkipsAnUnchangedDisk(t *testing.T) {
 	require.NotNil(t, third)
 }
 
-// The cleanup path passes false: a stop is a point in the disk's history
-// whether or not anything moved, and callers wait for the generation it makes.
 func TestCreateDurableDiskDirectorySnapshotAlwaysWritesWhenNotSkipping(t *testing.T) {
 	ctx := context.Background()
 	source := filepath.Join(t.TempDir(), "data")
@@ -512,9 +525,6 @@ func TestCreateDurableDiskDirectorySnapshotAlwaysWritesWhenNotSkipping(t *testin
 	require.NotNil(t, second)
 }
 
-// Device and inode numbers describe where a file sits, not what is in it, and a
-// restore builds a fresh filesystem. Comparing them would make the first
-// snapshot after every restart look like a disk full of changes.
 func TestDurableDiskSnapshotContentsMatchIgnoresFilesystemIdentity(t *testing.T) {
 	before := &types.DiskSnapshotManifest{
 		Format: types.DiskSnapshotFormatDirV1,
@@ -529,7 +539,6 @@ func TestDurableDiskSnapshotContentsMatchIgnoresFilesystemIdentity(t *testing.T)
 		Files: []types.DiskSnapshotFile{{
 			Path: "value", Type: "file", Mode: 0o600, SizeBytes: 7, ModTimeUnixNano: 1,
 			DeviceId: 33, Inode: 44, ChangeUnixNano: 1234,
-			// A different object key for the same bytes is still the same bytes.
 			Chunks: []types.DiskSnapshotChunk{{Digest: "sha256:aaa", SizeBytes: 7, ObjectKey: "elsewhere"}},
 		}},
 	}

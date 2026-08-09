@@ -332,11 +332,7 @@ class DurableDisk(betterproto.Message):
     driver: str = betterproto.string_field(5)
     read_only: bool = betterproto.bool_field(6)
     source_snapshot_id: str = betterproto.string_field(7)
-    """
-    Seeds a disk that has none of its own snapshots yet, so a new disk can
-     start life holding another disk's contents. Ignored once this disk has a
-     history, which keeps it from rewinding on every start.
-    """
+    """Snapshot used to initialize a disk with no snapshot history."""
 
 
 @dataclass(eq=False, repr=False)
@@ -407,11 +403,7 @@ class GetOrCreateStubRequest(betterproto.Message):
     allow_marketplace: bool = betterproto.bool_field(45)
     checkpoint_trigger: "_types__.CheckpointTrigger" = betterproto.message_field(46)
     hostname: str = betterproto.string_field(47)
-    """
-    Hostname reported inside the container. Left empty, the container keeps
-     the runtime's own name ("runc" or "runsc"), which is what every stub that
-     does not care about this still gets.
-    """
+    """Hostname to set inside the container."""
 
 
 @dataclass(eq=False, repr=False)

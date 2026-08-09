@@ -75,8 +75,6 @@ func TestContainerSnapshotDisksReportsWhatItCaptured(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, response.Ok)
 	require.Same(t, request, snapshotted)
-	// The caller gets the ID back rather than having to poll for a generation
-	// it hopes is the one it just asked for.
 	require.Len(t, response.Snapshots, 1)
 	require.Equal(t, "snapshot-1", response.Snapshots[0].SnapshotId)
 	require.Equal(t, "home", response.Snapshots[0].DiskName)

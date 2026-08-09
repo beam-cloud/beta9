@@ -15,6 +15,14 @@ type diskGroup struct {
 	gds        *GlobalDiskService
 }
 
+func (g *diskGroup) workspace(ctx echo.Context) (*types.Workspace, error) {
+	workspace, err := g.gds.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), ctx.Param("workspaceId"))
+	if err != nil {
+		return nil, echo.NewHTTPError(http.StatusBadRequest, "Invalid workspace ID")
+	}
+	return &workspace, nil
+}
+
 func registerDiskRoutes(g *echo.Group, gds *GlobalDiskService) *diskGroup {
 	group := &diskGroup{
 		routeGroup: g,
@@ -31,10 +39,9 @@ func registerDiskRoutes(g *echo.Group, gds *GlobalDiskService) *diskGroup {
 }
 
 func (g *diskGroup) PublishSnapshot(ctx echo.Context) error {
-	workspaceID := ctx.Param("workspaceId")
-	workspace, err := g.gds.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceID)
+	workspace, err := g.workspace(ctx)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid workspace ID")
+		return err
 	}
 
 	snapshotID := strings.TrimSpace(ctx.Param("snapshotId"))
@@ -42,9 +49,7 @@ func (g *diskGroup) PublishSnapshot(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid snapshot ID")
 	}
 
-	// Get also resolves public snapshots for workers, so retain the explicit
-	// owner check before mutating. A direct lookup avoids the list endpoint's
-	// pagination making an older, valid snapshot impossible to publish.
+	// Publishing requires ownership even when the snapshot is public.
 	snapshot, err := g.gds.backendRepo.GetDiskSnapshot(ctx.Request().Context(), workspace.Id, snapshotID)
 	if err != nil {
 		var notFound *types.ErrDiskSnapshotNotFound
@@ -56,6 +61,9 @@ func (g *diskGroup) PublishSnapshot(ctx echo.Context) error {
 	if snapshot.WorkspaceId != workspace.Id {
 		return echo.NewHTTPError(http.StatusNotFound, "Disk snapshot not found")
 	}
+	if snapshot.Status != types.DiskSnapshotStatusAvailable {
+		return echo.NewHTTPError(http.StatusConflict, "Disk snapshot is not available")
+	}
 
 	snapshot.Public = true
 	if _, err := g.gds.backendRepo.UpdateDiskSnapshot(ctx.Request().Context(), snapshot); err != nil {
@@ -65,10 +73,9 @@ func (g *diskGroup) PublishSnapshot(ctx echo.Context) error {
 }
 
 func (g *diskGroup) ListDisks(ctx echo.Context) error {
-	workspaceId := ctx.Param("workspaceId")
-	workspace, err := g.gds.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
+	workspace, err := g.workspace(ctx)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid workspace ID")
+		return err
 	}
 
 	disks, err := g.gds.backendRepo.ListDisksWithRelated(ctx.Request().Context(), workspace.Id)
@@ -79,10 +86,9 @@ func (g *diskGroup) ListDisks(ctx echo.Context) error {
 }
 
 func (g *diskGroup) ListSnapshots(ctx echo.Context) error {
-	workspaceId := ctx.Param("workspaceId")
-	workspace, err := g.gds.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
+	workspace, err := g.workspace(ctx)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid workspace ID")
+		return err
 	}
 
 	snapshots, err := g.gds.backendRepo.ListDiskSnapshots(ctx.Request().Context(), types.DiskSnapshotFilter{
@@ -96,10 +102,9 @@ func (g *diskGroup) ListSnapshots(ctx echo.Context) error {
 }
 
 func (g *diskGroup) CreateDisk(ctx echo.Context) error {
-	workspaceId := ctx.Param("workspaceId")
-	workspace, err := g.gds.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
+	workspace, err := g.workspace(ctx)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid workspace ID")
+		return err
 	}
 
 	diskName := ctx.Param("diskName")
@@ -121,10 +126,9 @@ func (g *diskGroup) CreateDisk(ctx echo.Context) error {
 }
 
 func (g *diskGroup) DeleteDisk(ctx echo.Context) error {
-	workspaceId := ctx.Param("workspaceId")
-	workspace, err := g.gds.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
+	workspace, err := g.workspace(ctx)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid workspace ID")
+		return err
 	}
 
 	diskName := ctx.Param("diskName")

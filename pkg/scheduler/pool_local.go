@@ -230,7 +230,7 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 			SecurityContext: &corev1.SecurityContext{
 				Privileged: ptr.To(true),
 			},
-			Env:          wpc.getWorkerEnvironment(workerId, workerCpu, workerMemory, workerGpuType, workerGpuCount, token),
+			Env:          wpc.getWorkerEnvironment(workerId, workerCpu, workerMemory, workerGpuType, workerGpuCount, token, workerConfig),
 			VolumeMounts: wpc.getWorkerVolumeMounts(),
 		},
 	}
@@ -297,16 +297,8 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 	}
 }
 
-// workerPodConfig disables pull-based Prometheus metrics for host-network
-// workers so a fixed node port does not prevent worker co-location. The
-// VictoriaMetrics push registry is configured independently.
 func (wpc *LocalKubernetesWorkerPoolController) workerPodConfig() types.AppConfig {
 	config := wpc.config
-	// Local workers must use the in-cluster gateway for their own repository
-	// clients when service-hostname routing is enabled. The pod environment
-	// already advertises this endpoint to child containers; keep CONFIG_JSON in
-	// sync so a development/public tunnel is only used by genuinely remote
-	// workers instead of hairpinning local build workers through it.
 	if config.Worker.UseGatewayServiceHostname {
 		config.GatewayService.GRPC.ExternalHost = config.GatewayService.Host
 		config.GatewayService.GRPC.ExternalPort = config.GatewayService.GRPC.Port
@@ -460,7 +452,7 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerVolumeMounts() []corev1
 	return volumeMounts
 }
 
-func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId string, cpu int64, memory int64, gpuType string, gpuCount uint32, token string) []corev1.EnvVar {
+func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId string, cpu int64, memory int64, gpuType string, gpuCount uint32, token string, workerConfig types.AppConfig) []corev1.EnvVar {
 	locality := wpc.workerPoolConfig.ConfigGroup
 	if locality == "" {
 		locality = wpc.config.Cache.Global.DefaultLocality
@@ -601,7 +593,7 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId st
 		envVars = append(envVars, wpc.workerPoolConfig.JobSpec.Env...)
 	}
 
-	configJSON, err := json.MarshalIndent(wpc.workerPodConfig(), "", "  ")
+	configJSON, err := json.MarshalIndent(workerConfig, "", "  ")
 	if err == nil {
 		envVars = append(envVars, corev1.EnvVar{
 			Name:  "CONFIG_JSON",

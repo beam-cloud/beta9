@@ -78,13 +78,7 @@ func unescapeMountInfoPath(path string) string {
 	return replacer.Replace(path)
 }
 
-// NewStorage mounts one filesystem and hands it back.
-//
-// Every failure here is returned rather than fatal. Workers call this per
-// workspace on the container path, so exiting on a bad mount would take down
-// every unrelated container already running on that worker for the sake of the
-// one request that could not be served. Boot-time callers pass the error up and
-// still refuse to start.
+// NewStorage mounts the configured filesystem and returns mount failures.
 func NewStorage(config types.StorageConfig, cacheClient *cache.Client) (Storage, error) {
 	switch config.Mode {
 	case StorageModeJuiceFS:

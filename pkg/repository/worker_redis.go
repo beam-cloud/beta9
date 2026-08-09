@@ -591,23 +591,6 @@ func (r *WorkerRedisRepository) reconcileWorkerCapacity(ctx context.Context, wor
 	return nil
 }
 
-// ReconcileWorkerCapacity derives the free capacity from work that is still
-// queued or active. It is deliberately absolute rather than an additive
-// release: a late container completion and a replacement assignment can race
-// this repair without ever over-crediting the worker.
-func (r *WorkerRedisRepository) ReconcileWorkerCapacity(workerId string) error {
-	return r.withWorker(workerId, func(ctx context.Context, stateKey string, worker *types.Worker) error {
-		if err := r.reconcileWorkerCapacity(ctx, worker); err != nil {
-			return err
-		}
-		return r.saveWorkerFields(ctx, stateKey,
-			"free_cpu", worker.FreeCpu,
-			"free_memory", worker.FreeMemory,
-			"gpu_count", worker.FreeGpuCount,
-		)
-	})
-}
-
 func (r *WorkerRedisRepository) getWorkerReservedCapacity(ctx context.Context, workerId string) (workerReservedCapacity, error) {
 	var usage workerReservedCapacity
 	requestContainerIDs := map[string]struct{}{}

@@ -310,10 +310,7 @@ func (s *ContainerRuntimeServer) ContainerCheckpoint(ctx context.Context, in *pb
 	return &pb.ContainerCheckpointResponse{Ok: true, CheckpointId: checkpointId}, nil
 }
 
-// ContainerSnapshotDisks snapshots the container's durable disks without
-// stopping it. The same snapshot happens on container cleanup; doing it on
-// demand is what lets a caller capture the filesystem of a container it means
-// to keep running, such as when cloning one.
+// ContainerSnapshotDisks snapshots a running container's durable disks.
 func (s *ContainerRuntimeServer) ContainerSnapshotDisks(ctx context.Context, in *pb.ContainerSnapshotDisksRequest) (*pb.ContainerSnapshotDisksResponse, error) {
 	instance, exists := s.containerInstances.Get(in.ContainerId)
 	if !exists {
@@ -336,8 +333,7 @@ func (s *ContainerRuntimeServer) ContainerSnapshotDisks(ctx context.Context, in 
 		})
 	}
 	if err != nil {
-		// Preserve snapshots created before another mount failed so callers can
-		// still use or clean up those persisted generations.
+		// Return snapshots created before another mount failed.
 		log.Error().Err(err).Str("container_id", in.ContainerId).Msg("failed to snapshot durable disks")
 		response.ErrorMsg = err.Error()
 	}

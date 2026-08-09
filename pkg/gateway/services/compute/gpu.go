@@ -251,11 +251,6 @@ func concreteGPUTypes(gpus []types.GpuType) []string {
 	return out
 }
 
-// gpuRequirementSatisfiedBy is deliberately directional. A request for the
-// A100 family accepts the concrete memory-qualified model a provider reports,
-// while a request for A100-80 must not silently land on A100-40. Providers
-// commonly advertise a generic family before launch and the NVIDIA driver
-// reports the concrete model once the machine boots.
 func gpuRequirementSatisfiedBy(required, available string) bool {
 	required = types.NormalizeGPUType(required).String()
 	available = types.NormalizeGPUType(available).String()

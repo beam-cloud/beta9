@@ -65,7 +65,7 @@ type DurableDiskMountConfig struct {
 	Size       string `json:"size"`
 	Filesystem string `json:"filesystem"`
 	Driver     string `json:"driver"`
-	// Where a disk with no history of its own gets its first contents from.
+	// Snapshot used to seed a new disk.
 	SourceSnapshotId string `json:"source_snapshot_id,omitempty"`
 }
 

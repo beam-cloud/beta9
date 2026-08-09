@@ -295,11 +295,12 @@ func (r *PostgresBackendRepository) GetDiskSnapshot(ctx context.Context, workspa
 	query := fmt.Sprintf(`
 		SELECT %s
 		FROM disk_snapshot
-		WHERE (workspace_id = $1 OR public = TRUE) AND external_id = $2 AND deleted_at IS NULL
+		WHERE (workspace_id = $1 OR (public = TRUE AND status = $3))
+			AND external_id = $2 AND deleted_at IS NULL
 		LIMIT 1;`, diskSnapshotColumns(""))
 
 	var snapshot types.DiskSnapshot
-	if err := r.client.GetContext(ctx, &snapshot, query, workspaceId, snapshotId); err != nil {
+	if err := r.client.GetContext(ctx, &snapshot, query, workspaceId, snapshotId, types.DiskSnapshotStatusAvailable); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, &types.ErrDiskSnapshotNotFound{SnapshotId: snapshotId}
 		}

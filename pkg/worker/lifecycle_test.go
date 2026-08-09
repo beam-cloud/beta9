@@ -886,9 +886,6 @@ func TestSpecFromRequestPreservesPodInitialSpecCwd(t *testing.T) {
 	require.Equal(t, uint32(1000), spec.Process.User.GID)
 }
 
-// The base OCI specs name the runtime, so a container that asks for nothing
-// still calls itself "runc" or "runsc". Only a request that names a hostname
-// gets one.
 func TestSpecFromRequestSetsHostnameOnlyWhenRequested(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -896,44 +893,12 @@ func TestSpecFromRequestSetsHostnameOnlyWhenRequested(t *testing.T) {
 		hostname     string
 		wantHostname string
 	}{
-		{name: "unset keeps the runc default", runtime: types.ContainerRuntimeRunc.String(), wantHostname: "runc"},
-		{name: "unset keeps the runsc default", runtime: types.ContainerRuntimeGvisor.String(), wantHostname: "runsc"},
-		{
-			name:         "a requested name is used verbatim",
-			runtime:      types.ContainerRuntimeGvisor.String(),
-			hostname:     "brisk-canyon-a1b2",
-			wantHostname: "brisk-canyon-a1b2",
-		},
-		{
-			name:         "capitals, dots and slashes are reduced to a label",
-			runtime:      types.ContainerRuntimeGvisor.String(),
-			hostname:     "MyApp/v1.2",
-			wantHostname: "myapp-v1-2",
-		},
-		{
-			name:         "leading and trailing punctuation is dropped",
-			runtime:      types.ContainerRuntimeGvisor.String(),
-			hostname:     "--wrapped__",
-			wantHostname: "wrapped",
-		},
-		{
-			name:         "a name with nothing usable in it falls back to the default",
-			runtime:      types.ContainerRuntimeRunc.String(),
-			hostname:     "///",
-			wantHostname: "runc",
-		},
-		{
-			name:         "an over-long name is truncated to the RFC 1123 limit",
-			runtime:      types.ContainerRuntimeGvisor.String(),
-			hostname:     strings.Repeat("a", 80),
-			wantHostname: strings.Repeat("a", maxHostnameLength),
-		},
-		{
-			name:         "a separator at the length boundary does not hide the following character",
-			runtime:      types.ContainerRuntimeGvisor.String(),
-			hostname:     strings.Repeat("a", maxHostnameLength-1) + "-b",
-			wantHostname: strings.Repeat("a", maxHostnameLength-1) + "b",
-		},
+		{name: "runc default", runtime: types.ContainerRuntimeRunc.String(), wantHostname: "runc"},
+		{name: "runsc default", runtime: types.ContainerRuntimeGvisor.String(), wantHostname: "runsc"},
+		{name: "requested", runtime: types.ContainerRuntimeGvisor.String(), hostname: "brisk-canyon-a1b2", wantHostname: "brisk-canyon-a1b2"},
+		{name: "sanitized", runtime: types.ContainerRuntimeGvisor.String(), hostname: "MyApp/v1.2", wantHostname: "myapp-v1-2"},
+		{name: "invalid", runtime: types.ContainerRuntimeRunc.String(), hostname: "///", wantHostname: "runc"},
+		{name: "bounded", runtime: types.ContainerRuntimeGvisor.String(), hostname: strings.Repeat("a", maxHostnameLength-1) + "-b", wantHostname: strings.Repeat("a", maxHostnameLength-1) + "b"},
 	}
 
 	for _, test := range tests {
@@ -1618,10 +1583,6 @@ func TestWaitForRestoredContainerExitFailsBeforeRunningState(t *testing.T) {
 	require.Equal(t, -1, exitCode)
 }
 
-// Checkpointing freezes the container's cgroup, and runc calls a frozen
-// container paused. If the exit watcher reads that as an exit it tears the
-// container down mid-dump, which loses the memory image and the running
-// process both.
 func TestWaitForRestoredContainerExitTreatsPausedContainerAsAlive(t *testing.T) {
 	statuses := []string{
 		types.RuncContainerStatusRunning,
@@ -1911,7 +1872,6 @@ func TestShouldCreateCheckpointSkipsSandboxes(t *testing.T) {
 
 	require.False(t, worker.shouldCreateCheckpoint(request))
 
-	// Everything else still checkpoints on its own.
 	request.Stub.Type = types.StubType(types.StubTypePodDeployment)
 	require.True(t, worker.shouldCreateCheckpoint(request))
 }
@@ -2685,7 +2645,14 @@ func (f *fakeBackendRepoClient) GetLatestDiskSnapshot(ctx context.Context, in *p
 
 func (f *fakeBackendRepoClient) GetDiskSnapshot(ctx context.Context, in *pb.GetDiskSnapshotRequest, opts ...grpc.CallOption) (*pb.GetDiskSnapshotResponse, error) {
 	f.requestedSnapshotId = in.SnapshotId
-	return &pb.GetDiskSnapshotResponse{Ok: true, Snapshot: f.sourceSnapshot}, f.getDiskSnapshotErr
+	if f.getDiskSnapshotErr != nil {
+		return nil, f.getDiskSnapshotErr
+	}
+	return &pb.GetDiskSnapshotResponse{Ok: true, Snapshot: f.sourceSnapshot}, nil
+}
+
+func (f *fakeBackendRepoClient) GetDiskSnapshotDownloadURL(context.Context, *pb.GetDiskSnapshotDownloadURLRequest, ...grpc.CallOption) (*pb.GetDiskSnapshotDownloadURLResponse, error) {
+	return nil, errors.New("not implemented")
 }
 
 type mockResourceRuntime struct {

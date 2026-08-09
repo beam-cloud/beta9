@@ -1464,11 +1464,7 @@ func (s *Worker) shouldCreateCheckpoint(request *types.ContainerRequest) bool {
 		return false
 	}
 
-	// Sandboxes checkpoint on demand, through ContainerCheckpoint, because
-	// there is no point in their execution that means "warm and ready to be
-	// frozen" the way there is for a deployment serving its first request.
-	// Auto-checkpointing one means waiting for a readiness signal nothing will
-	// ever send, and the container stays unreachable for the whole deadline.
+	// Sandboxes checkpoint only on demand.
 	if request.Stub.Type.Kind() == types.StubTypeSandbox {
 		return false
 	}

@@ -156,9 +156,7 @@ func (s *Worker) finalizeContainer(containerId string, request *types.ContainerR
 
 func (s *Worker) clearContainer(containerId string, request *types.ContainerRequest, exitCode int, exitReported bool) {
 	if request != nil && request.HasDurableDiskMount() {
-		// Unconditional: a stop is a point in the disk's history whether or not
-		// anything was written, and callers wait for the generation it produces.
-		if _, err := s.syncDurableDiskMounts(s.ctx, request, false); err != nil {
+		if _, err := s.syncDurableDiskMounts(s.durableDiskCleanupContext(), request, false); err != nil {
 			log.Error().Str("container_id", containerId).Err(err).Msg("failed to sync durable disks during container cleanup")
 		}
 	}
@@ -787,8 +785,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	if err != nil {
 		return nil, err
 	}
-	// Opt-in: the base specs name the runtime, so a stub that says nothing
-	// keeps calling itself "runc" or "runsc" the way it always has.
+	// Preserve the runtime default unless a hostname is requested.
 	if hostname := sanitizeHostname(request.Hostname); hostname != "" {
 		spec.Hostname = hostname
 	}
@@ -1136,10 +1133,7 @@ func (s *Worker) newSpecTemplate() (*specs.Spec, error) {
 	return &newSpec, nil
 }
 
-// sanitizeHostname reduces a requested hostname to an RFC 1123 label. What
-// callers send is free text and routinely carries capitals, dots and slashes,
-// none of which belong in a hostname. An empty result means there is nothing
-// usable to set, and the container keeps the runtime's own name.
+// sanitizeHostname returns an RFC 1123 label.
 func sanitizeHostname(name string) string {
 	label := make([]byte, 0, maxHostnameLength)
 	separatorPending := false
@@ -1156,9 +1150,7 @@ func sanitizeHostname(name string) string {
 			label = append(label, character)
 			separatorPending = false
 		} else if len(label) > 0 {
-			// Delay separators until the following usable character is known.
-			// Besides avoiding a trailing dash, this lets that character use the
-			// final byte when there is no room for both it and the dash.
+			// Defer separators to avoid trailing or overlong labels.
 			separatorPending = true
 		}
 	}
@@ -1870,11 +1862,7 @@ func (s *Worker) waitForRestoredContainerExit(ctx context.Context, rt runtime.Ru
 			}
 			return -1, nil
 		}
-		// A checkpoint freezes the container's cgroup, and runc reports a frozen
-		// container as paused until the dump finishes. Reading that as an exit
-		// tears down a container that is only being dumped — and taking its
-		// cgroup away fails the dump too, so the machine loses both its memory
-		// image and the process that was running.
+		// A checkpoint temporarily reports the container as paused.
 		if state.Status != types.RuncContainerStatusRunning && state.Status != types.RuncContainerStatusPaused {
 			return -1, nil
 		}

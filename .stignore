@@ -33,7 +33,7 @@ bin/gateway
 sdk
 benchmarks
 
-# stray worktrees and build output that have no business in the dev container
+# Local worktrees and build output
 .codex-*
 .htmlcov
 node_modules

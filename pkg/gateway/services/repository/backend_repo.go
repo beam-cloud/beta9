@@ -2,22 +2,48 @@ package repository_services
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"path"
+	"strings"
+	"sync"
+	"time"
 
+	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"golang.org/x/sync/singleflight"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type BackendRepositoryService struct {
-	ctx         context.Context
-	backendRepo repository.BackendRepository
+	ctx                     context.Context
+	backendRepo             repository.BackendRepository
+	diskSnapshotObjectMu    sync.Mutex
+	diskSnapshotObjectCache map[string]diskSnapshotObjectCacheEntry
+	diskSnapshotObjectGroup singleflight.Group
 	pb.UnimplementedBackendRepositoryServiceServer
 }
 
+const diskSnapshotURLExpiry = 15 * time.Minute
+
+type diskSnapshotObjectCacheEntry struct {
+	digest    string
+	expiresAt time.Time
+	keys      map[string]struct{}
+}
+
 func NewBackendRepositoryService(ctx context.Context, backendRepo repository.BackendRepository) *BackendRepositoryService {
-	return &BackendRepositoryService{ctx: ctx, backendRepo: backendRepo}
+	return &BackendRepositoryService{
+		ctx:                     ctx,
+		backendRepo:             backendRepo,
+		diskSnapshotObjectCache: make(map[string]diskSnapshotObjectCacheEntry),
+	}
 }
 
 func (s *BackendRepositoryService) GetCheckpointById(ctx context.Context, req *pb.GetCheckpointByIdRequest) (*pb.GetCheckpointByIdResponse, error) {
@@ -150,6 +176,163 @@ func (s *BackendRepositoryService) GetDiskSnapshot(ctx context.Context, req *pb.
 	return &pb.GetDiskSnapshotResponse{Ok: true, Snapshot: diskSnapshotToProto(snapshot)}, nil
 }
 
+func (s *BackendRepositoryService) GetDiskSnapshotDownloadURL(ctx context.Context, req *pb.GetDiskSnapshotDownloadURLRequest) (*pb.GetDiskSnapshotDownloadURLResponse, error) {
+	url, err := s.diskSnapshotDownloadURL(ctx, req)
+	if err != nil {
+		return &pb.GetDiskSnapshotDownloadURLResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+	return &pb.GetDiskSnapshotDownloadURLResponse{Ok: true, Url: url}, nil
+}
+
+func (s *BackendRepositoryService) diskSnapshotDownloadURL(ctx context.Context, req *pb.GetDiskSnapshotDownloadURLRequest) (string, error) {
+	if req == nil {
+		return "", fmt.Errorf("request is required")
+	}
+	if authInfo, ok := auth.AuthInfoFromContext(ctx); ok && authInfo != nil && authInfo.Token != nil && authInfo.Token.TokenType == types.TokenTypeWorkerPrivate {
+		if authInfo.Workspace == nil || authInfo.Workspace.ExternalId != req.WorkspaceId {
+			return "", fmt.Errorf("worker token cannot access workspace %q", req.WorkspaceId)
+		}
+	}
+
+	workspace, err := s.backendRepo.GetWorkspaceByExternalId(ctx, req.WorkspaceId)
+	if err != nil {
+		return "", err
+	}
+	snapshot, err := s.backendRepo.GetDiskSnapshot(ctx, workspace.Id, req.SnapshotId)
+	if err != nil {
+		return "", err
+	}
+	if snapshot.Status != types.DiskSnapshotStatusAvailable {
+		return "", fmt.Errorf("disk snapshot object is unavailable")
+	}
+
+	source, err := s.backendRepo.GetWorkspace(ctx, snapshot.WorkspaceId)
+	if err != nil {
+		return "", err
+	}
+	if !source.StorageAvailable() || snapshot.BucketName == "" {
+		return "", fmt.Errorf("disk snapshot storage is unavailable")
+	}
+	storageClient, err := clients.NewWorkspaceStorageClient(ctx, source.Name, source.Storage)
+	if err != nil {
+		return "", err
+	}
+	allowed, err := s.diskSnapshotObjectAllowed(ctx, snapshot, storageClient, req.ObjectKey)
+	if err != nil {
+		return "", err
+	}
+	if !allowed {
+		return "", fmt.Errorf("disk snapshot object is unavailable")
+	}
+	return storageClient.StorageClient.GeneratePresignedGetURL(ctx, req.ObjectKey, int64(diskSnapshotURLExpiry.Seconds()), snapshot.BucketName)
+}
+
+func (s *BackendRepositoryService) diskSnapshotObjectAllowed(ctx context.Context, snapshot *types.DiskSnapshot, storageClient *clients.WorkspaceStorageClient, objectKey string) (bool, error) {
+	if !diskSnapshotObjectKeyValid(snapshot, objectKey) {
+		return false, nil
+	}
+	if objectKey == snapshot.ManifestKey {
+		return true, nil
+	}
+
+	keys, err := s.diskSnapshotChunkKeys(ctx, snapshot, storageClient)
+	if err != nil {
+		return false, err
+	}
+	return diskSnapshotObjectKeyAllowed(snapshot, objectKey, keys), nil
+}
+
+func (s *BackendRepositoryService) diskSnapshotChunkKeys(ctx context.Context, snapshot *types.DiskSnapshot, storageClient *clients.WorkspaceStorageClient) (map[string]struct{}, error) {
+	now := time.Now()
+	s.diskSnapshotObjectMu.Lock()
+	entry, ok := s.diskSnapshotObjectCache[snapshot.ExternalId]
+	s.diskSnapshotObjectMu.Unlock()
+	if ok && entry.digest == snapshot.ManifestDigest && now.Before(entry.expiresAt) {
+		return entry.keys, nil
+	}
+
+	cacheKey := snapshot.ExternalId + ":" + snapshot.ManifestDigest
+	value, err, _ := s.diskSnapshotObjectGroup.Do(cacheKey, func() (any, error) {
+		now := time.Now()
+		s.diskSnapshotObjectMu.Lock()
+		entry, ok := s.diskSnapshotObjectCache[snapshot.ExternalId]
+		s.diskSnapshotObjectMu.Unlock()
+		if ok && entry.digest == snapshot.ManifestDigest && now.Before(entry.expiresAt) {
+			return entry.keys, nil
+		}
+
+		data, err := storageClient.StorageClient.Download(ctx, snapshot.ManifestKey, snapshot.BucketName)
+		if err != nil {
+			return nil, fmt.Errorf("read disk snapshot manifest: %w", err)
+		}
+		keys, err := diskSnapshotManifestChunkKeys(data, snapshot.ManifestDigest)
+		if err != nil {
+			return nil, err
+		}
+
+		s.diskSnapshotObjectMu.Lock()
+		if len(s.diskSnapshotObjectCache) >= 256 {
+			for id, cached := range s.diskSnapshotObjectCache {
+				if !now.Before(cached.expiresAt) {
+					delete(s.diskSnapshotObjectCache, id)
+				}
+			}
+		}
+		if len(s.diskSnapshotObjectCache) >= 256 {
+			for id := range s.diskSnapshotObjectCache {
+				delete(s.diskSnapshotObjectCache, id)
+				break
+			}
+		}
+		s.diskSnapshotObjectCache[snapshot.ExternalId] = diskSnapshotObjectCacheEntry{
+			digest:    snapshot.ManifestDigest,
+			expiresAt: now.Add(diskSnapshotURLExpiry),
+			keys:      keys,
+		}
+		s.diskSnapshotObjectMu.Unlock()
+		return keys, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return value.(map[string]struct{}), nil
+}
+
+func diskSnapshotObjectKeyValid(snapshot *types.DiskSnapshot, objectKey string) bool {
+	return snapshot != nil && objectKey != "" && strings.TrimSpace(objectKey) == objectKey && !strings.HasPrefix(objectKey, "/") && path.Clean(objectKey) == objectKey
+}
+
+func diskSnapshotObjectKeyAllowed(snapshot *types.DiskSnapshot, objectKey string, chunkKeys map[string]struct{}) bool {
+	if !diskSnapshotObjectKeyValid(snapshot, objectKey) {
+		return false
+	}
+	if objectKey == snapshot.ManifestKey {
+		return true
+	}
+	_, ok := chunkKeys[objectKey]
+	return ok
+}
+
+func diskSnapshotManifestChunkKeys(data []byte, expectedDigest string) (map[string]struct{}, error) {
+	if expectedDigest != "" {
+		digest := sha256.Sum256(data)
+		if "sha256:"+hex.EncodeToString(digest[:]) != expectedDigest {
+			return nil, fmt.Errorf("disk snapshot manifest digest mismatch")
+		}
+	}
+	var manifest types.DiskSnapshotManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return nil, fmt.Errorf("decode disk snapshot manifest: %w", err)
+	}
+	keys := make(map[string]struct{})
+	for _, file := range manifest.Files {
+		for _, chunk := range file.Chunks {
+			keys[chunk.ObjectKey] = struct{}{}
+		}
+	}
+	return keys, nil
+}
+
 func (s *BackendRepositoryService) findDiskSnapshot(
 	ctx context.Context,
 	workspaceExternalID string,
@@ -207,6 +390,7 @@ func diskSnapshotToProto(snapshot *types.DiskSnapshot) *pb.DiskSnapshot {
 		CreatedAt:           timestamppb.New(snapshot.CreatedAt.Time),
 		UpdatedAt:           timestamppb.New(snapshot.UpdatedAt.Time),
 		CompletedAt:         completedAt,
+		Public:              snapshot.Public,
 	}
 }
 
@@ -237,5 +421,6 @@ func diskSnapshotFromProto(in *pb.DiskSnapshot) *types.DiskSnapshot {
 		SourcePool:          in.SourcePool,
 		SourceWorkerId:      in.SourceWorkerId,
 		SourceStorageNodeId: in.SourceStorageNodeId,
+		Public:              in.Public,
 	}
 }

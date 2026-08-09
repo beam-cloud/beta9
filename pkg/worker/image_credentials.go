@@ -56,7 +56,7 @@ func (c *ImageClient) originCredentials(ctx context.Context, request *types.Cont
 	}
 
 	stubID := cacheRequestStubID(request)
-	key := originCredentialsKey(workspaceID, stubID, imageID, registry)
+	key := strings.Join([]string{workspaceID, stubID, imageID, registry}, "\x00")
 	c.originCredsMu.Lock()
 	if cached, ok := c.originCredsCache[key]; ok && time.Since(cached.fetchedAt) < originCredentialsTTL {
 		c.originCredsMu.Unlock()
@@ -97,20 +97,6 @@ func (c *ImageClient) originCredentials(ctx context.Context, request *types.Cont
 	c.originCredsCache[key] = creds
 	c.originCredsMu.Unlock()
 	return creds
-}
-
-func originCredentialsKey(workspaceID, stubID, imageID, registry string) string {
-	return strings.Join([]string{workspaceID, stubID, imageID, registry}, "\x00")
-}
-
-func (c *ImageClient) invalidateOriginCredentials(request *types.ContainerRequest, imageID, registry string) {
-	if c == nil || request == nil {
-		return
-	}
-	key := originCredentialsKey(cacheRequestWorkspaceID(request), cacheRequestStubID(request), imageID, registry)
-	c.originCredsMu.Lock()
-	delete(c.originCredsCache, key)
-	c.originCredsMu.Unlock()
 }
 
 type gatewayRegistryCredentialProvider struct {

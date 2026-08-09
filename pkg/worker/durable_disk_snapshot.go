@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path"
 	"path/filepath"
@@ -46,6 +47,12 @@ type durableDiskSnapshotBucketStore struct {
 	bucket string
 }
 
+type durableDiskSnapshotURLStore struct {
+	resolveURL  func(context.Context, *pb.GetDiskSnapshotDownloadURLRequest) (*pb.GetDiskSnapshotDownloadURLResponse, error)
+	workspaceID string
+	snapshotID  string
+}
+
 func newDurableDiskSnapshotWriteStore(ctx context.Context, request *types.ContainerRequest) (*durableDiskSnapshotBucketStore, error) {
 	client, err := newDurableDiskSnapshotStorageClient(ctx, request)
 	if err != nil {
@@ -59,11 +66,28 @@ func newDurableDiskSnapshotWriteStore(ctx context.Context, request *types.Contai
 	return &durableDiskSnapshotBucketStore{client: client, bucket: bucketName}, nil
 }
 
-func newDurableDiskSnapshotReadStore(ctx context.Context, request *types.ContainerRequest, bucketName string) (*durableDiskSnapshotBucketStore, error) {
+func newDurableDiskSnapshotReadStore(ctx context.Context, request *types.ContainerRequest, snapshot *types.DiskSnapshot, backendRepoClient pb.BackendRepositoryServiceClient) (durableDiskSnapshotStore, error) {
+	if snapshot == nil {
+		return nil, fmt.Errorf("durable disk snapshot is required")
+	}
+	if snapshot.Public {
+		if backendRepoClient == nil {
+			return nil, fmt.Errorf("backend repository client is required for public disk snapshots")
+		}
+		return &durableDiskSnapshotURLStore{
+			resolveURL: func(ctx context.Context, req *pb.GetDiskSnapshotDownloadURLRequest) (*pb.GetDiskSnapshotDownloadURLResponse, error) {
+				return backendRepoClient.GetDiskSnapshotDownloadURL(ctx, req)
+			},
+			workspaceID: cacheRequestWorkspaceID(request),
+			snapshotID:  snapshot.ExternalId,
+		}, nil
+	}
+
 	client, err := newDurableDiskSnapshotStorageClient(ctx, request)
 	if err != nil {
 		return nil, err
 	}
+	bucketName := snapshot.BucketName
 	if bucketName == "" {
 		bucketName = client.BucketName()
 	}
@@ -96,6 +120,42 @@ func (s *durableDiskSnapshotBucketStore) UploadWithReader(ctx context.Context, k
 
 func (s *durableDiskSnapshotBucketStore) DownloadWithReader(ctx context.Context, key string) (io.ReadCloser, error) {
 	return s.client.StorageClient.DownloadWithReader(ctx, key, s.bucket)
+}
+
+func (s *durableDiskSnapshotURLStore) Exists(context.Context, string) (bool, error) {
+	return false, fmt.Errorf("public disk snapshot store is read-only")
+}
+
+func (s *durableDiskSnapshotURLStore) Upload(context.Context, string, []byte) error {
+	return fmt.Errorf("public disk snapshot store is read-only")
+}
+
+func (s *durableDiskSnapshotURLStore) UploadWithReader(context.Context, string, io.Reader) error {
+	return fmt.Errorf("public disk snapshot store is read-only")
+}
+
+func (s *durableDiskSnapshotURLStore) DownloadWithReader(ctx context.Context, key string) (io.ReadCloser, error) {
+	resp, err := handleGRPCResponse(s.resolveURL(ctx, &pb.GetDiskSnapshotDownloadURLRequest{
+		WorkspaceId: s.workspaceID,
+		SnapshotId:  s.snapshotID,
+		ObjectKey:   key,
+	}))
+	if err != nil {
+		return nil, fmt.Errorf("resolve public disk snapshot object: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, resp.Url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create public disk snapshot request: %w", err)
+	}
+	httpResp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("download public disk snapshot object: %w", err)
+	}
+	if httpResp.StatusCode != http.StatusOK {
+		httpResp.Body.Close()
+		return nil, fmt.Errorf("download public disk snapshot object: status %d", httpResp.StatusCode)
+	}
+	return httpResp.Body, nil
 }
 
 func uploadDurableDiskSnapshotManifest(ctx context.Context, store durableDiskSnapshotStore, manifestKey string, manifest *types.DiskSnapshotManifest) (string, int64, error) {
@@ -149,13 +209,7 @@ func loadDurableDiskSnapshotManifest(ctx context.Context, store durableDiskSnaps
 	return &manifest, nil
 }
 
-// createDurableDiskDirectorySnapshot writes a new generation of a disk.
-//
-// When skipUnchanged is set and the directory holds exactly what the previous
-// generation holds, it returns a nil snapshot instead: no manifest is uploaded
-// and the caller is expected to keep using the parent. That is what stops a
-// caller snapshotting on a timer from accumulating a generation every few
-// minutes for a disk nobody has written to.
+// createDurableDiskDirectorySnapshot returns nil when skipUnchanged finds no changes.
 func createDurableDiskDirectorySnapshot(ctx context.Context, store durableDiskSnapshotStore, sourceDir, objectPrefix string, snapshot types.DiskSnapshot, chunkSize int64, previous *types.DiskSnapshotManifest, skipUnchanged bool) (*types.DiskSnapshot, *types.DiskSnapshotManifest, error) {
 	if store == nil {
 		return nil, nil, fmt.Errorf("durable disk snapshot store is nil")
@@ -262,10 +316,6 @@ func createDurableDiskDirectorySnapshot(ctx context.Context, store durableDiskSn
 	manifest.LogicalSizeBytes = logicalSizeBytes
 	manifest.StoredSizeBytes = storedSizeBytes
 
-	// Checked here rather than before the walk, because there is no way to know
-	// whether anything moved without looking. The walk reuses the previous
-	// generation's chunks for files whose metadata is unchanged, so this costs a
-	// directory traversal and nothing else.
 	if skipUnchanged && durableDiskSnapshotContentsMatch(previous, manifest) {
 		return nil, nil, nil
 	}
@@ -288,19 +338,6 @@ func createDurableDiskDirectorySnapshot(ctx context.Context, store durableDiskSn
 	return &snapshot, manifest, nil
 }
 
-// durableDiskSnapshotContentsMatch reports whether restoring either manifest
-// would produce the same directory.
-//
-// Compared field by field rather than by hashing the manifests, because a
-// manifest carries its generation, its parent and the time it was written, so
-// two of them are never byte-identical however little the disk moved.
-//
-// Device and inode numbers are left out: they identify a file on the filesystem
-// it happens to be sitting on, and a restore builds a fresh one, so an unchanged
-// disk would otherwise read as different the first time it was captured after
-// coming back. Change time is left out for the same reason it is not restored —
-// it moves on metadata operations that leave the contents alone. Everything a
-// restore does reproduce is compared, modification time included.
 func durableDiskSnapshotContentsMatch(previous, current *types.DiskSnapshotManifest) bool {
 	if previous == nil || current == nil {
 		return false
@@ -309,7 +346,6 @@ func durableDiskSnapshotContentsMatch(previous, current *types.DiskSnapshotManif
 		return false
 	}
 
-	// Both are sorted by path, so this walks two views of the same tree.
 	for i, before := range previous.Files {
 		after := current.Files[i]
 		if before.Path != after.Path ||
@@ -327,8 +363,7 @@ func durableDiskSnapshotContentsMatch(previous, current *types.DiskSnapshotManif
 	return true
 }
 
-// Digests and offsets, not object keys: the same bytes stored under a different
-// key are still the same bytes.
+// durableDiskSnapshotChunksMatch ignores storage object keys.
 func durableDiskSnapshotChunksMatch(previous, current []types.DiskSnapshotChunk) bool {
 	if len(previous) != len(current) {
 		return false
@@ -737,6 +772,7 @@ func durableDiskSnapshotToProto(snapshot *types.DiskSnapshot) *pb.DiskSnapshot {
 		SourceStorageNodeId: snapshot.SourceStorageNodeId,
 		CreatedAt:           timestamppb.New(snapshot.CreatedAt.Time),
 		UpdatedAt:           timestamppb.New(snapshot.UpdatedAt.Time),
+		Public:              snapshot.Public,
 	}
 }
 
@@ -767,5 +803,6 @@ func durableDiskSnapshotFromProto(in *pb.DiskSnapshot) *types.DiskSnapshot {
 		SourcePool:          in.SourcePool,
 		SourceWorkerId:      in.SourceWorkerId,
 		SourceStorageNodeId: in.SourceStorageNodeId,
+		Public:              in.Public,
 	}
 }

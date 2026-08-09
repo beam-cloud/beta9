@@ -99,7 +99,7 @@ func newContainerClient(
 
 	grpcOption := grpc.WithTransportCredentials(insecure.NewCredentials())
 
-	isTLS := strings.HasSuffix(serviceUrl, "443")
+	isTLS := containerClientUsesTLS(serviceUrl)
 	if isTLS {
 		h2creds := credentials.NewTLS(&tls.Config{NextProtos: []string{"h2"}})
 		grpcOption = grpc.WithTransportCredentials(h2creds)
@@ -125,6 +125,11 @@ func newContainerClient(
 	client.conn = conn
 	client.client = pb.NewContainerServiceClient(conn)
 	return client, nil
+}
+
+func containerClientUsesTLS(serviceURL string) bool {
+	_, port, err := net.SplitHostPort(serviceURL)
+	return err == nil && port == "443"
 }
 
 func (c *ContainerClient) Close() error {

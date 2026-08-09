@@ -41,10 +41,7 @@ func (s *Worker) prepareDurableDiskMount(request *types.ContainerRequest, mount 
 	if mount.LocalPath == "" {
 		return fmt.Errorf("durable disk %q has no local path", mount.DurableDisk.Name)
 	}
-	// The mount is the worker-facing copy, but the immutable stub config is also
-	// carried on every container request. Recover from older/private-worker
-	// serialization paths that omitted the new seed field instead of silently
-	// treating a template fork as an empty disk.
+	// Recover source metadata from the stub config when the mount omits it.
 	if mount.DurableDisk.SourceSnapshotId == "" {
 		mount.DurableDisk.SourceSnapshotId = durableDiskSourceSnapshotFromStub(request, mount.DurableDisk.Name)
 	}
@@ -52,11 +49,7 @@ func (s *Worker) prepareDurableDiskMount(request *types.ContainerRequest, mount 
 	driver := durableDiskDriver(mount.DurableDisk.Driver)
 	switch driver {
 	case types.DurableDiskDriverSnapshot:
-		ctx := context.Background()
-		if s != nil && s.ctx != nil {
-			ctx = s.ctx
-		}
-		return withDurableDiskLock(ctx, mount, func() error {
+		return withDurableDiskLock(s.durableDiskContext(nil), mount, func() error {
 			if s != nil {
 				if err := s.restoreDurableDiskSnapshot(request, mount); err != nil {
 					return err
@@ -99,6 +92,20 @@ func durableDiskSourceSnapshotFromStub(request *types.ContainerRequest, diskName
 	return ""
 }
 
+func (s *Worker) durableDiskContext(ctx context.Context) context.Context {
+	if ctx != nil {
+		return ctx
+	}
+	if s != nil && s.ctx != nil {
+		return s.ctx
+	}
+	return context.Background()
+}
+
+func (s *Worker) durableDiskCleanupContext() context.Context {
+	return context.WithoutCancel(s.durableDiskContext(nil))
+}
+
 func durableDiskDriver(configured string) string {
 	if driver := types.NormalizeDurableDiskDriver(configured); driver != "" {
 		return driver
@@ -125,27 +132,12 @@ func prepareSnapshotDurableDiskMount(mount *types.Mount) error {
 	return nil
 }
 
-// syncDurableDiskMounts snapshots every durable disk the container has
-// mounted, and reports the snapshots it created. It runs on container cleanup
-// and can also be called against a running container, which yields a
-// crash-consistent copy of the disk as of now.
-//
-// skipUnchanged reports the previous generation instead of writing a new one
-// when the disk holds exactly what it held last time. On-demand callers set it,
-// since one snapshotting on a timer would otherwise leave a generation every
-// few minutes for a disk nobody has touched. Cleanup does not: a stop is a point
-// in the disk's history whether or not anything moved, and callers wait for the
-// generation it produces.
+// syncDurableDiskMounts snapshots all durable mounts, optionally reusing unchanged generations.
 func (s *Worker) syncDurableDiskMounts(ctx context.Context, request *types.ContainerRequest, skipUnchanged bool) ([]*types.DiskSnapshot, error) {
 	if request == nil {
 		return nil, nil
 	}
-	if ctx == nil && s != nil {
-		ctx = s.ctx
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx = s.durableDiskContext(ctx)
 
 	var syncErrs []error
 	var snapshots []*types.DiskSnapshot
@@ -246,12 +238,7 @@ func (s *Worker) snapshotDurableDiskMount(ctx context.Context, request *types.Co
 		return nil, fmt.Errorf("durable disk %q is not ready to snapshot", mount.DurableDisk.Name)
 	}
 
-	if ctx == nil {
-		ctx = s.ctx
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx = s.durableDiskContext(ctx)
 	sizeBytes, _ := durableDiskSizeBytes(mount.DurableDisk.Size)
 	ctx, cancel := context.WithTimeout(ctx, durableDiskTransferTimeout(sizeBytes))
 	defer cancel()
@@ -293,10 +280,6 @@ func (s *Worker) snapshotDurableDiskMount(ctx context.Context, request *types.Co
 		return nil, err
 	}
 
-	// Nothing has been written since the parent was taken, so the parent still
-	// describes the disk exactly. Handing it back rather than recording a
-	// duplicate is what keeps a caller snapshotting on a timer from filling the
-	// disk's history with generations that all say the same thing.
 	if snapshot == nil {
 		log.Debug().Str("disk", mount.DurableDisk.Name).Msg("durable disk is unchanged; keeping the last generation")
 		return parentSnapshot, nil
@@ -355,10 +338,7 @@ func (s *Worker) restoreDurableDiskSnapshot(request *types.ContainerRequest, mou
 	if s == nil || s.backendRepoClient == nil || request == nil || mount == nil || mount.DurableDisk == nil {
 		return nil
 	}
-	ctx := s.ctx
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx := s.durableDiskContext(nil)
 
 	resp, err := handleGRPCResponse(s.backendRepoClient.GetLatestDiskSnapshot(ctx, &pb.GetLatestDiskSnapshotRequest{
 		WorkspaceId: cacheRequestWorkspaceID(request),
@@ -369,10 +349,7 @@ func (s *Worker) restoreDurableDiskSnapshot(request *types.ContainerRequest, mou
 	}
 	snapshot := durableDiskSnapshotFromProto(resp.Snapshot)
 	if snapshot == nil || snapshot.ManifestKey == "" {
-		// A disk that has never been snapshotted may still be seeded from
-		// another one, which is how a forked disk starts out holding its
-		// source's contents. Once this disk has a generation of its own the
-		// branch above wins, so a fork does not rewind on every start.
+		// Seed only disks without their own snapshot history.
 		seed, err := s.seedDurableDiskSnapshot(ctx, request, mount)
 		if err != nil {
 			return err
@@ -402,10 +379,12 @@ func (s *Worker) restoreDurableDiskSnapshot(request *types.ContainerRequest, mou
 	ctx, cancel := context.WithTimeout(ctx, durableDiskTransferTimeout(max(snapshot.LogicalSizeBytes, snapshot.StoredSizeBytes)))
 	defer cancel()
 
-	if err := s.ensureDurableDiskSnapshotStorage(ctx, request); err != nil {
-		return err
+	if !snapshot.Public {
+		if err := s.ensureDurableDiskSnapshotStorage(ctx, request); err != nil {
+			return err
+		}
 	}
-	store, err := newDurableDiskSnapshotReadStore(ctx, request, snapshot.BucketName)
+	store, err := newDurableDiskSnapshotReadStore(ctx, request, snapshot, s.backendRepoClient)
 	if err != nil {
 		return err
 	}
@@ -433,11 +412,6 @@ func (s *Worker) restoreDurableDiskSnapshot(request *types.ContainerRequest, mou
 	})
 }
 
-// seedDurableDiskSnapshot resolves the snapshot a fresh disk was told to start
-// from. An explicit seed is part of the disk's correctness contract: silently
-// booting an empty disk makes a template or fork look healthy while discarding
-// the state it was created to carry. A prior local payload remains usable during
-// a transient lookup outage, but a genuinely fresh disk must resolve its seed.
 func (s *Worker) seedDurableDiskSnapshot(ctx context.Context, request *types.ContainerRequest, mount *types.Mount) (*types.DiskSnapshot, error) {
 	sourceID := mount.DurableDisk.SourceSnapshotId
 	if sourceID == "" {

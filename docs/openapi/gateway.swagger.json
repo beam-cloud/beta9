@@ -3518,7 +3518,7 @@
         },
         "sourceSnapshotId": {
           "type": "string",
-          "description": "Seeds a disk that has none of its own snapshots yet, so a new disk can\nstart life holding another disk's contents. Ignored once this disk has a\nhistory, which keeps it from rewinding on every start."
+          "description": "Snapshot used to initialize a disk with no snapshot history."
         }
       }
     },
@@ -3838,7 +3838,7 @@
         },
         "hostname": {
           "type": "string",
-          "description": "Hostname reported inside the container. Left empty, the container keeps\nthe runtime's own name (\"runc\" or \"runsc\"), which is what every stub that\ndoes not care about this still gets."
+          "description": "Hostname to set inside the container."
         }
       }
     },

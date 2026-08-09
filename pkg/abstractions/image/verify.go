@@ -93,23 +93,22 @@ func (is *ContainerImageService) buildOptionsFromVerifyRequest(ctx context.Conte
 	}
 
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
-	buildSecrets, buildSecretsFingerprint, err := is.retrieveBuildSecrets(ctx, in.Secrets, authInfo)
+	buildSecrets, err := is.retrieveBuildSecrets(ctx, in.Secrets, authInfo)
 	if err != nil {
 		return nil, err
 	}
 
 	opts := &BuildOpts{
-		PythonVersion:           in.PythonVersion,
-		PythonPackages:          in.PythonPackages,
-		Commands:                in.Commands,
-		BuildSteps:              convertBuildSteps(in.BuildSteps),
-		EnvVars:                 in.EnvVars,
-		Dockerfile:              in.Dockerfile,
-		BuildCtxObject:          in.BuildCtxObject,
-		BuildSecrets:            buildSecrets,
-		BuildSecretsFingerprint: buildSecretsFingerprint,
-		Gpu:                     in.Gpu,
-		ClipVersion:             is.config.ImageService.ClipVersion,
+		PythonVersion:  in.PythonVersion,
+		PythonPackages: in.PythonPackages,
+		Commands:       in.Commands,
+		BuildSteps:     convertBuildSteps(in.BuildSteps),
+		EnvVars:        in.EnvVars,
+		Dockerfile:     in.Dockerfile,
+		BuildCtxObject: in.BuildCtxObject,
+		BuildSecrets:   buildSecrets,
+		Gpu:            in.Gpu,
+		ClipVersion:    is.config.ImageService.ClipVersion,
 	}
 
 	if in.Dockerfile == "" {

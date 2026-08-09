@@ -11,13 +11,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
-// A worker mounts one of these per workspace while containers are already
-// running on it, so a mount it cannot complete has to come back as an error.
-// Exiting instead would take every unrelated container on the worker with it,
-// and this test would not fail so much as kill the package's test binary.
 func TestNewStorageReturnsMountFailuresInsteadOfExiting(t *testing.T) {
-	// LocalStorage.Mount calls MkdirAll directly, so this exercises the error
-	// path without depending on an object store or an external mount binary.
 	blocked := filepath.Join(t.TempDir(), "not-a-directory")
 	if err := os.WriteFile(blocked, nil, 0644); err != nil {
 		t.Fatalf("failed to seed the test: %v", err)

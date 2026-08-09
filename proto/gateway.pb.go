@@ -2549,9 +2549,7 @@ type DurableDisk struct {
 	Filesystem string `protobuf:"bytes,4,opt,name=filesystem,proto3" json:"filesystem,omitempty"`
 	Driver     string `protobuf:"bytes,5,opt,name=driver,proto3" json:"driver,omitempty"`
 	ReadOnly   bool   `protobuf:"varint,6,opt,name=read_only,json=readOnly,proto3" json:"read_only,omitempty"`
-	// Seeds a disk that has none of its own snapshots yet, so a new disk can
-	// start life holding another disk's contents. Ignored once this disk has a
-	// history, which keeps it from rewinding on every start.
+	// Snapshot used to initialize a disk with no snapshot history.
 	SourceSnapshotId string `protobuf:"bytes,7,opt,name=source_snapshot_id,json=sourceSnapshotId,proto3" json:"source_snapshot_id,omitempty"`
 }
 
@@ -2851,9 +2849,7 @@ type GetOrCreateStubRequest struct {
 	Disks              []*DurableDisk     `protobuf:"bytes,44,rep,name=disks,proto3" json:"disks,omitempty"`
 	AllowMarketplace   bool               `protobuf:"varint,45,opt,name=allow_marketplace,json=allowMarketplace,proto3" json:"allow_marketplace,omitempty"`
 	CheckpointTrigger  *CheckpointTrigger `protobuf:"bytes,46,opt,name=checkpoint_trigger,json=checkpointTrigger,proto3" json:"checkpoint_trigger,omitempty"`
-	// Hostname reported inside the container. Left empty, the container keeps
-	// the runtime's own name ("runc" or "runsc"), which is what every stub that
-	// does not care about this still gets.
+	// Hostname to set inside the container.
 	Hostname string `protobuf:"bytes,47,opt,name=hostname,proto3" json:"hostname,omitempty"`
 }
 
