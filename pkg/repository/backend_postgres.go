@@ -180,11 +180,8 @@ func (r *PostgresBackendRepository) ListWorkspaces(ctx context.Context) ([]types
 	return workspaces, nil
 }
 
-func (r *PostgresBackendRepository) CreateWorkspace(ctx context.Context, namePrefix ...string) (types.Workspace, error) {
+func (r *PostgresBackendRepository) CreateWorkspace(ctx context.Context) (types.Workspace, error) {
 	name := uuid.New().String()[:6] // Generate a short UUID for the workspace name
-	if len(namePrefix) > 0 && strings.TrimSpace(namePrefix[0]) != "" {
-		name = strings.TrimSpace(namePrefix[0]) + "-" + name
-	}
 
 	externalId, err := r.generateExternalId()
 	if err != nil {

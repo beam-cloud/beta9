@@ -3,7 +3,6 @@ package compute
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -12,77 +11,71 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
-type fakeWorkspaceBillingResolver struct {
-	workspaces map[string]types.Workspace
-	err        error
-	calls      int
-}
-
-func (r *fakeWorkspaceBillingResolver) GetWorkspaceByExternalId(_ context.Context, id string) (types.Workspace, error) {
-	r.calls++
-	if r.err != nil {
-		return types.Workspace{}, r.err
+func TestRoutedManagedBillingUsesThePoolRouteForEveryBillingOperation(t *testing.T) {
+	beam := &fakeManagedBilling{
+		launchDecision:  billingDecision{OK: true, Message: "beam"},
+		balanceDecision: billingDecision{OK: true, Message: "beam"},
 	}
-	workspace, ok := r.workspaces[id]
-	if !ok {
-		return types.Workspace{}, errors.New("workspace not found")
+	tama := &fakeManagedBilling{
+		launchDecision:  billingDecision{OK: true, Message: "tama"},
+		balanceDecision: billingDecision{OK: true, Message: "tama"},
 	}
-	return workspace, nil
-}
-
-func TestRoutedManagedBillingKeepsWhitelabelAndDefaultLedgersSeparate(t *testing.T) {
-	beam := &fakeManagedBilling{launchDecision: billingDecision{OK: true, Message: "beam"}}
-	tama := &fakeManagedBilling{launchDecision: billingDecision{OK: true, Message: "tama"}}
-	resolver := &fakeWorkspaceBillingResolver{workspaces: map[string]types.Workspace{
-		"workspace-beam": {ExternalId: "workspace-beam", Name: "ordinary"},
-		"workspace-tama": {ExternalId: "workspace-tama", Name: "tama-a1b2c3"},
-	}}
 	router := &routedManagedBilling{
 		defaultClient: beam,
-		resolver:      resolver,
 		routes: []managedBillingRoute{{
-			workspaceIDs:        map[string]struct{}{"workspace-legacy": {}},
-			workspaceNamePrefix: "tama-",
-			client:              tama,
+			poolNamePrefix: "tama-",
+			client:         tama,
 		}},
 	}
 
-	for workspaceID, want := range map[string]string{
-		"workspace-beam":   "beam",
-		"workspace-tama":   "tama",
-		"workspace-legacy": "tama",
+	for _, test := range []struct {
+		pool string
+		want string
+	}{
+		{pool: "default", want: "beam"},
+		{pool: "tama-machine-1", want: "tama"},
 	} {
-		decision, err := router.CheckLaunchCredit(context.Background(), billingCreditRequest{WorkspaceID: workspaceID})
+		decision, err := router.CheckLaunchCredit(
+			context.Background(),
+			billingCreditRequest{WorkspaceID: "workspace-1", PoolName: test.pool},
+		)
 		if err != nil {
-			t.Fatalf("CheckLaunchCredit(%q) error = %v", workspaceID, err)
+			t.Fatalf("CheckLaunchCredit(%q) error = %v", test.pool, err)
 		}
-		if decision.Message != want {
-			t.Fatalf("CheckLaunchCredit(%q) ledger = %q, want %q", workspaceID, decision.Message, want)
+		if decision.Message != test.want {
+			t.Fatalf("CheckLaunchCredit(%q) ledger = %q, want %q", test.pool, decision.Message, test.want)
 		}
 	}
-	if resolver.calls != 2 {
-		t.Fatalf("workspace lookups = %d, want 2; an exact migration ID should not need the database", resolver.calls)
+
+	decision, err := router.CheckBalance(context.Background(), "workspace-1", "tama-machine-1")
+	if err != nil || decision.Message != "tama" {
+		t.Fatalf("CheckBalance() = (%+v, %v), want Tama ledger", decision, err)
+	}
+	usage := managedUsage{WorkspaceID: "workspace-1", PoolName: "tama-machine-1"}
+	if err := router.RecordManagedUsage(context.Background(), usage); err != nil {
+		t.Fatalf("RecordManagedUsage() error = %v", err)
+	}
+	if tama.balanceCalls != 1 || len(tama.usage) != 1 {
+		t.Fatalf("Tama ledger calls = balance:%d usage:%d, want one each", tama.balanceCalls, len(tama.usage))
 	}
 }
 
-func TestRoutedManagedBillingFallsBackWhenWorkspaceRoutingIsUnavailable(t *testing.T) {
+func TestRoutedManagedBillingLeavesOtherPoolsOnTheDefaultLedger(t *testing.T) {
 	beam := &fakeManagedBilling{
 		launchDecision:  billingDecision{OK: true, Message: "beam"},
 		balanceDecision: billingDecision{OK: true, Message: "beam"},
 	}
 	router := &routedManagedBilling{
 		defaultClient: beam,
-		resolver:      &fakeWorkspaceBillingResolver{err: errors.New("database unavailable")},
 		routes: []managedBillingRoute{{
-			workspaceIDs:        map[string]struct{}{},
-			workspaceNamePrefix: "tama-",
-			client:              &fakeManagedBilling{launchDecision: billingDecision{OK: true}},
+			poolNamePrefix: "tama-",
+			client:         &fakeManagedBilling{launchDecision: billingDecision{OK: true}},
 		}},
 	}
 
 	decision, err := router.CheckLaunchCredit(
 		context.Background(),
-		billingCreditRequest{WorkspaceID: "workspace-unknown", RequiredCents: 2000},
+		billingCreditRequest{WorkspaceID: "workspace-1", PoolName: "ordinary", RequiredCents: 2000},
 	)
 	if err != nil {
 		t.Fatalf("CheckLaunchCredit() error = %v", err)
@@ -90,10 +83,13 @@ func TestRoutedManagedBillingFallsBackWhenWorkspaceRoutingIsUnavailable(t *testi
 	if !decision.OK || decision.Message != "beam" {
 		t.Fatalf("CheckLaunchCredit() decision = %+v, want default ledger", decision)
 	}
-	if _, err := router.CheckBalance(context.Background(), "workspace-unknown"); err != nil {
+	if _, err := router.CheckBalance(context.Background(), "workspace-1", "ordinary"); err != nil {
 		t.Fatalf("CheckBalance() error = %v", err)
 	}
-	if err := router.RecordManagedUsage(context.Background(), managedUsage{WorkspaceID: "workspace-unknown"}); err != nil {
+	if err := router.RecordManagedUsage(
+		context.Background(),
+		managedUsage{WorkspaceID: "workspace-1", PoolName: "ordinary"},
+	); err != nil {
 		t.Fatalf("RecordManagedUsage() error = %v", err)
 	}
 	if beam.launchCalls != 1 || beam.balanceCalls != 1 || len(beam.usage) != 1 {
@@ -116,15 +112,16 @@ func TestRoutedManagedBillingRouteEndpointAndMinimumOverrideDefaults(t *testing.
 	client := newRoutedManagedComputeBillingClient(types.ManagedComputeBillingConfig{
 		Mode:               billingModeNoop,
 		MinimumCreditCents: 2500,
-		Routes: []types.ManagedComputeBillingRouteConfig{{
-			WorkspaceIDs:       []string{"workspace-tama"},
+		PoolRoutes: []types.ManagedComputeBillingPoolRouteConfig{{
+			PoolNamePrefix:     "tama-",
 			Endpoint:           server.URL,
 			MinimumCreditCents: 7500,
 		}},
-	}, nil)
+	})
 
 	decision, err := client.CheckLaunchCredit(context.Background(), billingCreditRequest{
-		WorkspaceID:   "workspace-tama",
+		WorkspaceID:   "workspace-1",
+		PoolName:      "tama-machine-1",
 		RequiredCents: 2500,
 	})
 	if err != nil {

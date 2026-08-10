@@ -208,7 +208,7 @@ func (s *Service) reconcileBilling(ctx context.Context, workspaceID string, stat
 	}
 	changed := s.recordManagedUsage(ctx, workspaceID, state, now, false)
 
-	decision, err := s.billing.CheckBalance(ctx, workspaceID)
+	decision, err := s.billing.CheckBalance(ctx, workspaceID, state.Name)
 	if err != nil {
 		// Fail closed: terminate once balance checks have failed past the grace period.
 		if state.BillingDegradedSince.IsZero() {

@@ -28,25 +28,19 @@ var errManagedBillingUnavailable = errors.New("managed compute billing is not co
 
 type managedComputeBillingClient interface {
 	CheckLaunchCredit(context.Context, billingCreditRequest) (billingDecision, error)
-	CheckBalance(context.Context, string) (billingDecision, error)
+	CheckBalance(context.Context, string, string) (billingDecision, error)
 	RecordManagedUsage(context.Context, managedUsage) error
-}
-
-type workspaceBillingRouteResolver interface {
-	GetWorkspaceByExternalId(context.Context, string) (types.Workspace, error)
 }
 
 type routedManagedBilling struct {
 	defaultClient managedComputeBillingClient
 	routes        []managedBillingRoute
-	resolver      workspaceBillingRouteResolver
 }
 
 type managedBillingRoute struct {
-	workspaceIDs        map[string]struct{}
-	workspaceNamePrefix string
-	client              managedComputeBillingClient
-	minimumCents        int64
+	poolNamePrefix string
+	client         managedComputeBillingClient
+	minimumCents   int64
 }
 
 type billingCreditRequest struct {
@@ -107,67 +101,34 @@ func newManagedComputeBillingClient(config types.ManagedComputeBillingConfig) ma
 	return noopManagedBilling{minimumCents: config.MinimumCreditCentsOrDefault()}
 }
 
-func newRoutedManagedComputeBillingClient(
-	config types.ManagedComputeBillingConfig,
-	resolver workspaceBillingRouteResolver,
-) managedComputeBillingClient {
+func newRoutedManagedComputeBillingClient(config types.ManagedComputeBillingConfig) managedComputeBillingClient {
 	defaultClient := newManagedComputeBillingClient(config)
-	if len(config.Routes) == 0 {
+	if len(config.PoolRoutes) == 0 {
 		return defaultClient
 	}
 
-	routes := make([]managedBillingRoute, 0, len(config.Routes))
-	for _, configured := range config.Routes {
-		workspaceIDs := make(map[string]struct{}, len(configured.WorkspaceIDs))
-		for _, workspaceID := range configured.WorkspaceIDs {
-			if workspaceID = strings.TrimSpace(workspaceID); workspaceID != "" {
-				workspaceIDs[workspaceID] = struct{}{}
-			}
-		}
-		prefix := strings.TrimSpace(configured.WorkspaceNamePrefix)
-		if len(workspaceIDs) == 0 && prefix == "" {
+	routes := make([]managedBillingRoute, 0, len(config.PoolRoutes))
+	for _, configured := range config.PoolRoutes {
+		prefix := strings.TrimSpace(configured.PoolNamePrefix)
+		if prefix == "" {
 			continue
 		}
 		routeConfig := configured.BillingConfig(config)
 		routes = append(routes, managedBillingRoute{
-			workspaceIDs:        workspaceIDs,
-			workspaceNamePrefix: prefix,
-			client:              newManagedComputeBillingClient(routeConfig),
-			minimumCents:        routeConfig.MinimumCreditCentsOrDefault(),
+			poolNamePrefix: prefix,
+			client:         newManagedComputeBillingClient(routeConfig),
+			minimumCents:   routeConfig.MinimumCreditCentsOrDefault(),
 		})
 	}
 	if len(routes) == 0 {
 		return defaultClient
 	}
-	return &routedManagedBilling{defaultClient: defaultClient, routes: routes, resolver: resolver}
+	return &routedManagedBilling{defaultClient: defaultClient, routes: routes}
 }
 
-func (r *routedManagedBilling) clientFor(ctx context.Context, workspaceID string) (managedComputeBillingClient, int64) {
+func (r *routedManagedBilling) clientFor(poolName string) (managedComputeBillingClient, int64) {
 	for _, route := range r.routes {
-		if _, ok := route.workspaceIDs[workspaceID]; ok {
-			return route.client, route.minimumCents
-		}
-	}
-
-	needsWorkspace := false
-	for _, route := range r.routes {
-		if route.workspaceNamePrefix != "" {
-			needsWorkspace = true
-			break
-		}
-	}
-	if !needsWorkspace {
-		return r.defaultClient, 0
-	}
-	if r.resolver == nil {
-		return r.defaultClient, 0
-	}
-	workspace, err := r.resolver.GetWorkspaceByExternalId(ctx, workspaceID)
-	if err != nil {
-		return r.defaultClient, 0
-	}
-	for _, route := range r.routes {
-		if route.workspaceNamePrefix != "" && strings.HasPrefix(workspace.Name, route.workspaceNamePrefix) {
+		if route.poolNamePrefix != "" && strings.HasPrefix(poolName, route.poolNamePrefix) {
 			return route.client, route.minimumCents
 		}
 	}
@@ -178,20 +139,20 @@ func (r *routedManagedBilling) CheckLaunchCredit(
 	ctx context.Context,
 	req billingCreditRequest,
 ) (billingDecision, error) {
-	client, minimumCents := r.clientFor(ctx, req.WorkspaceID)
+	client, minimumCents := r.clientFor(req.PoolName)
 	if minimumCents > 0 {
 		req.RequiredCents = minimumCents
 	}
 	return client.CheckLaunchCredit(ctx, req)
 }
 
-func (r *routedManagedBilling) CheckBalance(ctx context.Context, workspaceID string) (billingDecision, error) {
-	client, _ := r.clientFor(ctx, workspaceID)
-	return client.CheckBalance(ctx, workspaceID)
+func (r *routedManagedBilling) CheckBalance(ctx context.Context, workspaceID, poolName string) (billingDecision, error) {
+	client, _ := r.clientFor(poolName)
+	return client.CheckBalance(ctx, workspaceID, poolName)
 }
 
 func (r *routedManagedBilling) RecordManagedUsage(ctx context.Context, usage managedUsage) error {
-	client, _ := r.clientFor(ctx, usage.WorkspaceID)
+	client, _ := r.clientFor(usage.PoolName)
 	return client.RecordManagedUsage(ctx, usage)
 }
 
@@ -204,7 +165,7 @@ func (n noopManagedBilling) CheckLaunchCredit(_ context.Context, req billingCred
 	return billingDecision{OK: true, RequiredCents: required, AvailableCents: required}, nil
 }
 
-func (n noopManagedBilling) CheckBalance(_ context.Context, _ string) (billingDecision, error) {
+func (n noopManagedBilling) CheckBalance(_ context.Context, _, _ string) (billingDecision, error) {
 	return billingDecision{OK: true, RequiredCents: n.minimumCents, AvailableCents: n.minimumCents}, nil
 }
 
@@ -218,7 +179,7 @@ func (disabledManagedBilling) CheckLaunchCredit(context.Context, billingCreditRe
 	return billingDecision{OK: false, ErrorCode: launchErrorBillingUnavailable}, errManagedBillingUnavailable
 }
 
-func (disabledManagedBilling) CheckBalance(context.Context, string) (billingDecision, error) {
+func (disabledManagedBilling) CheckBalance(context.Context, string, string) (billingDecision, error) {
 	return billingDecision{OK: false, ErrorCode: launchErrorBillingUnavailable}, errManagedBillingUnavailable
 }
 
@@ -256,7 +217,7 @@ func (h *httpManagedBilling) CheckLaunchCredit(ctx context.Context, req billingC
 	return decision, nil
 }
 
-func (h *httpManagedBilling) CheckBalance(ctx context.Context, workspaceID string) (billingDecision, error) {
+func (h *httpManagedBilling) CheckBalance(ctx context.Context, workspaceID, _ string) (billingDecision, error) {
 	req := map[string]string{"workspace_id": workspaceID}
 	var decision billingDecision
 	if err := h.post(ctx, "balance/", req, &decision); err != nil {

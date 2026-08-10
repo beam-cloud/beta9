@@ -174,7 +174,7 @@ type WorkspaceRepository interface {
 
 type BackendRepository interface {
 	ListWorkspaces(ctx context.Context) ([]types.Workspace, error)
-	CreateWorkspace(ctx context.Context, namePrefix ...string) (types.Workspace, error)
+	CreateWorkspace(ctx context.Context) (types.Workspace, error)
 	GetWorkspaceByExternalId(ctx context.Context, externalId string) (types.Workspace, error)
 	GetWorkspaceByExternalIdWithSigningKey(ctx context.Context, externalId string) (types.Workspace, error)
 	GetWorkspace(ctx context.Context, workspaceId uint) (*types.Workspace, error)

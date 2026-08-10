@@ -444,8 +444,7 @@ managedCompute:
     mode: noop
     endpoint: ""
     authToken: ""
-    # Optional workspace-specific billing endpoints.
-    routes: []
+    poolRoutes: []
     required: false
     timeout: 5s
     reconcileInterval: 1m

@@ -5518,7 +5518,7 @@ func (b *fakeManagedBilling) CheckLaunchCredit(_ context.Context, req billingCre
 	return b.launchDecision, b.launchErr
 }
 
-func (b *fakeManagedBilling) CheckBalance(context.Context, string) (billingDecision, error) {
+func (b *fakeManagedBilling) CheckBalance(context.Context, string, string) (billingDecision, error) {
 	b.balanceCalls++
 	b.balanceSawUsageCount = len(b.usage)
 	return b.balanceDecision, b.balanceErr
