@@ -1,8 +1,10 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -41,15 +43,6 @@ func (c *fakeAgentPoolVirtualizationClient) GetAgentPoolVirtualization(ctx conte
 	return c.resp, nil
 }
 
-func TestShouldSetupThunderNodeRequiresGPUVirtualization(t *testing.T) {
-	if shouldSetupThunderNode(false) {
-		t.Fatal("non-virtualized pool should not set up Thunder")
-	}
-	if !shouldSetupThunderNode(true) {
-		t.Fatal("virtualized GPU pool should set up Thunder")
-	}
-}
-
 func TestRequestAgentPoolGPUVirtualizedUsesAgentTokenRPC(t *testing.T) {
 	client := &fakeAgentPoolVirtualizationClient{resp: &pb.GetAgentPoolVirtualizationResponse{Ok: true, GpuVirtualized: true}}
 
@@ -71,6 +64,22 @@ func TestRequestAgentPoolGPUVirtualizedReturnsRPCError(t *testing.T) {
 	_, err := requestAgentPoolGPUVirtualized(context.Background(), client, "agent-token")
 	if err == nil || err.Error() != "invalid agent token" {
 		t.Fatalf("requestAgentPoolGPUVirtualized() error = %v", err)
+	}
+}
+
+func TestLogThunderNodeEnrollmentSkippedWritesStructuredWarningToProvidedWriter(t *testing.T) {
+	var stderr bytes.Buffer
+	logThunderNodeEnrollmentSkipped(&stderr, errors.New("gateway unavailable"))
+
+	got := stderr.String()
+	if !strings.Contains(got, `"level":"warn"`) {
+		t.Fatalf("missing warning level: %q", got)
+	}
+	if !strings.Contains(got, `"error":"gateway unavailable"`) {
+		t.Fatalf("missing error field: %q", got)
+	}
+	if !strings.Contains(got, `"message":"Thunder node enrollment skipped"`) {
+		t.Fatalf("missing message field: %q", got)
 	}
 }
 
