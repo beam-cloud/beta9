@@ -13,6 +13,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"github.com/rs/zerolog/log"
 	"google.golang.org/grpc"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tsnet"
@@ -89,10 +90,10 @@ func runTSNetRouteProxy(ctx context.Context, client pb.GatewayServiceClient, age
 	}
 	poolVirtualized, err := requestAgentPoolGPUVirtualized(ctx, client, agentToken)
 	if err != nil {
-		fmt.Fprintf(stderr, "Thunder node enrollment skipped: %v\n", err)
-	} else if shouldSetupThunderNode(poolVirtualized) {
+		log.Warn().Err(err).Msg("Thunder node enrollment skipped")
+	} else if poolVirtualized {
 		if err := setupThunderNode(ctx, client, agentToken, stdout, stderr); err != nil {
-			fmt.Fprintf(stderr, "Thunder node enrollment skipped: %v\n", err)
+			log.Warn().Err(err).Msg("Thunder node enrollment skipped")
 		} else {
 			defer deleteThunderNodeEnrollment(context.Background(), client, agentToken, stderr)
 		}
@@ -117,10 +118,6 @@ func runTSNetRouteProxy(ctx context.Context, client pb.GatewayServiceClient, age
 		go emitTSNetSnapshots(ctx, telemetry, localClient, proxyTarget)
 	}
 	return newRouteProxy(client, agentToken, machineID, listener, proxyTarget, workers, stdout, stderr).run(ctx)
-}
-
-func shouldSetupThunderNode(gpuVirtualized bool) bool {
-	return gpuVirtualized
 }
 
 func emitTSNetSnapshots(ctx context.Context, telemetry *agentTelemetry, client tsnetStatusClient, proxyTarget string) {

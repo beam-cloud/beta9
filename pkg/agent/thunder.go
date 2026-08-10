@@ -2,10 +2,13 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 
 	thundersdk "github.com/Thunder-Compute/thunder-sdk"
@@ -15,6 +18,7 @@ import (
 )
 
 const thunderNodeInstallTimeout = 2 * time.Minute
+const thunderNodeInstallCancelGracePeriod = 2 * time.Second
 
 var runThunderNodeInstallCommand = defaultRunThunderNodeInstallCommand
 var discoverThunderNodeIP = defaultDiscoverThunderNodeIP
@@ -101,12 +105,47 @@ func thunderNodeInstallCommand(reachableIP, enrollmentToken string) string {
 }
 
 func defaultRunThunderNodeInstallCommand(ctx context.Context, command string) error {
-	out, err := exec.CommandContext(ctx, "sh", "-c", command).CombinedOutput()
+	cmd := newThunderNodeInstallCommand(ctx, command)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			err = ctxErr
+		}
 		output := strings.TrimSpace(string(out))
 		if output != "" {
 			return fmt.Errorf("%w: %s", err, output)
 		}
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func newThunderNodeInstallCommand(ctx context.Context, command string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "bash", "-o", "pipefail", "-c", command)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.WaitDelay = thunderNodeInstallCancelGracePeriod
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		return killThunderNodeInstallProcessGroup(cmd.Process.Pid)
+	}
+	return cmd
+}
+
+func killThunderNodeInstallProcessGroup(pid int) error {
+	pgid, err := syscall.Getpgid(pid)
+	if err != nil {
+		if errors.Is(err, syscall.ESRCH) {
+			return nil
+		}
+		return err
+	}
+
+	if err := syscall.Kill(-pgid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) && !errors.Is(err, os.ErrProcessDone) {
 		return err
 	}
 	return nil

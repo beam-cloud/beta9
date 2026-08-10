@@ -41,15 +41,6 @@ func (c *fakeAgentPoolVirtualizationClient) GetAgentPoolVirtualization(ctx conte
 	return c.resp, nil
 }
 
-func TestShouldSetupThunderNodeRequiresGPUVirtualization(t *testing.T) {
-	if shouldSetupThunderNode(false) {
-		t.Fatal("non-virtualized pool should not set up Thunder")
-	}
-	if !shouldSetupThunderNode(true) {
-		t.Fatal("virtualized GPU pool should set up Thunder")
-	}
-}
-
 func TestRequestAgentPoolGPUVirtualizedUsesAgentTokenRPC(t *testing.T) {
 	client := &fakeAgentPoolVirtualizationClient{resp: &pb.GetAgentPoolVirtualizationResponse{Ok: true, GpuVirtualized: true}}
 

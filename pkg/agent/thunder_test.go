@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	pb "github.com/beam-cloud/beta9/proto"
 	"google.golang.org/grpc"
@@ -101,6 +102,45 @@ func TestSetupThunderNodeSkipsInstallerWhenPrivateIPMissing(t *testing.T) {
 	err := setupThunderNode(context.Background(), client, "agent-token", nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "no private ip") {
 		t.Fatalf("setupThunderNode() error = %v", err)
+	}
+}
+
+func TestDefaultRunThunderNodeInstallCommandPropagatesPipelineFailure(t *testing.T) {
+	err := defaultRunThunderNodeInstallCommand(context.Background(), "printf download-failed >&2; false | true")
+	if err == nil {
+		t.Fatal("installer command succeeded despite pipeline failure")
+	}
+	if !strings.Contains(err.Error(), "download-failed") {
+		t.Fatalf("installer command error = %v", err)
+	}
+}
+
+func TestDefaultRunThunderNodeInstallCommandKillsProcessGroupOnTimeout(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	err := defaultRunThunderNodeInstallCommand(ctx, "sh -c 'sleep 10'")
+	elapsed := time.Since(start)
+
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("installer command error = %v", err)
+	}
+	if elapsed > 3*time.Second {
+		t.Fatalf("installer command took %s after timeout", elapsed)
+	}
+}
+
+func TestNewThunderNodeInstallCommandUsesPipefailAndProcessGroup(t *testing.T) {
+	cmd := newThunderNodeInstallCommand(context.Background(), "true")
+	if got := strings.Join(cmd.Args, " "); got != "bash -o pipefail -c true" {
+		t.Fatalf("install command args = %q", got)
+	}
+	if cmd.SysProcAttr == nil || !cmd.SysProcAttr.Setpgid {
+		t.Fatalf("install command should start a new process group")
+	}
+	if cmd.Cancel == nil {
+		t.Fatalf("install command should have a process-group cancel hook")
 	}
 }
 
