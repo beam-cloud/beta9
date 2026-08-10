@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	thundersdk "github.com/Thunder-Compute/thunder-sdk"
@@ -41,36 +43,43 @@ func TestServiceCreateAndDeleteClientEnrollment(t *testing.T) {
 	var createZoneCalls int
 	var createTokenCalls int
 	var deleteTokenCalls int
+	handlerErrors := newThunderHTTPHandlerErrors()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer central-token" {
-			t.Fatalf("authorization = %q", got)
+			handlerErrors.failf(w, "authorization = %q", got)
+			return
 		}
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/zones/ensure":
 			createZoneCalls++
 			var payload thundersdk.CreateZoneRequest
 			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-				t.Fatal(err)
+				handlerErrors.failf(w, "decode request body: %v", err)
+				return
 			}
 			if payload.DisplayName != "workspace-1-pool-1" {
-				t.Fatalf("zone displayName = %q", payload.DisplayName)
+				handlerErrors.failf(w, "zone displayName = %q", payload.DisplayName)
+				return
 			}
 			_ = json.NewEncoder(w).Encode(thundersdk.CreateZoneResponse{ZoneID: "zone-1", DisplayName: payload.DisplayName})
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/enrollment-tokens":
 			createTokenCalls++
 			payload := map[string]any{}
 			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-				t.Fatal(err)
+				handlerErrors.failf(w, "decode request body: %v", err)
+				return
 			}
 			if payload["zoneId"] != "zone-1" || payload["role"] != thundersdk.RoleClient || payload["gpuType"] != "h100" || payload["gpuCount"] != float64(2) {
-				t.Fatalf("client enrollment payload = %+v", payload)
+				handlerErrors.failf(w, "client enrollment payload = %+v", payload)
+				return
 			}
 			_ = json.NewEncoder(w).Encode(thundersdk.EnrollmentToken{EnrollmentTokenID: "token-1", EnrollmentToken: "tr_client", ZoneID: "zone-1", Role: thundersdk.RoleClient, GPUType: "h100", GPUCount: 2})
 		case r.Method == http.MethodDelete && r.URL.Path == "/api/v1/enrollment-tokens/token-1/node":
 			deleteTokenCalls++
 			_ = json.NewEncoder(w).Encode(thundersdk.DeleteEnrollmentServerResponse{EnrollmentTokenID: "token-1", Role: thundersdk.RoleClient, ServerDeleted: true})
 		default:
-			t.Fatalf("unexpected request = %s %s", r.Method, r.URL.Path)
+			handlerErrors.failf(w, "unexpected request = %s %s", r.Method, r.URL.Path)
+			return
 		}
 	}))
 	defer server.Close()
@@ -90,6 +99,7 @@ func TestServiceCreateAndDeleteClientEnrollment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	handlerErrors.assertEmpty(t)
 	if !createResp.Ok || createResp.ErrorMsg != "" {
 		t.Fatalf("CreateClientEnrollment() = %+v", createResp)
 	}
@@ -119,6 +129,7 @@ func TestServiceCreateAndDeleteClientEnrollment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	handlerErrors.assertEmpty(t)
 	if !deleteResp.Ok || deleteResp.ErrorMsg != "" {
 		t.Fatalf("DeleteClientEnrollment() = %+v", deleteResp)
 	}
@@ -155,20 +166,25 @@ func TestServiceCreateClientEnrollmentReusesExistingZone(t *testing.T) {
 	}
 
 	var createZoneCalls int
+	handlerErrors := newThunderHTTPHandlerErrors()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost && r.URL.Path == "/api/v1/zones/ensure" {
 			createZoneCalls++
-			t.Fatal("CreateZone should not be called for an existing zone")
+			handlerErrors.failf(w, "CreateZone should not be called for an existing zone")
+			return
 		}
 		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/enrollment-tokens" {
-			t.Fatalf("unexpected request = %s %s", r.Method, r.URL.Path)
+			handlerErrors.failf(w, "unexpected request = %s %s", r.Method, r.URL.Path)
+			return
 		}
 		payload := map[string]any{}
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			t.Fatal(err)
+			handlerErrors.failf(w, "decode request body: %v", err)
+			return
 		}
 		if payload["zoneId"] != "zone-existing" {
-			t.Fatalf("zoneId = %v", payload["zoneId"])
+			handlerErrors.failf(w, "zoneId = %v", payload["zoneId"])
+			return
 		}
 		_ = json.NewEncoder(w).Encode(thundersdk.EnrollmentToken{EnrollmentTokenID: "token-1", EnrollmentToken: "tr_client", ZoneID: "zone-existing", Role: thundersdk.RoleClient})
 	}))
@@ -182,6 +198,7 @@ func TestServiceCreateClientEnrollmentReusesExistingZone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	handlerErrors.assertEmpty(t)
 	if !resp.Ok || resp.ErrorMsg != "" {
 		t.Fatalf("CreateClientEnrollment() = %+v", resp)
 	}
@@ -212,6 +229,7 @@ func TestServiceCreateClientEnrollmentReplacesExistingToken(t *testing.T) {
 
 	var createTokenCalls int
 	var deleted []string
+	handlerErrors := newThunderHTTPHandlerErrors()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/enrollment-tokens":
@@ -221,7 +239,8 @@ func TestServiceCreateClientEnrollmentReplacesExistingToken(t *testing.T) {
 			deleted = append(deleted, strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/v1/enrollment-tokens/"), "/node"))
 			_ = json.NewEncoder(w).Encode(thundersdk.DeleteEnrollmentServerResponse{ServerDeleted: true})
 		default:
-			t.Fatalf("unexpected request = %s %s", r.Method, r.URL.Path)
+			handlerErrors.failf(w, "unexpected request = %s %s", r.Method, r.URL.Path)
+			return
 		}
 	}))
 	defer server.Close()
@@ -234,6 +253,7 @@ func TestServiceCreateClientEnrollmentReplacesExistingToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	handlerErrors.assertEmpty(t)
 	if !resp.Ok || resp.ErrorMsg != "" || !strings.Contains(resp.InstallCommand, "tr_client_new") {
 		t.Fatalf("CreateClientEnrollment() = %+v", resp)
 	}
@@ -273,6 +293,7 @@ func TestServiceCreateClientEnrollmentSucceedsWhenPreviousTokenRevokeFails(t *te
 	}
 
 	var deleted []string
+	handlerErrors := newThunderHTTPHandlerErrors()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/enrollment-tokens":
@@ -282,7 +303,8 @@ func TestServiceCreateClientEnrollmentSucceedsWhenPreviousTokenRevokeFails(t *te
 			w.WriteHeader(http.StatusInternalServerError)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": "internal", "message": "delete failed"})
 		default:
-			t.Fatalf("unexpected request = %s %s", r.Method, r.URL.Path)
+			handlerErrors.failf(w, "unexpected request = %s %s", r.Method, r.URL.Path)
+			return
 		}
 	}))
 	defer server.Close()
@@ -296,6 +318,7 @@ func TestServiceCreateClientEnrollmentSucceedsWhenPreviousTokenRevokeFails(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
+	handlerErrors.assertEmpty(t)
 	if !resp.Ok || resp.ErrorMsg != "" || !strings.Contains(resp.InstallCommand, "tr_client_new") {
 		t.Fatalf("CreateClientEnrollment() = %+v", resp)
 	}
@@ -385,42 +408,51 @@ func TestServiceCreateAndDeleteNodeEnrollment(t *testing.T) {
 	var createZoneCalls int
 	var createTokenCalls int
 	var deleteTokenCalls int
+	handlerErrors := newThunderHTTPHandlerErrors()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer central-token" {
-			t.Fatalf("authorization = %q", got)
+			handlerErrors.failf(w, "authorization = %q", got)
+			return
 		}
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/zones/ensure":
 			createZoneCalls++
 			var payload thundersdk.CreateZoneRequest
 			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-				t.Fatal(err)
+				handlerErrors.failf(w, "decode request body: %v", err)
+				return
 			}
 			if payload.DisplayName != "workspace-1-pool-1" {
-				t.Fatalf("zone displayName = %q", payload.DisplayName)
+				handlerErrors.failf(w, "zone displayName = %q", payload.DisplayName)
+				return
 			}
 			_ = json.NewEncoder(w).Encode(thundersdk.CreateZoneResponse{ZoneID: "zone-1", DisplayName: payload.DisplayName})
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/enrollment-tokens":
 			createTokenCalls++
 			payload := map[string]any{}
 			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-				t.Fatal(err)
+				handlerErrors.failf(w, "decode request body: %v", err)
+				return
 			}
 			if payload["zoneId"] != "zone-1" || payload["role"] != thundersdk.RoleServer {
-				t.Fatalf("node enrollment payload = %+v", payload)
+				handlerErrors.failf(w, "node enrollment payload = %+v", payload)
+				return
 			}
 			if _, ok := payload["gpuType"]; ok {
-				t.Fatalf("node enrollment payload included gpuType: %+v", payload)
+				handlerErrors.failf(w, "node enrollment payload included gpuType: %+v", payload)
+				return
 			}
 			if _, ok := payload["gpuCount"]; ok {
-				t.Fatalf("node enrollment payload included gpuCount: %+v", payload)
+				handlerErrors.failf(w, "node enrollment payload included gpuCount: %+v", payload)
+				return
 			}
 			_ = json.NewEncoder(w).Encode(thundersdk.EnrollmentToken{EnrollmentTokenID: "node-token-1", EnrollmentToken: "tr_node", ZoneID: "zone-1", Role: thundersdk.RoleServer})
 		case r.Method == http.MethodDelete && r.URL.Path == "/api/v1/enrollment-tokens/node-token-1/node":
 			deleteTokenCalls++
 			_ = json.NewEncoder(w).Encode(thundersdk.DeleteEnrollmentServerResponse{EnrollmentTokenID: "node-token-1", Role: thundersdk.RoleServer, ServerDeleted: true})
 		default:
-			t.Fatalf("unexpected request = %s %s", r.Method, r.URL.Path)
+			handlerErrors.failf(w, "unexpected request = %s %s", r.Method, r.URL.Path)
+			return
 		}
 	}))
 	defer server.Close()
@@ -440,6 +472,7 @@ func TestServiceCreateAndDeleteNodeEnrollment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	handlerErrors.assertEmpty(t)
 	if !createResp.Ok || createResp.ErrorMsg != "" || createResp.EnrollmentToken != "tr_node" {
 		t.Fatalf("CreateNodeEnrollment() = %+v", createResp)
 	}
@@ -466,6 +499,7 @@ func TestServiceCreateAndDeleteNodeEnrollment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	handlerErrors.assertEmpty(t)
 	if !deleteResp.Ok || deleteResp.ErrorMsg != "" {
 		t.Fatalf("DeleteNodeEnrollment() = %+v", deleteResp)
 	}
@@ -494,23 +528,27 @@ func TestServiceCreateNodeEnrollmentReplacesExistingToken(t *testing.T) {
 
 	var createTokenCalls int
 	var deleted []string
+	handlerErrors := newThunderHTTPHandlerErrors()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/enrollment-tokens":
 			createTokenCalls++
 			payload := map[string]any{}
 			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-				t.Fatal(err)
+				handlerErrors.failf(w, "decode request body: %v", err)
+				return
 			}
 			if payload["zoneId"] != "zone-existing" || payload["role"] != thundersdk.RoleServer {
-				t.Fatalf("node enrollment payload = %+v", payload)
+				handlerErrors.failf(w, "node enrollment payload = %+v", payload)
+				return
 			}
 			_ = json.NewEncoder(w).Encode(thundersdk.EnrollmentToken{EnrollmentTokenID: "node-token-new", EnrollmentToken: "tr_node_new", ZoneID: "zone-existing", Role: thundersdk.RoleServer})
 		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/v1/enrollment-tokens/"):
 			deleted = append(deleted, strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/v1/enrollment-tokens/"), "/node"))
 			_ = json.NewEncoder(w).Encode(thundersdk.DeleteEnrollmentServerResponse{ServerDeleted: true})
 		default:
-			t.Fatalf("unexpected request = %s %s", r.Method, r.URL.Path)
+			handlerErrors.failf(w, "unexpected request = %s %s", r.Method, r.URL.Path)
+			return
 		}
 	}))
 	defer server.Close()
@@ -529,6 +567,7 @@ func TestServiceCreateNodeEnrollmentReplacesExistingToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	handlerErrors.assertEmpty(t)
 	if !resp.Ok || resp.ErrorMsg != "" || resp.EnrollmentToken != "tr_node_new" {
 		t.Fatalf("CreateNodeEnrollment() = %+v", resp)
 	}
@@ -560,6 +599,7 @@ func TestServiceCreateNodeEnrollmentSucceedsWhenPreviousTokenRevokeFails(t *test
 	}
 
 	var deleted []string
+	handlerErrors := newThunderHTTPHandlerErrors()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/enrollment-tokens":
@@ -569,7 +609,8 @@ func TestServiceCreateNodeEnrollmentSucceedsWhenPreviousTokenRevokeFails(t *test
 			w.WriteHeader(http.StatusInternalServerError)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": "internal", "message": "delete failed"})
 		default:
-			t.Fatalf("unexpected request = %s %s", r.Method, r.URL.Path)
+			handlerErrors.failf(w, "unexpected request = %s %s", r.Method, r.URL.Path)
+			return
 		}
 	}))
 	defer server.Close()
@@ -589,6 +630,7 @@ func TestServiceCreateNodeEnrollmentSucceedsWhenPreviousTokenRevokeFails(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
+	handlerErrors.assertEmpty(t)
 	if !resp.Ok || resp.ErrorMsg != "" || resp.EnrollmentToken != "tr_node_new" {
 		t.Fatalf("CreateNodeEnrollment() = %+v", resp)
 	}
@@ -697,6 +739,35 @@ func TestServiceCreateNodeEnrollmentRequiresValidAgentToken(t *testing.T) {
 	}
 	if resp.Ok || !strings.Contains(resp.ErrorMsg, "managed pool no longer exists") {
 		t.Fatalf("CreateNodeEnrollment() = %+v", resp)
+	}
+}
+
+type thunderHTTPHandlerErrors struct {
+	mu  sync.Mutex
+	err error
+}
+
+func newThunderHTTPHandlerErrors() *thunderHTTPHandlerErrors {
+	return &thunderHTTPHandlerErrors{}
+}
+
+func (e *thunderHTTPHandlerErrors) failf(w http.ResponseWriter, format string, args ...any) {
+	err := fmt.Errorf(format, args...)
+	e.mu.Lock()
+	if e.err == nil {
+		e.err = err
+	}
+	e.mu.Unlock()
+	http.Error(w, err.Error(), http.StatusInternalServerError)
+}
+
+func (e *thunderHTTPHandlerErrors) assertEmpty(t *testing.T) {
+	t.Helper()
+	e.mu.Lock()
+	err := e.err
+	e.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -354,19 +354,6 @@ func (s *Service) clientEnrollmentAttrs(ctx context.Context, containerID string)
 	}, nil
 }
 
-func (s *Service) ensureZone(ctx context.Context, workspaceID, poolName string) (string, error) {
-	var zoneID string
-	err := s.repo.WithPoolLock(ctx, workspaceID, poolName, func(ctx context.Context) error {
-		var err error
-		zoneID, err = s.ensureZoneLocked(ctx, workspaceID, poolName)
-		return err
-	})
-	if err != nil {
-		return "", err
-	}
-	return zoneID, nil
-}
-
 func (s *Service) ensureZoneLocked(ctx context.Context, workspaceID, poolName string) (string, error) {
 	state, found, err := s.repo.GetZone(ctx, workspaceID, poolName)
 	if err != nil {
