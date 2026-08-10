@@ -928,8 +928,9 @@ type ManagedComputeBillingRouteConfig struct {
 
 func (r ManagedComputeBillingRouteConfig) BillingConfig(base ManagedComputeBillingConfig) ManagedComputeBillingConfig {
 	base.Routes = nil
-	if strings.TrimSpace(r.Endpoint) != "" {
-		base.Endpoint = r.Endpoint
+	if endpoint := strings.TrimSpace(r.Endpoint); endpoint != "" {
+		base.Endpoint = endpoint
+		base.Mode = ""
 	}
 	if strings.TrimSpace(r.AuthToken) != "" {
 		base.AuthToken = r.AuthToken

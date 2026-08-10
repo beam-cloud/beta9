@@ -1836,6 +1836,15 @@ func TestRunContainerMaterializeFailureFallsBackWithoutRestore(t *testing.T) {
 	require.Nil(t, request.Checkpoint)
 }
 
+func TestHasAvailableCheckpoint(t *testing.T) {
+	require.False(t, hasAvailableCheckpoint(&types.ContainerRequest{
+		Checkpoint: &types.Checkpoint{Status: string(types.CheckpointStatusRestoreFailed)},
+	}))
+	require.True(t, hasAvailableCheckpoint(&types.ContainerRequest{
+		Checkpoint: &types.Checkpoint{Status: string(types.CheckpointStatusAvailable)},
+	}))
+}
+
 func TestShouldCreateCheckpointIgnoresNonAvailableAttachedCheckpoint(t *testing.T) {
 	t.Setenv("WORKER_POOL_NAME", "default")
 

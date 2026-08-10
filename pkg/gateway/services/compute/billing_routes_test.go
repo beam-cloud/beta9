@@ -2,8 +2,12 @@ package compute
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 )
@@ -61,8 +65,11 @@ func TestRoutedManagedBillingKeepsWhitelabelAndDefaultLedgersSeparate(t *testing
 	}
 }
 
-func TestRoutedManagedBillingDoesNotGuessWhenWorkspaceRoutingIsUnavailable(t *testing.T) {
-	beam := &fakeManagedBilling{launchDecision: billingDecision{OK: true}}
+func TestRoutedManagedBillingFallsBackWhenWorkspaceRoutingIsUnavailable(t *testing.T) {
+	beam := &fakeManagedBilling{
+		launchDecision:  billingDecision{OK: true, Message: "beam"},
+		balanceDecision: billingDecision{OK: true, Message: "beam"},
+	}
 	router := &routedManagedBilling{
 		defaultClient: beam,
 		resolver:      &fakeWorkspaceBillingResolver{err: errors.New("database unavailable")},
@@ -77,13 +84,61 @@ func TestRoutedManagedBillingDoesNotGuessWhenWorkspaceRoutingIsUnavailable(t *te
 		context.Background(),
 		billingCreditRequest{WorkspaceID: "workspace-unknown", RequiredCents: 2000},
 	)
-	if !errors.Is(err, errManagedBillingRouteUnavailable) {
-		t.Fatalf("CheckLaunchCredit() error = %v, want route unavailable", err)
+	if err != nil {
+		t.Fatalf("CheckLaunchCredit() error = %v", err)
 	}
-	if decision.OK || decision.ErrorCode != launchErrorBillingUnavailable || decision.RequiredCents != 2000 {
-		t.Fatalf("CheckLaunchCredit() decision = %+v, want a billing-unavailable decision", decision)
+	if !decision.OK || decision.Message != "beam" {
+		t.Fatalf("CheckLaunchCredit() decision = %+v, want default ledger", decision)
 	}
-	if beam.launchCalls != 0 {
-		t.Fatalf("default ledger called %d times after route lookup failed", beam.launchCalls)
+	if _, err := router.CheckBalance(context.Background(), "workspace-unknown"); err != nil {
+		t.Fatalf("CheckBalance() error = %v", err)
+	}
+	if err := router.RecordManagedUsage(context.Background(), managedUsage{WorkspaceID: "workspace-unknown"}); err != nil {
+		t.Fatalf("RecordManagedUsage() error = %v", err)
+	}
+	if beam.launchCalls != 1 || beam.balanceCalls != 1 || len(beam.usage) != 1 {
+		t.Fatalf("default ledger calls = launch:%d balance:%d usage:%d, want one each", beam.launchCalls, beam.balanceCalls, len(beam.usage))
+	}
+}
+
+func TestRoutedManagedBillingRouteEndpointAndMinimumOverrideDefaults(t *testing.T) {
+	requests := make(chan billingCreditRequest, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		var request billingCreditRequest
+		if err := json.NewDecoder(req.Body).Decode(&request); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		requests <- request
+		_ = json.NewEncoder(w).Encode(billingDecision{OK: true})
+	}))
+	defer server.Close()
+
+	client := newRoutedManagedComputeBillingClient(types.ManagedComputeBillingConfig{
+		Mode:               billingModeNoop,
+		MinimumCreditCents: 2500,
+		Routes: []types.ManagedComputeBillingRouteConfig{{
+			WorkspaceIDs:       []string{"workspace-tama"},
+			Endpoint:           server.URL,
+			MinimumCreditCents: 7500,
+		}},
+	}, nil)
+
+	decision, err := client.CheckLaunchCredit(context.Background(), billingCreditRequest{
+		WorkspaceID:   "workspace-tama",
+		RequiredCents: 2500,
+	})
+	if err != nil {
+		t.Fatalf("CheckLaunchCredit() error = %v", err)
+	}
+	if !decision.OK || decision.RequiredCents != 7500 {
+		t.Fatalf("CheckLaunchCredit() decision = %+v, want route minimum 7500", decision)
+	}
+	select {
+	case request := <-requests:
+		if request.RequiredCents != 7500 {
+			t.Fatalf("HTTP required cents = %d, want 7500", request.RequiredCents)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("route endpoint was not called")
 	}
 }

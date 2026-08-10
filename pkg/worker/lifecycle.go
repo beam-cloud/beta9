@@ -333,7 +333,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 	// Gate checkpointing based on runtime capabilities, and let the user know if it was disabled
 	if request.CheckpointEnabled && !caps.CheckpointRestore {
-		if request.Checkpoint != nil {
+		if hasAvailableCheckpoint(request) {
 			return fmt.Errorf(
 				"cannot restore checkpoint %q with runtime %q: checkpoint restore is unsupported",
 				request.Checkpoint.CheckpointId,
