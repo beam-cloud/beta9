@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	thundersdk "github.com/Thunder-Compute/thunder-sdk"
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -207,7 +206,7 @@ func TestServiceCreateClientEnrollmentReplacesExistingToken(t *testing.T) {
 	if err := repo.SaveZone(context.Background(), &repository.ThunderZoneState{WorkspaceID: "workspace-1", PoolName: "pool-1", ThunderZoneID: "zone-existing"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.SaveClientEnrollment(context.Background(), &repository.ThunderClientEnrollmentState{ContainerID: "container-1", WorkspaceID: "workspace-1", WorkerID: "worker-1", MachineID: "machine-1", PoolName: "pool-1", EnrollmentTokenID: "token-old"}, 0); err != nil {
+	if err := repo.SaveClientEnrollment(context.Background(), &repository.ThunderClientEnrollmentState{ContainerID: "container-1", WorkspaceID: "workspace-1", WorkerID: "worker-1", MachineID: "machine-1", PoolName: "pool-1", EnrollmentTokenID: "token-old"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -269,7 +268,7 @@ func TestServiceCreateClientEnrollmentSucceedsWhenPreviousTokenRevokeFails(t *te
 	if err := repo.SaveZone(context.Background(), &repository.ThunderZoneState{WorkspaceID: "workspace-1", PoolName: "pool-1", ThunderZoneID: "zone-existing"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.SaveClientEnrollment(context.Background(), &repository.ThunderClientEnrollmentState{ContainerID: "container-1", WorkspaceID: "workspace-1", WorkerID: "worker-1", MachineID: "machine-1", PoolName: "pool-1", EnrollmentTokenID: "token-old"}, 0); err != nil {
+	if err := repo.SaveClientEnrollment(context.Background(), &repository.ThunderClientEnrollmentState{ContainerID: "container-1", WorkspaceID: "workspace-1", WorkerID: "worker-1", MachineID: "machine-1", PoolName: "pool-1", EnrollmentTokenID: "token-old"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -489,7 +488,7 @@ func TestServiceCreateNodeEnrollmentReplacesExistingToken(t *testing.T) {
 	if err := repo.SaveZone(context.Background(), &repository.ThunderZoneState{WorkspaceID: "workspace-1", PoolName: "pool-1", ThunderZoneID: "zone-existing"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.SaveNodeEnrollment(context.Background(), &repository.ThunderNodeEnrollmentState{WorkspaceID: "workspace-1", PoolName: "pool-1", MachineID: "machine-1", EnrollmentTokenID: "node-token-old"}, 0); err != nil {
+	if err := repo.SaveNodeEnrollment(context.Background(), &repository.ThunderNodeEnrollmentState{WorkspaceID: "workspace-1", PoolName: "pool-1", MachineID: "machine-1", EnrollmentTokenID: "node-token-old"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -556,7 +555,7 @@ func TestServiceCreateNodeEnrollmentSucceedsWhenPreviousTokenRevokeFails(t *test
 	if err := repo.SaveZone(context.Background(), &repository.ThunderZoneState{WorkspaceID: "workspace-1", PoolName: "pool-1", ThunderZoneID: "zone-existing"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.SaveNodeEnrollment(context.Background(), &repository.ThunderNodeEnrollmentState{WorkspaceID: "workspace-1", PoolName: "pool-1", MachineID: "machine-1", EnrollmentTokenID: "node-token-old"}, 0); err != nil {
+	if err := repo.SaveNodeEnrollment(context.Background(), &repository.ThunderNodeEnrollmentState{WorkspaceID: "workspace-1", PoolName: "pool-1", MachineID: "machine-1", EnrollmentTokenID: "node-token-old"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -736,7 +735,7 @@ func (r *lockingThunderRepository) GetClientEnrollment(ctx context.Context, cont
 	return &copy, true, nil
 }
 
-func (r *lockingThunderRepository) SaveClientEnrollment(ctx context.Context, state *repository.ThunderClientEnrollmentState, ttl time.Duration) error {
+func (r *lockingThunderRepository) SaveClientEnrollment(ctx context.Context, state *repository.ThunderClientEnrollmentState) error {
 	return errors.New("unexpected SaveClientEnrollment call")
 }
 
@@ -766,7 +765,7 @@ func (r *lockingThunderRepository) GetNodeEnrollment(ctx context.Context, worksp
 	return &copy, true, nil
 }
 
-func (r *lockingThunderRepository) SaveNodeEnrollment(ctx context.Context, state *repository.ThunderNodeEnrollmentState, ttl time.Duration) error {
+func (r *lockingThunderRepository) SaveNodeEnrollment(ctx context.Context, state *repository.ThunderNodeEnrollmentState) error {
 	return errors.New("unexpected SaveNodeEnrollment call")
 }
 
