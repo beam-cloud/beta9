@@ -19,12 +19,12 @@ type ThunderRepository interface {
 	WithPoolLock(ctx context.Context, workspaceID, poolName string, fn func(context.Context) error) error
 
 	GetClientEnrollment(ctx context.Context, containerID string) (*ThunderClientEnrollmentState, bool, error)
-	SaveClientEnrollment(ctx context.Context, state *ThunderClientEnrollmentState, ttl time.Duration) error
+	SaveClientEnrollment(ctx context.Context, state *ThunderClientEnrollmentState) error
 	DeleteClientEnrollment(ctx context.Context, containerID string) error
 	ListClientEnrollments(ctx context.Context) ([]*ThunderClientEnrollmentState, error)
 
 	GetNodeEnrollment(ctx context.Context, workspaceID, poolName, machineID string) (*ThunderNodeEnrollmentState, bool, error)
-	SaveNodeEnrollment(ctx context.Context, state *ThunderNodeEnrollmentState, ttl time.Duration) error
+	SaveNodeEnrollment(ctx context.Context, state *ThunderNodeEnrollmentState) error
 	DeleteNodeEnrollment(ctx context.Context, workspaceID, poolName, machineID string) error
 	ListNodeEnrollments(ctx context.Context, workspaceID, poolName string) ([]*ThunderNodeEnrollmentState, error)
 
@@ -82,7 +82,7 @@ func (r *ThunderRedisRepository) GetClientEnrollment(ctx context.Context, contai
 	return &state, true, nil
 }
 
-func (r *ThunderRedisRepository) SaveClientEnrollment(ctx context.Context, state *ThunderClientEnrollmentState, ttl time.Duration) error {
+func (r *ThunderRedisRepository) SaveClientEnrollment(ctx context.Context, state *ThunderClientEnrollmentState) error {
 	if state == nil || state.ContainerID == "" {
 		return errThunderStateRequired
 	}
@@ -91,7 +91,7 @@ func (r *ThunderRedisRepository) SaveClientEnrollment(ctx context.Context, state
 		return err
 	}
 	_, err = r.rdb.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-		pipe.Set(ctx, common.RedisKeys.ThunderClientEnrollment(state.ContainerID), data, ttl)
+		pipe.Set(ctx, common.RedisKeys.ThunderClientEnrollment(state.ContainerID), data, 0)
 		pipe.SAdd(ctx, common.RedisKeys.ThunderClientEnrollmentIndex(), state.ContainerID)
 		return nil
 	})
@@ -129,7 +129,7 @@ func (r *ThunderRedisRepository) GetNodeEnrollment(ctx context.Context, workspac
 	return &state, true, nil
 }
 
-func (r *ThunderRedisRepository) SaveNodeEnrollment(ctx context.Context, state *ThunderNodeEnrollmentState, ttl time.Duration) error {
+func (r *ThunderRedisRepository) SaveNodeEnrollment(ctx context.Context, state *ThunderNodeEnrollmentState) error {
 	if state == nil || state.WorkspaceID == "" || state.PoolName == "" || state.MachineID == "" {
 		return errThunderStateRequired
 	}
@@ -138,7 +138,7 @@ func (r *ThunderRedisRepository) SaveNodeEnrollment(ctx context.Context, state *
 		return err
 	}
 	_, err = r.rdb.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-		pipe.Set(ctx, common.RedisKeys.ThunderNodeEnrollment(state.WorkspaceID, state.PoolName, state.MachineID), data, ttl)
+		pipe.Set(ctx, common.RedisKeys.ThunderNodeEnrollment(state.WorkspaceID, state.PoolName, state.MachineID), data, 0)
 		pipe.SAdd(ctx, common.RedisKeys.ThunderNodeEnrollmentIndex(state.WorkspaceID, state.PoolName), state.MachineID)
 		return nil
 	})

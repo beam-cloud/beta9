@@ -117,7 +117,7 @@ func (s *Service) CreateClientEnrollment(ctx context.Context, req *pb.CreateClie
 			MachineID:         attrs.machineID,
 			PoolName:          attrs.poolName,
 			EnrollmentTokenID: enrollment.EnrollmentTokenID,
-		}, 0); err != nil {
+		}); err != nil {
 			if _, deleteErr := s.client.DeleteEnrollmentServer(ctx, enrollment.EnrollmentTokenID); deleteErr != nil && !thundersdk.IsNotFound(deleteErr) {
 				return fmt.Errorf("failed to save Thunder client enrollment: %w; additionally failed to revoke Thunder enrollment token %q: %v", err, enrollment.EnrollmentTokenID, deleteErr)
 			}
@@ -237,7 +237,7 @@ func (s *Service) CreateNodeEnrollment(ctx context.Context, req *pb.CreateNodeEn
 			PoolName:          agentState.PoolName,
 			MachineID:         agentState.MachineID,
 			EnrollmentTokenID: enrollment.EnrollmentTokenID,
-		}, 0); err != nil {
+		}); err != nil {
 			if _, deleteErr := s.client.DeleteEnrollmentServer(ctx, enrollment.EnrollmentTokenID); deleteErr != nil && !thundersdk.IsNotFound(deleteErr) {
 				return fmt.Errorf("failed to save Thunder node enrollment: %w; additionally failed to revoke Thunder enrollment token %q: %v", err, enrollment.EnrollmentTokenID, deleteErr)
 			}

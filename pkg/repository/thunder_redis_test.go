@@ -23,7 +23,7 @@ func TestRedisRepositoryClientEnrollment(t *testing.T) {
 		PoolName:          "pool-1",
 		EnrollmentTokenID: "token-1",
 	}
-	if err := repo.SaveClientEnrollment(ctx, state, 0); err != nil {
+	if err := repo.SaveClientEnrollment(ctx, state); err != nil {
 		t.Fatalf("SaveClientEnrollment() error = %v", err)
 	}
 
@@ -64,7 +64,7 @@ func TestRedisRepositoryNodeEnrollment(t *testing.T) {
 		MachineID:         "machine-1",
 		EnrollmentTokenID: "token-1",
 	}
-	if err := repo.SaveNodeEnrollment(ctx, state, 0); err != nil {
+	if err := repo.SaveNodeEnrollment(ctx, state); err != nil {
 		t.Fatalf("SaveNodeEnrollment() error = %v", err)
 	}
 
