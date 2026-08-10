@@ -6,6 +6,8 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
+const thunderServiceUnavailableError = "Thunder service is unavailable"
+
 func (gws *GatewayService) ListPrivatePools(ctx context.Context, in *pb.ListPrivatePoolsRequest) (*pb.ListPrivatePoolsResponse, error) {
 	return gws.computeService.ListPrivatePools(ctx, in)
 }
@@ -136,14 +138,14 @@ func (gws *GatewayService) GetAgentPoolVirtualization(ctx context.Context, in *p
 
 func (gws *GatewayService) CreateNodeEnrollment(ctx context.Context, in *pb.CreateNodeEnrollmentRequest) (*pb.CreateNodeEnrollmentResponse, error) {
 	if gws.thunderService == nil {
-		return &pb.CreateNodeEnrollmentResponse{ErrorMsg: "Thunder service is unavailable"}, nil
+		return &pb.CreateNodeEnrollmentResponse{ErrorMsg: thunderServiceUnavailableError}, nil
 	}
 	return gws.thunderService.CreateNodeEnrollment(ctx, in)
 }
 
 func (gws *GatewayService) DeleteNodeEnrollment(ctx context.Context, in *pb.DeleteNodeEnrollmentRequest) (*pb.DeleteNodeEnrollmentResponse, error) {
 	if gws.thunderService == nil {
-		return &pb.DeleteNodeEnrollmentResponse{ErrorMsg: "Thunder service is unavailable"}, nil
+		return &pb.DeleteNodeEnrollmentResponse{ErrorMsg: thunderServiceUnavailableError}, nil
 	}
 	return gws.thunderService.DeleteNodeEnrollment(ctx, in)
 }
