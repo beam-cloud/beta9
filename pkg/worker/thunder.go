@@ -19,6 +19,8 @@ const (
 	thunderNvidiaSMIPath         = "/usr/bin/nvidia-smi"
 	thunderNvidiaMLLibraryPath   = "/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1"
 	thunderCudaDriverLibraryPath = "/usr/lib/x86_64-linux-gnu/libcuda.so.1"
+	thunderEnrollmentRPCTimeout  = 10 * time.Second
+	thunderTeardownRPCTimeout    = 5 * time.Second
 )
 
 type ContainerThunderManager struct {
@@ -33,7 +35,10 @@ func NewContainerThunderManager(client pb.ThunderServiceClient) *ContainerThunde
 	}
 }
 
-func (c *ContainerThunderManager) AssignGPUDevices(request *types.ContainerRequest) ([]int, error) {
+func (c *ContainerThunderManager) AssignGPUDevices(ctx context.Context, request *types.ContainerRequest) ([]int, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if request == nil {
 		return nil, fmt.Errorf("missing container request")
 	}
@@ -46,7 +51,9 @@ func (c *ContainerThunderManager) AssignGPUDevices(request *types.ContainerReque
 	}
 
 	log.Info().Str("container_id", containerID).Msg("requesting Thunder client enrollment")
-	response, err := handleGRPCResponse(c.client.CreateClientEnrollment(context.Background(), &pb.CreateClientEnrollmentRequest{ContainerId: containerID}))
+	rpcCtx, cancel := context.WithTimeout(ctx, thunderEnrollmentRPCTimeout)
+	defer cancel()
+	response, err := handleGRPCResponse(c.client.CreateClientEnrollment(rpcCtx, &pb.CreateClientEnrollmentRequest{ContainerId: containerID}))
 	if err != nil {
 		log.Error().Str("container_id", containerID).Err(err).Msg("failed to assign Thunder virtual GPU")
 		return nil, err
@@ -65,7 +72,10 @@ func (c *ContainerThunderManager) GetContainerGPUDevices(containerId string) []i
 	return []int{}
 }
 
-func (c *ContainerThunderManager) UnassignGPUDevices(containerId string) {
+func (c *ContainerThunderManager) UnassignGPUDevices(ctx context.Context, containerId string) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	containerId = strings.TrimSpace(containerId)
 	if containerId == "" {
 		return
@@ -76,7 +86,9 @@ func (c *ContainerThunderManager) UnassignGPUDevices(containerId string) {
 	}
 
 	log.Info().Str("container_id", containerId).Msg("unassigning Thunder virtual GPU")
-	if _, err := handleGRPCResponse(c.client.DeleteClientEnrollment(context.Background(), &pb.DeleteClientEnrollmentRequest{ContainerId: containerId})); err != nil {
+	rpcCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), thunderTeardownRPCTimeout)
+	defer cancel()
+	if _, err := handleGRPCResponse(c.client.DeleteClientEnrollment(rpcCtx, &pb.DeleteClientEnrollmentRequest{ContainerId: containerId})); err != nil {
 		log.Error().Str("container_id", containerId).Err(err).Msg("failed to unregister Thunder virtual GPU client")
 	} else {
 		log.Info().Str("container_id", containerId).Msg("unassigned Thunder virtual GPU")
@@ -97,7 +109,12 @@ func (c *ContainerThunderManager) InjectAssignedEnvVars(env []string, assignedDe
 }
 
 func (c *ContainerThunderManager) InjectMounts(mounts []specs.Mount) []specs.Mount {
+	inheritedMountsStart := len(mounts)
 	mounts = (&ContainerNvidiaManager{}).InjectMounts(mounts)
+	for i := inheritedMountsStart; i < len(mounts); i++ {
+		mounts[i].Options = thunderReadOnlyMountOptions(mounts[i].Options)
+	}
+
 	mounts = append(mounts, thunderBindMount(thunderNvidiaSMIPath))
 	mounts = append(mounts, thunderBindMount(thunderNvidiaMLLibraryPath))
 	mounts = append(mounts, thunderBindMount(thunderCudaDriverLibraryPath))
@@ -109,14 +126,24 @@ func thunderBindMount(path string) specs.Mount {
 		Type:        "bind",
 		Source:      path,
 		Destination: path,
-		Options: []string{
+		Options: thunderReadOnlyMountOptions([]string{
 			"rbind",
 			"rprivate",
 			"nosuid",
 			"nodev",
-			"rw",
-		},
+		}),
 	}
+}
+
+func thunderReadOnlyMountOptions(options []string) []string {
+	readOnlyOptions := make([]string, 0, len(options)+1)
+	for _, option := range options {
+		if option == "rw" || option == "ro" {
+			continue
+		}
+		readOnlyOptions = append(readOnlyOptions, option)
+	}
+	return append(readOnlyOptions, "ro")
 }
 
 func (s *Worker) thunderStartupHook(request *types.ContainerRequest, spec *specs.Spec) (runtime.StartupHook, error) {

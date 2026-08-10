@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -71,7 +72,7 @@ func TestIntegrationGPUIsolation(t *testing.T) {
 		resolvedVisibleDevices: resolved,
 	}
 
-	assigned, err := manager.AssignGPUDevices(&types.ContainerRequest{ContainerId: "test-container-1", GpuCount: 1})
+	assigned, err := manager.AssignGPUDevices(context.Background(), &types.ContainerRequest{ContainerId: "test-container-1", GpuCount: 1})
 	if err != nil {
 		t.Fatalf("AssignGPUDevices() failed: %v", err)
 	}
@@ -82,7 +83,7 @@ func TestIntegrationGPUIsolation(t *testing.T) {
 	}
 
 	// Step 7: Verify second allocation FAILS (only 1 GPU per worker)
-	_, err = manager.AssignGPUDevices(&types.ContainerRequest{ContainerId: "test-container-2", GpuCount: 1})
+	_, err = manager.AssignGPUDevices(context.Background(), &types.ContainerRequest{ContainerId: "test-container-2", GpuCount: 1})
 	if err == nil {
 		t.Fatal("Second allocation should fail — only 1 GPU per worker")
 	}

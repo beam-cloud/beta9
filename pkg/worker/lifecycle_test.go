@@ -2401,7 +2401,7 @@ type testGPUManager struct {
 	mounts []specs.Mount
 }
 
-func (m *testGPUManager) AssignGPUDevices(request *types.ContainerRequest) ([]int, error) {
+func (m *testGPUManager) AssignGPUDevices(ctx context.Context, request *types.ContainerRequest) ([]int, error) {
 	return []int{}, nil
 }
 
@@ -2409,7 +2409,7 @@ func (m *testGPUManager) GetContainerGPUDevices(containerId string) []int {
 	return []int{}
 }
 
-func (m *testGPUManager) UnassignGPUDevices(containerId string) {}
+func (m *testGPUManager) UnassignGPUDevices(ctx context.Context, containerId string) {}
 
 func (m *testGPUManager) CDIDevices(assignedDevices []int) []string {
 	return []string{}
