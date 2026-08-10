@@ -185,7 +185,7 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 
 	// De-allocate GPU devices so they are available for new containers
 	if request != nil && request.RequiresGPU() {
-		s.gpuManagerForRequest(request).UnassignGPUDevices(containerId)
+		s.gpuManagerForRequest(request).UnassignGPUDevices(context.Background(), containerId)
 	}
 
 	// Tear down container network components - best effort
@@ -1255,7 +1255,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		gpuManager := s.gpuManagerForRequest(request)
 
 		phaseStart = time.Now()
-		assignedDevices, err := gpuManager.AssignGPUDevices(request)
+		assignedDevices, err := gpuManager.AssignGPUDevices(ctx, request)
 		metrics.RecordWorkerStartupPhase("gpu_assignment", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 		s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleGPUAssignment, phaseStart, err == nil, map[string]string{"gpu_count": fmt.Sprintf("%d", request.GpuCount)})
 		if err != nil {

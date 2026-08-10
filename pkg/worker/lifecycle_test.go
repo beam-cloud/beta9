@@ -2397,11 +2397,9 @@ func envListToMap(env []string) map[string]string {
 	return out
 }
 
-type testGPUManager struct {
-	mounts []specs.Mount
-}
+type testGPUManager struct{}
 
-func (m *testGPUManager) AssignGPUDevices(request *types.ContainerRequest) ([]int, error) {
+func (m *testGPUManager) AssignGPUDevices(ctx context.Context, request *types.ContainerRequest) ([]int, error) {
 	return []int{}, nil
 }
 
@@ -2409,7 +2407,7 @@ func (m *testGPUManager) GetContainerGPUDevices(containerId string) []int {
 	return []int{}
 }
 
-func (m *testGPUManager) UnassignGPUDevices(containerId string) {}
+func (m *testGPUManager) UnassignGPUDevices(ctx context.Context, containerId string) {}
 
 func (m *testGPUManager) CDIDevices(assignedDevices []int) []string {
 	return []string{}
@@ -2424,7 +2422,7 @@ func (m *testGPUManager) InjectAssignedEnvVars(env []string, assignedDevices []i
 }
 
 func (m *testGPUManager) InjectMounts(mounts []specs.Mount) []specs.Mount {
-	return append(mounts, m.mounts...)
+	return mounts
 }
 
 // Mock runtime for testing
