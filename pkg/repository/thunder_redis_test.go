@@ -1,4 +1,4 @@
-package thunder
+package repository
 
 import (
 	"context"
@@ -13,9 +13,9 @@ func TestRedisRepositoryClientEnrollment(t *testing.T) {
 	rdb := newThunderRedisClient(t)
 	defer rdb.Close()
 
-	repo := NewRedisRepository(rdb)
+	repo := NewThunderRedisRepository(rdb)
 	ctx := context.Background()
-	state := &ClientEnrollmentState{
+	state := &ThunderClientEnrollmentState{
 		ContainerID:       "container-1",
 		WorkspaceID:       "workspace-1",
 		WorkerID:          "worker-1",
@@ -56,9 +56,9 @@ func TestRedisRepositoryNodeEnrollment(t *testing.T) {
 	rdb := newThunderRedisClient(t)
 	defer rdb.Close()
 
-	repo := NewRedisRepository(rdb)
+	repo := NewThunderRedisRepository(rdb)
 	ctx := context.Background()
-	state := &NodeEnrollmentState{
+	state := &ThunderNodeEnrollmentState{
 		WorkspaceID:       "workspace-1",
 		PoolName:          "pool-1",
 		MachineID:         "machine-1",
@@ -97,9 +97,9 @@ func TestRedisRepositoryZone(t *testing.T) {
 	rdb := newThunderRedisClient(t)
 	defer rdb.Close()
 
-	repo := NewRedisRepository(rdb)
+	repo := NewThunderRedisRepository(rdb)
 	ctx := context.Background()
-	state := &ZoneState{
+	state := &ThunderZoneState{
 		WorkspaceID:   "workspace-1",
 		PoolName:      "pool-1",
 		ThunderZoneID: "zone-1",
