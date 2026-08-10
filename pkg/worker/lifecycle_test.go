@@ -2397,9 +2397,7 @@ func envListToMap(env []string) map[string]string {
 	return out
 }
 
-type testGPUManager struct {
-	mounts []specs.Mount
-}
+type testGPUManager struct{}
 
 func (m *testGPUManager) AssignGPUDevices(ctx context.Context, request *types.ContainerRequest) ([]int, error) {
 	return []int{}, nil
@@ -2424,7 +2422,7 @@ func (m *testGPUManager) InjectAssignedEnvVars(env []string, assignedDevices []i
 }
 
 func (m *testGPUManager) InjectMounts(mounts []specs.Mount) []specs.Mount {
-	return append(mounts, m.mounts...)
+	return mounts
 }
 
 // Mock runtime for testing
