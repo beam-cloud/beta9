@@ -444,7 +444,6 @@ managedCompute:
     mode: noop
     endpoint: ""
     authToken: ""
-    poolRoutes: []
     required: false
     timeout: 5s
     reconcileInterval: 1m

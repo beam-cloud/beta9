@@ -548,7 +548,6 @@ func (s *Worker) attemptRestoreCheckpoint(ctx context.Context, request *types.Co
 		if hostIncompatible {
 			outputLogger.Info("Checkpoint was created on an incompatible CPU; starting container normally")
 		} else {
-			// Surface delayed runtime resume errors to the container log.
 			outputLogger.Error(fmt.Sprintf("Failed to restore checkpoint: %v", err))
 		}
 		if cleanupErr := deleteFailedRestoreRuntimeContainer(ctx, instance.Runtime, request.ContainerId); cleanupErr != nil {
@@ -697,7 +696,6 @@ type CreateCheckpointOpts struct {
 	Request           *types.ContainerRequest
 	CheckpointId      string
 	ContainerIp       string
-	RuntimeName       string
 	OutputLogger      *slog.Logger
 	CheckpointPIDChan chan int
 	WaitForSignal     bool
@@ -711,10 +709,11 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 	}
 
 	availableStateCreated := false
+	runtimeName := ""
 	var persistedMetadata *checkpointCacheMetadata
 	defer func() {
 		if err != nil && !availableStateCreated {
-			s.markCheckpointFailed(opts, persistedMetadata)
+			s.markCheckpointFailed(opts, runtimeName, persistedMetadata)
 		}
 	}()
 
@@ -725,7 +724,7 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 	if instance.Runtime == nil {
 		return fmt.Errorf("container runtime is unavailable")
 	}
-	opts.RuntimeName = instance.Runtime.Name()
+	runtimeName = instance.Runtime.Name()
 
 	if err := s.requireCRIUManager(); err != nil {
 		return err
@@ -858,7 +857,7 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 		}
 	}
 
-	err = s.createCheckpointState(opts.CheckpointId, opts.Request, types.CheckpointStatusAvailable, opts.ContainerIp, opts.RuntimeName, metadata)
+	err = s.createCheckpointState(opts.CheckpointId, opts.Request, types.CheckpointStatusAvailable, opts.ContainerIp, runtimeName, metadata)
 	if err != nil {
 		log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to update checkpoint state: %v", err)
 		return err
@@ -874,11 +873,11 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 	return nil
 }
 
-func (s *Worker) markCheckpointFailed(opts *CreateCheckpointOpts, metadata *checkpointCacheMetadata) {
+func (s *Worker) markCheckpointFailed(opts *CreateCheckpointOpts, runtimeName string, metadata *checkpointCacheMetadata) {
 	if s == nil || s.backendRepoClient == nil || opts == nil || opts.Request == nil {
 		return
 	}
-	if stateErr := s.createCheckpointState(opts.CheckpointId, opts.Request, types.CheckpointStatusCheckpointFailed, opts.ContainerIp, opts.RuntimeName, metadata); stateErr != nil {
+	if stateErr := s.createCheckpointState(opts.CheckpointId, opts.Request, types.CheckpointStatusCheckpointFailed, opts.ContainerIp, runtimeName, metadata); stateErr != nil {
 		log.Error().
 			Str("container_id", opts.Request.ContainerId).
 			Str("checkpoint_id", opts.CheckpointId).

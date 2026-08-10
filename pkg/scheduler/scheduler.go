@@ -944,10 +944,9 @@ func filterControllersByFlags(controllers []WorkerPoolController, request *types
 
 func filterControllersByFlagsForFailover(controllers []WorkerPoolController, request *types.ContainerRequest, chain *failoverChain) []WorkerPoolController {
 	filteredControllers := []WorkerPoolController{}
-	requiredRuntime := checkpointRuntime(request)
 
 	for _, controller := range controllers {
-		if requiredRuntime != "" && controllerRuntime(controller) != requiredRuntime {
+		if !runtimeMatchesCheckpoint(request, controllerRuntime(controller)) {
 			continue
 		}
 		if !request.StorageAvailable() && controllerUsesAgentCapacity(controller) {
@@ -1046,7 +1045,6 @@ func workerPoolSelector(worker *types.Worker) string {
 
 func filterWorkersByResources(workers []*types.Worker, request *types.ContainerRequest, chain *failoverChain) []*types.Worker {
 	filteredWorkers := []*types.Worker{}
-	requiredRuntime := checkpointRuntime(request)
 	gpuRequestsMap := map[string]int{}
 	requiresGPU := request.RequiresGPU()
 	gpuCount := gpuCountForScheduling(request)
@@ -1065,7 +1063,7 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 	}
 
 	for _, worker := range workers {
-		if requiredRuntime != "" && workerRuntime(worker) != requiredRuntime {
+		if !runtimeMatchesCheckpoint(request, workerRuntime(worker)) {
 			continue
 		}
 		isGpuWorker := worker.Gpu != ""
@@ -1110,6 +1108,11 @@ func checkpointRuntime(request *types.ContainerRequest) string {
 		return ""
 	}
 	return strings.TrimSpace(request.Checkpoint.Runtime)
+}
+
+func runtimeMatchesCheckpoint(request *types.ContainerRequest, runtimeName string) bool {
+	requiredRuntime := checkpointRuntime(request)
+	return requiredRuntime == "" || runtimeName == requiredRuntime
 }
 
 func controllerRuntime(controller WorkerPoolController) string {

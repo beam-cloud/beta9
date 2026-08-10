@@ -23,8 +23,8 @@ func TestRoutedManagedBillingUsesThePoolRouteForEveryBillingOperation(t *testing
 	router := &routedManagedBilling{
 		defaultClient: beam,
 		routes: []managedBillingRoute{{
-			poolNamePrefix: "tama-",
-			client:         tama,
+			prefix: "tama-",
+			client: tama,
 		}},
 	}
 
@@ -68,8 +68,8 @@ func TestRoutedManagedBillingLeavesOtherPoolsOnTheDefaultLedger(t *testing.T) {
 	router := &routedManagedBilling{
 		defaultClient: beam,
 		routes: []managedBillingRoute{{
-			poolNamePrefix: "tama-",
-			client:         &fakeManagedBilling{launchDecision: billingDecision{OK: true}},
+			prefix: "tama-",
+			client: &fakeManagedBilling{launchDecision: billingDecision{OK: true}},
 		}},
 	}
 

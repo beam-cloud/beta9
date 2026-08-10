@@ -688,6 +688,7 @@ type LocalWorkerPoolControllerForTest struct {
 	preemptable      bool
 	workerStatus     types.WorkerStatus
 	addWorkerStarted chan struct{}
+	addWorkerDone    chan struct{}
 	unblockAddWorker chan struct{}
 	addWorkerErr     error
 	requiresSelector bool
@@ -716,7 +717,11 @@ func (wpc *LocalWorkerPoolControllerForTest) Mode() types.PoolMode {
 }
 
 func (wpc *LocalWorkerPoolControllerForTest) RequiresPoolSelector() bool {
-	return wpc.requiresSelector
+	if wpc.requiresSelector {
+		return true
+	}
+	pool, ok := wpc.config.Worker.Pools[wpc.name]
+	return ok && pool.RequiresPoolSelector
 }
 
 func (wpc *LocalWorkerPoolControllerForTest) ContainerRuntime() string {
@@ -785,6 +790,12 @@ func (wpc *LocalWorkerPoolControllerForTest) AddWorker(cpu int64, memory int64, 
 	if err != nil {
 		log.Error().Err(err).Msg("unable to create worker")
 		return nil, err
+	}
+	if wpc.addWorkerDone != nil {
+		select {
+		case wpc.addWorkerDone <- struct{}{}:
+		default:
+		}
 	}
 
 	return worker, nil
@@ -1123,30 +1134,29 @@ func TestProcessRequests(t *testing.T) {
 
 	assert.Equal(t, int64(4), wb.requestBacklog.Len())
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	wb.ctx = ctx
 
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				wb.StartProcessingRequests()
+	go wb.StartProcessingRequests()
+
+	deadline := time.After(5 * time.Second)
+	for {
+		allScheduled := true
+		for _, request := range requests {
+			state, err := wb.containerRepo.GetContainerState(request.ContainerId)
+			if err != nil || state.WorkerId == "" {
+				allScheduled = false
+				break
 			}
 		}
-	}()
-
-	deadline := time.After(2 * time.Second)
-	for {
-		if wb.requestBacklog.Len() == 0 {
+		if allScheduled {
 			return
 		}
 
 		select {
 		case <-deadline:
-			assert.Equal(t, int64(0), wb.requestBacklog.Len())
-			return
+			t.Fatal("timed out waiting for all requests to be scheduled")
 		case <-time.After(10 * time.Millisecond):
 		}
 	}

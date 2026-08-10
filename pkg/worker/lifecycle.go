@@ -297,6 +297,9 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	if request.RequiresGPU() && !caps.GPU {
 		return fmt.Errorf("runtime %s does not support GPU workloads", s.runtime.Name())
 	}
+	if err := validateCheckpointRestoreRuntime(request, s.runtime); err != nil {
+		return err
+	}
 
 	instance, exists := s.containerInstances.Get(containerId)
 	if !exists {
@@ -333,13 +336,6 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 	// Gate checkpointing based on runtime capabilities, and let the user know if it was disabled
 	if request.CheckpointEnabled && !caps.CheckpointRestore {
-		if hasAvailableCheckpoint(request) {
-			return fmt.Errorf(
-				"cannot restore checkpoint %q with runtime %q: checkpoint restore is unsupported",
-				request.Checkpoint.CheckpointId,
-				s.runtime.Name(),
-			)
-		}
 		log.Info().Str("container_id", containerId).
 			Str("runtime", s.runtime.Name()).
 			Msg("disabling checkpoint for runtime without CRIU support")
@@ -347,9 +343,6 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 		request.CheckpointEnabled = false
 		request.Checkpoint = nil
-	}
-	if err := requireCheckpointRuntime(request, s.runtime.Name()); err != nil {
-		return err
 	}
 
 	var filesystemRestore *checkpointFilesystemRestore
@@ -481,9 +474,20 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	return nil
 }
 
-func requireCheckpointRuntime(request *types.ContainerRequest, runtimeName string) error {
+func validateCheckpointRestoreRuntime(request *types.ContainerRequest, rt runtime.Runtime) error {
 	if !hasAvailableCheckpoint(request) {
 		return nil
+	}
+	if rt == nil {
+		return fmt.Errorf("cannot restore checkpoint %q: container runtime is unavailable", request.Checkpoint.CheckpointId)
+	}
+	runtimeName := rt.Name()
+	if !rt.Capabilities().CheckpointRestore {
+		return fmt.Errorf(
+			"cannot restore checkpoint %q with runtime %q: checkpoint restore is unsupported",
+			request.Checkpoint.CheckpointId,
+			runtimeName,
+		)
 	}
 	required := strings.TrimSpace(request.Checkpoint.Runtime)
 	if required == "" || required == runtimeName {

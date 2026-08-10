@@ -1845,23 +1845,28 @@ func TestHasAvailableCheckpoint(t *testing.T) {
 	}))
 }
 
-func TestRequireCheckpointRuntime(t *testing.T) {
+func TestValidateCheckpointRestoreRuntime(t *testing.T) {
 	request := &types.ContainerRequest{Checkpoint: &types.Checkpoint{
 		CheckpointId: "checkpoint-1",
 		Status:       string(types.CheckpointStatusAvailable),
 		Runtime:      " gvisor ",
 	}}
+	gvisor := &mockRuntime{name: types.ContainerRuntimeGvisor.String(), capabilities: runtime.Capabilities{CheckpointRestore: true}}
+	runc := &mockRuntime{name: types.ContainerRuntimeRunc.String(), capabilities: runtime.Capabilities{CheckpointRestore: true}}
+	unsupported := &mockRuntime{name: types.ContainerRuntimeRunc.String()}
 
-	require.NoError(t, requireCheckpointRuntime(request, types.ContainerRuntimeGvisor.String()))
-	require.EqualError(t, requireCheckpointRuntime(request, types.ContainerRuntimeRunc.String()),
+	require.NoError(t, validateCheckpointRestoreRuntime(request, gvisor))
+	require.EqualError(t, validateCheckpointRestoreRuntime(request, runc),
 		`cannot restore gvisor checkpoint "checkpoint-1" with runtime "runc"`)
+	require.EqualError(t, validateCheckpointRestoreRuntime(request, unsupported),
+		`cannot restore checkpoint "checkpoint-1" with runtime "runc": checkpoint restore is unsupported`)
 
 	request.Checkpoint.Status = string(types.CheckpointStatusRestoreFailed)
-	require.NoError(t, requireCheckpointRuntime(request, types.ContainerRuntimeRunc.String()))
+	require.NoError(t, validateCheckpointRestoreRuntime(request, unsupported))
 
 	request.Checkpoint.Status = string(types.CheckpointStatusAvailable)
 	request.Checkpoint.Runtime = ""
-	require.NoError(t, requireCheckpointRuntime(request, types.ContainerRuntimeRunc.String()))
+	require.NoError(t, validateCheckpointRestoreRuntime(request, runc))
 }
 
 func TestShouldCreateCheckpointIgnoresNonAvailableAttachedCheckpoint(t *testing.T) {

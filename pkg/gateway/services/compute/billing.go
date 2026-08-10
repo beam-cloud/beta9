@@ -38,9 +38,9 @@ type routedManagedBilling struct {
 }
 
 type managedBillingRoute struct {
-	poolNamePrefix string
-	client         managedComputeBillingClient
-	minimumCents   int64
+	prefix       string
+	client       managedComputeBillingClient
+	minimumCents int64
 }
 
 type billingCreditRequest struct {
@@ -115,9 +115,9 @@ func newRoutedManagedComputeBillingClient(config types.ManagedComputeBillingConf
 		}
 		routeConfig := configured.BillingConfig(config)
 		routes = append(routes, managedBillingRoute{
-			poolNamePrefix: prefix,
-			client:         newManagedComputeBillingClient(routeConfig),
-			minimumCents:   routeConfig.MinimumCreditCentsOrDefault(),
+			prefix:       prefix,
+			client:       newManagedComputeBillingClient(routeConfig),
+			minimumCents: routeConfig.MinimumCreditCentsOrDefault(),
 		})
 	}
 	if len(routes) == 0 {
@@ -128,7 +128,7 @@ func newRoutedManagedComputeBillingClient(config types.ManagedComputeBillingConf
 
 func (r *routedManagedBilling) clientFor(poolName string) (managedComputeBillingClient, int64) {
 	for _, route := range r.routes {
-		if route.poolNamePrefix != "" && strings.HasPrefix(poolName, route.poolNamePrefix) {
+		if strings.HasPrefix(poolName, route.prefix) {
 			return route.client, route.minimumCents
 		}
 	}

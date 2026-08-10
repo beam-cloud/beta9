@@ -288,7 +288,10 @@ func (s *ContainerRuntimeServer) ContainerCheckpoint(ctx context.Context, in *pb
 	}
 
 	// Check if runtime supports checkpointing
-	rt := s.getRuntime()
+	rt := instance.Runtime
+	if rt == nil {
+		return &pb.ContainerCheckpointResponse{Ok: false, ErrorMsg: "Container runtime not found"}, nil
+	}
 	if !rt.Capabilities().CheckpointRestore {
 		return &pb.ContainerCheckpointResponse{
 			Ok:       false,

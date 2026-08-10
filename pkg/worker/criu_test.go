@@ -1335,8 +1335,7 @@ func TestMarkCheckpointFailedRetainsPersistedMetadata(t *testing.T) {
 			Stub:        types.StubWithRelated{Stub: types.Stub{ExternalId: "stub-a"}},
 		},
 		CheckpointId: "checkpoint-a",
-		RuntimeName:  types.ContainerRuntimeGvisor.String(),
-	}, metadata)
+	}, types.ContainerRuntimeGvisor.String(), metadata)
 
 	got := backendRepoClient.lastCreate
 	if got == nil || got.Status != string(types.CheckpointStatusCheckpointFailed) {
