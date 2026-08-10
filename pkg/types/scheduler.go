@@ -48,6 +48,7 @@ const (
 	ContainerSchedulingFailureBacklogPushFailed               ContainerSchedulingFailureReason = "backlog_push_failed"
 	ContainerSchedulingFailureNoController                    ContainerSchedulingFailureReason = "no_controller"
 	ContainerSchedulingFailureWorkerCapacityTimeout           ContainerSchedulingFailureReason = "worker_capacity_timeout"
+	ContainerSchedulingFailureProvisioningLimit               ContainerSchedulingFailureReason = "worker_provisioning_limit"
 	ContainerSchedulingFailureRetryLimit                      ContainerSchedulingFailureReason = "retry_limit"
 	ContainerSchedulingFailureManagedFallbackConcurrencyLimit ContainerSchedulingFailureReason = "managed_fallback_concurrency_limit"
 	ContainerSchedulingFailureManagedFallbackNoCapacity       ContainerSchedulingFailureReason = "managed_fallback_no_capacity"
@@ -292,7 +293,8 @@ type ContainerRequest struct {
 	TaskId            string             `json:"task_id,omitempty"`
 	DeliveryToken     string             `json:"-" go2proto:"ignore"`
 	// Hostname preserved across checkpoint and restore.
-	Hostname string `json:"hostname,omitempty"`
+	Hostname             string `json:"hostname,omitempty"`
+	ProvisioningAttempts int    `json:"provisioning_attempts,omitempty" go2proto:"ignore"`
 }
 
 // @go2proto

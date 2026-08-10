@@ -94,6 +94,7 @@ message ContainerCheckpointResponse {
   bool ok = 1;
   string checkpoint_id = 2;
   string error_msg = 3;
+  string runtime = 4;
 }
 
 message ContainerSnapshotDisksRequest { string container_id = 1; }

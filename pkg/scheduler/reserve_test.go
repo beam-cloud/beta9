@@ -133,6 +133,94 @@ func TestProvisioningAttemptDoesNotFailOverWithinReservation(t *testing.T) {
 	assert.Equal(t, 0, secondary.AddWorkerCallCount())
 }
 
+func TestProvisionedWorkerRuntimeMismatchDoesNotAmplifyJobs(t *testing.T) {
+	scheduler, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+
+	started := make(chan struct{}, 2)
+	controller := &LocalWorkerPoolControllerForTest{
+		ctx:              context.Background(),
+		name:             "gvisor-pool",
+		config:           scheduler.config,
+		workerRepo:       scheduler.workerRepo,
+		containerRuntime: types.ContainerRuntimeGvisor.String(),
+		addWorkerStarted: started,
+	}
+	scheduler.workerPoolManager.SetPool("gvisor-pool", types.WorkerPoolConfig{
+		ContainerRuntime: types.ContainerRuntimeGvisor.String(),
+	}, controller)
+
+	request := &types.ContainerRequest{
+		ContainerId:       uuid.NewString(),
+		Cpu:               100,
+		Memory:            100,
+		PoolSelector:      "gvisor-pool",
+		Timestamp:         time.Now(),
+		CheckpointEnabled: true,
+		Checkpoint: &types.Checkpoint{
+			CheckpointId: "checkpoint-1",
+			Status:       string(types.CheckpointStatusAvailable),
+			Runtime:      types.ContainerRuntimeGvisor.String(),
+		},
+	}
+	setPendingSchedulerRequests(t, scheduler, request)
+
+	newSchedulingAttempt(scheduler, request, nil).run()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("expected the initial worker provisioning attempt")
+	}
+
+	var requeued *types.ContainerRequest
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		requeued, err = scheduler.requestBacklog.Pop()
+		if err == nil {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	assert.NotNil(t, requeued, "expected the request to become ready in the backlog")
+	assert.Equal(t, 1, requeued.ProvisioningAttempts)
+
+	workers, err := scheduler.workerRepo.GetAllWorkers()
+	assert.Nil(t, err)
+	assert.Len(t, workers, 1)
+	workers[0].Runtime = types.ContainerRuntimeRunc.String()
+	assert.Nil(t, scheduler.workerRepo.AddWorker(workers[0]))
+
+	newSchedulingAttempt(scheduler, requeued, workers).run()
+	time.Sleep(2 * requestProcessingInterval)
+	assert.Equal(t, 1, controller.AddWorkerCallCount(), "one request must not create another worker while its first worker is pending")
+}
+
+func TestProvisioningLimitStopsFurtherWorkerCreation(t *testing.T) {
+	scheduler, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+
+	controller := &LocalWorkerPoolControllerForTest{
+		ctx:        context.Background(),
+		name:       "beta9-cpu",
+		config:     scheduler.config,
+		workerRepo: scheduler.workerRepo,
+	}
+	scheduler.workerPoolManager.SetPool("beta9-cpu", types.WorkerPoolConfig{}, controller)
+	request := &types.ContainerRequest{
+		ContainerId:          uuid.NewString(),
+		Cpu:                  100,
+		Memory:               100,
+		PoolSelector:         "beta9-cpu",
+		Timestamp:            time.Now(),
+		ProvisioningAttempts: maxWorkerProvisioningAttempts,
+	}
+	setPendingSchedulerRequests(t, scheduler, request)
+
+	newSchedulingAttempt(scheduler, request, nil).provisionWorker()
+	assert.Equal(t, 0, controller.AddWorkerCallCount())
+	assert.False(t, newSchedulingAttempt(scheduler, request, nil).runnable())
+}
+
 func TestWorkerProvisioningBackoffDoesNotBlockExistingPoolCapacity(t *testing.T) {
 	scheduler, err := NewSchedulerForTest()
 	assert.Nil(t, err)

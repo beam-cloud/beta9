@@ -181,21 +181,29 @@ func (s *Service) privatePoolStateToProto(state *model.PoolState) *pb.PrivatePoo
 
 func (s *Service) privatePoolStateToProtoWithMachines(state *model.PoolState, machines []*model.AgentTokenState) *pb.PrivatePool {
 	pool := privatePoolStateToProtoWithMachines(state, machines, s.billableMicros, s.appConfig.ManagedCompute)
-	if state == nil || state.Config == nil || state.Config.ContainerRuntime != types.ContainerRuntimeGvisor.String() {
+	if state == nil || state.Config == nil {
+		return pool
+	}
+	requiredRuntime := strings.TrimSpace(state.Config.ContainerRuntime)
+	if requiredRuntime == "" {
 		return pool
 	}
 
-	// A connected host is not enough for a restore pool: the agent may still
-	// be downloading or restarting its worker. Report capacity ready only after
-	// the gVisor worker itself is available, so clients cannot race a restore
-	// onto stale or runc capacity.
+	// Explicit runtimes are ready only when a matching worker is available.
 	pool.ReadyMachineCount = 0
 	now := time.Now()
 	for _, machine := range machines {
 		worker := s.agentMachineStatusWorker(machine)
+		workerRuntime := ""
+		if worker != nil {
+			workerRuntime = strings.TrimSpace(worker.Runtime)
+			if workerRuntime == "" {
+				workerRuntime = types.ContainerRuntimeRunc.String()
+			}
+		}
 		if model.AgentMachineConnected(machine, now) && worker != nil &&
 			worker.Status == types.WorkerStatusAvailable &&
-			worker.Runtime == types.ContainerRuntimeGvisor.String() {
+			workerRuntime == requiredRuntime {
 			pool.ReadyMachineCount++
 		}
 	}

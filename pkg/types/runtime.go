@@ -24,7 +24,7 @@ func MarketplaceContainerRuntimeForGPU(gpu string) string {
 
 func marketplaceGPUUsesGvisor(gpu string) bool {
 	switch NormalizeGPUType(gpu) {
-	case GPU_T4, GPU_A10G, GPU_A100, GPU_A100_40, GPU_A100_80, GPU_L4, GPU_H100, GPU_RTX4090, GPU_RTX5090:
+	case GPU_T4, GPU_A10G, GPU_A100, GPU_A100_40, GPU_A100_80, GPU_L4, GPU_H100:
 		return true
 	default:
 		return false

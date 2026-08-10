@@ -1380,6 +1380,9 @@
         },
         "checkpointId": {
           "type": "string"
+        },
+        "runtime": {
+          "type": "string"
         }
       }
     },

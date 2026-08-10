@@ -914,10 +914,7 @@ type ManagedComputeBillingConfig struct {
 	FailureGracePeriod time.Duration `key:"failureGracePeriod" json:"failure_grace_period"`
 }
 
-// ManagedComputeBillingRouteConfig keeps whitelabel workspaces on their own
-// ledger while a shared Beta9 cluster continues billing every other workspace
-// through the deployment-wide endpoint. Exact IDs are for pre-existing
-// workspaces; newly provisioned tenants should use a trusted name prefix.
+// ManagedComputeBillingRouteConfig routes selected workspaces to another ledger.
 type ManagedComputeBillingRouteConfig struct {
 	WorkspaceIDs        []string `key:"workspaceIDs" json:"workspace_ids"`
 	WorkspaceNamePrefix string   `key:"workspaceNamePrefix" json:"workspace_name_prefix"`

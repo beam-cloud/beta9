@@ -1174,6 +1174,7 @@ func (s *GenericPodService) SandboxSnapshotMemory(ctx context.Context, in *pb.Po
 	return &pb.PodSandboxSnapshotMemoryResponse{
 		Ok:           true,
 		CheckpointId: resp.CheckpointId,
+		Runtime:      resp.Runtime,
 	}, nil
 }
 

@@ -4416,8 +4416,7 @@ type PoolConfig struct {
 	Fallback       string   `protobuf:"bytes,12,opt,name=fallback,proto3" json:"fallback,omitempty"`
 	Priority       int32    `protobuf:"varint,13,opt,name=priority,proto3" json:"priority,omitempty"`
 	OfferId        string   `protobuf:"bytes,14,opt,name=offer_id,json=offerId,proto3" json:"offer_id,omitempty"`
-	// Runtime every worker in this pool must use. Checkpoint-backed clients use
-	// gVisor so a restore cannot silently land on a runc worker.
+	// Runtime for workers in this pool.
 	ContainerRuntime string `protobuf:"bytes,15,opt,name=container_runtime,json=containerRuntime,proto3" json:"container_runtime,omitempty"`
 }
 

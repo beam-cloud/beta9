@@ -1845,6 +1845,25 @@ func TestHasAvailableCheckpoint(t *testing.T) {
 	}))
 }
 
+func TestRequireCheckpointRuntime(t *testing.T) {
+	request := &types.ContainerRequest{Checkpoint: &types.Checkpoint{
+		CheckpointId: "checkpoint-1",
+		Status:       string(types.CheckpointStatusAvailable),
+		Runtime:      " gvisor ",
+	}}
+
+	require.NoError(t, requireCheckpointRuntime(request, types.ContainerRuntimeGvisor.String()))
+	require.EqualError(t, requireCheckpointRuntime(request, types.ContainerRuntimeRunc.String()),
+		`cannot restore gvisor checkpoint "checkpoint-1" with runtime "runc"`)
+
+	request.Checkpoint.Status = string(types.CheckpointStatusRestoreFailed)
+	require.NoError(t, requireCheckpointRuntime(request, types.ContainerRuntimeRunc.String()))
+
+	request.Checkpoint.Status = string(types.CheckpointStatusAvailable)
+	request.Checkpoint.Runtime = ""
+	require.NoError(t, requireCheckpointRuntime(request, types.ContainerRuntimeRunc.String()))
+}
+
 func TestShouldCreateCheckpointIgnoresNonAvailableAttachedCheckpoint(t *testing.T) {
 	t.Setenv("WORKER_POOL_NAME", "default")
 

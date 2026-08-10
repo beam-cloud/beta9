@@ -444,10 +444,7 @@ managedCompute:
     mode: noop
     endpoint: ""
     authToken: ""
-    # Route trusted, cluster-admin-provisioned whitelabel workspaces to an
-    # isolated ledger without changing billing for the rest of the cluster.
-    # Each route accepts workspaceIDs for existing tenants and/or a
-    # workspaceNamePrefix for newly provisioned tenants.
+    # Optional workspace-specific billing endpoints.
     routes: []
     required: false
     timeout: 5s

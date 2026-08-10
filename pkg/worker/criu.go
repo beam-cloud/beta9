@@ -548,10 +548,7 @@ func (s *Worker) attemptRestoreCheckpoint(ctx context.Context, request *types.Co
 		if hostIncompatible {
 			outputLogger.Info("Checkpoint was created on an incompatible CPU; starting container normally")
 		} else {
-			// Preserve the runtime error in container logs. In particular,
-			// runsc reports background CUDA resume failures from `wait --restore`,
-			// after its stderr pipe has closed, so a generic message here otherwise
-			// discards the only actionable diagnostic.
+			// Surface delayed runtime resume errors to the container log.
 			outputLogger.Error(fmt.Sprintf("Failed to restore checkpoint: %v", err))
 		}
 		if cleanupErr := deleteFailedRestoreRuntimeContainer(ctx, instance.Runtime, request.ContainerId); cleanupErr != nil {
@@ -700,6 +697,7 @@ type CreateCheckpointOpts struct {
 	Request           *types.ContainerRequest
 	CheckpointId      string
 	ContainerIp       string
+	RuntimeName       string
 	OutputLogger      *slog.Logger
 	CheckpointPIDChan chan int
 	WaitForSignal     bool
@@ -727,6 +725,7 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 	if instance.Runtime == nil {
 		return fmt.Errorf("container runtime is unavailable")
 	}
+	opts.RuntimeName = instance.Runtime.Name()
 
 	if err := s.requireCRIUManager(); err != nil {
 		return err
@@ -859,7 +858,7 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 		}
 	}
 
-	err = s.createCheckpointState(opts.CheckpointId, opts.Request, types.CheckpointStatusAvailable, opts.ContainerIp, metadata)
+	err = s.createCheckpointState(opts.CheckpointId, opts.Request, types.CheckpointStatusAvailable, opts.ContainerIp, opts.RuntimeName, metadata)
 	if err != nil {
 		log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to update checkpoint state: %v", err)
 		return err
@@ -879,7 +878,7 @@ func (s *Worker) markCheckpointFailed(opts *CreateCheckpointOpts, metadata *chec
 	if s == nil || s.backendRepoClient == nil || opts == nil || opts.Request == nil {
 		return
 	}
-	if stateErr := s.createCheckpointState(opts.CheckpointId, opts.Request, types.CheckpointStatusCheckpointFailed, opts.ContainerIp, metadata); stateErr != nil {
+	if stateErr := s.createCheckpointState(opts.CheckpointId, opts.Request, types.CheckpointStatusCheckpointFailed, opts.ContainerIp, opts.RuntimeName, metadata); stateErr != nil {
 		log.Error().
 			Str("container_id", opts.Request.ContainerId).
 			Str("checkpoint_id", opts.CheckpointId).
@@ -1723,8 +1722,8 @@ func (s *Worker) requireCRIUManager() error {
 	return nil
 }
 
-func (s *Worker) createCheckpointState(checkpointId string, request *types.ContainerRequest, status types.CheckpointStatus, containerIp string, metadata *checkpointCacheMetadata) error {
-	req := checkpointStateRequest(checkpointId, request, status, containerIp)
+func (s *Worker) createCheckpointState(checkpointId string, request *types.ContainerRequest, status types.CheckpointStatus, containerIp, runtimeName string, metadata *checkpointCacheMetadata) error {
+	req := checkpointStateRequest(checkpointId, request, status, containerIp, runtimeName)
 	if metadata != nil {
 		req.CacheHash = metadata.hash
 		req.CacheSizeBytes = metadata.sizeBytes
@@ -1737,7 +1736,7 @@ func (s *Worker) createCheckpointState(checkpointId string, request *types.Conta
 	return err
 }
 
-func checkpointStateRequest(checkpointId string, request *types.ContainerRequest, status types.CheckpointStatus, containerIp string) *pb.CreateCheckpointRequest {
+func checkpointStateRequest(checkpointId string, request *types.ContainerRequest, status types.CheckpointStatus, containerIp, runtimeName string) *pb.CreateCheckpointRequest {
 	return &pb.CreateCheckpointRequest{
 		CheckpointId:      checkpointId,
 		SourceContainerId: request.ContainerId,
@@ -1746,6 +1745,7 @@ func checkpointStateRequest(checkpointId string, request *types.ContainerRequest
 		RemoteKey:         checkpointId,
 		StubId:            request.Stub.ExternalId,
 		ExposedPorts:      request.Ports,
+		Runtime:           runtimeName,
 	}
 }
 

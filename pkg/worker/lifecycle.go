@@ -348,6 +348,9 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		request.CheckpointEnabled = false
 		request.Checkpoint = nil
 	}
+	if err := requireCheckpointRuntime(request, s.runtime.Name()); err != nil {
+		return err
+	}
 
 	var filesystemRestore *checkpointFilesystemRestore
 	if s.canRestoreCheckpoint(request, s.runtime) {
@@ -476,6 +479,22 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	log.Info().Str("container_id", containerId).Msg("spawned successfully")
 	logCaptureClosed = true
 	return nil
+}
+
+func requireCheckpointRuntime(request *types.ContainerRequest, runtimeName string) error {
+	if !hasAvailableCheckpoint(request) {
+		return nil
+	}
+	required := strings.TrimSpace(request.Checkpoint.Runtime)
+	if required == "" || required == runtimeName {
+		return nil
+	}
+	return fmt.Errorf(
+		"cannot restore %s checkpoint %q with runtime %q",
+		required,
+		request.Checkpoint.CheckpointId,
+		runtimeName,
+	)
 }
 
 func (s *Worker) mountWorkspaceStorage(ctx context.Context, request *types.ContainerRequest) error {

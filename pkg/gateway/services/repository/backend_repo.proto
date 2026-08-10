@@ -60,6 +60,7 @@ message CreateCheckpointRequest {
   string origin_key = 10;
   string locality = 11;
   string accelerator = 12;
+  string runtime = 13;
 }
 
 message CreateCheckpointResponse {

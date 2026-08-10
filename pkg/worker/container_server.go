@@ -307,7 +307,7 @@ func (s *ContainerRuntimeServer) ContainerCheckpoint(ctx context.Context, in *pb
 		return &pb.ContainerCheckpointResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
-	return &pb.ContainerCheckpointResponse{Ok: true, CheckpointId: checkpointId}, nil
+	return &pb.ContainerCheckpointResponse{Ok: true, CheckpointId: checkpointId, Runtime: rt.Name()}, nil
 }
 
 // ContainerSnapshotDisks snapshots a running container's durable disks.

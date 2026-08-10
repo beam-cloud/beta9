@@ -58,7 +58,14 @@ func TestWorkerProtoRoundTripPreservesRuntimeAndPoolSelector(t *testing.T) {
 func TestContainerRequestProtoRoundTripPreservesTaskID(t *testing.T) {
 	request := &ContainerRequest{TaskId: "task-1"}
 
-	require.Equal(t, request.TaskId, NewContainerRequestFromProto(request.ToProto()).TaskId)
+	roundTrip := NewContainerRequestFromProto(request.ToProto())
+	require.Equal(t, request.TaskId, roundTrip.TaskId)
+}
+
+func TestCheckpointProtoRoundTripPreservesRuntime(t *testing.T) {
+	checkpoint := &Checkpoint{CheckpointId: "checkpoint-1", Runtime: ContainerRuntimeGvisor.String()}
+
+	require.Equal(t, checkpoint.Runtime, NewCheckpointFromProto(checkpoint.ToProto()).Runtime)
 }
 
 func TestPrivateWorkerRequestRemovesControlPlaneCredentials(t *testing.T) {

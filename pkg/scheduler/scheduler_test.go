@@ -776,6 +776,7 @@ func (wpc *LocalWorkerPoolControllerForTest) AddWorker(cpu int64, memory int64, 
 		Gpu:                  gpuType,
 		PoolName:             wpc.name,
 		RequiresPoolSelector: wpc.RequiresPoolSelector(),
+		Runtime:              wpc.ContainerRuntime(),
 		Status:               status,
 	}
 
@@ -2910,14 +2911,17 @@ func TestSelectorBoundAnyGPUAcceptsUncataloguedHardware(t *testing.T) {
 	assert.Empty(t, filterWorkersByResources([]*types.Worker{worker}, request, nil))
 }
 
-func TestExplicitCheckpointDoesNotAssumeRuntime(t *testing.T) {
+func TestCheckpointRuntimeSelection(t *testing.T) {
 	request := &types.ContainerRequest{
 		Cpu:               1000,
 		Memory:            1000,
 		GpuRequest:        []string{"RTX5090"},
 		GpuCount:          1,
 		CheckpointEnabled: true,
-		Checkpoint:        &types.Checkpoint{CheckpointId: "checkpoint-1"},
+		Checkpoint: &types.Checkpoint{
+			CheckpointId: "checkpoint-1",
+			Status:       string(types.CheckpointStatusAvailable),
+		},
 	}
 	worker := func(id, runtimeName string) *types.Worker {
 		return &types.Worker{
@@ -2933,7 +2937,36 @@ func TestExplicitCheckpointDoesNotAssumeRuntime(t *testing.T) {
 	runc := worker("runc", types.ContainerRuntimeRunc.String())
 	gvisor := worker("gvisor", types.ContainerRuntimeGvisor.String())
 
-	assert.Equal(t, []*types.Worker{runc, gvisor}, filterWorkersByResources([]*types.Worker{runc, gvisor}, request, nil))
+	workers := []*types.Worker{runc, gvisor}
+
+	assert.Equal(t, workers, filterWorkersByResources(workers, request, nil), "legacy checkpoints have no runtime metadata")
+
+	request.Checkpoint.Runtime = types.ContainerRuntimeRunc.String()
+	assert.Equal(t, []*types.Worker{runc}, filterWorkersByResources(workers, request, nil))
+
+	request.Checkpoint.Runtime = types.ContainerRuntimeGvisor.String()
+	assert.Equal(t, []*types.Worker{gvisor}, filterWorkersByResources(workers, request, nil))
+
+	request.Checkpoint.Status = string(types.CheckpointStatusCheckpointFailed)
+	assert.Equal(t, workers, filterWorkersByResources(workers, request, nil), "non-available checkpoints cold-start normally")
+}
+
+func TestCheckpointRuntimeFiltersProvisioningControllers(t *testing.T) {
+	runc := &LocalWorkerPoolControllerForTest{name: "runc", containerRuntime: types.ContainerRuntimeRunc.String()}
+	gvisor := &LocalWorkerPoolControllerForTest{name: "gvisor", containerRuntime: types.ContainerRuntimeGvisor.String()}
+	controllers := []WorkerPoolController{runc, gvisor}
+	request := &types.ContainerRequest{
+		Checkpoint: &types.Checkpoint{
+			CheckpointId: "checkpoint-1",
+			Status:       string(types.CheckpointStatusAvailable),
+			Runtime:      types.ContainerRuntimeGvisor.String(),
+		},
+	}
+
+	assert.Equal(t, []WorkerPoolController{gvisor}, filterControllersByFlags(controllers, request))
+
+	request.Checkpoint.Runtime = ""
+	assert.Equal(t, controllers, filterControllersByFlags(controllers, request), "legacy checkpoints retain existing placement")
 }
 
 func TestSelectGPUWorkerDoesNotMutatePriority(t *testing.T) {

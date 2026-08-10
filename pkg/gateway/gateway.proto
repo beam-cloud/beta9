@@ -872,8 +872,7 @@ message PoolConfig {
   string fallback = 12;
   int32 priority = 13;
   string offer_id = 14;
-  // Runtime every worker in this pool must use. Checkpoint-backed clients use
-  // gVisor so a restore cannot silently land on a runc worker.
+  // Runtime for workers in this pool.
   string container_runtime = 15;
 }
 

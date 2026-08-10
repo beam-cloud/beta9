@@ -2680,13 +2680,13 @@ func (r *PostgresBackendRepository) CreateCheckpoint(ctx context.Context, checkp
 		INSERT INTO checkpoint (
 			checkpoint_id, source_container_id, container_ip, status, remote_key,
 			workspace_id, stub_id, stub_type, app_id, exposed_ports,
-			cache_hash, cache_size_bytes, origin_key, locality, accelerator
+			cache_hash, cache_size_bytes, origin_key, locality, accelerator, runtime
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
 		)
 		RETURNING checkpoint_id, external_id, source_container_id, container_ip, status, remote_key,
 		          workspace_id, stub_id, stub_type, app_id, exposed_ports, created_at, last_restored_at,
-		          cache_hash, cache_size_bytes, origin_key, locality, accelerator;`
+		          cache_hash, cache_size_bytes, origin_key, locality, accelerator, runtime;`
 
 	exposedPortsInt32 := make([]int32, len(checkpoint.ExposedPorts))
 	for i, port := range checkpoint.ExposedPorts {
@@ -2711,6 +2711,7 @@ func (r *PostgresBackendRepository) CreateCheckpoint(ctx context.Context, checkp
 		checkpoint.OriginKey,
 		checkpoint.Locality,
 		checkpoint.Accelerator,
+		checkpoint.Runtime,
 	).Scan(
 		&created.CheckpointId,
 		&created.ExternalId,
@@ -2730,6 +2731,7 @@ func (r *PostgresBackendRepository) CreateCheckpoint(ctx context.Context, checkp
 		&created.OriginKey,
 		&created.Locality,
 		&created.Accelerator,
+		&created.Runtime,
 	)
 	if err != nil {
 		return nil, err
@@ -2745,7 +2747,7 @@ func (r *PostgresBackendRepository) ListCheckpoints(ctx context.Context, workspa
 	query := `
 		SELECT c.checkpoint_id, c.external_id, c.source_container_id, c.container_ip, c.status, c.remote_key,
 		       c.workspace_id, c.stub_id, c.stub_type, c.app_id, c.exposed_ports, c.created_at, c.last_restored_at,
-		       c.cache_hash, c.cache_size_bytes, c.origin_key, c.locality, c.accelerator
+		       c.cache_hash, c.cache_size_bytes, c.origin_key, c.locality, c.accelerator, c.runtime
 		FROM checkpoint c
 		INNER JOIN workspace w ON c.workspace_id = w.id
 		WHERE w.external_id = $1 AND c.deleted_at IS NULL
@@ -2780,6 +2782,7 @@ func (r *PostgresBackendRepository) ListCheckpoints(ctx context.Context, workspa
 			&checkpoint.OriginKey,
 			&checkpoint.Locality,
 			&checkpoint.Accelerator,
+			&checkpoint.Runtime,
 		)
 		if err != nil {
 			return nil, err
@@ -2802,7 +2805,7 @@ func (r *PostgresBackendRepository) UpdateCheckpoint(ctx context.Context, checkp
 	updateBuilder := squirrel.Update("checkpoint").
 		Where(squirrel.Eq{"checkpoint_id": checkpoint.CheckpointId}).
 		Where(squirrel.Eq{"deleted_at": nil}).
-		Suffix("RETURNING checkpoint_id, external_id, source_container_id, container_ip, status, remote_key, workspace_id, stub_id, stub_type, app_id, exposed_ports, created_at, last_restored_at, cache_hash, cache_size_bytes, origin_key, locality, accelerator")
+		Suffix("RETURNING checkpoint_id, external_id, source_container_id, container_ip, status, remote_key, workspace_id, stub_id, stub_type, app_id, exposed_ports, created_at, last_restored_at, cache_hash, cache_size_bytes, origin_key, locality, accelerator, runtime")
 
 	if checkpoint.ContainerIp != "" {
 		updateBuilder = updateBuilder.Set("container_ip", checkpoint.ContainerIp)
@@ -2850,6 +2853,7 @@ func (r *PostgresBackendRepository) UpdateCheckpoint(ctx context.Context, checkp
 		&updated.OriginKey,
 		&updated.Locality,
 		&updated.Accelerator,
+		&updated.Runtime,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -2868,7 +2872,7 @@ func (r *PostgresBackendRepository) GetCheckpointById(ctx context.Context, check
 	query := `
 		SELECT checkpoint_id, external_id, source_container_id, container_ip, status, remote_key,
 		       workspace_id, stub_id, stub_type, app_id, exposed_ports, created_at, last_restored_at,
-		       cache_hash, cache_size_bytes, origin_key, locality, accelerator
+		       cache_hash, cache_size_bytes, origin_key, locality, accelerator, runtime
 		FROM checkpoint 
 		WHERE checkpoint_id = $1 AND deleted_at IS NULL
 		LIMIT 1;`
@@ -2894,6 +2898,7 @@ func (r *PostgresBackendRepository) GetCheckpointById(ctx context.Context, check
 		&checkpoint.OriginKey,
 		&checkpoint.Locality,
 		&checkpoint.Accelerator,
+		&checkpoint.Runtime,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -2912,7 +2917,7 @@ func (r *PostgresBackendRepository) GetLatestCheckpointByStubId(ctx context.Cont
 	query := `
 		SELECT c.checkpoint_id, c.external_id, c.source_container_id, c.container_ip, c.status, c.remote_key,
 		       c.workspace_id, c.stub_id, c.stub_type, c.app_id, c.exposed_ports, c.created_at, c.last_restored_at,
-		       c.cache_hash, c.cache_size_bytes, c.origin_key, c.locality, c.accelerator
+		       c.cache_hash, c.cache_size_bytes, c.origin_key, c.locality, c.accelerator, c.runtime
 		FROM checkpoint c
 		INNER JOIN stub s ON c.stub_id = s.id
 		WHERE s.external_id = $1 AND c.deleted_at IS NULL AND c.status = $2
@@ -2940,6 +2945,7 @@ func (r *PostgresBackendRepository) GetLatestCheckpointByStubId(ctx context.Cont
 		&checkpoint.OriginKey,
 		&checkpoint.Locality,
 		&checkpoint.Accelerator,
+		&checkpoint.Runtime,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -2960,7 +2966,7 @@ func (r *PostgresBackendRepository) ListStaleCheckpoints(ctx context.Context, ac
 	query := `
 		SELECT c.checkpoint_id, c.external_id, c.source_container_id, c.container_ip, c.status, c.remote_key,
 		       c.workspace_id, c.stub_id, c.stub_type, c.app_id, c.exposed_ports, c.created_at, c.last_restored_at,
-		       c.cache_hash, c.cache_size_bytes, c.origin_key, c.locality, c.accelerator
+		       c.cache_hash, c.cache_size_bytes, c.origin_key, c.locality, c.accelerator, c.runtime
 		FROM checkpoint c
 		INNER JOIN stub s ON c.stub_id = s.id
 		INNER JOIN workspace w ON s.workspace_id = w.id
@@ -2987,7 +2993,7 @@ func (r *PostgresBackendRepository) PruneCheckpoints(ctx context.Context, checkp
 		  AND c.checkpoint_id = ANY($1::text[])
 		RETURNING c.checkpoint_id, c.external_id, c.source_container_id, c.container_ip, c.status, c.remote_key,
 		          c.workspace_id, c.stub_id, c.stub_type, c.app_id, c.exposed_ports, c.created_at, c.last_restored_at,
-		          c.cache_hash, c.cache_size_bytes, c.origin_key, c.locality, c.accelerator;`
+		          c.cache_hash, c.cache_size_bytes, c.origin_key, c.locality, c.accelerator, c.runtime;`
 
 	rows, err := r.client.QueryxContext(ctx, query, pq.Array(checkpointIds))
 	if err != nil {
@@ -3022,6 +3028,7 @@ func scanCheckpointRows(rows *sqlx.Rows) ([]types.Checkpoint, error) {
 			&checkpoint.OriginKey,
 			&checkpoint.Locality,
 			&checkpoint.Accelerator,
+			&checkpoint.Runtime,
 		)
 		if err != nil {
 			return nil, err

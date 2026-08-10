@@ -43,6 +43,7 @@ message Checkpoint {
   string origin_key = 18;
   string locality = 19;
   string accelerator = 20;
+  string runtime = 21;
 }
 
 message CheckpointTrigger {

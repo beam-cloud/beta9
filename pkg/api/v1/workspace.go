@@ -41,9 +41,6 @@ func NewWorkspaceGroup(g *echo.Group, backendRepo repository.BackendRepository, 
 }
 
 type CreateWorkspaceRequest struct {
-	// NamePrefix is accepted only on this cluster-admin route. It marks
-	// whitelabel tenants for workspace-scoped services such as billing without
-	// exposing a user-selectable billing switch.
 	NamePrefix string `json:"name_prefix" validate:"omitempty,lowercase,alphanum,max=24"`
 }
 

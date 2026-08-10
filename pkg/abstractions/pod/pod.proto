@@ -419,6 +419,7 @@ message PodSandboxSnapshotMemoryResponse {
   bool ok = 1;
   string error_msg = 2;
   string checkpoint_id = 3;
+  string runtime = 4;
 }
 
 message PodSandboxSnapshotDisksRequest {
