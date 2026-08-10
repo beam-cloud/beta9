@@ -362,21 +362,8 @@ func (c *StorageClient) Head(ctx context.Context, key string, bucket string) (bo
 }
 
 func (c *StorageClient) Exists(ctx context.Context, key string, bucket string) (bool, error) {
-	_, err := c.s3Client.GetObject(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(bucket),
-		Key:    aws.String(key),
-		Range:  aws.String("bytes=0-0"),
-	})
-
-	if err != nil {
-		if errors.As(err, new(*s3types.NoSuchKey)) || errors.As(err, new(*s3types.NotFound)) {
-			return false, nil
-		}
-
-		return false, err
-	}
-
-	return true, nil
+	exists, _, err := c.Head(ctx, key, bucket)
+	return exists, err
 }
 
 func (c *StorageClient) Download(ctx context.Context, key string, bucket string) ([]byte, error) {

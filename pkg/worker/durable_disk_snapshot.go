@@ -27,8 +27,9 @@ import (
 )
 
 const (
-	defaultDurableDiskSnapshotChunkSize int64 = 64 << 20
-	durableDiskRestoreConcurrency             = 8
+	defaultDurableDiskSnapshotChunkSize  int64 = 64 << 20
+	durableDiskSnapshotUploadConcurrency       = 8
+	durableDiskRestoreConcurrency              = 8
 )
 
 type durableDiskSnapshotStore interface {
@@ -569,24 +570,34 @@ func snapshotDurableDiskFile(ctx context.Context, store durableDiskSnapshotStore
 		}
 	}
 
+	uploads, uploadCtx := errgroup.WithContext(ctx)
+	uploads.SetLimit(durableDiskSnapshotUploadConcurrency)
+	var readErr error
 	for ; ; index++ {
+		if uploadCtx.Err() != nil {
+			break
+		}
 		n, readErr := in.Read(buffer)
 		if n > 0 {
-			chunk := buffer[:n]
+			chunk := append([]byte(nil), buffer[:n]...)
 			sum := sha256.Sum256(chunk)
 			hash := hex.EncodeToString(sum[:])
 			key := path.Join(chunkPrefix, hash)
 			if _, ok := seen[key]; !ok {
-				exists, err := store.Exists(ctx, key)
-				if err != nil {
-					return fmt.Errorf("check durable disk snapshot chunk %s: %w", key, err)
-				}
-				if !exists {
-					if err := store.UploadWithReader(ctx, key, bytes.NewReader(chunk)); err != nil {
+				seen[key] = struct{}{}
+				uploads.Go(func() error {
+					exists, err := store.Exists(uploadCtx, key)
+					if err != nil {
+						return fmt.Errorf("check durable disk snapshot chunk %s: %w", key, err)
+					}
+					if exists {
+						return nil
+					}
+					if err := store.UploadWithReader(uploadCtx, key, bytes.NewReader(chunk)); err != nil {
 						return fmt.Errorf("upload durable disk snapshot chunk %s: %w", key, err)
 					}
-				}
-				seen[key] = struct{}{}
+					return nil
+				})
 			}
 			file.Chunks = append(file.Chunks, types.DiskSnapshotChunk{
 				Index:       index,
@@ -598,12 +609,17 @@ func snapshotDurableDiskFile(ctx context.Context, store durableDiskSnapshotStore
 			offset += int64(n)
 		}
 		if readErr == io.EOF {
-			return nil
+			break
 		}
 		if readErr != nil {
-			return fmt.Errorf("read durable disk snapshot file %s: %w", filename, readErr)
+			readErr = fmt.Errorf("read durable disk snapshot file %s: %w", filename, readErr)
+			break
 		}
 	}
+	if err := uploads.Wait(); err != nil {
+		return err
+	}
+	return readErr
 }
 
 func durableDiskSnapshotFileStoredBytes(chunks []types.DiskSnapshotChunk) int64 {

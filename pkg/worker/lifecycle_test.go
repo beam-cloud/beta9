@@ -1458,19 +1458,22 @@ func TestCheckpointFilesystemRestoreDiscardRemovesPartialUpperLayer(t *testing.T
 	overlayRoot := filepath.Join(t.TempDir(), "overlay")
 	require.NoError(t, os.MkdirAll(filepath.Join(overlayRoot, "layer-0", "upper"), 0755))
 	require.NoError(t, os.WriteFile(filepath.Join(overlayRoot, "layer-0", "upper", "partial"), []byte("partial"), 0644))
+	require.NoError(t, os.MkdirAll(filepath.Join(overlayRoot, "criu"), 0755))
 
 	_, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	close(done)
 	restore := &checkpointFilesystemRestore{
 		overlayRoot: overlayRoot,
+		upperPath:   filepath.Join(overlayRoot, "layer-0", "upper"),
 		done:        done,
 		cancel:      cancel,
 		err:         assert.AnError,
 	}
 
 	require.NoError(t, restore.discard())
-	require.NoDirExists(t, overlayRoot)
+	require.NoDirExists(t, filepath.Join(overlayRoot, "layer-0"))
+	require.DirExists(t, filepath.Join(overlayRoot, "criu"))
 }
 
 func TestRunContainerRestoreWaitsForRestoredRuntimeExit(t *testing.T) {

@@ -3,6 +3,8 @@ package clients
 import (
 	"bytes"
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"testing"
 
@@ -89,6 +91,30 @@ func TestStorageMultipartUploaderLimitsStreamingConcurrency(t *testing.T) {
 	}
 	if uploader.Concurrency != storageStreamingUploadWorkers {
 		t.Fatalf("uploader Concurrency = %d, want %d", uploader.Concurrency, storageStreamingUploadWorkers)
+	}
+}
+
+func TestStorageExistsUsesHead(t *testing.T) {
+	var method string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		method = r.Method
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client, err := NewWorkspaceStorageClient(context.Background(), "workspace", testWorkspaceStorage(server.URL))
+	if err != nil {
+		t.Fatalf("NewWorkspaceStorageClient() error = %v", err)
+	}
+	exists, err := client.Exists(context.Background(), "chunks/hash")
+	if err != nil {
+		t.Fatalf("Exists() error = %v", err)
+	}
+	if !exists {
+		t.Fatal("Exists() = false, want true")
+	}
+	if method != http.MethodHead {
+		t.Fatalf("Exists() method = %q, want HEAD", method)
 	}
 }
 

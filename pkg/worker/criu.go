@@ -99,7 +99,7 @@ func (r *checkpointFilesystemRestore) discard() error {
 	}
 	r.cancel()
 	r.wait()
-	return os.RemoveAll(r.overlayRoot)
+	return os.RemoveAll(filepath.Dir(r.upperPath))
 }
 
 func (s *Worker) startCheckpointFilesystemRestore(request *types.ContainerRequest, outputLogger *slog.Logger) *checkpointFilesystemRestore {

@@ -320,6 +320,24 @@ func TestCreateDurableDiskDirectorySnapshotDedupesChunks(t *testing.T) {
 	require.Equal(t, "wal2", string(data))
 }
 
+func TestCreateDurableDiskDirectorySnapshotUploadsChunksInParallel(t *testing.T) {
+	ctx := context.Background()
+	source := t.TempDir()
+	data := make([]byte, 64)
+	for i := range data {
+		data[i] = byte(i)
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(source, "model"), data, 0o600))
+
+	store := &parallelUploadDurableDiskSnapshotStore{fakeDurableDiskSnapshotStore: &fakeDurableDiskSnapshotStore{}}
+	_, _, err := createDurableDiskDirectorySnapshot(ctx, store, source, "durable-disks/model/snapshots/1", types.DiskSnapshot{
+		DiskName: "model", Format: types.DiskSnapshotFormatDirV1, Filesystem: "ext4", Generation: 1,
+	}, 4, nil, false)
+	require.NoError(t, err)
+	require.Greater(t, store.maxActive, 1)
+	require.LessOrEqual(t, store.maxActive, durableDiskSnapshotUploadConcurrency)
+}
+
 func TestCreateDurableDiskDirectorySnapshotReusesAppendOnlyTail(t *testing.T) {
 	ctx := context.Background()
 	source := filepath.Join(t.TempDir(), "redis-data")
@@ -690,9 +708,34 @@ func durableDiskTestMount(primary string) *types.Mount {
 }
 
 type fakeDurableDiskSnapshotStore struct {
+	mu          sync.Mutex
 	objects     map[string][]byte
 	existsCalls int
 	uploadCalls int
+}
+
+type parallelUploadDurableDiskSnapshotStore struct {
+	*fakeDurableDiskSnapshotStore
+	activeMu  sync.Mutex
+	active    int
+	maxActive int
+}
+
+func (s *parallelUploadDurableDiskSnapshotStore) UploadWithReader(ctx context.Context, key string, data io.Reader) error {
+	body, err := io.ReadAll(data)
+	if err != nil {
+		return err
+	}
+	s.activeMu.Lock()
+	s.active++
+	s.maxActive = max(s.maxActive, s.active)
+	s.activeMu.Unlock()
+	time.Sleep(20 * time.Millisecond)
+	err = s.fakeDurableDiskSnapshotStore.Upload(ctx, key, body)
+	s.activeMu.Lock()
+	s.active--
+	s.activeMu.Unlock()
+	return err
 }
 
 type parallelDownloadDurableDiskSnapshotStore struct {
@@ -719,12 +762,16 @@ func (s *parallelDownloadDurableDiskSnapshotStore) DownloadWithReader(ctx contex
 }
 
 func (s *fakeDurableDiskSnapshotStore) Exists(_ context.Context, key string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.existsCalls++
 	_, ok := s.objects[key]
 	return ok, nil
 }
 
 func (s *fakeDurableDiskSnapshotStore) Upload(_ context.Context, key string, data []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.uploadCalls++
 	if s.objects == nil {
 		s.objects = map[string][]byte{}
@@ -742,7 +789,10 @@ func (s *fakeDurableDiskSnapshotStore) UploadWithReader(_ context.Context, key s
 }
 
 func (s *fakeDurableDiskSnapshotStore) DownloadWithReader(_ context.Context, key string) (io.ReadCloser, error) {
-	return io.NopCloser(bytes.NewReader(s.objects[key])), nil
+	s.mu.Lock()
+	data := append([]byte(nil), s.objects[key]...)
+	s.mu.Unlock()
+	return io.NopCloser(bytes.NewReader(data)), nil
 }
 
 type fakeDurableDiskSnapshotCacheReader struct {
