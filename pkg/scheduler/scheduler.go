@@ -597,7 +597,6 @@ func (s *Scheduler) getControllers(request *types.ContainerRequest) ([]WorkerPoo
 	// type before widening.
 	controllers = append(controllers, s.failoverControllers(chain, controllers)...)
 	controllers = filterControllersByFlagsForFailover(controllers, request, chain)
-	controllers = s.filterControllersByRuntime(controllers, request)
 	if len(controllers) == 0 {
 		return nil, errors.New("no controller found for request")
 	}
@@ -941,35 +940,6 @@ func isLocalBuildRegistry(buildRegistry string) bool {
 
 func filterControllersByFlags(controllers []WorkerPoolController, request *types.ContainerRequest) []WorkerPoolController {
 	return filterControllersByFlagsForFailover(controllers, request, nil)
-}
-
-// filterControllersByRuntime keeps worker provisioning subject to the same
-// runtime requirements as worker selection. An explicit checkpoint is a hard
-// restore request: provisioning a runc worker can never satisfy it and, before
-// this guard, every retry could create another unusable worker.
-func (s *Scheduler) filterControllersByRuntime(controllers []WorkerPoolController, request *types.ContainerRequest) []WorkerPoolController {
-	if request == nil || request.Checkpoint == nil {
-		return controllers
-	}
-
-	filtered := make([]WorkerPoolController, 0, len(controllers))
-	for _, controller := range controllers {
-		if s.controllerRuntime(controller) == types.ContainerRuntimeGvisor.String() {
-			filtered = append(filtered, controller)
-		}
-	}
-	return filtered
-}
-
-func (s *Scheduler) controllerRuntime(controller WorkerPoolController) string {
-	if controller == nil {
-		return types.ContainerRuntimeRunc.String()
-	}
-	return firstNonEmpty(
-		controller.ContainerRuntime(),
-		s.config.Worker.ContainerRuntime,
-		types.ContainerRuntimeRunc.String(),
-	)
 }
 
 func filterControllersByFlagsForFailover(controllers []WorkerPoolController, request *types.ContainerRequest, chain *failoverChain) []WorkerPoolController {
