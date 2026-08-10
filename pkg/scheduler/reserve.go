@@ -268,6 +268,13 @@ func (a *workerProvisioningAttempt) run() {
 	if controller == nil {
 		return
 	}
+	// Defense in depth: getControllers filters these before a provisioning
+	// attempt is created, but never allow a future caller to turn a checkpoint
+	// restore into an unbounded stream of runtime-incompatible workers.
+	if a.request.Checkpoint != nil && a.scheduler.controllerRuntime(controller) != types.ContainerRuntimeGvisor.String() {
+		a.logAddWorkerFailure(errors.New("checkpoint restore requires a gvisor worker pool"))
+		return
+	}
 
 	select {
 	case <-a.scheduler.ctx.Done():
@@ -486,7 +493,7 @@ func (s *Scheduler) newProvisioningReservation(request *types.ContainerRequest, 
 		Gpu:                  gpu,
 		PoolName:             controller.Name(),
 		RequiresPoolSelector: controller.RequiresPoolSelector(),
-		Runtime:              controller.ContainerRuntime(),
+		Runtime:              s.controllerRuntime(controller),
 		BuildVersion:         s.config.Worker.ImageTag,
 		Preemptable:          controller.IsPreemptable(),
 	}
