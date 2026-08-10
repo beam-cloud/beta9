@@ -1,4 +1,4 @@
-package thunder
+package repository
 
 import (
 	"context"
@@ -15,26 +15,26 @@ const thunderPoolLockTTLSeconds = 30
 
 var errThunderStateRequired = errors.New("thunder state is required")
 
-type Repository interface {
+type ThunderRepository interface {
 	WithPoolLock(ctx context.Context, workspaceID, poolName string, fn func(context.Context) error) error
 
-	GetClientEnrollment(ctx context.Context, containerID string) (*ClientEnrollmentState, bool, error)
-	SaveClientEnrollment(ctx context.Context, state *ClientEnrollmentState, ttl time.Duration) error
+	GetClientEnrollment(ctx context.Context, containerID string) (*ThunderClientEnrollmentState, bool, error)
+	SaveClientEnrollment(ctx context.Context, state *ThunderClientEnrollmentState, ttl time.Duration) error
 	DeleteClientEnrollment(ctx context.Context, containerID string) error
-	ListClientEnrollments(ctx context.Context) ([]*ClientEnrollmentState, error)
+	ListClientEnrollments(ctx context.Context) ([]*ThunderClientEnrollmentState, error)
 
-	GetNodeEnrollment(ctx context.Context, workspaceID, poolName, machineID string) (*NodeEnrollmentState, bool, error)
-	SaveNodeEnrollment(ctx context.Context, state *NodeEnrollmentState, ttl time.Duration) error
+	GetNodeEnrollment(ctx context.Context, workspaceID, poolName, machineID string) (*ThunderNodeEnrollmentState, bool, error)
+	SaveNodeEnrollment(ctx context.Context, state *ThunderNodeEnrollmentState, ttl time.Duration) error
 	DeleteNodeEnrollment(ctx context.Context, workspaceID, poolName, machineID string) error
-	ListNodeEnrollments(ctx context.Context, workspaceID, poolName string) ([]*NodeEnrollmentState, error)
+	ListNodeEnrollments(ctx context.Context, workspaceID, poolName string) ([]*ThunderNodeEnrollmentState, error)
 
-	GetZone(ctx context.Context, workspaceID, poolName string) (*ZoneState, bool, error)
-	SaveZone(ctx context.Context, state *ZoneState) error
+	GetZone(ctx context.Context, workspaceID, poolName string) (*ThunderZoneState, bool, error)
+	SaveZone(ctx context.Context, state *ThunderZoneState) error
 	DeleteZone(ctx context.Context, workspaceID, poolName string) error
-	ListZones(ctx context.Context, workspaceID string) ([]*ZoneState, error)
+	ListZones(ctx context.Context, workspaceID string) ([]*ThunderZoneState, error)
 }
 
-type ClientEnrollmentState struct {
+type ThunderClientEnrollmentState struct {
 	ContainerID       string `json:"container_id"`
 	WorkspaceID       string `json:"workspace_id"`
 	WorkerID          string `json:"worker_id"`
@@ -43,29 +43,29 @@ type ClientEnrollmentState struct {
 	EnrollmentTokenID string `json:"enrollment_token_id"`
 }
 
-type NodeEnrollmentState struct {
+type ThunderNodeEnrollmentState struct {
 	WorkspaceID       string `json:"workspace_id"`
 	PoolName          string `json:"pool_name"`
 	MachineID         string `json:"machine_id"`
 	EnrollmentTokenID string `json:"enrollment_token_id"`
 }
 
-type ZoneState struct {
+type ThunderZoneState struct {
 	WorkspaceID   string `json:"workspace_id"`
 	PoolName      string `json:"pool_name"`
 	ThunderZoneID string `json:"thunder_zone_id"`
 }
 
-type RedisRepository struct {
+type ThunderRedisRepository struct {
 	rdb  *common.RedisClient
 	lock *common.RedisLock
 }
 
-func NewRedisRepository(rdb *common.RedisClient) *RedisRepository {
-	return &RedisRepository{rdb: rdb, lock: common.NewRedisLock(rdb)}
+func NewThunderRedisRepository(rdb *common.RedisClient) *ThunderRedisRepository {
+	return &ThunderRedisRepository{rdb: rdb, lock: common.NewRedisLock(rdb)}
 }
 
-func (r *RedisRepository) WithPoolLock(ctx context.Context, workspaceID, poolName string, fn func(context.Context) error) error {
+func (r *ThunderRedisRepository) WithPoolLock(ctx context.Context, workspaceID, poolName string, fn func(context.Context) error) error {
 	return r.lock.WithLease(ctx, common.RedisKeys.ThunderPoolLock(workspaceID, poolName), common.RedisLockOptions{
 		TtlS:          thunderPoolLockTTLSeconds,
 		Retries:       100,
@@ -73,8 +73,8 @@ func (r *RedisRepository) WithPoolLock(ctx context.Context, workspaceID, poolNam
 	}, fn)
 }
 
-func (r *RedisRepository) GetClientEnrollment(ctx context.Context, containerID string) (*ClientEnrollmentState, bool, error) {
-	var state ClientEnrollmentState
+func (r *ThunderRedisRepository) GetClientEnrollment(ctx context.Context, containerID string) (*ThunderClientEnrollmentState, bool, error) {
+	var state ThunderClientEnrollmentState
 	found, err := r.getJSON(ctx, common.RedisKeys.ThunderClientEnrollment(containerID), &state)
 	if err != nil || !found {
 		return nil, found, err
@@ -82,7 +82,7 @@ func (r *RedisRepository) GetClientEnrollment(ctx context.Context, containerID s
 	return &state, true, nil
 }
 
-func (r *RedisRepository) SaveClientEnrollment(ctx context.Context, state *ClientEnrollmentState, ttl time.Duration) error {
+func (r *ThunderRedisRepository) SaveClientEnrollment(ctx context.Context, state *ThunderClientEnrollmentState, ttl time.Duration) error {
 	if state == nil || state.ContainerID == "" {
 		return errThunderStateRequired
 	}
@@ -98,7 +98,7 @@ func (r *RedisRepository) SaveClientEnrollment(ctx context.Context, state *Clien
 	return err
 }
 
-func (r *RedisRepository) DeleteClientEnrollment(ctx context.Context, containerID string) error {
+func (r *ThunderRedisRepository) DeleteClientEnrollment(ctx context.Context, containerID string) error {
 	_, err := r.rdb.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
 		pipe.Del(ctx, common.RedisKeys.ThunderClientEnrollment(containerID))
 		pipe.SRem(ctx, common.RedisKeys.ThunderClientEnrollmentIndex(), containerID)
@@ -107,7 +107,7 @@ func (r *RedisRepository) DeleteClientEnrollment(ctx context.Context, containerI
 	return err
 }
 
-func (r *RedisRepository) ListClientEnrollments(ctx context.Context) ([]*ClientEnrollmentState, error) {
+func (r *ThunderRedisRepository) ListClientEnrollments(ctx context.Context) ([]*ThunderClientEnrollmentState, error) {
 	containerIDs, err := r.rdb.SMembers(ctx, common.RedisKeys.ThunderClientEnrollmentIndex()).Result()
 	if err != nil {
 		return nil, err
@@ -117,11 +117,11 @@ func (r *RedisRepository) ListClientEnrollments(ctx context.Context) ([]*ClientE
 	for _, containerID := range containerIDs {
 		keys = append(keys, common.RedisKeys.ThunderClientEnrollment(containerID))
 	}
-	return listJSON[ClientEnrollmentState](ctx, r.rdb, keys)
+	return listJSON[ThunderClientEnrollmentState](ctx, r.rdb, keys)
 }
 
-func (r *RedisRepository) GetNodeEnrollment(ctx context.Context, workspaceID, poolName, machineID string) (*NodeEnrollmentState, bool, error) {
-	var state NodeEnrollmentState
+func (r *ThunderRedisRepository) GetNodeEnrollment(ctx context.Context, workspaceID, poolName, machineID string) (*ThunderNodeEnrollmentState, bool, error) {
+	var state ThunderNodeEnrollmentState
 	found, err := r.getJSON(ctx, common.RedisKeys.ThunderNodeEnrollment(workspaceID, poolName, machineID), &state)
 	if err != nil || !found {
 		return nil, found, err
@@ -129,7 +129,7 @@ func (r *RedisRepository) GetNodeEnrollment(ctx context.Context, workspaceID, po
 	return &state, true, nil
 }
 
-func (r *RedisRepository) SaveNodeEnrollment(ctx context.Context, state *NodeEnrollmentState, ttl time.Duration) error {
+func (r *ThunderRedisRepository) SaveNodeEnrollment(ctx context.Context, state *ThunderNodeEnrollmentState, ttl time.Duration) error {
 	if state == nil || state.WorkspaceID == "" || state.PoolName == "" || state.MachineID == "" {
 		return errThunderStateRequired
 	}
@@ -145,7 +145,7 @@ func (r *RedisRepository) SaveNodeEnrollment(ctx context.Context, state *NodeEnr
 	return err
 }
 
-func (r *RedisRepository) DeleteNodeEnrollment(ctx context.Context, workspaceID, poolName, machineID string) error {
+func (r *ThunderRedisRepository) DeleteNodeEnrollment(ctx context.Context, workspaceID, poolName, machineID string) error {
 	_, err := r.rdb.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
 		pipe.Del(ctx, common.RedisKeys.ThunderNodeEnrollment(workspaceID, poolName, machineID))
 		pipe.SRem(ctx, common.RedisKeys.ThunderNodeEnrollmentIndex(workspaceID, poolName), machineID)
@@ -154,7 +154,7 @@ func (r *RedisRepository) DeleteNodeEnrollment(ctx context.Context, workspaceID,
 	return err
 }
 
-func (r *RedisRepository) ListNodeEnrollments(ctx context.Context, workspaceID, poolName string) ([]*NodeEnrollmentState, error) {
+func (r *ThunderRedisRepository) ListNodeEnrollments(ctx context.Context, workspaceID, poolName string) ([]*ThunderNodeEnrollmentState, error) {
 	machineIDs, err := r.rdb.SMembers(ctx, common.RedisKeys.ThunderNodeEnrollmentIndex(workspaceID, poolName)).Result()
 	if err != nil {
 		return nil, err
@@ -164,11 +164,11 @@ func (r *RedisRepository) ListNodeEnrollments(ctx context.Context, workspaceID, 
 	for _, machineID := range machineIDs {
 		keys = append(keys, common.RedisKeys.ThunderNodeEnrollment(workspaceID, poolName, machineID))
 	}
-	return listJSON[NodeEnrollmentState](ctx, r.rdb, keys)
+	return listJSON[ThunderNodeEnrollmentState](ctx, r.rdb, keys)
 }
 
-func (r *RedisRepository) GetZone(ctx context.Context, workspaceID, poolName string) (*ZoneState, bool, error) {
-	var state ZoneState
+func (r *ThunderRedisRepository) GetZone(ctx context.Context, workspaceID, poolName string) (*ThunderZoneState, bool, error) {
+	var state ThunderZoneState
 	found, err := r.getJSON(ctx, common.RedisKeys.ThunderZone(workspaceID, poolName), &state)
 	if err != nil || !found {
 		return nil, found, err
@@ -176,7 +176,7 @@ func (r *RedisRepository) GetZone(ctx context.Context, workspaceID, poolName str
 	return &state, true, nil
 }
 
-func (r *RedisRepository) SaveZone(ctx context.Context, state *ZoneState) error {
+func (r *ThunderRedisRepository) SaveZone(ctx context.Context, state *ThunderZoneState) error {
 	if state == nil || state.WorkspaceID == "" || state.PoolName == "" {
 		return errThunderStateRequired
 	}
@@ -192,7 +192,7 @@ func (r *RedisRepository) SaveZone(ctx context.Context, state *ZoneState) error 
 	return err
 }
 
-func (r *RedisRepository) DeleteZone(ctx context.Context, workspaceID, poolName string) error {
+func (r *ThunderRedisRepository) DeleteZone(ctx context.Context, workspaceID, poolName string) error {
 	_, err := r.rdb.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
 		pipe.Del(ctx, common.RedisKeys.ThunderZone(workspaceID, poolName))
 		pipe.SRem(ctx, common.RedisKeys.ThunderZoneIndex(workspaceID), poolName)
@@ -201,7 +201,7 @@ func (r *RedisRepository) DeleteZone(ctx context.Context, workspaceID, poolName 
 	return err
 }
 
-func (r *RedisRepository) ListZones(ctx context.Context, workspaceID string) ([]*ZoneState, error) {
+func (r *ThunderRedisRepository) ListZones(ctx context.Context, workspaceID string) ([]*ThunderZoneState, error) {
 	poolNames, err := r.rdb.SMembers(ctx, common.RedisKeys.ThunderZoneIndex(workspaceID)).Result()
 	if err != nil {
 		return nil, err
@@ -211,10 +211,10 @@ func (r *RedisRepository) ListZones(ctx context.Context, workspaceID string) ([]
 	for _, poolName := range poolNames {
 		keys = append(keys, common.RedisKeys.ThunderZone(workspaceID, poolName))
 	}
-	return listJSON[ZoneState](ctx, r.rdb, keys)
+	return listJSON[ThunderZoneState](ctx, r.rdb, keys)
 }
 
-func (r *RedisRepository) getJSON(ctx context.Context, key string, out any) (bool, error) {
+func (r *ThunderRedisRepository) getJSON(ctx context.Context, key string, out any) (bool, error) {
 	data, err := r.rdb.Get(ctx, key).Bytes()
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
@@ -259,4 +259,4 @@ func jsonBytes(value any) ([]byte, bool) {
 	}
 }
 
-var _ Repository = (*RedisRepository)(nil)
+var _ ThunderRepository = (*ThunderRedisRepository)(nil)

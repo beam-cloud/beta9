@@ -12,6 +12,7 @@ import (
 
 	thundersdk "github.com/Thunder-Compute/thunder-sdk"
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/common"
 	model "github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -76,7 +77,7 @@ func TestServiceCreateAndDeleteClientEnrollment(t *testing.T) {
 	defer server.Close()
 
 	service, err := NewService(ServiceOpts{
-		Repository:    NewRedisRepository(rdb),
+		Repository:    repository.NewThunderRedisRepository(rdb),
 		Client:        thundersdk.NewClient(server.URL, "central-token", thundersdk.WithHTTPClient(server.Client())),
 		ContainerRepo: containerRepo,
 		WorkerRepo:    workerRepo,
@@ -149,8 +150,8 @@ func TestServiceCreateClientEnrollmentReusesExistingZone(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	repo := NewRedisRepository(rdb)
-	if err := repo.SaveZone(context.Background(), &ZoneState{WorkspaceID: "workspace-1", PoolName: "pool-1", ThunderZoneID: "zone-existing"}); err != nil {
+	repo := repository.NewThunderRedisRepository(rdb)
+	if err := repo.SaveZone(context.Background(), &repository.ThunderZoneState{WorkspaceID: "workspace-1", PoolName: "pool-1", ThunderZoneID: "zone-existing"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -202,11 +203,11 @@ func TestServiceCreateClientEnrollmentReplacesExistingToken(t *testing.T) {
 	if err := containerRepo.SetContainerState("container-1", &types.ContainerState{ContainerId: "container-1", WorkspaceId: "workspace-1", WorkerId: "worker-1", MachineId: "machine-1", Gpu: "H100", GpuCount: 1}); err != nil {
 		t.Fatal(err)
 	}
-	repo := NewRedisRepository(rdb)
-	if err := repo.SaveZone(context.Background(), &ZoneState{WorkspaceID: "workspace-1", PoolName: "pool-1", ThunderZoneID: "zone-existing"}); err != nil {
+	repo := repository.NewThunderRedisRepository(rdb)
+	if err := repo.SaveZone(context.Background(), &repository.ThunderZoneState{WorkspaceID: "workspace-1", PoolName: "pool-1", ThunderZoneID: "zone-existing"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.SaveClientEnrollment(context.Background(), &ClientEnrollmentState{ContainerID: "container-1", WorkspaceID: "workspace-1", WorkerID: "worker-1", MachineID: "machine-1", PoolName: "pool-1", EnrollmentTokenID: "token-old"}, 0); err != nil {
+	if err := repo.SaveClientEnrollment(context.Background(), &repository.ThunderClientEnrollmentState{ContainerID: "container-1", WorkspaceID: "workspace-1", WorkerID: "worker-1", MachineID: "machine-1", PoolName: "pool-1", EnrollmentTokenID: "token-old"}, 0); err != nil {
 		t.Fatal(err)
 	}
 
@@ -264,11 +265,11 @@ func TestServiceCreateClientEnrollmentSucceedsWhenPreviousTokenRevokeFails(t *te
 	if err := containerRepo.SetContainerState("container-1", &types.ContainerState{ContainerId: "container-1", WorkspaceId: "workspace-1", WorkerId: "worker-1", MachineId: "machine-1", Gpu: "H100", GpuCount: 1}); err != nil {
 		t.Fatal(err)
 	}
-	repo := NewRedisRepository(rdb)
-	if err := repo.SaveZone(context.Background(), &ZoneState{WorkspaceID: "workspace-1", PoolName: "pool-1", ThunderZoneID: "zone-existing"}); err != nil {
+	repo := repository.NewThunderRedisRepository(rdb)
+	if err := repo.SaveZone(context.Background(), &repository.ThunderZoneState{WorkspaceID: "workspace-1", PoolName: "pool-1", ThunderZoneID: "zone-existing"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.SaveClientEnrollment(context.Background(), &ClientEnrollmentState{ContainerID: "container-1", WorkspaceID: "workspace-1", WorkerID: "worker-1", MachineID: "machine-1", PoolName: "pool-1", EnrollmentTokenID: "token-old"}, 0); err != nil {
+	if err := repo.SaveClientEnrollment(context.Background(), &repository.ThunderClientEnrollmentState{ContainerID: "container-1", WorkspaceID: "workspace-1", WorkerID: "worker-1", MachineID: "machine-1", PoolName: "pool-1", EnrollmentTokenID: "token-old"}, 0); err != nil {
 		t.Fatal(err)
 	}
 
@@ -326,7 +327,7 @@ func TestServiceDeleteClientEnrollmentIsIdempotent(t *testing.T) {
 	rdb := newThunderRedisClient(t)
 	defer rdb.Close()
 	service, err := NewService(ServiceOpts{
-		Repository:    NewRedisRepository(rdb),
+		Repository:    repository.NewThunderRedisRepository(rdb),
 		Client:        thundersdk.NewClient("https://central.example", "central-token"),
 		ContainerRepo: repository.NewContainerRedisRepositoryForTest(rdb),
 		WorkerRepo:    repository.NewWorkerRedisRepositoryForTest(rdb),
@@ -356,7 +357,7 @@ func TestServicePrivateWorkerTokenIsWorkspaceScoped(t *testing.T) {
 		t.Fatal(err)
 	}
 	service, err := NewService(ServiceOpts{
-		Repository:    NewRedisRepository(rdb),
+		Repository:    repository.NewThunderRedisRepository(rdb),
 		Client:        thundersdk.NewClient("https://central.example", "central-token"),
 		ContainerRepo: containerRepo,
 		WorkerRepo:    workerRepo,
@@ -378,7 +379,7 @@ func TestServiceCreateAndDeleteNodeEnrollment(t *testing.T) {
 	rdb := newThunderRedisClient(t)
 	defer rdb.Close()
 
-	repo := NewRedisRepository(rdb)
+	repo := repository.NewThunderRedisRepository(rdb)
 	agentToken := "agent-token"
 	validator := &fakeAgentStateValidator{state: &model.AgentTokenState{WorkspaceID: "workspace-1", PoolName: "pool-1", MachineID: "machine-1"}}
 
@@ -482,13 +483,13 @@ func TestServiceCreateNodeEnrollmentReplacesExistingToken(t *testing.T) {
 	rdb := newThunderRedisClient(t)
 	defer rdb.Close()
 
-	repo := NewRedisRepository(rdb)
+	repo := repository.NewThunderRedisRepository(rdb)
 	agentToken := "agent-token"
 	validator := &fakeAgentStateValidator{state: &model.AgentTokenState{WorkspaceID: "workspace-1", PoolName: "pool-1", MachineID: "machine-1"}}
-	if err := repo.SaveZone(context.Background(), &ZoneState{WorkspaceID: "workspace-1", PoolName: "pool-1", ThunderZoneID: "zone-existing"}); err != nil {
+	if err := repo.SaveZone(context.Background(), &repository.ThunderZoneState{WorkspaceID: "workspace-1", PoolName: "pool-1", ThunderZoneID: "zone-existing"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.SaveNodeEnrollment(context.Background(), &NodeEnrollmentState{WorkspaceID: "workspace-1", PoolName: "pool-1", MachineID: "machine-1", EnrollmentTokenID: "node-token-old"}, 0); err != nil {
+	if err := repo.SaveNodeEnrollment(context.Background(), &repository.ThunderNodeEnrollmentState{WorkspaceID: "workspace-1", PoolName: "pool-1", MachineID: "machine-1", EnrollmentTokenID: "node-token-old"}, 0); err != nil {
 		t.Fatal(err)
 	}
 
@@ -551,11 +552,11 @@ func TestServiceCreateNodeEnrollmentSucceedsWhenPreviousTokenRevokeFails(t *test
 	rdb := newThunderRedisClient(t)
 	defer rdb.Close()
 
-	repo := NewRedisRepository(rdb)
-	if err := repo.SaveZone(context.Background(), &ZoneState{WorkspaceID: "workspace-1", PoolName: "pool-1", ThunderZoneID: "zone-existing"}); err != nil {
+	repo := repository.NewThunderRedisRepository(rdb)
+	if err := repo.SaveZone(context.Background(), &repository.ThunderZoneState{WorkspaceID: "workspace-1", PoolName: "pool-1", ThunderZoneID: "zone-existing"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.SaveNodeEnrollment(context.Background(), &NodeEnrollmentState{WorkspaceID: "workspace-1", PoolName: "pool-1", MachineID: "machine-1", EnrollmentTokenID: "node-token-old"}, 0); err != nil {
+	if err := repo.SaveNodeEnrollment(context.Background(), &repository.ThunderNodeEnrollmentState{WorkspaceID: "workspace-1", PoolName: "pool-1", MachineID: "machine-1", EnrollmentTokenID: "node-token-old"}, 0); err != nil {
 		t.Fatal(err)
 	}
 
@@ -606,13 +607,13 @@ func TestServiceCreateNodeEnrollmentSucceedsWhenPreviousTokenRevokeFails(t *test
 
 func TestServiceDeleteClientEnrollmentSkipsChangedTokenUnderPoolLock(t *testing.T) {
 	repo := &lockingThunderRepository{
-		clientBeforeLock: &ClientEnrollmentState{
+		clientBeforeLock: &repository.ThunderClientEnrollmentState{
 			ContainerID:       "container-1",
 			WorkspaceID:       "workspace-1",
 			PoolName:          "pool-1",
 			EnrollmentTokenID: "token-old",
 		},
-		clientInsideLock: &ClientEnrollmentState{
+		clientInsideLock: &repository.ThunderClientEnrollmentState{
 			ContainerID:       "container-1",
 			WorkspaceID:       "workspace-1",
 			PoolName:          "pool-1",
@@ -641,13 +642,13 @@ func TestServiceDeleteClientEnrollmentSkipsChangedTokenUnderPoolLock(t *testing.
 
 func TestServiceDeleteNodeEnrollmentSkipsChangedTokenUnderPoolLock(t *testing.T) {
 	repo := &lockingThunderRepository{
-		nodeBeforeLock: &NodeEnrollmentState{
+		nodeBeforeLock: &repository.ThunderNodeEnrollmentState{
 			WorkspaceID:       "workspace-1",
 			PoolName:          "pool-1",
 			MachineID:         "machine-1",
 			EnrollmentTokenID: "node-token-old",
 		},
-		nodeInsideLock: &NodeEnrollmentState{
+		nodeInsideLock: &repository.ThunderNodeEnrollmentState{
 			WorkspaceID:       "workspace-1",
 			PoolName:          "pool-1",
 			MachineID:         "machine-1",
@@ -682,7 +683,7 @@ func TestServiceCreateNodeEnrollmentRequiresValidAgentToken(t *testing.T) {
 	rdb := newThunderRedisClient(t)
 	defer rdb.Close()
 	service, err := NewService(ServiceOpts{
-		Repository:          NewRedisRepository(rdb),
+		Repository:          repository.NewThunderRedisRepository(rdb),
 		Client:              thundersdk.NewClient("https://central.example", "central-token"),
 		ContainerRepo:       repository.NewContainerRedisRepositoryForTest(rdb),
 		WorkerRepo:          repository.NewWorkerRedisRepositoryForTest(rdb),
@@ -706,10 +707,10 @@ type lockingThunderRepository struct {
 	lockedPoolName          string
 	clientGetCalls          int
 	nodeGetOutsideLockCalls int
-	clientBeforeLock        *ClientEnrollmentState
-	clientInsideLock        *ClientEnrollmentState
-	nodeBeforeLock          *NodeEnrollmentState
-	nodeInsideLock          *NodeEnrollmentState
+	clientBeforeLock        *repository.ThunderClientEnrollmentState
+	clientInsideLock        *repository.ThunderClientEnrollmentState
+	nodeBeforeLock          *repository.ThunderNodeEnrollmentState
+	nodeInsideLock          *repository.ThunderNodeEnrollmentState
 	deletedClientID         string
 	deletedNodeMachineID    string
 }
@@ -722,7 +723,7 @@ func (r *lockingThunderRepository) WithPoolLock(ctx context.Context, workspaceID
 	return fn(ctx)
 }
 
-func (r *lockingThunderRepository) GetClientEnrollment(ctx context.Context, containerID string) (*ClientEnrollmentState, bool, error) {
+func (r *lockingThunderRepository) GetClientEnrollment(ctx context.Context, containerID string) (*repository.ThunderClientEnrollmentState, bool, error) {
 	r.clientGetCalls++
 	state := r.clientBeforeLock
 	if r.inLock {
@@ -735,7 +736,7 @@ func (r *lockingThunderRepository) GetClientEnrollment(ctx context.Context, cont
 	return &copy, true, nil
 }
 
-func (r *lockingThunderRepository) SaveClientEnrollment(ctx context.Context, state *ClientEnrollmentState, ttl time.Duration) error {
+func (r *lockingThunderRepository) SaveClientEnrollment(ctx context.Context, state *repository.ThunderClientEnrollmentState, ttl time.Duration) error {
 	return errors.New("unexpected SaveClientEnrollment call")
 }
 
@@ -747,11 +748,11 @@ func (r *lockingThunderRepository) DeleteClientEnrollment(ctx context.Context, c
 	return nil
 }
 
-func (r *lockingThunderRepository) ListClientEnrollments(ctx context.Context) ([]*ClientEnrollmentState, error) {
+func (r *lockingThunderRepository) ListClientEnrollments(ctx context.Context) ([]*repository.ThunderClientEnrollmentState, error) {
 	return nil, errors.New("unexpected ListClientEnrollments call")
 }
 
-func (r *lockingThunderRepository) GetNodeEnrollment(ctx context.Context, workspaceID, poolName, machineID string) (*NodeEnrollmentState, bool, error) {
+func (r *lockingThunderRepository) GetNodeEnrollment(ctx context.Context, workspaceID, poolName, machineID string) (*repository.ThunderNodeEnrollmentState, bool, error) {
 	state := r.nodeBeforeLock
 	if !r.inLock {
 		r.nodeGetOutsideLockCalls++
@@ -765,7 +766,7 @@ func (r *lockingThunderRepository) GetNodeEnrollment(ctx context.Context, worksp
 	return &copy, true, nil
 }
 
-func (r *lockingThunderRepository) SaveNodeEnrollment(ctx context.Context, state *NodeEnrollmentState, ttl time.Duration) error {
+func (r *lockingThunderRepository) SaveNodeEnrollment(ctx context.Context, state *repository.ThunderNodeEnrollmentState, ttl time.Duration) error {
 	return errors.New("unexpected SaveNodeEnrollment call")
 }
 
@@ -777,15 +778,15 @@ func (r *lockingThunderRepository) DeleteNodeEnrollment(ctx context.Context, wor
 	return nil
 }
 
-func (r *lockingThunderRepository) ListNodeEnrollments(ctx context.Context, workspaceID, poolName string) ([]*NodeEnrollmentState, error) {
+func (r *lockingThunderRepository) ListNodeEnrollments(ctx context.Context, workspaceID, poolName string) ([]*repository.ThunderNodeEnrollmentState, error) {
 	return nil, errors.New("unexpected ListNodeEnrollments call")
 }
 
-func (r *lockingThunderRepository) GetZone(ctx context.Context, workspaceID, poolName string) (*ZoneState, bool, error) {
+func (r *lockingThunderRepository) GetZone(ctx context.Context, workspaceID, poolName string) (*repository.ThunderZoneState, bool, error) {
 	return nil, false, errors.New("unexpected GetZone call")
 }
 
-func (r *lockingThunderRepository) SaveZone(ctx context.Context, state *ZoneState) error {
+func (r *lockingThunderRepository) SaveZone(ctx context.Context, state *repository.ThunderZoneState) error {
 	return errors.New("unexpected SaveZone call")
 }
 
@@ -793,7 +794,7 @@ func (r *lockingThunderRepository) DeleteZone(ctx context.Context, workspaceID, 
 	return errors.New("unexpected DeleteZone call")
 }
 
-func (r *lockingThunderRepository) ListZones(ctx context.Context, workspaceID string) ([]*ZoneState, error) {
+func (r *lockingThunderRepository) ListZones(ctx context.Context, workspaceID string) ([]*repository.ThunderZoneState, error) {
 	return nil, errors.New("unexpected ListZones call")
 }
 
@@ -817,4 +818,13 @@ func thunderWorkerAuthContext(tokenType, workspaceID string) context.Context {
 		authInfo.Workspace = &types.Workspace{ExternalId: workspaceID}
 	}
 	return auth.ContextWithAuthInfo(context.Background(), authInfo)
+}
+
+func newThunderRedisClient(t *testing.T) *common.RedisClient {
+	t.Helper()
+	rdb, err := repository.NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rdb
 }

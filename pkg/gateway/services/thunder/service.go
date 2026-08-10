@@ -21,7 +21,7 @@ type AgentStateValidator interface {
 }
 
 type ServiceOpts struct {
-	Repository          Repository
+	Repository          repository.ThunderRepository
 	RedisClient         *common.RedisClient
 	Client              *thundersdk.Client
 	ContainerRepo       repository.ContainerRepository
@@ -32,7 +32,7 @@ type ServiceOpts struct {
 type Service struct {
 	pb.UnimplementedThunderServiceServer
 
-	repo           Repository
+	repo           repository.ThunderRepository
 	client         *thundersdk.Client
 	containerRepo  repository.ContainerRepository
 	workerRepo     repository.WorkerRepository
@@ -42,7 +42,7 @@ type Service struct {
 func NewService(opts ServiceOpts) (*Service, error) {
 	repo := opts.Repository
 	if repo == nil && opts.RedisClient != nil {
-		repo = NewRedisRepository(opts.RedisClient)
+		repo = repository.NewThunderRedisRepository(opts.RedisClient)
 	}
 	if repo == nil {
 		return nil, fmt.Errorf("Thunder repository is required")
@@ -110,7 +110,7 @@ func (s *Service) CreateClientEnrollment(ctx context.Context, req *pb.CreateClie
 			return fmt.Errorf("Thunder client enrollment response was incomplete")
 		}
 		installCommand = s.client.ClientEnrollmentCommand(enrollment.EnrollmentToken)
-		if err := s.repo.SaveClientEnrollment(ctx, &ClientEnrollmentState{
+		if err := s.repo.SaveClientEnrollment(ctx, &repository.ThunderClientEnrollmentState{
 			ContainerID:       containerID,
 			WorkspaceID:       attrs.workspaceID,
 			WorkerID:          attrs.workerID,
@@ -232,7 +232,7 @@ func (s *Service) CreateNodeEnrollment(ctx context.Context, req *pb.CreateNodeEn
 		if strings.TrimSpace(enrollment.EnrollmentTokenID) == "" || strings.TrimSpace(enrollment.EnrollmentToken) == "" {
 			return fmt.Errorf("Thunder node enrollment response was incomplete")
 		}
-		if err := s.repo.SaveNodeEnrollment(ctx, &NodeEnrollmentState{
+		if err := s.repo.SaveNodeEnrollment(ctx, &repository.ThunderNodeEnrollmentState{
 			WorkspaceID:       agentState.WorkspaceID,
 			PoolName:          agentState.PoolName,
 			MachineID:         agentState.MachineID,
@@ -383,7 +383,7 @@ func (s *Service) ensureZoneLocked(ctx context.Context, workspaceID, poolName st
 	if strings.TrimSpace(zone.ZoneID) == "" {
 		return "", fmt.Errorf("Thunder zone response did not include a zone id")
 	}
-	return zone.ZoneID, s.repo.SaveZone(ctx, &ZoneState{
+	return zone.ZoneID, s.repo.SaveZone(ctx, &repository.ThunderZoneState{
 		WorkspaceID:   workspaceID,
 		PoolName:      poolName,
 		ThunderZoneID: zone.ZoneID,
