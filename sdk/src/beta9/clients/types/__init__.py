@@ -49,6 +49,7 @@ class Checkpoint(betterproto.Message):
     origin_key: str = betterproto.string_field(18)
     locality: str = betterproto.string_field(19)
     accelerator: str = betterproto.string_field(20)
+    runtime: str = betterproto.string_field(21)
 
 
 @dataclass(eq=False, repr=False)

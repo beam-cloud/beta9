@@ -2,7 +2,6 @@ package apiv1
 
 import (
 	"net/http"
-
 	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -40,8 +39,7 @@ func NewWorkspaceGroup(g *echo.Group, backendRepo repository.BackendRepository, 
 	return group
 }
 
-type CreateWorkspaceRequest struct {
-}
+type CreateWorkspaceRequest struct{}
 
 func (g *WorkspaceGroup) CreateWorkspace(ctx echo.Context) error {
 	cc, _ := ctx.(*auth.HttpAuthContext)
@@ -53,7 +51,6 @@ func (g *WorkspaceGroup) CreateWorkspace(ctx echo.Context) error {
 	if err := ctx.Bind(&request); err != nil {
 		return HTTPBadRequest("Invalid payload")
 	}
-
 	workspace, err := g.backendRepo.CreateWorkspace(ctx.Request().Context())
 	if err != nil {
 		return HTTPInternalServerError("Unable to create workspace")

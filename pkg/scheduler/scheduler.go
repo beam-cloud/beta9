@@ -29,8 +29,8 @@ const (
 	requestProcessingInterval      time.Duration = 50 * time.Millisecond
 	requestProcessingBatchSize                   = 512
 	provisioningWorkerRequeueDelay time.Duration = 250 * time.Millisecond
-	provisioningReservationHandoff time.Duration = 2 * requestProcessingInterval
 	pendingWorkerReservationTTL    time.Duration = 30 * time.Second
+	maxWorkerProvisioningAttempts                = 3
 )
 
 var (
@@ -358,6 +358,9 @@ func normalizeAgentWorkerPoolConfig(state *compute.PoolState) types.WorkerPoolCo
 	if state.Config != nil {
 		if len(state.Config.Gpu) > 0 {
 			config.GPUType = state.Config.Gpu[0]
+		}
+		if state.Config.ContainerRuntime != "" {
+			config.ContainerRuntime = state.Config.ContainerRuntime
 		}
 		if state.Config.Priority != 0 {
 			config.Priority = state.Config.Priority
@@ -943,6 +946,9 @@ func filterControllersByFlagsForFailover(controllers []WorkerPoolController, req
 	filteredControllers := []WorkerPoolController{}
 
 	for _, controller := range controllers {
+		if !runtimeMatchesCheckpoint(request, controllerRuntime(controller)) {
+			continue
+		}
 		if !request.StorageAvailable() && controllerUsesAgentCapacity(controller) {
 			continue
 		}
@@ -1057,6 +1063,9 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 	}
 
 	for _, worker := range workers {
+		if !runtimeMatchesCheckpoint(request, workerRuntime(worker)) {
+			continue
+		}
 		isGpuWorker := worker.Gpu != ""
 		cpu := request.Cpu
 		memory := capacityMemoryForScheduling(request)
@@ -1092,6 +1101,38 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 		filteredWorkers = append(filteredWorkers, worker)
 	}
 	return filteredWorkers
+}
+
+func checkpointRuntime(request *types.ContainerRequest) string {
+	if request == nil || request.Checkpoint == nil || request.Checkpoint.Status != string(types.CheckpointStatusAvailable) {
+		return ""
+	}
+	return strings.TrimSpace(request.Checkpoint.Runtime)
+}
+
+func runtimeMatchesCheckpoint(request *types.ContainerRequest, runtimeName string) bool {
+	requiredRuntime := checkpointRuntime(request)
+	return requiredRuntime == "" || runtimeName == requiredRuntime
+}
+
+func controllerRuntime(controller WorkerPoolController) string {
+	if controller == nil {
+		return ""
+	}
+	if runtimeName := strings.TrimSpace(controller.ContainerRuntime()); runtimeName != "" {
+		return runtimeName
+	}
+	return types.ContainerRuntimeRunc.String()
+}
+
+func workerRuntime(worker *types.Worker) string {
+	if worker == nil {
+		return ""
+	}
+	if runtimeName := strings.TrimSpace(worker.Runtime); runtimeName != "" {
+		return runtimeName
+	}
+	return types.ContainerRuntimeRunc.String()
 }
 
 func gpuRequestsForScheduling(request *types.ContainerRequest) []string {

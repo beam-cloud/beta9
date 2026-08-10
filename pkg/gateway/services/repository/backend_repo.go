@@ -100,6 +100,7 @@ func (s *BackendRepositoryService) CreateCheckpoint(ctx context.Context, req *pb
 		OriginKey:         req.OriginKey,
 		Locality:          req.Locality,
 		Accelerator:       req.Accelerator,
+		Runtime:           req.Runtime,
 	})
 	if err != nil {
 		return &pb.CreateCheckpointResponse{Ok: false, ErrorMsg: err.Error()}, nil

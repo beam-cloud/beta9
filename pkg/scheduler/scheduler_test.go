@@ -688,6 +688,7 @@ type LocalWorkerPoolControllerForTest struct {
 	preemptable      bool
 	workerStatus     types.WorkerStatus
 	addWorkerStarted chan struct{}
+	addWorkerDone    chan struct{}
 	unblockAddWorker chan struct{}
 	addWorkerErr     error
 	requiresSelector bool
@@ -716,7 +717,11 @@ func (wpc *LocalWorkerPoolControllerForTest) Mode() types.PoolMode {
 }
 
 func (wpc *LocalWorkerPoolControllerForTest) RequiresPoolSelector() bool {
-	return wpc.requiresSelector
+	if wpc.requiresSelector {
+		return true
+	}
+	pool, ok := wpc.config.Worker.Pools[wpc.name]
+	return ok && pool.RequiresPoolSelector
 }
 
 func (wpc *LocalWorkerPoolControllerForTest) ContainerRuntime() string {
@@ -776,6 +781,7 @@ func (wpc *LocalWorkerPoolControllerForTest) AddWorker(cpu int64, memory int64, 
 		Gpu:                  gpuType,
 		PoolName:             wpc.name,
 		RequiresPoolSelector: wpc.RequiresPoolSelector(),
+		Runtime:              wpc.ContainerRuntime(),
 		Status:               status,
 	}
 
@@ -784,6 +790,12 @@ func (wpc *LocalWorkerPoolControllerForTest) AddWorker(cpu int64, memory int64, 
 	if err != nil {
 		log.Error().Err(err).Msg("unable to create worker")
 		return nil, err
+	}
+	if wpc.addWorkerDone != nil {
+		select {
+		case wpc.addWorkerDone <- struct{}{}:
+		default:
+		}
 	}
 
 	return worker, nil
@@ -1122,30 +1134,29 @@ func TestProcessRequests(t *testing.T) {
 
 	assert.Equal(t, int64(4), wb.requestBacklog.Len())
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	wb.ctx = ctx
 
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				wb.StartProcessingRequests()
+	go wb.StartProcessingRequests()
+
+	deadline := time.After(5 * time.Second)
+	for {
+		allScheduled := true
+		for _, request := range requests {
+			state, err := wb.containerRepo.GetContainerState(request.ContainerId)
+			if err != nil || state.WorkerId == "" {
+				allScheduled = false
+				break
 			}
 		}
-	}()
-
-	deadline := time.After(2 * time.Second)
-	for {
-		if wb.requestBacklog.Len() == 0 {
+		if allScheduled {
 			return
 		}
 
 		select {
 		case <-deadline:
-			assert.Equal(t, int64(0), wb.requestBacklog.Len())
-			return
+			t.Fatal("timed out waiting for all requests to be scheduled")
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
@@ -2908,6 +2919,64 @@ func TestSelectorBoundAnyGPUAcceptsUncataloguedHardware(t *testing.T) {
 
 	request.PoolSelector = ""
 	assert.Empty(t, filterWorkersByResources([]*types.Worker{worker}, request, nil))
+}
+
+func TestCheckpointRuntimeSelection(t *testing.T) {
+	request := &types.ContainerRequest{
+		Cpu:               1000,
+		Memory:            1000,
+		GpuRequest:        []string{"RTX5090"},
+		GpuCount:          1,
+		CheckpointEnabled: true,
+		Checkpoint: &types.Checkpoint{
+			CheckpointId: "checkpoint-1",
+			Status:       string(types.CheckpointStatusAvailable),
+		},
+	}
+	worker := func(id, runtimeName string) *types.Worker {
+		return &types.Worker{
+			Id:           id,
+			Status:       types.WorkerStatusAvailable,
+			FreeCpu:      1000,
+			FreeMemory:   2000,
+			FreeGpuCount: 1,
+			Gpu:          "RTX5090",
+			Runtime:      runtimeName,
+		}
+	}
+	runc := worker("runc", types.ContainerRuntimeRunc.String())
+	gvisor := worker("gvisor", types.ContainerRuntimeGvisor.String())
+
+	workers := []*types.Worker{runc, gvisor}
+
+	assert.Equal(t, workers, filterWorkersByResources(workers, request, nil), "legacy checkpoints have no runtime metadata")
+
+	request.Checkpoint.Runtime = types.ContainerRuntimeRunc.String()
+	assert.Equal(t, []*types.Worker{runc}, filterWorkersByResources(workers, request, nil))
+
+	request.Checkpoint.Runtime = types.ContainerRuntimeGvisor.String()
+	assert.Equal(t, []*types.Worker{gvisor}, filterWorkersByResources(workers, request, nil))
+
+	request.Checkpoint.Status = string(types.CheckpointStatusCheckpointFailed)
+	assert.Equal(t, workers, filterWorkersByResources(workers, request, nil), "non-available checkpoints cold-start normally")
+}
+
+func TestCheckpointRuntimeFiltersProvisioningControllers(t *testing.T) {
+	runc := &LocalWorkerPoolControllerForTest{name: "runc", containerRuntime: types.ContainerRuntimeRunc.String()}
+	gvisor := &LocalWorkerPoolControllerForTest{name: "gvisor", containerRuntime: types.ContainerRuntimeGvisor.String()}
+	controllers := []WorkerPoolController{runc, gvisor}
+	request := &types.ContainerRequest{
+		Checkpoint: &types.Checkpoint{
+			CheckpointId: "checkpoint-1",
+			Status:       string(types.CheckpointStatusAvailable),
+			Runtime:      types.ContainerRuntimeGvisor.String(),
+		},
+	}
+
+	assert.Equal(t, []WorkerPoolController{gvisor}, filterControllersByFlags(controllers, request))
+
+	request.Checkpoint.Runtime = ""
+	assert.Equal(t, controllers, filterControllersByFlags(controllers, request), "legacy checkpoints retain existing placement")
 }
 
 func TestSelectGPUWorkerDoesNotMutatePriority(t *testing.T) {

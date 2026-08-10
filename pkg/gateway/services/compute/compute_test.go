@@ -249,6 +249,75 @@ func TestListPrivatePoolsReadyMachineCountUsesAgentConnection(t *testing.T) {
 	}
 }
 
+func TestConfiguredRuntimePoolReadyMachineCountRequiresMatchingWorker(t *testing.T) {
+	now := time.Now().UTC()
+	ctx := testAuthContext("workspace-1", "viewer-token")
+	machine := &model.AgentTokenState{
+		WorkspaceID:     "workspace-1",
+		PoolName:        "restore-pool",
+		MachineID:       "machine-1",
+		Schedulable:     true,
+		LastJoinAt:      now.Add(-time.Minute),
+		LastHeartbeatAt: now,
+	}
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{
+			"workspace-1": {{
+				Name:   "restore-pool",
+				Mode:   string(types.PoolModePrivate),
+				Status: "active",
+				Config: &pb.PoolConfig{ContainerRuntime: types.ContainerRuntimeGvisor.String()},
+			}},
+		},
+		machines: map[string][]*model.AgentTokenState{
+			fakeComputeKey("workspace-1", "restore-pool"): {machine},
+		},
+	}
+	worker := &types.Worker{
+		Id:        model.AgentMachineWorkerID(machine.MachineID),
+		PoolName:  machine.PoolName,
+		MachineId: machine.MachineID,
+		Status:    types.WorkerStatusAvailable,
+		Runtime:   types.ContainerRuntimeRunc.String(),
+	}
+	service := &Service{computeRepo: repo, workerRepo: &fakeWorkerRepo{worker: worker}}
+
+	pools, err := service.ListPrivatePools(ctx, &pb.ListPrivatePoolsRequest{})
+	if err != nil || !pools.Ok {
+		t.Fatalf("ListPrivatePools() = (%+v, %v)", pools, err)
+	}
+	if got := pools.Pools[0].ReadyMachineCount; got != 0 {
+		t.Fatalf("runc restore pool ready machines = %d, want 0", got)
+	}
+
+	worker.Runtime = types.ContainerRuntimeGvisor.String()
+	pools, err = service.ListPrivatePools(ctx, &pb.ListPrivatePoolsRequest{})
+	if err != nil || !pools.Ok {
+		t.Fatalf("ListPrivatePools() = (%+v, %v)", pools, err)
+	}
+	if got := pools.Pools[0].ReadyMachineCount; got != 1 {
+		t.Fatalf("available gVisor restore pool ready machines = %d, want 1", got)
+	}
+
+	repo.pools["workspace-1"][0].Config.ContainerRuntime = types.ContainerRuntimeRunc.String()
+	pools, err = service.ListPrivatePools(ctx, &pb.ListPrivatePoolsRequest{})
+	if err != nil || !pools.Ok {
+		t.Fatalf("ListPrivatePools() = (%+v, %v)", pools, err)
+	}
+	if got := pools.Pools[0].ReadyMachineCount; got != 0 {
+		t.Fatalf("gVisor worker in runc pool ready machines = %d, want 0", got)
+	}
+
+	worker.Runtime = types.ContainerRuntimeRunc.String()
+	pools, err = service.ListPrivatePools(ctx, &pb.ListPrivatePoolsRequest{})
+	if err != nil || !pools.Ok {
+		t.Fatalf("ListPrivatePools() = (%+v, %v)", pools, err)
+	}
+	if got := pools.Pools[0].ReadyMachineCount; got != 1 {
+		t.Fatalf("available runc pool ready machines = %d, want 1", got)
+	}
+}
+
 func TestFindReadyPrivatePoolForGPU(t *testing.T) {
 	now := time.Now().UTC()
 	repo := &fakeComputeRepo{
@@ -5449,7 +5518,7 @@ func (b *fakeManagedBilling) CheckLaunchCredit(_ context.Context, req billingCre
 	return b.launchDecision, b.launchErr
 }
 
-func (b *fakeManagedBilling) CheckBalance(context.Context, string) (billingDecision, error) {
+func (b *fakeManagedBilling) CheckBalance(context.Context, string, string) (billingDecision, error) {
 	b.balanceCalls++
 	b.balanceSawUsageCount = len(b.usage)
 	return b.balanceDecision, b.balanceErr

@@ -325,6 +325,7 @@ class PodSandboxSnapshotMemoryResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     error_msg: str = betterproto.string_field(2)
     checkpoint_id: str = betterproto.string_field(3)
+    runtime: str = betterproto.string_field(4)
 
 
 @dataclass(eq=False, repr=False)

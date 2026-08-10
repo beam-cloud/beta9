@@ -297,6 +297,9 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	if request.RequiresGPU() && !caps.GPU {
 		return fmt.Errorf("runtime %s does not support GPU workloads", s.runtime.Name())
 	}
+	if err := validateCheckpointRestoreRuntime(request, s.runtime); err != nil {
+		return err
+	}
 
 	instance, exists := s.containerInstances.Get(containerId)
 	if !exists {
@@ -469,6 +472,33 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	log.Info().Str("container_id", containerId).Msg("spawned successfully")
 	logCaptureClosed = true
 	return nil
+}
+
+func validateCheckpointRestoreRuntime(request *types.ContainerRequest, rt runtime.Runtime) error {
+	if !hasAvailableCheckpoint(request) {
+		return nil
+	}
+	if rt == nil {
+		return fmt.Errorf("cannot restore checkpoint %q: container runtime is unavailable", request.Checkpoint.CheckpointId)
+	}
+	runtimeName := rt.Name()
+	if !rt.Capabilities().CheckpointRestore {
+		return fmt.Errorf(
+			"cannot restore checkpoint %q with runtime %q: checkpoint restore is unsupported",
+			request.Checkpoint.CheckpointId,
+			runtimeName,
+		)
+	}
+	required := strings.TrimSpace(request.Checkpoint.Runtime)
+	if required == "" || required == runtimeName {
+		return nil
+	}
+	return fmt.Errorf(
+		"cannot restore %s checkpoint %q with runtime %q",
+		required,
+		request.Checkpoint.CheckpointId,
+		runtimeName,
+	)
 }
 
 func (s *Worker) mountWorkspaceStorage(ctx context.Context, request *types.ContainerRequest) error {

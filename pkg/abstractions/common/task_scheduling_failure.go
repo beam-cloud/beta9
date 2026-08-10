@@ -78,6 +78,8 @@ func schedulingFailureMessage(failure common.ContainerSchedulingFailure) string 
 	}
 
 	switch failure.Reason {
+	case types.ContainerSchedulingFailureProvisioningLimit:
+		return fmt.Sprintf("Beta9 could not provision a compatible worker%s after several attempts. Check that the pool has enough CPU, memory, and GPU capacity.", pool)
 	case types.ContainerSchedulingFailureWorkerCapacityTimeout, types.ContainerSchedulingFailureRetryLimit:
 		return fmt.Sprintf("No compatible worker%s became available before scheduling timed out. Check that a machine is online and has enough CPU, memory, and GPU capacity.", pool)
 	case types.ContainerSchedulingFailureNoController:

@@ -572,6 +572,8 @@ class PoolConfig(betterproto.Message):
     fallback: str = betterproto.string_field(12)
     priority: int = betterproto.int32_field(13)
     offer_id: str = betterproto.string_field(14)
+    container_runtime: str = betterproto.string_field(15)
+    """Runtime for workers in this pool."""
 
 
 @dataclass(eq=False, repr=False)

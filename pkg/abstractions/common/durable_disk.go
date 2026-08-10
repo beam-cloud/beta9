@@ -2,8 +2,10 @@ package abstractions
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -155,9 +157,24 @@ func latestRestorableDurableDiskSnapshots(ctx context.Context, repos DurableDisk
 		if disk == nil || disk.Name == "" {
 			continue
 		}
+		sourceSnapshotID := strings.TrimSpace(disk.SourceSnapshotId)
+		disk.SourceSnapshotId = sourceSnapshotID
 		snapshot, err := repos.BackendRepo.GetLatestDiskSnapshot(ctx, workspaceID, disk.Name)
 		if err != nil {
-			return nil, fmt.Errorf("durable disk %q has no restorable snapshot: %w", disk.Name, err)
+			var notFound *types.ErrDiskSnapshotNotFound
+			if !errors.As(err, &notFound) {
+				return nil, fmt.Errorf("durable disk %q has no restorable snapshot: %w", disk.Name, err)
+			}
+			snapshot = nil
+		}
+		if snapshot == nil || snapshot.ManifestKey == "" {
+			if sourceSnapshotID == "" {
+				return nil, fmt.Errorf("durable disk %q has no restorable filesystem snapshot", disk.Name)
+			}
+			snapshot, err = repos.BackendRepo.GetDiskSnapshot(ctx, workspaceID, sourceSnapshotID)
+			if err != nil {
+				return nil, fmt.Errorf("durable disk %q source snapshot %q is not restorable: %w", disk.Name, sourceSnapshotID, err)
+			}
 		}
 		if snapshot == nil || snapshot.ManifestKey == "" || !types.IsDiskSnapshotFilesystemFormat(snapshot.Format) {
 			return nil, fmt.Errorf("durable disk %q has no restorable filesystem snapshot", disk.Name)

@@ -288,7 +288,10 @@ func (s *ContainerRuntimeServer) ContainerCheckpoint(ctx context.Context, in *pb
 	}
 
 	// Check if runtime supports checkpointing
-	rt := s.getRuntime()
+	rt := instance.Runtime
+	if rt == nil {
+		return &pb.ContainerCheckpointResponse{Ok: false, ErrorMsg: "Container runtime not found"}, nil
+	}
 	if !rt.Capabilities().CheckpointRestore {
 		return &pb.ContainerCheckpointResponse{
 			Ok:       false,
@@ -307,7 +310,7 @@ func (s *ContainerRuntimeServer) ContainerCheckpoint(ctx context.Context, in *pb
 		return &pb.ContainerCheckpointResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
-	return &pb.ContainerCheckpointResponse{Ok: true, CheckpointId: checkpointId}, nil
+	return &pb.ContainerCheckpointResponse{Ok: true, CheckpointId: checkpointId, Runtime: rt.Name()}, nil
 }
 
 // ContainerSnapshotDisks snapshots a running container's durable disks.

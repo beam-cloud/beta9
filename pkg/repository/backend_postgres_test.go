@@ -425,6 +425,7 @@ func TestListStaleCheckpointsRequiresStubUpdatedBeforeCutoff(t *testing.T) {
 			"origin_key",
 			"locality",
 			"accelerator",
+			"runtime",
 		}).AddRow(
 			"checkpoint-123",
 			"external-123",
@@ -444,6 +445,7 @@ func TestListStaleCheckpointsRequiresStubUpdatedBeforeCutoff(t *testing.T) {
 			"checkpoints/checkpoint-123.tar",
 			"default",
 			"cpu",
+			types.ContainerRuntimeRunc.String(),
 		))
 
 	checkpoints, err := postgresRepo.ListStaleCheckpoints(context.Background(), []string{"workspace|active-stub"}, cutoff)
@@ -452,6 +454,7 @@ func TestListStaleCheckpointsRequiresStubUpdatedBeforeCutoff(t *testing.T) {
 	require.Len(t, checkpoints, 1)
 	require.Equal(t, "checkpoint-123", checkpoints[0].CheckpointId)
 	require.Equal(t, []uint32{8080}, checkpoints[0].ExposedPorts)
+	require.Equal(t, types.ContainerRuntimeRunc.String(), checkpoints[0].Runtime)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -482,6 +485,7 @@ func TestGetLatestCheckpointByStubIdOnlyReturnsAvailable(t *testing.T) {
 			"origin_key",
 			"locality",
 			"accelerator",
+			"runtime",
 		}).AddRow(
 			"checkpoint-available",
 			"external-available",
@@ -501,6 +505,7 @@ func TestGetLatestCheckpointByStubIdOnlyReturnsAvailable(t *testing.T) {
 			"checkpoints/checkpoint-available.tar",
 			"default",
 			"cpu",
+			types.ContainerRuntimeGvisor.String(),
 		))
 
 	checkpoint, err := postgresRepo.GetLatestCheckpointByStubId(context.Background(), "stub-123")
@@ -509,6 +514,7 @@ func TestGetLatestCheckpointByStubIdOnlyReturnsAvailable(t *testing.T) {
 	require.Equal(t, "checkpoint-available", checkpoint.CheckpointId)
 	require.Equal(t, string(types.CheckpointStatusAvailable), checkpoint.Status)
 	require.Equal(t, []uint32{8001}, checkpoint.ExposedPorts)
+	require.Equal(t, types.ContainerRuntimeGvisor.String(), checkpoint.Runtime)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
