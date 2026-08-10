@@ -30,6 +30,7 @@ const (
 	defaultDurableDiskSnapshotChunkSize  int64 = 64 << 20
 	durableDiskSnapshotUploadConcurrency       = 8
 	durableDiskRestoreConcurrency              = 8
+	durableDiskSnapshotReadBufferSize          = 1 << 20
 )
 
 type durableDiskSnapshotStore interface {
@@ -222,9 +223,6 @@ func createDurableDiskDirectorySnapshot(ctx context.Context, store durableDiskSn
 	if chunkSize <= 0 {
 		chunkSize = defaultDurableDiskSnapshotChunkSize
 	}
-	if chunkSize > int64(int(chunkSize)) {
-		return nil, nil, fmt.Errorf("durable disk snapshot chunk size %d is too large", chunkSize)
-	}
 
 	manifest := &types.DiskSnapshotManifest{
 		Version:          1,
@@ -240,7 +238,6 @@ func createDurableDiskDirectorySnapshot(ctx context.Context, store durableDiskSn
 	chunkPrefix := durableDiskSnapshotChunkPrefix(objectPrefix)
 	files := map[string]types.DiskSnapshotFile{}
 	seen := durableDiskSnapshotSeenChunks(previous, chunkPrefix)
-	buffer := make([]byte, int(chunkSize))
 
 	if err := filepath.WalkDir(sourceDir, func(name string, entry os.DirEntry, err error) error {
 		if err != nil {
@@ -296,10 +293,10 @@ func createDurableDiskDirectorySnapshot(ctx context.Context, store durableDiskSn
 				if reusePrefix {
 					file.Chunks = append([]types.DiskSnapshotChunk(nil), previousFile.Chunks...)
 				}
-				if err := snapshotDurableDiskFile(ctx, store, name, chunkPrefix, buffer, seen, &file); err != nil {
+				if err := snapshotDurableDiskFile(ctx, store, name, chunkPrefix, chunkSize, seen, &file); err != nil {
 					return err
 				}
-			} else if err := snapshotDurableDiskFile(ctx, store, name, chunkPrefix, buffer, seen, &file); err != nil {
+			} else if err := snapshotDurableDiskFile(ctx, store, name, chunkPrefix, chunkSize, seen, &file); err != nil {
 				return err
 			}
 		default:
@@ -553,73 +550,129 @@ func durableDiskSnapshotSeenChunks(previous *types.DiskSnapshotManifest, chunkPr
 	return seen
 }
 
-func snapshotDurableDiskFile(ctx context.Context, store durableDiskSnapshotStore, filename, chunkPrefix string, buffer []byte, seen map[string]struct{}, file *types.DiskSnapshotFile) error {
+func snapshotDurableDiskFile(ctx context.Context, store durableDiskSnapshotStore, filename, chunkPrefix string, chunkSize int64, seen map[string]struct{}, file *types.DiskSnapshotFile) error {
 	in, err := os.Open(filename)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
+	return snapshotDurableDiskReader(ctx, store, in, filename, chunkPrefix, chunkSize, seen, file)
+}
 
+func snapshotDurableDiskReader(ctx context.Context, store durableDiskSnapshotStore, source io.ReaderAt, sourceName, chunkPrefix string, chunkSize int64, seen map[string]struct{}, file *types.DiskSnapshotFile) error {
+	if chunkSize <= 0 {
+		chunkSize = defaultDurableDiskSnapshotChunkSize
+	}
 	var index, offset int64
 	if len(file.Chunks) > 0 {
 		last := file.Chunks[len(file.Chunks)-1]
 		index = last.Index + 1
 		offset = last.OffsetBytes + last.SizeBytes
-		if _, err := in.Seek(offset, io.SeekStart); err != nil {
-			return err
-		}
 	}
 
 	uploads, uploadCtx := errgroup.WithContext(ctx)
 	uploads.SetLimit(durableDiskSnapshotUploadConcurrency)
+	readBufferSize := min(chunkSize, int64(durableDiskSnapshotReadBufferSize))
+	buffer := make([]byte, int(readBufferSize))
 	var readErr error
 	for ; ; index++ {
-		if uploadCtx.Err() != nil {
+		if err := uploadCtx.Err(); err != nil {
+			readErr = err
 			break
 		}
-		n, readErr := in.Read(buffer)
-		if n > 0 {
-			chunk := append([]byte(nil), buffer[:n]...)
-			sum := sha256.Sum256(chunk)
-			hash := hex.EncodeToString(sum[:])
-			key := path.Join(chunkPrefix, hash)
-			if _, ok := seen[key]; !ok {
-				seen[key] = struct{}{}
-				uploads.Go(func() error {
-					exists, err := store.Exists(uploadCtx, key)
-					if err != nil {
-						return fmt.Errorf("check durable disk snapshot chunk %s: %w", key, err)
-					}
-					if exists {
-						return nil
-					}
-					if err := store.UploadWithReader(uploadCtx, key, bytes.NewReader(chunk)); err != nil {
-						return fmt.Errorf("upload durable disk snapshot chunk %s: %w", key, err)
-					}
+		chunkFile, n, hash, err := spoolDurableDiskSnapshotChunk(uploadCtx, source, sourceName, offset, chunkSize, buffer)
+		if err != nil {
+			readErr = err
+			break
+		}
+		if n == 0 {
+			break
+		}
+		key := path.Join(chunkPrefix, hash)
+		if _, ok := seen[key]; !ok {
+			seen[key] = struct{}{}
+			chunkSizeBytes := n
+			uploads.Go(func() error {
+				defer removeDurableDiskSnapshotChunkFile(chunkFile)
+				exists, err := store.Exists(uploadCtx, key)
+				if err != nil {
+					return fmt.Errorf("check durable disk snapshot chunk %s: %w", key, err)
+				}
+				if exists {
 					return nil
-				})
-			}
-			file.Chunks = append(file.Chunks, types.DiskSnapshotChunk{
-				Index:       index,
-				OffsetBytes: offset,
-				SizeBytes:   int64(n),
-				ObjectKey:   key,
-				Digest:      "sha256:" + hash,
+				}
+				reader := io.NewSectionReader(chunkFile, 0, chunkSizeBytes)
+				if err := store.UploadWithReader(uploadCtx, key, reader); err != nil {
+					return fmt.Errorf("upload durable disk snapshot chunk %s: %w", key, err)
+				}
+				return nil
 			})
-			offset += int64(n)
+		} else {
+			removeDurableDiskSnapshotChunkFile(chunkFile)
 		}
-		if readErr == io.EOF {
-			break
-		}
-		if readErr != nil {
-			readErr = fmt.Errorf("read durable disk snapshot file %s: %w", filename, readErr)
+		file.Chunks = append(file.Chunks, types.DiskSnapshotChunk{
+			Index:       index,
+			OffsetBytes: offset,
+			SizeBytes:   n,
+			ObjectKey:   key,
+			Digest:      "sha256:" + hash,
+		})
+		offset += n
+		if n < chunkSize {
 			break
 		}
 	}
 	if err := uploads.Wait(); err != nil {
 		return err
 	}
-	return readErr
+	if readErr != nil {
+		return readErr
+	}
+	return ctx.Err()
+}
+
+func spoolDurableDiskSnapshotChunk(ctx context.Context, source io.ReaderAt, sourceName string, offset, size int64, buffer []byte) (*os.File, int64, string, error) {
+	chunkFile, err := os.CreateTemp("", "beta9-durable-disk-snapshot-chunk-*")
+	if err != nil {
+		return nil, 0, "", fmt.Errorf("create durable disk snapshot chunk file: %w", err)
+	}
+	cleanup := func() {
+		removeDurableDiskSnapshotChunkFile(chunkFile)
+	}
+
+	sum := sha256.New()
+	reader := io.NewSectionReader(&durableDiskSnapshotContextReaderAt{ctx: ctx, source: source}, offset, size)
+	n, err := io.CopyBuffer(io.MultiWriter(chunkFile, sum), reader, buffer)
+	if err != nil {
+		cleanup()
+		return nil, 0, "", fmt.Errorf("read durable disk snapshot file %s: %w", sourceName, err)
+	}
+	if n == 0 {
+		cleanup()
+		return nil, 0, "", nil
+	}
+	return chunkFile, n, hex.EncodeToString(sum.Sum(nil)), nil
+}
+
+func removeDurableDiskSnapshotChunkFile(chunkFile *os.File) {
+	if chunkFile == nil {
+		return
+	}
+	name := chunkFile.Name()
+	_ = chunkFile.Close()
+	_ = os.Remove(name)
+}
+
+type durableDiskSnapshotContextReaderAt struct {
+	ctx    context.Context
+	source io.ReaderAt
+}
+
+func (r *durableDiskSnapshotContextReaderAt) ReadAt(p []byte, offset int64) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.source.ReadAt(p, offset)
 }
 
 func durableDiskSnapshotFileStoredBytes(chunks []types.DiskSnapshotChunk) int64 {

@@ -1464,11 +1464,10 @@ func TestCheckpointFilesystemRestoreDiscardRemovesPartialUpperLayer(t *testing.T
 	done := make(chan struct{})
 	close(done)
 	restore := &checkpointFilesystemRestore{
-		overlayRoot: overlayRoot,
-		upperPath:   filepath.Join(overlayRoot, "layer-0", "upper"),
-		done:        done,
-		cancel:      cancel,
-		err:         assert.AnError,
+		upperPath: filepath.Join(overlayRoot, "layer-0", "upper"),
+		done:      done,
+		cancel:    cancel,
+		err:       assert.AnError,
 	}
 
 	require.NoError(t, restore.discard())
