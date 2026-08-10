@@ -74,12 +74,11 @@ var checkpointDisabledIOUringSyscalls = []string{
 var errCRIUManagerUnavailable = errors.New("checkpoint/restore unavailable: CRIU manager is not initialized")
 
 type checkpointFilesystemRestore struct {
-	startedAt   time.Time
-	overlayRoot string
-	upperPath   string
-	done        chan struct{}
-	cancel      context.CancelFunc
-	err         error
+	startedAt time.Time
+	upperPath string
+	done      chan struct{}
+	cancel    context.CancelFunc
+	err       error
 }
 
 func (r *checkpointFilesystemRestore) wait() error {
@@ -99,18 +98,16 @@ func (r *checkpointFilesystemRestore) discard() error {
 	}
 	r.cancel()
 	r.wait()
-	return os.RemoveAll(r.overlayRoot)
+	return os.RemoveAll(filepath.Dir(r.upperPath))
 }
 
 func (s *Worker) startCheckpointFilesystemRestore(request *types.ContainerRequest, outputLogger *slog.Logger) *checkpointFilesystemRestore {
-	overlayRoot := filepath.Join(s.containerOverlayBasePath(request), request.ContainerId)
 	restoreCtx, cancel := context.WithCancel(s.ctx)
 	restore := &checkpointFilesystemRestore{
-		startedAt:   time.Now(),
-		overlayRoot: overlayRoot,
-		upperPath:   filepath.Join(overlayRoot, "layer-0", "upper"),
-		done:        make(chan struct{}),
-		cancel:      cancel,
+		startedAt: time.Now(),
+		upperPath: filepath.Join(s.containerOverlayBasePath(request), request.ContainerId, "layer-0", "upper"),
+		done:      make(chan struct{}),
+		cancel:    cancel,
 	}
 
 	go func() {
