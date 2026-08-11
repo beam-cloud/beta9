@@ -73,6 +73,11 @@ func (m Systemd) runner() Runner {
 func SystemdUnit(spec Spec) string {
 	spec, _ = spec.normalized()
 	spec.Env = systemdEnv(spec.Env, spec.StateDir)
+	thunderUninstallHook := systemdCommand([]string{
+		"/bin/sh",
+		"-c",
+		"if [ -x /usr/local/bin/uninstall-thunder.sh ]; then sudo THUNDER_UNINSTALL_NOWARN=1 /usr/local/bin/uninstall-thunder.sh; fi",
+	})
 
 	var b strings.Builder
 	writeLines(&b,
@@ -92,10 +97,11 @@ func SystemdUnit(spec Spec) string {
 	}
 	writeLines(&b,
 		"ExecStart="+systemdCommand(append([]string{spec.BinaryPath}, spec.Args...)),
+		"ExecStopPost="+thunderUninstallHook,
 		"Restart=always",
 		"RestartSec=30",
 		"KillSignal=SIGINT",
-		"TimeoutStopSec=30",
+		"TimeoutStopSec=60",
 		"LimitNOFILE=1048576",
 		"",
 		"[Install]",

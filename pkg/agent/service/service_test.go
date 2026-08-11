@@ -49,10 +49,12 @@ func TestSystemdInstallWritesUnitAndStartsService(t *testing.T) {
 		`Environment="BEAM_WORKER_IMAGE=registry.example.com/worker:latest"`,
 		`Environment="HOME=` + filepath.Join(tmp, "state") + `"`,
 		`ExecStart="` + types.DefaultAgentBinaryPath + `" "join" "--gateway" "https://gateway.beam.cloud" "--join-token" "token with spaces"`,
+		`ExecStopPost="/bin/sh" "-c" "if [ -x /usr/local/bin/uninstall-thunder.sh ]; then sudo THUNDER_UNINSTALL_NOWARN=1 /usr/local/bin/uninstall-thunder.sh; fi"`,
 		`RequiresMountsFor=` + filepath.Join(tmp, "state"),
 		`StartLimitIntervalSec=0`,
 		`Restart=always`,
 		`RestartSec=30`,
+		`TimeoutStopSec=60`,
 		`Environment="XDG_CONFIG_HOME=` + filepath.Join(tmp, "state", ".config") + `"`,
 	} {
 		if !strings.Contains(unitText, want) {
