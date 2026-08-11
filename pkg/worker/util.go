@@ -349,20 +349,16 @@ func (fl *FileLock) Release() error {
 		return fmt.Errorf("file lock not acquired")
 	}
 
-	err := syscall.Flock(int(fl.file.Fd()), syscall.LOCK_UN)
-	if err != nil {
+	if err := syscall.Flock(int(fl.file.Fd()), syscall.LOCK_UN); err != nil {
 		return err
 	}
 
-	fl.file.Close()
+	err := fl.file.Close()
 	fl.file = nil
-
-	err = os.Remove(fl.path)
 	if err != nil {
-		return fmt.Errorf("failed to delete lock file: %v", err)
+		return err
 	}
-
-	fl.file = nil
+	// Keep the lock file stable so every contender continues locking the same inode.
 	return nil
 }
 

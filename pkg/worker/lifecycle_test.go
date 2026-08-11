@@ -1367,7 +1367,12 @@ func TestClearContainerStopsHeartbeatWhileDurableDiskSyncBlocks(t *testing.T) {
 		t.Fatal("container state was not deleted after disk sync cancellation")
 	}
 	updates = repoClient.containerStatusUpdates()
-	require.Len(t, updates, len(updatesBeforeRelease)+1)
+	require.Greater(t, len(updates), len(updatesBeforeRelease))
+	for _, update := range updates[len(updatesBeforeRelease) : len(updates)-1] {
+		require.Equal(t, string(types.ContainerStatusStopping), update.Status)
+		require.Equal(t, int64(types.ContainerStateTtlSWhileStopping), update.ExpirySeconds)
+	}
+	require.Equal(t, string(types.ContainerStatusStopping), updates[len(updates)-1].Status)
 	require.Equal(t, int64(types.ContainerStateTtlS), updates[len(updates)-1].ExpirySeconds)
 }
 

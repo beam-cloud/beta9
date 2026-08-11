@@ -21,6 +21,23 @@ func TestTarXattrArgsPreserveOverlayMetadataOnLinux(t *testing.T) {
 	}
 }
 
+func TestFileLockReleaseKeepsStableLockFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "shared.lock")
+	first := NewFileLock(path)
+	require.NoError(t, first.Acquire())
+	require.NoError(t, first.Release())
+
+	_, err := os.Stat(path)
+	require.NoError(t, err)
+
+	second := NewFileLock(path)
+	require.NoError(t, second.Acquire())
+	t.Cleanup(func() { require.NoError(t, second.Release()) })
+
+	contender := NewFileLock(path)
+	require.Error(t, contender.Acquire())
+}
+
 func TestForceSymlinkCreatesParentAndReplacesExistingLink(t *testing.T) {
 	root := t.TempDir()
 	source := filepath.Join(root, "source")
