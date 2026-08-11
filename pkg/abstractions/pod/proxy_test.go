@@ -18,6 +18,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
+	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
 )
 
@@ -34,6 +35,36 @@ func TestPodBackendURLPreservesDirectAddress(t *testing.T) {
 	got := podBackendURL("http", "127.0.0.1:8001", "metrics", "")
 	if got != "http://127.0.0.1:8001/metrics" {
 		t.Fatalf("direct backend url = %q", got)
+	}
+}
+
+func TestForwardedWebSocketHeadersKeepsOriginAndDropsHandshake(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/websockify", nil)
+	request.Host = "app.example.com"
+	request.Header.Set("Origin", "https://app.example.com")
+	request.Header.Set("Cookie", "session=abc")
+	request.Header.Set("Upgrade", "websocket")
+	request.Header.Set("Connection", "Upgrade")
+	request.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+	request.Header.Set("Sec-WebSocket-Version", "13")
+	request.Header.Set("Sec-WebSocket-Protocol", "binary")
+	request.Header.Set("Sec-WebSocket-Extensions", "permessage-deflate")
+
+	forwarded := forwardedWebSocketHeaders(request)
+
+	if got := forwarded.Get("Origin"); got != "https://app.example.com" {
+		t.Fatalf("origin = %q, want it forwarded", got)
+	}
+	if got := forwarded.Get("Cookie"); got != "session=abc" {
+		t.Fatalf("cookie = %q, want it forwarded", got)
+	}
+	if got := forwarded.Get("Host"); got != "app.example.com" {
+		t.Fatalf("host = %q, want the incoming request host", got)
+	}
+	for _, header := range webSocketHandshakeHeaders {
+		if got := forwarded.Get(header); got != "" {
+			t.Fatalf("%s = %q, want it dropped so the dialer can set it", header, got)
+		}
 	}
 }
 
@@ -558,6 +589,71 @@ func TestForwardContainerRequestProxiesPinnedContainerWithoutQueueing(t *testing
 	}
 	if got := pb.containerConnectionCount(containerId); got != 0 {
 		t.Fatalf("container connections = %d, want released", got)
+	}
+}
+
+func TestProxyWebSocketReleasesBackendWhenTheClientVanishes(t *testing.T) {
+	released := make(chan struct{})
+	host := make(chan string, 1)
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host <- r.Host
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("backend upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				break
+			}
+		}
+		close(released)
+	}))
+	t.Cleanup(backend.Close)
+
+	rdb := newPodProxyTestRedis(t)
+	repo := repository.NewContainerRedisRepositoryForTest(rdb)
+	containerId := "sandbox-e9c29586-c465-4a67-9c9b-25293d1ce77b-abc12345"
+	if err := repo.SetContainerAddressMap(containerId, map[int32]string{
+		8765: backend.Listener.Addr().String(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	pb := &PodProxyBuffer{
+		ctx:           context.Background(),
+		rdb:           rdb,
+		workspace:     &types.Workspace{Name: "workspace"},
+		stubId:        "e9c29586-c465-4a67-9c9b-25293d1ce77b",
+		stubConfig:    &types.StubConfigV1{},
+		containerRepo: repo,
+	}
+
+	e := echo.New()
+	e.GET("/:port/:subPath", func(ctx echo.Context) error {
+		return pb.ForwardContainerRequest(ctx, containerId)
+	})
+	front := httptest.NewServer(e)
+	t.Cleanup(front.Close)
+
+	frontHost := front.Listener.Addr().String()
+	client, _, err := websocket.DefaultDialer.Dial("ws://"+frontHost+"/8765/ws", http.Header{"Origin": {"http://" + frontHost}})
+	if err != nil {
+		t.Fatalf("dial through the proxy: %v", err)
+	}
+	if got := <-host; got != frontHost {
+		t.Fatalf("backend host = %q, want %q", got, frontHost)
+	}
+
+	client.Close()
+
+	select {
+	case <-released:
+	case <-time.After(15 * time.Second):
+		t.Fatal("the backend is still holding a session open for a client that has gone")
 	}
 }
 

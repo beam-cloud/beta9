@@ -99,7 +99,7 @@ func newContainerClient(
 
 	grpcOption := grpc.WithTransportCredentials(insecure.NewCredentials())
 
-	isTLS := strings.HasSuffix(serviceUrl, "443")
+	isTLS := containerClientUsesTLS(serviceUrl)
 	if isTLS {
 		h2creds := credentials.NewTLS(&tls.Config{NextProtos: []string{"h2"}})
 		grpcOption = grpc.WithTransportCredentials(h2creds)
@@ -125,6 +125,11 @@ func newContainerClient(
 	client.conn = conn
 	client.client = pb.NewContainerServiceClient(conn)
 	return client, nil
+}
+
+func containerClientUsesTLS(serviceURL string) bool {
+	_, port, err := net.SplitHostPort(serviceURL)
+	return err == nil && port == "443"
 }
 
 func (c *ContainerClient) Close() error {
@@ -425,6 +430,10 @@ func (c *ContainerClient) Checkpoint(ctx context.Context, containerId string) (*
 		return resp, err
 	}
 	return resp, nil
+}
+
+func (c *ContainerClient) SnapshotDisks(ctx context.Context, containerId string) (*pb.ContainerSnapshotDisksResponse, error) {
+	return c.client.ContainerSnapshotDisks(ctx, &pb.ContainerSnapshotDisksRequest{ContainerId: containerId})
 }
 
 func (c *ContainerClient) Archive(ctx context.Context, containerId, imageId string, outputChan chan OutputMsg) error {

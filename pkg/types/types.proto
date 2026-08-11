@@ -43,6 +43,7 @@ message Checkpoint {
   string origin_key = 18;
   string locality = 19;
   string accelerator = 20;
+  string runtime = 21;
 }
 
 message CheckpointTrigger {
@@ -112,6 +113,7 @@ message ContainerRequest {
   string machine_id = 34;
   CheckpointTrigger checkpoint_trigger = 35;
   string task_id = 36;
+  string hostname = 38;
 }
 
 message ContainerState {
@@ -134,6 +136,7 @@ message DurableDiskMountConfig {
   string size = 2;
   string filesystem = 3;
   string driver = 4;
+  string source_snapshot_id = 5;
 }
 
 message FileInfo {

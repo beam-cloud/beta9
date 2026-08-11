@@ -45,7 +45,24 @@ func sandboxAuthInfoFromContext(ctx context.Context) (*auth.AuthInfo, bool) {
 }
 
 func (s *GenericPodService) SandboxExec(ctx context.Context, in *pb.PodSandboxExecRequest) (*pb.PodSandboxExecResponse, error) {
-	authInfo, _ := auth.AuthInfoFromContext(ctx)
+	if in == nil {
+		return nil, status.Error(codes.InvalidArgument, "missing sandbox exec request")
+	}
+
+	authInfo, ok := sandboxAuthInfoFromContext(ctx)
+	if !ok {
+		return nil, status.Error(codes.Unauthenticated, "invalid or missing token")
+	}
+
+	env, err := s.sandboxExecEnvironment(ctx, authInfo.Workspace, in.Env, in.Secrets)
+	if err != nil {
+		log.Error().Err(err).Str("workspace_id", authInfo.Workspace.ExternalId).Msg("failed to resolve sandbox exec secrets")
+		return &pb.PodSandboxExecResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to resolve secrets",
+		}, nil
+	}
+	in.Env = env
 
 	resp, err := s.sandboxExecWithConnectRetry(ctx, in, authInfo.Token.Key, authInfo.Workspace.ExternalId)
 	if err != nil {
@@ -70,6 +87,30 @@ func (s *GenericPodService) SandboxExec(ctx context.Context, in *pb.PodSandboxEx
 		Stdout:   resp.Stdout,
 		Stderr:   resp.Stderr,
 	}, nil
+}
+
+func (s *GenericPodService) sandboxExecEnvironment(
+	ctx context.Context,
+	workspace *types.Workspace,
+	explicit map[string]string,
+	names []string,
+) (map[string]string, error) {
+	env := make(map[string]string, len(explicit)+len(names))
+	for key, value := range explicit {
+		env[key] = value
+	}
+	if len(names) == 0 {
+		return env, nil
+	}
+
+	secrets, err := s.backendRepo.GetSecretsByNameDecrypted(ctx, workspace, names)
+	if err != nil {
+		return nil, err
+	}
+	for _, secret := range secrets {
+		env[secret.Name] = secret.Value
+	}
+	return env, nil
 }
 
 func (s *GenericPodService) sandboxExecWithConnectRetry(ctx context.Context, in *pb.PodSandboxExecRequest, token, workspaceID string) (*pb.ContainerSandboxExecResponse, error) {
@@ -175,8 +216,15 @@ func (s *GenericPodService) SandboxStatus(ctx context.Context, in *pb.PodSandbox
 
 func (s *GenericPodService) sandboxContainerStatus(ctx context.Context, containerId string, authInfo *auth.AuthInfo) (*pb.PodSandboxStatusResponse, error) {
 	container, err := s.getSandboxContainerStateForStatus(ctx, containerId)
-	if err != nil || container == nil {
+	if err != nil {
+		var stateNotFound *types.ErrContainerStateNotFound
+		if errors.As(err, &stateNotFound) {
+			return s.sandboxExitedStatus(ctx, containerId, authInfo, err)
+		}
 		return nil, err
+	}
+	if container == nil {
+		return nil, &types.ErrContainerStateNotFound{ContainerId: containerId}
 	}
 
 	if container.WorkspaceId != authInfo.Workspace.ExternalId {
@@ -191,6 +239,39 @@ func (s *GenericPodService) sandboxContainerStatus(ctx context.Context, containe
 	default:
 		return sandboxStatus(types.SandboxStatusPending), nil
 	}
+}
+
+func (s *GenericPodService) sandboxExitedStatus(ctx context.Context, containerId string, authInfo *auth.AuthInfo, stateErr error) (*pb.PodSandboxStatusResponse, error) {
+	if authInfo == nil || authInfo.Workspace == nil {
+		return nil, errors.New("missing auth info")
+	}
+
+	stubId, ok := common.ExtractStubIdFromStubScopedContainerId(containerId)
+	if !ok {
+		return nil, stateErr
+	}
+
+	stub, err := s.backendRepo.GetStubByExternalId(ctx, stubId)
+	if err != nil {
+		return nil, err
+	}
+	if stub == nil {
+		return nil, stateErr
+	}
+	if stub.WorkspaceId != authInfo.Workspace.Id {
+		return nil, errors.New("invalid workspace")
+	}
+
+	exitCode, err := s.containerRepo.GetContainerExitCode(containerId)
+	if err != nil {
+		return nil, stateErr
+	}
+
+	return &pb.PodSandboxStatusResponse{
+		Ok:       true,
+		Status:   string(types.SandboxStatusExited),
+		ExitCode: int32(exitCode),
+	}, nil
 }
 
 func (s *GenericPodService) sandboxRuntimeStatus(ctx context.Context, containerId string, authInfo *auth.AuthInfo) (*pb.PodSandboxStatusResponse, error) {
@@ -1093,7 +1174,40 @@ func (s *GenericPodService) SandboxSnapshotMemory(ctx context.Context, in *pb.Po
 	return &pb.PodSandboxSnapshotMemoryResponse{
 		Ok:           true,
 		CheckpointId: resp.CheckpointId,
+		Runtime:      resp.Runtime,
 	}, nil
+}
+
+func (s *GenericPodService) SandboxSnapshotDisks(ctx context.Context, in *pb.PodSandboxSnapshotDisksRequest) (*pb.PodSandboxSnapshotDisksResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+	if err != nil {
+		return &pb.PodSandboxSnapshotDisksResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to connect to sandbox",
+		}, nil
+	}
+
+	resp, err := client.SnapshotDisks(ctx, in.ContainerId)
+	if err != nil {
+		return &pb.PodSandboxSnapshotDisksResponse{
+			Ok:       false,
+			ErrorMsg: err.Error(),
+		}, nil
+	}
+	response := &pb.PodSandboxSnapshotDisksResponse{Ok: resp.Ok, ErrorMsg: resp.ErrorMsg}
+	for _, snapshot := range resp.Snapshots {
+		if snapshot == nil {
+			continue
+		}
+		response.Snapshots = append(response.Snapshots, &pb.PodSandboxDiskSnapshot{
+			SnapshotId: snapshot.SnapshotId,
+			DiskName:   snapshot.DiskName,
+			Generation: snapshot.Generation,
+		})
+	}
+	return response, nil
 }
 
 func (s *GenericPodService) SandboxListUrls(ctx context.Context, in *pb.PodSandboxListUrlsRequest) (*pb.PodSandboxListUrlsResponse, error) {

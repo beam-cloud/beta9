@@ -1335,7 +1335,7 @@ func TestMarkCheckpointFailedRetainsPersistedMetadata(t *testing.T) {
 			Stub:        types.StubWithRelated{Stub: types.Stub{ExternalId: "stub-a"}},
 		},
 		CheckpointId: "checkpoint-a",
-	}, metadata)
+	}, types.ContainerRuntimeGvisor.String(), metadata)
 
 	got := backendRepoClient.lastCreate
 	if got == nil || got.Status != string(types.CheckpointStatusCheckpointFailed) {
@@ -1343,6 +1343,9 @@ func TestMarkCheckpointFailedRetainsPersistedMetadata(t *testing.T) {
 	}
 	if got.CacheHash != metadata.hash || got.CacheSizeBytes != metadata.sizeBytes || got.OriginKey != metadata.originKey || got.Locality != metadata.locality || got.Accelerator != metadata.accelerator {
 		t.Fatalf("checkpoint metadata = %+v, want %+v", got, metadata)
+	}
+	if got.Runtime != types.ContainerRuntimeGvisor.String() {
+		t.Fatalf("checkpoint runtime = %q, want gvisor", got.Runtime)
 	}
 }
 

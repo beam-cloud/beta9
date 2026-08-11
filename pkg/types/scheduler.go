@@ -48,6 +48,7 @@ const (
 	ContainerSchedulingFailureBacklogPushFailed               ContainerSchedulingFailureReason = "backlog_push_failed"
 	ContainerSchedulingFailureNoController                    ContainerSchedulingFailureReason = "no_controller"
 	ContainerSchedulingFailureWorkerCapacityTimeout           ContainerSchedulingFailureReason = "worker_capacity_timeout"
+	ContainerSchedulingFailureProvisioningLimit               ContainerSchedulingFailureReason = "worker_provisioning_limit"
 	ContainerSchedulingFailureRetryLimit                      ContainerSchedulingFailureReason = "retry_limit"
 	ContainerSchedulingFailureManagedFallbackConcurrencyLimit ContainerSchedulingFailureReason = "managed_fallback_concurrency_limit"
 	ContainerSchedulingFailureManagedFallbackNoCapacity       ContainerSchedulingFailureReason = "managed_fallback_no_capacity"
@@ -291,6 +292,9 @@ type ContainerRequest struct {
 	CheckpointTrigger *CheckpointTrigger `json:"checkpoint_trigger,omitempty"`
 	TaskId            string             `json:"task_id,omitempty"`
 	DeliveryToken     string             `json:"-" go2proto:"ignore"`
+	// Hostname preserved across checkpoint and restore.
+	Hostname             string `json:"hostname,omitempty"`
+	ProvisioningAttempts int    `json:"provisioning_attempts,omitempty" go2proto:"ignore"`
 }
 
 // @go2proto
@@ -626,6 +630,7 @@ func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 		RuntimeSecretNames:       c.RuntimeSecretNames,
 		RuntimeTokenRequired:     c.RuntimeTokenRequired,
 		CheckpointTrigger:        c.CheckpointTrigger.ToProto(),
+		Hostname:                 c.Hostname,
 	}
 }
 
@@ -686,6 +691,7 @@ func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
 		RuntimeSecretNames:       in.RuntimeSecretNames,
 		RuntimeTokenRequired:     in.RuntimeTokenRequired,
 		CheckpointTrigger:        NewCheckpointTriggerFromProto(in.CheckpointTrigger),
+		Hostname:                 in.Hostname,
 	}
 }
 

@@ -249,6 +249,75 @@ func TestListPrivatePoolsReadyMachineCountUsesAgentConnection(t *testing.T) {
 	}
 }
 
+func TestConfiguredRuntimePoolReadyMachineCountRequiresMatchingWorker(t *testing.T) {
+	now := time.Now().UTC()
+	ctx := testAuthContext("workspace-1", "viewer-token")
+	machine := &model.AgentTokenState{
+		WorkspaceID:     "workspace-1",
+		PoolName:        "restore-pool",
+		MachineID:       "machine-1",
+		Schedulable:     true,
+		LastJoinAt:      now.Add(-time.Minute),
+		LastHeartbeatAt: now,
+	}
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{
+			"workspace-1": {{
+				Name:   "restore-pool",
+				Mode:   string(types.PoolModePrivate),
+				Status: "active",
+				Config: &pb.PoolConfig{ContainerRuntime: types.ContainerRuntimeGvisor.String()},
+			}},
+		},
+		machines: map[string][]*model.AgentTokenState{
+			fakeComputeKey("workspace-1", "restore-pool"): {machine},
+		},
+	}
+	worker := &types.Worker{
+		Id:        model.AgentMachineWorkerID(machine.MachineID),
+		PoolName:  machine.PoolName,
+		MachineId: machine.MachineID,
+		Status:    types.WorkerStatusAvailable,
+		Runtime:   types.ContainerRuntimeRunc.String(),
+	}
+	service := &Service{computeRepo: repo, workerRepo: &fakeWorkerRepo{worker: worker}}
+
+	pools, err := service.ListPrivatePools(ctx, &pb.ListPrivatePoolsRequest{})
+	if err != nil || !pools.Ok {
+		t.Fatalf("ListPrivatePools() = (%+v, %v)", pools, err)
+	}
+	if got := pools.Pools[0].ReadyMachineCount; got != 0 {
+		t.Fatalf("runc restore pool ready machines = %d, want 0", got)
+	}
+
+	worker.Runtime = types.ContainerRuntimeGvisor.String()
+	pools, err = service.ListPrivatePools(ctx, &pb.ListPrivatePoolsRequest{})
+	if err != nil || !pools.Ok {
+		t.Fatalf("ListPrivatePools() = (%+v, %v)", pools, err)
+	}
+	if got := pools.Pools[0].ReadyMachineCount; got != 1 {
+		t.Fatalf("available gVisor restore pool ready machines = %d, want 1", got)
+	}
+
+	repo.pools["workspace-1"][0].Config.ContainerRuntime = types.ContainerRuntimeRunc.String()
+	pools, err = service.ListPrivatePools(ctx, &pb.ListPrivatePoolsRequest{})
+	if err != nil || !pools.Ok {
+		t.Fatalf("ListPrivatePools() = (%+v, %v)", pools, err)
+	}
+	if got := pools.Pools[0].ReadyMachineCount; got != 0 {
+		t.Fatalf("gVisor worker in runc pool ready machines = %d, want 0", got)
+	}
+
+	worker.Runtime = types.ContainerRuntimeRunc.String()
+	pools, err = service.ListPrivatePools(ctx, &pb.ListPrivatePoolsRequest{})
+	if err != nil || !pools.Ok {
+		t.Fatalf("ListPrivatePools() = (%+v, %v)", pools, err)
+	}
+	if got := pools.Pools[0].ReadyMachineCount; got != 1 {
+		t.Fatalf("available runc pool ready machines = %d, want 1", got)
+	}
+}
+
 func TestFindReadyPrivatePoolForGPU(t *testing.T) {
 	now := time.Now().UTC()
 	repo := &fakeComputeRepo{
@@ -2205,6 +2274,51 @@ func TestValidatePrivatePoolGPURequestAllowsWorkloadPreferenceList(t *testing.T)
 	)
 	if err != nil {
 		t.Fatalf("ValidatePrivatePoolGPURequest() error = %v", err)
+	}
+}
+
+func TestGPURequirementSatisfiedByConcreteMemoryVariant(t *testing.T) {
+	tests := []struct {
+		name      string
+		required  string
+		available string
+		want      bool
+	}{
+		{name: "generic A100 accepts 40 GB", required: "A100", available: "A100-40", want: true},
+		{name: "generic A100 accepts 80 GB", required: "A100", available: "NVIDIA A100 80GB PCI", want: true},
+		{name: "generic V100 accepts 32 GB", required: "V100", available: "V100-32", want: true},
+		{name: "80 GB requirement rejects 40 GB", required: "A100-80", available: "A100-40", want: false},
+		{name: "different family rejected", required: "A4000", available: "H100", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := gpuRequirementSatisfiedBy(tt.required, tt.available); got != tt.want {
+				t.Fatalf("gpuRequirementSatisfiedBy(%q, %q) = %v, want %v", tt.required, tt.available, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEnforcePoolGPUTypeAcceptsConcreteVariantForGenericPool(t *testing.T) {
+	service := &Service{}
+	pool := &model.PoolState{
+		Name:   "gpu-pool",
+		Config: &pb.PoolConfig{Name: "gpu-pool", Gpu: []string{"A100"}},
+	}
+	agent := &model.AgentTokenState{
+		MachineID: "machine-1",
+		GPUs:      []string{"A100-40"},
+		GPUCount:  1,
+	}
+
+	if err := service.enforcePoolGPUType(context.Background(), pool, agent); err != nil {
+		t.Fatalf("enforcePoolGPUType() error = %v", err)
+	}
+
+	pool.Config.Gpu = []string{"A100-80"}
+	if err := service.enforcePoolGPUType(context.Background(), pool, agent); err == nil {
+		t.Fatal("enforcePoolGPUType() accepted A100-40 for an A100-80 requirement")
 	}
 }
 
@@ -5449,7 +5563,7 @@ func (b *fakeManagedBilling) CheckLaunchCredit(_ context.Context, req billingCre
 	return b.launchDecision, b.launchErr
 }
 
-func (b *fakeManagedBilling) CheckBalance(context.Context, string) (billingDecision, error) {
+func (b *fakeManagedBilling) CheckBalance(context.Context, string, string) (billingDecision, error) {
 	b.balanceCalls++
 	b.balanceSawUsageCount = len(b.usage)
 	return b.balanceDecision, b.balanceErr

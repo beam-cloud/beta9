@@ -151,6 +151,13 @@ service PodService {
       body : "*"
     };
   }
+  rpc SandboxSnapshotDisks(PodSandboxSnapshotDisksRequest)
+      returns (PodSandboxSnapshotDisksResponse) {
+    option (google.api.http) = {
+      post : "/pods/{container_id}/snapshot-disks"
+      body : "*"
+    };
+  }
   rpc SandboxListUrls(PodSandboxListUrlsRequest)
       returns (PodSandboxListUrlsResponse) {
     option (google.api.http) = {
@@ -181,6 +188,8 @@ message PodSandboxExecRequest {
   string cwd = 3;
   map<string, string> env = 4;
   bool wait = 5;
+  // Secret names to resolve in the authenticated workspace.
+  repeated string secrets = 6;
 }
 
 message PodSandboxExecResponse {
@@ -410,6 +419,24 @@ message PodSandboxSnapshotMemoryResponse {
   bool ok = 1;
   string error_msg = 2;
   string checkpoint_id = 3;
+  string runtime = 4;
+}
+
+message PodSandboxSnapshotDisksRequest {
+  string stub_id = 1;
+  string container_id = 2;
+}
+
+message PodSandboxDiskSnapshot {
+  string snapshot_id = 1;
+  string disk_name = 2;
+  int64 generation = 3;
+}
+
+message PodSandboxSnapshotDisksResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  repeated PodSandboxDiskSnapshot snapshots = 3;
 }
 
 message PodSandboxListProcessesRequest { string container_id = 1; }

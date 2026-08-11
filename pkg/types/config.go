@@ -902,16 +902,39 @@ type ManagedComputeBYOCAWSConfig struct {
 }
 
 type ManagedComputeBillingConfig struct {
-	Mode               string        `key:"mode" json:"mode"`
-	Endpoint           string        `key:"endpoint" json:"endpoint"`
-	AuthToken          string        `key:"authToken" json:"auth_token"`
-	Required           bool          `key:"required" json:"required"`
-	Timeout            time.Duration `key:"timeout" json:"timeout"`
-	ReconcileInterval  time.Duration `key:"reconcileInterval" json:"reconcile_interval"`
-	MinimumCreditCents int64         `key:"minimumCreditCents" json:"minimum_credit_cents"`
+	Mode               string                                 `key:"mode" json:"mode"`
+	Endpoint           string                                 `key:"endpoint" json:"endpoint"`
+	AuthToken          string                                 `key:"authToken" json:"auth_token"`
+	PoolRoutes         []ManagedComputeBillingPoolRouteConfig `key:"poolRoutes" json:"pool_routes"`
+	Required           bool                                   `key:"required" json:"required"`
+	Timeout            time.Duration                          `key:"timeout" json:"timeout"`
+	ReconcileInterval  time.Duration                          `key:"reconcileInterval" json:"reconcile_interval"`
+	MinimumCreditCents int64                                  `key:"minimumCreditCents" json:"minimum_credit_cents"`
 	// FailureGracePeriod is how long balance checks may fail before managed
 	// reservations are terminated.
 	FailureGracePeriod time.Duration `key:"failureGracePeriod" json:"failure_grace_period"`
+}
+
+type ManagedComputeBillingPoolRouteConfig struct {
+	PoolNamePrefix     string `key:"poolNamePrefix" json:"pool_name_prefix"`
+	Endpoint           string `key:"endpoint" json:"endpoint"`
+	AuthToken          string `key:"authToken" json:"auth_token"`
+	MinimumCreditCents int64  `key:"minimumCreditCents" json:"minimum_credit_cents"`
+}
+
+func (r ManagedComputeBillingPoolRouteConfig) BillingConfig(base ManagedComputeBillingConfig) ManagedComputeBillingConfig {
+	base.PoolRoutes = nil
+	if endpoint := strings.TrimSpace(r.Endpoint); endpoint != "" {
+		base.Endpoint = endpoint
+		base.Mode = ""
+	}
+	if strings.TrimSpace(r.AuthToken) != "" {
+		base.AuthToken = r.AuthToken
+	}
+	if r.MinimumCreditCents > 0 {
+		base.MinimumCreditCents = r.MinimumCreditCents
+	}
+	return base
 }
 
 func (c ManagedComputeBillingConfig) MinimumCreditCentsOrDefault() int64 {

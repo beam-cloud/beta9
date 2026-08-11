@@ -121,6 +121,11 @@ func (a *schedulingAttempt) reservePendingWorkerCapacity() bool {
 }
 
 func (a *schedulingAttempt) provisionWorker() {
+	if a.request.ProvisioningAttempts >= maxWorkerProvisioningAttempts {
+		a.fail(types.ContainerSchedulingFailureProvisioningLimit)
+		return
+	}
+
 	chain := a.scheduler.failoverChainFor(a.request)
 	controllers, err := a.scheduler.getControllers(a.request)
 	if err != nil {
@@ -152,6 +157,7 @@ func (a *schedulingAttempt) provisionWorker() {
 
 	metrics.RecordSchedulerWorkerWait(time.Since(a.request.Timestamp), a.request, "no_worker")
 
+	a.request.ProvisioningAttempts++
 	reservationID := a.scheduler.provisioning.addReservation(a.scheduler, a.request, controller)
 	go newWorkerProvisioningAttempt(a.scheduler, a.request, controller, reservationID).run()
 	a.requeueForWorkerWait()
@@ -293,9 +299,7 @@ func (a *workerProvisioningAttempt) run() {
 
 	workerLog(requestLog(log.Info(), a.request), newWorker).Msg("added new worker")
 	releaseOnReturn = false
-	time.AfterFunc(provisioningReservationHandoff, func() {
-		a.scheduler.provisioning.release(a.reservationID)
-	})
+	a.scheduler.provisioning.handoff(a.reservationID, newWorker)
 }
 
 func (a *workerProvisioningAttempt) logAddWorkerFailure(err error) {
@@ -396,6 +400,34 @@ func (p *provisioningTracker) release(reservationID string) {
 		delete(p.requestReservations, requestID)
 	}
 	delete(p.reservations, reservationID)
+}
+
+func (p *provisioningTracker) handoff(reservationID string, worker *types.Worker) {
+	if worker == nil || worker.Id == "" {
+		p.release(reservationID)
+		return
+	}
+
+	p.mu.Lock()
+	reservation, ok := p.reservations[reservationID]
+	if !ok {
+		p.mu.Unlock()
+		return
+	}
+	delete(p.reservations, reservationID)
+	reservation.worker.Id = worker.Id
+	reservation.worker.MachineId = worker.MachineId
+	reservation.worker.Runtime = worker.Runtime
+	p.reservations[worker.Id] = reservation
+	for requestID := range reservation.requestIDs {
+		p.requestReservations[requestID] = worker.Id
+	}
+	p.mu.Unlock()
+
+	workerID := worker.Id
+	time.AfterFunc(pendingWorkerReservationTTL, func() {
+		p.release(workerID)
+	})
 }
 
 func (p *provisioningTracker) ensureMaps() {

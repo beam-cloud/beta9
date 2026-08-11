@@ -462,6 +462,7 @@ type Checkpoint struct {
 	OriginKey         string   `db:"origin_key" json:"origin_key" serializer:"origin_key"`
 	Locality          string   `db:"locality" json:"locality" serializer:"locality"`
 	Accelerator       string   `db:"accelerator" json:"accelerator" serializer:"accelerator"`
+	Runtime           string   `db:"runtime" json:"runtime" serializer:"runtime"`
 }
 
 func (c *Checkpoint) ToProto() *pb.Checkpoint {
@@ -486,6 +487,7 @@ func (c *Checkpoint) ToProto() *pb.Checkpoint {
 		OriginKey:         c.OriginKey,
 		Locality:          c.Locality,
 		Accelerator:       c.Accelerator,
+		Runtime:           c.Runtime,
 	}
 }
 
@@ -511,6 +513,7 @@ func NewCheckpointFromProto(in *pb.Checkpoint) *Checkpoint {
 		OriginKey:         in.OriginKey,
 		Locality:          in.Locality,
 		Accelerator:       in.Accelerator,
+		Runtime:           in.Runtime,
 	}
 }
 
@@ -546,6 +549,8 @@ type StubConfigV1 struct {
 	AllowList          []string           `json:"allow_list"`
 	DockerEnabled      bool               `json:"docker_enabled"`
 	AllowMarketplace   bool               `json:"allow_marketplace"`
+	// Hostname to set inside the container.
+	Hostname string `json:"hostname,omitempty"`
 	// MachineID pins the stub's containers to one agent machine. Only set by
 	// the gateway for marketplace rental workloads; not exposed to the SDK.
 	MachineID string            `json:"machine_id,omitempty"`

@@ -212,34 +212,42 @@ func (r *Runc) Restore(ctx context.Context, containerID string, opts *RestoreOpt
 	}
 
 	cmd := exec.Command(r.runcCommand(), r.restoreArgs(containerID, opts)...)
-	var outputRead, outputWrite *os.File
-	var outputDone chan struct{}
-	if opts.OutputWriter != nil {
-		var err error
-		outputRead, outputWrite, err = os.Pipe()
-		if err != nil {
-			return -1, fmt.Errorf("create restore output pipe: %w", err)
-		}
-		cmd.Stdout = outputWrite
-		cmd.Stderr = outputWrite
+
+	// Detached restores inherit these checkpoint-safe pipes as standard streams.
+	stdinRead, stdinWrite, err := os.Pipe()
+	if err != nil {
+		return -1, fmt.Errorf("create restore stdin pipe: %w", err)
 	}
+	defer stdinRead.Close()
+	defer stdinWrite.Close()
+	cmd.Stdin = stdinRead
+
+	outputRead, outputWrite, err := os.Pipe()
+	if err != nil {
+		return -1, fmt.Errorf("create restore output pipe: %w", err)
+	}
+	cmd.Stdout = outputWrite
+	cmd.Stderr = outputWrite
 
 	if err := cmd.Start(); err != nil {
-		if outputRead != nil {
-			_ = outputRead.Close()
-			_ = outputWrite.Close()
-		}
+		_ = outputRead.Close()
+		_ = outputWrite.Close()
 		return -1, err
 	}
-	if outputRead != nil {
-		_ = outputWrite.Close()
-		outputDone = make(chan struct{})
-		go func() {
-			defer close(outputDone)
-			_, _ = io.Copy(opts.OutputWriter, outputRead)
-			_ = outputRead.Close()
-		}()
-	}
+	// Close the stdin writer so the restored process observes EOF.
+	_ = stdinWrite.Close()
+	_ = outputWrite.Close()
+
+	outputDone := make(chan struct{})
+	go func() {
+		defer close(outputDone)
+		writer := opts.OutputWriter
+		if writer == nil {
+			writer = io.Discard
+		}
+		_, _ = io.Copy(writer, outputRead)
+		_ = outputRead.Close()
+	}()
 
 	resultCh := make(chan runcCommandResult, 1)
 	go func() {
@@ -270,6 +278,7 @@ func (r *Runc) Restore(ctx context.Context, containerID string, opts *RestoreOpt
 
 	pid, _, err := r.waitForRestoredContainerPID(ctx, containerID, nil)
 	if err != nil {
+		drainRestoreOutput(ctx, outputRead, outputDone)
 		return -1, err
 	}
 

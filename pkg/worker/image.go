@@ -2059,16 +2059,10 @@ func (c *ImageClient) getBuildahAuthArgs(ctx context.Context, imageRef string, c
 		return nil
 	}
 
-	// Check for basic username/password auth (covers most registries including pre-generated ECR/GCR tokens)
-	if username, ok := parsedCreds["USERNAME"]; ok {
-		if password, ok := parsedCreds["PASSWORD"]; ok {
-			return []string{"--creds", fmt.Sprintf("%s:%s", username, password)}
-		}
-	}
-
-	// Check for Docker Hub credentials
-	if username, ok := parsedCreds["DOCKERHUB_USERNAME"]; ok {
-		if password, ok := parsedCreds["DOCKERHUB_PASSWORD"]; ok {
+	for _, keys := range [][2]string{{"USERNAME", "PASSWORD"}, {"DOCKERHUB_USERNAME", "DOCKERHUB_PASSWORD"}} {
+		username, usernameOK := parsedCreds[keys[0]]
+		password, passwordOK := parsedCreds[keys[1]]
+		if usernameOK && passwordOK {
 			return []string{"--creds", fmt.Sprintf("%s:%s", username, password)}
 		}
 	}

@@ -911,6 +911,41 @@ func TestSpecFromRequestPreservesPodInitialSpecCwd(t *testing.T) {
 	require.Equal(t, uint32(1000), spec.Process.User.GID)
 }
 
+func TestSpecFromRequestSetsHostnameOnlyWhenRequested(t *testing.T) {
+	tests := []struct {
+		name         string
+		runtime      string
+		hostname     string
+		wantHostname string
+	}{
+		{name: "runc default", runtime: types.ContainerRuntimeRunc.String(), wantHostname: "runc"},
+		{name: "runsc default", runtime: types.ContainerRuntimeGvisor.String(), wantHostname: "runsc"},
+		{name: "requested", runtime: types.ContainerRuntimeGvisor.String(), hostname: "brisk-canyon-a1b2", wantHostname: "brisk-canyon-a1b2"},
+		{name: "sanitized", runtime: types.ContainerRuntimeGvisor.String(), hostname: "MyApp/v1.2", wantHostname: "myapp-v1-2"},
+		{name: "trimmed", runtime: types.ContainerRuntimeGvisor.String(), hostname: "--wrapped__", wantHostname: "wrapped"},
+		{name: "invalid", runtime: types.ContainerRuntimeRunc.String(), hostname: "///", wantHostname: "runc"},
+		{name: "truncated", runtime: types.ContainerRuntimeGvisor.String(), hostname: strings.Repeat("a", 80), wantHostname: strings.Repeat("a", maxHostnameLength)},
+		{name: "bounded", runtime: types.ContainerRuntimeGvisor.String(), hostname: strings.Repeat("a", maxHostnameLength-1) + "-b", wantHostname: strings.Repeat("a", maxHostnameLength-1) + "b"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			worker := &Worker{runtime: &mockRuntime{name: test.runtime}}
+
+			spec, err := worker.specFromRequest(&types.ContainerRequest{
+				ContainerId: "container-1",
+				StubId:      "stub-1",
+				Hostname:    test.hostname,
+				EntryPoint:  []string{"tail", "-f", "/dev/null"},
+				Stub:        types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypePod)}},
+			}, &ContainerOptions{BindPorts: []int{8001}})
+
+			require.NoError(t, err)
+			require.Equal(t, test.wantHostname, spec.Hostname)
+		})
+	}
+}
+
 func TestSpecFromRequestRejectsRunnerStubWithoutRunnerEnv(t *testing.T) {
 	worker := &Worker{runtime: &mockRuntime{name: types.ContainerRuntimeGvisor.String()}}
 
@@ -1448,19 +1483,21 @@ func TestCheckpointFilesystemRestoreDiscardRemovesPartialUpperLayer(t *testing.T
 	overlayRoot := filepath.Join(t.TempDir(), "overlay")
 	require.NoError(t, os.MkdirAll(filepath.Join(overlayRoot, "layer-0", "upper"), 0755))
 	require.NoError(t, os.WriteFile(filepath.Join(overlayRoot, "layer-0", "upper", "partial"), []byte("partial"), 0644))
+	require.NoError(t, os.MkdirAll(filepath.Join(overlayRoot, "criu"), 0755))
 
 	_, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	close(done)
 	restore := &checkpointFilesystemRestore{
-		overlayRoot: overlayRoot,
-		done:        done,
-		cancel:      cancel,
-		err:         assert.AnError,
+		upperPath: filepath.Join(overlayRoot, "layer-0", "upper"),
+		done:      done,
+		cancel:    cancel,
+		err:       assert.AnError,
 	}
 
 	require.NoError(t, restore.discard())
-	require.NoDirExists(t, overlayRoot)
+	require.NoDirExists(t, filepath.Join(overlayRoot, "layer-0"))
+	require.DirExists(t, filepath.Join(overlayRoot, "criu"))
 }
 
 func TestRunContainerRestoreWaitsForRestoredRuntimeExit(t *testing.T) {
@@ -1575,6 +1612,30 @@ func TestWaitForRestoredContainerExitFailsBeforeRunningState(t *testing.T) {
 	require.Equal(t, -1, exitCode)
 }
 
+func TestWaitForRestoredContainerExitTreatsPausedContainerAsAlive(t *testing.T) {
+	statuses := []string{
+		types.RuncContainerStatusRunning,
+		types.RuncContainerStatusPaused,
+		types.RuncContainerStatusPaused,
+		types.RuncContainerStatusRunning,
+		types.RuncContainerStatusStopped,
+	}
+	var observed []string
+	rt := &mockRuntime{
+		state: func(context.Context, string) (runtime.State, error) {
+			status := statuses[len(observed)]
+			observed = append(observed, status)
+			return runtime.State{Status: status, Pid: 42}, nil
+		},
+	}
+
+	exitCode, err := (&Worker{}).waitForRestoredContainerExit(context.Background(), rt, "container-restore", 0)
+
+	require.NoError(t, err)
+	require.Equal(t, -1, exitCode)
+	require.Equal(t, statuses, observed, "watcher stopped before the container actually stopped")
+}
+
 func TestAttemptRestoreCheckpointTreatsGenericErrorAsRestoreFailure(t *testing.T) {
 	restoreErr := assert.AnError
 	containerID := "container-restore-generic-error"
@@ -1599,10 +1660,11 @@ func TestAttemptRestoreCheckpointTreatsGenericErrorAsRestoreFailure(t *testing.T
 		},
 	}
 
+	var output strings.Builder
 	exitCode, restored, started, err := worker.attemptRestoreCheckpoint(
 		context.Background(),
 		request,
-		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		slog.New(slog.NewTextHandler(&output, nil)),
 		common.NewOutputWriter(func(string) {}),
 		make(chan int, 1),
 		make(chan int, 1),
@@ -1616,6 +1678,7 @@ func TestAttemptRestoreCheckpointTreatsGenericErrorAsRestoreFailure(t *testing.T
 	require.Equal(t, request.Checkpoint.CheckpointId, backendRepoClient.lastUpdate.CheckpointId)
 	require.Equal(t, string(types.CheckpointStatusRestoreFailed), backendRepoClient.lastUpdate.Status)
 	require.Nil(t, backendRepoClient.lastUpdate.LastRestoredAt)
+	require.Contains(t, output.String(), restoreErr.Error())
 }
 
 func TestAttemptRestoreCheckpointKeepsHostIncompatibleCheckpointAvailable(t *testing.T) {
@@ -1800,6 +1863,39 @@ func TestRunContainerMaterializeFailureFallsBackWithoutRestore(t *testing.T) {
 	require.Nil(t, request.Checkpoint)
 }
 
+func TestHasAvailableCheckpoint(t *testing.T) {
+	require.False(t, hasAvailableCheckpoint(&types.ContainerRequest{
+		Checkpoint: &types.Checkpoint{Status: string(types.CheckpointStatusRestoreFailed)},
+	}))
+	require.True(t, hasAvailableCheckpoint(&types.ContainerRequest{
+		Checkpoint: &types.Checkpoint{Status: string(types.CheckpointStatusAvailable)},
+	}))
+}
+
+func TestValidateCheckpointRestoreRuntime(t *testing.T) {
+	request := &types.ContainerRequest{Checkpoint: &types.Checkpoint{
+		CheckpointId: "checkpoint-1",
+		Status:       string(types.CheckpointStatusAvailable),
+		Runtime:      " gvisor ",
+	}}
+	gvisor := &mockRuntime{name: types.ContainerRuntimeGvisor.String(), capabilities: runtime.Capabilities{CheckpointRestore: true}}
+	runc := &mockRuntime{name: types.ContainerRuntimeRunc.String(), capabilities: runtime.Capabilities{CheckpointRestore: true}}
+	unsupported := &mockRuntime{name: types.ContainerRuntimeRunc.String()}
+
+	require.NoError(t, validateCheckpointRestoreRuntime(request, gvisor))
+	require.EqualError(t, validateCheckpointRestoreRuntime(request, runc),
+		`cannot restore gvisor checkpoint "checkpoint-1" with runtime "runc"`)
+	require.EqualError(t, validateCheckpointRestoreRuntime(request, unsupported),
+		`cannot restore checkpoint "checkpoint-1" with runtime "runc": checkpoint restore is unsupported`)
+
+	request.Checkpoint.Status = string(types.CheckpointStatusRestoreFailed)
+	require.NoError(t, validateCheckpointRestoreRuntime(request, unsupported))
+
+	request.Checkpoint.Status = string(types.CheckpointStatusAvailable)
+	request.Checkpoint.Runtime = ""
+	require.NoError(t, validateCheckpointRestoreRuntime(request, runc))
+}
+
 func TestShouldCreateCheckpointIgnoresNonAvailableAttachedCheckpoint(t *testing.T) {
 	t.Setenv("WORKER_POOL_NAME", "default")
 
@@ -1822,6 +1918,26 @@ func TestShouldCreateCheckpointIgnoresNonAvailableAttachedCheckpoint(t *testing.
 
 	request.Checkpoint.Status = string(types.CheckpointStatusAvailable)
 	require.False(t, worker.shouldCreateCheckpoint(request))
+}
+
+func TestShouldCreateCheckpointSkipsSandboxes(t *testing.T) {
+	t.Setenv("WORKER_POOL_NAME", "default")
+
+	worker := &Worker{
+		config: types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
+			"default": {CRIUEnabled: true},
+		}}},
+		criuManager: &startedCRIUManager{},
+	}
+	request := &types.ContainerRequest{
+		CheckpointEnabled: true,
+		Stub:              types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)}},
+	}
+
+	require.False(t, worker.shouldCreateCheckpoint(request))
+
+	request.Stub.Type = types.StubType(types.StubTypePodDeployment)
+	require.True(t, worker.shouldCreateCheckpoint(request))
 }
 
 func TestAttemptRestoreCheckpointRestoresRuntimeOnly(t *testing.T) {
@@ -2585,10 +2701,14 @@ func (m *restoreFallbackRuntime) Run(ctx context.Context, containerID, bundlePat
 }
 
 type fakeBackendRepoClient struct {
-	updateCalls int
-	lastUpdate  *pb.UpdateCheckpointRequest
-	createCalls int
-	lastCreate  *pb.CreateCheckpointRequest
+	updateCalls         int
+	lastUpdate          *pb.UpdateCheckpointRequest
+	createCalls         int
+	lastCreate          *pb.CreateCheckpointRequest
+	sourceSnapshot      *pb.DiskSnapshot
+	latestSnapshot      *pb.DiskSnapshot
+	getDiskSnapshotErr  error
+	requestedSnapshotId string
 }
 
 func (f *fakeBackendRepoClient) GetCheckpointById(ctx context.Context, in *pb.GetCheckpointByIdRequest, opts ...grpc.CallOption) (*pb.GetCheckpointByIdResponse, error) {
@@ -2620,7 +2740,19 @@ func (f *fakeBackendRepoClient) CreateDiskSnapshot(ctx context.Context, in *pb.C
 }
 
 func (f *fakeBackendRepoClient) GetLatestDiskSnapshot(ctx context.Context, in *pb.GetLatestDiskSnapshotRequest, opts ...grpc.CallOption) (*pb.GetLatestDiskSnapshotResponse, error) {
-	return &pb.GetLatestDiskSnapshotResponse{Ok: true}, nil
+	return &pb.GetLatestDiskSnapshotResponse{Ok: true, Snapshot: f.latestSnapshot}, nil
+}
+
+func (f *fakeBackendRepoClient) GetDiskSnapshot(ctx context.Context, in *pb.GetDiskSnapshotRequest, opts ...grpc.CallOption) (*pb.GetDiskSnapshotResponse, error) {
+	f.requestedSnapshotId = in.SnapshotId
+	if f.getDiskSnapshotErr != nil {
+		return nil, f.getDiskSnapshotErr
+	}
+	return &pb.GetDiskSnapshotResponse{Ok: true, Snapshot: f.sourceSnapshot}, nil
+}
+
+func (f *fakeBackendRepoClient) GetDiskSnapshotDownloadURL(context.Context, *pb.GetDiskSnapshotDownloadURLRequest, ...grpc.CallOption) (*pb.GetDiskSnapshotDownloadURLResponse, error) {
+	return nil, errors.New("not implemented")
 }
 
 type mockResourceRuntime struct {
