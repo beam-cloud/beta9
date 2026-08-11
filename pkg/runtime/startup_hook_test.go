@@ -112,6 +112,68 @@ func TestStartupHookRuntimeRunsHooksWhenRuntimeReturnsAfterStarted(t *testing.T)
 	}
 }
 
+func TestStartupHookRuntimeWaitsForRuntimeStateBeforeHooks(t *testing.T) {
+	rt := newStartupHookMockRuntime(2468)
+	attempts := 0
+	rt.state = func(context.Context, string) (State, error) {
+		attempts++
+		if attempts < 3 {
+			return State{}, ErrContainerNotFound{ContainerID: "container-1"}
+		}
+		return State{ID: "container-1", Pid: 2468, Status: startupHookRunningStatus}, nil
+	}
+	calls := []string{}
+	wrapped := WithStartupHooks(rt, &recordingStartupHook{name: "install", calls: &calls})
+
+	started := make(chan int, 1)
+	done := make(chan error, 1)
+	go func() {
+		_, err := wrapped.Run(context.Background(), "container-1", "/bundle", &RunOpts{Started: started})
+		done <- err
+	}()
+
+	select {
+	case pid := <-started:
+		require.Equal(t, 2468, pid)
+	case <-time.After(time.Second):
+		t.Fatal("started was not published after runtime became ready")
+	}
+	require.GreaterOrEqual(t, attempts, 3)
+	require.Equal(t, []string{"install"}, calls)
+
+	rt.finishRun()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("run did not return after runtime finished")
+	}
+}
+
+func TestStartupHookRuntimeReadinessFailureKillsContainerAndDoesNotPublishStarted(t *testing.T) {
+	rt := newStartupHookMockRuntime(1234)
+	rt.state = func(context.Context, string) (State, error) {
+		return State{}, ErrContainerNotFound{ContainerID: "container-1"}
+	}
+	wrapped := WithStartupHooks(rt, &recordingStartupHook{name: "install"})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	started := make(chan int, 1)
+	exitCode, err := wrapped.Run(ctx, "container-1", "/bundle", &RunOpts{Started: started})
+
+	require.Equal(t, -1, exitCode)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "container did not become ready for startup hooks")
+	select {
+	case pid := <-started:
+		t.Fatalf("started was published after readiness failure: %d", pid)
+	default:
+	}
+	require.Equal(t, []syscall.Signal{syscall.SIGKILL}, rt.killSignals())
+	require.Equal(t, []bool{true}, rt.killAllOpts())
+}
+
 func TestWaitForStartupPIDPrioritizesStartedWhenDoneReady(t *testing.T) {
 	started := make(chan int, 1)
 	done := make(chan startupHookRunResult, 1)
@@ -276,6 +338,7 @@ type startupHookMockRuntime struct {
 	finishOnce sync.Once
 
 	mu                  sync.Mutex
+	state               func(context.Context, string) (State, error)
 	kills               []syscall.Signal
 	killOpts            []*KillOpts
 	execs               []specs.Process
@@ -343,7 +406,13 @@ func (m *startupHookMockRuntime) Delete(ctx context.Context, containerID string,
 }
 
 func (m *startupHookMockRuntime) State(ctx context.Context, containerID string) (State, error) {
-	return State{}, nil
+	m.mu.Lock()
+	state := m.state
+	m.mu.Unlock()
+	if state != nil {
+		return state(ctx, containerID)
+	}
+	return State{ID: containerID, Pid: m.pid, Status: startupHookRunningStatus}, nil
 }
 
 func (m *startupHookMockRuntime) Events(ctx context.Context, containerID string) (<-chan Event, error) {

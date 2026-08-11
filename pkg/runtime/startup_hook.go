@@ -9,7 +9,13 @@ import (
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
-const startupHookShutdownTimeout = 5 * time.Second
+const (
+	startupHookShutdownTimeout = 5 * time.Second
+	startupHookReadyTimeout    = 5 * time.Second
+	startupHookReadyInitial    = 10 * time.Millisecond
+	startupHookReadyMax        = 100 * time.Millisecond
+	startupHookRunningStatus   = "running"
+)
 
 // StartupHook runs after the container init process starts but before the
 // runtime publishes the container as started to worker lifecycle consumers.
@@ -127,6 +133,11 @@ func (r *startupHookRuntime) runWithStartedHook(ctx context.Context, containerID
 		return completed.exitCode, completed.err
 	}
 
+	completed, err = r.waitForStartupHookReadiness(ctx, containerID, done, completed)
+	if err != nil {
+		return r.failStartup(ctx, containerID, done, completed, err)
+	}
+
 	for _, hook := range r.hooks {
 		if err := hook.Run(ctx, r.Runtime, containerID); err != nil {
 			return r.failStartupHook(ctx, containerID, done, completed, hook, err)
@@ -177,7 +188,61 @@ func waitForStartupPID(ctx context.Context, started <-chan int, done <-chan star
 	}
 }
 
+func (r *startupHookRuntime) waitForStartupHookReadiness(ctx context.Context, containerID string, done <-chan startupHookRunResult, completed *startupHookRunResult) (*startupHookRunResult, error) {
+	readyCtx, cancel := context.WithTimeout(ctx, startupHookReadyTimeout)
+	defer cancel()
+
+	backoff := startupHookReadyInitial
+	doneCh := done
+	if completed != nil {
+		doneCh = nil
+	}
+
+	var lastErr error
+	for {
+		state, err := r.Runtime.State(readyCtx, containerID)
+		if err == nil && state.Pid > 0 && state.Status == startupHookRunningStatus {
+			return completed, nil
+		}
+		if err != nil {
+			lastErr = err
+		} else {
+			lastErr = fmt.Errorf("container state is not ready for exec: pid=%d status=%q", state.Pid, state.Status)
+		}
+
+		timer := time.NewTimer(backoff)
+		select {
+		case result := <-doneCh:
+			timer.Stop()
+			completed = &result
+			doneCh = nil
+			if result.err != nil {
+				return completed, result.err
+			}
+			return completed, fmt.Errorf("container exited before startup hooks could run: %w", lastErr)
+		case <-readyCtx.Done():
+			timer.Stop()
+			if lastErr != nil {
+				return completed, fmt.Errorf("container did not become ready for startup hooks: %w", lastErr)
+			}
+			return completed, readyCtx.Err()
+		case <-timer.C:
+		}
+
+		if backoff < startupHookReadyMax {
+			backoff *= 2
+			if backoff > startupHookReadyMax {
+				backoff = startupHookReadyMax
+			}
+		}
+	}
+}
+
 func (r *startupHookRuntime) failStartupHook(ctx context.Context, containerID string, done <-chan startupHookRunResult, completed *startupHookRunResult, hook StartupHook, hookErr error) (int, error) {
+	return r.failStartup(ctx, containerID, done, completed, fmt.Errorf("startup hook %q failed: %w", hook.Name(), hookErr))
+}
+
+func (r *startupHookRuntime) failStartup(ctx context.Context, containerID string, done <-chan startupHookRunResult, completed *startupHookRunResult, err error) (int, error) {
 	_ = r.Runtime.Kill(context.Background(), containerID, syscall.SIGKILL, &KillOpts{All: true})
 
 	waitCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), startupHookShutdownTimeout)
@@ -190,7 +255,7 @@ func (r *startupHookRuntime) failStartupHook(ctx context.Context, containerID st
 		}
 	}
 
-	return -1, fmt.Errorf("startup hook %q failed: %w", hook.Name(), hookErr)
+	return -1, err
 }
 
 func (r *startupHookRuntime) UpdateResources(ctx context.Context, containerID string, resources *specs.LinuxResources) error {
