@@ -318,6 +318,7 @@ class PodSandboxCreateImageFromFilesystemResponse(betterproto.Message):
 class PodSandboxSnapshotMemoryRequest(betterproto.Message):
     stub_id: str = betterproto.string_field(1)
     container_id: str = betterproto.string_field(2)
+    terminate_after_checkpoint: bool = betterproto.bool_field(3)
 
 
 @dataclass(eq=False, repr=False)

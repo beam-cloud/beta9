@@ -4,14 +4,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -19,6 +22,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 )
 
 func TestPublicDiskSnapshotStoreDownloadsPresignedObject(t *testing.T) {
@@ -168,8 +172,9 @@ func TestLatestDurableDiskSnapshotManifestPreservesEmptyTree(t *testing.T) {
 	worker := &Worker{backendRepoClient: backendRepo}
 	mount := &types.Mount{DurableDisk: &types.DurableDiskMountConfig{Name: "empty-disk"}}
 
-	parent, previous := worker.latestDurableDiskSnapshotManifest(context.Background(), &types.ContainerRequest{}, mount, store)
+	parent, previous, err := worker.latestDurableDiskSnapshotManifest(context.Background(), &types.ContainerRequest{}, mount, store)
 
+	require.NoError(t, err)
 	require.Equal(t, "empty-snapshot", parent.ExternalId)
 	require.NotNil(t, previous)
 	require.Empty(t, previous.Files)
@@ -184,6 +189,133 @@ func TestLatestDurableDiskSnapshotManifestPreservesEmptyTree(t *testing.T) {
 	require.Nil(t, snapshot)
 }
 
+func TestNextDurableDiskSnapshotGenerationIsMonotonicAcrossWorkerClocks(t *testing.T) {
+	generation, err := nextDurableDiskSnapshotGeneration(200, &types.DiskSnapshot{Generation: 100})
+	require.NoError(t, err)
+	require.Equal(t, int64(200), generation)
+
+	generation, err = nextDurableDiskSnapshotGeneration(100, &types.DiskSnapshot{Generation: 200})
+	require.NoError(t, err)
+	require.Equal(t, int64(201), generation)
+
+	generation, err = nextDurableDiskSnapshotGeneration(math.MaxInt64-1, &types.DiskSnapshot{Generation: math.MaxInt64})
+	require.ErrorContains(t, err, "generation is exhausted")
+	require.Zero(t, generation)
+}
+
+func TestConcurrentDurableDiskGenerationAttemptsKeepIndependentManifests(t *testing.T) {
+	mount := &types.Mount{DurableDisk: &types.DurableDiskMountConfig{Name: "snapshots"}}
+	store := &fakeDurableDiskSnapshotStore{}
+	generation := int64(42)
+
+	snapshot := func(payload string) *types.DiskSnapshot {
+		source := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(source, "weights"), []byte(payload), 0o600))
+		created, _, err := createDurableDiskDirectorySnapshot(
+			context.Background(), store, source, durableDiskSnapshotObjectPrefix(mount, generation),
+			types.DiskSnapshot{DiskName: "snapshots", Generation: generation}, 4, nil, false,
+		)
+		require.NoError(t, err)
+		return created
+	}
+
+	first := snapshot("first model")
+	second := snapshot("second model")
+	require.Equal(t, generation, first.Generation)
+	require.Equal(t, generation, second.Generation)
+	require.NotEqual(t, first.ObjectPrefix, second.ObjectPrefix)
+	require.NotEqual(t, first.ManifestKey, second.ManifestKey)
+	require.Equal(t, "durable-disks/snapshots/chunks", durableDiskSnapshotChunkPrefix(first.ObjectPrefix))
+
+	for _, test := range []struct {
+		name     string
+		snapshot *types.DiskSnapshot
+		want     string
+	}{
+		{name: "first", snapshot: first, want: "first model"},
+		{name: "second", snapshot: second, want: "second model"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			target := filepath.Join(t.TempDir(), "restored")
+			_, err := restoreDurableDiskDirectorySnapshotWithCache(
+				context.Background(), store, nil, test.snapshot.ManifestKey,
+				test.snapshot.ManifestDigest, test.snapshot.ManifestSizeBytes, target,
+			)
+			require.NoError(t, err)
+			data, err := os.ReadFile(filepath.Join(target, "weights"))
+			require.NoError(t, err)
+			require.Equal(t, test.want, string(data))
+		})
+	}
+}
+
+func TestLatestDurableDiskSnapshotManifestDistinguishesMissingHistoryFromFailure(t *testing.T) {
+	mount := &types.Mount{DurableDisk: &types.DurableDiskMountConfig{Name: "model"}}
+	request := &types.ContainerRequest{}
+
+	t.Run("first snapshot", func(t *testing.T) {
+		backend := &latestDiskSnapshotBackend{
+			fakeBackendRepoClient: &fakeBackendRepoClient{},
+			response: &pb.GetLatestDiskSnapshotResponse{
+				Ok:       false,
+				ErrorMsg: (&types.ErrDiskSnapshotNotFound{SnapshotId: "latest:model"}).Error(),
+			},
+		}
+		parent, manifest, err := (&Worker{backendRepoClient: backend}).latestDurableDiskSnapshotManifest(
+			context.Background(), request, mount, &fakeDurableDiskSnapshotStore{},
+		)
+		require.NoError(t, err)
+		require.Nil(t, parent)
+		require.Nil(t, manifest)
+	})
+
+	t.Run("repository unavailable", func(t *testing.T) {
+		backend := &latestDiskSnapshotBackend{
+			fakeBackendRepoClient: &fakeBackendRepoClient{},
+			err:                   errors.New("repository unavailable"),
+		}
+		parent, manifest, err := (&Worker{backendRepoClient: backend}).latestDurableDiskSnapshotManifest(
+			context.Background(), request, mount, &fakeDurableDiskSnapshotStore{},
+		)
+		require.ErrorContains(t, err, "repository unavailable")
+		require.Nil(t, parent)
+		require.Nil(t, manifest)
+	})
+
+	t.Run("manifest unavailable", func(t *testing.T) {
+		backend := &latestDiskSnapshotBackend{
+			fakeBackendRepoClient: &fakeBackendRepoClient{},
+			response: &pb.GetLatestDiskSnapshotResponse{Ok: true, Snapshot: &pb.DiskSnapshot{
+				ExternalId:  "snapshot-1",
+				DiskName:    "model",
+				ManifestKey: "missing/manifest.json",
+			}},
+		}
+		parent, manifest, err := (&Worker{backendRepoClient: backend}).latestDurableDiskSnapshotManifest(
+			context.Background(), request, mount, &fakeDurableDiskSnapshotStore{},
+		)
+		require.ErrorContains(t, err, "load latest durable disk snapshot manifest")
+		require.Nil(t, parent)
+		require.Nil(t, manifest)
+	})
+
+	t.Run("manifest metadata missing", func(t *testing.T) {
+		backend := &latestDiskSnapshotBackend{
+			fakeBackendRepoClient: &fakeBackendRepoClient{},
+			response: &pb.GetLatestDiskSnapshotResponse{Ok: true, Snapshot: &pb.DiskSnapshot{
+				ExternalId: "snapshot-without-manifest",
+				DiskName:   "model",
+			}},
+		}
+		parent, manifest, err := (&Worker{backendRepoClient: backend}).latestDurableDiskSnapshotManifest(
+			context.Background(), request, mount, &fakeDurableDiskSnapshotStore{},
+		)
+		require.ErrorContains(t, err, "has no manifest")
+		require.Nil(t, parent)
+		require.Nil(t, manifest)
+	})
+}
+
 func TestSyncDurableDiskMountsHonorsCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -191,17 +323,180 @@ func TestSyncDurableDiskMountsHonorsCanceledContext(t *testing.T) {
 		DurableDisk: &types.DurableDiskMountConfig{Name: "disk"},
 	}}}
 
-	snapshots, err := (&Worker{}).syncDurableDiskMounts(ctx, request, true)
+	snapshots, err := (&Worker{}).syncDurableDiskMounts(ctx, request, durableDiskSyncExplicit)
 
 	require.Empty(t, snapshots)
 	require.ErrorIs(t, err, context.Canceled)
 }
 
-func TestDurableDiskCleanupContextIgnoresWorkerCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+func TestDurableDiskInactivityWatchdogResetsOnlyOnProgress(t *testing.T) {
+	ctx, stop := withDurableDiskInactivityWatchdog(context.Background(), 80*time.Millisecond)
+	defer stop()
 
-	require.NoError(t, (&Worker{ctx: ctx}).durableDiskCleanupContext().Err())
+	for range 3 {
+		time.Sleep(40 * time.Millisecond)
+		reportDurableDiskProgress(ctx, durableDiskProgressEvent{logicalBytes: 1})
+		select {
+		case <-ctx.Done():
+			t.Fatal("watchdog expired while snapshot progress continued")
+		default:
+		}
+	}
+
+	select {
+	case <-ctx.Done():
+		require.ErrorIs(t, context.Cause(ctx), errDurableDiskSnapshotInactive)
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("watchdog did not cancel an inactive snapshot")
+	}
+}
+
+func TestDurableDiskLockContentionKeepsInactivityWatchdogAlive(t *testing.T) {
+	diskPath := filepath.Join(t.TempDir(), "disk")
+	mount := &types.Mount{
+		LocalPath: diskPath,
+		DurableDisk: &types.DurableDiskMountConfig{
+			Name: "disk",
+		},
+	}
+	lockDir := filepath.Join(filepath.Dir(diskPath), durableDiskLockDir)
+	require.NoError(t, os.MkdirAll(lockDir, 0o755))
+	lock := NewFileLock(filepath.Join(lockDir, filepath.Base(diskPath)+".lock"))
+	require.NoError(t, lock.Acquire())
+
+	ctx, stop := withDurableDiskInactivityWatchdog(context.Background(), 650*time.Millisecond)
+	defer stop()
+	releaseErr := make(chan error, 1)
+	go func() {
+		time.Sleep(900 * time.Millisecond)
+		releaseErr <- lock.Release()
+	}()
+	started := time.Now()
+	acquired := false
+	err := withDurableDiskLock(ctx, mount, func() error {
+		acquired = true
+		return nil
+	})
+
+	require.NoError(t, <-releaseErr)
+	require.NoError(t, err)
+	require.True(t, acquired)
+	require.Greater(t, time.Since(started), 650*time.Millisecond)
+	require.NoError(t, ctx.Err())
+}
+
+func TestAppendOnlyPrefixVerificationReportsProgressAndHonorsCancellation(t *testing.T) {
+	filename := filepath.Join(t.TempDir(), "appendonly.aof")
+	require.NoError(t, os.WriteFile(filename, make([]byte, 4<<20), 0o600))
+
+	baseCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var logicalBytes, uploadChunks int64
+	baseCtx = withDurableDiskProgressReporter(baseCtx, func(progress durableDiskProgressEvent) {
+		logicalBytes += progress.logicalBytes
+		uploadChunks += progress.chunks
+		cancel()
+	})
+	ctx, stopWatchdog := withDurableDiskInactivityWatchdog(baseCtx, time.Hour)
+	defer stopWatchdog()
+
+	reusable, err := durableDiskSnapshotFileChunksReusable(ctx, filename, types.DiskSnapshotFile{
+		Type:      "file",
+		SizeBytes: 4 << 20,
+		Chunks: []types.DiskSnapshotChunk{{
+			OffsetBytes: 0,
+			SizeBytes:   4 << 20,
+			Digest:      "sha256:not-reached",
+		}},
+	})
+
+	require.False(t, reusable)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, int64(durableDiskSnapshotReadBufferSize), logicalBytes)
+	require.Zero(t, uploadChunks, "rehashing an existing prefix is read progress, not a completed upload")
+}
+
+func TestChunkSpoolingAndUploadExposeStreamingProgress(t *testing.T) {
+	t.Run("source read", func(t *testing.T) {
+		baseCtx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		var logicalBytes int64
+		ctx := withDurableDiskProgressReporter(baseCtx, func(progress durableDiskProgressEvent) {
+			logicalBytes += progress.logicalBytes
+			if logicalBytes > 0 {
+				cancel()
+			}
+		})
+		_, _, _, err := spoolDurableDiskSnapshotChunk(
+			ctx,
+			bytes.NewReader(make([]byte, 4<<20)),
+			"model.safetensors",
+			0,
+			4<<20,
+			make([]byte, durableDiskSnapshotReadBufferSize),
+		)
+		require.ErrorIs(t, err, context.Canceled)
+		require.Equal(t, int64(durableDiskSnapshotReadBufferSize), logicalBytes)
+	})
+
+	t.Run("upload read", func(t *testing.T) {
+		chunk, err := os.CreateTemp(t.TempDir(), "chunk-*")
+		require.NoError(t, err)
+		defer removeDurableDiskSnapshotChunkFile(chunk)
+		_, err = chunk.Write(make([]byte, 4<<20))
+		require.NoError(t, err)
+
+		baseCtx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		progressEvents := 0
+		ctx := withDurableDiskProgressReporter(baseCtx, func(progress durableDiskProgressEvent) {
+			progressEvents++
+			require.Zero(t, progress.logicalBytes)
+			require.Zero(t, progress.chunks)
+			cancel()
+		})
+		err = uploadDurableDiskSnapshotChunk(ctx, &fakeDurableDiskSnapshotStore{}, "chunk", chunk, 4<<20)
+		require.ErrorIs(t, err, context.Canceled)
+		require.Positive(t, progressEvents)
+	})
+}
+
+func TestDurabilityReportingNeverBlocksCheckpointOrDiskPublication(t *testing.T) {
+	events := &blockingRequiredContentEventRepo{
+		fakeEventRepo: &fakeEventRepo{},
+		started:       make(chan struct{}),
+	}
+	reporter := newTestReporter(events)
+	worker := &Worker{cacheManager: &WorkerCacheManager{reporter: reporter}}
+	request := &types.ContainerRequest{WorkspaceId: "workspace", StubId: "stub"}
+
+	done := make(chan struct{})
+	go func() {
+		worker.reportCheckpointRequiredContent(request, "checkpoint", &checkpointCacheMetadata{
+			hash: "checkpoint-hash", sizeBytes: 42, originKey: "checkpoints/checkpoint.tar",
+		})
+		worker.reportDurableDiskSnapshotContent(request, &types.DiskSnapshot{
+			BucketName: "bucket", ManifestKey: "disk/manifest.json", ManifestDigest: "sha256:manifest", ManifestSizeBytes: 10,
+		}, &types.DiskSnapshotManifest{Files: []types.DiskSnapshotFile{{
+			Type: "file", Chunks: []types.DiskSnapshotChunk{{Digest: "sha256:chunk", ObjectKey: "disk/chunks/chunk", SizeBytes: 4}},
+		}}})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("durability reporting blocked on the external event sink")
+	}
+	select {
+	case <-events.started:
+		t.Fatal("durability path synchronously flushed its best-effort report")
+	default:
+	}
+	reporter.mu.Lock()
+	pending := len(reporter.pending)
+	reporter.mu.Unlock()
+	require.Equal(t, 2, pending, "both reports should remain queued for the reporter's periodic flush")
 }
 
 func TestAddRequestMountsPreparesDurableDisk(t *testing.T) {
@@ -257,6 +552,22 @@ func TestDurableDiskShouldKeepLocalPayload(t *testing.T) {
 	}, snapshot))
 }
 
+func TestPublishedDurableDiskGenerationSurvivesLocalMarkerFailure(t *testing.T) {
+	blockedPath := filepath.Join(t.TempDir(), "not-a-directory")
+	require.NoError(t, os.WriteFile(blockedPath, []byte("blocked"), 0o600))
+	mount := durableDiskTestMount(blockedPath)
+	snapshot := &types.DiskSnapshot{
+		ExternalId:     "snapshot-published",
+		Generation:     42,
+		ManifestDigest: "sha256:published",
+	}
+
+	recordPublishedDurableDiskMarker(mount, snapshot)
+
+	require.Equal(t, "snapshot-published", snapshot.ExternalId)
+	require.NoFileExists(t, filepath.Join(blockedPath, durableDiskMarkerFile))
+}
+
 func TestCreateDurableDiskDirectorySnapshotDedupesChunks(t *testing.T) {
 	ctx := context.Background()
 	source := filepath.Join(t.TempDir(), "pg-data")
@@ -280,7 +591,6 @@ func TestCreateDurableDiskDirectorySnapshotDedupesChunks(t *testing.T) {
 	baseFile := snapshotTestFile(firstManifest, "pgdata/base/1")
 	require.NotEmpty(t, baseFile.Chunks)
 
-	store.existsCalls = 0
 	store.uploadCalls = 0
 	require.NoError(t, os.WriteFile(filepath.Join(source, "pgdata", "base", "1"), []byte("base-data-mutated"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(source, "pgdata", "base", "2"), []byte("new-base-file"), 0o600))
@@ -296,8 +606,6 @@ func TestCreateDurableDiskDirectorySnapshotDedupesChunks(t *testing.T) {
 	require.Equal(t, first.ExternalId, second.ParentSnapshotId)
 	require.NotEqual(t, baseFile.Chunks, snapshotTestFile(secondManifest, "pgdata/base/1").Chunks)
 	require.NotEmpty(t, snapshotTestFile(secondManifest, "pgdata/base/2").Chunks)
-	require.Less(t, store.existsCalls, int(second.ChunkCount))
-
 	walFile := snapshotTestFile(secondManifest, "pgdata/pg_wal/0002")
 	require.NotEmpty(t, walFile.Chunks)
 	chunk := walFile.Chunks[0]
@@ -318,6 +626,36 @@ func TestCreateDurableDiskDirectorySnapshotDedupesChunks(t *testing.T) {
 	data, err = os.ReadFile(filepath.Join(restored, "pgdata", "pg_wal", "0002"))
 	require.NoError(t, err)
 	require.Equal(t, "wal2", string(data))
+}
+
+func TestIncrementalSnapshotUploadsOnlyTheChangedChunk(t *testing.T) {
+	source := t.TempDir()
+	model := filepath.Join(source, "model.safetensors")
+	require.NoError(t, os.WriteFile(model, []byte("aaaabbbbccccdddd"), 0o600))
+	store := &fakeDurableDiskSnapshotStore{}
+
+	_, first, err := createDurableDiskDirectorySnapshot(
+		context.Background(), store, source, "durable-disks/model/snapshots/1",
+		types.DiskSnapshot{DiskName: "model", Format: types.DiskSnapshotFormatDirV1}, 4, nil, false,
+	)
+	require.NoError(t, err)
+	before := snapshotTestFile(first, "model.safetensors")
+	require.Len(t, before.Chunks, 4)
+
+	store.uploadCalls = 0
+	time.Sleep(2 * time.Millisecond)
+	require.NoError(t, os.WriteFile(model, []byte("aaaaxxxxccccdddd"), 0o600))
+	_, second, err := createDurableDiskDirectorySnapshot(
+		context.Background(), store, source, "durable-disks/model/snapshots/2",
+		types.DiskSnapshot{DiskName: "model", Format: types.DiskSnapshotFormatDirV1}, 4, first, false,
+	)
+	require.NoError(t, err)
+	after := snapshotTestFile(second, "model.safetensors")
+	require.Len(t, after.Chunks, 4)
+	require.Equal(t, before.Chunks[0], after.Chunks[0])
+	require.NotEqual(t, before.Chunks[1], after.Chunks[1])
+	require.Equal(t, before.Chunks[2:], after.Chunks[2:])
+	require.Equal(t, 2, store.uploadCalls, "only one new chunk and the manifest should be uploaded")
 }
 
 func TestCreateDurableDiskDirectorySnapshotUploadsChunksInParallel(t *testing.T) {
@@ -353,13 +691,46 @@ func TestSnapshotDurableDiskReaderReturnsMidStreamReadError(t *testing.T) {
 	require.ErrorIs(t, err, readErr)
 	require.Len(t, file.Chunks, 1)
 	require.Equal(t, int64(8), file.Chunks[0].SizeBytes)
-	require.Equal(t, 1, store.uploadCalls)
+}
+
+func TestSnapshotDurableDiskReaderCancelsSiblingUploadsOnReadError(t *testing.T) {
+	readErr := syscall.EIO
+	store := &cancellationBlockingDurableDiskSnapshotStore{
+		fakeDurableDiskSnapshotStore: &fakeDurableDiskSnapshotStore{},
+		started:                      make(chan struct{}),
+		canceled:                     make(chan struct{}),
+	}
+	source := &failAfterUploadStartsReaderAt{
+		data:          []byte("12345678"),
+		uploadStarted: store.started,
+		err:           readErr,
+	}
+	file := &types.DiskSnapshotFile{Path: "model", Type: "file"}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- snapshotDurableDiskReader(ctx, store, source, "model", "chunks", 8, map[string]struct{}{}, file)
+	}()
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, readErr)
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("source read failure did not cancel the in-flight upload promptly")
+	}
+	select {
+	case <-store.canceled:
+	default:
+		t.Fatal("in-flight upload did not observe cancellation")
+	}
 }
 
 func TestSnapshotDurableDiskReaderSpoolsChunksWithFixedMemoryBuffer(t *testing.T) {
 	data := make([]byte, 2*durableDiskSnapshotReadBufferSize+17)
 	source := &trackingDurableDiskSnapshotReaderAt{reader: bytes.NewReader(data)}
-	store := &existingDurableDiskSnapshotStore{fakeDurableDiskSnapshotStore: &fakeDurableDiskSnapshotStore{}}
+	store := &fakeDurableDiskSnapshotStore{}
 	file := &types.DiskSnapshotFile{Path: "model", Type: "file"}
 
 	err := snapshotDurableDiskReader(
@@ -377,6 +748,47 @@ func TestSnapshotDurableDiskReaderSpoolsChunksWithFixedMemoryBuffer(t *testing.T
 	require.Len(t, file.Chunks, 1)
 	require.Equal(t, int64(len(data)), file.Chunks[0].SizeBytes)
 	require.LessOrEqual(t, source.maxReadSize(), durableDiskSnapshotReadBufferSize)
+}
+
+func TestSnapshotDurableDiskReaderRetriesFromTheStartOfTheChunk(t *testing.T) {
+	payload := []byte("complete model chunk")
+	store := &retryingDurableDiskSnapshotStore{
+		fakeDurableDiskSnapshotStore: &fakeDurableDiskSnapshotStore{},
+		failures:                     1,
+	}
+	file := &types.DiskSnapshotFile{Path: "model", Type: "file"}
+
+	err := snapshotDurableDiskReader(
+		context.Background(), store, bytes.NewReader(payload), "model", "chunks", int64(len(payload)),
+		map[string]struct{}{}, file,
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, 2, store.attempts)
+	require.Equal(t, payload, store.lastBody, "a retry must rewind rather than upload an empty tail")
+	require.Equal(t, 1, store.uploadCalls)
+}
+
+func TestCreateDurableDiskDirectorySnapshotRejectsFileMutationBeforePublishing(t *testing.T) {
+	source := t.TempDir()
+	filename := filepath.Join(source, "model.safetensors")
+	require.NoError(t, os.WriteFile(filename, []byte("original"), 0o600))
+	store := &mutatingDurableDiskSnapshotStore{
+		fakeDurableDiskSnapshotStore: &fakeDurableDiskSnapshotStore{},
+		mutate: func() error {
+			return os.WriteFile(filename, []byte("modified-and-longer"), 0o600)
+		},
+	}
+
+	snapshot, manifest, err := createDurableDiskDirectorySnapshot(
+		context.Background(), store, source, "durable-disks/model/snapshots/1",
+		types.DiskSnapshot{DiskName: "model", Format: types.DiskSnapshotFormatDirV1},
+		defaultDurableDiskSnapshotChunkSize, nil, false,
+	)
+
+	require.ErrorContains(t, err, "changed while snapshotting")
+	require.Nil(t, snapshot)
+	require.Nil(t, manifest)
 }
 
 func TestCreateDurableDiskDirectorySnapshotDoesNotPublishAfterUploadCancellation(t *testing.T) {
@@ -403,6 +815,58 @@ func TestCreateDurableDiskDirectorySnapshotDoesNotPublishAfterUploadCancellation
 	require.Nil(t, snapshot)
 	require.Nil(t, manifest)
 	require.Zero(t, store.uploadCalls)
+}
+
+func TestCreateDurableDiskDirectorySnapshotHonorsCanceledTreeWalk(t *testing.T) {
+	source := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(source, "model.safetensors"), []byte("model"), 0o600))
+	store := &fakeDurableDiskSnapshotStore{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	snapshot, manifest, err := createDurableDiskDirectorySnapshot(
+		ctx, store, source, "durable-disks/model/snapshots/1",
+		types.DiskSnapshot{DiskName: "model", Format: types.DiskSnapshotFormatDirV1},
+		defaultDurableDiskSnapshotChunkSize, nil, false,
+	)
+
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, snapshot)
+	require.Nil(t, manifest)
+	require.Zero(t, store.uploadCalls)
+}
+
+func TestValidateDurableDiskSnapshotTreeHonorsDeadline(t *testing.T) {
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+
+	err := validateDurableDiskSnapshotTree(ctx, t.TempDir(), map[string]types.DiskSnapshotFile{})
+
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
+func TestCreateDurableDiskDirectorySnapshotRejectsNewFileBeforePublishing(t *testing.T) {
+	source := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(source, "model-00001.safetensors"), []byte("first shard"), 0o600))
+	store := &mutatingDurableDiskSnapshotStore{
+		fakeDurableDiskSnapshotStore: &fakeDurableDiskSnapshotStore{},
+		mutate: func() error {
+			return os.WriteFile(filepath.Join(source, "model-00002.safetensors"), []byte("second shard"), 0o600)
+		},
+	}
+
+	snapshot, manifest, err := createDurableDiskDirectorySnapshot(
+		context.Background(), store, source, "durable-disks/model/snapshots/1",
+		types.DiskSnapshot{DiskName: "model", Format: types.DiskSnapshotFormatDirV1},
+		defaultDurableDiskSnapshotChunkSize, nil, false,
+	)
+
+	require.ErrorContains(t, err, "changed while snapshotting")
+	require.Nil(t, snapshot)
+	require.Nil(t, manifest)
+	for key := range store.objects {
+		require.NotContains(t, key, "manifest.json")
+	}
 }
 
 func TestCreateDurableDiskDirectorySnapshotReusesAppendOnlyTail(t *testing.T) {
@@ -480,7 +944,7 @@ func TestCreateDurableDiskDirectorySnapshotRejectsRecreatedAppendOnlyPrefix(t *t
 	require.Equal(t, "xxxxbbbbcccc", string(data))
 }
 
-func TestCreateDurableDiskDirectorySnapshotRejectsSameMetadataRewrite(t *testing.T) {
+func TestUnchangedCleanupDetectsSameSizeWriteWithRestoredMtime(t *testing.T) {
 	ctx := context.Background()
 	source := filepath.Join(t.TempDir(), "data")
 	file := filepath.Join(source, "dbfile")
@@ -499,6 +963,7 @@ func TestCreateDurableDiskDirectorySnapshotRejectsSameMetadataRewrite(t *testing
 	require.NotEmpty(t, firstFile.Chunks)
 
 	modTime := time.Unix(0, firstFile.ModTimeUnixNano)
+	time.Sleep(2 * time.Millisecond)
 	require.NoError(t, os.WriteFile(file, []byte("xxxxbbbb"), 0o600))
 	require.NoError(t, os.Chtimes(file, modTime, modTime))
 
@@ -507,8 +972,9 @@ func TestCreateDurableDiskDirectorySnapshotRejectsSameMetadataRewrite(t *testing
 		Format:     types.DiskSnapshotFormatDirV1,
 		Filesystem: "ext4",
 		Generation: 2,
-	}, 4, firstManifest, false)
+	}, 4, firstManifest, true)
 	require.NoError(t, err)
+	require.NotNil(t, second, "same-size writes after the explicit snapshot must not be skipped at cleanup")
 
 	restored := filepath.Join(t.TempDir(), "restored")
 	_, err = restoreDurableDiskDirectorySnapshotWithCache(ctx, store, nil, second.ManifestKey, second.ManifestDigest, second.ManifestSizeBytes, restored)
@@ -552,7 +1018,7 @@ func TestCreateDurableDiskDirectorySnapshotPreservesEmptyDirectory(t *testing.T)
 	require.Empty(t, entries)
 }
 
-func TestCreateDurableDiskDirectorySnapshotSkipsAnUnchangedDisk(t *testing.T) {
+func TestExplicitDurableDiskSnapshotReusesUnchangedGeneration(t *testing.T) {
 	ctx := context.Background()
 	source := filepath.Join(t.TempDir(), "data")
 	require.NoError(t, os.MkdirAll(source, 0o700))
@@ -569,6 +1035,7 @@ func TestCreateDurableDiskDirectorySnapshotSkipsAnUnchangedDisk(t *testing.T) {
 	require.NotNil(t, first)
 
 	uploadsAfterFirst := store.uploadCalls
+	store.resetUploadCounts()
 	second, secondManifest, err := createDurableDiskDirectorySnapshot(ctx, store, source, "durable-disks/data/snapshots/2", types.DiskSnapshot{
 		DiskName:   "data",
 		Format:     types.DiskSnapshotFormatDirV1,
@@ -578,7 +1045,10 @@ func TestCreateDurableDiskDirectorySnapshotSkipsAnUnchangedDisk(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, second, "an untouched disk should report no new generation")
 	require.Nil(t, secondManifest)
-	require.Equal(t, uploadsAfterFirst, store.uploadCalls, "not even the manifest should have been written")
+	require.Positive(t, uploadsAfterFirst)
+	uploadCalls, chunkUploadCalls := store.uploadCounts()
+	require.Zero(t, uploadCalls, "not even the manifest should have been written")
+	require.Zero(t, chunkUploadCalls)
 
 	require.NoError(t, os.WriteFile(filepath.Join(source, "value"), []byte("changed"), 0o600))
 	third, _, err := createDurableDiskDirectorySnapshot(ctx, store, source, "durable-disks/data/snapshots/3", types.DiskSnapshot{
@@ -591,23 +1061,31 @@ func TestCreateDurableDiskDirectorySnapshotSkipsAnUnchangedDisk(t *testing.T) {
 	require.NotNil(t, third)
 }
 
-func TestCreateDurableDiskDirectorySnapshotAlwaysWritesWhenNotSkipping(t *testing.T) {
+func TestFinalDurableDiskSnapshotPublishesFreshUnchangedGeneration(t *testing.T) {
 	ctx := context.Background()
 	source := filepath.Join(t.TempDir(), "data")
 	require.NoError(t, os.MkdirAll(source, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(source, "value"), []byte("present"), 0o600))
 
 	store := &fakeDurableDiskSnapshotStore{}
-	_, firstManifest, err := createDurableDiskDirectorySnapshot(ctx, store, source, "durable-disks/data/snapshots/1", types.DiskSnapshot{
+	first, firstManifest, err := createDurableDiskDirectorySnapshot(ctx, store, source, "durable-disks/data/snapshots/1", types.DiskSnapshot{
 		DiskName: "data", Format: types.DiskSnapshotFormatDirV1, Filesystem: "ext4", Generation: 1,
 	}, 4, nil, false)
 	require.NoError(t, err)
+	require.NotNil(t, first)
+	store.resetUploadCounts()
 
-	second, _, err := createDurableDiskDirectorySnapshot(ctx, store, source, "durable-disks/data/snapshots/2", types.DiskSnapshot{
+	second, secondManifest, err := createDurableDiskDirectorySnapshot(ctx, store, source, "durable-disks/data/snapshots/2", types.DiskSnapshot{
 		DiskName: "data", Format: types.DiskSnapshotFormatDirV1, Filesystem: "ext4", Generation: 2,
 	}, 4, firstManifest, false)
 	require.NoError(t, err)
 	require.NotNil(t, second)
+	require.Equal(t, int64(2), second.Generation)
+	require.NotEqual(t, first.ManifestKey, second.ManifestKey)
+	require.Equal(t, firstManifest.Files, secondManifest.Files)
+	uploadCalls, chunkUploadCalls := store.uploadCounts()
+	require.Equal(t, 1, uploadCalls, "terminal finalization should upload only its fresh manifest")
+	require.Zero(t, chunkUploadCalls, "terminal finalization should reuse every unchanged CAS chunk")
 }
 
 func TestDurableDiskSnapshotContentsMatchIgnoresFilesystemIdentity(t *testing.T) {
@@ -754,6 +1232,69 @@ func TestDurableDiskTransferTimeoutScalesWithSnapshotSize(t *testing.T) {
 	require.Equal(t, time.Hour, durableDiskTransferTimeout(1<<40))
 }
 
+func BenchmarkDurableDiskModelSnapshot(b *testing.B) {
+	const modelSize = int64(256 << 20)
+
+	for _, fixture := range []struct {
+		name   string
+		sparse bool
+	}{
+		{name: "dense-256MiB"},
+		{name: "sparse-256MiB", sparse: true},
+	} {
+		b.Run(fixture.name, func(b *testing.B) {
+			source := b.TempDir()
+			model := filepath.Join(source, "model.safetensors")
+			if fixture.sparse {
+				file, err := os.Create(model)
+				require.NoError(b, err)
+				require.NoError(b, file.Truncate(modelSize))
+				_, err = file.WriteAt(bytes.Repeat([]byte{0x5a}, 1<<20), modelSize-(1<<20))
+				require.NoError(b, err)
+				require.NoError(b, file.Close())
+			} else {
+				file, err := os.Create(model)
+				require.NoError(b, err)
+				block := bytes.Repeat([]byte{0x5a}, 1<<20)
+				for written := int64(0); written < modelSize; written += int64(len(block)) {
+					_, err = file.Write(block)
+					require.NoError(b, err)
+				}
+				require.NoError(b, file.Close())
+			}
+
+			store := &discardDurableDiskSnapshotStore{}
+			_, previous, err := createDurableDiskDirectorySnapshot(
+				context.Background(), store, source, "durable-disks/model/snapshots/baseline",
+				types.DiskSnapshot{DiskName: "model", Format: types.DiskSnapshotFormatDirV1},
+				defaultDurableDiskSnapshotChunkSize, nil, false,
+			)
+			require.NoError(b, err)
+
+			b.Run("cold", func(b *testing.B) {
+				for i := 0; i < b.N; i++ {
+					_, _, err := createDurableDiskDirectorySnapshot(
+						context.Background(), store, source, fmt.Sprintf("durable-disks/model/snapshots/cold-%d", i),
+						types.DiskSnapshot{DiskName: "model", Format: types.DiskSnapshotFormatDirV1},
+						defaultDurableDiskSnapshotChunkSize, nil, false,
+					)
+					require.NoError(b, err)
+				}
+			})
+			b.Run("unchanged", func(b *testing.B) {
+				for i := 0; i < b.N; i++ {
+					_, _, err := createDurableDiskDirectorySnapshot(
+						context.Background(), store, source, fmt.Sprintf("durable-disks/model/snapshots/unchanged-%d", i),
+						types.DiskSnapshot{DiskName: "model", Format: types.DiskSnapshotFormatDirV1},
+						defaultDurableDiskSnapshotChunkSize, previous, true,
+					)
+					require.NoError(b, err)
+				}
+			})
+		})
+	}
+}
+
 func snapshotTestFile(manifest *types.DiskSnapshotManifest, name string) types.DiskSnapshotFile {
 	for _, file := range manifest.Files {
 		if file.Path == name {
@@ -775,10 +1316,53 @@ func durableDiskTestMount(primary string) *types.Mount {
 }
 
 type fakeDurableDiskSnapshotStore struct {
-	mu          sync.Mutex
-	objects     map[string][]byte
-	existsCalls int
-	uploadCalls int
+	mu               sync.Mutex
+	objects          map[string][]byte
+	uploadCalls      int
+	chunkUploadCalls int
+}
+
+type latestDiskSnapshotBackend struct {
+	*fakeBackendRepoClient
+	response *pb.GetLatestDiskSnapshotResponse
+	err      error
+}
+
+type blockingRequiredContentEventRepo struct {
+	*fakeEventRepo
+	started chan struct{}
+	once    sync.Once
+}
+
+func (r *blockingRequiredContentEventRepo) PushStubCacheRequiredContent(types.EventStubCacheRequiredContentSchema) error {
+	r.once.Do(func() { close(r.started) })
+	select {}
+}
+
+func (b *latestDiskSnapshotBackend) GetLatestDiskSnapshot(
+	_ context.Context,
+	_ *pb.GetLatestDiskSnapshotRequest,
+	_ ...grpc.CallOption,
+) (*pb.GetLatestDiskSnapshotResponse, error) {
+	if b.response == nil && b.err == nil {
+		return &pb.GetLatestDiskSnapshotResponse{Ok: true}, nil
+	}
+	return b.response, b.err
+}
+
+type discardDurableDiskSnapshotStore struct{}
+
+func (*discardDurableDiskSnapshotStore) Upload(context.Context, string, []byte) error {
+	return nil
+}
+
+func (*discardDurableDiskSnapshotStore) UploadWithReader(_ context.Context, _ string, data io.Reader) error {
+	_, err := io.Copy(io.Discard, data)
+	return err
+}
+
+func (*discardDurableDiskSnapshotStore) DownloadWithReader(context.Context, string) (io.ReadCloser, error) {
+	return nil, fmt.Errorf("not implemented")
 }
 
 type parallelUploadDurableDiskSnapshotStore struct {
@@ -788,28 +1372,90 @@ type parallelUploadDurableDiskSnapshotStore struct {
 	maxActive int
 }
 
-type existingDurableDiskSnapshotStore struct {
-	*fakeDurableDiskSnapshotStore
-}
-
-func (s *existingDurableDiskSnapshotStore) Exists(context.Context, string) (bool, error) {
-	return true, nil
-}
-
 type cancelingDurableDiskSnapshotStore struct {
 	*fakeDurableDiskSnapshotStore
 	cancel context.CancelFunc
 }
 
-func (s *cancelingDurableDiskSnapshotStore) Exists(context.Context, string) (bool, error) {
+type cancellationBlockingDurableDiskSnapshotStore struct {
+	*fakeDurableDiskSnapshotStore
+	started      chan struct{}
+	canceled     chan struct{}
+	startedOnce  sync.Once
+	canceledOnce sync.Once
+}
+
+type retryingDurableDiskSnapshotStore struct {
+	*fakeDurableDiskSnapshotStore
+	mu       sync.Mutex
+	failures int
+	attempts int
+	lastBody []byte
+}
+
+func (s *retryingDurableDiskSnapshotStore) UploadWithReader(ctx context.Context, key string, data io.Reader) error {
+	body, err := io.ReadAll(data)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.attempts++
+	s.lastBody = append([]byte(nil), body...)
+	attempt := s.attempts
+	s.mu.Unlock()
+	if attempt <= s.failures {
+		return fmt.Errorf("transient upload failure")
+	}
+	return s.fakeDurableDiskSnapshotStore.Upload(ctx, key, body)
+}
+
+type mutatingDurableDiskSnapshotStore struct {
+	*fakeDurableDiskSnapshotStore
+	mutate func() error
+	once   sync.Once
+}
+
+func (s *mutatingDurableDiskSnapshotStore) UploadWithReader(ctx context.Context, key string, data io.Reader) error {
+	body, err := io.ReadAll(data)
+	if err != nil {
+		return err
+	}
+	s.once.Do(func() {
+		err = s.mutate()
+	})
+	if err != nil {
+		return err
+	}
+	return s.fakeDurableDiskSnapshotStore.Upload(ctx, key, body)
+}
+
+func (s *cancelingDurableDiskSnapshotStore) UploadWithReader(context.Context, string, io.Reader) error {
 	s.cancel()
-	return true, nil
+	return context.Canceled
 }
 
 type failingDurableDiskSnapshotReaderAt struct {
 	data   []byte
 	failAt int64
 	err    error
+}
+
+type failAfterUploadStartsReaderAt struct {
+	data          []byte
+	uploadStarted <-chan struct{}
+	err           error
+}
+
+func (r *failAfterUploadStartsReaderAt) ReadAt(p []byte, offset int64) (int, error) {
+	if offset >= int64(len(r.data)) {
+		<-r.uploadStarted
+		return 0, r.err
+	}
+	n := copy(p, r.data[offset:])
+	if n < len(p) {
+		return n, io.EOF
+	}
+	return n, nil
 }
 
 func (r *failingDurableDiskSnapshotReaderAt) ReadAt(p []byte, offset int64) (int, error) {
@@ -867,6 +1513,13 @@ func (s *parallelUploadDurableDiskSnapshotStore) UploadWithReader(ctx context.Co
 	return err
 }
 
+func (s *cancellationBlockingDurableDiskSnapshotStore) UploadWithReader(ctx context.Context, _ string, _ io.Reader) error {
+	s.startedOnce.Do(func() { close(s.started) })
+	<-ctx.Done()
+	s.canceledOnce.Do(func() { close(s.canceled) })
+	return ctx.Err()
+}
+
 type parallelDownloadDurableDiskSnapshotStore struct {
 	*fakeDurableDiskSnapshotStore
 	mu        sync.Mutex
@@ -890,14 +1543,6 @@ func (s *parallelDownloadDurableDiskSnapshotStore) DownloadWithReader(ctx contex
 	return s.fakeDurableDiskSnapshotStore.DownloadWithReader(ctx, key)
 }
 
-func (s *fakeDurableDiskSnapshotStore) Exists(_ context.Context, key string) (bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.existsCalls++
-	_, ok := s.objects[key]
-	return ok, nil
-}
-
 func (s *fakeDurableDiskSnapshotStore) Upload(_ context.Context, key string, data []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -914,7 +1559,23 @@ func (s *fakeDurableDiskSnapshotStore) UploadWithReader(_ context.Context, key s
 	if err != nil {
 		return err
 	}
+	s.mu.Lock()
+	s.chunkUploadCalls++
+	s.mu.Unlock()
 	return s.Upload(context.Background(), key, body)
+}
+
+func (s *fakeDurableDiskSnapshotStore) resetUploadCounts() {
+	s.mu.Lock()
+	s.uploadCalls = 0
+	s.chunkUploadCalls = 0
+	s.mu.Unlock()
+}
+
+func (s *fakeDurableDiskSnapshotStore) uploadCounts() (int, int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.uploadCalls, s.chunkUploadCalls
 }
 
 func (s *fakeDurableDiskSnapshotStore) DownloadWithReader(_ context.Context, key string) (io.ReadCloser, error) {

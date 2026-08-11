@@ -81,6 +81,57 @@ func TestContainerSnapshotDisksReportsWhatItCaptured(t *testing.T) {
 	require.Equal(t, int64(7), response.Snapshots[0].Generation)
 }
 
+func TestContainerCheckpointForwardsTerminalIntent(t *testing.T) {
+	request := &types.ContainerRequest{ContainerId: "container-id"}
+	var got []bool
+	server := &ContainerRuntimeServer{
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		createCheckpoint: func(_ context.Context, opts *CreateCheckpointOpts) error {
+			got = append(got, opts.TerminateAfterCheckpoint)
+			return nil
+		},
+	}
+	server.containerInstances.Set(request.ContainerId, &ContainerInstance{
+		Id:      request.ContainerId,
+		Request: request,
+		Runtime: NewMockRuntime(types.ContainerRuntimeRunc.String(), betaruntime.Capabilities{CheckpointRestore: true}),
+	})
+
+	for _, terminate := range []bool{false, true} {
+		response, err := server.ContainerCheckpoint(context.Background(), &pb.ContainerCheckpointRequest{
+			ContainerId:              request.ContainerId,
+			TerminateAfterCheckpoint: terminate,
+		})
+		require.NoError(t, err)
+		require.True(t, response.Ok)
+	}
+	require.Equal(t, []bool{false, true}, got)
+}
+
+func TestContainerCheckpointReturnsNoIDWhenPersistenceFails(t *testing.T) {
+	request := &types.ContainerRequest{ContainerId: "container-id"}
+	server := &ContainerRuntimeServer{
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		createCheckpoint: func(context.Context, *CreateCheckpointOpts) error {
+			return errors.New("checkpoint persistence failed")
+		},
+	}
+	server.containerInstances.Set(request.ContainerId, &ContainerInstance{
+		Id:      request.ContainerId,
+		Request: request,
+		Runtime: NewMockRuntime(types.ContainerRuntimeRunc.String(), betaruntime.Capabilities{CheckpointRestore: true}),
+	})
+
+	response, err := server.ContainerCheckpoint(context.Background(), &pb.ContainerCheckpointRequest{
+		ContainerId:              request.ContainerId,
+		TerminateAfterCheckpoint: true,
+	})
+	require.NoError(t, err)
+	require.False(t, response.Ok)
+	require.Empty(t, response.CheckpointId)
+	require.Equal(t, "checkpoint persistence failed", response.ErrorMsg)
+}
+
 func TestContainerSnapshotDisksPropagatesRequestContext(t *testing.T) {
 	request := &types.ContainerRequest{ContainerId: "container-id"}
 	server := &ContainerRuntimeServer{

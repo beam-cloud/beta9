@@ -424,8 +424,15 @@ func generateProgressBar(progress int, total int) string {
 	return fmt.Sprintf("%s\r%s %d%%\n", up, progressBar, (progress*100)/total)
 }
 
-func (c *ContainerClient) Checkpoint(ctx context.Context, containerId string) (*pb.ContainerCheckpointResponse, error) {
-	resp, err := c.client.ContainerCheckpoint(ctx, &pb.ContainerCheckpointRequest{ContainerId: containerId})
+type ContainerCheckpointOptions struct {
+	TerminateAfterCheckpoint bool
+}
+
+func (c *ContainerClient) Checkpoint(ctx context.Context, containerId string, opts ContainerCheckpointOptions) (*pb.ContainerCheckpointResponse, error) {
+	resp, err := c.client.ContainerCheckpoint(ctx, &pb.ContainerCheckpointRequest{
+		ContainerId:              containerId,
+		TerminateAfterCheckpoint: opts.TerminateAfterCheckpoint,
+	})
 	if err != nil {
 		return resp, err
 	}

@@ -1023,28 +1023,48 @@ func TestStopDeletesUnassignedPendingContainerState(t *testing.T) {
 	assert.Equal(t, int64(0), wb.requestBacklog.Len())
 }
 
-func TestStopPreservesAssignedPendingContainerForWorkerCancellation(t *testing.T) {
-	wb, err := NewSchedulerForTest()
+func TestStopPreservesAssignedContainerForWorkerCancellation(t *testing.T) {
+	for _, status := range []types.ContainerStatus{
+		types.ContainerStatusPending,
+		types.ContainerStatusRunning,
+	} {
+		t.Run(string(status), func(t *testing.T) {
+			wb, err := NewSchedulerForTest()
+			assert.NoError(t, err)
+
+			containerID := "assigned-" + string(status) + "-container"
+			assert.NoError(t, wb.containerRepo.SetContainerState(containerID, &types.ContainerState{
+				ContainerId: containerID,
+				Status:      status,
+				WorkspaceId: "workspace-1",
+				WorkerId:    "worker-1",
+				ScheduledAt: time.Now().Unix(),
+			}))
+
+			assert.NoError(t, wb.Stop(&types.StopContainerArgs{
+				ContainerId: containerID,
+				Reason:      types.StopContainerReasonUser,
+			}))
+
+			state, err := wb.containerRepo.GetContainerState(containerID)
+			assert.NoError(t, err)
+			assert.Equal(t, types.ContainerStatusStopping, state.Status)
+			assert.Equal(t, "worker-1", state.WorkerId)
+			assertContainerStateTTL(t, wb, containerID, types.ContainerStateTtlSWhileStopping)
+		})
+	}
+}
+
+func assertContainerStateTTL(t *testing.T, scheduler *Scheduler, containerID string, seconds int64) {
+	t.Helper()
+	ttl, err := scheduler.requestBacklog.rdb.TTL(
+		context.Background(),
+		common.RedisKeys.SchedulerContainerState(containerID),
+	).Result()
 	assert.NoError(t, err)
-
-	containerID := "assigned-pending-container"
-	assert.NoError(t, wb.containerRepo.SetContainerState(containerID, &types.ContainerState{
-		ContainerId: containerID,
-		Status:      types.ContainerStatusPending,
-		WorkspaceId: "workspace-1",
-		WorkerId:    "worker-1",
-		ScheduledAt: time.Now().Unix(),
-	}))
-
-	assert.NoError(t, wb.Stop(&types.StopContainerArgs{
-		ContainerId: containerID,
-		Reason:      types.StopContainerReasonUser,
-	}))
-
-	state, err := wb.containerRepo.GetContainerState(containerID)
-	assert.NoError(t, err)
-	assert.Equal(t, types.ContainerStatusStopping, state.Status)
-	assert.Equal(t, "worker-1", state.WorkerId)
+	want := time.Duration(seconds) * time.Second
+	assert.True(t, ttl == want || ttl == want-time.Second,
+		"container state TTL = %s, want %s (allowing one-second boundary rounding)", ttl, want)
 }
 
 func TestRunCleansContainerStateWhenBacklogPushFails(t *testing.T) {
@@ -2321,7 +2341,7 @@ func TestProcessRequestMarksNoControllerRequestFailed(t *testing.T) {
 		GpuRequest:  []string{"UNKNOWN_GPU"},
 		Timestamp:   time.Now(),
 	}
-	err = wb.containerRepo.SetContainerStateWithConcurrencyLimit(nil, request)
+	err = wb.containerRepo.CreateContainerStateWithConcurrencyLimit(nil, request)
 	assert.Nil(t, err)
 
 	wb.processRequest(request, nil)
@@ -2977,6 +2997,173 @@ func TestCheckpointRuntimeFiltersProvisioningControllers(t *testing.T) {
 
 	request.Checkpoint.Runtime = ""
 	assert.Equal(t, controllers, filterControllersByFlags(controllers, request), "legacy checkpoints retain existing placement")
+}
+
+func TestCheckpointAcceleratorFiltersExistingWorkers(t *testing.T) {
+	request := &types.ContainerRequest{
+		Cpu:        1000,
+		Memory:     1000,
+		GpuRequest: []string{string(types.GPU_ANY)},
+		GpuCount:   1,
+		Checkpoint: &types.Checkpoint{
+			CheckpointId: "checkpoint-1",
+			Status:       string(types.CheckpointStatusAvailable),
+			Accelerator:  "NVIDIA GeForce RTX 5090",
+		},
+	}
+	worker := func(id, gpu string) *types.Worker {
+		return &types.Worker{
+			Id:           id,
+			Status:       types.WorkerStatusAvailable,
+			FreeCpu:      1000,
+			FreeMemory:   2000,
+			FreeGpuCount: 1,
+			Gpu:          gpu,
+		}
+	}
+	rtx5090 := worker("rtx5090", "RTX5090")
+	l40s := worker("l40s", "L40S")
+	workers := []*types.Worker{rtx5090, l40s}
+
+	assert.Equal(t, []*types.Worker{rtx5090}, filterWorkersByResources(workers, request, nil))
+
+	request.Checkpoint.Accelerator = ""
+	assert.Equal(t, workers, filterWorkersByResources(workers, request, nil), "legacy checkpoints retain GPU preference placement")
+
+	request.Checkpoint.Accelerator = "RTX5090"
+	request.Checkpoint.Status = string(types.CheckpointStatusRestoreFailed)
+	assert.Equal(t, workers, filterWorkersByResources(workers, request, nil), "non-available checkpoints cold-start normally")
+}
+
+func TestCheckpointAcceleratorFiltersProvisioningControllers(t *testing.T) {
+	scheduler, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+	scheduler.workerPoolManager = NewWorkerPoolManager()
+
+	rtx5090 := &LocalWorkerPoolControllerForTest{name: "rtx5090"}
+	l40s := &LocalWorkerPoolControllerForTest{name: "l40s"}
+	scheduler.workerPoolManager.SetPool("rtx5090", types.WorkerPoolConfig{GPUType: "RTX5090"}, rtx5090)
+	scheduler.workerPoolManager.SetPool("l40s", types.WorkerPoolConfig{GPUType: "L40S"}, l40s)
+
+	request := &types.ContainerRequest{
+		GpuRequest: []string{string(types.GPU_ANY)},
+		GpuCount:   1,
+		Checkpoint: &types.Checkpoint{
+			CheckpointId: "checkpoint-1",
+			Status:       string(types.CheckpointStatusAvailable),
+			Accelerator:  "NVIDIA GeForce RTX 5090",
+		},
+	}
+	controllers, err := scheduler.getControllers(request)
+	assert.Nil(t, err)
+	assert.Equal(t, []WorkerPoolController{rtx5090}, controllers)
+
+	request.Checkpoint.Accelerator = ""
+	controllers, err = scheduler.getControllers(request)
+	assert.Nil(t, err)
+	assert.ElementsMatch(t, []WorkerPoolController{rtx5090, l40s}, controllers)
+}
+
+func TestCheckpointAcceleratorDefersUnknownAgentGPUToWorker(t *testing.T) {
+	scheduler, err := NewSchedulerForTest()
+	assert.NoError(t, err)
+	scheduler.workerPoolManager = NewWorkerPoolManager()
+
+	private := &LocalWorkerPoolControllerForTest{name: "private", mode: types.PoolModePrivate}
+	localCPU := &LocalWorkerPoolControllerForTest{name: "local-cpu"}
+	privateL40S := &LocalWorkerPoolControllerForTest{name: "private-l40s", mode: types.PoolModePrivate}
+	scheduler.workerPoolManager.SetPool(private.name, types.WorkerPoolConfig{Mode: types.PoolModePrivate}, private)
+	scheduler.workerPoolManager.SetPool(localCPU.name, types.WorkerPoolConfig{}, localCPU)
+	scheduler.workerPoolManager.SetPool(privateL40S.name, types.WorkerPoolConfig{Mode: types.PoolModePrivate, GPUType: "L40S"}, privateL40S)
+
+	request := &types.ContainerRequest{
+		Cpu:          1000,
+		Memory:       1000,
+		GpuRequest:   []string{string(types.GPU_ANY)},
+		GpuCount:     1,
+		PoolSelector: private.name,
+		Checkpoint: &types.Checkpoint{
+			CheckpointId: "checkpoint-1",
+			Status:       string(types.CheckpointStatusAvailable),
+			Accelerator:  "RTX5090",
+		},
+	}
+
+	controllers := []WorkerPoolController{private, localCPU, privateL40S}
+	assert.Equal(t, []WorkerPoolController{private}, scheduler.filterControllersByCheckpointAccelerator(controllers, request))
+
+	matching := &types.Worker{
+		Id:           "rtx5090",
+		Status:       types.WorkerStatusAvailable,
+		FreeCpu:      1000,
+		FreeMemory:   2000,
+		FreeGpuCount: 1,
+		Gpu:          "RTX5090",
+	}
+	mismatching := &types.Worker{
+		Id:           "l40s",
+		Status:       types.WorkerStatusAvailable,
+		FreeCpu:      1000,
+		FreeMemory:   2000,
+		FreeGpuCount: 1,
+		Gpu:          "L40S",
+	}
+	assert.Equal(t, []*types.Worker{matching}, filterWorkersByResources([]*types.Worker{matching, mismatching}, request, nil))
+
+	request.GpuRequest = nil
+	request.GpuCount = 0
+	request.Checkpoint.Accelerator = "CPU"
+	assert.Equal(t, []WorkerPoolController{private, localCPU}, scheduler.filterControllersByCheckpointAccelerator(controllers, request))
+
+	request.Checkpoint.Accelerator = ""
+	assert.Equal(t, controllers, scheduler.filterControllersByCheckpointAccelerator(controllers, request))
+}
+
+func TestCheckpointCompatibilityKeepsManagedOnDemandFallback(t *testing.T) {
+	scheduler, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+	scheduler.workerPoolManager = NewWorkerPoolManager()
+
+	serverless := &LocalWorkerPoolControllerForTest{
+		name:             "serverless-rtx5090",
+		containerRuntime: types.ContainerRuntimeGvisor.String(),
+	}
+	scheduler.workerPoolManager.SetPool(serverless.name, types.WorkerPoolConfig{
+		GPUType:          "RTX5090",
+		ContainerRuntime: types.ContainerRuntimeGvisor.String(),
+	}, serverless)
+
+	onDemandName := types.FailoverOnDemandPoolName("RTX5090")
+	onDemand := &LocalWorkerPoolControllerForTest{
+		name:             onDemandName,
+		containerRuntime: types.ContainerRuntimeRunc.String(),
+		requiresSelector: true,
+	}
+	scheduler.workerPoolManager.SetPool(onDemandName, types.WorkerPoolConfig{
+		GPUType:              "RTX5090",
+		ContainerRuntime:     types.ContainerRuntimeRunc.String(),
+		RequiresPoolSelector: true,
+	}, onDemand)
+	scheduler.config.Scheduling.Failover = types.FailoverConfig{
+		Enabled: true,
+		Chains: map[string]types.FailoverChain{
+			"RTX5090": {OnDemand: &types.FailoverOnDemandStep{MaxNodes: 1}},
+		},
+	}
+
+	request := &types.ContainerRequest{
+		Gpu:      "RTX5090",
+		GpuCount: 1,
+		Checkpoint: &types.Checkpoint{
+			CheckpointId: "checkpoint-1",
+			Status:       string(types.CheckpointStatusAvailable),
+			Runtime:      types.ContainerRuntimeRunc.String(),
+			Accelerator:  "NVIDIA GeForce RTX 5090",
+		},
+	}
+	controllers, err := scheduler.getControllers(request)
+	assert.Nil(t, err)
+	assert.Equal(t, []WorkerPoolController{onDemand}, controllers)
 }
 
 func TestSelectGPUWorkerDoesNotMutatePriority(t *testing.T) {

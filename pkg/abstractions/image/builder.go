@@ -577,7 +577,7 @@ func (b *Builder) handleBuildCancellation(ctx context.Context, build *Build) {
 		return
 	}
 
-	err = b.containerRepo.UpdateContainerStatus(build.containerID, types.ContainerStatusStopping, types.ContainerStateTtlSWhilePending)
+	err = b.containerRepo.UpdateContainerStatus(build.containerID, types.ContainerStatusStopping, types.ContainerStateTtlSWhileStopping)
 	if err != nil {
 		log.Error().Str("container_id", build.containerID).Err(err).Msg("failed to update container status")
 	}

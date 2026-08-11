@@ -253,9 +253,6 @@ RUN curl -L https://raw.githubusercontent.com/containers/shortnames/refs/heads/m
     -o /etc/containers/registries.conf.d/shortnames.conf
 RUN echo 'unqualified-search-registries = ["docker.io"]' > /etc/containers/registries.conf
 
-ARG CEDANA_VERSION=0.9.240
-ARG CEDANA_BASE_URL=""
-ARG CEDANA_TOKEN=""
 ARG CRIU_COMMIT=b47c692bb3a73ae45ee1c4ab215a8f6869d40efd
 COPY docker/patches/criu/criu-network-remap.patch /tmp/criu-network-remap.patch
 COPY docker/patches/criu/criu-skip-non-cuda-resume.patch /tmp/criu-skip-non-cuda-resume.patch

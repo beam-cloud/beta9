@@ -1151,7 +1151,9 @@ func (s *GenericPodService) SandboxSnapshotMemory(ctx context.Context, in *pb.Po
 		}, nil
 	}
 
-	resp, err := client.Checkpoint(ctx, in.ContainerId)
+	resp, err := client.Checkpoint(ctx, in.ContainerId, common.ContainerCheckpointOptions{
+		TerminateAfterCheckpoint: in.TerminateAfterCheckpoint,
+	})
 	if err != nil {
 		return &pb.PodSandboxSnapshotMemoryResponse{
 			Ok:       false,

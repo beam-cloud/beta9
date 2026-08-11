@@ -317,7 +317,7 @@ func (r *PostgresBackendRepository) GetLatestDiskSnapshot(ctx context.Context, w
 		  AND disk_name = $2
 		  AND status = $3
 		  AND deleted_at IS NULL
-		ORDER BY generation DESC, created_at DESC
+		ORDER BY generation DESC, created_at DESC, id DESC
 		LIMIT 1;`, diskSnapshotColumns(""))
 
 	var snapshot types.DiskSnapshot

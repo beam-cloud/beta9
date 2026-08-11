@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -1236,8 +1237,22 @@ func TestRuntimeNeedsGraceKill(t *testing.T) {
 		{
 			name: "stopped",
 			state: func(context.Context, string) (runtime.State, error) {
-				return runtime.State{Status: "stopped"}, nil
+				return runtime.State{Status: types.RuncContainerStatusStopped}, nil
 			},
+		},
+		{
+			name: "created runtime still requires termination",
+			state: func(context.Context, string) (runtime.State, error) {
+				return runtime.State{Status: types.RuncContainerStatusCreated}, nil
+			},
+			want: true,
+		},
+		{
+			name: "paused runtime still requires termination",
+			state: func(context.Context, string) (runtime.State, error) {
+				return runtime.State{Status: types.RuncContainerStatusPaused}, nil
+			},
+			want: true,
 		},
 		{
 			name: "terminal checkpoint removed runtime",
@@ -1261,6 +1276,477 @@ func TestRuntimeNeedsGraceKill(t *testing.T) {
 		})
 	}
 	require.False(t, runtimeNeedsGraceKill(context.Background(), nil, "container"))
+}
+
+func TestStopContainerReturnsRuntimeKillError(t *testing.T) {
+	rt := &mockRuntime{killErr: assert.AnError}
+	worker := &Worker{containerInstances: common.NewSafeMap[*ContainerInstance]()}
+	worker.containerInstances.Set("container-kill-error", &ContainerInstance{
+		Id:      "container-kill-error",
+		Runtime: rt,
+	})
+
+	err := worker.stopContainer("container-kill-error", true)
+
+	require.ErrorIs(t, err, assert.AnError)
+	require.Equal(t, []syscall.Signal{syscall.SIGKILL}, rt.signals)
+}
+
+func TestClearContainerStopsHeartbeatWhileDurableDiskSyncBlocks(t *testing.T) {
+	fixture := newLockedDurableDiskFinalizationFixture(t, "container-blocked-sync")
+	request := fixture.request
+	leaseStarted := make(chan struct{}, 1)
+	leaseRelease := make(chan struct{})
+	heartbeatGetStarted := make(chan struct{}, 1)
+	repoClient := &fakeContainerRepoClient{
+		state: &pb.ContainerState{
+			ContainerId: request.ContainerId,
+			Status:      string(types.ContainerStatusRunning),
+		},
+		deleteStateDone:     make(chan struct{}, 1),
+		getStateStarted:     heartbeatGetStarted,
+		updateStatusStarted: leaseStarted,
+		updateStatusRelease: leaseRelease,
+	}
+	worker := newContainerFinalizationTestWorker(request, repoClient, nil)
+
+	clearDone := clearContainerAsync(worker, request, 7)
+
+	select {
+	case <-leaseStarted:
+	case <-time.After(time.Second):
+		t.Fatal("cleanup lease was not requested")
+	}
+	instance, ok := worker.containerInstances.Get(request.ContainerId)
+	require.True(t, ok)
+	localExitCode, _ := instance.lifecycleState()
+	require.Equal(t, -1, localExitCode)
+
+	updates := repoClient.containerStatusUpdates()
+	require.Len(t, updates, 1)
+	require.Equal(t, int64(types.ContainerStateTtlSWhileStopping), updates[0].ExpirySeconds)
+	require.Greater(t, updates[0].ExpirySeconds, int64(types.ContainerStateTtlS))
+	require.Equal(
+		t,
+		durableDiskSnapshotInactivityTimeout+time.Duration(types.ContainerStateTtlS)*time.Second,
+		time.Duration(updates[0].ExpirySeconds)*time.Second,
+	)
+	heartbeatDone := make(chan bool, 1)
+	heartbeatErr := make(chan error, 1)
+	go func() {
+		done, err := worker.updateContainerStatusOnce(context.Background(), request)
+		heartbeatDone <- done
+		heartbeatErr <- err
+	}()
+	select {
+	case <-heartbeatDone:
+		t.Fatal("heartbeat passed the finalization fence before the cleanup lease completed")
+	case <-time.After(50 * time.Millisecond):
+	}
+	select {
+	case <-heartbeatGetStarted:
+	case <-time.After(time.Second):
+		t.Fatal("heartbeat did not reach the finalization fence")
+	}
+	close(leaseRelease)
+
+	requireLocalContainerExitCode(t, worker, request.ContainerId, 7)
+	require.True(t, <-heartbeatDone)
+	require.NoError(t, <-heartbeatErr)
+	require.Equal(t, 1, repoClient.getStateCalls)
+	updatesBeforeRelease := repoClient.containerStatusUpdates()
+	require.NotEmpty(t, updatesBeforeRelease)
+	for _, update := range updatesBeforeRelease {
+		require.Equal(t, int64(types.ContainerStateTtlSWhileStopping), update.ExpirySeconds)
+	}
+
+	fixture.releaseAndWaitForClear(t, clearDone)
+	select {
+	case <-repoClient.deleteStateDone:
+	case <-time.After(time.Second):
+		t.Fatal("container state was not deleted after disk sync cancellation")
+	}
+	updates = repoClient.containerStatusUpdates()
+	require.Len(t, updates, len(updatesBeforeRelease)+1)
+	require.Equal(t, int64(types.ContainerStateTtlS), updates[len(updates)-1].ExpirySeconds)
+}
+
+func TestClearContainerSerializesInFlightHeartbeatWhenStoppingLeaseFails(t *testing.T) {
+	fixture := newLockedDurableDiskFinalizationFixture(t, "container-failed-stopping-lease")
+	request := fixture.request
+	heartbeatRelease := make(chan struct{})
+	leaseStarted := make(chan struct{}, 1)
+	repoClient := &fakeContainerRepoClient{
+		state: &pb.ContainerState{
+			ContainerId: request.ContainerId,
+			Status:      string(types.ContainerStatusPending),
+		},
+		getStateStarted:     make(chan struct{}, 1),
+		getStateRelease:     heartbeatRelease,
+		updateStatusStarted: leaseStarted,
+		updateStatusErrorForExpiry: map[int64]error{
+			types.ContainerStateTtlSWhileStopping: context.Canceled,
+		},
+	}
+	worker := newContainerFinalizationTestWorker(request, repoClient, nil)
+	heartbeatDone := make(chan bool, 1)
+	heartbeatErr := make(chan error, 1)
+	go func() {
+		done, err := worker.updateContainerStatusOnce(context.Background(), request)
+		heartbeatDone <- done
+		heartbeatErr <- err
+	}()
+	select {
+	case <-repoClient.getStateStarted:
+	case <-time.After(time.Second):
+		t.Fatal("heartbeat did not cache pending state")
+	}
+
+	clearDone := clearContainerAsync(worker, request, 7)
+	select {
+	case <-leaseStarted:
+	case <-time.After(time.Second):
+		t.Fatal("finalization did not begin the cleanup lease")
+	}
+	close(heartbeatRelease)
+	requireLocalContainerExitCode(t, worker, request.ContainerId, 7)
+
+	require.True(t, <-heartbeatDone)
+	require.NoError(t, <-heartbeatErr)
+	for _, update := range repoClient.containerStatusUpdates() {
+		require.Equal(t, string(types.ContainerStatusStopping), update.Status, "stale heartbeat overwrote finalization state")
+		require.Equal(t, int64(types.ContainerStateTtlSWhileStopping), update.ExpirySeconds)
+	}
+	require.Equal(t, 1, repoClient.getStateCalls)
+
+	fixture.releaseAndWaitForClear(t, clearDone)
+}
+
+func TestClearContainerTerminalizesAfterDurableDiskSyncFailure(t *testing.T) {
+	request := &types.ContainerRequest{
+		ContainerId: "container-sync-error",
+		Mounts: []types.Mount{{
+			LocalPath: blockedDurableDiskPath(t),
+			DurableDisk: &types.DurableDiskMountConfig{
+				Name: "disk-sync-error",
+				Size: "1Gi",
+			},
+		}},
+	}
+	repoClient := &fakeContainerRepoClient{deleteStateDone: make(chan struct{}, 1)}
+	worker := newContainerFinalizationTestWorker(request, repoClient, nil)
+
+	worker.clearContainer(request.ContainerId, request, 0, true)
+
+	select {
+	case <-repoClient.deleteStateDone:
+	case <-time.After(time.Second):
+		t.Fatal("container state was not deleted after disk sync failure")
+	}
+	require.Equal(t, 1, repoClient.setExitCodeCalls)
+	require.Equal(t, int32(types.ContainerExitCodeUnknownError), repoClient.lastSetExitCode.ExitCode)
+	updates := repoClient.containerStatusUpdates()
+	require.Len(t, updates, 2)
+	require.Equal(t, int64(types.ContainerStateTtlSWhileStopping), updates[0].ExpirySeconds)
+	require.Equal(t, int64(types.ContainerStateTtlS), updates[1].ExpirySeconds)
+	require.Eventually(t, func() bool {
+		_, exists := worker.containerInstances.Get(request.ContainerId)
+		return !exists
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestClearContainerWithoutDurableDiskUsesNormalStoppingLease(t *testing.T) {
+	request := &types.ContainerRequest{ContainerId: "container-no-durable-disk"}
+	repoClient := &fakeContainerRepoClient{}
+	worker := newContainerFinalizationTestWorker(request, repoClient, nil)
+
+	worker.clearContainer(request.ContainerId, request, 0, false)
+
+	updates := repoClient.containerStatusUpdates()
+	require.Len(t, updates, 1)
+	require.Equal(t, string(types.ContainerStatusStopping), updates[0].Status)
+	require.Equal(t, int64(types.ContainerStateTtlS), updates[0].ExpirySeconds)
+	require.NotEqual(t, int64(types.ContainerStateTtlSWhileStopping), updates[0].ExpirySeconds)
+	require.Equal(t, 1, repoClient.containerExitCodeCalls())
+	require.Equal(t, int32(types.ContainerExitCodeSuccess), repoClient.lastSetExitCode.ExitCode)
+	require.Equal(t, 1, repoClient.deleteContainerStateCalls())
+	select {
+	case completed := <-worker.completedRequests:
+		require.Same(t, request, completed)
+	default:
+		t.Fatal("ordinary container capacity was not released")
+	}
+	_, exists := worker.containerInstances.Get(request.ContainerId)
+	require.False(t, exists)
+}
+
+func TestClearContainerPublishesFailureAfterDurableDiskSyncFailure(t *testing.T) {
+	for _, test := range []struct {
+		exitCode     types.ContainerExitCode
+		exitReported bool
+		want         types.ContainerExitCode
+	}{
+		{exitCode: types.ContainerExitCodeScheduler, exitReported: true, want: types.ContainerExitCodeUnknownError},
+		{exitCode: types.ContainerExitCodeTtl, exitReported: true, want: types.ContainerExitCodeUnknownError},
+		{exitCode: types.ContainerExitCodeUser, exitReported: true, want: types.ContainerExitCodeUnknownError},
+		{exitCode: types.ContainerExitCodeAdmin, exitReported: true, want: types.ContainerExitCodeUnknownError},
+		{exitCode: types.ContainerExitCodeOomKill, exitReported: false, want: types.ContainerExitCodeOomKill},
+	} {
+		t.Run(fmt.Sprintf("exit-%d", test.exitCode), func(t *testing.T) {
+			request := &types.ContainerRequest{
+				ContainerId: fmt.Sprintf("container-sync-failure-%d", test.exitCode),
+				Mounts: []types.Mount{{
+					LocalPath: blockedDurableDiskPath(t),
+					DurableDisk: &types.DurableDiskMountConfig{
+						Name: "disk",
+						Size: "1Gi",
+					},
+				}},
+			}
+			repoClient := &fakeContainerRepoClient{}
+			worker := newContainerFinalizationTestWorker(request, repoClient, nil)
+
+			worker.clearContainer(request.ContainerId, request, int(test.exitCode), test.exitReported)
+
+			require.Equal(t, 1, repoClient.containerExitCodeCalls())
+			require.Equal(t, int32(test.want), repoClient.lastSetExitCode.ExitCode)
+		})
+	}
+}
+
+func TestClearContainerRetriesExitPublication(t *testing.T) {
+	request := &types.ContainerRequest{ContainerId: "container-exit-retry"}
+	repoClient := &fakeContainerRepoClient{
+		setExitCodeErrors: []error{
+			errors.New("first exit publication failed"),
+			errors.New("second exit publication failed"),
+		},
+	}
+	worker := newContainerFinalizationTestWorker(request, repoClient, nil)
+
+	worker.clearContainer(request.ContainerId, request, 11, false)
+
+	require.Equal(t, 3, repoClient.containerExitCodeCalls())
+	require.Equal(t, int32(11), repoClient.lastSetExitCode.ExitCode)
+	require.Equal(t, 1, repoClient.deleteContainerStateCalls())
+}
+
+func TestSetContainerExitCodeTreatsMissingStateAsComplete(t *testing.T) {
+	request := &types.ContainerRequest{ContainerId: "container-already-gone"}
+	repoClient := &fakeContainerRepoClient{
+		setExitCodeErrors: []error{&types.ErrContainerStateNotFound{ContainerId: request.ContainerId}},
+	}
+	worker := newContainerFinalizationTestWorker(request, repoClient, nil)
+
+	require.True(t, worker.setContainerExitCode(request.ContainerId, 0))
+	require.Equal(t, 1, repoClient.containerExitCodeCalls())
+}
+
+func TestClearContainerTreatsMissingStateAsTerminal(t *testing.T) {
+	request := &types.ContainerRequest{
+		ContainerId: "container-missing-state",
+		Mounts: []types.Mount{{
+			LocalPath: blockedDurableDiskPath(t),
+			DurableDisk: &types.DurableDiskMountConfig{
+				Name: "disk-missing-state",
+				Size: "1Gi",
+			},
+		}},
+	}
+	missing := &types.ErrContainerStateNotFound{ContainerId: request.ContainerId}
+	repoClient := &fakeContainerRepoClient{updateStatusErrors: []error{missing, missing}}
+	worker := newContainerFinalizationTestWorker(request, repoClient, nil)
+
+	worker.clearContainer(request.ContainerId, request, 12, false)
+
+	require.Len(t, repoClient.containerStatusUpdates(), 2)
+	require.Equal(t, 1, repoClient.containerExitCodeCalls())
+	require.Equal(t, 1, repoClient.deleteContainerStateCalls())
+	_, exists := worker.containerInstances.Get(request.ContainerId)
+	require.False(t, exists)
+}
+
+func TestDeleteContainerStateRetriesBeforeDroppingLocalInstance(t *testing.T) {
+	repoClient := &fakeContainerRepoClient{
+		deleteStateErrors: []error{errors.New("transient delete failure")},
+	}
+	worker := &Worker{
+		containerRepoClient: repoClient,
+		containerInstances:  common.NewSafeMap[*ContainerInstance](),
+	}
+	worker.containerInstances.Set("container-retry-delete", &ContainerInstance{Id: "container-retry-delete"})
+
+	worker.deleteContainer("container-retry-delete")
+
+	require.Equal(t, 2, repoClient.deleteContainerStateCalls())
+	_, exists := worker.containerInstances.Get("container-retry-delete")
+	require.False(t, exists)
+}
+
+func TestDeleteContainerStateTreatsMissingStateAsDeleted(t *testing.T) {
+	repoClient := &fakeContainerRepoClient{
+		deleteStateErrors: []error{&types.ErrContainerStateNotFound{ContainerId: "container-missing"}},
+	}
+	worker := &Worker{
+		containerRepoClient: repoClient,
+		containerInstances:  common.NewSafeMap[*ContainerInstance](),
+	}
+	worker.containerInstances.Set("container-missing", &ContainerInstance{Id: "container-missing"})
+
+	worker.deleteContainer("container-missing")
+
+	require.Equal(t, 1, repoClient.deleteContainerStateCalls())
+	_, exists := worker.containerInstances.Get("container-missing")
+	require.False(t, exists)
+}
+
+func TestFinishContainerShutdownSkipsGraceWhenRuntimeIsGone(t *testing.T) {
+	repoClient := &fakeContainerRepoClient{}
+	rt := &mockRuntime{state: func(context.Context, string) (runtime.State, error) {
+		return runtime.State{}, runtime.ErrContainerNotFound{ContainerID: "container-gone"}
+	}}
+	request := &types.ContainerRequest{ContainerId: "container-gone"}
+	worker := newContainerFinalizationTestWorker(request, repoClient, rt)
+	worker.config.Worker.TerminationGracePeriod = 30
+
+	done := make(chan struct{})
+	go func() {
+		worker.finishContainerShutdown(request.ContainerId, request)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("shutdown waited for grace after the runtime was gone")
+	}
+	require.Empty(t, rt.signals)
+	require.Equal(t, 1, repoClient.deleteContainerStateCalls())
+}
+
+func TestFinishContainerShutdownDeletesStateBeforeCapacityNotification(t *testing.T) {
+	repoClient := &fakeContainerRepoClient{deleteStateDone: make(chan struct{}, 1)}
+	request := &types.ContainerRequest{ContainerId: "container-blocked-capacity"}
+	worker := newContainerFinalizationTestWorker(request, repoClient, nil)
+	worker.completedRequests = make(chan *types.ContainerRequest)
+
+	done := make(chan struct{})
+	go func() {
+		worker.finishContainerShutdown(request.ContainerId, request)
+		close(done)
+	}()
+
+	select {
+	case <-repoClient.deleteStateDone:
+	case <-time.After(time.Second):
+		t.Fatal("container state deletion was blocked by capacity notification")
+	}
+	require.Eventually(t, func() bool {
+		_, exists := worker.containerInstances.Get(request.ContainerId)
+		return !exists
+	}, time.Second, 10*time.Millisecond)
+
+	select {
+	case completed := <-worker.completedRequests:
+		require.Same(t, request, completed)
+	case <-time.After(time.Second):
+		t.Fatal("capacity notification was not delivered")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not finish after capacity notification")
+	}
+}
+
+func newContainerFinalizationTestWorker(request *types.ContainerRequest, repoClient *fakeContainerRepoClient, rt runtime.Runtime) *Worker {
+	instances := common.NewSafeMap[*ContainerInstance]()
+	instance := &ContainerInstance{Id: request.ContainerId, Request: request, Runtime: rt}
+	instance.setExitCode(-1)
+	instances.Set(request.ContainerId, instance)
+	return &Worker{
+		ctx:                     context.Background(),
+		containerRepoClient:     repoClient,
+		containerInstances:      instances,
+		containerNetworkManager: &fakeContainerNetworkController{},
+		completedRequests:       make(chan *types.ContainerRequest, 1),
+		runtime:                 rt,
+	}
+}
+
+type lockedDurableDiskFinalizationFixture struct {
+	request *types.ContainerRequest
+	lock    *FileLock
+}
+
+func newLockedDurableDiskFinalizationFixture(t *testing.T, containerID string) *lockedDurableDiskFinalizationFixture {
+	t.Helper()
+	diskPath := filepath.Join(t.TempDir(), "disk")
+	lockDir := filepath.Join(filepath.Dir(diskPath), durableDiskLockDir)
+	require.NoError(t, os.MkdirAll(lockDir, 0o755))
+	lock := NewFileLock(filepath.Join(lockDir, filepath.Base(diskPath)+".lock"))
+	require.NoError(t, lock.Acquire())
+	fixture := &lockedDurableDiskFinalizationFixture{
+		request: &types.ContainerRequest{
+			ContainerId: containerID,
+			Mounts: []types.Mount{{
+				LocalPath: diskPath,
+				DurableDisk: &types.DurableDiskMountConfig{
+					Name: containerID,
+					Size: "1Gi",
+				},
+			}},
+		},
+		lock: lock,
+	}
+	t.Cleanup(func() { fixture.release(t) })
+	return fixture
+}
+
+func (f *lockedDurableDiskFinalizationFixture) release(t *testing.T) {
+	t.Helper()
+	if f.lock == nil {
+		return
+	}
+	require.NoError(t, f.lock.Release())
+	f.lock = nil
+}
+
+func (f *lockedDurableDiskFinalizationFixture) releaseAndWaitForClear(t *testing.T, clearDone <-chan struct{}) {
+	t.Helper()
+	f.release(t)
+	select {
+	case <-clearDone:
+	case <-time.After(time.Second):
+		t.Fatal("container cleanup did not finish after releasing the disk lock")
+	}
+}
+
+func clearContainerAsync(worker *Worker, request *types.ContainerRequest, exitCode int) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		worker.clearContainer(request.ContainerId, request, exitCode, false)
+		close(done)
+	}()
+	return done
+}
+
+func requireLocalContainerExitCode(t *testing.T, worker *Worker, containerID string, expected int) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		instance, ok := worker.containerInstances.Get(containerID)
+		if !ok {
+			return false
+		}
+		exitCode, _ := instance.lifecycleState()
+		return exitCode == expected
+	}, time.Second, 10*time.Millisecond)
+}
+
+func blockedDurableDiskPath(t *testing.T) string {
+	blocker := filepath.Join(t.TempDir(), "not-a-directory")
+	require.NoError(t, os.WriteFile(blocker, []byte("blocked"), 0o644))
+	return filepath.Join(blocker, "disk")
 }
 
 func TestContainerExitReasonSeparatesCompletionFromStops(t *testing.T) {

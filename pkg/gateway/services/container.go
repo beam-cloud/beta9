@@ -130,7 +130,7 @@ func (gws GatewayService) CheckpointContainer(ctx context.Context, in *pb.Checkp
 		}, nil
 	}
 
-	resp, err := client.Checkpoint(ctx, in.ContainerId)
+	resp, err := client.Checkpoint(ctx, in.ContainerId, common.ContainerCheckpointOptions{})
 	if err != nil {
 		return &pb.CheckpointContainerResponse{
 			Ok:       false,

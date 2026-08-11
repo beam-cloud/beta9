@@ -413,6 +413,7 @@ message PodSandboxCreateImageFromFilesystemResponse {
 message PodSandboxSnapshotMemoryRequest {
   string stub_id = 1;
   string container_id = 2;
+  bool terminate_after_checkpoint = 3;
 }
 
 message PodSandboxSnapshotMemoryResponse {

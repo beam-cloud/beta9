@@ -506,7 +506,7 @@ func (s *Scheduler) Stop(stopArgs *types.StopContainerArgs) error {
 
 	stoppedBeforeAssignment, err := s.containerRepo.MarkPendingContainerStoppingIfUnassigned(
 		stopArgs.ContainerId,
-		types.ContainerStateTtlSWhilePending,
+		types.ContainerStateTtlSWhileStopping,
 	)
 	if err != nil {
 		return err
@@ -518,7 +518,7 @@ func (s *Scheduler) Stop(stopArgs *types.StopContainerArgs) error {
 		return nil
 	}
 
-	err = s.containerRepo.UpdateContainerStatus(stopArgs.ContainerId, types.ContainerStatusStopping, types.ContainerStateTtlSWhilePending)
+	err = s.containerRepo.UpdateContainerStatus(stopArgs.ContainerId, types.ContainerStatusStopping, types.ContainerStateTtlSWhileStopping)
 	if err != nil {
 		return err
 	}
@@ -597,6 +597,7 @@ func (s *Scheduler) getControllers(request *types.ContainerRequest) ([]WorkerPoo
 	// type before widening.
 	controllers = append(controllers, s.failoverControllers(chain, controllers)...)
 	controllers = filterControllersByFlagsForFailover(controllers, request, chain)
+	controllers = s.filterControllersByCheckpointAccelerator(controllers, request)
 	if len(controllers) == 0 {
 		return nil, errors.New("no controller found for request")
 	}
@@ -1066,6 +1067,9 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 		if !runtimeMatchesCheckpoint(request, workerRuntime(worker)) {
 			continue
 		}
+		if !acceleratorMatchesCheckpoint(request, worker.Gpu) {
+			continue
+		}
 		isGpuWorker := worker.Gpu != ""
 		cpu := request.Cpu
 		memory := capacityMemoryForScheduling(request)
@@ -1103,16 +1107,74 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 	return filteredWorkers
 }
 
-func checkpointRuntime(request *types.ContainerRequest) string {
+func availableCheckpoint(request *types.ContainerRequest) *types.Checkpoint {
 	if request == nil || request.Checkpoint == nil || request.Checkpoint.Status != string(types.CheckpointStatusAvailable) {
+		return nil
+	}
+	return request.Checkpoint
+}
+
+func checkpointRuntime(request *types.ContainerRequest) string {
+	checkpoint := availableCheckpoint(request)
+	if checkpoint == nil {
 		return ""
 	}
-	return strings.TrimSpace(request.Checkpoint.Runtime)
+	return strings.TrimSpace(checkpoint.Runtime)
 }
 
 func runtimeMatchesCheckpoint(request *types.ContainerRequest, runtimeName string) bool {
 	requiredRuntime := checkpointRuntime(request)
 	return requiredRuntime == "" || runtimeName == requiredRuntime
+}
+
+func checkpointAccelerator(request *types.ContainerRequest) string {
+	checkpoint := availableCheckpoint(request)
+	if checkpoint == nil {
+		return ""
+	}
+	return strings.TrimSpace(checkpoint.Accelerator)
+}
+
+func normalizedAccelerator(accelerator string) string {
+	accelerator = strings.TrimSpace(accelerator)
+	if accelerator == "" || strings.EqualFold(accelerator, "CPU") {
+		return "CPU"
+	}
+	normalized := types.NormalizeGPUType(accelerator)
+	if normalized == types.NO_GPU {
+		return "CPU"
+	}
+	return normalized.String()
+}
+
+func acceleratorMatchesCheckpoint(request *types.ContainerRequest, accelerator string) bool {
+	requiredAccelerator := checkpointAccelerator(request)
+	return requiredAccelerator == "" || strings.EqualFold(normalizedAccelerator(accelerator), normalizedAccelerator(requiredAccelerator))
+}
+
+func (s *Scheduler) filterControllersByCheckpointAccelerator(
+	controllers []WorkerPoolController,
+	request *types.ContainerRequest,
+) []WorkerPoolController {
+	if checkpointAccelerator(request) == "" {
+		return controllers
+	}
+
+	filtered := make([]WorkerPoolController, 0, len(controllers))
+	for _, controller := range controllers {
+		pool, ok := s.poolForController(controller)
+		if !ok {
+			continue
+		}
+		if strings.TrimSpace(pool.Config.GPUType) == "" && controllerUsesAgentCapacity(controller) {
+			filtered = append(filtered, controller)
+			continue
+		}
+		if acceleratorMatchesCheckpoint(request, pool.Config.GPUType) {
+			filtered = append(filtered, controller)
+		}
+	}
+	return filtered
 }
 
 func controllerRuntime(controller WorkerPoolController) string {

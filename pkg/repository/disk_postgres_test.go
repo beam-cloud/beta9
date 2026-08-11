@@ -261,12 +261,12 @@ func TestUpdateDiskSnapshotFinalizesManifestReference(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestGetLatestDiskSnapshotOrdersByGeneration(t *testing.T) {
+func TestGetLatestDiskSnapshotOrdersConcurrentGenerationsDeterministically(t *testing.T) {
 	repo, mock := NewBackendPostgresRepositoryForTest()
 	postgresRepo := repo.(*PostgresBackendRepository)
 
 	now := time.Now()
-	mock.ExpectQuery("ORDER BY generation DESC, created_at DESC").
+	mock.ExpectQuery("ORDER BY generation DESC, created_at DESC, id DESC").
 		WithArgs(uint(7), "pg-data", types.DiskSnapshotStatusAvailable).
 		WillReturnRows(diskSnapshotRows().AddRow(
 			uint(2),

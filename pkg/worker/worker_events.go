@@ -150,8 +150,7 @@ func (s *Worker) cancelStoppingContainers() {
 		return
 	}
 	s.containerCancels.Range(func(containerID string, cancel context.CancelFunc) bool {
-		// One slow state lookup must not delay the rest of a burst.
-		go s.cancelContainerIfAlreadyStopping(cancel, containerID)
+		s.cancelContainerIfAlreadyStopping(cancel, containerID)
 		return true
 	})
 }
