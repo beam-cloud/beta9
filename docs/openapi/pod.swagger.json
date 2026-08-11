@@ -1007,6 +1007,9 @@
       "properties": {
         "stubId": {
           "type": "string"
+        },
+        "terminateAfterCheckpoint": {
+          "type": "boolean"
         }
       }
     },

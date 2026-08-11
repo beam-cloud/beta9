@@ -113,21 +113,17 @@ func TestHandleWorkerEventCancelsMatchingBuild(t *testing.T) {
 	}
 }
 
-func TestReconnectCancelsStoppingContainers(t *testing.T) {
-	repoClient := &fakeContainerRepoClient{
-		state: &pb.ContainerState{
-			ContainerId: "build-1",
-			Status:      string(types.ContainerStatusStopping),
-		},
-	}
+func TestReconnectCancelsLocallyStoppingContainers(t *testing.T) {
 	worker := &Worker{
-		containerRepoClient: repoClient,
-		containerCancels:    common.NewSafeMap[context.CancelFunc](),
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		containerCancels:   common.NewSafeMap[context.CancelFunc](),
 	}
 	first, cancelFirst := context.WithCancel(context.Background())
 	second, cancelSecond := context.WithCancel(context.Background())
 	worker.registerContainerCancel("container-1", cancelFirst)
 	worker.registerContainerCancel("container-2", cancelSecond)
+	worker.containerInstances.Set("container-1", &ContainerInstance{ExitCode: -1, StopReason: types.StopContainerReasonUser})
+	worker.containerInstances.Set("container-2", &ContainerInstance{ExitCode: -1, StopReason: types.StopContainerReasonUser})
 
 	worker.cancelStoppingContainers()
 

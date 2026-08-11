@@ -732,6 +732,7 @@ const (
 	ContainerResourceUsageEmissionInterval time.Duration = 3 * time.Second
 )
 const ContainerStateTtlSWhilePending int64 = 1800
+const ContainerStateTtlSWhileStopping int64 = 300
 const ContainerStateTtlS int64 = 120
 const WorkspaceQuotaTtlS int64 = 600
 

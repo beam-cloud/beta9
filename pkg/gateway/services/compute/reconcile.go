@@ -952,7 +952,7 @@ func (s *Service) stopContainerForDisabledWorker(_ context.Context, containerID,
 		}
 		return
 	}
-	if err := s.containerRepo.UpdateContainerStatus(containerID, types.ContainerStatusStopping, types.ContainerStateTtlSWhilePending); err != nil {
+	if err := s.containerRepo.UpdateContainerStatus(containerID, types.ContainerStatusStopping, types.ContainerStateTtlSWhileStopping); err != nil {
 		log.Warn().Err(err).Str("container_id", containerID).Msg("failed to mark container stopping on disabled worker")
 	}
 }

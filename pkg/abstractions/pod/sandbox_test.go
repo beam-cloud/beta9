@@ -524,6 +524,7 @@ type sandboxReconnectStatusServer struct {
 	mu                   sync.Mutex
 	unavailableResponses int
 	statusCalls          atomic.Int32
+	checkpointRequests   chan *pb.ContainerCheckpointRequest
 }
 
 func (s *sandboxReconnectStatusServer) failNextStatusCalls(count int) {
@@ -549,6 +550,19 @@ func (s *sandboxReconnectStatusServer) ContainerSandboxStatus(
 	}, nil
 }
 
+func (s *sandboxReconnectStatusServer) ContainerCheckpoint(
+	_ context.Context,
+	in *pb.ContainerCheckpointRequest,
+) (*pb.ContainerCheckpointResponse, error) {
+	request := *in
+	s.checkpointRequests <- &request
+	return &pb.ContainerCheckpointResponse{
+		Ok:           true,
+		CheckpointId: "checkpoint-1",
+		Runtime:      types.ContainerRuntimeRunc.String(),
+	}, nil
+}
+
 type sandboxReconnectTestHarness struct {
 	service     *GenericPodService
 	repository  *sandboxReconnectTestRepository
@@ -568,7 +582,7 @@ func newSandboxReconnectTestHarness(t *testing.T) *sandboxReconnectTestHarness {
 		t.Fatalf("listen: %v", err)
 	}
 	listener := newTrackedSandboxListener(rawListener)
-	statusServer := &sandboxReconnectStatusServer{}
+	statusServer := &sandboxReconnectStatusServer{checkpointRequests: make(chan *pb.ContainerCheckpointRequest, 2)}
 	workerServer := grpc.NewServer()
 	pb.RegisterContainerServiceServer(workerServer, statusServer)
 	go func() {
@@ -614,6 +628,26 @@ func newSandboxReconnectTestHarness(t *testing.T) *sandboxReconnectTestHarness {
 		containerID: containerID,
 		stubID:      stubID,
 		cacheKey:    sandboxClientCacheKey(workerAddress, token),
+	}
+}
+
+func TestSandboxSnapshotMemoryForwardsTerminalIntent(t *testing.T) {
+	harness := newSandboxReconnectTestHarness(t)
+	for _, terminate := range []bool{false, true} {
+		response, err := harness.service.SandboxSnapshotMemory(harness.context, &pb.PodSandboxSnapshotMemoryRequest{
+			ContainerId:              harness.containerID,
+			TerminateAfterCheckpoint: terminate,
+		})
+		if err != nil {
+			t.Fatalf("SandboxSnapshotMemory: %v", err)
+		}
+		if !response.Ok || response.CheckpointId != "checkpoint-1" {
+			t.Fatalf("SandboxSnapshotMemory response = %+v", response)
+		}
+		request := <-harness.server.checkpointRequests
+		if request.ContainerId != harness.containerID || request.TerminateAfterCheckpoint != terminate {
+			t.Fatalf("worker checkpoint request = %+v, want terminate=%t", request, terminate)
+		}
 	}
 }
 

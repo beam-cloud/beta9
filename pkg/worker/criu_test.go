@@ -16,6 +16,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -23,9 +25,11 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/runtime"
 	types "github.com/beam-cloud/beta9/pkg/types"
+	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 )
 
 // MockRuntime is a mock implementation of runtime.Runtime for testing
@@ -57,7 +61,380 @@ type staticCheckpointManager struct {
 type restoringCheckpointManager struct{}
 
 type observingCheckpointManager struct {
-	create func() error
+	create func(bool) error
+}
+
+type blockingCheckpointManager struct {
+	path    string
+	err     error
+	started chan bool
+	release chan struct{}
+}
+
+type contextBoundCheckpointBackend struct {
+	*fakeBackendRepoClient
+	started chan context.Context
+	release chan struct{}
+}
+
+func (b *contextBoundCheckpointBackend) CreateCheckpoint(
+	ctx context.Context,
+	_ *pb.CreateCheckpointRequest,
+	_ ...grpc.CallOption,
+) (*pb.CreateCheckpointResponse, error) {
+	b.started <- ctx
+	if b.release != nil {
+		select {
+		case <-b.release:
+			return &pb.CreateCheckpointResponse{Ok: true}, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+type terminalRunRuntime struct {
+	*MockRuntime
+	entered     chan struct{}
+	enteredOnce sync.Once
+	release     chan struct{}
+	runCalls    int
+}
+
+type blockingOOMKillRuntime struct {
+	*MockRuntime
+	started     chan struct{}
+	once        sync.Once
+	mu          sync.Mutex
+	signal      syscall.Signal
+	all         bool
+	killCalls   int
+	deleteCalls int
+	deleteErr   error
+}
+
+func (r *blockingOOMKillRuntime) Kill(ctx context.Context, _ string, signal syscall.Signal, opts *runtime.KillOpts) error {
+	r.mu.Lock()
+	r.signal = signal
+	r.all = opts != nil && opts.All
+	r.killCalls++
+	r.mu.Unlock()
+	r.once.Do(func() { close(r.started) })
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (r *blockingOOMKillRuntime) Delete(context.Context, string, *runtime.DeleteOpts) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.deleteCalls++
+	return r.deleteErr
+}
+
+func (r *blockingOOMKillRuntime) terminationRequests() (syscall.Signal, bool, int, int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.signal, r.all, r.killCalls, r.deleteCalls
+}
+
+type recordingOOMWatcher struct {
+	mu      sync.Mutex
+	stopped bool
+	onOOM   func()
+}
+
+func (w *recordingOOMWatcher) Watch(onOOM func()) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.onOOM = onOOM
+	return nil
+}
+
+func (w *recordingOOMWatcher) Stop() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.stopped = true
+}
+
+func (w *recordingOOMWatcher) isStopped() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.stopped
+}
+
+func (w *recordingOOMWatcher) trigger() {
+	w.mu.Lock()
+	onOOM := w.onOOM
+	w.mu.Unlock()
+	if onOOM != nil {
+		onOOM()
+	}
+}
+
+type recordingOOMWatcherFactory struct {
+	mu       sync.Mutex
+	watchers []*recordingOOMWatcher
+}
+
+func (f *recordingOOMWatcherFactory) create(onOOM func()) runtime.OOMWatcher {
+	watcher := &recordingOOMWatcher{}
+	_ = watcher.Watch(onOOM)
+	f.mu.Lock()
+	f.watchers = append(f.watchers, watcher)
+	f.mu.Unlock()
+	return watcher
+}
+
+func TestOOMWatcherResumeCannotOutliveContainerStop(t *testing.T) {
+	instance := &ContainerInstance{}
+	resumeStarted := make(chan struct{})
+	resumeRelease := make(chan struct{})
+	var mu sync.Mutex
+	var created []*recordingOOMWatcher
+	factory := func(onOOM func()) runtime.OOMWatcher {
+		watcher := &recordingOOMWatcher{}
+		_ = watcher.Watch(onOOM)
+		mu.Lock()
+		created = append(created, watcher)
+		call := len(created)
+		mu.Unlock()
+		if call == 2 {
+			close(resumeStarted)
+			<-resumeRelease
+		}
+		return watcher
+	}
+	instance.installOOMWatcher(factory, func() error { return nil })
+	resume := instance.suspendOOMWatcher()
+
+	resumeDone := make(chan struct{})
+	go func() {
+		defer close(resumeDone)
+		resume()
+	}()
+	<-resumeStarted
+	stopDone := make(chan struct{})
+	go func() {
+		defer close(stopDone)
+		instance.stopOOMWatcher()
+	}()
+	close(resumeRelease)
+	<-resumeDone
+	<-stopDone
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, created, 2)
+	require.True(t, created[0].isStopped())
+	require.True(t, created[1].isStopped())
+	require.False(t, instance.hasOOMWatcher())
+}
+
+func TestSuspendOOMWatcherWaitsForCallbackAndRejectsStaleCallbacks(t *testing.T) {
+	instance := &ContainerInstance{}
+	callbackStarted := make(chan struct{})
+	callbackRelease := make(chan struct{})
+	callbackDone := make(chan struct{})
+	var watcher *recordingOOMWatcher
+	instance.installOOMWatcher(func(onOOM func()) runtime.OOMWatcher {
+		watcher = &recordingOOMWatcher{}
+		_ = watcher.Watch(onOOM)
+		return watcher
+	}, func() error {
+		close(callbackStarted)
+		<-callbackRelease
+		close(callbackDone)
+		return nil
+	})
+
+	go watcher.trigger()
+	<-callbackStarted
+	suspended := make(chan func(), 1)
+	go func() { suspended <- instance.suspendOOMWatcher() }()
+	select {
+	case <-suspended:
+		t.Fatal("suspend returned while an OOM callback was active")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(callbackRelease)
+	<-callbackDone
+	resume := <-suspended
+
+	staleWatcher := watcher
+	resume()
+	staleWatcher.trigger()
+}
+
+func TestTerminalCheckpointRejectsUnresolvedGvisorOOMKill(t *testing.T) {
+	containerID := "oom-container"
+	request := &types.ContainerRequest{
+		ContainerId: containerID,
+		WorkspaceId: "workspace",
+		StubId:      "stub",
+	}
+	rt := &blockingOOMKillRuntime{
+		MockRuntime: NewMockRuntime(types.ContainerRuntimeGvisor.String(), runtime.Capabilities{CheckpointRestore: true}),
+		started:     make(chan struct{}),
+		deleteErr:   errors.New("force delete failed"),
+	}
+	checkpointStarted := make(chan struct{}, 1)
+	manager := &observingCheckpointManager{create: func(bool) error {
+		checkpointStarted <- struct{}{}
+		return nil
+	}}
+	worker := &Worker{
+		runtime:            NewMockRuntime(types.ContainerRuntimeRunc.String(), runtime.Capabilities{CheckpointRestore: true}),
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		containerCancels:   common.NewSafeMap[context.CancelFunc](),
+		criuManager:        manager,
+	}
+	terminationCtx, cancelTermination := context.WithCancel(context.Background())
+	worker.registerContainerCancel(containerID, cancelTermination)
+	defer worker.unregisterContainerCancel(containerID)
+	instance := &ContainerInstance{
+		Id:      containerID,
+		Request: request,
+		Runtime: rt,
+		Overlay: common.NewContainerOverlay(request, filepath.Join(t.TempDir(), "merged"), t.TempDir()),
+	}
+	watchers := &recordingOOMWatcherFactory{}
+	oomCtx, cancelOOM := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancelOOM()
+	var isOOMKilled atomic.Bool
+	instance.installOOMWatcher(watchers.create, func() error {
+		return worker.handleOOMKill(oomCtx, containerID, request, slog.New(slog.NewTextHandler(io.Discard, nil)), &isOOMKilled)
+	})
+	worker.containerInstances.Set(containerID, instance)
+
+	created := watchers.all()
+	require.Len(t, created, 1)
+	oomDone := make(chan struct{})
+	go func() {
+		created[0].trigger()
+		close(oomDone)
+	}()
+	<-rt.started
+
+	checkpointDone := make(chan error, 1)
+	go func() {
+		checkpointDone <- worker.createCheckpoint(context.Background(), &CreateCheckpointOpts{
+			Request:                  request,
+			CheckpointId:             "checkpoint",
+			TerminateAfterCheckpoint: true,
+		})
+	}()
+
+	select {
+	case <-checkpointStarted:
+		t.Fatal("CRIU started while the OOM kill was unresolved")
+	case err := <-checkpointDone:
+		t.Fatalf("terminal checkpoint returned before the bounded OOM kill completed: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	select {
+	case <-oomDone:
+	case <-time.After(time.Second):
+		t.Fatal("OOM kill did not respect its context deadline")
+	}
+	err := <-checkpointDone
+	require.ErrorContains(t, err, "cannot create terminal checkpoint because OOM termination did not complete")
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	select {
+	case <-checkpointStarted:
+		t.Fatal("CRIU started after the OOM kill timed out")
+	default:
+	}
+	require.True(t, isOOMKilled.Load())
+	signal, all, killCalls, deleteCalls := rt.terminationRequests()
+	require.Equal(t, syscall.SIGKILL, signal)
+	require.True(t, all)
+	require.Equal(t, 1, killCalls)
+	require.Equal(t, 1, deleteCalls)
+	require.ErrorIs(t, terminationCtx.Err(), context.Canceled)
+	_, stopReason := instance.lifecycleState()
+	require.Equal(t, types.StopContainerReasonUnknown, stopReason)
+	created = watchers.all()
+	require.Len(t, created, 2, "an unresolved kill must resume OOM monitoring")
+	require.False(t, created[1].isStopped())
+	require.True(t, instance.hasOOMWatcher())
+}
+
+func TestTerminalCheckpointDoesNotResumeWatcherAfterOOMKillTimeoutAndForceDelete(t *testing.T) {
+	containerID := "oom-killed-container"
+	request := &types.ContainerRequest{
+		ContainerId: containerID,
+		WorkspaceId: "workspace",
+		StubId:      "stub",
+	}
+	rt := &blockingOOMKillRuntime{
+		MockRuntime: NewMockRuntime(types.ContainerRuntimeGvisor.String(), runtime.Capabilities{CheckpointRestore: true}),
+		started:     make(chan struct{}),
+	}
+	checkpointStarted := make(chan struct{}, 1)
+	worker := &Worker{
+		runtime:            NewMockRuntime(types.ContainerRuntimeRunc.String(), runtime.Capabilities{CheckpointRestore: true}),
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		containerCancels:   common.NewSafeMap[context.CancelFunc](),
+		criuManager: &observingCheckpointManager{create: func(bool) error {
+			checkpointStarted <- struct{}{}
+			return nil
+		}},
+	}
+	terminationCtx, cancelTermination := context.WithCancel(context.Background())
+	worker.registerContainerCancel(containerID, cancelTermination)
+	defer worker.unregisterContainerCancel(containerID)
+	instance := &ContainerInstance{
+		Id:      containerID,
+		Request: request,
+		Runtime: rt,
+		Overlay: common.NewContainerOverlay(request, filepath.Join(t.TempDir(), "merged"), t.TempDir()),
+	}
+	watchers := &recordingOOMWatcherFactory{}
+	oomCtx, cancelOOM := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancelOOM()
+	var isOOMKilled atomic.Bool
+	instance.installOOMWatcher(watchers.create, func() error {
+		return worker.handleOOMKill(oomCtx, containerID, request, slog.New(slog.NewTextHandler(io.Discard, nil)), &isOOMKilled)
+	})
+	worker.containerInstances.Set(containerID, instance)
+
+	created := watchers.all()
+	require.Len(t, created, 1)
+	created[0].trigger()
+	err := worker.createCheckpoint(context.Background(), &CreateCheckpointOpts{
+		Request:                  request,
+		CheckpointId:             "checkpoint",
+		TerminateAfterCheckpoint: true,
+	})
+
+	require.ErrorContains(t, err, "container was terminated after OOM")
+	select {
+	case <-checkpointStarted:
+		t.Fatal("CRIU started after the OOM kill completed")
+	default:
+	}
+	require.True(t, isOOMKilled.Load())
+	signal, all, killCalls, deleteCalls := rt.terminationRequests()
+	require.Equal(t, syscall.SIGKILL, signal)
+	require.True(t, all)
+	require.Equal(t, 1, killCalls)
+	require.Equal(t, 1, deleteCalls)
+	require.ErrorIs(t, terminationCtx.Err(), context.Canceled)
+	_, stopReason := instance.lifecycleState()
+	require.Equal(t, types.StopContainerReasonUnknown, stopReason)
+	created = watchers.all()
+	require.Len(t, created, 1, "a successful OOM kill must not reinstall the watcher")
+	require.True(t, created[0].isStopped())
+	require.False(t, instance.hasOOMWatcher())
+}
+
+func (f *recordingOOMWatcherFactory) all() []*recordingOOMWatcher {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]*recordingOOMWatcher(nil), f.watchers...)
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -140,12 +517,48 @@ func (*observingCheckpointManager) Available() bool {
 	return true
 }
 
-func (m *observingCheckpointManager) CreateCheckpoint(context.Context, runtime.Runtime, string, *types.ContainerRequest, bool) (string, error) {
-	return "", m.create()
+func (m *observingCheckpointManager) CreateCheckpoint(_ context.Context, _ runtime.Runtime, _ string, _ *types.ContainerRequest, terminate bool) (string, error) {
+	return "", m.create(terminate)
 }
 
 func (*observingCheckpointManager) RestoreCheckpoint(context.Context, runtime.Runtime, *RestoreOpts) (int, error) {
 	return -1, errors.New("not implemented")
+}
+
+func (*blockingCheckpointManager) Available() bool {
+	return true
+}
+
+func (m *blockingCheckpointManager) CreateCheckpoint(_ context.Context, _ runtime.Runtime, _ string, _ *types.ContainerRequest, terminate bool) (string, error) {
+	m.started <- terminate
+	<-m.release
+	return m.path, m.err
+}
+
+func (*blockingCheckpointManager) RestoreCheckpoint(context.Context, runtime.Runtime, *RestoreOpts) (int, error) {
+	return -1, errors.New("not implemented")
+}
+
+func (r *terminalRunRuntime) Run(context.Context, string, string, *runtime.RunOpts) (int, error) {
+	r.runCalls++
+	r.enteredOnce.Do(func() { close(r.entered) })
+	<-r.release
+	return -1, errors.New("runtime stopped by checkpoint")
+}
+
+func TestTerminalRunRuntimeToleratesUnexpectedSecondRun(t *testing.T) {
+	release := make(chan struct{})
+	close(release)
+	rt := &terminalRunRuntime{
+		MockRuntime: NewMockRuntime(types.ContainerRuntimeRunc.String(), runtime.Capabilities{}),
+		entered:     make(chan struct{}),
+		release:     release,
+	}
+
+	_, _ = rt.Run(context.Background(), "container", "bundle", nil)
+	_, _ = rt.Run(context.Background(), "container", "bundle", nil)
+
+	require.Equal(t, 2, rt.runCalls)
 }
 
 func TestCheckpointRuntimeEnvironmentOverrides(t *testing.T) {
@@ -507,6 +920,45 @@ func TestAutomaticStopIsDeferredDuringCheckpoint(t *testing.T) {
 	}
 }
 
+func TestGvisorOOMBypassesAutomaticCheckpointDeferral(t *testing.T) {
+	request := &types.ContainerRequest{ContainerId: "oom-container", WorkspaceId: "workspace", StubId: "stub"}
+	rt := NewMockRuntime(types.ContainerRuntimeGvisor.String(), runtime.Capabilities{CheckpointRestore: true})
+	worker := &Worker{
+		ctx:                context.Background(),
+		runtime:            rt,
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		stopContainerChan:  make(chan stopContainerEvent, 1),
+	}
+	worker.containerInstances.Set(request.ContainerId, &ContainerInstance{
+		Id:         request.ContainerId,
+		Request:    request,
+		Runtime:    rt,
+		StopReason: types.StopContainerReasonScheduler,
+	})
+	state, acquired := worker.acquireCheckpointCreateLock(request)
+	require.True(t, acquired)
+	defer worker.finishCheckpointCreate(request, state)
+	var isOOMKilled atomic.Bool
+
+	err := worker.handleOOMKill(
+		context.Background(),
+		request.ContainerId,
+		request,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		&isOOMKilled,
+	)
+
+	require.NoError(t, err)
+	require.True(t, isOOMKilled.Load())
+	require.True(t, rt.killCalled)
+	require.Equal(t, syscall.SIGKILL, rt.killSignal)
+	select {
+	case event := <-worker.stopContainerChan:
+		t.Fatalf("OOM kill was deferred behind checkpoint: %+v", event)
+	default:
+	}
+}
+
 func TestTerminalCheckpointDoesNotReplaySatisfiedStop(t *testing.T) {
 	request := &types.ContainerRequest{ContainerId: "container", WorkspaceId: "workspace", StubId: "stub"}
 	worker := &Worker{stopContainerChan: make(chan stopContainerEvent, 1)}
@@ -541,6 +993,188 @@ func TestTerminalCheckpointDoesNotReplaySatisfiedStop(t *testing.T) {
 	case event := <-worker.stopContainerChan:
 		t.Fatalf("terminal checkpoint replayed satisfied stop: %+v", event)
 	default:
+	}
+}
+
+func TestDirectTerminalCheckpointWaitsUntilPersistenceFailure(t *testing.T) {
+	root := t.TempDir()
+	containerID := "terminal-container"
+	request := &types.ContainerRequest{
+		ContainerId: containerID,
+		WorkspaceId: "workspace",
+		StubId:      "stub",
+	}
+	checkpointPath := filepath.Join(root, "checkpoint")
+	if err := os.MkdirAll(checkpointPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(checkpointPath, "inventory.img"), []byte("runtime"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	overlayRoot := filepath.Join(root, "overlay", "merged")
+	upperPath := filepath.Join(root, "overlay", "upper")
+	if err := os.MkdirAll(upperPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(upperPath, "state.txt"), []byte("filesystem"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	manager := &blockingCheckpointManager{
+		path:    checkpointPath,
+		started: make(chan bool, 1),
+		release: make(chan struct{}),
+	}
+	backend := &contextBoundCheckpointBackend{
+		fakeBackendRepoClient: &fakeBackendRepoClient{},
+		started:               make(chan context.Context, 1),
+		release:               make(chan struct{}),
+	}
+	rt := &terminalRunRuntime{
+		MockRuntime: NewMockRuntime(types.ContainerRuntimeRunc.String(), runtime.Capabilities{CheckpointRestore: true}),
+		entered:     make(chan struct{}),
+		release:     make(chan struct{}),
+	}
+	worker := &Worker{
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		criuManager:        manager,
+		backendRepoClient:  backend,
+	}
+	instance := &ContainerInstance{
+		Id:      containerID,
+		Request: request,
+		Runtime: rt,
+		Overlay: common.NewContainerOverlay(request, overlayRoot, filepath.Join(root, "overlay-storage")),
+	}
+	worker.containerInstances.Set(containerID, instance)
+	lifecycleCtx, cancelLifecycle := context.WithCancel(context.Background())
+	defer cancelLifecycle()
+	lifecycleDone := make(chan error, 1)
+	go func() {
+		_, err := worker.runContainer(
+			lifecycleCtx,
+			request,
+			slog.New(slog.NewTextHandler(io.Discard, nil)),
+			common.NewOutputWriter(func(string) {}),
+			make(chan int, 1),
+			make(chan int, 1),
+			time.Now(),
+			nil,
+			nil,
+		)
+		lifecycleDone <- err
+	}()
+	<-rt.entered
+
+	checkpointCtx, cancelCheckpoint := context.WithCancel(context.Background())
+	defer cancelCheckpoint()
+	checkpointDone := make(chan error, 1)
+	go func() {
+		checkpointDone <- worker.createCheckpoint(checkpointCtx, &CreateCheckpointOpts{
+			Request:                  request,
+			CheckpointId:             "checkpoint",
+			TerminateAfterCheckpoint: true,
+		})
+	}()
+	if terminate := <-manager.started; !terminate {
+		t.Fatal("terminal checkpoint reached CRIU as a hot checkpoint")
+	}
+
+	close(rt.release)
+	// Runtime termination is irreversible. Neither the request transport nor the
+	// spawn context may let lifecycle cleanup race checkpoint persistence.
+	cancelCheckpoint()
+	cancelLifecycle()
+	select {
+	case err := <-lifecycleDone:
+		t.Fatalf("lifecycle returned before checkpoint persistence completed: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	select {
+	case err := <-checkpointDone:
+		t.Fatalf("checkpoint returned before persistence was released: %v", err)
+	default:
+	}
+
+	close(manager.release)
+	publicationCtx := <-backend.started
+	_, bounded := publicationCtx.Deadline()
+	require.True(t, bounded, "terminal failure publication must be bounded")
+	select {
+	case err := <-lifecycleDone:
+		t.Fatalf("lifecycle returned before terminal checkpoint state publication unwound: %v", err)
+	default:
+	}
+	close(backend.release)
+	err := <-checkpointDone
+	if err == nil || !strings.Contains(err.Error(), "cache is required") {
+		t.Fatalf("createCheckpoint error = %v, want persistence failure", err)
+	}
+	if err := <-lifecycleDone; err != nil {
+		t.Fatalf("terminal runtime exit escaped lifecycle: %v", err)
+	}
+	select {
+	case err := <-lifecycleDone:
+		t.Fatalf("lifecycle completed more than once: %v", err)
+	default:
+	}
+	if rt.runCalls != 1 {
+		t.Fatalf("runtime Run calls = %d, want 1", rt.runCalls)
+	}
+	if _, reason := instance.lifecycleState(); reason != types.StopContainerReasonUser {
+		t.Fatalf("stop reason = %q, want user", reason)
+	}
+	if _, ok := worker.loadCheckpointCreateState(request); ok {
+		t.Fatal("terminal checkpoint state survived persistence failure")
+	}
+}
+
+func TestDirectTerminalCheckpointFailureBeforeRuntimeStopStaysRunning(t *testing.T) {
+	containerID := "running-container"
+	request := &types.ContainerRequest{ContainerId: containerID, WorkspaceId: "workspace", StubId: "stub"}
+	watchers := &recordingOOMWatcherFactory{}
+	manager := &observingCheckpointManager{
+		create: func(terminate bool) error {
+			require.True(t, terminate)
+			created := watchers.all()
+			require.Len(t, created, 1)
+			require.True(t, created[0].isStopped(), "OOM watcher must stop before terminal checkpointing")
+			return errors.New("runtime checkpoint failed")
+		},
+	}
+	rt := NewMockRuntime(types.ContainerRuntimeGvisor.String(), runtime.Capabilities{CheckpointRestore: true})
+	rt.state = runtime.State{Status: types.RuncContainerStatusRunning}
+	worker := &Worker{
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		criuManager:        manager,
+	}
+	instance := &ContainerInstance{
+		Id:      containerID,
+		Request: request,
+		Runtime: rt,
+		Overlay: common.NewContainerOverlay(request, filepath.Join(t.TempDir(), "merged"), t.TempDir()),
+	}
+	instance.installOOMWatcher(watchers.create, func() error { return nil })
+	worker.containerInstances.Set(containerID, instance)
+
+	err := worker.createCheckpoint(context.Background(), &CreateCheckpointOpts{
+		Request:                  request,
+		CheckpointId:             "checkpoint",
+		TerminateAfterCheckpoint: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "runtime checkpoint failed") {
+		t.Fatalf("createCheckpoint error = %v", err)
+	}
+	created := watchers.all()
+	require.Len(t, created, 2)
+	require.True(t, created[0].isStopped())
+	require.False(t, created[1].isStopped())
+	require.True(t, instance.hasOOMWatcher())
+	if _, reason := instance.lifecycleState(); reason == types.StopContainerReasonUser {
+		t.Fatal("pre-termination failure marked the running container stopped")
+	}
+	if _, ok := worker.loadCheckpointCreateState(request); ok {
+		t.Fatal("terminal checkpoint state survived pre-termination failure")
 	}
 }
 
@@ -1329,7 +1963,7 @@ func TestMarkCheckpointFailedRetainsPersistedMetadata(t *testing.T) {
 		accelerator: "A10G",
 	}
 
-	worker.markCheckpointFailed(&CreateCheckpointOpts{
+	worker.markCheckpointFailed(context.Background(), &CreateCheckpointOpts{
 		Request: &types.ContainerRequest{
 			ContainerId: "container-a",
 			Stub:        types.StubWithRelated{Stub: types.Stub{ExternalId: "stub-a"}},
@@ -1347,6 +1981,34 @@ func TestMarkCheckpointFailedRetainsPersistedMetadata(t *testing.T) {
 	if got.Runtime != types.ContainerRuntimeGvisor.String() {
 		t.Fatalf("checkpoint runtime = %q, want gvisor", got.Runtime)
 	}
+}
+
+func TestCheckpointStatePublicationIsBoundedAndFailureContextIsWorkerOwned(t *testing.T) {
+	backend := &contextBoundCheckpointBackend{
+		fakeBackendRepoClient: &fakeBackendRepoClient{},
+		started:               make(chan context.Context, 1),
+	}
+	worker := &Worker{backendRepoClient: backend}
+	request := &types.ContainerRequest{ContainerId: "container-state", Stub: types.StubWithRelated{Stub: types.Stub{ExternalId: "stub-state"}}}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	startedAt := time.Now()
+	err := worker.createCheckpointState(ctx, "checkpoint-state", request, types.CheckpointStatusAvailable, "", "runc", nil)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Less(t, time.Since(startedAt), time.Second)
+	publicationCtx := <-backend.started
+	_, bounded := publicationCtx.Deadline()
+	require.True(t, bounded)
+
+	callerCtx, cancelCaller := context.WithCancel(context.Background())
+	cancelCaller()
+	failureCtx, cancelFailure := checkpointStatePublicationContext(callerCtx)
+	defer cancelFailure()
+	require.NoError(t, failureCtx.Err(), "failure publication must survive request cancellation")
+	deadline, bounded := failureCtx.Deadline()
+	require.True(t, bounded)
+	require.WithinDuration(t, time.Now().Add(checkpointStatePublicationTTL), deadline, time.Second)
 }
 
 func TestCreateCheckpointRetriesTransientGvisorTCPStateError(t *testing.T) {

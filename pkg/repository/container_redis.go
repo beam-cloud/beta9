@@ -312,14 +312,14 @@ func (cr *ContainerRedisRepository) GetContainerExitCode(containerId string) (in
 	return exitCode, nil
 }
 
-func (cr *ContainerRedisRepository) UpdateContainerStatus(containerId string, status types.ContainerStatus, expirySeconds int64) error {
+func (cr *ContainerRedisRepository) UpdateContainerStatus(containerId string, requestedStatus types.ContainerStatus, expirySeconds int64) error {
 	expiry := time.Duration(expirySeconds) * time.Second
 
-	switch status {
+	switch requestedStatus {
 	case types.ContainerStatusPending, types.ContainerStatusRunning, types.ContainerStatusStopping:
 		// continue
 	default:
-		return fmt.Errorf("invalid status: %s", status)
+		return fmt.Errorf("invalid status: %s", requestedStatus)
 	}
 
 	err := cr.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerContainerLock(containerId), containerStateLockOptions)
@@ -334,6 +334,9 @@ func (cr *ContainerRedisRepository) UpdateContainerStatus(containerId string, st
 	if err != nil {
 		return err
 	}
+	if len(res) == 0 {
+		return &types.ErrContainerStateNotFound{ContainerId: containerId}
+	}
 
 	// Convert response to struct
 	state := &types.ContainerState{}
@@ -342,18 +345,20 @@ func (cr *ContainerRedisRepository) UpdateContainerStatus(containerId string, st
 		return fmt.Errorf("failed to deserialize container state: %v", err)
 	}
 
-	previousStatus := types.ContainerStatus(state.Status)
-	if status == types.ContainerStatusRunning && previousStatus == types.ContainerStatusStopping {
+	storedStatus := types.ContainerStatus(state.Status)
+	if !containerStatusTransitionAllowed(storedStatus, requestedStatus) {
+		// A delayed heartbeat must never move lifecycle state backward. In
+		// particular, STOPPING is terminal until the state is deleted.
 		return nil
 	}
 
 	// Update StartedAt if this is the first time we set container status to RUNNING
-	if status == types.ContainerStatusRunning && previousStatus != types.ContainerStatusRunning {
+	if requestedStatus == types.ContainerStatusRunning && storedStatus != types.ContainerStatusRunning {
 		state.StartedAt = time.Now().Unix()
 	}
 
 	// Update status
-	state.Status = status
+	state.Status = requestedStatus
 
 	// Save state to database
 	pipe := cr.rdb.TxPipeline()
@@ -367,7 +372,7 @@ func (cr *ContainerRedisRepository) UpdateContainerStatus(containerId string, st
 		return fmt.Errorf("failed to set container state ttl <%v>: %w", stateKey, err)
 	}
 
-	if status == types.ContainerStatusStopping {
+	if requestedStatus == types.ContainerStatusStopping {
 		// The release script is idempotent. Run it on every STOPPING update so
 		// callers can retry if a previous release failed after status persisted.
 		if err := cr.releaseContainerConcurrencyReservation(context.TODO(), state.WorkspaceId, containerId); err != nil {
@@ -376,6 +381,22 @@ func (cr *ContainerRedisRepository) UpdateContainerStatus(containerId string, st
 	}
 
 	return nil
+}
+
+func containerStatusTransitionAllowed(storedStatus, requestedStatus types.ContainerStatus) bool {
+	switch storedStatus {
+	case types.ContainerStatusPending:
+		return requestedStatus == types.ContainerStatusPending ||
+			requestedStatus == types.ContainerStatusRunning ||
+			requestedStatus == types.ContainerStatusStopping
+	case types.ContainerStatusRunning:
+		return requestedStatus == types.ContainerStatusRunning ||
+			requestedStatus == types.ContainerStatusStopping
+	case types.ContainerStatusStopping:
+		return requestedStatus == types.ContainerStatusStopping
+	default:
+		return false
+	}
 }
 
 var markPendingContainerStoppingIfUnassignedScript = redis.NewScript(`
@@ -393,6 +414,12 @@ return 1
 `)
 
 func (cr *ContainerRedisRepository) MarkPendingContainerStoppingIfUnassigned(containerId string, expirySeconds int64) (bool, error) {
+	lockKey := common.RedisKeys.SchedulerContainerLock(containerId)
+	if err := cr.lock.Acquire(context.TODO(), lockKey, containerStateLockOptions); err != nil {
+		return false, err
+	}
+	defer cr.lock.Release(lockKey)
+
 	stateKey := common.RedisKeys.SchedulerContainerState(containerId)
 	marked, err := markPendingContainerStoppingIfUnassignedScript.Run(context.TODO(), cr.rdb, []string{
 		stateKey,
@@ -973,37 +1000,75 @@ func (cr *ContainerRedisRepository) GetFailedContainersByStubId(stubId string) (
 	return failedContainerIds, nil
 }
 
-func (c *ContainerRedisRepository) SetContainerStateWithConcurrencyLimit(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error {
-	return c.createContainerState(quota, request, false)
+// ReserveContainerConcurrencyForPending applies workspace quota accounting to an
+// already-created PENDING container without changing its state or TTL. Initial
+// admissions, including serverless, use CreateContainerStateWithConcurrencyLimit;
+// this transition is for a quota-exempt request rerouted to accounted capacity.
+func (c *ContainerRedisRepository) ReserveContainerConcurrencyForPending(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error {
+	if request == nil || request.ContainerId == "" {
+		return errors.New("container request is required")
+	}
+
+	if quota == nil {
+		_, err := c.tryReserveContainerConcurrencyForPending(nil, request)
+		return err
+	}
+
+	return c.reserveContainerConcurrencyWithAttempt(quota, request, func() (string, error) {
+		return c.tryReserveContainerConcurrencyForPending(quota, request)
+	})
+}
+
+func (c *ContainerRedisRepository) tryReserveContainerConcurrencyForPending(quota *types.ConcurrencyLimit, request *types.ContainerRequest) (string, error) {
+	lockKey := common.RedisKeys.SchedulerContainerLock(request.ContainerId)
+	if err := c.lock.Acquire(context.TODO(), lockKey, containerStateLockOptions); err != nil {
+		return "", err
+	}
+	defer c.lock.Release(lockKey)
+
+	ctx := context.TODO()
+	storedStatus, err := c.rdb.HGet(ctx, common.RedisKeys.SchedulerContainerState(request.ContainerId), "status").Result()
+	if err == redis.Nil {
+		return "", &types.ErrContainerStateNotFound{ContainerId: request.ContainerId}
+	}
+	if err != nil {
+		return "", fmt.Errorf("failed to get container status: %w", err)
+	}
+	if types.ContainerStatus(storedStatus) != types.ContainerStatusPending {
+		return "", fmt.Errorf("container <%s> is no longer pending (stored status: %s)", request.ContainerId, storedStatus)
+	}
+	if quota == nil {
+		return "", nil
+	}
+
+	return c.tryReserveContainerConcurrencyWithContext(ctx, quota, request)
 }
 
 func (c *ContainerRedisRepository) CreateContainerStateWithConcurrencyLimit(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error {
-	return c.createContainerState(quota, request, true)
+	return c.createContainerState(quota, request)
 }
 
-func (c *ContainerRedisRepository) createContainerState(quota *types.ConcurrencyLimit, request *types.ContainerRequest, rejectDuplicate bool) error {
-	setState := c.SetContainerState
-	if rejectDuplicate {
-		lockKey := common.RedisKeys.SchedulerContainerLock(request.ContainerId)
-		if err := c.lock.Acquire(context.TODO(), lockKey, containerStateLockOptions); err != nil {
-			return err
-		}
-		defer c.lock.Release(lockKey)
-		status, err := c.rdb.HGet(context.TODO(), common.RedisKeys.SchedulerContainerState(request.ContainerId), "status").Result()
-		if err != nil && err != redis.Nil {
-			return fmt.Errorf("failed to get container status: %w", err)
-		}
-		if status == string(types.ContainerStatusPending) || status == string(types.ContainerStatusRunning) {
-			return &types.ContainerAlreadyScheduledError{Msg: "a container with this id is already running or pending"}
-		}
-		setState = c.setContainerState
+func (c *ContainerRedisRepository) createContainerState(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error {
+	lockKey := common.RedisKeys.SchedulerContainerLock(request.ContainerId)
+	if err := c.lock.Acquire(context.TODO(), lockKey, containerStateLockOptions); err != nil {
+		return err
+	}
+	defer c.lock.Release(lockKey)
+	status, err := c.rdb.HGet(context.TODO(), common.RedisKeys.SchedulerContainerState(request.ContainerId), "status").Result()
+	if err != nil && err != redis.Nil {
+		return fmt.Errorf("failed to get container status: %w", err)
+	}
+	if status == string(types.ContainerStatusPending) ||
+		status == string(types.ContainerStatusRunning) ||
+		status == string(types.ContainerStatusStopping) {
+		return &types.ContainerAlreadyScheduledError{Msg: "a container with this id is still active"}
 	}
 	if quota != nil {
 		if err := c.reserveContainerConcurrency(quota, request); err != nil {
 			return err
 		}
 	}
-	err := setState(request.ContainerId, &types.ContainerState{
+	err = c.setContainerState(request.ContainerId, &types.ContainerState{
 		ContainerId: request.ContainerId,
 		StubId:      request.StubId,
 		WorkspaceId: request.WorkspaceId,
@@ -1070,16 +1135,26 @@ func (c *ContainerRedisRepository) CheckContainerConcurrencyLimit(quota *types.C
 }
 
 func (c *ContainerRedisRepository) reserveContainerConcurrency(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error {
+	return c.reserveContainerConcurrencyWithAttempt(quota, request, func() (string, error) {
+		return c.tryReserveContainerConcurrency(quota, request)
+	})
+}
+
+func (c *ContainerRedisRepository) reserveContainerConcurrencyWithAttempt(
+	quota *types.ConcurrencyLimit,
+	request *types.ContainerRequest,
+	tryReserve func() (string, error),
+) error {
 	if err := c.ensureWorkspaceConcurrencyCounter(request.WorkspaceId); err != nil {
 		return err
 	}
 
-	reason, err := c.tryReserveContainerConcurrency(quota, request)
+	reason, err := tryReserve()
 	if errors.Is(err, errConcurrencyCounterRepairing) {
 		if err := c.ensureWorkspaceConcurrencyCounter(request.WorkspaceId); err != nil {
 			return err
 		}
-		reason, err = c.tryReserveContainerConcurrency(quota, request)
+		reason, err = tryReserve()
 	}
 	if err == nil {
 		return nil
@@ -1101,7 +1176,7 @@ func (c *ContainerRedisRepository) reserveContainerConcurrency(quota *types.Conc
 		return err
 	}
 
-	reason, err = c.tryReserveContainerConcurrency(quota, request)
+	reason, err = tryReserve()
 	if err != nil && reason != "" {
 		metrics.RecordConcurrencyLimitThrottle(reason, request)
 	}
@@ -1351,7 +1426,10 @@ func (c *ContainerRedisRepository) workspaceConcurrencyCounterNeedsRepair(ctx co
 }
 
 func (c *ContainerRedisRepository) tryReserveContainerConcurrency(quota *types.ConcurrencyLimit, request *types.ContainerRequest) (string, error) {
-	ctx := context.TODO()
+	return c.tryReserveContainerConcurrencyWithContext(context.TODO(), quota, request)
+}
+
+func (c *ContainerRedisRepository) tryReserveContainerConcurrencyWithContext(ctx context.Context, quota *types.ConcurrencyLimit, request *types.ContainerRequest) (string, error) {
 	result, err := reserveConcurrencyReservationScript.Run(ctx, c.rdb, []string{
 		common.RedisKeys.WorkspaceConcurrencyLimitUsage(request.WorkspaceId),
 		common.RedisKeys.WorkspaceConcurrencyLimitReservation(request.WorkspaceId, request.ContainerId),

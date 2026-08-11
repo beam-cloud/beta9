@@ -1,6 +1,8 @@
 package scheduler
 
 import (
+	"errors"
+
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
 )
@@ -24,6 +26,16 @@ func (a *schedulingAttempt) tryPrivatePoolFallback() bool {
 		return false
 	}
 	if err := fallback.reserveManagedFallbackQuota(); err != nil {
+		var notFound *types.ErrContainerStateNotFound
+		if errors.As(err, &notFound) {
+			return true
+		}
+		pending, stateErr := a.scheduler.containerRequestPending(fallbackRequest.ContainerId)
+		if stateErr == nil && !pending {
+			requestLog(log.Debug(), fallbackRequest).
+				Msg("private pool fallback canceled because container is no longer pending")
+			return true
+		}
 		requestLog(log.Error(), fallbackRequest).
 			Err(err).
 			Msg("private pool fallback blocked by managed concurrency limit")
@@ -123,7 +135,7 @@ func (a *schedulingAttempt) reserveManagedFallbackQuota() error {
 	if err != nil {
 		return err
 	}
-	return a.scheduler.containerRepo.SetContainerStateWithConcurrencyLimit(quota, a.request)
+	return a.scheduler.containerRepo.ReserveContainerConcurrencyForPending(quota, a.request)
 }
 
 func (a *schedulingAttempt) selectedPrivatePool() (*WorkerPool, bool) {

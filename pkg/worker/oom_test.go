@@ -30,5 +30,5 @@ func TestSetupOOMWatcherSkipsGvisorWhenMemoryIsNotEnforced(t *testing.T) {
 
 	instance, exists := worker.containerInstances.Get("container-id")
 	require.True(t, exists)
-	require.Nil(t, instance.OOMWatcher)
+	require.False(t, instance.hasOOMWatcher())
 }

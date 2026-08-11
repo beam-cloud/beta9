@@ -10,7 +10,7 @@ CACHE_BENCH_PROFILE ?=
 CACHE_BENCH_CONFIG ?=
 TOKEN ?=
 
-.PHONY: startup-benchmark startup-benchmark-build sandbox-parallel-benchmark sandbox-stage-cold-benchmark sandbox-stage-warm-benchmark cache-benchmark bench-cache-smoke
+.PHONY: startup-benchmark startup-benchmark-build sandbox-parallel-benchmark sandbox-stage-cold-benchmark sandbox-stage-warm-benchmark cache-benchmark bench-cache-smoke worker-e2e-tag worker-e2e-check worker-e2e-push
 
 setup:
 	bash bin/setup.sh
@@ -82,6 +82,15 @@ worker:
 	docker build . --target final --platform=$(workerPlatform) --build-arg BASE_STAGE=dev -f ./docker/Dockerfile.worker -t localhost:5001/beta9-worker:$(workerTag)
 	docker push localhost:5001/beta9-worker:$(workerTag)
 	BENCH_NAMESPACE="$(BENCH_NAMESPACE)" bin/delete_workers.sh
+
+worker-e2e-tag:
+	@./hack/worker-e2e-image.sh tag
+
+worker-e2e-check:
+	@./hack/worker-e2e-image.sh check
+
+worker-e2e-push:
+	@./hack/worker-e2e-image.sh push
 
 runner:
 	for target in py312 py311 py310 py39 py38; do \

@@ -10,12 +10,66 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/beam-cloud/redislock"
+	"github.com/redis/go-redis/v9"
 )
 
-func TestSetContainerStateWithConcurrencyLimitSkipsLockWithoutQuota(t *testing.T) {
+type redisKeyCommandBarrier struct {
+	key     string
+	reached chan struct{}
+	once    sync.Once
+}
+
+func newRedisKeyCommandBarrier(key string) *redisKeyCommandBarrier {
+	return &redisKeyCommandBarrier{key: key, reached: make(chan struct{})}
+}
+
+func (b *redisKeyCommandBarrier) DialHook(next redis.DialHook) redis.DialHook {
+	return next
+}
+
+func (b *redisKeyCommandBarrier) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
+	return func(ctx context.Context, cmd redis.Cmder) error {
+		err := next(ctx, cmd)
+		b.observe(cmd)
+		return err
+	}
+}
+
+func (b *redisKeyCommandBarrier) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return func(ctx context.Context, cmds []redis.Cmder) error {
+		err := next(ctx, cmds)
+		for _, cmd := range cmds {
+			b.observe(cmd)
+		}
+		return err
+	}
+}
+
+func (b *redisKeyCommandBarrier) observe(cmd redis.Cmder) {
+	for _, arg := range cmd.Args()[1:] {
+		if key, ok := arg.(string); ok && key == b.key {
+			b.once.Do(func() { close(b.reached) })
+			return
+		}
+	}
+}
+
+func assertContainerStateTTL(t *testing.T, rdb *common.RedisClient, containerID string, want time.Duration) {
+	t.Helper()
+	ttl, err := rdb.TTL(context.Background(), common.RedisKeys.SchedulerContainerState(containerID)).Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ttl != want && ttl != want-time.Second {
+		t.Fatalf("container state TTL = %s, want %s (allowing one-second boundary rounding)", ttl, want)
+	}
+}
+
+func TestCreateContainerStateWithConcurrencyLimitSkipsConcurrencyLockWithoutQuota(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	if err != nil {
 		t.Fatal(err)
@@ -47,7 +101,7 @@ func TestSetContainerStateWithConcurrencyLimitSkipsLockWithoutQuota(t *testing.T
 	defer lock.Release(context.Background())
 
 	startedAt := time.Now()
-	err = repo.SetContainerStateWithConcurrencyLimit(nil, request)
+	err = repo.CreateContainerStateWithConcurrencyLimit(nil, request)
 	if err != nil {
 		t.Fatalf("expected nil quota to bypass concurrency lock, got %v", err)
 	}
@@ -157,6 +211,34 @@ func TestCreateContainerStateAdmitsOneDuplicate(t *testing.T) {
 	}
 }
 
+func TestCreateContainerStateDoesNotOverwriteStopping(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := NewContainerRedisRepositoryForTest(rdb)
+	request := testContainerRequest("sandbox-stopping-duplicate", "workspace", 100)
+	if err := repo.CreateContainerStateWithConcurrencyLimit(nil, request); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.UpdateContainerStatus(request.ContainerId, types.ContainerStatusStopping, types.ContainerStateTtlSWhileStopping); err != nil {
+		t.Fatal(err)
+	}
+
+	err = repo.CreateContainerStateWithConcurrencyLimit(nil, request.Clone())
+	var duplicate *types.ContainerAlreadyScheduledError
+	if !errors.As(err, &duplicate) {
+		t.Fatalf("expected stopping duplicate to be rejected, got %v", err)
+	}
+	state, err := repo.GetContainerState(request.ContainerId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Status != types.ContainerStatusStopping {
+		t.Fatalf("status = %s, want stopping", state.Status)
+	}
+}
+
 func TestContainerFailureRetentionAndCooldown(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	if err != nil {
@@ -198,7 +280,7 @@ func TestContainerFailureRetentionAndCooldown(t *testing.T) {
 	assertTTL("container-failure", types.ContainerFailureCooldown)
 }
 
-func TestSetContainerStateWithConcurrencyLimitUsesAtomicReservationAfterInit(t *testing.T) {
+func TestCreateContainerStateWithConcurrencyLimitUsesAtomicReservationAfterInit(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	if err != nil {
 		t.Fatal(err)
@@ -207,7 +289,7 @@ func TestSetContainerStateWithConcurrencyLimitUsesAtomicReservationAfterInit(t *
 	repo := NewContainerRedisRepositoryForTest(rdb)
 	quota := &types.ConcurrencyLimit{GPULimit: 100, CPUMillicoreLimit: 100_000}
 	initRequest := testContainerRequest("sandbox-test-stub-init", "test-workspace", 100)
-	if err := repo.SetContainerStateWithConcurrencyLimit(quota, initRequest); err != nil {
+	if err := repo.CreateContainerStateWithConcurrencyLimit(quota, initRequest); err != nil {
 		t.Fatal(err)
 	}
 
@@ -225,7 +307,7 @@ func TestSetContainerStateWithConcurrencyLimitUsesAtomicReservationAfterInit(t *
 
 	request := testContainerRequest("sandbox-test-stub-after-init", initRequest.WorkspaceId, 100)
 	startedAt := time.Now()
-	err = repo.SetContainerStateWithConcurrencyLimit(quota, request)
+	err = repo.CreateContainerStateWithConcurrencyLimit(quota, request)
 	if err != nil {
 		t.Fatalf("expected initialized quota path to avoid workspace lock, got %v", err)
 	}
@@ -234,7 +316,7 @@ func TestSetContainerStateWithConcurrencyLimitUsesAtomicReservationAfterInit(t *
 	}
 }
 
-func TestSetContainerStateWithConcurrencyLimitAllowsOnlyQuotaUnderParallelLoad(t *testing.T) {
+func TestCreateContainerStateWithConcurrencyLimitAllowsOnlyQuotaUnderParallelLoad(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	if err != nil {
 		t.Fatal(err)
@@ -252,7 +334,7 @@ func TestSetContainerStateWithConcurrencyLimitAllowsOnlyQuotaUnderParallelLoad(t
 			defer wg.Done()
 
 			request := testContainerRequest(fmt.Sprintf("sandbox-test-stub-parallel-%03d", i), "test-workspace", 100)
-			err := repo.SetContainerStateWithConcurrencyLimit(quota, request)
+			err := repo.CreateContainerStateWithConcurrencyLimit(quota, request)
 			if err == nil {
 				atomic.AddInt64(&successCount, 1)
 				return
@@ -288,7 +370,7 @@ func TestCheckContainerConcurrencyLimitRejectsWithoutReservation(t *testing.T) {
 	firstRequest := testContainerRequest("sandbox-test-stub-check-first", "test-workspace", 100)
 	secondRequest := testContainerRequest("sandbox-test-stub-check-second", "test-workspace", 1)
 
-	if err := repo.SetContainerStateWithConcurrencyLimit(quota, firstRequest); err != nil {
+	if err := repo.CreateContainerStateWithConcurrencyLimit(quota, firstRequest); err != nil {
 		t.Fatal(err)
 	}
 
@@ -325,7 +407,7 @@ func TestCheckContainerConcurrencyLimitDoesNotReserveCapacity(t *testing.T) {
 	firstRequest := testContainerRequest("sandbox-test-stub-check-capacity-first", "test-workspace", 40)
 	secondRequest := testContainerRequest("sandbox-test-stub-check-capacity-second", "test-workspace", 60)
 
-	if err := repo.SetContainerStateWithConcurrencyLimit(quota, firstRequest); err != nil {
+	if err := repo.CreateContainerStateWithConcurrencyLimit(quota, firstRequest); err != nil {
 		t.Fatal(err)
 	}
 
@@ -342,7 +424,7 @@ func TestCheckContainerConcurrencyLimitDoesNotReserveCapacity(t *testing.T) {
 		t.Fatalf("expected preflight not to reserve CPU, got %d", usedCPU)
 	}
 
-	if err := repo.SetContainerStateWithConcurrencyLimit(quota, secondRequest); err != nil {
+	if err := repo.CreateContainerStateWithConcurrencyLimit(quota, secondRequest); err != nil {
 		t.Fatalf("expected authoritative reservation to admit second request, got %v", err)
 	}
 }
@@ -358,11 +440,11 @@ func TestUpdateContainerStatusStoppingReleasesConcurrencyReservation(t *testing.
 	firstRequest := testContainerRequest("sandbox-test-stub-release-first", "test-workspace", 100)
 	secondRequest := testContainerRequest("sandbox-test-stub-release-second", "test-workspace", 100)
 
-	if err := repo.SetContainerStateWithConcurrencyLimit(quota, firstRequest); err != nil {
+	if err := repo.CreateContainerStateWithConcurrencyLimit(quota, firstRequest); err != nil {
 		t.Fatal(err)
 	}
 
-	err = repo.SetContainerStateWithConcurrencyLimit(quota, secondRequest)
+	err = repo.CreateContainerStateWithConcurrencyLimit(quota, secondRequest)
 	var throttled *types.ThrottledByConcurrencyLimitError
 	if !errors.As(err, &throttled) {
 		t.Fatalf("expected second request to be throttled, got %v", err)
@@ -373,7 +455,7 @@ func TestUpdateContainerStatusStoppingReleasesConcurrencyReservation(t *testing.
 		t.Fatal(err)
 	}
 
-	if err := repo.SetContainerStateWithConcurrencyLimit(quota, secondRequest); err != nil {
+	if err := repo.CreateContainerStateWithConcurrencyLimit(quota, secondRequest); err != nil {
 		t.Fatalf("expected quota to be released after STOPPING status, got %v", err)
 	}
 
@@ -390,31 +472,346 @@ func TestUpdateContainerStatusStoppingReleasesConcurrencyReservation(t *testing.
 	}
 }
 
-func TestUpdateContainerStatusDoesNotMoveStoppingBackToRunning(t *testing.T) {
+func TestUpdateContainerStatusEnforcesMonotonicTransitionsAndLease(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	repo := NewContainerRedisRepositoryForTest(rdb)
-	request := testContainerRequest("sandbox-test-stub-stopping-wins", "test-workspace", 100)
-	if err := repo.SetContainerStateWithConcurrencyLimit(nil, request); err != nil {
-		t.Fatal(err)
-	}
+	for _, test := range []struct {
+		name            string
+		storedStatus    types.ContainerStatus
+		storedTTL       int64
+		requestedStatus types.ContainerStatus
+		requestedTTL    int64
+		wantStatus      types.ContainerStatus
+		wantTTL         int64
+	}{
+		{name: "pending stays pending", storedStatus: types.ContainerStatusPending, storedTTL: 401, requestedStatus: types.ContainerStatusPending, requestedTTL: 402, wantStatus: types.ContainerStatusPending, wantTTL: 402},
+		{name: "pending becomes running", storedStatus: types.ContainerStatusPending, storedTTL: 403, requestedStatus: types.ContainerStatusRunning, requestedTTL: 404, wantStatus: types.ContainerStatusRunning, wantTTL: 404},
+		{name: "pending becomes stopping", storedStatus: types.ContainerStatusPending, storedTTL: 405, requestedStatus: types.ContainerStatusStopping, requestedTTL: 406, wantStatus: types.ContainerStatusStopping, wantTTL: 406},
+		{name: "running stays running", storedStatus: types.ContainerStatusRunning, storedTTL: 407, requestedStatus: types.ContainerStatusRunning, requestedTTL: 408, wantStatus: types.ContainerStatusRunning, wantTTL: 408},
+		{name: "running becomes stopping", storedStatus: types.ContainerStatusRunning, storedTTL: 409, requestedStatus: types.ContainerStatusStopping, requestedTTL: 410, wantStatus: types.ContainerStatusStopping, wantTTL: 410},
+		{name: "running rejects pending", storedStatus: types.ContainerStatusRunning, storedTTL: 411, requestedStatus: types.ContainerStatusPending, requestedTTL: 412, wantStatus: types.ContainerStatusRunning, wantTTL: 411},
+		{name: "stopping stays stopping", storedStatus: types.ContainerStatusStopping, storedTTL: 413, requestedStatus: types.ContainerStatusStopping, requestedTTL: 414, wantStatus: types.ContainerStatusStopping, wantTTL: 414},
+		{name: "stopping rejects pending", storedStatus: types.ContainerStatusStopping, storedTTL: 415, requestedStatus: types.ContainerStatusPending, requestedTTL: 416, wantStatus: types.ContainerStatusStopping, wantTTL: 415},
+		{name: "stopping rejects running", storedStatus: types.ContainerStatusStopping, storedTTL: 417, requestedStatus: types.ContainerStatusRunning, requestedTTL: 418, wantStatus: types.ContainerStatusStopping, wantTTL: 417},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			containerID := "sandbox-transition-" + strings.ReplaceAll(test.name, " ", "-")
+			request := testContainerRequest(containerID, "test-workspace", 100)
+			if err := repo.CreateContainerStateWithConcurrencyLimit(nil, request); err != nil {
+				t.Fatal(err)
+			}
+			if test.storedStatus != types.ContainerStatusPending {
+				if err := repo.UpdateContainerStatus(request.ContainerId, test.storedStatus, test.storedTTL); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := rdb.Expire(
+				context.Background(),
+				common.RedisKeys.SchedulerContainerState(request.ContainerId),
+				time.Duration(test.storedTTL)*time.Second,
+			).Err(); err != nil {
+				t.Fatal(err)
+			}
 
-	if err := repo.UpdateContainerStatus(request.ContainerId, types.ContainerStatusStopping, types.ContainerStateTtlSWhilePending); err != nil {
-		t.Fatal(err)
-	}
-	if err := repo.UpdateContainerStatus(request.ContainerId, types.ContainerStatusRunning, types.ContainerStateTtlS); err != nil {
-		t.Fatal(err)
-	}
+			if err := repo.UpdateContainerStatus(request.ContainerId, test.requestedStatus, test.requestedTTL); err != nil {
+				t.Fatal(err)
+			}
 
-	state, err := repo.GetContainerState(request.ContainerId)
+			state, err := repo.GetContainerState(request.ContainerId)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if state.Status != test.wantStatus {
+				t.Fatalf("status = %s, want %s", state.Status, test.wantStatus)
+			}
+			assertContainerStateTTL(t, rdb, request.ContainerId, time.Duration(test.wantTTL)*time.Second)
+		})
+	}
+}
+
+func TestStoppingWinsConcurrentHeartbeatUpdates(t *testing.T) {
+	for _, heartbeatStatus := range []types.ContainerStatus{
+		types.ContainerStatusPending,
+		types.ContainerStatusRunning,
+	} {
+		t.Run(string(heartbeatStatus), func(t *testing.T) {
+			rdb, err := NewRedisClientForTest()
+			if err != nil {
+				t.Fatal(err)
+			}
+			repo := NewContainerRedisRepositoryForTest(rdb)
+
+			for i := range 8 {
+				request := testContainerRequest(fmt.Sprintf("sandbox-stop-heartbeat-%s-%02d", heartbeatStatus, i), "test-workspace", 100)
+				if err := repo.CreateContainerStateWithConcurrencyLimit(nil, request); err != nil {
+					t.Fatal(err)
+				}
+
+				start := make(chan struct{})
+				stopResult := make(chan error, 1)
+				heartbeatResult := make(chan error, 1)
+				go func() {
+					<-start
+					marked, err := repo.MarkPendingContainerStoppingIfUnassigned(
+						request.ContainerId,
+						types.ContainerStateTtlSWhileStopping,
+					)
+					if err == nil && !marked {
+						err = repo.UpdateContainerStatus(
+							request.ContainerId,
+							types.ContainerStatusStopping,
+							types.ContainerStateTtlSWhileStopping,
+						)
+					}
+					stopResult <- err
+				}()
+				go func() {
+					<-start
+					heartbeatResult <- repo.UpdateContainerStatus(
+						request.ContainerId,
+						heartbeatStatus,
+						types.ContainerStateTtlS,
+					)
+				}()
+				close(start)
+
+				if err := <-stopResult; err != nil {
+					t.Fatal(err)
+				}
+				if err := <-heartbeatResult; err != nil {
+					t.Fatal(err)
+				}
+
+				state, err := repo.GetContainerState(request.ContainerId)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if state.Status != types.ContainerStatusStopping {
+					t.Fatalf("status = %s, want STOPPING", state.Status)
+				}
+				assertContainerStateTTL(t, rdb, request.ContainerId, time.Duration(types.ContainerStateTtlSWhileStopping)*time.Second)
+			}
+		})
+	}
+}
+
+func TestReserveContainerConcurrencyForPendingPreservesStateAndLease(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Status != types.ContainerStatusStopping {
-		t.Fatalf("expected STOPPING status to win over late RUNNING update, got %s", state.Status)
+
+	repo := NewContainerRedisRepositoryForTest(rdb)
+	request := testContainerRequest("sandbox-private-fallback", "test-workspace", 100)
+	if err := repo.CreateContainerStateWithConcurrencyLimit(nil, request); err != nil {
+		t.Fatal(err)
+	}
+	stateBefore, err := repo.GetContainerState(request.ContainerId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const leaseSeconds = int64(777)
+	stateKey := common.RedisKeys.SchedulerContainerState(request.ContainerId)
+	if err := rdb.Expire(context.Background(), stateKey, time.Duration(leaseSeconds)*time.Second).Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	quota := &types.ConcurrencyLimit{CPUMillicoreLimit: 1_000}
+	if err := repo.ReserveContainerConcurrencyForPending(quota, request); err != nil {
+		t.Fatal(err)
+	}
+
+	stateAfter, err := repo.GetContainerState(request.ContainerId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *stateAfter != *stateBefore {
+		t.Fatalf("fallback reservation rewrote state:\nbefore: %+v\nafter:  %+v", stateBefore, stateAfter)
+	}
+	assertContainerStateTTL(t, rdb, request.ContainerId, time.Duration(leaseSeconds)*time.Second)
+	reserved, err := rdb.Exists(
+		context.Background(),
+		common.RedisKeys.WorkspaceConcurrencyLimitReservation(request.WorkspaceId, request.ContainerId),
+	).Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reserved != 1 {
+		t.Fatal("expected managed fallback concurrency reservation")
+	}
+}
+
+func TestReserveContainerConcurrencyForPendingCannotRaceStopOrDelete(t *testing.T) {
+	for _, test := range []struct {
+		name              string
+		counterState      string
+		stop              func(ContainerRepository, string) error
+		wantStateNotFound bool
+	}{
+		{
+			name:         "workspace initialization does not block stopping",
+			counterState: "",
+			stop: func(repo ContainerRepository, containerID string) error {
+				return repo.UpdateContainerStatus(containerID, types.ContainerStatusStopping, types.ContainerStateTtlSWhileStopping)
+			},
+		},
+		{
+			name:              "workspace repair does not block delete",
+			counterState:      concurrencyCounterRepairing,
+			wantStateNotFound: true,
+			stop: func(repo ContainerRepository, containerID string) error {
+				return repo.DeleteContainerState(containerID)
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := miniredis.RunT(t)
+			rdb, err := common.NewRedisClient(types.RedisConfig{
+				Addrs: []string{server.Addr()},
+				Mode:  types.RedisModeSingle,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = rdb.Close() })
+
+			repo := NewContainerRedisRepositoryForTest(rdb)
+			quota := &types.ConcurrencyLimit{CPUMillicoreLimit: 1_000_000}
+			request := testContainerRequest("sandbox-fallback-slow-accounting", "test-workspace", 100)
+			if err := repo.CreateContainerStateWithConcurrencyLimit(nil, request); err != nil {
+				t.Fatal(err)
+			}
+			if test.counterState != "" {
+				if err := rdb.HSet(context.Background(), common.RedisKeys.WorkspaceConcurrencyLimitUsage(request.WorkspaceId),
+					"gpu_count", 0,
+					"cpu", 0,
+					"initialized", test.counterState,
+					"updated_at", time.Now().Unix(),
+				).Err(); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			workspaceLock, err := redislock.Obtain(
+				context.Background(),
+				rdb,
+				common.RedisKeys.WorkspaceConcurrencyLimitLock(request.WorkspaceId),
+				time.Minute,
+				nil,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var finishOnce sync.Once
+			finishWorkspaceAccounting := func() {
+				finishOnce.Do(func() {
+					if err := rdb.HSet(context.Background(), common.RedisKeys.WorkspaceConcurrencyLimitUsage(request.WorkspaceId),
+						"gpu_count", 0,
+						"cpu", 0,
+						"initialized", concurrencyCounterInitialized,
+						"updated_at", time.Now().Unix(),
+					).Err(); err != nil {
+						t.Errorf("finish workspace accounting: %v", err)
+					}
+					if err := workspaceLock.Release(context.Background()); err != nil {
+						t.Errorf("release workspace lock: %v", err)
+					}
+				})
+			}
+			defer finishWorkspaceAccounting()
+
+			workspaceLockAttempted := newRedisKeyCommandBarrier(
+				common.RedisKeys.WorkspaceConcurrencyLimitLock(request.WorkspaceId),
+			)
+			rdb.AddHook(workspaceLockAttempted)
+			reserveResult := make(chan error, 1)
+			go func() {
+				reserveResult <- repo.ReserveContainerConcurrencyForPending(quota, request)
+			}()
+			select {
+			case <-workspaceLockAttempted.reached:
+			case <-time.After(time.Second):
+				t.Fatal("fallback reservation did not attempt workspace accounting lock")
+			}
+			select {
+			case err := <-reserveResult:
+				t.Fatalf("fallback did not remain blocked in workspace accounting: %v", err)
+			default:
+			}
+
+			stopResult := make(chan error, 1)
+			go func() { stopResult <- test.stop(repo, request.ContainerId) }()
+			select {
+			case err := <-stopResult:
+				if err != nil {
+					t.Fatalf("stop/delete failed while workspace accounting was blocked: %v", err)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("slow workspace accounting held the per-container lifecycle lock")
+			}
+
+			finishWorkspaceAccounting()
+			reserveErr := <-reserveResult
+			if reserveErr == nil {
+				t.Fatal("fallback reserved concurrency after stop/delete completed")
+			}
+			var notFound *types.ErrContainerStateNotFound
+			if !errors.As(reserveErr, &notFound) && !strings.Contains(reserveErr.Error(), "no longer pending") {
+				t.Fatalf("unexpected fallback result after stop/delete: %v", reserveErr)
+			}
+
+			state, stateErr := repo.GetContainerState(request.ContainerId)
+			if test.wantStateNotFound {
+				if !errors.As(stateErr, &notFound) {
+					t.Fatalf("deleted state was recreated: state=%+v err=%v", state, stateErr)
+				}
+			} else {
+				if stateErr != nil {
+					t.Fatal(stateErr)
+				}
+				if state.Status != types.ContainerStatusStopping {
+					t.Fatalf("status = %s, want STOPPING", state.Status)
+				}
+				assertContainerStateTTL(t, rdb, request.ContainerId, time.Duration(types.ContainerStateTtlSWhileStopping)*time.Second)
+			}
+
+			reserved, err := rdb.Exists(
+				context.Background(),
+				common.RedisKeys.WorkspaceConcurrencyLimitReservation(request.WorkspaceId, request.ContainerId),
+			).Result()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reserved != 0 {
+				t.Fatal("stop/delete left a managed fallback concurrency reservation")
+			}
+		})
+	}
+}
+
+func TestUpdateContainerStatusDoesNotRecreateMissingState(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repo := NewContainerRedisRepositoryForTest(rdb)
+	containerID := "container-missing-update"
+	err = repo.UpdateContainerStatus(containerID, types.ContainerStatusStopping, types.ContainerStateTtlSWhilePending)
+	var notFound *types.ErrContainerStateNotFound
+	if !errors.As(err, &notFound) {
+		t.Fatalf("expected missing state error, got %v", err)
+	}
+
+	exists, err := rdb.Exists(context.Background(), common.RedisKeys.SchedulerContainerState(containerID)).Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exists != 0 {
+		t.Fatal("missing state was recreated by status update")
 	}
 }
 
@@ -459,7 +856,7 @@ func TestMarkPendingContainerStoppingIfUnassigned(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			marked, err := repo.MarkPendingContainerStoppingIfUnassigned(test.state.ContainerId, types.ContainerStateTtlSWhilePending)
+			marked, err := repo.MarkPendingContainerStoppingIfUnassigned(test.state.ContainerId, types.ContainerStateTtlSWhileStopping)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -477,6 +874,15 @@ func TestMarkPendingContainerStoppingIfUnassigned(t *testing.T) {
 			}
 			if state.Status != expectedStatus {
 				t.Fatalf("expected status %s, got %s", expectedStatus, state.Status)
+			}
+			if test.expected {
+				ttl, err := rdb.TTL(context.Background(), common.RedisKeys.SchedulerContainerState(test.state.ContainerId)).Result()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if ttl != time.Duration(types.ContainerStateTtlSWhileStopping)*time.Second {
+					t.Fatalf("expected STOPPING TTL %ds, got %s", types.ContainerStateTtlSWhileStopping, ttl)
+				}
 			}
 		})
 	}
@@ -928,7 +1334,7 @@ func TestUpdateContainerStatusStoppingRetriesConcurrencyReleaseAfterTransientFai
 	secondRequest := testContainerRequest("sandbox-test-stub-release-retry-second", "test-workspace", 100)
 	usageKey := common.RedisKeys.WorkspaceConcurrencyLimitUsage(firstRequest.WorkspaceId)
 
-	if err := repo.SetContainerStateWithConcurrencyLimit(quota, firstRequest); err != nil {
+	if err := repo.CreateContainerStateWithConcurrencyLimit(quota, firstRequest); err != nil {
 		t.Fatal(err)
 	}
 
@@ -957,7 +1363,7 @@ func TestUpdateContainerStatusStoppingRetriesConcurrencyReleaseAfterTransientFai
 		t.Fatalf("expected retry to release existing reservation, got %v", err)
 	}
 
-	if err := repo.SetContainerStateWithConcurrencyLimit(quota, secondRequest); err != nil {
+	if err := repo.CreateContainerStateWithConcurrencyLimit(quota, secondRequest); err != nil {
 		t.Fatalf("expected quota to be available after retry release, got %v", err)
 	}
 
@@ -986,7 +1392,7 @@ func TestUpdateContainerStatusStoppingReleasesDuringCounterRepair(t *testing.T) 
 	secondRequest := testContainerRequest("sandbox-test-stub-release-repair-second", "test-workspace", 100)
 	usageKey := common.RedisKeys.WorkspaceConcurrencyLimitUsage(firstRequest.WorkspaceId)
 
-	if err := repo.SetContainerStateWithConcurrencyLimit(quota, firstRequest); err != nil {
+	if err := repo.CreateContainerStateWithConcurrencyLimit(quota, firstRequest); err != nil {
 		t.Fatal(err)
 	}
 
@@ -998,7 +1404,7 @@ func TestUpdateContainerStatusStoppingReleasesDuringCounterRepair(t *testing.T) 
 		t.Fatalf("expected STOPPING release to wait for repair and succeed, got %v", err)
 	}
 
-	if err := repo.SetContainerStateWithConcurrencyLimit(quota, secondRequest); err != nil {
+	if err := repo.CreateContainerStateWithConcurrencyLimit(quota, secondRequest); err != nil {
 		t.Fatalf("expected quota to be available after repair-time release, got %v", err)
 	}
 }
@@ -1014,7 +1420,7 @@ func TestDeleteContainerStateReleasesConcurrencyReservation(t *testing.T) {
 	firstRequest := testContainerRequest("sandbox-test-stub-delete-first", "test-workspace", 100)
 	secondRequest := testContainerRequest("sandbox-test-stub-delete-second", "test-workspace", 100)
 
-	if err := repo.SetContainerStateWithConcurrencyLimit(quota, firstRequest); err != nil {
+	if err := repo.CreateContainerStateWithConcurrencyLimit(quota, firstRequest); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1026,7 +1432,7 @@ func TestDeleteContainerStateReleasesConcurrencyReservation(t *testing.T) {
 		t.Fatal("expected deleted container state to be gone")
 	}
 
-	if err := repo.SetContainerStateWithConcurrencyLimit(quota, secondRequest); err != nil {
+	if err := repo.CreateContainerStateWithConcurrencyLimit(quota, secondRequest); err != nil {
 		t.Fatalf("expected quota to be released after delete, got %v", err)
 	}
 
@@ -1043,7 +1449,7 @@ func TestDeleteContainerStateReleasesConcurrencyReservation(t *testing.T) {
 	}
 }
 
-func TestSetContainerStateWithConcurrencyLimitRepairsStaleConcurrencyCounter(t *testing.T) {
+func TestCreateContainerStateWithConcurrencyLimitRepairsStaleConcurrencyCounter(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	if err != nil {
 		t.Fatal(err)
@@ -1054,7 +1460,7 @@ func TestSetContainerStateWithConcurrencyLimitRepairsStaleConcurrencyCounter(t *
 	firstRequest := testContainerRequest("sandbox-test-stub-stale-first", "test-workspace", 100)
 	secondRequest := testContainerRequest("sandbox-test-stub-stale-second", "test-workspace", 100)
 
-	if err := repo.SetContainerStateWithConcurrencyLimit(quota, firstRequest); err != nil {
+	if err := repo.CreateContainerStateWithConcurrencyLimit(quota, firstRequest); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1076,7 +1482,7 @@ func TestSetContainerStateWithConcurrencyLimitRepairsStaleConcurrencyCounter(t *
 		t.Fatal(err)
 	}
 
-	if err := repo.SetContainerStateWithConcurrencyLimit(quota, secondRequest); err != nil {
+	if err := repo.CreateContainerStateWithConcurrencyLimit(quota, secondRequest); err != nil {
 		t.Fatalf("expected stale counter repair to admit second request, got %v", err)
 	}
 
@@ -1101,7 +1507,7 @@ func TestSetContainerStateWithConcurrencyLimitRepairsStaleConcurrencyCounter(t *
 	}
 }
 
-func TestSetContainerStateWithConcurrencyLimitPreservesInFlightReservationDuringRepair(t *testing.T) {
+func TestCreateContainerStateWithConcurrencyLimitPreservesInFlightReservationDuringRepair(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	if err != nil {
 		t.Fatal(err)
@@ -1112,7 +1518,7 @@ func TestSetContainerStateWithConcurrencyLimitPreservesInFlightReservationDuring
 	firstRequest := testContainerRequest("sandbox-test-stub-inflight-first", "test-workspace", 100)
 	secondRequest := testContainerRequest("sandbox-test-stub-inflight-second", "test-workspace", 100)
 
-	if err := repo.SetContainerStateWithConcurrencyLimit(quota, firstRequest); err != nil {
+	if err := repo.CreateContainerStateWithConcurrencyLimit(quota, firstRequest); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1125,7 +1531,7 @@ func TestSetContainerStateWithConcurrencyLimitPreservesInFlightReservationDuring
 		t.Fatal(err)
 	}
 
-	err = repo.SetContainerStateWithConcurrencyLimit(quota, secondRequest)
+	err = repo.CreateContainerStateWithConcurrencyLimit(quota, secondRequest)
 	var throttled *types.ThrottledByConcurrencyLimitError
 	if !errors.As(err, &throttled) {
 		t.Fatalf("expected recent in-flight reservation to be preserved and throttle second request, got %v", err)
@@ -1165,7 +1571,7 @@ func TestTryReserveContainerConcurrencyWaitsDuringRepair(t *testing.T) {
 	}
 }
 
-func TestSetContainerStateWithConcurrencyLimitReturnsReservationReleaseError(t *testing.T) {
+func TestCreateContainerStateWithConcurrencyLimitReturnsReservationReleaseError(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	if err != nil {
 		t.Fatal(err)
@@ -1175,7 +1581,7 @@ func TestSetContainerStateWithConcurrencyLimitReturnsReservationReleaseError(t *
 	quota := &types.ConcurrencyLimit{GPULimit: 0, CPUMillicoreLimit: 100}
 	request := testContainerRequest("sandbox-test-stub-state-release-error", "test-workspace", 100)
 
-	stateKey := common.RedisKeys.SchedulerContainerState(request.ContainerId)
+	stubIndexKey := common.RedisKeys.SchedulerContainerIndex(request.StubId)
 	usageKey := common.RedisKeys.WorkspaceConcurrencyLimitUsage(request.WorkspaceId)
 	reservationKey := common.RedisKeys.WorkspaceConcurrencyLimitReservation(request.WorkspaceId, request.ContainerId)
 
@@ -1190,11 +1596,13 @@ func TestSetContainerStateWithConcurrencyLimitReturnsReservationReleaseError(t *
 	if err := rdb.Set(context.Background(), reservationKey, "not-a-hash", 0).Err(); err != nil {
 		t.Fatal(err)
 	}
-	if err := rdb.Set(context.Background(), stateKey, "not-a-hash", 0).Err(); err != nil {
+	// Let the initial duplicate check pass, then fail the transactional state
+	// write on its stub-index SADD after concurrency has been reserved.
+	if err := rdb.Set(context.Background(), stubIndexKey, "not-a-set", 0).Err(); err != nil {
 		t.Fatal(err)
 	}
 
-	err = repo.SetContainerStateWithConcurrencyLimit(quota, request)
+	err = repo.CreateContainerStateWithConcurrencyLimit(quota, request)
 	if err == nil {
 		t.Fatal("expected state write and reservation release errors")
 	}
