@@ -4239,6 +4239,15 @@
             "type": "boolean"
           },
           "description": "supported_gpus reports pool-config-based serverless support per GPU\ntype: true when a pool could serve the GPU even if scaled to zero."
+        },
+        "maxCpuMillicores": {
+          "type": "integer",
+          "format": "int64",
+          "description": "Resource ceilings enforced when creating a serverless stub. Private\non-demand pools own their machine and do not use these limits."
+        },
+        "maxMemoryMb": {
+          "type": "integer",
+          "format": "int64"
         }
       }
     },

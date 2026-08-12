@@ -4,13 +4,16 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
+	"time"
 
 	abstractionscommon "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/cache"
@@ -18,6 +21,33 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/stretchr/testify/require"
 )
+
+type bindMountRetryTestClock struct {
+	current time.Time
+	waits   []time.Duration
+}
+
+func (c *bindMountRetryTestClock) now() time.Time {
+	return c.current
+}
+
+func (c *bindMountRetryTestClock) wait(ctx context.Context, delay time.Duration) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	c.waits = append(c.waits, delay)
+	c.current = c.current.Add(delay)
+	return nil
+}
+
+func bindMountRetryTestOps(clock *bindMountRetryTestClock, mkdirAll func(string, os.FileMode) error) bindMountSourceDirOps {
+	ops := defaultBindMountSourceDirOps()
+	ops.mkdirAll = mkdirAll
+	ops.now = clock.now
+	ops.wait = clock.wait
+	ops.jitter = func(delay time.Duration) time.Duration { return delay }
+	return ops
+}
 
 func TestSetupContainerMountsUsesLocalWorkspaceForEmptySandbox(t *testing.T) {
 	manager := NewContainerMountManager(types.AppConfig{})
@@ -32,6 +62,170 @@ func TestSetupContainerMountsUsesLocalWorkspaceForEmptySandbox(t *testing.T) {
 	require.DirExists(t, request.Mounts[0].LocalPath)
 	require.FileExists(t, filepath.Join(filepath.Dir(request.Mounts[0].LocalPath), ".workspace-ready"))
 	require.NoDirExists(t, manager.codeCacheRoot)
+}
+
+func TestEnsureBindMountSourceDirsRetriesWorkspaceEAGAIN(t *testing.T) {
+	basePath := filepath.Join(t.TempDir(), "workspace-storage")
+	localPath := filepath.Join(basePath, "workspace", "outputs", "stub")
+	manager := NewContainerMountManager(types.AppConfig{Storage: types.StorageConfig{
+		WorkspaceStorage: types.WorkspaceStorageConfig{BaseMountPath: basePath},
+	}})
+	transientErr := &os.PathError{Op: "mkdir", Path: localPath, Err: syscall.EAGAIN}
+	attempts := 0
+	clock := &bindMountRetryTestClock{current: time.Unix(1, 0)}
+	ops := bindMountRetryTestOps(clock, func(string, os.FileMode) error {
+		attempts++
+		if attempts < 3 {
+			return transientErr
+		}
+		return nil
+	})
+
+	err := manager.ensureBindMountSourceDirsWithOps(context.Background(), []types.Mount{{
+		LocalPath: localPath,
+		MountPath: "/data",
+	}}, ops)
+
+	require.NoError(t, err)
+	require.Equal(t, 3, attempts)
+	require.Equal(t, []time.Duration{250 * time.Millisecond, 500 * time.Millisecond}, clock.waits)
+}
+
+func TestEnsureBindMountSourceDirsStopsAtWorkspaceRetryBudget(t *testing.T) {
+	basePath := filepath.Join(t.TempDir(), "workspace-storage")
+	localPath := filepath.Join(basePath, "workspace", "volumes", "data")
+	manager := NewContainerMountManager(types.AppConfig{Storage: types.StorageConfig{
+		WorkspaceStorage: types.WorkspaceStorageConfig{BaseMountPath: basePath},
+	}})
+	transientErr := &os.PathError{Op: "mkdir", Path: localPath, Err: syscall.EAGAIN}
+	attempts := 0
+	clock := &bindMountRetryTestClock{current: time.Unix(1, 0)}
+	ops := bindMountRetryTestOps(clock, func(string, os.FileMode) error {
+		attempts++
+		return transientErr
+	})
+	ops.retryBudget = 2 * time.Second
+
+	err := manager.ensureBindMountSourceDirsWithOps(context.Background(), []types.Mount{{
+		LocalPath: localPath,
+		MountPath: "/data",
+	}}, ops)
+
+	require.ErrorIs(t, err, transientErr)
+	require.Equal(t, 4, attempts)
+	require.Equal(t, []time.Duration{250 * time.Millisecond, 500 * time.Millisecond, time.Second, 250 * time.Millisecond}, clock.waits)
+}
+
+func TestEnsureBindMountSourceDirsStopsWhenContextCanceled(t *testing.T) {
+	basePath := filepath.Join(t.TempDir(), "workspace-storage")
+	localPath := filepath.Join(basePath, "workspace", "outputs", "stub")
+	manager := NewContainerMountManager(types.AppConfig{Storage: types.StorageConfig{
+		WorkspaceStorage: types.WorkspaceStorageConfig{BaseMountPath: basePath},
+	}})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	attempts := 0
+	waits := 0
+	clock := &bindMountRetryTestClock{current: time.Unix(1, 0)}
+	ops := bindMountRetryTestOps(clock, func(string, os.FileMode) error {
+		attempts++
+		return syscall.EAGAIN
+	})
+	ops.wait = func(ctx context.Context, _ time.Duration) error {
+		waits++
+		cancel()
+		return ctx.Err()
+	}
+
+	err := manager.ensureBindMountSourceDirsWithOps(ctx, []types.Mount{{
+		LocalPath: localPath,
+		MountPath: "/data",
+	}}, ops)
+
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, 1, attempts)
+	require.Equal(t, 1, waits)
+}
+
+func TestEnsureBindMountSourceDirsRetriesOnlyWorkspaceFusePaths(t *testing.T) {
+	root := t.TempDir()
+	basePath := filepath.Join(root, "workspace-storage")
+	workspacePath := filepath.Join(basePath, "workspace", "volumes", "data")
+	transientErr := &os.PathError{Op: "mkdir", Path: workspacePath, Err: syscall.EAGAIN}
+	permanentErr := errors.New("permission denied")
+
+	tests := []struct {
+		name  string
+		mount types.Mount
+		err   error
+	}{
+		{
+			name:  "healthy workspace path",
+			mount: types.Mount{LocalPath: workspacePath, MountPath: "/data"},
+		},
+		{
+			name:  "workspace non-EAGAIN",
+			mount: types.Mount{LocalPath: workspacePath, MountPath: "/data"},
+			err:   permanentErr,
+		},
+		{
+			name:  "sibling prefix",
+			mount: types.Mount{LocalPath: filepath.Join(basePath+"-sibling", "workspace"), MountPath: "/data"},
+			err:   transientErr,
+		},
+		{
+			name:  "local path",
+			mount: types.Mount{LocalPath: filepath.Join(root, "local", "data"), MountPath: "/data"},
+			err:   transientErr,
+		},
+		{
+			name:  "local mount under workspace root",
+			mount: types.Mount{LocalPath: workspacePath, MountPath: "/data", MountType: storage.StorageModeLocal},
+			err:   transientErr,
+		},
+		{
+			name: "durable disk under workspace root",
+			mount: types.Mount{
+				LocalPath: workspacePath,
+				MountPath: "/data",
+				MountType: types.StorageModeDurableDisk,
+			},
+			err: transientErr,
+		},
+		{
+			name: "durable disk metadata under workspace root",
+			mount: types.Mount{
+				LocalPath:   workspacePath,
+				MountPath:   "/data",
+				DurableDisk: &types.DurableDiskMountConfig{Name: "data"},
+			},
+			err: transientErr,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			manager := NewContainerMountManager(types.AppConfig{Storage: types.StorageConfig{
+				WorkspaceStorage: types.WorkspaceStorageConfig{BaseMountPath: basePath},
+			}})
+			attempts := 0
+			clock := &bindMountRetryTestClock{current: time.Unix(1, 0)}
+			ops := bindMountRetryTestOps(clock, func(string, os.FileMode) error {
+				attempts++
+				return test.err
+			})
+
+			err := manager.ensureBindMountSourceDirsWithOps(context.Background(), []types.Mount{test.mount}, ops)
+
+			if test.err == nil {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, test.err)
+			}
+			require.Equal(t, 1, attempts)
+			require.Empty(t, clock.waits)
+		})
+	}
 }
 
 func TestSetupContainerMountsCachesStubCodeWithoutSharingContainerWorkspaces(t *testing.T) {

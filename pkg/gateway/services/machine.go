@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"math"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/providers"
@@ -38,7 +39,7 @@ func (gws *GatewayService) ListMachines(ctx context.Context, in *pb.ListMachines
 		if err != nil {
 			return &pb.ListMachinesResponse{Ok: false, ErrMsg: err.Error()}, nil
 		}
-		return machineListResponse(gpus, supportedGpus, machines, in.Limit), nil
+		return machineListResponse(gpus, supportedGpus, machines, in.Limit, gws.appConfig.GatewayService.StubLimits), nil
 	}
 
 	backend, pool := gws.classifyMachinePool(in.PoolName)
@@ -47,7 +48,7 @@ func (gws *GatewayService) ListMachines(ctx context.Context, in *pb.ListMachines
 		if err != nil {
 			return &pb.ListMachinesResponse{Ok: false, ErrMsg: err.Error()}, nil
 		}
-		return machineListResponse(gpus, supportedGpus, machines, in.Limit), nil
+		return machineListResponse(gpus, supportedGpus, machines, in.Limit, gws.appConfig.GatewayService.StubLimits), nil
 	}
 	if backend == machinePoolLocal {
 		return &pb.ListMachinesResponse{Ok: false, ErrMsg: fmt.Sprintf("pool %q is managed by its local controller", in.PoolName)}, nil
@@ -67,7 +68,7 @@ func (gws *GatewayService) ListMachines(ctx context.Context, in *pb.ListMachines
 		}
 		machines = append(machines, providerMachines...)
 	}
-	return machineListResponse(gpus, supportedGpus, machines, in.Limit), nil
+	return machineListResponse(gpus, supportedGpus, machines, in.Limit, gws.appConfig.GatewayService.StubLimits), nil
 }
 
 // supportedServerlessGpus reports pool-config-based serverless support per
@@ -86,14 +87,21 @@ func (gws *GatewayService) supportedServerlessGpus() map[string]bool {
 	return supported
 }
 
-func machineListResponse(gpus map[string]bool, supportedGpus map[string]bool, machines []*pb.Machine, limit uint32) *pb.ListMachinesResponse {
+func machineListResponse(gpus map[string]bool, supportedGpus map[string]bool, machines []*pb.Machine, limit uint32, stubLimits types.StubLimits) *pb.ListMachinesResponse {
 	slices.SortFunc(machines, func(i, j *pb.Machine) int {
 		return cmp.Or(cmp.Compare(i.PoolName, j.PoolName), cmp.Compare(i.Id, j.Id))
 	})
 	if limit > 0 && len(machines) > int(limit) {
 		machines = machines[:limit]
 	}
-	return &pb.ListMachinesResponse{Ok: true, Gpus: gpus, SupportedGpus: supportedGpus, Machines: machines}
+	return &pb.ListMachinesResponse{
+		Ok:               true,
+		Gpus:             gpus,
+		SupportedGpus:    supportedGpus,
+		Machines:         machines,
+		MaxCpuMillicores: uint32(min(stubLimits.Cpu, math.MaxUint32)),
+		MaxMemoryMb:      uint32(min(stubLimits.Memory, math.MaxUint32)),
+	}
 }
 
 type machinePoolBackend uint8
