@@ -205,7 +205,7 @@ def create_disk(
 
 @management.command(
     name="delete",
-    help="Delete a disk.",
+    help="Unregister a disk (snapshots and backing data are retained).",
 )
 @click.argument(
     "name",
@@ -218,7 +218,9 @@ def delete_disk(service: ServiceClient, name: str, yes: bool):
     if not yes:
         terminal.warn(
             "Any apps or services (functions, endpoints, databases, etc) that\n"
-            "refer to this disk should be updated before it is deleted."
+            "refer to this disk should be updated before it is unregistered.\n"
+            "Immutable snapshots and backing data are retained so templates and "
+            "forks keep working."
         )
 
         if not terminal.confirm("Are you sure?", default=False):
@@ -230,7 +232,7 @@ def delete_disk(service: ServiceClient, name: str, yes: bool):
     if not res.ok:
         terminal.error(res.err_msg)
 
-    terminal.success(f"Deleted disk: {name}")
+    terminal.success(f"Unregistered disk: {name}")
 
 
 @management.command(

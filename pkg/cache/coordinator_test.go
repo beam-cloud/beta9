@@ -108,8 +108,13 @@ func (r *memoryCoordinatorRepository) CountCacheRegistrations(ctx context.Contex
 	return int64(len(r.registrations[logicalHostID])), nil
 }
 
-func (r *memoryCoordinatorRepository) RemoveCacheLogicalHost(ctx context.Context, poolName, locality, logicalHostID string) error {
+func (r *memoryCoordinatorRepository) RemoveCacheLogicalHostFromPool(ctx context.Context, poolName, locality, logicalHostID string) error {
 	delete(r.index[fmt.Sprintf("%s:%s", poolName, locality)], logicalHostID)
+	return nil
+}
+
+func (r *memoryCoordinatorRepository) RemoveCacheLogicalHost(ctx context.Context, poolName, locality, logicalHostID string) error {
+	_ = r.RemoveCacheLogicalHostFromPool(ctx, poolName, locality, logicalHostID)
 	delete(r.registrations, logicalHostID)
 	delete(r.logicalHosts, logicalHostID)
 	delete(r.active, logicalHostID)
@@ -308,4 +313,85 @@ func TestCoordinatorCanListCacheHostsAcrossWorkerPools(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, defaultHosts, 1)
 	require.Equal(t, "default", defaultHosts[0].PoolName)
+}
+
+func TestCoordinatorRemoveNodeDeletesOnlyReleasedNodeState(t *testing.T) {
+	repo := newMemoryCoordinatorRepository()
+	coordinator := NewCoordinator(repo)
+	ctx := context.Background()
+
+	targetLogicalHostID := "cache-host-workspace-pool-machine-a-path"
+	for _, registrationID := range []string{"worker-a-1", "worker-a-2"} {
+		require.NoError(t, coordinator.RegisterHost(ctx, CoordinatorHost{
+			LogicalHostID:  targetLogicalHostID,
+			RegistrationID: registrationID,
+			PoolName:       "pool",
+			Locality:       "workspace/pool",
+			NodeID:         "machine-a",
+			CachePathID:    "path",
+			PrivateAddr:    "10.0.0.1:2049",
+		}, 30*time.Second))
+	}
+	require.NoError(t, coordinator.RegisterHost(ctx, CoordinatorHost{
+		LogicalHostID:  "cache-host-workspace-pool-machine-b-path",
+		RegistrationID: "worker-b",
+		PoolName:       "pool",
+		Locality:       "workspace/pool",
+		NodeID:         "machine-b",
+		CachePathID:    "path",
+		PrivateAddr:    "10.0.0.2:2049",
+	}, 30*time.Second))
+
+	require.NoError(t, coordinator.RemoveNode(ctx, "pool", "workspace/pool", "machine-a"))
+	require.NoError(t, coordinator.RemoveNode(ctx, "pool", "workspace/pool", "machine-a"))
+
+	_, found := repo.logicalHosts[targetLogicalHostID]
+	require.False(t, found)
+	require.NotContains(t, repo.registrations, targetLogicalHostID)
+	require.NotContains(t, repo.active, targetLogicalHostID)
+	hosts, err := coordinator.ListHosts(ctx, "pool", "workspace/pool")
+	require.NoError(t, err)
+	require.Len(t, hosts, 1)
+	require.Equal(t, "machine-b", hosts[0].NodeID)
+}
+
+func TestCoordinatorRemoveNodePreservesSharedLogicalHostForAnotherPool(t *testing.T) {
+	repo := newMemoryCoordinatorRepository()
+	coordinator := NewCoordinator(repo)
+	ctx := context.Background()
+	logicalHostID := "cache-host-shared-machine-a-path"
+
+	for _, host := range []CoordinatorHost{
+		{
+			LogicalHostID:  logicalHostID,
+			RegistrationID: "worker-pool-a",
+			PoolName:       "pool-a",
+			Locality:       "shared",
+			NodeID:         "machine-a",
+			CachePathID:    "path",
+			PrivateAddr:    "10.0.0.1:2049",
+		},
+		{
+			LogicalHostID:  logicalHostID,
+			RegistrationID: "worker-pool-b",
+			PoolName:       "pool-b",
+			Locality:       "shared",
+			NodeID:         "machine-a",
+			CachePathID:    "path",
+			PrivateAddr:    "10.0.0.1:2050",
+		},
+	} {
+		require.NoError(t, coordinator.RegisterHost(ctx, host, 30*time.Second))
+	}
+
+	require.NoError(t, coordinator.RemoveNode(ctx, "pool-a", "shared", "machine-a"))
+
+	poolAHosts, err := coordinator.ListHosts(ctx, "pool-a", "shared")
+	require.NoError(t, err)
+	require.Empty(t, poolAHosts)
+	poolBHosts, err := coordinator.ListHosts(ctx, "pool-b", "shared")
+	require.NoError(t, err)
+	require.Len(t, poolBHosts, 1)
+	require.Equal(t, "worker-pool-b", poolBHosts[0].RegistrationID)
+	require.Contains(t, repo.logicalHosts, logicalHostID)
 }

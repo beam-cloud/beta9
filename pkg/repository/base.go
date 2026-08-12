@@ -43,6 +43,7 @@ type WorkerRepository interface {
 	RemoveContainerIp(networkPrefix string, containerId string) error
 	GetContainerIps(networkPrefix string) ([]string, error)
 	GetContainerIpAssignments(networkPrefix string) ([]types.ContainerIpAssignment, error)
+	RemoveWorkerNetworkState(ctx context.Context, networkPrefix string) error
 	SetNetworkLock(networkPrefix string, ttl, retries int) (string, error)
 	RemoveNetworkLock(networkPrefix string, token string) error
 	GetGpuCounts() (map[string]int, error)
@@ -279,6 +280,9 @@ type BackendRepository interface {
 	ListDiskSnapshots(ctx context.Context, filter types.DiskSnapshotFilter) ([]types.DiskSnapshot, error)
 	GetDisk(ctx context.Context, workspaceId uint, name string) (*types.Disk, error)
 	GetOrCreateDisk(ctx context.Context, workspaceId uint, disk *types.Disk) (*types.Disk, error)
+	// DeleteDisk unregisters the mutable disk resource. Immutable snapshots and
+	// their backing payload are retained because snapshot IDs can outlive a disk
+	// record (for example, when pinned by a template or published for a fork).
 	DeleteDisk(ctx context.Context, workspaceId uint, name string) error
 	ListDisksWithRelated(ctx context.Context, workspaceId uint) ([]types.DiskWithRelated, error)
 }

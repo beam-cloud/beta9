@@ -133,6 +133,29 @@ redis.call("HSET", ref_counts_key, ip, 1)
 return 1
 `)
 
+// removeWorkerNetworkStateScript removes every persistent IP allocation key
+// owned by one worker-network prefix. Provider machines use a machine-scoped
+// prefix, so their preallocated slots must not outlive the machine itself.
+var removeWorkerNetworkStateScript = redis.NewScript(`
+local index_key = KEYS[1]
+local ref_counts_key = KEYS[2]
+local owner_key_prefix = ARGV[1]
+local container_key_prefix = ARGV[2]
+
+local ips = redis.call("SMEMBERS", index_key)
+for _, ip in ipairs(ips) do
+	local owner_key = owner_key_prefix .. ip
+	local container_id = redis.call("GET", owner_key)
+	if container_id and container_id ~= false and container_id ~= "" then
+		redis.call("DEL", container_key_prefix .. container_id)
+	end
+	redis.call("DEL", owner_key)
+end
+
+redis.call("DEL", index_key, ref_counts_key)
+return #ips
+`)
+
 var drainWorkerRequestsScript = redis.NewScript(`
 local requests = redis.call("LRANGE", KEYS[1], 0, -1)
 if #requests > 0 then
@@ -1677,6 +1700,25 @@ func (r *WorkerRedisRepository) GetContainerIp(networkPrefix string, containerId
 	}
 
 	return containerIp, nil
+}
+
+func (r *WorkerRedisRepository) RemoveWorkerNetworkState(ctx context.Context, networkPrefix string) error {
+	lockOptions := common.RedisLockOptions{TtlS: 10, Retries: 20, RetryInterval: 50 * time.Millisecond}
+	slotPoolLockKey := common.RedisKeys.WorkerNetworkLock(networkPrefix + ":slot_pool")
+	return r.lock.WithLease(ctx, slotPoolLockKey, lockOptions, func(lockCtx context.Context) error {
+		return r.lock.WithLease(lockCtx, common.RedisKeys.WorkerNetworkLock(networkPrefix), lockOptions, func(lockCtx context.Context) error {
+			return removeWorkerNetworkStateScript.Run(
+				lockCtx,
+				r.rdb,
+				[]string{
+					common.RedisKeys.WorkerNetworkIpIndex(networkPrefix),
+					common.RedisKeys.WorkerNetworkIpRefCounts(networkPrefix),
+				},
+				common.RedisKeys.WorkerNetworkIpOwnerPrefix(networkPrefix),
+				common.RedisKeys.WorkerNetworkContainerIpPrefix(networkPrefix),
+			).Err()
+		})
+	})
 }
 
 func (r *WorkerRedisRepository) SetContainerIp(networkPrefix string, containerId, containerIp string) error {
