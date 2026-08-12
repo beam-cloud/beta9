@@ -87,6 +87,11 @@ func (r *PostgresBackendRepository) DeleteDisk(ctx context.Context, workspaceId 
 		return err
 	}
 
+	// Disk snapshots are immutable resources in their own right: templates and
+	// public forks retain snapshot IDs after the mutable disk record is gone.
+	// Keep snapshot rows, object payloads, and worker-local restore data here. A
+	// destructive purge needs a separate API that can prove references are gone
+	// and coordinate cleanup with every worker that may hold the disk.
 	query := `UPDATE disk SET deleted_at = CURRENT_TIMESTAMP WHERE workspace_id = $1 AND name = $2 AND deleted_at IS NULL;`
 	_, err = r.client.ExecContext(ctx, query, workspaceId, name)
 	return err

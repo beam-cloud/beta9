@@ -1449,6 +1449,95 @@ func TestDeleteContainerStateReleasesConcurrencyReservation(t *testing.T) {
 	}
 }
 
+func TestDeleteContainerStateCleansIndexesByExitHistory(t *testing.T) {
+	for _, test := range []struct {
+		name              string
+		exitCode          types.ContainerExitCode
+		setExitCode       bool
+		retainStubHistory bool
+	}{
+		{name: "pending cancellation without an exit lease"},
+		{name: "non-failure stop", exitCode: types.ContainerExitCodeUser, setExitCode: true},
+		{name: "failed exit", exitCode: types.ContainerExitCodeUnknownError, setExitCode: true, retainStubHistory: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rdb, err := NewRedisClientForTest()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			repo := NewContainerRedisRepositoryForTest(rdb)
+			state := &types.ContainerState{
+				ContainerId: "endpoint-" + strings.ReplaceAll(test.name, " ", "-"),
+				StubId:      "endpoint-stub",
+				WorkspaceId: "test-workspace",
+				WorkerId:    "worker-one",
+				Status:      types.ContainerStatusRunning,
+			}
+			if err := repo.SetContainerState(state.ContainerId, state); err != nil {
+				t.Fatal(err)
+			}
+			stateKey := common.RedisKeys.SchedulerContainerState(state.ContainerId)
+			workerIndexKey := common.RedisKeys.SchedulerContainerWorkerIndex(state.WorkerId)
+			if err := rdb.SAdd(context.Background(), workerIndexKey, stateKey).Err(); err != nil {
+				t.Fatal(err)
+			}
+			if test.setExitCode {
+				if err := repo.SetContainerExitCode(state.ContainerId, int(test.exitCode)); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			if err := repo.DeleteContainerState(state.ContainerId); err != nil {
+				t.Fatal(err)
+			}
+
+			stubIndexKey := common.RedisKeys.SchedulerContainerIndex(state.StubId)
+			indexed, err := rdb.SIsMember(context.Background(), stubIndexKey, stateKey).Result()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if indexed != test.retainStubHistory {
+				t.Fatalf("stub history indexed = %v, want %v", indexed, test.retainStubHistory)
+			}
+			for _, indexKey := range []string{
+				common.RedisKeys.SchedulerContainerWorkspaceIndex(state.WorkspaceId),
+				workerIndexKey,
+			} {
+				indexed, err := rdb.SIsMember(context.Background(), indexKey, stateKey).Result()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if indexed {
+					t.Fatalf("deleted container state remained in non-history index %s", indexKey)
+				}
+			}
+			exists, err := rdb.Exists(context.Background(), common.RedisKeys.SchedulerContainerExitCode(state.ContainerId)).Result()
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := int64(0)
+			if test.setExitCode {
+				want = 1
+			}
+			if exists != want {
+				t.Fatalf("exit-code lease exists = %d, want %d", exists, want)
+			}
+
+			failed, err := repo.GetFailedContainersByStubId(state.StubId)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.retainStubHistory && (len(failed) != 1 || failed[0] != state.ContainerId) {
+				t.Fatalf("failed container history = %v, want %s", failed, state.ContainerId)
+			}
+			if !test.retainStubHistory && len(failed) != 0 {
+				t.Fatalf("successful container appeared in failure history: %v", failed)
+			}
+		})
+	}
+}
+
 func TestCreateContainerStateWithConcurrencyLimitRepairsStaleConcurrencyCounter(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	if err != nil {

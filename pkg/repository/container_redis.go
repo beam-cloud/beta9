@@ -441,28 +441,61 @@ func (cr *ContainerRedisRepository) DeleteContainerState(containerId string) err
 	}
 	defer cr.lock.Release(common.RedisKeys.SchedulerContainerLock(containerId))
 
+	ctx := context.TODO()
 	stateKey := common.RedisKeys.SchedulerContainerState(containerId)
-	workspaceId, err := cr.rdb.HGet(context.TODO(), stateKey, "workspace_id").Result()
-	if err != nil && err != redis.Nil {
-		return fmt.Errorf("failed to get container workspace <%v>: %w", stateKey, err)
+	state, err := cr.rdb.HMGet(ctx, stateKey, "workspace_id", "stub_id", "worker_id").Result()
+	if err != nil {
+		return fmt.Errorf("failed to get container indexes <%v>: %w", stateKey, err)
 	}
+	indexedValue := func(index int) string {
+		if index >= len(state) || state[index] == nil {
+			return ""
+		}
+		value, _ := state[index].(string)
+		return value
+	}
+	workspaceId := indexedValue(0)
+	stubId := indexedValue(1)
+	workerId := indexedValue(2)
 
 	if workspaceId != "" {
-		if err := cr.rdb.HSet(context.TODO(), stateKey, "status", string(types.ContainerStatusStopping)).Err(); err != nil {
+		if err := cr.rdb.HSet(ctx, stateKey, "status", string(types.ContainerStatusStopping)).Err(); err != nil {
 			return fmt.Errorf("failed to mark container stopping before delete <%v>: %w", stateKey, err)
 		}
-		if err := cr.releaseContainerConcurrencyReservation(context.TODO(), workspaceId, containerId); err != nil {
+		if err := cr.releaseContainerConcurrencyReservation(ctx, workspaceId, containerId); err != nil {
 			return err
 		}
+	}
+
+	// Failed exit codes intentionally keep their stub-index membership for the
+	// autoscaler's bounded failure-history window. Successful and administrative
+	// stops have no history consumer, so retaining their missing state keys would
+	// leak a permanent stub index after a deployment is deleted.
+	retainFailureHistory := false
+	if exitCode, exitErr := cr.rdb.Get(ctx, common.RedisKeys.SchedulerContainerExitCode(containerId)).Int(); exitErr == nil {
+		retainFailureHistory = types.ContainerExitCode(exitCode).IsFailed()
+	} else if exitErr != redis.Nil {
+		// A Redis read failure must not make failure history disappear. The normal
+		// index reader can prune this member once the exit-code lease is gone.
+		retainFailureHistory = true
 	}
 
 	addrKey := common.RedisKeys.SchedulerContainerAddress(containerId)
 	addrMapKey := common.RedisKeys.SchedulerContainerAddressMap(containerId)
 	workerAddrKey := common.RedisKeys.SchedulerWorkerAddress(containerId)
 	pipe := cr.rdb.TxPipeline()
-	pipe.Del(context.TODO(), stateKey, addrKey, addrMapKey, workerAddrKey)
-	pipe.ZRem(context.TODO(), common.RedisKeys.SchedulerContainerStateIndex(), stateKey)
-	if _, err := pipe.Exec(context.TODO()); err != nil {
+	pipe.Del(ctx, stateKey, addrKey, addrMapKey, workerAddrKey)
+	pipe.ZRem(ctx, common.RedisKeys.SchedulerContainerStateIndex(), stateKey)
+	if workspaceId != "" {
+		pipe.SRem(ctx, common.RedisKeys.SchedulerContainerWorkspaceIndex(workspaceId), stateKey)
+	}
+	if workerId != "" {
+		pipe.SRem(ctx, common.RedisKeys.SchedulerContainerWorkerIndex(workerId), stateKey)
+	}
+	if stubId != "" && !retainFailureHistory {
+		pipe.SRem(ctx, common.RedisKeys.SchedulerContainerIndex(stubId), stateKey)
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("failed to delete container state <%v>: %w", stateKey, err)
 	}
 
