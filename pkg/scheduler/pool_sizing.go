@@ -152,9 +152,13 @@ func (s *WorkerPoolSizer) poolSupportsProvisioning() bool {
 	if s == nil || s.workerPoolConfig == nil {
 		return true
 	}
-	if s.workerPoolConfig.Mode == types.PoolModeExternal &&
-		s.workerPoolConfig.Provider != nil &&
-		*s.workerPoolConfig.Provider == types.ProviderGeneric {
+	return workerPoolSupportsProvisioning(*s.workerPoolConfig)
+}
+
+func workerPoolSupportsProvisioning(config types.WorkerPoolConfig) bool {
+	if config.Mode == types.PoolModeExternal &&
+		config.Provider != nil &&
+		*config.Provider == types.ProviderGeneric {
 		return false
 	}
 	return true

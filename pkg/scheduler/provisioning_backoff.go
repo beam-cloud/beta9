@@ -3,6 +3,8 @@ package scheduler
 import (
 	"sync"
 	"time"
+
+	"github.com/beam-cloud/beta9/pkg/types"
 )
 
 const (
@@ -21,23 +23,51 @@ func newWorkerProvisioningBackoff() *workerProvisioningBackoff {
 	}
 }
 
-func (s *Scheduler) workerProvisioningController(controllers []WorkerPoolController) (WorkerPoolController, time.Duration) {
-	if s == nil || s.workerProvisioningBackoff == nil {
-		return firstController(controllers), provisioningWorkerRequeueDelay
+func (s *Scheduler) workerProvisioningControllerForRequest(controllers []WorkerPoolController, request *types.ContainerRequest) (WorkerPoolController, time.Duration, error) {
+	if s == nil {
+		return firstController(controllers), provisioningWorkerRequeueDelay, nil
 	}
 
 	var poolNames []string
+	var capacityErr error
 	for _, controller := range controllers {
 		if controller == nil {
 			continue
 		}
+		if pool, ok := s.poolForController(controller); ok && !workerPoolSupportsProvisioning(pool.Config) {
+			continue
+		}
+		if request != nil {
+			if checker, ok := controller.(workerPoolCapacityChecker); ok {
+				hasCapacity, err := checker.HasWorkerCapacity(
+					s.workerCPUForControllerRequest(controller, request),
+					s.workerMemoryForControllerRequest(controller, request),
+					s.workerGPUCountForControllerRequest(controller, request),
+				)
+				if err != nil {
+					if capacityErr == nil {
+						capacityErr = err
+					}
+					continue
+				}
+				if !hasCapacity {
+					continue
+				}
+			}
+		}
 		poolNames = append(poolNames, controller.Name())
-		if s.workerProvisioningBackoff.canAttempt(controller.Name()) {
-			return controller, provisioningWorkerRequeueDelay
+		if s.workerProvisioningBackoff == nil || s.workerProvisioningBackoff.canAttempt(controller.Name()) {
+			return controller, provisioningWorkerRequeueDelay, nil
 		}
 	}
 
-	return nil, s.workerProvisioningBackoff.nextDelay(poolNames)
+	if capacityErr != nil {
+		return nil, provisioningWorkerRequeueDelay, capacityErr
+	}
+	if s.workerProvisioningBackoff == nil {
+		return nil, provisioningWorkerRequeueDelay, nil
+	}
+	return nil, s.workerProvisioningBackoff.nextDelay(poolNames), nil
 }
 
 func firstController(controllers []WorkerPoolController) WorkerPoolController {

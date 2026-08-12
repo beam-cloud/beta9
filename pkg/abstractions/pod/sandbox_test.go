@@ -209,10 +209,13 @@ func TestSandboxExecEnvironmentInjectsOnlySecretsThatExist(t *testing.T) {
 
 type sandboxStatusContainerRepository struct {
 	repository.ContainerRepository
-	stateErr     error
-	exitCode     int
-	exitCodeErr  error
-	exitCodeRead bool
+	stateErr          error
+	requestStatus     types.ContainerRequestStatus
+	requestStatusErr  error
+	requestStatusRead bool
+	exitCode          int
+	exitCodeErr       error
+	exitCodeRead      bool
 }
 
 func (r *sandboxStatusContainerRepository) GetContainerState(string) (*types.ContainerState, error) {
@@ -224,22 +227,32 @@ func (r *sandboxStatusContainerRepository) GetContainerExitCode(string) (int, er
 	return r.exitCode, r.exitCodeErr
 }
 
+func (r *sandboxStatusContainerRepository) GetContainerRequestStatus(string) (types.ContainerRequestStatus, error) {
+	r.requestStatusRead = true
+	return r.requestStatus, r.requestStatusErr
+}
+
 func TestSandboxContainerStatusAfterStateExpiry(t *testing.T) {
 	const containerId = "sandbox-11111111-2222-3333-4444-555555555555-deadbeef"
 	ownedStub := &types.StubWithRelated{Stub: types.Stub{WorkspaceId: 7}}
 	tests := []struct {
-		name         string
-		workspaceID  uint
-		stub         *types.StubWithRelated
-		exitCode     int
-		exitCodeErr  error
-		wantExited   bool
-		wantStateErr bool
-		wantExitRead bool
+		name             string
+		workspaceID      uint
+		stub             *types.StubWithRelated
+		exitCode         int
+		exitCodeErr      error
+		requestStatus    types.ContainerRequestStatus
+		requestStatusErr error
+		wantExited       bool
+		wantExitCode     int
+		wantStateErr     bool
+		wantRequestRead  bool
+		wantExitRead     bool
 	}{
-		{name: "exited", workspaceID: 7, stub: ownedStub, exitCode: 1, wantExited: true, wantExitRead: true},
+		{name: "exited", workspaceID: 7, stub: ownedStub, requestStatusErr: errors.New("not found"), exitCode: 1, wantExited: true, wantExitCode: 1, wantRequestRead: true, wantExitRead: true},
+		{name: "scheduling failed", workspaceID: 7, stub: ownedStub, requestStatus: types.ContainerRequestStatusFailed, wantExited: true, wantExitCode: 1, wantRequestRead: true},
 		{name: "other workspace", workspaceID: 8, stub: ownedStub},
-		{name: "expired exit code", workspaceID: 7, stub: ownedStub, exitCodeErr: errors.New("not found"), wantStateErr: true, wantExitRead: true},
+		{name: "expired exit code", workspaceID: 7, stub: ownedStub, requestStatusErr: errors.New("not found"), exitCodeErr: errors.New("not found"), wantStateErr: true, wantRequestRead: true, wantExitRead: true},
 		{name: "missing stub", workspaceID: 7, wantStateErr: true},
 	}
 
@@ -247,7 +260,8 @@ func TestSandboxContainerStatusAfterStateExpiry(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			stateErr := &types.ErrContainerStateNotFound{ContainerId: containerId}
 			containerRepo := &sandboxStatusContainerRepository{
-				stateErr: stateErr, exitCode: tt.exitCode, exitCodeErr: tt.exitCodeErr,
+				stateErr: stateErr, requestStatus: tt.requestStatus, requestStatusErr: tt.requestStatusErr,
+				exitCode: tt.exitCode, exitCodeErr: tt.exitCodeErr,
 			}
 			service := &GenericPodService{
 				containerRepo: containerRepo,
@@ -259,7 +273,7 @@ func TestSandboxContainerStatusAfterStateExpiry(t *testing.T) {
 
 			switch {
 			case tt.wantExited:
-				if err != nil || resp == nil || !resp.Ok || resp.Status != string(types.SandboxStatusExited) || resp.ExitCode != int32(tt.exitCode) {
+				if err != nil || resp == nil || !resp.Ok || resp.Status != string(types.SandboxStatusExited) || resp.ExitCode != int32(tt.wantExitCode) {
 					t.Fatalf("sandboxContainerStatus() = (%#v, %v)", resp, err)
 				}
 			case tt.wantStateErr:
@@ -273,6 +287,9 @@ func TestSandboxContainerStatusAfterStateExpiry(t *testing.T) {
 			}
 			if containerRepo.exitCodeRead != tt.wantExitRead {
 				t.Fatalf("exit code read = %t, want %t", containerRepo.exitCodeRead, tt.wantExitRead)
+			}
+			if containerRepo.requestStatusRead != tt.wantRequestRead {
+				t.Fatalf("request status read = %t, want %t", containerRepo.requestStatusRead, tt.wantRequestRead)
 			}
 		})
 	}

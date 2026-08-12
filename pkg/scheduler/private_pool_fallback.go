@@ -7,7 +7,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-type privatePoolCapacityChecker interface {
+type workerPoolCapacityChecker interface {
 	HasWorkerCapacity(cpu int64, memory int64, gpuCount uint32) (bool, error)
 }
 
@@ -79,7 +79,7 @@ func (a *schedulingAttempt) privatePoolFallbackRequest() (*types.ContainerReques
 	}
 
 	if a.request.StorageAvailable() {
-		checker, ok := pool.Controller.(privatePoolCapacityChecker)
+		checker, ok := pool.Controller.(workerPoolCapacityChecker)
 		if !ok {
 			return nil, "", false
 		}
@@ -155,6 +155,6 @@ func (a *schedulingAttempt) canProvisionWorker() bool {
 	if err != nil {
 		return false
 	}
-	controller, _ := a.scheduler.workerProvisioningController(controllers)
-	return controller != nil
+	controller, _, err := a.scheduler.workerProvisioningControllerForRequest(controllers, a.request)
+	return err == nil && controller != nil
 }
