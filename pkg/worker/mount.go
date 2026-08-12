@@ -4,14 +4,17 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	abstractionscommon "github.com/beam-cloud/beta9/pkg/abstractions/common"
@@ -35,6 +38,30 @@ type ContainerMountManager struct {
 type containerMountPoint struct {
 	localPath string
 	storage   storage.Storage
+}
+
+const (
+	workspaceBindMountRetryBudget       = 3 * time.Minute
+	workspaceBindMountRetryInitialDelay = 250 * time.Millisecond
+	workspaceBindMountRetryMaxDelay     = 5 * time.Second
+)
+
+type bindMountSourceDirOps struct {
+	mkdirAll    func(string, os.FileMode) error
+	now         func() time.Time
+	wait        func(context.Context, time.Duration) error
+	jitter      func(time.Duration) time.Duration
+	retryBudget time.Duration
+}
+
+func defaultBindMountSourceDirOps() bindMountSourceDirOps {
+	return bindMountSourceDirOps{
+		mkdirAll:    os.MkdirAll,
+		now:         time.Now,
+		wait:        waitForRetry,
+		jitter:      jitterBindMountRetryDelay,
+		retryBudget: workspaceBindMountRetryBudget,
+	}
 }
 
 func NewContainerMountManager(config types.AppConfig, poolConfig ...types.WorkerPoolConfig) *ContainerMountManager {
@@ -121,17 +148,27 @@ func (c *ContainerMountManager) SetupContainerMounts(ctx context.Context, reques
 	return nil
 }
 
-func (c *ContainerMountManager) ensureBindMountSourceDirs(mounts []types.Mount) error {
+func (c *ContainerMountManager) ensureBindMountSourceDirs(ctx context.Context, mounts []types.Mount) error {
+	return c.ensureBindMountSourceDirsWithOps(ctx, mounts, defaultBindMountSourceDirOps())
+}
+
+func (c *ContainerMountManager) ensureBindMountSourceDirsWithOps(ctx context.Context, mounts []types.Mount, ops bindMountSourceDirOps) error {
 	for _, mount := range mounts {
 		if mount.MountType == storage.StorageModeMountPoint || mount.LocalPath == "" {
 			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 		if mount.MountPath == types.WorkerUserOutputVolume {
 			if _, ready := c.readyOutputDirs.Load(mount.LocalPath); ready {
 				continue
 			}
 		}
-		if err := os.MkdirAll(mount.LocalPath, 0755); err != nil {
+		retry := mount.MountType != storage.StorageModeLocal &&
+			mount.MountType != types.StorageModeDurableDisk && mount.DurableDisk == nil &&
+			pathWithinBase(c.storageConfig.WorkspaceStorage.BaseMountPath, mount.LocalPath)
+		if err := ensureBindMountSourceDir(ctx, mount.LocalPath, retry, ops); err != nil {
 			return fmt.Errorf("create bind mount source %s for %s: %w", mount.LocalPath, mount.MountPath, err)
 		}
 		if mount.MountPath == types.WorkerUserOutputVolume {
@@ -139,6 +176,63 @@ func (c *ContainerMountManager) ensureBindMountSourceDirs(mounts []types.Mount) 
 		}
 	}
 	return nil
+}
+
+func ensureBindMountSourceDir(ctx context.Context, localPath string, retry bool, ops bindMountSourceDirOps) error {
+	startedAt := ops.now()
+	deadline := startedAt.Add(ops.retryBudget)
+	delay := workspaceBindMountRetryInitialDelay
+	attempts := 0
+	retrying := false
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		attempts++
+		err := ops.mkdirAll(localPath, 0755)
+		if err == nil {
+			if retrying {
+				log.Info().Str("local_path", localPath).Int("attempts", attempts).Dur("elapsed", ops.now().Sub(startedAt)).Msg("workspace bind mount source recovered")
+			}
+			return nil
+		}
+		if !retry || !errors.Is(err, syscall.EAGAIN) {
+			return err
+		}
+
+		remaining := deadline.Sub(ops.now())
+		if remaining <= 0 {
+			return err
+		}
+		if !retrying {
+			retrying = true
+			log.Warn().Str("local_path", localPath).Dur("retry_budget", ops.retryBudget).Msg("workspace bind mount source temporarily unavailable; retrying")
+		}
+		waitDelay := ops.jitter(delay)
+		if waitDelay > remaining {
+			waitDelay = remaining
+		}
+		if waitErr := ops.wait(ctx, waitDelay); waitErr != nil {
+			return waitErr
+		}
+		if !ops.now().Before(deadline) {
+			return err
+		}
+		delay = min(2*delay, workspaceBindMountRetryMaxDelay)
+	}
+}
+
+func jitterBindMountRetryDelay(delay time.Duration) time.Duration {
+	half := delay / 2
+	return half + time.Duration(rand.Int63n(int64(delay-half)+1))
+}
+
+func pathWithinBase(basePath, localPath string) bool {
+	if strings.TrimSpace(basePath) == "" {
+		return false
+	}
+	rel, err := filepath.Rel(filepath.Clean(basePath), filepath.Clean(localPath))
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func (c *ContainerMountManager) RequiresWorkspaceStorageMount(request *types.ContainerRequest) bool {

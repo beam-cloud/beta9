@@ -731,7 +731,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		return err
 	}
 	var mountSetup errgroup.Group
-	mountSetup.Go(func() error { return s.containerMountManager.ensureBindMountSourceDirs(request.Mounts) })
+	mountSetup.Go(func() error { return s.containerMountManager.ensureBindMountSourceDirs(ctx, request.Mounts) })
 
 	// Generate dynamic runc spec for this container
 	phaseStart = time.Now()

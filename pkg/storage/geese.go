@@ -276,6 +276,7 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	// Backend config
 	s3Config := &cfg.S3Config{}
 	s3Config.Init()
+	s3Config.MetadataSDKMaxRetries = cfg.DefaultMetadataSDKMaxRetries
 	s3Config.AccessKey = s.config.AccessKey
 	s3Config.SecretKey = s.config.SecretKey
 	s3Config.Region = s.config.Region
