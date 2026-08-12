@@ -355,6 +355,10 @@ func (rk *redisKeys) WorkerNetworkContainerIp(networkPrefix, containerId string)
 	return fmt.Sprintf(workerNetworkContainerIp, networkPrefix, containerId)
 }
 
+func (rk *redisKeys) WorkerNetworkContainerIpPrefix(networkPrefix string) string {
+	return fmt.Sprintf(workerNetworkContainerIp, networkPrefix, "")
+}
+
 // Worker Pool keys
 func (rk *redisKeys) WorkerPoolPrefix() string {
 	return workerPoolPrefix

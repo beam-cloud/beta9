@@ -1520,6 +1520,42 @@ func TestRemoveContainerIpCleansLegacyIndexWithoutOwnerKey(t *testing.T) {
 	assert.Nil(t, err)
 }
 
+func TestRemoveWorkerNetworkStateDeletesOnlyMachineScopedAllocations(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	assert.NoError(t, err)
+	t.Cleanup(func() { _ = rdb.Close() })
+	repo := NewWorkerRedisRepositoryForTest(rdb)
+	targetPrefix := common.WorkerNetworkPrefix("beta9", "machine-a")
+	otherPrefix := common.WorkerNetworkPrefix("beta9", "machine-b")
+
+	for i := 0; i < 24; i++ {
+		containerID := fmt.Sprintf("network-slot:slot-%02d", i)
+		ip := fmt.Sprintf("192.168.0.%d", i+2)
+		assert.NoError(t, repo.SetContainerIp(targetPrefix, containerID, ip))
+	}
+	assert.NoError(t, repo.SetContainerIp(otherPrefix, "network-slot:other", "192.168.1.2"))
+
+	ctx := context.Background()
+	targetKeys, err := rdb.Keys(ctx, "worker:network:"+targetPrefix+"*")
+	assert.NoError(t, err)
+	assert.Equal(t, 50, len(targetKeys))
+	routeRevisionKey := "scheduler:route:machine:{workspace-1}:pool:machine-a:rev"
+	assert.NoError(t, rdb.Set(ctx, routeRevisionKey, "7", 0).Err())
+
+	assert.NoError(t, repo.RemoveWorkerNetworkState(ctx, targetPrefix))
+	assert.NoError(t, repo.RemoveWorkerNetworkState(ctx, targetPrefix))
+
+	targetKeys, err = rdb.Keys(ctx, "worker:network:"+targetPrefix+"*")
+	assert.NoError(t, err)
+	assert.Empty(t, targetKeys)
+	otherIP, err := repo.GetContainerIp(otherPrefix, "network-slot:other")
+	assert.NoError(t, err)
+	assert.Equal(t, "192.168.1.2", otherIP)
+	routeRevision, err := rdb.Get(ctx, routeRevisionKey).Result()
+	assert.NoError(t, err)
+	assert.Equal(t, "7", routeRevision)
+}
+
 func BenchmarkGetAllWorkers(b *testing.B) {
 	rdb, err := NewRedisClientForTest()
 	assert.NotNil(b, rdb)

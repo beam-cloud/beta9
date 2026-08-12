@@ -52,6 +52,13 @@ func TestCacheRedisRepositoryUsesReadableCoordinatorHostIndexKeys(t *testing.T) 
 	for _, key := range keys {
 		require.NotContains(t, key, "cache:coordinator:index:")
 	}
+	for _, key := range []string{
+		cacheCoordinatorIndexKey(host.PoolName, host.Locality),
+		cacheCoordinatorLocalityIndexKey(host.Locality),
+		cacheCoordinatorRegistrationSetKey(host.LogicalHostID),
+	} {
+		require.Positive(t, server.TTL(key), "coordinator set must expire after its last heartbeat: %s", key)
+	}
 
 	logicalHost, ok, err := repo.GetCacheLogicalHost(ctx, host.LogicalHostID)
 	require.NoError(t, err)
@@ -93,4 +100,58 @@ func TestCacheRedisRepositoryListsLocalityHostsWithoutScanningPoolIndexes(t *tes
 
 	require.NoError(t, err)
 	require.Equal(t, []string{host.LogicalHostID}, hosts)
+}
+
+func TestCacheRedisRepositoryRemoveNodeDeletesPersistentCoordinatorState(t *testing.T) {
+	ctx := context.Background()
+
+	server, err := miniredis.Run()
+	require.NoError(t, err)
+	t.Cleanup(server.Close)
+
+	rdb, err := common.NewRedisClient(types.RedisConfig{
+		Addrs: []string{server.Addr()},
+		Mode:  types.RedisModeSingle,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = rdb.Close() })
+
+	coordinator := cache.NewCoordinator(NewCacheRedisRepository(rdb))
+	target := cache.CoordinatorHost{
+		LogicalHostID:  "cache-host-workspace-pool-machine-a-path",
+		RegistrationID: "worker-a",
+		PoolName:       "pool",
+		Locality:       "workspace/pool",
+		NodeID:         "machine-a",
+		CachePathID:    "path",
+		PrivateAddr:    "10.0.0.1:2049",
+	}
+	other := cache.CoordinatorHost{
+		LogicalHostID:  "cache-host-workspace-pool-machine-b-path",
+		RegistrationID: "worker-b",
+		PoolName:       "pool",
+		Locality:       "workspace/pool",
+		NodeID:         "machine-b",
+		CachePathID:    "path",
+		PrivateAddr:    "10.0.0.2:2049",
+	}
+	require.NoError(t, coordinator.RegisterHost(ctx, target, 30*time.Second))
+	require.NoError(t, coordinator.RegisterHost(ctx, other, 30*time.Second))
+
+	require.NoError(t, coordinator.RemoveNode(ctx, target.PoolName, target.Locality, target.NodeID))
+
+	for _, key := range []string{
+		cacheCoordinatorRegistrationSetKey(target.LogicalHostID),
+		cacheCoordinatorLogicalHostKey(target.LogicalHostID),
+		cacheCoordinatorRegistrationKey(target.LogicalHostID, target.RegistrationID),
+		cacheCoordinatorActiveRegistrationKey(target.LogicalHostID),
+	} {
+		require.False(t, server.Exists(key), "released node key survived: %s", key)
+	}
+	poolHosts, err := rdb.SMembers(ctx, cacheCoordinatorIndexKey(target.PoolName, target.Locality)).Result()
+	require.NoError(t, err)
+	require.Equal(t, []string{other.LogicalHostID}, poolHosts)
+	localityHosts, err := rdb.SMembers(ctx, cacheCoordinatorLocalityIndexKey(target.Locality)).Result()
+	require.NoError(t, err)
+	require.Equal(t, []string{other.LogicalHostID}, localityHosts)
 }

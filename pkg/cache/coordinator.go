@@ -50,6 +50,7 @@ type CoordinatorRepository interface {
 	GetCacheLogicalHost(ctx context.Context, logicalHostID string) (CoordinatorHost, bool, error)
 	RemoveCacheRegistration(ctx context.Context, logicalHostID, registrationID string) error
 	CountCacheRegistrations(ctx context.Context, logicalHostID string) (int64, error)
+	RemoveCacheLogicalHostFromPool(ctx context.Context, poolName, locality, logicalHostID string) error
 	RemoveCacheLogicalHost(ctx context.Context, poolName, locality, logicalHostID string) error
 }
 
@@ -126,6 +127,84 @@ func (c *Coordinator) ListHosts(ctx context.Context, poolName, locality string) 
 		hosts = append(hosts, logicalHosts...)
 	}
 	return hosts, nil
+}
+
+// RemoveNode removes coordinator registrations and indexes owned by one
+// released node without disturbing another node or a shared logical host.
+func (c *Coordinator) RemoveNode(ctx context.Context, poolName, locality, nodeID string) error {
+	if c == nil || c.repository == nil {
+		return ErrCoordinatorUnavailable
+	}
+	if poolName == "" || locality == "" || nodeID == "" {
+		return fmt.Errorf("%w: pool, locality, and node are required", ErrInvalidHostRegistration)
+	}
+
+	logicalHostIDs, err := c.repository.ListCacheLogicalHosts(ctx, poolName, locality)
+	if err != nil {
+		return err
+	}
+	for _, logicalHostID := range logicalHostIDs {
+		removed, err := c.removeNodeRegistrations(ctx, poolName, locality, nodeID, logicalHostID)
+		if err != nil {
+			return err
+		}
+
+		logicalHost, logicalHostFound, err := c.repository.GetCacheLogicalHost(ctx, logicalHostID)
+		if err != nil {
+			return err
+		}
+		logicalHostOwnedByNode := logicalHostFound &&
+			logicalHost.PoolName == poolName &&
+			logicalHost.Locality == locality &&
+			logicalHost.NodeID == nodeID
+		if !removed && !logicalHostOwnedByNode {
+			continue
+		}
+
+		count, err := c.repository.CountCacheRegistrations(ctx, logicalHostID)
+		if err != nil {
+			return err
+		}
+		if count == 0 {
+			if err := c.repository.RemoveCacheLogicalHost(ctx, poolName, locality, logicalHostID); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := c.repository.RemoveCacheLogicalHostFromPool(ctx, poolName, locality, logicalHostID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *Coordinator) removeNodeRegistrations(ctx context.Context, poolName, locality, nodeID, logicalHostID string) (bool, error) {
+	registrationIDs, err := c.repository.ListCacheRegistrations(ctx, logicalHostID)
+	if err != nil {
+		return false, err
+	}
+
+	removed := false
+	for _, registrationID := range registrationIDs {
+		host, found, err := c.repository.GetCacheRegistration(ctx, logicalHostID, registrationID)
+		if err != nil {
+			return false, err
+		}
+		if !found {
+			if err := c.repository.RemoveCacheRegistration(ctx, logicalHostID, registrationID); err != nil {
+				return false, err
+			}
+			continue
+		}
+		if host.PoolName != poolName || host.Locality != locality || host.NodeID != nodeID {
+			continue
+		}
+		if err := c.repository.RemoveCacheRegistration(ctx, logicalHostID, registrationID); err != nil {
+			return false, err
+		}
+		removed = true
+	}
+	return removed, nil
 }
 
 func (c *Coordinator) logicalHosts(ctx context.Context, poolName, locality, logicalHostID string) ([]CoordinatorHost, error) {
