@@ -1498,6 +1498,14 @@ class ListMachinesResponse(betterproto.Message):
      type: true when a pool could serve the GPU even if scaled to zero.
     """
 
+    max_cpu_millicores: int = betterproto.uint32_field(6)
+    """
+    Resource ceilings enforced when creating a serverless stub. Private
+     on-demand pools own their machine and do not use these limits.
+    """
+
+    max_memory_mb: int = betterproto.uint32_field(7)
+
 
 @dataclass(eq=False, repr=False)
 class CreateMachineRequest(betterproto.Message):

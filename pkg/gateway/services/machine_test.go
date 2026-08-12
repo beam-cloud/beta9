@@ -69,6 +69,14 @@ func TestClassifyMachinePool(t *testing.T) {
 	}
 }
 
+func TestMachineListResponseReportsConfiguredStubLimits(t *testing.T) {
+	response := machineListResponse(nil, nil, nil, 0, types.StubLimits{Cpu: 96_000, Memory: 48 * 1024})
+
+	if response.MaxCpuMillicores != 96_000 || response.MaxMemoryMb != 48*1024 {
+		t.Fatalf("machineListResponse() limits = %d/%d, want %d/%d", response.MaxCpuMillicores, response.MaxMemoryMb, 96_000, 48*1024)
+	}
+}
+
 func TestDeleteMachineRoutesConfiguredExternalPoolToProviderRepository(t *testing.T) {
 	rdb, err := repository.NewRedisClientForTest()
 	if err != nil {
