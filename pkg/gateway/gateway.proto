@@ -1642,6 +1642,10 @@ message ListMachinesResponse {
   // supported_gpus reports pool-config-based serverless support per GPU
   // type: true when a pool could serve the GPU even if scaled to zero.
   map<string, bool> supported_gpus = 5;
+  // Resource ceilings enforced when creating a serverless stub. Private
+  // on-demand pools own their machine and do not use these limits.
+  uint32 max_cpu_millicores = 6;
+  uint32 max_memory_mb = 7;
 }
 
 message CreateMachineRequest { string pool_name = 1; }
