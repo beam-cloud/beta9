@@ -59,6 +59,7 @@ const (
 	containerNetworkCleanupRPCTimeout   time.Duration = 30 * time.Second
 	containerNetworkCleanupLockRetries                = 14
 	containerNetworkSlotAcquireAttempts               = 3
+	criuNetworkLockChain                string        = "CRIU"
 )
 
 type ContainerNetworkManager struct {
@@ -682,6 +683,25 @@ func (m *ContainerNetworkManager) cleanupStaleNetworkSlots() error {
 			}
 			assignedSlots[slotID] = struct{}{}
 			resourcesExist := m.networkSlotResourcesExist(slotID)
+			if slotWorkerID == m.workerId {
+				originalResourcesExist := resourcesExist
+				var inspectErr error
+				resourcesExist, inspectErr = networkSlotReusableForAdoption(
+					resourcesExist,
+					slotID,
+					m.networkSlotHasCRIULock,
+				)
+				if inspectErr != nil {
+					log.Warn().
+						Str("network_slot", slotID).
+						Err(inspectErr).
+						Msg("discarding preallocated network slot because its firewall state could not be verified")
+				} else if originalResourcesExist && !resourcesExist {
+					log.Info().
+						Str("network_slot", slotID).
+						Msg("discarding preallocated network slot retained after terminal checkpoint")
+				}
+			}
 			if slotWorkerID == m.workerId && resourcesExist && m.adoptNetworkSlot(assignment, slotID) {
 				adopted++
 				continue
@@ -769,6 +789,21 @@ func (m *ContainerNetworkManager) cleanupStaleNetworkSlots() error {
 
 		return nil
 	})
+}
+
+func networkSlotReusableForAdoption(
+	resourcesExist bool,
+	slotID string,
+	inspect func(string) (bool, error),
+) (bool, error) {
+	if !resourcesExist {
+		return false, nil
+	}
+	locked, err := inspect(slotID)
+	if err != nil {
+		return false, err
+	}
+	return !locked, nil
 }
 
 func (m *ContainerNetworkManager) adoptNetworkSlot(assignment *pb.ContainerIpAssignment, slotID string) bool {
@@ -1033,8 +1068,22 @@ func (m *ContainerNetworkManager) setupPreallocatedNetworkSlot(containerId strin
 }
 
 func (m *ContainerNetworkManager) prepareNetworkSlotForAssignment(slot *containerNetworkSlot) error {
+	return m.prepareNetworkSlotForAssignmentWithInspector(slot, m.networkSlotHasCRIULock)
+}
+
+func (m *ContainerNetworkManager) prepareNetworkSlotForAssignmentWithInspector(
+	slot *containerNetworkSlot,
+	inspect func(string) (bool, error),
+) error {
 	if slot == nil || slot.ip == "" {
 		return errors.New("network slot is missing an IP address")
+	}
+	locked, err := inspect(slot.id)
+	if err != nil {
+		return fmt.Errorf("failed to verify network slot %s firewall state: %w", slot.id, err)
+	}
+	if locked {
+		return fmt.Errorf("network slot %s retained a CRIU terminal-checkpoint lock", slot.id)
 	}
 	if !m.networkSlotResourcesExist(slot.id) {
 		return fmt.Errorf("network slot %s is missing local resources", slot.id)
@@ -2335,6 +2384,35 @@ func (m *ContainerNetworkManager) tearDownPreallocatedNetworkSlot(containerId st
 	if err := m.removePreallocatedNetworkSlotRules(slot); err != nil {
 		return err
 	}
+	return m.recyclePreallocatedNetworkSlotWithInspector(containerId, slot, m.networkSlotHasCRIULock)
+}
+
+func (m *ContainerNetworkManager) recyclePreallocatedNetworkSlotWithInspector(
+	containerId string,
+	slot *containerNetworkSlot,
+	inspect func(string) (bool, error),
+) error {
+	locked, inspectErr := inspect(slot.id)
+	if inspectErr != nil || locked {
+		logEvent := log.Warn().
+			Str("container_id", containerId).
+			Str("network_slot", slot.id)
+		if inspectErr != nil {
+			logEvent = logEvent.Err(inspectErr)
+			logEvent.Msg("discarding preallocated network slot because its firewall state could not be verified")
+		} else {
+			logEvent.Msg("discarding preallocated network slot retained after terminal checkpoint")
+		}
+
+		// CRIU intentionally leaves this lock in place after a successful
+		// terminal checkpoint to suppress TCP resets. Do not flush it in place:
+		// retire the internal namespace so a fresh workload cannot inherit it.
+		m.discardNetworkSlot(containerId, slot)
+		if m.slotPoolSize > 0 {
+			go m.fillNetworkSlotPool()
+		}
+		return nil
+	}
 
 	if err := m.releasePreallocatedNetworkSlot(containerId, slot); err != nil {
 		m.discardNetworkSlot(containerId, slot)
@@ -2349,6 +2427,66 @@ func (m *ContainerNetworkManager) tearDownPreallocatedNetworkSlot(containerId st
 
 	m.returnNetworkSlot(containerId, slot)
 	return nil
+}
+
+func (m *ContainerNetworkManager) networkSlotHasCRIULock(slotID string) (bool, error) {
+	if slotID == "" {
+		return false, errors.New("network slot id is required")
+	}
+	output, err := exec.Command("ip", "netns", "exec", slotID, "iptables-save", "-t", "filter").CombinedOutput()
+	if err != nil {
+		return false, fmt.Errorf("inspect network slot firewall: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	return hasCRIUNetworkLockSignature(string(output)), nil
+}
+
+func hasCRIUNetworkLockSignature(dump string) bool {
+	inputHook := false
+	outputHook := false
+	markAccept := false
+	drop := false
+	chainRules := 0
+	for _, rule := range strings.Split(dump, "\n") {
+		fields := iptablesRuleFields(rule)
+		if len(fields) < 2 || fields[0] != "-A" {
+			continue
+		}
+		switch {
+		case len(fields) == 4 && fields[1] == "INPUT" && fields[2] == "-j" && fields[3] == criuNetworkLockChain:
+			inputHook = true
+		case len(fields) == 4 && fields[1] == "OUTPUT" && fields[2] == "-j" && fields[3] == criuNetworkLockChain:
+			outputHook = true
+		case len(fields) == 8 &&
+			fields[1] == criuNetworkLockChain &&
+			fields[2] == "-m" && fields[3] == "mark" &&
+			fields[4] == "--mark" && isCRIUNetworkLockMark(fields[5]) &&
+			fields[6] == "-j" && fields[7] == "ACCEPT":
+			markAccept = true
+			chainRules++
+		case len(fields) == 4 && fields[1] == criuNetworkLockChain && fields[2] == "-j" && fields[3] == "DROP":
+			drop = true
+			chainRules++
+		case fields[1] == criuNetworkLockChain:
+			chainRules++
+		}
+	}
+	return inputHook && outputHook && markAccept && drop && chainRules == 2
+}
+
+func isCRIUNetworkLockMark(value string) bool {
+	parts := strings.Split(value, "/")
+	if len(parts) > 2 {
+		return false
+	}
+	mark, err := strconv.ParseUint(parts[0], 0, 32)
+	if err != nil || mark != 0xc114 {
+		return false
+	}
+	if len(parts) == 1 {
+		return true
+	}
+	mask, err := strconv.ParseUint(parts[1], 0, 32)
+	return err == nil && mask == 0xffffffff
 }
 
 func (m *ContainerNetworkManager) removePreallocatedNetworkSlotRules(slot *containerNetworkSlot) error {

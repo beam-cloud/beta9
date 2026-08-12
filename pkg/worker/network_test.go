@@ -363,6 +363,36 @@ func TestAdoptNetworkSlotRespectsPoolSize(t *testing.T) {
 	}
 }
 
+func TestNetworkSlotAdoptionRejectsTerminalCheckpointLock(t *testing.T) {
+	inspected := 0
+	inspect := func(slotID string) (bool, error) {
+		inspected++
+		if slotID != "slot-a" {
+			t.Fatalf("inspected slot %q, want slot-a", slotID)
+		}
+		return true, nil
+	}
+
+	reusable, err := networkSlotReusableForAdoption(true, "slot-a", inspect)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reusable {
+		t.Fatal("expected terminal-checkpoint slot not to be adopted")
+	}
+	if inspected != 1 {
+		t.Fatalf("expected one firewall inspection, got %d", inspected)
+	}
+
+	reusable, err = networkSlotReusableForAdoption(false, "slot-a", func(string) (bool, error) {
+		t.Fatal("missing slot resources must not be inspected")
+		return false, nil
+	})
+	if err != nil || reusable {
+		t.Fatalf("missing slot unexpectedly reusable: reusable=%t err=%v", reusable, err)
+	}
+}
+
 func TestDrainFreeNetworkSlots(t *testing.T) {
 	manager := &ContainerNetworkManager{
 		freeSlots: []*containerNetworkSlot{
@@ -578,6 +608,159 @@ func TestDiscardNetworkSlotClearsLocalAssignment(t *testing.T) {
 	instance, exists := manager.containerInstances.Get("container-a")
 	if !exists || instance.ContainerIp != "" {
 		t.Fatalf("expected container instance ip to be cleared, got %+v", instance)
+	}
+}
+
+func TestCRIUNetworkLockSignature(t *testing.T) {
+	tests := []struct {
+		name string
+		dump string
+		want bool
+	}{
+		{
+			name: "exact CRIU terminal checkpoint lock",
+			dump: "-P INPUT ACCEPT\n-A INPUT -p tcp --dport 22 -j ACCEPT\n-A INPUT -j CRIU\n" +
+				"-P OUTPUT ACCEPT\n-A OUTPUT -j CRIU\n-A OUTPUT -d 10.0.0.0/8 -j ACCEPT\n" +
+				"-N CRIU\n-A CRIU -m mark --mark 0x0000C114/0xffffffff -j ACCEPT\n-A CRIU -j DROP\n",
+			want: true,
+		},
+		{
+			name: "missing input hook",
+			dump: "-A OUTPUT -j CRIU\n-A CRIU -m mark --mark 0xc114 -j ACCEPT\n-A CRIU -j DROP\n",
+		},
+		{
+			name: "different mark",
+			dump: "-A INPUT -j CRIU\n-A OUTPUT -j CRIU\n-A CRIU -m mark --mark 0xc115 -j ACCEPT\n-A CRIU -j DROP\n",
+		},
+		{
+			name: "user chain with extra rule",
+			dump: "-A INPUT -j CRIU\n-A OUTPUT -j CRIU\n-A CRIU -m mark --mark 0xc114 -j ACCEPT\n" +
+				"-A CRIU -p tcp --dport 443 -j ACCEPT\n-A CRIU -j DROP\n",
+		},
+		{
+			name: "ordinary block rules",
+			dump: "-A INPUT -j DROP\n-A OUTPUT -j DROP\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := hasCRIUNetworkLockSignature(tt.dump); got != tt.want {
+				t.Fatalf("hasCRIUNetworkLockSignature() = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPrepareNetworkSlotRejectsTerminalCheckpointLock(t *testing.T) {
+	manager := &ContainerNetworkManager{}
+	slot := &containerNetworkSlot{id: "slot-checkpoint", ip: "192.168.0.44"}
+
+	err := manager.prepareNetworkSlotForAssignmentWithInspector(slot, func(slotID string) (bool, error) {
+		if slotID != slot.id {
+			t.Fatalf("inspected slot %q, want %q", slotID, slot.id)
+		}
+		return true, nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "CRIU terminal-checkpoint lock") {
+		t.Fatalf("expected poisoned slot to be rejected before fresh assignment, got %v", err)
+	}
+}
+
+func TestRecyclePreallocatedNetworkSlotDiscardsTerminalCheckpointLock(t *testing.T) {
+	manager := &ContainerNetworkManager{
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		allocatedIPs:       map[string]struct{}{},
+		containerIPs:       map[string]string{},
+		containerSlots:     map[string]*containerNetworkSlot{},
+		totalSlots:         1,
+	}
+	slot := &containerNetworkSlot{
+		id:        "slot-checkpoint",
+		namespace: "missing-checkpoint-netns",
+		vethHost:  "missing-checkpoint-veth",
+		ip:        "192.168.0.44",
+	}
+	containerID := "sandbox-after-terminal-checkpoint"
+	reservationID := containerNetworkSlotReservationID(slot.id)
+	manager.containerInstances.Set(containerID, &ContainerInstance{ContainerIp: slot.ip})
+	manager.containerSlots[containerID] = slot
+	manager.containerIPs[containerID] = slot.ip
+	manager.containerIPs[reservationID] = slot.ip
+	manager.allocatedIPs[slot.ip] = struct{}{}
+
+	err := manager.recyclePreallocatedNetworkSlotWithInspector(containerID, slot, func(slotID string) (bool, error) {
+		if slotID != slot.id {
+			t.Fatalf("inspected slot %q, want %q", slotID, slot.id)
+		}
+		return true, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manager.totalSlots != 0 || len(manager.freeSlots) != 0 {
+		t.Fatalf("terminal-checkpoint slot was recycled: total=%d free=%d", manager.totalSlots, len(manager.freeSlots))
+	}
+	if _, exists := manager.containerSlots[containerID]; exists {
+		t.Fatal("discarded checkpoint slot remained assigned")
+	}
+	if _, exists := manager.allocatedIPs[slot.ip]; exists {
+		t.Fatal("discarded checkpoint slot IP remained allocated")
+	}
+}
+
+func TestRecyclePreallocatedNetworkSlotDiscardsUnverifiableFirewallState(t *testing.T) {
+	manager := &ContainerNetworkManager{
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		allocatedIPs:       map[string]struct{}{},
+		containerIPs:       map[string]string{},
+		containerSlots:     map[string]*containerNetworkSlot{},
+		totalSlots:         1,
+	}
+	slot := &containerNetworkSlot{
+		id:        "slot-unverifiable",
+		namespace: "missing-unverifiable-netns",
+		vethHost:  "missing-unverifiable-veth",
+	}
+	manager.containerSlots["sandbox-a"] = slot
+
+	err := manager.recyclePreallocatedNetworkSlotWithInspector("sandbox-a", slot, func(string) (bool, error) {
+		return false, errors.New("iptables unavailable")
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manager.totalSlots != 0 || len(manager.freeSlots) != 0 {
+		t.Fatalf("unverifiable slot was recycled: total=%d free=%d", manager.totalSlots, len(manager.freeSlots))
+	}
+}
+
+func TestRecyclePreallocatedNetworkSlotKeepsCleanSlotReusable(t *testing.T) {
+	repoClient := &cleanupContextWorkerRepoClient{}
+	manager := &ContainerNetworkManager{
+		ctx:              context.Background(),
+		workerId:         "worker-a",
+		workerRepoClient: repoClient,
+		networkPrefix:    "network-a",
+		allocatedIPs:     map[string]struct{}{"192.168.0.44": {}},
+		containerIPs:     map[string]string{"sandbox-a": "192.168.0.44"},
+		containerSlots:   map[string]*containerNetworkSlot{},
+		totalSlots:       1,
+	}
+	slot := &containerNetworkSlot{id: "slot-clean", ip: "192.168.0.44"}
+	manager.containerSlots["sandbox-a"] = slot
+
+	err := manager.recyclePreallocatedNetworkSlotWithInspector("sandbox-a", slot, func(string) (bool, error) {
+		return false, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manager.totalSlots != 1 || len(manager.freeSlots) != 1 || manager.freeSlots[0] != slot {
+		t.Fatalf("clean slot was not recycled: total=%d free=%v", manager.totalSlots, manager.freeSlots)
+	}
+	if repoClient.moveCtxErr != nil {
+		t.Fatalf("clean slot release used an invalid context: %v", repoClient.moveCtxErr)
 	}
 }
 
