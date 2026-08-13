@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"slices"
@@ -1567,7 +1568,7 @@ func TestProcessRequestBatchDoesNotOverScheduleWorkerSnapshot(t *testing.T) {
 	assert.Equal(t, int64(2), updatedWorker.ResourceVersion)
 }
 
-func TestProcessRequestBatchSpreadsAcrossEqualWorkers(t *testing.T) {
+func TestProcessRequestBatchPacksOntoSingleWorker(t *testing.T) {
 	wb, err := NewSchedulerForTest()
 	assert.Nil(t, err)
 
@@ -1616,14 +1617,24 @@ func TestProcessRequestBatchSpreadsAcrossEqualWorkers(t *testing.T) {
 
 	wb.processRequestBatch(requests, workers)
 
-	firstQueued, err := wb.workerRepo.GetNextContainerRequest(firstWorker.Id)
-	assert.Nil(t, err)
-	secondQueued, err := wb.workerRepo.GetNextContainerRequest(secondWorker.Id)
-	assert.Nil(t, err)
-
-	assert.NotNil(t, firstQueued)
-	assert.NotNil(t, secondQueued)
-	assert.NotEqual(t, firstQueued.ContainerId, secondQueued.ContainerId)
+	// Best-fit packing: both requests should land on the same worker so the
+	// other worker can drain, spin down, and release its node.
+	perWorker := []int{}
+	for _, w := range []*types.Worker{firstWorker, secondWorker} {
+		queued := 0
+		for {
+			request, err := wb.workerRepo.GetNextContainerRequest(w.Id)
+			assert.Nil(t, err)
+			if request == nil {
+				break
+			}
+			queued++
+		}
+		perWorker = append(perWorker, queued)
+	}
+	assert.Equal(t, 2, perWorker[0]+perWorker[1])
+	assert.Contains(t, perWorker, 2)
+	assert.Contains(t, perWorker, 0)
 }
 
 func TestProcessRequestBatchEmitsContainerPlaced(t *testing.T) {
@@ -1720,6 +1731,9 @@ func TestProcessRequestBatchSchedulesTinySandboxBurstByRequestedCapacity(t *test
 	assert.Nil(t, err)
 	wb.processRequestBatch(requests, workerSnapshot)
 
+	// All 70 tiny requests fit on one 16-CPU worker only when scheduled by
+	// their actual requested capacity; best-fit packs them onto one worker.
+	queuedPerWorker := []int{}
 	for _, worker := range workers {
 		queued := 0
 		for {
@@ -1730,8 +1744,10 @@ func TestProcessRequestBatchSchedulesTinySandboxBurstByRequestedCapacity(t *test
 			}
 			queued++
 		}
-		assert.Equal(t, 35, queued)
+		queuedPerWorker = append(queuedPerWorker, queued)
 	}
+	assert.Equal(t, 70, queuedPerWorker[0]+queuedPerWorker[1])
+	assert.Contains(t, queuedPerWorker, 70)
 }
 
 func TestProcessRequestBatchKeepsCPUAndGPUCapacitySeparate(t *testing.T) {
@@ -3479,6 +3495,33 @@ func (b *BackendRepoConcurrencyLimitsForTest) GetConcurrencyLimitByWorkspaceId(c
 		GPULimit:          b.GPUConcurrencyLimit,
 		CPUMillicoreLimit: b.CPUConcurrencyLimit,
 	}, nil
+}
+
+type BackendRepoNoConcurrencyLimitForTest struct {
+	repo.BackendRepository
+}
+
+func (b *BackendRepoNoConcurrencyLimitForTest) GetConcurrencyLimitByWorkspaceId(ctx context.Context, workspaceId string) (*types.ConcurrencyLimit, error) {
+	return nil, sql.ErrNoRows
+}
+
+func TestDefaultConcurrencyLimitForWorkspacesWithoutQuota(t *testing.T) {
+	wb, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+	wb.backendRepo = &BackendRepoNoConcurrencyLimitForTest{}
+
+	// Default not configured: workspaces without a quota row stay unlimited.
+	quota, err := wb.managedConcurrencyLimit(&types.ContainerRequest{WorkspaceId: uuid.New().String()})
+	assert.Nil(t, err)
+	assert.Nil(t, quota)
+
+	// Default configured: applied to workspaces without a quota row.
+	wb.config.GatewayService.DefaultConcurrencyLimit = types.DefaultConcurrencyLimitConfig{CPUMillicores: 64000, GPUCount: 10}
+	quota, err = wb.managedConcurrencyLimit(&types.ContainerRequest{WorkspaceId: uuid.New().String()})
+	assert.Nil(t, err)
+	assert.NotNil(t, quota)
+	assert.Equal(t, uint32(64000), quota.CPUMillicoreLimit)
+	assert.Equal(t, uint32(10), quota.GPULimit)
 }
 
 func TestConcurrencyLimit(t *testing.T) {

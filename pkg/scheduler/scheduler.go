@@ -29,7 +29,10 @@ const (
 	requestProcessingInterval      time.Duration = 50 * time.Millisecond
 	requestProcessingBatchSize                   = 512
 	provisioningWorkerRequeueDelay time.Duration = 250 * time.Millisecond
-	pendingWorkerReservationTTL    time.Duration = 30 * time.Second
+	// Must cover node provision + worker registration (2-4 min on EKS with
+	// Karpenter). A shorter TTL forgets capacity reserved on still-booting
+	// workers, and the orphaned requests provision duplicate workers.
+	pendingWorkerReservationTTL time.Duration = 3 * time.Minute
 	maxWorkerProvisioningAttempts                = 3
 )
 
@@ -440,7 +443,10 @@ func (s *Scheduler) managedConcurrencyLimit(request *types.ContainerRequest) (*t
 	if quota == nil {
 		quota, err = s.backendRepo.GetConcurrencyLimitByWorkspaceId(s.ctx, request.WorkspaceId)
 		if err != nil && err == sql.ErrNoRows {
-			return nil, nil // No quota set for this workspace
+			// No explicit quota for this workspace — fall back to the
+			// platform-wide default so a single workspace cannot fan out
+			// unbounded capacity. Nil when the default is not configured.
+			return s.defaultConcurrencyLimit(), nil
 		}
 		if err != nil {
 			return nil, err
@@ -453,6 +459,21 @@ func (s *Scheduler) managedConcurrencyLimit(request *types.ContainerRequest) (*t
 	}
 
 	return quota, nil
+}
+
+// defaultConcurrencyLimit returns the platform-wide concurrency limit applied
+// to workspaces without an explicit quota row. GPULimit==0 means "no GPUs
+// allowed" in quota checks, so the default only activates when both values
+// are configured to be positive.
+func (s *Scheduler) defaultConcurrencyLimit() *types.ConcurrencyLimit {
+	cfg := s.config.GatewayService.DefaultConcurrencyLimit
+	if cfg.CPUMillicores == 0 || cfg.GPUCount == 0 {
+		return nil
+	}
+	return &types.ConcurrencyLimit{
+		CPUMillicoreLimit: cfg.CPUMillicores,
+		GPULimit:          cfg.GPUCount,
+	}
 }
 
 func (s *Scheduler) privatePoolQuotaExempt(request *types.ContainerRequest) bool {
@@ -1322,7 +1343,9 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 		if scoredWorkers[i].score != scoredWorkers[j].score {
 			return scoredWorkers[i].score > scoredWorkers[j].score
 		}
-		return workerFreeCapacityScore(scoredWorkers[i].worker, request) > workerFreeCapacityScore(scoredWorkers[j].worker, request)
+		// Best-fit: prefer the fullest worker that still fits so idle workers
+		// drain to zero, hit their spindown timeout, and release their nodes.
+		return workerFreeCapacityScore(scoredWorkers[i].worker, request) < workerFreeCapacityScore(scoredWorkers[j].worker, request)
 	})
 
 	return scoredWorkers[0].worker, nil
