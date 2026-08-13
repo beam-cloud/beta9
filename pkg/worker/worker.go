@@ -32,7 +32,7 @@ import (
 
 const (
 	containerLogsPath              string        = types.AgentLogsPath
-	defaultWorkerSpindownTimeS     float64       = 300 // 5 minutes
+	defaultWorkerSpindownTimeS     float64       = 600 // 10 min: outlives 5-min cron periods so recurring jobs reuse workers instead of churning nodes
 	defaultCacheWaitTime           time.Duration = 30 * time.Second
 	containerStatusUpdateInterval  time.Duration = 30 * time.Second
 	containerRequestStreamInterval time.Duration = 100 * time.Millisecond
