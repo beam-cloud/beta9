@@ -1284,7 +1284,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		spec.Process.Env = gpuManager.InjectAssignedEnvVars(spec.Process.Env, assignedDevices)
 	}
 
-	if request.Stub.Type.Kind() == types.StubTypeSandbox && s.gpuVirtualizedForRequest(request) {
+	if s.gpuVirtualizedForRequest(request) {
 		hook, err := s.thunderStartupHook(request, spec)
 		if err != nil {
 			log.Error().Str("container_id", request.ContainerId).Msgf("failed to prepare Thunder startup hook: %v", err)

@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -161,9 +162,25 @@ func TestThunderStartupHookUsesCachedInstaller(t *testing.T) {
 	assert.Equal(t, "thunder_client_install", execHook.HookName)
 	assert.Equal(t, 2*time.Minute, execHook.Timeout)
 	assert.Equal(t, "/workspace", execHook.Process.Cwd)
-	assert.Equal(t, []string{"sh", "-c", "curl -fsSL https://get.thundercompute.com/install.sh | sudo THUNDER_NOWARN=1 THUNDER_INSTALL_MODE=client THUNDER_CENTRAL_URL='https://gateway.example' THUNDER_ENROLLMENT_TOKEN='enroll-token' sh"}, execHook.Process.Args)
+	assert.Equal(t, []string{"bash", "-o", "pipefail", "-c", "curl -fsSL https://get.thundercompute.com/install.sh | THUNDER_NOWARN=1 THUNDER_INSTALL_MODE=client THUNDER_CENTRAL_URL='https://gateway.example' THUNDER_ENROLLMENT_TOKEN='enroll-token' sh"}, execHook.Process.Args)
 	assert.Contains(t, execHook.Process.Env, "A=1")
 	assert.Contains(t, execHook.Process.Env, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+}
+
+func TestThunderStartupHookPropagatesInstallerExecError(t *testing.T) {
+	manager := NewContainerThunderManager(nil)
+	manager.installCache.Set("container-123", "curl -fsSL https://get.thundercompute.com/install.sh | sudo THUNDER_INSTALL_MODE=client sh")
+	worker := &Worker{
+		containerThunderManager: manager,
+		gpuVirtualized:          true,
+	}
+
+	hook, err := worker.thunderStartupHook(&types.ContainerRequest{ContainerId: "container-123", GpuRequest: []string{"H100"}}, &specs.Spec{Process: &specs.Process{}})
+	require.NoError(t, err)
+
+	installErr := errors.New("curl failed")
+	err = hook.Run(context.Background(), &mockRuntime{execErr: installErr}, "container-123")
+	require.ErrorIs(t, err, installErr)
 }
 
 func TestThunderStartupHookRequiresCachedInstaller(t *testing.T) {

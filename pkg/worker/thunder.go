@@ -174,12 +174,23 @@ func (s *Worker) thunderStartupHook(request *types.ContainerRequest, spec *specs
 	return runtime.StartupExecHook{
 		HookName: "thunder_client_install",
 		Process: specs.Process{
-			Args: []string{"sh", "-c", cmd},
+			Args: thunderStartupInstallArgs(cmd),
 			Cwd:  cwd,
 			Env:  env,
 		},
 		Timeout: 2 * time.Minute,
 	}, nil
+}
+
+func thunderStartupInstallArgs(command string) []string {
+	return []string{"bash", "-o", "pipefail", "-c", withoutThunderInstallerSudo(command)}
+}
+
+func withoutThunderInstallerSudo(command string) string {
+	command = strings.TrimSpace(command)
+	command = strings.Replace(command, "| sudo ", "| ", 1)
+	command = strings.Replace(command, "|sudo ", "| ", 1)
+	return command
 }
 
 func containsEnvKey(env []string, key string) bool {
