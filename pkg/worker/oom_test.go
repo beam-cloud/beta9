@@ -32,3 +32,12 @@ func TestSetupOOMWatcherSkipsGvisorWhenMemoryIsNotEnforced(t *testing.T) {
 	require.True(t, exists)
 	require.False(t, instance.hasOOMWatcher())
 }
+
+func TestForcedResourceLimitsEnableGvisorOOMPolicy(t *testing.T) {
+	worker := &Worker{}
+	request := &types.ContainerRequest{Stub: types.StubWithRelated{Stub: types.Stub{
+		Config: `{"_beta9_force_resource_limits":true}`,
+	}}}
+
+	require.True(t, worker.memoryLimitsEnforced(request))
+}

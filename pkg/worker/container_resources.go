@@ -104,7 +104,7 @@ func processCPUSet(cpuLimit int64) cpuset.CPUSet {
 
 func (s *Worker) allocateContainerCPUSet(request *types.ContainerRequest) string {
 	if s == nil || s.containerInstances == nil || request == nil || request.IsBuildRequest() ||
-		!s.config.Worker.ContainerResourceLimits.CPUAffinityEnforced {
+		(!s.config.Worker.ContainerResourceLimits.CPUAffinityEnforced && !requestForcesResourceLimits(request)) {
 		return ""
 	}
 
@@ -131,6 +131,25 @@ func (s *Worker) allocateContainerCPUSet(request *types.ContainerRequest) string
 	})
 
 	return selectRequestedCPUs(request.Cpu, available, load)
+}
+
+func requestForcesResourceLimits(request *types.ContainerRequest) bool {
+	return request != nil && types.StubConfigForcesResourceLimits(request.Stub.Config)
+}
+
+func (s *Worker) cpuLimitsEnforced(request *types.ContainerRequest) bool {
+	if request == nil || request.IsBuildRequest() {
+		return false
+	}
+	return requestForcesResourceLimits(request) ||
+		(!request.RequiresGPU() && s.config.Worker.ContainerResourceLimits.CPUEnforced)
+}
+
+func (s *Worker) memoryLimitsEnforced(request *types.ContainerRequest) bool {
+	if request == nil || request.IsBuildRequest() {
+		return false
+	}
+	return requestForcesResourceLimits(request) || s.config.Worker.ContainerResourceLimits.MemoryEnforced
 }
 
 func (r *StandardResources) GetMemory(request *types.ContainerRequest) *specs.LinuxMemory {
