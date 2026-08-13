@@ -520,6 +520,46 @@ func TestSpecFromRequestEnforcesMemoryForGPUWithoutCPUQuota(t *testing.T) {
 	require.Equal(t, int64(42*1024*1024*1024), *spec.Linux.Resources.Memory.Limit)
 }
 
+func TestSpecFromRequestForcesCPUAndMemoryLimitsForGvisorGPU(t *testing.T) {
+	mockRuntime := &mockResourceRuntime{mockRuntime: mockRuntime{name: types.ContainerRuntimeGvisor.String()}}
+	containerInstances := common.NewSafeMap[*ContainerInstance]()
+	containerInstances.Set("container-1", &ContainerInstance{Runtime: mockRuntime, CPUSet: "2-9"})
+	worker := &Worker{
+		config:             types.AppConfig{},
+		runtime:            mockRuntime,
+		containerInstances: containerInstances,
+	}
+
+	spec, err := worker.specFromRequest(&types.ContainerRequest{
+		ContainerId: "container-1",
+		EntryPoint:  []string{"sleep", "60"},
+		Cpu:         8000,
+		Memory:      16 * 1024,
+		GpuRequest:  []string{"A6000"},
+		GpuCount:    1,
+		Stub: types.StubWithRelated{Stub: types.Stub{
+			Type:   types.StubType(types.StubTypeSandbox),
+			Config: `{"_beta9_force_resource_limits":true}`,
+		}},
+	}, &ContainerOptions{BindPorts: []int{8001}})
+	require.NoError(t, err)
+	require.NotNil(t, spec.Linux.Resources.CPU)
+	require.Nil(t, spec.Linux.Resources.CPU.Quota, "sandbox CPU quota is deferred until its process manager is ready")
+	require.Equal(t, "2-9", spec.Linux.Resources.CPU.Cpus, "gVisor must see the requested CPU topology at sandbox boot")
+	require.NotNil(t, spec.Linux.Resources.Memory)
+	require.Equal(t, int64(22*1024*1024*1024), *spec.Linux.Resources.Memory.Limit)
+
+	instance, exists := containerInstances.Get("container-1")
+	require.True(t, exists)
+	require.NotNil(t, instance.DeferredCPUQuota)
+	require.Equal(t, int64(800_000), *instance.DeferredCPUQuota.Quota)
+	require.Equal(t, uint64(100_000), *instance.DeferredCPUQuota.Period)
+	require.Equal(t, "2-9", instance.DeferredCPUQuota.Cpus)
+	require.NoError(t, worker.applyDeferredCPUThrottle(&types.ContainerRequest{ContainerId: "container-1"}, instance))
+	require.Equal(t, int64(800_000), *mockRuntime.updatedResources.CPU.Quota)
+	require.Equal(t, "2-9", mockRuntime.updatedResources.CPU.Cpus)
+}
+
 func TestSpecFromRequestReturnsIndependentSpecs(t *testing.T) {
 	worker := &Worker{runtime: &mockRuntime{name: types.ContainerRuntimeRunc.String()}}
 	initialEnv := make([]string, 1, 8)
@@ -643,6 +683,31 @@ func TestContainerCPUAffinityIsOptInAndLoadBalanced(t *testing.T) {
 	require.Equal(t, 1, firstSet.Size())
 	require.Equal(t, 1, secondSet.Size())
 	require.True(t, firstSet.Intersection(secondSet).IsEmpty())
+}
+
+func TestForcedResourceLimitsOptIntoCPUAffinity(t *testing.T) {
+	instances := common.NewSafeMap[*ContainerInstance]()
+	worker := &Worker{
+		containerInstances: instances,
+		cpuLimit:           64_000,
+	}
+	request := &types.ContainerRequest{
+		ContainerId: "tama-gpu",
+		Cpu:         1000,
+		GpuRequest:  []string{"A6000"},
+		GpuCount:    1,
+		Stub: types.StubWithRelated{Stub: types.Stub{
+			Type:   types.StubType(types.StubTypeSandbox),
+			Config: `{"_beta9_force_resource_limits":true}`,
+		}},
+	}
+
+	require.True(t, worker.reserveContainerInstance(request))
+	instance, exists := instances.Get(request.ContainerId)
+	require.True(t, exists)
+	affinity, err := cpuset.Parse(instance.CPUSet)
+	require.NoError(t, err)
+	require.Equal(t, 1, affinity.Size())
 }
 
 func TestCheckpointRestoreCPUAffinityIsDeferredAndApplied(t *testing.T) {

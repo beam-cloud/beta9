@@ -560,6 +560,36 @@ type StubConfigV1 struct {
 	Disks     []*pb.DurableDisk `json:"disks,omitempty"`
 }
 
+const (
+	ForceResourceLimitsMetadata  = "x-beta9-force-resource-limits"
+	forceResourceLimitsConfigKey = "_beta9_force_resource_limits"
+)
+
+// StubConfigWithForcedResourceLimits carries the request-scoped override over
+// the existing stub config wire path. Keeping the config as raw JSON preserves
+// fields introduced by newer clients that this gateway does not know yet.
+func StubConfigWithForcedResourceLimits(config string) (string, error) {
+	fields := map[string]json.RawMessage{}
+	if strings.TrimSpace(config) != "" && strings.TrimSpace(config) != "null" {
+		if err := json.Unmarshal([]byte(config), &fields); err != nil {
+			return "", err
+		}
+	}
+	fields[forceResourceLimitsConfigKey] = json.RawMessage("true")
+	updated, err := json.Marshal(fields)
+	if err != nil {
+		return "", err
+	}
+	return string(updated), nil
+}
+
+func StubConfigForcesResourceLimits(config string) bool {
+	marker := struct {
+		Enabled bool `json:"_beta9_force_resource_limits"`
+	}{}
+	return json.Unmarshal([]byte(config), &marker) == nil && marker.Enabled
+}
+
 type ServingConfig struct {
 	AppKind         string                 `json:"app_kind,omitempty" serializer:"app_kind,omitempty"`
 	ServingProtocol string                 `json:"serving_protocol,omitempty" serializer:"serving_protocol,omitempty"`

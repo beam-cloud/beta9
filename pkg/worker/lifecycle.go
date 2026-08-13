@@ -1162,9 +1162,8 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		spec.Linux.Resources.CPU.Cpus = cpuAffinity
 	}
 
-	resourceLimitsEnabled := !request.IsBuildRequest()
-	cpuEnforced := resourceLimitsEnabled && !request.RequiresGPU() && s.config.Worker.ContainerResourceLimits.CPUEnforced
-	memoryEnforced := resourceLimitsEnabled && s.config.Worker.ContainerResourceLimits.MemoryEnforced
+	cpuEnforced := s.cpuLimitsEnforced(request)
+	memoryEnforced := s.memoryLimitsEnforced(request)
 	if cpuEnforced || memoryEnforced {
 		resources, err := s.getContainerResources(request)
 		if err != nil {
@@ -1177,7 +1176,11 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 				startupCPU.Quota = nil
 				startupCPU.Burst = nil
 				startupCPU.Period = nil
-				startupCPU.Cpus = ""
+				// gVisor fixes the guest CPU topology when the sandbox starts;
+				// a later resource update cannot change what nproc reports.
+				if !requestForcesResourceLimits(request) {
+					startupCPU.Cpus = ""
+				}
 				spec.Linux.Resources.CPU = &startupCPU
 			} else {
 				spec.Linux.Resources.CPU = resources.CPU
@@ -2396,7 +2399,6 @@ func (s *Worker) containerOverlayBasePath(request *types.ContainerRequest) strin
 func (s *Worker) getContainerResources(request *types.ContainerRequest) (*specs.LinuxResources, error) {
 	var resources ContainerResources
 
-	// Get runtime for this container
 	instance, exists := s.containerInstances.Get(request.ContainerId)
 	if exists && instance.Runtime != nil && instance.Runtime.Name() == types.ContainerRuntimeGvisor.String() {
 		resources = NewGvisorResources()

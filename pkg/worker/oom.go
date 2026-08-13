@@ -44,7 +44,7 @@ func (s *Worker) setupOOMWatcher(
 	}
 
 	if containerRuntime.Name() == types.ContainerRuntimeGvisor.String() {
-		if !s.config.Worker.ContainerResourceLimits.MemoryEnforced {
+		if !s.memoryLimitsEnforced(request) {
 			return
 		}
 		// runsc places the sandbox and gofer in a cgroup named after the

@@ -71,6 +71,7 @@ type ContainerRepository interface {
 	MarkPendingContainerStoppingIfUnassigned(containerId string, expirySeconds int64) (bool, error)
 	DeleteContainerState(containerId string) error
 	SetContainerRequestStatus(containerId string, status types.ContainerRequestStatus) error
+	GetContainerRequestStatus(containerId string) (types.ContainerRequestStatus, error)
 	SetWorkerAddress(containerId string, addr string) error
 	GetWorkerAddress(ctx context.Context, containerId string) (string, error)
 	SetContainerAddressMap(containerId string, addressMap map[int32]string) error

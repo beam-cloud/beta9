@@ -8,7 +8,9 @@ import (
 	computemodel "github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
+	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/metadata"
 )
 
 type podMachinePlacementRepo struct {
@@ -44,4 +46,29 @@ func TestConfigureMachinePlacementRejectsPoolMismatch(t *testing.T) {
 
 	err := service.configureMachinePlacement(context.Background(), "workspace-1", "machine-1", config)
 	require.ErrorContains(t, err, "does not belong to pool")
+}
+
+func TestCreatePodRunOptionsPreserveResourceOverrideForColdAndCheckpointLaunches(t *testing.T) {
+	ctx := metadata.NewIncomingContext(
+		context.Background(),
+		metadata.Pairs(types.ForceResourceLimitsMetadata, "true"),
+	)
+	request := &pb.CreatePodRequest{StubId: "legacy-stub"}
+	checkpoint := &types.Checkpoint{CheckpointId: "checkpoint-1"}
+
+	for _, test := range []struct {
+		name       string
+		checkpoint *types.Checkpoint
+	}{
+		{name: "cold launch"},
+		{name: "checkpoint clone", checkpoint: checkpoint},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			opts := createPodRunOptions(ctx, request, test.checkpoint)
+			require.True(t, opts.forceResourceLimits)
+			require.Same(t, test.checkpoint, opts.checkpoint)
+		})
+	}
+
+	require.False(t, createPodRunOptions(context.Background(), request, nil).forceResourceLimits)
 }

@@ -1,6 +1,7 @@
 package types
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 )
@@ -196,5 +197,27 @@ func TestStubConfigSetReplicaCountZeroPreservesAutoscalerCeiling(t *testing.T) {
 
 	if config.Autoscaler.MinContainers != 0 || config.Autoscaler.MaxContainers != 4 {
 		t.Fatalf("replica bounds = %d/%d, want 0/4", config.Autoscaler.MinContainers, config.Autoscaler.MaxContainers)
+	}
+}
+
+func TestStubConfigResourceLimitOverridePreservesUnknownFields(t *testing.T) {
+	original := `{"runtime":{"cpu":1000},"future":{"enabled":true}}`
+	updated, err := StubConfigWithForcedResourceLimits(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !StubConfigForcesResourceLimits(updated) {
+		t.Fatal("resource-limit override was not carried in stub config")
+	}
+
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(updated), &fields); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(fields["future"]); got != `{"enabled":true}` {
+		t.Fatalf("unknown field = %s, want it preserved", got)
+	}
+	if StubConfigForcesResourceLimits(original) {
+		t.Fatal("ordinary stub config unexpectedly forces resource limits")
 	}
 }
