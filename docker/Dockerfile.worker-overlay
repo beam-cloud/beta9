@@ -1,0 +1,38 @@
+# syntax=docker/dockerfile:1.7
+
+ARG GO_BUILD_IMAGE=docker.io/library/golang:1.25-bookworm@sha256:6359592445455f2dbe2412bed411336035bc019a50017720d77454ffdd6d0f82
+ARG WORKER_RUNTIME_IMAGE=public.ecr.aws/n4e0e1y0/beta9-worker@sha256:5792f3b5c2ce00e37165db3ed1f1d39b245da6ec922a3cf688f437280cae0308
+
+FROM --platform=$BUILDPLATFORM ${GO_BUILD_IMAGE} AS binaries
+
+ARG TARGETOS
+ARG TARGETARCH
+ENV GONOSUMDB="github.com/beam-cloud/*"
+WORKDIR /workspace
+
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
+
+COPY cmd/ ./cmd/
+COPY pkg/ ./pkg/
+COPY proto/ ./proto/
+
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    mkdir -p /out && \
+    CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" \
+      go build -trimpath -o /out/worker ./cmd/worker/main.go && \
+    CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" \
+      go build -trimpath -gcflags="all=-N -l" -o /out/worker-debug ./cmd/worker/main.go && \
+    CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" \
+      go build -trimpath -o /out/agent ./cmd/agent && \
+    ln /out/agent /out/beam-agent
+
+FROM --platform=$TARGETPLATFORM ${WORKER_RUNTIME_IMAGE}
+
+ARG SOURCE_REVISION
+ARG SOURCE_HASH
+LABEL org.opencontainers.image.revision="$SOURCE_REVISION" \
+      dev.beam.source-hash="$SOURCE_HASH"
+
+COPY --link --from=binaries /out/ /usr/local/bin/

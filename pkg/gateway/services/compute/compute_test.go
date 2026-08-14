@@ -16,7 +16,9 @@ import (
 	cftypes "github.com/aws/aws-sdk-go-v2/service/cloudformation/types"
 	"github.com/aws/smithy-go"
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/clients"
+	"github.com/beam-cloud/beta9/pkg/common"
 	model "github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
@@ -4444,6 +4446,142 @@ func TestReleasePrivateMachineTransitionsManagedReservation(t *testing.T) {
 	}
 }
 
+func TestReleasePrivateMachineCleansMachineScopedRedisState(t *testing.T) {
+	ctx := context.Background()
+	rdb, err := repository.NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = rdb.Close() })
+
+	computeRepo := repository.NewComputeRedisRepository(rdb)
+	workerRepo := repository.NewWorkerRedisRepositoryForTest(rdb)
+	machine := &model.AgentTokenState{
+		TokenHash:       "agent-token-hash",
+		WorkspaceID:     "workspace-1",
+		PoolName:        "pool-1",
+		MachineID:       "machine-1",
+		Schedulable:     true,
+		LastHeartbeatAt: time.Now().UTC(),
+	}
+	if err := computeRepo.SavePoolState(ctx, machine.WorkspaceID, &model.PoolState{
+		Name: machine.PoolName,
+		Mode: string(types.PoolModePrivate),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := computeRepo.SaveAgentTokenState(ctx, machine, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := computeRepo.SaveJoinTokenState(ctx, &model.JoinTokenState{
+		TokenHash:   "revoked-join-token",
+		WorkspaceID: machine.WorkspaceID,
+		PoolName:    machine.PoolName,
+		Revoked:     true,
+	}, 0); err != nil {
+		t.Fatal(err)
+	}
+	workerID := model.AgentMachineWorkerID(machine.MachineID)
+	if err := workerRepo.AddWorker(&types.Worker{
+		Id:        workerID,
+		MachineId: machine.MachineID,
+		PoolName:  machine.PoolName,
+		Status:    types.WorkerStatusAvailable,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	networkPrefix := common.WorkerNetworkPrefix("beta9", machine.MachineID)
+	otherNetworkPrefix := common.WorkerNetworkPrefix("beta9", "machine-2")
+	for i := 0; i < 24; i++ {
+		if err := workerRepo.SetContainerIp(
+			networkPrefix,
+			fmt.Sprintf("network-slot:slot-%02d", i),
+			fmt.Sprintf("192.168.0.%d", i+2),
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := workerRepo.SetContainerIp(otherNetworkPrefix, "network-slot:other", "192.168.1.2"); err != nil {
+		t.Fatal(err)
+	}
+
+	locality := machine.WorkspaceID + "/" + machine.PoolName
+	coordinator := cache.NewCoordinator(repository.NewCacheRedisRepository(rdb))
+	targetLogicalHostID := "cache-host-workspace-1-pool-1-machine-1-path"
+	for _, host := range []cache.CoordinatorHost{
+		{
+			LogicalHostID:  targetLogicalHostID,
+			RegistrationID: workerID,
+			PoolName:       machine.PoolName,
+			Locality:       locality,
+			NodeID:         machine.MachineID,
+			CachePathID:    "path",
+			PrivateAddr:    "10.0.0.1:2049",
+		},
+		{
+			LogicalHostID:  "cache-host-workspace-1-pool-1-machine-2-path",
+			RegistrationID: "worker-machine-2",
+			PoolName:       machine.PoolName,
+			Locality:       locality,
+			NodeID:         "machine-2",
+			CachePathID:    "path",
+			PrivateAddr:    "10.0.0.2:2049",
+		},
+	} {
+		if err := coordinator.RegisterHost(ctx, host, 30*time.Second); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	routeRevisionKeys := []string{
+		common.RedisKeys.SchedulerBackendRouteMachineRevision(machine.WorkspaceID, machine.PoolName, machine.MachineID),
+		common.RedisKeys.SchedulerBackendRouteMachineIDRevision(machine.MachineID),
+	}
+	for _, key := range routeRevisionKeys {
+		if err := rdb.Set(ctx, key, "7", 0).Err(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	service := &Service{
+		appConfig:   types.AppConfig{ClusterName: "beta9"},
+		computeRepo: computeRepo,
+		workerRepo:  workerRepo,
+		redisClient: rdb,
+	}
+	if err := service.releasePrivateMachine(ctx, machine); err != nil {
+		t.Fatal(err)
+	}
+
+	networkKeys, err := rdb.Keys(ctx, "worker:network:"+networkPrefix+"*")
+	if err != nil || len(networkKeys) != 0 {
+		t.Fatalf("released machine network keys = %v, %v; want none", networkKeys, err)
+	}
+	otherIP, err := workerRepo.GetContainerIp(otherNetworkPrefix, "network-slot:other")
+	if err != nil || otherIP != "192.168.1.2" {
+		t.Fatalf("other machine network allocation = %q, %v", otherIP, err)
+	}
+	cacheKeys, err := rdb.Keys(ctx, "cache:coordinator:host:"+targetLogicalHostID+"*")
+	if err != nil || len(cacheKeys) != 0 {
+		t.Fatalf("released machine cache keys = %v, %v; want none", cacheKeys, err)
+	}
+	hosts, err := coordinator.ListHosts(ctx, machine.PoolName, locality)
+	if err != nil || len(hosts) != 1 || hosts[0].NodeID != "machine-2" {
+		t.Fatalf("remaining cache hosts = %#v, %v; want only machine-2", hosts, err)
+	}
+	for _, key := range routeRevisionKeys {
+		value, err := rdb.Get(ctx, key).Result()
+		if err != nil || value != "7" {
+			t.Fatalf("route revision %q = %q, %v; want preserved", key, value, err)
+		}
+	}
+	joinToken, err := computeRepo.GetJoinTokenState(ctx, "revoked-join-token")
+	if err != nil || joinToken == nil || !joinToken.Revoked {
+		t.Fatalf("revoked join token = %#v, %v; want preserved", joinToken, err)
+	}
+}
+
 func TestTerminateReservationTreatsProviderNotFoundAsDeleted(t *testing.T) {
 	now := time.Now().UTC()
 	state := &model.PoolState{
@@ -5651,6 +5789,10 @@ func (r *fakeWorkerRepo) RemoveWorker(workerID string) error {
 		return &types.ErrWorkerNotFound{WorkerId: workerID}
 	}
 	r.worker = nil
+	return nil
+}
+
+func (r *fakeWorkerRepo) RemoveWorkerNetworkState(context.Context, string) error {
 	return nil
 }
 

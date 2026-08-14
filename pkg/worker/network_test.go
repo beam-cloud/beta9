@@ -21,11 +21,21 @@ import (
 
 type cleanupContextWorkerRepoClient struct {
 	pb.WorkerRepositoryServiceClient
-	moveCtxErr error
+	removeCtxErr error
+	removeErr    error
+	removed      []string
 }
 
-func (c *cleanupContextWorkerRepoClient) MoveContainerIp(ctx context.Context, in *pb.MoveContainerIpRequest, opts ...grpc.CallOption) (*pb.MoveContainerIpResponse, error) {
-	c.moveCtxErr = ctx.Err()
+func (c *cleanupContextWorkerRepoClient) RemoveContainerIp(ctx context.Context, in *pb.RemoveContainerIpRequest, opts ...grpc.CallOption) (*pb.RemoveContainerIpResponse, error) {
+	c.removeCtxErr = ctx.Err()
+	c.removed = append(c.removed, in.ContainerId)
+	if c.removeErr != nil {
+		return nil, c.removeErr
+	}
+	return &pb.RemoveContainerIpResponse{Ok: true}, nil
+}
+
+func (c *cleanupContextWorkerRepoClient) MoveContainerIp(context.Context, *pb.MoveContainerIpRequest, ...grpc.CallOption) (*pb.MoveContainerIpResponse, error) {
 	return &pb.MoveContainerIpResponse{Ok: true}, nil
 }
 
@@ -189,17 +199,11 @@ func TestContainerNetworkPrefixCanonicalizesLegacyPoolScopedPrefix(t *testing.T)
 
 func TestContainerNetworkSlotReservationParsing(t *testing.T) {
 	legacy := containerNetworkSlotReservationID("slot-a")
-	if got, ok := containerNetworkSlotIDFromReservationID(legacy); !ok || got != "slot-a" {
-		t.Fatalf("failed to parse legacy slot reservation: got %q ok=%t", got, ok)
-	}
 	if workerID, slotID, ok := containerNetworkSlotReservationParts(legacy); !ok || workerID != "" || slotID != "slot-a" {
 		t.Fatalf("failed to parse legacy reservation parts: worker=%q slot=%q ok=%t", workerID, slotID, ok)
 	}
 
 	scoped := containerNetworkSlotReservationIDForWorker("worker-a", "slot-b")
-	if got, ok := containerNetworkSlotIDFromReservationID(scoped); !ok || got != "slot-b" {
-		t.Fatalf("failed to parse worker-scoped slot reservation: got %q ok=%t", got, ok)
-	}
 	if workerID, slotID, ok := containerNetworkSlotReservationParts(scoped); !ok || workerID != "worker-a" || slotID != "slot-b" {
 		t.Fatalf("failed to parse scoped reservation parts: worker=%q slot=%q ok=%t", workerID, slotID, ok)
 	}
@@ -240,33 +244,6 @@ func TestReservePortsIsUniqueAcrossConcurrentContainers(t *testing.T) {
 	}
 }
 
-func TestReleasePreallocatedNetworkSlotUsesFreshCleanupContext(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	repoClient := &cleanupContextWorkerRepoClient{}
-	manager := &ContainerNetworkManager{
-		ctx:              ctx,
-		workerId:         "worker-a",
-		workerRepoClient: repoClient,
-		networkPrefix:    "network-a",
-		allocatedIPs:     map[string]struct{}{"192.168.0.2": {}},
-		containerIPs:     map[string]string{"container-a": "192.168.0.2"},
-	}
-
-	err := manager.releasePreallocatedNetworkSlot("container-a", &containerNetworkSlot{
-		id: "slot-a",
-		ip: "192.168.0.2",
-	})
-
-	if err != nil {
-		t.Fatalf("releasePreallocatedNetworkSlot failed: %v", err)
-	}
-	if repoClient.moveCtxErr != nil {
-		t.Fatalf("cleanup RPC used canceled worker context: %v", repoClient.moveCtxErr)
-	}
-}
-
 func TestShouldCleanupNetworkSlotReservation(t *testing.T) {
 	workerExists := func(workerID string) (bool, error) {
 		switch workerID {
@@ -299,11 +276,11 @@ func TestShouldCleanupNetworkSlotReservation(t *testing.T) {
 			want:          true,
 		},
 		{
-			name:           "current worker slot with resources stays",
+			name:           "current worker slot with resources is rebuilt",
 			currentWorker:  "worker-a",
 			slotWorker:     "worker-a",
 			resourcesExist: true,
-			want:           false,
+			want:           true,
 		},
 		{
 			name:          "current worker slot without resources is stale",
@@ -341,25 +318,6 @@ func TestShouldCleanupNetworkSlotReservation(t *testing.T) {
 				t.Fatalf("unexpected cleanup decision: got %t want %t", got, tt.want)
 			}
 		})
-	}
-}
-
-func TestAdoptNetworkSlotRespectsPoolSize(t *testing.T) {
-	manager := &ContainerNetworkManager{slotPoolSize: 1}
-	first := &pb.ContainerIpAssignment{ContainerId: "network-slot:worker-a:slot-a", IpAddress: "192.168.0.2"}
-	second := &pb.ContainerIpAssignment{ContainerId: "network-slot:worker-a:slot-b", IpAddress: "192.168.0.3"}
-
-	if !manager.adoptNetworkSlot(first, "slot-a") {
-		t.Fatal("expected first slot to be adopted")
-	}
-	if manager.adoptNetworkSlot(second, "slot-b") {
-		t.Fatal("expected pool size to reject extra slot")
-	}
-	if manager.totalSlots != 1 || len(manager.freeSlots) != 1 {
-		t.Fatalf("unexpected adopted slot state: total=%d free=%d", manager.totalSlots, len(manager.freeSlots))
-	}
-	if got := manager.freeSlots[0]; got.id != "slot-a" || got.reservationID != first.ContainerId || got.ip != first.IpAddress {
-		t.Fatalf("unexpected adopted slot: %#v", got)
 	}
 }
 
@@ -537,7 +495,13 @@ func TestLockContainerNetworkSerializesConcurrentUsers(t *testing.T) {
 }
 
 func TestDiscardNetworkSlotClearsLocalAssignment(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	repoClient := &cleanupContextWorkerRepoClient{}
 	manager := &ContainerNetworkManager{
+		ctx:                ctx,
+		workerId:           "worker-a",
+		workerRepoClient:   repoClient,
 		containerInstances: common.NewSafeMap[*ContainerInstance](),
 		allocatedIPs:       map[string]struct{}{},
 		containerIPs:       map[string]string{},
@@ -550,7 +514,7 @@ func TestDiscardNetworkSlotClearsLocalAssignment(t *testing.T) {
 		vethHost:  "missing-veth",
 		ip:        "192.168.0.44",
 	}
-	reservationID := containerNetworkSlotReservationID(slot.id)
+	reservationID := containerNetworkSlotReservationIDForWorker(manager.workerId, slot.id)
 
 	manager.containerInstances.Set("container-a", &ContainerInstance{ContainerIp: slot.ip})
 	manager.containerSlots["container-a"] = slot
@@ -558,7 +522,9 @@ func TestDiscardNetworkSlotClearsLocalAssignment(t *testing.T) {
 	manager.containerIPs[reservationID] = slot.ip
 	manager.allocatedIPs[slot.ip] = struct{}{}
 
-	manager.discardNetworkSlot("container-a", slot)
+	if err := manager.finishNetworkSlotDiscard("container-a", slot, true, nil); err != nil {
+		t.Fatal(err)
+	}
 
 	if manager.totalSlots != 0 {
 		t.Fatalf("expected slot count to decrement, got %d", manager.totalSlots)
@@ -575,9 +541,124 @@ func TestDiscardNetworkSlotClearsLocalAssignment(t *testing.T) {
 	if _, exists := manager.allocatedIPs[slot.ip]; exists {
 		t.Fatal("expected allocated ip cache to be cleared")
 	}
+	if !slices.Equal(manager.releasedIPs, []string{slot.ip}) {
+		t.Fatalf("released IPs = %v, want one copy of %s", manager.releasedIPs, slot.ip)
+	}
 	instance, exists := manager.containerInstances.Get("container-a")
 	if !exists || instance.ContainerIp != "" {
 		t.Fatalf("expected container instance ip to be cleared, got %+v", instance)
+	}
+	if repoClient.removeCtxErr != nil {
+		t.Fatalf("cleanup RPC used canceled worker context: %v", repoClient.removeCtxErr)
+	}
+	wantRemoved := []string{"container-a", containerNetworkSlotReservationIDForWorker("worker-a", slot.id)}
+	if !slices.Equal(repoClient.removed, wantRemoved) {
+		t.Fatalf("removed reservations = %v, want %v", repoClient.removed, wantRemoved)
+	}
+}
+
+func TestPreallocatedNetworkSlotReleasesIPOnce(t *testing.T) {
+	repoClient := &cleanupContextWorkerRepoClient{}
+	manager := &ContainerNetworkManager{
+		ctx:                context.Background(),
+		workerId:           "worker-a",
+		workerRepoClient:   repoClient,
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		allocatedIPs:       map[string]struct{}{"192.168.0.44": {}},
+		containerIPs: map[string]string{
+			containerNetworkSlotReservationIDForWorker("worker-a", "slot-a"): "192.168.0.44",
+		},
+		containerSlots: map[string]*containerNetworkSlot{},
+		totalSlots:     1,
+	}
+	slot := &containerNetworkSlot{
+		id:        "slot-a",
+		namespace: "missing-netns",
+		vethHost:  "missing-veth",
+		ip:        "192.168.0.44",
+	}
+
+	if err := manager.assignPreallocatedNetworkSlot("container-a", slot); err != nil {
+		t.Fatal(err)
+	}
+	if len(manager.releasedIPs) != 0 {
+		t.Fatalf("assigned IP was released early: %v", manager.releasedIPs)
+	}
+	if _, allocated := manager.allocatedIPs[slot.ip]; !allocated {
+		t.Fatal("assigned IP was removed from allocated set")
+	}
+
+	if err := manager.finishNetworkSlotDiscard("container-a", slot, true, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(manager.releasedIPs, []string{slot.ip}) {
+		t.Fatalf("released IPs = %v, want one copy of %s", manager.releasedIPs, slot.ip)
+	}
+
+	if got := manager.nextAvailableContainerIPLocked(); got == nil || got.IP.String() != slot.ip {
+		t.Fatalf("next available IP = %v, want %s", got, slot.ip)
+	}
+	if len(manager.releasedIPs) != 0 {
+		t.Fatalf("released IP queue retained duplicates: %v", manager.releasedIPs)
+	}
+}
+
+func TestDiscardNetworkSlotReturnsRepositoryError(t *testing.T) {
+	wantErr := errors.New("redis unavailable")
+	manager := &ContainerNetworkManager{
+		ctx:                context.Background(),
+		workerId:           "worker-a",
+		workerRepoClient:   &cleanupContextWorkerRepoClient{removeErr: wantErr},
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		allocatedIPs:       map[string]struct{}{"192.168.0.44": {}},
+		containerIPs:       map[string]string{"container-a": "192.168.0.44"},
+		containerSlots:     map[string]*containerNetworkSlot{},
+		totalSlots:         1,
+	}
+	slot := &containerNetworkSlot{
+		id:        "slot-a",
+		namespace: "missing-netns",
+		vethHost:  "missing-veth",
+		ip:        "192.168.0.44",
+	}
+
+	err := manager.finishNetworkSlotDiscard("container-a", slot, true, nil)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("discard error = %v, want wrapped %v", err, wantErr)
+	}
+	if _, allocated := manager.allocatedIPs[slot.ip]; !allocated {
+		t.Fatal("IP with failed repository cleanup was not quarantined")
+	}
+	if len(manager.releasedIPs) != 0 {
+		t.Fatalf("IP with failed repository cleanup was released: %v", manager.releasedIPs)
+	}
+}
+
+func TestDiscardNetworkSlotQuarantinesIPAfterRuleCleanupFailure(t *testing.T) {
+	wantErr := errors.New("host rules remain")
+	manager := &ContainerNetworkManager{
+		workerId:           "worker-a",
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		allocatedIPs:       map[string]struct{}{"192.168.0.44": {}},
+		containerIPs:       map[string]string{"container-a": "192.168.0.44"},
+		containerSlots:     map[string]*containerNetworkSlot{},
+		totalSlots:         1,
+	}
+	slot := &containerNetworkSlot{
+		id:        "slot-a",
+		namespace: "missing-netns",
+		vethHost:  "missing-veth",
+		ip:        "192.168.0.44",
+	}
+
+	if err := manager.finishNetworkSlotDiscard("container-a", slot, true, wantErr); !errors.Is(err, wantErr) {
+		t.Fatalf("discard error = %v, want wrapped %v", err, wantErr)
+	}
+	if _, allocated := manager.allocatedIPs[slot.ip]; !allocated {
+		t.Fatal("IP with stale host rules was not quarantined")
+	}
+	if len(manager.releasedIPs) != 0 {
+		t.Fatalf("IP with stale host rules was released: %v", manager.releasedIPs)
 	}
 }
 

@@ -184,6 +184,15 @@ type GatewayServiceConfig struct {
 	HTTP            HTTPConfig    `key:"http" json:"http"`
 	ShutdownTimeout time.Duration `key:"shutdownTimeout" json:"shutdown_timeout"`
 	StubLimits      StubLimits    `key:"stubLimits" json:"stub_limits"`
+	// Applied to workspaces that have no explicit concurrency limit row.
+	// Both values must be > 0 for the default to take effect; otherwise
+	// workspaces without a row remain unlimited (legacy behavior).
+	DefaultConcurrencyLimit DefaultConcurrencyLimitConfig `key:"defaultConcurrencyLimit" json:"default_concurrency_limit"`
+}
+
+type DefaultConcurrencyLimitConfig struct {
+	CPUMillicores uint32 `key:"cpuMillicores" json:"cpu_millicores"`
+	GPUCount      uint32 `key:"gpuCount" json:"gpu_count"`
 }
 
 type FileServiceConfig struct {

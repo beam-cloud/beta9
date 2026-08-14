@@ -43,6 +43,7 @@ type WorkerRepository interface {
 	RemoveContainerIp(networkPrefix string, containerId string) error
 	GetContainerIps(networkPrefix string) ([]string, error)
 	GetContainerIpAssignments(networkPrefix string) ([]types.ContainerIpAssignment, error)
+	RemoveWorkerNetworkState(ctx context.Context, networkPrefix string) error
 	SetNetworkLock(networkPrefix string, ttl, retries int) (string, error)
 	RemoveNetworkLock(networkPrefix string, token string) error
 	GetGpuCounts() (map[string]int, error)
@@ -70,13 +71,14 @@ type ContainerRepository interface {
 	MarkPendingContainerStoppingIfUnassigned(containerId string, expirySeconds int64) (bool, error)
 	DeleteContainerState(containerId string) error
 	SetContainerRequestStatus(containerId string, status types.ContainerRequestStatus) error
+	GetContainerRequestStatus(containerId string) (types.ContainerRequestStatus, error)
 	SetWorkerAddress(containerId string, addr string) error
 	GetWorkerAddress(ctx context.Context, containerId string) (string, error)
 	SetContainerAddressMap(containerId string, addressMap map[int32]string) error
 	GetContainerAddressMap(containerId string) (map[int32]string, error)
 	CheckContainerConcurrencyLimit(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error
 	CreateContainerStateWithConcurrencyLimit(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error
-	SetContainerStateWithConcurrencyLimit(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error
+	ReserveContainerConcurrencyForPending(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error
 	GetActiveContainersByStubId(stubId string) ([]types.ContainerState, error)
 	GetActiveContainersByWorkspaceId(workspaceId string) ([]types.ContainerState, error)
 	GetActiveContainersByWorkerId(workerId string) ([]types.ContainerState, error)
@@ -279,6 +281,9 @@ type BackendRepository interface {
 	ListDiskSnapshots(ctx context.Context, filter types.DiskSnapshotFilter) ([]types.DiskSnapshot, error)
 	GetDisk(ctx context.Context, workspaceId uint, name string) (*types.Disk, error)
 	GetOrCreateDisk(ctx context.Context, workspaceId uint, disk *types.Disk) (*types.Disk, error)
+	// DeleteDisk unregisters the mutable disk resource. Immutable snapshots and
+	// their backing payload are retained because snapshot IDs can outlive a disk
+	// record (for example, when pinned by a template or published for a fork).
 	DeleteDisk(ctx context.Context, workspaceId uint, name string) error
 	ListDisksWithRelated(ctx context.Context, workspaceId uint) ([]types.DiskWithRelated, error)
 }

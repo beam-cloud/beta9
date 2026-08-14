@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,6 +35,38 @@ func TestNewRunscDefaultsUnsupportedDriverCompatibility(t *testing.T) {
 			require.Len(t, rt.cfg.RunscExtraArgs, 1)
 		})
 	}
+}
+
+func TestRunscStateRecognizesMissingContainerFromCurrentRunsc(t *testing.T) {
+	dir := t.TempDir()
+	runscPath := filepath.Join(dir, "runsc")
+	require.NoError(t, os.WriteFile(runscPath, []byte(`#!/bin/sh
+echo 'FetchSpec failed: loading container: file does not exist' >&2
+exit 128
+`), 0o755))
+
+	rt := &Runsc{cfg: Config{RunscPath: runscPath, RunscRoot: filepath.Join(dir, "root")}}
+	_, err := rt.State(context.Background(), "already-gone")
+
+	var notFound ErrContainerNotFound
+	require.ErrorAs(t, err, &notFound)
+	require.Equal(t, "already-gone", notFound.ContainerID)
+}
+
+func TestRunscStateDoesNotHideUnrelatedExit128(t *testing.T) {
+	dir := t.TempDir()
+	runscPath := filepath.Join(dir, "runsc")
+	require.NoError(t, os.WriteFile(runscPath, []byte(`#!/bin/sh
+echo 'runsc state failed: permission denied' >&2
+exit 128
+`), 0o755))
+
+	rt := &Runsc{cfg: Config{RunscPath: runscPath, RunscRoot: filepath.Join(dir, "root")}}
+	_, err := rt.State(context.Background(), "unreadable")
+
+	var notFound ErrContainerNotFound
+	require.False(t, errors.As(err, &notFound))
+	require.ErrorContains(t, err, "permission denied")
 }
 
 func TestRunscRestoreSignalsStartedAfterStateRunning(t *testing.T) {

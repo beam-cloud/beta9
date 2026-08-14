@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/cache"
+	"github.com/beam-cloud/beta9/pkg/common"
 	model "github.com/beam-cloud/beta9/pkg/compute"
+	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
@@ -96,6 +99,9 @@ func (s *Service) removePrivateMachine(ctx context.Context, machine *model.Agent
 	if err := s.removePrivateMachineWorker(machine); err != nil {
 		return err
 	}
+	if err := s.removePrivateMachineRuntimeState(ctx, machine); err != nil {
+		return err
+	}
 	if err := s.computeRepo.DeleteAgentMachineState(ctx, machine.WorkspaceID, machine.PoolName, machine.MachineID); err != nil {
 		return err
 	}
@@ -119,6 +125,31 @@ func (s *Service) removePrivateMachine(ctx context.Context, machine *model.Agent
 		Status:      string(types.MachineStatusDisabled),
 		Message:     machineReleasedMessage,
 	})
+	return nil
+}
+
+// removePrivateMachineRuntimeState clears state whose lifetime is the provider
+// machine, rather than a worker process. This runs while the agent record is
+// still present so a transient Redis failure remains retryable by reconciliation.
+func (s *Service) removePrivateMachineRuntimeState(ctx context.Context, machine *model.AgentTokenState) error {
+	if machine == nil {
+		return nil
+	}
+	if s.workerRepo != nil {
+		networkPrefix := common.WorkerNetworkPrefix(s.appConfig.ClusterName, machine.MachineID)
+		if err := s.workerRepo.RemoveWorkerNetworkState(ctx, networkPrefix); err != nil {
+			return fmt.Errorf("remove private machine network state: %w", err)
+		}
+	}
+	if s.redisClient == nil {
+		return nil
+	}
+
+	locality := machine.WorkspaceID + "/" + machine.PoolName
+	coordinator := cache.NewCoordinator(repository.NewCacheRedisRepository(s.redisClient))
+	if err := coordinator.RemoveNode(ctx, machine.PoolName, locality, machine.MachineID); err != nil {
+		return fmt.Errorf("remove private machine cache state: %w", err)
+	}
 	return nil
 }
 

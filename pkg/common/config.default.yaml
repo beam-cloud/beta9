@@ -96,6 +96,12 @@ gateway:
     memory: 32768
     maxReplicas: 10
     maxGpuCount: 2
+  # Per-workspace cap on concurrently reserved capacity, applied only to
+  # workspaces without an explicit concurrency limit row. Disabled when
+  # either value is 0.
+  defaultConcurrencyLimit:
+    cpuMillicores: 0
+    gpuCount: 0
 fileService:
   enabled: true
   endpointUrl: http://juicefs-s3-gateway.beta9.svc.cluster.local:9900

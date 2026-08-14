@@ -88,7 +88,10 @@ message ContainerArchiveResponse {
   string error_msg = 4;
 }
 
-message ContainerCheckpointRequest { string container_id = 1; }
+message ContainerCheckpointRequest {
+  string container_id = 1;
+  bool terminate_after_checkpoint = 2;
+}
 
 message ContainerCheckpointResponse {
   bool ok = 1;

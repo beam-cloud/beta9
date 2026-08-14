@@ -144,7 +144,14 @@ func (a *schedulingAttempt) provisionWorker() {
 		return
 	}
 
-	controller, delay := a.scheduler.workerProvisioningController(controllers)
+	controller, delay, err := a.scheduler.workerProvisioningControllerForRequest(controllers, a.request)
+	if err != nil {
+		requestLog(log.Warn(), a.request).
+			Err(err).
+			Msg("unable to check worker provisioning capacity")
+		a.requeueForWorkerWaitDelay(provisioningWorkerRequeueDelay, "worker_capacity_check_failed")
+		return
+	}
 	if controller == nil {
 		// Every eligible pool, primary and failover alike, recently refused to
 		// provision. That is the serverless estate being exhausted, and the

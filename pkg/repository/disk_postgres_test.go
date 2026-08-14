@@ -22,6 +22,20 @@ func TestGetDiskSnapshotOnlySharesAvailableSnapshots(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestDeleteDiskOnlyUnregistersMutableDisk(t *testing.T) {
+	repo, mock := NewBackendPostgresRepositoryForTest()
+	postgresRepo := repo.(*PostgresBackendRepository)
+
+	mock.ExpectExec(`UPDATE disk SET deleted_at = CURRENT_TIMESTAMP`).
+		WithArgs(uint(7), "template-source").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	require.NoError(t, postgresRepo.DeleteDisk(context.Background(), 7, "template/source"))
+	// No disk_snapshot expectation is deliberate: immutable snapshots may be
+	// pinned by a template or consumed by another workspace after publication.
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestCreateDiskSnapshotStoresManifestReference(t *testing.T) {
 	repo, mock := NewBackendPostgresRepositoryForTest()
 	postgresRepo := repo.(*PostgresBackendRepository)
@@ -261,12 +275,12 @@ func TestUpdateDiskSnapshotFinalizesManifestReference(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestGetLatestDiskSnapshotOrdersByGeneration(t *testing.T) {
+func TestGetLatestDiskSnapshotOrdersConcurrentGenerationsDeterministically(t *testing.T) {
 	repo, mock := NewBackendPostgresRepositoryForTest()
 	postgresRepo := repo.(*PostgresBackendRepository)
 
 	now := time.Now()
-	mock.ExpectQuery("ORDER BY generation DESC, created_at DESC").
+	mock.ExpectQuery("ORDER BY generation DESC, created_at DESC, id DESC").
 		WithArgs(uint(7), "pg-data", types.DiskSnapshotStatusAvailable).
 		WillReturnRows(diskSnapshotRows().AddRow(
 			uint(2),

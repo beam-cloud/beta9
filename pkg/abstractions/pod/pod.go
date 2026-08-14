@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -398,11 +399,35 @@ func (ps *GenericPodService) deletePodInstance(stubId string, instance *podInsta
 // in which case the container id is pre-generated so the task record can
 // reference it before scheduling.
 type runOptions struct {
-	imageId     *string
-	checkpoint  *types.Checkpoint
-	machineId   string
-	taskId      string
-	containerId string
+	imageId             *string
+	checkpoint          *types.Checkpoint
+	machineId           string
+	forceResourceLimits bool
+	taskId              string
+	containerId         string
+}
+
+func createPodRunOptions(ctx context.Context, in *pb.CreatePodRequest, checkpoint *types.Checkpoint) runOptions {
+	return runOptions{
+		imageId:             in.ImageId,
+		checkpoint:          checkpoint,
+		machineId:           in.GetMachineId(),
+		forceResourceLimits: forceResourceLimitsRequested(ctx),
+	}
+}
+
+func forceResourceLimitsRequested(ctx context.Context) bool {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return false
+	}
+	for _, value := range md.Get(types.ForceResourceLimitsMetadata) {
+		enabled, err := strconv.ParseBool(strings.TrimSpace(value))
+		if err == nil && enabled {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, stub *types.StubWithRelated, opts runOptions) (string, error) {
@@ -497,6 +522,13 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 	if stub.App != nil {
 		appId = stub.App.ExternalId
 	}
+	requestStub := *stub
+	if opts.forceResourceLimits {
+		requestStub.Config, err = types.StubConfigWithForcedResourceLimits(stub.Config)
+		if err != nil {
+			return "", err
+		}
+	}
 
 	runRequest := &types.ContainerRequest{
 		ContainerId:       containerId,
@@ -509,7 +541,7 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 		GpuRequest:        gpuRequest,
 		GpuCount:          uint32(gpuCount),
 		Mounts:            mounts,
-		Stub:              *stub,
+		Stub:              requestStub,
 		ImageId:           *imageId,
 		WorkspaceId:       workspace.ExternalId,
 		Workspace:         *workspace,
@@ -649,11 +681,7 @@ func (s *GenericPodService) CreatePod(ctx context.Context, in *pb.CreatePodReque
 		}
 	}
 
-	opts := runOptions{
-		imageId:    in.ImageId,
-		checkpoint: checkpoint,
-		machineId:  in.GetMachineId(),
-	}
+	opts := createPodRunOptions(ctx, in, checkpoint)
 
 	var containerId, taskId string
 	if s.trackRunAsTask(stub) {

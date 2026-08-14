@@ -262,6 +262,15 @@ func (s *GenericPodService) sandboxExitedStatus(ctx context.Context, containerId
 		return nil, errors.New("invalid workspace")
 	}
 
+	requestStatus, requestStatusErr := s.containerRepo.GetContainerRequestStatus(containerId)
+	if requestStatusErr == nil && requestStatus == types.ContainerRequestStatusFailed {
+		return &pb.PodSandboxStatusResponse{
+			Ok:       true,
+			Status:   string(types.SandboxStatusExited),
+			ExitCode: 1,
+		}, nil
+	}
+
 	exitCode, err := s.containerRepo.GetContainerExitCode(containerId)
 	if err != nil {
 		return nil, stateErr
@@ -1151,7 +1160,9 @@ func (s *GenericPodService) SandboxSnapshotMemory(ctx context.Context, in *pb.Po
 		}, nil
 	}
 
-	resp, err := client.Checkpoint(ctx, in.ContainerId)
+	resp, err := client.Checkpoint(ctx, in.ContainerId, common.ContainerCheckpointOptions{
+		TerminateAfterCheckpoint: in.TerminateAfterCheckpoint,
+	})
 	if err != nil {
 		return &pb.PodSandboxSnapshotMemoryResponse{
 			Ok:       false,

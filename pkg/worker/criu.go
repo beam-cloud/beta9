@@ -47,6 +47,7 @@ const (
 	checkpointTriggerHTTP         = "http"
 	checkpointProgressInterval    = 10 * time.Second
 	terminalCheckpointStopWait    = 5 * time.Second
+	checkpointStatePublicationTTL = 5 * time.Second
 	restoreReadinessTimeout       = 15 * time.Second
 	restoreReadinessInterval      = 100 * time.Millisecond
 	restoreReadinessStableFor     = 250 * time.Millisecond
@@ -618,9 +619,7 @@ func (s *Worker) prepareRestoreFallback(request *types.ContainerRequest, config 
 		}
 		if instance, exists := s.containerInstances.Get(request.ContainerId); exists {
 			instance.RestoreCPUAffinityDeferred = false
-			instance.RuntimeStarted = false
-			instance.RuntimePid = 0
-			instance.RuntimeStartedAt = 0
+			instance.resetRuntimeStarted()
 			s.containerInstances.Set(request.ContainerId, instance)
 		}
 	}
@@ -690,12 +689,13 @@ func (s *Worker) signalRestoredSandboxProcessManager(ctx context.Context, reques
 }
 
 type CreateCheckpointOpts struct {
-	Request           *types.ContainerRequest
-	CheckpointId      string
-	ContainerIp       string
-	OutputLogger      *slog.Logger
-	CheckpointPIDChan chan int
-	WaitForSignal     bool
+	Request                  *types.ContainerRequest
+	CheckpointId             string
+	ContainerIp              string
+	OutputLogger             *slog.Logger
+	CheckpointPIDChan        chan int
+	WaitForSignal            bool
+	TerminateAfterCheckpoint bool
 }
 
 // Waits for the container to be ready to checkpoint at the desired point in execution, ie.
@@ -708,9 +708,16 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 	availableStateCreated := false
 	runtimeName := ""
 	var persistedMetadata *checkpointCacheMetadata
+	var directTerminalState *checkpointCreateState
+	checkpointStateCtx := ctx
+	defer func() {
+		if directTerminalState != nil {
+			s.finishCheckpointCreate(opts.Request, directTerminalState)
+		}
+	}()
 	defer func() {
 		if err != nil && !availableStateCreated {
-			s.markCheckpointFailed(opts, runtimeName, persistedMetadata)
+			s.markCheckpointFailed(checkpointStateCtx, opts, runtimeName, persistedMetadata)
 		}
 	}()
 
@@ -725,6 +732,20 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 
 	if err := s.requireCRIUManager(); err != nil {
 		return err
+	}
+
+	if opts.TerminateAfterCheckpoint {
+		if !supportsTerminalCheckpoint(instance.Runtime) {
+			return fmt.Errorf("runtime %s does not support terminal checkpointing", runtimeName)
+		}
+		var acquired bool
+		directTerminalState, acquired = s.acquireCheckpointCreateLock(opts.Request)
+		if !acquired {
+			return fmt.Errorf("checkpoint creation already in progress")
+		}
+		if !directTerminalState.requestTerminal(opts.Request.ContainerId) {
+			return fmt.Errorf("failed to start terminal checkpoint")
+		}
 	}
 
 	if opts.CheckpointPIDChan != nil {
@@ -778,25 +799,47 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 		opts.OutputLogger.Info("Creating container checkpoint snapshot")
 	}
 	// READY blocks application workers until this function returns and its
-	// fail-open defer writes COMPLETE. Bound the entire snapshot/copy/persist
-	// operation with one deadline so no later phase can strand those workers.
-	checkpointCtx, checkpointCancel := context.WithTimeout(ctx, defaultCheckpointOperationTTL)
-	defer checkpointCancel()
+	// fail-open defer writes COMPLETE. Use one deadline for stop arbitration and
+	// persistence. Once a terminal checkpoint is selected, caller cancellation
+	// cannot safely undo the runtime stop, so the remaining work is worker-owned.
+	checkpointDeadline := time.Now().Add(defaultCheckpointOperationTTL)
+	arbitrationCtx, arbitrationCancel := context.WithDeadline(ctx, checkpointDeadline)
 	completePendingStop := opts.WaitForSignal && s.awaitTerminalAutoCheckpointStop(
-		checkpointCtx,
+		arbitrationCtx,
 		opts.Request,
 		instance.Runtime,
 		terminalCheckpointStopWait,
 	)
-	if completePendingStop {
-		if instance.OOMWatcher != nil {
-			instance.OOMWatcher.Stop()
+	arbitrationCancel()
+	terminateRuntime := opts.TerminateAfterCheckpoint || completePendingStop
+	checkpointParent := ctx
+	if terminateRuntime {
+		checkpointParent = context.WithoutCancel(ctx)
+	}
+	checkpointCtx, checkpointCancel := context.WithDeadline(checkpointParent, checkpointDeadline)
+	defer checkpointCancel()
+	checkpointStateCtx = checkpointCtx
+	resumeOOMWatcher := func() {}
+	if terminateRuntime {
+		resumeOOMWatcher = instance.suspendOOMWatcher()
+		if oomTerminationAttempted, oomErr := instance.oomTerminationResult(); oomTerminationAttempted {
+			if oomErr != nil {
+				resumeOOMWatcher()
+				return fmt.Errorf("cannot create terminal checkpoint because OOM termination did not complete: %w", oomErr)
+			}
+			return errors.New("cannot create terminal checkpoint because the container was terminated after OOM")
 		}
-		log.Info().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msg("completing pending automatic stop with checkpoint")
+		log.Info().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msg("creating terminal checkpoint")
 	}
 
-	checkpointPath, err := s.criuManager.CreateCheckpoint(checkpointCtx, instance.Runtime, opts.CheckpointId, opts.Request, completePendingStop)
+	checkpointPath, err := s.criuManager.CreateCheckpoint(checkpointCtx, instance.Runtime, opts.CheckpointId, opts.Request, terminateRuntime)
 	if err != nil {
+		runtimeStopped := terminateRuntime && checkpointRuntimeHasStopped(checkpointCtx, instance.Runtime, opts.Request.ContainerId)
+		if runtimeStopped {
+			s.markTerminalCheckpointStopped(opts.Request, instance, opts.TerminateAfterCheckpoint)
+		} else {
+			resumeOOMWatcher()
+		}
 		if errors.Is(checkpointCtx.Err(), context.DeadlineExceeded) {
 			err = fmt.Errorf("checkpoint snapshot timed out after %s: %w", defaultCheckpointOperationTTL, err)
 		}
@@ -806,8 +849,8 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 
 		return err
 	}
-	if completePendingStop {
-		s.markTerminalCheckpointRuntimeStopped(opts.Request)
+	if terminateRuntime {
+		s.markTerminalCheckpointStopped(opts.Request, instance, opts.TerminateAfterCheckpoint)
 	}
 	parentDir := filepath.Dir(instance.Overlay.TopLayerPath())
 	upperDir := path.Join(parentDir, "upper")
@@ -854,7 +897,7 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 		}
 	}
 
-	err = s.createCheckpointState(opts.CheckpointId, opts.Request, types.CheckpointStatusAvailable, opts.ContainerIp, runtimeName, metadata)
+	err = s.createCheckpointState(checkpointCtx, opts.CheckpointId, opts.Request, types.CheckpointStatusAvailable, opts.ContainerIp, runtimeName, metadata)
 	if err != nil {
 		log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to update checkpoint state: %v", err)
 		return err
@@ -870,11 +913,13 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 	return nil
 }
 
-func (s *Worker) markCheckpointFailed(opts *CreateCheckpointOpts, runtimeName string, metadata *checkpointCacheMetadata) {
+func (s *Worker) markCheckpointFailed(ctx context.Context, opts *CreateCheckpointOpts, runtimeName string, metadata *checkpointCacheMetadata) {
 	if s == nil || s.backendRepoClient == nil || opts == nil || opts.Request == nil {
 		return
 	}
-	if stateErr := s.createCheckpointState(opts.CheckpointId, opts.Request, types.CheckpointStatusCheckpointFailed, opts.ContainerIp, runtimeName, metadata); stateErr != nil {
+	stateCtx, cancel := checkpointStatePublicationContext(ctx)
+	defer cancel()
+	if stateErr := s.createCheckpointState(stateCtx, opts.CheckpointId, opts.Request, types.CheckpointStatusCheckpointFailed, opts.ContainerIp, runtimeName, metadata); stateErr != nil {
 		log.Error().
 			Str("container_id", opts.Request.ContainerId).
 			Str("checkpoint_id", opts.CheckpointId).
@@ -1453,7 +1498,6 @@ func (s *Worker) reportCheckpointRequiredContent(request *types.ContainerRequest
 		CheckpointID: checkpointId,
 		Accelerator:  metadata.accelerator,
 	}})
-	reporter.flush()
 }
 
 // shouldCreateCheckpoint checks if a checkpoint should be created for a given container
@@ -1519,6 +1563,16 @@ func (state *checkpointCreateState) markTerminal(containerID string) bool {
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	if !state.active || state.containerID != containerID || state.deferredStop == nil {
+		return false
+	}
+	state.terminateAfterCheckpoint = true
+	return true
+}
+
+func (state *checkpointCreateState) requestTerminal(containerID string) bool {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if !state.active || state.containerID != containerID {
 		return false
 	}
 	state.terminateAfterCheckpoint = true
@@ -1618,6 +1672,19 @@ func supportsTerminalCheckpoint(rt runtime.Runtime) bool {
 		rt.Name() == types.ContainerRuntimeGvisor.String()
 }
 
+func checkpointRuntimeHasStopped(ctx context.Context, rt runtime.Runtime, containerID string) bool {
+	if rt == nil {
+		return false
+	}
+	stateCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+	defer cancel()
+	state, err := rt.State(stateCtx, containerID)
+	if err != nil {
+		return runtimeContainerNotFound(err)
+	}
+	return state.Status == types.RuncContainerStatusStopped
+}
+
 func shouldAwaitTerminalCheckpointStop(request *types.ContainerRequest) bool {
 	if !isPodRequest(request) {
 		return false
@@ -1626,7 +1693,7 @@ func shouldAwaitTerminalCheckpointStop(request *types.ContainerRequest) bool {
 	return err == nil && config != nil && config.KeepWarmSeconds == 0
 }
 
-func (s *Worker) waitForTerminalAutoCheckpoint(ctx context.Context, request *types.ContainerRequest) bool {
+func (s *Worker) waitForTerminalAutoCheckpoint(_ context.Context, request *types.ContainerRequest) bool {
 	state, ok := s.loadCheckpointCreateState(request)
 	if !ok {
 		return false
@@ -1640,15 +1707,13 @@ func (s *Worker) waitForTerminalAutoCheckpoint(ctx context.Context, request *typ
 		return false
 	}
 
-	select {
-	case <-done:
-		state.mu.Lock()
-		runtimeStopped := state.runtimeStopped
-		state.mu.Unlock()
-		return runtimeStopped
-	case <-ctx.Done():
-		return false
-	}
+	// A terminal checkpoint owns a bounded post-stop context. Returning on the
+	// spawn context would let overlay cleanup race its copy/upload unwind.
+	<-done
+	state.mu.Lock()
+	runtimeStopped := state.runtimeStopped
+	state.mu.Unlock()
+	return runtimeStopped
 }
 
 func (s *Worker) markTerminalCheckpointRuntimeStopped(request *types.ContainerRequest) {
@@ -1662,6 +1727,17 @@ func (s *Worker) markTerminalCheckpointRuntimeStopped(request *types.ContainerRe
 	if state.active && state.terminateAfterCheckpoint && state.containerID == request.ContainerId {
 		state.runtimeStopped = true
 	}
+}
+
+func (s *Worker) markTerminalCheckpointStopped(request *types.ContainerRequest, instance *ContainerInstance, userInitiated bool) {
+	if instance != nil {
+		instance.stopOOMWatcher()
+		if userInitiated {
+			instance.setStopReason(types.StopContainerReasonUser)
+		}
+		s.containerInstances.Set(request.ContainerId, instance)
+	}
+	s.markTerminalCheckpointRuntimeStopped(request)
 }
 
 func (s *Worker) finishCheckpointCreate(request *types.ContainerRequest, state *checkpointCreateState) {
@@ -1718,7 +1794,14 @@ func (s *Worker) requireCRIUManager() error {
 	return nil
 }
 
-func (s *Worker) createCheckpointState(checkpointId string, request *types.ContainerRequest, status types.CheckpointStatus, containerIp, runtimeName string, metadata *checkpointCacheMetadata) error {
+func checkpointStatePublicationContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithTimeout(context.WithoutCancel(ctx), checkpointStatePublicationTTL)
+}
+
+func (s *Worker) createCheckpointState(ctx context.Context, checkpointId string, request *types.ContainerRequest, status types.CheckpointStatus, containerIp, runtimeName string, metadata *checkpointCacheMetadata) error {
 	req := checkpointStateRequest(checkpointId, request, status, containerIp, runtimeName)
 	if metadata != nil {
 		req.CacheHash = metadata.hash
@@ -1727,7 +1810,7 @@ func (s *Worker) createCheckpointState(checkpointId string, request *types.Conta
 		req.Locality = metadata.locality
 		req.Accelerator = metadata.accelerator
 	}
-	_, err := handleGRPCResponse(s.backendRepoClient.CreateCheckpoint(context.Background(), req))
+	_, err := handleGRPCResponse(s.backendRepoClient.CreateCheckpoint(ctx, req))
 
 	return err
 }

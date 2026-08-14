@@ -301,9 +301,10 @@ func (s *ContainerRuntimeServer) ContainerCheckpoint(ctx context.Context, in *pb
 
 	checkpointId := uuid.New().String()
 	err := s.createCheckpoint(ctx, &CreateCheckpointOpts{
-		Request:      instance.Request,
-		CheckpointId: checkpointId,
-		ContainerIp:  instance.ContainerIp,
+		Request:                  instance.Request,
+		CheckpointId:             checkpointId,
+		ContainerIp:              instance.ContainerIp,
+		TerminateAfterCheckpoint: in.TerminateAfterCheckpoint,
 	})
 	if err != nil {
 		log.Error().Str("container_id", in.ContainerId).Msgf("failed to create checkpoint: %v", err)

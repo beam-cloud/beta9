@@ -161,9 +161,19 @@ type ContainerInstance struct {
 	containerAddressMu         sync.RWMutex
 	ContainerAddressMap        map[int32]string
 	Runtime                    runtime.Runtime
-	OOMWatcher                 runtime.OOMWatcher
 	StopEscalationStarted      atomic.Bool
+	StuckMountRecoveryStarted  atomic.Bool
+	statusHeartbeatMu          sync.Mutex
 	stateMu                    sync.RWMutex
+	oomWatcherMu               sync.Mutex
+	oomWatcher                 runtime.OOMWatcher
+	oomWatcherFactory          func(func()) runtime.OOMWatcher
+	oomWatcherOnOOM            func() error
+	oomTerminationAttempted    bool
+	oomTerminationErr          error
+	oomWatcherGeneration       uint64
+	oomWatcherSuspended        bool
+	oomWatcherClosed           bool
 }
 
 func (i *ContainerInstance) lifecycleState() (int, types.StopContainerReason) {
@@ -182,6 +192,124 @@ func (i *ContainerInstance) setStopReason(reason types.StopContainerReason) {
 	i.stateMu.Lock()
 	defer i.stateMu.Unlock()
 	i.StopReason = reason
+}
+
+func (i *ContainerInstance) runtimeStartState() (bool, int) {
+	i.stateMu.RLock()
+	defer i.stateMu.RUnlock()
+	return i.RuntimeStarted, i.RuntimePid
+}
+
+func (i *ContainerInstance) markRuntimeStarted(pid int) {
+	i.stateMu.Lock()
+	defer i.stateMu.Unlock()
+	i.RuntimeStarted = true
+	i.RuntimePid = pid
+	i.RuntimeStartedAt = time.Now().Unix()
+}
+
+func (i *ContainerInstance) resetRuntimeStarted() {
+	i.stateMu.Lock()
+	defer i.stateMu.Unlock()
+	i.RuntimeStarted = false
+	i.RuntimePid = 0
+	i.RuntimeStartedAt = 0
+}
+
+func (i *ContainerInstance) installOOMWatcher(factory func(func()) runtime.OOMWatcher, onOOM func() error) {
+	if factory == nil {
+		return
+	}
+
+	i.oomWatcherMu.Lock()
+	if i.oomWatcherClosed {
+		i.oomWatcherMu.Unlock()
+		return
+	}
+	previous := i.oomWatcher
+	i.oomWatcher = nil
+	i.oomWatcherFactory = factory
+	i.oomWatcherOnOOM = onOOM
+	if !i.oomWatcherSuspended {
+		i.startOOMWatcherLocked()
+	}
+	i.oomWatcherMu.Unlock()
+
+	if previous != nil {
+		previous.Stop()
+	}
+}
+
+func (i *ContainerInstance) startOOMWatcherLocked() {
+	i.oomWatcherGeneration++
+	generation := i.oomWatcherGeneration
+	i.oomWatcher = i.oomWatcherFactory(func() {
+		i.oomWatcherMu.Lock()
+		defer i.oomWatcherMu.Unlock()
+		if !i.oomWatcherClosed && !i.oomWatcherSuspended && i.oomWatcherGeneration == generation && i.oomWatcherOnOOM != nil {
+			i.oomTerminationAttempted = true
+			i.oomTerminationErr = i.oomWatcherOnOOM()
+		}
+	})
+}
+
+func (i *ContainerInstance) oomTerminationResult() (bool, error) {
+	i.oomWatcherMu.Lock()
+	defer i.oomWatcherMu.Unlock()
+	return i.oomTerminationAttempted, i.oomTerminationErr
+}
+
+func (i *ContainerInstance) suspendOOMWatcher() func() {
+	i.oomWatcherMu.Lock()
+	if i.oomWatcherClosed {
+		i.oomWatcherMu.Unlock()
+		return func() {}
+	}
+	i.oomWatcherSuspended = true
+	i.oomWatcherGeneration++
+	generation := i.oomWatcherGeneration
+	watcher := i.oomWatcher
+	i.oomWatcher = nil
+	i.oomWatcherMu.Unlock()
+
+	if watcher != nil {
+		watcher.Stop()
+	}
+
+	return func() {
+		i.oomWatcherMu.Lock()
+		if i.oomWatcherClosed || !i.oomWatcherSuspended || i.oomWatcherGeneration != generation {
+			i.oomWatcherMu.Unlock()
+			return
+		}
+		i.oomWatcherSuspended = false
+		if i.oomWatcherFactory != nil {
+			i.startOOMWatcherLocked()
+		}
+		i.oomWatcherMu.Unlock()
+	}
+}
+
+func (i *ContainerInstance) stopOOMWatcher() {
+	i.oomWatcherMu.Lock()
+	i.oomWatcherClosed = true
+	i.oomWatcherSuspended = true
+	i.oomWatcherGeneration++
+	i.oomWatcherFactory = nil
+	i.oomWatcherOnOOM = nil
+	watcher := i.oomWatcher
+	i.oomWatcher = nil
+	i.oomWatcherMu.Unlock()
+
+	if watcher != nil {
+		watcher.Stop()
+	}
+}
+
+func (i *ContainerInstance) hasOOMWatcher() bool {
+	i.oomWatcherMu.Lock()
+	defer i.oomWatcherMu.Unlock()
+	return i.oomWatcher != nil
 }
 
 func (i *ContainerInstance) setContainerAddressMap(addressMap map[int32]string) {
@@ -485,7 +613,7 @@ func NewWorker() (_ *Worker, err error) {
 		BackendRoute:            worker.backendRouteFor,
 		CreateCheckpoint:        worker.createCheckpoint,
 		SnapshotDisks: func(ctx context.Context, request *types.ContainerRequest) ([]*types.DiskSnapshot, error) {
-			return worker.syncDurableDiskMounts(ctx, request, true)
+			return worker.syncDurableDiskMounts(ctx, request, durableDiskSyncExplicit)
 		},
 	})
 	if err != nil {
@@ -499,17 +627,12 @@ func NewWorker() (_ *Worker, err error) {
 		return nil, err
 	}
 
-	// Only agent-provisioned workers on billable machines get a usage
-	// recorder; everyone else records nothing beyond the usual metrics.
-	var usageRecorder ContainerUsageRecorder
-	if recorder := clients.NewManagedComputeUsageRecorder(config.ManagedCompute, clients.WorkerIdentity{
+	usageRecorder := clients.NewManagedComputeContainerUsageRecorder(config.ManagedCompute, clients.WorkerIdentity{
 		WorkerID:  workerId,
 		PoolName:  workerPoolName,
 		MachineID: machineID,
 		Runtime:   defaultRuntime.Name(),
-	}); recorder != nil {
-		usageRecorder = recorder
-	}
+	})
 
 	workerMetrics, err := NewWorkerUsageMetrics(ctx, workerId, config, gpuType, poolConfig.Mode, usageRecorder)
 	if err != nil {
@@ -688,6 +811,7 @@ func (s *Worker) reserveContainerInstance(request *types.ContainerRequest) bool 
 	instance := &ContainerInstance{
 		Id:        request.ContainerId,
 		StubId:    request.StubId,
+		ExitCode:  -1,
 		LogBuffer: common.NewLogBuffer(),
 		Request:   request,
 		Runtime:   s.runtime,
@@ -711,15 +835,55 @@ func (s *Worker) handleContainerRequest(request *types.ContainerRequest) {
 }
 
 func (s *Worker) runContainerRequest(request *types.ContainerRequest) {
+	s.runContainerRequestWithRunner(request, s.RunContainer)
+}
+
+func (s *Worker) runContainerRequestWithRunner(
+	request *types.ContainerRequest,
+	runContainer func(context.Context, *types.ContainerRequest) error,
+) {
 	containerId := request.ContainerId
 	log.Info().Str("container_id", containerId).Msg("running container")
 
-	ctx, cancel := context.WithCancel(s.ctx)
-	defer cancel()
+	ctx, cancelStartup := context.WithCancel(s.ctx)
 
-	s.registerContainerCancel(containerId, cancel)
-	defer s.unregisterContainerCancel(containerId)
-	go s.cancelContainerIfAlreadyStopping(cancel, containerId)
+	s.registerContainerCancel(containerId, cancelStartup)
+	defer func() {
+		cancelStartup()
+		s.unregisterContainerCancel(containerId)
+	}()
+	s.cancelContainerIfAlreadyStopping(cancelStartup, containerId)
+	startupAllowed, reconcileErr := s.awaitInitialContainerReconciliation(ctx, request)
+	if reconcileErr != nil {
+		log.Error().Str("container_id", containerId).Err(reconcileErr).Msg("unable to reconcile container state before startup")
+		s.failContainerRequest(containerId, request, reconcileErr)
+		return
+	}
+	if !startupAllowed {
+		return
+	}
+	if err := ctx.Err(); err != nil {
+		s.failContainerRequest(containerId, request, err)
+		return
+	}
+
+	// The initial persisted-state reconciliation above gates startup. Continue
+	// the same lifecycle heartbeat before hydration, without repeating the
+	// already completed reconciliation immediately.
+	heartbeatCtx, cancelHeartbeat := context.WithCancel(s.ctx)
+	heartbeatDone := make(chan struct{})
+	go func() {
+		defer close(heartbeatDone)
+		defer cancelHeartbeat()
+		_ = s.updateContainerStatusAfterInitialReconciliation(heartbeatCtx, request)
+	}()
+	heartbeatHandedOff := false
+	defer func() {
+		if !heartbeatHandedOff {
+			cancelHeartbeat()
+			<-heartbeatDone
+		}
+	}()
 
 	if err := s.hydrateRuntimeCredentials(ctx, request); err != nil {
 		log.Error().Str("container_id", containerId).Err(err).Msg("unable to hydrate runtime credentials")
@@ -732,7 +896,7 @@ func (s *Worker) runContainerRequest(request *types.ContainerRequest) {
 			return err
 		}
 
-		return s.RunContainer(ctx, request)
+		return runContainer(ctx, request)
 	}
 
 	var err error
@@ -750,10 +914,10 @@ func (s *Worker) runContainerRequest(request *types.ContainerRequest) {
 		select {
 		case err = <-errCh:
 		case <-timer.C:
-			cancel()
+			cancelStartup()
 			err = fmt.Errorf("container startup timed out after %s", containerStartupTimeout)
 		case <-s.ctx.Done():
-			cancel()
+			cancelStartup()
 			err = fmt.Errorf("worker shutting down before container startup completed: %w", s.ctx.Err())
 		}
 	}
@@ -763,6 +927,11 @@ func (s *Worker) runContainerRequest(request *types.ContainerRequest) {
 		s.failContainerRequest(containerId, request, err)
 		return
 	}
+
+	// Runtime/finalization now owns the instance. Stop exposing the startup
+	// cancel, but leave the heartbeat alive until local exit or worker shutdown.
+	s.unregisterContainerCancel(containerId)
+	heartbeatHandedOff = true
 }
 
 func (s *Worker) failContainerRequest(containerId string, request *types.ContainerRequest, runErr error) {
@@ -777,41 +946,20 @@ func (s *Worker) failContainerRequest(containerId string, request *types.Contain
 	s.clearContainer(containerId, request, exitCode, false)
 }
 
-// cancelContainerIfAlreadyStopping closes the startup race where a stop is
-// persisted before this worker registers the in-memory cancellation callback.
+// cancelContainerIfAlreadyStopping closes the local startup-registration race.
+// The lifetime status heartbeat owns persisted-state checks, so startup and
+// reconnect only need this cheap local check.
 func (s *Worker) cancelContainerIfAlreadyStopping(cancel context.CancelFunc, containerId string) {
-	// A stop event can land after the instance is reserved but before the
-	// startup cancellation callback is registered. Prefer the local lifecycle
-	// state so that race does not depend on another repository round trip.
-	if s.containerInstances != nil {
-		if instance, exists := s.containerInstances.Get(containerId); exists && instance != nil {
-			_, stopReason := instance.lifecycleState()
-			if stopReason != "" {
-				log.Info().Str("container_id", containerId).Msg("container stopped before startup cancellation was registered")
-				cancel()
-				return
-			}
+	if s.containerInstances == nil {
+		return
+	}
+	if instance, exists := s.containerInstances.Get(containerId); exists && instance != nil {
+		_, stopReason := instance.lifecycleState()
+		if stopReason == "" {
+			return
 		}
-	}
-
-	// The worker event stream may have disconnected before delivering the stop
-	// event. Reconcile against persisted state, but keep the lookup bounded so a
-	// repository outage cannot leak one goroutine per startup or reconnect.
-	if s.containerRepoClient == nil {
-		return
-	}
-	stateCtx, stateCancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer stateCancel()
-	containerState, err := handleGRPCResponse(s.containerRepoClient.GetContainerState(stateCtx, &pb.GetContainerStateRequest{ContainerId: containerId}))
-	if err != nil {
-		log.Error().Str("container_id", containerId).Err(err).Msg("failed to get container state")
-		return
-	}
-
-	if types.ContainerStatus(containerState.State.Status) == types.ContainerStatusStopping {
-		log.Info().Str("container_id", containerId).Msg("incoming container state is stopping, cancelling startup context")
+		log.Info().Str("container_id", containerId).Msg("container stopped before startup cancellation was registered")
 		cancel()
-		return
 	}
 }
 
@@ -863,16 +1011,21 @@ func (s *Worker) shouldShutDown(lastContainerRequest time.Time) bool {
 	}
 }
 
-func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
+func (s *Worker) updateContainerStatus(ctx context.Context, request *types.ContainerRequest) error {
+	return s.updateContainerStatusLoop(ctx, request, true)
+}
+
+func (s *Worker) updateContainerStatusAfterInitialReconciliation(ctx context.Context, request *types.ContainerRequest) error {
+	return s.updateContainerStatusLoop(ctx, request, false)
+}
+
+func (s *Worker) updateContainerStatusLoop(ctx context.Context, request *types.ContainerRequest, updateImmediately bool) error {
 	ticker := time.NewTicker(containerStatusUpdateInterval)
 	defer ticker.Stop()
 
 	for {
-		select {
-		case <-s.ctx.Done():
-			return nil
-		case <-ticker.C:
-			done, err := s.updateContainerStatusOnce(request)
+		if updateImmediately {
+			done, err := s.updateContainerStatusOnce(ctx, request)
 			if err != nil {
 				log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to update container state")
 			}
@@ -880,16 +1033,41 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 				return nil
 			}
 		}
+		updateImmediately = true
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+		}
 	}
 }
 
-func (s *Worker) updateContainerStatusOnce(request *types.ContainerRequest) (bool, error) {
+func (s *Worker) awaitInitialContainerReconciliation(ctx context.Context, request *types.ContainerRequest) (bool, error) {
+	reconcileCtx, cancel := context.WithTimeout(ctx, containerRepositoryRetryTimeout)
+	defer cancel()
+	var lastErr error
+	for {
+		done, err := s.updateContainerStatusOnce(reconcileCtx, request)
+		if err == nil {
+			if done {
+				return false, nil
+			}
+			return true, nil
+		}
+		lastErr = err
+		if err := waitForRetry(reconcileCtx, containerRepositoryRetryInterval); err != nil {
+			return false, fmt.Errorf("initial container state reconciliation failed: %w", lastErr)
+		}
+	}
+}
+
+func (s *Worker) updateContainerStatusOnce(ctx context.Context, request *types.ContainerRequest) (bool, error) {
 	instance, exists := s.containerInstances.Get(request.ContainerId)
 	if !exists {
 		return true, nil
 	}
 
-	exitCode, _ := instance.lifecycleState()
+	exitCode, localStopReason := instance.lifecycleState()
 	if exitCode >= 0 {
 		log.Debug().
 			Str("container_id", request.ContainerId).
@@ -899,31 +1077,37 @@ func (s *Worker) updateContainerStatusOnce(request *types.ContainerRequest) (boo
 	}
 
 	// Stop container if it is "orphaned" - meaning it's running but has no associated state.
-	getStateResponse, err := handleGRPCResponse(s.containerRepoClient.GetContainerState(context.Background(), &pb.GetContainerStateRequest{
+	getStateCtx, cancelGetState := context.WithTimeout(ctx, containerRepositoryAttemptTimeout)
+	getStateResponse, err := handleGRPCResponse(s.containerRepoClient.GetContainerState(getStateCtx, &pb.GetContainerStateRequest{
 		ContainerId: request.ContainerId,
 	}))
+	cancelGetState()
 	if err != nil {
 		notFoundErr := &types.ErrContainerStateNotFound{}
 		if notFoundErr.From(err) {
-			instance.setStopReason(types.StopContainerReasonUnknown)
-			s.containerInstances.Set(request.ContainerId, instance)
-			s.stopContainerChan <- stopContainerEvent{ContainerId: request.ContainerId, Kill: true}
-			go s.recordContainerEvent(context.Background(), request, types.EventContainerEventSchema{
-				ID:          types.ContainerEventWorkerOrphanStateMissing,
-				ContainerID: request.ContainerId,
-				Reason:      string(types.StopContainerReasonUnknown),
-				Source:      types.EventSourceWorkerStatusHeartbeat.String(),
-				Message:     types.EventMessageWorkerOrphanStateMissing.String(),
-			})
-			return true, nil
+			_, previousStopReason := instance.lifecycleState()
+			s.handleObservedOrphanedContainer(request.ContainerId, types.EventSourceWorkerStatusHeartbeat)
+			if previousStopReason == "" {
+				go s.recordContainerEvent(context.Background(), request, types.EventContainerEventSchema{
+					ID:          types.ContainerEventWorkerOrphanStateMissing,
+					ContainerID: request.ContainerId,
+					Reason:      string(types.StopContainerReasonUnknown),
+					Source:      types.EventSourceWorkerStatusHeartbeat.String(),
+					Message:     types.EventMessageWorkerOrphanStateMissing.String(),
+				})
+			}
+			return false, nil
 		}
 
-		return false, nil
+		return false, err
 	}
 
 	state := getStateResponse.State
 	if state == nil {
 		return false, fmt.Errorf("container state response missing state")
+	}
+	if exitCode, localStopReason = instance.lifecycleState(); exitCode >= 0 {
+		return true, nil
 	}
 
 	status := types.ContainerStatus(state.Status)
@@ -931,11 +1115,19 @@ func (s *Worker) updateContainerStatusOnce(request *types.ContainerRequest) (boo
 	log.Debug().Str("container_id", request.ContainerId).Str("image_id", request.ImageId).Msg("container still running")
 
 	expirySeconds := int64(types.ContainerStateTtlS)
-	if status == types.ContainerStatusPending {
-		if instance.RuntimeStarted {
+	if localStopReason != "" && status != types.ContainerStatusStopping {
+		// A local terminal fault (for example, address publication failure) may
+		// precede a persisted STOPPING transition. Publish that transition so the
+		// lifetime heartbeat continues retrying the owned stop escalation.
+		s.handleObservedStoppingContainer(request.ContainerId, types.EventSourceWorkerStatusHeartbeat)
+		state.Status = string(types.ContainerStatusStopping)
+		expirySeconds = int64(types.ContainerStateTtlSWhileStopping)
+	} else if status == types.ContainerStatusPending {
+		runtimeStarted, runtimePID := instance.runtimeStartState()
+		if runtimeStarted {
 			log.Info().
 				Str("container_id", request.ContainerId).
-				Int("pid", instance.RuntimePid).
+				Int("pid", runtimePID).
 				Msg("reconciling pending container to running from runtime start signal")
 			s.recordContainerEvent(context.Background(), request, types.EventContainerEventSchema{
 				ID:          types.ContainerEventWorkerPendingReconciled,
@@ -943,7 +1135,7 @@ func (s *Worker) updateContainerStatusOnce(request *types.ContainerRequest) (boo
 				Source:      types.EventSourceWorkerStatusHeartbeat.String(),
 				Message:     types.EventMessagePendingReconciledRunning.String(),
 				Attrs: map[string]string{
-					types.EventAttrRuntimePID: fmt.Sprintf("%d", instance.RuntimePid),
+					types.EventAttrRuntimePID: fmt.Sprintf("%d", runtimePID),
 				},
 			})
 			state.Status = string(types.ContainerStatusRunning)
@@ -951,67 +1143,26 @@ func (s *Worker) updateContainerStatusOnce(request *types.ContainerRequest) (boo
 			expirySeconds = int64(types.ContainerStateTtlSWhilePending)
 		}
 	}
+	// Finalization owns the STOPPING lease; the normal heartbeat must not renew it.
+	if status == types.ContainerStatusStopping {
+		s.handleObservedStoppingContainer(request.ContainerId, types.EventSourceWorkerStatusHeartbeat)
+		return false, nil
+	}
 
-	_, err = handleGRPCResponse(s.containerRepoClient.UpdateContainerStatus(context.Background(), &pb.UpdateContainerStatusRequest{
+	instance.statusHeartbeatMu.Lock()
+	defer instance.statusHeartbeatMu.Unlock()
+	if exitCode, _ = instance.lifecycleState(); exitCode >= 0 {
+		return true, nil
+	}
+	updateCtx, cancelUpdate := context.WithTimeout(ctx, containerRepositoryAttemptTimeout)
+	defer cancelUpdate()
+	_, err = handleGRPCResponse(s.containerRepoClient.UpdateContainerStatus(updateCtx, &pb.UpdateContainerStatusRequest{
 		ContainerId:   request.ContainerId,
 		Status:        string(state.Status),
 		ExpirySeconds: expirySeconds,
 	}))
 	if err != nil {
 		return false, err
-	}
-
-	// If container is supposed to be stopped, but isn't gone after TerminationGracePeriod seconds
-	// ensure it is killed after that
-	if status == types.ContainerStatusStopping {
-		_, stopReason := instance.lifecycleState()
-		if stopReason == "" {
-			instance.setStopReason(types.StopContainerReasonUnknown)
-			s.containerInstances.Set(request.ContainerId, instance)
-		}
-		if !instance.StopEscalationStarted.CompareAndSwap(false, true) {
-			return false, nil
-		}
-		go func() {
-			time.Sleep(time.Duration(s.config.Worker.TerminationGracePeriod) * time.Second)
-
-			instance, exists := s.containerInstances.Get(request.ContainerId)
-			if !exists {
-				return
-			}
-			rt := instance.Runtime
-			if rt == nil {
-				rt = s.runtime
-			}
-			stateCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			needsStop := runtimeNeedsGraceKill(stateCtx, rt, request.ContainerId)
-			cancel()
-			if needsStop {
-				log.Info().Str("container_id", request.ContainerId).Int64("grace_period_seconds", s.config.Worker.TerminationGracePeriod).Msg("container still running after stop event")
-				_, stopReason := instance.lifecycleState()
-				s.recordContainerEvent(context.Background(), request, types.EventContainerEventSchema{
-					ID:          types.ContainerEventWorkerStoppingGraceKill,
-					ContainerID: request.ContainerId,
-					Reason:      string(stopReason),
-					Source:      types.EventSourceWorkerStatusHeartbeat.String(),
-					Message:     types.EventMessageStoppingGraceKill.String(),
-					Attrs: map[string]string{
-						types.EventAttrGracePeriodSeconds: fmt.Sprintf("%d", s.config.Worker.TerminationGracePeriod),
-					},
-				})
-				s.stopContainerChan <- stopContainerEvent{
-					ContainerId: request.ContainerId,
-					Kill:        true,
-				}
-			}
-
-			select {
-			case <-time.After(stuckContainerAbortDelay):
-			case <-s.ctx.Done():
-				return
-			}
-			s.abortStuckWorkspaceMount(request)
-		}()
 	}
 
 	return false, nil
@@ -1067,14 +1218,22 @@ func (s *Worker) workspaceOnlyStopping(workspaceName string) bool {
 }
 
 func runtimeNeedsGraceKill(ctx context.Context, rt runtime.Runtime, containerID string) bool {
+	needsStop, _ := runtimeNeedsStop(ctx, rt, containerID)
+	return needsStop
+}
+
+func runtimeNeedsStop(ctx context.Context, rt runtime.Runtime, containerID string) (needsStop, absent bool) {
 	if rt == nil {
-		return false
+		return false, true
 	}
 	state, err := rt.State(ctx, containerID)
 	if err != nil {
-		return !runtimeContainerNotFound(err)
+		if runtimeContainerNotFound(err) {
+			return false, true
+		}
+		return true, false
 	}
-	return state.Status == types.RuncContainerStatusRunning
+	return state.Status != types.RuncContainerStatusStopped, false
 }
 
 func (s *Worker) processStopContainerEvents() {
@@ -1083,9 +1242,12 @@ func (s *Worker) processStopContainerEvents() {
 		case <-s.ctx.Done():
 			return
 		default:
-			err := s.stopContainer(event.ContainerId, event.Kill)
+			stopCtx, cancelStop := context.WithTimeout(context.Background(), observedStoppingSignalTimeout)
+			err := s.stopContainerWithContext(stopCtx, event.ContainerId, event.Kill)
+			cancelStop()
 			if err != nil {
-				time.Sleep(time.Second)
+				log.Warn().Str("container_id", event.ContainerId).Err(err).Msg("failed to stop container; handing off to lifecycle reconciliation")
+				s.handleObservedContainerStop(event.ContainerId, types.EventSourceWorkerEventBus, event.Kill)
 			}
 		}
 	}

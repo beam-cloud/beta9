@@ -154,9 +154,22 @@ func TestAgentWorkerPoolControllerAddWorkerCreatesDesiredSlot(t *testing.T) {
 		t.Fatalf("second worker = %q, want stable worker %q", secondWorker.Id, worker.Id)
 	}
 
-	secondWorker.FreeCpu -= 2000
-	secondWorker.FreeMemory -= 1024
-	secondWorker.FreeGpuCount--
+	runningState := &types.ContainerState{
+		ContainerId: "agent-worker-resize-running",
+		Status:      types.ContainerStatusRunning,
+		WorkerId:    secondWorker.Id,
+		Cpu:         2000,
+		Memory:      819, // 1.25x capacity accounting reserves 1024 MiB.
+		Gpu:         "A10G",
+		GpuCount:    1,
+	}
+	runningStateKey := common.RedisKeys.SchedulerContainerState(runningState.ContainerId)
+	if err := redisClient.HSet(ctx, runningStateKey, common.ToSlice(runningState)).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := redisClient.SAdd(ctx, common.RedisKeys.SchedulerContainerWorkerIndex(secondWorker.Id), runningStateKey).Err(); err != nil {
+		t.Fatal(err)
+	}
 	if err := workerRepo.AddWorker(secondWorker); err != nil {
 		t.Fatal(err)
 	}

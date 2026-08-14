@@ -29,7 +29,10 @@ const (
 	requestProcessingInterval      time.Duration = 50 * time.Millisecond
 	requestProcessingBatchSize                   = 512
 	provisioningWorkerRequeueDelay time.Duration = 250 * time.Millisecond
-	pendingWorkerReservationTTL    time.Duration = 30 * time.Second
+	// Must cover node provision + worker registration (2-4 min on EKS with
+	// Karpenter). A shorter TTL forgets capacity reserved on still-booting
+	// workers, and the orphaned requests provision duplicate workers.
+	pendingWorkerReservationTTL time.Duration = 3 * time.Minute
 	maxWorkerProvisioningAttempts                = 3
 )
 
@@ -440,7 +443,10 @@ func (s *Scheduler) managedConcurrencyLimit(request *types.ContainerRequest) (*t
 	if quota == nil {
 		quota, err = s.backendRepo.GetConcurrencyLimitByWorkspaceId(s.ctx, request.WorkspaceId)
 		if err != nil && err == sql.ErrNoRows {
-			return nil, nil // No quota set for this workspace
+			// No explicit quota for this workspace — fall back to the
+			// platform-wide default so a single workspace cannot fan out
+			// unbounded capacity. Nil when the default is not configured.
+			return s.defaultConcurrencyLimit(), nil
 		}
 		if err != nil {
 			return nil, err
@@ -453,6 +459,21 @@ func (s *Scheduler) managedConcurrencyLimit(request *types.ContainerRequest) (*t
 	}
 
 	return quota, nil
+}
+
+// defaultConcurrencyLimit returns the platform-wide concurrency limit applied
+// to workspaces without an explicit quota row. GPULimit==0 means "no GPUs
+// allowed" in quota checks, so the default only activates when both values
+// are configured to be positive.
+func (s *Scheduler) defaultConcurrencyLimit() *types.ConcurrencyLimit {
+	cfg := s.config.GatewayService.DefaultConcurrencyLimit
+	if cfg.CPUMillicores == 0 || cfg.GPUCount == 0 {
+		return nil
+	}
+	return &types.ConcurrencyLimit{
+		CPUMillicoreLimit: cfg.CPUMillicores,
+		GPULimit:          cfg.GPUCount,
+	}
 }
 
 func (s *Scheduler) privatePoolQuotaExempt(request *types.ContainerRequest) bool {
@@ -506,7 +527,7 @@ func (s *Scheduler) Stop(stopArgs *types.StopContainerArgs) error {
 
 	stoppedBeforeAssignment, err := s.containerRepo.MarkPendingContainerStoppingIfUnassigned(
 		stopArgs.ContainerId,
-		types.ContainerStateTtlSWhilePending,
+		types.ContainerStateTtlSWhileStopping,
 	)
 	if err != nil {
 		return err
@@ -518,7 +539,7 @@ func (s *Scheduler) Stop(stopArgs *types.StopContainerArgs) error {
 		return nil
 	}
 
-	err = s.containerRepo.UpdateContainerStatus(stopArgs.ContainerId, types.ContainerStatusStopping, types.ContainerStateTtlSWhilePending)
+	err = s.containerRepo.UpdateContainerStatus(stopArgs.ContainerId, types.ContainerStatusStopping, types.ContainerStateTtlSWhileStopping)
 	if err != nil {
 		return err
 	}
@@ -597,6 +618,7 @@ func (s *Scheduler) getControllers(request *types.ContainerRequest) ([]WorkerPoo
 	// type before widening.
 	controllers = append(controllers, s.failoverControllers(chain, controllers)...)
 	controllers = filterControllersByFlagsForFailover(controllers, request, chain)
+	controllers = s.filterControllersByCheckpointAccelerator(controllers, request)
 	if len(controllers) == 0 {
 		return nil, errors.New("no controller found for request")
 	}
@@ -1066,6 +1088,9 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 		if !runtimeMatchesCheckpoint(request, workerRuntime(worker)) {
 			continue
 		}
+		if !acceleratorMatchesCheckpoint(request, worker.Gpu) {
+			continue
+		}
 		isGpuWorker := worker.Gpu != ""
 		cpu := request.Cpu
 		memory := capacityMemoryForScheduling(request)
@@ -1103,16 +1128,74 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 	return filteredWorkers
 }
 
-func checkpointRuntime(request *types.ContainerRequest) string {
+func availableCheckpoint(request *types.ContainerRequest) *types.Checkpoint {
 	if request == nil || request.Checkpoint == nil || request.Checkpoint.Status != string(types.CheckpointStatusAvailable) {
+		return nil
+	}
+	return request.Checkpoint
+}
+
+func checkpointRuntime(request *types.ContainerRequest) string {
+	checkpoint := availableCheckpoint(request)
+	if checkpoint == nil {
 		return ""
 	}
-	return strings.TrimSpace(request.Checkpoint.Runtime)
+	return strings.TrimSpace(checkpoint.Runtime)
 }
 
 func runtimeMatchesCheckpoint(request *types.ContainerRequest, runtimeName string) bool {
 	requiredRuntime := checkpointRuntime(request)
 	return requiredRuntime == "" || runtimeName == requiredRuntime
+}
+
+func checkpointAccelerator(request *types.ContainerRequest) string {
+	checkpoint := availableCheckpoint(request)
+	if checkpoint == nil {
+		return ""
+	}
+	return strings.TrimSpace(checkpoint.Accelerator)
+}
+
+func normalizedAccelerator(accelerator string) string {
+	accelerator = strings.TrimSpace(accelerator)
+	if accelerator == "" || strings.EqualFold(accelerator, "CPU") {
+		return "CPU"
+	}
+	normalized := types.NormalizeGPUType(accelerator)
+	if normalized == types.NO_GPU {
+		return "CPU"
+	}
+	return normalized.String()
+}
+
+func acceleratorMatchesCheckpoint(request *types.ContainerRequest, accelerator string) bool {
+	requiredAccelerator := checkpointAccelerator(request)
+	return requiredAccelerator == "" || strings.EqualFold(normalizedAccelerator(accelerator), normalizedAccelerator(requiredAccelerator))
+}
+
+func (s *Scheduler) filterControllersByCheckpointAccelerator(
+	controllers []WorkerPoolController,
+	request *types.ContainerRequest,
+) []WorkerPoolController {
+	if checkpointAccelerator(request) == "" {
+		return controllers
+	}
+
+	filtered := make([]WorkerPoolController, 0, len(controllers))
+	for _, controller := range controllers {
+		pool, ok := s.poolForController(controller)
+		if !ok {
+			continue
+		}
+		if strings.TrimSpace(pool.Config.GPUType) == "" && controllerUsesAgentCapacity(controller) {
+			filtered = append(filtered, controller)
+			continue
+		}
+		if acceleratorMatchesCheckpoint(request, pool.Config.GPUType) {
+			filtered = append(filtered, controller)
+		}
+	}
+	return filtered
 }
 
 func controllerRuntime(controller WorkerPoolController) string {
@@ -1260,7 +1343,9 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 		if scoredWorkers[i].score != scoredWorkers[j].score {
 			return scoredWorkers[i].score > scoredWorkers[j].score
 		}
-		return workerFreeCapacityScore(scoredWorkers[i].worker, request) > workerFreeCapacityScore(scoredWorkers[j].worker, request)
+		// Best-fit: prefer the fullest worker that still fits so idle workers
+		// drain to zero, hit their spindown timeout, and release their nodes.
+		return workerFreeCapacityScore(scoredWorkers[i].worker, request) < workerFreeCapacityScore(scoredWorkers[j].worker, request)
 	})
 
 	return scoredWorkers[0].worker, nil

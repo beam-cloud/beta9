@@ -44,16 +44,29 @@ func (r *CacheRedisRepository) SetCacheRegistration(ctx context.Context, host ca
 		return err
 	}
 
-	if err := r.rdb.SAdd(ctx, cacheCoordinatorIndexKey(host.PoolName, host.Locality), host.LogicalHostID).Err(); err != nil {
+	indexTTL := cacheCoordinatorLogicalHostTTL(ttl)
+	poolIndexKey := cacheCoordinatorIndexKey(host.PoolName, host.Locality)
+	if err := r.rdb.SAdd(ctx, poolIndexKey, host.LogicalHostID).Err(); err != nil {
 		return err
 	}
-	if err := r.rdb.SAdd(ctx, cacheCoordinatorLocalityIndexKey(host.Locality), host.LogicalHostID).Err(); err != nil {
+	if err := r.rdb.Expire(ctx, poolIndexKey, indexTTL).Err(); err != nil {
+		return err
+	}
+	localityIndexKey := cacheCoordinatorLocalityIndexKey(host.Locality)
+	if err := r.rdb.SAdd(ctx, localityIndexKey, host.LogicalHostID).Err(); err != nil {
+		return err
+	}
+	if err := r.rdb.Expire(ctx, localityIndexKey, indexTTL).Err(); err != nil {
 		return err
 	}
 	if err := r.rdb.Set(ctx, cacheCoordinatorLogicalHostKey(host.LogicalHostID), logicalPayload, cacheCoordinatorLogicalHostTTL(ttl)).Err(); err != nil {
 		return err
 	}
-	if err := r.rdb.SAdd(ctx, cacheCoordinatorRegistrationSetKey(host.LogicalHostID), host.RegistrationID).Err(); err != nil {
+	registrationSetKey := cacheCoordinatorRegistrationSetKey(host.LogicalHostID)
+	if err := r.rdb.SAdd(ctx, registrationSetKey, host.RegistrationID).Err(); err != nil {
+		return err
+	}
+	if err := r.rdb.Expire(ctx, registrationSetKey, indexTTL).Err(); err != nil {
 		return err
 	}
 	return r.rdb.Set(ctx, cacheCoordinatorRegistrationKey(host.LogicalHostID, host.RegistrationID), payload, ttl).Err()
@@ -154,11 +167,16 @@ func (r *CacheRedisRepository) CountCacheRegistrations(ctx context.Context, logi
 	return r.rdb.SCard(ctx, cacheCoordinatorRegistrationSetKey(logicalHostID)).Result()
 }
 
+func (r *CacheRedisRepository) RemoveCacheLogicalHostFromPool(ctx context.Context, poolName, locality, logicalHostID string) error {
+	if poolName == "" {
+		return nil
+	}
+	return r.rdb.SRem(ctx, cacheCoordinatorIndexKey(poolName, locality), logicalHostID).Err()
+}
+
 func (r *CacheRedisRepository) RemoveCacheLogicalHost(ctx context.Context, poolName, locality, logicalHostID string) error {
-	if poolName != "" {
-		if err := r.rdb.SRem(ctx, cacheCoordinatorIndexKey(poolName, locality), logicalHostID).Err(); err != nil {
-			return err
-		}
+	if err := r.RemoveCacheLogicalHostFromPool(ctx, poolName, locality, logicalHostID); err != nil {
+		return err
 	}
 	if err := r.rdb.SRem(ctx, cacheCoordinatorLocalityIndexKey(locality), logicalHostID).Err(); err != nil {
 		return err

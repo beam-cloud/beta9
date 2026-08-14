@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 )
 
@@ -22,9 +24,45 @@ const (
 	durableDiskLockDir    = ".beta9-durable-disk-locks"
 	durableDiskLockWait   = 10 * time.Minute
 
+	durableDiskSnapshotInactivityTimeout = 3 * time.Minute
+
 	durableDiskStateClean = "clean"
 	durableDiskStateDirty = "dirty"
 )
+
+type durableDiskSyncMode uint8
+
+const (
+	// Final cleanup is the durable handoff fence. It always publishes a new
+	// generation, even when every content chunk can be reused.
+	durableDiskSyncFinal durableDiskSyncMode = iota
+	// An explicit snapshot may return the latest generation when nothing changed.
+	durableDiskSyncExplicit
+)
+
+type durableDiskProgressEvent struct {
+	logicalBytes int64
+	files        int64
+	chunks       int64
+}
+
+type durableDiskProgressReporterKey struct{}
+
+func withDurableDiskProgressReporter(ctx context.Context, report func(durableDiskProgressEvent)) context.Context {
+	if report == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, durableDiskProgressReporterKey{}, report)
+}
+
+func reportDurableDiskProgress(ctx context.Context, progress durableDiskProgressEvent) {
+	if ctx == nil {
+		return
+	}
+	if report, ok := ctx.Value(durableDiskProgressReporterKey{}).(func(durableDiskProgressEvent)); ok {
+		report(progress)
+	}
+}
 
 type durableDiskMarker struct {
 	Driver         string
@@ -102,10 +140,6 @@ func (s *Worker) durableDiskContext(ctx context.Context) context.Context {
 	return context.Background()
 }
 
-func (s *Worker) durableDiskCleanupContext() context.Context {
-	return context.WithoutCancel(s.durableDiskContext(nil))
-}
-
 func durableDiskDriver(configured string) string {
 	if driver := types.NormalizeDurableDiskDriver(configured); driver != "" {
 		return driver
@@ -132,12 +166,14 @@ func prepareSnapshotDurableDiskMount(mount *types.Mount) error {
 	return nil
 }
 
-// syncDurableDiskMounts snapshots all durable mounts, optionally reusing unchanged generations.
-func (s *Worker) syncDurableDiskMounts(ctx context.Context, request *types.ContainerRequest, skipUnchanged bool) ([]*types.DiskSnapshot, error) {
+// syncDurableDiskMounts snapshots all durable mounts according to the caller's
+// persistence boundary.
+func (s *Worker) syncDurableDiskMounts(ctx context.Context, request *types.ContainerRequest, mode durableDiskSyncMode) ([]*types.DiskSnapshot, error) {
 	if request == nil {
 		return nil, nil
 	}
 	ctx = s.durableDiskContext(ctx)
+	ctx, stopInactivityWatchdog := withDurableDiskInactivityWatchdog(ctx, durableDiskSnapshotInactivityTimeout)
 
 	var syncErrs []error
 	var snapshots []*types.DiskSnapshot
@@ -153,7 +189,7 @@ func (s *Worker) syncDurableDiskMounts(ctx context.Context, request *types.Conta
 		switch durableDiskDriver(mount.DurableDisk.Driver) {
 		case types.DurableDiskDriverSnapshot:
 			err := withDurableDiskLock(ctx, mount, func() error {
-				snapshot, err := s.snapshotDurableDiskMount(ctx, request, mount, skipUnchanged)
+				snapshot, err := s.snapshotDurableDiskMount(ctx, request, mount, mode)
 				if err != nil {
 					return fmt.Errorf("snapshot: %w", err)
 				}
@@ -179,6 +215,11 @@ func (s *Worker) syncDurableDiskMounts(ctx context.Context, request *types.Conta
 		}
 	}
 
+	cause := context.Cause(ctx)
+	stopInactivityWatchdog()
+	if errors.Is(cause, errDurableDiskSnapshotInactive) {
+		syncErrs = append(syncErrs, cause)
+	}
 	return snapshots, errors.Join(syncErrs...)
 }
 
@@ -210,6 +251,8 @@ func withDurableDiskLock(ctx context.Context, mount *types.Mount, fn func() erro
 		} else if time.Since(start) > durableDiskLockWait {
 			return fmt.Errorf("acquire durable disk lock %s: %w", cleanPath, err)
 		}
+		// Contention can be another active snapshot and is bounded by durableDiskLockWait.
+		reportDurableDiskProgress(ctx, durableDiskProgressEvent{})
 		timer := time.NewTimer(500 * time.Millisecond)
 		select {
 		case <-ctx.Done():
@@ -227,7 +270,7 @@ func withDurableDiskLock(ctx context.Context, mount *types.Mount, fn func() erro
 	return fn()
 }
 
-func (s *Worker) snapshotDurableDiskMount(ctx context.Context, request *types.ContainerRequest, mount *types.Mount, skipUnchanged bool) (*types.DiskSnapshot, error) {
+func (s *Worker) snapshotDurableDiskMount(ctx context.Context, request *types.ContainerRequest, mount *types.Mount, mode durableDiskSyncMode) (*types.DiskSnapshot, error) {
 	if s == nil || s.backendRepoClient == nil || request == nil || mount == nil || mount.DurableDisk == nil {
 		return nil, nil
 	}
@@ -240,8 +283,6 @@ func (s *Worker) snapshotDurableDiskMount(ctx context.Context, request *types.Co
 
 	ctx = s.durableDiskContext(ctx)
 	sizeBytes, _ := durableDiskSizeBytes(mount.DurableDisk.Size)
-	ctx, cancel := context.WithTimeout(ctx, durableDiskTransferTimeout(sizeBytes))
-	defer cancel()
 
 	if err := s.ensureDurableDiskSnapshotStorage(ctx, request); err != nil {
 		return nil, err
@@ -251,9 +292,15 @@ func (s *Worker) snapshotDurableDiskMount(ctx context.Context, request *types.Co
 	if err != nil {
 		return nil, err
 	}
-	parentSnapshot, previousManifest := s.latestDurableDiskSnapshotManifest(ctx, request, mount, store)
+	parentSnapshot, previousManifest, err := s.latestDurableDiskSnapshotManifest(ctx, request, mount, store)
+	if err != nil {
+		return nil, err
+	}
 
-	generation := time.Now().UnixNano()
+	generation, err := nextDurableDiskSnapshotGeneration(time.Now().UnixNano(), parentSnapshot)
+	if err != nil {
+		return nil, err
+	}
 	snapshot, manifest, err := createDurableDiskDirectorySnapshot(
 		ctx,
 		store,
@@ -274,7 +321,7 @@ func (s *Worker) snapshotDurableDiskMount(ctx context.Context, request *types.Co
 		},
 		defaultDurableDiskSnapshotChunkSize,
 		previousManifest,
-		skipUnchanged,
+		mode == durableDiskSyncExplicit,
 	)
 	if err != nil {
 		return nil, err
@@ -285,6 +332,9 @@ func (s *Worker) snapshotDurableDiskMount(ctx context.Context, request *types.Co
 		return parentSnapshot, nil
 	}
 
+	// The manifest upload above is the durability boundary. Publish the
+	// generation before marking the local tree clean so observers never see a
+	// clean marker for a generation that is absent from the repository.
 	resp, err := handleGRPCResponse(s.backendRepoClient.CreateDiskSnapshot(ctx, &pb.CreateDiskSnapshotRequest{
 		WorkspaceId: cacheRequestWorkspaceID(request),
 		StubId:      cacheRequestStubID(request),
@@ -296,7 +346,21 @@ func (s *Worker) snapshotDurableDiskMount(ctx context.Context, request *types.Co
 	if created := durableDiskSnapshotFromProto(resp.Snapshot); created != nil {
 		snapshot = created
 	}
+	reportDurableDiskProgress(ctx, durableDiskProgressEvent{})
 
+	recordPublishedDurableDiskMarker(mount, snapshot)
+
+	s.reportDurableDiskSnapshotContent(request, snapshot, manifest)
+	return snapshot, nil
+}
+
+// recordPublishedDurableDiskMarker is deliberately best effort: the remote
+// manifest and repository row are the durability fence. A missing local marker
+// merely forces the next sync to scan and hash conservatively.
+func recordPublishedDurableDiskMarker(mount *types.Mount, snapshot *types.DiskSnapshot) {
+	if mount == nil || mount.DurableDisk == nil || snapshot == nil {
+		return
+	}
 	if err := writeDurableDiskMarker(mount.LocalPath, durableDiskMarker{
 		Driver:         types.DurableDiskDriverSnapshot,
 		State:          durableDiskStateClean,
@@ -304,27 +368,45 @@ func (s *Worker) snapshotDurableDiskMount(ctx context.Context, request *types.Co
 		ManifestDigest: snapshot.ManifestDigest,
 		Generation:     snapshot.Generation,
 	}); err != nil {
-		return nil, err
+		log.Warn().
+			Str("disk", mount.DurableDisk.Name).
+			Int64("generation", snapshot.Generation).
+			Err(err).
+			Msg("failed to record published durable disk generation locally")
 	}
-
-	s.reportDurableDiskSnapshotContent(request, snapshot, manifest)
-	return snapshot, nil
 }
 
-func (s *Worker) latestDurableDiskSnapshotManifest(ctx context.Context, request *types.ContainerRequest, mount *types.Mount, store durableDiskSnapshotStore) (*types.DiskSnapshot, *types.DiskSnapshotManifest) {
+func (s *Worker) latestDurableDiskSnapshotManifest(ctx context.Context, request *types.ContainerRequest, mount *types.Mount, store durableDiskSnapshotStore) (*types.DiskSnapshot, *types.DiskSnapshotManifest, error) {
 	resp, err := handleGRPCResponse(s.backendRepoClient.GetLatestDiskSnapshot(ctx, &pb.GetLatestDiskSnapshotRequest{
 		WorkspaceId: cacheRequestWorkspaceID(request),
 		DiskName:    mount.DurableDisk.Name,
 	}))
-	if err != nil || resp == nil || resp.Snapshot == nil {
-		return nil, nil
+	if err != nil {
+		if durableDiskSnapshotNotFound(err) {
+			return nil, nil, nil
+		}
+		return nil, nil, fmt.Errorf("get latest durable disk snapshot: %w", err)
+	}
+	if resp == nil || resp.Snapshot == nil {
+		return nil, nil, nil
 	}
 	snapshot := durableDiskSnapshotFromProto(resp.Snapshot)
 	manifest, err := loadDurableDiskSnapshotManifest(ctx, store, s.durableDiskSnapshotCacheReader(), snapshot)
-	if err != nil || manifest == nil {
-		return snapshot, nil
+	if err != nil {
+		return nil, nil, fmt.Errorf("load latest durable disk snapshot manifest: %w", err)
 	}
-	return snapshot, manifest
+	if manifest == nil {
+		return nil, nil, fmt.Errorf("latest durable disk snapshot %q has no manifest", snapshot.ExternalId)
+	}
+	return snapshot, manifest, nil
+}
+
+func durableDiskSnapshotNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	var notFound *types.ErrDiskSnapshotNotFound
+	return errors.As(err, &notFound) || strings.HasPrefix(err.Error(), "disk snapshot not found:")
 }
 
 func durableDiskSnapshotExternalID(snapshot *types.DiskSnapshot) string {
@@ -332,6 +414,16 @@ func durableDiskSnapshotExternalID(snapshot *types.DiskSnapshot) string {
 		return ""
 	}
 	return snapshot.ExternalId
+}
+
+func nextDurableDiskSnapshotGeneration(now int64, parent *types.DiskSnapshot) (int64, error) {
+	if parent == nil || now > parent.Generation {
+		return now, nil
+	}
+	if parent.Generation == math.MaxInt64 {
+		return 0, fmt.Errorf("durable disk snapshot generation is exhausted")
+	}
+	return parent.Generation + 1, nil
 }
 
 func (s *Worker) restoreDurableDiskSnapshot(request *types.ContainerRequest, mount *types.Mount) error {
@@ -517,11 +609,15 @@ func (s *Worker) durableDiskSnapshotCacheReader() durableDiskSnapshotCacheReader
 }
 
 func durableDiskSnapshotObjectPrefix(mount *types.Mount, generation int64) string {
+	// Generations order repository rows, but two workers can legitimately choose
+	// the same one after reading the same parent. Give each publish attempt its
+	// own manifest directory; chunks remain content-addressed and shared.
 	return path.Join(
 		"durable-disks",
 		types.SafeDurableDiskName(mount.DurableDisk.Name),
 		"snapshots",
 		strconv.FormatInt(generation, 10),
+		uuid.NewString(),
 	)
 }
 
@@ -538,7 +634,6 @@ func (s *Worker) reportDurableDiskSnapshotContent(request *types.ContainerReques
 		return
 	}
 	reporter.reportItems(cacheRequestWorkspaceID(request), cacheRequestStubID(request), types.CacheContentKindDiskSnapshot, items)
-	reporter.flush()
 }
 
 func durableDiskSnapshotRequiredContentItems(snapshot *types.DiskSnapshot, manifest *types.DiskSnapshotManifest) []types.CacheRequiredContentItem {

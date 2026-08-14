@@ -7,10 +7,6 @@ on:
         description: 'image tag'
         required: true
         type: string
-      build_args:
-        description: 'Optional build arguments (format: KEY1=VALUE1,KEY2=VALUE2)'
-        required: false
-        type: string
 
 permissions:
   id-token: write
@@ -61,7 +57,6 @@ jobs:
             ${{ steps.login-ecr.outputs.registry }}/n4e0e1y0/beta9-worker:${{ inputs.tag }}-${{ matrix.arch }}
           target: final
           platforms: ${{ matrix.platform }}
-          build-args: ${{ inputs.build_args }}
 
   publish_worker_manifest:
     needs: build_and_release_worker

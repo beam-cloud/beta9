@@ -334,11 +334,21 @@ func (r *Runsc) loadState(ctx context.Context, containerID string) (runscState, 
 	cmd := exec.CommandContext(ctx, r.cfg.RunscPath, args...)
 
 	var stdout bytes.Buffer
+	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
-			return runscState{}, ErrContainerNotFound{ContainerID: containerID}
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			// Newer runsc releases return 128 when the container bundle has
+			// already disappeared; older releases returned 1 for this case.
+			if exitErr.ExitCode() == 1 ||
+				(exitErr.ExitCode() == 128 && strings.Contains(strings.ToLower(stderr.String()), "loading container: file does not exist")) {
+				return runscState{}, ErrContainerNotFound{ContainerID: containerID}
+			}
+		}
+		if output := strings.TrimSpace(stderr.String()); output != "" {
+			return runscState{}, fmt.Errorf("failed to get state: %w (stderr: %s)", err, output)
 		}
 		return runscState{}, fmt.Errorf("failed to get state: %w", err)
 	}
