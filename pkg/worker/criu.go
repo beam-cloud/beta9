@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	_ "embed"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -37,20 +39,24 @@ import (
 )
 
 const (
-	gpuCntEnvKey                  = types.WorkerGPUCountEnv
-	defaultCheckpointDeadline     = 10 * time.Minute
-	defaultCheckpointOperationTTL = 10 * time.Minute
-	readyLogRate                  = 10
-	checkpointFsDir               = "filesystem"
-	checkpointArchiveExtension    = ".tar"
-	checkpointOriginPrefix        = "checkpoints"
-	checkpointTriggerHTTP         = "http"
-	checkpointProgressInterval    = 10 * time.Second
-	terminalCheckpointStopWait    = 5 * time.Second
-	checkpointStatePublicationTTL = 5 * time.Second
-	restoreReadinessTimeout       = 15 * time.Second
-	restoreReadinessInterval      = 100 * time.Millisecond
-	restoreReadinessStableFor     = 250 * time.Millisecond
+	gpuCntEnvKey                    = types.WorkerGPUCountEnv
+	defaultCheckpointDeadline       = 10 * time.Minute
+	defaultCheckpointOperationTTL   = 10 * time.Minute
+	readyLogRate                    = 10
+	checkpointFsDir                 = "filesystem" // Legacy materialized upper directory.
+	checkpointFsArchive             = "filesystem.tar"
+	checkpointArchiveExtension      = ".tar"
+	checkpointOriginPrefix          = "checkpoints"
+	checkpointTriggerHTTP           = "http"
+	checkpointProgressInterval      = 10 * time.Second
+	terminalCheckpointStopWait      = 5 * time.Second
+	checkpointStatePublicationTTL   = 5 * time.Second
+	checkpointFilesystemOnlyFile    = "filesystem-only"
+	checkpointForcedRuncProfileFile = "beam-forced-runc-profile"
+	checkpointForcedRuncProfileV1   = "v1\n"
+	restoreReadinessTimeout         = 15 * time.Second
+	restoreReadinessInterval        = 100 * time.Millisecond
+	restoreReadinessStableFor       = 250 * time.Millisecond
 )
 
 var checkpointRuntimeEnvOverrides = []string{
@@ -74,12 +80,42 @@ var checkpointDisabledIOUringSyscalls = []string{
 
 var errCRIUManagerUnavailable = errors.New("checkpoint/restore unavailable: CRIU manager is not initialized")
 
-type checkpointFilesystemRestore struct {
-	startedAt time.Time
-	upperPath string
-	done      chan struct{}
-	cancel    context.CancelFunc
+type checkpointDurableMountValidationError struct {
+	mountPath string
 	err       error
+}
+
+func (e *checkpointDurableMountValidationError) Error() string {
+	if e.mountPath == "" {
+		return fmt.Sprintf("validate restored durable disk mounts: %v", e.err)
+	}
+	return fmt.Sprintf("validate restored durable disk mount %q: %v", e.mountPath, e.err)
+}
+
+func (e *checkpointDurableMountValidationError) Unwrap() error {
+	return e.err
+}
+
+type checkpointRestoreCleanupError struct {
+	err error
+}
+
+func (e *checkpointRestoreCleanupError) Error() string {
+	return fmt.Sprintf("clean up failed checkpoint restore: %v", e.err)
+}
+
+func (e *checkpointRestoreCleanupError) Unwrap() error {
+	return e.err
+}
+
+type checkpointFilesystemRestore struct {
+	startedAt   time.Time
+	upperPath   string
+	stagingPath string
+	published   bool
+	done        chan struct{}
+	cancel      context.CancelFunc
+	err         error
 }
 
 func (r *checkpointFilesystemRestore) wait() error {
@@ -99,7 +135,13 @@ func (r *checkpointFilesystemRestore) discard() error {
 	}
 	r.cancel()
 	r.wait()
-	return os.RemoveAll(filepath.Dir(r.upperPath))
+	if r.published {
+		return os.RemoveAll(filepath.Dir(r.upperPath))
+	}
+	if r.stagingPath != "" {
+		return os.RemoveAll(r.stagingPath)
+	}
+	return nil
 }
 
 func (s *Worker) startCheckpointFilesystemRestore(request *types.ContainerRequest, outputLogger *slog.Logger) *checkpointFilesystemRestore {
@@ -113,7 +155,27 @@ func (s *Worker) startCheckpointFilesystemRestore(request *types.ContainerReques
 
 	go func() {
 		defer cancel()
-		restore.err = s.restoreCheckpointFilesystem(restoreCtx, request, outputLogger, restore.upperPath)
+		layerPath := filepath.Dir(restore.upperPath)
+		if err := os.MkdirAll(layerPath, 0755); err != nil {
+			restore.err = fmt.Errorf("prepare checkpoint upper layer: %w", err)
+			close(restore.done)
+			return
+		}
+		restore.stagingPath, restore.err = os.MkdirTemp(layerPath, ".checkpoint-upper-")
+		if restore.err == nil {
+			restore.err = os.Chmod(restore.stagingPath, 0755)
+		}
+		if restore.err == nil {
+			restore.err = s.restoreCheckpointFilesystem(restoreCtx, request, outputLogger, restore.stagingPath)
+		}
+		if restore.err == nil {
+			if _, err := os.Lstat(restore.upperPath); err == nil || !os.IsNotExist(err) {
+				restore.err = errors.New("checkpoint upper layer is not fresh")
+			} else {
+				restore.err = os.Rename(restore.stagingPath, restore.upperPath)
+				restore.published = restore.err == nil
+			}
+		}
 		close(restore.done)
 	}()
 	return restore
@@ -127,7 +189,7 @@ func (s *Worker) restoreCheckpointFilesystem(ctx context.Context, request *types
 		log.Error().Err(err).Str("container_id", request.ContainerId).Str("checkpoint_id", request.Checkpoint.CheckpointId).Msg("failed to materialize checkpoint")
 		return err
 	}
-	if s.containerInstances != nil {
+	if s.containerInstances != nil && !request.Checkpoint.IsFilesystemOnly() {
 		instance, exists := s.containerInstances.Get(request.ContainerId)
 		if exists && instance.Runtime != nil {
 			if err := validateCheckpointRuntimePayload(checkpointPath, instance.Runtime.Name()); err != nil {
@@ -148,7 +210,14 @@ func (s *Worker) restoreCheckpointFilesystem(ctx context.Context, request *types
 	if outputLogger != nil {
 		outputLogger.Info("Restoring checkpoint filesystem...\n")
 	}
-	err = copyDirectoryContext(ctx, filepath.Join(checkpointPath, checkpointFsDir), destination, nil)
+	filesystemPath, archived, err := checkpointFilesystemPayload(checkpointPath)
+	if err == nil {
+		if archived {
+			err = extractDirectoryArchiveContext(ctx, filesystemPath, destination)
+		} else {
+			err = copyDirectoryContext(ctx, filesystemPath, destination, nil)
+		}
+	}
 	duration := time.Since(phaseStarted)
 	metrics.RecordWorkerStartupPhase("checkpoint_filesystem_restore", duration, request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 	if err != nil {
@@ -543,8 +612,13 @@ func (s *Worker) attemptRestoreCheckpoint(ctx context.Context, request *types.Co
 		log.Error().Str("container_id", request.ContainerId).Str("checkpoint_id", checkpoint.CheckpointId).Msgf("failed to restore checkpoint: %v", err)
 
 		hostIncompatible := IsCheckpointHostIncompatible(err)
+		runscVersionFallback := forcedRunscVersionFallback(request, err)
+		var mountValidationErr *checkpointDurableMountValidationError
+		durableMountValidationFailed := errors.As(err, &mountValidationErr)
 		if hostIncompatible {
 			outputLogger.Info("Checkpoint was created on an incompatible CPU; starting container normally")
+		} else if runscVersionFallback {
+			outputLogger.Info("Checkpoint uses an incompatible runsc version; starting from its saved filesystem")
 		} else {
 			outputLogger.Error(fmt.Sprintf("Failed to restore checkpoint: %v", err))
 		}
@@ -554,8 +628,11 @@ func (s *Worker) attemptRestoreCheckpoint(ctx context.Context, request *types.Co
 				Str("container_id", request.ContainerId).
 				Str("checkpoint_id", checkpoint.CheckpointId).
 				Msg("failed to clean up runtime container after checkpoint restore failure")
+			if durableMountValidationFailed || runscVersionFallback {
+				err = errors.Join(err, &checkpointRestoreCleanupError{err: cleanupErr})
+			}
 		}
-		if !hostIncompatible {
+		if !hostIncompatible && !durableMountValidationFailed && !runscVersionFallback {
 			s.markCheckpointRestoreFailed(request, checkpoint)
 		}
 
@@ -570,6 +647,10 @@ func (s *Worker) attemptRestoreCheckpoint(ctx context.Context, request *types.Co
 	}
 
 	return exitCode, true, started, nil
+}
+
+func forcedRunscVersionFallback(request *types.ContainerRequest, err error) bool {
+	return requestForcesResourceLimits(request) && IsRunscCheckpointVersionMismatch(err)
 }
 
 func forwardRestoreStarted(ctx context.Context, startedChan chan int, pid int) error {
@@ -612,7 +693,21 @@ func deleteFailedRestoreRuntimeContainer(ctx context.Context, rt runtime.Runtime
 	return nil
 }
 
-func (s *Worker) prepareRestoreFallback(request *types.ContainerRequest, config []byte) error {
+func (s *Worker) prepareRestoreFallback(request *types.ContainerRequest, config []byte, seedUpper func(string) error) error {
+	var instance *ContainerInstance
+	var exists bool
+	if seedUpper != nil {
+		if request == nil || request.ConfigPath == "" || len(config) == 0 {
+			return fmt.Errorf("container config is required to reseed checkpoint filesystem")
+		}
+		if s.containerInstances == nil {
+			return fmt.Errorf("container overlay is required to reseed checkpoint filesystem")
+		}
+		instance, exists = s.containerInstances.Get(request.ContainerId)
+		if !exists || instance.Overlay == nil {
+			return fmt.Errorf("container overlay is required to reseed checkpoint filesystem")
+		}
+	}
 	if request != nil {
 		if err := clearCheckpointSignals(request.ContainerId); err != nil {
 			return fmt.Errorf("clear checkpoint signals: %w", err)
@@ -627,9 +722,17 @@ func (s *Worker) prepareRestoreFallback(request *types.ContainerRequest, config 
 		return nil
 	}
 
-	instance, exists := s.containerInstances.Get(request.ContainerId)
+	if seedUpper == nil {
+		instance, exists = s.containerInstances.Get(request.ContainerId)
+	}
 	if exists && instance.Overlay != nil {
-		if err := instance.Overlay.Reset(); err != nil {
+		var err error
+		if seedUpper != nil {
+			err = instance.Overlay.ResetWithUpper(seedUpper)
+		} else {
+			err = instance.Overlay.Reset()
+		}
+		if err != nil {
 			return fmt.Errorf("reset container overlay: %w", err)
 		}
 	}
@@ -696,6 +799,177 @@ type CreateCheckpointOpts struct {
 	CheckpointPIDChan        chan int
 	WaitForSignal            bool
 	TerminateAfterCheckpoint bool
+	CheckpointRuntime        string
+}
+
+func filesystemCheckpointFallbackAllowed(opts *CreateCheckpointOpts) bool {
+	return opts != nil && opts.TerminateAfterCheckpoint && requestForcesResourceLimits(opts.Request)
+}
+
+func (s *Worker) stopForFilesystemCheckpoint(ctx context.Context, instance *ContainerInstance) error {
+	if instance == nil || instance.Runtime == nil {
+		return errors.New("container runtime is unavailable")
+	}
+	wait := func(ctx context.Context) error {
+		_, err := s.waitForRestoredContainerExit(ctx, instance.Runtime, instance.Id, -1)
+		if runtimeContainerNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	termCtx, cancelTerm := context.WithTimeout(ctx, observedStoppingSignalTimeout)
+	termErr := s.stopContainerWithoutCheckpointDeferral(termCtx, instance.Id, false)
+	cancelTerm()
+	if runtimeContainerNotFound(termErr) {
+		termErr = nil
+	}
+
+	grace := time.Duration(s.config.Worker.TerminationGracePeriod) * time.Second
+	if grace <= 0 {
+		grace = terminalCheckpointStopWait
+	}
+	graceCtx, cancelGrace := context.WithTimeout(ctx, grace)
+	err := wait(graceCtx)
+	cancelGrace()
+	if err == nil {
+		return termErr
+	}
+	if ctx.Err() != nil {
+		return errors.Join(termErr, ctx.Err())
+	}
+
+	killCtx, cancelKill := context.WithTimeout(ctx, observedStoppingSignalTimeout)
+	killErr := s.stopContainerWithoutCheckpointDeferral(killCtx, instance.Id, true)
+	cancelKill()
+	if runtimeContainerNotFound(killErr) {
+		killErr = nil
+	}
+	forceCtx, cancelForce := context.WithTimeout(context.WithoutCancel(ctx), terminalCheckpointStopWait)
+	defer cancelForce()
+	return errors.Join(termErr, killErr, wait(forceCtx))
+}
+
+func captureCheckpointFilesystem(ctx context.Context, instance *ContainerInstance, checkpointPath string, filesystemOnly bool) error {
+	if filesystemOnly {
+		if checkpointPath == "" {
+			return errors.New("checkpoint path is unavailable")
+		}
+		if err := os.RemoveAll(checkpointPath); err != nil {
+			return fmt.Errorf("reset filesystem checkpoint: %w", err)
+		}
+		if err := os.MkdirAll(checkpointPath, 0755); err != nil {
+			return fmt.Errorf("create filesystem checkpoint: %w", err)
+		}
+	}
+
+	upperDir := path.Join(filepath.Dir(instance.Overlay.TopLayerPath()), "upper")
+	legacyPath := filepath.Join(checkpointPath, checkpointFsDir)
+	archivePath := filepath.Join(checkpointPath, checkpointFsArchive)
+	copyErr := copyDirectoryContext(ctx, upperDir, legacyPath, []string{"config.json", "outputs", "snapshot"})
+	if copyErr != nil {
+		if err := os.RemoveAll(legacyPath); err != nil {
+			return errors.Join(fmt.Errorf("copy checkpoint filesystem state: %w", copyErr), fmt.Errorf("remove partial checkpoint filesystem state: %w", err))
+		}
+		if !requestForcesResourceLimits(instance.Request) {
+			return fmt.Errorf("copy checkpoint filesystem state: %w", copyErr)
+		}
+		if err := os.Remove(archivePath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("reset checkpoint filesystem archive: %w", err)
+		}
+		if err := archiveDirectoryContext(ctx, upperDir, archivePath, []string{"config.json", "outputs", "snapshot"}); err != nil {
+			_ = os.Remove(archivePath)
+			return errors.Join(fmt.Errorf("copy checkpoint filesystem state: %w", copyErr), fmt.Errorf("archive checkpoint filesystem state: %w", err))
+		}
+	}
+	if filesystemOnly {
+		if err := os.WriteFile(filepath.Join(checkpointPath, checkpointFilesystemOnlyFile), []byte("v1\n"), 0644); err != nil {
+			_ = os.Remove(archivePath)
+			return fmt.Errorf("mark filesystem checkpoint: %w", err)
+		}
+	}
+	if !checkpointMaterialized(checkpointPath) {
+		return errors.New("checkpoint missing runtime or filesystem payload")
+	}
+	if filesystemOnly {
+		return nil
+	}
+	return validateCheckpointRuntimePayload(checkpointPath, instance.Runtime.Name())
+}
+
+func forcedRuncCheckpointProfileRequired(request *types.ContainerRequest, rt runtime.Runtime) bool {
+	return requestForcesResourceLimits(request) && rt != nil && rt.Name() == types.ContainerRuntimeRunc.String()
+}
+
+func validateForcedRuncCheckpointProfile(configPath string) error {
+	contents, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("read container config: %w", err)
+	}
+
+	var spec specs.Spec
+	if err := json.Unmarshal(contents, &spec); err != nil {
+		return fmt.Errorf("decode container config: %w", err)
+	}
+	if spec.Linux == nil || !slices.Contains(spec.Linux.ReadonlyPaths, "/proc/sys/vm/drop_caches") {
+		return errors.New("container config does not protect /proc/sys/vm/drop_caches")
+	}
+	return nil
+}
+
+func writeForcedRuncCheckpointProfile(checkpointPath string, request *types.ContainerRequest, rt runtime.Runtime) error {
+	if !forcedRuncCheckpointProfileRequired(request, rt) {
+		return nil
+	}
+	markerPath := filepath.Join(checkpointPath, checkpointForcedRuncProfileFile)
+	if err := os.Remove(markerPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("reset forced runc checkpoint profile marker: %w", err)
+	}
+	if request.DockerEnabled {
+		return errors.New("forced runc profile does not support Docker-enabled containers")
+	}
+	if err := validateForcedRuncCheckpointProfile(request.ConfigPath); err != nil {
+		return fmt.Errorf("validate forced runc checkpoint profile: %w", err)
+	}
+
+	if err := os.WriteFile(markerPath, []byte(checkpointForcedRuncProfileV1), 0644); err != nil {
+		_ = os.Remove(markerPath)
+		return fmt.Errorf("write forced runc checkpoint profile marker: %w", err)
+	}
+	return nil
+}
+
+func forcedRuncCheckpointNeedsColdMigration(checkpointPath string, request *types.ContainerRequest, rt runtime.Runtime) bool {
+	if !forcedRuncCheckpointProfileRequired(request, rt) {
+		return false
+	}
+	if request.DockerEnabled {
+		return true
+	}
+
+	markerPath := filepath.Join(checkpointPath, checkpointForcedRuncProfileFile)
+	info, err := os.Lstat(markerPath)
+	if err != nil || !info.Mode().IsRegular() || info.Size() != int64(len(checkpointForcedRuncProfileV1)) {
+		return true
+	}
+	contents, err := os.ReadFile(markerPath)
+	return err != nil || string(contents) != checkpointForcedRuncProfileV1
+}
+
+func (s *Worker) createFilesystemCheckpoint(ctx context.Context, opts *CreateCheckpointOpts, instance *ContainerInstance) (string, error) {
+	var stopErr error
+	if !checkpointRuntimeHasStopped(ctx, instance.Runtime, opts.Request.ContainerId) {
+		stopErr = s.stopForFilesystemCheckpoint(ctx, instance)
+	}
+	if !checkpointRuntimeHasStopped(ctx, instance.Runtime, opts.Request.ContainerId) {
+		return "", errors.Join(stopErr, errors.New("container runtime did not stop for filesystem checkpoint"))
+	}
+
+	s.markTerminalCheckpointStopped(opts.Request, instance, opts.TerminateAfterCheckpoint)
+	checkpointPath := s.checkpointPath(opts.CheckpointId)
+	if err := captureCheckpointFilesystem(ctx, instance, checkpointPath, true); err != nil {
+		return "", errors.Join(stopErr, err)
+	}
+	return checkpointPath, nil
 }
 
 // Waits for the container to be ready to checkpoint at the desired point in execution, ie.
@@ -729,13 +1003,18 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 		return fmt.Errorf("container runtime is unavailable")
 	}
 	runtimeName = instance.Runtime.Name()
+	opts.CheckpointRuntime = runtimeName
+	filesystemFallback := filesystemCheckpointFallbackAllowed(opts)
+	criuErr := s.requireCRIUManager()
+	filesystemOnly := filesystemFallback && (!opts.Request.CheckpointEnabled ||
+		!instance.Runtime.Capabilities().CheckpointRestore || !supportsTerminalCheckpoint(instance.Runtime) || criuErr != nil)
 
-	if err := s.requireCRIUManager(); err != nil {
-		return err
+	if !filesystemOnly && criuErr != nil {
+		return criuErr
 	}
 
 	if opts.TerminateAfterCheckpoint {
-		if !supportsTerminalCheckpoint(instance.Runtime) {
+		if !filesystemOnly && !supportsTerminalCheckpoint(instance.Runtime) {
 			return fmt.Errorf("runtime %s does not support terminal checkpointing", runtimeName)
 		}
 		var acquired bool
@@ -817,7 +1096,7 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 		checkpointParent = context.WithoutCancel(ctx)
 	}
 	checkpointCtx, checkpointCancel := context.WithDeadline(checkpointParent, checkpointDeadline)
-	defer checkpointCancel()
+	defer func() { checkpointCancel() }()
 	checkpointStateCtx = checkpointCtx
 	resumeOOMWatcher := func() {}
 	if terminateRuntime {
@@ -832,51 +1111,81 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 		log.Info().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msg("creating terminal checkpoint")
 	}
 
-	checkpointPath, err := s.criuManager.CreateCheckpoint(checkpointCtx, instance.Runtime, opts.CheckpointId, opts.Request, terminateRuntime)
-	if err != nil {
-		runtimeStopped := terminateRuntime && checkpointRuntimeHasStopped(checkpointCtx, instance.Runtime, opts.Request.ContainerId)
-		if runtimeStopped {
+	checkpointPath := ""
+	if filesystemOnly {
+		runtimeName = types.CheckpointRuntimeFilesystem
+		opts.CheckpointRuntime = runtimeName
+		checkpointPath, err = s.createFilesystemCheckpoint(checkpointCtx, opts, instance)
+		if err != nil {
+			if !checkpointRuntimeHasStopped(checkpointCtx, instance.Runtime, opts.Request.ContainerId) {
+				resumeOOMWatcher()
+			}
+			return err
+		}
+	} else {
+		checkpointPath, err = s.criuManager.CreateCheckpoint(checkpointCtx, instance.Runtime, opts.CheckpointId, opts.Request, terminateRuntime)
+		if err != nil {
+			checkpointErr := err
+			if filesystemFallback {
+				runtimeName = types.CheckpointRuntimeFilesystem
+				opts.CheckpointRuntime = runtimeName
+				if checkpointCtx.Err() != nil {
+					checkpointCancel()
+					checkpointCtx, checkpointCancel = context.WithTimeout(context.WithoutCancel(checkpointCtx), defaultCheckpointOperationTTL)
+					checkpointStateCtx = checkpointCtx
+				}
+				checkpointPath, err = s.createFilesystemCheckpoint(checkpointCtx, opts, instance)
+				if err != nil {
+					if !checkpointRuntimeHasStopped(checkpointCtx, instance.Runtime, opts.Request.ContainerId) {
+						resumeOOMWatcher()
+					}
+					return errors.Join(checkpointErr, err)
+				}
+				filesystemOnly = true
+				log.Warn().Err(checkpointErr).
+					Str("container_id", opts.Request.ContainerId).
+					Str("checkpoint_id", opts.CheckpointId).
+					Msg("memory checkpoint failed; preserving a filesystem-only checkpoint")
+			} else {
+				if terminateRuntime && checkpointRuntimeHasStopped(checkpointCtx, instance.Runtime, opts.Request.ContainerId) {
+					s.markTerminalCheckpointStopped(opts.Request, instance, opts.TerminateAfterCheckpoint)
+				} else {
+					resumeOOMWatcher()
+				}
+				if errors.Is(checkpointCtx.Err(), context.DeadlineExceeded) {
+					checkpointErr = fmt.Errorf("checkpoint snapshot timed out after %s: %w", defaultCheckpointOperationTTL, checkpointErr)
+				}
+				if opts.OutputLogger != nil {
+					opts.OutputLogger.Error(fmt.Sprintf("Failed to create checkpoint: %v", checkpointErr))
+				}
+				return checkpointErr
+			}
+		} else if terminateRuntime {
 			s.markTerminalCheckpointStopped(opts.Request, instance, opts.TerminateAfterCheckpoint)
-		} else {
-			resumeOOMWatcher()
 		}
-		if errors.Is(checkpointCtx.Err(), context.DeadlineExceeded) {
-			err = fmt.Errorf("checkpoint snapshot timed out after %s: %w", defaultCheckpointOperationTTL, err)
-		}
-		if opts.OutputLogger != nil {
-			opts.OutputLogger.Error(fmt.Sprintf("Failed to create checkpoint: %v", err))
-		}
+	}
 
-		return err
-	}
-	if terminateRuntime {
-		s.markTerminalCheckpointStopped(opts.Request, instance, opts.TerminateAfterCheckpoint)
-	}
-	parentDir := filepath.Dir(instance.Overlay.TopLayerPath())
-	upperDir := path.Join(parentDir, "upper")
-
-	err = copyDirectoryContext(checkpointCtx, upperDir, path.Join(checkpointPath, checkpointFsDir), []string{"config.json", "outputs", "snapshot"})
-	if err != nil {
-		if errors.Is(checkpointCtx.Err(), context.DeadlineExceeded) {
-			err = fmt.Errorf("checkpoint filesystem copy timed out after %s: %w", defaultCheckpointOperationTTL, err)
+	if !filesystemOnly {
+		err = captureCheckpointFilesystem(checkpointCtx, instance, checkpointPath, false)
+		if err != nil {
+			if errors.Is(checkpointCtx.Err(), context.DeadlineExceeded) {
+				err = fmt.Errorf("checkpoint filesystem copy timed out after %s: %w", defaultCheckpointOperationTTL, err)
+			}
+			log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to copy upper directory: %v", err)
+			if opts.OutputLogger != nil {
+				opts.OutputLogger.Error(fmt.Sprintf("Failed to copy checkpoint filesystem state: %v", err))
+			}
+			return err
 		}
-		log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to copy upper directory: %v", err)
-		if opts.OutputLogger != nil {
-			opts.OutputLogger.Error(fmt.Sprintf("Failed to copy checkpoint filesystem state: %v", err))
+		if err = writeForcedRuncCheckpointProfile(checkpointPath, opts.Request, instance.Runtime); err != nil {
+			return err
 		}
-		return err
-	}
-	if !checkpointMaterialized(checkpointPath) {
-		return fmt.Errorf("checkpoint missing runtime or filesystem payload")
-	}
-	if err := validateCheckpointRuntimePayload(checkpointPath, instance.Runtime.Name()); err != nil {
-		return err
 	}
 
 	if opts.OutputLogger != nil {
 		opts.OutputLogger.Info("Persisting container checkpoint")
 	}
-	metadata, err := s.persistCheckpoint(checkpointCtx, opts.Request, opts.CheckpointId, checkpointPath, opts.OutputLogger)
+	persistedMetadata, err = s.persistCheckpoint(checkpointCtx, opts.Request, opts.CheckpointId, checkpointPath, opts.OutputLogger)
 	if err != nil {
 		if errors.Is(checkpointCtx.Err(), context.DeadlineExceeded) {
 			err = fmt.Errorf("checkpoint persistence timed out after %s: %w", defaultCheckpointOperationTTL, err)
@@ -887,7 +1196,6 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 		}
 		return err
 	}
-	persistedMetadata = metadata
 
 	if opts.WaitForSignal {
 		// Create a file accessible to the container to indicate that the checkpoint has been captured
@@ -897,13 +1205,13 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 		}
 	}
 
-	err = s.createCheckpointState(checkpointCtx, opts.CheckpointId, opts.Request, types.CheckpointStatusAvailable, opts.ContainerIp, runtimeName, metadata)
+	err = s.createCheckpointState(checkpointCtx, opts.CheckpointId, opts.Request, types.CheckpointStatusAvailable, opts.ContainerIp, runtimeName, persistedMetadata)
 	if err != nil {
 		log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to update checkpoint state: %v", err)
 		return err
 	}
 	availableStateCreated = true
-	s.reportCheckpointRequiredContent(opts.Request, opts.CheckpointId, metadata)
+	s.reportCheckpointRequiredContent(opts.Request, opts.CheckpointId, persistedMetadata)
 
 	if opts.OutputLogger != nil {
 		opts.OutputLogger.Info("Checkpoint created successfully")
@@ -1054,7 +1362,7 @@ func (s *Worker) ensureCheckpointMaterializedWithLogger(ctx context.Context, req
 	}
 	metadataComplete := checkpoint.CacheHash != "" && checkpoint.CacheSizeBytes > 0 && checkpoint.OriginKey != ""
 	if checkpointMaterialized(checkpointPath) {
-		return checkpointPath, nil
+		return checkpointPath, validateCheckpointKind(checkpointPath, checkpoint.IsFilesystemOnly())
 	}
 	if metadataComplete {
 		s.reportCheckpointRequiredContent(request, checkpoint.CheckpointId, checkpointCacheMetadataFromRecord(request, checkpoint))
@@ -1071,7 +1379,7 @@ func (s *Worker) ensureCheckpointMaterializedWithLogger(ctx context.Context, req
 	}
 	defer release()
 	if checkpointMaterialized(checkpointPath) {
-		return checkpointPath, nil
+		return checkpointPath, validateCheckpointKind(checkpointPath, checkpoint.IsFilesystemOnly())
 	}
 	s.cacheManager.requestReconcile()
 
@@ -1081,6 +1389,9 @@ func (s *Worker) ensureCheckpointMaterializedWithLogger(ctx context.Context, req
 	}
 	err = s.materializeCheckpointFromCache(ctx, checkpointPath, checkpoint)
 	if err == nil {
+		if err := validateCheckpointKind(checkpointPath, checkpoint.IsFilesystemOnly()); err != nil {
+			return "", err
+		}
 		s.logCheckpointMaterialized(outputLogger, checkpoint, "cache", started)
 		return checkpointPath, nil
 	}
@@ -1094,6 +1405,9 @@ func (s *Worker) ensureCheckpointMaterializedWithLogger(ctx context.Context, req
 		outputLogger.Info(fmt.Sprintf("Checkpoint cache miss; downloading from workspace storage (%s)...\n", formatImageBytes(checkpoint.CacheSizeBytes)))
 	}
 	if err := s.materializeCheckpointFromOrigin(ctx, request, checkpointPath, checkpoint); err != nil {
+		return "", err
+	}
+	if err := validateCheckpointKind(checkpointPath, checkpoint.IsFilesystemOnly()); err != nil {
 		return "", err
 	}
 	s.logCheckpointMaterialized(outputLogger, checkpoint, "origin", started)
@@ -1325,12 +1639,72 @@ func (r *checkpointCacheReader) Read(dst []byte) (int, error) {
 }
 
 func checkpointMaterialized(checkpointPath string) bool {
-	info, err := os.Stat(filepath.Join(checkpointPath, checkpointFsDir))
-	if err != nil || !info.IsDir() {
+	if _, _, err := checkpointFilesystemPayload(checkpointPath); err != nil {
 		return false
 	}
 
-	return checkpointHasRuntimePayload(checkpointPath)
+	return checkpointHasRuntimePayload(checkpointPath) || checkpointFilesystemOnly(checkpointPath)
+}
+
+// checkpointFilesystemPayload accepts the new nested archive and the legacy
+// materialized directory, but never both. The archive is a regular file because
+// the cache filesystem need not support the whiteout device nodes it contains.
+func checkpointFilesystemPayload(checkpointPath string) (payloadPath string, archived bool, err error) {
+	legacyPath := filepath.Join(checkpointPath, checkpointFsDir)
+	legacy, legacyErr := os.Lstat(legacyPath)
+	legacyExists := legacyErr == nil
+	if legacyErr != nil && !os.IsNotExist(legacyErr) {
+		return "", false, legacyErr
+	}
+	if legacyExists && !legacy.IsDir() {
+		return "", false, errors.New("legacy checkpoint filesystem payload is not a directory")
+	}
+
+	archivePath := filepath.Join(checkpointPath, checkpointFsArchive)
+	archive, archiveErr := os.Lstat(archivePath)
+	archiveExists := archiveErr == nil
+	if archiveErr != nil && !os.IsNotExist(archiveErr) {
+		return "", false, archiveErr
+	}
+	if archiveExists && (!archive.Mode().IsRegular() || archive.Size() == 0) {
+		return "", false, errors.New("checkpoint filesystem archive is empty or invalid")
+	}
+	if legacyExists == archiveExists {
+		return "", false, errors.New("checkpoint must contain exactly one filesystem payload")
+	}
+	if archiveExists {
+		return archivePath, true, nil
+	}
+	return legacyPath, false, nil
+}
+
+func checkpointFilesystemOnly(checkpointPath string) bool {
+	markerPath := filepath.Join(checkpointPath, checkpointFilesystemOnlyFile)
+	marker, markerErr := os.Lstat(markerPath)
+	if markerErr != nil || !marker.Mode().IsRegular() {
+		return false
+	}
+	if _, _, err := checkpointFilesystemPayload(checkpointPath); err != nil {
+		return false
+	}
+	contents, err := os.ReadFile(markerPath)
+	return err == nil && string(contents) == "v1\n"
+}
+
+func validateCheckpointKind(checkpointPath string, filesystemOnly bool) error {
+	if _, _, err := checkpointFilesystemPayload(checkpointPath); err != nil {
+		return err
+	}
+	if filesystemOnly {
+		if !checkpointFilesystemOnly(checkpointPath) || checkpointHasRuntimePayload(checkpointPath) {
+			return errors.New("filesystem checkpoint payload is invalid")
+		}
+		return nil
+	}
+	if _, err := os.Lstat(filepath.Join(checkpointPath, checkpointFilesystemOnlyFile)); err == nil || !os.IsNotExist(err) || !checkpointHasRuntimePayload(checkpointPath) {
+		return errors.New("memory checkpoint payload is invalid")
+	}
+	return nil
 }
 
 type ErrCheckpointRuntimeIncompatible struct {
@@ -1397,7 +1771,7 @@ func checkpointHasRuntimePayload(checkpointPath string) bool {
 	}
 
 	for _, entry := range entries {
-		if entry.Name() == checkpointFsDir {
+		if entry.Name() == checkpointFsDir || entry.Name() == checkpointFsArchive || entry.Name() == checkpointFilesystemOnlyFile || entry.Name() == checkpointForcedRuncProfileFile {
 			continue
 		}
 
@@ -1526,7 +1900,8 @@ func (s *Worker) supportsCheckpointRestore(request *types.ContainerRequest, rt r
 }
 
 func (s *Worker) canRestoreCheckpoint(request *types.ContainerRequest, rt runtime.Runtime) bool {
-	return s.supportsCheckpointRestore(request, rt) && hasAvailableCheckpoint(request)
+	return hasAvailableCheckpoint(request) &&
+		(request.Checkpoint.IsFilesystemOnly() || s.supportsCheckpointRestore(request, rt))
 }
 
 type checkpointCreateState struct {
@@ -1856,13 +2231,92 @@ func (s *Worker) waitForCheckpointTrigger(ctx context.Context, request *types.Co
 
 func (s *Worker) checkpointRestoreValidator(request *types.ContainerRequest) func(context.Context, runtime.Runtime) error {
 	trigger := request.CheckpointTrigger
-	if trigger == nil || !strings.EqualFold(trigger.Type, checkpointTriggerHTTP) || trigger.HttpPath == "" {
+	validateHTTPReadiness := trigger != nil && strings.EqualFold(trigger.Type, checkpointTriggerHTTP) && trigger.HttpPath != ""
+	validateDurableMounts := false
+	if requestForcesResourceLimits(request) {
+		for _, mount := range request.Mounts {
+			if mount.DurableDisk != nil {
+				validateDurableMounts = true
+				break
+			}
+		}
+	}
+	if !validateDurableMounts && !validateHTTPReadiness {
 		return nil
 	}
 
 	return func(ctx context.Context, rt runtime.Runtime) error {
-		return s.waitForRestoredCheckpointHTTPReadiness(ctx, request, trigger, rt)
+		if validateDurableMounts {
+			if err := validateRestoredDurableDiskMounts(ctx, request, rt); err != nil {
+				return err
+			}
+		}
+		if validateHTTPReadiness {
+			return s.waitForRestoredCheckpointHTTPReadiness(ctx, request, trigger, rt)
+		}
+		return nil
 	}
+}
+
+func validateRestoredDurableDiskMounts(ctx context.Context, request *types.ContainerRequest, rt runtime.Runtime) error {
+	if request == nil || rt == nil || rt.Name() != types.ContainerRuntimeRunc.String() {
+		return nil
+	}
+
+	state, err := rt.State(ctx, request.ContainerId)
+	if err != nil {
+		return &checkpointDurableMountValidationError{err: fmt.Errorf("get runtime state: %w", err)}
+	}
+	if state.Status != types.RuncContainerStatusRunning || state.Pid <= 0 {
+		return &checkpointDurableMountValidationError{err: fmt.Errorf("runtime status %q with pid %d", state.Status, state.Pid)}
+	}
+
+	return validateRestoredDurableDiskMountsAtRoot(request.Mounts, filepath.Join("/proc", strconv.Itoa(state.Pid), "root"))
+}
+
+func validateRestoredDurableDiskMountsAtRoot(mounts []types.Mount, containerRoot string) error {
+	for _, mount := range mounts {
+		if mount.DurableDisk == nil {
+			continue
+		}
+		if !filepath.IsAbs(mount.LocalPath) || !filepath.IsAbs(mount.MountPath) {
+			return &checkpointDurableMountValidationError{
+				mountPath: mount.MountPath,
+				err:       fmt.Errorf("invalid source %q or target", mount.LocalPath),
+			}
+		}
+
+		targetPath := filepath.Join(containerRoot, strings.TrimPrefix(filepath.Clean(mount.MountPath), string(filepath.Separator)))
+		sourceLinkInfo, err := os.Lstat(mount.LocalPath)
+		if err != nil {
+			return &checkpointDurableMountValidationError{mountPath: mount.MountPath, err: fmt.Errorf("lstat source %q: %w", mount.LocalPath, err)}
+		}
+		targetLinkInfo, err := os.Lstat(targetPath)
+		if err != nil {
+			return &checkpointDurableMountValidationError{mountPath: mount.MountPath, err: fmt.Errorf("lstat restored target %q: %w", targetPath, err)}
+		}
+		if sourceLinkInfo.Mode()&os.ModeSymlink != 0 || targetLinkInfo.Mode()&os.ModeSymlink != 0 {
+			return &checkpointDurableMountValidationError{
+				mountPath: mount.MountPath,
+				err:       fmt.Errorf("source %q or restored target %q is a symlink", mount.LocalPath, targetPath),
+			}
+		}
+		sourceInfo, err := os.Stat(mount.LocalPath)
+		if err != nil {
+			return &checkpointDurableMountValidationError{mountPath: mount.MountPath, err: fmt.Errorf("stat source %q: %w", mount.LocalPath, err)}
+		}
+		targetInfo, err := os.Stat(targetPath)
+		if err != nil {
+			return &checkpointDurableMountValidationError{mountPath: mount.MountPath, err: fmt.Errorf("stat restored target %q: %w", targetPath, err)}
+		}
+		if !os.SameFile(sourceInfo, targetInfo) {
+			return &checkpointDurableMountValidationError{
+				mountPath: mount.MountPath,
+				err:       fmt.Errorf("source %q does not back restored target %q", mount.LocalPath, targetPath),
+			}
+		}
+	}
+	return nil
 }
 
 func (s *Worker) waitForRestoredCheckpointHTTPReadiness(ctx context.Context, request *types.ContainerRequest, trigger *types.CheckpointTrigger, rt runtime.Runtime) error {

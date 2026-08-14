@@ -123,6 +123,77 @@ func copyDirectoryContext(ctx context.Context, src, dst string, excludePaths []s
 	return nil
 }
 
+// archiveDirectoryContext writes the contents of src to a tar archive without
+// first materializing them in another directory. This matters for raw overlay
+// upper layers: whiteouts are character devices and some cache filesystems do
+// not permit mknod, even though they can safely store a regular tar file that
+// describes one.
+func archiveDirectoryContext(ctx context.Context, src, destTar string, excludePaths []string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	rootExcludes := map[string]struct{}{}
+	for _, excludePath := range excludePaths {
+		cleanPath := filepath.ToSlash(filepath.Clean(excludePath))
+		if cleanPath == "." || cleanPath == "" {
+			continue
+		}
+		if strings.Contains(cleanPath, "/") {
+			return fmt.Errorf("archive exclusion %q must name a root entry", excludePath)
+		}
+		rootExcludes[cleanPath] = struct{}{}
+	}
+
+	if err := os.MkdirAll(filepath.Dir(destTar), 0755); err != nil {
+		return fmt.Errorf("create archive directory %s: %w", filepath.Dir(destTar), err)
+	}
+
+	tmp, err := os.CreateTemp(filepath.Dir(destTar), "."+filepath.Base(destTar)+"-*")
+	if err != nil {
+		return fmt.Errorf("create temporary archive for %s: %w", destTar, err)
+	}
+	tmpPath := tmp.Name()
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("close temporary archive %s: %w", tmpPath, err)
+	}
+	defer os.Remove(tmpPath)
+
+	tarArgs := tarXattrArgs()
+	for excluded := range rootExcludes {
+		tarArgs = append(tarArgs, "--exclude=./"+excluded)
+	}
+	tarArgs = append(tarArgs, "-cf", tmpPath, "-C", src, ".")
+
+	cmd := exec.CommandContext(ctx, "tar", tarArgs...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return tarCommandError(fmt.Sprintf("archive directory %s", src), err, stderr)
+	}
+	if err := os.Rename(tmpPath, destTar); err != nil {
+		return fmt.Errorf("publish directory archive %s: %w", destTar, err)
+	}
+	return nil
+}
+
+func extractDirectoryArchiveContext(ctx context.Context, srcTar, destDir string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		return fmt.Errorf("create archive destination %s: %w", destDir, err)
+	}
+	cmd := exec.CommandContext(ctx, "tar", append(tarXattrArgs(), "-xf", srcTar, "-C", destDir)...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return tarCommandError(fmt.Sprintf("extract directory archive %s", srcTar), err, stderr)
+	}
+	return nil
+}
+
 func normalizedCopyExcludePaths(excludePaths []string) map[string]struct{} {
 	excludes := map[string]struct{}{}
 	for _, excludePath := range excludePaths {

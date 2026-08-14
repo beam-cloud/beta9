@@ -66,6 +66,9 @@ func TestCheckpointProtoRoundTripPreservesRuntime(t *testing.T) {
 	checkpoint := &Checkpoint{CheckpointId: "checkpoint-1", Runtime: ContainerRuntimeGvisor.String()}
 
 	require.Equal(t, checkpoint.Runtime, NewCheckpointFromProto(checkpoint.ToProto()).Runtime)
+	require.False(t, checkpoint.IsFilesystemOnly())
+	checkpoint.Runtime = " FILESYSTEM "
+	require.True(t, checkpoint.IsFilesystemOnly())
 }
 
 func TestPrivateWorkerRequestRemovesControlPlaneCredentials(t *testing.T) {

@@ -587,6 +587,9 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	if request.RequiresGPU() && !caps.GPU {
 		return fmt.Errorf("runtime %s does not support GPU workloads", s.runtime.Name())
 	}
+	if request.DockerEnabled && forcedRuncCheckpointProfileRequired(request, s.runtime) {
+		return errors.New("forced runc containers do not support Docker-enabled mode")
+	}
 	if err := validateCheckpointRestoreRuntime(request, s.runtime); err != nil {
 		return err
 	}
@@ -632,7 +635,9 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		outputLogger.Info("Checkpointing is enabled for this container, but the runtime on this worker does not support checkpoint/restore - disabling checkpointing\n")
 
 		request.CheckpointEnabled = false
-		request.Checkpoint = nil
+		if request.Checkpoint == nil || !request.Checkpoint.IsFilesystemOnly() {
+			request.Checkpoint = nil
+		}
 	}
 
 	var filesystemRestore *checkpointFilesystemRestore
@@ -767,6 +772,9 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 func validateCheckpointRestoreRuntime(request *types.ContainerRequest, rt runtime.Runtime) error {
 	if !hasAvailableCheckpoint(request) {
+		return nil
+	}
+	if request.Checkpoint.IsFilesystemOnly() {
 		return nil
 	}
 	if rt == nil {
@@ -1720,7 +1728,10 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	request.ConfigPath = configPath
 
 	outputWriter := containerInstance.OutputWriter
-	restoringCheckpoint := s.canRestoreCheckpoint(request, containerInstance.Runtime)
+	restoringRuntimeCheckpoint := s.supportsCheckpointRestore(request, containerInstance.Runtime) && hasAvailableCheckpoint(request)
+	if restoringRuntimeCheckpoint && request.Checkpoint.IsFilesystemOnly() {
+		restoringRuntimeCheckpoint = false
+	}
 
 	// Log metrics
 	go s.workerUsageMetrics.EmitContainerUsage(ctx, request)
@@ -1751,7 +1762,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			if !exists {
 				return
 			}
-			if restoringCheckpoint {
+			if restoringRuntimeCheckpoint {
 				s.signalRestoredSandboxProcessManager(ctx, request, instance.Runtime)
 			}
 
@@ -1952,7 +1963,7 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 	}
 
 	supportsCheckpoint := s.supportsCheckpointRestore(request, instance.Runtime)
-	restoringCheckpoint := supportsCheckpoint && hasAvailableCheckpoint(request)
+	restoringCheckpoint := s.canRestoreCheckpoint(request, instance.Runtime)
 	checkpointRestoreStarted := time.Now()
 	if filesystemRestore != nil {
 		checkpointRestoreStarted = filesystemRestore.startedAt
@@ -1983,11 +1994,25 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 			s.startAutoCheckpoint(ctx, request, outputLogger, checkpointPIDChan)
 		}
 	}
-	fallbackFromCheckpoint := func() error {
+	fallbackFromCheckpoint := func(reseedCheckpointFilesystem bool) error {
 		restoringCheckpoint = false
-		request.Checkpoint = nil
-		if err := s.prepareRestoreFallback(request, originalConfig); err != nil {
+		if reseedCheckpointFilesystem && originalConfigErr != nil {
+			return fmt.Errorf("checkpoint mount validation fallback requires the original container config: %w", originalConfigErr)
+		}
+		if !reseedCheckpointFilesystem {
+			request.Checkpoint = nil
+		}
+		var seedUpper func(string) error
+		if reseedCheckpointFilesystem {
+			seedUpper = func(upperPath string) error {
+				return s.restoreCheckpointFilesystem(ctx, request, outputLogger, upperPath)
+			}
+		}
+		if err := s.prepareRestoreFallback(request, originalConfig, seedUpper); err != nil {
 			return fmt.Errorf("prepare checkpoint restore fallback: %w", err)
+		}
+		if reseedCheckpointFilesystem {
+			request.Checkpoint = nil
 		}
 		startAutoCheckpoint()
 		return nil
@@ -2070,7 +2095,13 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 		if filesystemRestore != nil {
 			restoreErr = filesystemRestore.wait()
 		} else {
-			restoreErr = s.restoreCheckpointFilesystem(ctx, request, outputLogger, filepath.Dir(request.ConfigPath))
+			if originalConfigErr != nil {
+				restoreErr = fmt.Errorf("checkpoint filesystem restore requires the original container config: %w", originalConfigErr)
+			} else {
+				restoreErr = s.prepareRestoreFallback(request, originalConfig, func(upperPath string) error {
+					return s.restoreCheckpointFilesystem(ctx, request, outputLogger, upperPath)
+				})
+			}
 		}
 		if restoreErr != nil {
 			// A local fetch failure does not prove the checkpoint itself is invalid.
@@ -2078,10 +2109,25 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 				finishRuntimeStarted()
 				return -1, restoreErr
 			}
-			if err := fallbackFromCheckpoint(); err != nil {
+			if err := fallbackFromCheckpoint(false); err != nil {
 				finishRuntimeStarted()
 				return -1, err
 			}
+		} else if request.Checkpoint.IsFilesystemOnly() {
+			markCheckpointRestored()
+			request.Checkpoint = nil
+			restoringCheckpoint = false
+			startAutoCheckpoint()
+			log.Info().Str("container_id", request.ContainerId).Msg("checkpoint filesystem restored; starting container cold")
+			outputLogger.Info("Checkpoint filesystem restored; starting container normally\n")
+		} else if forcedRuncCheckpointNeedsColdMigration(s.checkpointPath(request.Checkpoint.CheckpointId), request, instance.Runtime) {
+			checkpointID := request.Checkpoint.CheckpointId
+			if err := fallbackFromCheckpoint(true); err != nil {
+				finishRuntimeStarted()
+				return -1, fmt.Errorf("migrate legacy forced runc checkpoint %q: %w", checkpointID, err)
+			}
+			log.Info().Str("container_id", request.ContainerId).Str("checkpoint_id", checkpointID).Msg("legacy forced runc checkpoint filesystem restored; starting container cold")
+			outputLogger.Info("Checkpoint security profile changed; starting from the saved filesystem\n")
 		} else {
 			if originalConfigErr == nil {
 				if err := s.deferCheckpointRestoreCPUAffinity(request, originalConfig); err != nil {
@@ -2112,11 +2158,28 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 				if err != nil {
 					return exitCode, err
 				}
-				return s.waitForRestoredContainerExit(ctx, instance.Runtime, request.ContainerId, exitCode)
+				exitCode, err = s.waitForRestoredContainerExit(ctx, instance.Runtime, request.ContainerId, exitCode)
+				terminalCheckpoint := s.waitForTerminalAutoCheckpoint(ctx, request)
+				if err != nil && terminalCheckpoint {
+					log.Info().Str("container_id", request.ContainerId).Int("exit_code", exitCode).Msg("restored container exited after terminal checkpoint")
+					err = nil
+				}
+				return exitCode, err
 			}
 
-			// If this is not a deployment stub, don't fall back to running the container
-			if !restored && !request.Stub.Type.IsDeployment() {
+			var durableMountValidationErr *checkpointDurableMountValidationError
+			durableMountValidationFailed := errors.As(err, &durableMountValidationErr)
+			runscVersionFallback := forcedRunscVersionFallback(request, err)
+			var restoreCleanupErr *checkpointRestoreCleanupError
+			restoreCleanupFailed := errors.As(err, &restoreCleanupErr)
+			if (durableMountValidationFailed || runscVersionFallback) && restoreCleanupFailed {
+				finishRuntimeStarted()
+				return exitCode, err
+			}
+			// Non-deployment fallbacks are limited to forced requests whose
+			// independently captured root filesystem can be safely reseeded.
+			if !restored && !request.Stub.Type.IsDeployment() &&
+				(!durableMountValidationFailed || !requestForcesResourceLimits(request)) && !runscVersionFallback {
 				finishRuntimeStarted()
 				return exitCode, err
 			}
@@ -2124,11 +2187,11 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 				finishRuntimeStarted()
 				finishRuntimeStarted = startRuntimeStartedHandler()
 			}
-			if err := fallbackFromCheckpoint(); err != nil {
+			if fallbackErr := fallbackFromCheckpoint(durableMountValidationFailed || runscVersionFallback); fallbackErr != nil {
 				if !restoreStarted {
 					finishRuntimeStarted()
 				}
-				return exitCode, err
+				return exitCode, errors.Join(err, fallbackErr)
 			}
 		}
 	}
