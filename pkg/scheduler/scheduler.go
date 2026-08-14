@@ -32,8 +32,8 @@ const (
 	// Must cover node provision + worker registration (2-4 min on EKS with
 	// Karpenter). A shorter TTL forgets capacity reserved on still-booting
 	// workers, and the orphaned requests provision duplicate workers.
-	pendingWorkerReservationTTL time.Duration = 3 * time.Minute
-	maxWorkerProvisioningAttempts                = 3
+	pendingWorkerReservationTTL   time.Duration = 3 * time.Minute
+	maxWorkerProvisioningAttempts               = 3
 )
 
 var (
@@ -1137,7 +1137,7 @@ func availableCheckpoint(request *types.ContainerRequest) *types.Checkpoint {
 
 func checkpointRuntime(request *types.ContainerRequest) string {
 	checkpoint := availableCheckpoint(request)
-	if checkpoint == nil {
+	if checkpoint == nil || checkpoint.IsFilesystemOnly() {
 		return ""
 	}
 	return strings.TrimSpace(checkpoint.Runtime)
@@ -1150,7 +1150,7 @@ func runtimeMatchesCheckpoint(request *types.ContainerRequest, runtimeName strin
 
 func checkpointAccelerator(request *types.ContainerRequest) string {
 	checkpoint := availableCheckpoint(request)
-	if checkpoint == nil {
+	if checkpoint == nil || checkpoint.IsFilesystemOnly() {
 		return ""
 	}
 	return strings.TrimSpace(checkpoint.Accelerator)

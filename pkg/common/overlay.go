@@ -182,6 +182,37 @@ func (co *ContainerOverlay) Reset() error {
 	return nil
 }
 
+// ResetWithUpper rebuilds the writable layer from seed while it is unmounted.
+// Checkpoint upper directories can contain overlay whiteouts and opaque xattrs
+// that must not be copied through the merged filesystem.
+func (co *ContainerOverlay) ResetWithUpper(seed func(string) error) error {
+	if seed == nil {
+		return fmt.Errorf("upper layer seed is required")
+	}
+	if err := co.cleanupLayers(); err != nil {
+		return err
+	}
+
+	layerDir := filepath.Join(co.overlayPath, co.containerId, "layer-0")
+	if err := os.RemoveAll(layerDir); err != nil {
+		return err
+	}
+	upperDir := filepath.Join(layerDir, "upper")
+	if err := os.MkdirAll(upperDir, 0755); err != nil {
+		return err
+	}
+	if err := seed(upperDir); err != nil {
+		_ = os.RemoveAll(layerDir)
+		return err
+	}
+	if err := co.Setup(); err != nil {
+		_ = co.cleanupLayers()
+		_ = os.RemoveAll(layerDir)
+		return err
+	}
+	return nil
+}
+
 func (co *ContainerOverlay) TopLayerPath() string {
 	if len(co.layers) == 0 {
 		return co.root

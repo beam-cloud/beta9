@@ -292,7 +292,8 @@ func (s *ContainerRuntimeServer) ContainerCheckpoint(ctx context.Context, in *pb
 	if rt == nil {
 		return &pb.ContainerCheckpointResponse{Ok: false, ErrorMsg: "Container runtime not found"}, nil
 	}
-	if !rt.Capabilities().CheckpointRestore {
+	filesystemFallback := in.TerminateAfterCheckpoint && requestForcesResourceLimits(instance.Request)
+	if !rt.Capabilities().CheckpointRestore && !filesystemFallback {
 		return &pb.ContainerCheckpointResponse{
 			Ok:       false,
 			ErrorMsg: fmt.Sprintf("Runtime %s does not support checkpoint/restore", rt.Name()),
@@ -300,18 +301,23 @@ func (s *ContainerRuntimeServer) ContainerCheckpoint(ctx context.Context, in *pb
 	}
 
 	checkpointId := uuid.New().String()
-	err := s.createCheckpoint(ctx, &CreateCheckpointOpts{
+	checkpointOpts := &CreateCheckpointOpts{
 		Request:                  instance.Request,
 		CheckpointId:             checkpointId,
 		ContainerIp:              instance.ContainerIp,
 		TerminateAfterCheckpoint: in.TerminateAfterCheckpoint,
-	})
+	}
+	err := s.createCheckpoint(ctx, checkpointOpts)
 	if err != nil {
 		log.Error().Str("container_id", in.ContainerId).Msgf("failed to create checkpoint: %v", err)
 		return &pb.ContainerCheckpointResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
-	return &pb.ContainerCheckpointResponse{Ok: true, CheckpointId: checkpointId, Runtime: rt.Name()}, nil
+	checkpointRuntime := checkpointOpts.CheckpointRuntime
+	if checkpointRuntime == "" {
+		checkpointRuntime = rt.Name()
+	}
+	return &pb.ContainerCheckpointResponse{Ok: true, CheckpointId: checkpointId, Runtime: checkpointRuntime}, nil
 }
 
 // ContainerSnapshotDisks snapshots a running container's durable disks.

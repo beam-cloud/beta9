@@ -465,6 +465,12 @@ type Checkpoint struct {
 	Runtime           string   `db:"runtime" json:"runtime" serializer:"runtime"`
 }
 
+const CheckpointRuntimeFilesystem = "filesystem"
+
+func (c *Checkpoint) IsFilesystemOnly() bool {
+	return c != nil && strings.EqualFold(strings.TrimSpace(c.Runtime), CheckpointRuntimeFilesystem)
+}
+
 func (c *Checkpoint) ToProto() *pb.Checkpoint {
 	exposedPorts := make([]uint32, len(c.ExposedPorts))
 	for i, port := range c.ExposedPorts {

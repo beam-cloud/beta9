@@ -88,6 +88,9 @@ func TestContainerCheckpointForwardsTerminalIntent(t *testing.T) {
 		containerInstances: common.NewSafeMap[*ContainerInstance](),
 		createCheckpoint: func(_ context.Context, opts *CreateCheckpointOpts) error {
 			got = append(got, opts.TerminateAfterCheckpoint)
+			if opts.TerminateAfterCheckpoint {
+				opts.CheckpointRuntime = types.CheckpointRuntimeFilesystem
+			}
 			return nil
 		},
 	}
@@ -97,6 +100,7 @@ func TestContainerCheckpointForwardsTerminalIntent(t *testing.T) {
 		Runtime: NewMockRuntime(types.ContainerRuntimeRunc.String(), betaruntime.Capabilities{CheckpointRestore: true}),
 	})
 
+	var runtimes []string
 	for _, terminate := range []bool{false, true} {
 		response, err := server.ContainerCheckpoint(context.Background(), &pb.ContainerCheckpointRequest{
 			ContainerId:              request.ContainerId,
@@ -104,8 +108,47 @@ func TestContainerCheckpointForwardsTerminalIntent(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.True(t, response.Ok)
+		runtimes = append(runtimes, response.Runtime)
 	}
 	require.Equal(t, []bool{false, true}, got)
+	require.Equal(t, []string{types.ContainerRuntimeRunc.String(), types.CheckpointRuntimeFilesystem}, runtimes)
+}
+
+func TestContainerCheckpointAllowsForcedTerminalFilesystemCapture(t *testing.T) {
+	request := &types.ContainerRequest{
+		ContainerId: "container-id",
+		Stub: types.StubWithRelated{Stub: types.Stub{
+			Config: `{"_beta9_force_resource_limits":true}`,
+		}},
+	}
+	createCalls := 0
+	server := &ContainerRuntimeServer{
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		createCheckpoint: func(_ context.Context, opts *CreateCheckpointOpts) error {
+			createCalls++
+			opts.CheckpointRuntime = types.CheckpointRuntimeFilesystem
+			return nil
+		},
+	}
+	server.containerInstances.Set(request.ContainerId, &ContainerInstance{
+		Id:      request.ContainerId,
+		Request: request,
+		Runtime: NewMockRuntime("other", betaruntime.Capabilities{}),
+	})
+
+	nonterminal, err := server.ContainerCheckpoint(context.Background(), &pb.ContainerCheckpointRequest{ContainerId: request.ContainerId})
+	require.NoError(t, err)
+	require.False(t, nonterminal.Ok)
+	require.Zero(t, createCalls)
+
+	terminal, err := server.ContainerCheckpoint(context.Background(), &pb.ContainerCheckpointRequest{
+		ContainerId:              request.ContainerId,
+		TerminateAfterCheckpoint: true,
+	})
+	require.NoError(t, err)
+	require.True(t, terminal.Ok)
+	require.Equal(t, types.CheckpointRuntimeFilesystem, terminal.Runtime)
+	require.Equal(t, 1, createCalls)
 }
 
 func TestContainerCheckpointReturnsNoIDWhenPersistenceFails(t *testing.T) {

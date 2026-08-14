@@ -2993,6 +2993,9 @@ func TestCheckpointRuntimeSelection(t *testing.T) {
 	request.Checkpoint.Runtime = types.ContainerRuntimeGvisor.String()
 	assert.Equal(t, []*types.Worker{gvisor}, filterWorkersByResources(workers, request, nil))
 
+	request.Checkpoint.Runtime = types.CheckpointRuntimeFilesystem
+	assert.Equal(t, workers, filterWorkersByResources(workers, request, nil), "filesystem checkpoints cold-start on any runtime")
+
 	request.Checkpoint.Status = string(types.CheckpointStatusCheckpointFailed)
 	assert.Equal(t, workers, filterWorkersByResources(workers, request, nil), "non-available checkpoints cold-start normally")
 }
@@ -3013,6 +3016,9 @@ func TestCheckpointRuntimeFiltersProvisioningControllers(t *testing.T) {
 
 	request.Checkpoint.Runtime = ""
 	assert.Equal(t, controllers, filterControllersByFlags(controllers, request), "legacy checkpoints retain existing placement")
+
+	request.Checkpoint.Runtime = types.CheckpointRuntimeFilesystem
+	assert.Equal(t, controllers, filterControllersByFlags(controllers, request), "filesystem checkpoints cold-start on any runtime")
 }
 
 func TestCheckpointAcceleratorFiltersExistingWorkers(t *testing.T) {
@@ -3045,6 +3051,10 @@ func TestCheckpointAcceleratorFiltersExistingWorkers(t *testing.T) {
 
 	request.Checkpoint.Accelerator = ""
 	assert.Equal(t, workers, filterWorkersByResources(workers, request, nil), "legacy checkpoints retain GPU preference placement")
+
+	request.Checkpoint.Runtime = types.CheckpointRuntimeFilesystem
+	request.Checkpoint.Accelerator = "RTX5090"
+	assert.Equal(t, workers, filterWorkersByResources(workers, request, nil), "filesystem checkpoints do not require the source accelerator")
 
 	request.Checkpoint.Accelerator = "RTX5090"
 	request.Checkpoint.Status = string(types.CheckpointStatusRestoreFailed)
