@@ -1343,16 +1343,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		spec.Process.Env = gpuManager.InjectAssignedEnvVars(spec.Process.Env, assignedDevices)
 	}
 
-	if request.Stub.Type.Kind() == types.StubTypeSandbox && s.gpuVirtualizedForRequest(request) {
-		hook, err := s.thunderStartupHook(request, spec)
-		if err != nil {
-			log.Error().Str("container_id", request.ContainerId).Msgf("failed to prepare Thunder startup hook: %v", err)
-			return
-		}
-		containerInstance.Runtime = runtime.WithStartupHooks(containerInstance.Runtime, hook)
-		s.containerInstances.Set(containerId, containerInstance)
-	}
-
 	// Expose the bind ports
 	phaseStart = time.Now()
 	err = s.containerNetworkManager.ExposePorts(containerId, opts.StartupPortBindings)
@@ -1406,6 +1396,18 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	if request.DockerEnabled && request.Stub.Type.Kind() == types.StubTypeSandbox {
 		runtime.AddDockerInDockerCapabilities(spec)
 		log.Info().Str("container_id", containerId).Str("runtime", s.runtime.Name()).Msg("added docker capabilities for sandbox container")
+	}
+
+	if s.gpuVirtualizedForRequest(request) {
+		hook, err := s.thunderPreInitHook(request)
+		if err != nil {
+			log.Error().Str("container_id", request.ContainerId).Msgf("failed to prepare Thunder pre-init hook: %v", err)
+			return
+		}
+		if err := runtime.InjectPreInitHooks(spec, hook); err != nil {
+			log.Error().Str("container_id", request.ContainerId).Msgf("failed to inject Thunder pre-init hook: %v", err)
+			return
+		}
 	}
 
 	// Prepare spec for the selected runtime

@@ -146,48 +146,28 @@ func thunderReadOnlyMountOptions(options []string) []string {
 	return append(readOnlyOptions, "ro")
 }
 
-func (s *Worker) thunderStartupHook(request *types.ContainerRequest, spec *specs.Spec) (runtime.StartupHook, error) {
+func (s *Worker) thunderPreInitHook(request *types.ContainerRequest) (runtime.PreInitHook, error) {
 	if s == nil || request == nil || !s.gpuVirtualizedForRequest(request) {
-		return nil, nil
+		return runtime.PreInitHook{}, nil
 	}
 	manager, ok := s.containerThunderManager.(*ContainerThunderManager)
 	if !ok || manager == nil {
-		return nil, fmt.Errorf("thunder manager unavailable")
+		return runtime.PreInitHook{}, fmt.Errorf("thunder manager unavailable")
 	}
 	cmd, ok := manager.installCache.Get(request.ContainerId)
 	if !ok || strings.TrimSpace(cmd) == "" {
-		return nil, fmt.Errorf("missing Thunder install command for container %s", request.ContainerId)
-	}
-	if spec == nil || spec.Process == nil {
-		return nil, fmt.Errorf("container spec unavailable for Thunder install")
+		return runtime.PreInitHook{}, fmt.Errorf("missing Thunder install command for container %s", request.ContainerId)
 	}
 
-	env := append([]string(nil), spec.Process.Env...)
-	if !containsEnvKey(env, "PATH") {
-		env = append(env, "PATH="+strings.Join(defaultContainerPath, ":"))
-	}
-	cwd := "/"
-	if spec.Process.Cwd != "" {
-		cwd = spec.Process.Cwd
-	}
-
-	return runtime.StartupExecHook{
-		HookName: "thunder_client_install",
-		Process: specs.Process{
-			Args: []string{"sh", "-c", cmd},
-			Cwd:  cwd,
-			Env:  env,
-		},
-		Timeout: 2 * time.Minute,
+	return runtime.PreInitHook{
+		Name:   "thunder_client_install",
+		Script: withoutThunderInstallerSudo(cmd),
 	}, nil
 }
 
-func containsEnvKey(env []string, key string) bool {
-	prefix := key + "="
-	for _, item := range env {
-		if strings.HasPrefix(item, prefix) {
-			return true
-		}
-	}
-	return false
+func withoutThunderInstallerSudo(command string) string {
+	command = strings.TrimSpace(command)
+	command = strings.Replace(command, "| sudo ", "| ", 1)
+	command = strings.Replace(command, "|sudo ", "| ", 1)
+	return command
 }
