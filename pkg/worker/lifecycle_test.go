@@ -957,17 +957,21 @@ func TestSpecFromRequestSetsHostnameOnlyWhenRequested(t *testing.T) {
 	tests := []struct {
 		name         string
 		runtime      string
+		stubKind     string
 		hostname     string
 		wantHostname string
 	}{
-		{name: "runc default", runtime: types.ContainerRuntimeRunc.String(), wantHostname: "runc"},
-		{name: "runsc default", runtime: types.ContainerRuntimeGvisor.String(), wantHostname: "runsc"},
-		{name: "requested", runtime: types.ContainerRuntimeGvisor.String(), hostname: "brisk-canyon-a1b2", wantHostname: "brisk-canyon-a1b2"},
-		{name: "sanitized", runtime: types.ContainerRuntimeGvisor.String(), hostname: "MyApp/v1.2", wantHostname: "myapp-v1-2"},
-		{name: "trimmed", runtime: types.ContainerRuntimeGvisor.String(), hostname: "--wrapped__", wantHostname: "wrapped"},
-		{name: "invalid", runtime: types.ContainerRuntimeRunc.String(), hostname: "///", wantHostname: "runc"},
-		{name: "truncated", runtime: types.ContainerRuntimeGvisor.String(), hostname: strings.Repeat("a", 80), wantHostname: strings.Repeat("a", maxHostnameLength)},
-		{name: "bounded", runtime: types.ContainerRuntimeGvisor.String(), hostname: strings.Repeat("a", maxHostnameLength-1) + "-b", wantHostname: strings.Repeat("a", maxHostnameLength-1) + "b"},
+		{name: "runc job default", runtime: types.ContainerRuntimeRunc.String(), stubKind: types.StubTypePod, wantHostname: "runc"},
+		{name: "runsc job default", runtime: types.ContainerRuntimeGvisor.String(), stubKind: types.StubTypePod, wantHostname: "runsc"},
+		{name: "runc sandbox default", runtime: types.ContainerRuntimeRunc.String(), stubKind: types.StubTypeSandbox, wantHostname: "localhost"},
+		{name: "runsc sandbox default", runtime: types.ContainerRuntimeGvisor.String(), stubKind: types.StubTypeSandbox, wantHostname: "localhost"},
+		{name: "requested", runtime: types.ContainerRuntimeGvisor.String(), stubKind: types.StubTypeSandbox, hostname: "brisk-canyon-a1b2", wantHostname: "brisk-canyon-a1b2"},
+		{name: "sanitized", runtime: types.ContainerRuntimeGvisor.String(), stubKind: types.StubTypeSandbox, hostname: "MyApp/v1.2", wantHostname: "myapp-v1-2"},
+		{name: "trimmed", runtime: types.ContainerRuntimeGvisor.String(), stubKind: types.StubTypeSandbox, hostname: "--wrapped__", wantHostname: "wrapped"},
+		{name: "invalid sandbox", runtime: types.ContainerRuntimeRunc.String(), stubKind: types.StubTypeSandbox, hostname: "///", wantHostname: "localhost"},
+		{name: "invalid job", runtime: types.ContainerRuntimeRunc.String(), stubKind: types.StubTypePod, hostname: "///", wantHostname: "runc"},
+		{name: "truncated", runtime: types.ContainerRuntimeGvisor.String(), stubKind: types.StubTypeSandbox, hostname: strings.Repeat("a", 80), wantHostname: strings.Repeat("a", maxHostnameLength)},
+		{name: "bounded", runtime: types.ContainerRuntimeGvisor.String(), stubKind: types.StubTypeSandbox, hostname: strings.Repeat("a", maxHostnameLength-1) + "-b", wantHostname: strings.Repeat("a", maxHostnameLength-1) + "b"},
 	}
 
 	for _, test := range tests {
@@ -979,7 +983,7 @@ func TestSpecFromRequestSetsHostnameOnlyWhenRequested(t *testing.T) {
 				StubId:      "stub-1",
 				Hostname:    test.hostname,
 				EntryPoint:  []string{"tail", "-f", "/dev/null"},
-				Stub:        types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypePod)}},
+				Stub:        types.StubWithRelated{Stub: types.Stub{Type: types.StubType(test.stubKind)}},
 			}, &ContainerOptions{BindPorts: []int{8001}})
 
 			require.NoError(t, err)
@@ -1903,6 +1907,45 @@ func TestRunContainerDoesNotCancelRuntimeRunWithWorkerContext(t *testing.T) {
 
 	require.NoError(t, <-rt.ctxErr)
 	require.NoError(t, <-result)
+}
+
+func TestRunContainerNormalizesColdSandboxIdentityBeforeRuntimeStart(t *testing.T) {
+	bundlePath := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(bundlePath, "etc"), 0755))
+	require.NoError(t, os.MkdirAll(filepath.Join(bundlePath, "var/lib/dbus"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(bundlePath, specBaseName), []byte("{}"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(bundlePath, "etc/machine-id"), nil, 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(bundlePath, "etc/hostname"), []byte("runsc\n"), 0644))
+	const imageMachineID = "0123456789abcdef0123456789abcdef\n"
+	require.NoError(t, os.WriteFile(filepath.Join(bundlePath, "var/lib/dbus/machine-id"), []byte(imageMachineID), 0644))
+
+	rt := &identityObservingRuntime{mockRuntime: mockRuntime{name: types.ContainerRuntimeGvisor.String()}}
+	worker := &Worker{containerInstances: common.NewSafeMap[*ContainerInstance]()}
+	request := &types.ContainerRequest{
+		ContainerId: "container-identity",
+		ConfigPath:  filepath.Join(bundlePath, specBaseName),
+		Hostname:    "quiet-harbor-a1b2",
+		Stub:        types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)}},
+	}
+	worker.containerInstances.Set(request.ContainerId, &ContainerInstance{Id: request.ContainerId, Request: request, Runtime: rt})
+
+	exitCode, err := worker.runContainer(
+		context.Background(),
+		request,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		common.NewOutputWriter(func(string) {}),
+		make(chan int, 1),
+		make(chan int, 1),
+		time.Now(),
+		nil,
+		nil,
+	)
+
+	require.NoError(t, err)
+	require.Zero(t, exitCode)
+	require.True(t, rt.runCalled)
+	require.Equal(t, imageMachineID, string(rt.machineID))
+	require.Equal(t, "quiet-harbor-a1b2\n", string(rt.hostname))
 }
 
 func completedCheckpointFilesystemRestore() *checkpointFilesystemRestore {
@@ -3640,6 +3683,27 @@ type mockRuntime struct {
 	signals      []syscall.Signal
 	killOpts     []*runtime.KillOpts
 	killErr      error
+}
+
+type identityObservingRuntime struct {
+	mockRuntime
+	runCalled bool
+	machineID []byte
+	hostname  []byte
+}
+
+func (m *identityObservingRuntime) Run(_ context.Context, _ string, bundlePath string, _ *runtime.RunOpts) (int, error) {
+	m.runCalled = true
+	var err error
+	m.machineID, err = os.ReadFile(filepath.Join(bundlePath, "etc/machine-id"))
+	if err != nil {
+		return -1, err
+	}
+	m.hostname, err = os.ReadFile(filepath.Join(bundlePath, "etc/hostname"))
+	if err != nil {
+		return -1, err
+	}
+	return 0, nil
 }
 
 func (m *mockRuntime) Name() string {

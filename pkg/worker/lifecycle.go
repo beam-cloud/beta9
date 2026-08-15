@@ -1114,9 +1114,12 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	if err != nil {
 		return nil, err
 	}
-	// Preserve the runtime default unless a hostname is requested.
+	// Preserve the runtime default for jobs, but never expose the selected
+	// container runtime as a sandbox hostname.
 	if hostname := sanitizeHostname(request.Hostname); hostname != "" {
 		spec.Hostname = hostname
+	} else if request.Stub.Type.Kind() == types.StubTypeSandbox {
+		spec.Hostname = "localhost"
 	}
 
 	spec.Process.Cwd = defaultContainerDirectory
@@ -2212,6 +2215,16 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 	if _, stopReason := instance.lifecycleState(); stopReason != "" {
 		finishRuntimeStarted()
 		return int(types.ContainerExitCodeSigterm), nil
+	}
+
+	if shouldNormalizeSandboxRoot(request, restoringCheckpoint) {
+		hostname := sanitizeHostname(request.Hostname)
+		if hostname == "" {
+			hostname = "localhost"
+		}
+		if err := normalizeSandboxRoot(bundlePath, hostname); err != nil {
+			log.Warn().Err(err).Str("container_id", request.ContainerId).Msg("sandbox machine identity normalization was incomplete")
+		}
 	}
 
 	runtimeStart = time.Now()
