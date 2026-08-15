@@ -16,6 +16,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -29,14 +30,22 @@ import (
 
 const (
 	defaultDurableDiskSnapshotChunkSize  int64 = 16 << 20
-	durableDiskSnapshotUploadConcurrency       = 8
+	durableDiskSnapshotUploadConcurrency       = 16
 	durableDiskRestoreConcurrency              = 8
 	durableDiskSnapshotReadBufferSize          = 1 << 20
 	durableDiskSnapshotUploadAttempts          = 3
 	durableDiskSnapshotRetryDelay              = 250 * time.Millisecond
+	// Chunks up to this size are kept in memory rather than spooled to a temp file.
+	durableDiskSnapshotInlineChunkSize = 1 << 20
 )
 
+// Files read, hashed and uploaded at once. Bounded by memory, not cores: these wait on the store.
+const durableDiskSnapshotFileConcurrency = 16
+
 var durableDiskSnapshotChunkSlots = make(chan struct{}, durableDiskSnapshotUploadConcurrency)
+
+// Chunk downloads in flight across every file being restored, so more files widen the pipe.
+var durableDiskRestoreChunkSlots = make(chan struct{}, durableDiskRestoreConcurrency)
 
 var errDurableDiskSnapshotInactive = errors.New("durable disk snapshot made no progress before the inactivity deadline")
 
@@ -292,35 +301,61 @@ func createDurableDiskDirectorySnapshot(ctx context.Context, store durableDiskSn
 
 	previousFiles := durableDiskSnapshotFilesByPath(previous)
 	chunkPrefix := durableDiskSnapshotChunkPrefix(objectPrefix)
-	files := map[string]types.DiskSnapshotFile{}
 	seen := durableDiskSnapshotSeenChunks(previous, chunkPrefix)
 
-	if err := walkDurableDiskSnapshotTree(ctx, sourceDir, true, durableDiskProgressEvent{files: 1}, func(name string, file types.DiskSnapshotFile) error {
-		switch file.Type {
-		case "file":
-			previousFile := previousFiles[file.Path]
-			if durableDiskSnapshotFileReusable(previousFile, file) {
-				file.Chunks = append([]types.DiskSnapshotChunk(nil), previousFile.Chunks...)
-			} else if durableDiskSnapshotAppendOnlyFile(manifest.Format, file.Path) && durableDiskSnapshotFileAppendReusable(previousFile, file) {
-				reusePrefix, err := durableDiskSnapshotFileChunksReusable(ctx, name, previousFile)
+	var filesMu sync.Mutex
+	files := map[string]types.DiskSnapshotFile{}
+	record := func(file types.DiskSnapshotFile) {
+		filesMu.Lock()
+		files[file.Path] = file
+		filesMu.Unlock()
+	}
+
+	// On a pool: walking serially kept the upload pool one chunk deep, a round trip per file.
+	content, contentCtx := errgroup.WithContext(ctx)
+	content.SetLimit(durableDiskSnapshotFileConcurrency)
+
+	walkErr := walkDurableDiskSnapshotTree(ctx, sourceDir, true, durableDiskProgressEvent{files: 1}, func(name string, file types.DiskSnapshotFile) error {
+		if file.Type != "file" {
+			record(file)
+			return nil
+		}
+
+		// Metadata settles an unchanged file without reading it, for less than a worker costs.
+		previousFile := previousFiles[file.Path]
+		if durableDiskSnapshotFileReusable(previousFile, file) {
+			file.Chunks = append([]types.DiskSnapshotChunk(nil), previousFile.Chunks...)
+			record(file)
+			return nil
+		}
+
+		reuseAppendPrefix := durableDiskSnapshotAppendOnlyFile(manifest.Format, file.Path) &&
+			durableDiskSnapshotFileAppendReusable(previousFile, file)
+		content.Go(func() error {
+			if reuseAppendPrefix {
+				reusePrefix, err := durableDiskSnapshotFileChunksReusable(contentCtx, name, previousFile)
 				if err != nil {
 					return err
 				}
 				if reusePrefix {
 					file.Chunks = append([]types.DiskSnapshotChunk(nil), previousFile.Chunks...)
 				}
-				if err := snapshotDurableDiskFile(ctx, store, name, chunkPrefix, chunkSize, seen, &file); err != nil {
-					return err
-				}
-			} else if err := snapshotDurableDiskFile(ctx, store, name, chunkPrefix, chunkSize, seen, &file); err != nil {
+			}
+			if err := snapshotDurableDiskFile(contentCtx, store, name, chunkPrefix, chunkSize, seen, &file); err != nil {
 				return err
 			}
-		}
-
-		files[file.Path] = file
-		return nil
-	}); err != nil {
+			record(file)
+			return nil
+		})
+		// One file failing makes the rest of the walk pointless.
+		return contentCtx.Err()
+	})
+	// Waited on first, so a walk that stopped reports the file rather than the cancellation.
+	if err := content.Wait(); err != nil {
 		return nil, nil, err
+	}
+	if walkErr != nil {
+		return nil, nil, walkErr
 	}
 
 	manifest.Files = durableDiskSnapshotSortedFiles(files)
@@ -664,25 +699,47 @@ func durableDiskSnapshotPostgresWALFile(name string) bool {
 	return strings.HasPrefix(name, "pgdata/pg_wal/")
 }
 
-func durableDiskSnapshotSeenChunks(previous *types.DiskSnapshotManifest, chunkPrefix string) map[string]struct{} {
-	seen := map[string]struct{}{}
+// durableDiskSnapshotChunkSet is every chunk the snapshot already has, claimed in one step
+// because concurrent files holding the same bytes must produce one upload between them.
+type durableDiskSnapshotChunkSet struct {
+	mu   sync.Mutex
+	keys map[string]struct{}
+}
+
+func newDurableDiskSnapshotChunkSet() *durableDiskSnapshotChunkSet {
+	return &durableDiskSnapshotChunkSet{keys: map[string]struct{}{}}
+}
+
+// claim reports whether this caller is the one that has to upload the chunk.
+func (s *durableDiskSnapshotChunkSet) claim(key string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.keys[key]; ok {
+		return false
+	}
+	s.keys[key] = struct{}{}
+	return true
+}
+
+func durableDiskSnapshotSeenChunks(previous *types.DiskSnapshotManifest, chunkPrefix string) *durableDiskSnapshotChunkSet {
+	seen := newDurableDiskSnapshotChunkSet()
 	if previous == nil {
 		return seen
 	}
 	for _, file := range previous.Files {
 		for _, chunk := range file.Chunks {
 			if chunk.ObjectKey != "" {
-				seen[chunk.ObjectKey] = struct{}{}
+				seen.claim(chunk.ObjectKey)
 			}
 			if digest := strings.TrimPrefix(chunk.Digest, "sha256:"); digest != "" {
-				seen[path.Join(chunkPrefix, digest)] = struct{}{}
+				seen.claim(path.Join(chunkPrefix, digest))
 			}
 		}
 	}
 	return seen
 }
 
-func snapshotDurableDiskFile(ctx context.Context, store durableDiskSnapshotStore, filename, chunkPrefix string, chunkSize int64, seen map[string]struct{}, file *types.DiskSnapshotFile) error {
+func snapshotDurableDiskFile(ctx context.Context, store durableDiskSnapshotStore, filename, chunkPrefix string, chunkSize int64, seen *durableDiskSnapshotChunkSet, file *types.DiskSnapshotFile) error {
 	in, err := os.Open(filename)
 	if err != nil {
 		return err
@@ -691,7 +748,7 @@ func snapshotDurableDiskFile(ctx context.Context, store durableDiskSnapshotStore
 	return snapshotDurableDiskReader(ctx, store, in, filename, chunkPrefix, chunkSize, seen, file)
 }
 
-func snapshotDurableDiskReader(ctx context.Context, store durableDiskSnapshotStore, source io.ReaderAt, sourceName, chunkPrefix string, chunkSize int64, seen map[string]struct{}, file *types.DiskSnapshotFile) error {
+func snapshotDurableDiskReader(ctx context.Context, store durableDiskSnapshotStore, source io.ReaderAt, sourceName, chunkPrefix string, chunkSize int64, seen *durableDiskSnapshotChunkSet, file *types.DiskSnapshotFile) error {
 	if chunkSize <= 0 || chunkSize > defaultDurableDiskSnapshotChunkSize {
 		chunkSize = defaultDurableDiskSnapshotChunkSize
 	}
@@ -722,7 +779,7 @@ func snapshotDurableDiskReader(ctx context.Context, store durableDiskSnapshotSto
 		if readErr != nil {
 			break
 		}
-		chunkFile, n, hash, err := spoolDurableDiskSnapshotChunk(uploadCtx, source, sourceName, offset, chunkSize, buffer)
+		body, n, hash, err := spoolDurableDiskSnapshotChunk(uploadCtx, source, sourceName, offset, chunkSize, buffer)
 		if err != nil {
 			<-durableDiskSnapshotChunkSlots
 			// A source read failure makes every sibling upload useless. Cancel
@@ -739,20 +796,19 @@ func snapshotDurableDiskReader(ctx context.Context, store durableDiskSnapshotSto
 			break
 		}
 		key := path.Join(chunkPrefix, hash)
-		if _, ok := seen[key]; !ok {
-			seen[key] = struct{}{}
+		if seen.claim(key) {
 			chunkSizeBytes := n
 			uploads.Go(func() error {
 				defer func() { <-durableDiskSnapshotChunkSlots }()
-				defer removeDurableDiskSnapshotChunkFile(chunkFile)
-				if err := uploadDurableDiskSnapshotChunk(uploadCtx, store, key, chunkFile, chunkSizeBytes); err != nil {
+				defer body.release()
+				if err := uploadDurableDiskSnapshotChunk(uploadCtx, store, key, body, chunkSizeBytes); err != nil {
 					return fmt.Errorf("upload durable disk snapshot chunk %s: %w", key, err)
 				}
 				reportDurableDiskProgress(uploadCtx, durableDiskProgressEvent{chunks: 1})
 				return nil
 			})
 		} else {
-			removeDurableDiskSnapshotChunkFile(chunkFile)
+			body.release()
 			<-durableDiskSnapshotChunkSlots
 		}
 		file.Chunks = append(file.Chunks, types.DiskSnapshotChunk{
@@ -780,12 +836,12 @@ func snapshotDurableDiskReader(ctx context.Context, store durableDiskSnapshotSto
 	return ctx.Err()
 }
 
-func uploadDurableDiskSnapshotChunk(ctx context.Context, store durableDiskSnapshotStore, key string, chunkFile *os.File, size int64) error {
+func uploadDurableDiskSnapshotChunk(ctx context.Context, store durableDiskSnapshotStore, key string, body *durableDiskSnapshotChunkBody, size int64) error {
 	var err error
 	for attempt := 0; attempt < durableDiskSnapshotUploadAttempts; attempt++ {
 		err = store.UploadWithReader(ctx, key, &durableDiskSnapshotProgressReader{
 			ctx:    ctx,
-			reader: io.NewSectionReader(chunkFile, 0, size),
+			reader: body.reader(size),
 		})
 		if err == nil {
 			return nil
@@ -803,27 +859,74 @@ func uploadDurableDiskSnapshotChunk(ctx context.Context, store durableDiskSnapsh
 	return err
 }
 
-func spoolDurableDiskSnapshotChunk(ctx context.Context, source io.ReaderAt, sourceName string, offset, size int64, buffer []byte) (*os.File, int64, string, error) {
-	chunkFile, err := os.CreateTemp("", "beta9-durable-disk-snapshot-chunk-*")
-	if err != nil {
-		return nil, 0, "", fmt.Errorf("create durable disk snapshot chunk file: %w", err)
-	}
-	cleanup := func() {
-		removeDurableDiskSnapshotChunkFile(chunkFile)
-	}
+func spoolDurableDiskSnapshotChunk(ctx context.Context, source io.ReaderAt, sourceName string, offset, size int64, buffer []byte) (*durableDiskSnapshotChunkBody, int64, string, error) {
+	body := &durableDiskSnapshotChunkBody{}
 
 	sum := sha256.New()
 	reader := io.NewSectionReader(&durableDiskSnapshotContextReaderAt{ctx: ctx, source: source}, offset, size)
-	n, err := io.CopyBuffer(io.MultiWriter(chunkFile, sum, durableDiskSnapshotLogicalProgressWriter{ctx: ctx}), reader, buffer)
+	n, err := io.CopyBuffer(io.MultiWriter(body, sum, durableDiskSnapshotLogicalProgressWriter{ctx: ctx}), reader, buffer)
 	if err != nil {
-		cleanup()
+		body.release()
 		return nil, 0, "", fmt.Errorf("read durable disk snapshot file %s: %w", sourceName, err)
 	}
 	if n == 0 {
-		cleanup()
+		body.release()
 		return nil, 0, "", nil
 	}
-	return chunkFile, n, hex.EncodeToString(sum.Sum(nil)), nil
+	return body, n, hex.EncodeToString(sum.Sum(nil)), nil
+}
+
+// durableDiskSnapshotChunkBody is a chunk waiting to go up, re-readable because a failed
+// upload rewinds. Small ones stay in memory; a temp file each was most of a small-file tree.
+type durableDiskSnapshotChunkBody struct {
+	data []byte
+	file *os.File
+}
+
+func (b *durableDiskSnapshotChunkBody) Write(data []byte) (int, error) {
+	if b.file == nil && len(b.data)+len(data) > durableDiskSnapshotInlineChunkSize {
+		if err := b.spill(); err != nil {
+			return 0, err
+		}
+	}
+	if b.file != nil {
+		return b.file.Write(data)
+	}
+	b.data = append(b.data, data...)
+	return len(data), nil
+}
+
+func (b *durableDiskSnapshotChunkBody) spill() error {
+	file, err := os.CreateTemp("", "beta9-durable-disk-snapshot-chunk-*")
+	if err != nil {
+		return fmt.Errorf("create durable disk snapshot chunk file: %w", err)
+	}
+	if _, err := file.Write(b.data); err != nil {
+		removeDurableDiskSnapshotChunkFile(file)
+		return fmt.Errorf("spool durable disk snapshot chunk: %w", err)
+	}
+	b.file = file
+	b.data = nil
+	return nil
+}
+
+// reader starts at the chunk's first byte, so a retried upload sends all of it, not the tail.
+func (b *durableDiskSnapshotChunkBody) reader(size int64) durableDiskSnapshotChunkReader {
+	if b.file != nil {
+		return io.NewSectionReader(b.file, 0, size)
+	}
+	return bytes.NewReader(b.data)
+}
+
+func (b *durableDiskSnapshotChunkBody) release() {
+	if b == nil {
+		return
+	}
+	if b.file != nil {
+		removeDurableDiskSnapshotChunkFile(b.file)
+		b.file = nil
+	}
+	b.data = nil
 }
 
 type durableDiskSnapshotLogicalProgressWriter struct {
@@ -835,16 +938,39 @@ func (w durableDiskSnapshotLogicalProgressWriter) Write(data []byte) (int, error
 	return len(data), nil
 }
 
+// durableDiskSnapshotChunkReader is what the S3 uploader slices in place; a plain reader is
+// copied through a buffer sized for the largest part it might ever send, allocated per upload.
+type durableDiskSnapshotChunkReader interface {
+	io.Reader
+	io.ReaderAt
+	io.Seeker
+}
+
+// durableDiskSnapshotProgressReader passes that seekability through rather than hiding it.
 type durableDiskSnapshotProgressReader struct {
 	ctx    context.Context
-	reader io.Reader
+	reader durableDiskSnapshotChunkReader
 }
 
 func (r *durableDiskSnapshotProgressReader) Read(data []byte) (int, error) {
 	if err := r.ctx.Err(); err != nil {
 		return 0, err
 	}
-	n, err := r.reader.Read(data)
+	return r.report(r.reader.Read(data))
+}
+
+func (r *durableDiskSnapshotProgressReader) ReadAt(data []byte, offset int64) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.report(r.reader.ReadAt(data, offset))
+}
+
+func (r *durableDiskSnapshotProgressReader) Seek(offset int64, whence int) (int64, error) {
+	return r.reader.Seek(offset, whence)
+}
+
+func (r *durableDiskSnapshotProgressReader) report(n int, err error) (int, error) {
 	if n > 0 {
 		// Upload reads prove the request is still consuming bytes, but do not
 		// double-count them as logical disk bytes or completed chunks.
@@ -918,38 +1044,63 @@ func restoreDurableDiskDirectoryManifest(ctx context.Context, store durableDiskS
 		return fmt.Errorf("create durable disk restore directory %s: %w", targetDir, err)
 	}
 
-	for _, file := range manifest.Files {
-		targetPath, err := durableDiskRestoreTarget(targetDir, file.Path)
-		if err != nil {
-			return err
+	// Contents on a pool, for the reason snapshotting is. Directories and symlinks stay here,
+	// in sorted manifest order, so a parent exists and owns its mode before anything fills it.
+	contents, contentsCtx := errgroup.WithContext(ctx)
+	contents.SetLimit(durableDiskRestoreConcurrency)
+
+	entriesErr := func() error {
+		for _, file := range manifest.Files {
+			if err := contentsCtx.Err(); err != nil {
+				return err
+			}
+			targetPath, err := durableDiskRestoreTarget(targetDir, file.Path)
+			if err != nil {
+				return err
+			}
+			mode := os.FileMode(file.Mode)
+			switch file.Type {
+			case "dir":
+				if err := os.MkdirAll(targetPath, mode.Perm()); err != nil {
+					return err
+				}
+			case "symlink":
+				if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
+					return err
+				}
+				if err := os.Symlink(file.LinkName, targetPath); err != nil && !os.IsExist(err) {
+					return err
+				}
+			case "file":
+				contents.Go(func() error {
+					if err := restoreDurableDiskManifestFile(contentsCtx, store, cacheReader, file, targetPath, mode.Perm()); err != nil {
+						return err
+					}
+					applyDurableDiskRestoreMetadata(targetPath, file)
+					return nil
+				})
+				continue
+			default:
+				continue
+			}
+			applyDurableDiskRestoreMetadata(targetPath, file)
 		}
-		mode := os.FileMode(file.Mode)
-		switch file.Type {
-		case "dir":
-			if err := os.MkdirAll(targetPath, mode.Perm()); err != nil {
-				return err
-			}
-		case "symlink":
-			if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
-				return err
-			}
-			if err := os.Symlink(file.LinkName, targetPath); err != nil && !os.IsExist(err) {
-				return err
-			}
-		case "file":
-			if err := restoreDurableDiskManifestFile(ctx, store, cacheReader, file, targetPath, mode.Perm()); err != nil {
-				return err
-			}
-		default:
-			continue
-		}
-		_ = os.Chown(targetPath, file.Uid, file.Gid)
-		if file.ModTimeUnixNano > 0 {
-			modTime := time.Unix(0, file.ModTimeUnixNano)
-			_ = os.Chtimes(targetPath, modTime, modTime)
-		}
+		return nil
+	}()
+
+	// Waited on either way: a pass that stopped early still has files writing into the directory.
+	if contentsErr := contents.Wait(); contentsErr != nil {
+		return contentsErr
 	}
-	return nil
+	return entriesErr
+}
+
+func applyDurableDiskRestoreMetadata(targetPath string, file types.DiskSnapshotFile) {
+	_ = os.Chown(targetPath, file.Uid, file.Gid)
+	if file.ModTimeUnixNano > 0 {
+		modTime := time.Unix(0, file.ModTimeUnixNano)
+		_ = os.Chtimes(targetPath, modTime, modTime)
+	}
 }
 
 func restoreDurableDiskManifestFile(ctx context.Context, store durableDiskSnapshotStore, cacheReader durableDiskSnapshotCacheReader, file types.DiskSnapshotFile, targetPath string, mode os.FileMode) error {
@@ -970,6 +1121,13 @@ func restoreDurableDiskManifestFile(ctx context.Context, store durableDiskSnapsh
 	for _, chunk := range file.Chunks {
 		chunk := chunk
 		group.Go(func() error {
+			// One pool across all files, so the bound does not multiply by the files open.
+			select {
+			case durableDiskRestoreChunkSlots <- struct{}{}:
+			case <-groupCtx.Done():
+				return groupCtx.Err()
+			}
+			defer func() { <-durableDiskRestoreChunkSlots }()
 			return restoreDurableDiskManifestChunk(groupCtx, store, cacheReader, out, chunk)
 		})
 	}

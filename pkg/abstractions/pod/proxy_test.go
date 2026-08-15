@@ -549,6 +549,11 @@ func TestForwardContainerRequestProxiesPinnedContainerWithoutQueueing(t *testing
 		if r.URL.String() != "/health?probe=1" {
 			t.Fatalf("backend URL = %q, want /health?probe=1", r.URL.String())
 		}
+		// Pinned requests hold their body open for a possible second dial, so it still has to arrive whole.
+		body, err := io.ReadAll(r.Body)
+		if err != nil || string(body) != "payload" {
+			t.Fatalf("backend body = %q (%v), want %q", body, err, "payload")
+		}
 		w.WriteHeader(http.StatusAccepted)
 	}))
 	t.Cleanup(backend.Close)
@@ -563,7 +568,7 @@ func TestForwardContainerRequestProxiesPinnedContainerWithoutQueueing(t *testing
 	}
 
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodGet, "/health?probe=1", nil)
+	req := httptest.NewRequest(http.MethodPost, "/health?probe=1", bytes.NewReader([]byte("payload")))
 	rec := httptest.NewRecorder()
 	ctx := e.NewContext(req, rec)
 	ctx.SetParamNames("port", "subPath")
@@ -979,6 +984,58 @@ func TestPrimeContainerPortMissingPortDoesNotPublishContainer(t *testing.T) {
 	}
 	if _, ok, hasContainers, hasPort := pb.reserveContainerForPort(8765); ok || hasContainers || hasPort {
 		t.Fatalf("missing port was published, ok=%v hasContainers=%v hasPort=%v", ok, hasContainers, hasPort)
+	}
+}
+
+func TestForwardContainerRequestGivesDirectAddressesRoomToRetransmit(t *testing.T) {
+	// An address nobody answers, so the request fails without a backend to talk to.
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	listener.Close()
+
+	rdb := newPodProxyTestRedis(t)
+	repo := repository.NewContainerRedisRepositoryForTest(rdb)
+	containerID := "sandbox-e9c29586-c465-4a67-9c9b-25293d1ce77b-abc12345"
+	if err := repo.SetContainerAddressMap(containerID, map[int32]string{8765: address}); err != nil {
+		t.Fatal(err)
+	}
+
+	e := echo.New()
+	rec := httptest.NewRecorder()
+	ctx := e.NewContext(httptest.NewRequest(http.MethodGet, "/", nil), rec)
+	ctx.SetParamNames("port", "subPath")
+	ctx.SetParamValues("8765", "")
+
+	pb := &PodProxyBuffer{
+		ctx:           context.Background(),
+		rdb:           rdb,
+		workspace:     &types.Workspace{Name: "workspace"},
+		stubId:        "e9c29586-c465-4a67-9c9b-25293d1ce77b",
+		stubConfig:    &types.StubConfigV1{},
+		containerRepo: repo,
+	}
+
+	if err := pb.ForwardContainerRequest(ctx, containerID); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadGateway)
+	}
+
+	// A real connect has to outlast a dropped SYN, unanswered for a second.
+	budgets := []time.Duration{}
+	pb.backendTransports.Range(func(key, _ any) bool {
+		budgets = append(budgets, key.(backendTransportKey).dialTimeout)
+		return true
+	})
+	if len(budgets) != 1 || budgets[0] != containerPinnedDialTimeout {
+		t.Fatalf("dial budgets = %v, want one of %s", budgets, containerPinnedDialTimeout)
+	}
+	if containerPinnedDialTimeout <= time.Second {
+		t.Fatalf("pinned dial budget %s does not outlast a retransmit", containerPinnedDialTimeout)
 	}
 }
 
