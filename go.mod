@@ -1,6 +1,6 @@
 module github.com/beam-cloud/beta9
 
-go 1.26.5
+go 1.25.7
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
@@ -90,7 +90,7 @@ require (
 	k8s.io/apimachinery v0.34.0
 	k8s.io/client-go v0.34.0
 	k8s.io/utils v0.0.0-20250604170112-4c0f3b243397
-	tailscale.com v1.102.2
+	tailscale.com v1.95.0-pre.0.20260305003012-d58bfb8a1b51
 )
 
 require (
@@ -122,7 +122,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/signin v1.0.11 // indirect
 	github.com/cncf/xds/go v0.0.0-20260202195803-dba9d589def2 // indirect
 	github.com/containerd/console v1.0.5 // indirect
-	github.com/creachadair/msync v0.8.1 // indirect
+	github.com/creachadair/msync v0.7.1 // indirect
 	github.com/dimchansky/utfbom v1.1.1 // indirect
 	github.com/docker/cli v29.5.3+incompatible // indirect
 	github.com/docker/docker-credential-helpers v0.9.3 // indirect
@@ -150,6 +150,7 @@ require (
 	github.com/opencontainers/selinux v1.13.0 // indirect
 	github.com/pires/go-proxyproto v0.8.1 // indirect
 	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
+	github.com/prometheus-community/pro-bing v0.4.0 // indirect
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
 	github.com/satori/go.uuid v1.2.1-0.20181028125025-b2ce2384e17b // indirect
 	github.com/spiffe/go-spiffe/v2 v2.6.0 // indirect
@@ -212,7 +213,7 @@ require (
 	github.com/gaissmai/bart v0.26.1 // indirect
 	github.com/getkin/kin-openapi v0.144.0 // indirect
 	github.com/go-chi/chi/v5 v5.1.0 // indirect
-	github.com/go-json-experiment/json v0.0.0-20260214004413-d219187c3433 // indirect
+	github.com/go-json-experiment/json v0.0.0-20250813024750-ebf49471dced // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
@@ -275,7 +276,7 @@ require (
 	github.com/tailscale/hujson v0.0.0-20260302212456-ecc657c15afd // indirect
 	github.com/tailscale/peercred v0.0.0-20250107143737-35a0c7bd7edc // indirect
 	github.com/tailscale/web-client-prebuilt v0.0.0-20250124233751-d4cd19a26976 // indirect
-	github.com/tailscale/wireguard-go v0.0.0-20260715223240-2e01ba5b00f0 // indirect
+	github.com/tailscale/wireguard-go v0.0.0-20250716170648-1d0488a3d7da // indirect
 	github.com/tidwall/btree v1.8.1 // indirect
 	github.com/tklauser/go-sysconf v0.3.16 // indirect
 	github.com/tklauser/numcpus v0.11.0 // indirect
