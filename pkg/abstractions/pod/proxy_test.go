@@ -1039,7 +1039,9 @@ func TestForwardContainerRequestGivesDirectAddressesRoomToRetransmit(t *testing.
 	}
 }
 
-func TestForwardContainerRequestTimesOutOpeningRouteQuickly(t *testing.T) {
+// A stuck-opening route gets the full pinned dial budget plus one retry
+// before failing, since routes normally become ready within seconds.
+func TestForwardContainerRequestBoundsStuckOpeningRoute(t *testing.T) {
 	rdb := newPodProxyTestRedis(t)
 	repo := repository.NewContainerRedisRepositoryForTest(rdb)
 	containerID := "sandbox-e9c29586-c465-4a67-9c9b-25293d1ce77b-abc12345"
@@ -1081,8 +1083,9 @@ func TestForwardContainerRequestTimesOutOpeningRouteQuickly(t *testing.T) {
 		t.Fatal(err)
 	}
 	elapsed := time.Since(start)
-	if elapsed > 1200*time.Millisecond {
-		t.Fatalf("forwarding opening route took %s, want bounded below 1.2s", elapsed)
+	maxElapsed := 2*containerPinnedDialTimeout + time.Second
+	if elapsed > maxElapsed {
+		t.Fatalf("forwarding opening route took %s, want bounded below %s", elapsed, maxElapsed)
 	}
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadGateway)

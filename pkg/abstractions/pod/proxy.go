@@ -33,9 +33,8 @@ const (
 	containerDiscoveryInterval       time.Duration = time.Millisecond * 250
 	queuedContainerDiscoveryInterval time.Duration = time.Millisecond * 50
 	containerDialTimeoutDurationS    time.Duration = time.Second * 30
-	// Bounds waiting on a route that is still opening, so it stays short.
-	containerPinnedRouteDialTimeout time.Duration = time.Millisecond * 900
-	// A full accept queue drops the SYN, which the kernel leaves unanswered for a second.
+	// Covers a dropped SYN (kernel retransmits at 1s) and relayed tunnel dials
+	// that routinely exceed 900ms under concurrency.
 	containerPinnedDialTimeout  time.Duration = time.Second * 3
 	containerAvailableTimeout   time.Duration = time.Second * 2
 	containerPrimeTimeout       time.Duration = time.Second * 3
@@ -269,11 +268,12 @@ func (pb *PodProxyBuffer) ForwardContainerRequest(ctx echo.Context, containerId 
 	}
 
 	done := make(chan struct{})
-	conn := &connection{ctx: ctx, done: done, dialTimeout: containerPinnedRouteDialTimeout}
-	if _, isRoute := types.ParseBackendRouteAddress(addressMap[int32(port)]); !isRoute {
-		conn.dialTimeout = containerPinnedDialTimeout
-		conn.retryBackendDial = true
-		conn.pinned = true
+	conn := &connection{
+		ctx:              ctx,
+		done:             done,
+		dialTimeout:      containerPinnedDialTimeout,
+		retryBackendDial: true,
+		pinned:           true,
 	}
 	conn.claim()
 	pb.handleConnection(conn, container{
