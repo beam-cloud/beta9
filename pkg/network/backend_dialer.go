@@ -12,7 +12,7 @@ import (
 
 const BackendRoutePreface = "BEAMROUTE/1 "
 
-const backendRouteDialConcurrency = 16
+const backendRouteDialConcurrency = 64
 
 var backendRouteDialSlots = make(chan struct{}, backendRouteDialConcurrency)
 

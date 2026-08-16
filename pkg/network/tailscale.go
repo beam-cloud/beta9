@@ -403,9 +403,16 @@ func (t *Tailscale) recycleServer(missingPeer string) {
 	log.Warn().
 		Str("missing_peer", missingPeer).
 		Msg("recycling tsnet server after repeated netmap misses; tailnet control connection may be stale")
-	_ = t.server.Close()
+	closeTSNetServer(t.server)
 	t.server = t.buildServer()
 	t.initialized = false
+}
+
+// closeTSNetServer tolerates tsnet.Server.Close panicking on a server that
+// never finished coming up; recycling exists precisely for wedged servers.
+func closeTSNetServer(server *tsnet.Server) {
+	defer func() { _ = recover() }()
+	_ = server.Close()
 }
 
 // DialTimeout attempts to establish a TCP connection to a tailscale service with the specified timeout duration
