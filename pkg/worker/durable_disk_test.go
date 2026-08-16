@@ -440,10 +440,9 @@ func TestChunkSpoolingAndUploadExposeStreamingProgress(t *testing.T) {
 	})
 
 	t.Run("upload read", func(t *testing.T) {
-		chunk, err := os.CreateTemp(t.TempDir(), "chunk-*")
-		require.NoError(t, err)
-		defer removeDurableDiskSnapshotChunkFile(chunk)
-		_, err = chunk.Write(make([]byte, 4<<20))
+		chunk := &durableDiskSnapshotChunkBody{}
+		defer chunk.release()
+		_, err := chunk.Write(make([]byte, 4<<20))
 		require.NoError(t, err)
 
 		baseCtx, cancel := context.WithCancel(context.Background())
@@ -676,6 +675,112 @@ func TestCreateDurableDiskDirectorySnapshotUploadsChunksInParallel(t *testing.T)
 	require.LessOrEqual(t, store.maxActive, durableDiskSnapshotUploadConcurrency)
 }
 
+// A real tree is mostly small files of one chunk, so the chunk pool is one deep unless
+// separate files are in flight. This is what a package install's snapshot time turns on.
+func TestCreateDurableDiskDirectorySnapshotSnapshotsSeparateFilesInParallel(t *testing.T) {
+	source := t.TempDir()
+	for i := range 16 {
+		require.NoError(t, os.WriteFile(filepath.Join(source, fmt.Sprintf("file-%d", i)), []byte(fmt.Sprintf("contents-%d", i)), 0o600))
+	}
+
+	store := &parallelUploadDurableDiskSnapshotStore{fakeDurableDiskSnapshotStore: &fakeDurableDiskSnapshotStore{}}
+	_, manifest, err := createDurableDiskDirectorySnapshot(
+		context.Background(), store, source, "durable-disks/workspace/snapshots/1",
+		types.DiskSnapshot{DiskName: "workspace", Format: types.DiskSnapshotFormatDirV1},
+		defaultDurableDiskSnapshotChunkSize, nil, false,
+	)
+	require.NoError(t, err)
+	require.Len(t, manifest.Files, 16)
+	require.Greater(t, store.maxActive, 1)
+	require.LessOrEqual(t, store.maxActive, durableDiskSnapshotFileConcurrency)
+}
+
+// Identical files must cost one upload even when read at the same moment, or concurrency
+// would undo the deduplication it was added to speed up.
+func TestCreateDurableDiskDirectorySnapshotUploadsIdenticalFilesOnce(t *testing.T) {
+	source := t.TempDir()
+	for i := range 16 {
+		require.NoError(t, os.WriteFile(filepath.Join(source, fmt.Sprintf("copy-%d", i)), []byte("identical contents"), 0o600))
+	}
+
+	store := &fakeDurableDiskSnapshotStore{}
+	snapshot, manifest, err := createDurableDiskDirectorySnapshot(
+		context.Background(), store, source, "durable-disks/workspace/snapshots/1",
+		types.DiskSnapshot{DiskName: "workspace", Format: types.DiskSnapshotFormatDirV1},
+		defaultDurableDiskSnapshotChunkSize, nil, false,
+	)
+	require.NoError(t, err)
+	require.Len(t, manifest.Files, 16)
+
+	_, chunkUploads := store.uploadCounts()
+	require.Equal(t, 1, chunkUploads)
+	require.Equal(t, int64(16), snapshot.ChunkCount, "every file still records the chunk it shares")
+	for _, file := range manifest.Files {
+		require.Len(t, file.Chunks, 1)
+		require.Equal(t, manifest.Files[0].Chunks[0].ObjectKey, file.Chunks[0].ObjectKey)
+	}
+}
+
+func TestDurableDiskSnapshotChunkBodyKeepsSmallChunksOutOfTheFilesystem(t *testing.T) {
+	t.Run("small", func(t *testing.T) {
+		body := &durableDiskSnapshotChunkBody{}
+		defer body.release()
+		payload := bytes.Repeat([]byte{0x5a}, durableDiskSnapshotInlineChunkSize)
+		written, err := body.Write(payload)
+
+		require.NoError(t, err)
+		require.Equal(t, len(payload), written)
+		require.Nil(t, body.file, "a chunk that fits in hand should not cost a temp file")
+		read, err := io.ReadAll(body.reader(int64(len(payload))))
+		require.NoError(t, err)
+		require.Equal(t, payload, read)
+	})
+
+	t.Run("large", func(t *testing.T) {
+		body := &durableDiskSnapshotChunkBody{}
+		payload := bytes.Repeat([]byte{0x5a}, durableDiskSnapshotInlineChunkSize+1)
+		for _, part := range [][]byte{payload[:len(payload)-1], payload[len(payload)-1:]} {
+			_, err := body.Write(part)
+			require.NoError(t, err)
+		}
+
+		require.NotNil(t, body.file, "a chunk too large to hold should spill rather than be kept")
+		name := body.file.Name()
+		read, err := io.ReadAll(body.reader(int64(len(payload))))
+		require.NoError(t, err)
+		require.Equal(t, payload, read, "spilling keeps the bytes written before it in order")
+
+		body.release()
+		_, err = os.Stat(name)
+		require.True(t, os.IsNotExist(err), "a released chunk should leave nothing behind")
+	})
+
+	// In memory or spilled, a chunk must arrive seekable, or every one pays for the
+	// per-upload buffer the S3 manager allocates for a plain reader.
+	t.Run("seekable either way", func(t *testing.T) {
+		for _, size := range []int{durableDiskSnapshotInlineChunkSize, durableDiskSnapshotInlineChunkSize + 1} {
+			body := &durableDiskSnapshotChunkBody{}
+			_, err := body.Write(bytes.Repeat([]byte{0x5a}, size))
+			require.NoError(t, err)
+
+			var uploaded io.Reader = &durableDiskSnapshotProgressReader{
+				ctx:    context.Background(),
+				reader: body.reader(int64(size)),
+			}
+			_, seekable := uploaded.(io.Seeker)
+			at, readableAt := uploaded.(io.ReaderAt)
+			require.True(t, seekable, "the uploader was offered a chunk it cannot seek")
+			require.True(t, readableAt, "the uploader was offered a chunk it cannot read at an offset")
+
+			tail := make([]byte, 1)
+			_, err = at.ReadAt(tail, int64(size)-1)
+			require.NoError(t, err)
+			require.Equal(t, []byte{0x5a}, tail)
+			body.release()
+		}
+	})
+}
+
 func TestSnapshotDurableDiskReaderReturnsMidStreamReadError(t *testing.T) {
 	readErr := fmt.Errorf("injected read failure")
 	source := &failingDurableDiskSnapshotReaderAt{
@@ -686,7 +791,7 @@ func TestSnapshotDurableDiskReaderReturnsMidStreamReadError(t *testing.T) {
 	store := &fakeDurableDiskSnapshotStore{}
 	file := &types.DiskSnapshotFile{Path: "model", Type: "file"}
 
-	err := snapshotDurableDiskReader(context.Background(), store, source, "model", "chunks", 8, map[string]struct{}{}, file)
+	err := snapshotDurableDiskReader(context.Background(), store, source, "model", "chunks", 8, newDurableDiskSnapshotChunkSet(), file)
 
 	require.ErrorIs(t, err, readErr)
 	require.Len(t, file.Chunks, 1)
@@ -711,7 +816,7 @@ func TestSnapshotDurableDiskReaderCancelsSiblingUploadsOnReadError(t *testing.T)
 
 	done := make(chan error, 1)
 	go func() {
-		done <- snapshotDurableDiskReader(ctx, store, source, "model", "chunks", 8, map[string]struct{}{}, file)
+		done <- snapshotDurableDiskReader(ctx, store, source, "model", "chunks", 8, newDurableDiskSnapshotChunkSet(), file)
 	}()
 
 	select {
@@ -740,7 +845,7 @@ func TestSnapshotDurableDiskReaderSpoolsChunksWithFixedMemoryBuffer(t *testing.T
 		"model",
 		"chunks",
 		4*durableDiskSnapshotReadBufferSize,
-		map[string]struct{}{},
+		newDurableDiskSnapshotChunkSet(),
 		file,
 	)
 
@@ -760,7 +865,7 @@ func TestSnapshotDurableDiskReaderRetriesFromTheStartOfTheChunk(t *testing.T) {
 
 	err := snapshotDurableDiskReader(
 		context.Background(), store, bytes.NewReader(payload), "model", "chunks", int64(len(payload)),
-		map[string]struct{}{}, file,
+		newDurableDiskSnapshotChunkSet(), file,
 	)
 
 	require.NoError(t, err)
@@ -1184,6 +1289,36 @@ func TestRestoreDurableDiskDirectorySnapshotDownloadsChunksInParallel(t *testing
 	require.Equal(t, payload, restored)
 }
 
+func TestRestoreDurableDiskDirectorySnapshotDownloadsSeparateFilesInParallel(t *testing.T) {
+	source := t.TempDir()
+	for i := range 16 {
+		require.NoError(t, os.WriteFile(filepath.Join(source, fmt.Sprintf("file-%d", i)), []byte(fmt.Sprintf("contents-%d", i)), 0o600))
+	}
+
+	store := &fakeDurableDiskSnapshotStore{}
+	snapshot, _, err := createDurableDiskDirectorySnapshot(
+		context.Background(), store, source, "durable-disks/workspace/snapshots/1",
+		types.DiskSnapshot{DiskName: "workspace", Format: types.DiskSnapshotFormatDirV1},
+		defaultDurableDiskSnapshotChunkSize, nil, false,
+	)
+	require.NoError(t, err)
+
+	parallelStore := &parallelDownloadDurableDiskSnapshotStore{fakeDurableDiskSnapshotStore: store}
+	target := filepath.Join(t.TempDir(), "restored")
+	_, err = restoreDurableDiskDirectorySnapshotWithCache(
+		context.Background(), parallelStore, nil,
+		snapshot.ManifestKey, snapshot.ManifestDigest, snapshot.ManifestSizeBytes, target,
+	)
+	require.NoError(t, err)
+	require.Greater(t, parallelStore.maxActive, 1)
+	require.LessOrEqual(t, parallelStore.maxActive, durableDiskRestoreConcurrency)
+	for i := range 16 {
+		restored, err := os.ReadFile(filepath.Join(target, fmt.Sprintf("file-%d", i)))
+		require.NoError(t, err)
+		require.Equal(t, fmt.Sprintf("contents-%d", i), string(restored))
+	}
+}
+
 func TestRestoreDurableDiskDirectorySnapshotPreservesTargetOnFailure(t *testing.T) {
 	source := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(source, "new"), []byte("new payload"), 0o600))
@@ -1293,6 +1428,77 @@ func BenchmarkDurableDiskModelSnapshot(b *testing.B) {
 			})
 		})
 	}
+}
+
+// A real workspace is thousands of small files, bounded by round trips rather than by the
+// bytes the large-file benchmark above measures.
+func BenchmarkDurableDiskWorkspaceSnapshot(b *testing.B) {
+	source := b.TempDir()
+	writeDurableDiskWorkspaceFixture(b, source, 2000, 4<<10)
+
+	for b.Loop() {
+		store := &latentDurableDiskSnapshotStore{fakeDurableDiskSnapshotStore: &fakeDurableDiskSnapshotStore{}, latency: 2 * time.Millisecond}
+		_, _, err := createDurableDiskDirectorySnapshot(
+			context.Background(), store, source, "durable-disks/workspace/snapshots/1",
+			types.DiskSnapshot{DiskName: "workspace", Format: types.DiskSnapshotFormatDirV1},
+			defaultDurableDiskSnapshotChunkSize, nil, false,
+		)
+		require.NoError(b, err)
+	}
+}
+
+func BenchmarkDurableDiskWorkspaceRestore(b *testing.B) {
+	source := b.TempDir()
+	writeDurableDiskWorkspaceFixture(b, source, 2000, 4<<10)
+
+	store := &latentDurableDiskSnapshotStore{fakeDurableDiskSnapshotStore: &fakeDurableDiskSnapshotStore{}, latency: 2 * time.Millisecond}
+	snapshot, _, err := createDurableDiskDirectorySnapshot(
+		context.Background(), store, source, "durable-disks/workspace/snapshots/1",
+		types.DiskSnapshot{DiskName: "workspace", Format: types.DiskSnapshotFormatDirV1},
+		defaultDurableDiskSnapshotChunkSize, nil, false,
+	)
+	require.NoError(b, err)
+
+	for b.Loop() {
+		target := filepath.Join(b.TempDir(), "restored")
+		_, err := restoreDurableDiskDirectorySnapshotWithCache(
+			context.Background(), store, nil,
+			snapshot.ManifestKey, snapshot.ManifestDigest, snapshot.ManifestSizeBytes, target,
+		)
+		require.NoError(b, err)
+	}
+}
+
+// A package install, with contents unique per file so nothing dedupes away and the count is real.
+func writeDurableDiskWorkspaceFixture(tb testing.TB, root string, files, size int) {
+	tb.Helper()
+	for i := range files {
+		dir := filepath.Join(root, "node_modules", fmt.Sprintf("package-%02d", i%100))
+		require.NoError(tb, os.MkdirAll(dir, 0o755))
+		content := bytes.Repeat([]byte{byte(i), byte(i >> 8)}, size/2)
+		require.NoError(tb, os.WriteFile(filepath.Join(dir, fmt.Sprintf("file-%d.js", i)), content, 0o600))
+	}
+}
+
+// An object store with a round trip, which is what a snapshot of many small files spends on.
+type latentDurableDiskSnapshotStore struct {
+	*fakeDurableDiskSnapshotStore
+	latency time.Duration
+}
+
+func (s *latentDurableDiskSnapshotStore) Upload(ctx context.Context, key string, data []byte) error {
+	time.Sleep(s.latency)
+	return s.fakeDurableDiskSnapshotStore.Upload(ctx, key, data)
+}
+
+func (s *latentDurableDiskSnapshotStore) UploadWithReader(ctx context.Context, key string, data io.Reader) error {
+	time.Sleep(s.latency)
+	return s.fakeDurableDiskSnapshotStore.UploadWithReader(ctx, key, data)
+}
+
+func (s *latentDurableDiskSnapshotStore) DownloadWithReader(ctx context.Context, key string) (io.ReadCloser, error) {
+	time.Sleep(s.latency)
+	return s.fakeDurableDiskSnapshotStore.DownloadWithReader(ctx, key)
 }
 
 func snapshotTestFile(manifest *types.DiskSnapshotManifest, name string) types.DiskSnapshotFile {
