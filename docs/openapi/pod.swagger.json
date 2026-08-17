@@ -1386,6 +1386,14 @@
         },
         "runtime": {
           "type": "string"
+        },
+        "diskSnapshots": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/podPodSandboxDiskSnapshot"
+          },
+          "description": "Durable disk snapshots captured at the same boundary as the memory image."
         }
       }
     },

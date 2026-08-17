@@ -1182,11 +1182,22 @@ func (s *GenericPodService) SandboxSnapshotMemory(ctx context.Context, in *pb.Po
 		}, nil
 	}
 
-	return &pb.PodSandboxSnapshotMemoryResponse{
+	response := &pb.PodSandboxSnapshotMemoryResponse{
 		Ok:           true,
 		CheckpointId: resp.CheckpointId,
 		Runtime:      resp.Runtime,
-	}, nil
+	}
+	for _, snapshot := range resp.DiskSnapshots {
+		if snapshot == nil {
+			continue
+		}
+		response.DiskSnapshots = append(response.DiskSnapshots, &pb.PodSandboxDiskSnapshot{
+			SnapshotId: snapshot.SnapshotId,
+			DiskName:   snapshot.DiskName,
+			Generation: snapshot.Generation,
+		})
+	}
+	return response, nil
 }
 
 func (s *GenericPodService) SandboxSnapshotDisks(ctx context.Context, in *pb.PodSandboxSnapshotDisksRequest) (*pb.PodSandboxSnapshotDisksResponse, error) {

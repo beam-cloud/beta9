@@ -86,6 +86,10 @@ func (s *Worker) prepareDurableDiskMount(request *types.ContainerRequest, mount 
 
 	driver := durableDiskDriver(mount.DurableDisk.Driver)
 	switch driver {
+	case types.DurableDiskDriverQcow:
+		return withDurableDiskLock(s.durableDiskContext(nil), mount, func() error {
+			return s.prepareQcowDurableDiskMount(request, mount)
+		})
 	case types.DurableDiskDriverSnapshot:
 		return withDurableDiskLock(s.durableDiskContext(nil), mount, func() error {
 			if s != nil {
@@ -204,6 +208,33 @@ func (s *Worker) syncDurableDiskMounts(ctx context.Context, request *types.Conta
 					Str("disk", mount.DurableDisk.Name).
 					Err(err).
 					Msg("failed to sync durable disk")
+				syncErrs = append(syncErrs, err)
+			}
+		case types.DurableDiskDriverQcow:
+			err := withDurableDiskLock(ctx, mount, func() error {
+				snapshot, snapErr := s.snapshotQcowDurableDiskMount(ctx, request, mount, mode)
+				if snapshot != nil {
+					snapshots = append(snapshots, snapshot)
+				}
+				if snapErr != nil {
+					snapErr = fmt.Errorf("snapshot: %w", snapErr)
+				}
+				// The final sync is the container's durability boundary; the
+				// volume comes offline afterwards even if publishing failed,
+				// leaving sealed layers cached for the next attachment.
+				if mode == durableDiskSyncFinal {
+					if detachErr := s.detachQcowDurableDiskMount(ctx, request, mount); detachErr != nil {
+						return errors.Join(snapErr, fmt.Errorf("detach: %w", detachErr))
+					}
+				}
+				return snapErr
+			})
+			if err != nil {
+				log.Warn().
+					Str("container_id", request.ContainerId).
+					Str("disk", mount.DurableDisk.Name).
+					Err(err).
+					Msg("failed to sync qcow durable disk")
 				syncErrs = append(syncErrs, err)
 			}
 		}

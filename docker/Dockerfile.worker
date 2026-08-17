@@ -188,7 +188,10 @@ RUN apt-get update && \
         sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
         tee /etc/apt/sources.list.d/nvidia-container-toolkit.list && \
     apt-get update && \
-    apt-get install -y psmisc tini iproute2 iptables
+    apt-get install -y psmisc tini iproute2 iptables \
+        # qcow durable disks: qemu-img + qemu-storage-daemon, kernel NBD client,
+        # and ext4 tooling for formatting freshly created volumes
+        qemu-utils nbd-client e2fsprogs
 
 RUN <<EOT
 set -eux

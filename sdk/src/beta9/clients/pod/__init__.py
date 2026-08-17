@@ -327,6 +327,10 @@ class PodSandboxSnapshotMemoryResponse(betterproto.Message):
     error_msg: str = betterproto.string_field(2)
     checkpoint_id: str = betterproto.string_field(3)
     runtime: str = betterproto.string_field(4)
+    disk_snapshots: List["PodSandboxDiskSnapshot"] = betterproto.message_field(5)
+    """
+    Durable disk snapshots captured at the same boundary as the memory image.
+    """
 
 
 @dataclass(eq=False, repr=False)

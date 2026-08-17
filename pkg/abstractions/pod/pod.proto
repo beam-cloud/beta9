@@ -421,6 +421,8 @@ message PodSandboxSnapshotMemoryResponse {
   string error_msg = 2;
   string checkpoint_id = 3;
   string runtime = 4;
+  // Durable disk snapshots captured at the same boundary as the memory image.
+  repeated PodSandboxDiskSnapshot disk_snapshots = 5;
 }
 
 message PodSandboxSnapshotDisksRequest {

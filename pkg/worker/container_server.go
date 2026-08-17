@@ -317,7 +317,18 @@ func (s *ContainerRuntimeServer) ContainerCheckpoint(ctx context.Context, in *pb
 	if checkpointRuntime == "" {
 		checkpointRuntime = rt.Name()
 	}
-	return &pb.ContainerCheckpointResponse{Ok: true, CheckpointId: checkpointId, Runtime: checkpointRuntime}, nil
+	response := &pb.ContainerCheckpointResponse{Ok: true, CheckpointId: checkpointId, Runtime: checkpointRuntime}
+	for _, snapshot := range checkpointOpts.DiskSnapshots {
+		if snapshot == nil {
+			continue
+		}
+		response.DiskSnapshots = append(response.DiskSnapshots, &pb.ContainerDiskSnapshot{
+			SnapshotId: snapshot.ExternalId,
+			DiskName:   snapshot.DiskName,
+			Generation: snapshot.Generation,
+		})
+	}
+	return response, nil
 }
 
 // ContainerSnapshotDisks snapshots a running container's durable disks.

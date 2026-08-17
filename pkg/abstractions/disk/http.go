@@ -65,9 +65,25 @@ func (g *diskGroup) PublishSnapshot(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusConflict, "Disk snapshot is not available")
 	}
 
-	snapshot.Public = true
-	if _, err := g.gds.backendRepo.UpdateDiskSnapshot(ctx.Request().Context(), snapshot); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to publish disk snapshot")
+	// A restore walks ParentSnapshotId back to a parentless base, so a public
+	// snapshot is only usable from another workspace if its whole ancestry is
+	// public too. Publish the chain, newest first.
+	const maxChainDepth = 128
+	for depth := 0; snapshot != nil; depth++ {
+		if depth >= maxChainDepth {
+			return echo.NewHTTPError(http.StatusInternalServerError, "Disk snapshot chain is too deep to publish")
+		}
+		snapshot.Public = true
+		if _, err := g.gds.backendRepo.UpdateDiskSnapshot(ctx.Request().Context(), snapshot); err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to publish disk snapshot")
+		}
+		if snapshot.ParentSnapshotId == "" {
+			break
+		}
+		snapshot, err = g.gds.backendRepo.GetDiskSnapshot(ctx.Request().Context(), workspace.Id, snapshot.ParentSnapshotId)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to resolve disk snapshot parent")
+		}
 	}
 	return ctx.JSON(http.StatusOK, map[string]any{"ok": true, "err_msg": ""})
 }
