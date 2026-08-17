@@ -76,7 +76,7 @@ func New(opts Options) *Service {
 		billing:              newRoutedManagedComputeBillingClient(opts.Config.ManagedCompute.Billing),
 		rentalUsage:          clients.NewMarketplaceUsageClient(opts.Config.ManagedCompute.Billing),
 		tailscale:            opts.Tailscale,
-		routePrewarm:         routePrewarmer{lastAttempt: map[string]time.Time{}},
+		routePrewarm:         routePrewarmer{activeTargets: map[string]struct{}{}},
 		managedPoolInstances: map[string]string{},
 	}
 	service.telemetryCredentials = newTelemetryCredentialIssuer(opts.Config.Database.S2)
