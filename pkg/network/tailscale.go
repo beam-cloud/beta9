@@ -2,7 +2,6 @@ package network
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math/rand"
 	"net"
@@ -15,7 +14,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
 	"tailscale.com/ipn/ipnstate"
-	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
 )
 
@@ -53,7 +51,6 @@ type TailscaleConfig struct {
 var (
 	tailnetPeerPollInterval    = 500 * time.Millisecond
 	tailnetPeerAdvisoryTimeout = time.Second
-	tailnetPeerPingTimeout     = 10 * time.Second
 )
 
 type Tailscale struct {
@@ -65,9 +62,8 @@ type Tailscale struct {
 	debug         bool
 	tailscaleRepo repository.TailscaleRepository
 
-	// statusFunc, pingFunc, and dialFunc override tailnet operations in tests.
+	// statusFunc and dialFunc override tailnet operations in tests.
 	statusFunc func(ctx context.Context) (*ipnstate.Status, error)
-	pingFunc   func(ctx context.Context, ip netip.Addr) error
 	dialFunc   func(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
@@ -121,83 +117,6 @@ func (t *Tailscale) ensureUp(ctx context.Context) error {
 
 func (t *Tailscale) Start(ctx context.Context) error {
 	return t.ensureUp(ctx)
-}
-
-// WarmPeers establishes paths to matching online peers before they carry traffic.
-func (t *Tailscale) WarmPeers(ctx context.Context, hostnamePrefix string) {
-	status, err := t.netmapStatus(ctx)
-	if err != nil || status == nil {
-		return
-	}
-	ping := t.pingFunc
-	if ping == nil {
-		client, err := t.currentServer().LocalClient()
-		if err != nil {
-			return
-		}
-		ping = func(ctx context.Context, ip netip.Addr) error {
-			result, err := client.Ping(ctx, ip, tailcfg.PingTSMP)
-			if err != nil {
-				return err
-			}
-			if result == nil {
-				return errors.New("tailnet ping returned no result")
-			}
-			if result.Err != "" {
-				return errors.New("tailnet ping failed: " + result.Err)
-			}
-			return nil
-		}
-	}
-
-	var peers sync.WaitGroup
-	for _, peer := range status.Peer {
-		if peer == nil || !peer.Online || !strings.HasPrefix(peer.HostName, hostnamePrefix) {
-			continue
-		}
-		ip, ok := tailnetPeerIP(peer)
-		if !ok {
-			continue
-		}
-
-		peers.Add(1)
-		go func(host string, ip netip.Addr) {
-			defer peers.Done()
-			pingCtx, cancel := context.WithTimeout(ctx, tailnetPeerPingTimeout)
-			defer cancel()
-			if err := ping(pingCtx, ip); err != nil {
-				log.Debug().Str("peer", host).Err(err).Msg("unable to warm tailnet peer")
-			}
-		}(peer.HostName, ip)
-	}
-	peers.Wait()
-}
-
-// KeepPeersAlive periodically refreshes paths when no application route is active.
-func (t *Tailscale) KeepPeersAlive(ctx context.Context, hostnamePrefix string, interval time.Duration) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			t.WarmPeers(ctx, hostnamePrefix)
-		}
-	}
-}
-
-func tailnetPeerIP(peer *ipnstate.PeerStatus) (netip.Addr, bool) {
-	for _, ip := range peer.TailscaleIPs {
-		if ip.Is4() {
-			return ip, true
-		}
-	}
-	if len(peer.TailscaleIPs) == 0 {
-		return netip.Addr{}, false
-	}
-	return peer.TailscaleIPs[0], true
 }
 
 // Serve connects to a tailnet and serves a local service

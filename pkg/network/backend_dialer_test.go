@@ -414,3 +414,60 @@ func TestBackendDialerReadyRouteDialsImmediately(t *testing.T) {
 		t.Fatalf("resolver calls = %d, want 1", calls)
 	}
 }
+
+func TestBackendDialerBackgroundSlotsDoNotBlockDefaultRequestDial(t *testing.T) {
+	if got := len(backendRouteBackgroundDialSlots); got != 0 {
+		t.Fatalf("background dial slots already occupied: %d", got)
+	}
+	for i := 0; i < cap(backendRouteBackgroundDialSlots); i++ {
+		backendRouteBackgroundDialSlots <- struct{}{}
+	}
+	defer func() {
+		for i := 0; i < cap(backendRouteBackgroundDialSlots); i++ {
+			<-backendRouteBackgroundDialSlots
+		}
+	}()
+
+	ts := testTailscale(t, statusWithPeers("beam-agent-machine"))
+	resolver := &tsnetRouteResolver{proxyTarget: "beam-agent-machine.tailnet.ts.net:29443"}
+	backgroundDialer := NewBackendDialer(
+		ts,
+		types.TailscaleConfig{Enabled: true},
+		resolver,
+		100*time.Millisecond,
+		WithBackgroundDialSlots(),
+	)
+	var backgroundReachedDial atomic.Bool
+	backgroundDialer.tsnetDial = func(context.Context, string, time.Duration) (net.Conn, error) {
+		backgroundReachedDial.Store(true)
+		return nil, errors.New("unexpected background dial")
+	}
+	if _, err := backgroundDialer.Dial(context.Background(), types.BackendRouteAddress("route-background")); err == nil {
+		t.Fatal("background dial succeeded while all background slots were occupied")
+	}
+	if backgroundReachedDial.Load() {
+		t.Fatal("background dial reached tsnet while all background slots were occupied")
+	}
+
+	requestDialer := NewBackendDialer(
+		ts,
+		types.TailscaleConfig{Enabled: true},
+		resolver,
+		time.Second,
+	)
+	requestDialer.tsnetDial = func(context.Context, string, time.Duration) (net.Conn, error) {
+		client, server := net.Pipe()
+		go func() {
+			defer server.Close()
+			buf := make([]byte, 128)
+			_, _ = server.Read(buf)
+		}()
+		return client, nil
+	}
+
+	conn, err := requestDialer.Dial(context.Background(), types.BackendRouteAddress("route-request"))
+	if err != nil {
+		t.Fatalf("default request dial was blocked by saturated background slots: %v", err)
+	}
+	_ = conn.Close()
+}
