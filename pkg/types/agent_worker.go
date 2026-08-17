@@ -121,6 +121,7 @@ const (
 	WorkerMachineEnv        = "WORKER_MACHINE_ID"
 	WorkerPersistentEnv     = "WORKER_PERSISTENT"
 	WorkerGenerationEnv     = "WORKER_GENERATION"
+	WorkerInstanceIDEnv     = "WORKER_INSTANCE_ID"
 	WorkerRouteTransportEnv = "WORKER_ROUTE_TRANSPORT"
 	WorkerRouteTargetEnv    = "WORKER_ROUTE_LOCAL_TARGET_HOST"
 	WorkerCPUEnv            = "CPU_LIMIT"

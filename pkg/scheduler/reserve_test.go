@@ -392,17 +392,13 @@ func TestProvisionedWorkerRuntimeMismatchDoesNotAmplifyJobs(t *testing.T) {
 	}, controller)
 
 	request := &types.ContainerRequest{
-		ContainerId:       uuid.NewString(),
-		Cpu:               100,
-		Memory:            100,
-		PoolSelector:      "gvisor-pool",
-		Timestamp:         time.Now(),
-		CheckpointEnabled: true,
-		Checkpoint: &types.Checkpoint{
-			CheckpointId: "checkpoint-1",
-			Status:       string(types.CheckpointStatusAvailable),
-			Runtime:      types.ContainerRuntimeGvisor.String(),
-		},
+		ContainerId:         uuid.NewString(),
+		Cpu:                 100,
+		Memory:              100,
+		PoolSelector:        "gvisor-pool",
+		Timestamp:           time.Now(),
+		StateSnapshotId:     "state-1",
+		StateRuntimeProfile: types.ContainerRuntimeGvisor.String(),
 	}
 	setPendingSchedulerRequests(t, scheduler, request)
 

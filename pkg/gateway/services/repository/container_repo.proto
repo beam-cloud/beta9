@@ -20,6 +20,10 @@ service ContainerRepositoryService {
       returns (GetContainerAddressMapResponse);
   rpc SetWorkerAddress(SetWorkerAddressRequest)
       returns (SetWorkerAddressResponse);
+  rpc SetStateRestoreReceipt(SetStateRestoreReceiptRequest)
+      returns (SetStateRestoreReceiptResponse);
+  rpc GetStateRestoreReceipt(GetStateRestoreReceiptRequest)
+      returns (GetStateRestoreReceiptResponse);
 }
 
 message GetContainerStateRequest { string container_id = 1; }
@@ -99,6 +103,30 @@ message SetWorkerAddressRequest {
 message SetWorkerAddressResponse {
   bool ok = 1;
   string error_msg = 2;
+}
+
+message SetStateRestoreReceiptRequest {
+  string container_id = 1;
+  types.StateRestoreReceipt receipt = 2;
+  string worker_id = 3;
+  string storage_node_id = 4;
+  string worker_instance_id = 5;
+  string delivery_token = 6;
+  string state_volume_plan_id = 7;
+  string state_volume_plan_hash = 8;
+}
+
+message SetStateRestoreReceiptResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message GetStateRestoreReceiptRequest { string container_id = 1; }
+
+message GetStateRestoreReceiptResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  types.StateRestoreReceipt receipt = 3;
 }
 
 message BackendRoute {

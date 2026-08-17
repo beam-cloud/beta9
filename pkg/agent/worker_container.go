@@ -64,6 +64,8 @@ func dockerRunArgs(name, image, imageID, configPath string, bootstrap bootstrapC
 		dirs.Workspace + ":" + types.AgentWorkspacePath,
 		dirs.Checkpoints + ":" + types.AgentCheckpointPath,
 		dirs.DurableDisk + ":" + types.DefaultDurableDisksPath,
+		dirs.StateVolumes + ":" + workerStateVolumesMountPath,
+		dirs.StateVolumeLocks + ":" + types.DefaultStateVolumeLocksPath,
 		dirs.Logs + ":" + types.AgentLogsPath,
 		configPath + ":" + types.AgentConfigPath + ":ro",
 	}

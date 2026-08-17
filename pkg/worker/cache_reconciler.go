@@ -139,7 +139,9 @@ type cacheContentReporter struct {
 	reconcileNow   func()
 
 	mu       sync.Mutex
+	flushMu  sync.Mutex
 	pending  map[reporterKey]map[string]types.CacheRequiredContentItem
+	scoped   map[scopedReporterKey]requiredContentReport
 	recent   map[reporterStubKey]struct{}
 	reported map[string]struct{}
 }
@@ -156,8 +158,20 @@ type reporterStubKey struct {
 }
 
 type requiredContentReport struct {
-	kind  types.CacheContentKind
-	items []types.CacheRequiredContentItem
+	kind               types.CacheContentKind
+	items              []types.CacheRequiredContentItem
+	scope              string
+	revisionGeneration int64
+	revisionID         string
+	tombstone          bool
+}
+
+type scopedReporterKey struct {
+	workspaceID        string
+	stubID             string
+	scope              string
+	revisionGeneration int64
+	revisionID         string
 }
 
 func newCacheContentReporter(
@@ -180,6 +194,7 @@ func newCacheContentReporter(
 		activeStubs:    activeStubs,
 		reconcileNow:   reconcileNow,
 		pending:        make(map[reporterKey]map[string]types.CacheRequiredContentItem),
+		scoped:         make(map[scopedReporterKey]requiredContentReport),
 		recent:         make(map[reporterStubKey]struct{}),
 		reported:       make(map[string]struct{}),
 	}
@@ -246,8 +261,25 @@ func (r *cacheContentReporter) reportBatches(workspaceID, stubID string, reports
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.pending == nil {
+		r.pending = make(map[reporterKey]map[string]types.CacheRequiredContentItem)
+	}
+	if r.scoped == nil {
+		r.scoped = make(map[scopedReporterKey]requiredContentReport)
+	}
+	if r.recent == nil {
+		r.recent = make(map[reporterStubKey]struct{})
+	}
 	r.recent[reporterStubKey{workspaceID: workspaceID, stubID: stubID}] = struct{}{}
 	for _, report := range reports {
+		if report.scope != "" {
+			key := scopedReporterKey{
+				workspaceID: workspaceID, stubID: stubID, scope: report.scope,
+				revisionGeneration: report.revisionGeneration, revisionID: report.revisionID,
+			}
+			r.scoped[key] = report
+			continue
+		}
 		if len(report.items) == 0 {
 			continue
 		}
@@ -269,23 +301,51 @@ func (r *cacheContentReporter) reportBatches(workspaceID, stubID string, reports
 	}
 }
 
-func (r *cacheContentReporter) flush() {
+// reportBatchesAndFlush does not return until the durable event repository has
+// acknowledged every supplied required-content batch. State snapshot callers
+// retain their fsynced local finalization journal until this succeeds, closing
+// the Commit->periodic-flush crash window without inventing a second cache
+// metadata store.
+func (r *cacheContentReporter) reportBatchesAndFlush(workspaceID, stubID string, reports []requiredContentReport) error {
 	if r == nil {
-		return
+		return nil
 	}
+	r.reportBatches(workspaceID, stubID, reports)
+	return r.flushWithResult()
+}
+
+func (r *cacheContentReporter) flush() {
+	_ = r.flushWithResult()
+}
+
+func (r *cacheContentReporter) flushWithResult() error {
+	if r == nil {
+		return nil
+	}
+	r.flushMu.Lock()
+	defer r.flushMu.Unlock()
 
 	r.mu.Lock()
 	pending := r.pending
+	scoped := r.scoped
 	recent := r.recent
 	r.pending = make(map[reporterKey]map[string]types.CacheRequiredContentItem)
+	r.scoped = make(map[scopedReporterKey]requiredContentReport)
 	r.recent = make(map[reporterStubKey]struct{})
 	r.mu.Unlock()
 
 	if r.eventRepo == nil {
-		return
+		r.requeue(pending)
+		r.requeueScoped(scoped)
+		r.requeueRecent(recent)
+		if len(pending) != 0 || len(scoped) != 0 {
+			return fmt.Errorf("cache required-content event repository is unavailable")
+		}
+		return nil
 	}
 
 	failed := make(map[reporterKey]map[string]types.CacheRequiredContentItem)
+	failedScoped := make(map[scopedReporterKey]requiredContentReport)
 	stubOK := make(map[reporterStubKey]bool)
 	published := false
 	for key, bucket := range pending {
@@ -323,6 +383,20 @@ func (r *cacheContentReporter) flush() {
 		}
 		published = true
 	}
+	for key, report := range scoped {
+		stubKey := reporterStubKey{workspaceID: key.workspaceID, stubID: key.stubID}
+		if _, ok := stubOK[stubKey]; !ok {
+			stubOK[stubKey] = true
+		}
+		if err := r.publishScopedRequiredContent(key, report); err != nil {
+			log.Debug().Err(err).Str("workspace_id", key.workspaceID).Str("stub_id", key.stubID).
+				Str("scope", key.scope).Str("revision_id", key.revisionID).Msg("failed to publish scoped required-content revision")
+			stubOK[stubKey] = false
+			failedScoped[key] = report
+			continue
+		}
+		published = true
+	}
 
 	for stubKey, ok := range stubOK {
 		if ok {
@@ -333,19 +407,54 @@ func (r *cacheContentReporter) flush() {
 	if len(failed) > 0 {
 		r.requeue(failed)
 	}
+	if len(failedScoped) > 0 {
+		r.requeueScoped(failedScoped)
+	}
 	indexed := false
+	indexFailures := 0
 	if r.metadata != nil {
 		for key := range recent {
 			if err := r.metadata.AddRecentStub(r.ctx, r.locality, key.workspaceID, key.stubID, r.recentStubTTL); err != nil {
 				log.Debug().Err(err).Str("workspace_id", key.workspaceID).Str("stub_id", key.stubID).Msg("failed to refresh recent stub for cache reconciliation")
+				indexFailures++
+				r.requeueRecent(map[reporterStubKey]struct{}{key: {}})
 				continue
 			}
 			indexed = true
 		}
+	} else if len(recent) != 0 {
+		indexFailures = len(recent)
+		r.requeueRecent(recent)
 	}
 	if (published || indexed) && r.reconcileNow != nil {
 		r.reconcileNow()
 	}
+	if len(failed) != 0 || len(failedScoped) != 0 {
+		return fmt.Errorf("%d cache required-content batches were not durably published", len(failed)+len(failedScoped))
+	}
+	if indexFailures != 0 {
+		return fmt.Errorf("%d cache required-content reports were not added to the reconciliation index", indexFailures)
+	}
+	return nil
+}
+
+func (r *cacheContentReporter) publishScopedRequiredContent(key scopedReporterKey, report requiredContentReport) error {
+	if report.kind != "" {
+		return fmt.Errorf("scoped required-content revision identity is incomplete")
+	}
+	records, err := types.BuildScopedCacheRequiredContentRevision(
+		key.workspaceID, key.stubID, r.locality, key.scope,
+		key.revisionGeneration, key.revisionID, report.items, report.tombstone,
+	)
+	if err != nil {
+		return err
+	}
+	for _, record := range records {
+		if err := r.eventRepo.PushStubCacheRequiredContent(record); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *cacheContentReporter) markStubReported(stubID string) {
@@ -372,6 +481,25 @@ func (r *cacheContentReporter) requeue(items map[reporterKey]map[string]types.Ca
 		for itemKey, item := range bucket {
 			current[itemKey] = item
 		}
+	}
+}
+
+func (r *cacheContentReporter) requeueScoped(reports map[scopedReporterKey]requiredContentReport) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.scoped == nil {
+		r.scoped = make(map[scopedReporterKey]requiredContentReport)
+	}
+	for key, report := range reports {
+		r.scoped[key] = report
+	}
+}
+
+func (r *cacheContentReporter) requeueRecent(stubs map[reporterStubKey]struct{}) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for key := range stubs {
+		r.recent[key] = struct{}{}
 	}
 }
 
@@ -490,11 +618,11 @@ func (m *WorkerCacheManager) reconcileOnce() {
 	}
 
 	stubContent, requiredContentComplete := m.loadRecentRequiredContent(stubs)
-	protectedContent, activeCheckpointIDs := protectedContentFromRecentStubs(stubContent, m.accelerator)
+	protectedContent := protectedContentFromRecentStubs(stubContent)
 	protectedSetComplete := requiredContentComplete && len(stubs) < maxStubs
 	server.SetProtectedContent(protectedContent)
 	if protectedSetComplete {
-		m.pruneOwnerLocalCache(server, protectedContent, activeCheckpointIDs)
+		m.pruneOwnerLocalCache(server, protectedContent)
 	}
 	m.pruneOwnerStubCodeCache(server)
 
@@ -517,21 +645,20 @@ func (m *WorkerCacheManager) reconcileOnce() {
 	}
 }
 
-func (m *WorkerCacheManager) reconcileStub(server *cache.Server, localHostID string, stub cache.RecentStub, budget *reconcileBudget) []string {
+func (m *WorkerCacheManager) reconcileStub(server *cache.Server, localHostID string, stub cache.RecentStub, budget *reconcileBudget) {
 	items, err := m.eventRepo.ReadStubCacheRequiredContent(m.ctx, stub.WorkspaceID, stub.StubID)
 	if err != nil {
 		log.Debug().Err(err).Str("workspace_id", stub.WorkspaceID).Str("stub_id", stub.StubID).Msg("cache reconciliation failed to read required content")
-		return nil
+		return
 	}
-	return m.reconcileStubContent(server, localHostID, stub, items, budget, nil)
+	m.reconcileStubContent(server, localHostID, stub, items, budget, nil)
 }
 
-func (m *WorkerCacheManager) reconcileStubContent(server *cache.Server, localHostID string, stub cache.RecentStub, items []types.CacheRequiredContentItem, budget *reconcileBudget, allowlist map[string]struct{}) []string {
-	checkpointIDs := []string{}
+func (m *WorkerCacheManager) reconcileStubContent(server *cache.Server, localHostID string, stub cache.RecentStub, items []types.CacheRequiredContentItem, budget *reconcileBudget, allowlist map[string]struct{}) {
 	for _, item := range orderedRequiredContentItems(items) {
 		select {
 		case <-m.ctx.Done():
-			return checkpointIDs
+			return
 		default:
 		}
 
@@ -545,21 +672,14 @@ func (m *WorkerCacheManager) reconcileStubContent(server *cache.Server, localHos
 			}
 		}
 
-		if item.Kind == types.CacheContentKindCheckpoint {
-			if !cacheContentAppliesToAccelerator(item, m.accelerator) {
-				continue
-			}
-			if item.CheckpointID != "" {
-				checkpointIDs = append(checkpointIDs, item.CheckpointID)
-			}
-		} else if !m.localHostOwnsForReconcile(localHostID, routingKey) {
+		if !m.localHostOwnsForReconcile(localHostID, routingKey) {
 			continue
 		}
 
 		if m.requiredContentComplete(server, item, routingKey) {
 			continue
 		}
-		if reconcileSuccessBackoffApplies(item) && m.reconcileRecentlySucceeded(item.Hash, routingKey) {
+		if m.reconcileRecentlySucceeded(item.Hash, routingKey) {
 			continue
 		}
 
@@ -570,12 +690,11 @@ func (m *WorkerCacheManager) reconcileStubContent(server *cache.Server, localHos
 			continue
 		}
 		if !budget.take() {
-			return checkpointIDs
+			return
 		}
 
 		m.materializeOwnedItem(server, localHostID, stub, item, routingKey)
 	}
-	return checkpointIDs
 }
 
 type recentStubContent struct {
@@ -598,20 +717,16 @@ func (m *WorkerCacheManager) loadRecentRequiredContent(stubs []cache.RecentStub)
 	return content, complete
 }
 
-func protectedContentFromRecentStubs(stubs []recentStubContent, accelerator string) (map[string]struct{}, map[string]struct{}) {
+func protectedContentFromRecentStubs(stubs []recentStubContent) map[string]struct{} {
 	protected := map[string]struct{}{}
-	activeCheckpointIDs := map[string]struct{}{}
 	for _, stub := range stubs {
 		for _, item := range stub.items {
-			if item.Hash != "" && cacheContentAppliesToAccelerator(item, accelerator) {
+			if item.Hash != "" {
 				protected[item.Hash] = struct{}{}
-			}
-			if item.Kind == types.CacheContentKindCheckpoint && item.CheckpointID != "" && cacheContentAppliesToAccelerator(item, accelerator) {
-				activeCheckpointIDs[item.CheckpointID] = struct{}{}
 			}
 		}
 	}
-	return protected, activeCheckpointIDs
+	return protected
 }
 
 func pressureProtectedContentFromRecentStubs(stubs []recentStubContent, accelerator string, usage cache.DiskUsage, softWatermark float64, minFreeBytes int64) map[string]struct{} {
@@ -629,7 +744,7 @@ func pressureProtectedContentFromRecentStubs(stubs []recentStubContent, accelera
 	var protectedBytes int64
 	for _, stub := range orderedStubs {
 		for _, item := range orderedRequiredContentItems(stub.items) {
-			if item.Hash == "" || !cacheContentAppliesToAccelerator(item, accelerator) {
+			if item.Hash == "" {
 				continue
 			}
 			if _, ok := protected[item.Hash]; ok {
@@ -678,11 +793,9 @@ func orderedRequiredContentItems(items []types.CacheRequiredContentItem) []types
 
 func cacheContentKindPriority(kind types.CacheContentKind) int {
 	switch kind {
-	case types.CacheContentKindCheckpoint:
-		return 500
 	case types.CacheContentKindClipV1, types.CacheContentKindClipV2:
 		return 400
-	case types.CacheContentKindDiskSnapshot:
+	case types.CacheContentKindStateManifest, types.CacheContentKindStateChunk:
 		return 300
 	case types.CacheContentKindVolume:
 		return 100
@@ -691,11 +804,7 @@ func cacheContentKindPriority(kind types.CacheContentKind) int {
 	}
 }
 
-func cacheContentAppliesToAccelerator(item types.CacheRequiredContentItem, accelerator string) bool {
-	return item.Kind != types.CacheContentKindCheckpoint || item.Accelerator == "" || strings.EqualFold(item.Accelerator, accelerator)
-}
-
-func (m *WorkerCacheManager) pruneOwnerLocalCache(server *cache.Server, protected map[string]struct{}, activeCheckpointIDs map[string]struct{}) {
+func (m *WorkerCacheManager) pruneOwnerLocalCache(server *cache.Server, protected map[string]struct{}) {
 	if server == nil {
 		return
 	}
@@ -706,8 +815,6 @@ func (m *WorkerCacheManager) pruneOwnerLocalCache(server *cache.Server, protecte
 			Dur("recent_stub_ttl", m.recentStubTTL()).
 			Msg("pruned stale embedded cache content")
 	}
-	m.pruneLocalCheckpoints(activeCheckpointIDs)
-	m.pruneStaleCacheCheckpoints()
 }
 
 type imageCacheProtection struct {
@@ -1303,11 +1410,7 @@ func (m *WorkerCacheManager) materializeOwnedItem(server *cache.Server, localHos
 	switch {
 	case status == types.CacheAuditStatusMaterialized:
 		m.clearReconcileFailure(item.Hash, routingKey)
-		if reconcileSuccessBackoffApplies(item) {
-			m.recordReconcileSuccess(item.Hash, routingKey)
-		} else {
-			m.clearReconcileSuccess(item.Hash, routingKey)
-		}
+		m.recordReconcileSuccess(item.Hash, routingKey)
 		m.reconcileLogFields(log.Info(), localHostID, stub, item).
 			Str("status", status).Dur("duration", elapsed).
 			Msg("cache content reconciled")
@@ -1340,13 +1443,6 @@ func reconcileStatusIsFailure(status string) bool {
 	default:
 		return false
 	}
-}
-
-// Success backoff is only valid when the cache blob is the complete materialized
-// state. Checkpoints also require an extracted runtime/filesystem payload, which
-// can be pruned independently of the archive blob.
-func reconcileSuccessBackoffApplies(item types.CacheRequiredContentItem) bool {
-	return item.Kind != types.CacheContentKindCheckpoint
 }
 
 // reconcileBackingOff reports whether an item failed to materialize recently and
@@ -1462,60 +1558,6 @@ func (m *WorkerCacheManager) pruneReconcileFailures() {
 	}
 }
 
-func (m *WorkerCacheManager) pruneLocalCheckpoints(active map[string]struct{}) {
-	if m.checkpointRoot == "" {
-		return
-	}
-	entries, err := os.ReadDir(m.checkpointRoot)
-	if err != nil {
-		return
-	}
-	pruneCutoff := time.Now().Add(-m.recentStubTTL())
-	for _, entry := range entries {
-		name := entry.Name()
-		if strings.HasPrefix(name, ".") {
-			continue
-		}
-		checkpointID := name
-		if strings.HasSuffix(name, checkpointArchiveExtension) {
-			checkpointID = strings.TrimSuffix(name, checkpointArchiveExtension)
-		} else if !entry.IsDir() {
-			continue
-		}
-		if _, ok := active[checkpointID]; ok {
-			continue
-		}
-		path := filepath.Join(m.checkpointRoot, name)
-		if checkpointLocalPathFresh(path, pruneCutoff) {
-			continue
-		}
-		_ = os.RemoveAll(path)
-	}
-}
-
-func checkpointLocalPathFresh(path string, pruneCutoff time.Time) bool {
-	info, err := os.Stat(path)
-	if err != nil {
-		return false
-	}
-	return info.ModTime().After(pruneCutoff)
-}
-
-func (m *WorkerCacheManager) pruneStaleCacheCheckpoints() {
-	if m.workerRepo == nil || m.locality == "" {
-		return
-	}
-	resp, err := handleGRPCResponse(m.workerRepo.PruneStaleCacheCheckpoints(m.ctx, &pb.PruneStaleCacheCheckpointsRequest{}))
-	if err != nil {
-		log.Debug().Err(err).Str("locality", m.locality).Msg("cache reconciliation failed to prune stale checkpoints")
-		return
-	}
-	if resp.Pruned > 0 {
-		log.Info().Str("locality", m.locality).Int32("pruned", resp.Pruned).Msg("pruned stale cache-managed checkpoints")
-	}
-}
-
-// reconcileLogFields adds the fields common to per-item reconciliation logs.
 func (m *WorkerCacheManager) reconcileLogFields(event *zerolog.Event, localHostID string, stub cache.RecentStub, item types.CacheRequiredContentItem) *zerolog.Event {
 	return event.
 		Str("locality", m.locality).
@@ -1531,10 +1573,6 @@ func (m *WorkerCacheManager) reconcileLogFields(event *zerolog.Event, localHostI
 // prefers a reachable replica and otherwise fetches from the item's origin in
 // the same way the read path does. It never persists credentials in Redis or S2.
 func (m *WorkerCacheManager) materialize(ctx context.Context, server *cache.Server, stub cache.RecentStub, item types.CacheRequiredContentItem, routingKey string) string {
-	if item.Kind == types.CacheContentKindCheckpoint {
-		return m.materializeCheckpoint(ctx, server, stub, item, routingKey)
-	}
-
 	if ok, err := m.client.MaterializeFromReplica(ctx, server, item.Hash, routingKey, item.SizeBytes); err != nil {
 		log.Debug().Err(err).Str("hash", item.Hash).Msg("cache reconciliation replica copy failed")
 	} else if ok {
@@ -1551,8 +1589,8 @@ func (m *WorkerCacheManager) materialize(ctx context.Context, server *cache.Serv
 		// then stored under the decompressed content hash, mirroring the clip
 		// read path. The local mounted-source path is not valid for layers.
 		return m.materializeOCILayer(ctx, server, stub, item)
-	case types.CacheContentKindVolume, types.CacheContentKindDiskSnapshot:
-		return m.materializeWorkspaceObject(ctx, server, stub, item)
+	case types.CacheContentKindVolume, types.CacheContentKindStateManifest, types.CacheContentKindStateChunk:
+		return m.materializeWorkspaceObject(ctx, server, stub, item, routingKey)
 	case types.CacheContentKindClipV1:
 		// The v1 archive is one content-addressed object; re-fetch the whole
 		// archive from the image registry (the same source the image-load path
@@ -1658,60 +1696,14 @@ func imageIDFromArchiveSource(source string) string {
 }
 
 func (m *WorkerCacheManager) requiredContentComplete(server *cache.Server, item types.CacheRequiredContentItem, routingKey string) bool {
-	if item.Kind == types.CacheContentKindCheckpoint && item.CheckpointID != "" {
-		return server.HasCompleteContent(item.Hash, item.SizeBytes) &&
-			checkpointMaterialized(filepath.Join(m.checkpointRoot, item.CheckpointID))
-	}
 	return server.HasCompleteContent(item.Hash, item.SizeBytes)
-}
-
-func (m *WorkerCacheManager) materializeCheckpoint(ctx context.Context, server *cache.Server, stub cache.RecentStub, item types.CacheRequiredContentItem, routingKey string) string {
-	if item.CheckpointID == "" || item.Hash == "" || item.SizeBytes <= 0 {
-		return types.CacheAuditStatusMiss
-	}
-	release, err := m.acquireCheckpointMaterialization(ctx, item.CheckpointID)
-	if err != nil {
-		log.Debug().Err(err).Str("checkpoint_id", item.CheckpointID).Msg("cache reconciliation checkpoint materialization canceled")
-		return types.CacheAuditStatusSkipped
-	}
-	defer release()
-	if m.requiredContentComplete(server, item, routingKey) {
-		return types.CacheAuditStatusMaterialized
-	}
-	if ok, err := m.client.MaterializeFromReplica(ctx, server, item.Hash, routingKey, item.SizeBytes); err != nil {
-		log.Debug().Err(err).Str("hash", item.Hash).Msg("cache reconciliation checkpoint replica copy failed")
-	} else if !ok {
-		if item.Source == "" {
-			return types.CacheAuditStatusMiss
-		}
-		if status := m.materializeWorkspaceObject(ctx, server, stub, item); status != types.CacheAuditStatusMaterialized {
-			return status
-		}
-	}
-	if err := m.extractCheckpointArchive(ctx, server, item); err != nil {
-		log.Debug().Err(err).Str("checkpoint_id", item.CheckpointID).Msg("cache reconciliation checkpoint extract failed")
-		return types.CacheAuditStatusOriginFailure
-	}
-	return types.CacheAuditStatusMaterialized
-}
-
-func (m *WorkerCacheManager) extractCheckpointArchive(ctx context.Context, server *cache.Server, item types.CacheRequiredContentItem) error {
-	checkpointPath := filepath.Join(m.checkpointRoot, item.CheckpointID)
-	if checkpointMaterialized(checkpointPath) {
-		return nil
-	}
-	if server == nil {
-		return fmt.Errorf("cache server is unavailable")
-	}
-	reader := newCheckpointCacheReader(ctx, item.Hash, item.SizeBytes, server.ReadContentInto)
-	return materializeCheckpointReader(ctx, reader, item.Hash, item.SizeBytes, checkpointPath, item.CheckpointID, nil)
 }
 
 // materializeWorkspaceObject fetches a workspace object from object storage using
 // gateway-brokered workspace storage credentials and stores it under its content
 // hash. Credentials ride only in the in-flight store request; they are not
 // persisted on the worker.
-func (m *WorkerCacheManager) materializeWorkspaceObject(ctx context.Context, server *cache.Server, stub cache.RecentStub, item types.CacheRequiredContentItem) string {
+func (m *WorkerCacheManager) materializeWorkspaceObject(ctx context.Context, server *cache.Server, stub cache.RecentStub, item types.CacheRequiredContentItem, routingKey string) string {
 	creds := m.originCredentials(ctx, stub.WorkspaceID, stub.StubID, "", "")
 	if creds == nil || creds.workspaceStorage == nil {
 		log.Debug().Str("hash", item.Hash).Str("workspace_id", stub.WorkspaceID).Msg("cache reconciliation has no workspace storage credentials")
@@ -1726,6 +1718,7 @@ func (m *WorkerCacheManager) materializeWorkspaceObject(ctx context.Context, ser
 	req := &pb.CacheStoreContentFromSourceRequest{
 		Source: &pb.CacheSource{
 			Path:           item.Source,
+			CachePath:      routingKey,
 			ExpectedHash:   item.Hash,
 			BucketName:     bucketName,
 			Region:         ws.Region,

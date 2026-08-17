@@ -14,13 +14,22 @@ def test_disk_management_commands_registered():
 
     disk = cli.management_group.get_command(None, "disk")
     assert disk is not None
-    assert sorted(disk.commands) == ["create", "delete", "list", "snapshots"]
+    assert sorted(disk.commands) == ["create", "delete", "list"]
 
     create_options = {param.name for param in disk.commands["create"].params}
-    assert {"name", "size", "filesystem", "mount_path", "format"} <= create_options
+    assert {"name", "size", "mount_path", "format"} <= create_options
     assert "format" in {param.name for param in disk.commands["list"].params}
-    assert "format" in {param.name for param in disk.commands["snapshots"].params}
     assert "yes" in {param.name for param in disk.commands["delete"].params}
+
+
+def test_container_exposes_unified_state_snapshot_command():
+    cli = load_cli(check_config=False)
+    container = cli.management_group.get_command(None, "container")
+
+    assert "checkpoint" not in container.commands
+    assert "snapshot-state" in container.commands
+    options = {param.name for param in container.commands["snapshot-state"].params}
+    assert {"container_id", "mode", "include_memory"} <= options
 
 
 def test_container_uptime_ignores_unset_timestamp():

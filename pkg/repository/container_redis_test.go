@@ -69,6 +69,100 @@ func assertContainerStateTTL(t *testing.T, rdb *common.RedisClient, containerID 
 	}
 }
 
+func TestStateRestoreReceiptIsWriteOnceOrByteIdentical(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := NewContainerRedisRepositoryForTest(rdb)
+	containerID := "restore-receipt-container"
+	assignmentA := &types.ContainerState{
+		ContainerId: containerID, Status: types.ContainerStatusRunning, WorkerId: "worker-a", MachineId: "node-a",
+		StateSnapshotId: "86dd770a-1adc-4e2e-9677-4acbc7601ef9", AssignmentId: "assignment-a:1",
+		StateVolumePlanId: "plan-a", StateVolumePlanHash: "hash-a",
+	}
+	if err := repo.SetContainerState(containerID, assignmentA); err != nil {
+		t.Fatal(err)
+	}
+	if err := rdb.HSet(context.Background(), common.RedisKeys.SchedulerWorkerState(assignmentA.WorkerId),
+		"instance_id", "instance-a", "machine_id", assignmentA.MachineId).Err(); err != nil {
+		t.Fatal(err)
+	}
+	receipt := &types.StateRestoreReceipt{
+		StateSnapshotId: "86dd770a-1adc-4e2e-9677-4acbc7601ef9", RestoreMode: "memory",
+		Generations: []types.StateGeneration{
+			{VolumeId: "b-volume", GenerationId: "b-generation", Name: "data", MountPath: "/data", Generation: 2},
+			{VolumeId: "a-volume", GenerationId: "a-generation", Name: "root", MountPath: "/", Root: true, Generation: 1},
+		},
+	}
+	if err := repo.SetStateRestoreReceipt(containerID, "instance-a", receipt, assignmentA); err != nil {
+		t.Fatal(err)
+	}
+	reordered := *receipt
+	reordered.Generations = []types.StateGeneration{receipt.Generations[1], receipt.Generations[0]}
+	if err := repo.SetStateRestoreReceipt(containerID, "instance-a", &reordered, assignmentA); err != nil {
+		t.Fatalf("byte-identical canonical replay failed: %v", err)
+	}
+	conflict := reordered
+	conflict.RestoreMode = "cold_state"
+	conflict.FallbackReason = "memory restore failed"
+	if err := repo.SetStateRestoreReceipt(containerID, "instance-a", &conflict, assignmentA); err == nil || !strings.Contains(err.Error(), "immutable") {
+		t.Fatalf("conflicting worker outcome error = %v", err)
+	}
+	stored, err := repo.GetStateRestoreReceipt(containerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.RestoreMode != "memory" || stored.Generations[0].VolumeId != "a-volume" {
+		t.Fatalf("stored receipt was overwritten or not canonical: %#v", stored)
+	}
+
+	// Superseding only the worker process epoch (same stable worker, node,
+	// container assignment, delivery token, and snapshot) must atomically fence
+	// the old process at the receipt Lua boundary.
+	if err := rdb.HSet(context.Background(), common.RedisKeys.SchedulerWorkerState(assignmentA.WorkerId),
+		"instance_id", "instance-a-replacement").Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetStateRestoreReceipt(containerID, "instance-a", receipt, assignmentA); err == nil || !strings.Contains(err.Error(), "worker process was superseded") {
+		t.Fatalf("stale process epoch write error = %v", err)
+	}
+	if _, err := repo.GetStateRestoreReceipt(containerID); !errors.Is(err, redis.Nil) {
+		t.Fatalf("superseded process receipt remained visible: %v", err)
+	}
+
+	// Reassignment changes the delivery epoch. A stale worker cannot write after
+	// that atomic transition, and readers no longer observe its prior receipt.
+	stateKey := common.RedisKeys.SchedulerContainerState(containerID)
+	if err := rdb.HSet(context.Background(), stateKey,
+		"worker_id", "worker-b", "machine_id", "node-b", "schedule_delivery_token", "assignment-b:1").Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetStateRestoreReceipt(containerID, "instance-a", receipt, assignmentA); err == nil ||
+		(!strings.Contains(err.Error(), "assignment changed") && !strings.Contains(err.Error(), "worker process was superseded")) {
+		t.Fatalf("stale assignment write error = %v", err)
+	}
+	if _, err := repo.GetStateRestoreReceipt(containerID); !errors.Is(err, redis.Nil) {
+		t.Fatalf("stale assignment receipt remained visible: %v", err)
+	}
+	assignmentB := *assignmentA
+	assignmentB.WorkerId, assignmentB.MachineId, assignmentB.AssignmentId = "worker-b", "node-b", "assignment-b:1"
+	if err := rdb.HSet(context.Background(), common.RedisKeys.SchedulerWorkerState(assignmentB.WorkerId),
+		"instance_id", "instance-b", "machine_id", assignmentB.MachineId).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetStateRestoreReceipt(containerID, "instance-b", &conflict, &assignmentB); err != nil {
+		t.Fatalf("replacement assignment could not publish cold fallback: %v", err)
+	}
+	stored, err = repo.GetStateRestoreReceipt(containerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.RestoreMode != "cold_state" || stored.FallbackReason != "memory restore failed" {
+		t.Fatalf("replacement assignment receipt = %#v", stored)
+	}
+}
+
 func TestCreateContainerStateWithConcurrencyLimitSkipsConcurrencyLockWithoutQuota(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	if err != nil {
@@ -118,6 +212,161 @@ func TestCreateContainerStateWithConcurrencyLimitSkipsConcurrencyLockWithoutQuot
 	}
 	if state.MachineId != request.MachineId {
 		t.Fatalf("expected pending state on machine %q, got %q", request.MachineId, state.MachineId)
+	}
+}
+
+func TestStateVolumeAdmissionAtomicallyWritesExactContainerStateAndOutbox(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := NewContainerRedisRepositoryForTest(rdb)
+	readyAt := time.Unix(1_700_000_000, 123).UTC()
+	request := &types.ContainerRequest{
+		ContainerId: "state-volume-atomic", StubId: "stub", WorkspaceId: "workspace",
+		StateVolumePlanId:   "7aee3365-2963-4a6d-b9fb-2c934924880d",
+		StateVolumePlanHash: strings.Repeat("a", 64), PersistentRoot: &types.PersistentRoot{Size: "4Gi"},
+	}
+	payload := []byte(`{"container_id":"state-volume-atomic","timestamp":"2023-11-14T22:13:20.000000123Z"}`)
+	if err := repo.CreateContainerStateWithConcurrencyLimitAndStateVolumeOutbox(nil, request, payload, readyAt); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := repo.GetContainerState(request.ContainerId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.StateVolumePlanId != request.StateVolumePlanId || state.StateVolumePlanHash != request.StateVolumePlanHash {
+		t.Fatalf("container state plan = (%q,%q), want (%q,%q)", state.StateVolumePlanId, state.StateVolumePlanHash,
+			request.StateVolumePlanId, request.StateVolumePlanHash)
+	}
+	outbox := common.RedisKeys.SchedulerStateVolumePlanOutbox(request.StateVolumePlanId)
+	values, err := rdb.HMGet(context.Background(), outbox, "plan_id", "container_id", "request_hash", "payload", "ready_at").Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := values[0]; got != request.StateVolumePlanId {
+		t.Fatalf("outbox plan_id = %v, want %s", got, request.StateVolumePlanId)
+	}
+	if got := values[1]; got != request.ContainerId {
+		t.Fatalf("outbox container_id = %v, want %s", got, request.ContainerId)
+	}
+	if got := values[2]; got != request.StateVolumePlanHash {
+		t.Fatalf("outbox request_hash = %v, want %s", got, request.StateVolumePlanHash)
+	}
+	if got := values[3]; got != string(payload) {
+		t.Fatalf("outbox payload = %v, want %s", got, payload)
+	}
+	if got := values[4]; got != fmt.Sprint(readyAt.UnixNano()) {
+		t.Fatalf("outbox ready_at = %v, want %d", got, readyAt.UnixNano())
+	}
+}
+
+func TestStateVolumeAdmissionLuaCannotOverwriteAssignedWinnerAfterLockExpiry(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := NewContainerRedisRepositoryForTest(rdb).(*ContainerRedisRepository)
+	readyAt := time.Unix(1_700_000_000, 0).UTC()
+	request := &types.ContainerRequest{
+		ContainerId: "state-volume-fenced", StubId: "stub", WorkspaceId: "workspace",
+		StateVolumePlanId:   "7aee3365-2963-4a6d-b9fb-2c934924880d",
+		StateVolumePlanHash: strings.Repeat("b", 64), PersistentRoot: &types.PersistentRoot{Size: "4Gi"},
+	}
+	payload := []byte(`{"container_id":"state-volume-fenced","state_volume_plan_id":"7aee3365-2963-4a6d-b9fb-2c934924880d"}`)
+	if err := repo.CreateContainerStateWithConcurrencyLimitAndStateVolumeOutbox(nil, request, payload, readyAt); err != nil {
+		t.Fatal(err)
+	}
+	state, err := repo.GetContainerState(request.ContainerId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.setContainerStateWithStateVolumeOutbox(state, payload, readyAt, nil); err != nil {
+		t.Fatalf("exact pending replay should be idempotent: %v", err)
+	}
+	if err := repo.setContainerStateWithStateVolumeOutbox(state, append(payload, ' '), readyAt, nil); err == nil {
+		t.Fatal("changed canonical payload unexpectedly overwrote the exact outbox")
+	}
+
+	stateKey := common.RedisKeys.SchedulerContainerState(request.ContainerId)
+	outboxKey := common.RedisKeys.SchedulerStateVolumePlanOutbox(request.StateVolumePlanId)
+	if err := rdb.HSet(context.Background(), stateKey,
+		"status", string(types.ContainerStatusRunning), "worker_id", "winner-worker",
+		containerStateVolumePlanEnqueuedField, request.StateVolumePlanId).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := rdb.Del(context.Background(), outboxKey).Err(); err != nil {
+		t.Fatal(err)
+	}
+	stale := *state
+	stale.Status = types.ContainerStatusPending
+	stale.WorkerId = ""
+	err = repo.setContainerStateWithStateVolumeOutbox(&stale, payload, readyAt, nil)
+	var already *types.ContainerAlreadyScheduledError
+	if !errors.As(err, &already) {
+		t.Fatalf("stale admission error = %v, want ContainerAlreadyScheduledError", err)
+	}
+	stored, err := repo.GetContainerState(request.ContainerId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != types.ContainerStatusRunning || stored.WorkerId != "winner-worker" {
+		t.Fatalf("stale admission overwrote winner: status=%s worker=%q", stored.Status, stored.WorkerId)
+	}
+	if exists, err := rdb.Exists(context.Background(), outboxKey).Result(); err != nil || exists != 0 {
+		t.Fatalf("stale admission recreated outbox: exists=%d err=%v", exists, err)
+	}
+}
+
+func TestStateVolumeAdmissionAtomicallyRetainsWinnerConcurrencyReservation(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := NewContainerRedisRepositoryForTest(rdb).(*ContainerRedisRepository)
+	readyAt := time.Unix(1_700_000_000, 0).UTC()
+	request := &types.ContainerRequest{
+		ContainerId: "state-volume-quota-winner", StubId: "stub", WorkspaceId: "workspace",
+		StateVolumePlanId:   "7aee3365-2963-4a6d-b9fb-2c934924880d",
+		StateVolumePlanHash: strings.Repeat("c", 64), PersistentRoot: &types.PersistentRoot{Size: "4Gi"},
+		Cpu: 250,
+	}
+	quota := &types.ConcurrencyLimit{CPUMillicoreLimit: 1_000, GPULimit: 1}
+	payload := []byte(`{"container_id":"state-volume-quota-winner"}`)
+	if err := repo.CreateContainerStateWithConcurrencyLimitAndStateVolumeOutbox(quota, request, payload, readyAt); err != nil {
+		t.Fatal(err)
+	}
+	usageKey := common.RedisKeys.WorkspaceConcurrencyLimitUsage(request.WorkspaceId)
+	reservationKey := common.RedisKeys.WorkspaceConcurrencyLimitReservation(request.WorkspaceId, request.ContainerId)
+	if used, err := rdb.HGet(context.Background(), usageKey, "cpu").Int64(); err != nil || used != request.Cpu {
+		t.Fatalf("usage cpu = %d, want %d (err=%v)", used, request.Cpu, err)
+	}
+
+	// Simulate creator A resuming after its distributed lock expired and B
+	// already atomically admitted/assigned the same container. The Lua CAS must
+	// reject A without touching B's container-keyed reservation.
+	state, err := repo.GetContainerState(request.ContainerId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateKey := common.RedisKeys.SchedulerContainerState(request.ContainerId)
+	if err := rdb.HSet(context.Background(), stateKey, "status", string(types.ContainerStatusRunning), "worker_id", "winner-worker").Err(); err != nil {
+		t.Fatal(err)
+	}
+	stale := *state
+	stale.Status = types.ContainerStatusPending
+	stale.WorkerId = ""
+	err = repo.setContainerStateWithStateVolumeOutbox(&stale, payload, readyAt, quota)
+	var already *types.ContainerAlreadyScheduledError
+	if !errors.As(err, &already) {
+		t.Fatalf("stale admission error = %v, want ContainerAlreadyScheduledError", err)
+	}
+	if used, err := rdb.HGet(context.Background(), usageKey, "cpu").Int64(); err != nil || used != request.Cpu {
+		t.Fatalf("winner usage changed after stale admission: cpu=%d err=%v", used, err)
+	}
+	if exists, err := rdb.Exists(context.Background(), reservationKey).Result(); err != nil || exists != 1 {
+		t.Fatalf("winner reservation was removed: exists=%d err=%v", exists, err)
 	}
 }
 

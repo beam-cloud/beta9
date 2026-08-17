@@ -24,8 +24,8 @@ const (
 	ContainerService_ContainerExec_FullMethodName                            = "/container.ContainerService/ContainerExec"
 	ContainerService_ContainerStreamLogs_FullMethodName                      = "/container.ContainerService/ContainerStreamLogs"
 	ContainerService_ContainerArchive_FullMethodName                         = "/container.ContainerService/ContainerArchive"
-	ContainerService_ContainerCheckpoint_FullMethodName                      = "/container.ContainerService/ContainerCheckpoint"
-	ContainerService_ContainerSnapshotDisks_FullMethodName                   = "/container.ContainerService/ContainerSnapshotDisks"
+	ContainerService_SnapshotContainerState_FullMethodName                   = "/container.ContainerService/SnapshotContainerState"
+	ContainerService_RestoreContainerState_FullMethodName                    = "/container.ContainerService/RestoreContainerState"
 	ContainerService_ContainerSyncWorkspace_FullMethodName                   = "/container.ContainerService/ContainerSyncWorkspace"
 	ContainerService_ContainerSandboxExec_FullMethodName                     = "/container.ContainerService/ContainerSandboxExec"
 	ContainerService_ContainerSandboxStatus_FullMethodName                   = "/container.ContainerService/ContainerSandboxStatus"
@@ -56,8 +56,8 @@ type ContainerServiceClient interface {
 	ContainerExec(ctx context.Context, in *ContainerExecRequest, opts ...grpc.CallOption) (*ContainerExecResponse, error)
 	ContainerStreamLogs(ctx context.Context, in *ContainerStreamLogsRequest, opts ...grpc.CallOption) (ContainerService_ContainerStreamLogsClient, error)
 	ContainerArchive(ctx context.Context, in *ContainerArchiveRequest, opts ...grpc.CallOption) (ContainerService_ContainerArchiveClient, error)
-	ContainerCheckpoint(ctx context.Context, in *ContainerCheckpointRequest, opts ...grpc.CallOption) (*ContainerCheckpointResponse, error)
-	ContainerSnapshotDisks(ctx context.Context, in *ContainerSnapshotDisksRequest, opts ...grpc.CallOption) (*ContainerSnapshotDisksResponse, error)
+	SnapshotContainerState(ctx context.Context, in *SnapshotContainerStateRequest, opts ...grpc.CallOption) (*SnapshotContainerStateResponse, error)
+	RestoreContainerState(ctx context.Context, in *RestoreContainerStateRequest, opts ...grpc.CallOption) (*RestoreContainerStateResponse, error)
 	ContainerSyncWorkspace(ctx context.Context, in *SyncContainerWorkspaceRequest, opts ...grpc.CallOption) (*SyncContainerWorkspaceResponse, error)
 	ContainerSandboxExec(ctx context.Context, in *ContainerSandboxExecRequest, opts ...grpc.CallOption) (*ContainerSandboxExecResponse, error)
 	ContainerSandboxStatus(ctx context.Context, in *ContainerSandboxStatusRequest, opts ...grpc.CallOption) (*ContainerSandboxStatusResponse, error)
@@ -178,18 +178,18 @@ func (x *containerServiceContainerArchiveClient) Recv() (*ContainerArchiveRespon
 	return m, nil
 }
 
-func (c *containerServiceClient) ContainerCheckpoint(ctx context.Context, in *ContainerCheckpointRequest, opts ...grpc.CallOption) (*ContainerCheckpointResponse, error) {
-	out := new(ContainerCheckpointResponse)
-	err := c.cc.Invoke(ctx, ContainerService_ContainerCheckpoint_FullMethodName, in, out, opts...)
+func (c *containerServiceClient) SnapshotContainerState(ctx context.Context, in *SnapshotContainerStateRequest, opts ...grpc.CallOption) (*SnapshotContainerStateResponse, error) {
+	out := new(SnapshotContainerStateResponse)
+	err := c.cc.Invoke(ctx, ContainerService_SnapshotContainerState_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *containerServiceClient) ContainerSnapshotDisks(ctx context.Context, in *ContainerSnapshotDisksRequest, opts ...grpc.CallOption) (*ContainerSnapshotDisksResponse, error) {
-	out := new(ContainerSnapshotDisksResponse)
-	err := c.cc.Invoke(ctx, ContainerService_ContainerSnapshotDisks_FullMethodName, in, out, opts...)
+func (c *containerServiceClient) RestoreContainerState(ctx context.Context, in *RestoreContainerStateRequest, opts ...grpc.CallOption) (*RestoreContainerStateResponse, error) {
+	out := new(RestoreContainerStateResponse)
+	err := c.cc.Invoke(ctx, ContainerService_RestoreContainerState_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -376,8 +376,8 @@ type ContainerServiceServer interface {
 	ContainerExec(context.Context, *ContainerExecRequest) (*ContainerExecResponse, error)
 	ContainerStreamLogs(*ContainerStreamLogsRequest, ContainerService_ContainerStreamLogsServer) error
 	ContainerArchive(*ContainerArchiveRequest, ContainerService_ContainerArchiveServer) error
-	ContainerCheckpoint(context.Context, *ContainerCheckpointRequest) (*ContainerCheckpointResponse, error)
-	ContainerSnapshotDisks(context.Context, *ContainerSnapshotDisksRequest) (*ContainerSnapshotDisksResponse, error)
+	SnapshotContainerState(context.Context, *SnapshotContainerStateRequest) (*SnapshotContainerStateResponse, error)
+	RestoreContainerState(context.Context, *RestoreContainerStateRequest) (*RestoreContainerStateResponse, error)
 	ContainerSyncWorkspace(context.Context, *SyncContainerWorkspaceRequest) (*SyncContainerWorkspaceResponse, error)
 	ContainerSandboxExec(context.Context, *ContainerSandboxExecRequest) (*ContainerSandboxExecResponse, error)
 	ContainerSandboxStatus(context.Context, *ContainerSandboxStatusRequest) (*ContainerSandboxStatusResponse, error)
@@ -419,11 +419,11 @@ func (UnimplementedContainerServiceServer) ContainerStreamLogs(*ContainerStreamL
 func (UnimplementedContainerServiceServer) ContainerArchive(*ContainerArchiveRequest, ContainerService_ContainerArchiveServer) error {
 	return status.Errorf(codes.Unimplemented, "method ContainerArchive not implemented")
 }
-func (UnimplementedContainerServiceServer) ContainerCheckpoint(context.Context, *ContainerCheckpointRequest) (*ContainerCheckpointResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ContainerCheckpoint not implemented")
+func (UnimplementedContainerServiceServer) SnapshotContainerState(context.Context, *SnapshotContainerStateRequest) (*SnapshotContainerStateResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SnapshotContainerState not implemented")
 }
-func (UnimplementedContainerServiceServer) ContainerSnapshotDisks(context.Context, *ContainerSnapshotDisksRequest) (*ContainerSnapshotDisksResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ContainerSnapshotDisks not implemented")
+func (UnimplementedContainerServiceServer) RestoreContainerState(context.Context, *RestoreContainerStateRequest) (*RestoreContainerStateResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RestoreContainerState not implemented")
 }
 func (UnimplementedContainerServiceServer) ContainerSyncWorkspace(context.Context, *SyncContainerWorkspaceRequest) (*SyncContainerWorkspaceResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ContainerSyncWorkspace not implemented")
@@ -591,38 +591,38 @@ func (x *containerServiceContainerArchiveServer) Send(m *ContainerArchiveRespons
 	return x.ServerStream.SendMsg(m)
 }
 
-func _ContainerService_ContainerCheckpoint_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ContainerCheckpointRequest)
+func _ContainerService_SnapshotContainerState_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SnapshotContainerStateRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(ContainerServiceServer).ContainerCheckpoint(ctx, in)
+		return srv.(ContainerServiceServer).SnapshotContainerState(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: ContainerService_ContainerCheckpoint_FullMethodName,
+		FullMethod: ContainerService_SnapshotContainerState_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ContainerServiceServer).ContainerCheckpoint(ctx, req.(*ContainerCheckpointRequest))
+		return srv.(ContainerServiceServer).SnapshotContainerState(ctx, req.(*SnapshotContainerStateRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _ContainerService_ContainerSnapshotDisks_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ContainerSnapshotDisksRequest)
+func _ContainerService_RestoreContainerState_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RestoreContainerStateRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(ContainerServiceServer).ContainerSnapshotDisks(ctx, in)
+		return srv.(ContainerServiceServer).RestoreContainerState(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: ContainerService_ContainerSnapshotDisks_FullMethodName,
+		FullMethod: ContainerService_RestoreContainerState_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ContainerServiceServer).ContainerSnapshotDisks(ctx, req.(*ContainerSnapshotDisksRequest))
+		return srv.(ContainerServiceServer).RestoreContainerState(ctx, req.(*RestoreContainerStateRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -989,12 +989,12 @@ var ContainerService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _ContainerService_ContainerExec_Handler,
 		},
 		{
-			MethodName: "ContainerCheckpoint",
-			Handler:    _ContainerService_ContainerCheckpoint_Handler,
+			MethodName: "SnapshotContainerState",
+			Handler:    _ContainerService_SnapshotContainerState_Handler,
 		},
 		{
-			MethodName: "ContainerSnapshotDisks",
-			Handler:    _ContainerService_ContainerSnapshotDisks_Handler,
+			MethodName: "RestoreContainerState",
+			Handler:    _ContainerService_RestoreContainerState_Handler,
 		},
 		{
 			MethodName: "ContainerSyncWorkspace",

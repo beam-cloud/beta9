@@ -27,6 +27,8 @@ const (
 	ContainerRepositoryService_SetContainerAddressMap_FullMethodName = "/ContainerRepositoryService/SetContainerAddressMap"
 	ContainerRepositoryService_GetContainerAddressMap_FullMethodName = "/ContainerRepositoryService/GetContainerAddressMap"
 	ContainerRepositoryService_SetWorkerAddress_FullMethodName       = "/ContainerRepositoryService/SetWorkerAddress"
+	ContainerRepositoryService_SetStateRestoreReceipt_FullMethodName = "/ContainerRepositoryService/SetStateRestoreReceipt"
+	ContainerRepositoryService_GetStateRestoreReceipt_FullMethodName = "/ContainerRepositoryService/GetStateRestoreReceipt"
 )
 
 // ContainerRepositoryServiceClient is the client API for ContainerRepositoryService service.
@@ -41,6 +43,8 @@ type ContainerRepositoryServiceClient interface {
 	SetContainerAddressMap(ctx context.Context, in *SetContainerAddressMapRequest, opts ...grpc.CallOption) (*SetContainerAddressMapResponse, error)
 	GetContainerAddressMap(ctx context.Context, in *GetContainerAddressMapRequest, opts ...grpc.CallOption) (*GetContainerAddressMapResponse, error)
 	SetWorkerAddress(ctx context.Context, in *SetWorkerAddressRequest, opts ...grpc.CallOption) (*SetWorkerAddressResponse, error)
+	SetStateRestoreReceipt(ctx context.Context, in *SetStateRestoreReceiptRequest, opts ...grpc.CallOption) (*SetStateRestoreReceiptResponse, error)
+	GetStateRestoreReceipt(ctx context.Context, in *GetStateRestoreReceiptRequest, opts ...grpc.CallOption) (*GetStateRestoreReceiptResponse, error)
 }
 
 type containerRepositoryServiceClient struct {
@@ -123,6 +127,24 @@ func (c *containerRepositoryServiceClient) SetWorkerAddress(ctx context.Context,
 	return out, nil
 }
 
+func (c *containerRepositoryServiceClient) SetStateRestoreReceipt(ctx context.Context, in *SetStateRestoreReceiptRequest, opts ...grpc.CallOption) (*SetStateRestoreReceiptResponse, error) {
+	out := new(SetStateRestoreReceiptResponse)
+	err := c.cc.Invoke(ctx, ContainerRepositoryService_SetStateRestoreReceipt_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *containerRepositoryServiceClient) GetStateRestoreReceipt(ctx context.Context, in *GetStateRestoreReceiptRequest, opts ...grpc.CallOption) (*GetStateRestoreReceiptResponse, error) {
+	out := new(GetStateRestoreReceiptResponse)
+	err := c.cc.Invoke(ctx, ContainerRepositoryService_GetStateRestoreReceipt_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ContainerRepositoryServiceServer is the server API for ContainerRepositoryService service.
 // All implementations must embed UnimplementedContainerRepositoryServiceServer
 // for forward compatibility
@@ -135,6 +157,8 @@ type ContainerRepositoryServiceServer interface {
 	SetContainerAddressMap(context.Context, *SetContainerAddressMapRequest) (*SetContainerAddressMapResponse, error)
 	GetContainerAddressMap(context.Context, *GetContainerAddressMapRequest) (*GetContainerAddressMapResponse, error)
 	SetWorkerAddress(context.Context, *SetWorkerAddressRequest) (*SetWorkerAddressResponse, error)
+	SetStateRestoreReceipt(context.Context, *SetStateRestoreReceiptRequest) (*SetStateRestoreReceiptResponse, error)
+	GetStateRestoreReceipt(context.Context, *GetStateRestoreReceiptRequest) (*GetStateRestoreReceiptResponse, error)
 	mustEmbedUnimplementedContainerRepositoryServiceServer()
 }
 
@@ -165,6 +189,12 @@ func (UnimplementedContainerRepositoryServiceServer) GetContainerAddressMap(cont
 }
 func (UnimplementedContainerRepositoryServiceServer) SetWorkerAddress(context.Context, *SetWorkerAddressRequest) (*SetWorkerAddressResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetWorkerAddress not implemented")
+}
+func (UnimplementedContainerRepositoryServiceServer) SetStateRestoreReceipt(context.Context, *SetStateRestoreReceiptRequest) (*SetStateRestoreReceiptResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetStateRestoreReceipt not implemented")
+}
+func (UnimplementedContainerRepositoryServiceServer) GetStateRestoreReceipt(context.Context, *GetStateRestoreReceiptRequest) (*GetStateRestoreReceiptResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetStateRestoreReceipt not implemented")
 }
 func (UnimplementedContainerRepositoryServiceServer) mustEmbedUnimplementedContainerRepositoryServiceServer() {
 }
@@ -324,6 +354,42 @@ func _ContainerRepositoryService_SetWorkerAddress_Handler(srv interface{}, ctx c
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ContainerRepositoryService_SetStateRestoreReceipt_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetStateRestoreReceiptRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ContainerRepositoryServiceServer).SetStateRestoreReceipt(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ContainerRepositoryService_SetStateRestoreReceipt_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ContainerRepositoryServiceServer).SetStateRestoreReceipt(ctx, req.(*SetStateRestoreReceiptRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ContainerRepositoryService_GetStateRestoreReceipt_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetStateRestoreReceiptRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ContainerRepositoryServiceServer).GetStateRestoreReceipt(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ContainerRepositoryService_GetStateRestoreReceipt_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ContainerRepositoryServiceServer).GetStateRestoreReceipt(ctx, req.(*GetStateRestoreReceiptRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ContainerRepositoryService_ServiceDesc is the grpc.ServiceDesc for ContainerRepositoryService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -362,6 +428,14 @@ var ContainerRepositoryService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetWorkerAddress",
 			Handler:    _ContainerRepositoryService_SetWorkerAddress_Handler,
+		},
+		{
+			MethodName: "SetStateRestoreReceipt",
+			Handler:    _ContainerRepositoryService_SetStateRestoreReceipt_Handler,
+		},
+		{
+			MethodName: "GetStateRestoreReceipt",
+			Handler:    _ContainerRepositoryService_GetStateRestoreReceipt_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -152,7 +153,7 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 		log.Info().Str("pool_name", name).Str("mode", string(pool.Mode)).Str("gpu_type", pool.GPUType).Msg("loaded controller")
 	}
 
-	return &Scheduler{
+	scheduler := &Scheduler{
 		ctx:                       ctx,
 		config:                    config,
 		eventBus:                  eventBus,
@@ -171,7 +172,9 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 		workerProvisioningBackoff: newWorkerProvisioningBackoff(),
 		credentials:               newSchedulerCredentialCache(),
 		pushComputeEvent:          pushPoolMetrics,
-	}, nil
+	}
+	go scheduler.runStateVolumeAttachmentPlanReconciler(ctx)
+	return scheduler, nil
 }
 
 func NewSchedulerForCapacityChecks(workerRepo repo.WorkerRepository, computeRepo repo.ComputeRepository, workerPoolManager *WorkerPoolManager) *Scheduler {
@@ -388,36 +391,119 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func (s *Scheduler) Run(request *types.ContainerRequest) error {
+func (s *Scheduler) Run(request *types.ContainerRequest) (runErr error) {
 	requestLog(log.Info(), request).
 		Str("stub_type", string(request.Stub.Type.Kind())).
 		Msg("received run request")
 
 	request.Timestamp = time.Now()
+	ctx := s.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	attachmentPlanHash, writableStateMembers, err := stateVolumeAttachmentPlanIdentity(request)
+	if err != nil {
+		return err
+	}
+	attachmentPlan, err := s.beginStateVolumeAttachmentPlan(ctx, request, attachmentPlanHash, writableStateMembers)
+	if err != nil {
+		return err
+	}
+	_, err = s.resolveStateVolumeAttachments(ctx, request)
+	if err != nil {
+		if releaseErr := s.abortStateVolumeAttachmentPlan(ctx, request, attachmentPlan); releaseErr != nil {
+			return errors.Join(err, releaseErr)
+		}
+		return err
+	}
+	defer func() {
+		if runErr != nil {
+			if releaseErr := s.abortStateVolumeAttachmentPlan(ctx, request, attachmentPlan); releaseErr != nil {
+				runErr = errors.Join(runErr, releaseErr)
+			}
+		}
+	}()
 
 	quota, err := s.getConcurrencyLimit(request)
 	if err != nil {
 		return err
 	}
 
-	err = s.containerRepo.CreateContainerStateWithConcurrencyLimit(quota, request)
-	if err != nil {
-		return err
+	if attachmentPlan != nil {
+		prepared, delay, enqueue, prepareErr := s.prepareRequestForBacklog(request)
+		if prepareErr != nil {
+			return prepareErr
+		}
+		if !enqueue {
+			if abortErr := s.abortStateVolumeAttachmentPlan(ctx, request, attachmentPlan); abortErr != nil {
+				return abortErr
+			}
+			return nil
+		}
+		// Exact retries may run on different gateway replicas. Serialize a
+		// deterministic queue request: the durable plan timestamp is stable and
+		// the worker refreshes lease deadlines authoritatively before mounting.
+		prepared, prepareErr = canonicalStateVolumeOutboxRequest(prepared, attachmentPlan)
+		if prepareErr != nil {
+			return prepareErr
+		}
+		stateReadyAt := time.Now().Add(delay)
+		if delay == 0 && !prepared.Timestamp.IsZero() {
+			stateReadyAt = prepared.Timestamp
+		}
+		payload, marshalErr := json.Marshal(prepared)
+		if marshalErr != nil {
+			return marshalErr
+		}
+		// Once Redis admission is attempted, its outcome can be uncertain to
+		// this replica. The durable reconciler owns cleanup from this point;
+		// never let the original creator delete an exact retry's winner.
+		attachmentPlan.Owned = false
+		err = s.containerRepo.CreateContainerStateWithConcurrencyLimitAndStateVolumeOutbox(quota, request, payload, stateReadyAt)
+		if err != nil {
+			var alreadyScheduled *types.ContainerAlreadyScheduledError
+			if !errors.As(err, &alreadyScheduled) {
+				return err
+			}
+			state, stateErr := s.containerRepo.GetContainerState(request.ContainerId)
+			if stateErr != nil || state.StateVolumePlanId != attachmentPlan.PlanId ||
+				state.StateVolumePlanHash != attachmentPlan.RequestHash {
+				return fmt.Errorf("active container does not match the exact state-volume attachment plan: %w", err)
+			}
+			err = nil
+		}
+	} else {
+		err = s.containerRepo.CreateContainerStateWithConcurrencyLimit(quota, request)
+		if err != nil {
+			return err
+		}
 	}
-
-	s.attachLatestCheckpoint(request)
 
 	requestedEvent := request.Clone()
 	go s.schedulerUsageMetrics.CounterIncContainerRequested(requestedEvent)
 
 	queueStart := time.Now()
-	err = s.addRequestToBacklog(request)
+	if attachmentPlan != nil {
+		err = s.completeStateVolumeAttachmentPlan(ctx, request, attachmentPlan)
+		if err == nil {
+			_, err = s.requestBacklog.PromoteStateVolumePlan(attachmentPlan.PlanId, request.ContainerId)
+		}
+		if err == nil {
+			err = s.backendRepo.MarkStateVolumeAttachmentPlanEnqueued(ctx, attachmentPlan.WorkspaceId,
+				request.ContainerId, attachmentPlan.PlanId, attachmentPlan.RequestHash)
+			attachmentPlan.Enqueued = err == nil
+		}
+	} else {
+		err = s.addRequestToBacklog(request)
+	}
 	s.recordContainerLifecycle(request, types.ContainerLifecycleSchedulerQueuePush, queueStart, time.Now(), err == nil, map[string]string{
 		"retry_count": fmt.Sprintf("%d", request.RetryCount),
 	})
 	if err != nil {
 		requestLog(log.Error(), request).Err(err).Msg("failed to add request to backlog")
-		newSchedulingAttempt(s, request, nil).fail(types.ContainerSchedulingFailureBacklogPushFailed)
+		if attachmentPlan == nil {
+			newSchedulingAttempt(s, request, nil).fail(types.ContainerSchedulingFailureBacklogPushFailed)
+		}
 		return err
 	}
 
@@ -525,14 +611,33 @@ func (s *Scheduler) Stop(stopArgs *types.StopContainerArgs) error {
 	}
 	s.eventRepo.PushContainerEvent(event)
 
-	stoppedBeforeAssignment, err := s.containerRepo.MarkPendingContainerStoppingIfUnassigned(
-		stopArgs.ContainerId,
-		types.ContainerStateTtlSWhileStopping,
-	)
+	stoppedBeforeAssignment := false
+	var err error
+	if state != nil && state.StateVolumePlanId != "" && state.Status == types.ContainerStatusPending && state.WorkerId == "" {
+		stoppedBeforeAssignment, err = s.containerRepo.FencePendingContainerStateVolumePlan(
+			stopArgs.ContainerId, state.StateVolumePlanId, state.StateVolumePlanHash, types.ContainerStateTtlSWhileStopping)
+	} else {
+		stoppedBeforeAssignment, err = s.containerRepo.MarkPendingContainerStoppingIfUnassigned(
+			stopArgs.ContainerId, types.ContainerStateTtlSWhileStopping)
+	}
 	if err != nil {
 		return err
 	}
 	if stoppedBeforeAssignment {
+		if state != nil && state.NbdDevices > 0 && s.backendRepo != nil && state.WorkspaceId != "" {
+			ctx := s.ctx
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			workspace, workspaceErr := s.backendRepo.GetWorkspaceByExternalId(ctx, state.WorkspaceId)
+			if workspaceErr != nil {
+				return workspaceErr
+			}
+			if releaseErr := s.backendRepo.ReleasePendingStateVolumeAttachments(ctx, workspace.Id, stopArgs.ContainerId,
+				state.StateVolumePlanId, state.StateVolumePlanHash); releaseErr != nil {
+				return releaseErr
+			}
+		}
 		if err := s.containerRepo.DeleteContainerState(stopArgs.ContainerId); err != nil {
 			return err
 		}
@@ -618,7 +723,7 @@ func (s *Scheduler) getControllers(request *types.ContainerRequest) ([]WorkerPoo
 	// type before widening.
 	controllers = append(controllers, s.failoverControllers(chain, controllers)...)
 	controllers = filterControllersByFlagsForFailover(controllers, request, chain)
-	controllers = s.filterControllersByCheckpointAccelerator(controllers, request)
+	controllers = s.filterControllersByStateRestoreAccelerator(controllers, request)
 	if len(controllers) == 0 {
 		return nil, errors.New("no controller found for request")
 	}
@@ -667,10 +772,6 @@ func (s *Scheduler) StartProcessingRequests() {
 }
 
 func (s *Scheduler) processRequest(request *types.ContainerRequest, workers []*types.Worker) {
-	if !s.checkpointReady(request) {
-		newSchedulingAttempt(s, request, workers).requeueForWorkerWaitDelay(checkpointHandoffRetryDelay, "checkpoint_handoff")
-		return
-	}
 	newSchedulingAttempt(s, request, workers).run()
 }
 
@@ -679,6 +780,14 @@ func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.Contain
 	if err := s.pushWorkerRequests(worker, []*types.ContainerRequest{workerRequest}); err != nil {
 		return err
 	}
+	if request.StateVolumePlanId != "" {
+		if err := s.requestBacklog.AcknowledgeStateVolumePlanDispatch(request.StateVolumePlanId); err != nil {
+			// Assignment and worker delivery are already one durable Redis commit.
+			// Leaving the processing lease is safe: recovery also requires the
+			// exact container to remain PENDING and unassigned.
+			requestLog(log.Warn(), request).Err(err).Msg("failed to acknowledge state-volume backlog processing lease")
+		}
+	}
 
 	go s.schedulerUsageMetrics.CounterIncContainerScheduled(workerRequest.Clone())
 	return nil
@@ -686,7 +795,6 @@ func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.Contain
 
 func (s *Scheduler) prepareWorkerRequest(worker *types.Worker, request *types.ContainerRequest) *types.ContainerRequest {
 	workerRequest := request.Clone()
-	s.attachLatestCheckpoint(workerRequest)
 	normalizeGPURequest(workerRequest)
 	workerRequest.Gpu = worker.Gpu
 
@@ -968,7 +1076,7 @@ func filterControllersByFlagsForFailover(controllers []WorkerPoolController, req
 	filteredControllers := []WorkerPoolController{}
 
 	for _, controller := range controllers {
-		if !runtimeMatchesCheckpoint(request, controllerRuntime(controller)) {
+		if !runtimeMatchesRestore(request, controllerRuntime(controller)) {
 			continue
 		}
 		if !request.StorageAvailable() && controllerUsesAgentCapacity(controller) {
@@ -1085,10 +1193,10 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 	}
 
 	for _, worker := range workers {
-		if !runtimeMatchesCheckpoint(request, workerRuntime(worker)) {
+		if !runtimeMatchesRestore(request, workerRuntime(worker)) {
 			continue
 		}
-		if !acceleratorMatchesCheckpoint(request, worker.Gpu) {
+		if !acceleratorMatchesStateRestore(request, worker.Gpu) {
 			continue
 		}
 		isGpuWorker := worker.Gpu != ""
@@ -1097,6 +1205,9 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 
 		// Check if the worker has enough free cpu and memory to run the container
 		if worker.FreeCpu < cpu || worker.FreeMemory < memory {
+			continue
+		}
+		if worker.FreeNbdDevices < request.RequiredNbdDevices() {
 			continue
 		}
 
@@ -1128,35 +1239,26 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 	return filteredWorkers
 }
 
-func availableCheckpoint(request *types.ContainerRequest) *types.Checkpoint {
-	if request == nil || request.Checkpoint == nil || request.Checkpoint.Status != string(types.CheckpointStatusAvailable) {
-		return nil
-	}
-	return request.Checkpoint
-}
-
-func checkpointRuntime(request *types.ContainerRequest) string {
-	checkpoint := availableCheckpoint(request)
-	if checkpoint == nil || checkpoint.IsFilesystemOnly() {
+func stateRestoreRuntime(request *types.ContainerRequest) string {
+	if request == nil || request.StateSnapshotId == "" {
 		return ""
 	}
-	return strings.TrimSpace(checkpoint.Runtime)
+	return strings.TrimSpace(request.StateRuntimeProfile)
 }
 
-func runtimeMatchesCheckpoint(request *types.ContainerRequest, runtimeName string) bool {
-	requiredRuntime := checkpointRuntime(request)
+func runtimeMatchesRestore(request *types.ContainerRequest, runtimeName string) bool {
+	requiredRuntime := stateRestoreRuntime(request)
 	return requiredRuntime == "" || runtimeName == requiredRuntime
 }
 
-func checkpointAccelerator(request *types.ContainerRequest) string {
-	checkpoint := availableCheckpoint(request)
-	if checkpoint == nil || checkpoint.IsFilesystemOnly() {
+func stateRestoreAccelerator(request *types.ContainerRequest) string {
+	if request == nil || request.StateSnapshotId == "" {
 		return ""
 	}
-	return strings.TrimSpace(checkpoint.Accelerator)
+	return strings.TrimSpace(request.StateCheckpointAccelerator)
 }
 
-func normalizedAccelerator(accelerator string) string {
+func normalizedStateRestoreAccelerator(accelerator string) string {
 	accelerator = strings.TrimSpace(accelerator)
 	if accelerator == "" || strings.EqualFold(accelerator, "CPU") {
 		return "CPU"
@@ -1168,16 +1270,16 @@ func normalizedAccelerator(accelerator string) string {
 	return normalized.String()
 }
 
-func acceleratorMatchesCheckpoint(request *types.ContainerRequest, accelerator string) bool {
-	requiredAccelerator := checkpointAccelerator(request)
-	return requiredAccelerator == "" || strings.EqualFold(normalizedAccelerator(accelerator), normalizedAccelerator(requiredAccelerator))
+func acceleratorMatchesStateRestore(request *types.ContainerRequest, accelerator string) bool {
+	required := stateRestoreAccelerator(request)
+	return required == "" || strings.EqualFold(normalizedStateRestoreAccelerator(accelerator), normalizedStateRestoreAccelerator(required))
 }
 
-func (s *Scheduler) filterControllersByCheckpointAccelerator(
+func (s *Scheduler) filterControllersByStateRestoreAccelerator(
 	controllers []WorkerPoolController,
 	request *types.ContainerRequest,
 ) []WorkerPoolController {
-	if checkpointAccelerator(request) == "" {
+	if stateRestoreAccelerator(request) == "" {
 		return controllers
 	}
 
@@ -1191,7 +1293,7 @@ func (s *Scheduler) filterControllersByCheckpointAccelerator(
 			filtered = append(filtered, controller)
 			continue
 		}
-		if acceleratorMatchesCheckpoint(request, pool.Config.GPUType) {
+		if acceleratorMatchesStateRestore(request, pool.Config.GPUType) {
 			filtered = append(filtered, controller)
 		}
 	}
@@ -1649,25 +1751,41 @@ const (
 )
 
 func (s *Scheduler) addRequestToBacklog(request *types.ContainerRequest) error {
+	prepared, delay, enqueue, err := s.prepareRequestForBacklog(request)
+	if err != nil || !enqueue {
+		return err
+	}
+	return s.requestBacklog.PushAfter(prepared, delay)
+}
+
+func (s *Scheduler) prepareRequestForBacklog(request *types.ContainerRequest) (*types.ContainerRequest, time.Duration, bool, error) {
 	normalizeGPURequest(request)
 
+	delay := time.Duration(0)
 	if request.RetryCount == 0 {
 		request.RetryCount++
-		return s.pushBacklog(request, 0)
-	}
-
-	if request.RetryCount >= maxScheduleRetryCount || time.Since(request.Timestamp) >= maxScheduleRetryDuration {
+	} else if request.RetryCount >= maxScheduleRetryCount || time.Since(request.Timestamp) >= maxScheduleRetryDuration {
 		newSchedulingAttempt(s, request, nil).fail(types.ContainerSchedulingFailureRetryLimit)
-		return nil
+		return nil, 0, false, nil
+	} else {
+		delay = calculateBackoffDelay(request.RetryCount)
+		request.RetryCount++
+		metrics.RecordRequestRetry(request)
 	}
-
-	delay := calculateBackoffDelay(request.RetryCount)
-	request.RetryCount++
-	metrics.RecordRequestRetry(request)
-	return s.pushBacklog(request, delay)
+	private, err := s.privateBacklogRequest(request)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	if private {
+		request = request.PrivateWorkerRequest()
+	}
+	return request, delay, true, nil
 }
 
 func (s *Scheduler) pushBacklog(request *types.ContainerRequest, delay time.Duration) error {
+	if request != nil && request.StateVolumePlanId != "" {
+		return s.requestBacklog.RequeueStateVolumePlan(request.StateVolumePlanId, request.ContainerId, delay)
+	}
 	private, err := s.privateBacklogRequest(request)
 	if err != nil {
 		return err

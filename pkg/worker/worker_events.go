@@ -15,7 +15,9 @@ func (s *Worker) listenForWorkerEvents() {
 
 	for {
 		stream, err := s.workerRepoClient.StreamWorkerEvents(s.ctx, &pb.StreamWorkerEventsRequest{
-			WorkerId: s.workerId,
+			WorkerId:         s.workerId,
+			WorkerInstanceId: s.workerInstanceId,
+			StorageNodeId:    s.machineID,
 		})
 		if err != nil {
 			if s.ctx.Err() != nil {

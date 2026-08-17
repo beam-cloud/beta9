@@ -514,20 +514,23 @@ func (s *Scheduler) newProvisioningReservation(request *types.ContainerRequest, 
 	}
 
 	worker := &types.Worker{
-		Id:                   fmt.Sprintf("provisioning-%s-%d", controller.Name(), time.Now().UnixNano()),
-		Status:               types.WorkerStatusPending,
-		TotalCpu:             cpu,
-		TotalMemory:          memory,
-		TotalGpuCount:        gpuCount,
-		FreeCpu:              cpu,
-		FreeMemory:           memory,
-		FreeGpuCount:         gpuCount,
-		Gpu:                  gpu,
-		PoolName:             controller.Name(),
-		RequiresPoolSelector: controller.RequiresPoolSelector(),
-		Runtime:              controller.ContainerRuntime(),
-		BuildVersion:         s.config.Worker.ImageTag,
-		Preemptable:          controller.IsPreemptable(),
+		Id:                     fmt.Sprintf("provisioning-%s-%d", controller.Name(), time.Now().UnixNano()),
+		Status:                 types.WorkerStatusPending,
+		TotalCpu:               cpu,
+		TotalMemory:            memory,
+		TotalGpuCount:          gpuCount,
+		FreeCpu:                cpu,
+		FreeMemory:             memory,
+		FreeGpuCount:           gpuCount,
+		TotalNbdDevices:        request.RequiredNbdDevices(),
+		FreeNbdDevices:         request.RequiredNbdDevices(),
+		ObservedFreeNbdDevices: request.RequiredNbdDevices(),
+		Gpu:                    gpu,
+		PoolName:               controller.Name(),
+		RequiresPoolSelector:   controller.RequiresPoolSelector(),
+		Runtime:                controller.ContainerRuntime(),
+		BuildVersion:           s.config.Worker.ImageTag,
+		Preemptable:            controller.IsPreemptable(),
 	}
 
 	if pool, ok := s.poolForController(controller); ok {
@@ -665,8 +668,12 @@ func (s *Scheduler) reserveWorkerCapacity(worker *types.Worker, request *types.C
 		}
 		worker.FreeGpuCount -= request.GpuCount
 	}
+	if worker.FreeNbdDevices < request.RequiredNbdDevices() {
+		return false
+	}
 
 	worker.FreeCpu -= cpu
 	worker.FreeMemory -= memory
+	worker.FreeNbdDevices -= request.RequiredNbdDevices()
 	return true
 }

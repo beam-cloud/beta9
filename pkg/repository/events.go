@@ -1012,17 +1012,35 @@ type syncEventSink interface {
 	PushEventSync(event cloudevents.Event) error
 }
 
+func (r *EventClientRepo) HasDurableScopedStateSink() bool {
+	for _, sink := range r.storageSinks {
+		if _, ok := sink.(syncEventSink); ok {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *EventClientRepo) PushStubCacheRequiredContent(schema types.EventStubCacheRequiredContentSchema) error {
 	if schema.Timestamp.IsZero() {
 		schema.Timestamp = time.Now().UTC()
 	}
-	schema.ItemCount = len(schema.Items)
-	if schema.TotalBytes == 0 {
+	// Scoped replacement revisions describe the aggregate set across all
+	// multipart records. Recomputing these fields from one part (or the empty
+	// commit marker) corrupts the set digest contract and makes every revision
+	// uncommittable. Legacy additive records remain normalized per event.
+	if schema.Scope == "" {
+		schema.ItemCount = len(schema.Items)
+	}
+	if schema.Scope == "" && schema.TotalBytes == 0 {
 		var total int64
 		for _, item := range schema.Items {
 			total += item.SizeBytes
 		}
 		schema.TotalBytes = total
+	}
+	if schema.Scope != "" && !r.HasDurableScopedStateSink() {
+		return ErrEventWriteUnsupported
 	}
 	if len(r.storageSinks) == 0 && len(r.callbackSinks) == 0 {
 		return nil

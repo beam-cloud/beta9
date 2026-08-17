@@ -1,0 +1,22 @@
+# syntax=docker/dockerfile:1.7-labs
+
+ARG WORKER_IMAGE=localhost:5001/beta9-worker:latest
+
+FROM golang:1.25-bookworm AS build
+
+WORKDIR /workspace
+ENV GONOSUMDB="github.com/beam-cloud/*"
+ENV CGO_ENABLED=0
+
+COPY go.mod go.sum ./
+RUN go mod download
+COPY --exclude=sdk . .
+RUN go test -c -tags=statevolumeintegration -o /usr/local/bin/state-volume-integration ./pkg/worker && \
+    ! ldd /usr/local/bin/state-volume-integration
+
+FROM ${WORKER_IMAGE}
+
+COPY --from=build /usr/local/bin/state-volume-integration /usr/local/bin/state-volume-integration
+
+ENTRYPOINT ["/usr/bin/tini", "-g", "--", "/usr/local/bin/state-volume-integration"]
+CMD ["-test.v", "-test.run=^TestStateVolumeIntegration$", "-test.timeout=120m"]

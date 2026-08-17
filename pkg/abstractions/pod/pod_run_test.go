@@ -48,27 +48,15 @@ func TestConfigureMachinePlacementRejectsPoolMismatch(t *testing.T) {
 	require.ErrorContains(t, err, "does not belong to pool")
 }
 
-func TestCreatePodRunOptionsPreserveResourceOverrideForColdAndCheckpointLaunches(t *testing.T) {
+func TestCreatePodRunOptionsPreserveResourceOverrideAndStateSnapshot(t *testing.T) {
 	ctx := metadata.NewIncomingContext(
 		context.Background(),
 		metadata.Pairs(types.ForceResourceLimitsMetadata, "true"),
 	)
-	request := &pb.CreatePodRequest{StubId: "legacy-stub"}
-	checkpoint := &types.Checkpoint{CheckpointId: "checkpoint-1"}
-
-	for _, test := range []struct {
-		name       string
-		checkpoint *types.Checkpoint
-	}{
-		{name: "cold launch"},
-		{name: "checkpoint clone", checkpoint: checkpoint},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			opts := createPodRunOptions(ctx, request, test.checkpoint)
-			require.True(t, opts.forceResourceLimits)
-			require.Same(t, test.checkpoint, opts.checkpoint)
-		})
-	}
-
-	require.False(t, createPodRunOptions(context.Background(), request, nil).forceResourceLimits)
+	stateID := "state-1"
+	request := &pb.CreatePodRequest{StubId: "stub", StateSnapshotId: &stateID}
+	opts := createPodRunOptions(ctx, request)
+	require.True(t, opts.forceResourceLimits)
+	require.Equal(t, stateID, opts.stateSnapshotId)
+	require.False(t, createPodRunOptions(context.Background(), request).forceResourceLimits)
 }

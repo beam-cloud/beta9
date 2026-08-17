@@ -14,10 +14,6 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
-type checkpointVolumeBackendRepo struct {
-	repository.BackendRepository
-}
-
 type missingSecretBackendRepo struct {
 	repository.BackendRepository
 }
@@ -123,29 +119,27 @@ func TestComputeCapacityVerdictSkipsNoGPU(t *testing.T) {
 	require.Equal(t, []string{"A6000"}, verdict.unsupportedGpus)
 }
 
-func (r *checkpointVolumeBackendRepo) GetOrCreateVolume(ctx context.Context, workspaceId uint, name string) (*types.Volume, error) {
-	return &types.Volume{ExternalId: "volume-123", WorkspaceId: workspaceId, Name: name}, nil
-}
-
-func TestConfigureDurableDiskPlacementDefaultsSnapshotDriver(t *testing.T) {
+func TestConfigureDurableDiskPlacementNormalizesBlockVolume(t *testing.T) {
 	config := &types.StubConfigV1{
-		Disks: []*pb.DurableDisk{{Name: "pg-data"}},
+		Disks: []*pb.DurableDisk{{Name: "pg/data", Size: " 50Gi ", MountPath: "/data/", SourceGenerationId: " 7aee3365-2963-4a6d-b9fb-2c934924880d "}},
 	}
 
 	require.NoError(t, (&GatewayService{}).configureDurableDiskPlacement(context.Background(), nil, config))
-	require.Equal(t, types.DurableDiskDriverSnapshot, config.Disks[0].Driver)
+	require.Equal(t, "pg-data", config.Disks[0].Name)
+	require.Equal(t, "50Gi", config.Disks[0].Size)
+	require.Equal(t, "/data", config.Disks[0].MountPath)
+	require.Equal(t, "7aee3365-2963-4a6d-b9fb-2c934924880d", config.Disks[0].SourceGenerationId)
 }
 
-func TestConfigureDurableDiskPlacementRejectsUnsupportedDriver(t *testing.T) {
-	config := &types.StubConfigV1{
-		Disks: []*pb.DurableDisk{{
-			Name:   "pg-data",
-			Driver: "unsupported",
-		}},
-	}
+func TestPersistentRootFromProtoRequiresPositiveSize(t *testing.T) {
+	root, err := persistentRootFromProto(&pb.PersistentRoot{Size: " 50Gi "})
+	require.NoError(t, err)
+	require.Equal(t, &types.PersistentRoot{Size: "50Gi"}, root)
 
-	err := (&GatewayService{}).configureDurableDiskPlacement(context.Background(), nil, config)
-	require.ErrorContains(t, err, `unsupported driver "unsupported"`)
+	for _, size := range []string{"", "nope", "0", "-1Gi"} {
+		_, err := persistentRootFromProto(&pb.PersistentRoot{Size: size})
+		require.Error(t, err)
+	}
 }
 
 func TestConfigureDurableDiskPlacementRejectsWritableDiskWithMultipleContainers(t *testing.T) {
@@ -171,121 +165,8 @@ func TestConfigureDurableDiskPlacementRejectsWritableDiskWithMultipleMinContaine
 func TestConfigureDurableDiskPlacementAllowsReadOnlyDiskWithMultipleContainers(t *testing.T) {
 	config := &types.StubConfigV1{
 		Autoscaler: &types.Autoscaler{MaxContainers: 4},
-		Disks:      []*pb.DurableDisk{{Name: "data", ReadOnly: true}},
+		Disks:      []*pb.DurableDisk{{Name: "data", Size: "50Gi", MountPath: "/data", ReadOnly: true}},
 	}
 
 	require.NoError(t, (&GatewayService{}).configureDurableDiskPlacement(context.Background(), nil, config))
-}
-
-func TestHandleCheckpointEnabledDisablesCheckpointForServesWithWarning(t *testing.T) {
-	authInfo := &auth.AuthInfo{Workspace: &types.Workspace{}}
-	in := &pb.GetOrCreateStubRequest{
-		StubType:          types.StubTypeEndpointServe,
-		CheckpointEnabled: true,
-	}
-
-	warning, err := (&GatewayService{}).handleCheckpointEnabled(context.Background(), authInfo, in, nil)
-	require.NoError(t, err)
-	require.Contains(t, warning, "checkpointing is not supported for serve sessions")
-	require.False(t, in.CheckpointEnabled)
-}
-
-func TestHandleCheckpointEnabledRequiresReadinessPathForPods(t *testing.T) {
-	authInfo := &auth.AuthInfo{Workspace: &types.Workspace{}}
-
-	for _, stubType := range []string{types.StubTypePod, types.StubTypePodDeployment, types.StubTypePodRun} {
-		t.Run(stubType, func(t *testing.T) {
-			// No trigger at all
-			in := &pb.GetOrCreateStubRequest{StubType: stubType, CheckpointEnabled: true}
-			_, err := (&GatewayService{}).handleCheckpointEnabled(context.Background(), authInfo, in, nil)
-			require.ErrorContains(t, err, "checkpoint_readiness_path")
-
-			// Trigger without an HTTP path
-			in = &pb.GetOrCreateStubRequest{
-				StubType:          stubType,
-				CheckpointEnabled: true,
-				CheckpointTrigger: &pb.CheckpointTrigger{Type: "http"},
-			}
-			_, err = (&GatewayService{}).handleCheckpointEnabled(context.Background(), authInfo, in, nil)
-			require.ErrorContains(t, err, "checkpoint_readiness_path")
-
-			// Valid HTTP trigger passes pod validation (fails later on workspace storage instead)
-			in = &pb.GetOrCreateStubRequest{
-				StubType:          stubType,
-				CheckpointEnabled: true,
-				CheckpointTrigger: &pb.CheckpointTrigger{Type: "http", HttpPath: "/ready"},
-			}
-			_, err = (&GatewayService{}).handleCheckpointEnabled(context.Background(), authInfo, in, nil)
-			require.ErrorContains(t, err, "workspace storage is required")
-		})
-	}
-}
-
-func TestHandleCheckpointEnabledExemptsSandboxesFromReadinessPath(t *testing.T) {
-	authInfo := &auth.AuthInfo{Workspace: &types.Workspace{}}
-	in := &pb.GetOrCreateStubRequest{
-		StubType:          types.StubTypeSandbox,
-		CheckpointEnabled: true,
-	}
-
-	// Sandboxes checkpoint via manual snapshot APIs, so no readiness path is required;
-	// validation proceeds to the workspace storage check instead.
-	_, err := (&GatewayService{}).handleCheckpointEnabled(context.Background(), authInfo, in, nil)
-	require.ErrorContains(t, err, "workspace storage is required")
-}
-
-func TestCheckpointModelCacheVolumeNamePrefersAppName(t *testing.T) {
-	in := &pb.GetOrCreateStubRequest{
-		Name:    types.StubTypePodDeployment,
-		AppName: "qwen",
-	}
-	require.Equal(t, "checkpoint-model-cache-qwen", checkpointModelCacheVolumeName(in))
-}
-
-func TestCheckpointModelCacheVolumeNameFallsBackToStubName(t *testing.T) {
-	in := &pb.GetOrCreateStubRequest{Name: "qwen/prod"}
-	require.Equal(t, "checkpoint-model-cache-qwen-prod", checkpointModelCacheVolumeName(in))
-}
-
-func TestHandleCheckpointEnabledSplitsModelAndCompilerCaches(t *testing.T) {
-	storageId := uint(1)
-	authInfo := &auth.AuthInfo{Workspace: &types.Workspace{
-		Id:        7,
-		StorageId: &storageId,
-		Storage:   &types.WorkspaceStorage{Id: &storageId},
-	}}
-	in := &pb.GetOrCreateStubRequest{
-		Name:              "qwen",
-		StubType:          types.StubTypePodDeployment,
-		CheckpointEnabled: true,
-		CheckpointTrigger: &pb.CheckpointTrigger{Type: "http", HttpPath: "/v1/models"},
-		Env:               []string{"TRITON_CACHE_DIR=/bad", "HF_HOME=/bad", "USER_ENV=1"},
-	}
-
-	warning, err := (&GatewayService{backendRepo: &checkpointVolumeBackendRepo{}}).handleCheckpointEnabled(context.Background(), authInfo, in, nil)
-
-	require.NoError(t, err)
-	require.Empty(t, warning)
-	require.ElementsMatch(t, []string{
-		"HF_HOME=/checkpoint-model-cache-qwen",
-		"HF_HUB_CACHE=/checkpoint-model-cache-qwen/hub",
-		"HF_XET_CACHE=/tmp/beam-checkpoint-compile-cache/hf-xet",
-		"TRANSFORMERS_CACHE=/checkpoint-model-cache-qwen",
-		"TRITON_CACHE_DIR=/tmp/beam-checkpoint-compile-cache/triton",
-		"TORCHINDUCTOR_CACHE_DIR=/tmp/beam-checkpoint-compile-cache/torchinductor",
-		"VLLM_CACHE_ROOT=/tmp/beam-checkpoint-compile-cache/vllm",
-		"CUDA_CACHE_PATH=/tmp/beam-checkpoint-compile-cache/cuda",
-		"USER_ENV=1",
-	}, in.Env)
-	require.Len(t, in.Volumes, 1)
-	require.Equal(t, "volume-123", in.Volumes[0].Id)
-	require.Equal(t, "/checkpoint-model-cache-qwen", in.Volumes[0].MountPath)
-}
-
-func TestCheckpointCacheEnvLeavesHubTransportSelectionToRuntime(t *testing.T) {
-	env := checkpointCacheEnv("/model-cache")
-
-	require.NotContains(t, env, "HF_HUB_DISABLE_XET=1")
-	require.NotContains(t, env, "HF_HUB_ENABLE_HF_TRANSFER=0")
-	require.Contains(t, env, "HF_XET_CACHE=/tmp/beam-checkpoint-compile-cache/hf-xet")
 }

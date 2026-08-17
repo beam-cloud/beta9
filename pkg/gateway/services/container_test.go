@@ -34,6 +34,134 @@ type attachContainerRepository struct {
 	requestedContainer string
 }
 
+type snapshotReplayBackendRepository struct {
+	repository.BackendRepository
+	snapshot    *types.StateSnapshot
+	lookupCount int
+}
+
+type stateSnapshotReferenceBackendRepository struct {
+	repository.BackendRepository
+	workspaceID uint
+	snapshotID  string
+	kind        string
+	referenceID string
+	released    bool
+	err         error
+}
+
+func (r *stateSnapshotReferenceBackendRepository) RetainStateSnapshotReference(_ context.Context, workspaceID uint,
+	snapshotID, kind, referenceID string,
+) (*types.StateSnapshotReference, error) {
+	r.workspaceID, r.snapshotID, r.kind, r.referenceID = workspaceID, snapshotID, kind, referenceID
+	if r.err != nil {
+		return nil, r.err
+	}
+	return &types.StateSnapshotReference{SnapshotExternalId: snapshotID, Kind: kind, ReferenceId: referenceID}, nil
+}
+
+func (r *stateSnapshotReferenceBackendRepository) ReleaseStateSnapshotReference(_ context.Context, workspaceID uint,
+	snapshotID, kind, referenceID string,
+) (*types.StateSnapshotReference, error) {
+	r.workspaceID, r.snapshotID, r.kind, r.referenceID, r.released = workspaceID, snapshotID, kind, referenceID, true
+	if r.err != nil {
+		return nil, r.err
+	}
+	return &types.StateSnapshotReference{SnapshotExternalId: snapshotID, Kind: kind, ReferenceId: referenceID,
+		Released: true}, nil
+}
+
+func (r *snapshotReplayBackendRepository) GetStateSnapshotByOperationForWorkspace(context.Context, uint, string, string) (*types.StateSnapshot, error) {
+	r.lookupCount++
+	return r.snapshot, nil
+}
+
+func TestSnapshotContainerStateRejectsPublicPublishBeforeCapture(t *testing.T) {
+	backend := &snapshotReplayBackendRepository{}
+	gws := &GatewayService{backendRepo: backend}
+	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
+		Workspace: &types.Workspace{Id: 7, ExternalId: "workspace"},
+		Token:     &types.Token{TokenType: types.TokenTypeWorkspace},
+	})
+
+	response, err := gws.SnapshotContainerState(ctx, &pb.GatewaySnapshotContainerStateRequest{
+		ContainerId: "container", OperationId: "operation", Mode: "live", Publish: true,
+	})
+	require.NoError(t, err)
+	require.False(t, response.Ok)
+	require.Equal(t, "public whole-root state publishing is disabled", response.ErrorMsg)
+	require.Zero(t, backend.lookupCount, "publish must be rejected before repository lookup or worker capture")
+}
+
+func TestStateSnapshotReferenceAPIIsWorkspaceScopedAndAdditive(t *testing.T) {
+	const (
+		snapshotID  = "ae64dbd5-f687-4da9-b766-7b49d79b4db1"
+		referenceID = "machine:machine-17:ae64dbd5-f687-4da9-b766-7b49d79b4db1"
+	)
+	backend := &stateSnapshotReferenceBackendRepository{}
+	gws := &GatewayService{backendRepo: backend}
+	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
+		Workspace: &types.Workspace{Id: 17, ExternalId: "workspace"},
+		Token:     &types.Token{TokenType: types.TokenTypeWorkspace},
+	})
+
+	retained, err := gws.RetainStateSnapshotReference(ctx, &pb.StateSnapshotReferenceRequest{
+		StateSnapshotId: snapshotID, Kind: "machine", ReferenceId: referenceID,
+	})
+	require.NoError(t, err)
+	require.True(t, retained.Ok)
+	require.Equal(t, "active", retained.Status)
+	require.EqualValues(t, 17, backend.workspaceID)
+	require.Equal(t, snapshotID, backend.snapshotID)
+	require.Equal(t, referenceID, backend.referenceID)
+
+	released, err := gws.ReleaseStateSnapshotReference(ctx, &pb.StateSnapshotReferenceRequest{
+		StateSnapshotId: snapshotID, Kind: "machine", ReferenceId: referenceID,
+	})
+	require.NoError(t, err)
+	require.True(t, released.Ok)
+	require.Equal(t, "released", released.Status)
+	require.True(t, backend.released)
+}
+
+func TestStateSnapshotReferenceAPIRejectsMissingWorkspaceAuthorization(t *testing.T) {
+	backend := &stateSnapshotReferenceBackendRepository{}
+	gws := &GatewayService{backendRepo: backend}
+	response, err := gws.RetainStateSnapshotReference(context.Background(), &pb.StateSnapshotReferenceRequest{
+		StateSnapshotId: "ae64dbd5-f687-4da9-b766-7b49d79b4db1", Kind: "machine", ReferenceId: "machine:m:s",
+	})
+	require.NoError(t, err)
+	require.False(t, response.Ok)
+	require.Equal(t, "Unauthorized Access", response.ErrorMsg)
+	require.Zero(t, backend.workspaceID)
+}
+
+func TestSnapshotContainerStateReplaysTerminalRepositoryResultBeforeWorkerRouting(t *testing.T) {
+	generation := types.StateGeneration{
+		VolumeId: "21d4182a-4930-47b4-a987-e50c4a80156f", GenerationId: "7aee3365-2963-4a6d-b9fb-2c934924880d",
+		CloneParentGenerationId: "acee3e88-20d7-4bbc-92cc-4b839ad6bc55",
+		Name:                    "root", MountPath: "/", Root: true, Generation: 1,
+	}
+	gws := &GatewayService{backendRepo: &snapshotReplayBackendRepository{snapshot: &types.StateSnapshot{
+		ExternalId: "e4f41f9a-524c-4906-8ea3-b36b32f45c27", Mode: "terminal", IncludeMemory: true,
+		Visible: true, Status: types.StateSnapshotStatusAvailable, RestoreMode: "memory",
+		CheckpointId: "checkpoint", Generations: []types.StateGeneration{generation},
+	}}}
+	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
+		Workspace: &types.Workspace{Id: 7, ExternalId: "workspace"},
+		Token:     &types.Token{TokenType: types.TokenTypeWorkspace},
+	})
+	response, err := gws.SnapshotContainerState(ctx, &pb.GatewaySnapshotContainerStateRequest{
+		ContainerId: "gone-container", OperationId: "terminal-op", Mode: "terminal",
+		IncludeMemory: true, Visible: true,
+	})
+	require.NoError(t, err)
+	require.True(t, response.Ok)
+	require.Equal(t, "e4f41f9a-524c-4906-8ea3-b36b32f45c27", response.StateSnapshotId)
+	require.True(t, response.HasMemory)
+	require.Equal(t, generation.CloneParentGenerationId, response.Generations[0].CloneParentGenerationId)
+}
+
 func (r *attachContainerRepository) GetContainerState(containerId string) (*types.ContainerState, error) {
 	r.requestedContainer = containerId
 	return r.state, r.err

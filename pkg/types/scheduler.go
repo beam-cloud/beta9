@@ -56,25 +56,30 @@ const (
 
 // @go2proto
 type Worker struct {
-	Id                   string       `json:"id" redis:"id"`
-	Status               WorkerStatus `json:"status" redis:"status"`
-	TotalCpu             int64        `json:"total_cpu" redis:"total_cpu"`
-	TotalMemory          int64        `json:"total_memory" redis:"total_memory"`
-	TotalGpuCount        uint32       `json:"total_gpu_count" redis:"total_gpu_count"`
-	FreeCpu              int64        `json:"free_cpu" redis:"free_cpu"`
-	FreeMemory           int64        `json:"free_memory" redis:"free_memory"`
-	FreeGpuCount         uint32       `json:"free_gpu_count" redis:"gpu_count"`
-	Gpu                  string       `json:"gpu" redis:"gpu"`
-	PoolName             string       `json:"pool_name" redis:"pool_name"`
-	MachineId            string       `json:"machine_id" redis:"machine_id"`
-	ResourceVersion      int64        `json:"resource_version" redis:"resource_version"`
-	RequiresPoolSelector bool         `json:"requires_pool_selector" redis:"requires_pool_selector"`
-	Priority             int32        `json:"priority" redis:"priority"`
-	Preemptable          bool         `json:"preemptable" redis:"preemptable"`
-	BuildVersion         string       `json:"build_version" redis:"build_version"`
-	ActiveContainers     []Container  `json:"active_containers" redis:"active_containers"`
-	Runtime              string       `json:"runtime" redis:"runtime"`
-	PoolSelector         string       `json:"pool_selector" redis:"pool_selector"`
+	Id              string       `json:"id" redis:"id"`
+	Status          WorkerStatus `json:"status" redis:"status"`
+	TotalCpu        int64        `json:"total_cpu" redis:"total_cpu"`
+	TotalMemory     int64        `json:"total_memory" redis:"total_memory"`
+	TotalGpuCount   uint32       `json:"total_gpu_count" redis:"total_gpu_count"`
+	TotalNbdDevices uint32       `json:"total_nbd_devices" redis:"total_nbd_devices"`
+	FreeCpu         int64        `json:"free_cpu" redis:"free_cpu"`
+	FreeMemory      int64        `json:"free_memory" redis:"free_memory"`
+	FreeGpuCount    uint32       `json:"free_gpu_count" redis:"gpu_count"`
+	FreeNbdDevices  uint32       `json:"free_nbd_devices" redis:"free_nbd_devices"`
+	// ObservedFreeNbdDevices is the worker-reported preflight baseline. Scheduler
+	// reservations are subtracted from it to derive FreeNbdDevices.
+	ObservedFreeNbdDevices uint32      `json:"-" redis:"observed_free_nbd_devices" go2proto:"ignore"`
+	Gpu                    string      `json:"gpu" redis:"gpu"`
+	PoolName               string      `json:"pool_name" redis:"pool_name"`
+	MachineId              string      `json:"machine_id" redis:"machine_id"`
+	ResourceVersion        int64       `json:"resource_version" redis:"resource_version"`
+	RequiresPoolSelector   bool        `json:"requires_pool_selector" redis:"requires_pool_selector"`
+	Priority               int32       `json:"priority" redis:"priority"`
+	Preemptable            bool        `json:"preemptable" redis:"preemptable"`
+	BuildVersion           string      `json:"build_version" redis:"build_version"`
+	ActiveContainers       []Container `json:"active_containers" redis:"active_containers"`
+	Runtime                string      `json:"runtime" redis:"runtime"`
+	PoolSelector           string      `json:"pool_selector" redis:"pool_selector"`
 	// CordonRequested records explicit operator intent. Disabled workers without
 	// this flag may be recovered automatically after a transient failure.
 	CordonRequested bool `json:"cordon_requested" redis:"cordon_requested"`
@@ -84,10 +89,18 @@ type Worker struct {
 	WorkerImageOverride string `json:"worker_image_override" redis:"worker_image_override"`
 	WorkspaceId         string `json:"-" redis:"workspace_id" go2proto:"ignore"`
 	ControlPlaneManaged bool   `json:"-" redis:"control_plane_managed" go2proto:"ignore"`
+	// WorkerTokenId binds internal worker mutations to the exact token minted
+	// for this worker/slot. It is never exposed through the public Worker wire.
+	WorkerTokenId string `json:"-" redis:"worker_token_id" go2proto:"ignore"`
+	// InstanceId is a per-process/container epoch (the Kubernetes Pod UID when
+	// available). A stable worker id may be reused, but an old process epoch may
+	// never mutate or recover state owned by a replacement epoch.
+	InstanceId string `json:"instance_id" redis:"instance_id"`
 }
 
 type WorkerKeepAlive struct {
-	MachineId string `json:"machine_id"`
+	MachineId  string `json:"machine_id"`
+	InstanceId string `json:"instance_id"`
 }
 
 func StableStorageNodeID(machineID, workerID string) string {
@@ -109,9 +122,11 @@ func (w *Worker) ToProto() *pb.Worker {
 		TotalCpu:             w.TotalCpu,
 		TotalMemory:          w.TotalMemory,
 		TotalGpuCount:        w.TotalGpuCount,
+		TotalNbdDevices:      w.TotalNbdDevices,
 		FreeCpu:              w.FreeCpu,
 		FreeMemory:           w.FreeMemory,
 		FreeGpuCount:         w.FreeGpuCount,
+		FreeNbdDevices:       w.FreeNbdDevices,
 		Gpu:                  w.Gpu,
 		PoolName:             w.PoolName,
 		MachineId:            w.MachineId,
@@ -127,6 +142,7 @@ func (w *Worker) ToProto() *pb.Worker {
 		RolloutGeneration:    w.RolloutGeneration,
 		RolloutBuildVersion:  w.RolloutBuildVersion,
 		WorkerImageOverride:  w.WorkerImageOverride,
+		InstanceId:           w.InstanceId,
 	}
 }
 
@@ -142,9 +158,11 @@ func NewWorkerFromProto(in *pb.Worker) *Worker {
 		TotalCpu:             in.TotalCpu,
 		TotalMemory:          in.TotalMemory,
 		TotalGpuCount:        in.TotalGpuCount,
+		TotalNbdDevices:      in.TotalNbdDevices,
 		FreeCpu:              in.FreeCpu,
 		FreeMemory:           in.FreeMemory,
 		FreeGpuCount:         in.FreeGpuCount,
+		FreeNbdDevices:       in.FreeNbdDevices,
 		Gpu:                  in.Gpu,
 		PoolName:             in.PoolName,
 		MachineId:            in.MachineId,
@@ -160,6 +178,7 @@ func NewWorkerFromProto(in *pb.Worker) *Worker {
 		RolloutGeneration:    in.RolloutGeneration,
 		RolloutBuildVersion:  in.RolloutBuildVersion,
 		WorkerImageOverride:  in.WorkerImageOverride,
+		InstanceId:           in.InstanceId,
 	}
 }
 
@@ -188,18 +207,25 @@ func (e *ContainerAlreadyScheduledError) Error() string {
 
 // @go2proto
 type ContainerState struct {
-	ContainerId string          `redis:"container_id" json:"container_id"`
-	StubId      string          `redis:"stub_id" json:"stub_id"`
-	Status      ContainerStatus `redis:"status" json:"status"`
-	ScheduledAt int64           `redis:"scheduled_at" json:"scheduled_at"`
-	WorkspaceId string          `redis:"workspace_id" json:"workspace_id"`
-	Gpu         string          `redis:"gpu" json:"gpu"`
-	GpuCount    uint32          `redis:"gpu_count" json:"gpu_count"`
-	Cpu         int64           `redis:"cpu" json:"cpu"`
-	Memory      int64           `redis:"memory" json:"memory"`
-	StartedAt   int64           `redis:"started_at" json:"started_at"`
-	WorkerId    string          `redis:"worker_id" json:"worker_id"`
-	MachineId   string          `redis:"machine_id" json:"machine_id"`
+	ContainerId         string          `redis:"container_id" json:"container_id"`
+	StubId              string          `redis:"stub_id" json:"stub_id"`
+	Status              ContainerStatus `redis:"status" json:"status"`
+	ScheduledAt         int64           `redis:"scheduled_at" json:"scheduled_at"`
+	WorkspaceId         string          `redis:"workspace_id" json:"workspace_id"`
+	Gpu                 string          `redis:"gpu" json:"gpu"`
+	GpuCount            uint32          `redis:"gpu_count" json:"gpu_count"`
+	NbdDevices          uint32          `redis:"nbd_devices" json:"nbd_devices"`
+	Cpu                 int64           `redis:"cpu" json:"cpu"`
+	Memory              int64           `redis:"memory" json:"memory"`
+	StartedAt           int64           `redis:"started_at" json:"started_at"`
+	WorkerId            string          `redis:"worker_id" json:"worker_id"`
+	MachineId           string          `redis:"machine_id" json:"machine_id"`
+	StateSnapshotId     string          `redis:"state_snapshot_id" json:"state_snapshot_id,omitempty"`
+	StateFork           bool            `redis:"state_fork" json:"state_fork,omitempty"`
+	AssignmentId        string          `redis:"schedule_delivery_token" json:"-" go2proto:"ignore"`
+	StateVolumePlanId   string          `redis:"state_volume_plan_id" json:"-" go2proto:"ignore"`
+	StateVolumePlanHash string          `redis:"state_volume_plan_hash" json:"-" go2proto:"ignore"`
+	StateVolumeAborting string          `redis:"state_volume_plan_aborting" json:"-" go2proto:"ignore"`
 }
 
 // @go2proto
@@ -271,12 +297,10 @@ type ContainerRequest struct {
 	RetryCount               int             `json:"retry_count"`
 	PoolSelector             string          `json:"pool_selector"`
 	Preemptable              bool            `json:"preemptable"`
-	CheckpointEnabled        bool            `json:"checkpoint_enabled"`
 	BuildOptions             BuildOptions    `json:"build_options"`
 	Ports                    []uint32        `json:"ports"`
 	CostPerMs                float64         `json:"cost_per_ms"`
 	AppId                    string          `json:"app_id"`
-	Checkpoint               *Checkpoint     `json:"checkpoint"`
 	ConfigPath               string          `json:"config_path"`
 	ImageCredentials         string          `json:"image_credentials"`
 	BuildRegistryCredentials string          `json:"build_registry_credentials"`
@@ -288,48 +312,21 @@ type ContainerRequest struct {
 	AllowMarketplace         bool            `json:"allow_marketplace"`
 	// MachineId pins scheduling to a single agent machine (e.g. a marketplace
 	// rental); empty means any machine.
-	MachineId         string             `json:"machine_id,omitempty"`
-	CheckpointTrigger *CheckpointTrigger `json:"checkpoint_trigger,omitempty"`
-	TaskId            string             `json:"task_id,omitempty"`
-	DeliveryToken     string             `json:"-" go2proto:"ignore"`
+	MachineId     string `json:"machine_id,omitempty"`
+	TaskId        string `json:"task_id,omitempty"`
+	DeliveryToken string `json:"-" go2proto:"ignore"`
 	// Hostname preserved across checkpoint and restore.
-	Hostname             string `json:"hostname,omitempty"`
-	ProvisioningAttempts int    `json:"provisioning_attempts,omitempty" go2proto:"ignore"`
-}
-
-// @go2proto
-type CheckpointTrigger struct {
-	Type            string `json:"type,omitempty"`
-	HttpPath        string `json:"http_path,omitempty"`
-	HttpPort        uint32 `json:"http_port,omitempty"`
-	TimeoutSeconds  uint32 `json:"timeout_seconds,omitempty"`
-	IntervalSeconds uint32 `json:"interval_seconds,omitempty"`
-}
-
-func (t *CheckpointTrigger) ToProto() *pb.CheckpointTrigger {
-	if t == nil {
-		return nil
-	}
-	return &pb.CheckpointTrigger{
-		Type:            t.Type,
-		HttpPath:        t.HttpPath,
-		HttpPort:        t.HttpPort,
-		TimeoutSeconds:  t.TimeoutSeconds,
-		IntervalSeconds: t.IntervalSeconds,
-	}
-}
-
-func NewCheckpointTriggerFromProto(in *pb.CheckpointTrigger) *CheckpointTrigger {
-	if in == nil {
-		return nil
-	}
-	return &CheckpointTrigger{
-		Type:            in.Type,
-		HttpPath:        in.HttpPath,
-		HttpPort:        in.HttpPort,
-		TimeoutSeconds:  in.TimeoutSeconds,
-		IntervalSeconds: in.IntervalSeconds,
-	}
+	Hostname                   string                `json:"hostname,omitempty"`
+	PersistentRoot             *PersistentRoot       `json:"persistent_root,omitempty"`
+	RootState                  *RootStateMountConfig `json:"root_state,omitempty"`
+	StateSnapshotId            string                `json:"state_snapshot_id,omitempty"`
+	StateFork                  bool                  `json:"state_fork,omitempty"`
+	StateImageDigest           string                `json:"state_image_digest,omitempty"`
+	StateRuntimeProfile        string                `json:"state_runtime_profile,omitempty"`
+	StateCheckpointAccelerator string                `json:"state_checkpoint_accelerator,omitempty"`
+	StateVolumePlanId          string                `json:"state_volume_plan_id,omitempty" go2proto:"ignore"`
+	StateVolumePlanHash        string                `json:"state_volume_plan_hash,omitempty" go2proto:"ignore"`
+	ProvisioningAttempts       int                   `json:"provisioning_attempts,omitempty" go2proto:"ignore"`
 }
 
 type ContainerNetworkPolicy string
@@ -399,7 +396,7 @@ func (c *ContainerRequest) IsBuildRequest() bool {
 }
 
 func (c *ContainerRequest) VolumeCacheCompatible() bool {
-	if c.IsBuildRequest() || c.CheckpointEnabled || c.StorageAvailable() {
+	if c.IsBuildRequest() || c.StorageAvailable() {
 		return false
 	}
 	return c.Workspace.VolumeCacheEnabled
@@ -426,16 +423,27 @@ func (c *ContainerRequest) NetworkRestricted() bool {
 	return c.NetworkPolicy() != ContainerNetworkPolicyOpen
 }
 
-func (c *ContainerRequest) HasDurableDiskMount() bool {
+func (c *ContainerRequest) HasStateVolumes() bool {
+	return c.RequiredNbdDevices() > 0
+}
+
+// RequiredNbdDevices returns the exact number of node-global NBD attachments
+// this container needs. The persistent root consumes one device and every
+// explicit durable mount consumes one more, including read-only attachments.
+func (c *ContainerRequest) RequiredNbdDevices() uint32 {
 	if c == nil {
-		return false
+		return 0
+	}
+	var required uint32
+	if c.PersistentRoot != nil {
+		required++
 	}
 	for _, mount := range c.Mounts {
 		if mount.MountType == StorageModeDurableDisk || mount.DurableDisk != nil {
-			return true
+			required++
 		}
 	}
-	return false
+	return required
 }
 
 func (c *ContainerRequest) Clone() *ContainerRequest {
@@ -590,47 +598,60 @@ func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 		}
 	}
 
-	var checkpoint *pb.Checkpoint
-	if c.Checkpoint != nil {
-		checkpoint = c.Checkpoint.ToProto()
+	var persistentRoot *pb.PersistentRoot
+	if c.PersistentRoot != nil {
+		persistentRoot = &pb.PersistentRoot{Size: c.PersistentRoot.Size}
+	}
+	var rootState *pb.RootStateMountConfig
+	if c.RootState != nil {
+		rootState = &pb.RootStateMountConfig{
+			VolumeId: c.RootState.VolumeId, Size: c.RootState.Size,
+			SourceGenerationId: c.RootState.SourceGenerationId, CloneSource: c.RootState.CloneSource,
+			Initialize: c.RootState.Initialize, AttachmentToken: c.RootState.AttachmentToken,
+			FencingToken: c.RootState.FencingToken, LeaseExpiresAtUnix: c.RootState.LeaseExpiresAtUnix,
+		}
 	}
 
 	return &pb.ContainerRequest{
-		ContainerId:              c.ContainerId,
-		EntryPoint:               c.EntryPoint,
-		Env:                      c.Env,
-		Cpu:                      c.Cpu,
-		Memory:                   c.Memory,
-		Gpu:                      c.Gpu,
-		GpuRequest:               c.GpuRequest,
-		GpuCount:                 c.GpuCount,
-		ImageId:                  c.ImageId,
-		Mounts:                   mounts,
-		StubId:                   c.StubId,
-		TaskId:                   c.TaskId,
-		AppId:                    c.AppId,
-		WorkspaceId:              c.WorkspaceId,
-		Workspace:                c.Workspace.ToProto(),
-		Stub:                     c.Stub.ToProto(),
-		RetryCount:               int64(c.RetryCount),
-		PoolSelector:             c.PoolSelector,
-		Preemptable:              c.Preemptable,
-		Timestamp:                timestamppb.New(c.Timestamp),
-		BuildOptions:             buildOptions,
-		ImageCredentials:         c.ImageCredentials,
-		Ports:                    c.Ports,
-		CheckpointEnabled:        c.CheckpointEnabled,
-		Checkpoint:               checkpoint,
-		BuildRegistryCredentials: c.BuildRegistryCredentials,
-		BlockNetwork:             c.BlockNetwork,
-		AllowList:                c.AllowList,
-		DockerEnabled:            c.DockerEnabled,
-		AllowMarketplace:         c.AllowMarketplace,
-		MachineId:                c.MachineId,
-		RuntimeSecretNames:       c.RuntimeSecretNames,
-		RuntimeTokenRequired:     c.RuntimeTokenRequired,
-		CheckpointTrigger:        c.CheckpointTrigger.ToProto(),
-		Hostname:                 c.Hostname,
+		ContainerId:                c.ContainerId,
+		EntryPoint:                 c.EntryPoint,
+		Env:                        c.Env,
+		Cpu:                        c.Cpu,
+		Memory:                     c.Memory,
+		Gpu:                        c.Gpu,
+		GpuRequest:                 c.GpuRequest,
+		GpuCount:                   c.GpuCount,
+		ImageId:                    c.ImageId,
+		Mounts:                     mounts,
+		StubId:                     c.StubId,
+		TaskId:                     c.TaskId,
+		AppId:                      c.AppId,
+		WorkspaceId:                c.WorkspaceId,
+		Workspace:                  c.Workspace.ToProto(),
+		Stub:                       c.Stub.ToProto(),
+		RetryCount:                 int64(c.RetryCount),
+		PoolSelector:               c.PoolSelector,
+		Preemptable:                c.Preemptable,
+		Timestamp:                  timestamppb.New(c.Timestamp),
+		BuildOptions:               buildOptions,
+		ImageCredentials:           c.ImageCredentials,
+		Ports:                      c.Ports,
+		BuildRegistryCredentials:   c.BuildRegistryCredentials,
+		BlockNetwork:               c.BlockNetwork,
+		AllowList:                  c.AllowList,
+		DockerEnabled:              c.DockerEnabled,
+		AllowMarketplace:           c.AllowMarketplace,
+		MachineId:                  c.MachineId,
+		RuntimeSecretNames:         c.RuntimeSecretNames,
+		RuntimeTokenRequired:       c.RuntimeTokenRequired,
+		Hostname:                   c.Hostname,
+		PersistentRoot:             persistentRoot,
+		RootState:                  rootState,
+		StateSnapshotId:            c.StateSnapshotId,
+		StateFork:                  c.StateFork,
+		StateImageDigest:           c.StateImageDigest,
+		StateRuntimeProfile:        c.StateRuntimeProfile,
+		StateCheckpointAccelerator: c.StateCheckpointAccelerator,
 	}
 }
 
@@ -651,47 +672,60 @@ func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
 		}
 	}
 
-	var checkpoint *Checkpoint
-	if in.Checkpoint != nil {
-		checkpoint = NewCheckpointFromProto(in.Checkpoint)
+	var persistentRoot *PersistentRoot
+	if in.PersistentRoot != nil {
+		persistentRoot = &PersistentRoot{Size: in.PersistentRoot.Size}
+	}
+	var rootState *RootStateMountConfig
+	if in.RootState != nil {
+		rootState = &RootStateMountConfig{
+			VolumeId: in.RootState.VolumeId, Size: in.RootState.Size,
+			SourceGenerationId: in.RootState.SourceGenerationId, CloneSource: in.RootState.CloneSource,
+			Initialize: in.RootState.Initialize, AttachmentToken: in.RootState.AttachmentToken,
+			FencingToken: in.RootState.FencingToken, LeaseExpiresAtUnix: in.RootState.LeaseExpiresAtUnix,
+		}
 	}
 
 	return &ContainerRequest{
-		ContainerId:              in.ContainerId,
-		EntryPoint:               in.EntryPoint,
-		Env:                      in.Env,
-		Cpu:                      in.Cpu,
-		Memory:                   in.Memory,
-		Gpu:                      in.Gpu,
-		GpuRequest:               in.GpuRequest,
-		GpuCount:                 in.GpuCount,
-		ImageId:                  in.ImageId,
-		Mounts:                   mounts,
-		WorkspaceId:              in.WorkspaceId,
-		AppId:                    in.AppId,
-		Workspace:                *NewWorkspaceFromProto(in.Workspace),
-		Stub:                     *NewStubWithRelatedFromProto(in.Stub),
-		StubId:                   in.StubId,
-		TaskId:                   in.TaskId,
-		Timestamp:                in.GetTimestamp().AsTime(),
-		RetryCount:               int(in.RetryCount),
-		CheckpointEnabled:        in.CheckpointEnabled,
-		Preemptable:              in.Preemptable,
-		PoolSelector:             in.PoolSelector,
-		BuildOptions:             bo,
-		ImageCredentials:         in.ImageCredentials,
-		Ports:                    in.Ports,
-		Checkpoint:               checkpoint,
-		BuildRegistryCredentials: in.BuildRegistryCredentials,
-		BlockNetwork:             in.BlockNetwork,
-		AllowList:                in.AllowList,
-		DockerEnabled:            in.DockerEnabled,
-		AllowMarketplace:         in.AllowMarketplace,
-		MachineId:                in.MachineId,
-		RuntimeSecretNames:       in.RuntimeSecretNames,
-		RuntimeTokenRequired:     in.RuntimeTokenRequired,
-		CheckpointTrigger:        NewCheckpointTriggerFromProto(in.CheckpointTrigger),
-		Hostname:                 in.Hostname,
+		ContainerId:                in.ContainerId,
+		EntryPoint:                 in.EntryPoint,
+		Env:                        in.Env,
+		Cpu:                        in.Cpu,
+		Memory:                     in.Memory,
+		Gpu:                        in.Gpu,
+		GpuRequest:                 in.GpuRequest,
+		GpuCount:                   in.GpuCount,
+		ImageId:                    in.ImageId,
+		Mounts:                     mounts,
+		WorkspaceId:                in.WorkspaceId,
+		AppId:                      in.AppId,
+		Workspace:                  *NewWorkspaceFromProto(in.Workspace),
+		Stub:                       *NewStubWithRelatedFromProto(in.Stub),
+		StubId:                     in.StubId,
+		TaskId:                     in.TaskId,
+		Timestamp:                  in.GetTimestamp().AsTime(),
+		RetryCount:                 int(in.RetryCount),
+		Preemptable:                in.Preemptable,
+		PoolSelector:               in.PoolSelector,
+		BuildOptions:               bo,
+		ImageCredentials:           in.ImageCredentials,
+		Ports:                      in.Ports,
+		BuildRegistryCredentials:   in.BuildRegistryCredentials,
+		BlockNetwork:               in.BlockNetwork,
+		AllowList:                  in.AllowList,
+		DockerEnabled:              in.DockerEnabled,
+		AllowMarketplace:           in.AllowMarketplace,
+		MachineId:                  in.MachineId,
+		RuntimeSecretNames:         in.RuntimeSecretNames,
+		RuntimeTokenRequired:       in.RuntimeTokenRequired,
+		Hostname:                   in.Hostname,
+		PersistentRoot:             persistentRoot,
+		RootState:                  rootState,
+		StateSnapshotId:            in.StateSnapshotId,
+		StateFork:                  in.StateFork,
+		StateImageDigest:           in.StateImageDigest,
+		StateRuntimeProfile:        in.StateRuntimeProfile,
+		StateCheckpointAccelerator: in.StateCheckpointAccelerator,
 	}
 }
 
@@ -892,23 +926,6 @@ type QuotaDoesNotExistError struct{}
 
 func (e *QuotaDoesNotExistError) Error() string {
 	return "quota_does_not_exist"
-}
-
-type CheckpointStatus string
-
-const (
-	CheckpointStatusAvailable        CheckpointStatus = "available"
-	CheckpointStatusCheckpointFailed CheckpointStatus = "checkpoint_failed"
-	CheckpointStatusRestoreFailed    CheckpointStatus = "restore_failed"
-	CheckpointStatusNotFound         CheckpointStatus = "not_found"
-)
-
-type ErrCheckpointNotFound struct {
-	CheckpointId string
-}
-
-func (e *ErrCheckpointNotFound) Error() string {
-	return fmt.Sprintf("checkpoint state not found: %s", e.CheckpointId)
 }
 
 type StopContainerReason string

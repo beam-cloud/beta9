@@ -40,9 +40,11 @@ func (c *lifecyclePushClient) callCount() int {
 func TestWorkerLifecycleRelayRetriesUnacknowledgedBatch(t *testing.T) {
 	client := &lifecyclePushClient{}
 	relay := &workerLifecycleRelay{
-		client:   client,
-		workerID: "worker-1",
-		events:   make(chan types.EventContainerLifecycleSchema, 1),
+		client:           client,
+		workerID:         "worker-1",
+		workerInstanceID: "instance-1",
+		storageNodeID:    "machine-1",
+		events:           make(chan types.EventContainerLifecycleSchema, 1),
 	}
 	go relay.run()
 
@@ -57,6 +59,8 @@ func TestWorkerLifecycleRelayRetriesUnacknowledgedBatch(t *testing.T) {
 	defer client.mu.Unlock()
 	require.Len(t, client.requests, 2)
 	require.Equal(t, client.requests[0].Events, client.requests[1].Events)
+	require.Equal(t, "instance-1", client.requests[0].WorkerInstanceId)
+	require.Equal(t, "machine-1", client.requests[0].StorageNodeId)
 }
 
 func TestWorkerLifecycleRelayRejectsFullQueue(t *testing.T) {

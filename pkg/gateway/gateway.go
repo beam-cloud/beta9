@@ -207,8 +207,38 @@ func NewGateway() (*Gateway, error) {
 		Tailscale:        tailscale,
 	})
 	gateway.ComputeService.Start(ctx)
+	gateway.startStateCacheRetirementReconciler(backendRepo)
 
 	return gateway, nil
+}
+
+const (
+	stateCacheRetirementReconcileInterval = 30 * time.Second
+	stateCacheRetirementReconcileBatch    = 32
+)
+
+type stateCacheRetirementProcessor interface {
+	ProcessStateCacheRetirements(context.Context, int) (int, error)
+}
+
+func (g *Gateway) startStateCacheRetirementReconciler(processor stateCacheRetirementProcessor) {
+	go func() {
+		ticker := time.NewTicker(stateCacheRetirementReconcileInterval)
+		defer ticker.Stop()
+		for {
+			processed, err := processor.ProcessStateCacheRetirements(g.ctx, stateCacheRetirementReconcileBatch)
+			if err != nil && g.ctx.Err() == nil {
+				log.Error().Err(err).Msg("state cache retirement reconciliation failed")
+			} else if processed > 0 {
+				log.Info().Int("retirements", processed).Msg("state cache retirement reconciliation completed")
+			}
+			select {
+			case <-g.ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
 }
 
 type postgresMigrator interface {
@@ -365,10 +395,10 @@ func (g *Gateway) registerRepositoryServices() error {
 	wr := repositoryservices.NewWorkerRepositoryService(g.ctx, g.workerRepo, g.ContainerRepo, g.BackendRepo, g.ComputeRepo, g.EventRepo, g.RedisClient, g.Config, g.Config.Cache.Coordinator.Token)
 	pb.RegisterWorkerRepositoryServiceServer(g.grpcServer, wr)
 
-	cr := repositoryservices.NewContainerRepositoryService(g.ctx, g.ContainerRepo)
+	cr := repositoryservices.NewContainerRepositoryService(g.ctx, g.ContainerRepo, g.BackendRepo, g.workerRepo, g.ComputeRepo)
 	pb.RegisterContainerRepositoryServiceServer(g.grpcServer, cr)
 
-	br := repositoryservices.NewBackendRepositoryService(g.ctx, g.BackendRepo)
+	br := repositoryservices.NewBackendRepositoryService(g.ctx, g.BackendRepo, g.ContainerRepo, g.workerRepo, g.ComputeRepo)
 	pb.RegisterBackendRepositoryServiceServer(g.grpcServer, br)
 
 	return nil

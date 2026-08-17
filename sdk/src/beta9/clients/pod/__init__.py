@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 class CreatePodRequest(betterproto.Message):
     stub_id: str = betterproto.string_field(1)
     image_id: Optional[str] = betterproto.string_field(2, optional=True)
-    checkpoint_id: Optional[str] = betterproto.string_field(3, optional=True)
+    state_snapshot_id: Optional[str] = betterproto.string_field(3, optional=True)
     machine_id: Optional[str] = betterproto.string_field(4, optional=True)
 
 
@@ -41,6 +41,7 @@ class CreatePodResponse(betterproto.Message):
     stub_id: str = betterproto.string_field(4)
     task_id: str = betterproto.string_field(5)
     app_id: str = betterproto.string_field(6)
+    restore_receipt: "_types__.StateRestoreReceipt" = betterproto.message_field(7)
 
 
 @dataclass(eq=False, repr=False)
@@ -315,38 +316,43 @@ class PodSandboxCreateImageFromFilesystemResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class PodSandboxSnapshotMemoryRequest(betterproto.Message):
+class PodSandboxSnapshotStateRequest(betterproto.Message):
     stub_id: str = betterproto.string_field(1)
     container_id: str = betterproto.string_field(2)
-    terminate_after_checkpoint: bool = betterproto.bool_field(3)
+    operation_id: str = betterproto.string_field(3)
+    mode: str = betterproto.string_field(4)
+    publish: bool = betterproto.bool_field(5)
+    include_memory: bool = betterproto.bool_field(6)
+    visible: bool = betterproto.bool_field(7)
 
 
 @dataclass(eq=False, repr=False)
-class PodSandboxSnapshotMemoryResponse(betterproto.Message):
+class PodSandboxSnapshotStateResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     error_msg: str = betterproto.string_field(2)
-    checkpoint_id: str = betterproto.string_field(3)
-    runtime: str = betterproto.string_field(4)
+    state_snapshot_id: str = betterproto.string_field(3)
+    status: str = betterproto.string_field(4)
+    image_digest: str = betterproto.string_field(5)
+    runtime_profile: str = betterproto.string_field(6)
+    checkpoint_id: str = betterproto.string_field(7)
+    has_memory: bool = betterproto.bool_field(8)
+    generations: List["_types__.StateGeneration"] = betterproto.message_field(9)
+    restore_mode: str = betterproto.string_field(10)
+    fallback_reason: str = betterproto.string_field(11)
 
 
 @dataclass(eq=False, repr=False)
-class PodSandboxSnapshotDisksRequest(betterproto.Message):
-    stub_id: str = betterproto.string_field(1)
-    container_id: str = betterproto.string_field(2)
+class PodGetStateRestoreReceiptRequest(betterproto.Message):
+    container_id: str = betterproto.string_field(1)
+    state_snapshot_id: str = betterproto.string_field(2)
 
 
 @dataclass(eq=False, repr=False)
-class PodSandboxDiskSnapshot(betterproto.Message):
-    snapshot_id: str = betterproto.string_field(1)
-    disk_name: str = betterproto.string_field(2)
-    generation: int = betterproto.int64_field(3)
-
-
-@dataclass(eq=False, repr=False)
-class PodSandboxSnapshotDisksResponse(betterproto.Message):
+class PodGetStateRestoreReceiptResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     error_msg: str = betterproto.string_field(2)
-    snapshots: List["PodSandboxDiskSnapshot"] = betterproto.message_field(3)
+    pending: bool = betterproto.bool_field(3)
+    receipt: "_types__.StateRestoreReceipt" = betterproto.message_field(4)
 
 
 @dataclass(eq=False, repr=False)
@@ -565,23 +571,23 @@ class PodServiceStub(SyncServiceStub):
             PodSandboxCreateImageFromFilesystemResponse,
         )(pod_sandbox_create_image_from_filesystem_request)
 
-    def sandbox_snapshot_memory(
-        self, pod_sandbox_snapshot_memory_request: "PodSandboxSnapshotMemoryRequest"
-    ) -> "PodSandboxSnapshotMemoryResponse":
+    def sandbox_snapshot_state(
+        self, pod_sandbox_snapshot_state_request: "PodSandboxSnapshotStateRequest"
+    ) -> "PodSandboxSnapshotStateResponse":
         return self._unary_unary(
-            "/pod.PodService/SandboxSnapshotMemory",
-            PodSandboxSnapshotMemoryRequest,
-            PodSandboxSnapshotMemoryResponse,
-        )(pod_sandbox_snapshot_memory_request)
+            "/pod.PodService/SandboxSnapshotState",
+            PodSandboxSnapshotStateRequest,
+            PodSandboxSnapshotStateResponse,
+        )(pod_sandbox_snapshot_state_request)
 
-    def sandbox_snapshot_disks(
-        self, pod_sandbox_snapshot_disks_request: "PodSandboxSnapshotDisksRequest"
-    ) -> "PodSandboxSnapshotDisksResponse":
+    def get_state_restore_receipt(
+        self, pod_get_state_restore_receipt_request: "PodGetStateRestoreReceiptRequest"
+    ) -> "PodGetStateRestoreReceiptResponse":
         return self._unary_unary(
-            "/pod.PodService/SandboxSnapshotDisks",
-            PodSandboxSnapshotDisksRequest,
-            PodSandboxSnapshotDisksResponse,
-        )(pod_sandbox_snapshot_disks_request)
+            "/pod.PodService/GetStateRestoreReceipt",
+            PodGetStateRestoreReceiptRequest,
+            PodGetStateRestoreReceiptResponse,
+        )(pod_get_state_restore_receipt_request)
 
     def sandbox_list_urls(
         self, pod_sandbox_list_urls_request: "PodSandboxListUrlsRequest"

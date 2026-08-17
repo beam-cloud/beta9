@@ -26,7 +26,7 @@ func (s *WorkerRepositoryService) PushContainerLifecycleEvents(ctx context.Conte
 	if err != nil {
 		return &pb.PushContainerLifecycleEventsResponse{ErrorMsg: err.Error()}, nil
 	}
-	if err := s.authorizeWorkerLifecycleWorker(ctx, authInfo, req.WorkerId, worker); err != nil {
+	if err := s.authorizeWorkerLifecycleWorker(ctx, authInfo, req.WorkerId, req.WorkerInstanceId, req.StorageNodeId, worker); err != nil {
 		return &pb.PushContainerLifecycleEventsResponse{ErrorMsg: err.Error()}, nil
 	}
 	states := make(map[string]*types.ContainerState)
@@ -43,7 +43,7 @@ func (s *WorkerRepositoryService) PushContainerLifecycleEvents(ctx context.Conte
 			if err != nil {
 				return &pb.PushContainerLifecycleEventsResponse{ErrorMsg: err.Error()}, nil
 			}
-			if state.WorkerId != req.WorkerId {
+			if state.WorkerId != req.WorkerId || state.MachineId != req.StorageNodeId {
 				return &pb.PushContainerLifecycleEventsResponse{ErrorMsg: errWorkerLifecycleUnauthorized.Error()}, nil
 			}
 			if authInfo.Token.TokenType == types.TokenTypeWorkerPrivate && (authInfo.Workspace == nil || authInfo.Workspace.ExternalId != state.WorkspaceId) {
@@ -62,6 +62,26 @@ func (s *WorkerRepositoryService) PushContainerLifecycleEvents(ctx context.Conte
 		event.MachineID = worker.MachineId
 		events = append(events, event)
 	}
+	// The stream RPC may be delayed after its initial token check. Re-read the
+	// authoritative process immediately before the irreversible event write so
+	// a superseded worker epoch cannot emit lifecycle/billing events for its
+	// replacement.
+	worker, err = s.workerRepo.GetWorkerById(req.WorkerId)
+	if err != nil {
+		return &pb.PushContainerLifecycleEventsResponse{ErrorMsg: err.Error()}, nil
+	}
+	if err := s.authorizeWorkerLifecycleWorker(ctx, authInfo, req.WorkerId, req.WorkerInstanceId, req.StorageNodeId, worker); err != nil {
+		return &pb.PushContainerLifecycleEventsResponse{ErrorMsg: err.Error()}, nil
+	}
+	for containerID := range states {
+		state, err := s.containerRepo.GetContainerState(containerID)
+		if err != nil {
+			return &pb.PushContainerLifecycleEventsResponse{ErrorMsg: err.Error()}, nil
+		}
+		if state.WorkerId != req.WorkerId || state.MachineId != req.StorageNodeId {
+			return &pb.PushContainerLifecycleEventsResponse{ErrorMsg: errWorkerLifecycleUnauthorized.Error()}, nil
+		}
+	}
 	for _, event := range events {
 		s.eventRepo.PushContainerLifecycleEvent(event)
 	}
@@ -69,27 +89,15 @@ func (s *WorkerRepositoryService) PushContainerLifecycleEvents(ctx context.Conte
 	return &pb.PushContainerLifecycleEventsResponse{Ok: true}, nil
 }
 
-func (s *WorkerRepositoryService) authorizeWorkerLifecycleWorker(ctx context.Context, authInfo *auth.AuthInfo, workerID string, worker *types.Worker) error {
-	if worker == nil || worker.Id != workerID {
+func (s *WorkerRepositoryService) authorizeWorkerLifecycleWorker(ctx context.Context, authInfo *auth.AuthInfo, workerID, workerInstanceID, storageNodeID string, worker *types.Worker) error {
+	if worker == nil || worker.Id != workerID || worker.InstanceId == "" || worker.InstanceId != workerInstanceID ||
+		worker.MachineId == "" || worker.MachineId != storageNodeID {
 		return errWorkerLifecycleUnauthorized
 	}
-	if authInfo.Token.TokenType != types.TokenTypeWorkerPrivate {
-		return nil
-	}
-	if s.computeRepo == nil || authInfo.Workspace == nil {
+	if err := authorizeRegisteredWorkerToken(ctx, authInfo, worker, s.computeRepo); err != nil {
 		return errWorkerLifecycleUnauthorized
 	}
-
-	slots, err := s.computeRepo.ListAgentWorkerSlotStates(ctx, authInfo.Workspace.ExternalId, worker.PoolName, worker.MachineId)
-	if err != nil {
-		return err
-	}
-	for _, slot := range slots {
-		if slot != nil && slot.WorkerID == worker.Id && slot.WorkerTokenID == authInfo.Token.ExternalId {
-			return nil
-		}
-	}
-	return errWorkerLifecycleUnauthorized
+	return nil
 }
 
 func workerLifecycleAuth(ctx context.Context, req *pb.PushContainerLifecycleEventsRequest) (*auth.AuthInfo, error) {
@@ -97,8 +105,8 @@ func workerLifecycleAuth(ctx context.Context, req *pb.PushContainerLifecycleEven
 	if !ok || authInfo == nil || authInfo.Token == nil || !types.IsWorkerTokenType(authInfo.Token.TokenType) {
 		return nil, errWorkerLifecycleUnauthorized
 	}
-	if req == nil || req.WorkerId == "" || len(req.Events) == 0 {
-		return nil, fmt.Errorf("worker id and events are required")
+	if req == nil || req.WorkerId == "" || req.WorkerInstanceId == "" || req.StorageNodeId == "" || len(req.Events) == 0 {
+		return nil, fmt.Errorf("worker process identity and events are required")
 	}
 	return authInfo, nil
 }

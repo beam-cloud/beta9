@@ -399,18 +399,21 @@ func (ps *GenericPodService) deletePodInstance(stubId string, instance *podInsta
 // in which case the container id is pre-generated so the task record can
 // reference it before scheduling.
 type runOptions struct {
-	imageId             *string
-	checkpoint          *types.Checkpoint
-	machineId           string
-	forceResourceLimits bool
-	taskId              string
-	containerId         string
+	imageId                    *string
+	stateSnapshotId            string
+	stateImageDigest           string
+	stateRuntimeProfile        string
+	stateCheckpointAccelerator string
+	machineId                  string
+	forceResourceLimits        bool
+	taskId                     string
+	containerId                string
 }
 
-func createPodRunOptions(ctx context.Context, in *pb.CreatePodRequest, checkpoint *types.Checkpoint) runOptions {
+func createPodRunOptions(ctx context.Context, in *pb.CreatePodRequest) runOptions {
 	return runOptions{
 		imageId:             in.ImageId,
-		checkpoint:          checkpoint,
+		stateSnapshotId:     in.GetStateSnapshotId(),
 		machineId:           in.GetMachineId(),
 		forceResourceLimits: forceResourceLimitsRequested(ctx),
 	}
@@ -440,8 +443,6 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 	}
 
 	imageId := opts.imageId
-	checkpoint := opts.checkpoint
-
 	stubConfig := types.StubConfigV1{}
 	if err := json.Unmarshal([]byte(stub.Config), &stubConfig); err != nil {
 		return "", err
@@ -496,11 +497,6 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 		gpuCount = 1
 	}
 
-	checkpointEnabled := stubConfig.CheckpointEnabled
-	if gpuCount > 1 {
-		checkpointEnabled = false
-	}
-
 	ports := []uint32{}
 	if len(stubConfig.Ports) > 0 {
 		ports = stubConfig.Ports
@@ -531,29 +527,31 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 	}
 
 	runRequest := &types.ContainerRequest{
-		ContainerId:       containerId,
-		StubId:            stub.ExternalId,
-		TaskId:            opts.taskId,
-		AppId:             appId,
-		Env:               env,
-		Cpu:               stubConfig.Runtime.Cpu,
-		Memory:            stubConfig.Runtime.Memory,
-		GpuRequest:        gpuRequest,
-		GpuCount:          uint32(gpuCount),
-		Mounts:            mounts,
-		Stub:              requestStub,
-		ImageId:           *imageId,
-		WorkspaceId:       workspace.ExternalId,
-		Workspace:         *workspace,
-		EntryPoint:        stubConfig.EntryPoint,
-		Ports:             ports,
-		CheckpointEnabled: checkpointEnabled,
-		CheckpointTrigger: stubConfig.CheckpointTrigger,
-		Checkpoint:        checkpoint,
-		PoolSelector:      stubConfig.PoolSelector(),
-		AllowMarketplace:  stubConfig.AllowMarketplace,
-		MachineId:         stubConfig.MachineID,
-		Hostname:          stubConfig.Hostname,
+		ContainerId:                containerId,
+		StubId:                     stub.ExternalId,
+		TaskId:                     opts.taskId,
+		AppId:                      appId,
+		Env:                        env,
+		Cpu:                        stubConfig.Runtime.Cpu,
+		Memory:                     stubConfig.Runtime.Memory,
+		GpuRequest:                 gpuRequest,
+		GpuCount:                   uint32(gpuCount),
+		Mounts:                     mounts,
+		Stub:                       requestStub,
+		ImageId:                    *imageId,
+		WorkspaceId:                workspace.ExternalId,
+		Workspace:                  *workspace,
+		EntryPoint:                 stubConfig.EntryPoint,
+		Ports:                      ports,
+		StateSnapshotId:            opts.stateSnapshotId,
+		StateImageDigest:           opts.stateImageDigest,
+		StateRuntimeProfile:        opts.stateRuntimeProfile,
+		StateCheckpointAccelerator: opts.stateCheckpointAccelerator,
+		PersistentRoot:             stubConfig.PersistentRoot,
+		PoolSelector:               stubConfig.PoolSelector(),
+		AllowMarketplace:           stubConfig.AllowMarketplace,
+		MachineId:                  stubConfig.MachineID,
+		Hostname:                   stubConfig.Hostname,
 	}
 	if err := abstractions.ConfigureContainerRequestNetwork(runRequest, stubConfig); err != nil {
 		return "", err
@@ -633,39 +631,71 @@ func podRunnableStub(stubType types.StubType) bool {
 	}
 }
 
+func validateStateLaunchStub(snapshot *types.StateSnapshot, stub *types.StubWithRelated) error {
+	if snapshot == nil || stub == nil {
+		return fmt.Errorf("state snapshot and launch stub are required")
+	}
+	var config types.StubConfigV1
+	if err := json.Unmarshal([]byte(stub.Config), &config); err != nil {
+		return fmt.Errorf("decode launch stub: %w", err)
+	}
+	if config.Runtime.ImageId != snapshot.ImageId {
+		return fmt.Errorf("launch stub image %q does not match state image %q", config.Runtime.ImageId, snapshot.ImageId)
+	}
+	if strings.TrimSpace(snapshot.RuntimeProfile) == "" {
+		return fmt.Errorf("state snapshot runtime profile is missing")
+	}
+	return nil
+}
+
+func (s *GenericPodService) stateLaunchStub(ctx context.Context, authInfo *auth.AuthInfo, snapshot *types.StateSnapshot, launchStubId string) (*types.StubWithRelated, error) {
+	if authInfo == nil || authInfo.Workspace == nil {
+		return nil, fmt.Errorf("missing workspace auth")
+	}
+	if launchStubId != "" {
+		stub, err := s.loadStub(ctx, launchStubId)
+		if err != nil || stub == nil || stub.WorkspaceId != authInfo.Workspace.Id {
+			return nil, fmt.Errorf("launch stub is unavailable or belongs to another workspace")
+		}
+		if err := validateStateLaunchStub(snapshot, stub); err != nil {
+			return nil, err
+		}
+		return stub, nil
+	}
+	if snapshot.StubId == 0 {
+		return nil, fmt.Errorf("source stub was deleted; provide a launch stub")
+	}
+	originalStub, err := s.backendRepo.GetStubById(ctx, snapshot.StubId)
+	if err != nil || originalStub == nil {
+		return nil, fmt.Errorf("source stub was deleted; provide a launch stub")
+	}
+	return s.cloneStub(ctx, authInfo.Workspace, originalStub)
+}
+
 func (s *GenericPodService) CreatePod(ctx context.Context, in *pb.CreatePodRequest) (*pb.CreatePodResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 	var err error = nil
-	var checkpoint *types.Checkpoint = nil
+	var stateSnapshot *types.StateSnapshot
 	var stub *types.StubWithRelated = nil
 
-	if in.CheckpointId != nil {
-		checkpoint, err = s.backendRepo.GetCheckpointById(ctx, *in.CheckpointId)
+	if in.StateSnapshotId != nil {
+		if authInfo == nil || authInfo.Workspace == nil {
+			return &pb.CreatePodResponse{Ok: false, ErrorMsg: "missing workspace auth"}, nil
+		}
+		stateSnapshot, err = s.backendRepo.GetStateSnapshot(ctx, authInfo.Workspace.Id, *in.StateSnapshotId)
 		if err != nil {
 			return &pb.CreatePodResponse{
-				Ok: false,
+				Ok: false, ErrorMsg: err.Error(),
 			}, nil
 		}
 
-		originalStub, err := s.backendRepo.GetStubById(ctx, checkpoint.StubId)
-		if err != nil {
-			return &pb.CreatePodResponse{
-				Ok: false,
-			}, nil
+		if stateSnapshot.Status != types.StateSnapshotStatusAvailable {
+			return &pb.CreatePodResponse{Ok: false, ErrorMsg: "state snapshot is not available"}, nil
 		}
 
-		if in.StubId != "" && in.StubId != originalStub.ExternalId {
-			stub, err = s.loadStub(ctx, in.StubId)
-			if err != nil || authInfo == nil || authInfo.Workspace == nil || stub == nil || stub.WorkspaceId != authInfo.Workspace.Id {
-				return &pb.CreatePodResponse{Ok: false}, nil
-			}
-		} else {
-			stub, err = s.cloneStub(ctx, authInfo.Workspace, originalStub)
-			if err != nil {
-				return &pb.CreatePodResponse{
-					Ok: false,
-				}, nil
-			}
+		stub, err = s.stateLaunchStub(ctx, authInfo, stateSnapshot, in.StubId)
+		if err != nil {
+			return &pb.CreatePodResponse{Ok: false, ErrorMsg: err.Error()}, nil
 		}
 	}
 
@@ -681,7 +711,12 @@ func (s *GenericPodService) CreatePod(ctx context.Context, in *pb.CreatePodReque
 		}
 	}
 
-	opts := createPodRunOptions(ctx, in, checkpoint)
+	opts := createPodRunOptions(ctx, in)
+	if stateSnapshot != nil {
+		opts.stateImageDigest = stateSnapshot.ImageDigest
+		opts.stateRuntimeProfile = stateSnapshot.RuntimeProfile
+		opts.stateCheckpointAccelerator = stateSnapshot.CheckpointAccelerator
+	}
 
 	var containerId, taskId string
 	if s.trackRunAsTask(stub) {
@@ -715,13 +750,14 @@ func (s *GenericPodService) CreatePod(ctx context.Context, in *pb.CreatePodReque
 		appId = stub.App.ExternalId
 	}
 
-	return &pb.CreatePodResponse{
+	response := &pb.CreatePodResponse{
 		Ok:          true,
 		ContainerId: containerId,
 		StubId:      stub.ExternalId,
 		TaskId:      taskId,
 		AppId:       appId,
-	}, nil
+	}
+	return response, nil
 }
 
 func (s *GenericPodService) preparedStubID(ctx context.Context, workspaceID string) string {

@@ -340,9 +340,8 @@ class DurableDisk:
     name: str
     size: str
     mount_path: str
-    filesystem: str = "ext4"
-    driver: str = ""
     read_only: bool = False
+    source_generation_id: str = ""
 
     def export(self):
         from .clients.gateway import DurableDisk as DurableDiskProto
@@ -351,9 +350,8 @@ class DurableDisk:
             name=self.name,
             size=self.size,
             mount_path=self.mount_path,
-            filesystem=self.filesystem,
-            driver=self.driver,
             read_only=self.read_only,
+            source_generation_id=self.source_generation_id,
         )
 
 

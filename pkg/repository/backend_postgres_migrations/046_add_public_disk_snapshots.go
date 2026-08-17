@@ -8,15 +8,12 @@ import (
 )
 
 func init() {
-	goose.AddMigrationContext(upAddPublicDiskSnapshots, downAddPublicDiskSnapshots)
+	goose.AddMigrationContext(upStorageCutover046, downStorageCutover046)
 }
 
-func upAddPublicDiskSnapshots(ctx context.Context, tx *sql.Tx) error {
-	_, err := tx.ExecContext(ctx, `ALTER TABLE disk_snapshot ADD COLUMN IF NOT EXISTS public BOOLEAN NOT NULL DEFAULT FALSE;`)
-	return err
-}
+// This historical version is intentionally empty. The state-volume cutover
+// owns all writable machine state and migration 048 removes superseded storage
+// tables on upgrade. Fresh installs must never create those intermediate schemas.
+func upStorageCutover046(context.Context, *sql.Tx) error { return nil }
 
-func downAddPublicDiskSnapshots(ctx context.Context, tx *sql.Tx) error {
-	_, err := tx.ExecContext(ctx, `ALTER TABLE disk_snapshot DROP COLUMN IF EXISTS public;`)
-	return err
-}
+func downStorageCutover046(context.Context, *sql.Tx) error { return nil }

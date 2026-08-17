@@ -146,6 +146,7 @@ func (c *capacityCheck) restoreReplacedCapacity() {
 		worker.FreeCpu += container.Cpu
 		worker.FreeMemory += capacityMemoryForScheduling(replacedRequest)
 		worker.FreeGpuCount += gpuCountForScheduling(replacedRequest)
+		worker.FreeNbdDevices += container.NbdDevices
 		c.capFreeCapacity(worker)
 	}
 }
@@ -179,6 +180,7 @@ func (c *capacityCheck) reserve(worker *types.Worker) {
 	if c.request.RequiresGPU() {
 		worker.FreeGpuCount -= gpuCountForScheduling(c.request)
 	}
+	worker.FreeNbdDevices -= c.request.RequiredNbdDevices()
 }
 
 func (c *capacityCheck) capFreeCapacity(worker *types.Worker) {
@@ -190,5 +192,8 @@ func (c *capacityCheck) capFreeCapacity(worker *types.Worker) {
 	}
 	if worker.TotalGpuCount > 0 && worker.FreeGpuCount > worker.TotalGpuCount {
 		worker.FreeGpuCount = worker.TotalGpuCount
+	}
+	if worker.TotalNbdDevices > 0 && worker.FreeNbdDevices > worker.TotalNbdDevices {
+		worker.FreeNbdDevices = worker.TotalNbdDevices
 	}
 }

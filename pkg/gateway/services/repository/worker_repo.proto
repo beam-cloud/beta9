@@ -27,6 +27,8 @@ service WorkerRepositoryService {
       returns (UpdateWorkerCapacityResponse) {}
   rpc SetWorkerKeepAlive(SetWorkerKeepAliveRequest)
       returns (SetWorkerKeepAliveResponse) {}
+  rpc SetWorkerStateVolumeCapacity(SetWorkerStateVolumeCapacityRequest)
+      returns (SetWorkerStateVolumeCapacityResponse) {}
   rpc RegisterCacheHost(RegisterCacheHostRequest)
       returns (RegisterCacheHostResponse) {}
   rpc UnregisterCacheHost(UnregisterCacheHostRequest)
@@ -56,8 +58,6 @@ service WorkerRepositoryService {
       returns (GetCacheOriginCredentialsResponse) {}
   rpc GetContainerRuntimeCredentials(GetContainerRuntimeCredentialsRequest)
       returns (GetContainerRuntimeCredentialsResponse) {}
-  rpc PruneStaleCacheCheckpoints(PruneStaleCacheCheckpointsRequest)
-      returns (PruneStaleCacheCheckpointsResponse) {}
   rpc SetCacheFsNode(SetCacheFsNodeRequest) returns (SetCacheFsNodeResponse) {}
   rpc GetCacheFsNode(GetCacheFsNodeRequest) returns (GetCacheFsNodeResponse) {}
   rpc AddCacheFsNodeChild(AddCacheFsNodeChildRequest)
@@ -83,17 +83,25 @@ service WorkerRepositoryService {
       returns (RemoveContainerIpResponse) {}
 }
 
-message GetNextContainerRequestRequest { string worker_id = 1; }
+message GetNextContainerRequestRequest {
+  string worker_id = 1;
+  string worker_instance_id = 2;
+  string storage_node_id = 3;
+}
 
 message GetNextContainerRequestResponse {
   bool ok = 1;
   types.ContainerRequest container_request = 2;
   string error_msg = 3;
   string delivery_token = 4;
+  string state_volume_plan_id = 5;
+  string state_volume_plan_hash = 6;
 }
 
 message StreamWorkerEventsRequest {
   string worker_id = 1;
+  string worker_instance_id = 2;
+  string storage_node_id = 3;
 }
 
 message WorkerEvent {
@@ -116,6 +124,8 @@ message StopBuildEvent { string container_id = 1; }
 message SetImagePullLockRequest {
   string worker_id = 1;
   string image_id = 2;
+  string worker_instance_id = 3;
+  string storage_node_id = 4;
 }
 
 message SetImagePullLockResponse {
@@ -128,6 +138,8 @@ message RemoveImagePullLockRequest {
   string worker_id = 1;
   string image_id = 2;
   string token = 3;
+  string worker_instance_id = 4;
+  string storage_node_id = 5;
 }
 
 message RemoveImagePullLockResponse {
@@ -141,6 +153,10 @@ message AddContainerToWorkerRequest {
   string pool_name = 3;
   string pod_hostname = 4;
   string delivery_token = 5;
+  string state_volume_plan_id = 6;
+  string state_volume_plan_hash = 7;
+  string worker_instance_id = 8;
+  string storage_node_id = 9;
 }
 
 message AddContainerToWorkerResponse {
@@ -152,7 +168,9 @@ message RemoveContainerFromWorkerRequest {
   string worker_id = 1;
   string container_id = 2;
   string pool_name = 3;
-  string pod_hostname = 4;  
+  string pod_hostname = 4;
+  string worker_instance_id = 5;
+  string storage_node_id = 6;
 }
 
 message RemoveContainerFromWorkerResponse {
@@ -171,6 +189,8 @@ message GetWorkerByIdResponse {
 message ToggleWorkerAvailableRequest {
   string worker_id = 1;
   string generation = 2;
+  string worker_instance_id = 3;
+  string storage_node_id = 4;
 }
 
 message ToggleWorkerAvailableResponse {
@@ -178,14 +198,22 @@ message ToggleWorkerAvailableResponse {
   string error_msg = 2;
 }
 
-message DisableWorkerRequest { string worker_id = 1; }
+message DisableWorkerRequest {
+  string worker_id = 1;
+  string worker_instance_id = 2;
+  string storage_node_id = 3;
+}
 
 message DisableWorkerResponse {
   bool ok = 1;
   string error_msg = 2;
 }
 
-message RemoveWorkerRequest { string worker_id = 1; }
+message RemoveWorkerRequest {
+  string worker_id = 1;
+  string worker_instance_id = 2;
+  string storage_node_id = 3;
+}
 
 message RemoveWorkerResponse {
   bool ok = 1;
@@ -196,6 +224,8 @@ message UpdateWorkerCapacityRequest {
   string worker_id = 1;
   int64 capacity_change = 2;
   types.ContainerRequest container_request = 3;
+  string worker_instance_id = 4;
+  string storage_node_id = 5;
 }
 
 message UpdateWorkerCapacityResponse {
@@ -206,9 +236,23 @@ message UpdateWorkerCapacityResponse {
 message SetWorkerKeepAliveRequest {
   string worker_id = 1;
   string machine_id = 2;
+  string worker_instance_id = 3;
 }
 
 message SetWorkerKeepAliveResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message SetWorkerStateVolumeCapacityRequest {
+  string worker_id = 1;
+  uint32 total_nbd_devices = 2;
+  uint32 free_nbd_devices = 3;
+  string machine_id = 4;
+  string worker_instance_id = 5;
+}
+
+message SetWorkerStateVolumeCapacityResponse {
   bool ok = 1;
   string error_msg = 2;
 }
@@ -416,17 +460,6 @@ message GetContainerRuntimeCredentialsResponse {
   repeated RuntimeMountCredentials mount_credentials = 5;
 }
 
-message PruneStaleCacheCheckpointsRequest {
-  string locality = 1;
-  repeated string active_stub_ids = 2;
-}
-
-message PruneStaleCacheCheckpointsResponse {
-  bool ok = 1;
-  string error_msg = 2;
-  int32 pruned = 3;
-}
-
 message RemoveCacheStoreFromContentLockRequest {
   string locality = 1;
   string source_path = 2;
@@ -529,6 +562,9 @@ message SetNetworkLockRequest {
   string network_prefix = 1;
   int32 ttl = 2;
   int32 retries = 3;
+  string worker_id = 4;
+  string worker_instance_id = 5;
+  string storage_node_id = 6;
 }
 
 message SetNetworkLockResponse {
@@ -540,6 +576,9 @@ message SetNetworkLockResponse {
 message RemoveNetworkLockRequest {
   string network_prefix = 1;
   string token = 2;
+  string worker_id = 3;
+  string worker_instance_id = 4;
+  string storage_node_id = 5;
 }
 
 message RemoveNetworkLockResponse {
@@ -551,6 +590,9 @@ message SetContainerIpRequest {
   string network_prefix = 1;
   string container_id = 2;
   string ip_address = 3;
+  string worker_id = 4;
+  string worker_instance_id = 5;
+  string storage_node_id = 6;
 }
 
 message SetContainerIpResponse {
@@ -563,6 +605,9 @@ message MoveContainerIpRequest {
   string from_container_id = 2;
   string to_container_id = 3;
   string ip_address = 4;
+  string worker_id = 5;
+  string worker_instance_id = 6;
+  string storage_node_id = 7;
 }
 
 message MoveContainerIpResponse {
@@ -605,6 +650,9 @@ message GetContainerIpAssignmentsResponse {
 message RemoveContainerIpRequest {
   string network_prefix = 1;
   string container_id = 2;
+  string worker_id = 3;
+  string worker_instance_id = 4;
+  string storage_node_id = 5;
 }
 
 message RemoveContainerIpResponse {
@@ -615,6 +663,8 @@ message RemoveContainerIpResponse {
 message PushContainerLifecycleEventsRequest {
   string worker_id = 1;
   repeated bytes events = 2;
+  string worker_instance_id = 3;
+  string storage_node_id = 4;
 }
 
 message PushContainerLifecycleEventsResponse {

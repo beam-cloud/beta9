@@ -204,9 +204,144 @@ func request_GatewayService_PutObjectStream_0(ctx context.Context, marshaler run
 	return msg, metadata, err
 }
 
-func request_GatewayService_CheckpointContainer_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+func request_GatewayService_SnapshotContainerState_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
-		protoReq CheckpointContainerRequest
+		protoReq GatewaySnapshotContainerStateRequest
+		metadata runtime.ServerMetadata
+		err      error
+	)
+	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if req.Body != nil {
+		_, _ = io.Copy(io.Discard, req.Body)
+	}
+	val, ok := pathParams["container_id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "container_id")
+	}
+	protoReq.ContainerId, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "container_id", err)
+	}
+	msg, err := client.SnapshotContainerState(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
+	return msg, metadata, err
+}
+
+func local_request_GatewayService_SnapshotContainerState_0(ctx context.Context, marshaler runtime.Marshaler, server GatewayServiceServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+	var (
+		protoReq GatewaySnapshotContainerStateRequest
+		metadata runtime.ServerMetadata
+		err      error
+	)
+	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	val, ok := pathParams["container_id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "container_id")
+	}
+	protoReq.ContainerId, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "container_id", err)
+	}
+	msg, err := server.SnapshotContainerState(ctx, &protoReq)
+	return msg, metadata, err
+}
+
+func request_GatewayService_RetainStateSnapshotReference_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+	var (
+		protoReq StateSnapshotReferenceRequest
+		metadata runtime.ServerMetadata
+		err      error
+	)
+	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if req.Body != nil {
+		_, _ = io.Copy(io.Discard, req.Body)
+	}
+	val, ok := pathParams["state_snapshot_id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "state_snapshot_id")
+	}
+	protoReq.StateSnapshotId, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "state_snapshot_id", err)
+	}
+	msg, err := client.RetainStateSnapshotReference(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
+	return msg, metadata, err
+}
+
+func local_request_GatewayService_RetainStateSnapshotReference_0(ctx context.Context, marshaler runtime.Marshaler, server GatewayServiceServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+	var (
+		protoReq StateSnapshotReferenceRequest
+		metadata runtime.ServerMetadata
+		err      error
+	)
+	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	val, ok := pathParams["state_snapshot_id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "state_snapshot_id")
+	}
+	protoReq.StateSnapshotId, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "state_snapshot_id", err)
+	}
+	msg, err := server.RetainStateSnapshotReference(ctx, &protoReq)
+	return msg, metadata, err
+}
+
+func request_GatewayService_ReleaseStateSnapshotReference_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+	var (
+		protoReq StateSnapshotReferenceRequest
+		metadata runtime.ServerMetadata
+		err      error
+	)
+	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if req.Body != nil {
+		_, _ = io.Copy(io.Discard, req.Body)
+	}
+	val, ok := pathParams["state_snapshot_id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "state_snapshot_id")
+	}
+	protoReq.StateSnapshotId, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "state_snapshot_id", err)
+	}
+	msg, err := client.ReleaseStateSnapshotReference(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
+	return msg, metadata, err
+}
+
+func local_request_GatewayService_ReleaseStateSnapshotReference_0(ctx context.Context, marshaler runtime.Marshaler, server GatewayServiceServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+	var (
+		protoReq StateSnapshotReferenceRequest
+		metadata runtime.ServerMetadata
+		err      error
+	)
+	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	val, ok := pathParams["state_snapshot_id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "state_snapshot_id")
+	}
+	protoReq.StateSnapshotId, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "state_snapshot_id", err)
+	}
+	msg, err := server.ReleaseStateSnapshotReference(ctx, &protoReq)
+	return msg, metadata, err
+}
+
+func request_GatewayService_PromoteStateTemplate_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+	var (
+		protoReq PromoteStateTemplateRequest
 		metadata runtime.ServerMetadata
 	)
 	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
@@ -215,19 +350,325 @@ func request_GatewayService_CheckpointContainer_0(ctx context.Context, marshaler
 	if req.Body != nil {
 		_, _ = io.Copy(io.Discard, req.Body)
 	}
-	msg, err := client.CheckpointContainer(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
+	msg, err := client.PromoteStateTemplate(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
 	return msg, metadata, err
 }
 
-func local_request_GatewayService_CheckpointContainer_0(ctx context.Context, marshaler runtime.Marshaler, server GatewayServiceServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+func local_request_GatewayService_PromoteStateTemplate_0(ctx context.Context, marshaler runtime.Marshaler, server GatewayServiceServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
-		protoReq CheckpointContainerRequest
+		protoReq PromoteStateTemplateRequest
 		metadata runtime.ServerMetadata
 	)
 	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
-	msg, err := server.CheckpointContainer(ctx, &protoReq)
+	msg, err := server.PromoteStateTemplate(ctx, &protoReq)
+	return msg, metadata, err
+}
+
+func request_GatewayService_GetStateTemplate_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+	var (
+		protoReq GetStateTemplateRequest
+		metadata runtime.ServerMetadata
+		err      error
+	)
+	if req.Body != nil {
+		_, _ = io.Copy(io.Discard, req.Body)
+	}
+	val, ok := pathParams["state_template_id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "state_template_id")
+	}
+	protoReq.StateTemplateId, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "state_template_id", err)
+	}
+	val, ok = pathParams["version"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "version")
+	}
+	protoReq.Version, err = runtime.Int64(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "version", err)
+	}
+	msg, err := client.GetStateTemplate(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
+	return msg, metadata, err
+}
+
+func local_request_GatewayService_GetStateTemplate_0(ctx context.Context, marshaler runtime.Marshaler, server GatewayServiceServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+	var (
+		protoReq GetStateTemplateRequest
+		metadata runtime.ServerMetadata
+		err      error
+	)
+	val, ok := pathParams["state_template_id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "state_template_id")
+	}
+	protoReq.StateTemplateId, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "state_template_id", err)
+	}
+	val, ok = pathParams["version"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "version")
+	}
+	protoReq.Version, err = runtime.Int64(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "version", err)
+	}
+	msg, err := server.GetStateTemplate(ctx, &protoReq)
+	return msg, metadata, err
+}
+
+func request_GatewayService_InstantiateStateTemplate_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+	var (
+		protoReq InstantiateStateTemplateRequest
+		metadata runtime.ServerMetadata
+		err      error
+	)
+	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if req.Body != nil {
+		_, _ = io.Copy(io.Discard, req.Body)
+	}
+	val, ok := pathParams["state_template_id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "state_template_id")
+	}
+	protoReq.StateTemplateId, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "state_template_id", err)
+	}
+	val, ok = pathParams["version"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "version")
+	}
+	protoReq.Version, err = runtime.Int64(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "version", err)
+	}
+	msg, err := client.InstantiateStateTemplate(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
+	return msg, metadata, err
+}
+
+func local_request_GatewayService_InstantiateStateTemplate_0(ctx context.Context, marshaler runtime.Marshaler, server GatewayServiceServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+	var (
+		protoReq InstantiateStateTemplateRequest
+		metadata runtime.ServerMetadata
+		err      error
+	)
+	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	val, ok := pathParams["state_template_id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "state_template_id")
+	}
+	protoReq.StateTemplateId, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "state_template_id", err)
+	}
+	val, ok = pathParams["version"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "version")
+	}
+	protoReq.Version, err = runtime.Int64(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "version", err)
+	}
+	msg, err := server.InstantiateStateTemplate(ctx, &protoReq)
+	return msg, metadata, err
+}
+
+func request_GatewayService_GetStateTemplateInstantiation_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+	var (
+		protoReq GetStateTemplateInstantiationRequest
+		metadata runtime.ServerMetadata
+		err      error
+	)
+	if req.Body != nil {
+		_, _ = io.Copy(io.Discard, req.Body)
+	}
+	val, ok := pathParams["operation_id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "operation_id")
+	}
+	protoReq.OperationId, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "operation_id", err)
+	}
+	msg, err := client.GetStateTemplateInstantiation(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
+	return msg, metadata, err
+}
+
+func local_request_GatewayService_GetStateTemplateInstantiation_0(ctx context.Context, marshaler runtime.Marshaler, server GatewayServiceServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+	var (
+		protoReq GetStateTemplateInstantiationRequest
+		metadata runtime.ServerMetadata
+		err      error
+	)
+	val, ok := pathParams["operation_id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "operation_id")
+	}
+	protoReq.OperationId, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "operation_id", err)
+	}
+	msg, err := server.GetStateTemplateInstantiation(ctx, &protoReq)
+	return msg, metadata, err
+}
+
+func request_GatewayService_ConfirmStateTemplateInstantiation_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+	var (
+		protoReq ConfirmStateTemplateInstantiationRequest
+		metadata runtime.ServerMetadata
+		err      error
+	)
+	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if req.Body != nil {
+		_, _ = io.Copy(io.Discard, req.Body)
+	}
+	val, ok := pathParams["operation_id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "operation_id")
+	}
+	protoReq.OperationId, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "operation_id", err)
+	}
+	msg, err := client.ConfirmStateTemplateInstantiation(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
+	return msg, metadata, err
+}
+
+func local_request_GatewayService_ConfirmStateTemplateInstantiation_0(ctx context.Context, marshaler runtime.Marshaler, server GatewayServiceServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+	var (
+		protoReq ConfirmStateTemplateInstantiationRequest
+		metadata runtime.ServerMetadata
+		err      error
+	)
+	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	val, ok := pathParams["operation_id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "operation_id")
+	}
+	protoReq.OperationId, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "operation_id", err)
+	}
+	msg, err := server.ConfirmStateTemplateInstantiation(ctx, &protoReq)
+	return msg, metadata, err
+}
+
+func request_GatewayService_CancelStateTemplateInstantiation_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+	var (
+		protoReq CancelStateTemplateInstantiationRequest
+		metadata runtime.ServerMetadata
+		err      error
+	)
+	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if req.Body != nil {
+		_, _ = io.Copy(io.Discard, req.Body)
+	}
+	val, ok := pathParams["operation_id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "operation_id")
+	}
+	protoReq.OperationId, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "operation_id", err)
+	}
+	msg, err := client.CancelStateTemplateInstantiation(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
+	return msg, metadata, err
+}
+
+func local_request_GatewayService_CancelStateTemplateInstantiation_0(ctx context.Context, marshaler runtime.Marshaler, server GatewayServiceServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+	var (
+		protoReq CancelStateTemplateInstantiationRequest
+		metadata runtime.ServerMetadata
+		err      error
+	)
+	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	val, ok := pathParams["operation_id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "operation_id")
+	}
+	protoReq.OperationId, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "operation_id", err)
+	}
+	msg, err := server.CancelStateTemplateInstantiation(ctx, &protoReq)
+	return msg, metadata, err
+}
+
+func request_GatewayService_ReleaseStateTemplate_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+	var (
+		protoReq ReleaseStateTemplateRequest
+		metadata runtime.ServerMetadata
+		err      error
+	)
+	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if req.Body != nil {
+		_, _ = io.Copy(io.Discard, req.Body)
+	}
+	val, ok := pathParams["state_template_id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "state_template_id")
+	}
+	protoReq.StateTemplateId, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "state_template_id", err)
+	}
+	val, ok = pathParams["version"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "version")
+	}
+	protoReq.Version, err = runtime.Int64(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "version", err)
+	}
+	msg, err := client.ReleaseStateTemplate(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
+	return msg, metadata, err
+}
+
+func local_request_GatewayService_ReleaseStateTemplate_0(ctx context.Context, marshaler runtime.Marshaler, server GatewayServiceServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+	var (
+		protoReq ReleaseStateTemplateRequest
+		metadata runtime.ServerMetadata
+		err      error
+	)
+	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	val, ok := pathParams["state_template_id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "state_template_id")
+	}
+	protoReq.StateTemplateId, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "state_template_id", err)
+	}
+	val, ok = pathParams["version"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "version")
+	}
+	protoReq.Version, err = runtime.Int64(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "version", err)
+	}
+	msg, err := server.ReleaseStateTemplate(ctx, &protoReq)
 	return msg, metadata, err
 }
 
@@ -2685,25 +3126,205 @@ func RegisterGatewayServiceHandlerServer(ctx context.Context, mux *runtime.Serve
 		runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 		return
 	})
-	mux.Handle(http.MethodPost, pattern_GatewayService_CheckpointContainer_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodPost, pattern_GatewayService_SnapshotContainerState_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/CheckpointContainer", runtime.WithHTTPPathPattern("/gateway.GatewayService/CheckpointContainer"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/SnapshotContainerState", runtime.WithHTTPPathPattern("/pods/{container_id}/snapshot-state"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		resp, md, err := local_request_GatewayService_CheckpointContainer_0(annotatedContext, inboundMarshaler, server, req, pathParams)
+		resp, md, err := local_request_GatewayService_SnapshotContainerState_0(annotatedContext, inboundMarshaler, server, req, pathParams)
 		md.HeaderMD, md.TrailerMD = metadata.Join(md.HeaderMD, stream.Header()), metadata.Join(md.TrailerMD, stream.Trailer())
 		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
 		if err != nil {
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_GatewayService_CheckpointContainer_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_GatewayService_SnapshotContainerState_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+	})
+	mux.Handle(http.MethodPost, pattern_GatewayService_RetainStateSnapshotReference_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+		ctx, cancel := context.WithCancel(req.Context())
+		defer cancel()
+		var stream runtime.ServerTransportStream
+		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
+		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/RetainStateSnapshotReference", runtime.WithHTTPPathPattern("/state-snapshots/{state_snapshot_id}/references:retain"))
+		if err != nil {
+			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		resp, md, err := local_request_GatewayService_RetainStateSnapshotReference_0(annotatedContext, inboundMarshaler, server, req, pathParams)
+		md.HeaderMD, md.TrailerMD = metadata.Join(md.HeaderMD, stream.Header()), metadata.Join(md.TrailerMD, stream.Trailer())
+		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
+		if err != nil {
+			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		forward_GatewayService_RetainStateSnapshotReference_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+	})
+	mux.Handle(http.MethodPost, pattern_GatewayService_ReleaseStateSnapshotReference_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+		ctx, cancel := context.WithCancel(req.Context())
+		defer cancel()
+		var stream runtime.ServerTransportStream
+		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
+		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/ReleaseStateSnapshotReference", runtime.WithHTTPPathPattern("/state-snapshots/{state_snapshot_id}/references:release"))
+		if err != nil {
+			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		resp, md, err := local_request_GatewayService_ReleaseStateSnapshotReference_0(annotatedContext, inboundMarshaler, server, req, pathParams)
+		md.HeaderMD, md.TrailerMD = metadata.Join(md.HeaderMD, stream.Header()), metadata.Join(md.TrailerMD, stream.Trailer())
+		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
+		if err != nil {
+			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		forward_GatewayService_ReleaseStateSnapshotReference_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+	})
+	mux.Handle(http.MethodPost, pattern_GatewayService_PromoteStateTemplate_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+		ctx, cancel := context.WithCancel(req.Context())
+		defer cancel()
+		var stream runtime.ServerTransportStream
+		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
+		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/PromoteStateTemplate", runtime.WithHTTPPathPattern("/state-templates:promote"))
+		if err != nil {
+			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		resp, md, err := local_request_GatewayService_PromoteStateTemplate_0(annotatedContext, inboundMarshaler, server, req, pathParams)
+		md.HeaderMD, md.TrailerMD = metadata.Join(md.HeaderMD, stream.Header()), metadata.Join(md.TrailerMD, stream.Trailer())
+		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
+		if err != nil {
+			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		forward_GatewayService_PromoteStateTemplate_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+	})
+	mux.Handle(http.MethodGet, pattern_GatewayService_GetStateTemplate_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+		ctx, cancel := context.WithCancel(req.Context())
+		defer cancel()
+		var stream runtime.ServerTransportStream
+		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
+		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/GetStateTemplate", runtime.WithHTTPPathPattern("/state-templates/{state_template_id}/versions/{version}"))
+		if err != nil {
+			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		resp, md, err := local_request_GatewayService_GetStateTemplate_0(annotatedContext, inboundMarshaler, server, req, pathParams)
+		md.HeaderMD, md.TrailerMD = metadata.Join(md.HeaderMD, stream.Header()), metadata.Join(md.TrailerMD, stream.Trailer())
+		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
+		if err != nil {
+			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		forward_GatewayService_GetStateTemplate_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+	})
+	mux.Handle(http.MethodPost, pattern_GatewayService_InstantiateStateTemplate_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+		ctx, cancel := context.WithCancel(req.Context())
+		defer cancel()
+		var stream runtime.ServerTransportStream
+		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
+		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/InstantiateStateTemplate", runtime.WithHTTPPathPattern("/state-templates/{state_template_id}/versions/{version}:instantiate"))
+		if err != nil {
+			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		resp, md, err := local_request_GatewayService_InstantiateStateTemplate_0(annotatedContext, inboundMarshaler, server, req, pathParams)
+		md.HeaderMD, md.TrailerMD = metadata.Join(md.HeaderMD, stream.Header()), metadata.Join(md.TrailerMD, stream.Trailer())
+		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
+		if err != nil {
+			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		forward_GatewayService_InstantiateStateTemplate_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+	})
+	mux.Handle(http.MethodGet, pattern_GatewayService_GetStateTemplateInstantiation_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+		ctx, cancel := context.WithCancel(req.Context())
+		defer cancel()
+		var stream runtime.ServerTransportStream
+		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
+		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/GetStateTemplateInstantiation", runtime.WithHTTPPathPattern("/state-template-instantiations/{operation_id}"))
+		if err != nil {
+			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		resp, md, err := local_request_GatewayService_GetStateTemplateInstantiation_0(annotatedContext, inboundMarshaler, server, req, pathParams)
+		md.HeaderMD, md.TrailerMD = metadata.Join(md.HeaderMD, stream.Header()), metadata.Join(md.TrailerMD, stream.Trailer())
+		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
+		if err != nil {
+			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		forward_GatewayService_GetStateTemplateInstantiation_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+	})
+	mux.Handle(http.MethodPost, pattern_GatewayService_ConfirmStateTemplateInstantiation_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+		ctx, cancel := context.WithCancel(req.Context())
+		defer cancel()
+		var stream runtime.ServerTransportStream
+		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
+		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/ConfirmStateTemplateInstantiation", runtime.WithHTTPPathPattern("/state-template-instantiations/{operation_id}:confirm"))
+		if err != nil {
+			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		resp, md, err := local_request_GatewayService_ConfirmStateTemplateInstantiation_0(annotatedContext, inboundMarshaler, server, req, pathParams)
+		md.HeaderMD, md.TrailerMD = metadata.Join(md.HeaderMD, stream.Header()), metadata.Join(md.TrailerMD, stream.Trailer())
+		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
+		if err != nil {
+			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		forward_GatewayService_ConfirmStateTemplateInstantiation_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+	})
+	mux.Handle(http.MethodPost, pattern_GatewayService_CancelStateTemplateInstantiation_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+		ctx, cancel := context.WithCancel(req.Context())
+		defer cancel()
+		var stream runtime.ServerTransportStream
+		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
+		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/CancelStateTemplateInstantiation", runtime.WithHTTPPathPattern("/state-template-instantiations/{operation_id}:cancel"))
+		if err != nil {
+			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		resp, md, err := local_request_GatewayService_CancelStateTemplateInstantiation_0(annotatedContext, inboundMarshaler, server, req, pathParams)
+		md.HeaderMD, md.TrailerMD = metadata.Join(md.HeaderMD, stream.Header()), metadata.Join(md.TrailerMD, stream.Trailer())
+		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
+		if err != nil {
+			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		forward_GatewayService_CancelStateTemplateInstantiation_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+	})
+	mux.Handle(http.MethodPost, pattern_GatewayService_ReleaseStateTemplate_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+		ctx, cancel := context.WithCancel(req.Context())
+		defer cancel()
+		var stream runtime.ServerTransportStream
+		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
+		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/ReleaseStateTemplate", runtime.WithHTTPPathPattern("/state-templates/{state_template_id}/versions/{version}:release"))
+		if err != nil {
+			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		resp, md, err := local_request_GatewayService_ReleaseStateTemplate_0(annotatedContext, inboundMarshaler, server, req, pathParams)
+		md.HeaderMD, md.TrailerMD = metadata.Join(md.HeaderMD, stream.Header()), metadata.Join(md.TrailerMD, stream.Trailer())
+		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
+		if err != nil {
+			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		forward_GatewayService_ReleaseStateTemplate_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
 	mux.Handle(http.MethodGet, pattern_GatewayService_ListContainers_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
@@ -4091,22 +4712,175 @@ func RegisterGatewayServiceHandlerClient(ctx context.Context, mux *runtime.Serve
 		}
 		forward_GatewayService_PutObjectStream_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPost, pattern_GatewayService_CheckpointContainer_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodPost, pattern_GatewayService_SnapshotContainerState_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/CheckpointContainer", runtime.WithHTTPPathPattern("/gateway.GatewayService/CheckpointContainer"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/SnapshotContainerState", runtime.WithHTTPPathPattern("/pods/{container_id}/snapshot-state"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		resp, md, err := request_GatewayService_CheckpointContainer_0(annotatedContext, inboundMarshaler, client, req, pathParams)
+		resp, md, err := request_GatewayService_SnapshotContainerState_0(annotatedContext, inboundMarshaler, client, req, pathParams)
 		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
 		if err != nil {
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_GatewayService_CheckpointContainer_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_GatewayService_SnapshotContainerState_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+	})
+	mux.Handle(http.MethodPost, pattern_GatewayService_RetainStateSnapshotReference_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+		ctx, cancel := context.WithCancel(req.Context())
+		defer cancel()
+		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/RetainStateSnapshotReference", runtime.WithHTTPPathPattern("/state-snapshots/{state_snapshot_id}/references:retain"))
+		if err != nil {
+			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		resp, md, err := request_GatewayService_RetainStateSnapshotReference_0(annotatedContext, inboundMarshaler, client, req, pathParams)
+		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
+		if err != nil {
+			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		forward_GatewayService_RetainStateSnapshotReference_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+	})
+	mux.Handle(http.MethodPost, pattern_GatewayService_ReleaseStateSnapshotReference_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+		ctx, cancel := context.WithCancel(req.Context())
+		defer cancel()
+		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/ReleaseStateSnapshotReference", runtime.WithHTTPPathPattern("/state-snapshots/{state_snapshot_id}/references:release"))
+		if err != nil {
+			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		resp, md, err := request_GatewayService_ReleaseStateSnapshotReference_0(annotatedContext, inboundMarshaler, client, req, pathParams)
+		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
+		if err != nil {
+			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		forward_GatewayService_ReleaseStateSnapshotReference_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+	})
+	mux.Handle(http.MethodPost, pattern_GatewayService_PromoteStateTemplate_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+		ctx, cancel := context.WithCancel(req.Context())
+		defer cancel()
+		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/PromoteStateTemplate", runtime.WithHTTPPathPattern("/state-templates:promote"))
+		if err != nil {
+			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		resp, md, err := request_GatewayService_PromoteStateTemplate_0(annotatedContext, inboundMarshaler, client, req, pathParams)
+		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
+		if err != nil {
+			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		forward_GatewayService_PromoteStateTemplate_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+	})
+	mux.Handle(http.MethodGet, pattern_GatewayService_GetStateTemplate_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+		ctx, cancel := context.WithCancel(req.Context())
+		defer cancel()
+		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/GetStateTemplate", runtime.WithHTTPPathPattern("/state-templates/{state_template_id}/versions/{version}"))
+		if err != nil {
+			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		resp, md, err := request_GatewayService_GetStateTemplate_0(annotatedContext, inboundMarshaler, client, req, pathParams)
+		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
+		if err != nil {
+			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		forward_GatewayService_GetStateTemplate_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+	})
+	mux.Handle(http.MethodPost, pattern_GatewayService_InstantiateStateTemplate_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+		ctx, cancel := context.WithCancel(req.Context())
+		defer cancel()
+		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/InstantiateStateTemplate", runtime.WithHTTPPathPattern("/state-templates/{state_template_id}/versions/{version}:instantiate"))
+		if err != nil {
+			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		resp, md, err := request_GatewayService_InstantiateStateTemplate_0(annotatedContext, inboundMarshaler, client, req, pathParams)
+		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
+		if err != nil {
+			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		forward_GatewayService_InstantiateStateTemplate_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+	})
+	mux.Handle(http.MethodGet, pattern_GatewayService_GetStateTemplateInstantiation_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+		ctx, cancel := context.WithCancel(req.Context())
+		defer cancel()
+		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/GetStateTemplateInstantiation", runtime.WithHTTPPathPattern("/state-template-instantiations/{operation_id}"))
+		if err != nil {
+			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		resp, md, err := request_GatewayService_GetStateTemplateInstantiation_0(annotatedContext, inboundMarshaler, client, req, pathParams)
+		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
+		if err != nil {
+			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		forward_GatewayService_GetStateTemplateInstantiation_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+	})
+	mux.Handle(http.MethodPost, pattern_GatewayService_ConfirmStateTemplateInstantiation_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+		ctx, cancel := context.WithCancel(req.Context())
+		defer cancel()
+		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/ConfirmStateTemplateInstantiation", runtime.WithHTTPPathPattern("/state-template-instantiations/{operation_id}:confirm"))
+		if err != nil {
+			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		resp, md, err := request_GatewayService_ConfirmStateTemplateInstantiation_0(annotatedContext, inboundMarshaler, client, req, pathParams)
+		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
+		if err != nil {
+			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		forward_GatewayService_ConfirmStateTemplateInstantiation_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+	})
+	mux.Handle(http.MethodPost, pattern_GatewayService_CancelStateTemplateInstantiation_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+		ctx, cancel := context.WithCancel(req.Context())
+		defer cancel()
+		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/CancelStateTemplateInstantiation", runtime.WithHTTPPathPattern("/state-template-instantiations/{operation_id}:cancel"))
+		if err != nil {
+			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		resp, md, err := request_GatewayService_CancelStateTemplateInstantiation_0(annotatedContext, inboundMarshaler, client, req, pathParams)
+		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
+		if err != nil {
+			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		forward_GatewayService_CancelStateTemplateInstantiation_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+	})
+	mux.Handle(http.MethodPost, pattern_GatewayService_ReleaseStateTemplate_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+		ctx, cancel := context.WithCancel(req.Context())
+		defer cancel()
+		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/ReleaseStateTemplate", runtime.WithHTTPPathPattern("/state-templates/{state_template_id}/versions/{version}:release"))
+		if err != nil {
+			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		resp, md, err := request_GatewayService_ReleaseStateTemplate_0(annotatedContext, inboundMarshaler, client, req, pathParams)
+		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
+		if err != nil {
+			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		forward_GatewayService_ReleaseStateTemplate_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
 	mux.Handle(http.MethodGet, pattern_GatewayService_ListContainers_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
@@ -5217,149 +5991,167 @@ func RegisterGatewayServiceHandlerClient(ctx context.Context, mux *runtime.Serve
 }
 
 var (
-	pattern_GatewayService_Authorize_0                       = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"auth", "authorize"}, ""))
-	pattern_GatewayService_SignPayload_0                     = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"auth", "sign"}, ""))
-	pattern_GatewayService_HeadObject_0                      = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1}, []string{"objects", "hash"}, ""))
-	pattern_GatewayService_CreateObject_0                    = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"objects"}, ""))
-	pattern_GatewayService_PutObjectStream_0                 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"gateway.GatewayService", "PutObjectStream"}, ""))
-	pattern_GatewayService_CheckpointContainer_0             = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"gateway.GatewayService", "CheckpointContainer"}, ""))
-	pattern_GatewayService_ListContainers_0                  = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"containers"}, ""))
-	pattern_GatewayService_StopContainer_0                   = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"containers", "container_id", "stop"}, ""))
-	pattern_GatewayService_AttachToContainer_0               = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"gateway.GatewayService", "AttachToContainer"}, ""))
-	pattern_GatewayService_StartTask_0                       = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"tasks", "start"}, ""))
-	pattern_GatewayService_EndTask_0                         = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"tasks", "end"}, ""))
-	pattern_GatewayService_StopTasks_0                       = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"tasks", "stop"}, ""))
-	pattern_GatewayService_ListTasks_0                       = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"tasks"}, ""))
-	pattern_GatewayService_GetOrCreateStub_0                 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"stubs"}, ""))
-	pattern_GatewayService_DeployStub_0                      = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"stubs", "deploy"}, ""))
-	pattern_GatewayService_GetURL_0                          = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"stubs", "stub_id", "url"}, ""))
-	pattern_GatewayService_ListDeployments_0                 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"deployments"}, ""))
-	pattern_GatewayService_StopDeployment_0                  = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"deployments", "id", "stop"}, ""))
-	pattern_GatewayService_StartDeployment_0                 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"deployments", "id", "start"}, ""))
-	pattern_GatewayService_ScaleDeployment_0                 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"deployments", "id", "scale"}, ""))
-	pattern_GatewayService_DeleteDeployment_0                = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1}, []string{"deployments", "id"}, ""))
-	pattern_GatewayService_ListPools_0                       = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"pools"}, ""))
-	pattern_GatewayService_ListPoolOffers_0                  = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"pools"}, "offers"))
-	pattern_GatewayService_LaunchPoolCapacity_0              = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"pools"}, "launch"))
-	pattern_GatewayService_ListPrivatePools_0                = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"pools", "private"}, ""))
-	pattern_GatewayService_CreateBYOCPool_0                  = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"pools", "byoc"}, ""))
-	pattern_GatewayService_GetBYOCPool_0                     = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"pools", "pool_name", "byoc"}, ""))
-	pattern_GatewayService_ScaleBYOCPool_0                   = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2, 2, 3}, []string{"pools", "pool_name", "byoc", "scale"}, ""))
-	pattern_GatewayService_CreateMarketplaceListing_0        = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"marketplace", "listings"}, ""))
-	pattern_GatewayService_UpdateMarketplaceListing_0        = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2}, []string{"marketplace", "listings", "listing_id"}, ""))
-	pattern_GatewayService_DeleteMarketplaceListing_0        = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2}, []string{"marketplace", "listings", "listing_id"}, ""))
-	pattern_GatewayService_ListMarketplaceListings_0         = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"marketplace", "listings"}, ""))
-	pattern_GatewayService_GetMarketplaceJoinCommand_0       = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2, 2, 3}, []string{"marketplace", "listings", "listing_id", "join-command"}, ""))
-	pattern_GatewayService_ListMarketplaceOffers_0           = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"marketplace", "offers"}, ""))
-	pattern_GatewayService_GetMarketplaceOffer_0             = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2}, []string{"marketplace", "offers", "listing_id"}, ""))
-	pattern_GatewayService_CreateMarketplaceRental_0         = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"marketplace", "rentals"}, ""))
-	pattern_GatewayService_ListMarketplaceRentals_0          = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"marketplace", "rentals"}, ""))
-	pattern_GatewayService_DeleteMarketplaceRental_0         = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2}, []string{"marketplace", "rentals", "rental_id"}, ""))
-	pattern_GatewayService_LaunchRentalWorkload_0            = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2, 2, 3}, []string{"marketplace", "rentals", "rental_id", "launch"}, ""))
-	pattern_GatewayService_ListMarketplaceMachines_0         = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2, 2, 3}, []string{"marketplace", "listings", "listing_id", "machines"}, ""))
-	pattern_GatewayService_ListMachineContainers_0           = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2, 1, 0, 4, 1, 5, 3, 2, 4}, []string{"pools", "pool_name", "machines", "machine_id", "containers"}, ""))
-	pattern_GatewayService_CreatePool_0                      = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"pools"}, ""))
-	pattern_GatewayService_DeletePool_0                      = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1}, []string{"pools", "name"}, ""))
-	pattern_GatewayService_ExtendPoolCapacity_0              = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"pools", "name", "extend"}, ""))
-	pattern_GatewayService_CreatePoolJoinToken_0             = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"pools", "pool_name", "join-tokens"}, ""))
-	pattern_GatewayService_RevokePoolJoinToken_0             = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2}, []string{"pools", "join-tokens", "revoke"}, ""))
-	pattern_GatewayService_GetPoolJoinCommand_0              = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"pools", "pool_name", "join-command"}, ""))
-	pattern_GatewayService_ListPoolMachines_0                = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"pools", "pool_name", "machines"}, ""))
-	pattern_GatewayService_DownloadMachineSSHKey_0           = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2, 1, 0, 4, 1, 5, 3, 2, 4, 2, 5}, []string{"pools", "pool_name", "machines", "machine_id", "ssh", "key"}, "download"))
-	pattern_GatewayService_RotateMachineSSHKey_0             = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2, 1, 0, 4, 1, 5, 3, 2, 4, 2, 5}, []string{"pools", "pool_name", "machines", "machine_id", "ssh", "key"}, "rotate"))
-	pattern_GatewayService_ActivateMachineSSHKey_0           = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2, 1, 0, 4, 1, 5, 3, 2, 4, 2, 5}, []string{"pools", "pool_name", "machines", "machine_id", "ssh", "key"}, "activate"))
-	pattern_GatewayService_JoinAgent_0                       = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"agent", "join"}, ""))
-	pattern_GatewayService_RequestAgentTransportCredential_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"agent", "transport-credential"}, ""))
-	pattern_GatewayService_ListAgentRoutes_0                 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"agent", "routes"}, "list"))
-	pattern_GatewayService_UpdateAgentRouteStatus_0          = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2}, []string{"agent", "routes", "status"}, ""))
-	pattern_GatewayService_UpdateAgentSSHStatus_0            = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2}, []string{"agent", "ssh", "status"}, ""))
-	pattern_GatewayService_UpdateAgentAvailability_0         = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"agent", "availability"}, ""))
-	pattern_GatewayService_StreamAgent_0                     = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"gateway.GatewayService", "StreamAgent"}, ""))
-	pattern_GatewayService_StreamAgentTelemetry_0            = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"gateway.GatewayService", "StreamAgentTelemetry"}, ""))
-	pattern_GatewayService_ListMachines_0                    = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"machines"}, ""))
-	pattern_GatewayService_CreateMachine_0                   = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"machines"}, ""))
-	pattern_GatewayService_DeleteMachine_0                   = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1}, []string{"machines", "machine_id"}, ""))
-	pattern_GatewayService_ListTokens_0                      = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"tokens"}, ""))
-	pattern_GatewayService_CreateToken_0                     = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"tokens"}, ""))
-	pattern_GatewayService_ToggleToken_0                     = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"tokens", "token_id", "toggle"}, ""))
-	pattern_GatewayService_DeleteToken_0                     = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1}, []string{"tokens", "token_id"}, ""))
-	pattern_GatewayService_ListWorkers_0                     = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"workers"}, ""))
-	pattern_GatewayService_CordonWorker_0                    = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"workers", "worker_id", "cordon"}, ""))
-	pattern_GatewayService_UncordonWorker_0                  = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"workers", "worker_id", "uncordon"}, ""))
-	pattern_GatewayService_DrainWorker_0                     = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"workers", "worker_id", "drain"}, ""))
-	pattern_GatewayService_ExportWorkspaceConfig_0           = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"workspace", "config"}, ""))
+	pattern_GatewayService_Authorize_0                         = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"auth", "authorize"}, ""))
+	pattern_GatewayService_SignPayload_0                       = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"auth", "sign"}, ""))
+	pattern_GatewayService_HeadObject_0                        = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1}, []string{"objects", "hash"}, ""))
+	pattern_GatewayService_CreateObject_0                      = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"objects"}, ""))
+	pattern_GatewayService_PutObjectStream_0                   = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"gateway.GatewayService", "PutObjectStream"}, ""))
+	pattern_GatewayService_SnapshotContainerState_0            = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"pods", "container_id", "snapshot-state"}, ""))
+	pattern_GatewayService_RetainStateSnapshotReference_0      = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"state-snapshots", "state_snapshot_id", "references"}, "retain"))
+	pattern_GatewayService_ReleaseStateSnapshotReference_0     = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"state-snapshots", "state_snapshot_id", "references"}, "release"))
+	pattern_GatewayService_PromoteStateTemplate_0              = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"state-templates"}, "promote"))
+	pattern_GatewayService_GetStateTemplate_0                  = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2, 1, 0, 4, 1, 5, 3}, []string{"state-templates", "state_template_id", "versions", "version"}, ""))
+	pattern_GatewayService_InstantiateStateTemplate_0          = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2, 1, 0, 4, 1, 5, 3}, []string{"state-templates", "state_template_id", "versions", "version"}, "instantiate"))
+	pattern_GatewayService_GetStateTemplateInstantiation_0     = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1}, []string{"state-template-instantiations", "operation_id"}, ""))
+	pattern_GatewayService_ConfirmStateTemplateInstantiation_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1}, []string{"state-template-instantiations", "operation_id"}, "confirm"))
+	pattern_GatewayService_CancelStateTemplateInstantiation_0  = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1}, []string{"state-template-instantiations", "operation_id"}, "cancel"))
+	pattern_GatewayService_ReleaseStateTemplate_0              = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2, 1, 0, 4, 1, 5, 3}, []string{"state-templates", "state_template_id", "versions", "version"}, "release"))
+	pattern_GatewayService_ListContainers_0                    = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"containers"}, ""))
+	pattern_GatewayService_StopContainer_0                     = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"containers", "container_id", "stop"}, ""))
+	pattern_GatewayService_AttachToContainer_0                 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"gateway.GatewayService", "AttachToContainer"}, ""))
+	pattern_GatewayService_StartTask_0                         = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"tasks", "start"}, ""))
+	pattern_GatewayService_EndTask_0                           = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"tasks", "end"}, ""))
+	pattern_GatewayService_StopTasks_0                         = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"tasks", "stop"}, ""))
+	pattern_GatewayService_ListTasks_0                         = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"tasks"}, ""))
+	pattern_GatewayService_GetOrCreateStub_0                   = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"stubs"}, ""))
+	pattern_GatewayService_DeployStub_0                        = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"stubs", "deploy"}, ""))
+	pattern_GatewayService_GetURL_0                            = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"stubs", "stub_id", "url"}, ""))
+	pattern_GatewayService_ListDeployments_0                   = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"deployments"}, ""))
+	pattern_GatewayService_StopDeployment_0                    = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"deployments", "id", "stop"}, ""))
+	pattern_GatewayService_StartDeployment_0                   = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"deployments", "id", "start"}, ""))
+	pattern_GatewayService_ScaleDeployment_0                   = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"deployments", "id", "scale"}, ""))
+	pattern_GatewayService_DeleteDeployment_0                  = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1}, []string{"deployments", "id"}, ""))
+	pattern_GatewayService_ListPools_0                         = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"pools"}, ""))
+	pattern_GatewayService_ListPoolOffers_0                    = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"pools"}, "offers"))
+	pattern_GatewayService_LaunchPoolCapacity_0                = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"pools"}, "launch"))
+	pattern_GatewayService_ListPrivatePools_0                  = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"pools", "private"}, ""))
+	pattern_GatewayService_CreateBYOCPool_0                    = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"pools", "byoc"}, ""))
+	pattern_GatewayService_GetBYOCPool_0                       = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"pools", "pool_name", "byoc"}, ""))
+	pattern_GatewayService_ScaleBYOCPool_0                     = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2, 2, 3}, []string{"pools", "pool_name", "byoc", "scale"}, ""))
+	pattern_GatewayService_CreateMarketplaceListing_0          = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"marketplace", "listings"}, ""))
+	pattern_GatewayService_UpdateMarketplaceListing_0          = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2}, []string{"marketplace", "listings", "listing_id"}, ""))
+	pattern_GatewayService_DeleteMarketplaceListing_0          = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2}, []string{"marketplace", "listings", "listing_id"}, ""))
+	pattern_GatewayService_ListMarketplaceListings_0           = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"marketplace", "listings"}, ""))
+	pattern_GatewayService_GetMarketplaceJoinCommand_0         = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2, 2, 3}, []string{"marketplace", "listings", "listing_id", "join-command"}, ""))
+	pattern_GatewayService_ListMarketplaceOffers_0             = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"marketplace", "offers"}, ""))
+	pattern_GatewayService_GetMarketplaceOffer_0               = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2}, []string{"marketplace", "offers", "listing_id"}, ""))
+	pattern_GatewayService_CreateMarketplaceRental_0           = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"marketplace", "rentals"}, ""))
+	pattern_GatewayService_ListMarketplaceRentals_0            = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"marketplace", "rentals"}, ""))
+	pattern_GatewayService_DeleteMarketplaceRental_0           = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2}, []string{"marketplace", "rentals", "rental_id"}, ""))
+	pattern_GatewayService_LaunchRentalWorkload_0              = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2, 2, 3}, []string{"marketplace", "rentals", "rental_id", "launch"}, ""))
+	pattern_GatewayService_ListMarketplaceMachines_0           = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2, 2, 3}, []string{"marketplace", "listings", "listing_id", "machines"}, ""))
+	pattern_GatewayService_ListMachineContainers_0             = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2, 1, 0, 4, 1, 5, 3, 2, 4}, []string{"pools", "pool_name", "machines", "machine_id", "containers"}, ""))
+	pattern_GatewayService_CreatePool_0                        = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"pools"}, ""))
+	pattern_GatewayService_DeletePool_0                        = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1}, []string{"pools", "name"}, ""))
+	pattern_GatewayService_ExtendPoolCapacity_0                = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"pools", "name", "extend"}, ""))
+	pattern_GatewayService_CreatePoolJoinToken_0               = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"pools", "pool_name", "join-tokens"}, ""))
+	pattern_GatewayService_RevokePoolJoinToken_0               = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2}, []string{"pools", "join-tokens", "revoke"}, ""))
+	pattern_GatewayService_GetPoolJoinCommand_0                = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"pools", "pool_name", "join-command"}, ""))
+	pattern_GatewayService_ListPoolMachines_0                  = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"pools", "pool_name", "machines"}, ""))
+	pattern_GatewayService_DownloadMachineSSHKey_0             = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2, 1, 0, 4, 1, 5, 3, 2, 4, 2, 5}, []string{"pools", "pool_name", "machines", "machine_id", "ssh", "key"}, "download"))
+	pattern_GatewayService_RotateMachineSSHKey_0               = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2, 1, 0, 4, 1, 5, 3, 2, 4, 2, 5}, []string{"pools", "pool_name", "machines", "machine_id", "ssh", "key"}, "rotate"))
+	pattern_GatewayService_ActivateMachineSSHKey_0             = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2, 1, 0, 4, 1, 5, 3, 2, 4, 2, 5}, []string{"pools", "pool_name", "machines", "machine_id", "ssh", "key"}, "activate"))
+	pattern_GatewayService_JoinAgent_0                         = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"agent", "join"}, ""))
+	pattern_GatewayService_RequestAgentTransportCredential_0   = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"agent", "transport-credential"}, ""))
+	pattern_GatewayService_ListAgentRoutes_0                   = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"agent", "routes"}, "list"))
+	pattern_GatewayService_UpdateAgentRouteStatus_0            = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2}, []string{"agent", "routes", "status"}, ""))
+	pattern_GatewayService_UpdateAgentSSHStatus_0              = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2}, []string{"agent", "ssh", "status"}, ""))
+	pattern_GatewayService_UpdateAgentAvailability_0           = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"agent", "availability"}, ""))
+	pattern_GatewayService_StreamAgent_0                       = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"gateway.GatewayService", "StreamAgent"}, ""))
+	pattern_GatewayService_StreamAgentTelemetry_0              = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"gateway.GatewayService", "StreamAgentTelemetry"}, ""))
+	pattern_GatewayService_ListMachines_0                      = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"machines"}, ""))
+	pattern_GatewayService_CreateMachine_0                     = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"machines"}, ""))
+	pattern_GatewayService_DeleteMachine_0                     = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1}, []string{"machines", "machine_id"}, ""))
+	pattern_GatewayService_ListTokens_0                        = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"tokens"}, ""))
+	pattern_GatewayService_CreateToken_0                       = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"tokens"}, ""))
+	pattern_GatewayService_ToggleToken_0                       = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"tokens", "token_id", "toggle"}, ""))
+	pattern_GatewayService_DeleteToken_0                       = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1}, []string{"tokens", "token_id"}, ""))
+	pattern_GatewayService_ListWorkers_0                       = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"workers"}, ""))
+	pattern_GatewayService_CordonWorker_0                      = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"workers", "worker_id", "cordon"}, ""))
+	pattern_GatewayService_UncordonWorker_0                    = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"workers", "worker_id", "uncordon"}, ""))
+	pattern_GatewayService_DrainWorker_0                       = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"workers", "worker_id", "drain"}, ""))
+	pattern_GatewayService_ExportWorkspaceConfig_0             = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"workspace", "config"}, ""))
 )
 
 var (
-	forward_GatewayService_Authorize_0                       = runtime.ForwardResponseMessage
-	forward_GatewayService_SignPayload_0                     = runtime.ForwardResponseMessage
-	forward_GatewayService_HeadObject_0                      = runtime.ForwardResponseMessage
-	forward_GatewayService_CreateObject_0                    = runtime.ForwardResponseMessage
-	forward_GatewayService_PutObjectStream_0                 = runtime.ForwardResponseMessage
-	forward_GatewayService_CheckpointContainer_0             = runtime.ForwardResponseMessage
-	forward_GatewayService_ListContainers_0                  = runtime.ForwardResponseMessage
-	forward_GatewayService_StopContainer_0                   = runtime.ForwardResponseMessage
-	forward_GatewayService_AttachToContainer_0               = runtime.ForwardResponseStream
-	forward_GatewayService_StartTask_0                       = runtime.ForwardResponseMessage
-	forward_GatewayService_EndTask_0                         = runtime.ForwardResponseMessage
-	forward_GatewayService_StopTasks_0                       = runtime.ForwardResponseMessage
-	forward_GatewayService_ListTasks_0                       = runtime.ForwardResponseMessage
-	forward_GatewayService_GetOrCreateStub_0                 = runtime.ForwardResponseMessage
-	forward_GatewayService_DeployStub_0                      = runtime.ForwardResponseMessage
-	forward_GatewayService_GetURL_0                          = runtime.ForwardResponseMessage
-	forward_GatewayService_ListDeployments_0                 = runtime.ForwardResponseMessage
-	forward_GatewayService_StopDeployment_0                  = runtime.ForwardResponseMessage
-	forward_GatewayService_StartDeployment_0                 = runtime.ForwardResponseMessage
-	forward_GatewayService_ScaleDeployment_0                 = runtime.ForwardResponseMessage
-	forward_GatewayService_DeleteDeployment_0                = runtime.ForwardResponseMessage
-	forward_GatewayService_ListPools_0                       = runtime.ForwardResponseMessage
-	forward_GatewayService_ListPoolOffers_0                  = runtime.ForwardResponseMessage
-	forward_GatewayService_LaunchPoolCapacity_0              = runtime.ForwardResponseMessage
-	forward_GatewayService_ListPrivatePools_0                = runtime.ForwardResponseMessage
-	forward_GatewayService_CreateBYOCPool_0                  = runtime.ForwardResponseMessage
-	forward_GatewayService_GetBYOCPool_0                     = runtime.ForwardResponseMessage
-	forward_GatewayService_ScaleBYOCPool_0                   = runtime.ForwardResponseMessage
-	forward_GatewayService_CreateMarketplaceListing_0        = runtime.ForwardResponseMessage
-	forward_GatewayService_UpdateMarketplaceListing_0        = runtime.ForwardResponseMessage
-	forward_GatewayService_DeleteMarketplaceListing_0        = runtime.ForwardResponseMessage
-	forward_GatewayService_ListMarketplaceListings_0         = runtime.ForwardResponseMessage
-	forward_GatewayService_GetMarketplaceJoinCommand_0       = runtime.ForwardResponseMessage
-	forward_GatewayService_ListMarketplaceOffers_0           = runtime.ForwardResponseMessage
-	forward_GatewayService_GetMarketplaceOffer_0             = runtime.ForwardResponseMessage
-	forward_GatewayService_CreateMarketplaceRental_0         = runtime.ForwardResponseMessage
-	forward_GatewayService_ListMarketplaceRentals_0          = runtime.ForwardResponseMessage
-	forward_GatewayService_DeleteMarketplaceRental_0         = runtime.ForwardResponseMessage
-	forward_GatewayService_LaunchRentalWorkload_0            = runtime.ForwardResponseMessage
-	forward_GatewayService_ListMarketplaceMachines_0         = runtime.ForwardResponseMessage
-	forward_GatewayService_ListMachineContainers_0           = runtime.ForwardResponseMessage
-	forward_GatewayService_CreatePool_0                      = runtime.ForwardResponseMessage
-	forward_GatewayService_DeletePool_0                      = runtime.ForwardResponseMessage
-	forward_GatewayService_ExtendPoolCapacity_0              = runtime.ForwardResponseMessage
-	forward_GatewayService_CreatePoolJoinToken_0             = runtime.ForwardResponseMessage
-	forward_GatewayService_RevokePoolJoinToken_0             = runtime.ForwardResponseMessage
-	forward_GatewayService_GetPoolJoinCommand_0              = runtime.ForwardResponseMessage
-	forward_GatewayService_ListPoolMachines_0                = runtime.ForwardResponseMessage
-	forward_GatewayService_DownloadMachineSSHKey_0           = runtime.ForwardResponseMessage
-	forward_GatewayService_RotateMachineSSHKey_0             = runtime.ForwardResponseMessage
-	forward_GatewayService_ActivateMachineSSHKey_0           = runtime.ForwardResponseMessage
-	forward_GatewayService_JoinAgent_0                       = runtime.ForwardResponseMessage
-	forward_GatewayService_RequestAgentTransportCredential_0 = runtime.ForwardResponseMessage
-	forward_GatewayService_ListAgentRoutes_0                 = runtime.ForwardResponseMessage
-	forward_GatewayService_UpdateAgentRouteStatus_0          = runtime.ForwardResponseMessage
-	forward_GatewayService_UpdateAgentSSHStatus_0            = runtime.ForwardResponseMessage
-	forward_GatewayService_UpdateAgentAvailability_0         = runtime.ForwardResponseMessage
-	forward_GatewayService_StreamAgent_0                     = runtime.ForwardResponseStream
-	forward_GatewayService_StreamAgentTelemetry_0            = runtime.ForwardResponseMessage
-	forward_GatewayService_ListMachines_0                    = runtime.ForwardResponseMessage
-	forward_GatewayService_CreateMachine_0                   = runtime.ForwardResponseMessage
-	forward_GatewayService_DeleteMachine_0                   = runtime.ForwardResponseMessage
-	forward_GatewayService_ListTokens_0                      = runtime.ForwardResponseMessage
-	forward_GatewayService_CreateToken_0                     = runtime.ForwardResponseMessage
-	forward_GatewayService_ToggleToken_0                     = runtime.ForwardResponseMessage
-	forward_GatewayService_DeleteToken_0                     = runtime.ForwardResponseMessage
-	forward_GatewayService_ListWorkers_0                     = runtime.ForwardResponseMessage
-	forward_GatewayService_CordonWorker_0                    = runtime.ForwardResponseMessage
-	forward_GatewayService_UncordonWorker_0                  = runtime.ForwardResponseMessage
-	forward_GatewayService_DrainWorker_0                     = runtime.ForwardResponseMessage
-	forward_GatewayService_ExportWorkspaceConfig_0           = runtime.ForwardResponseMessage
+	forward_GatewayService_Authorize_0                         = runtime.ForwardResponseMessage
+	forward_GatewayService_SignPayload_0                       = runtime.ForwardResponseMessage
+	forward_GatewayService_HeadObject_0                        = runtime.ForwardResponseMessage
+	forward_GatewayService_CreateObject_0                      = runtime.ForwardResponseMessage
+	forward_GatewayService_PutObjectStream_0                   = runtime.ForwardResponseMessage
+	forward_GatewayService_SnapshotContainerState_0            = runtime.ForwardResponseMessage
+	forward_GatewayService_RetainStateSnapshotReference_0      = runtime.ForwardResponseMessage
+	forward_GatewayService_ReleaseStateSnapshotReference_0     = runtime.ForwardResponseMessage
+	forward_GatewayService_PromoteStateTemplate_0              = runtime.ForwardResponseMessage
+	forward_GatewayService_GetStateTemplate_0                  = runtime.ForwardResponseMessage
+	forward_GatewayService_InstantiateStateTemplate_0          = runtime.ForwardResponseMessage
+	forward_GatewayService_GetStateTemplateInstantiation_0     = runtime.ForwardResponseMessage
+	forward_GatewayService_ConfirmStateTemplateInstantiation_0 = runtime.ForwardResponseMessage
+	forward_GatewayService_CancelStateTemplateInstantiation_0  = runtime.ForwardResponseMessage
+	forward_GatewayService_ReleaseStateTemplate_0              = runtime.ForwardResponseMessage
+	forward_GatewayService_ListContainers_0                    = runtime.ForwardResponseMessage
+	forward_GatewayService_StopContainer_0                     = runtime.ForwardResponseMessage
+	forward_GatewayService_AttachToContainer_0                 = runtime.ForwardResponseStream
+	forward_GatewayService_StartTask_0                         = runtime.ForwardResponseMessage
+	forward_GatewayService_EndTask_0                           = runtime.ForwardResponseMessage
+	forward_GatewayService_StopTasks_0                         = runtime.ForwardResponseMessage
+	forward_GatewayService_ListTasks_0                         = runtime.ForwardResponseMessage
+	forward_GatewayService_GetOrCreateStub_0                   = runtime.ForwardResponseMessage
+	forward_GatewayService_DeployStub_0                        = runtime.ForwardResponseMessage
+	forward_GatewayService_GetURL_0                            = runtime.ForwardResponseMessage
+	forward_GatewayService_ListDeployments_0                   = runtime.ForwardResponseMessage
+	forward_GatewayService_StopDeployment_0                    = runtime.ForwardResponseMessage
+	forward_GatewayService_StartDeployment_0                   = runtime.ForwardResponseMessage
+	forward_GatewayService_ScaleDeployment_0                   = runtime.ForwardResponseMessage
+	forward_GatewayService_DeleteDeployment_0                  = runtime.ForwardResponseMessage
+	forward_GatewayService_ListPools_0                         = runtime.ForwardResponseMessage
+	forward_GatewayService_ListPoolOffers_0                    = runtime.ForwardResponseMessage
+	forward_GatewayService_LaunchPoolCapacity_0                = runtime.ForwardResponseMessage
+	forward_GatewayService_ListPrivatePools_0                  = runtime.ForwardResponseMessage
+	forward_GatewayService_CreateBYOCPool_0                    = runtime.ForwardResponseMessage
+	forward_GatewayService_GetBYOCPool_0                       = runtime.ForwardResponseMessage
+	forward_GatewayService_ScaleBYOCPool_0                     = runtime.ForwardResponseMessage
+	forward_GatewayService_CreateMarketplaceListing_0          = runtime.ForwardResponseMessage
+	forward_GatewayService_UpdateMarketplaceListing_0          = runtime.ForwardResponseMessage
+	forward_GatewayService_DeleteMarketplaceListing_0          = runtime.ForwardResponseMessage
+	forward_GatewayService_ListMarketplaceListings_0           = runtime.ForwardResponseMessage
+	forward_GatewayService_GetMarketplaceJoinCommand_0         = runtime.ForwardResponseMessage
+	forward_GatewayService_ListMarketplaceOffers_0             = runtime.ForwardResponseMessage
+	forward_GatewayService_GetMarketplaceOffer_0               = runtime.ForwardResponseMessage
+	forward_GatewayService_CreateMarketplaceRental_0           = runtime.ForwardResponseMessage
+	forward_GatewayService_ListMarketplaceRentals_0            = runtime.ForwardResponseMessage
+	forward_GatewayService_DeleteMarketplaceRental_0           = runtime.ForwardResponseMessage
+	forward_GatewayService_LaunchRentalWorkload_0              = runtime.ForwardResponseMessage
+	forward_GatewayService_ListMarketplaceMachines_0           = runtime.ForwardResponseMessage
+	forward_GatewayService_ListMachineContainers_0             = runtime.ForwardResponseMessage
+	forward_GatewayService_CreatePool_0                        = runtime.ForwardResponseMessage
+	forward_GatewayService_DeletePool_0                        = runtime.ForwardResponseMessage
+	forward_GatewayService_ExtendPoolCapacity_0                = runtime.ForwardResponseMessage
+	forward_GatewayService_CreatePoolJoinToken_0               = runtime.ForwardResponseMessage
+	forward_GatewayService_RevokePoolJoinToken_0               = runtime.ForwardResponseMessage
+	forward_GatewayService_GetPoolJoinCommand_0                = runtime.ForwardResponseMessage
+	forward_GatewayService_ListPoolMachines_0                  = runtime.ForwardResponseMessage
+	forward_GatewayService_DownloadMachineSSHKey_0             = runtime.ForwardResponseMessage
+	forward_GatewayService_RotateMachineSSHKey_0               = runtime.ForwardResponseMessage
+	forward_GatewayService_ActivateMachineSSHKey_0             = runtime.ForwardResponseMessage
+	forward_GatewayService_JoinAgent_0                         = runtime.ForwardResponseMessage
+	forward_GatewayService_RequestAgentTransportCredential_0   = runtime.ForwardResponseMessage
+	forward_GatewayService_ListAgentRoutes_0                   = runtime.ForwardResponseMessage
+	forward_GatewayService_UpdateAgentRouteStatus_0            = runtime.ForwardResponseMessage
+	forward_GatewayService_UpdateAgentSSHStatus_0              = runtime.ForwardResponseMessage
+	forward_GatewayService_UpdateAgentAvailability_0           = runtime.ForwardResponseMessage
+	forward_GatewayService_StreamAgent_0                       = runtime.ForwardResponseStream
+	forward_GatewayService_StreamAgentTelemetry_0              = runtime.ForwardResponseMessage
+	forward_GatewayService_ListMachines_0                      = runtime.ForwardResponseMessage
+	forward_GatewayService_CreateMachine_0                     = runtime.ForwardResponseMessage
+	forward_GatewayService_DeleteMachine_0                     = runtime.ForwardResponseMessage
+	forward_GatewayService_ListTokens_0                        = runtime.ForwardResponseMessage
+	forward_GatewayService_CreateToken_0                       = runtime.ForwardResponseMessage
+	forward_GatewayService_ToggleToken_0                       = runtime.ForwardResponseMessage
+	forward_GatewayService_DeleteToken_0                       = runtime.ForwardResponseMessage
+	forward_GatewayService_ListWorkers_0                       = runtime.ForwardResponseMessage
+	forward_GatewayService_CordonWorker_0                      = runtime.ForwardResponseMessage
+	forward_GatewayService_UncordonWorker_0                    = runtime.ForwardResponseMessage
+	forward_GatewayService_DrainWorker_0                       = runtime.ForwardResponseMessage
+	forward_GatewayService_ExportWorkspaceConfig_0             = runtime.ForwardResponseMessage
 )

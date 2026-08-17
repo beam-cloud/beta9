@@ -5,7 +5,9 @@ import (
 	"testing"
 
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/stretchr/testify/require"
 	"github.com/tj/assert"
+	corev1 "k8s.io/api/core/v1"
 )
 
 func TestCalculateMemoryQuantity(t *testing.T) {
@@ -63,8 +65,8 @@ func TestWorkerPodTerminationGracePeriodAllowsNestedCleanup(t *testing.T) {
 		workerStopGrace int64
 		want            int64
 	}{
-		{name: "default", workerStopGrace: 0, want: 120},
-		{name: "short", workerStopGrace: 10, want: 120},
+		{name: "default", workerStopGrace: 0, want: 240},
+		{name: "short", workerStopGrace: 10, want: 240},
 		{name: "long", workerStopGrace: 90, want: 240},
 	}
 
@@ -90,4 +92,62 @@ func TestWorkerDurableDisksHostPathUsesPoolOverride(t *testing.T) {
 		StoragePath:      "/mnt/nvme/beta9/storage",
 		DurableDisksPath: "/mnt/nvme/beta9/disks",
 	}))
+}
+
+func TestWorkerStateVolumesUseDedicatedSiblingHostPath(t *testing.T) {
+	assert.Equal(t, types.DefaultStateVolumesPath, workerStateVolumesHostPath(types.WorkerPoolConfig{}))
+	assert.Equal(t, "/mnt/nvme/beta9/storage/state-volumes", workerStateVolumesHostPath(types.WorkerPoolConfig{
+		StoragePath: "/mnt/nvme/beta9/storage",
+	}))
+	assert.Equal(t, "/mnt/nvme/beta9/state-volumes", workerStateVolumesHostPath(types.WorkerPoolConfig{
+		DurableDisksPath: "/mnt/nvme/beta9/disks",
+	}))
+}
+
+func TestWorkerStateVolumeLocksUseOneNodeGlobalHostPathAcrossPools(t *testing.T) {
+	first := types.WorkerPoolConfig{StoragePath: "/mnt/nvme-a/beta9"}
+	second := types.WorkerPoolConfig{StoragePath: "/mnt/nvme-b/beta9"}
+	assert.NotEqual(t, workerStateVolumesHostPath(first), workerStateVolumesHostPath(second))
+	assert.Equal(t, types.DefaultStateVolumeLocksPath, workerStateVolumeLocksHostPath())
+
+	local := &LocalKubernetesWorkerPoolController{workerPoolConfig: first}
+	provider := &ProviderWorkerPoolController{workerPoolConfig: second}
+	for name, volumes := range map[string][]corev1.Volume{
+		"local": local.getWorkerVolumes(1024), "provider": provider.getWorkerVolumes(1024),
+	} {
+		volume := requireNamedHostPathVolume(t, volumes, stateVolumeLocksVolumeName)
+		require.Equal(t, types.DefaultStateVolumeLocksPath, volume.HostPath.Path, name)
+		require.NotNil(t, volume.HostPath.Type, name)
+		require.Equal(t, corev1.HostPathDirectoryOrCreate, *volume.HostPath.Type, name)
+	}
+	for name, mounts := range map[string][]corev1.VolumeMount{
+		"local": local.getWorkerVolumeMounts(), "provider": provider.getWorkerVolumeMounts(),
+	} {
+		mount := requireNamedVolumeMount(t, mounts, stateVolumeLocksVolumeName)
+		require.Equal(t, types.DefaultStateVolumeLocksPath, mount.MountPath, name)
+		require.False(t, mount.ReadOnly, name)
+	}
+}
+
+func requireNamedHostPathVolume(t *testing.T, volumes []corev1.Volume, name string) corev1.Volume {
+	t.Helper()
+	for _, volume := range volumes {
+		if volume.Name == name {
+			require.NotNil(t, volume.HostPath)
+			return volume
+		}
+	}
+	t.Fatalf("volume %q is missing", name)
+	return corev1.Volume{}
+}
+
+func requireNamedVolumeMount(t *testing.T, mounts []corev1.VolumeMount, name string) corev1.VolumeMount {
+	t.Helper()
+	for _, mount := range mounts {
+		if mount.Name == name {
+			return mount
+		}
+	}
+	t.Fatalf("volume mount %q is missing", name)
+	return corev1.VolumeMount{}
 }

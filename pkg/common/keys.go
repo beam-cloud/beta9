@@ -16,6 +16,11 @@ var (
 	schedulerWorkerPoolIndex          string = "scheduler:worker:pool_index:%s"
 	schedulerWorkerMachineIndex       string = "scheduler:worker:machine_index:%s"
 	schedulerWorkerState              string = "scheduler:worker:state:%s"
+	schedulerStateVolumeCapacity      string = "scheduler:state_volume:capacity:{%s}"
+	schedulerStateVolumePlanOutbox    string = "scheduler:state_volume:attachment_plan:%s:outbox"
+	schedulerStateVolumePlanTombstone string = "scheduler:state_volume:attachment_plan:%s:aborted"
+	schedulerStateVolumePayloadPlans  string = "scheduler:state_volume:backlog_payload_plans"
+	schedulerStateVolumeProcessing    string = "scheduler:state_volume:processing"
 	schedulerContainerConfig          string = "scheduler:container:config:%s"
 	schedulerContainerState           string = "scheduler:container:state:%s"
 	schedulerContainerStateIndex      string = "scheduler:container:state_index"
@@ -189,6 +194,22 @@ func (rk *redisKeys) SchedulerContainerRequests() string {
 	return schedulerContainerRequests
 }
 
+func (rk *redisKeys) SchedulerStateVolumePlanOutbox(planId string) string {
+	return fmt.Sprintf(schedulerStateVolumePlanOutbox, planId)
+}
+
+func (rk *redisKeys) SchedulerStateVolumePlanTombstone(planId string) string {
+	return fmt.Sprintf(schedulerStateVolumePlanTombstone, planId)
+}
+
+func (rk *redisKeys) SchedulerStateVolumePayloadPlans() string {
+	return schedulerStateVolumePayloadPlans
+}
+
+func (rk *redisKeys) SchedulerStateVolumeProcessing() string {
+	return schedulerStateVolumeProcessing
+}
+
 func (rk *redisKeys) SchedulerWorkerLock(workerId string) string {
 	return fmt.Sprintf(schedulerWorkerLock, workerId)
 }
@@ -207,6 +228,10 @@ func (rk *redisKeys) SchedulerWorkerPendingRequests(workerId string) string {
 
 func (rk *redisKeys) SchedulerWorkerState(workerId string) string {
 	return fmt.Sprintf(schedulerWorkerState, workerId)
+}
+
+func (rk *redisKeys) SchedulerStateVolumeCapacity(storageNodeId string) string {
+	return fmt.Sprintf(schedulerStateVolumeCapacity, storageNodeId)
 }
 
 func (rk *redisKeys) SchedulerContainerLock(containerId string) string {

@@ -1,11 +1,15 @@
 package types
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
+	"sort"
 	"strings"
 	"time"
 
 	cloudevents "github.com/cloudevents/sdk-go/v2/event"
+	"github.com/google/uuid"
 )
 
 type EventSink = func(event []cloudevents.Event)
@@ -58,11 +62,11 @@ var (
 type CacheContentKind string
 
 const (
-	CacheContentKindClipV1       CacheContentKind = "clip_v1"
-	CacheContentKindClipV2       CacheContentKind = "clip_v2"
-	CacheContentKindVolume       CacheContentKind = "volume"
-	CacheContentKindCheckpoint   CacheContentKind = "checkpoint"
-	CacheContentKindDiskSnapshot CacheContentKind = "disk_snapshot"
+	CacheContentKindClipV1        CacheContentKind = "clip_v1"
+	CacheContentKindClipV2        CacheContentKind = "clip_v2"
+	CacheContentKindVolume        CacheContentKind = "volume"
+	CacheContentKindStateManifest CacheContentKind = "state_manifest"
+	CacheContentKindStateChunk    CacheContentKind = "state_chunk"
 )
 
 // Platform cache audit statuses for EventPlatformCacheSchema.Status.
@@ -75,26 +79,27 @@ const (
 	CacheAuditStatusSkipped         = "skipped"
 )
 
-var EventStubCacheRequiredContentSchemaVersion = "1.0"
+var EventStubCacheRequiredContentSchemaVersion = "2.0"
 var EventPlatformCacheSchemaVersion = "1.0"
+
+const CacheRequiredContentMaxItemsPerPart = 512
 
 // CacheRequiredContentItem describes a single piece of content a stub needs.
 // Locality-scoped recent-stub indexes decide where it is kept warm. Source is a
 // non-secret descriptor (OCI layer identity or workspace object path) used to
 // resolve an origin fetch; it never carries credentials.
 type CacheRequiredContentItem struct {
-	Hash               string           `json:"hash"`
-	RoutingKey         string           `json:"routing_key"`
-	SizeBytes          int64            `json:"size_bytes,omitempty"`
-	ExpectedHash       string           `json:"expected_hash,omitempty"`
-	ImageID            string           `json:"image_id,omitempty"`
-	Source             string           `json:"source,omitempty"`
-	SourceBucket       string           `json:"source_bucket,omitempty"`
-	Kind               CacheContentKind `json:"kind,omitempty"`
-	CheckpointID       string           `json:"checkpoint_id,omitempty"`
-	Accelerator        string           `json:"accelerator,omitempty"`
-	DiskName           string           `json:"disk_name,omitempty"`
-	SnapshotGeneration int64            `json:"snapshot_generation,omitempty"`
+	Hash         string           `json:"hash"`
+	RoutingKey   string           `json:"routing_key"`
+	SizeBytes    int64            `json:"size_bytes,omitempty"`
+	ExpectedHash string           `json:"expected_hash,omitempty"`
+	ImageID      string           `json:"image_id,omitempty"`
+	Source       string           `json:"source,omitempty"`
+	SourceBucket string           `json:"source_bucket,omitempty"`
+	Kind         CacheContentKind `json:"kind,omitempty"`
+	Accelerator  string           `json:"accelerator,omitempty"`
+	VolumeID     string           `json:"volume_id,omitempty"`
+	GenerationID string           `json:"generation_id,omitempty"`
 }
 
 // EventStubCacheRequiredContentSchema is the coalesced required-content report
@@ -102,14 +107,140 @@ type CacheRequiredContentItem struct {
 // the content was observed; the reconciler uses the locality-scoped recent-stub
 // index to decide where to materialize it.
 type EventStubCacheRequiredContentSchema struct {
-	WorkspaceID string                     `json:"workspace_id"`
-	StubID      string                     `json:"stub_id"`
-	Locality    string                     `json:"locality"`
-	Kind        CacheContentKind           `json:"kind"`
-	ItemCount   int                        `json:"item_count"`
-	TotalBytes  int64                      `json:"total_bytes"`
-	Items       []CacheRequiredContentItem `json:"items"`
-	Timestamp   time.Time                  `json:"timestamp"`
+	WorkspaceID string           `json:"workspace_id"`
+	StubID      string           `json:"stub_id"`
+	Locality    string           `json:"locality"`
+	Kind        CacheContentKind `json:"kind"`
+	// Scope/RevisionGeneration/RevisionID define a replaceable physical
+	// state-volume lineage set. Scoped revisions are multipart because a block
+	// generation can reference more chunks than one event may carry. Readers
+	// retain the prior committed revision until every part and the commit marker
+	// agree on the deterministic set digest. A committed empty Tombstone retires
+	// the scope without disturbing independent fork scopes.
+	Scope              string                     `json:"scope,omitempty"`
+	RevisionGeneration int64                      `json:"revision_generation,omitempty"`
+	RevisionID         string                     `json:"revision_id,omitempty"`
+	Replace            bool                       `json:"replace,omitempty"`
+	PartIndex          int                        `json:"part_index,omitempty"`
+	PartCount          int                        `json:"part_count,omitempty"`
+	SetDigest          string                     `json:"set_digest,omitempty"`
+	Commit             bool                       `json:"commit,omitempty"`
+	Tombstone          bool                       `json:"tombstone,omitempty"`
+	ItemCount          int                        `json:"item_count"`
+	TotalBytes         int64                      `json:"total_bytes"`
+	Items              []CacheRequiredContentItem `json:"items"`
+	Timestamp          time.Time                  `json:"timestamp"`
+}
+
+// CanonicalCacheRequiredContentSet returns the stable physical-content set and
+// digest used by multipart scoped reports. Duplicate physical objects are
+// collapsed by (kind, hash, routing key); when the same chunk is reachable
+// through several generations, the lexicographically smallest non-secret
+// descriptor is retained so reporter retries and ancestry traversal order do
+// not change the revision identity.
+func CanonicalCacheRequiredContentSet(items []CacheRequiredContentItem) ([]CacheRequiredContentItem, string, int64, error) {
+	type encodedItem struct {
+		item    CacheRequiredContentItem
+		encoded string
+	}
+	byKey := make(map[string]encodedItem, len(items))
+	for _, item := range items {
+		if item.Hash == "" || item.Kind == "" {
+			return nil, "", 0, fmt.Errorf("cache required-content item requires hash and kind")
+		}
+		if item.RoutingKey == "" {
+			item.RoutingKey = item.Hash
+		}
+		encoded, err := json.Marshal(item)
+		if err != nil {
+			return nil, "", 0, err
+		}
+		key := string(item.Kind) + "\x00" + item.Hash + "\x00" + item.RoutingKey
+		candidate := encodedItem{item: item, encoded: string(encoded)}
+		if current, ok := byKey[key]; !ok || candidate.encoded < current.encoded {
+			byKey[key] = candidate
+		}
+	}
+	keys := make([]string, 0, len(byKey))
+	for key := range byKey {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	canonical := make([]CacheRequiredContentItem, 0, len(keys))
+	var totalBytes int64
+	for _, key := range keys {
+		item := byKey[key].item
+		if item.SizeBytes < 0 {
+			return nil, "", 0, fmt.Errorf("cache required-content item has negative size")
+		}
+		canonical = append(canonical, item)
+		totalBytes += item.SizeBytes
+	}
+	payload, err := json.Marshal(canonical)
+	if err != nil {
+		return nil, "", 0, err
+	}
+	digest := sha256.Sum256(payload)
+	return canonical, fmt.Sprintf("sha256:%x", digest[:]), totalBytes, nil
+}
+
+// BuildScopedCacheRequiredContentRevision constructs one complete, atomic
+// state-volume lineage replacement. Every non-commit record carries the same
+// whole-set identity and at most 512 canonical mixed manifest/chunk items; the
+// final zero-item commit makes the revision visible to readers. A tombstone is
+// represented by a commit-only empty revision.
+func BuildScopedCacheRequiredContentRevision(
+	workspaceID, stubID, locality, scope string,
+	revisionGeneration int64,
+	revisionID string,
+	items []CacheRequiredContentItem,
+	tombstone bool,
+) ([]EventStubCacheRequiredContentSchema, error) {
+	if workspaceID == "" || stubID == "" || locality == "" || revisionGeneration <= 0 {
+		return nil, fmt.Errorf("scoped cache required-content owner and revision generation are required")
+	}
+	if parsed, err := uuid.Parse(scope); err != nil || parsed.String() != scope {
+		return nil, fmt.Errorf("scoped cache required-content volume %q is not a canonical UUID", scope)
+	}
+	if parsed, err := uuid.Parse(revisionID); err != nil || parsed.String() != revisionID {
+		return nil, fmt.Errorf("scoped cache required-content revision %q is not a canonical UUID", revisionID)
+	}
+	canonical, digest, totalBytes, err := CanonicalCacheRequiredContentSet(items)
+	if err != nil {
+		return nil, err
+	}
+	if tombstone && len(canonical) != 0 {
+		return nil, fmt.Errorf("scoped cache required-content tombstone contains items")
+	}
+	for _, item := range canonical {
+		if (item.Kind != CacheContentKindStateManifest && item.Kind != CacheContentKindStateChunk) ||
+			item.VolumeID == "" || item.GenerationID == "" {
+			return nil, fmt.Errorf("scoped cache required-content item has invalid state identity")
+		}
+	}
+	partCount := 0
+	if len(canonical) != 0 {
+		partCount = (len(canonical) + CacheRequiredContentMaxItemsPerPart - 1) / CacheRequiredContentMaxItemsPerPart
+	}
+	base := EventStubCacheRequiredContentSchema{
+		WorkspaceID: workspaceID, StubID: stubID, Locality: locality,
+		Scope: scope, RevisionGeneration: revisionGeneration, RevisionID: revisionID,
+		Replace: true, PartCount: partCount, SetDigest: digest, Tombstone: tombstone,
+		ItemCount: len(canonical), TotalBytes: totalBytes,
+	}
+	records := make([]EventStubCacheRequiredContentSchema, 0, partCount+1)
+	for partIndex := 0; partIndex < partCount; partIndex++ {
+		start := partIndex * CacheRequiredContentMaxItemsPerPart
+		end := min(start+CacheRequiredContentMaxItemsPerPart, len(canonical))
+		part := base
+		part.PartIndex = partIndex
+		part.Items = canonical[start:end]
+		records = append(records, part)
+	}
+	commit := base
+	commit.Commit = true
+	records = append(records, commit)
+	return records, nil
 }
 
 // EventPlatformCacheSchema is an operational/audit event for cache

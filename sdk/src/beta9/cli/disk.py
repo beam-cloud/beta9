@@ -10,8 +10,6 @@ from ..clients.disk import (
     DeleteDiskResponse,
     GetOrCreateDiskRequest,
     GetOrCreateDiskResponse,
-    ListDiskSnapshotsRequest,
-    ListDiskSnapshotsResponse,
     ListDisksRequest,
     ListDisksResponse,
 )
@@ -44,8 +42,6 @@ def _disk_payload(disk) -> Dict[str, Any]:
         "id": disk.id,
         "name": disk.name,
         "size": disk.size,
-        "filesystem": disk.filesystem,
-        "driver": disk.driver,
         "mount_path": disk.mount_path,
         "created_at": disk.created_at,
         "updated_at": disk.updated_at,
@@ -54,27 +50,11 @@ def _disk_payload(disk) -> Dict[str, Any]:
     }
 
 
-def _snapshot_payload(snapshot) -> Dict[str, Any]:
-    return {
-        "id": snapshot.id,
-        "disk_name": snapshot.disk_name,
-        "status": snapshot.status,
-        "format": snapshot.format,
-        "generation": snapshot.generation,
-        "size_bytes": snapshot.size_bytes,
-        "logical_size_bytes": snapshot.logical_size_bytes,
-        "stored_size_bytes": snapshot.stored_size_bytes,
-        "created_at": snapshot.created_at,
-        "completed_at": snapshot.completed_at,
-    }
-
-
 def _print_disk_table(disks: Iterable, *, include_count: bool = True) -> None:
     disks = list(disks)
     table = Table(
         Column("Name"),
         Column("Size"),
-        Column("Filesystem"),
         Column("Mount Path"),
         Column("Created At"),
         Column("Workspace Name"),
@@ -85,7 +65,6 @@ def _print_disk_table(disks: Iterable, *, include_count: bool = True) -> None:
         table.add_row(
             disk.name,
             disk.size or "-",
-            disk.filesystem or "-",
             disk.mount_path or "-",
             terminal.humanize_date(disk.created_at),
             disk.workspace_name,
@@ -94,35 +73,6 @@ def _print_disk_table(disks: Iterable, *, include_count: bool = True) -> None:
     if include_count:
         table.add_section()
         table.add_row(f"[bold]{len(disks)} disks")
-    terminal.print(table)
-
-
-def _print_snapshot_table(snapshots: Iterable) -> None:
-    snapshots = list(snapshots)
-    table = Table(
-        Column("Disk Name"),
-        Column("Status"),
-        Column("Format"),
-        Column("Generation", justify="right"),
-        Column("Logical Size"),
-        Column("Stored Size"),
-        Column("Created At"),
-        box=box.SIMPLE,
-    )
-
-    for snapshot in snapshots:
-        table.add_row(
-            snapshot.disk_name,
-            snapshot.status,
-            snapshot.format,
-            str(snapshot.generation),
-            terminal.humanize_memory(snapshot.logical_size_bytes),
-            terminal.humanize_memory(snapshot.stored_size_bytes),
-            terminal.humanize_date(snapshot.created_at),
-        )
-
-    table.add_section()
-    table.add_row(f"[bold]{len(snapshots)} snapshots")
     terminal.print(table)
 
 
@@ -162,15 +112,9 @@ def list_disks(service: ServiceClient, format: str):
     help="The size of the disk (e.g. 10Gi).",
 )
 @click.option(
-    "--filesystem",
-    type=click.STRING,
-    default="ext4",
-    help="The filesystem of the disk.",
-)
-@click.option(
     "--mount-path",
     type=click.STRING,
-    default="",
+    required=True,
     help="The default mount path for the disk.",
 )
 @_format_option
@@ -179,7 +123,6 @@ def create_disk(
     service: ServiceClient,
     name: str,
     size: str,
-    filesystem: str,
     mount_path: str,
     format: str,
 ):
@@ -188,7 +131,6 @@ def create_disk(
         GetOrCreateDiskRequest(
             name=name,
             size=size,
-            filesystem=filesystem,
             mount_path=mount_path,
         )
     )
@@ -205,7 +147,7 @@ def create_disk(
 
 @management.command(
     name="delete",
-    help="Unregister a disk (snapshots and backing data are retained).",
+    help="Unregister a disk.",
 )
 @click.argument(
     "name",
@@ -219,8 +161,7 @@ def delete_disk(service: ServiceClient, name: str, yes: bool):
         terminal.warn(
             "Any apps or services (functions, endpoints, databases, etc) that\n"
             "refer to this disk should be updated before it is unregistered.\n"
-            "Immutable snapshots and backing data are retained so templates and "
-            "forks keep working."
+            "Existing state snapshots keep their immutable generation references."
         )
 
         if not terminal.confirm("Are you sure?", default=False):
@@ -233,31 +174,3 @@ def delete_disk(service: ServiceClient, name: str, yes: bool):
         terminal.error(res.err_msg)
 
     terminal.success(f"Unregistered disk: {name}")
-
-
-@management.command(
-    name="snapshots",
-    help="List snapshots for a disk.",
-)
-@click.argument(
-    "name",
-    type=click.STRING,
-    required=False,
-    default="",
-)
-@_format_option
-@extraclick.pass_service_client
-def list_disk_snapshots(service: ServiceClient, name: str, format: str):
-    res: ListDiskSnapshotsResponse
-    res = service.disk.list_disk_snapshots(ListDiskSnapshotsRequest(disk_name=name))
-
-    if not res.ok:
-        terminal.error(res.err_msg)
-
-    if format == "json":
-        terminal.print_json(
-            {"snapshots": [_snapshot_payload(snapshot) for snapshot in res.snapshots]}
-        )
-        return
-
-    _print_snapshot_table(res.snapshots)

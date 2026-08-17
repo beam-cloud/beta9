@@ -78,7 +78,18 @@ func (r *workerRuntimeCredentialsContainerRepo) GetContainerState(containerID st
 		r.errs = r.errs[1:]
 		return nil, err
 	}
+	if r.state != nil && r.state.WorkerId == "" {
+		copy := *r.state
+		copy.WorkerId = "worker-id"
+		return &copy, nil
+	}
 	return r.state, nil
+}
+
+type workerRuntimeCredentialsWorkerRepo struct{ repository.WorkerRepository }
+
+func (*workerRuntimeCredentialsWorkerRepo) GetWorkerById(workerID string) (*types.Worker, error) {
+	return &types.Worker{Id: workerID, WorkerTokenId: "worker-token"}, nil
 }
 
 func TestGetContainerRuntimeCredentialsVendsPrivateRuntimeBundle(t *testing.T) {
@@ -113,6 +124,7 @@ func TestGetContainerRuntimeCredentialsVendsPrivateRuntimeBundle(t *testing.T) {
 	require.NoError(t, err)
 
 	service := &WorkerRepositoryService{
+		workerRepo: &workerRuntimeCredentialsWorkerRepo{},
 		backendRepo: &workerRuntimeCredentialsBackendRepo{
 			workspace: &types.Workspace{
 				Id:         7,
@@ -188,6 +200,7 @@ func TestGetContainerRuntimeCredentialsVendsStubScopedSecretAlias(t *testing.T) 
 	require.NoError(t, err)
 
 	service := &WorkerRepositoryService{
+		workerRepo: &workerRuntimeCredentialsWorkerRepo{},
 		backendRepo: &workerRuntimeCredentialsBackendRepo{
 			workspace: &types.Workspace{
 				Id:         7,
@@ -229,6 +242,7 @@ func TestGetContainerRuntimeCredentialsUsesWorkerTokenWorkspaceID(t *testing.T) 
 		},
 	}
 	service := &WorkerRepositoryService{
+		workerRepo:  &workerRuntimeCredentialsWorkerRepo{},
 		backendRepo: backendRepo,
 		containerRepo: &workerRuntimeCredentialsContainerRepo{
 			state: &types.ContainerState{ContainerId: "container-id", WorkspaceId: "workspace-id", StubId: "stub-id"},
@@ -236,7 +250,7 @@ func TestGetContainerRuntimeCredentialsUsesWorkerTokenWorkspaceID(t *testing.T) 
 	}
 	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
 		Workspace: &types.Workspace{Id: workspaceID, ExternalId: "workspace-id"},
-		Token:     &types.Token{TokenType: types.TokenTypeWorker, WorkspaceId: &workspaceID},
+		Token:     &types.Token{TokenType: types.TokenTypeWorker, ExternalId: "worker-token", WorkspaceId: &workspaceID},
 	})
 
 	resp, err := service.GetContainerRuntimeCredentials(
@@ -249,7 +263,7 @@ func TestGetContainerRuntimeCredentialsUsesWorkerTokenWorkspaceID(t *testing.T) 
 	require.Zero(t, backendRepo.workspaceByExternalIDCalls)
 }
 
-func TestGetContainerRuntimeCredentialsAllowsTrustedWorkerAcrossWorkspaces(t *testing.T) {
+func TestGetContainerRuntimeCredentialsRejectsDetachedTrustedWorkerAcrossWorkspaces(t *testing.T) {
 	storageID := uint(1)
 	storageBucket := "target-bucket"
 	backendRepo := &workerRuntimeCredentialsBackendRepo{
@@ -262,11 +276,11 @@ func TestGetContainerRuntimeCredentialsAllowsTrustedWorkerAcrossWorkspaces(t *te
 			},
 		},
 	}
-	service := &WorkerRepositoryService{backendRepo: backendRepo}
+	service := &WorkerRepositoryService{backendRepo: backendRepo, workerRepo: &workerRuntimeCredentialsWorkerRepo{}}
 	adminWorkspaceID := uint(7)
 	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
 		Workspace: &types.Workspace{Id: adminWorkspaceID, ExternalId: "admin-workspace"},
-		Token:     &types.Token{TokenType: types.TokenTypeWorker, WorkspaceId: &adminWorkspaceID},
+		Token:     &types.Token{TokenType: types.TokenTypeWorker, ExternalId: "worker-token", WorkspaceId: &adminWorkspaceID},
 	})
 
 	resp, err := service.GetContainerRuntimeCredentials(ctx, &pb.GetContainerRuntimeCredentialsRequest{
@@ -275,14 +289,13 @@ func TestGetContainerRuntimeCredentialsAllowsTrustedWorkerAcrossWorkspaces(t *te
 	})
 
 	require.NoError(t, err)
-	require.True(t, resp.Ok)
-	require.NotNil(t, resp.WorkspaceStorage)
-	require.Equal(t, storageBucket, resp.WorkspaceStorage.BucketName)
-	require.Equal(t, 2, backendRepo.workspaceByExternalIDCalls)
+	require.False(t, resp.Ok)
+	require.Contains(t, resp.ErrorMsg, "container")
 }
 
 func TestGetContainerRuntimeCredentialsRejectsPrivateWorkerAcrossWorkspaces(t *testing.T) {
 	service := &WorkerRepositoryService{
+		workerRepo: &workerRuntimeCredentialsWorkerRepo{},
 		backendRepo: &workerRuntimeCredentialsBackendRepo{
 			workspace: &types.Workspace{Id: 9, ExternalId: "target-workspace"},
 		},
@@ -290,7 +303,7 @@ func TestGetContainerRuntimeCredentialsRejectsPrivateWorkerAcrossWorkspaces(t *t
 	privateWorkspaceID := uint(7)
 	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
 		Workspace: &types.Workspace{Id: privateWorkspaceID, ExternalId: "private-workspace"},
-		Token:     &types.Token{TokenType: types.TokenTypeWorkerPrivate, WorkspaceId: &privateWorkspaceID},
+		Token:     &types.Token{TokenType: types.TokenTypeWorkerPrivate, ExternalId: "worker-token", WorkspaceId: &privateWorkspaceID},
 	})
 
 	resp, err := service.GetContainerRuntimeCredentials(ctx, &pb.GetContainerRuntimeCredentialsRequest{
@@ -314,6 +327,7 @@ func TestGetContainerRuntimeCredentialsRetriesContainerStateLockContention(t *te
 		errs: []error{redislock.ErrNotObtained, redislock.ErrNotObtained},
 	}
 	service := &WorkerRepositoryService{
+		workerRepo: &workerRuntimeCredentialsWorkerRepo{},
 		backendRepo: &workerRuntimeCredentialsBackendRepo{
 			workspace: &types.Workspace{Id: workspaceID, ExternalId: "workspace-id"},
 			tokens: []types.Token{{
@@ -369,6 +383,7 @@ func TestGetContainerRuntimeCredentialsDoesNotRequireSigningKeyForStorageAndRunt
 		}},
 	}
 	service := &WorkerRepositoryService{
+		workerRepo:  &workerRuntimeCredentialsWorkerRepo{},
 		backendRepo: backendRepo,
 		containerRepo: &workerRuntimeCredentialsContainerRepo{
 			state: &types.ContainerState{ContainerId: "container-id", WorkspaceId: "workspace-id", StubId: "stub-id"},
@@ -395,7 +410,7 @@ func TestGetContainerRuntimeCredentialsDoesNotRequireSigningKeyForStorageAndRunt
 	require.Zero(t, backendRepo.workspaceWithSigningCalls)
 }
 
-func TestGetContainerRuntimeCredentialsVendsWorkspaceStorageWithoutContainerState(t *testing.T) {
+func TestGetContainerRuntimeCredentialsRejectsWorkspaceStorageWithoutContainerState(t *testing.T) {
 	storageID := uint(1)
 	storageBucket := "workspace-bucket"
 	storageAccess := "storage-access"
@@ -413,7 +428,7 @@ func TestGetContainerRuntimeCredentialsVendsWorkspaceStorageWithoutContainerStat
 			},
 		},
 	}
-	service := &WorkerRepositoryService{backendRepo: backendRepo}
+	service := &WorkerRepositoryService{backendRepo: backendRepo, workerRepo: &workerRuntimeCredentialsWorkerRepo{}}
 
 	resp, err := service.GetContainerRuntimeCredentials(
 		cacheRepositoryWorkspaceAuthContext("workspace-id"),
@@ -426,14 +441,13 @@ func TestGetContainerRuntimeCredentialsVendsWorkspaceStorageWithoutContainerStat
 	)
 
 	require.NoError(t, err)
-	require.True(t, resp.Ok)
-	require.NotNil(t, resp.WorkspaceStorage)
-	require.Equal(t, "storage-access", resp.WorkspaceStorage.AccessKey)
-	require.Equal(t, "storage-secret", resp.WorkspaceStorage.SecretKey)
+	require.False(t, resp.Ok)
+	require.Contains(t, resp.ErrorMsg, "container")
 }
 
 func TestGetContainerRuntimeCredentialsRequiresSigningKeyForSecrets(t *testing.T) {
 	service := &WorkerRepositoryService{
+		workerRepo: &workerRuntimeCredentialsWorkerRepo{},
 		backendRepo: &workerRuntimeCredentialsBackendRepo{
 			workspace: &types.Workspace{Id: 7, ExternalId: "workspace-id"},
 		},
@@ -459,6 +473,7 @@ func TestGetContainerRuntimeCredentialsRequiresSigningKeyForSecrets(t *testing.T
 
 func TestGetContainerRuntimeCredentialsRequiresSigningKeyForMountCredentials(t *testing.T) {
 	service := &WorkerRepositoryService{
+		workerRepo: &workerRuntimeCredentialsWorkerRepo{},
 		backendRepo: &workerRuntimeCredentialsBackendRepo{
 			workspace: &types.Workspace{Id: 7, ExternalId: "workspace-id"},
 		},
@@ -488,6 +503,7 @@ func TestGetContainerRuntimeCredentialsRequiresSigningKeyForMountCredentials(t *
 func TestGetContainerRuntimeCredentialsRejectsMismatchedContainerState(t *testing.T) {
 	signingKey, _ := testSigningKey(t)
 	service := &WorkerRepositoryService{
+		workerRepo: &workerRuntimeCredentialsWorkerRepo{},
 		backendRepo: &workerRuntimeCredentialsBackendRepo{
 			workspace: &types.Workspace{Id: 7, ExternalId: "workspace-id", SigningKey: &signingKey},
 		},

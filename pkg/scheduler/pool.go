@@ -30,6 +30,8 @@ const (
 	storageVolumeName           string  = "beta9-storage"
 	cacheVolumeName             string  = "beta9-cache"
 	durableDiskVolumeName       string  = "beta9-durable-disks"
+	stateVolumeName             string  = "beta9-state-volumes"
+	stateVolumeLocksVolumeName  string  = "beta9-state-volume-locks"
 	devicePluginVolumeName      string  = "kubelet-device-plugins"
 	defaultDevicePluginPath     string  = "/var/lib/kubelet/device-plugins"
 	defaultContainerName        string  = "worker"
@@ -40,7 +42,7 @@ const (
 	defaultCachePath            string  = "/var/lib/beta9/cache"
 	defaultSharedMemoryPct      float32 = 0.5
 	defaultWorkerStopGraceS     int64   = 30
-	minWorkerPodGraceS          int64   = 120
+	minWorkerPodGraceS          int64   = 240
 	poolMonitoringInterval              = 1 * time.Second
 	poolHealthCheckInterval             = 10 * time.Second
 )
@@ -129,6 +131,22 @@ func workerDurableDisksHostPath(poolConfig types.WorkerPoolConfig) string {
 	return types.DefaultDurableDisksPath
 }
 
+func workerStateVolumesHostPath(poolConfig types.WorkerPoolConfig) string {
+	if poolConfig.StoragePath != "" {
+		return filepath.Join(poolConfig.StoragePath, "state-volumes")
+	}
+	if poolConfig.DurableDisksPath != "" {
+		return filepath.Join(filepath.Dir(filepath.Clean(poolConfig.DurableDisksPath)), "state-volumes")
+	}
+	return types.DefaultStateVolumesPath
+}
+
+// NBD device allocation is node-global, so every worker slot on a node must
+// share one lock directory even when pools use different storage paths.
+func workerStateVolumeLocksHostPath() string {
+	return types.DefaultStateVolumeLocksPath
+}
+
 func workerCacheHostPath(config types.AppConfig, poolConfig types.WorkerPoolConfig) string {
 	if poolConfig.Cache.Disk.HostPath != "" {
 		return poolConfig.Cache.Disk.HostPath
@@ -154,7 +172,8 @@ func workerPodTerminationGracePeriod(workerStopGraceS int64) int64 {
 		workerStopGraceS = defaultWorkerStopGraceS
 	}
 
-	// Covers task drain, forced nested-container stop, and FUSE unmounts.
+	// Covers task drain plus the non-bypassable two-minute state commit,
+	// cache flush, QSD/NBD detach, and kernel cleanup barrier.
 	grace := workerStopGraceS*2 + 60
 	if grace < minWorkerPodGraceS {
 		return minWorkerPodGraceS

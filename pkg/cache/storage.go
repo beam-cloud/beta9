@@ -976,6 +976,28 @@ func (cas *Store) Exists(hash string, expectedSize ...int64) bool {
 	return cas.ContentStatus(hash, expectedSize...) == contentStatusComplete
 }
 
+// VerifyContentHash streams a completed cache object back through SHA-256.
+// Completion metadata alone is not an integrity proof: a same-size damaged
+// page must never suppress an authenticated origin repair.
+func (cas *Store) VerifyContentHash(expectedHash string) bool {
+	size, pageSize, pageCount, ok := cas.completeMarker(expectedHash)
+	if !ok || pageSize <= 0 || pageCount != (size+pageSize-1)/pageSize {
+		return false
+	}
+	hasher := sha256.New()
+	for page := int64(0); page < pageCount; page++ {
+		offset := page * pageSize
+		length := min(pageSize, size-offset)
+		data := make([]byte, length)
+		read, err := cas.ReadAt(expectedHash, offset, data)
+		if err != nil || read != length {
+			return false
+		}
+		_, _ = hasher.Write(data)
+	}
+	return hex.EncodeToString(hasher.Sum(nil)) == expectedHash
+}
+
 func (cas *Store) ContentStatus(hash string, expectedSize ...int64) string {
 	hasExpectedSize := len(expectedSize) > 0 && expectedSize[0] > 0
 	if cas.memoryCacheEnabled {

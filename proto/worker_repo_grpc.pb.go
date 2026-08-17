@@ -32,6 +32,7 @@ const (
 	WorkerRepositoryService_RemoveWorker_FullMethodName                     = "/WorkerRepositoryService/RemoveWorker"
 	WorkerRepositoryService_UpdateWorkerCapacity_FullMethodName             = "/WorkerRepositoryService/UpdateWorkerCapacity"
 	WorkerRepositoryService_SetWorkerKeepAlive_FullMethodName               = "/WorkerRepositoryService/SetWorkerKeepAlive"
+	WorkerRepositoryService_SetWorkerStateVolumeCapacity_FullMethodName     = "/WorkerRepositoryService/SetWorkerStateVolumeCapacity"
 	WorkerRepositoryService_RegisterCacheHost_FullMethodName                = "/WorkerRepositoryService/RegisterCacheHost"
 	WorkerRepositoryService_UnregisterCacheHost_FullMethodName              = "/WorkerRepositoryService/UnregisterCacheHost"
 	WorkerRepositoryService_ListCacheHosts_FullMethodName                   = "/WorkerRepositoryService/ListCacheHosts"
@@ -47,7 +48,6 @@ const (
 	WorkerRepositoryService_ReleaseCacheReconcileLock_FullMethodName        = "/WorkerRepositoryService/ReleaseCacheReconcileLock"
 	WorkerRepositoryService_GetCacheOriginCredentials_FullMethodName        = "/WorkerRepositoryService/GetCacheOriginCredentials"
 	WorkerRepositoryService_GetContainerRuntimeCredentials_FullMethodName   = "/WorkerRepositoryService/GetContainerRuntimeCredentials"
-	WorkerRepositoryService_PruneStaleCacheCheckpoints_FullMethodName       = "/WorkerRepositoryService/PruneStaleCacheCheckpoints"
 	WorkerRepositoryService_SetCacheFsNode_FullMethodName                   = "/WorkerRepositoryService/SetCacheFsNode"
 	WorkerRepositoryService_GetCacheFsNode_FullMethodName                   = "/WorkerRepositoryService/GetCacheFsNode"
 	WorkerRepositoryService_AddCacheFsNodeChild_FullMethodName              = "/WorkerRepositoryService/AddCacheFsNodeChild"
@@ -81,6 +81,7 @@ type WorkerRepositoryServiceClient interface {
 	RemoveWorker(ctx context.Context, in *RemoveWorkerRequest, opts ...grpc.CallOption) (*RemoveWorkerResponse, error)
 	UpdateWorkerCapacity(ctx context.Context, in *UpdateWorkerCapacityRequest, opts ...grpc.CallOption) (*UpdateWorkerCapacityResponse, error)
 	SetWorkerKeepAlive(ctx context.Context, in *SetWorkerKeepAliveRequest, opts ...grpc.CallOption) (*SetWorkerKeepAliveResponse, error)
+	SetWorkerStateVolumeCapacity(ctx context.Context, in *SetWorkerStateVolumeCapacityRequest, opts ...grpc.CallOption) (*SetWorkerStateVolumeCapacityResponse, error)
 	RegisterCacheHost(ctx context.Context, in *RegisterCacheHostRequest, opts ...grpc.CallOption) (*RegisterCacheHostResponse, error)
 	UnregisterCacheHost(ctx context.Context, in *UnregisterCacheHostRequest, opts ...grpc.CallOption) (*UnregisterCacheHostResponse, error)
 	ListCacheHosts(ctx context.Context, in *ListCacheHostsRequest, opts ...grpc.CallOption) (*ListCacheHostsResponse, error)
@@ -96,7 +97,6 @@ type WorkerRepositoryServiceClient interface {
 	ReleaseCacheReconcileLock(ctx context.Context, in *ReleaseCacheReconcileLockRequest, opts ...grpc.CallOption) (*ReleaseCacheReconcileLockResponse, error)
 	GetCacheOriginCredentials(ctx context.Context, in *GetCacheOriginCredentialsRequest, opts ...grpc.CallOption) (*GetCacheOriginCredentialsResponse, error)
 	GetContainerRuntimeCredentials(ctx context.Context, in *GetContainerRuntimeCredentialsRequest, opts ...grpc.CallOption) (*GetContainerRuntimeCredentialsResponse, error)
-	PruneStaleCacheCheckpoints(ctx context.Context, in *PruneStaleCacheCheckpointsRequest, opts ...grpc.CallOption) (*PruneStaleCacheCheckpointsResponse, error)
 	SetCacheFsNode(ctx context.Context, in *SetCacheFsNodeRequest, opts ...grpc.CallOption) (*SetCacheFsNodeResponse, error)
 	GetCacheFsNode(ctx context.Context, in *GetCacheFsNodeRequest, opts ...grpc.CallOption) (*GetCacheFsNodeResponse, error)
 	AddCacheFsNodeChild(ctx context.Context, in *AddCacheFsNodeChildRequest, opts ...grpc.CallOption) (*AddCacheFsNodeChildResponse, error)
@@ -284,6 +284,15 @@ func (c *workerRepositoryServiceClient) SetWorkerKeepAlive(ctx context.Context, 
 	return out, nil
 }
 
+func (c *workerRepositoryServiceClient) SetWorkerStateVolumeCapacity(ctx context.Context, in *SetWorkerStateVolumeCapacityRequest, opts ...grpc.CallOption) (*SetWorkerStateVolumeCapacityResponse, error) {
+	out := new(SetWorkerStateVolumeCapacityResponse)
+	err := c.cc.Invoke(ctx, WorkerRepositoryService_SetWorkerStateVolumeCapacity_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *workerRepositoryServiceClient) RegisterCacheHost(ctx context.Context, in *RegisterCacheHostRequest, opts ...grpc.CallOption) (*RegisterCacheHostResponse, error) {
 	out := new(RegisterCacheHostResponse)
 	err := c.cc.Invoke(ctx, WorkerRepositoryService_RegisterCacheHost_FullMethodName, in, out, opts...)
@@ -413,15 +422,6 @@ func (c *workerRepositoryServiceClient) GetCacheOriginCredentials(ctx context.Co
 func (c *workerRepositoryServiceClient) GetContainerRuntimeCredentials(ctx context.Context, in *GetContainerRuntimeCredentialsRequest, opts ...grpc.CallOption) (*GetContainerRuntimeCredentialsResponse, error) {
 	out := new(GetContainerRuntimeCredentialsResponse)
 	err := c.cc.Invoke(ctx, WorkerRepositoryService_GetContainerRuntimeCredentials_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *workerRepositoryServiceClient) PruneStaleCacheCheckpoints(ctx context.Context, in *PruneStaleCacheCheckpointsRequest, opts ...grpc.CallOption) (*PruneStaleCacheCheckpointsResponse, error) {
-	out := new(PruneStaleCacheCheckpointsResponse)
-	err := c.cc.Invoke(ctx, WorkerRepositoryService_PruneStaleCacheCheckpoints_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -571,6 +571,7 @@ type WorkerRepositoryServiceServer interface {
 	RemoveWorker(context.Context, *RemoveWorkerRequest) (*RemoveWorkerResponse, error)
 	UpdateWorkerCapacity(context.Context, *UpdateWorkerCapacityRequest) (*UpdateWorkerCapacityResponse, error)
 	SetWorkerKeepAlive(context.Context, *SetWorkerKeepAliveRequest) (*SetWorkerKeepAliveResponse, error)
+	SetWorkerStateVolumeCapacity(context.Context, *SetWorkerStateVolumeCapacityRequest) (*SetWorkerStateVolumeCapacityResponse, error)
 	RegisterCacheHost(context.Context, *RegisterCacheHostRequest) (*RegisterCacheHostResponse, error)
 	UnregisterCacheHost(context.Context, *UnregisterCacheHostRequest) (*UnregisterCacheHostResponse, error)
 	ListCacheHosts(context.Context, *ListCacheHostsRequest) (*ListCacheHostsResponse, error)
@@ -586,7 +587,6 @@ type WorkerRepositoryServiceServer interface {
 	ReleaseCacheReconcileLock(context.Context, *ReleaseCacheReconcileLockRequest) (*ReleaseCacheReconcileLockResponse, error)
 	GetCacheOriginCredentials(context.Context, *GetCacheOriginCredentialsRequest) (*GetCacheOriginCredentialsResponse, error)
 	GetContainerRuntimeCredentials(context.Context, *GetContainerRuntimeCredentialsRequest) (*GetContainerRuntimeCredentialsResponse, error)
-	PruneStaleCacheCheckpoints(context.Context, *PruneStaleCacheCheckpointsRequest) (*PruneStaleCacheCheckpointsResponse, error)
 	SetCacheFsNode(context.Context, *SetCacheFsNodeRequest) (*SetCacheFsNodeResponse, error)
 	GetCacheFsNode(context.Context, *GetCacheFsNodeRequest) (*GetCacheFsNodeResponse, error)
 	AddCacheFsNodeChild(context.Context, *AddCacheFsNodeChildRequest) (*AddCacheFsNodeChildResponse, error)
@@ -647,6 +647,9 @@ func (UnimplementedWorkerRepositoryServiceServer) UpdateWorkerCapacity(context.C
 func (UnimplementedWorkerRepositoryServiceServer) SetWorkerKeepAlive(context.Context, *SetWorkerKeepAliveRequest) (*SetWorkerKeepAliveResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetWorkerKeepAlive not implemented")
 }
+func (UnimplementedWorkerRepositoryServiceServer) SetWorkerStateVolumeCapacity(context.Context, *SetWorkerStateVolumeCapacityRequest) (*SetWorkerStateVolumeCapacityResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetWorkerStateVolumeCapacity not implemented")
+}
 func (UnimplementedWorkerRepositoryServiceServer) RegisterCacheHost(context.Context, *RegisterCacheHostRequest) (*RegisterCacheHostResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RegisterCacheHost not implemented")
 }
@@ -691,9 +694,6 @@ func (UnimplementedWorkerRepositoryServiceServer) GetCacheOriginCredentials(cont
 }
 func (UnimplementedWorkerRepositoryServiceServer) GetContainerRuntimeCredentials(context.Context, *GetContainerRuntimeCredentialsRequest) (*GetContainerRuntimeCredentialsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetContainerRuntimeCredentials not implemented")
-}
-func (UnimplementedWorkerRepositoryServiceServer) PruneStaleCacheCheckpoints(context.Context, *PruneStaleCacheCheckpointsRequest) (*PruneStaleCacheCheckpointsResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method PruneStaleCacheCheckpoints not implemented")
 }
 func (UnimplementedWorkerRepositoryServiceServer) SetCacheFsNode(context.Context, *SetCacheFsNodeRequest) (*SetCacheFsNodeResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetCacheFsNode not implemented")
@@ -991,6 +991,24 @@ func _WorkerRepositoryService_SetWorkerKeepAlive_Handler(srv interface{}, ctx co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkerRepositoryService_SetWorkerStateVolumeCapacity_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetWorkerStateVolumeCapacityRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerRepositoryServiceServer).SetWorkerStateVolumeCapacity(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerRepositoryService_SetWorkerStateVolumeCapacity_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerRepositoryServiceServer).SetWorkerStateVolumeCapacity(ctx, req.(*SetWorkerStateVolumeCapacityRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _WorkerRepositoryService_RegisterCacheHost_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(RegisterCacheHostRequest)
 	if err := dec(in); err != nil {
@@ -1257,24 +1275,6 @@ func _WorkerRepositoryService_GetContainerRuntimeCredentials_Handler(srv interfa
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(WorkerRepositoryServiceServer).GetContainerRuntimeCredentials(ctx, req.(*GetContainerRuntimeCredentialsRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _WorkerRepositoryService_PruneStaleCacheCheckpoints_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(PruneStaleCacheCheckpointsRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(WorkerRepositoryServiceServer).PruneStaleCacheCheckpoints(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: WorkerRepositoryService_PruneStaleCacheCheckpoints_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(WorkerRepositoryServiceServer).PruneStaleCacheCheckpoints(ctx, req.(*PruneStaleCacheCheckpointsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1583,6 +1583,10 @@ var WorkerRepositoryService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _WorkerRepositoryService_SetWorkerKeepAlive_Handler,
 		},
 		{
+			MethodName: "SetWorkerStateVolumeCapacity",
+			Handler:    _WorkerRepositoryService_SetWorkerStateVolumeCapacity_Handler,
+		},
+		{
 			MethodName: "RegisterCacheHost",
 			Handler:    _WorkerRepositoryService_RegisterCacheHost_Handler,
 		},
@@ -1641,10 +1645,6 @@ var WorkerRepositoryService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetContainerRuntimeCredentials",
 			Handler:    _WorkerRepositoryService_GetContainerRuntimeCredentials_Handler,
-		},
-		{
-			MethodName: "PruneStaleCacheCheckpoints",
-			Handler:    _WorkerRepositoryService_PruneStaleCacheCheckpoints_Handler,
 		},
 		{
 			MethodName: "SetCacheFsNode",

@@ -10,6 +10,9 @@ IMAGE_ID="${IMAGE_ID:-}"
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-120}"
 POLL_SECONDS="${POLL_SECONDS:-1}"
 RESET_WORKERS="${RESET_WORKERS:-0}"
+LOCAL_CONTEXT="${LOCAL_CONTEXT:-}"
+LOCAL_NAMESPACE="${LOCAL_NAMESPACE:-beta9}"
+KUBECTL=(kubectl --context "${LOCAL_CONTEXT}" --namespace "${LOCAL_NAMESPACE}")
 
 started_at="$(date +%s)"
 
@@ -51,12 +54,12 @@ redis_cli() {
   fi
 
   local pod
-  pod="$(kubectl get pod -l app.kubernetes.io/name=redis -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+  pod="$("${KUBECTL[@]}" get pod -l app.kubernetes.io/name=redis -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
   if [[ -z "$pod" ]]; then
-    pod="$(kubectl get pod redis-master-0 -o jsonpath='{.metadata.name}' 2>/dev/null || true)"
+    pod="$("${KUBECTL[@]}" get pod redis-master-0 -o jsonpath='{.metadata.name}' 2>/dev/null || true)"
   fi
   if [[ -n "$pod" ]]; then
-    kubectl exec "$pod" -- redis-cli "$@" 2>/dev/null || true
+    "${KUBECTL[@]}" exec "$pod" -- redis-cli "$@" 2>/dev/null || true
   fi
 }
 
@@ -66,7 +69,7 @@ print_observations() {
   if command -v kubectl >/dev/null 2>&1; then
     echo
     echo "kubectl jobs,pods"
-    kubectl get jobs,pods 2>/dev/null || true
+    "${KUBECTL[@]}" get jobs,pods 2>/dev/null || true
   fi
 
   echo
@@ -91,6 +94,8 @@ Optional:
   GATEWAY_URL=http://localhost:1994
   API_PREFIX=/api/v1/gateway
   IMAGE_ID=<image-id override>
+  LOCAL_CONTEXT=k3d-beta9
+  LOCAL_NAMESPACE=beta9
   RESET_WORKERS=1
   TIMEOUT_SECONDS=120
 
@@ -106,6 +111,16 @@ fi
 
 require_cmd curl
 
+if [[ "$LOCAL_CONTEXT" != "k3d-beta9" ]]; then
+  echo "refusing to run startup probe unless LOCAL_CONTEXT=k3d-beta9" >&2
+  exit 1
+fi
+
+if [[ -z "$LOCAL_NAMESPACE" ]]; then
+  echo "LOCAL_NAMESPACE is required" >&2
+  exit 1
+fi
+
 if [[ -z "$TOKEN" ]]; then
   echo "TOKEN or BETA9_TOKEN is required" >&2
   usage
@@ -120,7 +135,7 @@ fi
 
 if [[ "$RESET_WORKERS" == "1" ]]; then
   timeline "reset workers"
-  bash bin/delete_workers.sh
+  KUBE_CONTEXT="$LOCAL_CONTEXT" BENCH_NAMESPACE="$LOCAL_NAMESPACE" bash bin/delete_workers.sh
 fi
 
 timeline "wait gateway health"

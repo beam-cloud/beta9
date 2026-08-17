@@ -311,6 +311,7 @@ func (wpc *ProviderWorkerPoolController) createWorkerOnMachine(workerId, machine
 	worker.PoolName = wpc.name
 	worker.MachineId = machineId
 	worker.RequiresPoolSelector = wpc.workerPoolConfig.RequiresPoolSelector
+	worker.WorkerTokenId = token.ExternalId
 
 	// Create the job in the cluster
 	_, err = client.BatchV1().Jobs(wpc.config.Worker.Namespace).Create(wpc.ctx, job, metav1.CreateOptions{})
@@ -391,7 +392,9 @@ func (wpc *ProviderWorkerPoolController) createWorkerJob(workerId, machineId str
 		Spec: corev1.PodSpec{
 			HostNetwork:                   true,
 			ImagePullSecrets:              imagePullSecrets,
-			RestartPolicy:                 corev1.RestartPolicyOnFailure,
+			// The Pod UID is the worker process epoch; never restart a worker
+			// container inside the same Pod with the prior state-volume identity.
+			RestartPolicy:                 corev1.RestartPolicyNever,
 			NodeSelector:                  wpc.workerPoolConfig.JobSpec.NodeSelector,
 			Containers:                    containers,
 			Volumes:                       wpc.getWorkerVolumes(workerMemory),
@@ -406,6 +409,7 @@ func (wpc *ProviderWorkerPoolController) createWorkerJob(workerId, machineId str
 	}
 
 	ttl := int32(30)
+	backoffLimit := int32(0)
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      jobName,
@@ -415,6 +419,7 @@ func (wpc *ProviderWorkerPoolController) createWorkerJob(workerId, machineId str
 		Spec: batchv1.JobSpec{
 			Template:                podTemplate,
 			TTLSecondsAfterFinished: &ttl,
+			BackoffLimit:             &backoffLimit,
 		},
 	}
 
@@ -455,6 +460,10 @@ func (wpc *ProviderWorkerPoolController) getWorkerEnvironment(workerId, machineI
 		{
 			Name:  "WORKER_POOL_NAME",
 			Value: wpc.name,
+		},
+		{
+			Name:  types.WorkerMachineEnv,
+			Value: machineId,
 		},
 		{
 			Name:  "CACHE_LOCALITY",
@@ -618,6 +627,20 @@ func (wpc *ProviderWorkerPoolController) getWorkerVolumes(workerMemory int64) []
 			},
 		},
 	})
+	volumes = append(volumes, corev1.Volume{
+		Name: stateVolumeName,
+		VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{
+			Path: workerStateVolumesHostPath(wpc.workerPoolConfig),
+			Type: &hostPathType,
+		}},
+	})
+	volumes = append(volumes, corev1.Volume{
+		Name: stateVolumeLocksVolumeName,
+		VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{
+			Path: workerStateVolumeLocksHostPath(),
+			Type: &hostPathType,
+		}},
+	})
 
 	hostPathDir := corev1.HostPathDirectory
 	volumes = append(volumes, corev1.Volume{
@@ -655,6 +678,16 @@ func (wpc *ProviderWorkerPoolController) getWorkerVolumeMounts() []corev1.Volume
 		Name:      devicePluginVolumeName,
 		MountPath: defaultDevicePluginPath,
 		ReadOnly:  true,
+	})
+	volumeMounts = append(volumeMounts, corev1.VolumeMount{
+		Name:      stateVolumeName,
+		MountPath: types.DefaultStateVolumesPath,
+		ReadOnly:  false,
+	})
+	volumeMounts = append(volumeMounts, corev1.VolumeMount{
+		Name:      stateVolumeLocksVolumeName,
+		MountPath: types.DefaultStateVolumeLocksPath,
+		ReadOnly:  false,
 	})
 
 	if wpc.workerPoolConfig.StoragePath != "" {

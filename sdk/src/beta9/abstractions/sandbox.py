@@ -3,6 +3,7 @@ import atexit
 import io
 import shlex
 import time
+import uuid
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Set, Tuple, Union
 
@@ -40,8 +41,8 @@ from ..clients.pod import (
     PodSandboxListUrlsRequest,
     PodSandboxListUrlsResponse,
     PodSandboxReplaceInFilesRequest,
-    PodSandboxSnapshotMemoryRequest,
-    PodSandboxSnapshotMemoryResponse,
+    PodSandboxSnapshotStateRequest,
+    PodSandboxSnapshotStateResponse,
     PodSandboxStatFileRequest,
     PodSandboxStatusRequest,
     PodSandboxStatusResponse,
@@ -324,11 +325,10 @@ class Sandbox(Pod):
             stub_id=response.stub_id,
         )
 
-    def create_from_memory_snapshot(self, snapshot_id: str) -> "SandboxInstance":
+    def create_from_state_snapshot(self, snapshot_id: str) -> "SandboxInstance":
         """
-        Create a sandbox instance from a filesystem snapshot.
-        This will create a new sandbox instance with any filesystem-level changes made in that original sandbox instance.
-        However, it will not restore any running processes or state present in the original sandbox instance.
+        Create a sandbox from an exact state snapshot. The receipt returned by
+        the service determines whether memory or cold state was restored.
 
         Parameters:
             snapshot_id (str): The ID of the snapshot to create the sandbox from.
@@ -338,17 +338,16 @@ class Sandbox(Pod):
 
         Example:
             ```python
-            # Create a sandbox instance from a memory snapshot
-            instance = sandbox.create_from_memory_snapshot("snapshot-123")
+            instance = sandbox.create_from_state_snapshot("snapshot-123")
             print(f"Sandbox created with ID: {instance.sandbox_id()}")
             ```
         """
 
-        terminal.header(f"Creating sandbox from memory snapshot: {snapshot_id}")
+        terminal.header(f"Creating sandbox from state snapshot: {snapshot_id}")
 
         create_response: CreatePodResponse = self.stub.create_pod(
             CreatePodRequest(
-                checkpoint_id=snapshot_id,
+                state_snapshot_id=snapshot_id,
             )
         )
 
@@ -553,30 +552,47 @@ class SandboxInstance(BaseAbstraction):
 
         return res.image_id
 
-    def snapshot_memory(self) -> str:
+    def snapshot_state(
+        self,
+        *,
+        mode: str = "live",
+        include_memory: bool = False,
+        operation_id: Optional[str] = None,
+    ) -> "PodSandboxSnapshotStateResponse":
         """
-        Create a memory snapshot of the sandbox (including all running processes and GPU state).
+        Commit the complete writable root as one exact state snapshot.
 
         Returns:
-            str: The checkpoint ID.
+            PodSandboxSnapshotStateResponse: State ID, generations, and the
+            explicit memory or cold-state restore mode.
 
         Example:
             ```python
-            # Create a snapshot of the sandbox memory contents
-            checkpoint_id = instance.snapshot_memory()
-            print(f"Checkpoint created with ID: {checkpoint_id}")
+            snapshot = instance.snapshot_state()
+            print(f"Snapshot created with ID: {snapshot.state_snapshot_id}")
             ```
         """
-        terminal.header(f"Creating a memory snapshot of sandbox: {self.container_id}")
+        if mode not in {"live", "terminal"}:
+            raise ValueError("mode must be 'live' or 'terminal'")
+        if mode == "live" and include_memory:
+            raise ValueError("live snapshots cannot include memory")
 
-        res: "PodSandboxSnapshotMemoryResponse" = self.stub.sandbox_snapshot_memory(
-            PodSandboxSnapshotMemoryRequest(stub_id=self.stub_id, container_id=self.container_id)
+        terminal.header(f"Committing sandbox state: {self.container_id}")
+
+        res: "PodSandboxSnapshotStateResponse" = self.stub.sandbox_snapshot_state(
+            PodSandboxSnapshotStateRequest(
+                stub_id=self.stub_id,
+                container_id=self.container_id,
+                operation_id=operation_id or str(uuid.uuid4()),
+                mode=mode,
+                include_memory=include_memory,
+            )
         )
 
         if not res.ok:
             raise SandboxProcessError(res.error_msg)
 
-        return res.checkpoint_id
+        return res
 
     def sandbox_id(self) -> str:
         """
@@ -4174,14 +4190,25 @@ class AsyncSandboxInstance:
         """
         return await asyncio.to_thread(self._sync.create_image_from_filesystem)
 
-    async def snapshot_memory(self) -> str:
+    async def snapshot_state(
+        self,
+        *,
+        mode: str = "live",
+        include_memory: bool = False,
+        operation_id: Optional[str] = None,
+    ) -> "PodSandboxSnapshotStateResponse":
         """
-        Create a memory snapshot of the sandbox asynchronously.
+        Commit the complete writable root as one state snapshot asynchronously.
 
         Returns:
-            str: The checkpoint ID.
+            PodSandboxSnapshotStateResponse: Snapshot state and generation receipt.
         """
-        return await asyncio.to_thread(self._sync.snapshot_memory)
+        return await asyncio.to_thread(
+            self._sync.snapshot_state,
+            mode=mode,
+            include_memory=include_memory,
+            operation_id=operation_id,
+        )
 
     def sandbox_id(self) -> str:
         """

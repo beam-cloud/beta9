@@ -159,15 +159,137 @@ class StopContainerResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class CheckpointContainerRequest(betterproto.Message):
+class GatewaySnapshotContainerStateRequest(betterproto.Message):
     container_id: str = betterproto.string_field(1)
+    operation_id: str = betterproto.string_field(2)
+    mode: str = betterproto.string_field(3)
+    publish: bool = betterproto.bool_field(4)
+    include_memory: bool = betterproto.bool_field(5)
+    visible: bool = betterproto.bool_field(6)
 
 
 @dataclass(eq=False, repr=False)
-class CheckpointContainerResponse(betterproto.Message):
+class GatewaySnapshotContainerStateResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
-    checkpoint_id: str = betterproto.string_field(2)
-    error_msg: str = betterproto.string_field(3)
+    error_msg: str = betterproto.string_field(2)
+    state_snapshot_id: str = betterproto.string_field(3)
+    status: str = betterproto.string_field(4)
+    image_digest: str = betterproto.string_field(5)
+    runtime_profile: str = betterproto.string_field(6)
+    checkpoint_id: str = betterproto.string_field(7)
+    has_memory: bool = betterproto.bool_field(8)
+    generations: List["_types__.StateGeneration"] = betterproto.message_field(9)
+    restore_mode: str = betterproto.string_field(10)
+    fallback_reason: str = betterproto.string_field(11)
+
+
+@dataclass(eq=False, repr=False)
+class StateSnapshotReferenceRequest(betterproto.Message):
+    state_snapshot_id: str = betterproto.string_field(1)
+    kind: str = betterproto.string_field(2)
+    reference_id: str = betterproto.string_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class StateSnapshotReferenceResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    error_msg: str = betterproto.string_field(2)
+    state_snapshot_id: str = betterproto.string_field(3)
+    kind: str = betterproto.string_field(4)
+    reference_id: str = betterproto.string_field(5)
+    status: str = betterproto.string_field(6)
+
+
+@dataclass(eq=False, repr=False)
+class PromoteStateTemplateRequest(betterproto.Message):
+    operation_id: str = betterproto.string_field(1)
+    source_state_snapshot_id: str = betterproto.string_field(2)
+    reference_kind: str = betterproto.string_field(3)
+    reference_id: str = betterproto.string_field(4)
+
+
+@dataclass(eq=False, repr=False)
+class PromoteStateTemplateResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    error_msg: str = betterproto.string_field(2)
+    state_template: "_types__.PublicStateTemplateArtifact" = betterproto.message_field(
+        3
+    )
+    replayed: bool = betterproto.bool_field(4)
+
+
+@dataclass(eq=False, repr=False)
+class GetStateTemplateRequest(betterproto.Message):
+    state_template_id: str = betterproto.string_field(1)
+    version: int = betterproto.int64_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class GetStateTemplateResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    error_msg: str = betterproto.string_field(2)
+    state_template: "_types__.PublicStateTemplateArtifact" = betterproto.message_field(
+        3
+    )
+
+
+@dataclass(eq=False, repr=False)
+class InstantiateStateTemplateRequest(betterproto.Message):
+    state_template_id: str = betterproto.string_field(1)
+    version: int = betterproto.int64_field(2)
+    operation_id: str = betterproto.string_field(3)
+    destination_stub_id: str = betterproto.string_field(4)
+    expected_template: "_types__.PublicStateTemplateArtifact" = (
+        betterproto.message_field(5)
+    )
+
+
+@dataclass(eq=False, repr=False)
+class GetStateTemplateInstantiationRequest(betterproto.Message):
+    operation_id: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class ConfirmStateTemplateInstantiationRequest(betterproto.Message):
+    operation_id: str = betterproto.string_field(1)
+    destination_state_snapshot_id: str = betterproto.string_field(2)
+    reference_kind: str = betterproto.string_field(3)
+    reference_id: str = betterproto.string_field(4)
+
+
+@dataclass(eq=False, repr=False)
+class CancelStateTemplateInstantiationRequest(betterproto.Message):
+    operation_id: str = betterproto.string_field(1)
+    destination_state_snapshot_id: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class StateTemplateInstantiationResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    error_msg: str = betterproto.string_field(2)
+    instantiation: "_types__.StateTemplateInstantiation" = betterproto.message_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class ReleaseStateTemplateRequest(betterproto.Message):
+    state_template_id: str = betterproto.string_field(1)
+    version: int = betterproto.int64_field(2)
+    operation_id: str = betterproto.string_field(3)
+    reference_kind: str = betterproto.string_field(4)
+    reference_id: str = betterproto.string_field(5)
+
+
+@dataclass(eq=False, repr=False)
+class ReleaseStateTemplateResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    error_msg: str = betterproto.string_field(2)
+    state_template_id: str = betterproto.string_field(3)
+    version: int = betterproto.int64_field(4)
+    status: str = betterproto.string_field(5)
+    replayed: bool = betterproto.bool_field(6)
+    active_instantiations: int = betterproto.int64_field(7)
+    queued_at: datetime = betterproto.message_field(8)
+    retired_at: datetime = betterproto.message_field(9)
 
 
 @dataclass(eq=False, repr=False)
@@ -328,11 +450,8 @@ class DurableDisk(betterproto.Message):
     name: str = betterproto.string_field(1)
     size: str = betterproto.string_field(2)
     mount_path: str = betterproto.string_field(3)
-    filesystem: str = betterproto.string_field(4)
-    driver: str = betterproto.string_field(5)
-    read_only: bool = betterproto.bool_field(6)
-    source_snapshot_id: str = betterproto.string_field(7)
-    """Snapshot used to initialize a disk with no snapshot history."""
+    read_only: bool = betterproto.bool_field(4)
+    source_generation_id: str = betterproto.string_field(5)
 
 
 @dataclass(eq=False, repr=False)
@@ -381,7 +500,6 @@ class GetOrCreateStubRequest(betterproto.Message):
     task_policy: "TaskPolicy" = betterproto.message_field(23)
     concurrent_requests: int = betterproto.uint32_field(24)
     extra: str = betterproto.string_field(25)
-    checkpoint_enabled: bool = betterproto.bool_field(26)
     gpu_count: int = betterproto.uint32_field(27)
     on_deploy: str = betterproto.string_field(28)
     on_deploy_stub_id: str = betterproto.string_field(29)
@@ -401,9 +519,10 @@ class GetOrCreateStubRequest(betterproto.Message):
     serving: "ServingConfig" = betterproto.message_field(43)
     disks: List["DurableDisk"] = betterproto.message_field(44)
     allow_marketplace: bool = betterproto.bool_field(45)
-    checkpoint_trigger: "_types__.CheckpointTrigger" = betterproto.message_field(46)
     hostname: str = betterproto.string_field(47)
     """Hostname to set inside the container."""
+
+    persistent_root: "_types__.PersistentRoot" = betterproto.message_field(48)
 
 
 @dataclass(eq=False, repr=False)
@@ -1871,14 +1990,99 @@ class GatewayServiceStub(SyncServiceStub):
             .result()
         )
 
-    def checkpoint_container(
-        self, checkpoint_container_request: "CheckpointContainerRequest"
-    ) -> "CheckpointContainerResponse":
+    def snapshot_container_state(
+        self,
+        gateway_snapshot_container_state_request: "GatewaySnapshotContainerStateRequest",
+    ) -> "GatewaySnapshotContainerStateResponse":
         return self._unary_unary(
-            "/gateway.GatewayService/CheckpointContainer",
-            CheckpointContainerRequest,
-            CheckpointContainerResponse,
-        )(checkpoint_container_request)
+            "/gateway.GatewayService/SnapshotContainerState",
+            GatewaySnapshotContainerStateRequest,
+            GatewaySnapshotContainerStateResponse,
+        )(gateway_snapshot_container_state_request)
+
+    def retain_state_snapshot_reference(
+        self, state_snapshot_reference_request: "StateSnapshotReferenceRequest"
+    ) -> "StateSnapshotReferenceResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/RetainStateSnapshotReference",
+            StateSnapshotReferenceRequest,
+            StateSnapshotReferenceResponse,
+        )(state_snapshot_reference_request)
+
+    def release_state_snapshot_reference(
+        self, state_snapshot_reference_request: "StateSnapshotReferenceRequest"
+    ) -> "StateSnapshotReferenceResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/ReleaseStateSnapshotReference",
+            StateSnapshotReferenceRequest,
+            StateSnapshotReferenceResponse,
+        )(state_snapshot_reference_request)
+
+    def promote_state_template(
+        self, promote_state_template_request: "PromoteStateTemplateRequest"
+    ) -> "PromoteStateTemplateResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/PromoteStateTemplate",
+            PromoteStateTemplateRequest,
+            PromoteStateTemplateResponse,
+        )(promote_state_template_request)
+
+    def get_state_template(
+        self, get_state_template_request: "GetStateTemplateRequest"
+    ) -> "GetStateTemplateResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/GetStateTemplate",
+            GetStateTemplateRequest,
+            GetStateTemplateResponse,
+        )(get_state_template_request)
+
+    def instantiate_state_template(
+        self, instantiate_state_template_request: "InstantiateStateTemplateRequest"
+    ) -> "StateTemplateInstantiationResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/InstantiateStateTemplate",
+            InstantiateStateTemplateRequest,
+            StateTemplateInstantiationResponse,
+        )(instantiate_state_template_request)
+
+    def get_state_template_instantiation(
+        self,
+        get_state_template_instantiation_request: "GetStateTemplateInstantiationRequest",
+    ) -> "StateTemplateInstantiationResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/GetStateTemplateInstantiation",
+            GetStateTemplateInstantiationRequest,
+            StateTemplateInstantiationResponse,
+        )(get_state_template_instantiation_request)
+
+    def confirm_state_template_instantiation(
+        self,
+        confirm_state_template_instantiation_request: "ConfirmStateTemplateInstantiationRequest",
+    ) -> "StateTemplateInstantiationResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/ConfirmStateTemplateInstantiation",
+            ConfirmStateTemplateInstantiationRequest,
+            StateTemplateInstantiationResponse,
+        )(confirm_state_template_instantiation_request)
+
+    def cancel_state_template_instantiation(
+        self,
+        cancel_state_template_instantiation_request: "CancelStateTemplateInstantiationRequest",
+    ) -> "StateTemplateInstantiationResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/CancelStateTemplateInstantiation",
+            CancelStateTemplateInstantiationRequest,
+            StateTemplateInstantiationResponse,
+        )(cancel_state_template_instantiation_request)
+
+    def release_state_template(
+        self, release_state_template_request: "ReleaseStateTemplateRequest"
+    ) -> "ReleaseStateTemplateResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/ReleaseStateTemplate",
+            ReleaseStateTemplateRequest,
+            ReleaseStateTemplateResponse,
+        )(release_state_template_request)
 
     def list_containers(
         self, list_containers_request: "ListContainersRequest"

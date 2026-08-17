@@ -48,6 +48,13 @@ local ip = ARGV[1]
 local container_id = ARGV[2]
 local owner_key_prefix = ARGV[3]
 
+if ARGV[4] ~= "" then
+	if (redis.call("HGET", KEYS[5], "instance_id") or "") ~= ARGV[4]
+		or (redis.call("HGET", KEYS[5], "machine_id") or "") ~= ARGV[5] then
+		return redis.error_reply("worker process was superseded")
+	end
+end
+
 local old_ip = redis.call("GET", container_key)
 if old_ip == ip then
 	redis.call("SADD", index_key, ip)
@@ -85,6 +92,13 @@ local ref_counts_key = KEYS[3]
 local container_id = ARGV[1]
 local owner_key_prefix = ARGV[2]
 
+if ARGV[3] ~= "" then
+	if (redis.call("HGET", KEYS[4], "instance_id") or "") ~= ARGV[3]
+		or (redis.call("HGET", KEYS[4], "machine_id") or "") ~= ARGV[4] then
+		return redis.error_reply("worker process was superseded")
+	end
+end
+
 local ip = redis.call("GET", container_key)
 if not ip or ip == false or ip == "" then
 	return 0
@@ -110,6 +124,13 @@ local owner_key = KEYS[5]
 local ip = ARGV[1]
 local from_container_id = ARGV[2]
 local to_container_id = ARGV[3]
+
+if ARGV[4] ~= "" then
+	if (redis.call("HGET", KEYS[6], "instance_id") or "") ~= ARGV[4]
+		or (redis.call("HGET", KEYS[6], "machine_id") or "") ~= ARGV[5] then
+		return redis.error_reply("worker process was superseded")
+	end
+end
 
 local current_ip = redis.call("GET", from_key)
 if current_ip ~= ip then
@@ -214,6 +235,12 @@ return #valid
 `)
 
 var reserveWorkerRequestsScript = redis.NewScript(`
+if ARGV[5] ~= "" then
+	if (redis.call("HGET", KEYS[3], "instance_id") or "") ~= ARGV[5]
+		or (redis.call("HGET", KEYS[3], "machine_id") or "") ~= ARGV[6] then
+		return redis.error_reply("worker delivery process was superseded")
+	end
+end
 local requests = redis.call("LRANGE", KEYS[1], 0, tonumber(ARGV[1]) - 1)
 local pending = {}
 local deliveries = {}
@@ -244,9 +271,15 @@ return deliveries
 `)
 
 var requeuePendingWorkerRequestsScript = redis.NewScript(`
+if ARGV[3] ~= "" then
+	if (redis.call("HGET", KEYS[3], "instance_id") or "") ~= ARGV[3]
+		or (redis.call("HGET", KEYS[3], "machine_id") or "") ~= ARGV[4] then
+		return redis.error_reply("worker delivery process was superseded")
+	end
+end
 local values = {}
 local pending_ids = {}
-for i = 3, #ARGV, 2 do
+for i = 5, #ARGV, 2 do
 	local container_id = ARGV[i]
 	local delivery_token = ARGV[i + 1]
 	local state = ARGV[2] .. container_id
@@ -272,9 +305,19 @@ return #values
 `)
 
 var acknowledgeContainerDeliveryScript = redis.NewScript(`
+if ARGV[8] ~= "" then
+	if (redis.call("HGET", KEYS[4], "instance_id") or "") ~= ARGV[8]
+		or (redis.call("HGET", KEYS[4], "machine_id") or "") ~= ARGV[9] then
+		return -5
+	end
+end
 local owner = redis.call("HGET", KEYS[1], "worker_id")
 if owner and owner ~= "" and owner ~= ARGV[1] then
 	return -1
+end
+if (redis.call("HGET", KEYS[1], "state_volume_plan_id") or "") ~= ARGV[6]
+	or (redis.call("HGET", KEYS[1], "state_volume_plan_hash") or "") ~= ARGV[7] then
+	return -4
 end
 
 local assignment = redis.call("HGET", KEYS[1], ARGV[2])
@@ -322,6 +365,12 @@ return 1
 `)
 
 var recoverPendingContainerRequestsScript = redis.NewScript(`
+if ARGV[4] ~= "" then
+	if (redis.call("HGET", KEYS[3], "instance_id") or "") ~= ARGV[4]
+		or (redis.call("HGET", KEYS[3], "machine_id") or "") ~= ARGV[5] then
+		return redis.error_reply("worker delivery process was superseded")
+	end
+end
 local pending = redis.call("HGETALL", KEYS[2])
 local recovered = 0
 for i = 1, #pending, 2 do
@@ -339,20 +388,29 @@ redis.call("DEL", KEYS[2])
 return recovered
 `)
 
+var removeContainerFromWorkerForProcessScript = redis.NewScript(`
+if (redis.call("HGET", KEYS[1], "instance_id") or "") ~= ARGV[1]
+	or (redis.call("HGET", KEYS[1], "machine_id") or "") ~= ARGV[2] then
+	return redis.error_reply("worker delivery process was superseded")
+end
+return redis.call("SREM", KEYS[2], KEYS[3])
+`)
+
 var scheduleContainerRequestsScript = redis.NewScript(`
 local status = redis.call("HGET", KEYS[1], "status")
 if not status then
 	return {-1}
 end
-if redis.call("HGET", KEYS[1], "last_schedule_batch_id") == ARGV[9] then
+if redis.call("HGET", KEYS[1], "last_schedule_batch_id") == ARGV[10] then
 	local cpu = tonumber(redis.call("HGET", KEYS[1], "free_cpu") or "0")
 	local memory = tonumber(redis.call("HGET", KEYS[1], "free_memory") or "0")
 	local gpu = tonumber(redis.call("HGET", KEYS[1], "gpu_count") or "0")
+	local nbd = tonumber(redis.call("HGET", KEYS[4], "free_nbd_devices") or "0")
 	local version = tonumber(redis.call("HGET", KEYS[1], "resource_version") or "0")
-	if not cpu or not memory or not gpu or not version then
+	if not cpu or not memory or not gpu or not nbd or not version then
 		return {-5}
 	end
-	return {1, redis.call("HGET", KEYS[1], "machine_id") or "", cpu, memory, gpu, version}
+	return {1, redis.call("HGET", KEYS[1], "machine_id") or "", cpu, memory, gpu, nbd, version}
 end
 if status ~= "available" then
 	return {-2, status}
@@ -361,32 +419,41 @@ end
 local requested_cpu = tonumber(ARGV[1])
 local requested_memory = tonumber(ARGV[2])
 local requested_gpu = tonumber(ARGV[3])
-local version_delta = tonumber(ARGV[4])
+local requested_nbd = tonumber(ARGV[4])
+local version_delta = tonumber(ARGV[5])
 if not requested_cpu or requested_cpu < 0
 	or not requested_memory or requested_memory < 0
 	or not requested_gpu or requested_gpu < 0
+	or not requested_nbd or requested_nbd < 0
 	or not version_delta or version_delta <= 0 then
 	return {-5}
 end
 
 local queue_type = redis.call("TYPE", KEYS[2]).ok
 local index_type = redis.call("TYPE", KEYS[3]).ok
-if (queue_type ~= "none" and queue_type ~= "list") or (index_type ~= "none" and index_type ~= "set") then
+local nbd_type = redis.call("TYPE", KEYS[4]).ok
+if (queue_type ~= "none" and queue_type ~= "list")
+	or (index_type ~= "none" and index_type ~= "set")
+	or (nbd_type ~= "none" and nbd_type ~= "hash") then
 	return {-5}
 
 end
-for i = 10, #ARGV, 4 do
+for i = 11, #ARGV, 5 do
 	local state_type = redis.call("TYPE", ARGV[i]).ok
 	if state_type ~= "hash" then
 		return {-4}
 	end
 	local owner = redis.call("HGET", ARGV[i], "worker_id")
-	local assignment = redis.call("HGET", ARGV[i], ARGV[6])
-	local delivery = redis.call("HGET", ARGV[i], ARGV[7])
+	local assignment = redis.call("HGET", ARGV[i], ARGV[7])
+	local delivery = redis.call("HGET", ARGV[i], ARGV[8])
 	if redis.call("HGET", ARGV[i], "status") ~= "PENDING"
 		or (owner and owner ~= "")
 		or (assignment and assignment ~= "")
 		or (delivery and delivery ~= "") then
+		return {-4}
+	end
+	local item_nbd = tonumber(ARGV[i + 4])
+	if not item_nbd or item_nbd < 0 or (item_nbd > 0 and redis.call("HEXISTS", KEYS[4], ARGV[i]) == 1) then
 		return {-4}
 	end
 end
@@ -394,14 +461,16 @@ end
 local current_cpu = tonumber(redis.call("HGET", KEYS[1], "free_cpu") or "0")
 local current_memory = tonumber(redis.call("HGET", KEYS[1], "free_memory") or "0")
 local current_gpu = tonumber(redis.call("HGET", KEYS[1], "gpu_count") or "0")
+local current_nbd = tonumber(redis.call("HGET", KEYS[4], "free_nbd_devices") or "0")
 local current_version = tonumber(redis.call("HGET", KEYS[1], "resource_version") or "0")
-if not current_cpu or not current_memory or not current_gpu or not current_version then
+if not current_cpu or not current_memory or not current_gpu or not current_nbd or not current_version then
 	return {-5}
 end
 local free_cpu = current_cpu - requested_cpu
 local free_memory = current_memory - requested_memory
 local free_gpu = current_gpu - requested_gpu
-if free_cpu < 0 or free_memory < 0 or free_gpu < 0 then
+local free_nbd = current_nbd - requested_nbd
+if free_cpu < 0 or free_memory < 0 or free_gpu < 0 or free_nbd < 0 then
 	return {-3}
 end
 
@@ -411,20 +480,25 @@ redis.call("HSET", KEYS[1],
 	"free_memory", free_memory,
 	"gpu_count", free_gpu,
 	"resource_version", version,
-	"last_schedule_batch_id", ARGV[9])
+	"last_schedule_batch_id", ARGV[10])
+redis.call("HSET", KEYS[4], "free_nbd_devices", free_nbd)
+redis.call("HINCRBY", KEYS[4], "reserved_nbd_devices", requested_nbd)
 local machine_id = redis.call("HGET", KEYS[1], "machine_id") or ""
-for i = 10, #ARGV, 4 do
+for i = 11, #ARGV, 5 do
 	local state = ARGV[i]
 	redis.call("RPUSH", KEYS[2], ARGV[i + 1])
 	redis.call("HSET", state,
-		"worker_id", ARGV[5],
+		"worker_id", ARGV[6],
 		"machine_id", machine_id,
 		"gpu", ARGV[i + 2],
-		ARGV[6], ARGV[i + 3])
-	redis.call("HDEL", state, ARGV[7], ARGV[8])
+		ARGV[7], ARGV[i + 3])
+	redis.call("HDEL", state, ARGV[8], ARGV[9], "nbd_released")
 	redis.call("SADD", KEYS[3], state)
+	if tonumber(ARGV[i + 4]) > 0 then
+		redis.call("HSET", KEYS[4], state, ARGV[i + 4])
+	end
 end
-return {1, machine_id, free_cpu, free_memory, free_gpu, version}
+return {1, machine_id, free_cpu, free_memory, free_gpu, free_nbd, version}
 `)
 
 var adjustWorkerCapacityScript = redis.NewScript(`
@@ -436,23 +510,103 @@ end
 local free_cpu = tonumber(redis.call("HGET", KEYS[1], "free_cpu") or "0") + tonumber(ARGV[1])
 local free_memory = tonumber(redis.call("HGET", KEYS[1], "free_memory") or "0") + tonumber(ARGV[2])
 local free_gpu = tonumber(redis.call("HGET", KEYS[1], "gpu_count") or "0") + tonumber(ARGV[3])
-if free_cpu < 0 or free_memory < 0 or free_gpu < 0 then
+local free_nbd = tonumber(redis.call("HGET", KEYS[2], "free_nbd_devices") or "0") + tonumber(ARGV[4])
+if free_cpu < 0 or free_memory < 0 or free_gpu < 0 or free_nbd < 0 then
     return {-3}
 end
 
 local total_cpu = tonumber(redis.call("HGET", KEYS[1], "total_cpu") or "0")
 local total_memory = tonumber(redis.call("HGET", KEYS[1], "total_memory") or "0")
 local total_gpu = tonumber(redis.call("HGET", KEYS[1], "total_gpu_count") or "0")
+local total_nbd = tonumber(redis.call("HGET", KEYS[2], "total_nbd_devices") or "0")
 if total_cpu > 0 and free_cpu > total_cpu then free_cpu = total_cpu end
 if total_memory > 0 and free_memory > total_memory then free_memory = total_memory end
 if total_gpu > 0 and free_gpu > total_gpu then free_gpu = total_gpu end
+if total_nbd > 0 and free_nbd > total_nbd then free_nbd = total_nbd end
 
 redis.call("HSET", KEYS[1],
     "free_cpu", free_cpu,
     "free_memory", free_memory,
     "gpu_count", free_gpu)
-local version = redis.call("HINCRBY", KEYS[1], "resource_version", ARGV[4])
-return {1, redis.call("HGET", KEYS[1], "machine_id") or "", free_cpu, free_memory, free_gpu, version}
+redis.call("HSET", KEYS[2], "free_nbd_devices", free_nbd)
+local version = redis.call("HINCRBY", KEYS[1], "resource_version", ARGV[5])
+return {1, redis.call("HGET", KEYS[1], "machine_id") or "", free_cpu, free_memory, free_gpu, free_nbd, version}
+`)
+
+var repairStateVolumeCapacityScript = redis.NewScript(`
+local total = tonumber(ARGV[1])
+local observed_free = tonumber(ARGV[2])
+local storage_node_id = ARGV[3]
+if not total or not observed_free or total < 0 or observed_free < 0 or observed_free > total
+	or not storage_node_id or storage_node_id == "" then
+	return {-2}
+end
+
+local live = {}
+local reserved = 0
+for _, state in ipairs(redis.call("ZRANGE", KEYS[3], 0, -1)) do
+	if redis.call("EXISTS", state) == 1
+		and redis.call("HGET", state, "machine_id") == storage_node_id
+		and redis.call("HGET", state, "nbd_released") ~= "1" then
+		local devices = tonumber(redis.call("HGET", state, "nbd_devices") or "0")
+		if devices and devices > 0 then
+			live[state] = devices
+			reserved = reserved + devices
+		end
+	end
+end
+
+local metadata = {
+	["total_nbd_devices"] = true,
+	["observed_free_nbd_devices"] = true,
+	["free_nbd_devices"] = true,
+	["reserved_nbd_devices"] = true,
+	["storage_node_id"] = true
+}
+for _, field in ipairs(redis.call("HKEYS", KEYS[2])) do
+	if not metadata[field] and not live[field] then
+		redis.call("HDEL", KEYS[2], field)
+	end
+end
+for state, devices in pairs(live) do
+	redis.call("HSET", KEYS[2], state, devices)
+end
+local schedulable = total - reserved
+if schedulable < 0 then schedulable = 0 end
+local free = observed_free
+if free > schedulable then free = schedulable end
+redis.call("HSET", KEYS[2],
+	"total_nbd_devices", total,
+	"observed_free_nbd_devices", observed_free,
+	"free_nbd_devices", free,
+	"reserved_nbd_devices", reserved,
+	"storage_node_id", storage_node_id)
+return {1, free, reserved}
+`)
+
+var releaseStateVolumeCapacityScript = redis.NewScript(`
+if redis.call("EXISTS", KEYS[1]) == 0 then
+	return {-1}
+end
+local reserved = tonumber(redis.call("HGET", KEYS[2], ARGV[1]) or "0")
+local free = tonumber(redis.call("HGET", KEYS[2], "free_nbd_devices") or "0")
+local observed_free = tonumber(redis.call("HGET", KEYS[2], "observed_free_nbd_devices") or "0")
+local total_reserved = tonumber(redis.call("HGET", KEYS[2], "reserved_nbd_devices") or "0")
+if not reserved or not free or not observed_free or not total_reserved then
+	return {-2}
+end
+	if reserved > 0 then
+	free = free + reserved
+	if free > observed_free then free = observed_free end
+	total_reserved = total_reserved - reserved
+	if total_reserved < 0 then total_reserved = 0 end
+		redis.call("HDEL", KEYS[2], ARGV[1])
+		redis.call("HSET", KEYS[2], "free_nbd_devices", free, "reserved_nbd_devices", total_reserved)
+	end
+	if redis.call("EXISTS", KEYS[3]) == 1 then
+		redis.call("HSET", KEYS[3], "nbd_released", 1)
+	end
+return {1, free}
 `)
 
 func NewWorkerRedisRepository(r *common.RedisClient, config types.WorkerConfig) WorkerRepository {
@@ -480,6 +634,25 @@ func (r *WorkerRedisRepository) addWorker(ctx context.Context, worker *types.Wor
 		}
 	}
 	if oldWorker != nil {
+		incomingTokenID := strings.TrimSpace(worker.WorkerTokenId)
+		if incomingTokenID == "" {
+			worker.WorkerTokenId = oldWorker.WorkerTokenId
+		}
+		if incomingTokenID != "" && incomingTokenID != oldWorker.WorkerTokenId {
+			// A newly minted worker token denotes a replacement process. Its
+			// instance epoch is registered by the replacement's first keepalive;
+			// never preserve the prior process epoch across that replacement.
+			worker.InstanceId = ""
+		} else if strings.TrimSpace(worker.InstanceId) == "" {
+			worker.InstanceId = oldWorker.InstanceId
+		}
+		// Pool controllers do not probe the node-global NBD pool. Preserve the
+		// worker's explicit preflight advertisement across controller refreshes.
+		if worker.TotalNbdDevices == 0 && oldWorker.TotalNbdDevices > 0 {
+			worker.TotalNbdDevices = oldWorker.TotalNbdDevices
+			worker.FreeNbdDevices = oldWorker.FreeNbdDevices
+			worker.ObservedFreeNbdDevices = oldWorker.ObservedFreeNbdDevices
+		}
 		incomingControlState := worker.CordonRequested || worker.RolloutGeneration != ""
 		oldControlState := oldWorker.CordonRequested || oldWorker.RolloutGeneration != ""
 		worker.CordonRequested = oldWorker.CordonRequested
@@ -494,6 +667,9 @@ func (r *WorkerRedisRepository) addWorker(ctx context.Context, worker *types.Wor
 			// after the repository has already cleared it.
 			worker.Status = oldWorker.Status
 		}
+	}
+	if worker.TotalNbdDevices > 0 && worker.ObservedFreeNbdDevices == 0 && worker.FreeNbdDevices > 0 {
+		worker.ObservedFreeNbdDevices = min(worker.FreeNbdDevices, worker.TotalNbdDevices)
 	}
 
 	if err := r.reconcileWorkerCapacity(ctx, worker); err != nil {
@@ -530,13 +706,35 @@ func (r *WorkerRedisRepository) addWorker(ctx context.Context, worker *types.Wor
 
 func workerCapacityChanged(oldWorker, worker *types.Worker) bool {
 	return oldWorker.TotalCpu != worker.TotalCpu || oldWorker.TotalMemory != worker.TotalMemory ||
-		oldWorker.TotalGpuCount != worker.TotalGpuCount || oldWorker.FreeCpu != worker.FreeCpu ||
-		oldWorker.FreeMemory != worker.FreeMemory || oldWorker.FreeGpuCount != worker.FreeGpuCount
+		oldWorker.TotalGpuCount != worker.TotalGpuCount || oldWorker.TotalNbdDevices != worker.TotalNbdDevices ||
+		oldWorker.FreeCpu != worker.FreeCpu || oldWorker.FreeMemory != worker.FreeMemory ||
+		oldWorker.FreeGpuCount != worker.FreeGpuCount || oldWorker.FreeNbdDevices != worker.FreeNbdDevices ||
+		oldWorker.ObservedFreeNbdDevices != worker.ObservedFreeNbdDevices
 }
 
 func (r *WorkerRedisRepository) RemoveWorker(workerId string) error {
+	return r.removeWorkerWithProcess(workerId, "", "")
+}
+
+func (r *WorkerRedisRepository) RemoveWorkerForProcess(workerId, workerInstanceId, storageNodeId string) error {
+	if workerInstanceId == "" || storageNodeId == "" {
+		return errors.New("worker delivery process identity is required")
+	}
+	return r.removeWorkerWithProcess(workerId, workerInstanceId, storageNodeId)
+}
+
+func (r *WorkerRedisRepository) removeWorkerWithProcess(workerId, workerInstanceId, storageNodeId string) error {
 	ctx := context.TODO()
 	err := r.lock.WithLease(ctx, common.RedisKeys.SchedulerWorkerLock(workerId), schedulerWorkerLockOptions, func(ctx context.Context) error {
+		if workerInstanceId != "" {
+			worker, err := r.getWorkerFromKey(common.RedisKeys.SchedulerWorkerState(workerId))
+			if err != nil {
+				return err
+			}
+			if worker.InstanceId != workerInstanceId || worker.MachineId != storageNodeId {
+				return errors.New("worker delivery process was superseded")
+			}
+		}
 		return r.removeWorker(ctx, workerId)
 	})
 	var notFound *types.ErrWorkerNotFound
@@ -560,9 +758,22 @@ func (r *WorkerRedisRepository) removeWorker(ctx context.Context, workerId strin
 	if err != nil {
 		return err
 	}
+	containerStateKeys, err := r.rdb.SMembers(ctx, common.RedisKeys.SchedulerContainerWorkerIndex(workerId)).Result()
+	if err != nil {
+		return fmt.Errorf("failed to list state-volume reservations for worker <%s>: %w", workerId, err)
+	}
 	requeued, err := r.requeueWorkerRequests(ctx, workerId)
 	if err != nil {
 		return err
+	}
+	for _, containerStateKey := range containerStateKeys {
+		containerID := containerIDFromStateKey(containerStateKey)
+		if containerID == "" {
+			continue
+		}
+		if _, err := r.releaseStateVolumeCapacity(ctx, worker, containerID); err != nil {
+			return fmt.Errorf("failed to release state-volume reservation for container <%s>: %w", containerID, err)
+		}
 	}
 	if err := r.removeWorkerIndexEntries(ctx, stateKey, worker); err != nil {
 		return err
@@ -634,10 +845,17 @@ type pendingContainerRequest struct {
 }
 
 func (r *WorkerRedisRepository) UpdateWorkerStatus(workerId string, status types.WorkerStatus) error {
-	return r.updateWorkerStatus(workerId, status, "", false)
+	return r.updateWorkerStatus(workerId, "", "", status, "", false)
 }
 
-func (r *WorkerRedisRepository) updateWorkerStatus(workerId string, status, expected types.WorkerStatus, reconcileCapacity bool) error {
+func (r *WorkerRedisRepository) UpdateWorkerStatusForProcess(workerId, workerInstanceId, storageNodeId string, status types.WorkerStatus) error {
+	if workerInstanceId == "" || storageNodeId == "" {
+		return errors.New("worker delivery process identity is required")
+	}
+	return r.updateWorkerStatus(workerId, workerInstanceId, storageNodeId, status, "", false)
+}
+
+func (r *WorkerRedisRepository) updateWorkerStatus(workerId, workerInstanceId, storageNodeId string, status, expected types.WorkerStatus, reconcileCapacity bool) error {
 	err := r.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerWorkerLock(workerId), schedulerWorkerLockOptions)
 	if err != nil {
 		return err
@@ -648,6 +866,9 @@ func (r *WorkerRedisRepository) updateWorkerStatus(workerId string, status, expe
 	worker, err := r.getWorkerFromKey(stateKey)
 	if err != nil {
 		return err
+	}
+	if workerInstanceId != "" && (worker.InstanceId != workerInstanceId || worker.MachineId != storageNodeId) {
+		return errors.New("worker delivery process was superseded")
 	}
 	if expected != "" && worker.Status != expected {
 		return nil
@@ -667,6 +888,7 @@ func (r *WorkerRedisRepository) updateWorkerStatus(workerId string, status, expe
 			"free_cpu", worker.FreeCpu,
 			"free_memory", worker.FreeMemory,
 			"gpu_count", worker.FreeGpuCount,
+			"free_nbd_devices", worker.FreeNbdDevices,
 		)
 	} else {
 		pipe.HSet(ctx, stateKey, "status", string(status))
@@ -684,6 +906,7 @@ type workerReservedCapacity struct {
 	cpu    int64
 	memory int64
 	gpu    uint32
+	nbd    uint32
 }
 
 func (r *WorkerRedisRepository) reconcileWorkerCapacity(ctx context.Context, worker *types.Worker) error {
@@ -709,7 +932,13 @@ func (r *WorkerRedisRepository) reconcileWorkerCapacity(ctx context.Context, wor
 			worker.FreeGpuCount = worker.TotalGpuCount - usage.gpu
 		}
 	}
-
+	if worker.TotalNbdDevices > 0 {
+		free, err := r.repairStateVolumeCapacity(ctx, worker, worker.TotalNbdDevices, worker.ObservedFreeNbdDevices)
+		if err != nil {
+			return err
+		}
+		worker.FreeNbdDevices = free
+	}
 	return nil
 }
 
@@ -722,7 +951,12 @@ func (r *WorkerRedisRepository) reconcileStoredWorkerCapacity(ctx context.Contex
 		return nil
 	}
 	pipe := r.rdb.TxPipeline()
-	pipe.HSet(ctx, stateKey, "free_cpu", worker.FreeCpu, "free_memory", worker.FreeMemory, "gpu_count", worker.FreeGpuCount)
+	pipe.HSet(ctx, stateKey,
+		"free_cpu", worker.FreeCpu,
+		"free_memory", worker.FreeMemory,
+		"gpu_count", worker.FreeGpuCount,
+		"free_nbd_devices", worker.FreeNbdDevices,
+	)
 	version := pipe.HIncrBy(ctx, stateKey, "resource_version", 1)
 	pipe.Expire(ctx, stateKey, time.Duration(types.WorkerStateTtlS)*time.Second)
 	if _, err := pipe.Exec(ctx); err != nil {
@@ -835,6 +1069,7 @@ func (c *workerReservedCapacity) addRequest(request *types.ContainerRequest) {
 	c.cpu += request.Cpu
 	c.memory += capacityMemoryForRequest(request)
 	c.gpu += gpuCountForCapacity(request.Gpu, request.GpuRequest, request.GpuCount)
+	c.nbd += request.RequiredNbdDevices()
 }
 
 func (c *workerReservedCapacity) addContainerState(state *types.ContainerState) {
@@ -845,6 +1080,7 @@ func (c *workerReservedCapacity) addContainerState(state *types.ContainerState) 
 	c.cpu += state.Cpu
 	c.memory += capacityMemoryForRequest(&types.ContainerRequest{Memory: state.Memory})
 	c.gpu += gpuCountForCapacity(state.Gpu, nil, state.GpuCount)
+	c.nbd += state.NbdDevices
 }
 
 func gpuCountForCapacity(gpu string, gpuRequest []string, gpuCount uint32) uint32 {
@@ -865,6 +1101,11 @@ func maxInt64(a, b int64) int64 {
 }
 
 func (r *WorkerRedisRepository) SetWorkerKeepAlive(workerId string, keepAlive types.WorkerKeepAlive) error {
+	keepAlive.InstanceId = strings.TrimSpace(keepAlive.InstanceId)
+	keepAlive.MachineId = strings.TrimSpace(keepAlive.MachineId)
+	if keepAlive.InstanceId == "" || keepAlive.MachineId == "" {
+		return fmt.Errorf("worker <%s> must report an authoritative process instance and machine id", workerId)
+	}
 	ctx := context.TODO()
 	err := r.lock.Acquire(ctx, common.RedisKeys.SchedulerWorkerLock(workerId), schedulerWorkerLockOptions)
 	if err != nil {
@@ -878,23 +1119,11 @@ func (r *WorkerRedisRepository) SetWorkerKeepAlive(workerId string, keepAlive ty
 		return err
 	}
 
-	oldMachineID := worker.MachineId
-	machineID := strings.TrimSpace(keepAlive.MachineId)
-	if machineID != "" {
-		worker.MachineId = machineID
+	if worker.InstanceId != keepAlive.InstanceId || worker.MachineId != keepAlive.MachineId {
+		return fmt.Errorf("worker <%s> keepalive process was superseded", workerId)
 	}
 	pipe := r.rdb.TxPipeline()
-	if worker.MachineId != oldMachineID {
-		pipe.HSet(ctx, stateKey, "machine_id", worker.MachineId)
-		pipe.HIncrBy(ctx, stateKey, "resource_version", 1)
-	}
 	pipe.Expire(ctx, stateKey, time.Duration(types.WorkerStateTtlS)*time.Second)
-	if oldMachineID != "" && oldMachineID != worker.MachineId {
-		pipe.SRem(ctx, common.RedisKeys.SchedulerWorkerMachineIndex(oldMachineID), stateKey)
-	}
-	for _, indexKey := range r.workerIndexKeys(worker) {
-		pipe.SAdd(ctx, indexKey, stateKey)
-	}
 
 	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("failed to set worker keepalive <%v>: %w", stateKey, err)
@@ -902,8 +1131,101 @@ func (r *WorkerRedisRepository) SetWorkerKeepAlive(workerId string, keepAlive ty
 	return nil
 }
 
-func (r *WorkerRedisRepository) ToggleWorkerAvailable(workerId, generation string) error {
+func (r *WorkerRedisRepository) SetWorkerStateVolumeCapacity(workerId, machineId string, totalNbdDevices, freeNbdDevices uint32) error {
+	return r.setWorkerStateVolumeCapacity(workerId, "", machineId, totalNbdDevices, freeNbdDevices)
+}
+
+func (r *WorkerRedisRepository) SetWorkerStateVolumeCapacityForProcess(workerId, workerInstanceId, machineId string, totalNbdDevices, freeNbdDevices uint32) error {
+	if strings.TrimSpace(workerInstanceId) == "" {
+		return errors.New("worker process instance id is required")
+	}
+	return r.setWorkerStateVolumeCapacity(workerId, workerInstanceId, machineId, totalNbdDevices, freeNbdDevices)
+}
+
+func (r *WorkerRedisRepository) setWorkerStateVolumeCapacity(workerId, workerInstanceId, machineId string, totalNbdDevices, freeNbdDevices uint32) error {
+	machineId = strings.TrimSpace(machineId)
+	if machineId == "" {
+		return fmt.Errorf("worker <%s> must report an authoritative machine id with state-volume capacity", workerId)
+	}
+	if freeNbdDevices > totalNbdDevices {
+		return fmt.Errorf("worker <%s> reports %d free NBD devices but only %d total", workerId, freeNbdDevices, totalNbdDevices)
+	}
 	return r.withWorker(workerId, func(ctx context.Context, stateKey string, worker *types.Worker) error {
+		if workerInstanceId != "" && (worker.InstanceId != workerInstanceId || worker.MachineId != machineId) {
+			return errors.New("worker delivery process was superseded")
+		}
+		if worker.MachineId != "" && worker.MachineId != machineId {
+			return fmt.Errorf("worker <%s> state-volume machine id changed from %q to %q", workerId, worker.MachineId, machineId)
+		}
+		if worker.MachineId == "" {
+			worker.MachineId = machineId
+			worker.ResourceVersion++
+			pipe := r.rdb.TxPipeline()
+			pipe.HSet(ctx, stateKey, "machine_id", machineId, "resource_version", worker.ResourceVersion)
+			pipe.SAdd(ctx, common.RedisKeys.SchedulerWorkerMachineIndex(machineId), stateKey)
+			if _, err := pipe.Exec(ctx); err != nil {
+				return fmt.Errorf("failed to bind worker <%s> to storage node <%s>: %w", workerId, machineId, err)
+			}
+		}
+		worker.TotalNbdDevices = totalNbdDevices
+		worker.ObservedFreeNbdDevices = freeNbdDevices
+		free, err := r.repairStateVolumeCapacity(ctx, worker, totalNbdDevices, freeNbdDevices)
+		if err != nil {
+			return err
+		}
+		worker.FreeNbdDevices = free
+		return r.saveWorkerFields(ctx, stateKey,
+			"total_nbd_devices", worker.TotalNbdDevices,
+			"observed_free_nbd_devices", worker.ObservedFreeNbdDevices,
+			"free_nbd_devices", worker.FreeNbdDevices,
+		)
+	})
+}
+
+// repairStateVolumeCapacity rebuilds the node-global reservation map from the
+// authoritative live container-state index. Running this as one Redis script
+// makes it race-free with scheduling on every worker that shares the node and
+// removes reservations left by crashed workers or stale worker indexes.
+func (r *WorkerRedisRepository) repairStateVolumeCapacity(ctx context.Context, worker *types.Worker, totalNbdDevices, observedFreeNbdDevices uint32) (uint32, error) {
+	if worker == nil {
+		return 0, errors.New("worker is required")
+	}
+	storageNodeID := types.StableStorageNodeID(worker.MachineId, worker.Id)
+	result, err := repairStateVolumeCapacityScript.Run(ctx, r.rdb, []string{
+		common.RedisKeys.SchedulerWorkerState(worker.Id),
+		common.RedisKeys.SchedulerStateVolumeCapacity(storageNodeID),
+		common.RedisKeys.SchedulerContainerStateIndex(),
+	}, totalNbdDevices, observedFreeNbdDevices, storageNodeID).Result()
+	if err != nil {
+		return 0, err
+	}
+	items, ok := result.([]interface{})
+	if !ok || len(items) != 3 || items[0] != int64(1) {
+		return 0, fmt.Errorf("failed to repair state-volume capacity for worker <%s>", worker.Id)
+	}
+	free, ok := items[1].(int64)
+	if !ok || free < 0 {
+		return 0, fmt.Errorf("invalid state-volume capacity result for worker <%s>", worker.Id)
+	}
+	return uint32(free), nil
+}
+
+func (r *WorkerRedisRepository) ToggleWorkerAvailable(workerId, generation string) error {
+	return r.toggleWorkerAvailable(workerId, "", "", generation)
+}
+
+func (r *WorkerRedisRepository) ToggleWorkerAvailableForProcess(workerId, workerInstanceId, storageNodeId, generation string) error {
+	if workerInstanceId == "" || storageNodeId == "" {
+		return errors.New("worker delivery process identity is required")
+	}
+	return r.toggleWorkerAvailable(workerId, workerInstanceId, storageNodeId, generation)
+}
+
+func (r *WorkerRedisRepository) toggleWorkerAvailable(workerId, workerInstanceId, storageNodeId, generation string) error {
+	return r.withWorker(workerId, func(ctx context.Context, stateKey string, worker *types.Worker) error {
+		if workerInstanceId != "" && (worker.InstanceId != workerInstanceId || worker.MachineId != storageNodeId) {
+			return errors.New("worker delivery process was superseded")
+		}
 		if worker.RolloutGeneration != "" {
 			if generation == "" || generation != worker.RolloutGeneration {
 				return nil
@@ -933,6 +1255,7 @@ func (r *WorkerRedisRepository) ToggleWorkerAvailable(workerId, generation strin
 			"free_cpu", worker.FreeCpu,
 			"free_memory", worker.FreeMemory,
 			"gpu_count", worker.FreeGpuCount,
+			"free_nbd_devices", worker.FreeNbdDevices,
 		)
 	})
 }
@@ -1011,6 +1334,18 @@ func (r *WorkerRedisRepository) withWorker(workerId string, fn func(context.Cont
 		worker, err := r.getWorkerFromKey(stateKey)
 		if err != nil {
 			return err
+		}
+		return fn(ctx, stateKey, worker)
+	})
+}
+
+func (r *WorkerRedisRepository) withWorkerProcess(workerId, workerInstanceId, storageNodeId string, fn func(context.Context, string, *types.Worker) error) error {
+	if strings.TrimSpace(workerInstanceId) == "" || strings.TrimSpace(storageNodeId) == "" {
+		return errors.New("worker process identity is required")
+	}
+	return r.withWorker(workerId, func(ctx context.Context, stateKey string, worker *types.Worker) error {
+		if worker == nil || worker.InstanceId != workerInstanceId || worker.MachineId != storageNodeId {
+			return errors.New("worker process was superseded")
 		}
 		return fn(ctx, stateKey, worker)
 	})
@@ -1133,6 +1468,9 @@ func (r *WorkerRedisRepository) getWorkersFromKeys(keys []string, cleanupIndexKe
 		if err = common.ToStruct(res, worker); err != nil {
 			return nil, fmt.Errorf("failed to deserialize worker state <%v>: %v", keys[i], err)
 		}
+		if err := r.hydrateWorkerStateVolumeCapacity(context.TODO(), worker); err != nil {
+			return nil, err
+		}
 
 		workers = append(workers, worker)
 	}
@@ -1181,8 +1519,42 @@ func (r *WorkerRedisRepository) getWorkerFromKey(key string) (*types.Worker, err
 	if err = common.ToStruct(res, worker); err != nil {
 		return nil, fmt.Errorf("failed to deserialize worker state <%v>: %v", key, err)
 	}
+	if err := r.hydrateWorkerStateVolumeCapacity(context.TODO(), worker); err != nil {
+		return nil, err
+	}
 
 	return worker, nil
+}
+
+type stateVolumeNodeCapacity struct {
+	TotalNbdDevices        uint32 `redis:"total_nbd_devices"`
+	ObservedFreeNbdDevices uint32 `redis:"observed_free_nbd_devices"`
+	FreeNbdDevices         uint32 `redis:"free_nbd_devices"`
+}
+
+func (r *WorkerRedisRepository) hydrateWorkerStateVolumeCapacity(ctx context.Context, worker *types.Worker) error {
+	if worker == nil {
+		return nil
+	}
+	nodeID := types.StableStorageNodeID(worker.MachineId, worker.Id)
+	values, err := r.rdb.HGetAll(ctx, common.RedisKeys.SchedulerStateVolumeCapacity(nodeID)).Result()
+	if err != nil {
+		return fmt.Errorf("failed to read state-volume capacity for node <%s>: %w", nodeID, err)
+	}
+	if len(values) == 0 {
+		worker.TotalNbdDevices = 0
+		worker.ObservedFreeNbdDevices = 0
+		worker.FreeNbdDevices = 0
+		return nil
+	}
+	var capacity stateVolumeNodeCapacity
+	if err := common.ToStruct(values, &capacity); err != nil {
+		return fmt.Errorf("failed to deserialize state-volume capacity for node <%s>: %w", nodeID, err)
+	}
+	worker.TotalNbdDevices = capacity.TotalNbdDevices
+	worker.ObservedFreeNbdDevices = capacity.ObservedFreeNbdDevices
+	worker.FreeNbdDevices = capacity.FreeNbdDevices
+	return nil
 }
 
 func (r *WorkerRedisRepository) GetGpuCounts() (map[string]int, error) {
@@ -1333,18 +1705,43 @@ func capacityMemoryForRequest(request *types.ContainerRequest) int64 {
 }
 
 func (r *WorkerRedisRepository) UpdateWorkerCapacity(worker *types.Worker, request *types.ContainerRequest, capacityUpdateType types.CapacityUpdateType) error {
+	return r.updateWorkerCapacity(worker, "", "", request, capacityUpdateType)
+}
+
+func (r *WorkerRedisRepository) UpdateWorkerCapacityForProcess(worker *types.Worker, workerInstanceId, storageNodeId string,
+	request *types.ContainerRequest, capacityUpdateType types.CapacityUpdateType,
+) error {
+	if workerInstanceId == "" || storageNodeId == "" {
+		return errors.New("worker delivery process identity is required")
+	}
+	return r.updateWorkerCapacity(worker, workerInstanceId, storageNodeId, request, capacityUpdateType)
+}
+
+func (r *WorkerRedisRepository) updateWorkerCapacity(worker *types.Worker, workerInstanceId, storageNodeId string,
+	request *types.ContainerRequest, capacityUpdateType types.CapacityUpdateType,
+) error {
 	if worker == nil || request == nil {
 		return errors.New("worker and container request are required")
 	}
 
 	if capacityUpdateType == types.AddCapacity {
 		return r.withWorker(worker.Id, func(ctx context.Context, stateKey string, current *types.Worker) error {
+			if workerInstanceId != "" && (current.InstanceId != workerInstanceId || current.MachineId != storageNodeId) {
+				return errors.New("worker delivery process was superseded")
+			}
 			if err := r.reconcileStoredWorkerCapacity(ctx, stateKey, current); err != nil {
 				return err
 			}
+			freeNBD, err := r.releaseStateVolumeCapacity(ctx, current, request.ContainerId)
+			if err != nil {
+				return err
+			}
+			current.FreeNbdDevices = freeNBD
 			worker.FreeCpu = current.FreeCpu
 			worker.FreeMemory = current.FreeMemory
 			worker.FreeGpuCount = current.FreeGpuCount
+			worker.FreeNbdDevices = current.FreeNbdDevices
+			worker.TotalNbdDevices = current.TotalNbdDevices
 			worker.ResourceVersion = current.ResourceVersion
 			worker.MachineId = current.MachineId
 			return nil
@@ -1356,14 +1753,30 @@ func (r *WorkerRedisRepository) UpdateWorkerCapacity(worker *types.Worker, reque
 		// Retained for legacy callers. Scheduling reserves capacity atomically in
 		// ScheduleContainerRequests; reconciliation remains authoritative.
 		direction = -1
+		if request.RequiredNbdDevices() > 0 {
+			return errors.New("state-volume capacity is reserved only by atomic scheduling")
+		}
 	} else {
 		return errors.New("invalid capacity update type")
 	}
+	if workerInstanceId != "" {
+		return r.withWorker(worker.Id, func(_ context.Context, _ string, current *types.Worker) error {
+			if current.InstanceId != workerInstanceId || current.MachineId != storageNodeId {
+				return errors.New("worker delivery process was superseded")
+			}
+			return r.adjustWorkerCapacityResult(worker, request, direction)
+		})
+	}
+	return r.adjustWorkerCapacityResult(worker, request, direction)
+}
+
+func (r *WorkerRedisRepository) adjustWorkerCapacityResult(worker *types.Worker, request *types.ContainerRequest, direction int64) error {
 	result, err := r.adjustWorkerCapacity(
 		worker.Id,
 		direction*request.Cpu,
 		direction*capacityMemoryForRequest(request),
 		direction*int64(gpuCountForCapacity(request.Gpu, request.GpuRequest, request.GpuCount)),
+		direction*int64(request.RequiredNbdDevices()),
 		1,
 	)
 	if err != nil {
@@ -1372,9 +1785,44 @@ func (r *WorkerRedisRepository) UpdateWorkerCapacity(worker *types.Worker, reque
 	worker.FreeCpu = result.freeCPU
 	worker.FreeMemory = result.freeMemory
 	worker.FreeGpuCount = uint32(result.freeGPU)
+	worker.FreeNbdDevices = uint32(result.freeNBD)
 	worker.ResourceVersion = result.resourceVersion
 	worker.MachineId = result.machineID
 	return nil
+}
+
+func (r *WorkerRedisRepository) releaseStateVolumeCapacity(ctx context.Context, worker *types.Worker, containerID string) (uint32, error) {
+	if worker == nil || containerID == "" {
+		if worker == nil {
+			return 0, errors.New("worker is required")
+		}
+		return worker.FreeNbdDevices, nil
+	}
+	storageNodeID := types.StableStorageNodeID(worker.MachineId, worker.Id)
+	value, err := releaseStateVolumeCapacityScript.Run(ctx, r.rdb, []string{
+		common.RedisKeys.SchedulerWorkerState(worker.Id),
+		common.RedisKeys.SchedulerStateVolumeCapacity(storageNodeID),
+		common.RedisKeys.SchedulerContainerState(containerID),
+	}, common.RedisKeys.SchedulerContainerState(containerID)).Result()
+	if err != nil {
+		return 0, err
+	}
+	items, ok := value.([]interface{})
+	if !ok || len(items) == 0 {
+		return 0, fmt.Errorf("unexpected state-volume release result: %T", value)
+	}
+	code, _ := items[0].(int64)
+	if code == -1 {
+		return 0, &types.ErrWorkerNotFound{WorkerId: worker.Id}
+	}
+	if code != 1 || len(items) != 2 {
+		return 0, errors.New("invalid state-volume release result")
+	}
+	free, ok := items[1].(int64)
+	if !ok || free < 0 {
+		return 0, errors.New("invalid free NBD capacity")
+	}
+	return uint32(free), nil
 }
 
 type workerCapacityResult struct {
@@ -1382,17 +1830,27 @@ type workerCapacityResult struct {
 	freeCPU         int64
 	freeMemory      int64
 	freeGPU         int64
+	freeNBD         int64
 	resourceVersion int64
 }
 
-func (r *WorkerRedisRepository) adjustWorkerCapacity(workerID string, cpu, memory, gpu, version int64) (workerCapacityResult, error) {
+func (r *WorkerRedisRepository) adjustWorkerCapacity(workerID string, cpu, memory, gpu, nbd, version int64) (workerCapacityResult, error) {
+	worker, err := r.getWorkerFromKey(common.RedisKeys.SchedulerWorkerState(workerID))
+	if err != nil {
+		return workerCapacityResult{}, err
+	}
+	storageNodeID := types.StableStorageNodeID(worker.MachineId, worker.Id)
 	value, err := adjustWorkerCapacityScript.Run(
 		context.TODO(),
 		r.rdb,
-		[]string{common.RedisKeys.SchedulerWorkerState(workerID)},
+		[]string{
+			common.RedisKeys.SchedulerWorkerState(workerID),
+			common.RedisKeys.SchedulerStateVolumeCapacity(storageNodeID),
+		},
 		cpu,
 		memory,
 		gpu,
+		nbd,
 		version,
 	).Result()
 	if err != nil {
@@ -1420,21 +1878,22 @@ func parseWorkerCapacityResult(workerID string, value interface{}) (workerCapaci
 		}
 		return workerCapacityResult{}, fmt.Errorf("worker <%s> is not available: %s", workerID, status)
 	case -3:
-		return workerCapacityResult{}, errors.New("unable to schedule container, worker out of cpu, memory, or gpu")
+		return workerCapacityResult{}, errors.New("unable to schedule container, worker out of cpu, memory, gpu, or NBD devices")
 	case -4:
 		return workerCapacityResult{}, errors.New("container request is no longer pending or is already assigned")
 	case -5:
 		return workerCapacityResult{}, errors.New("worker scheduling state has an invalid Redis type")
 	case 1:
-		if len(items) != 6 {
+		if len(items) != 7 {
 			return workerCapacityResult{}, fmt.Errorf("unexpected worker capacity result length: %d", len(items))
 		}
 		machineID, _ := items[1].(string)
 		freeCPU, cpuOK := items[2].(int64)
 		freeMemory, memoryOK := items[3].(int64)
 		freeGPU, gpuOK := items[4].(int64)
-		resourceVersion, versionOK := items[5].(int64)
-		if !cpuOK || !memoryOK || !gpuOK || !versionOK {
+		freeNBD, nbdOK := items[5].(int64)
+		resourceVersion, versionOK := items[6].(int64)
+		if !cpuOK || !memoryOK || !gpuOK || !nbdOK || !versionOK {
 			return workerCapacityResult{}, errors.New("invalid worker capacity values")
 		}
 		return workerCapacityResult{
@@ -1442,6 +1901,7 @@ func parseWorkerCapacityResult(workerID string, value interface{}) (workerCapaci
 			freeCPU:         freeCPU,
 			freeMemory:      freeMemory,
 			freeGPU:         freeGPU,
+			freeNBD:         freeNBD,
 			resourceVersion: resourceVersion,
 		}, nil
 	default:
@@ -1455,6 +1915,7 @@ func workerCapacityResultFromWorker(worker *types.Worker) workerCapacityResult {
 		freeCPU:         worker.FreeCpu,
 		freeMemory:      worker.FreeMemory,
 		freeGPU:         int64(worker.FreeGpuCount),
+		freeNBD:         int64(worker.FreeNbdDevices),
 		resourceVersion: worker.ResourceVersion,
 	}
 }
@@ -1514,11 +1975,12 @@ func (r *WorkerRedisRepository) ScheduleContainerRequests(worker *types.Worker, 
 			return err
 		}
 		scheduledAt = time.Now()
-		var cpu, memory, gpu int64
+		var cpu, memory, gpu, nbd int64
 		for index := range queued {
 			cpu += queued[index].request.Cpu
 			memory += capacityMemoryForRequest(queued[index].request)
 			gpu += int64(gpuCountForCapacity(queued[index].request.Gpu, queued[index].request.GpuRequest, queued[index].request.GpuCount))
+			nbd += int64(queued[index].request.RequiredNbdDevices())
 			queuedRequest := *queued[index].request
 			queuedRequest.Timestamp = scheduledAt
 			queuedRequest.MachineId = current.MachineId
@@ -1533,18 +1995,21 @@ func (r *WorkerRedisRepository) ScheduleContainerRequests(worker *types.Worker, 
 			freeCPU:         current.FreeCpu - cpu,
 			freeMemory:      current.FreeMemory - memory,
 			freeGPU:         int64(current.FreeGpuCount) - gpu,
+			freeNBD:         int64(current.FreeNbdDevices) - nbd,
 			resourceVersion: current.ResourceVersion + int64(len(requests)),
 		}
 
-		args := []interface{}{cpu, memory, gpu, int64(len(requests)), worker.Id,
+		args := []interface{}{cpu, memory, gpu, nbd, int64(len(requests)), worker.Id,
 			schedulerAssignmentIDField, schedulerDeliveryTokenField, schedulerDeliveryAttemptField, batchID}
 		for _, item := range queued {
-			args = append(args, item.stateKey, item.payload, item.request.Gpu, item.assignment)
+			args = append(args, item.stateKey, item.payload, item.request.Gpu, item.assignment, item.request.RequiredNbdDevices())
 		}
+		storageNodeID := types.StableStorageNodeID(current.MachineId, current.Id)
 		value, runErr := scheduleContainerRequestsScript.Run(ctx, r.rdb, []string{
 			common.RedisKeys.SchedulerWorkerState(worker.Id),
 			queueKey,
 			workerContainerIndexKey,
+			common.RedisKeys.SchedulerStateVolumeCapacity(storageNodeID),
 		}, args...).Result()
 		if runErr != nil {
 			recoveryCtx, cancelRecovery := context.WithTimeout(context.Background(), 2*time.Second)
@@ -1590,6 +2055,7 @@ func (r *WorkerRedisRepository) ScheduleContainerRequests(worker *types.Worker, 
 	worker.FreeCpu = capacity.freeCPU
 	worker.FreeMemory = capacity.freeMemory
 	worker.FreeGpuCount = uint32(capacity.freeGPU)
+	worker.FreeNbdDevices = uint32(capacity.freeNBD)
 	worker.ResourceVersion = capacity.resourceVersion
 	worker.MachineId = capacity.machineID
 	for _, item := range queued {
@@ -1654,7 +2120,25 @@ func (r *WorkerRedisRepository) scheduledBatchCommitted(ctx context.Context, wor
 	return false, nil
 }
 
-func (r *WorkerRedisRepository) AddContainerToWorker(workerId, containerId, deliveryToken string) error {
+func (r *WorkerRedisRepository) AddContainerToWorker(workerId, containerId, deliveryToken,
+	stateVolumePlanId, stateVolumePlanHash string,
+) error {
+	return r.addContainerToWorker(workerId, "", "", containerId, deliveryToken, stateVolumePlanId, stateVolumePlanHash)
+}
+
+func (r *WorkerRedisRepository) AddContainerToWorkerForProcess(workerId, workerInstanceId, storageNodeId,
+	containerId, deliveryToken, stateVolumePlanId, stateVolumePlanHash string,
+) error {
+	if workerInstanceId == "" || storageNodeId == "" {
+		return errors.New("worker delivery process identity is required")
+	}
+	return r.addContainerToWorker(workerId, workerInstanceId, storageNodeId, containerId, deliveryToken,
+		stateVolumePlanId, stateVolumePlanHash)
+}
+
+func (r *WorkerRedisRepository) addContainerToWorker(workerId, workerInstanceId, storageNodeId,
+	containerId, deliveryToken, stateVolumePlanId, stateVolumePlanHash string,
+) error {
 	if deliveryToken == "" {
 		return errors.New("container delivery token is required")
 	}
@@ -1663,7 +2147,9 @@ func (r *WorkerRedisRepository) AddContainerToWorker(workerId, containerId, deli
 		common.RedisKeys.SchedulerContainerWorkerIndex(workerId),
 		common.RedisKeys.SchedulerWorkerPendingRequests(workerId),
 		common.RedisKeys.SchedulerWorkerState(workerId),
-	}, workerId, schedulerAssignmentIDField, schedulerDeliveryTokenField, deliveryToken, string(types.ContainerStatusStopping)).Int()
+	}, workerId, schedulerAssignmentIDField, schedulerDeliveryTokenField, deliveryToken,
+		string(types.ContainerStatusStopping), stateVolumePlanId, stateVolumePlanHash,
+		workerInstanceId, storageNodeId).Int()
 	if err != nil {
 		return fmt.Errorf("failed to add container to worker container index: %w", err)
 	}
@@ -1675,6 +2161,12 @@ func (r *WorkerRedisRepository) AddContainerToWorker(workerId, containerId, deli
 	}
 	if result == -3 {
 		return fmt.Errorf("container <%s> is no longer runnable", containerId)
+	}
+	if result == -4 {
+		return fmt.Errorf("container <%s> delivery state-volume plan was superseded", containerId)
+	}
+	if result == -5 {
+		return errors.New("worker delivery process was superseded")
 	}
 	return nil
 }
@@ -1690,6 +2182,17 @@ func (r *WorkerRedisRepository) RemoveContainerFromWorker(workerId string, conta
 	return nil
 }
 
+func (r *WorkerRedisRepository) RemoveContainerFromWorkerForProcess(workerId, workerInstanceId, storageNodeId, containerId string) error {
+	if workerInstanceId == "" || storageNodeId == "" {
+		return errors.New("worker delivery process identity is required")
+	}
+	return removeContainerFromWorkerForProcessScript.Run(context.TODO(), r.rdb, []string{
+		common.RedisKeys.SchedulerWorkerState(workerId),
+		common.RedisKeys.SchedulerContainerWorkerIndex(workerId),
+		common.RedisKeys.SchedulerContainerState(containerId),
+	}, workerInstanceId, storageNodeId).Err()
+}
+
 func (r *WorkerRedisRepository) GetNextContainerRequest(workerId string) (*types.ContainerRequest, error) {
 	requests, err := r.GetNextContainerRequests(workerId, 1)
 	if err != nil || len(requests) == 0 {
@@ -1699,13 +2202,37 @@ func (r *WorkerRedisRepository) GetNextContainerRequest(workerId string) (*types
 }
 
 func (r *WorkerRedisRepository) RecoverPendingContainerRequests(workerId string) error {
+	return r.recoverPendingContainerRequests(workerId, "", "")
+}
+
+func (r *WorkerRedisRepository) RecoverPendingContainerRequestsForProcess(workerId, workerInstanceId, storageNodeId string) error {
+	if workerInstanceId == "" || storageNodeId == "" {
+		return errors.New("worker delivery process identity is required")
+	}
+	return r.recoverPendingContainerRequests(workerId, workerInstanceId, storageNodeId)
+}
+
+func (r *WorkerRedisRepository) recoverPendingContainerRequests(workerId, workerInstanceId, storageNodeId string) error {
 	return recoverPendingContainerRequestsScript.Run(context.TODO(), r.rdb, []string{
 		common.RedisKeys.SchedulerWorkerRequests(workerId),
 		common.RedisKeys.SchedulerWorkerPendingRequests(workerId),
-	}, common.RedisKeys.SchedulerContainerState(""), workerId, schedulerAssignmentIDField).Err()
+		common.RedisKeys.SchedulerWorkerState(workerId),
+	}, common.RedisKeys.SchedulerContainerState(""), workerId, schedulerAssignmentIDField,
+		workerInstanceId, storageNodeId).Err()
 }
 
 func (r *WorkerRedisRepository) GetNextContainerRequests(workerId string, limit int) ([]*types.ContainerRequest, error) {
+	return r.getNextContainerRequests(workerId, "", "", limit)
+}
+
+func (r *WorkerRedisRepository) GetNextContainerRequestsForProcess(workerId, workerInstanceId, storageNodeId string, limit int) ([]*types.ContainerRequest, error) {
+	if workerInstanceId == "" || storageNodeId == "" {
+		return nil, errors.New("worker delivery process identity is required")
+	}
+	return r.getNextContainerRequests(workerId, workerInstanceId, storageNodeId, limit)
+}
+
+func (r *WorkerRedisRepository) getNextContainerRequests(workerId, workerInstanceId, storageNodeId string, limit int) ([]*types.ContainerRequest, error) {
 	if limit <= 0 {
 		return nil, nil
 	}
@@ -1715,7 +2242,9 @@ func (r *WorkerRedisRepository) GetNextContainerRequests(workerId string, limit 
 	result, err := reserveWorkerRequestsScript.Run(ctx, r.rdb, []string{
 		queueKey,
 		common.RedisKeys.SchedulerWorkerPendingRequests(workerId),
-	}, limit, common.RedisKeys.SchedulerContainerState(""), schedulerAssignmentIDField, schedulerDeliveryAttemptField).Result()
+		common.RedisKeys.SchedulerWorkerState(workerId),
+	}, limit, common.RedisKeys.SchedulerContainerState(""), schedulerAssignmentIDField,
+		schedulerDeliveryAttemptField, workerInstanceId, storageNodeId).Result()
 	if err != nil {
 		return nil, err
 	}
@@ -1758,7 +2287,18 @@ func (r *WorkerRedisRepository) GetNextContainerRequests(workerId string, limit 
 }
 
 func (r *WorkerRedisRepository) RequeueContainerRequests(workerId string, requests []*types.ContainerRequest) error {
-	args := []interface{}{schedulerAssignmentIDField, common.RedisKeys.SchedulerContainerState("")}
+	return r.requeueContainerRequests(workerId, "", "", requests)
+}
+
+func (r *WorkerRedisRepository) RequeueContainerRequestsForProcess(workerId, workerInstanceId, storageNodeId string, requests []*types.ContainerRequest) error {
+	if workerInstanceId == "" || storageNodeId == "" {
+		return errors.New("worker delivery process identity is required")
+	}
+	return r.requeueContainerRequests(workerId, workerInstanceId, storageNodeId, requests)
+}
+
+func (r *WorkerRedisRepository) requeueContainerRequests(workerId, workerInstanceId, storageNodeId string, requests []*types.ContainerRequest) error {
+	args := []interface{}{schedulerAssignmentIDField, common.RedisKeys.SchedulerContainerState(""), workerInstanceId, storageNodeId}
 	for i := len(requests) - 1; i >= 0; i-- {
 		if requests[i] == nil {
 			return errors.New("cannot requeue a nil container request")
@@ -1771,6 +2311,7 @@ func (r *WorkerRedisRepository) RequeueContainerRequests(workerId string, reques
 	return requeuePendingWorkerRequestsScript.Run(context.TODO(), r.rdb, []string{
 		common.RedisKeys.SchedulerWorkerRequests(workerId),
 		common.RedisKeys.SchedulerWorkerPendingRequests(workerId),
+		common.RedisKeys.SchedulerWorkerState(workerId),
 	}, args...).Err()
 }
 
@@ -1813,8 +2354,28 @@ func (r *WorkerRedisRepository) SetImagePullLock(workerId, imageId string) (stri
 	return token, nil
 }
 
+func (r *WorkerRedisRepository) SetImagePullLockForProcess(workerId, workerInstanceId, storageNodeId, imageId string) (string, error) {
+	token, err := r.SetImagePullLock(workerId, imageId)
+	if err != nil {
+		return "", err
+	}
+	if err := r.withWorkerProcess(workerId, workerInstanceId, storageNodeId, func(context.Context, string, *types.Worker) error {
+		return nil
+	}); err != nil {
+		_ = r.RemoveImagePullLock(workerId, imageId, token)
+		return "", err
+	}
+	return token, nil
+}
+
 func (r *WorkerRedisRepository) RemoveImagePullLock(workerId, imageId, token string) error {
 	return r.lock.ReleaseWithToken(common.RedisKeys.WorkerImageLock(workerId, imageId), token)
+}
+
+func (r *WorkerRedisRepository) RemoveImagePullLockForProcess(workerId, workerInstanceId, storageNodeId, imageId, token string) error {
+	return r.withWorkerProcess(workerId, workerInstanceId, storageNodeId, func(context.Context, string, *types.Worker) error {
+		return r.RemoveImagePullLock(workerId, imageId, token)
+	})
 }
 
 func (r *WorkerRedisRepository) GetContainerIps(networkPrefix string) ([]string, error) {
@@ -1904,6 +2465,21 @@ func (r *WorkerRedisRepository) RemoveWorkerNetworkState(ctx context.Context, ne
 }
 
 func (r *WorkerRedisRepository) SetContainerIp(networkPrefix string, containerId, containerIp string) error {
+	return r.setContainerIpForProcess("", "", "", networkPrefix, containerId, containerIp)
+}
+
+func (r *WorkerRedisRepository) SetContainerIpForProcess(workerId, workerInstanceId, storageNodeId, networkPrefix, containerId, containerIp string) error {
+	if workerId == "" || workerInstanceId == "" || storageNodeId == "" {
+		return errors.New("worker process identity is required")
+	}
+	return r.setContainerIpForProcess(workerId, workerInstanceId, storageNodeId, networkPrefix, containerId, containerIp)
+}
+
+func (r *WorkerRedisRepository) setContainerIpForProcess(workerId, workerInstanceId, storageNodeId, networkPrefix, containerId, containerIp string) error {
+	workerStateKey := common.RedisKeys.SchedulerWorkerState(workerId)
+	if workerId == "" {
+		workerStateKey = common.RedisKeys.WorkerNetworkContainerIp(networkPrefix, containerId)
+	}
 	return setWorkerNetworkContainerIPScript.Run(
 		context.TODO(),
 		r.rdb,
@@ -1912,14 +2488,32 @@ func (r *WorkerRedisRepository) SetContainerIp(networkPrefix string, containerId
 			common.RedisKeys.WorkerNetworkIpIndex(networkPrefix),
 			common.RedisKeys.WorkerNetworkIpRefCounts(networkPrefix),
 			common.RedisKeys.WorkerNetworkIpOwner(networkPrefix, containerIp),
+			workerStateKey,
 		},
 		containerIp,
 		containerId,
 		common.RedisKeys.WorkerNetworkIpOwnerPrefix(networkPrefix),
+		workerInstanceId,
+		storageNodeId,
 	).Err()
 }
 
 func (r *WorkerRedisRepository) MoveContainerIp(networkPrefix, fromContainerId, toContainerId, containerIp string) error {
+	return r.moveContainerIpForProcess("", "", "", networkPrefix, fromContainerId, toContainerId, containerIp)
+}
+
+func (r *WorkerRedisRepository) MoveContainerIpForProcess(workerId, workerInstanceId, storageNodeId, networkPrefix, fromContainerId, toContainerId, containerIp string) error {
+	if workerId == "" || workerInstanceId == "" || storageNodeId == "" {
+		return errors.New("worker process identity is required")
+	}
+	return r.moveContainerIpForProcess(workerId, workerInstanceId, storageNodeId, networkPrefix, fromContainerId, toContainerId, containerIp)
+}
+
+func (r *WorkerRedisRepository) moveContainerIpForProcess(workerId, workerInstanceId, storageNodeId, networkPrefix, fromContainerId, toContainerId, containerIp string) error {
+	workerStateKey := common.RedisKeys.SchedulerWorkerState(workerId)
+	if workerId == "" {
+		workerStateKey = common.RedisKeys.WorkerNetworkContainerIp(networkPrefix, fromContainerId)
+	}
 	return moveWorkerNetworkContainerIPScript.Run(
 		context.TODO(),
 		r.rdb,
@@ -1929,10 +2523,13 @@ func (r *WorkerRedisRepository) MoveContainerIp(networkPrefix, fromContainerId, 
 			common.RedisKeys.WorkerNetworkIpIndex(networkPrefix),
 			common.RedisKeys.WorkerNetworkIpRefCounts(networkPrefix),
 			common.RedisKeys.WorkerNetworkIpOwner(networkPrefix, containerIp),
+			workerStateKey,
 		},
 		containerIp,
 		fromContainerId,
 		toContainerId,
+		workerInstanceId,
+		storageNodeId,
 	).Err()
 }
 
@@ -1952,11 +2549,46 @@ func (r *WorkerRedisRepository) SetNetworkLock(networkPrefix string, ttl, retrie
 	return token, nil
 }
 
+func (r *WorkerRedisRepository) SetNetworkLockForProcess(workerId, workerInstanceId, storageNodeId, networkPrefix string, ttl, retries int) (string, error) {
+	token, err := r.SetNetworkLock(networkPrefix, ttl, retries)
+	if err != nil {
+		return "", err
+	}
+	if err := r.withWorkerProcess(workerId, workerInstanceId, storageNodeId, func(context.Context, string, *types.Worker) error {
+		return nil
+	}); err != nil {
+		_ = r.RemoveNetworkLock(networkPrefix, token)
+		return "", err
+	}
+	return token, nil
+}
+
 func (r *WorkerRedisRepository) RemoveNetworkLock(networkPrefix string, token string) error {
 	return r.lock.ReleaseWithToken(common.RedisKeys.WorkerNetworkLock(networkPrefix), token)
 }
 
+func (r *WorkerRedisRepository) RemoveNetworkLockForProcess(workerId, workerInstanceId, storageNodeId, networkPrefix, token string) error {
+	return r.withWorkerProcess(workerId, workerInstanceId, storageNodeId, func(context.Context, string, *types.Worker) error {
+		return r.RemoveNetworkLock(networkPrefix, token)
+	})
+}
+
 func (r *WorkerRedisRepository) RemoveContainerIp(networkPrefix string, containerId string) error {
+	return r.removeContainerIpForProcess("", "", "", networkPrefix, containerId)
+}
+
+func (r *WorkerRedisRepository) RemoveContainerIpForProcess(workerId, workerInstanceId, storageNodeId, networkPrefix, containerId string) error {
+	if workerId == "" || workerInstanceId == "" || storageNodeId == "" {
+		return errors.New("worker process identity is required")
+	}
+	return r.removeContainerIpForProcess(workerId, workerInstanceId, storageNodeId, networkPrefix, containerId)
+}
+
+func (r *WorkerRedisRepository) removeContainerIpForProcess(workerId, workerInstanceId, storageNodeId, networkPrefix, containerId string) error {
+	workerStateKey := common.RedisKeys.SchedulerWorkerState(workerId)
+	if workerId == "" {
+		workerStateKey = common.RedisKeys.WorkerNetworkContainerIp(networkPrefix, containerId)
+	}
 	return removeWorkerNetworkContainerIPScript.Run(
 		context.TODO(),
 		r.rdb,
@@ -1964,8 +2596,11 @@ func (r *WorkerRedisRepository) RemoveContainerIp(networkPrefix string, containe
 			common.RedisKeys.WorkerNetworkContainerIp(networkPrefix, containerId),
 			common.RedisKeys.WorkerNetworkIpIndex(networkPrefix),
 			common.RedisKeys.WorkerNetworkIpRefCounts(networkPrefix),
+			workerStateKey,
 		},
 		containerId,
 		common.RedisKeys.WorkerNetworkIpOwnerPrefix(networkPrefix),
+		workerInstanceId,
+		storageNodeId,
 	).Err()
 }

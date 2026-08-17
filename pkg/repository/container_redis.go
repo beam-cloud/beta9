@@ -22,6 +22,8 @@ const (
 	containerStateLockInterval = 50 * time.Millisecond
 )
 
+const containerStateVolumePlanEnqueuedField = "state_volume_plan_enqueued"
+
 var containerStateLockOptions = common.RedisLockOptions{
 	TtlS:          containerStateLockTTL,
 	Retries:       containerStateLockRetries,
@@ -156,6 +158,30 @@ redis.call("SREM", KEYS[3], ARGV[2])
 return 1
 `)
 
+var releaseUnadmittedConcurrencyReservationScript = redis.NewScript(`
+if redis.call("EXISTS", KEYS[4]) == 1 then
+	local status = redis.call("HGET", KEYS[4], "status")
+	if status == ARGV[3] or status == ARGV[4] or status == ARGV[5] then return 0 end
+end
+if redis.call("EXISTS", KEYS[2]) == 0 then
+	redis.call("SREM", KEYS[3], ARGV[2])
+	return 0
+end
+if redis.call("HGET", KEYS[1], "initialized") ~= "1" then return "repairing" end
+local reserved_gpu = tonumber(redis.call("HGET", KEYS[2], "gpu_count") or "0")
+local reserved_cpu = tonumber(redis.call("HGET", KEYS[2], "cpu") or "0")
+local used_gpu = tonumber(redis.call("HGET", KEYS[1], "gpu_count") or "0")
+local used_cpu = tonumber(redis.call("HGET", KEYS[1], "cpu") or "0")
+if reserved_gpu ~= 0 then used_gpu = redis.call("HINCRBY", KEYS[1], "gpu_count", -reserved_gpu) end
+if reserved_cpu ~= 0 then used_cpu = redis.call("HINCRBY", KEYS[1], "cpu", -reserved_cpu) end
+if used_gpu < 0 then redis.call("HSET", KEYS[1], "gpu_count", 0) end
+if used_cpu < 0 then redis.call("HSET", KEYS[1], "cpu", 0) end
+redis.call("HSET", KEYS[1], "updated_at", ARGV[1])
+redis.call("DEL", KEYS[2])
+redis.call("SREM", KEYS[3], ARGV[2])
+return 1
+`)
+
 type ContainerRedisRepository struct {
 	rdb  *common.RedisClient
 	lock *common.RedisLock
@@ -193,6 +219,113 @@ func (cr *ContainerRedisRepository) GetContainerState(containerId string) (*type
 
 	return state, nil
 }
+
+func (cr *ContainerRedisRepository) SetStateRestoreReceipt(containerId, workerInstanceId string, receipt *types.StateRestoreReceipt, expectedAssignment *types.ContainerState) error {
+	if receipt == nil || receipt.StateSnapshotId == "" || expectedAssignment == nil || expectedAssignment.WorkerId == "" ||
+		expectedAssignment.MachineId == "" || workerInstanceId == "" || expectedAssignment.StateSnapshotId == "" || expectedAssignment.AssignmentId == "" {
+		return fmt.Errorf("state restore receipt, snapshot id, and exact worker process assignment are required")
+	}
+	canonical := *receipt
+	canonical.Generations = append([]types.StateGeneration(nil), receipt.Generations...)
+	sort.Slice(canonical.Generations, func(i, j int) bool {
+		if canonical.Generations[i].Root != canonical.Generations[j].Root {
+			return canonical.Generations[i].Root
+		}
+		if canonical.Generations[i].VolumeId != canonical.Generations[j].VolumeId {
+			return canonical.Generations[i].VolumeId < canonical.Generations[j].VolumeId
+		}
+		return canonical.Generations[i].GenerationId < canonical.Generations[j].GenerationId
+	})
+	payload, err := json.Marshal(&canonical)
+	if err != nil {
+		return fmt.Errorf("serialize state restore receipt: %w", err)
+	}
+	stateKey := common.RedisKeys.SchedulerContainerState(containerId)
+	workerKey := common.RedisKeys.SchedulerWorkerState(expectedAssignment.WorkerId)
+	result, err := setStateRestoreReceiptScript.Run(context.TODO(), cr.rdb, []string{stateKey, workerKey}, payload,
+		expectedAssignment.WorkerId, expectedAssignment.MachineId, workerInstanceId, expectedAssignment.StateSnapshotId,
+		expectedAssignment.StateVolumePlanId, expectedAssignment.StateVolumePlanHash, expectedAssignment.AssignmentId).Int()
+	if err != nil {
+		return err
+	}
+	switch result {
+	case 0, 1:
+		return nil
+	case -1:
+		return &types.ErrContainerStateNotFound{ContainerId: containerId}
+	case -2:
+		return fmt.Errorf("state restore receipt is immutable and conflicts with the stored worker outcome")
+	case -3:
+		return fmt.Errorf("state restore receipt assignment changed before its outcome could be persisted")
+	case -4:
+		return fmt.Errorf("state restore receipt worker process was superseded before its outcome could be persisted")
+	default:
+		return fmt.Errorf("unexpected state restore receipt CAS result %d", result)
+	}
+}
+
+var setStateRestoreReceiptScript = redis.NewScript(`
+if redis.call("EXISTS", KEYS[1]) ~= 1 then return -1 end
+if redis.call("EXISTS", KEYS[2]) ~= 1 or
+   (redis.call("HGET", KEYS[2], "instance_id") or "") ~= ARGV[4] or
+   (redis.call("HGET", KEYS[2], "machine_id") or "") ~= ARGV[3] then return -4 end
+if (redis.call("HGET", KEYS[1], "worker_id") or "") ~= ARGV[2] or
+   (redis.call("HGET", KEYS[1], "machine_id") or "") ~= ARGV[3] or
+   (redis.call("HGET", KEYS[1], "state_snapshot_id") or "") ~= ARGV[5] or
+   (redis.call("HGET", KEYS[1], "state_volume_plan_id") or "") ~= ARGV[6] or
+   (redis.call("HGET", KEYS[1], "state_volume_plan_hash") or "") ~= ARGV[7] or
+   (redis.call("HGET", KEYS[1], "schedule_delivery_token") or "") ~= ARGV[8] then return -3 end
+local stored = redis.call("HGET", KEYS[1], "state_restore_receipt")
+local stored_assignment = redis.call("HGET", KEYS[1], "state_restore_receipt_assignment")
+local stored_instance = redis.call("HGET", KEYS[1], "state_restore_receipt_worker_instance")
+if stored and stored_assignment == ARGV[8] and stored_instance == ARGV[4] then
+  if stored == ARGV[1] then return 0 end
+  return -2
+end
+redis.call("HSET", KEYS[1], "state_restore_receipt", ARGV[1], "state_restore_receipt_assignment", ARGV[8],
+  "state_restore_receipt_worker_instance", ARGV[4], "state_restore_receipt_storage_node", ARGV[3])
+return 1
+`)
+
+func (cr *ContainerRedisRepository) GetStateRestoreReceipt(containerId string) (*types.StateRestoreReceipt, error) {
+	state, err := cr.GetContainerState(containerId)
+	if err != nil {
+		return nil, err
+	}
+	value, err := getStateRestoreReceiptScript.Run(context.TODO(), cr.rdb,
+		[]string{common.RedisKeys.SchedulerContainerState(containerId), common.RedisKeys.SchedulerWorkerState(state.WorkerId)},
+		state.WorkerId).Result()
+	if err != nil {
+		return nil, err
+	}
+	payload, ok := value.(string)
+	if !ok || payload == "" {
+		return nil, redis.Nil
+	}
+	var receipt types.StateRestoreReceipt
+	if err := json.Unmarshal([]byte(payload), &receipt); err != nil {
+		return nil, fmt.Errorf("deserialize state restore receipt: %w", err)
+	}
+	return &receipt, nil
+}
+
+var getStateRestoreReceiptScript = redis.NewScript(`
+if redis.call("EXISTS", KEYS[1]) ~= 1 then return false end
+if redis.call("EXISTS", KEYS[2]) ~= 1 or
+   (redis.call("HGET", KEYS[1], "worker_id") or "") ~= ARGV[1] then return false end
+local receipt = redis.call("HGET", KEYS[1], "state_restore_receipt")
+if not receipt then return false end
+if (redis.call("HGET", KEYS[1], "state_restore_receipt_assignment") or "") ~=
+   (redis.call("HGET", KEYS[1], "schedule_delivery_token") or "") then return false end
+if (redis.call("HGET", KEYS[1], "state_restore_receipt_worker_instance") or "") ~=
+   (redis.call("HGET", KEYS[2], "instance_id") or "") or
+   (redis.call("HGET", KEYS[1], "state_restore_receipt_storage_node") or "") ~=
+   (redis.call("HGET", KEYS[2], "machine_id") or "") then return false end
+local ok, decoded = pcall(cjson.decode, receipt)
+if not ok or not decoded or (decoded.state_snapshot_id or "") ~=
+   (redis.call("HGET", KEYS[1], "state_snapshot_id") or "") then return false end
+return receipt
+`)
 
 func (cr *ContainerRedisRepository) GetContainerStatuses(containerIds []string) (map[string]types.ContainerStatus, error) {
 	statuses := make(map[string]types.ContainerStatus, len(containerIds))
@@ -248,10 +381,16 @@ func (cr *ContainerRedisRepository) setContainerState(containerId string, state 
 		"workspace_id", state.WorkspaceId,
 		"gpu", state.Gpu,
 		"gpu_count", state.GpuCount,
+		"nbd_devices", state.NbdDevices,
 		"cpu", state.Cpu,
 		"memory", state.Memory,
 		"worker_id", state.WorkerId,
 		"machine_id", state.MachineId,
+		"state_snapshot_id", state.StateSnapshotId,
+		"state_fork", state.StateFork,
+		"schedule_delivery_token", state.AssignmentId,
+		"state_volume_plan_id", state.StateVolumePlanId,
+		"state_volume_plan_hash", state.StateVolumePlanHash,
 	)
 	pipe.Expire(ctx, stateKey, time.Duration(types.ContainerStateTtlSWhilePending)*time.Second)
 	pipe.SAdd(ctx, stubIndexKey, stateKey)
@@ -265,6 +404,143 @@ func (cr *ContainerRedisRepository) setContainerState(containerId string, state 
 	}
 
 	return nil
+}
+
+var setContainerStateWithStateVolumeOutboxScript = redis.NewScript(`
+if redis.call("EXISTS", KEYS[7]) == 1 then return -7 end
+local state_exists = redis.call("EXISTS", KEYS[1])
+if state_exists == 1 then
+  local stored_plan = redis.call("HGET", KEYS[1], "state_volume_plan_id")
+  local stored_hash = redis.call("HGET", KEYS[1], "state_volume_plan_hash")
+  if stored_plan ~= ARGV[13] or stored_hash ~= ARGV[14] then return -2 end
+  local status = redis.call("HGET", KEYS[1], "status")
+  local worker_id = redis.call("HGET", KEYS[1], "worker_id") or ""
+  if status ~= ARGV[2] or worker_id ~= "" then return -4 end
+  if ARGV[20] == "1" then
+    if redis.call("EXISTS", KEYS[6]) ~= 1 or
+       redis.call("HGET", KEYS[6], "workspace_id") ~= ARGV[5] or
+       redis.call("HGET", KEYS[6], "container_id") ~= ARGV[1] or
+       tonumber(redis.call("HGET", KEYS[6], "gpu_count") or "-1") ~= tonumber(ARGV[23]) or
+       tonumber(redis.call("HGET", KEYS[6], "cpu") or "-1") ~= tonumber(ARGV[24]) then return -6 end
+  end
+  local enqueued = redis.call("HGET", KEYS[1], ARGV[19])
+  if enqueued then
+    if enqueued == ARGV[13] then return 0 end
+    return -2
+  end
+  if redis.call("EXISTS", KEYS[5]) ~= 1 then return -1 end
+  if redis.call("HGET", KEYS[5], "plan_id") ~= ARGV[13] or
+     redis.call("HGET", KEYS[5], "request_hash") ~= ARGV[14] or
+     redis.call("HGET", KEYS[5], "container_id") ~= ARGV[1] or
+     redis.call("HGET", KEYS[5], "payload") ~= ARGV[17] or
+     redis.call("HGET", KEYS[5], "ready_at") ~= ARGV[18] then return -2 end
+  return 0
+end
+if redis.call("EXISTS", KEYS[5]) == 1 then return -3 end
+if ARGV[20] == "1" then
+  if redis.call("HGET", KEYS[8], "initialized") ~= "1" then return -8 end
+  if redis.call("EXISTS", KEYS[6]) == 1 then
+    if redis.call("HGET", KEYS[6], "workspace_id") ~= ARGV[5] or
+       redis.call("HGET", KEYS[6], "container_id") ~= ARGV[1] or
+       tonumber(redis.call("HGET", KEYS[6], "gpu_count") or "-1") ~= tonumber(ARGV[23]) or
+       tonumber(redis.call("HGET", KEYS[6], "cpu") or "-1") ~= tonumber(ARGV[24]) then return -6 end
+  else
+    local used_gpu = tonumber(redis.call("HGET", KEYS[8], "gpu_count") or "0")
+    local used_cpu = tonumber(redis.call("HGET", KEYS[8], "cpu") or "0")
+    if used_gpu + tonumber(ARGV[23]) > tonumber(ARGV[21]) then return -9 end
+    if used_cpu + tonumber(ARGV[24]) > tonumber(ARGV[22]) then return -10 end
+    redis.call("HINCRBY", KEYS[8], "gpu_count", ARGV[23])
+    redis.call("HINCRBY", KEYS[8], "cpu", ARGV[24])
+    redis.call("HSET", KEYS[8], "updated_at", ARGV[25])
+    redis.call("HSET", KEYS[6], "workspace_id", ARGV[5], "container_id", ARGV[1],
+      "gpu_count", ARGV[23], "cpu", ARGV[24], "created_at", ARGV[25])
+  end
+  redis.call("SADD", KEYS[9], ARGV[1])
+end
+redis.call("HSET", KEYS[1],
+  "container_id", ARGV[1], "status", ARGV[2], "scheduled_at", ARGV[3],
+  "stub_id", ARGV[4], "workspace_id", ARGV[5], "gpu", ARGV[6],
+  "gpu_count", ARGV[7], "nbd_devices", ARGV[8], "cpu", ARGV[9],
+  "memory", ARGV[10], "worker_id", ARGV[11], "machine_id", ARGV[12],
+  "state_volume_plan_id", ARGV[13], "state_volume_plan_hash", ARGV[14],
+  "state_snapshot_id", ARGV[26], "state_fork", ARGV[27])
+redis.call("EXPIRE", KEYS[1], ARGV[15])
+redis.call("SADD", KEYS[2], KEYS[1])
+redis.call("SADD", KEYS[3], KEYS[1])
+redis.call("ZADD", KEYS[4], ARGV[16], KEYS[1])
+redis.call("HSET", KEYS[5], "plan_id", ARGV[13], "container_id", ARGV[1],
+  "request_hash", ARGV[14], "payload", ARGV[17], "ready_at", ARGV[18])
+redis.call("EXPIRE", KEYS[5], ARGV[15])
+return 1
+`)
+
+func concurrencyGPULimit(quota *types.ConcurrencyLimit) int64 {
+	if quota == nil {
+		return 0
+	}
+	return int64(quota.GPULimit)
+}
+
+func concurrencyCPULimit(quota *types.ConcurrencyLimit) int64 {
+	if quota == nil {
+		return 0
+	}
+	return int64(quota.CPUMillicoreLimit)
+}
+
+func (cr *ContainerRedisRepository) setContainerStateWithStateVolumeOutbox(state *types.ContainerState, payload []byte, readyAt time.Time, quota *types.ConcurrencyLimit) error {
+	if state == nil || state.ContainerId == "" || state.StateVolumePlanId == "" || state.StateVolumePlanHash == "" || len(payload) == 0 || readyAt.IsZero() {
+		return fmt.Errorf("state-volume container admission is incomplete")
+	}
+	stateKey := common.RedisKeys.SchedulerContainerState(state.ContainerId)
+	ttlSeconds := types.ContainerStateTtlSWhilePending
+	expiresAt := time.Now().Add(time.Duration(ttlSeconds) * time.Second).Unix()
+	quotaRequired := "0"
+	if quota != nil {
+		quotaRequired = "1"
+	}
+	result, err := setContainerStateWithStateVolumeOutboxScript.Run(context.TODO(), cr.rdb, []string{
+		stateKey,
+		common.RedisKeys.SchedulerContainerIndex(state.StubId),
+		common.RedisKeys.SchedulerContainerWorkspaceIndex(state.WorkspaceId),
+		common.RedisKeys.SchedulerContainerStateIndex(),
+		common.RedisKeys.SchedulerStateVolumePlanOutbox(state.StateVolumePlanId),
+		common.RedisKeys.WorkspaceConcurrencyLimitReservation(state.WorkspaceId, state.ContainerId),
+		common.RedisKeys.SchedulerStateVolumePlanTombstone(state.StateVolumePlanId),
+		common.RedisKeys.WorkspaceConcurrencyLimitUsage(state.WorkspaceId),
+		common.RedisKeys.WorkspaceConcurrencyLimitReservationIndex(state.WorkspaceId),
+	}, state.ContainerId, string(state.Status), state.ScheduledAt, state.StubId, state.WorkspaceId,
+		state.Gpu, state.GpuCount, state.NbdDevices, state.Cpu, state.Memory, state.WorkerId, state.MachineId,
+		state.StateVolumePlanId, state.StateVolumePlanHash, ttlSeconds, expiresAt, payload, readyAt.UnixNano(),
+		containerStateVolumePlanEnqueuedField, quotaRequired, concurrencyGPULimit(quota), concurrencyCPULimit(quota),
+		state.GpuCount, state.Cpu, time.Now().Unix(), state.StateSnapshotId, state.StateFork).Int()
+	if err != nil {
+		return fmt.Errorf("atomically admit state-volume container and outbox: %w", err)
+	}
+	switch result {
+	case 0, 1:
+		return nil
+	case -4:
+		return &types.ContainerAlreadyScheduledError{Msg: "state-volume container is already assigned or no longer pending"}
+	case -2:
+		return &types.ContainerAlreadyScheduledError{Msg: "container belongs to a different state-volume admission"}
+	case -1:
+		return fmt.Errorf("state-volume admission lost its exact outbox before promotion")
+	case -3:
+		return fmt.Errorf("state-volume admission found an outbox without its exact container state")
+	case -7:
+		return fmt.Errorf("state-volume attachment plan was durably aborted")
+	case -6:
+		return fmt.Errorf("state-volume concurrency reservation conflicts with the exact admission")
+	case -8:
+		return errConcurrencyCounterRepairing
+	case -9:
+		return &types.ThrottledByConcurrencyLimitError{Reason: "gpu quota exceeded"}
+	case -10:
+		return &types.ThrottledByConcurrencyLimitError{Reason: "cpu quota exceeded"}
+	default:
+		return fmt.Errorf("atomically admit state-volume container and outbox: unexpected result %d", result)
+	}
 }
 
 func (cr *ContainerRedisRepository) SetContainerExitCode(containerId string, exitCode int) error {
@@ -413,6 +689,40 @@ redis.call("ZADD", KEYS[2], ARGV[4], KEYS[1])
 return 1
 `)
 
+const stateVolumePlanAbortingField = "state_volume_plan_aborting"
+
+var fencePendingContainerStateVolumePlanScript = redis.NewScript(`
+if redis.call("EXISTS", KEYS[4]) == 1 then
+  if redis.call("HGET", KEYS[4], "container_id") == ARGV[9] and
+     redis.call("HGET", KEYS[4], "request_hash") == ARGV[6] then return 1 end
+  return -2
+end
+if redis.call("EXISTS", KEYS[1]) ~= 1 then
+  redis.call("HSET", KEYS[4], "container_id", ARGV[9], "request_hash", ARGV[6])
+  return 1
+end
+if redis.call("HGET", KEYS[1], "state_volume_plan_id") ~= ARGV[5] or
+   redis.call("HGET", KEYS[1], "state_volume_plan_hash") ~= ARGV[6] then return -2 end
+local worker_id = redis.call("HGET", KEYS[1], "worker_id") or ""
+if worker_id ~= "" then return -3 end
+if redis.call("HGET", KEYS[1], ARGV[8]) then return -3 end
+local status = redis.call("HGET", KEYS[1], "status")
+if status ~= ARGV[1] then
+  if status ~= ARGV[2] or redis.call("HGET", KEYS[1], ARGV[7]) ~= ARGV[5] then return -3 end
+end
+if redis.call("EXISTS", KEYS[3]) == 1 then
+  if redis.call("HGET", KEYS[3], "plan_id") ~= ARGV[5] or
+     redis.call("HGET", KEYS[3], "container_id") ~= ARGV[9] or
+     redis.call("HGET", KEYS[3], "request_hash") ~= ARGV[6] then return -2 end
+  redis.call("DEL", KEYS[3])
+end
+redis.call("HSET", KEYS[1], "status", ARGV[2], ARGV[7], ARGV[5])
+redis.call("HSET", KEYS[4], "container_id", ARGV[9], "request_hash", ARGV[6])
+redis.call("EXPIRE", KEYS[1], ARGV[3])
+redis.call("ZADD", KEYS[2], ARGV[4], KEYS[1])
+return 1
+`)
+
 func (cr *ContainerRedisRepository) MarkPendingContainerStoppingIfUnassigned(containerId string, expirySeconds int64) (bool, error) {
 	lockKey := common.RedisKeys.SchedulerContainerLock(containerId)
 	if err := cr.lock.Acquire(context.TODO(), lockKey, containerStateLockOptions); err != nil {
@@ -432,6 +742,36 @@ func (cr *ContainerRedisRepository) MarkPendingContainerStoppingIfUnassigned(con
 		return false, fmt.Errorf("failed to stop unassigned pending container <%s>: %w", containerId, err)
 	}
 	return marked, nil
+}
+
+// FencePendingContainerStateVolumePlan installs an exact Redis tombstone
+// before PostgreSQL aborts an unadmitted attachment plan. A concurrent exact
+// retry can no longer recreate or dispatch the old request between stores.
+func (cr *ContainerRedisRepository) FencePendingContainerStateVolumePlan(containerId, planId, requestHash string, expirySeconds int64) (bool, error) {
+	if containerId == "" || planId == "" || requestHash == "" || expirySeconds <= 0 {
+		return false, fmt.Errorf("container, state-volume plan identity, and positive expiry are required")
+	}
+	result, err := fencePendingContainerStateVolumePlanScript.Run(context.TODO(), cr.rdb, []string{
+		common.RedisKeys.SchedulerContainerState(containerId),
+		common.RedisKeys.SchedulerContainerStateIndex(),
+		common.RedisKeys.SchedulerStateVolumePlanOutbox(planId),
+		common.RedisKeys.SchedulerStateVolumePlanTombstone(planId),
+	}, string(types.ContainerStatusPending), string(types.ContainerStatusStopping), expirySeconds,
+		time.Now().Add(time.Duration(expirySeconds)*time.Second).Unix(), planId, requestHash,
+		stateVolumePlanAbortingField, containerStateVolumePlanEnqueuedField, containerId).Int()
+	if err != nil {
+		return false, fmt.Errorf("fence pending state-volume container <%s>: %w", containerId, err)
+	}
+	switch result {
+	case 0:
+		return false, nil
+	case 1:
+		return true, nil
+	case -2:
+		return false, fmt.Errorf("pending container belongs to a different state-volume attachment plan")
+	default:
+		return false, fmt.Errorf("pending state-volume container is assigned, enqueued, or no longer abortable")
+	}
 }
 
 func (cr *ContainerRedisRepository) DeleteContainerState(containerId string) error {
@@ -1078,10 +1418,17 @@ func (c *ContainerRedisRepository) tryReserveContainerConcurrencyForPending(quot
 }
 
 func (c *ContainerRedisRepository) CreateContainerStateWithConcurrencyLimit(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error {
-	return c.createContainerState(quota, request)
+	return c.createContainerState(quota, request, nil, time.Time{})
 }
 
-func (c *ContainerRedisRepository) createContainerState(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error {
+func (c *ContainerRedisRepository) CreateContainerStateWithConcurrencyLimitAndStateVolumeOutbox(quota *types.ConcurrencyLimit, request *types.ContainerRequest, payload []byte, readyAt time.Time) error {
+	if request == nil || request.StateVolumePlanId == "" || request.StateVolumePlanHash == "" || len(payload) == 0 || readyAt.IsZero() {
+		return fmt.Errorf("state-volume admission requires an exact plan identity, canonical request payload, and ready time")
+	}
+	return c.createContainerState(quota, request, payload, readyAt)
+}
+
+func (c *ContainerRedisRepository) createContainerState(quota *types.ConcurrencyLimit, request *types.ContainerRequest, stateVolumePayload []byte, stateVolumeReadyAt time.Time) error {
 	lockKey := common.RedisKeys.SchedulerContainerLock(request.ContainerId)
 	if err := c.lock.Acquire(context.TODO(), lockKey, containerStateLockOptions); err != nil {
 		return err
@@ -1096,30 +1443,70 @@ func (c *ContainerRedisRepository) createContainerState(quota *types.Concurrency
 		status == string(types.ContainerStatusStopping) {
 		return &types.ContainerAlreadyScheduledError{Msg: "a container with this id is still active"}
 	}
-	if quota != nil {
+	if quota != nil && len(stateVolumePayload) == 0 {
 		if err := c.reserveContainerConcurrency(quota, request); err != nil {
 			return err
 		}
 	}
-	err = c.setContainerState(request.ContainerId, &types.ContainerState{
-		ContainerId: request.ContainerId,
-		StubId:      request.StubId,
-		WorkspaceId: request.WorkspaceId,
-		Status:      types.ContainerStatusPending,
-		ScheduledAt: time.Now().Unix(),
-		Gpu:         request.Gpu,
-		GpuCount:    request.GpuCount,
-		Cpu:         request.Cpu,
-		Memory:      request.Memory,
-		MachineId:   request.MachineId,
-	})
+	state := &types.ContainerState{
+		ContainerId:         request.ContainerId,
+		StubId:              request.StubId,
+		WorkspaceId:         request.WorkspaceId,
+		Status:              types.ContainerStatusPending,
+		ScheduledAt:         time.Now().Unix(),
+		Gpu:                 request.Gpu,
+		GpuCount:            request.GpuCount,
+		NbdDevices:          request.RequiredNbdDevices(),
+		Cpu:                 request.Cpu,
+		Memory:              request.Memory,
+		MachineId:           request.MachineId,
+		StateSnapshotId:     request.StateSnapshotId,
+		StateFork:           request.StateFork,
+		StateVolumePlanId:   request.StateVolumePlanId,
+		StateVolumePlanHash: request.StateVolumePlanHash,
+	}
+	if len(stateVolumePayload) != 0 {
+		err = c.admitStateVolumeContainer(quota, request, state, stateVolumePayload, stateVolumeReadyAt)
+	} else {
+		err = c.setContainerState(request.ContainerId, state)
+	}
 	if err == nil {
 		return nil
 	}
-	if quota != nil {
+	if quota != nil && len(stateVolumePayload) == 0 {
 		if releaseErr := c.releaseContainerConcurrencyReservation(context.TODO(), request.WorkspaceId, request.ContainerId); releaseErr != nil {
 			return errors.Join(err, fmt.Errorf("failed to release concurrency reservation after container state error: %w", releaseErr))
 		}
+	}
+	return err
+}
+
+func (c *ContainerRedisRepository) admitStateVolumeContainer(quota *types.ConcurrencyLimit, request *types.ContainerRequest, state *types.ContainerState, payload []byte, readyAt time.Time) error {
+	if quota != nil {
+		if err := c.ensureWorkspaceConcurrencyCounter(request.WorkspaceId); err != nil {
+			return err
+		}
+	}
+	err := c.setContainerStateWithStateVolumeOutbox(state, payload, readyAt, quota)
+	if errors.Is(err, errConcurrencyCounterRepairing) {
+		if ensureErr := c.ensureWorkspaceConcurrencyCounter(request.WorkspaceId); ensureErr != nil {
+			return ensureErr
+		}
+		return c.setContainerStateWithStateVolumeOutbox(state, payload, readyAt, quota)
+	}
+	var throttled *types.ThrottledByConcurrencyLimitError
+	if quota == nil || !errors.As(err, &throttled) {
+		return err
+	}
+	repaired, repairErr := c.repairWorkspaceConcurrencyCounterAfterThrottle(request.WorkspaceId)
+	if repairErr != nil {
+		return repairErr
+	}
+	if repaired {
+		err = c.setContainerStateWithStateVolumeOutbox(state, payload, readyAt, quota)
+	}
+	if err != nil {
+		metrics.RecordConcurrencyLimitThrottle(throttled.Reason, request)
 	}
 	return err
 }

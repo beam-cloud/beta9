@@ -1,4 +1,5 @@
 import datetime
+import uuid
 from typing import List, Optional
 
 import click
@@ -10,7 +11,7 @@ from ..abstractions.base.container import Container
 from ..channel import ServiceClient
 from ..cli import extraclick
 from ..clients.gateway import (
-    CheckpointContainerRequest,
+    GatewaySnapshotContainerStateRequest,
     ListContainersRequest,
     StopContainerRequest,
     StopContainerResponse,
@@ -185,21 +186,45 @@ def attach_to_container(_: ServiceClient, container_id: str):
 
 
 @management.command(
-    name="checkpoint",
-    help="Checkpoint a running container.",
+    name="snapshot-state",
+    help="Commit the container's complete writable root as one state snapshot.",
 )
 @click.argument(
     "container_id",
     required=True,
 )
+@click.option(
+    "--mode",
+    type=click.Choice(("live", "terminal")),
+    default="live",
+    show_default=True,
+)
+@click.option(
+    "--include-memory/--no-memory",
+    default=False,
+    help="Bind a CRIU memory checkpoint to a terminal state snapshot.",
+)
 @extraclick.pass_service_client
-def checkpoint_container(service: ServiceClient, container_id: str):
-    with terminal.progress("Creating checkpoint..."):
-        res = service.gateway.checkpoint_container(
-            CheckpointContainerRequest(container_id=container_id)
+def snapshot_container_state(
+    service: ServiceClient, container_id: str, mode: str, include_memory: bool
+):
+    if mode == "live" and include_memory:
+        raise click.UsageError("--include-memory requires --mode terminal")
+
+    with terminal.progress("Committing container state..."):
+        res = service.gateway.snapshot_container_state(
+            GatewaySnapshotContainerStateRequest(
+                container_id=container_id,
+                operation_id=str(uuid.uuid4()),
+                mode=mode,
+                include_memory=include_memory,
+            )
         )
 
     if res.ok:
-        terminal.success(f"Checkpoint created for container: {container_id} -> {res.checkpoint_id}")
+        terminal.success(
+            f"State snapshot committed for container: {container_id} -> "
+            f"{res.state_snapshot_id} ({res.restore_mode})"
+        )
     else:
         terminal.error(f"{res.error_msg}")

@@ -9,8 +9,6 @@ import (
 	"io"
 	"log/slog"
 	"net"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -25,11 +23,9 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/runtime"
 	types "github.com/beam-cloud/beta9/pkg/types"
-	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/grpc"
 )
 
 // MockRuntime is a mock implementation of runtime.Runtime for testing
@@ -69,30 +65,6 @@ type blockingCheckpointManager struct {
 	err     error
 	started chan bool
 	release chan struct{}
-}
-
-type contextBoundCheckpointBackend struct {
-	*fakeBackendRepoClient
-	started chan context.Context
-	release chan struct{}
-}
-
-func (b *contextBoundCheckpointBackend) CreateCheckpoint(
-	ctx context.Context,
-	_ *pb.CreateCheckpointRequest,
-	_ ...grpc.CallOption,
-) (*pb.CreateCheckpointResponse, error) {
-	b.started <- ctx
-	if b.release != nil {
-		select {
-		case <-b.release:
-			return &pb.CreateCheckpointResponse{Ok: true}, nil
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-	}
-	<-ctx.Done()
-	return nil, ctx.Err()
 }
 
 type terminalRunRuntime struct {
@@ -323,6 +295,7 @@ func TestTerminalCheckpointRejectsUnresolvedGvisorOOMKill(t *testing.T) {
 			Request:                  request,
 			CheckpointId:             "checkpoint",
 			TerminateAfterCheckpoint: true,
+			RequireListenerProof:     true,
 		})
 	}()
 
@@ -408,6 +381,7 @@ func TestTerminalCheckpointDoesNotResumeWatcherAfterOOMKillTimeoutAndForceDelete
 		Request:                  request,
 		CheckpointId:             "checkpoint",
 		TerminateAfterCheckpoint: true,
+		RequireListenerProof:     true,
 	})
 
 	require.ErrorContains(t, err, "container was terminated after OOM")
@@ -435,31 +409,6 @@ func (f *recordingOOMWatcherFactory) all() []*recordingOOMWatcher {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]*recordingOOMWatcher(nil), f.watchers...)
-}
-
-type roundTripFunc func(*http.Request) (*http.Response, error)
-
-func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
-	return f(request)
-}
-
-type trackingReadCloser struct {
-	reader     io.Reader
-	reachedEOF bool
-	closed     bool
-}
-
-func (b *trackingReadCloser) Read(p []byte) (int, error) {
-	n, err := b.reader.Read(p)
-	if err == io.EOF {
-		b.reachedEOF = true
-	}
-	return n, err
-}
-
-func (b *trackingReadCloser) Close() error {
-	b.closed = true
-	return nil
 }
 
 type checkpointErrorWriter struct{}
@@ -563,9 +512,9 @@ func TestTerminalRunRuntimeToleratesUnexpectedSecondRun(t *testing.T) {
 
 func TestCheckpointRuntimeEnvironmentOverrides(t *testing.T) {
 	gpuRequest := &types.ContainerRequest{
-		CheckpointEnabled: true,
-		Gpu:               "RTX4090",
-		Stub:              testServiceStub(t),
+		PersistentRoot: &types.PersistentRoot{Size: "1Gi"},
+		Gpu:            "RTX4090",
+		Stub:           testServiceStub(t),
 	}
 	gpuEnv := applyCheckpointRuntimeEnvironmentOverrides([]string{
 		"UV_USE_IO_URING=1",
@@ -591,9 +540,9 @@ func TestCheckpointRuntimeEnvironmentOverrides(t *testing.T) {
 	}
 
 	podEnv := applyCheckpointRuntimeEnvironmentOverrides(nil, &types.ContainerRequest{
-		CheckpointEnabled: true,
-		Gpu:               "RTX4090",
-		Stub:              testPodStub(t, false),
+		PersistentRoot: &types.PersistentRoot{Size: "1Gi"},
+		Gpu:            "RTX4090",
+		Stub:           testPodStub(t, false),
 	}, []string{"vllm", "serve"})
 	for _, want := range checkpointServiceLoopbackEnvOverrides {
 		if !slices.Contains(podEnv, want) {
@@ -602,9 +551,9 @@ func TestCheckpointRuntimeEnvironmentOverrides(t *testing.T) {
 	}
 
 	genericGPUEnv := applyCheckpointRuntimeEnvironmentOverrides(nil, &types.ContainerRequest{
-		CheckpointEnabled: true,
-		Gpu:               "RTX4090",
-		Stub:              testServiceStub(t),
+		PersistentRoot: &types.PersistentRoot{Size: "1Gi"},
+		Gpu:            "RTX4090",
+		Stub:           testServiceStub(t),
 	}, []string{"python", "app.py"})
 	if !slices.Contains(genericGPUEnv, "UV_USE_IO_URING=0") ||
 		slices.Contains(genericGPUEnv, "MASTER_ADDR=127.0.0.1") ||
@@ -616,8 +565,8 @@ func TestCheckpointRuntimeEnvironmentOverrides(t *testing.T) {
 	}
 
 	nonServiceEnv := applyCheckpointRuntimeEnvironmentOverrides(nil, &types.ContainerRequest{
-		CheckpointEnabled: true,
-		Gpu:               "RTX4090",
+		PersistentRoot: &types.PersistentRoot{Size: "1Gi"},
+		Gpu:            "RTX4090",
 	}, []string{"vllm", "serve"})
 	if slices.Contains(nonServiceEnv, "MASTER_ADDR=127.0.0.1") ||
 		slices.Contains(nonServiceEnv, "NCCL_SOCKET_IFNAME=lo") ||
@@ -627,8 +576,7 @@ func TestCheckpointRuntimeEnvironmentOverrides(t *testing.T) {
 	}
 
 	disabledEnv := applyCheckpointRuntimeEnvironmentOverrides([]string{"UV_USE_IO_URING=1"}, &types.ContainerRequest{
-		CheckpointEnabled: false,
-		Gpu:               "RTX4090",
+		Gpu: "RTX4090",
 	}, []string{"vllm", "serve"})
 	if !slices.Contains(disabledEnv, "UV_USE_IO_URING=1") || slices.Contains(disabledEnv, "UV_USE_IO_URING=0") {
 		t.Fatalf("checkpoint-disabled request should leave env unchanged: %v", disabledEnv)
@@ -651,481 +599,6 @@ func testPodStub(t *testing.T, isService bool) types.StubWithRelated {
 			Type:   types.StubType(types.StubTypePodDeployment),
 			Config: string(config),
 		},
-	}
-}
-
-func TestCheckpointHTTPReadinessRequiresStatusOK(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/ready" {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		w.WriteHeader(http.StatusServiceUnavailable)
-	}))
-	defer server.Close()
-
-	address := testHTTPServerAddress(t, server)
-	worker := &Worker{containerInstances: common.NewSafeMap[*ContainerInstance]()}
-	request := &types.ContainerRequest{ContainerId: "container-1"}
-	worker.containerInstances.Set(request.ContainerId, &ContainerInstance{
-		ContainerAddressMap: map[int32]string{8000: address},
-	})
-
-	err := worker.checkCheckpointHTTPReady(context.Background(), server.Client(), request, 8000, "/ready")
-	if err != nil {
-		t.Fatalf("checkCheckpointHTTPReady returned error: %v", err)
-	}
-
-	err = worker.checkCheckpointHTTPReady(context.Background(), server.Client(), request, 8000, "/not-ready")
-	if err == nil {
-		t.Fatal("expected non-200 readiness response to fail")
-	}
-}
-
-func TestCheckpointHTTPReadinessClosesConnection(t *testing.T) {
-	body := &trackingReadCloser{reader: strings.NewReader("ready")}
-	requestClose := false
-	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		requestClose = request.Close
-		return &http.Response{StatusCode: http.StatusOK, Body: body, Header: make(http.Header)}, nil
-	})}
-
-	if err := checkCheckpointHTTPReadyAt(context.Background(), client, "127.0.0.1:8000", "/ready"); err != nil {
-		t.Fatalf("checkCheckpointHTTPReadyAt returned error: %v", err)
-	}
-	if !requestClose || !body.reachedEOF || !body.closed {
-		t.Fatalf("readiness connection not fully closed: request_close=%t reached_eof=%t body_closed=%t", requestClose, body.reachedEOF, body.closed)
-	}
-}
-
-func TestCheckpointHTTPReadinessPrefersContainerIP(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
-
-	host, port := testHTTPServerHostPort(t, server)
-
-	worker := &Worker{containerInstances: common.NewSafeMap[*ContainerInstance]()}
-	request := &types.ContainerRequest{ContainerId: "container-direct-ip"}
-	worker.containerInstances.Set(request.ContainerId, &ContainerInstance{
-		ContainerIp:         host,
-		ContainerAddressMap: map[int32]string{port: "127.0.0.1:1"},
-	})
-
-	err := worker.checkCheckpointHTTPReady(context.Background(), server.Client(), request, port, "/ready")
-	if err != nil {
-		t.Fatalf("checkCheckpointHTTPReady returned error: %v", err)
-	}
-}
-
-func TestCheckpointHTTPReadinessAddresses(t *testing.T) {
-	tests := []struct {
-		name     string
-		instance *ContainerInstance
-		want     []string
-	}{
-		{
-			name: "container IPv4 before published route",
-			instance: &ContainerInstance{
-				ContainerIp:         "192.168.0.65",
-				ContainerAddressMap: map[int32]string{8000: "10.42.0.215:43131"},
-			},
-			want: []string{
-				"192.168.0.65:8000",
-				"[fd00:abcd::41]:8000",
-				"10.42.0.215:43131",
-			},
-		},
-		{
-			name: "container IPv6 before published route",
-			instance: &ContainerInstance{
-				ContainerIp:         "fd00:abcd::41",
-				ContainerAddressMap: map[int32]string{8000: "[2600:1f18::1]:43131"},
-			},
-			want: []string{
-				"[fd00:abcd::41]:8000",
-				"[2600:1f18::1]:43131",
-			},
-		},
-		{
-			name: "published route only",
-			instance: &ContainerInstance{
-				ContainerAddressMap: map[int32]string{8000: "10.42.0.215:43131"},
-			},
-			want: []string{"10.42.0.215:43131"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := checkpointHTTPReadinessAddresses(tt.instance, 8000)
-			if !slices.Equal(got, tt.want) {
-				t.Fatalf("checkpoint readiness addresses = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestWaitForCheckpointHTTPReadinessLogsWaitingAndReady(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/models" {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
-
-	address := testHTTPServerAddress(t, server)
-	worker := &Worker{containerInstances: common.NewSafeMap[*ContainerInstance]()}
-	request := &types.ContainerRequest{
-		ContainerId: "container-ready-log",
-		Ports:       []uint32{8000},
-	}
-	worker.containerInstances.Set(request.ContainerId, &ContainerInstance{
-		ContainerAddressMap: map[int32]string{8000: address},
-	})
-	trigger := &types.CheckpointTrigger{
-		Type:           checkpointTriggerHTTP,
-		HttpPath:       "v1/models",
-		TimeoutSeconds: 1,
-	}
-	var output bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&output, nil))
-
-	if err := worker.waitForCheckpointHTTPReadiness(context.Background(), request, trigger, logger); err != nil {
-		t.Fatalf("waitForCheckpointHTTPReadiness returned error: %v", err)
-	}
-
-	logs := output.String()
-	if !strings.Contains(logs, "Waiting for container HTTP readiness before checkpoint (port 8000, path /v1/models)") {
-		t.Fatalf("expected waiting log, got: %s", logs)
-	}
-	if !strings.Contains(logs, "Container HTTP readiness reached for checkpoint") {
-		t.Fatalf("expected ready log, got: %s", logs)
-	}
-}
-
-func testHTTPServerAddress(t *testing.T, server *httptest.Server) string {
-	t.Helper()
-	return strings.TrimPrefix(server.URL, "http://")
-}
-
-func testHTTPServerHostPort(t *testing.T, server *httptest.Server) (string, int32) {
-	t.Helper()
-
-	host, portText, err := net.SplitHostPort(testHTTPServerAddress(t, server))
-	if err != nil {
-		t.Fatalf("split test server address: %v", err)
-	}
-	port, err := strconv.Atoi(portText)
-	if err != nil {
-		t.Fatalf("parse test server port: %v", err)
-	}
-	return host, int32(port)
-}
-
-func TestCheckpointCreateLockIsPerStub(t *testing.T) {
-	worker := &Worker{stopContainerChan: make(chan stopContainerEvent, 1)}
-	request := &types.ContainerRequest{ContainerId: "container", WorkspaceId: "workspace", StubId: "stub"}
-
-	state, acquired := worker.acquireCheckpointCreateLock(request)
-	if !acquired {
-		t.Fatal("first checkpoint lock acquisition failed")
-	}
-	if _, acquired := worker.acquireCheckpointCreateLock(request); acquired {
-		t.Fatal("second checkpoint lock acquisition succeeded")
-	}
-	worker.finishCheckpointCreate(request, state)
-	if _, acquired := worker.acquireCheckpointCreateLock(request); !acquired {
-		t.Fatal("checkpoint lock was not released")
-	}
-}
-
-func checkpointStopInstance(request *types.ContainerRequest, reason types.StopContainerReason) *ContainerInstance {
-	return &ContainerInstance{Request: request, StopReason: reason}
-}
-
-func TestAutomaticStopIsDeferredDuringCheckpoint(t *testing.T) {
-	request := &types.ContainerRequest{ContainerId: "container", WorkspaceId: "workspace", StubId: "stub"}
-	worker := &Worker{
-		containerInstances: common.NewSafeMap[*ContainerInstance](),
-		stopContainerChan:  make(chan stopContainerEvent, 1),
-	}
-	worker.containerInstances.Set(request.ContainerId, &ContainerInstance{
-		Id:         request.ContainerId,
-		Request:    request,
-		StopReason: types.StopContainerReasonScheduler,
-	})
-	state, acquired := worker.acquireCheckpointCreateLock(request)
-	if !acquired {
-		t.Fatal("checkpoint lock acquisition failed")
-	}
-	runcRuntime := NewMockRuntime(types.ContainerRuntimeRunc.String(), runtime.Capabilities{CheckpointRestore: true})
-	if worker.awaitTerminalAutoCheckpointStop(context.Background(), request, runcRuntime, 0) {
-		t.Fatal("checkpoint was terminal before a stop was deferred")
-	}
-
-	if err := worker.stopContainer(request.ContainerId, false); err != nil {
-		t.Fatalf("defer scheduler stop: %v", err)
-	}
-	if err := worker.stopContainer(request.ContainerId, true); err != nil {
-		t.Fatalf("coalesce scheduler kill: %v", err)
-	}
-	if worker.deferStopForCheckpoint(checkpointStopInstance(request, types.StopContainerReasonUser), false) {
-		t.Fatal("user stop was deferred")
-	}
-	otherRequest := &types.ContainerRequest{
-		ContainerId: "other-container",
-		WorkspaceId: request.WorkspaceId,
-		StubId:      request.StubId,
-	}
-	if worker.deferStopForCheckpoint(checkpointStopInstance(otherRequest, types.StopContainerReasonScheduler), false) {
-		t.Fatal("stop for a different container was deferred")
-	}
-	if !worker.awaitTerminalAutoCheckpointStop(context.Background(), request, NewMockRuntime(types.ContainerRuntimeGvisor.String(), runtime.Capabilities{CheckpointRestore: true}), 0) {
-		t.Fatal("terminal gvisor checkpoint was not detected")
-	}
-	if !worker.awaitTerminalAutoCheckpointStop(context.Background(), request, runcRuntime, 0) {
-		t.Fatal("terminal runc checkpoint was not detected")
-	}
-	waitDone := make(chan bool, 1)
-	go func() {
-		waitDone <- worker.waitForTerminalAutoCheckpoint(context.Background(), request)
-	}()
-	select {
-	case <-waitDone:
-		t.Fatal("terminal checkpoint wait returned before completion")
-	default:
-	}
-
-	worker.finishCheckpointCreate(request, state)
-	if runtimeStopped := <-waitDone; runtimeStopped {
-		t.Fatal("non-terminal checkpoint reported a stopped runtime")
-	}
-	select {
-	case event := <-worker.stopContainerChan:
-		if event.ContainerId != request.ContainerId || !event.Kill {
-			t.Fatalf("unexpected deferred stop: %+v", event)
-		}
-	default:
-		t.Fatal("deferred stop was not replayed")
-	}
-	if worker.deferStopForCheckpoint(checkpointStopInstance(request, types.StopContainerReasonScheduler), false) {
-		t.Fatal("stop remained deferred after checkpoint completion")
-	}
-	if worker.awaitTerminalAutoCheckpointStop(context.Background(), request, runcRuntime, 0) {
-		t.Fatal("checkpoint remained terminal after completion")
-	}
-}
-
-func TestGvisorOOMBypassesAutomaticCheckpointDeferral(t *testing.T) {
-	request := &types.ContainerRequest{ContainerId: "oom-container", WorkspaceId: "workspace", StubId: "stub"}
-	rt := NewMockRuntime(types.ContainerRuntimeGvisor.String(), runtime.Capabilities{CheckpointRestore: true})
-	worker := &Worker{
-		ctx:                context.Background(),
-		runtime:            rt,
-		containerInstances: common.NewSafeMap[*ContainerInstance](),
-		stopContainerChan:  make(chan stopContainerEvent, 1),
-	}
-	worker.containerInstances.Set(request.ContainerId, &ContainerInstance{
-		Id:         request.ContainerId,
-		Request:    request,
-		Runtime:    rt,
-		StopReason: types.StopContainerReasonScheduler,
-	})
-	state, acquired := worker.acquireCheckpointCreateLock(request)
-	require.True(t, acquired)
-	defer worker.finishCheckpointCreate(request, state)
-	var isOOMKilled atomic.Bool
-
-	err := worker.handleOOMKill(
-		context.Background(),
-		request.ContainerId,
-		request,
-		slog.New(slog.NewTextHandler(io.Discard, nil)),
-		&isOOMKilled,
-	)
-
-	require.NoError(t, err)
-	require.True(t, isOOMKilled.Load())
-	require.True(t, rt.killCalled)
-	require.Equal(t, syscall.SIGKILL, rt.killSignal)
-	select {
-	case event := <-worker.stopContainerChan:
-		t.Fatalf("OOM kill was deferred behind checkpoint: %+v", event)
-	default:
-	}
-}
-
-func TestTerminalCheckpointDoesNotReplaySatisfiedStop(t *testing.T) {
-	request := &types.ContainerRequest{ContainerId: "container", WorkspaceId: "workspace", StubId: "stub"}
-	worker := &Worker{stopContainerChan: make(chan stopContainerEvent, 1)}
-	state, acquired := worker.acquireCheckpointCreateLock(request)
-	if !acquired {
-		t.Fatal("checkpoint lock acquisition failed")
-	}
-	if !worker.deferStopForCheckpoint(checkpointStopInstance(request, types.StopContainerReasonScheduler), true) {
-		t.Fatal("scheduler stop was not deferred")
-	}
-	if !worker.awaitTerminalAutoCheckpointStop(
-		context.Background(),
-		request,
-		NewMockRuntime(types.ContainerRuntimeRunc.String(), runtime.Capabilities{CheckpointRestore: true}),
-		0,
-	) {
-		t.Fatal("checkpoint was not marked terminal")
-	}
-
-	waitDone := make(chan bool, 1)
-	go func() {
-		waitDone <- worker.waitForTerminalAutoCheckpoint(context.Background(), request)
-	}()
-	time.Sleep(20 * time.Millisecond)
-	worker.markTerminalCheckpointRuntimeStopped(request)
-	worker.finishCheckpointCreate(request, state)
-	if runtimeStopped := <-waitDone; !runtimeStopped {
-		t.Fatal("terminal checkpoint did not report a stopped runtime")
-	}
-
-	select {
-	case event := <-worker.stopContainerChan:
-		t.Fatalf("terminal checkpoint replayed satisfied stop: %+v", event)
-	default:
-	}
-}
-
-func TestDirectTerminalCheckpointWaitsUntilPersistenceFailure(t *testing.T) {
-	root := t.TempDir()
-	containerID := "terminal-container"
-	request := &types.ContainerRequest{
-		ContainerId: containerID,
-		WorkspaceId: "workspace",
-		StubId:      "stub",
-	}
-	checkpointPath := filepath.Join(root, "checkpoint")
-	if err := os.MkdirAll(checkpointPath, 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(checkpointPath, "inventory.img"), []byte("runtime"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	overlayRoot := filepath.Join(root, "overlay", "merged")
-	upperPath := filepath.Join(root, "overlay", "upper")
-	if err := os.MkdirAll(upperPath, 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(upperPath, "state.txt"), []byte("filesystem"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	manager := &blockingCheckpointManager{
-		path:    checkpointPath,
-		started: make(chan bool, 1),
-		release: make(chan struct{}),
-	}
-	backend := &contextBoundCheckpointBackend{
-		fakeBackendRepoClient: &fakeBackendRepoClient{},
-		started:               make(chan context.Context, 1),
-		release:               make(chan struct{}),
-	}
-	rt := &terminalRunRuntime{
-		MockRuntime: NewMockRuntime(types.ContainerRuntimeRunc.String(), runtime.Capabilities{CheckpointRestore: true}),
-		entered:     make(chan struct{}),
-		release:     make(chan struct{}),
-	}
-	worker := &Worker{
-		containerInstances: common.NewSafeMap[*ContainerInstance](),
-		criuManager:        manager,
-		backendRepoClient:  backend,
-	}
-	instance := &ContainerInstance{
-		Id:      containerID,
-		Request: request,
-		Runtime: rt,
-		Overlay: common.NewContainerOverlay(request, overlayRoot, filepath.Join(root, "overlay-storage")),
-	}
-	worker.containerInstances.Set(containerID, instance)
-	lifecycleCtx, cancelLifecycle := context.WithCancel(context.Background())
-	defer cancelLifecycle()
-	lifecycleDone := make(chan error, 1)
-	go func() {
-		_, err := worker.runContainer(
-			lifecycleCtx,
-			request,
-			slog.New(slog.NewTextHandler(io.Discard, nil)),
-			common.NewOutputWriter(func(string) {}),
-			make(chan int, 1),
-			make(chan int, 1),
-			time.Now(),
-			nil,
-			nil,
-		)
-		lifecycleDone <- err
-	}()
-	<-rt.entered
-
-	checkpointCtx, cancelCheckpoint := context.WithCancel(context.Background())
-	defer cancelCheckpoint()
-	checkpointDone := make(chan error, 1)
-	go func() {
-		checkpointDone <- worker.createCheckpoint(checkpointCtx, &CreateCheckpointOpts{
-			Request:                  request,
-			CheckpointId:             "checkpoint",
-			TerminateAfterCheckpoint: true,
-		})
-	}()
-	if terminate := <-manager.started; !terminate {
-		t.Fatal("terminal checkpoint reached CRIU as a hot checkpoint")
-	}
-
-	close(rt.release)
-	// Runtime termination is irreversible. Neither the request transport nor the
-	// spawn context may let lifecycle cleanup race checkpoint persistence.
-	cancelCheckpoint()
-	cancelLifecycle()
-	select {
-	case err := <-lifecycleDone:
-		t.Fatalf("lifecycle returned before checkpoint persistence completed: %v", err)
-	case <-time.After(50 * time.Millisecond):
-	}
-	select {
-	case err := <-checkpointDone:
-		t.Fatalf("checkpoint returned before persistence was released: %v", err)
-	default:
-	}
-
-	close(manager.release)
-	publicationCtx := <-backend.started
-	_, bounded := publicationCtx.Deadline()
-	require.True(t, bounded, "terminal failure publication must be bounded")
-	select {
-	case err := <-lifecycleDone:
-		t.Fatalf("lifecycle returned before terminal checkpoint state publication unwound: %v", err)
-	default:
-	}
-	close(backend.release)
-	err := <-checkpointDone
-	if err == nil || !strings.Contains(err.Error(), "cache is required") {
-		t.Fatalf("createCheckpoint error = %v, want persistence failure", err)
-	}
-	if err := <-lifecycleDone; err != nil {
-		t.Fatalf("terminal runtime exit escaped lifecycle: %v", err)
-	}
-	select {
-	case err := <-lifecycleDone:
-		t.Fatalf("lifecycle completed more than once: %v", err)
-	default:
-	}
-	if rt.runCalls != 1 {
-		t.Fatalf("runtime Run calls = %d, want 1", rt.runCalls)
-	}
-	if _, reason := instance.lifecycleState(); reason != types.StopContainerReasonUser {
-		t.Fatalf("stop reason = %q, want user", reason)
-	}
-	if _, ok := worker.loadCheckpointCreateState(request); ok {
-		t.Fatal("terminal checkpoint state survived persistence failure")
 	}
 }
 
@@ -1161,6 +634,7 @@ func TestDirectTerminalCheckpointFailureBeforeRuntimeStopStaysRunning(t *testing
 		Request:                  request,
 		CheckpointId:             "checkpoint",
 		TerminateAfterCheckpoint: true,
+		RequireListenerProof:     true,
 	})
 	if err == nil || !strings.Contains(err.Error(), "runtime checkpoint failed") {
 		t.Fatalf("createCheckpoint error = %v", err)
@@ -1172,85 +646,6 @@ func TestDirectTerminalCheckpointFailureBeforeRuntimeStopStaysRunning(t *testing
 	require.True(t, instance.hasOOMWatcher())
 	if _, reason := instance.lifecycleState(); reason == types.StopContainerReasonUser {
 		t.Fatal("pre-termination failure marked the running container stopped")
-	}
-	if _, ok := worker.loadCheckpointCreateState(request); ok {
-		t.Fatal("terminal checkpoint state survived pre-termination failure")
-	}
-}
-
-func TestTerminalAutoCheckpointWaitsForScaleToZeroStop(t *testing.T) {
-	request := &types.ContainerRequest{
-		ContainerId: "container",
-		WorkspaceId: "workspace",
-		StubId:      "stub",
-		Stub: types.StubWithRelated{Stub: types.Stub{
-			Type:   types.StubType(types.StubTypePodDeployment),
-			Config: `{"keep_warm_seconds":0}`,
-		}},
-	}
-	worker := &Worker{stopContainerChan: make(chan stopContainerEvent, 1)}
-	state, acquired := worker.acquireCheckpointCreateLock(request)
-	if !acquired {
-		t.Fatal("checkpoint lock acquisition failed")
-	}
-	defer worker.finishCheckpointCreate(request, state)
-
-	result := make(chan bool, 1)
-	go func() {
-		result <- worker.awaitTerminalAutoCheckpointStop(
-			context.Background(),
-			request,
-			NewMockRuntime(types.ContainerRuntimeRunc.String(), runtime.Capabilities{CheckpointRestore: true}),
-			time.Second,
-		)
-	}()
-	select {
-	case <-result:
-		t.Fatal("terminal checkpoint wait returned before the stop arrived")
-	case <-time.After(20 * time.Millisecond):
-	}
-
-	if !worker.deferStopForCheckpoint(checkpointStopInstance(request, types.StopContainerReasonScheduler), true) {
-		t.Fatal("scheduler stop was not deferred")
-	}
-	select {
-	case terminal := <-result:
-		if !terminal {
-			t.Fatal("checkpoint did not become terminal after deferred stop")
-		}
-	case <-time.After(time.Second):
-		t.Fatal("terminal checkpoint wait did not observe deferred stop")
-	}
-}
-
-func TestTerminalAutoCheckpointDoesNotWaitForEndpoint(t *testing.T) {
-	request := &types.ContainerRequest{
-		ContainerId: "container",
-		WorkspaceId: "workspace",
-		StubId:      "stub",
-		Stub: types.StubWithRelated{Stub: types.Stub{
-			Type:   types.StubType(types.StubTypeEndpointDeployment),
-			Config: `{"keep_warm_seconds":0}`,
-		}},
-	}
-	worker := &Worker{}
-	state, acquired := worker.acquireCheckpointCreateLock(request)
-	if !acquired {
-		t.Fatal("checkpoint lock acquisition failed")
-	}
-	defer worker.finishCheckpointCreate(request, state)
-
-	started := time.Now()
-	if worker.awaitTerminalAutoCheckpointStop(
-		context.Background(),
-		request,
-		NewMockRuntime(types.ContainerRuntimeRunc.String(), runtime.Capabilities{CheckpointRestore: true}),
-		time.Second,
-	) {
-		t.Fatal("endpoint checkpoint was marked terminal without a deferred stop")
-	}
-	if elapsed := time.Since(started); elapsed > 100*time.Millisecond {
-		t.Fatalf("endpoint checkpoint unexpectedly waited for a stop: %s", elapsed)
 	}
 }
 
@@ -1398,7 +793,7 @@ func TestNvidiaCRIUManager(t *testing.T) {
 						GpuCount:    1,
 					}
 
-					checkpointPath, err := manager.CreateCheckpoint(context.Background(), mockRuntime, "cuda-checkpoint", request, false)
+					checkpointPath, err := manager.CreateCheckpoint(context.Background(), mockRuntime, "cuda-checkpoint", request, true)
 					if err != nil {
 						t.Errorf("CreateCheckpoint with CUDA support failed: %v", err)
 					}
@@ -1432,28 +827,6 @@ func TestNvidiaCRIUManager(t *testing.T) {
 
 			mockRuntime := NewMockRuntime(tc.runtimeName, tc.capabilities)
 
-			t.Run("CreateCheckpoint", func(t *testing.T) {
-				request := &types.ContainerRequest{
-					ContainerId: fmt.Sprintf("%s-container-1", tc.runtimeName),
-				}
-
-				checkpointPath, err := manager.CreateCheckpoint(context.Background(), mockRuntime, "checkpoint-1", request, false)
-				if err != nil {
-					t.Errorf("CreateCheckpoint failed: %v", err)
-				}
-
-				if !mockRuntime.checkpointCalled {
-					t.Error("Expected Checkpoint to be called on runtime")
-				}
-
-				if checkpointPath == "" {
-					t.Error("Expected non-empty checkpoint path")
-				}
-				if mockRuntime.checkpointOpts == nil || !mockRuntime.checkpointOpts.LeaveRunning {
-					t.Fatalf("unexpected hot checkpoint options: %+v", mockRuntime.checkpointOpts)
-				}
-			})
-
 			t.Run("CreateCheckpoint terminal state", func(t *testing.T) {
 				mockRuntime.Reset()
 				request := &types.ContainerRequest{
@@ -1479,12 +852,12 @@ func TestNvidiaCRIUManager(t *testing.T) {
 					}},
 				}
 
-				checkpoint := &types.Checkpoint{
-					CheckpointId: "checkpoint-1",
+				checkpoint := &StateMemoryCheckpoint{
+					ID: "checkpoint-1",
 				}
 
 				// Create checkpoint directory
-				checkpointPath := filepath.Join(tmpDir, checkpoint.CheckpointId)
+				checkpointPath := filepath.Join(tmpDir, checkpoint.ID)
 				os.MkdirAll(checkpointPath, 0755)
 
 				opts := &RestoreOpts{
@@ -1506,7 +879,7 @@ func TestNvidiaCRIUManager(t *testing.T) {
 				if mockRuntime.restoreOpts == nil || mockRuntime.restoreOpts.AllowOpenTCP || !mockRuntime.restoreOpts.TCPClose {
 					t.Errorf("Expected generic NVIDIA restore to use tcp-close, got %+v", mockRuntime.restoreOpts)
 				}
-				mapPath := filepath.Join(types.AgentTmpPath, checkpoint.CheckpointId, request.ContainerId, checkpointNetworkMapFile)
+				mapPath := filepath.Join(types.AgentTmpPath, checkpoint.ID, request.ContainerId, checkpointNetworkMapFile)
 				if _, err := os.Stat(mapPath); !errors.Is(err, os.ErrNotExist) {
 					t.Errorf("Expected endpoint restore not to create a network map, got %v", err)
 				}
@@ -1525,12 +898,12 @@ func TestNvidiaCRIUManager(t *testing.T) {
 					Stub:        testPodStub(t, false),
 				}
 
-				checkpoint := &types.Checkpoint{
-					CheckpointId: "checkpoint-pod",
-					ContainerIp:  "192.168.0.46",
+				checkpoint := &StateMemoryCheckpoint{
+					ID:          "checkpoint-pod",
+					ContainerIP: "192.168.0.46",
 				}
 
-				checkpointPath := filepath.Join(tmpDir, checkpoint.CheckpointId)
+				checkpointPath := filepath.Join(tmpDir, checkpoint.ID)
 				os.MkdirAll(checkpointPath, 0755)
 
 				opts := &RestoreOpts{
@@ -1549,7 +922,7 @@ func TestNvidiaCRIUManager(t *testing.T) {
 				if mockRuntime.restoreOpts == nil || !mockRuntime.restoreOpts.AllowOpenTCP || mockRuntime.restoreOpts.TCPClose {
 					t.Errorf("Expected pod NVIDIA restore to preserve open TCP without tcp-close, got %+v", mockRuntime.restoreOpts)
 				}
-				mapPath := filepath.Join(types.AgentTmpPath, checkpoint.CheckpointId, request.ContainerId, checkpointNetworkMapFile)
+				mapPath := filepath.Join(types.AgentTmpPath, checkpoint.ID, request.ContainerId, checkpointNetworkMapFile)
 				contents, err := os.ReadFile(mapPath)
 				if err != nil {
 					t.Fatalf("Expected pod restore network map: %v", err)
@@ -1573,12 +946,12 @@ func TestNvidiaCRIUManager(t *testing.T) {
 					Stub:        testServiceStub(t),
 				}
 
-				checkpoint := &types.Checkpoint{
-					CheckpointId: "checkpoint-service",
-					ContainerIp:  "192.168.0.46",
+				checkpoint := &StateMemoryCheckpoint{
+					ID:          "checkpoint-service",
+					ContainerIP: "192.168.0.46",
 				}
 
-				checkpointPath := filepath.Join(tmpDir, checkpoint.CheckpointId)
+				checkpointPath := filepath.Join(tmpDir, checkpoint.ID)
 				os.MkdirAll(checkpointPath, 0755)
 
 				opts := &RestoreOpts{
@@ -1597,7 +970,7 @@ func TestNvidiaCRIUManager(t *testing.T) {
 				if mockRuntime.restoreOpts == nil || !mockRuntime.restoreOpts.AllowOpenTCP || mockRuntime.restoreOpts.TCPClose {
 					t.Errorf("Expected service NVIDIA restore to preserve open TCP without tcp-close, got %+v", mockRuntime.restoreOpts)
 				}
-				mapPath := filepath.Join(types.AgentTmpPath, checkpoint.CheckpointId, request.ContainerId, checkpointNetworkMapFile)
+				mapPath := filepath.Join(types.AgentTmpPath, checkpoint.ID, request.ContainerId, checkpointNetworkMapFile)
 				if _, err := os.Stat(mapPath); err != nil {
 					t.Errorf("Expected service restore network map: %v", err)
 				}
@@ -1648,7 +1021,7 @@ func TestCheckpointRestoreErrorHandling(t *testing.T) {
 			ContainerId: "failing-container",
 		}
 
-		_, err := manager.CreateCheckpoint(context.Background(), mockRuntime, "failing-checkpoint", request, false)
+		_, err := manager.CreateCheckpoint(context.Background(), mockRuntime, "failing-checkpoint", request, true)
 		if err == nil {
 			t.Error("Expected error when checkpoint fails")
 		}
@@ -1665,12 +1038,12 @@ func TestCheckpointRestoreErrorHandling(t *testing.T) {
 			ContainerId: "failing-container",
 		}
 
-		checkpoint := &types.Checkpoint{
-			CheckpointId: "failing-checkpoint",
+		checkpoint := &StateMemoryCheckpoint{
+			ID: "failing-checkpoint",
 		}
 
 		// Create checkpoint directory
-		checkpointPath := filepath.Join(tmpDir, checkpoint.CheckpointId)
+		checkpointPath := filepath.Join(tmpDir, checkpoint.ID)
 		os.MkdirAll(checkpointPath, 0755)
 
 		opts := &RestoreOpts{
@@ -1705,12 +1078,12 @@ func TestCheckpointRestoreErrorHandling(t *testing.T) {
 			ContainerId: "criu-failing-container",
 		}
 
-		checkpoint := &types.Checkpoint{
-			CheckpointId: "criu-failing-checkpoint",
+		checkpoint := &StateMemoryCheckpoint{
+			ID: "criu-failing-checkpoint",
 		}
 
 		// Create checkpoint directory
-		checkpointPath := filepath.Join(tmpDir, checkpoint.CheckpointId)
+		checkpointPath := filepath.Join(tmpDir, checkpoint.ID)
 		os.MkdirAll(checkpointPath, 0755)
 
 		opts := &RestoreOpts{
@@ -1731,8 +1104,8 @@ func TestCheckpointRestoreErrorHandling(t *testing.T) {
 
 func TestNvidiaRestoreRetriesCRIUFailure(t *testing.T) {
 	tmpDir := t.TempDir()
-	checkpoint := &types.Checkpoint{CheckpointId: "checkpoint-retry"}
-	if err := os.MkdirAll(filepath.Join(tmpDir, checkpoint.CheckpointId), 0755); err != nil {
+	checkpoint := &StateMemoryCheckpoint{ID: "checkpoint-retry"}
+	if err := os.MkdirAll(filepath.Join(tmpDir, checkpoint.ID), 0755); err != nil {
 		t.Fatal(err)
 	}
 	rt := NewMockRuntime(types.ContainerRuntimeRunc.String(), runtime.Capabilities{CheckpointRestore: true})
@@ -1765,8 +1138,8 @@ func TestNvidiaRestoreRetriesCRIUFailure(t *testing.T) {
 
 func TestNvidiaRestorePublishesStartedAfterValidation(t *testing.T) {
 	tmpDir := t.TempDir()
-	checkpoint := &types.Checkpoint{CheckpointId: "checkpoint-validate"}
-	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, checkpoint.CheckpointId), 0755))
+	checkpoint := &StateMemoryCheckpoint{ID: "checkpoint-validate"}
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, checkpoint.ID), 0755))
 	rt := NewMockRuntime(types.ContainerRuntimeRunc.String(), runtime.Capabilities{CheckpointRestore: true})
 	manager := &NvidiaCRIUManager{checkpointRoot: tmpDir}
 	started := make(chan int, 1)
@@ -1888,33 +1261,64 @@ func TestCheckpointRestoreValidatorSkipsDurableMountsWithoutForcedResources(t *t
 	require.Nil(t, worker.checkpointRestoreValidator(request))
 }
 
-func TestRestoredCheckpointHTTPReadinessRequiresStableRuntime(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
-		response.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
-	address := strings.TrimPrefix(server.URL, "http://")
-	containerID := "container-restore-ready"
-	worker := &Worker{containerInstances: common.NewSafeMap[*ContainerInstance]()}
-	worker.containerInstances.Set(containerID, &ContainerInstance{
-		Id:                  containerID,
-		ContainerAddressMap: map[int32]string{8000: address},
-	})
-	request := &types.ContainerRequest{
-		ContainerId: containerID,
-		CheckpointTrigger: &types.CheckpointTrigger{
-			Type:           checkpointTriggerHTTP,
-			HttpPath:       "/ready",
-			HttpPort:       8000,
-			TimeoutSeconds: 2,
-		},
-	}
-	rt := NewMockRuntime(types.ContainerRuntimeRunc.String(), runtime.Capabilities{})
-	rt.state = runtime.State{Status: types.RuncContainerStatusRunning}
+func TestRestoredStateCheckpointRequiresNonZombieReachableDeclaredListener(t *testing.T) {
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer listener.Close()
+	port := uint32(listener.Addr().(*net.TCPAddr).Port)
+	acceptCtx, cancelAccept := context.WithCancel(context.Background())
+	defer cancelAccept()
+	go func() {
+		for {
+			connection, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			_ = connection.Close()
+			select {
+			case <-acceptCtx.Done():
+				return
+			default:
+			}
+		}
+	}()
 
-	started := time.Now()
-	require.NoError(t, worker.waitForRestoredCheckpointHTTPReadiness(context.Background(), request, request.CheckpointTrigger, rt))
-	require.GreaterOrEqual(t, time.Since(started), restoreReadinessStableFor)
+	procRoot := t.TempDir()
+	pid := 123
+	procDir := filepath.Join(procRoot, strconv.Itoa(pid))
+	require.NoError(t, os.MkdirAll(filepath.Join(procDir, "net"), 0700))
+	writeProcState := func(state byte) {
+		require.NoError(t, os.WriteFile(filepath.Join(procDir, "stat"), []byte(fmt.Sprintf("123 (serve.py) %c 1 2 3\n", state)), 0600))
+	}
+	writeProcState('S')
+	tcpLine := fmt.Sprintf("  sl  local_address rem_address   st\n   0: 0100007F:%04X 00000000:0000 0A 00000000:00000000\n", port)
+	require.NoError(t, os.WriteFile(filepath.Join(procDir, "net", "tcp"), []byte(tcpLine), 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(procDir, "net", "tcp6"), []byte("  sl  local_address rem_address   st\n"), 0600))
+	checkpointPath := t.TempDir()
+	require.NoError(t, writeCheckpointListenerProof(checkpointPath, checkpointListenerProof{Version: 1, Ports: []uint32{port}}))
+
+	containerID := "restored-state-listener"
+	worker := &Worker{checkpointProcRoot: procRoot, containerInstances: common.NewSafeMap[*ContainerInstance]()}
+	worker.containerInstances.Set(containerID, &ContainerInstance{
+		Id: containerID, ContainerAddressMap: map[int32]string{int32(port): listener.Addr().String()},
+	})
+	request := &types.ContainerRequest{ContainerId: containerID}
+	rt := NewMockRuntime(types.ContainerRuntimeRunc.String(), runtime.Capabilities{})
+	rt.state = runtime.State{Status: types.RuncContainerStatusRunning, Pid: pid}
+	require.NoError(t, worker.waitForRestoredCheckpointListenerProof(context.Background(), request, rt, checkpointPath))
+
+	writeProcState('Z')
+	zombieCtx, zombieCancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer zombieCancel()
+	err = worker.waitForRestoredCheckpointListenerProof(zombieCtx, request, rt, checkpointPath)
+	require.ErrorContains(t, err, "zombie")
+
+	writeProcState('S')
+	require.NoError(t, listener.Close())
+	deadCtx, deadCancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer deadCancel()
+	err = worker.waitForRestoredCheckpointListenerProof(deadCtx, request, rt, checkpointPath)
+	require.ErrorContains(t, err, "unreachable")
 }
 
 func TestClassifyRestoreErrorDetectsHostIncompatibility(t *testing.T) {
@@ -1949,91 +1353,6 @@ func TestClassifyRestoreErrorPreservesDurableMountValidation(t *testing.T) {
 	require.False(t, IsCRIURestoreError(err))
 }
 
-func TestCheckpointMaterializedRequiresRuntimeAndFilesystemPayload(t *testing.T) {
-	checkpointPath := filepath.Join(t.TempDir(), "checkpoint-1")
-
-	if checkpointMaterialized(checkpointPath) {
-		t.Fatal("missing checkpoint path should not be materialized")
-	}
-
-	if err := os.MkdirAll(filepath.Join(checkpointPath, checkpointFsDir), 0755); err != nil {
-		t.Fatal(err)
-	}
-	if checkpointMaterialized(checkpointPath) {
-		t.Fatal("unmarked filesystem-only checkpoint should not be materialized")
-	}
-
-	if err := os.WriteFile(filepath.Join(checkpointPath, checkpointFilesystemOnlyFile), []byte("v1\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if !checkpointMaterialized(checkpointPath) {
-		t.Fatal("marked filesystem-only checkpoint should be materialized")
-	}
-	if checkpointHasRuntimePayload(checkpointPath) {
-		t.Fatal("filesystem-only marker should not be treated as runtime payload")
-	}
-
-	require.NoError(t, os.Remove(filepath.Join(checkpointPath, checkpointFilesystemOnlyFile)))
-	if err := os.WriteFile(filepath.Join(checkpointPath, "inventory.img"), []byte("runtime payload"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if !checkpointMaterialized(checkpointPath) {
-		t.Fatal("checkpoint with filesystem and runtime payload should be materialized")
-	}
-}
-
-func TestCheckpointMaterializedAcceptsArchiveAndRejectsMixedFilesystemPayload(t *testing.T) {
-	checkpointPath := t.TempDir()
-	upperPath := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(upperPath, "state"), []byte("archive"), 0644))
-	require.NoError(t, archiveDirectoryContext(context.Background(), upperPath, filepath.Join(checkpointPath, checkpointFsArchive), nil))
-	require.NoError(t, os.WriteFile(filepath.Join(checkpointPath, checkpointFilesystemOnlyFile), []byte("v1\n"), 0644))
-	require.True(t, checkpointMaterialized(checkpointPath))
-	require.NoError(t, validateCheckpointKind(checkpointPath, true))
-
-	require.NoError(t, os.Mkdir(filepath.Join(checkpointPath, checkpointFsDir), 0755))
-	require.False(t, checkpointMaterialized(checkpointPath))
-	require.Error(t, validateCheckpointKind(checkpointPath, true))
-	require.NoError(t, os.Remove(filepath.Join(checkpointPath, checkpointFilesystemOnlyFile)))
-	require.NoError(t, os.WriteFile(filepath.Join(checkpointPath, "inventory.img"), []byte("runtime"), 0644))
-	require.Error(t, validateCheckpointKind(checkpointPath, false))
-}
-
-func TestCheckpointFilesystemArchiveMustBeARegularNonemptyFile(t *testing.T) {
-	checkpointPath := t.TempDir()
-	archivePath := filepath.Join(checkpointPath, checkpointFsArchive)
-	require.NoError(t, os.WriteFile(archivePath, nil, 0644))
-	_, _, err := checkpointFilesystemPayload(checkpointPath)
-	require.Error(t, err)
-
-	require.NoError(t, os.Remove(archivePath))
-	require.NoError(t, os.WriteFile(filepath.Join(checkpointPath, "payload"), []byte("archive"), 0644))
-	require.NoError(t, os.Symlink("payload", archivePath))
-	_, _, err = checkpointFilesystemPayload(checkpointPath)
-	require.Error(t, err)
-
-	require.NoError(t, os.Remove(archivePath))
-	require.NoError(t, os.Mkdir(filepath.Join(checkpointPath, checkpointFsDir), 0755))
-	require.NoError(t, os.Symlink(checkpointFsDir, filepath.Join(checkpointPath, checkpointFilesystemOnlyFile)))
-	require.False(t, checkpointFilesystemOnly(checkpointPath))
-}
-
-func TestValidateCheckpointKind(t *testing.T) {
-	checkpointPath := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(checkpointPath, checkpointFsDir), 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(checkpointPath, "inventory.img"), []byte("runtime"), 0644))
-	require.NoError(t, validateCheckpointKind(checkpointPath, false))
-	require.Error(t, validateCheckpointKind(checkpointPath, true))
-
-	require.NoError(t, os.WriteFile(filepath.Join(checkpointPath, checkpointFilesystemOnlyFile), []byte("wrong-version\n"), 0644))
-	require.Error(t, validateCheckpointKind(checkpointPath, true))
-	require.NoError(t, os.WriteFile(filepath.Join(checkpointPath, checkpointFilesystemOnlyFile), []byte("v1\n"), 0644))
-	require.Error(t, validateCheckpointKind(checkpointPath, true), "filesystem checkpoint must reject mixed runtime payload")
-	require.Error(t, validateCheckpointKind(checkpointPath, false))
-	require.NoError(t, os.Remove(filepath.Join(checkpointPath, "inventory.img")))
-	require.NoError(t, validateCheckpointKind(checkpointPath, true))
-}
-
 func writeForcedRuncProfileConfig(t *testing.T, configPath string) []byte {
 	t.Helper()
 
@@ -2060,12 +1379,10 @@ func TestForcedRuncCheckpointProfileMarkerIsExactAndFailSafe(t *testing.T) {
 	contents, err := os.ReadFile(filepath.Join(checkpointPath, checkpointForcedRuncProfileFile))
 	require.NoError(t, err)
 	require.Equal(t, checkpointForcedRuncProfileV1, string(contents))
-	require.False(t, forcedRuncCheckpointNeedsColdMigration(checkpointPath, request, rt))
 	dockerRequest := *request
 	dockerRequest.DockerEnabled = true
 	require.ErrorContains(t, writeForcedRuncCheckpointProfile(checkpointPath, &dockerRequest, rt), "does not support Docker-enabled containers")
 	require.NoFileExists(t, filepath.Join(checkpointPath, checkpointForcedRuncProfileFile), "rejected Docker mode must remove any stale marker")
-	require.True(t, forcedRuncCheckpointNeedsColdMigration(checkpointPath, &dockerRequest, rt))
 	require.NoError(t, writeForcedRuncCheckpointProfile(checkpointPath, request, rt))
 
 	var spec specs.Spec
@@ -2076,48 +1393,6 @@ func TestForcedRuncCheckpointProfileMarkerIsExactAndFailSafe(t *testing.T) {
 	require.NoError(t, os.WriteFile(request.ConfigPath, invalidConfig, 0644))
 	require.ErrorContains(t, writeForcedRuncCheckpointProfile(checkpointPath, request, rt), "does not protect /proc/sys/vm/drop_caches")
 	require.NoFileExists(t, filepath.Join(checkpointPath, checkpointForcedRuncProfileFile), "failed validation must remove any stale marker")
-	require.True(t, forcedRuncCheckpointNeedsColdMigration(checkpointPath, request, rt))
-}
-
-func TestForcedRuncCheckpointProfileMigrationClassification(t *testing.T) {
-	runcRuntime := NewMockRuntime(types.ContainerRuntimeRunc.String(), runtime.Capabilities{CheckpointRestore: true})
-	gvisorRuntime := NewMockRuntime(types.ContainerRuntimeGvisor.String(), runtime.Capabilities{CheckpointRestore: true})
-	forced := &types.ContainerRequest{Stub: types.StubWithRelated{Stub: types.Stub{Config: `{"_beta9_force_resource_limits":true}`}}}
-	unforced := &types.ContainerRequest{}
-
-	tests := []struct {
-		name     string
-		request  *types.ContainerRequest
-		runtime  runtime.Runtime
-		marker   string
-		symlink  bool
-		wantCold bool
-	}{
-		{name: "missing", request: forced, runtime: runcRuntime, wantCold: true},
-		{name: "malformed", request: forced, runtime: runcRuntime, marker: "v0\n", wantCold: true},
-		{name: "trailing data", request: forced, runtime: runcRuntime, marker: checkpointForcedRuncProfileV1 + "extra", wantCold: true},
-		{name: "symlink", request: forced, runtime: runcRuntime, marker: checkpointForcedRuncProfileV1, symlink: true, wantCold: true},
-		{name: "current", request: forced, runtime: runcRuntime, marker: checkpointForcedRuncProfileV1},
-		{name: "unforced legacy", request: unforced, runtime: runcRuntime, wantCold: false},
-		{name: "forced gvisor", request: forced, runtime: gvisorRuntime, wantCold: false},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			checkpointPath := t.TempDir()
-			if test.marker != "" {
-				markerPath := filepath.Join(checkpointPath, checkpointForcedRuncProfileFile)
-				if test.symlink {
-					targetPath := filepath.Join(t.TempDir(), "marker")
-					require.NoError(t, os.WriteFile(targetPath, []byte(test.marker), 0644))
-					require.NoError(t, os.Symlink(targetPath, markerPath))
-				} else {
-					require.NoError(t, os.WriteFile(markerPath, []byte(test.marker), 0644))
-				}
-			}
-			require.Equal(t, test.wantCold, forcedRuncCheckpointNeedsColdMigration(checkpointPath, test.request, test.runtime))
-		})
-	}
 }
 
 func TestCreateCheckpointWritesForcedRuncProfileBeforePersistence(t *testing.T) {
@@ -2155,7 +1430,9 @@ func TestCreateCheckpointWritesForcedRuncProfileBeforePersistence(t *testing.T) 
 		Overlay: common.NewContainerOverlay(request, overlayRoot, filepath.Join(root, "overlay-storage")),
 	})
 
-	err := worker.createCheckpoint(context.Background(), &CreateCheckpointOpts{Request: request, CheckpointId: checkpointID})
+	err := worker.createCheckpoint(context.Background(), &CreateCheckpointOpts{
+		Request: request, CheckpointId: checkpointID, TerminateAfterCheckpoint: true, RequireListenerProof: true,
+	})
 	require.ErrorContains(t, err, "cache is required for checkpoint persistence")
 	marker, readErr := os.ReadFile(filepath.Join(checkpointPath, checkpointForcedRuncProfileFile))
 	require.NoError(t, readErr)
@@ -2172,233 +1449,14 @@ func TestCreateCheckpointRequiresCRIUManager(t *testing.T) {
 	})
 
 	err := worker.createCheckpoint(context.Background(), &CreateCheckpointOpts{
-		Request:      &types.ContainerRequest{ContainerId: containerID},
-		CheckpointId: "checkpoint-no-criu",
+		Request:                  &types.ContainerRequest{ContainerId: containerID},
+		CheckpointId:             "checkpoint-no-criu",
+		TerminateAfterCheckpoint: true,
+		RequireListenerProof:     true,
 	})
 	if !errors.Is(err, errCRIUManagerUnavailable) {
 		t.Fatalf("createCheckpoint error = %v, want %v", err, errCRIUManagerUnavailable)
 	}
-}
-
-func TestCreateFilesystemCheckpointFallbackStopsAndCapturesOverlay(t *testing.T) {
-	for _, tc := range []struct {
-		name              string
-		checkpointEnabled bool
-		withCRIU          bool
-		initiallyStopped  bool
-		wantCRIUCalls     int
-		wantSignals       int
-	}{
-		{name: "checkpoint disabled", wantSignals: 1},
-		{name: "CRIU unavailable", checkpointEnabled: true, wantSignals: 1},
-		{name: "memory failure while running", checkpointEnabled: true, withCRIU: true, wantCRIUCalls: 1, wantSignals: 1},
-		{name: "memory failure after stop", checkpointEnabled: true, withCRIU: true, initiallyStopped: true, wantCRIUCalls: 1},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			root := t.TempDir()
-			containerID := "container-filesystem-fallback"
-			request := &types.ContainerRequest{
-				ContainerId:       containerID,
-				CheckpointEnabled: tc.checkpointEnabled,
-				Stub: types.StubWithRelated{Stub: types.Stub{
-					ExternalId: "stub-filesystem-fallback",
-					Config:     `{"_beta9_force_resource_limits":true}`,
-				}},
-			}
-			overlay := common.NewContainerOverlay(request, filepath.Join(root, "overlay", "merged"), filepath.Join(root, "overlay-storage"))
-			upperDir := filepath.Join(filepath.Dir(overlay.TopLayerPath()), "upper")
-			require.NoError(t, os.MkdirAll(filepath.Join(upperDir, "tmp"), 0755))
-			require.NoError(t, os.WriteFile(filepath.Join(upperDir, "tmp", "marker"), []byte("preserved"), 0644))
-
-			rt := &mockRuntime{name: types.ContainerRuntimeRunc.String(), capabilities: runtime.Capabilities{CheckpointRestore: true}}
-			rt.state = func(context.Context, string) (runtime.State, error) {
-				if tc.initiallyStopped || len(rt.signals) > 0 {
-					return runtime.State{Status: types.RuncContainerStatusStopped}, nil
-				}
-				return runtime.State{Status: types.RuncContainerStatusRunning}, nil
-			}
-			criuCalls := 0
-			var manager CRIUManager
-			if tc.withCRIU {
-				manager = &observingCheckpointManager{create: func(bool) error {
-					criuCalls++
-					return assert.AnError
-				}}
-			}
-			backendRepoClient := &fakeBackendRepoClient{}
-			worker := &Worker{
-				criuManager:        manager,
-				cacheManager:       &WorkerCacheManager{checkpointRoot: filepath.Join(root, "checkpoints")},
-				backendRepoClient:  backendRepoClient,
-				containerInstances: common.NewSafeMap[*ContainerInstance](),
-			}
-			worker.containerInstances.Set(containerID, &ContainerInstance{
-				Id:      containerID,
-				Request: request,
-				Runtime: rt,
-				Overlay: overlay,
-			})
-			opts := &CreateCheckpointOpts{
-				Request:                  request,
-				CheckpointId:             "checkpoint-filesystem-fallback",
-				TerminateAfterCheckpoint: true,
-			}
-
-			err := worker.createCheckpoint(context.Background(), opts)
-
-			require.ErrorContains(t, err, "cache is required for checkpoint persistence")
-			require.Equal(t, tc.wantCRIUCalls, criuCalls)
-			require.Len(t, rt.signals, tc.wantSignals)
-			if tc.wantSignals > 0 {
-				require.Equal(t, syscall.SIGTERM, rt.signals[0])
-			}
-			require.Equal(t, types.CheckpointRuntimeFilesystem, opts.CheckpointRuntime)
-			checkpointPath := worker.checkpointPath(opts.CheckpointId)
-			require.FileExists(t, filepath.Join(checkpointPath, checkpointFilesystemOnlyFile))
-			require.FileExists(t, filepath.Join(checkpointPath, checkpointFsDir, "tmp", "marker"))
-			require.NoFileExists(t, filepath.Join(checkpointPath, checkpointFsArchive))
-			require.False(t, checkpointHasRuntimePayload(checkpointPath))
-			require.NotNil(t, backendRepoClient.lastCreate)
-			require.Equal(t, string(types.CheckpointStatusCheckpointFailed), backendRepoClient.lastCreate.Status)
-			require.Equal(t, types.CheckpointRuntimeFilesystem, backendRepoClient.lastCreate.Runtime)
-		})
-	}
-}
-
-func TestCreateCheckpointFailsWhenRuntimeStartSignalCloses(t *testing.T) {
-	containerID := "container-no-runtime-start"
-	backendRepoClient := &fakeBackendRepoClient{}
-	worker := &Worker{
-		containerInstances: common.NewSafeMap[*ContainerInstance](),
-		backendRepoClient:  backendRepoClient,
-		criuManager:        &NvidiaCRIUManager{checkpointRoot: t.TempDir(), available: true},
-	}
-	worker.containerInstances.Set(containerID, &ContainerInstance{
-		Id:      containerID,
-		Runtime: NewMockRuntime("runc", runtime.Capabilities{CheckpointRestore: true}),
-	})
-	checkpointPIDChan := make(chan int)
-	close(checkpointPIDChan)
-
-	err := worker.createCheckpoint(context.Background(), &CreateCheckpointOpts{
-		Request:           &types.ContainerRequest{ContainerId: containerID, Stub: types.StubWithRelated{Stub: types.Stub{ExternalId: "stub-no-runtime-start"}}},
-		CheckpointId:      "checkpoint-no-runtime-start",
-		CheckpointPIDChan: checkpointPIDChan,
-	})
-	if err == nil || !strings.Contains(err.Error(), "container runtime exited before checkpoint could start") {
-		t.Fatalf("createCheckpoint error = %v, want runtime start signal error", err)
-	}
-	if backendRepoClient.createCalls != 1 {
-		t.Fatalf("CreateCheckpoint calls = %d, want 1", backendRepoClient.createCalls)
-	}
-	if got := backendRepoClient.lastCreate.Status; got != string(types.CheckpointStatusCheckpointFailed) {
-		t.Fatalf("checkpoint status = %q, want %q", got, types.CheckpointStatusCheckpointFailed)
-	}
-}
-
-func TestCreateCheckpointMarksFilesystemCopyFailure(t *testing.T) {
-	root := t.TempDir()
-	containerID := "container-copy-failure"
-	request := &types.ContainerRequest{
-		ContainerId: containerID,
-		Stub: types.StubWithRelated{Stub: types.Stub{
-			ExternalId: "stub-copy-failure",
-		}},
-	}
-	checkpointPath := filepath.Join(root, "checkpoints", "checkpoint-copy-failure")
-	require.NoError(t, os.MkdirAll(filepath.Join(checkpointPath, checkpointFsDir), 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(checkpointPath, "inventory.img"), []byte("runtime"), 0644))
-	backendRepoClient := &fakeBackendRepoClient{}
-	worker := &Worker{
-		containerInstances: common.NewSafeMap[*ContainerInstance](),
-		backendRepoClient:  backendRepoClient,
-		criuManager:        &staticCheckpointManager{path: checkpointPath},
-	}
-	worker.containerInstances.Set(containerID, &ContainerInstance{
-		Id:      containerID,
-		Runtime: NewMockRuntime("runc", runtime.Capabilities{CheckpointRestore: true}),
-		Overlay: common.NewContainerOverlay(
-			request,
-			filepath.Join(root, "overlay", "merged"),
-			filepath.Join(root, "overlay-storage"),
-		),
-	})
-
-	err := worker.createCheckpoint(context.Background(), &CreateCheckpointOpts{
-		Request:      request,
-		CheckpointId: "checkpoint-copy-failure",
-	})
-	if err == nil || !strings.Contains(err.Error(), "read source directory") {
-		t.Fatalf("createCheckpoint error = %v, want filesystem copy error", err)
-	}
-	if backendRepoClient.createCalls != 1 {
-		t.Fatalf("CreateCheckpoint calls = %d, want 1", backendRepoClient.createCalls)
-	}
-	if got := backendRepoClient.lastCreate.Status; got != string(types.CheckpointStatusCheckpointFailed) {
-		t.Fatalf("checkpoint status = %q, want %q", got, types.CheckpointStatusCheckpointFailed)
-	}
-	require.NoDirExists(t, filepath.Join(checkpointPath, checkpointFsDir))
-	require.NoFileExists(t, filepath.Join(checkpointPath, checkpointFsArchive))
-	require.False(t, checkpointMaterialized(checkpointPath))
-}
-
-func TestMarkCheckpointFailedRetainsPersistedMetadata(t *testing.T) {
-	backendRepoClient := &fakeBackendRepoClient{}
-	worker := &Worker{backendRepoClient: backendRepoClient}
-	metadata := &checkpointCacheMetadata{
-		hash:        "checkpoint-hash",
-		sizeBytes:   42,
-		originKey:   "checkpoints/checkpoint-a.tar",
-		locality:    "locality-a",
-		accelerator: "A10G",
-	}
-
-	worker.markCheckpointFailed(context.Background(), &CreateCheckpointOpts{
-		Request: &types.ContainerRequest{
-			ContainerId: "container-a",
-			Stub:        types.StubWithRelated{Stub: types.Stub{ExternalId: "stub-a"}},
-		},
-		CheckpointId: "checkpoint-a",
-	}, types.ContainerRuntimeGvisor.String(), metadata)
-
-	got := backendRepoClient.lastCreate
-	if got == nil || got.Status != string(types.CheckpointStatusCheckpointFailed) {
-		t.Fatalf("checkpoint state = %+v, want failed", got)
-	}
-	if got.CacheHash != metadata.hash || got.CacheSizeBytes != metadata.sizeBytes || got.OriginKey != metadata.originKey || got.Locality != metadata.locality || got.Accelerator != metadata.accelerator {
-		t.Fatalf("checkpoint metadata = %+v, want %+v", got, metadata)
-	}
-	if got.Runtime != types.ContainerRuntimeGvisor.String() {
-		t.Fatalf("checkpoint runtime = %q, want gvisor", got.Runtime)
-	}
-}
-
-func TestCheckpointStatePublicationIsBoundedAndFailureContextIsWorkerOwned(t *testing.T) {
-	backend := &contextBoundCheckpointBackend{
-		fakeBackendRepoClient: &fakeBackendRepoClient{},
-		started:               make(chan context.Context, 1),
-	}
-	worker := &Worker{backendRepoClient: backend}
-	request := &types.ContainerRequest{ContainerId: "container-state", Stub: types.StubWithRelated{Stub: types.Stub{ExternalId: "stub-state"}}}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
-	defer cancel()
-	startedAt := time.Now()
-	err := worker.createCheckpointState(ctx, "checkpoint-state", request, types.CheckpointStatusAvailable, "", "runc", nil)
-	require.ErrorIs(t, err, context.DeadlineExceeded)
-	require.Less(t, time.Since(startedAt), time.Second)
-	publicationCtx := <-backend.started
-	_, bounded := publicationCtx.Deadline()
-	require.True(t, bounded)
-
-	callerCtx, cancelCaller := context.WithCancel(context.Background())
-	cancelCaller()
-	failureCtx, cancelFailure := checkpointStatePublicationContext(callerCtx)
-	defer cancelFailure()
-	require.NoError(t, failureCtx.Err(), "failure publication must survive request cancellation")
-	deadline, bounded := failureCtx.Deadline()
-	require.True(t, bounded)
-	require.WithinDuration(t, time.Now().Add(checkpointStatePublicationTTL), deadline, time.Second)
 }
 
 func TestCreateCheckpointRetriesTransientGvisorTCPStateError(t *testing.T) {
@@ -2411,7 +1469,7 @@ func TestCreateCheckpointRetriesTransientGvisorTCPStateError(t *testing.T) {
 
 	_, err := manager.CreateCheckpoint(context.Background(), rt, "checkpoint-retry", &types.ContainerRequest{
 		ContainerId: "sandbox-retry",
-	}, false)
+	}, true)
 
 	if err != nil {
 		t.Fatalf("CreateCheckpoint error = %v", err)
@@ -2428,7 +1486,7 @@ func TestCreateCheckpointDoesNotRetryRuncCheckpointError(t *testing.T) {
 
 	_, err := manager.CreateCheckpoint(context.Background(), rt, "checkpoint-no-retry", &types.ContainerRequest{
 		ContainerId: "sandbox-no-retry",
-	}, false)
+	}, true)
 
 	if err == nil {
 		t.Fatal("expected CreateCheckpoint error")
@@ -2440,17 +1498,19 @@ func TestCreateCheckpointDoesNotRetryRuncCheckpointError(t *testing.T) {
 
 func TestAttemptRestoreCheckpointRequiresCRIUManager(t *testing.T) {
 	request := &types.ContainerRequest{
-		ContainerId: "container-restore-no-criu",
-		Checkpoint: &types.Checkpoint{
-			CheckpointId: "checkpoint-no-criu",
-			Status:       string(types.CheckpointStatusAvailable),
-		},
+		ContainerId:     "container-restore-no-criu",
+		StateSnapshotId: "state-snapshot-no-criu",
 	}
+	worker := &Worker{containerInstances: common.NewSafeMap[*ContainerInstance]()}
+	worker.containerInstances.Set(request.ContainerId, &ContainerInstance{
+		Id: request.ContainerId, Request: request,
+		Runtime:               NewMockRuntime(types.ContainerRuntimeRunc.String(), runtime.Capabilities{CheckpointRestore: true}),
+		StateMemoryCheckpoint: &StateMemoryCheckpoint{ID: "checkpoint-no-criu"},
+	})
 
-	exitCode, restored, started, err := (&Worker{}).attemptRestoreCheckpoint(
+	exitCode, restored, started, err := worker.attemptRestoreCheckpoint(
 		context.Background(),
 		request,
-		nil,
 		nil,
 		nil,
 		nil,
@@ -2504,40 +1564,11 @@ func TestSignalRestoredSandboxProcessManagerSkipsNonSandbox(t *testing.T) {
 	}
 }
 
-func TestMaterializeCheckpointArchiveFilesystemOnlyMarker(t *testing.T) {
-	for _, marked := range []bool{false, true} {
-		t.Run(fmt.Sprintf("marked=%t", marked), func(t *testing.T) {
-			root := t.TempDir()
-			checkpointID := "checkpoint-filesystem"
-			sourcePath := filepath.Join(root, "source", checkpointID)
-			require.NoError(t, os.MkdirAll(filepath.Join(sourcePath, checkpointFsDir), 0755))
-			if marked {
-				require.NoError(t, os.WriteFile(filepath.Join(sourcePath, checkpointFilesystemOnlyFile), []byte("v1\n"), 0644))
-			}
-			archivePath := filepath.Join(root, checkpointID+checkpointArchiveExtension)
-			require.NoError(t, createTar(sourcePath, archivePath))
-
-			checkpointPath := filepath.Join(root, "materialized", checkpointID)
-			err := materializeCheckpointArchive(archivePath, checkpointPath, checkpointID)
-			if marked {
-				require.NoError(t, err)
-				require.True(t, checkpointFilesystemOnly(checkpointPath))
-			} else {
-				require.Error(t, err)
-				require.False(t, checkpointMaterialized(checkpointPath))
-			}
-		})
-	}
-}
-
 func TestMaterializeCheckpointReaderVerifiesAndPublishes(t *testing.T) {
 	root := t.TempDir()
 	checkpointID := "checkpoint-stream"
 	sourcePath := filepath.Join(root, "source", checkpointID)
-	if err := os.MkdirAll(filepath.Join(sourcePath, checkpointFsDir), 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(sourcePath, checkpointFsDir, "state.txt"), []byte("filesystem"), 0644); err != nil {
+	if err := os.MkdirAll(sourcePath, 0755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(sourcePath, "inventory.img"), []byte("runtime"), 0644); err != nil {
@@ -2585,10 +1616,7 @@ func TestMaterializeCheckpointReaderRejectsHashMismatch(t *testing.T) {
 	root := t.TempDir()
 	checkpointID := "checkpoint-corrupt"
 	sourcePath := filepath.Join(root, "source", checkpointID)
-	if err := os.MkdirAll(filepath.Join(sourcePath, checkpointFsDir), 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(sourcePath, checkpointFsDir, "state.txt"), []byte("filesystem"), 0644); err != nil {
+	if err := os.MkdirAll(sourcePath, 0755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(sourcePath, "inventory.img"), []byte("runtime"), 0644); err != nil {
@@ -2736,7 +1764,7 @@ func TestRuntimeCompatibility(t *testing.T) {
 			}
 
 			checkpointID := fmt.Sprintf("%s-checkpoint", rtInfo.name)
-			checkpointPath, err := manager.CreateCheckpoint(context.Background(), mockRuntime, checkpointID, request, false)
+			checkpointPath, err := manager.CreateCheckpoint(context.Background(), mockRuntime, checkpointID, request, true)
 			if err != nil {
 				t.Errorf("CreateCheckpoint with %s failed: %v", rtInfo.name, err)
 			}

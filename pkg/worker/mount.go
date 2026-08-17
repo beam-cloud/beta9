@@ -544,17 +544,6 @@ func (c *ContainerMountManager) setupMountPointS3(containerId string, m types.Mo
 	return nil
 }
 
-const (
-	checkpointSignalFileName            = "READY_FOR_CHECKPOINT"
-	checkpointCompleteFileName          = "CHECKPOINT_COMPLETE"
-	checkpointContainerIdFileName       = "CONTAINER_ID"
-	checkpointContainerHostnameFileName = "CONTAINER_HOSTNAME"
-)
-
-func checkpointSignalDir(containerId string) string {
-	return containerSignalDir(containerId, "criu")
-}
-
 func runnerSignalDir(containerId string) string {
 	return containerSignalDir(containerId, "runner")
 }

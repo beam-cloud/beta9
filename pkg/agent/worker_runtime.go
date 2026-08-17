@@ -270,7 +270,7 @@ func (r *workerContainerRuntime) run(ctx context.Context, slot *pb.AgentWorkerSl
 	}
 
 	if err := removeOtherManagedWorkerContainers(name, slot); err != nil {
-		fmt.Fprintf(r.statusErr, "failed to clean stale worker containers: %v\n", err)
+		return fmt.Errorf("clean stale worker containers for slot %s: %w", slot.WorkerId, err)
 	}
 	if err := removeManagedWorkerContainer(name, slot); err != nil {
 		return err

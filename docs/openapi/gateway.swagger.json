@@ -1042,6 +1042,45 @@
         ]
       }
     },
+    "/pods/{containerId}/snapshot-state": {
+      "post": {
+        "summary": "Containers",
+        "operationId": "GatewayService_SnapshotContainerState",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayGatewaySnapshotContainerStateResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "containerId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/GatewayServiceSnapshotContainerStateBody"
+            }
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
     "/pools": {
       "get": {
         "summary": "Pools",
@@ -1691,6 +1730,347 @@
         ]
       }
     },
+    "/state-snapshots/{stateSnapshotId}/references:release": {
+      "post": {
+        "operationId": "GatewayService_ReleaseStateSnapshotReference",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayStateSnapshotReferenceResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "stateSnapshotId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/GatewayServiceReleaseStateSnapshotReferenceBody"
+            }
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/state-snapshots/{stateSnapshotId}/references:retain": {
+      "post": {
+        "operationId": "GatewayService_RetainStateSnapshotReference",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayStateSnapshotReferenceResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "stateSnapshotId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/GatewayServiceRetainStateSnapshotReferenceBody"
+            }
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/state-template-instantiations/{operationId}": {
+      "get": {
+        "operationId": "GatewayService_GetStateTemplateInstantiation",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayStateTemplateInstantiationResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "operationId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/state-template-instantiations/{operationId}:cancel": {
+      "post": {
+        "operationId": "GatewayService_CancelStateTemplateInstantiation",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayStateTemplateInstantiationResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "operationId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/GatewayServiceCancelStateTemplateInstantiationBody"
+            }
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/state-template-instantiations/{operationId}:confirm": {
+      "post": {
+        "operationId": "GatewayService_ConfirmStateTemplateInstantiation",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayStateTemplateInstantiationResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "operationId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/GatewayServiceConfirmStateTemplateInstantiationBody"
+            }
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/state-templates/{stateTemplateId}/versions/{version}": {
+      "get": {
+        "operationId": "GatewayService_GetStateTemplate",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayGetStateTemplateResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "stateTemplateId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "format": "int64"
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/state-templates/{stateTemplateId}/versions/{version}:instantiate": {
+      "post": {
+        "operationId": "GatewayService_InstantiateStateTemplate",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayStateTemplateInstantiationResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "stateTemplateId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "format": "int64"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/GatewayServiceInstantiateStateTemplateBody"
+            }
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/state-templates/{stateTemplateId}/versions/{version}:release": {
+      "post": {
+        "operationId": "GatewayService_ReleaseStateTemplate",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayReleaseStateTemplateResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "stateTemplateId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "type": "string",
+            "format": "int64"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/GatewayServiceReleaseStateTemplateBody"
+            }
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/state-templates:promote": {
+      "post": {
+        "operationId": "GatewayService_PromoteStateTemplate",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayPromoteStateTemplateResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/gatewayPromoteStateTemplateRequest"
+            }
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
     "/stubs": {
       "post": {
         "summary": "Stubs",
@@ -2195,6 +2575,28 @@
         }
       }
     },
+    "GatewayServiceCancelStateTemplateInstantiationBody": {
+      "type": "object",
+      "properties": {
+        "destinationStateSnapshotId": {
+          "type": "string"
+        }
+      }
+    },
+    "GatewayServiceConfirmStateTemplateInstantiationBody": {
+      "type": "object",
+      "properties": {
+        "destinationStateSnapshotId": {
+          "type": "string"
+        },
+        "referenceKind": {
+          "type": "string"
+        },
+        "referenceId": {
+          "type": "string"
+        }
+      }
+    },
     "GatewayServiceCreatePoolJoinTokenBody": {
       "type": "object",
       "properties": {
@@ -2235,6 +2637,20 @@
         }
       }
     },
+    "GatewayServiceInstantiateStateTemplateBody": {
+      "type": "object",
+      "properties": {
+        "operationId": {
+          "type": "string"
+        },
+        "destinationStubId": {
+          "type": "string"
+        },
+        "expectedTemplate": {
+          "$ref": "#/definitions/typesPublicStateTemplateArtifact"
+        }
+      }
+    },
     "GatewayServiceLaunchRentalWorkloadBody": {
       "type": "object",
       "properties": {
@@ -2270,6 +2686,42 @@
         }
       }
     },
+    "GatewayServiceReleaseStateSnapshotReferenceBody": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "referenceId": {
+          "type": "string"
+        }
+      }
+    },
+    "GatewayServiceReleaseStateTemplateBody": {
+      "type": "object",
+      "properties": {
+        "operationId": {
+          "type": "string"
+        },
+        "referenceKind": {
+          "type": "string"
+        },
+        "referenceId": {
+          "type": "string"
+        }
+      }
+    },
+    "GatewayServiceRetainStateSnapshotReferenceBody": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "referenceId": {
+          "type": "string"
+        }
+      }
+    },
     "GatewayServiceRotateMachineSSHKeyBody": {
       "type": "object"
     },
@@ -2292,6 +2744,26 @@
         "containers": {
           "type": "integer",
           "format": "int64"
+        }
+      }
+    },
+    "GatewayServiceSnapshotContainerStateBody": {
+      "type": "object",
+      "properties": {
+        "operationId": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "publish": {
+          "type": "boolean"
+        },
+        "includeMemory": {
+          "type": "boolean"
+        },
+        "visible": {
+          "type": "boolean"
         }
       }
     },
@@ -2961,20 +3433,6 @@
         }
       }
     },
-    "gatewayCheckpointContainerResponse": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "type": "boolean"
-        },
-        "checkpointId": {
-          "type": "string"
-        },
-        "errorMsg": {
-          "type": "string"
-        }
-      }
-    },
     "gatewayCordonWorkerResponse": {
       "type": "object",
       "properties": {
@@ -3507,18 +3965,11 @@
         "mountPath": {
           "type": "string"
         },
-        "filesystem": {
-          "type": "string"
-        },
-        "driver": {
-          "type": "string"
-        },
         "readOnly": {
           "type": "boolean"
         },
-        "sourceSnapshotId": {
-          "type": "string",
-          "description": "Snapshot used to initialize a disk with no snapshot history."
+        "sourceGenerationId": {
+          "type": "string"
         }
       }
     },
@@ -3598,6 +4049,48 @@
         },
         "pool": {
           "$ref": "#/definitions/gatewayPrivatePool"
+        }
+      }
+    },
+    "gatewayGatewaySnapshotContainerStateResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errorMsg": {
+          "type": "string"
+        },
+        "stateSnapshotId": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "imageDigest": {
+          "type": "string"
+        },
+        "runtimeProfile": {
+          "type": "string"
+        },
+        "checkpointId": {
+          "type": "string"
+        },
+        "hasMemory": {
+          "type": "boolean"
+        },
+        "generations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/typesStateGeneration"
+          }
+        },
+        "restoreMode": {
+          "type": "string"
+        },
+        "fallbackReason": {
+          "type": "string"
         }
       }
     },
@@ -3755,9 +4248,6 @@
         "extra": {
           "type": "string"
         },
-        "checkpointEnabled": {
-          "type": "boolean"
-        },
         "gpuCount": {
           "type": "integer",
           "format": "int64"
@@ -3833,12 +4323,12 @@
         "allowMarketplace": {
           "type": "boolean"
         },
-        "checkpointTrigger": {
-          "$ref": "#/definitions/typesCheckpointTrigger"
-        },
         "hostname": {
           "type": "string",
           "description": "Hostname to set inside the container."
+        },
+        "persistentRoot": {
+          "$ref": "#/definitions/typesPersistentRoot"
         }
       }
     },
@@ -3892,6 +4382,20 @@
         "expiresAt": {
           "type": "string",
           "format": "date-time"
+        }
+      }
+    },
+    "gatewayGetStateTemplateResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errorMsg": {
+          "type": "string"
+        },
+        "stateTemplate": {
+          "$ref": "#/definitions/typesPublicStateTemplateArtifact"
         }
       }
     },
@@ -5143,6 +5647,40 @@
         }
       }
     },
+    "gatewayPromoteStateTemplateRequest": {
+      "type": "object",
+      "properties": {
+        "operationId": {
+          "type": "string"
+        },
+        "sourceStateSnapshotId": {
+          "type": "string"
+        },
+        "referenceKind": {
+          "type": "string"
+        },
+        "referenceId": {
+          "type": "string"
+        }
+      }
+    },
+    "gatewayPromoteStateTemplateResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errorMsg": {
+          "type": "string"
+        },
+        "stateTemplate": {
+          "$ref": "#/definitions/typesPublicStateTemplateArtifact"
+        },
+        "replayed": {
+          "type": "boolean"
+        }
+      }
+    },
     "gatewayProviderInstance": {
       "type": "object",
       "properties": {
@@ -5231,6 +5769,42 @@
         },
         "errorMsg": {
           "type": "string"
+        }
+      }
+    },
+    "gatewayReleaseStateTemplateResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errorMsg": {
+          "type": "string"
+        },
+        "stateTemplateId": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string",
+          "format": "int64"
+        },
+        "status": {
+          "type": "string"
+        },
+        "replayed": {
+          "type": "boolean"
+        },
+        "activeInstantiations": {
+          "type": "string",
+          "format": "int64"
+        },
+        "queuedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "retiredAt": {
+          "type": "string",
+          "format": "date-time"
         }
       }
     },
@@ -5431,6 +6005,43 @@
       "properties": {
         "ok": {
           "type": "boolean"
+        }
+      }
+    },
+    "gatewayStateSnapshotReferenceResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errorMsg": {
+          "type": "string"
+        },
+        "stateSnapshotId": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "referenceId": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
+      }
+    },
+    "gatewayStateTemplateInstantiationResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errorMsg": {
+          "type": "string"
+        },
+        "instantiation": {
+          "$ref": "#/definitions/typesStateTemplateInstantiation"
         }
       }
     },
@@ -5828,29 +6439,6 @@
         }
       }
     },
-    "typesCheckpointTrigger": {
-      "type": "object",
-      "properties": {
-        "type": {
-          "type": "string"
-        },
-        "httpPath": {
-          "type": "string"
-        },
-        "httpPort": {
-          "type": "integer",
-          "format": "int64"
-        },
-        "timeoutSeconds": {
-          "type": "integer",
-          "format": "int64"
-        },
-        "intervalSeconds": {
-          "type": "integer",
-          "format": "int64"
-        }
-      }
-    },
     "typesContainer": {
       "type": "object",
       "properties": {
@@ -5911,6 +6499,14 @@
         }
       }
     },
+    "typesPersistentRoot": {
+      "type": "object",
+      "properties": {
+        "size": {
+          "type": "string"
+        }
+      }
+    },
     "typesPricingPolicy": {
       "type": "object",
       "properties": {
@@ -5928,6 +6524,151 @@
         "costPerTaskDurationMs": {
           "type": "number",
           "format": "double"
+        }
+      }
+    },
+    "typesPublicStateTemplateArtifact": {
+      "type": "object",
+      "properties": {
+        "stateTemplateId": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string",
+          "format": "int64"
+        },
+        "status": {
+          "type": "string"
+        },
+        "aggregateManifestDigest": {
+          "type": "string"
+        },
+        "members": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/typesPublicStateTemplateMember"
+          }
+        },
+        "image": {
+          "type": "string"
+        },
+        "imageDigest": {
+          "type": "string"
+        },
+        "runtimeProfile": {
+          "type": "string"
+        }
+      }
+    },
+    "typesPublicStateTemplateMember": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "mountPath": {
+          "type": "string"
+        },
+        "readOnly": {
+          "type": "boolean"
+        },
+        "root": {
+          "type": "boolean"
+        },
+        "logicalSizeBytes": {
+          "type": "string",
+          "format": "int64"
+        },
+        "storedSizeBytes": {
+          "type": "string",
+          "format": "int64"
+        },
+        "manifestDigest": {
+          "type": "string"
+        },
+        "manifestSizeBytes": {
+          "type": "string",
+          "format": "int64"
+        },
+        "chunkCount": {
+          "type": "string",
+          "format": "int64"
+        }
+      }
+    },
+    "typesStateGeneration": {
+      "type": "object",
+      "properties": {
+        "volumeId": {
+          "type": "string"
+        },
+        "generationId": {
+          "type": "string"
+        },
+        "parentGenerationId": {
+          "type": "string"
+        },
+        "cloneParentGenerationId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "mountPath": {
+          "type": "string"
+        },
+        "readOnly": {
+          "type": "boolean"
+        },
+        "root": {
+          "type": "boolean"
+        },
+        "generation": {
+          "type": "string",
+          "format": "int64"
+        }
+      }
+    },
+    "typesStateTemplateInstantiation": {
+      "type": "object",
+      "properties": {
+        "operationId": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "terminalWinner": {
+          "type": "string"
+        },
+        "template": {
+          "$ref": "#/definitions/typesPublicStateTemplateArtifact"
+        },
+        "destinationStubId": {
+          "type": "string"
+        },
+        "destinationStateSnapshotId": {
+          "type": "string"
+        },
+        "destinationImageId": {
+          "type": "string"
+        },
+        "destinationImageDigest": {
+          "type": "string"
+        },
+        "destinationRuntimeProfile": {
+          "type": "string"
+        },
+        "generations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/typesStateGeneration"
+          }
+        },
+        "replayed": {
+          "type": "boolean"
         }
       }
     },
@@ -5952,6 +6693,10 @@
           "type": "integer",
           "format": "int64"
         },
+        "totalNbdDevices": {
+          "type": "integer",
+          "format": "int64"
+        },
         "freeCpu": {
           "type": "string",
           "format": "int64"
@@ -5961,6 +6706,10 @@
           "format": "int64"
         },
         "freeGpuCount": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "freeNbdDevices": {
           "type": "integer",
           "format": "int64"
         },
@@ -6013,6 +6762,9 @@
           "type": "string"
         },
         "workerImageOverride": {
+          "type": "string"
+        },
+        "instanceId": {
           "type": "string"
         }
       }

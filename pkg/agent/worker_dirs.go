@@ -9,18 +9,22 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
+const workerStateVolumesMountPath = "/var/lib/beta9/state-volumes"
+
 type workerDirs struct {
-	Slot         string
-	Images       string
-	Tmp          string
-	Data         string
-	Workspace    string
-	Cache        string
-	CacheMount   string
-	CacheEnabled bool
-	Checkpoints  string
-	DurableDisk  string
-	Logs         string
+	Slot             string
+	Images           string
+	Tmp              string
+	Data             string
+	Workspace        string
+	Cache            string
+	CacheMount       string
+	CacheEnabled     bool
+	Checkpoints      string
+	DurableDisk      string
+	StateVolumes     string
+	StateVolumeLocks string
+	Logs             string
 }
 
 func (d workerDirs) All() []string {
@@ -32,6 +36,8 @@ func (d workerDirs) All() []string {
 		d.Workspace,
 		d.Checkpoints,
 		d.DurableDisk,
+		d.StateVolumes,
+		d.StateVolumeLocks,
 		d.Logs,
 	}
 	if d.CacheEnabled {
@@ -43,17 +49,19 @@ func (d workerDirs) All() []string {
 func agentWorkerDirs(stateDir, cacheDir, workerID string) workerDirs {
 	slotName := sanitizeDockerName(workerID)
 	return workerDirs{
-		Slot:         filepath.Join(stateDir, "slots", slotName),
-		Images:       filepath.Join(stateDir, "images"),
-		Tmp:          filepath.Join(stateDir, "tmp", slotName),
-		Data:         filepath.Join(stateDir, "data"),
-		Workspace:    filepath.Join(stateDir, "workspace-data"),
-		Cache:        agentCacheDir(stateDir, cacheDir),
-		CacheMount:   types.AgentCachePath,
-		CacheEnabled: true,
-		Checkpoints:  filepath.Join(stateDir, "checkpoints"),
-		DurableDisk:  filepath.Join(stateDir, "durable-disks"),
-		Logs:         filepath.Join(stateDir, "logs", slotName),
+		Slot:             filepath.Join(stateDir, "slots", slotName),
+		Images:           filepath.Join(stateDir, "images"),
+		Tmp:              filepath.Join(stateDir, "tmp", slotName),
+		Data:             filepath.Join(stateDir, "data"),
+		Workspace:        filepath.Join(stateDir, "workspace-data"),
+		Cache:            agentCacheDir(stateDir, cacheDir),
+		CacheMount:       types.AgentCachePath,
+		CacheEnabled:     true,
+		Checkpoints:      filepath.Join(stateDir, "checkpoints"),
+		DurableDisk:      filepath.Join(stateDir, "durable-disks"),
+		StateVolumes:     filepath.Join(stateDir, "state-volumes"),
+		StateVolumeLocks: filepath.Join(stateDir, "state-volume-locks"),
+		Logs:             filepath.Join(stateDir, "logs", slotName),
 	}
 }
 
@@ -73,6 +81,7 @@ func agentWorkerDirsForSlot(stateDir, cacheDir string, slot *pb.AgentWorkerSlot)
 		dirs.Data = storagePath
 		dirs.Workspace = filepath.Join(storagePath, "workspace-data")
 		dirs.Checkpoints = filepath.Join(storagePath, "checkpoints")
+		dirs.StateVolumes = filepath.Join(storagePath, "state-volumes")
 		if strings.TrimSpace(config.GetDurableDisksPath()) == "" {
 			dirs.DurableDisk = filepath.Join(storagePath, "durable-disks")
 		}

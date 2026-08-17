@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path"
+	"strings"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -64,10 +65,6 @@ func (s *WorkerRepositoryService) authorizeWorkerRuntimeCredentialRequest(ctx co
 		return nil, fmt.Errorf("backend repository is unavailable")
 	}
 
-	if runtimeCredentialsWorkspaceStorageOnly(req) {
-		return s.runtimeCredentialsWorkspace(ctx, workspaceID, req)
-	}
-
 	if s.containerRepo == nil {
 		return nil, fmt.Errorf("container repository is unavailable")
 	}
@@ -78,6 +75,17 @@ func (s *WorkerRepositoryService) authorizeWorkerRuntimeCredentialRequest(ctx co
 	}
 	if state.WorkspaceId != req.WorkspaceId || state.StubId != req.StubId {
 		return nil, fmt.Errorf("container %q is not assigned to workspace/stub", req.ContainerId)
+	}
+	if s.workerRepo == nil || strings.TrimSpace(state.WorkerId) == "" {
+		return nil, fmt.Errorf("container %q has no authoritative worker assignment", req.ContainerId)
+	}
+	worker, err := s.workerRepo.GetWorkerById(state.WorkerId)
+	if err != nil {
+		return nil, err
+	}
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+	if err := authorizeRegisteredWorkerToken(ctx, authInfo, worker, s.computeRepo); err != nil {
+		return nil, err
 	}
 
 	workspace, err := s.runtimeCredentialsWorkspace(ctx, workspaceID, req)
@@ -129,14 +137,6 @@ func (s *WorkerRepositoryService) runtimeCredentialsWorkspace(ctx context.Contex
 
 func runtimeCredentialsNeedsSigningKey(req *pb.GetContainerRuntimeCredentialsRequest) bool {
 	return req != nil && (len(req.SecretNames) > 0 || len(req.MountCredentials) > 0)
-}
-
-func runtimeCredentialsWorkspaceStorageOnly(req *pb.GetContainerRuntimeCredentialsRequest) bool {
-	return req != nil &&
-		req.WorkspaceStorage &&
-		!req.RuntimeToken &&
-		len(req.SecretNames) == 0 &&
-		len(req.MountCredentials) == 0
 }
 
 func (s *WorkerRepositoryService) workerTokenWorkspaceID(ctx context.Context, workspaceID string) (uint, error) {

@@ -8,26 +8,12 @@ import (
 )
 
 func init() {
-	goose.AddMigrationContext(upAddDiskSnapshotBucketName, downAddDiskSnapshotBucketName)
+	goose.AddMigrationContext(upStorageCutover042, downStorageCutover042)
 }
 
-func upAddDiskSnapshotBucketName(ctx context.Context, tx *sql.Tx) error {
-	// Ensure the disk_snapshot table exists before altering it. If a database
-	// recorded migration 041 as applied without the table actually being
-	// created (e.g. a partial/failed run that left goose_db_version ahead of the
-	// real schema), this guard recreates it so the ALTER below cannot fail with
-	// "relation \"disk_snapshot\" does not exist".
-	for _, statement := range diskSnapshotSchemaStatements() {
-		if _, err := tx.ExecContext(ctx, statement); err != nil {
-			return err
-		}
-	}
+// This historical version is intentionally empty. The state-volume cutover
+// owns all writable machine state and migration 048 removes superseded storage
+// tables on upgrade. Fresh installs must never create those intermediate schemas.
+func upStorageCutover042(context.Context, *sql.Tx) error { return nil }
 
-	_, err := tx.ExecContext(ctx, `ALTER TABLE disk_snapshot ADD COLUMN IF NOT EXISTS bucket_name TEXT NOT NULL DEFAULT '';`)
-	return err
-}
-
-func downAddDiskSnapshotBucketName(ctx context.Context, tx *sql.Tx) error {
-	_, err := tx.ExecContext(ctx, `ALTER TABLE disk_snapshot DROP COLUMN IF EXISTS bucket_name;`)
-	return err
-}
+func downStorageCutover042(context.Context, *sql.Tx) error { return nil }

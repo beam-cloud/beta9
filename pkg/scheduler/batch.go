@@ -83,13 +83,6 @@ func (b *schedulingBatch) planRequest(request *types.ContainerRequest, attempt *
 	if !runnable {
 		return
 	}
-	if !b.scheduler.checkpointReady(request) {
-		if attempt.runnable() {
-			attempt.requeueForWorkerWaitDelay(checkpointHandoffRetryDelay, "checkpoint_handoff")
-		}
-		return
-	}
-
 	normalizeGPURequest(request)
 
 	selectionStart := time.Now()
@@ -187,6 +180,11 @@ func (b *schedulingBatch) completeSchedule(schedule plannedSchedule, err error) 
 		metrics.RecordSchedulerWorkerWait(time.Since(schedule.request.Timestamp), schedule.request, "schedule_failed")
 		attempt.retryIfRunnable("schedule_failed")
 		return
+	}
+	if schedule.request.StateVolumePlanId != "" {
+		if ackErr := b.scheduler.requestBacklog.AcknowledgeStateVolumePlanDispatch(schedule.request.StateVolumePlanId); ackErr != nil {
+			requestLog(log.Warn(), schedule.request).Err(ackErr).Msg("failed to acknowledge state-volume batch processing lease")
+		}
 	}
 
 	duration := time.Since(schedule.request.Timestamp)

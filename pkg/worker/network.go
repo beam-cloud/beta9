@@ -68,6 +68,8 @@ type ContainerNetworkManager struct {
 	ipt6                *iptables.IPTables
 	worker              *types.Worker
 	workerId            string
+	workerInstanceId    string
+	storageNodeId       string
 	workerRepoClient    pb.WorkerRepositoryServiceClient
 	containerRepoClient pb.ContainerRepositoryServiceClient
 	eventRepo           repo.EventRepository
@@ -411,7 +413,7 @@ func iptablesAddressMatches(value string, ip string) bool {
 	return net.ParseIP(value).Equal(target)
 }
 
-func NewContainerNetworkManager(ctx context.Context, workerId, poolName string, workerRepoClient pb.WorkerRepositoryServiceClient, containerRepoClient pb.ContainerRepositoryServiceClient, eventRepo repo.EventRepository, config types.AppConfig, containerInstances *common.SafeMap[*ContainerInstance], poolConfig types.WorkerPoolConfig, containerStartLimit int) (*ContainerNetworkManager, error) {
+func NewContainerNetworkManager(ctx context.Context, workerId, workerInstanceId, storageNodeId, poolName string, workerRepoClient pb.WorkerRepositoryServiceClient, containerRepoClient pb.ContainerRepositoryServiceClient, eventRepo repo.EventRepository, config types.AppConfig, containerInstances *common.SafeMap[*ContainerInstance], poolConfig types.WorkerPoolConfig, containerStartLimit int) (*ContainerNetworkManager, error) {
 	defaultLink, err := getDefaultInterface()
 	if err != nil {
 		return nil, err
@@ -467,6 +469,8 @@ func NewContainerNetworkManager(ctx context.Context, workerId, poolName string, 
 		ipt6:                ipt6,
 		defaultLink:         defaultLink,
 		workerId:            workerId,
+		workerInstanceId:    workerInstanceId,
+		storageNodeId:       storageNodeId,
 		workerRepoClient:    workerRepoClient,
 		containerRepoClient: containerRepoClient,
 		eventRepo:           eventRepo,
@@ -623,16 +627,22 @@ func (m *ContainerNetworkManager) fillNetworkSlotPoolLocked() error {
 
 func (m *ContainerNetworkManager) withNetworkSlotPoolLock(fn func() error) error {
 	lockResponse, err := handleGRPCResponse(m.workerRepoClient.SetNetworkLock(m.ctx, &pb.SetNetworkLockRequest{
-		NetworkPrefix: m.networkPrefix + ":slot_pool",
-		Ttl:           networkSlotPoolLockTTL,
-		Retries:       3,
+		NetworkPrefix:    m.networkPrefix + ":slot_pool",
+		Ttl:              networkSlotPoolLockTTL,
+		Retries:          3,
+		WorkerId:         m.workerId,
+		WorkerInstanceId: m.workerInstanceId,
+		StorageNodeId:    m.storageNodeId,
 	}))
 	if err != nil {
 		return err
 	}
 	defer m.workerRepoClient.RemoveNetworkLock(m.ctx, &pb.RemoveNetworkLockRequest{
-		NetworkPrefix: m.networkPrefix + ":slot_pool",
-		Token:         lockResponse.Token,
+		NetworkPrefix:    m.networkPrefix + ":slot_pool",
+		Token:            lockResponse.Token,
+		WorkerId:         m.workerId,
+		WorkerInstanceId: m.workerInstanceId,
+		StorageNodeId:    m.storageNodeId,
 	})
 
 	return fn()
@@ -1044,10 +1054,13 @@ func (m *ContainerNetworkManager) clearNetworkSlotNeighbor(slot *containerNetwor
 func (m *ContainerNetworkManager) assignPreallocatedNetworkSlot(containerId string, slot *containerNetworkSlot) error {
 	reservationID := m.containerNetworkSlotReservationID(slot.id)
 	_, err := handleGRPCResponse(m.workerRepoClient.MoveContainerIp(m.ctx, &pb.MoveContainerIpRequest{
-		NetworkPrefix:   m.networkPrefix,
-		FromContainerId: reservationID,
-		ToContainerId:   containerId,
-		IpAddress:       slot.ip,
+		NetworkPrefix:    m.networkPrefix,
+		FromContainerId:  reservationID,
+		ToContainerId:    containerId,
+		IpAddress:        slot.ip,
+		WorkerId:         m.workerId,
+		WorkerInstanceId: m.workerInstanceId,
+		StorageNodeId:    m.storageNodeId,
 	}))
 	if err != nil {
 		return err
@@ -1278,9 +1291,12 @@ func (m *ContainerNetworkManager) reserveNetworkSlotIP(reservationID string) (*n
 		}
 
 		_, err := handleGRPCResponse(m.workerRepoClient.SetContainerIp(m.ctx, &pb.SetContainerIpRequest{
-			NetworkPrefix: m.networkPrefix,
-			ContainerId:   reservationID,
-			IpAddress:     ipAddr.IP.String(),
+			NetworkPrefix:    m.networkPrefix,
+			ContainerId:      reservationID,
+			IpAddress:        ipAddr.IP.String(),
+			WorkerId:         m.workerId,
+			WorkerInstanceId: m.workerInstanceId,
+			StorageNodeId:    m.storageNodeId,
 		}))
 		if err != nil {
 			lastErr = err
@@ -1604,16 +1620,22 @@ func (m *ContainerNetworkManager) getOrSetupBridge(bridgeName string) (netlink.L
 
 func (m *ContainerNetworkManager) setupBridge(bridgeName string) (netlink.Link, error) {
 	lockResponse, err := handleGRPCResponse(m.workerRepoClient.SetNetworkLock(m.ctx, &pb.SetNetworkLockRequest{
-		NetworkPrefix: m.networkPrefix,
-		Ttl:           10,
-		Retries:       10,
+		NetworkPrefix:    m.networkPrefix,
+		Ttl:              10,
+		Retries:          10,
+		WorkerId:         m.workerId,
+		WorkerInstanceId: m.workerInstanceId,
+		StorageNodeId:    m.storageNodeId,
 	}))
 	if err != nil {
 		return nil, err
 	}
 	defer m.workerRepoClient.RemoveNetworkLock(m.ctx, &pb.RemoveNetworkLockRequest{
-		NetworkPrefix: m.networkPrefix,
-		Token:         lockResponse.Token,
+		NetworkPrefix:    m.networkPrefix,
+		Token:            lockResponse.Token,
+		WorkerId:         m.workerId,
+		WorkerInstanceId: m.workerInstanceId,
+		StorageNodeId:    m.storageNodeId,
 	})
 
 	bridge, err := netlink.LinkByName(bridgeName)
@@ -1759,9 +1781,12 @@ func (m *ContainerNetworkManager) reserveContainerIP(opts *containerNetworkConfi
 
 		phaseStart = time.Now()
 		_, err := handleGRPCResponse(m.workerRepoClient.SetContainerIp(m.ctx, &pb.SetContainerIpRequest{
-			NetworkPrefix: m.networkPrefix,
-			ContainerId:   opts.containerId,
-			IpAddress:     ipAddr.IP.String(),
+			NetworkPrefix:    m.networkPrefix,
+			ContainerId:      opts.containerId,
+			IpAddress:        ipAddr.IP.String(),
+			WorkerId:         m.workerId,
+			WorkerInstanceId: m.workerInstanceId,
+			StorageNodeId:    m.storageNodeId,
 		}))
 		metrics.RecordWorkerStartupPhase("network_set_container_ip", time.Since(phaseStart), opts.request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 		m.recordNetworkLifecycle(opts.request, types.ContainerLifecycleNetworkSetContainerIP, phaseStart, err == nil, nil)
@@ -1942,8 +1967,11 @@ func (m *ContainerNetworkManager) removeContainerIPFromRepository(containerId st
 
 func (m *ContainerNetworkManager) removeContainerIPFromRepositoryWithContext(ctx context.Context, containerId string) error {
 	_, err := handleGRPCResponse(m.workerRepoClient.RemoveContainerIp(ctx, &pb.RemoveContainerIpRequest{
-		NetworkPrefix: m.networkPrefix,
-		ContainerId:   containerId,
+		NetworkPrefix:    m.networkPrefix,
+		ContainerId:      containerId,
+		WorkerId:         m.workerId,
+		WorkerInstanceId: m.workerInstanceId,
+		StorageNodeId:    m.storageNodeId,
 	}))
 	return err
 }
@@ -2137,16 +2165,22 @@ func (m *ContainerNetworkManager) cleanupOrphanedNamespaces() {
 					// Only allow one worker on this machine/worker handle the cleanup
 					// We have a secondary lock for the IP assignment, but we need this lock for the "container" level consistency
 					lockResponse, err := handleGRPCResponse(m.workerRepoClient.SetNetworkLock(m.ctx, &pb.SetNetworkLockRequest{
-						NetworkPrefix: m.networkPrefix + "-" + containerId,
-						Ttl:           10,
-						Retries:       0,
+						NetworkPrefix:    m.networkPrefix + "-" + containerId,
+						Ttl:              10,
+						Retries:          0,
+						WorkerId:         m.workerId,
+						WorkerInstanceId: m.workerInstanceId,
+						StorageNodeId:    m.storageNodeId,
 					}))
 					if err != nil {
 						return
 					}
 					defer m.workerRepoClient.RemoveNetworkLock(m.ctx, &pb.RemoveNetworkLockRequest{
-						NetworkPrefix: m.networkPrefix + "-" + containerId,
-						Token:         lockResponse.Token,
+						NetworkPrefix:    m.networkPrefix + "-" + containerId,
+						Token:            lockResponse.Token,
+						WorkerId:         m.workerId,
+						WorkerInstanceId: m.workerInstanceId,
+						StorageNodeId:    m.storageNodeId,
 					})
 
 					// Check if the container still exists
@@ -2194,9 +2228,12 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 	defer cleanupCancel()
 
 	lockResponse, err := handleGRPCResponse(m.workerRepoClient.SetNetworkLock(cleanupCtx, &pb.SetNetworkLockRequest{
-		NetworkPrefix: m.networkPrefix,
-		Ttl:           10,
-		Retries:       containerNetworkCleanupLockRetries,
+		NetworkPrefix:    m.networkPrefix,
+		Ttl:              10,
+		Retries:          containerNetworkCleanupLockRetries,
+		WorkerId:         m.workerId,
+		WorkerInstanceId: m.workerInstanceId,
+		StorageNodeId:    m.storageNodeId,
 	}))
 	if err != nil {
 		return err
@@ -2205,8 +2242,11 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 		unlockCtx, unlockCancel := context.WithTimeout(context.Background(), containerNetworkCleanupRPCTimeout)
 		defer unlockCancel()
 		m.workerRepoClient.RemoveNetworkLock(unlockCtx, &pb.RemoveNetworkLockRequest{
-			NetworkPrefix: m.networkPrefix,
-			Token:         lockResponse.Token,
+			NetworkPrefix:    m.networkPrefix,
+			Token:            lockResponse.Token,
+			WorkerId:         m.workerId,
+			WorkerInstanceId: m.workerInstanceId,
+			StorageNodeId:    m.storageNodeId,
 		})
 	}()
 
@@ -2259,8 +2299,11 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 	}
 
 	_, err = handleGRPCResponse(m.workerRepoClient.RemoveContainerIp(cleanupCtx, &pb.RemoveContainerIpRequest{
-		NetworkPrefix: m.networkPrefix,
-		ContainerId:   containerId,
+		NetworkPrefix:    m.networkPrefix,
+		ContainerId:      containerId,
+		WorkerId:         m.workerId,
+		WorkerInstanceId: m.workerInstanceId,
+		StorageNodeId:    m.storageNodeId,
 	}))
 	if err != nil {
 		if isMissingNetworkReservation(err) {

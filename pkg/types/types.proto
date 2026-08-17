@@ -26,34 +26,6 @@ message BuildOptions {
   repeated string build_secrets = 5;
 }
 
-message Checkpoint {
-  string checkpoint_id = 2;
-  string external_id = 3;
-  string source_container_id = 4;
-  string container_ip = 5;
-  string status = 6;
-  string remote_key = 7;
-  string stub_type = 10;
-  repeated uint32 exposed_ports = 12;
-  google.protobuf.Timestamp created_at = 13;
-  google.protobuf.Timestamp last_restored_at = 14;
-  NullTime deleted_at = 15;
-  string cache_hash = 16;
-  int64 cache_size_bytes = 17;
-  string origin_key = 18;
-  string locality = 19;
-  string accelerator = 20;
-  string runtime = 21;
-}
-
-message CheckpointTrigger {
-  string type = 1;
-  string http_path = 2;
-  uint32 http_port = 3;
-  uint32 timeout_seconds = 4;
-  uint32 interval_seconds = 5;
-}
-
 message ConcurrencyLimit {
   uint32 id = 1;
   string external_id = 2;
@@ -95,25 +67,29 @@ message ContainerRequest {
   int64 retry_count = 16;
   string pool_selector = 17;
   bool preemptable = 18;
-  bool checkpoint_enabled = 19;
-  BuildOptions build_options = 20;
-  repeated uint32 ports = 21;
-  double cost_per_ms = 22;
-  string app_id = 23;
-  Checkpoint checkpoint = 24;
-  string config_path = 25;
-  string image_credentials = 26;
-  string build_registry_credentials = 27;
-  bool block_network = 28;
-  repeated string allow_list = 29;
-  bool docker_enabled = 30;
-  repeated string runtime_secret_names = 31;
-  bool runtime_token_required = 32;
-  bool allow_marketplace = 33;
-  string machine_id = 34;
-  CheckpointTrigger checkpoint_trigger = 35;
-  string task_id = 36;
-  string hostname = 38;
+  BuildOptions build_options = 19;
+  repeated uint32 ports = 20;
+  double cost_per_ms = 21;
+  string app_id = 22;
+  string config_path = 23;
+  string image_credentials = 24;
+  string build_registry_credentials = 25;
+  bool block_network = 26;
+  repeated string allow_list = 27;
+  bool docker_enabled = 28;
+  repeated string runtime_secret_names = 29;
+  bool runtime_token_required = 30;
+  bool allow_marketplace = 31;
+  string machine_id = 32;
+  string task_id = 33;
+  string hostname = 35;
+  PersistentRoot persistent_root = 36;
+  RootStateMountConfig root_state = 37;
+  string state_snapshot_id = 38;
+  bool state_fork = 39;
+  string state_image_digest = 40;
+  string state_runtime_profile = 41;
+  string state_checkpoint_accelerator = 42;
 }
 
 message ContainerState {
@@ -124,19 +100,26 @@ message ContainerState {
   string workspace_id = 5;
   string gpu = 6;
   uint32 gpu_count = 7;
-  int64 cpu = 8;
-  int64 memory = 9;
-  int64 started_at = 10;
-  string worker_id = 11;
-  string machine_id = 12;
+  uint32 nbd_devices = 8;
+  int64 cpu = 9;
+  int64 memory = 10;
+  int64 started_at = 11;
+  string worker_id = 12;
+  string machine_id = 13;
+  string state_snapshot_id = 14;
+  bool state_fork = 15;
 }
 
 message DurableDiskMountConfig {
   string name = 1;
   string size = 2;
-  string filesystem = 3;
-  string driver = 4;
-  string source_snapshot_id = 5;
+  string source_generation_id = 3;
+  string volume_id = 4;
+  bool initialize = 5;
+  bool clone_source = 6;
+  string attachment_token = 7;
+  int64 fencing_token = 8;
+  int64 lease_expires_at_unix = 9;
 }
 
 message FileInfo {
@@ -205,6 +188,10 @@ message Object {
   google.protobuf.Timestamp created_at = 6;
 }
 
+message PersistentRoot {
+  string size = 1;
+}
+
 message PricingPolicy {
   int64 max_in_flight = 1;
   string cost_model = 2;
@@ -219,6 +206,73 @@ message ProcessInfo {
   string cwd = 4;
   repeated string env = 5;
   int32 exit_code = 6;
+}
+
+message PublicStateTemplateArtifact {
+  string state_template_id = 1;
+  int64 version = 2;
+  string status = 3;
+  string aggregate_manifest_digest = 4;
+  repeated PublicStateTemplateMember members = 5;
+  string image = 6;
+  string image_digest = 7;
+  string runtime_profile = 8;
+}
+
+message PublicStateTemplateMember {
+  string name = 1;
+  string mount_path = 2;
+  bool read_only = 3;
+  bool root = 4;
+  int64 logical_size_bytes = 5;
+  int64 stored_size_bytes = 6;
+  string manifest_digest = 7;
+  int64 manifest_size_bytes = 8;
+  int64 chunk_count = 9;
+}
+
+message RootStateMountConfig {
+  string volume_id = 1;
+  string size = 2;
+  string source_generation_id = 3;
+  bool clone_source = 4;
+  bool initialize = 5;
+  string attachment_token = 6;
+  int64 fencing_token = 7;
+  int64 lease_expires_at_unix = 8;
+}
+
+message StateGeneration {
+  string volume_id = 1;
+  string generation_id = 2;
+  string parent_generation_id = 3;
+  string clone_parent_generation_id = 4;
+  string name = 5;
+  string mount_path = 6;
+  bool read_only = 7;
+  bool root = 8;
+  int64 generation = 9;
+}
+
+message StateRestoreReceipt {
+  string state_snapshot_id = 1;
+  string restore_mode = 2;
+  string fallback_reason = 3;
+  repeated StateGeneration generations = 4;
+}
+
+message StateTemplateInstantiation {
+  string operation_id = 1;
+  string status = 2;
+  string terminal_winner = 3;
+  PublicStateTemplateArtifact template = 4;
+  string destination_stub_id = 5;
+  string destination_state_snapshot_id = 6;
+  string destination_image_id = 7;
+  string destination_image_digest = 8;
+  string destination_runtime_profile = 9;
+  repeated StateGeneration generations = 10;
+  bool replayed = 11;
 }
 
 message Stub {
@@ -249,24 +303,27 @@ message Worker {
   int64 total_cpu = 3;
   int64 total_memory = 4;
   uint32 total_gpu_count = 5;
-  int64 free_cpu = 6;
-  int64 free_memory = 7;
-  uint32 free_gpu_count = 8;
-  string gpu = 9;
-  string pool_name = 10;
-  string machine_id = 11;
-  int64 resource_version = 12;
-  bool requires_pool_selector = 13;
-  int32 priority = 14;
-  bool preemptable = 15;
-  string build_version = 16;
-  repeated Container active_containers = 17;
-  string runtime = 18;
-  string pool_selector = 19;
-  bool cordon_requested = 20;
-  string rollout_generation = 21;
-  string rollout_build_version = 22;
-  string worker_image_override = 23;
+  uint32 total_nbd_devices = 6;
+  int64 free_cpu = 7;
+  int64 free_memory = 8;
+  uint32 free_gpu_count = 9;
+  uint32 free_nbd_devices = 10;
+  string gpu = 12;
+  string pool_name = 13;
+  string machine_id = 14;
+  int64 resource_version = 15;
+  bool requires_pool_selector = 16;
+  int32 priority = 17;
+  bool preemptable = 18;
+  string build_version = 19;
+  repeated Container active_containers = 20;
+  string runtime = 21;
+  string pool_selector = 22;
+  bool cordon_requested = 23;
+  string rollout_generation = 24;
+  string rollout_build_version = 25;
+  string worker_image_override = 26;
+  string instance_id = 30;
 }
 
 message WorkerPoolState {

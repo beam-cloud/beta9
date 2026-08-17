@@ -3,7 +3,10 @@ package repository_services
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 
+	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
@@ -12,11 +15,14 @@ import (
 type ContainerRepositoryService struct {
 	ctx           context.Context
 	containerRepo repository.ContainerRepository
+	backendRepo   repository.BackendRepository
+	workerRepo    repository.WorkerRepository
+	computeRepo   repository.ComputeRepository
 	pb.UnimplementedContainerRepositoryServiceServer
 }
 
-func NewContainerRepositoryService(ctx context.Context, containerRepo repository.ContainerRepository) *ContainerRepositoryService {
-	return &ContainerRepositoryService{ctx: ctx, containerRepo: containerRepo}
+func NewContainerRepositoryService(ctx context.Context, containerRepo repository.ContainerRepository, backendRepo repository.BackendRepository, workerRepo repository.WorkerRepository, computeRepo repository.ComputeRepository) *ContainerRepositoryService {
+	return &ContainerRepositoryService{ctx: ctx, containerRepo: containerRepo, backendRepo: backendRepo, workerRepo: workerRepo, computeRepo: computeRepo}
 }
 
 func (s *ContainerRepositoryService) GetContainerState(ctx context.Context, req *pb.GetContainerStateRequest) (*pb.GetContainerStateResponse, error) {
@@ -29,16 +35,19 @@ func (s *ContainerRepositoryService) GetContainerState(ctx context.Context, req 
 		Ok:          true,
 		ContainerId: req.ContainerId,
 		State: &pb.ContainerState{
-			Status:      string(state.Status),
-			ContainerId: state.ContainerId,
-			StubId:      state.StubId,
-			ScheduledAt: state.ScheduledAt,
-			StartedAt:   state.StartedAt,
-			WorkspaceId: state.WorkspaceId,
-			Gpu:         state.Gpu,
-			GpuCount:    state.GpuCount,
-			Cpu:         state.Cpu,
-			Memory:      state.Memory,
+			Status:          string(state.Status),
+			ContainerId:     state.ContainerId,
+			StubId:          state.StubId,
+			ScheduledAt:     state.ScheduledAt,
+			StartedAt:       state.StartedAt,
+			WorkspaceId:     state.WorkspaceId,
+			Gpu:             state.Gpu,
+			GpuCount:        state.GpuCount,
+			NbdDevices:      state.NbdDevices,
+			Cpu:             state.Cpu,
+			Memory:          state.Memory,
+			StateSnapshotId: state.StateSnapshotId,
+			StateFork:       state.StateFork,
 		}}, nil
 }
 
@@ -67,6 +76,184 @@ func (s *ContainerRepositoryService) SetContainerExitCode(ctx context.Context, r
 	}
 
 	return &pb.SetContainerExitCodeResponse{Ok: true}, nil
+}
+
+func (s *ContainerRepositoryService) SetStateRestoreReceipt(ctx context.Context, req *pb.SetStateRestoreReceiptRequest) (*pb.SetStateRestoreReceiptResponse, error) {
+	if req == nil || req.Receipt == nil {
+		return &pb.SetStateRestoreReceiptResponse{ErrorMsg: "state restore receipt is required"}, nil
+	}
+	state, err := s.authorizeStateRestoreReceiptWorker(ctx, req)
+	if err != nil {
+		return &pb.SetStateRestoreReceiptResponse{ErrorMsg: err.Error()}, nil
+	}
+	receipt := &types.StateRestoreReceipt{
+		StateSnapshotId: strings.TrimSpace(req.Receipt.StateSnapshotId),
+		RestoreMode:     strings.TrimSpace(req.Receipt.RestoreMode),
+		FallbackReason:  strings.TrimSpace(req.Receipt.FallbackReason),
+		Generations:     make([]types.StateGeneration, 0, len(req.Receipt.Generations)),
+	}
+	for _, generation := range req.Receipt.Generations {
+		if generation != nil {
+			receipt.Generations = append(receipt.Generations, types.StateGeneration{
+				VolumeId: generation.VolumeId, GenerationId: generation.GenerationId, Name: generation.Name,
+				MountPath: generation.MountPath, ReadOnly: generation.ReadOnly, Root: generation.Root,
+				Generation: generation.Generation, ParentGenerationId: generation.ParentGenerationId,
+				CloneParentGenerationId: generation.CloneParentGenerationId,
+			})
+		}
+	}
+	workspace, err := s.backendRepo.GetWorkspaceByExternalId(ctx, state.WorkspaceId)
+	if err != nil {
+		return &pb.SetStateRestoreReceiptResponse{ErrorMsg: err.Error()}, nil
+	}
+	snapshot, err := s.backendRepo.GetStateSnapshot(ctx, workspace.Id, receipt.StateSnapshotId)
+	if err != nil {
+		return &pb.SetStateRestoreReceiptResponse{ErrorMsg: err.Error()}, nil
+	}
+	if err := validateStateRestoreReceipt(state, snapshot, receipt); err != nil {
+		return &pb.SetStateRestoreReceiptResponse{ErrorMsg: err.Error()}, nil
+	}
+	expectedAssignment := &types.ContainerState{
+		WorkerId: req.WorkerId, MachineId: req.StorageNodeId, StateSnapshotId: receipt.StateSnapshotId,
+		AssignmentId: req.DeliveryToken, StateVolumePlanId: req.StateVolumePlanId,
+		StateVolumePlanHash: req.StateVolumePlanHash,
+	}
+	if err := s.containerRepo.SetStateRestoreReceipt(req.ContainerId, req.WorkerInstanceId, receipt, expectedAssignment); err != nil {
+		return &pb.SetStateRestoreReceiptResponse{ErrorMsg: err.Error()}, nil
+	}
+	return &pb.SetStateRestoreReceiptResponse{Ok: true}, nil
+}
+
+func (s *ContainerRepositoryService) authorizeStateRestoreReceiptWorker(ctx context.Context, req *pb.SetStateRestoreReceiptRequest) (*types.ContainerState, error) {
+	if s.containerRepo == nil || s.backendRepo == nil || s.workerRepo == nil || strings.TrimSpace(req.ContainerId) == "" ||
+		strings.TrimSpace(req.WorkerId) == "" || strings.TrimSpace(req.WorkerInstanceId) == "" || strings.TrimSpace(req.StorageNodeId) == "" ||
+		strings.TrimSpace(req.DeliveryToken) == "" || strings.TrimSpace(req.StateVolumePlanId) == "" ||
+		strings.TrimSpace(req.StateVolumePlanHash) == "" {
+		return nil, fmt.Errorf("state restore receipt authority is unavailable")
+	}
+	authInfo, ok := auth.AuthInfoFromContext(ctx)
+	if !ok || authInfo == nil || authInfo.Token == nil || !types.IsWorkerTokenType(authInfo.Token.TokenType) {
+		return nil, fmt.Errorf("state restore receipt requires an authenticated worker")
+	}
+	worker, err := s.workerRepo.GetWorkerById(req.WorkerId)
+	if err != nil || worker == nil || worker.Id != req.WorkerId || worker.InstanceId != req.WorkerInstanceId || worker.MachineId != req.StorageNodeId {
+		return nil, fmt.Errorf("state restore receipt caller does not match a registered worker and storage node")
+	}
+	if err := authorizeRegisteredWorkerToken(ctx, authInfo, worker, s.computeRepo); err != nil {
+		return nil, err
+	}
+	state, err := s.containerRepo.GetContainerState(req.ContainerId)
+	if err != nil {
+		return nil, err
+	}
+	if state.WorkerId != req.WorkerId || state.MachineId != req.StorageNodeId {
+		return nil, fmt.Errorf("state restore receipt caller does not own the current container assignment")
+	}
+	if state.AssignmentId != req.DeliveryToken || state.StateVolumePlanId != req.StateVolumePlanId ||
+		state.StateVolumePlanHash != req.StateVolumePlanHash {
+		return nil, fmt.Errorf("state restore receipt caller does not match the current delivery epoch and state-volume plan")
+	}
+	if authInfo.Token.TokenType == types.TokenTypeWorkerPrivate &&
+		(authInfo.Workspace == nil || authInfo.Workspace.ExternalId != state.WorkspaceId) {
+		return nil, fmt.Errorf("state restore receipt worker workspace does not match the container")
+	}
+	return state, nil
+}
+
+func validateStateRestoreReceipt(state *types.ContainerState, snapshot *types.StateSnapshot, receipt *types.StateRestoreReceipt) error {
+	if state == nil || snapshot == nil || receipt == nil {
+		return fmt.Errorf("state restore receipt validation requires container and snapshot state")
+	}
+	if state.StateSnapshotId == "" || receipt.StateSnapshotId != state.StateSnapshotId || snapshot.ExternalId != state.StateSnapshotId {
+		return fmt.Errorf("state restore receipt does not match the container's requested state snapshot")
+	}
+	if snapshot.Status != types.StateSnapshotStatusAvailable {
+		return fmt.Errorf("state restore receipt snapshot is not available")
+	}
+	if !exactStateGenerations(snapshot.Generations, receipt.Generations) {
+		return fmt.Errorf("state restore receipt generations do not match the authoritative snapshot membership")
+	}
+	hasMemory := strings.TrimSpace(snapshot.CheckpointId) != ""
+	switch receipt.RestoreMode {
+	case "memory":
+		if !hasMemory || state.StateFork || state.StubId != snapshot.SourceStubExternalId || snapshot.Mode != "terminal" {
+			return fmt.Errorf("memory restore receipt is not valid for this container and state snapshot")
+		}
+		if receipt.FallbackReason != "" {
+			return fmt.Errorf("memory restore receipt cannot include a fallback reason")
+		}
+	case "cold_state":
+		if hasMemory {
+			if receipt.FallbackReason == "" {
+				return fmt.Errorf("cold state receipt requires a fallback reason when memory was available")
+			}
+		} else if receipt.FallbackReason != strings.TrimSpace(snapshot.FallbackReason) {
+			return fmt.Errorf("cold state receipt fallback does not match the snapshot outcome")
+		}
+	default:
+		return fmt.Errorf("invalid state restore mode %q", receipt.RestoreMode)
+	}
+	return nil
+}
+
+func exactStateGenerations(authoritative, reported []types.StateGeneration) bool {
+	if len(authoritative) == 0 || len(authoritative) != len(reported) {
+		return false
+	}
+	left := append([]types.StateGeneration(nil), authoritative...)
+	right := append([]types.StateGeneration(nil), reported...)
+	less := func(values []types.StateGeneration, i, j int) bool {
+		if values[i].Root != values[j].Root {
+			return values[i].Root
+		}
+		if values[i].VolumeId != values[j].VolumeId {
+			return values[i].VolumeId < values[j].VolumeId
+		}
+		return values[i].GenerationId < values[j].GenerationId
+	}
+	sort.Slice(left, func(i, j int) bool { return less(left, i, j) })
+	sort.Slice(right, func(i, j int) bool { return less(right, i, j) })
+	for index := range left {
+		if left[index] != right[index] || (index > 0 && left[index-1].VolumeId == left[index].VolumeId) {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *ContainerRepositoryService) GetStateRestoreReceipt(ctx context.Context, req *pb.GetStateRestoreReceiptRequest) (*pb.GetStateRestoreReceiptResponse, error) {
+	if req == nil || strings.TrimSpace(req.ContainerId) == "" {
+		return &pb.GetStateRestoreReceiptResponse{ErrorMsg: "state restore receipt read is unauthorized"}, nil
+	}
+	authInfo, ok := auth.AuthInfoFromContext(ctx)
+	if !ok || authInfo == nil || authInfo.Token == nil || authInfo.Workspace == nil ||
+		types.IsWorkerTokenType(authInfo.Token.TokenType) {
+		return &pb.GetStateRestoreReceiptResponse{ErrorMsg: "state restore receipt read is unauthorized"}, nil
+	}
+	state, err := s.containerRepo.GetContainerState(req.ContainerId)
+	if err != nil {
+		return &pb.GetStateRestoreReceiptResponse{ErrorMsg: err.Error()}, nil
+	}
+	if state == nil || strings.TrimSpace(state.WorkspaceId) == "" || state.WorkspaceId != authInfo.Workspace.ExternalId {
+		return &pb.GetStateRestoreReceiptResponse{ErrorMsg: "state restore receipt read is unauthorized"}, nil
+	}
+	receipt, err := s.containerRepo.GetStateRestoreReceipt(req.ContainerId)
+	if err != nil {
+		return &pb.GetStateRestoreReceiptResponse{ErrorMsg: err.Error()}, nil
+	}
+	generations := make([]*pb.StateGeneration, 0, len(receipt.Generations))
+	for _, generation := range receipt.Generations {
+		generations = append(generations, &pb.StateGeneration{
+			VolumeId: generation.VolumeId, GenerationId: generation.GenerationId, Name: generation.Name,
+			MountPath: generation.MountPath, ReadOnly: generation.ReadOnly, Root: generation.Root,
+			Generation: generation.Generation, ParentGenerationId: generation.ParentGenerationId,
+			CloneParentGenerationId: generation.CloneParentGenerationId,
+		})
+	}
+	return &pb.GetStateRestoreReceiptResponse{Ok: true, Receipt: &pb.StateRestoreReceipt{
+		StateSnapshotId: receipt.StateSnapshotId, RestoreMode: receipt.RestoreMode,
+		FallbackReason: receipt.FallbackReason, Generations: generations,
+	}}, nil
 }
 
 func (s *ContainerRepositoryService) SetContainerAddress(ctx context.Context, req *pb.SetContainerAddressRequest) (*pb.SetContainerAddressResponse, error) {

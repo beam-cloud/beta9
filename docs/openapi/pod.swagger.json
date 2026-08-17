@@ -641,14 +641,14 @@
         ]
       }
     },
-    "/pods/{containerId}/snapshot-disks": {
-      "post": {
-        "operationId": "PodService_SandboxSnapshotDisks",
+    "/pods/{containerId}/restore-receipt": {
+      "get": {
+        "operationId": "PodService_GetStateRestoreReceipt",
         "responses": {
           "200": {
             "description": "A successful response.",
             "schema": {
-              "$ref": "#/definitions/podPodSandboxSnapshotDisksResponse"
+              "$ref": "#/definitions/podPodGetStateRestoreReceiptResponse"
             }
           },
           "default": {
@@ -666,12 +666,10 @@
             "type": "string"
           },
           {
-            "name": "body",
-            "in": "body",
-            "required": true,
-            "schema": {
-              "$ref": "#/definitions/PodServiceSandboxSnapshotDisksBody"
-            }
+            "name": "stateSnapshotId",
+            "in": "query",
+            "required": false,
+            "type": "string"
           }
         ],
         "tags": [
@@ -679,14 +677,14 @@
         ]
       }
     },
-    "/pods/{containerId}/snapshot-memory": {
+    "/pods/{containerId}/snapshot-state": {
       "post": {
-        "operationId": "PodService_SandboxSnapshotMemory",
+        "operationId": "PodService_SandboxSnapshotState",
         "responses": {
           "200": {
             "description": "A successful response.",
             "schema": {
-              "$ref": "#/definitions/podPodSandboxSnapshotMemoryResponse"
+              "$ref": "#/definitions/podPodSandboxSnapshotStateResponse"
             }
           },
           "default": {
@@ -708,7 +706,7 @@
             "in": "body",
             "required": true,
             "schema": {
-              "$ref": "#/definitions/PodServiceSandboxSnapshotMemoryBody"
+              "$ref": "#/definitions/PodServiceSandboxSnapshotStateBody"
             }
           }
         ],
@@ -994,21 +992,25 @@
         }
       }
     },
-    "PodServiceSandboxSnapshotDisksBody": {
-      "type": "object",
-      "properties": {
-        "stubId": {
-          "type": "string"
-        }
-      }
-    },
-    "PodServiceSandboxSnapshotMemoryBody": {
+    "PodServiceSandboxSnapshotStateBody": {
       "type": "object",
       "properties": {
         "stubId": {
           "type": "string"
         },
-        "terminateAfterCheckpoint": {
+        "operationId": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "publish": {
+          "type": "boolean"
+        },
+        "includeMemory": {
+          "type": "boolean"
+        },
+        "visible": {
           "type": "boolean"
         }
       }
@@ -1064,7 +1066,7 @@
         "imageId": {
           "type": "string"
         },
-        "checkpointId": {
+        "stateSnapshotId": {
           "type": "string"
         },
         "machineId": {
@@ -1092,6 +1094,26 @@
         },
         "appId": {
           "type": "string"
+        },
+        "restoreReceipt": {
+          "$ref": "#/definitions/typesStateRestoreReceipt"
+        }
+      }
+    },
+    "podPodGetStateRestoreReceiptResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errorMsg": {
+          "type": "string"
+        },
+        "pending": {
+          "type": "boolean"
+        },
+        "receipt": {
+          "$ref": "#/definitions/typesStateRestoreReceipt"
         }
       }
     },
@@ -1153,21 +1175,6 @@
         },
         "errorMsg": {
           "type": "string"
-        }
-      }
-    },
-    "podPodSandboxDiskSnapshot": {
-      "type": "object",
-      "properties": {
-        "snapshotId": {
-          "type": "string"
-        },
-        "diskName": {
-          "type": "string"
-        },
-        "generation": {
-          "type": "string",
-          "format": "int64"
         }
       }
     },
@@ -1354,7 +1361,7 @@
         }
       }
     },
-    "podPodSandboxSnapshotDisksResponse": {
+    "podPodSandboxSnapshotStateResponse": {
       "type": "object",
       "properties": {
         "ok": {
@@ -1363,28 +1370,35 @@
         "errorMsg": {
           "type": "string"
         },
-        "snapshots": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "$ref": "#/definitions/podPodSandboxDiskSnapshot"
-          }
-        }
-      }
-    },
-    "podPodSandboxSnapshotMemoryResponse": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "type": "boolean"
+        "stateSnapshotId": {
+          "type": "string"
         },
-        "errorMsg": {
+        "status": {
+          "type": "string"
+        },
+        "imageDigest": {
+          "type": "string"
+        },
+        "runtimeProfile": {
           "type": "string"
         },
         "checkpointId": {
           "type": "string"
         },
-        "runtime": {
+        "hasMemory": {
+          "type": "boolean"
+        },
+        "generations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/typesStateGeneration"
+          }
+        },
+        "restoreMode": {
+          "type": "string"
+        },
+        "fallbackReason": {
           "type": "string"
         }
       }
@@ -1585,6 +1599,60 @@
         "exitCode": {
           "type": "integer",
           "format": "int32"
+        }
+      }
+    },
+    "typesStateGeneration": {
+      "type": "object",
+      "properties": {
+        "volumeId": {
+          "type": "string"
+        },
+        "generationId": {
+          "type": "string"
+        },
+        "parentGenerationId": {
+          "type": "string"
+        },
+        "cloneParentGenerationId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "mountPath": {
+          "type": "string"
+        },
+        "readOnly": {
+          "type": "boolean"
+        },
+        "root": {
+          "type": "boolean"
+        },
+        "generation": {
+          "type": "string",
+          "format": "int64"
+        }
+      }
+    },
+    "typesStateRestoreReceipt": {
+      "type": "object",
+      "properties": {
+        "stateSnapshotId": {
+          "type": "string"
+        },
+        "restoreMode": {
+          "type": "string"
+        },
+        "fallbackReason": {
+          "type": "string"
+        },
+        "generations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/typesStateGeneration"
+          }
         }
       }
     }

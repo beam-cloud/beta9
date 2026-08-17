@@ -62,13 +62,23 @@ func TestContainerRequestProtoRoundTripPreservesTaskID(t *testing.T) {
 	require.Equal(t, request.TaskId, roundTrip.TaskId)
 }
 
-func TestCheckpointProtoRoundTripPreservesRuntime(t *testing.T) {
-	checkpoint := &Checkpoint{CheckpointId: "checkpoint-1", Runtime: ContainerRuntimeGvisor.String()}
-
-	require.Equal(t, checkpoint.Runtime, NewCheckpointFromProto(checkpoint.ToProto()).Runtime)
-	require.False(t, checkpoint.IsFilesystemOnly())
-	checkpoint.Runtime = " FILESYSTEM "
-	require.True(t, checkpoint.IsFilesystemOnly())
+func TestContainerRequestProtoRoundTripPreservesPersistentRootAndStateSnapshot(t *testing.T) {
+	request := &ContainerRequest{
+		PersistentRoot:  &PersistentRoot{Size: "50Gi"},
+		StateSnapshotId: "state-1",
+		StateFork:       true,
+		RootState: &RootStateMountConfig{
+			VolumeId: "21d4182a-4930-47b4-a987-e50c4a80156f", Size: "50Gi",
+			SourceGenerationId: "7aee3365-2963-4a6d-b9fb-2c934924880d", CloneSource: true,
+			AttachmentToken: "35141b8e-4591-4c72-856a-3ab7e831818e", FencingToken: 9,
+			LeaseExpiresAtUnix: 1_700_000_000,
+		},
+	}
+	roundTrip := NewContainerRequestFromProto(request.ToProto())
+	require.Equal(t, request.PersistentRoot, roundTrip.PersistentRoot)
+	require.Equal(t, request.StateSnapshotId, roundTrip.StateSnapshotId)
+	require.Equal(t, request.StateFork, roundTrip.StateFork)
+	require.Equal(t, request.RootState, roundTrip.RootState)
 }
 
 func TestPrivateWorkerRequestRemovesControlPlaneCredentials(t *testing.T) {

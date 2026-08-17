@@ -20,7 +20,18 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/rs/zerolog/log"
 	"google.golang.org/grpc/metadata"
+	"k8s.io/apimachinery/pkg/api/resource"
 )
+
+func appendWarning(existing, next string) string {
+	if existing == "" {
+		return next
+	}
+	if next == "" {
+		return existing
+	}
+	return existing + " " + next
+}
 
 // Capacity verdict values reported in GetOrCreateStubResponse.CapacityStatus.
 const (
@@ -94,18 +105,6 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		}
 	}
 
-	// If checkpoint/restore is enabled, we need to handle a few additional things to ensure dump/restore will work properly
-	if in.CheckpointEnabled {
-		checkpointWarning, err := gws.handleCheckpointEnabled(ctx, authInfo, in, gpus)
-		if err != nil {
-			return &pb.GetOrCreateStubResponse{
-				Ok:     false,
-				ErrMsg: err.Error(),
-			}, nil
-		}
-		warning = appendWarning(warning, checkpointWarning)
-	}
-
 	var inputs *types.Schema = nil
 	if in.Inputs != nil {
 		inputs = types.NewSchemaFromProto(in.Inputs)
@@ -117,6 +116,10 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 	}
 
 	servingConfig := servingConfigFromProto(in.Serving)
+	persistentRoot, err := persistentRootFromProto(in.PersistentRoot)
+	if err != nil {
+		return &pb.GetOrCreateStubResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
 
 	stubConfig := types.StubConfigV1{
 		Runtime: types.Runtime{
@@ -142,8 +145,6 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		Authorized:         in.Authorized,
 		Autoscaler:         autoscaler,
 		Extra:              json.RawMessage(in.Extra),
-		CheckpointEnabled:  in.CheckpointEnabled,
-		CheckpointTrigger:  types.NewCheckpointTriggerFromProto(in.CheckpointTrigger),
 		EntryPoint:         in.Entrypoint,
 		Ports:              in.Ports,
 		Env:                in.Env,
@@ -160,6 +161,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		Serving:            servingConfig,
 		Pool:               resourcePolicy.pool,
 		Disks:              in.Disks,
+		PersistentRoot:     persistentRoot,
 	}
 
 	// Ensure GPU count is at least 1 if a GPU is required
@@ -293,13 +295,11 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 			continue
 		}
 		if _, err := gws.backendRepo.GetOrCreateDisk(ctx, authInfo.Workspace.Id, &types.Disk{
-			Name:       types.SafeDurableDiskName(durableDisk.Name),
-			Size:       durableDisk.Size,
-			Filesystem: durableDisk.Filesystem,
-			Driver:     durableDisk.Driver,
-			MountPath:  durableDisk.MountPath,
+			Name:      types.SafeDurableDiskName(durableDisk.Name),
+			Size:      durableDisk.Size,
+			MountPath: durableDisk.MountPath,
 		}); err != nil {
-			log.Error().Err(err).Str("disk_name", durableDisk.Name).Msg("failed to register durable disk record")
+			return &pb.GetOrCreateStubResponse{Ok: false, ErrMsg: err.Error()}, nil
 		}
 	}
 
@@ -364,6 +364,18 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		UnsupportedGpus:    capacity.unsupportedGpus,
 		MatchedPrivatePool: capacity.matchedPrivatePool,
 	}, nil
+}
+
+func persistentRootFromProto(in *pb.PersistentRoot) (*types.PersistentRoot, error) {
+	if in == nil {
+		return nil, nil
+	}
+	size := strings.TrimSpace(in.Size)
+	quantity, err := resource.ParseQuantity(size)
+	if err != nil || quantity.Value() <= 0 {
+		return nil, fmt.Errorf("persistent root size %q must be a positive Kubernetes quantity", size)
+	}
+	return &types.PersistentRoot{Size: size}, nil
 }
 
 func (gws *GatewayService) cachePreparedStub(ctx context.Context, workspaceID, stubID string) {
@@ -811,116 +823,6 @@ func sanitizePoolSelector(value string) string {
 		return out[:128]
 	}
 	return out
-}
-
-// checkpointTriggerTypeHTTP mirrors the trigger type the worker uses to decide between
-// HTTP readiness polling and the runner signal file (see pkg/worker/criu.go)
-const checkpointTriggerTypeHTTP = "http"
-
-const checkpointCompileCacheRoot = "/tmp/beam-checkpoint-compile-cache"
-
-func appendWarning(existing, warning string) string {
-	if existing == "" {
-		return warning
-	}
-	if warning == "" {
-		return existing
-	}
-	return existing + " " + warning
-}
-
-func checkpointModelCacheVolumeName(in *pb.GetOrCreateStubRequest) string {
-	name := in.Name
-	if in.AppName != "" {
-		name = in.AppName
-	}
-	return types.CheckpointModelCacheVolumeName(name)
-}
-
-func checkpointCacheEnv(modelCachePath string) []string {
-	// Persist model files across checkpoint boots, but keep compiler/JIT artifacts and
-	// Xet's transfer cache on local disk so they do not inflate the workspace volume.
-	return []string{
-		fmt.Sprintf("HF_HOME=%s", modelCachePath),
-		fmt.Sprintf("HF_HUB_CACHE=%s/hub", modelCachePath),
-		fmt.Sprintf("HF_XET_CACHE=%s/hf-xet", checkpointCompileCacheRoot),
-		fmt.Sprintf("TRANSFORMERS_CACHE=%s", modelCachePath),
-		fmt.Sprintf("TRITON_CACHE_DIR=%s/triton", checkpointCompileCacheRoot),
-		fmt.Sprintf("TORCHINDUCTOR_CACHE_DIR=%s/torchinductor", checkpointCompileCacheRoot),
-		fmt.Sprintf("VLLM_CACHE_ROOT=%s/vllm", checkpointCompileCacheRoot),
-		fmt.Sprintf("CUDA_CACHE_PATH=%s/cuda", checkpointCompileCacheRoot),
-	}
-}
-
-func upsertCheckpointEnv(env []string, updates []string) []string {
-	for _, update := range updates {
-		name, _, ok := strings.Cut(update, "=")
-		if !ok {
-			continue
-		}
-		replaced := false
-		for i, existing := range env {
-			existingName, _, ok := strings.Cut(existing, "=")
-			if ok && existingName == name {
-				env[i] = update
-				replaced = true
-			}
-		}
-		if !replaced {
-			env = append(env, update)
-		}
-	}
-	return env
-}
-
-// handleCheckpointEnabled validates and configures a stub request that has checkpointing
-// enabled. It returns a user-facing warning message (empty if none) and an error.
-func (gws *GatewayService) handleCheckpointEnabled(ctx context.Context, authInfo *auth.AuthInfo, in *pb.GetOrCreateStubRequest, gpus []types.GpuType) (string, error) {
-	workspace := authInfo.Workspace
-
-	if in.GpuCount > 1 {
-		return "", fmt.Errorf("Checkpoints are yet not supported for multi-GPU")
-	}
-
-	if len(gpus) > 1 {
-		return "", fmt.Errorf("Checkpoints are yet not supported between multiple GPUs")
-	}
-
-	// Disable checkpoint for serves, but let the user know instead of failing silently
-	if types.StubType(in.StubType).IsServe() {
-		in.CheckpointEnabled = false
-		return "checkpointing is not supported for serve sessions; it has been disabled", nil
-	}
-
-	// Pods have no beta9 runner process to write the checkpoint readiness signal file,
-	// so automatic checkpoints require an HTTP readiness path. Sandboxes are exempt
-	// because they checkpoint via the manual snapshot APIs instead.
-	if types.StubType(in.StubType).Kind() == types.StubTypePod {
-		trigger := in.CheckpointTrigger
-		if trigger == nil || !strings.EqualFold(trigger.Type, checkpointTriggerTypeHTTP) || trigger.HttpPath == "" {
-			return "", fmt.Errorf("pods with checkpoint_enabled require checkpoint_readiness_path to be set (there is no runner to signal readiness)")
-		}
-	}
-
-	if !workspace.StorageAvailable() {
-		return "", fmt.Errorf("workspace storage is required for checkpoints")
-	}
-
-	volumeName := checkpointModelCacheVolumeName(in)
-	modelCachePath := fmt.Sprintf("/%s", volumeName)
-	volume, err := gws.backendRepo.GetOrCreateVolume(ctx, authInfo.Workspace.Id, volumeName)
-	if err != nil {
-		return "", err
-	}
-
-	in.Env = upsertCheckpointEnv(in.Env, checkpointCacheEnv(modelCachePath))
-
-	in.Volumes = append(in.Volumes, &pb.Volume{
-		Id:        volume.ExternalId,
-		MountPath: modelCachePath,
-	})
-
-	return "", nil
 }
 
 func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequest) (*pb.DeployStubResponse, error) {

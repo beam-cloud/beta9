@@ -111,44 +111,139 @@ func (gws GatewayService) getContainersAsAdmin() ([]types.ContainerState, map[st
 	return containerStates, containerWorkerMap, nil
 }
 
-func (gws GatewayService) CheckpointContainer(ctx context.Context, in *pb.CheckpointContainerRequest) (*pb.CheckpointContainerResponse, error) {
+func (gws GatewayService) SnapshotContainerState(ctx context.Context, in *pb.GatewaySnapshotContainerStateRequest) (*pb.GatewaySnapshotContainerStateResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 	workspaceId := authInfo.Workspace.ExternalId
 
 	if !auth.HasPermission(authInfo) {
-		return &pb.CheckpointContainerResponse{
+		return &pb.GatewaySnapshotContainerStateResponse{
 			Ok:       false,
 			ErrorMsg: "Unauthorized Access",
 		}, nil
 	}
+	if in.OperationId == "" {
+		return &pb.GatewaySnapshotContainerStateResponse{ErrorMsg: "operation_id is required"}, nil
+	}
+	if in.Mode != "live" && in.Mode != "terminal" {
+		return &pb.GatewaySnapshotContainerStateResponse{ErrorMsg: "mode must be live or terminal"}, nil
+	}
+	if in.Mode == "live" && in.IncludeMemory {
+		return &pb.GatewaySnapshotContainerStateResponse{ErrorMsg: "live snapshots cannot include memory"}, nil
+	}
+	if in.Publish {
+		return &pb.GatewaySnapshotContainerStateResponse{ErrorMsg: "public whole-root state publishing is disabled"}, nil
+	}
+
+	var existing *types.StateSnapshot
+	existing, err := gws.backendRepo.GetStateSnapshotByOperationForWorkspace(ctx, authInfo.Workspace.Id, in.ContainerId, in.OperationId)
+	if err == nil {
+		if existing.Mode != in.Mode || existing.IncludeMemory != in.IncludeMemory || existing.Visible != in.Visible {
+			return &pb.GatewaySnapshotContainerStateResponse{ErrorMsg: "operation_id conflicts with different immutable snapshot inputs"}, nil
+		}
+		if existing.Status == types.StateSnapshotStatusAvailable || existing.Status == types.StateSnapshotStatusFailed {
+			return gatewayStateSnapshotResponse(existing), nil
+		}
+	} else {
+		var notFound *types.ErrStateSnapshotNotFound
+		if !errors.As(err, &notFound) {
+			return &pb.GatewaySnapshotContainerStateResponse{ErrorMsg: err.Error()}, nil
+		}
+		existing = nil
+	}
 
 	client, _, err := gws.getClient(ctx, in.ContainerId, authInfo.Token.Key, workspaceId)
 	if err != nil {
-		return &pb.CheckpointContainerResponse{
+		if existing != nil && existing.Status == types.StateSnapshotStatusPending {
+			return gatewayStateSnapshotResponse(existing), nil
+		}
+		return &pb.GatewaySnapshotContainerStateResponse{
 			Ok:       false,
-			ErrorMsg: fmt.Sprintf("Unable to checkpoint container: %s", in.ContainerId),
+			ErrorMsg: fmt.Sprintf("unable to snapshot container state: %s", in.ContainerId),
 		}, nil
 	}
 
-	resp, err := client.Checkpoint(ctx, in.ContainerId, common.ContainerCheckpointOptions{})
+	resp, err := client.SnapshotContainerState(ctx, in.ContainerId, common.SnapshotContainerStateOptions{
+		OperationId: in.OperationId, Mode: in.Mode, Publish: in.Publish,
+		IncludeMemory: in.IncludeMemory, Visible: in.Visible,
+	})
 	if err != nil {
-		return &pb.CheckpointContainerResponse{
+		return &pb.GatewaySnapshotContainerStateResponse{
 			Ok:       false,
-			ErrorMsg: fmt.Sprintf("Unable to checkpoint container: %v", err),
+			ErrorMsg: fmt.Sprintf("unable to snapshot container state: %v", err),
 		}, nil
 	}
 
 	if !resp.Ok {
-		return &pb.CheckpointContainerResponse{
+		return &pb.GatewaySnapshotContainerStateResponse{
 			Ok:       false,
-			ErrorMsg: fmt.Sprintf("Unable to checkpoint container: %s", resp.ErrorMsg),
+			ErrorMsg: fmt.Sprintf("unable to snapshot container state: %s", resp.ErrorMsg),
 		}, nil
 	}
 
-	return &pb.CheckpointContainerResponse{
-		Ok:           true,
-		CheckpointId: resp.CheckpointId,
+	return &pb.GatewaySnapshotContainerStateResponse{
+		Ok: true, StateSnapshotId: resp.StateSnapshotId, Status: resp.Status,
+		ImageDigest: resp.ImageDigest, RuntimeProfile: resp.RuntimeProfile,
+		CheckpointId: resp.CheckpointId, HasMemory: resp.HasMemory,
+		Generations: resp.Generations, RestoreMode: resp.RestoreMode,
+		FallbackReason: resp.FallbackReason,
 	}, nil
+}
+
+func gatewayStateSnapshotResponse(snapshot *types.StateSnapshot) *pb.GatewaySnapshotContainerStateResponse {
+	if snapshot == nil {
+		return &pb.GatewaySnapshotContainerStateResponse{ErrorMsg: "state snapshot is unavailable"}
+	}
+	generations := make([]*pb.StateGeneration, 0, len(snapshot.Generations))
+	for _, generation := range snapshot.Generations {
+		generations = append(generations, &pb.StateGeneration{
+			VolumeId: generation.VolumeId, GenerationId: generation.GenerationId,
+			ParentGenerationId:      generation.ParentGenerationId,
+			CloneParentGenerationId: generation.CloneParentGenerationId,
+			Name:                    generation.Name, MountPath: generation.MountPath, ReadOnly: generation.ReadOnly,
+			Root: generation.Root, Generation: generation.Generation,
+		})
+	}
+	return &pb.GatewaySnapshotContainerStateResponse{
+		Ok: snapshot.Status != types.StateSnapshotStatusFailed, ErrorMsg: snapshot.Reason,
+		StateSnapshotId: snapshot.ExternalId, Status: string(snapshot.Status),
+		ImageDigest: snapshot.ImageDigest, RuntimeProfile: snapshot.RuntimeProfile,
+		CheckpointId: snapshot.CheckpointId, HasMemory: snapshot.CheckpointId != "",
+		Generations: generations, RestoreMode: snapshot.RestoreMode, FallbackReason: snapshot.FallbackReason,
+	}
+}
+
+func (gws GatewayService) RetainStateSnapshotReference(ctx context.Context, in *pb.StateSnapshotReferenceRequest) (*pb.StateSnapshotReferenceResponse, error) {
+	authInfo, ok := auth.AuthInfoFromContext(ctx)
+	if !ok || authInfo == nil || authInfo.Workspace == nil || !auth.HasPermission(authInfo) {
+		return &pb.StateSnapshotReferenceResponse{ErrorMsg: "Unauthorized Access"}, nil
+	}
+	if in == nil {
+		return &pb.StateSnapshotReferenceResponse{ErrorMsg: "state snapshot reference is required"}, nil
+	}
+	reference, err := gws.backendRepo.RetainStateSnapshotReference(ctx, authInfo.Workspace.Id,
+		in.StateSnapshotId, in.Kind, in.ReferenceId)
+	if err != nil {
+		return &pb.StateSnapshotReferenceResponse{ErrorMsg: err.Error()}, nil
+	}
+	return &pb.StateSnapshotReferenceResponse{Ok: true, StateSnapshotId: reference.SnapshotExternalId,
+		Kind: reference.Kind, ReferenceId: reference.ReferenceId, Status: "active"}, nil
+}
+
+func (gws GatewayService) ReleaseStateSnapshotReference(ctx context.Context, in *pb.StateSnapshotReferenceRequest) (*pb.StateSnapshotReferenceResponse, error) {
+	authInfo, ok := auth.AuthInfoFromContext(ctx)
+	if !ok || authInfo == nil || authInfo.Workspace == nil || !auth.HasPermission(authInfo) {
+		return &pb.StateSnapshotReferenceResponse{ErrorMsg: "Unauthorized Access"}, nil
+	}
+	if in == nil {
+		return &pb.StateSnapshotReferenceResponse{ErrorMsg: "state snapshot reference is required"}, nil
+	}
+	reference, err := gws.backendRepo.ReleaseStateSnapshotReference(ctx, authInfo.Workspace.Id,
+		in.StateSnapshotId, in.Kind, in.ReferenceId)
+	if err != nil {
+		return &pb.StateSnapshotReferenceResponse{ErrorMsg: err.Error()}, nil
+	}
+	return &pb.StateSnapshotReferenceResponse{Ok: true, StateSnapshotId: reference.SnapshotExternalId,
+		Kind: reference.Kind, ReferenceId: reference.ReferenceId, Status: "released"}, nil
 }
 
 func (gws *GatewayService) getClient(ctx context.Context, containerId, token string, workspaceId string) (*common.ContainerClient, *types.ContainerState, error) {

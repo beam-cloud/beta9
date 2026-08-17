@@ -3,7 +3,6 @@ package repository_services
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -17,53 +16,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/metadata"
 )
-
-type pruneCheckpointBackendRepo struct {
-	repository.BackendRepository
-	activeKeys               []string
-	stubLastUsedBefore       time.Time
-	checkpoints              []types.Checkpoint
-	recentKeysByCheckpointID map[string]string
-	pruneIDs                 []string
-	workspaces               map[uint]*types.Workspace
-}
-
-func (r *pruneCheckpointBackendRepo) ListStaleCheckpoints(ctx context.Context, activeRecentStubKeys []string, stubLastUsedBefore time.Time) ([]types.Checkpoint, error) {
-	r.activeKeys = append([]string(nil), activeRecentStubKeys...)
-	r.stubLastUsedBefore = stubLastUsedBefore
-	active := map[string]struct{}{}
-	for _, key := range activeRecentStubKeys {
-		active[key] = struct{}{}
-	}
-	checkpoints := make([]types.Checkpoint, 0, len(r.checkpoints))
-	for _, checkpoint := range r.checkpoints {
-		if key := r.recentKeysByCheckpointID[checkpoint.CheckpointId]; key != "" {
-			if _, ok := active[key]; ok {
-				continue
-			}
-		}
-		checkpoints = append(checkpoints, checkpoint)
-	}
-	return checkpoints, nil
-}
-
-func (r *pruneCheckpointBackendRepo) PruneCheckpoints(ctx context.Context, checkpointIDs []string) ([]types.Checkpoint, error) {
-	r.pruneIDs = append([]string(nil), checkpointIDs...)
-	pruned := make([]types.Checkpoint, 0, len(checkpointIDs))
-	for _, checkpointID := range checkpointIDs {
-		pruned = append(pruned, types.Checkpoint{CheckpointId: checkpointID})
-	}
-	return pruned, nil
-}
-
-func (r *pruneCheckpointBackendRepo) GetWorkspace(ctx context.Context, workspaceID uint) (*types.Workspace, error) {
-	if r.workspaces != nil {
-		if workspace, ok := r.workspaces[workspaceID]; ok {
-			return workspace, nil
-		}
-	}
-	return &types.Workspace{}, nil
-}
 
 type originCredentialsBackendRepo struct {
 	repository.BackendRepository
@@ -477,148 +429,6 @@ func TestCacheMetadataKeepsClusterWorkerMarkersUnscoped(t *testing.T) {
 	require.False(t, second.Claimed)
 }
 
-func TestPruneStaleCacheCheckpointsUsesRecentStubsAcrossLocalities(t *testing.T) {
-	server, err := miniredis.Run()
-	require.NoError(t, err)
-	t.Cleanup(server.Close)
-
-	rdb := redis.NewClient(&redis.Options{Addr: server.Addr()})
-	t.Cleanup(func() { _ = rdb.Close() })
-
-	metadataStore := cache.NewRedisCacheMetadataStoreWithClient(cache.GlobalConfig{}, cache.ServerConfig{}, rdb)
-	require.NoError(t, metadataStore.AddRecentStub(context.Background(), "locality-a", "workspace", "stub-a", time.Hour))
-	require.NoError(t, metadataStore.AddRecentStub(context.Background(), "locality-b", "workspace", "stub-b", time.Hour))
-
-	backendRepo := &pruneCheckpointBackendRepo{}
-	service := &WorkerRepositoryService{
-		cacheMetadata: metadataStore,
-		backendRepo:   backendRepo,
-		appConfig: types.AppConfig{
-			Cache: cache.Config{
-				Reconciliation: cache.ReconciliationConfig{RecentStubTTLSeconds: 3600},
-			},
-		},
-	}
-
-	resp, err := service.PruneStaleCacheCheckpoints(
-		cacheRepositoryAuthContext(types.TokenTypeWorker),
-		&pb.PruneStaleCacheCheckpointsRequest{},
-	)
-
-	require.NoError(t, err)
-	require.True(t, resp.Ok)
-	require.ElementsMatch(t, []string{
-		cache.RecentStubKey("workspace", "stub-a"),
-		cache.RecentStubKey("workspace", "stub-b"),
-	}, backendRepo.activeKeys)
-	require.WithinDuration(t, time.Now().Add(-time.Hour), backendRepo.stubLastUsedBefore, 5*time.Second)
-}
-
-func TestPruneStaleCacheCheckpointsPrunesStaleSandboxAndEndpointCheckpoints(t *testing.T) {
-	server, err := miniredis.Run()
-	require.NoError(t, err)
-	t.Cleanup(server.Close)
-
-	rdb := redis.NewClient(&redis.Options{Addr: server.Addr()})
-	t.Cleanup(func() { _ = rdb.Close() })
-
-	now := time.Now()
-	metadataStore := cache.NewRedisCacheMetadataStoreWithClient(cache.GlobalConfig{}, cache.ServerConfig{}, rdb)
-	require.NoError(t, metadataStore.AddRecentStub(context.Background(), "locality-a", "workspace", "recent-sandbox-stub", time.Hour))
-	backendRepo := &pruneCheckpointBackendRepo{
-		checkpoints: []types.Checkpoint{
-			{
-				CheckpointId: "sandbox-checkpoint",
-				StubType:     types.StubTypeSandbox,
-				CreatedAt:    types.Time{Time: now.Add(-2 * time.Hour)},
-			},
-			{
-				CheckpointId: "recent-sandbox-checkpoint",
-				StubType:     types.StubTypeSandbox,
-				CreatedAt:    types.Time{Time: now.Add(-2 * time.Hour)},
-			},
-			{
-				CheckpointId:   "recently-restored-sandbox-checkpoint",
-				StubType:       types.StubTypeSandbox,
-				CreatedAt:      types.Time{Time: now.Add(-2 * time.Hour)},
-				LastRestoredAt: types.Time{Time: now.Add(-5 * time.Minute)},
-			},
-			{
-				CheckpointId: "fresh-endpoint-checkpoint",
-				StubType:     types.StubTypeEndpointDeployment,
-				CreatedAt:    types.Time{Time: now.Add(-5 * time.Minute)},
-			},
-			{
-				CheckpointId: "old-endpoint-checkpoint",
-				StubType:     types.StubTypeEndpointDeployment,
-				CreatedAt:    types.Time{Time: now.Add(-2 * time.Hour)},
-			},
-		},
-		recentKeysByCheckpointID: map[string]string{
-			"recent-sandbox-checkpoint": cache.RecentStubKey("workspace", "recent-sandbox-stub"),
-		},
-	}
-	service := &WorkerRepositoryService{
-		cacheMetadata: metadataStore,
-		backendRepo:   backendRepo,
-		appConfig: types.AppConfig{
-			Cache: cache.Config{
-				Reconciliation: cache.ReconciliationConfig{RecentStubTTLSeconds: 3600},
-			},
-		},
-	}
-
-	resp, err := service.PruneStaleCacheCheckpoints(
-		cacheRepositoryAuthContext(types.TokenTypeWorker),
-		&pb.PruneStaleCacheCheckpointsRequest{},
-	)
-
-	require.NoError(t, err)
-	require.True(t, resp.Ok, resp.ErrorMsg)
-	require.EqualValues(t, 2, resp.Pruned)
-	require.Equal(t, []string{"sandbox-checkpoint", "old-endpoint-checkpoint"}, backendRepo.pruneIDs)
-}
-
-func TestPruneStaleCacheCheckpointsDefersDbPruneWhenOriginDeleteCannotRun(t *testing.T) {
-	server, err := miniredis.Run()
-	require.NoError(t, err)
-	t.Cleanup(server.Close)
-
-	rdb := redis.NewClient(&redis.Options{Addr: server.Addr()})
-	t.Cleanup(func() { _ = rdb.Close() })
-
-	metadataStore := cache.NewRedisCacheMetadataStoreWithClient(cache.GlobalConfig{}, cache.ServerConfig{}, rdb)
-	backendRepo := &pruneCheckpointBackendRepo{
-		checkpoints: []types.Checkpoint{{
-			CheckpointId: "checkpoint-a",
-			WorkspaceId:  7,
-			OriginKey:    "checkpoints/checkpoint-a.tar",
-			StubType:     types.StubTypeEndpointDeployment,
-			CreatedAt:    types.Time{Time: time.Now().Add(-2 * time.Hour)},
-		}},
-		workspaces: map[uint]*types.Workspace{7: {Name: "workspace"}},
-	}
-	service := &WorkerRepositoryService{
-		cacheMetadata: metadataStore,
-		backendRepo:   backendRepo,
-		appConfig: types.AppConfig{
-			Cache: cache.Config{
-				Reconciliation: cache.ReconciliationConfig{RecentStubTTLSeconds: 3600},
-			},
-		},
-	}
-
-	resp, err := service.PruneStaleCacheCheckpoints(
-		cacheRepositoryAuthContext(types.TokenTypeWorker),
-		&pb.PruneStaleCacheCheckpointsRequest{},
-	)
-
-	require.NoError(t, err)
-	require.False(t, resp.Ok)
-	require.Contains(t, resp.ErrorMsg, "workspace storage is unavailable")
-	require.Empty(t, backendRepo.pruneIDs)
-}
-
 func TestGetCacheOriginCredentialsVendsImageRegistrySecret(t *testing.T) {
 	signingKey := "workspace-signing-key"
 	backendRepo := &originCredentialsBackendRepo{
@@ -781,7 +591,7 @@ func TestGetCacheOriginCredentialsRejectsNilRequest(t *testing.T) {
 
 func cacheRepositoryAuthContext(tokenType string) context.Context {
 	return auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
-		Token: &types.Token{TokenType: tokenType},
+		Token: &types.Token{TokenType: tokenType, ExternalId: "worker-token"},
 	})
 }
 
@@ -790,6 +600,6 @@ func cacheRepositoryAuthContext(tokenType string) context.Context {
 func cacheRepositoryWorkspaceAuthContext(workspaceID string) context.Context {
 	return auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
 		Workspace: &types.Workspace{ExternalId: workspaceID},
-		Token:     &types.Token{TokenType: types.TokenTypeWorkerPrivate},
+		Token:     &types.Token{TokenType: types.TokenTypeWorkerPrivate, ExternalId: "worker-token"},
 	})
 }

@@ -68,36 +68,6 @@
         ]
       }
     },
-    "/disks/snapshots": {
-      "get": {
-        "operationId": "DiskService_ListDiskSnapshots",
-        "responses": {
-          "200": {
-            "description": "A successful response.",
-            "schema": {
-              "$ref": "#/definitions/diskListDiskSnapshotsResponse"
-            }
-          },
-          "default": {
-            "description": "An unexpected error response.",
-            "schema": {
-              "$ref": "#/definitions/rpcStatus"
-            }
-          }
-        },
-        "parameters": [
-          {
-            "name": "diskName",
-            "in": "query",
-            "required": false,
-            "type": "string"
-          }
-        ],
-        "tags": [
-          "DiskService"
-        ]
-      }
-    },
     "/disks/{name}/delete": {
       "post": {
         "operationId": "DiskService_DeleteDisk",
@@ -164,12 +134,6 @@
         "size": {
           "type": "string"
         },
-        "filesystem": {
-          "type": "string"
-        },
-        "driver": {
-          "type": "string"
-        },
         "mountPath": {
           "type": "string"
         },
@@ -189,47 +153,6 @@
         }
       }
     },
-    "diskDiskSnapshotInstance": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string"
-        },
-        "diskName": {
-          "type": "string"
-        },
-        "format": {
-          "type": "string"
-        },
-        "status": {
-          "type": "string"
-        },
-        "generation": {
-          "type": "string",
-          "format": "int64"
-        },
-        "sizeBytes": {
-          "type": "string",
-          "format": "int64"
-        },
-        "logicalSizeBytes": {
-          "type": "string",
-          "format": "int64"
-        },
-        "storedSizeBytes": {
-          "type": "string",
-          "format": "int64"
-        },
-        "createdAt": {
-          "type": "string",
-          "format": "date-time"
-        },
-        "completedAt": {
-          "type": "string",
-          "format": "date-time"
-        }
-      }
-    },
     "diskGetOrCreateDiskRequest": {
       "type": "object",
       "properties": {
@@ -237,12 +160,6 @@
           "type": "string"
         },
         "size": {
-          "type": "string"
-        },
-        "filesystem": {
-          "type": "string"
-        },
-        "driver": {
           "type": "string"
         },
         "mountPath": {
@@ -261,24 +178,6 @@
         },
         "disk": {
           "$ref": "#/definitions/diskDiskInstance"
-        }
-      }
-    },
-    "diskListDiskSnapshotsResponse": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "type": "boolean"
-        },
-        "errMsg": {
-          "type": "string"
-        },
-        "snapshots": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "$ref": "#/definitions/diskDiskSnapshotInstance"
-          }
         }
       }
     },

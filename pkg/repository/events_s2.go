@@ -15,6 +15,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	cloudevents "github.com/cloudevents/sdk-go/v2"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 	"github.com/s2-streamstore/s2-sdk-go/s2"
 )
@@ -47,8 +48,26 @@ type S2EventRepository struct {
 	basin              *s2.BasinClient
 	streamPrefix       string
 	queue              chan cloudevents.Event
+	appendRecords      func(s2.StreamName, []s2.AppendRecord) error
+	readRecords        func(context.Context, s2.StreamName, uint64, uint64) (*s2.ReadBatch, error)
 	stubCacheContentMu sync.Mutex
 	stubCacheContent   map[s2.StreamName]*stubCacheRequiredContentState
+}
+
+// ErrStubCacheRequiredContentIncomplete is returned when one reconciliation
+// pass reaches its bounded S2 scan budget. The reader retains its coalescing
+// cursor, so a retry continues from NextSeqNum and returns the complete set only
+// after it reaches the stream tail. Callers must not prune or pressure-evict
+// from a partial set.
+type ErrStubCacheRequiredContentIncomplete struct {
+	Stream      string
+	RecordsRead int
+	NextSeqNum  uint64
+}
+
+func (e *ErrStubCacheRequiredContentIncomplete) Error() string {
+	return fmt.Sprintf("stub cache required-content stream %q is incomplete after %d records (next sequence %d)",
+		e.Stream, e.RecordsRead, e.NextSeqNum)
 }
 
 type ScopedS2EventRepository struct {
@@ -67,6 +86,26 @@ type stubCacheRequiredContentState struct {
 	mu         sync.Mutex
 	nextSeqNum uint64
 	items      map[string]types.CacheRequiredContentItem
+	scopes     map[string]*stubCacheRequiredContentScope
+}
+
+type stubCacheRequiredContentScope struct {
+	committed *stubCacheRequiredContentRevision
+	staging   map[string]*stubCacheRequiredContentRevision
+}
+
+type stubCacheRequiredContentRevision struct {
+	generation int64
+	id         string
+	digest     string
+	partCount  int
+	itemCount  int
+	totalBytes int64
+	tombstone  bool
+	commitSeen bool
+	invalid    bool
+	parts      map[int][]types.CacheRequiredContentItem
+	items      []types.CacheRequiredContentItem
 }
 
 func NewScopedS2EventRepository(config types.S2Config) (*ScopedS2EventRepository, error) {
@@ -253,10 +292,6 @@ func (r *ScopedS2EventRepository) appendEventBatch(events []cloudevents.Event) e
 				continue
 			}
 			if err := appendScopedS2Records(target.basin, streamName, records); err != nil {
-				if isS2EventStreamDeletionPending(err) {
-					log.Debug().Err(err).Str("stream", string(streamName)).Msg("dropping scoped event batch for stream pending deletion")
-					continue
-				}
 				streamErrs = append(streamErrs, fmt.Errorf("append %d scoped events to s2 stream %q: %w", len(records), streamName, err))
 			}
 		}
@@ -367,10 +402,6 @@ func (r *S2EventRepository) appendEventBatch(events []cloudevents.Event) error {
 			continue
 		}
 		if err := r.appendRecordsForWrite(streamName, records); err != nil {
-			if isS2EventStreamDeletionPending(err) {
-				log.Debug().Err(err).Str("stream", string(streamName)).Msg("dropping event batch for stream pending deletion")
-				continue
-			}
 			streamErrs = append(streamErrs, fmt.Errorf("append %d events to s2 stream %q: %w", len(records), streamName, err))
 		}
 	}
@@ -1252,6 +1283,9 @@ func s2TimestampMillisToNanos(timestamp uint64) uint64 {
 }
 
 func (r *S2EventRepository) appendRecordsForWrite(streamName s2.StreamName, records []s2.AppendRecord) error {
+	if r.appendRecords != nil {
+		return r.appendRecords(streamName, records)
+	}
 	return appendS2RecordsForWrite(r.basin, streamName, records)
 }
 
@@ -1615,8 +1649,15 @@ func (r *S2EventRepository) platformCacheStreamName() s2.StreamName {
 // stub from the dedicated S2 cache stream. Items are merged by
 // (hash, routing_key) keeping the most recent report for each.
 func (r *S2EventRepository) ReadStubCacheRequiredContent(ctx context.Context, workspaceID, stubID string) ([]types.CacheRequiredContentItem, error) {
+	return r.readStubCacheRequiredContent(ctx, workspaceID, stubID, maxStubCacheReadRecords)
+}
+
+func (r *S2EventRepository) readStubCacheRequiredContent(ctx context.Context, workspaceID, stubID string, maxRecords int) ([]types.CacheRequiredContentItem, error) {
 	if workspaceID == "" || stubID == "" {
 		return nil, fmt.Errorf("workspace id and stub id are required to read stub cache required content")
+	}
+	if maxRecords <= 0 {
+		return nil, fmt.Errorf("stub cache required-content read budget must be positive")
 	}
 
 	streamName := r.stubCacheStreamName(workspaceID, stubID)
@@ -1627,17 +1668,26 @@ func (r *S2EventRepository) ReadStubCacheRequiredContent(ctx context.Context, wo
 	if state.items == nil {
 		state.items = map[string]types.CacheRequiredContentItem{}
 	}
+	if state.scopes == nil {
+		state.scopes = map[string]*stubCacheRequiredContentScope{}
+	}
 
 	// Read only records appended since this repository last coalesced the stub.
 	// Reconciliation calls this repeatedly for recent stubs; restarting from
 	// sequence 0 every cycle makes read bytes grow with stream age.
 	recordsRead := 0
-	for recordsRead < maxStubCacheReadRecords {
-		count := uint64(defaultS2EventReadLimit)
-		batch, err := r.basin.Stream(streamName).Read(ctx, &s2.ReadOptions{
-			SeqNum: &state.nextSeqNum,
-			Count:  &count,
-		})
+	for recordsRead < maxRecords {
+		count := uint64(min(defaultS2EventReadLimit, maxRecords-recordsRead))
+		var batch *s2.ReadBatch
+		var err error
+		if r.readRecords != nil {
+			batch, err = r.readRecords(ctx, streamName, state.nextSeqNum, count)
+		} else {
+			batch, err = r.basin.Stream(streamName).Read(ctx, &s2.ReadOptions{
+				SeqNum: &state.nextSeqNum,
+				Count:  &count,
+			})
+		}
 		if err != nil {
 			if isS2ReadEmpty(err) {
 				break
@@ -1650,7 +1700,7 @@ func (r *S2EventRepository) ReadStubCacheRequiredContent(ctx context.Context, wo
 		recordsRead += len(batch.Records)
 
 		for _, record := range batch.Records {
-			mergeStubCacheRequiredContentRecord(state.items, record.Body)
+			mergeStubCacheRequiredContentRecordIntoState(state, record.Body)
 		}
 
 		state.nextSeqNum = batch.Records[len(batch.Records)-1].SeqNum + 1
@@ -1658,11 +1708,14 @@ func (r *S2EventRepository) ReadStubCacheRequiredContent(ctx context.Context, wo
 			break
 		}
 	}
-	if recordsRead >= maxStubCacheReadRecords {
-		log.Warn().Str("stream", string(streamName)).Int("records_read", recordsRead).Msg("stub cache required-content read hit record cap; result may be partial")
+	if recordsRead >= maxRecords {
+		log.Warn().Str("stream", string(streamName)).Int("records_read", recordsRead).Msg("stub cache required-content read hit record cap; refusing partial result")
+		return nil, &ErrStubCacheRequiredContentIncomplete{
+			Stream: string(streamName), RecordsRead: recordsRead, NextSeqNum: state.nextSeqNum,
+		}
 	}
 
-	return stubCacheRequiredContentItems(state.items), nil
+	return state.requiredContentItems(), nil
 }
 
 func (r *S2EventRepository) stubCacheRequiredContentState(streamName s2.StreamName) *stubCacheRequiredContentState {
@@ -1681,6 +1734,14 @@ func (r *S2EventRepository) stubCacheRequiredContentState(streamName s2.StreamNa
 }
 
 func mergeStubCacheRequiredContentRecord(merged map[string]types.CacheRequiredContentItem, body []byte) {
+	state := &stubCacheRequiredContentState{items: merged, scopes: map[string]*stubCacheRequiredContentScope{}}
+	mergeStubCacheRequiredContentRecordIntoState(state, body)
+}
+
+func mergeStubCacheRequiredContentRecordIntoState(state *stubCacheRequiredContentState, body []byte) {
+	if state == nil {
+		return
+	}
 	var envelope struct {
 		Type string          `json:"type"`
 		Data json.RawMessage `json:"data"`
@@ -1695,6 +1756,13 @@ func mergeStubCacheRequiredContentRecord(merged map[string]types.CacheRequiredCo
 	if err := json.Unmarshal(envelope.Data, &schema); err != nil {
 		return
 	}
+	if schema.Scope != "" {
+		mergeScopedStubCacheRequiredContentRecord(state, schema)
+		return
+	}
+	if state.items == nil {
+		state.items = map[string]types.CacheRequiredContentItem{}
+	}
 	for _, item := range schema.Items {
 		if item.Hash == "" {
 			continue
@@ -1702,8 +1770,177 @@ func mergeStubCacheRequiredContentRecord(merged map[string]types.CacheRequiredCo
 		if item.Kind == "" {
 			item.Kind = schema.Kind
 		}
-		mergeStubCacheRequiredContentItem(merged, item)
+		// Block-state content must use a committed scoped replacement revision;
+		// accepting additive records would retain compacted/deleted ancestry
+		// forever and defeat exact cache eviction.
+		if item.Kind == types.CacheContentKindStateManifest || item.Kind == types.CacheContentKindStateChunk {
+			continue
+		}
+		mergeStubCacheRequiredContentItem(state.items, item)
 	}
+}
+
+func mergeScopedStubCacheRequiredContentRecord(state *stubCacheRequiredContentState, schema types.EventStubCacheRequiredContentSchema) {
+	if !schema.Replace || schema.Kind != "" || schema.RevisionGeneration <= 0 || schema.RevisionID == "" || schema.SetDigest == "" {
+		return
+	}
+	if parsed, err := uuid.Parse(schema.Scope); err != nil || parsed.String() != schema.Scope {
+		return
+	}
+	if parsed, err := uuid.Parse(schema.RevisionID); err != nil || parsed.String() != schema.RevisionID {
+		return
+	}
+	if state.scopes == nil {
+		state.scopes = map[string]*stubCacheRequiredContentScope{}
+	}
+	scope := state.scopes[schema.Scope]
+	if scope == nil {
+		scope = &stubCacheRequiredContentScope{staging: map[string]*stubCacheRequiredContentRevision{}}
+		state.scopes[schema.Scope] = scope
+	}
+	if scope.staging == nil {
+		scope.staging = map[string]*stubCacheRequiredContentRevision{}
+	}
+	if scope.committed != nil {
+		order := compareStubCacheRevision(schema.RevisionGeneration, schema.RevisionID, scope.committed.generation, scope.committed.id)
+		if order < 0 {
+			return
+		}
+		if order == 0 {
+			// Exact committed replay is harmless; conflicting metadata for the
+			// same generation/revision identity is ignored fail-closed.
+			if scope.committed.digest == schema.SetDigest && scope.committed.tombstone == schema.Tombstone {
+				return
+			}
+			return
+		}
+	}
+	key := fmt.Sprintf("%020d:%s", schema.RevisionGeneration, schema.RevisionID)
+	revision := scope.staging[key]
+	if revision == nil {
+		revision = &stubCacheRequiredContentRevision{
+			generation: schema.RevisionGeneration, id: schema.RevisionID, digest: schema.SetDigest,
+			partCount: schema.PartCount, itemCount: schema.ItemCount, totalBytes: schema.TotalBytes,
+			tombstone: schema.Tombstone, parts: map[int][]types.CacheRequiredContentItem{},
+		}
+		scope.staging[key] = revision
+	} else if revision.digest != schema.SetDigest || revision.partCount != schema.PartCount ||
+		revision.itemCount != schema.ItemCount || revision.totalBytes != schema.TotalBytes || revision.tombstone != schema.Tombstone {
+		revision.invalid = true
+		return
+	}
+	if revision.invalid {
+		return
+	}
+
+	if schema.Tombstone {
+		_, emptyDigest, _, err := types.CanonicalCacheRequiredContentSet(nil)
+		if err != nil || !schema.Commit || schema.PartCount != 0 || schema.ItemCount != 0 || schema.TotalBytes != 0 ||
+			len(schema.Items) != 0 || schema.SetDigest != emptyDigest {
+			revision.invalid = true
+			return
+		}
+		revision.commitSeen = true
+	} else if schema.Commit {
+		if schema.PartCount <= 0 || len(schema.Items) != 0 {
+			revision.invalid = true
+			return
+		}
+		revision.commitSeen = true
+	} else {
+		if schema.PartCount <= 0 || schema.PartIndex < 0 || schema.PartIndex >= schema.PartCount || len(schema.Items) == 0 {
+			revision.invalid = true
+			return
+		}
+		for _, item := range schema.Items {
+			if (item.Kind != types.CacheContentKindStateManifest && item.Kind != types.CacheContentKindStateChunk) ||
+				item.Hash == "" || item.VolumeID == "" || item.GenerationID == "" {
+				revision.invalid = true
+				return
+			}
+		}
+		canonical, _, _, err := types.CanonicalCacheRequiredContentSet(schema.Items)
+		if err != nil {
+			revision.invalid = true
+			return
+		}
+		if existing, ok := revision.parts[schema.PartIndex]; ok {
+			oldBytes, _ := json.Marshal(existing)
+			newBytes, _ := json.Marshal(canonical)
+			if string(oldBytes) != string(newBytes) {
+				revision.invalid = true
+			}
+			return
+		}
+		revision.parts[schema.PartIndex] = canonical
+	}
+	commitScopedStubCacheRevision(scope, key, revision)
+}
+
+func commitScopedStubCacheRevision(scope *stubCacheRequiredContentScope, key string, revision *stubCacheRequiredContentRevision) {
+	if scope == nil || revision == nil || revision.invalid || !revision.commitSeen || len(revision.parts) != revision.partCount {
+		return
+	}
+	items := make([]types.CacheRequiredContentItem, 0, revision.itemCount)
+	for part := 0; part < revision.partCount; part++ {
+		partItems, ok := revision.parts[part]
+		if !ok {
+			return
+		}
+		items = append(items, partItems...)
+	}
+	canonical, digest, totalBytes, err := types.CanonicalCacheRequiredContentSet(items)
+	if err != nil || digest != revision.digest || len(canonical) != revision.itemCount || totalBytes != revision.totalBytes {
+		revision.invalid = true
+		return
+	}
+	if !revision.tombstone {
+		hasManifest := false
+		for _, item := range canonical {
+			if item.Kind == types.CacheContentKindStateManifest {
+				hasManifest = true
+				break
+			}
+		}
+		if !hasManifest {
+			revision.invalid = true
+			return
+		}
+	}
+	revision.items = canonical
+	scope.committed = revision
+	// A newer committed revision supersedes every incomplete/replayed staging
+	// revision for this lineage. Independent fork scopes remain untouched.
+	for stagedKey := range scope.staging {
+		delete(scope.staging, stagedKey)
+	}
+	_ = key
+}
+
+func compareStubCacheRevision(leftGeneration int64, leftID string, rightGeneration int64, rightID string) int {
+	if leftGeneration < rightGeneration {
+		return -1
+	}
+	if leftGeneration > rightGeneration {
+		return 1
+	}
+	return strings.Compare(leftID, rightID)
+}
+
+func (state *stubCacheRequiredContentState) requiredContentItems() []types.CacheRequiredContentItem {
+	merged := make(map[string]types.CacheRequiredContentItem, len(state.items))
+	for key, item := range state.items {
+		merged[key] = item
+	}
+	for _, scope := range state.scopes {
+		if scope == nil || scope.committed == nil || scope.committed.tombstone {
+			continue
+		}
+		for _, item := range scope.committed.items {
+			mergeStubCacheRequiredContentItem(merged, item)
+		}
+	}
+	return stubCacheRequiredContentItems(merged)
 }
 
 func stubCacheRequiredContentItems(merged map[string]types.CacheRequiredContentItem) []types.CacheRequiredContentItem {
@@ -1715,82 +1952,11 @@ func stubCacheRequiredContentItems(merged map[string]types.CacheRequiredContentI
 }
 
 func mergeStubCacheRequiredContentItem(merged map[string]types.CacheRequiredContentItem, item types.CacheRequiredContentItem) {
-	item = normalizeStubCacheRequiredContentItem(item)
-	if item.Kind == types.CacheContentKindDiskSnapshot && item.DiskName != "" {
-		latest := latestDiskSnapshotContentGeneration(merged, item.DiskName)
-		if item.SnapshotGeneration < latest {
-			return
-		}
-		if item.SnapshotGeneration > latest {
-			pruneDiskSnapshotContentGenerationsBefore(merged, item.DiskName, item.SnapshotGeneration)
-		}
-	}
 	merged[stubCacheRequiredContentItemKey(item)] = item
 }
 
-func normalizeStubCacheRequiredContentItem(item types.CacheRequiredContentItem) types.CacheRequiredContentItem {
-	if item.Kind != types.CacheContentKindDiskSnapshot || (item.DiskName != "" && item.SnapshotGeneration > 0) {
-		return item
-	}
-	diskName, generation := diskSnapshotContentIdentity(item.Source)
-	if item.DiskName == "" {
-		item.DiskName = diskName
-	}
-	if item.SnapshotGeneration == 0 {
-		item.SnapshotGeneration = generation
-	}
-	return item
-}
-
 func stubCacheRequiredContentItemKey(item types.CacheRequiredContentItem) string {
-	// Keep only the checkpoint most recently reported by a stub. Explicit
-	// restores of older checkpoints still fetch their archive from origin.
-	if item.Kind == types.CacheContentKindCheckpoint {
-		return string(types.CacheContentKindCheckpoint)
-	}
-	if item.Kind == types.CacheContentKindDiskSnapshot && item.DiskName != "" {
-		return strings.Join([]string{
-			string(item.Kind),
-			item.DiskName,
-			strconv.FormatInt(item.SnapshotGeneration, 10),
-			item.Hash,
-			item.RoutingKey,
-		}, "\x00")
-	}
 	return item.Hash + "\x00" + item.RoutingKey
-}
-
-func latestDiskSnapshotContentGeneration(merged map[string]types.CacheRequiredContentItem, diskName string) int64 {
-	var latest int64
-	for _, item := range merged {
-		if item.Kind == types.CacheContentKindDiskSnapshot && item.DiskName == diskName && item.SnapshotGeneration > latest {
-			latest = item.SnapshotGeneration
-		}
-	}
-	return latest
-}
-
-func pruneDiskSnapshotContentGenerationsBefore(merged map[string]types.CacheRequiredContentItem, diskName string, generation int64) {
-	for key, item := range merged {
-		if item.Kind == types.CacheContentKindDiskSnapshot && item.DiskName == diskName && item.SnapshotGeneration < generation {
-			delete(merged, key)
-		}
-	}
-}
-
-func diskSnapshotContentIdentity(source string) (string, int64) {
-	parts := strings.Split(strings.Trim(source, "/"), "/")
-	if len(parts) < 3 || parts[0] != "durable-disks" {
-		return "", 0
-	}
-	if len(parts) >= 5 && parts[2] == "snapshots" {
-		generation, _ := strconv.ParseInt(parts[3], 10, 64)
-		return parts[1], generation
-	}
-	if parts[2] == "chunks" {
-		return parts[1], 0
-	}
-	return "", 0
 }
 
 func (r *S2EventRepository) containerLogStreamName(workspaceID, stubID, containerID string) s2.StreamName {

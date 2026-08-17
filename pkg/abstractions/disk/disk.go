@@ -17,7 +17,6 @@ type DiskService interface {
 	GetOrCreateDisk(ctx context.Context, in *pb.GetOrCreateDiskRequest) (*pb.GetOrCreateDiskResponse, error)
 	ListDisks(ctx context.Context, in *pb.ListDisksRequest) (*pb.ListDisksResponse, error)
 	DeleteDisk(ctx context.Context, in *pb.DeleteDiskRequest) (*pb.DeleteDiskResponse, error)
-	ListDiskSnapshots(ctx context.Context, in *pb.ListDiskSnapshotsRequest) (*pb.ListDiskSnapshotsResponse, error)
 }
 
 type GlobalDiskService struct {
@@ -43,32 +42,12 @@ func diskToProto(disk *types.Disk, workspaceExternalId, workspaceName string) *p
 		Id:            disk.ExternalId,
 		Name:          disk.Name,
 		Size:          disk.Size,
-		Filesystem:    disk.Filesystem,
-		Driver:        disk.Driver,
 		MountPath:     disk.MountPath,
 		CreatedAt:     timestamppb.New(disk.CreatedAt.Time),
 		UpdatedAt:     timestamppb.New(disk.UpdatedAt.Time),
 		WorkspaceId:   workspaceExternalId,
 		WorkspaceName: workspaceName,
 	}
-}
-
-func snapshotToProto(snapshot types.DiskSnapshot) *pb.DiskSnapshotInstance {
-	instance := &pb.DiskSnapshotInstance{
-		Id:               snapshot.ExternalId,
-		DiskName:         snapshot.DiskName,
-		Format:           snapshot.Format,
-		Status:           string(snapshot.Status),
-		Generation:       snapshot.Generation,
-		SizeBytes:        snapshot.SizeBytes,
-		LogicalSizeBytes: snapshot.LogicalSizeBytes,
-		StoredSizeBytes:  snapshot.StoredSizeBytes,
-		CreatedAt:        timestamppb.New(snapshot.CreatedAt.Time),
-	}
-	if snapshot.CompletedAt.Valid {
-		instance.CompletedAt = timestamppb.New(snapshot.CompletedAt.Time)
-	}
-	return instance
 }
 
 func (ds *GlobalDiskService) GetOrCreateDisk(ctx context.Context, in *pb.GetOrCreateDiskRequest) (*pb.GetOrCreateDiskResponse, error) {
@@ -79,14 +58,12 @@ func (ds *GlobalDiskService) GetOrCreateDisk(ctx context.Context, in *pb.GetOrCr
 	}
 
 	disk, err := ds.backendRepo.GetOrCreateDisk(ctx, authInfo.Workspace.Id, &types.Disk{
-		Name:       types.SafeDurableDiskName(in.Name),
-		Size:       in.Size,
-		Filesystem: in.Filesystem,
-		Driver:     in.Driver,
-		MountPath:  in.MountPath,
+		Name:      types.SafeDurableDiskName(in.Name),
+		Size:      in.Size,
+		MountPath: in.MountPath,
 	})
 	if err != nil {
-		return &pb.GetOrCreateDiskResponse{Ok: false, ErrMsg: "Unable to get or create disk"}, nil
+		return &pb.GetOrCreateDiskResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 
 	return &pb.GetOrCreateDiskResponse{
@@ -131,23 +108,4 @@ func (ds *GlobalDiskService) DeleteDisk(ctx context.Context, in *pb.DeleteDiskRe
 	}
 
 	return &pb.DeleteDiskResponse{Ok: true}, nil
-}
-
-func (ds *GlobalDiskService) ListDiskSnapshots(ctx context.Context, in *pb.ListDiskSnapshotsRequest) (*pb.ListDiskSnapshotsResponse, error) {
-	authInfo, _ := auth.AuthInfoFromContext(ctx)
-
-	snapshots, err := ds.backendRepo.ListDiskSnapshots(ctx, types.DiskSnapshotFilter{
-		WorkspaceId: authInfo.Workspace.Id,
-		DiskName:    in.DiskName,
-	})
-	if err != nil {
-		return &pb.ListDiskSnapshotsResponse{Ok: false, ErrMsg: "Unable to list disk snapshots"}, nil
-	}
-
-	instances := make([]*pb.DiskSnapshotInstance, 0, len(snapshots))
-	for _, snapshot := range snapshots {
-		instances = append(instances, snapshotToProto(snapshot))
-	}
-
-	return &pb.ListDiskSnapshotsResponse{Ok: true, Snapshots: instances}, nil
 }

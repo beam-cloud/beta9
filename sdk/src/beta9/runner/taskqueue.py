@@ -6,7 +6,7 @@ import threading
 import time
 import traceback
 from concurrent import futures
-from multiprocessing import Event, Process, Value, set_start_method
+from multiprocessing import Event, Process, set_start_method
 from multiprocessing.synchronize import Event as TEvent
 from typing import Any, List, NamedTuple, Type, Union
 
@@ -33,9 +33,7 @@ from ..runner.common import (
     execute_lifecycle_method,
     send_callback,
     serialize_result,
-    wait_for_checkpoint,
 )
-from ..runner.common import config as cfg
 from ..type import LifeCycleMethod, TaskExitCode, TaskStatus
 
 TASK_PROCESS_WATCHDOG_INTERVAL = 0.01
@@ -61,9 +59,6 @@ class TaskQueueManager:
             Event() for _ in range(self.task_worker_count)
         ]
         self.task_worker_watchdog_threads: List[threading.Thread] = []
-
-        # Shared workers_ready counter for auto-checkpointing
-        self.workers_ready: Value = Value("i", 0)
 
     def _setup_signal_handlers(self):
         if os.getpid() == self.pid:
@@ -110,7 +105,6 @@ class TaskQueueManager:
                 worker_index=worker_index,
                 parent_pid=self.pid,
                 worker_startup_event=self.task_worker_startup_events[worker_index],
-                workers_ready=self.workers_ready,
             )
         )
 
@@ -170,12 +164,10 @@ class TaskQueueWorker:
         worker_index: int,
         parent_pid: int,
         worker_startup_event: TEvent,
-        workers_ready: Value,
     ) -> None:
         self.worker_index: int = worker_index
         self.parent_pid: int = parent_pid
         self.worker_startup_event: TEvent = worker_startup_event
-        self.workers_ready: Value = workers_ready
         self.should_exit: bool = False
 
     def _signal_handler(self, signum, frame):
@@ -308,10 +300,6 @@ class TaskQueueWorker:
         on_start_value = execute_lifecycle_method(name=LifeCycleMethod.OnStart)
 
         print(f"Worker[{self.worker_index}] ready")
-
-        # If checkpointing is enabled, wait for all workers to be ready before creating a checkpoint
-        if cfg.checkpoint_enabled:
-            wait_for_checkpoint(workers_ready=self.workers_ready)
 
         with ThreadPoolExecutorOverride() as thread_pool:
             while not self.should_exit:

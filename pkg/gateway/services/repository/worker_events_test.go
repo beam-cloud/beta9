@@ -2,11 +2,14 @@ package repository_services
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
+	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/stretchr/testify/require"
@@ -39,8 +42,9 @@ func newWorkerEventBrokerForTest(t *testing.T) (*workerEventBroker, *common.Even
 	return broker, common.NewEventBus(rdb)
 }
 
-func TestWorkerEventBrokerFansOutStopContainerEvents(t *testing.T) {
+func TestWorkerEventBrokerRoutesStopContainerOnlyToAuthoritativeWorker(t *testing.T) {
 	broker, eventBus := newWorkerEventBrokerForTest(t)
+	require.NoError(t, broker.rdb.HSet(context.Background(), common.RedisKeys.SchedulerContainerState("container-1"), "worker_id", "worker-a").Err())
 
 	sinkAID, sinkA := broker.register("worker-a")
 	defer broker.unregister(sinkAID)
@@ -63,19 +67,23 @@ func TestWorkerEventBrokerFansOutStopContainerEvents(t *testing.T) {
 
 	broker.handleRedisEventID(eventID)
 
-	for _, sink := range []<-chan *pb.WorkerEvent{sinkA, sinkB} {
-		event := receiveWorkerEvent(t, sink)
-		require.Equal(t, eventID, event.EventId)
-		stop := event.GetStopContainer()
-		require.NotNil(t, stop)
-		require.Equal(t, "container-1", stop.ContainerId)
-		require.True(t, stop.Force)
-		require.Equal(t, string(types.StopContainerReasonUser), stop.Reason)
+	event := receiveWorkerEvent(t, sinkA)
+	require.Equal(t, eventID, event.EventId)
+	stop := event.GetStopContainer()
+	require.NotNil(t, stop)
+	require.Equal(t, "container-1", stop.ContainerId)
+	require.True(t, stop.Force)
+	require.Equal(t, string(types.StopContainerReasonUser), stop.Reason)
+	select {
+	case event := <-sinkB:
+		t.Fatalf("unrelated worker received confidential stop event: %+v", event)
+	default:
 	}
 }
 
 func TestWorkerEventBrokerConvertsStopBuildEvents(t *testing.T) {
 	broker, eventBus := newWorkerEventBrokerForTest(t)
+	require.NoError(t, broker.rdb.HSet(context.Background(), common.RedisKeys.SchedulerContainerState("build-1"), "worker_id", "worker-a").Err())
 
 	sinkID, sink := broker.register("worker-a")
 	defer broker.unregister(sinkID)
@@ -94,6 +102,28 @@ func TestWorkerEventBrokerConvertsStopBuildEvents(t *testing.T) {
 	stopBuild := event.GetStopBuild()
 	require.NotNil(t, stopBuild)
 	require.Equal(t, "build-1", stopBuild.ContainerId)
+}
+
+func TestWorkerEventBrokerUsesReassignedWorkerAtDelivery(t *testing.T) {
+	broker, eventBus := newWorkerEventBrokerForTest(t)
+	sinkAID, sinkA := broker.register("worker-a")
+	defer broker.unregister(sinkAID)
+	sinkBID, sinkB := broker.register("worker-b")
+	defer broker.unregister(sinkBID)
+
+	args, err := (types.StopContainerArgs{ContainerId: "container-reassigned", Reason: types.StopContainerReasonUser}).ToMap()
+	require.NoError(t, err)
+	eventID, err := eventBus.Send(&common.Event{Type: common.EventTypeStopContainer, Args: args})
+	require.NoError(t, err)
+	require.NoError(t, broker.rdb.HSet(context.Background(), common.RedisKeys.SchedulerContainerState("container-reassigned"), "worker_id", "worker-b").Err())
+
+	broker.handleRedisEventID(eventID)
+	require.Equal(t, eventID, receiveWorkerEvent(t, sinkB).EventId)
+	select {
+	case event := <-sinkA:
+		t.Fatalf("prior worker received reassigned stop event: %+v", event)
+	default:
+	}
 }
 
 func TestWorkerEventBrokerWakesOnlyTargetWorker(t *testing.T) {
@@ -123,17 +153,24 @@ func TestStreamWorkerEventsRejectsInvalidRequests(t *testing.T) {
 	err := service.StreamWorkerEvents(&pb.StreamWorkerEventsRequest{}, nil)
 	require.Equal(t, codes.InvalidArgument, status.Code(err))
 
-	err = service.StreamWorkerEvents(&pb.StreamWorkerEventsRequest{WorkerId: "worker-a"}, nil)
+	err = service.StreamWorkerEvents(&pb.StreamWorkerEventsRequest{
+		WorkerId: "worker-a", WorkerInstanceId: "instance-a", StorageNodeId: "node-a",
+	}, nil)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
 }
 
 func TestStreamWorkerEventsSendsHeartbeat(t *testing.T) {
 	broker, _ := newWorkerEventBrokerForTest(t)
+	workers := newWorkerEventAuthRepo()
 	service := &WorkerRepositoryService{
 		ctx:          context.Background(),
 		workerEvents: broker,
+		workerRepo:   workers,
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	authCtx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{Token: &types.Token{
+		TokenType: types.TokenTypeWorker, ExternalId: "worker-token",
+	}})
+	ctx, cancel := context.WithCancel(authCtx)
 	stream := &fakeWorkerEventStream{
 		ctx:  ctx,
 		sent: make(chan *pb.WorkerEvent, 8),
@@ -142,7 +179,9 @@ func TestStreamWorkerEventsSendsHeartbeat(t *testing.T) {
 	errs := make(chan error, 1)
 	go func() {
 		errs <- service.streamWorkerEvents(
-			&pb.StreamWorkerEventsRequest{WorkerId: "worker-a"},
+			&pb.StreamWorkerEventsRequest{
+				WorkerId: "worker-a", WorkerInstanceId: "instance-a", StorageNodeId: "node-a",
+			},
 			stream,
 			10*time.Millisecond,
 		)
@@ -159,6 +198,61 @@ func TestStreamWorkerEventsSendsHeartbeat(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for stream to close")
 	}
+}
+
+func TestStreamWorkerEventsStopsWhenProcessEpochIsSuperseded(t *testing.T) {
+	broker, _ := newWorkerEventBrokerForTest(t)
+	workers := newWorkerEventAuthRepo()
+	service := &WorkerRepositoryService{ctx: context.Background(), workerEvents: broker, workerRepo: workers}
+	authCtx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{Token: &types.Token{
+		TokenType: types.TokenTypeWorker, ExternalId: "worker-token",
+	}})
+	ctx, cancel := context.WithCancel(authCtx)
+	defer cancel()
+	stream := &fakeWorkerEventStream{ctx: ctx, sent: make(chan *pb.WorkerEvent, 8)}
+	errs := make(chan error, 1)
+	go func() {
+		errs <- service.streamWorkerEvents(&pb.StreamWorkerEventsRequest{
+			WorkerId: "worker-a", WorkerInstanceId: "instance-a", StorageNodeId: "node-a",
+		}, stream, 10*time.Millisecond)
+	}()
+
+	require.Equal(t, types.WorkerEventHeartbeatID, receiveWorkerEvent(t, stream.sent).EventId)
+	workers.setInstance("instance-b")
+	select {
+	case err := <-errs:
+		require.Equal(t, codes.PermissionDenied, status.Code(err))
+	case <-time.After(time.Second):
+		t.Fatal("superseded worker event stream did not stop")
+	}
+}
+
+type workerEventAuthRepo struct {
+	repository.WorkerRepository
+	mu     sync.RWMutex
+	worker types.Worker
+}
+
+func newWorkerEventAuthRepo() *workerEventAuthRepo {
+	return &workerEventAuthRepo{worker: types.Worker{
+		Id: "worker-a", InstanceId: "instance-a", MachineId: "node-a", WorkerTokenId: "worker-token",
+	}}
+}
+
+func (r *workerEventAuthRepo) GetWorkerById(workerID string) (*types.Worker, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if workerID != r.worker.Id {
+		return nil, &types.ErrWorkerNotFound{WorkerId: workerID}
+	}
+	worker := r.worker
+	return &worker, nil
+}
+
+func (r *workerEventAuthRepo) setInstance(instanceID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.worker.InstanceId = instanceID
 }
 
 type fakeWorkerEventStream struct {

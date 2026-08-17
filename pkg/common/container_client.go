@@ -424,14 +424,22 @@ func generateProgressBar(progress int, total int) string {
 	return fmt.Sprintf("%s\r%s %d%%\n", up, progressBar, (progress*100)/total)
 }
 
-type ContainerCheckpointOptions struct {
-	TerminateAfterCheckpoint bool
+type SnapshotContainerStateOptions struct {
+	OperationId   string
+	Mode          string
+	Publish       bool
+	IncludeMemory bool
+	Visible       bool
 }
 
-func (c *ContainerClient) Checkpoint(ctx context.Context, containerId string, opts ContainerCheckpointOptions) (*pb.ContainerCheckpointResponse, error) {
-	resp, err := c.client.ContainerCheckpoint(ctx, &pb.ContainerCheckpointRequest{
-		ContainerId:              containerId,
-		TerminateAfterCheckpoint: opts.TerminateAfterCheckpoint,
+func (c *ContainerClient) SnapshotContainerState(ctx context.Context, containerId string, opts SnapshotContainerStateOptions) (*pb.SnapshotContainerStateResponse, error) {
+	resp, err := c.client.SnapshotContainerState(ctx, &pb.SnapshotContainerStateRequest{
+		ContainerId:   containerId,
+		OperationId:   opts.OperationId,
+		Mode:          opts.Mode,
+		Publish:       opts.Publish,
+		IncludeMemory: opts.IncludeMemory,
+		Visible:       opts.Visible,
 	})
 	if err != nil {
 		return resp, err
@@ -439,8 +447,12 @@ func (c *ContainerClient) Checkpoint(ctx context.Context, containerId string, op
 	return resp, nil
 }
 
-func (c *ContainerClient) SnapshotDisks(ctx context.Context, containerId string) (*pb.ContainerSnapshotDisksResponse, error) {
-	return c.client.ContainerSnapshotDisks(ctx, &pb.ContainerSnapshotDisksRequest{ContainerId: containerId})
+func (c *ContainerClient) RestoreContainerState(ctx context.Context, containerId, operationId, stateSnapshotId string) (*pb.RestoreContainerStateResponse, error) {
+	return c.client.RestoreContainerState(ctx, &pb.RestoreContainerStateRequest{
+		ContainerId:     containerId,
+		OperationId:     operationId,
+		StateSnapshotId: stateSnapshotId,
+	})
 }
 
 func (c *ContainerClient) Archive(ctx context.Context, containerId, imageId string, outputChan chan OutputMsg) error {

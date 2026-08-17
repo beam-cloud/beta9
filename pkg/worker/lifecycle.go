@@ -133,9 +133,7 @@ func (s *Worker) stopContainerWithCheckpointDeferral(ctx context.Context, contai
 		log.Info().Str("container_id", containerId).Msg("container not found")
 		return nil
 	}
-	if allowCheckpointDeferral && s.deferStopForCheckpoint(instance, kill) {
-		return nil
-	}
+	_ = allowCheckpointDeferral
 
 	log.Info().Str("container_id", containerId).Msg("stopping container")
 
@@ -366,9 +364,17 @@ func (s *Worker) finalizeContainer(containerId string, request *types.ContainerR
 }
 
 func (s *Worker) clearContainer(containerId string, request *types.ContainerRequest, exitCode int, exitReported bool) {
-	hasDurableDisk := request != nil && request.HasDurableDiskMount()
+	hasDurableDisk := request != nil && request.HasStateVolumes()
+	pendingStateOperation := ""
+	if s.stateVolumeManager != nil {
+		pendingStateOperation, _ = s.stateVolumeManager.PendingOperation(containerId)
+	}
 	instance, exists := s.containerInstances.Get(containerId)
+	var finalStateCommitErr error
 	if exists {
+		instance.stateMu.RLock()
+		finalStateCommitErr = instance.StateFinalCommitError
+		instance.stateMu.RUnlock()
 		if request != nil && request.Stub.Type.Kind() == types.StubTypeSandbox {
 			instance.signalProcessManagerReadiness(false)
 		}
@@ -385,13 +391,10 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 		instance.statusHeartbeatMu.Unlock()
 	}
 
-	if hasDurableDisk {
-		exitCode, exitReported = s.finalizeDurableDiskMounts(containerId, request, exitCode, exitReported)
-	}
 	if containerId != "" {
 		_ = os.RemoveAll(filepath.Join(baseConfigPath, containerId))
 	}
-	if !exitReported {
+	if !exitReported && pendingStateOperation == "" && finalStateCommitErr == nil {
 		s.setContainerExitCode(containerId, exitCode)
 	}
 
@@ -416,6 +419,15 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 	os.RemoveAll(filepath.Join(types.WorkerContainerUploadsHostPath, containerId))
 
 	s.containerLock.Unlock()
+	if pendingStateOperation != "" || finalStateCommitErr != nil {
+		// The runtime is gone and live block resources have been detached, but
+		// the immutable terminal operation still needs upload/commit replay.
+		// Preserve the request and remote container record as recovery context;
+		// reporting a terminal exit here would make a pending snapshot look
+		// successfully finished and would delete the only local retry handle.
+		log.Warn().Err(finalStateCommitErr).Str("container_id", containerId).Str("operation_id", pendingStateOperation).Msg("preserving terminal state for durable publication replay")
+		return
+	}
 
 	s.markContainerStopping(containerId, types.ContainerStateTtlS)
 
@@ -590,10 +602,6 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	if request.DockerEnabled && forcedRuncCheckpointProfileRequired(request, s.runtime) {
 		return errors.New("forced runc containers do not support Docker-enabled mode")
 	}
-	if err := validateCheckpointRestoreRuntime(request, s.runtime); err != nil {
-		return err
-	}
-
 	instance, exists := s.containerInstances.Get(containerId)
 	if !exists {
 		instance = &ContainerInstance{
@@ -626,30 +634,6 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 	// Handle stdout/stderr
 	go s.containerLogger.CaptureLogs(request, logChan)
-
-	// Gate checkpointing based on runtime capabilities, and let the user know if it was disabled
-	if request.CheckpointEnabled && !caps.CheckpointRestore {
-		log.Info().Str("container_id", containerId).
-			Str("runtime", s.runtime.Name()).
-			Msg("disabling checkpoint for runtime without CRIU support")
-		outputLogger.Info("Checkpointing is enabled for this container, but the runtime on this worker does not support checkpoint/restore - disabling checkpointing\n")
-
-		request.CheckpointEnabled = false
-		if request.Checkpoint == nil || !request.Checkpoint.IsFilesystemOnly() {
-			request.Checkpoint = nil
-		}
-	}
-
-	var filesystemRestore *checkpointFilesystemRestore
-	if s.canRestoreCheckpoint(request, s.runtime) {
-		filesystemRestore = s.startCheckpointFilesystemRestore(request, outputLogger)
-	}
-	filesystemRestoreHandedOff := false
-	defer func() {
-		if !filesystemRestoreHandedOff {
-			filesystemRestore.cleanup()
-		}
-	}()
 
 	var imageLoaded bool
 	startup.Go(func() error {
@@ -713,13 +697,86 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 	startupPortBindings := startupPortBindingsForRequest(request, requestedPorts, bindPorts)
 	opts := &ContainerOptions{
-		BundlePath:                  bundlePath,
-		HostBindPort:                bindPorts[0],
-		BindPorts:                   bindPorts,
-		StartupPortBindings:         startupPortBindings,
-		InitialSpec:                 initialBundleSpec,
-		StartupStartedAt:            startupStartedAt,
-		CheckpointFilesystemRestore: filesystemRestore,
+		BundlePath:          bundlePath,
+		HostBindPort:        bindPorts[0],
+		BindPorts:           bindPorts,
+		StartupPortBindings: startupPortBindings,
+		InitialSpec:         initialBundleSpec,
+		StartupStartedAt:    startupStartedAt,
+	}
+
+	if requestHasStateVolumes(request) {
+		// Prove every writer attachment with the authoritative repository before
+		// mounting any exported block device. This also refreshes a stale
+		// scheduler deadline on a safely redelivered request.
+		if err := s.startStateVolumeAttachmentRenewal(ctx, request, instance); err != nil {
+			return fmt.Errorf("start state volume attachment renewal: %w", err)
+		}
+	}
+	instance.stateMu.RLock()
+	attachmentState := instance.StateVolumeAttachments
+	instance.stateMu.RUnlock()
+	prepareCtx := ctx
+	if attachmentState != nil && attachmentState.prepareCtx != nil {
+		prepareCtx = attachmentState.prepareCtx
+	}
+	stateVolumes, err := s.prepareStateVolumes(prepareCtx, request, instance)
+	if attachmentState != nil {
+		// Publish the handle before preparationDone. A concurrent lease fence
+		// waits on that channel and therefore observes either a definitive prepare
+		// failure or the exact mounted group it must quarantine—never a transient
+		// nil handle while slow preparation is still running.
+		instance.stateMu.Lock()
+		if err == nil && stateVolumes != nil {
+			instance.StateVolumes = stateVolumes
+		}
+		instance.stateMu.Unlock()
+		attachmentState.finishPreparation()
+	}
+	if err != nil {
+		var fenceErr error
+		if attachmentState != nil {
+			if fenceErr = attachmentState.failureOrExpired(time.Now()); fenceErr != nil {
+				err = errors.Join(err, fenceErr)
+			}
+		}
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cleanupCancel()
+		if fenceErr != nil {
+			s.fenceStateVolumeContainer(containerId, fenceErr)
+			if cleanupErr := attachmentState.waitCleanup(cleanupCtx); cleanupErr != nil {
+				err = errors.Join(err, fmt.Errorf("complete fenced state volume preparation cleanup: %w", cleanupErr))
+			}
+		} else if releaseErr := s.releaseStateVolumeAttachments(cleanupCtx, request, instance); releaseErr != nil {
+			err = errors.Join(err, fmt.Errorf("release state volume attachments after prepare failure: %w", releaseErr))
+		}
+		return fmt.Errorf("prepare container state volumes: %w", err)
+	}
+	stateVolumesHandedOff := false
+	if stateVolumes != nil {
+		s.containerInstances.Set(containerId, instance)
+		defer func() {
+			if stateVolumesHandedOff {
+				return
+			}
+			stopCtx, stopCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer stopCancel()
+			if attachmentState != nil && attachmentState.fenced() != nil {
+				if cleanupErr := attachmentState.waitCleanup(stopCtx); cleanupErr != nil {
+					log.Error().Err(cleanupErr).Str("container_id", containerId).Msg("fenced state volume cleanup did not complete")
+				}
+				return
+			}
+			if stopErr := s.stopAndReleaseStateVolumes(stopCtx, request, instance); stopErr != nil {
+				log.Error().Err(stopErr).Str("container_id", containerId).Msg("failed to stop state volumes after startup failure")
+			}
+		}()
+	}
+	if attachmentState != nil {
+		if fenceErr := attachmentState.failureOrExpired(time.Now()); fenceErr != nil {
+			s.fenceStateVolumeContainer(containerId, fenceErr)
+			return fmt.Errorf("state volume writer fenced after preparation: %w", fenceErr)
+		}
 	}
 
 	phaseStart = time.Now()
@@ -756,10 +813,16 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	case <-ctx.Done():
 		return ctx.Err()
 	default:
+		if attachmentState != nil {
+			if fenceErr := attachmentState.failureOrExpired(time.Now()); fenceErr != nil {
+				s.fenceStateVolumeContainer(containerId, fenceErr)
+				return fmt.Errorf("state volume writer fenced before runtime handoff: %w", fenceErr)
+			}
+		}
 		// Start the container
 		phaseStart = time.Now()
 		portsHandedOff = true
-		filesystemRestoreHandedOff = true
+		stateVolumesHandedOff = true
 		s.containerWg.Add(1)
 		go s.spawn(request, spec, outputLogger, opts)
 		metrics.RecordWorkerStartupPhase("spawn_enqueue", time.Since(phaseStart), request, nil)
@@ -770,34 +833,22 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	return nil
 }
 
-func validateCheckpointRestoreRuntime(request *types.ContainerRequest, rt runtime.Runtime) error {
-	if !hasAvailableCheckpoint(request) {
-		return nil
-	}
-	if request.Checkpoint.IsFilesystemOnly() {
+func validateStateMemoryRestoreRuntime(request *types.ContainerRequest, checkpoint *StateMemoryCheckpoint, rt runtime.Runtime) error {
+	if checkpoint == nil {
 		return nil
 	}
 	if rt == nil {
-		return fmt.Errorf("cannot restore checkpoint %q: container runtime is unavailable", request.Checkpoint.CheckpointId)
+		return fmt.Errorf("cannot restore state memory checkpoint %q: container runtime is unavailable", checkpoint.ID)
 	}
 	runtimeName := rt.Name()
 	if !rt.Capabilities().CheckpointRestore {
-		return fmt.Errorf(
-			"cannot restore checkpoint %q with runtime %q: checkpoint restore is unsupported",
-			request.Checkpoint.CheckpointId,
-			runtimeName,
-		)
+		return fmt.Errorf("cannot restore state memory checkpoint %q with runtime %q: restore is unsupported", checkpoint.ID, runtimeName)
 	}
-	required := strings.TrimSpace(request.Checkpoint.Runtime)
+	required := strings.TrimSpace(checkpoint.Runtime)
 	if required == "" || required == runtimeName {
 		return nil
 	}
-	return fmt.Errorf(
-		"cannot restore %s checkpoint %q with runtime %q",
-		required,
-		request.Checkpoint.CheckpointId,
-		runtimeName,
-	)
+	return fmt.Errorf("cannot restore %s state memory checkpoint %q with runtime %q", required, checkpoint.ID, runtimeName)
 }
 
 func (s *Worker) mountWorkspaceStorage(ctx context.Context, request *types.ContainerRequest) error {
@@ -880,9 +931,10 @@ func (s *Worker) pullLazyWithMetrics(ctx context.Context, request *types.Contain
 	// A deployment must not eagerly inflate every OCI layer before its runtime
 	// can start. Large model images can spend tens of minutes on one compressed
 	// layer even when the entrypoint only needs a small working set. Checkpoint
-	// creation still requires a fully materialized root filesystem; ordinary
-	// deployments use CLIP's lazy, content-addressed read path.
-	elapsed, err := s.imageClient.PullLazy(ctx, request, outputLogger, request.CheckpointEnabled)
+	// State snapshots persist rootfs changes through the block graph; CRIU never
+	// archives a second filesystem copy and therefore does not require eager
+	// image materialization.
+	elapsed, err := s.imageClient.PullLazy(ctx, request, outputLogger, false)
 	metrics.RecordWorkerStartupPhase(phase, time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 	spanID := types.ContainerLifecycleImageLoad
 	if phase != "pull_lazy" && phase != "pull_lazy_after_build" {
@@ -904,10 +956,6 @@ func (s *Worker) buildOrPullBaseImageWithMetrics(ctx context.Context, request *t
 }
 
 func portsForRequest(request *types.ContainerRequest) []uint32 {
-	if request.Checkpoint != nil {
-		return request.Checkpoint.ExposedPorts
-	}
-
 	ports := request.Ports
 	if len(ports) == 0 {
 		ports = []uint32{uint32(containerInnerPort)}
@@ -927,11 +975,7 @@ func startupPortBindingsForRequest(request *types.ContainerRequest, requestedPor
 	}
 
 	exposePorts := make(map[uint32]struct{}, len(request.Ports))
-	if request.Checkpoint != nil {
-		for _, port := range request.Ports {
-			exposePorts[port] = struct{}{}
-		}
-	} else if request.Stub.Type.Kind() == types.StubTypeSandbox {
+	if request.Stub.Type.Kind() == types.StubTypeSandbox {
 		for _, port := range requestedPorts {
 			exposePorts[port] = struct{}{}
 		}
@@ -1226,39 +1270,10 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	// Environment is already assembled in getContainerEnvironment (includes InitialSpec.Env if present)
 	spec.Process.Env = env
 
-	// We need to include the checkpoint signal files in the container spec
-	if s.IsCRIUAvailable(request.GpuCount) && request.CheckpointEnabled {
+	// Stateful containers must remain CRIU-compatible for an explicit terminal
+	// state snapshot, but no standalone checkpoint signal mount is exposed.
+	if s.IsCRIUAvailable(request.GpuCount) && requestHasStateVolumes(request) {
 		disableIOUringForCheckpoint(spec)
-
-		err = os.MkdirAll(checkpointSignalDir(request.ContainerId), os.ModePerm) // Add a mount point for the checkpoint signal file
-		if err != nil {
-			return nil, err
-		}
-
-		spec.Mounts = append(spec.Mounts, specs.Mount{
-			Type:        "bind",
-			Source:      checkpointSignalDir(request.ContainerId),
-			Destination: "/criu",
-			Options: []string{
-				"rbind",
-				"rprivate",
-				"nosuid",
-				"nodev",
-			},
-		})
-
-		containerIdPath := filepath.Join(checkpointSignalDir(request.ContainerId), checkpointContainerIdFileName)
-		err := os.WriteFile(containerIdPath, []byte(request.ContainerId), 0644)
-		if err != nil {
-			return nil, err
-		}
-
-		containerHostname := fmt.Sprintf("%s:%d", s.podAddr, options.HostBindPort)
-		containerHostnamePath := filepath.Join(checkpointSignalDir(request.ContainerId), checkpointContainerHostnameFileName)
-		err = os.WriteFile(containerHostnamePath, []byte(containerHostname), 0644)
-		if err != nil {
-			return nil, err
-		}
 	}
 
 	volumeCacheMap, err := s.addRequestMounts(request, spec)
@@ -1413,21 +1428,17 @@ func (s *Worker) prepareRequestMount(request *types.ContainerRequest, mount *typ
 	}
 
 	if mount.MountType == types.StorageModeDurableDisk {
-		if err := s.prepareDurableDiskMount(request, mount); err != nil {
-			return false, fmt.Errorf("failed to prepare durable disk mount: %w", err)
+		if mount.DurableDisk == nil || strings.TrimSpace(mount.LocalPath) == "" {
+			return false, fmt.Errorf("durable disk mount %q was not prepared as a state volume", mount.MountPath)
 		}
 		return true, nil
 	}
 
-	if strings.HasPrefix(mount.MountPath, types.WorkerContainerVolumePath) && !checkpointModelCacheMount(mount.MountPath) {
+	if strings.HasPrefix(mount.MountPath, types.WorkerContainerVolumePath) {
 		volumeCacheMap[filepath.Base(mount.MountPath)] = mount.LocalPath
 	}
 
 	return true, nil
-}
-
-func checkpointModelCacheMount(mountPath string) bool {
-	return strings.HasPrefix(filepath.Base(mountPath), types.CheckpointModelCacheVolumePrefix)
 }
 
 func bindMountMode(mount types.Mount) string {
@@ -1528,8 +1539,10 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		defer cleanupCancel()
 
 		s.workerRepoClient.RemoveContainerFromWorker(cleanupCtx, &pb.RemoveContainerFromWorkerRequest{
-			WorkerId:    s.workerId,
-			ContainerId: request.ContainerId,
+			WorkerId:         s.workerId,
+			WorkerInstanceId: s.workerInstanceId,
+			StorageNodeId:    s.machineID,
+			ContainerId:      request.ContainerId,
 		})
 	}()
 
@@ -1549,12 +1562,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	// Create overlayfs for container
 	overlay := s.createOverlay(request, opts.BundlePath)
-	restoreFilesystemCleanupNeeded := opts.CheckpointFilesystemRestore != nil
-	defer func() {
-		if restoreFilesystemCleanupNeeded {
-			opts.CheckpointFilesystemRestore.cleanup()
-		}
-	}()
 
 	containerInstance, exists := s.containerInstances.Get(containerId)
 	if !exists {
@@ -1569,20 +1576,53 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	})
 	s.containerInstances.Set(containerId, containerInstance)
 
-	// Setup container overlay filesystem
 	var err error
-	if opts.CheckpointFilesystemRestore != nil {
-		if restoreErr := opts.CheckpointFilesystemRestore.wait(); restoreErr != nil {
-			log.Debug().Err(restoreErr).Str("container_id", containerId).Msg("checkpoint filesystem preparation did not complete")
-			if err := opts.CheckpointFilesystemRestore.discard(); err != nil {
-				log.Error().Err(err).Str("container_id", containerId).Msg("failed to discard partial checkpoint filesystem")
+	stateVolumes := containerInstance.StateVolumes
+	if requestHasStateVolumes(request) && stateVolumes == nil {
+		log.Error().Str("container_id", containerId).Msg("container state volumes were not prepared before overlay setup")
+		return
+	}
+	if stateVolumes != nil {
+		defer func() {
+			containerInstance.stateMu.RLock()
+			attachmentState := containerInstance.StateVolumeAttachments
+			containerInstance.stateMu.RUnlock()
+			if attachmentState != nil && attachmentState.fenced() != nil {
+				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cleanupCancel()
+				if cleanupErr := attachmentState.waitCleanup(cleanupCtx); cleanupErr != nil {
+					log.Error().Err(cleanupErr).Str("container_id", containerId).Msg("fenced state volume cleanup did not complete")
+				}
 				return
 			}
-			restoreFilesystemCleanupNeeded = false
-		}
+			containerInstance.stateMu.RLock()
+			finalCommitErr := containerInstance.StateFinalCommitError
+			containerInstance.stateMu.RUnlock()
+			if finalCommitErr != nil {
+				log.Error().Err(finalCommitErr).Str("container_id", containerId).Msg("retaining state volume group after failed final state commit")
+				return
+			}
+			stopCtx, stopCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer stopCancel()
+			if err := s.stopAndReleaseStateVolumes(stopCtx, request, containerInstance); err != nil {
+				log.Error().Err(err).Str("container_id", containerId).Msg("failed to stop state volumes safely")
+			}
+		}()
 	}
+	if fenceErr := stateVolumePreparationFence(containerInstance); fenceErr != nil {
+		s.fenceStateVolumeContainer(containerId, fenceErr)
+		log.Error().Err(fenceErr).Str("container_id", containerId).Msg("state volume writer fenced before overlay setup")
+		return
+	}
+
+	// Setup the container overlay after all persistent writable state is mounted.
+	// The merged directory remains disposable worker-local state.
 	phaseStart := time.Now()
-	err = containerInstance.Overlay.Setup()
+	if upper, work, ok := stateVolumes.PersistentOverlayPaths(); ok {
+		err = containerInstance.Overlay.SetupWithWritable(upper, work)
+	} else {
+		err = containerInstance.Overlay.Setup()
+	}
 	metrics.RecordWorkerStartupPhase("overlay_setup", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleOverlaySetup, phaseStart, err == nil, nil)
 	if err != nil {
@@ -1590,7 +1630,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		return
 	}
 	defer containerInstance.Overlay.Cleanup()
-	restoreFilesystemCleanupNeeded = false
 
 	spec.Root.Readonly = false
 	spec.Root.Path = containerInstance.Overlay.TopLayerPath()
@@ -1728,21 +1767,16 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	request.ConfigPath = configPath
 
 	outputWriter := containerInstance.OutputWriter
-	restoringRuntimeCheckpoint := s.supportsCheckpointRestore(request, containerInstance.Runtime) && hasAvailableCheckpoint(request)
-	if restoringRuntimeCheckpoint && request.Checkpoint.IsFilesystemOnly() {
-		restoringRuntimeCheckpoint = false
-	}
+	restoringRuntimeCheckpoint := request.StateSnapshotId != "" && containerInstance.StateMemoryCheckpoint != nil
 
 	// Log metrics
 	go s.workerUsageMetrics.EmitContainerUsage(ctx, request)
 
 	startedChan := make(chan int, 1)
-	checkpointPIDChan := make(chan int, 1)
 	monitorPIDChan := make(chan int, 1)
 
 	defer func() {
 		// Close in reverse order of dependency
-		close(checkpointPIDChan)
 		close(monitorPIDChan)
 		close(startedChan)
 	}()
@@ -1755,8 +1789,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		}
 
 		monitorPIDChan <- pid
-		checkpointPIDChan <- pid
-
 		if request.Stub.Type.Kind() == types.StubTypeSandbox {
 			instance, exists := s.containerInstances.Get(containerId)
 			if !exists {
@@ -1820,7 +1852,11 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		s.setupOOMWatcher(ctx, containerId, pid, spec, request, outputLogger, &isOOMKilled)
 	}()
 
-	exitCode, _ = s.runContainer(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan, opts.StartupStartedAt, opts.StartupPortBindings, opts.CheckpointFilesystemRestore)
+	exitCode, _ = s.runContainer(ctx, request, outputLogger, outputWriter, startedChan, opts.StartupStartedAt, opts.StartupPortBindings)
+	// A terminal state operation acquired teardown ownership before it stopped
+	// the runtime. Do not run overlay/state-volume/finalization defers until that
+	// operation either publishes+detaches or proves the runtime can continue.
+	containerInstance.waitForTerminalStateSnapshot()
 
 	stopReason := types.StopContainerReasonUnknown
 	containerInstance, exists = s.containerInstances.Get(containerId)
@@ -1857,11 +1893,25 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			types.EventAttrReason:         string(stopReason),
 		},
 	})
+	if request.HasStateVolumes() {
+		finalStateCtx, finalStateCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		finalStateErr := s.publishFinalContainerState(finalStateCtx, request, containerInstance)
+		finalStateCancel()
+		containerInstance.stateMu.Lock()
+		containerInstance.StateFinalCommitError = finalStateErr
+		containerInstance.stateMu.Unlock()
+		s.containerInstances.Set(containerId, containerInstance)
+		if finalStateErr != nil {
+			s.markContainerStopping(containerId, types.ContainerStateTtlSWhileStopping)
+			log.Error().Err(finalStateErr).Str("container_id", containerId).Msg("final container block state did not commit; refusing to report terminal completion")
+			return
+		}
+	}
 	outputLogger.Info("", "done", true, "success", exitCode == 0)
 	// Runtime deletion can be slow under burst load. Report completion before
 	// cleanup so clients are never blocked on resource reclamation. Durable-disk
 	// containers are reported by finalizeContainer after their final sync.
-	if !request.HasDurableDiskMount() {
+	if !request.HasStateVolumes() {
 		exitReported = s.setContainerExitCode(containerId, exitCode)
 	}
 	if err := s.deleteRuntimeContainer(containerId); err != nil {
@@ -1937,7 +1987,7 @@ func eventStopReason(stopReason types.StopContainerReason) string {
 	return string(stopReason)
 }
 
-func (s *Worker) runContainer(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, outputWriter *common.OutputWriter, startedChan chan int, checkpointPIDChan chan int, startupStartedAt time.Time, startupPortBindings []PortBinding, filesystemRestore *checkpointFilesystemRestore) (int, error) {
+func (s *Worker) runContainer(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, outputWriter *common.OutputWriter, startedChan chan int, startupStartedAt time.Time, startupPortBindings []PortBinding) (int, error) {
 	phaseStart := time.Now()
 	releaseStartupSlot := func() {}
 	if s.containerStartSem != nil {
@@ -1961,13 +2011,54 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 	if s.imageClient != nil {
 		defer s.imageClient.untrackContainer(request.ContainerId)
 	}
-
-	supportsCheckpoint := s.supportsCheckpointRestore(request, instance.Runtime)
-	restoringCheckpoint := s.canRestoreCheckpoint(request, instance.Runtime)
-	checkpointRestoreStarted := time.Now()
-	if filesystemRestore != nil {
-		checkpointRestoreStarted = filesystemRestore.startedAt
+	instance.stateMu.RLock()
+	attachmentState := instance.StateVolumeAttachments
+	instance.stateMu.RUnlock()
+	runtimeCtx := context.WithoutCancel(ctx)
+	if attachmentState != nil && attachmentState.writerCtx != nil {
+		runtimeCtx = attachmentState.writerCtx
 	}
+	checkWriterFence := func() error {
+		if attachmentState == nil {
+			return nil
+		}
+		if err := attachmentState.failureOrExpired(time.Now()); err != nil {
+			s.fenceStateVolumeContainer(request.ContainerId, err)
+			return err
+		}
+		if err := context.Cause(runtimeCtx); err != nil {
+			s.fenceStateVolumeContainer(request.ContainerId, err)
+			return err
+		}
+		return nil
+	}
+	if err := checkWriterFence(); err != nil {
+		return -1, fmt.Errorf("state volume writer fenced before runtime preparation: %w", err)
+	}
+
+	restoringCheckpoint := request.StateSnapshotId != "" && instance.StateMemoryCheckpoint != nil
+	if err := validateStateMemoryRestoreRuntime(request, instance.StateMemoryCheckpoint, instance.Runtime); err != nil {
+		return -1, err
+	}
+	stateRestoreModeForReceipt := stateRestoreModeCold
+	stateRestoreFallbackReason := instance.StateRestoreFallbackReason
+	if request.StateSnapshotId != "" && restoringCheckpoint {
+		stateRestoreModeForReceipt = stateRestoreModeMemory
+	}
+	var stateRestoreReceiptOnce sync.Once
+	var stateRestoreReceiptErr error
+	publishFinalStateRestoreReceipt := func() error {
+		if request.StateSnapshotId == "" {
+			return nil
+		}
+		stateRestoreReceiptOnce.Do(func() {
+			receiptCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+			defer cancel()
+			stateRestoreReceiptErr = s.publishStateRestoreReceipt(receiptCtx, request, stateRestoreModeForReceipt, stateRestoreFallbackReason)
+		})
+		return stateRestoreReceiptErr
+	}
+	checkpointRestoreStarted := time.Now()
 	bundlePath := filepath.Dir(request.ConfigPath)
 	originalConfig, originalConfigErr := os.ReadFile(request.ConfigPath)
 	if originalConfigErr != nil {
@@ -1979,47 +2070,29 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 			return
 		}
 		checkpointRestoredOnce.Do(func() {
-			if err := s.updateCheckpointRestored(request.Checkpoint.CheckpointId); err != nil {
-				log.Warn().Err(err).Str("checkpoint_id", request.Checkpoint.CheckpointId).Msg("failed to update checkpoint restore timestamp")
-			}
 			duration := time.Since(checkpointRestoreStarted)
 			metrics.RecordWorkerStartupPhase("checkpoint_restore", duration, request, map[string]string{"success": "true"})
-			log.Info().Str("container_id", request.ContainerId).Str("checkpoint_id", request.Checkpoint.CheckpointId).Dur("duration", duration).Msg("checkpoint restore completed")
+			log.Info().Str("container_id", request.ContainerId).Str("checkpoint_id", instance.StateMemoryCheckpoint.ID).Dur("duration", duration).Msg("state memory restore completed")
 			outputLogger.Info(fmt.Sprintf("Checkpoint found and restored in %s\n", duration.Round(time.Millisecond)))
 		})
 	}
 
-	startAutoCheckpoint := func() {
-		if supportsCheckpoint && request.CheckpointEnabled {
-			s.startAutoCheckpoint(ctx, request, outputLogger, checkpointPIDChan)
-		}
-	}
-	fallbackFromCheckpoint := func(reseedCheckpointFilesystem bool) error {
+	fallbackFromCheckpoint := func(cause error) error {
 		restoringCheckpoint = false
-		if reseedCheckpointFilesystem && originalConfigErr != nil {
-			return fmt.Errorf("checkpoint mount validation fallback requires the original container config: %w", originalConfigErr)
-		}
-		if !reseedCheckpointFilesystem {
-			request.Checkpoint = nil
-		}
-		var seedUpper func(string) error
-		if reseedCheckpointFilesystem {
-			seedUpper = func(upperPath string) error {
-				return s.restoreCheckpointFilesystem(ctx, request, outputLogger, upperPath)
+		if request.StateSnapshotId != "" {
+			stateRestoreModeForReceipt = stateRestoreModeCold
+			if cause != nil {
+				stateRestoreFallbackReason = cause.Error()
 			}
 		}
-		if err := s.prepareRestoreFallback(request, originalConfig, seedUpper); err != nil {
+		if originalConfigErr != nil {
+			return fmt.Errorf("checkpoint restore fallback requires the original container config: %w", originalConfigErr)
+		}
+		instance.StateMemoryCheckpoint = nil
+		if err := s.prepareRestoreFallback(ctx, request, originalConfig); err != nil {
 			return fmt.Errorf("prepare checkpoint restore fallback: %w", err)
 		}
-		if reseedCheckpointFilesystem {
-			request.Checkpoint = nil
-		}
-		startAutoCheckpoint()
 		return nil
-	}
-
-	if !restoringCheckpoint {
-		startAutoCheckpoint()
 	}
 
 	runtimeStartedChan := make(chan int, 1)
@@ -2029,6 +2102,11 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 	runtimeStartedPID.Store(-1)
 
 	publishRuntimeStarted := func(pid int) {
+		if err := publishFinalStateRestoreReceipt(); err != nil {
+			log.Error().Err(err).Str("container_id", request.ContainerId).Msg("failed to persist state restore receipt before readiness")
+			s.handleObservedContainerStop(request.ContainerId, types.EventSourceWorkerRuntime, false)
+			return
+		}
 		if err := s.publishContainerAddresses(ctx, request, startupPortBindings); err != nil {
 			log.Error().Err(err).Str("container_id", request.ContainerId).Msg("failed to publish container address")
 			s.handleObservedContainerStop(request.ContainerId, types.EventSourceWorkerRuntime, false)
@@ -2091,43 +2169,17 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 
 	// Handle restore from checkpoint if available
 	if restoringCheckpoint {
-		var restoreErr error
-		if filesystemRestore != nil {
-			restoreErr = filesystemRestore.wait()
-		} else {
-			if originalConfigErr != nil {
-				restoreErr = fmt.Errorf("checkpoint filesystem restore requires the original container config: %w", originalConfigErr)
-			} else {
-				restoreErr = s.prepareRestoreFallback(request, originalConfig, func(upperPath string) error {
-					return s.restoreCheckpointFilesystem(ctx, request, outputLogger, upperPath)
-				})
-			}
-		}
+		_, restoreErr := s.ensureCheckpointMaterializedWithLogger(ctx, request, instance.StateMemoryCheckpoint, outputLogger)
 		if restoreErr != nil {
 			// A local fetch failure does not prove the checkpoint itself is invalid.
-			if !request.Stub.Type.IsDeployment() {
+			if !request.Stub.Type.IsDeployment() && request.StateSnapshotId == "" {
 				finishRuntimeStarted()
 				return -1, restoreErr
 			}
-			if err := fallbackFromCheckpoint(false); err != nil {
+			if err := fallbackFromCheckpoint(restoreErr); err != nil {
 				finishRuntimeStarted()
 				return -1, err
 			}
-		} else if request.Checkpoint.IsFilesystemOnly() {
-			markCheckpointRestored()
-			request.Checkpoint = nil
-			restoringCheckpoint = false
-			startAutoCheckpoint()
-			log.Info().Str("container_id", request.ContainerId).Msg("checkpoint filesystem restored; starting container cold")
-			outputLogger.Info("Checkpoint filesystem restored; starting container normally\n")
-		} else if forcedRuncCheckpointNeedsColdMigration(s.checkpointPath(request.Checkpoint.CheckpointId), request, instance.Runtime) {
-			checkpointID := request.Checkpoint.CheckpointId
-			if err := fallbackFromCheckpoint(true); err != nil {
-				finishRuntimeStarted()
-				return -1, fmt.Errorf("migrate legacy forced runc checkpoint %q: %w", checkpointID, err)
-			}
-			log.Info().Str("container_id", request.ContainerId).Str("checkpoint_id", checkpointID).Msg("legacy forced runc checkpoint filesystem restored; starting container cold")
-			outputLogger.Info("Checkpoint security profile changed; starting from the saved filesystem\n")
 		} else {
 			if originalConfigErr == nil {
 				if err := s.deferCheckpointRestoreCPUAffinity(request, originalConfig); err != nil {
@@ -2140,10 +2192,14 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 			}
 			runtimeStart = time.Now()
 			phaseStarted := time.Now()
-			exitCode, restored, restoreStarted, err := s.attemptRestoreCheckpoint(ctx, request, outputLogger, outputWriter, runtimeStartedChan, checkpointPIDChan)
+			if fenceErr := checkWriterFence(); fenceErr != nil {
+				finishRuntimeStarted()
+				return -1, fmt.Errorf("state volume writer fenced before checkpoint restore: %w", fenceErr)
+			}
+			exitCode, restored, restoreStarted, err := s.attemptRestoreCheckpoint(runtimeCtx, request, outputLogger, outputWriter, runtimeStartedChan)
 			runtimeRestoreDuration := time.Since(phaseStarted)
 			metrics.RecordWorkerStartupPhase("checkpoint_runtime_restore", runtimeRestoreDuration, request, map[string]string{"success": fmt.Sprintf("%t", restored && err == nil)})
-			log.Info().Str("container_id", request.ContainerId).Str("checkpoint_id", request.Checkpoint.CheckpointId).Dur("duration", runtimeRestoreDuration).Bool("restored", restored).Err(err).Msg("checkpoint runtime restore finished")
+			log.Info().Str("container_id", request.ContainerId).Str("checkpoint_id", instance.StateMemoryCheckpoint.ID).Dur("duration", runtimeRestoreDuration).Bool("restored", restored).Err(err).Msg("state memory runtime restore finished")
 			if restored {
 				finishRuntimeStarted()
 				if restoredPID := int(runtimeStartedPID.Load()); restoredPID > 0 {
@@ -2159,27 +2215,15 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 					return exitCode, err
 				}
 				exitCode, err = s.waitForRestoredContainerExit(ctx, instance.Runtime, request.ContainerId, exitCode)
-				terminalCheckpoint := s.waitForTerminalAutoCheckpoint(ctx, request)
-				if err != nil && terminalCheckpoint {
-					log.Info().Str("container_id", request.ContainerId).Int("exit_code", exitCode).Msg("restored container exited after terminal checkpoint")
-					err = nil
-				}
 				return exitCode, err
 			}
 
-			var durableMountValidationErr *checkpointDurableMountValidationError
-			durableMountValidationFailed := errors.As(err, &durableMountValidationErr)
-			runscVersionFallback := forcedRunscVersionFallback(request, err)
 			var restoreCleanupErr *checkpointRestoreCleanupError
-			restoreCleanupFailed := errors.As(err, &restoreCleanupErr)
-			if (durableMountValidationFailed || runscVersionFallback) && restoreCleanupFailed {
+			if errors.As(err, &restoreCleanupErr) {
 				finishRuntimeStarted()
 				return exitCode, err
 			}
-			// Non-deployment fallbacks are limited to forced requests whose
-			// independently captured root filesystem can be safely reseeded.
-			if !restored && !request.Stub.Type.IsDeployment() &&
-				(!durableMountValidationFailed || !requestForcesResourceLimits(request)) && !runscVersionFallback {
+			if !restored && !request.Stub.Type.IsDeployment() && request.StateSnapshotId == "" {
 				finishRuntimeStarted()
 				return exitCode, err
 			}
@@ -2187,21 +2231,13 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 				finishRuntimeStarted()
 				finishRuntimeStarted = startRuntimeStartedHandler()
 			}
-			if fallbackErr := fallbackFromCheckpoint(durableMountValidationFailed || runscVersionFallback); fallbackErr != nil {
+			if fallbackErr := fallbackFromCheckpoint(err); fallbackErr != nil {
 				if !restoreStarted {
 					finishRuntimeStarted()
 				}
 				return exitCode, errors.Join(err, fallbackErr)
 			}
 		}
-	}
-
-	if request.CheckpointEnabled {
-		err := addEnvToSpec(request.ConfigPath, []string{fmt.Sprintf("CHECKPOINT_ENABLED=%t", request.CheckpointEnabled && s.IsCRIUAvailable(request.GpuCount))})
-		if err != nil {
-			log.Warn().Str("container_id", request.ContainerId).Msgf("failed to add checkpoint env var to spec: %v", err)
-		}
-
 	}
 
 	select {
@@ -2213,22 +2249,20 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 		finishRuntimeStarted()
 		return int(types.ContainerExitCodeSigterm), nil
 	}
+	if fenceErr := checkWriterFence(); fenceErr != nil {
+		finishRuntimeStarted()
+		return -1, fmt.Errorf("state volume writer fenced before runtime start: %w", fenceErr)
+	}
 
 	runtimeStart = time.Now()
-	exitCode, err := instance.Runtime.Run(context.WithoutCancel(ctx), request.ContainerId, bundlePath, &runtime.RunOpts{
+	exitCode, err := instance.Runtime.Run(runtimeCtx, request.ContainerId, bundlePath, &runtime.RunOpts{
 		OutputWriter:  outputWriter,
 		Started:       runtimeStartedChan,
 		DockerEnabled: request.DockerEnabled,
 	})
-	terminalCheckpoint := s.waitForTerminalAutoCheckpoint(ctx, request)
 	finishRuntimeStarted()
 	if err != nil {
-		if terminalCheckpoint {
-			log.Info().Str("container_id", request.ContainerId).Int("exit_code", exitCode).Msg("container runtime exited after terminal checkpoint")
-			err = nil
-		} else {
-			log.Warn().Str("container_id", request.ContainerId).Err(err).Msgf("error running container from bundle, exit code %d", exitCode)
-		}
+		log.Warn().Str("container_id", request.ContainerId).Err(err).Msgf("error running container from bundle, exit code %d", exitCode)
 	}
 
 	return exitCode, err

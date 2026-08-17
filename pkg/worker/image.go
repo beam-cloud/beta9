@@ -149,6 +149,8 @@ type ImageClient struct {
 	skopeoClient       common.SkopeoClient
 	config             types.AppConfig
 	workerId           string
+	workerInstanceId   string
+	storageNodeId      string
 	workerPoolName     string
 	workerRepoClient   pb.WorkerRepositoryServiceClient
 	logger             *ContainerLogger
@@ -172,7 +174,7 @@ type ImageClient struct {
 	clipAggregates    map[string]*clipReadAggregate
 }
 
-func NewImageClient(config types.AppConfig, workerId, workerPoolName string, workerRepoClient pb.WorkerRepositoryServiceClient, fileCacheManager *FileCacheManager) (*ImageClient, error) {
+func NewImageClient(config types.AppConfig, workerId, workerInstanceId, storageNodeId, workerPoolName string, workerRepoClient pb.WorkerRepositoryServiceClient, fileCacheManager *FileCacheManager) (*ImageClient, error) {
 	registry, err := reg.NewImageRegistry(config, config.ImageService.Registries.S3)
 	if err != nil {
 		return nil, err
@@ -195,6 +197,8 @@ func NewImageClient(config types.AppConfig, workerId, workerPoolName string, wor
 		imageCachePath:     imageCachePath,
 		imageMountPath:     imageMountPath,
 		workerId:           workerId,
+		workerInstanceId:   workerInstanceId,
+		storageNodeId:      storageNodeId,
 		workerPoolName:     workerPoolName,
 		workerRepoClient:   workerRepoClient,
 		skopeoClient:       common.NewSkopeoClient(config),
@@ -939,8 +943,10 @@ func (c *ImageClient) localImageArchiveReady(archivePath, imageID string) bool {
 
 func (c *ImageClient) acquireRemoteImageMountLock(imageId string) (func(), error) {
 	lockResponse, err := handleGRPCResponse(c.workerRepoClient.SetImagePullLock(context.Background(), &pb.SetImagePullLockRequest{
-		WorkerId: c.workerId,
-		ImageId:  imageId,
+		WorkerId:         c.workerId,
+		ImageId:          imageId,
+		WorkerInstanceId: c.workerInstanceId,
+		StorageNodeId:    c.storageNodeId,
 	}))
 	if err != nil {
 		return nil, err
@@ -948,9 +954,11 @@ func (c *ImageClient) acquireRemoteImageMountLock(imageId string) (func(), error
 
 	return func() {
 		_, err := handleGRPCResponse(c.workerRepoClient.RemoveImagePullLock(context.Background(), &pb.RemoveImagePullLockRequest{
-			WorkerId: c.workerId,
-			ImageId:  imageId,
-			Token:    lockResponse.Token,
+			WorkerId:         c.workerId,
+			ImageId:          imageId,
+			Token:            lockResponse.Token,
+			WorkerInstanceId: c.workerInstanceId,
+			StorageNodeId:    c.storageNodeId,
 		}))
 		if err != nil {
 			log.Warn().Err(err).Str("image_id", imageId).Msg("failed to release image pull lock")

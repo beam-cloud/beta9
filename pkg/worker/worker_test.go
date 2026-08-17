@@ -112,14 +112,20 @@ func TestAcknowledgeContainerRequestRetriesAmbiguousTransportFailure(t *testing.
 	worker := &Worker{
 		ctx:              context.Background(),
 		workerId:         "worker-1",
+		workerInstanceId: "instance-1",
+		machineID:        "node-1",
 		poolName:         "pool-1",
 		podHostName:      "host-1",
 		workerRepoClient: client,
 	}
 
-	require.NoError(t, worker.acknowledgeContainerRequest("container-1", "delivery-1"))
+	require.NoError(t, worker.acknowledgeContainerRequest("container-1", "delivery-1", "plan-1", "hash-1"))
 	require.Equal(t, 2, client.calls)
 	require.Equal(t, "delivery-1", client.request.DeliveryToken)
+	require.Equal(t, "instance-1", client.request.WorkerInstanceId)
+	require.Equal(t, "node-1", client.request.StorageNodeId)
+	require.Equal(t, "plan-1", client.request.StateVolumePlanId)
+	require.Equal(t, "hash-1", client.request.StateVolumePlanHash)
 }
 
 func TestAcknowledgeContainerRequestReturnsAuthoritativeRejection(t *testing.T) {
@@ -128,8 +134,23 @@ func TestAcknowledgeContainerRequestReturnsAuthoritativeRejection(t *testing.T) 
 	}
 	worker := &Worker{ctx: context.Background(), workerRepoClient: client}
 
-	require.EqualError(t, worker.acknowledgeContainerRequest("container-1", "delivery-1"), "stale delivery")
+	require.EqualError(t, worker.acknowledgeContainerRequest("container-1", "delivery-1", "plan-1", "hash-1"), "stale delivery")
 	require.Equal(t, 1, client.calls)
+}
+
+func TestDeliveredContainerRequestCarriesExactReceiptAndAckBindingTuple(t *testing.T) {
+	response := &pb.GetNextContainerRequestResponse{
+		ContainerRequest:    (&types.ContainerRequest{ContainerId: "container"}).ToProto(),
+		DeliveryToken:       "delivery-7",
+		StateVolumePlanId:   "plan-7",
+		StateVolumePlanHash: "hash-7",
+	}
+	request := deliveredContainerRequestFromProto(response, "machine")
+	require.NotNil(t, request)
+	require.Equal(t, "delivery-7", request.DeliveryToken)
+	require.Equal(t, "plan-7", request.StateVolumePlanId)
+	require.Equal(t, "hash-7", request.StateVolumePlanHash)
+	require.Equal(t, "machine", request.MachineId)
 }
 
 func (m *shutdownSignalRuntime) Kill(ctx context.Context, containerID string, sig syscall.Signal, opts *runtime.KillOpts) error {
@@ -1056,13 +1077,13 @@ func TestStopActiveContainersForShutdownForceKillsStuckRuntime(t *testing.T) {
 	require.Equal(t, []syscall.Signal{syscall.SIGTERM, syscall.SIGKILL}, rt.recordedSignals())
 }
 
-func TestFinishShutdownSuppressesCleanupErrorsAfterCancellation(t *testing.T) {
+func TestFinishShutdownPreservesCleanupErrorsAfterCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
 	err := (&Worker{ctx: ctx}).finishShutdown(errors.New("cleanup failed"))
 
-	require.NoError(t, err)
+	require.ErrorContains(t, err, "cleanup failed")
 }
 
 func TestFinishShutdownReturnsCleanupErrorsWithoutCancellation(t *testing.T) {
@@ -1071,6 +1092,40 @@ func TestFinishShutdownReturnsCleanupErrorsWithoutCancellation(t *testing.T) {
 	err := (&Worker{ctx: context.Background()}).finishShutdown(cleanupErr)
 
 	require.ErrorIs(t, err, cleanupErr)
+}
+
+func TestWorkerProcessEpochNeverFallsBackToPodUID(t *testing.T) {
+	podUID := "pod-owner-uid"
+	first := stateVolumeWorkerProcessEpoch("")
+	second := stateVolumeWorkerProcessEpoch("")
+	require.NotEqual(t, podUID, first)
+	require.NotEqual(t, podUID, second)
+	require.NotEqual(t, first, second, "same-Pod process restarts must have distinct epochs")
+	require.Equal(t, "attempt-epoch", stateVolumeWorkerProcessEpoch("  attempt-epoch  "))
+}
+
+func TestShutdownBoundaryTimeoutKeepsWorkerAliveUntilStateIsSafe(t *testing.T) {
+	instances := common.NewSafeMap[*ContainerInstance]()
+	instances.Set("container", &ContainerInstance{Id: "container"})
+	worker := &Worker{
+		containerInstances:         instances,
+		stateVolumeShutdownTimeout: 20 * time.Millisecond,
+	}
+	done := make(chan error, 1)
+	go func() { done <- worker.waitForStateVolumeShutdownBoundary(worker.stateVolumeShutdownDeadline()) }()
+
+	select {
+	case err := <-done:
+		t.Fatalf("unsafe shutdown boundary returned after diagnostic timeout: %v", err)
+	case <-time.After(75 * time.Millisecond):
+	}
+	instances.Delete("container")
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("shutdown boundary did not complete after state became safe")
+	}
 }
 
 func TestMarkContainerStoppingUsesStoppingTTL(t *testing.T) {
@@ -1136,6 +1191,7 @@ type fakeContainerRepoClient struct {
 	deleteStateCalls           int
 	deleteStateErrors          []error
 	deleteStateDone            chan struct{}
+	lastStateRestoreReceipt    *pb.SetStateRestoreReceiptRequest
 }
 
 type blockingRuntimeCredentialsWorkerRepo struct {
@@ -1322,4 +1378,15 @@ func (f *fakeContainerRepoClient) GetContainerAddressMap(ctx context.Context, in
 
 func (f *fakeContainerRepoClient) SetWorkerAddress(ctx context.Context, in *pb.SetWorkerAddressRequest, opts ...grpc.CallOption) (*pb.SetWorkerAddressResponse, error) {
 	return &pb.SetWorkerAddressResponse{Ok: true}, nil
+}
+
+func (f *fakeContainerRepoClient) SetStateRestoreReceipt(_ context.Context, in *pb.SetStateRestoreReceiptRequest, _ ...grpc.CallOption) (*pb.SetStateRestoreReceiptResponse, error) {
+	f.mu.Lock()
+	f.lastStateRestoreReceipt = in
+	f.mu.Unlock()
+	return &pb.SetStateRestoreReceiptResponse{Ok: true}, nil
+}
+
+func (f *fakeContainerRepoClient) GetStateRestoreReceipt(context.Context, *pb.GetStateRestoreReceiptRequest, ...grpc.CallOption) (*pb.GetStateRestoreReceiptResponse, error) {
+	return &pb.GetStateRestoreReceiptResponse{Ok: true}, nil
 }

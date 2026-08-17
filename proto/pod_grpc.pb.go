@@ -40,8 +40,8 @@ const (
 	PodService_SandboxConnect_FullMethodName                   = "/pod.PodService/SandboxConnect"
 	PodService_SandboxUpdateTTL_FullMethodName                 = "/pod.PodService/SandboxUpdateTTL"
 	PodService_SandboxCreateImageFromFilesystem_FullMethodName = "/pod.PodService/SandboxCreateImageFromFilesystem"
-	PodService_SandboxSnapshotMemory_FullMethodName            = "/pod.PodService/SandboxSnapshotMemory"
-	PodService_SandboxSnapshotDisks_FullMethodName             = "/pod.PodService/SandboxSnapshotDisks"
+	PodService_SandboxSnapshotState_FullMethodName             = "/pod.PodService/SandboxSnapshotState"
+	PodService_GetStateRestoreReceipt_FullMethodName           = "/pod.PodService/GetStateRestoreReceipt"
 	PodService_SandboxListUrls_FullMethodName                  = "/pod.PodService/SandboxListUrls"
 )
 
@@ -70,8 +70,8 @@ type PodServiceClient interface {
 	SandboxConnect(ctx context.Context, in *PodSandboxConnectRequest, opts ...grpc.CallOption) (*PodSandboxConnectResponse, error)
 	SandboxUpdateTTL(ctx context.Context, in *PodSandboxUpdateTTLRequest, opts ...grpc.CallOption) (*PodSandboxUpdateTTLResponse, error)
 	SandboxCreateImageFromFilesystem(ctx context.Context, in *PodSandboxCreateImageFromFilesystemRequest, opts ...grpc.CallOption) (*PodSandboxCreateImageFromFilesystemResponse, error)
-	SandboxSnapshotMemory(ctx context.Context, in *PodSandboxSnapshotMemoryRequest, opts ...grpc.CallOption) (*PodSandboxSnapshotMemoryResponse, error)
-	SandboxSnapshotDisks(ctx context.Context, in *PodSandboxSnapshotDisksRequest, opts ...grpc.CallOption) (*PodSandboxSnapshotDisksResponse, error)
+	SandboxSnapshotState(ctx context.Context, in *PodSandboxSnapshotStateRequest, opts ...grpc.CallOption) (*PodSandboxSnapshotStateResponse, error)
+	GetStateRestoreReceipt(ctx context.Context, in *PodGetStateRestoreReceiptRequest, opts ...grpc.CallOption) (*PodGetStateRestoreReceiptResponse, error)
 	SandboxListUrls(ctx context.Context, in *PodSandboxListUrlsRequest, opts ...grpc.CallOption) (*PodSandboxListUrlsResponse, error)
 }
 
@@ -272,18 +272,18 @@ func (c *podServiceClient) SandboxCreateImageFromFilesystem(ctx context.Context,
 	return out, nil
 }
 
-func (c *podServiceClient) SandboxSnapshotMemory(ctx context.Context, in *PodSandboxSnapshotMemoryRequest, opts ...grpc.CallOption) (*PodSandboxSnapshotMemoryResponse, error) {
-	out := new(PodSandboxSnapshotMemoryResponse)
-	err := c.cc.Invoke(ctx, PodService_SandboxSnapshotMemory_FullMethodName, in, out, opts...)
+func (c *podServiceClient) SandboxSnapshotState(ctx context.Context, in *PodSandboxSnapshotStateRequest, opts ...grpc.CallOption) (*PodSandboxSnapshotStateResponse, error) {
+	out := new(PodSandboxSnapshotStateResponse)
+	err := c.cc.Invoke(ctx, PodService_SandboxSnapshotState_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *podServiceClient) SandboxSnapshotDisks(ctx context.Context, in *PodSandboxSnapshotDisksRequest, opts ...grpc.CallOption) (*PodSandboxSnapshotDisksResponse, error) {
-	out := new(PodSandboxSnapshotDisksResponse)
-	err := c.cc.Invoke(ctx, PodService_SandboxSnapshotDisks_FullMethodName, in, out, opts...)
+func (c *podServiceClient) GetStateRestoreReceipt(ctx context.Context, in *PodGetStateRestoreReceiptRequest, opts ...grpc.CallOption) (*PodGetStateRestoreReceiptResponse, error) {
+	out := new(PodGetStateRestoreReceiptResponse)
+	err := c.cc.Invoke(ctx, PodService_GetStateRestoreReceipt_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -324,8 +324,8 @@ type PodServiceServer interface {
 	SandboxConnect(context.Context, *PodSandboxConnectRequest) (*PodSandboxConnectResponse, error)
 	SandboxUpdateTTL(context.Context, *PodSandboxUpdateTTLRequest) (*PodSandboxUpdateTTLResponse, error)
 	SandboxCreateImageFromFilesystem(context.Context, *PodSandboxCreateImageFromFilesystemRequest) (*PodSandboxCreateImageFromFilesystemResponse, error)
-	SandboxSnapshotMemory(context.Context, *PodSandboxSnapshotMemoryRequest) (*PodSandboxSnapshotMemoryResponse, error)
-	SandboxSnapshotDisks(context.Context, *PodSandboxSnapshotDisksRequest) (*PodSandboxSnapshotDisksResponse, error)
+	SandboxSnapshotState(context.Context, *PodSandboxSnapshotStateRequest) (*PodSandboxSnapshotStateResponse, error)
+	GetStateRestoreReceipt(context.Context, *PodGetStateRestoreReceiptRequest) (*PodGetStateRestoreReceiptResponse, error)
 	SandboxListUrls(context.Context, *PodSandboxListUrlsRequest) (*PodSandboxListUrlsResponse, error)
 	mustEmbedUnimplementedPodServiceServer()
 }
@@ -397,11 +397,11 @@ func (UnimplementedPodServiceServer) SandboxUpdateTTL(context.Context, *PodSandb
 func (UnimplementedPodServiceServer) SandboxCreateImageFromFilesystem(context.Context, *PodSandboxCreateImageFromFilesystemRequest) (*PodSandboxCreateImageFromFilesystemResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SandboxCreateImageFromFilesystem not implemented")
 }
-func (UnimplementedPodServiceServer) SandboxSnapshotMemory(context.Context, *PodSandboxSnapshotMemoryRequest) (*PodSandboxSnapshotMemoryResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method SandboxSnapshotMemory not implemented")
+func (UnimplementedPodServiceServer) SandboxSnapshotState(context.Context, *PodSandboxSnapshotStateRequest) (*PodSandboxSnapshotStateResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SandboxSnapshotState not implemented")
 }
-func (UnimplementedPodServiceServer) SandboxSnapshotDisks(context.Context, *PodSandboxSnapshotDisksRequest) (*PodSandboxSnapshotDisksResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method SandboxSnapshotDisks not implemented")
+func (UnimplementedPodServiceServer) GetStateRestoreReceipt(context.Context, *PodGetStateRestoreReceiptRequest) (*PodGetStateRestoreReceiptResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetStateRestoreReceipt not implemented")
 }
 func (UnimplementedPodServiceServer) SandboxListUrls(context.Context, *PodSandboxListUrlsRequest) (*PodSandboxListUrlsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SandboxListUrls not implemented")
@@ -797,38 +797,38 @@ func _PodService_SandboxCreateImageFromFilesystem_Handler(srv interface{}, ctx c
 	return interceptor(ctx, in, info, handler)
 }
 
-func _PodService_SandboxSnapshotMemory_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(PodSandboxSnapshotMemoryRequest)
+func _PodService_SandboxSnapshotState_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PodSandboxSnapshotStateRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(PodServiceServer).SandboxSnapshotMemory(ctx, in)
+		return srv.(PodServiceServer).SandboxSnapshotState(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: PodService_SandboxSnapshotMemory_FullMethodName,
+		FullMethod: PodService_SandboxSnapshotState_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PodServiceServer).SandboxSnapshotMemory(ctx, req.(*PodSandboxSnapshotMemoryRequest))
+		return srv.(PodServiceServer).SandboxSnapshotState(ctx, req.(*PodSandboxSnapshotStateRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _PodService_SandboxSnapshotDisks_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(PodSandboxSnapshotDisksRequest)
+func _PodService_GetStateRestoreReceipt_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PodGetStateRestoreReceiptRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(PodServiceServer).SandboxSnapshotDisks(ctx, in)
+		return srv.(PodServiceServer).GetStateRestoreReceipt(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: PodService_SandboxSnapshotDisks_FullMethodName,
+		FullMethod: PodService_GetStateRestoreReceipt_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PodServiceServer).SandboxSnapshotDisks(ctx, req.(*PodSandboxSnapshotDisksRequest))
+		return srv.(PodServiceServer).GetStateRestoreReceipt(ctx, req.(*PodGetStateRestoreReceiptRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -943,12 +943,12 @@ var PodService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _PodService_SandboxCreateImageFromFilesystem_Handler,
 		},
 		{
-			MethodName: "SandboxSnapshotMemory",
-			Handler:    _PodService_SandboxSnapshotMemory_Handler,
+			MethodName: "SandboxSnapshotState",
+			Handler:    _PodService_SandboxSnapshotState_Handler,
 		},
 		{
-			MethodName: "SandboxSnapshotDisks",
-			Handler:    _PodService_SandboxSnapshotDisks_Handler,
+			MethodName: "GetStateRestoreReceipt",
+			Handler:    _PodService_GetStateRestoreReceipt_Handler,
 		},
 		{
 			MethodName: "SandboxListUrls",

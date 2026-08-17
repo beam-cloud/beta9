@@ -54,7 +54,6 @@ class Config:
     callback_url: str
     task_id: str
     bind_port: int
-    checkpoint_enabled: bool
     volume_cache_map: Dict
     inputs: Dict
     outputs: Dict
@@ -74,7 +73,6 @@ class Config:
         task_id = os.getenv("TASK_ID")
         bind_port = int(os.getenv("BIND_PORT"))
         timeout = int(os.getenv("TIMEOUT", 180))
-        checkpoint_enabled = os.getenv("CHECKPOINT_ENABLED", "false").lower() == "true"
         volume_cache_map = json.loads(os.getenv("VOLUME_CACHE_MAP", "{}"))
         inputs = json.loads(os.getenv("BETA9_INPUTS", "{}"))
         outputs = json.loads(os.getenv("BETA9_OUTPUTS", "{}"))
@@ -99,7 +97,6 @@ class Config:
             task_id=task_id,
             bind_port=bind_port,
             timeout=timeout,
-            checkpoint_enabled=checkpoint_enabled,
             volume_cache_map=volume_cache_map,
             inputs=inputs,
             outputs=outputs,
@@ -613,97 +610,3 @@ class ThreadPoolExecutorOverride(ThreadPoolExecutor):
             self.shutdown(cancel_futures=True)
         except Exception:
             pass
-
-
-CHECKPOINT_SIGNAL_FILE = "/criu/READY_FOR_CHECKPOINT"
-CHECKPOINT_COMPLETE_FILE = "/criu/CHECKPOINT_COMPLETE"
-CHECKPOINT_CONTAINER_ID_FILE = "/criu/CONTAINER_ID"
-CHECKPOINT_CONTAINER_HOSTNAME_FILE = "/criu/CONTAINER_HOSTNAME"
-CHECKPOINT_HEARTBEAT_MAX_SECONDS = 11 * 60
-
-
-def _reset_checkpointed_gunicorn_heartbeats(
-    arbiter: Any,
-    complete_path: Union[str, Path] = CHECKPOINT_COMPLETE_FILE,
-    ready_path: Union[str, Path] = CHECKPOINT_SIGNAL_FILE,
-) -> bool:
-    """Keep Gunicorn clocks live through checkpoint creation and resume."""
-    if getattr(arbiter, "_beta9_checkpoint_heartbeats_reset", False):
-        return False
-    checkpoint_complete = Path(complete_path).exists()
-    checkpoint_ready = Path(ready_path).exists()
-    if not checkpoint_complete and not checkpoint_ready:
-        if hasattr(arbiter, "_beta9_checkpoint_heartbeat_started_at"):
-            del arbiter._beta9_checkpoint_heartbeat_started_at
-        return False
-
-    if checkpoint_ready and not checkpoint_complete:
-        now = time.monotonic()
-        started_at = getattr(arbiter, "_beta9_checkpoint_heartbeat_started_at", None)
-        if started_at is None:
-            arbiter._beta9_checkpoint_heartbeat_started_at = now
-        elif now - started_at >= CHECKPOINT_HEARTBEAT_MAX_SECONDS:
-            return False
-
-    reset = False
-    for worker in list(getattr(arbiter, "WORKERS", {}).values()):
-        try:
-            worker.tmp.notify()
-            reset = True
-        except (OSError, ValueError):
-            continue
-
-    # READY can remain set while a large checkpoint is archived and uploaded;
-    # refresh repeatedly in that window. COMPLETE is the one-shot resume edge.
-    if reset and checkpoint_complete:
-        arbiter._beta9_checkpoint_heartbeats_reset = True
-    return reset
-
-
-def _install_checkpointed_gunicorn_timeout_guard() -> None:
-    try:
-        from gunicorn.arbiter import Arbiter
-    except ImportError:
-        return
-
-    original = Arbiter.murder_workers
-    if getattr(original, "_beta9_checkpoint_guard", False):
-        return
-
-    def murder_workers(arbiter):
-        _reset_checkpointed_gunicorn_heartbeats(arbiter)
-        return original(arbiter)
-
-    murder_workers._beta9_checkpoint_guard = True
-    Arbiter.murder_workers = murder_workers
-
-
-def wait_for_checkpoint(workers_ready: Any):
-    def _reload_config():
-        # Once we have set the checkpoint signal file, wait for checkpoint to be complete before reloading the config
-        while not Path(CHECKPOINT_COMPLETE_FILE).exists():
-            time.sleep(1)
-
-        # Reload config that may have changed during restore
-        config.container_id = Path(CHECKPOINT_CONTAINER_ID_FILE).read_text()
-        config.container_hostname = Path(CHECKPOINT_CONTAINER_HOSTNAME_FILE).read_text()
-
-    with workers_ready.get_lock():
-        workers_ready.value += 1
-
-    if workers_ready.value == config.workers:
-        Path(CHECKPOINT_SIGNAL_FILE).touch(exist_ok=True)
-        return _reload_config()
-
-    while True:
-        with workers_ready.get_lock():
-            if workers_ready.value == config.workers:
-                break
-
-        time.sleep(1)
-
-    return _reload_config()
-
-
-if config is not None and config.checkpoint_enabled:
-    _install_checkpointed_gunicorn_timeout_guard()

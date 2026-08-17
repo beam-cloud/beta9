@@ -36,8 +36,83 @@ service GatewayService {
   rpc PutObjectStream(stream PutObjectRequest) returns (PutObjectResponse) {}
 
   // Containers
-  rpc CheckpointContainer(CheckpointContainerRequest)
-      returns (CheckpointContainerResponse) {}
+  rpc SnapshotContainerState(GatewaySnapshotContainerStateRequest)
+      returns (GatewaySnapshotContainerStateResponse) {
+    option (google.api.http) = {
+      post : "/pods/{container_id}/snapshot-state"
+      body : "*"
+    };
+  }
+
+  rpc RetainStateSnapshotReference(StateSnapshotReferenceRequest)
+      returns (StateSnapshotReferenceResponse) {
+    option (google.api.http) = {
+      post : "/state-snapshots/{state_snapshot_id}/references:retain"
+      body : "*"
+    };
+  }
+
+  rpc ReleaseStateSnapshotReference(StateSnapshotReferenceRequest)
+      returns (StateSnapshotReferenceResponse) {
+    option (google.api.http) = {
+      post : "/state-snapshots/{state_snapshot_id}/references:release"
+      body : "*"
+    };
+  }
+
+  rpc PromoteStateTemplate(PromoteStateTemplateRequest)
+      returns (PromoteStateTemplateResponse) {
+    option (google.api.http) = {
+      post : "/state-templates:promote"
+      body : "*"
+    };
+  }
+
+  rpc GetStateTemplate(GetStateTemplateRequest)
+      returns (GetStateTemplateResponse) {
+    option (google.api.http) = {
+      get : "/state-templates/{state_template_id}/versions/{version}"
+    };
+  }
+
+  rpc InstantiateStateTemplate(InstantiateStateTemplateRequest)
+      returns (StateTemplateInstantiationResponse) {
+    option (google.api.http) = {
+      post : "/state-templates/{state_template_id}/versions/{version}:instantiate"
+      body : "*"
+    };
+  }
+
+  rpc GetStateTemplateInstantiation(GetStateTemplateInstantiationRequest)
+      returns (StateTemplateInstantiationResponse) {
+    option (google.api.http) = {
+      get : "/state-template-instantiations/{operation_id}"
+    };
+  }
+
+  rpc ConfirmStateTemplateInstantiation(ConfirmStateTemplateInstantiationRequest)
+      returns (StateTemplateInstantiationResponse) {
+    option (google.api.http) = {
+      post : "/state-template-instantiations/{operation_id}:confirm"
+      body : "*"
+    };
+  }
+
+  rpc CancelStateTemplateInstantiation(CancelStateTemplateInstantiationRequest)
+      returns (StateTemplateInstantiationResponse) {
+    option (google.api.http) = {
+      post : "/state-template-instantiations/{operation_id}:cancel"
+      body : "*"
+    };
+  }
+
+  rpc ReleaseStateTemplate(ReleaseStateTemplateRequest)
+      returns (ReleaseStateTemplateResponse) {
+    option (google.api.http) = {
+      post : "/state-templates/{state_template_id}/versions/{version}:release"
+      body : "*"
+    };
+  }
 
   rpc ListContainers(ListContainersRequest) returns (ListContainersResponse) {
     option (google.api.http) = {
@@ -543,12 +618,115 @@ message StopContainerResponse {
   string error_msg = 2;
 }
 
-message CheckpointContainerRequest { string container_id = 1; }
+message GatewaySnapshotContainerStateRequest {
+  string container_id = 1;
+  string operation_id = 2;
+  string mode = 3;
+  bool publish = 4;
+  bool include_memory = 5;
+  bool visible = 6;
+}
 
-message CheckpointContainerResponse {
+message GatewaySnapshotContainerStateResponse {
   bool ok = 1;
-  string checkpoint_id = 2;
-  string error_msg = 3;
+  string error_msg = 2;
+  string state_snapshot_id = 3;
+  string status = 4;
+  string image_digest = 5;
+  string runtime_profile = 6;
+  string checkpoint_id = 7;
+  bool has_memory = 8;
+  repeated types.StateGeneration generations = 9;
+  string restore_mode = 10;
+  string fallback_reason = 11;
+}
+
+message StateSnapshotReferenceRequest {
+  string state_snapshot_id = 1;
+  string kind = 2;
+  string reference_id = 3;
+}
+
+message StateSnapshotReferenceResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  string state_snapshot_id = 3;
+  string kind = 4;
+  string reference_id = 5;
+  string status = 6;
+}
+
+message PromoteStateTemplateRequest {
+  string operation_id = 1;
+  string source_state_snapshot_id = 2;
+  string reference_kind = 3;
+  string reference_id = 4;
+}
+
+message PromoteStateTemplateResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  types.PublicStateTemplateArtifact state_template = 3;
+  bool replayed = 4;
+}
+
+message GetStateTemplateRequest {
+  string state_template_id = 1;
+  int64 version = 2;
+}
+
+message GetStateTemplateResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  types.PublicStateTemplateArtifact state_template = 3;
+}
+
+message InstantiateStateTemplateRequest {
+  string state_template_id = 1;
+  int64 version = 2;
+  string operation_id = 3;
+  string destination_stub_id = 4;
+  types.PublicStateTemplateArtifact expected_template = 5;
+}
+
+message GetStateTemplateInstantiationRequest { string operation_id = 1; }
+
+message ConfirmStateTemplateInstantiationRequest {
+  string operation_id = 1;
+  string destination_state_snapshot_id = 2;
+  string reference_kind = 3;
+  string reference_id = 4;
+}
+
+message CancelStateTemplateInstantiationRequest {
+  string operation_id = 1;
+  string destination_state_snapshot_id = 2;
+}
+
+message StateTemplateInstantiationResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  types.StateTemplateInstantiation instantiation = 3;
+}
+
+message ReleaseStateTemplateRequest {
+  string state_template_id = 1;
+  int64 version = 2;
+  string operation_id = 3;
+  string reference_kind = 4;
+  string reference_id = 5;
+}
+
+message ReleaseStateTemplateResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  string state_template_id = 3;
+  int64 version = 4;
+  string status = 5;
+  bool replayed = 6;
+  int64 active_instantiations = 7;
+  google.protobuf.Timestamp queued_at = 8;
+  google.protobuf.Timestamp retired_at = 9;
 }
 
 message ContainerStreamMessage {
@@ -670,11 +848,8 @@ message DurableDisk {
   string name = 1;
   string size = 2;
   string mount_path = 3;
-  string filesystem = 4;
-  string driver = 5;
-  bool read_only = 6;
-  // Snapshot used to initialize a disk with no snapshot history.
-  string source_snapshot_id = 7;
+  bool read_only = 4;
+  string source_generation_id = 5;
 }
 
 message TaskPolicy {
@@ -715,7 +890,7 @@ message GetOrCreateStubRequest {
   TaskPolicy task_policy = 23;
   uint32 concurrent_requests = 24;
   string extra = 25;
-  bool checkpoint_enabled = 26;
+  reserved 26;
   uint32 gpu_count = 27;
   string on_deploy = 28;
   string on_deploy_stub_id = 29;
@@ -735,9 +910,10 @@ message GetOrCreateStubRequest {
   ServingConfig serving = 43;
   repeated DurableDisk disks = 44;
   bool allow_marketplace = 45;
-  types.CheckpointTrigger checkpoint_trigger = 46;
+  reserved 46;
   // Hostname to set inside the container.
   string hostname = 47;
+  types.PersistentRoot persistent_root = 48;
 }
 
 message GetOrCreateStubResponse {

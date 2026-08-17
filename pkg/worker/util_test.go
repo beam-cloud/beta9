@@ -2,86 +2,14 @@ package worker
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
-	"syscall"
 	"testing"
 
-	"github.com/beam-cloud/beta9/pkg/common"
-	types "github.com/beam-cloud/beta9/pkg/types"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/sys/unix"
 )
-
-func TestDirectoryArchivePreservesOverlayWhiteoutWithoutMaterializingItInCache(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("overlay whiteouts are Linux character devices")
-	}
-	if os.Geteuid() != 0 {
-		t.Skip("creating an overlay whiteout requires mknod")
-	}
-
-	root, err := os.MkdirTemp("/dev/shm", "beta9-whiteout-archive-")
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, os.RemoveAll(root)) })
-	src := filepath.Join(root, "upper")
-	require.NoError(t, os.MkdirAll(filepath.Join(src, "etc"), 0755))
-	whiteout := filepath.Join(src, "etc", ".wh.issue")
-	if err := syscall.Mknod(whiteout, syscall.S_IFCHR|0600, 0); err != nil {
-		if errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.ENOSYS) || errors.Is(err, syscall.EOPNOTSUPP) {
-			t.Skipf("creating an overlay whiteout is unsupported: %v", err)
-		}
-		require.NoError(t, err)
-	}
-	opaque := filepath.Join(src, "opaque")
-	require.NoError(t, os.Mkdir(opaque, 0755))
-	require.NoError(t, unix.Setxattr(opaque, "user.beta9.test", []byte("opaque"), 0))
-
-	realTar, err := exec.LookPath("tar")
-	require.NoError(t, err)
-	fakeBin := t.TempDir()
-	// Model the cache filesystem rejecting mknod during the legacy streaming
-	// extract; nested archive creation and restore still use the real tar.
-	wrapper := fmt.Sprintf("#!/bin/sh\ncase \"$*\" in *\"-xf - -C\"*) exit 1;; esac\nexec %q \"$@\"\n", realTar)
-	require.NoError(t, os.WriteFile(filepath.Join(fakeBin, "tar"), []byte(wrapper), 0755))
-	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	request := &types.ContainerRequest{Stub: types.StubWithRelated{Stub: types.Stub{Config: `{"_beta9_force_resource_limits":true}`}}}
-	overlay := common.NewContainerOverlay(request, filepath.Join(root, "merged"), filepath.Join(root, "overlay-storage"))
-	archivePath := filepath.Join(root, "cache", checkpointFsArchive)
-	require.NoError(t, captureCheckpointFilesystem(context.Background(), &ContainerInstance{Request: request, Overlay: overlay}, filepath.Dir(archivePath), true))
-	require.NoDirExists(t, filepath.Join(root, "cache", checkpointFsDir))
-	info, err := os.Stat(archivePath)
-	require.NoError(t, err)
-	require.True(t, info.Mode().IsRegular())
-	require.NoFileExists(t, filepath.Join(root, "cache", "etc", ".wh.issue"))
-
-	dst := filepath.Join(root, "restored-upper")
-	require.NoError(t, extractDirectoryArchiveContext(context.Background(), archivePath, dst))
-	restored, err := os.Lstat(filepath.Join(dst, "etc", ".wh.issue"))
-	require.NoError(t, err)
-	require.NotZero(t, restored.Mode()&os.ModeCharDevice)
-	value := make([]byte, len("opaque"))
-	size, err := unix.Getxattr(filepath.Join(dst, "opaque"), "user.beta9.test", value)
-	require.NoError(t, err)
-	require.Equal(t, "opaque", string(value[:size]))
-}
-
-func TestDirectoryArchivePublishesOnlyACompleteFinalArchive(t *testing.T) {
-	root := t.TempDir()
-	destination := filepath.Join(root, checkpointFsArchive)
-
-	err := archiveDirectoryContext(context.Background(), filepath.Join(root, "missing-upper"), destination, nil)
-	require.Error(t, err)
-	require.NoFileExists(t, destination)
-	matches, globErr := filepath.Glob(filepath.Join(root, "."+checkpointFsArchive+"-*"))
-	require.NoError(t, globErr)
-	require.Empty(t, matches)
-}
 
 func TestTarXattrArgsPreserveOverlayMetadataOnLinux(t *testing.T) {
 	args := tarXattrArgs()

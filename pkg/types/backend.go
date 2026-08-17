@@ -440,130 +440,46 @@ const (
 	PricingPolicyCostModelDuration PricingPolicyCostModel = "duration"
 )
 
-// @go2proto
-type Checkpoint struct {
-	Id                uint     `db:"id" json:"id" serializer:"id,source:external_id" go2proto:"ignore"`
-	CheckpointId      string   `db:"checkpoint_id" json:"checkpoint_id" serializer:"checkpoint_id"`
-	ExternalId        string   `db:"external_id" json:"external_id,omitempty" serializer:"external_id"`
-	SourceContainerId string   `db:"source_container_id" json:"source_container_id" serializer:"source_container_id"`
-	ContainerIp       string   `db:"container_ip" json:"container_ip" serializer:"container_ip"`
-	Status            string   `db:"status" json:"status" serializer:"status"`
-	RemoteKey         string   `db:"remote_key" json:"remote_key" serializer:"remote_key"`
-	WorkspaceId       uint     `db:"workspace_id" json:"workspace_id" go2proto:"ignore"` // Foreign key to Workspace
-	StubId            uint     `db:"stub_id" json:"stub_id" go2proto:"ignore"`           // Foreign key to Stub
-	StubType          string   `db:"stub_type" json:"stub_type" serializer:"stub_type"`
-	AppId             uint     `db:"app_id" json:"app_id,omitempty" go2proto:"ignore"` // Foreign key to App
-	ExposedPorts      []uint32 `db:"exposed_ports" json:"exposed_ports" serializer:"exposed_ports"`
-	CreatedAt         Time     `db:"created_at" json:"created_at" serializer:"created_at"`
-	LastRestoredAt    Time     `db:"last_restored_at" json:"last_restored_at" serializer:"last_restored_at"`
-	DeletedAt         NullTime `db:"deleted_at" json:"deleted_at" serializer:"deleted_at"`
-	CacheHash         string   `db:"cache_hash" json:"cache_hash" serializer:"cache_hash"`
-	CacheSizeBytes    int64    `db:"cache_size_bytes" json:"cache_size_bytes" serializer:"cache_size_bytes"`
-	OriginKey         string   `db:"origin_key" json:"origin_key" serializer:"origin_key"`
-	Locality          string   `db:"locality" json:"locality" serializer:"locality"`
-	Accelerator       string   `db:"accelerator" json:"accelerator" serializer:"accelerator"`
-	Runtime           string   `db:"runtime" json:"runtime" serializer:"runtime"`
-}
-
-const CheckpointRuntimeFilesystem = "filesystem"
-
-func (c *Checkpoint) IsFilesystemOnly() bool {
-	return c != nil && strings.EqualFold(strings.TrimSpace(c.Runtime), CheckpointRuntimeFilesystem)
-}
-
-func (c *Checkpoint) ToProto() *pb.Checkpoint {
-	exposedPorts := make([]uint32, len(c.ExposedPorts))
-	for i, port := range c.ExposedPorts {
-		exposedPorts[i] = port
-	}
-
-	return &pb.Checkpoint{
-		CheckpointId:      c.CheckpointId,
-		ExternalId:        c.ExternalId,
-		SourceContainerId: c.SourceContainerId,
-		ContainerIp:       c.ContainerIp,
-		Status:            c.Status,
-		RemoteKey:         c.RemoteKey,
-		StubType:          c.StubType,
-		ExposedPorts:      exposedPorts,
-		CreatedAt:         timestamppb.New(c.CreatedAt.Time),
-		LastRestoredAt:    timestamppb.New(c.LastRestoredAt.Time),
-		CacheHash:         c.CacheHash,
-		CacheSizeBytes:    c.CacheSizeBytes,
-		OriginKey:         c.OriginKey,
-		Locality:          c.Locality,
-		Accelerator:       c.Accelerator,
-		Runtime:           c.Runtime,
-	}
-}
-
-func NewCheckpointFromProto(in *pb.Checkpoint) *Checkpoint {
-	exposedPorts := make([]uint32, len(in.ExposedPorts))
-	for i, port := range in.ExposedPorts {
-		exposedPorts[i] = uint32(port)
-	}
-
-	return &Checkpoint{
-		CheckpointId:      in.CheckpointId,
-		ExternalId:        in.ExternalId,
-		SourceContainerId: in.SourceContainerId,
-		ContainerIp:       in.ContainerIp,
-		Status:            in.Status,
-		RemoteKey:         in.RemoteKey,
-		StubType:          in.StubType,
-		ExposedPorts:      exposedPorts,
-		CreatedAt:         Time{Time: in.CreatedAt.AsTime()},
-		LastRestoredAt:    Time{Time: in.LastRestoredAt.AsTime()},
-		CacheHash:         in.CacheHash,
-		CacheSizeBytes:    in.CacheSizeBytes,
-		OriginKey:         in.OriginKey,
-		Locality:          in.Locality,
-		Accelerator:       in.Accelerator,
-		Runtime:           in.Runtime,
-	}
-}
-
 type StubConfigV1 struct {
-	Runtime            Runtime            `json:"runtime"`
-	Handler            string             `json:"handler"`
-	OnStart            string             `json:"on_start"`
-	OnDeploy           string             `json:"on_deploy"`
-	OnDeployStubId     string             `json:"on_deploy_stub_id"`
-	PythonVersion      string             `json:"python_version"`
-	KeepWarmSeconds    int                `json:"keep_warm_seconds"`
-	MaxPendingTasks    uint               `json:"max_pending_tasks"`
-	CallbackUrl        string             `json:"callback_url"`
-	TaskPolicy         TaskPolicy         `json:"task_policy"`
-	Workers            uint               `json:"workers"`
-	ConcurrentRequests uint               `json:"concurrent_requests"`
-	Authorized         bool               `json:"authorized"`
-	Volumes            []*pb.Volume       `json:"volumes"`
-	Secrets            []Secret           `json:"secrets,omitempty"`
-	Env                []string           `json:"env,omitempty"`
-	Autoscaler         *Autoscaler        `json:"autoscaler"`
-	Extra              json.RawMessage    `json:"extra"`
-	CheckpointEnabled  bool               `json:"checkpoint_enabled"`
-	CheckpointTrigger  *CheckpointTrigger `json:"checkpoint_trigger,omitempty"`
-	WorkDir            string             `json:"work_dir"`
-	EntryPoint         []string           `json:"entry_point"`
-	Ports              []uint32           `json:"ports"`
-	Pricing            *PricingPolicy     `json:"pricing"`
-	Inputs             *Schema            `json:"inputs"`
-	Outputs            *Schema            `json:"outputs"`
-	TCP                bool               `json:"tcp"`
-	BlockNetwork       bool               `json:"block_network"`
-	AllowList          []string           `json:"allow_list"`
-	DockerEnabled      bool               `json:"docker_enabled"`
-	AllowMarketplace   bool               `json:"allow_marketplace"`
+	Runtime            Runtime         `json:"runtime"`
+	Handler            string          `json:"handler"`
+	OnStart            string          `json:"on_start"`
+	OnDeploy           string          `json:"on_deploy"`
+	OnDeployStubId     string          `json:"on_deploy_stub_id"`
+	PythonVersion      string          `json:"python_version"`
+	KeepWarmSeconds    int             `json:"keep_warm_seconds"`
+	MaxPendingTasks    uint            `json:"max_pending_tasks"`
+	CallbackUrl        string          `json:"callback_url"`
+	TaskPolicy         TaskPolicy      `json:"task_policy"`
+	Workers            uint            `json:"workers"`
+	ConcurrentRequests uint            `json:"concurrent_requests"`
+	Authorized         bool            `json:"authorized"`
+	Volumes            []*pb.Volume    `json:"volumes"`
+	Secrets            []Secret        `json:"secrets,omitempty"`
+	Env                []string        `json:"env,omitempty"`
+	Autoscaler         *Autoscaler     `json:"autoscaler"`
+	Extra              json.RawMessage `json:"extra"`
+	WorkDir            string          `json:"work_dir"`
+	EntryPoint         []string        `json:"entry_point"`
+	Ports              []uint32        `json:"ports"`
+	Pricing            *PricingPolicy  `json:"pricing"`
+	Inputs             *Schema         `json:"inputs"`
+	Outputs            *Schema         `json:"outputs"`
+	TCP                bool            `json:"tcp"`
+	BlockNetwork       bool            `json:"block_network"`
+	AllowList          []string        `json:"allow_list"`
+	DockerEnabled      bool            `json:"docker_enabled"`
+	AllowMarketplace   bool            `json:"allow_marketplace"`
 	// Hostname to set inside the container.
 	Hostname string `json:"hostname,omitempty"`
 	// MachineID pins the stub's containers to one agent machine. Only set by
 	// the gateway for marketplace rental workloads; not exposed to the SDK.
-	MachineID string            `json:"machine_id,omitempty"`
-	IsService bool              `json:"is_service"`
-	Serving   *ServingConfig    `json:"serving,omitempty"`
-	Pool      *PoolConfig       `json:"pool,omitempty"`
-	Disks     []*pb.DurableDisk `json:"disks,omitempty"`
+	MachineID      string            `json:"machine_id,omitempty"`
+	IsService      bool              `json:"is_service"`
+	Serving        *ServingConfig    `json:"serving,omitempty"`
+	Pool           *PoolConfig       `json:"pool,omitempty"`
+	Disks          []*pb.DurableDisk `json:"disks,omitempty"`
+	PersistentRoot *PersistentRoot   `json:"persistent_root,omitempty"`
 }
 
 const (

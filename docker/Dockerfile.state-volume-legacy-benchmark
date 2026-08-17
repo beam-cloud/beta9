@@ -1,0 +1,27 @@
+# syntax=docker/dockerfile:1.7-labs
+
+# Benchmark-only quarantine image. Its build context is the external, pinned
+# pre-cutover worktree; no layer from this image is copied into a Beta9 runtime
+# or the clean-cut state-volume integration image.
+FROM golang:1.25-bookworm AS build
+
+ARG LEGACY_COMMIT
+ARG LEGACY_FIXTURE_PATCH_SHA256
+WORKDIR /workspace
+ENV GONOSUMDB="github.com/beam-cloud/*"
+ENV CGO_ENABLED=0
+
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN go test -c -o /usr/local/bin/state-volume-legacy-benchmark ./pkg/worker && \
+    ! ldd /usr/local/bin/state-volume-legacy-benchmark
+
+FROM debian:bookworm-slim
+ARG LEGACY_COMMIT
+ARG LEGACY_FIXTURE_PATCH_SHA256
+LABEL run.beam.cloud/state-volume-benchmark-only="true" \
+      run.beam.cloud/legacy-commit="${LEGACY_COMMIT}" \
+      run.beam.cloud/legacy-fixture-patch-sha256="${LEGACY_FIXTURE_PATCH_SHA256}"
+COPY --from=build /usr/local/bin/state-volume-legacy-benchmark /usr/local/bin/state-volume-legacy-benchmark
+ENTRYPOINT ["/usr/local/bin/state-volume-legacy-benchmark"]

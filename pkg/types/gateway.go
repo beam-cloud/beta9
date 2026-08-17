@@ -5,6 +5,8 @@ const (
 	DefaultExtractedObjectPath         string = "/data/unpacked"
 	DefaultVolumesPath                 string = "/data/volumes"
 	DefaultDurableDisksPath            string = "/var/lib/beta9/durable-disks"
+	DefaultStateVolumesPath            string = "/var/lib/beta9/state-volumes"
+	DefaultStateVolumeLocksPath        string = "/var/lib/beta9/state-volume-locks"
 	DefaultObjectPath                  string = "/data/objects"
 	DefaultOutputsPath                 string = "/data/outputs"
 	DefaultObjectPrefix                string = "objects"

@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"reflect"
@@ -251,47 +252,340 @@ func TestMergeStubCacheRequiredContentRecordKeepsLatestItem(t *testing.T) {
 	}
 }
 
-func TestMergeStubCacheRequiredContentRecordKeepsMostRecentlyReportedCheckpoint(t *testing.T) {
-	merged := map[string]types.CacheRequiredContentItem{}
-	writeRecord := func(item types.CacheRequiredContentItem) {
-		body, err := json.Marshal(struct {
-			Type string                                    `json:"type"`
-			Data types.EventStubCacheRequiredContentSchema `json:"data"`
-		}{
-			Type: types.EventStubCacheRequiredContent,
-			Data: types.EventStubCacheRequiredContentSchema{
-				Kind:  types.CacheContentKindCheckpoint,
-				Items: []types.CacheRequiredContentItem{item},
-			},
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		mergeStubCacheRequiredContentRecord(merged, body)
+func mergeScopedRequiredContentForTest(t *testing.T, state *stubCacheRequiredContentState, schema types.EventStubCacheRequiredContentSchema) {
+	t.Helper()
+	body, err := json.Marshal(struct {
+		Type string                                    `json:"type"`
+		Data types.EventStubCacheRequiredContentSchema `json:"data"`
+	}{Type: types.EventStubCacheRequiredContent, Data: schema})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mergeStubCacheRequiredContentRecordIntoState(state, body)
+}
+
+func scopedRequiredContentSchemaForTest(t *testing.T, scope, revisionID string, generation int64, parts [][]types.CacheRequiredContentItem) []types.EventStubCacheRequiredContentSchema {
+	t.Helper()
+	all := make([]types.CacheRequiredContentItem, 0)
+	for _, part := range parts {
+		all = append(all, part...)
+	}
+	canonical, digest, totalBytes, err := types.CanonicalCacheRequiredContentSet(all)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := types.EventStubCacheRequiredContentSchema{
+		Scope: scope, RevisionGeneration: generation, RevisionID: revisionID, Replace: true,
+		PartCount: len(parts), SetDigest: digest, ItemCount: len(canonical), TotalBytes: totalBytes,
+	}
+	records := make([]types.EventStubCacheRequiredContentSchema, 0, len(parts)+1)
+	for index, part := range parts {
+		record := base
+		record.PartIndex, record.Items = index, part
+		records = append(records, record)
+	}
+	commit := base
+	commit.Commit = true
+	records = append(records, commit)
+	return records
+}
+
+func TestScopedStateRequiredContentCommitsCompleteMultipartRevisionAtomically(t *testing.T) {
+	state := &stubCacheRequiredContentState{items: map[string]types.CacheRequiredContentItem{}, scopes: map[string]*stubCacheRequiredContentScope{}}
+	scope := "bd9a783d-9857-4d1d-ae42-62629f7ecf89"
+	manifest := types.CacheRequiredContentItem{
+		Kind: types.CacheContentKindStateManifest, Hash: "parent-manifest", RoutingKey: "parent-manifest",
+		Source: "state-volumes/generation-parent/manifest.json", VolumeID: scope, GenerationID: "4f96d83a-0eb8-4a9a-afd4-fcae79069302", SizeBytes: 64,
+	}
+	chunk := types.CacheRequiredContentItem{
+		Kind: types.CacheContentKindStateChunk, Hash: "parent-chunk", RoutingKey: "parent-chunk",
+		Source: "state-volumes/chunks/parent-chunk", VolumeID: scope, GenerationID: "4f96d83a-0eb8-4a9a-afd4-fcae79069302", SizeBytes: 4096,
+	}
+	revision1 := scopedRequiredContentSchemaForTest(t, scope, "86dd770a-1adc-4e2e-9677-4acbc7601ef9", 1,
+		[][]types.CacheRequiredContentItem{{manifest}, {chunk}})
+	// Commit-before-parts and out-of-order parts retain no partial set.
+	mergeScopedRequiredContentForTest(t, state, revision1[2])
+	mergeScopedRequiredContentForTest(t, state, revision1[1])
+	if got := state.requiredContentItems(); len(got) != 0 {
+		t.Fatalf("incomplete revision became visible: %#v", got)
+	}
+	mergeScopedRequiredContentForTest(t, state, revision1[0])
+	if got := state.requiredContentItems(); len(got) != 2 {
+		t.Fatalf("complete revision item count = %d, want 2: %#v", len(got), got)
 	}
 
-	writeRecord(types.CacheRequiredContentItem{Hash: "old-hash", RoutingKey: "old-hash", CheckpointID: "old"})
-	writeRecord(types.CacheRequiredContentItem{Hash: "new-hash", RoutingKey: "new-hash", CheckpointID: "new"})
-
-	items := stubCacheRequiredContentItems(merged)
-	if got, want := len(items), 1; got != want {
-		t.Fatalf("unexpected item count: got %d want %d", got, want)
+	newManifest := manifest
+	newManifest.Hash, newManifest.RoutingKey, newManifest.GenerationID = "new-manifest", "new-manifest", "4d4740d2-6af4-4d1b-8357-5981d42e5886"
+	revision2 := scopedRequiredContentSchemaForTest(t, scope, "09737b39-ae66-4fa5-93da-d6ca4b6d60c9", 2,
+		[][]types.CacheRequiredContentItem{{newManifest}, {chunk}})
+	mergeScopedRequiredContentForTest(t, state, revision2[0])
+	mergeScopedRequiredContentForTest(t, state, revision2[2])
+	// Missing part 1 leaves the prior committed revision intact.
+	byHash := map[string]bool{}
+	for _, item := range state.requiredContentItems() {
+		byHash[item.Hash] = true
 	}
-	if got, want := items[0].CheckpointID, "new"; got != want {
-		t.Fatalf("unexpected checkpoint: got %q want %q", got, want)
+	if !byHash["parent-manifest"] || byHash["new-manifest"] {
+		t.Fatalf("incomplete replacement displaced prior revision: %#v", byHash)
+	}
+	mergeScopedRequiredContentForTest(t, state, revision2[1])
+	byHash = map[string]bool{}
+	for _, item := range state.requiredContentItems() {
+		byHash[item.Hash] = true
+	}
+	if byHash["parent-manifest"] || !byHash["new-manifest"] || !byHash["parent-chunk"] {
+		t.Fatalf("complete replacement did not atomically swap the scope: %#v", byHash)
 	}
 }
 
-func TestMergeStubCacheRequiredContentRecordKeepsLatestDiskSnapshotGeneration(t *testing.T) {
+func TestScopedStateRequiredContentRejectsMixedAndConflictingPartsAndCommitsTombstone(t *testing.T) {
+	state := &stubCacheRequiredContentState{items: map[string]types.CacheRequiredContentItem{}, scopes: map[string]*stubCacheRequiredContentScope{}}
+	scope := "bd9a783d-9857-4d1d-ae42-62629f7ecf89"
+	otherScope := "e7fb96a2-c8d7-484d-9673-d0eecdfca146"
+	item := func(hash string, kind types.CacheContentKind, volume string) types.CacheRequiredContentItem {
+		return types.CacheRequiredContentItem{Kind: kind, Hash: hash, RoutingKey: hash, Source: "objects/" + hash,
+			VolumeID: volume, GenerationID: "4f96d83a-0eb8-4a9a-afd4-fcae79069302", SizeBytes: 1}
+	}
+	base := scopedRequiredContentSchemaForTest(t, scope, "86dd770a-1adc-4e2e-9677-4acbc7601ef9", 1,
+		[][]types.CacheRequiredContentItem{{item("base-manifest", types.CacheContentKindStateManifest, scope)}})
+	for _, record := range base {
+		mergeScopedRequiredContentForTest(t, state, record)
+	}
+	fork := scopedRequiredContentSchemaForTest(t, otherScope, "4d4740d2-6af4-4d1b-8357-5981d42e5886", 1,
+		[][]types.CacheRequiredContentItem{{item("fork-manifest", types.CacheContentKindStateManifest, otherScope)}})
+	for _, record := range fork {
+		mergeScopedRequiredContentForTest(t, state, record)
+	}
+
+	revision2 := scopedRequiredContentSchemaForTest(t, scope, "09737b39-ae66-4fa5-93da-d6ca4b6d60c9", 2,
+		[][]types.CacheRequiredContentItem{{item("new-manifest", types.CacheContentKindStateManifest, scope)}, {item("new-chunk", types.CacheContentKindStateChunk, scope)}})
+	revision3 := scopedRequiredContentSchemaForTest(t, scope, "da1e4117-7e39-43cf-89cc-9185bd24a46f", 3,
+		[][]types.CacheRequiredContentItem{{item("other-manifest", types.CacheContentKindStateManifest, scope)}, {item("other-chunk", types.CacheContentKindStateChunk, scope)}})
+	mergeScopedRequiredContentForTest(t, state, revision2[0])
+	mergeScopedRequiredContentForTest(t, state, revision3[1])
+	mergeScopedRequiredContentForTest(t, state, revision2[2])
+	mergeScopedRequiredContentForTest(t, state, revision3[2])
+	if got := state.requiredContentItems(); len(got) != 2 {
+		t.Fatalf("mixed incomplete revisions changed committed scopes: %#v", got)
+	}
+	// A conflicting duplicate part poisons only its staged revision.
+	conflict := revision2[0]
+	conflict.Items = []types.CacheRequiredContentItem{item("forged-manifest", types.CacheContentKindStateManifest, scope)}
+	mergeScopedRequiredContentForTest(t, state, conflict)
+	mergeScopedRequiredContentForTest(t, state, revision2[1])
+	if got := state.requiredContentItems(); len(got) != 2 {
+		t.Fatalf("conflicting duplicate part changed committed scopes: %#v", got)
+	}
+
+	_, emptyDigest, _, err := types.CanonicalCacheRequiredContentSet(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mergeScopedRequiredContentForTest(t, state, types.EventStubCacheRequiredContentSchema{
+		Scope: scope, RevisionGeneration: 4, RevisionID: "b948fa30-76f9-45ef-98c7-04f2986f8fc1",
+		Replace: true, Commit: true, Tombstone: true, SetDigest: emptyDigest,
+	})
+	items := state.requiredContentItems()
+	if len(items) != 1 || items[0].Hash != "fork-manifest" {
+		t.Fatalf("tombstone removed an independent fork scope or retained its own: %#v", items)
+	}
+}
+
+func TestReadStubCacheRequiredContentRefusesPartialScanAndResumesToTail(t *testing.T) {
+	repo := &S2EventRepository{
+		streamPrefix:     "events",
+		stubCacheContent: map[s2.StreamName]*stubCacheRequiredContentState{},
+	}
+	repo.readRecords = func(_ context.Context, _ s2.StreamName, seqNum, count uint64) (*s2.ReadBatch, error) {
+		if seqNum == 0 {
+			if count != 2 {
+				t.Fatalf("read count = %d, want bounded count 2", count)
+			}
+			return &s2.ReadBatch{Records: []s2.SequencedRecord{
+				{SeqNum: 0, Body: []byte(`{"type":"ignored"}`)},
+				{SeqNum: 1, Body: []byte(`{"type":"ignored"}`)},
+			}}, nil
+		}
+		if seqNum != 2 {
+			t.Fatalf("resume sequence = %d, want 2", seqNum)
+		}
+		return &s2.ReadBatch{}, nil
+	}
+
+	items, err := repo.readStubCacheRequiredContent(context.Background(), "workspace", "stub", 2)
+	if items != nil {
+		t.Fatalf("partial read returned items: %#v", items)
+	}
+	var incomplete *ErrStubCacheRequiredContentIncomplete
+	if !errors.As(err, &incomplete) {
+		t.Fatalf("partial read error = %v, want ErrStubCacheRequiredContentIncomplete", err)
+	}
+	if incomplete.RecordsRead != 2 || incomplete.NextSeqNum != 2 {
+		t.Fatalf("incomplete metadata = %#v, want records=2 next=2", incomplete)
+	}
+
+	items, err = repo.readStubCacheRequiredContent(context.Background(), "workspace", "stub", 2)
+	if err != nil {
+		t.Fatalf("resumed read: %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("resumed complete set = %#v, want empty", items)
+	}
+}
+
+func TestEventClientRepoRoundTripsLargeScopedStateRevisionThroughS2WriterAndReader(t *testing.T) {
+	const (
+		scope      = "36eb1f5c-e9ed-464a-bd98-cc35d5d068bc"
+		revisionID = "12614665-148e-405b-9cc3-6e1b06f659d9"
+	)
+	items := make([]types.CacheRequiredContentItem, 0, types.CacheRequiredContentMaxItemsPerPart+1)
+	for index := 0; index < types.CacheRequiredContentMaxItemsPerPart+1; index++ {
+		kind := types.CacheContentKindStateChunk
+		if index == 0 {
+			kind = types.CacheContentKindStateManifest
+		}
+		hash := fmt.Sprintf("sha256:%064x", index+1)
+		items = append(items, types.CacheRequiredContentItem{
+			Hash: hash, RoutingKey: hash, ExpectedHash: hash, SizeBytes: int64(index + 1),
+			Kind: kind, VolumeID: scope, GenerationID: revisionID,
+		})
+	}
+	records, err := types.BuildScopedCacheRequiredContentRevision(
+		"workspace", "stub", "node", scope, 9, revisionID, items, false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	state := &stubCacheRequiredContentState{
+		items:  map[string]types.CacheRequiredContentItem{},
+		scopes: map[string]*stubCacheRequiredContentScope{},
+	}
+	var written []types.EventStubCacheRequiredContentSchema
+	s2Sink := &S2EventRepository{
+		streamPrefix: "events",
+		appendRecords: func(stream s2.StreamName, appendRecords []s2.AppendRecord) error {
+			if got, want := string(stream), "events/workspaces/workspace/stubs/stub/cache"; got != want {
+				t.Fatalf("unexpected S2 stream: got %q want %q", got, want)
+			}
+			for _, record := range appendRecords {
+				var envelope struct {
+					Data types.EventStubCacheRequiredContentSchema `json:"data"`
+				}
+				if err := json.Unmarshal(record.Body, &envelope); err != nil {
+					t.Fatal(err)
+				}
+				written = append(written, envelope.Data)
+				mergeStubCacheRequiredContentRecordIntoState(state, record.Body)
+			}
+			return nil
+		},
+	}
+	client := &EventClientRepo{storageSinks: []eventSink{s2Sink}}
+	for _, record := range records {
+		if err := client.PushStubCacheRequiredContent(record); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if got, want := len(written), len(records); got != want {
+		t.Fatalf("unexpected S2 record count: got %d want %d", got, want)
+	}
+	for index, record := range written {
+		if record.ItemCount != len(items) || record.PartCount != 2 || record.TotalBytes != records[0].TotalBytes || record.SetDigest != records[0].SetDigest {
+			t.Fatalf("S2 record %d changed aggregate multipart metadata: %+v", index, record)
+		}
+	}
+	if got := state.requiredContentItems(); len(got) != len(items) {
+		t.Fatalf("committed S2 reader item count = %d, want %d", len(got), len(items))
+	}
+}
+
+func TestEventClientRepoReturnsDeletionPendingMidScopedRevision(t *testing.T) {
+	const (
+		scope      = "36eb1f5c-e9ed-464a-bd98-cc35d5d068bc"
+		revisionID = "12614665-148e-405b-9cc3-6e1b06f659d9"
+	)
+	items := make([]types.CacheRequiredContentItem, 0, types.CacheRequiredContentMaxItemsPerPart+1)
+	for index := 0; index < types.CacheRequiredContentMaxItemsPerPart+1; index++ {
+		kind := types.CacheContentKindStateChunk
+		if index == 0 {
+			kind = types.CacheContentKindStateManifest
+		}
+		hash := fmt.Sprintf("sha256:%064x", index+1)
+		items = append(items, types.CacheRequiredContentItem{
+			Hash: hash, RoutingKey: hash, SizeBytes: 1, Kind: kind,
+			VolumeID: scope, GenerationID: revisionID,
+		})
+	}
+	records, err := types.BuildScopedCacheRequiredContentRevision(
+		"workspace", "stub", "node", scope, 1, revisionID, items, false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	state := &stubCacheRequiredContentState{
+		items:  map[string]types.CacheRequiredContentItem{},
+		scopes: map[string]*stubCacheRequiredContentScope{},
+	}
+	appendCalls := 0
+	s2Sink := &S2EventRepository{
+		streamPrefix: "events",
+		appendRecords: func(_ s2.StreamName, appendRecords []s2.AppendRecord) error {
+			appendCalls++
+			if appendCalls == 2 {
+				return &s2.S2Error{Code: "stream_deletion_pending", Status: 409, Origin: "server"}
+			}
+			for _, record := range appendRecords {
+				mergeStubCacheRequiredContentRecordIntoState(state, record.Body)
+			}
+			return nil
+		},
+	}
+	client := &EventClientRepo{storageSinks: []eventSink{s2Sink}}
+	if err := client.PushStubCacheRequiredContent(records[0]); err != nil {
+		t.Fatal(err)
+	}
+	err = client.PushStubCacheRequiredContent(records[1])
+	if err == nil || !isS2EventStreamDeletionPending(err) {
+		t.Fatalf("expected retryable stream_deletion_pending error, got %v", err)
+	}
+	if got := state.requiredContentItems(); len(got) != 0 {
+		t.Fatalf("incomplete multipart revision became visible after failed S2 append: %#v", got)
+	}
+	if appendCalls != 2 {
+		t.Fatalf("unexpected append calls after synchronous failure: %d", appendCalls)
+	}
+}
+
+func TestEventClientRepoRejectsScopedStateRevisionWithoutDurableSyncSink(t *testing.T) {
+	records, err := types.BuildScopedCacheRequiredContentRevision(
+		"workspace", "stub", "node", "36eb1f5c-e9ed-464a-bd98-cc35d5d068bc", 1,
+		"12614665-148e-405b-9cc3-6e1b06f659d9", nil, true,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &EventClientRepo{}
+	if client.HasDurableScopedStateSink() {
+		t.Fatal("empty event client unexpectedly advertised a durable state sink")
+	}
+	if err := client.PushStubCacheRequiredContent(records[0]); !errors.Is(err, ErrEventWriteUnsupported) {
+		t.Fatalf("scoped tombstone without durable sink error = %v, want %v", err, ErrEventWriteUnsupported)
+	}
+}
+
+func TestUnscopedStateRequiredContentIsRejected(t *testing.T) {
 	merged := map[string]types.CacheRequiredContentItem{}
-	writeRecord := func(items ...types.CacheRequiredContentItem) {
+	writeRecord := func(kind types.CacheContentKind, items ...types.CacheRequiredContentItem) {
 		body, err := json.Marshal(struct {
 			Type string                                    `json:"type"`
 			Data types.EventStubCacheRequiredContentSchema `json:"data"`
 		}{
 			Type: types.EventStubCacheRequiredContent,
 			Data: types.EventStubCacheRequiredContentSchema{
-				Kind:  types.CacheContentKindDiskSnapshot,
+				Kind:  kind,
 				Items: items,
 			},
 		})
@@ -301,58 +595,43 @@ func TestMergeStubCacheRequiredContentRecordKeepsLatestDiskSnapshotGeneration(t 
 		mergeStubCacheRequiredContentRecord(merged, body)
 	}
 
-	writeRecord(
+	writeRecord(types.CacheContentKindStateManifest,
 		types.CacheRequiredContentItem{
-			Hash:               "old-manifest",
-			RoutingKey:         "old-manifest",
-			Source:             "durable-disks/redis-data/snapshots/1/manifest.json",
-			DiskName:           "redis-data",
-			SnapshotGeneration: 1,
-		},
-		types.CacheRequiredContentItem{
-			Hash:               "old-only-chunk",
-			RoutingKey:         "old-only-chunk",
-			Source:             "durable-disks/redis-data/chunks/old-only-chunk",
-			DiskName:           "redis-data",
-			SnapshotGeneration: 1,
-		},
-		types.CacheRequiredContentItem{
-			Hash:       "old-unversioned-chunk",
-			RoutingKey: "old-unversioned-chunk",
-			Source:     "durable-disks/redis-data/chunks/old-unversioned-chunk",
+			Hash:         "parent-manifest",
+			RoutingKey:   "parent-manifest",
+			Source:       "state-volumes/generation-parent/manifest.json",
+			VolumeID:     "root",
+			GenerationID: "generation-parent",
 		},
 	)
-	writeRecord(types.CacheRequiredContentItem{
-		Hash:               "new-manifest",
-		RoutingKey:         "new-manifest",
-		Source:             "durable-disks/redis-data/snapshots/2/manifest.json",
-		DiskName:           "redis-data",
-		SnapshotGeneration: 2,
-	})
-	writeRecord(types.CacheRequiredContentItem{
-		Hash:               "new-chunk",
-		RoutingKey:         "new-chunk",
-		Source:             "durable-disks/redis-data/chunks/new-chunk",
-		DiskName:           "redis-data",
-		SnapshotGeneration: 2,
-	})
-	writeRecord(types.CacheRequiredContentItem{
-		Hash:       "ignored-old-late",
-		RoutingKey: "ignored-old-late",
-		Source:     "durable-disks/redis-data/chunks/ignored-old-late",
+	writeRecord(types.CacheContentKindStateChunk,
+		types.CacheRequiredContentItem{
+			Hash:         "parent-chunk",
+			RoutingKey:   "parent-chunk",
+			Source:       "state-volumes/chunks/parent-chunk",
+			VolumeID:     "root",
+			GenerationID: "generation-parent",
+		},
+	)
+	writeRecord(types.CacheContentKindStateManifest,
+		types.CacheRequiredContentItem{
+			Hash:         "child-manifest",
+			RoutingKey:   "child-manifest",
+			Source:       "state-volumes/generation-child/manifest.json",
+			VolumeID:     "root",
+			GenerationID: "generation-child",
+		},
+	)
+	writeRecord(types.CacheContentKindStateChunk, types.CacheRequiredContentItem{
+		Hash:         "child-chunk",
+		RoutingKey:   "child-chunk",
+		Source:       "state-volumes/chunks/child-chunk",
+		VolumeID:     "root",
+		GenerationID: "generation-child",
 	})
 
-	items := stubCacheRequiredContentItems(merged)
-	if got, want := len(items), 2; got != want {
-		t.Fatalf("unexpected item count: got %d want %d: %#v", got, want, items)
-	}
-	for _, item := range items {
-		if got, want := item.SnapshotGeneration, int64(2); got != want {
-			t.Fatalf("unexpected snapshot generation: got %d want %d", got, want)
-		}
-		if strings.HasPrefix(item.Hash, "old") || strings.HasPrefix(item.Hash, "ignored") {
-			t.Fatalf("stale snapshot item kept: %#v", item)
-		}
+	if items := stubCacheRequiredContentItems(merged); len(items) != 0 {
+		t.Fatalf("unscoped additive block state was accepted: %#v", items)
 	}
 }
 

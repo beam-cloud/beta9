@@ -32,7 +32,6 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 	goproc "github.com/beam-cloud/goproc/pkg"
 	"github.com/google/shlex"
-	"github.com/google/uuid"
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
@@ -66,17 +65,17 @@ type ContainerRuntimeServer struct {
 	port                    int
 	podAddr                 string
 	backendRoute            backendRouteFunc
-	createCheckpoint        createCheckpointFunc
-	snapshotDisks           snapshotDisksFunc
+	snapshotContainerState  snapshotContainerStateFunc
+	restoreContainerState   restoreContainerStateFunc
 	grpcServer              *grpc.Server
 	mu                      sync.Mutex
 	exposePortMu            sync.Mutex
 }
 
 type (
-	backendRouteFunc     func(request *types.ContainerRequest, kind string, port int32, localTarget string) *pb.BackendRoute
-	createCheckpointFunc func(ctx context.Context, opts *CreateCheckpointOpts) error
-	snapshotDisksFunc    func(ctx context.Context, request *types.ContainerRequest) ([]*types.DiskSnapshot, error)
+	backendRouteFunc           func(request *types.ContainerRequest, kind string, port int32, localTarget string) *pb.BackendRoute
+	snapshotContainerStateFunc func(context.Context, *pb.SnapshotContainerStateRequest) (*pb.SnapshotContainerStateResponse, error)
+	restoreContainerStateFunc  func(context.Context, *pb.RestoreContainerStateRequest) (*pb.RestoreContainerStateResponse, error)
 )
 
 type ContainerRuntimeServerOpts struct {
@@ -89,8 +88,8 @@ type ContainerRuntimeServerOpts struct {
 	EventRepo               repository.EventRepository
 	WorkerID                string
 	BackendRoute            backendRouteFunc
-	CreateCheckpoint        createCheckpointFunc
-	SnapshotDisks           snapshotDisksFunc
+	SnapshotContainerState  snapshotContainerStateFunc
+	RestoreContainerState   restoreContainerStateFunc
 }
 
 // NewContainerRuntimeServer creates a new runtime-agnostic container server
@@ -116,9 +115,23 @@ func NewContainerRuntimeServer(opts *ContainerRuntimeServerOpts) (*ContainerRunt
 		eventRepo:               opts.EventRepo,
 		workerID:                opts.WorkerID,
 		backendRoute:            opts.BackendRoute,
-		createCheckpoint:        opts.CreateCheckpoint,
-		snapshotDisks:           opts.SnapshotDisks,
+		snapshotContainerState:  opts.SnapshotContainerState,
+		restoreContainerState:   opts.RestoreContainerState,
 	}, nil
+}
+
+func (s *ContainerRuntimeServer) SnapshotContainerState(ctx context.Context, in *pb.SnapshotContainerStateRequest) (*pb.SnapshotContainerStateResponse, error) {
+	if s.snapshotContainerState == nil {
+		return &pb.SnapshotContainerStateResponse{Ok: false, ErrorMsg: "state snapshot service is unavailable"}, nil
+	}
+	return s.snapshotContainerState(ctx, in)
+}
+
+func (s *ContainerRuntimeServer) RestoreContainerState(ctx context.Context, in *pb.RestoreContainerStateRequest) (*pb.RestoreContainerStateResponse, error) {
+	if s.restoreContainerState == nil {
+		return &pb.RestoreContainerStateResponse{Ok: false, ErrorMsg: "state restore service is unavailable"}, nil
+	}
+	return s.restoreContainerState(ctx, in)
 }
 
 func (s *ContainerRuntimeServer) Start() error {
@@ -278,76 +291,6 @@ func (s *ContainerRuntimeServer) ContainerStreamLogs(req *pb.ContainerStreamLogs
 	}
 
 	return nil
-}
-
-// ContainerCheckpoint creates a checkpoint of a running container
-func (s *ContainerRuntimeServer) ContainerCheckpoint(ctx context.Context, in *pb.ContainerCheckpointRequest) (*pb.ContainerCheckpointResponse, error) {
-	instance, exists := s.containerInstances.Get(in.ContainerId)
-	if !exists {
-		return &pb.ContainerCheckpointResponse{Ok: false, ErrorMsg: "Container not found"}, nil
-	}
-
-	// Check if runtime supports checkpointing
-	rt := instance.Runtime
-	if rt == nil {
-		return &pb.ContainerCheckpointResponse{Ok: false, ErrorMsg: "Container runtime not found"}, nil
-	}
-	filesystemFallback := in.TerminateAfterCheckpoint && requestForcesResourceLimits(instance.Request)
-	if !rt.Capabilities().CheckpointRestore && !filesystemFallback {
-		return &pb.ContainerCheckpointResponse{
-			Ok:       false,
-			ErrorMsg: fmt.Sprintf("Runtime %s does not support checkpoint/restore", rt.Name()),
-		}, nil
-	}
-
-	checkpointId := uuid.New().String()
-	checkpointOpts := &CreateCheckpointOpts{
-		Request:                  instance.Request,
-		CheckpointId:             checkpointId,
-		ContainerIp:              instance.ContainerIp,
-		TerminateAfterCheckpoint: in.TerminateAfterCheckpoint,
-	}
-	err := s.createCheckpoint(ctx, checkpointOpts)
-	if err != nil {
-		log.Error().Str("container_id", in.ContainerId).Msgf("failed to create checkpoint: %v", err)
-		return &pb.ContainerCheckpointResponse{Ok: false, ErrorMsg: err.Error()}, nil
-	}
-
-	checkpointRuntime := checkpointOpts.CheckpointRuntime
-	if checkpointRuntime == "" {
-		checkpointRuntime = rt.Name()
-	}
-	return &pb.ContainerCheckpointResponse{Ok: true, CheckpointId: checkpointId, Runtime: checkpointRuntime}, nil
-}
-
-// ContainerSnapshotDisks snapshots a running container's durable disks.
-func (s *ContainerRuntimeServer) ContainerSnapshotDisks(ctx context.Context, in *pb.ContainerSnapshotDisksRequest) (*pb.ContainerSnapshotDisksResponse, error) {
-	instance, exists := s.containerInstances.Get(in.ContainerId)
-	if !exists {
-		return &pb.ContainerSnapshotDisksResponse{Ok: false, ErrorMsg: "Container not found"}, nil
-	}
-	if s.snapshotDisks == nil {
-		return &pb.ContainerSnapshotDisksResponse{Ok: false, ErrorMsg: "Durable disks are not available on this worker"}, nil
-	}
-
-	snapshots, err := s.snapshotDisks(ctx, instance.Request)
-	response := &pb.ContainerSnapshotDisksResponse{Ok: err == nil}
-	for _, snapshot := range snapshots {
-		if snapshot == nil {
-			continue
-		}
-		response.Snapshots = append(response.Snapshots, &pb.ContainerDiskSnapshot{
-			SnapshotId: snapshot.ExternalId,
-			DiskName:   snapshot.DiskName,
-			Generation: snapshot.Generation,
-		})
-	}
-	if err != nil {
-		// Return snapshots created before another mount failed.
-		log.Error().Err(err).Str("container_id", in.ContainerId).Msg("failed to snapshot durable disks")
-		response.ErrorMsg = err.Error()
-	}
-	return response, nil
 }
 
 // ContainerArchive archives a container's filesystem

@@ -19,30 +19,42 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	BackendRepositoryService_GetCheckpointById_FullMethodName           = "/BackendRepositoryService/GetCheckpointById"
-	BackendRepositoryService_GetLatestCheckpointByStubId_FullMethodName = "/BackendRepositoryService/GetLatestCheckpointByStubId"
-	BackendRepositoryService_ListCheckpoints_FullMethodName             = "/BackendRepositoryService/ListCheckpoints"
-	BackendRepositoryService_CreateCheckpoint_FullMethodName            = "/BackendRepositoryService/CreateCheckpoint"
-	BackendRepositoryService_UpdateCheckpoint_FullMethodName            = "/BackendRepositoryService/UpdateCheckpoint"
-	BackendRepositoryService_CreateDiskSnapshot_FullMethodName          = "/BackendRepositoryService/CreateDiskSnapshot"
-	BackendRepositoryService_GetLatestDiskSnapshot_FullMethodName       = "/BackendRepositoryService/GetLatestDiskSnapshot"
-	BackendRepositoryService_GetDiskSnapshot_FullMethodName             = "/BackendRepositoryService/GetDiskSnapshot"
-	BackendRepositoryService_GetDiskSnapshotDownloadURL_FullMethodName  = "/BackendRepositoryService/GetDiskSnapshotDownloadURL"
+	BackendRepositoryService_CreateStateSnapshot_FullMethodName                 = "/BackendRepositoryService/CreateStateSnapshot"
+	BackendRepositoryService_ArmStateSnapshot_FullMethodName                    = "/BackendRepositoryService/ArmStateSnapshot"
+	BackendRepositoryService_ClaimStateSnapshotRecovery_FullMethodName          = "/BackendRepositoryService/ClaimStateSnapshotRecovery"
+	BackendRepositoryService_GetStateSnapshotRecoveryCredentials_FullMethodName = "/BackendRepositoryService/GetStateSnapshotRecoveryCredentials"
+	BackendRepositoryService_FailStateSnapshot_FullMethodName                   = "/BackendRepositoryService/FailStateSnapshot"
+	BackendRepositoryService_CommitStateSnapshot_FullMethodName                 = "/BackendRepositoryService/CommitStateSnapshot"
+	BackendRepositoryService_GetStateSnapshot_FullMethodName                    = "/BackendRepositoryService/GetStateSnapshot"
+	BackendRepositoryService_GetStateSnapshotByOperation_FullMethodName         = "/BackendRepositoryService/GetStateSnapshotByOperation"
+	BackendRepositoryService_GetPendingStateSnapshotByContainer_FullMethodName  = "/BackendRepositoryService/GetPendingStateSnapshotByContainer"
+	BackendRepositoryService_GetVolumeGeneration_FullMethodName                 = "/BackendRepositoryService/GetVolumeGeneration"
+	BackendRepositoryService_RenewStateVolumeAttachments_FullMethodName         = "/BackendRepositoryService/RenewStateVolumeAttachments"
+	BackendRepositoryService_ReleaseStateVolumeAttachments_FullMethodName       = "/BackendRepositoryService/ReleaseStateVolumeAttachments"
+	BackendRepositoryService_BeginStateVolumeReleaseIntent_FullMethodName       = "/BackendRepositoryService/BeginStateVolumeReleaseIntent"
+	BackendRepositoryService_ClaimStateVolumeRelease_FullMethodName             = "/BackendRepositoryService/ClaimStateVolumeRelease"
+	BackendRepositoryService_CompleteClaimedStateVolumeRelease_FullMethodName   = "/BackendRepositoryService/CompleteClaimedStateVolumeRelease"
 )
 
 // BackendRepositoryServiceClient is the client API for BackendRepositoryService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type BackendRepositoryServiceClient interface {
-	GetCheckpointById(ctx context.Context, in *GetCheckpointByIdRequest, opts ...grpc.CallOption) (*GetCheckpointByIdResponse, error)
-	GetLatestCheckpointByStubId(ctx context.Context, in *GetLatestCheckpointByStubIdRequest, opts ...grpc.CallOption) (*GetLatestCheckpointByStubIdResponse, error)
-	ListCheckpoints(ctx context.Context, in *ListCheckpointsRequest, opts ...grpc.CallOption) (*ListCheckpointsResponse, error)
-	CreateCheckpoint(ctx context.Context, in *CreateCheckpointRequest, opts ...grpc.CallOption) (*CreateCheckpointResponse, error)
-	UpdateCheckpoint(ctx context.Context, in *UpdateCheckpointRequest, opts ...grpc.CallOption) (*UpdateCheckpointResponse, error)
-	CreateDiskSnapshot(ctx context.Context, in *CreateDiskSnapshotRequest, opts ...grpc.CallOption) (*CreateDiskSnapshotResponse, error)
-	GetLatestDiskSnapshot(ctx context.Context, in *GetLatestDiskSnapshotRequest, opts ...grpc.CallOption) (*GetLatestDiskSnapshotResponse, error)
-	GetDiskSnapshot(ctx context.Context, in *GetDiskSnapshotRequest, opts ...grpc.CallOption) (*GetDiskSnapshotResponse, error)
-	GetDiskSnapshotDownloadURL(ctx context.Context, in *GetDiskSnapshotDownloadURLRequest, opts ...grpc.CallOption) (*GetDiskSnapshotDownloadURLResponse, error)
+	CreateStateSnapshot(ctx context.Context, in *CreateStateSnapshotRequest, opts ...grpc.CallOption) (*CreateStateSnapshotResponse, error)
+	ArmStateSnapshot(ctx context.Context, in *ArmStateSnapshotRequest, opts ...grpc.CallOption) (*StateSnapshotMutationResponse, error)
+	ClaimStateSnapshotRecovery(ctx context.Context, in *ClaimStateSnapshotRecoveryRequest, opts ...grpc.CallOption) (*StateSnapshotMutationResponse, error)
+	GetStateSnapshotRecoveryCredentials(ctx context.Context, in *GetStateSnapshotRecoveryCredentialsRequest, opts ...grpc.CallOption) (*GetStateSnapshotRecoveryCredentialsResponse, error)
+	FailStateSnapshot(ctx context.Context, in *FailStateSnapshotRequest, opts ...grpc.CallOption) (*StateSnapshotMutationResponse, error)
+	CommitStateSnapshot(ctx context.Context, in *CommitStateSnapshotRequest, opts ...grpc.CallOption) (*CommitStateSnapshotResponse, error)
+	GetStateSnapshot(ctx context.Context, in *GetStateSnapshotRequest, opts ...grpc.CallOption) (*GetStateSnapshotResponse, error)
+	GetStateSnapshotByOperation(ctx context.Context, in *GetStateSnapshotByOperationRequest, opts ...grpc.CallOption) (*GetStateSnapshotResponse, error)
+	GetPendingStateSnapshotByContainer(ctx context.Context, in *GetPendingStateSnapshotByContainerRequest, opts ...grpc.CallOption) (*GetStateSnapshotResponse, error)
+	GetVolumeGeneration(ctx context.Context, in *GetVolumeGenerationRequest, opts ...grpc.CallOption) (*GetVolumeGenerationResponse, error)
+	RenewStateVolumeAttachments(ctx context.Context, in *RenewStateVolumeAttachmentsRequest, opts ...grpc.CallOption) (*RenewStateVolumeAttachmentsResponse, error)
+	ReleaseStateVolumeAttachments(ctx context.Context, in *ReleaseStateVolumeAttachmentsRequest, opts ...grpc.CallOption) (*ReleaseStateVolumeAttachmentsResponse, error)
+	BeginStateVolumeReleaseIntent(ctx context.Context, in *BeginStateVolumeReleaseIntentRequest, opts ...grpc.CallOption) (*ClaimStateVolumeReleaseResponse, error)
+	ClaimStateVolumeRelease(ctx context.Context, in *ClaimStateVolumeReleaseRequest, opts ...grpc.CallOption) (*ClaimStateVolumeReleaseResponse, error)
+	CompleteClaimedStateVolumeRelease(ctx context.Context, in *CompleteClaimedStateVolumeReleaseRequest, opts ...grpc.CallOption) (*CompleteClaimedStateVolumeReleaseResponse, error)
 }
 
 type backendRepositoryServiceClient struct {
@@ -53,81 +65,135 @@ func NewBackendRepositoryServiceClient(cc grpc.ClientConnInterface) BackendRepos
 	return &backendRepositoryServiceClient{cc}
 }
 
-func (c *backendRepositoryServiceClient) GetCheckpointById(ctx context.Context, in *GetCheckpointByIdRequest, opts ...grpc.CallOption) (*GetCheckpointByIdResponse, error) {
-	out := new(GetCheckpointByIdResponse)
-	err := c.cc.Invoke(ctx, BackendRepositoryService_GetCheckpointById_FullMethodName, in, out, opts...)
+func (c *backendRepositoryServiceClient) CreateStateSnapshot(ctx context.Context, in *CreateStateSnapshotRequest, opts ...grpc.CallOption) (*CreateStateSnapshotResponse, error) {
+	out := new(CreateStateSnapshotResponse)
+	err := c.cc.Invoke(ctx, BackendRepositoryService_CreateStateSnapshot_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *backendRepositoryServiceClient) GetLatestCheckpointByStubId(ctx context.Context, in *GetLatestCheckpointByStubIdRequest, opts ...grpc.CallOption) (*GetLatestCheckpointByStubIdResponse, error) {
-	out := new(GetLatestCheckpointByStubIdResponse)
-	err := c.cc.Invoke(ctx, BackendRepositoryService_GetLatestCheckpointByStubId_FullMethodName, in, out, opts...)
+func (c *backendRepositoryServiceClient) ArmStateSnapshot(ctx context.Context, in *ArmStateSnapshotRequest, opts ...grpc.CallOption) (*StateSnapshotMutationResponse, error) {
+	out := new(StateSnapshotMutationResponse)
+	err := c.cc.Invoke(ctx, BackendRepositoryService_ArmStateSnapshot_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *backendRepositoryServiceClient) ListCheckpoints(ctx context.Context, in *ListCheckpointsRequest, opts ...grpc.CallOption) (*ListCheckpointsResponse, error) {
-	out := new(ListCheckpointsResponse)
-	err := c.cc.Invoke(ctx, BackendRepositoryService_ListCheckpoints_FullMethodName, in, out, opts...)
+func (c *backendRepositoryServiceClient) ClaimStateSnapshotRecovery(ctx context.Context, in *ClaimStateSnapshotRecoveryRequest, opts ...grpc.CallOption) (*StateSnapshotMutationResponse, error) {
+	out := new(StateSnapshotMutationResponse)
+	err := c.cc.Invoke(ctx, BackendRepositoryService_ClaimStateSnapshotRecovery_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *backendRepositoryServiceClient) CreateCheckpoint(ctx context.Context, in *CreateCheckpointRequest, opts ...grpc.CallOption) (*CreateCheckpointResponse, error) {
-	out := new(CreateCheckpointResponse)
-	err := c.cc.Invoke(ctx, BackendRepositoryService_CreateCheckpoint_FullMethodName, in, out, opts...)
+func (c *backendRepositoryServiceClient) GetStateSnapshotRecoveryCredentials(ctx context.Context, in *GetStateSnapshotRecoveryCredentialsRequest, opts ...grpc.CallOption) (*GetStateSnapshotRecoveryCredentialsResponse, error) {
+	out := new(GetStateSnapshotRecoveryCredentialsResponse)
+	err := c.cc.Invoke(ctx, BackendRepositoryService_GetStateSnapshotRecoveryCredentials_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *backendRepositoryServiceClient) UpdateCheckpoint(ctx context.Context, in *UpdateCheckpointRequest, opts ...grpc.CallOption) (*UpdateCheckpointResponse, error) {
-	out := new(UpdateCheckpointResponse)
-	err := c.cc.Invoke(ctx, BackendRepositoryService_UpdateCheckpoint_FullMethodName, in, out, opts...)
+func (c *backendRepositoryServiceClient) FailStateSnapshot(ctx context.Context, in *FailStateSnapshotRequest, opts ...grpc.CallOption) (*StateSnapshotMutationResponse, error) {
+	out := new(StateSnapshotMutationResponse)
+	err := c.cc.Invoke(ctx, BackendRepositoryService_FailStateSnapshot_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *backendRepositoryServiceClient) CreateDiskSnapshot(ctx context.Context, in *CreateDiskSnapshotRequest, opts ...grpc.CallOption) (*CreateDiskSnapshotResponse, error) {
-	out := new(CreateDiskSnapshotResponse)
-	err := c.cc.Invoke(ctx, BackendRepositoryService_CreateDiskSnapshot_FullMethodName, in, out, opts...)
+func (c *backendRepositoryServiceClient) CommitStateSnapshot(ctx context.Context, in *CommitStateSnapshotRequest, opts ...grpc.CallOption) (*CommitStateSnapshotResponse, error) {
+	out := new(CommitStateSnapshotResponse)
+	err := c.cc.Invoke(ctx, BackendRepositoryService_CommitStateSnapshot_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *backendRepositoryServiceClient) GetLatestDiskSnapshot(ctx context.Context, in *GetLatestDiskSnapshotRequest, opts ...grpc.CallOption) (*GetLatestDiskSnapshotResponse, error) {
-	out := new(GetLatestDiskSnapshotResponse)
-	err := c.cc.Invoke(ctx, BackendRepositoryService_GetLatestDiskSnapshot_FullMethodName, in, out, opts...)
+func (c *backendRepositoryServiceClient) GetStateSnapshot(ctx context.Context, in *GetStateSnapshotRequest, opts ...grpc.CallOption) (*GetStateSnapshotResponse, error) {
+	out := new(GetStateSnapshotResponse)
+	err := c.cc.Invoke(ctx, BackendRepositoryService_GetStateSnapshot_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *backendRepositoryServiceClient) GetDiskSnapshot(ctx context.Context, in *GetDiskSnapshotRequest, opts ...grpc.CallOption) (*GetDiskSnapshotResponse, error) {
-	out := new(GetDiskSnapshotResponse)
-	err := c.cc.Invoke(ctx, BackendRepositoryService_GetDiskSnapshot_FullMethodName, in, out, opts...)
+func (c *backendRepositoryServiceClient) GetStateSnapshotByOperation(ctx context.Context, in *GetStateSnapshotByOperationRequest, opts ...grpc.CallOption) (*GetStateSnapshotResponse, error) {
+	out := new(GetStateSnapshotResponse)
+	err := c.cc.Invoke(ctx, BackendRepositoryService_GetStateSnapshotByOperation_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *backendRepositoryServiceClient) GetDiskSnapshotDownloadURL(ctx context.Context, in *GetDiskSnapshotDownloadURLRequest, opts ...grpc.CallOption) (*GetDiskSnapshotDownloadURLResponse, error) {
-	out := new(GetDiskSnapshotDownloadURLResponse)
-	err := c.cc.Invoke(ctx, BackendRepositoryService_GetDiskSnapshotDownloadURL_FullMethodName, in, out, opts...)
+func (c *backendRepositoryServiceClient) GetPendingStateSnapshotByContainer(ctx context.Context, in *GetPendingStateSnapshotByContainerRequest, opts ...grpc.CallOption) (*GetStateSnapshotResponse, error) {
+	out := new(GetStateSnapshotResponse)
+	err := c.cc.Invoke(ctx, BackendRepositoryService_GetPendingStateSnapshotByContainer_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *backendRepositoryServiceClient) GetVolumeGeneration(ctx context.Context, in *GetVolumeGenerationRequest, opts ...grpc.CallOption) (*GetVolumeGenerationResponse, error) {
+	out := new(GetVolumeGenerationResponse)
+	err := c.cc.Invoke(ctx, BackendRepositoryService_GetVolumeGeneration_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *backendRepositoryServiceClient) RenewStateVolumeAttachments(ctx context.Context, in *RenewStateVolumeAttachmentsRequest, opts ...grpc.CallOption) (*RenewStateVolumeAttachmentsResponse, error) {
+	out := new(RenewStateVolumeAttachmentsResponse)
+	err := c.cc.Invoke(ctx, BackendRepositoryService_RenewStateVolumeAttachments_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *backendRepositoryServiceClient) ReleaseStateVolumeAttachments(ctx context.Context, in *ReleaseStateVolumeAttachmentsRequest, opts ...grpc.CallOption) (*ReleaseStateVolumeAttachmentsResponse, error) {
+	out := new(ReleaseStateVolumeAttachmentsResponse)
+	err := c.cc.Invoke(ctx, BackendRepositoryService_ReleaseStateVolumeAttachments_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *backendRepositoryServiceClient) BeginStateVolumeReleaseIntent(ctx context.Context, in *BeginStateVolumeReleaseIntentRequest, opts ...grpc.CallOption) (*ClaimStateVolumeReleaseResponse, error) {
+	out := new(ClaimStateVolumeReleaseResponse)
+	err := c.cc.Invoke(ctx, BackendRepositoryService_BeginStateVolumeReleaseIntent_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *backendRepositoryServiceClient) ClaimStateVolumeRelease(ctx context.Context, in *ClaimStateVolumeReleaseRequest, opts ...grpc.CallOption) (*ClaimStateVolumeReleaseResponse, error) {
+	out := new(ClaimStateVolumeReleaseResponse)
+	err := c.cc.Invoke(ctx, BackendRepositoryService_ClaimStateVolumeRelease_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *backendRepositoryServiceClient) CompleteClaimedStateVolumeRelease(ctx context.Context, in *CompleteClaimedStateVolumeReleaseRequest, opts ...grpc.CallOption) (*CompleteClaimedStateVolumeReleaseResponse, error) {
+	out := new(CompleteClaimedStateVolumeReleaseResponse)
+	err := c.cc.Invoke(ctx, BackendRepositoryService_CompleteClaimedStateVolumeRelease_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -138,15 +204,21 @@ func (c *backendRepositoryServiceClient) GetDiskSnapshotDownloadURL(ctx context.
 // All implementations must embed UnimplementedBackendRepositoryServiceServer
 // for forward compatibility
 type BackendRepositoryServiceServer interface {
-	GetCheckpointById(context.Context, *GetCheckpointByIdRequest) (*GetCheckpointByIdResponse, error)
-	GetLatestCheckpointByStubId(context.Context, *GetLatestCheckpointByStubIdRequest) (*GetLatestCheckpointByStubIdResponse, error)
-	ListCheckpoints(context.Context, *ListCheckpointsRequest) (*ListCheckpointsResponse, error)
-	CreateCheckpoint(context.Context, *CreateCheckpointRequest) (*CreateCheckpointResponse, error)
-	UpdateCheckpoint(context.Context, *UpdateCheckpointRequest) (*UpdateCheckpointResponse, error)
-	CreateDiskSnapshot(context.Context, *CreateDiskSnapshotRequest) (*CreateDiskSnapshotResponse, error)
-	GetLatestDiskSnapshot(context.Context, *GetLatestDiskSnapshotRequest) (*GetLatestDiskSnapshotResponse, error)
-	GetDiskSnapshot(context.Context, *GetDiskSnapshotRequest) (*GetDiskSnapshotResponse, error)
-	GetDiskSnapshotDownloadURL(context.Context, *GetDiskSnapshotDownloadURLRequest) (*GetDiskSnapshotDownloadURLResponse, error)
+	CreateStateSnapshot(context.Context, *CreateStateSnapshotRequest) (*CreateStateSnapshotResponse, error)
+	ArmStateSnapshot(context.Context, *ArmStateSnapshotRequest) (*StateSnapshotMutationResponse, error)
+	ClaimStateSnapshotRecovery(context.Context, *ClaimStateSnapshotRecoveryRequest) (*StateSnapshotMutationResponse, error)
+	GetStateSnapshotRecoveryCredentials(context.Context, *GetStateSnapshotRecoveryCredentialsRequest) (*GetStateSnapshotRecoveryCredentialsResponse, error)
+	FailStateSnapshot(context.Context, *FailStateSnapshotRequest) (*StateSnapshotMutationResponse, error)
+	CommitStateSnapshot(context.Context, *CommitStateSnapshotRequest) (*CommitStateSnapshotResponse, error)
+	GetStateSnapshot(context.Context, *GetStateSnapshotRequest) (*GetStateSnapshotResponse, error)
+	GetStateSnapshotByOperation(context.Context, *GetStateSnapshotByOperationRequest) (*GetStateSnapshotResponse, error)
+	GetPendingStateSnapshotByContainer(context.Context, *GetPendingStateSnapshotByContainerRequest) (*GetStateSnapshotResponse, error)
+	GetVolumeGeneration(context.Context, *GetVolumeGenerationRequest) (*GetVolumeGenerationResponse, error)
+	RenewStateVolumeAttachments(context.Context, *RenewStateVolumeAttachmentsRequest) (*RenewStateVolumeAttachmentsResponse, error)
+	ReleaseStateVolumeAttachments(context.Context, *ReleaseStateVolumeAttachmentsRequest) (*ReleaseStateVolumeAttachmentsResponse, error)
+	BeginStateVolumeReleaseIntent(context.Context, *BeginStateVolumeReleaseIntentRequest) (*ClaimStateVolumeReleaseResponse, error)
+	ClaimStateVolumeRelease(context.Context, *ClaimStateVolumeReleaseRequest) (*ClaimStateVolumeReleaseResponse, error)
+	CompleteClaimedStateVolumeRelease(context.Context, *CompleteClaimedStateVolumeReleaseRequest) (*CompleteClaimedStateVolumeReleaseResponse, error)
 	mustEmbedUnimplementedBackendRepositoryServiceServer()
 }
 
@@ -154,32 +226,50 @@ type BackendRepositoryServiceServer interface {
 type UnimplementedBackendRepositoryServiceServer struct {
 }
 
-func (UnimplementedBackendRepositoryServiceServer) GetCheckpointById(context.Context, *GetCheckpointByIdRequest) (*GetCheckpointByIdResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetCheckpointById not implemented")
+func (UnimplementedBackendRepositoryServiceServer) CreateStateSnapshot(context.Context, *CreateStateSnapshotRequest) (*CreateStateSnapshotResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateStateSnapshot not implemented")
 }
-func (UnimplementedBackendRepositoryServiceServer) GetLatestCheckpointByStubId(context.Context, *GetLatestCheckpointByStubIdRequest) (*GetLatestCheckpointByStubIdResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetLatestCheckpointByStubId not implemented")
+func (UnimplementedBackendRepositoryServiceServer) ArmStateSnapshot(context.Context, *ArmStateSnapshotRequest) (*StateSnapshotMutationResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ArmStateSnapshot not implemented")
 }
-func (UnimplementedBackendRepositoryServiceServer) ListCheckpoints(context.Context, *ListCheckpointsRequest) (*ListCheckpointsResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ListCheckpoints not implemented")
+func (UnimplementedBackendRepositoryServiceServer) ClaimStateSnapshotRecovery(context.Context, *ClaimStateSnapshotRecoveryRequest) (*StateSnapshotMutationResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ClaimStateSnapshotRecovery not implemented")
 }
-func (UnimplementedBackendRepositoryServiceServer) CreateCheckpoint(context.Context, *CreateCheckpointRequest) (*CreateCheckpointResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method CreateCheckpoint not implemented")
+func (UnimplementedBackendRepositoryServiceServer) GetStateSnapshotRecoveryCredentials(context.Context, *GetStateSnapshotRecoveryCredentialsRequest) (*GetStateSnapshotRecoveryCredentialsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetStateSnapshotRecoveryCredentials not implemented")
 }
-func (UnimplementedBackendRepositoryServiceServer) UpdateCheckpoint(context.Context, *UpdateCheckpointRequest) (*UpdateCheckpointResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method UpdateCheckpoint not implemented")
+func (UnimplementedBackendRepositoryServiceServer) FailStateSnapshot(context.Context, *FailStateSnapshotRequest) (*StateSnapshotMutationResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method FailStateSnapshot not implemented")
 }
-func (UnimplementedBackendRepositoryServiceServer) CreateDiskSnapshot(context.Context, *CreateDiskSnapshotRequest) (*CreateDiskSnapshotResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method CreateDiskSnapshot not implemented")
+func (UnimplementedBackendRepositoryServiceServer) CommitStateSnapshot(context.Context, *CommitStateSnapshotRequest) (*CommitStateSnapshotResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CommitStateSnapshot not implemented")
 }
-func (UnimplementedBackendRepositoryServiceServer) GetLatestDiskSnapshot(context.Context, *GetLatestDiskSnapshotRequest) (*GetLatestDiskSnapshotResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetLatestDiskSnapshot not implemented")
+func (UnimplementedBackendRepositoryServiceServer) GetStateSnapshot(context.Context, *GetStateSnapshotRequest) (*GetStateSnapshotResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetStateSnapshot not implemented")
 }
-func (UnimplementedBackendRepositoryServiceServer) GetDiskSnapshot(context.Context, *GetDiskSnapshotRequest) (*GetDiskSnapshotResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetDiskSnapshot not implemented")
+func (UnimplementedBackendRepositoryServiceServer) GetStateSnapshotByOperation(context.Context, *GetStateSnapshotByOperationRequest) (*GetStateSnapshotResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetStateSnapshotByOperation not implemented")
 }
-func (UnimplementedBackendRepositoryServiceServer) GetDiskSnapshotDownloadURL(context.Context, *GetDiskSnapshotDownloadURLRequest) (*GetDiskSnapshotDownloadURLResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetDiskSnapshotDownloadURL not implemented")
+func (UnimplementedBackendRepositoryServiceServer) GetPendingStateSnapshotByContainer(context.Context, *GetPendingStateSnapshotByContainerRequest) (*GetStateSnapshotResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetPendingStateSnapshotByContainer not implemented")
+}
+func (UnimplementedBackendRepositoryServiceServer) GetVolumeGeneration(context.Context, *GetVolumeGenerationRequest) (*GetVolumeGenerationResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetVolumeGeneration not implemented")
+}
+func (UnimplementedBackendRepositoryServiceServer) RenewStateVolumeAttachments(context.Context, *RenewStateVolumeAttachmentsRequest) (*RenewStateVolumeAttachmentsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RenewStateVolumeAttachments not implemented")
+}
+func (UnimplementedBackendRepositoryServiceServer) ReleaseStateVolumeAttachments(context.Context, *ReleaseStateVolumeAttachmentsRequest) (*ReleaseStateVolumeAttachmentsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ReleaseStateVolumeAttachments not implemented")
+}
+func (UnimplementedBackendRepositoryServiceServer) BeginStateVolumeReleaseIntent(context.Context, *BeginStateVolumeReleaseIntentRequest) (*ClaimStateVolumeReleaseResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method BeginStateVolumeReleaseIntent not implemented")
+}
+func (UnimplementedBackendRepositoryServiceServer) ClaimStateVolumeRelease(context.Context, *ClaimStateVolumeReleaseRequest) (*ClaimStateVolumeReleaseResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ClaimStateVolumeRelease not implemented")
+}
+func (UnimplementedBackendRepositoryServiceServer) CompleteClaimedStateVolumeRelease(context.Context, *CompleteClaimedStateVolumeReleaseRequest) (*CompleteClaimedStateVolumeReleaseResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CompleteClaimedStateVolumeRelease not implemented")
 }
 func (UnimplementedBackendRepositoryServiceServer) mustEmbedUnimplementedBackendRepositoryServiceServer() {
 }
@@ -195,164 +285,272 @@ func RegisterBackendRepositoryServiceServer(s grpc.ServiceRegistrar, srv Backend
 	s.RegisterService(&BackendRepositoryService_ServiceDesc, srv)
 }
 
-func _BackendRepositoryService_GetCheckpointById_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetCheckpointByIdRequest)
+func _BackendRepositoryService_CreateStateSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateStateSnapshotRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(BackendRepositoryServiceServer).GetCheckpointById(ctx, in)
+		return srv.(BackendRepositoryServiceServer).CreateStateSnapshot(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: BackendRepositoryService_GetCheckpointById_FullMethodName,
+		FullMethod: BackendRepositoryService_CreateStateSnapshot_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BackendRepositoryServiceServer).GetCheckpointById(ctx, req.(*GetCheckpointByIdRequest))
+		return srv.(BackendRepositoryServiceServer).CreateStateSnapshot(ctx, req.(*CreateStateSnapshotRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _BackendRepositoryService_GetLatestCheckpointByStubId_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetLatestCheckpointByStubIdRequest)
+func _BackendRepositoryService_ArmStateSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ArmStateSnapshotRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(BackendRepositoryServiceServer).GetLatestCheckpointByStubId(ctx, in)
+		return srv.(BackendRepositoryServiceServer).ArmStateSnapshot(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: BackendRepositoryService_GetLatestCheckpointByStubId_FullMethodName,
+		FullMethod: BackendRepositoryService_ArmStateSnapshot_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BackendRepositoryServiceServer).GetLatestCheckpointByStubId(ctx, req.(*GetLatestCheckpointByStubIdRequest))
+		return srv.(BackendRepositoryServiceServer).ArmStateSnapshot(ctx, req.(*ArmStateSnapshotRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _BackendRepositoryService_ListCheckpoints_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ListCheckpointsRequest)
+func _BackendRepositoryService_ClaimStateSnapshotRecovery_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ClaimStateSnapshotRecoveryRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(BackendRepositoryServiceServer).ListCheckpoints(ctx, in)
+		return srv.(BackendRepositoryServiceServer).ClaimStateSnapshotRecovery(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: BackendRepositoryService_ListCheckpoints_FullMethodName,
+		FullMethod: BackendRepositoryService_ClaimStateSnapshotRecovery_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BackendRepositoryServiceServer).ListCheckpoints(ctx, req.(*ListCheckpointsRequest))
+		return srv.(BackendRepositoryServiceServer).ClaimStateSnapshotRecovery(ctx, req.(*ClaimStateSnapshotRecoveryRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _BackendRepositoryService_CreateCheckpoint_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(CreateCheckpointRequest)
+func _BackendRepositoryService_GetStateSnapshotRecoveryCredentials_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetStateSnapshotRecoveryCredentialsRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(BackendRepositoryServiceServer).CreateCheckpoint(ctx, in)
+		return srv.(BackendRepositoryServiceServer).GetStateSnapshotRecoveryCredentials(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: BackendRepositoryService_CreateCheckpoint_FullMethodName,
+		FullMethod: BackendRepositoryService_GetStateSnapshotRecoveryCredentials_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BackendRepositoryServiceServer).CreateCheckpoint(ctx, req.(*CreateCheckpointRequest))
+		return srv.(BackendRepositoryServiceServer).GetStateSnapshotRecoveryCredentials(ctx, req.(*GetStateSnapshotRecoveryCredentialsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _BackendRepositoryService_UpdateCheckpoint_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(UpdateCheckpointRequest)
+func _BackendRepositoryService_FailStateSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FailStateSnapshotRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(BackendRepositoryServiceServer).UpdateCheckpoint(ctx, in)
+		return srv.(BackendRepositoryServiceServer).FailStateSnapshot(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: BackendRepositoryService_UpdateCheckpoint_FullMethodName,
+		FullMethod: BackendRepositoryService_FailStateSnapshot_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BackendRepositoryServiceServer).UpdateCheckpoint(ctx, req.(*UpdateCheckpointRequest))
+		return srv.(BackendRepositoryServiceServer).FailStateSnapshot(ctx, req.(*FailStateSnapshotRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _BackendRepositoryService_CreateDiskSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(CreateDiskSnapshotRequest)
+func _BackendRepositoryService_CommitStateSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CommitStateSnapshotRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(BackendRepositoryServiceServer).CreateDiskSnapshot(ctx, in)
+		return srv.(BackendRepositoryServiceServer).CommitStateSnapshot(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: BackendRepositoryService_CreateDiskSnapshot_FullMethodName,
+		FullMethod: BackendRepositoryService_CommitStateSnapshot_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BackendRepositoryServiceServer).CreateDiskSnapshot(ctx, req.(*CreateDiskSnapshotRequest))
+		return srv.(BackendRepositoryServiceServer).CommitStateSnapshot(ctx, req.(*CommitStateSnapshotRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _BackendRepositoryService_GetLatestDiskSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetLatestDiskSnapshotRequest)
+func _BackendRepositoryService_GetStateSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetStateSnapshotRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(BackendRepositoryServiceServer).GetLatestDiskSnapshot(ctx, in)
+		return srv.(BackendRepositoryServiceServer).GetStateSnapshot(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: BackendRepositoryService_GetLatestDiskSnapshot_FullMethodName,
+		FullMethod: BackendRepositoryService_GetStateSnapshot_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BackendRepositoryServiceServer).GetLatestDiskSnapshot(ctx, req.(*GetLatestDiskSnapshotRequest))
+		return srv.(BackendRepositoryServiceServer).GetStateSnapshot(ctx, req.(*GetStateSnapshotRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _BackendRepositoryService_GetDiskSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetDiskSnapshotRequest)
+func _BackendRepositoryService_GetStateSnapshotByOperation_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetStateSnapshotByOperationRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(BackendRepositoryServiceServer).GetDiskSnapshot(ctx, in)
+		return srv.(BackendRepositoryServiceServer).GetStateSnapshotByOperation(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: BackendRepositoryService_GetDiskSnapshot_FullMethodName,
+		FullMethod: BackendRepositoryService_GetStateSnapshotByOperation_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BackendRepositoryServiceServer).GetDiskSnapshot(ctx, req.(*GetDiskSnapshotRequest))
+		return srv.(BackendRepositoryServiceServer).GetStateSnapshotByOperation(ctx, req.(*GetStateSnapshotByOperationRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _BackendRepositoryService_GetDiskSnapshotDownloadURL_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetDiskSnapshotDownloadURLRequest)
+func _BackendRepositoryService_GetPendingStateSnapshotByContainer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetPendingStateSnapshotByContainerRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(BackendRepositoryServiceServer).GetDiskSnapshotDownloadURL(ctx, in)
+		return srv.(BackendRepositoryServiceServer).GetPendingStateSnapshotByContainer(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: BackendRepositoryService_GetDiskSnapshotDownloadURL_FullMethodName,
+		FullMethod: BackendRepositoryService_GetPendingStateSnapshotByContainer_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BackendRepositoryServiceServer).GetDiskSnapshotDownloadURL(ctx, req.(*GetDiskSnapshotDownloadURLRequest))
+		return srv.(BackendRepositoryServiceServer).GetPendingStateSnapshotByContainer(ctx, req.(*GetPendingStateSnapshotByContainerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BackendRepositoryService_GetVolumeGeneration_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetVolumeGenerationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BackendRepositoryServiceServer).GetVolumeGeneration(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BackendRepositoryService_GetVolumeGeneration_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BackendRepositoryServiceServer).GetVolumeGeneration(ctx, req.(*GetVolumeGenerationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BackendRepositoryService_RenewStateVolumeAttachments_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RenewStateVolumeAttachmentsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BackendRepositoryServiceServer).RenewStateVolumeAttachments(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BackendRepositoryService_RenewStateVolumeAttachments_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BackendRepositoryServiceServer).RenewStateVolumeAttachments(ctx, req.(*RenewStateVolumeAttachmentsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BackendRepositoryService_ReleaseStateVolumeAttachments_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReleaseStateVolumeAttachmentsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BackendRepositoryServiceServer).ReleaseStateVolumeAttachments(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BackendRepositoryService_ReleaseStateVolumeAttachments_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BackendRepositoryServiceServer).ReleaseStateVolumeAttachments(ctx, req.(*ReleaseStateVolumeAttachmentsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BackendRepositoryService_BeginStateVolumeReleaseIntent_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BeginStateVolumeReleaseIntentRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BackendRepositoryServiceServer).BeginStateVolumeReleaseIntent(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BackendRepositoryService_BeginStateVolumeReleaseIntent_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BackendRepositoryServiceServer).BeginStateVolumeReleaseIntent(ctx, req.(*BeginStateVolumeReleaseIntentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BackendRepositoryService_ClaimStateVolumeRelease_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ClaimStateVolumeReleaseRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BackendRepositoryServiceServer).ClaimStateVolumeRelease(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BackendRepositoryService_ClaimStateVolumeRelease_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BackendRepositoryServiceServer).ClaimStateVolumeRelease(ctx, req.(*ClaimStateVolumeReleaseRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BackendRepositoryService_CompleteClaimedStateVolumeRelease_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CompleteClaimedStateVolumeReleaseRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BackendRepositoryServiceServer).CompleteClaimedStateVolumeRelease(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BackendRepositoryService_CompleteClaimedStateVolumeRelease_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BackendRepositoryServiceServer).CompleteClaimedStateVolumeRelease(ctx, req.(*CompleteClaimedStateVolumeReleaseRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -365,40 +563,64 @@ var BackendRepositoryService_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*BackendRepositoryServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "GetCheckpointById",
-			Handler:    _BackendRepositoryService_GetCheckpointById_Handler,
+			MethodName: "CreateStateSnapshot",
+			Handler:    _BackendRepositoryService_CreateStateSnapshot_Handler,
 		},
 		{
-			MethodName: "GetLatestCheckpointByStubId",
-			Handler:    _BackendRepositoryService_GetLatestCheckpointByStubId_Handler,
+			MethodName: "ArmStateSnapshot",
+			Handler:    _BackendRepositoryService_ArmStateSnapshot_Handler,
 		},
 		{
-			MethodName: "ListCheckpoints",
-			Handler:    _BackendRepositoryService_ListCheckpoints_Handler,
+			MethodName: "ClaimStateSnapshotRecovery",
+			Handler:    _BackendRepositoryService_ClaimStateSnapshotRecovery_Handler,
 		},
 		{
-			MethodName: "CreateCheckpoint",
-			Handler:    _BackendRepositoryService_CreateCheckpoint_Handler,
+			MethodName: "GetStateSnapshotRecoveryCredentials",
+			Handler:    _BackendRepositoryService_GetStateSnapshotRecoveryCredentials_Handler,
 		},
 		{
-			MethodName: "UpdateCheckpoint",
-			Handler:    _BackendRepositoryService_UpdateCheckpoint_Handler,
+			MethodName: "FailStateSnapshot",
+			Handler:    _BackendRepositoryService_FailStateSnapshot_Handler,
 		},
 		{
-			MethodName: "CreateDiskSnapshot",
-			Handler:    _BackendRepositoryService_CreateDiskSnapshot_Handler,
+			MethodName: "CommitStateSnapshot",
+			Handler:    _BackendRepositoryService_CommitStateSnapshot_Handler,
 		},
 		{
-			MethodName: "GetLatestDiskSnapshot",
-			Handler:    _BackendRepositoryService_GetLatestDiskSnapshot_Handler,
+			MethodName: "GetStateSnapshot",
+			Handler:    _BackendRepositoryService_GetStateSnapshot_Handler,
 		},
 		{
-			MethodName: "GetDiskSnapshot",
-			Handler:    _BackendRepositoryService_GetDiskSnapshot_Handler,
+			MethodName: "GetStateSnapshotByOperation",
+			Handler:    _BackendRepositoryService_GetStateSnapshotByOperation_Handler,
 		},
 		{
-			MethodName: "GetDiskSnapshotDownloadURL",
-			Handler:    _BackendRepositoryService_GetDiskSnapshotDownloadURL_Handler,
+			MethodName: "GetPendingStateSnapshotByContainer",
+			Handler:    _BackendRepositoryService_GetPendingStateSnapshotByContainer_Handler,
+		},
+		{
+			MethodName: "GetVolumeGeneration",
+			Handler:    _BackendRepositoryService_GetVolumeGeneration_Handler,
+		},
+		{
+			MethodName: "RenewStateVolumeAttachments",
+			Handler:    _BackendRepositoryService_RenewStateVolumeAttachments_Handler,
+		},
+		{
+			MethodName: "ReleaseStateVolumeAttachments",
+			Handler:    _BackendRepositoryService_ReleaseStateVolumeAttachments_Handler,
+		},
+		{
+			MethodName: "BeginStateVolumeReleaseIntent",
+			Handler:    _BackendRepositoryService_BeginStateVolumeReleaseIntent_Handler,
+		},
+		{
+			MethodName: "ClaimStateVolumeRelease",
+			Handler:    _BackendRepositoryService_ClaimStateVolumeRelease_Handler,
+		},
+		{
+			MethodName: "CompleteClaimedStateVolumeRelease",
+			Handler:    _BackendRepositoryService_CompleteClaimedStateVolumeRelease_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

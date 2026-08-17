@@ -357,6 +357,8 @@ func TestDockerRunArgsUsesConfigurableRouteTargetHost(t *testing.T) {
 		"/tmp/agent-state/cache:" + types.AgentCachePath,
 		"/tmp/agent-state/checkpoints:" + types.AgentCheckpointPath,
 		"/tmp/agent-state/durable-disks:" + types.DefaultDurableDisksPath,
+		"/tmp/agent-state/state-volumes:" + workerStateVolumesMountPath,
+		"/tmp/agent-state/state-volume-locks:" + types.DefaultStateVolumeLocksPath,
 	} {
 		if !containsArg(args, "-v", want) {
 			t.Fatalf("expected %s volume in docker args: %#v", want, args)
@@ -418,6 +420,8 @@ func TestManagedPoolPathsOverrideAgentInstallerDirectories(t *testing.T) {
 		"workspace":     {dirs.Workspace, "/mnt/raid/storage/workspace-data"},
 		"checkpoints":   {dirs.Checkpoints, "/mnt/raid/storage/checkpoints"},
 		"durable disks": {dirs.DurableDisk, "/mnt/raid/durable-disks"},
+		"state volumes": {dirs.StateVolumes, "/mnt/raid/storage/state-volumes"},
+		"state locks":   {dirs.StateVolumeLocks, "/var/lib/beam/agent/state-volume-locks"},
 		"cache":         {dirs.Cache, "/mnt/raid/cache"},
 		"cache mount":   {dirs.CacheMount, "/var/lib/beta9/cache"},
 	} {
@@ -442,6 +446,8 @@ func TestManagedPoolPathsOverrideAgentInstallerDirectories(t *testing.T) {
 		"/mnt/raid/storage/workspace-data:" + types.AgentWorkspacePath,
 		"/mnt/raid/storage/checkpoints:" + types.AgentCheckpointPath,
 		"/mnt/raid/durable-disks:" + types.DefaultDurableDisksPath,
+		"/mnt/raid/storage/state-volumes:" + workerStateVolumesMountPath,
+		"/var/lib/beam/agent/state-volume-locks:" + types.DefaultStateVolumeLocksPath,
 		"/mnt/raid/cache:" + types.AgentCachePath,
 	} {
 		if !containsArg(args, "-v", volume) {

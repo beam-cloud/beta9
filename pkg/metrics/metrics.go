@@ -108,11 +108,6 @@ func requestMetricLabels(request *types.ContainerRequest) map[string]string {
 	if request.Stub.Type != "" {
 		labels["stub_type"] = string(request.Stub.Type.Kind())
 	}
-	if request.Checkpoint != nil {
-		labels["checkpoint"] = "true"
-	} else {
-		labels["checkpoint"] = "false"
-	}
 	if request.DockerEnabled {
 		labels["docker_enabled"] = "true"
 	} else {

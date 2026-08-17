@@ -24,10 +24,20 @@ func (r *lifecycleContainerRepo) GetContainerState(string) (*types.ContainerStat
 
 type lifecycleWorkerRepo struct {
 	repository.WorkerRepository
-	worker *types.Worker
+	worker  *types.Worker
+	workers []*types.Worker
+	calls   int
 }
 
 func (r *lifecycleWorkerRepo) GetWorkerById(string) (*types.Worker, error) {
+	if len(r.workers) > 0 {
+		index := r.calls
+		if index >= len(r.workers) {
+			index = len(r.workers) - 1
+		}
+		r.calls++
+		return r.workers[index], nil
+	}
 	return r.worker, nil
 }
 
@@ -55,11 +65,12 @@ func TestPushContainerLifecycleEventsUsesAuthoritativeIdentity(t *testing.T) {
 		StubId:      "stub-1",
 		WorkspaceId: "workspace-1",
 		WorkerId:    "worker-1",
+		MachineId:   "machine-1",
 	}
 	events := &lifecycleEventRepo{}
 	service := &WorkerRepositoryService{
 		containerRepo: &lifecycleContainerRepo{state: state},
-		workerRepo:    &lifecycleWorkerRepo{worker: &types.Worker{Id: "worker-1", PoolName: "pool-1", MachineId: "machine-1"}},
+		workerRepo:    &lifecycleWorkerRepo{worker: &types.Worker{Id: "worker-1", InstanceId: "instance-1", PoolName: "pool-1", MachineId: "machine-1"}},
 		computeRepo: &lifecycleComputeRepo{slots: []*compute.AgentWorkerSlotState{{
 			WorkerID: "worker-1", WorkerTokenID: "token-1",
 		}}},
@@ -76,8 +87,10 @@ func TestPushContainerLifecycleEventsUsesAuthoritativeIdentity(t *testing.T) {
 	require.NoError(t, err)
 
 	response, err := service.PushContainerLifecycleEvents(workerLifecycleContext("workspace-1"), &pb.PushContainerLifecycleEventsRequest{
-		WorkerId: "worker-1",
-		Events:   [][]byte{data},
+		WorkerId:         "worker-1",
+		WorkerInstanceId: "instance-1",
+		StorageNodeId:    "machine-1",
+		Events:           [][]byte{data},
 	})
 	require.NoError(t, err)
 	require.True(t, response.Ok)
@@ -94,8 +107,9 @@ func TestPushContainerLifecycleEventsRejectsAnotherWorkspace(t *testing.T) {
 			ContainerId: "container-1",
 			WorkspaceId: "workspace-2",
 			WorkerId:    "worker-1",
+			MachineId:   "machine-1",
 		}},
-		workerRepo: &lifecycleWorkerRepo{worker: &types.Worker{Id: "worker-1"}},
+		workerRepo: &lifecycleWorkerRepo{worker: &types.Worker{Id: "worker-1", InstanceId: "instance-1", PoolName: "pool-1", MachineId: "machine-1"}},
 		computeRepo: &lifecycleComputeRepo{slots: []*compute.AgentWorkerSlotState{{
 			WorkerID: "worker-1", WorkerTokenID: "token-1",
 		}}},
@@ -105,8 +119,10 @@ func TestPushContainerLifecycleEventsRejectsAnotherWorkspace(t *testing.T) {
 	require.NoError(t, err)
 
 	response, err := service.PushContainerLifecycleEvents(workerLifecycleContext("workspace-1"), &pb.PushContainerLifecycleEventsRequest{
-		WorkerId: "worker-1",
-		Events:   [][]byte{data},
+		WorkerId:         "worker-1",
+		WorkerInstanceId: "instance-1",
+		StorageNodeId:    "machine-1",
+		Events:           [][]byte{data},
 	})
 	require.NoError(t, err)
 	require.False(t, response.Ok)
@@ -119,8 +135,9 @@ func TestPushContainerLifecycleEventsRejectsAnotherWorkerToken(t *testing.T) {
 			ContainerId: "container-1",
 			WorkspaceId: "workspace-1",
 			WorkerId:    "worker-1",
+			MachineId:   "machine-1",
 		}},
-		workerRepo: &lifecycleWorkerRepo{worker: &types.Worker{Id: "worker-1", PoolName: "pool-1", MachineId: "machine-1"}},
+		workerRepo: &lifecycleWorkerRepo{worker: &types.Worker{Id: "worker-1", InstanceId: "instance-1", PoolName: "pool-1", MachineId: "machine-1"}},
 		computeRepo: &lifecycleComputeRepo{slots: []*compute.AgentWorkerSlotState{{
 			WorkerID: "worker-1", WorkerTokenID: "token-2",
 		}}},
@@ -130,12 +147,42 @@ func TestPushContainerLifecycleEventsRejectsAnotherWorkerToken(t *testing.T) {
 	require.NoError(t, err)
 
 	response, err := service.PushContainerLifecycleEvents(workerLifecycleContext("workspace-1"), &pb.PushContainerLifecycleEventsRequest{
-		WorkerId: "worker-1",
-		Events:   [][]byte{data},
+		WorkerId:         "worker-1",
+		WorkerInstanceId: "instance-1",
+		StorageNodeId:    "machine-1",
+		Events:           [][]byte{data},
 	})
 	require.NoError(t, err)
 	require.False(t, response.Ok)
 	require.Equal(t, errWorkerLifecycleUnauthorized.Error(), response.ErrorMsg)
+}
+
+func TestPushContainerLifecycleEventsRejectsSupersededProcessBeforeWrite(t *testing.T) {
+	state := &types.ContainerState{
+		ContainerId: "container-1", WorkspaceId: "workspace-1", WorkerId: "worker-1", MachineId: "machine-1",
+	}
+	events := &lifecycleEventRepo{}
+	service := &WorkerRepositoryService{
+		containerRepo: &lifecycleContainerRepo{state: state},
+		workerRepo: &lifecycleWorkerRepo{workers: []*types.Worker{
+			{Id: "worker-1", InstanceId: "instance-1", PoolName: "pool-1", MachineId: "machine-1"},
+			{Id: "worker-1", InstanceId: "instance-2", PoolName: "pool-1", MachineId: "machine-1"},
+		}},
+		computeRepo: &lifecycleComputeRepo{slots: []*compute.AgentWorkerSlotState{{
+			WorkerID: "worker-1", WorkerTokenID: "token-1",
+		}}},
+		eventRepo: events,
+	}
+	data, err := json.Marshal(types.EventContainerLifecycleSchema{ID: types.ContainerLifecycleImageLoad, ContainerID: state.ContainerId})
+	require.NoError(t, err)
+
+	response, err := service.PushContainerLifecycleEvents(workerLifecycleContext("workspace-1"), &pb.PushContainerLifecycleEventsRequest{
+		WorkerId: "worker-1", WorkerInstanceId: "instance-1", StorageNodeId: "machine-1", Events: [][]byte{data},
+	})
+	require.NoError(t, err)
+	require.False(t, response.Ok)
+	require.Equal(t, errWorkerLifecycleUnauthorized.Error(), response.ErrorMsg)
+	require.Empty(t, events.events)
 }
 
 func workerLifecycleContext(workspaceID string) context.Context {

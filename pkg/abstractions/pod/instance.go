@@ -111,11 +111,6 @@ func (i *podInstance) startContainers(containersToRun int) error {
 		gpuCount = 1
 	}
 
-	checkpointEnabled := i.StubConfig.CheckpointEnabled
-	if gpuCount > 1 {
-		checkpointEnabled = false
-	}
-
 	ports := []uint32{}
 	if len(i.StubConfig.Ports) > 0 {
 		ports = i.StubConfig.Ports
@@ -152,8 +147,6 @@ func (i *podInstance) startContainers(containersToRun int) error {
 			EntryPoint:        i.EntryPoint,
 			Mounts:            mounts,
 			Stub:              *i.Stub,
-			CheckpointEnabled: checkpointEnabled,
-			CheckpointTrigger: i.StubConfig.CheckpointTrigger,
 			Ports:             ports,
 			PoolSelector:      i.StubConfig.PoolSelector(),
 			Hostname:          i.StubConfig.Hostname,

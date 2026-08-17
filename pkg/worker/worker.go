@@ -8,6 +8,7 @@ import (
 	_ "net/http/pprof" // Import for side effects
 	"os"
 	"os/signal"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/clients"
+	"github.com/google/uuid"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/rs/zerolog/log"
 
@@ -48,6 +50,7 @@ const (
 	shutdownDrainMax               time.Duration = 5 * time.Second
 	shutdownForceWait              time.Duration = 5 * time.Second
 	shutdownCleanupReserve         time.Duration = 5 * time.Second
+	stateVolumeShutdownMax         time.Duration = 2 * time.Minute
 	workerShutdownRPCTimeout       time.Duration = 5 * time.Second
 	containerStartupTimeout        time.Duration = 15 * time.Minute
 	stuckContainerAbortDelay       time.Duration = 2 * time.Minute
@@ -71,96 +74,114 @@ func ensureGVisorShmemTHP(path string) (bool, error) {
 }
 
 type Worker struct {
-	workerId                string
-	workerToken             string
-	workerGeneration        string
-	poolName                string
-	machineID               string
-	poolConfig              types.WorkerPoolConfig
-	cpuLimit                int64
-	memoryLimit             int64
-	gpuType                 string
-	gpuCount                uint32
-	podAddr                 string
-	podHostName             string
-	routeLocalTargetHost    string
-	imageMountPath          string
-	runtime                 runtime.Runtime
-	runcRuntime             runtime.Runtime
-	gvisorRuntime           runtime.Runtime
-	containerServer         *ContainerRuntimeServer
-	cacheManager            *WorkerCacheManager
-	fileCacheManager        *FileCacheManager
-	criuManager             CRIUManager
-	containerNetworkManager ContainerNetwork
-	containerGPUManager     GPUManager
-	containerMountManager   *ContainerMountManager
-	imageClient             *ImageClient
-	containerInstances      *common.SafeMap[*ContainerInstance]
-	containerCancels        *common.SafeMap[context.CancelFunc]
-	containerLock           sync.Mutex
-	checkpointCreateLocks   sync.Map
-	containerStartSem       chan struct{}
-	containerStartLimit     int
-	containerWg             sync.WaitGroup
-	containerLogger         *ContainerLogger
-	workerUsageMetrics      *WorkerUsageMetrics
-	completedRequests       chan *types.ContainerRequest
-	stopContainerChan       chan stopContainerEvent
-	workerRepoClient        pb.WorkerRepositoryServiceClient
-	containerRepoClient     pb.ContainerRepositoryServiceClient
-	backendRepoClient       pb.BackendRepositoryServiceClient
-	eventRepo               repo.EventRepository
-	storageManager          *WorkspaceStorageManager
-	userDataStorage         storage.Storage
-	persistent              bool
-	routeTransport          string
-	ctx                     context.Context
-	cancel                  func()
-	config                  types.AppConfig
+	workerId                      string
+	workerToken                   string
+	workerGeneration              string
+	workerInstanceId              string
+	workerPodUID                  string
+	poolName                      string
+	machineID                     string
+	poolConfig                    types.WorkerPoolConfig
+	cpuLimit                      int64
+	memoryLimit                   int64
+	gpuType                       string
+	gpuCount                      uint32
+	podAddr                       string
+	podHostName                   string
+	routeLocalTargetHost          string
+	imageMountPath                string
+	runtime                       runtime.Runtime
+	runcRuntime                   runtime.Runtime
+	gvisorRuntime                 runtime.Runtime
+	containerServer               *ContainerRuntimeServer
+	cacheManager                  *WorkerCacheManager
+	fileCacheManager              *FileCacheManager
+	criuManager                   CRIUManager
+	containerNetworkManager       ContainerNetwork
+	containerGPUManager           GPUManager
+	containerMountManager         *ContainerMountManager
+	imageClient                   *ImageClient
+	containerInstances            *common.SafeMap[*ContainerInstance]
+	containerCancels              *common.SafeMap[context.CancelFunc]
+	containerLock                 sync.Mutex
+	stateSnapshotOperationLocks   sync.Map
+	checkpointProcRoot            string
+	containerStartSem             chan struct{}
+	containerStartLimit           int
+	containerWg                   sync.WaitGroup
+	containerLogger               *ContainerLogger
+	workerUsageMetrics            *WorkerUsageMetrics
+	completedRequests             chan *types.ContainerRequest
+	stopContainerChan             chan stopContainerEvent
+	workerRepoClient              pb.WorkerRepositoryServiceClient
+	containerRepoClient           pb.ContainerRepositoryServiceClient
+	backendRepoClient             pb.BackendRepositoryServiceClient
+	eventRepo                     repo.EventRepository
+	storageManager                *WorkspaceStorageManager
+	stateVolumeManager            *StateVolumeManager
+	stateVolumeLeaseRenewInterval time.Duration
+	stateVolumeShutdownTimeout    time.Duration
+	finalStateSnapshot            snapshotContainerStateFunc
+	stateVolumeCASFactory         func(context.Context, *types.ContainerRequest) (BlockV1CAS, string, error)
+	userDataStorage               storage.Storage
+	persistent                    bool
+	routeTransport                string
+	ctx                           context.Context
+	cancel                        func()
+	config                        types.AppConfig
 }
 
 type ContainerInstance struct {
-	Id                         string
-	StubId                     string
-	BundlePath                 string
-	Overlay                    *common.ContainerOverlay
-	Spec                       *specs.Spec
-	Err                        error
-	ExitCode                   int
-	Port                       int
-	OutputWriter               *common.OutputWriter
-	LogBuffer                  *common.LogBuffer
-	Request                    *types.ContainerRequest
-	StopReason                 types.StopContainerReason
-	RuntimeStarted             bool
-	RuntimePid                 int
-	RuntimeStartedAt           int64
-	SandboxProcessManager      *goproc.GoProcClient
-	SandboxProcessManagerReady bool
-	processManagerReadyMu      sync.RWMutex
-	DeferredCPUQuota           *specs.LinuxCPU
-	CPUSet                     string
-	RestoreCPUAffinityDeferred bool
-	ProcessManagerReadyOnce    sync.Once
-	ProcessManagerReadyChan    chan struct{}
-	ContainerIp                string
-	containerAddressMu         sync.RWMutex
-	ContainerAddressMap        map[int32]string
-	Runtime                    runtime.Runtime
-	StopEscalationStarted      atomic.Bool
-	StuckMountRecoveryStarted  atomic.Bool
-	statusHeartbeatMu          sync.Mutex
-	stateMu                    sync.RWMutex
-	oomWatcherMu               sync.Mutex
-	oomWatcher                 runtime.OOMWatcher
-	oomWatcherFactory          func(func()) runtime.OOMWatcher
-	oomWatcherOnOOM            func() error
-	oomTerminationAttempted    bool
-	oomTerminationErr          error
-	oomWatcherGeneration       uint64
-	oomWatcherSuspended        bool
-	oomWatcherClosed           bool
+	Id                          string
+	StubId                      string
+	BundlePath                  string
+	Overlay                     *common.ContainerOverlay
+	StateVolumes                *StateVolumeGroupHandle
+	StateVolumeAttachments      *stateVolumeAttachmentState
+	StateRestoreFallbackReason  string
+	StateRestoreOperationID     string
+	StateRestoreSnapshotID      string
+	StateMemoryCheckpoint       *StateMemoryCheckpoint
+	StateFinalCommitOperationID string
+	StateFinalCommitError       error
+	stateVolumeCleanupMu        sync.Mutex
+	terminalStateSnapshot       *terminalStateSnapshotHold
+	Spec                        *specs.Spec
+	Err                         error
+	ExitCode                    int
+	Port                        int
+	OutputWriter                *common.OutputWriter
+	LogBuffer                   *common.LogBuffer
+	Request                     *types.ContainerRequest
+	StopReason                  types.StopContainerReason
+	RuntimeStarted              bool
+	RuntimePid                  int
+	RuntimeStartedAt            int64
+	SandboxProcessManager       *goproc.GoProcClient
+	SandboxProcessManagerReady  bool
+	processManagerReadyMu       sync.RWMutex
+	DeferredCPUQuota            *specs.LinuxCPU
+	CPUSet                      string
+	RestoreCPUAffinityDeferred  bool
+	ProcessManagerReadyOnce     sync.Once
+	ProcessManagerReadyChan     chan struct{}
+	ContainerIp                 string
+	containerAddressMu          sync.RWMutex
+	ContainerAddressMap         map[int32]string
+	Runtime                     runtime.Runtime
+	StopEscalationStarted       atomic.Bool
+	StuckMountRecoveryStarted   atomic.Bool
+	statusHeartbeatMu           sync.Mutex
+	stateMu                     sync.RWMutex
+	oomWatcherMu                sync.Mutex
+	oomWatcher                  runtime.OOMWatcher
+	oomWatcherFactory           func(func()) runtime.OOMWatcher
+	oomWatcherOnOOM             func() error
+	oomTerminationAttempted     bool
+	oomTerminationErr           error
+	oomWatcherGeneration        uint64
+	oomWatcherSuspended         bool
+	oomWatcherClosed            bool
 }
 
 func (i *ContainerInstance) lifecycleState() (int, types.StopContainerReason) {
@@ -318,18 +339,27 @@ func (i *ContainerInstance) containerAddress(port int32) string {
 }
 
 type ContainerOptions struct {
-	BundlePath                  string
-	HostBindPort                int
-	BindPorts                   []int
-	StartupPortBindings         []PortBinding
-	InitialSpec                 *specs.Spec
-	StartupStartedAt            time.Time
-	CheckpointFilesystemRestore *checkpointFilesystemRestore
+	BundlePath          string
+	HostBindPort        int
+	BindPorts           []int
+	StartupPortBindings []PortBinding
+	InitialSpec         *specs.Spec
+	StartupStartedAt    time.Time
 }
 
 type stopContainerEvent struct {
 	ContainerId string
 	Kill        bool
+}
+
+func stateVolumeWorkerProcessEpoch(explicit string) string {
+	if epoch := strings.TrimSpace(explicit); epoch != "" {
+		return epoch
+	}
+	// POD_UID is a workload-owner identity, not a process epoch: a same-Pod
+	// container restart reuses it. A fresh UUID makes that replacement fail the
+	// old Redis epoch CAS until control authoritatively retires the prior owner.
+	return uuid.NewString()
 }
 
 func NewWorker() (_ *Worker, err error) {
@@ -346,6 +376,8 @@ func NewWorker() (_ *Worker, err error) {
 	workerId := os.Getenv(types.WorkerIDEnv)
 	workerToken := os.Getenv(types.WorkerTokenEnv)
 	workerGeneration := os.Getenv(types.WorkerGenerationEnv)
+	workerPodUID := strings.TrimSpace(os.Getenv(types.WorkerPodUIDEnv))
+	workerInstanceId := stateVolumeWorkerProcessEpoch(os.Getenv(types.WorkerInstanceIDEnv))
 	workerPoolName := os.Getenv(types.WorkerPoolEnv)
 	machineID := os.Getenv(types.WorkerMachineEnv)
 	podHostName := os.Getenv(types.WorkerHostnameEnv)
@@ -397,7 +429,7 @@ func NewWorker() (_ *Worker, err error) {
 		return nil, err
 	}
 
-	eventRepo := repo.NewWorkerEventClientRepo(config, workerRepoClient, workerId)
+	eventRepo := repo.NewWorkerEventClientRepo(config, workerRepoClient, workerId, workerInstanceId, machineID)
 
 	poolConfig, poolFound := config.Worker.Pools[workerPoolName]
 	if !poolFound {
@@ -501,7 +533,7 @@ func NewWorker() (_ *Worker, err error) {
 	}
 
 	fileCacheManager := NewFileCacheManager(config, cacheClient)
-	imageClient, err := NewImageClient(config, workerId, workerPoolName, workerRepoClient, fileCacheManager)
+	imageClient, err := NewImageClient(config, workerId, workerInstanceId, machineID, workerPoolName, workerRepoClient, fileCacheManager)
 	if err != nil {
 		return nil, err
 	}
@@ -522,7 +554,7 @@ func NewWorker() (_ *Worker, err error) {
 		}
 	}
 
-	baseContainerNetworkManager, err := NewContainerNetworkManager(ctx, workerId, workerPoolName, workerRepoClient, containerRepoClient, eventRepo, config, containerInstances, poolConfig, containerStartLimit)
+	baseContainerNetworkManager, err := NewContainerNetworkManager(ctx, workerId, workerInstanceId, machineID, workerPoolName, workerRepoClient, containerRepoClient, eventRepo, config, containerInstances, poolConfig, containerStartLimit)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -530,25 +562,31 @@ func NewWorker() (_ *Worker, err error) {
 	containerNetworkManager := newContainerNetwork(baseContainerNetworkManager, podAddr, persistent, machineID, routeTransport, routeLocalTargetHost)
 
 	worker := &Worker{
-		ctx:                     ctx,
-		workerId:                workerId,
-		workerToken:             workerToken,
-		workerGeneration:        workerGeneration,
-		poolName:                workerPoolName,
-		machineID:               machineID,
-		poolConfig:              poolConfig,
-		cancel:                  cancel,
-		config:                  config,
-		imageMountPath:          getImageMountPath(workerId),
-		cpuLimit:                cpuLimit,
-		memoryLimit:             memoryLimit,
-		gpuType:                 gpuType,
-		gpuCount:                uint32(gpuCount),
-		runtime:                 defaultRuntime,
-		runcRuntime:             runcRuntime,
-		gvisorRuntime:           gvisorRuntime,
-		cacheManager:            cacheManager,
-		storageManager:          storageManager,
+		ctx:              ctx,
+		workerId:         workerId,
+		workerToken:      workerToken,
+		workerGeneration: workerGeneration,
+		workerInstanceId: workerInstanceId,
+		workerPodUID:     workerPodUID,
+		poolName:         workerPoolName,
+		machineID:        machineID,
+		poolConfig:       poolConfig,
+		cancel:           cancel,
+		config:           config,
+		imageMountPath:   getImageMountPath(workerId),
+		cpuLimit:         cpuLimit,
+		memoryLimit:      memoryLimit,
+		gpuType:          gpuType,
+		gpuCount:         uint32(gpuCount),
+		runtime:          defaultRuntime,
+		runcRuntime:      runcRuntime,
+		gvisorRuntime:    gvisorRuntime,
+		cacheManager:     cacheManager,
+		storageManager:   storageManager,
+		stateVolumeManager: &StateVolumeManager{
+			StateRoot: stateVolumeHostRoot, StrictLayout: true,
+			WorkerID: workerId, WorkerInstanceID: workerInstanceId, WorkerPodUID: workerPodUID, StorageNodeID: machineID,
+		},
 		fileCacheManager:        fileCacheManager,
 		containerGPUManager:     NewContainerNvidiaManager(uint32(gpuCount), defaultRuntime.Name()),
 		containerNetworkManager: containerNetworkManager,
@@ -580,6 +618,7 @@ func NewWorker() (_ *Worker, err error) {
 		persistent:          persistent,
 		routeTransport:      routeTransport,
 	}
+	worker.stateVolumeManager.OnUnexpectedExit = worker.handleStateVolumeQSDExit
 
 	containerServer, err := NewContainerRuntimeServer(&ContainerRuntimeServerOpts{
 		PodAddr:                 podAddr,
@@ -591,10 +630,8 @@ func NewWorker() (_ *Worker, err error) {
 		EventRepo:               eventRepo,
 		WorkerID:                workerId,
 		BackendRoute:            worker.backendRouteFor,
-		CreateCheckpoint:        worker.createCheckpoint,
-		SnapshotDisks: func(ctx context.Context, request *types.ContainerRequest) ([]*types.DiskSnapshot, error) {
-			return worker.syncDurableDiskMounts(ctx, request, durableDiskSyncExplicit)
-		},
+		SnapshotContainerState:  worker.snapshotContainerState,
+		RestoreContainerState:   worker.restoreContainerState,
 	})
 	if err != nil {
 		cancel()
@@ -643,7 +680,7 @@ func (s *Worker) Run() error {
 containerRequestStream:
 	for {
 		stream, err := s.workerRepoClient.GetNextContainerRequest(s.ctx, &pb.GetNextContainerRequestRequest{
-			WorkerId: s.workerId,
+			WorkerId: s.workerId, WorkerInstanceId: s.workerInstanceId, StorageNodeId: s.machineID,
 		})
 		if err != nil {
 			if s.ctx.Err() != nil {
@@ -675,17 +712,14 @@ containerRequestStream:
 
 			if response.ContainerRequest != nil {
 				lastContainerRequest = time.Now()
-				request := types.NewContainerRequestFromProto(response.ContainerRequest)
-				if request.MachineId == "" {
-					request.MachineId = s.machineID
-				}
+				request := deliveredContainerRequestFromProto(response, s.machineID)
 				log.Info().Str("worker_id", s.workerId).Str("container_id", request.ContainerId).Msg("worker received container request")
 				if !request.Timestamp.IsZero() {
 					s.recordContainerLifecycle(s.ctx, request, containerLifecycleFromDuration(types.ContainerLifecycleWorkerQueueReceive, request, request.Timestamp, time.Since(request.Timestamp), true, map[string]string{
 						"worker_id": s.workerId,
 					}))
 				}
-				if err := s.acknowledgeContainerRequest(request.ContainerId, response.DeliveryToken); err != nil {
+				if err := s.acknowledgeContainerRequest(request.ContainerId, request.DeliveryToken, request.StateVolumePlanId, request.StateVolumePlanHash); err != nil {
 					log.Warn().Err(err).Str("worker_id", s.workerId).Str("container_id", request.ContainerId).Msg("failed to acknowledge container request")
 					s.completedRequests <- request
 					break
@@ -706,13 +740,31 @@ containerRequestStream:
 	return s.shutdown()
 }
 
-func (s *Worker) acknowledgeContainerRequest(containerID, deliveryToken string) error {
+func deliveredContainerRequestFromProto(response *pb.GetNextContainerRequestResponse, machineID string) *types.ContainerRequest {
+	if response == nil || response.ContainerRequest == nil {
+		return nil
+	}
+	request := types.NewContainerRequestFromProto(response.ContainerRequest)
+	request.DeliveryToken = response.DeliveryToken
+	request.StateVolumePlanId = response.StateVolumePlanId
+	request.StateVolumePlanHash = response.StateVolumePlanHash
+	if request.MachineId == "" {
+		request.MachineId = machineID
+	}
+	return request
+}
+
+func (s *Worker) acknowledgeContainerRequest(containerID, deliveryToken, stateVolumePlanID, stateVolumePlanHash string) error {
 	request := &pb.AddContainerToWorkerRequest{
-		WorkerId:      s.workerId,
-		ContainerId:   containerID,
-		PoolName:      s.poolName,
-		PodHostname:   s.podHostName,
-		DeliveryToken: deliveryToken,
+		WorkerId:            s.workerId,
+		WorkerInstanceId:    s.workerInstanceId,
+		StorageNodeId:       s.machineID,
+		ContainerId:         containerID,
+		PoolName:            s.poolName,
+		PodHostname:         s.podHostName,
+		DeliveryToken:       deliveryToken,
+		StateVolumePlanId:   stateVolumePlanID,
+		StateVolumePlanHash: stateVolumePlanHash,
 	}
 
 	for {
@@ -951,14 +1003,26 @@ func (s *Worker) listenForShutdown() {
 }
 
 func (s *Worker) disableSchedulingForShutdown() {
+	if err := s.disableSchedulingForShutdownWithError(); err != nil {
+		log.Warn().Err(err).Msg("failed to disable worker scheduling during shutdown")
+	}
+}
+
+func (s *Worker) disableSchedulingForShutdownWithError() error {
+	if s == nil || s.workerRepoClient == nil {
+		return nil
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), workerShutdownRPCTimeout)
 	defer cancel()
 
 	if _, err := handleGRPCResponse(s.workerRepoClient.DisableWorker(ctx, &pb.DisableWorkerRequest{
-		WorkerId: s.workerId,
+		WorkerId:         s.workerId,
+		WorkerInstanceId: s.workerInstanceId,
+		StorageNodeId:    s.machineID,
 	})); err != nil {
-		log.Warn().Err(err).Msg("failed to disable worker scheduling during shutdown")
+		return err
 	}
+	return nil
 }
 
 // Exit if there are no containers running and no containers have recently been spun up on this
@@ -1253,6 +1317,8 @@ func (s *Worker) processCompletedRequest(request *types.ContainerRequest) error 
 	for {
 		_, err := handleGRPCResponse(s.workerRepoClient.UpdateWorkerCapacity(ctx, &pb.UpdateWorkerCapacityRequest{
 			WorkerId:         s.workerId,
+			WorkerInstanceId: s.workerInstanceId,
+			StorageNodeId:    s.machineID,
 			CapacityChange:   int64(types.AddCapacity),
 			ContainerRequest: request.ToProto(),
 		}))
@@ -1305,8 +1371,9 @@ func (s *Worker) keepalive() {
 
 func (s *Worker) setWorkerKeepAlive() error {
 	_, err := handleGRPCResponse(s.workerRepoClient.SetWorkerKeepAlive(s.ctx, &pb.SetWorkerKeepAliveRequest{
-		WorkerId:  s.workerId,
-		MachineId: s.machineID,
+		WorkerId:         s.workerId,
+		MachineId:        s.machineID,
+		WorkerInstanceId: s.workerInstanceId,
 	}))
 	return err
 }
@@ -1347,9 +1414,34 @@ func (s *Worker) startup() error {
 	if err := s.setWorkerKeepAlive(); err != nil {
 		return err
 	}
-	_, err := handleGRPCResponse(s.workerRepoClient.ToggleWorkerAvailable(s.ctx, &pb.ToggleWorkerAvailableRequest{
-		WorkerId:   s.workerId,
-		Generation: s.workerGeneration,
+	totalNBD, freeNBD, err := s.preflightStateVolumes(s.ctx)
+	if err != nil {
+		return fmt.Errorf("state volume startup preflight: %w", err)
+	}
+	if err := s.stateVolumeManager.Reconcile(s.ctx); err != nil {
+		return fmt.Errorf("state volume startup reconciliation: %w", err)
+	}
+	if err := s.reconcileStateVolumeReleaseJournals(s.ctx); err != nil {
+		return fmt.Errorf("state volume release reconciliation: %w", err)
+	}
+	if err := s.reconcileTerminalStateSnapshotJournals(s.ctx); err != nil {
+		return fmt.Errorf("state snapshot operation reconciliation: %w", err)
+	}
+	// Reconciliation may adopt journal-owned devices, so advertise the
+	// post-recovery free count rather than the preflight probe's free count.
+	_, reconciledFree, err := s.stateVolumeManager.NBD.Capacity()
+	if err != nil {
+		return fmt.Errorf("state volume capacity after reconciliation: %w", err)
+	}
+	freeNBD = uint32(reconciledFree)
+	if err := s.advertiseStateVolumeCapacity(s.ctx, totalNBD, freeNBD); err != nil {
+		return fmt.Errorf("advertise state volume capacity: %w", err)
+	}
+	_, err = handleGRPCResponse(s.workerRepoClient.ToggleWorkerAvailable(s.ctx, &pb.ToggleWorkerAvailableRequest{
+		WorkerId:         s.workerId,
+		Generation:       s.workerGeneration,
+		WorkerInstanceId: s.workerInstanceId,
+		StorageNodeId:    s.machineID,
 	}))
 	if err != nil {
 		return err
@@ -1375,14 +1467,26 @@ func (s *Worker) shutdown() error {
 	defer s.eventRepo.PushWorkerStoppedEvent(s.workerId)
 
 	var errs error
+	// Stop admission before waiting for or signalling any existing workload.
+	// Otherwise the scheduler can race a fresh state-volume assignment into the
+	// shutdown drain after we have counted its obligations.
+	if err := s.disableSchedulingForShutdownWithError(); err != nil {
+		errs = errors.Join(errs, fmt.Errorf("disable worker scheduling: %w", err))
+	}
+
+	s.waitForActiveContainersBeforeShutdown()
+	if err := s.stopActiveContainersForShutdown(); err != nil {
+		// Cache, workspace storage, repository clients, and runtimes are part of
+		// the recovery path. Never close them while a writer is mounted or before
+		// a replayable detached/release obligation has reached disk.
+		return s.finishShutdown(errors.Join(errs, err))
+	}
+
 	if s.cacheManager != nil {
 		if err := s.cacheManager.Drain(); err != nil {
 			errs = errors.Join(errs, fmt.Errorf("failed to drain cache: %v", err))
 		}
 	}
-
-	s.waitForActiveContainersBeforeShutdown()
-	s.stopActiveContainersForShutdown()
 
 	if s.containerNetworkManager != nil {
 		if err := s.containerNetworkManager.Close(); err != nil {
@@ -1390,13 +1494,13 @@ func (s *Worker) shutdown() error {
 		}
 	}
 
-	if s.persistent {
-		s.disableSchedulingForShutdown()
-	} else {
+	if !s.persistent {
 		ctx, cancel := context.WithTimeout(context.Background(), workerShutdownRPCTimeout)
 		defer cancel()
 		if _, err := handleGRPCResponse(s.workerRepoClient.RemoveWorker(ctx, &pb.RemoveWorkerRequest{
-			WorkerId: s.workerId,
+			WorkerId:         s.workerId,
+			WorkerInstanceId: s.workerInstanceId,
+			StorageNodeId:    s.machineID,
 		})); err != nil {
 			errs = errors.Join(errs, err)
 		}
@@ -1442,10 +1546,6 @@ func (s *Worker) shutdown() error {
 }
 
 func (s *Worker) finishShutdown(errs error) error {
-	if errs != nil && s.shutdownCanceled() {
-		log.Warn().Err(errs).Msg("worker shutdown cleanup completed with errors")
-		return nil
-	}
 	return errs
 }
 
@@ -1473,13 +1573,16 @@ func (s *Worker) waitForActiveContainersBeforeShutdown() {
 		Msg("active containers still present after worker shutdown drain")
 }
 
-func (s *Worker) stopActiveContainersForShutdown() {
-	if s.containerInstances == nil || s.containerInstances.Len() == 0 {
-		return
+func (s *Worker) stopActiveContainersForShutdown() error {
+	var errs error
+	if s.containerInstances == nil {
+		return s.waitForStateVolumeShutdownBoundary(s.stateVolumeShutdownDeadline())
 	}
 
 	ids := s.activeContainerIDs()
-	log.Info().Int("containers", len(ids)).Msg("stopping active containers before worker shutdown")
+	if len(ids) != 0 {
+		log.Info().Int("containers", len(ids)).Msg("stopping active containers before worker shutdown")
+	}
 
 	for _, id := range ids {
 		if instance, exists := s.containerInstances.Get(id); exists {
@@ -1488,26 +1591,91 @@ func (s *Worker) stopActiveContainersForShutdown() {
 		}
 		if err := s.stopContainer(id, false); err != nil {
 			log.Warn().Str("container_id", id).Err(err).Msg("failed to stop container during worker shutdown")
+			errs = errors.Join(errs, fmt.Errorf("stop container %s: %w", id, err))
 		}
 	}
 
 	grace := workerContainerStopGrace(s.config.Worker.TerminationGracePeriod)
-	if s.waitForActiveContainers(grace) {
-		return
-	}
-
-	remaining := s.activeContainerIDs()
-	log.Warn().
-		Int("containers", len(remaining)).
-		Dur("grace", grace).
-		Msg("force stopping active containers during worker shutdown")
-	for _, id := range remaining {
-		if err := s.stopContainer(id, true); err != nil {
-			log.Warn().Str("container_id", id).Err(err).Msg("failed to force stop container during worker shutdown")
+	if !s.waitForActiveContainers(grace) {
+		remaining := s.activeContainerIDs()
+		log.Warn().
+			Int("containers", len(remaining)).
+			Dur("grace", grace).
+			Msg("force stopping active containers during worker shutdown")
+		for _, id := range remaining {
+			if err := s.stopContainer(id, true); err != nil {
+				log.Warn().Str("container_id", id).Err(err).Msg("failed to force stop container during worker shutdown")
+				errs = errors.Join(errs, fmt.Errorf("force stop container %s: %w", id, err))
+			}
 		}
 	}
 
-	s.waitForActiveContainers(shutdownForceWait)
+	if err := s.waitForStateVolumeShutdownBoundary(s.stateVolumeShutdownDeadline()); err != nil {
+		errs = errors.Join(errs, err)
+	}
+	return errs
+}
+
+func (s *Worker) stateVolumeShutdownDeadline() time.Duration {
+	if s != nil && s.stateVolumeShutdownTimeout > 0 {
+		return s.stateVolumeShutdownTimeout
+	}
+	return stateVolumeShutdownMax
+}
+
+func (s *Worker) stateVolumeShutdownBoundaryError() error {
+	safeStateContainers := make(map[string]struct{})
+	var errs error
+	if s != nil && s.stateVolumeManager != nil {
+		var err error
+		safeStateContainers, err = s.stateVolumeManager.ShutdownSafeContainers()
+		if err != nil {
+			errs = errors.Join(errs, err)
+		}
+	}
+	if s == nil || s.containerInstances == nil {
+		return errs
+	}
+	unsafeInstances := make([]string, 0)
+	s.containerInstances.Range(func(containerID string, _ *ContainerInstance) bool {
+		if _, safe := safeStateContainers[containerID]; !safe {
+			unsafeInstances = append(unsafeInstances, containerID)
+		}
+		return true
+	})
+	if len(unsafeInstances) != 0 {
+		sort.Strings(unsafeInstances)
+		errs = errors.Join(errs, fmt.Errorf("container shutdown is incomplete: %s", strings.Join(unsafeInstances, ", ")))
+	}
+	return errs
+}
+
+func (s *Worker) waitForStateVolumeShutdownBoundary(timeout time.Duration) error {
+	if timeout <= 0 {
+		timeout = stateVolumeShutdownMax
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		err := s.stateVolumeShutdownBoundaryError()
+		if err == nil {
+			return nil
+		}
+		if !time.Now().Before(deadline) {
+			// Returning would let cmd/worker log.Fatal terminate the process while
+			// its filesystem is still mounted or its only recovery obligation is
+			// volatile. Stay alive, unavailable, and retry until the boundary is
+			// durable; the timeout is a diagnostic cadence, not an unsafe escape.
+			log.Error().Err(err).Dur("retry_interval", timeout).Msg("worker remains fenced waiting for durable state-volume shutdown boundary")
+			s.disableSchedulingForShutdown()
+			deadline = time.Now().Add(timeout)
+		}
+		remaining := time.Until(deadline)
+		wait := shutdownDrainPollInterval
+		if wait > remaining {
+			wait = remaining
+		}
+		time.Sleep(wait)
+	}
 }
 
 func (s *Worker) activeContainerIDs() []string {

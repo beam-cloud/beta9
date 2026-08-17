@@ -15,6 +15,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -147,10 +148,12 @@ func TestSandboxExecRequiresAuth(t *testing.T) {
 
 type sandboxBackendRepository struct {
 	repository.BackendRepository
-	secrets   []types.Secret
-	secretErr error
-	stub      *types.StubWithRelated
-	stubErr   error
+	secrets           []types.Secret
+	secretErr         error
+	stub              *types.StubWithRelated
+	stubErr           error
+	operationSnapshot *types.StateSnapshot
+	operationErr      error
 }
 
 func (r *sandboxBackendRepository) GetSecretsByNameDecrypted(
@@ -165,8 +168,15 @@ func (r *sandboxBackendRepository) GetStubByExternalId(context.Context, string, 
 	return r.stub, r.stubErr
 }
 
-func (r *sandboxBackendRepository) GetCheckpointById(context.Context, string) (*types.Checkpoint, error) {
-	return &types.Checkpoint{StubId: 1}, nil
+func (r *sandboxBackendRepository) GetStateSnapshot(context.Context, uint, string) (*types.StateSnapshot, error) {
+	return &types.StateSnapshot{StubId: 1}, nil
+}
+
+func (r *sandboxBackendRepository) GetStateSnapshotByOperationForWorkspace(context.Context, uint, string, string) (*types.StateSnapshot, error) {
+	if r.operationSnapshot != nil || r.operationErr != nil {
+		return r.operationSnapshot, r.operationErr
+	}
+	return nil, &types.ErrStateSnapshotNotFound{StateSnapshotId: "operation"}
 }
 
 func (r *sandboxBackendRepository) GetStubById(context.Context, uint, ...types.QueryFilter) (*types.StubWithRelated, error) {
@@ -296,13 +306,33 @@ func TestSandboxContainerStatusAfterStateExpiry(t *testing.T) {
 }
 
 func TestCreatePodRejectsMissingForkStub(t *testing.T) {
-	checkpointID := "checkpoint-1"
+	stateSnapshotID := "state-1"
 	service := &GenericPodService{backendRepo: &sandboxBackendRepository{}}
 	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{Workspace: &types.Workspace{Id: 7}})
 
-	resp, err := service.CreatePod(ctx, &pb.CreatePodRequest{CheckpointId: &checkpointID, StubId: "fork-stub"})
+	resp, err := service.CreatePod(ctx, &pb.CreatePodRequest{StateSnapshotId: &stateSnapshotID, StubId: "fork-stub"})
 	if err != nil || resp.Ok {
 		t.Fatalf("CreatePod() = (%#v, %v)", resp, err)
+	}
+}
+
+func TestStateLaunchStubRestoresAfterSourceStubDeletion(t *testing.T) {
+	launch := &types.StubWithRelated{Stub: types.Stub{
+		ExternalId: "launch-stub", WorkspaceId: 7,
+		Config: `{"runtime":{"image_id":"image-1"}}`,
+	}}
+	service := &GenericPodService{backendRepo: &sandboxBackendRepository{stub: launch}}
+	authInfo := &auth.AuthInfo{Workspace: &types.Workspace{Id: 7}}
+	snapshot := &types.StateSnapshot{
+		StubId: 0, ImageId: "image-1", ImageDigest: "sha256:image-1", RuntimeProfile: "runc",
+	}
+
+	resolved, err := service.stateLaunchStub(context.Background(), authInfo, snapshot, "launch-stub")
+	if err != nil || resolved != launch {
+		t.Fatalf("stateLaunchStub() = (%#v, %v), want supplied launch stub", resolved, err)
+	}
+	if _, err := service.stateLaunchStub(context.Background(), authInfo, snapshot, ""); err == nil {
+		t.Fatal("stateLaunchStub() accepted a deleted source without an explicit launch stub")
 	}
 }
 
@@ -541,7 +571,7 @@ type sandboxReconnectStatusServer struct {
 	mu                   sync.Mutex
 	unavailableResponses int
 	statusCalls          atomic.Int32
-	checkpointRequests   chan *pb.ContainerCheckpointRequest
+	snapshotRequests     chan *pb.SnapshotContainerStateRequest
 }
 
 func (s *sandboxReconnectStatusServer) failNextStatusCalls(count int) {
@@ -567,16 +597,18 @@ func (s *sandboxReconnectStatusServer) ContainerSandboxStatus(
 	}, nil
 }
 
-func (s *sandboxReconnectStatusServer) ContainerCheckpoint(
+func (s *sandboxReconnectStatusServer) SnapshotContainerState(
 	_ context.Context,
-	in *pb.ContainerCheckpointRequest,
-) (*pb.ContainerCheckpointResponse, error) {
+	in *pb.SnapshotContainerStateRequest,
+) (*pb.SnapshotContainerStateResponse, error) {
 	request := *in
-	s.checkpointRequests <- &request
-	return &pb.ContainerCheckpointResponse{
-		Ok:           true,
-		CheckpointId: "checkpoint-1",
-		Runtime:      types.ContainerRuntimeRunc.String(),
+	s.snapshotRequests <- &request
+	return &pb.SnapshotContainerStateResponse{
+		Ok:              true,
+		StateSnapshotId: "state-1",
+		CheckpointId:    "memory-1",
+		RuntimeProfile:  types.ContainerRuntimeRunc.String(),
+		RestoreMode:     "memory",
 	}, nil
 }
 
@@ -599,7 +631,7 @@ func newSandboxReconnectTestHarness(t *testing.T) *sandboxReconnectTestHarness {
 		t.Fatalf("listen: %v", err)
 	}
 	listener := newTrackedSandboxListener(rawListener)
-	statusServer := &sandboxReconnectStatusServer{checkpointRequests: make(chan *pb.ContainerCheckpointRequest, 2)}
+	statusServer := &sandboxReconnectStatusServer{snapshotRequests: make(chan *pb.SnapshotContainerStateRequest, 2)}
 	workerServer := grpc.NewServer()
 	pb.RegisterContainerServiceServer(workerServer, statusServer)
 	go func() {
@@ -623,7 +655,7 @@ func newSandboxReconnectTestHarness(t *testing.T) *sandboxReconnectTestHarness {
 		},
 		address: workerAddress,
 	}
-	service := &GenericPodService{containerRepo: repo}
+	service := &GenericPodService{containerRepo: repo, backendRepo: &sandboxBackendRepository{}}
 	t.Cleanup(func() {
 		service.clientCache.Range(func(_, value any) bool {
 			if client, ok := value.(*common.ContainerClient); ok {
@@ -648,24 +680,52 @@ func newSandboxReconnectTestHarness(t *testing.T) *sandboxReconnectTestHarness {
 	}
 }
 
-func TestSandboxSnapshotMemoryForwardsTerminalIntent(t *testing.T) {
+func TestSandboxSnapshotStateForwardsExactIntent(t *testing.T) {
 	harness := newSandboxReconnectTestHarness(t)
-	for _, terminate := range []bool{false, true} {
-		response, err := harness.service.SandboxSnapshotMemory(harness.context, &pb.PodSandboxSnapshotMemoryRequest{
-			ContainerId:              harness.containerID,
-			TerminateAfterCheckpoint: terminate,
+	for _, test := range []struct {
+		mode          string
+		includeMemory bool
+	}{{"live", false}, {"terminal", true}} {
+		response, err := harness.service.SandboxSnapshotState(harness.context, &pb.PodSandboxSnapshotStateRequest{
+			ContainerId:   harness.containerID,
+			OperationId:   "operation-" + test.mode,
+			Mode:          test.mode,
+			IncludeMemory: test.includeMemory,
 		})
 		if err != nil {
-			t.Fatalf("SandboxSnapshotMemory: %v", err)
+			t.Fatalf("SandboxSnapshotState: %v", err)
 		}
-		if !response.Ok || response.CheckpointId != "checkpoint-1" {
-			t.Fatalf("SandboxSnapshotMemory response = %+v", response)
+		if !response.Ok || response.StateSnapshotId != "state-1" {
+			t.Fatalf("SandboxSnapshotState response = %+v", response)
 		}
-		request := <-harness.server.checkpointRequests
-		if request.ContainerId != harness.containerID || request.TerminateAfterCheckpoint != terminate {
-			t.Fatalf("worker checkpoint request = %+v, want terminate=%t", request, terminate)
+		request := <-harness.server.snapshotRequests
+		if request.ContainerId != harness.containerID || request.Mode != test.mode || request.IncludeMemory != test.includeMemory {
+			t.Fatalf("worker state snapshot request = %+v", request)
 		}
 	}
+}
+
+func TestSandboxSnapshotStateReplaysTerminalRepositoryResultWithoutWorker(t *testing.T) {
+	generation := types.StateGeneration{
+		VolumeId: "21d4182a-4930-47b4-a987-e50c4a80156f", GenerationId: "7aee3365-2963-4a6d-b9fb-2c934924880d",
+		ParentGenerationId: "acee3e88-20d7-4bbc-92cc-4b839ad6bc55",
+		Name:               "root", MountPath: "/", Root: true, Generation: 2,
+	}
+	service := &GenericPodService{backendRepo: &sandboxBackendRepository{operationSnapshot: &types.StateSnapshot{
+		ExternalId: "e4f41f9a-524c-4906-8ea3-b36b32f45c27", Mode: "terminal", Visible: true,
+		Status: types.StateSnapshotStatusAvailable, RestoreMode: "cold_state",
+		Generations: []types.StateGeneration{generation},
+	}}}
+	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
+		Workspace: &types.Workspace{Id: 7, ExternalId: "workspace"}, Token: &types.Token{Key: "token"},
+	})
+	response, err := service.SandboxSnapshotState(ctx, &pb.PodSandboxSnapshotStateRequest{
+		ContainerId: "gone-container", OperationId: "terminal-op", Mode: "terminal", Visible: true,
+	})
+	require.NoError(t, err)
+	require.True(t, response.Ok)
+	require.Equal(t, "e4f41f9a-524c-4906-8ea3-b36b32f45c27", response.StateSnapshotId)
+	require.Equal(t, generation.ParentGenerationId, response.Generations[0].ParentGenerationId)
 }
 
 func (h *sandboxReconnectTestHarness) connect(t *testing.T, ctx context.Context) {

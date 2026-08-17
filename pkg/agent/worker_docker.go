@@ -208,6 +208,13 @@ func shouldRemoveManagedWorkerContainer(inspect *dockerContainerInspect, desired
 	if inspect == nil || slot == nil || inspect.Config.Labels[types.AgentDockerLabelManaged] != "true" {
 		return false
 	}
+	// A slot may clean only an older container for its own stable worker on
+	// this machine. The previous broad predicate let one slot delete every
+	// sibling managed worker merely because its name differed.
+	if inspect.Config.Labels[types.AgentDockerLabelWorkerID] != slot.WorkerId ||
+		inspect.Config.Labels[types.AgentDockerLabelMachineID] != slot.MachineId {
+		return false
+	}
 	return !dockerContainerNameMatches(inspect.Name, desiredName) || !dockerContainerLabelsMatchSlot(inspect.Config.Labels, slot)
 }
 

@@ -213,8 +213,8 @@ func waitCheckpointRetry(ctx context.Context, attempt int) error {
 
 func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, rt runtime.Runtime, opts *RestoreOpts) (int, error) {
 	bundlePath := filepath.Dir(opts.configPath)
-	imagePath := filepath.Join(c.checkpointRoot, opts.checkpoint.CheckpointId)
-	workDir := filepath.Join(types.AgentTmpPath, opts.checkpoint.CheckpointId, opts.request.ContainerId)
+	imagePath := filepath.Join(c.checkpointRoot, opts.checkpoint.ID)
+	workDir := filepath.Join(types.AgentTmpPath, opts.checkpoint.ID, opts.request.ContainerId)
 	preserveOpenTCP := shouldPreservePodTCPOnRestore(opts)
 
 	// Setup work directory for restore files
@@ -223,7 +223,7 @@ func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, rt runtime.Ru
 		return -1, fmt.Errorf("failed to setup restore work directory: %w", err)
 	}
 	if preserveOpenTCP {
-		if err := writeCheckpointNetworkMap(workDir, opts.checkpoint.ContainerIp, opts.containerIP); err != nil {
+		if err := writeCheckpointNetworkMap(workDir, opts.checkpoint.ContainerIP, opts.containerIP); err != nil {
 			return -1, fmt.Errorf("failed to configure checkpoint network restore: %w", err)
 		}
 	}
@@ -286,7 +286,7 @@ func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, rt runtime.Ru
 		log.Warn().
 			Err(restoreErr).
 			Str("runtime", rt.Name()).
-			Str("checkpoint_id", opts.checkpoint.CheckpointId).
+			Str("checkpoint_id", opts.checkpoint.ID).
 			Int("attempt", attempt).
 			Msg("retrying checkpoint restore after CRIU failure")
 		if err := waitNvidiaRestoreRetry(ctx); err != nil {
@@ -296,7 +296,7 @@ func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, rt runtime.Ru
 
 	log.Info().
 		Str("runtime", rt.Name()).
-		Str("checkpoint_id", opts.checkpoint.CheckpointId).
+		Str("checkpoint_id", opts.checkpoint.ID).
 		Str("image_path", imagePath).
 		Str("work_dir", workDir).
 		Msg("checkpoint restored successfully")

@@ -12,6 +12,53 @@ import (
 
 type SchedulerRepository interface{}
 
+// ContainerMutationAuthority is the immutable delivery/process tuple that a
+// worker must still own at the exact Redis commit point of a container
+// mutation.  Handler-only authorization is insufficient: a replacement may
+// register under the same stable worker id while an older RPC is in flight.
+type ContainerMutationAuthority struct {
+	ContainerId        string
+	WorkerId           string
+	WorkerInstanceId   string
+	StorageNodeId      string
+	DeliveryToken      string
+	StateVolumePlanId  string
+	StateVolumePlanHash string
+}
+
+type ContainerMutationKind string
+
+const (
+	ContainerMutationDelete     ContainerMutationKind = "delete"
+	ContainerMutationStatus     ContainerMutationKind = "status"
+	ContainerMutationExitCode   ContainerMutationKind = "exit_code"
+	ContainerMutationAddress    ContainerMutationKind = "address"
+	ContainerMutationAddressMap ContainerMutationKind = "address_map"
+	ContainerMutationWorkerAddr ContainerMutationKind = "worker_address"
+)
+
+// ContainerProcessMutation contains only the data written by a single
+// worker-originated repository RPC. Backend routes are committed in the same
+// optimistic Redis transaction as the assignment/process recheck so a stale
+// process cannot leave a route behind after reassignment.
+type ContainerProcessMutation struct {
+	Kind          ContainerMutationKind
+	Status        types.ContainerStatus
+	ExpirySeconds int64
+	ExitCode      int
+	Address       string
+	AddressMap    map[int32]string
+	BackendRoutes []types.BackendRoute
+}
+
+// ProcessBoundContainerRepository is intentionally separate from
+// ContainerRepository. Scheduler/admin code retains the explicit internal
+// methods below, while every externally registered worker mutation must use
+// this exact process-and-delivery CAS seam.
+type ProcessBoundContainerRepository interface {
+	MutateContainerForProcess(context.Context, ContainerMutationAuthority, ContainerProcessMutation) error
+}
+
 type WorkerRepository interface {
 	GetId() string
 	GetWorkerById(workerId string) (*types.Worker, error)
@@ -20,32 +67,50 @@ type WorkerRepository interface {
 	GetAllWorkersOnMachine(machineId string) ([]*types.Worker, error)
 	AddWorker(w *types.Worker) error
 	ToggleWorkerAvailable(workerId, generation string) error
+	ToggleWorkerAvailableForProcess(workerId, workerInstanceId, storageNodeId, generation string) error
 	SetWorkerCordon(workerId string, cordoned bool) error
 	PrepareWorkerRollout(workerId, generation string) (bool, error)
 	UpdateWorkerStatus(workerId string, status types.WorkerStatus) error
+	UpdateWorkerStatusForProcess(workerId, workerInstanceId, storageNodeId string, status types.WorkerStatus) error
 	RemoveWorker(workerId string) error
+	RemoveWorkerForProcess(workerId, workerInstanceId, storageNodeId string) error
 	SetWorkerKeepAlive(workerId string, keepAlive types.WorkerKeepAlive) error
+	SetWorkerStateVolumeCapacity(workerId, machineId string, totalNbdDevices, freeNbdDevices uint32) error
+	SetWorkerStateVolumeCapacityForProcess(workerId, workerInstanceId, machineId string, totalNbdDevices, freeNbdDevices uint32) error
 	UpdateWorkerCapacity(w *types.Worker, cr *types.ContainerRequest, ut types.CapacityUpdateType) error
+	UpdateWorkerCapacityForProcess(w *types.Worker, workerInstanceId, storageNodeId string, cr *types.ContainerRequest, ut types.CapacityUpdateType) error
 	ScheduleContainerRequest(worker *types.Worker, request *types.ContainerRequest) error
 	ScheduleContainerRequests(worker *types.Worker, requests []*types.ContainerRequest) error
 	GetNextContainerRequest(workerId string) (*types.ContainerRequest, error)
 	GetNextContainerRequests(workerId string, limit int) ([]*types.ContainerRequest, error)
+	GetNextContainerRequestsForProcess(workerId, workerInstanceId, storageNodeId string, limit int) ([]*types.ContainerRequest, error)
 	RecoverPendingContainerRequests(workerId string) error
+	RecoverPendingContainerRequestsForProcess(workerId, workerInstanceId, storageNodeId string) error
 	RequeueContainerRequests(workerId string, requests []*types.ContainerRequest) error
-	AddContainerToWorker(workerId, containerId, deliveryToken string) error
+	RequeueContainerRequestsForProcess(workerId, workerInstanceId, storageNodeId string, requests []*types.ContainerRequest) error
+	AddContainerToWorker(workerId, containerId, deliveryToken, stateVolumePlanId, stateVolumePlanHash string) error
+	AddContainerToWorkerForProcess(workerId, workerInstanceId, storageNodeId, containerId, deliveryToken, stateVolumePlanId, stateVolumePlanHash string) error
 	RemoveContainerFromWorker(workerId string, containerId string) error
+	RemoveContainerFromWorkerForProcess(workerId, workerInstanceId, storageNodeId, containerId string) error
 	SetContainerResourceValues(workerId string, containerId string, usage types.ContainerResourceUsage) error
 	SetImagePullLock(workerId, imageId string) (string, error)
+	SetImagePullLockForProcess(workerId, workerInstanceId, storageNodeId, imageId string) (string, error)
 	RemoveImagePullLock(workerId, imageId, token string) error
+	RemoveImagePullLockForProcess(workerId, workerInstanceId, storageNodeId, imageId, token string) error
 	GetContainerIp(networkPrefix string, containerId string) (string, error)
 	SetContainerIp(networkPrefix string, containerId, containerIp string) error
+	SetContainerIpForProcess(workerId, workerInstanceId, storageNodeId, networkPrefix, containerId, containerIp string) error
 	MoveContainerIp(networkPrefix, fromContainerId, toContainerId, containerIp string) error
+	MoveContainerIpForProcess(workerId, workerInstanceId, storageNodeId, networkPrefix, fromContainerId, toContainerId, containerIp string) error
 	RemoveContainerIp(networkPrefix string, containerId string) error
+	RemoveContainerIpForProcess(workerId, workerInstanceId, storageNodeId, networkPrefix, containerId string) error
 	GetContainerIps(networkPrefix string) ([]string, error)
 	GetContainerIpAssignments(networkPrefix string) ([]types.ContainerIpAssignment, error)
 	RemoveWorkerNetworkState(ctx context.Context, networkPrefix string) error
 	SetNetworkLock(networkPrefix string, ttl, retries int) (string, error)
+	SetNetworkLockForProcess(workerId, workerInstanceId, storageNodeId, networkPrefix string, ttl, retries int) (string, error)
 	RemoveNetworkLock(networkPrefix string, token string) error
+	RemoveNetworkLockForProcess(workerId, workerInstanceId, storageNodeId, networkPrefix, token string) error
 	GetGpuCounts() (map[string]int, error)
 	GetGpuAvailability() (map[string]bool, error)
 	GetFreeGpuCounts() (map[string]int, error)
@@ -55,6 +120,8 @@ type WorkerRepository interface {
 type ContainerRepository interface {
 	GetContainerState(string) (*types.ContainerState, error)
 	SetContainerState(string, *types.ContainerState) error
+	SetStateRestoreReceipt(containerId, workerInstanceId string, receipt *types.StateRestoreReceipt, expectedAssignment *types.ContainerState) error
+	GetStateRestoreReceipt(containerId string) (*types.StateRestoreReceipt, error)
 	SetContainerExitCode(string, int) error
 	SetContainerFailureCooldown([]string) error
 	GetContainerExitCode(string) (int, error)
@@ -69,6 +136,7 @@ type ContainerRepository interface {
 	DeleteBackendRoutesByMachine(ctx context.Context, workspaceID, poolName, machineID string) error
 	UpdateContainerStatus(string, types.ContainerStatus, int64) error
 	MarkPendingContainerStoppingIfUnassigned(containerId string, expirySeconds int64) (bool, error)
+	FencePendingContainerStateVolumePlan(containerId, planId, requestHash string, expirySeconds int64) (bool, error)
 	DeleteContainerState(containerId string) error
 	SetContainerRequestStatus(containerId string, status types.ContainerRequestStatus) error
 	GetContainerRequestStatus(containerId string) (types.ContainerRequestStatus, error)
@@ -78,6 +146,7 @@ type ContainerRepository interface {
 	GetContainerAddressMap(containerId string) (map[int32]string, error)
 	CheckContainerConcurrencyLimit(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error
 	CreateContainerStateWithConcurrencyLimit(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error
+	CreateContainerStateWithConcurrencyLimitAndStateVolumeOutbox(quota *types.ConcurrencyLimit, request *types.ContainerRequest, payload []byte, readyAt time.Time) error
 	ReserveContainerConcurrencyForPending(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error
 	GetActiveContainersByStubId(stubId string) ([]types.ContainerState, error)
 	GetActiveContainersByWorkspaceId(workspaceId string) ([]types.ContainerState, error)
@@ -267,20 +336,45 @@ type BackendRepository interface {
 	CreateImage(ctx context.Context, imageId string, clipVersion uint32) (uint32, error)
 	SetImageCredentialSecret(ctx context.Context, imageId string, secretName string, secretExternalId string) error
 	GetImageCredentialSecret(ctx context.Context, imageId string) (string, string, error)
-	CreateCheckpoint(ctx context.Context, checkpoint *types.Checkpoint) (*types.Checkpoint, error)
-	UpdateCheckpoint(ctx context.Context, checkpoint *types.Checkpoint) (*types.Checkpoint, error)
-	ListCheckpoints(ctx context.Context, workspaceExternalId string) ([]types.Checkpoint, error)
-	GetCheckpointById(ctx context.Context, checkpointId string) (*types.Checkpoint, error)
-	GetLatestCheckpointByStubId(ctx context.Context, stubExternalId string) (*types.Checkpoint, error)
-	ListStaleCheckpoints(ctx context.Context, activeRecentStubKeys []string, stubLastUsedBefore time.Time) ([]types.Checkpoint, error)
-	PruneCheckpoints(ctx context.Context, checkpointIds []string) ([]types.Checkpoint, error)
-	CreateDiskSnapshot(ctx context.Context, snapshot *types.DiskSnapshot) (*types.DiskSnapshot, error)
-	UpdateDiskSnapshot(ctx context.Context, snapshot *types.DiskSnapshot) (*types.DiskSnapshot, error)
-	GetDiskSnapshot(ctx context.Context, workspaceId uint, snapshotId string) (*types.DiskSnapshot, error)
-	GetLatestDiskSnapshot(ctx context.Context, workspaceId uint, diskName string) (*types.DiskSnapshot, error)
-	ListDiskSnapshots(ctx context.Context, filter types.DiskSnapshotFilter) ([]types.DiskSnapshot, error)
+	CreateStateSnapshot(ctx context.Context, snapshot *types.StateSnapshot, members []types.StateGeneration, compactions []types.StateGenerationCompaction, leases []types.StateVolumeLease) (*types.StateSnapshot, error)
+	ArmStateSnapshot(ctx context.Context, snapshotId, sourceContainerId, operationId, workerId, workerInstanceId, storageNodeId, recoveryProofToken string) (*types.StateSnapshot, error)
+	ClaimStateSnapshotRecovery(ctx context.Context, snapshotId, sourceContainerId, operationId, workerId, workerInstanceId, storageNodeId, recoveryProofToken string, previousClaimGeneration int64) (*types.StateSnapshot, error)
+	FailStateSnapshot(ctx context.Context, snapshotId, sourceContainerId, operationId, workerId, workerInstanceId, storageNodeId, reason string, recoveryClaimGeneration int64) (*types.StateSnapshot, error)
+	FailUnarmedStateSnapshot(ctx context.Context, snapshotId, reason string) (*types.StateSnapshot, error)
+	CommitStateSnapshot(ctx context.Context, snapshot *types.StateSnapshot, generations []types.VolumeGeneration, leases []types.StateVolumeLease, workerId, workerInstanceId, storageNodeId string, recoveryClaimGeneration int64) (*types.StateSnapshot, error)
+	GetStateSnapshot(ctx context.Context, workspaceId uint, snapshotId string) (*types.StateSnapshot, error)
+	GetStateSnapshotByOperation(ctx context.Context, sourceContainerId, operationId string) (*types.StateSnapshot, error)
+	GetStateSnapshotByOperationForWorkspace(ctx context.Context, workspaceId uint, sourceContainerId, operationId string) (*types.StateSnapshot, error)
+	GetPendingStateSnapshotByContainer(ctx context.Context, sourceContainerId string) (*types.StateSnapshot, error)
+	ListUnarmedPendingStateSnapshots(ctx context.Context, olderThan time.Time) ([]types.StateSnapshot, error)
+	GetStateSnapshotPlan(ctx context.Context, workspaceId uint, snapshotId string) ([]types.StateGeneration, error)
+	GetStateSnapshotCompactionPlan(ctx context.Context, workspaceId uint, snapshotId string) ([]types.StateGenerationCompaction, error)
+	GetVolumeGeneration(ctx context.Context, workspaceId uint, generationId string) (*types.VolumeGeneration, error)
+	RetainStateSnapshotReference(ctx context.Context, workspaceId uint, snapshotId, kind, referenceId string) (*types.StateSnapshotReference, error)
+	ReleaseStateSnapshotReference(ctx context.Context, workspaceId uint, snapshotId, kind, referenceId string) (*types.StateSnapshotReference, error)
+	ProcessStateCacheRetirements(ctx context.Context, limit int) (int, error)
+	GetLatestVolumeGeneration(ctx context.Context, workspaceId uint, volumeId string) (*types.VolumeGeneration, error)
 	GetDisk(ctx context.Context, workspaceId uint, name string) (*types.Disk, error)
 	GetOrCreateDisk(ctx context.Context, workspaceId uint, disk *types.Disk) (*types.Disk, error)
+	BeginStateVolumeAttachmentPlan(ctx context.Context, workspaceId uint, containerId, requestHash string, expectedWritableMembers int) (*types.StateVolumeAttachmentPlan, error)
+	CompleteStateVolumeAttachmentPlan(ctx context.Context, workspaceId uint, containerId, planId, requestHash string) error
+	MarkStateVolumeAttachmentPlanEnqueued(ctx context.Context, workspaceId uint, containerId, planId, requestHash string) error
+	ListIncompleteStateVolumeAttachmentPlans(ctx context.Context, olderThan time.Time) ([]types.StateVolumeAttachmentPlan, error)
+	AbortStateVolumeAttachmentPlan(ctx context.Context, workspaceId uint, containerId, planId, requestHash string) error
+	ResolveStateVolumeAttachment(ctx context.Context, workspaceId uint, containerId, planId, requestHash string, disk *types.Disk, sourceGenerationId string) (*types.StateVolumeAttachment, error)
+	ResolveReadOnlyStateAttachment(ctx context.Context, workspaceId uint, containerId, volumeId, generationId, name, mountPath string, root bool) error
+	ResolveBranchStateAttachment(ctx context.Context, workspaceId uint, stubExternalId, containerId, planId, requestHash, volumeId, name, size, mountPath, sourceGenerationId string, root, cloneSource bool) (*types.StateVolumeAttachment, error)
+	RenewStateVolumeAttachments(ctx context.Context, workspaceId uint, containerId, workerId, workerInstanceId, storageNodeId string, leases []types.StateVolumeLease) (time.Time, error)
+	ReleaseStateVolumeAttachments(ctx context.Context, workspaceId uint, containerId, workerId, workerInstanceId, storageNodeId string, leases []types.StateVolumeLease) error
+	BeginStateVolumeReleaseIntent(ctx context.Context, workspaceId uint, containerId, sourceWorkerId, sourceWorkerInstanceId,
+		storageNodeId, journalDigest string, members []types.StateVolumeReleaseMember) (*types.StateVolumeReleaseClaim, error)
+	ClaimStateVolumeRelease(ctx context.Context, workspaceId uint, containerId, sourceWorkerId, sourceWorkerInstanceId,
+		storageNodeId, recoveryWorkerId, recoveryWorkerInstanceId, journalDigest string, previousClaimGeneration int64,
+		members []types.StateVolumeReleaseMember) (*types.StateVolumeReleaseClaim, error)
+	GetStateVolumeReleaseClaim(ctx context.Context, workspaceId uint, containerId string) (*types.StateVolumeReleaseClaim, error)
+	CompleteClaimedStateVolumeRelease(ctx context.Context, workspaceId uint, containerId, claimId,
+		recoveryWorkerId, recoveryWorkerInstanceId, storageNodeId string, claimGeneration int64) error
+	ReleasePendingStateVolumeAttachments(ctx context.Context, workspaceId uint, containerId, planId, requestHash string) error
 	// DeleteDisk unregisters the mutable disk resource. Immutable snapshots and
 	// their backing payload are retained because snapshot IDs can outlive a disk
 	// record (for example, when pinned by a template or published for a fork).
@@ -382,6 +476,7 @@ type EventRepository interface {
 	PushStubStateUnhealthy(workspaceId string, stubId string, currentState, previousState string, reason string, failedContainers []string)
 	PushGatewayEndpointCalledEvent(method, path, workspaceID string, statusCode int, userAgent, remoteIP, requestID, contentType, accept, errorMessage string)
 	PushStubCacheRequiredContent(schema types.EventStubCacheRequiredContentSchema) error
+	HasDurableScopedStateSink() bool
 	PushPlatformCacheEvent(schema types.EventPlatformCacheSchema)
 	ReadStubCacheRequiredContent(ctx context.Context, workspaceID, stubID string) ([]types.CacheRequiredContentItem, error)
 }

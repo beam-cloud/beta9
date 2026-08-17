@@ -14,6 +14,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	redis "github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog/log"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -1149,76 +1150,142 @@ func (s *GenericPodService) SandboxCreateImageFromFilesystem(ctx context.Context
 	}, nil
 }
 
-func (s *GenericPodService) SandboxSnapshotMemory(ctx context.Context, in *pb.PodSandboxSnapshotMemoryRequest) (*pb.PodSandboxSnapshotMemoryResponse, error) {
+func (s *GenericPodService) SandboxSnapshotState(ctx context.Context, in *pb.PodSandboxSnapshotStateRequest) (*pb.PodSandboxSnapshotStateResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
+	if in.OperationId == "" {
+		return &pb.PodSandboxSnapshotStateResponse{ErrorMsg: "operation_id is required"}, nil
+	}
+	if in.Mode != "live" && in.Mode != "terminal" {
+		return &pb.PodSandboxSnapshotStateResponse{ErrorMsg: "mode must be live or terminal"}, nil
+	}
+	if in.Mode == "live" && in.IncludeMemory {
+		return &pb.PodSandboxSnapshotStateResponse{ErrorMsg: "live snapshots cannot include memory"}, nil
+	}
+	if in.Publish {
+		return &pb.PodSandboxSnapshotStateResponse{ErrorMsg: "public whole-root state publishing is disabled"}, nil
+	}
+
+	var existing *types.StateSnapshot
+	existing, err := s.backendRepo.GetStateSnapshotByOperationForWorkspace(ctx, authInfo.Workspace.Id, in.ContainerId, in.OperationId)
+	if err == nil {
+		if existing.Mode != in.Mode || existing.IncludeMemory != in.IncludeMemory || existing.Visible != in.Visible {
+			return &pb.PodSandboxSnapshotStateResponse{ErrorMsg: "operation_id conflicts with different immutable snapshot inputs"}, nil
+		}
+		if existing.Status == types.StateSnapshotStatusAvailable || existing.Status == types.StateSnapshotStatusFailed {
+			return podStateSnapshotResponse(existing), nil
+		}
+	} else {
+		var notFound *types.ErrStateSnapshotNotFound
+		if !errors.As(err, &notFound) {
+			return &pb.PodSandboxSnapshotStateResponse{ErrorMsg: err.Error()}, nil
+		}
+		existing = nil
+	}
 
 	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
 	if err != nil {
-		return &pb.PodSandboxSnapshotMemoryResponse{
+		if existing != nil && existing.Status == types.StateSnapshotStatusPending {
+			return podStateSnapshotResponse(existing), nil
+		}
+		return &pb.PodSandboxSnapshotStateResponse{
 			Ok:       false,
 			ErrorMsg: "Failed to connect to sandbox",
 		}, nil
 	}
 
-	resp, err := client.Checkpoint(ctx, in.ContainerId, common.ContainerCheckpointOptions{
-		TerminateAfterCheckpoint: in.TerminateAfterCheckpoint,
+	resp, err := client.SnapshotContainerState(ctx, in.ContainerId, common.SnapshotContainerStateOptions{
+		OperationId:   in.OperationId,
+		Mode:          in.Mode,
+		Publish:       in.Publish,
+		IncludeMemory: in.IncludeMemory,
+		Visible:       in.Visible,
 	})
 	if err != nil {
-		return &pb.PodSandboxSnapshotMemoryResponse{
+		return &pb.PodSandboxSnapshotStateResponse{
 			Ok:       false,
 			ErrorMsg: err.Error(),
 		}, nil
 	}
 	if !resp.Ok {
-		return &pb.PodSandboxSnapshotMemoryResponse{
+		return &pb.PodSandboxSnapshotStateResponse{
 			Ok:       false,
 			ErrorMsg: resp.ErrorMsg,
 		}, nil
 	}
-	if resp.CheckpointId == "" {
-		return &pb.PodSandboxSnapshotMemoryResponse{
+	if resp.StateSnapshotId == "" {
+		return &pb.PodSandboxSnapshotStateResponse{
 			Ok:       false,
-			ErrorMsg: "checkpoint response missing checkpoint ID",
+			ErrorMsg: "snapshot response missing state snapshot ID",
 		}, nil
 	}
 
-	return &pb.PodSandboxSnapshotMemoryResponse{
-		Ok:           true,
-		CheckpointId: resp.CheckpointId,
-		Runtime:      resp.Runtime,
+	return &pb.PodSandboxSnapshotStateResponse{
+		Ok: true, StateSnapshotId: resp.StateSnapshotId, Status: resp.Status,
+		ImageDigest: resp.ImageDigest, RuntimeProfile: resp.RuntimeProfile,
+		CheckpointId: resp.CheckpointId, HasMemory: resp.HasMemory,
+		Generations: resp.Generations, RestoreMode: resp.RestoreMode,
+		FallbackReason: resp.FallbackReason,
 	}, nil
 }
 
-func (s *GenericPodService) SandboxSnapshotDisks(ctx context.Context, in *pb.PodSandboxSnapshotDisksRequest) (*pb.PodSandboxSnapshotDisksResponse, error) {
-	authInfo, _ := auth.AuthInfoFromContext(ctx)
-
-	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
-	if err != nil {
-		return &pb.PodSandboxSnapshotDisksResponse{
-			Ok:       false,
-			ErrorMsg: "Failed to connect to sandbox",
-		}, nil
+func podStateSnapshotResponse(snapshot *types.StateSnapshot) *pb.PodSandboxSnapshotStateResponse {
+	if snapshot == nil {
+		return &pb.PodSandboxSnapshotStateResponse{ErrorMsg: "state snapshot is unavailable"}
 	}
-
-	resp, err := client.SnapshotDisks(ctx, in.ContainerId)
-	if err != nil {
-		return &pb.PodSandboxSnapshotDisksResponse{
-			Ok:       false,
-			ErrorMsg: err.Error(),
-		}, nil
-	}
-	response := &pb.PodSandboxSnapshotDisksResponse{Ok: resp.Ok, ErrorMsg: resp.ErrorMsg}
-	for _, snapshot := range resp.Snapshots {
-		if snapshot == nil {
-			continue
-		}
-		response.Snapshots = append(response.Snapshots, &pb.PodSandboxDiskSnapshot{
-			SnapshotId: snapshot.SnapshotId,
-			DiskName:   snapshot.DiskName,
-			Generation: snapshot.Generation,
+	generations := make([]*pb.StateGeneration, 0, len(snapshot.Generations))
+	for _, generation := range snapshot.Generations {
+		generations = append(generations, &pb.StateGeneration{
+			VolumeId: generation.VolumeId, GenerationId: generation.GenerationId,
+			ParentGenerationId:      generation.ParentGenerationId,
+			CloneParentGenerationId: generation.CloneParentGenerationId,
+			Name:                    generation.Name, MountPath: generation.MountPath, ReadOnly: generation.ReadOnly,
+			Root: generation.Root, Generation: generation.Generation,
 		})
 	}
-	return response, nil
+	return &pb.PodSandboxSnapshotStateResponse{
+		Ok: snapshot.Status != types.StateSnapshotStatusFailed, ErrorMsg: snapshot.Reason,
+		StateSnapshotId: snapshot.ExternalId, Status: string(snapshot.Status),
+		ImageDigest: snapshot.ImageDigest, RuntimeProfile: snapshot.RuntimeProfile,
+		CheckpointId: snapshot.CheckpointId, HasMemory: snapshot.CheckpointId != "",
+		Generations: generations, RestoreMode: snapshot.RestoreMode, FallbackReason: snapshot.FallbackReason,
+	}
+}
+
+func (s *GenericPodService) GetStateRestoreReceipt(ctx context.Context, in *pb.PodGetStateRestoreReceiptRequest) (*pb.PodGetStateRestoreReceiptResponse, error) {
+	authInfo, ok := sandboxAuthInfoFromContext(ctx)
+	if !ok {
+		return nil, status.Error(codes.Unauthenticated, "invalid or missing token")
+	}
+	state, err := s.containerRepo.GetContainerState(in.ContainerId)
+	if err != nil {
+		return &pb.PodGetStateRestoreReceiptResponse{ErrorMsg: err.Error()}, nil
+	}
+	if state.WorkspaceId != authInfo.Workspace.ExternalId {
+		return &pb.PodGetStateRestoreReceiptResponse{ErrorMsg: "container does not belong to workspace"}, nil
+	}
+	receipt, err := s.containerRepo.GetStateRestoreReceipt(in.ContainerId)
+	if errors.Is(err, redis.Nil) {
+		return &pb.PodGetStateRestoreReceiptResponse{Ok: true, Pending: true}, nil
+	}
+	if err != nil {
+		return &pb.PodGetStateRestoreReceiptResponse{ErrorMsg: err.Error()}, nil
+	}
+	if in.StateSnapshotId != "" && receipt.StateSnapshotId != in.StateSnapshotId {
+		return &pb.PodGetStateRestoreReceiptResponse{ErrorMsg: "restore receipt does not match requested state snapshot"}, nil
+	}
+	generations := make([]*pb.StateGeneration, 0, len(receipt.Generations))
+	for _, generation := range receipt.Generations {
+		generations = append(generations, &pb.StateGeneration{
+			VolumeId: generation.VolumeId, GenerationId: generation.GenerationId, Name: generation.Name,
+			MountPath: generation.MountPath, ReadOnly: generation.ReadOnly, Root: generation.Root,
+			Generation: generation.Generation, ParentGenerationId: generation.ParentGenerationId,
+			CloneParentGenerationId: generation.CloneParentGenerationId,
+		})
+	}
+	return &pb.PodGetStateRestoreReceiptResponse{Ok: true, Receipt: &pb.StateRestoreReceipt{
+		StateSnapshotId: receipt.StateSnapshotId, RestoreMode: receipt.RestoreMode,
+		FallbackReason: receipt.FallbackReason, Generations: generations,
+	}}, nil
 }
 
 func (s *GenericPodService) SandboxListUrls(ctx context.Context, in *pb.PodSandboxListUrlsRequest) (*pb.PodSandboxListUrlsResponse, error) {

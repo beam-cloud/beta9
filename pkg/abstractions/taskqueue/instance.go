@@ -64,11 +64,6 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 		gpuCount = 1
 	}
 
-	checkpointEnabled := i.StubConfig.CheckpointEnabled
-	if gpuCount > 1 {
-		checkpointEnabled = false
-	}
-
 	for c := 0; c < containersToRun; c++ {
 		if err := i.CheckConcurrencyLimit(); err != nil {
 			return err
@@ -101,8 +96,6 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 			EntryPoint:        i.EntryPoint,
 			Mounts:            mounts,
 			Stub:              *i.Stub,
-			CheckpointEnabled: checkpointEnabled,
-			CheckpointTrigger: i.StubConfig.CheckpointTrigger,
 			PoolSelector:      i.StubConfig.PoolSelector(),
 		}
 		if err := abstractions.ConfigureContainerRequestNetwork(runRequest, *i.StubConfig); err != nil {

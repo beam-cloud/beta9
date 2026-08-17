@@ -9,7 +9,6 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/cache"
-	"github.com/beam-cloud/beta9/pkg/clients"
 	reg "github.com/beam-cloud/beta9/pkg/registry"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
@@ -246,71 +245,6 @@ func (s *WorkerRepositoryService) authorizeOriginCredentialStub(ctx context.Cont
 		return fmt.Errorf("worker token cannot request credentials for image %q on stub %q", req.ImageId, req.StubId)
 	}
 	return nil
-}
-
-func (s *WorkerRepositoryService) PruneStaleCacheCheckpoints(ctx context.Context, _ *pb.PruneStaleCacheCheckpointsRequest) (*pb.PruneStaleCacheCheckpointsResponse, error) {
-	if err := s.authorizeCacheMetadata(ctx); err != nil {
-		return &pb.PruneStaleCacheCheckpointsResponse{Ok: false, ErrorMsg: err.Error()}, nil
-	}
-	if s.backendRepo == nil {
-		return &pb.PruneStaleCacheCheckpointsResponse{Ok: false, ErrorMsg: "backend repository is unavailable"}, nil
-	}
-
-	activeKeys, err := s.activeRecentCacheStubKeys(ctx)
-	if err != nil {
-		return &pb.PruneStaleCacheCheckpointsResponse{Ok: false, ErrorMsg: err.Error()}, nil
-	}
-	pruneCutoff := s.staleCacheCheckpointPruneCutoff()
-	checkpoints, err := s.backendRepo.ListStaleCheckpoints(ctx, activeKeys, pruneCutoff)
-	if err != nil {
-		return &pb.PruneStaleCacheCheckpointsResponse{Ok: false, ErrorMsg: err.Error()}, nil
-	}
-
-	pruneIDs := make([]string, 0, len(checkpoints))
-	for _, checkpoint := range checkpoints {
-		if !cacheCheckpointPruneCandidate(checkpoint, pruneCutoff) {
-			continue
-		}
-		if checkpoint.OriginKey != "" {
-			workspace, err := s.backendRepo.GetWorkspace(ctx, checkpoint.WorkspaceId)
-			if err != nil {
-				return &pb.PruneStaleCacheCheckpointsResponse{Ok: false, ErrorMsg: err.Error()}, nil
-			}
-			if !workspace.StorageAvailable() {
-				return &pb.PruneStaleCacheCheckpointsResponse{Ok: false, ErrorMsg: fmt.Sprintf("workspace storage is unavailable for checkpoint %s", checkpoint.CheckpointId)}, nil
-			}
-			storageClient, err := clients.NewWorkspaceStorageClient(ctx, workspace.Name, workspace.Storage)
-			if err != nil {
-				return &pb.PruneStaleCacheCheckpointsResponse{Ok: false, ErrorMsg: err.Error()}, nil
-			}
-			if err := storageClient.Delete(ctx, checkpoint.OriginKey); err != nil {
-				return &pb.PruneStaleCacheCheckpointsResponse{Ok: false, ErrorMsg: err.Error()}, nil
-			}
-		}
-		pruneIDs = append(pruneIDs, checkpoint.CheckpointId)
-	}
-
-	pruned, err := s.backendRepo.PruneCheckpoints(ctx, pruneIDs)
-	if err != nil {
-		return &pb.PruneStaleCacheCheckpointsResponse{Ok: false, ErrorMsg: err.Error()}, nil
-	}
-
-	return &pb.PruneStaleCacheCheckpointsResponse{Ok: true, Pruned: int32(len(pruned))}, nil
-}
-
-func (s *WorkerRepositoryService) staleCacheCheckpointPruneCutoff() time.Time {
-	return time.Now().Add(-s.recentCacheStubTTL())
-}
-
-func cacheCheckpointPruneCandidate(checkpoint types.Checkpoint, pruneCutoff time.Time) bool {
-	lastUsedAt := checkpoint.CreatedAt.Time
-	if checkpoint.LastRestoredAt.Time.After(lastUsedAt) {
-		lastUsedAt = checkpoint.LastRestoredAt.Time
-	}
-	if lastUsedAt.IsZero() {
-		return false
-	}
-	return lastUsedAt.Before(pruneCutoff)
 }
 
 type anyLocalityRecentStubStore interface {

@@ -9,14 +9,17 @@ CACHE_BENCHMARK_FILE_PLAN ?=
 CACHE_BENCH_PROFILE ?=
 CACHE_BENCH_CONFIG ?=
 TOKEN ?=
+LOCAL_CONTEXT ?= k3d-beta9
+LOCAL_NAMESPACE ?= beta9
+KUBECTL := kubectl --context $(LOCAL_CONTEXT)
 
-.PHONY: startup-benchmark startup-benchmark-build sandbox-parallel-benchmark sandbox-stage-cold-benchmark sandbox-stage-warm-benchmark cache-benchmark bench-cache-smoke worker-e2e-tag worker-e2e-check worker-e2e-push
+.PHONY: startup-benchmark startup-benchmark-build sandbox-parallel-benchmark sandbox-stage-cold-benchmark sandbox-stage-warm-benchmark cache-benchmark bench-cache-smoke worker-e2e-tag worker-e2e-check worker-e2e-push state-snapshot-no-legacy state-volume-integration state-volume-migration-integration
 
 setup:
 	bash bin/setup.sh
 	make k3d-up runner worker gateway
 	# helm install beta9 deploy/charts/beta9 --create-namespace --values deploy/charts/beta9/values.local.yaml
-	kustomize build --enable-helm manifests/kustomize/overlays/cluster-dev | kubectl apply -f-
+	kustomize build --enable-helm manifests/kustomize/overlays/cluster-dev | $(KUBECTL) apply -f-
 
 startup-benchmark:
 	PYTHONPATH="$(CURDIR)/sdk/src:$(PYTHONPATH)" \
@@ -72,7 +75,7 @@ k3d-down:
 k3d-rebuild:
 	make k3d-down
 	make k3d-up
-	kustomize build --enable-helm manifests/kustomize/overlays/cluster-dev | kubectl apply -f-
+	kustomize build --enable-helm manifests/kustomize/overlays/cluster-dev | $(KUBECTL) apply -f-
 
 gateway:
 	docker build . --target build -f ./docker/Dockerfile.gateway -t localhost:5001/beta9-gateway:$(tag)
@@ -81,7 +84,7 @@ gateway:
 worker:
 	docker build . --target final --platform=$(workerPlatform) --build-arg BASE_STAGE=dev -f ./docker/Dockerfile.worker -t localhost:5001/beta9-worker:$(workerTag)
 	docker push localhost:5001/beta9-worker:$(workerTag)
-	BENCH_NAMESPACE="$(BENCH_NAMESPACE)" bin/delete_workers.sh
+	KUBE_CONTEXT="$(LOCAL_CONTEXT)" BENCH_NAMESPACE="$(BENCH_NAMESPACE)" bin/delete_workers.sh
 
 worker-e2e-tag:
 	@./hack/worker-e2e-image.sh tag
@@ -104,9 +107,9 @@ runner:
 
 start:
 	@if [ -f config.yaml ]; then \
-		cd hack && okteto up --file okteto.yaml --env CONFIG_PATH=/workspace/config.yaml; \
+		cd hack && okteto up --context "$(LOCAL_CONTEXT)" --namespace "$(LOCAL_NAMESPACE)" --file okteto.yaml --env CONFIG_PATH=/workspace/config.yaml; \
 	else \
-		cd hack && okteto up --file okteto.yaml; \
+		cd hack && okteto up --context "$(LOCAL_CONTEXT)" --namespace "$(LOCAL_NAMESPACE)" --file okteto.yaml; \
 	fi
 
 clear-ports:
@@ -114,7 +117,7 @@ clear-ports:
 	@lsof -t -i :1993,1994,8008 | xargs -r sudo kill -9 2>/dev/null || true
 
 stop:
-	cd hack && okteto down --file okteto.yaml
+	cd hack && okteto down --context "$(LOCAL_CONTEXT)" --namespace "$(LOCAL_NAMESPACE)" --file okteto.yaml
 
 protocol:
 	./bin/gen_proto.sh
@@ -129,6 +132,21 @@ openapi:
 
 verify-protocol:
 	./bin/verify_proto.sh
+
+state-snapshot-no-legacy:
+	./bin/verify_no_legacy_state.sh
+
+state-volume-integration:
+	@LOCAL_CONTEXT="$(LOCAL_CONTEXT)" LOCAL_NAMESPACE="$(LOCAL_NAMESPACE)" \
+		STATE_VOLUME_INTEGRATION_REPORT="$(STATE_VOLUME_INTEGRATION_REPORT)" \
+		bash ./hack/state-volume-integration.sh
+
+state-volume-migration-integration:
+	@test -n "$(BETA9_STATE_MIGRATION_TEST_ADMIN_DSN)" || \
+		(echo "BETA9_STATE_MIGRATION_TEST_ADMIN_DSN is required" >&2; exit 1)
+	@BETA9_STATE_MIGRATION_TEST_ADMIN_DSN="$(BETA9_STATE_MIGRATION_TEST_ADMIN_DSN)" \
+		go test -tags=statevolume_integration ./pkg/repository/backend_postgres_migrations ./pkg/repository \
+		-run '^(TestStateVolumeCutover|TestStateVolumeReleaseIntentRealPostgres|TestStateCache)' -count=1 -v
 
 test-pkg:
 	go test -v ./pkg/...

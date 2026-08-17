@@ -106,11 +106,6 @@ class TaskQueue(RunnerAbstraction):
             Setting values here will override timeout and retries.
         retry_for (Optional[List[BaseException]]):
             A list of exceptions that will trigger a retry if raised by your handler.
-        checkpoint_enabled (bool):
-            (experimental) Whether to enable checkpointing for the task queue. Default is False.
-            If enabled, the app will be checkpointed after the on_start function has completed.
-            On next invocation, each container will restore from a checkpoint and resume execution instead of
-            booting up from cold.
         inputs (Optional[Schema]):
             The input schema for the task queue. Default is None.
         outputs (Optional[Schema]):
@@ -153,7 +148,6 @@ class TaskQueue(RunnerAbstraction):
         authorized: bool = True,
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
         task_policy: TaskPolicy = TaskPolicy(),
-        checkpoint_enabled: bool = False,
         retry_for: Optional[List[Type[Exception]]] = None,
         pricing: Optional[PricingPolicy] = None,
         inputs: Optional[Schema] = None,
@@ -183,7 +177,6 @@ class TaskQueue(RunnerAbstraction):
             authorized=authorized,
             autoscaler=autoscaler,
             task_policy=task_policy,
-            checkpoint_enabled=checkpoint_enabled,
             app=app,
             pricing=pricing,
             inputs=inputs,

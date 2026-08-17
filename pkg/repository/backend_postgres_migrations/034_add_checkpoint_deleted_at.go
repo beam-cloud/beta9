@@ -8,17 +8,12 @@ import (
 )
 
 func init() {
-	goose.AddMigrationContext(upAddCheckpointDeletedAt, downAddCheckpointDeletedAt)
+	goose.AddMigrationContext(upStorageCutover034, downStorageCutover034)
 }
 
-func upAddCheckpointDeletedAt(ctx context.Context, tx *sql.Tx) error {
-	_, err := tx.Exec(`
-		ALTER TABLE checkpoint ADD COLUMN deleted_at TIMESTAMP WITH TIME ZONE DEFAULT NULL;
-	`)
-	return err
-}
+// This historical version is intentionally empty. The state-volume cutover
+// owns all writable machine state and migration 048 removes superseded storage
+// tables on upgrade. Fresh installs must never create those intermediate schemas.
+func upStorageCutover034(context.Context, *sql.Tx) error { return nil }
 
-func downAddCheckpointDeletedAt(ctx context.Context, tx *sql.Tx) error {
-	_, err := tx.Exec(`ALTER TABLE checkpoint DROP COLUMN deleted_at;`)
-	return err
-}
+func downStorageCutover034(context.Context, *sql.Tx) error { return nil }

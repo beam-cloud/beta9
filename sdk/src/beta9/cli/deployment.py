@@ -213,22 +213,6 @@ def _service_llm_metadata(kwargs: Dict, image: Optional[Image], entrypoint: Opti
     return service_llm_metadata(kwargs, image=image, entrypoint=entrypoint)
 
 
-def _service_checkpoint_options(kwargs: Dict) -> Dict:
-    options = {
-        "checkpoint_enabled": bool(kwargs.get("checkpoint_enabled")),
-    }
-    if kwargs.get("checkpoint_readiness_path"):
-        options.update(
-            {
-                "checkpoint_readiness_path": kwargs.get("checkpoint_readiness_path"),
-                "checkpoint_readiness_port": kwargs.get("checkpoint_readiness_port"),
-                "checkpoint_readiness_timeout": kwargs.get("checkpoint_readiness_timeout") or 600,
-                "checkpoint_readiness_interval": kwargs.get("checkpoint_readiness_interval") or 1,
-            }
-        )
-    return options
-
-
 def _apply_llm_metadata_if_requested(user_obj, kwargs: Dict) -> bool:
     if not _llm_options_present(kwargs):
         return True
@@ -261,7 +245,6 @@ def _generate_service_module(name: Optional[str], kwargs: Dict) -> Service:
         "pool": kwargs.get("pool"),
         "tcp": bool(kwargs.get("tcp")),
     }
-    service_kwargs.update(_service_checkpoint_options(kwargs))
     llm_metadata = _service_llm_metadata(
         kwargs,
         image=service_image,

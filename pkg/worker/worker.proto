@@ -13,9 +13,10 @@ service ContainerService {
   rpc ContainerExec(ContainerExecRequest) returns (ContainerExecResponse) {}
   rpc ContainerStreamLogs(ContainerStreamLogsRequest) returns (stream ContainerLogEntry) {}
   rpc ContainerArchive(ContainerArchiveRequest) returns (stream ContainerArchiveResponse) {}
-  rpc ContainerCheckpoint(ContainerCheckpointRequest) returns (ContainerCheckpointResponse) {}
-  rpc ContainerSnapshotDisks(ContainerSnapshotDisksRequest)
-      returns (ContainerSnapshotDisksResponse) {}
+  rpc SnapshotContainerState(SnapshotContainerStateRequest)
+      returns (SnapshotContainerStateResponse) {}
+  rpc RestoreContainerState(RestoreContainerStateRequest)
+      returns (RestoreContainerStateResponse) {}
   rpc ContainerSyncWorkspace(gateway.SyncContainerWorkspaceRequest)
       returns (gateway.SyncContainerWorkspaceResponse) {}
   rpc ContainerSandboxExec(ContainerSandboxExecRequest)
@@ -88,30 +89,39 @@ message ContainerArchiveResponse {
   string error_msg = 4;
 }
 
-message ContainerCheckpointRequest {
+message SnapshotContainerStateRequest {
   string container_id = 1;
-  bool terminate_after_checkpoint = 2;
+  string operation_id = 2;
+  string mode = 3;
+  bool publish = 4;
+  bool include_memory = 5;
+  bool visible = 6;
 }
 
-message ContainerCheckpointResponse {
-  bool ok = 1;
-  string checkpoint_id = 2;
-  string error_msg = 3;
-  string runtime = 4;
-}
-
-message ContainerSnapshotDisksRequest { string container_id = 1; }
-
-message ContainerDiskSnapshot {
-  string snapshot_id = 1;
-  string disk_name = 2;
-  int64 generation = 3;
-}
-
-message ContainerSnapshotDisksResponse {
+message SnapshotContainerStateResponse {
   bool ok = 1;
   string error_msg = 2;
-  repeated ContainerDiskSnapshot snapshots = 3;
+  string state_snapshot_id = 3;
+  string status = 4;
+  string image_digest = 5;
+  string runtime_profile = 6;
+  string checkpoint_id = 7;
+  bool has_memory = 8;
+  repeated types.StateGeneration generations = 9;
+  string restore_mode = 10;
+  string fallback_reason = 11;
+}
+
+message RestoreContainerStateRequest {
+  string container_id = 1;
+  string operation_id = 2;
+  string state_snapshot_id = 3;
+}
+
+message RestoreContainerStateResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  types.StateRestoreReceipt receipt = 3;
 }
 
 message ContainerSandboxExecRequest {

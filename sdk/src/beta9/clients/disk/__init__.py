@@ -29,36 +29,18 @@ class DiskInstance(betterproto.Message):
     id: str = betterproto.string_field(1)
     name: str = betterproto.string_field(2)
     size: str = betterproto.string_field(3)
-    filesystem: str = betterproto.string_field(4)
-    driver: str = betterproto.string_field(5)
-    mount_path: str = betterproto.string_field(6)
-    created_at: datetime = betterproto.message_field(7)
-    updated_at: datetime = betterproto.message_field(8)
-    workspace_id: str = betterproto.string_field(9)
-    workspace_name: str = betterproto.string_field(10)
-
-
-@dataclass(eq=False, repr=False)
-class DiskSnapshotInstance(betterproto.Message):
-    id: str = betterproto.string_field(1)
-    disk_name: str = betterproto.string_field(2)
-    format: str = betterproto.string_field(3)
-    status: str = betterproto.string_field(4)
-    generation: int = betterproto.int64_field(5)
-    size_bytes: int = betterproto.int64_field(6)
-    logical_size_bytes: int = betterproto.int64_field(7)
-    stored_size_bytes: int = betterproto.int64_field(8)
-    created_at: datetime = betterproto.message_field(9)
-    completed_at: datetime = betterproto.message_field(10)
+    mount_path: str = betterproto.string_field(4)
+    created_at: datetime = betterproto.message_field(5)
+    updated_at: datetime = betterproto.message_field(6)
+    workspace_id: str = betterproto.string_field(7)
+    workspace_name: str = betterproto.string_field(8)
 
 
 @dataclass(eq=False, repr=False)
 class GetOrCreateDiskRequest(betterproto.Message):
     name: str = betterproto.string_field(1)
     size: str = betterproto.string_field(2)
-    filesystem: str = betterproto.string_field(3)
-    driver: str = betterproto.string_field(4)
-    mount_path: str = betterproto.string_field(5)
+    mount_path: str = betterproto.string_field(3)
 
 
 @dataclass(eq=False, repr=False)
@@ -91,18 +73,6 @@ class DeleteDiskResponse(betterproto.Message):
     err_msg: str = betterproto.string_field(2)
 
 
-@dataclass(eq=False, repr=False)
-class ListDiskSnapshotsRequest(betterproto.Message):
-    disk_name: str = betterproto.string_field(1)
-
-
-@dataclass(eq=False, repr=False)
-class ListDiskSnapshotsResponse(betterproto.Message):
-    ok: bool = betterproto.bool_field(1)
-    err_msg: str = betterproto.string_field(2)
-    snapshots: List["DiskSnapshotInstance"] = betterproto.message_field(3)
-
-
 class DiskServiceStub(SyncServiceStub):
     def get_or_create_disk(
         self, get_or_create_disk_request: "GetOrCreateDiskRequest"
@@ -128,12 +98,3 @@ class DiskServiceStub(SyncServiceStub):
             DeleteDiskRequest,
             DeleteDiskResponse,
         )(delete_disk_request)
-
-    def list_disk_snapshots(
-        self, list_disk_snapshots_request: "ListDiskSnapshotsRequest"
-    ) -> "ListDiskSnapshotsResponse":
-        return self._unary_unary(
-            "/disk.DiskService/ListDiskSnapshots",
-            ListDiskSnapshotsRequest,
-            ListDiskSnapshotsResponse,
-        )(list_disk_snapshots_request)

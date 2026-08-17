@@ -4,14 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
-	goruntime "runtime"
 	"strings"
-	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -277,11 +274,11 @@ func TestApplyRuntimeEnvironmentOverridesLeavesRuncNvidiaCapabilities(t *testing
 	require.Equal(t, "all", envMap["NVIDIA_DRIVER_CAPABILITIES"])
 }
 
-func TestApplyRuntimeEnvironmentOverridesDisablesLibuvIOUringForCheckpoints(t *testing.T) {
+func TestApplyRuntimeEnvironmentOverridesDisablesLibuvIOUringForStateVolumes(t *testing.T) {
 	worker := &Worker{runtime: &mockRuntime{name: types.ContainerRuntimeRunc.String()}}
 	env := worker.applyRuntimeEnvironmentOverrides(
 		[]string{"UV_USE_IO_URING=1", "TORCHINDUCTOR_QUIESCE_ASYNC_COMPILE_POOL=0", "OTHER=value"},
-		&types.ContainerRequest{CheckpointEnabled: true},
+		&types.ContainerRequest{PersistentRoot: &types.PersistentRoot{Size: "1Gi"}},
 		nil,
 	)
 	envMap := envListToMap(env)
@@ -735,7 +732,6 @@ func TestCheckpointRestoreCPUAffinityIsDeferredAndApplied(t *testing.T) {
 	request := &types.ContainerRequest{
 		ContainerId: "container-1",
 		ConfigPath:  configPath,
-		Checkpoint:  &types.Checkpoint{Status: string(types.CheckpointStatusAvailable)},
 	}
 
 	require.NoError(t, worker.deferCheckpointRestoreCPUAffinity(request, config))
@@ -765,17 +761,15 @@ func TestCheckpointRestoreCPUAffinityAppliedBeforeStartedForwarded(t *testing.T)
 		CPUSet:                     "4",
 		RestoreCPUAffinityDeferred: true,
 		Runtime:                    rt,
+		StateMemoryCheckpoint:      &StateMemoryCheckpoint{ID: "checkpoint-1"},
 	})
 	worker := &Worker{
 		criuManager:        &startedCRIUManager{},
 		containerInstances: instances,
 	}
 	request := &types.ContainerRequest{
-		ContainerId: "container-1",
-		Checkpoint: &types.Checkpoint{
-			CheckpointId: "checkpoint-1",
-			Status:       string(types.CheckpointStatusAvailable),
-		},
+		ContainerId:     "container-1",
+		StateSnapshotId: "state-snapshot-1",
 	}
 	started := make(chan int)
 	appliedBeforeForward := make(chan bool, 1)
@@ -790,7 +784,6 @@ func TestCheckpointRestoreCPUAffinityAppliedBeforeStartedForwarded(t *testing.T)
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		io.Discard,
 		started,
-		make(chan int, 1),
 	)
 	require.NoError(t, err)
 	require.True(t, restored)
@@ -1005,7 +998,7 @@ func TestSpecFromRequestRejectsRunnerStubWithoutRunnerEnv(t *testing.T) {
 	require.ErrorContains(t, err, "empty process args")
 }
 
-func TestSpecFromRequestDisablesIOUringForCheckpoints(t *testing.T) {
+func TestSpecFromRequestDisablesIOUringForStateVolumes(t *testing.T) {
 	t.Setenv(types.WorkerPoolEnv, "default")
 
 	worker := &Worker{
@@ -1018,9 +1011,9 @@ func TestSpecFromRequestDisablesIOUringForCheckpoints(t *testing.T) {
 	}
 
 	spec, err := worker.specFromRequest(&types.ContainerRequest{
-		ContainerId:       "container-checkpoint",
-		EntryPoint:        []string{"python", "app.py"},
-		CheckpointEnabled: true,
+		ContainerId:    "container-state",
+		EntryPoint:     []string{"python", "app.py"},
+		PersistentRoot: &types.PersistentRoot{Size: "1Gi"},
 		Stub: types.StubWithRelated{Stub: types.Stub{
 			Type: types.StubType(types.StubTypeFunction),
 		}},
@@ -1358,174 +1351,6 @@ func TestStopContainerReturnsRuntimeKillError(t *testing.T) {
 	require.Equal(t, []syscall.Signal{syscall.SIGKILL}, rt.signals)
 }
 
-func TestClearContainerStopsHeartbeatWhileDurableDiskSyncBlocks(t *testing.T) {
-	fixture := newLockedDurableDiskFinalizationFixture(t, "container-blocked-sync")
-	request := fixture.request
-	leaseStarted := make(chan struct{}, 1)
-	leaseRelease := make(chan struct{})
-	heartbeatGetStarted := make(chan struct{}, 1)
-	repoClient := &fakeContainerRepoClient{
-		state: &pb.ContainerState{
-			ContainerId: request.ContainerId,
-			Status:      string(types.ContainerStatusRunning),
-		},
-		deleteStateDone:     make(chan struct{}, 1),
-		getStateStarted:     heartbeatGetStarted,
-		updateStatusStarted: leaseStarted,
-		updateStatusRelease: leaseRelease,
-	}
-	worker := newContainerFinalizationTestWorker(request, repoClient, nil)
-
-	clearDone := clearContainerAsync(worker, request, 7)
-
-	select {
-	case <-leaseStarted:
-	case <-time.After(time.Second):
-		t.Fatal("cleanup lease was not requested")
-	}
-	instance, ok := worker.containerInstances.Get(request.ContainerId)
-	require.True(t, ok)
-	localExitCode, _ := instance.lifecycleState()
-	require.Equal(t, -1, localExitCode)
-
-	updates := repoClient.containerStatusUpdates()
-	require.Len(t, updates, 1)
-	require.Equal(t, int64(types.ContainerStateTtlSWhileStopping), updates[0].ExpirySeconds)
-	require.Greater(t, updates[0].ExpirySeconds, int64(types.ContainerStateTtlS))
-	require.Equal(
-		t,
-		durableDiskSnapshotInactivityTimeout+time.Duration(types.ContainerStateTtlS)*time.Second,
-		time.Duration(updates[0].ExpirySeconds)*time.Second,
-	)
-	heartbeatDone := make(chan bool, 1)
-	heartbeatErr := make(chan error, 1)
-	go func() {
-		done, err := worker.updateContainerStatusOnce(context.Background(), request)
-		heartbeatDone <- done
-		heartbeatErr <- err
-	}()
-	select {
-	case <-heartbeatDone:
-		t.Fatal("heartbeat passed the finalization fence before the cleanup lease completed")
-	case <-time.After(50 * time.Millisecond):
-	}
-	select {
-	case <-heartbeatGetStarted:
-	case <-time.After(time.Second):
-		t.Fatal("heartbeat did not reach the finalization fence")
-	}
-	close(leaseRelease)
-
-	requireLocalContainerExitCode(t, worker, request.ContainerId, 7)
-	require.True(t, <-heartbeatDone)
-	require.NoError(t, <-heartbeatErr)
-	require.Equal(t, 1, repoClient.getStateCalls)
-	updatesBeforeRelease := repoClient.containerStatusUpdates()
-	require.NotEmpty(t, updatesBeforeRelease)
-	for _, update := range updatesBeforeRelease {
-		require.Equal(t, int64(types.ContainerStateTtlSWhileStopping), update.ExpirySeconds)
-	}
-
-	fixture.releaseAndWaitForClear(t, clearDone)
-	select {
-	case <-repoClient.deleteStateDone:
-	case <-time.After(time.Second):
-		t.Fatal("container state was not deleted after disk sync cancellation")
-	}
-	updates = repoClient.containerStatusUpdates()
-	require.Greater(t, len(updates), len(updatesBeforeRelease))
-	for _, update := range updates[len(updatesBeforeRelease) : len(updates)-1] {
-		require.Equal(t, string(types.ContainerStatusStopping), update.Status)
-		require.Equal(t, int64(types.ContainerStateTtlSWhileStopping), update.ExpirySeconds)
-	}
-	require.Equal(t, string(types.ContainerStatusStopping), updates[len(updates)-1].Status)
-	require.Equal(t, int64(types.ContainerStateTtlS), updates[len(updates)-1].ExpirySeconds)
-}
-
-func TestClearContainerSerializesInFlightHeartbeatWhenStoppingLeaseFails(t *testing.T) {
-	fixture := newLockedDurableDiskFinalizationFixture(t, "container-failed-stopping-lease")
-	request := fixture.request
-	heartbeatRelease := make(chan struct{})
-	leaseStarted := make(chan struct{}, 1)
-	repoClient := &fakeContainerRepoClient{
-		state: &pb.ContainerState{
-			ContainerId: request.ContainerId,
-			Status:      string(types.ContainerStatusPending),
-		},
-		getStateStarted:     make(chan struct{}, 1),
-		getStateRelease:     heartbeatRelease,
-		updateStatusStarted: leaseStarted,
-		updateStatusErrorForExpiry: map[int64]error{
-			types.ContainerStateTtlSWhileStopping: context.Canceled,
-		},
-	}
-	worker := newContainerFinalizationTestWorker(request, repoClient, nil)
-	heartbeatDone := make(chan bool, 1)
-	heartbeatErr := make(chan error, 1)
-	go func() {
-		done, err := worker.updateContainerStatusOnce(context.Background(), request)
-		heartbeatDone <- done
-		heartbeatErr <- err
-	}()
-	select {
-	case <-repoClient.getStateStarted:
-	case <-time.After(time.Second):
-		t.Fatal("heartbeat did not cache pending state")
-	}
-
-	clearDone := clearContainerAsync(worker, request, 7)
-	select {
-	case <-leaseStarted:
-	case <-time.After(time.Second):
-		t.Fatal("finalization did not begin the cleanup lease")
-	}
-	close(heartbeatRelease)
-	requireLocalContainerExitCode(t, worker, request.ContainerId, 7)
-
-	require.True(t, <-heartbeatDone)
-	require.NoError(t, <-heartbeatErr)
-	for _, update := range repoClient.containerStatusUpdates() {
-		require.Equal(t, string(types.ContainerStatusStopping), update.Status, "stale heartbeat overwrote finalization state")
-		require.Equal(t, int64(types.ContainerStateTtlSWhileStopping), update.ExpirySeconds)
-	}
-	require.Equal(t, 1, repoClient.getStateCalls)
-
-	fixture.releaseAndWaitForClear(t, clearDone)
-}
-
-func TestClearContainerTerminalizesAfterDurableDiskSyncFailure(t *testing.T) {
-	request := &types.ContainerRequest{
-		ContainerId: "container-sync-error",
-		Mounts: []types.Mount{{
-			LocalPath: blockedDurableDiskPath(t),
-			DurableDisk: &types.DurableDiskMountConfig{
-				Name: "disk-sync-error",
-				Size: "1Gi",
-			},
-		}},
-	}
-	repoClient := &fakeContainerRepoClient{deleteStateDone: make(chan struct{}, 1)}
-	worker := newContainerFinalizationTestWorker(request, repoClient, nil)
-
-	worker.clearContainer(request.ContainerId, request, 0, true)
-
-	select {
-	case <-repoClient.deleteStateDone:
-	case <-time.After(time.Second):
-		t.Fatal("container state was not deleted after disk sync failure")
-	}
-	require.Equal(t, 1, repoClient.setExitCodeCalls)
-	require.Equal(t, int32(types.ContainerExitCodeUnknownError), repoClient.lastSetExitCode.ExitCode)
-	updates := repoClient.containerStatusUpdates()
-	require.Len(t, updates, 2)
-	require.Equal(t, int64(types.ContainerStateTtlSWhileStopping), updates[0].ExpirySeconds)
-	require.Equal(t, int64(types.ContainerStateTtlS), updates[1].ExpirySeconds)
-	require.Eventually(t, func() bool {
-		_, exists := worker.containerInstances.Get(request.ContainerId)
-		return !exists
-	}, time.Second, 10*time.Millisecond)
-}
-
 func TestClearContainerWithoutDurableDiskUsesNormalStoppingLease(t *testing.T) {
 	request := &types.ContainerRequest{ContainerId: "container-no-durable-disk"}
 	repoClient := &fakeContainerRepoClient{}
@@ -1549,40 +1374,6 @@ func TestClearContainerWithoutDurableDiskUsesNormalStoppingLease(t *testing.T) {
 	}
 	_, exists := worker.containerInstances.Get(request.ContainerId)
 	require.False(t, exists)
-}
-
-func TestClearContainerPublishesFailureAfterDurableDiskSyncFailure(t *testing.T) {
-	for _, test := range []struct {
-		exitCode     types.ContainerExitCode
-		exitReported bool
-		want         types.ContainerExitCode
-	}{
-		{exitCode: types.ContainerExitCodeScheduler, exitReported: true, want: types.ContainerExitCodeUnknownError},
-		{exitCode: types.ContainerExitCodeTtl, exitReported: true, want: types.ContainerExitCodeUnknownError},
-		{exitCode: types.ContainerExitCodeUser, exitReported: true, want: types.ContainerExitCodeUnknownError},
-		{exitCode: types.ContainerExitCodeAdmin, exitReported: true, want: types.ContainerExitCodeUnknownError},
-		{exitCode: types.ContainerExitCodeOomKill, exitReported: false, want: types.ContainerExitCodeOomKill},
-	} {
-		t.Run(fmt.Sprintf("exit-%d", test.exitCode), func(t *testing.T) {
-			request := &types.ContainerRequest{
-				ContainerId: fmt.Sprintf("container-sync-failure-%d", test.exitCode),
-				Mounts: []types.Mount{{
-					LocalPath: blockedDurableDiskPath(t),
-					DurableDisk: &types.DurableDiskMountConfig{
-						Name: "disk",
-						Size: "1Gi",
-					},
-				}},
-			}
-			repoClient := &fakeContainerRepoClient{}
-			worker := newContainerFinalizationTestWorker(request, repoClient, nil)
-
-			worker.clearContainer(request.ContainerId, request, int(test.exitCode), test.exitReported)
-
-			require.Equal(t, 1, repoClient.containerExitCodeCalls())
-			require.Equal(t, int32(test.want), repoClient.lastSetExitCode.ExitCode)
-		})
-	}
 }
 
 func TestClearContainerRetriesExitPublication(t *testing.T) {
@@ -1615,14 +1406,8 @@ func TestSetContainerExitCodeTreatsMissingStateAsComplete(t *testing.T) {
 
 func TestClearContainerTreatsMissingStateAsTerminal(t *testing.T) {
 	request := &types.ContainerRequest{
-		ContainerId: "container-missing-state",
-		Mounts: []types.Mount{{
-			LocalPath: blockedDurableDiskPath(t),
-			DurableDisk: &types.DurableDiskMountConfig{
-				Name: "disk-missing-state",
-				Size: "1Gi",
-			},
-		}},
+		ContainerId:    "container-missing-state",
+		PersistentRoot: &types.PersistentRoot{Size: "1Gi"},
 	}
 	missing := &types.ErrContainerStateNotFound{ContainerId: request.ContainerId}
 	repoClient := &fakeContainerRepoClient{updateStatusErrors: []error{missing, missing}}
@@ -1745,81 +1530,6 @@ func newContainerFinalizationTestWorker(request *types.ContainerRequest, repoCli
 	}
 }
 
-type lockedDurableDiskFinalizationFixture struct {
-	request *types.ContainerRequest
-	lock    *FileLock
-}
-
-func newLockedDurableDiskFinalizationFixture(t *testing.T, containerID string) *lockedDurableDiskFinalizationFixture {
-	t.Helper()
-	diskPath := filepath.Join(t.TempDir(), "disk")
-	lockDir := filepath.Join(filepath.Dir(diskPath), durableDiskLockDir)
-	require.NoError(t, os.MkdirAll(lockDir, 0o755))
-	lock := NewFileLock(filepath.Join(lockDir, filepath.Base(diskPath)+".lock"))
-	require.NoError(t, lock.Acquire())
-	fixture := &lockedDurableDiskFinalizationFixture{
-		request: &types.ContainerRequest{
-			ContainerId: containerID,
-			Mounts: []types.Mount{{
-				LocalPath: diskPath,
-				DurableDisk: &types.DurableDiskMountConfig{
-					Name: containerID,
-					Size: "1Gi",
-				},
-			}},
-		},
-		lock: lock,
-	}
-	t.Cleanup(func() { fixture.release(t) })
-	return fixture
-}
-
-func (f *lockedDurableDiskFinalizationFixture) release(t *testing.T) {
-	t.Helper()
-	if f.lock == nil {
-		return
-	}
-	require.NoError(t, f.lock.Release())
-	f.lock = nil
-}
-
-func (f *lockedDurableDiskFinalizationFixture) releaseAndWaitForClear(t *testing.T, clearDone <-chan struct{}) {
-	t.Helper()
-	f.release(t)
-	select {
-	case <-clearDone:
-	case <-time.After(time.Second):
-		t.Fatal("container cleanup did not finish after releasing the disk lock")
-	}
-}
-
-func clearContainerAsync(worker *Worker, request *types.ContainerRequest, exitCode int) <-chan struct{} {
-	done := make(chan struct{})
-	go func() {
-		worker.clearContainer(request.ContainerId, request, exitCode, false)
-		close(done)
-	}()
-	return done
-}
-
-func requireLocalContainerExitCode(t *testing.T, worker *Worker, containerID string, expected int) {
-	t.Helper()
-	require.Eventually(t, func() bool {
-		instance, ok := worker.containerInstances.Get(containerID)
-		if !ok {
-			return false
-		}
-		exitCode, _ := instance.lifecycleState()
-		return exitCode == expected
-	}, time.Second, 10*time.Millisecond)
-}
-
-func blockedDurableDiskPath(t *testing.T) string {
-	blocker := filepath.Join(t.TempDir(), "not-a-directory")
-	require.NoError(t, os.WriteFile(blocker, []byte("blocked"), 0o644))
-	return filepath.Join(blocker, "disk")
-}
-
 func TestContainerExitReasonSeparatesCompletionFromStops(t *testing.T) {
 	require.Equal(t, "COMPLETED", containerExitReason(0, types.StopContainerReasonUnknown, false))
 	require.Equal(t, "SIGKILL", containerExitReason(int(types.ContainerExitCodeOomKill), types.StopContainerReasonUnknown, false))
@@ -1878,9 +1588,7 @@ func TestRunContainerDoesNotCancelRuntimeRunWithWorkerContext(t *testing.T) {
 			slog.New(slog.NewTextHandler(io.Discard, nil)),
 			common.NewOutputWriter(func(string) {}),
 			make(chan int, 1),
-			make(chan int, 1),
 			time.Now(),
-			nil,
 			nil,
 		)
 		result <- err
@@ -1905,1183 +1613,25 @@ func TestRunContainerDoesNotCancelRuntimeRunWithWorkerContext(t *testing.T) {
 	require.NoError(t, <-result)
 }
 
-func completedCheckpointFilesystemRestore() *checkpointFilesystemRestore {
-	done := make(chan struct{})
-	close(done)
-	return &checkpointFilesystemRestore{startedAt: time.Now(), done: done}
-}
-
-func TestRunContainerRestorePublishesAddressFromStartedHandler(t *testing.T) {
-	t.Setenv("WORKER_POOL_NAME", "default")
-	tmpDir := t.TempDir()
-	checkpointId := "checkpoint-1"
-	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "checkpoints", checkpointId, checkpointFsDir), 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "checkpoints", checkpointId, "inventory.img"), []byte("runtime payload"), 0644))
-
-	bundleDir := filepath.Join(tmpDir, "bundle")
-	require.NoError(t, os.MkdirAll(bundleDir, 0755))
-	configPath := filepath.Join(bundleDir, specBaseName)
-	require.NoError(t, os.WriteFile(configPath, []byte("{}"), 0644))
-
-	repoClient := &fakeContainerRepoClient{
-		state: &pb.ContainerState{Status: string(types.ContainerStatusPending)},
-	}
-	backendRepoClient := &fakeBackendRepoClient{}
-	var stateCalls atomic.Int32
-	rt := &mockRuntime{
-		name:         "runc",
-		capabilities: runtime.Capabilities{CheckpointRestore: true},
-		state: func(context.Context, string) (runtime.State, error) {
-			if stateCalls.Add(1) == 1 {
-				return runtime.State{Pid: 1234, Status: types.RuncContainerStatusRunning}, nil
-			}
-			return runtime.State{Status: types.RuncContainerStatusStopped}, nil
-		},
-	}
-	worker := &Worker{
-		config: types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
-			"default": {CRIUEnabled: true},
-		}}},
-		podAddr:             "10.42.0.10",
-		criuManager:         &startedCRIUManager{},
-		cacheManager:        &WorkerCacheManager{checkpointRoot: filepath.Join(tmpDir, "checkpoints")},
-		containerRepoClient: repoClient,
-		backendRepoClient:   backendRepoClient,
-		containerInstances:  common.NewSafeMap[*ContainerInstance](),
-	}
-	request := &types.ContainerRequest{
-		ContainerId: "container-1",
-		ConfigPath:  configPath,
-		Checkpoint: &types.Checkpoint{
-			CheckpointId: checkpointId,
-			Status:       string(types.CheckpointStatusAvailable),
-		},
-		Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeASGI)}},
-	}
-	worker.containerInstances.Set(request.ContainerId, &ContainerInstance{
-		Id:      request.ContainerId,
-		Runtime: rt,
-	})
-
-	exitCode, err := worker.runContainer(
-		context.Background(),
-		request,
-		slog.New(slog.NewTextHandler(io.Discard, nil)),
-		common.NewOutputWriter(func(string) {}),
-		make(chan int, 1),
-		make(chan int, 1),
-		time.Now(),
-		[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
-		completedCheckpointFilesystemRestore(),
-	)
-
-	require.NoError(t, err)
-	require.Equal(t, -1, exitCode)
-	require.Zero(t, repoClient.setAddressCalls)
-	require.Equal(t, 1, repoClient.setAddressMapCalls)
-	require.Equal(t, int32(8001), repoClient.lastSetAddressMap.PrimaryPort)
-	require.Equal(t, "10.42.0.10:30001", repoClient.lastSetAddressMap.AddressMap[8001])
-	require.Equal(t, 1, repoClient.updateStatusCalls)
-	require.Equal(t, string(types.ContainerStatusRunning), repoClient.lastUpdateStatus.Status)
-	require.Eventually(t, func() bool {
-		return backendRepoClient.updateCalls == 1 && backendRepoClient.lastUpdate.LastRestoredAt != nil
-	}, time.Second, 10*time.Millisecond)
-}
-
-func TestCheckpointFilesystemRestorePreparesInitialUpperLayer(t *testing.T) {
-	checkpointRoot := t.TempDir()
-	checkpointID := "checkpoint-prepare-upper"
-	checkpointPath := filepath.Join(checkpointRoot, checkpointID)
-	checkpointFilesystem := filepath.Join(checkpointPath, checkpointFsDir)
-	require.NoError(t, os.MkdirAll(filepath.Join(checkpointFilesystem, "state"), 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(checkpointPath, "inventory.img"), []byte("runtime"), 0644))
-	require.NoError(t, os.WriteFile(filepath.Join(checkpointFilesystem, "state", "ready"), []byte("yes"), 0644))
-
-	worker := &Worker{
-		ctx:          context.Background(),
-		cacheManager: &WorkerCacheManager{checkpointRoot: checkpointRoot},
-	}
-	request := &types.ContainerRequest{
-		ContainerId: "checkpoint-prepare-upper-test",
-		Checkpoint: &types.Checkpoint{
-			CheckpointId: checkpointID,
-			Status:       string(types.CheckpointStatusAvailable),
-		},
-	}
-	restore := worker.startCheckpointFilesystemRestore(request, nil)
-	t.Cleanup(restore.cleanup)
-
-	require.NoError(t, restore.wait())
-	info, err := os.Stat(restore.upperPath)
-	require.NoError(t, err)
-	require.Equal(t, os.FileMode(0755), info.Mode().Perm())
-	data, err := os.ReadFile(filepath.Join(restore.upperPath, "state", "ready"))
-	require.NoError(t, err)
-	require.Equal(t, "yes", string(data))
-}
-
-func TestCheckpointFilesystemRestorePreservesArchiveRootMode(t *testing.T) {
-	if goruntime.GOOS != "linux" {
-		t.Skip("checkpoint workers use GNU tar on Linux")
-	}
-
-	checkpointRoot := t.TempDir()
-	checkpointID := "checkpoint-archive-root-mode"
-	checkpointPath := filepath.Join(checkpointRoot, checkpointID)
-	require.NoError(t, os.MkdirAll(checkpointPath, 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(checkpointPath, "inventory.img"), []byte("runtime"), 0644))
-
-	archiveSource := t.TempDir()
-	require.NoError(t, os.Chmod(archiveSource, 0750))
-	require.NoError(t, os.WriteFile(filepath.Join(archiveSource, "marker"), []byte("preserved"), 0644))
-	require.NoError(t, archiveDirectoryContext(context.Background(), archiveSource, filepath.Join(checkpointPath, checkpointFsArchive), nil))
-
-	worker := &Worker{
-		ctx:          context.Background(),
-		cacheManager: &WorkerCacheManager{checkpointRoot: checkpointRoot},
-	}
-	request := &types.ContainerRequest{
-		ContainerId: "checkpoint-archive-root-mode-test",
-		Checkpoint: &types.Checkpoint{
-			CheckpointId: checkpointID,
-			Status:       string(types.CheckpointStatusAvailable),
-		},
-	}
-	restore := worker.startCheckpointFilesystemRestore(request, nil)
-	t.Cleanup(restore.cleanup)
-
-	require.NoError(t, restore.wait())
-	info, err := os.Stat(restore.upperPath)
-	require.NoError(t, err)
-	require.Equal(t, os.FileMode(0750), info.Mode().Perm())
-	require.FileExists(t, filepath.Join(restore.upperPath, "marker"))
-}
-
-func TestFilesystemCheckpointRestoreCopiesOverlayThenColdRuns(t *testing.T) {
-	fakeBin := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(fakeBin, "mount"), []byte("#!/bin/sh\nexit 0\n"), 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(fakeBin, "umount"), []byte("#!/bin/sh\nexit 0\n"), 0755))
-	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
-
-	checkpointRoot := t.TempDir()
-	checkpointID := "checkpoint-filesystem-cold"
-	checkpointPath := filepath.Join(checkpointRoot, checkpointID)
-	require.NoError(t, os.MkdirAll(filepath.Join(checkpointPath, checkpointFsDir, "tmp"), 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(checkpointPath, checkpointFilesystemOnlyFile), []byte("v1\n"), 0644))
-	require.NoError(t, os.WriteFile(filepath.Join(checkpointPath, checkpointFsDir, "tmp", "marker"), []byte("preserved"), 0644))
-
-	bundleDir := t.TempDir()
-	configPath := filepath.Join(bundleDir, specBaseName)
-	require.NoError(t, os.WriteFile(configPath, []byte("{}"), 0644))
-
-	overlayPath := t.TempDir()
-	restoredMarker := filepath.Join(overlayPath, "container-filesystem-cold", "layer-0", "upper", "tmp", "marker")
-	rt := &restoreFallbackRuntime{mockRuntime: mockRuntime{name: "other"}}
-	rt.runConfigPath = restoredMarker
-	criuManager := &observingRestoreErrorCRIUManager{err: assert.AnError}
-	backendRepoClient := &fakeBackendRepoClient{}
-	repoClient := &fakeContainerRepoClient{state: &pb.ContainerState{Status: string(types.ContainerStatusPending)}}
-	worker := &Worker{
-		podAddr:             "10.42.0.10",
-		criuManager:         criuManager,
-		cacheManager:        &WorkerCacheManager{checkpointRoot: checkpointRoot},
-		containerRepoClient: repoClient,
-		backendRepoClient:   backendRepoClient,
-		containerInstances:  common.NewSafeMap[*ContainerInstance](),
-	}
-	request := &types.ContainerRequest{
-		ContainerId: "container-filesystem-cold",
-		ConfigPath:  configPath,
-		Checkpoint: &types.Checkpoint{
-			CheckpointId: checkpointID,
-			Status:       string(types.CheckpointStatusAvailable),
-			Runtime:      types.CheckpointRuntimeFilesystem,
-		},
-		Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeASGI)}},
-	}
-	worker.containerInstances.Set(request.ContainerId, &ContainerInstance{
-		Id:      request.ContainerId,
-		Request: request,
-		Runtime: rt,
-		Overlay: common.NewContainerOverlay(request, t.TempDir(), overlayPath),
-	})
-
-	exitCode, err := worker.runContainer(
-		context.Background(),
-		request,
-		slog.New(slog.NewTextHandler(io.Discard, nil)),
-		common.NewOutputWriter(func(string) {}),
-		make(chan int, 1),
-		make(chan int, 1),
-		time.Now(),
-		[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
-		nil,
-	)
-
-	require.NoError(t, err)
-	require.Equal(t, 0, exitCode)
-	require.True(t, rt.runCalled)
-	require.Equal(t, "preserved", string(rt.runConfigContents), "overlay must be restored before cold runtime start")
-	require.Equal(t, 0, rt.deleteCallsAtRun, "filesystem restore must not invoke runtime restore cleanup before cold run")
-	require.Zero(t, criuManager.restoreCalls)
-	require.FileExists(t, restoredMarker)
-	require.NoFileExists(t, filepath.Join(bundleDir, "tmp", "marker"), "raw upper state must not be extracted into the bundle")
-	require.Nil(t, request.Checkpoint)
-	require.Equal(t, 1, backendRepoClient.updateCalls)
-	require.NotNil(t, backendRepoClient.lastUpdate.LastRestoredAt)
-}
-
-func TestCheckpointFilesystemRestoreDiscardRemovesPartialUpperLayer(t *testing.T) {
-	overlayRoot := filepath.Join(t.TempDir(), "overlay")
-	require.NoError(t, os.MkdirAll(filepath.Join(overlayRoot, "layer-0", "upper"), 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(overlayRoot, "layer-0", "upper", "partial"), []byte("partial"), 0644))
-	require.NoError(t, os.MkdirAll(filepath.Join(overlayRoot, "criu"), 0755))
-
-	_, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	close(done)
-	restore := &checkpointFilesystemRestore{
-		upperPath: filepath.Join(overlayRoot, "layer-0", "upper"),
-		published: true,
-		done:      done,
-		cancel:    cancel,
-		err:       assert.AnError,
-	}
-
-	require.NoError(t, restore.discard())
-	require.NoDirExists(t, filepath.Join(overlayRoot, "layer-0"))
-	require.DirExists(t, filepath.Join(overlayRoot, "criu"))
-}
-
-func TestRunContainerRestoreWaitsForRestoredRuntimeExitAndTerminalCheckpoint(t *testing.T) {
-	t.Setenv("WORKER_POOL_NAME", "default")
-	tmpDir := t.TempDir()
-	checkpointId := "checkpoint-1"
-	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "checkpoints", checkpointId, checkpointFsDir), 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "checkpoints", checkpointId, "checkpoint.img"), []byte("runtime payload"), 0644))
-
-	bundleDir := filepath.Join(tmpDir, "bundle")
-	require.NoError(t, os.MkdirAll(bundleDir, 0755))
-	configPath := filepath.Join(bundleDir, specBaseName)
-	require.NoError(t, os.WriteFile(configPath, []byte("{}"), 0644))
-
-	repoClient := &fakeContainerRepoClient{
-		state: &pb.ContainerState{Status: string(types.ContainerStatusPending)},
-	}
-	backendRepoClient := &fakeBackendRepoClient{}
-	restoreStopped := make(chan struct{})
-	enteredWait := make(chan struct{}, 1)
-	rt := &mockRuntime{
-		name:         "gvisor",
-		capabilities: runtime.Capabilities{CheckpointRestore: true},
-		state: func(context.Context, string) (runtime.State, error) {
-			select {
-			case enteredWait <- struct{}{}:
-			default:
-			}
-			select {
-			case <-restoreStopped:
-				return runtime.State{Status: types.RuncContainerStatusStopped}, nil
-			default:
-				return runtime.State{Pid: 1234, Status: types.RuncContainerStatusRunning}, nil
-			}
-		},
-	}
-	worker := &Worker{
-		config: types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
-			"default": {CRIUEnabled: true},
-		}}},
-		podAddr:             "10.42.0.10",
-		criuManager:         &startedCRIUManager{},
-		cacheManager:        &WorkerCacheManager{checkpointRoot: filepath.Join(tmpDir, "checkpoints")},
-		containerRepoClient: repoClient,
-		backendRepoClient:   backendRepoClient,
-		containerInstances:  common.NewSafeMap[*ContainerInstance](),
-	}
-	request := &types.ContainerRequest{
-		ContainerId: "container-1",
-		ConfigPath:  configPath,
-		Checkpoint: &types.Checkpoint{
-			CheckpointId: checkpointId,
-			Status:       string(types.CheckpointStatusAvailable),
-		},
-		Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeASGI)}},
-	}
-	worker.containerInstances.Set(request.ContainerId, &ContainerInstance{
-		Id:      request.ContainerId,
-		Runtime: rt,
-	})
-
-	done := make(chan error, 1)
-	go func() {
-		_, err := worker.runContainer(
-			context.Background(),
-			request,
-			slog.New(slog.NewTextHandler(io.Discard, nil)),
-			common.NewOutputWriter(func(string) {}),
-			make(chan int, 1),
-			make(chan int, 1),
-			time.Now(),
-			[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
-			completedCheckpointFilesystemRestore(),
-		)
-		done <- err
-	}()
-
-	select {
-	case <-enteredWait:
-	case err := <-done:
-		t.Fatalf("runContainer returned before polling restored runtime state: %v", err)
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for restored runtime state polling")
-	}
-
-	select {
-	case err := <-done:
-		t.Fatalf("runContainer returned before restored runtime exited: %v", err)
-	case <-time.After(100 * time.Millisecond):
-	}
-
-	checkpointState, acquired := worker.acquireCheckpointCreateLock(request)
-	require.True(t, acquired)
-	require.True(t, checkpointState.requestTerminal(request.ContainerId))
-	close(restoreStopped)
-	select {
-	case err := <-done:
-		t.Fatalf("runContainer returned while the terminal checkpoint still owned the restored overlay: %v", err)
-	case <-time.After(2 * restoredContainerPollInterval):
-	}
-
-	worker.markTerminalCheckpointRuntimeStopped(request)
-	worker.finishCheckpointCreate(request, checkpointState)
-	select {
-	case err := <-done:
-		require.NoError(t, err)
-	case <-time.After(2 * restoredContainerPollInterval):
-		t.Fatal("runContainer did not return after restored runtime exited")
-	}
-}
-
-func TestWaitForRestoredContainerExitFailsBeforeRunningState(t *testing.T) {
-	rt := &mockRuntime{
-		state: func(context.Context, string) (runtime.State, error) {
-			return runtime.State{}, runtime.ErrContainerNotFound{ContainerID: "container-restore"}
-		},
-	}
-
-	exitCode, err := (&Worker{}).waitForRestoredContainerExit(context.Background(), rt, "container-restore", 0)
-
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "restored container state unavailable")
-	require.Equal(t, -1, exitCode)
-}
-
-func TestWaitForRestoredContainerExitTreatsPausedContainerAsAlive(t *testing.T) {
-	statuses := []string{
-		types.RuncContainerStatusRunning,
-		types.RuncContainerStatusPaused,
-		types.RuncContainerStatusPaused,
-		types.RuncContainerStatusRunning,
-		types.RuncContainerStatusStopped,
-	}
-	var observed []string
-	rt := &mockRuntime{
-		state: func(context.Context, string) (runtime.State, error) {
-			status := statuses[len(observed)]
-			observed = append(observed, status)
-			return runtime.State{Status: status, Pid: 42}, nil
-		},
-	}
-
-	exitCode, err := (&Worker{}).waitForRestoredContainerExit(context.Background(), rt, "container-restore", 0)
-
-	require.NoError(t, err)
-	require.Equal(t, -1, exitCode)
-	require.Equal(t, statuses, observed, "watcher stopped before the container actually stopped")
-}
-
-func TestAttemptRestoreCheckpointTreatsGenericErrorAsRestoreFailure(t *testing.T) {
-	restoreErr := assert.AnError
-	containerID := "container-restore-generic-error"
-	t.Cleanup(func() { _ = os.RemoveAll(filepath.Join("/tmp", containerID)) })
-
-	backendRepoClient := &fakeBackendRepoClient{}
-	worker := &Worker{
-		criuManager:        &restoreErrorCRIUManager{exitCode: 17, err: restoreErr},
-		backendRepoClient:  backendRepoClient,
-		containerInstances: common.NewSafeMap[*ContainerInstance](),
-	}
-	worker.containerInstances.Set(containerID, &ContainerInstance{
-		Id:      containerID,
-		Runtime: &mockRuntime{name: "runc"},
-	})
-	request := &types.ContainerRequest{
-		ContainerId: containerID,
-		ConfigPath:  filepath.Join(t.TempDir(), "config.json"),
-		Checkpoint: &types.Checkpoint{
-			CheckpointId: "checkpoint-generic-error",
-			Status:       string(types.CheckpointStatusAvailable),
-		},
-	}
-
-	var output strings.Builder
-	exitCode, restored, started, err := worker.attemptRestoreCheckpoint(
-		context.Background(),
-		request,
-		slog.New(slog.NewTextHandler(&output, nil)),
-		common.NewOutputWriter(func(string) {}),
-		make(chan int, 1),
-		make(chan int, 1),
-	)
-
-	require.ErrorIs(t, err, restoreErr)
-	require.False(t, restored)
-	require.False(t, started)
-	require.Equal(t, 17, exitCode)
-	require.Equal(t, 1, backendRepoClient.updateCalls)
-	require.Equal(t, request.Checkpoint.CheckpointId, backendRepoClient.lastUpdate.CheckpointId)
-	require.Equal(t, string(types.CheckpointStatusRestoreFailed), backendRepoClient.lastUpdate.Status)
-	require.Nil(t, backendRepoClient.lastUpdate.LastRestoredAt)
-	require.Contains(t, output.String(), restoreErr.Error())
-}
-
-func TestAttemptRestoreCheckpointKeepsHostIncompatibleCheckpointAvailable(t *testing.T) {
-	containerID := "container-restore-incompatible-host"
-	t.Cleanup(func() { _ = os.RemoveAll(filepath.Join("/tmp", containerID)) })
-
-	backendRepoClient := &fakeBackendRepoClient{}
-	worker := &Worker{
-		criuManager: &restoreErrorCRIUManager{
-			exitCode: -1,
-			err:      &ErrCheckpointHostIncompatible{Stderr: "CPU capabilities do not match run time"},
-		},
-		backendRepoClient:  backendRepoClient,
-		containerInstances: common.NewSafeMap[*ContainerInstance](),
-	}
-	worker.containerInstances.Set(containerID, &ContainerInstance{
-		Id:      containerID,
-		Runtime: &mockRuntime{name: "runc"},
-	})
-	request := &types.ContainerRequest{
-		ContainerId: containerID,
-		ConfigPath:  filepath.Join(t.TempDir(), "config.json"),
-		Checkpoint: &types.Checkpoint{
-			CheckpointId: "checkpoint-incompatible-host",
-			Status:       string(types.CheckpointStatusAvailable),
-		},
-	}
-	var output strings.Builder
-
-	exitCode, restored, started, err := worker.attemptRestoreCheckpoint(
-		context.Background(),
-		request,
-		slog.New(slog.NewTextHandler(&output, nil)),
-		common.NewOutputWriter(func(message string) { output.WriteString(message) }),
-		make(chan int, 1),
-		make(chan int, 1),
-	)
-
-	require.True(t, IsCheckpointHostIncompatible(err))
-	require.False(t, restored)
-	require.False(t, started)
-	require.Equal(t, -1, exitCode)
-	require.Equal(t, 0, backendRepoClient.updateCalls)
-	require.Contains(t, output.String(), "incompatible CPU")
-}
-
-func TestRunContainerRestoreFailureCleansRuntimeBeforeFallback(t *testing.T) {
-	t.Setenv("WORKER_POOL_NAME", "default")
-
-	restoreErr := assert.AnError
-	containerID := "container-restore-fallback"
-	checkpointID := "checkpoint-restore-fallback"
-	tmpDir := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "checkpoints", checkpointID, checkpointFsDir), 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "checkpoints", checkpointID, "inventory.img"), []byte("runtime payload"), 0644))
-
-	rt := &restoreFallbackRuntime{
-		mockRuntime: mockRuntime{
-			name:         "runc",
-			capabilities: runtime.Capabilities{CheckpointRestore: true},
-		},
-	}
-	criuManager := &observingRestoreErrorCRIUManager{err: restoreErr, removeConfig: true}
-	backendRepoClient := &fakeBackendRepoClient{}
-	repoClient := &fakeContainerRepoClient{
-		state: &pb.ContainerState{Status: string(types.ContainerStatusPending)},
-	}
-	worker := &Worker{
-		config: types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
-			"default": {CRIUEnabled: true},
-		}}},
-		podAddr:             "10.42.0.10",
-		criuManager:         criuManager,
-		containerRepoClient: repoClient,
-		backendRepoClient:   backendRepoClient,
-		containerInstances:  common.NewSafeMap[*ContainerInstance](),
-		cacheManager:        &WorkerCacheManager{checkpointRoot: filepath.Join(tmpDir, "checkpoints")},
-	}
-	worker.containerInstances.Set(containerID, &ContainerInstance{
-		Id:      containerID,
-		Runtime: rt,
-	})
-	configPath := filepath.Join(t.TempDir(), "config.json")
-	configContents := []byte(runtime.GetBaseConfig("runc"))
-	require.NoError(t, os.WriteFile(configPath, configContents, 0644))
-	rt.runConfigPath = configPath
-	request := &types.ContainerRequest{
-		ContainerId:       containerID,
-		ConfigPath:        configPath,
-		Stub:              types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeASGIDeployment)}},
-		CheckpointEnabled: true,
-		Checkpoint: &types.Checkpoint{
-			CheckpointId: checkpointID,
-			Status:       string(types.CheckpointStatusAvailable),
-		},
-	}
-
-	exitCode, err := worker.runContainer(
-		context.Background(),
-		request,
-		slog.New(slog.NewTextHandler(io.Discard, nil)),
-		common.NewOutputWriter(func(string) {}),
-		make(chan int, 1),
-		make(chan int, 1),
-		time.Now(),
-		[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
-		completedCheckpointFilesystemRestore(),
-	)
-
-	require.NoError(t, err)
-	require.Equal(t, 0, exitCode)
-	require.True(t, rt.runCalled)
-	require.Equal(t, 0, criuManager.deleteCallsAtRestore)
-	require.Equal(t, 1, rt.deleteCallsAtRun)
-	require.Equal(t, 1, backendRepoClient.updateCalls)
-	require.Equal(t, string(types.CheckpointStatusRestoreFailed), backendRepoClient.lastUpdate.Status)
-	require.Nil(t, backendRepoClient.lastUpdate.LastRestoredAt)
-	require.Nil(t, request.Checkpoint)
-	require.True(t, request.CheckpointEnabled)
-	require.Equal(t, 1, repoClient.updateStatusCalls)
-	require.Equal(t, string(types.ContainerStatusRunning), repoClient.lastUpdateStatus.Status)
-	require.Contains(t, string(rt.runConfigContents), `"ociVersion"`)
-	require.Contains(t, string(rt.runConfigContents), "CHECKPOINT_ENABLED=true")
-}
-
-func TestRunContainerMigratesLegacyForcedRuncCheckpointBeforeRestore(t *testing.T) {
-	t.Setenv("WORKER_POOL_NAME", "default")
-	fakeBin := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(fakeBin, "mount"), []byte("#!/bin/sh\nexit 0\n"), 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(fakeBin, "umount"), []byte("#!/bin/sh\nexit 0\n"), 0755))
-	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
-
-	for index, test := range []struct {
-		name             string
-		marker           string
-		wantCold         bool
-		wantRestoreCalls int
-	}{
-		{name: "missing profile marker", wantCold: true},
-		{name: "malformed profile marker", marker: "v0\n", wantCold: true},
-		{name: "current profile marker", marker: checkpointForcedRuncProfileV1, wantRestoreCalls: 1},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			root := t.TempDir()
-			containerID := fmt.Sprintf("container-forced-profile-migration-%d", index)
-			checkpointID := fmt.Sprintf("checkpoint-forced-profile-migration-%d", index)
-			t.Cleanup(func() { _ = os.RemoveAll(checkpointSignalDir(containerID)) })
-
-			checkpointRoot := filepath.Join(root, "checkpoints")
-			checkpointPath := filepath.Join(checkpointRoot, checkpointID)
-			require.NoError(t, os.MkdirAll(filepath.Join(checkpointPath, checkpointFsDir, "tmp"), 0755))
-			require.NoError(t, os.MkdirAll(filepath.Join(checkpointPath, checkpointFsDir, "workspace"), 0755))
-			require.NoError(t, os.WriteFile(filepath.Join(checkpointPath, "inventory.img"), []byte("runtime"), 0644))
-			require.NoError(t, os.WriteFile(filepath.Join(checkpointPath, checkpointFsDir, "tmp", "root-marker"), []byte("checkpoint-root"), 0644))
-			require.NoError(t, os.WriteFile(filepath.Join(checkpointPath, checkpointFsDir, "workspace", "overlay-only"), []byte("overlay"), 0644))
-			if test.marker != "" {
-				require.NoError(t, os.WriteFile(filepath.Join(checkpointPath, checkpointForcedRuncProfileFile), []byte(test.marker), 0644))
-			}
-
-			overlayPath := filepath.Join(root, "overlay")
-			configPath := filepath.Join(overlayPath, containerID, "layer-0", "merged", specBaseName)
-			configContents := writeForcedRuncProfileConfig(t, configPath)
-			durablePath := filepath.Join(root, "durable-workspace")
-			require.NoError(t, os.MkdirAll(durablePath, 0755))
-			require.NoError(t, os.WriteFile(filepath.Join(durablePath, "durable-marker"), []byte("durable"), 0644))
-			var spec specs.Spec
-			require.NoError(t, json.Unmarshal(configContents, &spec))
-			spec.Mounts = append(spec.Mounts, specs.Mount{Type: "bind", Source: durablePath, Destination: "/workspace"})
-			configContents, err := json.Marshal(&spec)
-			require.NoError(t, err)
-			require.NoError(t, os.WriteFile(configPath, configContents, 0644))
-
-			rt := &restoreFallbackRuntime{
-				mockRuntime: mockRuntime{
-					name:         types.ContainerRuntimeRunc.String(),
-					capabilities: runtime.Capabilities{CheckpointRestore: true},
-				},
-				runConfigPath:     configPath,
-				runRootMarkerPath: filepath.Join(overlayPath, containerID, "layer-0", "upper", "tmp", "root-marker"),
-			}
-			manager := &observingRestoreErrorCRIUManager{}
-			backendRepoClient := &fakeBackendRepoClient{}
-			worker := &Worker{
-				config: types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
-					"default": {CRIUEnabled: true},
-				}}},
-				podAddr:             "10.42.0.10",
-				criuManager:         manager,
-				cacheManager:        &WorkerCacheManager{checkpointRoot: checkpointRoot},
-				containerRepoClient: &fakeContainerRepoClient{state: &pb.ContainerState{Status: string(types.ContainerStatusPending)}},
-				backendRepoClient:   backendRepoClient,
-				containerInstances:  common.NewSafeMap[*ContainerInstance](),
-			}
-			request := &types.ContainerRequest{
-				ContainerId: containerID,
-				ConfigPath:  configPath,
-				Stub: types.StubWithRelated{Stub: types.Stub{
-					Type:   types.StubType(types.StubTypeSandbox),
-					Config: `{"_beta9_force_resource_limits":true}`,
-				}},
-				Mounts: []types.Mount{{
-					LocalPath:   durablePath,
-					MountPath:   "/workspace",
-					MountType:   types.StorageModeDurableDisk,
-					DurableDisk: &types.DurableDiskMountConfig{Name: "workspace"},
-				}},
-				Checkpoint: &types.Checkpoint{
-					CheckpointId: checkpointID,
-					Status:       string(types.CheckpointStatusAvailable),
-					Runtime:      types.ContainerRuntimeRunc.String(),
-				},
-			}
-			worker.containerInstances.Set(containerID, &ContainerInstance{
-				Id:      containerID,
-				Request: request,
-				Runtime: rt,
-				Overlay: common.NewContainerOverlay(request, filepath.Join(root, "root"), overlayPath),
-			})
-			restoreDone := make(chan struct{})
-			close(restoreDone)
-
-			exitCode, err := worker.runContainer(
-				context.Background(),
-				request,
-				slog.New(slog.NewTextHandler(io.Discard, nil)),
-				common.NewOutputWriter(func(string) {}),
-				make(chan int, 1),
-				make(chan int, 1),
-				time.Now(),
-				nil,
-				&checkpointFilesystemRestore{done: restoreDone},
-			)
-
-			require.NoError(t, err)
-			require.Equal(t, test.wantRestoreCalls, manager.restoreCalls)
-			if !test.wantCold {
-				require.Equal(t, -1, exitCode)
-				require.False(t, rt.runCalled)
-				require.Equal(t, 1, backendRepoClient.updateCalls)
-				require.NotNil(t, backendRepoClient.lastUpdate.LastRestoredAt)
-				return
-			}
-
-			require.Equal(t, 0, exitCode)
-			require.True(t, rt.runCalled)
-			require.Zero(t, rt.deleteCalls, "migration must bypass runtime restore and cleanup")
-			require.Equal(t, "checkpoint-root", string(rt.runRootMarkerContents))
-			require.Equal(t, configContents, rt.runConfigContents, "cold run must use the newly generated guarded config")
-			require.Contains(t, string(rt.runConfigContents), "/proc/sys/vm/drop_caches")
-			require.Contains(t, string(rt.runConfigContents), durablePath)
-			require.Zero(t, backendRepoClient.updateCalls, "migration must not mark the legacy checkpoint restored or failed")
-			require.Nil(t, request.Checkpoint)
-			require.FileExists(t, filepath.Join(durablePath, "durable-marker"))
-			require.NoFileExists(t, filepath.Join(durablePath, "overlay-only"), "checkpoint root overlay must not replace the durable mount")
-		})
-	}
-}
-
-func TestRunContainerLegacyForcedRuncMigrationFailureDoesNotRestoreOrRun(t *testing.T) {
-	t.Setenv("WORKER_POOL_NAME", "default")
-	fakeBin := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(fakeBin, "mount"), []byte("#!/bin/sh\nexit 1\n"), 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(fakeBin, "umount"), []byte("#!/bin/sh\nexit 0\n"), 0755))
-	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
-
-	root := t.TempDir()
-	containerID := "container-forced-profile-migration-failure"
-	checkpointID := "checkpoint-forced-profile-migration-failure"
-	checkpointRoot := filepath.Join(root, "checkpoints")
-	checkpointPath := filepath.Join(checkpointRoot, checkpointID)
-	require.NoError(t, os.MkdirAll(filepath.Join(checkpointPath, checkpointFsDir), 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(checkpointPath, checkpointFsDir, "root-marker"), []byte("checkpoint-root"), 0644))
-	require.NoError(t, os.WriteFile(filepath.Join(checkpointPath, "inventory.img"), []byte("runtime"), 0644))
-	overlayPath := filepath.Join(root, "overlay")
-	configPath := filepath.Join(overlayPath, containerID, "layer-0", "merged", specBaseName)
-	writeForcedRuncProfileConfig(t, configPath)
-
-	rt := &restoreFallbackRuntime{mockRuntime: mockRuntime{name: types.ContainerRuntimeRunc.String(), capabilities: runtime.Capabilities{CheckpointRestore: true}}}
-	manager := &observingRestoreErrorCRIUManager{}
-	backendRepoClient := &fakeBackendRepoClient{}
-	worker := &Worker{
-		config: types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
-			"default": {CRIUEnabled: true},
-		}}},
-		criuManager:        manager,
-		cacheManager:       &WorkerCacheManager{checkpointRoot: checkpointRoot},
-		backendRepoClient:  backendRepoClient,
-		containerInstances: common.NewSafeMap[*ContainerInstance](),
-	}
-	request := &types.ContainerRequest{
-		ContainerId: containerID,
-		ConfigPath:  configPath,
-		Stub: types.StubWithRelated{Stub: types.Stub{
-			Type:   types.StubType(types.StubTypeSandbox),
-			Config: `{"_beta9_force_resource_limits":true}`,
-		}},
-		Checkpoint: &types.Checkpoint{CheckpointId: checkpointID, Status: string(types.CheckpointStatusAvailable), Runtime: types.ContainerRuntimeRunc.String()},
-	}
-	worker.containerInstances.Set(containerID, &ContainerInstance{
-		Id:      containerID,
-		Request: request,
-		Runtime: rt,
-		Overlay: common.NewContainerOverlay(request, filepath.Join(root, "root"), overlayPath),
-	})
-	restoreDone := make(chan struct{})
-	close(restoreDone)
-
-	_, err := worker.runContainer(
-		context.Background(), request,
-		slog.New(slog.NewTextHandler(io.Discard, nil)), common.NewOutputWriter(func(string) {}),
-		make(chan int, 1), make(chan int, 1), time.Now(), nil,
-		&checkpointFilesystemRestore{done: restoreDone},
-	)
-
-	require.ErrorContains(t, err, "migrate legacy forced runc checkpoint")
-	require.Zero(t, manager.restoreCalls)
-	require.False(t, rt.runCalled)
-	require.Zero(t, rt.deleteCalls)
-	require.Zero(t, backendRepoClient.updateCalls)
-	require.NotNil(t, request.Checkpoint, "failed migration must leave the checkpoint attached for retry")
-	require.NoDirExists(t, filepath.Join(overlayPath, containerID, "layer-0"), "failed reseed must remove partial upper state")
-}
-
-func TestRunContainerRejectsForcedRuncDockerModeBeforeLaunch(t *testing.T) {
-	instances := common.NewSafeMap[*ContainerInstance]()
-	worker := &Worker{
-		runtime:            &mockRuntime{name: types.ContainerRuntimeRunc.String()},
-		containerInstances: instances,
-	}
-	request := &types.ContainerRequest{
-		ContainerId:   "forced-runc-docker",
-		DockerEnabled: true,
-		Stub: types.StubWithRelated{Stub: types.Stub{
-			Config: `{"_beta9_force_resource_limits":true}`,
-		}},
-	}
-
-	err := worker.RunContainer(context.Background(), request)
-	require.ErrorContains(t, err, "do not support Docker-enabled mode")
-	_, exists := instances.Get(request.ContainerId)
-	require.False(t, exists, "rejected request must not create container state")
-}
-
-func TestRunContainerSandboxRestoreFallbackPolicy(t *testing.T) {
-	t.Setenv("WORKER_POOL_NAME", "default")
-	fakeBin := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(fakeBin, "mount"), []byte("#!/bin/sh\nexit 0\n"), 0755))
-	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
-
-	tests := []struct {
-		name                  string
-		restoreErr            error
-		deleteErr             error
-		runtimeName           string
-		archiveFilesystem     bool
-		forceResourceLimits   bool
-		missingOverlay        bool
-		wantFallback          bool
-		wantCheckpointUpdates int
-	}{
-		{
-			name: "forced sandbox durable mount validation error",
-			restoreErr: fmt.Errorf("restore failed: %w", &checkpointDurableMountValidationError{
-				mountPath: "/workspace",
-				err:       assert.AnError,
-			}),
-			forceResourceLimits: true,
-			wantFallback:        true,
-		},
-		{
-			name: "forced sandbox cleanup failure",
-			restoreErr: fmt.Errorf("restore failed: %w", &checkpointDurableMountValidationError{
-				mountPath: "/workspace",
-				err:       assert.AnError,
-			}),
-			deleteErr:           errors.New("delete failed"),
-			forceResourceLimits: true,
-		},
-		{
-			name: "forced sandbox missing overlay",
-			restoreErr: fmt.Errorf("restore failed: %w", &checkpointDurableMountValidationError{
-				mountPath: "/workspace",
-				err:       assert.AnError,
-			}),
-			forceResourceLimits: true,
-			missingOverlay:      true,
-		},
-		{
-			name: "ordinary sandbox durable mount validation error",
-			restoreErr: fmt.Errorf("restore failed: %w", &checkpointDurableMountValidationError{
-				mountPath: "/workspace",
-				err:       assert.AnError,
-			}),
-		},
-		{
-			name:                  "forced sandbox generic restore error",
-			restoreErr:            assert.AnError,
-			forceResourceLimits:   true,
-			wantCheckpointUpdates: 1,
-		},
-		{
-			name:                "forced sandbox runsc version mismatch",
-			restoreErr:          &ErrRunscCheckpointVersionMismatch{Stderr: runscVersionMismatchMessage},
-			runtimeName:         types.ContainerRuntimeGvisor.String(),
-			archiveFilesystem:   true,
-			forceResourceLimits: true,
-			wantFallback:        true,
-		},
-		{
-			name:                "forced sandbox runsc version mismatch cleanup failure",
-			restoreErr:          &ErrRunscCheckpointVersionMismatch{Stderr: runscVersionMismatchMessage},
-			deleteErr:           errors.New("delete failed"),
-			runtimeName:         types.ContainerRuntimeGvisor.String(),
-			forceResourceLimits: true,
-		},
-		{
-			name:                  "ordinary sandbox runsc version mismatch",
-			restoreErr:            &ErrRunscCheckpointVersionMismatch{Stderr: runscVersionMismatchMessage},
-			runtimeName:           types.ContainerRuntimeGvisor.String(),
-			wantCheckpointUpdates: 1,
-		},
-	}
-
-	for index, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			containerID := fmt.Sprintf("container-sandbox-mount-fallback-%d", index)
-			checkpointID := fmt.Sprintf("checkpoint-sandbox-mount-fallback-%d", index)
-			t.Cleanup(func() { _ = os.RemoveAll(filepath.Join("/tmp", containerID)) })
-			tmpDir := t.TempDir()
-			overlayPath := filepath.Join(tmpDir, "overlay")
-			configPath := filepath.Join(overlayPath, containerID, "layer-0", "merged", "config.json")
-			runtimeName := test.runtimeName
-			if runtimeName == "" {
-				runtimeName = types.ContainerRuntimeRunc.String()
-			}
-			configContents := []byte(runtime.GetBaseConfig(runtimeName))
-			durablePath := ""
-			if runtimeName == types.ContainerRuntimeGvisor.String() {
-				durablePath = filepath.Join(tmpDir, "durable-workspace")
-				require.NoError(t, os.MkdirAll(durablePath, 0755))
-				require.NoError(t, os.WriteFile(filepath.Join(durablePath, "durable-marker"), []byte("durable"), 0644))
-				var spec specs.Spec
-				require.NoError(t, json.Unmarshal(configContents, &spec))
-				spec.Mounts = append(spec.Mounts, specs.Mount{Type: "bind", Source: durablePath, Destination: "/workspace"})
-				updatedConfig, err := json.Marshal(&spec)
-				require.NoError(t, err)
-				configContents = updatedConfig
-			}
-			require.NoError(t, os.MkdirAll(filepath.Dir(configPath), 0755))
-			require.NoError(t, os.WriteFile(configPath, configContents, 0644))
-			checkpointRoot := filepath.Join(tmpDir, "checkpoints")
-			checkpointPath := filepath.Join(checkpointRoot, checkpointID)
-			require.NoError(t, os.MkdirAll(checkpointPath, 0755))
-			checkpointFilesystem := filepath.Join(checkpointPath, checkpointFsDir)
-			if test.archiveFilesystem {
-				checkpointFilesystem = t.TempDir()
-			}
-			require.NoError(t, os.MkdirAll(checkpointFilesystem, 0755))
-			runtimePayload := "inventory.img"
-			if runtimeName == types.ContainerRuntimeGvisor.String() {
-				runtimePayload = "checkpoint.img"
-			}
-			require.NoError(t, os.WriteFile(filepath.Join(checkpointPath, runtimePayload), []byte("runtime"), 0644))
-			require.NoError(t, os.WriteFile(filepath.Join(checkpointFilesystem, "checkpoint-root-marker"), []byte("pristine"), 0644))
-			if test.forceResourceLimits && runtimeName == types.ContainerRuntimeRunc.String() {
-				require.NoError(t, os.WriteFile(filepath.Join(checkpointPath, checkpointForcedRuncProfileFile), []byte(checkpointForcedRuncProfileV1), 0644))
-			}
-			if test.archiveFilesystem {
-				require.NoError(t, archiveDirectoryContext(context.Background(), checkpointFilesystem, filepath.Join(checkpointPath, checkpointFsArchive), nil))
-			}
-
-			rt := &restoreFallbackRuntime{
-				mockRuntime: mockRuntime{
-					name:         runtimeName,
-					capabilities: runtime.Capabilities{CheckpointRestore: true},
-				},
-				runConfigPath: configPath,
-				deleteErr:     test.deleteErr,
-			}
-			repoClient := &fakeContainerRepoClient{state: &pb.ContainerState{Status: string(types.ContainerStatusPending)}}
-			backendRepoClient := &fakeBackendRepoClient{}
-			worker := &Worker{
-				config: types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
-					"default": {CRIUEnabled: true},
-				}}},
-				criuManager:         &restoreErrorCRIUManager{exitCode: -1, err: test.restoreErr},
-				containerRepoClient: repoClient,
-				backendRepoClient:   backendRepoClient,
-				containerInstances:  common.NewSafeMap[*ContainerInstance](),
-				cacheManager:        &WorkerCacheManager{checkpointRoot: checkpointRoot},
-			}
-			request := &types.ContainerRequest{
-				ContainerId: containerID,
-				ConfigPath:  configPath,
-				Stub: types.StubWithRelated{Stub: types.Stub{
-					Type: types.StubType(types.StubTypeSandbox),
-				}},
-				Checkpoint: &types.Checkpoint{
-					CheckpointId: checkpointID,
-					Status:       string(types.CheckpointStatusAvailable),
-				},
-			}
-			if test.forceResourceLimits {
-				request.Stub.Config = `{"_beta9_force_resource_limits":true}`
-			}
-			if durablePath != "" {
-				request.Mounts = []types.Mount{{
-					LocalPath:   durablePath,
-					MountPath:   "/workspace",
-					MountType:   types.StorageModeDurableDisk,
-					DurableDisk: &types.DurableDiskMountConfig{Name: "workspace"},
-				}}
-				t.Cleanup(func() {
-					contents, err := os.ReadFile(filepath.Join(durablePath, "durable-marker"))
-					require.NoError(t, err, "checkpoint fallback must not replace durable workspace storage")
-					require.Equal(t, "durable", string(contents))
-				})
-			}
-			instance := &ContainerInstance{
-				Id:      containerID,
-				Runtime: rt,
-			}
-			if !test.missingOverlay {
-				instance.Overlay = common.NewContainerOverlay(request, filepath.Join(tmpDir, "root"), overlayPath)
-			}
-			worker.containerInstances.Set(containerID, instance)
-			filesystemRestoreDone := make(chan struct{})
-			close(filesystemRestoreDone)
-
-			exitCode, err := worker.runContainer(
-				context.Background(),
-				request,
-				slog.New(slog.NewTextHandler(io.Discard, nil)),
-				common.NewOutputWriter(func(string) {}),
-				make(chan int, 1),
-				make(chan int, 1),
-				time.Now(),
-				nil,
-				&checkpointFilesystemRestore{done: filesystemRestoreDone},
-			)
-
-			if !test.wantFallback {
-				require.ErrorIs(t, err, test.restoreErr)
-				require.False(t, rt.runCalled)
-				require.NotNil(t, request.Checkpoint)
-				require.Equal(t, test.wantCheckpointUpdates, backendRepoClient.updateCalls)
-				if test.wantCheckpointUpdates > 0 {
-					require.Equal(t, string(types.CheckpointStatusRestoreFailed), backendRepoClient.lastUpdate.Status)
-				}
-				require.FileExists(t, filepath.Join(checkpointSignalDir(containerID), checkpointCompleteFileName), "fallback preparation must not run")
-				require.NoFileExists(t, filepath.Join(tmpDir, "checkpoint-root-marker"), "checkpoint filesystem must not be reseeded")
-				if test.deleteErr != nil {
-					var cleanupErr *checkpointRestoreCleanupError
-					require.ErrorAs(t, err, &cleanupErr)
-					require.ErrorIs(t, err, test.deleteErr)
-				}
-				return
-			}
-
-			require.NoError(t, err)
-			require.Equal(t, 0, exitCode)
-			require.True(t, rt.runCalled)
-			require.Equal(t, 1, rt.deleteCallsAtRun, "failed restored runtime must be deleted before cold run")
-			require.Zero(t, backendRepoClient.updateCalls, "safe fallback must not invalidate the checkpoint")
-			require.Nil(t, request.Checkpoint)
-			require.NoFileExists(t, filepath.Join(checkpointSignalDir(containerID), checkpointCompleteFileName), "fallback must clear restored checkpoint signals")
-			require.FileExists(t, filepath.Join(overlayPath, containerID, "layer-0", "upper", "checkpoint-root-marker"), "fallback must reseed the fresh upper from the checkpoint")
-			require.NoFileExists(t, filepath.Join(overlayPath, containerID, "layer-0", "merged", "checkpoint-root-marker"), "checkpoint upper must not be copied through merged")
-			require.Equal(t, configContents, rt.runConfigContents)
-			if durablePath != "" {
-				require.Contains(t, string(rt.runConfigContents), durablePath, "cold run must retain the durable workspace bind")
-			}
-		})
-	}
-}
-
-func TestRunContainerMaterializeFailureFallsBackWithoutRestore(t *testing.T) {
-	t.Setenv("WORKER_POOL_NAME", "default")
-
-	containerID := "container-materialize-fallback"
-	rt := &restoreFallbackRuntime{
-		mockRuntime: mockRuntime{
-			name:         "runc",
-			capabilities: runtime.Capabilities{CheckpointRestore: true},
-		},
-	}
-	criuManager := &observingRestoreErrorCRIUManager{err: assert.AnError}
-	backendRepoClient := &fakeBackendRepoClient{}
-	repoClient := &fakeContainerRepoClient{
-		state: &pb.ContainerState{Status: string(types.ContainerStatusPending)},
-	}
-	worker := &Worker{
-		config: types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
-			"default": {CRIUEnabled: true},
-		}}},
-		podAddr:             "10.42.0.10",
-		criuManager:         criuManager,
-		containerRepoClient: repoClient,
-		backendRepoClient:   backendRepoClient,
-		containerInstances:  common.NewSafeMap[*ContainerInstance](),
-	}
-	worker.containerInstances.Set(containerID, &ContainerInstance{
-		Id:      containerID,
-		Runtime: rt,
-	})
-	request := &types.ContainerRequest{
-		ContainerId: containerID,
-		ConfigPath:  filepath.Join(t.TempDir(), "config.json"),
-		Stub:        types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeASGIDeployment)}},
-		Checkpoint: &types.Checkpoint{
-			CheckpointId: "checkpoint-missing-payload",
-			Status:       string(types.CheckpointStatusAvailable),
-		},
-	}
-
-	exitCode, err := worker.runContainer(
-		context.Background(),
-		request,
-		slog.New(slog.NewTextHandler(io.Discard, nil)),
-		common.NewOutputWriter(func(string) {}),
-		make(chan int, 1),
-		make(chan int, 1),
-		time.Now(),
-		[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
-		nil,
-	)
-
-	require.NoError(t, err)
-	require.Equal(t, 0, exitCode)
-	require.True(t, rt.runCalled)
-	require.Equal(t, 0, criuManager.restoreCalls)
-	require.Equal(t, 0, backendRepoClient.updateCalls)
-	require.Nil(t, request.Checkpoint)
-}
-
-func TestHasAvailableCheckpoint(t *testing.T) {
-	require.False(t, hasAvailableCheckpoint(&types.ContainerRequest{
-		Checkpoint: &types.Checkpoint{Status: string(types.CheckpointStatusRestoreFailed)},
-	}))
-	require.True(t, hasAvailableCheckpoint(&types.ContainerRequest{
-		Checkpoint: &types.Checkpoint{Status: string(types.CheckpointStatusAvailable)},
-	}))
-}
-
-func TestValidateCheckpointRestoreRuntime(t *testing.T) {
-	request := &types.ContainerRequest{Checkpoint: &types.Checkpoint{
-		CheckpointId: "checkpoint-1",
-		Status:       string(types.CheckpointStatusAvailable),
-		Runtime:      " gvisor ",
-	}}
-	gvisor := &mockRuntime{name: types.ContainerRuntimeGvisor.String(), capabilities: runtime.Capabilities{CheckpointRestore: true}}
-	runc := &mockRuntime{name: types.ContainerRuntimeRunc.String(), capabilities: runtime.Capabilities{CheckpointRestore: true}}
-	unsupported := &mockRuntime{name: types.ContainerRuntimeRunc.String()}
-
-	require.NoError(t, validateCheckpointRestoreRuntime(request, gvisor))
-	require.EqualError(t, validateCheckpointRestoreRuntime(request, runc),
-		`cannot restore gvisor checkpoint "checkpoint-1" with runtime "runc"`)
-	require.EqualError(t, validateCheckpointRestoreRuntime(request, unsupported),
-		`cannot restore checkpoint "checkpoint-1" with runtime "runc": checkpoint restore is unsupported`)
-
-	request.Checkpoint.Status = string(types.CheckpointStatusRestoreFailed)
-	require.NoError(t, validateCheckpointRestoreRuntime(request, unsupported))
-
-	request.Checkpoint.Status = string(types.CheckpointStatusAvailable)
-	request.Checkpoint.Runtime = ""
-	require.NoError(t, validateCheckpointRestoreRuntime(request, runc))
-
-	request.Checkpoint.Runtime = types.CheckpointRuntimeFilesystem
-	require.NoError(t, validateCheckpointRestoreRuntime(request, unsupported))
-	require.NoError(t, validateCheckpointRestoreRuntime(request, nil))
-}
-
-func TestShouldCreateCheckpointIgnoresNonAvailableAttachedCheckpoint(t *testing.T) {
-	t.Setenv("WORKER_POOL_NAME", "default")
-
-	worker := &Worker{
-		config: types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
-			"default": {CRIUEnabled: true},
-		}}},
-		criuManager: &startedCRIUManager{},
-	}
-	request := &types.ContainerRequest{
-		CheckpointEnabled: true,
-		GpuCount:          0,
-		Checkpoint: &types.Checkpoint{
-			CheckpointId: "checkpoint-failed",
-			Status:       string(types.CheckpointStatusRestoreFailed),
-		},
-	}
-
-	require.True(t, worker.shouldCreateCheckpoint(request))
-
-	request.Checkpoint.Status = string(types.CheckpointStatusAvailable)
-	require.False(t, worker.shouldCreateCheckpoint(request))
-}
-
-func TestShouldCreateCheckpointSkipsSandboxes(t *testing.T) {
-	t.Setenv("WORKER_POOL_NAME", "default")
-
-	worker := &Worker{
-		config: types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
-			"default": {CRIUEnabled: true},
-		}}},
-		criuManager: &startedCRIUManager{},
-	}
-	request := &types.ContainerRequest{
-		CheckpointEnabled: true,
-		Stub:              types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)}},
-	}
-
-	require.False(t, worker.shouldCreateCheckpoint(request))
-
-	request.Stub.Type = types.StubType(types.StubTypePodDeployment)
-	require.True(t, worker.shouldCreateCheckpoint(request))
-}
-
 func TestAttemptRestoreCheckpointRestoresRuntimeOnly(t *testing.T) {
 	containerID := "container-restore-sandbox"
 	t.Cleanup(func() { _ = os.RemoveAll(filepath.Join("/tmp", containerID)) })
 
 	rt := &mockRuntime{name: "runc"}
-	backendRepoClient := &fakeBackendRepoClient{}
 	worker := &Worker{
 		criuManager:        &startedCRIUManager{},
-		backendRepoClient:  backendRepoClient,
 		containerInstances: common.NewSafeMap[*ContainerInstance](),
 	}
 	worker.containerInstances.Set(containerID, &ContainerInstance{
-		Id:      containerID,
-		Runtime: rt,
+		Id:                    containerID,
+		Runtime:               rt,
+		StateMemoryCheckpoint: &StateMemoryCheckpoint{ID: "checkpoint-sandbox-restore"},
 	})
 	request := &types.ContainerRequest{
-		ContainerId: containerID,
-		ConfigPath:  filepath.Join(t.TempDir(), "config.json"),
-		Stub:        types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)}},
-		Checkpoint: &types.Checkpoint{
-			CheckpointId: "checkpoint-sandbox-restore",
-			Status:       string(types.CheckpointStatusAvailable),
-		},
+		ContainerId:     containerID,
+		StateSnapshotId: "state-snapshot-sandbox-restore",
+		ConfigPath:      filepath.Join(t.TempDir(), "config.json"),
+		Stub:            types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)}},
 	}
 
 	exitCode, restored, started, err := worker.attemptRestoreCheckpoint(
@@ -3089,7 +1639,6 @@ func TestAttemptRestoreCheckpointRestoresRuntimeOnly(t *testing.T) {
 		request,
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		common.NewOutputWriter(func(string) {}),
-		make(chan int, 1),
 		make(chan int, 1),
 	)
 
@@ -3099,7 +1648,6 @@ func TestAttemptRestoreCheckpointRestoresRuntimeOnly(t *testing.T) {
 	require.Equal(t, 0, exitCode)
 	require.Empty(t, rt.signals)
 	require.Empty(t, rt.killOpts)
-	require.Equal(t, 0, backendRepoClient.updateCalls)
 }
 
 func TestAddRequestMountsBuildsVolumeCacheMap(t *testing.T) {
@@ -3122,24 +1670,6 @@ func TestAddRequestMountsBuildsVolumeCacheMap(t *testing.T) {
 	require.Equal(t, localPath, spec.Mounts[0].Source)
 	require.Equal(t, request.Mounts[0].MountPath, spec.Mounts[0].Destination)
 	require.Equal(t, []string{"rbind", "ro"}, spec.Mounts[0].Options)
-}
-
-func TestAddRequestMountsSkipsCheckpointModelCacheVolumeCacheMap(t *testing.T) {
-	localPath := filepath.Join(t.TempDir(), "volume")
-	spec := getTestBaseSpec()
-	request := &types.ContainerRequest{
-		ContainerId: "container-1",
-		Mounts: []types.Mount{{
-			LocalPath: localPath,
-			MountPath: filepath.Join(types.WorkerContainerVolumePath, types.CheckpointModelCacheVolumeName("svc")),
-		}},
-	}
-
-	volumeCacheMap, err := (&Worker{}).addRequestMounts(request, &spec)
-
-	require.NoError(t, err)
-	require.Empty(t, volumeCacheMap)
-	require.Len(t, spec.Mounts, 1)
 }
 
 func TestAddRequestMountsSkipsMissingMountPoint(t *testing.T) {
@@ -3789,59 +2319,66 @@ func (m *restoreFallbackRuntime) Run(ctx context.Context, containerID, bundlePat
 	return 0, nil
 }
 
-type fakeBackendRepoClient struct {
-	updateCalls         int
-	lastUpdate          *pb.UpdateCheckpointRequest
-	createCalls         int
-	lastCreate          *pb.CreateCheckpointRequest
-	sourceSnapshot      *pb.DiskSnapshot
-	latestSnapshot      *pb.DiskSnapshot
-	getDiskSnapshotErr  error
-	requestedSnapshotId string
+type fakeBackendRepoClient struct{}
+
+func (*fakeBackendRepoClient) CreateStateSnapshot(context.Context, *pb.CreateStateSnapshotRequest, ...grpc.CallOption) (*pb.CreateStateSnapshotResponse, error) {
+	return &pb.CreateStateSnapshotResponse{Ok: true}, nil
 }
 
-func (f *fakeBackendRepoClient) GetCheckpointById(ctx context.Context, in *pb.GetCheckpointByIdRequest, opts ...grpc.CallOption) (*pb.GetCheckpointByIdResponse, error) {
-	return &pb.GetCheckpointByIdResponse{Ok: true}, nil
+func (*fakeBackendRepoClient) ArmStateSnapshot(context.Context, *pb.ArmStateSnapshotRequest, ...grpc.CallOption) (*pb.StateSnapshotMutationResponse, error) {
+	return &pb.StateSnapshotMutationResponse{Ok: true}, nil
 }
 
-func (f *fakeBackendRepoClient) GetLatestCheckpointByStubId(ctx context.Context, in *pb.GetLatestCheckpointByStubIdRequest, opts ...grpc.CallOption) (*pb.GetLatestCheckpointByStubIdResponse, error) {
-	return &pb.GetLatestCheckpointByStubIdResponse{Ok: true}, nil
+func (*fakeBackendRepoClient) ClaimStateSnapshotRecovery(context.Context, *pb.ClaimStateSnapshotRecoveryRequest, ...grpc.CallOption) (*pb.StateSnapshotMutationResponse, error) {
+	return &pb.StateSnapshotMutationResponse{Ok: true}, nil
 }
 
-func (f *fakeBackendRepoClient) ListCheckpoints(ctx context.Context, in *pb.ListCheckpointsRequest, opts ...grpc.CallOption) (*pb.ListCheckpointsResponse, error) {
-	return &pb.ListCheckpointsResponse{Ok: true}, nil
+func (*fakeBackendRepoClient) GetStateSnapshotRecoveryCredentials(context.Context, *pb.GetStateSnapshotRecoveryCredentialsRequest, ...grpc.CallOption) (*pb.GetStateSnapshotRecoveryCredentialsResponse, error) {
+	return &pb.GetStateSnapshotRecoveryCredentialsResponse{Ok: true}, nil
 }
 
-func (f *fakeBackendRepoClient) CreateCheckpoint(ctx context.Context, in *pb.CreateCheckpointRequest, opts ...grpc.CallOption) (*pb.CreateCheckpointResponse, error) {
-	f.createCalls++
-	f.lastCreate = in
-	return &pb.CreateCheckpointResponse{Ok: true}, nil
+func (*fakeBackendRepoClient) FailStateSnapshot(context.Context, *pb.FailStateSnapshotRequest, ...grpc.CallOption) (*pb.StateSnapshotMutationResponse, error) {
+	return &pb.StateSnapshotMutationResponse{Ok: true}, nil
 }
 
-func (f *fakeBackendRepoClient) UpdateCheckpoint(ctx context.Context, in *pb.UpdateCheckpointRequest, opts ...grpc.CallOption) (*pb.UpdateCheckpointResponse, error) {
-	f.updateCalls++
-	f.lastUpdate = in
-	return &pb.UpdateCheckpointResponse{Ok: true}, nil
+func (*fakeBackendRepoClient) CommitStateSnapshot(context.Context, *pb.CommitStateSnapshotRequest, ...grpc.CallOption) (*pb.CommitStateSnapshotResponse, error) {
+	return &pb.CommitStateSnapshotResponse{Ok: true}, nil
 }
 
-func (f *fakeBackendRepoClient) CreateDiskSnapshot(ctx context.Context, in *pb.CreateDiskSnapshotRequest, opts ...grpc.CallOption) (*pb.CreateDiskSnapshotResponse, error) {
-	return &pb.CreateDiskSnapshotResponse{Ok: true}, nil
+func (*fakeBackendRepoClient) GetStateSnapshot(context.Context, *pb.GetStateSnapshotRequest, ...grpc.CallOption) (*pb.GetStateSnapshotResponse, error) {
+	return &pb.GetStateSnapshotResponse{Ok: true}, nil
 }
 
-func (f *fakeBackendRepoClient) GetLatestDiskSnapshot(ctx context.Context, in *pb.GetLatestDiskSnapshotRequest, opts ...grpc.CallOption) (*pb.GetLatestDiskSnapshotResponse, error) {
-	return &pb.GetLatestDiskSnapshotResponse{Ok: true, Snapshot: f.latestSnapshot}, nil
+func (*fakeBackendRepoClient) GetStateSnapshotByOperation(context.Context, *pb.GetStateSnapshotByOperationRequest, ...grpc.CallOption) (*pb.GetStateSnapshotResponse, error) {
+	return &pb.GetStateSnapshotResponse{Ok: true}, nil
 }
 
-func (f *fakeBackendRepoClient) GetDiskSnapshot(ctx context.Context, in *pb.GetDiskSnapshotRequest, opts ...grpc.CallOption) (*pb.GetDiskSnapshotResponse, error) {
-	f.requestedSnapshotId = in.SnapshotId
-	if f.getDiskSnapshotErr != nil {
-		return nil, f.getDiskSnapshotErr
-	}
-	return &pb.GetDiskSnapshotResponse{Ok: true, Snapshot: f.sourceSnapshot}, nil
+func (*fakeBackendRepoClient) GetPendingStateSnapshotByContainer(context.Context, *pb.GetPendingStateSnapshotByContainerRequest, ...grpc.CallOption) (*pb.GetStateSnapshotResponse, error) {
+	return &pb.GetStateSnapshotResponse{Ok: true}, nil
 }
 
-func (f *fakeBackendRepoClient) GetDiskSnapshotDownloadURL(context.Context, *pb.GetDiskSnapshotDownloadURLRequest, ...grpc.CallOption) (*pb.GetDiskSnapshotDownloadURLResponse, error) {
-	return nil, errors.New("not implemented")
+func (*fakeBackendRepoClient) GetVolumeGeneration(context.Context, *pb.GetVolumeGenerationRequest, ...grpc.CallOption) (*pb.GetVolumeGenerationResponse, error) {
+	return &pb.GetVolumeGenerationResponse{Ok: true}, nil
+}
+
+func (*fakeBackendRepoClient) RenewStateVolumeAttachments(context.Context, *pb.RenewStateVolumeAttachmentsRequest, ...grpc.CallOption) (*pb.RenewStateVolumeAttachmentsResponse, error) {
+	return &pb.RenewStateVolumeAttachmentsResponse{Ok: true}, nil
+}
+
+func (*fakeBackendRepoClient) ReleaseStateVolumeAttachments(context.Context, *pb.ReleaseStateVolumeAttachmentsRequest, ...grpc.CallOption) (*pb.ReleaseStateVolumeAttachmentsResponse, error) {
+	return &pb.ReleaseStateVolumeAttachmentsResponse{Ok: true}, nil
+}
+
+func (*fakeBackendRepoClient) BeginStateVolumeReleaseIntent(context.Context, *pb.BeginStateVolumeReleaseIntentRequest, ...grpc.CallOption) (*pb.ClaimStateVolumeReleaseResponse, error) {
+	return &pb.ClaimStateVolumeReleaseResponse{Ok: true, ReleaseClaimId: "00000000-0000-4000-8000-000000000001"}, nil
+}
+
+func (*fakeBackendRepoClient) ClaimStateVolumeRelease(context.Context, *pb.ClaimStateVolumeReleaseRequest, ...grpc.CallOption) (*pb.ClaimStateVolumeReleaseResponse, error) {
+	return &pb.ClaimStateVolumeReleaseResponse{Ok: true, ReleaseClaimId: "00000000-0000-4000-8000-000000000001", ReleaseClaimGeneration: 1}, nil
+}
+
+func (*fakeBackendRepoClient) CompleteClaimedStateVolumeRelease(context.Context, *pb.CompleteClaimedStateVolumeReleaseRequest, ...grpc.CallOption) (*pb.CompleteClaimedStateVolumeReleaseResponse, error) {
+	return &pb.CompleteClaimedStateVolumeReleaseResponse{Ok: true}, nil
 }
 
 type mockResourceRuntime struct {

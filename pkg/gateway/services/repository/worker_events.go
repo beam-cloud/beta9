@@ -155,15 +155,27 @@ func (b *workerEventBroker) handleRedisEventID(eventID string) {
 		return
 	}
 
-	b.fanout(workerEvent)
+	containerID, err := workerEventContainerID(workerEvent)
+	if err != nil {
+		log.Error().Str("event_id", eventID).Err(err).Msg("worker event bridge could not resolve the target container")
+		return
+	}
+	targetWorkerID, err := b.rdb.HGet(b.ctx, common.RedisKeys.SchedulerContainerState(containerID), "worker_id").Result()
+	if err != nil || targetWorkerID == "" {
+		log.Error().Err(err).Str("event_id", eventID).Str("container_id", containerID).
+			Msg("worker event bridge could not resolve the authoritative target worker")
+		return
+	}
+
+	b.fanout(targetWorkerID, workerEvent)
 }
 
-func (b *workerEventBroker) fanout(event *pb.WorkerEvent) {
+func (b *workerEventBroker) fanout(targetWorkerID string, event *pb.WorkerEvent) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
 	for _, sink := range b.sinks {
-		if sink.events == nil {
+		if sink.workerID != targetWorkerID || sink.events == nil {
 			continue
 		}
 		select {
@@ -175,6 +187,19 @@ func (b *workerEventBroker) fanout(event *pb.WorkerEvent) {
 				Msg("dropping worker event for slow stream")
 		}
 	}
+}
+
+func workerEventContainerID(event *pb.WorkerEvent) (string, error) {
+	if event == nil {
+		return "", errors.New("worker event is required")
+	}
+	if stop := event.GetStopContainer(); stop != nil && stop.ContainerId != "" {
+		return stop.ContainerId, nil
+	}
+	if stop := event.GetStopBuild(); stop != nil && stop.ContainerId != "" {
+		return stop.ContainerId, nil
+	}
+	return "", errors.New("worker event has no target container")
 }
 
 func (b *workerEventBroker) wakeRequests(workerID string) {
@@ -246,11 +271,14 @@ func (s *WorkerRepositoryService) StreamWorkerEvents(req *pb.StreamWorkerEventsR
 }
 
 func (s *WorkerRepositoryService) streamWorkerEvents(req *pb.StreamWorkerEventsRequest, stream pb.WorkerRepositoryService_StreamWorkerEventsServer, heartbeatInterval time.Duration) error {
-	if req.WorkerId == "" {
-		return status.Error(codes.InvalidArgument, "worker_id is required")
+	if req == nil || req.WorkerId == "" || req.WorkerInstanceId == "" || req.StorageNodeId == "" {
+		return status.Error(codes.InvalidArgument, "worker id, process instance, and storage node are required")
 	}
 	if s.workerEvents == nil {
 		return status.Error(codes.FailedPrecondition, "worker event stream is unavailable")
+	}
+	if err := s.authorizeWorkerDeliveryProcess(stream.Context(), req.WorkerId, req.WorkerInstanceId, req.StorageNodeId); err != nil {
+		return status.Error(codes.PermissionDenied, err.Error())
 	}
 
 	sinkID, events := s.workerEvents.register(req.WorkerId)
@@ -270,12 +298,18 @@ func (s *WorkerRepositoryService) streamWorkerEvents(req *pb.StreamWorkerEventsR
 		case <-stream.Context().Done():
 			return stream.Context().Err()
 		case <-heartbeat:
+			if err := s.authorizeWorkerDeliveryProcess(stream.Context(), req.WorkerId, req.WorkerInstanceId, req.StorageNodeId); err != nil {
+				return status.Error(codes.PermissionDenied, err.Error())
+			}
 			if err := stream.Send(&pb.WorkerEvent{EventId: types.WorkerEventHeartbeatID}); err != nil {
 				return err
 			}
 		case event, ok := <-events:
 			if !ok {
 				return nil
+			}
+			if err := s.authorizeWorkerDeliveryProcess(stream.Context(), req.WorkerId, req.WorkerInstanceId, req.StorageNodeId); err != nil {
+				return status.Error(codes.PermissionDenied, err.Error())
 			}
 			if err := stream.Send(event); err != nil {
 				return err

@@ -19,17 +19,21 @@ const (
 )
 
 type workerLifecycleRelay struct {
-	client   pb.WorkerRepositoryServiceClient
-	workerID string
-	events   chan types.EventContainerLifecycleSchema
+	client           pb.WorkerRepositoryServiceClient
+	workerID         string
+	workerInstanceID string
+	storageNodeID    string
+	events           chan types.EventContainerLifecycleSchema
 }
 
-func NewWorkerEventClientRepo(config types.AppConfig, client pb.WorkerRepositoryServiceClient, workerID string) EventRepository {
+func NewWorkerEventClientRepo(config types.AppConfig, client pb.WorkerRepositoryServiceClient, workerID, workerInstanceID, storageNodeID string) EventRepository {
 	events := NewEventClientRepo(config).(*EventClientRepo)
 	relay := &workerLifecycleRelay{
-		client:   client,
-		workerID: workerID,
-		events:   make(chan types.EventContainerLifecycleSchema, workerLifecycleQueueSize),
+		client:           client,
+		workerID:         workerID,
+		workerInstanceID: workerInstanceID,
+		storageNodeID:    storageNodeID,
+		events:           make(chan types.EventContainerLifecycleSchema, workerLifecycleQueueSize),
 	}
 	events.containerLifecyclePush = relay.push
 	go relay.run()
@@ -76,8 +80,10 @@ func (r *workerLifecycleRelay) run() {
 
 func (r *workerLifecycleRelay) flush(events []types.EventContainerLifecycleSchema) bool {
 	request := &pb.PushContainerLifecycleEventsRequest{
-		WorkerId: r.workerID,
-		Events:   make([][]byte, 0, len(events)),
+		WorkerId:         r.workerID,
+		WorkerInstanceId: r.workerInstanceID,
+		StorageNodeId:    r.storageNodeID,
+		Events:           make([][]byte, 0, len(events)),
 	}
 	for _, event := range events {
 		data, err := json.Marshal(event)

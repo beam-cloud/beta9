@@ -19,77 +19,86 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	GatewayService_Authorize_FullMethodName                       = "/gateway.GatewayService/Authorize"
-	GatewayService_SignPayload_FullMethodName                     = "/gateway.GatewayService/SignPayload"
-	GatewayService_HeadObject_FullMethodName                      = "/gateway.GatewayService/HeadObject"
-	GatewayService_CreateObject_FullMethodName                    = "/gateway.GatewayService/CreateObject"
-	GatewayService_PutObjectStream_FullMethodName                 = "/gateway.GatewayService/PutObjectStream"
-	GatewayService_CheckpointContainer_FullMethodName             = "/gateway.GatewayService/CheckpointContainer"
-	GatewayService_ListContainers_FullMethodName                  = "/gateway.GatewayService/ListContainers"
-	GatewayService_StopContainer_FullMethodName                   = "/gateway.GatewayService/StopContainer"
-	GatewayService_AttachToContainer_FullMethodName               = "/gateway.GatewayService/AttachToContainer"
-	GatewayService_StartTask_FullMethodName                       = "/gateway.GatewayService/StartTask"
-	GatewayService_EndTask_FullMethodName                         = "/gateway.GatewayService/EndTask"
-	GatewayService_StopTasks_FullMethodName                       = "/gateway.GatewayService/StopTasks"
-	GatewayService_ListTasks_FullMethodName                       = "/gateway.GatewayService/ListTasks"
-	GatewayService_GetOrCreateStub_FullMethodName                 = "/gateway.GatewayService/GetOrCreateStub"
-	GatewayService_DeployStub_FullMethodName                      = "/gateway.GatewayService/DeployStub"
-	GatewayService_GetURL_FullMethodName                          = "/gateway.GatewayService/GetURL"
-	GatewayService_ListDeployments_FullMethodName                 = "/gateway.GatewayService/ListDeployments"
-	GatewayService_StopDeployment_FullMethodName                  = "/gateway.GatewayService/StopDeployment"
-	GatewayService_StartDeployment_FullMethodName                 = "/gateway.GatewayService/StartDeployment"
-	GatewayService_ScaleDeployment_FullMethodName                 = "/gateway.GatewayService/ScaleDeployment"
-	GatewayService_DeleteDeployment_FullMethodName                = "/gateway.GatewayService/DeleteDeployment"
-	GatewayService_ListPools_FullMethodName                       = "/gateway.GatewayService/ListPools"
-	GatewayService_ListPoolOffers_FullMethodName                  = "/gateway.GatewayService/ListPoolOffers"
-	GatewayService_LaunchPoolCapacity_FullMethodName              = "/gateway.GatewayService/LaunchPoolCapacity"
-	GatewayService_ListPrivatePools_FullMethodName                = "/gateway.GatewayService/ListPrivatePools"
-	GatewayService_CreateBYOCPool_FullMethodName                  = "/gateway.GatewayService/CreateBYOCPool"
-	GatewayService_GetBYOCPool_FullMethodName                     = "/gateway.GatewayService/GetBYOCPool"
-	GatewayService_ScaleBYOCPool_FullMethodName                   = "/gateway.GatewayService/ScaleBYOCPool"
-	GatewayService_CreateMarketplaceListing_FullMethodName        = "/gateway.GatewayService/CreateMarketplaceListing"
-	GatewayService_UpdateMarketplaceListing_FullMethodName        = "/gateway.GatewayService/UpdateMarketplaceListing"
-	GatewayService_DeleteMarketplaceListing_FullMethodName        = "/gateway.GatewayService/DeleteMarketplaceListing"
-	GatewayService_ListMarketplaceListings_FullMethodName         = "/gateway.GatewayService/ListMarketplaceListings"
-	GatewayService_GetMarketplaceJoinCommand_FullMethodName       = "/gateway.GatewayService/GetMarketplaceJoinCommand"
-	GatewayService_ListMarketplaceOffers_FullMethodName           = "/gateway.GatewayService/ListMarketplaceOffers"
-	GatewayService_GetMarketplaceOffer_FullMethodName             = "/gateway.GatewayService/GetMarketplaceOffer"
-	GatewayService_CreateMarketplaceRental_FullMethodName         = "/gateway.GatewayService/CreateMarketplaceRental"
-	GatewayService_ListMarketplaceRentals_FullMethodName          = "/gateway.GatewayService/ListMarketplaceRentals"
-	GatewayService_DeleteMarketplaceRental_FullMethodName         = "/gateway.GatewayService/DeleteMarketplaceRental"
-	GatewayService_LaunchRentalWorkload_FullMethodName            = "/gateway.GatewayService/LaunchRentalWorkload"
-	GatewayService_ListMarketplaceMachines_FullMethodName         = "/gateway.GatewayService/ListMarketplaceMachines"
-	GatewayService_ListMachineContainers_FullMethodName           = "/gateway.GatewayService/ListMachineContainers"
-	GatewayService_CreatePool_FullMethodName                      = "/gateway.GatewayService/CreatePool"
-	GatewayService_DeletePool_FullMethodName                      = "/gateway.GatewayService/DeletePool"
-	GatewayService_ExtendPoolCapacity_FullMethodName              = "/gateway.GatewayService/ExtendPoolCapacity"
-	GatewayService_CreatePoolJoinToken_FullMethodName             = "/gateway.GatewayService/CreatePoolJoinToken"
-	GatewayService_RevokePoolJoinToken_FullMethodName             = "/gateway.GatewayService/RevokePoolJoinToken"
-	GatewayService_GetPoolJoinCommand_FullMethodName              = "/gateway.GatewayService/GetPoolJoinCommand"
-	GatewayService_ListPoolMachines_FullMethodName                = "/gateway.GatewayService/ListPoolMachines"
-	GatewayService_DownloadMachineSSHKey_FullMethodName           = "/gateway.GatewayService/DownloadMachineSSHKey"
-	GatewayService_RotateMachineSSHKey_FullMethodName             = "/gateway.GatewayService/RotateMachineSSHKey"
-	GatewayService_ActivateMachineSSHKey_FullMethodName           = "/gateway.GatewayService/ActivateMachineSSHKey"
-	GatewayService_JoinAgent_FullMethodName                       = "/gateway.GatewayService/JoinAgent"
-	GatewayService_RequestAgentTransportCredential_FullMethodName = "/gateway.GatewayService/RequestAgentTransportCredential"
-	GatewayService_ListAgentRoutes_FullMethodName                 = "/gateway.GatewayService/ListAgentRoutes"
-	GatewayService_UpdateAgentRouteStatus_FullMethodName          = "/gateway.GatewayService/UpdateAgentRouteStatus"
-	GatewayService_UpdateAgentSSHStatus_FullMethodName            = "/gateway.GatewayService/UpdateAgentSSHStatus"
-	GatewayService_UpdateAgentAvailability_FullMethodName         = "/gateway.GatewayService/UpdateAgentAvailability"
-	GatewayService_StreamAgent_FullMethodName                     = "/gateway.GatewayService/StreamAgent"
-	GatewayService_StreamAgentTelemetry_FullMethodName            = "/gateway.GatewayService/StreamAgentTelemetry"
-	GatewayService_ListMachines_FullMethodName                    = "/gateway.GatewayService/ListMachines"
-	GatewayService_CreateMachine_FullMethodName                   = "/gateway.GatewayService/CreateMachine"
-	GatewayService_DeleteMachine_FullMethodName                   = "/gateway.GatewayService/DeleteMachine"
-	GatewayService_ListTokens_FullMethodName                      = "/gateway.GatewayService/ListTokens"
-	GatewayService_CreateToken_FullMethodName                     = "/gateway.GatewayService/CreateToken"
-	GatewayService_ToggleToken_FullMethodName                     = "/gateway.GatewayService/ToggleToken"
-	GatewayService_DeleteToken_FullMethodName                     = "/gateway.GatewayService/DeleteToken"
-	GatewayService_ListWorkers_FullMethodName                     = "/gateway.GatewayService/ListWorkers"
-	GatewayService_CordonWorker_FullMethodName                    = "/gateway.GatewayService/CordonWorker"
-	GatewayService_UncordonWorker_FullMethodName                  = "/gateway.GatewayService/UncordonWorker"
-	GatewayService_DrainWorker_FullMethodName                     = "/gateway.GatewayService/DrainWorker"
-	GatewayService_ExportWorkspaceConfig_FullMethodName           = "/gateway.GatewayService/ExportWorkspaceConfig"
+	GatewayService_Authorize_FullMethodName                         = "/gateway.GatewayService/Authorize"
+	GatewayService_SignPayload_FullMethodName                       = "/gateway.GatewayService/SignPayload"
+	GatewayService_HeadObject_FullMethodName                        = "/gateway.GatewayService/HeadObject"
+	GatewayService_CreateObject_FullMethodName                      = "/gateway.GatewayService/CreateObject"
+	GatewayService_PutObjectStream_FullMethodName                   = "/gateway.GatewayService/PutObjectStream"
+	GatewayService_SnapshotContainerState_FullMethodName            = "/gateway.GatewayService/SnapshotContainerState"
+	GatewayService_RetainStateSnapshotReference_FullMethodName      = "/gateway.GatewayService/RetainStateSnapshotReference"
+	GatewayService_ReleaseStateSnapshotReference_FullMethodName     = "/gateway.GatewayService/ReleaseStateSnapshotReference"
+	GatewayService_PromoteStateTemplate_FullMethodName              = "/gateway.GatewayService/PromoteStateTemplate"
+	GatewayService_GetStateTemplate_FullMethodName                  = "/gateway.GatewayService/GetStateTemplate"
+	GatewayService_InstantiateStateTemplate_FullMethodName          = "/gateway.GatewayService/InstantiateStateTemplate"
+	GatewayService_GetStateTemplateInstantiation_FullMethodName     = "/gateway.GatewayService/GetStateTemplateInstantiation"
+	GatewayService_ConfirmStateTemplateInstantiation_FullMethodName = "/gateway.GatewayService/ConfirmStateTemplateInstantiation"
+	GatewayService_CancelStateTemplateInstantiation_FullMethodName  = "/gateway.GatewayService/CancelStateTemplateInstantiation"
+	GatewayService_ReleaseStateTemplate_FullMethodName              = "/gateway.GatewayService/ReleaseStateTemplate"
+	GatewayService_ListContainers_FullMethodName                    = "/gateway.GatewayService/ListContainers"
+	GatewayService_StopContainer_FullMethodName                     = "/gateway.GatewayService/StopContainer"
+	GatewayService_AttachToContainer_FullMethodName                 = "/gateway.GatewayService/AttachToContainer"
+	GatewayService_StartTask_FullMethodName                         = "/gateway.GatewayService/StartTask"
+	GatewayService_EndTask_FullMethodName                           = "/gateway.GatewayService/EndTask"
+	GatewayService_StopTasks_FullMethodName                         = "/gateway.GatewayService/StopTasks"
+	GatewayService_ListTasks_FullMethodName                         = "/gateway.GatewayService/ListTasks"
+	GatewayService_GetOrCreateStub_FullMethodName                   = "/gateway.GatewayService/GetOrCreateStub"
+	GatewayService_DeployStub_FullMethodName                        = "/gateway.GatewayService/DeployStub"
+	GatewayService_GetURL_FullMethodName                            = "/gateway.GatewayService/GetURL"
+	GatewayService_ListDeployments_FullMethodName                   = "/gateway.GatewayService/ListDeployments"
+	GatewayService_StopDeployment_FullMethodName                    = "/gateway.GatewayService/StopDeployment"
+	GatewayService_StartDeployment_FullMethodName                   = "/gateway.GatewayService/StartDeployment"
+	GatewayService_ScaleDeployment_FullMethodName                   = "/gateway.GatewayService/ScaleDeployment"
+	GatewayService_DeleteDeployment_FullMethodName                  = "/gateway.GatewayService/DeleteDeployment"
+	GatewayService_ListPools_FullMethodName                         = "/gateway.GatewayService/ListPools"
+	GatewayService_ListPoolOffers_FullMethodName                    = "/gateway.GatewayService/ListPoolOffers"
+	GatewayService_LaunchPoolCapacity_FullMethodName                = "/gateway.GatewayService/LaunchPoolCapacity"
+	GatewayService_ListPrivatePools_FullMethodName                  = "/gateway.GatewayService/ListPrivatePools"
+	GatewayService_CreateBYOCPool_FullMethodName                    = "/gateway.GatewayService/CreateBYOCPool"
+	GatewayService_GetBYOCPool_FullMethodName                       = "/gateway.GatewayService/GetBYOCPool"
+	GatewayService_ScaleBYOCPool_FullMethodName                     = "/gateway.GatewayService/ScaleBYOCPool"
+	GatewayService_CreateMarketplaceListing_FullMethodName          = "/gateway.GatewayService/CreateMarketplaceListing"
+	GatewayService_UpdateMarketplaceListing_FullMethodName          = "/gateway.GatewayService/UpdateMarketplaceListing"
+	GatewayService_DeleteMarketplaceListing_FullMethodName          = "/gateway.GatewayService/DeleteMarketplaceListing"
+	GatewayService_ListMarketplaceListings_FullMethodName           = "/gateway.GatewayService/ListMarketplaceListings"
+	GatewayService_GetMarketplaceJoinCommand_FullMethodName         = "/gateway.GatewayService/GetMarketplaceJoinCommand"
+	GatewayService_ListMarketplaceOffers_FullMethodName             = "/gateway.GatewayService/ListMarketplaceOffers"
+	GatewayService_GetMarketplaceOffer_FullMethodName               = "/gateway.GatewayService/GetMarketplaceOffer"
+	GatewayService_CreateMarketplaceRental_FullMethodName           = "/gateway.GatewayService/CreateMarketplaceRental"
+	GatewayService_ListMarketplaceRentals_FullMethodName            = "/gateway.GatewayService/ListMarketplaceRentals"
+	GatewayService_DeleteMarketplaceRental_FullMethodName           = "/gateway.GatewayService/DeleteMarketplaceRental"
+	GatewayService_LaunchRentalWorkload_FullMethodName              = "/gateway.GatewayService/LaunchRentalWorkload"
+	GatewayService_ListMarketplaceMachines_FullMethodName           = "/gateway.GatewayService/ListMarketplaceMachines"
+	GatewayService_ListMachineContainers_FullMethodName             = "/gateway.GatewayService/ListMachineContainers"
+	GatewayService_CreatePool_FullMethodName                        = "/gateway.GatewayService/CreatePool"
+	GatewayService_DeletePool_FullMethodName                        = "/gateway.GatewayService/DeletePool"
+	GatewayService_ExtendPoolCapacity_FullMethodName                = "/gateway.GatewayService/ExtendPoolCapacity"
+	GatewayService_CreatePoolJoinToken_FullMethodName               = "/gateway.GatewayService/CreatePoolJoinToken"
+	GatewayService_RevokePoolJoinToken_FullMethodName               = "/gateway.GatewayService/RevokePoolJoinToken"
+	GatewayService_GetPoolJoinCommand_FullMethodName                = "/gateway.GatewayService/GetPoolJoinCommand"
+	GatewayService_ListPoolMachines_FullMethodName                  = "/gateway.GatewayService/ListPoolMachines"
+	GatewayService_DownloadMachineSSHKey_FullMethodName             = "/gateway.GatewayService/DownloadMachineSSHKey"
+	GatewayService_RotateMachineSSHKey_FullMethodName               = "/gateway.GatewayService/RotateMachineSSHKey"
+	GatewayService_ActivateMachineSSHKey_FullMethodName             = "/gateway.GatewayService/ActivateMachineSSHKey"
+	GatewayService_JoinAgent_FullMethodName                         = "/gateway.GatewayService/JoinAgent"
+	GatewayService_RequestAgentTransportCredential_FullMethodName   = "/gateway.GatewayService/RequestAgentTransportCredential"
+	GatewayService_ListAgentRoutes_FullMethodName                   = "/gateway.GatewayService/ListAgentRoutes"
+	GatewayService_UpdateAgentRouteStatus_FullMethodName            = "/gateway.GatewayService/UpdateAgentRouteStatus"
+	GatewayService_UpdateAgentSSHStatus_FullMethodName              = "/gateway.GatewayService/UpdateAgentSSHStatus"
+	GatewayService_UpdateAgentAvailability_FullMethodName           = "/gateway.GatewayService/UpdateAgentAvailability"
+	GatewayService_StreamAgent_FullMethodName                       = "/gateway.GatewayService/StreamAgent"
+	GatewayService_StreamAgentTelemetry_FullMethodName              = "/gateway.GatewayService/StreamAgentTelemetry"
+	GatewayService_ListMachines_FullMethodName                      = "/gateway.GatewayService/ListMachines"
+	GatewayService_CreateMachine_FullMethodName                     = "/gateway.GatewayService/CreateMachine"
+	GatewayService_DeleteMachine_FullMethodName                     = "/gateway.GatewayService/DeleteMachine"
+	GatewayService_ListTokens_FullMethodName                        = "/gateway.GatewayService/ListTokens"
+	GatewayService_CreateToken_FullMethodName                       = "/gateway.GatewayService/CreateToken"
+	GatewayService_ToggleToken_FullMethodName                       = "/gateway.GatewayService/ToggleToken"
+	GatewayService_DeleteToken_FullMethodName                       = "/gateway.GatewayService/DeleteToken"
+	GatewayService_ListWorkers_FullMethodName                       = "/gateway.GatewayService/ListWorkers"
+	GatewayService_CordonWorker_FullMethodName                      = "/gateway.GatewayService/CordonWorker"
+	GatewayService_UncordonWorker_FullMethodName                    = "/gateway.GatewayService/UncordonWorker"
+	GatewayService_DrainWorker_FullMethodName                       = "/gateway.GatewayService/DrainWorker"
+	GatewayService_ExportWorkspaceConfig_FullMethodName             = "/gateway.GatewayService/ExportWorkspaceConfig"
 )
 
 // GatewayServiceClient is the client API for GatewayService service.
@@ -104,7 +113,16 @@ type GatewayServiceClient interface {
 	CreateObject(ctx context.Context, in *CreateObjectRequest, opts ...grpc.CallOption) (*CreateObjectResponse, error)
 	PutObjectStream(ctx context.Context, opts ...grpc.CallOption) (GatewayService_PutObjectStreamClient, error)
 	// Containers
-	CheckpointContainer(ctx context.Context, in *CheckpointContainerRequest, opts ...grpc.CallOption) (*CheckpointContainerResponse, error)
+	SnapshotContainerState(ctx context.Context, in *GatewaySnapshotContainerStateRequest, opts ...grpc.CallOption) (*GatewaySnapshotContainerStateResponse, error)
+	RetainStateSnapshotReference(ctx context.Context, in *StateSnapshotReferenceRequest, opts ...grpc.CallOption) (*StateSnapshotReferenceResponse, error)
+	ReleaseStateSnapshotReference(ctx context.Context, in *StateSnapshotReferenceRequest, opts ...grpc.CallOption) (*StateSnapshotReferenceResponse, error)
+	PromoteStateTemplate(ctx context.Context, in *PromoteStateTemplateRequest, opts ...grpc.CallOption) (*PromoteStateTemplateResponse, error)
+	GetStateTemplate(ctx context.Context, in *GetStateTemplateRequest, opts ...grpc.CallOption) (*GetStateTemplateResponse, error)
+	InstantiateStateTemplate(ctx context.Context, in *InstantiateStateTemplateRequest, opts ...grpc.CallOption) (*StateTemplateInstantiationResponse, error)
+	GetStateTemplateInstantiation(ctx context.Context, in *GetStateTemplateInstantiationRequest, opts ...grpc.CallOption) (*StateTemplateInstantiationResponse, error)
+	ConfirmStateTemplateInstantiation(ctx context.Context, in *ConfirmStateTemplateInstantiationRequest, opts ...grpc.CallOption) (*StateTemplateInstantiationResponse, error)
+	CancelStateTemplateInstantiation(ctx context.Context, in *CancelStateTemplateInstantiationRequest, opts ...grpc.CallOption) (*StateTemplateInstantiationResponse, error)
+	ReleaseStateTemplate(ctx context.Context, in *ReleaseStateTemplateRequest, opts ...grpc.CallOption) (*ReleaseStateTemplateResponse, error)
 	ListContainers(ctx context.Context, in *ListContainersRequest, opts ...grpc.CallOption) (*ListContainersResponse, error)
 	StopContainer(ctx context.Context, in *StopContainerRequest, opts ...grpc.CallOption) (*StopContainerResponse, error)
 	AttachToContainer(ctx context.Context, opts ...grpc.CallOption) (GatewayService_AttachToContainerClient, error)
@@ -259,9 +277,90 @@ func (x *gatewayServicePutObjectStreamClient) CloseAndRecv() (*PutObjectResponse
 	return m, nil
 }
 
-func (c *gatewayServiceClient) CheckpointContainer(ctx context.Context, in *CheckpointContainerRequest, opts ...grpc.CallOption) (*CheckpointContainerResponse, error) {
-	out := new(CheckpointContainerResponse)
-	err := c.cc.Invoke(ctx, GatewayService_CheckpointContainer_FullMethodName, in, out, opts...)
+func (c *gatewayServiceClient) SnapshotContainerState(ctx context.Context, in *GatewaySnapshotContainerStateRequest, opts ...grpc.CallOption) (*GatewaySnapshotContainerStateResponse, error) {
+	out := new(GatewaySnapshotContainerStateResponse)
+	err := c.cc.Invoke(ctx, GatewayService_SnapshotContainerState_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) RetainStateSnapshotReference(ctx context.Context, in *StateSnapshotReferenceRequest, opts ...grpc.CallOption) (*StateSnapshotReferenceResponse, error) {
+	out := new(StateSnapshotReferenceResponse)
+	err := c.cc.Invoke(ctx, GatewayService_RetainStateSnapshotReference_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) ReleaseStateSnapshotReference(ctx context.Context, in *StateSnapshotReferenceRequest, opts ...grpc.CallOption) (*StateSnapshotReferenceResponse, error) {
+	out := new(StateSnapshotReferenceResponse)
+	err := c.cc.Invoke(ctx, GatewayService_ReleaseStateSnapshotReference_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) PromoteStateTemplate(ctx context.Context, in *PromoteStateTemplateRequest, opts ...grpc.CallOption) (*PromoteStateTemplateResponse, error) {
+	out := new(PromoteStateTemplateResponse)
+	err := c.cc.Invoke(ctx, GatewayService_PromoteStateTemplate_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) GetStateTemplate(ctx context.Context, in *GetStateTemplateRequest, opts ...grpc.CallOption) (*GetStateTemplateResponse, error) {
+	out := new(GetStateTemplateResponse)
+	err := c.cc.Invoke(ctx, GatewayService_GetStateTemplate_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) InstantiateStateTemplate(ctx context.Context, in *InstantiateStateTemplateRequest, opts ...grpc.CallOption) (*StateTemplateInstantiationResponse, error) {
+	out := new(StateTemplateInstantiationResponse)
+	err := c.cc.Invoke(ctx, GatewayService_InstantiateStateTemplate_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) GetStateTemplateInstantiation(ctx context.Context, in *GetStateTemplateInstantiationRequest, opts ...grpc.CallOption) (*StateTemplateInstantiationResponse, error) {
+	out := new(StateTemplateInstantiationResponse)
+	err := c.cc.Invoke(ctx, GatewayService_GetStateTemplateInstantiation_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) ConfirmStateTemplateInstantiation(ctx context.Context, in *ConfirmStateTemplateInstantiationRequest, opts ...grpc.CallOption) (*StateTemplateInstantiationResponse, error) {
+	out := new(StateTemplateInstantiationResponse)
+	err := c.cc.Invoke(ctx, GatewayService_ConfirmStateTemplateInstantiation_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) CancelStateTemplateInstantiation(ctx context.Context, in *CancelStateTemplateInstantiationRequest, opts ...grpc.CallOption) (*StateTemplateInstantiationResponse, error) {
+	out := new(StateTemplateInstantiationResponse)
+	err := c.cc.Invoke(ctx, GatewayService_CancelStateTemplateInstantiation_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) ReleaseStateTemplate(ctx context.Context, in *ReleaseStateTemplateRequest, opts ...grpc.CallOption) (*ReleaseStateTemplateResponse, error) {
+	out := new(ReleaseStateTemplateResponse)
+	err := c.cc.Invoke(ctx, GatewayService_ReleaseStateTemplate_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -935,7 +1034,16 @@ type GatewayServiceServer interface {
 	CreateObject(context.Context, *CreateObjectRequest) (*CreateObjectResponse, error)
 	PutObjectStream(GatewayService_PutObjectStreamServer) error
 	// Containers
-	CheckpointContainer(context.Context, *CheckpointContainerRequest) (*CheckpointContainerResponse, error)
+	SnapshotContainerState(context.Context, *GatewaySnapshotContainerStateRequest) (*GatewaySnapshotContainerStateResponse, error)
+	RetainStateSnapshotReference(context.Context, *StateSnapshotReferenceRequest) (*StateSnapshotReferenceResponse, error)
+	ReleaseStateSnapshotReference(context.Context, *StateSnapshotReferenceRequest) (*StateSnapshotReferenceResponse, error)
+	PromoteStateTemplate(context.Context, *PromoteStateTemplateRequest) (*PromoteStateTemplateResponse, error)
+	GetStateTemplate(context.Context, *GetStateTemplateRequest) (*GetStateTemplateResponse, error)
+	InstantiateStateTemplate(context.Context, *InstantiateStateTemplateRequest) (*StateTemplateInstantiationResponse, error)
+	GetStateTemplateInstantiation(context.Context, *GetStateTemplateInstantiationRequest) (*StateTemplateInstantiationResponse, error)
+	ConfirmStateTemplateInstantiation(context.Context, *ConfirmStateTemplateInstantiationRequest) (*StateTemplateInstantiationResponse, error)
+	CancelStateTemplateInstantiation(context.Context, *CancelStateTemplateInstantiationRequest) (*StateTemplateInstantiationResponse, error)
+	ReleaseStateTemplate(context.Context, *ReleaseStateTemplateRequest) (*ReleaseStateTemplateResponse, error)
 	ListContainers(context.Context, *ListContainersRequest) (*ListContainersResponse, error)
 	StopContainer(context.Context, *StopContainerRequest) (*StopContainerResponse, error)
 	AttachToContainer(GatewayService_AttachToContainerServer) error
@@ -1032,8 +1140,35 @@ func (UnimplementedGatewayServiceServer) CreateObject(context.Context, *CreateOb
 func (UnimplementedGatewayServiceServer) PutObjectStream(GatewayService_PutObjectStreamServer) error {
 	return status.Errorf(codes.Unimplemented, "method PutObjectStream not implemented")
 }
-func (UnimplementedGatewayServiceServer) CheckpointContainer(context.Context, *CheckpointContainerRequest) (*CheckpointContainerResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method CheckpointContainer not implemented")
+func (UnimplementedGatewayServiceServer) SnapshotContainerState(context.Context, *GatewaySnapshotContainerStateRequest) (*GatewaySnapshotContainerStateResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SnapshotContainerState not implemented")
+}
+func (UnimplementedGatewayServiceServer) RetainStateSnapshotReference(context.Context, *StateSnapshotReferenceRequest) (*StateSnapshotReferenceResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RetainStateSnapshotReference not implemented")
+}
+func (UnimplementedGatewayServiceServer) ReleaseStateSnapshotReference(context.Context, *StateSnapshotReferenceRequest) (*StateSnapshotReferenceResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ReleaseStateSnapshotReference not implemented")
+}
+func (UnimplementedGatewayServiceServer) PromoteStateTemplate(context.Context, *PromoteStateTemplateRequest) (*PromoteStateTemplateResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PromoteStateTemplate not implemented")
+}
+func (UnimplementedGatewayServiceServer) GetStateTemplate(context.Context, *GetStateTemplateRequest) (*GetStateTemplateResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetStateTemplate not implemented")
+}
+func (UnimplementedGatewayServiceServer) InstantiateStateTemplate(context.Context, *InstantiateStateTemplateRequest) (*StateTemplateInstantiationResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method InstantiateStateTemplate not implemented")
+}
+func (UnimplementedGatewayServiceServer) GetStateTemplateInstantiation(context.Context, *GetStateTemplateInstantiationRequest) (*StateTemplateInstantiationResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetStateTemplateInstantiation not implemented")
+}
+func (UnimplementedGatewayServiceServer) ConfirmStateTemplateInstantiation(context.Context, *ConfirmStateTemplateInstantiationRequest) (*StateTemplateInstantiationResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ConfirmStateTemplateInstantiation not implemented")
+}
+func (UnimplementedGatewayServiceServer) CancelStateTemplateInstantiation(context.Context, *CancelStateTemplateInstantiationRequest) (*StateTemplateInstantiationResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CancelStateTemplateInstantiation not implemented")
+}
+func (UnimplementedGatewayServiceServer) ReleaseStateTemplate(context.Context, *ReleaseStateTemplateRequest) (*ReleaseStateTemplateResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ReleaseStateTemplate not implemented")
 }
 func (UnimplementedGatewayServiceServer) ListContainers(context.Context, *ListContainersRequest) (*ListContainersResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListContainers not implemented")
@@ -1341,20 +1476,182 @@ func (x *gatewayServicePutObjectStreamServer) Recv() (*PutObjectRequest, error) 
 	return m, nil
 }
 
-func _GatewayService_CheckpointContainer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(CheckpointContainerRequest)
+func _GatewayService_SnapshotContainerState_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GatewaySnapshotContainerStateRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(GatewayServiceServer).CheckpointContainer(ctx, in)
+		return srv.(GatewayServiceServer).SnapshotContainerState(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: GatewayService_CheckpointContainer_FullMethodName,
+		FullMethod: GatewayService_SnapshotContainerState_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(GatewayServiceServer).CheckpointContainer(ctx, req.(*CheckpointContainerRequest))
+		return srv.(GatewayServiceServer).SnapshotContainerState(ctx, req.(*GatewaySnapshotContainerStateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_RetainStateSnapshotReference_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StateSnapshotReferenceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).RetainStateSnapshotReference(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_RetainStateSnapshotReference_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).RetainStateSnapshotReference(ctx, req.(*StateSnapshotReferenceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_ReleaseStateSnapshotReference_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StateSnapshotReferenceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).ReleaseStateSnapshotReference(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_ReleaseStateSnapshotReference_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).ReleaseStateSnapshotReference(ctx, req.(*StateSnapshotReferenceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_PromoteStateTemplate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PromoteStateTemplateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).PromoteStateTemplate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_PromoteStateTemplate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).PromoteStateTemplate(ctx, req.(*PromoteStateTemplateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_GetStateTemplate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetStateTemplateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).GetStateTemplate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_GetStateTemplate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).GetStateTemplate(ctx, req.(*GetStateTemplateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_InstantiateStateTemplate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(InstantiateStateTemplateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).InstantiateStateTemplate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_InstantiateStateTemplate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).InstantiateStateTemplate(ctx, req.(*InstantiateStateTemplateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_GetStateTemplateInstantiation_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetStateTemplateInstantiationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).GetStateTemplateInstantiation(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_GetStateTemplateInstantiation_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).GetStateTemplateInstantiation(ctx, req.(*GetStateTemplateInstantiationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_ConfirmStateTemplateInstantiation_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ConfirmStateTemplateInstantiationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).ConfirmStateTemplateInstantiation(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_ConfirmStateTemplateInstantiation_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).ConfirmStateTemplateInstantiation(ctx, req.(*ConfirmStateTemplateInstantiationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_CancelStateTemplateInstantiation_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CancelStateTemplateInstantiationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).CancelStateTemplateInstantiation(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_CancelStateTemplateInstantiation_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).CancelStateTemplateInstantiation(ctx, req.(*CancelStateTemplateInstantiationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_ReleaseStateTemplate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReleaseStateTemplateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).ReleaseStateTemplate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_ReleaseStateTemplate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).ReleaseStateTemplate(ctx, req.(*ReleaseStateTemplateRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2572,8 +2869,44 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _GatewayService_CreateObject_Handler,
 		},
 		{
-			MethodName: "CheckpointContainer",
-			Handler:    _GatewayService_CheckpointContainer_Handler,
+			MethodName: "SnapshotContainerState",
+			Handler:    _GatewayService_SnapshotContainerState_Handler,
+		},
+		{
+			MethodName: "RetainStateSnapshotReference",
+			Handler:    _GatewayService_RetainStateSnapshotReference_Handler,
+		},
+		{
+			MethodName: "ReleaseStateSnapshotReference",
+			Handler:    _GatewayService_ReleaseStateSnapshotReference_Handler,
+		},
+		{
+			MethodName: "PromoteStateTemplate",
+			Handler:    _GatewayService_PromoteStateTemplate_Handler,
+		},
+		{
+			MethodName: "GetStateTemplate",
+			Handler:    _GatewayService_GetStateTemplate_Handler,
+		},
+		{
+			MethodName: "InstantiateStateTemplate",
+			Handler:    _GatewayService_InstantiateStateTemplate_Handler,
+		},
+		{
+			MethodName: "GetStateTemplateInstantiation",
+			Handler:    _GatewayService_GetStateTemplateInstantiation_Handler,
+		},
+		{
+			MethodName: "ConfirmStateTemplateInstantiation",
+			Handler:    _GatewayService_ConfirmStateTemplateInstantiation_Handler,
+		},
+		{
+			MethodName: "CancelStateTemplateInstantiation",
+			Handler:    _GatewayService_CancelStateTemplateInstantiation_Handler,
+		},
+		{
+			MethodName: "ReleaseStateTemplate",
+			Handler:    _GatewayService_ReleaseStateTemplate_Handler,
 		},
 		{
 			MethodName: "ListContainers",

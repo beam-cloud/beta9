@@ -19,10 +19,9 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	DiskService_GetOrCreateDisk_FullMethodName   = "/disk.DiskService/GetOrCreateDisk"
-	DiskService_ListDisks_FullMethodName         = "/disk.DiskService/ListDisks"
-	DiskService_DeleteDisk_FullMethodName        = "/disk.DiskService/DeleteDisk"
-	DiskService_ListDiskSnapshots_FullMethodName = "/disk.DiskService/ListDiskSnapshots"
+	DiskService_GetOrCreateDisk_FullMethodName = "/disk.DiskService/GetOrCreateDisk"
+	DiskService_ListDisks_FullMethodName       = "/disk.DiskService/ListDisks"
+	DiskService_DeleteDisk_FullMethodName      = "/disk.DiskService/DeleteDisk"
 )
 
 // DiskServiceClient is the client API for DiskService service.
@@ -32,7 +31,6 @@ type DiskServiceClient interface {
 	GetOrCreateDisk(ctx context.Context, in *GetOrCreateDiskRequest, opts ...grpc.CallOption) (*GetOrCreateDiskResponse, error)
 	ListDisks(ctx context.Context, in *ListDisksRequest, opts ...grpc.CallOption) (*ListDisksResponse, error)
 	DeleteDisk(ctx context.Context, in *DeleteDiskRequest, opts ...grpc.CallOption) (*DeleteDiskResponse, error)
-	ListDiskSnapshots(ctx context.Context, in *ListDiskSnapshotsRequest, opts ...grpc.CallOption) (*ListDiskSnapshotsResponse, error)
 }
 
 type diskServiceClient struct {
@@ -70,15 +68,6 @@ func (c *diskServiceClient) DeleteDisk(ctx context.Context, in *DeleteDiskReques
 	return out, nil
 }
 
-func (c *diskServiceClient) ListDiskSnapshots(ctx context.Context, in *ListDiskSnapshotsRequest, opts ...grpc.CallOption) (*ListDiskSnapshotsResponse, error) {
-	out := new(ListDiskSnapshotsResponse)
-	err := c.cc.Invoke(ctx, DiskService_ListDiskSnapshots_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 // DiskServiceServer is the server API for DiskService service.
 // All implementations must embed UnimplementedDiskServiceServer
 // for forward compatibility
@@ -86,7 +75,6 @@ type DiskServiceServer interface {
 	GetOrCreateDisk(context.Context, *GetOrCreateDiskRequest) (*GetOrCreateDiskResponse, error)
 	ListDisks(context.Context, *ListDisksRequest) (*ListDisksResponse, error)
 	DeleteDisk(context.Context, *DeleteDiskRequest) (*DeleteDiskResponse, error)
-	ListDiskSnapshots(context.Context, *ListDiskSnapshotsRequest) (*ListDiskSnapshotsResponse, error)
 	mustEmbedUnimplementedDiskServiceServer()
 }
 
@@ -102,9 +90,6 @@ func (UnimplementedDiskServiceServer) ListDisks(context.Context, *ListDisksReque
 }
 func (UnimplementedDiskServiceServer) DeleteDisk(context.Context, *DeleteDiskRequest) (*DeleteDiskResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeleteDisk not implemented")
-}
-func (UnimplementedDiskServiceServer) ListDiskSnapshots(context.Context, *ListDiskSnapshotsRequest) (*ListDiskSnapshotsResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ListDiskSnapshots not implemented")
 }
 func (UnimplementedDiskServiceServer) mustEmbedUnimplementedDiskServiceServer() {}
 
@@ -173,24 +158,6 @@ func _DiskService_DeleteDisk_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
-func _DiskService_ListDiskSnapshots_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ListDiskSnapshotsRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(DiskServiceServer).ListDiskSnapshots(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: DiskService_ListDiskSnapshots_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(DiskServiceServer).ListDiskSnapshots(ctx, req.(*ListDiskSnapshotsRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 // DiskService_ServiceDesc is the grpc.ServiceDesc for DiskService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -209,10 +176,6 @@ var DiskService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteDisk",
 			Handler:    _DiskService_DeleteDisk_Handler,
-		},
-		{
-			MethodName: "ListDiskSnapshots",
-			Handler:    _DiskService_ListDiskSnapshots_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

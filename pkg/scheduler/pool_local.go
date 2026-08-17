@@ -155,6 +155,7 @@ func (wpc *LocalKubernetesWorkerPoolController) addWorkerWithId(workerId string,
 
 	worker.PoolName = wpc.name
 	worker.RequiresPoolSelector = wpc.workerPoolConfig.RequiresPoolSelector
+	worker.WorkerTokenId = token.ExternalId
 
 	// Add the worker state
 	if err := wpc.workerRepo.AddWorker(worker); err != nil {
@@ -250,7 +251,11 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 			AutomountServiceAccountToken:  ptr.To(true),
 			HostNetwork:                   wpc.config.Worker.HostNetwork,
 			ImagePullSecrets:              imagePullSecrets,
-			RestartPolicy:                 corev1.RestartPolicyOnFailure,
+			// A worker process epoch is the Pod UID. In-place container restarts
+			// reuse that UID and would let a replacement process impersonate the
+			// prior state-volume owner, so a failed worker must be replaced by a
+			// new Pod/Job attempt instead.
+			RestartPolicy:                 corev1.RestartPolicyNever,
 			NodeSelector:                  wpc.workerPoolConfig.JobSpec.NodeSelector,
 			Containers:                    containers,
 			Volumes:                       wpc.getWorkerVolumes(workerMemory),
@@ -268,6 +273,7 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 	}
 
 	ttl := int32(30)
+	backoffLimit := int32(0)
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      jobName,
@@ -277,6 +283,7 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 		Spec: batchv1.JobSpec{
 			Template:                podTemplate,
 			TTLSecondsAfterFinished: &ttl,
+			BackoffLimit:             &backoffLimit,
 		},
 	}
 
@@ -387,6 +394,20 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerVolumes(workerMemory in
 			},
 		},
 	})
+	volumes = append(volumes, corev1.Volume{
+		Name: stateVolumeName,
+		VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{
+			Path: workerStateVolumesHostPath(wpc.workerPoolConfig),
+			Type: &hostPathType,
+		}},
+	})
+	volumes = append(volumes, corev1.Volume{
+		Name: stateVolumeLocksVolumeName,
+		VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{
+			Path: workerStateVolumeLocksHostPath(),
+			Type: &hostPathType,
+		}},
+	})
 
 	hostPathDir := corev1.HostPathDirectory
 	volumes = append(volumes, corev1.Volume{
@@ -429,6 +450,16 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerVolumeMounts() []corev1
 		Name:      devicePluginVolumeName,
 		MountPath: defaultDevicePluginPath,
 		ReadOnly:  true,
+	})
+	volumeMounts = append(volumeMounts, corev1.VolumeMount{
+		Name:      stateVolumeName,
+		MountPath: types.DefaultStateVolumesPath,
+		ReadOnly:  false,
+	})
+	volumeMounts = append(volumeMounts, corev1.VolumeMount{
+		Name:      stateVolumeLocksVolumeName,
+		MountPath: types.DefaultStateVolumeLocksPath,
+		ReadOnly:  false,
 	})
 
 	if len(wpc.workerPoolConfig.JobSpec.VolumeMounts) > 0 {

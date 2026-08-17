@@ -1,156 +1,341 @@
 syntax = "proto3";
 
 option go_package = "github.com/beam-cloud/beta9/proto";
+
 import "google/protobuf/timestamp.proto";
 import "types.proto";
 
 service BackendRepositoryService {
-  rpc GetCheckpointById(GetCheckpointByIdRequest)
-      returns (GetCheckpointByIdResponse);
-  rpc GetLatestCheckpointByStubId(GetLatestCheckpointByStubIdRequest)
-      returns (GetLatestCheckpointByStubIdResponse);
-  rpc ListCheckpoints(ListCheckpointsRequest) returns (ListCheckpointsResponse);
-  rpc CreateCheckpoint(CreateCheckpointRequest)
-      returns (CreateCheckpointResponse);
-  rpc UpdateCheckpoint(UpdateCheckpointRequest)
-      returns (UpdateCheckpointResponse);
-  rpc CreateDiskSnapshot(CreateDiskSnapshotRequest)
-      returns (CreateDiskSnapshotResponse);
-  rpc GetLatestDiskSnapshot(GetLatestDiskSnapshotRequest)
-      returns (GetLatestDiskSnapshotResponse);
-  rpc GetDiskSnapshot(GetDiskSnapshotRequest) returns (GetDiskSnapshotResponse);
-  rpc GetDiskSnapshotDownloadURL(GetDiskSnapshotDownloadURLRequest)
-      returns (GetDiskSnapshotDownloadURLResponse);
+  rpc CreateStateSnapshot(CreateStateSnapshotRequest)
+      returns (CreateStateSnapshotResponse);
+  rpc ArmStateSnapshot(ArmStateSnapshotRequest)
+      returns (StateSnapshotMutationResponse);
+  rpc ClaimStateSnapshotRecovery(ClaimStateSnapshotRecoveryRequest)
+      returns (StateSnapshotMutationResponse);
+  rpc GetStateSnapshotRecoveryCredentials(GetStateSnapshotRecoveryCredentialsRequest)
+      returns (GetStateSnapshotRecoveryCredentialsResponse);
+  rpc FailStateSnapshot(FailStateSnapshotRequest)
+      returns (StateSnapshotMutationResponse);
+  rpc CommitStateSnapshot(CommitStateSnapshotRequest)
+      returns (CommitStateSnapshotResponse);
+  rpc GetStateSnapshot(GetStateSnapshotRequest)
+      returns (GetStateSnapshotResponse);
+  rpc GetStateSnapshotByOperation(GetStateSnapshotByOperationRequest)
+      returns (GetStateSnapshotResponse);
+  rpc GetPendingStateSnapshotByContainer(GetPendingStateSnapshotByContainerRequest)
+      returns (GetStateSnapshotResponse);
+  rpc GetVolumeGeneration(GetVolumeGenerationRequest)
+      returns (GetVolumeGenerationResponse);
+  rpc RenewStateVolumeAttachments(RenewStateVolumeAttachmentsRequest)
+      returns (RenewStateVolumeAttachmentsResponse);
+  rpc ReleaseStateVolumeAttachments(ReleaseStateVolumeAttachmentsRequest)
+      returns (ReleaseStateVolumeAttachmentsResponse);
+  rpc BeginStateVolumeReleaseIntent(BeginStateVolumeReleaseIntentRequest)
+      returns (ClaimStateVolumeReleaseResponse);
+  rpc ClaimStateVolumeRelease(ClaimStateVolumeReleaseRequest)
+      returns (ClaimStateVolumeReleaseResponse);
+  rpc CompleteClaimedStateVolumeRelease(CompleteClaimedStateVolumeReleaseRequest)
+      returns (CompleteClaimedStateVolumeReleaseResponse);
 }
 
-message GetCheckpointByIdRequest { string checkpoint_id = 1; }
-
-message GetCheckpointByIdResponse {
-  bool ok = 1;
-  types.Checkpoint checkpoint = 2;
-  string error_msg = 3;
-}
-
-message GetLatestCheckpointByStubIdRequest { string stub_id = 1; }
-
-message GetLatestCheckpointByStubIdResponse {
-  bool ok = 1;
-  types.Checkpoint checkpoint = 2;
-  string error_msg = 3;
-}
-
-message ListCheckpointsRequest { string workspace_id = 1; }
-
-message ListCheckpointsResponse {
-  bool ok = 1;
-  repeated types.Checkpoint checkpoints = 2;
-  string error_msg = 3;
-}
-
-message CreateCheckpointRequest {
-  string checkpoint_id = 1;
-  string source_container_id = 2;
-  string container_ip = 3;
-  string status = 4;
-  string remote_key = 5;
-  string stub_id = 6;
-  repeated uint32 exposed_ports = 7;
-  string cache_hash = 8;
-  int64 cache_size_bytes = 9;
-  string origin_key = 10;
-  string locality = 11;
-  string accelerator = 12;
-  string runtime = 13;
-}
-
-message CreateCheckpointResponse {
-  bool ok = 1;
-  types.Checkpoint checkpoint = 2;
-  string error_msg = 3;
-}
-
-message UpdateCheckpointRequest {
-  string checkpoint_id = 1;
-  string status = 2;
-  google.protobuf.Timestamp last_restored_at = 3;
-}
-
-message UpdateCheckpointResponse {
-  bool ok = 1;
-  types.Checkpoint checkpoint = 2;
-  string error_msg = 3;
-}
-
-message DiskSnapshot {
+message StateSnapshot {
   string external_id = 1;
-  string disk_name = 2;
-  string format = 3;
+  string operation_id = 2;
+  string source_container_id = 3;
   string status = 4;
   string reason = 5;
-  string parent_snapshot_id = 6;
-  int64 generation = 7;
-  int64 size_bytes = 8;
-  string filesystem = 9;
-  string driver = 10;
-  string manifest_key = 11;
-  string manifest_digest = 12;
-  int64 manifest_size_bytes = 13;
-  int64 chunk_count = 14;
-  int64 logical_size_bytes = 15;
-  int64 stored_size_bytes = 16;
-  string bucket_name = 17;
-  string object_prefix = 18;
-  string source_pool = 19;
-  string source_worker_id = 20;
-  string source_storage_node_id = 21;
-  google.protobuf.Timestamp created_at = 22;
-  google.protobuf.Timestamp updated_at = 23;
-  google.protobuf.Timestamp completed_at = 24;
-  bool public = 25;
+  string image_digest = 6;
+  string runtime_profile = 7;
+  string checkpoint_id = 8;
+  string restore_mode = 9;
+  bool public = 10;
+  repeated types.StateGeneration generations = 11;
+  google.protobuf.Timestamp created_at = 12;
+  google.protobuf.Timestamp updated_at = 13;
+  google.protobuf.Timestamp completed_at = 14;
+  string fallback_reason = 15;
+  string checkpoint_digest = 16;
+  string checkpoint_cache_hash = 17;
+  int64 checkpoint_size_bytes = 18;
+  string checkpoint_origin_key = 19;
+  string checkpoint_accelerator = 20;
+  string checkpoint_locality = 21;
+  string source_stub_external_id = 22;
+  string source_stub_name = 23;
+  string source_stub_type = 24;
+  string image_id = 25;
+  string mode = 26;
+  bool include_memory = 27;
+  bool visible = 28;
+  string source_worker_id = 29;
+  string storage_node_id = 30;
+  bool armed = 31;
+  string recovery_worker_id = 32;
+  string source_worker_instance_id = 33;
+  string recovery_worker_instance_id = 34;
+  int64 recovery_claim_generation = 35;
 }
 
-message CreateDiskSnapshotRequest {
+message VolumeGeneration {
+  string external_id = 1;
+  string volume_id = 2;
+  string name = 3;
+  string parent_generation_id = 4;
+  int64 generation = 5;
+  string status = 6;
+  string reason = 7;
+  string manifest_key = 8;
+  string manifest_digest = 9;
+  int64 manifest_size_bytes = 10;
+  int64 chunk_count = 11;
+  int64 logical_size_bytes = 12;
+  int64 stored_size_bytes = 13;
+  string bucket_name = 14;
+  string object_prefix = 15;
+  bool public = 16;
+  google.protobuf.Timestamp created_at = 17;
+  google.protobuf.Timestamp updated_at = 18;
+  google.protobuf.Timestamp completed_at = 19;
+  string clone_parent_generation_id = 20;
+  reserved 21;
+}
+
+message StateGenerationCompaction {
+  string volume_id = 1;
+  string generation_id = 2;
+  string source_generation_id = 3;
+}
+
+message CreateStateSnapshotRequest {
   string workspace_id = 1;
   string stub_id = 2;
-  DiskSnapshot snapshot = 3;
+  StateSnapshot snapshot = 3;
+  repeated types.StateGeneration members = 4;
+  repeated StateVolumeLease leases = 5;
+  string worker_id = 6;
+  string storage_node_id = 7;
+  string worker_instance_id = 8;
+  repeated StateGenerationCompaction compactions = 9;
 }
 
-message CreateDiskSnapshotResponse {
+message CreateStateSnapshotResponse {
   bool ok = 1;
-  DiskSnapshot snapshot = 2;
-  string error_msg = 3;
+  string error_msg = 2;
+  StateSnapshot snapshot = 3;
+  string recovery_proof_token = 4;
 }
 
-message GetLatestDiskSnapshotRequest {
+message ArmStateSnapshotRequest {
+  string state_snapshot_id = 1;
+  string source_container_id = 2;
+  string operation_id = 3;
+  string worker_id = 4;
+  string storage_node_id = 5;
+  string worker_instance_id = 6;
+  string recovery_proof_token = 7;
+}
+
+message FailStateSnapshotRequest {
+  string state_snapshot_id = 1;
+  string source_container_id = 2;
+  string operation_id = 3;
+  string worker_id = 4;
+  string storage_node_id = 5;
+  string reason = 6;
+  string worker_instance_id = 7;
+  int64 recovery_claim_generation = 8;
+}
+
+message ClaimStateSnapshotRecoveryRequest {
+  string state_snapshot_id = 1;
+  string source_container_id = 2;
+  string operation_id = 3;
+  string worker_id = 4;
+  string storage_node_id = 5;
+  string worker_instance_id = 6;
+  int64 previous_claim_generation = 7;
+  string recovery_proof_token = 8;
+}
+
+message GetStateSnapshotRecoveryCredentialsRequest {
+  string state_snapshot_id = 1;
+  string source_container_id = 2;
+  string operation_id = 3;
+  string worker_id = 4;
+  string storage_node_id = 5;
+  string worker_instance_id = 6;
+  int64 recovery_claim_generation = 7;
+  string recovery_proof_token = 8;
+}
+
+message StateSnapshotWorkspaceStorageCredentials {
+  string endpoint_url = 1;
+  string region = 2;
+  string bucket_name = 3;
+  string access_key = 4;
+  string secret_key = 5;
+  bool force_path_style = 6;
+}
+
+message GetStateSnapshotRecoveryCredentialsResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  string workspace_id = 3;
+  string stub_id = 4;
+  StateSnapshotWorkspaceStorageCredentials workspace_storage = 5;
+  string workspace_name = 6;
+  string stub_name = 7;
+  string stub_type = 8;
+  string image_id = 9;
+  string image_digest = 10;
+  string runtime_profile = 11;
+  uint32 workspace_storage_id = 12;
+  string workspace_storage_external_id = 13;
+}
+
+message StateSnapshotMutationResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  StateSnapshot snapshot = 3;
+}
+
+message CommitStateSnapshotRequest {
   string workspace_id = 1;
-  string disk_name = 2;
+  StateSnapshot snapshot = 2;
+  repeated VolumeGeneration generations = 3;
+  repeated StateVolumeLease leases = 4;
+  string worker_id = 5;
+  string storage_node_id = 6;
+  string worker_instance_id = 7;
+  int64 recovery_claim_generation = 8;
 }
 
-message GetLatestDiskSnapshotResponse {
+message CommitStateSnapshotResponse {
   bool ok = 1;
-  DiskSnapshot snapshot = 2;
-  string error_msg = 3;
+  string error_msg = 2;
+  StateSnapshot snapshot = 3;
 }
 
-message GetDiskSnapshotRequest {
+message GetStateSnapshotRequest {
   string workspace_id = 1;
-  string snapshot_id = 2;
+  string state_snapshot_id = 2;
 }
 
-message GetDiskSnapshotResponse {
+message GetStateSnapshotResponse {
   bool ok = 1;
-  DiskSnapshot snapshot = 2;
-  string error_msg = 3;
+  string error_msg = 2;
+  StateSnapshot snapshot = 3;
+  string workspace_id = 4;
+  string stub_id = 5;
+  repeated types.StateGeneration planned_members = 6;
+  repeated StateGenerationCompaction planned_compactions = 7;
 }
 
-message GetDiskSnapshotDownloadURLRequest {
+message GetStateSnapshotByOperationRequest {
+  string source_container_id = 1;
+  string operation_id = 2;
+}
+
+message GetPendingStateSnapshotByContainerRequest {
+  string source_container_id = 1;
+  string worker_id = 2;
+  string storage_node_id = 3;
+  string worker_instance_id = 4;
+}
+
+message GetVolumeGenerationRequest {
   string workspace_id = 1;
-  string snapshot_id = 2;
-  string object_key = 3;
+  string generation_id = 2;
 }
 
-message GetDiskSnapshotDownloadURLResponse {
+message GetVolumeGenerationResponse {
   bool ok = 1;
-  string url = 2;
-  string error_msg = 3;
+  string error_msg = 2;
+  VolumeGeneration generation = 3;
+}
+
+message StateVolumeLease {
+  string volume_id = 1;
+  string attachment_token = 2;
+  int64 fencing_token = 3;
+}
+
+message RenewStateVolumeAttachmentsRequest {
+  string workspace_id = 1;
+  string container_id = 2;
+  repeated StateVolumeLease leases = 3;
+  string worker_id = 4;
+  string worker_instance_id = 5;
+  string storage_node_id = 6;
+}
+
+message RenewStateVolumeAttachmentsResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  google.protobuf.Timestamp lease_expires_at = 3;
+}
+
+message ReleaseStateVolumeAttachmentsRequest {
+  string workspace_id = 1;
+  string container_id = 2;
+  repeated StateVolumeLease leases = 3;
+  string worker_id = 4;
+  string worker_instance_id = 5;
+  string storage_node_id = 6;
+}
+
+message ReleaseStateVolumeAttachmentsResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message StateVolumeReleaseMember {
+  string volume_id = 1;
+  int64 fencing_token = 2;
+}
+
+message BeginStateVolumeReleaseIntentRequest {
+  string workspace_id = 1;
+  string container_id = 2;
+  string source_worker_id = 3;
+  string source_worker_instance_id = 4;
+  string storage_node_id = 5;
+  string journal_digest = 6;
+  repeated StateVolumeReleaseMember members = 7;
+}
+
+message ClaimStateVolumeReleaseRequest {
+  string workspace_id = 1;
+  string container_id = 2;
+  string source_worker_id = 3;
+  string source_worker_instance_id = 4;
+  string storage_node_id = 5;
+  string recovery_worker_id = 6;
+  string recovery_worker_instance_id = 7;
+  string journal_digest = 8;
+  int64 previous_claim_generation = 9;
+  repeated StateVolumeReleaseMember members = 10;
+}
+
+message ClaimStateVolumeReleaseResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  string release_claim_id = 3;
+  int64 release_claim_generation = 4;
+  bool completed = 5;
+}
+
+message CompleteClaimedStateVolumeReleaseRequest {
+  string workspace_id = 1;
+  string container_id = 2;
+  string release_claim_id = 3;
+  int64 release_claim_generation = 4;
+  string recovery_worker_id = 5;
+  string recovery_worker_instance_id = 6;
+  string storage_node_id = 7;
+}
+
+message CompleteClaimedStateVolumeReleaseResponse {
+  bool ok = 1;
+  string error_msg = 2;
 }

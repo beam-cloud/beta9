@@ -981,11 +981,10 @@ func (cs *Server) storeContentFromSource(ctx context.Context, req *proto.CacheSt
 		cachePath = filepath.Join("/", filepath.Clean(req.Source.CachePath))
 	}
 	Logger.Debugf("StoreFromContent[ACK] - [source=%s cache_path=%s]", req.Source.Path, cachePath)
-	if req.Source.CachePath == "" && isContentHash(req.Source.ExpectedHash) && cs.cas.Exists(req.Source.ExpectedHash) {
-		Logger.Debugf("StoreFromContent[EXISTS] - [%s]", req.Source.ExpectedHash)
+	if req.Source.CachePath == "" && isContentHash(req.Source.ExpectedHash) && cs.cas.VerifyContentHash(req.Source.ExpectedHash) {
+		Logger.Debugf("StoreFromContent[VERIFIED] - [%s]", req.Source.ExpectedHash)
 		return &proto.CacheStoreContentFromSourceResponse{Ok: true, Hash: req.Source.ExpectedHash}, nil
 	}
-
 	var (
 		hash string
 		size uint64

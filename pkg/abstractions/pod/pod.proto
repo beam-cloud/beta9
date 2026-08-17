@@ -144,18 +144,17 @@ service PodService {
       body : "*"
     };
   }
-  rpc SandboxSnapshotMemory(PodSandboxSnapshotMemoryRequest)
-      returns (PodSandboxSnapshotMemoryResponse) {
+  rpc SandboxSnapshotState(PodSandboxSnapshotStateRequest)
+      returns (PodSandboxSnapshotStateResponse) {
     option (google.api.http) = {
-      post : "/pods/{container_id}/snapshot-memory"
+      post : "/pods/{container_id}/snapshot-state"
       body : "*"
     };
   }
-  rpc SandboxSnapshotDisks(PodSandboxSnapshotDisksRequest)
-      returns (PodSandboxSnapshotDisksResponse) {
+  rpc GetStateRestoreReceipt(PodGetStateRestoreReceiptRequest)
+      returns (PodGetStateRestoreReceiptResponse) {
     option (google.api.http) = {
-      post : "/pods/{container_id}/snapshot-disks"
-      body : "*"
+      get : "/pods/{container_id}/restore-receipt"
     };
   }
   rpc SandboxListUrls(PodSandboxListUrlsRequest)
@@ -169,7 +168,7 @@ service PodService {
 message CreatePodRequest {
   string stub_id = 1;
   optional string image_id = 2;
-  optional string checkpoint_id = 3;
+  optional string state_snapshot_id = 3;
   optional string machine_id = 4;
 }
 
@@ -180,6 +179,7 @@ message CreatePodResponse {
   string stub_id = 4;
   string task_id = 5;
   string app_id = 6;
+  types.StateRestoreReceipt restore_receipt = 7;
 }
 
 message PodSandboxExecRequest {
@@ -410,34 +410,40 @@ message PodSandboxCreateImageFromFilesystemResponse {
   string image_id = 3;
 }
 
-message PodSandboxSnapshotMemoryRequest {
+message PodSandboxSnapshotStateRequest {
   string stub_id = 1;
   string container_id = 2;
-  bool terminate_after_checkpoint = 3;
+  string operation_id = 3;
+  string mode = 4;
+  bool publish = 5;
+  bool include_memory = 6;
+  bool visible = 7;
 }
 
-message PodSandboxSnapshotMemoryResponse {
+message PodSandboxSnapshotStateResponse {
   bool ok = 1;
   string error_msg = 2;
-  string checkpoint_id = 3;
-  string runtime = 4;
+  string state_snapshot_id = 3;
+  string status = 4;
+  string image_digest = 5;
+  string runtime_profile = 6;
+  string checkpoint_id = 7;
+  bool has_memory = 8;
+  repeated types.StateGeneration generations = 9;
+  string restore_mode = 10;
+  string fallback_reason = 11;
 }
 
-message PodSandboxSnapshotDisksRequest {
-  string stub_id = 1;
-  string container_id = 2;
+message PodGetStateRestoreReceiptRequest {
+  string container_id = 1;
+  string state_snapshot_id = 2;
 }
 
-message PodSandboxDiskSnapshot {
-  string snapshot_id = 1;
-  string disk_name = 2;
-  int64 generation = 3;
-}
-
-message PodSandboxSnapshotDisksResponse {
+message PodGetStateRestoreReceiptResponse {
   bool ok = 1;
   string error_msg = 2;
-  repeated PodSandboxDiskSnapshot snapshots = 3;
+  bool pending = 3;
+  types.StateRestoreReceipt receipt = 4;
 }
 
 message PodSandboxListProcessesRequest { string container_id = 1; }
