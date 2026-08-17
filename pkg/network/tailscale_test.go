@@ -128,9 +128,6 @@ func TestWaitForPeerFindsPeerByDNSName(t *testing.T) {
 	if err := ts.WaitForPeer(context.Background(), "beam-agent-machine.tailnet.ts.net", 100*time.Millisecond); err != nil {
 		t.Fatalf("WaitForPeer() error = %v, want nil", err)
 	}
-	if ts.staleNetmap.misses != 0 {
-		t.Fatalf("missCount = %d, want 0", ts.staleNetmap.misses)
-	}
 }
 
 func TestWaitForPeerSkipsIPLiterals(t *testing.T) {
@@ -142,9 +139,6 @@ func TestWaitForPeerSkipsIPLiterals(t *testing.T) {
 		if err := ts.WaitForPeer(context.Background(), host, 10*time.Millisecond); err != nil {
 			t.Fatalf("WaitForPeer(%q) error = %v, want nil for IP literal", host, err)
 		}
-	}
-	if ts.staleNetmap.misses != 0 {
-		t.Fatalf("missCount = %d, want 0 (IP literals must not count as misses)", ts.staleNetmap.misses)
 	}
 }
 
@@ -170,69 +164,110 @@ func TestWaitForPeerMissingPeerReturnsClearError(t *testing.T) {
 	if !strings.Contains(err.Error(), "netmap") {
 		t.Fatalf("WaitForPeer() error = %v, want mention of netmap", err)
 	}
-	if ts.staleNetmap.misses != 1 {
-		t.Fatalf("missCount = %d, want 1", ts.staleNetmap.misses)
-	}
 }
 
-func TestWaitForPeerSuccessResetsMissCount(t *testing.T) {
+func TestWaitForPeerReturnsCallerCancellationWithoutReplacingServer(t *testing.T) {
 	withFastPeerPolling(t)
-	ts := testTailscale(t, statusWithPeers("beam-agent-machine"))
-	ts.staleNetmap.misses = 2
-	ts.staleNetmap.firstMissAt = time.Now().Add(-time.Minute)
-
-	if err := ts.WaitForPeer(context.Background(), "beam-agent-machine", 50*time.Millisecond); err != nil {
-		t.Fatalf("WaitForPeer() error = %v, want nil", err)
-	}
-	if ts.staleNetmap.misses != 0 || !ts.staleNetmap.firstMissAt.IsZero() {
-		t.Fatalf("miss state = (%d, %v), want reset", ts.staleNetmap.misses, ts.staleNetmap.firstMissAt)
-	}
-}
-
-func TestRepeatedMissesRecycleServer(t *testing.T) {
-	withFastPeerPolling(t)
-	prevThreshold, prevWindow, prevCooldown := staleNetmapMissThreshold, staleNetmapMissWindow, staleNetmapRestartCooldown
-	staleNetmapMissThreshold = 3
-	staleNetmapMissWindow = 0
-	staleNetmapRestartCooldown = 0
-	t.Cleanup(func() {
-		staleNetmapMissThreshold, staleNetmapMissWindow, staleNetmapRestartCooldown = prevThreshold, prevWindow, prevCooldown
-	})
-
 	ts := testTailscale(t, statusWithPeers())
 	originalServer := ts.currentServer()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
 
-	for i := 0; i < 3; i++ {
+	err := ts.WaitForPeer(ctx, "beam-agent-missing", time.Second)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("WaitForPeer() error = %v, want context.Canceled", err)
+	}
+	if ts.currentServer() != originalServer {
+		t.Fatal("caller cancellation replaced the shared tsnet server")
+	}
+}
+
+func TestWaitForPeerBoundsSlowStatusToAdvisoryTimeout(t *testing.T) {
+	ts := testTailscale(t, nil)
+	ts.statusFunc = func(ctx context.Context) (*ipnstate.Status, error) {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(250 * time.Millisecond):
+			return statusWithPeers(), nil
+		}
+	}
+
+	start := time.Now()
+	err := ts.WaitForPeer(context.Background(), "beam-agent-missing", 20*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "netmap status unavailable") {
+		t.Fatalf("WaitForPeer() error = %v, want bounded netmap status error", err)
+	}
+	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
+		t.Fatalf("WaitForPeer() took %s, want less than 100ms", elapsed)
+	}
+}
+
+func TestRepeatedCleanPeerMissesPreserveHealthyPeerRouting(t *testing.T) {
+	withFastPeerPolling(t)
+	ts := testTailscale(t, statusWithPeers("beam-agent-healthy"))
+	originalServer := ts.currentServer()
+
+	for i := 0; i < 10; i++ {
 		_ = ts.WaitForPeer(context.Background(), "beam-agent-missing", time.Millisecond)
+		if err := ts.WaitForPeer(context.Background(), "beam-agent-healthy", 10*time.Millisecond); err != nil {
+			t.Fatalf("healthy peer lookup %d failed after missing peer: %v", i, err)
+		}
 	}
 
-	if ts.currentServer() == originalServer {
-		t.Fatal("server was not recycled after repeated netmap misses")
-	}
-	if ts.initialized {
-		t.Fatal("initialized = true after recycle, want false so the next dial re-ups")
+	if ts.currentServer() != originalServer {
+		t.Fatal("server was recycled for a peer absent from a healthy netmap")
 	}
 }
 
-func TestRepeatedMissesDoNotRecycleServingNode(t *testing.T) {
+func TestRepeatedStatusFailuresDoNotReplaceSharedServer(t *testing.T) {
 	withFastPeerPolling(t)
-	prevThreshold, prevWindow, prevCooldown := staleNetmapMissThreshold, staleNetmapMissWindow, staleNetmapRestartCooldown
-	staleNetmapMissThreshold = 2
-	staleNetmapMissWindow = 0
-	staleNetmapRestartCooldown = 0
-	t.Cleanup(func() {
-		staleNetmapMissThreshold, staleNetmapMissWindow, staleNetmapRestartCooldown = prevThreshold, prevWindow, prevCooldown
-	})
-
-	ts := testTailscale(t, statusWithPeers())
-	ts.served = true
+	ts := testTailscale(t, nil)
+	ts.statusFunc = func(context.Context) (*ipnstate.Status, error) {
+		return nil, errors.New("tailnet status unavailable")
+	}
 	originalServer := ts.currentServer()
 
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 10; i++ {
 		_ = ts.WaitForPeer(context.Background(), "beam-agent-missing", time.Millisecond)
 	}
 
 	if ts.currentServer() != originalServer {
-		t.Fatal("serving node's tsnet server was recycled, want untouched")
+		t.Fatal("netmap status failures replaced the shared tsnet server")
+	}
+}
+
+func TestConcurrentPeerChecksDoNotMutateSharedServer(t *testing.T) {
+	withFastPeerPolling(t)
+	ts := testTailscale(t, statusWithPeers("beam-agent-healthy"))
+	originalServer := ts.currentServer()
+
+	const missingChecks = 32
+	const healthyChecks = 128
+	errs := make(chan error, healthyChecks)
+	var checks sync.WaitGroup
+	checks.Add(missingChecks + healthyChecks)
+	for range missingChecks {
+		go func() {
+			defer checks.Done()
+			_ = ts.WaitForPeer(context.Background(), "beam-agent-removed", time.Millisecond)
+		}()
+	}
+	for range healthyChecks {
+		go func() {
+			defer checks.Done()
+			if err := ts.WaitForPeer(context.Background(), "beam-agent-healthy", 10*time.Millisecond); err != nil {
+				errs <- err
+			}
+		}()
+	}
+	checks.Wait()
+	close(errs)
+
+	for err := range errs {
+		t.Errorf("healthy peer lookup failed during missing-peer storm: %v", err)
+	}
+	if ts.currentServer() != originalServer {
+		t.Fatal("concurrent peer checks replaced the shared tsnet server")
 	}
 }

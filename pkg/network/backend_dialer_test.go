@@ -2,6 +2,7 @@ package network
 
 import (
 	"context"
+	"errors"
 	"net"
 	"strings"
 	"sync"
@@ -282,8 +283,18 @@ func TestBackendDialerTSNetIncludesPeerMissWhenDialFails(t *testing.T) {
 	}
 }
 
-func TestBackendDialerTSNetChecksPeerAfterDialConsumesBudget(t *testing.T) {
+func TestBackendDialerTSNetPreservesNetmapDiagnosticAfterDialConsumesBudget(t *testing.T) {
 	ts, dialer := newMissingPeerBackendDialer(t, 100*time.Millisecond)
+	previousAdvisory := tailnetPeerAdvisoryTimeout
+	previousRetry := backendRouteDialRetryInterval
+	tailnetPeerAdvisoryTimeout = time.Second
+	backendRouteDialRetryInterval = 250 * time.Millisecond
+	t.Cleanup(func() {
+		tailnetPeerAdvisoryTimeout = previousAdvisory
+		backendRouteDialRetryInterval = previousRetry
+	})
+
+	originalServer := ts.currentServer()
 	dialer.tsnetDial = func(ctx context.Context, addr string, timeout time.Duration) (net.Conn, error) {
 		timer := time.NewTimer(timeout)
 		defer timer.Stop()
@@ -295,18 +306,46 @@ func TestBackendDialerTSNetChecksPeerAfterDialConsumesBudget(t *testing.T) {
 		}
 	}
 
+	start := time.Now()
 	_, err := dialer.Dial(context.Background(), types.BackendRouteAddress("route-ts"))
+	elapsed := time.Since(start)
 	if err == nil || !strings.Contains(err.Error(), "netmap") {
 		t.Fatalf("dial error = %v, want netmap miss after exhausted dial", err)
 	}
-	if ts.staleNetmap.misses < 1 {
-		t.Fatalf("netmap misses = %d, want at least 1", ts.staleNetmap.misses)
+	if elapsed > 200*time.Millisecond {
+		t.Fatalf("dial took %s, want the 100ms route budget without a full retry delay", elapsed)
+	}
+	if ts.currentServer() != originalServer {
+		t.Fatal("peer lookup failure replaced the shared tsnet server")
+	}
+}
+
+func TestBackendDialerTSNetCallerCancellationWins(t *testing.T) {
+	_, dialer := newMissingPeerBackendDialer(t, 2*time.Second)
+	started := make(chan struct{})
+	dialer.tsnetDial = func(ctx context.Context, addr string, timeout time.Duration) (net.Conn, error) {
+		close(started)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := dialer.Dial(ctx, types.BackendRouteAddress("route-ts"))
+		done <- err
+	}()
+
+	<-started
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Dial() error = %v, want context.Canceled", err)
 	}
 }
 
 // A dead peer (offline seller machine) produces netmap miss + NXDOMAIN on
-// every dial. That must feed the rate-limited stale-netmap detector only —
-// recycling the shared tsnet server per dial would drop every other route.
+// every dial. That failure must remain local to the request; recycling the
+// shared tsnet server would drop every other route.
 func TestBackendDialerTSNetDeadPeerDoesNotRecycleServer(t *testing.T) {
 	ts, dialer := newMissingPeerBackendDialer(t, 250*time.Millisecond)
 	originalServer := ts.currentServer()

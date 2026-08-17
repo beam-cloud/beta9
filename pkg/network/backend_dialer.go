@@ -92,13 +92,13 @@ func (d *BackendDialer) Dial(ctx context.Context, address string) (net.Conn, err
 // dialTSNetRoute connects to the agent's tsnet proxy target. A ready route is
 // dialed immediately: tsnet.Status can omit reachable peers, so checking the
 // netmap first only adds latency. After a failed dial, WaitForPeer enriches the
-// error and feeds the rate-limited stale-netmap detector before retrying.
+// error before retrying; it never mutates the shared tsnet server.
 func (d *BackendDialer) dialTSNetRoute(ctx context.Context, route *types.BackendRoute, routeID string, deadline time.Time) (net.Conn, error) {
 	host := tailnetHostFromAddr(route.ProxyTarget)
 	var lastErr error
 
 	for remaining := time.Until(deadline); remaining > 0; remaining = time.Until(deadline) {
-		// A failed MagicDNS dial must still reach WaitForPeer so stale netmaps
+		// A failed MagicDNS dial must still reach WaitForPeer so missing peers
 		// are observable. Keep a bounded part of each attempt for that check.
 		peerReserve := time.Duration(0)
 		if host != "" {
@@ -124,18 +124,36 @@ func (d *BackendDialer) dialTSNetRoute(ctx context.Context, route *types.Backend
 		lastErr = err
 
 		if host != "" {
-			peerWait := min(time.Until(deadline), tailnetPeerAdvisoryTimeout)
+			// Leave a small margin for error propagation so the advisory probe
+			// cannot consume the route deadline. If the dial wakes after its
+			// budget, retain an explicit netmap diagnostic without starting work
+			// that would extend the failed request.
+			peerWait := min(peerReserve, time.Until(deadline), tailnetPeerAdvisoryTimeout)
+			if peerWait > 0 {
+				peerWait -= min(peerWait/4, 10*time.Millisecond)
+			}
 			if peerWait > 0 {
 				if peerErr := d.tailscale.WaitForPeer(ctx, host, peerWait); peerErr != nil {
 					lastErr = fmt.Errorf("%w; tsnet dial failed: %w", peerErr, err)
 				}
+			} else {
+				lastErr = fmt.Errorf("tailnet netmap check skipped because the dial exhausted its route budget; tsnet dial failed: %w", err)
 			}
 		}
 
+		retryDelay := min(backendRouteDialRetryInterval, time.Until(deadline))
+		if retryDelay <= 0 {
+			break
+		}
+		retryTimer := time.NewTimer(retryDelay)
 		select {
 		case <-ctx.Done():
+			retryTimer.Stop()
+			if ctx.Err() == context.DeadlineExceeded && lastErr != nil {
+				return nil, fmt.Errorf("backend route %s dial timed out: %w", routeID, lastErr)
+			}
 			return nil, ctx.Err()
-		case <-time.After(backendRouteDialRetryInterval):
+		case <-retryTimer.C:
 		}
 	}
 
