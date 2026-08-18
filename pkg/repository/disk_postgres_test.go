@@ -11,6 +11,64 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestGetOrCreateDiskAcceptsQcowDriver(t *testing.T) {
+	repo, mock := NewBackendPostgresRepositoryForTest()
+	postgresRepo := repo.(*PostgresBackendRepository)
+	now := time.Now().UTC()
+
+	mock.ExpectQuery(`SELECT .* FROM disk`).
+		WithArgs(uint(7), "machine-root").
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery(`INSERT INTO disk`).
+		WithArgs(uint(7), "machine-root", "32Gi", "ext4", types.DurableDiskDriverQcow, "/").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "external_id", "workspace_id", "name", "size", "filesystem", "driver", "mount_path",
+			"created_at", "updated_at", "deleted_at",
+		}).AddRow(
+			uint(1),
+			"disk-1",
+			uint(7),
+			"machine-root",
+			"32Gi",
+			"ext4",
+			types.DurableDiskDriverQcow,
+			"/",
+			now,
+			now,
+			nil,
+		))
+
+	disk, err := postgresRepo.GetOrCreateDisk(context.Background(), 7, &types.Disk{
+		Name:       "machine-root",
+		Size:       "32Gi",
+		Filesystem: "ext4",
+		Driver:     types.DurableDiskDriverQcow,
+		MountPath:  "/",
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, types.DurableDiskDriverQcow, disk.Driver)
+	require.Equal(t, "/", disk.MountPath)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestGetOrCreateDiskRejectsUnsupportedDriver(t *testing.T) {
+	repo, mock := NewBackendPostgresRepositoryForTest()
+	postgresRepo := repo.(*PostgresBackendRepository)
+
+	mock.ExpectQuery(`SELECT .* FROM disk`).
+		WithArgs(uint(7), "machine-root").
+		WillReturnError(sql.ErrNoRows)
+
+	_, err := postgresRepo.GetOrCreateDisk(context.Background(), 7, &types.Disk{
+		Name:   "machine-root",
+		Driver: "unsupported",
+	})
+
+	require.EqualError(t, err, `unsupported durable disk driver "unsupported"`)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestGetDiskSnapshotOnlySharesAvailableSnapshots(t *testing.T) {
 	repo, mock := NewBackendPostgresRepositoryForTest()
 	mock.ExpectQuery(`public = TRUE AND status = \$3`).

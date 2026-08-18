@@ -84,6 +84,7 @@ const (
 	HostNetnsPath                   = "/var/run/netns"
 	HostCgroupPath                  = "/sys/fs/cgroup"
 	HostFuseDevicePath              = "/dev/fuse"
+	HostKernelModulesPath           = "/lib/modules"
 	AgentDockerLabelManaged         = "dev.beam.agent.worker"
 	AgentDockerLabelWorkerID        = "dev.beam.agent.worker_id"
 	AgentDockerLabelMachineID       = "dev.beam.agent.machine_id"

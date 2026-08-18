@@ -2021,7 +2021,9 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 			request.Checkpoint = nil
 		}
 		var seedUpper func(string) error
-		if reseedCheckpointFilesystem {
+		// A qcow root disk already holds the checkpoint filesystem; Reset
+		// preserves its persistent upper, so no reseed is needed (or safe).
+		if reseedCheckpointFilesystem && qcowRootDiskMount(request) == nil {
 			seedUpper = func(upperPath string) error {
 				return s.restoreCheckpointFilesystem(ctx, request, outputLogger, upperPath)
 			}
@@ -2112,14 +2114,17 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 		var restoreErr error
 		if filesystemRestore != nil {
 			restoreErr = filesystemRestore.wait()
+		} else if originalConfigErr != nil {
+			restoreErr = fmt.Errorf("checkpoint filesystem restore requires the original container config: %w", originalConfigErr)
+		} else if qcowRootDiskMount(request) != nil {
+			// The root disk is sealed after the CRIU dump, so the restored
+			// disk already holds the checkpoint filesystem; reseeding would
+			// wipe it and re-extract the same bytes.
+			restoreErr = s.prepareRestoreFallback(request, originalConfig, nil)
 		} else {
-			if originalConfigErr != nil {
-				restoreErr = fmt.Errorf("checkpoint filesystem restore requires the original container config: %w", originalConfigErr)
-			} else {
-				restoreErr = s.prepareRestoreFallback(request, originalConfig, func(upperPath string) error {
-					return s.restoreCheckpointFilesystem(ctx, request, outputLogger, upperPath)
-				})
-			}
+			restoreErr = s.prepareRestoreFallback(request, originalConfig, func(upperPath string) error {
+				return s.restoreCheckpointFilesystem(ctx, request, outputLogger, upperPath)
+			})
 		}
 		if restoreErr != nil {
 			// A local fetch failure does not prove the checkpoint itself is invalid.

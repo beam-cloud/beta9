@@ -29,6 +29,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -104,6 +105,24 @@ func (m *WorkerCacheManager) reconcileMaxItemsPerCycle() int {
 		items = cacheDefaultReconcileMaxItemsCycle
 	}
 	return items
+}
+
+func (m *WorkerCacheManager) reconcileConcurrency() int {
+	n := m.config.Cache.Reconciliation.MaxConcurrentFetches
+	if n <= 0 {
+		n = cacheDefaultReconcileConcurrency
+	}
+	return n
+}
+
+// reconcileMaxBytesPerCycle bounds bytes fetched per cycle so the disk-usage
+// gate is re-evaluated regularly; exhausted cycles re-kick immediately.
+func (m *WorkerCacheManager) reconcileMaxBytesPerCycle() int64 {
+	b := m.config.Cache.Reconciliation.MaxBytesPerCycle
+	if b <= 0 {
+		b = cacheDefaultReconcileMaxBytesCycle
+	}
+	return b
 }
 
 // reconcileMaxDiskUsagePct is the local disk usage fraction above which
@@ -503,17 +522,28 @@ func (m *WorkerCacheManager) reconcileOnce() {
 		return
 	}
 
-	budget := newReconcileBudget(m.reconcileMaxItemsPerCycle())
+	// Stubs arrive MRU-first from the recent index.
+	budget := newReconcileBudget(m.reconcileMaxItemsPerCycle(), m.reconcileMaxBytesPerCycle())
+	pool := newReconcilePool(m.reconcileConcurrency())
 	for _, content := range stubContent {
 		select {
 		case <-m.ctx.Done():
+			pool.wait()
 			return
 		default:
 		}
-		m.reconcileStubContent(server, localHostID, content.stub, content.items, budget, reconcileAllowlist)
+		m.reconcileStubContent(server, localHostID, content.stub, content.items, budget, reconcileAllowlist, pool)
 		if budget.exhausted() {
 			break
 		}
+	}
+	pool.wait()
+
+	// An exhausted budget means known pending work: re-kick immediately with
+	// a fresh MRU listing instead of waiting for the next tick. Requiring
+	// local progress avoids hot-looping on contended or missing items.
+	if budget.exhausted() && pool.didWork() {
+		m.requestReconcile()
 	}
 }
 
@@ -523,10 +553,10 @@ func (m *WorkerCacheManager) reconcileStub(server *cache.Server, localHostID str
 		log.Debug().Err(err).Str("workspace_id", stub.WorkspaceID).Str("stub_id", stub.StubID).Msg("cache reconciliation failed to read required content")
 		return nil
 	}
-	return m.reconcileStubContent(server, localHostID, stub, items, budget, nil)
+	return m.reconcileStubContent(server, localHostID, stub, items, budget, nil, nil)
 }
 
-func (m *WorkerCacheManager) reconcileStubContent(server *cache.Server, localHostID string, stub cache.RecentStub, items []types.CacheRequiredContentItem, budget *reconcileBudget, allowlist map[string]struct{}) []string {
+func (m *WorkerCacheManager) reconcileStubContent(server *cache.Server, localHostID string, stub cache.RecentStub, items []types.CacheRequiredContentItem, budget *reconcileBudget, allowlist map[string]struct{}, pool *reconcilePool) []string {
 	checkpointIDs := []string{}
 	for _, item := range orderedRequiredContentItems(items) {
 		select {
@@ -569,13 +599,89 @@ func (m *WorkerCacheManager) reconcileStubContent(server *cache.Server, localHos
 		if m.reconcileBackingOff(item.Hash, routingKey, stub.LastSeen) {
 			continue
 		}
-		if !budget.take() {
+		// Stubs share content (e.g. base image layers); dedupe submissions
+		// within the cycle instead of burning budget on lock contention.
+		if !pool.claim(reconcileItemKey(item.Hash, routingKey)) {
+			continue
+		}
+		if !budget.take(item.SizeBytes) {
 			return checkpointIDs
 		}
 
-		m.materializeOwnedItem(server, localHostID, stub, item, routingKey)
+		pool.submit(func() {
+			if m.materializeOwnedItem(server, localHostID, stub, item, routingKey) {
+				pool.markProgress()
+			}
+		})
 	}
 	return checkpointIDs
+}
+
+// reconcilePool bounds concurrent materializations within a reconcile cycle.
+// A nil pool runs work inline (the sequential path used by reconcileStub).
+type reconcilePool struct {
+	wg       sync.WaitGroup
+	ch       chan struct{}
+	progress atomic.Bool
+	// seen dedupes (hash, routingKey) submissions within one cycle.
+	// Reconcile loop goroutine only; no lock.
+	seen map[string]struct{}
+}
+
+func newReconcilePool(concurrency int) *reconcilePool {
+	if concurrency <= 1 {
+		return nil
+	}
+	return &reconcilePool{ch: make(chan struct{}, concurrency), seen: map[string]struct{}{}}
+}
+
+// claim marks the item as submitted this cycle, returning false on repeats.
+// A nil pool never dedupes; the sequential path sees completed items via
+// requiredContentComplete on the next iteration.
+func (p *reconcilePool) claim(key string) bool {
+	if p == nil {
+		return true
+	}
+	if _, ok := p.seen[key]; ok {
+		return false
+	}
+	p.seen[key] = struct{}{}
+	return true
+}
+
+// markProgress records that a task landed content locally, i.e. the cycle
+// moved the working set forward rather than spinning on misses or contention.
+func (p *reconcilePool) markProgress() {
+	if p != nil {
+		p.progress.Store(true)
+	}
+}
+
+func (p *reconcilePool) didWork() bool {
+	return p != nil && p.progress.Load()
+}
+
+func (p *reconcilePool) submit(fn func()) {
+	if p == nil {
+		fn()
+		return
+	}
+	p.ch <- struct{}{}
+	p.wg.Add(1)
+	go func() {
+		defer func() {
+			<-p.ch
+			p.wg.Done()
+		}()
+		fn()
+	}()
+}
+
+func (p *reconcilePool) wait() {
+	if p == nil {
+		return
+	}
+	p.wg.Wait()
 }
 
 type recentStubContent struct {
@@ -583,18 +689,36 @@ type recentStubContent struct {
 	items []types.CacheRequiredContentItem
 }
 
+type requiredContentCacheEntry struct {
+	lastSeen time.Time
+	items    []types.CacheRequiredContentItem
+}
+
+// loadRecentRequiredContent resolves required-content items for each recent
+// stub, cached keyed on the stub's recent-index score: publishers append to S2
+// before bumping the score, so an unchanged score means the cached items are
+// current. Only stubs with new activity cost an S2 read per cycle.
 func (m *WorkerCacheManager) loadRecentRequiredContent(stubs []cache.RecentStub) ([]recentStubContent, bool) {
 	content := make([]recentStubContent, 0, len(stubs))
 	complete := true
+	next := make(map[string]requiredContentCacheEntry, len(stubs))
 	for _, stub := range stubs {
+		key := stub.WorkspaceID + "|" + stub.StubID
+		if entry, ok := m.requiredContentCache[key]; ok && entry.lastSeen.Equal(stub.LastSeen) {
+			next[key] = entry
+			content = append(content, recentStubContent{stub: stub, items: entry.items})
+			continue
+		}
 		items, err := m.eventRepo.ReadStubCacheRequiredContent(m.ctx, stub.WorkspaceID, stub.StubID)
 		if err != nil {
 			log.Debug().Err(err).Str("workspace_id", stub.WorkspaceID).Str("stub_id", stub.StubID).Msg("cache reconciliation failed to read required content")
 			complete = false
 			continue
 		}
+		next[key] = requiredContentCacheEntry{lastSeen: stub.LastSeen, items: items}
 		content = append(content, recentStubContent{stub: stub, items: items})
 	}
+	m.requiredContentCache = next
 	return content, complete
 }
 
@@ -1244,25 +1368,39 @@ func (m *WorkerCacheManager) ownerLastLiveAt(hostID string, now time.Time) time.
 	return now
 }
 
+// reconcileBudget bounds one reconcile pass by item count and by bytes, so
+// gate rechecks stay regular regardless of item size. An item crossing the
+// byte boundary is still admitted (a single oversized item must not starve);
+// the budget exhausts after it. Reconcile loop goroutine only.
 type reconcileBudget struct {
-	remaining int
-	limited   bool
-	empty     bool
+	remaining      int
+	limited        bool
+	bytesRemaining int64
+	byteLimited    bool
+	empty          bool
 }
 
-func newReconcileBudget(limit int) *reconcileBudget {
-	return &reconcileBudget{remaining: limit, limited: limit > 0}
+func newReconcileBudget(limit int, byteLimit int64) *reconcileBudget {
+	return &reconcileBudget{
+		remaining:      limit,
+		limited:        limit > 0,
+		bytesRemaining: byteLimit,
+		byteLimited:    byteLimit > 0,
+	}
 }
 
-func (b *reconcileBudget) take() bool {
-	if b == nil || !b.limited {
+func (b *reconcileBudget) take(sizeBytes int64) bool {
+	if b == nil || (!b.limited && !b.byteLimited) {
 		return true
 	}
-	if b.remaining <= 0 {
+	if (b.limited && b.remaining <= 0) || (b.byteLimited && b.bytesRemaining <= 0) {
 		b.empty = true
 		return false
 	}
 	b.remaining--
+	if sizeBytes > 0 {
+		b.bytesRemaining -= sizeBytes
+	}
 	return true
 }
 
@@ -1270,12 +1408,15 @@ func (b *reconcileBudget) exhausted() bool {
 	return b != nil && b.empty
 }
 
-func (m *WorkerCacheManager) materializeOwnedItem(server *cache.Server, localHostID string, stub cache.RecentStub, item types.CacheRequiredContentItem, routingKey string) {
+// materializeOwnedItem fetches a single missing item into the local cache,
+// returning true only if the item ended up complete. Misses, failures, and
+// lock contention return false so retries alone never re-kick the loop.
+func (m *WorkerCacheManager) materializeOwnedItem(server *cache.Server, localHostID string, stub cache.RecentStub, item types.CacheRequiredContentItem, routingKey string) bool {
 	acquired, err := m.metadataStore.AcquireReconcileLock(m.ctx, m.locality, localHostID, item.Hash, m.reconcileLockTTLSeconds())
 	if err != nil || !acquired {
 		// Another materialization is already in flight for this item (or the
 		// coordinator is unavailable); try again next cycle.
-		return
+		return false
 	}
 	defer func() {
 		if err := m.metadataStore.ReleaseReconcileLock(m.ctx, m.locality, localHostID, item.Hash); err != nil {
@@ -1285,7 +1426,7 @@ func (m *WorkerCacheManager) materializeOwnedItem(server *cache.Server, localHos
 
 	// Re-check after acquiring the lock; another process may have just completed it.
 	if m.requiredContentComplete(server, item, routingKey) {
-		return
+		return true
 	}
 
 	ctx, cancel := context.WithTimeout(m.ctx, reconcileItemTimeout)
@@ -1327,6 +1468,7 @@ func (m *WorkerCacheManager) materializeOwnedItem(server *cache.Server, localHos
 	}
 
 	m.auditCacheEvent(localHostID, stub, item, routingKey, status)
+	return status == types.CacheAuditStatusMaterialized
 }
 
 // reconcileStatusIsFailure reports whether a materialization outcome is a genuine

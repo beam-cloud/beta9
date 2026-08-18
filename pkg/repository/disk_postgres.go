@@ -54,7 +54,7 @@ func (r *PostgresBackendRepository) GetOrCreateDisk(ctx context.Context, workspa
 	if driver == "" {
 		driver = types.DurableDiskDriverSnapshot
 	}
-	if driver != types.DurableDiskDriverSnapshot {
+	if driver != types.DurableDiskDriverSnapshot && driver != types.DurableDiskDriverQcow {
 		return nil, fmt.Errorf("unsupported durable disk driver %q", driver)
 	}
 

@@ -41,6 +41,9 @@ type Binaries struct {
 	QemuImg   string
 	QSD       string
 	NBDClient string
+	Modprobe  string
+	Mknod     string
+	Stat      string
 	MkfsExt4  string
 	Fsfreeze  string
 	Mount     string
@@ -51,6 +54,9 @@ func (b *Binaries) applyDefaults() {
 	setDefault(&b.QemuImg, "qemu-img")
 	setDefault(&b.QSD, "qemu-storage-daemon")
 	setDefault(&b.NBDClient, "nbd-client")
+	setDefault(&b.Modprobe, "modprobe")
+	setDefault(&b.Mknod, "mknod")
+	setDefault(&b.Stat, "stat")
 	setDefault(&b.MkfsExt4, "mkfs.ext4")
 	setDefault(&b.Fsfreeze, "fsfreeze")
 	setDefault(&b.Mount, "mount")
@@ -80,6 +86,7 @@ type Config struct {
 
 	// Test hooks.
 	SysBlockPath string
+	DevPath      string
 	Runner       func(ctx context.Context, name string, args ...string) ([]byte, error)
 }
 
@@ -88,6 +95,7 @@ type Manager struct {
 	root          string
 	binaries      Binaries
 	sysBlockPath  string
+	devPath       string
 	run           runner
 	maxChainDepth int
 
@@ -105,6 +113,9 @@ func NewManager(config Config) *Manager {
 	if config.SysBlockPath == "" {
 		config.SysBlockPath = "/sys/block"
 	}
+	if config.DevPath == "" {
+		config.DevPath = "/dev"
+	}
 	if config.MaxChainDepth <= 0 {
 		config.MaxChainDepth = DefaultMaxChainDepth
 	}
@@ -117,6 +128,7 @@ func NewManager(config Config) *Manager {
 		root:          config.Root,
 		binaries:      config.Binaries,
 		sysBlockPath:  config.SysBlockPath,
+		devPath:       config.DevPath,
 		run:           run,
 		maxChainDepth: config.MaxChainDepth,
 		volumes:       make(map[string]*Volume),
@@ -145,6 +157,7 @@ func (m *Manager) preflight() error {
 	m.preflightOnce.Do(func() {
 		for _, binary := range []string{
 			m.binaries.QemuImg, m.binaries.QSD, m.binaries.NBDClient,
+			m.binaries.Modprobe, m.binaries.Mknod, m.binaries.Stat,
 			m.binaries.MkfsExt4, m.binaries.Fsfreeze, m.binaries.Mount, m.binaries.Umount,
 		} {
 			if _, err := exec.LookPath(binary); err != nil {
@@ -230,6 +243,11 @@ func (m *Manager) Recover(ctx context.Context) error {
 			return nil
 		}
 		return err
+	}
+	if len(entries) > 0 {
+		if err := m.ensureNBDDevices(ctx); err != nil {
+			return err
+		}
 	}
 
 	for _, entry := range entries {

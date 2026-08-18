@@ -22,6 +22,7 @@ type nbdDevice struct {
 
 const (
 	nbdSettleTimeout = 15 * time.Second
+	nbdModuleTimeout = 10 * time.Second
 	// nbdBlockSize is the device block size requested from nbd-client.
 	nbdBlockSize = 4096
 	sectorSize   = 512
@@ -30,6 +31,9 @@ const (
 // acquireNBDDevice picks a free /dev/nbdN, locks it, and connects it to the
 // daemon's NBD unix socket.
 func (m *Manager) acquireNBDDevice(ctx context.Context, nbdSocket string, expectedSizeBytes int64) (*nbdDevice, error) {
+	if err := m.ensureNBDDevices(ctx); err != nil {
+		return nil, err
+	}
 	names, err := listNBDDeviceNames(m.sysBlockPath)
 	if err != nil {
 		return nil, err
@@ -49,6 +53,79 @@ func (m *Manager) acquireNBDDevice(ctx context.Context, nbdSocket string, expect
 		return device, nil
 	}
 	return nil, fmt.Errorf("all %d nbd devices are busy", len(names))
+}
+
+// ensureNBDDevices lazily prepares the host kernel and this worker's private
+// /dev mount on the first qcow attachment. Kubernetes and Docker both give a
+// privileged worker its own /dev tmpfs, so loading the host module alone does
+// not guarantee that /dev/nbdN exists inside the worker.
+func (m *Manager) ensureNBDDevices(ctx context.Context) error {
+	names, err := listNBDDeviceNames(m.sysBlockPath)
+	if err != nil {
+		return err
+	}
+	if len(names) == 0 {
+		loadCtx, cancel := context.WithTimeout(ctx, nbdModuleTimeout)
+		_, loadErr := m.run(loadCtx, m.binaries.Modprobe, "nbd", "nbds_max=64")
+		cancel()
+		if loadErr != nil {
+			return fmt.Errorf("load nbd kernel module: %w", loadErr)
+		}
+		names, err = listNBDDeviceNames(m.sysBlockPath)
+		if err != nil {
+			return err
+		}
+		if len(names) == 0 {
+			return fmt.Errorf("load nbd kernel module: no nbd devices appeared")
+		}
+	}
+
+	for _, name := range names {
+		deviceNumber, err := os.ReadFile(filepath.Join(m.sysBlockPath, name, "dev"))
+		if err != nil {
+			return fmt.Errorf("read %s device number: %w", name, err)
+		}
+		parts := strings.Split(strings.TrimSpace(string(deviceNumber)), ":")
+		if len(parts) != 2 {
+			return fmt.Errorf("read %s device number: malformed value %q", name, strings.TrimSpace(string(deviceNumber)))
+		}
+		major, err := strconv.ParseUint(parts[0], 10, 32)
+		if err != nil {
+			return fmt.Errorf("read %s major device number: %w", name, err)
+		}
+		minor, err := strconv.ParseUint(parts[1], 10, 32)
+		if err != nil {
+			return fmt.Errorf("read %s minor device number: %w", name, err)
+		}
+
+		devicePath := filepath.Join(m.devPath, name)
+		if _, err := os.Lstat(devicePath); os.IsNotExist(err) {
+			// A concurrent attachment may win this create. Always validate the
+			// final node below instead of treating EEXIST as authoritative.
+			_, _ = m.run(ctx, m.binaries.Mknod, "-m", "0600", devicePath, "b", parts[0], parts[1])
+		} else if err != nil {
+			return fmt.Errorf("inspect %s: %w", devicePath, err)
+		}
+
+		identity, err := m.run(ctx, m.binaries.Stat, "-c", "%f:%t:%T", devicePath)
+		if err != nil {
+			return fmt.Errorf("validate %s: %w", devicePath, err)
+		}
+		fields := strings.Split(strings.TrimSpace(string(identity)), ":")
+		if len(fields) != 3 {
+			return fmt.Errorf("validate %s: malformed stat identity %q", devicePath, strings.TrimSpace(string(identity)))
+		}
+		mode, err := strconv.ParseUint(fields[0], 16, 32)
+		if err != nil || mode&0170000 != 0060000 {
+			return fmt.Errorf("validate %s: not a block device", devicePath)
+		}
+		want := fmt.Sprintf("%x:%x", major, minor)
+		got := fields[1] + ":" + fields[2]
+		if got != want {
+			return fmt.Errorf("validate %s: device number %s, want %s", devicePath, got, want)
+		}
+	}
+	return nil
 }
 
 // lockNBDDevice takes the exclusive flock for a device without caring whether
@@ -71,7 +148,7 @@ func (m *Manager) lockNBDDevice(name string) (*nbdDevice, bool) {
 		lock.Close()
 		return nil, false
 	}
-	return &nbdDevice{Path: "/dev/" + name, name: name, lock: lock}, true
+	return &nbdDevice{Path: filepath.Join(m.devPath, name), name: name, lock: lock}, true
 }
 
 func (m *Manager) tryLockNBDDevice(name string) (*nbdDevice, bool) {

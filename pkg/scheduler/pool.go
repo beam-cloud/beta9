@@ -30,6 +30,7 @@ const (
 	storageVolumeName           string  = "beta9-storage"
 	cacheVolumeName             string  = "beta9-cache"
 	durableDiskVolumeName       string  = "beta9-durable-disks"
+	kernelModulesVolumeName     string  = "host-kernel-modules"
 	devicePluginVolumeName      string  = "kubelet-device-plugins"
 	defaultDevicePluginPath     string  = "/var/lib/kubelet/device-plugins"
 	defaultContainerName        string  = "worker"

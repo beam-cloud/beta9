@@ -24,8 +24,9 @@ const (
 	// LayerFileName is the single logical file inside a qcow.v1 manifest.
 	LayerFileName = "layer.qcow2"
 
-	uploadConcurrency = 16
-	fetchConcurrency  = 8
+	uploadConcurrency     = 16
+	fetchConcurrency      = 8
+	layerFetchConcurrency = 4
 )
 
 // ChunkSink stores a chunk body under a content-addressed object key.

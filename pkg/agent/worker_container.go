@@ -79,6 +79,9 @@ func dockerRunArgs(name, image, imageID, configPath string, bootstrap bootstrapC
 	if pathExists(types.HostCgroupPath) {
 		volumeArgs = append(volumeArgs, types.HostCgroupPath+":"+types.HostCgroupPath+":rw")
 	}
+	if pathExists(types.HostKernelModulesPath) {
+		volumeArgs = append(volumeArgs, types.HostKernelModulesPath+":"+types.HostKernelModulesPath+":ro")
+	}
 	for _, volume := range volumeArgs {
 		args = append(args, "-v", volume)
 	}
