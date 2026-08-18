@@ -148,7 +148,7 @@ func (m *Manager) lockNBDDevice(name string) (*nbdDevice, bool) {
 		lock.Close()
 		return nil, false
 	}
-	return &nbdDevice{Path: "/dev/" + name, name: name, lock: lock}, true
+	return &nbdDevice{Path: filepath.Join(m.devPath, name), name: name, lock: lock}, true
 }
 
 func (m *Manager) tryLockNBDDevice(name string) (*nbdDevice, bool) {

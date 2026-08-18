@@ -388,6 +388,19 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerVolumes(workerMemory in
 		},
 	})
 
+	// Host kernel modules let the worker modprobe nbd for qcow durable disks.
+	// DirectoryOrCreate keeps scheduling working on hosts without the path;
+	// the qcow attach then fails with a clear module error instead.
+	volumes = append(volumes, corev1.Volume{
+		Name: kernelModulesVolumeName,
+		VolumeSource: corev1.VolumeSource{
+			HostPath: &corev1.HostPathVolumeSource{
+				Path: types.HostKernelModulesPath,
+				Type: &hostPathType,
+			},
+		},
+	})
+
 	hostPathDir := corev1.HostPathDirectory
 	volumes = append(volumes, corev1.Volume{
 		Name: devicePluginVolumeName,
@@ -447,6 +460,12 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerVolumeMounts() []corev1
 		Name:      durableDiskVolumeName,
 		MountPath: types.DefaultDurableDisksPath,
 		ReadOnly:  false,
+	})
+
+	volumeMounts = append(volumeMounts, corev1.VolumeMount{
+		Name:      kernelModulesVolumeName,
+		MountPath: types.HostKernelModulesPath,
+		ReadOnly:  true,
 	})
 
 	return volumeMounts
