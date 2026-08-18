@@ -317,18 +317,27 @@ func (s *ContainerRuntimeServer) ContainerCheckpoint(ctx context.Context, in *pb
 	if checkpointRuntime == "" {
 		checkpointRuntime = rt.Name()
 	}
-	response := &pb.ContainerCheckpointResponse{Ok: true, CheckpointId: checkpointId, Runtime: checkpointRuntime}
-	for _, snapshot := range checkpointOpts.DiskSnapshots {
+	return &pb.ContainerCheckpointResponse{
+		Ok:            true,
+		CheckpointId:  checkpointId,
+		Runtime:       checkpointRuntime,
+		DiskSnapshots: containerDiskSnapshotsToProto(checkpointOpts.DiskSnapshots),
+	}, nil
+}
+
+func containerDiskSnapshotsToProto(snapshots []*types.DiskSnapshot) []*pb.ContainerDiskSnapshot {
+	protos := make([]*pb.ContainerDiskSnapshot, 0, len(snapshots))
+	for _, snapshot := range snapshots {
 		if snapshot == nil {
 			continue
 		}
-		response.DiskSnapshots = append(response.DiskSnapshots, &pb.ContainerDiskSnapshot{
+		protos = append(protos, &pb.ContainerDiskSnapshot{
 			SnapshotId: snapshot.ExternalId,
 			DiskName:   snapshot.DiskName,
 			Generation: snapshot.Generation,
 		})
 	}
-	return response, nil
+	return protos
 }
 
 // ContainerSnapshotDisks snapshots a running container's durable disks.
@@ -342,17 +351,7 @@ func (s *ContainerRuntimeServer) ContainerSnapshotDisks(ctx context.Context, in 
 	}
 
 	snapshots, err := s.snapshotDisks(ctx, instance.Request)
-	response := &pb.ContainerSnapshotDisksResponse{Ok: err == nil}
-	for _, snapshot := range snapshots {
-		if snapshot == nil {
-			continue
-		}
-		response.Snapshots = append(response.Snapshots, &pb.ContainerDiskSnapshot{
-			SnapshotId: snapshot.ExternalId,
-			DiskName:   snapshot.DiskName,
-			Generation: snapshot.Generation,
-		})
-	}
+	response := &pb.ContainerSnapshotDisksResponse{Ok: err == nil, Snapshots: containerDiskSnapshotsToProto(snapshots)}
 	if err != nil {
 		// Return snapshots created before another mount failed.
 		log.Error().Err(err).Str("container_id", in.ContainerId).Msg("failed to snapshot durable disks")

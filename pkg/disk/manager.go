@@ -10,6 +10,8 @@ package disk
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -123,6 +125,14 @@ func NewManager(config Config) *Manager {
 
 func (m *Manager) volumeDir(key string) string {
 	return filepath.Join(m.root, "volumes", key)
+}
+
+// runtimeDir is where a volume's QMP/NBD sockets and pidfile live. It hashes
+// the key instead of embedding it: volume keys carry workspace UUIDs, and the
+// full path must stay well under the 108-byte unix socket path limit.
+func (m *Manager) runtimeDir(key string) string {
+	sum := sha256.Sum256([]byte(key))
+	return filepath.Join(m.root, "run", hex.EncodeToString(sum[:6]))
 }
 
 func (m *Manager) lockDir() string {
@@ -248,7 +258,7 @@ func (m *Manager) adoptVolume(dir string, state *volumeState) bool {
 		return false
 	}
 	deviceName := filepath.Base(state.NBDDevice)
-	device, ok := m.tryLockNBDDeviceForAdoption(deviceName)
+	device, ok := m.lockNBDDevice(deviceName)
 	if !ok {
 		return false
 	}
@@ -257,12 +267,12 @@ func (m *Manager) adoptVolume(dir string, state *volumeState) bool {
 		manager: m,
 		dir:     dir,
 		state:   state,
-		fmtNode: fmt.Sprintf("%s%d", qsdFmtNodePrefix, state.PivotCount),
+		fmtNode: fmtNodeName(state.PivotCount),
 		qsd: &qsdProcess{
 			pid:        state.QSDPid,
 			qmpSocket:  state.QMPSocket,
 			nbdSocket:  state.NBDSocket,
-			runtimeDir: filepath.Join(dir, "runtime"),
+			runtimeDir: m.runtimeDir(state.Key),
 		},
 		nbd: device,
 	}
@@ -281,27 +291,6 @@ func (m *Manager) adoptVolume(dir string, state *volumeState) bool {
 	return true
 }
 
-// tryLockNBDDeviceForAdoption locks a device that is expected to be busy
-// (still connected to the adopted daemon).
-func (m *Manager) tryLockNBDDeviceForAdoption(name string) (*nbdDevice, bool) {
-	if name == "" || name == "." {
-		return nil, false
-	}
-	if err := os.MkdirAll(m.lockDir(), 0o755); err != nil {
-		return nil, false
-	}
-	lockPath := filepath.Join(m.lockDir(), name+".lock")
-	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return nil, false
-	}
-	if err := flockNB(lock); err != nil {
-		lock.Close()
-		return nil, false
-	}
-	return &nbdDevice{Path: "/dev/" + name, name: name, lock: lock}, true
-}
-
 func (m *Manager) cleanupCrashedVolume(ctx context.Context, dir string, state *volumeState) {
 	if state.Mountpoint != "" {
 		if err := m.unmount(ctx, state.Mountpoint); err != nil {
@@ -309,7 +298,7 @@ func (m *Manager) cleanupCrashedVolume(ctx context.Context, dir string, state *v
 		}
 	}
 	if state.NBDDevice != "" {
-		if device, ok := m.tryLockNBDDeviceForAdoption(filepath.Base(state.NBDDevice)); ok {
+		if device, ok := m.lockNBDDevice(filepath.Base(state.NBDDevice)); ok {
 			if m.nbdDeviceBusy(device.name) {
 				if err := m.disconnectNBDDevice(ctx, device); err != nil {
 					log.Warn().Str("volume", state.Key).Err(err).Msg("failed to disconnect crashed volume device")
@@ -329,5 +318,5 @@ func (m *Manager) cleanupCrashedVolume(ctx context.Context, dir string, state *v
 	if err := saveVolumeState(dir, state); err != nil {
 		log.Warn().Str("volume", state.Key).Err(err).Msg("failed to persist recovered volume state")
 	}
-	_ = os.RemoveAll(filepath.Join(dir, "runtime"))
+	_ = os.RemoveAll(m.runtimeDir(state.Key))
 }

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -19,7 +20,12 @@ type nbdDevice struct {
 	lock *os.File
 }
 
-const nbdSettleTimeout = 15 * time.Second
+const (
+	nbdSettleTimeout = 15 * time.Second
+	// nbdBlockSize is the device block size requested from nbd-client.
+	nbdBlockSize = 4096
+	sectorSize   = 512
+)
 
 // acquireNBDDevice picks a free /dev/nbdN, locks it, and connects it to the
 // daemon's NBD unix socket.
@@ -31,10 +37,6 @@ func (m *Manager) acquireNBDDevice(ctx context.Context, nbdSocket string, expect
 	if len(names) == 0 {
 		return nil, fmt.Errorf("no nbd devices present; is the nbd kernel module loaded?")
 	}
-	if err := os.MkdirAll(m.lockDir(), 0o755); err != nil {
-		return nil, err
-	}
-
 	for _, name := range names {
 		device, ok := m.tryLockNBDDevice(name)
 		if !ok {
@@ -49,7 +51,17 @@ func (m *Manager) acquireNBDDevice(ctx context.Context, nbdSocket string, expect
 	return nil, fmt.Errorf("all %d nbd devices are busy", len(names))
 }
 
-func (m *Manager) tryLockNBDDevice(name string) (*nbdDevice, bool) {
+// lockNBDDevice takes the exclusive flock for a device without caring whether
+// the kernel currently has a server connected. Fresh attachments additionally
+// require the device to be free (tryLockNBDDevice); adoption and crash
+// cleanup expect it busy.
+func (m *Manager) lockNBDDevice(name string) (*nbdDevice, bool) {
+	if name == "" || name == "." {
+		return nil, false
+	}
+	if err := os.MkdirAll(m.lockDir(), 0o755); err != nil {
+		return nil, false
+	}
 	lockPath := filepath.Join(m.lockDir(), name+".lock")
 	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
@@ -59,22 +71,29 @@ func (m *Manager) tryLockNBDDevice(name string) (*nbdDevice, bool) {
 		lock.Close()
 		return nil, false
 	}
-	if m.nbdDeviceBusy(name) {
-		syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
-		lock.Close()
-		return nil, false
-	}
 	return &nbdDevice{Path: "/dev/" + name, name: name, lock: lock}, true
 }
 
+func (m *Manager) tryLockNBDDevice(name string) (*nbdDevice, bool) {
+	device, ok := m.lockNBDDevice(name)
+	if !ok {
+		return nil, false
+	}
+	if m.nbdDeviceBusy(name) {
+		device.release()
+		return nil, false
+	}
+	return device, true
+}
+
 func (m *Manager) connectNBDDevice(ctx context.Context, device *nbdDevice, nbdSocket string, expectedSizeBytes int64) error {
-	if _, err := m.run(ctx, m.binaries.NBDClient, "-unix", nbdSocket, "-N", qsdExportName, device.Path, "-b", "4096"); err != nil {
+	if _, err := m.run(ctx, m.binaries.NBDClient, "-unix", nbdSocket, "-N", qsdExportName, device.Path, "-b", strconv.Itoa(nbdBlockSize)); err != nil {
 		return fmt.Errorf("connect %s: %w", device.Path, err)
 	}
 	// The device is usable once the kernel records a server pid and the
 	// virtual size is visible.
 	deadline := time.Now().Add(nbdSettleTimeout)
-	expectedSectors := expectedSizeBytes / 512
+	expectedSectors := expectedSizeBytes / sectorSize
 	for {
 		if m.nbdDeviceBusy(device.name) {
 			if sectors, err := m.nbdDeviceSectors(device.name); err == nil && sectors == expectedSectors {
@@ -89,7 +108,7 @@ func (m *Manager) connectNBDDevice(ctx context.Context, device *nbdDevice, nbdSo
 		case <-ctx.Done():
 			_ = m.disconnectNBDDevice(ctx, device)
 			return ctx.Err()
-		case <-time.After(50 * time.Millisecond):
+		case <-time.After(pollInterval):
 		}
 	}
 }
@@ -104,7 +123,7 @@ func (m *Manager) disconnectNBDDevice(ctx context.Context, device *nbdDevice) er
 		if time.Now().After(deadline) {
 			return fmt.Errorf("%s is still connected after disconnect", device.Path)
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(pollInterval)
 	}
 	return nil
 }

@@ -639,17 +639,32 @@ func (s *Worker) durableDiskSnapshotCacheReader() durableDiskSnapshotCacheReader
 	return s.cacheManager.client
 }
 
+// The workspace-bucket layout for durable disk artifacts:
+// durable-disks/<disk>/snapshots/<generation>/<attempt>/manifest.json for
+// manifests and durable-disks/<disk>/chunks/<hash> for content-addressed
+// chunks.
+const (
+	durableDiskObjectRoot       = "durable-disks"
+	durableDiskManifestFileName = "manifest.json"
+)
+
 func durableDiskSnapshotObjectPrefix(mount *types.Mount, generation int64) string {
 	// Generations order repository rows, but two workers can legitimately choose
 	// the same one after reading the same parent. Give each publish attempt its
 	// own manifest directory; chunks remain content-addressed and shared.
 	return path.Join(
-		"durable-disks",
+		durableDiskObjectRoot,
 		types.SafeDurableDiskName(mount.DurableDisk.Name),
 		"snapshots",
 		strconv.FormatInt(generation, 10),
 		uuid.NewString(),
 	)
+}
+
+// durableDiskChunkPrefix is where a disk's content-addressed chunks live,
+// shared by every generation of the disk.
+func durableDiskChunkPrefix(mount *types.Mount) string {
+	return path.Join(durableDiskObjectRoot, types.SafeDurableDiskName(mount.DurableDisk.Name), "chunks")
 }
 
 func (s *Worker) reportDurableDiskSnapshotContent(request *types.ContainerRequest, snapshot *types.DiskSnapshot, manifest *types.DiskSnapshotManifest) {

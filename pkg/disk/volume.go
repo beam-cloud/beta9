@@ -23,6 +23,13 @@ type Volume struct {
 	qsd     *qsdProcess
 	nbd     *nbdDevice
 	fmtNode string
+
+	// freshHead is true when the current head file was created within this
+	// daemon session, which is what makes a zero write-offset on its file
+	// node a safe "nothing changed" signal. Reused heads and adopted volumes
+	// may hold data written before the daemon's statistics started counting,
+	// so their first seal is never skipped.
+	freshHead bool
 }
 
 // AttachSpec describes a volume attachment.
@@ -62,7 +69,7 @@ func (v *Volume) ReadOnly() bool     { return v.state.ReadOnly }
 // manager registration already reserved for this key.
 func (m *Manager) attach(ctx context.Context, spec AttachSpec, source ChunkSource) (*Volume, error) {
 	dir := m.volumeDir(spec.Key)
-	layersDir := filepath.Join(dir, "layers")
+	layersDir := filepath.Join(dir, layersSubdir)
 	if err := os.MkdirAll(layersDir, 0o700); err != nil {
 		return nil, err
 	}
@@ -77,6 +84,7 @@ func (m *Manager) attach(ctx context.Context, spec AttachSpec, source ChunkSourc
 		return nil, fmt.Errorf("volume %s is already attached", spec.Key)
 	}
 
+	freshHead := false
 	if !reusableState(state, spec) {
 		if state != nil {
 			log.Info().Str("volume", spec.Key).Msg("discarding stale local volume state")
@@ -91,6 +99,7 @@ func (m *Manager) attach(ctx context.Context, spec AttachSpec, source ChunkSourc
 		if err != nil {
 			return nil, err
 		}
+		freshHead = true
 	} else {
 		log.Info().Str("volume", spec.Key).Int("layers", state.depth()).Msg("reusing local volume state")
 	}
@@ -98,7 +107,7 @@ func (m *Manager) attach(ctx context.Context, spec AttachSpec, source ChunkSourc
 	state.ReadOnly = spec.ReadOnly
 	state.VirtualSizeBytes = spec.VirtualSizeBytes
 
-	volume := &Volume{manager: m, dir: dir, state: state}
+	volume := &Volume{manager: m, dir: dir, state: state, freshHead: freshHead}
 	if err := volume.start(ctx); err != nil {
 		return nil, err
 	}
@@ -172,7 +181,7 @@ func (m *Manager) materializeChain(ctx context.Context, spec AttachSpec, layersD
 		return state, nil
 	}
 
-	headPath := filepath.Join(layersDir, fmt.Sprintf("head-%06d.qcow2", state.PivotCount))
+	headPath := headLayerPath(layersDir, state.PivotCount)
 	if previousPath == "" {
 		if err := m.createQcowBase(ctx, headPath, spec.VirtualSizeBytes); err != nil {
 			return nil, err
@@ -195,9 +204,9 @@ func (v *Volume) start(ctx context.Context) error {
 	if state.ReadOnly {
 		openPath = state.lastLayerPath()
 	}
-	v.fmtNode = fmt.Sprintf("%s%d", qsdFmtNodePrefix, state.PivotCount)
+	v.fmtNode = fmtNodeName(state.PivotCount)
 
-	qsd, err := m.startQSD(ctx, filepath.Join(v.dir, "runtime"), openPath, v.fmtNode, state.ReadOnly)
+	qsd, err := m.startQSD(ctx, m.runtimeDir(state.Key), openPath, v.fmtNode, state.ReadOnly)
 	if err != nil {
 		return err
 	}
@@ -261,8 +270,8 @@ func (v *Volume) Seal(ctx context.Context, force bool) ([]SealedLayer, bool, err
 	}
 	defer client.Close()
 
-	if !force && len(state.Pending) == 0 {
-		written, err := client.writtenBytes(ctx, v.fmtNode)
+	if !force && len(state.Pending) == 0 && v.freshHead {
+		written, err := client.writtenBytes(ctx, qsdFileNodePrefix+v.fmtNode)
 		if err == nil && written == 0 {
 			return nil, true, nil
 		}
@@ -277,8 +286,8 @@ func (v *Volume) Seal(ctx context.Context, force bool) ([]SealedLayer, bool, err
 	// layer that other layers build on.
 	sealedPath := state.HeadPath
 	newPivot := state.PivotCount + 1
-	newHeadPath := filepath.Join(v.dir, "layers", fmt.Sprintf("head-%06d.qcow2", newPivot))
-	newNode := fmt.Sprintf("%s%d", qsdFmtNodePrefix, newPivot)
+	newHeadPath := headLayerPath(filepath.Join(v.dir, layersSubdir), newPivot)
+	newNode := fmtNodeName(newPivot)
 	if err := v.manager.createQcowOverlay(ctx, newHeadPath, sealedPath, state.VirtualSizeBytes); err != nil {
 		return nil, false, err
 	}
@@ -293,23 +302,30 @@ func (v *Volume) Seal(ctx context.Context, force bool) ([]SealedLayer, bool, err
 		return nil, false, err
 	}
 
+	if err := client.addOverlay(ctx, newNode, qsdFileNodePrefix+newNode, newHeadPath); err != nil {
+		v.rollbackSeal(previousState, newHeadPath)
+		return nil, false, fmt.Errorf("add overlay for volume %s: %w", state.Key, err)
+	}
 	thaw, err := v.manager.freezeFS(ctx, state.Mountpoint)
 	if err != nil {
+		_ = client.removeNode(ctx, newNode)
 		v.rollbackSeal(previousState, newHeadPath)
 		return nil, false, err
 	}
-	pivotErr := client.snapshotSync(ctx, v.fmtNode, newHeadPath, newNode)
+	pivotErr := client.pivot(ctx, v.fmtNode, newNode)
 	thaw()
 
 	if pivotErr != nil {
-		// A lost reply is indeterminate: ask the daemon whether the new node
-		// exists before deciding to roll back.
+		// A lost reply is indeterminate: ask the daemon whether the overlay
+		// got wired into the chain before deciding to roll back.
 		if committed := v.pivotCommitted(ctx, newNode); !committed {
+			_ = client.removeNode(ctx, newNode)
 			v.rollbackSeal(previousState, newHeadPath)
 			return nil, false, fmt.Errorf("pivot volume %s: %w", state.Key, pivotErr)
 		}
 	}
 	v.fmtNode = newNode
+	v.freshHead = true
 
 	sealed := make([]SealedLayer, 0, len(state.Pending))
 	parentID := ""
@@ -334,6 +350,9 @@ func (v *Volume) rollbackSeal(previous volumeState, newHeadPath string) {
 	os.Remove(newHeadPath)
 }
 
+// pivotCommitted reports whether the overlay actually became the active
+// head. Merely existing is not enough: addOverlay creates it with no backing,
+// and only a committed pivot wires the old head underneath it.
 func (v *Volume) pivotCommitted(ctx context.Context, newNode string) bool {
 	client, err := dialQMP(ctx, v.state.QMPSocket)
 	if err != nil {
@@ -344,14 +363,16 @@ func (v *Volume) pivotCommitted(ctx context.Context, newNode string) bool {
 	if err != nil {
 		return false
 	}
-	_, ok := nodes[newNode]
-	return ok
+	node, ok := nodes[newNode]
+	return ok && node.BackingFileDepth > 0
 }
 
 // reconcileHeadNode aligns adopted state with the daemon's actual graph. A
-// crash between recording a seal intent and sending the pivot leaves the
+// crash between recording a seal intent and committing the pivot leaves the
 // state one pivot ahead of the daemon; the intent is rolled back so writes
-// continue landing in the layer the daemon is actually using.
+// continue landing in the layer the daemon is actually using. The overlay
+// node may already exist without being wired in (crash between blockdev-add
+// and the pivot transaction), which counts as uncommitted.
 func (v *Volume) reconcileHeadNode(ctx context.Context) error {
 	client, err := dialQMP(ctx, v.state.QMPSocket)
 	if err != nil {
@@ -362,11 +383,16 @@ func (v *Volume) reconcileHeadNode(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if _, ok := nodes[v.fmtNode]; ok {
-		return nil
+	if node, ok := nodes[v.fmtNode]; ok {
+		// A pivot intent (Pending non-empty) is only committed once the
+		// overlay has a backing chain; a base head never has one.
+		if len(v.state.Pending) == 0 || node.BackingFileDepth > 0 {
+			return nil
+		}
+		_ = client.removeNode(ctx, v.fmtNode)
 	}
 
-	previousNode := fmt.Sprintf("%s%d", qsdFmtNodePrefix, v.state.PivotCount-1)
+	previousNode := fmtNodeName(v.state.PivotCount - 1)
 	if _, ok := nodes[previousNode]; !ok || len(v.state.Pending) == 0 {
 		return fmt.Errorf("daemon graph has neither %s nor %s", v.fmtNode, previousNode)
 	}
@@ -434,5 +460,5 @@ func (v *Volume) detach(ctx context.Context) error {
 	if err := saveVolumeState(v.dir, v.state); err != nil {
 		return err
 	}
-	return os.RemoveAll(filepath.Join(v.dir, "runtime"))
+	return os.RemoveAll(v.manager.runtimeDir(v.state.Key))
 }

@@ -7,6 +7,19 @@ import (
 	"path/filepath"
 )
 
+// Volume directory layout: layer files under layersSubdir, the durability
+// record beside them.
+const (
+	stateFileName = "state.json"
+	layersSubdir  = "layers"
+)
+
+// headLayerPath names the writable head created by pivot number n. The
+// counter keeps names unique so a sealed layer is never overwritten.
+func headLayerPath(layersDir string, pivot int) string {
+	return filepath.Join(layersDir, fmt.Sprintf("head-%06d.qcow2", pivot))
+}
+
 // volumeState is the single per-volume durability record. It is written with
 // an atomic rename before and after every mutating step, and is all that
 // recovery needs to clean up or adopt a volume after a crash.
@@ -75,7 +88,7 @@ func (s *volumeState) depth() int {
 }
 
 func loadVolumeState(dir string) (*volumeState, error) {
-	data, err := os.ReadFile(filepath.Join(dir, "state.json"))
+	data, err := os.ReadFile(filepath.Join(dir, stateFileName))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -94,7 +107,7 @@ func saveVolumeState(dir string, state *volumeState) error {
 	if err != nil {
 		return err
 	}
-	tmpPath := filepath.Join(dir, "state.json.tmp")
+	tmpPath := filepath.Join(dir, stateFileName+".tmp")
 	file, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
@@ -113,5 +126,5 @@ func saveVolumeState(dir string, state *volumeState) error {
 		os.Remove(tmpPath)
 		return err
 	}
-	return os.Rename(tmpPath, filepath.Join(dir, "state.json"))
+	return os.Rename(tmpPath, filepath.Join(dir, stateFileName))
 }

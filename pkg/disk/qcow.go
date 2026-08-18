@@ -10,11 +10,7 @@ import (
 
 // Fixed qcow2 image options. Every layer in a chain is created with the same
 // options so sealed layers are byte-reproducible across hosts.
-const (
-	qcowCompat      = "1.1"
-	qcowClusterSize = 65536
-	qcowCreateOpts  = "compat=1.1,cluster_size=65536,lazy_refcounts=off"
-)
+const qcowCreateOpts = "compat=1.1,cluster_size=65536,lazy_refcounts=off"
 
 // runner executes an external binary and returns combined output. It exists so
 // tests can intercept process execution.

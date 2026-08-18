@@ -26,15 +26,13 @@ import (
 // the machine root: the container's overlay upper layer lives on the volume,
 // so the entire root filesystem is preserved across snapshot and fork.
 
-const qcowRootDiskMountPath = "/"
-
 func isQcowDurableDiskMount(mount *types.Mount) bool {
 	return mount != nil && mount.DurableDisk != nil &&
 		durableDiskDriver(mount.DurableDisk.Driver) == types.DurableDiskDriverQcow
 }
 
 func isQcowRootDiskMount(mount *types.Mount) bool {
-	return isQcowDurableDiskMount(mount) && mount.MountPath == qcowRootDiskMountPath
+	return isQcowDurableDiskMount(mount) && mount.MountPath == types.DurableDiskRootMountPath
 }
 
 // qcowRootDiskMount returns the machine-root disk mount of a request, if any.
@@ -114,7 +112,10 @@ func (s *Worker) prepareQcowDurableDiskMount(request *types.ContainerRequest, mo
 		return fmt.Errorf("attach qcow durable disk %q: %w", mount.DurableDisk.Name, err)
 	}
 
-	s.qcowChainDepths.Store(s.qcowVolumeKey(request, mount), qcowDepthSinceFlatten(rows))
+	// The chain is rooted at its last parentless row, so its length is the
+	// generation count since the last flatten, which drives the periodic
+	// flattened publish that bounds restore chains.
+	s.qcowChainDepths.Store(s.qcowVolumeKey(request, mount), len(rows))
 	for i, row := range rows {
 		s.reportDurableDiskSnapshotContent(request, row, manifests[i])
 	}
@@ -125,16 +126,9 @@ func (s *Worker) prepareQcowDurableDiskMount(request *types.ContainerRequest, mo
 // generation (or a seed snapshot for forks) back to a parentless root and
 // returns the rows base first.
 func (s *Worker) resolveQcowSnapshotChain(ctx context.Context, request *types.ContainerRequest, mount *types.Mount) ([]*types.DiskSnapshot, error) {
-	resp, err := handleGRPCResponse(s.backendRepoClient.GetLatestDiskSnapshot(ctx, &pb.GetLatestDiskSnapshotRequest{
-		WorkspaceId: cacheRequestWorkspaceID(request),
-		DiskName:    mount.DurableDisk.Name,
-	}))
-	if err != nil && !durableDiskSnapshotNotFound(err) {
-		return nil, fmt.Errorf("get latest qcow disk snapshot: %w", err)
-	}
-	var newest *types.DiskSnapshot
-	if resp != nil {
-		newest = durableDiskSnapshotFromProto(resp.Snapshot)
+	newest, err := s.latestQcowSnapshotRow(ctx, request, mount)
+	if err != nil {
+		return nil, err
 	}
 	if (newest == nil || newest.ManifestKey == "") && mount.DurableDisk.SourceSnapshotId != "" {
 		// Fork: seed a brand new disk from another disk's snapshot chain.
@@ -181,12 +175,6 @@ func (s *Worker) resolveQcowSnapshotChain(ctx context.Context, request *types.Co
 	return rows, nil
 }
 
-// qcowDepthSinceFlatten counts generations since the last parentless row,
-// which drives the periodic flattened publish that bounds restore chains.
-func qcowDepthSinceFlatten(rows []*types.DiskSnapshot) int {
-	return len(rows)
-}
-
 func qcowManifestLayer(manifest *types.DiskSnapshotManifest) (*types.DiskSnapshotFile, error) {
 	if manifest == nil || manifest.Format != types.DiskSnapshotFormatQcowV1 {
 		return nil, fmt.Errorf("manifest is not %s", types.DiskSnapshotFormatQcowV1)
@@ -229,7 +217,11 @@ func (s *Worker) snapshotQcowDurableDiskMount(ctx context.Context, request *type
 		return nil, err
 	}
 
-	sealed, skipped, err := volume.Seal(ctx, mode == durableDiskSyncFinal)
+	// The final sync is a durability boundary and always seals. A disk with
+	// no published generation yet also always seals: callers pin machine
+	// state to a snapshot ID, so the first snapshot must produce one even if
+	// nothing was written.
+	sealed, skipped, err := volume.Seal(ctx, mode == durableDiskSyncFinal || latest == nil)
 	if err != nil {
 		return nil, err
 	}
@@ -294,9 +286,9 @@ func (s *Worker) publishQcowLayer(ctx context.Context, request *types.ContainerR
 		parentID = ""
 	}
 
-	diskName := types.SafeDurableDiskName(mount.DurableDisk.Name)
+	chunkPrefix := durableDiskChunkPrefix(mount)
 	layer, err := disk.ScanLayer(uploadPath, func(digest string) string {
-		return path.Join("durable-disks", diskName, "chunks", strings.TrimPrefix(digest, "sha256:"))
+		return path.Join(chunkPrefix, strings.TrimPrefix(digest, "sha256:"))
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("scan qcow layer: %w", err)
@@ -315,7 +307,7 @@ func (s *Worker) publishQcowLayer(ctx context.Context, request *types.ContainerR
 		Version:          1,
 		Format:           types.DiskSnapshotFormatQcowV1,
 		DiskName:         mount.DurableDisk.Name,
-		Filesystem:       "ext4",
+		Filesystem:       types.DiskFilesystemExt4,
 		Generation:       generation,
 		ParentSnapshotId: parentID,
 		LogicalSizeBytes: sizeBytes,
@@ -329,7 +321,7 @@ func (s *Worker) publishQcowLayer(ctx context.Context, request *types.ContainerR
 	}
 	manifestDigest := sha256.Sum256(manifestBytes)
 	objectPrefix := durableDiskSnapshotObjectPrefix(mount, generation)
-	manifestKey := path.Join(objectPrefix, "manifest.json")
+	manifestKey := path.Join(objectPrefix, durableDiskManifestFileName)
 	if err := store.Upload(ctx, manifestKey, manifestBytes); err != nil {
 		return nil, nil, fmt.Errorf("upload qcow snapshot manifest: %w", err)
 	}
@@ -341,7 +333,7 @@ func (s *Worker) publishQcowLayer(ctx context.Context, request *types.ContainerR
 		ParentSnapshotId:    parentID,
 		Generation:          generation,
 		SizeBytes:           sizeBytes,
-		Filesystem:          "ext4",
+		Filesystem:          types.DiskFilesystemExt4,
 		Driver:              types.DurableDiskDriverQcow,
 		ManifestKey:         manifestKey,
 		ManifestDigest:      "sha256:" + hex.EncodeToString(manifestDigest[:]),

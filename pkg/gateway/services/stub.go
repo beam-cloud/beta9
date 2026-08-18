@@ -168,12 +168,12 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 	if in.PersistentRoot != nil {
 		rootName := in.PersistentRoot.Name
 		if rootName == "" {
-			rootName = "root"
+			rootName = types.DurableDiskDefaultRootName
 		}
 		stubConfig.Disks = append(stubConfig.Disks, &pb.DurableDisk{
 			Name:             rootName,
 			Size:             in.PersistentRoot.Size,
-			MountPath:        "/",
+			MountPath:        types.DurableDiskRootMountPath,
 			Driver:           types.DurableDiskDriverQcow,
 			SourceSnapshotId: in.PersistentRoot.SourceSnapshotId,
 		})

@@ -15,8 +15,8 @@ import (
 
 // Node names inside each daemon's block graph. One daemon serves exactly one
 // volume, so the names are constant. The export points at a raw wrapper node:
-// blockdev-snapshot-sync re-parents the qcow2 node underneath it, which keeps
-// the NBD export stable across pivots.
+// pivots re-parent the qcow2 node underneath it, which keeps the NBD export
+// stable across snapshots.
 const (
 	qsdFileNodePrefix = "file-"
 	qsdFmtNodePrefix  = "fmt-"
@@ -24,7 +24,16 @@ const (
 	qsdExportName     = "vol"
 
 	qsdStartTimeout = 15 * time.Second
+
+	// pollInterval paces every wait loop in this package: socket and pidfile
+	// appearance, NBD settle, and daemon shutdown.
+	pollInterval = 50 * time.Millisecond
 )
+
+// fmtNodeName is the qcow2 node name of the head created by pivot number n.
+func fmtNodeName(pivot int) string {
+	return fmt.Sprintf("%s%d", qsdFmtNodePrefix, pivot)
+}
 
 type qsdProcess struct {
 	pid        int
@@ -107,7 +116,7 @@ func waitForPidFile(ctx context.Context, pidFile string, timeout time.Duration) 
 		select {
 		case <-ctx.Done():
 			return 0, ctx.Err()
-		case <-time.After(50 * time.Millisecond):
+		case <-time.After(pollInterval):
 		}
 	}
 }
@@ -124,7 +133,7 @@ func waitForSocket(ctx context.Context, path string, timeout time.Duration) erro
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(50 * time.Millisecond):
+		case <-time.After(pollInterval):
 		}
 	}
 }
@@ -145,7 +154,7 @@ func (m *Manager) stopQSD(ctx context.Context, proc *qsdProcess) error {
 			killProcess(proc.pid, m.binaries.qsdComm())
 			break
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(pollInterval)
 	}
 	return nil
 }

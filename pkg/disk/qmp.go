@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net"
 	"time"
+
+	"github.com/beam-cloud/beta9/pkg/types"
 )
 
 // qmpClient is a minimal QMP client for qemu-storage-daemon. It supports the
@@ -38,7 +40,7 @@ func dialQMP(ctx context.Context, socketPath string) (*qmpClient, error) {
 		conn.Close()
 		return nil, fmt.Errorf("unexpected qmp greeting")
 	}
-	if _, err := client.execute(ctx, "qmp_capabilities", nil); err != nil {
+	if _, err := client.execute(ctx, types.QMPCommandCapabilities, nil); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("negotiate qmp capabilities: %w", err)
 	}
@@ -101,58 +103,85 @@ func (c *qmpClient) execute(ctx context.Context, command string, arguments any) 
 	}
 }
 
-// snapshotSync pivots the active qcow2 node onto a pre-created empty overlay.
-// The overlay file must already exist (mode=existing); on success the old
-// active layer is sealed and all writes land in the new overlay.
-func (c *qmpClient) snapshotSync(ctx context.Context, nodeName, overlayPath, overlayNodeName string) error {
-	_, err := c.execute(ctx, "transaction", map[string]any{
+// addOverlay opens a pre-created empty overlay under explicit node names,
+// with no backing attached yet. Naming the file child ourselves (instead of
+// letting blockdev-snapshot-sync open the file anonymously) keeps the head's
+// file node addressable for write statistics after every pivot.
+func (c *qmpClient) addOverlay(ctx context.Context, fmtNode, fileNode, path string) error {
+	_, err := c.execute(ctx, types.QMPCommandBlockdevAdd, map[string]any{
+		"driver":    "qcow2",
+		"node-name": fmtNode,
+		"file": map[string]any{
+			"driver": "file", "filename": path, "node-name": fileNode,
+		},
+		"backing": nil,
+	})
+	return err
+}
+
+// removeNode drops a node added with addOverlay that never got wired into the
+// active chain. Implicitly created children (the file node) go with it.
+func (c *qmpClient) removeNode(ctx context.Context, nodeName string) error {
+	_, err := c.execute(ctx, types.QMPCommandBlockdevDel, map[string]any{"node-name": nodeName})
+	return err
+}
+
+// pivot re-parents the active qcow2 node under the already-added overlay. On
+// success the old active layer is sealed and all writes land in the overlay.
+func (c *qmpClient) pivot(ctx context.Context, nodeName, overlayNode string) error {
+	_, err := c.execute(ctx, types.QMPCommandTransaction, map[string]any{
 		"actions": []map[string]any{{
-			"type": "blockdev-snapshot-sync",
-			"data": map[string]any{
-				"node-name":          nodeName,
-				"snapshot-file":      overlayPath,
-				"snapshot-node-name": overlayNodeName,
-				"format":             "qcow2",
-				"mode":               "existing",
-			},
+			"type": types.QMPCommandBlockdevSnapshot,
+			"data": map[string]any{"node": nodeName, "overlay": overlayNode},
 		}},
 	})
 	return err
 }
 
-// namedBlockNodes returns the filenames of all named nodes in the daemon's
-// graph, used during recovery to determine whether a pivot committed.
-func (c *qmpClient) namedBlockNodes(ctx context.Context) (map[string]string, error) {
-	raw, err := c.execute(ctx, "query-named-block-nodes", nil)
+// qmpNode is one entry of query-named-block-nodes. BackingFileDepth counts
+// runtime backing links: an overlay added with backing=null reports zero
+// until a pivot wires it, which is what recovery uses to tell a committed
+// pivot from a dangling add.
+type qmpNode struct {
+	BackingFileDepth int `json:"backing_file_depth"`
+}
+
+// namedBlockNodes returns all named nodes in the daemon's graph, used during
+// recovery to determine whether a pivot committed.
+func (c *qmpClient) namedBlockNodes(ctx context.Context) (map[string]qmpNode, error) {
+	raw, err := c.execute(ctx, types.QMPCommandQueryNamedBlockNodes, nil)
 	if err != nil {
 		return nil, err
 	}
 	var nodes []struct {
 		NodeName string `json:"node-name"`
-		File     string `json:"file"`
+		qmpNode
 	}
 	if err := json.Unmarshal(raw, &nodes); err != nil {
 		return nil, err
 	}
-	result := make(map[string]string, len(nodes))
+	result := make(map[string]qmpNode, len(nodes))
 	for _, node := range nodes {
-		result[node.NodeName] = node.File
+		result[node.NodeName] = node.qmpNode
 	}
 	return result, nil
 }
 
-// writtenBytes returns the bytes written to a node since it was created.
-// A freshly pivoted head starts at zero, which makes this an exact "anything
-// changed since the last snapshot" signal.
+// writtenBytes reports whether anything was written to a node since the
+// daemon opened it, via wr_highest_offset. wr_bytes cannot be used here: the
+// daemon accounts it on the NBD export's block backend, so graph nodes always
+// report zero. wr_highest_offset is tracked on the node itself, and a freshly
+// created qcow2 overlay starts at zero, which makes this an exact "anything
+// changed since the last snapshot" signal for the head's file node.
 func (c *qmpClient) writtenBytes(ctx context.Context, nodeName string) (int64, error) {
-	raw, err := c.execute(ctx, "query-blockstats", map[string]any{"query-nodes": true})
+	raw, err := c.execute(ctx, types.QMPCommandQueryBlockstats, map[string]any{"query-nodes": true})
 	if err != nil {
 		return 0, err
 	}
 	var stats []struct {
 		NodeName string `json:"node-name"`
 		Stats    struct {
-			WrBytes int64 `json:"wr_bytes"`
+			WrHighestOffset int64 `json:"wr_highest_offset"`
 		} `json:"stats"`
 	}
 	if err := json.Unmarshal(raw, &stats); err != nil {
@@ -160,13 +189,13 @@ func (c *qmpClient) writtenBytes(ctx context.Context, nodeName string) (int64, e
 	}
 	for _, node := range stats {
 		if node.NodeName == nodeName {
-			return node.Stats.WrBytes, nil
+			return node.Stats.WrHighestOffset, nil
 		}
 	}
 	return 0, fmt.Errorf("node %s not found in block stats", nodeName)
 }
 
 func (c *qmpClient) quit(ctx context.Context) error {
-	_, err := c.execute(ctx, "quit", nil)
+	_, err := c.execute(ctx, types.QMPCommandQuit, nil)
 	return err
 }

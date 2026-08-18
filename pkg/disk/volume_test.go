@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/beam-cloud/beta9/pkg/types"
 )
 
 // fakeQMP is a scriptable QMP server on a unix socket.
@@ -57,18 +59,20 @@ func (f *fakeQMP) handle(conn net.Conn) {
 			return
 		}
 		switch request.Execute {
-		case "qmp_capabilities", "quit":
+		case types.QMPCommandCapabilities, types.QMPCommandQuit, types.QMPCommandBlockdevAdd, types.QMPCommandBlockdevDel:
 			fmt.Fprintf(conn, `{"return":{}}`)
-		case "query-blockstats":
-			fmt.Fprintf(conn, `{"return":[{"node-name":"fmt-0","stats":{"wr_bytes":%d}}]}`, f.writtenB.Load())
-		case "query-named-block-nodes":
+		case types.QMPCommandQueryBlockstats:
+			fmt.Fprintf(conn, `{"return":[{"node-name":"file-fmt-0","stats":{"wr_highest_offset":%d}}]}`, f.writtenB.Load())
+		case types.QMPCommandQueryNamedBlockNodes:
+			// Listed nodes are reported as wired into a backing chain, which
+			// is what pivotCommitted uses to recognize a committed pivot.
 			nodes := f.nodes.Load().([]string)
 			entries := make([]string, 0, len(nodes))
 			for _, node := range nodes {
-				entries = append(entries, fmt.Sprintf(`{"node-name":%q,"file":""}`, node))
+				entries = append(entries, fmt.Sprintf(`{"node-name":%q,"file":"","backing_file_depth":1}`, node))
 			}
 			fmt.Fprintf(conn, `{"return":[%s]}`, strings.Join(entries, ","))
-		case "transaction":
+		case types.QMPCommandTransaction:
 			if f.failPivots.Load() {
 				fmt.Fprintf(conn, `{"error":{"class":"GenericError","desc":"injected pivot failure"}}`)
 				continue
@@ -93,7 +97,7 @@ func fakeRunner(_ context.Context, name string, args ...string) ([]byte, error) 
 func newTestVolume(t *testing.T) (*Volume, *fakeQMP) {
 	t.Helper()
 	dir := t.TempDir()
-	layersDir := filepath.Join(dir, "layers")
+	layersDir := filepath.Join(dir, layersSubdir)
 	if err := os.MkdirAll(layersDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +125,7 @@ func newTestVolume(t *testing.T) (*Volume, *fakeQMP) {
 		HeadPath:         headPath,
 		QMPSocket:        qmpSocket,
 	}
-	volume := &Volume{manager: manager, dir: dir, state: state, fmtNode: "fmt-0"}
+	volume := &Volume{manager: manager, dir: dir, state: state, fmtNode: "fmt-0", freshHead: true}
 	if err := saveVolumeState(dir, state); err != nil {
 		t.Fatal(err)
 	}
@@ -287,7 +291,7 @@ func TestRecoverCleansUpCrashedVolume(t *testing.T) {
 		Key:      "crashed",
 		Attached: true,
 		QSDPid:   1 << 30, // certainly not a live qemu-storage-daemon
-		HeadPath: filepath.Join(dir, "layers", "head-000000.qcow2"),
+		HeadPath: headLayerPath(filepath.Join(dir, layersSubdir), 0),
 	}
 	if err := saveVolumeState(dir, state); err != nil {
 		t.Fatal(err)
