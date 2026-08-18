@@ -281,7 +281,23 @@ func TestReusableState(t *testing.T) {
 
 func TestRecoverCleansUpCrashedVolume(t *testing.T) {
 	root := t.TempDir()
-	manager := NewManager(Config{Root: root, Runner: fakeRunner})
+	sysBlock, dev := t.TempDir(), t.TempDir()
+	writeTestNBDDevice(t, sysBlock, "nbd0", "43:0")
+	manager := NewManager(Config{
+		Root:         root,
+		SysBlockPath: sysBlock,
+		DevPath:      dev,
+		Runner: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			switch name {
+			case "mknod":
+				return nil, os.WriteFile(args[2], nil, 0o600)
+			case "stat":
+				return []byte("6180:2b:0\n"), nil
+			default:
+				return fakeRunner(ctx, name, args...)
+			}
+		},
+	})
 
 	dir := manager.volumeDir("crashed")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
