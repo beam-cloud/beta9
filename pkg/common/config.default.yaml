@@ -381,7 +381,9 @@ cache:
     recentStubTTLSeconds: 604800 # keep required content warm for 7 days after a stub's last container
     lockTTLSeconds: 300
     maxStubsPerCycle: 256
-    maxItemsPerCycle: 32
+    maxItemsPerCycle: 256 # re-prioritization batch size; exhausted cycles re-kick immediately
+    maxBytesPerCycle: 2147483648 # 2GiB between disk-usage gate rechecks
+    maxConcurrentFetches: 16
     volumeMinBytes: 134217728 # 128MiB; only large geesefs volume objects are reconciled
     originFallbackEnabled: false
 

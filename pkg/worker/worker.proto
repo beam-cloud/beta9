@@ -98,6 +98,8 @@ message ContainerCheckpointResponse {
   string checkpoint_id = 2;
   string error_msg = 3;
   string runtime = 4;
+  // Durable disk snapshots captured at the same boundary as the memory image.
+  repeated ContainerDiskSnapshot disk_snapshots = 5;
 }
 
 message ContainerSnapshotDisksRequest { string container_id = 1; }

@@ -47,14 +47,6 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 
 	autoscaler := autoscalerFromProto(in.Autoscaler)
 
-	log.Info().
-		Str("stub_name", in.Name).
-		Str("stub_type", in.StubType).
-		Str("workspace_id", authInfo.Workspace.ExternalId).
-		Strs("gpus", types.GpuTypesToStrings(gpus)).
-		Uint32("gpu_count", in.GpuCount).
-		Msg("gateway received GetOrCreateStub request")
-
 	keepWarmSeconds := normalizeKeepWarmSeconds(in.KeepWarmSeconds, types.StubType(in.StubType))
 
 	// Pod keep-warm semantics:
@@ -170,17 +162,27 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		Disks:              in.Disks,
 	}
 
+	// A persistent root is shorthand for a qcow machine-root disk: the
+	// container's overlay upper layer lives on the volume, so disk snapshots
+	// capture the whole machine filesystem.
+	if in.PersistentRoot != nil {
+		rootName := in.PersistentRoot.Name
+		if rootName == "" {
+			rootName = types.DurableDiskDefaultRootName
+		}
+		stubConfig.Disks = append(stubConfig.Disks, &pb.DurableDisk{
+			Name:             rootName,
+			Size:             in.PersistentRoot.Size,
+			MountPath:        types.DurableDiskRootMountPath,
+			Driver:           types.DurableDiskDriverQcow,
+			SourceSnapshotId: in.PersistentRoot.SourceSnapshotId,
+		})
+	}
+
 	// Ensure GPU count is at least 1 if a GPU is required
 	if stubConfig.RequiresGPU() && in.GpuCount == 0 {
 		stubConfig.Runtime.GpuCount = 1
 	}
-
-	log.Info().
-		Str("stub_name", in.Name).
-		Str("stub_type", in.StubType).
-		Strs("gpus", types.GpuTypesToStrings(gpus)).
-		Uint32("gpu_count", stubConfig.Runtime.GpuCount).
-		Msg("gateway built stub config")
 
 	if stubConfig.RequiresGPU() {
 		if gws.computeService != nil {

@@ -17,6 +17,7 @@ const (
 
 const (
 	DurableDiskDriverSnapshot        = "snapshot"
+	DurableDiskDriverQcow            = "qcow"
 	CheckpointModelCacheVolumePrefix = "checkpoint-model-cache"
 )
 
@@ -83,6 +84,9 @@ const (
 	DiskSnapshotFormatDirV1         = "dir.v1"
 	DiskSnapshotFormatPostgresWalV1 = "postgres.wal.v1"
 	DiskSnapshotFormatRedisAOFV1    = "redis.aof.v1"
+	// DiskSnapshotFormatQcowV1 is a block snapshot: one immutable qcow2 layer
+	// stored as sparse content-addressed chunks, chained via ParentSnapshotId.
+	DiskSnapshotFormatQcowV1 = "qcow.v1"
 )
 
 type DiskSnapshot struct {

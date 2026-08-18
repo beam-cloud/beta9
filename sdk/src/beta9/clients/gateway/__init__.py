@@ -336,6 +336,27 @@ class DurableDisk(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
+class PersistentRoot(betterproto.Message):
+    """
+    A durable machine-root disk. The container's entire root filesystem delta
+     lives on a qcow-backed volume mounted at "/", so disk snapshots capture the
+     whole machine state. Shorthand for a DurableDisk with mount_path "/" and
+     the qcow driver.
+    """
+
+    size: str = betterproto.string_field(1)
+    source_snapshot_id: str = betterproto.string_field(2)
+    """Snapshot used to initialize the root with no snapshot history."""
+
+    name: str = betterproto.string_field(3)
+    """
+    Disk name backing the root. Disk snapshot history is keyed by this name
+     within the workspace, so each machine wanting its own root lineage must
+     use a distinct name (e.g. the machine id). Defaults to "root".
+    """
+
+
+@dataclass(eq=False, repr=False)
 class TaskPolicy(betterproto.Message):
     timeout: int = betterproto.int64_field(1)
     max_retries: int = betterproto.uint32_field(2)
@@ -404,6 +425,8 @@ class GetOrCreateStubRequest(betterproto.Message):
     checkpoint_trigger: "_types__.CheckpointTrigger" = betterproto.message_field(46)
     hostname: str = betterproto.string_field(47)
     """Hostname to set inside the container."""
+
+    persistent_root: "PersistentRoot" = betterproto.message_field(48)
 
 
 @dataclass(eq=False, repr=False)
@@ -1273,6 +1296,29 @@ class RequestAgentTransportCredentialResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
+class CreateNodeEnrollmentRequest(betterproto.Message):
+    agent_token: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class CreateNodeEnrollmentResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    error_msg: str = betterproto.string_field(2)
+    enrollment_token: str = betterproto.string_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class DeleteNodeEnrollmentRequest(betterproto.Message):
+    agent_token: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class DeleteNodeEnrollmentResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    error_msg: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
 class ListAgentRoutesRequest(betterproto.Message):
     agent_token: str = betterproto.string_field(1)
 
@@ -1824,6 +1870,18 @@ class AgentPoolRuntimeConfig(betterproto.Message):
     gpu_virtualized: bool = betterproto.bool_field(10)
 
 
+@dataclass(eq=False, repr=False)
+class GetAgentPoolVirtualizationRequest(betterproto.Message):
+    agent_token: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class GetAgentPoolVirtualizationResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    gpu_virtualized: bool = betterproto.bool_field(3)
+
+
 class GatewayServiceStub(SyncServiceStub):
     def authorize(self, authorize_request: "AuthorizeRequest") -> "AuthorizeResponse":
         return self._unary_unary(
@@ -2291,6 +2349,33 @@ class GatewayServiceStub(SyncServiceStub):
             RequestAgentTransportCredentialRequest,
             RequestAgentTransportCredentialResponse,
         )(request_agent_transport_credential_request)
+
+    def get_agent_pool_virtualization(
+        self, get_agent_pool_virtualization_request: "GetAgentPoolVirtualizationRequest"
+    ) -> "GetAgentPoolVirtualizationResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/GetAgentPoolVirtualization",
+            GetAgentPoolVirtualizationRequest,
+            GetAgentPoolVirtualizationResponse,
+        )(get_agent_pool_virtualization_request)
+
+    def create_node_enrollment(
+        self, create_node_enrollment_request: "CreateNodeEnrollmentRequest"
+    ) -> "CreateNodeEnrollmentResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/CreateNodeEnrollment",
+            CreateNodeEnrollmentRequest,
+            CreateNodeEnrollmentResponse,
+        )(create_node_enrollment_request)
+
+    def delete_node_enrollment(
+        self, delete_node_enrollment_request: "DeleteNodeEnrollmentRequest"
+    ) -> "DeleteNodeEnrollmentResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/DeleteNodeEnrollment",
+            DeleteNodeEnrollmentRequest,
+            DeleteNodeEnrollmentResponse,
+        )(delete_node_enrollment_request)
 
     def list_agent_routes(
         self, list_agent_routes_request: "ListAgentRoutesRequest"

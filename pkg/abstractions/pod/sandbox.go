@@ -1183,10 +1183,26 @@ func (s *GenericPodService) SandboxSnapshotMemory(ctx context.Context, in *pb.Po
 	}
 
 	return &pb.PodSandboxSnapshotMemoryResponse{
-		Ok:           true,
-		CheckpointId: resp.CheckpointId,
-		Runtime:      resp.Runtime,
+		Ok:            true,
+		CheckpointId:  resp.CheckpointId,
+		Runtime:       resp.Runtime,
+		DiskSnapshots: sandboxDiskSnapshots(resp.DiskSnapshots),
 	}, nil
+}
+
+func sandboxDiskSnapshots(snapshots []*pb.ContainerDiskSnapshot) []*pb.PodSandboxDiskSnapshot {
+	result := make([]*pb.PodSandboxDiskSnapshot, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		if snapshot == nil {
+			continue
+		}
+		result = append(result, &pb.PodSandboxDiskSnapshot{
+			SnapshotId: snapshot.SnapshotId,
+			DiskName:   snapshot.DiskName,
+			Generation: snapshot.Generation,
+		})
+	}
+	return result
 }
 
 func (s *GenericPodService) SandboxSnapshotDisks(ctx context.Context, in *pb.PodSandboxSnapshotDisksRequest) (*pb.PodSandboxSnapshotDisksResponse, error) {
@@ -1207,18 +1223,11 @@ func (s *GenericPodService) SandboxSnapshotDisks(ctx context.Context, in *pb.Pod
 			ErrorMsg: err.Error(),
 		}, nil
 	}
-	response := &pb.PodSandboxSnapshotDisksResponse{Ok: resp.Ok, ErrorMsg: resp.ErrorMsg}
-	for _, snapshot := range resp.Snapshots {
-		if snapshot == nil {
-			continue
-		}
-		response.Snapshots = append(response.Snapshots, &pb.PodSandboxDiskSnapshot{
-			SnapshotId: snapshot.SnapshotId,
-			DiskName:   snapshot.DiskName,
-			Generation: snapshot.Generation,
-		})
-	}
-	return response, nil
+	return &pb.PodSandboxSnapshotDisksResponse{
+		Ok:        resp.Ok,
+		ErrorMsg:  resp.ErrorMsg,
+		Snapshots: sandboxDiskSnapshots(resp.Snapshots),
+	}, nil
 }
 
 func (s *GenericPodService) SandboxListUrls(ctx context.Context, in *pb.PodSandboxListUrlsRequest) (*pb.PodSandboxListUrlsResponse, error) {

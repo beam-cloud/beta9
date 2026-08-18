@@ -29,6 +29,7 @@ const (
 	maxRestoreCaptureBytes      = 64 << 10
 	checkpointNetworkMapFile    = "beam-network-map-v1"
 	checkpointNetworkMapVersion = "v1"
+	runscVersionMismatchMessage = "runsc version does not match across checkpoint restore"
 )
 
 type restoreOutputCapture struct {
@@ -90,6 +91,19 @@ func (e *ErrCheckpointHostIncompatible) Error() string {
 func IsCheckpointHostIncompatible(err error) bool {
 	var compatibilityErr *ErrCheckpointHostIncompatible
 	return errors.As(err, &compatibilityErr)
+}
+
+type ErrRunscCheckpointVersionMismatch struct {
+	Stderr string
+}
+
+func (e *ErrRunscCheckpointVersionMismatch) Error() string {
+	return fmt.Sprintf("runsc checkpoint version mismatch: %s", e.Stderr)
+}
+
+func IsRunscCheckpointVersionMismatch(err error) bool {
+	var versionErr *ErrRunscCheckpointVersionMismatch
+	return errors.As(err, &versionErr)
 }
 
 type NvidiaCRIUManager struct {
@@ -291,6 +305,13 @@ func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, rt runtime.Ru
 }
 
 func classifyRestoreError(runtimeName string, err error, stderr string) error {
+	var mountValidationErr *checkpointDurableMountValidationError
+	if errors.As(err, &mountValidationErr) {
+		return restoreFailureError(runtimeName, err, stderr)
+	}
+	if runtimeName == types.ContainerRuntimeGvisor.String() && strings.Contains(stderr, runscVersionMismatchMessage) {
+		return &ErrRunscCheckpointVersionMismatch{Stderr: stderr}
+	}
 	if strings.Contains(stderr, "criu failed") && strings.Contains(stderr, "type RESTORE") {
 		if checkpointHostIncompatible(stderr) {
 			return &ErrCheckpointHostIncompatible{Stderr: stderr}

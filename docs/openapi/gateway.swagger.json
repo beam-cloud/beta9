@@ -3163,6 +3163,20 @@
         }
       }
     },
+    "gatewayCreateNodeEnrollmentResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errorMsg": {
+          "type": "string"
+        },
+        "enrollmentToken": {
+          "type": "string"
+        }
+      }
+    },
     "gatewayCreateObjectRequest": {
       "type": "object",
       "properties": {
@@ -3340,6 +3354,17 @@
           "type": "boolean"
         },
         "errMsg": {
+          "type": "string"
+        }
+      }
+    },
+    "gatewayDeleteNodeEnrollmentResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errorMsg": {
           "type": "string"
         }
       }
@@ -3604,6 +3629,20 @@
         }
       }
     },
+    "gatewayGetAgentPoolVirtualizationResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        },
+        "gpuVirtualized": {
+          "type": "boolean"
+        }
+      }
+    },
     "gatewayGetBYOCPoolResponse": {
       "type": "object",
       "properties": {
@@ -3842,6 +3881,9 @@
         "hostname": {
           "type": "string",
           "description": "Hostname to set inside the container."
+        },
+        "persistentRoot": {
+          "$ref": "#/definitions/gatewayPersistentRoot"
         }
       }
     },
@@ -4920,6 +4962,23 @@
           "format": "int64"
         }
       }
+    },
+    "gatewayPersistentRoot": {
+      "type": "object",
+      "properties": {
+        "size": {
+          "type": "string"
+        },
+        "sourceSnapshotId": {
+          "type": "string",
+          "description": "Snapshot used to initialize the root with no snapshot history."
+        },
+        "name": {
+          "type": "string",
+          "description": "Disk name backing the root. Disk snapshot history is keyed by this name\nwithin the workspace, so each machine wanting its own root lineage must\nuse a distinct name (e.g. the machine id). Defaults to \"root\"."
+        }
+      },
+      "description": "A durable machine-root disk. The container's entire root filesystem delta\nlives on a qcow-backed volume mounted at \"/\", so disk snapshots capture the\nwhole machine state. Shorthand for a DurableDisk with mount_path \"/\" and\nthe qcow driver."
     },
     "gatewayPool": {
       "type": "object",

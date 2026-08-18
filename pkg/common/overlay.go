@@ -13,11 +13,13 @@ import (
 )
 
 type ContainerOverlay struct {
-	request     *types.ContainerRequest
-	containerId string
-	layers      []ContainerOverlayLayer
-	root        string
-	overlayPath string
+	request         *types.ContainerRequest
+	containerId     string
+	layers          []ContainerOverlayLayer
+	root            string
+	overlayPath     string
+	persistentUpper string
+	persistentWork  string
 }
 
 type ContainerOverlayLayer struct {
@@ -39,9 +41,64 @@ func NewContainerOverlay(request *types.ContainerRequest, rootPath string, overl
 }
 
 func (co *ContainerOverlay) Setup() error {
+	if co.persistentUpper != "" {
+		return co.addPersistentLayer()
+	}
 	// Right now, we are just adding an empty layer to the top of the rootfs
 	// In the future, though, we can add additional layers on top of that
 	return co.AddEmptyLayer()
+}
+
+// SetupWithWritable mounts the overlay with its writable layer on a
+// persistent filesystem (e.g. a qcow-backed durable disk) instead of worker
+// scratch space, so the container's entire root filesystem delta survives
+// snapshots and restores. Cleanup never removes upper or work.
+func (co *ContainerOverlay) SetupWithWritable(upperDir, workDir string) error {
+	if len(co.layers) != 0 {
+		return fmt.Errorf("container overlay is already mounted")
+	}
+	if !filepath.IsAbs(upperDir) || !filepath.IsAbs(workDir) || upperDir == workDir {
+		return fmt.Errorf("persistent overlay requires distinct absolute upper and work paths")
+	}
+	co.persistentUpper = filepath.Clean(upperDir)
+	co.persistentWork = filepath.Clean(workDir)
+	return co.addPersistentLayer()
+}
+
+func (co *ContainerOverlay) addPersistentLayer() error {
+	if err := os.MkdirAll(co.persistentUpper, 0755); err != nil {
+		return err
+	}
+	// A restored work directory can hold stale kernel state; overlayfs
+	// requires it to be recreated for every mount.
+	if err := os.RemoveAll(co.persistentWork); err != nil {
+		return err
+	}
+	if err := os.Mkdir(co.persistentWork, 0755); err != nil {
+		return err
+	}
+	for _, dir := range []string{"workspace", "volumes"} {
+		if err := os.MkdirAll(filepath.Join(co.persistentUpper, dir), 0755); err != nil {
+			return err
+		}
+	}
+
+	mergedDir := filepath.Join(co.overlayPath, co.containerId, "layer-0", "merged")
+	if err := os.MkdirAll(mergedDir, 0755); err != nil {
+		return err
+	}
+	layer := ContainerOverlayLayer{
+		lower:  co.root,
+		upper:  co.persistentUpper,
+		work:   co.persistentWork,
+		merged: mergedDir,
+		index:  0,
+	}
+	if err := co.mount(&layer); err != nil {
+		return err
+	}
+	co.layers = append(co.layers, layer)
+	return nil
 }
 
 func (co *ContainerOverlay) AddEmptyLayer() error {
@@ -182,6 +239,50 @@ func (co *ContainerOverlay) Reset() error {
 	return nil
 }
 
+// ResetWithUpper rebuilds the writable layer from seed while it is unmounted.
+// Checkpoint upper directories can contain overlay whiteouts and opaque xattrs
+// that must not be copied through the merged filesystem.
+func (co *ContainerOverlay) ResetWithUpper(seed func(string) error) error {
+	if seed == nil {
+		return fmt.Errorf("upper layer seed is required")
+	}
+	if err := co.cleanupLayers(); err != nil {
+		return err
+	}
+
+	if co.persistentUpper != "" {
+		if err := os.RemoveAll(co.persistentUpper); err != nil {
+			return err
+		}
+		if err := os.MkdirAll(co.persistentUpper, 0755); err != nil {
+			return err
+		}
+		if err := seed(co.persistentUpper); err != nil {
+			return err
+		}
+		return co.Setup()
+	}
+
+	layerDir := filepath.Join(co.overlayPath, co.containerId, "layer-0")
+	if err := os.RemoveAll(layerDir); err != nil {
+		return err
+	}
+	upperDir := filepath.Join(layerDir, "upper")
+	if err := os.MkdirAll(upperDir, 0755); err != nil {
+		return err
+	}
+	if err := seed(upperDir); err != nil {
+		_ = os.RemoveAll(layerDir)
+		return err
+	}
+	if err := co.Setup(); err != nil {
+		_ = co.cleanupLayers()
+		_ = os.RemoveAll(layerDir)
+		return err
+	}
+	return nil
+}
+
 func (co *ContainerOverlay) TopLayerPath() string {
 	if len(co.layers) == 0 {
 		return co.root
@@ -191,6 +292,17 @@ func (co *ContainerOverlay) TopLayerPath() string {
 	layer := co.layers[i]
 
 	return layer.merged
+}
+
+// TopLayerUpperDir returns the writable upper directory of the top layer,
+// which may live on a persistent disk rather than beside the merged path.
+func (co *ContainerOverlay) TopLayerUpperDir() string {
+	if len(co.layers) == 0 {
+		// Matches the layout AddEmptyLayer would create; kept for callers that
+		// resolve the path before the overlay is mounted.
+		return filepath.Join(filepath.Dir(co.root), "upper")
+	}
+	return co.layers[len(co.layers)-1].upper
 }
 
 func (co *ContainerOverlay) OverlayPath() string {

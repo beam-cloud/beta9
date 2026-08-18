@@ -86,9 +86,9 @@ FROM debian:bookworm AS gvisor
 
 ARG TARGETARCH
 ARG GVISOR_VERSION=20260714.0
-# beam-cloud/gvisor@3b4f90ab1bf160b9e3a4edb4f3f4782260dfc29b
-ARG GVISOR_AMD64_RELEASE=release-20260714.0-beam.5
-ARG GVISOR_AMD64_SHA512=452e8014cd6f8479afbd97fcd67d384bee549d8eab938361909cee862046d2d79861a987b8542c733ccda276aa6b4094991f70c3ad7256eb65c3729e134f9154
+# beam-cloud/gvisor@3d5aea8eefb1175e02baac73663553f83528095d
+ARG GVISOR_AMD64_RELEASE=release-20260714.0-beam.7
+ARG GVISOR_AMD64_SHA512=9843aa9f29ac6d714a37967b08db24ca7d8d191437c1bb58c391adc72888371ae67c417c7f501d3bdbd96ad04e4b46184f79bac48b587b91161c545135e8bc3c
 
 WORKDIR /tmp
 
@@ -130,6 +130,29 @@ chmod +x /usr/local/bin/runsc
 # Verify installation and check available platforms
 /usr/local/bin/runsc --version
 /usr/local/bin/runsc help 2>&1 | grep -i platform || { echo "Platform options unavailable" >&2; exit 1; }
+EOT
+
+# qemu-storage-daemon
+# ========================
+# jammy's qemu-utils (6.2) predates qemu-storage-daemon being packaged, so
+# build the tools from source against the same ubuntu:22.04 userland as the
+# final image. Tools-only build: no system emulation, no user emulation.
+FROM ubuntu:22.04 AS qemu
+ARG QEMU_VERSION=8.2.10
+
+RUN apt-get update && apt-get install -y \
+    curl xz-utils python3 python3-pip pkg-config ninja-build \
+    libglib2.0-dev zlib1g-dev flex bison && \
+    pip3 install meson==1.5.2
+
+RUN <<EOT
+set -eux
+curl -fsSL https://download.qemu.org/qemu-${QEMU_VERSION}.tar.xz | tar -xJ -C /tmp
+cd /tmp/qemu-${QEMU_VERSION}
+./configure --disable-system --disable-user --disable-docs --disable-guest-agent --enable-tools
+ninja -C build storage-daemon/qemu-storage-daemon
+install -m 0755 build/storage-daemon/qemu-storage-daemon /usr/local/bin/qemu-storage-daemon
+/usr/local/bin/qemu-storage-daemon --version
 EOT
 
 # nvidia-container-toolkit
@@ -188,7 +211,11 @@ RUN apt-get update && \
         sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
         tee /etc/apt/sources.list.d/nvidia-container-toolkit.list && \
     apt-get update && \
-    apt-get install -y psmisc tini iproute2 iptables
+    apt-get install -y psmisc tini iproute2 iptables kmod \
+        # qcow durable disks: qemu-img + qemu-storage-daemon, kernel NBD client,
+        # and ext4 tooling for formatting freshly created volumes. libglib2.0-0
+        # is the runtime dependency of the qemu-storage-daemon built above.
+        qemu-utils nbd-client e2fsprogs libglib2.0-0
 
 RUN <<EOT
 set -eux
@@ -377,6 +404,7 @@ COPY --from=runc /usr/local/bin/buildah /usr/local/bin/buildah
 COPY --from=runc /usr/local/bin/skopeo /usr/local/bin/skopeo
 COPY --from=runc /workspace/skopeo/default-policy.json /etc/containers/policy.json
 COPY --from=gvisor /usr/local/bin/runsc /usr/local/bin/runsc
+COPY --from=qemu /usr/local/bin/qemu-storage-daemon /usr/bin/qemu-storage-daemon
 COPY --from=nvidia-container-toolkit /workspace/nvidia-container-runtime* /usr/bin/
 
 # LD_PRELOAD libraries

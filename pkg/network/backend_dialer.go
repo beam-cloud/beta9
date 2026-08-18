@@ -12,9 +12,15 @@ import (
 
 const BackendRoutePreface = "BEAMROUTE/1 "
 
-const backendRouteDialConcurrency = 16
+const (
+	backendRouteDialConcurrency           = 64
+	backendRouteBackgroundDialConcurrency = 4
+)
 
-var backendRouteDialSlots = make(chan struct{}, backendRouteDialConcurrency)
+var (
+	backendRouteDialSlots           = make(chan struct{}, backendRouteDialConcurrency)
+	backendRouteBackgroundDialSlots = make(chan struct{}, backendRouteBackgroundDialConcurrency)
+)
 
 var (
 	backendRouteReadyPollInterval = 50 * time.Millisecond
@@ -30,18 +36,36 @@ type BackendDialer struct {
 	tsConfig  types.TailscaleConfig
 	resolver  BackendRouteResolver
 	timeout   time.Duration
+	dialSlots chan struct{}
 
 	// tsnetDial overrides the tsnet dial in tests.
 	tsnetDial func(ctx context.Context, addr string, timeout time.Duration) (net.Conn, error)
 }
 
-func NewBackendDialer(tailscale *Tailscale, tsConfig types.TailscaleConfig, resolver BackendRouteResolver, timeout time.Duration) *BackendDialer {
-	return &BackendDialer{
+type BackendDialerOption func(*BackendDialer)
+
+// WithBackgroundDialSlots isolates best-effort background dials from
+// request-path backend route admission.
+func WithBackgroundDialSlots() BackendDialerOption {
+	return func(d *BackendDialer) {
+		d.dialSlots = backendRouteBackgroundDialSlots
+	}
+}
+
+func NewBackendDialer(tailscale *Tailscale, tsConfig types.TailscaleConfig, resolver BackendRouteResolver, timeout time.Duration, opts ...BackendDialerOption) *BackendDialer {
+	dialer := &BackendDialer{
 		tailscale: tailscale,
 		tsConfig:  tsConfig,
 		resolver:  resolver,
 		timeout:   timeout,
+		dialSlots: backendRouteDialSlots,
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(dialer)
+		}
+	}
+	return dialer
 }
 
 func (d *BackendDialer) Dial(ctx context.Context, address string) (net.Conn, error) {
@@ -92,13 +116,17 @@ func (d *BackendDialer) Dial(ctx context.Context, address string) (net.Conn, err
 // dialTSNetRoute connects to the agent's tsnet proxy target. A ready route is
 // dialed immediately: tsnet.Status can omit reachable peers, so checking the
 // netmap first only adds latency. After a failed dial, WaitForPeer enriches the
-// error and feeds the rate-limited stale-netmap detector before retrying.
+// error before retrying; it never mutates the shared tsnet server.
 func (d *BackendDialer) dialTSNetRoute(ctx context.Context, route *types.BackendRoute, routeID string, deadline time.Time) (net.Conn, error) {
 	host := tailnetHostFromAddr(route.ProxyTarget)
 	var lastErr error
+	dialSlots := d.dialSlots
+	if dialSlots == nil {
+		dialSlots = backendRouteDialSlots
+	}
 
 	for remaining := time.Until(deadline); remaining > 0; remaining = time.Until(deadline) {
-		// A failed MagicDNS dial must still reach WaitForPeer so stale netmaps
+		// A failed MagicDNS dial must still reach WaitForPeer so missing peers
 		// are observable. Keep a bounded part of each attempt for that check.
 		peerReserve := time.Duration(0)
 		if host != "" {
@@ -108,34 +136,52 @@ func (d *BackendDialer) dialTSNetRoute(ctx context.Context, route *types.Backend
 		if dialBudget <= 0 {
 			break
 		}
-		if err := acquireBackendRouteDial(ctx, dialBudget); err != nil {
+		if err := acquireBackendRouteDial(ctx, dialBudget, dialSlots); err != nil {
 			return nil, err
 		}
 		dialTimeout := time.Until(deadline) - peerReserve
 		if dialTimeout <= 0 {
-			<-backendRouteDialSlots
+			<-dialSlots
 			return nil, context.DeadlineExceeded
 		}
 		conn, err := d.dialTSNetTarget(ctx, route.ProxyTarget, dialTimeout)
-		<-backendRouteDialSlots
+		<-dialSlots
 		if err == nil {
 			return writeBackendRoutePreface(conn, routeID)
 		}
 		lastErr = err
 
 		if host != "" {
-			peerWait := min(time.Until(deadline), tailnetPeerAdvisoryTimeout)
+			// Leave a small margin for error propagation so the advisory probe
+			// cannot consume the route deadline. If the dial wakes after its
+			// budget, retain an explicit netmap diagnostic without starting work
+			// that would extend the failed request.
+			peerWait := min(peerReserve, time.Until(deadline), tailnetPeerAdvisoryTimeout)
+			if peerWait > 0 {
+				peerWait -= min(peerWait/4, 10*time.Millisecond)
+			}
 			if peerWait > 0 {
 				if peerErr := d.tailscale.WaitForPeer(ctx, host, peerWait); peerErr != nil {
 					lastErr = fmt.Errorf("%w; tsnet dial failed: %w", peerErr, err)
 				}
+			} else {
+				lastErr = fmt.Errorf("tailnet netmap check skipped because the dial exhausted its route budget; tsnet dial failed: %w", err)
 			}
 		}
 
+		retryDelay := min(backendRouteDialRetryInterval, time.Until(deadline))
+		if retryDelay <= 0 {
+			break
+		}
+		retryTimer := time.NewTimer(retryDelay)
 		select {
 		case <-ctx.Done():
+			retryTimer.Stop()
+			if ctx.Err() == context.DeadlineExceeded && lastErr != nil {
+				return nil, fmt.Errorf("backend route %s dial timed out: %w", routeID, lastErr)
+			}
 			return nil, ctx.Err()
-		case <-time.After(backendRouteDialRetryInterval):
+		case <-retryTimer.C:
 		}
 	}
 
@@ -145,11 +191,11 @@ func (d *BackendDialer) dialTSNetRoute(ctx context.Context, route *types.Backend
 	return nil, fmt.Errorf("backend route %s dial timed out", routeID)
 }
 
-func acquireBackendRouteDial(ctx context.Context, timeout time.Duration) error {
+func acquireBackendRouteDial(ctx context.Context, timeout time.Duration, dialSlots chan struct{}) error {
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
-	case backendRouteDialSlots <- struct{}{}:
+	case dialSlots <- struct{}{}:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()

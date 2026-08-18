@@ -20,7 +20,7 @@ import (
 	"google.golang.org/grpc"
 )
 
-func TestGpuManagerForRequestUsesWorkerVirtualizationFlag(t *testing.T) {
+func TestGPUManagerForRequestUsesWorkerVirtualizationFlag(t *testing.T) {
 	physical := &testGPUManager{}
 	thunder := &testGPUManager{}
 	worker := &Worker{

@@ -1801,6 +1801,93 @@ func TestNvidiaRestorePublishesStartedAfterValidation(t *testing.T) {
 	require.NoError(t, <-done)
 }
 
+func TestValidateRestoredDurableDiskMountsAtRoot(t *testing.T) {
+	tests := []struct {
+		name          string
+		durable       bool
+		mismatched    bool
+		symlinkTarget bool
+		wantError     bool
+	}{
+		{
+			name:    "matching durable mount",
+			durable: true,
+		},
+		{
+			name:       "mismatched durable mount",
+			durable:    true,
+			mismatched: true,
+			wantError:  true,
+		},
+		{
+			name:       "ordinary bind is ignored",
+			mismatched: true,
+		},
+		{
+			name:          "symlink target is rejected",
+			durable:       true,
+			symlinkTarget: true,
+			wantError:     true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			containerRoot := t.TempDir()
+			targetPath := filepath.Join(containerRoot, "workspace")
+			require.NoError(t, os.Mkdir(targetPath, 0755))
+			localPath := targetPath
+			if test.mismatched {
+				localPath = t.TempDir()
+			}
+			if test.symlinkTarget {
+				require.NoError(t, os.Remove(targetPath))
+				require.NoError(t, os.Symlink(localPath, targetPath))
+			}
+			mount := types.Mount{LocalPath: localPath, MountPath: "/workspace"}
+			if test.durable {
+				mount.DurableDisk = &types.DurableDiskMountConfig{}
+			}
+
+			err := validateRestoredDurableDiskMountsAtRoot([]types.Mount{mount}, containerRoot)
+			if !test.wantError {
+				require.NoError(t, err)
+				return
+			}
+
+			var validationErr *checkpointDurableMountValidationError
+			require.ErrorAs(t, fmt.Errorf("wrapped: %w", err), &validationErr)
+			require.Equal(t, "/workspace", validationErr.mountPath)
+		})
+	}
+}
+
+func TestCheckpointRestoreValidatorSkipsDurableMountsForGVisor(t *testing.T) {
+	worker := &Worker{}
+	request := &types.ContainerRequest{Stub: types.StubWithRelated{Stub: types.Stub{
+		Config: `{"_beta9_force_resource_limits":true}`,
+	}}, Mounts: []types.Mount{{
+		LocalPath:   "/missing/source",
+		MountPath:   "/workspace",
+		DurableDisk: &types.DurableDiskMountConfig{},
+	}}}
+	validator := worker.checkpointRestoreValidator(request)
+	require.NotNil(t, validator)
+
+	require.NoError(t, validator(context.Background(), NewMockRuntime(types.ContainerRuntimeGvisor.String(), runtime.Capabilities{})))
+}
+
+func TestCheckpointRestoreValidatorSkipsDurableMountsWithoutForcedResources(t *testing.T) {
+	worker := &Worker{}
+	request := &types.ContainerRequest{Mounts: []types.Mount{{
+		LocalPath:   "/missing/source",
+		MountPath:   "/workspace",
+		DurableDisk: &types.DurableDiskMountConfig{},
+	}}}
+
+	require.Nil(t, worker.checkpointRestoreValidator(request))
+}
+
 func TestRestoredCheckpointHTTPReadinessRequiresStableRuntime(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
 		response.WriteHeader(http.StatusOK)
@@ -1841,6 +1928,27 @@ func TestClassifyRestoreErrorDetectsHostIncompatibility(t *testing.T) {
 	require.False(t, IsCRIURestoreError(err))
 }
 
+func TestClassifyRestoreErrorDetectsRunscVersionMismatch(t *testing.T) {
+	stderr := "runsc version does not match across checkpoint restore, checkpoint: release-20260714.0-beam.5 current: release-20260714.0-beam.6"
+	err := classifyRestoreError(types.ContainerRuntimeGvisor.String(), assert.AnError, stderr)
+
+	require.True(t, IsRunscCheckpointVersionMismatch(err))
+	require.False(t, IsCheckpointHostIncompatible(err))
+	require.False(t, IsCRIURestoreError(err))
+
+	runcErr := classifyRestoreError(types.ContainerRuntimeRunc.String(), assert.AnError, stderr)
+	require.False(t, IsRunscCheckpointVersionMismatch(runcErr), "runsc errors must not affect other runtimes")
+}
+
+func TestClassifyRestoreErrorPreservesDurableMountValidation(t *testing.T) {
+	validationErr := &checkpointDurableMountValidationError{mountPath: "/workspace", err: assert.AnError}
+	err := classifyRestoreError(types.ContainerRuntimeRunc.String(), validationErr, "criu failed: type RESTORE")
+
+	var restoredValidationErr *checkpointDurableMountValidationError
+	require.ErrorAs(t, err, &restoredValidationErr)
+	require.False(t, IsCRIURestoreError(err))
+}
+
 func TestCheckpointMaterializedRequiresRuntimeAndFilesystemPayload(t *testing.T) {
 	checkpointPath := filepath.Join(t.TempDir(), "checkpoint-1")
 
@@ -1852,15 +1960,207 @@ func TestCheckpointMaterializedRequiresRuntimeAndFilesystemPayload(t *testing.T)
 		t.Fatal(err)
 	}
 	if checkpointMaterialized(checkpointPath) {
-		t.Fatal("filesystem-only checkpoint should not be materialized")
+		t.Fatal("unmarked filesystem-only checkpoint should not be materialized")
 	}
 
+	if err := os.WriteFile(filepath.Join(checkpointPath, checkpointFilesystemOnlyFile), []byte("v1\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if !checkpointMaterialized(checkpointPath) {
+		t.Fatal("marked filesystem-only checkpoint should be materialized")
+	}
+	if checkpointHasRuntimePayload(checkpointPath) {
+		t.Fatal("filesystem-only marker should not be treated as runtime payload")
+	}
+
+	require.NoError(t, os.Remove(filepath.Join(checkpointPath, checkpointFilesystemOnlyFile)))
 	if err := os.WriteFile(filepath.Join(checkpointPath, "inventory.img"), []byte("runtime payload"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	if !checkpointMaterialized(checkpointPath) {
 		t.Fatal("checkpoint with filesystem and runtime payload should be materialized")
 	}
+}
+
+func TestCheckpointMaterializedAcceptsArchiveAndRejectsMixedFilesystemPayload(t *testing.T) {
+	checkpointPath := t.TempDir()
+	upperPath := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(upperPath, "state"), []byte("archive"), 0644))
+	require.NoError(t, archiveDirectoryContext(context.Background(), upperPath, filepath.Join(checkpointPath, checkpointFsArchive), nil))
+	require.NoError(t, os.WriteFile(filepath.Join(checkpointPath, checkpointFilesystemOnlyFile), []byte("v1\n"), 0644))
+	require.True(t, checkpointMaterialized(checkpointPath))
+	require.NoError(t, validateCheckpointKind(checkpointPath, true))
+
+	require.NoError(t, os.Mkdir(filepath.Join(checkpointPath, checkpointFsDir), 0755))
+	require.False(t, checkpointMaterialized(checkpointPath))
+	require.Error(t, validateCheckpointKind(checkpointPath, true))
+	require.NoError(t, os.Remove(filepath.Join(checkpointPath, checkpointFilesystemOnlyFile)))
+	require.NoError(t, os.WriteFile(filepath.Join(checkpointPath, "inventory.img"), []byte("runtime"), 0644))
+	require.Error(t, validateCheckpointKind(checkpointPath, false))
+}
+
+func TestCheckpointFilesystemArchiveMustBeARegularNonemptyFile(t *testing.T) {
+	checkpointPath := t.TempDir()
+	archivePath := filepath.Join(checkpointPath, checkpointFsArchive)
+	require.NoError(t, os.WriteFile(archivePath, nil, 0644))
+	_, _, err := checkpointFilesystemPayload(checkpointPath)
+	require.Error(t, err)
+
+	require.NoError(t, os.Remove(archivePath))
+	require.NoError(t, os.WriteFile(filepath.Join(checkpointPath, "payload"), []byte("archive"), 0644))
+	require.NoError(t, os.Symlink("payload", archivePath))
+	_, _, err = checkpointFilesystemPayload(checkpointPath)
+	require.Error(t, err)
+
+	require.NoError(t, os.Remove(archivePath))
+	require.NoError(t, os.Mkdir(filepath.Join(checkpointPath, checkpointFsDir), 0755))
+	require.NoError(t, os.Symlink(checkpointFsDir, filepath.Join(checkpointPath, checkpointFilesystemOnlyFile)))
+	require.False(t, checkpointFilesystemOnly(checkpointPath))
+}
+
+func TestValidateCheckpointKind(t *testing.T) {
+	checkpointPath := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(checkpointPath, checkpointFsDir), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(checkpointPath, "inventory.img"), []byte("runtime"), 0644))
+	require.NoError(t, validateCheckpointKind(checkpointPath, false))
+	require.Error(t, validateCheckpointKind(checkpointPath, true))
+
+	require.NoError(t, os.WriteFile(filepath.Join(checkpointPath, checkpointFilesystemOnlyFile), []byte("wrong-version\n"), 0644))
+	require.Error(t, validateCheckpointKind(checkpointPath, true))
+	require.NoError(t, os.WriteFile(filepath.Join(checkpointPath, checkpointFilesystemOnlyFile), []byte("v1\n"), 0644))
+	require.Error(t, validateCheckpointKind(checkpointPath, true), "filesystem checkpoint must reject mixed runtime payload")
+	require.Error(t, validateCheckpointKind(checkpointPath, false))
+	require.NoError(t, os.Remove(filepath.Join(checkpointPath, "inventory.img")))
+	require.NoError(t, validateCheckpointKind(checkpointPath, true))
+}
+
+func writeForcedRuncProfileConfig(t *testing.T, configPath string) []byte {
+	t.Helper()
+
+	var spec specs.Spec
+	require.NoError(t, json.Unmarshal([]byte(runtime.GetBaseConfig(types.ContainerRuntimeRunc.String())), &spec))
+	contents, err := json.Marshal(&spec)
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(configPath), 0755))
+	require.NoError(t, os.WriteFile(configPath, contents, 0644))
+	return contents
+}
+
+func TestForcedRuncCheckpointProfileMarkerIsExactAndFailSafe(t *testing.T) {
+	rt := NewMockRuntime(types.ContainerRuntimeRunc.String(), runtime.Capabilities{CheckpointRestore: true})
+	request := &types.ContainerRequest{
+		Stub: types.StubWithRelated{Stub: types.Stub{Config: `{"_beta9_force_resource_limits":true}`}},
+	}
+	checkpointPath := t.TempDir()
+	request.ConfigPath = filepath.Join(t.TempDir(), specBaseName)
+	writeForcedRuncProfileConfig(t, request.ConfigPath)
+
+	require.NoError(t, writeForcedRuncCheckpointProfile(checkpointPath, request, rt))
+	require.FileExists(t, filepath.Join(checkpointPath, checkpointForcedRuncProfileFile))
+	contents, err := os.ReadFile(filepath.Join(checkpointPath, checkpointForcedRuncProfileFile))
+	require.NoError(t, err)
+	require.Equal(t, checkpointForcedRuncProfileV1, string(contents))
+	require.False(t, forcedRuncCheckpointNeedsColdMigration(checkpointPath, request, rt))
+	dockerRequest := *request
+	dockerRequest.DockerEnabled = true
+	require.ErrorContains(t, writeForcedRuncCheckpointProfile(checkpointPath, &dockerRequest, rt), "does not support Docker-enabled containers")
+	require.NoFileExists(t, filepath.Join(checkpointPath, checkpointForcedRuncProfileFile), "rejected Docker mode must remove any stale marker")
+	require.True(t, forcedRuncCheckpointNeedsColdMigration(checkpointPath, &dockerRequest, rt))
+	require.NoError(t, writeForcedRuncCheckpointProfile(checkpointPath, request, rt))
+
+	var spec specs.Spec
+	require.NoError(t, json.Unmarshal([]byte(runtime.GetBaseConfig(types.ContainerRuntimeRunc.String())), &spec))
+	spec.Linux.ReadonlyPaths = nil
+	invalidConfig, err := json.Marshal(&spec)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(request.ConfigPath, invalidConfig, 0644))
+	require.ErrorContains(t, writeForcedRuncCheckpointProfile(checkpointPath, request, rt), "does not protect /proc/sys/vm/drop_caches")
+	require.NoFileExists(t, filepath.Join(checkpointPath, checkpointForcedRuncProfileFile), "failed validation must remove any stale marker")
+	require.True(t, forcedRuncCheckpointNeedsColdMigration(checkpointPath, request, rt))
+}
+
+func TestForcedRuncCheckpointProfileMigrationClassification(t *testing.T) {
+	runcRuntime := NewMockRuntime(types.ContainerRuntimeRunc.String(), runtime.Capabilities{CheckpointRestore: true})
+	gvisorRuntime := NewMockRuntime(types.ContainerRuntimeGvisor.String(), runtime.Capabilities{CheckpointRestore: true})
+	forced := &types.ContainerRequest{Stub: types.StubWithRelated{Stub: types.Stub{Config: `{"_beta9_force_resource_limits":true}`}}}
+	unforced := &types.ContainerRequest{}
+
+	tests := []struct {
+		name     string
+		request  *types.ContainerRequest
+		runtime  runtime.Runtime
+		marker   string
+		symlink  bool
+		wantCold bool
+	}{
+		{name: "missing", request: forced, runtime: runcRuntime, wantCold: true},
+		{name: "malformed", request: forced, runtime: runcRuntime, marker: "v0\n", wantCold: true},
+		{name: "trailing data", request: forced, runtime: runcRuntime, marker: checkpointForcedRuncProfileV1 + "extra", wantCold: true},
+		{name: "symlink", request: forced, runtime: runcRuntime, marker: checkpointForcedRuncProfileV1, symlink: true, wantCold: true},
+		{name: "current", request: forced, runtime: runcRuntime, marker: checkpointForcedRuncProfileV1},
+		{name: "unforced legacy", request: unforced, runtime: runcRuntime, wantCold: false},
+		{name: "forced gvisor", request: forced, runtime: gvisorRuntime, wantCold: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			checkpointPath := t.TempDir()
+			if test.marker != "" {
+				markerPath := filepath.Join(checkpointPath, checkpointForcedRuncProfileFile)
+				if test.symlink {
+					targetPath := filepath.Join(t.TempDir(), "marker")
+					require.NoError(t, os.WriteFile(targetPath, []byte(test.marker), 0644))
+					require.NoError(t, os.Symlink(targetPath, markerPath))
+				} else {
+					require.NoError(t, os.WriteFile(markerPath, []byte(test.marker), 0644))
+				}
+			}
+			require.Equal(t, test.wantCold, forcedRuncCheckpointNeedsColdMigration(checkpointPath, test.request, test.runtime))
+		})
+	}
+}
+
+func TestCreateCheckpointWritesForcedRuncProfileBeforePersistence(t *testing.T) {
+	root := t.TempDir()
+	containerID := "container-forced-profile"
+	checkpointID := "checkpoint-forced-profile"
+	checkpointPath := filepath.Join(root, "checkpoints", checkpointID)
+	require.NoError(t, os.MkdirAll(checkpointPath, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(checkpointPath, "inventory.img"), []byte("runtime"), 0644))
+
+	request := &types.ContainerRequest{
+		ContainerId: containerID,
+		ConfigPath:  filepath.Join(root, "bundle", specBaseName),
+		Stub: types.StubWithRelated{Stub: types.Stub{
+			ExternalId: "stub-forced-profile",
+			Config:     `{"_beta9_force_resource_limits":true}`,
+		}},
+	}
+	writeForcedRuncProfileConfig(t, request.ConfigPath)
+
+	overlayRoot := filepath.Join(root, "overlay", "merged")
+	upperPath := filepath.Join(filepath.Dir(overlayRoot), "upper")
+	require.NoError(t, os.MkdirAll(upperPath, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(upperPath, "root-marker"), []byte("preserved"), 0644))
+	rt := NewMockRuntime(types.ContainerRuntimeRunc.String(), runtime.Capabilities{CheckpointRestore: true})
+	worker := &Worker{
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		backendRepoClient:  &fakeBackendRepoClient{},
+		criuManager:        &staticCheckpointManager{path: checkpointPath},
+	}
+	worker.containerInstances.Set(containerID, &ContainerInstance{
+		Id:      containerID,
+		Request: request,
+		Runtime: rt,
+		Overlay: common.NewContainerOverlay(request, overlayRoot, filepath.Join(root, "overlay-storage")),
+	})
+
+	err := worker.createCheckpoint(context.Background(), &CreateCheckpointOpts{Request: request, CheckpointId: checkpointID})
+	require.ErrorContains(t, err, "cache is required for checkpoint persistence")
+	marker, readErr := os.ReadFile(filepath.Join(checkpointPath, checkpointForcedRuncProfileFile))
+	require.NoError(t, readErr)
+	require.Equal(t, checkpointForcedRuncProfileV1, string(marker))
+	require.True(t, checkpointHasRuntimePayload(checkpointPath), "the profile marker itself must not count as runtime state")
 }
 
 func TestCreateCheckpointRequiresCRIUManager(t *testing.T) {
@@ -1877,6 +2177,91 @@ func TestCreateCheckpointRequiresCRIUManager(t *testing.T) {
 	})
 	if !errors.Is(err, errCRIUManagerUnavailable) {
 		t.Fatalf("createCheckpoint error = %v, want %v", err, errCRIUManagerUnavailable)
+	}
+}
+
+func TestCreateFilesystemCheckpointFallbackStopsAndCapturesOverlay(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		checkpointEnabled bool
+		withCRIU          bool
+		initiallyStopped  bool
+		wantCRIUCalls     int
+		wantSignals       int
+	}{
+		{name: "checkpoint disabled", wantSignals: 1},
+		{name: "CRIU unavailable", checkpointEnabled: true, wantSignals: 1},
+		{name: "memory failure while running", checkpointEnabled: true, withCRIU: true, wantCRIUCalls: 1, wantSignals: 1},
+		{name: "memory failure after stop", checkpointEnabled: true, withCRIU: true, initiallyStopped: true, wantCRIUCalls: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			containerID := "container-filesystem-fallback"
+			request := &types.ContainerRequest{
+				ContainerId:       containerID,
+				CheckpointEnabled: tc.checkpointEnabled,
+				Stub: types.StubWithRelated{Stub: types.Stub{
+					ExternalId: "stub-filesystem-fallback",
+					Config:     `{"_beta9_force_resource_limits":true}`,
+				}},
+			}
+			overlay := common.NewContainerOverlay(request, filepath.Join(root, "overlay", "merged"), filepath.Join(root, "overlay-storage"))
+			upperDir := filepath.Join(filepath.Dir(overlay.TopLayerPath()), "upper")
+			require.NoError(t, os.MkdirAll(filepath.Join(upperDir, "tmp"), 0755))
+			require.NoError(t, os.WriteFile(filepath.Join(upperDir, "tmp", "marker"), []byte("preserved"), 0644))
+
+			rt := &mockRuntime{name: types.ContainerRuntimeRunc.String(), capabilities: runtime.Capabilities{CheckpointRestore: true}}
+			rt.state = func(context.Context, string) (runtime.State, error) {
+				if tc.initiallyStopped || len(rt.signals) > 0 {
+					return runtime.State{Status: types.RuncContainerStatusStopped}, nil
+				}
+				return runtime.State{Status: types.RuncContainerStatusRunning}, nil
+			}
+			criuCalls := 0
+			var manager CRIUManager
+			if tc.withCRIU {
+				manager = &observingCheckpointManager{create: func(bool) error {
+					criuCalls++
+					return assert.AnError
+				}}
+			}
+			backendRepoClient := &fakeBackendRepoClient{}
+			worker := &Worker{
+				criuManager:        manager,
+				cacheManager:       &WorkerCacheManager{checkpointRoot: filepath.Join(root, "checkpoints")},
+				backendRepoClient:  backendRepoClient,
+				containerInstances: common.NewSafeMap[*ContainerInstance](),
+			}
+			worker.containerInstances.Set(containerID, &ContainerInstance{
+				Id:      containerID,
+				Request: request,
+				Runtime: rt,
+				Overlay: overlay,
+			})
+			opts := &CreateCheckpointOpts{
+				Request:                  request,
+				CheckpointId:             "checkpoint-filesystem-fallback",
+				TerminateAfterCheckpoint: true,
+			}
+
+			err := worker.createCheckpoint(context.Background(), opts)
+
+			require.ErrorContains(t, err, "cache is required for checkpoint persistence")
+			require.Equal(t, tc.wantCRIUCalls, criuCalls)
+			require.Len(t, rt.signals, tc.wantSignals)
+			if tc.wantSignals > 0 {
+				require.Equal(t, syscall.SIGTERM, rt.signals[0])
+			}
+			require.Equal(t, types.CheckpointRuntimeFilesystem, opts.CheckpointRuntime)
+			checkpointPath := worker.checkpointPath(opts.CheckpointId)
+			require.FileExists(t, filepath.Join(checkpointPath, checkpointFilesystemOnlyFile))
+			require.FileExists(t, filepath.Join(checkpointPath, checkpointFsDir, "tmp", "marker"))
+			require.NoFileExists(t, filepath.Join(checkpointPath, checkpointFsArchive))
+			require.False(t, checkpointHasRuntimePayload(checkpointPath))
+			require.NotNil(t, backendRepoClient.lastCreate)
+			require.Equal(t, string(types.CheckpointStatusCheckpointFailed), backendRepoClient.lastCreate.Status)
+			require.Equal(t, types.CheckpointRuntimeFilesystem, backendRepoClient.lastCreate.Runtime)
+		})
 	}
 }
 
@@ -1921,6 +2306,8 @@ func TestCreateCheckpointMarksFilesystemCopyFailure(t *testing.T) {
 		}},
 	}
 	checkpointPath := filepath.Join(root, "checkpoints", "checkpoint-copy-failure")
+	require.NoError(t, os.MkdirAll(filepath.Join(checkpointPath, checkpointFsDir), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(checkpointPath, "inventory.img"), []byte("runtime"), 0644))
 	backendRepoClient := &fakeBackendRepoClient{}
 	worker := &Worker{
 		containerInstances: common.NewSafeMap[*ContainerInstance](),
@@ -1950,6 +2337,9 @@ func TestCreateCheckpointMarksFilesystemCopyFailure(t *testing.T) {
 	if got := backendRepoClient.lastCreate.Status; got != string(types.CheckpointStatusCheckpointFailed) {
 		t.Fatalf("checkpoint status = %q, want %q", got, types.CheckpointStatusCheckpointFailed)
 	}
+	require.NoDirExists(t, filepath.Join(checkpointPath, checkpointFsDir))
+	require.NoFileExists(t, filepath.Join(checkpointPath, checkpointFsArchive))
+	require.False(t, checkpointMaterialized(checkpointPath))
 }
 
 func TestMarkCheckpointFailedRetainsPersistedMetadata(t *testing.T) {
@@ -2114,25 +2504,29 @@ func TestSignalRestoredSandboxProcessManagerSkipsNonSandbox(t *testing.T) {
 	}
 }
 
-func TestMaterializeCheckpointArchiveRejectsFilesystemOnlyPayload(t *testing.T) {
-	root := t.TempDir()
-	checkpointID := "checkpoint-1"
-	sourcePath := filepath.Join(root, "source", checkpointID)
-	if err := os.MkdirAll(filepath.Join(sourcePath, checkpointFsDir), 0755); err != nil {
-		t.Fatal(err)
-	}
+func TestMaterializeCheckpointArchiveFilesystemOnlyMarker(t *testing.T) {
+	for _, marked := range []bool{false, true} {
+		t.Run(fmt.Sprintf("marked=%t", marked), func(t *testing.T) {
+			root := t.TempDir()
+			checkpointID := "checkpoint-filesystem"
+			sourcePath := filepath.Join(root, "source", checkpointID)
+			require.NoError(t, os.MkdirAll(filepath.Join(sourcePath, checkpointFsDir), 0755))
+			if marked {
+				require.NoError(t, os.WriteFile(filepath.Join(sourcePath, checkpointFilesystemOnlyFile), []byte("v1\n"), 0644))
+			}
+			archivePath := filepath.Join(root, checkpointID+checkpointArchiveExtension)
+			require.NoError(t, createTar(sourcePath, archivePath))
 
-	archivePath := filepath.Join(root, checkpointID+checkpointArchiveExtension)
-	if err := createTar(sourcePath, archivePath); err != nil {
-		t.Fatal(err)
-	}
-
-	checkpointPath := filepath.Join(root, "materialized", checkpointID)
-	if err := materializeCheckpointArchive(archivePath, checkpointPath, checkpointID); err == nil {
-		t.Fatal("expected filesystem-only archive to be rejected")
-	}
-	if checkpointMaterialized(checkpointPath) {
-		t.Fatal("filesystem-only archive should not materialize checkpoint")
+			checkpointPath := filepath.Join(root, "materialized", checkpointID)
+			err := materializeCheckpointArchive(archivePath, checkpointPath, checkpointID)
+			if marked {
+				require.NoError(t, err)
+				require.True(t, checkpointFilesystemOnly(checkpointPath))
+			} else {
+				require.Error(t, err)
+				require.False(t, checkpointMaterialized(checkpointPath))
+			}
+		})
 	}
 }
 

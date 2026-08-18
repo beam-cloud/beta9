@@ -345,8 +345,11 @@ func requestAgentPoolGPUVirtualized(ctx context.Context, client agentPoolVirtual
 	if err != nil {
 		return false, err
 	}
+	if res == nil {
+		return false, errors.New("gateway returned an empty pool virtualization response")
+	}
 	if !res.GetOk() {
-		return false, fmt.Errorf("%s", res.GetErrMsg())
+		return false, errors.New(firstNonEmpty(res.GetErrMsg(), "gateway rejected request"))
 	}
 	return res.GetGpuVirtualized(), nil
 }

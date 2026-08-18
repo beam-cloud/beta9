@@ -33,12 +33,14 @@ const (
 	containerDiscoveryInterval       time.Duration = time.Millisecond * 250
 	queuedContainerDiscoveryInterval time.Duration = time.Millisecond * 50
 	containerDialTimeoutDurationS    time.Duration = time.Second * 30
-	containerPinnedDialTimeout       time.Duration = time.Millisecond * 900
-	containerAvailableTimeout        time.Duration = time.Second * 2
-	containerPrimeTimeout            time.Duration = time.Second * 3
-	connectionKeepAliveInterval      time.Duration = time.Second * 1
-	connectionReadTimeout            time.Duration = time.Minute * 5
-	backendDialRetryLimit                          = 1
+	// Covers a dropped SYN (kernel retransmits at 1s) and relayed tunnel dials
+	// that routinely exceed 900ms under concurrency.
+	containerPinnedDialTimeout  time.Duration = time.Second * 3
+	containerAvailableTimeout   time.Duration = time.Second * 2
+	containerPrimeTimeout       time.Duration = time.Second * 3
+	connectionKeepAliveInterval time.Duration = time.Second * 1
+	connectionReadTimeout       time.Duration = time.Minute * 5
+	backendDialRetryLimit                     = 1
 )
 
 type container struct {
@@ -57,6 +59,7 @@ type connection struct {
 	dialTimeout      time.Duration
 	llm              *llmRequestInfo
 	retryBackendDial bool
+	pinned           bool
 	retryCount       int
 	state            atomic.Int32
 }
@@ -265,7 +268,13 @@ func (pb *PodProxyBuffer) ForwardContainerRequest(ctx echo.Context, containerId 
 	}
 
 	done := make(chan struct{})
-	conn := &connection{ctx: ctx, done: done, dialTimeout: containerPinnedDialTimeout}
+	conn := &connection{
+		ctx:              ctx,
+		done:             done,
+		dialTimeout:      containerPinnedDialTimeout,
+		retryBackendDial: true,
+		pinned:           true,
+	}
 	conn.claim()
 	pb.handleConnection(conn, container{
 		id:         containerId,
@@ -793,13 +802,21 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection, container container
 	// The transport closes its outbound request body even when dialing fails.
 	// Keep the inbound body open until the one safe pre-connect retry is decided.
 	requestBody := request.Body
-	func() {
+	serve := func() {
 		if conn.retryBackendDial && conn.retryCount < backendDialRetryLimit && requestBody != nil {
 			request.Body = preservedRequestBody{ReadCloser: requestBody}
 			defer func() { request.Body = requestBody }()
 		}
 		proxy.ServeHTTP(conn.ctx.Response(), request)
-	}()
+	}
+	serve()
+
+	// A pinned request names one container, so there is nowhere to requeue it: dial again.
+	if retryErr != nil && conn.pinned {
+		conn.retryCount++
+		retryErr = nil
+		serve()
+	}
 
 	if retryErr == nil {
 		return false

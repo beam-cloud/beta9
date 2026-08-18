@@ -86,6 +86,10 @@ func (s *Worker) prepareDurableDiskMount(request *types.ContainerRequest, mount 
 
 	driver := durableDiskDriver(mount.DurableDisk.Driver)
 	switch driver {
+	case types.DurableDiskDriverQcow:
+		return withDurableDiskLock(s.durableDiskContext(nil), mount, func() error {
+			return s.prepareQcowDurableDiskMount(request, mount)
+		})
 	case types.DurableDiskDriverSnapshot:
 		return withDurableDiskLock(s.durableDiskContext(nil), mount, func() error {
 			if s != nil {
@@ -204,6 +208,33 @@ func (s *Worker) syncDurableDiskMounts(ctx context.Context, request *types.Conta
 					Str("disk", mount.DurableDisk.Name).
 					Err(err).
 					Msg("failed to sync durable disk")
+				syncErrs = append(syncErrs, err)
+			}
+		case types.DurableDiskDriverQcow:
+			err := withDurableDiskLock(ctx, mount, func() error {
+				snapshot, snapErr := s.snapshotQcowDurableDiskMount(ctx, request, mount, mode)
+				if snapshot != nil {
+					snapshots = append(snapshots, snapshot)
+				}
+				if snapErr != nil {
+					snapErr = fmt.Errorf("snapshot: %w", snapErr)
+				}
+				// The final sync is the container's durability boundary; the
+				// volume comes offline afterwards even if publishing failed,
+				// leaving sealed layers cached for the next attachment.
+				if mode == durableDiskSyncFinal {
+					if detachErr := s.detachQcowDurableDiskMount(ctx, request, mount); detachErr != nil {
+						return errors.Join(snapErr, fmt.Errorf("detach: %w", detachErr))
+					}
+				}
+				return snapErr
+			})
+			if err != nil {
+				log.Warn().
+					Str("container_id", request.ContainerId).
+					Str("disk", mount.DurableDisk.Name).
+					Err(err).
+					Msg("failed to sync qcow durable disk")
 				syncErrs = append(syncErrs, err)
 			}
 		}
@@ -608,17 +639,32 @@ func (s *Worker) durableDiskSnapshotCacheReader() durableDiskSnapshotCacheReader
 	return s.cacheManager.client
 }
 
+// The workspace-bucket layout for durable disk artifacts:
+// durable-disks/<disk>/snapshots/<generation>/<attempt>/manifest.json for
+// manifests and durable-disks/<disk>/chunks/<hash> for content-addressed
+// chunks.
+const (
+	durableDiskObjectRoot       = "durable-disks"
+	durableDiskManifestFileName = "manifest.json"
+)
+
 func durableDiskSnapshotObjectPrefix(mount *types.Mount, generation int64) string {
 	// Generations order repository rows, but two workers can legitimately choose
 	// the same one after reading the same parent. Give each publish attempt its
 	// own manifest directory; chunks remain content-addressed and shared.
 	return path.Join(
-		"durable-disks",
+		durableDiskObjectRoot,
 		types.SafeDurableDiskName(mount.DurableDisk.Name),
 		"snapshots",
 		strconv.FormatInt(generation, 10),
 		uuid.NewString(),
 	)
+}
+
+// durableDiskChunkPrefix is where a disk's content-addressed chunks live,
+// shared by every generation of the disk.
+func durableDiskChunkPrefix(mount *types.Mount) string {
+	return path.Join(durableDiskObjectRoot, types.SafeDurableDiskName(mount.DurableDisk.Name), "chunks")
 }
 
 func (s *Worker) reportDurableDiskSnapshotContent(request *types.ContainerRequest, snapshot *types.DiskSnapshot, manifest *types.DiskSnapshotManifest) {

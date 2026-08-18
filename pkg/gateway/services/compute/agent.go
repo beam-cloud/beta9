@@ -942,7 +942,7 @@ func agentPoolRuntimeConfigToProto(config *types.WorkerPoolConfig) *pb.AgentPool
 		ImagesPath:           config.ImagesPath,
 		DurableDisksPath:     config.DurableDisksPath,
 		ConfigGroup:          config.ConfigGroup,
-		GpuVirtualized:       config.GpuVirtualized,
+		GpuVirtualized:       config.GPUVirtualized,
 		Cache: &pb.AgentPoolCacheConfig{
 			Enabled: cacheEnabled,
 			Disk: &pb.AgentPoolCacheDiskConfig{
@@ -1120,10 +1120,13 @@ func (s *Service) agentBillingConfig(poolState *model.PoolState) *pb.AgentBillin
 
 func (s *Service) agentPoolGPUVirtualized(ctx context.Context, agentState *model.AgentTokenState) (bool, error) {
 	poolState, err := s.getAgentPoolState(ctx, agentState)
-	if err != nil || poolState == nil || poolState.WorkerConfig == nil {
+	if err != nil {
 		return false, err
 	}
-	return poolState.WorkerConfig.GpuVirtualized, nil
+	if poolState == nil || poolState.WorkerConfig == nil {
+		return false, errors.New("agent pool worker config is unavailable")
+	}
+	return poolState.WorkerConfig.GPUVirtualized, nil
 }
 
 func (s *Service) validateAgentTransportConfig(transport string) error {

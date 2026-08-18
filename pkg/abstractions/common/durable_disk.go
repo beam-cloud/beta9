@@ -100,7 +100,9 @@ func configureDurableDiskDrivers(stubConfig *types.StubConfigV1) error {
 		}
 		disk.Driver = driver
 
-		if driver != types.DurableDiskDriverSnapshot {
+		switch driver {
+		case types.DurableDiskDriverSnapshot, types.DurableDiskDriverQcow:
+		default:
 			return fmt.Errorf("durable disk %q requested unsupported driver %q", disk.Name, driver)
 		}
 	}

@@ -2612,7 +2612,7 @@ func TestGetAgentPoolVirtualizationReportsGPUVirtualized(t *testing.T) {
 					{
 						Name: poolName,
 						WorkerConfig: &types.WorkerPoolConfig{
-							GpuVirtualized: true,
+							GPUVirtualized: true,
 						},
 					},
 				},
@@ -2636,6 +2636,22 @@ func TestGetAgentPoolVirtualizationReportsGPUVirtualized(t *testing.T) {
 	}
 	if !resp.GetOk() || !resp.GetGpuVirtualized() {
 		t.Fatalf("GetAgentPoolVirtualization() = %+v, want gpu virtualized", resp)
+	}
+}
+
+func TestAgentPoolGPUVirtualizedRequiresWorkerConfig(t *testing.T) {
+	service := &Service{computeRepo: &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{
+			"workspace-1": {{Name: "pool-1"}},
+		},
+	}}
+
+	_, err := service.agentPoolGPUVirtualized(context.Background(), &model.AgentTokenState{
+		WorkspaceID: "workspace-1",
+		PoolName:    "pool-1",
+	})
+	if err == nil || err.Error() != "agent pool worker config is unavailable" {
+		t.Fatalf("agentPoolGPUVirtualized() error = %v", err)
 	}
 }
 
@@ -5972,7 +5988,7 @@ func TestAgentWorkerSlotStateCarriesMarketplaceModeAndRuntime(t *testing.T) {
 		ContainerStartConcurrency: 64,
 		NetworkSlotPoolSize:       128,
 		NetworkPreallocation:      &networkPreallocation,
-		GpuVirtualized:            true,
+		GPUVirtualized:            true,
 		Priority:                  10,
 		CRIUEnabled:               false,
 		TmpSizeLimit:              "50Gi",

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -543,16 +544,123 @@ func TestReconcileSuccessBackoffSkipsRecentMaterialization(t *testing.T) {
 }
 
 func TestReconcileBudgetCapsMaterializationAttempts(t *testing.T) {
-	budget := newReconcileBudget(1)
+	budget := newReconcileBudget(1, 0)
 
-	require.True(t, budget.take())
+	require.True(t, budget.take(0))
 	require.False(t, budget.exhausted())
-	require.False(t, budget.take())
+	require.False(t, budget.take(0))
 	require.True(t, budget.exhausted())
 
 	var unlimited *reconcileBudget
-	require.True(t, unlimited.take())
+	require.True(t, unlimited.take(0))
 	require.False(t, unlimited.exhausted())
+}
+
+func TestReconcileBudgetCapsBytesPerCycle(t *testing.T) {
+	budget := newReconcileBudget(100, 10)
+
+	// An item crossing the byte boundary is admitted; the budget exhausts after.
+	require.True(t, budget.take(4))
+	require.True(t, budget.take(8))
+	require.False(t, budget.exhausted())
+	require.False(t, budget.take(1))
+	require.True(t, budget.exhausted())
+
+	// A single item larger than the whole byte budget is still admitted.
+	huge := newReconcileBudget(100, 10)
+	require.True(t, huge.take(1<<30))
+	require.False(t, huge.take(1))
+
+	// Items with unknown size only consume the item budget.
+	unknown := newReconcileBudget(2, 10)
+	require.True(t, unknown.take(0))
+	require.True(t, unknown.take(0))
+	require.False(t, unknown.take(0))
+	require.True(t, unknown.exhausted())
+}
+
+func TestLoadRecentRequiredContentCachesByLastSeen(t *testing.T) {
+	fake := &fakeEventRepo{
+		itemsByStub: map[string]map[string]types.CacheRequiredContentItem{
+			"ws|stub-a": {"h1": {Hash: "h1", Kind: types.CacheContentKindDiskSnapshot}},
+			"ws|stub-b": {"h2": {Hash: "h2", Kind: types.CacheContentKindDiskSnapshot}},
+		},
+	}
+	manager := &WorkerCacheManager{ctx: context.Background(), eventRepo: fake}
+
+	seenA := time.Unix(100, 0)
+	seenB := time.Unix(200, 0)
+	stubs := []cache.RecentStub{
+		{WorkspaceID: "ws", StubID: "stub-a", LastSeen: seenA},
+		{WorkspaceID: "ws", StubID: "stub-b", LastSeen: seenB},
+	}
+
+	content, complete := manager.loadRecentRequiredContent(stubs)
+	require.True(t, complete)
+	require.Len(t, content, 2)
+	require.Equal(t, []string{"ws|stub-a", "ws|stub-b"}, fake.readKeys)
+
+	// Unchanged scores are served from cache without new reads.
+	content, complete = manager.loadRecentRequiredContent(stubs)
+	require.True(t, complete)
+	require.Len(t, content, 2)
+	require.Equal(t, "h1", content[0].items[0].Hash)
+	require.Equal(t, []string{"ws|stub-a", "ws|stub-b"}, fake.readKeys)
+
+	// A bumped score (new activity/content) forces a re-read of that stub only.
+	stubs[1].LastSeen = seenB.Add(time.Second)
+	_, _ = manager.loadRecentRequiredContent(stubs)
+	require.Equal(t, []string{"ws|stub-a", "ws|stub-b", "ws|stub-b"}, fake.readKeys)
+
+	// Stubs that age out of the recent index are evicted from the cache.
+	_, _ = manager.loadRecentRequiredContent(stubs[1:])
+	require.NotContains(t, manager.requiredContentCache, "ws|stub-a")
+
+	// Read errors are not cached; the stub is retried next cycle.
+	fake.readErr = errors.New("s2 unavailable")
+	_, complete = manager.loadRecentRequiredContent([]cache.RecentStub{{WorkspaceID: "ws", StubID: "stub-c", LastSeen: seenA}})
+	require.False(t, complete)
+	require.NotContains(t, manager.requiredContentCache, "ws|stub-c")
+}
+
+func TestReconcilePoolDedupesAndBoundsConcurrency(t *testing.T) {
+	var nilPool *reconcilePool
+	require.True(t, nilPool.claim("a"))
+	require.True(t, nilPool.claim("a")) // nil pool never dedupes
+	require.False(t, nilPool.didWork())
+	nilPool.markProgress() // must not panic
+	nilPool.wait()
+
+	// concurrency <= 1 yields the inline (nil) pool
+	require.Nil(t, newReconcilePool(1))
+
+	pool := newReconcilePool(4)
+	require.True(t, pool.claim("a"))
+	require.False(t, pool.claim("a"))
+	require.True(t, pool.claim("b"))
+
+	var inFlight, maxInFlight, total atomic.Int64
+	for i := 0; i < 32; i++ {
+		pool.submit(func() {
+			cur := inFlight.Add(1)
+			for {
+				prev := maxInFlight.Load()
+				if cur <= prev || maxInFlight.CompareAndSwap(prev, cur) {
+					break
+				}
+			}
+			time.Sleep(2 * time.Millisecond)
+			inFlight.Add(-1)
+			total.Add(1)
+		})
+	}
+	pool.wait()
+
+	require.EqualValues(t, 32, total.Load())
+	require.LessOrEqual(t, maxInFlight.Load(), int64(4))
+	require.False(t, pool.didWork())
+	pool.markProgress()
+	require.True(t, pool.didWork())
 }
 
 func TestReconcileOnceUsesOnlyCurrentLocalityRecentStubs(t *testing.T) {
@@ -1064,7 +1172,7 @@ func TestReconcileCheckpointIgnoresSuccessBackoffWhenExtractedPayloadMissing(t *
 	manager.reconcileStub(server, "local-host", cache.RecentStub{
 		WorkspaceID: "workspace",
 		StubID:      "stub",
-	}, newReconcileBudget(10))
+	}, newReconcileBudget(10, 0))
 
 	require.True(t, checkpointMaterialized(filepath.Join(checkpointRoot, checkpointID)))
 	require.Len(t, fake.cacheEvents, 1)
