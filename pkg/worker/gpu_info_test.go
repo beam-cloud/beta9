@@ -3,6 +3,7 @@ package worker
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -235,7 +236,7 @@ func TestAvailableGPUDevicesReturnsQueryErrors(t *testing.T) {
 	assert.Nil(t, devices)
 }
 
-func TestAvailableGPUDevicesSkipsFailedProcAdapter(t *testing.T) {
+func TestAvailableGPUDevicesSkipsExcludedProcAdapter(t *testing.T) {
 	originalQueryDevices := queryDevices
 	defer func() { queryDevices = originalQueryDevices }()
 	originalCheckGPUExists := checkGPUExists
@@ -246,8 +247,8 @@ func TestAvailableGPUDevicesSkipsFailedProcAdapter(t *testing.T) {
 0x0000, 00000000:24:00.0, 1, GPU-good`), nil
 	}
 	root := t.TempDir()
-	writeWorkerNvidiaProcGPUInfo(t, root, "0000:01:00.0", "GPU-bad", "N/A", "??.??.??.??.?")
-	writeWorkerNvidiaProcGPUInfo(t, root, "0000:24:00.0", "GPU-good", "580.126.18", "95.02.3c.40.b8")
+	writeWorkerNvidiaProcGPUInfo(t, root, "0000:01:00.0", "GPU-bad", "N/A", "??.??.??.??.?", true)
+	writeWorkerNvidiaProcGPUInfo(t, root, "0000:24:00.0", "GPU-good", "580.126.18", "95.02.3c.40.b8", false)
 	withNvidiaProcGPUInfoRoot(t, root)
 
 	client := &NvidiaInfoClient{visibleDevices: "all"}
@@ -255,6 +256,26 @@ func TestAvailableGPUDevicesSkipsFailedProcAdapter(t *testing.T) {
 	devices, err := client.AvailableGPUDevices()
 	assert.NoError(t, err)
 	assert.Equal(t, []int{1}, devices)
+}
+
+func TestAvailableGPUDevicesAllowsUnknownVideoBIOS(t *testing.T) {
+	originalQueryDevices := queryDevices
+	defer func() { queryDevices = originalQueryDevices }()
+	originalCheckGPUExists := checkGPUExists
+	defer func() { checkGPUExists = originalCheckGPUExists }()
+
+	queryDevices = func() ([]byte, error) {
+		return []byte(`0x0000, 00000000:01:00.0, 0, GPU-good`), nil
+	}
+	root := t.TempDir()
+	writeWorkerNvidiaProcGPUInfo(t, root, "0000:01:00.0", "GPU-good", "N/A", "??.??.??.??.??", false)
+	withNvidiaProcGPUInfoRoot(t, root)
+
+	client := &NvidiaInfoClient{visibleDevices: "all"}
+
+	devices, err := client.AvailableGPUDevices()
+	assert.NoError(t, err)
+	assert.Equal(t, []int{0}, devices)
 }
 
 func TestAvailableGPUDevicesSingleGPUUUID(t *testing.T) {
@@ -394,7 +415,7 @@ func withNvidiaProcGPUInfoRoot(t *testing.T, root string) {
 	t.Cleanup(func() { nvidiaProcGPUInfoRoot = previous })
 }
 
-func writeWorkerNvidiaProcGPUInfo(t *testing.T, root, busID, uuid, firmware, videoBIOS string) {
+func writeWorkerNvidiaProcGPUInfo(t *testing.T, root, busID, uuid, firmware, videoBIOS string, excluded bool) {
 	t.Helper()
 	dir := filepath.Join(root, busID)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -407,6 +428,7 @@ func writeWorkerNvidiaProcGPUInfo(t *testing.T, root, busID, uuid, firmware, vid
 		"Bus Location: \t " + busID,
 		"Device Minor: \t 0",
 		"GPU Firmware: \t " + firmware,
+		fmt.Sprintf("GPU Excluded:\t %v", map[bool]string{true: "Yes", false: "No"}[excluded]),
 	}, "\n")
 	if err := os.WriteFile(filepath.Join(dir, "information"), []byte(info), 0644); err != nil {
 		t.Fatal(err)
