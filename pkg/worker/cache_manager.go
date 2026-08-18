@@ -59,7 +59,13 @@ const (
 	cacheDefaultReconcileRecentStubTTLS = cache.DefaultReconcileRecentStubTTLS
 	cacheDefaultReconcileLockTTLS       = 300
 	cacheDefaultReconcileMaxStubsCycle  = 256
-	cacheDefaultReconcileMaxItemsCycle  = 32
+	// Exhausted cycles re-kick with a fresh MRU listing, so the item budget
+	// is a re-prioritization batch size, not a throughput cap.
+	cacheDefaultReconcileMaxItemsCycle = 256
+	// Parallel materializations per cycle.
+	cacheDefaultReconcileConcurrency = 16
+	// Byte budget per cycle; bounds writes between disk-usage gate rechecks.
+	cacheDefaultReconcileMaxBytesCycle = int64(2) << 30
 	// cacheDefaultReconcileMaxDiskUsagePct pauses proactive materialization
 	// before node-level DiskPressure thresholds can be reached.
 	cacheDefaultReconcileMaxDiskUsagePct = 0.80
@@ -74,36 +80,39 @@ const (
 )
 
 type WorkerCacheManager struct {
-	ctx                   context.Context
-	cancel                context.CancelFunc
-	config                types.AppConfig
-	poolConfig            types.WorkerPoolConfig
-	workerRepo            pb.WorkerRepositoryServiceClient
-	eventRepo             repo.EventRepository
-	containerInstances    *common.SafeMap[*ContainerInstance]
-	workerID              string
-	instanceID            string
-	poolName              string
-	podAddr               string
-	nodeID                string
-	locality              string
-	accelerator           string
-	checkpointRoot        string
-	cacheIdentityPath     string
-	metadataStore         cache.CacheMetadataStore
-	reporter              *cacheContentReporter
-	originCredsMu         sync.Mutex
-	originCredsCache      map[string]*originCredentials
-	reconcileFailuresMu   sync.Mutex
-	reconcileFailures     map[string]time.Time
-	reconcileSuccessesMu  sync.Mutex
-	reconcileSuccesses    map[string]time.Time
-	checkpointLocksMu     sync.Mutex
-	checkpointLocks       map[string]*checkpointMaterializationLock
-	ownerLastLiveMu       sync.Mutex
-	ownerLastLive         map[string]time.Time
-	reconcilePausedAt     time.Time
-	reconcileNow          chan struct{}
+	ctx                  context.Context
+	cancel               context.CancelFunc
+	config               types.AppConfig
+	poolConfig           types.WorkerPoolConfig
+	workerRepo           pb.WorkerRepositoryServiceClient
+	eventRepo            repo.EventRepository
+	containerInstances   *common.SafeMap[*ContainerInstance]
+	workerID             string
+	instanceID           string
+	poolName             string
+	podAddr              string
+	nodeID               string
+	locality             string
+	accelerator          string
+	checkpointRoot       string
+	cacheIdentityPath    string
+	metadataStore        cache.CacheMetadataStore
+	reporter             *cacheContentReporter
+	originCredsMu        sync.Mutex
+	originCredsCache     map[string]*originCredentials
+	reconcileFailuresMu  sync.Mutex
+	reconcileFailures    map[string]time.Time
+	reconcileSuccessesMu sync.Mutex
+	reconcileSuccesses   map[string]time.Time
+	checkpointLocksMu    sync.Mutex
+	checkpointLocks      map[string]*checkpointMaterializationLock
+	ownerLastLiveMu      sync.Mutex
+	ownerLastLive        map[string]time.Time
+	reconcilePausedAt    time.Time
+	reconcileNow         chan struct{}
+	// Memoized per-stub required-content reads keyed on the stub's
+	// recent-index score. Reconcile loop goroutine only; no lock.
+	requiredContentCache  map[string]requiredContentCacheEntry
 	client                *cache.Client
 	server                *cache.Server
 	serverLock            *os.File

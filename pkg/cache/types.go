@@ -42,6 +42,8 @@ type ReconciliationConfig struct {
 	LockTTLSeconds        int   `key:"lockTTLSeconds" json:"lock_ttl_seconds"`
 	MaxStubsPerCycle      int   `key:"maxStubsPerCycle" json:"max_stubs_per_cycle"`
 	MaxItemsPerCycle      int   `key:"maxItemsPerCycle" json:"max_items_per_cycle"`
+	MaxBytesPerCycle      int64 `key:"maxBytesPerCycle" json:"max_bytes_per_cycle"`
+	MaxConcurrentFetches  int   `key:"maxConcurrentFetches" json:"max_concurrent_fetches"`
 	VolumeMinBytes        int64 `key:"volumeMinBytes" json:"volume_min_bytes"`
 	OriginFallbackEnabled bool  `key:"originFallbackEnabled" json:"origin_fallback_enabled"`
 	// MaxDiskUsagePct is the soft pressure watermark (0-1). Above it, the

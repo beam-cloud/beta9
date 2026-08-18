@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sync"
 
+	"golang.org/x/sync/errgroup"
+
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
 )
@@ -154,24 +156,38 @@ func fileExists(path string) bool {
 func (m *Manager) materializeChain(ctx context.Context, spec AttachSpec, layersDir string, source ChunkSource) (*volumeState, error) {
 	state := &volumeState{Key: spec.Key, VirtualSizeBytes: spec.VirtualSizeBytes, ReadOnly: spec.ReadOnly}
 
-	previousPath := ""
+	// Layers are independent objects; fetch them in parallel and link the
+	// chain afterwards.
+	localPaths := make([]string, len(spec.Chain))
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.SetLimit(layerFetchConcurrency)
 	for i, chainLayer := range spec.Chain {
 		if chainLayer.Layer == nil || chainLayer.SnapshotID == "" {
 			return nil, fmt.Errorf("chain layer %d for volume %s is incomplete", i, spec.Key)
 		}
-		localPath := filepath.Join(layersDir, fmt.Sprintf("%03d-%s.qcow2", i, chainLayer.SnapshotID))
-		if err := fetchLayer(ctx, source, chainLayer.Layer, localPath); err != nil {
-			return nil, fmt.Errorf("fetch layer %s: %w", chainLayer.SnapshotID, err)
-		}
+		localPaths[i] = filepath.Join(layersDir, fmt.Sprintf("%03d-%s.qcow2", i, chainLayer.SnapshotID))
+		group.Go(func() error {
+			if err := fetchLayer(groupCtx, source, chainLayer.Layer, localPaths[i]); err != nil {
+				return fmt.Errorf("fetch layer %s: %w", chainLayer.SnapshotID, err)
+			}
+			return nil
+		})
+	}
+	if err := group.Wait(); err != nil {
+		return nil, err
+	}
+
+	previousPath := ""
+	for i, chainLayer := range spec.Chain {
 		if i > 0 {
 			// Downloaded layers carry the origin host's backing path; repoint
 			// them at the local copy of their parent.
-			if err := m.rebaseQcow(ctx, localPath, previousPath); err != nil {
+			if err := m.rebaseQcow(ctx, localPaths[i], previousPath); err != nil {
 				return nil, err
 			}
 		}
-		state.Chain = append(state.Chain, stateLayer{SnapshotID: chainLayer.SnapshotID, Path: localPath})
-		previousPath = localPath
+		state.Chain = append(state.Chain, stateLayer{SnapshotID: chainLayer.SnapshotID, Path: localPaths[i]})
+		previousPath = localPaths[i]
 	}
 
 	if spec.ReadOnly {
