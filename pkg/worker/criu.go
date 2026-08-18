@@ -800,6 +800,9 @@ type CreateCheckpointOpts struct {
 	WaitForSignal            bool
 	TerminateAfterCheckpoint bool
 	CheckpointRuntime        string
+	// DiskSnapshots reports the durable disk snapshots captured alongside the
+	// memory image, so callers can pair the checkpoint with exact generations.
+	DiskSnapshots []*types.DiskSnapshot
 }
 
 func filesystemCheckpointFallbackAllowed(opts *CreateCheckpointOpts) bool {
@@ -862,7 +865,7 @@ func captureCheckpointFilesystem(ctx context.Context, instance *ContainerInstanc
 		}
 	}
 
-	upperDir := path.Join(filepath.Dir(instance.Overlay.TopLayerPath()), "upper")
+	upperDir := instance.Overlay.TopLayerUpperDir()
 	legacyPath := filepath.Join(checkpointPath, checkpointFsDir)
 	archivePath := filepath.Join(checkpointPath, checkpointFsArchive)
 	copyErr := copyDirectoryContext(ctx, upperDir, legacyPath, []string{"config.json", "outputs", "snapshot"})
@@ -1180,6 +1183,16 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 		if err = writeForcedRuncCheckpointProfile(checkpointPath, opts.Request, instance.Runtime); err != nil {
 			return err
 		}
+	}
+
+	// A checkpoint must never outrun its disks: capture every durable disk at
+	// the same boundary as the memory image so a restore pairs the two.
+	if opts.DiskSnapshots, err = s.syncDurableDiskMounts(checkpointCtx, opts.Request, durableDiskSyncExplicit); err != nil {
+		log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to snapshot durable disks with checkpoint: %v", err)
+		if opts.OutputLogger != nil {
+			opts.OutputLogger.Error(fmt.Sprintf("Failed to snapshot durable disks with checkpoint: %v", err))
+		}
+		return err
 	}
 
 	if opts.OutputLogger != nil {
@@ -2277,6 +2290,11 @@ func validateRestoredDurableDiskMounts(ctx context.Context, request *types.Conta
 func validateRestoredDurableDiskMountsAtRoot(mounts []types.Mount, containerRoot string) error {
 	for _, mount := range mounts {
 		if mount.DurableDisk == nil {
+			continue
+		}
+		if isQcowRootDiskMount(&mount) {
+			// The machine-root disk backs the overlay upper layer; it is never
+			// bind-mounted into the container.
 			continue
 		}
 		if !filepath.IsAbs(mount.LocalPath) || !filepath.IsAbs(mount.MountPath) {

@@ -17,6 +17,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/clients"
+	"github.com/beam-cloud/beta9/pkg/disk"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/rs/zerolog/log"
 
@@ -112,6 +113,8 @@ type Worker struct {
 	backendRepoClient       pb.BackendRepositoryServiceClient
 	eventRepo               repo.EventRepository
 	storageManager          *WorkspaceStorageManager
+	diskManager             *disk.Manager
+	qcowChainDepths         sync.Map
 	userDataStorage         storage.Storage
 	persistent              bool
 	routeTransport          string
@@ -579,6 +582,13 @@ func NewWorker() (_ *Worker, err error) {
 		userDataStorage:     userDataStorage,
 		persistent:          persistent,
 		routeTransport:      routeTransport,
+	}
+
+	// Recover qcow volumes left behind by a previous worker process before any
+	// container can attach: live volumes are adopted, crashed ones cleaned up.
+	worker.diskManager = disk.NewManager(disk.Config{})
+	if err := worker.diskManager.Recover(ctx); err != nil {
+		log.Warn().Err(err).Msg("failed to recover qcow durable disk volumes")
 	}
 
 	containerServer, err := NewContainerRuntimeServer(&ContainerRuntimeServerOpts{

@@ -677,6 +677,20 @@ message DurableDisk {
   string source_snapshot_id = 7;
 }
 
+// A durable machine-root disk. The container's entire root filesystem delta
+// lives on a qcow-backed volume mounted at "/", so disk snapshots capture the
+// whole machine state. Shorthand for a DurableDisk with mount_path "/" and
+// the qcow driver.
+message PersistentRoot {
+  string size = 1;
+  // Snapshot used to initialize the root with no snapshot history.
+  string source_snapshot_id = 2;
+  // Disk name backing the root. Disk snapshot history is keyed by this name
+  // within the workspace, so each machine wanting its own root lineage must
+  // use a distinct name (e.g. the machine id). Defaults to "root".
+  string name = 3;
+}
+
 message TaskPolicy {
   int64 timeout = 1;
   uint32 max_retries = 2;
@@ -738,6 +752,7 @@ message GetOrCreateStubRequest {
   types.CheckpointTrigger checkpoint_trigger = 46;
   // Hostname to set inside the container.
   string hostname = 47;
+  PersistentRoot persistent_root = 48;
 }
 
 message GetOrCreateStubResponse {

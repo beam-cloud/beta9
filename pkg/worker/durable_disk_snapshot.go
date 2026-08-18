@@ -370,7 +370,7 @@ func createDurableDiskDirectorySnapshot(ctx context.Context, store durableDiskSn
 		return nil, nil, nil
 	}
 
-	manifestKey := path.Join(objectPrefix, "manifest.json")
+	manifestKey := path.Join(objectPrefix, durableDiskManifestFileName)
 	manifestDigest, manifestSizeBytes, err := uploadDurableDiskSnapshotManifest(ctx, store, manifestKey, manifest)
 	if err != nil {
 		return nil, nil, err

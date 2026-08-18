@@ -336,6 +336,27 @@ class DurableDisk(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
+class PersistentRoot(betterproto.Message):
+    """
+    A durable machine-root disk. The container's entire root filesystem delta
+     lives on a qcow-backed volume mounted at "/", so disk snapshots capture the
+     whole machine state. Shorthand for a DurableDisk with mount_path "/" and
+     the qcow driver.
+    """
+
+    size: str = betterproto.string_field(1)
+    source_snapshot_id: str = betterproto.string_field(2)
+    """Snapshot used to initialize the root with no snapshot history."""
+
+    name: str = betterproto.string_field(3)
+    """
+    Disk name backing the root. Disk snapshot history is keyed by this name
+     within the workspace, so each machine wanting its own root lineage must
+     use a distinct name (e.g. the machine id). Defaults to "root".
+    """
+
+
+@dataclass(eq=False, repr=False)
 class TaskPolicy(betterproto.Message):
     timeout: int = betterproto.int64_field(1)
     max_retries: int = betterproto.uint32_field(2)
@@ -404,6 +425,8 @@ class GetOrCreateStubRequest(betterproto.Message):
     checkpoint_trigger: "_types__.CheckpointTrigger" = betterproto.message_field(46)
     hostname: str = betterproto.string_field(47)
     """Hostname to set inside the container."""
+
+    persistent_root: "PersistentRoot" = betterproto.message_field(48)
 
 
 @dataclass(eq=False, repr=False)

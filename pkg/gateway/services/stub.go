@@ -162,6 +162,23 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		Disks:              in.Disks,
 	}
 
+	// A persistent root is shorthand for a qcow machine-root disk: the
+	// container's overlay upper layer lives on the volume, so disk snapshots
+	// capture the whole machine filesystem.
+	if in.PersistentRoot != nil {
+		rootName := in.PersistentRoot.Name
+		if rootName == "" {
+			rootName = types.DurableDiskDefaultRootName
+		}
+		stubConfig.Disks = append(stubConfig.Disks, &pb.DurableDisk{
+			Name:             rootName,
+			Size:             in.PersistentRoot.Size,
+			MountPath:        types.DurableDiskRootMountPath,
+			Driver:           types.DurableDiskDriverQcow,
+			SourceSnapshotId: in.PersistentRoot.SourceSnapshotId,
+		})
+	}
+
 	// Ensure GPU count is at least 1 if a GPU is required
 	if stubConfig.RequiresGPU() && in.GpuCount == 0 {
 		stubConfig.Runtime.GpuCount = 1

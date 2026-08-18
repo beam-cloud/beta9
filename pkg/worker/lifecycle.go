@@ -641,7 +641,10 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	}
 
 	var filesystemRestore *checkpointFilesystemRestore
-	if s.canRestoreCheckpoint(request, s.runtime) {
+	// A machine-root disk hosts the upper layer, so the checkpoint filesystem
+	// cannot be staged in scratch space; it is reseeded onto the disk after
+	// mounts are prepared (see prepareRestoreFallback).
+	if s.canRestoreCheckpoint(request, s.runtime) && qcowRootDiskMount(request) == nil {
 		filesystemRestore = s.startCheckpointFilesystemRestore(request, outputLogger)
 	}
 	filesystemRestoreHandedOff := false
@@ -1416,6 +1419,11 @@ func (s *Worker) prepareRequestMount(request *types.ContainerRequest, mount *typ
 		if err := s.prepareDurableDiskMount(request, mount); err != nil {
 			return false, fmt.Errorf("failed to prepare durable disk mount: %w", err)
 		}
+		// A machine-root disk is not bind-mounted; it hosts the container's
+		// overlay upper layer instead (see SetupWithWritable below).
+		if isQcowRootDiskMount(mount) {
+			return false, nil
+		}
 		return true, nil
 	}
 
@@ -1582,7 +1590,17 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		}
 	}
 	phaseStart := time.Now()
-	err = containerInstance.Overlay.Setup()
+	if rootDisk := qcowRootDiskMount(request); rootDisk != nil {
+		// The whole machine filesystem persists: the overlay's writable layer
+		// lives on the qcow volume, so every root filesystem change is part of
+		// the disk snapshot.
+		err = containerInstance.Overlay.SetupWithWritable(
+			filepath.Join(rootDisk.LocalPath, "overlay", "upper"),
+			filepath.Join(rootDisk.LocalPath, "overlay", "work"),
+		)
+	} else {
+		err = containerInstance.Overlay.Setup()
+	}
 	metrics.RecordWorkerStartupPhase("overlay_setup", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleOverlaySetup, phaseStart, err == nil, nil)
 	if err != nil {
