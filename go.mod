@@ -5,6 +5,7 @@ go 1.25.7
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/Masterminds/squirrel v1.5.4
+	github.com/Thunder-Compute/thunder-sdk v0.1.0
 	github.com/VictoriaMetrics/metrics v1.37.0
 	github.com/alicebob/miniredis/v2 v2.30.5
 	github.com/aws/aws-sdk-go-v2 v1.42.1

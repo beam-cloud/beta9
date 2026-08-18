@@ -145,6 +145,7 @@ type agentConfigPool struct {
 	GPUType                   string                   `json:"gpuType"`
 	ContainerRuntime          string                   `json:"containerRuntime"`
 	ContainerRuntimeConfig    agentConfigRuntimeConfig `json:"containerRuntimeConfig"`
+	GPUVirtualized            bool                     `json:"gpuVirtualized"`
 	ContainerStartConcurrency int                      `json:"containerStartConcurrency"`
 	NetworkPreallocation      bool                     `json:"networkPreallocation"`
 	NetworkSlotPoolSize       int                      `json:"networkSlotPoolSize"`
@@ -309,6 +310,7 @@ func newAgentWorkerConfig(bootstrap bootstrapConfig, slot *pb.AgentWorkerSlot) a
 					GPUType:                   slot.Gpu,
 					ContainerRuntime:          poolRuntime,
 					ContainerRuntimeConfig:    agentRuntimeConfig,
+					GPUVirtualized:            poolConfig.GetGpuVirtualized(),
 					ContainerStartConcurrency: int(slot.ContainerStartConcurrency),
 					NetworkPreallocation:      networkPreallocation,
 					NetworkSlotPoolSize:       int(slot.NetworkSlotPoolSize),

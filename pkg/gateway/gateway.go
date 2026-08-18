@@ -44,6 +44,7 @@ import (
 	gatewayservices "github.com/beam-cloud/beta9/pkg/gateway/services"
 	computesvc "github.com/beam-cloud/beta9/pkg/gateway/services/compute"
 	repositoryservices "github.com/beam-cloud/beta9/pkg/gateway/services/repository"
+	thundersvc "github.com/beam-cloud/beta9/pkg/gateway/services/thunder"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	usage "github.com/beam-cloud/beta9/pkg/repository/usage"
@@ -392,6 +393,18 @@ func (g *Gateway) registerServices() error {
 	}
 	pb.RegisterSimpleQueueServiceServer(g.grpcServer, rq)
 
+	// Register Thunder service
+	ts, err := thundersvc.NewService(thundersvc.ServiceOpts{
+		RedisClient:         g.RedisClient,
+		ContainerRepo:       g.ContainerRepo,
+		WorkerRepo:          g.workerRepo,
+		AgentStateValidator: g.ComputeService,
+	})
+	if err != nil {
+		return err
+	}
+	pb.RegisterThunderServiceServer(g.grpcServer, ts)
+
 	// Register image service
 	is, err := image.NewContainerImageService(g.ctx, image.ImageServiceOpts{
 		Config:        g.Config,
@@ -587,6 +600,7 @@ func (g *Gateway) registerServices() error {
 		WorkerPoolRepo:   g.WorkerPoolRepo,
 		ComputeRepo:      g.ComputeRepo,
 		ComputeService:   g.ComputeService,
+		ThunderService:   ts,
 		UsageMetricsRepo: g.UsageMetricsRepo,
 		Tailscale:        g.Tailscale,
 	})

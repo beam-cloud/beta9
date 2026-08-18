@@ -1296,6 +1296,29 @@ class RequestAgentTransportCredentialResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
+class CreateNodeEnrollmentRequest(betterproto.Message):
+    agent_token: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class CreateNodeEnrollmentResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    error_msg: str = betterproto.string_field(2)
+    enrollment_token: str = betterproto.string_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class DeleteNodeEnrollmentRequest(betterproto.Message):
+    agent_token: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class DeleteNodeEnrollmentResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    error_msg: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
 class ListAgentRoutesRequest(betterproto.Message):
     agent_token: str = betterproto.string_field(1)
 
@@ -1844,6 +1867,19 @@ class AgentPoolRuntimeConfig(betterproto.Message):
     durable_disks_path: str = betterproto.string_field(7)
     cache: "AgentPoolCacheConfig" = betterproto.message_field(8)
     config_group: str = betterproto.string_field(9)
+    gpu_virtualized: bool = betterproto.bool_field(10)
+
+
+@dataclass(eq=False, repr=False)
+class GetAgentPoolVirtualizationRequest(betterproto.Message):
+    agent_token: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class GetAgentPoolVirtualizationResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    gpu_virtualized: bool = betterproto.bool_field(3)
 
 
 class GatewayServiceStub(SyncServiceStub):
@@ -2313,6 +2349,33 @@ class GatewayServiceStub(SyncServiceStub):
             RequestAgentTransportCredentialRequest,
             RequestAgentTransportCredentialResponse,
         )(request_agent_transport_credential_request)
+
+    def get_agent_pool_virtualization(
+        self, get_agent_pool_virtualization_request: "GetAgentPoolVirtualizationRequest"
+    ) -> "GetAgentPoolVirtualizationResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/GetAgentPoolVirtualization",
+            GetAgentPoolVirtualizationRequest,
+            GetAgentPoolVirtualizationResponse,
+        )(get_agent_pool_virtualization_request)
+
+    def create_node_enrollment(
+        self, create_node_enrollment_request: "CreateNodeEnrollmentRequest"
+    ) -> "CreateNodeEnrollmentResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/CreateNodeEnrollment",
+            CreateNodeEnrollmentRequest,
+            CreateNodeEnrollmentResponse,
+        )(create_node_enrollment_request)
+
+    def delete_node_enrollment(
+        self, delete_node_enrollment_request: "DeleteNodeEnrollmentRequest"
+    ) -> "DeleteNodeEnrollmentResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/DeleteNodeEnrollment",
+            DeleteNodeEnrollmentRequest,
+            DeleteNodeEnrollmentResponse,
+        )(delete_node_enrollment_request)
 
     def list_agent_routes(
         self, list_agent_routes_request: "ListAgentRoutesRequest"

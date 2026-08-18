@@ -1,12 +1,15 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"google.golang.org/grpc"
 	"tailscale.com/ipn/ipnstate"
 )
 
@@ -24,6 +27,60 @@ func (c *fakeTSNetStatusClient) Status(context.Context) (*ipnstate.Status, error
 func (c *fakeTSNetStatusClient) StatusWithoutPeers(context.Context) (*ipnstate.Status, error) {
 	c.calls = append(c.calls, "light")
 	return c.status, c.err
+}
+
+type fakeAgentPoolVirtualizationClient struct {
+	resp       *pb.GetAgentPoolVirtualizationResponse
+	err        error
+	agentToken string
+}
+
+func (c *fakeAgentPoolVirtualizationClient) GetAgentPoolVirtualization(ctx context.Context, in *pb.GetAgentPoolVirtualizationRequest, _ ...grpc.CallOption) (*pb.GetAgentPoolVirtualizationResponse, error) {
+	c.agentToken = in.GetAgentToken()
+	if c.err != nil {
+		return nil, c.err
+	}
+	return c.resp, nil
+}
+
+func TestRequestAgentPoolGPUVirtualizedUsesAgentTokenRPC(t *testing.T) {
+	client := &fakeAgentPoolVirtualizationClient{resp: &pb.GetAgentPoolVirtualizationResponse{Ok: true, GpuVirtualized: true}}
+
+	got, err := requestAgentPoolGPUVirtualized(context.Background(), client, "agent-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got {
+		t.Fatal("gpu virtualized = false, want true")
+	}
+	if client.agentToken != "agent-token" {
+		t.Fatalf("agent token = %q", client.agentToken)
+	}
+}
+
+func TestRequestAgentPoolGPUVirtualizedReturnsRPCError(t *testing.T) {
+	client := &fakeAgentPoolVirtualizationClient{resp: &pb.GetAgentPoolVirtualizationResponse{Ok: false, ErrMsg: "invalid agent token"}}
+
+	_, err := requestAgentPoolGPUVirtualized(context.Background(), client, "agent-token")
+	if err == nil || err.Error() != "invalid agent token" {
+		t.Fatalf("requestAgentPoolGPUVirtualized() error = %v", err)
+	}
+}
+
+func TestLogThunderNodeEnrollmentSkippedWritesStructuredWarningToProvidedWriter(t *testing.T) {
+	var stderr bytes.Buffer
+	logThunderNodeEnrollmentSkipped(&stderr, errors.New("gateway unavailable"))
+
+	got := stderr.String()
+	if !strings.Contains(got, `"level":"warn"`) {
+		t.Fatalf("missing warning level: %q", got)
+	}
+	if !strings.Contains(got, `"error":"gateway unavailable"`) {
+		t.Fatalf("missing error field: %q", got)
+	}
+	if !strings.Contains(got, `"message":"Thunder node enrollment skipped"`) {
+		t.Fatalf("missing message field: %q", got)
+	}
 }
 
 func TestTSNetSnapshotSuppressesTransientTimeouts(t *testing.T) {

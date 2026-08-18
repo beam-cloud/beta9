@@ -127,6 +127,24 @@ func (r *checkpointVolumeBackendRepo) GetOrCreateVolume(ctx context.Context, wor
 	return &types.Volume{ExternalId: "volume-123", WorkspaceId: workspaceId, Name: name}, nil
 }
 
+type getOrCreateStubBackendRepo struct {
+	repository.BackendRepository
+	stubConfig types.StubConfigV1
+}
+
+func (r *getOrCreateStubBackendRepo) GetOrCreateApp(ctx context.Context, workspaceId uint, appName string) (*types.App, error) {
+	return &types.App{Id: 3, WorkspaceId: workspaceId, Name: appName}, nil
+}
+
+func (r *getOrCreateStubBackendRepo) GetObjectByExternalId(ctx context.Context, externalId string, workspaceId uint) (types.Object, error) {
+	return types.Object{Id: 2, ExternalId: externalId, WorkspaceId: workspaceId}, nil
+}
+
+func (r *getOrCreateStubBackendRepo) GetOrCreateStub(ctx context.Context, name, stubType string, config types.StubConfigV1, objectId, workspaceId uint, forceCreate bool, appId uint) (types.Stub, error) {
+	r.stubConfig = config
+	return types.Stub{Id: 4, ExternalId: "stub-123", Name: name, Type: types.StubType(stubType), ObjectId: objectId, WorkspaceId: workspaceId, AppId: appId}, nil
+}
+
 func TestConfigureDurableDiskPlacementDefaultsSnapshotDriver(t *testing.T) {
 	config := &types.StubConfigV1{
 		Disks: []*pb.DurableDisk{{Name: "pg-data"}},

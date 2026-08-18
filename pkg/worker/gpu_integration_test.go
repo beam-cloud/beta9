@@ -1,12 +1,14 @@
 package worker
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
 	"testing"
 
 	common "github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/types"
 	"gvisor.dev/gvisor/pkg/sync"
 )
 
@@ -70,7 +72,7 @@ func TestIntegrationGPUIsolation(t *testing.T) {
 		resolvedVisibleDevices: resolved,
 	}
 
-	assigned, err := manager.AssignGPUDevices("test-container-1", 1)
+	assigned, err := manager.AssignGPUDevices(context.Background(), &types.ContainerRequest{ContainerId: "test-container-1", GpuCount: 1})
 	if err != nil {
 		t.Fatalf("AssignGPUDevices() failed: %v", err)
 	}
@@ -81,7 +83,7 @@ func TestIntegrationGPUIsolation(t *testing.T) {
 	}
 
 	// Step 7: Verify second allocation FAILS (only 1 GPU per worker)
-	_, err = manager.AssignGPUDevices("test-container-2", 1)
+	_, err = manager.AssignGPUDevices(context.Background(), &types.ContainerRequest{ContainerId: "test-container-2", GpuCount: 1})
 	if err == nil {
 		t.Fatal("Second allocation should fail — only 1 GPU per worker")
 	}

@@ -13,6 +13,8 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"github.com/rs/zerolog"
+	"google.golang.org/grpc"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tsnet"
 	"tailscale.com/types/key"
@@ -80,8 +82,20 @@ func runTSNetRouteProxy(ctx context.Context, client pb.GatewayServiceClient, age
 
 	hostname := credential.Hostname
 	if localClient, err := server.LocalClient(); err == nil {
-		if status, err := localClient.Status(ctx); err == nil && status.Self != nil && status.Self.DNSName != "" {
-			hostname = strings.TrimSuffix(status.Self.DNSName, ".")
+		if status, err := localClient.Status(ctx); err == nil {
+			if status.Self != nil && status.Self.DNSName != "" {
+				hostname = strings.TrimSuffix(status.Self.DNSName, ".")
+			}
+		}
+	}
+	poolVirtualized, err := requestAgentPoolGPUVirtualized(ctx, client, agentToken)
+	if err != nil {
+		logThunderNodeEnrollmentSkipped(stderr, err)
+	} else if poolVirtualized {
+		if err := setupThunderNode(ctx, client, agentToken, stdout, stderr); err != nil {
+			logThunderNodeEnrollmentSkipped(stderr, err)
+		} else {
+			defer deleteThunderNodeEnrollment(context.Background(), client, agentToken, stderr)
 		}
 	}
 
@@ -104,6 +118,14 @@ func runTSNetRouteProxy(ctx context.Context, client pb.GatewayServiceClient, age
 		go emitTSNetSnapshots(ctx, telemetry, localClient, proxyTarget)
 	}
 	return newRouteProxy(client, agentToken, machineID, listener, proxyTarget, workers, stdout, stderr).run(ctx)
+}
+
+func logThunderNodeEnrollmentSkipped(stderr io.Writer, err error) {
+	if stderr == nil {
+		stderr = io.Discard
+	}
+	logger := zerolog.New(stderr)
+	logger.Warn().Err(err).Msg("Thunder node enrollment skipped")
 }
 
 func emitTSNetSnapshots(ctx context.Context, telemetry *agentTelemetry, client tsnetStatusClient, proxyTarget string) {
@@ -312,6 +334,24 @@ func agentTSNetLogf(stderr io.Writer) func(string, ...any) {
 	return func(format string, args ...any) {
 		verbosef(stderr, format+"\n", args...)
 	}
+}
+
+type agentPoolVirtualizationGatewayClient interface {
+	GetAgentPoolVirtualization(context.Context, *pb.GetAgentPoolVirtualizationRequest, ...grpc.CallOption) (*pb.GetAgentPoolVirtualizationResponse, error)
+}
+
+func requestAgentPoolGPUVirtualized(ctx context.Context, client agentPoolVirtualizationGatewayClient, agentToken string) (bool, error) {
+	res, err := client.GetAgentPoolVirtualization(ctx, &pb.GetAgentPoolVirtualizationRequest{AgentToken: agentToken})
+	if err != nil {
+		return false, err
+	}
+	if res == nil {
+		return false, errors.New("gateway returned an empty pool virtualization response")
+	}
+	if !res.GetOk() {
+		return false, errors.New(firstNonEmpty(res.GetErrMsg(), "gateway rejected request"))
+	}
+	return res.GetGpuVirtualized(), nil
 }
 
 func requestTransportCredential(ctx context.Context, client pb.GatewayServiceClient, agentToken, transport string) (*transportCredentialResponse, error) {

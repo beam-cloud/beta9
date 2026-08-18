@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -47,9 +48,9 @@ var (
 )
 
 type GPUManager interface {
-	AssignGPUDevices(containerId string, gpuCount uint32) ([]int, error)
+	AssignGPUDevices(ctx context.Context, request *types.ContainerRequest) ([]int, error)
 	GetContainerGPUDevices(containerId string) []int
-	UnassignGPUDevices(containerId string)
+	UnassignGPUDevices(ctx context.Context, containerId string)
 	CDIDevices(assignedDevices []int) []string
 	InjectEnvVars(env []string) []string
 	InjectAssignedEnvVars(env []string, assignedDevices []int) []string
@@ -211,12 +212,12 @@ func nvidiaCDICommandError(output []byte, err error) string {
 type AssignedGpuDevices struct {
 }
 
-func (c *ContainerNvidiaManager) UnassignGPUDevices(containerId string) {
+func (c *ContainerNvidiaManager) UnassignGPUDevices(ctx context.Context, containerId string) {
 	c.gpuAllocationMap.Delete(containerId)
 }
 
-func (c *ContainerNvidiaManager) AssignGPUDevices(containerId string, gpuCount uint32) ([]int, error) {
-	gpuIds, err := c.chooseDevices(containerId, gpuCount)
+func (c *ContainerNvidiaManager) AssignGPUDevices(ctx context.Context, request *types.ContainerRequest) ([]int, error) {
+	gpuIds, err := c.chooseDevices(request.ContainerId, request.GpuCount)
 	if err != nil {
 		return nil, err
 	}

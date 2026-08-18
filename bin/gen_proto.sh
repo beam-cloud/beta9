@@ -109,6 +109,9 @@ protoc -I ./googleapis -I ./pkg/types -I ./pkg/gateway/ --python_betterproto_bet
 # Internal cache services
 protoc -I ./pkg/cache/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/cache/cache.proto
 
+# Thunder service
+protoc -I $PROTOC_INCLUDE_PATH -I ./googleapis -I ./pkg/types -I ./pkg/gateway/services/thunder/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/gateway/services/thunder/thunder.proto
+
 # Repository services
 protoc -I $PROTOC_INCLUDE_PATH -I ./googleapis -I ./pkg/types -I ./pkg/gateway/services/repository/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/gateway/services/repository/container_repo.proto
 protoc -I $PROTOC_INCLUDE_PATH -I ./googleapis -I ./pkg/types -I ./pkg/gateway/services/repository/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/gateway/services/repository/worker_repo.proto

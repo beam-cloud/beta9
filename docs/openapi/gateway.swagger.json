@@ -2593,6 +2593,9 @@
         },
         "configGroup": {
           "type": "string"
+        },
+        "gpuVirtualized": {
+          "type": "boolean"
         }
       }
     },
@@ -3160,6 +3163,20 @@
         }
       }
     },
+    "gatewayCreateNodeEnrollmentResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errorMsg": {
+          "type": "string"
+        },
+        "enrollmentToken": {
+          "type": "string"
+        }
+      }
+    },
     "gatewayCreateObjectRequest": {
       "type": "object",
       "properties": {
@@ -3337,6 +3354,17 @@
           "type": "boolean"
         },
         "errMsg": {
+          "type": "string"
+        }
+      }
+    },
+    "gatewayDeleteNodeEnrollmentResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errorMsg": {
           "type": "string"
         }
       }
@@ -3598,6 +3626,20 @@
         },
         "pool": {
           "$ref": "#/definitions/gatewayPrivatePool"
+        }
+      }
+    },
+    "gatewayGetAgentPoolVirtualizationResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        },
+        "gpuVirtualized": {
+          "type": "boolean"
         }
       }
     },

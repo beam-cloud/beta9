@@ -286,6 +286,15 @@ func (s *Service) bindJoinTokenFingerprint(ctx context.Context, tokenState *mode
 	return nil
 }
 
+// ResolveAgentState resolves an agent token to its current machine state.
+func (s *Service) ResolveAgentState(ctx context.Context, token string) (*model.AgentTokenState, error) {
+	agentState, errMsg := s.requireAgentState(ctx, token)
+	if errMsg != "" {
+		return nil, errors.New(errMsg)
+	}
+	return agentState, nil
+}
+
 // requireAgentState resolves an agent token to its current machine state,
 // returning a user-facing error message when the token is invalid or stale.
 // Shared by every agent-token-authenticated RPC in this file.
@@ -354,6 +363,19 @@ func (s *Service) RequestAgentTransportCredential(ctx context.Context, in *pb.Re
 		Hostname:   types.AgentTailnetHostnamePrefix + agentState.MachineID,
 		Ephemeral:  true,
 	}, nil
+}
+
+func (s *Service) GetAgentPoolVirtualization(ctx context.Context, in *pb.GetAgentPoolVirtualizationRequest) (*pb.GetAgentPoolVirtualizationResponse, error) {
+	agentState, errMsg := s.requireAgentState(ctx, in.GetAgentToken())
+	if errMsg != "" {
+		return &pb.GetAgentPoolVirtualizationResponse{Ok: false, ErrMsg: errMsg}, nil
+	}
+
+	gpuVirtualized, err := s.agentPoolGPUVirtualized(ctx, agentState)
+	if err != nil {
+		return &pb.GetAgentPoolVirtualizationResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+	return &pb.GetAgentPoolVirtualizationResponse{Ok: true, GpuVirtualized: gpuVirtualized}, nil
 }
 
 func (s *Service) StreamAgent(in *pb.StreamAgentRequest, stream pb.GatewayService_StreamAgentServer) error {
@@ -920,6 +942,7 @@ func agentPoolRuntimeConfigToProto(config *types.WorkerPoolConfig) *pb.AgentPool
 		ImagesPath:           config.ImagesPath,
 		DurableDisksPath:     config.DurableDisksPath,
 		ConfigGroup:          config.ConfigGroup,
+		GpuVirtualized:       config.GPUVirtualized,
 		Cache: &pb.AgentPoolCacheConfig{
 			Enabled: cacheEnabled,
 			Disk: &pb.AgentPoolCacheDiskConfig{
@@ -1093,6 +1116,17 @@ func (s *Service) agentBillingConfig(poolState *model.PoolState) *pb.AgentBillin
 		CostHookToken:     s.appConfig.Monitoring.ContainerCostHookConfig.Token,
 		BillableMarginPct: s.appConfig.ManagedCompute.BillableMarginPctOrDefault(),
 	}
+}
+
+func (s *Service) agentPoolGPUVirtualized(ctx context.Context, agentState *model.AgentTokenState) (bool, error) {
+	poolState, err := s.getAgentPoolState(ctx, agentState)
+	if err != nil {
+		return false, err
+	}
+	if poolState == nil || poolState.WorkerConfig == nil {
+		return false, errors.New("agent pool worker config is unavailable")
+	}
+	return poolState.WorkerConfig.GPUVirtualized, nil
 }
 
 func (s *Service) validateAgentTransportConfig(transport string) error {

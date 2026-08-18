@@ -2594,6 +2594,67 @@ func TestIsLocalGatewayURL(t *testing.T) {
 	}
 }
 
+func TestGetAgentPoolVirtualizationReportsGPUVirtualized(t *testing.T) {
+	workspaceID := "workspace-1"
+	poolName := "pool-1"
+	agentToken := "agent-token"
+	service := &Service{
+		appConfig: types.AppConfig{
+			Tailscale: types.TailscaleConfig{
+				Enabled:      true,
+				AuthKey:      "tskey-auth-gateway",
+				AgentAuthKey: "tskey-auth-worker",
+			},
+		},
+		computeRepo: &fakeComputeRepo{
+			pools: map[string][]*model.PoolState{
+				workspaceID: {
+					{
+						Name: poolName,
+						WorkerConfig: &types.WorkerPoolConfig{
+							GPUVirtualized: true,
+						},
+					},
+				},
+			},
+			machines: map[string][]*model.AgentTokenState{
+				fakeComputeKey(workspaceID, poolName): {
+					{
+						TokenHash:   hashComputeToken(agentToken),
+						WorkspaceID: workspaceID,
+						PoolName:    poolName,
+						MachineID:   "machine-1",
+					},
+				},
+			},
+		},
+	}
+
+	resp, err := service.GetAgentPoolVirtualization(context.Background(), &pb.GetAgentPoolVirtualizationRequest{AgentToken: agentToken})
+	if err != nil {
+		t.Fatalf("GetAgentPoolVirtualization() error = %v", err)
+	}
+	if !resp.GetOk() || !resp.GetGpuVirtualized() {
+		t.Fatalf("GetAgentPoolVirtualization() = %+v, want gpu virtualized", resp)
+	}
+}
+
+func TestAgentPoolGPUVirtualizedRequiresWorkerConfig(t *testing.T) {
+	service := &Service{computeRepo: &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{
+			"workspace-1": {{Name: "pool-1"}},
+		},
+	}}
+
+	_, err := service.agentPoolGPUVirtualized(context.Background(), &model.AgentTokenState{
+		WorkspaceID: "workspace-1",
+		PoolName:    "pool-1",
+	})
+	if err == nil || err.Error() != "agent pool worker config is unavailable" {
+		t.Fatalf("agentPoolGPUVirtualized() error = %v", err)
+	}
+}
+
 func TestValidateAgentTransportConfig(t *testing.T) {
 	s := &Service{
 		appConfig: types.AppConfig{
@@ -5927,6 +5988,7 @@ func TestAgentWorkerSlotStateCarriesMarketplaceModeAndRuntime(t *testing.T) {
 		ContainerStartConcurrency: 64,
 		NetworkSlotPoolSize:       128,
 		NetworkPreallocation:      &networkPreallocation,
+		GPUVirtualized:            true,
 		Priority:                  10,
 		CRIUEnabled:               false,
 		TmpSizeLimit:              "50Gi",
@@ -5954,6 +6016,7 @@ func TestAgentWorkerSlotStateCarriesMarketplaceModeAndRuntime(t *testing.T) {
 	}
 	if wireSlot.PoolConfig == nil ||
 		wireSlot.PoolConfig.NetworkPreallocation ||
+		!wireSlot.PoolConfig.GpuVirtualized ||
 		wireSlot.PoolConfig.CriuEnabled ||
 		wireSlot.PoolConfig.StoragePath != "/mnt/raid/storage" ||
 		wireSlot.PoolConfig.ImagesPath != "/mnt/raid/images" ||
