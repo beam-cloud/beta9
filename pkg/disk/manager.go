@@ -25,9 +25,8 @@ const (
 	// DefaultRoot is where volumes, layers, and runtime state live on a worker.
 	DefaultRoot = "/var/lib/beta9/qcow-disks"
 
-	// DefaultMaxChainDepth bounds the local backing chain. Deeper chains slow
-	// reads; when the cap is hit the container must be restarted, which
-	// reattaches from the (flattened) published chain.
+	// DefaultMaxChainDepth is a backstop on the local backing chain. Compact
+	// keeps chains shallow; the cap only trips if compaction keeps failing.
 	DefaultMaxChainDepth = 64
 
 	// DefaultFlattenDepth is the published chain length at which the adapter

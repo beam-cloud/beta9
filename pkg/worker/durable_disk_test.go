@@ -1312,6 +1312,40 @@ func TestQcowChainContentReportsEveryLayerAtHeadGeneration(t *testing.T) {
 	require.Equal(t, "snap-3", chain[0].row.ExternalId)
 }
 
+// A publish must skip uploading chunks the live chain's manifests already
+// reference: chunk objects are content-addressed and never deleted, and a
+// flattened publish overlaps heavily with the previous flatten.
+func TestQcowUploadChunksSkipsChunksKnownToTheChain(t *testing.T) {
+	chunk := func(hex string) types.DiskSnapshotChunk {
+		return types.DiskSnapshotChunk{
+			Digest:    "sha256:" + strings.Repeat(hex, 64),
+			ObjectKey: "durable-disks/machine-root/chunks/" + strings.Repeat(hex, 64),
+			SizeBytes: 4,
+		}
+	}
+	worker := &Worker{}
+	worker.qcowChains.Store("volume-key", []qcowChainEntry{{
+		row: &types.DiskSnapshot{ExternalId: "snap-1"},
+		manifest: &types.DiskSnapshotManifest{Files: []types.DiskSnapshotFile{{
+			Type: "file", Chunks: []types.DiskSnapshotChunk{chunk("a"), chunk("b")},
+		}}},
+	}})
+
+	layer := &types.DiskSnapshotFile{
+		Type:   "file",
+		Chunks: []types.DiskSnapshotChunk{chunk("a"), chunk("b"), chunk("c")},
+	}
+	upload := worker.qcowUploadChunks("volume-key", layer)
+	require.Len(t, upload.Chunks, 1)
+	require.Equal(t, chunk("c").ObjectKey, upload.Chunks[0].ObjectKey)
+	require.Len(t, layer.Chunks, 3, "the manifest layer must keep every chunk")
+
+	// An empty chain (first publish, or a worker that just restarted) skips
+	// nothing.
+	full := worker.qcowUploadChunks("other-volume", layer)
+	require.Len(t, full.Chunks, 3)
+}
+
 func TestRestoreDurableDiskDirectorySnapshotDownloadsChunksInParallel(t *testing.T) {
 	source := t.TempDir()
 	payload := []byte(strings.Repeat("parallel restore ", durableDiskRestoreConcurrency))

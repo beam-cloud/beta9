@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -21,6 +22,19 @@ type fakeQMP struct {
 	failPivots atomic.Bool
 	nodes      atomic.Value // []string
 	pivots     atomic.Int64
+
+	mu          sync.Mutex
+	images      map[string][]string // node -> backing chain filenames, head first
+	failCommits bool
+	commits     []fakeCommit
+	job         *fakeJob
+}
+
+type fakeCommit struct{ device, top, base string }
+
+type fakeJob struct {
+	id  string
+	err string
 }
 
 func newFakeQMP(t *testing.T, socketPath string) *fakeQMP {
@@ -29,11 +43,17 @@ func newFakeQMP(t *testing.T, socketPath string) *fakeQMP {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := &fakeQMP{listener: listener}
+	server := &fakeQMP{listener: listener, images: map[string][]string{}}
 	server.nodes.Store([]string{})
 	go server.serve()
 	t.Cleanup(func() { listener.Close() })
 	return server
+}
+
+func (f *fakeQMP) setImages(images map[string][]string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.images = images
 }
 
 func (f *fakeQMP) serve() {
@@ -67,11 +87,79 @@ func (f *fakeQMP) handle(conn net.Conn) {
 			// Listed nodes are reported as wired into a backing chain, which
 			// is what pivotCommitted uses to recognize a committed pivot.
 			nodes := f.nodes.Load().([]string)
-			entries := make([]string, 0, len(nodes))
+			entries := make([]map[string]any, 0, len(nodes))
+			f.mu.Lock()
 			for _, node := range nodes {
-				entries = append(entries, fmt.Sprintf(`{"node-name":%q,"file":"","backing_file_depth":1}`, node))
+				entry := map[string]any{"node-name": node, "file": "", "backing_file_depth": 1}
+				chain := f.images[node]
+				var image map[string]any
+				for i := len(chain) - 1; i >= 0; i-- {
+					next := map[string]any{"filename": chain[i]}
+					if image != nil {
+						next["backing-image"] = image
+					}
+					image = next
+				}
+				if image != nil {
+					entry["image"] = image
+				}
+				entries = append(entries, entry)
 			}
-			fmt.Fprintf(conn, `{"return":[%s]}`, strings.Join(entries, ","))
+			f.mu.Unlock()
+			payload, _ := json.Marshal(map[string]any{"return": entries})
+			conn.Write(payload)
+		case types.QMPCommandBlockCommit:
+			var args struct {
+				JobID  string `json:"job-id"`
+				Device string `json:"device"`
+				Top    string `json:"top"`
+				Base   string `json:"base"`
+			}
+			_ = json.Unmarshal(request.Arguments, &args)
+			f.mu.Lock()
+			f.commits = append(f.commits, fakeCommit{device: args.Device, top: args.Top, base: args.Base})
+			f.job = &fakeJob{id: args.JobID}
+			if f.failCommits {
+				f.job.err = "injected commit failure"
+			} else {
+				// Merge: drop every filename from top down to (but excluding)
+				// base from each node's chain.
+				for node, chain := range f.images {
+					merged := make([]string, 0, len(chain))
+					drop := false
+					for _, filename := range chain {
+						if filename == args.Base {
+							drop = false
+						}
+						if filename == args.Top {
+							drop = true
+						}
+						if !drop {
+							merged = append(merged, filename)
+						}
+					}
+					f.images[node] = merged
+				}
+			}
+			f.mu.Unlock()
+			fmt.Fprintf(conn, `{"return":{}}`)
+		case types.QMPCommandQueryJobs:
+			f.mu.Lock()
+			job := f.job
+			f.mu.Unlock()
+			switch {
+			case job == nil:
+				fmt.Fprintf(conn, `{"return":[]}`)
+			case job.err != "":
+				fmt.Fprintf(conn, `{"return":[{"id":%q,"status":"concluded","error":%q}]}`, job.id, job.err)
+			default:
+				fmt.Fprintf(conn, `{"return":[{"id":%q,"status":"concluded"}]}`, job.id)
+			}
+		case types.QMPCommandJobDismiss:
+			f.mu.Lock()
+			f.job = nil
+			f.mu.Unlock()
+			fmt.Fprintf(conn, `{"return":{}}`)
 		case types.QMPCommandTransaction:
 			if f.failPivots.Load() {
 				fmt.Fprintf(conn, `{"error":{"class":"GenericError","desc":"injected pivot failure"}}`)
@@ -275,6 +363,137 @@ func TestReusableState(t *testing.T) {
 	for _, tc := range cases {
 		if got := reusableState(tc.state, tc.spec); got != tc.want {
 			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// newCompactVolume returns a volume with three published layers and a live
+// graph reporting the full chain under the head.
+func newCompactVolume(t *testing.T) (*Volume, *fakeQMP, []string) {
+	t.Helper()
+	volume, server := newTestVolume(t)
+	layersDir := filepath.Join(volume.dir, layersSubdir)
+	paths := make([]string, 3)
+	for i, name := range []string{"a", "b", "c"} {
+		paths[i] = filepath.Join(layersDir, name+".qcow2")
+		if err := os.WriteFile(paths[i], []byte("qcow2-stub"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	volume.state.Chain = []stateLayer{
+		{SnapshotID: "snap-a", Path: paths[0]},
+		{SnapshotID: "snap-b", Path: paths[1]},
+		{SnapshotID: "snap-c", Path: paths[2]},
+	}
+	if err := saveVolumeState(volume.dir, volume.state); err != nil {
+		t.Fatal(err)
+	}
+	server.nodes.Store([]string{"fmt-0"})
+	server.setImages(map[string][]string{
+		"fmt-0": {volume.state.HeadPath, paths[2], paths[1], paths[0]},
+	})
+	return volume, server, paths
+}
+
+func TestCompactMergesPublishedChainIntoBase(t *testing.T) {
+	volume, server, paths := newCompactVolume(t)
+
+	if err := volume.Compact(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	server.mu.Lock()
+	commits := append([]fakeCommit{}, server.commits...)
+	server.mu.Unlock()
+	if len(commits) != 1 || commits[0] != (fakeCommit{device: "fmt-0", top: paths[2], base: paths[0]}) {
+		t.Fatalf("unexpected commit calls: %+v", commits)
+	}
+
+	// The base file carries the newest generation's ID; merged files are gone.
+	want := stateLayer{SnapshotID: "snap-c", Path: paths[0]}
+	if len(volume.state.Chain) != 1 || volume.state.Chain[0] != want {
+		t.Fatalf("chain not collapsed: %+v", volume.state.Chain)
+	}
+	if volume.Depth() != 2 {
+		t.Fatalf("depth is %d, expected base + head", volume.Depth())
+	}
+	reloaded, err := loadVolumeState(volume.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reloaded.Chain) != 1 || reloaded.Chain[0] != want {
+		t.Fatalf("collapsed chain not persisted: %+v", reloaded.Chain)
+	}
+	for _, path := range paths[1:] {
+		if fileExists(path) {
+			t.Fatalf("merged layer %s must be deleted", path)
+		}
+	}
+	if !fileExists(paths[0]) {
+		t.Fatal("base layer must survive compaction")
+	}
+}
+
+func TestCompactSkipsPendingAndShallowChains(t *testing.T) {
+	volume, server, _ := newCompactVolume(t)
+	volume.state.Pending = []stateLayer{{Path: "pending.qcow2"}}
+	if err := volume.Compact(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	volume.state.Pending = nil
+	volume.state.Chain = volume.state.Chain[:1]
+	if err := volume.Compact(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	if len(server.commits) != 0 {
+		t.Fatalf("no commit must be issued: %+v", server.commits)
+	}
+}
+
+// A crash between a completed commit and the state save leaves the live graph
+// already merged; the next Compact must adopt that result instead of running
+// a job whose top is no longer in the chain.
+func TestCompactAdoptsAlreadyMergedChain(t *testing.T) {
+	volume, server, paths := newCompactVolume(t)
+	server.setImages(map[string][]string{
+		"fmt-0": {volume.state.HeadPath, paths[0]},
+	})
+
+	if err := volume.Compact(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	server.mu.Lock()
+	commitCount := len(server.commits)
+	server.mu.Unlock()
+	if commitCount != 0 {
+		t.Fatal("adopting a merged chain must not issue a commit")
+	}
+	want := stateLayer{SnapshotID: "snap-c", Path: paths[0]}
+	if len(volume.state.Chain) != 1 || volume.state.Chain[0] != want {
+		t.Fatalf("chain not collapsed: %+v", volume.state.Chain)
+	}
+}
+
+func TestCompactSurfacesCommitFailure(t *testing.T) {
+	volume, server, paths := newCompactVolume(t)
+	server.mu.Lock()
+	server.failCommits = true
+	server.mu.Unlock()
+
+	if err := volume.Compact(context.Background()); err == nil {
+		t.Fatal("expected commit failure")
+	}
+	if len(volume.state.Chain) != 3 {
+		t.Fatalf("chain must be unchanged after a failed commit: %+v", volume.state.Chain)
+	}
+	for _, path := range paths {
+		if !fileExists(path) {
+			t.Fatalf("layer %s must survive a failed commit", path)
 		}
 	}
 }

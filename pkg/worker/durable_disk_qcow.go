@@ -168,6 +168,36 @@ func (s *Worker) reportQcowChainContent(request *types.ContainerRequest, chain [
 	}
 }
 
+// qcowUploadChunks returns a copy of layer without the chunks the live
+// chain's manifests already reference: chunk objects are content-addressed
+// and never deleted, so those are known to exist in the bucket. Flattened
+// publishes overlap heavily with the previous flatten, so this usually
+// reduces the periodic full-image publish to just the clusters that changed.
+func (s *Worker) qcowUploadChunks(key string, layer *types.DiskSnapshotFile) *types.DiskSnapshotFile {
+	existing := make(map[string]bool)
+	for _, entry := range s.qcowChain(key) {
+		if entry.manifest == nil {
+			continue
+		}
+		for _, file := range entry.manifest.Files {
+			for _, chunk := range file.Chunks {
+				existing[chunk.ObjectKey] = true
+			}
+		}
+	}
+	if len(existing) == 0 {
+		return layer
+	}
+	upload := *layer
+	upload.Chunks = nil
+	for _, chunk := range layer.Chunks {
+		if !existing[chunk.ObjectKey] {
+			upload.Chunks = append(upload.Chunks, chunk)
+		}
+	}
+	return &upload
+}
+
 // resolveQcowSnapshotChain walks ParentSnapshotId links from the newest
 // generation (or a seed snapshot for forks) back to a parentless root and
 // returns the rows base first.
@@ -249,6 +279,14 @@ func (s *Worker) snapshotQcowDurableDiskMount(ctx context.Context, request *type
 	volume, ok := s.diskManager.Volume(key)
 	if !ok {
 		return nil, fmt.Errorf("qcow durable disk %q is not attached", mount.DurableDisk.Name)
+	}
+
+	// Fold published layers into the base so a long-running machine can be
+	// snapshotted indefinitely without hitting the local chain depth cap.
+	if volume.Depth() > disk.DefaultFlattenDepth {
+		if err := volume.Compact(ctx); err != nil {
+			log.Warn().Err(err).Str("disk", mount.DurableDisk.Name).Msg("failed to compact qcow backing chain")
+		}
 	}
 
 	if err := s.ensureDurableDiskSnapshotStorage(ctx, request); err != nil {
@@ -335,9 +373,15 @@ func (s *Worker) publishQcowLayer(ctx context.Context, request *types.ContainerR
 	if err != nil {
 		return nil, nil, fmt.Errorf("scan qcow layer: %w", err)
 	}
+
+	upload := s.qcowUploadChunks(s.qcowVolumeKey(request, mount), layer)
 	sink := &qcowChunkSink{ctx: ctx, store: store}
-	if err := disk.UploadLayer(ctx, sink, uploadPath, layer); err != nil {
+	if err := disk.UploadLayer(ctx, sink, uploadPath, upload); err != nil {
 		return nil, nil, err
+	}
+	if skipped := len(layer.Chunks) - len(upload.Chunks); skipped > 0 {
+		log.Info().Str("disk", mount.DurableDisk.Name).Int("skipped", skipped).Int("total", len(layer.Chunks)).
+			Msg("skipped qcow chunks already present in the bucket")
 	}
 
 	generation, err := nextDurableDiskSnapshotGeneration(time.Now().UnixNano(), latest)

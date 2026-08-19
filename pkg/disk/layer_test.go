@@ -80,9 +80,16 @@ func TestLayerScanUploadFetchRoundTrip(t *testing.T) {
 	if len(layer.Chunks) == 0 {
 		t.Fatal("expected chunks")
 	}
-	for _, chunk := range layer.Chunks {
+	for i, chunk := range layer.Chunks {
 		if chunk.OffsetBytes >= 20*LayerChunkSize && chunk.OffsetBytes < 21*LayerChunkSize {
 			t.Fatalf("all-zero chunk at %d was not skipped", chunk.OffsetBytes)
+		}
+		// The parallel scan must keep chunks offset-ordered and densely indexed.
+		if chunk.Index != int64(i) {
+			t.Fatalf("chunk %d has index %d", i, chunk.Index)
+		}
+		if i > 0 && chunk.OffsetBytes <= layer.Chunks[i-1].OffsetBytes {
+			t.Fatalf("chunks out of order at %d", i)
 		}
 	}
 
@@ -109,6 +116,59 @@ func TestLayerScanUploadFetchRoundTrip(t *testing.T) {
 	}
 	if !bytes.Equal(source, restored) {
 		t.Fatal("restored layer differs from source")
+	}
+}
+
+// Content-defined boundaries must survive shifts: a flatten relocates
+// unchanged disk content within the qcow2 file, and publish dedup relies on
+// those bytes keeping their chunk hashes.
+func TestScanLayerChunksSurviveContentShift(t *testing.T) {
+	dir := t.TempDir()
+	base := make([]byte, 64<<20)
+	rand.Read(base)
+	pathA := filepath.Join(dir, "a.qcow2")
+	if err := os.WriteFile(pathA, base, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert 64 KiB at 8 MiB, shifting everything after it.
+	inserted := make([]byte, 64<<10)
+	rand.Read(inserted)
+	shifted := append(append(append([]byte{}, base[:8<<20]...), inserted...), base[8<<20:]...)
+	pathB := filepath.Join(dir, "b.qcow2")
+	if err := os.WriteFile(pathB, shifted, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	layerA, err := ScanLayer(pathA, chunkKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	layerB, err := ScanLayer(pathB, chunkKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	digestsA := map[string]bool{}
+	for _, chunk := range layerA.Chunks {
+		digestsA[chunk.Digest] = true
+	}
+	var sharedBytes, totalBytes int64
+	for _, chunk := range layerB.Chunks {
+		totalBytes += chunk.SizeBytes
+		if digestsA[chunk.Digest] {
+			sharedBytes += chunk.SizeBytes
+		}
+	}
+	if sharedBytes < totalBytes*3/4 {
+		t.Fatalf("only %d of %d bytes dedup after a 64KiB shift", sharedBytes, totalBytes)
+	}
+
+	// Chunk sizes must respect the configured bounds.
+	for _, chunk := range layerB.Chunks {
+		if chunk.SizeBytes > chunkMaxSize {
+			t.Fatalf("chunk of %d bytes exceeds the max", chunk.SizeBytes)
+		}
 	}
 }
 

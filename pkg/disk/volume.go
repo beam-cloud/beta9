@@ -296,7 +296,7 @@ func (v *Volume) Seal(ctx context.Context, force bool) ([]SealedLayer, bool, err
 	}
 
 	if state.depth() >= v.manager.maxChainDepth {
-		return nil, false, fmt.Errorf("volume %s reached the maximum chain depth of %d; restart the container to compact", state.Key, v.manager.maxChainDepth)
+		return nil, false, fmt.Errorf("volume %s reached the maximum chain depth of %d; compaction is failing or falling behind", state.Key, v.manager.maxChainDepth)
 	}
 
 	// Pre-create the empty overlay, then record the intent before asking the
@@ -445,6 +445,54 @@ func (v *Volume) MarkPublished(sealedPath, snapshotID string) error {
 // parentless image at destPath, used to bound published chain depth.
 func (v *Volume) Flatten(ctx context.Context, sealedPath, destPath string) error {
 	return v.manager.flattenQcow(ctx, sealedPath, destPath)
+}
+
+// Compact folds every published layer into the base image with a live
+// intermediate block-commit; the daemon keeps serving I/O. Pending layers are
+// deltas the publisher still needs byte-for-byte, so compaction waits until
+// the whole chain is published.
+func (v *Volume) Compact(ctx context.Context) error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	state := v.state
+	if !state.Attached || state.ReadOnly || len(state.Pending) > 0 || len(state.Chain) < 2 {
+		return nil
+	}
+	base, top := state.Chain[0], state.Chain[len(state.Chain)-1]
+
+	client, err := dialQMP(ctx, state.QMPSocket)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+
+	// The live graph decides what needs merging: a crash after a completed
+	// commit but before the state save leaves the files already merged.
+	live, err := client.backingFilenames(ctx, v.fmtNode)
+	if err != nil {
+		return err
+	}
+	if live[top.Path] {
+		if err := client.commitChain(ctx, v.fmtNode, top.Path, base.Path); err != nil {
+			return fmt.Errorf("compact volume %s: %w", state.Key, err)
+		}
+	} else if !live[base.Path] {
+		return fmt.Errorf("compact volume %s: neither %s nor %s is in the live chain", state.Key, top.Path, base.Path)
+	}
+
+	// The base file now holds the newest published generation in full. A
+	// partially committed base stays invisible behind the intact overlays, so
+	// merged files are deleted only after the collapsed state is durable.
+	merged := state.Chain[1:]
+	state.Chain = []stateLayer{{SnapshotID: top.SnapshotID, Path: base.Path}}
+	if err := saveVolumeState(v.dir, state); err != nil {
+		return err
+	}
+	for _, layer := range merged {
+		os.Remove(layer.Path)
+	}
+	log.Info().Str("volume", state.Key).Int("layers", len(merged)+1).Msg("compacted qcow backing chain")
+	return nil
 }
 
 // detach unmounts, disconnects, and stops the daemon. Layer files and state
