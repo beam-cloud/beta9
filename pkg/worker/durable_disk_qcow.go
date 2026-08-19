@@ -115,11 +115,57 @@ func (s *Worker) prepareQcowDurableDiskMount(request *types.ContainerRequest, mo
 	// The chain is rooted at its last parentless row, so its length is the
 	// generation count since the last flatten, which drives the periodic
 	// flattened publish that bounds restore chains.
-	s.qcowChainDepths.Store(s.qcowVolumeKey(request, mount), len(rows))
-	for i, row := range rows {
-		s.reportDurableDiskSnapshotContent(request, row, manifests[i])
+	entries := make([]qcowChainEntry, len(rows))
+	for i := range rows {
+		entries[i] = qcowChainEntry{row: rows[i], manifest: manifests[i]}
+	}
+	s.qcowChains.Store(s.qcowVolumeKey(request, mount), entries)
+	s.reportQcowChainContent(request, entries)
+	return nil
+}
+
+// qcowChainEntry is one published generation of a volume's live chain.
+type qcowChainEntry struct {
+	row      *types.DiskSnapshot
+	manifest *types.DiskSnapshotManifest
+}
+
+func (s *Worker) qcowChain(key string) []qcowChainEntry {
+	if value, ok := s.qcowChains.Load(key); ok {
+		chain, _ := value.([]qcowChainEntry)
+		return chain
 	}
 	return nil
+}
+
+// appendQcowChain records a newly published generation. A parentless row
+// (first generation or a flattened publish) is self-contained and supersedes
+// the whole previous chain.
+func (s *Worker) appendQcowChain(key string, entry qcowChainEntry) []qcowChainEntry {
+	chain := s.qcowChain(key)
+	if entry.row.ParentSnapshotId == "" {
+		chain = []qcowChainEntry{entry}
+	} else {
+		chain = append(chain, entry)
+	}
+	s.qcowChains.Store(key, chain)
+	return chain
+}
+
+// reportQcowChainContent reports every layer of the live chain tagged with
+// the head generation. Restores need the whole chain, and the recency index
+// keeps only a disk's newest generation, so tagging parents with the head
+// generation keeps them protected and locality-replicated until a flatten
+// (or newer chain) supersedes them; superseded and idle content then ages
+// out of the cache through the normal recency prune.
+func (s *Worker) reportQcowChainContent(request *types.ContainerRequest, chain []qcowChainEntry) {
+	if len(chain) == 0 {
+		return
+	}
+	head := chain[len(chain)-1].row.Generation
+	for _, entry := range chain {
+		s.reportDurableDiskSnapshotContentTagged(request, entry.row, entry.manifest, head)
+	}
 }
 
 // resolveQcowSnapshotChain walks ParentSnapshotId links from the newest
@@ -240,7 +286,7 @@ func (s *Worker) snapshotQcowDurableDiskMount(ctx context.Context, request *type
 		if err := volume.MarkPublished(layer.Path, row.ExternalId); err != nil {
 			return published, err
 		}
-		s.reportDurableDiskSnapshotContent(request, row, manifest)
+		s.reportQcowChainContent(request, s.appendQcowChain(key, qcowChainEntry{row: row, manifest: manifest}))
 		published, latest, parentID = row, row, row.ExternalId
 	}
 	return published, nil
@@ -267,11 +313,7 @@ func (s *Worker) latestQcowSnapshotRow(ctx context.Context, request *types.Conta
 // published chain is deep) plus its manifest, then creates the repository row.
 // The manifest upload is the durability boundary, mirroring the dir.v1 driver.
 func (s *Worker) publishQcowLayer(ctx context.Context, request *types.ContainerRequest, mount *types.Mount, volume *disk.Volume, store *durableDiskSnapshotBucketStore, sealedPath, parentID string, latest *types.DiskSnapshot) (*types.DiskSnapshot, *types.DiskSnapshotManifest, error) {
-	key := s.qcowVolumeKey(request, mount)
-	depth := 0
-	if value, ok := s.qcowChainDepths.Load(key); ok {
-		depth, _ = value.(int)
-	}
+	depth := len(s.qcowChain(s.qcowVolumeKey(request, mount)))
 
 	uploadPath := sealedPath
 	if parentID != "" && depth+1 >= disk.DefaultFlattenDepth {
@@ -359,12 +401,6 @@ func (s *Worker) publishQcowLayer(ctx context.Context, request *types.ContainerR
 		snapshot = created
 	}
 	reportDurableDiskProgress(ctx, durableDiskProgressEvent{})
-
-	if parentID == "" {
-		s.qcowChainDepths.Store(key, 1)
-	} else {
-		s.qcowChainDepths.Store(key, depth+1)
-	}
 	return snapshot, manifest, nil
 }
 

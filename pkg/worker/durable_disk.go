@@ -668,6 +668,15 @@ func durableDiskChunkPrefix(mount *types.Mount) string {
 }
 
 func (s *Worker) reportDurableDiskSnapshotContent(request *types.ContainerRequest, snapshot *types.DiskSnapshot, manifest *types.DiskSnapshotManifest) {
+	s.reportDurableDiskSnapshotContentTagged(request, snapshot, manifest, 0)
+}
+
+// reportDurableDiskSnapshotContentTagged reports a snapshot's content tagged
+// with chainGeneration instead of the snapshot's own generation. The recency
+// index keeps only a disk's newest generation; qcow layers are deltas, so
+// every layer of the live chain is tagged with the chain head's generation to
+// stay protected and replicated until the whole chain is superseded.
+func (s *Worker) reportDurableDiskSnapshotContentTagged(request *types.ContainerRequest, snapshot *types.DiskSnapshot, manifest *types.DiskSnapshotManifest, chainGeneration int64) {
 	if s == nil || s.cacheManager == nil || request == nil || snapshot == nil || manifest == nil {
 		return
 	}
@@ -678,6 +687,11 @@ func (s *Worker) reportDurableDiskSnapshotContent(request *types.ContainerReques
 	items := durableDiskSnapshotRequiredContentItems(snapshot, manifest)
 	if len(items) == 0 {
 		return
+	}
+	if chainGeneration > 0 {
+		for i := range items {
+			items[i].SnapshotGeneration = chainGeneration
+		}
 	}
 	reporter.reportItems(cacheRequestWorkspaceID(request), cacheRequestStubID(request), types.CacheContentKindDiskSnapshot, items)
 }

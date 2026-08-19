@@ -1251,6 +1251,68 @@ func TestDurableDiskSnapshotRequiredContentItems(t *testing.T) {
 	require.Equal(t, int64(7), items[1].SnapshotGeneration)
 }
 
+// Every layer of a live qcow chain must be reported at the chain head's
+// generation: the recency index keeps only a disk's newest generation, and
+// qcow layers are deltas, so tagging parents with their own generation would
+// evict content the chain still needs while stale chains age out.
+func TestQcowChainContentReportsEveryLayerAtHeadGeneration(t *testing.T) {
+	events := &fakeEventRepo{}
+	reporter := newTestReporter(events)
+	worker := &Worker{cacheManager: &WorkerCacheManager{reporter: reporter}}
+	request := &types.ContainerRequest{WorkspaceId: "workspace", StubId: "stub"}
+
+	entry := func(id string, generation int64, parentID, manifestHex, chunkHex string) qcowChainEntry {
+		return qcowChainEntry{
+			row: &types.DiskSnapshot{
+				ExternalId:        id,
+				BucketName:        "bucket",
+				DiskName:          "machine-root",
+				Generation:        generation,
+				ParentSnapshotId:  parentID,
+				ManifestKey:       fmt.Sprintf("durable-disks/machine-root/snapshots/%d/manifest.json", generation),
+				ManifestDigest:    "sha256:" + strings.Repeat(manifestHex, 64),
+				ManifestSizeBytes: 64,
+			},
+			manifest: &types.DiskSnapshotManifest{Files: []types.DiskSnapshotFile{{
+				Type: "file",
+				Chunks: []types.DiskSnapshotChunk{{
+					Digest:    "sha256:" + strings.Repeat(chunkHex, 64),
+					ObjectKey: "durable-disks/machine-root/chunks/" + strings.Repeat(chunkHex, 64),
+					SizeBytes: 4,
+				}},
+			}}},
+		}
+	}
+
+	worker.qcowChains.Store("volume-key", []qcowChainEntry{
+		entry("snap-1", 100, "", "1", "2"),
+		entry("snap-2", 200, "snap-1", "3", "4"),
+	})
+	worker.reportQcowChainContent(request, worker.qcowChain("volume-key"))
+	reporter.flush()
+
+	events.mu.Lock()
+	hashes := map[string]int64{}
+	for _, schema := range events.pushed {
+		for _, item := range schema.Items {
+			hashes[item.Hash] = item.SnapshotGeneration
+		}
+	}
+	events.mu.Unlock()
+	require.Len(t, hashes, 4, "manifest and chunk items of both layers must be reported")
+	for hash, generation := range hashes {
+		require.Equal(t, int64(200), generation, "item %s must carry the chain head generation", hash)
+	}
+
+	// A parentless publish (first generation or a flatten) is self-contained
+	// and supersedes the whole previous chain; deltas append to it.
+	chain := worker.appendQcowChain("volume-key", entry("snap-3", 300, "", "5", "6"))
+	require.Len(t, chain, 1)
+	chain = worker.appendQcowChain("volume-key", entry("snap-4", 400, "snap-3", "7", "8"))
+	require.Len(t, chain, 2)
+	require.Equal(t, "snap-3", chain[0].row.ExternalId)
+}
+
 func TestRestoreDurableDiskDirectorySnapshotDownloadsChunksInParallel(t *testing.T) {
 	source := t.TempDir()
 	payload := []byte(strings.Repeat("parallel restore ", durableDiskRestoreConcurrency))

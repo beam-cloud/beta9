@@ -114,7 +114,7 @@ type Worker struct {
 	eventRepo               repo.EventRepository
 	storageManager          *WorkspaceStorageManager
 	diskManager             *disk.Manager
-	qcowChainDepths         sync.Map
+	qcowChains              sync.Map // live published qcow chain (rows + manifests) per volume key
 	userDataStorage         storage.Storage
 	persistent              bool
 	routeTransport          string
