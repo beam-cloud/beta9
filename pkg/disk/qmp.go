@@ -11,8 +11,8 @@ import (
 )
 
 // qmpClient is a minimal QMP client for qemu-storage-daemon. It supports the
-// handshake plus the three commands the disk engine needs: transactional
-// snapshots, graph queries (recovery), and quit.
+// handshake plus the commands the disk engine needs: transactional snapshots,
+// commit jobs (compaction), graph queries (recovery), and quit.
 type qmpClient struct {
 	conn net.Conn
 	dec  *json.Decoder
@@ -138,12 +138,80 @@ func (c *qmpClient) pivot(ctx context.Context, nodeName, overlayNode string) err
 	return err
 }
 
+// commitChain runs an intermediate block-commit merging every layer between
+// base and top (inclusive) down into base, identified by filename within
+// device's backing chain, and waits for the job to conclude. The head keeps
+// serving I/O throughout; on completion the daemon drops the merged layers
+// from the graph and re-parents the layer above top onto base.
+func (c *qmpClient) commitChain(ctx context.Context, device, topPath, basePath string) error {
+	jobID := fmt.Sprintf("commit-%d", time.Now().UnixNano())
+	if _, err := c.execute(ctx, types.QMPCommandBlockCommit, map[string]any{
+		"job-id":       jobID,
+		"device":       device,
+		"top":          topPath,
+		"base":         basePath,
+		"auto-dismiss": false,
+	}); err != nil {
+		return err
+	}
+	return c.waitForJob(ctx, jobID)
+}
+
+// waitForJob polls until the job concludes (commit jobs finalize on their
+// own; with auto-dismiss off, concluded is their terminal state), dismisses
+// it, and returns its error.
+func (c *qmpClient) waitForJob(ctx context.Context, jobID string) error {
+	for {
+		raw, err := c.execute(ctx, types.QMPCommandQueryJobs, nil)
+		if err != nil {
+			return err
+		}
+		var jobs []struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+			Error  string `json:"error"`
+		}
+		if err := json.Unmarshal(raw, &jobs); err != nil {
+			return err
+		}
+		var status string
+		for _, job := range jobs {
+			if job.ID == jobID {
+				status = job.Status
+				if status == "concluded" {
+					_, _ = c.execute(ctx, types.QMPCommandJobDismiss, map[string]any{"id": jobID})
+					if job.Error != "" {
+						return fmt.Errorf("job %s: %s", jobID, job.Error)
+					}
+					return nil
+				}
+				break
+			}
+		}
+		if status == "" {
+			return fmt.Errorf("job %s disappeared before concluding", jobID)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(pollInterval):
+		}
+	}
+}
+
 // qmpNode is one entry of query-named-block-nodes. BackingFileDepth counts
 // runtime backing links: an overlay added with backing=null reports zero
 // until a pivot wires it, which is what recovery uses to tell a committed
 // pivot from a dangling add.
 type qmpNode struct {
-	BackingFileDepth int `json:"backing_file_depth"`
+	BackingFileDepth int      `json:"backing_file_depth"`
+	Image            qmpImage `json:"image"`
+}
+
+// qmpImage mirrors the recursive ImageInfo the daemon reports per node.
+type qmpImage struct {
+	Filename     string    `json:"filename"`
+	BackingImage *qmpImage `json:"backing-image"`
 }
 
 // namedBlockNodes returns all named nodes in the daemon's graph, used during
@@ -165,6 +233,24 @@ func (c *qmpClient) namedBlockNodes(ctx context.Context) (map[string]qmpNode, er
 		result[node.NodeName] = node.qmpNode
 	}
 	return result, nil
+}
+
+// backingFilenames returns the image filenames in nodeName's live backing
+// chain, the node's own file included.
+func (c *qmpClient) backingFilenames(ctx context.Context, nodeName string) (map[string]bool, error) {
+	nodes, err := c.namedBlockNodes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	node, ok := nodes[nodeName]
+	if !ok {
+		return nil, fmt.Errorf("node %s not found in block graph", nodeName)
+	}
+	filenames := make(map[string]bool)
+	for image := &node.Image; image != nil; image = image.BackingImage {
+		filenames[image.Filename] = true
+	}
+	return filenames, nil
 }
 
 // writtenBytes reports whether anything was written to a node since the

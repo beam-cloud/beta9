@@ -26,4 +26,7 @@ const (
 	QMPCommandTransaction          = "transaction"
 	QMPCommandQueryBlockstats      = "query-blockstats"
 	QMPCommandQueryNamedBlockNodes = "query-named-block-nodes"
+	QMPCommandBlockCommit          = "block-commit"
+	QMPCommandQueryJobs            = "query-jobs"
+	QMPCommandJobDismiss           = "job-dismiss"
 )

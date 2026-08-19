@@ -251,6 +251,15 @@ func (s *Worker) snapshotQcowDurableDiskMount(ctx context.Context, request *type
 		return nil, fmt.Errorf("qcow durable disk %q is not attached", mount.DurableDisk.Name)
 	}
 
+	// A live intermediate commit folds published layers into the base, so a
+	// long-running machine can be snapshotted indefinitely without the local
+	// backing chain hitting the depth cap.
+	if volume.Depth() > disk.DefaultFlattenDepth {
+		if err := volume.Compact(ctx); err != nil {
+			log.Warn().Err(err).Str("disk", mount.DurableDisk.Name).Msg("failed to compact qcow backing chain")
+		}
+	}
+
 	if err := s.ensureDurableDiskSnapshotStorage(ctx, request); err != nil {
 		return nil, err
 	}

@@ -14,13 +14,13 @@ import (
 )
 
 // Node names inside each daemon's block graph. One daemon serves exactly one
-// volume, so the names are constant. The export points at a raw wrapper node:
-// pivots re-parent the qcow2 node underneath it, which keeps the NBD export
-// stable across snapshots.
+// volume. The NBD export attaches directly to the active qcow2 node: a pivot
+// (blockdev-snapshot) re-parents every user of the old head onto the overlay,
+// so the export follows each new head automatically, and the head stays a
+// root node, which block-commit requires for live chain compaction.
 const (
 	qsdFileNodePrefix = "file-"
 	qsdFmtNodePrefix  = "fmt-"
-	qsdRootNode       = "root"
 	qsdExportName     = "vol"
 
 	qsdStartTimeout = 15 * time.Second
@@ -64,9 +64,6 @@ func (m *Manager) startQSD(ctx context.Context, runtimeDir, headPath, fmtNode st
 	fmtBlockdev, _ := json.Marshal(map[string]any{
 		"driver": "qcow2", "file": qsdFileNodePrefix + fmtNode, "node-name": fmtNode, "read-only": readOnly,
 	})
-	rootBlockdev, _ := json.Marshal(map[string]any{
-		"driver": "raw", "file": fmtNode, "node-name": qsdRootNode, "read-only": readOnly,
-	})
 
 	args := []string{
 		"--daemonize",
@@ -75,9 +72,8 @@ func (m *Manager) startQSD(ctx context.Context, runtimeDir, headPath, fmtNode st
 		"--monitor", "chardev=qmp0",
 		"--blockdev", string(fileBlockdev),
 		"--blockdev", string(fmtBlockdev),
-		"--blockdev", string(rootBlockdev),
 		"--nbd-server", fmt.Sprintf("addr.type=unix,addr.path=%s", nbdSocket),
-		"--export", fmt.Sprintf("type=nbd,id=%s,node-name=%s,name=%s,writable=%s", qsdExportName, qsdRootNode, qsdExportName, boolOnOff(!readOnly)),
+		"--export", fmt.Sprintf("type=nbd,id=%s,node-name=%s,name=%s,writable=%s", qsdExportName, fmtNode, qsdExportName, boolOnOff(!readOnly)),
 	}
 
 	if output, err := exec.CommandContext(ctx, m.binaries.QSD, args...).CombinedOutput(); err != nil {
