@@ -381,7 +381,7 @@ func (s *Worker) snapshotDurableDiskMount(ctx context.Context, request *types.Co
 
 	recordPublishedDurableDiskMarker(mount, snapshot)
 
-	s.reportDurableDiskSnapshotContent(request, snapshot, manifest)
+	s.reportDurableDiskSnapshotContent(request, snapshot, manifest, 0)
 	return snapshot, nil
 }
 
@@ -520,7 +520,7 @@ func (s *Worker) restoreDurableDiskSnapshot(request *types.ContainerRequest, mou
 		_ = os.RemoveAll(mount.LocalPath)
 		return fmt.Errorf("restore durable disk snapshot %s produced an invalid payload", snapshot.ExternalId)
 	}
-	s.reportDurableDiskSnapshotContent(request, snapshot, manifest)
+	s.reportDurableDiskSnapshotContent(request, snapshot, manifest, 0)
 	log.Info().
 		Str("disk", mount.DurableDisk.Name).
 		Int64("bytes", snapshot.LogicalSizeBytes).
@@ -667,7 +667,10 @@ func durableDiskChunkPrefix(mount *types.Mount) string {
 	return path.Join(durableDiskObjectRoot, types.SafeDurableDiskName(mount.DurableDisk.Name), "chunks")
 }
 
-func (s *Worker) reportDurableDiskSnapshotContent(request *types.ContainerRequest, snapshot *types.DiskSnapshot, manifest *types.DiskSnapshotManifest) {
+// reportDurableDiskSnapshotContent registers a snapshot's manifest and chunks
+// as required content. A non-zero chainGeneration overrides the generation the
+// items are tagged with (see reportQcowChainContent).
+func (s *Worker) reportDurableDiskSnapshotContent(request *types.ContainerRequest, snapshot *types.DiskSnapshot, manifest *types.DiskSnapshotManifest, chainGeneration int64) {
 	if s == nil || s.cacheManager == nil || request == nil || snapshot == nil || manifest == nil {
 		return
 	}
@@ -678,6 +681,11 @@ func (s *Worker) reportDurableDiskSnapshotContent(request *types.ContainerReques
 	items := durableDiskSnapshotRequiredContentItems(snapshot, manifest)
 	if len(items) == 0 {
 		return
+	}
+	if chainGeneration > 0 {
+		for i := range items {
+			items[i].SnapshotGeneration = chainGeneration
+		}
 	}
 	reporter.reportItems(cacheRequestWorkspaceID(request), cacheRequestStubID(request), types.CacheContentKindDiskSnapshot, items)
 }

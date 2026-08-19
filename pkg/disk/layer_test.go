@@ -95,7 +95,7 @@ func TestLayerScanUploadFetchRoundTrip(t *testing.T) {
 	}
 
 	destPath := filepath.Join(dir, "restored.qcow2")
-	if err := fetchLayer(context.Background(), store, layer, destPath); err != nil {
+	if err := fetchLayer(context.Background(), store, layer, destPath, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -109,6 +109,81 @@ func TestLayerScanUploadFetchRoundTrip(t *testing.T) {
 	}
 	if !bytes.Equal(source, restored) {
 		t.Fatal("restored layer differs from source")
+	}
+}
+
+// blockingChunkStore records peak concurrent ReadChunk calls.
+type blockingChunkStore struct {
+	*memoryChunkStore
+	mu       sync.Mutex
+	inflight int
+	peak     int
+}
+
+func (s *blockingChunkStore) ReadChunk(ctx context.Context, chunk types.DiskSnapshotChunk, dest []byte) error {
+	s.mu.Lock()
+	s.inflight++
+	if s.inflight > s.peak {
+		s.peak = s.inflight
+	}
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.inflight--
+		s.mu.Unlock()
+	}()
+	return s.memoryChunkStore.ReadChunk(ctx, chunk, dest)
+}
+
+func TestFetchLayerSharesChunkGateAcrossLayers(t *testing.T) {
+	dir := t.TempDir()
+	sourcePath := filepath.Join(dir, "layer.qcow2")
+	data := make([]byte, 40*LayerChunkSize)
+	rand.Read(data)
+	if err := os.WriteFile(sourcePath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	layer, err := ScanLayer(sourcePath, chunkKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(layer.Chunks) < 20 {
+		t.Fatalf("expected a multi-chunk layer, got %d", len(layer.Chunks))
+	}
+
+	store := &blockingChunkStore{memoryChunkStore: newMemoryChunkStore()}
+	if err := UploadLayer(context.Background(), store, sourcePath, layer); err != nil {
+		t.Fatal(err)
+	}
+
+	// A single layer must saturate the whole shared budget, not a per-layer slice.
+	gate := newChunkGate(chunkFetchConcurrency)
+	if err := fetchLayer(context.Background(), store, layer, filepath.Join(dir, "a.qcow2"), gate); err != nil {
+		t.Fatal(err)
+	}
+	if store.peak > chunkFetchConcurrency {
+		t.Fatalf("peak concurrency %d exceeded budget %d", store.peak, chunkFetchConcurrency)
+	}
+
+	// Two layers sharing one gate stay within the same budget.
+	store.peak = 0
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	for i := range errs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs[i] = fetchLayer(context.Background(), store, layer, filepath.Join(dir, fmt.Sprintf("b%d.qcow2", i)), gate)
+		}()
+	}
+	wg.Wait()
+	for _, err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if store.peak > chunkFetchConcurrency {
+		t.Fatalf("shared gate exceeded budget: peak %d", store.peak)
 	}
 }
 
@@ -134,7 +209,7 @@ func TestFetchLayerRejectsCorruptChunks(t *testing.T) {
 	}
 
 	destPath := filepath.Join(dir, "restored.qcow2")
-	if err := fetchLayer(context.Background(), store, layer, destPath); err == nil {
+	if err := fetchLayer(context.Background(), store, layer, destPath, nil); err == nil {
 		t.Fatal("expected digest mismatch error")
 	}
 	if _, err := os.Stat(destPath); !os.IsNotExist(err) {

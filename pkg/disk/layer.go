@@ -24,8 +24,14 @@ const (
 	// LayerFileName is the single logical file inside a qcow.v1 manifest.
 	LayerFileName = "layer.qcow2"
 
-	uploadConcurrency     = 16
-	fetchConcurrency      = 8
+	uploadConcurrency = 16
+	// chunkFetchConcurrency bounds in-flight chunk fetches across every layer
+	// of a chain. It is shared rather than per-layer so a chain dominated by
+	// one large layer gets the same parallelism as a deep one, and a deep
+	// chain does not multiply into hundreds of concurrent requests. Each
+	// in-flight chunk holds a LayerChunkSize buffer, so this also caps
+	// restore memory (32 * 4 MiB = 128 MiB).
+	chunkFetchConcurrency = 32
 	layerFetchConcurrency = 4
 )
 
@@ -126,10 +132,39 @@ func UploadLayer(ctx context.Context, sink ChunkSink, path string, layer *types.
 	return group.Wait()
 }
 
+// chunkGate bounds concurrent chunk fetches. A nil gate is unbounded.
+type chunkGate chan struct{}
+
+func newChunkGate(limit int) chunkGate {
+	if limit <= 0 {
+		return nil
+	}
+	return make(chunkGate, limit)
+}
+
+func (g chunkGate) acquire(ctx context.Context) error {
+	if g == nil {
+		return nil
+	}
+	select {
+	case g <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (g chunkGate) release() {
+	if g != nil {
+		<-g
+	}
+}
+
 // fetchLayer reassembles a layer file from its chunks. The result is written
 // to a temporary file and atomically renamed, so a crashed fetch never leaves
-// a truncated layer behind.
-func fetchLayer(ctx context.Context, source ChunkSource, layer *types.DiskSnapshotFile, destPath string) error {
+// a truncated layer behind. Chunk parallelism is bounded by gate, which the
+// caller shares across all layers of a chain.
+func fetchLayer(ctx context.Context, source ChunkSource, layer *types.DiskSnapshotFile, destPath string, gate chunkGate) error {
 	tmpPath := destPath + ".tmp"
 	file, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
@@ -143,10 +178,17 @@ func fetchLayer(ctx context.Context, source ChunkSource, layer *types.DiskSnapsh
 		return err
 	}
 
+	if gate == nil {
+		gate = newChunkGate(chunkFetchConcurrency)
+	}
 	group, groupCtx := errgroup.WithContext(ctx)
-	group.SetLimit(fetchConcurrency)
 	for _, chunk := range layer.Chunks {
 		group.Go(func() error {
+			if err := gate.acquire(groupCtx); err != nil {
+				return err
+			}
+			defer gate.release()
+
 			data := make([]byte, chunk.SizeBytes)
 			if err := source.ReadChunk(groupCtx, chunk, data); err != nil {
 				return fmt.Errorf("fetch chunk %s: %w", chunk.Digest, err)
