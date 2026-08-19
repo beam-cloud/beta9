@@ -153,18 +153,18 @@ func (s *Worker) appendQcowChain(key string, entry qcowChainEntry) []qcowChainEn
 }
 
 // reportQcowChainContent reports every layer of the live chain tagged with
-// the head generation. Restores need the whole chain, and the recency index
-// keeps only a disk's newest generation, so tagging parents with the head
-// generation keeps them protected and locality-replicated until a flatten
-// (or newer chain) supersedes them; superseded and idle content then ages
-// out of the cache through the normal recency prune.
+// the head generation. The recency index keeps only a disk's newest
+// generation, and qcow layers are deltas: tagging parents with the head
+// generation keeps the whole restore chain protected and locality-replicated
+// until a flatten or newer chain supersedes it, at which point the old chain
+// ages out through the normal recency prune.
 func (s *Worker) reportQcowChainContent(request *types.ContainerRequest, chain []qcowChainEntry) {
 	if len(chain) == 0 {
 		return
 	}
 	head := chain[len(chain)-1].row.Generation
 	for _, entry := range chain {
-		s.reportDurableDiskSnapshotContentTagged(request, entry.row, entry.manifest, head)
+		s.reportDurableDiskSnapshotContent(request, entry.row, entry.manifest, head)
 	}
 }
 

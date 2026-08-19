@@ -478,7 +478,7 @@ func TestDurabilityReportingNeverBlocksCheckpointOrDiskPublication(t *testing.T)
 			BucketName: "bucket", ManifestKey: "disk/manifest.json", ManifestDigest: "sha256:manifest", ManifestSizeBytes: 10,
 		}, &types.DiskSnapshotManifest{Files: []types.DiskSnapshotFile{{
 			Type: "file", Chunks: []types.DiskSnapshotChunk{{Digest: "sha256:chunk", ObjectKey: "disk/chunks/chunk", SizeBytes: 4}},
-		}}})
+		}}}, 0)
 		close(done)
 	}()
 
@@ -1252,9 +1252,8 @@ func TestDurableDiskSnapshotRequiredContentItems(t *testing.T) {
 }
 
 // Every layer of a live qcow chain must be reported at the chain head's
-// generation: the recency index keeps only a disk's newest generation, and
-// qcow layers are deltas, so tagging parents with their own generation would
-// evict content the chain still needs while stale chains age out.
+// generation; tagging parents with their own generation would let the recency
+// index evict deltas the chain still needs.
 func TestQcowChainContentReportsEveryLayerAtHeadGeneration(t *testing.T) {
 	events := &fakeEventRepo{}
 	reporter := newTestReporter(events)
