@@ -582,7 +582,7 @@ func (m *WorkerCacheManager) reconcileStubContent(server *cache.Server, localHos
 			if item.CheckpointID != "" {
 				checkpointIDs = append(checkpointIDs, item.CheckpointID)
 			}
-		} else if !m.localHostOwnsForReconcile(localHostID, routingKey) {
+		} else if !reconcileOnEveryHost(item.Kind) && !m.localHostOwnsForReconcile(localHostID, routingKey) {
 			continue
 		}
 
@@ -615,6 +615,16 @@ func (m *WorkerCacheManager) reconcileStubContent(server *cache.Server, localHos
 		})
 	}
 	return checkpointIDs
+}
+
+// reconcileOnEveryHost reports whether a content kind replicates to every host
+// in the locality instead of sharding by ring owner. Checkpoints and disk
+// snapshot chunks are what a machine restore reads, and the client prefers
+// local stores, so full replication makes a post-reconcile start run at local
+// disk speed on any host. Everything else stays owner-sharded and is served
+// to peers over the network.
+func reconcileOnEveryHost(kind types.CacheContentKind) bool {
+	return kind == types.CacheContentKindCheckpoint || kind == types.CacheContentKindDiskSnapshot
 }
 
 // reconcilePool bounds concurrent materializations within a reconcile cycle.

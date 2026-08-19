@@ -1303,6 +1303,111 @@ func TestRequiredContentReportedByOneWorkerReconcilesCheckpointOnPeerInLocality(
 	require.Equal(t, types.CacheAuditStatusMaterialized, cacheEvents[0].Status)
 }
 
+// Disk snapshot chunks replicate to every host in the locality (like
+// checkpoints) so a restore reads them locally, while other kinds stay
+// sharded by ring owner.
+func TestReconcileDiskSnapshotChunksMaterializeOnNonOwnerHost(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := testCacheManagerConfig(t.TempDir()).Cache
+	cfg.Client.NTopHosts = 2
+
+	newServer := func(hostID string) (*cache.Server, *cache.Host) {
+		t.Helper()
+		serverCfg := cfg
+		serverCfg.Server.DiskCacheDir = t.TempDir()
+		server, err := cache.NewServerWithOptions(ctx, serverCfg, "locality-a", cache.WithServerMetadataStore(cache.NewMockCacheMetadataStore()), cache.WithServerHostID(hostID))
+		require.NoError(t, err)
+		addr, err := server.Serve("127.0.0.1:0", "")
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, server.Close()) })
+
+		host := server.Host()
+		require.NotNil(t, host)
+		host.Addr = addr
+		host.PrivateAddr = addr
+		return server, host
+	}
+	sourceServer, sourceHost := newServer("source-host")
+	destinationServer, destinationHost := newServer("destination-host")
+
+	clientCfg := cfg
+	clientCfg.Server.DiskCacheDir = t.TempDir()
+	destinationClient, err := cache.NewClientWithHostDirectory(ctx, clientCfg, cache.NewMockCacheMetadataStore(), testHostDirectoryFunc(func(context.Context, string) ([]*cache.Host, error) {
+		return []*cache.Host{sourceHost, destinationHost}, nil
+	}), "locality-a")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, destinationClient.Cleanup()) })
+	destinationClient.AttachLocalServer(destinationServer)
+	require.Eventually(t, func() bool {
+		return len(destinationClient.RankedReadHosts("probe")) == 2
+	}, 3*time.Second, 20*time.Millisecond)
+
+	// Two source-host-owned blobs: one disk snapshot chunk (must replicate
+	// to the non-owner destination) and one owner-sharded volume blob
+	// (must stay gated).
+	sourceOwnedContent := func(seed string) (string, []byte) {
+		t.Helper()
+		for i := 0; i < 256; i++ {
+			data := []byte(fmt.Sprintf("%s-%d-content", seed, i))
+			digest := sha256.Sum256(data)
+			hash := hex.EncodeToString(digest[:])
+			ranked := destinationClient.RankedReadHosts(hash)
+			require.Len(t, ranked, 2)
+			if ranked[0].HostId == sourceHost.HostId {
+				return hash, data
+			}
+		}
+		t.Fatal("expected content owned by the source host")
+		return "", nil
+	}
+	chunkHash, chunkData := sourceOwnedContent("chunk")
+	volumeHash, volumeData := sourceOwnedContent("volume")
+	for hash, data := range map[string][]byte{chunkHash: chunkData, volumeHash: volumeData} {
+		_, _, err = sourceServer.StoreReader(ctx, strings.NewReader(string(data)), hash)
+		require.NoError(t, err)
+		require.True(t, sourceServer.HasCompleteContent(hash, int64(len(data))))
+		require.False(t, destinationServer.HasCompleteContent(hash, int64(len(data))))
+	}
+
+	events := &fakeEventRepo{items: []types.CacheRequiredContentItem{
+		{
+			Kind:       types.CacheContentKindDiskSnapshot,
+			Hash:       chunkHash,
+			RoutingKey: chunkHash,
+			SizeBytes:  int64(len(chunkData)),
+			DiskName:   "machine-root",
+		},
+		{
+			Kind:       types.CacheContentKindVolume,
+			Hash:       volumeHash,
+			RoutingKey: volumeHash,
+			SizeBytes:  int64(len(volumeData)),
+		},
+	}}
+	manager := &WorkerCacheManager{
+		ctx:               ctx,
+		config:            types.AppConfig{Cache: cfg},
+		locality:          "locality-a",
+		metadataStore:     cache.NewMockCacheMetadataStore(),
+		eventRepo:         events,
+		client:            destinationClient,
+		server:            destinationServer,
+		reconcileFailures: make(map[string]time.Time),
+	}
+
+	manager.reconcileStub(destinationServer, destinationHost.HostId, cache.RecentStub{
+		WorkspaceID: "workspace",
+		StubID:      "stub",
+	}, newReconcileBudget(10, 0))
+
+	require.True(t, destinationServer.HasCompleteContent(chunkHash, int64(len(chunkData))),
+		"disk snapshot chunk must materialize on the non-owner host")
+	require.False(t, destinationServer.HasCompleteContent(volumeHash, int64(len(volumeData))),
+		"owner-sharded content must not materialize on the non-owner host")
+}
+
 func TestReconcileStubFansOutCheckpointsAcrossMatchingHosts(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

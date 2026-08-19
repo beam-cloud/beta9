@@ -157,8 +157,10 @@ func (m *Manager) materializeChain(ctx context.Context, spec AttachSpec, layersD
 	state := &volumeState{Key: spec.Key, VirtualSizeBytes: spec.VirtualSizeBytes, ReadOnly: spec.ReadOnly}
 
 	// Layers are independent objects; fetch them in parallel and link the
-	// chain afterwards.
+	// chain afterwards. Chunk parallelism is a single budget shared by every
+	// layer, so restore speed does not depend on how the data is split.
 	localPaths := make([]string, len(spec.Chain))
+	gate := newChunkGate(chunkFetchConcurrency)
 	group, groupCtx := errgroup.WithContext(ctx)
 	group.SetLimit(layerFetchConcurrency)
 	for i, chainLayer := range spec.Chain {
@@ -167,7 +169,7 @@ func (m *Manager) materializeChain(ctx context.Context, spec AttachSpec, layersD
 		}
 		localPaths[i] = filepath.Join(layersDir, fmt.Sprintf("%03d-%s.qcow2", i, chainLayer.SnapshotID))
 		group.Go(func() error {
-			if err := fetchLayer(groupCtx, source, chainLayer.Layer, localPaths[i]); err != nil {
+			if err := fetchLayer(groupCtx, source, chainLayer.Layer, localPaths[i], gate); err != nil {
 				return fmt.Errorf("fetch layer %s: %w", chainLayer.SnapshotID, err)
 			}
 			return nil
