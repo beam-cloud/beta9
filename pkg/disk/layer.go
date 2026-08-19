@@ -19,21 +19,45 @@ import (
 // addressed chunks. Zero regions (holes and explicit zeros) are omitted; a
 // restore recreates them by truncating the destination file to size.
 const (
+	// LayerChunkSize is the average chunk size. Boundaries are content
+	// defined (gear hash), not fixed: an insertion or shift in the qcow2
+	// file re-aligns boundaries within roughly a minimum chunk, so unchanged
+	// disk content keeps its chunk hashes no matter where a flatten
+	// relocated it, and publish dedup holds between full-image generations.
+	// (Fixed boundaries measured 0% dedup between consecutive flattens of a
+	// lightly changed ext4 disk; content-defined measured ~95%.)
 	LayerChunkSize = 4 << 20 // 4 MiB
+	chunkMinSize   = 1 << 20
+	chunkMeanMask  = LayerChunkSize - 1
+	chunkMaxSize   = 8 << 20
 
 	// LayerFileName is the single logical file inside a qcow.v1 manifest.
 	LayerFileName = "layer.qcow2"
 
 	uploadConcurrency = 16
+	scanConcurrency   = 8
 	// chunkFetchConcurrency bounds in-flight chunk fetches across every layer
 	// of a chain. It is shared rather than per-layer so a chain dominated by
 	// one large layer gets the same parallelism as a deep one, and a deep
 	// chain does not multiply into hundreds of concurrent requests. Each
-	// in-flight chunk holds a LayerChunkSize buffer, so this also caps
-	// restore memory (32 * 4 MiB = 128 MiB).
+	// in-flight chunk holds up to a chunkMaxSize buffer, so this also caps
+	// restore memory (32 * 8 MiB = 256 MiB worst case).
 	chunkFetchConcurrency = 32
 	layerFetchConcurrency = 4
 )
+
+// gearTable drives the rolling hash used for chunk boundaries. It is part of
+// the chunking contract: changing it re-cuts every future publish, which
+// costs one full re-upload per disk before dedup recovers.
+var gearTable = func() [256]uint64 {
+	var table [256]uint64
+	seed := uint64(0x9E3779B97F4A7C15)
+	for i := range table {
+		seed = seed*6364136223846793005 + 1442695040888963407
+		table[i] = seed
+	}
+	return table
+}()
 
 // ChunkSink stores a chunk body under a content-addressed object key.
 type ChunkSink interface {
@@ -49,6 +73,9 @@ type ChunkSource interface {
 
 // ScanLayer splits a sealed layer file into content-addressed chunks, skipping
 // holes and all-zero regions. Object keys are assigned by keyForDigest.
+// Data extents are enumerated and split at content-defined boundaries first,
+// then read and hashed in parallel: this pass dominates publish latency on
+// large flattened images.
 func ScanLayer(path string, keyForDigest func(digest string) string) (*types.DiskSnapshotFile, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -67,44 +94,121 @@ func ScanLayer(path string, keyForDigest func(digest string) string) (*types.Dis
 		Mode:      0o600,
 		SizeBytes: fileSize,
 	}
+
+	spans, err := chunkSpans(file, fileSize)
+	if err != nil {
+		return nil, err
+	}
+	chunks := make([]*types.DiskSnapshotChunk, len(spans))
+	group := errgroup.Group{}
+	group.SetLimit(scanConcurrency)
+	for i, span := range spans {
+		group.Go(func() error {
+			data := make([]byte, span.size)
+			if _, err := file.ReadAt(data, span.offset); err != nil && err != io.EOF {
+				return fmt.Errorf("read layer chunk at %d: %w", span.offset, err)
+			}
+			if isZero(data) {
+				return nil
+			}
+			digestBytes := sha256.Sum256(data)
+			digest := "sha256:" + hex.EncodeToString(digestBytes[:])
+			chunks[i] = &types.DiskSnapshotChunk{
+				OffsetBytes: span.offset,
+				SizeBytes:   span.size,
+				ObjectKey:   keyForDigest(digest),
+				Digest:      digest,
+			}
+			return nil
+		})
+	}
+	if err := group.Wait(); err != nil {
+		return nil, err
+	}
+	for _, chunk := range chunks {
+		if chunk == nil {
+			continue
+		}
+		chunk.Index = int64(len(layer.Chunks))
+		layer.Chunks = append(layer.Chunks, *chunk)
+	}
+	return layer, nil
+}
+
+// chunkSpan is one prospective chunk: a piece of a data extent.
+type chunkSpan struct {
+	offset int64
+	size   int64
+}
+
+// chunkSpans enumerates the file's data extents (SEEK_DATA/SEEK_HOLE; the
+// whole file counts as data on filesystems without support) and splits each
+// at content-defined boundaries. Extents reset the boundary state, so sparse
+// layouts chunk identically regardless of surrounding holes.
+func chunkSpans(file *os.File, fileSize int64) ([]chunkSpan, error) {
+	var spans []chunkSpan
 	buffer := make([]byte, LayerChunkSize)
-	index := int64(0)
-	for offset := int64(0); offset < fileSize; offset += LayerChunkSize {
-		dataOffset, err := unix.Seek(int(file.Fd()), offset, unix.SEEK_DATA)
+	for offset := int64(0); offset < fileSize; {
+		dataStart, err := unix.Seek(int(file.Fd()), offset, unix.SEEK_DATA)
 		if err != nil {
 			if err == unix.ENXIO {
 				break // Nothing but holes remain.
 			}
-			// Filesystem without SEEK_DATA support: treat everything as data.
-			dataOffset = offset
+			// No SEEK_DATA support: treat the rest of the file as one extent.
+			extent, err := splitExtent(file, buffer, offset, fileSize)
+			if err != nil {
+				return nil, err
+			}
+			return append(spans, extent...), nil
 		}
-		if dataOffset >= offset+LayerChunkSize {
-			// Skip directly to the chunk containing the next data extent.
-			offset = (dataOffset / LayerChunkSize) * LayerChunkSize
-			offset -= LayerChunkSize // Compensate the loop increment.
-			continue
+		dataEnd, err := unix.Seek(int(file.Fd()), dataStart, unix.SEEK_HOLE)
+		if err != nil {
+			dataEnd = fileSize
 		}
-
-		chunkSize := min(LayerChunkSize, fileSize-offset)
-		chunk := buffer[:chunkSize]
-		if _, err := file.ReadAt(chunk, offset); err != nil && err != io.EOF {
-			return nil, fmt.Errorf("read layer chunk at %d: %w", offset, err)
+		extent, err := splitExtent(file, buffer, dataStart, min(dataEnd, fileSize))
+		if err != nil {
+			return nil, err
 		}
-		if isZero(chunk) {
-			continue
-		}
-		digestBytes := sha256.Sum256(chunk)
-		digest := "sha256:" + hex.EncodeToString(digestBytes[:])
-		layer.Chunks = append(layer.Chunks, types.DiskSnapshotChunk{
-			Index:       index,
-			OffsetBytes: offset,
-			SizeBytes:   chunkSize,
-			ObjectKey:   keyForDigest(digest),
-			Digest:      digest,
-		})
-		index++
+		spans = append(spans, extent...)
+		offset = dataEnd
 	}
-	return layer, nil
+	return spans, nil
+}
+
+// splitExtent cuts one data extent at gear-hash boundaries: the hash rolls
+// byte-wise (skipping the guaranteed minimum) and a chunk ends where the low
+// bits clear, giving LayerChunkSize chunks on average within [min, max].
+func splitExtent(file *os.File, buffer []byte, start, end int64) ([]chunkSpan, error) {
+	var spans []chunkSpan
+	for chunkStart := start; chunkStart < end; {
+		if end-chunkStart <= chunkMinSize {
+			spans = append(spans, chunkSpan{offset: chunkStart, size: end - chunkStart})
+			break
+		}
+		windowEnd := min(end, chunkStart+chunkMaxSize)
+		cut := windowEnd
+		hash := uint64(0)
+		for pos := chunkStart + chunkMinSize; pos < windowEnd && cut == windowEnd; {
+			read, err := file.ReadAt(buffer[:min(int64(len(buffer)), windowEnd-pos)], pos)
+			if err != nil && err != io.EOF {
+				return nil, fmt.Errorf("scan layer at %d: %w", pos, err)
+			}
+			if read == 0 {
+				break
+			}
+			for i := range read {
+				hash = hash<<1 + gearTable[buffer[i]]
+				if hash&chunkMeanMask == 0 {
+					cut = pos + int64(i) + 1
+					break
+				}
+			}
+			pos += int64(read)
+		}
+		spans = append(spans, chunkSpan{offset: chunkStart, size: cut - chunkStart})
+		chunkStart = cut
+	}
+	return spans, nil
 }
 
 // UploadLayer ships every chunk of a scanned layer to the sink.

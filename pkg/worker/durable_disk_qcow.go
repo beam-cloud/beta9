@@ -168,6 +168,39 @@ func (s *Worker) reportQcowChainContent(request *types.ContainerRequest, chain [
 	}
 }
 
+// qcowChainChunkKeys returns the object keys of every chunk referenced by the
+// live published chain's manifests, i.e. chunks known to exist in the bucket.
+func (s *Worker) qcowChainChunkKeys(key string) map[string]bool {
+	keys := make(map[string]bool)
+	for _, entry := range s.qcowChain(key) {
+		if entry.manifest == nil {
+			continue
+		}
+		for _, file := range entry.manifest.Files {
+			for _, chunk := range file.Chunks {
+				keys[chunk.ObjectKey] = true
+			}
+		}
+	}
+	return keys
+}
+
+// filterUploadChunks returns a copy of layer holding only the chunks whose
+// object keys are not already present in the bucket.
+func filterUploadChunks(layer *types.DiskSnapshotFile, existing map[string]bool) *types.DiskSnapshotFile {
+	if len(existing) == 0 {
+		return layer
+	}
+	upload := *layer
+	upload.Chunks = nil
+	for _, chunk := range layer.Chunks {
+		if !existing[chunk.ObjectKey] {
+			upload.Chunks = append(upload.Chunks, chunk)
+		}
+	}
+	return &upload
+}
+
 // resolveQcowSnapshotChain walks ParentSnapshotId links from the newest
 // generation (or a seed snapshot for forks) back to a parentless root and
 // returns the rows base first.
@@ -344,9 +377,20 @@ func (s *Worker) publishQcowLayer(ctx context.Context, request *types.ContainerR
 	if err != nil {
 		return nil, nil, fmt.Errorf("scan qcow layer: %w", err)
 	}
+
+	// Chunks are content-addressed and never deleted, so everything the live
+	// chain's manifests reference is already in the bucket. Flattened
+	// publishes overlap heavily with the previous flatten (convert output is
+	// deterministic), so this usually reduces the periodic full-image publish
+	// to just the clusters that changed.
+	upload := filterUploadChunks(layer, s.qcowChainChunkKeys(s.qcowVolumeKey(request, mount)))
 	sink := &qcowChunkSink{ctx: ctx, store: store}
-	if err := disk.UploadLayer(ctx, sink, uploadPath, layer); err != nil {
+	if err := disk.UploadLayer(ctx, sink, uploadPath, upload); err != nil {
 		return nil, nil, err
+	}
+	if skipped := len(layer.Chunks) - len(upload.Chunks); skipped > 0 {
+		log.Info().Str("disk", mount.DurableDisk.Name).Int("skipped", skipped).Int("total", len(layer.Chunks)).
+			Msg("skipped qcow chunks already present in the bucket")
 	}
 
 	generation, err := nextDurableDiskSnapshotGeneration(time.Now().UnixNano(), latest)
