@@ -14,10 +14,9 @@ import (
 )
 
 // Node names inside each daemon's block graph. One daemon serves exactly one
-// volume. The NBD export attaches directly to the active qcow2 node: a pivot
-// (blockdev-snapshot) re-parents every user of the old head onto the overlay,
-// so the export follows each new head automatically, and the head stays a
-// root node, which block-commit requires for live chain compaction.
+// volume. The NBD export attaches directly to the active qcow2 node: pivots
+// re-parent it onto each new overlay, and the head stays a root node, which
+// block-commit (live compaction) requires.
 const (
 	qsdFileNodePrefix = "file-"
 	qsdFmtNodePrefix  = "fmt-"

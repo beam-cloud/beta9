@@ -448,10 +448,9 @@ func (v *Volume) Flatten(ctx context.Context, sealedPath, destPath string) error
 }
 
 // Compact folds every published layer into the base image with a live
-// intermediate block-commit, keeping the local backing chain shallow no
-// matter how many times a long-running volume is sealed. The daemon keeps
-// serving I/O throughout. Pending layers are deltas the publisher still needs
-// byte-for-byte, so compaction only runs once the whole chain is published.
+// intermediate block-commit; the daemon keeps serving I/O. Pending layers are
+// deltas the publisher still needs byte-for-byte, so compaction waits until
+// the whole chain is published.
 func (v *Volume) Compact(ctx context.Context) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -467,9 +466,8 @@ func (v *Volume) Compact(ctx context.Context) error {
 	}
 	defer client.Close()
 
-	// The live graph decides what still needs merging: a crash between a
-	// completed commit and the state save below leaves the files merged while
-	// the state still lists the full chain.
+	// The live graph decides what needs merging: a crash after a completed
+	// commit but before the state save leaves the files already merged.
 	live, err := client.backingFilenames(ctx, v.fmtNode)
 	if err != nil {
 		return err
@@ -482,10 +480,9 @@ func (v *Volume) Compact(ctx context.Context) error {
 		return fmt.Errorf("compact volume %s: neither %s nor %s is in the live chain", state.Key, top.Path, base.Path)
 	}
 
-	// The base file now holds the newest published generation's full content
-	// and the merged files are out of the graph. A partially committed base
-	// is invisible through the intact overlays, so the file deletes only
-	// happen after the collapsed state is durable.
+	// The base file now holds the newest published generation in full. A
+	// partially committed base stays invisible behind the intact overlays, so
+	// merged files are deleted only after the collapsed state is durable.
 	merged := state.Chain[1:]
 	state.Chain = []stateLayer{{SnapshotID: top.SnapshotID, Path: base.Path}}
 	if err := saveVolumeState(v.dir, state); err != nil {

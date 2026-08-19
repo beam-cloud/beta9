@@ -168,26 +168,23 @@ func (s *Worker) reportQcowChainContent(request *types.ContainerRequest, chain [
 	}
 }
 
-// qcowChainChunkKeys returns the object keys of every chunk referenced by the
-// live published chain's manifests, i.e. chunks known to exist in the bucket.
-func (s *Worker) qcowChainChunkKeys(key string) map[string]bool {
-	keys := make(map[string]bool)
+// qcowUploadChunks returns a copy of layer without the chunks the live
+// chain's manifests already reference: chunk objects are content-addressed
+// and never deleted, so those are known to exist in the bucket. Flattened
+// publishes overlap heavily with the previous flatten, so this usually
+// reduces the periodic full-image publish to just the clusters that changed.
+func (s *Worker) qcowUploadChunks(key string, layer *types.DiskSnapshotFile) *types.DiskSnapshotFile {
+	existing := make(map[string]bool)
 	for _, entry := range s.qcowChain(key) {
 		if entry.manifest == nil {
 			continue
 		}
 		for _, file := range entry.manifest.Files {
 			for _, chunk := range file.Chunks {
-				keys[chunk.ObjectKey] = true
+				existing[chunk.ObjectKey] = true
 			}
 		}
 	}
-	return keys
-}
-
-// filterUploadChunks returns a copy of layer holding only the chunks whose
-// object keys are not already present in the bucket.
-func filterUploadChunks(layer *types.DiskSnapshotFile, existing map[string]bool) *types.DiskSnapshotFile {
 	if len(existing) == 0 {
 		return layer
 	}
@@ -284,9 +281,8 @@ func (s *Worker) snapshotQcowDurableDiskMount(ctx context.Context, request *type
 		return nil, fmt.Errorf("qcow durable disk %q is not attached", mount.DurableDisk.Name)
 	}
 
-	// A live intermediate commit folds published layers into the base, so a
-	// long-running machine can be snapshotted indefinitely without the local
-	// backing chain hitting the depth cap.
+	// Fold published layers into the base so a long-running machine can be
+	// snapshotted indefinitely without hitting the local chain depth cap.
 	if volume.Depth() > disk.DefaultFlattenDepth {
 		if err := volume.Compact(ctx); err != nil {
 			log.Warn().Err(err).Str("disk", mount.DurableDisk.Name).Msg("failed to compact qcow backing chain")
@@ -378,12 +374,7 @@ func (s *Worker) publishQcowLayer(ctx context.Context, request *types.ContainerR
 		return nil, nil, fmt.Errorf("scan qcow layer: %w", err)
 	}
 
-	// Chunks are content-addressed and never deleted, so everything the live
-	// chain's manifests reference is already in the bucket. Flattened
-	// publishes overlap heavily with the previous flatten (convert output is
-	// deterministic), so this usually reduces the periodic full-image publish
-	// to just the clusters that changed.
-	upload := filterUploadChunks(layer, s.qcowChainChunkKeys(s.qcowVolumeKey(request, mount)))
+	upload := s.qcowUploadChunks(s.qcowVolumeKey(request, mount), layer)
 	sink := &qcowChunkSink{ctx: ctx, store: store}
 	if err := disk.UploadLayer(ctx, sink, uploadPath, upload); err != nil {
 		return nil, nil, err

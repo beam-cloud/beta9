@@ -20,12 +20,10 @@ import (
 // restore recreates them by truncating the destination file to size.
 const (
 	// LayerChunkSize is the average chunk size. Boundaries are content
-	// defined (gear hash), not fixed: an insertion or shift in the qcow2
-	// file re-aligns boundaries within roughly a minimum chunk, so unchanged
-	// disk content keeps its chunk hashes no matter where a flatten
-	// relocated it, and publish dedup holds between full-image generations.
-	// (Fixed boundaries measured 0% dedup between consecutive flattens of a
-	// lightly changed ext4 disk; content-defined measured ~95%.)
+	// defined (gear hash), so unchanged content keeps its chunk hashes no
+	// matter where a flatten relocated it in the file, which is what lets
+	// publishes dedup against prior generations: fixed boundaries measured
+	// 0% dedup between consecutive flattens, content-defined ~95%.
 	LayerChunkSize = 4 << 20 // 4 MiB
 	chunkMinSize   = 1 << 20
 	chunkMeanMask  = LayerChunkSize - 1
@@ -37,18 +35,16 @@ const (
 	uploadConcurrency = 16
 	scanConcurrency   = 8
 	// chunkFetchConcurrency bounds in-flight chunk fetches across every layer
-	// of a chain. It is shared rather than per-layer so a chain dominated by
-	// one large layer gets the same parallelism as a deep one, and a deep
-	// chain does not multiply into hundreds of concurrent requests. Each
-	// in-flight chunk holds up to a chunkMaxSize buffer, so this also caps
-	// restore memory (32 * 8 MiB = 256 MiB worst case).
+	// of a chain, shared so one large layer gets full parallelism and a deep
+	// chain does not multiply into hundreds of requests. Each in-flight chunk
+	// buffers up to chunkMaxSize, capping restore memory (32 * 8 MiB = 256 MiB).
 	chunkFetchConcurrency = 32
 	layerFetchConcurrency = 4
 )
 
-// gearTable drives the rolling hash used for chunk boundaries. It is part of
-// the chunking contract: changing it re-cuts every future publish, which
-// costs one full re-upload per disk before dedup recovers.
+// gearTable drives the boundary rolling hash. Changing it (or the size
+// constants) re-cuts every future publish, costing each disk one full
+// re-upload before dedup recovers.
 var gearTable = func() [256]uint64 {
 	var table [256]uint64
 	seed := uint64(0x9E3779B97F4A7C15)
@@ -73,9 +69,8 @@ type ChunkSource interface {
 
 // ScanLayer splits a sealed layer file into content-addressed chunks, skipping
 // holes and all-zero regions. Object keys are assigned by keyForDigest.
-// Data extents are enumerated and split at content-defined boundaries first,
-// then read and hashed in parallel: this pass dominates publish latency on
-// large flattened images.
+// Boundaries are found in one sequential pass, then chunks are read and
+// hashed in parallel: this pass dominates publish latency on large images.
 func ScanLayer(path string, keyForDigest func(digest string) string) (*types.DiskSnapshotFile, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -136,15 +131,12 @@ func ScanLayer(path string, keyForDigest func(digest string) string) (*types.Dis
 }
 
 // chunkSpan is one prospective chunk: a piece of a data extent.
-type chunkSpan struct {
-	offset int64
-	size   int64
-}
+type chunkSpan struct{ offset, size int64 }
 
 // chunkSpans enumerates the file's data extents (SEEK_DATA/SEEK_HOLE; the
-// whole file counts as data on filesystems without support) and splits each
-// at content-defined boundaries. Extents reset the boundary state, so sparse
-// layouts chunk identically regardless of surrounding holes.
+// whole file on filesystems without support) and splits each at content
+// defined boundaries. Extents reset the boundary state, so sparse layouts
+// chunk identically regardless of surrounding holes.
 func chunkSpans(file *os.File, fileSize int64) ([]chunkSpan, error) {
 	var spans []chunkSpan
 	buffer := make([]byte, LayerChunkSize)

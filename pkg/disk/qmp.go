@@ -139,10 +139,9 @@ func (c *qmpClient) pivot(ctx context.Context, nodeName, overlayNode string) err
 }
 
 // commitChain runs an intermediate block-commit merging every layer between
-// base and top (inclusive) down into base, identified by filename within
-// device's backing chain, and waits for the job to conclude. The head keeps
-// serving I/O throughout; on completion the daemon drops the merged layers
-// from the graph and re-parents the layer above top onto base.
+// base and top (inclusive, identified by filename) down into base, and polls
+// the job to its conclusion. The head keeps serving I/O; on completion the
+// daemon drops the merged layers and re-parents the layer above top onto base.
 func (c *qmpClient) commitChain(ctx context.Context, device, topPath, basePath string) error {
 	jobID := fmt.Sprintf("commit-%d", time.Now().UnixNano())
 	if _, err := c.execute(ctx, types.QMPCommandBlockCommit, map[string]any{
@@ -150,46 +149,41 @@ func (c *qmpClient) commitChain(ctx context.Context, device, topPath, basePath s
 		"device":       device,
 		"top":          topPath,
 		"base":         basePath,
-		"auto-dismiss": false,
+		"auto-dismiss": false, // hold the concluded job so its error is readable
 	}); err != nil {
 		return err
 	}
-	return c.waitForJob(ctx, jobID)
-}
 
-// waitForJob polls until the job concludes (commit jobs finalize on their
-// own; with auto-dismiss off, concluded is their terminal state), dismisses
-// it, and returns its error.
-func (c *qmpClient) waitForJob(ctx context.Context, jobID string) error {
+	type jobInfo struct {
+		ID     string `json:"id"`
+		Status string `json:"status"`
+		Error  string `json:"error"`
+	}
 	for {
 		raw, err := c.execute(ctx, types.QMPCommandQueryJobs, nil)
 		if err != nil {
 			return err
 		}
-		var jobs []struct {
-			ID     string `json:"id"`
-			Status string `json:"status"`
-			Error  string `json:"error"`
-		}
+		var jobs []jobInfo
 		if err := json.Unmarshal(raw, &jobs); err != nil {
 			return err
 		}
-		var status string
-		for _, job := range jobs {
-			if job.ID == jobID {
-				status = job.Status
-				if status == "concluded" {
-					_, _ = c.execute(ctx, types.QMPCommandJobDismiss, map[string]any{"id": jobID})
-					if job.Error != "" {
-						return fmt.Errorf("job %s: %s", jobID, job.Error)
-					}
-					return nil
-				}
+		var job *jobInfo
+		for i := range jobs {
+			if jobs[i].ID == jobID {
+				job = &jobs[i]
 				break
 			}
 		}
-		if status == "" {
-			return fmt.Errorf("job %s disappeared before concluding", jobID)
+		if job == nil {
+			return fmt.Errorf("commit job %s disappeared before concluding", jobID)
+		}
+		if job.Status == "concluded" {
+			_, _ = c.execute(ctx, types.QMPCommandJobDismiss, map[string]any{"id": jobID})
+			if job.Error != "" {
+				return fmt.Errorf("commit job: %s", job.Error)
+			}
+			return nil
 		}
 		select {
 		case <-ctx.Done():
