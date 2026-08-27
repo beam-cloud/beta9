@@ -144,7 +144,7 @@ func (is *ContainerImageService) prepareBuildOptionsForImageID(ctx context.Conte
 		opts.addPythonRequirements()
 	}
 
-	is.resolveBaseImageDigest(ctx, opts, in.ExistingImageUri == "")
+	is.resolveBaseImageDigest(ctx, opts, baseImageDigestCacheable(in, opts))
 
 	if is.config.ImageService.ClipVersion != uint32(types.ClipVersion2) {
 		return nil
@@ -204,4 +204,14 @@ func (is *ContainerImageService) imageMetadataCurrent(ctx context.Context, image
 
 func (is *ContainerImageService) imageMetadataAuthoritative() bool {
 	return is.config.ImageService.RegistryStore == reg.S3ImageRegistryStore
+}
+
+func baseImageDigestCacheable(in *pb.VerifyImageBuildRequest, opts *BuildOpts) bool {
+	if in == nil || opts == nil {
+		return false
+	}
+	if in.ExistingImageUri == "" {
+		return true
+	}
+	return opts.BaseImageCreds == ""
 }

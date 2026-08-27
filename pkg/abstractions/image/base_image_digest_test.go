@@ -2,10 +2,14 @@ package image
 
 import (
 	"context"
+	"log/slog"
+	"sync/atomic"
 	"testing"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/types"
+	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 )
@@ -76,4 +80,117 @@ func TestBaseImageDigestCacheSharedAcrossInstances(t *testing.T) {
 	digest, _ = second.resolve(context.Background(), "node:20-slim", "", inspect)
 	require.Equal(t, "sha256:digest", digest)
 	require.Equal(t, 1, lookups)
+}
+
+func TestPrepareBuildOptionsForImageIDCachesPublicExistingImageDigest(t *testing.T) {
+	server := miniredis.RunT(t)
+	rdb := &common.RedisClient{UniversalClient: redis.NewClient(&redis.Options{Addr: server.Addr()})}
+	skopeo := &recordingSkopeoClient{digest: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}
+	cfg := types.AppConfig{
+		ImageService: types.ImageServiceConfig{
+			PythonVersion: "python3.10",
+			ClipVersion:   uint32(types.ClipVersion2),
+			Runner: types.RunnerConfig{
+				BaseImageName:     "beta9-runner",
+				BaseImageRegistry: "registry.localhost:5000",
+				Tags: map[string]string{
+					"python3.10": "py310-latest",
+				},
+			},
+		},
+	}
+	newService := func() *ContainerImageService {
+		return &ContainerImageService{
+			config: cfg,
+			builder: &Builder{
+				config:       cfg,
+				skopeoClient: skopeo,
+			},
+			baseImageDigests: newBaseImageDigestCache(rdb),
+		}
+	}
+	req := &pb.VerifyImageBuildRequest{
+		PythonVersion:    "python3.10",
+		ExistingImageUri: "node:20-slim",
+		IgnorePython:     true,
+	}
+
+	for i := 0; i < 2; i++ {
+		is := newService()
+		opts, err := is.buildOptionsFromVerifyRequest(context.Background(), req)
+		require.NoError(t, err)
+
+		err = is.prepareBuildOptionsForImageID(context.Background(), req, opts)
+		require.NoError(t, err)
+		require.Equal(t, skopeo.digest, opts.BaseImageDigest)
+	}
+
+	require.Equal(t, int32(1), skopeo.calls.Load())
+	cached, err := rdb.Get(context.Background(), common.RedisKeys.ImageBaseDigest("docker.io/node:20-slim")).Result()
+	require.NoError(t, err)
+	require.Equal(t, skopeo.digest, cached)
+}
+
+func TestBaseImageDigestCacheable(t *testing.T) {
+	tests := []struct {
+		name string
+		req  *pb.VerifyImageBuildRequest
+		opts *BuildOpts
+		want bool
+	}{
+		{
+			name: "managed base image",
+			req:  &pb.VerifyImageBuildRequest{},
+			opts: &BuildOpts{},
+			want: true,
+		},
+		{
+			name: "public custom base image",
+			req:  &pb.VerifyImageBuildRequest{ExistingImageUri: "node:20-slim"},
+			opts: &BuildOpts{},
+			want: true,
+		},
+		{
+			name: "credentialed custom base image",
+			req:  &pb.VerifyImageBuildRequest{ExistingImageUri: "registry.example.com/private/node:20-slim"},
+			opts: &BuildOpts{BaseImageCreds: "auth.json"},
+			want: false,
+		},
+		{
+			name: "nil request",
+			req:  nil,
+			opts: &BuildOpts{},
+			want: false,
+		},
+		{
+			name: "nil options",
+			req:  &pb.VerifyImageBuildRequest{ExistingImageUri: "node:20-slim"},
+			opts: nil,
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, baseImageDigestCacheable(tt.req, tt.opts))
+		})
+	}
+}
+
+type recordingSkopeoClient struct {
+	digest string
+	calls  atomic.Int32
+}
+
+func (c *recordingSkopeoClient) Inspect(context.Context, string, string, *slog.Logger) (common.ImageMetadata, error) {
+	c.calls.Add(1)
+	return common.ImageMetadata{Digest: c.digest}, nil
+}
+
+func (c *recordingSkopeoClient) InspectSizeInBytes(context.Context, string, string) (int64, error) {
+	return 0, nil
+}
+
+func (c *recordingSkopeoClient) Copy(context.Context, string, string, string, *slog.Logger) error {
+	return nil
 }
