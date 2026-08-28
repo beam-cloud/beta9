@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -239,6 +240,12 @@ func (is *ContainerImageService) retrieveBuildSecrets(ctx context.Context, secre
 		if err != nil {
 			return nil, err
 		}
+
+		// The repository query does not guarantee row order. Canonicalize it so
+		// repeated builds render the same Dockerfile and resolve to the same image.
+		sort.Slice(secrets, func(i, j int) bool {
+			return secrets[i].Name < secrets[j].Name
+		})
 
 		for _, secret := range secrets {
 			buildSecrets = append(buildSecrets, fmt.Sprintf("%s=%s", secret.Name, secret.Value))
