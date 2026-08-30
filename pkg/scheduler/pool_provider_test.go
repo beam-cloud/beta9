@@ -10,6 +10,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/providers"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 type failingProviderRepo struct {
@@ -49,6 +50,37 @@ func TestProviderMachineGPUCompatible(t *testing.T) {
 				t.Fatalf("providerMachineGPUCompatible() = %v, want %v", got, test.want)
 			}
 		})
+	}
+}
+
+func TestProviderWorkerCapsAdvertisedCPUWithoutReservingItAll(t *testing.T) {
+	resources := providerWorkerResources(2000, 16000, "", 0)
+	if got := resources.Limits.Cpu(); got == nil || got.Cmp(resource.MustParse("16")) != 0 {
+		t.Fatalf("CPU limit = %v, want 16", got)
+	}
+	if got := resources.Requests.Cpu(); got == nil || got.Cmp(resource.MustParse("2")) != 0 {
+		t.Fatalf("CPU request = %v, want 2", got)
+	}
+}
+
+func TestProviderWorkerCPURequestNeverExceedsItsLimit(t *testing.T) {
+	resources := providerWorkerResources(2000, 500, "", 0)
+	if got := resources.Limits.Cpu(); got == nil || got.Cmp(resource.MustParse("500m")) != 0 {
+		t.Fatalf("CPU limit = %v, want 500m", got)
+	}
+	if got := resources.Requests.Cpu(); got == nil || got.Cmp(resource.MustParse("500m")) != 0 {
+		t.Fatalf("CPU request = %v, want 500m", got)
+	}
+}
+
+func TestProviderWorkerCPUCapPreservesGPUResources(t *testing.T) {
+	resources := providerWorkerResources(2000, 16000, "RTX4090", 2)
+	wantGPU := resource.MustParse("2")
+	if got := resources.Requests["nvidia.com/gpu"]; got.Cmp(wantGPU) != 0 {
+		t.Fatalf("GPU request = %v, want 2", got)
+	}
+	if got := resources.Limits["nvidia.com/gpu"]; got.Cmp(wantGPU) != 0 {
+		t.Fatalf("GPU limit = %v, want 2", got)
 	}
 }
 

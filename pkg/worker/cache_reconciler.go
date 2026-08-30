@@ -855,7 +855,7 @@ type imageCacheEntry struct {
 	modified time.Time
 }
 
-func (m *WorkerCacheManager) pruneOwnerImageCache(stubs []recentStubContent, softWatermark float64, minFreeBytes int64) int64 {
+func (m *WorkerCacheManager) pruneOwnerImageCache(stubs []recentStubContent, softWatermark float64, minFreeBytes int64, protectedSetComplete bool) int64 {
 	root := getImageCachePath()
 	usage, err := fastDiskUsage(root)
 	if err != nil {
@@ -866,8 +866,15 @@ func (m *WorkerCacheManager) pruneOwnerImageCache(stubs []recentStubContent, sof
 	if bytesToFree > 0 {
 		allowlist = pressureProtectedContentFromRecentStubs(stubs, m.accelerator, usage, softWatermark, minFreeBytes)
 	}
-	protected := protectedImageCache(stubs, allowlist, root, filepath.Join(types.AgentImagesPath, "mnt"))
-	evicted, freed := evictImageCache(root, protected, time.Now().Add(-m.recentStubTTL()), bytesToFree)
+	mountRoot := filepath.Join(types.AgentImagesPath, "mnt")
+	mountSetComplete := m.pruneStaleImageMountPaths(mountRoot)
+	protected := protectedImageCache(stubs, allowlist, root, mountRoot)
+	protected.complete = protected.complete && mountSetComplete
+	cutoff := time.Time{}
+	if protectedSetComplete {
+		cutoff = time.Now().Add(-m.recentStubTTL())
+	}
+	evicted, freed := evictImageCache(root, protected, cutoff, bytesToFree)
 	if evicted > 0 {
 		event := log.Info()
 		message := "pruned stale image cache content"
@@ -884,6 +891,59 @@ func (m *WorkerCacheManager) pruneOwnerImageCache(stubs []recentStubContent, sof
 			Msg(message)
 	}
 	return freed
+}
+
+func (m *WorkerCacheManager) pruneStaleImageMountPaths(mountRoot string) bool {
+	if m.workerRepo == nil {
+		return false
+	}
+
+	rpcCtx, cancel := context.WithTimeout(m.ctx, cacheCoordinatorRPCTimeout)
+	defer cancel()
+	pruned, complete := pruneStaleImageMountPathsWithLookup(mountRoot, func(workerID string) (bool, error) {
+		_, err := handleGRPCResponse(m.workerRepo.GetWorkerById(rpcCtx, &pb.GetWorkerByIdRequest{WorkerId: workerID}))
+		if err == nil {
+			return true, nil
+		}
+		notFoundErr := &types.ErrWorkerNotFound{}
+		if notFoundErr.From(err) {
+			return false, nil
+		}
+		return false, err
+	})
+	if pruned > 0 {
+		log.Info().Int("pruned", pruned).Str("mount_root", mountRoot).Msg("pruned stale worker image mount paths")
+	}
+	return complete
+}
+
+func pruneStaleImageMountPathsWithLookup(mountRoot string, workerExists func(string) (bool, error)) (int, bool) {
+	workers, err := os.ReadDir(mountRoot)
+	if err != nil {
+		return 0, false
+	}
+
+	pruned := 0
+	complete := true
+	for _, worker := range workers {
+		if !worker.IsDir() || worker.Type()&os.ModeSymlink != 0 {
+			continue
+		}
+		exists, err := workerExists(worker.Name())
+		if err != nil {
+			complete = false
+			continue
+		}
+		if exists {
+			continue
+		}
+		if err := cleanupImageMountPath(filepath.Join(mountRoot, worker.Name())); err != nil {
+			complete = false
+			continue
+		}
+		pruned++
+	}
+	return pruned, complete
 }
 
 func protectedImageCache(stubs []recentStubContent, allowlist map[string]struct{}, cacheRoot, mountRoot string) imageCacheProtection {
@@ -970,7 +1030,7 @@ func activeImageLayers(cacheRoot, imageID string) ([]string, bool) {
 }
 
 func evictImageCache(root string, protected imageCacheProtection, cutoff time.Time, bytesToFree int64) (int, int64) {
-	if !protected.complete || cutoff.IsZero() && bytesToFree <= 0 {
+	if cutoff.IsZero() && bytesToFree <= 0 {
 		return 0, 0
 	}
 	scanStarted := time.Now()
@@ -988,6 +1048,12 @@ func evictImageCache(root string, protected imageCacheProtection, cutoff time.Ti
 			continue
 		}
 		if _, ok := protected.names[entry.name]; ok {
+			continue
+		}
+		// Without complete mount metadata, raw layers cannot be attributed to
+		// active images safely. Archive names are still protected directly by
+		// their mount directory, so unrelated archives remain evictable.
+		if !protected.complete && isSHA256HexDigest(entry.name) {
 			continue
 		}
 
@@ -1212,7 +1278,7 @@ func (m *WorkerCacheManager) reconcileGatedByDiskUsage(server *cache.Server, loc
 
 	softWatermark := m.reconcileMaxDiskUsagePct()
 	resumeWatermark := reconcileResumeDiskUsagePct(softWatermark)
-	if protectedSetComplete && m.pruneOwnerImageCache(stubContent, softWatermark, server.DiskMinFreeBytes()) > 0 {
+	if m.pruneOwnerImageCache(stubContent, softWatermark, server.DiskMinFreeBytes(), protectedSetComplete) > 0 {
 		if refreshed, refreshErr := server.RefreshDiskUsage(); refreshErr == nil {
 			usage = refreshed
 		}
@@ -1244,20 +1310,6 @@ func (m *WorkerCacheManager) reconcileGatedByDiskUsage(server *cache.Server, loc
 	}
 
 	bytesToFree := reconcilePressureBytesToFree(usage, softWatermark, server.DiskMinFreeBytes())
-	if bytesToFree > 0 && !protectedSetComplete {
-		server.SetProtectedContent(protected)
-		if m.reconcilePausedAt.IsZero() {
-			m.reconcilePausedAt = time.Now()
-			log.Warn().
-				Str("locality", m.locality).
-				Str("logical_host", localHostID).
-				Int64("target_free_bytes", bytesToFree).
-				Float64("disk_usage_pct", usage.UsagePct).
-				Float64("soft_watermark_pct", softWatermark).
-				Msg("cache reconciliation paused: required content set incomplete under disk pressure")
-		}
-		return true, nil
-	}
 	if bytesToFree > 0 {
 		evicted, freed := server.PressureEvictContent(protectedForPressure, bytesToFree)
 		if evicted > 0 {

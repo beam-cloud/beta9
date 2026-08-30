@@ -12,6 +12,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -229,6 +230,27 @@ func (m *Manager) Detach(ctx context.Context, key string) error {
 	delete(m.volumes, key)
 	m.mu.Unlock()
 	return nil
+}
+
+// DetachAll tears down every volume still owned by this worker. It is safe to
+// call after the last container exits and during worker shutdown.
+func (m *Manager) DetachAll(ctx context.Context) error {
+	m.mu.Lock()
+	keys := make([]string, 0, len(m.volumes))
+	for key, volume := range m.volumes {
+		if volume != nil {
+			keys = append(keys, key)
+		}
+	}
+	m.mu.Unlock()
+
+	var errs error
+	for _, key := range keys {
+		if err := m.Detach(ctx, key); err != nil {
+			errs = errors.Join(errs, fmt.Errorf("detach volume %s: %w", key, err))
+		}
+	}
+	return errs
 }
 
 // Recover sweeps volume state left behind by a previous worker process. Live

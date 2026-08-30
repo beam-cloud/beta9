@@ -193,6 +193,11 @@ func (m *Manager) connectNBDDevice(ctx context.Context, device *nbdDevice, nbdSo
 func (m *Manager) disconnectNBDDevice(ctx context.Context, device *nbdDevice) error {
 	defer device.release()
 	if _, err := m.run(ctx, m.binaries.NBDClient, "-d", device.Path); err != nil {
+		// The server may have exited between the disconnect attempt and this
+		// check. Treat an already-cleared kernel device as success.
+		if !m.nbdDeviceBusy(device.name) {
+			return nil
+		}
 		return fmt.Errorf("disconnect %s: %w", device.Path, err)
 	}
 	deadline := time.Now().Add(nbdSettleTimeout)

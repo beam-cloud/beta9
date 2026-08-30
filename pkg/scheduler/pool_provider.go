@@ -349,15 +349,7 @@ func (wpc *ProviderWorkerPoolController) createWorkerJob(workerId, machineId str
 		wpc.config.Worker.ImageTag,
 	)
 
-	resources := corev1.ResourceRequirements{}
-	if workerGpuType != "" {
-		resources.Requests = corev1.ResourceList{
-			"nvidia.com/gpu": *resource.NewQuantity(int64(gpuCount), resource.DecimalSI),
-		}
-		resources.Limits = corev1.ResourceList{
-			"nvidia.com/gpu": *resource.NewQuantity(int64(gpuCount), resource.DecimalSI),
-		}
-	}
+	resources := providerWorkerResources(wpc.config.Worker.DefaultWorkerCPURequest, workerCpu, workerGpuType, gpuCount)
 
 	env, err := wpc.getWorkerEnvironment(workerId, machineId, workerCpu, workerMemory, workerGpuType, workerGpuCount, token)
 	if err != nil {
@@ -433,6 +425,33 @@ func (wpc *ProviderWorkerPoolController) createWorkerJob(workerId, machineId str
 		BuildVersion:  wpc.config.Worker.ImageTag,
 		Preemptable:   wpc.workerPoolConfig.Preemptable,
 	}, nil
+}
+
+func providerWorkerResources(defaultCPURequest, workerCPU int64, workerGPUType string, gpuCount uint32) corev1.ResourceRequirements {
+	resources := corev1.ResourceRequirements{}
+	if workerCPU > 0 {
+		// Provider clusters contain one physical node. Request only the normal
+		// scheduling footprint, but cap the worker pod at its advertised CPU so
+		// nested user cgroups cannot oversubscribe the machine in aggregate.
+		cpuRequest := min(workerCPU, max(defaultCPURequest, 0))
+		resources.Requests = corev1.ResourceList{
+			corev1.ResourceCPU: *resource.NewMilliQuantity(cpuRequest, resource.DecimalSI),
+		}
+		resources.Limits = corev1.ResourceList{
+			corev1.ResourceCPU: *resource.NewMilliQuantity(workerCPU, resource.DecimalSI),
+		}
+	}
+	if workerGPUType != "" {
+		if resources.Requests == nil {
+			resources.Requests = corev1.ResourceList{}
+		}
+		if resources.Limits == nil {
+			resources.Limits = corev1.ResourceList{}
+		}
+		resources.Requests["nvidia.com/gpu"] = *resource.NewQuantity(int64(gpuCount), resource.DecimalSI)
+		resources.Limits["nvidia.com/gpu"] = *resource.NewQuantity(int64(gpuCount), resource.DecimalSI)
+	}
+	return resources
 }
 
 func (wpc *ProviderWorkerPoolController) getWorkerEnvironment(workerId, machineId string, cpu int64, memory int64, gpuType string, gpuCount uint32, token string) ([]corev1.EnvVar, error) {

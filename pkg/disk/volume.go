@@ -2,6 +2,7 @@ package disk
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -507,16 +508,27 @@ func (v *Volume) detach(ctx context.Context) error {
 	if err := v.manager.unmount(ctx, v.state.Mountpoint); err != nil {
 		return err
 	}
+	var disconnectErr error
 	if v.nbd != nil {
 		if err := v.manager.disconnectNBDDevice(ctx, v.nbd); err != nil {
-			return err
+			disconnectErr = err
+		} else {
+			v.nbd = nil
 		}
-		v.nbd = nil
 	}
-	if err := v.manager.stopQSD(ctx, v.qsd); err != nil {
+	stopErr := v.manager.stopQSD(ctx, v.qsd)
+	if stopErr == nil {
+		v.qsd = nil
+	}
+	// A dead daemon closes its NBD socket. If that cleared a failed
+	// disconnect, allow the state to be finalized instead of leaking it.
+	if v.nbd != nil && !v.manager.nbdDeviceBusy(v.nbd.name) {
+		v.nbd = nil
+		disconnectErr = nil
+	}
+	if err := errors.Join(disconnectErr, stopErr); err != nil {
 		return err
 	}
-	v.qsd = nil
 
 	v.state.Attached = false
 	v.state.QSDPid = 0
