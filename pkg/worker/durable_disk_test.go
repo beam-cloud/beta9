@@ -351,6 +351,32 @@ func TestDurableDiskInactivityWatchdogResetsOnlyOnProgress(t *testing.T) {
 	}
 }
 
+// Prevents this: flattening or committing a many-gigabyte qcow chain uploads
+// nothing for minutes, the watchdog read the silence as a stall, and snapshots
+// of exactly the heaviest disks always failed around the inactivity deadline.
+func TestDurableDiskPhaseHeartbeatKeepsTheWatchdogFed(t *testing.T) {
+	ctx, stop := withDurableDiskInactivityWatchdog(context.Background(), 80*time.Millisecond)
+	defer stop()
+
+	stopHeartbeat := durableDiskPhaseHeartbeat(ctx, 20*time.Millisecond)
+	time.Sleep(300 * time.Millisecond)
+	select {
+	case <-ctx.Done():
+		t.Fatal("watchdog expired during a heartbeat-covered phase")
+	default:
+	}
+
+	// Once the phase ends the watchdog is armed again: silence after the
+	// heartbeat stops must still catch a genuinely stalled snapshot.
+	stopHeartbeat()
+	select {
+	case <-ctx.Done():
+		require.ErrorIs(t, context.Cause(ctx), errDurableDiskSnapshotInactive)
+	case <-time.After(400 * time.Millisecond):
+		t.Fatal("watchdog did not cancel after the heartbeat stopped")
+	}
+}
+
 func TestDurableDiskLockContentionKeepsInactivityWatchdogAlive(t *testing.T) {
 	diskPath := filepath.Join(t.TempDir(), "disk")
 	mount := &types.Mount{

@@ -1019,19 +1019,6 @@ func (pb *PodProxyBuffer) pruneBackendTransports(containers []container) {
 func (pb *PodProxyBuffer) proxyWebSocket(conn *connection, container container, addr string, path string) error {
 	subprotocols := websocket.Subprotocols(conn.ctx.Request())
 
-	upgrader := websocket.Upgrader{
-		CheckOrigin: func(r *http.Request) bool {
-			return true // Allow all origins
-		},
-		Subprotocols: subprotocols,
-	}
-
-	clientConn, err := upgrader.Upgrade(conn.ctx.Response().Writer, conn.ctx.Request(), nil)
-	if err != nil {
-		return err
-	}
-	defer clientConn.Close()
-
 	wsURL, err := url.Parse(podBackendURL("ws", addr, path, conn.ctx.Request().URL.RawQuery))
 	if err != nil {
 		return err
@@ -1047,11 +1034,38 @@ func (pb *PodProxyBuffer) proxyWebSocket(conn *connection, container container, 
 		Subprotocols: subprotocols,
 	}
 
-	serverConn, _, err := dstDialer.Dial(wsURL.String(), forwardedWebSocketHeaders(conn.ctx.Request()))
+	// The backend is dialed before the client is upgraded: once the upgrade
+	// has happened this handler can only answer a dead backend by slamming the
+	// fresh socket shut, which the browser reports as a connection that never
+	// worked. Before the upgrade a failure is still an ordinary HTTP error,
+	// and a cold route gets the same single redial the HTTP path has.
+	var serverConn *websocket.Conn
+	for attempt := 0; ; attempt++ {
+		var err error
+		serverConn, _, err = dstDialer.Dial(wsURL.String(), forwardedWebSocketHeaders(conn.ctx.Request()))
+		if err == nil {
+			break
+		}
+		if attempt < backendDialRetryLimit && conn.ctx.Request().Context().Err() == nil {
+			log.Warn().Err(err).Str("container_id", container.id).Str("stub_id", pb.stubId).Msg("websocket backend dial failed; dialing again")
+			continue
+		}
+		return conn.ctx.String(http.StatusBadGateway, "Backend route unavailable")
+	}
+	defer serverConn.Close()
+
+	upgrader := websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool {
+			return true // Allow all origins
+		},
+		Subprotocols: subprotocols,
+	}
+
+	clientConn, err := upgrader.Upgrade(conn.ctx.Response().Writer, conn.ctx.Request(), nil)
 	if err != nil {
 		return err
 	}
-	defer serverConn.Close()
+	defer clientConn.Close()
 
 	wg := sync.WaitGroup{}
 	wg.Add(2)

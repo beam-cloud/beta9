@@ -1912,7 +1912,7 @@ func TestEvictImageCacheProtectsRecentAndMountedImages(t *testing.T) {
 	require.NoFileExists(t, filepath.Join(cacheRoot, "stale.rclip"))
 }
 
-func TestEvictImageCacheFailsClosedForLayersWithoutMountedMetadata(t *testing.T) {
+func TestEvictImageCacheProtectsLayersWithoutMountedMetadata(t *testing.T) {
 	cacheRoot := t.TempDir()
 	mountRoot := filepath.Join(t.TempDir(), "mnt")
 	layerHash := strings.Repeat("d", 64)
@@ -1928,9 +1928,38 @@ func TestEvictImageCacheFailsClosedForLayersWithoutMountedMetadata(t *testing.T)
 	evicted, _ := evictImageCache(cacheRoot, protected, time.Now().Add(-time.Hour), 0)
 
 	require.False(t, protected.complete)
-	require.Zero(t, evicted)
+	require.Equal(t, 1, evicted)
 	require.FileExists(t, filepath.Join(cacheRoot, layerHash))
-	require.FileExists(t, filepath.Join(cacheRoot, "stale.clip"))
+	require.NoFileExists(t, filepath.Join(cacheRoot, "stale.clip"))
+}
+
+func TestPruneStaleImageMountPaths(t *testing.T) {
+	mountRoot := t.TempDir()
+	for _, workerID := range []string{"live", "stale"} {
+		require.NoError(t, os.Mkdir(filepath.Join(mountRoot, workerID), 0o755))
+	}
+
+	pruned, complete := pruneStaleImageMountPathsWithLookup(mountRoot, func(workerID string) (bool, error) {
+		return workerID == "live", nil
+	})
+
+	require.True(t, complete)
+	require.Equal(t, 1, pruned)
+	require.DirExists(t, filepath.Join(mountRoot, "live"))
+	require.NoDirExists(t, filepath.Join(mountRoot, "stale"))
+}
+
+func TestPruneStaleImageMountPathsPreservesWorkersWithUnknownLiveness(t *testing.T) {
+	mountRoot := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(mountRoot, "unknown"), 0o755))
+
+	pruned, complete := pruneStaleImageMountPathsWithLookup(mountRoot, func(string) (bool, error) {
+		return false, errors.New("gateway unavailable")
+	})
+
+	require.False(t, complete)
+	require.Zero(t, pruned)
+	require.DirExists(t, filepath.Join(mountRoot, "unknown"))
 }
 
 func writeStubCodeCacheEntry(t *testing.T, root, name string, readyTime time.Time) string {

@@ -546,3 +546,25 @@ func TestRecoverCleansUpCrashedVolume(t *testing.T) {
 		t.Fatal("crashed volume must not be adopted")
 	}
 }
+
+func TestDetachAllCleansEveryOwnedVolume(t *testing.T) {
+	manager := NewManager(Config{Root: t.TempDir(), Runner: fakeRunner})
+	for _, key := range []string{"disk-a", "disk-b"} {
+		dir := manager.volumeDir(key)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		state := &volumeState{Key: key, Attached: true}
+		if err := saveVolumeState(dir, state); err != nil {
+			t.Fatal(err)
+		}
+		manager.volumes[key] = &Volume{manager: manager, dir: dir, state: state}
+	}
+
+	if err := manager.DetachAll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(manager.volumes) != 0 {
+		t.Fatalf("owned volumes after detach = %d, want 0", len(manager.volumes))
+	}
+}

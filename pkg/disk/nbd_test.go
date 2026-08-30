@@ -125,3 +125,17 @@ func TestEnsureNBDDevicesRejectsMalformedKernelDeviceNumber(t *testing.T) {
 		t.Fatalf("ensureNBDDevices() error = %v", err)
 	}
 }
+
+func TestDisconnectTreatsAlreadyClearedDeviceAsSuccess(t *testing.T) {
+	manager := NewManager(Config{
+		SysBlockPath: t.TempDir(),
+		DevPath:      t.TempDir(),
+		Runner: func(context.Context, string, ...string) ([]byte, error) {
+			return nil, fmt.Errorf("not connected")
+		},
+	})
+
+	if err := manager.disconnectNBDDevice(context.Background(), &nbdDevice{name: "nbd0", Path: "/dev/nbd0"}); err != nil {
+		t.Fatalf("disconnect already-cleared device: %v", err)
+	}
+}

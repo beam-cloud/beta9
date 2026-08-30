@@ -462,6 +462,7 @@ func (s *Worker) finishContainerShutdown(containerId string, request *types.Cont
 	}
 
 	s.deleteContainer(containerId)
+	s.cleanupIdleQcowVolumes()
 	if request != nil && s.completedRequests != nil {
 		var workerDone <-chan struct{}
 		if s.ctx != nil {

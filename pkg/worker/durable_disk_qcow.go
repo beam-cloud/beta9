@@ -284,7 +284,10 @@ func (s *Worker) snapshotQcowDurableDiskMount(ctx context.Context, request *type
 	// Fold published layers into the base so a long-running machine can be
 	// snapshotted indefinitely without hitting the local chain depth cap.
 	if volume.Depth() > disk.DefaultFlattenDepth {
-		if err := volume.Compact(ctx); err != nil {
+		stopHeartbeat := durableDiskPhaseHeartbeat(ctx, durableDiskPhaseHeartbeatInterval)
+		err := volume.Compact(ctx)
+		stopHeartbeat()
+		if err != nil {
 			log.Warn().Err(err).Str("disk", mount.DurableDisk.Name).Msg("failed to compact qcow backing chain")
 		}
 	}
@@ -358,7 +361,10 @@ func (s *Worker) publishQcowLayer(ctx context.Context, request *types.ContainerR
 		// Publish a parentless flattened generation so restore chains stay
 		// short. The local chain is untouched; only the artifact differs.
 		flatPath := sealedPath + ".flat"
-		if err := volume.Flatten(ctx, sealedPath, flatPath); err != nil {
+		stopHeartbeat := durableDiskPhaseHeartbeat(ctx, durableDiskPhaseHeartbeatInterval)
+		err := volume.Flatten(ctx, sealedPath, flatPath)
+		stopHeartbeat()
+		if err != nil {
 			return nil, nil, fmt.Errorf("flatten qcow chain: %w", err)
 		}
 		defer os.Remove(flatPath)
@@ -367,9 +373,11 @@ func (s *Worker) publishQcowLayer(ctx context.Context, request *types.ContainerR
 	}
 
 	chunkPrefix := durableDiskChunkPrefix(mount)
+	stopHeartbeat := durableDiskPhaseHeartbeat(ctx, durableDiskPhaseHeartbeatInterval)
 	layer, err := disk.ScanLayer(uploadPath, func(digest string) string {
 		return path.Join(chunkPrefix, strings.TrimPrefix(digest, "sha256:"))
 	})
+	stopHeartbeat()
 	if err != nil {
 		return nil, nil, fmt.Errorf("scan qcow layer: %w", err)
 	}

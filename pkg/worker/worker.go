@@ -1423,6 +1423,13 @@ func (s *Worker) shutdown() error {
 
 	s.waitForActiveContainersBeforeShutdown()
 	s.stopActiveContainersForShutdown()
+	if s.diskManager != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), durableDiskCleanupGrace)
+		if err := s.diskManager.DetachAll(ctx); err != nil {
+			errs = errors.Join(errs, fmt.Errorf("failed to detach qcow volumes: %w", err))
+		}
+		cancel()
+	}
 
 	if s.containerNetworkManager != nil {
 		if err := s.containerNetworkManager.Close(); err != nil {

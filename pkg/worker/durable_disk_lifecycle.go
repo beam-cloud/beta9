@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"time"
 
@@ -64,8 +65,12 @@ func (s *Worker) finalizeDurableDiskMountsWithContext(ctx context.Context, conta
 	)
 	defer stopProgress()
 
-	if _, syncErr := s.syncDurableDiskMounts(progressCtx, request, durableDiskSyncFinal); syncErr != nil {
-		log.Error().Str("container_id", containerID).Err(syncErr).Msg("failed to sync durable disks during container cleanup")
+	_, syncErr := s.syncDurableDiskMounts(progressCtx, request, durableDiskSyncFinal)
+	// Final sync can consume or cancel its transfer budget. Detach gets a fresh
+	// cleanup context so the NBD is still released after the container exits.
+	detachErr := s.detachFinalQcowDurableDisks(request)
+	if finalErr := errors.Join(syncErr, detachErr); finalErr != nil {
+		log.Error().Str("container_id", containerID).Err(finalErr).Msg("failed to finalize durable disks during container cleanup")
 		finalExitCode = durableDiskSyncFailureExitCode(exitCode)
 		if finalExitCode != exitCode {
 			s.setLocalContainerExitCode(containerID, finalExitCode)
@@ -73,6 +78,39 @@ func (s *Worker) finalizeDurableDiskMountsWithContext(ctx context.Context, conta
 		}
 	}
 	return finalExitCode, finalExitReported
+}
+
+func (s *Worker) detachFinalQcowDurableDisks(request *types.ContainerRequest) error {
+	if request == nil || s.diskManager == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(s.durableDiskCleanupContext(), durableDiskCleanupGrace)
+	defer cancel()
+
+	var errs error
+	for i := range request.Mounts {
+		mount := &request.Mounts[i]
+		if isQcowDurableDiskMount(mount) {
+			errs = errors.Join(errs, s.detachQcowDurableDiskMount(ctx, request, mount))
+		}
+	}
+	return errs
+}
+
+func (s *Worker) cleanupIdleQcowVolumes() {
+	if s.diskManager == nil || s.containerInstances == nil {
+		return
+	}
+	s.containerLock.Lock()
+	defer s.containerLock.Unlock()
+	if s.containerInstances.Len() != 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(s.durableDiskCleanupContext(), durableDiskCleanupGrace)
+	defer cancel()
+	if err := s.diskManager.DetachAll(ctx); err != nil {
+		log.Warn().Err(err).Msg("failed to detach idle qcow volumes")
+	}
 }
 
 func durableDiskSyncFailureExitCode(exitCode int) int {
