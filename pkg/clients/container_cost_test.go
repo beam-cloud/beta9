@@ -175,6 +175,62 @@ func TestContainerCostClientSeparatesWorkspaceAndSandboxQuotes(t *testing.T) {
 	}
 }
 
+// Prevents this: concurrent refreshes were deduplicated by resources alone, so
+// two workspaces asking at the same moment shared one flight and one of them
+// was handed the other's price.
+func TestContainerCostClientDoesNotCoalesceAcrossWorkspaces(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		var request ContainerCostRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+		cost := "0.1"
+		if request.WorkspaceId == "workspace-b" {
+			cost = "0.2"
+		}
+		_, _ = fmt.Fprintf(w, `{"cost_per_ms":%q}`, cost)
+	}))
+	t.Cleanup(server.Close)
+
+	client := NewContainerCostClient(types.ContainerCostHookConfig{Endpoint: server.URL, Token: "test-token"})
+	requests := map[string]*types.ContainerRequest{
+		"workspace-a": {WorkspaceId: "workspace-a", Cpu: 1_000, Memory: 1_024},
+		"workspace-b": {WorkspaceId: "workspace-b", Cpu: 1_000, Memory: 1_024},
+	}
+	want := map[string]float64{"workspace-a": 0.1, "workspace-b": 0.2}
+
+	start := make(chan struct{})
+	errs := make(chan error, len(requests))
+	var wg sync.WaitGroup
+	for workspace, request := range requests {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			quote, err := client.GetContainerCostQuote(context.Background(), request)
+			if err == nil && (!quote.Valid || quote.CostPerMs != want[workspace]) {
+				err = fmt.Errorf("%s quote = %+v, want cost %v", workspace, quote, want[workspace])
+			}
+			errs <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("quote calls = %d, want one refresh per workspace", got)
+	}
+}
+
 func TestContainerCostClientRetriesWhenNoQuoteWasCached(t *testing.T) {
 	clock := newAtomicTestClock(time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC))
 	var calls atomic.Int32

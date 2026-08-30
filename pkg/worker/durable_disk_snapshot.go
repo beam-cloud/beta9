@@ -105,6 +105,34 @@ func withDurableDiskInactivityWatchdog(ctx context.Context, timeout time.Duratio
 	}
 }
 
+// durableDiskPhaseHeartbeat reports snapshot progress on an interval until the
+// returned stop function is called. Long single operations — a block-commit or
+// qemu-img convert of a many-gigabyte chain, hashing a sealed layer — do real
+// work for minutes with nothing uploaded to report, and without a heartbeat
+// the inactivity watchdog reads that silence as a stall and fails healthy
+// snapshots of exactly the disks that take longest to capture. The phases fed
+// this way run supervised subprocesses or QMP jobs bounded by the caller's
+// context, so a genuine hang still has an owner.
+func durableDiskPhaseHeartbeat(ctx context.Context, interval time.Duration) func() {
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				reportDurableDiskProgress(ctx, durableDiskProgressEvent{})
+			}
+		}
+	}()
+	var once sync.Once
+	return func() { once.Do(func() { close(done) }) }
+}
+
 type durableDiskSnapshotStore interface {
 	Upload(ctx context.Context, key string, data []byte) error
 	UploadWithReader(ctx context.Context, key string, data io.Reader) error

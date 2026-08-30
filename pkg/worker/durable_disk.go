@@ -25,6 +25,7 @@ const (
 	durableDiskLockWait   = 10 * time.Minute
 
 	durableDiskSnapshotInactivityTimeout = 3 * time.Minute
+	durableDiskPhaseHeartbeatInterval    = 45 * time.Second
 
 	durableDiskStateClean = "clean"
 	durableDiskStateDirty = "dirty"

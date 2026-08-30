@@ -309,6 +309,51 @@ func TestForwardRequestProxiesReadyBackendWithoutQueueing(t *testing.T) {
 	}
 }
 
+// Prevents this: the websocket path upgraded the browser before dialing the
+// machine, so a cold or racing dial could only slam the fresh socket shut —
+// which VNC clients report as a first connect that never works.
+func TestForwardRequestAnswersWebSocketDialFailureBeforeUpgrade(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadAddress := listener.Addr().String()
+	listener.Close()
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/websockify", nil)
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", "websocket")
+	req.Header.Set("Sec-Websocket-Version", "13")
+	req.Header.Set("Sec-Websocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+	rec := httptest.NewRecorder()
+	ctx := e.NewContext(req, rec)
+	ctx.SetParamNames("port", "subPath")
+	ctx.SetParamValues("8000", "websockify")
+
+	parentCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pb := &PodProxyBuffer{
+		ctx:        parentCtx,
+		workspace:  &types.Workspace{Name: "workspace"},
+		stubId:     "stub",
+		stubConfig: &types.StubConfigV1{},
+		buffer:     abstractions.NewRingBuffer[*connection](1),
+		availableContainers: []container{{
+			id:              "container-1",
+			addressMap:      map[int32]string{8000: deadAddress},
+			readyAddressMap: map[int32]string{8000: deadAddress},
+		}},
+	}
+
+	if err := pb.ForwardRequest(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d; body=%q", rec.Code, http.StatusBadGateway, rec.Body.String())
+	}
+}
+
 func TestForwardRequestRequeuesClosingRouteAndPreservesBody(t *testing.T) {
 	staleRouteID := "stale-route"
 	receivedBody := make(chan string, 1)

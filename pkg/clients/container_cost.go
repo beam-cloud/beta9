@@ -261,9 +261,14 @@ func (c *ContainerCostClient) lastGood(key ContainerCostRequest) ContainerCostQu
 	return c.quotes[key].quote
 }
 
+// cacheKey must cover every field of the request: it deduplicates in-flight
+// refreshes, and two requests that differ anywhere (workspace, sandbox flag)
+// can be quoted differently. A narrower key hands one workspace's quote to
+// another workspace's concurrent lookup.
 func (r ContainerCostRequest) cacheKey() string {
-	return strconv.FormatInt(r.Cpu, 10) + "\x00" + strconv.FormatInt(r.Memory, 10) +
-		"\x00" + r.Gpu + "\x00" + strconv.FormatUint(uint64(r.GpuCount), 10)
+	return r.WorkspaceId + "\x00" + strconv.FormatInt(r.Cpu, 10) + "\x00" + strconv.FormatInt(r.Memory, 10) +
+		"\x00" + r.Gpu + "\x00" + strconv.FormatUint(uint64(r.GpuCount), 10) +
+		"\x00" + strconv.FormatBool(r.Sandbox)
 }
 
 func optionalTime(value, name string) (time.Time, error) {
