@@ -149,6 +149,10 @@ func TestSandboxProcessManagerEndpointsIgnoreInvalidPublishedAddress(t *testing.
 	require.Equal(t, int(types.WorkerSandboxProcessManagerPort), endpoints[0].port)
 }
 
+func TestDockerSandboxStartupCleanupRemovesStalePidFile(t *testing.T) {
+	require.Equal(t, "rm -f /var/run/docker.pid", dockerSandboxStartupCleanupScript())
+}
+
 func TestDockerSandboxShutdownScriptStopsInnerRuntime(t *testing.T) {
 	script := dockerSandboxShutdownScript()
 
