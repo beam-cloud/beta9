@@ -145,6 +145,7 @@ func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, rt runtime.Run
 		AllowOpenTCP: true, // Allow open TCP connections
 		SkipInFlight: true, // Skip in-flight TCP packets
 		LinkRemap:    true, // Enable link remapping for file descriptors
+		FileLocks:    true, // Preserve daemon-held locks, including dockerd's.
 	}
 
 	attempts := 1

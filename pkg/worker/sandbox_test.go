@@ -163,3 +163,15 @@ func TestDockerSandboxShutdownScriptStopsInnerRuntime(t *testing.T) {
 	require.Contains(t, script, "pkill -KILL containerd")
 	require.True(t, strings.HasSuffix(strings.TrimSpace(script), "exit 0"))
 }
+
+func TestStopDockerSandboxPreservesTerminalCheckpointState(t *testing.T) {
+	instance := &ContainerInstance{
+		Request: &types.ContainerRequest{DockerEnabled: true},
+	}
+	instance.initializeProcessManagerReadiness()
+	instance.signalProcessManagerReadiness(true)
+	instance.terminalCheckpointCreated.Store(true)
+
+	// A nil process manager would panic if stopDockerSandbox attempted cleanup.
+	(&Worker{}).stopDockerSandbox("container-1", instance, false)
+}

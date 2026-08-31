@@ -151,6 +151,14 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 		return
 	}
 
+	// A memory restore brings dockerd and its socket back with the sandbox.
+	// Reusing that process preserves the daemon's in-memory state and avoids
+	// launching a second daemon against the same data root.
+	if err := s.probeDockerDaemon(ctx, instance); err == nil {
+		log.Info().Str("container_id", containerId).Msg("restored docker daemon is ready")
+		return
+	}
+
 	log.Info().Str("container_id", containerId).Msg("starting docker daemon in sandbox")
 
 	// A filesystem checkpoint preserves /run from the sandbox root. The old
@@ -216,6 +224,14 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 
 func (s *Worker) stopDockerSandbox(containerId string, instance *ContainerInstance, force bool) {
 	if force || instance == nil || instance.Request == nil || !instance.Request.DockerEnabled {
+		return
+	}
+	// A terminal memory checkpoint already captured the live Docker process tree
+	// and its runtime filesystem. Mutating that filesystem afterward makes the
+	// checkpoint internally inconsistent, most visibly when runsc restores its
+	// saved 9p paths. The outer runtime stop below is sufficient here.
+	if instance.terminalCheckpointCreated.Load() {
+		log.Info().Str("container_id", containerId).Msg("preserving Docker state captured by terminal checkpoint")
 		return
 	}
 	if instance.SandboxProcessManager == nil || !instance.processManagerReady() {

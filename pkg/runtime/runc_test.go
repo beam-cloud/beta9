@@ -81,6 +81,29 @@ func TestRestoreArgs(t *testing.T) {
 	}
 }
 
+func TestRuncCheckpointForwardsFileLocks(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "runc.log")
+	runcPath := filepath.Join(dir, "runc")
+	require.NoError(t, os.WriteFile(runcPath, []byte(`#!/bin/sh
+set -eu
+printf '%s\n' "$*" > "$RUNC_FAKE_LOG"
+`), 0o755))
+	t.Setenv("RUNC_FAKE_LOG", logPath)
+
+	rt, err := NewRunc(Config{RuncPath: runcPath})
+	require.NoError(t, err)
+	require.NoError(t, rt.Checkpoint(context.Background(), "container-1", &CheckpointOpts{
+		ImagePath: "/checkpoints/container-1",
+		WorkDir:   "/tmp/checkpoint-work",
+		FileLocks: true,
+	}))
+
+	args, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	require.Contains(t, string(args), "--file-locks")
+}
+
 func TestPollRestoredContainerPIDWaitsForState(t *testing.T) {
 	attempts := 0
 	pid, result, err := pollRestoredContainerPID(

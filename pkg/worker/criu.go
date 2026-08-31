@@ -1224,6 +1224,9 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 		return err
 	}
 	availableStateCreated = true
+	if terminateRuntime && !filesystemOnly {
+		instance.terminalCheckpointCreated.Store(true)
+	}
 	s.reportCheckpointRequiredContent(opts.Request, opts.CheckpointId, persistedMetadata)
 
 	if opts.OutputLogger != nil {

@@ -1452,6 +1452,9 @@ func TestNvidiaCRIUManager(t *testing.T) {
 				if mockRuntime.checkpointOpts == nil || !mockRuntime.checkpointOpts.LeaveRunning {
 					t.Fatalf("unexpected hot checkpoint options: %+v", mockRuntime.checkpointOpts)
 				}
+				if !mockRuntime.checkpointOpts.FileLocks {
+					t.Fatal("checkpoint must preserve locks held by container daemons")
+				}
 			})
 
 			t.Run("CreateCheckpoint terminal state", func(t *testing.T) {

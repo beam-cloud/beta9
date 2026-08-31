@@ -196,6 +196,7 @@ func (r *Runc) Checkpoint(ctx context.Context, containerID string, opts *Checkpo
 		AllowOpenTCP: opts.AllowOpenTCP,
 		SkipInFlight: opts.SkipInFlight,
 		LinkRemap:    opts.LinkRemap,
+		FileLocks:    opts.FileLocks,
 		Cgroups:      runc.Soft,
 	}
 

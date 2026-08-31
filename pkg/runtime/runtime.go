@@ -61,6 +61,7 @@ type CheckpointOpts struct {
 	AllowOpenTCP bool         // Allow open TCP connections
 	SkipInFlight bool         // Skip in-flight TCP connections
 	LinkRemap    bool         // Enable link remapping
+	FileLocks    bool         // Preserve file locks held by container processes
 	OutputWriter OutputWriter // Writer for checkpoint output
 }
 

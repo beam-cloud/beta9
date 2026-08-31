@@ -164,6 +164,7 @@ type ContainerInstance struct {
 	containerAddressMu         sync.RWMutex
 	ContainerAddressMap        map[int32]string
 	Runtime                    runtime.Runtime
+	terminalCheckpointCreated  atomic.Bool
 	StopEscalationStarted      atomic.Bool
 	StuckMountRecoveryStarted  atomic.Bool
 	statusHeartbeatMu          sync.Mutex
