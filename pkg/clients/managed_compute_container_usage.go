@@ -106,18 +106,25 @@ func managedComputeContainerUsageBody(
 	if request.WorkspaceId == "" || request.ContainerId == "" || !end.After(start) {
 		return nil, fmt.Errorf("managed compute usage is missing attribution or duration")
 	}
-	if costCents == nil || *costCents <= 0 || math.IsNaN(*costCents) || math.IsInf(*costCents, 0) {
-		return nil, fmt.Errorf("managed compute usage is missing a positive cost")
-	}
-	costMicros := math.Ceil(*costCents * 10_000)
-	if math.IsInf(costMicros, 0) || costMicros >= float64(1<<63) {
-		return nil, fmt.Errorf("managed compute usage cost is too large")
+
+	// The quote is optional: the cost hook cannot price every deployment, and
+	// the ledger stops machines whose usage goes silent. An unquoted window is
+	// sent with its resources and duration, and the ledger prices it from its
+	// own rate card.
+	var costMicros *int64
+	if costCents != nil && *costCents > 0 && !math.IsNaN(*costCents) && !math.IsInf(*costCents, 0) {
+		micros := math.Ceil(*costCents * 10_000)
+		if math.IsInf(micros, 0) || micros >= float64(1<<63) {
+			return nil, fmt.Errorf("managed compute usage cost is too large")
+		}
+		quoted := int64(micros)
+		costMicros = &quoted
 	}
 
 	payload := struct {
 		WorkspaceID   string    `json:"workspace_id"`
 		ReservationID string    `json:"reservation_id"`
-		CostMicros    int64     `json:"cost_micros"`
+		CostMicros    *int64    `json:"cost_micros,omitempty"`
 		StartAt       time.Time `json:"start_at"`
 		EndAt         time.Time `json:"end_at"`
 		GPU           string    `json:"gpu"`
@@ -127,7 +134,7 @@ func managedComputeContainerUsageBody(
 	}{
 		WorkspaceID:   request.WorkspaceId,
 		ReservationID: request.ContainerId,
-		CostMicros:    int64(costMicros),
+		CostMicros:    costMicros,
 		StartAt:       start.UTC(),
 		EndAt:         end.UTC(),
 		GPU:           request.Gpu,

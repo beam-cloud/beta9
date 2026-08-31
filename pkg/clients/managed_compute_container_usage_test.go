@@ -195,3 +195,47 @@ func TestManagedComputeContainerUsageRejectsInt64Overflow(t *testing.T) {
 		t.Fatalf("error = %v, want cost overflow", err)
 	}
 }
+
+// A cost-hook outage (or a workspace it cannot quote) leaves intervals without
+// a cost. Routed usage must still be sent — with resources and duration, no
+// cost fields — so the ledger can price it from its own rate card. Dropping it
+// instead bricks every machine the route covers: the ledger stops machines
+// whose usage goes silent.
+func TestManagedComputeContainerUsageSendsUnquotedWindowsWithoutACost(t *testing.T) {
+	requests := make(chan map[string]any, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		requests <- payload
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	recorder := managedComputeUsageTestRecorder(server.URL)
+	start := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	request := managedComputeUsageTestRequest("tama-machine-1")
+	request.Cpu = 4_000
+	request.Memory = 8_192
+	if err := recorder.RecordContainerUsage(context.Background(), request, start, start.Add(time.Minute), nil); err != nil {
+		t.Fatal(err)
+	}
+	payload := <-requests
+	if _, quoted := payload["cost_micros"]; quoted {
+		t.Fatalf("payload = %+v, want no cost on an unquoted window", payload)
+	}
+	if payload["cpu_millicores"] != float64(4_000) || payload["memory_mb"] != float64(8_192) {
+		t.Fatalf("payload = %+v, want resources for the ledger's rate card", payload)
+	}
+
+	// A quoted interval keeps sending the quote.
+	cost := 0.012345
+	if err := recorder.RecordContainerUsage(context.Background(), request, start, start.Add(time.Minute), &cost); err != nil {
+		t.Fatal(err)
+	}
+	payload = <-requests
+	if payload["cost_micros"] != float64(124) {
+		t.Fatalf("cost_micros = %v, want 124", payload["cost_micros"])
+	}
+}
