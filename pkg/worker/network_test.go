@@ -244,6 +244,17 @@ func TestReservePortsIsUniqueAcrossConcurrentContainers(t *testing.T) {
 	}
 }
 
+func TestIPTablesRuleOwnsExactPort(t *testing.T) {
+	rule := `-A PREROUTING -p tcp -m tcp --dport 42817 -j DNAT --to-destination 192.168.1.172:8001`
+
+	if !iptablesRuleOwnsPort(rule, 42817) {
+		t.Fatal("expected DNAT rule to own its destination port")
+	}
+	if iptablesRuleOwnsPort(rule, 4281) || iptablesRuleOwnsPort(rule, 142817) {
+		t.Fatal("destination port matching must be exact")
+	}
+}
+
 func TestShouldCleanupNetworkSlotReservation(t *testing.T) {
 	workerExists := func(workerID string) (bool, error) {
 		switch workerID {

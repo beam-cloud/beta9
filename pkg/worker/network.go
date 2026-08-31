@@ -398,6 +398,16 @@ func iptablesRuleFields(rule string) []string {
 	return fields
 }
 
+func iptablesRuleOwnsPort(rule string, port int) bool {
+	fields := iptablesRuleFields(rule)
+	for i := 0; i+1 < len(fields); i++ {
+		if fields[i] == "--dport" && fields[i+1] == strconv.Itoa(port) {
+			return true
+		}
+	}
+	return false
+}
+
 func iptablesAddressMatches(value string, ip string) bool {
 	target := net.ParseIP(ip)
 	if target == nil {
@@ -2505,6 +2515,29 @@ func (m *ContainerNetworkManager) exposePortDNATLocked(info *containerNetworkInf
 		}
 	}
 	return nil
+}
+
+// HostPortConflict reports whether PREROUTING already owns port. DNAT runs
+// before socket lookup, so net.Listen alone cannot detect this collision.
+func (m *ContainerNetworkManager) HostPortConflict(port int) (bool, error) {
+	m.iptablesMu.Lock()
+	defer m.iptablesMu.Unlock()
+
+	for _, ipt := range []*iptables.IPTables{m.ipt, m.ipt6} {
+		if ipt == nil {
+			continue
+		}
+		rules, err := ipt.List("nat", "PREROUTING")
+		if err != nil {
+			return false, fmt.Errorf("list nat/PREROUTING rules: %w", err)
+		}
+		for _, rule := range rules {
+			if iptablesRuleOwnsPort(rule, port) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 func (m *ContainerNetworkManager) stopContainerPortExposures(containerId string) {

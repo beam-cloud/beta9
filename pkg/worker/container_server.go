@@ -129,7 +129,7 @@ func (s *ContainerRuntimeServer) Start() error {
 		return errors.New("server already started")
 	}
 
-	listener, err := net.Listen("tcp", ":0") // Random free port
+	listener, err := listenForContainerRuntimeServer(s.containerNetworkManager)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to listen")
 		return fmt.Errorf("failed to listen: %w", err)
@@ -154,6 +154,35 @@ func (s *ContainerRuntimeServer) Start() error {
 	}()
 
 	return nil
+}
+
+type hostPortConflictChecker interface {
+	HostPortConflict(port int) (bool, error)
+}
+
+func listenForContainerRuntimeServer(networkManager ContainerNetwork) (net.Listener, error) {
+	checker, _ := networkManager.(hostPortConflictChecker)
+	for attempts := 0; attempts < 100; attempts++ {
+		listener, err := net.Listen("tcp", ":0")
+		if err != nil {
+			return nil, err
+		}
+		if checker == nil {
+			return listener, nil
+		}
+
+		port := listener.Addr().(*net.TCPAddr).Port
+		conflict, err := checker.HostPortConflict(port)
+		if err != nil {
+			_ = listener.Close()
+			return nil, err
+		}
+		if !conflict {
+			return listener, nil
+		}
+		_ = listener.Close()
+	}
+	return nil, errors.New("failed to bind container runtime server outside existing host forwarding rules")
 }
 
 func (s *ContainerRuntimeServer) Stop() error {

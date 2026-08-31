@@ -71,6 +71,7 @@ const (
 	cacheDefaultReconcileMaxDiskUsagePct = 0.80
 	cacheDefaultStubCodeEvictWatermark   = 0.80
 	cacheReconcileDiskUsageHysteresisPct = 0.03
+	checkpointMaterializationLockPoll    = 10 * time.Millisecond
 	// cacheReconcileOwnerGracePeriod preserves placement for one full owner
 	// lease, then lets a live peer rehydrate recent content. Waiting longer
 	// leaves failover workers routed to an endpoint-less logical host.
@@ -354,9 +355,21 @@ func (m *WorkerCacheManager) acquireCheckpointMaterialization(ctx context.Contex
 
 	select {
 	case <-lock.token:
+		hostLock, err := m.acquireHostCheckpointMaterialization(ctx, checkpointID)
+		if err != nil {
+			lock.token <- struct{}{}
+			m.releaseCheckpointMaterializationRef(checkpointID, lock)
+			return nil, err
+		}
+
 		var once sync.Once
 		return func() {
 			once.Do(func() {
+				if hostLock != nil {
+					if err := hostLock.Release(); err != nil {
+						log.Error().Err(err).Str("checkpoint_id", checkpointID).Msg("failed to release checkpoint materialization lock")
+					}
+				}
 				lock.token <- struct{}{}
 				m.releaseCheckpointMaterializationRef(checkpointID, lock)
 			})
@@ -364,6 +377,42 @@ func (m *WorkerCacheManager) acquireCheckpointMaterialization(ctx context.Contex
 	case <-ctx.Done():
 		m.releaseCheckpointMaterializationRef(checkpointID, lock)
 		return nil, ctx.Err()
+	}
+}
+
+func (m *WorkerCacheManager) acquireHostCheckpointMaterialization(ctx context.Context, checkpointID string) (*FileLock, error) {
+	if m.checkpointRoot == "" {
+		return nil, nil
+	}
+
+	lockDir := filepath.Join(m.checkpointRoot, ".locks")
+	if err := os.MkdirAll(lockDir, 0755); err != nil {
+		return nil, fmt.Errorf("create checkpoint materialization lock directory: %w", err)
+	}
+
+	lock := NewFileLock(filepath.Join(lockDir, checkpointID+".lock"))
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
+		err := lock.Acquire()
+		if err == nil {
+			return lock, nil
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN) {
+			return nil, fmt.Errorf("acquire checkpoint materialization lock: %w", err)
+		}
+
+		timer := time.NewTimer(checkpointMaterializationLockPoll)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
 	}
 }
 

@@ -23,6 +23,25 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+type firstPortConflictNetwork struct {
+	*fakeContainerNetworkController
+	checks int
+}
+
+func (n *firstPortConflictNetwork) HostPortConflict(int) (bool, error) {
+	n.checks++
+	return n.checks == 1, nil
+}
+
+func TestContainerRuntimeListenerSkipsForwardedPort(t *testing.T) {
+	network := &firstPortConflictNetwork{fakeContainerNetworkController: &fakeContainerNetworkController{}}
+	listener, err := listenForContainerRuntimeServer(network)
+	require.NoError(t, err)
+	require.NotNil(t, listener)
+	require.GreaterOrEqual(t, network.checks, 2)
+	require.NoError(t, listener.Close())
+}
+
 type logAttachmentStream struct {
 	pb.ContainerService_ContainerStreamLogsServer
 	attached bool

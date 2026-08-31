@@ -995,6 +995,29 @@ func TestCheckpointMaterializationLockSerializesSameCheckpoint(t *testing.T) {
 	require.Empty(t, manager.checkpointLocks)
 }
 
+func TestCheckpointMaterializationLockSerializesAcrossManagersOnSameHost(t *testing.T) {
+	checkpointRoot := t.TempDir()
+	firstManager := &WorkerCacheManager{checkpointRoot: checkpointRoot}
+	secondManager := &WorkerCacheManager{checkpointRoot: checkpointRoot}
+
+	release, err := firstManager.acquireCheckpointMaterialization(context.Background(), "checkpoint-a")
+	require.NoError(t, err)
+
+	waitCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	_, err = secondManager.acquireCheckpointMaterialization(waitCtx, "checkpoint-a")
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+
+	releaseOther, err := secondManager.acquireCheckpointMaterialization(context.Background(), "checkpoint-b")
+	require.NoError(t, err)
+	releaseOther()
+
+	release()
+	releaseAgain, err := secondManager.acquireCheckpointMaterialization(context.Background(), "checkpoint-a")
+	require.NoError(t, err)
+	releaseAgain()
+}
+
 func TestCheckpointMaterializationLockCancellationIsSkipped(t *testing.T) {
 	manager := &WorkerCacheManager{}
 	release, err := manager.acquireCheckpointMaterialization(context.Background(), "checkpoint-a")
