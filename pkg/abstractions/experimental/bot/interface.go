@@ -5,11 +5,24 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"net/http"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	openai "github.com/sashabaranov/go-openai"
 	"github.com/sashabaranov/go-openai/jsonschema"
 	"gopkg.in/yaml.v2"
+)
+
+const (
+	botProviderOpenAI     = "openai"
+	botProviderOrcaRouter = "orcarouter"
+
+	httpRefererHeader = "HTTP-Referer"
+	xTitleHeader      = "X-Title"
+)
+
+var (
+	orcarouterBaseURL = "https://api.orcarouter.ai/v1"
 )
 
 type BotInterface struct {
@@ -55,7 +68,7 @@ func NewBotInterface(opts botInterfaceOpts) (*BotInterface, error) {
 	}
 
 	bi := &BotInterface{
-		client:       openai.NewClient(opts.BotConfig.ApiKey),
+		client:       newBotLLMClient(opts.BotConfig),
 		botConfig:    opts.BotConfig,
 		model:        opts.BotConfig.Model,
 		systemPrompt: systemPrompt,
@@ -87,6 +100,38 @@ func NewBotInterface(opts botInterfaceOpts) (*BotInterface, error) {
 	bi.memorySchema = schema
 
 	return bi, nil
+}
+
+// newBotLLMClient builds the OpenAI-compatible chat client used by the bot.
+// It selects the base URL and attribution headers based on the configured
+// LLM provider. For provider "orcarouter", requests are sent to the OrcaRouter
+// gateway, which exposes an OpenAI-compatible API across many models.
+func newBotLLMClient(botConfig BotConfig) *openai.Client {
+	config := openai.DefaultConfig(botConfig.ApiKey)
+
+	switch botConfig.Provider {
+	case botProviderOrcaRouter:
+		config.BaseURL = orcarouterBaseURL
+		config.HTTPClient = &http.Client{
+			Transport: &attributionTransport{},
+		}
+	}
+
+	return openai.NewClientWithConfig(config)
+}
+
+// attributionTransport sets gateway attribution headers on each request so the
+// upstream gateway can attribute traffic to the Beta9 SDK.
+type attributionTransport struct{}
+
+func (t *attributionTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Header.Get(httpRefererHeader) == "" {
+		req.Header.Set(httpRefererHeader, "https://github.com/beam-cloud/beta9")
+	}
+	if req.Header.Get(xTitleHeader) == "" {
+		req.Header.Set(xTitleHeader, "beta9")
+	}
+	return http.DefaultTransport.RoundTrip(req)
 }
 
 func (bi *BotInterface) initSession(sessionId string) error {

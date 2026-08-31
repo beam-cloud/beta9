@@ -222,10 +222,18 @@ class BotTransition:
 class Bot(RunnerAbstraction, DeployableMixin):
     """
     Parameters:
+        provider (str):
+            LLM provider to use for the bot. Default is "openai". Set to
+            "orcarouter" to route requests through an OrcaRouter API key,
+            which exposes an OpenAI-compatible gateway across many models.
         model (Optional[str]):
-            Which model to use for the bot. Default is "gpt-4o".
+            Which model to use for the bot. Default is "gpt-4o". When provider
+            is "orcarouter", this is a namespaced model id such as
+            "openai/gpt-4o-mini" or "orcarouter/auto".
         api_key (str):
-            OpenAI API key to use for the bot. In the future this will support other LLM providers.
+            API key to use for the bot. For provider="openai", this is an
+            OpenAI API key. For provider="orcarouter", this is an OrcaRouter
+            API key.
         locations (Optional[List[BotLocation]]):
             A list of locations where the bot can store markers. Default is [].
         description (Optional[str]):
@@ -241,6 +249,9 @@ class Bot(RunnerAbstraction, DeployableMixin):
 
     deployment_stub_type = BOT_DEPLOYMENT_STUB_TYPE
     base_stub_type = BOT_STUB_TYPE
+
+    OPENAI_PROVIDER = "openai"
+    ORCAROUTER_PROVIDER = "orcarouter"
 
     VALID_MODELS = [
         "gpt-4o",
@@ -263,16 +274,29 @@ class Bot(RunnerAbstraction, DeployableMixin):
         disks: Optional[List[DurableDisk]] = None,
         authorized: bool = True,
         welcome_message: Optional[str] = None,
+        provider: str = OPENAI_PROVIDER,
     ) -> None:
         super().__init__(volumes=volumes, disks=disks)
 
         if not api_key or api_key == "":
             raise ValueError("API key is required")
 
-        if model not in self.VALID_MODELS:
+        if provider not in (self.OPENAI_PROVIDER, self.ORCAROUTER_PROVIDER):
             raise ValueError(
-                f"Invalid model name: {model}. We currently only support: {', '.join(self.VALID_MODELS)}"
+                f"Invalid provider: {provider}. We currently only support: {self.OPENAI_PROVIDER}, {self.ORCAROUTER_PROVIDER}"
             )
+
+        if provider == self.OPENAI_PROVIDER:
+            if model not in self.VALID_MODELS:
+                raise ValueError(
+                    f"Invalid model name: {model}. We currently only support: {', '.join(self.VALID_MODELS)}"
+                )
+        else:
+            # OrcaRouter uses a namespaced model id (e.g. "openai/gpt-4o-mini",
+            # "orcarouter/auto"), so we accept any model string and pass it
+            # through to the gateway.
+            if not model or model == "":
+                raise ValueError("A model name is required")
 
         self.is_websocket = True
         self._bot_stub: Optional[BotServiceStub] = None
@@ -281,6 +305,7 @@ class Bot(RunnerAbstraction, DeployableMixin):
         self.parent: "Bot" = self
 
         self.extra: Dict[str, Dict[str, dict]] = {}
+        self.extra["provider"] = provider
         self.extra["model"] = model
         self.extra["locations"] = {}
         self.extra["description"] = description
