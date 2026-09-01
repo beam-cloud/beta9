@@ -139,3 +139,52 @@ func TestDisconnectTreatsAlreadyClearedDeviceAsSuccess(t *testing.T) {
 		t.Fatalf("disconnect already-cleared device: %v", err)
 	}
 }
+
+func TestAcquireNBDDeviceContinuesAfterKernelContention(t *testing.T) {
+	sysBlock, dev := t.TempDir(), t.TempDir()
+	writeTestNBDDevice(t, sysBlock, "nbd0", "43:0")
+	writeTestNBDDevice(t, sysBlock, "nbd1", "43:1")
+	for _, name := range []string{"nbd0", "nbd1"} {
+		if err := os.WriteFile(filepath.Join(sysBlock, name, "size"), []byte("8\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dev, name), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	manager := NewManager(Config{
+		Root:         t.TempDir(),
+		SysBlockPath: sysBlock,
+		DevPath:      dev,
+		Runner: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			switch name {
+			case "stat":
+				if strings.HasSuffix(args[len(args)-1], "nbd0") {
+					return []byte("6180:2b:0\n"), nil
+				}
+				return []byte("6180:2b:1\n"), nil
+			case "nbd-client":
+				deviceName := filepath.Base(args[4])
+				if err := os.WriteFile(filepath.Join(sysBlock, deviceName, "pid"), []byte("123\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				if deviceName == "nbd0" {
+					return []byte("Failed to setup device, check dmesg"), fmt.Errorf("exit status 1")
+				}
+				return nil, nil
+			default:
+				return nil, fmt.Errorf("unexpected command %s", name)
+			}
+		},
+	})
+
+	device, err := manager.acquireNBDDevice(context.Background(), "/tmp/nbd.sock", 4096)
+	if err != nil {
+		t.Fatalf("acquire after contention: %v", err)
+	}
+	defer device.release()
+	if device.name != "nbd1" {
+		t.Fatalf("acquired %s after nbd0 contention, want nbd1", device.name)
+	}
+}

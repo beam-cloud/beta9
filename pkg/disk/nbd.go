@@ -13,7 +13,7 @@ import (
 )
 
 // nbdDevice is an attached kernel NBD device. The flock is held for the whole
-// attachment so concurrent workers and recovery sweeps never race on a device.
+// attachment so concurrent work inside this worker never races on a device.
 type nbdDevice struct {
 	Path string // e.g. /dev/nbd3
 	name string // e.g. nbd3
@@ -41,16 +41,29 @@ func (m *Manager) acquireNBDDevice(ctx context.Context, nbdSocket string, expect
 	if len(names) == 0 {
 		return nil, fmt.Errorf("no nbd devices present; is the nbd kernel module loaded?")
 	}
+	var contentionErr error
 	for _, name := range names {
 		device, ok := m.tryLockNBDDevice(name)
 		if !ok {
 			continue
 		}
 		if err := m.connectNBDDevice(ctx, device, nbdSocket, expectedSizeBytes); err != nil {
+			// The kernel is the final arbiter across workers whose host mounts
+			// may not share a lock directory. If another worker connected this
+			// device after our free check, keep scanning instead of failing the
+			// container attach.
+			contended := m.nbdDeviceBusy(name)
 			device.release()
+			if contended {
+				contentionErr = err
+				continue
+			}
 			return nil, err
 		}
 		return device, nil
+	}
+	if contentionErr != nil {
+		return nil, fmt.Errorf("all %d nbd devices are busy after concurrent attach: %w", len(names), contentionErr)
 	}
 	return nil, fmt.Errorf("all %d nbd devices are busy", len(names))
 }
