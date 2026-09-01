@@ -162,9 +162,10 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 	log.Info().Str("container_id", containerId).Msg("starting docker daemon in sandbox")
 
 	// A filesystem checkpoint preserves /run from the sandbox root. The old
-	// dockerd is gone after a cold restore, but its pidfile can name a PID that
-	// the replacement container has already reused, making dockerd reject its
-	// own startup as if another daemon were running.
+	// dockerd and its managed containerd are gone after a cold restore, but
+	// their pidfiles can name PIDs that the replacement container has already
+	// reused, making dockerd reject its own startup as if they were still
+	// running.
 	if err := runSandboxShell(ctx, instance.SandboxProcessManager, "docker sandbox startup cleanup", dockerSandboxStartupCleanupScript()); err != nil {
 		if s.logDockerStartupCanceled(ctx, containerId, "clean stale docker state", err) {
 			return
@@ -371,7 +372,7 @@ func waitForSandboxProcessMissing(ctx context.Context, manager *goproc.GoProcCli
 }
 
 func dockerSandboxStartupCleanupScript() string {
-	return "rm -f /var/run/docker.pid"
+	return "rm -f /var/run/docker.pid /var/run/docker/containerd/containerd.pid"
 }
 
 func dockerSandboxShutdownScript() string {
