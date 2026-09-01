@@ -153,12 +153,13 @@ func TestDockerSandboxStartupCleanupRemovesStalePidFiles(t *testing.T) {
 	require.Equal(t, "rm -f /var/run/docker.pid /var/run/docker/containerd/containerd.pid", dockerSandboxStartupCleanupScript())
 }
 
-func TestDockerSandboxShutdownScriptStopsInnerRuntime(t *testing.T) {
+func TestDockerSandboxShutdownScriptPreservesInnerContainers(t *testing.T) {
 	script := dockerSandboxShutdownScript()
 
 	require.Contains(t, script, "docker ps -q")
+	require.Contains(t, script, "docker stop -t 2")
 	require.Contains(t, script, "docker kill")
-	require.Contains(t, script, "docker rm -f")
+	require.NotContains(t, script, "docker rm")
 	require.Contains(t, script, "pkill -TERM dockerd")
 	require.Contains(t, script, "pkill -KILL containerd")
 	require.True(t, strings.HasSuffix(strings.TrimSpace(script), "exit 0"))

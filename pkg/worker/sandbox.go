@@ -386,13 +386,15 @@ run() {
   fi
 }
 if command -v docker >/dev/null 2>&1; then
+  # Stop inner workloads without deleting their metadata. A cold restore needs
+  # the container records so Docker can honor each workload's restart policy.
   ids="$(run docker ps -q 2>/dev/null || true)"
   if [ -n "$ids" ]; then
-    run docker kill $ids >/dev/null 2>&1 || true
-  fi
-  ids="$(run docker ps -aq 2>/dev/null || true)"
-  if [ -n "$ids" ]; then
-    run docker rm -f $ids >/dev/null 2>&1 || true
+    run docker stop -t 2 $ids >/dev/null 2>&1 || true
+    ids="$(run docker ps -q 2>/dev/null || true)"
+    if [ -n "$ids" ]; then
+      run docker kill $ids >/dev/null 2>&1 || true
+    fi
   fi
 fi
 if command -v pkill >/dev/null 2>&1; then
