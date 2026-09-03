@@ -26,6 +26,30 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestBlobInfoCacheMoveDirectoryIntoPreservesContents(t *testing.T) {
+	root := t.TempDir()
+	src := filepath.Join(root, "cache")
+	dst := filepath.Join(root, "persistent", "blob-info-cache")
+	require.NoError(t, os.MkdirAll(filepath.Join(src, "nested"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(src, "blob-info-cache-v1.sqlite"), []byte("local"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(src, "nested", "entry"), []byte("nested"), 0o600))
+
+	// Absent destination: the directory is adopted wholesale.
+	require.NoError(t, os.MkdirAll(filepath.Dir(dst), 0o700))
+	require.NoError(t, moveDirectoryInto(src, dst))
+	require.NoDirExists(t, src)
+	require.FileExists(t, filepath.Join(dst, "blob-info-cache-v1.sqlite"))
+	require.FileExists(t, filepath.Join(dst, "nested", "entry"))
+
+	// Existing destination: contents are merged in and the source removed.
+	require.NoError(t, os.MkdirAll(src, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(src, "extra"), []byte("extra"), 0o600))
+	require.NoError(t, moveDirectoryInto(src, dst))
+	require.NoDirExists(t, src)
+	require.FileExists(t, filepath.Join(dst, "extra"))
+	require.FileExists(t, filepath.Join(dst, "blob-info-cache-v1.sqlite"))
+}
+
 func TestImageLayerPrepareProgressLoggerEmitsAggregateUpdates(t *testing.T) {
 	var output bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&output, nil))

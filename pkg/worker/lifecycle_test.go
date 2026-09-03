@@ -1708,7 +1708,7 @@ func TestFinishContainerShutdownSkipsGraceWhenRuntimeIsGone(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		worker.finishContainerShutdown(request.ContainerId, request, func(string) {})
+		worker.finishContainerShutdown(request.ContainerId, request, nil)
 		close(done)
 	}()
 
@@ -1729,7 +1729,7 @@ func TestFinishContainerShutdownDeletesStateBeforeCapacityNotification(t *testin
 
 	done := make(chan struct{})
 	go func() {
-		worker.finishContainerShutdown(request.ContainerId, request, func(string) {})
+		worker.finishContainerShutdown(request.ContainerId, request, nil)
 		close(done)
 	}()
 

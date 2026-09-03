@@ -1933,16 +1933,41 @@ func persistBlobInfoCache(cacheRoot string) {
 	if current, err := os.Readlink(blobInfoCachePath); err == nil && current == target {
 		return
 	}
-	if err := os.MkdirAll(target, 0o700); err != nil {
-		return
-	}
 	if err := os.MkdirAll(filepath.Dir(blobInfoCachePath), 0o755); err != nil {
 		return
 	}
-	_ = os.RemoveAll(blobInfoCachePath)
+	if info, err := os.Lstat(blobInfoCachePath); err == nil {
+		if info.IsDir() {
+			// A real directory holds whatever this pod has cached so far; carry
+			// it over to the persistent copy rather than discarding it.
+			if err := moveDirectoryInto(blobInfoCachePath, target); err != nil {
+				log.Warn().Err(err).Str("path", blobInfoCachePath).Msg("buildah blob info cache will not persist across workers")
+				return
+			}
+		} else if err := os.Remove(blobInfoCachePath); err != nil {
+			log.Warn().Err(err).Str("path", blobInfoCachePath).Msg("buildah blob info cache will not persist across workers")
+			return
+		}
+	}
+	if err := os.MkdirAll(target, 0o700); err != nil {
+		return
+	}
 	if err := os.Symlink(target, blobInfoCachePath); err != nil {
 		log.Warn().Err(err).Str("path", target).Msg("buildah blob info cache will not persist across workers")
 	}
+}
+
+// moveDirectoryInto relocates src to dst, renaming when dst does not exist yet
+// and otherwise copying src's contents into dst. src is only removed once its
+// contents are in place.
+func moveDirectoryInto(src, dst string) error {
+	if _, err := os.Lstat(dst); os.IsNotExist(err) && os.Rename(src, dst) == nil {
+		return nil
+	}
+	if err := copyDirectoryContents(src, dst); err != nil {
+		return err
+	}
+	return os.RemoveAll(src)
 }
 
 func ensureBuildahGraphroot(graphroot string) error {

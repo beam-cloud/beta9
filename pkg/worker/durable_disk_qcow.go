@@ -61,7 +61,7 @@ func (s *Worker) qcowVolumeKey(request *types.ContainerRequest, mount *types.Mou
 	return key
 }
 
-func (s *Worker) prepareQcowDurableDiskMount(request *types.ContainerRequest, mount *types.Mount) error {
+func (s *Worker) prepareQcowDurableDiskMount(ctx context.Context, request *types.ContainerRequest, mount *types.Mount) error {
 	if s.diskManager == nil {
 		return fmt.Errorf("qcow durable disks are not enabled on this worker")
 	}
@@ -69,7 +69,6 @@ func (s *Worker) prepareQcowDurableDiskMount(request *types.ContainerRequest, mo
 	if err != nil {
 		return fmt.Errorf("qcow durable disk %q requires a valid size: %w", mount.DurableDisk.Name, err)
 	}
-	ctx := s.durableDiskContext(nil)
 	key := s.qcowVolumeKey(request, mount)
 	phaseStart := time.Now()
 

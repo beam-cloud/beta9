@@ -58,10 +58,14 @@ type Store struct {
 	diskMonitorStarted      atomic.Bool
 	lastDiskGuardCheckNanos atomic.Int64
 	index                   contentIndex
-	protectedMu             sync.RWMutex
-	protectedContent        map[string]struct{}
-	churnMu                 sync.RWMutex
-	churnSink               CacheChurnSink
+	// evictMu serializes eviction passes. The disk monitor and the embedded
+	// cache owner's ReclaimDisk both evict from a usage snapshot; two passes
+	// working from the same snapshot would each free the whole deficit.
+	evictMu          sync.Mutex
+	protectedMu      sync.RWMutex
+	protectedContent map[string]struct{}
+	churnMu          sync.RWMutex
+	churnSink        CacheChurnSink
 }
 
 func NewStore(ctx context.Context, currentHost *Host, locality string, metadataStore CacheMetadataStore, config Config) (*Store, error) {
@@ -212,6 +216,11 @@ func (cas *Store) existingPagePath(hash string, pageIdx int64) (string, os.FileI
 }
 
 func (cas *Store) Add(ctx context.Context, hash string, content []byte) error {
+	// The on-disk index only recognizes sha256 hex names; anything else would
+	// be stored but forgotten at the next restart.
+	if !isContentHash(hash) {
+		return fmt.Errorf("cache content key %q is not a sha256 hex digest", hash)
+	}
 	size := int64(len(content))
 	chunkKeys := []string{}
 
@@ -1503,6 +1512,12 @@ func (cas *Store) diskWriteAllowed() bool {
 }
 
 func (cas *Store) refreshDiskCacheUsage(evict bool) (diskUsageSnapshot, error) {
+	if evict {
+		// Hold the eviction lock across the stat too, so a pass that waited
+		// on another one decides from the usage that pass left behind.
+		cas.evictMu.Lock()
+		defer cas.evictMu.Unlock()
+	}
 	snapshot, err := getFilesystemDiskUsage(cas.diskCacheDir)
 	if err != nil {
 		if !os.IsNotExist(err) {

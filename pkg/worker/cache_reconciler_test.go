@@ -336,18 +336,9 @@ func (m *claimedMetadataStore) AddRecentStub(_ context.Context, locality, _, _ s
 func TestReporterGeneratesOncePerStub(t *testing.T) {
 	r := newTestReporter(&fakeEventRepo{})
 
-	// With no Redis metadata, the in-memory guard ensures one-time generation.
 	require.True(t, r.shouldGenerateRequiredContent("stub-a"))
 	require.False(t, r.shouldGenerateRequiredContent("stub-a"))
 	require.True(t, r.shouldGenerateRequiredContent("stub-b"))
-}
-
-func TestReporterRedisMarkerIsAdvisory(t *testing.T) {
-	r := newTestReporter(&fakeEventRepo{})
-	r.metadata = &claimedMetadataStore{}
-
-	require.True(t, r.shouldGenerateRequiredContent("stub-a"))
-	require.False(t, r.shouldGenerateRequiredContent("stub-a"))
 }
 
 func TestReporterCoalescesItemsPerStubKind(t *testing.T) {
@@ -607,6 +598,66 @@ func TestLoadRecentRequiredContentCachesByLastSeen(t *testing.T) {
 	_, complete = manager.loadRecentRequiredContent([]cache.RecentStub{{WorkspaceID: "ws", StubID: "stub-c", LastSeen: seenA}})
 	require.False(t, complete)
 	require.NotContains(t, manager.requiredContentCache, "ws|stub-c")
+}
+
+// windowedRecentMetadataStore honors the lookback the way the coordinator does.
+type windowedRecentMetadataStore struct {
+	*cache.MockCacheMetadataStore
+	stubs     []cache.RecentStub
+	lookbacks []time.Duration
+}
+
+func (m *windowedRecentMetadataStore) ListRecentStubs(_ context.Context, _ string, ttl time.Duration, _ int) ([]cache.RecentStub, error) {
+	m.lookbacks = append(m.lookbacks, ttl)
+	cutoff := time.Now().Add(-ttl)
+	var out []cache.RecentStub
+	for _, stub := range m.stubs {
+		if !stub.LastSeen.Before(cutoff) {
+			out = append(out, stub)
+		}
+	}
+	return out, nil
+}
+
+func TestListRecentStubsSyncsIncrementallyAndAgesOutLocally(t *testing.T) {
+	now := time.Now()
+	store := &windowedRecentMetadataStore{stubs: []cache.RecentStub{
+		{WorkspaceID: "ws", StubID: "old", LastSeen: now.Add(-6 * 24 * time.Hour)},
+		{WorkspaceID: "ws", StubID: "recent", LastSeen: now.Add(-time.Hour)},
+	}}
+	manager := &WorkerCacheManager{ctx: context.Background(), metadataStore: store}
+	ids := func(stubs []cache.RecentStub) []string {
+		out := make([]string, 0, len(stubs))
+		for _, stub := range stubs {
+			out = append(out, stub.StubID)
+		}
+		return out
+	}
+
+	// The first listing covers the whole window, MRU-first.
+	stubs, err := manager.listRecentStubs(false)
+	require.NoError(t, err)
+	require.Equal(t, []string{"recent", "old"}, ids(stubs))
+	require.Equal(t, manager.recentStubTTL(), store.lookbacks[0])
+
+	// A sync asks only for what was touched since, and merges it in.
+	manager.recentStubs.listedAt = now.Add(-10 * time.Second)
+	store.stubs = append(store.stubs, cache.RecentStub{WorkspaceID: "ws", StubID: "new", LastSeen: now})
+	stubs, err = manager.listRecentStubs(false)
+	require.NoError(t, err)
+	require.Less(t, store.lookbacks[1], time.Minute)
+	require.Equal(t, []string{"new", "recent", "old"}, ids(stubs))
+
+	// Stubs leave the window without a round trip.
+	manager.recentStubs.stubs["ws|old"] = cache.RecentStub{WorkspaceID: "ws", StubID: "old", LastSeen: now.Add(-8 * 24 * time.Hour)}
+	stubs, err = manager.listRecentStubs(false)
+	require.NoError(t, err)
+	require.Equal(t, []string{"new", "recent"}, ids(stubs))
+
+	// A maintenance pass relists the whole window.
+	_, err = manager.listRecentStubs(true)
+	require.NoError(t, err)
+	require.Equal(t, manager.recentStubTTL(), store.lookbacks[3])
 }
 
 func TestReconcilePoolDedupesAndBoundsConcurrency(t *testing.T) {

@@ -7,14 +7,21 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"time"
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
-	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
+
+// attachPhases times the phases of an attach in debug mode; nil otherwise.
+func (m *Manager) attachPhases() *common.PhaseTimer {
+	if !m.debug {
+		return nil
+	}
+	return common.NewPhaseTimer()
+}
 
 // Volume is one attached qcow2-backed disk: a backing chain of immutable
 // layers, a writable head, one qemu-storage-daemon, and one NBD device
@@ -216,7 +223,7 @@ func (m *Manager) materializeChain(ctx context.Context, spec AttachSpec, layersD
 
 // start launches the daemon, connects the NBD device, formats fresh disks,
 // and mounts the filesystem.
-func (v *Volume) start(ctx context.Context) error {
+func (v *Volume) start(ctx context.Context) (err error) {
 	m := v.manager
 	state := v.state
 	freshDisk := !state.ReadOnly && len(state.Chain) == 0 && !state.Formatted
@@ -227,20 +234,25 @@ func (v *Volume) start(ctx context.Context) error {
 	}
 	v.fmtNode = fmtNodeName(state.PivotCount)
 
-	// Step timings surface in the attach log so a slow attach can be blamed
-	// on the daemon, the kernel, mkfs, or the mount without a profiler.
-	stepStart := time.Now()
-	step := func(name string, event *zerolog.Event) {
-		event.Dur(name, time.Since(stepStart))
-		stepStart = time.Now()
-	}
-	attachLog := log.Info().Str("volume", state.Key).Bool("fresh", freshDisk).Int("layers", len(state.Chain))
+	// In debug mode the attach log carries per-phase timings, so a slow attach
+	// can be blamed on the daemon, the kernel, mkfs, or the mount without a
+	// profiler. The phases that completed are logged on failure too.
+	phases := m.attachPhases()
+	defer func() {
+		event, msg := log.Info(), "qcow volume attached"
+		if err != nil {
+			event, msg = log.Warn().Err(err), "qcow volume attach failed"
+		}
+		event.Str("volume", state.Key).Bool("fresh", freshDisk).Int("layers", len(state.Chain))
+		phases.Fields(event).Msg(msg)
+	}()
 
 	qsd, err := m.startQSD(ctx, m.runtimeDir(state.Key), openPath, v.fmtNode, state.ReadOnly)
 	if err != nil {
 		return err
 	}
-	step("qsd", attachLog)
+	phases.Mark("qsd")
+
 	cleanupOnError := func() {
 		if v.nbd != nil {
 			_ = m.disconnectNBDDevice(context.Background(), v.nbd)
@@ -255,7 +267,7 @@ func (v *Volume) start(ctx context.Context) error {
 		return err
 	}
 	v.nbd = nbd
-	step("nbd", attachLog)
+	phases.Mark("nbd")
 
 	if freshDisk {
 		if err := m.formatExt4(ctx, nbd.Path); err != nil {
@@ -263,14 +275,13 @@ func (v *Volume) start(ctx context.Context) error {
 			return err
 		}
 		state.Formatted = true
-		step("mkfs", attachLog)
+		phases.Mark("mkfs")
 	}
 	if err := m.mountExt4(ctx, nbd.Path, state.Mountpoint, state.ReadOnly); err != nil {
 		cleanupOnError()
 		return err
 	}
-	step("mount", attachLog)
-	attachLog.Msg("qcow volume attached")
+	phases.Mark("mount")
 
 	v.qsd = qsd
 	state.Attached = true

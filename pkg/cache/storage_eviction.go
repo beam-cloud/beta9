@@ -118,16 +118,24 @@ func (idx *contentIndex) candidates(now time.Time) []evictionCandidate {
 	return out
 }
 
-// replace swaps in a fresh walk of the disk, keeping the newer of the two
-// access times for content both sides know about: a read since the walk
-// started is more recent than any mtime the walk observed.
-func (idx *contentIndex) replace(scanned map[string]contentEntry) {
+// replace swaps in a walk of the disk that began at since. The walk is not
+// atomic, so the index it replaces wins wherever it knows more: a read since
+// the walk started is more recent than any mtime the walk observed, and a
+// completion indexed since then is authoritative over a directory the walk
+// saw half-written or not at all.
+func (idx *contentIndex) replace(scanned map[string]contentEntry, since time.Time) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
-	for hash, entry := range scanned {
-		if current, ok := idx.entries[hash]; ok && current.lastAccess.After(entry.lastAccess) {
+	for hash, current := range idx.entries {
+		entry, ok := scanned[hash]
+		switch {
+		case ok && current.complete && !entry.complete:
+			scanned[hash] = current
+		case ok && current.lastAccess.After(entry.lastAccess):
 			entry.lastAccess = current.lastAccess
 			scanned[hash] = entry
+		case !ok && current.complete && !current.lastAccess.Before(since):
+			scanned[hash] = current
 		}
 	}
 	idx.entries = scanned
@@ -138,7 +146,7 @@ func (idx *contentIndex) replace(scanned map[string]contentEntry) {
 func (cas *Store) rebuildContentIndex() {
 	started := time.Now()
 	scanned := cas.scanContent()
-	cas.index.replace(scanned)
+	cas.index.replace(scanned, started)
 	Logger.Infof("disk cache content index rebuilt: %d objects in %s", len(scanned), time.Since(started).Truncate(time.Millisecond))
 }
 
@@ -480,16 +488,23 @@ func isCacheContentHash(name string) bool {
 // removeContent deletes one object's pages. The index entry and the complete
 // marker go first so concurrent completeness checks stop treating the content
 // as present before its pages disappear; in-flight readers degrade to a normal
-// cache miss.
+// cache miss. Whatever a failed removal leaves behind is re-indexed as an
+// abandoned write, with its old access time, so the next pass retries it
+// rather than leaking it until the rescan.
 func (cas *Store) removeContent(candidate evictionCandidate) error {
 	cas.index.forget(candidate.hash)
 	if err := os.Remove(filepath.Join(candidate.dir, cacheCompleteMarkerName)); err != nil && !os.IsNotExist(err) {
+		cas.index.put(candidate.hash, contentEntry{dir: candidate.dir, size: candidate.sizeBytes, lastAccess: candidate.lastAccess})
 		return err
 	}
 	if cas.memoryCacheEnabled && cas.cache != nil {
 		cas.cache.Del(candidate.hash)
 	}
-	return os.RemoveAll(candidate.dir)
+	if err := os.RemoveAll(candidate.dir); err != nil {
+		cas.index.put(candidate.hash, contentEntry{dir: candidate.dir, size: dirSizeBytes(candidate.dir), lastAccess: candidate.lastAccess})
+		return err
+	}
+	return nil
 }
 
 func dirSizeBytes(dir string) int64 {

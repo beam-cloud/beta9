@@ -274,3 +274,11 @@ func TestRenderEnvVarsOnOneLine(t *testing.T) {
 	})
 	assert.Equal(t, "ENV A=1 PATH=/usr/local/bin:$PATH MSG=\"hello \\\"world\\\"\" BARE\n", sb.String())
 }
+
+func TestRenderEnvVarsSplitsInstructionAtDependency(t *testing.T) {
+	var sb strings.Builder
+	renderEnvVarsAndSecrets(&sb, &BuildOpts{
+		EnvVars: []string{"A=1", "B=$A", "C=${A}-x", "D=2", "E=${B:-fallback}", "F=$E"},
+	})
+	assert.Equal(t, "ENV A=1\nENV B=$A C=${A}-x D=2\nENV E=${B:-fallback}\nENV F=$E\n", sb.String())
+}

@@ -53,6 +53,7 @@ const (
 	checkpointStatePublicationTTL   = 5 * time.Second
 	checkpointFilesystemOnlyFile    = "filesystem-only"
 	checkpointFilesystemOnDiskFile  = "filesystem-on-disk" // Upper layer lives on the sealed qcow root disk.
+	checkpointFilesystemOnDiskV1    = "v1\n"
 	checkpointForcedRuncProfileFile = "beam-forced-runc-profile"
 	checkpointForcedRuncProfileV1   = "v1\n"
 	restoreReadinessTimeout         = 15 * time.Second
@@ -1178,7 +1179,7 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 		// from the checkpoint, so copying the upper dir here only costs time and
 		// inflates the archive.
 		if qcowRootDiskMount(opts.Request) != nil {
-			err = os.WriteFile(filepath.Join(checkpointPath, checkpointFilesystemOnDiskFile), []byte("v1\n"), 0644)
+			err = os.WriteFile(filepath.Join(checkpointPath, checkpointFilesystemOnDiskFile), []byte(checkpointFilesystemOnDiskV1), 0644)
 		} else {
 			err = captureCheckpointFilesystem(checkpointCtx, instance, checkpointPath, false)
 		}
@@ -1680,9 +1681,6 @@ func checkpointMaterialized(checkpointPath string) bool {
 // A checkpoint whose upper layer lives on a sealed root disk carries a marker
 // instead of a payload and returns an empty path.
 func checkpointFilesystemPayload(checkpointPath string) (payloadPath string, archived bool, err error) {
-	if marker, markerErr := os.Lstat(filepath.Join(checkpointPath, checkpointFilesystemOnDiskFile)); markerErr == nil && marker.Mode().IsRegular() {
-		return "", false, nil
-	}
 	legacyPath := filepath.Join(checkpointPath, checkpointFsDir)
 	legacy, legacyErr := os.Lstat(legacyPath)
 	legacyExists := legacyErr == nil
@@ -1701,6 +1699,28 @@ func checkpointFilesystemPayload(checkpointPath string) (payloadPath string, arc
 	}
 	if archiveExists && (!archive.Mode().IsRegular() || archive.Size() == 0) {
 		return "", false, errors.New("checkpoint filesystem archive is empty or invalid")
+	}
+
+	markerPath := filepath.Join(checkpointPath, checkpointFilesystemOnDiskFile)
+	marker, markerErr := os.Lstat(markerPath)
+	if markerErr != nil && !os.IsNotExist(markerErr) {
+		return "", false, markerErr
+	}
+	if markerErr == nil {
+		if !marker.Mode().IsRegular() {
+			return "", false, errors.New("checkpoint filesystem-on-disk marker is not a regular file")
+		}
+		contents, err := os.ReadFile(markerPath)
+		if err != nil {
+			return "", false, err
+		}
+		if string(contents) != checkpointFilesystemOnDiskV1 {
+			return "", false, errors.New("checkpoint filesystem-on-disk marker has an unsupported version")
+		}
+		if legacyExists || archiveExists {
+			return "", false, errors.New("checkpoint must not carry both a filesystem payload and the filesystem-on-disk marker")
+		}
+		return "", false, nil
 	}
 	if legacyExists == archiveExists {
 		return "", false, errors.New("checkpoint must contain exactly one filesystem payload")

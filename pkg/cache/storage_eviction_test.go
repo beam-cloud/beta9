@@ -18,8 +18,8 @@ func addEvictionTestContent(t *testing.T, store *Store, content string, lastAcce
 	require.NoError(t, err)
 	require.True(t, store.Exists(hash))
 	require.NoError(t, os.Chtimes(store.completeMarkerPath(hash), lastAccess, lastAccess))
-	// The index remembers the write as the last access; backdate it the way
-	// a restart would, by reading the marker mtime back off disk.
+	// The index remembers the write as the last access; backdate the entry
+	// to match the marker so it looks the way a restart would rebuild it.
 	entry, ok := store.index.get(hash)
 	require.True(t, ok)
 	entry.lastAccess = lastAccess
@@ -192,6 +192,53 @@ func TestEvictionCandidateUsesInMemoryTouchWhenFresher(t *testing.T) {
 	evicted, _ = store.evictLRU(1 << 30)
 	require.Zero(t, evicted)
 	require.True(t, store.Exists(hash))
+}
+
+func TestContentIndexRebuildKeepsCompletionsRacingTheWalk(t *testing.T) {
+	store := newTestStore(t, 5)
+
+	// A walk began, then two writes completed before it was swapped in: one
+	// the walk never saw, one it saw before the marker landed.
+	walkStarted := time.Now()
+	scanned := store.scanContent()
+	unseen := addEvictionTestContent(t, store, "completed-after-walk", time.Now())
+	halfSeen := addEvictionTestContent(t, store, "completed-mid-walk", time.Now())
+	scanned[halfSeen] = contentEntry{dir: store.pageDir(halfSeen), size: 3, lastAccess: walkStarted}
+
+	store.index.replace(scanned, walkStarted)
+
+	require.True(t, store.Exists(unseen, int64(len("completed-after-walk"))))
+	require.True(t, store.Exists(halfSeen, int64(len("completed-mid-walk"))))
+}
+
+func TestRemoveContentFailureLeavesTheLeftoverIndexed(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	store := newTestStore(t, 5)
+
+	stale := time.Now().Add(-2 * time.Hour)
+	hash := addEvictionTestContent(t, store, "stuck-content", stale)
+	// A directory the process cannot empty: a subdirectory it may not list.
+	locked := filepath.Join(store.pageDir(hash), "locked")
+	require.NoError(t, os.MkdirAll(filepath.Join(locked, "inner"), 0755))
+	require.NoError(t, os.Chmod(locked, 0))
+	t.Cleanup(func() { _ = os.Chmod(locked, 0755) })
+
+	evicted, _ := store.evictLRU(1 << 30)
+	require.Zero(t, evicted)
+	require.False(t, store.Exists(hash))
+
+	entry, ok := store.index.get(hash)
+	require.True(t, ok, "the leftover must stay visible to the next pass")
+	require.False(t, entry.complete)
+	require.WithinDuration(t, stale, entry.lastAccess, time.Second)
+
+	// Once the obstacle is gone the next pass reclaims it.
+	require.NoError(t, os.Chmod(locked, 0755))
+	evicted, _ = store.evictLRU(1 << 30)
+	require.Equal(t, 1, evicted)
+	require.NoDirExists(t, store.pageDir(hash))
 }
 
 func TestContentIndexRebuildFindsExistingContent(t *testing.T) {

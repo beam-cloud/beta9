@@ -259,25 +259,46 @@ func (b *Builder) hasWorkToDo(opts *BuildOpts) bool {
 		(opts.PythonVersion != "" && !opts.IgnorePython)
 }
 
+// dockerfileVarRef matches a $NAME or ${NAME...} reference inside an ENV value.
+var dockerfileVarRef = regexp.MustCompile(`\$\{?([A-Za-z_][A-Za-z0-9_]*)`)
+
 // renderEnvVarsAndSecrets adds ENV directives and ARG directives to a Dockerfile
 func renderEnvVarsAndSecrets(sb *strings.Builder, opts *BuildOpts) {
-	// One ENV instruction carries every variable: each instruction is a layer
-	// commit, and a commit snapshots the rootfs whatever the step changed.
-	var env []string
+	// Variables share one ENV instruction where they can: each instruction is
+	// a layer commit, and a commit snapshots the rootfs whatever the step
+	// changed. Substitution within an instruction only sees the environment
+	// before it, so a value that references a variable set earlier in the
+	// same instruction would resolve to the old value; such a variable starts
+	// a new instruction instead.
+	var batch []string
+	defined := map[string]bool{}
+	flush := func() {
+		if len(batch) == 0 {
+			return
+		}
+		sb.WriteString("ENV ")
+		sb.WriteString(strings.Join(batch, " "))
+		sb.WriteString("\n")
+		batch = nil
+		clear(defined)
+	}
 	for _, envVar := range opts.EnvVars {
 		if envVar == "" {
 			continue
 		}
 		if name, value, ok := strings.Cut(envVar, "="); ok && name != "" {
+			for _, ref := range dockerfileVarRef.FindAllStringSubmatch(value, -1) {
+				if defined[ref[1]] {
+					flush()
+					break
+				}
+			}
+			defined[name] = true
 			envVar = name + "=" + quoteDockerfileValue(value)
 		}
-		env = append(env, envVar)
+		batch = append(batch, envVar)
 	}
-	if len(env) > 0 {
-		sb.WriteString("ENV ")
-		sb.WriteString(strings.Join(env, " "))
-		sb.WriteString("\n")
-	}
+	flush()
 
 	// Add build secrets as ARG directives
 	// Secrets are mounted at build time using buildah --build-arg flag

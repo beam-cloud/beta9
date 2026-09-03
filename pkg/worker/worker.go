@@ -613,7 +613,7 @@ func NewWorker() (_ *Worker, err error) {
 
 	// Recover qcow volumes left behind by a previous worker process before any
 	// container can attach: live volumes are adopted, crashed ones cleaned up.
-	worker.diskManager = disk.NewManager(disk.Config{})
+	worker.diskManager = disk.NewManager(disk.Config{Debug: config.DebugMode})
 	if err := worker.diskManager.Recover(ctx); err != nil {
 		log.Warn().Err(err).Msg("failed to recover qcow durable disk volumes")
 	}

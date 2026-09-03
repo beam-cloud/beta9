@@ -2021,6 +2021,35 @@ func TestCheckpointFilesystemArchiveMustBeARegularNonemptyFile(t *testing.T) {
 	require.False(t, checkpointFilesystemOnly(checkpointPath))
 }
 
+func TestCheckpointFilesystemOnDiskMarkerIsValidatedStrictly(t *testing.T) {
+	checkpointPath := t.TempDir()
+	markerPath := filepath.Join(checkpointPath, checkpointFilesystemOnDiskFile)
+	require.NoError(t, os.WriteFile(filepath.Join(checkpointPath, "inventory.img"), []byte("runtime"), 0644))
+
+	require.NoError(t, os.WriteFile(markerPath, []byte(checkpointFilesystemOnDiskV1), 0644))
+	payloadPath, archived, err := checkpointFilesystemPayload(checkpointPath)
+	require.NoError(t, err)
+	require.Empty(t, payloadPath)
+	require.False(t, archived)
+	require.NoError(t, validateCheckpointKind(checkpointPath, false))
+
+	require.NoError(t, os.WriteFile(markerPath, []byte("v0\n"), 0644))
+	_, _, err = checkpointFilesystemPayload(checkpointPath)
+	require.ErrorContains(t, err, "unsupported version")
+
+	require.NoError(t, os.Remove(markerPath))
+	require.NoError(t, os.Symlink("inventory.img", markerPath))
+	_, _, err = checkpointFilesystemPayload(checkpointPath)
+	require.ErrorContains(t, err, "not a regular file")
+
+	require.NoError(t, os.Remove(markerPath))
+	require.NoError(t, os.WriteFile(markerPath, []byte(checkpointFilesystemOnDiskV1), 0644))
+	require.NoError(t, os.Mkdir(filepath.Join(checkpointPath, checkpointFsDir), 0755))
+	_, _, err = checkpointFilesystemPayload(checkpointPath)
+	require.ErrorContains(t, err, "must not carry both")
+	require.False(t, checkpointMaterialized(checkpointPath))
+}
+
 func TestValidateCheckpointKind(t *testing.T) {
 	checkpointPath := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(checkpointPath, checkpointFsDir), 0755))

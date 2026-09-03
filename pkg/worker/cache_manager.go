@@ -109,8 +109,10 @@ type WorkerCacheManager struct {
 	reconcilePausedAt    time.Time
 	reconcileNow         chan struct{}
 	// Memoized per-stub required-content reads keyed on the stub's
-	// recent-index score. Reconcile loop goroutine only; no lock.
+	// recent-index score, and the locality's recent-stub window as last
+	// listed. Reconcile loop goroutine only; no lock.
 	requiredContentCache  map[string]requiredContentCacheEntry
+	recentStubs           recentStubWindow
 	client                *cache.Client
 	server                *cache.Server
 	serverLock            *os.File

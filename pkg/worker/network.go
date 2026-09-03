@@ -2421,11 +2421,11 @@ func (m *ContainerNetworkManager) removeIPTablesRules(ip string, ipt *iptables.I
 		return nil
 	}
 
-	if err := iptablesRestore(ipt.Proto(), batch.String()); err == nil {
+	err := iptablesRestore(ipt.Proto(), batch.String())
+	if err == nil {
 		return nil
-	} else {
-		log.Debug().Err(err).Msg("batched iptables delete failed; deleting rules one at a time")
 	}
+	log.Debug().Err(err).Msg("batched iptables delete failed; deleting rules one at a time")
 
 	for _, tableChain := range chains {
 		table, chain := tableChain[0], tableChain[1]
@@ -2574,6 +2574,14 @@ func (m *ContainerNetworkManager) startContainerPortExposure(containerId string,
 		if exposure.ctx.Err() != nil {
 			return nil
 		}
+		// Rules installed before the failure keep diverting the host port in
+		// PREROUTING, ahead of any socket the proxy could bind, so withdraw
+		// them first. If even that fails the port is unreachable either way;
+		// fail the exposure so container teardown removes the rules by IP.
+		if rollbackErr := m.unexposePortDNAT(exposure.ctx, info, binding.HostPort, binding.ContainerPort, family); rollbackErr != nil {
+			m.dropPortExposure(exposure)
+			return fmt.Errorf("expose container port %d with kernel forwarding: %w (rollback failed: %w)", binding.ContainerPort, err, rollbackErr)
+		}
 		log.Warn().Err(err).Str("container_id", exposure.containerID).Int("host_port", binding.HostPort).Int("container_port", binding.ContainerPort).Msg("failed to expose container port with kernel forwarding; using proxy")
 		go m.runContainerPortProxyFallback(exposure, info, binding, family, native, fallback, true)
 		return nil
@@ -2585,6 +2593,16 @@ func (m *ContainerNetworkManager) startContainerPortExposure(containerId string,
 		go m.runContainerPortProxyFallback(exposure, info, binding, family, native, fallback, false)
 	}
 	return nil
+}
+
+// dropPortExposure unregisters an exposure that never became usable.
+func (m *ContainerNetworkManager) dropPortExposure(exposure *containerPortExposure) {
+	m.portExposureMu.Lock()
+	if m.portExposures[exposure.hostPort] == exposure {
+		delete(m.portExposures, exposure.hostPort)
+	}
+	m.portExposureMu.Unlock()
+	exposure.close()
 }
 
 // runContainerPortProxyFallback probes the container's port and starts the

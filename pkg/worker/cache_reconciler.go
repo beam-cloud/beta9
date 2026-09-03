@@ -506,12 +506,7 @@ func (m *WorkerCacheManager) reconcileOnce(maintain bool) {
 			Msg("cache reconciliation cycle")
 	}()
 
-	// Every stub accessed within the recency window, MRU-first. The whole
-	// window is needed, not a page of it: the protected set derived from it
-	// is what keeps pruning from removing content a recent stub still needs,
-	// and a truncated set would either be unsafe or, if pruning were skipped
-	// whenever it was truncated, let a busy locality's disk grow unbounded.
-	stubs, err := m.metadataStore.ListRecentStubs(m.ctx, m.locality, m.recentStubTTL(), 0)
+	stubs, err := m.listRecentStubs(maintain)
 	if err != nil {
 		log.Debug().Err(err).Str("locality", m.locality).Msg("cache reconciliation failed to list recent stubs")
 		return
@@ -711,6 +706,60 @@ func (p *reconcilePool) wait() {
 type recentStubContent struct {
 	stub  cache.RecentStub
 	items []types.CacheRequiredContentItem
+}
+
+// recentStubWindow is the locality's recent-stub index as this worker last
+// saw it: every stub accessed within the recency window, keyed by
+// workspace|stub.
+type recentStubWindow struct {
+	stubs    map[string]cache.RecentStub
+	listedAt time.Time
+}
+
+// listRecentStubs returns every stub accessed within the recency window,
+// MRU-first. The whole window is needed, not a page of it: the protected set
+// derived from it is what keeps pruning from removing content a recent stub
+// still needs, and a truncated set would be unsafe.
+//
+// Only a full pass lists the whole window. A sync lists the stubs touched
+// since the previous listing and merges them in, so its cost tracks activity
+// rather than the number of stubs a busy locality has seen this week; stubs
+// age out of the local copy on their own, since a last-seen time and the
+// window say when.
+func (m *WorkerCacheManager) listRecentStubs(full bool) ([]cache.RecentStub, error) {
+	window := m.recentStubTTL()
+	now := time.Now()
+	lookback := window
+	full = full || m.recentStubs.listedAt.IsZero()
+	if !full {
+		// Overlap by one interval: the coordinator truncates the lookback to
+		// whole seconds and its clock is not ours. Re-listing a stub is free.
+		lookback = min(now.Sub(m.recentStubs.listedAt)+cacheReconcileSyncInterval, window)
+	}
+
+	listed, err := m.metadataStore.ListRecentStubs(m.ctx, m.locality, lookback, 0)
+	if err != nil {
+		return nil, err
+	}
+	if full {
+		m.recentStubs.stubs = make(map[string]cache.RecentStub, len(listed))
+	}
+	for _, stub := range listed {
+		m.recentStubs.stubs[stub.WorkspaceID+"|"+stub.StubID] = stub
+	}
+	m.recentStubs.listedAt = now
+
+	cutoff := now.Add(-window)
+	stubs := make([]cache.RecentStub, 0, len(m.recentStubs.stubs))
+	for key, stub := range m.recentStubs.stubs {
+		if stub.LastSeen.Before(cutoff) {
+			delete(m.recentStubs.stubs, key)
+			continue
+		}
+		stubs = append(stubs, stub)
+	}
+	sort.Slice(stubs, func(i, j int) bool { return stubs[i].LastSeen.After(stubs[j].LastSeen) })
+	return stubs, nil
 }
 
 type requiredContentCacheEntry struct {

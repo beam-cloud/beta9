@@ -3,6 +3,8 @@ package cache
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"sync"
@@ -10,6 +12,12 @@ import (
 )
 
 var benchmarkSetupOnce sync.Once
+
+// benchHash turns a readable label into the sha256 hex key the store requires.
+func benchHash(label string) string {
+	sum := sha256.Sum256([]byte(label))
+	return hex.EncodeToString(sum[:])
+}
 
 func setupBenchmarkCAS(b *testing.B) (*Store, func()) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -67,7 +75,7 @@ func BenchmarkSequentialRead(b *testing.B) {
 			// Generate test data
 			content := make([]byte, size)
 			rand.Read(content)
-			hash := fmt.Sprintf("test-hash-%d", size)
+			hash := benchHash(fmt.Sprintf("test-hash-%d", size))
 
 			err := cas.Add(context.Background(), hash, content)
 			if err != nil {
@@ -114,7 +122,7 @@ func BenchmarkRandomRead(b *testing.B) {
 			// Generate test data
 			content := make([]byte, fileSize)
 			rand.Read(content)
-			hash := "random-test-hash"
+			hash := benchHash("random-test-hash")
 
 			err := cas.Add(context.Background(), hash, content)
 			if err != nil {
@@ -153,7 +161,7 @@ func BenchmarkSmallFiles(b *testing.B) {
 			for i := 0; i < numFiles; i++ {
 				content := make([]byte, fileSize)
 				rand.Read(content)
-				hash := fmt.Sprintf("small-file-%d", i)
+				hash := benchHash(fmt.Sprintf("small-file-%d", i))
 				hashes[i] = hash
 
 				err := cas.Add(context.Background(), hash, content)
@@ -186,7 +194,7 @@ func BenchmarkCacheHitRatios(b *testing.B) {
 	fileSize := int64(16 * 1024 * 1024) // 16 MB
 	content := make([]byte, fileSize)
 	rand.Read(content)
-	hash := "cache-test-hash"
+	hash := benchHash("cache-test-hash")
 
 	err := cas.Add(context.Background(), hash, content)
 	if err != nil {

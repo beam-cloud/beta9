@@ -28,7 +28,7 @@ func ensureWritableSysfs() {
 	}
 	flags := uintptr(unix.MS_REMOUNT | unix.MS_NOSUID | unix.MS_NODEV | unix.MS_NOEXEC)
 	if err := unix.Mount("", sysfsPath, "", flags, ""); err != nil {
-		if !errors.Is(err, os.ErrPermission) && !errors.Is(err, unix.EPERM) {
+		if !errors.Is(err, os.ErrPermission) {
 			log.Warn().Err(err).Msg("could not remount /sys read-write; FUSE read-ahead tuning unavailable")
 		}
 		return
