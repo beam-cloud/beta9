@@ -303,12 +303,8 @@ func (cas *Store) Add(ctx context.Context, hash string, content []byte) error {
 	// Release the large initial buffer
 	content = nil
 
-	if cas.memoryCacheEnabled {
-		chunks := strings.Join(chunkKeys, ",")
-		added := cas.cache.SetWithTTL(hash, chunks, int64(len(chunks)), time.Duration(cas.serverConfig.ObjectTtlS)*time.Second)
-		if !added {
-			return errors.New("unable to cache: set dropped")
-		}
+	if cas.memoryCacheEnabled && !cas.indexObjectInMemory(hash, int64(len(chunkKeys))) {
+		return errors.New("unable to cache: set dropped")
 	}
 	if writeToDisk {
 		if err := cas.writeCompleteMarker(hash, size, int64(len(chunkKeys))); err != nil {
@@ -418,9 +414,7 @@ func (cas *Store) AddReader(ctx context.Context, reader io.Reader) (string, int6
 			}
 		}
 
-		chunks := strings.Join(chunkKeys, ",")
-		added := cas.cache.SetWithTTL(hash, chunks, int64(len(chunks)), time.Duration(cas.serverConfig.ObjectTtlS)*time.Second)
-		if !added {
+		if !cas.indexObjectInMemory(hash, chunkCount) {
 			return "", size, errors.New("unable to cache: set dropped")
 		}
 	}
@@ -767,17 +761,23 @@ func (cas *Store) publishExpectedHashPages(hash string, tmpDir string, pageCount
 	if err := cas.writeCompleteMarker(hash, size, pageCount); err != nil {
 		return err
 	}
-	if cas.memoryCacheEnabled {
-		chunkKeys := make([]string, 0, pageCount)
-		for pageIdx := int64(0); pageIdx < pageCount; pageIdx++ {
-			chunkKeys = append(chunkKeys, cas.pageKey(hash, pageIdx))
-		}
-		chunks := strings.Join(chunkKeys, ",")
-		if !cas.cache.SetWithTTL(hash, chunks, int64(len(chunks)), time.Duration(cas.serverConfig.ObjectTtlS)*time.Second) {
-			return errors.New("unable to cache: set dropped")
-		}
+	// The object is durable from here. The memory index only lets lookups
+	// skip the disk index; a dropped set costs that shortcut, not the object.
+	if cas.memoryCacheEnabled && !cas.indexObjectInMemory(hash, pageCount) {
+		Logger.Debugf("memory index dropped published object %s", hash)
 	}
 	return nil
+}
+
+// indexObjectInMemory records which page keys make up hash in the memory
+// cache, under the object TTL. It reports whether the cache accepted the entry.
+func (cas *Store) indexObjectInMemory(hash string, pageCount int64) bool {
+	keys := make([]string, 0, pageCount)
+	for pageIdx := int64(0); pageIdx < pageCount; pageIdx++ {
+		keys = append(keys, cas.pageKey(hash, pageIdx))
+	}
+	chunks := strings.Join(keys, ",")
+	return cas.cache.SetWithTTL(hash, chunks, int64(len(chunks)), time.Duration(cas.serverConfig.ObjectTtlS)*time.Second)
 }
 
 func (cas *Store) PutFullPages(hash string, offset int64, data []byte) {
@@ -881,9 +881,7 @@ func (cas *Store) addReaderToMemory(ctx context.Context, reader io.Reader) (stri
 		}
 	}
 
-	chunksValue := strings.Join(chunkKeys, ",")
-	added := cas.cache.SetWithTTL(hash, chunksValue, int64(len(chunksValue)), time.Duration(cas.serverConfig.ObjectTtlS)*time.Second)
-	if !added {
+	if !cas.indexObjectInMemory(hash, int64(len(chunks))) {
 		return "", size, errors.New("unable to cache: set dropped")
 	}
 
