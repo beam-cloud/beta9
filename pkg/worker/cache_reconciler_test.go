@@ -286,10 +286,7 @@ func createCheckpointArchiveForTest(t *testing.T, checkpointID string) (archiveP
 
 type claimedMetadataStore struct {
 	cache.CacheMetadataStore
-	claimed          bool
-	marked           int
 	recent           int
-	markedLocalities []string
 	recentLocalities []string
 }
 
@@ -330,12 +327,6 @@ func (m *localityRecentMetadataStore) ListRecentStubs(_ context.Context, localit
 	return stubs, nil
 }
 
-func (m *claimedMetadataStore) MarkStubReported(_ context.Context, locality, _ string, _ time.Duration) (bool, error) {
-	m.marked++
-	m.markedLocalities = append(m.markedLocalities, locality)
-	return m.claimed, nil
-}
-
 func (m *claimedMetadataStore) AddRecentStub(_ context.Context, locality, _, _ string, _ time.Duration) error {
 	m.recent++
 	m.recentLocalities = append(m.recentLocalities, locality)
@@ -345,18 +336,9 @@ func (m *claimedMetadataStore) AddRecentStub(_ context.Context, locality, _, _ s
 func TestReporterGeneratesOncePerStub(t *testing.T) {
 	r := newTestReporter(&fakeEventRepo{})
 
-	// With no Redis metadata, the in-memory guard ensures one-time generation.
 	require.True(t, r.shouldGenerateRequiredContent("stub-a"))
 	require.False(t, r.shouldGenerateRequiredContent("stub-a"))
 	require.True(t, r.shouldGenerateRequiredContent("stub-b"))
-}
-
-func TestReporterRedisMarkerIsAdvisory(t *testing.T) {
-	r := newTestReporter(&fakeEventRepo{})
-	r.metadata = &claimedMetadataStore{claimed: false}
-
-	require.True(t, r.shouldGenerateRequiredContent("stub-a"))
-	require.False(t, r.shouldGenerateRequiredContent("stub-a"))
 }
 
 func TestReporterCoalescesItemsPerStubKind(t *testing.T) {
@@ -397,9 +379,9 @@ func TestReporterSeparatesByKind(t *testing.T) {
 	require.Len(t, fake.pushed, 2)
 }
 
-func TestReporterMarksRedisAfterSuccessfulRequiredContentWrite(t *testing.T) {
+func TestReporterIndexesRecentStubOnceAfterRequiredContentWrite(t *testing.T) {
 	fake := &fakeEventRepo{}
-	metadata := &claimedMetadataStore{claimed: true}
+	metadata := &claimedMetadataStore{}
 	r := newTestReporter(fake)
 	r.metadata = metadata
 	r.locality = "locality-a"
@@ -408,31 +390,26 @@ func TestReporterMarksRedisAfterSuccessfulRequiredContentWrite(t *testing.T) {
 		r.touchRecentStub("ws", "stub")
 	}
 	r.reportItems("ws", "stub", types.CacheContentKindClipV1, []types.CacheRequiredContentItem{{Hash: "h1"}})
-	require.Zero(t, metadata.marked)
 
 	r.flush()
 	require.Len(t, fake.pushed, 1)
-	require.Equal(t, 1, metadata.marked)
 	require.Equal(t, []string{"locality-a"}, metadata.recentLocalities)
-	require.Equal(t, []string{"locality-a"}, metadata.markedLocalities)
 	require.Equal(t, "locality-a", fake.pushed[0].Locality)
 }
 
 func TestReporterRetriesRequiredContentWhenEventWriteFails(t *testing.T) {
 	fake := &fakeEventRepo{err: errors.New("s2 unavailable")}
-	metadata := &claimedMetadataStore{claimed: true}
+	metadata := &claimedMetadataStore{}
 	r := newTestReporter(fake)
 	r.metadata = metadata
 
 	r.reportItems("ws", "stub", types.CacheContentKindClipV1, []types.CacheRequiredContentItem{{Hash: "h1"}})
 	r.flush()
 	require.Empty(t, fake.pushed)
-	require.Zero(t, metadata.marked)
 
 	fake.err = nil
 	r.flush()
 	require.Len(t, fake.pushed, 1)
-	require.Equal(t, 1, metadata.marked)
 }
 
 func TestReporterVolumeRespectsSizeThreshold(t *testing.T) {
@@ -623,6 +600,81 @@ func TestLoadRecentRequiredContentCachesByLastSeen(t *testing.T) {
 	require.NotContains(t, manager.requiredContentCache, "ws|stub-c")
 }
 
+// windowedRecentMetadataStore honors the lookback the way the coordinator does.
+type windowedRecentMetadataStore struct {
+	*cache.MockCacheMetadataStore
+	stubs     []cache.RecentStub
+	lookbacks []time.Duration
+}
+
+func (m *windowedRecentMetadataStore) ListRecentStubs(_ context.Context, _ string, ttl time.Duration, _ int) ([]cache.RecentStub, error) {
+	m.lookbacks = append(m.lookbacks, ttl)
+	cutoff := time.Now().Add(-ttl)
+	var out []cache.RecentStub
+	for _, stub := range m.stubs {
+		if !stub.LastSeen.Before(cutoff) {
+			out = append(out, stub)
+		}
+	}
+	return out, nil
+}
+
+func TestListRecentStubsSyncsIncrementallyAndAgesOutLocally(t *testing.T) {
+	now := time.Now()
+	store := &windowedRecentMetadataStore{stubs: []cache.RecentStub{
+		{WorkspaceID: "ws", StubID: "old", LastSeen: now.Add(-6 * 24 * time.Hour)},
+		{WorkspaceID: "ws", StubID: "recent", LastSeen: now.Add(-time.Hour)},
+	}}
+	manager := &WorkerCacheManager{ctx: context.Background(), metadataStore: store}
+	ids := func(stubs []cache.RecentStub) []string {
+		out := make([]string, 0, len(stubs))
+		for _, stub := range stubs {
+			out = append(out, stub.StubID)
+		}
+		return out
+	}
+
+	// The first listing covers the whole window, MRU-first.
+	stubs, err := manager.listRecentStubs(false)
+	require.NoError(t, err)
+	require.Equal(t, []string{"recent", "old"}, ids(stubs))
+	require.Equal(t, manager.recentStubTTL(), store.lookbacks[0])
+
+	// A sync asks only for what was touched since, and merges it in.
+	manager.recentStubs.listedAt = now.Add(-10 * time.Second)
+	store.stubs = append(store.stubs, cache.RecentStub{WorkspaceID: "ws", StubID: "new", LastSeen: now})
+	stubs, err = manager.listRecentStubs(false)
+	require.NoError(t, err)
+	require.Less(t, store.lookbacks[1], time.Minute)
+	require.Equal(t, []string{"new", "recent", "old"}, ids(stubs))
+
+	// Stubs leave the window without a round trip.
+	manager.recentStubs.stubs["ws|old"] = recentStubEntry{stub: cache.RecentStub{WorkspaceID: "ws", StubID: "old", LastSeen: now.Add(-8 * 24 * time.Hour)}}
+	stubs, err = manager.listRecentStubs(false)
+	require.NoError(t, err)
+	require.Equal(t, []string{"new", "recent"}, ids(stubs))
+
+	// Stubs seen in the same second keep the coordinator's MRU order, and a
+	// later listing outranks an earlier one.
+	same := now.Truncate(time.Second)
+	store.stubs = []cache.RecentStub{
+		{WorkspaceID: "ws", StubID: "b", LastSeen: same},
+		{WorkspaceID: "ws", StubID: "a", LastSeen: same},
+	}
+	stubs, err = manager.listRecentStubs(true)
+	require.NoError(t, err)
+	require.Equal(t, []string{"b", "a"}, ids(stubs))
+	store.stubs = []cache.RecentStub{{WorkspaceID: "ws", StubID: "a", LastSeen: same}}
+	stubs, err = manager.listRecentStubs(false)
+	require.NoError(t, err)
+	require.Equal(t, []string{"a", "b"}, ids(stubs))
+
+	// A maintenance pass relists the whole window.
+	_, err = manager.listRecentStubs(true)
+	require.NoError(t, err)
+	require.Equal(t, manager.recentStubTTL(), store.lookbacks[len(store.lookbacks)-1])
+}
+
 func TestReconcilePoolDedupesAndBoundsConcurrency(t *testing.T) {
 	var nilPool *reconcilePool
 	require.True(t, nilPool.claim("a"))
@@ -706,7 +758,7 @@ func TestReconcileOnceUsesOnlyCurrentLocalityRecentStubs(t *testing.T) {
 		reconcileFailures: make(map[string]time.Time),
 	}
 
-	manager.reconcileOnce()
+	manager.reconcileOnce(false)
 
 	require.Equal(t, []string{"locality-b"}, metadata.listed)
 	require.Equal(t, []string{"workspace-b|stub-b"}, fake.readKeys)
@@ -1305,7 +1357,7 @@ func TestRequiredContentReportedByOneWorkerReconcilesCheckpointOnPeerInLocality(
 		reconcileSuccesses: make(map[string]time.Time),
 	}
 
-	managerB.reconcileOnce()
+	managerB.reconcileOnce(false)
 
 	require.True(t, destinationServer.HasCompleteContent(hash, size))
 	require.True(t, checkpointMaterialized(filepath.Join(checkpointRoot, checkpointID)))

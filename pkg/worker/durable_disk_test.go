@@ -138,7 +138,7 @@ func TestSeedDurableDiskSnapshotFailsOpenWhenLookupIsUnavailable(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Nil(t, seed)
-	require.NoError(t, worker.restoreDurableDiskSnapshot(&types.ContainerRequest{}, mount))
+	require.NoError(t, worker.restoreDurableDiskSnapshot(context.Background(), &types.ContainerRequest{}, mount))
 	require.FileExists(t, filepath.Join(localPath, "already-restored"))
 }
 
@@ -542,7 +542,9 @@ func TestAddRequestMountsPreparesDurableDisk(t *testing.T) {
 		}},
 	}
 
-	volumeCacheMap, err := (&Worker{}).addRequestMounts(request, &spec)
+	worker := &Worker{}
+	require.NoError(t, worker.prepareDurableDiskMounts(context.Background(), request))
+	volumeCacheMap, err := worker.addRequestMounts(request, &spec)
 
 	require.NoError(t, err)
 	require.Empty(t, volumeCacheMap)

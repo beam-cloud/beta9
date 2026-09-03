@@ -16,6 +16,7 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -34,8 +35,13 @@ const (
 type durableDiskSyncMode uint8
 
 const (
-	// Final cleanup is the durable handoff fence. It always publishes a new
-	// generation, even when every content chunk can be reused.
+	// Final cleanup is the durable handoff fence: everything written since the
+	// last publish is durable once it returns. The directory driver always
+	// publishes a fresh generation, even when every content chunk is reused,
+	// because its change detection is a heuristic. The qcow driver skips an
+	// unchanged head (see snapshotQcowDurableDiskMount): the daemon's write
+	// counter proves nothing changed, so the latest generation stays the
+	// disk's pinned state instead of an empty layer deepening the chain.
 	durableDiskSyncFinal durableDiskSyncMode = iota
 	// An explicit snapshot may return the latest generation when nothing changed.
 	durableDiskSyncExplicit
@@ -73,7 +79,33 @@ type durableDiskMarker struct {
 	Generation     int64
 }
 
-func (s *Worker) prepareDurableDiskMount(request *types.ContainerRequest, mount *types.Mount) error {
+// prepareDurableDiskMounts brings every durable disk on the request online.
+// It runs during container startup alongside the image pull and workspace
+// mount: a qcow attach costs ~45ms inside the kernel's NBD connect alone, so
+// paying it serially inside spec generation put it squarely on the critical
+// path. Disks attach concurrently with each other for the same reason.
+//
+// ctx is the startup context: when a sibling startup task fails or startup is
+// canceled, in-flight attaches abort instead of finishing after the container
+// has already been failed. Disks that did attach are detached by clearContainer.
+func (s *Worker) prepareDurableDiskMounts(ctx context.Context, request *types.ContainerRequest) error {
+	disks, ctx := errgroup.WithContext(ctx)
+	for i := range request.Mounts {
+		mount := &request.Mounts[i]
+		if mount.MountType != types.StorageModeDurableDisk {
+			continue
+		}
+		disks.Go(func() error {
+			if err := s.prepareDurableDiskMount(ctx, request, mount); err != nil {
+				return fmt.Errorf("failed to prepare durable disk mount: %w", err)
+			}
+			return nil
+		})
+	}
+	return disks.Wait()
+}
+
+func (s *Worker) prepareDurableDiskMount(ctx context.Context, request *types.ContainerRequest, mount *types.Mount) error {
 	if mount == nil || mount.DurableDisk == nil {
 		return fmt.Errorf("durable disk mount is missing metadata")
 	}
@@ -85,16 +117,17 @@ func (s *Worker) prepareDurableDiskMount(request *types.ContainerRequest, mount 
 		mount.DurableDisk.SourceSnapshotId = durableDiskSourceSnapshotFromStub(request, mount.DurableDisk.Name)
 	}
 
+	ctx = s.durableDiskContext(ctx)
 	driver := durableDiskDriver(mount.DurableDisk.Driver)
 	switch driver {
 	case types.DurableDiskDriverQcow:
-		return withDurableDiskLock(s.durableDiskContext(nil), mount, func() error {
-			return s.prepareQcowDurableDiskMount(request, mount)
+		return withDurableDiskLock(ctx, mount, func() error {
+			return s.prepareQcowDurableDiskMount(ctx, request, mount)
 		})
 	case types.DurableDiskDriverSnapshot:
-		return withDurableDiskLock(s.durableDiskContext(nil), mount, func() error {
+		return withDurableDiskLock(ctx, mount, func() error {
 			if s != nil {
-				if err := s.restoreDurableDiskSnapshot(request, mount); err != nil {
+				if err := s.restoreDurableDiskSnapshot(ctx, request, mount); err != nil {
 					return err
 				}
 			}
@@ -458,11 +491,11 @@ func nextDurableDiskSnapshotGeneration(now int64, parent *types.DiskSnapshot) (i
 	return parent.Generation + 1, nil
 }
 
-func (s *Worker) restoreDurableDiskSnapshot(request *types.ContainerRequest, mount *types.Mount) error {
+func (s *Worker) restoreDurableDiskSnapshot(ctx context.Context, request *types.ContainerRequest, mount *types.Mount) error {
 	if s == nil || s.backendRepoClient == nil || request == nil || mount == nil || mount.DurableDisk == nil {
 		return nil
 	}
-	ctx := s.durableDiskContext(nil)
+	ctx = s.durableDiskContext(ctx)
 
 	resp, err := handleGRPCResponse(s.backendRepoClient.GetLatestDiskSnapshot(ctx, &pb.GetLatestDiskSnapshotRequest{
 		WorkspaceId: cacheRequestWorkspaceID(request),

@@ -205,11 +205,24 @@ func (cs *Server) AvailableDiskBytes() int64 {
 	return cs.cas.CachedDiskAvailableBytes()
 }
 
+// RefreshDiskUsage re-reads filesystem usage without evicting.
 func (cs *Server) RefreshDiskUsage() (DiskUsage, error) {
+	return cs.refreshDisk(false)
+}
+
+// ReclaimDisk re-reads filesystem usage and, if it is above the eviction
+// watermark, evicts down to it honoring the current protected set. It is the
+// same pass the store's own monitor runs; callers use it when they have just
+// changed the protected set and want the disk to reflect it now.
+func (cs *Server) ReclaimDisk() (DiskUsage, error) {
+	return cs.refreshDisk(true)
+}
+
+func (cs *Server) refreshDisk(evict bool) (DiskUsage, error) {
 	if cs == nil || cs.cas == nil {
 		return DiskUsage{}, fmt.Errorf("cache server store is not available")
 	}
-	snapshot, err := cs.cas.refreshDiskCacheUsage(false)
+	snapshot, err := cs.cas.refreshDiskCacheUsage(evict)
 	if err != nil {
 		return DiskUsage{}, err
 	}
@@ -246,11 +259,12 @@ func (cs *Server) SetProtectedContent(protected map[string]struct{}) {
 	cs.cas.SetProtectedContent(protected)
 }
 
-func (cs *Server) PressureEvictContent(protected map[string]struct{}, bytesToFree int64) (int, int64) {
+// EvictWatermarkPct is the filesystem usage fraction the store evicts down to.
+func (cs *Server) EvictWatermarkPct() float64 {
 	if cs == nil || cs.cas == nil {
-		return 0, 0
+		return defaultDiskCacheEvictWatermarkPct
 	}
-	return cs.cas.PressureEvictContent(protected, bytesToFree)
+	return cs.cas.evictWatermarkPct()
 }
 
 func (cs *Server) SetChurnSink(sink CacheChurnSink) {

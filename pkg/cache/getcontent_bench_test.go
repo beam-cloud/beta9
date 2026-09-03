@@ -50,7 +50,7 @@ func BenchmarkGetContentDiskCache(b *testing.B) {
 	fileSize := int64(16 * 1024 * 1024)
 	content := make([]byte, fileSize)
 	rand.Read(content)
-	hash := "test-file"
+	hash := benchHash("test-file")
 
 	err = cas.Add(context.Background(), hash, content)
 	if err != nil {

@@ -3,14 +3,21 @@ package cache
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"sync"
 	"testing"
-	"time"
 )
 
 var benchmarkSetupOnce sync.Once
+
+// benchHash turns a readable label into the sha256 hex key the store requires.
+func benchHash(label string) string {
+	sum := sha256.Sum256([]byte(label))
+	return hex.EncodeToString(sum[:])
+}
 
 func setupBenchmarkCAS(b *testing.B) (*Store, func()) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -68,7 +75,7 @@ func BenchmarkSequentialRead(b *testing.B) {
 			// Generate test data
 			content := make([]byte, size)
 			rand.Read(content)
-			hash := fmt.Sprintf("test-hash-%d", size)
+			hash := benchHash(fmt.Sprintf("test-hash-%d", size))
 
 			err := cas.Add(context.Background(), hash, content)
 			if err != nil {
@@ -115,7 +122,7 @@ func BenchmarkRandomRead(b *testing.B) {
 			// Generate test data
 			content := make([]byte, fileSize)
 			rand.Read(content)
-			hash := "random-test-hash"
+			hash := benchHash("random-test-hash")
 
 			err := cas.Add(context.Background(), hash, content)
 			if err != nil {
@@ -154,7 +161,7 @@ func BenchmarkSmallFiles(b *testing.B) {
 			for i := 0; i < numFiles; i++ {
 				content := make([]byte, fileSize)
 				rand.Read(content)
-				hash := fmt.Sprintf("small-file-%d", i)
+				hash := benchHash(fmt.Sprintf("small-file-%d", i))
 				hashes[i] = hash
 
 				err := cas.Add(context.Background(), hash, content)
@@ -187,7 +194,7 @@ func BenchmarkCacheHitRatios(b *testing.B) {
 	fileSize := int64(16 * 1024 * 1024) // 16 MB
 	content := make([]byte, fileSize)
 	rand.Read(content)
-	hash := "cache-test-hash"
+	hash := benchHash("cache-test-hash")
 
 	err := cas.Add(context.Background(), hash, content)
 	if err != nil {
@@ -226,75 +233,4 @@ func BenchmarkCacheHitRatios(b *testing.B) {
 			}
 		}
 	})
-}
-
-// BenchmarkPrefetcher tests prefetcher effectiveness
-func BenchmarkPrefetcher(b *testing.B) {
-	cas, cleanup := setupBenchmarkCAS(b)
-	defer cleanup()
-
-	fileSize := int64(64 * 1024 * 1024) // 64 MB
-	content := make([]byte, fileSize)
-	rand.Read(content)
-	hash := "prefetch-test-hash"
-
-	err := cas.Add(context.Background(), hash, content)
-	if err != nil {
-		b.Fatalf("Failed to add content: %v", err)
-	}
-
-	chunkSize := int64(4 * 1024 * 1024) // 4MB chunks
-	dst := make([]byte, chunkSize)
-
-	b.ResetTimer()
-	b.SetBytes(fileSize)
-
-	for i := 0; i < b.N; i++ {
-		// Sequential reads to trigger prefetcher
-		for offset := int64(0); offset < fileSize; offset += chunkSize {
-			readLen := chunkSize
-			if offset+readLen > fileSize {
-				readLen = fileSize - offset
-			}
-
-			_, err := cas.Get(hash, offset, readLen, dst)
-			if err != nil {
-				b.Fatalf("Failed to read: %v", err)
-			}
-		}
-
-		// Small delay to let prefetcher work
-		time.Sleep(10 * time.Millisecond)
-	}
-}
-
-// BenchmarkBufferPool tests buffer allocation performance
-func BenchmarkBufferPool(b *testing.B) {
-	pool := NewBufferPool()
-
-	sizes := []int{
-		1 * 1024 * 1024,  // 1MB
-		4 * 1024 * 1024,  // 4MB
-		16 * 1024 * 1024, // 16MB
-	}
-
-	for _, size := range sizes {
-		b.Run(fmt.Sprintf("size_%dMB", size/(1024*1024)), func(b *testing.B) {
-			b.Run("WithPool", func(b *testing.B) {
-				b.ReportAllocs()
-				for i := 0; i < b.N; i++ {
-					buf := pool.Get(size)
-					pool.Put(buf)
-				}
-			})
-
-			b.Run("WithoutPool", func(b *testing.B) {
-				b.ReportAllocs()
-				for i := 0; i < b.N; i++ {
-					buf := make([]byte, size)
-					_ = buf
-				}
-			})
-		})
-	}
 }

@@ -1,6 +1,7 @@
 package image
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -264,4 +265,35 @@ func TestParseBuildSteps(t *testing.T) {
 		got := parseBuildSteps(tc.steps, "micromamba3.10", false)
 		assert.Equal(t, tc.want, got)
 	}
+}
+
+func TestRenderEnvVarsOnOneLine(t *testing.T) {
+	var sb strings.Builder
+	renderEnvVarsAndSecrets(&sb, &BuildOpts{
+		EnvVars: []string{"A=1", "", "PATH=/usr/local/bin:$PATH", `MSG=hello "world"`, "BARE"},
+	})
+	assert.Equal(t, "ENV A=1 PATH=/usr/local/bin:$PATH MSG=\"hello \\\"world\\\"\" BARE\n", sb.String())
+}
+
+func TestRenderEnvVarsSplitsInstructionAtDependency(t *testing.T) {
+	var sb strings.Builder
+	renderEnvVarsAndSecrets(&sb, &BuildOpts{
+		EnvVars: []string{"A=1", "B=$A", "C=${A}-x", "D=2", "E=${B:-fallback}", "F=$E"},
+	})
+	assert.Equal(t, "ENV A=1\nENV B=$A C=${A}-x D=2\nENV E=${B:-fallback}\nENV F=$E\n", sb.String())
+
+	// `\$A` is a literal dollar sign, not a reference, quoted or not; `\\$A`
+	// is an escaped backslash followed by a live reference.
+	sb.Reset()
+	renderEnvVarsAndSecrets(&sb, &BuildOpts{EnvVars: []string{"A=1", `B=\$A`, `C=\\$A`, `D=it's "x" \$A`}})
+	assert.Equal(t, "ENV A=1 B=\\$A\nENV C=\\\\$A D=\"it's \\\"x\\\" \\$A\"\n", sb.String())
+}
+
+func TestQuoteDockerfileValueKeepsAuthoredEscapes(t *testing.T) {
+	assert.Equal(t, `plain$VAR`, quoteDockerfileValue(`plain$VAR`))
+	assert.Equal(t, `C:\path`, quoteDockerfileValue(`C:\path`))
+	assert.Equal(t, `"two words"`, quoteDockerfileValue(`two words`))
+	assert.Equal(t, `"say \"hi\""`, quoteDockerfileValue(`say "hi"`))
+	assert.Equal(t, `"already \"escaped\" \$LITERAL"`, quoteDockerfileValue(`already \"escaped\" \$LITERAL`))
+	assert.Equal(t, `"escaped backslash \\ then quote \""`, quoteDockerfileValue(`escaped backslash \\ then quote "`))
 }

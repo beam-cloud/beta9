@@ -26,6 +26,7 @@ const (
 	diskCacheUsageCheckInterval = 30 * time.Second
 	diskCacheWriteGuardInterval = 5 * time.Second
 	pageLockStripeCount         = 4096
+	objectLockStripeCount       = 1024
 	cacheCompleteMarkerName     = "_complete"
 )
 
@@ -45,27 +46,30 @@ type Store struct {
 	serverConfig            ServerConfig
 	diskConfig              DiskConfig
 	globalConfig            GlobalConfig
-	prefetchConfig          ReadPrefetchConfig
 	metadataStore           CacheMetadataStore
 	maxCacheSizeMb          int64
 	diskCacheDir            string
 	diskCachedUsageExceeded bool
 	memoryCacheEnabled      bool
 	mu                      sync.Mutex
-	bufferPool              *BufferPool
-	prefetcher              *Prefetcher
 	pageLocks               [pageLockStripeCount]sync.RWMutex
+	// objectLocks serialize publishing an object's pages and marker against
+	// removing them, per hash stripe; see lockObject.
+	objectLocks             [objectLockStripeCount]sync.Mutex
 	closing                 atomic.Bool
 	diskUsagePctBits        atomic.Uint64
 	diskAvailableBytes      atomic.Int64
 	diskMonitorStarted      atomic.Bool
 	lastDiskGuardCheckNanos atomic.Int64
-	accessTouchMu           sync.Mutex
-	accessTouches           map[string]time.Time
-	protectedMu             sync.RWMutex
-	protectedContent        map[string]struct{}
-	churnMu                 sync.RWMutex
-	churnSink               CacheChurnSink
+	index                   contentIndex
+	// evictMu serializes eviction passes. The disk monitor and the embedded
+	// cache owner's ReclaimDisk both evict from a usage snapshot; two passes
+	// working from the same snapshot would each free the whole deficit.
+	evictMu          sync.Mutex
+	protectedMu      sync.RWMutex
+	protectedContent map[string]struct{}
+	churnMu          sync.RWMutex
+	churnSink        CacheChurnSink
 }
 
 func NewStore(ctx context.Context, currentHost *Host, locality string, metadataStore CacheMetadataStore, config Config) (*Store, error) {
@@ -77,18 +81,18 @@ func NewStore(ctx context.Context, currentHost *Host, locality string, metadataS
 		serverConfig:       config.Server,
 		diskConfig:         config.Disk,
 		globalConfig:       config.Global,
-		prefetchConfig:     config.Client.Prefetch,
 		metadataStore:      metadataStore,
 		currentHost:        currentHost,
 		locality:           locality,
 		diskCacheDir:       config.Server.DiskCacheDir,
 		memoryCacheEnabled: config.Server.MaxCachePct > 0,
 		mu:                 sync.Mutex{},
-		accessTouches:      make(map[string]time.Time),
+		index:              contentIndex{entries: map[string]contentEntry{}},
 		protectedContent:   make(map[string]struct{}),
 	}
 
 	Logger.Infof("Disk cache directory located at: '%s'", cas.diskCacheDir)
+	cas.rebuildContentIndex()
 
 	if cas.memoryCacheEnabled {
 		_, totalMemoryMb := getMemoryMb()
@@ -128,14 +132,6 @@ func NewStore(ctx context.Context, currentHost *Host, locality string, metadataS
 		cas.cache = cache
 	}
 
-	// Initialize buffer pool for reduced allocations
-	cas.bufferPool = NewBufferPool()
-
-	// Initialize prefetcher for sequential read optimization
-	if config.Client.Prefetch.Enabled {
-		cas.prefetcher = NewPrefetcher(ctx, cas, cas.bufferPool)
-	}
-
 	return cas, nil
 }
 
@@ -149,6 +145,20 @@ func (cas *Store) pageFileBuckets() int {
 		return 1024
 	}
 	return cas.serverConfig.PageFileBuckets
+}
+
+// lockObject serializes publication and removal of one hash. A writer holds it
+// from the moment its verified pages start landing in the object directory
+// until the complete marker is written; eviction holds it for a removal. That
+// way a removal never deletes pages out from under a completion, and a
+// completion never lands in a directory that is half deleted. Page reads and
+// on-demand single-page fills are unaffected. It returns the unlock.
+func (cas *Store) lockObject(hash string) func() {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(hash))
+	lock := &cas.objectLocks[h.Sum64()%objectLockStripeCount]
+	lock.Lock()
+	return lock.Unlock
 }
 
 func (cas *Store) pageLock(hash string, pageIdx int64) *sync.RWMutex {
@@ -191,24 +201,44 @@ func (cas *Store) legacyPagePath(hash string, pageIdx int64) string {
 }
 
 func (cas *Store) existingPagePath(hash string, pageIdx int64) (string, os.FileInfo, error) {
-	v2 := cas.pagePath(hash, pageIdx)
-	if info, err := os.Stat(v2); err == nil {
-		return v2, info, nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return "", nil, err
+	if entry, ok := cas.index.get(hash); ok && entry.complete {
+		// A complete object has a known layout and page count: reads past the
+		// end are ordinary misses, and only one directory needs probing.
+		if pageIdx >= entry.pageCount {
+			return "", nil, ErrContentNotFound
+		}
+		path := filepath.Join(entry.dir, cas.pageKey(hash, pageIdx))
+		info, err := os.Stat(path)
+		if err == nil {
+			return path, info, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", nil, err
+		}
+		// A page the index believed present is gone: something outside this
+		// process removed it, so stop advertising the object until a rescan.
+		cas.index.forget(hash)
+		return "", nil, ErrContentNotFound
 	}
 
-	legacy := cas.legacyPagePath(hash, pageIdx)
-	if info, err := os.Stat(legacy); err == nil {
-		return legacy, info, nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return "", nil, err
+	for _, path := range []string{cas.pagePath(hash, pageIdx), cas.legacyPagePath(hash, pageIdx)} {
+		info, err := os.Stat(path)
+		if err == nil {
+			return path, info, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", nil, err
+		}
 	}
-
 	return "", nil, ErrContentNotFound
 }
 
 func (cas *Store) Add(ctx context.Context, hash string, content []byte) error {
+	// The on-disk index only recognizes sha256 hex names; anything else would
+	// be stored but forgotten at the next restart.
+	if !isContentHash(hash) {
+		return fmt.Errorf("cache content key %q is not a sha256 hex digest", hash)
+	}
 	size := int64(len(content))
 	chunkKeys := []string{}
 
@@ -220,6 +250,9 @@ func (cas *Store) Add(ctx context.Context, hash string, content []byte) error {
 	writeToDisk := cas.diskWriteAllowed()
 	if !writeToDisk && !cas.memoryCacheEnabled {
 		return errors.New("disk cache capacity exceeded")
+	}
+	if writeToDisk {
+		defer cas.lockObject(hash)()
 	}
 	if writeToDisk {
 		if err := os.MkdirAll(dirPath, 0755); err != nil {
@@ -270,12 +303,8 @@ func (cas *Store) Add(ctx context.Context, hash string, content []byte) error {
 	// Release the large initial buffer
 	content = nil
 
-	if cas.memoryCacheEnabled {
-		chunks := strings.Join(chunkKeys, ",")
-		added := cas.cache.SetWithTTL(hash, chunks, int64(len(chunks)), time.Duration(cas.serverConfig.ObjectTtlS)*time.Second)
-		if !added {
-			return errors.New("unable to cache: set dropped")
-		}
+	if cas.memoryCacheEnabled && !cas.indexObjectInMemory(hash, int64(len(chunkKeys))) {
+		return errors.New("unable to cache: set dropped")
 	}
 	if writeToDisk {
 		if err := cas.writeCompleteMarker(hash, size, int64(len(chunkKeys))); err != nil {
@@ -349,6 +378,7 @@ func (cas *Store) AddReader(ctx context.Context, reader io.Reader) (string, int6
 	}
 
 	hash := hex.EncodeToString(hasher.Sum(nil))
+	defer cas.lockObject(hash)()
 	dirPath := cas.pageDir(hash)
 	if err := os.MkdirAll(dirPath, 0755); err != nil {
 		return "", size, fmt.Errorf("failed to create cache directory: %w", err)
@@ -384,9 +414,7 @@ func (cas *Store) AddReader(ctx context.Context, reader io.Reader) (string, int6
 			}
 		}
 
-		chunks := strings.Join(chunkKeys, ",")
-		added := cas.cache.SetWithTTL(hash, chunks, int64(len(chunks)), time.Duration(cas.serverConfig.ObjectTtlS)*time.Second)
-		if !added {
+		if !cas.indexObjectInMemory(hash, chunkCount) {
 			return "", size, errors.New("unable to cache: set dropped")
 		}
 	}
@@ -478,18 +506,6 @@ func (cas *Store) AddReaderWithExpectedHash(ctx context.Context, reader io.Reade
 		return "", size, err
 	}
 
-	if cas.memoryCacheEnabled {
-		chunkKeys := make([]string, 0, chunkCount)
-		for chunkIdx := int64(0); chunkIdx < chunkCount; chunkIdx++ {
-			chunkKeys = append(chunkKeys, cas.pageKey(expectedHash, chunkIdx))
-		}
-		chunks := strings.Join(chunkKeys, ",")
-		added := cas.cache.SetWithTTL(expectedHash, chunks, int64(len(chunks)), time.Duration(cas.serverConfig.ObjectTtlS)*time.Second)
-		if !added {
-			return "", size, errors.New("unable to cache: set dropped")
-		}
-	}
-
 	Logger.Debugf("Added expected-hash object: %s, size: %d bytes", expectedHash, size)
 	return actualHash, size, nil
 }
@@ -523,6 +539,8 @@ func (cas *Store) AddPageSourceWithExpectedHash(ctx context.Context, expectedHas
 		if actualHash != expectedHash {
 			return actualHash, 0, fmt.Errorf("stored content hash mismatch: expected %s, got %s", expectedHash, actualHash)
 		}
+		unlock := cas.lockObject(expectedHash)
+		defer unlock()
 		if err := os.MkdirAll(cas.pageDir(expectedHash), 0755); err != nil {
 			return "", 0, fmt.Errorf("failed to create cache directory: %w", err)
 		}
@@ -709,7 +727,12 @@ func writePrivateCacheChunk(path string, data []byte) error {
 	return os.WriteFile(path, data, 0644)
 }
 
+// publishExpectedHashPages moves verified pages into place and marks the
+// object complete on disk and, when enabled, in the memory index. All of it
+// happens under the object lock so an eviction cannot slip between the pages
+// landing and the object being advertised.
 func (cas *Store) publishExpectedHashPages(hash string, tmpDir string, pageCount int64, size int64) error {
+	defer cas.lockObject(hash)()
 	finalDir := cas.pageDir(hash)
 	if err := os.MkdirAll(finalDir, 0755); err != nil {
 		return fmt.Errorf("failed to create cache directory: %w", err)
@@ -735,7 +758,26 @@ func (cas *Store) publishExpectedHashPages(hash string, tmpDir string, pageCount
 		}
 		pageLock.Unlock()
 	}
-	return cas.writeCompleteMarker(hash, size, pageCount)
+	if err := cas.writeCompleteMarker(hash, size, pageCount); err != nil {
+		return err
+	}
+	// The object is durable from here. The memory index only lets lookups
+	// skip the disk index; a dropped set costs that shortcut, not the object.
+	if cas.memoryCacheEnabled && !cas.indexObjectInMemory(hash, pageCount) {
+		Logger.Debugf("memory index dropped published object %s", hash)
+	}
+	return nil
+}
+
+// indexObjectInMemory records which page keys make up hash in the memory
+// cache, under the object TTL. It reports whether the cache accepted the entry.
+func (cas *Store) indexObjectInMemory(hash string, pageCount int64) bool {
+	keys := make([]string, 0, pageCount)
+	for pageIdx := int64(0); pageIdx < pageCount; pageIdx++ {
+		keys = append(keys, cas.pageKey(hash, pageIdx))
+	}
+	chunks := strings.Join(keys, ",")
+	return cas.cache.SetWithTTL(hash, chunks, int64(len(chunks)), time.Duration(cas.serverConfig.ObjectTtlS)*time.Second)
 }
 
 func (cas *Store) PutFullPages(hash string, offset int64, data []byte) {
@@ -839,9 +881,7 @@ func (cas *Store) addReaderToMemory(ctx context.Context, reader io.Reader) (stri
 		}
 	}
 
-	chunksValue := strings.Join(chunkKeys, ",")
-	added := cas.cache.SetWithTTL(hash, chunksValue, int64(len(chunksValue)), time.Duration(cas.serverConfig.ObjectTtlS)*time.Second)
-	if !added {
+	if !cas.indexObjectInMemory(hash, int64(len(chunks))) {
 		return "", size, errors.New("unable to cache: set dropped")
 	}
 
@@ -929,6 +969,7 @@ func (cas *Store) writeCompleteMarker(hash string, size int64, pageCount int64) 
 	if err := writeCacheMetadataAtomic(cas.completeMarkerPath(hash), []byte(marker)); err != nil {
 		return fmt.Errorf("failed to write cache complete marker: %w", err)
 	}
+	cas.indexCompleteContent(hash, size, pageCount)
 	return nil
 }
 
@@ -988,15 +1029,17 @@ func (cas *Store) ContentStatus(hash string, expectedSize ...int64) string {
 		return contentStatusIncomplete
 	}
 
+	// Every completion in this process passes through the index, so an
+	// object it does not know as complete is not complete.
 	pageSize := cas.serverConfig.PageSizeBytes
-	markerSize, markerPageSize, markerPageCount, ok := cas.completeMarker(hash)
-	if !ok {
+	entry, ok := cas.index.get(hash)
+	if !ok || !entry.complete {
 		if cas.hasAnyPages(hash) {
 			return contentStatusPartial
 		}
 		return contentStatusMissing
 	}
-	if markerPageSize != pageSize {
+	if entry.pageSize != pageSize {
 		return contentStatusSizeMismatch
 	}
 	if !hasExpectedSize {
@@ -1005,23 +1048,34 @@ func (cas *Store) ContentStatus(hash string, expectedSize ...int64) string {
 
 	size := expectedSize[0]
 	pageCount := (size + pageSize - 1) / pageSize
-	if markerSize != size || markerPageCount != pageCount {
+	if entry.size != size || entry.pageCount != pageCount {
 		return contentStatusSizeMismatch
 	}
 	return contentStatusComplete
 }
 
+// hasAnyPages reports whether an object directory holds at least one page. It
+// stops at the first page instead of listing (and sorting) the whole directory,
+// which for a multi-GiB object is over a thousand entries.
 func (cas *Store) hasAnyPages(hash string) bool {
 	for _, dir := range []string{cas.pageDir(hash), cas.legacyPageDir(hash)} {
-		entries, err := os.ReadDir(dir)
+		directory, err := os.Open(dir)
 		if err != nil {
 			continue
 		}
-		for _, entry := range entries {
-			if entry.Name() != cacheCompleteMarkerName {
-				return true
+		for {
+			names, err := directory.Readdirnames(8)
+			for _, name := range names {
+				if name != cacheCompleteMarkerName {
+					_ = directory.Close()
+					return true
+				}
+			}
+			if err != nil {
+				break
 			}
 		}
+		_ = directory.Close()
 	}
 	return false
 }
@@ -1064,11 +1118,6 @@ func (cas *Store) ReadAt(hash string, offset int64, dst []byte) (read int64, err
 			Logger.Warnf("cache store read-at result: hash=%s offset=%d length=%d read=%d err=%v elapsed=%s", hash, offset, len(dst), read, err, elapsed.Truncate(time.Millisecond))
 		}
 	}()
-
-	// Notify prefetcher about this read
-	if cas.prefetcher != nil {
-		cas.prefetcher.OnRead(hash, offset, length)
-	}
 
 	if cas.memoryCacheEnabled {
 		cas.cache.ResetTTL(hash, time.Duration(cas.serverConfig.ObjectTtlS)*time.Second)
@@ -1291,48 +1340,9 @@ func (cas *Store) PageRegion(hash string, offset int64, length int64) (path stri
 		atomic.AddInt64(&cachePathStats.storePageRegionMiss, 1)
 		return "", 0, 0, false, nil
 	}
-	if cas.prefetcher != nil {
-		cas.prefetcher.OnRead(hash, offset, readLength)
-	}
 	atomic.AddInt64(&cachePathStats.storePageRegionHits, 1)
 	atomic.AddInt64(&cachePathStats.storePageRegionBytes, readLength)
 	return pagePath, pageOffset, int(readLength), true, nil
-}
-
-func (cas *Store) WarmRange(hash string, offset int64, length int64) {
-	if length <= 0 || offset < 0 || cas.serverConfig.PageSizeBytes <= 0 {
-		return
-	}
-
-	pageSize := cas.serverConfig.PageSizeBytes
-	remaining := length
-	currentOffset := offset
-	for remaining > 0 {
-		pageIdx := currentOffset / pageSize
-		pageOffset := currentOffset % pageSize
-		readLength := min(remaining, pageSize-pageOffset)
-
-		pageLock := cas.pageLock(hash, pageIdx)
-		pageLock.RLock()
-		chunkPath, info, err := cas.existingPagePath(hash, pageIdx)
-		if err == nil && pageOffset < info.Size() {
-			if readLength > info.Size()-pageOffset {
-				readLength = info.Size() - pageOffset
-			}
-			if file, err := os.Open(chunkPath); err == nil {
-				_ = fadviseWillneed(file.Fd(), pageOffset, readLength)
-				_ = file.Close()
-				cachePrefetchPagesTotal.Inc()
-			}
-		}
-		pageLock.RUnlock()
-
-		if readLength <= 0 {
-			return
-		}
-		remaining -= readLength
-		currentOffset += readLength
-	}
 }
 
 func (cas *Store) onEvict(item *ristretto.Item[interface{}]) {
@@ -1530,6 +1540,12 @@ func (cas *Store) diskWriteAllowed() bool {
 }
 
 func (cas *Store) refreshDiskCacheUsage(evict bool) (diskUsageSnapshot, error) {
+	if evict {
+		// Hold the eviction lock across the stat too, so a pass that waited
+		// on another one decides from the usage that pass left behind.
+		cas.evictMu.Lock()
+		defer cas.evictMu.Unlock()
+	}
 	snapshot, err := getFilesystemDiskUsage(cas.diskCacheDir)
 	if err != nil {
 		if !os.IsNotExist(err) {
@@ -1583,6 +1599,8 @@ func normalizedPct(pct float64) float64 {
 func (cas *Store) monitorDiskCacheUsage() {
 	ticker := time.NewTicker(diskCacheUsageCheckInterval)
 	defer ticker.Stop()
+	rescan := time.NewTicker(contentIndexRescanInterval)
+	defer rescan.Stop()
 
 	for {
 		select {
@@ -1590,6 +1608,8 @@ func (cas *Store) monitorDiskCacheUsage() {
 			return
 		case <-ticker.C:
 			cas.refreshDiskCacheUsage(true)
+		case <-rescan.C:
+			cas.rebuildContentIndex()
 		}
 	}
 }

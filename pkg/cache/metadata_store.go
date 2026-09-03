@@ -25,7 +25,6 @@ type CacheMetadataStore interface {
 	// its Redis.
 	AddRecentStub(ctx context.Context, locality, workspaceID, stubID string, ttl time.Duration) error
 	ListRecentStubs(ctx context.Context, locality string, ttl time.Duration, limit int) ([]RecentStub, error)
-	MarkStubReported(ctx context.Context, locality, stubID string, ttl time.Duration) (bool, error)
 	AcquireReconcileLock(ctx context.Context, locality, logicalHost, hash string, ttlSeconds int) (bool, error)
 	ReleaseReconcileLock(ctx context.Context, locality, logicalHost, hash string) error
 }
@@ -124,10 +123,6 @@ func (c *RedisCacheMetadataStore) ListRecentStubs(ctx context.Context, locality 
 
 func (c *RedisCacheMetadataStore) ListRecentStubsAnyLocality(ctx context.Context, ttl time.Duration) ([]RecentStub, error) {
 	return c.metadata.ListRecentStubsAnyLocality(ctx, ttl)
-}
-
-func (c *RedisCacheMetadataStore) MarkStubReported(ctx context.Context, locality, stubID string, ttl time.Duration) (bool, error) {
-	return c.metadata.MarkStubReported(ctx, locality, stubID, ttl)
 }
 
 func (c *RedisCacheMetadataStore) AcquireReconcileLock(ctx context.Context, locality, logicalHost, hash string, ttlSeconds int) (bool, error) {

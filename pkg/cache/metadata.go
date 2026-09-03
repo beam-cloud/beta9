@@ -378,19 +378,6 @@ func (m *Metadata) ListRecentStubsAnyLocality(ctx context.Context, ttl time.Dura
 	return m.listRecentStubsFromKey(ctx, MetadataKeys.MetadataReconcileRecentAll(), ttl, 0)
 }
 
-// MarkStubReported atomically claims the one-time required-content generation
-// for a stub. It returns true only for the first caller (cluster-wide), so the
-// expensive enumeration + S2 write happens once per stub rather than on every
-// container start. The marker is set once with the given TTL and is not
-// refreshed by later callers; once it expires the content may be regenerated,
-// which is idempotent.
-func (m *Metadata) MarkStubReported(ctx context.Context, locality, stubID string, ttl time.Duration) (bool, error) {
-	if ttl <= 0 {
-		ttl = time.Hour
-	}
-	return m.rdb.SetNX(ctx, MetadataKeys.MetadataReconcileReported(locality, stubID), "1", ttl).Result()
-}
-
 // AcquireReconcileLock takes a short lifecycle lock so only one materialization
 // runs for a (locality, logical host, hash) at a time. It returns whether the
 // lock was acquired; contention is not an error.
@@ -454,7 +441,6 @@ var (
 	metadataReconcileRecent      string = "cache:reconcile:recent:%s"
 	metadataReconcileRecentAll   string = "cache:reconcile:recent"
 	metadataReconcileLock        string = "cache:reconcile:lock:%s:%s:%s"
-	metadataReconcileReported    string = "cache:reconcile:reported:%s:%s"
 )
 
 const (
@@ -526,10 +512,6 @@ func (k *metadataKeys) MetadataReconcileRecentAll() string {
 
 func (k *metadataKeys) MetadataReconcileLock(locality, logicalHost, hash string) string {
 	return fmt.Sprintf(metadataReconcileLock, locality, logicalHost, hash)
-}
-
-func (k *metadataKeys) MetadataReconcileReported(locality, stubID string) string {
-	return fmt.Sprintf(metadataReconcileReported, locality, stubID)
 }
 
 var MetadataKeys = &metadataKeys{}

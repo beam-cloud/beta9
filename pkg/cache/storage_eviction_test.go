@@ -18,7 +18,38 @@ func addEvictionTestContent(t *testing.T, store *Store, content string, lastAcce
 	require.NoError(t, err)
 	require.True(t, store.Exists(hash))
 	require.NoError(t, os.Chtimes(store.completeMarkerPath(hash), lastAccess, lastAccess))
+	// The index remembers the write as the last access; backdate the entry
+	// to match the marker so it looks the way a restart would rebuild it.
+	entry, ok := store.index.get(hash)
+	require.True(t, ok)
+	entry.lastAccess = lastAccess
+	store.index.put(hash, entry)
 	return hash
+}
+
+func evictionCandidateFor(t *testing.T, store *Store, hash string) evictionCandidate {
+	t.Helper()
+	for _, candidate := range store.evictionCandidates() {
+		if candidate.hash == hash {
+			return candidate
+		}
+	}
+	t.Fatalf("%s is not an eviction candidate", hash)
+	return evictionCandidate{}
+}
+
+func TestRemoveContentSkipsContentTouchedSinceItWasChosen(t *testing.T) {
+	store := newTestStore(t, 5)
+	hash := addEvictionTestContent(t, store, "read-after-chosen", time.Now().Add(-2*time.Hour))
+	candidate := evictionCandidateFor(t, store, hash)
+
+	// A read between the pass snapshot and the removal keeps the content.
+	store.touchContentAccess(hash)
+	require.ErrorIs(t, store.removeContent(candidate), errContentTouched)
+	require.True(t, store.Exists(hash))
+
+	require.NoError(t, store.removeContent(evictionCandidateFor(t, store, hash)))
+	require.False(t, store.Exists(hash))
 }
 
 func TestEvictLRURemovesOldestContentFirst(t *testing.T) {
@@ -174,13 +205,94 @@ func TestEvictionCandidateUsesInMemoryTouchWhenFresher(t *testing.T) {
 	hash := addEvictionTestContent(t, store, "in-memory-touch", stale)
 
 	// Simulate a throttled touch that never reached the filesystem
-	store.accessTouchMu.Lock()
-	store.accessTouches[hash] = time.Now()
-	store.accessTouchMu.Unlock()
+	known, _ := store.index.touch(hash, time.Now(), evictionAccessTouchInterval)
+	require.True(t, known)
 
 	evicted, _ := store.evictLRU(1 << 30)
 	require.Zero(t, evicted)
 	require.True(t, store.Exists(hash))
+
+	// A rescan must not lose the in-memory access to the older on-disk mtime
+	store.rebuildContentIndex()
+	evicted, _ = store.evictLRU(1 << 30)
+	require.Zero(t, evicted)
+	require.True(t, store.Exists(hash))
+}
+
+func TestContentIndexRebuildKeepsCompletionsRacingTheWalk(t *testing.T) {
+	store := newTestStore(t, 5)
+
+	// Content completed long before the walk, whose marker then vanished on
+	// disk: that is drift, and the walk's view of it must win.
+	drifted := addEvictionTestContent(t, store, "marker-lost-on-disk", time.Now())
+	driftedEntry, _ := store.index.get(drifted)
+	driftedEntry.completedAt = time.Now().Add(-time.Hour)
+	store.index.put(drifted, driftedEntry)
+	require.NoError(t, os.Remove(store.completeMarkerPath(drifted)))
+
+	// A walk began, then two writes completed before it was swapped in: one
+	// the walk never saw, one it saw before the marker landed.
+	walkStarted := time.Now()
+	scanned := store.scanContent()
+	unseen := addEvictionTestContent(t, store, "completed-after-walk", time.Now())
+	halfSeen := addEvictionTestContent(t, store, "completed-mid-walk", time.Now())
+	scanned[halfSeen] = contentEntry{dir: store.pageDir(halfSeen), size: 3, lastAccess: walkStarted}
+
+	store.index.replace(scanned, walkStarted)
+
+	require.True(t, store.Exists(unseen, int64(len("completed-after-walk"))))
+	require.True(t, store.Exists(halfSeen, int64(len("completed-mid-walk"))))
+	require.False(t, store.Exists(drifted))
+}
+
+func TestRemoveContentFailureLeavesTheLeftoverIndexed(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	store := newTestStore(t, 5)
+
+	stale := time.Now().Add(-2 * time.Hour)
+	hash := addEvictionTestContent(t, store, "stuck-content", stale)
+	// A directory the process cannot empty: a subdirectory it may not list.
+	locked := filepath.Join(store.pageDir(hash), "locked")
+	require.NoError(t, os.MkdirAll(filepath.Join(locked, "inner"), 0755))
+	require.NoError(t, os.Chmod(locked, 0))
+	t.Cleanup(func() { _ = os.Chmod(locked, 0755) })
+
+	evicted, _ := store.evictLRU(1 << 30)
+	require.Zero(t, evicted)
+	require.False(t, store.Exists(hash))
+
+	entry, ok := store.index.get(hash)
+	require.True(t, ok, "the leftover must stay visible to the next pass")
+	require.False(t, entry.complete)
+	require.WithinDuration(t, stale, entry.lastAccess, time.Second)
+
+	// Once the obstacle is gone the next pass reclaims it.
+	require.NoError(t, os.Chmod(locked, 0755))
+	evicted, _ = store.evictLRU(1 << 30)
+	require.Equal(t, 1, evicted)
+	require.NoDirExists(t, store.pageDir(hash))
+}
+
+func TestContentIndexRebuildFindsExistingContent(t *testing.T) {
+	store := newTestStore(t, 5)
+	hash := addEvictionTestContent(t, store, "survives-restart", time.Now())
+
+	// A fresh store over the same directory learns the content from disk
+	restarted, err := NewStore(context.Background(), store.currentHost, store.locality, store.metadataStore, Config{
+		Server: store.serverConfig, Disk: store.diskConfig, Global: store.globalConfig,
+	})
+	require.NoError(t, err)
+	require.True(t, restarted.Exists(hash, int64(len("survives-restart"))))
+
+	// Content removed behind the index's back stops being advertised on the
+	// first read that misses it
+	require.NoError(t, os.RemoveAll(store.pageDir(hash)))
+	require.True(t, restarted.Exists(hash))
+	_, err = restarted.ReadAt(hash, 0, make([]byte, 4))
+	require.ErrorIs(t, err, ErrContentNotFound)
+	require.False(t, restarted.Exists(hash))
 }
 
 func TestEvictionCandidateUsesCompleteMarkerSize(t *testing.T) {
@@ -222,6 +334,8 @@ func TestEvictionSkipsTemporaryAndIncompleteContentDirs(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(staleIncompleteDir, store.pageKey(staleIncompleteHash, 0)), []byte("partial"), 0644))
 	require.NoError(t, os.Chtimes(staleIncompleteDir, stale.Add(-evictionIncompleteContentGrace), stale.Add(-evictionIncompleteContentGrace)))
 
+	// Abandoned dirs were not written through the store; the rescan finds them
+	store.rebuildContentIndex()
 	evicted, _ := store.evictLRU(1 << 30)
 
 	require.Equal(t, 2, evicted)

@@ -30,6 +30,12 @@ volumes:
 - volume: $HOME/.beta9-k3d/storage:k3s-storage
   nodeFilters:
   - servers:*
+# Worker cache on a real filesystem. On the node's overlayfs root buildah
+# cannot use the overlay driver and falls back to vfs, where every layer is a
+# full rootfs copy (~15s per commit on a 650 MiB image, 16 GiB for 30 layers).
+- volume: beta9-worker-cache:/var/lib/beta9/cache
+  nodeFilters:
+  - servers:*
 
 registries:
   create:

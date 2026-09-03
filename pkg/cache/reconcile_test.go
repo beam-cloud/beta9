@@ -156,24 +156,6 @@ func TestRecentStubsAnyLocalityDedupesByNewestSeen(t *testing.T) {
 	require.Contains(t, byKey, RecentStubKey("ws", "stub-b"))
 }
 
-func TestMarkStubReportedClaimsOnce(t *testing.T) {
-	ctx := context.Background()
-	m := newTestMetadata(t)
-
-	claimed, err := m.MarkStubReported(ctx, "default", "stub", time.Hour)
-	require.NoError(t, err)
-	require.True(t, claimed)
-
-	claimed, err = m.MarkStubReported(ctx, "default", "stub", time.Hour)
-	require.NoError(t, err)
-	require.False(t, claimed)
-
-	// A different stub can still be claimed.
-	claimed, err = m.MarkStubReported(ctx, "default", "other", time.Hour)
-	require.NoError(t, err)
-	require.True(t, claimed)
-}
-
 func TestReconcileLockIsExclusive(t *testing.T) {
 	ctx := context.Background()
 	m := newTestMetadata(t)

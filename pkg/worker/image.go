@@ -40,7 +40,6 @@ import (
 	"github.com/opencontainers/umoci/oci/layer"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
-	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -48,7 +47,6 @@ const (
 	imageBundlePath                   string = "/dev/shm/images"
 	imageTmpDir                       string = types.AgentTmpPath
 	metricsSourceLabel                       = "image_client"
-	pullLazyBackoff                          = 1000 * time.Millisecond
 	embeddedImageCacheLockWaitTimeout        = 2 * time.Second
 	embeddedImageCacheWaitInterval           = 250 * time.Millisecond
 	imageArchiveLockRetryInterval            = 100 * time.Millisecond
@@ -283,6 +281,10 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		return elapsed, nil
 	}
 
+	// One mutex per image serializes every mount attempt in this process, and
+	// the mount point is per worker, so nothing else can race the mount once
+	// the lock is held. Cross-process work on the shared archive and layer
+	// files is guarded by file locks where it happens.
 	localLockStart := time.Now()
 	unlockMount := c.lockImageMount(request.ImageId)
 	c.recordImageLifecycle(request, types.ContainerLifecycleID("image.local_mount_lock"), localLockStart, time.Since(localLockStart), true, nil)
@@ -308,24 +310,6 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		}
 		mountOptions.PrepareConcurrency = 0
 		mountOptions.PrepareProgress = nil
-	}
-
-	if elapsed, ok := c.mountedImageHit(startTime, request, "clip_mounted_fuse_hit"); ok {
-		c.recordSuccessfulImageLoad(ctx, request, archive.metadata)
-		return elapsed, nil
-	}
-
-	remoteLockStart := time.Now()
-	releaseImageLock, err := c.acquireRemoteImageMountLock(request.ImageId)
-	c.recordImageLifecycle(request, types.ContainerLifecycleID("image.remote_mount_lock"), remoteLockStart, time.Since(remoteLockStart), err == nil, nil)
-	if err != nil {
-		return time.Since(startTime), err
-	}
-	defer releaseImageLock()
-
-	if elapsed, ok := c.mountedImageHit(startTime, request, "clip_mounted_fuse_hit_after_lock"); ok {
-		c.recordSuccessfulImageLoad(ctx, request, archive.metadata)
-		return elapsed, nil
 	}
 
 	mountStart := time.Now()
@@ -935,27 +919,6 @@ func (c *ImageClient) localImageArchiveReady(archivePath, imageID string) bool {
 		return false
 	}
 	return true
-}
-
-func (c *ImageClient) acquireRemoteImageMountLock(imageId string) (func(), error) {
-	lockResponse, err := handleGRPCResponse(c.workerRepoClient.SetImagePullLock(context.Background(), &pb.SetImagePullLockRequest{
-		WorkerId: c.workerId,
-		ImageId:  imageId,
-	}))
-	if err != nil {
-		return nil, err
-	}
-
-	return func() {
-		_, err := handleGRPCResponse(c.workerRepoClient.RemoveImagePullLock(context.Background(), &pb.RemoveImagePullLockRequest{
-			WorkerId: c.workerId,
-			ImageId:  imageId,
-			Token:    lockResponse.Token,
-		}))
-		if err != nil {
-			log.Warn().Err(err).Str("image_id", imageId).Msg("failed to release image pull lock")
-		}
-	}, nil
 }
 
 func (c *ImageClient) mountLazyImageArchive(ctx context.Context, request *types.ContainerRequest, options clip.MountOptions) error {
@@ -1929,6 +1892,7 @@ func (c *ImageClient) setupBuildahDirs() (graphroot, runroot, tmpdir string, cle
 	if cacheRoot != "" {
 		graphroot = filepath.Join(cacheRoot, "storage")
 		if err := ensureBuildahGraphroot(graphroot); err == nil {
+			persistBlobInfoCache(cacheRoot)
 			runroot = mustMkdirTempBuildahDir("buildah-run-")
 			tmpdir = mustMkdirTempBuildahDir("buildah-tmp-")
 			return graphroot, runroot, tmpdir, false
@@ -1954,6 +1918,71 @@ func buildahLayerCacheRoot() string {
 	}
 
 	return ""
+}
+
+// blobInfoCachePath is where containers/image keeps its blob info cache when
+// running as root. It records which compressed blob each stored layer was
+// pushed or pulled as, which is what lets a push skip layers the registry
+// already holds. It has no configuration knob, so it is redirected onto the
+// persistent build cache next to the layers it describes; left in the pod's
+// filesystem, every new pod re-uploaded every base layer once.
+const blobInfoCachePath = "/var/lib/containers/cache"
+
+func persistBlobInfoCache(cacheRoot string) {
+	target := filepath.Join(cacheRoot, "blob-info-cache")
+	if err := linkBlobInfoCache(blobInfoCachePath, target); err != nil {
+		log.Warn().Err(err).Str("path", target).Msg("buildah blob info cache will not persist across workers")
+	}
+}
+
+// linkBlobInfoCache makes local a symlink to target, the copy that outlives
+// this pod. A pod-local directory already at local becomes the shared copy
+// when none exists yet. Otherwise it is set aside untouched: its index is a
+// single SQLite file, and copying it over the shared one would discard what
+// other workers have recorded.
+func linkBlobInfoCache(local, target string) error {
+	if current, err := os.Readlink(local); err == nil && current == target {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(local), 0o755); err != nil {
+		return err
+	}
+	if info, err := os.Lstat(local); err == nil {
+		switch _, targetErr := os.Lstat(target); {
+		case !info.IsDir():
+			if err := os.Remove(local); err != nil {
+				return err
+			}
+		case os.IsNotExist(targetErr):
+			if err := moveDirectory(local, target); err != nil {
+				return err
+			}
+		default:
+			if err := os.Rename(local, fmt.Sprintf("%s.pod-%d", local, time.Now().UnixNano())); err != nil {
+				return err
+			}
+		}
+	}
+	if err := os.MkdirAll(target, 0o700); err != nil {
+		return err
+	}
+	if err := os.Chmod(target, 0o700); err != nil {
+		return err
+	}
+	return os.Symlink(target, local)
+}
+
+// moveDirectory relocates src to the not-yet-existing dst, copying across
+// filesystems when a rename cannot. src is only removed once its contents are
+// in place.
+func moveDirectory(src, dst string) error {
+	if err := os.Rename(src, dst); err == nil {
+		return nil
+	}
+	if err := copyDirectoryContents(src, dst); err != nil {
+		return err
+	}
+	return os.RemoveAll(src)
 }
 
 func ensureBuildahGraphroot(graphroot string) error {
@@ -2314,47 +2343,6 @@ func (c *ImageClient) createOCIImageWithProgress(ctx context.Context, outputLogg
 	return nil
 }
 
-func ociLayoutPushArgs(layoutPath, imageTag, credentials string, insecure bool) []string {
-	args := []string{
-		"copy",
-		"--image-parallel-copies", fmt.Sprintf("%d", imageLayerPrepareConcurrency),
-		"--preserve-digests",
-		"--retry-times", "5",
-		"--retry-delay", "1s",
-	}
-	if insecure {
-		args = append(args, "--dest-tls-verify=false")
-	}
-	if credentials != "" {
-		args = append(args, "--dest-creds", credentials)
-	}
-	return append(args, "oci:"+layoutPath+":latest", "docker://"+imageTag)
-}
-
-func (c *ImageClient) pushOCILayout(ctx context.Context, outputLogger *slog.Logger, layoutPath, imageTag, credentials string) error {
-	outputLogger.Info(fmt.Sprintf("Publishing image (%d concurrent layers)...\n", imageLayerPrepareConcurrency))
-	started := time.Now()
-	heartbeat := newActiveOutputWriter(outputLogger)
-	stopHeartbeat := startSilentOutputHeartbeat(ctx, outputLogger, started, heartbeat, "Still publishing image...")
-	defer stopHeartbeat()
-
-	var commandOutput strings.Builder
-	cmd := newImageCommand(
-		ctx,
-		"skopeo",
-		ociLayoutPushArgs(layoutPath, imageTag, credentials, c.config.ImageService.BuildRegistryInsecure),
-		common.AddSkopeoEnvVars(os.Environ()),
-		&commandOutput,
-		&commandOutput,
-	)
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to publish OCI image: %w: %s", err, strings.TrimSpace(commandOutput.String()))
-	}
-
-	outputLogger.Info(fmt.Sprintf("Image published in %.1fs\n", time.Since(started).Seconds()))
-	return nil
-}
-
 func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *slog.Logger, request *types.ContainerRequest) error {
 	startTime := time.Now()
 
@@ -2482,7 +2470,13 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		}
 	}
 
-	// Clip v2: export once, then publish and index the same local layer blobs.
+	// Clip v2: push straight from buildah storage to the build registry, then
+	// index the pushed image. Pushing from storage lets the registry transport
+	// reuse layer blobs it already holds: base layers shared with earlier
+	// builds are neither recompressed nor uploaded, and the index cache then
+	// skips them too, so a build pays for the layers it changed. What this
+	// replaces exported every layer to a local OCI layout (a full gzip pass
+	// over the rootfs) before publishing and indexing that copy.
 	if c.config.ImageService.ClipVersion == uint32(types.ClipVersion2) {
 		archiveName := fmt.Sprintf("%s.%s.tmp", request.ImageId, c.registry.ImageFileExtension)
 		archivePath := filepath.Join(tmpdir, archiveName)
@@ -2503,32 +2497,6 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		}
 		outputLogger.Info(fmt.Sprintf("Image built in %.1fs\n", time.Since(buildStart).Seconds()))
 
-		if err := os.RemoveAll(ociPath); err != nil {
-			return err
-		}
-		outputLogger.Info("Exporting image layers once for publication and indexing...\n")
-		exportArgs := []string{
-			"--root", graphroot,
-			"--runroot", runroot,
-			"--storage-driver=" + storageDriver,
-			"push",
-			"--compression-format", "gzip",
-			"--compression-level", "1",
-			imageTag,
-			"oci:" + ociPath + ":latest",
-		}
-		var exportOutput strings.Builder
-		exportStart := time.Now()
-		exportHeartbeat := newActiveOutputWriter(outputLogger)
-		stopHeartbeat = startSilentOutputHeartbeat(ctx, outputLogger, exportStart, exportHeartbeat, "Still exporting image layers...")
-		cmd = newBuildahCommand(ctx, exportArgs, c.buildahEnv(runroot, tmpdir, storageConf), &exportOutput, &exportOutput)
-		err = cmd.Run()
-		stopHeartbeat()
-		if err != nil {
-			return fmt.Errorf("failed to export OCI image: %w: %s", err, strings.TrimSpace(exportOutput.String()))
-		}
-		outputLogger.Info(fmt.Sprintf("Image layers exported in %.1fs\n", time.Since(exportStart).Seconds()))
-
 		buildRegistryCredentials := request.BuildRegistryCredentials
 		if buildRegistryCredentials == "" {
 			buildRegistryCredentials = c.gatewayRegistryCredentials(ctx, buildRegistry, request)
@@ -2537,26 +2505,45 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 			buildRegistryCredentials = ""
 		}
 
+		outputLogger.Info("Publishing image...\n")
+		pushArgs := []string{
+			"--root", graphroot,
+			"--runroot", runroot,
+			"--storage-driver=" + storageDriver,
+			"push",
+			"--compression-format", "gzip",
+			"--compression-level", "1",
+			"--retry", "5",
+			"--retry-delay", "1s",
+		}
+		if c.config.ImageService.BuildRegistryInsecure {
+			pushArgs = append(pushArgs, "--tls-verify=false")
+		}
+		if buildRegistryCredentials != "" {
+			pushArgs = append(pushArgs, "--creds", buildRegistryCredentials)
+		}
+		pushArgs = append(pushArgs, imageTag, "docker://"+imageTag)
+		var pushOutput strings.Builder
+		pushStart := time.Now()
+		pushHeartbeat := newActiveOutputWriter(outputLogger)
+		stopHeartbeat = startSilentOutputHeartbeat(ctx, outputLogger, pushStart, pushHeartbeat, "Still publishing image...")
+		cmd = newBuildahCommand(ctx, pushArgs, c.buildahEnv(runroot, tmpdir, storageConf), &pushOutput, &pushOutput)
+		err = cmd.Run()
+		stopHeartbeat()
+		if err != nil {
+			return fmt.Errorf("failed to publish image: %w: %s", err, strings.TrimSpace(pushOutput.String()))
+		}
+		outputLogger.Info(fmt.Sprintf("Image published in %.1fs\n", time.Since(pushStart).Seconds()))
+
 		c.v2ImageRefs.Set(request.ImageId, imageTag)
 		log.Info().Str("image_id", request.ImageId).Str("image_tag", imageTag).Msg("cached image reference")
 
-		group, groupCtx := errgroup.WithContext(ctx)
-		group.Go(func() error {
-			return c.pushOCILayout(groupCtx, outputLogger, ociPath, imageTag, buildRegistryCredentials)
-		})
-		group.Go(func() error {
-			return c.createOCIImageWithProgress(groupCtx, outputLogger, request, imageTag, ociPath, archivePath, 2)
-		})
-		if err = group.Wait(); err != nil {
+		if err = c.createOCIImageWithProgress(ctx, outputLogger, request, imageTag, "", archivePath, 2); err != nil {
 			return err
 		}
 
 		// Upload the clip archive to object storage
-		if err = c.registry.Push(ctx, archivePath, request.ImageId); err != nil {
-			return err
-		}
-
-		return nil
+		return c.registry.Push(ctx, archivePath, request.ImageId)
 	}
 
 	// Clip v1: Build, push to OCI layout, then process locally

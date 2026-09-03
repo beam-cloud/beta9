@@ -1,18 +1,29 @@
 package cache
 
-// LRU disk eviction. Content recency is the complete marker file's
-// mtime, refreshed on read (throttled), so it survives restarts with no extra
-// index. When filesystem usage crosses the eviction watermark, the store first
-// deletes unprotected stale content. If the node remains under pressure, it can
-// evict newer unprotected content, and only uses protected content to clear the
-// hard write gate.
+// LRU disk eviction over an in-memory content index.
+//
+// The index maps every content hash on disk to its size, completeness and last
+// access. It is built by one directory walk at startup, maintained on every
+// completion, read and removal, and re-walked on a slow timer to absorb drift
+// (a page deleted by hand, an abandoned temp dir). Every completeness check and
+// every eviction pass then answers from memory: before the index, each check
+// read a marker file and each pass stat'd every object on disk several times,
+// which on a node with tens of thousands of objects was the reconciler's
+// dominant CPU cost.
+//
+// Content recency also persists as the complete marker's mtime, refreshed on
+// read (throttled), so it survives a restart. When filesystem usage crosses the
+// eviction watermark, the store first deletes unprotected stale content. If the
+// node remains under pressure, it can evict newer unprotected content, and only
+// uses protected content to clear the hard write gate.
 
 import (
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
+	"sync"
 	"time"
 )
 
@@ -29,8 +40,9 @@ const (
 	// evictionIncompleteContentGrace keeps in-flight writes out of eviction,
 	// while allowing abandoned marker-less v2 dirs to be reclaimed.
 	evictionIncompleteContentGrace = 30 * time.Minute
-	// accessTouchMapSweepSize bounds the in-memory touch throttle map.
-	accessTouchMapSweepSize = 65536
+	// contentIndexRescanInterval bounds how long the index can disagree with
+	// the disk about content this process did not write or delete itself.
+	contentIndexRescanInterval = 30 * time.Minute
 )
 
 type evictionCandidate struct {
@@ -38,6 +50,183 @@ type evictionCandidate struct {
 	dir        string
 	lastAccess time.Time
 	sizeBytes  int64
+}
+
+// contentEntry is one object as the index knows it. complete mirrors the
+// on-disk marker; an incomplete entry is an in-flight or abandoned write.
+type contentEntry struct {
+	dir        string
+	size       int64
+	pageSize   int64
+	pageCount  int64
+	complete   bool
+	lastAccess time.Time
+	// completedAt is when this process wrote the complete marker; zero for
+	// entries learned from a disk walk.
+	completedAt time.Time
+}
+
+type contentIndex struct {
+	mu      sync.RWMutex
+	entries map[string]contentEntry
+}
+
+func (idx *contentIndex) get(hash string) (contentEntry, bool) {
+	idx.mu.RLock()
+	entry, ok := idx.entries[hash]
+	idx.mu.RUnlock()
+	return entry, ok
+}
+
+func (idx *contentIndex) put(hash string, entry contentEntry) {
+	idx.mu.Lock()
+	idx.entries[hash] = entry
+	idx.mu.Unlock()
+}
+
+func (idx *contentIndex) forget(hash string) {
+	idx.mu.Lock()
+	delete(idx.entries, hash)
+	idx.mu.Unlock()
+}
+
+// forgetIfUntouched drops the entry unless it has been accessed after since,
+// deciding and deleting under one lock so a concurrent touch cannot land in
+// between. It reports whether the entry was dropped.
+func (idx *contentIndex) forgetIfUntouched(hash string, since time.Time) bool {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	if entry, ok := idx.entries[hash]; ok && entry.lastAccess.After(since) {
+		return false
+	}
+	delete(idx.entries, hash)
+	return true
+}
+
+// touch advances an entry's access time; it reports whether the entry exists
+// and whether the previous touch is older than interval, so the caller can
+// throttle the on-disk mtime refresh that persists recency across restarts.
+func (idx *contentIndex) touch(hash string, now time.Time, interval time.Duration) (known bool, persist bool) {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	entry, ok := idx.entries[hash]
+	if !ok {
+		return false, false
+	}
+	persist = now.Sub(entry.lastAccess) >= interval
+	entry.lastAccess = now
+	idx.entries[hash] = entry
+	return true, persist
+}
+
+// candidates snapshots the index as eviction candidates, skipping in-flight
+// writes that are still inside their grace period.
+func (idx *contentIndex) candidates(now time.Time) []evictionCandidate {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	out := make([]evictionCandidate, 0, len(idx.entries))
+	for hash, entry := range idx.entries {
+		if !entry.complete && now.Sub(entry.lastAccess) < evictionIncompleteContentGrace {
+			continue
+		}
+		out = append(out, evictionCandidate{hash: hash, dir: entry.dir, lastAccess: entry.lastAccess, sizeBytes: entry.size})
+	}
+	return out
+}
+
+// replace swaps in a walk of the disk that began at since. The walk is not
+// atomic, so the index it replaces wins where it knows more: a read since the
+// walk started is more recent than any mtime the walk observed, and a
+// completion written since then is authoritative over a directory the walk
+// saw half-written or not at all. Anything else the walk disagrees with is
+// drift on disk, and the walk wins.
+func (idx *contentIndex) replace(scanned map[string]contentEntry, since time.Time) {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	for hash, current := range idx.entries {
+		entry, ok := scanned[hash]
+		completedDuringWalk := current.complete && !current.completedAt.Before(since)
+		switch {
+		case completedDuringWalk && (!ok || !entry.complete):
+			scanned[hash] = current
+		case ok && current.lastAccess.After(entry.lastAccess):
+			entry.lastAccess = current.lastAccess
+			scanned[hash] = entry
+		}
+	}
+	idx.entries = scanned
+}
+
+// rebuildContentIndex walks the cache directory once and replaces the index
+// with what it finds. It runs at startup and on the rescan timer.
+func (cas *Store) rebuildContentIndex() {
+	started := time.Now()
+	scanned := cas.scanContent()
+	cas.index.replace(scanned, started)
+	Logger.Infof("disk cache content index rebuilt: %d objects in %s", len(scanned), time.Since(started).Truncate(time.Millisecond))
+}
+
+// scanContent lists all on-disk content, covering both the v2
+// (pages/<bucket>/<hash>) and legacy (<hash>) layouts.
+func (cas *Store) scanContent() map[string]contentEntry {
+	scanned := map[string]contentEntry{}
+	buckets, _ := os.ReadDir(filepath.Join(cas.diskCacheDir, "pages"))
+	for _, bucket := range buckets {
+		if !bucket.IsDir() {
+			continue
+		}
+		bucketDir := filepath.Join(cas.diskCacheDir, "pages", bucket.Name())
+		entries, _ := os.ReadDir(bucketDir)
+		for _, entry := range entries {
+			if entry.IsDir() && isContentHash(entry.Name()) {
+				cas.scanContentDir(scanned, entry.Name(), filepath.Join(bucketDir, entry.Name()))
+			}
+		}
+	}
+
+	entries, _ := os.ReadDir(cas.diskCacheDir)
+	for _, entry := range entries {
+		if entry.IsDir() && entry.Name() != "pages" && isContentHash(entry.Name()) {
+			cas.scanContentDir(scanned, entry.Name(), filepath.Join(cas.diskCacheDir, entry.Name()))
+		}
+	}
+	return scanned
+}
+
+func (cas *Store) scanContentDir(scanned map[string]contentEntry, hash, dir string) {
+	info, err := os.Stat(dir)
+	if err != nil {
+		return
+	}
+	entry := contentEntry{dir: dir, lastAccess: info.ModTime()}
+	if filepath.Clean(dir) == filepath.Clean(cas.pageDir(hash)) {
+		if size, pageSize, pageCount, ok := cas.completeMarker(hash); ok {
+			entry.size, entry.pageSize, entry.pageCount, entry.complete = size, pageSize, pageCount, true
+			// The marker mtime is refreshed on read and reflects content
+			// recency rather than page churn.
+			if markerInfo, err := os.Stat(filepath.Join(dir, cacheCompleteMarkerName)); err == nil {
+				entry.lastAccess = markerInfo.ModTime()
+			}
+		}
+	}
+	if !entry.complete {
+		entry.size = dirSizeBytes(dir)
+	}
+	scanned[hash] = entry
+}
+
+// indexCompleteContent records a freshly written complete marker.
+func (cas *Store) indexCompleteContent(hash string, size, pageCount int64) {
+	now := time.Now()
+	cas.index.put(hash, contentEntry{
+		dir:         cas.pageDir(hash),
+		size:        size,
+		pageSize:    cas.serverConfig.PageSizeBytes,
+		pageCount:   pageCount,
+		complete:    true,
+		lastAccess:  now,
+		completedAt: now,
+	})
 }
 
 func (cas *Store) evictWatermarkPct() float64 {
@@ -49,33 +238,16 @@ func (cas *Store) evictWatermarkPct() float64 {
 }
 
 // touchContentAccess records a successful read of hash so eviction prefers
-// newer content. Throttled per hash; persisted via the complete marker mtime.
+// newer content. The index is updated on every read; the marker mtime that
+// carries recency across restarts is refreshed at most once per interval.
 func (cas *Store) touchContentAccess(hash string) {
 	if hash == "" {
 		return
 	}
-
 	now := time.Now()
-	cas.accessTouchMu.Lock()
-	if last, ok := cas.accessTouches[hash]; ok && now.Sub(last) < evictionAccessTouchInterval {
-		cas.accessTouchMu.Unlock()
-		return
+	if known, persist := cas.index.touch(hash, now, evictionAccessTouchInterval); known && persist {
+		_ = os.Chtimes(cas.completeMarkerPath(hash), now, now)
 	}
-	cas.accessTouches[hash] = now
-	if len(cas.accessTouches) > accessTouchMapSweepSize {
-		// Entries past the throttle window are already persisted as marker
-		// mtimes and carry no extra information.
-		for h, t := range cas.accessTouches {
-			if now.Sub(t) >= evictionAccessTouchInterval {
-				delete(cas.accessTouches, h)
-			}
-		}
-	}
-	cas.accessTouchMu.Unlock()
-
-	// Best-effort; legacy-layout content without a v2 marker falls back to
-	// directory mtime during eviction.
-	_ = os.Chtimes(cas.completeMarkerPath(hash), now, now)
 }
 
 // maybeEvictDiskCache evicts least-recently-read content when filesystem usage
@@ -224,7 +396,9 @@ func (cas *Store) evictLRUWithProtected(bytesToFree int64, protected map[string]
 			break
 		}
 		if err := cas.removeContent(candidate); err != nil {
-			Logger.Warnf("disk cache eviction failed to remove %s: %v", candidate.hash, err)
+			if !errors.Is(err, errContentTouched) {
+				Logger.Warnf("disk cache eviction failed to remove %s: %v", candidate.hash, err)
+			}
 			continue
 		}
 		evicted++
@@ -276,17 +450,15 @@ func (cas *Store) PruneContentNotProtected(protected map[string]struct{}, ttl ti
 			break
 		}
 		if err := cas.removeContent(candidate); err != nil {
-			Logger.Warnf("disk cache stale prune failed to remove %s: %v", candidate.hash, err)
+			if !errors.Is(err, errContentTouched) {
+				Logger.Warnf("disk cache stale prune failed to remove %s: %v", candidate.hash, err)
+			}
 			continue
 		}
 		evicted++
 		freed += candidate.sizeBytes
 	}
 	return evicted, freed
-}
-
-func (cas *Store) PressureEvictContent(protected map[string]struct{}, bytesToFree int64) (int, int64) {
-	return cas.evictLRUWithProtected(bytesToFree, protected, true)
 }
 
 func (cas *Store) SetProtectedContent(protected map[string]struct{}) {
@@ -320,118 +492,49 @@ func (cas *Store) protectedContentSnapshot() map[string]struct{} {
 	return out
 }
 
-// evictionCandidates lists all on-disk content with its last access time and
-// size, covering both the v2 (pages/<bucket>/<hash>) and legacy (<hash>)
-// layouts.
+// evictionCandidates lists all indexed content with its last access time and
+// size.
 func (cas *Store) evictionCandidates() []evictionCandidate {
-	candidates := []evictionCandidate{}
-	now := time.Now()
-
-	buckets, _ := os.ReadDir(filepath.Join(cas.diskCacheDir, "pages"))
-	for _, bucket := range buckets {
-		if !bucket.IsDir() {
-			continue
-		}
-		bucketDir := filepath.Join(cas.diskCacheDir, "pages", bucket.Name())
-		entries, _ := os.ReadDir(bucketDir)
-		for _, entry := range entries {
-			if entry.IsDir() && isCacheContentHash(entry.Name()) {
-				dir := filepath.Join(bucketDir, entry.Name())
-				if _, err := os.Stat(filepath.Join(dir, cacheCompleteMarkerName)); err == nil {
-					candidates = cas.appendCandidate(candidates, entry.Name(), dir)
-				} else if os.IsNotExist(err) && incompleteContentDirEvictable(dir, now) {
-					candidates = cas.appendCandidate(candidates, entry.Name(), dir)
-				}
-			}
-		}
-	}
-
-	entries, _ := os.ReadDir(cas.diskCacheDir)
-	for _, entry := range entries {
-		if entry.IsDir() && entry.Name() != "pages" && isCacheContentHash(entry.Name()) {
-			candidates = cas.appendCandidate(candidates, entry.Name(), filepath.Join(cas.diskCacheDir, entry.Name()))
-		}
-	}
-
-	return candidates
+	return cas.index.candidates(time.Now())
 }
 
-func incompleteContentDirEvictable(dir string, now time.Time) bool {
-	info, err := os.Stat(dir)
-	if err != nil {
-		return false
-	}
-	return now.Sub(info.ModTime()) >= evictionIncompleteContentGrace
-}
+// errContentTouched reports a candidate read or rewritten after the eviction
+// pass chose it; the pass moves on to the next one.
+var errContentTouched = errors.New("content touched since it was chosen for eviction")
 
-func isCacheContentHash(name string) bool {
-	if len(name) != 64 {
-		return false
-	}
-	return strings.IndexFunc(name, func(r rune) bool {
-		return (r < '0' || r > '9') && (r < 'a' || r > 'f')
-	}) == -1
-}
-
-func (cas *Store) appendCandidate(candidates []evictionCandidate, hash, dir string) []evictionCandidate {
-	info, err := os.Stat(dir)
-	if err != nil {
-		return candidates
-	}
-
-	// Prefer the complete marker mtime: it is refreshed on read and reflects
-	// content recency rather than page churn.
-	lastAccess := info.ModTime()
-	if markerInfo, err := os.Stat(filepath.Join(dir, cacheCompleteMarkerName)); err == nil {
-		lastAccess = markerInfo.ModTime()
-	}
-
-	// An in-memory touch may be fresher than the on-disk mtime since Chtimes
-	// is throttled
-	cas.accessTouchMu.Lock()
-	if touched, ok := cas.accessTouches[hash]; ok && touched.After(lastAccess) {
-		lastAccess = touched
-	}
-	cas.accessTouchMu.Unlock()
-
-	sizeBytes := int64(0)
-	if filepath.Clean(dir) == filepath.Clean(cas.pageDir(hash)) {
-		if markerSize, _, _, ok := cas.completeMarker(hash); ok {
-			sizeBytes = markerSize
-		} else {
-			sizeBytes = dirSizeBytes(dir)
-		}
-	} else {
-		sizeBytes = dirSizeBytes(dir)
-	}
-
-	return append(candidates, evictionCandidate{
-		hash:       hash,
-		dir:        dir,
-		lastAccess: lastAccess,
-		sizeBytes:  sizeBytes,
-	})
-}
-
-// removeContent deletes one object's pages. The complete marker is removed
-// first so concurrent completeness checks stop treating the content as present
-// before its pages disappear; in-flight readers degrade to a normal cache
-// miss.
+// removeContent deletes one object's pages. It holds the object lock so no
+// writer can publish the same hash into a directory being deleted, and it
+// re-checks the index under that lock: a candidate was chosen from a snapshot,
+// and one read or rewritten since is no longer the coldest thing on disk. The
+// index entry and the complete marker go before the pages so concurrent
+// completeness checks stop treating the content as present first; in-flight
+// readers degrade to a normal cache miss. Whatever a failed removal leaves
+// behind is re-indexed as an abandoned write so the next pass retries it
+// rather than leaking it until the rescan.
 func (cas *Store) removeContent(candidate evictionCandidate) error {
+	defer cas.lockObject(candidate.hash)()
+	if !cas.index.forgetIfUntouched(candidate.hash, candidate.lastAccess) {
+		return errContentTouched
+	}
 	if err := os.Remove(filepath.Join(candidate.dir, cacheCompleteMarkerName)); err != nil && !os.IsNotExist(err) {
+		cas.retainForRetry(candidate, candidate.sizeBytes)
 		return err
 	}
 	if cas.memoryCacheEnabled && cas.cache != nil {
 		cas.cache.Del(candidate.hash)
 	}
 	if err := os.RemoveAll(candidate.dir); err != nil {
+		cas.retainForRetry(candidate, dirSizeBytes(candidate.dir))
 		return err
 	}
-
-	cas.accessTouchMu.Lock()
-	delete(cas.accessTouches, candidate.hash)
-	cas.accessTouchMu.Unlock()
 	return nil
+}
+
+// retainForRetry puts a failed removal back in the index as an abandoned
+// write of the given size, keeping its old access time so it is eligible
+// again immediately.
+func (cas *Store) retainForRetry(candidate evictionCandidate, size int64) {
+	cas.index.put(candidate.hash, contentEntry{dir: candidate.dir, size: size, lastAccess: candidate.lastAccess})
 }
 
 func dirSizeBytes(dir string) int64 {

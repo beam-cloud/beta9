@@ -3,6 +3,7 @@ package disk
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -24,10 +25,37 @@ const (
 
 	qsdStartTimeout = 15 * time.Second
 
-	// pollInterval paces every wait loop in this package: socket and pidfile
-	// appearance, NBD settle, and daemon shutdown.
-	pollInterval = 50 * time.Millisecond
+	// Wait loops in this package (socket and pidfile appearance, NBD settle,
+	// daemon shutdown) start polling at minPollInterval and back off to
+	// maxPollInterval. The conditions usually hold within a millisecond or
+	// two of the preceding exec returning; a fixed 50ms tick was costing
+	// most of the attach time.
+	minPollInterval = time.Millisecond
+	maxPollInterval = 50 * time.Millisecond
 )
+
+// waitFor polls ready until it returns true, the timeout elapses, or ctx is
+// done. The interval doubles from minPollInterval up to maxPollInterval.
+func waitFor(ctx context.Context, timeout time.Duration, ready func() bool) error {
+	deadline := time.Now().Add(timeout)
+	interval := minPollInterval
+	for {
+		if ready() {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return errTimeout
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(interval):
+		}
+		interval = min(interval*2, maxPollInterval)
+	}
+}
+
+var errTimeout = errors.New("timed out")
 
 // fmtNodeName is the qcow2 node name of the head created by pivot number n.
 func fmtNodeName(pivot int) string {
@@ -98,39 +126,27 @@ func boolOnOff(v bool) string {
 }
 
 func waitForPidFile(ctx context.Context, pidFile string, timeout time.Duration) (int, error) {
-	deadline := time.Now().Add(timeout)
-	for {
-		if data, err := os.ReadFile(pidFile); err == nil {
-			if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && pid > 0 {
-				return pid, nil
-			}
+	pid := 0
+	err := waitFor(ctx, timeout, func() bool {
+		data, err := os.ReadFile(pidFile)
+		if err != nil {
+			return false
 		}
-		if time.Now().After(deadline) {
-			return 0, fmt.Errorf("qemu-storage-daemon did not write %s within %s", pidFile, timeout)
-		}
-		select {
-		case <-ctx.Done():
-			return 0, ctx.Err()
-		case <-time.After(pollInterval):
-		}
+		pid, err = strconv.Atoi(strings.TrimSpace(string(data)))
+		return err == nil && pid > 0
+	})
+	if errors.Is(err, errTimeout) {
+		return 0, fmt.Errorf("qemu-storage-daemon did not write %s within %s", pidFile, timeout)
 	}
+	return pid, err
 }
 
 func waitForSocket(ctx context.Context, path string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for {
-		if _, err := os.Stat(path); err == nil {
-			return nil
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("socket %s did not appear within %s", path, timeout)
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(pollInterval):
-		}
+	err := waitFor(ctx, timeout, func() bool { return fileExists(path) })
+	if errors.Is(err, errTimeout) {
+		return fmt.Errorf("socket %s did not appear within %s", path, timeout)
 	}
+	return err
 }
 
 // stopQSD asks the daemon to exit via QMP and escalates to SIGKILL. The kill
@@ -143,13 +159,10 @@ func (m *Manager) stopQSD(ctx context.Context, proc *qsdProcess) error {
 		_ = client.quit(ctx)
 		client.Close()
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	for processAlive(proc.pid, m.binaries.qsdComm()) {
-		if time.Now().After(deadline) {
-			killProcess(proc.pid, m.binaries.qsdComm())
-			break
-		}
-		time.Sleep(pollInterval)
+	if err := waitFor(context.Background(), 5*time.Second, func() bool {
+		return !processAlive(proc.pid, m.binaries.qsdComm())
+	}); err != nil {
+		killProcess(proc.pid, m.binaries.qsdComm())
 	}
 	return nil
 }

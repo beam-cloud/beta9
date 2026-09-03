@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -2350,12 +2349,16 @@ func (c *Client) waitForStoredContent(ctx context.Context, hash string, routingK
 	}
 }
 
+// isContentHash reports whether value is a sha256 digest as the store names
+// content: 64 lowercase hex characters. The on-disk index recognizes exactly
+// this form, so the same rule gates writes and the startup walk.
 func isContentHash(value string) bool {
 	if len(value) != sha256.Size*2 {
 		return false
 	}
-	_, err := hex.DecodeString(value)
-	return err == nil
+	return strings.IndexFunc(value, func(r rune) bool {
+		return (r < '0' || r > '9') && (r < 'a' || r > 'f')
+	}) == -1
 }
 
 func (c *Client) StoreContentFromLocalPath(source struct {

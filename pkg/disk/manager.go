@@ -83,6 +83,8 @@ type Config struct {
 	Root          string
 	Binaries      Binaries
 	MaxChainDepth int
+	// Debug adds per-phase timings to attach logs.
+	Debug bool
 
 	// Test hooks.
 	SysBlockPath string
@@ -98,6 +100,7 @@ type Manager struct {
 	devPath       string
 	run           runner
 	maxChainDepth int
+	debug         bool
 
 	mu      sync.Mutex
 	volumes map[string]*Volume
@@ -131,6 +134,7 @@ func NewManager(config Config) *Manager {
 		devPath:       config.DevPath,
 		run:           run,
 		maxChainDepth: config.MaxChainDepth,
+		debug:         config.Debug,
 		volumes:       make(map[string]*Volume),
 	}
 }

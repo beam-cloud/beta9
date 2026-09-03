@@ -26,6 +26,43 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestLinkBlobInfoCacheAdoptsThenProtectsTheSharedCopy(t *testing.T) {
+	root := t.TempDir()
+	local := filepath.Join(root, "containers", "cache")
+	target := filepath.Join(root, "persistent", "blob-info-cache")
+	require.NoError(t, os.MkdirAll(filepath.Join(local, "nested"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(local, "blob-info-cache-v1.sqlite"), []byte("first pod"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(local, "nested", "entry"), []byte("nested"), 0o600))
+	require.NoError(t, os.MkdirAll(filepath.Dir(target), 0o700))
+
+	// No shared copy yet: the pod's directory becomes it, private to root.
+	require.NoError(t, linkBlobInfoCache(local, target))
+	linked, err := os.Readlink(local)
+	require.NoError(t, err)
+	require.Equal(t, target, linked)
+	require.FileExists(t, filepath.Join(target, "nested", "entry"))
+	info, err := os.Stat(target)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o700), info.Mode().Perm())
+
+	// Already linked: nothing to do.
+	require.NoError(t, linkBlobInfoCache(local, target))
+
+	// A later pod that cached locally before linking must not overwrite the
+	// shared index; its directory is set aside instead.
+	require.NoError(t, os.Remove(local))
+	require.NoError(t, os.MkdirAll(local, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(local, "blob-info-cache-v1.sqlite"), []byte("second pod"), 0o600))
+	require.NoError(t, linkBlobInfoCache(local, target))
+	shared, err := os.ReadFile(filepath.Join(target, "blob-info-cache-v1.sqlite"))
+	require.NoError(t, err)
+	require.Equal(t, "first pod", string(shared))
+	asides, err := filepath.Glob(filepath.Join(filepath.Dir(local), "cache.pod-*"))
+	require.NoError(t, err)
+	require.Len(t, asides, 1)
+	require.FileExists(t, filepath.Join(asides[0], "blob-info-cache-v1.sqlite"))
+}
+
 func TestImageLayerPrepareProgressLoggerEmitsAggregateUpdates(t *testing.T) {
 	var output bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&output, nil))
@@ -110,22 +147,6 @@ func TestImageIndexProgressReporterCoalescesRapidUpdates(t *testing.T) {
 	require.Equal(t, 1, bytes.Count(output.Bytes(), []byte("Image indexing:")))
 	require.Contains(t, logs, "Image indexed in")
 	require.Contains(t, logs, "9 cached")
-}
-
-func TestOCILayoutPushArgsUseEightWayDigestPreservingCopy(t *testing.T) {
-	args := ociLayoutPushArgs("/tmp/layout", "registry.example.com/beam/image:test", "user:token", true)
-
-	require.Equal(t, []string{
-		"copy",
-		"--image-parallel-copies", "8",
-		"--preserve-digests",
-		"--retry-times", "5",
-		"--retry-delay", "1s",
-		"--dest-tls-verify=false",
-		"--dest-creds", "user:token",
-		"oci:/tmp/layout:latest",
-		"docker://registry.example.com/beam/image:test",
-	}, args)
 }
 
 func TestImageRegistryPullFailureLogLevel(t *testing.T) {

@@ -123,17 +123,6 @@ func (s *WorkerRepositoryService) ListRecentCacheStubs(ctx context.Context, req 
 	return resp, nil
 }
 
-func (s *WorkerRepositoryService) MarkCacheStubReported(ctx context.Context, req *pb.MarkCacheStubReportedRequest) (*pb.MarkCacheStubReportedResponse, error) {
-	if err := s.authorizeCacheMetadata(ctx); err != nil {
-		return &pb.MarkCacheStubReportedResponse{Ok: false, ErrorMsg: err.Error()}, nil
-	}
-	claimed, err := s.cacheMetadata.MarkStubReported(ctx, s.scopedCacheLocality(ctx, req.Locality), req.StubId, time.Duration(req.TtlSeconds)*time.Second)
-	if err != nil {
-		return &pb.MarkCacheStubReportedResponse{Ok: false, ErrorMsg: err.Error()}, nil
-	}
-	return &pb.MarkCacheStubReportedResponse{Ok: true, Claimed: claimed}, nil
-}
-
 func (s *WorkerRepositoryService) AcquireCacheReconcileLock(ctx context.Context, req *pb.AcquireCacheReconcileLockRequest) (*pb.AcquireCacheReconcileLockResponse, error) {
 	if err := s.authorizeCacheMetadata(ctx); err != nil {
 		return &pb.AcquireCacheReconcileLockResponse{Ok: false, ErrorMsg: err.Error()}, nil

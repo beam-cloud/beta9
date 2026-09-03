@@ -2,6 +2,7 @@ package disk
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -182,25 +183,21 @@ func (m *Manager) connectNBDDevice(ctx context.Context, device *nbdDevice, nbdSo
 	}
 	// The device is usable once the kernel records a server pid and the
 	// virtual size is visible.
-	deadline := time.Now().Add(nbdSettleTimeout)
 	expectedSectors := expectedSizeBytes / sectorSize
-	for {
-		if m.nbdDeviceBusy(device.name) {
-			if sectors, err := m.nbdDeviceSectors(device.name); err == nil && sectors == expectedSectors {
-				return nil
-			}
+	err := waitFor(ctx, nbdSettleTimeout, func() bool {
+		if !m.nbdDeviceBusy(device.name) {
+			return false
 		}
-		if time.Now().After(deadline) {
-			_ = m.disconnectNBDDevice(ctx, device)
+		sectors, err := m.nbdDeviceSectors(device.name)
+		return err == nil && sectors == expectedSectors
+	})
+	if err != nil {
+		_ = m.disconnectNBDDevice(ctx, device)
+		if errors.Is(err, errTimeout) {
 			return fmt.Errorf("%s did not settle at %d bytes within %s", device.Path, expectedSizeBytes, nbdSettleTimeout)
 		}
-		select {
-		case <-ctx.Done():
-			_ = m.disconnectNBDDevice(ctx, device)
-			return ctx.Err()
-		case <-time.After(pollInterval):
-		}
 	}
+	return err
 }
 
 func (m *Manager) disconnectNBDDevice(ctx context.Context, device *nbdDevice) error {
@@ -213,12 +210,8 @@ func (m *Manager) disconnectNBDDevice(ctx context.Context, device *nbdDevice) er
 		}
 		return fmt.Errorf("disconnect %s: %w", device.Path, err)
 	}
-	deadline := time.Now().Add(nbdSettleTimeout)
-	for m.nbdDeviceBusy(device.name) {
-		if time.Now().After(deadline) {
-			return fmt.Errorf("%s is still connected after disconnect", device.Path)
-		}
-		time.Sleep(pollInterval)
+	if err := waitFor(context.Background(), nbdSettleTimeout, func() bool { return !m.nbdDeviceBusy(device.name) }); err != nil {
+		return fmt.Errorf("%s is still connected after disconnect", device.Path)
 	}
 	return nil
 }

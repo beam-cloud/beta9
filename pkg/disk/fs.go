@@ -8,9 +8,13 @@ import (
 	"strings"
 )
 
-// formatExt4 formats a freshly created block device.
+// formatExt4 formats a freshly created block device. Inode tables and the
+// journal are left for the kernel to initialize lazily: the device is a brand
+// new qcow2 whose unallocated clusters already read as zeros, so there is
+// nothing for the eager zeroing to accomplish but cost.
 func (m *Manager) formatExt4(ctx context.Context, devicePath string) error {
-	_, err := m.run(ctx, m.binaries.MkfsExt4, "-F", "-q", "-m", "0", devicePath)
+	_, err := m.run(ctx, m.binaries.MkfsExt4, "-F", "-q", "-m", "0",
+		"-E", "lazy_itable_init=1,lazy_journal_init=1", devicePath)
 	if err != nil {
 		return fmt.Errorf("format %s: %w", devicePath, err)
 	}

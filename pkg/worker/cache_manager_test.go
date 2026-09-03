@@ -519,17 +519,15 @@ func testCacheManagerConfig(cacheDir string) types.AppConfig {
 				HostWatchIntervalSeconds: 1,
 			},
 			Server: cache.ServerConfig{
-				DiskCacheDir:         cacheDir,
-				DiskCacheMaxUsagePct: 1,
-				PageSizeBytes:        4,
-				ObjectTtlS:           300,
+				DiskCacheDir:               cacheDir,
+				DiskCacheMaxUsagePct:       1,
+				DiskCacheEvictWatermarkPct: 0.99,
+				PageSizeBytes:              4,
+				ObjectTtlS:                 300,
 			},
 			Client: cache.ClientConfig{
 				NTopHosts:             3,
 				MaxGetContentAttempts: 1,
-			},
-			Reconciliation: cache.ReconciliationConfig{
-				MaxDiskUsagePct: 0.99,
 			},
 			Global: cache.GlobalConfig{
 				DefaultLocality:         "test",
