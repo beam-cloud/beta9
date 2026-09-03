@@ -26,28 +26,41 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestBlobInfoCacheMoveDirectoryIntoPreservesContents(t *testing.T) {
+func TestLinkBlobInfoCacheAdoptsThenProtectsTheSharedCopy(t *testing.T) {
 	root := t.TempDir()
-	src := filepath.Join(root, "cache")
-	dst := filepath.Join(root, "persistent", "blob-info-cache")
-	require.NoError(t, os.MkdirAll(filepath.Join(src, "nested"), 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(src, "blob-info-cache-v1.sqlite"), []byte("local"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(src, "nested", "entry"), []byte("nested"), 0o600))
+	local := filepath.Join(root, "containers", "cache")
+	target := filepath.Join(root, "persistent", "blob-info-cache")
+	require.NoError(t, os.MkdirAll(filepath.Join(local, "nested"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(local, "blob-info-cache-v1.sqlite"), []byte("first pod"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(local, "nested", "entry"), []byte("nested"), 0o600))
+	require.NoError(t, os.MkdirAll(filepath.Dir(target), 0o700))
 
-	// Absent destination: the directory is adopted wholesale.
-	require.NoError(t, os.MkdirAll(filepath.Dir(dst), 0o700))
-	require.NoError(t, moveDirectoryInto(src, dst))
-	require.NoDirExists(t, src)
-	require.FileExists(t, filepath.Join(dst, "blob-info-cache-v1.sqlite"))
-	require.FileExists(t, filepath.Join(dst, "nested", "entry"))
+	// No shared copy yet: the pod's directory becomes it, private to root.
+	require.NoError(t, linkBlobInfoCache(local, target))
+	linked, err := os.Readlink(local)
+	require.NoError(t, err)
+	require.Equal(t, target, linked)
+	require.FileExists(t, filepath.Join(target, "nested", "entry"))
+	info, err := os.Stat(target)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o700), info.Mode().Perm())
 
-	// Existing destination: contents are merged in and the source removed.
-	require.NoError(t, os.MkdirAll(src, 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(src, "extra"), []byte("extra"), 0o600))
-	require.NoError(t, moveDirectoryInto(src, dst))
-	require.NoDirExists(t, src)
-	require.FileExists(t, filepath.Join(dst, "extra"))
-	require.FileExists(t, filepath.Join(dst, "blob-info-cache-v1.sqlite"))
+	// Already linked: nothing to do.
+	require.NoError(t, linkBlobInfoCache(local, target))
+
+	// A later pod that cached locally before linking must not overwrite the
+	// shared index; its directory is set aside instead.
+	require.NoError(t, os.Remove(local))
+	require.NoError(t, os.MkdirAll(local, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(local, "blob-info-cache-v1.sqlite"), []byte("second pod"), 0o600))
+	require.NoError(t, linkBlobInfoCache(local, target))
+	shared, err := os.ReadFile(filepath.Join(target, "blob-info-cache-v1.sqlite"))
+	require.NoError(t, err)
+	require.Equal(t, "first pod", string(shared))
+	asides, err := filepath.Glob(filepath.Join(filepath.Dir(local), "cache.pod-*"))
+	require.NoError(t, err)
+	require.Len(t, asides, 1)
+	require.FileExists(t, filepath.Join(asides[0], "blob-info-cache-v1.sqlite"))
 }
 
 func TestImageLayerPrepareProgressLoggerEmitsAggregateUpdates(t *testing.T) {

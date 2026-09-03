@@ -22,7 +22,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 )
@@ -61,6 +60,9 @@ type contentEntry struct {
 	pageCount  int64
 	complete   bool
 	lastAccess time.Time
+	// completedAt is when this process wrote the complete marker; zero for
+	// entries learned from a disk walk.
+	completedAt time.Time
 }
 
 type contentIndex struct {
@@ -84,6 +86,16 @@ func (idx *contentIndex) put(hash string, entry contentEntry) {
 func (idx *contentIndex) forget(hash string) {
 	idx.mu.Lock()
 	delete(idx.entries, hash)
+	idx.mu.Unlock()
+}
+
+// putIfAbsent records entry unless the hash is already indexed, so a retry
+// record never displaces a writer that completed the same hash meanwhile.
+func (idx *contentIndex) putIfAbsent(hash string, entry contentEntry) {
+	idx.mu.Lock()
+	if _, ok := idx.entries[hash]; !ok {
+		idx.entries[hash] = entry
+	}
 	idx.mu.Unlock()
 }
 
@@ -119,23 +131,23 @@ func (idx *contentIndex) candidates(now time.Time) []evictionCandidate {
 }
 
 // replace swaps in a walk of the disk that began at since. The walk is not
-// atomic, so the index it replaces wins wherever it knows more: a read since
-// the walk started is more recent than any mtime the walk observed, and a
-// completion indexed since then is authoritative over a directory the walk
-// saw half-written or not at all.
+// atomic, so the index it replaces wins where it knows more: a read since the
+// walk started is more recent than any mtime the walk observed, and a
+// completion written since then is authoritative over a directory the walk
+// saw half-written or not at all. Anything else the walk disagrees with is
+// drift on disk, and the walk wins.
 func (idx *contentIndex) replace(scanned map[string]contentEntry, since time.Time) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 	for hash, current := range idx.entries {
 		entry, ok := scanned[hash]
+		completedDuringWalk := current.complete && !current.completedAt.Before(since)
 		switch {
-		case ok && current.complete && !entry.complete:
+		case completedDuringWalk && (!ok || !entry.complete):
 			scanned[hash] = current
 		case ok && current.lastAccess.After(entry.lastAccess):
 			entry.lastAccess = current.lastAccess
 			scanned[hash] = entry
-		case !ok && current.complete && !current.lastAccess.Before(since):
-			scanned[hash] = current
 		}
 	}
 	idx.entries = scanned
@@ -162,7 +174,7 @@ func (cas *Store) scanContent() map[string]contentEntry {
 		bucketDir := filepath.Join(cas.diskCacheDir, "pages", bucket.Name())
 		entries, _ := os.ReadDir(bucketDir)
 		for _, entry := range entries {
-			if entry.IsDir() && isCacheContentHash(entry.Name()) {
+			if entry.IsDir() && isContentHash(entry.Name()) {
 				cas.scanContentDir(scanned, entry.Name(), filepath.Join(bucketDir, entry.Name()))
 			}
 		}
@@ -170,7 +182,7 @@ func (cas *Store) scanContent() map[string]contentEntry {
 
 	entries, _ := os.ReadDir(cas.diskCacheDir)
 	for _, entry := range entries {
-		if entry.IsDir() && entry.Name() != "pages" && isCacheContentHash(entry.Name()) {
+		if entry.IsDir() && entry.Name() != "pages" && isContentHash(entry.Name()) {
 			cas.scanContentDir(scanned, entry.Name(), filepath.Join(cas.diskCacheDir, entry.Name()))
 		}
 	}
@@ -201,13 +213,15 @@ func (cas *Store) scanContentDir(scanned map[string]contentEntry, hash, dir stri
 
 // indexCompleteContent records a freshly written complete marker.
 func (cas *Store) indexCompleteContent(hash string, size, pageCount int64) {
+	now := time.Now()
 	cas.index.put(hash, contentEntry{
-		dir:        cas.pageDir(hash),
-		size:       size,
-		pageSize:   cas.serverConfig.PageSizeBytes,
-		pageCount:  pageCount,
-		complete:   true,
-		lastAccess: time.Now(),
+		dir:         cas.pageDir(hash),
+		size:        size,
+		pageSize:    cas.serverConfig.PageSizeBytes,
+		pageCount:   pageCount,
+		complete:    true,
+		lastAccess:  now,
+		completedAt: now,
 	})
 }
 
@@ -476,35 +490,34 @@ func (cas *Store) evictionCandidates() []evictionCandidate {
 	return cas.index.candidates(time.Now())
 }
 
-func isCacheContentHash(name string) bool {
-	if len(name) != 64 {
-		return false
-	}
-	return strings.IndexFunc(name, func(r rune) bool {
-		return (r < '0' || r > '9') && (r < 'a' || r > 'f')
-	}) == -1
-}
-
 // removeContent deletes one object's pages. The index entry and the complete
 // marker go first so concurrent completeness checks stop treating the content
 // as present before its pages disappear; in-flight readers degrade to a normal
 // cache miss. Whatever a failed removal leaves behind is re-indexed as an
-// abandoned write, with its old access time, so the next pass retries it
-// rather than leaking it until the rescan.
+// abandoned write so the next pass retries it rather than leaking it until
+// the rescan.
 func (cas *Store) removeContent(candidate evictionCandidate) error {
 	cas.index.forget(candidate.hash)
 	if err := os.Remove(filepath.Join(candidate.dir, cacheCompleteMarkerName)); err != nil && !os.IsNotExist(err) {
-		cas.index.put(candidate.hash, contentEntry{dir: candidate.dir, size: candidate.sizeBytes, lastAccess: candidate.lastAccess})
+		cas.retainForRetry(candidate, candidate.sizeBytes)
 		return err
 	}
 	if cas.memoryCacheEnabled && cas.cache != nil {
 		cas.cache.Del(candidate.hash)
 	}
 	if err := os.RemoveAll(candidate.dir); err != nil {
-		cas.index.put(candidate.hash, contentEntry{dir: candidate.dir, size: dirSizeBytes(candidate.dir), lastAccess: candidate.lastAccess})
+		cas.retainForRetry(candidate, dirSizeBytes(candidate.dir))
 		return err
 	}
 	return nil
+}
+
+// retainForRetry puts a failed removal back in the index as an abandoned
+// write of the given size, keeping its old access time so it is eligible
+// again immediately. A writer that completed the same hash meanwhile owns
+// the entry and is left alone.
+func (cas *Store) retainForRetry(candidate evictionCandidate, size int64) {
+	cas.index.putIfAbsent(candidate.hash, contentEntry{dir: candidate.dir, size: size, lastAccess: candidate.lastAccess})
 }
 
 func dirSizeBytes(dir string) int64 {

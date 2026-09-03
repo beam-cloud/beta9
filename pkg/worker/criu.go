@@ -54,6 +54,7 @@ const (
 	checkpointFilesystemOnlyFile    = "filesystem-only"
 	checkpointFilesystemOnDiskFile  = "filesystem-on-disk" // Upper layer lives on the sealed qcow root disk.
 	checkpointFilesystemOnDiskV1    = "v1\n"
+	checkpointFilesystemOnlyV1      = "v1\n"
 	checkpointForcedRuncProfileFile = "beam-forced-runc-profile"
 	checkpointForcedRuncProfileV1   = "v1\n"
 	restoreReadinessTimeout         = 15 * time.Second
@@ -890,7 +891,7 @@ func captureCheckpointFilesystem(ctx context.Context, instance *ContainerInstanc
 		}
 	}
 	if filesystemOnly {
-		if err := os.WriteFile(filepath.Join(checkpointPath, checkpointFilesystemOnlyFile), []byte("v1\n"), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(checkpointPath, checkpointFilesystemOnlyFile), []byte(checkpointFilesystemOnlyV1), 0644); err != nil {
 			_ = os.Remove(archivePath)
 			return fmt.Errorf("mark filesystem checkpoint: %w", err)
 		}
@@ -954,13 +955,8 @@ func forcedRuncCheckpointNeedsColdMigration(checkpointPath string, request *type
 		return true
 	}
 
-	markerPath := filepath.Join(checkpointPath, checkpointForcedRuncProfileFile)
-	info, err := os.Lstat(markerPath)
-	if err != nil || !info.Mode().IsRegular() || info.Size() != int64(len(checkpointForcedRuncProfileV1)) {
-		return true
-	}
-	contents, err := os.ReadFile(markerPath)
-	return err != nil || string(contents) != checkpointForcedRuncProfileV1
+	forced, err := readCheckpointMarker(filepath.Join(checkpointPath, checkpointForcedRuncProfileFile), checkpointForcedRuncProfileV1)
+	return err != nil || !forced
 }
 
 func (s *Worker) createFilesystemCheckpoint(ctx context.Context, opts *CreateCheckpointOpts, instance *ContainerInstance) (string, error) {
@@ -1701,22 +1697,11 @@ func checkpointFilesystemPayload(checkpointPath string) (payloadPath string, arc
 		return "", false, errors.New("checkpoint filesystem archive is empty or invalid")
 	}
 
-	markerPath := filepath.Join(checkpointPath, checkpointFilesystemOnDiskFile)
-	marker, markerErr := os.Lstat(markerPath)
-	if markerErr != nil && !os.IsNotExist(markerErr) {
-		return "", false, markerErr
+	onDisk, err := readCheckpointMarker(filepath.Join(checkpointPath, checkpointFilesystemOnDiskFile), checkpointFilesystemOnDiskV1)
+	if err != nil {
+		return "", false, err
 	}
-	if markerErr == nil {
-		if !marker.Mode().IsRegular() {
-			return "", false, errors.New("checkpoint filesystem-on-disk marker is not a regular file")
-		}
-		contents, err := os.ReadFile(markerPath)
-		if err != nil {
-			return "", false, err
-		}
-		if string(contents) != checkpointFilesystemOnDiskV1 {
-			return "", false, errors.New("checkpoint filesystem-on-disk marker has an unsupported version")
-		}
+	if onDisk {
 		if legacyExists || archiveExists {
 			return "", false, errors.New("checkpoint must not carry both a filesystem payload and the filesystem-on-disk marker")
 		}
@@ -1731,17 +1716,40 @@ func checkpointFilesystemPayload(checkpointPath string) (payloadPath string, arc
 	return legacyPath, false, nil
 }
 
+// readCheckpointMarker reports whether path holds exactly want. A missing
+// marker is (false, nil); anything else under that name is an error. The size
+// is checked before reading so a stray large file is never loaded.
+func readCheckpointMarker(path, want string) (bool, error) {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !info.Mode().IsRegular() {
+		return false, fmt.Errorf("checkpoint marker %s is not a regular file", filepath.Base(path))
+	}
+	if info.Size() != int64(len(want)) {
+		return false, fmt.Errorf("checkpoint marker %s has an unsupported version", filepath.Base(path))
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+	if string(contents) != want {
+		return false, fmt.Errorf("checkpoint marker %s has an unsupported version", filepath.Base(path))
+	}
+	return true, nil
+}
+
 func checkpointFilesystemOnly(checkpointPath string) bool {
-	markerPath := filepath.Join(checkpointPath, checkpointFilesystemOnlyFile)
-	marker, markerErr := os.Lstat(markerPath)
-	if markerErr != nil || !marker.Mode().IsRegular() {
+	filesystemOnly, err := readCheckpointMarker(filepath.Join(checkpointPath, checkpointFilesystemOnlyFile), checkpointFilesystemOnlyV1)
+	if err != nil || !filesystemOnly {
 		return false
 	}
-	if _, _, err := checkpointFilesystemPayload(checkpointPath); err != nil {
-		return false
-	}
-	contents, err := os.ReadFile(markerPath)
-	return err == nil && string(contents) == "v1\n"
+	_, _, err = checkpointFilesystemPayload(checkpointPath)
+	return err == nil
 }
 
 func validateCheckpointKind(checkpointPath string, filesystemOnly bool) error {

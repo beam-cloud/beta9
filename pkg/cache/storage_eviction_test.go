@@ -197,6 +197,14 @@ func TestEvictionCandidateUsesInMemoryTouchWhenFresher(t *testing.T) {
 func TestContentIndexRebuildKeepsCompletionsRacingTheWalk(t *testing.T) {
 	store := newTestStore(t, 5)
 
+	// Content completed long before the walk, whose marker then vanished on
+	// disk: that is drift, and the walk's view of it must win.
+	drifted := addEvictionTestContent(t, store, "marker-lost-on-disk", time.Now())
+	driftedEntry, _ := store.index.get(drifted)
+	driftedEntry.completedAt = time.Now().Add(-time.Hour)
+	store.index.put(drifted, driftedEntry)
+	require.NoError(t, os.Remove(store.completeMarkerPath(drifted)))
+
 	// A walk began, then two writes completed before it was swapped in: one
 	// the walk never saw, one it saw before the marker landed.
 	walkStarted := time.Now()
@@ -209,6 +217,7 @@ func TestContentIndexRebuildKeepsCompletionsRacingTheWalk(t *testing.T) {
 
 	require.True(t, store.Exists(unseen, int64(len("completed-after-walk"))))
 	require.True(t, store.Exists(halfSeen, int64(len("completed-mid-walk"))))
+	require.False(t, store.Exists(drifted))
 }
 
 func TestRemoveContentFailureLeavesTheLeftoverIndexed(t *testing.T) {

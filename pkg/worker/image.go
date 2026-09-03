@@ -1930,38 +1930,53 @@ const blobInfoCachePath = "/var/lib/containers/cache"
 
 func persistBlobInfoCache(cacheRoot string) {
 	target := filepath.Join(cacheRoot, "blob-info-cache")
-	if current, err := os.Readlink(blobInfoCachePath); err == nil && current == target {
-		return
-	}
-	if err := os.MkdirAll(filepath.Dir(blobInfoCachePath), 0o755); err != nil {
-		return
-	}
-	if info, err := os.Lstat(blobInfoCachePath); err == nil {
-		if info.IsDir() {
-			// A real directory holds whatever this pod has cached so far; carry
-			// it over to the persistent copy rather than discarding it.
-			if err := moveDirectoryInto(blobInfoCachePath, target); err != nil {
-				log.Warn().Err(err).Str("path", blobInfoCachePath).Msg("buildah blob info cache will not persist across workers")
-				return
-			}
-		} else if err := os.Remove(blobInfoCachePath); err != nil {
-			log.Warn().Err(err).Str("path", blobInfoCachePath).Msg("buildah blob info cache will not persist across workers")
-			return
-		}
-	}
-	if err := os.MkdirAll(target, 0o700); err != nil {
-		return
-	}
-	if err := os.Symlink(target, blobInfoCachePath); err != nil {
+	if err := linkBlobInfoCache(blobInfoCachePath, target); err != nil {
 		log.Warn().Err(err).Str("path", target).Msg("buildah blob info cache will not persist across workers")
 	}
 }
 
-// moveDirectoryInto relocates src to dst, renaming when dst does not exist yet
-// and otherwise copying src's contents into dst. src is only removed once its
-// contents are in place.
-func moveDirectoryInto(src, dst string) error {
-	if _, err := os.Lstat(dst); os.IsNotExist(err) && os.Rename(src, dst) == nil {
+// linkBlobInfoCache makes local a symlink to target, the copy that outlives
+// this pod. A pod-local directory already at local becomes the shared copy
+// when none exists yet. Otherwise it is set aside untouched: its index is a
+// single SQLite file, and copying it over the shared one would discard what
+// other workers have recorded.
+func linkBlobInfoCache(local, target string) error {
+	if current, err := os.Readlink(local); err == nil && current == target {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(local), 0o755); err != nil {
+		return err
+	}
+	if info, err := os.Lstat(local); err == nil {
+		switch _, targetErr := os.Lstat(target); {
+		case !info.IsDir():
+			if err := os.Remove(local); err != nil {
+				return err
+			}
+		case os.IsNotExist(targetErr):
+			if err := moveDirectory(local, target); err != nil {
+				return err
+			}
+		default:
+			if err := os.Rename(local, fmt.Sprintf("%s.pod-%d", local, time.Now().UnixNano())); err != nil {
+				return err
+			}
+		}
+	}
+	if err := os.MkdirAll(target, 0o700); err != nil {
+		return err
+	}
+	if err := os.Chmod(target, 0o700); err != nil {
+		return err
+	}
+	return os.Symlink(target, local)
+}
+
+// moveDirectory relocates src to the not-yet-existing dst, copying across
+// filesystems when a rename cannot. src is only removed once its contents are
+// in place.
+func moveDirectory(src, dst string) error {
+	if err := os.Rename(src, dst); err == nil {
 		return nil
 	}
 	if err := copyDirectoryContents(src, dst); err != nil {

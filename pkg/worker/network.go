@@ -2576,8 +2576,11 @@ func (m *ContainerNetworkManager) startContainerPortExposure(containerId string,
 		}
 		// Rules installed before the failure keep diverting the host port in
 		// PREROUTING, ahead of any socket the proxy could bind, so withdraw
-		// them first. If even that fails the port is unreachable either way;
-		// fail the exposure so container teardown removes the rules by IP.
+		// them first. If even that fails the port is unreachable either way.
+		// Dropping the exposure is what lets the caller retry: the inserts are
+		// idempotent, so a retry completes the rule set rather than tripping
+		// over "already proxied", and whatever is left carries the container's
+		// comment and IP, which teardown removes regardless of tracking.
 		if rollbackErr := m.unexposePortDNAT(exposure.ctx, info, binding.HostPort, binding.ContainerPort, family); rollbackErr != nil {
 			m.dropPortExposure(exposure)
 			return fmt.Errorf("expose container port %d with kernel forwarding: %w (rollback failed: %w)", binding.ContainerPort, err, rollbackErr)

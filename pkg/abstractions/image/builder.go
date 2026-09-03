@@ -259,8 +259,20 @@ func (b *Builder) hasWorkToDo(opts *BuildOpts) bool {
 		(opts.PythonVersion != "" && !opts.IgnorePython)
 }
 
-// dockerfileVarRef matches a $NAME or ${NAME...} reference inside an ENV value.
-var dockerfileVarRef = regexp.MustCompile(`\$\{?([A-Za-z_][A-Za-z0-9_]*)`)
+// dockerfileVarRef matches a $NAME or ${NAME...} reference inside an ENV value,
+// capturing the backslashes before it: an odd run escapes the dollar sign, and
+// the Dockerfile then carries it literally rather than as a reference.
+var dockerfileVarRef = regexp.MustCompile(`(\\*)\$\{?([A-Za-z_][A-Za-z0-9_]*)`)
+
+// referencesAny reports whether value substitutes any of the given variables.
+func referencesAny(value string, names map[string]bool) bool {
+	for _, ref := range dockerfileVarRef.FindAllStringSubmatch(value, -1) {
+		if len(ref[1])%2 == 0 && names[ref[2]] {
+			return true
+		}
+	}
+	return false
+}
 
 // renderEnvVarsAndSecrets adds ENV directives and ARG directives to a Dockerfile
 func renderEnvVarsAndSecrets(sb *strings.Builder, opts *BuildOpts) {
@@ -287,14 +299,15 @@ func renderEnvVarsAndSecrets(sb *strings.Builder, opts *BuildOpts) {
 			continue
 		}
 		if name, value, ok := strings.Cut(envVar, "="); ok && name != "" {
-			for _, ref := range dockerfileVarRef.FindAllStringSubmatch(value, -1) {
-				if defined[ref[1]] {
-					flush()
-					break
-				}
+			// References are judged on the value as the Dockerfile will see it:
+			// quoting doubles backslashes, so a dollar sign the caller escaped
+			// is still a reference once rendered.
+			rendered := quoteDockerfileValue(value)
+			if referencesAny(rendered, defined) {
+				flush()
 			}
 			defined[name] = true
-			envVar = name + "=" + quoteDockerfileValue(value)
+			envVar = name + "=" + rendered
 		}
 		batch = append(batch, envVar)
 	}

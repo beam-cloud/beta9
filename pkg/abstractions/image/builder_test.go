@@ -281,4 +281,10 @@ func TestRenderEnvVarsSplitsInstructionAtDependency(t *testing.T) {
 		EnvVars: []string{"A=1", "B=$A", "C=${A}-x", "D=2", "E=${B:-fallback}", "F=$E"},
 	})
 	assert.Equal(t, "ENV A=1\nENV B=$A C=${A}-x D=2\nENV E=${B:-fallback}\nENV F=$E\n", sb.String())
+
+	// Quoting doubles backslashes, so a caller's `\$A` reaches the Dockerfile
+	// as `\\$A`: an escaped backslash followed by a live reference.
+	sb.Reset()
+	renderEnvVarsAndSecrets(&sb, &BuildOpts{EnvVars: []string{"A=1", `B=\$A`, `C=\\$A`}})
+	assert.Equal(t, "ENV A=1\nENV B=\"\\\\$A\" C=\"\\\\\\\\$A\"\n", sb.String())
 }

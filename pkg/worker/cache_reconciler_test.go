@@ -649,15 +649,30 @@ func TestListRecentStubsSyncsIncrementallyAndAgesOutLocally(t *testing.T) {
 	require.Equal(t, []string{"new", "recent", "old"}, ids(stubs))
 
 	// Stubs leave the window without a round trip.
-	manager.recentStubs.stubs["ws|old"] = cache.RecentStub{WorkspaceID: "ws", StubID: "old", LastSeen: now.Add(-8 * 24 * time.Hour)}
+	manager.recentStubs.stubs["ws|old"] = recentStubEntry{stub: cache.RecentStub{WorkspaceID: "ws", StubID: "old", LastSeen: now.Add(-8 * 24 * time.Hour)}}
 	stubs, err = manager.listRecentStubs(false)
 	require.NoError(t, err)
 	require.Equal(t, []string{"new", "recent"}, ids(stubs))
 
+	// Stubs seen in the same second keep the coordinator's MRU order, and a
+	// later listing outranks an earlier one.
+	same := now.Truncate(time.Second)
+	store.stubs = []cache.RecentStub{
+		{WorkspaceID: "ws", StubID: "b", LastSeen: same},
+		{WorkspaceID: "ws", StubID: "a", LastSeen: same},
+	}
+	stubs, err = manager.listRecentStubs(true)
+	require.NoError(t, err)
+	require.Equal(t, []string{"b", "a"}, ids(stubs))
+	store.stubs = []cache.RecentStub{{WorkspaceID: "ws", StubID: "a", LastSeen: same}}
+	stubs, err = manager.listRecentStubs(false)
+	require.NoError(t, err)
+	require.Equal(t, []string{"a", "b"}, ids(stubs))
+
 	// A maintenance pass relists the whole window.
 	_, err = manager.listRecentStubs(true)
 	require.NoError(t, err)
-	require.Equal(t, manager.recentStubTTL(), store.lookbacks[3])
+	require.Equal(t, manager.recentStubTTL(), store.lookbacks[len(store.lookbacks)-1])
 }
 
 func TestReconcilePoolDedupesAndBoundsConcurrency(t *testing.T) {

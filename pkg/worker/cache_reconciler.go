@@ -710,11 +710,24 @@ type recentStubContent struct {
 
 // recentStubWindow is the locality's recent-stub index as this worker last
 // saw it: every stub accessed within the recency window, keyed by
-// workspace|stub.
+// workspace|stub. Last-seen times arrive at second resolution, so each stub
+// also carries the order it was listed in: the coordinator lists MRU-first
+// at full precision, and later listings carry later activity.
 type recentStubWindow struct {
-	stubs    map[string]cache.RecentStub
+	stubs    map[string]recentStubEntry
 	listedAt time.Time
+	seq      uint64
 }
+
+type recentStubEntry struct {
+	stub cache.RecentStub
+	seq  uint64
+}
+
+// recentStubExpiryTolerance covers the coordinator truncating last-seen times
+// to whole seconds, so a stub is never aged out locally before it leaves the
+// coordinator's window.
+const recentStubExpiryTolerance = time.Second
 
 // listRecentStubs returns every stub accessed within the recency window,
 // MRU-first. The whole window is needed, not a page of it: the protected set
@@ -742,23 +755,37 @@ func (m *WorkerCacheManager) listRecentStubs(full bool) ([]cache.RecentStub, err
 		return nil, err
 	}
 	if full {
-		m.recentStubs.stubs = make(map[string]cache.RecentStub, len(listed))
+		m.recentStubs.stubs = make(map[string]recentStubEntry, len(listed))
 	}
-	for _, stub := range listed {
-		m.recentStubs.stubs[stub.WorkspaceID+"|"+stub.StubID] = stub
+	// Walk the listing LRU-first so the most recent stub takes the highest
+	// sequence number.
+	for i := len(listed) - 1; i >= 0; i-- {
+		stub := listed[i]
+		m.recentStubs.seq++
+		m.recentStubs.stubs[stub.WorkspaceID+"|"+stub.StubID] = recentStubEntry{stub: stub, seq: m.recentStubs.seq}
 	}
 	m.recentStubs.listedAt = now
 
-	cutoff := now.Add(-window)
-	stubs := make([]cache.RecentStub, 0, len(m.recentStubs.stubs))
-	for key, stub := range m.recentStubs.stubs {
-		if stub.LastSeen.Before(cutoff) {
+	cutoff := now.Add(-window - recentStubExpiryTolerance)
+	entries := make([]recentStubEntry, 0, len(m.recentStubs.stubs))
+	for key, entry := range m.recentStubs.stubs {
+		if entry.stub.LastSeen.Before(cutoff) {
 			delete(m.recentStubs.stubs, key)
 			continue
 		}
-		stubs = append(stubs, stub)
+		entries = append(entries, entry)
 	}
-	sort.Slice(stubs, func(i, j int) bool { return stubs[i].LastSeen.After(stubs[j].LastSeen) })
+	sort.Slice(entries, func(i, j int) bool {
+		a, b := entries[i], entries[j]
+		if !a.stub.LastSeen.Equal(b.stub.LastSeen) {
+			return a.stub.LastSeen.After(b.stub.LastSeen)
+		}
+		return a.seq > b.seq
+	})
+	stubs := make([]cache.RecentStub, len(entries))
+	for i, entry := range entries {
+		stubs[i] = entry.stub
+	}
 	return stubs, nil
 }
 
