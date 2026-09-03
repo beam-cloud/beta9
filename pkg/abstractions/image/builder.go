@@ -299,15 +299,11 @@ func renderEnvVarsAndSecrets(sb *strings.Builder, opts *BuildOpts) {
 			continue
 		}
 		if name, value, ok := strings.Cut(envVar, "="); ok && name != "" {
-			// References are judged on the value as the Dockerfile will see it:
-			// quoting doubles backslashes, so a dollar sign the caller escaped
-			// is still a reference once rendered.
-			rendered := quoteDockerfileValue(value)
-			if referencesAny(rendered, defined) {
+			if referencesAny(value, defined) {
 				flush()
 			}
 			defined[name] = true
-			envVar = name + "=" + rendered
+			envVar = name + "=" + quoteDockerfileValue(value)
 		}
 		batch = append(batch, envVar)
 	}
@@ -330,14 +326,28 @@ func renderEnvVarsAndSecrets(sb *strings.Builder, opts *BuildOpts) {
 }
 
 // quoteDockerfileValue makes a value safe to sit among others on one ENV line:
-// bare values end at whitespace, so anything containing it is double-quoted,
-// which still lets $VAR references expand the way an unquoted value would.
+// bare values end at whitespace, so anything containing it or a quote is
+// double-quoted. Values are Dockerfile syntax, as they always were when each
+// had its own ENV line: $VAR expands and \$ is a literal dollar sign, inside
+// quotes as much as outside. Backslashes are therefore kept as written, and
+// only an unescaped double quote needs escaping.
 func quoteDockerfileValue(value string) string {
-	if !strings.ContainsAny(value, " \t\"'\\") {
+	if !strings.ContainsAny(value, " \t\"'") {
 		return value
 	}
-	replacer := strings.NewReplacer(`\`, `\\`, `"`, `\"`)
-	return `"` + replacer.Replace(value) + `"`
+	var quoted strings.Builder
+	quoted.WriteByte('"')
+	escaped := false
+	for i := 0; i < len(value); i++ {
+		ch := value[i]
+		if ch == '"' && !escaped {
+			quoted.WriteByte('\\')
+		}
+		quoted.WriteByte(ch)
+		escaped = ch == '\\' && !escaped
+	}
+	quoted.WriteByte('"')
+	return quoted.String()
 }
 
 // appendToDockerfile appends additional build steps to a custom Dockerfile

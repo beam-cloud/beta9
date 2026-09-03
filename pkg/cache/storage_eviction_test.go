@@ -27,6 +27,31 @@ func addEvictionTestContent(t *testing.T, store *Store, content string, lastAcce
 	return hash
 }
 
+func evictionCandidateFor(t *testing.T, store *Store, hash string) evictionCandidate {
+	t.Helper()
+	for _, candidate := range store.evictionCandidates() {
+		if candidate.hash == hash {
+			return candidate
+		}
+	}
+	t.Fatalf("%s is not an eviction candidate", hash)
+	return evictionCandidate{}
+}
+
+func TestRemoveContentSkipsContentTouchedSinceItWasChosen(t *testing.T) {
+	store := newTestStore(t, 5)
+	hash := addEvictionTestContent(t, store, "read-after-chosen", time.Now().Add(-2*time.Hour))
+	candidate := evictionCandidateFor(t, store, hash)
+
+	// A read between the pass snapshot and the removal keeps the content.
+	store.touchContentAccess(hash)
+	require.ErrorIs(t, store.removeContent(candidate), errContentTouched)
+	require.True(t, store.Exists(hash))
+
+	require.NoError(t, store.removeContent(evictionCandidateFor(t, store, hash)))
+	require.False(t, store.Exists(hash))
+}
+
 func TestEvictLRURemovesOldestContentFirst(t *testing.T) {
 	store := newTestStore(t, 5)
 

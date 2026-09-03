@@ -26,6 +26,7 @@ const (
 	diskCacheUsageCheckInterval = 30 * time.Second
 	diskCacheWriteGuardInterval = 5 * time.Second
 	pageLockStripeCount         = 4096
+	objectLockStripeCount       = 1024
 	cacheCompleteMarkerName     = "_complete"
 )
 
@@ -52,6 +53,9 @@ type Store struct {
 	memoryCacheEnabled      bool
 	mu                      sync.Mutex
 	pageLocks               [pageLockStripeCount]sync.RWMutex
+	// objectLocks serialize publishing an object's pages and marker against
+	// removing them, per hash stripe; see lockObject.
+	objectLocks             [objectLockStripeCount]sync.Mutex
 	closing                 atomic.Bool
 	diskUsagePctBits        atomic.Uint64
 	diskAvailableBytes      atomic.Int64
@@ -143,6 +147,20 @@ func (cas *Store) pageFileBuckets() int {
 	return cas.serverConfig.PageFileBuckets
 }
 
+// lockObject serializes publication and removal of one hash. A writer holds it
+// from the moment its verified pages start landing in the object directory
+// until the complete marker is written; eviction holds it for a removal. That
+// way a removal never deletes pages out from under a completion, and a
+// completion never lands in a directory that is half deleted. Page reads and
+// on-demand single-page fills are unaffected. It returns the unlock.
+func (cas *Store) lockObject(hash string) func() {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(hash))
+	lock := &cas.objectLocks[h.Sum64()%objectLockStripeCount]
+	lock.Lock()
+	return lock.Unlock
+}
+
 func (cas *Store) pageLock(hash string, pageIdx int64) *sync.RWMutex {
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(hash))
@@ -232,6 +250,9 @@ func (cas *Store) Add(ctx context.Context, hash string, content []byte) error {
 	writeToDisk := cas.diskWriteAllowed()
 	if !writeToDisk && !cas.memoryCacheEnabled {
 		return errors.New("disk cache capacity exceeded")
+	}
+	if writeToDisk {
+		defer cas.lockObject(hash)()
 	}
 	if writeToDisk {
 		if err := os.MkdirAll(dirPath, 0755); err != nil {
@@ -361,6 +382,7 @@ func (cas *Store) AddReader(ctx context.Context, reader io.Reader) (string, int6
 	}
 
 	hash := hex.EncodeToString(hasher.Sum(nil))
+	defer cas.lockObject(hash)()
 	dirPath := cas.pageDir(hash)
 	if err := os.MkdirAll(dirPath, 0755); err != nil {
 		return "", size, fmt.Errorf("failed to create cache directory: %w", err)
@@ -535,6 +557,8 @@ func (cas *Store) AddPageSourceWithExpectedHash(ctx context.Context, expectedHas
 		if actualHash != expectedHash {
 			return actualHash, 0, fmt.Errorf("stored content hash mismatch: expected %s, got %s", expectedHash, actualHash)
 		}
+		unlock := cas.lockObject(expectedHash)
+		defer unlock()
 		if err := os.MkdirAll(cas.pageDir(expectedHash), 0755); err != nil {
 			return "", 0, fmt.Errorf("failed to create cache directory: %w", err)
 		}
@@ -722,6 +746,7 @@ func writePrivateCacheChunk(path string, data []byte) error {
 }
 
 func (cas *Store) publishExpectedHashPages(hash string, tmpDir string, pageCount int64, size int64) error {
+	defer cas.lockObject(hash)()
 	finalDir := cas.pageDir(hash)
 	if err := os.MkdirAll(finalDir, 0755); err != nil {
 		return fmt.Errorf("failed to create cache directory: %w", err)

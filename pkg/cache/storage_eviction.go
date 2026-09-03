@@ -18,6 +18,7 @@ package cache
 // uses protected content to clear the hard write gate.
 
 import (
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -86,16 +87,6 @@ func (idx *contentIndex) put(hash string, entry contentEntry) {
 func (idx *contentIndex) forget(hash string) {
 	idx.mu.Lock()
 	delete(idx.entries, hash)
-	idx.mu.Unlock()
-}
-
-// putIfAbsent records entry unless the hash is already indexed, so a retry
-// record never displaces a writer that completed the same hash meanwhile.
-func (idx *contentIndex) putIfAbsent(hash string, entry contentEntry) {
-	idx.mu.Lock()
-	if _, ok := idx.entries[hash]; !ok {
-		idx.entries[hash] = entry
-	}
 	idx.mu.Unlock()
 }
 
@@ -392,7 +383,9 @@ func (cas *Store) evictLRUWithProtected(bytesToFree int64, protected map[string]
 			break
 		}
 		if err := cas.removeContent(candidate); err != nil {
-			Logger.Warnf("disk cache eviction failed to remove %s: %v", candidate.hash, err)
+			if !errors.Is(err, errContentTouched) {
+				Logger.Warnf("disk cache eviction failed to remove %s: %v", candidate.hash, err)
+			}
 			continue
 		}
 		evicted++
@@ -444,7 +437,9 @@ func (cas *Store) PruneContentNotProtected(protected map[string]struct{}, ttl ti
 			break
 		}
 		if err := cas.removeContent(candidate); err != nil {
-			Logger.Warnf("disk cache stale prune failed to remove %s: %v", candidate.hash, err)
+			if !errors.Is(err, errContentTouched) {
+				Logger.Warnf("disk cache stale prune failed to remove %s: %v", candidate.hash, err)
+			}
 			continue
 		}
 		evicted++
@@ -490,13 +485,24 @@ func (cas *Store) evictionCandidates() []evictionCandidate {
 	return cas.index.candidates(time.Now())
 }
 
-// removeContent deletes one object's pages. The index entry and the complete
-// marker go first so concurrent completeness checks stop treating the content
-// as present before its pages disappear; in-flight readers degrade to a normal
-// cache miss. Whatever a failed removal leaves behind is re-indexed as an
-// abandoned write so the next pass retries it rather than leaking it until
-// the rescan.
+// errContentTouched reports a candidate read or rewritten after the eviction
+// pass chose it; the pass moves on to the next one.
+var errContentTouched = errors.New("content touched since it was chosen for eviction")
+
+// removeContent deletes one object's pages. It holds the object lock so no
+// writer can publish the same hash into a directory being deleted, and it
+// re-checks the index under that lock: a candidate was chosen from a snapshot,
+// and one read or rewritten since is no longer the coldest thing on disk. The
+// index entry and the complete marker go before the pages so concurrent
+// completeness checks stop treating the content as present first; in-flight
+// readers degrade to a normal cache miss. Whatever a failed removal leaves
+// behind is re-indexed as an abandoned write so the next pass retries it
+// rather than leaking it until the rescan.
 func (cas *Store) removeContent(candidate evictionCandidate) error {
+	defer cas.lockObject(candidate.hash)()
+	if current, ok := cas.index.get(candidate.hash); ok && current.lastAccess.After(candidate.lastAccess) {
+		return errContentTouched
+	}
 	cas.index.forget(candidate.hash)
 	if err := os.Remove(filepath.Join(candidate.dir, cacheCompleteMarkerName)); err != nil && !os.IsNotExist(err) {
 		cas.retainForRetry(candidate, candidate.sizeBytes)
@@ -514,10 +520,9 @@ func (cas *Store) removeContent(candidate evictionCandidate) error {
 
 // retainForRetry puts a failed removal back in the index as an abandoned
 // write of the given size, keeping its old access time so it is eligible
-// again immediately. A writer that completed the same hash meanwhile owns
-// the entry and is left alone.
+// again immediately.
 func (cas *Store) retainForRetry(candidate evictionCandidate, size int64) {
-	cas.index.putIfAbsent(candidate.hash, contentEntry{dir: candidate.dir, size: size, lastAccess: candidate.lastAccess})
+	cas.index.put(candidate.hash, contentEntry{dir: candidate.dir, size: size, lastAccess: candidate.lastAccess})
 }
 
 func dirSizeBytes(dir string) int64 {

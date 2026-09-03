@@ -282,9 +282,18 @@ func TestRenderEnvVarsSplitsInstructionAtDependency(t *testing.T) {
 	})
 	assert.Equal(t, "ENV A=1\nENV B=$A C=${A}-x D=2\nENV E=${B:-fallback}\nENV F=$E\n", sb.String())
 
-	// Quoting doubles backslashes, so a caller's `\$A` reaches the Dockerfile
-	// as `\\$A`: an escaped backslash followed by a live reference.
+	// `\$A` is a literal dollar sign, not a reference, quoted or not; `\\$A`
+	// is an escaped backslash followed by a live reference.
 	sb.Reset()
-	renderEnvVarsAndSecrets(&sb, &BuildOpts{EnvVars: []string{"A=1", `B=\$A`, `C=\\$A`}})
-	assert.Equal(t, "ENV A=1\nENV B=\"\\\\$A\" C=\"\\\\\\\\$A\"\n", sb.String())
+	renderEnvVarsAndSecrets(&sb, &BuildOpts{EnvVars: []string{"A=1", `B=\$A`, `C=\\$A`, `D=it's "x" \$A`}})
+	assert.Equal(t, "ENV A=1 B=\\$A\nENV C=\\\\$A D=\"it's \\\"x\\\" \\$A\"\n", sb.String())
+}
+
+func TestQuoteDockerfileValueKeepsAuthoredEscapes(t *testing.T) {
+	assert.Equal(t, `plain$VAR`, quoteDockerfileValue(`plain$VAR`))
+	assert.Equal(t, `C:\path`, quoteDockerfileValue(`C:\path`))
+	assert.Equal(t, `"two words"`, quoteDockerfileValue(`two words`))
+	assert.Equal(t, `"say \"hi\""`, quoteDockerfileValue(`say "hi"`))
+	assert.Equal(t, `"already \"escaped\" \$LITERAL"`, quoteDockerfileValue(`already \"escaped\" \$LITERAL`))
+	assert.Equal(t, `"escaped backslash \\ then quote \""`, quoteDockerfileValue(`escaped backslash \\ then quote "`))
 }
