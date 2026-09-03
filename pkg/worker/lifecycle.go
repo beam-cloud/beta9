@@ -366,6 +366,15 @@ func (s *Worker) finalizeContainer(containerId string, request *types.ContainerR
 }
 
 func (s *Worker) clearContainer(containerId string, request *types.ContainerRequest, exitCode int, exitReported bool) {
+	// Step timings surface in the shutdown log: a machine stop is not done
+	// until the container is gone, so every step here is user-visible latency.
+	shutdownLog := log.Info().Str("container_id", containerId)
+	stepStart := time.Now()
+	step := func(name string) {
+		shutdownLog.Dur(name, time.Since(stepStart))
+		stepStart = time.Now()
+	}
+
 	hasDurableDisk := request != nil && request.HasDurableDiskMount()
 	instance, exists := s.containerInstances.Get(containerId)
 	if exists {
@@ -387,6 +396,7 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 
 	if hasDurableDisk {
 		exitCode, exitReported = s.finalizeDurableDiskMounts(containerId, request, exitCode, exitReported)
+		step("disks")
 	}
 	if containerId != "" {
 		_ = os.RemoveAll(filepath.Join(baseConfigPath, containerId))
@@ -396,6 +406,7 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 	}
 
 	s.containerLock.Lock()
+	step("exit_code")
 	if instance, exists := s.containerInstances.Get(containerId); exists {
 		instance.CPUSet = ""
 		instance.RestoreCPUAffinityDeferred = false
@@ -411,6 +422,7 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 	if err := s.containerNetworkManager.TearDown(request.ContainerId); err != nil {
 		log.Warn().Str("container_id", request.ContainerId).Err(err).Msg("failed to clean up container network")
 	}
+	step("network")
 
 	// Clean up upload directory
 	os.RemoveAll(filepath.Join(types.WorkerContainerUploadsHostPath, containerId))
@@ -419,10 +431,11 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 
 	s.markContainerStopping(containerId, types.ContainerStateTtlS)
 
-	s.finishContainerShutdown(containerId, request)
+	s.finishContainerShutdown(containerId, request, step)
+	shutdownLog.Msg("finalized container shutdown")
 }
 
-func (s *Worker) finishContainerShutdown(containerId string, request *types.ContainerRequest) {
+func (s *Worker) finishContainerShutdown(containerId string, request *types.ContainerRequest, step func(string)) {
 	instance, exists := s.containerInstances.Get(containerId)
 	if exists {
 		rt := instance.Runtime
@@ -460,9 +473,12 @@ func (s *Worker) finishContainerShutdown(containerId string, request *types.Cont
 		}
 		instance.stopOOMWatcher()
 	}
+	step("runtime_state")
 
 	s.deleteContainer(containerId)
+	step("delete")
 	s.cleanupIdleQcowVolumes()
+	step("volumes")
 	if request != nil && s.completedRequests != nil {
 		var workerDone <-chan struct{}
 		if s.ctx != nil {
@@ -473,7 +489,6 @@ func (s *Worker) finishContainerShutdown(containerId string, request *types.Cont
 		case <-workerDone:
 		}
 	}
-	log.Info().Str("container_id", containerId).Msg("finalized container shutdown")
 }
 
 func (s *Worker) setLocalContainerExitCode(containerId string, exitCode int) {
@@ -663,6 +678,9 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	})
 	if s.containerMountManager.RequiresWorkspaceStorageMount(request) {
 		startup.Go(func() error { return s.mountWorkspaceStorage(startupCtx, request) })
+	}
+	if request.HasDurableDiskMount() {
+		startup.Go(func() error { return s.prepareDurableDiskMounts(request) })
 	}
 	if err := startup.Wait(); err != nil {
 		return err
@@ -1420,16 +1438,11 @@ func (s *Worker) prepareRequestMount(request *types.ContainerRequest, mount *typ
 		return true, nil
 	}
 
+	// Durable disks were brought online during startup (prepareDurableDiskMounts).
+	// A machine-root disk is not bind-mounted; it hosts the container's
+	// overlay upper layer instead (see SetupWithWritable below).
 	if mount.MountType == types.StorageModeDurableDisk {
-		if err := s.prepareDurableDiskMount(request, mount); err != nil {
-			return false, fmt.Errorf("failed to prepare durable disk mount: %w", err)
-		}
-		// A machine-root disk is not bind-mounted; it hosts the container's
-		// overlay upper layer instead (see SetupWithWritable below).
-		if isQcowRootDiskMount(mount) {
-			return false, nil
-		}
-		return true, nil
+		return !isQcowRootDiskMount(mount), nil
 	}
 
 	if strings.HasPrefix(mount.MountPath, types.WorkerContainerVolumePath) && !checkpointModelCacheMount(mount.MountPath) {

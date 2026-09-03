@@ -430,6 +430,8 @@ func NewWorker() (_ *Worker, err error) {
 		return nil, errors.New("invalid worker pool name")
 	}
 
+	ensureWritableSysfs()
+
 	var cacheManager *WorkerCacheManager
 	var cacheClient *cache.Client
 	if config.Cache.Enabled && config.Worker.CacheEnabled {

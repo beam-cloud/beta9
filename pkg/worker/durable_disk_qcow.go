@@ -13,10 +13,12 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/cache"
+	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/disk"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/sync/errgroup"
 )
 
 // The qcow driver keeps the durable-disk control plane (DiskSnapshot rows,
@@ -68,60 +70,141 @@ func (s *Worker) prepareQcowDurableDiskMount(request *types.ContainerRequest, mo
 		return fmt.Errorf("qcow durable disk %q requires a valid size: %w", mount.DurableDisk.Name, err)
 	}
 	ctx := s.durableDiskContext(nil)
+	key := s.qcowVolumeKey(request, mount)
+	phaseStart := time.Now()
 
-	rows, err := s.resolveQcowSnapshotChain(ctx, request, mount)
+	// Resolving a chain costs a round trip per generation. A worker that
+	// published or last restored this disk already holds the whole chain in
+	// memory, and a head that still matches means nothing was published since.
+	newest, err := s.latestQcowSnapshotRow(ctx, request, mount)
 	if err != nil {
 		return err
 	}
-
-	chain := make([]disk.ChainLayer, 0, len(rows))
-	manifests := make([]*types.DiskSnapshotManifest, 0, len(rows))
-	source := &qcowChunkSource{cacheReader: s.durableDiskSnapshotCacheReader()}
-	for _, row := range rows {
-		if !row.Public {
-			if err := s.ensureDurableDiskSnapshotStorage(ctx, request); err != nil {
-				return err
-			}
+	entries := s.qcowChain(key)
+	rows := make([]*types.DiskSnapshot, 0, len(entries))
+	if qcowChainHeadIs(entries, newest) {
+		for _, entry := range entries {
+			rows = append(rows, entry.row)
 		}
-		store, err := newDurableDiskSnapshotReadStore(ctx, request, row, s.backendRepoClient)
-		if err != nil {
+	} else if rows, err = s.resolveQcowSnapshotChain(ctx, request, mount, newest); err != nil {
+		return err
+	}
+	resolveDuration := time.Since(phaseStart)
+	phaseStart = time.Now()
+
+	stores, err := s.qcowChainStores(ctx, request, rows)
+	if err != nil {
+		return err
+	}
+	if !qcowChainHeadIs(entries, newest) {
+		if entries, err = loadQcowChainManifests(ctx, s.durableDiskSnapshotCacheReader(), rows, stores); err != nil {
 			return err
 		}
-		manifest, err := loadDurableDiskSnapshotManifest(ctx, store, s.durableDiskSnapshotCacheReader(), row)
-		if err != nil {
-			return fmt.Errorf("load qcow snapshot manifest %s: %w", row.ExternalId, err)
-		}
-		layer, err := qcowManifestLayer(manifest)
-		if err != nil {
-			return fmt.Errorf("qcow snapshot %s: %w", row.ExternalId, err)
-		}
-		chain = append(chain, disk.ChainLayer{SnapshotID: row.ExternalId, Layer: layer})
-		manifests = append(manifests, manifest)
-		source.stores = append(source.stores, store)
 	}
+	chain := make([]disk.ChainLayer, 0, len(entries))
+	manifests := make([]*types.DiskSnapshotManifest, 0, len(entries))
+	for _, entry := range entries {
+		layer, err := qcowManifestLayer(entry.manifest)
+		if err != nil {
+			return fmt.Errorf("qcow snapshot %s: %w", entry.row.ExternalId, err)
+		}
+		chain = append(chain, disk.ChainLayer{SnapshotID: entry.row.ExternalId, Layer: layer})
+		manifests = append(manifests, entry.manifest)
+	}
+	manifestDuration := time.Since(phaseStart)
+	phaseStart = time.Now()
 
 	sizeBytes = max(sizeBytes, qcowChainVirtualSize(manifests))
 	_, err = s.diskManager.Attach(ctx, disk.AttachSpec{
-		Key:              s.qcowVolumeKey(request, mount),
+		Key:              key,
 		VirtualSizeBytes: sizeBytes,
 		ReadOnly:         mount.ReadOnly,
 		Mountpoint:       mount.LocalPath,
 		Chain:            chain,
-	}, source)
+	}, &qcowChunkSource{cacheReader: s.durableDiskSnapshotCacheReader(), stores: stores})
 	if err != nil {
 		return fmt.Errorf("attach qcow durable disk %q: %w", mount.DurableDisk.Name, err)
 	}
+	log.Info().
+		Str("container_id", request.ContainerId).
+		Str("disk", mount.DurableDisk.Name).
+		Int("generations", len(entries)).
+		Dur("resolve", resolveDuration).
+		Dur("manifests", manifestDuration).
+		Dur("attach", time.Since(phaseStart)).
+		Msg("qcow durable disk prepared")
 
 	// The chain is rooted at its last parentless row, so its length is the
 	// generation count since the last flatten, which drives the periodic
 	// flattened publish that bounds restore chains.
-	entries := make([]qcowChainEntry, len(rows))
-	for i := range rows {
-		entries[i] = qcowChainEntry{row: rows[i], manifest: manifests[i]}
-	}
-	s.qcowChains.Store(s.qcowVolumeKey(request, mount), entries)
+	s.qcowChains.Store(key, entries)
 	s.reportQcowChainContent(request, entries)
 	return nil
+}
+
+// qcowChainHeadIs reports whether a remembered chain ends at the given
+// published head, i.e. whether it is still the disk's live chain.
+func qcowChainHeadIs(chain []qcowChainEntry, head *types.DiskSnapshot) bool {
+	if len(chain) == 0 || head == nil {
+		return false
+	}
+	return chain[len(chain)-1].row.ExternalId == head.ExternalId
+}
+
+// qcowChainStores returns a read store per generation. Private generations
+// all live in the workspace bucket, so they share one client and connection
+// pool however deep the chain is, rather than paying for AWS config loading
+// and a cold TLS handshake per layer.
+func (s *Worker) qcowChainStores(ctx context.Context, request *types.ContainerRequest, rows []*types.DiskSnapshot) ([]durableDiskSnapshotStore, error) {
+	stores := make([]durableDiskSnapshotStore, len(rows))
+	var private *clients.WorkspaceStorageClient
+	for i, row := range rows {
+		if row.Public {
+			store, err := newDurableDiskSnapshotReadStore(ctx, request, row, s.backendRepoClient)
+			if err != nil {
+				return nil, err
+			}
+			stores[i] = store
+			continue
+		}
+		if private == nil {
+			if err := s.ensureDurableDiskSnapshotStorage(ctx, request); err != nil {
+				return nil, err
+			}
+			client, err := newDurableDiskSnapshotStorageClient(ctx, request)
+			if err != nil {
+				return nil, err
+			}
+			private = client
+		}
+		bucket := row.BucketName
+		if bucket == "" {
+			bucket = private.BucketName()
+		}
+		stores[i] = &durableDiskSnapshotBucketStore{client: private, bucket: bucket}
+	}
+	return stores, nil
+}
+
+// loadQcowChainManifests fetches every generation's manifest concurrently:
+// they are independent objects and the chain can be sixteen deep.
+func loadQcowChainManifests(ctx context.Context, cacheReader durableDiskSnapshotCacheReader, rows []*types.DiskSnapshot, stores []durableDiskSnapshotStore) ([]qcowChainEntry, error) {
+	entries := make([]qcowChainEntry, len(rows))
+	loads, ctx := errgroup.WithContext(ctx)
+	for i, row := range rows {
+		loads.Go(func() error {
+			manifest, err := loadDurableDiskSnapshotManifest(ctx, stores[i], cacheReader, row)
+			if err != nil {
+				return fmt.Errorf("load qcow snapshot manifest %s: %w", row.ExternalId, err)
+			}
+			entries[i] = qcowChainEntry{row: row, manifest: manifest}
+			return nil
+		})
+	}
+	if err := loads.Wait(); err != nil {
+		return nil, err
+	}
+	return entries, nil
 }
 
 // qcowChainEntry is one published generation of a volume's live chain.
@@ -201,11 +284,7 @@ func (s *Worker) qcowUploadChunks(key string, layer *types.DiskSnapshotFile) *ty
 // resolveQcowSnapshotChain walks ParentSnapshotId links from the newest
 // generation (or a seed snapshot for forks) back to a parentless root and
 // returns the rows base first.
-func (s *Worker) resolveQcowSnapshotChain(ctx context.Context, request *types.ContainerRequest, mount *types.Mount) ([]*types.DiskSnapshot, error) {
-	newest, err := s.latestQcowSnapshotRow(ctx, request, mount)
-	if err != nil {
-		return nil, err
-	}
+func (s *Worker) resolveQcowSnapshotChain(ctx context.Context, request *types.ContainerRequest, mount *types.Mount, newest *types.DiskSnapshot) ([]*types.DiskSnapshot, error) {
 	if (newest == nil || newest.ManifestKey == "") && mount.DurableDisk.SourceSnapshotId != "" {
 		// Fork: seed a brand new disk from another disk's snapshot chain.
 		seed, err := s.seedDurableDiskSnapshot(ctx, request, mount)
@@ -304,11 +383,13 @@ func (s *Worker) snapshotQcowDurableDiskMount(ctx context.Context, request *type
 		return nil, err
 	}
 
-	// The final sync is a durability boundary and always seals. A disk with
-	// no published generation yet also always seals: callers pin machine
-	// state to a snapshot ID, so the first snapshot must produce one even if
-	// nothing was written.
-	sealed, skipped, err := volume.Seal(ctx, mode == durableDiskSyncFinal || latest == nil)
+	// A disk with no published generation yet always seals: callers pin
+	// machine state to a snapshot ID, so the first snapshot must produce one
+	// even if nothing was written. Otherwise an unchanged head is skipped even
+	// on the final sync: the last generation is already durable, and a stop
+	// that follows a terminal checkpoint would otherwise publish an empty
+	// layer every time, doubling the chain depth each restore has to resolve.
+	sealed, skipped, err := volume.Seal(ctx, latest == nil)
 	if err != nil {
 		return nil, err
 	}

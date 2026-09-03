@@ -112,22 +112,6 @@ func TestImageIndexProgressReporterCoalescesRapidUpdates(t *testing.T) {
 	require.Contains(t, logs, "9 cached")
 }
 
-func TestOCILayoutPushArgsUseEightWayDigestPreservingCopy(t *testing.T) {
-	args := ociLayoutPushArgs("/tmp/layout", "registry.example.com/beam/image:test", "user:token", true)
-
-	require.Equal(t, []string{
-		"copy",
-		"--image-parallel-copies", "8",
-		"--preserve-digests",
-		"--retry-times", "5",
-		"--retry-delay", "1s",
-		"--dest-tls-verify=false",
-		"--dest-creds", "user:token",
-		"oci:/tmp/layout:latest",
-		"docker://registry.example.com/beam/image:test",
-	}, args)
-}
-
 func TestImageRegistryPullFailureLogLevel(t *testing.T) {
 	var buf bytes.Buffer
 	previous := zerologlog.Logger

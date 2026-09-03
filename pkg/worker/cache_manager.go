@@ -42,10 +42,6 @@ const (
 	cacheDefaultPageFDCacheSize         = 64
 	cacheDefaultRawMaxActiveConns       = 64
 	cacheDefaultRawMaxIdleConns         = 16
-	cacheDefaultPrefetchAheadBytes      = 64 * 1024 * 1024
-	cacheDefaultPrefetchWorkers         = 4
-	cacheDefaultPrefetchPartLength      = 4 * 1024 * 1024
-	cacheDefaultPrefetchMaxParts        = 16
 	cacheDefaultGRPCPayloadCodecMin     = 64 * 1024
 	cacheDefaultS3Concurrency           = 16
 	cacheDefaultS3ChunkSize             = 64_000_000
@@ -58,7 +54,6 @@ const (
 	cacheDefaultReconcileIntervalS      = 60
 	cacheDefaultReconcileRecentStubTTLS = cache.DefaultReconcileRecentStubTTLS
 	cacheDefaultReconcileLockTTLS       = 300
-	cacheDefaultReconcileMaxStubsCycle  = 256
 	// Exhausted cycles re-kick with a fresh MRU listing, so the item budget
 	// is a re-prioritization batch size, not a throughput cap.
 	cacheDefaultReconcileMaxItemsCycle = 256
@@ -66,9 +61,11 @@ const (
 	cacheDefaultReconcileConcurrency = 16
 	// Byte budget per cycle; bounds writes between disk-usage gate rechecks.
 	cacheDefaultReconcileMaxBytesCycle = int64(2) << 30
-	// cacheDefaultReconcileMaxDiskUsagePct pauses proactive materialization
-	// before node-level DiskPressure thresholds can be reached.
-	cacheDefaultReconcileMaxDiskUsagePct = 0.80
+	// cacheReconcileSyncInterval is how often a cache host looks for content
+	// to pull. A quiet sync is one coordinator round trip plus in-memory
+	// checks, so it can run often; this bounds how long a checkpoint
+	// published on one host takes to reach the others in its locality.
+	cacheReconcileSyncInterval           = 5 * time.Second
 	cacheDefaultStubCodeEvictWatermark   = 0.80
 	cacheReconcileDiskUsageHysteresisPct = 0.03
 	checkpointMaterializationLockPoll    = 10 * time.Millisecond
@@ -1079,19 +1076,6 @@ func normalizeCacheConfig(config types.AppConfig, poolConfig types.WorkerPoolCon
 	}
 	if cacheConfig.Client.ReadTransport.MaxIdleConnsPerHost == 0 {
 		cacheConfig.Client.ReadTransport.MaxIdleConnsPerHost = cacheDefaultRawMaxIdleConns
-	}
-	cacheConfig.Client.Prefetch.Enabled = true
-	if cacheConfig.Client.Prefetch.AheadBytes == 0 {
-		cacheConfig.Client.Prefetch.AheadBytes = cacheDefaultPrefetchAheadBytes
-	}
-	if cacheConfig.Client.Prefetch.Workers == 0 {
-		cacheConfig.Client.Prefetch.Workers = cacheDefaultPrefetchWorkers
-	}
-	if cacheConfig.Client.Prefetch.PartLengthBytes == 0 {
-		cacheConfig.Client.Prefetch.PartLengthBytes = cacheDefaultPrefetchPartLength
-	}
-	if cacheConfig.Client.Prefetch.MaxPartsPerRead == 0 {
-		cacheConfig.Client.Prefetch.MaxPartsPerRead = cacheDefaultPrefetchMaxParts
 	}
 
 	// Reconciliation defaults are applied at read time by the manager's

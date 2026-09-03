@@ -16,6 +16,7 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -71,6 +72,28 @@ type durableDiskMarker struct {
 	SnapshotID     string
 	ManifestDigest string
 	Generation     int64
+}
+
+// prepareDurableDiskMounts brings every durable disk on the request online.
+// It runs during container startup alongside the image pull and workspace
+// mount: a qcow attach costs ~45ms inside the kernel's NBD connect alone, so
+// paying it serially inside spec generation put it squarely on the critical
+// path. Disks attach concurrently with each other for the same reason.
+func (s *Worker) prepareDurableDiskMounts(request *types.ContainerRequest) error {
+	var disks errgroup.Group
+	for i := range request.Mounts {
+		mount := &request.Mounts[i]
+		if mount.MountType != types.StorageModeDurableDisk {
+			continue
+		}
+		disks.Go(func() error {
+			if err := s.prepareDurableDiskMount(request, mount); err != nil {
+				return fmt.Errorf("failed to prepare durable disk mount: %w", err)
+			}
+			return nil
+		})
+	}
+	return disks.Wait()
 }
 
 func (s *Worker) prepareDurableDiskMount(request *types.ContainerRequest, mount *types.Mount) error {

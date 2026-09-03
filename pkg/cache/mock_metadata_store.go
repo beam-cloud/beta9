@@ -199,18 +199,6 @@ func (m *MockCacheMetadataStore) ListRecentStubs(ctx context.Context, locality s
 	return nil, nil
 }
 
-func (m *MockCacheMetadataStore) MarkStubReported(ctx context.Context, locality, stubID string, ttl time.Duration) (bool, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	key := "reported:" + locality + ":" + stubID
-	if m.locks[key] {
-		return false, nil
-	}
-	m.locks[key] = true
-	return true, nil
-}
-
 func (m *MockCacheMetadataStore) AcquireReconcileLock(ctx context.Context, locality, logicalHost, hash string, ttlSeconds int) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

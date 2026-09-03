@@ -18,6 +18,12 @@ func addEvictionTestContent(t *testing.T, store *Store, content string, lastAcce
 	require.NoError(t, err)
 	require.True(t, store.Exists(hash))
 	require.NoError(t, os.Chtimes(store.completeMarkerPath(hash), lastAccess, lastAccess))
+	// The index remembers the write as the last access; backdate it the way
+	// a restart would, by reading the marker mtime back off disk.
+	entry, ok := store.index.get(hash)
+	require.True(t, ok)
+	entry.lastAccess = lastAccess
+	store.index.put(hash, entry)
 	return hash
 }
 
@@ -174,13 +180,38 @@ func TestEvictionCandidateUsesInMemoryTouchWhenFresher(t *testing.T) {
 	hash := addEvictionTestContent(t, store, "in-memory-touch", stale)
 
 	// Simulate a throttled touch that never reached the filesystem
-	store.accessTouchMu.Lock()
-	store.accessTouches[hash] = time.Now()
-	store.accessTouchMu.Unlock()
+	known, _ := store.index.touch(hash, time.Now(), evictionAccessTouchInterval)
+	require.True(t, known)
 
 	evicted, _ := store.evictLRU(1 << 30)
 	require.Zero(t, evicted)
 	require.True(t, store.Exists(hash))
+
+	// A rescan must not lose the in-memory access to the older on-disk mtime
+	store.rebuildContentIndex()
+	evicted, _ = store.evictLRU(1 << 30)
+	require.Zero(t, evicted)
+	require.True(t, store.Exists(hash))
+}
+
+func TestContentIndexRebuildFindsExistingContent(t *testing.T) {
+	store := newTestStore(t, 5)
+	hash := addEvictionTestContent(t, store, "survives-restart", time.Now())
+
+	// A fresh store over the same directory learns the content from disk
+	restarted, err := NewStore(context.Background(), store.currentHost, store.locality, store.metadataStore, Config{
+		Server: store.serverConfig, Disk: store.diskConfig, Global: store.globalConfig,
+	})
+	require.NoError(t, err)
+	require.True(t, restarted.Exists(hash, int64(len("survives-restart"))))
+
+	// Content removed behind the index's back stops being advertised on the
+	// first read that misses it
+	require.NoError(t, os.RemoveAll(store.pageDir(hash)))
+	require.True(t, restarted.Exists(hash))
+	_, err = restarted.ReadAt(hash, 0, make([]byte, 4))
+	require.ErrorIs(t, err, ErrContentNotFound)
+	require.False(t, restarted.Exists(hash))
 }
 
 func TestEvictionCandidateUsesCompleteMarkerSize(t *testing.T) {
@@ -222,6 +253,8 @@ func TestEvictionSkipsTemporaryAndIncompleteContentDirs(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(staleIncompleteDir, store.pageKey(staleIncompleteHash, 0)), []byte("partial"), 0644))
 	require.NoError(t, os.Chtimes(staleIncompleteDir, stale.Add(-evictionIncompleteContentGrace), stale.Add(-evictionIncompleteContentGrace)))
 
+	// Abandoned dirs were not written through the store; the rescan finds them
+	store.rebuildContentIndex()
 	evicted, _ := store.evictLRU(1 << 30)
 
 	require.Equal(t, 2, evicted)

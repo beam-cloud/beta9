@@ -366,33 +366,6 @@ func TestCacheMetadataScopesPrivateWorkerLocksAndMarkersByWorkspace(t *testing.T
 	ctxA := cacheRepositoryWorkspaceAuthContext("workspace-a")
 	ctxB := cacheRepositoryWorkspaceAuthContext("workspace-b")
 
-	markedA, err := service.MarkCacheStubReported(ctxA, &pb.MarkCacheStubReportedRequest{
-		Locality:   "shared-pool",
-		StubId:     "stub",
-		TtlSeconds: 3600,
-	})
-	require.NoError(t, err)
-	require.True(t, markedA.Ok, markedA.ErrorMsg)
-	require.True(t, markedA.Claimed)
-
-	markedB, err := service.MarkCacheStubReported(ctxB, &pb.MarkCacheStubReportedRequest{
-		Locality:   "shared-pool",
-		StubId:     "stub",
-		TtlSeconds: 3600,
-	})
-	require.NoError(t, err)
-	require.True(t, markedB.Ok, markedB.ErrorMsg)
-	require.True(t, markedB.Claimed)
-
-	markedAAgain, err := service.MarkCacheStubReported(ctxA, &pb.MarkCacheStubReportedRequest{
-		Locality:   "shared-pool",
-		StubId:     "stub",
-		TtlSeconds: 3600,
-	})
-	require.NoError(t, err)
-	require.True(t, markedAAgain.Ok, markedAAgain.ErrorMsg)
-	require.False(t, markedAAgain.Claimed)
-
 	lockA, err := service.AcquireCacheReconcileLock(ctxA, &pb.AcquireCacheReconcileLockRequest{
 		Locality:    "shared-pool",
 		LogicalHost: "logical-host",
@@ -443,38 +416,6 @@ func TestCacheMetadataScopesPrivateWorkerLocksAndMarkersByWorkspace(t *testing.T
 	})
 	require.NoError(t, err)
 	require.False(t, storeAAgain.Ok)
-}
-
-func TestCacheMetadataKeepsClusterWorkerMarkersUnscoped(t *testing.T) {
-	server, err := miniredis.Run()
-	require.NoError(t, err)
-	t.Cleanup(server.Close)
-
-	rdb := redis.NewClient(&redis.Options{Addr: server.Addr()})
-	t.Cleanup(func() { _ = rdb.Close() })
-
-	service := &WorkerRepositoryService{
-		cacheMetadata: cache.NewRedisCacheMetadataStoreWithClient(cache.GlobalConfig{}, cache.ServerConfig{}, rdb),
-	}
-	ctx := cacheRepositoryAuthContext(types.TokenTypeWorker)
-
-	first, err := service.MarkCacheStubReported(ctx, &pb.MarkCacheStubReportedRequest{
-		Locality:   "managed-locality",
-		StubId:     "stub",
-		TtlSeconds: 3600,
-	})
-	require.NoError(t, err)
-	require.True(t, first.Ok, first.ErrorMsg)
-	require.True(t, first.Claimed)
-
-	second, err := service.MarkCacheStubReported(ctx, &pb.MarkCacheStubReportedRequest{
-		Locality:   "managed-locality",
-		StubId:     "stub",
-		TtlSeconds: 3600,
-	})
-	require.NoError(t, err)
-	require.True(t, second.Ok, second.ErrorMsg)
-	require.False(t, second.Claimed)
 }
 
 func TestPruneStaleCacheCheckpointsUsesRecentStubsAcrossLocalities(t *testing.T) {

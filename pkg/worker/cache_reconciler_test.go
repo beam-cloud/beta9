@@ -286,10 +286,7 @@ func createCheckpointArchiveForTest(t *testing.T, checkpointID string) (archiveP
 
 type claimedMetadataStore struct {
 	cache.CacheMetadataStore
-	claimed          bool
-	marked           int
 	recent           int
-	markedLocalities []string
 	recentLocalities []string
 }
 
@@ -330,12 +327,6 @@ func (m *localityRecentMetadataStore) ListRecentStubs(_ context.Context, localit
 	return stubs, nil
 }
 
-func (m *claimedMetadataStore) MarkStubReported(_ context.Context, locality, _ string, _ time.Duration) (bool, error) {
-	m.marked++
-	m.markedLocalities = append(m.markedLocalities, locality)
-	return m.claimed, nil
-}
-
 func (m *claimedMetadataStore) AddRecentStub(_ context.Context, locality, _, _ string, _ time.Duration) error {
 	m.recent++
 	m.recentLocalities = append(m.recentLocalities, locality)
@@ -353,7 +344,7 @@ func TestReporterGeneratesOncePerStub(t *testing.T) {
 
 func TestReporterRedisMarkerIsAdvisory(t *testing.T) {
 	r := newTestReporter(&fakeEventRepo{})
-	r.metadata = &claimedMetadataStore{claimed: false}
+	r.metadata = &claimedMetadataStore{}
 
 	require.True(t, r.shouldGenerateRequiredContent("stub-a"))
 	require.False(t, r.shouldGenerateRequiredContent("stub-a"))
@@ -397,9 +388,9 @@ func TestReporterSeparatesByKind(t *testing.T) {
 	require.Len(t, fake.pushed, 2)
 }
 
-func TestReporterMarksRedisAfterSuccessfulRequiredContentWrite(t *testing.T) {
+func TestReporterIndexesRecentStubOnceAfterRequiredContentWrite(t *testing.T) {
 	fake := &fakeEventRepo{}
-	metadata := &claimedMetadataStore{claimed: true}
+	metadata := &claimedMetadataStore{}
 	r := newTestReporter(fake)
 	r.metadata = metadata
 	r.locality = "locality-a"
@@ -408,31 +399,26 @@ func TestReporterMarksRedisAfterSuccessfulRequiredContentWrite(t *testing.T) {
 		r.touchRecentStub("ws", "stub")
 	}
 	r.reportItems("ws", "stub", types.CacheContentKindClipV1, []types.CacheRequiredContentItem{{Hash: "h1"}})
-	require.Zero(t, metadata.marked)
 
 	r.flush()
 	require.Len(t, fake.pushed, 1)
-	require.Equal(t, 1, metadata.marked)
 	require.Equal(t, []string{"locality-a"}, metadata.recentLocalities)
-	require.Equal(t, []string{"locality-a"}, metadata.markedLocalities)
 	require.Equal(t, "locality-a", fake.pushed[0].Locality)
 }
 
 func TestReporterRetriesRequiredContentWhenEventWriteFails(t *testing.T) {
 	fake := &fakeEventRepo{err: errors.New("s2 unavailable")}
-	metadata := &claimedMetadataStore{claimed: true}
+	metadata := &claimedMetadataStore{}
 	r := newTestReporter(fake)
 	r.metadata = metadata
 
 	r.reportItems("ws", "stub", types.CacheContentKindClipV1, []types.CacheRequiredContentItem{{Hash: "h1"}})
 	r.flush()
 	require.Empty(t, fake.pushed)
-	require.Zero(t, metadata.marked)
 
 	fake.err = nil
 	r.flush()
 	require.Len(t, fake.pushed, 1)
-	require.Equal(t, 1, metadata.marked)
 }
 
 func TestReporterVolumeRespectsSizeThreshold(t *testing.T) {
@@ -706,7 +692,7 @@ func TestReconcileOnceUsesOnlyCurrentLocalityRecentStubs(t *testing.T) {
 		reconcileFailures: make(map[string]time.Time),
 	}
 
-	manager.reconcileOnce()
+	manager.reconcileOnce(false)
 
 	require.Equal(t, []string{"locality-b"}, metadata.listed)
 	require.Equal(t, []string{"workspace-b|stub-b"}, fake.readKeys)
@@ -1305,7 +1291,7 @@ func TestRequiredContentReportedByOneWorkerReconcilesCheckpointOnPeerInLocality(
 		reconcileSuccesses: make(map[string]time.Time),
 	}
 
-	managerB.reconcileOnce()
+	managerB.reconcileOnce(false)
 
 	require.True(t, destinationServer.HasCompleteContent(hash, size))
 	require.True(t, checkpointMaterialized(filepath.Join(checkpointRoot, checkpointID)))

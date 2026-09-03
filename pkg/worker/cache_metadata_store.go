@@ -124,18 +124,6 @@ func (s *gatewayCacheMetadataStore) ListRecentStubs(ctx context.Context, localit
 	return stubs, nil
 }
 
-func (s *gatewayCacheMetadataStore) MarkStubReported(ctx context.Context, locality, stubID string, ttl time.Duration) (bool, error) {
-	resp, err := handleGRPCResponse(s.client.MarkCacheStubReported(ctx, &pb.MarkCacheStubReportedRequest{
-		Locality:   locality,
-		StubId:     stubID,
-		TtlSeconds: int64(ttl / time.Second),
-	}))
-	if err != nil {
-		return false, err
-	}
-	return resp.Claimed, nil
-}
-
 func (s *gatewayCacheMetadataStore) AcquireReconcileLock(ctx context.Context, locality, logicalHost, hash string, ttlSeconds int) (bool, error) {
 	resp, err := handleGRPCResponse(s.client.AcquireCacheReconcileLock(ctx, &pb.AcquireCacheReconcileLockRequest{
 		Locality:    locality,

@@ -188,7 +188,7 @@ func (c *qmpClient) commitChain(ctx context.Context, device, topPath, basePath s
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(pollInterval):
+		case <-time.After(maxPollInterval):
 		}
 	}
 }

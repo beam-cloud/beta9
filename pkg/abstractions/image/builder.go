@@ -261,15 +261,22 @@ func (b *Builder) hasWorkToDo(opts *BuildOpts) bool {
 
 // renderEnvVarsAndSecrets adds ENV directives and ARG directives to a Dockerfile
 func renderEnvVarsAndSecrets(sb *strings.Builder, opts *BuildOpts) {
-	// Add environment variables
-	if len(opts.EnvVars) > 0 {
-		for _, envVar := range opts.EnvVars {
-			if envVar != "" {
-				sb.WriteString("ENV ")
-				sb.WriteString(envVar)
-				sb.WriteString("\n")
-			}
+	// One ENV instruction carries every variable: each instruction is a layer
+	// commit, and a commit snapshots the rootfs whatever the step changed.
+	var env []string
+	for _, envVar := range opts.EnvVars {
+		if envVar == "" {
+			continue
 		}
+		if name, value, ok := strings.Cut(envVar, "="); ok && name != "" {
+			envVar = name + "=" + quoteDockerfileValue(value)
+		}
+		env = append(env, envVar)
+	}
+	if len(env) > 0 {
+		sb.WriteString("ENV ")
+		sb.WriteString(strings.Join(env, " "))
+		sb.WriteString("\n")
 	}
 
 	// Add build secrets as ARG directives
@@ -286,6 +293,17 @@ func renderEnvVarsAndSecrets(sb *strings.Builder, opts *BuildOpts) {
 			}
 		}
 	}
+}
+
+// quoteDockerfileValue makes a value safe to sit among others on one ENV line:
+// bare values end at whitespace, so anything containing it is double-quoted,
+// which still lets $VAR references expand the way an unquoted value would.
+func quoteDockerfileValue(value string) string {
+	if !strings.ContainsAny(value, " \t\"'\\") {
+		return value
+	}
+	replacer := strings.NewReplacer(`\`, `\\`, `"`, `\"`)
+	return `"` + replacer.Replace(value) + `"`
 }
 
 // appendToDockerfile appends additional build steps to a custom Dockerfile

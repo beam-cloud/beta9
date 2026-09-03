@@ -72,7 +72,6 @@ func NewAuthInterceptor(config types.AppConfig, backendRepo repository.BackendRe
 			pb.WorkerRepositoryService_GetCacheFsNodeChildren_FullMethodName:           true,
 			pb.WorkerRepositoryService_AddRecentCacheStub_FullMethodName:               true,
 			pb.WorkerRepositoryService_ListRecentCacheStubs_FullMethodName:             true,
-			pb.WorkerRepositoryService_MarkCacheStubReported_FullMethodName:            true,
 			pb.WorkerRepositoryService_AcquireCacheReconcileLock_FullMethodName:        true,
 			pb.WorkerRepositoryService_ReleaseCacheReconcileLock_FullMethodName:        true,
 			pb.WorkerRepositoryService_GetCacheOriginCredentials_FullMethodName:        true,

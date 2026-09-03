@@ -929,7 +929,7 @@ func TestContentReadsPreferMaterializedLocalContentOverSelectedRemoteHost(t *tes
 	require.Equal(t, "local-host", pageTrace.Attempts[0].HostID)
 	require.Equal(t, -1, pageTrace.Attempts[0].HostIndex)
 
-	require.NoError(t, os.Remove(store.completeMarkerPath(hash)))
+	require.NoError(t, store.removeContent(evictionCandidate{hash: hash, dir: store.pageDir(hash)}))
 	_, err = client.ReadContentInto(context.Background(), hash, 0, make([]byte, len(content)), ClientOptions{})
 	require.ErrorIs(t, err, ErrSelectedHostUnavailable)
 	views, err = client.ClientLocalPageFileViews(hash, 0, int64(len(content)), ClientOptions{})

@@ -8,12 +8,23 @@ package worker
 //     decides placement or moves bytes.
 //   - WorkerCacheManager reconcile loop: on the node that currently hosts the
 //     cache server, materializes content the local host owns (HRW), except
-//     checkpoints which materialize on every matching accelerator in locality.
-//     Ownership has hysteresis: an owner that is briefly endpoint-less (e.g. a
-//     rolling deploy) keeps its keys; only after a grace period do its keys
-//     fail over to the next-ranked live host. Under disk pressure,
-//     materialization is constrained to a ranked recent working set so the
-//     newest high-value content survives before older volume-style cache data.
+//     checkpoints and disk snapshots which materialize on every matching
+//     accelerator in locality. Ownership has hysteresis: an owner that is
+//     briefly endpoint-less (e.g. a rolling deploy) keeps its keys; only after
+//     a grace period do its keys fail over to the next-ranked live host.
+//
+// The loop runs at two cadences. A sync (every few seconds, and immediately
+// when this worker publishes) lists the locality's recent stubs, refreshes the
+// store's protected set and pulls what is missing; the store answers every
+// completeness check from memory, so a quiet sync costs one coordinator round
+// trip. A maintenance pass (the configured interval) does the work that walks
+// disks: TTL pruning of content, checkpoints, image and stub-code caches.
+//
+// Disk pressure is handled by one mechanism: the reconciler decides what is
+// protected and the store evicts everything else, LRU, when usage crosses the
+// eviction watermark. Above the watermark the protected set shrinks to the
+// newest stubs' content that fits below it and materialization pauses; the
+// pause lifts with hysteresis so the two never churn against each other.
 //
 // The worker is trustless: all coordinator state (recent stubs, locks) is
 // brokered through the gateway, and all origin credentials are fetched from the
@@ -69,7 +80,7 @@ type originCredentials struct {
 	fetchedAt             time.Time
 }
 
-// reconcileInterval is how often a cache host scans for content to reconcile.
+// reconcileInterval is how often a cache host runs the maintenance pass.
 func (m *WorkerCacheManager) reconcileInterval() time.Duration {
 	seconds := m.config.Cache.Reconciliation.IntervalSeconds
 	if seconds <= 0 {
@@ -123,16 +134,6 @@ func (m *WorkerCacheManager) reconcileMaxBytesPerCycle() int64 {
 		b = cacheDefaultReconcileMaxBytesCycle
 	}
 	return b
-}
-
-// reconcileMaxDiskUsagePct is the local disk usage fraction above which
-// proactive materialization pauses.
-func (m *WorkerCacheManager) reconcileMaxDiskUsagePct() float64 {
-	pct := m.config.Cache.Reconciliation.MaxDiskUsagePct
-	if pct <= 0 || pct > 1 {
-		pct = cacheDefaultReconcileMaxDiskUsagePct
-	}
-	return pct
 }
 
 func reconcileResumeDiskUsagePct(pct float64) float64 {
@@ -218,7 +219,7 @@ func (r *cacheContentReporter) touchRecentStub(workspaceID, stubID string) {
 
 // shouldGenerateRequiredContent reports whether this worker process has already
 // enumerated a stub's required content. The durable S2 stream is the source of
-// truth, so Redis is marked only after a successful event write.
+// truth; the map only stops one process from re-enumerating the same stub.
 func (r *cacheContentReporter) shouldGenerateRequiredContent(stubID string) bool {
 	if r == nil || stubID == "" {
 		return false
@@ -305,15 +306,10 @@ func (r *cacheContentReporter) flush() {
 	}
 
 	failed := make(map[reporterKey]map[string]types.CacheRequiredContentItem)
-	stubOK := make(map[reporterStubKey]bool)
 	published := false
 	for key, bucket := range pending {
 		if len(bucket) == 0 {
 			continue
-		}
-		stubKey := reporterStubKey{workspaceID: key.workspaceID, stubID: key.stubID}
-		if _, ok := stubOK[stubKey]; !ok {
-			stubOK[stubKey] = true
 		}
 
 		items := make([]types.CacheRequiredContentItem, 0, len(bucket))
@@ -336,49 +332,41 @@ func (r *cacheContentReporter) flush() {
 			}
 		}
 		if !ok {
-			stubOK[stubKey] = false
 			failed[key] = bucket
 			continue
 		}
 		published = true
 	}
 
-	for stubKey, ok := range stubOK {
-		if ok {
-			r.markStubReported(stubKey.stubID)
-		}
-	}
-
-	if len(failed) > 0 {
-		r.requeue(failed)
-	}
+	// A stub whose recency refresh fails stays invisible to every reconciler
+	// in the locality even though its content is published, so it is retried
+	// with the next flush like a failed publish.
 	indexed := false
+	unindexed := make(map[reporterStubKey]struct{})
 	if r.metadata != nil {
 		for key := range recent {
 			if err := r.metadata.AddRecentStub(r.ctx, r.locality, key.workspaceID, key.stubID, r.recentStubTTL); err != nil {
 				log.Debug().Err(err).Str("workspace_id", key.workspaceID).Str("stub_id", key.stubID).Msg("failed to refresh recent stub for cache reconciliation")
+				unindexed[key] = struct{}{}
 				continue
 			}
 			indexed = true
 		}
+	}
+	if len(failed) > 0 || len(unindexed) > 0 {
+		r.requeue(failed, unindexed)
 	}
 	if (published || indexed) && r.reconcileNow != nil {
 		r.reconcileNow()
 	}
 }
 
-func (r *cacheContentReporter) markStubReported(stubID string) {
-	if r == nil || r.metadata == nil || stubID == "" {
-		return
-	}
-	if _, err := r.metadata.MarkStubReported(r.ctx, r.locality, stubID, r.recentStubTTL); err != nil {
-		log.Debug().Err(err).Str("stub_id", stubID).Msg("failed to mark required-content report complete")
-	}
-}
-
-func (r *cacheContentReporter) requeue(items map[reporterKey]map[string]types.CacheRequiredContentItem) {
+func (r *cacheContentReporter) requeue(items map[reporterKey]map[string]types.CacheRequiredContentItem, recent map[reporterStubKey]struct{}) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	for key := range recent {
+		r.recent[key] = struct{}{}
+	}
 	for key, bucket := range items {
 		if len(bucket) == 0 {
 			continue
@@ -458,22 +446,27 @@ func (m *WorkerCacheManager) activeStubsForWorkspace(workspaceID string) []strin
 func (m *WorkerCacheManager) runReconciliation() {
 	defer m.wg.Done()
 
-	ticker := time.NewTicker(m.reconcileInterval())
-	defer ticker.Stop()
+	sync := time.NewTicker(cacheReconcileSyncInterval)
+	defer sync.Stop()
+	maintain := time.NewTicker(m.reconcileInterval())
+	defer maintain.Stop()
 
 	for {
 		select {
 		case <-m.ctx.Done():
 			return
 		case <-m.reconcileNow:
-			m.reconcileOnce()
-		case <-ticker.C:
-			m.reconcileOnce()
+			m.reconcileOnce(false)
+		case <-sync.C:
+			m.reconcileOnce(false)
+		case <-maintain.C:
+			m.reconcileOnce(true)
 		}
 	}
 }
 
-func (m *WorkerCacheManager) reconcileOnce() {
+// reconcileOnce runs one sync, and the maintenance pass too when asked.
+func (m *WorkerCacheManager) reconcileOnce(maintain bool) {
 	if m.client == nil || m.metadataStore == nil {
 		return
 	}
@@ -495,29 +488,51 @@ func (m *WorkerCacheManager) reconcileOnce() {
 	m.pruneReconcileFailures()
 	m.pruneReconcileSuccesses()
 
-	maxStubs := m.config.Cache.Reconciliation.MaxStubsPerCycle
-	if maxStubs <= 0 {
-		maxStubs = cacheDefaultReconcileMaxStubsCycle
-	}
+	started := time.Now()
+	var stubCount int
+	defer func() {
+		// A sync should cost a coordinator round trip and little else; the
+		// trace says so, or says where a cycle went. Maintenance passes are
+		// rare enough to log at info as a heartbeat.
+		event := log.Debug()
+		if maintain {
+			event = log.Info()
+		}
+		event.
+			Str("locality", m.locality).
+			Bool("maintain", maintain).
+			Int("stubs", stubCount).
+			Dur("duration", time.Since(started)).
+			Msg("cache reconciliation cycle")
+	}()
 
-	// Only stubs accessed within the recency window are reconciled; older stubs
-	// have aged out of the recent index and their content is left to expire.
-	stubs, err := m.metadataStore.ListRecentStubs(m.ctx, m.locality, m.recentStubTTL(), maxStubs)
+	// Every stub accessed within the recency window, MRU-first. The whole
+	// window is needed, not a page of it: the protected set derived from it
+	// is what keeps pruning from removing content a recent stub still needs,
+	// and a truncated set would either be unsafe or, if pruning were skipped
+	// whenever it was truncated, let a busy locality's disk grow unbounded.
+	stubs, err := m.metadataStore.ListRecentStubs(m.ctx, m.locality, m.recentStubTTL(), 0)
 	if err != nil {
 		log.Debug().Err(err).Str("locality", m.locality).Msg("cache reconciliation failed to list recent stubs")
 		return
 	}
+	stubCount = len(stubs)
 
 	stubContent, requiredContentComplete := m.loadRecentRequiredContent(stubs)
 	protectedContent, activeCheckpointIDs := protectedContentFromRecentStubs(stubContent, m.accelerator)
-	protectedSetComplete := requiredContentComplete && len(stubs) < maxStubs
 	server.SetProtectedContent(protectedContent)
-	if protectedSetComplete {
-		m.pruneOwnerLocalCache(server, protectedContent, activeCheckpointIDs)
-	}
-	m.pruneOwnerStubCodeCache(server)
 
-	gated, reconcileAllowlist := m.reconcileGatedByDiskUsage(server, localHostID, protectedContent, stubContent, protectedSetComplete)
+	if maintain {
+		// TTL pruning is only safe with a complete picture of what is
+		// required; a failed required-content read defers it to the next pass.
+		if requiredContentComplete {
+			m.pruneOwnerLocalCache(server, protectedContent, activeCheckpointIDs)
+		}
+		m.pruneOwnerImageCache(stubContent, server.EvictWatermarkPct(), server.DiskMinFreeBytes(), requiredContentComplete)
+		m.pruneOwnerStubCodeCache(server)
+	}
+
+	gated, reconcileAllowlist := m.reconcileGatedByDiskUsage(server, localHostID, protectedContent, stubContent)
 	if gated {
 		return
 	}
@@ -1261,12 +1276,14 @@ func fastDiskUsage(path string) (cache.DiskUsage, error) {
 	}, nil
 }
 
-// reconcileGatedByDiskUsage keeps reconciliation balanced under pressure. Above
-// the soft watermark it evicts content outside the ranked recent working set and
-// pauses the current cycle; between the resume and soft watermarks it reconciles
-// only that ranked set. This avoids download/evict loops while still favoring
-// the newest useful content on a mostly-full node.
-func (m *WorkerCacheManager) reconcileGatedByDiskUsage(server *cache.Server, localHostID string, protected map[string]struct{}, stubContent []recentStubContent, protectedSetComplete bool) (bool, map[string]struct{}) {
+// reconcileGatedByDiskUsage keeps materialization and eviction from churning
+// against each other on a mostly-full node. Above the eviction watermark the
+// protected set shrinks to the newest stubs' content that fits below it, the
+// store evicts everything else, and the cycle pauses; the pause holds until
+// usage falls below the resume watermark. Between the two watermarks
+// materialization is limited to that same ranked set, so nothing is pulled
+// that the next eviction would remove.
+func (m *WorkerCacheManager) reconcileGatedByDiskUsage(server *cache.Server, localHostID string, protected map[string]struct{}, stubContent []recentStubContent) (bool, map[string]struct{}) {
 	usage, err := server.RefreshDiskUsage()
 	if err != nil {
 		log.Debug().Err(err).Str("locality", m.locality).Str("logical_host", localHostID).Msg("cache reconciliation failed to refresh disk usage")
@@ -1276,13 +1293,8 @@ func (m *WorkerCacheManager) reconcileGatedByDiskUsage(server *cache.Server, loc
 		}
 	}
 
-	softWatermark := m.reconcileMaxDiskUsagePct()
-	resumeWatermark := reconcileResumeDiskUsagePct(softWatermark)
-	if m.pruneOwnerImageCache(stubContent, softWatermark, server.DiskMinFreeBytes(), protectedSetComplete) > 0 {
-		if refreshed, refreshErr := server.RefreshDiskUsage(); refreshErr == nil {
-			usage = refreshed
-		}
-	}
+	watermark := server.EvictWatermarkPct()
+	resumeWatermark := reconcileResumeDiskUsagePct(watermark)
 	pressureMode := usage.UsagePct >= resumeWatermark
 	if !m.reconcilePausedAt.IsZero() {
 		if usage.UsagePct > resumeWatermark {
@@ -1299,34 +1311,34 @@ func (m *WorkerCacheManager) reconcileGatedByDiskUsage(server *cache.Server, loc
 		}
 	}
 
-	reconcileAllowlist := map[string]struct{}(nil)
-	protectedForPressure := protected
-	if pressureMode {
-		if usage.TotalBytes > 0 {
-			reconcileAllowlist = pressureProtectedContentFromRecentStubs(stubContent, m.accelerator, usage, softWatermark, server.DiskMinFreeBytes())
-			protectedForPressure = reconcileAllowlist
-		}
-		server.SetProtectedContent(protectedForPressure)
+	var reconcileAllowlist map[string]struct{}
+	if pressureMode && usage.TotalBytes > 0 {
+		reconcileAllowlist = pressureProtectedContentFromRecentStubs(stubContent, m.accelerator, usage, watermark, server.DiskMinFreeBytes())
+		server.SetProtectedContent(reconcileAllowlist)
 	}
 
-	bytesToFree := reconcilePressureBytesToFree(usage, softWatermark, server.DiskMinFreeBytes())
-	if bytesToFree > 0 {
-		evicted, freed := server.PressureEvictContent(protectedForPressure, bytesToFree)
-		if evicted > 0 {
+	minFreeBytes := server.DiskMinFreeBytes()
+	if reconcilePressureBytesToFree(usage, watermark, minFreeBytes) > 0 && m.reconcilePausedAt.IsZero() {
+		// The protected set just shrank; reclaim now rather than on the store
+		// monitor's next tick. While a pause holds, the monitor owns eviction:
+		// repeating it every sync would only re-walk the same candidates and
+		// re-log the same outcome.
+		if reclaimed, err := server.ReclaimDisk(); err == nil {
+			usage = reclaimed
+		}
+	}
+	if reconcilePressureBytesToFree(usage, watermark, minFreeBytes) > 0 {
+		if m.reconcilePausedAt.IsZero() {
+			m.reconcilePausedAt = time.Now()
 			log.Warn().
 				Str("locality", m.locality).
 				Str("logical_host", localHostID).
-				Int("evicted", evicted).
-				Int64("freed_bytes", freed).
-				Int64("target_free_bytes", bytesToFree).
 				Float64("disk_usage_pct", usage.UsagePct).
-				Float64("soft_watermark_pct", softWatermark).
+				Uint64("available_bytes", usage.AvailableBytes).
+				Float64("watermark_pct", watermark).
 				Float64("resume_watermark_pct", resumeWatermark).
-				Int("protected_candidates", len(protectedForPressure)).
-				Msg("pressure-evicted lower-priority cache content before pausing reconciliation")
-		}
-		if m.reconcilePausedAt.IsZero() {
-			m.reconcilePausedAt = time.Now()
+				Int("protected_candidates", len(reconcileAllowlist)).
+				Msg("cache reconciliation paused: disk above eviction watermark")
 		}
 		return true, nil
 	}
@@ -1339,18 +1351,13 @@ func (m *WorkerCacheManager) reconcileGatedByDiskUsage(server *cache.Server, loc
 				Str("logical_host", localHostID).
 				Float64("disk_usage_pct", usage.UsagePct).
 				Uint64("available_bytes", usage.AvailableBytes).
-				Float64("soft_watermark_pct", softWatermark).
-				Int64("min_free_bytes", server.DiskMinFreeBytes()).
+				Int64("min_free_bytes", minFreeBytes).
 				Msg("cache reconciliation paused: hard disk write gate active")
 		}
 		return true, nil
 	}
 
-	if pressureMode {
-		return false, reconcileAllowlist
-	}
-	server.SetProtectedContent(protected)
-	return false, nil
+	return false, reconcileAllowlist
 }
 
 func reconcilePressureBytesToFree(usage cache.DiskUsage, softWatermark float64, minFreeBytes int64) int64 {

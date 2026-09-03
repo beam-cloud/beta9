@@ -7,10 +7,12 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"golang.org/x/sync/errgroup"
 
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -225,10 +227,20 @@ func (v *Volume) start(ctx context.Context) error {
 	}
 	v.fmtNode = fmtNodeName(state.PivotCount)
 
+	// Step timings surface in the attach log so a slow attach can be blamed
+	// on the daemon, the kernel, mkfs, or the mount without a profiler.
+	stepStart := time.Now()
+	step := func(name string, event *zerolog.Event) {
+		event.Dur(name, time.Since(stepStart))
+		stepStart = time.Now()
+	}
+	attachLog := log.Info().Str("volume", state.Key).Bool("fresh", freshDisk).Int("layers", len(state.Chain))
+
 	qsd, err := m.startQSD(ctx, m.runtimeDir(state.Key), openPath, v.fmtNode, state.ReadOnly)
 	if err != nil {
 		return err
 	}
+	step("qsd", attachLog)
 	cleanupOnError := func() {
 		if v.nbd != nil {
 			_ = m.disconnectNBDDevice(context.Background(), v.nbd)
@@ -243,6 +255,7 @@ func (v *Volume) start(ctx context.Context) error {
 		return err
 	}
 	v.nbd = nbd
+	step("nbd", attachLog)
 
 	if freshDisk {
 		if err := m.formatExt4(ctx, nbd.Path); err != nil {
@@ -250,11 +263,14 @@ func (v *Volume) start(ctx context.Context) error {
 			return err
 		}
 		state.Formatted = true
+		step("mkfs", attachLog)
 	}
 	if err := m.mountExt4(ctx, nbd.Path, state.Mountpoint, state.ReadOnly); err != nil {
 		cleanupOnError()
 		return err
 	}
+	step("mount", attachLog)
+	attachLog.Msg("qcow volume attached")
 
 	v.qsd = qsd
 	state.Attached = true

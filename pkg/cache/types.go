@@ -40,17 +40,11 @@ type ReconciliationConfig struct {
 	IntervalSeconds       int   `key:"intervalSeconds" json:"interval_seconds"`
 	RecentStubTTLSeconds  int   `key:"recentStubTTLSeconds" json:"recent_stub_ttl_seconds"`
 	LockTTLSeconds        int   `key:"lockTTLSeconds" json:"lock_ttl_seconds"`
-	MaxStubsPerCycle      int   `key:"maxStubsPerCycle" json:"max_stubs_per_cycle"`
 	MaxItemsPerCycle      int   `key:"maxItemsPerCycle" json:"max_items_per_cycle"`
 	MaxBytesPerCycle      int64 `key:"maxBytesPerCycle" json:"max_bytes_per_cycle"`
 	MaxConcurrentFetches  int   `key:"maxConcurrentFetches" json:"max_concurrent_fetches"`
 	VolumeMinBytes        int64 `key:"volumeMinBytes" json:"volume_min_bytes"`
 	OriginFallbackEnabled bool  `key:"originFallbackEnabled" json:"origin_fallback_enabled"`
-	// MaxDiskUsagePct is the soft pressure watermark (0-1). Above it, the
-	// cache owner evicts lower-priority content and pauses proactive
-	// reconciliation. Near it, reconciliation is limited to the ranked recent
-	// working set so eviction and materialization do not churn.
-	MaxDiskUsagePct float64 `key:"maxDiskUsagePct" json:"max_disk_usage_pct"`
 }
 
 type DiskConfig struct {
@@ -175,7 +169,6 @@ type ClientConfig struct {
 	PreferLocalCacheHost  bool                      `key:"preferLocalCacheHost" json:"prefer_local_cache_host"`
 	PageFDCacheSize       int                       `key:"pageFDCacheSize" json:"page_fd_cache_size"`
 	ReadTransport         ClientReadTransportConfig `key:"readTransport" json:"read_transport"`
-	Prefetch              ReadPrefetchConfig        `key:"prefetch" json:"prefetch"`
 }
 
 type ClientReadTransportConfig struct {
@@ -188,14 +181,6 @@ type ClientReadTransportConfig struct {
 	// MaxPartsPerRead only controls fanout when a logical read is larger than
 	// RequestSizeBytes. A logical read that fits remains one wire request.
 	MaxPartsPerRead int `key:"maxPartsPerRead" json:"max_parts_per_read"`
-}
-
-type ReadPrefetchConfig struct {
-	Enabled         bool  `key:"enabled" json:"enabled"`
-	AheadBytes      int64 `key:"aheadBytes" json:"ahead_bytes"`
-	Workers         int   `key:"workers" json:"workers"`
-	PartLengthBytes int64 `key:"partLengthBytes" json:"part_length_bytes"`
-	MaxPartsPerRead int   `key:"maxPartsPerRead" json:"max_parts_per_read"`
 }
 
 type MetadataMode string

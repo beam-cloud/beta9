@@ -1,6 +1,7 @@
 package image
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -264,4 +265,12 @@ func TestParseBuildSteps(t *testing.T) {
 		got := parseBuildSteps(tc.steps, "micromamba3.10", false)
 		assert.Equal(t, tc.want, got)
 	}
+}
+
+func TestRenderEnvVarsOnOneLine(t *testing.T) {
+	var sb strings.Builder
+	renderEnvVarsAndSecrets(&sb, &BuildOpts{
+		EnvVars: []string{"A=1", "", "PATH=/usr/local/bin:$PATH", `MSG=hello "world"`, "BARE"},
+	})
+	assert.Equal(t, "ENV A=1 PATH=/usr/local/bin:$PATH MSG=\"hello \\\"world\\\"\" BARE\n", sb.String())
 }

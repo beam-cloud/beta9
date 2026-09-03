@@ -354,8 +354,7 @@ func TestRenderV2Dockerfile_ComprehensiveChaining(t *testing.T) {
 			},
 			expected: []string{
 				"FROM docker.io/library/ubuntu:22.04\n",
-				"ENV MY_VAR=value\n",
-				"ENV ANOTHER_VAR=test\n",
+				"ENV MY_VAR=value ANOTHER_VAR=test\n",
 				"RUN echo 'test'\n",
 			},
 		},
@@ -490,8 +489,7 @@ func TestRenderV2Dockerfile_WithEnvVarsAndSecrets(t *testing.T) {
 			},
 			expected: []string{
 				"FROM docker.io/library/alpine:3.18\n",
-				"ENV FOO=bar\n",
-				"ENV BAZ=qux\n",
+				"ENV FOO=bar BAZ=qux\n",
 			},
 		},
 		{
@@ -574,8 +572,7 @@ func TestAppendToDockerfile_WithEnvVarsAndSecrets(t *testing.T) {
 			},
 			expected: []string{
 				"FROM ubuntu:22.04\nRUN apt-get update",
-				"ENV NODE_ENV=production\n",
-				"ENV PORT=8080\n",
+				"ENV NODE_ENV=production PORT=8080\n",
 			},
 		},
 		{

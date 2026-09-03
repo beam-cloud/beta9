@@ -1023,15 +1023,16 @@ func (m *ContainerNetworkManager) prepareNetworkSlotForAssignment(slot *containe
 }
 
 func (m *ContainerNetworkManager) clearNetworkSlotNeighbor(slot *containerNetworkSlot) error {
-	if slot == nil || slot.ip == "" {
+	if slot == nil {
 		return nil
 	}
+	return m.clearBridgeNeighbors(slot.ip, slot.ipv6)
+}
 
-	ip := net.ParseIP(slot.ip)
-	if ip == nil {
-		return fmt.Errorf("invalid network slot IP %q", slot.ip)
-	}
-
+// clearBridgeNeighbors drops the bridge's neighbor entries for the given
+// addresses, including the permanent ones pinBridgeNeighbors installed,
+// which `ip neigh flush` would leave behind.
+func (m *ContainerNetworkManager) clearBridgeNeighbors(addrs ...string) error {
 	bridge, err := netlink.LinkByName(containerBridgeLinkName)
 	if err != nil {
 		var notFound netlink.LinkNotFoundError
@@ -1041,12 +1042,22 @@ func (m *ContainerNetworkManager) clearNetworkSlotNeighbor(slot *containerNetwor
 		return fmt.Errorf("look up network bridge: %w", err)
 	}
 
-	err = netlink.NeighDel(&netlink.Neigh{
-		LinkIndex: bridge.Attrs().Index,
-		IP:        ip,
-	})
-	if err != nil && !errors.Is(err, unix.ENOENT) {
-		return fmt.Errorf("clear network slot neighbor: %w", err)
+	for _, addr := range addrs {
+		if addr == "" {
+			continue
+		}
+		ip := net.ParseIP(addr)
+		if ip == nil {
+			return fmt.Errorf("invalid container IP %q", addr)
+		}
+		err = netlink.NeighDel(&netlink.Neigh{
+			LinkIndex: bridge.Attrs().Index,
+			Family:    neighborFamily(ip),
+			IP:        ip,
+		})
+		if err != nil && !errors.Is(err, unix.ENOENT) {
+			return fmt.Errorf("clear bridge neighbor %s: %w", ip, err)
+		}
 	}
 	return nil
 }
@@ -1098,8 +1109,12 @@ func (m *ContainerNetworkManager) discardNetworkSlot(containerId string, slot *c
 	if slot == nil {
 		return nil
 	}
+	started := time.Now()
 	resourceErr := errors.Join(m.clearNetworkSlotNeighbor(slot), m.deleteNetworkSlotResources(slot.id))
-	return m.finishNetworkSlotDiscard(containerId, slot, releaseIP, resourceErr)
+	resourcesDuration := time.Since(started)
+	err := m.finishNetworkSlotDiscard(containerId, slot, releaseIP, resourceErr)
+	log.Info().Str("network_slot", slot.id).Dur("resources", resourcesDuration).Dur("release", time.Since(started)-resourcesDuration).Msg("network slot discarded")
+	return err
 }
 
 func (m *ContainerNetworkManager) finishNetworkSlotDiscard(containerId string, slot *containerNetworkSlot, releaseIP bool, resourceErr error) error {
@@ -1970,7 +1985,55 @@ func (m *ContainerNetworkManager) configureContainerLink(opts *containerNetworkC
 		}
 		return fmt.Errorf("failed to switch back to host namespace: %w", nsErr)
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	return m.pinBridgeNeighbors(opts.containerVeth.Attrs().HardwareAddr, ipAddr.IP)
+}
+
+// pinBridgeNeighbors installs permanent neighbor entries for the container's
+// addresses on the bridge. The worker chose the veth's MAC, so it has nothing
+// to learn from ARP; and a probe that raced the container coming up leaves an
+// INCOMPLETE entry whose retransmit timer (1s) holds every later SYN, which
+// is where a restored container spent half a second looking unreachable.
+func (m *ContainerNetworkManager) pinBridgeNeighbors(mac net.HardwareAddr, ip net.IP) error {
+	bridge, err := netlink.LinkByName(containerBridgeLinkName)
+	if err != nil {
+		return fmt.Errorf("look up network bridge: %w", err)
+	}
+	ips := []net.IP{ip}
+	if m.ipt6 != nil {
+		_, ipv6Net, _ := net.ParseCIDR(containerSubnetIPv6)
+		ipv6, err := containerIPv6Address(ip, ipv6Net)
+		if err != nil {
+			return err
+		}
+		ips = append(ips, ipv6)
+	}
+	for _, ip := range ips {
+		neigh := &netlink.Neigh{
+			LinkIndex:    bridge.Attrs().Index,
+			Family:       neighborFamily(ip),
+			State:        neighborStatePermanent,
+			IP:           ip,
+			HardwareAddr: mac,
+		}
+		if err := netlink.NeighSet(neigh); err != nil {
+			return fmt.Errorf("pin bridge neighbor %s: %w", ip, err)
+		}
+	}
+	return nil
+}
+
+// neighborStatePermanent is NUD_PERMANENT; netlink and x/sys only export it
+// on Linux, and this file also builds for the unit tests elsewhere.
+const neighborStatePermanent = 0x80
+
+func neighborFamily(ip net.IP) int {
+	if ip.To4() != nil {
+		return unix.AF_INET
+	}
+	return unix.AF_INET6
 }
 
 func (m *ContainerNetworkManager) configureContainerLinkInNamespace(containerVeth netlink.Link, ipAddr *netlink.Addr) error {
@@ -2283,25 +2346,22 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 	}
 	m.forgetContainerIP(containerId, info.ContainerIp)
 
-	// Flush ARP cache on the bridge device
-	cmd := exec.Command("ip", "neigh", "flush", "dev", containerBridgeLinkName)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		log.Debug().Err(err).Str("output", string(output)).Msg("failed to flush ARP entries")
-	}
-
-	return nil
+	return m.clearBridgeNeighbors(info.ContainerIp, info.ContainerIpv6)
 }
 
 func (m *ContainerNetworkManager) tearDownPreallocatedNetworkSlot(containerId string, slot *containerNetworkSlot) error {
+	started := time.Now()
 	rulesErr := m.removePreallocatedNetworkSlotRules(slot)
+	rulesDuration := time.Since(started)
 	// A used namespace can contain container-owned state (including CRIU's
 	// terminal-checkpoint firewall lock), so it is never returned to the pool.
 	// Keep its IP quarantined if host-rule cleanup failed.
-	return errors.Join(
+	err := errors.Join(
 		rulesErr,
 		m.discardNetworkSlot(containerId, slot, rulesErr == nil),
 	)
+	log.Info().Str("container_id", containerId).Dur("rules", rulesDuration).Dur("discard", time.Since(started)-rulesDuration).Msg("network slot torn down")
+	return err
 }
 
 func (m *ContainerNetworkManager) removePreallocatedNetworkSlotRules(slot *containerNetworkSlot) error {
@@ -2325,8 +2385,15 @@ func (m *ContainerNetworkManager) removePreallocatedNetworkSlotRules(slot *conta
 	return nil
 }
 
+// removeIPTablesRules drops every PREROUTING and FORWARD rule aimed at the
+// container's IP. Under nf_tables each individual delete dumps and diffs the
+// whole ruleset before committing (~20ms), and a container leaves behind two
+// rules per exposed port, so the deletes go through one iptables-restore
+// transaction per family; the per-rule path remains as the fallback.
 func (m *ContainerNetworkManager) removeIPTablesRules(ip string, ipt *iptables.IPTables) error {
 	chains := [][2]string{{"nat", "PREROUTING"}, {"filter", "FORWARD"}}
+	doomed := make(map[string][]string, len(chains))
+	var batch strings.Builder
 	for _, tableChain := range chains {
 		table, chain := tableChain[0], tableChain[1]
 		rules, err := ipt.List(table, chain)
@@ -2334,21 +2401,71 @@ func (m *ContainerNetworkManager) removeIPTablesRules(ip string, ipt *iptables.I
 			return fmt.Errorf("list %s/%s rules: %w", table, chain, err)
 		}
 
+		var matched []string
 		for _, rule := range rules {
-			if !iptablesRuleMatchesIP(rule, ip) {
-				continue
+			if iptablesRuleMatchesIP(rule, ip) && strings.HasPrefix(rule, "-A ") {
+				matched = append(matched, rule)
 			}
+		}
+		if len(matched) == 0 {
+			continue
+		}
+		doomed[table] = matched
+		fmt.Fprintf(&batch, "*%s\n", table)
+		for _, rule := range matched {
+			fmt.Fprintf(&batch, "-D %s\n", strings.TrimPrefix(rule, "-A "))
+		}
+		batch.WriteString("COMMIT\n")
+	}
+	if len(doomed) == 0 {
+		return nil
+	}
 
+	if err := iptablesRestore(ipt.Proto(), batch.String()); err == nil {
+		return nil
+	} else {
+		log.Debug().Err(err).Msg("batched iptables delete failed; deleting rules one at a time")
+	}
+
+	for _, tableChain := range chains {
+		table, chain := tableChain[0], tableChain[1]
+		for _, rule := range doomed[table] {
 			parts := iptablesRuleFields(rule)
 			if len(parts) < 3 {
 				continue
 			}
-			if err := ipt.Delete(table, chain, parts[2:]...); err != nil {
+			if err := ipt.Delete(table, chain, parts[2:]...); err != nil && !isIPTablesNoMatch(err) {
 				return fmt.Errorf("delete %s/%s rule: %w", table, chain, err)
 			}
 		}
 	}
 	return nil
+}
+
+// iptablesRestore applies a rule batch atomically with `--noflush`, so the
+// rest of the ruleset is untouched.
+func iptablesRestore(proto iptables.Protocol, batch string) error {
+	binary := "iptables-restore"
+	if proto == iptables.ProtocolIPv6 {
+		binary = "ip6tables-restore"
+	}
+	path, err := exec.LookPath(binary)
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command(path, "--noflush", "--wait")
+	cmd.Stdin = strings.NewReader(batch)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("%s: %w: %s", binary, err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+// isIPTablesNoMatch reports a delete of a rule that is already gone, which
+// can happen when a partially applied batch is retried rule by rule.
+func isIPTablesNoMatch(err error) bool {
+	var iptErr *iptables.Error
+	return errors.As(err, &iptErr) && iptErr.IsNotExist()
 }
 
 func (m *ContainerNetworkManager) ExposePort(containerId string, hostPort, containerPort int) error {
@@ -2442,37 +2559,61 @@ func (m *ContainerNetworkManager) startContainerPortExposure(containerId string,
 	m.portExposures[binding.HostPort] = exposure
 	m.portExposureMu.Unlock()
 
-	go m.runContainerPortExposure(exposure, info, binding, family, native, fallback)
+	// A loopback pod address cannot be DNAT'd to; the proxy is the only path
+	// and starts on whichever backend answers first.
+	if m.forcePortProxy {
+		go m.runContainerPortProxyFallback(exposure, info, binding, family, native, fallback, true)
+		return nil
+	}
+
+	// Kernel forwarding goes in before the container runs. Gating it on the
+	// port answering bought nothing (a refused connect looks the same whether
+	// the host or the container sends the RST) and left a restored listener
+	// unreachable for the poll interval plus the iptables round trips.
+	if err := m.exposePortDNAT(exposure.ctx, info, binding.HostPort, binding.ContainerPort, family); err != nil {
+		if exposure.ctx.Err() != nil {
+			return nil
+		}
+		log.Warn().Err(err).Str("container_id", exposure.containerID).Int("host_port", binding.HostPort).Int("container_port", binding.ContainerPort).Msg("failed to expose container port with kernel forwarding; using proxy")
+		go m.runContainerPortProxyFallback(exposure, info, binding, family, native, fallback, true)
+		return nil
+	}
+
+	// DNAT cannot cross address families. When the pod's family is known and
+	// the container only ever answers on the other one, swap in the proxy.
+	if family != addressFamilyUnknown && fallback != "" {
+		go m.runContainerPortProxyFallback(exposure, info, binding, family, native, fallback, false)
+	}
 	return nil
 }
 
-func (m *ContainerNetworkManager) runContainerPortExposure(exposure *containerPortExposure, info *containerNetworkInfo, binding PortBinding, family addressFamily, native, fallback string) {
-	ticker := time.NewTicker(containerPortProxyReadyPollInterval)
-	defer ticker.Stop()
-
+// runContainerPortProxyFallback probes the container's port and starts the
+// user-space proxy once a backend answers. With proxyAlways the proxy is the
+// only path and takes the first reachable backend; otherwise DNAT already
+// serves the native family and the proxy replaces it only if the container
+// answers solely on the fallback family. Probing backs off because a port
+// that never listens (exposed but unused) would otherwise be dialed forever
+// at the base interval.
+func (m *ContainerNetworkManager) runContainerPortProxyFallback(exposure *containerPortExposure, info *containerNetworkInfo, binding PortBinding, family addressFamily, native, fallback string, proxyAlways bool) {
+	wait := containerPortProxyReadyPollInterval
 	for {
 		nativeReady := containerPortTargetReachable(exposure.ctx, native, containerPortProxyDialTimeout)
-		fallbackReady := containerPortTargetReachable(exposure.ctx, fallback, containerPortProxyDialTimeout)
-		if nativeReady || (family == addressFamilyUnknown && fallbackReady) {
-			if m.forcePortProxy {
-				target := native
-				if !nativeReady {
-					target = fallback
-				}
-				exposure.startProxy(family, []string{target})
-				return
-			}
-			if err := m.exposePortDNAT(exposure.ctx, info, binding.HostPort, binding.ContainerPort, family); err != nil {
-				log.Warn().
-					Err(err).
-					Str("container_id", exposure.containerID).
-					Int("host_port", binding.HostPort).
-					Int("container_port", binding.ContainerPort).
-					Msg("failed to expose container port with kernel forwarding")
+		fallbackReady := !nativeReady && containerPortTargetReachable(exposure.ctx, fallback, containerPortProxyDialTimeout)
+		switch {
+		case nativeReady:
+			if proxyAlways {
+				exposure.startProxy(family, []string{native})
 			}
 			return
-		}
-		if fallbackReady {
+		case fallbackReady:
+			if !proxyAlways {
+				if err := m.unexposePortDNAT(exposure.ctx, info, binding.HostPort, binding.ContainerPort, family); err != nil {
+					if exposure.ctx.Err() == nil {
+						log.Warn().Err(err).Str("container_id", exposure.containerID).Int("host_port", binding.HostPort).Msg("failed to remove kernel forwarding before proxy fallback")
+					}
+					return
+				}
+			}
 			exposure.startProxy(family, []string{fallback})
 			return
 		}
@@ -2480,7 +2621,8 @@ func (m *ContainerNetworkManager) runContainerPortExposure(exposure *containerPo
 		select {
 		case <-exposure.ctx.Done():
 			return
-		case <-ticker.C:
+		case <-time.After(wait):
+			wait = min(wait*2, containerPortProxyReadyPollCeiling)
 		}
 	}
 }
@@ -2511,6 +2653,29 @@ func (m *ContainerNetworkManager) exposePortDNATLocked(info *containerNetworkInf
 			return err
 		}
 		if err := m.ipt6.AppendUnique("filter", "FORWARD", "-p", "tcp", "-d", info.ContainerIpv6, "--dport", fmt.Sprintf("%d", containerPort), "-j", "ACCEPT", "-m", "comment", "--comment", info.Comment); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// unexposePortDNAT withdraws the PREROUTING rules exposePortDNAT installed for
+// one host port so a user-space proxy can own the socket instead. The FORWARD
+// accept stays: other host ports may share the container port, it is harmless
+// alongside the proxy, and it is removed with the container's network.
+func (m *ContainerNetworkManager) unexposePortDNAT(ctx context.Context, info *containerNetworkInfo, hostPort, containerPort int, family addressFamily) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	m.iptablesMu.Lock()
+	defer m.iptablesMu.Unlock()
+	if family != addressFamilyIPv6 {
+		if err := m.ipt.DeleteIfExists("nat", "PREROUTING", "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", info.ContainerIp, containerPort), "-m", "comment", "--comment", info.Comment); err != nil {
+			return err
+		}
+	}
+	if family != addressFamilyIPv4 && m.ipt6 != nil && info.ContainerIpv6 != "" {
+		if err := m.ipt6.DeleteIfExists("nat", "PREROUTING", "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("[%s]:%d", info.ContainerIpv6, containerPort), "-m", "comment", "--comment", info.Comment); err != nil {
 			return err
 		}
 	}

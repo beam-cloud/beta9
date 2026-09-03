@@ -52,6 +52,7 @@ const (
 	terminalCheckpointStopWait      = 5 * time.Second
 	checkpointStatePublicationTTL   = 5 * time.Second
 	checkpointFilesystemOnlyFile    = "filesystem-only"
+	checkpointFilesystemOnDiskFile  = "filesystem-on-disk" // Upper layer lives on the sealed qcow root disk.
 	checkpointForcedRuncProfileFile = "beam-forced-runc-profile"
 	checkpointForcedRuncProfileV1   = "v1\n"
 	restoreReadinessTimeout         = 15 * time.Second
@@ -211,6 +212,9 @@ func (s *Worker) restoreCheckpointFilesystem(ctx context.Context, request *types
 		outputLogger.Info("Restoring checkpoint filesystem...\n")
 	}
 	filesystemPath, archived, err := checkpointFilesystemPayload(checkpointPath)
+	if err == nil && filesystemPath == "" {
+		err = errors.New("checkpoint filesystem lives on the root disk and cannot be reseeded")
+	}
 	if err == nil {
 		if archived {
 			err = extractDirectoryArchiveContext(ctx, filesystemPath, destination)
@@ -1169,7 +1173,15 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 	}
 
 	if !filesystemOnly {
-		err = captureCheckpointFilesystem(checkpointCtx, instance, checkpointPath, false)
+		// A qcow root disk hosts the upper layer and is sealed alongside this
+		// checkpoint below; restore takes the filesystem from the disk and never
+		// from the checkpoint, so copying the upper dir here only costs time and
+		// inflates the archive.
+		if qcowRootDiskMount(opts.Request) != nil {
+			err = os.WriteFile(filepath.Join(checkpointPath, checkpointFilesystemOnDiskFile), []byte("v1\n"), 0644)
+		} else {
+			err = captureCheckpointFilesystem(checkpointCtx, instance, checkpointPath, false)
+		}
 		if err != nil {
 			if errors.Is(checkpointCtx.Err(), context.DeadlineExceeded) {
 				err = fmt.Errorf("checkpoint filesystem copy timed out after %s: %w", defaultCheckpointOperationTTL, err)
@@ -1665,7 +1677,12 @@ func checkpointMaterialized(checkpointPath string) bool {
 // checkpointFilesystemPayload accepts the new nested archive and the legacy
 // materialized directory, but never both. The archive is a regular file because
 // the cache filesystem need not support the whiteout device nodes it contains.
+// A checkpoint whose upper layer lives on a sealed root disk carries a marker
+// instead of a payload and returns an empty path.
 func checkpointFilesystemPayload(checkpointPath string) (payloadPath string, archived bool, err error) {
+	if marker, markerErr := os.Lstat(filepath.Join(checkpointPath, checkpointFilesystemOnDiskFile)); markerErr == nil && marker.Mode().IsRegular() {
+		return "", false, nil
+	}
 	legacyPath := filepath.Join(checkpointPath, checkpointFsDir)
 	legacy, legacyErr := os.Lstat(legacyPath)
 	legacyExists := legacyErr == nil
@@ -1787,7 +1804,8 @@ func checkpointHasRuntimePayload(checkpointPath string) bool {
 	}
 
 	for _, entry := range entries {
-		if entry.Name() == checkpointFsDir || entry.Name() == checkpointFsArchive || entry.Name() == checkpointFilesystemOnlyFile || entry.Name() == checkpointForcedRuncProfileFile {
+		switch entry.Name() {
+		case checkpointFsDir, checkpointFsArchive, checkpointFilesystemOnlyFile, checkpointFilesystemOnDiskFile, checkpointForcedRuncProfileFile:
 			continue
 		}
 

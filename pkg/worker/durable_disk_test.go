@@ -542,7 +542,9 @@ func TestAddRequestMountsPreparesDurableDisk(t *testing.T) {
 		}},
 	}
 
-	volumeCacheMap, err := (&Worker{}).addRequestMounts(request, &spec)
+	worker := &Worker{}
+	require.NoError(t, worker.prepareDurableDiskMounts(request))
+	volumeCacheMap, err := worker.addRequestMounts(request, &spec)
 
 	require.NoError(t, err)
 	require.Empty(t, volumeCacheMap)
