@@ -56,6 +56,17 @@ func (g *WorkspaceGroup) CreateWorkspace(ctx echo.Context) error {
 		return HTTPInternalServerError("Unable to create workspace")
 	}
 
+	// Every workspace gets the platform default concurrency limit at creation
+	// so callers that provision workspaces directly through this API cannot
+	// end up with unlimited capacity. Control planes that manage per-tier
+	// quotas overwrite this row afterwards.
+	if defaults := g.config.GatewayService.DefaultConcurrencyLimit; defaults.CPUMillicores > 0 && defaults.GPUCount > 0 {
+		if _, err := g.backendRepo.CreateConcurrencyLimit(ctx.Request().Context(), workspace.Id, defaults.GPUCount, defaults.CPUMillicores); err != nil {
+			log.Error().Err(err).Msgf("Failed to create default concurrency limit for workspace %d", workspace.Id)
+			return HTTPInternalServerError("Unable to create workspace concurrency limit")
+		}
+	}
+
 	token, err := g.backendRepo.CreateToken(ctx.Request().Context(), workspace.Id, types.TokenTypeWorkspacePrimary, true)
 	if err != nil {
 		return HTTPInternalServerError("Unable to create workspace token")
