@@ -233,7 +233,12 @@ esac
 	case <-time.After(3 * time.Second):
 		t.Fatal("restore did not return after detached restore completed")
 	}
-	require.Contains(t, output.String(), "restore-output-done\n")
+	// Restore returns once runc exits and the PID is known; the output copier
+	// keeps running so the restored container stays connected, so the final
+	// line of restore output may land a moment after Restore returns.
+	require.Eventually(t, func() bool {
+		return bytes.Contains([]byte(output.String()), []byte("restore-output-done\n"))
+	}, time.Second, 10*time.Millisecond, "restore output was not fully forwarded")
 	require.NotContains(t, output.String(), "container-output\n")
 	require.Eventually(t, func() bool {
 		return bytes.Contains([]byte(output.String()), []byte("container-output\n"))
