@@ -512,18 +512,6 @@ func (cas *Store) AddReaderWithExpectedHash(ctx context.Context, reader io.Reade
 		return "", size, err
 	}
 
-	if cas.memoryCacheEnabled {
-		chunkKeys := make([]string, 0, chunkCount)
-		for chunkIdx := int64(0); chunkIdx < chunkCount; chunkIdx++ {
-			chunkKeys = append(chunkKeys, cas.pageKey(expectedHash, chunkIdx))
-		}
-		chunks := strings.Join(chunkKeys, ",")
-		added := cas.cache.SetWithTTL(expectedHash, chunks, int64(len(chunks)), time.Duration(cas.serverConfig.ObjectTtlS)*time.Second)
-		if !added {
-			return "", size, errors.New("unable to cache: set dropped")
-		}
-	}
-
 	Logger.Debugf("Added expected-hash object: %s, size: %d bytes", expectedHash, size)
 	return actualHash, size, nil
 }
@@ -745,6 +733,10 @@ func writePrivateCacheChunk(path string, data []byte) error {
 	return os.WriteFile(path, data, 0644)
 }
 
+// publishExpectedHashPages moves verified pages into place and marks the
+// object complete on disk and, when enabled, in the memory index. All of it
+// happens under the object lock so an eviction cannot slip between the pages
+// landing and the object being advertised.
 func (cas *Store) publishExpectedHashPages(hash string, tmpDir string, pageCount int64, size int64) error {
 	defer cas.lockObject(hash)()
 	finalDir := cas.pageDir(hash)
@@ -772,7 +764,20 @@ func (cas *Store) publishExpectedHashPages(hash string, tmpDir string, pageCount
 		}
 		pageLock.Unlock()
 	}
-	return cas.writeCompleteMarker(hash, size, pageCount)
+	if err := cas.writeCompleteMarker(hash, size, pageCount); err != nil {
+		return err
+	}
+	if cas.memoryCacheEnabled {
+		chunkKeys := make([]string, 0, pageCount)
+		for pageIdx := int64(0); pageIdx < pageCount; pageIdx++ {
+			chunkKeys = append(chunkKeys, cas.pageKey(hash, pageIdx))
+		}
+		chunks := strings.Join(chunkKeys, ",")
+		if !cas.cache.SetWithTTL(hash, chunks, int64(len(chunks)), time.Duration(cas.serverConfig.ObjectTtlS)*time.Second) {
+			return errors.New("unable to cache: set dropped")
+		}
+	}
+	return nil
 }
 
 func (cas *Store) PutFullPages(hash string, offset int64, data []byte) {

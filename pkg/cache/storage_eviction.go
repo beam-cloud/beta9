@@ -90,6 +90,19 @@ func (idx *contentIndex) forget(hash string) {
 	idx.mu.Unlock()
 }
 
+// forgetIfUntouched drops the entry unless it has been accessed after since,
+// deciding and deleting under one lock so a concurrent touch cannot land in
+// between. It reports whether the entry was dropped.
+func (idx *contentIndex) forgetIfUntouched(hash string, since time.Time) bool {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	if entry, ok := idx.entries[hash]; ok && entry.lastAccess.After(since) {
+		return false
+	}
+	delete(idx.entries, hash)
+	return true
+}
+
 // touch advances an entry's access time; it reports whether the entry exists
 // and whether the previous touch is older than interval, so the caller can
 // throttle the on-disk mtime refresh that persists recency across restarts.
@@ -500,10 +513,9 @@ var errContentTouched = errors.New("content touched since it was chosen for evic
 // rather than leaking it until the rescan.
 func (cas *Store) removeContent(candidate evictionCandidate) error {
 	defer cas.lockObject(candidate.hash)()
-	if current, ok := cas.index.get(candidate.hash); ok && current.lastAccess.After(candidate.lastAccess) {
+	if !cas.index.forgetIfUntouched(candidate.hash, candidate.lastAccess) {
 		return errContentTouched
 	}
-	cas.index.forget(candidate.hash)
 	if err := os.Remove(filepath.Join(candidate.dir, cacheCompleteMarkerName)); err != nil && !os.IsNotExist(err) {
 		cas.retainForRetry(candidate, candidate.sizeBytes)
 		return err
