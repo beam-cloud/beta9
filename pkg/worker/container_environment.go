@@ -35,7 +35,7 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 	env = append(env, request.Env...)
 	env = append(env,
 		fmt.Sprintf("BIND_PORT=%d", containerInnerPort),
-		fmt.Sprintf("%s=%s", types.ContainerHostnameEnv, fmt.Sprintf("%s:%d", s.podAddr, options.BindPorts[0])),
+		fmt.Sprintf("%s=%s", types.ContainerHostnameEnv, joinHostPort(s.podAddr, options.BindPorts[0])),
 		fmt.Sprintf("CONTAINER_ID=%s", request.ContainerId),
 		fmt.Sprintf("%s=%s", types.ContainerGatewayGRPCHostEnv, gatewayEnv.grpcHost),
 		fmt.Sprintf("%s=%s", types.ContainerGatewayGRPCPortEnv, gatewayEnv.grpcPort),

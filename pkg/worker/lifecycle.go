@@ -878,7 +878,7 @@ func (s *Worker) mountWorkspaceStorage(ctx context.Context, request *types.Conta
 }
 
 func (s *Worker) setWorkerAddress(ctx context.Context, request *types.ContainerRequest) error {
-	hostname := fmt.Sprintf("%s:%d", s.podAddr, s.containerServer.port)
+	hostname := joinHostPort(s.podAddr, s.containerServer.port)
 	startedAt := time.Now()
 	_, err := handleGRPCResponse(s.containerRepoClient.SetWorkerAddress(ctx, &pb.SetWorkerAddressRequest{
 		ContainerId: request.ContainerId,
@@ -1267,7 +1267,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 			return nil, err
 		}
 
-		containerHostname := fmt.Sprintf("%s:%d", s.podAddr, options.HostBindPort)
+		containerHostname := joinHostPort(s.podAddr, options.HostBindPort)
 		containerHostnamePath := filepath.Join(checkpointSignalDir(request.ContainerId), checkpointContainerHostnameFileName)
 		err = os.WriteFile(containerHostnamePath, []byte(containerHostname), 0644)
 		if err != nil {
