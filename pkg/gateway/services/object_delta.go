@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/clients"
@@ -103,6 +104,27 @@ func (gws *GatewayService) CommitObjectDelta(ctx context.Context, in *pb.CommitO
 }
 
 func (gws *GatewayService) mergeObjectDelta(ctx context.Context, storageClient *clients.WorkspaceStorageClient, baseKey, deltaKey, targetKey, hash string, removedPaths []string) (int64, error) {
+	metadata := map[string]string{workspaceObjectHashMetadataKey: hash}
+
+	// Fast path: assemble the merged archive from server-side range copies of
+	// the two existing objects, so only the changed entries and the central
+	// directory pass through the gateway.
+	started := time.Now()
+	store := &s3SpliceStore{client: storageClient.StorageClient.S3Client(), bucket: *storageClient.WorkspaceStorage.BucketName}
+	size, err := spliceZipObjects(ctx, store, baseKey, deltaKey, targetKey, removedPaths, metadata, s3MinPartSize)
+	if err == nil {
+		log.Info().Str("target", targetKey).Int64("size", size).Dur("duration", time.Since(started)).Msg("spliced object delta")
+		return size, nil
+	}
+	log.Warn().Err(err).Str("target", targetKey).Msg("object delta splice failed; merging archives locally")
+
+	return gws.mergeObjectDeltaLocally(ctx, storageClient, baseKey, deltaKey, targetKey, metadata, removedPaths)
+}
+
+// mergeObjectDeltaLocally downloads both archives, merges them entry by entry
+// and uploads the result. It handles any zip layout, at the cost of moving
+// every byte of both archives through the gateway.
+func (gws *GatewayService) mergeObjectDeltaLocally(ctx context.Context, storageClient *clients.WorkspaceStorageClient, baseKey, deltaKey, targetKey string, metadata map[string]string, removedPaths []string) (int64, error) {
 	dir, err := os.MkdirTemp("", "object-delta-")
 	if err != nil {
 		return 0, err
@@ -134,7 +156,6 @@ func (gws *GatewayService) mergeObjectDelta(ctx context.Context, storageClient *
 		return 0, err
 	}
 
-	metadata := map[string]string{workspaceObjectHashMetadataKey: hash}
 	if err := storageClient.UploadWithReaderAndMetadata(ctx, targetKey, merged, metadata); err != nil {
 		return 0, fmt.Errorf("upload merged archive: %w", err)
 	}
