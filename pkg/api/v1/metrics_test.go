@@ -13,6 +13,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
+	"github.com/stretchr/testify/require"
 )
 
 func TestMetricEventTypesIncludeContainerEventsForRealtimeCounts(t *testing.T) {
@@ -31,6 +32,35 @@ func TestMetricEventTypesIncludeContainerEventsForRealtimeCounts(t *testing.T) {
 
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected metric event types: got %#v want %#v", got, want)
+	}
+}
+
+func TestContainerMetricRangeRejectsUnsupportedInterval(t *testing.T) {
+	tests := []struct {
+		interval string
+		want     string
+		wantErr  bool
+	}{
+		{interval: "", want: "1h"},
+		{interval: "1m", want: "1m"},
+		{interval: "1H", want: "1H"},
+		{interval: "5m", wantErr: true},
+		{interval: "day", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.interval, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "/?start=2026-07-13T10:00:00Z&end=2026-07-13T10:30:00Z&interval="+tt.interval, nil)
+			ctx := echo.New().NewContext(request, httptest.NewRecorder())
+
+			_, _, interval, err := containerMetricRangeFromContext(ctx, "1h")
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tt.want, interval)
+		})
 	}
 }
 

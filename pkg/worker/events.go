@@ -75,13 +75,15 @@ type GPUInfoStat struct {
 }
 
 type ProcessMonitor struct {
-	pid           int32
-	devices       []specs.LinuxDeviceCgroup
-	lastIOByPID   map[int32]process.IOCountersStat
-	lastNetIO     gopsutilnet.IOCountersStat
-	hasLastNetIO  bool
-	gpuInfoClient GPUInfoClient
-	gpuDeviceIds  []int
+	pid              int32
+	devices          []specs.LinuxDeviceCgroup
+	lastIOByPID      map[int32]process.IOCountersStat
+	lastNetIO        gopsutilnet.IOCountersStat
+	hasLastNetIO     bool
+	lastCPUSeconds   float64
+	lastCPUSampledAt time.Time
+	gpuInfoClient    GPUInfoClient
+	gpuDeviceIds     []int
 }
 
 func NewProcessMonitor(pid int, devices []specs.LinuxDeviceCgroup, gpuDeviceIds []int) *ProcessMonitor {
@@ -97,6 +99,7 @@ func NewProcessMonitor(pid int, devices []specs.LinuxDeviceCgroup, gpuDeviceIds 
 func (m *ProcessMonitor) Prime() {
 	if processes, err := m.findProcesses(); err == nil {
 		_, _ = m.fetchIO(processes)
+		_ = m.fetchCPU(processes)
 	}
 	_, _ = m.fetchNetworkIO()
 }
@@ -215,16 +218,34 @@ func (m *ProcessMonitor) fetchIO(processes []*process.Process) (*process.IOCount
 	return &deltaIO, nil
 }
 
+// fetchCPU returns the millicores consumed by the process tree since the
+// previous sample, so bursts and idle periods show up instead of being
+// smoothed into a lifetime average.
 func (m *ProcessMonitor) fetchCPU(processes []*process.Process) float64 {
-	millicores := 0.0
+	cpuSeconds := 0.0
 	for _, p := range processes {
-		cpuPercent, err := p.CPUPercent()
+		times, err := p.Times()
 		if err != nil {
 			continue
 		}
-		millicores += (cpuPercent / 100.0) * 1000.0
+		cpuSeconds += times.User + times.System
 	}
-	return millicores
+	return m.cpuMillicores(cpuSeconds, time.Now())
+}
+
+// cpuMillicores converts the cumulative CPU seconds of the process tree into
+// millicores over the interval since the previous call. The first call only
+// records the baseline and reports 0; a drop in cumulative time (a child
+// process exited) also reports 0 rather than a negative rate.
+func (m *ProcessMonitor) cpuMillicores(cpuSeconds float64, now time.Time) float64 {
+	previousSeconds, previousAt := m.lastCPUSeconds, m.lastCPUSampledAt
+	m.lastCPUSeconds, m.lastCPUSampledAt = cpuSeconds, now
+
+	elapsed := now.Sub(previousAt).Seconds()
+	if previousAt.IsZero() || elapsed <= 0 || cpuSeconds < previousSeconds {
+		return 0
+	}
+	return (cpuSeconds - previousSeconds) / elapsed * 1000
 }
 
 func (m *ProcessMonitor) fetchMemory(processes []*process.Process) *process.MemoryInfoStat {

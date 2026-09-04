@@ -3,6 +3,7 @@ package worker
 import (
 	"os"
 	"testing"
+	"time"
 
 	gopsutilnet "github.com/shirou/gopsutil/v4/net"
 	"github.com/shirou/gopsutil/v4/process"
@@ -18,6 +19,42 @@ func TestProcessTreeIncludesRootProcess(t *testing.T) {
 
 	require.NotEmpty(t, processes)
 	require.Equal(t, int32(os.Getpid()), processes[0].Pid)
+}
+
+func TestCPUMillicoresUsesIntervalDelta(t *testing.T) {
+	start := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+	// A process that has been alive for an hour but only used 10 CPU seconds
+	// in total has a lifetime average of ~3 millicores; that must not leak
+	// into the interval measurement.
+	tests := []struct {
+		name         string
+		cpuSeconds   []float64
+		want         []float64
+		intervalSecs float64
+	}{
+		{
+			name:         "half a core over three seconds",
+			cpuSeconds:   []float64{10, 11.5, 11.5, 14.5},
+			intervalSecs: 3,
+			want:         []float64{0, 500, 0, 1000},
+		},
+		{
+			name:         "child exit drops cumulative time",
+			cpuSeconds:   []float64{10, 4, 4.3},
+			intervalSecs: 3,
+			want:         []float64{0, 0, 100},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			monitor := NewProcessMonitor(0, nil, nil)
+			for i, cpuSeconds := range tt.cpuSeconds {
+				now := start.Add(time.Duration(float64(i)*tt.intervalSecs) * time.Second)
+				require.InDelta(t, tt.want[i], monitor.cpuMillicores(cpuSeconds, now), 0.01, "sample %d", i)
+			}
+		})
+	}
 }
 
 func TestProcessIODeltaDoesNotUnderflow(t *testing.T) {

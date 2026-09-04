@@ -1,0 +1,28 @@
+# Staging validation: swap the beta9-gateway deployment on eks-stage-01 for a
+# CI-built image of this branch, driven by hack/stage/config.stage.yaml (a copy
+# of the live secret with worker.imageTag pointed at the matching worker build).
+# No hot reload: the release image has no module cache for private modules.
+#
+#   okteto context use arn:aws:eks:us-east-1:683656326989:cluster/eks-stage-01 --namespace beta9
+#   GATEWAY_TAG=perf-startup-9b71dbb7 okteto up --file hack/okteto.stage.yaml
+#   okteto down --file hack/okteto.stage.yaml   # restores the original deployment
+#
+# The gateway logs to the container's stdout rather than the okteto PTY: once
+# the local `okteto up` detaches nothing drains the PTY, its buffer fills, and
+# every request that logs blocks behind the write. `kubectl logs` shows them.
+dev:
+  beta9-gateway:
+    image: public.ecr.aws/n4e0e1y0/beta9-gateway:${GATEWAY_TAG}
+    command:
+    - sh
+    - -c
+    - exec /usr/local/bin/gateway >/proc/1/fd/1 2>&1
+    sync:
+    - stage:/workspace
+    environment:
+      CONFIG_PATH: /workspace/config.stage.yaml
+    forward:
+    - 11993:1993
+    - 11994:1994
+    persistentVolume:
+      enabled: false

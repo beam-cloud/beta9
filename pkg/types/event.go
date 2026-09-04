@@ -997,6 +997,7 @@ type MetricsAggregationBucket struct {
 	KeyAsString             string        `json:"key_as_string"`
 	DocCount                int           `json:"doc_count"`
 	ContainerCount          MetricAverage `json:"container_count"`
+	ContainerSeconds        MetricAverage `json:"container_seconds"`
 	CPUConcurrency          MetricAverage `json:"cpu_concurrency"`
 	GPUConcurrency          MetricAverage `json:"gpu_concurrency"`
 	DiskReadBytesRateAvg    MetricAverage `json:"disk_read_bytes_per_second_avg"`
@@ -1006,11 +1007,14 @@ type MetricsAggregationBucket struct {
 	CPUPercentAvg           MetricAverage `json:"cpu_pct_avg"`
 	CPUTotalAvg             MetricAverage `json:"cpu_total_avg"`
 	CPUUsedAvg              MetricAverage `json:"cpu_used_avg"`
+	CPUUsedTotal            MetricAverage `json:"cpu_used_total"`
 	DiskReadBytesAvg        MetricAverage `json:"disk_read_bytes_avg"`
 	DiskWriteBytesAvg       MetricAverage `json:"disk_write_bytes_avg"`
 	GPUMemoryTotalBytesAvg  MetricAverage `json:"gpu_memory_total_bytes_avg"`
 	GPUMemoryUsedBytesAvg   MetricAverage `json:"gpu_memory_used_bytes_avg"`
+	GPUMemoryUsedBytesTotal MetricAverage `json:"gpu_memory_used_bytes_total"`
 	MemoryRSSBytesAvg       MetricAverage `json:"memory_rss_bytes_avg"`
+	MemoryRSSBytesTotal     MetricAverage `json:"memory_rss_bytes_total"`
 	MemoryTotalBytesAvg     MetricAverage `json:"memory_total_bytes_avg"`
 	MemoryVMSBytesAvg       MetricAverage `json:"memory_vms_bytes_avg"`
 	MemorySwapBytesAvg      MetricAverage `json:"memory_swap_bytes_avg"`

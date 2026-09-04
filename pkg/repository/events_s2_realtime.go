@@ -529,23 +529,27 @@ func metricAttrUint(attrs map[string]string, key string) uint32 {
 func (r *S2EventRepository) getMetricsTimeseries(ctx context.Context, streamName s2.StreamName, start time.Time, end time.Time, interval string, query types.EventQuery) (*types.MetricsTimeseriesResponse, error) {
 	response := &types.MetricsTimeseriesResponse{}
 	buckets := map[int64]*metricsBucketAccumulator{}
-	seqNum := uint64(0)
 	startMs := uint64(start.UTC().UnixMilli())
 	endMs := uint64(end.UTC().UnixMilli())
+	startSeq, endSeq, err := r.metricsScanRange(ctx, streamName, startMs, endMs)
+	if err != nil {
+		if isS2ReadEmpty(err) {
+			return response, nil
+		}
+		return nil, fmt.Errorf("position metrics scan on s2 stream %q: %w", streamName, err)
+	}
+	if startSeq >= endSeq {
+		return response, nil
+	}
+	seqNum, truncated := metricsScanStart(startSeq, endSeq)
 	scanBudget := s2MetricsScanBudget(s2ReadScanLimit)
 	for scanBudget > 0 {
 		readLimit := scanBudget.readLimit()
-		opts := &s2.ReadOptions{
+		batch, err := r.basin.Stream(streamName).Read(ctx, &s2.ReadOptions{
 			SeqNum: &seqNum,
 			Count:  countOption(readLimit),
 			Until:  &endMs,
-		}
-		if seqNum == 0 {
-			opts.Timestamp = &startMs
-			opts.SeqNum = nil
-		}
-
-		batch, err := r.basin.Stream(streamName).Read(ctx, opts)
+		})
 		if err != nil {
 			if isS2ReadEmpty(err) {
 				break
@@ -577,7 +581,7 @@ func (r *S2EventRepository) getMetricsTimeseries(ctx context.Context, streamName
 				acc = &metricsBucketAccumulator{key: key}
 				buckets[key] = acc
 			}
-			acc.add(metrics)
+			acc.add(metrics, eventTime)
 		}
 
 		last := batch.Records[len(batch.Records)-1]
@@ -598,7 +602,48 @@ func (r *S2EventRepository) getMetricsTimeseries(ctx context.Context, streamName
 		response.Timeseries.AggregationBuckets = append(response.Timeseries.AggregationBuckets, buckets[key].bucket())
 	}
 	response.ScannedRecords, response.Truncated = scanBudget.state()
+	response.Truncated = response.Truncated || truncated
 	return response, nil
+}
+
+// metricsScanRange resolves the sequence numbers bounding records with S2
+// timestamps in [startMs, endMs). endSeq is the stream tail when no record is
+// at or past endMs yet.
+func (r *S2EventRepository) metricsScanRange(ctx context.Context, streamName s2.StreamName, startMs, endMs uint64) (uint64, uint64, error) {
+	stream := r.basin.Stream(streamName)
+	one, clamp := uint64(1), true
+	first, err := stream.Read(ctx, &s2.ReadOptions{Timestamp: &startMs, Count: &one, Clamp: &clamp})
+	if err != nil {
+		return 0, 0, err
+	}
+	if len(first.Records) == 0 {
+		return 0, 0, nil
+	}
+	startSeq := first.Records[0].SeqNum
+
+	last, err := stream.Read(ctx, &s2.ReadOptions{Timestamp: &endMs, Count: &one, Clamp: &clamp})
+	if err == nil && len(last.Records) > 0 {
+		return startSeq, max(startSeq, last.Records[0].SeqNum), nil
+	}
+	if err != nil && !isS2RangeNotSatisfiable(err) {
+		return 0, 0, err
+	}
+	tail, err := stream.CheckTail(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	return startSeq, max(startSeq, tail.Tail.SeqNum), nil
+}
+
+// metricsScanStart returns the sequence number the scan begins at and whether
+// records were dropped. When [startSeq, endSeq) holds more records than the
+// scan budget, the scan starts late so the oldest records are dropped and the
+// newest are kept.
+func metricsScanStart(startSeq, endSeq uint64) (uint64, bool) {
+	if endSeq-startSeq > s2ReadScanLimit {
+		return endSeq - s2ReadScanLimit, true
+	}
+	return startSeq, false
 }
 
 func (r *S2EventRepository) resolveLogStreams(query types.LogQuery) ([]s2.StreamName, error) {
@@ -1071,12 +1116,35 @@ func metricsBucketKey(t time.Time, interval string) int64 {
 	}
 }
 
+// metricsBucketAccumulator aggregates the container metric samples that fall
+// into one bucket. Samples are first attributed to their container so that a
+// container sampled more often does not outweigh the others:
+//
+//   - *_avg is the mean across containers of each container's mean within the
+//     bucket; *_total is the sum of those per-container means. GPU memory only
+//     spans containers that have a GPU or reported GPU memory.
+//   - *_per_second_avg sums each container's mean rate. A sample's rate uses
+//     its reported interval, falling back to the gap to the adjacent sample
+//     of the same container; a sample with neither contributes no rate.
+//   - container_count, cpu_concurrency and gpu_concurrency are the peak
+//     number of containers (or of their allocated millicores / GPUs) alive at
+//     the same instant, where a container is alive from its first to its
+//     last sample in the bucket. container_seconds is the sampled time summed
+//     over containers, so container_seconds / bucket width is the mean
+//     concurrency.
 type metricsBucketAccumulator struct {
-	key   int64
-	count int
+	key        int64
+	count      int
+	containers map[string]*containerMetricsAccumulator
+}
 
-	containerResources map[string]containerResourceSample
-	containerIORates   map[string]*containerIORateAccumulator
+type containerMetricsAccumulator struct {
+	first, last   time.Time
+	count         int
+	rateCount     int
+	seconds       float64
+	cpuMillicores float64
+	gpuCount      float64
 
 	cpuPct             float64
 	cpuTotal           float64
@@ -1099,134 +1167,166 @@ type metricsBucketAccumulator struct {
 	networkPacketsSent float64
 }
 
-type containerResourceSample struct {
-	cpuMillicores float64
-	gpuCount      float64
-}
-
-type containerIORateAccumulator struct {
-	count           int
-	diskReadRate    float64
-	diskWriteRate   float64
-	networkRecvRate float64
-	networkSentRate float64
-}
-
-func (a *metricsBucketAccumulator) add(sample types.EventContainerMetricsSchema) {
+func (a *metricsBucketAccumulator) add(sample types.EventContainerMetricsSchema, at time.Time) {
 	metrics := sample.ContainerMetrics
-	sampleSeconds := metricSampleSeconds(metrics)
-	diskReadRate := float64(metrics.DiskReadBytes) / sampleSeconds
-	diskWriteRate := float64(metrics.DiskWriteBytes) / sampleSeconds
-	networkRecvRate := float64(metrics.NetworkBytesRecv) / sampleSeconds
-	networkSentRate := float64(metrics.NetworkBytesSent) / sampleSeconds
-	a.count++
-	if sample.ContainerID != "" {
-		if a.containerResources == nil {
-			a.containerResources = map[string]containerResourceSample{}
-		}
-		cpu := float64(sample.CPU)
-		if cpu == 0 {
-			cpu = float64(metrics.CPUTotal)
-		}
-		a.containerResources[sample.ContainerID] = containerResourceSample{
-			cpuMillicores: cpu,
-			gpuCount:      float64(sample.GPUCount),
-		}
-		if a.containerIORates == nil {
-			a.containerIORates = map[string]*containerIORateAccumulator{}
-		}
-		rate := a.containerIORates[sample.ContainerID]
-		if rate == nil {
-			rate = &containerIORateAccumulator{}
-			a.containerIORates[sample.ContainerID] = rate
-		}
-		rate.count++
-		rate.diskReadRate += diskReadRate
-		rate.diskWriteRate += diskWriteRate
-		rate.networkRecvRate += networkRecvRate
-		rate.networkSentRate += networkSentRate
+	if a.containers == nil {
+		a.containers = map[string]*containerMetricsAccumulator{}
 	}
-	a.cpuPct += float64(metrics.CPUPercent)
-	a.cpuTotal += float64(metrics.CPUTotal)
-	a.cpuUsed += float64(metrics.CPUUsed)
-	a.diskReadBytes += float64(metrics.DiskReadBytes)
-	a.diskWriteBytes += float64(metrics.DiskWriteBytes)
-	a.diskReadRate += diskReadRate
-	a.diskWriteRate += diskWriteRate
-	a.gpuMemoryTotal += float64(metrics.GPUMemoryTotal)
-	a.gpuMemoryUsed += float64(metrics.GPUMemoryUsed)
-	a.memoryRSS += float64(metrics.MemoryRSS)
-	a.memoryTotal += float64(metrics.MemoryTotal)
-	a.memoryVMS += float64(metrics.MemoryVMS)
-	a.memorySwap += float64(metrics.MemorySwap)
-	a.networkBytesRecv += float64(metrics.NetworkBytesRecv)
-	a.networkBytesSent += float64(metrics.NetworkBytesSent)
-	a.networkRecvRate += networkRecvRate
-	a.networkSentRate += networkSentRate
-	a.networkPacketsRecv += float64(metrics.NetworkPacketsRecv)
-	a.networkPacketsSent += float64(metrics.NetworkPacketsSent)
+	c := a.containers[sample.ContainerID]
+	if c == nil {
+		c = &containerMetricsAccumulator{first: at, last: at}
+		a.containers[sample.ContainerID] = c
+	}
+	seconds := metricSampleSeconds(metrics, c, at)
+	if at.Before(c.first) {
+		c.first = at
+	}
+	if at.After(c.last) {
+		c.last = at
+	}
+
+	a.count++
+	c.count++
+	c.seconds += seconds
+	c.cpuMillicores = float64(sample.CPU)
+	if c.cpuMillicores == 0 {
+		c.cpuMillicores = float64(metrics.CPUTotal)
+	}
+	c.gpuCount = float64(sample.GPUCount)
+	if seconds > 0 {
+		c.rateCount++
+		c.diskReadRate += float64(metrics.DiskReadBytes) / seconds
+		c.diskWriteRate += float64(metrics.DiskWriteBytes) / seconds
+		c.networkRecvRate += float64(metrics.NetworkBytesRecv) / seconds
+		c.networkSentRate += float64(metrics.NetworkBytesSent) / seconds
+	}
+	c.cpuPct += float64(metrics.CPUPercent)
+	c.cpuTotal += float64(metrics.CPUTotal)
+	c.cpuUsed += float64(metrics.CPUUsed)
+	c.diskReadBytes += float64(metrics.DiskReadBytes)
+	c.diskWriteBytes += float64(metrics.DiskWriteBytes)
+	c.gpuMemoryTotal += float64(metrics.GPUMemoryTotal)
+	c.gpuMemoryUsed += float64(metrics.GPUMemoryUsed)
+	c.memoryRSS += float64(metrics.MemoryRSS)
+	c.memoryTotal += float64(metrics.MemoryTotal)
+	c.memoryVMS += float64(metrics.MemoryVMS)
+	c.memorySwap += float64(metrics.MemorySwap)
+	c.networkBytesRecv += float64(metrics.NetworkBytesRecv)
+	c.networkBytesSent += float64(metrics.NetworkBytesSent)
+	c.networkPacketsRecv += float64(metrics.NetworkPacketsRecv)
+	c.networkPacketsSent += float64(metrics.NetworkPacketsSent)
 }
 
-func metricSampleSeconds(metrics types.EventContainerMetricsData) float64 {
-	if metrics.SampleIntervalMs <= 0 {
-		return 1
+// metricSampleSeconds returns the wall time a sample covers: its reported
+// interval, else the gap to the container's adjacent sample in the bucket,
+// else 0 when there is nothing to derive it from.
+func metricSampleSeconds(metrics types.EventContainerMetricsData, c *containerMetricsAccumulator, at time.Time) float64 {
+	if metrics.SampleIntervalMs > 0 {
+		return float64(metrics.SampleIntervalMs) / 1000
 	}
-	return float64(metrics.SampleIntervalMs) / 1000
+	if c.count == 0 {
+		return 0
+	}
+	return min(at.Sub(c.first).Abs(), at.Sub(c.last).Abs()).Seconds()
+}
+
+// sumContainerMeans sums value/count over containers with a non-zero count
+// and returns the sum and the number of containers included.
+func (a *metricsBucketAccumulator) sumContainerMeans(count func(*containerMetricsAccumulator) int, value func(*containerMetricsAccumulator) float64) (float64, int) {
+	sum, included := 0.0, 0
+	for _, c := range a.containers {
+		if n := count(c); n > 0 {
+			sum += value(c) / float64(n)
+			included++
+		}
+	}
+	return sum, included
+}
+
+// peakConcurrency returns the largest weight summed over containers alive at
+// the same instant.
+func (a *metricsBucketAccumulator) peakConcurrency(weight func(*containerMetricsAccumulator) float64) types.MetricAverage {
+	type edge struct {
+		at    time.Time
+		delta float64
+	}
+	edges := make([]edge, 0, 2*len(a.containers))
+	for _, c := range a.containers {
+		edges = append(edges, edge{c.first, weight(c)}, edge{c.last, -weight(c)})
+	}
+	// Starts sort before ends at the same instant: a sample covers the interval
+	// leading up to it, so two containers sampled at the same time overlap.
+	sort.Slice(edges, func(i, j int) bool {
+		if edges[i].at.Equal(edges[j].at) {
+			return edges[i].delta > edges[j].delta
+		}
+		return edges[i].at.Before(edges[j].at)
+	})
+	current, peak := 0.0, 0.0
+	for _, e := range edges {
+		current += e.delta
+		peak = max(peak, current)
+	}
+	return types.MetricAverage{Value: peak}
 }
 
 func (a *metricsBucketAccumulator) bucket() types.MetricsAggregationBucket {
-	avg := func(total float64) types.MetricAverage {
-		if a.count == 0 {
+	samples := func(c *containerMetricsAccumulator) int { return c.count }
+	rateSamples := func(c *containerMetricsAccumulator) int { return c.rateCount }
+	gpuSamples := func(c *containerMetricsAccumulator) int {
+		if c.gpuCount > 0 || c.gpuMemoryUsed > 0 {
+			return c.count
+		}
+		return 0
+	}
+	total := func(count func(*containerMetricsAccumulator) int, value func(*containerMetricsAccumulator) float64) types.MetricAverage {
+		sum, _ := a.sumContainerMeans(count, value)
+		return types.MetricAverage{Value: sum}
+	}
+	avg := func(count func(*containerMetricsAccumulator) int, value func(*containerMetricsAccumulator) float64) types.MetricAverage {
+		sum, included := a.sumContainerMeans(count, value)
+		if included == 0 {
 			return types.MetricAverage{}
 		}
-		return types.MetricAverage{Value: total / float64(a.count)}
+		return types.MetricAverage{Value: sum / float64(included)}
 	}
-	resourceTotal := func(selector func(containerResourceSample) float64) types.MetricAverage {
-		total := 0.0
-		for _, resource := range a.containerResources {
-			total += selector(resource)
-		}
-		return types.MetricAverage{Value: total}
-	}
-	ioRateTotal := func(fallbackTotal float64, selector func(*containerIORateAccumulator) float64) types.MetricAverage {
-		if len(a.containerIORates) == 0 {
-			return avg(fallbackTotal)
-		}
-		total := 0.0
-		for _, rate := range a.containerIORates {
-			if rate.count == 0 {
-				continue
-			}
-			total += selector(rate) / float64(rate.count)
-		}
-		return types.MetricAverage{Value: total}
+	cpuUsed := func(c *containerMetricsAccumulator) float64 { return c.cpuUsed }
+	memoryRSS := func(c *containerMetricsAccumulator) float64 { return c.memoryRSS }
+	gpuMemoryUsed := func(c *containerMetricsAccumulator) float64 { return c.gpuMemoryUsed }
+	seconds := 0.0
+	for _, c := range a.containers {
+		seconds += c.seconds
 	}
 	return types.MetricsAggregationBucket{
 		Key:                     a.key,
 		KeyAsString:             time.UnixMilli(a.key).UTC().Format(time.RFC3339),
 		DocCount:                a.count,
-		ContainerCount:          types.MetricAverage{Value: float64(len(a.containerResources))},
-		CPUConcurrency:          resourceTotal(func(resource containerResourceSample) float64 { return resource.cpuMillicores }),
-		GPUConcurrency:          resourceTotal(func(resource containerResourceSample) float64 { return resource.gpuCount }),
-		DiskReadBytesRateAvg:    ioRateTotal(a.diskReadRate, func(rate *containerIORateAccumulator) float64 { return rate.diskReadRate }),
-		DiskWriteBytesRateAvg:   ioRateTotal(a.diskWriteRate, func(rate *containerIORateAccumulator) float64 { return rate.diskWriteRate }),
-		NetworkRecvBytesRateAvg: ioRateTotal(a.networkRecvRate, func(rate *containerIORateAccumulator) float64 { return rate.networkRecvRate }),
-		NetworkSentBytesRateAvg: ioRateTotal(a.networkSentRate, func(rate *containerIORateAccumulator) float64 { return rate.networkSentRate }),
-		CPUPercentAvg:           avg(a.cpuPct),
-		CPUTotalAvg:             avg(a.cpuTotal),
-		CPUUsedAvg:              avg(a.cpuUsed),
-		DiskReadBytesAvg:        avg(a.diskReadBytes),
-		DiskWriteBytesAvg:       avg(a.diskWriteBytes),
-		GPUMemoryTotalBytesAvg:  avg(a.gpuMemoryTotal),
-		GPUMemoryUsedBytesAvg:   avg(a.gpuMemoryUsed),
-		MemoryRSSBytesAvg:       avg(a.memoryRSS),
-		MemoryTotalBytesAvg:     avg(a.memoryTotal),
-		MemoryVMSBytesAvg:       avg(a.memoryVMS),
-		MemorySwapBytesAvg:      avg(a.memorySwap),
-		NetworkRecvBytesAvg:     avg(a.networkBytesRecv),
-		NetworkSentBytesAvg:     avg(a.networkBytesSent),
-		NetworkRecvPacketsAvg:   avg(a.networkPacketsRecv),
-		NetworkSentPacketsAvg:   avg(a.networkPacketsSent),
+		ContainerCount:          a.peakConcurrency(func(*containerMetricsAccumulator) float64 { return 1 }),
+		ContainerSeconds:        types.MetricAverage{Value: seconds},
+		CPUConcurrency:          a.peakConcurrency(func(c *containerMetricsAccumulator) float64 { return c.cpuMillicores }),
+		GPUConcurrency:          a.peakConcurrency(func(c *containerMetricsAccumulator) float64 { return c.gpuCount }),
+		DiskReadBytesRateAvg:    total(rateSamples, func(c *containerMetricsAccumulator) float64 { return c.diskReadRate }),
+		DiskWriteBytesRateAvg:   total(rateSamples, func(c *containerMetricsAccumulator) float64 { return c.diskWriteRate }),
+		NetworkRecvBytesRateAvg: total(rateSamples, func(c *containerMetricsAccumulator) float64 { return c.networkRecvRate }),
+		NetworkSentBytesRateAvg: total(rateSamples, func(c *containerMetricsAccumulator) float64 { return c.networkSentRate }),
+		CPUPercentAvg:           avg(samples, func(c *containerMetricsAccumulator) float64 { return c.cpuPct }),
+		CPUTotalAvg:             avg(samples, func(c *containerMetricsAccumulator) float64 { return c.cpuTotal }),
+		CPUUsedAvg:              avg(samples, cpuUsed),
+		CPUUsedTotal:            total(samples, cpuUsed),
+		DiskReadBytesAvg:        avg(samples, func(c *containerMetricsAccumulator) float64 { return c.diskReadBytes }),
+		DiskWriteBytesAvg:       avg(samples, func(c *containerMetricsAccumulator) float64 { return c.diskWriteBytes }),
+		GPUMemoryTotalBytesAvg:  avg(gpuSamples, func(c *containerMetricsAccumulator) float64 { return c.gpuMemoryTotal }),
+		GPUMemoryUsedBytesAvg:   avg(gpuSamples, gpuMemoryUsed),
+		GPUMemoryUsedBytesTotal: total(gpuSamples, gpuMemoryUsed),
+		MemoryRSSBytesAvg:       avg(samples, memoryRSS),
+		MemoryRSSBytesTotal:     total(samples, memoryRSS),
+		MemoryTotalBytesAvg:     avg(samples, func(c *containerMetricsAccumulator) float64 { return c.memoryTotal }),
+		MemoryVMSBytesAvg:       avg(samples, func(c *containerMetricsAccumulator) float64 { return c.memoryVMS }),
+		MemorySwapBytesAvg:      avg(samples, func(c *containerMetricsAccumulator) float64 { return c.memorySwap }),
+		NetworkRecvBytesAvg:     avg(samples, func(c *containerMetricsAccumulator) float64 { return c.networkBytesRecv }),
+		NetworkSentBytesAvg:     avg(samples, func(c *containerMetricsAccumulator) float64 { return c.networkBytesSent }),
+		NetworkRecvPacketsAvg:   avg(samples, func(c *containerMetricsAccumulator) float64 { return c.networkPacketsRecv }),
+		NetworkSentPacketsAvg:   avg(samples, func(c *containerMetricsAccumulator) float64 { return c.networkPacketsSent }),
 	}
 }
 

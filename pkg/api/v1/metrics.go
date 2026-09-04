@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -58,7 +59,7 @@ func (g *MetricsGroup) GetStubMetricTimeseries(ctx echo.Context) error {
 		return HTTPNotFound()
 	}
 
-	start, end, interval, err := metricRangeFromContext(ctx, "1h")
+	start, end, interval, err := containerMetricRangeFromContext(ctx, "1h")
 	if err != nil {
 		return HTTPBadRequest(err.Error())
 	}
@@ -90,7 +91,7 @@ func (g *MetricsGroup) GetWorkspaceMetricTimeseries(ctx echo.Context) error {
 		return HTTPNotFound()
 	}
 
-	start, end, interval, err := metricRangeFromContext(ctx, "1m")
+	start, end, interval, err := containerMetricRangeFromContext(ctx, "1m")
 	if err != nil {
 		return HTTPBadRequest(err.Error())
 	}
@@ -206,6 +207,21 @@ func metricRangeFromContext(ctx echo.Context, defaultInterval string) (time.Time
 		interval = defaultInterval
 	}
 	return start, end, interval, nil
+}
+
+// containerMetricRangeFromContext additionally restricts the interval to the
+// buckets the container metrics aggregation supports.
+func containerMetricRangeFromContext(ctx echo.Context, defaultInterval string) (time.Time, time.Time, string, error) {
+	start, end, interval, err := metricRangeFromContext(ctx, defaultInterval)
+	if err != nil {
+		return start, end, interval, err
+	}
+	switch strings.ToLower(interval) {
+	case "1m", "minute", "1h", "hour":
+		return start, end, interval, nil
+	default:
+		return time.Time{}, time.Time{}, "", errors.New("Invalid metrics interval")
+	}
 }
 
 func (g *MetricsGroup) StreamStubMetrics(ctx echo.Context) error {
