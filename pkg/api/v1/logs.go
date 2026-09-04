@@ -3,7 +3,6 @@ package apiv1
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -90,23 +89,8 @@ func (g *LogGroup) StreamLogs(ctx echo.Context) error {
 }
 
 func writeLogStream(ctx echo.Context, stream repository.EventStream) error {
-	response := ctx.Response()
-	response.Header().Set("Content-Type", "text/event-stream")
-	response.Header().Set("Cache-Control", "no-cache")
-	response.Header().Set("Connection", "keep-alive")
-	response.WriteHeader(http.StatusOK)
-
-	flusher, _ := response.Writer.(http.Flusher)
-	if _, err := fmt.Fprint(response.Writer, ": connected\n\n"); err != nil {
-		return nil
-	}
-	if flusher != nil {
-		flusher.Flush()
-	}
-
-	for stream.Next() {
-		record := stream.Record()
-		logRecord := types.LogRecord{
+	return streamSSE(ctx, stream, func(record types.ContainerEventRecord) (string, []byte, bool) {
+		payload, err := json.Marshal(types.LogRecord{
 			SeqNum:      record.SeqNum,
 			StoredAtNs:  record.StoredAtNs,
 			Timestamp:   record.Timestamp,
@@ -124,26 +108,9 @@ func writeLogStream(ctx echo.Context, stream repository.EventStream) error {
 			ProcessArgs: record.ProcessArgs,
 			ProcessCwd:  record.ProcessCwd,
 			ProcessSeq:  record.ProcessSeq,
-		}
-		payload, err := json.Marshal(logRecord)
-		if err != nil {
-			continue
-		}
-		if err := writeSSEEvent(response.Writer, "log", strconv.FormatUint(record.SeqNum, 10), payload); err != nil {
-			return nil
-		}
-		if flusher != nil {
-			flusher.Flush()
-		}
-	}
-	if err := stream.Err(); err != nil && ctx.Request().Context().Err() == nil {
-		payload, _ := json.Marshal(map[string]string{"error": err.Error()})
-		_ = writeSSEEvent(response.Writer, "error", "", payload)
-		if flusher != nil {
-			flusher.Flush()
-		}
-	}
-	return nil
+		})
+		return "log", payload, err == nil
+	})
 }
 
 func (g *LogGroup) logQueryFromContext(ctx echo.Context) (types.LogQuery, error) {
