@@ -96,7 +96,7 @@ func (b *layeredBuild) execute() (upperDir string, err error) {
 	if b.c.config.ImageService.BuildRegistryInsecure {
 		fromArgs = append(fromArgs, "--tls-verify=false")
 	}
-	if authArgs := b.c.getBuildahAuthArgs(b.ctx, b.sourceImage, b.request.BuildOptions.SourceImageCreds); len(authArgs) > 0 {
+	if authArgs := b.c.buildahAuthArgs(b.ctx, b.request, b.sourceImage); len(authArgs) > 0 {
 		fromArgs = append(fromArgs, authArgs...)
 	}
 	fromArgs = append(fromArgs, b.fromRef)

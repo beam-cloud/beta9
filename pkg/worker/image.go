@@ -2147,6 +2147,31 @@ func (c *ImageClient) buildahEnv(runroot, tmpdir, storageConf string) []string {
 // getBuildahAuthArgs returns buildah authentication arguments from user-provided credentials
 // Expects credentials in username:password format (either directly or in JSON)
 // For ECR/GCR, users should pass pre-generated tokens, not raw AWS/GCP credentials
+// buildahAuthArgs resolves --creds for pulling imageRef: the request's source
+// image credentials when given, else whatever the gateway holds for that
+// registry. The latter is how a build whose FROM is an earlier beta9 image in
+// the build registry gets to pull it.
+func (c *ImageClient) buildahAuthArgs(ctx context.Context, request *types.ContainerRequest, imageRef string) []string {
+	if args := c.getBuildahAuthArgs(ctx, imageRef, request.BuildOptions.SourceImageCreds); len(args) > 0 {
+		return args
+	}
+	registry := imageRef
+	if i := strings.IndexByte(registry, '/'); i > 0 {
+		registry = registry[:i]
+	}
+	if registry == "localhost" || strings.HasPrefix(registry, "127.0.0.1") || !strings.ContainsAny(registry, ".:") {
+		return nil
+	}
+	creds := c.gatewayRegistryCredentials(ctx, registry, request)
+	if creds == "" {
+		return nil
+	}
+	if _, _, ok := strings.Cut(creds, ":"); ok && !strings.HasPrefix(creds, "{") {
+		return []string{"--creds", creds}
+	}
+	return c.getBuildahAuthArgs(ctx, imageRef, creds)
+}
+
 func (c *ImageClient) getBuildahAuthArgs(ctx context.Context, imageRef string, creds string) []string {
 	if creds == "" {
 		return nil
@@ -2493,7 +2518,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 			}
 
 			// Add credentials if provided
-			if authArgs := c.getBuildahAuthArgs(ctx, sourceImage, request.BuildOptions.SourceImageCreds); len(authArgs) > 0 {
+			if authArgs := c.buildahAuthArgs(ctx, request, sourceImage); len(authArgs) > 0 {
 				pullArgs = append(pullArgs, authArgs...)
 			}
 
@@ -2559,7 +2584,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	}
 
 	// Add credentials for multi-stage builds and private base images
-	if authArgs := c.getBuildahAuthArgs(ctx, sourceImage, request.BuildOptions.SourceImageCreds); len(authArgs) > 0 {
+	if authArgs := c.buildahAuthArgs(ctx, request, sourceImage); len(authArgs) > 0 {
 		budArgs = append(budArgs, authArgs...)
 	}
 

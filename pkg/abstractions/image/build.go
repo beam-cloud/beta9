@@ -57,6 +57,11 @@ type Build struct {
 	commands        []string
 	micromamba      bool
 	mounts          []types.Mount
+	// dockerfile and sourceImage, when set, replace the rendered Dockerfile
+	// and base image in the container request: the build starts from an
+	// already-built prefix of the Dockerfile (see build_prefix.go).
+	dockerfile  string
+	sourceImage string
 }
 
 func NewBuild(ctx context.Context, opts *BuildOpts, outputChan chan common.OutputMsg, config types.AppConfig) (*Build, error) {
@@ -298,12 +303,17 @@ func (b *Build) generateContainerRequest() (*types.ContainerRequest, error) {
 		sourceImage := getSourceImage(b.opts)
 		sourceImagePtr = &sourceImage
 	}
+	dockerfile := b.opts.Dockerfile
+	if b.dockerfile != "" {
+		dockerfile = b.dockerfile
+		sourceImagePtr = &b.sourceImage
+	}
 
 	req := &types.ContainerRequest{
 		BuildOptions: types.BuildOptions{
 			SourceImage:      sourceImagePtr,
 			SourceImageCreds: b.opts.BaseImageCreds,
-			Dockerfile:       &b.opts.Dockerfile,
+			Dockerfile:       &dockerfile,
 			BuildCtxObject:   &b.opts.BuildCtxObject,
 			BuildSecrets:     b.opts.BuildSecrets,
 		},
