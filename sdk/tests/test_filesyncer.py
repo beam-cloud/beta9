@@ -152,6 +152,28 @@ class TestIncrementalSync(TestCase):
         self.assertEqual(len(gw.created), 1, "no full upload")
         self.assertEqual(_SyncCache.load(self.root, []).object_id, "obj-2")
 
+    def test_same_root_with_other_include_patterns_is_a_delta_base(self):
+        """A build context synced with add_local_dir (include patterns) and the
+        same directory mounted with sync_local_dir (no patterns) are different
+        objects, but the second sync should only upload the files the first
+        one did not cover."""
+        gw = _FakeGateway()
+        syncer = FileSyncer(gateway_stub=gw, root_dir=str(self.root))
+        first = syncer.sync(include_patterns=["app/**"], cache_object_id=False)
+        self.assertTrue(first.success)
+        self.assertEqual(len(gw.created), 1)
+        self.assertEqual(self.puts[-1][1], [f"app/f{i}.bin" for i in range(5)])
+
+        result = self._sync(gw)
+        self.assertTrue(result.success)
+        self.assertEqual(result.object_id, "obj-2")
+        self.assertEqual(len(gw.created), 1, "no second full upload")
+        self.assertEqual(gw.deltas[0].base_object_id, "obj-1")
+        self.assertEqual(self.puts[-1][1], ["main.py"])
+        self.assertEqual(gw.commits[0].removed_paths, [])
+        self.assertEqual(_SyncCache.load(self.root, []).object_id, "obj-2")
+        self.assertEqual(_SyncCache.load(self.root, ["app/**"]).object_id, "obj-1")
+
     def test_missing_base_falls_back_to_full_upload(self):
         gw = _FakeGateway()
         self._sync(gw)

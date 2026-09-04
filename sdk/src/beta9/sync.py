@@ -447,10 +447,17 @@ class _SyncCache:
 
     VERSION = 1
 
-    def __init__(self, path: Path, object_id: str = "", manifest: Optional[_Manifest] = None):
+    def __init__(
+        self,
+        path: Path,
+        object_id: str = "",
+        manifest: Optional[_Manifest] = None,
+        root_dir: Optional[Path] = None,
+    ):
         self.path = path
         self.object_id = object_id
         self.manifest = manifest
+        self.root_dir = root_dir
 
     @classmethod
     def cache_dir(cls) -> Path:
@@ -458,16 +465,47 @@ class _SyncCache:
 
     @classmethod
     def load(cls, root_dir: Path, include_patterns: List[str]) -> "_SyncCache":
+        """Return the cache entry for this (root, include patterns) pair. If there
+        is none, fall back to the newest entry for the same root synced with
+        different patterns (e.g. a build context via add_local_dir, then the
+        same directory mounted with sync_local_dir): the file sets overlap
+        almost entirely, so it is a good delta base and its hashes are reusable.
+        The entry is still saved under this pair's own key."""
         key = hashlib.sha256(f"{root_dir}\0{'|'.join(include_patterns)}".encode()).hexdigest()[:32]
         path = cls.cache_dir() / f"{key}.json"
+        entry = cls._read(path)
+        if entry is not None:
+            return cls(path, entry["object_id"], _Manifest.from_json(entry["manifest"]), root_dir)
+
+        sibling = None
+        try:
+            candidates = sorted(
+                cls.cache_dir().glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True
+            )
+        except OSError:
+            candidates = []
+        for candidate in candidates:
+            if candidate == path:
+                continue
+            data = cls._read(candidate)
+            if data is not None and data.get("root_dir") == str(root_dir):
+                sibling = data
+                break
+        if sibling is not None:
+            return cls(path, sibling["object_id"], _Manifest.from_json(sibling["manifest"]), root_dir)
+        return cls(path, root_dir=root_dir)
+
+    @classmethod
+    def _read(cls, path: Path) -> Optional[dict]:
         try:
             with path.open() as f:
                 data = json.load(f)
             if data.get("version") == cls.VERSION and data.get("object_id"):
-                return cls(path, data["object_id"], _Manifest.from_json(data["manifest"]))
+                _Manifest.from_json(data["manifest"])
+                return data
         except (OSError, ValueError, KeyError, TypeError, IndexError):
             pass
-        return cls(path)
+        return None
 
     def save(self, object_id: str, manifest: _Manifest) -> None:
         self.object_id = object_id
@@ -480,6 +518,7 @@ class _SyncCache:
                     {
                         "version": self.VERSION,
                         "object_id": object_id,
+                        "root_dir": str(self.root_dir) if self.root_dir is not None else None,
                         "manifest": manifest.to_json(),
                     },
                     f,
