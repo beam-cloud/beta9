@@ -30,6 +30,31 @@ import (
 	"k8s.io/utils/cpuset"
 )
 
+func TestPruneUnreachableSDKMountsKeepsOnlyPresentSitePackages(t *testing.T) {
+	rootfs := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(rootfs, "usr/local/lib/python3.12/site-packages"), 0o755))
+
+	sdk := func(dest string) specs.Mount {
+		return specs.Mount{Destination: dest, Type: "bind", Source: sdkMountSource, Options: []string{"ro", "rbind"}}
+	}
+	other := specs.Mount{Destination: "/etc/hosts", Type: "bind", Source: "/tmp/hosts"}
+	mounts := []specs.Mount{
+		sdk("/usr/local/lib/python3.8/site-packages/beta9"),
+		sdk("/usr/local/lib/python3.12/site-packages/beta9"),
+		sdk("/usr/local/lib/python3.12/site-packages/beam"),
+		sdk("/opt/conda/lib/python3.12/site-packages/beta9"),
+		other,
+	}
+
+	kept := pruneUnreachableSDKMounts(mounts, rootfs)
+
+	require.Equal(t, []specs.Mount{
+		sdk("/usr/local/lib/python3.12/site-packages/beta9"),
+		sdk("/usr/local/lib/python3.12/site-packages/beam"),
+		other,
+	}, kept)
+}
+
 func TestWaitForRuntimeStartedDrainsQueuedPIDWhenRuntimeDone(t *testing.T) {
 	for i := 0; i < 1000; i++ {
 		runtimeStarted := make(chan int, 1)

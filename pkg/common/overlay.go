@@ -283,6 +283,11 @@ func (co *ContainerOverlay) ResetWithUpper(seed func(string) error) error {
 	return nil
 }
 
+// RootPath is the immutable image root under every layer.
+func (co *ContainerOverlay) RootPath() string {
+	return co.root
+}
+
 func (co *ContainerOverlay) TopLayerPath() string {
 	if len(co.layers) == 0 {
 		return co.root

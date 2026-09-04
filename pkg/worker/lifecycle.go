@@ -1465,6 +1465,30 @@ func (s *Worker) enableVolumeCaching(request *types.ContainerRequest, volumeCach
 	}
 }
 
+// sdkMountSource is the host path the base OCI spec binds into every Python
+// site-packages location an image might have.
+const sdkMountSource = "/workspace/sdk"
+
+// pruneUnreachableSDKMounts drops the SDK binds whose site-packages directory
+// is absent from the image. The base spec lists one for every Python layout,
+// so most are dead for any given image, and each one still costs runc a
+// mkdir through the overlay and a mount under the kernel's global mount
+// lock, which serializes concurrent starts. imageRoot is the immutable image
+// filesystem, not the writable overlay, so a checkpoint and its restore see
+// the same mount set whatever the container wrote in between.
+func pruneUnreachableSDKMounts(mounts []specs.Mount, imageRoot string) []specs.Mount {
+	kept := mounts[:0:0]
+	for _, mount := range mounts {
+		if mount.Source == sdkMountSource {
+			if _, err := os.Stat(filepath.Join(imageRoot, filepath.Dir(mount.Destination))); err != nil {
+				continue
+			}
+		}
+		kept = append(kept, mount)
+	}
+	return kept
+}
+
 func (s *Worker) newSpecTemplate() (*specs.Spec, error) {
 	if s == nil || s.runtime == nil {
 		return nil, errors.New("container runtime is unavailable")
@@ -1622,6 +1646,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	spec.Root.Readonly = false
 	spec.Root.Path = containerInstance.Overlay.TopLayerPath()
+	spec.Mounts = pruneUnreachableSDKMounts(spec.Mounts, containerInstance.Overlay.RootPath())
 
 	// Network setup (a gateway round trip) and GPU assignment (device
 	// discovery) are independent until the spec is amended, so they overlap.
