@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/rs/zerolog/log"
@@ -33,6 +35,11 @@ const (
 	// those are for real attaches, and other workers on the same node share
 	// the pool.
 	spareDeviceReserve = 4
+	// spareSizesFile remembers the virtual sizes recently requested on this
+	// node so a restarted worker rebuilds its spares before the first attach
+	// instead of paying for one. Bounded to the few sizes a node really sees.
+	spareSizesFile = "spare-sizes"
+	spareSizesKept = 4
 )
 
 func isSpareKey(key string) bool { return strings.HasPrefix(key, sparePrefix) }
@@ -126,6 +133,33 @@ func (m *Manager) takeSpare(size int64) *Volume {
 	spare := pool[len(pool)-1]
 	m.spares[size] = pool[:len(pool)-1]
 	return spare
+}
+
+// rememberSpareSize records size in spareSizesFile, most recent first.
+func (m *Manager) rememberSpareSize(size int64) {
+	sizes := append([]int64{size}, slices.DeleteFunc(m.rememberedSpareSizes(), func(s int64) bool { return s == size })...)
+	if len(sizes) > spareSizesKept {
+		sizes = sizes[:spareSizesKept]
+	}
+	lines := make([]string, len(sizes))
+	for i, s := range sizes {
+		lines[i] = strconv.FormatInt(s, 10)
+	}
+	_ = os.WriteFile(filepath.Join(m.root, spareSizesFile), []byte(strings.Join(lines, "\n")+"\n"), 0o600)
+}
+
+func (m *Manager) rememberedSpareSizes() []int64 {
+	data, err := os.ReadFile(filepath.Join(m.root, spareSizesFile))
+	if err != nil {
+		return nil
+	}
+	var sizes []int64
+	for _, line := range strings.Fields(string(data)) {
+		if size, err := strconv.ParseInt(line, 10, 64); err == nil && size > 0 {
+			sizes = append(sizes, size)
+		}
+	}
+	return sizes
 }
 
 // replenishSpares tops the pool for size up to spareTarget in the background.

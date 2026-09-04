@@ -334,3 +334,31 @@ func TestResolveVolumeDirDropsDanglingIndex(t *testing.T) {
 		t.Fatal("dangling index must be removed")
 	}
 }
+
+func TestRecoverRebuildsSparesForRememberedSizes(t *testing.T) {
+	manager, host := newSpareTestManager(t)
+	ctx := context.Background()
+	if _, err := manager.Attach(ctx, AttachSpec{Key: "disk", VirtualSizeBytes: testSpareSize, Mountpoint: filepath.Join(manager.root, "mnt")}, nil); err != nil {
+		t.Fatal(err)
+	}
+	waitForSpares(t, manager, testSpareSize, spareTarget)
+	manager.rememberSpareSize(7)
+	manager.rememberSpareSize(testSpareSize) // re-recording moves it to the front
+	if got := manager.rememberedSpareSizes(); len(got) != 2 || got[0] != testSpareSize || got[1] != 7 {
+		t.Fatalf("remembered sizes = %v", got)
+	}
+	manager.Close(ctx)
+
+	// A restarted worker with the same root warms the pool during Recover.
+	restarted := &Manager{root: manager.root, binaries: manager.binaries, sysBlockPath: manager.sysBlockPath, devPath: manager.devPath,
+		run: manager.run, maxChainDepth: DefaultMaxChainDepth, volumes: map[string]*Volume{}, spares: map[int64][]*Volume{}, spareBuilds: map[int64]bool{}}
+	before := len(host.ran("mkfs.ext4"))
+	if err := restarted.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	waitForSpares(t, restarted, testSpareSize, spareTarget)
+	if len(host.ran("mkfs.ext4")) < before+spareTarget {
+		t.Fatalf("recover must build %d spares, ran %v", spareTarget, host.commands)
+	}
+	restarted.Close(ctx)
+}

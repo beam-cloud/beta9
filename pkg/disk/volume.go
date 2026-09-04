@@ -88,6 +88,7 @@ func (m *Manager) attach(ctx context.Context, spec AttachSpec, source ChunkSourc
 
 	fresh := state == nil && len(spec.Chain) == 0 && !spec.ReadOnly
 	if fresh {
+		m.rememberSpareSize(spec.VirtualSizeBytes)
 		defer m.replenishSpares(spec.VirtualSizeBytes)
 		if volume := m.adoptSpare(ctx, spec); volume != nil {
 			return volume, nil

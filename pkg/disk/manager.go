@@ -278,6 +278,14 @@ func (m *Manager) DetachAll(ctx context.Context) error {
 // volumes (daemon running and filesystem mounted) are adopted; everything
 // else is torn down. Layer files always stay behind for reuse.
 func (m *Manager) Recover(ctx context.Context) error {
+	// Spares for the sizes this node saw last time are built while the worker
+	// is still booting, so its first fresh attach adopts one.
+	defer func() {
+		for _, size := range m.rememberedSpareSizes() {
+			m.replenishSpares(size)
+		}
+	}()
+
 	volumesDir := filepath.Join(m.root, "volumes")
 	entries, err := os.ReadDir(volumesDir)
 	if err != nil {
