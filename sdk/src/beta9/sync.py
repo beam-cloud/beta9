@@ -492,7 +492,9 @@ class _SyncCache:
                 sibling = data
                 break
         if sibling is not None:
-            return cls(path, sibling["object_id"], _Manifest.from_json(sibling["manifest"]), root_dir)
+            return cls(
+                path, sibling["object_id"], _Manifest.from_json(sibling["manifest"]), root_dir
+            )
         return cls(path, root_dir=root_dir)
 
     @classmethod
