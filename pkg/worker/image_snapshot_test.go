@@ -10,6 +10,10 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/google/go-containerregistry/pkg/v1/layout"
+	"github.com/google/go-containerregistry/pkg/v1/mutate"
+	"github.com/google/go-containerregistry/pkg/v1/random"
+	"github.com/google/go-containerregistry/pkg/v1/tarball"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
 )
@@ -93,4 +97,43 @@ type writerBuffer struct{ data []byte }
 func (w *writerBuffer) Write(p []byte) (int, error) {
 	w.data = append(w.data, p...)
 	return len(p), nil
+}
+
+func TestWriteSparseOCILayoutHoldsManifestConfigAndOnlyTheNewLayer(t *testing.T) {
+	base, err := random.Image(1024, 2)
+	require.NoError(t, err)
+	dir := t.TempDir()
+	layerPath := filepath.Join(dir, "layer.tar.gz")
+	_, err = writeOverlayLayer(t.TempDir(), layerPath, filepath.Join(dir, "layer.tar"))
+	require.NoError(t, err)
+	layer, err := tarball.LayerFromFile(layerPath)
+	require.NoError(t, err)
+	img, err := mutate.AppendLayers(base, layer)
+	require.NoError(t, err)
+
+	layoutDir := filepath.Join(dir, "layout")
+	require.NoError(t, writeSparseOCILayout(layoutDir, img, layer, layerPath))
+
+	path, err := layout.FromPath(layoutDir)
+	require.NoError(t, err)
+	index, err := path.ImageIndex()
+	require.NoError(t, err)
+	manifest, err := index.IndexManifest()
+	require.NoError(t, err)
+	require.Len(t, manifest.Manifests, 1)
+	got, err := path.Image(manifest.Manifests[0].Digest)
+	require.NoError(t, err)
+	wantDigest, _ := img.Digest()
+	gotDigest, _ := got.Digest()
+	require.Equal(t, wantDigest, gotDigest)
+	layers, err := got.Layers()
+	require.NoError(t, err)
+	require.Len(t, layers, 3)
+	_, err = layers[2].Compressed() // the new layer's blob is present
+	require.NoError(t, err)
+	_, err = layers[0].Compressed() // base layer blobs are not
+	require.Error(t, err)
+	entries, err := os.ReadDir(filepath.Join(layoutDir, "blobs", "sha256"))
+	require.NoError(t, err)
+	require.Len(t, entries, 3)
 }

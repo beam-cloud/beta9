@@ -2,10 +2,12 @@ package worker
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -104,25 +106,38 @@ func (c *ImageClient) ArchiveLayer(ctx context.Context, request *types.Container
 	} else {
 		pushOpts = append(pushOpts, baseOpts...)
 	}
-	started = time.Now()
-	if err := remote.Write(targetRef, img, pushOpts...); err != nil {
-		return fmt.Errorf("push snapshot image %s: %w", imageTag, err)
-	}
-	pushed := time.Since(started)
-	report(60)
-
 	// The indexer resolves credentials and the content-cache routing key from
 	// the image id, so the new image has to be known before it is indexed.
 	c.v2ImageRefs.Set(imageId, imageTag)
 	snapshotRequest := *request
 	snapshotRequest.ImageId = imageId
 	archivePath := filepath.Join(tmpdir, fmt.Sprintf("%s.%s", imageId, c.registry.ImageFileExtension))
-	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
-	started = time.Now()
-	if err := c.createOCIImageWithProgress(ctx, quiet, &snapshotRequest, imageTag, "", archivePath, 2); err != nil {
-		return fmt.Errorf("index snapshot image: %w", err)
+
+	// Push and index run side by side. The index reads the image from a local
+	// layout that holds the manifest, the config and the new layer: the base
+	// layers are served by the layer index cache, so their blobs are never
+	// opened. Should that cache miss, the layout read fails and the image is
+	// indexed from the registry once the push has landed.
+	layoutDir := filepath.Join(tmpdir, "layout")
+	if err := writeSparseOCILayout(layoutDir, img, layer, layerPath); err != nil {
+		return err
 	}
+	started = time.Now()
+	pushErr := make(chan error, 1)
+	go func() { pushErr <- remote.Write(targetRef, img, pushOpts...) }()
+	indexErr := c.indexImage(ctx, &snapshotRequest, imageTag, layoutDir, archivePath)
 	indexed := time.Since(started)
+	if err := <-pushErr; err != nil {
+		return fmt.Errorf("push snapshot image %s: %w", imageTag, err)
+	}
+	pushed := time.Since(started)
+	if indexErr != nil {
+		log.Warn().Err(indexErr).Str("image_id", imageId).Msg("snapshot index from local layout failed, indexing from registry")
+		if indexErr = c.indexImage(ctx, &snapshotRequest, imageTag, "", archivePath); indexErr != nil {
+			return fmt.Errorf("index snapshot image: %w", indexErr)
+		}
+		indexed = time.Since(started)
+	}
 	report(90)
 
 	if err := c.registry.Push(ctx, archivePath, imageId); err != nil {
@@ -165,6 +180,73 @@ func (c *ImageClient) seedSnapshotLayer(ctx context.Context, request *types.Cont
 	if _, err := contentCache.StoreContentFromLocalPath(tarPath, tarHash, struct{ RoutingKey string }{RoutingKey: tarHash}); err != nil {
 		log.Warn().Err(err).Str("image_id", request.ImageId).Msg("snapshot layer not seeded in content cache")
 	}
+}
+
+// indexImage writes the clip index archive for imageTag, reading the image
+// from layoutDir when given and from the registry otherwise.
+func (c *ImageClient) indexImage(ctx context.Context, request *types.ContainerRequest, imageTag, layoutDir, archivePath string) error {
+	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
+	return c.createOCIImageWithProgress(ctx, quiet, request, imageTag, layoutDir, archivePath, 2)
+}
+
+// writeSparseOCILayout lays img out as an OCI image layout that carries only
+// the manifest, the config and the one layer whose compressed bytes are at
+// layerPath.
+func writeSparseOCILayout(dir string, img v1.Image, layer v1.Layer, layerPath string) error {
+	blobs := filepath.Join(dir, "blobs", "sha256")
+	if err := os.MkdirAll(blobs, 0o755); err != nil {
+		return err
+	}
+	writeBlob := func(data []byte) (v1.Hash, error) {
+		hash, _, err := v1.SHA256(bytes.NewReader(data))
+		if err != nil {
+			return hash, err
+		}
+		return hash, os.WriteFile(filepath.Join(blobs, hash.Hex), data, 0o644)
+	}
+	manifest, err := img.RawManifest()
+	if err != nil {
+		return err
+	}
+	manifestDigest, err := writeBlob(manifest)
+	if err != nil {
+		return err
+	}
+	config, err := img.RawConfigFile()
+	if err != nil {
+		return err
+	}
+	if _, err := writeBlob(config); err != nil {
+		return err
+	}
+	layerDigest, err := layer.Digest()
+	if err != nil {
+		return err
+	}
+	if err := os.Link(layerPath, filepath.Join(blobs, layerDigest.Hex)); err != nil {
+		return err
+	}
+	mediaType, err := img.MediaType()
+	if err != nil {
+		return err
+	}
+	index, err := json.Marshal(v1.IndexManifest{
+		SchemaVersion: 2,
+		MediaType:     ggcrtypes.OCIImageIndex,
+		Manifests: []v1.Descriptor{{
+			MediaType: mediaType,
+			Size:      int64(len(manifest)),
+			Digest:    manifestDigest,
+			Platform:  &v1.Platform{OS: "linux", Architecture: runtime.GOARCH},
+		}},
+	})
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "index.json"), index, 0o644); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, "oci-layout"), []byte(`{"imageLayoutVersion":"1.0.0"}`), 0o644)
 }
 
 func (c *ImageClient) buildRegistryNameOptions() []name.Option {
