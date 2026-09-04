@@ -2420,185 +2420,6 @@
         }
       }
     },
-    "gatewayAgentEventRecord": {
-      "type": "object",
-      "properties": {
-        "action": {
-          "type": "string"
-        },
-        "status": {
-          "type": "string"
-        },
-        "message": {
-          "type": "string"
-        },
-        "attrs": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          }
-        },
-        "timestampUnixNano": {
-          "type": "string",
-          "format": "int64"
-        },
-        "eventType": {
-          "type": "string"
-        }
-      }
-    },
-    "gatewayAgentLogRecord": {
-      "type": "object",
-      "properties": {
-        "source": {
-          "type": "string"
-        },
-        "workerId": {
-          "type": "string"
-        },
-        "level": {
-          "type": "string"
-        },
-        "stream": {
-          "type": "string"
-        },
-        "line": {
-          "type": "string"
-        },
-        "timestampUnixNano": {
-          "type": "string",
-          "format": "int64"
-        }
-      }
-    },
-    "gatewayAgentMetricSnapshot": {
-      "type": "object",
-      "properties": {
-        "timestampUnixNano": {
-          "type": "string",
-          "format": "int64"
-        },
-        "cpuUtilizationPct": {
-          "type": "number",
-          "format": "float"
-        },
-        "memoryUsedMb": {
-          "type": "string",
-          "format": "uint64"
-        },
-        "memoryTotalMb": {
-          "type": "string",
-          "format": "uint64"
-        },
-        "memoryUtilizationPct": {
-          "type": "number",
-          "format": "float"
-        },
-        "diskUsedMb": {
-          "type": "string",
-          "format": "uint64"
-        },
-        "diskTotalMb": {
-          "type": "string",
-          "format": "uint64"
-        },
-        "diskUsagePct": {
-          "type": "number",
-          "format": "float"
-        },
-        "diskPath": {
-          "type": "string"
-        },
-        "workerCount": {
-          "type": "integer",
-          "format": "int64"
-        },
-        "containerCount": {
-          "type": "integer",
-          "format": "int64"
-        },
-        "freeGpuCount": {
-          "type": "integer",
-          "format": "int64"
-        },
-        "pathMetrics": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "$ref": "#/definitions/gatewayMachinePathMetrics"
-          }
-        }
-      }
-    },
-    "gatewayAgentPoolCacheConfig": {
-      "type": "object",
-      "properties": {
-        "enabled": {
-          "type": "boolean"
-        },
-        "disk": {
-          "$ref": "#/definitions/gatewayAgentPoolCacheDiskConfig"
-        }
-      }
-    },
-    "gatewayAgentPoolCacheDiskConfig": {
-      "type": "object",
-      "properties": {
-        "enabled": {
-          "type": "boolean"
-        },
-        "hostPath": {
-          "type": "string"
-        },
-        "mountPath": {
-          "type": "string"
-        },
-        "maxUsagePct": {
-          "type": "number",
-          "format": "double"
-        },
-        "minFreeBytes": {
-          "type": "string",
-          "format": "int64"
-        }
-      },
-      "description": "Host-backed runtime settings for an agent worker. Presence of this message\nmeans the managed pool configuration is authoritative; older gateways omit\nit and agents retain their installer-level state/cache defaults."
-    },
-    "gatewayAgentPoolRuntimeConfig": {
-      "type": "object",
-      "properties": {
-        "networkPreallocation": {
-          "type": "boolean"
-        },
-        "criuEnabled": {
-          "type": "boolean"
-        },
-        "tmpSizeLimit": {
-          "type": "string"
-        },
-        "storageMode": {
-          "type": "string"
-        },
-        "storagePath": {
-          "type": "string"
-        },
-        "imagesPath": {
-          "type": "string"
-        },
-        "durableDisksPath": {
-          "type": "string"
-        },
-        "cache": {
-          "$ref": "#/definitions/gatewayAgentPoolCacheConfig"
-        },
-        "configGroup": {
-          "type": "string"
-        },
-        "gpuVirtualized": {
-          "type": "boolean"
-        }
-      }
-    },
     "gatewayAgentPreflightCheck": {
       "type": "object",
       "properties": {
@@ -2668,27 +2489,6 @@
         }
       }
     },
-    "gatewayAgentSSHConfig": {
-      "type": "object",
-      "properties": {
-        "enabled": {
-          "type": "boolean"
-        },
-        "username": {
-          "type": "string"
-        },
-        "publicKey": {
-          "type": "string"
-        },
-        "keyFingerprint": {
-          "type": "string"
-        },
-        "generation": {
-          "type": "string",
-          "format": "uint64"
-        }
-      }
-    },
     "gatewayAgentTelemetryConfig": {
       "type": "object",
       "properties": {
@@ -2706,17 +2506,6 @@
         }
       }
     },
-    "gatewayAgentTelemetryResponse": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "type": "boolean"
-        },
-        "errMsg": {
-          "type": "string"
-        }
-      }
-    },
     "gatewayAgentTelemetrySinkConfig": {
       "type": "object",
       "properties": {
@@ -2728,128 +2517,6 @@
         },
         "streamPrefix": {
           "type": "string"
-        }
-      }
-    },
-    "gatewayAgentWorkerSlot": {
-      "type": "object",
-      "properties": {
-        "workerId": {
-          "type": "string"
-        },
-        "workerToken": {
-          "type": "string"
-        },
-        "poolName": {
-          "type": "string"
-        },
-        "machineId": {
-          "type": "string"
-        },
-        "cpu": {
-          "type": "string",
-          "format": "int64"
-        },
-        "memory": {
-          "type": "string",
-          "format": "int64"
-        },
-        "gpu": {
-          "type": "string"
-        },
-        "gpuCount": {
-          "type": "integer",
-          "format": "int64"
-        },
-        "gpuAssignment": {
-          "type": "string"
-        },
-        "networkPrefix": {
-          "type": "string"
-        },
-        "workerImage": {
-          "type": "string"
-        },
-        "networkSlotPoolSize": {
-          "type": "integer",
-          "format": "int64"
-        },
-        "containerStartConcurrency": {
-          "type": "integer",
-          "format": "int64"
-        },
-        "mode": {
-          "type": "string",
-          "description": "Pool mode (\"private\" / \"marketplace\" / \"external\") and the container\nruntime the worker must run with. Marketplace slots prefer gVisor but can\nfall back to runc for incompatible GPU families."
-        },
-        "containerRuntime": {
-          "type": "string"
-        },
-        "marketplaceListingId": {
-          "type": "string",
-          "description": "Marketplace identity of the machine backing this slot. Machines join a\n(possibly shared) pool through exactly one listing; the worker reports\nbuyer usage against it, so the request itself carries no billing fields."
-        },
-        "sellerWorkspaceId": {
-          "type": "string"
-        },
-        "requiresPoolSelector": {
-          "type": "boolean"
-        },
-        "priority": {
-          "type": "integer",
-          "format": "int32"
-        },
-        "preemptable": {
-          "type": "boolean"
-        },
-        "prioritySet": {
-          "type": "boolean",
-          "description": "Distinguishes an explicitly configured zero priority from legacy\ngateways that did not send scheduling priority metadata."
-        },
-        "gvisorPlatform": {
-          "type": "string"
-        },
-        "gvisorRoot": {
-          "type": "string"
-        },
-        "gvisorExtraArgs": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "generation": {
-          "type": "string",
-          "description": "Deterministic identity of the restart-relevant slot specification."
-        },
-        "cpuAffinityEnforced": {
-          "type": "boolean"
-        },
-        "poolConfig": {
-          "$ref": "#/definitions/gatewayAgentPoolRuntimeConfig"
-        }
-      }
-    },
-    "gatewayAttachToContainerRequest": {
-      "type": "object",
-      "properties": {
-        "containerId": {
-          "type": "string"
-        }
-      }
-    },
-    "gatewayAttachToContainerResponse": {
-      "type": "object",
-      "properties": {
-        "output": {
-          "type": "string"
-        },
-        "done": {
-          "type": "boolean"
-        },
-        "exitCode": {
-          "type": "integer",
-          "format": "int32"
         }
       }
     },
@@ -2961,38 +2628,6 @@
         "gpuCount": {
           "type": "integer",
           "format": "int64"
-        }
-      }
-    },
-    "gatewayCheckpointContainerResponse": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "type": "boolean"
-        },
-        "checkpointId": {
-          "type": "string"
-        },
-        "errorMsg": {
-          "type": "string"
-        }
-      }
-    },
-    "gatewayCommitObjectDeltaResponse": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "type": "boolean"
-        },
-        "objectId": {
-          "type": "string"
-        },
-        "size": {
-          "type": "string",
-          "format": "int64"
-        },
-        "errorMsg": {
-          "type": "string"
         }
       }
     },
@@ -3181,48 +2816,6 @@
         }
       }
     },
-    "gatewayCreateNodeEnrollmentResponse": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "type": "boolean"
-        },
-        "errorMsg": {
-          "type": "string"
-        },
-        "enrollmentToken": {
-          "type": "string"
-        }
-      }
-    },
-    "gatewayCreateObjectDeltaResponse": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "type": "boolean"
-        },
-        "objectId": {
-          "type": "string"
-        },
-        "presignedUrl": {
-          "type": "string",
-          "title": "PUT the delta archive here"
-        },
-        "putHeaders": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          }
-        },
-        "errorMsg": {
-          "type": "string"
-        },
-        "baseMissing": {
-          "type": "boolean",
-          "title": "base object is gone: fall back to a full upload"
-        }
-      }
-    },
     "gatewayCreateObjectRequest": {
       "type": "object",
       "properties": {
@@ -3241,6 +2834,16 @@
         },
         "supportsPutHeaders": {
           "type": "boolean"
+        },
+        "multipartPartSize": {
+          "type": "string",
+          "format": "int64",
+          "description": "When \u003e 0 the client can upload the object as concurrent parts of this\nmany bytes; the gateway answers with upload_parts instead of a single\npresigned_url for objects larger than one part."
+        },
+        "multipartTotalSize": {
+          "type": "string",
+          "format": "int64",
+          "description": "Byte length of the archive the parts cover (size is the manifest's\nuncompressed total, which is what the object record stores)."
         }
       }
     },
@@ -3263,6 +2866,16 @@
           "type": "object",
           "additionalProperties": {
             "type": "string"
+          }
+        },
+        "uploadId": {
+          "type": "string"
+        },
+        "uploadParts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/gatewayObjectUploadPart"
           }
         }
       }
@@ -3400,17 +3013,6 @@
           "type": "boolean"
         },
         "errMsg": {
-          "type": "string"
-        }
-      }
-    },
-    "gatewayDeleteNodeEnrollmentResponse": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "type": "boolean"
-        },
-        "errorMsg": {
           "type": "string"
         }
       }
@@ -3672,20 +3274,6 @@
         },
         "pool": {
           "$ref": "#/definitions/gatewayPrivatePool"
-        }
-      }
-    },
-    "gatewayGetAgentPoolVirtualizationResponse": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "type": "boolean"
-        },
-        "errMsg": {
-          "type": "string"
-        },
-        "gpuVirtualized": {
-          "type": "boolean"
         }
       }
     },
@@ -5009,6 +4597,26 @@
         }
       }
     },
+    "gatewayObjectUploadPart": {
+      "type": "object",
+      "properties": {
+        "number": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "start": {
+          "type": "string",
+          "format": "int64"
+        },
+        "end": {
+          "type": "string",
+          "format": "int64"
+        },
+        "url": {
+          "type": "string"
+        }
+      }
+    },
     "gatewayPersistentRoot": {
       "type": "object",
       "properties": {
@@ -5328,20 +4936,6 @@
         }
       }
     },
-    "gatewayPutObjectResponse": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "type": "boolean"
-        },
-        "objectId": {
-          "type": "string"
-        },
-        "errorMsg": {
-          "type": "string"
-        }
-      }
-    },
     "gatewayRequestAgentTransportCredentialRequest": {
       "type": "object",
       "properties": {
@@ -5586,34 +5180,6 @@
         }
       }
     },
-    "gatewayStreamAgentResponse": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "type": "boolean"
-        },
-        "errMsg": {
-          "type": "string"
-        },
-        "routes": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "$ref": "#/definitions/gatewayAgentRoute"
-          }
-        },
-        "slots": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "$ref": "#/definitions/gatewayAgentWorkerSlot"
-          }
-        },
-        "ssh": {
-          "$ref": "#/definitions/gatewayAgentSSHConfig"
-        }
-      }
-    },
     "gatewayStringList": {
       "type": "object",
       "properties": {
@@ -5622,39 +5188,6 @@
           "items": {
             "type": "string"
           }
-        }
-      }
-    },
-    "gatewaySyncContainerWorkspaceOperation": {
-      "type": "string",
-      "enum": [
-        "WRITE",
-        "DELETE",
-        "MOVED"
-      ],
-      "default": "WRITE"
-    },
-    "gatewaySyncContainerWorkspaceRequest": {
-      "type": "object",
-      "properties": {
-        "containerId": {
-          "type": "string"
-        },
-        "path": {
-          "type": "string"
-        },
-        "newPath": {
-          "type": "string"
-        },
-        "isDir": {
-          "type": "boolean"
-        },
-        "data": {
-          "type": "string",
-          "format": "byte"
-        },
-        "op": {
-          "$ref": "#/definitions/gatewaySyncContainerWorkspaceOperation"
         }
       }
     },

@@ -7,9 +7,11 @@ from unittest.mock import MagicMock, patch
 
 from beta9.clients.gateway import (
     CommitObjectDeltaResponse,
+    CompleteObjectUploadResponse,
     CreateObjectDeltaResponse,
     CreateObjectResponse,
     HeadObjectResponse,
+    ObjectUploadPart,
 )
 from beta9.sync import FileSyncer, _Manifest, _ManifestEntry, _SyncCache
 
@@ -17,13 +19,15 @@ from beta9.sync import FileSyncer, _Manifest, _ManifestEntry, _SyncCache
 class _FakeGateway:
     """Records what the syncer uploads; every archive PUT lands in self.puts."""
 
-    def __init__(self, known_hashes=(), base_missing=False, commit_ok=True):
+    def __init__(self, known_hashes=(), base_missing=False, commit_ok=True, part_size=0):
         self.known_hashes = set(known_hashes)
         self.base_missing = base_missing
         self.commit_ok = commit_ok
+        self.part_size = part_size
         self.created = []
         self.deltas = []
         self.commits = []
+        self.completed = []
         self.objects = 0
 
     def head_object(self, req):
@@ -36,9 +40,30 @@ class _FakeGateway:
     def create_object(self, req):
         self.objects += 1
         self.created.append(req)
+        if self.part_size and req.multipart_total_size > self.part_size:
+            parts = []
+            start = 0
+            while start < req.multipart_total_size:
+                end = min(start + self.part_size, req.multipart_total_size)
+                parts.append(
+                    ObjectUploadPart(
+                        number=len(parts) + 1,
+                        start=start,
+                        end=end,
+                        url=f"https://put/part/{len(parts) + 1}",
+                    )
+                )
+                start = end
+            return CreateObjectResponse(
+                ok=True, object_id=f"obj-{self.objects}", upload_id="mpu-1", upload_parts=parts
+            )
         return CreateObjectResponse(
             ok=True, object_id=f"obj-{self.objects}", presigned_url="https://put/full"
         )
+
+    def complete_object_upload(self, req):
+        self.completed.append(req)
+        return CompleteObjectUploadResponse(ok=True)
 
     def create_object_delta(self, req):
         self.deltas.append(req)
@@ -68,11 +93,17 @@ class TestIncrementalSync(TestCase):
         self.cache_dir = Path(self.tmp.name) / "cache"
         self.puts = []
 
+        self.part_bodies = {}
+
         def fake_put(url, data=None, headers=None):
-            names = sorted(zipfile.ZipFile(data.name).namelist())
-            self.puts.append((url, names))
             resp = MagicMock()
             resp.status_code = 200
+            if isinstance(data, bytes):  # a multipart part
+                self.part_bodies[url] = data
+                resp.headers = {"ETag": f'"etag-{len(self.part_bodies)}"'}
+                return resp
+            names = sorted(zipfile.ZipFile(data.name).namelist())
+            self.puts.append((url, names))
             return resp
 
         self.patches = [
@@ -123,6 +154,36 @@ class TestIncrementalSync(TestCase):
         cache = _SyncCache.load(self.root, [])
         self.assertEqual(cache.object_id, "obj-1")
         self.assertEqual(len(cache.manifest.entries), 6)
+
+    def test_large_full_upload_goes_as_concurrent_parts(self):
+        gw = _FakeGateway(part_size=20000)
+        result = self._sync(gw)
+        self.assertTrue(result.success)
+        self.assertEqual(self.puts, [], "no single-stream PUT for a multipart upload")
+        req = gw.created[0]
+        self.assertGreater(req.multipart_part_size, 0)
+        self.assertGreater(req.multipart_total_size, 20000)
+        self.assertEqual(len(gw.completed), 1)
+        completed = gw.completed[0]
+        self.assertEqual(completed.upload_id, "mpu-1")
+        self.assertEqual(
+            [p.number for p in completed.parts], list(range(1, len(self.part_bodies) + 1))
+        )
+        self.assertTrue(all(p.etag.startswith('"etag-') for p in completed.parts))
+        # The parts, in order, are the archive.
+        archive = b"".join(
+            self.part_bodies[f"https://put/part/{n}"] for n in range(1, len(self.part_bodies) + 1)
+        )
+        self.assertEqual(len(archive), req.multipart_total_size)
+        import io
+
+        names = sorted(zipfile.ZipFile(io.BytesIO(archive)).namelist())
+        self.assertEqual(
+            names,
+            sorted(
+                ["app/f0.bin", "app/f1.bin", "app/f2.bin", "app/f3.bin", "app/f4.bin", "main.py"]
+            ),
+        )
 
     def test_unchanged_directory_is_a_head_hit(self):
         gw = _FakeGateway()

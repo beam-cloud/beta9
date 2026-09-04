@@ -18,6 +18,8 @@ from . import terminal
 from .clients.gateway import (
     CommitObjectDeltaRequest,
     CommitObjectDeltaResponse,
+    CompleteObjectUploadRequest,
+    CompleteObjectUploadResponse,
     CreateObjectDeltaRequest,
     CreateObjectDeltaResponse,
     CreateObjectRequest,
@@ -26,6 +28,7 @@ from .clients.gateway import (
     HeadObjectRequest,
     HeadObjectResponse,
     ObjectMetadata,
+    ObjectUploadedPart,
     PutObjectRequest,
     SyncContainerWorkspaceOperation,
 )
@@ -51,6 +54,11 @@ def get_workspace_object_id() -> str:
 
 
 CHUNK_SIZE = 1024 * 1024 * 4
+
+# Full uploads go to object storage as concurrent parts: one presigned PUT is
+# a single TCP stream, which on a typical uplink runs well below the link.
+MULTIPART_PART_SIZE = 16 * 1024 * 1024
+MULTIPART_CONCURRENCY = 8
 
 
 def ignore_file_name() -> str:
@@ -295,10 +303,45 @@ class FileSyncer:
             response = requests.put(presigned_url, data=file, headers=headers or {})
         return response.status_code == HTTPStatus.OK
 
+    def _put_archive_parts(
+        self, temp_zip_name: str, create_object_response: CreateObjectResponse
+    ) -> bool:
+        """Upload the archive as the presigned parts the gateway handed out,
+        MULTIPART_CONCURRENCY at a time, then complete the multipart upload."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        parts = list(create_object_response.upload_parts)
+
+        def put_part(part) -> ObjectUploadedPart:
+            with open(temp_zip_name, "rb") as file:
+                file.seek(part.start)
+                data = file.read(part.end - part.start)
+            response = requests.put(part.url, data=data)
+            if response.status_code != HTTPStatus.OK:
+                raise RuntimeError(f"part {part.number}: HTTP {response.status_code}")
+            return ObjectUploadedPart(number=part.number, etag=response.headers.get("ETag", ""))
+
+        try:
+            with ThreadPoolExecutor(max_workers=min(MULTIPART_CONCURRENCY, len(parts))) as pool:
+                uploaded = list(pool.map(put_part, parts))
+        except Exception as e:
+            terminal.warn(f"Multipart upload failed: {e}")
+            return False
+
+        complete: CompleteObjectUploadResponse = self.gateway_stub.complete_object_upload(
+            CompleteObjectUploadRequest(
+                object_id=create_object_response.object_id,
+                upload_id=create_object_response.upload_id,
+                parts=uploaded,
+            )
+        )
+        return complete.ok
+
     def _upload_full(self, manifest: "_Manifest", hash: str, size: int) -> Optional[str]:
         temp_zip_name = self._write_archive(sorted(manifest.entries))
         try:
             terminal.header("Uploading")
+            archive_size = os.path.getsize(temp_zip_name)
             create_object_response: CreateObjectResponse = self.gateway_stub.create_object(
                 CreateObjectRequest(
                     object_metadata=ObjectMetadata(name=hash, size=size),
@@ -306,16 +349,22 @@ class FileSyncer:
                     size=size,
                     overwrite=True,
                     supports_put_headers=True,
+                    multipart_part_size=MULTIPART_PART_SIZE,
+                    multipart_total_size=archive_size,
                 )
             )
             if not create_object_response.ok:
                 terminal.error("File sync failed")
                 return None
-            if not self._put_archive(
-                temp_zip_name,
-                create_object_response.presigned_url,
-                create_object_response.put_headers,
-            ):
+            if create_object_response.upload_parts:
+                ok = self._put_archive_parts(temp_zip_name, create_object_response)
+            else:
+                ok = self._put_archive(
+                    temp_zip_name,
+                    create_object_response.presigned_url,
+                    create_object_response.put_headers,
+                )
+            if not ok:
                 terminal.error("File sync failed")
                 return None
             return create_object_response.object_id

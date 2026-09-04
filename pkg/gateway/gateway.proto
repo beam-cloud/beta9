@@ -34,6 +34,7 @@ service GatewayService {
     };
   }
   rpc PutObjectStream(stream PutObjectRequest) returns (PutObjectResponse) {}
+  rpc CompleteObjectUpload(CompleteObjectUploadRequest) returns (CompleteObjectUploadResponse) {}
   rpc CreateObjectDelta(CreateObjectDeltaRequest) returns (CreateObjectDeltaResponse) {}
   rpc CommitObjectDelta(CommitObjectDeltaRequest) returns (CommitObjectDeltaResponse) {}
 
@@ -494,6 +495,20 @@ message CreateObjectRequest {
   int64 size = 3;
   bool overwrite = 4;
   bool supports_put_headers = 5;
+  // When > 0 the client can upload the object as concurrent parts of this
+  // many bytes; the gateway answers with upload_parts instead of a single
+  // presigned_url for objects larger than one part.
+  int64 multipart_part_size = 6;
+  // Byte length of the archive the parts cover (size is the manifest's
+  // uncompressed total, which is what the object record stores).
+  int64 multipart_total_size = 7;
+}
+
+message ObjectUploadPart {
+  uint32 number = 1;
+  int64 start = 2;
+  int64 end = 3;
+  string url = 4;
 }
 
 message CreateObjectResponse {
@@ -502,6 +517,24 @@ message CreateObjectResponse {
   string presigned_url = 3;
   string error_msg = 4;
   map<string, string> put_headers = 5;
+  string upload_id = 6;
+  repeated ObjectUploadPart upload_parts = 7;
+}
+
+message ObjectUploadedPart {
+  uint32 number = 1;
+  string etag = 2;
+}
+
+message CompleteObjectUploadRequest {
+  string object_id = 1;
+  string upload_id = 2;
+  repeated ObjectUploadedPart parts = 3;
+}
+
+message CompleteObjectUploadResponse {
+  bool ok = 1;
+  string error_msg = 2;
 }
 
 message PutObjectRequest {
