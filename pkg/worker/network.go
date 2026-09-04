@@ -1005,19 +1005,17 @@ func (m *ContainerNetworkManager) setupPreallocatedNetworkSlot(containerId strin
 	return true, nil
 }
 
+// prepareNetworkSlotForAssignment confirms the slot's namespace still exists.
+// The pool built the slot in this process, so its veth and address are not
+// re-read: those netlink dumps wait on the kernel's rtnl lock, which a
+// neighbouring container's namespace teardown holds for up to a few hundred
+// milliseconds, and that wait landed directly on the start path.
 func (m *ContainerNetworkManager) prepareNetworkSlotForAssignment(slot *containerNetworkSlot) error {
 	if slot == nil || slot.ip == "" {
 		return errors.New("network slot is missing an IP address")
 	}
-	if !m.networkSlotResourcesExist(slot.id) {
-		return fmt.Errorf("network slot %s is missing local resources", slot.id)
-	}
-	ip, err := networkSlotIPv4(slot.id)
-	if err != nil {
-		return fmt.Errorf("network slot %s: %w", slot.id, err)
-	}
-	if ip != slot.ip {
-		return fmt.Errorf("network slot %s has IP %s, expected %s", slot.id, ip, slot.ip)
+	if _, err := os.Stat(filepath.Join(types.HostNetnsPath, slot.id)); err != nil {
+		return fmt.Errorf("network slot %s is missing its namespace: %w", slot.id, err)
 	}
 	return nil
 }
