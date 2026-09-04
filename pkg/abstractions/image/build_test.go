@@ -1537,7 +1537,7 @@ func TestBuild_prepareSteps_Micromamba(t *testing.T) {
 	expectedCommands := []string{
 		"micromamba config set use_lockfiles False",
 		"uv-b9 pip install --compile-bytecode -c \"conda-forge::numpy\" \"pytorch\"", // From PythonPackages
-		"micromamba install -y -n beta9 \"scipy\"",                // From BuildSteps (mamba)
+		"micromamba install -y -n beta9 \"scipy\"",                                   // From BuildSteps (mamba)
 		"echo done mamba",
 		"uv-b9 pip install --compile-bytecode \"requests\" \"beautifulsoup4\"", // From BuildSteps (pip)
 	}
