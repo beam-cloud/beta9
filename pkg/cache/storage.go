@@ -61,6 +61,7 @@ type Store struct {
 	diskAvailableBytes      atomic.Int64
 	diskMonitorStarted      atomic.Bool
 	lastDiskGuardCheckNanos atomic.Int64
+	lastDiskGuardEvictNanos atomic.Int64
 	index                   contentIndex
 	// evictMu serializes eviction passes. The disk monitor and the embedded
 	// cache owner's ReclaimDisk both evict from a usage snapshot; two passes
@@ -1442,6 +1443,9 @@ func diskUsageFromSnapshot(snapshot diskUsageSnapshot) DiskUsage {
 	}
 }
 
+// statDiskUsage is how the store measures its filesystem; tests substitute it.
+var statDiskUsage = getFilesystemDiskUsage
+
 func getFilesystemDiskUsage(path string) (diskUsageSnapshot, error) {
 	var stat syscall.Statfs_t
 	err := syscall.Statfs(path, &stat)
@@ -1535,8 +1539,30 @@ func (cas *Store) diskWriteAllowed() bool {
 		}
 	}
 	cas.mu.Lock()
-	defer cas.mu.Unlock()
-	return !cas.diskCachedUsageExceeded
+	exceeded = cas.diskCachedUsageExceeded
+	cas.mu.Unlock()
+	if !exceeded {
+		return true
+	}
+
+	// The disk is over the hard limit and a write is waiting. The periodic
+	// monitor evicts every diskCacheUsageCheckInterval, but a burst of writes
+	// (a worker materializing several layers next to this store, a multi-GiB
+	// seed) can cross the limit well inside one interval, and refusing the
+	// store then costs the next container a registry pull. Evict now, once
+	// per guard interval, and answer from the usage that leaves behind.
+	now = time.Now().UnixNano()
+	lastEvict := cas.lastDiskGuardEvictNanos.Load()
+	if lastEvict == 0 || time.Duration(now-lastEvict) >= diskCacheWriteGuardInterval {
+		if cas.lastDiskGuardEvictNanos.CompareAndSwap(lastEvict, now) {
+			if _, err := cas.refreshDiskCacheUsage(true); err == nil {
+				cas.mu.Lock()
+				exceeded = cas.diskCachedUsageExceeded
+				cas.mu.Unlock()
+			}
+		}
+	}
+	return !exceeded
 }
 
 func (cas *Store) refreshDiskCacheUsage(evict bool) (diskUsageSnapshot, error) {
@@ -1546,7 +1572,7 @@ func (cas *Store) refreshDiskCacheUsage(evict bool) (diskUsageSnapshot, error) {
 		cas.evictMu.Lock()
 		defer cas.evictMu.Unlock()
 	}
-	snapshot, err := getFilesystemDiskUsage(cas.diskCacheDir)
+	snapshot, err := statDiskUsage(cas.diskCacheDir)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			Logger.Errorf("Failed to fetch disk cache usage: %v", err)
@@ -1565,7 +1591,7 @@ func (cas *Store) refreshDiskCacheUsage(evict bool) (diskUsageSnapshot, error) {
 	)
 
 	if evict && cas.maybeEvictDiskCache(snapshot) {
-		if refreshed, err := getFilesystemDiskUsage(cas.diskCacheDir); err == nil {
+		if refreshed, err := statDiskUsage(cas.diskCacheDir); err == nil {
 			snapshot = refreshed
 			cas.setCachedDiskUsagePct(snapshot.usagePct)
 			cas.diskAvailableBytes.Store(int64(snapshot.availableBytes))

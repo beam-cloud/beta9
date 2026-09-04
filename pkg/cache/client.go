@@ -2513,6 +2513,20 @@ func (c *Client) storeContentFromReaderWithContextAndTrace(ctx context.Context, 
 	return "", ErrHostNotFound
 }
 
+// storeStreamSendError resolves the error from a failed Send on a store
+// stream. gRPC returns a bare io.EOF when the server has already ended the
+// stream with a status ("disk cache capacity exceeded", ...); that status is
+// only available from RecvMsg, and it is what the caller needs to log.
+func storeStreamSendError(stream proto.Cache_StoreContentClient, sendErr error) error {
+	if sendErr != io.EOF {
+		return sendErr
+	}
+	if _, err := stream.CloseAndRecv(); err != nil && err != io.EOF {
+		return err
+	}
+	return sendErr
+}
+
 func storeRepairResult(status string) string {
 	switch status {
 	case contentStatusMissing:
@@ -2578,7 +2592,7 @@ func (c *Client) storeContentFromReaderToHostWithContext(ctx context.Context, ho
 				cachePathSent = true
 			}
 			if err := stream.Send(req); err != nil {
-				return "", err
+				return "", storeStreamSendError(stream, err)
 			}
 		}
 
@@ -2592,7 +2606,7 @@ func (c *Client) storeContentFromReaderToHostWithContext(ctx context.Context, ho
 
 	if cachePath != "" && !cachePathSent {
 		if err := stream.Send(&proto.CacheStoreContentRequest{CachePath: cachePath, Metadata: fileMetadata}); err != nil {
-			return "", err
+			return "", storeStreamSendError(stream, err)
 		}
 	}
 

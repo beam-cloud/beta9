@@ -361,3 +361,41 @@ func TestPruneContentNotProtectedKeepsExplicitlyProtectedAndRecentContent(t *tes
 	require.False(t, store.Exists(stale))
 	require.True(t, store.Exists(recent))
 }
+
+func TestDiskWriteGuardEvictsBeforeRefusingAStore(t *testing.T) {
+	store := newTestStore(t, 5)
+	store.serverConfig.DiskCacheMaxUsagePct = 0.95
+	store.serverConfig.DiskCacheEvictWatermarkPct = 0.80
+
+	old := addEvictionTestContent(t, store, "stale content nobody has read in a while", time.Now().Add(-time.Hour))
+
+	// The filesystem reports itself over the hard limit until something is
+	// evicted, then comfortably under it.
+	var stats, evictedAt int
+	prev := statDiskUsage
+	statDiskUsage = func(string) (diskUsageSnapshot, error) {
+		stats++
+		if !store.Exists(old) {
+			if evictedAt == 0 {
+				evictedAt = stats
+			}
+			return diskUsageSnapshot{totalBytes: 1000, usedBytes: 700, availableBytes: 300, usagePct: 0.70}, nil
+		}
+		return diskUsageSnapshot{totalBytes: 1000, usedBytes: 960, availableBytes: 40, usagePct: 0.96}, nil
+	}
+	t.Cleanup(func() { statDiskUsage = prev })
+
+	// A plain (non-evicting) refresh, as the periodic check would leave it.
+	_, err := store.refreshDiskCacheUsage(false)
+	require.NoError(t, err)
+	require.True(t, store.diskCachedUsageExceeded)
+
+	// A store arriving now must evict and go through instead of failing.
+	require.True(t, store.diskWriteAllowed())
+	require.False(t, store.Exists(old), "stale content should have been evicted to admit the write")
+	require.NotZero(t, evictedAt)
+
+	hash, _, err := store.AddReader(context.Background(), bytes.NewReader([]byte("fresh content that needed the room")))
+	require.NoError(t, err)
+	require.True(t, store.Exists(hash))
+}
