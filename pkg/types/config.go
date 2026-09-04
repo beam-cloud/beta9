@@ -418,6 +418,17 @@ func NewMountPointConfigFromProto(in *pb.MountPointConfig) *MountPointConfig {
 	}
 }
 
+// JobResourceOverheadConfig is extra CPU/memory added to the worker pod's
+// requests and limits on top of the capacity the scheduler hands out to
+// containers. When jobResourcesEnforced is on, the pod limit is otherwise
+// exactly the schedulable capacity, so a fully packed worker leaves nothing
+// for the worker process itself (FUSE image/volume servers, log shipping,
+// runtime) and container I/O gets throttled with the containers.
+type JobResourceOverheadConfig struct {
+	CPU    string `key:"cpu" json:"cpu"`
+	Memory string `key:"memory" json:"memory"`
+}
+
 type WorkerConfig struct {
 	Pools                        map[string]WorkerPoolConfig   `key:"pools" json:"pools"`
 	HostNetwork                  bool                          `key:"hostNetwork" json:"host_network"`
@@ -430,6 +441,7 @@ type WorkerConfig struct {
 	Namespace                    string                        `key:"namespace" json:"namespace"`
 	ServiceAccountName           string                        `key:"serviceAccountName" json:"service_account_name"`
 	JobResourcesEnforced         bool                          `key:"jobResourcesEnforced" json:"job_resources_enforced"`
+	JobResourceOverhead          JobResourceOverheadConfig     `key:"jobResourceOverhead" json:"job_resource_overhead"`
 	ContainerResourceLimits      ContainerResourceLimitsConfig `key:"containerResourceLimits" json:"container_resource_limits"`
 	DefaultWorkerCPURequest      int64                         `key:"defaultWorkerCPURequest" json:"default_worker_cpu_request"`
 	DefaultWorkerMemoryRequest   int64                         `key:"defaultWorkerMemoryRequest" json:"default_worker_memory_request"`

@@ -42,16 +42,10 @@ func (d *DiscoveryClient) updateHostMap(newHosts []*Host) {
 
 // Used by cache servers to discover their closest peers
 func (d *DiscoveryClient) Start(ctx context.Context) error {
-	if jitter := d.discoveryJitter(); jitter > 0 {
-		timer := time.NewTimer(jitter)
-		select {
-		case <-timer.C:
-		case <-ctx.Done():
-			timer.Stop()
-			return nil
-		}
-	}
-
+	// The first discovery runs immediately: a freshly provisioned worker cannot
+	// start containers until it knows at least one cache host, so any delay
+	// here lands directly on cold-start latency. Jitter is applied to the
+	// periodic re-discovery only, which is where it spreads load.
 	hosts, err := d.discoverHosts(ctx)
 	if err == nil {
 		d.updateHostMap(hosts)
@@ -60,6 +54,16 @@ func (d *DiscoveryClient) Start(ctx context.Context) error {
 	interval := time.Duration(d.cfg.DiscoveryIntervalS) * time.Second
 	if interval <= 0 {
 		interval = 5 * time.Second
+	}
+
+	if jitter := d.discoveryJitter(); jitter > 0 {
+		timer := time.NewTimer(jitter)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			return nil
+		}
 	}
 
 	ticker := time.NewTicker(interval)

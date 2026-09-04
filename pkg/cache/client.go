@@ -2940,6 +2940,10 @@ func (c *Client) HostsAvailable() bool {
 	return false
 }
 
+// hostsAvailablePollInterval bounds how long a worker sits idle after the first
+// cache host becomes known; a coarse poll here shows up 1:1 in cold-start time.
+const hostsAvailablePollInterval = 25 * time.Millisecond
+
 func (c *Client) WaitForHosts(timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -2960,7 +2964,7 @@ func (c *Client) WaitForHosts(timeout time.Duration) error {
 				return nil
 			}
 
-			time.Sleep(1 * time.Second)
+			time.Sleep(hostsAvailablePollInterval)
 		}
 	}
 }

@@ -54,6 +54,10 @@ const (
 	workerIptablesModeEnv               string        = types.WorkerIptablesModeEnv
 	containerNetworkSlotFillInterval    time.Duration = 2 * time.Second
 	networkSlotFillConcurrency                        = 16
+	// networkSlotPrimeCount is how many slots a worker creates synchronously at
+	// startup before it begins accepting containers; the rest fill in the
+	// background.
+	networkSlotPrimeCount                             = 4
 	networkSlotCleanupConcurrency                     = 16
 	networkSlotPoolLockTTL                            = 120
 	containerNetworkCleanupRPCTimeout   time.Duration = 30 * time.Second
@@ -508,7 +512,13 @@ func NewContainerNetworkManager(ctx context.Context, workerId, poolName string, 
 				log.Warn().Err(err).Msg("failed to clean up stale preallocated network slots")
 			}
 		}
-		m.fillNetworkSlotPool()
+		// Prime just enough slots for the first containers that land on this
+		// worker, then fill the rest of the pool in the background. A freshly
+		// provisioned worker only exists because requests are already waiting
+		// for it, so a full synchronous fill (64 slots ~= 1.5 s) goes straight
+		// onto their cold-start time.
+		m.fillNetworkSlotPoolUpTo(networkSlotPrimeCount)
+		go m.fillNetworkSlotPool()
 		go m.maintainNetworkSlotPool()
 	}
 
@@ -564,6 +574,12 @@ func (m *ContainerNetworkManager) maintainNetworkSlotPool() {
 }
 
 func (m *ContainerNetworkManager) fillNetworkSlotPool() {
+	m.fillNetworkSlotPoolUpTo(0)
+}
+
+// fillNetworkSlotPoolUpTo tops the pool up towards slotPoolSize, creating at
+// most maxSlots new slots in this pass (0 means no cap).
+func (m *ContainerNetworkManager) fillNetworkSlotPoolUpTo(maxSlots int) {
 	m.slotMu.Lock()
 	if m.slotPoolClosed || m.slotFillRunning {
 		m.slotMu.Unlock()
@@ -578,15 +594,19 @@ func (m *ContainerNetworkManager) fillNetworkSlotPool() {
 		m.slotMu.Unlock()
 	}()
 
-	if err := m.withNetworkSlotPoolLock(m.fillNetworkSlotPoolLocked); err != nil && !common.IsRedisLockNotObtained(err) {
+	err := m.withNetworkSlotPoolLock(func() error { return m.fillNetworkSlotPoolLocked(maxSlots) })
+	if err != nil && !common.IsRedisLockNotObtained(err) {
 		log.Debug().Err(err).Msg("failed to fill preallocated network slot pool")
 	}
 }
 
-func (m *ContainerNetworkManager) fillNetworkSlotPoolLocked() error {
+func (m *ContainerNetworkManager) fillNetworkSlotPoolLocked(maxSlots int) error {
 	m.slotMu.Lock()
 	needed := m.slotPoolSize - m.totalSlots
 	m.slotMu.Unlock()
+	if maxSlots > 0 && needed > maxSlots {
+		needed = maxSlots
+	}
 	if needed <= 0 {
 		return nil
 	}

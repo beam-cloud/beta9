@@ -296,6 +296,12 @@ worker:
   # non-standard k8s job spec
   imagePVCName: beta9-images
   jobResourcesEnforced: false
+  # Extra CPU/memory for the worker process itself (FUSE image/volume servers,
+  # runtime, log shipping), added to the pod on top of the container capacity
+  # the scheduler hands out. Only applies when jobResourcesEnforced is true.
+  jobResourceOverhead:
+    cpu: ''
+    memory: ''
   containerResourceLimits:
     cpuEnforced: true
     cpuAffinityEnforced: false
