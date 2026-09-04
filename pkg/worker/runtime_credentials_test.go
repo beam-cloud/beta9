@@ -7,7 +7,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/grpc"
 )
 
 func TestMergeRuntimeEnvReplacesVendedKeys(t *testing.T) {
@@ -53,19 +52,23 @@ func TestApplyMountCredentialsMatchesPathAndBucket(t *testing.T) {
 	require.Equal(t, "secret-b", request.Mounts[1].MountPointConfig.SecretKey)
 }
 
-func TestHydrateRuntimeCredentialsForBuildOnlyRequestsWorkspaceStorage(t *testing.T) {
+func TestClaimContainerForBuildOnlyRequestsWorkspaceStorage(t *testing.T) {
 	storageID := uint(1)
 	dockerfile := "FROM alpine"
 	buildCtxObject := "build-context"
-	repo := &fakeRuntimeCredentialsWorkerRepo{
-		resp: &pb.GetContainerRuntimeCredentialsResponse{
-			Ok: true,
-			WorkspaceStorage: &pb.CacheWorkspaceStorageCredentials{
-				EndpointUrl: "https://storage.example",
-				Region:      "us-east-1",
-				BucketName:  "bucket",
-				AccessKey:   "access",
-				SecretKey:   "secret",
+	repo := &fakeWorkerRepoClient{
+		claim: &pb.ClaimContainerResponse{
+			Ok:      true,
+			Claimed: true,
+			Credentials: &pb.GetContainerRuntimeCredentialsResponse{
+				Ok: true,
+				WorkspaceStorage: &pb.CacheWorkspaceStorageCredentials{
+					EndpointUrl: "https://storage.example",
+					Region:      "us-east-1",
+					BucketName:  "bucket",
+					AccessKey:   "access",
+					SecretKey:   "secret",
+				},
 			},
 		},
 	}
@@ -73,6 +76,7 @@ func TestHydrateRuntimeCredentialsForBuildOnlyRequestsWorkspaceStorage(t *testin
 		ContainerId:          "build-1",
 		WorkspaceId:          "workspace-1",
 		StubId:               "stub-1",
+		DeliveryToken:        "token-1",
 		RuntimeSecretNames:   []string{"SECRET"},
 		RuntimeTokenRequired: true,
 		Workspace: types.Workspace{
@@ -83,113 +87,78 @@ func TestHydrateRuntimeCredentialsForBuildOnlyRequestsWorkspaceStorage(t *testin
 			BuildCtxObject: &buildCtxObject,
 		},
 	}
-	worker := &Worker{workerRepoClient: repo}
+	worker := &Worker{workerId: "worker-1", workerRepoClient: repo}
 
-	require.NoError(t, worker.hydrateRuntimeCredentials(context.Background(), request))
+	claimed, err := worker.claimContainer(context.Background(), request)
+	require.NoError(t, err)
+	require.True(t, claimed)
 
-	require.NotNil(t, repo.lastReq)
-	require.True(t, repo.lastReq.WorkspaceStorage)
-	require.False(t, repo.lastReq.RuntimeToken)
-	require.Empty(t, repo.lastReq.SecretNames)
-	require.Empty(t, repo.lastReq.MountCredentials)
+	require.Equal(t, "worker-1", repo.lastClaim.WorkerId)
+	require.Equal(t, "token-1", repo.lastClaim.DeliveryToken)
+	creds := repo.lastClaim.Credentials
+	require.NotNil(t, creds)
+	require.True(t, creds.WorkspaceStorage)
+	require.False(t, creds.RuntimeToken)
+	require.Empty(t, creds.SecretNames)
+	require.Empty(t, creds.MountCredentials)
 	require.Equal(t, "access", *request.Workspace.Storage.AccessKey)
 	require.Equal(t, "secret", *request.Workspace.Storage.SecretKey)
 	require.Equal(t, "https://storage.example", *request.Workspace.Storage.EndpointUrl)
 }
 
-func TestHydrateRuntimeCredentialsAcrossPoolTypes(t *testing.T) {
-	tests := []struct {
-		name   string
-		worker Worker
-	}{
-		{
-			name: "private agent pool",
-			worker: Worker{
-				persistent:     true,
-				machineID:      "private-machine",
-				poolName:       "private-pool",
-				poolConfig:     types.WorkerPoolConfig{Mode: types.PoolModePrivate},
-				routeTransport: types.BackendRouteTransportTSNet,
+func TestClaimContainerHydratesRuntimeTokenAndSecrets(t *testing.T) {
+	repo := &fakeWorkerRepoClient{
+		claim: &pb.ClaimContainerResponse{
+			Ok:      true,
+			Claimed: true,
+			Credentials: &pb.GetContainerRuntimeCredentialsResponse{
+				Ok:  true,
+				Env: []string{"BETA9_TOKEN=restricted-runtime-token", "SECRET=runtime-secret"},
 			},
 		},
-		{
-			name: "admin-managed serverless agent pool",
-			worker: Worker{
-				persistent:     true,
-				machineID:      "serverless-machine",
-				poolName:       "serverless-pool",
-				poolConfig:     types.WorkerPoolConfig{Mode: types.PoolModeExternal},
-				routeTransport: types.BackendRouteTransportTSNet,
-			},
-		},
-		{
-			name:   "managed fallback pool",
-			worker: Worker{poolName: "default"},
-		},
 	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			repo := &fakeRuntimeCredentialsWorkerRepo{
-				resp: &pb.GetContainerRuntimeCredentialsResponse{
-					Ok:  true,
-					Env: []string{"BETA9_TOKEN=restricted-runtime-token", "SECRET=runtime-secret"},
-				},
-			}
-			request := &types.ContainerRequest{
-				ContainerId:          "container-1",
-				WorkspaceId:          "workspace-1",
-				StubId:               "stub-1",
-				RuntimeSecretNames:   []string{"SECRET"},
-				RuntimeTokenRequired: true,
-			}
-			worker := test.worker
-			worker.workerRepoClient = repo
-
-			require.NoError(t, worker.hydrateRuntimeCredentials(context.Background(), request))
-
-			require.NotNil(t, repo.lastReq)
-			require.True(t, repo.lastReq.RuntimeToken)
-			require.Equal(t, []string{"SECRET"}, repo.lastReq.SecretNames)
-			require.Equal(t, []string{"BETA9_TOKEN=restricted-runtime-token", "SECRET=runtime-secret"}, request.Env)
-		})
+	request := &types.ContainerRequest{
+		ContainerId:          "container-1",
+		WorkspaceId:          "workspace-1",
+		StubId:               "stub-1",
+		Env:                  []string{"BETA9_TOKEN=placeholder"},
+		RuntimeSecretNames:   []string{"SECRET"},
+		RuntimeTokenRequired: true,
 	}
+	worker := &Worker{workerRepoClient: repo}
+
+	claimed, err := worker.claimContainer(context.Background(), request)
+	require.NoError(t, err)
+	require.True(t, claimed)
+
+	require.True(t, repo.lastClaim.Credentials.RuntimeToken)
+	require.Equal(t, []string{"SECRET"}, repo.lastClaim.Credentials.SecretNames)
+	require.Equal(t, []string{"BETA9_TOKEN=restricted-runtime-token", "SECRET=runtime-secret"}, request.Env)
 }
 
-func TestHydrateRuntimeCredentialsSkipsInlineServerlessCredentials(t *testing.T) {
-	repo := &fakeRuntimeCredentialsWorkerRepo{}
+func TestClaimContainerSkipsCredentialsForCompleteRequests(t *testing.T) {
+	repo := &fakeWorkerRepoClient{claim: &pb.ClaimContainerResponse{Ok: true, Claimed: true}}
 	request := &types.ContainerRequest{
 		ContainerId: "container-1",
 		WorkspaceId: "workspace-1",
 		StubId:      "stub-1",
 		Env:         []string{"BETA9_TOKEN=inline-token", "SECRET=inline-secret"},
 	}
-	worker := &Worker{
-		workerRepoClient: repo,
-		persistent:       true,
-		machineID:        "serverless-machine",
-		poolName:         "serverless-pool",
-		poolConfig:       types.WorkerPoolConfig{Mode: types.PoolModeExternal},
-		routeTransport:   types.BackendRouteTransportTSNet,
-	}
+	worker := &Worker{workerRepoClient: repo}
 
-	require.NoError(t, worker.hydrateRuntimeCredentials(context.Background(), request))
+	claimed, err := worker.claimContainer(context.Background(), request)
+	require.NoError(t, err)
+	require.True(t, claimed)
 
-	require.Nil(t, repo.lastReq)
+	require.Nil(t, repo.lastClaim.Credentials)
 	require.Equal(t, []string{"BETA9_TOKEN=inline-token", "SECRET=inline-secret"}, request.Env)
 }
 
-type fakeRuntimeCredentialsWorkerRepo struct {
-	pb.WorkerRepositoryServiceClient
-	lastReq *pb.GetContainerRuntimeCredentialsRequest
-	resp    *pb.GetContainerRuntimeCredentialsResponse
-	err     error
-}
+func TestClaimContainerReportsRejectedClaim(t *testing.T) {
+	repo := &fakeWorkerRepoClient{claim: &pb.ClaimContainerResponse{Ok: false, Claimed: false, ErrorMsg: "container already claimed"}}
+	worker := &Worker{workerRepoClient: repo}
 
-func (f *fakeRuntimeCredentialsWorkerRepo) GetContainerRuntimeCredentials(ctx context.Context, req *pb.GetContainerRuntimeCredentialsRequest, opts ...grpc.CallOption) (*pb.GetContainerRuntimeCredentialsResponse, error) {
-	f.lastReq = req
-	if f.err != nil {
-		return nil, f.err
-	}
-	return f.resp, nil
+	claimed, err := worker.claimContainer(context.Background(), &types.ContainerRequest{ContainerId: "container-1"})
+	require.EqualError(t, err, "container already claimed")
+	require.False(t, claimed)
 }

@@ -16,20 +16,25 @@ const (
 	workerLifecycleQueueSize     = 16384
 	workerLifecyclePushTimeout   = 5 * time.Second
 	workerLifecycleRetryInterval = time.Second
+	workerLifecycleRetryBudget   = 30 * time.Second
 )
 
 type workerLifecycleRelay struct {
-	client   pb.WorkerRepositoryServiceClient
-	workerID string
-	events   chan types.EventContainerLifecycleSchema
+	client        pb.WorkerRepositoryServiceClient
+	workerID      string
+	events        chan types.EventContainerLifecycleSchema
+	retryInterval time.Duration
+	retryBudget   time.Duration
 }
 
 func NewWorkerEventClientRepo(config types.AppConfig, client pb.WorkerRepositoryServiceClient, workerID string) EventRepository {
 	events := NewEventClientRepo(config).(*EventClientRepo)
 	relay := &workerLifecycleRelay{
-		client:   client,
-		workerID: workerID,
-		events:   make(chan types.EventContainerLifecycleSchema, workerLifecycleQueueSize),
+		client:        client,
+		workerID:      workerID,
+		events:        make(chan types.EventContainerLifecycleSchema, workerLifecycleQueueSize),
+		retryInterval: workerLifecycleRetryInterval,
+		retryBudget:   workerLifecycleRetryBudget,
 	}
 	events.containerLifecyclePush = relay.push
 	go relay.run()
@@ -55,8 +60,13 @@ func (r *workerLifecycleRelay) run() {
 		if len(batch) == 0 {
 			return
 		}
+		deadline := time.Now().Add(r.retryBudget)
 		for !r.flush(batch) {
-			time.Sleep(workerLifecycleRetryInterval)
+			if time.Now().After(deadline) {
+				log.Warn().Str("worker_id", r.workerID).Int("events", len(batch)).Msg("dropping worker lifecycle events after retry budget")
+				break
+			}
+			time.Sleep(r.retryInterval)
 		}
 		batch = batch[:0]
 	}

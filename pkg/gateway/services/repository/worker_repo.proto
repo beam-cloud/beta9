@@ -14,8 +14,11 @@ service WorkerRepositoryService {
       returns (SetImagePullLockResponse) {}
   rpc RemoveImagePullLock(RemoveImagePullLockRequest)
       returns (RemoveImagePullLockResponse) {}
+  // Deprecated: workers claim containers with ClaimContainer. Kept so a
+  // gateway upgrade does not strand workers still running the old binary.
   rpc AddContainerToWorker(AddContainerToWorkerRequest)
       returns (AddContainerToWorkerResponse) {}
+  rpc ClaimContainer(ClaimContainerRequest) returns (ClaimContainerResponse) {}
   rpc RemoveContainerFromWorker(RemoveContainerFromWorkerRequest)
       returns (RemoveContainerFromWorkerResponse) {}
   rpc GetWorkerById(GetWorkerByIdRequest) returns (GetWorkerByIdResponse) {}
@@ -146,6 +149,31 @@ message AddContainerToWorkerRequest {
 message AddContainerToWorkerResponse {
   bool ok = 1;
   string error_msg = 2;
+}
+
+// ClaimContainer acknowledges a delivered container request, refreshes the
+// container's pending lease, and vends its runtime credentials in one round
+// trip. It replaces the AddContainerToWorker -> GetContainerState ->
+// UpdateContainerStatus -> GetContainerRuntimeCredentials sequence.
+message ClaimContainerRequest {
+  string worker_id = 1;
+  string container_id = 2;
+  string pool_name = 3;
+  string pod_hostname = 4;
+  string delivery_token = 5;
+  // Optional. When set, credentials are vended after the claim succeeds.
+  GetContainerRuntimeCredentialsRequest credentials = 6;
+}
+
+message ClaimContainerResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  // claimed is true once the delivery was acknowledged, even when a later step
+  // failed. A worker that claimed a container owns its failure reporting; one
+  // that did not must only release its reserved capacity.
+  bool claimed = 3;
+  types.ContainerState state = 4;
+  GetContainerRuntimeCredentialsResponse credentials = 5;
 }
 
 message RemoveContainerFromWorkerRequest {

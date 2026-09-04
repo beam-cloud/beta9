@@ -304,6 +304,13 @@ func TestApplyRuntimeEnvironmentOverridesLeavesCheckpointEnvWithoutCheckpoints(t
 	require.Equal(t, "0", envMap["TORCHINDUCTOR_QUIESCE_ASYNC_COMPILE_POOL"])
 }
 
+// registeredAddresses stands in for a completed address-map publication.
+func registeredAddresses() <-chan error {
+	done := make(chan error, 1)
+	done <- nil
+	return done
+}
+
 func TestRegisterContainerPortsUsesNetworkManagerAddresses(t *testing.T) {
 	containerID := "container-route"
 	repoClient := &fakeContainerRepoClient{}
@@ -389,50 +396,6 @@ func TestRegisterContainerPortsKeepsLocalAddressBehavior(t *testing.T) {
 	require.True(t, exists)
 	require.Equal(t, "10.0.0.2:30001", instance.ContainerAddressMap[8001])
 	require.Equal(t, "10.0.0.2:30002", instance.ContainerAddressMap[2222])
-}
-
-func TestPublishContainerAddressesFormatsBracketedIPv6PodAddress(t *testing.T) {
-	containerID := "container-ipv6"
-	repoClient := &fakeContainerRepoClient{}
-	worker := &Worker{
-		containerRepoClient: repoClient,
-		containerInstances:  common.NewSafeMap[*ContainerInstance](),
-		podAddr:             "[2600:1f18:37a4:c02::7286]",
-	}
-	worker.containerInstances.Set(containerID, &ContainerInstance{})
-
-	err := worker.publishContainerAddresses(context.Background(), &types.ContainerRequest{
-		ContainerId: containerID,
-	}, []PortBinding{
-		{HostPort: 30001, ContainerPort: 8001},
-		{HostPort: 30002, ContainerPort: 2222},
-	})
-	require.NoError(t, err)
-
-	require.NotNil(t, repoClient.lastSetAddressMap)
-	require.Equal(t, int32(8001), repoClient.lastSetAddressMap.PrimaryPort)
-	require.Equal(t, "[2600:1f18:37a4:c02::7286]:30001", repoClient.lastSetAddressMap.AddressMap[8001])
-	require.Equal(t, "[2600:1f18:37a4:c02::7286]:30002", repoClient.lastSetAddressMap.AddressMap[2222])
-}
-
-func TestPublishContainerAddressesSkipsAgentWorkers(t *testing.T) {
-	repoClient := &fakeContainerRepoClient{}
-	worker := &Worker{
-		persistent:          true,
-		machineID:           "machine-one",
-		routeTransport:      types.BackendRouteTransportTSNet,
-		containerRepoClient: repoClient,
-		podAddr:             "127.0.0.1",
-	}
-
-	err := worker.publishContainerAddresses(context.Background(), &types.ContainerRequest{
-		ContainerId: "container-agent",
-	}, []PortBinding{
-		{HostPort: 60081, ContainerPort: 8001},
-	})
-	require.NoError(t, err)
-	require.Zero(t, repoClient.setAddressCalls)
-	require.Zero(t, repoClient.setAddressMapCalls)
 }
 
 func TestSpecFromRequestRespectsResourceEnforcementConfig(t *testing.T) {
@@ -1906,7 +1869,7 @@ func TestRunContainerDoesNotCancelRuntimeRunWithWorkerContext(t *testing.T) {
 			make(chan int, 1),
 			make(chan int, 1),
 			time.Now(),
-			nil,
+			registeredAddresses(),
 			nil,
 		)
 		result <- err
@@ -1968,12 +1931,13 @@ func TestRunContainerRestorePublishesAddressFromStartedHandler(t *testing.T) {
 		config: types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
 			"default": {CRIUEnabled: true},
 		}}},
-		podAddr:             "10.42.0.10",
-		criuManager:         &startedCRIUManager{},
-		cacheManager:        &WorkerCacheManager{checkpointRoot: filepath.Join(tmpDir, "checkpoints")},
-		containerRepoClient: repoClient,
-		backendRepoClient:   backendRepoClient,
-		containerInstances:  common.NewSafeMap[*ContainerInstance](),
+		podAddr:                 "10.42.0.10",
+		criuManager:             &startedCRIUManager{},
+		cacheManager:            &WorkerCacheManager{checkpointRoot: filepath.Join(tmpDir, "checkpoints")},
+		containerRepoClient:     repoClient,
+		backendRepoClient:       backendRepoClient,
+		containerInstances:      common.NewSafeMap[*ContainerInstance](),
+		containerNetworkManager: &fakeContainerNetworkController{},
 	}
 	request := &types.ContainerRequest{
 		ContainerId: "container-1",
@@ -1989,6 +1953,8 @@ func TestRunContainerRestorePublishesAddressFromStartedHandler(t *testing.T) {
 		Runtime: rt,
 	})
 
+	addressesRegistered := make(chan error, 1)
+	addressesRegistered <- worker.registerContainerPorts(context.Background(), request, []PortBinding{{HostPort: 30001, ContainerPort: 8001}})
 	exitCode, err := worker.runContainer(
 		context.Background(),
 		request,
@@ -1997,7 +1963,7 @@ func TestRunContainerRestorePublishesAddressFromStartedHandler(t *testing.T) {
 		make(chan int, 1),
 		make(chan int, 1),
 		time.Now(),
-		[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
+		addressesRegistered,
 		completedCheckpointFilesystemRestore(),
 	)
 
@@ -2006,7 +1972,7 @@ func TestRunContainerRestorePublishesAddressFromStartedHandler(t *testing.T) {
 	require.Zero(t, repoClient.setAddressCalls)
 	require.Equal(t, 1, repoClient.setAddressMapCalls)
 	require.Equal(t, int32(8001), repoClient.lastSetAddressMap.PrimaryPort)
-	require.Equal(t, "10.42.0.10:30001", repoClient.lastSetAddressMap.AddressMap[8001])
+	require.Equal(t, "10.0.0.2:30001", repoClient.lastSetAddressMap.AddressMap[8001])
 	require.Equal(t, 1, repoClient.updateStatusCalls)
 	require.Equal(t, string(types.ContainerStatusRunning), repoClient.lastUpdateStatus.Status)
 	require.Eventually(t, func() bool {
@@ -2140,7 +2106,7 @@ func TestFilesystemCheckpointRestoreCopiesOverlayThenColdRuns(t *testing.T) {
 		make(chan int, 1),
 		make(chan int, 1),
 		time.Now(),
-		[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
+		registeredAddresses(),
 		nil,
 	)
 
@@ -2248,7 +2214,7 @@ func TestRunContainerRestoreWaitsForRestoredRuntimeExitAndTerminalCheckpoint(t *
 			make(chan int, 1),
 			make(chan int, 1),
 			time.Now(),
-			[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
+			registeredAddresses(),
 			completedCheckpointFilesystemRestore(),
 		)
 		done <- err
@@ -2474,7 +2440,7 @@ func TestRunContainerRestoreFailureCleansRuntimeBeforeFallback(t *testing.T) {
 		make(chan int, 1),
 		make(chan int, 1),
 		time.Now(),
-		[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
+		registeredAddresses(),
 		completedCheckpointFilesystemRestore(),
 	)
 
@@ -2598,7 +2564,7 @@ func TestRunContainerMigratesLegacyForcedRuncCheckpointBeforeRestore(t *testing.
 				make(chan int, 1),
 				make(chan int, 1),
 				time.Now(),
-				nil,
+				registeredAddresses(),
 				&checkpointFilesystemRestore{done: restoreDone},
 			)
 
@@ -2906,7 +2872,7 @@ func TestRunContainerSandboxRestoreFallbackPolicy(t *testing.T) {
 				make(chan int, 1),
 				make(chan int, 1),
 				time.Now(),
-				nil,
+				registeredAddresses(),
 				&checkpointFilesystemRestore{done: filesystemRestoreDone},
 			)
 
@@ -2992,7 +2958,7 @@ func TestRunContainerMaterializeFailureFallsBackWithoutRestore(t *testing.T) {
 		make(chan int, 1),
 		make(chan int, 1),
 		time.Now(),
-		[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
+		registeredAddresses(),
 		nil,
 	)
 

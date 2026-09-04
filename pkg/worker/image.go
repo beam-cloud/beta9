@@ -301,15 +301,20 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	}
 
 	mountOptions := c.lazyMountOptions(ctx, request, archive)
-	if preload && archive.usesOCIStorage() {
-		mountOptions.Context = ctx
-		mountOptions.PrepareConcurrency = imageLayerPrepareConcurrency
-		mountOptions.PrepareProgress = imageLayerPrepareProgressLogger(outputLogger)
-		if err := clip.PrepareArchiveContent(mountOptions); err != nil {
-			return time.Since(startTime), err
+	if archive.usesOCIStorage() {
+		if preload {
+			// A checkpoint reads the whole root filesystem; it must be on disk
+			// before the mount is handed to the runtime.
+			if err := c.prepareImageLayers(ctx, request, mountOptions, outputLogger); err != nil {
+				return time.Since(startTime), err
+			}
+		} else {
+			// A cold miss materializes a whole layer, so letting the runtime
+			// discover layers one FUSE read at a time serializes the pulls.
+			// Start them all now; reads of an in-flight layer join it. The
+			// mount outlives this request, and so does its content.
+			go c.prepareImageLayers(context.WithoutCancel(ctx), request, mountOptions, nil)
 		}
-		mountOptions.PrepareConcurrency = 0
-		mountOptions.PrepareProgress = nil
 	}
 
 	mountStart := time.Now()
@@ -345,6 +350,28 @@ func (c *ImageClient) recordSuccessfulImageLoad(ctx context.Context, request *ty
 		c.queueV1ArchiveCache(request)
 	}
 	c.contentReporter.touchRecentStub(cacheRequestWorkspaceID(request), cacheRequestStubID(request))
+}
+
+// prepareImageLayers materializes every OCI layer of the archive into the
+// local layer cache, imageLayerPrepareConcurrency at a time. Layers already on
+// disk cost a stat; in-flight materializations are shared process-wide, so a
+// concurrent FUSE read of the same layer waits on this work instead of
+// repeating it.
+func (c *ImageClient) prepareImageLayers(ctx context.Context, request *types.ContainerRequest, options clip.MountOptions, outputLogger *slog.Logger) error {
+	options.Context = ctx
+	options.PrepareConcurrency = imageLayerPrepareConcurrency
+	options.PrepareProgress = imageLayerPrepareProgressLogger(outputLogger)
+
+	startedAt := time.Now()
+	err := clip.PrepareArchiveContent(options)
+	c.recordImageLifecycle(request, types.ContainerLifecycleID("image.prepare_layers"), startedAt, time.Since(startedAt), err == nil, nil)
+	switch {
+	case err == nil:
+		log.Info().Str("image_id", request.ImageId).Dur("duration", time.Since(startedAt)).Msg("image layers prepared")
+	case ctx.Err() == nil:
+		log.Warn().Err(err).Str("image_id", request.ImageId).Msg("image layer preparation failed")
+	}
+	return err
 }
 
 func imageLayerPrepareProgressLogger(outputLogger *slog.Logger) func(clipStorage.PrepareProgress) {

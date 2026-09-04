@@ -18,6 +18,8 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestGPUManagerForRequestUsesWorkerVirtualizationFlag(t *testing.T) {
@@ -100,52 +102,53 @@ func (r *startupTrackingRuntime) Kill(ctx context.Context, containerID string, s
 	return r.mockRuntime.Kill(ctx, containerID, signal, opts)
 }
 
-type acknowledgementWorkerRepoClient struct {
+// fakeWorkerRepoClient answers ClaimContainer. Errors are returned for the
+// first len(claimErrors) calls; claimStarted/claimRelease gate a call so a test
+// can observe what happens while the claim is in flight.
+type fakeWorkerRepoClient struct {
 	pb.WorkerRepositoryServiceClient
-	mu       sync.Mutex
-	failures int
-	calls    int
-	request  *pb.AddContainerToWorkerRequest
-	response *pb.AddContainerToWorkerResponse
+	mu           sync.Mutex
+	claims       int
+	claimErrors  []error
+	claim        *pb.ClaimContainerResponse
+	lastClaim    *pb.ClaimContainerRequest
+	claimStarted chan struct{}
+	claimRelease <-chan struct{}
 }
 
-func (c *acknowledgementWorkerRepoClient) AddContainerToWorker(_ context.Context, request *pb.AddContainerToWorkerRequest, _ ...grpc.CallOption) (*pb.AddContainerToWorkerResponse, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.calls++
-	c.request = request
-	if c.calls <= c.failures {
-		return nil, context.DeadlineExceeded
+func (f *fakeWorkerRepoClient) ClaimContainer(ctx context.Context, req *pb.ClaimContainerRequest, _ ...grpc.CallOption) (*pb.ClaimContainerResponse, error) {
+	f.mu.Lock()
+	call := f.claims
+	f.claims++
+	f.lastClaim = req
+	started, release := f.claimStarted, f.claimRelease
+	f.mu.Unlock()
+	if started != nil {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
 	}
-	return c.response, nil
+	if release != nil {
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	if call < len(f.claimErrors) {
+		return nil, f.claimErrors[call]
+	}
+	if f.claim == nil {
+		return &pb.ClaimContainerResponse{Ok: true, Claimed: true}, nil
+	}
+	return f.claim, nil
 }
 
-func TestAcknowledgeContainerRequestRetriesAmbiguousTransportFailure(t *testing.T) {
-	client := &acknowledgementWorkerRepoClient{
-		failures: 1,
-		response: &pb.AddContainerToWorkerResponse{Ok: true},
-	}
-	worker := &Worker{
-		ctx:              context.Background(),
-		workerId:         "worker-1",
-		poolName:         "pool-1",
-		podHostName:      "host-1",
-		workerRepoClient: client,
-	}
-
-	require.NoError(t, worker.acknowledgeContainerRequest("container-1", "delivery-1"))
-	require.Equal(t, 2, client.calls)
-	require.Equal(t, "delivery-1", client.request.DeliveryToken)
-}
-
-func TestAcknowledgeContainerRequestReturnsAuthoritativeRejection(t *testing.T) {
-	client := &acknowledgementWorkerRepoClient{
-		response: &pb.AddContainerToWorkerResponse{ErrorMsg: "stale delivery"},
-	}
-	worker := &Worker{ctx: context.Background(), workerRepoClient: client}
-
-	require.EqualError(t, worker.acknowledgeContainerRequest("container-1", "delivery-1"), "stale delivery")
-	require.Equal(t, 1, client.calls)
+func (f *fakeWorkerRepoClient) claimCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.claims
 }
 
 func (m *shutdownSignalRuntime) Kill(ctx context.Context, containerID string, sig syscall.Signal, opts *runtime.KillOpts) error {
@@ -339,22 +342,36 @@ func TestUpdateContainerStatusOnceStopsHeartbeatForExitedInstance(t *testing.T) 
 	require.Equal(t, 0, repoClient.updateStatusCalls)
 }
 
-func TestInitialReconciliationCancelsBeforeCredentialHydration(t *testing.T) {
+func TestClaimOutcomeGatesStartup(t *testing.T) {
 	tests := []struct {
-		name       string
-		state      *pb.ContainerState
-		stateError error
+		name         string
+		claim        *pb.ClaimContainerResponse
+		wantReleased bool
+		wantExitCode bool
+		wantRuntime  bool
 	}{
 		{
-			name:       "missing state",
-			stateError: &types.ErrContainerStateNotFound{ContainerId: "container-pre-runtime"},
+			name:         "rejected claim releases capacity only",
+			claim:        &pb.ClaimContainerResponse{Ok: false, ErrorMsg: "container <container-claim> is assigned to another worker"},
+			wantReleased: true,
 		},
 		{
-			name: "stopping state",
-			state: &pb.ContainerState{
-				ContainerId: "container-pre-runtime",
+			name:         "claimed container with missing state is failed",
+			claim:        &pb.ClaimContainerResponse{Ok: false, Claimed: true, ErrorMsg: "container state not found: container-claim"},
+			wantExitCode: true,
+		},
+		{
+			name: "claimed container already stopping does not start",
+			claim: &pb.ClaimContainerResponse{Ok: true, Claimed: true, State: &pb.ContainerState{
+				ContainerId: "container-claim",
 				Status:      string(types.ContainerStatusStopping),
-			},
+			}},
+			wantExitCode: true,
+		},
+		{
+			name:        "claimed pending container starts",
+			claim:       &pb.ClaimContainerResponse{Ok: true, Claimed: true, State: &pb.ContainerState{ContainerId: "container-claim", Status: string(types.ContainerStatusPending)}},
+			wantRuntime: true,
 		},
 	}
 
@@ -362,29 +379,14 @@ func TestInitialReconciliationCancelsBeforeCredentialHydration(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			workerCtx, cancelWorker := context.WithCancel(context.Background())
 			t.Cleanup(cancelWorker)
-			request := &types.ContainerRequest{
-				ContainerId:          "container-pre-runtime",
-				WorkspaceId:          "workspace",
-				StubId:               "stub",
-				RuntimeTokenRequired: true,
-			}
-			credentials := &blockingRuntimeCredentialsWorkerRepo{
-				started:  make(chan struct{}, 1),
-				canceled: make(chan struct{}, 1),
-			}
-			repoClient := &fakeContainerRepoClient{
-				state:           tt.state,
-				getStateErrors:  []error{tt.stateError},
-				deleteStateDone: make(chan struct{}, 1),
-			}
-			runtime := &startupTrackingRuntime{
-				mockRuntime: mockRuntime{name: types.ContainerRuntimeRunc.String()},
-				started:     make(chan struct{}, 1),
-			}
+			request := &types.ContainerRequest{ContainerId: "container-claim", DeliveryToken: "delivery-1"}
+			workerRepo := &fakeWorkerRepoClient{claim: tt.claim}
+			repoClient := &fakeContainerRepoClient{deleteStateDone: make(chan struct{}, 1)}
 			worker := &Worker{
 				ctx:                     workerCtx,
-				runtime:                 runtime,
-				workerRepoClient:        credentials,
+				workerId:                "worker-1",
+				runtime:                 &mockRuntime{name: types.ContainerRuntimeRunc.String()},
+				workerRepoClient:        workerRepo,
 				containerRepoClient:     repoClient,
 				containerInstances:      common.NewSafeMap[*ContainerInstance](),
 				containerCancels:        common.NewSafeMap[context.CancelFunc](),
@@ -394,53 +396,63 @@ func TestInitialReconciliationCancelsBeforeCredentialHydration(t *testing.T) {
 			}
 			require.True(t, worker.reserveContainerInstance(request))
 
+			runtimeStarted := make(chan struct{}, 1)
 			done := make(chan struct{})
 			go func() {
-				worker.runContainerRequest(request)
+				worker.runContainerRequestWithRunner(request, func(ctx context.Context, _ *types.ContainerRequest) error {
+					// Mirror the runtime: a stop observed during the claim
+					// cancels the startup context before the runner runs.
+					if ctx.Err() != nil {
+						return ctx.Err()
+					}
+					runtimeStarted <- struct{}{}
+					return nil
+				})
 				close(done)
 			}()
-
 			select {
 			case <-done:
 			case <-time.After(time.Second):
-				t.Fatal("initial reconciliation did not cancel startup")
+				t.Fatal("container request did not complete")
 			}
 
-			require.Equal(t, 1, repoClient.getContainerStateCalls())
+			require.Equal(t, 1, workerRepo.claimCalls())
+			require.Equal(t, "delivery-1", workerRepo.lastClaim.DeliveryToken)
 			_, cancelRegistered := worker.containerCancels.Get(request.ContainerId)
 			require.False(t, cancelRegistered)
-			select {
-			case <-credentials.started:
-				t.Fatal("credential hydration began before persisted state reconciliation")
-			default:
+			_, instanceExists := worker.containerInstances.Get(request.ContainerId)
+			require.Equal(t, !tt.wantReleased, instanceExists || tt.wantExitCode)
+			require.Equal(t, tt.wantRuntime, len(runtimeStarted) == 1)
+			// Every terminal path completes the request; a started container
+			// completes when it exits.
+			require.Equal(t, !tt.wantRuntime, len(worker.completedRequests) == 1)
+			if tt.wantExitCode {
+				require.Equal(t, 1, repoClient.setExitCodeCalls)
+				require.Equal(t, int32(1), repoClient.lastSetExitCode.ExitCode)
+			} else {
+				require.Zero(t, repoClient.setExitCodeCalls)
 			}
-			select {
-			case <-runtime.started:
-				t.Fatal("runtime started after authoritative terminal state")
-			default:
+			if tt.wantRuntime {
+				instance, exists := worker.containerInstances.Get(request.ContainerId)
+				require.True(t, exists)
+				instance.setExitCode(0)
 			}
 		})
 	}
 }
 
-func TestRunContainerRequestWaitsForInitialReconciliationBeforeRuntimeHandoff(t *testing.T) {
+func TestRunContainerRequestWaitsForClaimBeforeRuntimeHandoff(t *testing.T) {
 	workerCtx, cancelWorker := context.WithCancel(context.Background())
 	defer cancelWorker()
-	heartbeatStarted := make(chan struct{}, 1)
-	releaseHeartbeat := make(chan struct{})
-	repoClient := &fakeContainerRepoClient{
-		state: &pb.ContainerState{
-			ContainerId: "container-heartbeat-handoff",
-			Status:      string(types.ContainerStatusRunning),
-		},
-		getStateStarted: heartbeatStarted,
-		getStateRelease: releaseHeartbeat,
-	}
+	claimStarted := make(chan struct{}, 1)
+	releaseClaim := make(chan struct{})
+	workerRepo := &fakeWorkerRepoClient{claimStarted: claimStarted, claimRelease: releaseClaim}
 	worker := &Worker{
 		ctx:                 workerCtx,
+		workerRepoClient:    workerRepo,
 		containerInstances:  common.NewSafeMap[*ContainerInstance](),
 		containerCancels:    common.NewSafeMap[context.CancelFunc](),
-		containerRepoClient: repoClient,
+		containerRepoClient: &fakeContainerRepoClient{},
 	}
 	request := &types.ContainerRequest{ContainerId: "container-heartbeat-handoff"}
 	require.True(t, worker.reserveContainerInstance(request))
@@ -456,20 +468,20 @@ func TestRunContainerRequestWaitsForInitialReconciliationBeforeRuntimeHandoff(t 
 	}()
 
 	select {
-	case <-heartbeatStarted:
+	case <-claimStarted:
 	case <-time.After(time.Second):
-		t.Fatal("initial persisted-state reconciliation did not start")
+		t.Fatal("container claim did not start")
 	}
 	select {
 	case <-runnerStarted:
-		t.Fatal("runtime started before initial persisted-state reconciliation")
+		t.Fatal("runtime started before the claim was acknowledged")
 	default:
 	}
-	close(releaseHeartbeat)
+	close(releaseClaim)
 	select {
 	case <-runnerStarted:
 	case <-time.After(time.Second):
-		t.Fatal("runtime did not start after persisted-state reconciliation")
+		t.Fatal("runtime did not start after the claim")
 	}
 	select {
 	case <-requestDone:
@@ -479,61 +491,45 @@ func TestRunContainerRequestWaitsForInitialReconciliationBeforeRuntimeHandoff(t 
 	_, startupCancelRegistered := worker.containerCancels.Get(request.ContainerId)
 	require.False(t, startupCancelRegistered)
 
-	require.Len(t, repoClient.containerStatusUpdates(), 1)
-
 	instance, exists := worker.containerInstances.Get(request.ContainerId)
 	require.True(t, exists)
 	instance.setExitCode(0)
 }
 
-func TestInitialReconciliationRetriesTransientRepositoryFailure(t *testing.T) {
-	workerCtx, cancelWorker := context.WithCancel(context.Background())
-	defer cancelWorker()
-	repoClient := &fakeContainerRepoClient{
-		state: &pb.ContainerState{
-			ContainerId: "container-reconcile-retry",
-			Status:      string(types.ContainerStatusPending),
-		},
-		getStateErrors: []error{errors.New("transient repository failure")},
-	}
-	worker := &Worker{
-		ctx:                 workerCtx,
-		containerInstances:  common.NewSafeMap[*ContainerInstance](),
-		containerCancels:    common.NewSafeMap[context.CancelFunc](),
-		containerRepoClient: repoClient,
-	}
-	request := &types.ContainerRequest{ContainerId: "container-reconcile-retry"}
-	require.True(t, worker.reserveContainerInstance(request))
-	runnerCalled := false
+func TestClaimRetriesAmbiguousTransportFailure(t *testing.T) {
+	workerRepo := &fakeWorkerRepoClient{claimErrors: []error{status.Error(codes.Unavailable, "gateway restarting")}}
+	worker := &Worker{workerRepoClient: workerRepo}
 
-	worker.runContainerRequestWithRunner(request, func(context.Context, *types.ContainerRequest) error {
-		runnerCalled = true
-		return nil
-	})
-
-	require.True(t, runnerCalled)
-	require.Equal(t, 2, repoClient.getContainerStateCalls())
-	instance, exists := worker.containerInstances.Get(request.ContainerId)
-	require.True(t, exists)
-	instance.setExitCode(0)
+	claimed, err := worker.claimContainer(context.Background(), &types.ContainerRequest{ContainerId: "container-retry"})
+	require.NoError(t, err)
+	require.True(t, claimed)
+	require.Equal(t, 2, workerRepo.claimCalls())
 }
 
-func TestInitialReconciliationHonorsStartupContextDeadline(t *testing.T) {
-	repoClient := &fakeContainerRepoClient{getStateError: errors.New("repository unavailable")}
-	worker := &Worker{
-		containerInstances:  common.NewSafeMap[*ContainerInstance](),
-		containerRepoClient: repoClient,
+func TestClaimReturnsAuthoritativeTransportError(t *testing.T) {
+	workerRepo := &fakeWorkerRepoClient{claimErrors: []error{status.Error(codes.Unimplemented, "unknown method ClaimContainer")}}
+	worker := &Worker{workerRepoClient: workerRepo}
+
+	claimed, err := worker.claimContainer(context.Background(), &types.ContainerRequest{ContainerId: "container-old-gateway"})
+	require.Equal(t, codes.Unimplemented, status.Code(err))
+	require.False(t, claimed)
+	require.Equal(t, 1, workerRepo.claimCalls())
+}
+
+func TestClaimHonorsContextDeadline(t *testing.T) {
+	workerRepo := &fakeWorkerRepoClient{claimErrors: make([]error, 100)}
+	for i := range workerRepo.claimErrors {
+		workerRepo.claimErrors[i] = status.Error(codes.Unavailable, "gateway unavailable")
 	}
-	request := &types.ContainerRequest{ContainerId: "container-reconcile-timeout"}
-	worker.containerInstances.Set(request.ContainerId, &ContainerInstance{ExitCode: -1})
+	worker := &Worker{workerRepoClient: workerRepo}
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	started := time.Now()
 
-	startupAllowed, err := worker.awaitInitialContainerReconciliation(ctx, request)
+	claimed, err := worker.claimContainer(ctx, &types.ContainerRequest{ContainerId: "container-claim-timeout"})
 
-	require.Error(t, err)
-	require.False(t, startupAllowed)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.False(t, claimed)
 	require.Less(t, time.Since(started), 500*time.Millisecond)
 }
 
@@ -592,14 +588,11 @@ func TestRuntimeStartStateIsPublishedAtomically(t *testing.T) {
 }
 
 func TestUpdateContainerStatusStopsWhenRequestEnds(t *testing.T) {
-	release := make(chan struct{})
 	repoClient := &fakeContainerRepoClient{
 		state: &pb.ContainerState{
 			ContainerId: "container-cancelled-heartbeat",
 			Status:      string(types.ContainerStatusRunning),
 		},
-		getStateStarted: make(chan struct{}, 1),
-		getStateRelease: release,
 	}
 	worker := &Worker{
 		containerInstances:  common.NewSafeMap[*ContainerInstance](),
@@ -613,13 +606,8 @@ func TestUpdateContainerStatusStopsWhenRequestEnds(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_ = worker.updateContainerStatus(ctx, request)
+		worker.updateContainerStatusLoop(ctx, request)
 	}()
-	select {
-	case <-repoClient.getStateStarted:
-	case <-time.After(time.Second):
-		t.Fatal("heartbeat did not enter repository request")
-	}
 	cancel()
 
 	select {
@@ -1154,33 +1142,12 @@ type fakeContainerRepoClient struct {
 	deleteStateDone            chan struct{}
 }
 
-type blockingRuntimeCredentialsWorkerRepo struct {
-	pb.WorkerRepositoryServiceClient
-	started  chan struct{}
-	canceled chan struct{}
-}
-
 type missingContainerRepoClient struct {
 	pb.ContainerRepositoryServiceClient
 }
 
 func (*missingContainerRepoClient) GetContainerState(context.Context, *pb.GetContainerStateRequest, ...grpc.CallOption) (*pb.GetContainerStateResponse, error) {
 	return nil, &types.ErrContainerStateNotFound{ContainerId: "container-missing"}
-}
-
-func (f *blockingRuntimeCredentialsWorkerRepo) GetContainerRuntimeCredentials(ctx context.Context, _ *pb.GetContainerRuntimeCredentialsRequest, _ ...grpc.CallOption) (*pb.GetContainerRuntimeCredentialsResponse, error) {
-	select {
-	case f.started <- struct{}{}:
-	default:
-	}
-	<-ctx.Done()
-	if f.canceled != nil {
-		select {
-		case f.canceled <- struct{}{}:
-		default:
-		}
-	}
-	return nil, ctx.Err()
 }
 
 func (f *fakeContainerRepoClient) GetContainerState(ctx context.Context, in *pb.GetContainerStateRequest, opts ...grpc.CallOption) (*pb.GetContainerStateResponse, error) {
@@ -1289,7 +1256,14 @@ func (f *fakeContainerRepoClient) UpdateContainerStatus(ctx context.Context, in 
 	if err != nil {
 		return nil, err
 	}
-	return &pb.UpdateContainerStatusResponse{Ok: true}, nil
+	// Mirror the gateway: STOPPING is terminal, otherwise the update is persisted.
+	status := in.Status
+	f.mu.Lock()
+	if f.state != nil && f.state.Status == string(types.ContainerStatusStopping) {
+		status = f.state.Status
+	}
+	f.mu.Unlock()
+	return &pb.UpdateContainerStatusResponse{Ok: true, Status: status}, nil
 }
 
 func (f *fakeContainerRepoClient) SetContainerExitCode(ctx context.Context, in *pb.SetContainerExitCodeRequest, opts ...grpc.CallOption) (*pb.SetContainerExitCodeResponse, error) {

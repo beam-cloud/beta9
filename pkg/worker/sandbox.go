@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -23,12 +22,12 @@ import (
 
 const (
 	// Timing strategy for Docker daemon startup:
-	// 1. Wait up to 30s for goproc to be ready (usually takes 100-500ms)
+	// 1. Wait for goproc to be ready (usually 100-500ms; bounded by the container's lifetime)
 	// 2. Setup cgroups (fast, ~100ms)
 	// 3. Start dockerd in background
 	// 4. Wait up to 30s for dockerd to be ready (usually takes 2-5s)
-	goprocReadyTimeout            = 30 * time.Second
 	goprocReadyProbeTimeout       = 50 * time.Millisecond
+	goprocSlowReadyLogInterval    = 30 * time.Second
 	goprocInitialBackoff          = 5 * time.Millisecond
 	goprocMaxBackoff              = 15 * time.Millisecond
 	goprocBackoffMultiplier       = 1.5
@@ -73,60 +72,27 @@ func (i *ContainerInstance) processManagerReadyChannel() <-chan struct{} {
 	return i.ProcessManagerReadyChan
 }
 
-type tcpProbeResult struct {
-	Connected  bool
-	RouteReady bool
-	Class      string
-	Err        error
-	Duration   time.Duration
-}
-
 type processManagerWaitStats struct {
-	TCPAttempts         int
-	TCPFailures         int
-	TCPFailureClasses   map[string]int
-	ReadyAttempts       int
-	ReadyFailures       int
-	ReadyFailureClasses map[string]int
-	FirstTCPReadyAfter  time.Duration
-	LastTCPFailureClass string
-	LastReadyClass      string
-	LastError           string
+	Attempts       int
+	Failures       int
+	FailureClasses map[string]int
+	LastClass      string
+	LastError      string
 }
 
 func (s processManagerWaitStats) attrs() map[string]string {
 	attrs := map[string]string{
-		types.EventAttrAttempts:     strconv.Itoa(s.ReadyAttempts),
-		types.EventAttrFailureCount: strconv.Itoa(s.ReadyFailures),
+		types.EventAttrAttempts:     strconv.Itoa(s.Attempts),
+		types.EventAttrFailureCount: strconv.Itoa(s.Failures),
 	}
-	if s.FirstTCPReadyAfter > 0 {
-		attrs[types.EventAttrFirstTCPReadyMs] = strconv.FormatInt(s.FirstTCPReadyAfter.Milliseconds(), 10)
-	}
-	if s.LastReadyClass != "" {
-		attrs[types.EventAttrFailureClass] = s.LastReadyClass
+	if s.LastClass != "" {
+		attrs[types.EventAttrFailureClass] = s.LastClass
 	}
 	if s.LastError != "" {
 		attrs[types.EventAttrLastError] = s.LastError
 	}
-	if len(s.ReadyFailureClasses) > 0 {
-		attrs[types.EventAttrFailureClasses] = failureClassSummary(s.ReadyFailureClasses)
-	}
-	return attrs
-}
-
-func (s processManagerWaitStats) tcpAttrs() map[string]string {
-	attrs := map[string]string{
-		types.EventAttrAttempts:     strconv.Itoa(s.TCPAttempts),
-		types.EventAttrFailureCount: strconv.Itoa(s.TCPFailures),
-	}
-	if s.LastTCPFailureClass != "" {
-		attrs[types.EventAttrFailureClass] = s.LastTCPFailureClass
-	}
-	if s.LastError != "" {
-		attrs[types.EventAttrLastError] = s.LastError
-	}
-	if len(s.TCPFailureClasses) > 0 {
-		attrs[types.EventAttrFailureClasses] = failureClassSummary(s.TCPFailureClasses)
+	if len(s.FailureClasses) > 0 {
+		attrs[types.EventAttrFailureClasses] = failureClassSummary(s.FailureClasses)
 	}
 	return attrs
 }
@@ -497,87 +463,55 @@ func (s *Worker) enableIPv4Forwarding(ctx context.Context, instance *ContainerIn
 	return runSandboxShell(ctx, instance.SandboxProcessManager, "IPv4 forwarding", `echo 1 > /proc/sys/net/ipv4/ip_forward`)
 }
 
-// waitForProcessManager waits for the goproc process manager to be ready to accept commands
-// Uses exponential backoff to efficiently wait for goproc startup
-// This should be called ONCE during container initialization, not on every exec
+// waitForProcessManager blocks until the goproc process manager inside the
+// sandbox answers a readiness RPC, or the container's context ends.
+//
+// The wait is bounded by the container's lifetime, not a wall clock. The
+// process manager cannot start until the runtime has exec'd the entrypoint,
+// and on a cold node that can sit behind image layer materialization for
+// well over 30s. Giving up on a timer leaves a container that is otherwise
+// healthy permanently marked unusable; a container that never comes up is
+// instead handled by callers' own exec deadlines and eventual teardown.
+//
+// Called once per container start, not on every exec.
 func (s *Worker) waitForProcessManager(ctx context.Context, containerId string, instance *ContainerInstance) (*goproc.GoProcClient, bool, processManagerWaitStats) {
 	start := time.Now()
 	backoff := goprocInitialBackoff
-	var lastErr error
-	stats := processManagerWaitStats{
-		TCPFailureClasses:   map[string]int{},
-		ReadyFailureClasses: map[string]int{},
-	}
-	tcpReadyRecorded := false
+	stats := processManagerWaitStats{FailureClasses: map[string]int{}}
+	nextSlowLog := goprocSlowReadyLogInterval
 
-	for time.Since(start) < goprocReadyTimeout {
-		select {
-		case <-ctx.Done():
-			stats.LastError = ctx.Err().Error()
-			return nil, false, stats
-		default:
-		}
-
-		stats.TCPAttempts++
-		stats.ReadyAttempts++
+	for {
+		stats.Attempts++
 		client, err := newProcessManagerClient(ctx, instance)
 		if err == nil {
-			if !tcpReadyRecorded {
-				stats.FirstTCPReadyAfter = time.Since(start)
-				s.recordContainerLifecycle(ctx, instance.Request, containerLifecycleFromDuration(
-					types.ContainerLifecycleSandboxProcessManagerTCP,
-					instance.Request,
-					start,
-					stats.FirstTCPReadyAfter,
-					true,
-					stats.tcpAttrs(),
-				))
-				tcpReadyRecorded = true
-			}
 			log.Info().
 				Str("container_id", containerId).
 				Dur("wait_time", time.Since(start)).
-				Int("tcp_attempts", stats.TCPAttempts).
-				Int("ready_attempts", stats.ReadyAttempts).
+				Int("attempts", stats.Attempts).
 				Msg("process manager is ready")
 			return client, true, stats
 		}
 
-		lastErr = err
-		stats.ReadyFailures++
+		stats.Failures++
 		stats.LastError = err.Error()
-		stats.LastReadyClass = classifyProcessManagerReadyError(err)
-		stats.ReadyFailureClasses[stats.LastReadyClass]++
-		stats.TCPFailures++
-		stats.LastTCPFailureClass = stats.LastReadyClass
-		stats.TCPFailureClasses[stats.LastTCPFailureClass]++
+		stats.LastClass = classifyProcessManagerReadyError(err)
+		stats.FailureClasses[stats.LastClass]++
 
-		if err := waitProcessManagerBackoff(ctx, backoff); err != nil {
-			stats.LastError = ctx.Err().Error()
-			return nil, false, stats
+		if waited := time.Since(start); waited >= nextSlowLog {
+			log.Warn().
+				Err(err).
+				Str("container_id", containerId).
+				Dur("waited", waited).
+				Msg("process manager not ready yet; still waiting")
+			nextSlowLog += goprocSlowReadyLogInterval
 		}
 
+		if err := waitProcessManagerBackoff(ctx, backoff); err != nil {
+			stats.LastError = err.Error()
+			return nil, false, stats
+		}
 		backoff = nextProcessManagerBackoff(backoff)
 	}
-
-	logEvent := log.Error().Str("container_id", containerId)
-	if lastErr != nil {
-		logEvent = logEvent.Err(lastErr)
-	}
-	logEvent.Msg("process manager did not become ready within timeout")
-
-	if !tcpReadyRecorded {
-		s.recordContainerLifecycle(ctx, instance.Request, containerLifecycleFromDuration(
-			types.ContainerLifecycleSandboxProcessManagerTCP,
-			instance.Request,
-			start,
-			time.Since(start),
-			false,
-			stats.tcpAttrs(),
-		))
-	}
-
-	return nil, false, stats
 }
 
 func nextProcessManagerBackoff(delay time.Duration) time.Duration {
@@ -586,23 +520,6 @@ func nextProcessManagerBackoff(delay time.Duration) time.Duration {
 		return goprocMaxBackoff
 	}
 	return delay
-}
-
-func probeProcessManager(ctx context.Context, instance *ContainerInstance) tcpProbeResult {
-	endpoints := sandboxProcessManagerEndpoints(instance)
-	if len(endpoints) == 0 {
-		return tcpProbeResult{Class: "address_unavailable"}
-	}
-
-	var last tcpProbeResult
-	for _, endpoint := range endpoints {
-		result := probeTCP(ctx, endpoint.host, endpoint.port, goprocReadyProbeTimeout)
-		if result.Connected {
-			return result
-		}
-		last = result
-	}
-	return last
 }
 
 func newProcessManagerClient(ctx context.Context, instance *ContainerInstance) (*goproc.GoProcClient, error) {
@@ -717,58 +634,6 @@ func waitProcessManagerBackoff(ctx context.Context, delay time.Duration) error {
 		return ctx.Err()
 	case <-timer.C:
 		return nil
-	}
-}
-
-func probeTCP(ctx context.Context, ip string, port int, timeout time.Duration) tcpProbeResult {
-	start := time.Now()
-	probeCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	address := fmt.Sprintf("%s:%d", ip, port)
-	dialer := &net.Dialer{}
-	conn, err := dialer.DialContext(probeCtx, "tcp", address)
-	result := tcpProbeResult{
-		Class:    classifyTCPProbeError(err),
-		Err:      err,
-		Duration: time.Since(start),
-	}
-	if err == nil {
-		_ = conn.Close()
-		result.Connected = true
-		result.RouteReady = true
-		return result
-	}
-	if result.Class == "connection_refused" {
-		result.RouteReady = true
-	}
-	return result
-}
-
-func classifyTCPProbeError(err error) string {
-	if err == nil {
-		return "connected"
-	}
-	if errors.Is(err, syscall.ECONNREFUSED) {
-		return "connection_refused"
-	}
-	if errors.Is(err, syscall.EHOSTUNREACH) || errors.Is(err, syscall.ENETUNREACH) {
-		return "no_route"
-	}
-	var netErr net.Error
-	if errors.As(err, &netErr) && netErr.Timeout() {
-		return "timeout"
-	}
-	msg := strings.ToLower(err.Error())
-	switch {
-	case strings.Contains(msg, "connection refused"):
-		return "connection_refused"
-	case strings.Contains(msg, "no route") || strings.Contains(msg, "network is unreachable") || strings.Contains(msg, "host is unreachable"):
-		return "no_route"
-	case strings.Contains(msg, "i/o timeout") || strings.Contains(msg, "deadline exceeded"):
-		return "timeout"
-	default:
-		return "other"
 	}
 }
 

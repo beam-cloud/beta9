@@ -109,7 +109,6 @@ SERVER_PHASES = (
     ("runtime_ms", "container.startup", "Runtime/container startup", False),
     ("runtime_config_write_ms", "runtime.config_write", "Runtime config write", False),
     ("runtime_start_to_pid_ms", "runtime.start_to_pid", "Runtime start to PID", False),
-    ("sandbox_process_manager_tcp_ready_ms", "sandbox.process_manager_tcp_ready", "Sandbox process manager TCP ready", False),
     ("sandbox_process_manager_ready_ms", "sandbox.process_manager_ready", "Sandbox process manager ready", False),
     ("running_to_first_log_ms", "logs.first_byte", "RUNNING to first log", False),
     ("running_to_runner_process_started_ms", "runner.process_started", "RUNNING to runner process", False),

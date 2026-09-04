@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/rs/zerolog/log"
@@ -83,8 +84,6 @@ type Config struct {
 	Root          string
 	Binaries      Binaries
 	MaxChainDepth int
-	// Debug adds per-phase timings to attach logs.
-	Debug bool
 
 	// Test hooks.
 	SysBlockPath string
@@ -99,11 +98,16 @@ type Manager struct {
 	sysBlockPath  string
 	devPath       string
 	run           runner
+	execs         bool // run is the real exec runner, so binaries must exist
 	maxChainDepth int
-	debug         bool
 
-	mu      sync.Mutex
-	volumes map[string]*Volume
+	mu              sync.Mutex
+	volumes         map[string]*Volume
+	nbdDevicesReady bool
+	// spares are pre-built fresh volumes by virtual size (see spare.go).
+	spares      map[int64][]*Volume
+	spareBuilds map[int64]bool
+	closed      bool
 
 	preflightOnce sync.Once
 	preflightErr  error
@@ -133,9 +137,11 @@ func NewManager(config Config) *Manager {
 		sysBlockPath:  config.SysBlockPath,
 		devPath:       config.DevPath,
 		run:           run,
+		execs:         config.Runner == nil,
 		maxChainDepth: config.MaxChainDepth,
-		debug:         config.Debug,
 		volumes:       make(map[string]*Volume),
+		spares:        make(map[int64][]*Volume),
+		spareBuilds:   make(map[int64]bool),
 	}
 }
 
@@ -159,6 +165,10 @@ func (m *Manager) lockDir() string {
 // so workers that never attach a qcow disk don't need qemu installed.
 func (m *Manager) preflight() error {
 	m.preflightOnce.Do(func() {
+		if !m.execs {
+			m.preflightErr = os.MkdirAll(m.root, 0o700)
+			return
+		}
 		for _, binary := range []string{
 			m.binaries.QemuImg, m.binaries.QSD, m.binaries.NBDClient,
 			m.binaries.Modprobe, m.binaries.Mknod, m.binaries.Stat,
@@ -236,6 +246,13 @@ func (m *Manager) Detach(ctx context.Context, key string) error {
 	return nil
 }
 
+// Close detaches every volume and destroys the spare pool. For worker
+// shutdown; an idle worker uses DetachAll and keeps its spares.
+func (m *Manager) Close(ctx context.Context) error {
+	m.destroySpares()
+	return m.DetachAll(ctx)
+}
+
 // DetachAll tears down every volume still owned by this worker. It is safe to
 // call after the last container exits and during worker shutdown.
 func (m *Manager) DetachAll(ctx context.Context) error {
@@ -277,10 +294,18 @@ func (m *Manager) Recover(ctx context.Context) error {
 
 	for _, entry := range entries {
 		if !entry.IsDir() {
-			continue
+			continue // key index symlinks; the directories they point at are visited
 		}
 		dir := filepath.Join(volumesDir, entry.Name())
 		state, err := loadVolumeState(dir)
+		if strings.HasPrefix(entry.Name(), sparePrefix) && (state == nil || isSpareKey(state.Key)) {
+			// A spare that was never adopted holds no data.
+			if state != nil && state.Attached {
+				m.cleanupCrashedVolume(ctx, dir, state)
+			}
+			_ = os.RemoveAll(dir)
+			continue
+		}
 		if err != nil || state == nil || !state.Attached {
 			continue
 		}

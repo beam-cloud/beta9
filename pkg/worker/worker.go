@@ -342,6 +342,9 @@ type ContainerOptions struct {
 	InitialSpec                 *specs.Spec
 	StartupStartedAt            time.Time
 	CheckpointFilesystemRestore *checkpointFilesystemRestore
+	// AddressesRegistered delivers the result of the address-map publication
+	// started as soon as host ports were reserved; RUNNING waits on it.
+	AddressesRegistered <-chan error
 }
 
 type stopContainerEvent struct {
@@ -613,7 +616,7 @@ func NewWorker() (_ *Worker, err error) {
 
 	// Recover qcow volumes left behind by a previous worker process before any
 	// container can attach: live volumes are adopted, crashed ones cleaned up.
-	worker.diskManager = disk.NewManager(disk.Config{Debug: config.DebugMode})
+	worker.diskManager = disk.NewManager(disk.Config{})
 	if err := worker.diskManager.Recover(ctx); err != nil {
 		log.Warn().Err(err).Msg("failed to recover qcow durable disk volumes")
 	}
@@ -713,6 +716,7 @@ containerRequestStream:
 			if response.ContainerRequest != nil {
 				lastContainerRequest = time.Now()
 				request := types.NewContainerRequestFromProto(response.ContainerRequest)
+				request.DeliveryToken = response.DeliveryToken
 				if request.MachineId == "" {
 					request.MachineId = s.machineID
 				}
@@ -728,11 +732,6 @@ containerRequestStream:
 						"worker_id": s.workerId,
 					}))
 				}
-				if err := s.acknowledgeContainerRequest(request.ContainerId, response.DeliveryToken); err != nil {
-					log.Warn().Err(err).Str("worker_id", s.workerId).Str("container_id", request.ContainerId).Msg("failed to acknowledge container request")
-					s.completedRequests <- request
-					break
-				}
 				s.handleContainerRequest(request)
 			}
 
@@ -747,34 +746,6 @@ containerRequestStream:
 	}
 
 	return s.shutdown()
-}
-
-func (s *Worker) acknowledgeContainerRequest(containerID, deliveryToken string) error {
-	request := &pb.AddContainerToWorkerRequest{
-		WorkerId:      s.workerId,
-		ContainerId:   containerID,
-		PoolName:      s.poolName,
-		PodHostname:   s.podHostName,
-		DeliveryToken: deliveryToken,
-	}
-
-	for {
-		ctx, cancel := context.WithTimeout(s.ctx, containerRequestAckTimeout)
-		response, err := s.workerRepoClient.AddContainerToWorker(ctx, request)
-		cancel()
-		if err == nil {
-			if response != nil && response.Ok {
-				return nil
-			}
-			if response == nil {
-				return errors.New("empty container request acknowledgement")
-			}
-			return errors.New(response.ErrorMsg)
-		}
-		if !waitForReconnect(s.ctx, containerRequestStreamInterval) {
-			return s.ctx.Err()
-		}
-	}
 }
 
 func containerStartLimitForRuntime(runtimeType string) int {
@@ -870,13 +841,20 @@ func (s *Worker) runContainerRequestWithRunner(
 		s.unregisterContainerCancel(containerId)
 	}()
 	s.cancelContainerIfAlreadyStopping(cancelStartup, containerId)
-	startupAllowed, reconcileErr := s.awaitInitialContainerReconciliation(ctx, request)
-	if reconcileErr != nil {
-		log.Error().Str("container_id", containerId).Err(reconcileErr).Msg("unable to reconcile container state before startup")
-		s.failContainerRequest(containerId, request, reconcileErr)
-		return
-	}
-	if !startupAllowed {
+
+	// The claim uses the worker context, like the delivery stream that carried
+	// the request: a stop that races the claim is observed afterwards through
+	// the startup context, so the container is failed (and its exit reported)
+	// rather than silently forgotten while the gateway believes it is ours.
+	claimed, err := s.claimContainer(s.ctx, request)
+	if err != nil {
+		if !claimed {
+			log.Warn().Str("container_id", containerId).Err(err).Msg("container claim rejected")
+			s.releaseUnclaimedContainer(request)
+			return
+		}
+		log.Error().Str("container_id", containerId).Err(err).Msg("unable to claim container")
+		s.failContainerRequest(containerId, request, err)
 		return
 	}
 	if err := ctx.Err(); err != nil {
@@ -884,15 +862,12 @@ func (s *Worker) runContainerRequestWithRunner(
 		return
 	}
 
-	// The initial persisted-state reconciliation above gates startup. Continue
-	// the same lifecycle heartbeat before hydration, without repeating the
-	// already completed reconciliation immediately.
 	heartbeatCtx, cancelHeartbeat := context.WithCancel(s.ctx)
 	heartbeatDone := make(chan struct{})
 	go func() {
 		defer close(heartbeatDone)
 		defer cancelHeartbeat()
-		_ = s.updateContainerStatusAfterInitialReconciliation(heartbeatCtx, request)
+		s.updateContainerStatusLoop(heartbeatCtx, request)
 	}()
 	heartbeatHandedOff := false
 	defer func() {
@@ -902,12 +877,6 @@ func (s *Worker) runContainerRequestWithRunner(
 		}
 	}()
 
-	if err := s.hydrateRuntimeCredentials(ctx, request); err != nil {
-		log.Error().Str("container_id", containerId).Err(err).Msg("unable to hydrate runtime credentials")
-		s.failContainerRequest(containerId, request, err)
-		return
-	}
-
 	run := func() error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -916,7 +885,6 @@ func (s *Worker) runContainerRequestWithRunner(
 		return runContainer(ctx, request)
 	}
 
-	var err error
 	if request.IsBuildRequest() {
 		err = run()
 	} else {
@@ -949,6 +917,25 @@ func (s *Worker) runContainerRequestWithRunner(
 	// cancel, but leave the heartbeat alive until local exit or worker shutdown.
 	s.unregisterContainerCancel(containerId)
 	heartbeatHandedOff = true
+}
+
+// releaseUnclaimedContainer drops a request whose claim the gateway rejected.
+// The container is owned by another worker or already cancelled, so only local
+// bookkeeping is undone: no exit code, persisted state, or resources are
+// touched.
+func (s *Worker) releaseUnclaimedContainer(request *types.ContainerRequest) {
+	if instance, exists := s.containerInstances.Get(request.ContainerId); exists {
+		if request.Stub.Type.Kind() == types.StubTypeSandbox {
+			instance.signalProcessManagerReadiness(false)
+		}
+		s.containerInstances.Delete(request.ContainerId)
+	}
+	if s.completedRequests != nil {
+		select {
+		case s.completedRequests <- request:
+		case <-s.ctx.Done():
+		}
+	}
 }
 
 func (s *Worker) failContainerRequest(containerId string, request *types.ContainerRequest, runErr error) {
@@ -1028,52 +1015,27 @@ func (s *Worker) shouldShutDown(lastContainerRequest time.Time) bool {
 	}
 }
 
-func (s *Worker) updateContainerStatus(ctx context.Context, request *types.ContainerRequest) error {
-	return s.updateContainerStatusLoop(ctx, request, true)
-}
-
-func (s *Worker) updateContainerStatusAfterInitialReconciliation(ctx context.Context, request *types.ContainerRequest) error {
-	return s.updateContainerStatusLoop(ctx, request, false)
-}
-
-func (s *Worker) updateContainerStatusLoop(ctx context.Context, request *types.ContainerRequest, updateImmediately bool) error {
+// updateContainerStatusLoop is the container's lifetime status heartbeat. It
+// renews the persisted lease, reconciles pending->running from the runtime
+// start signal, and stops containers whose state disappeared or turned
+// STOPPING. The claim already refreshed the lease, so the first update runs a
+// full interval later. It returns when the instance exits or ctx ends.
+func (s *Worker) updateContainerStatusLoop(ctx context.Context, request *types.ContainerRequest) {
 	ticker := time.NewTicker(containerStatusUpdateInterval)
 	defer ticker.Stop()
 
 	for {
-		if updateImmediately {
-			done, err := s.updateContainerStatusOnce(ctx, request)
-			if err != nil {
-				log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to update container state")
-			}
-			if done {
-				return nil
-			}
-		}
-		updateImmediately = true
 		select {
 		case <-ctx.Done():
-			return nil
+			return
 		case <-ticker.C:
 		}
-	}
-}
-
-func (s *Worker) awaitInitialContainerReconciliation(ctx context.Context, request *types.ContainerRequest) (bool, error) {
-	reconcileCtx, cancel := context.WithTimeout(ctx, containerRepositoryRetryTimeout)
-	defer cancel()
-	var lastErr error
-	for {
-		done, err := s.updateContainerStatusOnce(reconcileCtx, request)
-		if err == nil {
-			if done {
-				return false, nil
-			}
-			return true, nil
+		done, err := s.updateContainerStatusOnce(ctx, request)
+		if err != nil {
+			log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to update container state")
 		}
-		lastErr = err
-		if err := waitForRetry(reconcileCtx, containerRepositoryRetryInterval); err != nil {
-			return false, fmt.Errorf("initial container state reconciliation failed: %w", lastErr)
+		if done {
+			return
 		}
 	}
 }
@@ -1428,7 +1390,7 @@ func (s *Worker) shutdown() error {
 	s.stopActiveContainersForShutdown()
 	if s.diskManager != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), durableDiskCleanupGrace)
-		if err := s.diskManager.DetachAll(ctx); err != nil {
+		if err := s.diskManager.Close(ctx); err != nil {
 			errs = errors.Join(errs, fmt.Errorf("failed to detach qcow volumes: %w", err))
 		}
 		cancel()
