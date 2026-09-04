@@ -334,6 +334,7 @@ type GeeseConfig struct {
 	MemoryLimit            int64         `key:"memoryLimit" json:"memory_limit"`                   // --memory-limit
 	MaxFlushers            int           `key:"maxFlushers" json:"max_flushers"`                   // --max-flushers
 	MaxParallelParts       int           `key:"maxParallelParts" json:"max_parallel_parts"`        // --max-parallel-parts
+	PartSizeMB             int64         `key:"partSizeMB" json:"part_size_mb"`                    // multipart upload part size for the first 1000 parts (default 64)
 	HTTPTimeout            time.Duration `key:"httpTimeout" json:"http_timeout"`                   // --http-timeout
 	ReadAheadKB            int           `key:"readAheadKB" json:"read_ahead_kb"`                  // --read-ahead-kb
 	ReadAheadLargeKB       int           `key:"readAheadLargeKB" json:"read_ahead_large_kb"`       // --read-ahead-large-kb
