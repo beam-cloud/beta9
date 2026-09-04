@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -18,6 +19,7 @@ import (
 // rules the splice has to respect: every part except the last is at least
 // minPart bytes, and copy ranges must lie inside the source object.
 type memSpliceStore struct {
+	mu        sync.Mutex
 	objects   map[string][]byte
 	metadata  map[string]map[string]string
 	uploads   map[string]*memUpload
@@ -39,6 +41,8 @@ func newMemSpliceStore(minPart int64) *memSpliceStore {
 }
 
 func (m *memSpliceStore) ObjectSize(_ context.Context, key string) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	data, ok := m.objects[key]
 	if !ok {
 		return 0, fmt.Errorf("no such object %q", key)
@@ -47,6 +51,8 @@ func (m *memSpliceStore) ObjectSize(_ context.Context, key string) (int64, error
 }
 
 func (m *memSpliceStore) ReadRange(_ context.Context, key string, offset, length int64) ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	data, ok := m.objects[key]
 	if !ok {
 		return nil, fmt.Errorf("no such object %q", key)
@@ -59,12 +65,16 @@ func (m *memSpliceStore) ReadRange(_ context.Context, key string, offset, length
 }
 
 func (m *memSpliceStore) BeginUpload(_ context.Context, key string, metadata map[string]string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	id := fmt.Sprintf("upload-%d", len(m.uploads)+1)
 	m.uploads[id] = &memUpload{key: key, metadata: metadata, parts: map[int32][]byte{}}
 	return id, nil
 }
 
 func (m *memSpliceStore) CopyPart(_ context.Context, key, uploadID string, partNumber int32, sourceKey string, offset, length int64) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.failParts {
 		return "", fmt.Errorf("injected copy failure")
 	}
@@ -78,12 +88,16 @@ func (m *memSpliceStore) CopyPart(_ context.Context, key, uploadID string, partN
 }
 
 func (m *memSpliceStore) PutPart(_ context.Context, key, uploadID string, partNumber int32, data []byte) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.uploads[uploadID].parts[partNumber] = append([]byte(nil), data...)
 	m.streamed += int64(len(data))
 	return fmt.Sprintf("etag-%d", partNumber), nil
 }
 
 func (m *memSpliceStore) CompleteUpload(_ context.Context, key, uploadID string, etags []string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	up := m.uploads[uploadID]
 	var out []byte
 	for i := range etags {
@@ -103,6 +117,8 @@ func (m *memSpliceStore) CompleteUpload(_ context.Context, key, uploadID string,
 }
 
 func (m *memSpliceStore) AbortUpload(_ context.Context, key, uploadID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.aborted++
 	delete(m.uploads, uploadID)
 	return nil
