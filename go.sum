@@ -161,14 +161,10 @@ github.com/aws/smithy-go v1.27.3/go.mod h1:YE2RhdIuDbA5E5bTdciG9KrW3+TiEONeUWCqx
 github.com/axiomhq/hyperloglog v0.0.0-20240319100328-84253e514e02 h1:bXAPYSbdYbS5VTy92NIUbeDI1qyggi+JYh5op9IFlcQ=
 github.com/axiomhq/hyperloglog v0.0.0-20240319100328-84253e514e02/go.mod h1:k08r+Yj1PRAmuayFiRK6MYuR5Ve4IuZtTfxErMIh0+c=
 github.com/aybabtme/rgbterm v0.0.0-20170906152045-cc83f3b3ce59/go.mod h1:q/89r3U2H7sSsE2t6Kca0lfwTK8JdoNGS/yzM/4iH5I=
-github.com/beam-cloud/clip v0.0.0-20260904111230-e0f95d9f478c h1:ydAOWTCjmKADNmKth33z0meXKqLioq3t3Z7NxXPRmck=
-github.com/beam-cloud/clip v0.0.0-20260904111230-e0f95d9f478c/go.mod h1:uymwDNMk1qoxElmDSlPzwYqZDriHDnW5VVyfK3YNuz8=
-github.com/beam-cloud/clip v0.0.0-20260904132835-a045072c6ad4 h1:l0jfbY/njjPASKo5+M49PjM+bMVRjoej3qU1CQnmolE=
-github.com/beam-cloud/clip v0.0.0-20260904132835-a045072c6ad4/go.mod h1:uymwDNMk1qoxElmDSlPzwYqZDriHDnW5VVyfK3YNuz8=
 github.com/beam-cloud/clip v0.0.0-20260904140225-48d355ad642e h1:JBX8neeB7dRHxUi2VPL0PLzgr23JGotRl3xPHqOaEsE=
 github.com/beam-cloud/clip v0.0.0-20260904140225-48d355ad642e/go.mod h1:uymwDNMk1qoxElmDSlPzwYqZDriHDnW5VVyfK3YNuz8=
-github.com/beam-cloud/geesefs v0.0.0-20260812020252-3ae905aad43d h1:+W15pBjH19q9kD7Y1Y3kdRRH6CuVVexIDjCzLe318ok=
-github.com/beam-cloud/geesefs v0.0.0-20260812020252-3ae905aad43d/go.mod h1:q0qGsu0wiOzf/5m9JGLqZ7WteYDaaLGgBwNmstb3og0=
+github.com/beam-cloud/geesefs v0.0.0-20260904145545-61e00ab18666 h1:ZLlz02aESPMaB1Ho+vECfG1AQAP9vvZ1bESW5dek1Yo=
+github.com/beam-cloud/geesefs v0.0.0-20260904145545-61e00ab18666/go.mod h1:q0qGsu0wiOzf/5m9JGLqZ7WteYDaaLGgBwNmstb3og0=
 github.com/beam-cloud/geesefs/s3ext v0.0.0-20250606164905-2f3593d03f4f h1:XzHOu+erxeBO6D3fKVbd5DAlipl+PYZ3u+Ywb8m7Ovk=
 github.com/beam-cloud/geesefs/s3ext v0.0.0-20250606164905-2f3593d03f4f/go.mod h1:YT41ScwaZw9hYfM0WbYZ64sQLNhPxWZFOXJOPug7O5M=
 github.com/beam-cloud/go-runc v0.0.0-20250911154456-bb45084abfe1 h1:EUB/gApGrZW0SzPdyk0jQILJk4Q8wUsWevTHGMkWU58=
