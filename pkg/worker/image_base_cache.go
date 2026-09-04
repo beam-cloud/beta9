@@ -203,6 +203,7 @@ func (c *ImageClient) cachedBaseImageOCIRef(ctx context.Context, outputLogger *s
 		return "", false, nil, nil, err
 	}
 	if len(missing) > 0 {
+		log.Info().Str("source_image", sourceImage).Int("cached_layers", len(layers)).Int("missing_layers", len(missing)).Msg("base image not fully in content cache, pulling")
 		return "", false, img, missing, nil
 	}
 	manifest, err := img.Manifest()

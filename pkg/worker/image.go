@@ -2505,7 +2505,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 
 		cachedBaseRef, cachedBase, baseImg, missingBaseLayers, cacheErr := c.cachedBaseImageOCIRef(ctx, outputLogger, request, sourceImage, buildPath)
 		if cacheErr != nil {
-			log.Debug().Err(cacheErr).Str("source_image", sourceImage).Msg("base image distributed cache unavailable")
+			log.Warn().Err(cacheErr).Str("source_image", sourceImage).Msg("base image distributed cache unavailable")
 		}
 		if cachedBase {
 			dockerfile = strings.ReplaceAll(dockerfile, sourceImage, cachedBaseRef)
