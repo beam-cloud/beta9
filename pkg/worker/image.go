@@ -2582,6 +2582,12 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		// and on a persistent build cache it carries over between builds.
 		budArgs = append(budArgs, "--volume", uvCacheDir(tmpdir)+":"+uvBuildCachePath)
 	}
+	// Synced local files are visible to RUN steps where they are at run
+	// time, so add_local_dir(copy=True) and commands that install from the
+	// working directory work the same way in a build as in a container.
+	if request.BuildOptions.BuildCtxObject != nil && *request.BuildOptions.BuildCtxObject != "" {
+		budArgs = append(budArgs, "--volume", buildCtxPath+":"+types.WorkerUserCodeVolume+":ro")
+	}
 
 	// Add credentials for multi-stage builds and private base images
 	if authArgs := c.buildahAuthArgs(ctx, request, sourceImage); len(authArgs) > 0 {

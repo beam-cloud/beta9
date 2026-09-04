@@ -437,6 +437,7 @@ func (c *ImageClient) buildLayeredImage(ctx context.Context, outputLogger *slog.
 	if err != nil {
 		return err
 	}
+	log.Info().Str("image_id", request.ImageId).Dur("push", result.pushed).Dur("index", result.indexed).Dur("publish", result.elapsed).Msg("published layered build")
 	outputLogger.Info(fmt.Sprintf("Image published in %.1fs (%d layers, %s)\n", packed.Seconds()+result.elapsed.Seconds(), len(layers), formatImageBytes(compressed)))
 	return nil
 }

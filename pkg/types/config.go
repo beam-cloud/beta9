@@ -318,6 +318,13 @@ type JuiceFSConfig struct {
 	BlockSize    int64  `key:"blockSize" json:"block_size"`
 	Prefetch     int64  `key:"prefetch" json:"prefetch"`
 	BufferSize   int64  `key:"bufferSize" json:"buffer_size"`
+	// CacheDir holds the local block cache (--cache-dir); CacheSize bounds it in MiB.
+	CacheDir string `key:"cacheDir" json:"cache_dir"`
+	// Writeback acknowledges writes once they are in the local cache and
+	// uploads them in the background (--writeback). Needs a CacheDir.
+	Writeback bool `key:"writeback" json:"writeback"`
+	// MaxUploads is the number of blocks uploaded concurrently (--max-uploads, juicefs default 20).
+	MaxUploads int64 `key:"maxUploads" json:"max_uploads"`
 }
 
 type GeeseConfig struct {

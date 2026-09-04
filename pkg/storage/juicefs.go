@@ -54,6 +54,15 @@ func (s *JuiceFsStorage) Mount(localPath string) error {
 		"--buffer-size", bufferSize,
 		"--no-usage-report",
 	}
+	if s.config.CacheDir != "" {
+		args = append(args, "--cache-dir", s.config.CacheDir)
+		if s.config.Writeback {
+			args = append(args, "--writeback")
+		}
+	}
+	if s.config.MaxUploads > 0 {
+		args = append(args, "--max-uploads", strconv.FormatInt(s.config.MaxUploads, 10))
+	}
 	mountCmd, err := managedprocess.StartManagedCommand("juicefs", args, nil)
 	if err != nil {
 		return err
