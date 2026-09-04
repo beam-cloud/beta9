@@ -1951,6 +1951,19 @@ func (c *ImageClient) setupBuildahDirs() (graphroot, runroot, tmpdir string, cle
 	return graphroot, runroot, tmpdir, true
 }
 
+// layerSpoolDir is where the indexer spools decompressed layers before
+// seeding them into the content cache. It sits on the disk-backed image cache:
+// the build's temp dirs live in /dev/shm, where a multi-GiB layer would be
+// charged against the pod's memory.
+func (c *ImageClient) layerSpoolDir() string {
+	dir := filepath.Join(c.imageCachePath, "spool")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		log.Warn().Err(err).Str("dir", dir).Msg("layer spool dir unavailable, spooling to the default temp dir")
+		return ""
+	}
+	return dir
+}
+
 // uvCacheDir is the host directory mounted as uv's cache during a build: the
 // persistent build cache when there is one, otherwise a build-scoped temp dir.
 func uvCacheDir(tmpdir string) string {
@@ -2384,7 +2397,7 @@ func (c *ImageClient) createOCIImageWithProgress(ctx context.Context, outputLogg
 		ProgressChan:     progressChan,
 		CredProvider:     c.getCredentialProviderForImage(ctx, request.ImageId, request),
 		ContentCache:     newImageContentCache(c.cacheClient, request.ImageId, "oci-layer-build", nil),
-		ContentCacheDir:  filepath.Dir(outputPath),
+		ContentCacheDir:  c.layerSpoolDir(),
 		SeedDecompressed: true, // first use of a new layer reads page-wise from the cache instead of materializing it
 		LayerIndexCache:  newImageLayerIndexCache(c.cacheClient),
 		IndexConcurrency: imageLayerPrepareConcurrency,
