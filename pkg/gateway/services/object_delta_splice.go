@@ -355,9 +355,11 @@ func spliceZipObjects(ctx context.Context, store spliceStore, baseKey, deltaKey,
 
 const (
 	// spliceCopyPartSize bounds server-side copy parts so a large archive is
-	// copied by many concurrent requests rather than one long one.
-	spliceCopyPartSize = int64(32 << 20)
-	spliceConcurrency  = 16
+	// copied by many concurrent requests rather than one long one: on Wasabi
+	// a single UploadPartCopy runs at roughly 16 MB/s regardless of size, so
+	// small parts with wide fanout are what make the splice fast.
+	spliceCopyPartSize = int64(8 << 20)
+	spliceConcurrency  = 32
 )
 
 // splicePart is one multipart-upload part: either a single server-side copy
