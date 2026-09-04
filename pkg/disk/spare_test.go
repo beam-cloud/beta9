@@ -143,8 +143,16 @@ func TestAttachAdoptsSpareAndReplenishes(t *testing.T) {
 	if got := host.ran("mount"); len(got) != 1 || !strings.Contains(got[0], mountpoint) {
 		t.Fatalf("adoption must mount once at %s, ran %v", mountpoint, got)
 	}
-	if len(host.ran("nbd-client -unix")) != 1 {
-		t.Fatalf("adoption must not connect a second device: %v", host.commands)
+	// The pool refill runs concurrently and connects its own devices, so only
+	// connects against the adopted volume's sockets count here.
+	var connects []string
+	for _, command := range host.ran("nbd-client -unix") {
+		if strings.Contains(command, manager.runtimeDir(spareKey)+"/") || strings.Contains(command, manager.runtimeDir("disk")+"/") {
+			connects = append(connects, command)
+		}
+	}
+	if len(connects) != 1 {
+		t.Fatalf("adoption must not connect a second device: %v", connects)
 	}
 	if target, err := filepath.EvalSymlinks(manager.volumeDir("disk")); err != nil || target != realSpareDir {
 		t.Fatalf("volumes/disk must index the spare directory %s, got %s (%v)", spareDir, target, err)
