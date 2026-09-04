@@ -124,13 +124,17 @@ func (c *ImageClient) ArchiveLayer(ctx context.Context, request *types.Container
 	}
 	started = time.Now()
 	pushErr := make(chan error, 1)
-	go func() { pushErr <- remote.Write(targetRef, img, pushOpts...) }()
+	var pushed time.Duration
+	go func() {
+		err := remote.Write(targetRef, img, pushOpts...)
+		pushed = time.Since(started)
+		pushErr <- err
+	}()
 	indexErr := c.indexImage(ctx, &snapshotRequest, imageTag, layoutDir, archivePath)
 	indexed := time.Since(started)
 	if err := <-pushErr; err != nil {
 		return fmt.Errorf("push snapshot image %s: %w", imageTag, err)
 	}
-	pushed := time.Since(started)
 	if indexErr != nil {
 		log.Warn().Err(indexErr).Str("image_id", imageId).Msg("snapshot index from local layout failed, indexing from registry")
 		if indexErr = c.indexImage(ctx, &snapshotRequest, imageTag, "", archivePath); indexErr != nil {
