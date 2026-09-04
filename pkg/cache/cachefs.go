@@ -93,6 +93,15 @@ func Mount(ctx context.Context, opts FSSystemOpts) (func() error, <-chan error, 
 	if maxWriteKB <= 0 {
 		maxWriteKB = 1024
 	}
+	maxWrite := maxWriteKB * 1024
+	if limit := spliceSafeMaxWrite(); limit > 0 && maxWrite > limit {
+		// go-fuse sets max_read = MaxWrite and serves our fd-backed reads by
+		// splicing header+payload+one page through a pipe. If that doesn't
+		// fit in fs.pipe-max-size every read falls back to a copy and logs
+		// "trySplice: splice: want N bytes, max pipe size M" once per read.
+		Logger.Infof("cachefs: capping max read/write at %d bytes to fit fs.pipe-max-size (configured %d)", limit, maxWrite)
+		maxWrite = limit
+	}
 
 	maxReadAheadKB := opts.Config.CacheFS.MaxReadAheadKB
 	if maxReadAheadKB <= 0 {
@@ -117,7 +126,7 @@ func Mount(ctx context.Context, opts FSSystemOpts) (func() error, <-chan error, 
 		SyncRead:             false,
 		RememberInodes:       true,
 		MaxReadAhead:         maxReadAheadKB * 1024,
-		MaxWrite:             maxWriteKB * 1024,
+		MaxWrite:             maxWrite,
 		Options:              options,
 		DirectMount:          opts.Config.CacheFS.DirectMount,
 	})
@@ -271,4 +280,31 @@ func forceUnmount(mountPoint string) error {
 		return err
 	}
 	return nil
+}
+
+// spliceSafeMaxWrite returns the largest page-aligned FUSE read/write size for
+// which go-fuse's zero-copy splice path (header + payload + one extra page)
+// fits in the kernel's maximum pipe size. Returns 0 if the limit is unknown.
+func spliceSafeMaxWrite() int {
+	content, err := os.ReadFile("/proc/sys/fs/pipe-max-size")
+	if err != nil {
+		return 0
+	}
+	pipeMax, err := strconv.Atoi(strings.TrimSpace(string(content)))
+	if err != nil || pipeMax <= 0 {
+		return 0
+	}
+	return spliceSafeMaxWriteFor(pipeMax, os.Getpagesize())
+}
+
+func spliceSafeMaxWriteFor(pipeMax, pageSize int) int {
+	if pageSize <= 0 || pipeMax <= 2*pageSize {
+		return 0
+	}
+	// The FUSE out header is 16 bytes; go-fuse grows the pipe to
+	// header + payload + pageSize, so the payload gets whatever whole pages
+	// remain once two pages are reserved (one for the extra page, one to hold
+	// the header without pushing the payload past a page boundary).
+	limit := pipeMax - 2*pageSize
+	return limit - limit%pageSize
 }
