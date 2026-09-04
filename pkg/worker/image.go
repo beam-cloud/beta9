@@ -54,6 +54,12 @@ const (
 	imageLayerPrepareConcurrency             = 8
 	imageLayerPrepareGrace                   = 2 * time.Second
 	imageMountReadyTimeout                   = 5 * time.Second
+
+	// uv ships in the worker image and is mounted into v2 builds as uv-b9,
+	// the name the rendered Dockerfiles (and v1 build containers) use.
+	uvBinaryPath     = "/usr/local/bin/uv"
+	uvBuildMountPath = "/usr/local/bin/uv-b9"
+	uvBuildCachePath = "/root/.cache/uv"
 )
 
 var (
@@ -1945,6 +1951,20 @@ func (c *ImageClient) setupBuildahDirs() (graphroot, runroot, tmpdir string, cle
 	return graphroot, runroot, tmpdir, true
 }
 
+// uvCacheDir is the host directory mounted as uv's cache during a build: the
+// persistent build cache when there is one, otherwise a build-scoped temp dir.
+func uvCacheDir(tmpdir string) string {
+	if root := buildahLayerCacheRoot(); root != "" {
+		dir := filepath.Join(filepath.Dir(root), "uv")
+		if err := os.MkdirAll(dir, 0o700); err == nil {
+			return dir
+		}
+	}
+	dir := filepath.Join(tmpdir, "uv-cache")
+	os.MkdirAll(dir, 0o700)
+	return dir
+}
+
 func buildahLayerCacheRoot() string {
 	if dir := strings.TrimSpace(os.Getenv(types.AgentBuildCacheDirEnv)); dir != "" {
 		return filepath.Join(dir, "buildah")
@@ -2365,6 +2385,7 @@ func (c *ImageClient) createOCIImageWithProgress(ctx context.Context, outputLogg
 		CredProvider:     c.getCredentialProviderForImage(ctx, request.ImageId, request),
 		ContentCache:     newImageContentCache(c.cacheClient, request.ImageId, "oci-layer-build", nil),
 		ContentCacheDir:  filepath.Dir(outputPath),
+		SeedDecompressed: true, // first use of a new layer reads page-wise from the cache instead of materializing it
 		LayerIndexCache:  newImageLayerIndexCache(c.cacheClient),
 		IndexConcurrency: imageLayerPrepareConcurrency,
 	})
@@ -2440,10 +2461,11 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		sourceImage = *request.BuildOptions.SourceImage
 	}
 	dockerfile := *request.BuildOptions.Dockerfile
+	var baseWarmed chan struct{}
 	if sourceImage != "" {
 		insecure = c.config.ImageService.BuildRegistryInsecure
 
-		cachedBaseRef, cachedBase, cacheErr := c.cachedBaseImageOCIRef(ctx, outputLogger, request, sourceImage, buildPath)
+		cachedBaseRef, cachedBase, baseImg, missingBaseLayers, cacheErr := c.cachedBaseImageOCIRef(ctx, outputLogger, request, sourceImage, buildPath)
 		if cacheErr != nil {
 			log.Debug().Err(cacheErr).Str("source_image", sourceImage).Msg("base image distributed cache unavailable")
 		}
@@ -2473,8 +2495,29 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 			if err := cmd.Run(); err != nil {
 				return err
 			}
+			// The pull is done, so the network is free: fetch the layers the
+			// cache lacks while the build runs, and the next build on this
+			// base restores it from cache instead of pulling.
+			if baseImg != nil && len(missingBaseLayers) > 0 {
+				baseWarmed = make(chan struct{})
+				go func() {
+					defer close(baseWarmed)
+					c.warmBaseImageLayers(ctx, request, baseImg, missingBaseLayers, buildPath)
+				}()
+			}
 		}
 	}
+	defer func() {
+		// The build worker exits right after the build; give the warm a
+		// moment to finish rather than letting the build wait on it.
+		if baseWarmed != nil {
+			select {
+			case <-baseWarmed:
+			case <-time.After(15 * time.Second):
+				log.Warn().Str("source_image", sourceImage).Msg("base image layer warm still running at build end")
+			}
+		}
+	}()
 
 	tempDockerFile := filepath.Join(buildPath, "Dockerfile")
 	f, err := os.Create(tempDockerFile)
@@ -2493,6 +2536,14 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	budArgs = append(budArgs, "--layers")           // Enable layer caching for faster rebuilds
 	budArgs = append(budArgs, "--format", "docker") // Use docker format to avoid conversion at push time
 	budArgs = append(budArgs, "--jobs", "8")        // Use parallel jobs for faster layer processing
+	// Rendered Dockerfiles install packages with uv-b9. It is mounted into
+	// each RUN step from the worker so it stays out of the image.
+	if _, err := os.Stat(uvBinaryPath); err == nil {
+		budArgs = append(budArgs, "--volume", uvBinaryPath+":"+uvBuildMountPath+":ro")
+		// uv's wheel cache lives on a mount so it never lands in a layer,
+		// and on a persistent build cache it carries over between builds.
+		budArgs = append(budArgs, "--volume", uvCacheDir(tmpdir)+":"+uvBuildCachePath)
+	}
 
 	// Add credentials for multi-stage builds and private base images
 	if authArgs := c.getBuildahAuthArgs(ctx, sourceImage, request.BuildOptions.SourceImageCreds); len(authArgs) > 0 {

@@ -2,12 +2,16 @@ package worker
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"log/slog"
 
@@ -29,18 +33,12 @@ type ociIndexFile struct {
 	Manifests     []v1.Descriptor `json:"manifests"`
 }
 
-// cachedBaseImageOCIRef restores a base image from distributed content
-// cache into a temporary OCI layout when every compressed layer blob is
-// already present. It avoids registry blob downloads while still letting
-// buildah ingest the image through its normal containers/storage path.
-func (c *ImageClient) cachedBaseImageOCIRef(ctx context.Context, outputLogger *slog.Logger, request *types.ContainerRequest, sourceImage, buildPath string) (string, bool, error) {
-	if c.cacheClient == nil || sourceImage == "" {
-		return "", false, nil
-	}
-
+// baseImage resolves sourceImage in the registry and reports which of its
+// compressed layers the content cache is missing.
+func (c *ImageClient) baseImage(ctx context.Context, request *types.ContainerRequest, sourceImage string) (v1.Image, []v1.Descriptor, error) {
 	ref, err := name.ParseReference(sourceImage)
 	if err != nil {
-		return "", false, err
+		return nil, nil, err
 	}
 
 	remoteOpts := []remote.Option{
@@ -55,14 +53,14 @@ func (c *ImageClient) cachedBaseImageOCIRef(ctx context.Context, outputLogger *s
 
 	img, err := remote.Image(ref, remoteOpts...)
 	if err != nil {
-		return "", false, err
+		return nil, nil, err
 	}
-
 	manifest, err := img.Manifest()
 	if err != nil {
-		return "", false, err
+		return nil, nil, err
 	}
 
+	var missing []v1.Descriptor
 	for _, layer := range manifest.Layers {
 		key := strings.TrimPrefix(layer.Digest.String(), "sha256:")
 		metadata, err := c.cacheClient.CacheFSMetadata(ctx, imageLayerContentCachePath(key))
@@ -70,51 +68,141 @@ func (c *ImageClient) cachedBaseImageOCIRef(ctx context.Context, outputLogger *s
 			if err != nil {
 				log.Debug().Err(err).Str("layer_digest", layer.Digest.String()).Msg("base image layer cache lookup failed")
 			}
-			return "", false, nil
+			missing = append(missing, layer)
 		}
+	}
+	return img, missing, nil
+}
+
+// warmBaseImageLayers downloads the given layers of img and stores them in
+// the content cache, so the next build restores the base image from cache
+// instead of pulling it. Meant to run alongside the build, after buildah has
+// finished its own pull of the same bytes.
+func (c *ImageClient) warmBaseImageLayers(ctx context.Context, request *types.ContainerRequest, img v1.Image, missing []v1.Descriptor, dir string) {
+	contentCache := newImageContentCache(c.cacheClient, request.ImageId, "base-image-layer", nil)
+	if contentCache == nil || len(missing) == 0 {
+		return
+	}
+	layers, err := img.Layers()
+	if err != nil {
+		return
+	}
+	byDigest := map[v1.Hash]v1.Layer{}
+	for _, layer := range layers {
+		if digest, err := layer.Digest(); err == nil {
+			byDigest[digest] = layer
+		}
+	}
+	started := time.Now()
+	var bytes int64
+	for _, desc := range missing {
+		layer, ok := byDigest[desc.Digest]
+		if !ok || ctx.Err() != nil {
+			continue
+		}
+		path := filepath.Join(dir, desc.Digest.Hex)
+		if err := downloadLayerBlob(layer, desc, path); err != nil {
+			log.Warn().Err(err).Str("layer_digest", desc.Digest.String()).Msg("base image layer not warmed")
+			os.Remove(path)
+			continue
+		}
+		if _, err := contentCache.StoreContentFromLocalPath(path, desc.Digest.Hex, struct{ RoutingKey string }{RoutingKey: desc.Digest.Hex}); err != nil {
+			log.Warn().Err(err).Str("layer_digest", desc.Digest.String()).Msg("base image layer not stored in content cache")
+		} else {
+			bytes += desc.Size
+		}
+		os.Remove(path)
+	}
+	log.Info().Int("layers", len(missing)).Int64("bytes", bytes).Dur("duration", time.Since(started)).Msg("warmed base image layers into content cache")
+}
+
+// downloadLayerBlob writes the layer's compressed bytes to path and verifies
+// them against the descriptor.
+func downloadLayerBlob(layer v1.Layer, desc v1.Descriptor, path string) error {
+	rc, err := layer.Compressed()
+	if err != nil {
+		return err
+	}
+	defer rc.Close()
+	out, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	hasher := sha256.New()
+	n, err := io.Copy(io.MultiWriter(out, hasher), rc)
+	if err != nil {
+		return err
+	}
+	if n != desc.Size || hex.EncodeToString(hasher.Sum(nil)) != desc.Digest.Hex {
+		return fmt.Errorf("layer %s: got %d bytes, digest mismatch or short read", desc.Digest, n)
+	}
+	return out.Sync()
+}
+
+// cachedBaseImageOCIRef restores a base image from distributed content
+// cache into a temporary OCI layout when every compressed layer blob is
+// already present. It avoids registry blob downloads while still letting
+// buildah ingest the image through its normal containers/storage path.
+// When layers are missing it returns them, so the caller can warm the
+// cache for the next build.
+func (c *ImageClient) cachedBaseImageOCIRef(ctx context.Context, outputLogger *slog.Logger, request *types.ContainerRequest, sourceImage, buildPath string) (ref string, cached bool, img v1.Image, missing []v1.Descriptor, err error) {
+	if c.cacheClient == nil || sourceImage == "" {
+		return "", false, nil, nil, nil
+	}
+	img, missing, err = c.baseImage(ctx, request, sourceImage)
+	if err != nil {
+		return "", false, nil, nil, err
+	}
+	if len(missing) > 0 {
+		return "", false, img, missing, nil
+	}
+	manifest, err := img.Manifest()
+	if err != nil {
+		return "", false, nil, nil, err
 	}
 
 	layoutDir := filepath.Join(buildPath, "base-oci")
 	if err := os.RemoveAll(layoutDir); err != nil {
-		return "", false, err
+		return "", false, nil, nil, err
 	}
 	if err := os.MkdirAll(filepath.Join(layoutDir, "blobs", "sha256"), 0o755); err != nil {
-		return "", false, err
+		return "", false, nil, nil, err
 	}
 
 	if err := os.WriteFile(filepath.Join(layoutDir, "oci-layout"), []byte(`{"imageLayoutVersion":"1.0.0"}`), 0o644); err != nil {
-		return "", false, err
+		return "", false, nil, nil, err
 	}
 
 	rawManifest, err := img.RawManifest()
 	if err != nil {
-		return "", false, err
+		return "", false, nil, nil, err
 	}
 	manifestDigest, err := img.Digest()
 	if err != nil {
-		return "", false, err
+		return "", false, nil, nil, err
 	}
 	if err := writeOCIBlob(layoutDir, manifestDigest, rawManifest); err != nil {
-		return "", false, err
+		return "", false, nil, nil, err
 	}
 
 	rawConfig, err := img.RawConfigFile()
 	if err != nil {
-		return "", false, err
+		return "", false, nil, nil, err
 	}
 	if err := writeOCIBlob(layoutDir, manifest.Config.Digest, rawConfig); err != nil {
-		return "", false, err
+		return "", false, nil, nil, err
 	}
 
 	for _, layer := range manifest.Layers {
 		if err := c.writeContentCacheBlobToOCI(ctx, layoutDir, layer.Digest, layer.Size); err != nil {
-			return "", false, err
+			return "", false, nil, nil, err
 		}
 	}
 
 	desc, err := partial.Descriptor(img)
 	if err != nil {
-		return "", false, err
+		return "", false, nil, nil, err
 	}
 	desc.Digest = manifestDigest
 	desc.Size = int64(len(rawManifest))
@@ -128,14 +216,14 @@ func (c *ImageClient) cachedBaseImageOCIRef(ctx context.Context, outputLogger *s
 		Manifests:     []v1.Descriptor{*desc},
 	})
 	if err != nil {
-		return "", false, err
+		return "", false, nil, nil, err
 	}
 	if err := os.WriteFile(filepath.Join(layoutDir, "index.json"), indexBytes, 0o644); err != nil {
-		return "", false, err
+		return "", false, nil, nil, err
 	}
 
 	outputLogger.Info("Restored base image layers from cache\n")
-	return fmt.Sprintf("oci:%s:%s", layoutDir, cachedBaseImageTag), true, nil
+	return fmt.Sprintf("oci:%s:%s", layoutDir, cachedBaseImageTag), true, img, nil, nil
 }
 
 func writeOCIBlob(layoutDir string, digest v1.Hash, data []byte) error {

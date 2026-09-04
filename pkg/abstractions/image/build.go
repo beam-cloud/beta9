@@ -384,11 +384,17 @@ func generatePipInstallCommand(pythonPackages []string, pythonVersion string, vi
 	return command
 }
 
-// generateStandardPipInstallCommand generates a pip install command for v2 dockerfile builds
+// generateStandardPipInstallCommand generates the package install command for
+// v2 dockerfile builds. System installs go through uv (the worker mounts it
+// into the build as uv-b9, so it never ends up in the image), which resolves
+// and installs several times faster than pip; virtual environments keep pip.
 func generateStandardPipInstallCommand(pythonPackages []string, pythonVersion string, virtualEnv bool) string {
 	flagLines, packages := parseFlagLinesAndPackages(pythonPackages)
 
 	command := fmt.Sprintf("%s -m pip install", pythonVersion)
+	if !virtualEnv && pythonVersion != "" {
+		command = fmt.Sprintf("uv-b9 pip install --system --python %s", pythonVersion)
+	}
 
 	if len(flagLines) > 0 {
 		command += " " + strings.Join(flagLines, " ")

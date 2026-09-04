@@ -172,7 +172,7 @@ func TestRenderV2Dockerfile_FromRegistryWithChainedCommands(t *testing.T) {
 			expected: []string{
 				"FROM docker.io/library/python:3.11-slim\n",
 				"RUN apt update\n",
-				"RUN python3.10 -m pip install",
+				"RUN uv-b9 pip install --system --python python3.10",
 				"numpy",
 				"RUN apt clean\n",
 			},
@@ -231,7 +231,7 @@ func TestPrepareBuildOptionsForImageID_V2ExistingImageAddsRuntimeRequirements(t 
 
 	assert.Contains(t, opts.PythonPackages, "rich==13.7.0")
 	assert.Contains(t, opts.Dockerfile, "FROM docker.io/library/python@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-	assert.Contains(t, opts.Dockerfile, "python3.10 -m pip install")
+	assert.Contains(t, opts.Dockerfile, "uv-b9 pip install --system --python python3.10")
 	assert.Contains(t, opts.Dockerfile, "rich==13.7.0")
 }
 
@@ -313,7 +313,7 @@ func TestPrepareBuildOptionsForImageID_V2ExistingImageIgnorePythonKeepsUserPacka
 	assert.NoError(t, err)
 
 	assert.Equal(t, []string{"numpy"}, opts.PythonPackages)
-	assert.Contains(t, opts.Dockerfile, "python3.10 -m pip install")
+	assert.Contains(t, opts.Dockerfile, "uv-b9 pip install --system --python python3.10")
 	assert.Contains(t, opts.Dockerfile, "numpy")
 	assert.NotContains(t, opts.Dockerfile, "rich==13.7.0")
 	assert.NotContains(t, opts.Dockerfile, "betterproto-beta9")
@@ -372,7 +372,7 @@ func TestRenderV2Dockerfile_ComprehensiveChaining(t *testing.T) {
 			},
 			expected: []string{
 				"FROM docker.io/library/python:3.11-slim\n",
-				"RUN python3.10 -m pip install",
+				"RUN uv-b9 pip install --system --python python3.10",
 				"numpy",
 				"pandas",
 				"RUN echo 'installed packages'\n",
@@ -398,7 +398,7 @@ func TestRenderV2Dockerfile_ComprehensiveChaining(t *testing.T) {
 				"FROM docker.io/library/python:3.11-slim\n",
 				"ENV API_KEY=secret\n",
 				"RUN apt update\n",
-				"RUN python3.10 -m pip install",
+				"RUN uv-b9 pip install --system --python python3.10",
 				"requests",
 				"RUN apt clean\n",
 			},
@@ -1635,7 +1635,7 @@ func Test_parseBuildStepsForDockerfile(t *testing.T) {
 
 	expected := []string{
 		"apt update",
-		"python3.9 -m pip install \"requests\" \"numpy\"",
+		"uv-b9 pip install --system --python python3.9 \"requests\" \"numpy\"",
 		"echo done",
 	}
 

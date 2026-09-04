@@ -3,8 +3,6 @@ package worker
 import (
 	"archive/tar"
 	"compress/gzip"
-	"crypto/sha256"
-	"encoding/hex"
 	"io"
 	"os"
 	"path/filepath"
@@ -56,14 +54,10 @@ func TestWriteOverlayLayerPacksUpperDirAsOCILayer(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	out, plain := filepath.Join(dir, "layer.tar.gz"), filepath.Join(dir, "layer.tar")
-	packed, err := writeOverlayLayer(upper, out, plain)
+	out := filepath.Join(dir, "layer.tar.gz")
+	size, err := writeOverlayLayer(upper, out)
 	require.NoError(t, err)
-	require.Positive(t, packed.compressedSize)
-	tarBytes, err := os.ReadFile(plain)
-	require.NoError(t, err)
-	sum := sha256.Sum256(tarBytes)
-	require.Equal(t, hex.EncodeToString(sum[:]), packed.tarHash)
+	require.Positive(t, size)
 
 	entries := readLayerEntries(t, out)
 	require.Equal(t, byte(tar.TypeDir), entries["app/"].Typeflag)
@@ -104,7 +98,7 @@ func TestWriteSparseOCILayoutHoldsManifestConfigAndOnlyTheNewLayer(t *testing.T)
 	require.NoError(t, err)
 	dir := t.TempDir()
 	layerPath := filepath.Join(dir, "layer.tar.gz")
-	_, err = writeOverlayLayer(t.TempDir(), layerPath, filepath.Join(dir, "layer.tar"))
+	_, err = writeOverlayLayer(t.TempDir(), layerPath)
 	require.NoError(t, err)
 	layer, err := tarball.LayerFromFile(layerPath)
 	require.NoError(t, err)

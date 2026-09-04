@@ -5,8 +5,6 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -64,8 +62,7 @@ func (c *ImageClient) ArchiveLayer(ctx context.Context, request *types.Container
 
 	started := time.Now()
 	layerPath := filepath.Join(tmpdir, "layer.tar.gz")
-	tarPath := filepath.Join(tmpdir, "layer.tar")
-	packedLayer, err := writeOverlayLayer(upperDir, layerPath, tarPath)
+	layerBytes, err := writeOverlayLayer(upperDir, layerPath)
 	if err != nil {
 		return fmt.Errorf("pack snapshot layer: %w", err)
 	}
@@ -147,43 +144,11 @@ func (c *ImageClient) ArchiveLayer(ctx context.Context, request *types.Container
 	if err := c.registry.Push(ctx, archivePath, imageId); err != nil {
 		return fmt.Errorf("publish snapshot archive: %w", err)
 	}
-	// The runtime serves the layer page-wise from the content cache and only
-	// materializes a layer it cannot find there. The decompressed tar is on
-	// hand, so store it now and the first restore reads locally instead of
-	// pulling the layer back from the registry.
-	c.seedSnapshotLayer(ctx, &snapshotRequest, archivePath, layer, tarPath, packedLayer.tarHash)
 	report(100)
 	log.Info().Str("image_id", imageId).Str("base_ref", baseRef).Str("image_tag", imageTag).
-		Int64("layer_bytes", packedLayer.compressedSize).Dur("pack", packed).Dur("push", pushed).Dur("index", indexed).
+		Int64("layer_bytes", layerBytes).Dur("pack", packed).Dur("push", pushed).Dur("index", indexed).
 		Msg("published filesystem snapshot as image layer")
 	return nil
-}
-
-// seedSnapshotLayer stores the layer's decompressed bytes in the content cache
-// under the hash the index recorded for it; a mismatch means the index saw a
-// different byte stream, and the runtime materializes the layer as usual.
-func (c *ImageClient) seedSnapshotLayer(ctx context.Context, request *types.ContainerRequest, archivePath string, layer v1.Layer, tarPath, tarHash string) {
-	contentCache := newImageContentCache(c.cacheClient, request.ImageId, "oci-layer-snapshot", nil)
-	if contentCache == nil {
-		return
-	}
-	digest, err := layer.Digest()
-	if err != nil {
-		return
-	}
-	meta, err := c.processPulledArchive(archivePath, request.ImageId)
-	if err != nil {
-		log.Warn().Err(err).Str("image_id", request.ImageId).Msg("snapshot layer not seeded: archive metadata unreadable")
-		return
-	}
-	info, ok := ociStorageInfo(meta)
-	if !ok || info.DecompressedHashByLayer[digest.String()] != tarHash {
-		log.Warn().Str("image_id", request.ImageId).Str("layer", digest.String()).Msg("snapshot layer not seeded: index hash differs from packed tar")
-		return
-	}
-	if _, err := contentCache.StoreContentFromLocalPath(tarPath, tarHash, struct{ RoutingKey string }{RoutingKey: tarHash}); err != nil {
-		log.Warn().Err(err).Str("image_id", request.ImageId).Msg("snapshot layer not seeded in content cache")
-	}
 }
 
 // indexImage writes the clip index archive for imageTag, reading the image
@@ -299,36 +264,24 @@ const (
 	opaqueWhiteout     = ".wh..wh..opq"
 )
 
-type packedLayer struct {
-	compressedSize int64
-	tarHash        string // sha256 of the uncompressed tar, the content cache key
-}
-
-// writeOverlayLayer packs an overlayfs upper directory as an OCI layer tar,
-// gzip'd at gzPath and plain at tarPath. Overlay's whiteouts become the OCI
-// ones: a 0/0 character device turns into an empty ".wh.<name>" entry and an
-// opaque directory gains a ".wh..wh..opq" child. Files are captured at the
-// size seen when their header is written; the sandbox is still running, so a
-// file that shrinks meanwhile is zero-padded and one that grows is truncated
-// to that size.
-func writeOverlayLayer(upperDir, gzPath, tarPath string) (packedLayer, error) {
-	var packed packedLayer
+// writeOverlayLayer packs an overlayfs upper directory as a gzip'd OCI layer
+// tar at gzPath and returns its compressed size. Overlay's whiteouts become
+// the OCI ones: a 0/0 character device turns into an empty ".wh.<name>" entry
+// and an opaque directory gains a ".wh..wh..opq" child. Files are captured at
+// the size seen when their header is written; the sandbox is still running,
+// so a file that shrinks meanwhile is zero-padded and one that grows is
+// truncated to that size.
+func writeOverlayLayer(upperDir, gzPath string) (int64, error) {
 	out, err := os.Create(gzPath)
 	if err != nil {
-		return packed, err
+		return 0, err
 	}
 	defer out.Close()
-	plain, err := os.Create(tarPath)
-	if err != nil {
-		return packed, err
-	}
-	defer plain.Close()
 	gz, err := gzip.NewWriterLevel(out, gzip.BestSpeed)
 	if err != nil {
-		return packed, err
+		return 0, err
 	}
-	hasher := sha256.New()
-	tw := tar.NewWriter(io.MultiWriter(gz, plain, hasher))
+	tw := tar.NewWriter(gz)
 
 	type inode struct{ dev, ino uint64 }
 	linked := map[inode]string{}
@@ -395,21 +348,19 @@ func writeOverlayLayer(upperDir, gzPath, tarPath string) (packedLayer, error) {
 		return nil
 	})
 	if err != nil {
-		return packed, err
+		return 0, err
 	}
 	if err := tw.Close(); err != nil {
-		return packed, err
+		return 0, err
 	}
 	if err := gz.Close(); err != nil {
-		return packed, err
+		return 0, err
 	}
 	stat, err := out.Stat()
 	if err != nil {
-		return packed, err
+		return 0, err
 	}
-	packed.compressedSize = stat.Size()
-	packed.tarHash = hex.EncodeToString(hasher.Sum(nil))
-	return packed, nil
+	return stat.Size(), nil
 }
 
 // copyFixedSize writes exactly size bytes of path to w, zero-padding if the
