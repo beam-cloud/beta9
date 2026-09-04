@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	types "github.com/beam-cloud/beta9/pkg/types"
@@ -108,5 +109,78 @@ func TestContainerOverlayResetWithUpper(t *testing.T) {
 
 		require.Error(t, err)
 		require.NoDirExists(t, filepath.Join(overlayPath, containerID, "layer-0"))
+	})
+}
+
+// fakeMount installs a mount(8) stand-in that appends its arguments to log
+// and exits with the code returned by the given shell snippet.
+func fakeMount(t *testing.T, body string) (logPath string) {
+	t.Helper()
+	fakeBin := t.TempDir()
+	logPath = filepath.Join(fakeBin, "mount.log")
+	script := "#!/bin/sh\necho \"$@\" >> " + logPath + "\n" + body + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(fakeBin, "mount"), []byte(script), 0755))
+	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return logPath
+}
+
+func mountCalls(t *testing.T, logPath string) []string {
+	t.Helper()
+	data, err := os.ReadFile(logPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	require.NoError(t, err)
+	return strings.Split(strings.TrimSpace(string(data)), "\n")
+}
+
+func TestContainerOverlayEphemeralLayersMountVolatile(t *testing.T) {
+	overlayVolatileUnsupported.Store(false)
+	t.Cleanup(func() { overlayVolatileUnsupported.Store(false) })
+
+	t.Run("ephemeral layer uses volatile, persistent layer does not", func(t *testing.T) {
+		logPath := fakeMount(t, "exit 0")
+
+		ephemeral := NewContainerOverlay(&types.ContainerRequest{ContainerId: "ephemeral"}, t.TempDir(), t.TempDir())
+		require.NoError(t, ephemeral.Setup())
+		disk := t.TempDir()
+		persistent := NewContainerOverlay(&types.ContainerRequest{ContainerId: "persistent"}, t.TempDir(), t.TempDir())
+		require.NoError(t, persistent.SetupWithWritable(filepath.Join(disk, "upper"), filepath.Join(disk, "work")))
+
+		calls := mountCalls(t, logPath)
+		require.Len(t, calls, 2)
+		require.Contains(t, calls[0], ",volatile")
+		require.NotContains(t, calls[1], "volatile")
+	})
+
+	t.Run("kernel without volatile support falls back once and remembers", func(t *testing.T) {
+		overlayVolatileUnsupported.Store(false)
+		logPath := fakeMount(t, `case "$*" in *volatile*) echo "mount: wrong fs type, bad option, bad superblock on overlay" >&2; exit 32;; esac; exit 0`)
+
+		overlay := NewContainerOverlay(&types.ContainerRequest{ContainerId: "fallback"}, t.TempDir(), t.TempDir())
+		require.NoError(t, overlay.Setup())
+		require.True(t, overlayVolatileUnsupported.Load())
+		require.DirExists(t, filepath.Join(overlay.OverlayPath(), "fallback", "layer-0", "work"))
+
+		second := NewContainerOverlay(&types.ContainerRequest{ContainerId: "fallback-2"}, t.TempDir(), t.TempDir())
+		require.NoError(t, second.Setup())
+
+		calls := mountCalls(t, logPath)
+		require.Len(t, calls, 3, "volatile attempt, synced retry, then synced only")
+		require.Contains(t, calls[0], ",volatile")
+		require.NotContains(t, calls[1], "volatile")
+		require.NotContains(t, calls[2], "volatile")
+	})
+
+	t.Run("a real mount failure is not retried without volatile", func(t *testing.T) {
+		overlayVolatileUnsupported.Store(false)
+		logPath := fakeMount(t, `echo "mount: /merged: mount point does not exist." >&2; exit 32`)
+
+		overlay := NewContainerOverlay(&types.ContainerRequest{ContainerId: "hard-failure"}, t.TempDir(), t.TempDir())
+		err := overlay.Setup()
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "mount point does not exist")
+		require.False(t, overlayVolatileUnsupported.Load())
+		require.Len(t, mountCalls(t, logPath), 1)
 	})
 }

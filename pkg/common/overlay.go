@@ -5,6 +5,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -28,7 +30,20 @@ type ContainerOverlayLayer struct {
 	upper  string
 	work   string
 	merged string
+	// volatile mounts the layer with overlayfs' "volatile" option: fsync and
+	// syncfs on the merged tree return without flushing the upper to disk.
+	// The upper is still written back by the kernel as usual, so the only
+	// thing given up is durability across a host crash, which an ephemeral
+	// container layer does not have anyway (the container is gone with the
+	// host). This is what makes writes to / behave like a memory-backed
+	// rootfs (gVisor's tmpfs overlay does the same) instead of paying an
+	// EBS/NVMe round trip on every fsync. Never used for durable-disk uppers.
+	volatile bool
 }
+
+// overlayVolatileUnsupported is set once the kernel rejects a volatile mount
+// (overlayfs "volatile" landed in Linux 5.10) so later mounts skip the retry.
+var overlayVolatileUnsupported atomic.Bool
 
 func NewContainerOverlay(request *types.ContainerRequest, rootPath string, overlayPath string) *ContainerOverlay {
 	return &ContainerOverlay{
@@ -111,8 +126,7 @@ func (co *ContainerOverlay) AddEmptyLayer() error {
 
 	layerDir := filepath.Join(co.overlayPath, co.containerId, fmt.Sprintf("layer-%d", index))
 
-	workDir := filepath.Join(layerDir, "work")
-	err := os.MkdirAll(workDir, 0755)
+	workDir, err := freshWorkDir(layerDir)
 	if err != nil {
 		return err
 	}
@@ -139,11 +153,12 @@ func (co *ContainerOverlay) AddEmptyLayer() error {
 	}
 
 	layer := ContainerOverlayLayer{
-		lower:  lowerDir,
-		upper:  upperDir,
-		work:   workDir,
-		merged: mergedDir,
-		index:  index,
+		lower:    lowerDir,
+		upper:    upperDir,
+		work:     workDir,
+		merged:   mergedDir,
+		index:    index,
+		volatile: true,
 	}
 
 	err = co.mount(&layer)
@@ -166,8 +181,7 @@ func (co *ContainerOverlay) AddLayer(upperDir string) error {
 
 	layerDir := filepath.Join(co.overlayPath, co.containerId, fmt.Sprintf("layer-%d", index))
 
-	workDir := filepath.Join(layerDir, "work")
-	err := os.MkdirAll(workDir, 0755)
+	workDir, err := freshWorkDir(layerDir)
 	if err != nil {
 		return err
 	}
@@ -179,11 +193,12 @@ func (co *ContainerOverlay) AddLayer(upperDir string) error {
 	}
 
 	layer := ContainerOverlayLayer{
-		lower:  lowerDir,
-		upper:  upperDir,
-		work:   workDir,
-		merged: mergedDir,
-		index:  index,
+		lower:    lowerDir,
+		upper:    upperDir,
+		work:     workDir,
+		merged:   mergedDir,
+		index:    index,
+		volatile: true,
 	}
 
 	err = co.mount(&layer)
@@ -314,14 +329,55 @@ func (co *ContainerOverlay) OverlayPath() string {
 	return co.overlayPath
 }
 
+// freshWorkDir recreates <layerDir>/work. overlayfs needs an empty work dir,
+// and a work dir left by a previous volatile mount carries an
+// incompat/volatile marker that makes the kernel refuse the next mount.
+func freshWorkDir(layerDir string) (string, error) {
+	workDir := filepath.Join(layerDir, "work")
+	if err := os.RemoveAll(workDir); err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(workDir, 0755); err != nil {
+		return "", err
+	}
+	return workDir, nil
+}
+
 func (co *ContainerOverlay) mount(layer *ContainerOverlayLayer) error {
 	startTime := time.Now()
 
 	mntOptions := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", layer.lower, layer.upper, layer.work)
-	if err := exec.Command("mount", "-t", "overlay", "overlay", "-o", mntOptions, layer.merged).Run(); err != nil {
-		return err
+	volatile := layer.volatile && !overlayVolatileUnsupported.Load()
+	if volatile {
+		out, err := exec.Command("mount", "-t", "overlay", "overlay", "-o", mntOptions+",volatile", layer.merged).CombinedOutput()
+		if err == nil {
+			log.Info().Str("container_id", co.containerId).Int("layer_index", layer.index).Bool("volatile", true).Dur("duration", time.Since(startTime)).Msg("mounted kernel overlay layer")
+			return nil
+		}
+		// Pre-5.10 kernels reject the option with EINVAL; everything else is
+		// a real failure that a retry without it would only mask.
+		msg := strings.ToLower(string(out))
+		if !strings.Contains(msg, "invalid argument") && !strings.Contains(msg, "bad option") {
+			return fmt.Errorf("mount overlay: %w: %s", err, strings.TrimSpace(string(out)))
+		}
+		volatileOut := strings.TrimSpace(string(out))
+		if _, err := freshWorkDir(filepath.Dir(layer.work)); err != nil {
+			return err
+		}
+		if out, err := exec.Command("mount", "-t", "overlay", "overlay", "-o", mntOptions, layer.merged).CombinedOutput(); err != nil {
+			return fmt.Errorf("mount overlay: %w: %s", err, strings.TrimSpace(string(out)))
+		}
+		// The same mount succeeded without the option, so the option is
+		// what this kernel rejects: stop trying it.
+		overlayVolatileUnsupported.Store(true)
+		log.Warn().Str("container_id", co.containerId).Str("output", volatileOut).Msg("kernel rejected volatile overlay mount; using synced overlay mounts")
+		return nil
 	}
 
-	log.Info().Str("container_id", co.containerId).Int("layer_index", layer.index).Dur("duration", time.Since(startTime)).Msg("mounted kernel overlay layer")
+	if out, err := exec.Command("mount", "-t", "overlay", "overlay", "-o", mntOptions, layer.merged).CombinedOutput(); err != nil {
+		return fmt.Errorf("mount overlay: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+
+	log.Info().Str("container_id", co.containerId).Int("layer_index", layer.index).Bool("volatile", false).Dur("duration", time.Since(startTime)).Msg("mounted kernel overlay layer")
 	return nil
 }
