@@ -231,6 +231,10 @@ type ImageServiceConfig struct {
 	BuildRepositoryName            string                         `key:"buildRepositoryName" json:"build_repository_name"`
 	BuildRegistryCredentials       BuildRegistryCredentialsConfig `key:"buildRegistryCredentials" json:"build_registry_credentials"`
 	BuildRegistryInsecure          bool                           `key:"buildRegistryInsecure" json:"build_registry_insecure"`
+	// LayeredBuilds publishes a build's changes as layers packed straight from
+	// the working container instead of buildah commit + push + re-index.
+	// Dockerfiles outside the supported subset still go through buildah bud.
+	LayeredBuilds bool `key:"layeredBuilds" json:"layered_builds"`
 }
 
 // BuildRegistryCredentialsConfig stores credentials for generating tokens for the build registry

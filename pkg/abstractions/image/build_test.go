@@ -1635,7 +1635,7 @@ func Test_parseBuildStepsForDockerfile(t *testing.T) {
 
 	expected := []string{
 		"apt update",
-		"uv-b9 pip install --system --python python3.9 --link-mode copy \"requests\" \"numpy\"",
+		"uv-b9 pip install --system --python python3.9 --link-mode copy --cache-dir /root/.cache/uv \"requests\" \"numpy\"",
 		"echo done",
 	}
 

@@ -117,6 +117,9 @@ imageService:
   archiveNanosecondsPerByte: 120
   # Default to clip v2. Set to 1 to force legacy image format. NOTE: This only applies to new images.
   clipVersion: 2
+  # Publish a build's delta as layers packed from the working container (no
+  # buildah commit/push/re-index). Unsupported Dockerfiles fall back to bud.
+  layeredBuilds: true
   registryStore: local
   registryCredentialProvider: docker
   buildRegistry: registry.localhost:5000

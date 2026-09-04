@@ -2580,11 +2580,40 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	// replaces exported every layer to a local OCI layout (a full gzip pass
 	// over the rootfs) before publishing and indexing that copy.
 	if c.config.ImageService.ClipVersion == uint32(types.ClipVersion2) {
-		archiveName := fmt.Sprintf("%s.%s.tmp", request.ImageId, c.registry.ImageFileExtension)
-		archivePath := filepath.Join(tmpdir, archiveName)
+		// Layered build: run the instructions in a working container and
+		// publish its upper directory as layers, no commit, push from
+		// storage or re-index. Dockerfiles the plan parser does not cover
+		// take the bud path below.
+		// The delta is the working container's overlay upper directory, so
+		// the vfs driver (a full copy per layer) keeps the bud path.
+		if c.config.ImageService.LayeredBuilds && storageDriver == "overlay" {
+			plan, planErr := parseDockerfilePlan(dockerfile, buildArgMap(request.BuildOptions.BuildSecrets))
+			if planErr == nil {
+				manifestRef := sourceImage
+				if manifestRef == "" {
+					manifestRef = plan.from
+				}
+				var runVolumes []string
+				for i := 0; i+1 < len(budArgs); i++ {
+					if budArgs[i] == "--volume" {
+						runVolumes = append(runVolumes, budArgs[i+1])
+					}
+				}
+				contextDir := buildCtxPath
+				if request.BuildOptions.BuildCtxObject == nil {
+					contextDir = ""
+				}
+				return c.buildLayeredImage(ctx, outputLogger, request, &layeredBuild{
+					c: c, ctx: ctx, out: outputLogger, request: request, plan: plan,
+					sourceImage: manifestRef, fromRef: plan.from,
+					graphroot: graphroot, runroot: runroot, tmpdir: tmpdir, storage: storageDriver, storageConf: storageConf,
+					buildCtxPath: contextDir, runVolumes: runVolumes, buildArgs: buildArgMap(request.BuildOptions.BuildSecrets),
+				})
+			}
+			log.Info().Err(planErr).Str("image_id", request.ImageId).Msg("dockerfile outside the layered builder's subset, building with bud")
+		}
 
-		buildRegistry := c.getBuildRegistry()
-		imageTag := fmt.Sprintf("%s/%s:%s", buildRegistry, c.config.ImageService.BuildRepositoryName, request.ImageId)
+		imageTag := fmt.Sprintf("%s/%s:%s", c.getBuildRegistry(), c.config.ImageService.BuildRepositoryName, request.ImageId)
 
 		// Build w/ buildah
 		budArgs = append(budArgs, "-f", tempDockerFile, "-t", imageTag, buildCtxPath)
@@ -2599,53 +2628,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		}
 		outputLogger.Info(fmt.Sprintf("Image built in %.1fs\n", time.Since(buildStart).Seconds()))
 
-		buildRegistryCredentials := request.BuildRegistryCredentials
-		if buildRegistryCredentials == "" {
-			buildRegistryCredentials = c.gatewayRegistryCredentials(ctx, buildRegistry, request)
-		}
-		if buildRegistry == "localhost" || strings.HasPrefix(buildRegistry, "127.0.0.1") {
-			buildRegistryCredentials = ""
-		}
-
-		outputLogger.Info("Publishing image...\n")
-		pushArgs := []string{
-			"--root", graphroot,
-			"--runroot", runroot,
-			"--storage-driver=" + storageDriver,
-			"push",
-			"--compression-format", "gzip",
-			"--compression-level", "1",
-			"--retry", "5",
-			"--retry-delay", "1s",
-		}
-		if c.config.ImageService.BuildRegistryInsecure {
-			pushArgs = append(pushArgs, "--tls-verify=false")
-		}
-		if buildRegistryCredentials != "" {
-			pushArgs = append(pushArgs, "--creds", buildRegistryCredentials)
-		}
-		pushArgs = append(pushArgs, imageTag, "docker://"+imageTag)
-		var pushOutput strings.Builder
-		pushStart := time.Now()
-		pushHeartbeat := newActiveOutputWriter(outputLogger)
-		stopHeartbeat = startSilentOutputHeartbeat(ctx, outputLogger, pushStart, pushHeartbeat, "Still publishing image...")
-		cmd = newBuildahCommand(ctx, pushArgs, c.buildahEnv(runroot, tmpdir, storageConf), &pushOutput, &pushOutput)
-		err = cmd.Run()
-		stopHeartbeat()
-		if err != nil {
-			return fmt.Errorf("failed to publish image: %w: %s", err, strings.TrimSpace(pushOutput.String()))
-		}
-		outputLogger.Info(fmt.Sprintf("Image published in %.1fs\n", time.Since(pushStart).Seconds()))
-
-		c.v2ImageRefs.Set(request.ImageId, imageTag)
-		log.Info().Str("image_id", request.ImageId).Str("image_tag", imageTag).Msg("cached image reference")
-
-		if err = c.createOCIImageWithProgress(ctx, outputLogger, request, imageTag, "", archivePath, 2); err != nil {
-			return err
-		}
-
-		// Upload the clip archive to object storage
-		return c.registry.Push(ctx, archivePath, request.ImageId)
+		return c.publishFromStorage(ctx, outputLogger, request, imageTag, &buildahStore{graphroot: graphroot, runroot: runroot, tmpdir: tmpdir, driver: storageDriver, conf: storageConf})
 	}
 
 	// Clip v1: Build, push to OCI layout, then process locally
@@ -2968,4 +2951,66 @@ func downloadWorkspaceBuildContext(ctx context.Context, request *types.Container
 	}
 
 	return nil
+}
+
+// buildahStore locates a buildah storage root for follow-up commands.
+type buildahStore struct {
+	graphroot, runroot, tmpdir, driver, conf string
+}
+
+func (s *buildahStore) args(sub string) []string {
+	return []string{"--root", s.graphroot, "--runroot", s.runroot, "--storage-driver=" + s.driver, sub}
+}
+
+// publishFromStorage pushes the image tagged imageTag straight from buildah
+// storage to the build registry, indexes the pushed image and uploads the
+// index archive. Pushing from storage lets the registry transport reuse layer
+// blobs it already holds: base layers shared with earlier builds are neither
+// recompressed nor uploaded, and the index cache then skips them too.
+func (c *ImageClient) publishFromStorage(ctx context.Context, outputLogger *slog.Logger, request *types.ContainerRequest, imageTag string, store *buildahStore) error {
+	buildRegistry := c.getBuildRegistry()
+	archivePath := filepath.Join(store.tmpdir, fmt.Sprintf("%s.%s.tmp", request.ImageId, c.registry.ImageFileExtension))
+
+	buildRegistryCredentials := request.BuildRegistryCredentials
+	if buildRegistryCredentials == "" {
+		buildRegistryCredentials = c.gatewayRegistryCredentials(ctx, buildRegistry, request)
+	}
+	if buildRegistry == "localhost" || strings.HasPrefix(buildRegistry, "127.0.0.1") {
+		buildRegistryCredentials = ""
+	}
+
+	outputLogger.Info("Publishing image...\n")
+	pushArgs := append(store.args("push"),
+		"--compression-format", "gzip",
+		"--compression-level", "1",
+		"--retry", "5",
+		"--retry-delay", "1s",
+	)
+	if c.config.ImageService.BuildRegistryInsecure {
+		pushArgs = append(pushArgs, "--tls-verify=false")
+	}
+	if buildRegistryCredentials != "" {
+		pushArgs = append(pushArgs, "--creds", buildRegistryCredentials)
+	}
+	pushArgs = append(pushArgs, imageTag, "docker://"+imageTag)
+	var pushOutput strings.Builder
+	pushStart := time.Now()
+	pushHeartbeat := newActiveOutputWriter(outputLogger)
+	stopHeartbeat := startSilentOutputHeartbeat(ctx, outputLogger, pushStart, pushHeartbeat, "Still publishing image...")
+	err := newBuildahCommand(ctx, pushArgs, c.buildahEnv(store.runroot, store.tmpdir, store.conf), &pushOutput, &pushOutput).Run()
+	stopHeartbeat()
+	if err != nil {
+		return fmt.Errorf("failed to publish image: %w: %s", err, strings.TrimSpace(pushOutput.String()))
+	}
+	outputLogger.Info(fmt.Sprintf("Image published in %.1fs\n", time.Since(pushStart).Seconds()))
+
+	c.v2ImageRefs.Set(request.ImageId, imageTag)
+	log.Info().Str("image_id", request.ImageId).Str("image_tag", imageTag).Msg("cached image reference")
+
+	if err = c.createOCIImageWithProgress(ctx, outputLogger, request, imageTag, "", archivePath, 2); err != nil {
+		return err
+	}
+
+	// Upload the clip archive to object storage
+	return c.registry.Push(ctx, archivePath, request.ImageId)
 }
