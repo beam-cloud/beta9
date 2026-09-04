@@ -3,9 +3,15 @@
 # of the live secret with worker.imageTag pointed at the matching worker build).
 # No hot reload: the release image has no module cache for private modules.
 #
-#   okteto context use arn:aws:eks:us-east-1:683656326989:cluster/eks-stage-01 --namespace beta9
-#   GATEWAY_TAG=perf-startup-9b71dbb7 okteto up --file hack/okteto.stage.yaml
-#   okteto down --file hack/okteto.stage.yaml   # restores the original deployment
+#   GATEWAY_TAG=perf-startup-9b71dbb7 make start-stage
+#   make stop-stage                             # restores the original deployment
+#
+# Safe to run alongside `make start` (local k3d). Okteto keys session state
+# (okteto.pid, okteto.state, syncthing config) by <namespace>/<dev name> — not
+# by cluster — so with both manifests using beta9/beta9-gateway, each `okteto up`
+# kills the other's session. The stage targets therefore run with a separate
+# OKTETO_FOLDER (~/.okteto-stage) and explicit --context/--namespace flags; never
+# `okteto context use`, which silently switches the context for other tabs.
 #
 # The gateway logs to the container's stdout rather than the okteto PTY: once
 # the local `okteto up` detaches nothing drains the PTY, its buffer fills, and

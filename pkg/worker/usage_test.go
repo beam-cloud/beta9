@@ -732,6 +732,278 @@ func TestContainerUsageSegmentsPreserveWholeIntervalMilliseconds(t *testing.T) {
 	}
 }
 
+func TestBilledGpuChargesWhatTheCustomerAskedFor(t *testing.T) {
+	cases := []struct {
+		name      string
+		requested []string
+		placed    string
+		want      string
+	}{
+		{"cpu only", nil, "", ""},
+		{"placed on the requested gpu", []string{"T4"}, "T4", "T4"},
+		{"placed on one of several requested", []string{"T4", "L4"}, "L4", "L4"},
+		{"any gpu is charged as placed", []string{"any"}, "RTX4090", "RTX4090"},
+		{"failover to an unrequested gpu is charged as requested", []string{"T4"}, "RTX4090", "T4"},
+		{"failover with several requested charges the first", []string{"T4", "L4"}, "RTX4090", "T4"},
+		{"no_gpu entries are ignored", []string{"NO_GPU", "T4"}, "RTX4090", "T4"},
+		{"legacy request without a gpu list", nil, "T4", "T4"},
+		// A10G serverless is retired; grandfathered A10G requests pay the
+		// RTX 4090 rate regardless of where they land.
+		{"a10g routed to a 4090 pays the 4090 rate", []string{"A10G"}, "RTX4090", "RTX4090"},
+		{"a10g still on a10g hardware pays the 4090 rate", []string{"A10G"}, "A10G", "RTX4090"},
+		{"a10g first in a failover list pays the 4090 rate", []string{"A10G", "T4"}, "H100", "RTX4090"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := billedGpu(&types.ContainerRequest{GpuRequest: tc.requested}, tc.placed)
+			if got != tc.want {
+				t.Fatalf("billedGpu(%v, %q) = %q, want %q", tc.requested, tc.placed, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestEmitContainerUsageBillsRequestedGpuOnFailoverAndReportsPlacement(t *testing.T) {
+	repository := &usageMetricsRecorder{}
+	var quoted []string
+	metrics := &WorkerUsageMetrics{
+		ctx:               context.Background(),
+		workerId:          "worker-4090",
+		metricsRepo:       repository,
+		poolMode:          types.PoolModeLocal,
+		gpuType:           "RTX4090",
+		openMeterMetadata: true,
+		quoteProvider: func(_ context.Context, request *types.ContainerRequest) (clients.ContainerCostQuote, error) {
+			quoted = append(quoted, request.Gpu)
+			return clients.ContainerCostQuote{CostPerMs: 0.001, PricingVersion: "v", Valid: true}, nil
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	metrics.EmitContainerUsage(ctx, &types.ContainerRequest{
+		ContainerId: "container-1",
+		GpuRequest:  []string{"T4"},
+		GpuCount:    1,
+	})
+
+	for _, gpu := range quoted {
+		if gpu != "T4" {
+			t.Fatalf("quoted gpu = %q, want the requested T4", gpu)
+		}
+	}
+	if len(repository.events) == 0 {
+		t.Fatal("no usage events emitted")
+	}
+	for _, event := range repository.events {
+		if event.labels["gpu"] != "T4" || event.labels["gpu_placed"] != "RTX4090" {
+			t.Fatalf("event labels gpu/gpu_placed = %v/%v, want T4/RTX4090", event.labels["gpu"], event.labels["gpu_placed"])
+		}
+	}
+}
+
+func TestEmitUsageHoldsRefusedEventsAndResendsThemInOrder(t *testing.T) {
+	repository := &flakyUsageMetricsRecorder{failing: true}
+	metrics := &WorkerUsageMetrics{metricsRepo: repository}
+
+	metrics.emitUsage(types.UsageMetricsWorkerContainerDuration, map[string]interface{}{"container_id": "c"}, 1)
+	metrics.emitUsage(types.UsageMetricsWorkerContainerDuration, map[string]interface{}{"container_id": "c"}, 2)
+	if len(repository.accepted) != 0 || len(metrics.backlog) != 2 {
+		t.Fatalf("accepted/backlog = %d/%d while endpoint is down, want 0/2", len(repository.accepted), len(metrics.backlog))
+	}
+
+	// The endpoint is back, but events behind the backlog must not overtake it.
+	repository.failing = false
+	metrics.emitUsage(types.UsageMetricsWorkerContainerDuration, map[string]interface{}{"container_id": "c"}, 3)
+	if len(repository.accepted) != 0 || len(metrics.backlog) != 3 {
+		t.Fatalf("accepted/backlog = %d/%d before drain, want 0/3", len(repository.accepted), len(metrics.backlog))
+	}
+
+	metrics.drainBacklog()
+	if len(metrics.backlog) != 0 {
+		t.Fatalf("backlog after drain = %d, want 0", len(metrics.backlog))
+	}
+	if got := repository.accepted; len(got) != 3 || got[0] != 1 || got[1] != 2 || got[2] != 3 {
+		t.Fatalf("accepted values = %v, want [1 2 3] in order", got)
+	}
+
+	// Nothing waiting: events go straight through again.
+	metrics.emitUsage(types.UsageMetricsWorkerContainerDuration, map[string]interface{}{"container_id": "c"}, 4)
+	if len(repository.accepted) != 4 || len(metrics.backlog) != 0 {
+		t.Fatalf("accepted/backlog = %d/%d after recovery, want 4/0", len(repository.accepted), len(metrics.backlog))
+	}
+}
+
+func TestUsageBacklogIsBoundedAndDropsOldestFirst(t *testing.T) {
+	repository := &flakyUsageMetricsRecorder{failing: true}
+	metrics := &WorkerUsageMetrics{metricsRepo: repository}
+	for i := 0; i < usageBacklogLimit+3; i++ {
+		metrics.emitUsage(types.UsageMetricsWorkerContainerDuration, map[string]interface{}{}, float64(i))
+	}
+	if len(metrics.backlog) != usageBacklogLimit {
+		t.Fatalf("backlog = %d, want capped at %d", len(metrics.backlog), usageBacklogLimit)
+	}
+	if metrics.backlog[0].value != 3 {
+		t.Fatalf("oldest retained value = %v, want 3 (0..2 dropped)", metrics.backlog[0].value)
+	}
+}
+
+func TestEmitContainerUsageDrainsBacklogOnEveryTickAndAtExit(t *testing.T) {
+	start := time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC)
+	firstEnd := start.Add(5 * time.Second)
+	secondEnd := firstEnd.Add(5 * time.Second)
+	ticks := make(chan time.Time, 2)
+	repository := &flakyUsageMetricsRecorder{failing: true, notify: make(chan struct{}, 16)}
+	var nowCalls atomic.Int32
+	metrics := &WorkerUsageMetrics{
+		ctx:         context.Background(),
+		workerId:    "worker-1",
+		metricsRepo: repository,
+		poolMode:    types.PoolModeLocal,
+		now: func() time.Time {
+			if nowCalls.Add(1) == 1 {
+				return start
+			}
+			return secondEnd
+		},
+		newTicker: func(time.Duration) (<-chan time.Time, func()) { return ticks, func() {} },
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		metrics.EmitContainerUsage(ctx, &types.ContainerRequest{ContainerId: "container-1"})
+		close(done)
+	}()
+
+	// First interval: OpenMeter is down, the 5s duration is held back.
+	ticks <- firstEnd
+	waitForUsageMetrics(t, repository.notify, 1) // one refused attempt
+	if len(repository.accepted) != 0 {
+		t.Fatalf("accepted while down = %v", repository.accepted)
+	}
+
+	// Endpoint recovers; the final flush must deliver both intervals.
+	repository.mu.Lock()
+	repository.failing = false
+	repository.mu.Unlock()
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("usage loop did not stop")
+	}
+	if got := repository.accepted; len(got) != 2 || got[0] != 5_000 || got[1] != 5_000 {
+		t.Fatalf("accepted durations = %v, want the held-back 5000ms followed by the final 5000ms", got)
+	}
+	if len(metrics.backlog) != 0 {
+		t.Fatalf("backlog after exit = %d, want 0", len(metrics.backlog))
+	}
+}
+
+func TestEmitContainerUsagePricesEarlierIntervalsOnceAQuoteArrives(t *testing.T) {
+	start := time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC)
+	firstEnd := start.Add(5 * time.Second)
+	secondEnd := firstEnd.Add(5 * time.Second)
+	ticks := make(chan time.Time, 2)
+	repository := &usageMetricsRecorder{notify: make(chan struct{}, 16)}
+	var nowCalls, quoteCalls atomic.Int32
+	metrics := &WorkerUsageMetrics{
+		ctx:               context.Background(),
+		workerId:          "worker-1",
+		metricsRepo:       repository,
+		poolMode:          types.PoolModeLocal,
+		openMeterMetadata: true,
+		now: func() time.Time {
+			if nowCalls.Add(1) == 1 {
+				return start
+			}
+			return secondEnd
+		},
+		newTicker: func(time.Duration) (<-chan time.Time, func()) { return ticks, func() {} },
+		quoteProvider: func(context.Context, *types.ContainerRequest) (clients.ContainerCostQuote, error) {
+			// The pricing service is unreachable for the initial quote and the
+			// first refresh, then answers with a dated card.
+			if quoteCalls.Add(1) <= 2 {
+				return clients.ContainerCostQuote{}, context.DeadlineExceeded
+			}
+			return clients.ContainerCostQuote{
+				CostPerMs:      0.001,
+				PricingVersion: "rates",
+				EffectiveAt:    start.Add(-24 * time.Hour),
+				Valid:          true,
+			}, nil
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		metrics.EmitContainerUsage(ctx, &types.ContainerRequest{ContainerId: "container-1"})
+		close(done)
+	}()
+	ticks <- firstEnd
+	waitForUsageMetrics(t, repository.notify, 1) // duration only: no quote yet
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("usage loop did not stop")
+	}
+
+	repository.mu.Lock()
+	events := append([]recordedUsageMetric(nil), repository.events...)
+	repository.mu.Unlock()
+	var durationMs, costCents float64
+	costIntervals := map[string]bool{}
+	for _, event := range events {
+		switch event.name {
+		case types.UsageMetricsWorkerContainerDuration:
+			durationMs += event.value
+		case types.UsageMetricsWorkerContainerCost:
+			costCents += event.value
+			costIntervals[event.labels["interval_start"].(string)] = true
+		}
+	}
+	if durationMs != 10_000 {
+		t.Fatalf("duration = %v, want 10000ms over two intervals", durationMs)
+	}
+	// Both intervals priced at 0.001 cents/ms: the second directly, the first
+	// retroactively once the quote arrived.
+	if costCents != 10 || !costIntervals[start.Format(time.RFC3339Nano)] || !costIntervals[firstEnd.Format(time.RFC3339Nano)] {
+		t.Fatalf("cost = %v cents over intervals %v, want 10 cents covering both intervals", costCents, costIntervals)
+	}
+}
+
+// flakyUsageMetricsRecorder refuses events while failing is set.
+type flakyUsageMetricsRecorder struct {
+	mu       sync.Mutex
+	failing  bool
+	accepted []float64
+	notify   chan struct{}
+}
+
+func (r *flakyUsageMetricsRecorder) Init(string) error { return nil }
+
+func (r *flakyUsageMetricsRecorder) IncrementCounter(_ string, _ map[string]interface{}, value float64) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.notify != nil {
+		select {
+		case r.notify <- struct{}{}:
+		default:
+		}
+	}
+	if r.failing {
+		return context.DeadlineExceeded
+	}
+	r.accepted = append(r.accepted, value)
+	return nil
+}
+
+func (r *flakyUsageMetricsRecorder) SetGauge(string, map[string]interface{}, float64) error {
+	return nil
+}
+
 func waitForUsageMetrics(t *testing.T, notifications <-chan struct{}, count int) {
 	t.Helper()
 	for i := 0; i < count; i++ {

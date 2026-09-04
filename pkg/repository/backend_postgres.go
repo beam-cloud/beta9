@@ -1771,11 +1771,16 @@ func (c *PostgresBackendRepository) CreateDeployment(ctx context.Context, worksp
 }
 
 func (c *PostgresBackendRepository) listStubsQueryBuilder(filters types.StubFilter) squirrel.SelectBuilder {
+	// The app is joined loosely so callers resolving stubs by id (e.g. billing
+	// attribution) learn which app each stub belongs to, even for stubs whose
+	// app has since been deleted.
 	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
 		"s.*",
 		"w.external_id AS \"workspace.external_id\"", "w.name AS \"workspace.name\"",
+		"COALESCE(a.external_id::text, '') AS \"app.external_id\"", "COALESCE(a.name, '') AS \"app.name\"",
 	).From("stub s").
-		Join("workspace w ON s.workspace_id = w.id")
+		Join("workspace w ON s.workspace_id = w.id").
+		LeftJoin("app a ON s.app_id = a.id")
 
 	// Apply filters
 	if filters.WorkspaceID != "" {
@@ -1791,7 +1796,6 @@ func (c *PostgresBackendRepository) listStubsQueryBuilder(filters types.StubFilt
 	}
 
 	if filters.AppId != "" {
-		qb = qb.Join("app a ON s.app_id = a.id")
 		qb = qb.Where(squirrel.Eq{"a.external_id": filters.AppId})
 		qb = qb.Where("a.deleted_at IS NULL")
 	}

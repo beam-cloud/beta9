@@ -188,11 +188,83 @@ type GatewayServiceConfig struct {
 	// Both values must be > 0 for the default to take effect; otherwise
 	// workspaces without a row remain unlimited (legacy behavior).
 	DefaultConcurrencyLimit DefaultConcurrencyLimitConfig `key:"defaultConcurrencyLimit" json:"default_concurrency_limit"`
+	// CreditGate decides whether a workspace has prepaid credit to run
+	// serverless workloads. Independent of the concurrency limit, which is a
+	// capacity cap, not a paywall.
+	CreditGate CreditGateConfig `key:"creditGate" json:"credit_gate"`
 }
 
 type DefaultConcurrencyLimitConfig struct {
 	CPUMillicores uint32 `key:"cpuMillicores" json:"cpu_millicores"`
 	GPUCount      uint32 `key:"gpuCount" json:"gpu_count"`
+}
+
+const (
+	CreditGateModeNoop = "noop"
+	CreditGateModeHTTP = "http"
+)
+
+// CreditGateConfig configures the scheduler's prepaid-credit check.
+//
+// In "http" mode every container request (and the periodic enforcement sweep)
+// asks the billing service whether the workspace still has credit. Decisions
+// are cached in Redis for CacheTTL and reused for up to StaleTTL when billing
+// is unreachable; with no usable cached decision FailOpen decides.
+type CreditGateConfig struct {
+	Mode            string        `key:"mode" json:"mode"`
+	Endpoint        string        `key:"endpoint" json:"endpoint"`
+	AuthToken       string        `key:"authToken" json:"auth_token"`
+	Timeout         time.Duration `key:"timeout" json:"timeout"`
+	CacheTTL        time.Duration `key:"cacheTTL" json:"cache_ttl"`
+	StaleTTL        time.Duration `key:"staleTTL" json:"stale_ttl"`
+	FailOpen        *bool         `key:"failOpen" json:"fail_open"`
+	EnforceInterval time.Duration `key:"enforceInterval" json:"enforce_interval"`
+}
+
+// Enabled reports whether the gate consults billing at all: http mode with an
+// endpoint. Anything else allows everything.
+func (c CreditGateConfig) Enabled() bool {
+	return strings.EqualFold(strings.TrimSpace(c.Mode), CreditGateModeHTTP) && strings.TrimSpace(c.Endpoint) != ""
+}
+
+// TimeoutOrDefault bounds one billing call. The check may run an off-session
+// Stripe charge (auto top-up) before answering, so it needs Stripe latency
+// headroom; a cached decision serves the next 30s either way.
+func (c CreditGateConfig) TimeoutOrDefault() time.Duration {
+	if c.Timeout <= 0 {
+		return 10 * time.Second
+	}
+	return c.Timeout
+}
+
+func (c CreditGateConfig) CacheTTLOrDefault() time.Duration {
+	if c.CacheTTL <= 0 {
+		return 30 * time.Second
+	}
+	return c.CacheTTL
+}
+
+func (c CreditGateConfig) StaleTTLOrDefault() time.Duration {
+	if c.StaleTTL <= 0 {
+		return 10 * time.Minute
+	}
+	return c.StaleTTL
+}
+
+// FailOpenOrDefault: allow when billing cannot be reached and nothing is
+// cached, unless explicitly set to false.
+func (c CreditGateConfig) FailOpenOrDefault() bool {
+	if c.FailOpen == nil {
+		return true
+	}
+	return *c.FailOpen
+}
+
+func (c CreditGateConfig) EnforceIntervalOrDefault() time.Duration {
+	if c.EnforceInterval <= 0 {
+		return time.Minute
+	}
+	return c.EnforceInterval
 }
 
 type FileServiceConfig struct {

@@ -252,6 +252,11 @@ func (i *AutoscaledInstance) Monitor() error {
 						log.Info().Str("instance_name", i.Name).Msg("throttled by concurrency limit")
 						ignoreScalingEventWindow = time.Now().Add(IgnoreScalingEventInterval)
 					}
+				} else if _, ok := err.(*types.InsufficientCreditsError); ok {
+					if time.Now().After(ignoreScalingEventWindow) {
+						log.Info().Str("instance_name", i.Name).Str("reason", err.Error()).Msg("scale up blocked: insufficient credits")
+						ignoreScalingEventWindow = time.Now().Add(IgnoreScalingEventInterval)
+					}
 				}
 				continue
 			}

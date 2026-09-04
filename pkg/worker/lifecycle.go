@@ -1966,7 +1966,7 @@ func normalizeContainerExitCode(exitCode int, stopReason types.StopContainerReas
 		return int(types.ContainerExitCodeTtl)
 	case types.StopContainerReasonUser:
 		return int(types.ContainerExitCodeUser)
-	case types.StopContainerReasonAdmin:
+	case types.StopContainerReasonAdmin, types.StopContainerReasonInsufficientCredits:
 		return int(types.ContainerExitCodeAdmin)
 	}
 

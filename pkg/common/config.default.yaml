@@ -102,6 +102,19 @@ gateway:
   defaultConcurrencyLimit:
     cpuMillicores: 0
     gpuCount: 0
+  # Prepaid credit gate. In "http" mode the scheduler asks the billing
+  # service (POST {workspace_id} to endpoint) before running a container and
+  # periodically stops containers of workspaces that have run out of credit.
+  # "noop" allows everything (self-hosted default).
+  creditGate:
+    mode: noop
+    endpoint: ""
+    authToken: ""
+    timeout: 10s
+    cacheTTL: 30s
+    staleTTL: 10m
+    failOpen: true
+    enforceInterval: 1m
 fileService:
   enabled: true
   endpointUrl: http://juicefs-s3-gateway.beta9.svc.cluster.local:9900

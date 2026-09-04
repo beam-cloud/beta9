@@ -55,6 +55,8 @@ func (t *FunctionTask) Execute(ctx context.Context, options ...interface{}) erro
 		}); err != nil {
 			if _, ok := err.(*types.ThrottledByConcurrencyLimitError); ok {
 				log.Info().Str("task_id", taskId).Str("reason", err.Error()).Msg("task rejected due to concurrency limit")
+			} else if _, ok := err.(*types.InsufficientCreditsError); ok {
+				log.Info().Str("task_id", taskId).Str("reason", err.Error()).Msg("task rejected due to insufficient credits")
 			}
 			return err
 		}
@@ -229,6 +231,8 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated, tas
 	if err != nil {
 		if _, ok := err.(*types.ThrottledByConcurrencyLimitError); ok {
 			log.Info().Str("task_id", task.ExternalId).Str("reason", err.Error()).Msg("task cancelled due to concurrency limit")
+		} else if _, ok := err.(*types.InsufficientCreditsError); ok {
+			log.Info().Str("task_id", task.ExternalId).Str("reason", err.Error()).Msg("task cancelled due to insufficient credits")
 		}
 
 		task.Status = types.TaskStatusCancelled

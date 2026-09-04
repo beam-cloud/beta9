@@ -10,7 +10,7 @@ CACHE_BENCH_PROFILE ?=
 CACHE_BENCH_CONFIG ?=
 TOKEN ?=
 
-.PHONY: startup-benchmark startup-benchmark-build sandbox-parallel-benchmark sandbox-stage-cold-benchmark sandbox-stage-warm-benchmark cache-benchmark bench-cache-smoke worker-e2e-tag worker-e2e-check worker-e2e-push
+.PHONY: start stop start-stage stop-stage startup-benchmark startup-benchmark-build sandbox-parallel-benchmark sandbox-stage-cold-benchmark sandbox-stage-warm-benchmark cache-benchmark bench-cache-smoke worker-e2e-tag worker-e2e-check worker-e2e-push
 
 setup:
 	bash bin/setup.sh
@@ -102,11 +102,26 @@ runner:
 		docker push localhost:5001/beta9-runner:micromamba$$version-$(runnerTag); \
 	done
 
+# Local (k3d) and staging (EKS) okteto sessions can run side by side. Okteto
+# stores session state under $OKTETO_FOLDER/<namespace>/<dev>, keyed by name
+# rather than cluster, so both sessions (beta9/beta9-gateway) would otherwise
+# share one okteto.pid and take turns killing each other. Staging gets its own
+# folder, and both pass --context/--namespace explicitly so neither depends on
+# (or clobbers) the global current context.
+LOCAL_OKTETO_CONTEXT ?= k3d-beta9
+LOCAL_OKTETO_NAMESPACE ?= beta9
+STAGE_OKTETO_CONTEXT ?= arn:aws:eks:us-east-1:683656326989:cluster/eks-stage-01
+STAGE_OKTETO_NAMESPACE ?= beta9
+STAGE_OKTETO_FOLDER ?= $(HOME)/.okteto-stage
+OKTETO_LOCAL_FLAGS := --context $(LOCAL_OKTETO_CONTEXT) --namespace $(LOCAL_OKTETO_NAMESPACE)
+OKTETO_STAGE_FLAGS := --context $(STAGE_OKTETO_CONTEXT) --namespace $(STAGE_OKTETO_NAMESPACE)
+OKTETO_STAGE := mkdir -p $(STAGE_OKTETO_FOLDER) && OKTETO_FOLDER=$(STAGE_OKTETO_FOLDER) okteto
+
 start:
 	@if [ -f config.yaml ]; then \
-		cd hack && okteto up --file okteto.yaml --env CONFIG_PATH=/workspace/config.yaml; \
+		cd hack && okteto up $(OKTETO_LOCAL_FLAGS) --file okteto.yaml --env CONFIG_PATH=/workspace/config.yaml; \
 	else \
-		cd hack && okteto up --file okteto.yaml; \
+		cd hack && okteto up $(OKTETO_LOCAL_FLAGS) --file okteto.yaml; \
 	fi
 
 clear-ports:
@@ -114,7 +129,16 @@ clear-ports:
 	@lsof -t -i :1993,1994,8008 | xargs -r sudo kill -9 2>/dev/null || true
 
 stop:
-	cd hack && okteto down --file okteto.yaml
+	cd hack && okteto down $(OKTETO_LOCAL_FLAGS) --file okteto.yaml
+
+# Staging gateway on eks-stage-01 (see hack/okteto.stage.yaml). Forwards to
+# localhost:11993/11994 so it never collides with the local session.
+start-stage:
+	@test -n "$(GATEWAY_TAG)" || { echo "GATEWAY_TAG is required, e.g. GATEWAY_TAG=perf-startup-9b71dbb7 make start-stage"; exit 1; }
+	cd hack && GATEWAY_TAG=$(GATEWAY_TAG) $(OKTETO_STAGE) up $(OKTETO_STAGE_FLAGS) --file okteto.stage.yaml
+
+stop-stage:
+	cd hack && $(OKTETO_STAGE) down $(OKTETO_STAGE_FLAGS) --file okteto.stage.yaml
 
 protocol:
 	./bin/gen_proto.sh
