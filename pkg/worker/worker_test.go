@@ -20,6 +20,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestGPUManagerForRequestUsesWorkerVirtualizationFlag(t *testing.T) {
@@ -1156,8 +1157,7 @@ func (f *fakeContainerRepoClient) GetContainerState(ctx context.Context, in *pb.
 	f.getStateCalls++
 	state := f.state
 	if state != nil {
-		copy := *state
-		state = &copy
+		state = proto.Clone(state).(*pb.ContainerState)
 	}
 	started := f.getStateStarted
 	release := f.getStateRelease

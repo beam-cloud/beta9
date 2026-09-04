@@ -410,12 +410,17 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 
 	phases.Mark("exit_code")
 
+	// Only the CPU set hand-back shares state with reserveContainerInstance.
+	// The GPU and network managers synchronize themselves, and their teardown
+	// (a Thunder RPC, a netns deletion that waits on the kernel) must not hold
+	// up the request stream, which reserves under the same lock.
 	s.containerLock.Lock()
 	if instance, exists := s.containerInstances.Get(containerId); exists {
 		instance.CPUSet = ""
 		instance.RestoreCPUAffinityDeferred = false
 		s.containerInstances.Set(containerId, instance)
 	}
+	s.containerLock.Unlock()
 
 	// De-allocate GPU devices so they are available for new containers
 	if request != nil && request.RequiresGPU() {
@@ -430,8 +435,6 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 
 	// Clean up upload directory
 	os.RemoveAll(filepath.Join(types.WorkerContainerUploadsHostPath, containerId))
-
-	s.containerLock.Unlock()
 
 	s.markContainerStopping(containerId, types.ContainerStateTtlS)
 
