@@ -1589,7 +1589,7 @@ func (m *WorkerCacheManager) materializeOwnedItem(server *cache.Server, localHos
 		} else {
 			m.clearReconcileSuccess(item.Hash, routingKey)
 		}
-		m.reconcileLogFields(log.Info(), localHostID, stub, item).
+		m.reconcileLogFields(log.Debug(), localHostID, stub, item).
 			Str("status", status).Dur("duration", elapsed).
 			Msg("cache content reconciled")
 	case reconcileStatusIsFailure(status):
