@@ -393,7 +393,9 @@ func generateStandardPipInstallCommand(pythonPackages []string, pythonVersion st
 
 	command := fmt.Sprintf("%s -m pip install", pythonVersion)
 	if !virtualEnv && pythonVersion != "" {
-		command = fmt.Sprintf("uv-b9 pip install --system --python %s", pythonVersion)
+		// The wheel cache is a mount on another filesystem, so hardlinking
+		// would fail and fall back to copying anyway; ask for it outright.
+		command = fmt.Sprintf("uv-b9 pip install --system --python %s --link-mode copy", pythonVersion)
 	}
 
 	if len(flagLines) > 0 {
