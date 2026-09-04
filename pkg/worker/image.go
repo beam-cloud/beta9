@@ -1068,7 +1068,11 @@ func (c *ImageClient) cacheOCIMetadata(imageId string, meta *clipCommon.ClipArch
 	if ociInfo.Repository != "" && ociInfo.Reference != "" {
 		registryHost := strings.TrimPrefix(ociInfo.RegistryURL, "https://")
 		registryHost = strings.TrimPrefix(registryHost, "http://")
-		sourceRef := fmt.Sprintf("%s/%s:%s", registryHost, ociInfo.Repository, ociInfo.Reference)
+		separator := ":"
+		if strings.Contains(ociInfo.Reference, ":") { // a digest, not a tag
+			separator = "@"
+		}
+		sourceRef := registryHost + "/" + ociInfo.Repository + separator + ociInfo.Reference
 		c.v2ImageRefs.Set(imageId, sourceRef)
 		log.Info().Str("image_id", imageId).Str("source_ref", sourceRef).Msg("cached image reference from metadata")
 	}

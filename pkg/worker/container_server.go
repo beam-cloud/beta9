@@ -409,44 +409,13 @@ func (s *ContainerRuntimeServer) ContainerArchive(req *pb.ContainerArchiveReques
 		return stream.Send(&pb.ContainerArchiveResponse{Done: true, Success: false, ErrorMsg: "Container not running"})
 	}
 
-	// If it's not a build request, use initial_config.json from the base image bundle
-	initialConfigPath := filepath.Join(instance.BundlePath, specBaseName)
-	if !instance.Request.IsBuildRequest() {
-		initialConfigPath = filepath.Join(instance.BundlePath, initialSpecBaseName)
-	}
-
-	// Ensure initial config exists; for v2 (no unpack), derive from image if missing
-	destInitial := filepath.Join(instance.Overlay.TopLayerPath(), initialSpecBaseName)
-	if _, statErr := os.Stat(initialConfigPath); statErr == nil {
-		if err = copyFile(initialConfigPath, destInitial); err != nil {
+	// A v1 base has no OCI image to stack a layer on; its snapshot archives the
+	// merged root, which carries the runtime spec inside the filesystem.
+	_, layered := s.imageClient.GetSourceImageRef(instance.Request.ImageId)
+	if !layered {
+		if err := s.writeArchiveSpecs(ctx, instance); err != nil {
 			return stream.Send(&pb.ContainerArchiveResponse{Done: true, Success: false, ErrorMsg: err.Error()})
 		}
-	} else {
-		// Derive initial spec from source image metadata via skopeo inspect
-		if err = s.writeInitialSpecFromImage(ctx, instance, destInitial); err != nil {
-			return stream.Send(&pb.ContainerArchiveResponse{Done: true, Success: false, ErrorMsg: err.Error()})
-		}
-	}
-
-	if err := s.addRequestEnvToInitialSpec(instance); err != nil {
-		return err
-	}
-
-	tempConfig := s.baseConfigSpec
-	tempConfig.Hooks.Prestart = nil
-	tempConfig.Process.Terminal = false
-	tempConfig.Process.Args = []string{"tail", "-f", "/dev/null"}
-	tempConfig.Root.Readonly = false
-
-	file, err := json.MarshalIndent(tempConfig, "", "  ")
-	if err != nil {
-		return stream.Send(&pb.ContainerArchiveResponse{Done: true, Success: false, ErrorMsg: err.Error()})
-	}
-
-	configPath := filepath.Join(instance.Overlay.TopLayerPath(), specBaseName)
-	err = os.WriteFile(configPath, file, 0644)
-	if err != nil {
-		return stream.Send(&pb.ContainerArchiveResponse{Done: true, Success: false, ErrorMsg: err.Error()})
 	}
 
 	progressChan := make(chan int)
@@ -494,13 +463,53 @@ func (s *ContainerRuntimeServer) ContainerArchive(req *pb.ContainerArchiveReques
 		wg.Wait()
 	}()
 
-	topLayerPath := NewPathInfo(instance.Overlay.TopLayerPath())
-	err = stream.Send(&pb.ContainerArchiveResponse{
-		Done: true, Success: s.imageClient.Archive(ctx, topLayerPath, req.ImageId, progressChan) == nil,
-	})
+	if layered {
+		err = s.imageClient.ArchiveLayer(ctx, instance.Request, instance.Overlay.TopLayerUpperDir(), req.ImageId, progressChan)
+	} else {
+		err = s.imageClient.Archive(ctx, NewPathInfo(instance.Overlay.TopLayerPath()), req.ImageId, progressChan)
+	}
+	if err != nil {
+		log.Error().Err(err).Str("container_id", req.ContainerId).Str("image_id", req.ImageId).Msg("filesystem snapshot failed")
+	}
+	err = stream.Send(&pb.ContainerArchiveResponse{Done: true, Success: err == nil})
 
 	close(doneChan)
 	return err
+}
+
+// writeArchiveSpecs places the runtime specs a v1 image archive is read with
+// into the merged root before it is archived.
+func (s *ContainerRuntimeServer) writeArchiveSpecs(ctx context.Context, instance *ContainerInstance) error {
+	// If it's not a build request, use initial_config.json from the base image bundle
+	initialConfigPath := filepath.Join(instance.BundlePath, specBaseName)
+	if !instance.Request.IsBuildRequest() {
+		initialConfigPath = filepath.Join(instance.BundlePath, initialSpecBaseName)
+	}
+
+	destInitial := filepath.Join(instance.Overlay.TopLayerPath(), initialSpecBaseName)
+	if _, statErr := os.Stat(initialConfigPath); statErr == nil {
+		if err := copyFile(initialConfigPath, destInitial); err != nil {
+			return err
+		}
+	} else if err := s.writeInitialSpecFromImage(ctx, instance, destInitial); err != nil {
+		return err
+	}
+
+	if err := s.addRequestEnvToInitialSpec(instance); err != nil {
+		return err
+	}
+
+	tempConfig := s.baseConfigSpec
+	tempConfig.Hooks.Prestart = nil
+	tempConfig.Process.Terminal = false
+	tempConfig.Process.Args = []string{"tail", "-f", "/dev/null"}
+	tempConfig.Root.Readonly = false
+
+	file, err := json.MarshalIndent(tempConfig, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(instance.Overlay.TopLayerPath(), specBaseName), file, 0644)
 }
 
 // writeInitialSpecFromImage builds an initial_config.json using the base runc config
