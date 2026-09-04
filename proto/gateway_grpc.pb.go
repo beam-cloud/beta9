@@ -24,6 +24,8 @@ const (
 	GatewayService_HeadObject_FullMethodName                      = "/gateway.GatewayService/HeadObject"
 	GatewayService_CreateObject_FullMethodName                    = "/gateway.GatewayService/CreateObject"
 	GatewayService_PutObjectStream_FullMethodName                 = "/gateway.GatewayService/PutObjectStream"
+	GatewayService_CreateObjectDelta_FullMethodName               = "/gateway.GatewayService/CreateObjectDelta"
+	GatewayService_CommitObjectDelta_FullMethodName               = "/gateway.GatewayService/CommitObjectDelta"
 	GatewayService_CheckpointContainer_FullMethodName             = "/gateway.GatewayService/CheckpointContainer"
 	GatewayService_ListContainers_FullMethodName                  = "/gateway.GatewayService/ListContainers"
 	GatewayService_StopContainer_FullMethodName                   = "/gateway.GatewayService/StopContainer"
@@ -106,6 +108,8 @@ type GatewayServiceClient interface {
 	HeadObject(ctx context.Context, in *HeadObjectRequest, opts ...grpc.CallOption) (*HeadObjectResponse, error)
 	CreateObject(ctx context.Context, in *CreateObjectRequest, opts ...grpc.CallOption) (*CreateObjectResponse, error)
 	PutObjectStream(ctx context.Context, opts ...grpc.CallOption) (GatewayService_PutObjectStreamClient, error)
+	CreateObjectDelta(ctx context.Context, in *CreateObjectDeltaRequest, opts ...grpc.CallOption) (*CreateObjectDeltaResponse, error)
+	CommitObjectDelta(ctx context.Context, in *CommitObjectDeltaRequest, opts ...grpc.CallOption) (*CommitObjectDeltaResponse, error)
 	// Containers
 	CheckpointContainer(ctx context.Context, in *CheckpointContainerRequest, opts ...grpc.CallOption) (*CheckpointContainerResponse, error)
 	ListContainers(ctx context.Context, in *ListContainersRequest, opts ...grpc.CallOption) (*ListContainersResponse, error)
@@ -263,6 +267,24 @@ func (x *gatewayServicePutObjectStreamClient) CloseAndRecv() (*PutObjectResponse
 		return nil, err
 	}
 	return m, nil
+}
+
+func (c *gatewayServiceClient) CreateObjectDelta(ctx context.Context, in *CreateObjectDeltaRequest, opts ...grpc.CallOption) (*CreateObjectDeltaResponse, error) {
+	out := new(CreateObjectDeltaResponse)
+	err := c.cc.Invoke(ctx, GatewayService_CreateObjectDelta_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gatewayServiceClient) CommitObjectDelta(ctx context.Context, in *CommitObjectDeltaRequest, opts ...grpc.CallOption) (*CommitObjectDeltaResponse, error) {
+	out := new(CommitObjectDeltaResponse)
+	err := c.cc.Invoke(ctx, GatewayService_CommitObjectDelta_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *gatewayServiceClient) CheckpointContainer(ctx context.Context, in *CheckpointContainerRequest, opts ...grpc.CallOption) (*CheckpointContainerResponse, error) {
@@ -967,6 +989,8 @@ type GatewayServiceServer interface {
 	HeadObject(context.Context, *HeadObjectRequest) (*HeadObjectResponse, error)
 	CreateObject(context.Context, *CreateObjectRequest) (*CreateObjectResponse, error)
 	PutObjectStream(GatewayService_PutObjectStreamServer) error
+	CreateObjectDelta(context.Context, *CreateObjectDeltaRequest) (*CreateObjectDeltaResponse, error)
+	CommitObjectDelta(context.Context, *CommitObjectDeltaRequest) (*CommitObjectDeltaResponse, error)
 	// Containers
 	CheckpointContainer(context.Context, *CheckpointContainerRequest) (*CheckpointContainerResponse, error)
 	ListContainers(context.Context, *ListContainersRequest) (*ListContainersResponse, error)
@@ -1067,6 +1091,12 @@ func (UnimplementedGatewayServiceServer) CreateObject(context.Context, *CreateOb
 }
 func (UnimplementedGatewayServiceServer) PutObjectStream(GatewayService_PutObjectStreamServer) error {
 	return status.Errorf(codes.Unimplemented, "method PutObjectStream not implemented")
+}
+func (UnimplementedGatewayServiceServer) CreateObjectDelta(context.Context, *CreateObjectDeltaRequest) (*CreateObjectDeltaResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateObjectDelta not implemented")
+}
+func (UnimplementedGatewayServiceServer) CommitObjectDelta(context.Context, *CommitObjectDeltaRequest) (*CommitObjectDeltaResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CommitObjectDelta not implemented")
 }
 func (UnimplementedGatewayServiceServer) CheckpointContainer(context.Context, *CheckpointContainerRequest) (*CheckpointContainerResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CheckpointContainer not implemented")
@@ -1384,6 +1414,42 @@ func (x *gatewayServicePutObjectStreamServer) Recv() (*PutObjectRequest, error) 
 		return nil, err
 	}
 	return m, nil
+}
+
+func _GatewayService_CreateObjectDelta_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateObjectDeltaRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).CreateObjectDelta(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_CreateObjectDelta_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).CreateObjectDelta(ctx, req.(*CreateObjectDeltaRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_CommitObjectDelta_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CommitObjectDeltaRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).CommitObjectDelta(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_CommitObjectDelta_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).CommitObjectDelta(ctx, req.(*CommitObjectDeltaRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _GatewayService_CheckpointContainer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -2669,6 +2735,14 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CreateObject",
 			Handler:    _GatewayService_CreateObject_Handler,
+		},
+		{
+			MethodName: "CreateObjectDelta",
+			Handler:    _GatewayService_CreateObjectDelta_Handler,
+		},
+		{
+			MethodName: "CommitObjectDelta",
+			Handler:    _GatewayService_CommitObjectDelta_Handler,
 		},
 		{
 			MethodName: "CheckpointContainer",

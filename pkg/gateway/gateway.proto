@@ -34,6 +34,8 @@ service GatewayService {
     };
   }
   rpc PutObjectStream(stream PutObjectRequest) returns (PutObjectResponse) {}
+  rpc CreateObjectDelta(CreateObjectDeltaRequest) returns (CreateObjectDeltaResponse) {}
+  rpc CommitObjectDelta(CommitObjectDeltaRequest) returns (CommitObjectDeltaResponse) {}
 
   // Containers
   rpc CheckpointContainer(CheckpointContainerRequest)
@@ -513,6 +515,39 @@ message PutObjectResponse {
   bool ok = 1;
   string object_id = 2;
   string error_msg = 3;
+}
+
+// Incremental sync: instead of re-uploading a whole workspace archive when a
+// few files changed, the client uploads an archive holding only the added and
+// modified files (the delta) and the gateway merges it with the archive of a
+// previous object of the same workspace into the new object.
+message CreateObjectDeltaRequest {
+  string hash = 1;           // identity of the merged object (content manifest hash)
+  int64 size = 2;            // expected size of the merged archive
+  string base_object_id = 3; // object the delta is relative to
+  int64 delta_size = 4;
+}
+
+message CreateObjectDeltaResponse {
+  bool ok = 1;
+  string object_id = 2;
+  string presigned_url = 3; // PUT the delta archive here
+  map<string, string> put_headers = 4;
+  string error_msg = 5;
+  bool base_missing = 6; // base object is gone: fall back to a full upload
+}
+
+message CommitObjectDeltaRequest {
+  string object_id = 1;
+  string base_object_id = 2;
+  repeated string removed_paths = 3; // base archive entries that no longer exist
+}
+
+message CommitObjectDeltaResponse {
+  bool ok = 1;
+  string object_id = 2;
+  int64 size = 3;
+  string error_msg = 4;
 }
 
 enum SyncContainerWorkspaceOperation {

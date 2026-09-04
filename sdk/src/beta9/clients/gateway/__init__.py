@@ -121,6 +121,48 @@ class PutObjectResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
+class CreateObjectDeltaRequest(betterproto.Message):
+    """
+    Incremental sync: instead of re-uploading a whole workspace archive when a
+     few files changed, the client uploads an archive holding only the added and
+     modified files (the delta) and the gateway merges it with the archive of a
+     previous object of the same workspace into the new object.
+    """
+
+    hash: str = betterproto.string_field(1)
+    size: int = betterproto.int64_field(2)
+    base_object_id: str = betterproto.string_field(3)
+    delta_size: int = betterproto.int64_field(4)
+
+
+@dataclass(eq=False, repr=False)
+class CreateObjectDeltaResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    object_id: str = betterproto.string_field(2)
+    presigned_url: str = betterproto.string_field(3)
+    put_headers: Dict[str, str] = betterproto.map_field(
+        4, betterproto.TYPE_STRING, betterproto.TYPE_STRING
+    )
+    error_msg: str = betterproto.string_field(5)
+    base_missing: bool = betterproto.bool_field(6)
+
+
+@dataclass(eq=False, repr=False)
+class CommitObjectDeltaRequest(betterproto.Message):
+    object_id: str = betterproto.string_field(1)
+    base_object_id: str = betterproto.string_field(2)
+    removed_paths: List[str] = betterproto.string_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class CommitObjectDeltaResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    object_id: str = betterproto.string_field(2)
+    size: int = betterproto.int64_field(3)
+    error_msg: str = betterproto.string_field(4)
+
+
+@dataclass(eq=False, repr=False)
 class SyncContainerWorkspaceRequest(betterproto.Message):
     container_id: str = betterproto.string_field(1)
     path: str = betterproto.string_field(2)
@@ -1929,6 +1971,24 @@ class GatewayServiceStub(SyncServiceStub):
             .future(put_object_request_iterator)
             .result()
         )
+
+    def create_object_delta(
+        self, create_object_delta_request: "CreateObjectDeltaRequest"
+    ) -> "CreateObjectDeltaResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/CreateObjectDelta",
+            CreateObjectDeltaRequest,
+            CreateObjectDeltaResponse,
+        )(create_object_delta_request)
+
+    def commit_object_delta(
+        self, commit_object_delta_request: "CommitObjectDeltaRequest"
+    ) -> "CommitObjectDeltaResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/CommitObjectDelta",
+            CommitObjectDeltaRequest,
+            CommitObjectDeltaResponse,
+        )(commit_object_delta_request)
 
     def checkpoint_container(
         self, checkpoint_container_request: "CheckpointContainerRequest"

@@ -1,4 +1,5 @@
 import hashlib
+import json
 import os
 import tempfile
 import threading
@@ -15,6 +16,10 @@ from beta9.vendor.pathspec import PathSpec
 
 from . import terminal
 from .clients.gateway import (
+    CommitObjectDeltaRequest,
+    CommitObjectDeltaResponse,
+    CreateObjectDeltaRequest,
+    CreateObjectDeltaResponse,
     CreateObjectRequest,
     CreateObjectResponse,
     GatewayServiceStub,
@@ -129,7 +134,9 @@ class FileSyncer:
 
     def _should_ignore(self, path: str) -> bool:
         relative_path = os.path.relpath(path, self.root_dir)
-        spec = PathSpec.from_lines("gitwildmatch", self.ignore_patterns)
+        spec = getattr(self, "_ignore_spec", None) or PathSpec.from_lines(
+            "gitwildmatch", self.ignore_patterns
+        )
         return spec.match_file(relative_path)
 
     def _should_include(self, path: str) -> bool:
@@ -137,8 +144,10 @@ class FileSyncer:
             return True
 
         relative_path = os.path.relpath(path, self.root_dir)
-        spec = PathSpec.from_lines("gitwildmatch", self.include_patterns)
-        return len(self.include_patterns) == 0 or spec.match_file(relative_path)
+        spec = getattr(self, "_include_spec", None) or PathSpec.from_lines(
+            "gitwildmatch", self.include_patterns
+        )
+        return spec.match_file(relative_path)
 
     def _collect_files(self) -> Generator[str, None, None]:
         if self.ignore_patterns == ["*"]:
@@ -198,18 +207,17 @@ class FileSyncer:
         else:
             self.include_patterns = include_patterns
 
-        temp_zip_name = tempfile.NamedTemporaryFile(delete=False).name
+        self._ignore_spec = PathSpec.from_lines("gitwildmatch", self.ignore_patterns)
+        self._include_spec = (
+            PathSpec.from_lines("gitwildmatch", self.include_patterns)
+            if self.include_patterns
+            else None
+        )
 
-        with zipfile.ZipFile(temp_zip_name, "w") as zipf:
-            for file in self._collect_files():
-                try:
-                    zipf.write(file, os.path.relpath(file, self.root_dir))
-                    terminal.detail(f"Added {file}")
-                except OSError as e:
-                    terminal.warn(f"Failed to add {file}: {e}")
-
-        size = os.path.getsize(temp_zip_name)
-        hash = self._calculate_sha256(temp_zip_name)
+        cache = _SyncCache.load(self.root_dir, self.include_patterns)
+        manifest = self._build_manifest(cache)
+        hash = manifest.hash()
+        size = manifest.size()
 
         if ignore_patterns != ["*"]:
             terminal.detail(f"Collected object is {terminal.humanize_memory(size, base=10)}")
@@ -218,63 +226,267 @@ class FileSyncer:
         head_response: HeadObjectResponse = self.gateway_stub.head_object(
             HeadObjectRequest(hash=hash, supports_put_headers=True)
         )
-        if not head_response.exists:
-            metadata = ObjectMetadata(name=hash, size=size)
-
-            def _upload_object(headers: Optional[Dict[str, str]] = None) -> requests.Response:
-                with terminal.progress_open(temp_zip_name, "rb", description=None) as file:
-                    response = requests.put(presigned_url, data=file, headers=headers or {})
-                return response
-
-            # TODO: remove this once all workspaces are migrated to use workspace storage
-            def stream_requests():
-                with terminal.progress_open(temp_zip_name, "rb", description=None) as file:
-                    while chunk := file.read(CHUNK_SIZE):
-                        yield PutObjectRequest(chunk, metadata, hash, False)
-
-            terminal.header("Uploading")
-            if head_response.use_workspace_storage:
-                create_object_response: CreateObjectResponse = self.gateway_stub.create_object(
-                    CreateObjectRequest(
-                        object_metadata=metadata,
-                        hash=hash,
-                        size=size,
-                        overwrite=True,
-                        supports_put_headers=True,
-                    )
-                )
-                if create_object_response.ok:
-                    presigned_url = create_object_response.presigned_url
-                    response = _upload_object(create_object_response.put_headers)
-                    if response.status_code == HTTPStatus.OK:
-                        if self.is_workspace_dir and cache_object_id:
-                            set_workspace_object_id(create_object_response.object_id)
-                        object_id = create_object_response.object_id
-                    else:
-                        terminal.error("File sync failed")
-            else:
-                put_response = self.gateway_stub.put_object_stream(stream_requests())
-                if put_response.ok:
-                    if self.is_workspace_dir and cache_object_id:
-                        set_workspace_object_id(put_response.object_id)
-                    object_id = put_response.object_id
-                else:
-                    terminal.error("File sync failed")
-
-        elif head_response.exists and head_response.ok:
+        if head_response.exists and head_response.ok:
+            cache.save(head_response.object_id, manifest)
             if self.is_workspace_dir and cache_object_id:
                 set_workspace_object_id(head_response.object_id)
-            object_id = head_response.object_id
-
             return FileSyncResult(success=True, object_id=head_response.object_id)
 
-        os.remove(temp_zip_name)
+        if not head_response.use_workspace_storage:
+            object_id = self._upload_stream(manifest, hash, size)
+        else:
+            if cache.object_id and cache.manifest is not None:
+                object_id = self._upload_delta(manifest, hash, size, cache)
+            if object_id is None:
+                object_id = self._upload_full(manifest, hash, size)
 
         if object_id is None:
             terminal.error("File sync failed")
             return FileSyncResult(success=False, object_id="")
 
+        cache.save(object_id, manifest)
+        if self.is_workspace_dir and cache_object_id:
+            set_workspace_object_id(object_id)
         return FileSyncResult(success=True, object_id=object_id)
+
+    def _build_manifest(self, cache: "_SyncCache") -> "_Manifest":
+        """Hash every file to sync, reusing cached hashes for files whose size
+        and mtime are unchanged since the last sync of this directory."""
+        entries: Dict[str, _ManifestEntry] = {}
+        previous = cache.manifest.entries if cache.manifest is not None else {}
+        for file in self._collect_files():
+            rel = os.path.relpath(file, self.root_dir)
+            try:
+                st = os.stat(file)
+            except OSError as e:
+                terminal.warn(f"Failed to add {file}: {e}")
+                continue
+            mode = st.st_mode & 0o777
+            prev = previous.get(rel)
+            if prev is not None and prev.size == st.st_size and prev.mtime_ns == st.st_mtime_ns:
+                sha = prev.sha256
+            else:
+                try:
+                    sha = self._calculate_sha256(file)
+                except OSError as e:
+                    terminal.warn(f"Failed to add {file}: {e}")
+                    continue
+            entries[rel] = _ManifestEntry(
+                size=st.st_size, mtime_ns=st.st_mtime_ns, sha256=sha, mode=mode
+            )
+            terminal.detail(f"Added {file}")
+        return _Manifest(entries)
+
+    def _write_archive(self, paths: List[str]) -> str:
+        temp_zip_name = tempfile.NamedTemporaryFile(delete=False).name
+        with zipfile.ZipFile(temp_zip_name, "w") as zipf:
+            for rel in paths:
+                try:
+                    zipf.write(self.root_dir / rel, rel)
+                except OSError as e:
+                    terminal.warn(f"Failed to add {rel}: {e}")
+        return temp_zip_name
+
+    @staticmethod
+    def _put_archive(
+        temp_zip_name: str, presigned_url: str, headers: Optional[Dict[str, str]]
+    ) -> bool:
+        with terminal.progress_open(temp_zip_name, "rb", description=None) as file:
+            response = requests.put(presigned_url, data=file, headers=headers or {})
+        return response.status_code == HTTPStatus.OK
+
+    def _upload_full(self, manifest: "_Manifest", hash: str, size: int) -> Optional[str]:
+        temp_zip_name = self._write_archive(sorted(manifest.entries))
+        try:
+            terminal.header("Uploading")
+            create_object_response: CreateObjectResponse = self.gateway_stub.create_object(
+                CreateObjectRequest(
+                    object_metadata=ObjectMetadata(name=hash, size=size),
+                    hash=hash,
+                    size=size,
+                    overwrite=True,
+                    supports_put_headers=True,
+                )
+            )
+            if not create_object_response.ok:
+                terminal.error("File sync failed")
+                return None
+            if not self._put_archive(
+                temp_zip_name,
+                create_object_response.presigned_url,
+                create_object_response.put_headers,
+            ):
+                terminal.error("File sync failed")
+                return None
+            return create_object_response.object_id
+        finally:
+            os.remove(temp_zip_name)
+
+    def _upload_delta(
+        self, manifest: "_Manifest", hash: str, size: int, cache: "_SyncCache"
+    ) -> Optional[str]:
+        """Upload only the files that changed since the last sync and have the
+        gateway merge them into the previous object's archive. Returns None
+        when a full upload is the better (or only) option."""
+        base = cache.manifest
+        changed = [
+            rel
+            for rel, entry in manifest.entries.items()
+            if rel not in base.entries
+            or base.entries[rel].sha256 != entry.sha256
+            or base.entries[rel].mode != entry.mode
+        ]
+        removed = [rel for rel in base.entries if rel not in manifest.entries]
+        delta_size = sum(manifest.entries[rel].size for rel in changed)
+        # Past about half the archive, the merge on the gateway costs more than it saves.
+        if size > 0 and delta_size * 2 > size:
+            return None
+
+        temp_zip_name = self._write_archive(sorted(changed))
+        try:
+            terminal.header("Uploading")
+            terminal.detail(
+                f"Uploading {len(changed)} changed file(s) ({terminal.humanize_memory(delta_size, base=10)}), "
+                f"{len(removed)} removed"
+            )
+            create_response: CreateObjectDeltaResponse = self.gateway_stub.create_object_delta(
+                CreateObjectDeltaRequest(
+                    hash=hash,
+                    size=size,
+                    base_object_id=cache.object_id,
+                    delta_size=os.path.getsize(temp_zip_name),
+                )
+            )
+            if not create_response.ok:
+                if create_response.base_missing:
+                    terminal.detail("Previous sync is gone from the server; uploading everything")
+                return None
+            if not self._put_archive(
+                temp_zip_name, create_response.presigned_url, create_response.put_headers
+            ):
+                return None
+            commit_response: CommitObjectDeltaResponse = self.gateway_stub.commit_object_delta(
+                CommitObjectDeltaRequest(
+                    object_id=create_response.object_id,
+                    base_object_id=cache.object_id,
+                    removed_paths=removed,
+                )
+            )
+            if not commit_response.ok:
+                terminal.detail(
+                    f"Incremental sync failed ({commit_response.error_msg}); uploading everything"
+                )
+                return None
+            return commit_response.object_id
+        finally:
+            os.remove(temp_zip_name)
+
+    def _upload_stream(self, manifest: "_Manifest", hash: str, size: int) -> Optional[str]:
+        # TODO: remove this once all workspaces are migrated to use workspace storage
+        temp_zip_name = self._write_archive(sorted(manifest.entries))
+        metadata = ObjectMetadata(name=hash, size=size)
+
+        def stream_requests():
+            with terminal.progress_open(temp_zip_name, "rb", description=None) as file:
+                while chunk := file.read(CHUNK_SIZE):
+                    yield PutObjectRequest(chunk, metadata, hash, False)
+
+        try:
+            terminal.header("Uploading")
+            put_response = self.gateway_stub.put_object_stream(stream_requests())
+            if put_response.ok:
+                return put_response.object_id
+            terminal.error("File sync failed")
+            return None
+        finally:
+            os.remove(temp_zip_name)
+
+
+class _ManifestEntry(NamedTuple):
+    size: int
+    mtime_ns: int
+    sha256: str
+    mode: int
+
+
+class _Manifest:
+    """What a sync consists of: every file's path, content hash and mode. Its
+    hash identifies the resulting object, so two directories with the same
+    content map to the same object regardless of how the archive was built."""
+
+    def __init__(self, entries: Dict[str, _ManifestEntry]):
+        self.entries = entries
+
+    def hash(self) -> str:
+        hasher = hashlib.sha256()
+        for rel in sorted(self.entries):
+            e = self.entries[rel]
+            hasher.update(f"{rel}\0{e.sha256}\0{e.mode:o}\n".encode())
+        return hasher.hexdigest()
+
+    def size(self) -> int:
+        return sum(e.size for e in self.entries.values())
+
+    def to_json(self) -> dict:
+        return {rel: [e.size, e.mtime_ns, e.sha256, e.mode] for rel, e in self.entries.items()}
+
+    @classmethod
+    def from_json(cls, data: dict) -> "_Manifest":
+        return cls(
+            {
+                rel: _ManifestEntry(int(v[0]), int(v[1]), str(v[2]), int(v[3]))
+                for rel, v in data.items()
+            }
+        )
+
+
+class _SyncCache:
+    """Per-directory record of the last synced object and its manifest, kept in
+    the SDK config directory. Lets the next sync skip hashing unchanged files
+    and upload only the delta."""
+
+    VERSION = 1
+
+    def __init__(self, path: Path, object_id: str = "", manifest: Optional[_Manifest] = None):
+        self.path = path
+        self.object_id = object_id
+        self.manifest = manifest
+
+    @classmethod
+    def cache_dir(cls) -> Path:
+        return get_settings().config_path.parent / "sync"
+
+    @classmethod
+    def load(cls, root_dir: Path, include_patterns: List[str]) -> "_SyncCache":
+        key = hashlib.sha256(f"{root_dir}\0{'|'.join(include_patterns)}".encode()).hexdigest()[:32]
+        path = cls.cache_dir() / f"{key}.json"
+        try:
+            with path.open() as f:
+                data = json.load(f)
+            if data.get("version") == cls.VERSION and data.get("object_id"):
+                return cls(path, data["object_id"], _Manifest.from_json(data["manifest"]))
+        except (OSError, ValueError, KeyError, TypeError, IndexError):
+            pass
+        return cls(path)
+
+    def save(self, object_id: str, manifest: _Manifest) -> None:
+        self.object_id = object_id
+        self.manifest = manifest
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_suffix(".tmp")
+            with tmp.open("w") as f:
+                json.dump(
+                    {
+                        "version": self.VERSION,
+                        "object_id": object_id,
+                        "manifest": manifest.to_json(),
+                    },
+                    f,
+                )
+            os.replace(tmp, self.path)
+        except OSError:
+            pass
 
 
 class SyncEventHandler(FileSystemEventHandler):

@@ -1,8 +1,197 @@
 import os
+import tempfile
+import zipfile
+from pathlib import Path
 from unittest import TestCase
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
-from beta9.sync import FileSyncer
+from beta9.clients.gateway import (
+    CommitObjectDeltaResponse,
+    CreateObjectDeltaResponse,
+    CreateObjectResponse,
+    HeadObjectResponse,
+)
+from beta9.sync import FileSyncer, _Manifest, _ManifestEntry, _SyncCache
+
+
+class _FakeGateway:
+    """Records what the syncer uploads; every archive PUT lands in self.puts."""
+
+    def __init__(self, known_hashes=(), base_missing=False, commit_ok=True):
+        self.known_hashes = set(known_hashes)
+        self.base_missing = base_missing
+        self.commit_ok = commit_ok
+        self.created = []
+        self.deltas = []
+        self.commits = []
+        self.objects = 0
+
+    def head_object(self, req):
+        if req.hash in self.known_hashes:
+            return HeadObjectResponse(
+                ok=True, exists=True, object_id="obj-known", use_workspace_storage=True
+            )
+        return HeadObjectResponse(ok=True, exists=False, use_workspace_storage=True)
+
+    def create_object(self, req):
+        self.objects += 1
+        self.created.append(req)
+        return CreateObjectResponse(
+            ok=True, object_id=f"obj-{self.objects}", presigned_url="https://put/full"
+        )
+
+    def create_object_delta(self, req):
+        self.deltas.append(req)
+        if self.base_missing:
+            return CreateObjectDeltaResponse(ok=False, base_missing=True)
+        self.objects += 1
+        return CreateObjectDeltaResponse(
+            ok=True, object_id=f"obj-{self.objects}", presigned_url="https://put/delta"
+        )
+
+    def commit_object_delta(self, req):
+        self.commits.append(req)
+        return CommitObjectDeltaResponse(
+            ok=self.commit_ok, object_id=req.object_id, error_msg="" if self.commit_ok else "boom"
+        )
+
+
+class TestIncrementalSync(TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name) / "proj"
+        self.root.mkdir()
+        (self.root / "app").mkdir()
+        for i in range(5):
+            (self.root / "app" / f"f{i}.bin").write_bytes(bytes([i]) * 10000)
+        (self.root / "main.py").write_text("print(1)\n")
+        self.cache_dir = Path(self.tmp.name) / "cache"
+        self.puts = []
+
+        def fake_put(url, data=None, headers=None):
+            names = sorted(zipfile.ZipFile(data.name).namelist())
+            self.puts.append((url, names))
+            resp = MagicMock()
+            resp.status_code = 200
+            return resp
+
+        self.patches = [
+            patch("beta9.sync._SyncCache.cache_dir", classmethod(lambda cls: self.cache_dir)),
+            patch("beta9.sync.requests.put", side_effect=fake_put),
+            patch(
+                "beta9.sync.terminal.progress_open", side_effect=lambda p, mode, **k: open(p, mode)
+            ),
+            patch("beta9.sync.is_local", return_value=False),
+        ]
+        for p in self.patches:
+            p.start()
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+        self.tmp.cleanup()
+
+    def _sync(self, gw):
+        syncer = FileSyncer(gateway_stub=gw, root_dir=str(self.root))
+        return syncer.sync(cache_object_id=False)
+
+    def test_manifest_hash_depends_on_content_path_and_mode(self):
+        a = _Manifest({"x": _ManifestEntry(1, 1, "h1", 0o644)})
+        self.assertEqual(
+            a.hash(),
+            _Manifest({"x": _ManifestEntry(1, 999, "h1", 0o644)}).hash(),
+            "mtime is not identity",
+        )
+        self.assertNotEqual(a.hash(), _Manifest({"x": _ManifestEntry(1, 1, "h2", 0o644)}).hash())
+        self.assertNotEqual(a.hash(), _Manifest({"y": _ManifestEntry(1, 1, "h1", 0o644)}).hash())
+        self.assertNotEqual(a.hash(), _Manifest({"x": _ManifestEntry(1, 1, "h1", 0o755)}).hash())
+
+    def test_first_sync_uploads_everything_and_seeds_cache(self):
+        gw = _FakeGateway()
+        result = self._sync(gw)
+        self.assertTrue(result.success)
+        self.assertEqual(result.object_id, "obj-1")
+        self.assertEqual(len(gw.created), 1)
+        self.assertEqual(gw.deltas, [])
+        self.assertEqual(self.puts[0][0], "https://put/full")
+        self.assertEqual(
+            self.puts[0][1],
+            sorted(
+                ["app/f0.bin", "app/f1.bin", "app/f2.bin", "app/f3.bin", "app/f4.bin", "main.py"]
+            ),
+        )
+        cache = _SyncCache.load(self.root, [])
+        self.assertEqual(cache.object_id, "obj-1")
+        self.assertEqual(len(cache.manifest.entries), 6)
+
+    def test_unchanged_directory_is_a_head_hit(self):
+        gw = _FakeGateway()
+        first = self._sync(gw)
+        gw.known_hashes.add(gw.created[0].hash)
+        again = self._sync(gw)
+        self.assertEqual(again.object_id, "obj-known")
+        self.assertEqual(len(self.puts), 1, "nothing uploaded the second time")
+        self.assertEqual(first.object_id, "obj-1")
+
+    def test_one_changed_file_uploads_only_the_delta(self):
+        gw = _FakeGateway()
+        self._sync(gw)
+        (self.root / "app" / "f2.bin").write_bytes(b"changed" * 100)
+        (self.root / "app" / "f4.bin").unlink()
+        (self.root / "app" / "new.txt").write_text("new")
+
+        result = self._sync(gw)
+        self.assertTrue(result.success)
+        self.assertEqual(result.object_id, "obj-2")
+        self.assertEqual(len(gw.deltas), 1)
+        self.assertEqual(gw.deltas[0].base_object_id, "obj-1")
+        self.assertEqual(self.puts[-1][0], "https://put/delta")
+        self.assertEqual(self.puts[-1][1], ["app/f2.bin", "app/new.txt"])
+        self.assertEqual(gw.commits[0].removed_paths, ["app/f4.bin"])
+        self.assertEqual(gw.commits[0].base_object_id, "obj-1")
+        self.assertEqual(len(gw.created), 1, "no full upload")
+        self.assertEqual(_SyncCache.load(self.root, []).object_id, "obj-2")
+
+    def test_missing_base_falls_back_to_full_upload(self):
+        gw = _FakeGateway()
+        self._sync(gw)
+        gw.base_missing = True
+        (self.root / "main.py").write_text("print(2)\n")
+        result = self._sync(gw)
+        self.assertTrue(result.success)
+        self.assertEqual(len(gw.deltas), 1)
+        self.assertEqual(len(gw.created), 2)
+        self.assertEqual(self.puts[-1][0], "https://put/full")
+        self.assertEqual(len(self.puts[-1][1]), 6)
+
+    def test_failed_commit_falls_back_to_full_upload(self):
+        gw = _FakeGateway(commit_ok=False)
+        self._sync(gw)
+        (self.root / "main.py").write_text("print(3)\n")
+        result = self._sync(gw)
+        self.assertTrue(result.success)
+        self.assertEqual(len(gw.commits), 1)
+        self.assertEqual(len(gw.created), 2)
+        self.assertEqual(self.puts[-1][0], "https://put/full")
+
+    def test_large_delta_uses_full_upload(self):
+        gw = _FakeGateway()
+        self._sync(gw)
+        for i in range(4):
+            (self.root / "app" / f"f{i}.bin").write_bytes(bytes([9]) * 10000)
+        self._sync(gw)
+        self.assertEqual(gw.deltas, [])
+        self.assertEqual(len(gw.created), 2)
+
+    def test_unchanged_files_are_not_rehashed(self):
+        gw = _FakeGateway()
+        self._sync(gw)
+        with patch.object(
+            FileSyncer, "_calculate_sha256", wraps=FileSyncer._calculate_sha256
+        ) as calc:
+            (self.root / "main.py").write_text("print(4)\n")
+            self._sync(gw)
+            self.assertEqual(calc.call_count, 1)
 
 
 class TestFileSyncer(TestCase):
