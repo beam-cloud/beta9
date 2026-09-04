@@ -1409,7 +1409,7 @@ func TestBuild_prepareSteps_PythonExists(t *testing.T) {
 
 	// When NOT in venv, expect pip install with --system
 	expectedCommands := []string{
-		"uv-b9 pip install --system \"requests\" \"numpy\"",
+		"uv-b9 pip install --compile-bytecode --system \"requests\" \"numpy\"",
 		"echo hello",
 	}
 	assert.Equal(t, expectedCommands, build.commands)
@@ -1440,7 +1440,7 @@ func TestBuild_prepareSteps_PythonExistsInVenv(t *testing.T) {
 	// When in venv, expect the pyvenv.cfg update command and pip install without --system
 	assert.Len(t, build.commands, 3)
 	assert.Contains(t, build.commands[0], "include-system-site-packages = true")
-	assert.Equal(t, "uv-b9 pip install \"requests\" \"numpy\"", build.commands[1])
+	assert.Equal(t, "uv-b9 pip install --compile-bytecode \"requests\" \"numpy\"", build.commands[1])
 	assert.Equal(t, "echo hello", build.commands[2])
 	assert.NotEmpty(t, build.imageID)
 	mockContainerClient.AssertExpectations(t)
@@ -1467,7 +1467,7 @@ func TestBuild_prepareSteps_PythonNeedsInstall(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Expect installation command based on PythonStandaloneConfig
-	expectedPipCmd := "uv-b9 pip install --system \"pandas\""
+	expectedPipCmd := "uv-b9 pip install --compile-bytecode --system \"pandas\""
 
 	// Installation command should contain arch, os, vendor derived from runtime and template
 	assert.Contains(t, build.commands[0], "installing python cpython-3.11.5+20230826")
@@ -1536,10 +1536,10 @@ func TestBuild_prepareSteps_Micromamba(t *testing.T) {
 
 	expectedCommands := []string{
 		"micromamba config set use_lockfiles False",
-		"uv-b9 pip install -c \"conda-forge::numpy\" \"pytorch\"", // From PythonPackages
+		"uv-b9 pip install --compile-bytecode -c \"conda-forge::numpy\" \"pytorch\"", // From PythonPackages
 		"micromamba install -y -n beta9 \"scipy\"",                // From BuildSteps (mamba)
 		"echo done mamba",
-		"uv-b9 pip install \"requests\" \"beautifulsoup4\"", // From BuildSteps (pip)
+		"uv-b9 pip install --compile-bytecode \"requests\" \"beautifulsoup4\"", // From BuildSteps (pip)
 	}
 
 	assert.Equal(t, expectedCommands, build.commands)
@@ -1635,7 +1635,7 @@ func Test_parseBuildStepsForDockerfile(t *testing.T) {
 
 	expected := []string{
 		"apt update",
-		"uv-b9 pip install --system --python python3.9 --link-mode copy --cache-dir /root/.cache/uv \"requests\" \"numpy\"",
+		"uv-b9 pip install --system --python python3.9 --link-mode copy --compile-bytecode --cache-dir /root/.cache/uv \"requests\" \"numpy\"",
 		"echo done",
 	}
 
@@ -1728,12 +1728,12 @@ func Test_parseBuildSteps(t *testing.T) {
 
 	expected := []string{
 		"apt update",
-		"uv-b9 pip install --system \"requests\" \"numpy\"", // Coalesced pip
+		"uv-b9 pip install --compile-bytecode --system \"requests\" \"numpy\"", // Coalesced pip
 		"echo 'installing libs'",
 		"micromamba install -y -n beta9 -c pytorch \"conda-forge::pandas\" \"scipy\"", // Coalesced mamba (flags don't split mamba)
 		"echo 'done'",
-		"uv-b9 pip install --system --no-deps flask", // Flagged line isn't quoted
-		"uv-b9 pip install --system \"gunicorn\"",    // Second pip group
+		"uv-b9 pip install --compile-bytecode --system --no-deps flask", // Flagged line isn't quoted
+		"uv-b9 pip install --compile-bytecode --system \"gunicorn\"",    // Second pip group
 	}
 
 	result := parseBuildSteps(steps, pythonVersion, false)

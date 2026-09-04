@@ -379,7 +379,10 @@ func genContainerId() string {
 func generatePipInstallCommand(pythonPackages []string, pythonVersion string, virtualEnv bool) string {
 	flagLines, packages := parseFlagLinesAndPackages(pythonPackages)
 
-	command := "uv-b9 pip install"
+	// pip compiles bytecode on install; uv does not unless asked. Without the
+	// .pyc files every fresh container recompiles the package on first import
+	// (about 1.4 s for torch), so compile once at build time instead.
+	command := "uv-b9 pip install --compile-bytecode"
 	if !virtualEnv {
 		command += " --system"
 	}
@@ -407,7 +410,10 @@ func generateStandardPipInstallCommand(pythonPackages []string, pythonVersion st
 		// would fail and fall back to copying anyway; ask for it outright. The
 		// cache path is the worker's mount, named explicitly so it does not
 		// depend on HOME or XDG_CACHE_HOME inside the image.
-		command = fmt.Sprintf("uv-b9 pip install --system --python %s --link-mode copy --cache-dir /root/.cache/uv", pythonVersion)
+		// --compile-bytecode: pip writes .pyc files on install, uv does not
+		// unless asked, and without them every fresh container recompiles
+		// the package on first import (about 1.4 s for torch).
+		command = fmt.Sprintf("uv-b9 pip install --system --python %s --link-mode copy --compile-bytecode --cache-dir /root/.cache/uv", pythonVersion)
 	}
 
 	if len(flagLines) > 0 {
