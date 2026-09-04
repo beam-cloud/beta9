@@ -350,6 +350,18 @@ func (c *Client) preferredLocalStores() []clientLocalStore {
 	return stores
 }
 
+// LocalContentComplete reports whether every page of hash is held by a store
+// on this node. Such content is read as page-file descriptors without a copy,
+// so callers can skip building their own on-disk replica of it.
+func (c *Client) LocalContentComplete(hash string) bool {
+	for _, candidate := range c.preferredLocalStores() {
+		if candidate.store.Exists(hash) {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Client) initLocalDiskStore(cfg Config, locality string) {
 	if cfg.Server.DiskCacheDir == "" || cfg.Server.PageSizeBytes <= 0 {
 		return

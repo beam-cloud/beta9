@@ -930,11 +930,7 @@ func requiresPostBuildImageMaterialization(request *types.ContainerRequest, clip
 
 func (s *Worker) pullLazyWithMetrics(ctx context.Context, request *types.ContainerRequest, phase string, outputLogger *slog.Logger) (time.Duration, error) {
 	phaseStart := time.Now()
-	// Only checkpointing blocks on a fully materialized root filesystem. Every
-	// other start mounts immediately and materializes layers in the background,
-	// so the runtime proceeds as soon as the layers it touches have landed
-	// rather than waiting on one it never reads.
-	elapsed, err := s.imageClient.PullLazy(ctx, request, outputLogger, request.CheckpointEnabled)
+	elapsed, err := s.imageClient.PullLazy(ctx, request)
 	metrics.RecordWorkerStartupPhase(phase, time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 	spanID := types.ContainerLifecycleImageLoad
 	if phase != "pull_lazy" && phase != "pull_lazy_after_build" {

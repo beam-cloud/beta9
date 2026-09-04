@@ -20,7 +20,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/registry"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/beam-cloud/clip/pkg/clip"
-	clipStorage "github.com/beam-cloud/clip/pkg/storage"
+	clipCommon "github.com/beam-cloud/clip/pkg/common"
 	"github.com/rs/zerolog"
 	zerologlog "github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
@@ -61,22 +61,6 @@ func TestLinkBlobInfoCacheAdoptsThenProtectsTheSharedCopy(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, asides, 1)
 	require.FileExists(t, filepath.Join(asides[0], "blob-info-cache-v1.sqlite"))
-}
-
-func TestImageLayerPrepareProgressLoggerEmitsAggregateUpdates(t *testing.T) {
-	var output bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&output, nil))
-	report := imageLayerPrepareProgressLogger(logger)
-	require.NotNil(t, report)
-
-	report(clipStorage.PrepareProgress{Total: 4})
-	report(clipStorage.PrepareProgress{Completed: 1, Total: 4, Bytes: 1024})
-	report(clipStorage.PrepareProgress{Completed: 4, Total: 4, Bytes: 4 * 1024 * 1024})
-
-	logs := output.String()
-	require.Contains(t, logs, "Preparing 4 image layers (8 concurrent)")
-	require.Contains(t, logs, "Prepared 4 image layers (4.0 MiB)")
-	require.NotContains(t, logs, "1/4 ready", "rapid per-layer updates should be coalesced")
 }
 
 func TestImageIndexProgressReporterEmitsMonotonicAggregateUpdates(t *testing.T) {
@@ -365,4 +349,20 @@ func TestTerminateImageProcessGroupKillsDescendants(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("process group did not exit after termination")
 	}
+}
+
+func TestLayersToPrepareSkipsLocallyCompleteLayers(t *testing.T) {
+	info := &clipCommon.OCIStorageInfo{
+		Layers: []string{"sha256:a", "sha256:b", "sha256:c"},
+		DecompressedHashByLayer: map[string]string{
+			"sha256:a": "hash-a",
+			"sha256:b": "hash-b",
+		},
+	}
+	local := map[string]bool{"hash-a": true}
+
+	remaining := layersToPrepare(info, func(hash string) bool { return local[hash] })
+
+	// b is not local; c has no decompressed hash so it can never be local.
+	require.Equal(t, []string{"sha256:b", "sha256:c"}, remaining)
 }

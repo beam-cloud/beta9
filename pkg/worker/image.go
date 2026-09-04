@@ -52,7 +52,7 @@ const (
 	imageArchiveLockRetryInterval            = 100 * time.Millisecond
 	maxSyncV1ArchiveDataRestoreBytes         = 512 * 1024 * 1024
 	imageLayerPrepareConcurrency             = 8
-	imageLayerProgressInterval               = 3 * time.Second
+	imageLayerPrepareGrace                   = 2 * time.Second
 	imageMountReadyTimeout                   = 5 * time.Second
 )
 
@@ -273,7 +273,7 @@ func ociStorageInfo(meta *clipCommon.ClipArchiveMetadata) (*clipCommon.OCIStorag
 	return nil, false
 }
 
-func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, preload bool) (time.Duration, error) {
+func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequest) (time.Duration, error) {
 	startTime := time.Now()
 
 	if elapsed, ok := c.mountedImageHit(startTime, request, "clip_mounted_fuse_hit"); ok {
@@ -302,19 +302,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 
 	mountOptions := c.lazyMountOptions(ctx, request, archive)
 	if archive.usesOCIStorage() {
-		if preload {
-			// A checkpoint reads the whole root filesystem; it must be on disk
-			// before the mount is handed to the runtime.
-			if err := c.prepareImageLayers(ctx, request, mountOptions, outputLogger); err != nil {
-				return time.Since(startTime), err
-			}
-		} else {
-			// A cold miss materializes a whole layer, so letting the runtime
-			// discover layers one FUSE read at a time serializes the pulls.
-			// Start them all now; reads of an in-flight layer join it. The
-			// mount outlives this request, and so does its content.
-			go c.prepareImageLayers(context.WithoutCancel(ctx), request, mountOptions, nil)
-		}
+		c.scheduleImageLayerPrepare(context.WithoutCancel(ctx), request, mountOptions)
 	}
 
 	mountStart := time.Now()
@@ -352,15 +340,61 @@ func (c *ImageClient) recordSuccessfulImageLoad(ctx context.Context, request *ty
 	c.contentReporter.touchRecentStub(cacheRequestWorkspaceID(request), cacheRequestStubID(request))
 }
 
+// scheduleImageLayerPrepare materializes, in the background, the layers this
+// node cannot already read locally. The mount serves reads page-wise from the
+// content cache, so nothing waits for whole layers: not the runtime, and not a
+// checkpoint, which captures only the overlay upper directory. A layer whose
+// pages are all in a store on this node is served as page-file descriptors, so
+// a second copy under the layer cache would only cost disk and the CPU to hash
+// it. The rest is copied in after a grace period so the container's first
+// reads are not competing with a multi-gigabyte write, and all at once so the
+// runtime does not discover layers one FUSE read at a time. The mount outlives
+// this request, and so does its content.
+func (c *ImageClient) scheduleImageLayerPrepare(ctx context.Context, request *types.ContainerRequest, options clip.MountOptions) {
+	ociInfo, ok := ociStorageInfo(options.Metadata)
+	if !ok {
+		return
+	}
+	localComplete := func(string) bool { return false }
+	if c.cacheClient != nil {
+		localComplete = c.cacheClient.LocalContentComplete
+	}
+	remaining := layersToPrepare(ociInfo, localComplete)
+	if len(remaining) == 0 {
+		return
+	}
+	if len(remaining) < len(ociInfo.Layers) {
+		filtered := *ociInfo
+		filtered.Layers = remaining
+		meta := *options.Metadata
+		meta.StorageInfo = &filtered
+		options.Metadata = &meta
+	}
+	time.AfterFunc(imageLayerPrepareGrace, func() {
+		c.prepareImageLayers(ctx, request, options)
+	})
+}
+
+// layersToPrepare returns the layers not fully present in a local page store.
+func layersToPrepare(info *clipCommon.OCIStorageInfo, localComplete func(hash string) bool) []string {
+	remaining := make([]string, 0, len(info.Layers))
+	for _, layer := range info.Layers {
+		if hash := info.DecompressedHashByLayer[layer]; hash != "" && localComplete(hash) {
+			continue
+		}
+		remaining = append(remaining, layer)
+	}
+	return remaining
+}
+
 // prepareImageLayers materializes every OCI layer of the archive into the
 // local layer cache, imageLayerPrepareConcurrency at a time. Layers already on
 // disk cost a stat; in-flight materializations are shared process-wide, so a
 // concurrent FUSE read of the same layer waits on this work instead of
 // repeating it.
-func (c *ImageClient) prepareImageLayers(ctx context.Context, request *types.ContainerRequest, options clip.MountOptions, outputLogger *slog.Logger) error {
+func (c *ImageClient) prepareImageLayers(ctx context.Context, request *types.ContainerRequest, options clip.MountOptions) error {
 	options.Context = ctx
 	options.PrepareConcurrency = imageLayerPrepareConcurrency
-	options.PrepareProgress = imageLayerPrepareProgressLogger(outputLogger)
 
 	startedAt := time.Now()
 	err := clip.PrepareArchiveContent(options)
@@ -372,38 +406,6 @@ func (c *ImageClient) prepareImageLayers(ctx context.Context, request *types.Con
 		log.Warn().Err(err).Str("image_id", request.ImageId).Msg("image layer preparation failed")
 	}
 	return err
-}
-
-func imageLayerPrepareProgressLogger(outputLogger *slog.Logger) func(clipStorage.PrepareProgress) {
-	if outputLogger == nil {
-		return nil
-	}
-
-	startedAt := time.Now()
-	var mu sync.Mutex
-	var lastLog time.Time
-	return func(progress clipStorage.PrepareProgress) {
-		mu.Lock()
-		defer mu.Unlock()
-
-		now := time.Now()
-		if progress.Completed == 0 {
-			outputLogger.Info(fmt.Sprintf("Preparing %d image layers (%d concurrent)...\n", progress.Total, imageLayerPrepareConcurrency))
-			lastLog = now
-			return
-		}
-		if progress.Completed < progress.Total && now.Sub(lastLog) < imageLayerProgressInterval {
-			return
-		}
-
-		elapsed := now.Sub(startedAt).Round(100 * time.Millisecond)
-		if progress.Completed == progress.Total {
-			outputLogger.Info(fmt.Sprintf("Prepared %d image layers (%s) in %s\n", progress.Total, formatImageBytes(progress.Bytes), elapsed))
-		} else {
-			outputLogger.Info(fmt.Sprintf("Preparing image layers: %d/%d ready (%s, %s)\n", progress.Completed, progress.Total, formatImageBytes(progress.Bytes), elapsed))
-		}
-		lastLog = now
-	}
 }
 
 type lazyImageArchive struct {
@@ -1006,8 +1008,16 @@ func waitForImageMount(ctx context.Context, mountPoint string, serverErrors <-ch
 	return nil
 }
 
-// processPulledArchive extracts metadata and moves v2 OCI archives to canonical location
+// processPulledArchive parses the archive metadata and caches it for OCI images.
+// Image ids are content hashes, so metadata cached by an earlier parse (a
+// restore from the content cache validates the archive by parsing it) is
+// reused instead of decoding the same archive twice.
 func (c *ImageClient) processPulledArchive(downloadPath, imageId string) (*clipCommon.ClipArchiveMetadata, error) {
+	if c.v2ArchiveMetadata != nil {
+		if meta, ok := c.v2ArchiveMetadata.Get(imageId); ok && meta != nil {
+			return meta, nil
+		}
+	}
 	archiver := clip.NewClipArchiver()
 	meta, err := archiver.ExtractMetadata(downloadPath)
 	if err != nil {
@@ -1115,7 +1125,8 @@ func (c *ImageClient) GetCLIPImageMetadata(imageId string) (*clipCommon.ImageMet
 
 // getCredentialProviderForImage determines the appropriate credentials for an
 // image. Agent-hosted pools are gateway-only: request-embedded credentials are
-// stripped before scheduling and ignored here as a second guardrail.
+// stripped before scheduling and ignored here as a second guardrail, and an
+// anonymous provider keeps CLIP off the ambient node keychain.
 func (c *ImageClient) getCredentialProviderForImage(ctx context.Context, imageId string, request *types.ContainerRequest) clipCommon.RegistryCredentialProvider {
 	sourceRef, hasRef := c.v2ImageRefs.Get(imageId)
 	if !hasRef {
@@ -1128,28 +1139,23 @@ func (c *ImageClient) getCredentialProviderForImage(ctx context.Context, imageId
 	}
 
 	if c.brokeredImageAccessRequest(request) {
-		if provider := c.gatewayCredentialProviderForImage(ctx, imageId, registry, request); provider != nil {
-			return provider
-		}
-		log.Warn().
-			Str("image_id", imageId).
-			Str("registry", registry).
-			Msg("agent worker has no gateway-vended registry credentials; using anonymous auth and avoiding ambient keychain")
-		return privateWorkerAnonymousRegistryProvider{}
+		return c.gatewayCredentialProviderForImage(imageId, registry, request, privateWorkerAnonymousRegistryProvider{})
 	}
 
 	if request.ImageCredentials != "" {
 		return c.parseAndCreateProvider(ctx, request.ImageCredentials, registry, imageId, "runtime secret")
 	}
 
-	if provider := c.gatewayCredentialProviderForImage(ctx, imageId, registry, request); provider != nil {
-		return provider
-	}
+	return c.gatewayCredentialProviderForImage(imageId, registry, request, c.requestCredentialProvider(ctx, sourceRef, registry, imageId, request))
+}
 
-	// Build registry credentials for images we built and pushed.
-	// This must come before source image credentials because when we build with a custom base image,
-	// the final image is in the build registry, not the source image registry
-	// We check both the registry domain AND the build repository name to avoid false positives
+// requestCredentialProvider builds a provider from credentials carried on the
+// request itself: the build registry for images we built and pushed, else the
+// source image's own credentials. The build registry check must come first,
+// because a build from a custom base image lands in the build registry, not
+// the source registry; it matches on both domain and repository name to avoid
+// false positives.
+func (c *ImageClient) requestCredentialProvider(ctx context.Context, sourceRef, registry, imageId string, request *types.ContainerRequest) clipCommon.RegistryCredentialProvider {
 	buildRegistry := c.getBuildRegistry()
 	buildRepoName := c.config.ImageService.BuildRepositoryName
 	if buildRegistry != "" && buildRepoName != "" &&
@@ -1513,7 +1519,8 @@ func (c *ImageClient) pullImageArchiveFromEmbeddedCache(ctx context.Context, arc
 	if ok, err := c.copyImageArchiveFromContentCacheMetadata(ctx, archivePath, imageId); ok {
 		c.recordImageLifecycle(request, types.ContainerLifecycleImageEmbeddedCacheMetadata, metadataStart, time.Since(metadataStart), true, nil)
 		log.Info().Str("image_id", imageId).Msg("restored image archive from embedded cache")
-		return true, c.imageArchiveSourceRegistry(ctx, request), nil
+		// Only the v1 data path needs a source registry; it resolves one itself.
+		return true, nil, nil
 	} else if err != nil {
 		c.recordImageLifecycle(request, types.ContainerLifecycleImageEmbeddedCacheMetadata, metadataStart, time.Since(metadataStart), false, nil)
 		log.Warn().Err(err).Str("image_id", imageId).Msg("embedded image archive content cache metadata unavailable")
