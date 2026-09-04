@@ -2978,6 +2978,24 @@
         }
       }
     },
+    "gatewayCommitObjectDeltaResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "objectId": {
+          "type": "string"
+        },
+        "size": {
+          "type": "string",
+          "format": "int64"
+        },
+        "errorMsg": {
+          "type": "string"
+        }
+      }
+    },
     "gatewayCordonWorkerResponse": {
       "type": "object",
       "properties": {
@@ -3174,6 +3192,34 @@
         },
         "enrollmentToken": {
           "type": "string"
+        }
+      }
+    },
+    "gatewayCreateObjectDeltaResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "objectId": {
+          "type": "string"
+        },
+        "presignedUrl": {
+          "type": "string",
+          "title": "PUT the delta archive here"
+        },
+        "putHeaders": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "errorMsg": {
+          "type": "string"
+        },
+        "baseMissing": {
+          "type": "boolean",
+          "title": "base object is gone: fall back to a full upload"
         }
       }
     },
