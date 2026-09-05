@@ -91,7 +91,10 @@ def run(
     result: PodInstance = pod_spec.create(machine_id=machine_id)
     if not result.ok:
         if result.error_msg == RUNTIME_PREPARE_FAILED_MSG:
-            return  # prepare_runtime already reported the specific failure
+            # prepare_runtime already reported the specific failure. Preserve
+            # that message without printing the generic error again, but make
+            # sure scripts and CI still receive a failing exit status.
+            raise click.exceptions.Exit(1)
         terminal.error(result.error_msg or "Failed to create container.")
         return
 

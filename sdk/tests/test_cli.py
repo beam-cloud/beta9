@@ -1,12 +1,19 @@
 import datetime
+import sys
+from pathlib import Path
 from types import SimpleNamespace
+from types import ModuleType
 
 import click
 import pytest
+from click.testing import CliRunner
 
 from beta9.cli import database as database_cli
 from beta9.cli import container as container_cli
+from beta9.cli import extraclick
+from beta9.cli import run as run_cli
 from beta9.cli.main import load_cli
+from beta9.config import SDKSettings
 
 
 def test_disk_management_commands_registered():
@@ -70,6 +77,43 @@ def test_reserved_hardware_dx_commands_are_registered():
 
     container = cli.management_group.get_command(None, "container")
     assert "machine_id" in {param.name for param in container.commands["list"].params}
+
+
+def test_beam_settings_honor_config_path(monkeypatch, tmp_path):
+    config_path = tmp_path / "beam-config.ini"
+    monkeypatch.setenv("CONFIG_PATH", str(config_path))
+    monkeypatch.setitem(sys.modules, "beam", ModuleType("beam"))
+
+    settings = SDKSettings()
+
+    assert settings.config_path == Path(config_path)
+
+
+def test_run_runtime_prepare_failure_exits_nonzero(monkeypatch):
+    class FakeServiceClient:
+        def __init__(self, _config):
+            self.channel = object()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    class FakePod:
+        def __init__(self, entrypoint=None):
+            self.entrypoint = entrypoint
+
+        def create(self, machine_id=""):
+            return SimpleNamespace(ok=False, error_msg="Failed to prepare runtime")
+
+    monkeypatch.setattr(extraclick, "ServiceClient", FakeServiceClient)
+    monkeypatch.setattr(extraclick, "get_config_context", lambda _context: SimpleNamespace())
+    monkeypatch.setattr(run_cli, "Pod", FakePod)
+
+    result = CliRunner().invoke(run_cli.common, ["run", "--entrypoint", "echo hi"])
+
+    assert result.exit_code == 1
 
 
 def test_database_exists_error_uses_active_cli_name(monkeypatch):
