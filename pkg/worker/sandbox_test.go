@@ -11,6 +11,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
+	goproc "github.com/beam-cloud/goproc/pkg"
 	goprocpb "github.com/beam-cloud/goproc/proto"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -234,6 +235,33 @@ func TestSandboxProcessManagerEndpointsBracketIPv6ForDialing(t *testing.T) {
 	require.Equal(t, "[fd00::5]", processManagerEndpoint{host: "[fd00::5]", port: 7111}.dialHost())
 	require.Equal(t, "10.42.0.163", processManagerEndpoint{host: "10.42.0.163", port: 7111}.dialHost())
 	require.Equal(t, "sandbox.local", processManagerEndpoint{host: "sandbox.local", port: 7111}.dialHost())
+}
+
+// End-to-end version of the above: a real goproc server on an IPv6 address,
+// reachable only through the host-mapped fallback endpoint. Before dialHost()
+// this failed with "invalid target address ::1:<port> ... too many colons".
+func TestNewProcessManagerClientReachesIPv6FallbackEndpoint(t *testing.T) {
+	lis, err := net.Listen("tcp6", "[::1]:0")
+	if err != nil {
+		t.Skipf("no IPv6 loopback: %v", err)
+	}
+	srv := grpc.NewServer()
+	goprocpb.RegisterGoProcServer(srv, &goproc.GoProcServer{})
+	go srv.Serve(lis)
+	defer srv.Stop()
+
+	instance := &ContainerInstance{
+		ContainerAddressMap: map[int32]string{
+			types.WorkerSandboxProcessManagerPort: lis.Addr().String(),
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	client, err := newProcessManagerClient(ctx, instance)
+	require.NoError(t, err)
+	defer client.Cleanup()
+	require.NoError(t, client.ReadyContext(ctx))
 }
 
 func TestDockerSandboxStartupCleanupRemovesStalePidFiles(t *testing.T) {
