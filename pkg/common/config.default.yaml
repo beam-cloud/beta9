@@ -332,6 +332,12 @@ worker:
   terminationGracePeriod: 30
   cleanupWorkerInterval: 1m
   cleanupPendingWorkerAgeLimit: 10m
+  # An idle worker holding a pool's minimum free capacity (poolSizing.minFree*)
+  # never idles out on its own. Past this age it exits anyway and the sizer
+  # replaces it (the pool is cold for one worker boot, ~4s, once per period).
+  # Each worker adds up to 1/8 of this as id-derived jitter so two headroom
+  # workers in a pool do not leave together. 0 disables the bound.
+  headroomWorkerMaxAge: 6h
   cacheEnabled: true
   containerLogLinesPerHour: 6000
   criu:

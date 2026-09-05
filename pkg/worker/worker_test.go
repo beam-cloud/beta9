@@ -115,6 +115,135 @@ type fakeWorkerRepoClient struct {
 	lastClaim    *pb.ClaimContainerRequest
 	claimStarted chan struct{}
 	claimRelease <-chan struct{}
+
+	// keepAliveHeadroom is the pool_headroom answer to SetWorkerKeepAlive;
+	// keepAliveErr fails the call instead. keepAlives counts calls and
+	// lastKeepAlive keeps the most recent request.
+	keepAliveHeadroom bool
+	keepAliveErr      error
+	keepAlives        int
+	lastKeepAlive     *pb.SetWorkerKeepAliveRequest
+}
+
+func (f *fakeWorkerRepoClient) SetWorkerKeepAlive(ctx context.Context, req *pb.SetWorkerKeepAliveRequest, _ ...grpc.CallOption) (*pb.SetWorkerKeepAliveResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.keepAlives++
+	f.lastKeepAlive = req
+	if f.keepAliveErr != nil {
+		return nil, f.keepAliveErr
+	}
+	return &pb.SetWorkerKeepAliveResponse{Ok: true, PoolHeadroom: f.keepAliveHeadroom}, nil
+}
+
+func (f *fakeWorkerRepoClient) keepAliveCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.keepAlives
+}
+
+// idleTestWorker is a worker with no containers that asks repo for headroom
+// before an idle exit. Its max age is set directly so the id jitter of
+// headroomWorkerMaxAge stays out of the arithmetic.
+func idleTestWorker(repo *fakeWorkerRepoClient, startedAt time.Time, maxAge time.Duration) *Worker {
+	return &Worker{
+		workerId:           "w-test",
+		ctx:                context.Background(),
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		workerRepoClient:   repo,
+		startedAt:          startedAt,
+		headroomMaxAge:     maxAge,
+	}
+}
+
+func TestShouldExitIdle(t *testing.T) {
+	now := time.Now()
+	spindown := time.Duration(defaultWorkerSpindownTimeS) * time.Second
+	idleSince := now.Add(-spindown - time.Second)
+	young := now.Add(-time.Hour)
+	old := now.Add(-7 * time.Hour)
+	maxAge := 6 * time.Hour
+
+	t.Run("recent request keeps the worker without asking the gateway", func(t *testing.T) {
+		repo := &fakeWorkerRepoClient{}
+		w := idleTestWorker(repo, old, maxAge)
+		require.False(t, w.shouldExitIdle(now.Add(-spindown+time.Second), now))
+		require.Equal(t, 0, repo.keepAliveCalls())
+	})
+
+	t.Run("running containers keep the worker whatever its age", func(t *testing.T) {
+		repo := &fakeWorkerRepoClient{}
+		w := idleTestWorker(repo, old, maxAge)
+		w.containerInstances.Set("c1", &ContainerInstance{})
+		require.False(t, w.shouldExitIdle(idleSince, now))
+		require.Equal(t, 0, repo.keepAliveCalls())
+	})
+
+	t.Run("persistent workers never idle out", func(t *testing.T) {
+		repo := &fakeWorkerRepoClient{}
+		w := idleTestWorker(repo, old, maxAge)
+		w.persistent = true
+		require.False(t, w.shouldExitIdle(idleSince, now))
+		require.Equal(t, 0, repo.keepAliveCalls())
+	})
+
+	t.Run("idle worker without headroom exits after a fresh answer", func(t *testing.T) {
+		repo := &fakeWorkerRepoClient{keepAliveHeadroom: false}
+		w := idleTestWorker(repo, young, maxAge)
+		w.poolHeadroom.Store(true) // stale flag from the last keepalive must not win
+		require.True(t, w.shouldExitIdle(idleSince, now))
+		require.Equal(t, 1, repo.keepAliveCalls())
+		require.True(t, repo.lastKeepAlive.Idle)
+	})
+
+	t.Run("failed refresh keeps the worker even past its max age", func(t *testing.T) {
+		repo := &fakeWorkerRepoClient{keepAliveErr: status.Error(codes.Unavailable, "gateway restarting")}
+		w := idleTestWorker(repo, old, maxAge)
+		require.False(t, w.shouldExitIdle(idleSince, now))
+		require.Equal(t, 1, repo.keepAliveCalls())
+	})
+
+	t.Run("headroom keeps a young idle worker", func(t *testing.T) {
+		repo := &fakeWorkerRepoClient{keepAliveHeadroom: true}
+		w := idleTestWorker(repo, young, maxAge)
+		require.False(t, w.shouldExitIdle(idleSince, now))
+		require.True(t, w.poolHeadroom.Load())
+	})
+
+	t.Run("headroom keeps an idle worker indefinitely when no max age is set", func(t *testing.T) {
+		repo := &fakeWorkerRepoClient{keepAliveHeadroom: true}
+		w := idleTestWorker(repo, now.Add(-100*24*time.Hour), 0)
+		require.False(t, w.shouldExitIdle(idleSince, now))
+	})
+
+	t.Run("headroom worker past its max age exits", func(t *testing.T) {
+		repo := &fakeWorkerRepoClient{keepAliveHeadroom: true}
+		w := idleTestWorker(repo, old, maxAge)
+		require.True(t, w.shouldExitIdle(idleSince, now))
+		require.Equal(t, 1, repo.keepAliveCalls())
+
+		// Exactly at the bound counts as reached.
+		w = idleTestWorker(repo, now.Add(-maxAge), maxAge)
+		require.True(t, w.shouldExitIdle(idleSince, now))
+	})
+}
+
+func TestHeadroomWorkerMaxAge(t *testing.T) {
+	require.Equal(t, time.Duration(0), headroomWorkerMaxAge(0, "1713919c"))
+	require.Equal(t, time.Duration(0), headroomWorkerMaxAge(-time.Hour, "1713919c"))
+
+	base := 6 * time.Hour
+	ids := []string{"1713919c", "cca87061", "3c51ead2", "df3dc97d", "00000000", "ffffffff", ""}
+	seen := map[time.Duration]bool{}
+	for _, id := range ids {
+		got := headroomWorkerMaxAge(base, id)
+		require.GreaterOrEqual(t, got, base, id)
+		require.LessOrEqual(t, got, base+base/8, id)
+		require.Equal(t, got, headroomWorkerMaxAge(base, id), "jitter must be stable for %q", id)
+		seen[got] = true
+	}
+	// Different ids spread out rather than all landing on the same instant.
+	require.Greater(t, len(seen), len(ids)/2)
 }
 
 // gateFakeCall lets a test observe a fake RPC while it is in flight: it signals

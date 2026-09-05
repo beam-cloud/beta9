@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
+	"math"
 	"net/http"
 	_ "net/http/pprof" // Import for side effects
 	"os"
@@ -122,7 +124,11 @@ type Worker struct {
 	// poolHeadroom is the gateway's answer on the last keepalive: this worker
 	// is what keeps the pool's free capacity at its minimum, so it must not
 	// idle out (see shouldShutDown).
-	poolHeadroom   atomic.Bool
+	poolHeadroom atomic.Bool
+	// startedAt and headroomMaxAge bound how long holding headroom keeps an
+	// idle worker up (see shouldExitIdle); a zero headroomMaxAge is no bound.
+	startedAt      time.Time
+	headroomMaxAge time.Duration
 	routeTransport string
 	ctx            context.Context
 	cancel         func()
@@ -659,6 +665,8 @@ func NewWorker() (_ *Worker, err error) {
 		stopContainerChan:   make(chan stopContainerEvent, 1000),
 		userDataStorage:     userDataStorage,
 		persistent:          persistent,
+		startedAt:           time.Now(),
+		headroomMaxAge:      headroomWorkerMaxAge(config.Worker.HeadroomWorkerMaxAge, workerId),
 		routeTransport:      routeTransport,
 	}
 
@@ -1046,34 +1054,72 @@ func (s *Worker) shouldShutDown(lastContainerRequest time.Time) bool {
 	case <-s.ctx.Done():
 		return true
 	default:
-		if s.persistent {
-			return false
-		}
-		if (time.Since(lastContainerRequest).Seconds() > defaultWorkerSpindownTimeS) && s.containerInstances.Len() == 0 {
-			// Idle, but is this worker part of the pool's minimum free
-			// capacity? Exiting then would only make the sizer start a
-			// replacement and leave the pool cold while it boots. Ask again
-			// right now rather than trust a flag up to a keepalive old, and
-			// stay when the answer cannot be had: leaving on a stale or
-			// missing answer is what empties the pool.
-			if err := s.setWorkerKeepAlive(); err != nil {
-				log.Warn().Err(err).Str("worker_id", s.workerId).Msg("staying up: could not refresh pool headroom before spindown")
-				return false
-			}
-			if s.poolHeadroom.Load() {
-				return false
-			}
-			s.disableSchedulingForShutdown()
-			err := s.storageManager.Cleanup()
-			if err != nil {
-				log.Error().Err(err).Msg("failed to cleanup workspace storage")
-			}
-
-			s.cancel() // Stops goroutines
-			return true
-		}
+	}
+	if !s.shouldExitIdle(lastContainerRequest, time.Now()) {
 		return false
 	}
+
+	s.disableSchedulingForShutdown()
+	if err := s.storageManager.Cleanup(); err != nil {
+		log.Error().Err(err).Msg("failed to cleanup workspace storage")
+	}
+
+	s.cancel() // Stops goroutines
+	return true
+}
+
+// shouldExitIdle decides whether a worker with no containers and no request
+// for the spindown timeout leaves now. Persistent workers never do.
+//
+// An idle worker that is part of the pool's minimum free capacity stays:
+// exiting would only make the sizer start a replacement and leave the pool
+// cold while it boots. The gateway is asked right now rather than trusting a
+// flag up to a keepalive old, and the worker stays when the answer cannot be
+// had, since leaving on a stale or missing answer is what empties the pool.
+//
+// Holding headroom alone must not keep a worker up forever, though: an idle
+// pool would pin the same pod indefinitely, past image rollouts and node
+// drains. Past headroomMaxAge (id-jittered, see headroomWorkerMaxAge) an idle
+// headroom worker exits anyway; the sizer replaces it and the pool is cold for
+// one boot per period. Busy workers are never aged out: the bound applies only
+// when headroom is the sole reason the worker is still here.
+func (s *Worker) shouldExitIdle(lastContainerRequest, now time.Time) bool {
+	if s.persistent {
+		return false
+	}
+	if now.Sub(lastContainerRequest).Seconds() <= defaultWorkerSpindownTimeS || s.containerInstances.Len() != 0 {
+		return false
+	}
+	if err := s.setWorkerKeepAlive(); err != nil {
+		log.Warn().Err(err).Str("worker_id", s.workerId).Msg("staying up: could not refresh pool headroom before spindown")
+		return false
+	}
+	if !s.poolHeadroom.Load() {
+		return true
+	}
+	if s.headroomMaxAge <= 0 || now.Sub(s.startedAt) < s.headroomMaxAge {
+		return false
+	}
+	log.Info().
+		Str("worker_id", s.workerId).
+		Dur("age", now.Sub(s.startedAt)).
+		Dur("max_age", s.headroomMaxAge).
+		Msg("idle headroom worker reached its max age, exiting so the pool sizer replaces it")
+	return true
+}
+
+// headroomWorkerMaxAge is the configured bound plus up to 1/8 of it as jitter
+// derived from the worker id, so two headroom workers the sizer started
+// together do not reach the bound in the same instant and leave the pool with
+// no ready worker at all. Zero (or negative) base means no bound.
+func headroomWorkerMaxAge(base time.Duration, workerId string) time.Duration {
+	if base <= 0 {
+		return 0
+	}
+	h := fnv.New32a()
+	h.Write([]byte(workerId))
+	jitter := time.Duration(float64(base/8) * (float64(h.Sum32()) / float64(math.MaxUint32)))
+	return base + jitter
 }
 
 // updateContainerStatusLoop is the container's lifetime status heartbeat. It
