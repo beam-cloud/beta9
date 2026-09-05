@@ -222,7 +222,16 @@ class FileSyncer:
             else None
         )
 
-        cache = _SyncCache.load(self.root_dir, self.include_patterns)
+        # ignore_patterns == ["*"] is the "sync nothing" mode used by builds and
+        # sandboxes without sync_local_dir. Its empty manifest must not become
+        # the cache entry for this directory: the next real sync would diff
+        # against it, see every file as changed, and fall back to a full upload.
+        sync_nothing = ignore_patterns == ["*"]
+        cache = (
+            _SyncCache(None, "", None, self.root_dir)
+            if sync_nothing
+            else _SyncCache.load(self.root_dir, self.include_patterns)
+        )
         manifest = self._build_manifest(cache)
         hash = manifest.hash()
         size = manifest.size()
@@ -235,7 +244,8 @@ class FileSyncer:
             HeadObjectRequest(hash=hash, supports_put_headers=True)
         )
         if head_response.exists and head_response.ok:
-            cache.save(head_response.object_id, manifest)
+            if not sync_nothing:
+                cache.save(head_response.object_id, manifest)
             if self.is_workspace_dir and cache_object_id:
                 set_workspace_object_id(head_response.object_id)
             return FileSyncResult(success=True, object_id=head_response.object_id)
@@ -252,7 +262,8 @@ class FileSyncer:
             terminal.error("File sync failed")
             return FileSyncResult(success=False, object_id="")
 
-        cache.save(object_id, manifest)
+        if not sync_nothing:
+            cache.save(object_id, manifest)
         if self.is_workspace_dir and cache_object_id:
             set_workspace_object_id(object_id)
         return FileSyncResult(success=True, object_id=object_id)

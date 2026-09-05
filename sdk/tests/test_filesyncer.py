@@ -137,6 +137,29 @@ class TestIncrementalSync(TestCase):
         self.assertNotEqual(a.hash(), _Manifest({"y": _ManifestEntry(1, 1, "h1", 0o644)}).hash())
         self.assertNotEqual(a.hash(), _Manifest({"x": _ManifestEntry(1, 1, "h1", 0o755)}).hash())
 
+    def test_sync_nothing_does_not_replace_the_directory_cache_entry(self):
+        # A build or a sandbox without sync_local_dir syncs with ignore ["*"]
+        # from the same directory. Its empty manifest must not become the
+        # cache entry, or the next real sync diffs against nothing, sees every
+        # file as changed and uploads the whole directory again.
+        gw = _FakeGateway()
+        self._sync(gw)
+        self.assertEqual(len(gw.created), 1)
+        FileSyncer(gateway_stub=gw, root_dir=str(self.root)).sync(
+            ignore_patterns=["*"], cache_object_id=False
+        )
+        cache = _SyncCache.load(self.root, [])
+        self.assertEqual(cache.object_id, "obj-1")
+        self.assertEqual(len(cache.manifest.entries), 6)
+
+        (self.root / "app" / "f0.bin").write_bytes(b"changed")
+        result = self._sync(gw)
+        self.assertTrue(result.success)
+        self.assertEqual(len(gw.deltas), 1, "the change goes up as a delta")
+        self.assertEqual(gw.deltas[0].base_object_id, "obj-1")
+        self.assertEqual(len(gw.created), 2, "only the empty sync-nothing object, no second full upload")
+
+
     def test_first_sync_uploads_everything_and_seeds_cache(self):
         gw = _FakeGateway()
         result = self._sync(gw)
