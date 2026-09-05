@@ -7,6 +7,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
+	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/rs/zerolog/log"
@@ -262,7 +263,14 @@ func (s *WorkerRepositoryService) SetWorkerKeepAlive(ctx context.Context, req *p
 		return &pb.SetWorkerKeepAliveResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
-	return &pb.SetWorkerKeepAliveResponse{Ok: true}, nil
+	// Tell the worker whether it is the pool's headroom, so it does not idle
+	// out and leave the pool cold until the sizer's replacement boots.
+	headroom := false
+	if worker, err := s.workerRepo.GetWorkerById(req.WorkerId); err == nil {
+		headroom = scheduler.WorkerHoldsPoolHeadroom(s.workerRepo, s.appConfig, worker)
+	}
+
+	return &pb.SetWorkerKeepAliveResponse{Ok: true, PoolHeadroom: headroom}, nil
 }
 
 func (s *WorkerRepositoryService) SetNetworkLock(ctx context.Context, req *pb.SetNetworkLockRequest) (*pb.SetNetworkLockResponse, error) {

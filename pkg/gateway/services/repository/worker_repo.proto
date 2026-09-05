@@ -239,6 +239,10 @@ message SetWorkerKeepAliveRequest {
 message SetWorkerKeepAliveResponse {
   bool ok = 1;
   string error_msg = 2;
+  // pool_headroom is set when the pool's free capacity would fall below its
+  // configured minimum without this worker. The worker keeps running through
+  // its idle spindown timeout while this is set.
+  bool pool_headroom = 3;
 }
 
 message CacheCoordinatorHost {

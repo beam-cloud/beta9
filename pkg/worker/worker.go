@@ -119,6 +119,10 @@ type Worker struct {
 	qcowChains              sync.Map // live published qcow chain (rows + manifests) per volume key
 	userDataStorage         storage.Storage
 	persistent              bool
+	// poolHeadroom is the gateway's answer on the last keepalive: this worker
+	// is what keeps the pool's free capacity at its minimum, so it must not
+	// idle out (see shouldShutDown).
+	poolHeadroom            atomic.Bool
 	routeTransport          string
 	ctx                     context.Context
 	cancel                  func()
@@ -1002,6 +1006,16 @@ func (s *Worker) shouldShutDown(lastContainerRequest time.Time) bool {
 			return false
 		}
 		if (time.Since(lastContainerRequest).Seconds() > defaultWorkerSpindownTimeS) && s.containerInstances.Len() == 0 {
+			// Idle, but is the pool below its minimum free capacity without
+			// this worker? Exiting then would only make the sizer start a
+			// replacement and leave the pool cold while it boots. Ask again
+			// right now rather than trust a flag up to a keepalive old: two
+			// idle workers judging each other's presence from stale answers
+			// could both leave at once.
+			_ = s.setWorkerKeepAlive()
+			if s.poolHeadroom.Load() {
+				return false
+			}
 			s.disableSchedulingForShutdown()
 			err := s.storageManager.Cleanup()
 			if err != nil {
@@ -1309,11 +1323,17 @@ func (s *Worker) keepalive() {
 }
 
 func (s *Worker) setWorkerKeepAlive() error {
-	_, err := handleGRPCResponse(s.workerRepoClient.SetWorkerKeepAlive(s.ctx, &pb.SetWorkerKeepAliveRequest{
+	resp, err := handleGRPCResponse(s.workerRepoClient.SetWorkerKeepAlive(s.ctx, &pb.SetWorkerKeepAliveRequest{
 		WorkerId:  s.workerId,
 		MachineId: s.machineID,
 	}))
-	return err
+	if err != nil {
+		return err
+	}
+	if headroom := resp.GetPoolHeadroom(); headroom != s.poolHeadroom.Swap(headroom) {
+		log.Info().Bool("pool_headroom", headroom).Str("worker_id", s.workerId).Msg("worker pool headroom changed")
+	}
+	return nil
 }
 
 func (s *Worker) profile() {
