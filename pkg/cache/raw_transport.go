@@ -17,21 +17,29 @@ import (
 )
 
 const (
-	rawReadMagic                            = "B9CR\x01"
-	rawReadVersion                     byte = 1
-	rawReadStatusOK                    byte = 0
-	rawReadStatusMiss                  byte = 1
-	rawReadStatusError                 byte = 2
-	rawReadStatusBusy                  byte = 3
-	rawReadHeaderSize                       = 19
-	rawReadRespHeaderSize                   = 9
-	rawReadSocketBufferBytes                = 16 * 1024 * 1024
-	cacheMuxInitialReadTimeout              = 5 * time.Second
-	rawReadFallbackBufferBytes              = 4 * 1024 * 1024
-	defaultRawReadRequestBytes              = 64 * 1024 * 1024
-	defaultRawReadMaxInflightBytes          = 8 * defaultRawReadRequestBytes
-	defaultRawReadMaxConcurrent             = 64
-	defaultRawReadWriteProgressTimeout      = 30 * time.Second
+	rawReadMagic                        = "B9CR\x01"
+	rawReadVersion                 byte = 1
+	rawReadStatusOK                byte = 0
+	rawReadStatusMiss              byte = 1
+	rawReadStatusError             byte = 2
+	rawReadStatusBusy              byte = 3
+	rawReadHeaderSize                   = 19
+	rawReadRespHeaderSize               = 9
+	rawReadSocketBufferBytes            = 16 * 1024 * 1024
+	cacheMuxInitialReadTimeout          = 5 * time.Second
+	rawReadFallbackBufferBytes          = 4 * 1024 * 1024
+	defaultRawReadRequestBytes          = 64 * 1024 * 1024
+	defaultRawReadMaxInflightBytes      = 16 * defaultRawReadRequestBytes
+	// One 16-CPU worker running 16 lazily loaded sandboxes can have 16 read-ahead
+	// windows in flight per mount; a cap below that turns a busy moment into
+	// failed reads on the client, and a failed window read costs the reader a
+	// whole-layer wait.
+	defaultRawReadMaxConcurrent = 256
+	// rawReadAdmissionWait is how long a request queues for an admission slot
+	// before the server answers busy. With sendfile a queued request holds no
+	// buffer, and a short wait here is far cheaper than the client's fallback.
+	rawReadAdmissionWait               = 250 * time.Millisecond
+	defaultRawReadWriteProgressTimeout = 30 * time.Second
 )
 
 type cacheMuxListener struct {
@@ -184,11 +192,22 @@ func (a *rawReadAdmission) acquire(length int64) (func(), error) {
 	select {
 	case a.concurrent <- struct{}{}:
 	default:
-		return nil, ErrRawReadBusy
+		timer := time.NewTimer(rawReadAdmissionWait)
+		select {
+		case a.concurrent <- struct{}{}:
+			timer.Stop()
+		case <-timer.C:
+			return nil, ErrRawReadBusy
+		}
 	}
 	if length > 0 && !a.inflightBytes.TryAcquire(length) {
-		<-a.concurrent
-		return nil, ErrRawReadBusy
+		ctx, cancel := context.WithTimeout(context.Background(), rawReadAdmissionWait)
+		err := a.inflightBytes.Acquire(ctx, length)
+		cancel()
+		if err != nil {
+			<-a.concurrent
+			return nil, ErrRawReadBusy
+		}
 	}
 	return func() {
 		if length > 0 {

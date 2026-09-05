@@ -372,8 +372,8 @@ cache:
       enabled: true
       sendfile: true
       maxRequestSizeBytes: 67108864 # 64MiB; independent of the gRPC message limit.
-      maxInflightBytes: 536870912 # Eight maximum-sized raw reads server-wide.
-      maxConcurrentRequests: 64 # Also bounds tiny and zero-length raw requests.
+      maxInflightBytes: 1073741824 # Sixteen maximum-sized raw reads server-wide (not RAM with sendfile).
+      maxConcurrentRequests: 256 # One packed 16-CPU worker can have this many read-ahead windows in flight.
     metadata:
       mode: default
       redisInsecureSkipVerify: false

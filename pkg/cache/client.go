@@ -707,6 +707,30 @@ func (c *Client) isCurrentHostEndpoint(host *Host) bool {
 	return sameCacheHostEndpoint(c.hostMap.Get(host.HostId), host)
 }
 
+// rememberHostForContent pins hash to host for later reads. Used when content
+// turns up on a host outside the routing key's top-N (the ring changed after
+// the store), so following reads go straight there instead of re-probing.
+func (c *Client) rememberHostForContent(hash, routingKey string, host *Host) {
+	if host == nil || host.HostId == "" {
+		return
+	}
+	c.mu.Lock()
+	c.localHostCache[newLocalHostCacheKey(hash, routingKey)] = &localClientCache{host: host, timestamp: time.Now()}
+	c.mu.Unlock()
+}
+
+// grpcClientForHost returns the existing gRPC client for host, if one has
+// been dialed.
+func (c *Client) grpcClientForHost(_ context.Context, host *Host) (proto.CacheClient, bool) {
+	if host == nil {
+		return nil, false
+	}
+	c.mu.RLock()
+	client, exists := c.grpcClients[host.HostId]
+	c.mu.RUnlock()
+	return client, exists
+}
+
 func (c *Client) removeLocalHostCache(hash string, routingKey ...string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -1760,6 +1784,25 @@ func (c *Client) tryReadContentIntoKnownHosts(ctx context.Context, hash string, 
 		return 0, err
 	}
 
+	// Content is stored on the routing key's top host as the storer saw the
+	// ring. A host that joined since can push that host out of this client's
+	// top-N, and the content is then on a host we have not asked. Every other
+	// host is one cheap round trip away; the alternative is the caller falling
+	// back to the registry for a whole layer.
+	if contentMissing || (lastErr != nil && !primaryUnavailable) {
+		for _, host := range c.remainingHostsForRequest(checked) {
+			if err := ctx.Err(); err != nil {
+				return 0, err
+			}
+			n, err := c.readContentIntoFromHost(ctx, host, len(checked), hash, offset, dst, trace)
+			if err == nil && n == length {
+				c.rememberHostForContent(hash, opts.RoutingKey, host)
+				Logger.Debugf("cache read-into found content off-ring: hash=%s host=%s", hash, host.HostId)
+				return n, nil
+			}
+		}
+	}
+
 	if primaryUnavailable || (selectedUnavailable && !contentMissing) {
 		return 0, ErrSelectedHostUnavailable
 	}
@@ -1851,11 +1894,31 @@ func (c *Client) readContentIntoFromHost(ctx context.Context, host *Host, hostIn
 	}
 
 	if c.clientConfig.ReadTransport.Enabled {
-		attemptStarted := time.Now()
-		n, err := c.rawReadIntoWindowed(ctx, host, hash, offset, dst)
-		trace.addAttempt(hostIndex, host, "raw", operationTraceReadResult(err, n, length), n, time.Since(attemptStarted), err)
-		if err == nil && n == length {
-			return n, nil
+		// A busy answer means the host's raw-read admission is full for the
+		// moment, not that anything is wrong. Failing the read here makes the
+		// caller (a lazily loaded image) fall back to waiting for the whole
+		// layer, so retry briefly and then take the gRPC path instead.
+		var err error
+		backoff := rawReadBusyInitialBackoff
+		for attempt := 0; ; attempt++ {
+			attemptStarted := time.Now()
+			var n int64
+			n, err = c.rawReadIntoWindowed(ctx, host, hash, offset, dst)
+			trace.addAttempt(hostIndex, host, "raw", operationTraceReadResult(err, n, length), n, time.Since(attemptStarted), err)
+			if err == nil && n == length {
+				return n, nil
+			}
+			if !errors.Is(err, ErrRawReadBusy) || attempt >= rawReadBusyRetries {
+				break
+			}
+			timer := time.NewTimer(backoff)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return 0, ctx.Err()
+			case <-timer.C:
+			}
+			backoff *= 2
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return 0, ctxErr
@@ -1865,9 +1928,6 @@ func (c *Client) readContentIntoFromHost(ctx context.Context, host *Host, hostIn
 		}
 		if errors.Is(err, ErrContentNotFound) {
 			c.removeLocalHostCache(hash)
-			return 0, err
-		}
-		if errors.Is(err, ErrRawReadBusy) {
 			return 0, err
 		}
 		if errors.Is(err, ErrUnableToReachHost) {
@@ -1989,6 +2049,30 @@ func (c *Client) GetContentStream(hash string, offset int64, length int64, opts 
 		defer close(contentChan)
 		defer cancel()
 
+		checked := make(map[string]struct{})
+		// streamFrom returns true once any bytes were delivered: the caller
+		// then owns the (possibly partial) stream and we must not start over.
+		streamFrom := func(client proto.CacheClient, host *Host) bool {
+			stream, err := client.GetContentStream(ctx, &proto.CacheGetContentRequest{Hash: hash, Offset: offset, Length: length}, c.dataCallOptions()...)
+			if err != nil {
+				c.removeHost(host)
+				return false
+			}
+			delivered := false
+			for {
+				resp, err := stream.Recv()
+				if err == io.EOF {
+					return true
+				}
+				if err != nil || !resp.Ok {
+					c.removeLocalHostCache(hash)
+					return delivered
+				}
+				delivered = true
+				contentChan <- resp.Content
+			}
+		}
+
 		for attempt := 0; attempt < c.getContentAttempts(length); attempt++ {
 			client, host, err := c.getGRPCClient(&ClientRequest{
 				rt:        ClientRequestTypeRetrieval,
@@ -2002,25 +2086,31 @@ func (c *Client) GetContentStream(hash string, offset int64, length int64, opts 
 				}
 				continue
 			}
+			checked[host.HostId] = struct{}{}
+			if streamFrom(client, host) {
+				return
+			}
+		}
 
-			stream, err := client.GetContentStream(ctx, &proto.CacheGetContentRequest{Hash: hash, Offset: offset, Length: length}, c.dataCallOptions()...)
-			if err != nil {
-				c.removeHost(host)
+		// Not on any top-N host: the ring may have changed since the store.
+		// Ask the rest before the caller gives up on the cache (see
+		// tryReadContentIntoKnownHosts).
+		for _, host := range c.remainingHostsForRequest(checked) {
+			if ctx.Err() != nil {
+				return
+			}
+			client, ok := c.grpcClientForHost(ctx, host)
+			if !ok {
 				continue
 			}
-
-			for {
-				resp, err := stream.Recv()
-				if err == io.EOF {
-					return
-				}
-
-				if err != nil || !resp.Ok {
-					c.removeLocalHostCache(hash)
-					break
-				}
-
-				contentChan <- resp.Content
+			has, err := client.HasContent(ctx, &proto.CacheHasContentRequest{Hash: hash})
+			if err != nil || !has.Exists {
+				continue
+			}
+			c.rememberHostForContent(hash, opts.RoutingKey, host)
+			Logger.Debugf("cache stream found content off-ring: hash=%s host=%s", hash, host.HostId)
+			if streamFrom(client, host) {
+				return
 			}
 		}
 	}()
@@ -2957,6 +3047,15 @@ func (c *Client) HostsAvailable() bool {
 // hostsAvailablePollInterval bounds how long a worker sits idle after the first
 // cache host becomes known; a coarse poll here shows up 1:1 in cold-start time.
 const hostsAvailablePollInterval = 25 * time.Millisecond
+
+// A busy raw read is retried once on the same host before falling back to
+// gRPC. The server already queues a request for rawReadAdmissionWait before
+// answering busy, so a second busy means the host is genuinely saturated and
+// the read should take the other transport rather than keep waiting.
+const (
+	rawReadBusyRetries        = 1
+	rawReadBusyInitialBackoff = 20 * time.Millisecond
+)
 
 func (c *Client) WaitForHosts(timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
