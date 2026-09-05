@@ -153,6 +153,7 @@ type MarkerField struct {
 
 // BotConfig holds the overall config for the bot
 type BotConfig struct {
+	Provider       string                         `json:"provider" redis:"provider"`
 	Model          string                         `json:"model" redis:"model"`
 	Locations      map[string]BotLocationConfig   `json:"locations" redis:"locations"`
 	Transitions    map[string]BotTransitionConfig `json:"transitions" redis:"transitions"`
