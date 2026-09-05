@@ -212,6 +212,30 @@ func TestSandboxProcessManagerEndpointsIgnoreInvalidPublishedAddress(t *testing.
 	require.Equal(t, int(types.WorkerSandboxProcessManagerPort), endpoints[0].port)
 }
 
+// On dual-stack nodes the worker publishes the process manager port on the
+// node's IPv6 address. goproc joins host and port with "%s:%d", so the host
+// must arrive bracketed or grpc rejects the target with "too many colons" and
+// the fallback endpoint is useless exactly when it is needed.
+func TestSandboxProcessManagerEndpointsBracketIPv6ForDialing(t *testing.T) {
+	endpoints := sandboxProcessManagerEndpoints(&ContainerInstance{
+		ContainerIp: "192.168.0.81",
+		ContainerAddressMap: map[int32]string{
+			types.WorkerSandboxProcessManagerPort: "[2600:1f18:37a4:c02::1a9b]:44209",
+		},
+	})
+
+	require.Len(t, endpoints, 2)
+	require.Equal(t, "192.168.0.81", endpoints[0].dialHost())
+	require.Equal(t, "2600:1f18:37a4:c02::1a9b", endpoints[1].host)
+	require.Equal(t, "[2600:1f18:37a4:c02::1a9b]", endpoints[1].dialHost())
+	require.Equal(t, 44209, endpoints[1].port)
+
+	require.Equal(t, "[fd00::5]", processManagerEndpoint{host: "fd00::5", port: 7111}.dialHost())
+	require.Equal(t, "[fd00::5]", processManagerEndpoint{host: "[fd00::5]", port: 7111}.dialHost())
+	require.Equal(t, "10.42.0.163", processManagerEndpoint{host: "10.42.0.163", port: 7111}.dialHost())
+	require.Equal(t, "sandbox.local", processManagerEndpoint{host: "sandbox.local", port: 7111}.dialHost())
+}
+
 func TestDockerSandboxStartupCleanupRemovesStalePidFiles(t *testing.T) {
 	require.Equal(t, "rm -f /var/run/docker.pid /var/run/docker/containerd/containerd.pid", dockerSandboxStartupCleanupScript())
 }
