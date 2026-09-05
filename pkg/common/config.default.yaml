@@ -133,6 +133,14 @@ imageService:
   # Publish a build's delta as layers packed from the working container (no
   # buildah commit/push/re-index). Unsupported Dockerfiles fall back to bud.
   layeredBuilds: true
+  # apt settings for RUN steps of a build (bind-mounted, not baked into the
+  # image). Set mirror to a nearby Ubuntu mirror, e.g.
+  # http://mirrors.edge.kernel.org/ubuntu, when archive.ubuntu.com is slow.
+  buildApt:
+    mirror: ""
+    proxy: ""
+    timeoutS: 20
+    retries: 3
   registryStore: local
   registryCredentialProvider: docker
   buildRegistry: registry.localhost:5000

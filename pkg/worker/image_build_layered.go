@@ -107,6 +107,18 @@ func (b *layeredBuild) execute() (upperDir string, err error) {
 	}
 	b.container = container
 
+	// apt inside RUN steps gets short timeouts, retries and (if configured)
+	// a nearby mirror, mounted for the step only. Needs a look at the base
+	// rootfs to know whether apt is there and what its sources say.
+	if mountPoint, err := b.quiet("mount", b.container); err == nil {
+		b.runVolumes = append(b.runVolumes, aptBuildVolumes(b.c.config.ImageService.BuildApt, mountPoint, b.tmpdir)...)
+		if _, err := b.quiet("umount", b.container); err != nil {
+			log.Debug().Err(err).Msg("buildah umount after apt inspection")
+		}
+	} else {
+		log.Debug().Err(err).Msg("buildah mount for apt inspection")
+	}
+
 	for i, step := range b.plan.steps {
 		b.out.Info(fmt.Sprintf("STEP %d/%d: %s\n", i+2, len(b.plan.steps)+1, step.raw))
 		if err := b.step(step); err != nil {

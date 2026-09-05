@@ -307,6 +307,28 @@ type ImageServiceConfig struct {
 	// the working container instead of buildah commit + push + re-index.
 	// Dockerfiles outside the supported subset still go through buildah bud.
 	LayeredBuilds bool `key:"layeredBuilds" json:"layered_builds"`
+	// BuildApt tunes apt inside the RUN steps of a layered build. The settings
+	// are bind-mounted into each step and never land in the image.
+	BuildApt BuildAptConfig `key:"buildApt" json:"build_apt"`
+}
+
+// BuildAptConfig is applied to apt during image builds whose base image has
+// apt installed. Public archives are slow or stall from some regions
+// (archive.ubuntu.com measured at ~90 KB/s from us-east-1, with apt's default
+// 120 s timeouts turning a stalled connection into a many-minute build), so a
+// build gets short timeouts with retries and, when configured, a nearby
+// mirror or caching proxy.
+type BuildAptConfig struct {
+	// Mirror replaces http://archive.ubuntu.com/ubuntu and
+	// http://security.ubuntu.com/ubuntu in the base image's sources for the
+	// duration of each RUN step, e.g. http://mirrors.edge.kernel.org/ubuntu.
+	Mirror string `key:"mirror" json:"mirror"`
+	// Proxy is set as Acquire::http::Proxy (an apt-cacher-ng, for instance).
+	Proxy string `key:"proxy" json:"proxy"`
+	// TimeoutS is Acquire::http::Timeout / Acquire::https::Timeout; 0 keeps apt's default.
+	TimeoutS int `key:"timeoutS" json:"timeout_s"`
+	// Retries is Acquire::Retries; 0 keeps apt's default.
+	Retries int `key:"retries" json:"retries"`
 }
 
 // BuildRegistryCredentialsConfig stores credentials for generating tokens for the build registry
