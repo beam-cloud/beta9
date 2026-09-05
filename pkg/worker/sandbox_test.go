@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -262,6 +263,47 @@ func TestNewProcessManagerClientReachesIPv6FallbackEndpoint(t *testing.T) {
 	require.NoError(t, err)
 	defer client.Cleanup()
 	require.NoError(t, client.ReadyContext(ctx))
+}
+
+// A restored sandbox has both endpoints. Right after restore the container-IP
+// endpoint can refuse for a moment (retryable), while the published address is
+// a host-mapped port the worker itself cannot reach (PREROUTING-only DNAT) and
+// fails in a non-retryable way. The retryable error has to win, otherwise the
+// exec fails immediately instead of riding out the blip.
+func TestNewProcessManagerClientKeepsRetryableErrorWhenFallbackFailsHard(t *testing.T) {
+	refused, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	primaryHost, primaryPort, _ := net.SplitHostPort(refused.Addr().String())
+	require.NoError(t, refused.Close()) // primary: nothing listening -> connection refused
+
+	// fallback: accepts and immediately hangs up -> "error reading server preface: EOF"
+	hangup, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer hangup.Close()
+	go func() {
+		for {
+			conn, err := hangup.Accept()
+			if err != nil {
+				return
+			}
+			conn.Close()
+		}
+	}()
+
+	port, err := strconv.Atoi(primaryPort)
+	require.NoError(t, err)
+	instance := &ContainerInstance{ContainerIp: primaryHost}
+	instance.setContainerAddressMap(map[int32]string{types.WorkerSandboxProcessManagerPort: hangup.Addr().String()})
+	endpoints := sandboxProcessManagerEndpoints(instance)
+	require.Len(t, endpoints, 2)
+	endpoints[0].port = port // the real primary is fixed at 7111, which a test cannot bind
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	client, err := newProcessManagerClientFromEndpoints(ctx, endpoints)
+	require.Nil(t, client)
+	require.Error(t, err)
+	require.True(t, isProcessManagerDialFailure(err), "expected the primary's retryable error, got: %v", err)
 }
 
 func TestDockerSandboxStartupCleanupRemovesStalePidFiles(t *testing.T) {

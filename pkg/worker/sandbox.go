@@ -527,24 +527,36 @@ func newProcessManagerClient(ctx context.Context, instance *ContainerInstance) (
 	if len(endpoints) == 0 {
 		return nil, fmt.Errorf("sandbox process manager address unavailable")
 	}
+	return newProcessManagerClientFromEndpoints(ctx, endpoints)
+}
 
-	var lastErr error
+// newProcessManagerClientFromEndpoints tries each endpoint in order and returns
+// the first that answers Ready. When none does, a retryable (dial) failure from
+// any endpoint takes precedence over a non-retryable one: a restored sandbox
+// briefly refuses on its container IP while its published host-mapped address
+// fails hard (the worker itself cannot reach a PREROUTING-only DNAT), and the
+// later hard failure must not turn the transient refusal into a fatal exec.
+func newProcessManagerClientFromEndpoints(ctx context.Context, endpoints []processManagerEndpoint) (*goproc.GoProcClient, error) {
+	var lastErr, retryableErr error
 	for _, endpoint := range endpoints {
 		client, err := goproc.NewGoProcClient(ctx, endpoint.dialHost(), uint(endpoint.port))
-		if err != nil {
-			lastErr = err
-			continue
-		}
-
-		probeCtx, cancel := context.WithTimeout(ctx, goprocReadyProbeTimeout)
-		err = client.ReadyContext(probeCtx)
-		cancel()
 		if err == nil {
-			return client, nil
+			probeCtx, cancel := context.WithTimeout(ctx, goprocReadyProbeTimeout)
+			err = client.ReadyContext(probeCtx)
+			cancel()
+			if err == nil {
+				return client, nil
+			}
+			_ = client.Cleanup()
 		}
 
-		_ = client.Cleanup()
 		lastErr = err
+		if retryableErr == nil && isProcessManagerDialFailure(err) {
+			retryableErr = err
+		}
+	}
+	if retryableErr != nil {
+		return nil, retryableErr
 	}
 	return nil, lastErr
 }
