@@ -323,13 +323,7 @@ func (c *StorageClient) UploadToBucket(ctx context.Context, key string, data []b
 }
 
 func (c *StorageClient) UploadToBucketWithReader(ctx context.Context, key string, data io.Reader, bucket string) error {
-	uploader := newStorageMultipartUploader(c.s3Client, data)
-	_, err := uploader.Upload(ctx, &s3.PutObjectInput{
-		Bucket: aws.String(bucket),
-		Key:    aws.String(key),
-		Body:   data,
-	})
-	return err
+	return c.UploadToBucketWithReaderAndMetadata(ctx, key, data, bucket, nil)
 }
 
 // UploadToBucketWithReaderAndMetadata is UploadToBucketWithReader with user

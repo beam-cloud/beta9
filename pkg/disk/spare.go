@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 )
@@ -40,6 +41,9 @@ const (
 	// instead of paying for one. Bounded to the few sizes a node really sees.
 	spareSizesFile = "spare-sizes"
 	spareSizesKept = 4
+	// spareReleaseTimeout bounds how long a destroyed spare's NBD device is
+	// given to clear after its explicit disconnect failed.
+	spareReleaseTimeout = time.Second
 )
 
 func isSpareKey(key string) bool { return strings.HasPrefix(key, sparePrefix) }
@@ -92,10 +96,19 @@ func (v *Volume) adopt(ctx context.Context, spec AttachSpec) error {
 	if err := os.RemoveAll(keyDir); err != nil {
 		return err
 	}
-	if err := os.Symlink(v.dir, keyDir); err != nil {
+	// The index and the spare are siblings, so the link target is the bare
+	// directory name: it resolves regardless of whether the root is absolute.
+	if err := os.Symlink(filepath.Base(v.dir), keyDir); err != nil {
 		return err
 	}
+	// Nothing is live under this key (a live volume would have state), but a
+	// crash between this rename and the state save below leaves the renamed
+	// directory behind with no record pointing at it. Clear such a leftover so
+	// the rename does not fail on a non-empty destination.
 	runtimeDir := m.runtimeDir(spec.Key)
+	if err := os.RemoveAll(runtimeDir); err != nil {
+		return err
+	}
 	if err := os.Rename(v.qsd.runtimeDir, runtimeDir); err != nil {
 		return err
 	}
@@ -113,14 +126,24 @@ func (v *Volume) adopt(ctx context.Context, spec AttachSpec) error {
 }
 
 // destroy tears a spare down and removes its directory; spares hold no data.
-func (v *Volume) destroy() {
+// It reports whether the spare's NBD device is confirmed free afterwards: a
+// disconnect can fail while the kernel still holds the device, in which case
+// stopping the daemon is what eventually clears it, and the kernel is given a
+// moment to notice before the device is declared stuck.
+func (v *Volume) destroy() (deviceFreed bool) {
 	ctx := context.Background()
+	m := v.manager
 	if v.nbd != nil {
-		_ = v.manager.disconnectNBDDevice(ctx, v.nbd)
+		deviceFreed = m.disconnectNBDDevice(ctx, v.nbd) == nil
 	}
-	_ = v.manager.stopQSD(ctx, v.qsd)
-	_ = os.RemoveAll(v.manager.runtimeDir(v.state.Key))
+	_ = m.stopQSD(ctx, v.qsd)
+	if v.nbd != nil && !deviceFreed {
+		name := v.nbd.name
+		deviceFreed = waitFor(ctx, spareReleaseTimeout, func() bool { return !m.nbdDeviceBusy(name) }) == nil
+	}
+	_ = os.RemoveAll(m.runtimeDir(v.state.Key))
 	_ = os.RemoveAll(v.dir)
+	return deviceFreed
 }
 
 func (m *Manager) takeSpare(size int64) *Volume {
@@ -135,8 +158,12 @@ func (m *Manager) takeSpare(size int64) *Volume {
 	return spare
 }
 
-// rememberSpareSize records size in spareSizesFile, most recent first.
+// rememberSpareSize records size in spareSizesFile, most recent first. Fresh
+// attaches for different keys run concurrently, so the read-modify-write is
+// serialized and the file is replaced atomically.
 func (m *Manager) rememberSpareSize(size int64) {
+	m.spareSizesMu.Lock()
+	defer m.spareSizesMu.Unlock()
 	sizes := append([]int64{size}, slices.DeleteFunc(m.rememberedSpareSizes(), func(s int64) bool { return s == size })...)
 	if len(sizes) > spareSizesKept {
 		sizes = sizes[:spareSizesKept]
@@ -145,7 +172,7 @@ func (m *Manager) rememberSpareSize(size int64) {
 	for i, s := range sizes {
 		lines[i] = strconv.FormatInt(s, 10)
 	}
-	_ = os.WriteFile(filepath.Join(m.root, spareSizesFile), []byte(strings.Join(lines, "\n")+"\n"), 0o600)
+	_ = writeFileAtomic(filepath.Join(m.root, spareSizesFile), []byte(strings.Join(lines, "\n")+"\n"))
 }
 
 func (m *Manager) rememberedSpareSizes() []int64 {
@@ -163,7 +190,7 @@ func (m *Manager) rememberedSpareSizes() []int64 {
 }
 
 // replenishSpares tops the pool for size up to spareTarget in the background.
-// One builder runs per size at a time.
+// One builder runs per size at a time; destroySpares cancels and joins them.
 func (m *Manager) replenishSpares(size int64) {
 	m.mu.Lock()
 	if m.closed || m.spareBuilds[size] || len(m.spares[size]) >= spareTarget {
@@ -171,9 +198,13 @@ func (m *Manager) replenishSpares(size int64) {
 		return
 	}
 	m.spareBuilds[size] = true
+	// Registered under the lock that destroySpares takes to set closed, so a
+	// builder is either counted before shutdown waits or never starts.
+	m.spareWG.Add(1)
 	m.mu.Unlock()
 
 	go func() {
+		defer m.spareWG.Done()
 		defer func() {
 			m.mu.Lock()
 			delete(m.spareBuilds, size)
@@ -189,9 +220,11 @@ func (m *Manager) replenishSpares(size int64) {
 			if m.freeNBDDevices() <= spareDeviceReserve {
 				return
 			}
-			spare, err := m.buildSpare(context.Background(), size)
+			spare, err := m.buildSpare(m.spareCtx, size)
 			if err != nil {
-				log.Warn().Err(err).Int64("size", size).Msg("failed to build spare qcow volume")
+				if m.spareCtx.Err() == nil {
+					log.Warn().Err(err).Int64("size", size).Msg("failed to build spare qcow volume")
+				}
 				return
 			}
 			m.mu.Lock()
@@ -231,6 +264,9 @@ func (m *Manager) buildSpare(ctx context.Context, size int64) (*Volume, error) {
 		freshHead: true,
 	}
 	if err := spare.start(ctx); err != nil {
+		// start creates the runtime directory before anything can fail, and
+		// spare keys are random, so a leftover would never be reused.
+		_ = os.RemoveAll(m.runtimeDir(key))
 		_ = os.RemoveAll(dir)
 		return nil, err
 	}
@@ -238,7 +274,8 @@ func (m *Manager) buildSpare(ctx context.Context, size int64) (*Volume, error) {
 }
 
 // reclaimSpare destroys one spare of any size to free its NBD device for a
-// real attach. It reports whether a spare was released.
+// real attach. It reports whether a device was actually freed; a spare whose
+// device the kernel refuses to release is gone but did not help.
 func (m *Manager) reclaimSpare() bool {
 	m.mu.Lock()
 	var victim *Volume
@@ -255,14 +292,23 @@ func (m *Manager) reclaimSpare() bool {
 		return false
 	}
 	log.Info().Str("volume", victim.state.Key).Msg("releasing spare qcow volume: nbd devices exhausted")
-	victim.destroy()
+	if !victim.destroy() {
+		log.Warn().Str("volume", victim.state.Key).Msg("released spare's nbd device is still connected")
+		return false
+	}
 	return true
 }
 
-// destroySpares empties the pool and stops replenishment.
+// destroySpares stops replenishment, waits for in-flight builders to exit,
+// and empties the pool. Nothing is left running when it returns.
 func (m *Manager) destroySpares() {
 	m.mu.Lock()
 	m.closed = true
+	m.mu.Unlock()
+	m.spareCancel()
+	m.spareWG.Wait()
+
+	m.mu.Lock()
 	spares := m.spares
 	m.spares = make(map[int64][]*Volume)
 	m.mu.Unlock()

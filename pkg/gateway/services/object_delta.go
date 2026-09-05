@@ -18,6 +18,17 @@ import (
 
 const objectDeltaSuffix = ".delta"
 
+// objectDeltaKey is where the delta archive for objectID relative to
+// baseObjectID is staged. The base is part of the key: two syncs can arrive
+// at the same content (hence the same object) from different previous syncs,
+// and their deltas are different archives. Under one key the later PUT would
+// replace the earlier delta before its commit, and that commit would merge
+// the wrong delta into its base and publish a bogus archive under the hash.
+// Two syncs from the same base carry equivalent deltas, so sharing is fine.
+func objectDeltaKey(objectID, baseObjectID string) string {
+	return path.Join(types.DefaultObjectPrefix, objectID+objectDeltaSuffix+"."+baseObjectID)
+}
+
 // CreateObjectDelta registers a new object whose archive will be produced by
 // merging a delta archive (added and modified files only) into the archive of
 // base_object_id, and hands back a presigned URL for the delta upload.
@@ -53,7 +64,7 @@ func (gws *GatewayService) CreateObjectDelta(ctx context.Context, in *pb.CreateO
 		}
 	}
 
-	presignedURL, err := storageClient.GeneratePresignedPutURL(ctx, path.Join(types.DefaultObjectPrefix, object.ExternalId+objectDeltaSuffix), defaultObjectPutExpirationS)
+	presignedURL, err := storageClient.GeneratePresignedPutURL(ctx, objectDeltaKey(object.ExternalId, in.BaseObjectId), defaultObjectPutExpirationS)
 	if err != nil {
 		return &pb.CreateObjectDeltaResponse{Ok: false, ErrorMsg: "Unable to generate presigned URL"}, nil
 	}
@@ -85,7 +96,7 @@ func (gws *GatewayService) CommitObjectDelta(ctx context.Context, in *pb.CommitO
 	}
 
 	baseKey := path.Join(types.DefaultObjectPrefix, in.BaseObjectId)
-	deltaKey := path.Join(types.DefaultObjectPrefix, object.ExternalId+objectDeltaSuffix)
+	deltaKey := objectDeltaKey(object.ExternalId, in.BaseObjectId)
 	targetKey := path.Join(types.DefaultObjectPrefix, object.ExternalId)
 
 	size, err := gws.mergeObjectDelta(ctx, storageClient, baseKey, deltaKey, targetKey, object.Hash, in.RemovedPaths)

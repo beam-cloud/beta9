@@ -2,8 +2,10 @@ package disk
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -358,8 +360,7 @@ func TestRecoverRebuildsSparesForRememberedSizes(t *testing.T) {
 	manager.Close(ctx)
 
 	// A restarted worker with the same root warms the pool during Recover.
-	restarted := &Manager{root: manager.root, binaries: manager.binaries, sysBlockPath: manager.sysBlockPath, devPath: manager.devPath,
-		run: manager.run, maxChainDepth: DefaultMaxChainDepth, volumes: map[string]*Volume{}, spares: map[int64][]*Volume{}, spareBuilds: map[int64]bool{}}
+	restarted := NewManager(Config{Root: manager.root, SysBlockPath: manager.sysBlockPath, DevPath: manager.devPath, Runner: host.run})
 	before := len(host.ran("mkfs.ext4"))
 	if err := restarted.Recover(ctx); err != nil {
 		t.Fatal(err)
@@ -369,4 +370,208 @@ func TestRecoverRebuildsSparesForRememberedSizes(t *testing.T) {
 		t.Fatalf("recover must build %d spares, ran %v", spareTarget, host.commands)
 	}
 	restarted.Close(ctx)
+}
+
+// pooledSpare builds one spare and places it in the pool so the next fresh
+// attach of that size adopts it.
+func pooledSpare(t *testing.T, manager *Manager) *Volume {
+	t.Helper()
+	spare, err := manager.buildSpare(context.Background(), testSpareSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.mu.Lock()
+	manager.spares[testSpareSize] = append(manager.spares[testSpareSize], spare)
+	manager.mu.Unlock()
+	return spare
+}
+
+func TestAdoptIndexResolvesUnderRelativeRoot(t *testing.T) {
+	base, err := os.MkdirTemp("", "qd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(base) })
+	t.Chdir(base)
+	sysBlock, dev := filepath.Join(base, "sys"), filepath.Join(base, "dev")
+	for i := 0; i < 2; i++ {
+		name := "nbd" + strconv.Itoa(i)
+		writeTestNBDDevice(t, sysBlock, name, "43:"+strconv.Itoa(i))
+		if err := os.WriteFile(filepath.Join(sysBlock, name, "size"), []byte(strconv.FormatInt(testSpareSize/sectorSize, 10)+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	host := &fakeHost{sysBlock: sysBlock}
+	manager := NewManager(Config{Root: "r", SysBlockPath: sysBlock, DevPath: dev, Runner: host.run})
+	spare := pooledSpare(t, manager)
+
+	volume, err := manager.Attach(context.Background(), AttachSpec{Key: "disk", VirtualSizeBytes: testSpareSize, Mountpoint: "mnt"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if volume != spare {
+		t.Fatal("attach must adopt the pooled spare")
+	}
+	if target, err := os.Readlink(manager.volumeDir("disk")); err != nil || target != filepath.Base(spare.dir) {
+		t.Fatalf("index must link to the sibling spare directory, got %q (%v)", target, err)
+	}
+	dir, err := manager.resolveVolumeDir("disk")
+	if want, _ := filepath.EvalSymlinks(spare.dir); err != nil || dir != want {
+		t.Fatalf("index must resolve to %s, got %s (%v)", want, dir, err)
+	}
+	manager.destroySpares()
+}
+
+func TestRememberSpareSizeSurvivesConcurrentAttaches(t *testing.T) {
+	manager, _ := newSpareTestManager(t)
+	if err := os.MkdirAll(manager.root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sizes := []int64{1 << 30, 2 << 30, 3 << 30, 4 << 30} // exactly spareSizesKept distinct sizes
+	var group sync.WaitGroup
+	for round := 0; round < 25; round++ {
+		for _, size := range sizes {
+			group.Add(1)
+			go func() {
+				defer group.Done()
+				manager.rememberSpareSize(size)
+			}()
+		}
+	}
+	group.Wait()
+
+	got := manager.rememberedSpareSizes()
+	if len(got) != len(sizes) {
+		t.Fatalf("concurrent records lost sizes: remembered %v", got)
+	}
+	for _, size := range sizes {
+		if !slices.Contains(got, size) {
+			t.Fatalf("size %d was lost: remembered %v", size, got)
+		}
+	}
+	if fileExists(filepath.Join(manager.root, spareSizesFile+".tmp")) {
+		t.Fatal("atomic write must not leave its temporary file behind")
+	}
+}
+
+func TestCloseWaitsForInFlightSpareBuild(t *testing.T) {
+	manager, host := newSpareTestManager(t)
+	formatting := make(chan struct{}, 1)
+	manager.run = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if name == "mkfs.ext4" {
+			select {
+			case formatting <- struct{}{}:
+			default:
+			}
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		return host.run(ctx, name, args...)
+	}
+	manager.replenishSpares(testSpareSize)
+	select {
+	case <-formatting:
+	case <-time.After(5 * time.Second):
+		t.Fatal("spare builder never reached mkfs")
+	}
+
+	if err := manager.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	manager.mu.Lock()
+	building, pooled := manager.spareBuilds[testSpareSize], len(manager.spares[testSpareSize])
+	manager.mu.Unlock()
+	if building || pooled != 0 {
+		t.Fatalf("Close returned with a builder running (%v) or spares pooled (%d)", building, pooled)
+	}
+	entries, _ := os.ReadDir(filepath.Join(manager.root, "volumes"))
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), sparePrefix) {
+			t.Fatalf("aborted spare build left %s behind", entry.Name())
+		}
+	}
+	if runs, _ := os.ReadDir(filepath.Join(manager.root, "run")); len(runs) != 0 {
+		t.Fatalf("aborted spare build left runtime directories behind: %d", len(runs))
+	}
+}
+
+func TestBuildSpareFailureLeavesNoRuntimeDir(t *testing.T) {
+	manager, host := newSpareTestManager(t)
+	manager.run = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if name == "mkfs.ext4" {
+			return nil, errors.New("mkfs failed")
+		}
+		return host.run(ctx, name, args...)
+	}
+	if _, err := manager.buildSpare(context.Background(), testSpareSize); err == nil {
+		t.Fatal("buildSpare must fail when mkfs fails")
+	}
+	if runs, _ := os.ReadDir(filepath.Join(manager.root, "run")); len(runs) != 0 {
+		t.Fatalf("failed spare build must remove its runtime directory, found %d", len(runs))
+	}
+	if volumes, _ := os.ReadDir(filepath.Join(manager.root, "volumes")); len(volumes) != 0 {
+		t.Fatalf("failed spare build must remove its volume directory, found %d", len(volumes))
+	}
+}
+
+func TestReclaimSpareReportsDeviceStillConnected(t *testing.T) {
+	manager, host := newSpareTestManagerWithDevices(t, 1)
+	spare := pooledSpare(t, manager)
+	manager.run = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if name == "nbd-client" && args[0] == "-d" {
+			return nil, errors.New("device is in use") // the kernel keeps the pid file
+		}
+		return host.run(ctx, name, args...)
+	}
+
+	if manager.reclaimSpare() {
+		t.Fatal("reclaim must not report a freed device while the kernel still holds it")
+	}
+	if got := spareCount(manager, testSpareSize); got != 0 {
+		t.Fatalf("the victim must leave the pool, pool = %d", got)
+	}
+	if fileExists(spare.dir) {
+		t.Fatal("the destroyed spare's directory must be removed")
+	}
+	if !manager.nbdDeviceBusy("nbd0") {
+		t.Fatal("test setup: the device was expected to stay connected")
+	}
+}
+
+func TestAdoptReplacesLeftoverRuntimeDir(t *testing.T) {
+	manager, _ := newSpareTestManager(t)
+	spare := pooledSpare(t, manager)
+	// A crash between adopt's runtime rename and its state save leaves the
+	// renamed directory behind under the real key with no record of it.
+	leftover := manager.runtimeDir("disk")
+	if err := os.MkdirAll(leftover, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(leftover, "stale"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	volume, err := manager.Attach(context.Background(), AttachSpec{Key: "disk", VirtualSizeBytes: testSpareSize, Mountpoint: filepath.Join(manager.root, "mnt")}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if volume != spare {
+		t.Fatal("a leftover runtime directory must not force a slow fresh build")
+	}
+	if fileExists(filepath.Join(leftover, "stale")) || !fileExists(filepath.Join(leftover, "qmp.sock")) {
+		t.Fatal("the adopted spare's runtime directory must replace the leftover")
+	}
+	manager.destroySpares()
+}
+
+func TestAttachRejectsReservedSpareKeys(t *testing.T) {
+	manager, _ := newSpareTestManager(t)
+	key := sparePrefix + "abc"
+	_, err := manager.Attach(context.Background(), AttachSpec{Key: key, VirtualSizeBytes: testSpareSize, Mountpoint: filepath.Join(manager.root, "mnt")}, nil)
+	if err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("attach with a spare-prefixed key must be rejected, got %v", err)
+	}
+	if fileExists(manager.volumeDir(key)) {
+		t.Fatal("a rejected key must not create a volume directory")
+	}
 }

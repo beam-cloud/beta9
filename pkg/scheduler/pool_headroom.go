@@ -5,17 +5,29 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
-// WorkerHoldsPoolHeadroom reports whether the pool's free capacity would fall
-// below its configured minimum (poolSizing.minFree*) if worker went away.
+// WorkerHoldsPoolHeadroom reports whether worker is one of the workers that
+// together keep the pool's free capacity at its configured minimum
+// (poolSizing.minFree*), and so must not idle out.
 //
 // The sizer adds a worker whenever free capacity is under the minimum, and an
 // idle worker exits after its spindown timeout. Together those make the
 // headroom worker cycle: it idles out, the sizer notices and starts another,
 // and every request that lands in the ~4 s between pays a worker cold boot.
-// The keepalive reply carries this so the worker holding the headroom stays.
+// The keepalive reply carries this so the workers holding the headroom stay.
+//
+// Which workers hold it is decided without coordination: ready workers are
+// taken in id order and a worker holds headroom while the workers ahead of it
+// do not cover the minimum on their own. Every worker evaluating the same
+// pool state thus lands on the same set, and that set always covers the
+// minimum when the pool does. Asking instead "is the pool still fine without
+// me?" lets two idle workers each count the other and both leave at once.
 //
 // Only ready workers count as capacity here: a pending replacement is not yet
 // able to take a container, so the incumbent must stay until it is.
+//
+// A failed worker lookup answers true: an idle worker that stays one keepalive
+// longer costs nothing, while one that leaves on a bad read leaves the pool
+// cold.
 func WorkerHoldsPoolHeadroom(workerRepo repository.WorkerRepository, config types.AppConfig, worker *types.Worker) bool {
 	if worker == nil || worker.PoolName == "" {
 		return false
@@ -35,17 +47,17 @@ func WorkerHoldsPoolHeadroom(workerRepo repository.WorkerRepository, config type
 
 	workers, err := workerRepo.GetAllWorkersInPool(worker.PoolName)
 	if err != nil {
-		return false
+		return true
 	}
-	return freeCapacityWithout(workers, worker.Id).belowMinimum(sizing)
+	return freeCapacityAhead(workers, worker.Id).belowMinimum(sizing)
 }
 
-// freeCapacityWithout sums the free capacity of the ready workers in workers,
-// leaving out the one with id excluded (and pending or disabled workers).
-func freeCapacityWithout(workers []*types.Worker, excluded string) *WorkerPoolCapacity {
+// freeCapacityAhead sums the free capacity of the ready workers in workers
+// whose id orders before id (pending and disabled workers are left out).
+func freeCapacityAhead(workers []*types.Worker, id string) *WorkerPoolCapacity {
 	capacity := &WorkerPoolCapacity{}
 	for _, w := range workers {
-		if w.Id == excluded || w.Status == types.WorkerStatusDisabled || w.Status == types.WorkerStatusPending {
+		if w.Id >= id || w.Status == types.WorkerStatusDisabled || w.Status == types.WorkerStatusPending {
 			continue
 		}
 		capacity.FreeCpu += w.FreeCpu

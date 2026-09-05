@@ -661,3 +661,22 @@ func TestMkdirBindSourceHandlesExistingFreshAndDeepPaths(t *testing.T) {
 		require.True(t, info.IsDir())
 	}
 }
+
+// A regular file at the source path makes Mkdir fail with EEXIST just like an
+// existing directory does; it must not be reported as a usable directory.
+func TestMkdirBindSourceRejectsExistingFile(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "file")
+	require.NoError(t, os.WriteFile(file, []byte("x"), 0o644))
+
+	err := mkdirBindSource(file, 0755)
+	require.Error(t, err)
+	require.ErrorIs(t, err, syscall.ENOTDIR)
+
+	// A symlink to a directory is still a directory for a bind mount.
+	dir := filepath.Join(root, "dir")
+	require.NoError(t, os.Mkdir(dir, 0755))
+	link := filepath.Join(root, "link")
+	require.NoError(t, os.Symlink(dir, link))
+	require.NoError(t, mkdirBindSource(link, 0755))
+}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net"
 	"os"
@@ -750,9 +751,16 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	// Publishing the address map is a gateway round trip that needs only the
 	// reserved host ports. It runs from here through spec generation, network
 	// setup, and the runtime start, and is joined before RUNNING is published.
-	addressesRegistered := make(chan error, 1)
-	go func() {
-		addressesRegistered <- s.registerContainerPorts(ctx, request, startupPortBindings)
+	addressesRegistered := newAddressRegistration(func() error {
+		return s.registerContainerPorts(ctx, request, startupPortBindings)
+	})
+	defer func() {
+		if !portsHandedOff {
+			// A failure from here on is followed by the container's state being
+			// deleted, which also removes its address map; the publication has
+			// to land first so that deletion does not leave it behind.
+			addressesRegistered.waitForTeardown()
+		}
 	}()
 
 	opts := &ContainerOptions{
@@ -1477,11 +1485,25 @@ const sdkMountSource = "/workspace/sdk"
 // filesystem, not the writable overlay, so a checkpoint and its restore see
 // the same mount set whatever the container wrote in between.
 func pruneUnreachableSDKMounts(mounts []specs.Mount, imageRoot string) []specs.Mount {
+	return pruneUnreachableSDKMountsWithStat(mounts, imageRoot, os.Stat)
+}
+
+func pruneUnreachableSDKMountsWithStat(mounts []specs.Mount, imageRoot string, stat func(string) (os.FileInfo, error)) []specs.Mount {
 	kept := mounts[:0:0]
 	for _, mount := range mounts {
 		if mount.Source == sdkMountSource {
-			if _, err := os.Stat(filepath.Join(imageRoot, filepath.Dir(mount.Destination))); err != nil {
+			sitePackages := filepath.Join(imageRoot, filepath.Dir(mount.Destination))
+			_, err := stat(sitePackages)
+			switch {
+			case err == nil:
+			case errors.Is(err, fs.ErrNotExist), errors.Is(err, syscall.ENOTDIR):
+				// Definitely absent (or a path component is a file).
 				continue
+			default:
+				// Only a definite absence justifies dropping a mount the SDK
+				// depends on. Anything else (EACCES, EIO from a lazily loaded
+				// image) keeps it and lets the runtime report the real problem.
+				log.Warn().Err(err).Str("path", sitePackages).Msg("could not check SDK mount destination; keeping mount")
 			}
 		}
 		kept = append(kept, mount)
@@ -1588,6 +1610,9 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	defer func() {
 		s.finalizeContainer(containerId, request, exitCode, exitReported)
 	}()
+	// Runs before finalizeContainer: a start that fails before the runtime
+	// joined the publication must still not delete state underneath it.
+	defer opts.AddressesRegistered.waitForTeardown()
 
 	// Create overlayfs for container
 	overlay := s.createOverlay(request, opts.BundlePath)
@@ -2009,7 +2034,7 @@ func eventStopReason(stopReason types.StopContainerReason) string {
 // runContainer drives the runtime from start to exit. addressesRegistered
 // delivers the result of the concurrent address-map publication; RUNNING is
 // only published once the container is reachable.
-func (s *Worker) runContainer(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, outputWriter *common.OutputWriter, startedChan chan int, checkpointPIDChan chan int, startupStartedAt time.Time, addressesRegistered <-chan error, filesystemRestore *checkpointFilesystemRestore) (int, error) {
+func (s *Worker) runContainer(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, outputWriter *common.OutputWriter, startedChan chan int, checkpointPIDChan chan int, startupStartedAt time.Time, addressesRegistered *addressRegistration, filesystemRestore *checkpointFilesystemRestore) (int, error) {
 	phaseStart := time.Now()
 	releaseStartupSlot := func() {}
 	if s.containerStartSem != nil {
@@ -2115,11 +2140,7 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 			}
 		})
 		joinAddresses.Do(func() {
-			select {
-			case addressesErr = <-addressesRegistered:
-			case <-ctx.Done():
-				addressesErr = ctx.Err()
-			}
+			addressesErr = addressesRegistered.wait(ctx)
 		})
 		if errors.Is(addressesErr, context.Canceled) {
 			return

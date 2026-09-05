@@ -399,3 +399,87 @@ func TestDiskWriteGuardEvictsBeforeRefusingAStore(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, store.Exists(hash))
 }
+
+// Pressure found by the startup accounting pass, before any write has run the
+// guard, must be evicted by the first write like any other pressure.
+func TestDiskWriteGuardEvictsStartupPressure(t *testing.T) {
+	store := newTestStore(t, 5)
+	store.serverConfig.DiskCacheMaxUsagePct = 0.95
+	store.serverConfig.DiskCacheEvictWatermarkPct = 0.80
+
+	old := addEvictionTestContent(t, store, "stale content nobody has read in a while", time.Now().Add(-time.Hour))
+
+	prev := statDiskUsage
+	statDiskUsage = func(string) (diskUsageSnapshot, error) {
+		if !store.Exists(old) {
+			return diskUsageSnapshot{totalBytes: 1000, usedBytes: 700, availableBytes: 300, usagePct: 0.70}, nil
+		}
+		return diskUsageSnapshot{totalBytes: 1000, usedBytes: 960, availableBytes: 40, usagePct: 0.96}, nil
+	}
+	t.Cleanup(func() { statDiskUsage = prev })
+
+	// What StartDiskMonitor leaves behind on a host that restarts over the
+	// limit: the gate set, no guard check on record yet.
+	store.lastDiskGuardCheckNanos.Store(0)
+	_, err := store.refreshDiskCacheUsage(false)
+	require.NoError(t, err)
+	require.True(t, store.diskCachedUsageExceeded)
+
+	require.True(t, store.diskWriteAllowed())
+	require.False(t, store.Exists(old))
+}
+
+// A write that finds an eviction pass already running waits for it and goes
+// through on the room it made, rather than failing on the stale gate.
+func TestDiskWriteGuardConcurrentWritersWaitForInflightEviction(t *testing.T) {
+	store := newTestStore(t, 5)
+	store.serverConfig.DiskCacheMaxUsagePct = 0.95
+	store.serverConfig.DiskCacheEvictWatermarkPct = 0.80
+
+	old := addEvictionTestContent(t, store, "stale content nobody has read in a while", time.Now().Add(-time.Hour))
+
+	// The first stat taken by an evicting pass blocks until released, holding
+	// the pass (and the guard) open.
+	evictingStat := make(chan struct{})
+	release := make(chan struct{})
+	var evictPasses int
+	prev := statDiskUsage
+	statDiskUsage = func(string) (diskUsageSnapshot, error) {
+		if store.evictMu.TryLock() {
+			store.evictMu.Unlock()
+		} else if store.Exists(old) {
+			evictPasses++
+			if evictPasses == 1 {
+				close(evictingStat)
+				<-release
+			}
+		}
+		if !store.Exists(old) {
+			return diskUsageSnapshot{totalBytes: 1000, usedBytes: 700, availableBytes: 300, usagePct: 0.70}, nil
+		}
+		return diskUsageSnapshot{totalBytes: 1000, usedBytes: 960, availableBytes: 40, usagePct: 0.96}, nil
+	}
+	t.Cleanup(func() { statDiskUsage = prev })
+
+	_, err := store.refreshDiskCacheUsage(false)
+	require.NoError(t, err)
+	require.True(t, store.diskCachedUsageExceeded)
+
+	first := make(chan bool, 1)
+	go func() { first <- store.diskWriteAllowed() }()
+	<-evictingStat
+
+	second := make(chan bool, 1)
+	go func() { second <- store.diskWriteAllowed() }()
+	select {
+	case allowed := <-second:
+		t.Fatalf("second writer answered %v while the eviction was still running", allowed)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(release)
+	require.True(t, <-first)
+	require.True(t, <-second)
+	require.False(t, store.Exists(old))
+	require.Equal(t, 1, evictPasses, "the waiting writer must not start a second eviction pass")
+}

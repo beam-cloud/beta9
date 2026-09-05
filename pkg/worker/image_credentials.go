@@ -111,11 +111,17 @@ func (p *gatewayRegistryCredentialProvider) GetCredentials(ctx context.Context, 
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if creds != nil && creds.registryCredentials != "" && creds.fetchedAt.After(p.credentialsAt) {
-		if provider := p.client.parseAndCreateProvider(ctx, creds.registryCredentials, p.registry, p.imageID, "gateway-vended"); provider != nil {
-			p.provider = provider
-			p.credentialsAt = creds.fetchedAt
+	if creds != nil && creds.fetchedAt.After(p.credentialsAt) {
+		// A newer answer from the gateway replaces whatever was cached,
+		// including an answer with no credentials: they were revoked or have
+		// expired, so the fallback must take over rather than the stale
+		// provider being reused. A failed fetch (creds == nil) keeps the
+		// cached provider, since nothing newer is known.
+		p.provider = nil
+		if creds.registryCredentials != "" {
+			p.provider = p.client.parseAndCreateProvider(ctx, creds.registryCredentials, p.registry, p.imageID, "gateway-vended")
 		}
+		p.credentialsAt = creds.fetchedAt
 	}
 	if p.provider == nil {
 		if p.fallback == nil {

@@ -2,6 +2,7 @@ package apiv1
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"sort"
 	"strings"
@@ -220,7 +221,7 @@ func containerMetricRangeFromContext(ctx echo.Context, defaultInterval string) (
 	case "1m", "minute", "1h", "hour":
 		return start, end, interval, nil
 	default:
-		return time.Time{}, time.Time{}, "", errors.New("Invalid metrics interval")
+		return time.Time{}, time.Time{}, "", fmt.Errorf("Invalid metrics interval %q: expected 1m or 1h", interval)
 	}
 }
 

@@ -47,6 +47,13 @@ func streamSSE(ctx echo.Context, stream repository.EventStream, encode sseEncode
 			flusher.Flush()
 		}
 	}
+	// send writes one event and pushes it to the wire; the error only tells
+	// the caller the client is gone.
+	send := func(name, id string, payload []byte) error {
+		err := writeSSEEvent(response.Writer, name, id, payload)
+		flush()
+		return err
+	}
 	if _, err := fmt.Fprint(response.Writer, ": connected\n\n"); err != nil {
 		return nil
 	}
@@ -72,16 +79,14 @@ func streamSSE(ctx echo.Context, stream repository.EventStream, encode sseEncode
 		case <-done:
 			return nil
 		case <-keepalive.C:
-			if err := writeSSEEvent(response.Writer, sseKeepaliveEvent, "", nil); err != nil {
+			if err := send(sseKeepaliveEvent, "", nil); err != nil {
 				return nil
 			}
-			flush()
 		case record, more := <-records:
 			if !more {
 				if err := stream.Err(); err != nil && ctx.Request().Context().Err() == nil {
 					payload, _ := json.Marshal(map[string]string{"error": err.Error()})
-					_ = writeSSEEvent(response.Writer, "error", "", payload)
-					flush()
+					_ = send("error", "", payload)
 				}
 				return nil
 			}
@@ -89,10 +94,9 @@ func streamSSE(ctx echo.Context, stream repository.EventStream, encode sseEncode
 			if !ok {
 				continue
 			}
-			if err := writeSSEEvent(response.Writer, name, strconv.FormatUint(record.SeqNum, 10), payload); err != nil {
+			if err := send(name, strconv.FormatUint(record.SeqNum, 10), payload); err != nil {
 				return nil
 			}
-			flush()
 		}
 	}
 }

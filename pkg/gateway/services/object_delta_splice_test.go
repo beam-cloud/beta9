@@ -28,6 +28,7 @@ type memSpliceStore struct {
 	streamed  int64 // bytes read or written through the caller
 	aborted   int
 	failParts bool
+	onFail    func() // runs when an injected part failure fires
 }
 
 type memUpload struct {
@@ -57,6 +58,10 @@ func (m *memSpliceStore) ReadRange(_ context.Context, key string, offset, length
 	if !ok {
 		return nil, fmt.Errorf("no such object %q", key)
 	}
+	if length <= 0 {
+		// S3 rejects an empty range (bytes=0--1 is not a valid range).
+		return nil, fmt.Errorf("invalid range %d+%d on %q", offset, length, key)
+	}
 	if offset < 0 || offset+length > int64(len(data)) {
 		return nil, fmt.Errorf("range %d+%d outside %q (%d bytes)", offset, length, key, len(data))
 	}
@@ -76,6 +81,9 @@ func (m *memSpliceStore) CopyPart(_ context.Context, key, uploadID string, partN
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.failParts {
+		if m.onFail != nil {
+			m.onFail()
+		}
 		return "", fmt.Errorf("injected copy failure")
 	}
 	src, ok := m.objects[sourceKey]
@@ -116,7 +124,11 @@ func (m *memSpliceStore) CompleteUpload(_ context.Context, key, uploadID string,
 	return nil
 }
 
-func (m *memSpliceStore) AbortUpload(_ context.Context, key, uploadID string) error {
+func (m *memSpliceStore) AbortUpload(ctx context.Context, key, uploadID string) error {
+	// Like the real client: a request on a canceled context never goes out.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.aborted++
@@ -249,6 +261,49 @@ func TestSpliceZipObjectsAbortsUploadOnFailure(t *testing.T) {
 	require.Equal(t, 1, store.aborted)
 	require.Empty(t, store.uploads)
 	require.NotContains(t, store.objects, "m")
+}
+
+func TestSpliceZipObjectsAbortsUploadWhenRequestContextIsCanceled(t *testing.T) {
+	// The request being canceled mid-upload is itself a failure mode; the
+	// abort still has to reach the store or the parts linger in the bucket.
+	const minPart = 1024
+	base := zipBytes(t, []struct{ name, content string }{{"a", strings.Repeat("a", 4*minPart)}, {"b", "b"}}, zip.Store)
+	delta := zipBytes(t, []struct{ name, content string }{{"b", "b2"}}, zip.Store)
+	store := newMemSpliceStore(minPart)
+	store.objects["b"] = base
+	store.objects["d"] = delta
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	store.failParts = true
+	store.onFail = cancel
+
+	_, err := spliceZipObjects(ctx, store, "b", "d", "m", nil, nil, minPart)
+	require.Error(t, err)
+	require.Equal(t, 1, store.aborted)
+	require.Empty(t, store.uploads)
+}
+
+func TestSpliceZipObjectsWithRemovalsOnlyDelta(t *testing.T) {
+	// Deleting files and syncing sends an empty delta archive: just an end
+	// record, zero-length central directory. That must splice, not fall back
+	// to downloading and re-uploading the whole base.
+	const minPart = 1024
+	base := zipBytes(t, []struct{ name, content string }{
+		{"keep", strings.Repeat("k", 4*minPart)},
+		{"gone", strings.Repeat("g", 2*minPart)},
+	}, zip.Store)
+	delta := zipBytes(t, nil, zip.Store)
+	require.Len(t, delta, zipEndOfCentralDirFixedLen)
+
+	store := newMemSpliceStore(minPart)
+	store.objects["b"] = base
+	store.objects["d"] = delta
+	size, err := spliceZipObjects(context.Background(), store, "b", "d", "m", []string{"gone"}, nil, minPart)
+	require.NoError(t, err)
+	require.Equal(t, int64(len(store.objects["m"])), size)
+	require.Equal(t, map[string]string{"keep": strings.Repeat("k", 4*minPart)}, readZip(t, store.objects["m"]))
+	require.Zero(t, store.aborted)
 }
 
 func TestParseZipDirectoryRejectsNonZip(t *testing.T) {

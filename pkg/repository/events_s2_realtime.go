@@ -1274,7 +1274,9 @@ func (a *metricsBucketAccumulator) bucket() types.MetricsAggregationBucket {
 	samples := func(c *containerMetricsAccumulator) int { return c.count }
 	rateSamples := func(c *containerMetricsAccumulator) int { return c.rateCount }
 	gpuSamples := func(c *containerMetricsAccumulator) int {
-		if c.gpuCount > 0 || c.gpuMemoryUsed > 0 {
+		// An idle GPU reports total memory with zero used; a legacy sample
+		// without gpu_count still has a GPU when it reports either.
+		if c.gpuCount > 0 || c.gpuMemoryUsed > 0 || c.gpuMemoryTotal > 0 {
 			return c.count
 		}
 		return 0

@@ -65,7 +65,7 @@ CMD serve --port 8080
 func TestParseDockerfilePlanExpandsVariables(t *testing.T) {
 	// As in Docker, pairs on one ENV line see the environment from before
 	// that line: SAME is empty here, and only the next line sees A.
-	text := "FROM alpine\nENV A=1 SAME=${A}x\nENV B=${A}x C=${MISSING:-def} D=${A:+alt} E=$A$B\nARG V=2\nENV F=$V\nWORKDIR /w/$A\nCOPY --chown=1:1 src/$A dst\n"
+	text := "FROM alpine\nENV A=1 SAME=${A}x\nENV B=${A}x C=${MISSING:-def} D=${A:+alt} E=$A$B\nARG V=2\nENV F=$V\nWORKDIR /w/$A\nCOPY --chown=$A:$V --chmod=${MODE:-755} src/$A dst\n"
 	plan, err := parseDockerfilePlan(text, nil)
 	require.NoError(t, err)
 	require.Equal(t, []envPair{{key: "A", value: "1", set: true}, {key: "SAME", value: "x", set: true}}, plan.steps[0].pairs)
@@ -79,9 +79,39 @@ func TestParseDockerfilePlanExpandsVariables(t *testing.T) {
 	require.Equal(t, "/w/1", plan.steps[4].value)
 	copyStep := plan.steps[5]
 	require.Equal(t, stepCopy, copyStep.kind)
-	require.Equal(t, "1:1", copyStep.chown)
+	require.Equal(t, "1:2", copyStep.chown, "flag values expand like operands")
+	require.Equal(t, "755", copyStep.chmod)
 	require.Equal(t, []string{"src/1"}, copyStep.sources)
 	require.Equal(t, "dst", copyStep.dest)
+}
+
+func TestParseDockerfilePlanScopesGlobalArgs(t *testing.T) {
+	// An ARG before FROM serves FROM only; a bare redeclaration in the stage
+	// inherits its value, and a supplied build arg wins over both.
+	text := "ARG TAG=3.12\nARG HIDDEN=secret\nFROM python:$TAG\nENV A=$HIDDEN-$TAG\nARG TAG\nENV B=$TAG\nARG OTHER\nENV C=$OTHER\n"
+	plan, err := parseDockerfilePlan(text, map[string]string{"OTHER": "given"})
+	require.NoError(t, err)
+	require.Equal(t, "python:3.12", plan.from)
+	require.Len(t, plan.steps, 5, "global ARGs are not build steps")
+	require.Equal(t, []envPair{{key: "A", value: "-", set: true}}, plan.steps[0].pairs, "global ARGs are invisible until redeclared")
+	require.Equal(t, stepArg, plan.steps[1].kind)
+	require.Equal(t, []envPair{{key: "TAG", value: "3.12", set: true}}, plan.steps[1].pairs)
+	require.Equal(t, []envPair{{key: "B", value: "3.12", set: true}}, plan.steps[2].pairs)
+	require.Equal(t, []envPair{{key: "OTHER", value: "given", set: true}}, plan.steps[3].pairs)
+	require.Equal(t, []envPair{{key: "C", value: "given", set: true}}, plan.steps[4].pairs)
+
+	plan, err = parseDockerfilePlan("ARG TAG=3.12\nFROM python:$TAG\n", map[string]string{"TAG": "3.13"})
+	require.NoError(t, err)
+	require.Equal(t, "python:3.13", plan.from)
+}
+
+func TestParseDockerfilePlanSplitsInstructionsOnTabs(t *testing.T) {
+	plan, err := parseDockerfilePlan("FROM\talpine\nRUN\techo hi\nENV\tA=1\tB=2\nWORKDIR\t/app\n", nil)
+	require.NoError(t, err)
+	require.Equal(t, "alpine", plan.from)
+	require.Equal(t, "echo hi", plan.steps[0].shell)
+	require.Equal(t, []envPair{{key: "A", value: "1", set: true}, {key: "B", value: "2", set: true}}, plan.steps[1].pairs)
+	require.Equal(t, "/app", plan.steps[2].value)
 }
 
 func TestParseDockerfilePlanRejectsWhatItCannotRun(t *testing.T) {
@@ -100,6 +130,8 @@ func TestParseDockerfilePlanRejectsWhatItCannotRun(t *testing.T) {
 		"unknown":      "FROM a\nFROB x\n",
 		"unterminated": "FROM a\nENV A=\"b\n",
 		"copy-json":    "FROM a\nCOPY [\"x\", \"y\"]\n",
+		// Resolves against the base image's working directory, unknown here.
+		"relative-workdir": "FROM a\nWORKDIR app\n",
 	} {
 		_, err := parseDockerfilePlan(text, nil)
 		require.ErrorIs(t, err, errDockerfileUnsupported, name)

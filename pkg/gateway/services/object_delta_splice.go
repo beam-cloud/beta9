@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -251,6 +252,12 @@ type rangeReaderAt struct {
 }
 
 func (r *rangeReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	if len(p) == 0 {
+		// An archive with no entries has an empty central directory; a
+		// zero-length HTTP range (bytes=0--1) is invalid and would fail the
+		// splice for every delta that only removes files.
+		return 0, nil
+	}
 	if off >= r.size {
 		return 0, io.EOF
 	}
@@ -343,14 +350,23 @@ func spliceZipObjects(ctx context.Context, store spliceStore, baseKey, deltaKey,
 		})
 	}
 	if err := group.Wait(); err != nil {
-		_ = store.AbortUpload(ctx, targetKey, uploadID)
+		abortSpliceUpload(ctx, store, targetKey, uploadID)
 		return 0, err
 	}
 	if err := store.CompleteUpload(ctx, targetKey, uploadID, etags); err != nil {
-		_ = store.AbortUpload(ctx, targetKey, uploadID)
+		abortSpliceUpload(ctx, store, targetKey, uploadID)
 		return 0, fmt.Errorf("complete upload: %w", err)
 	}
 	return size, nil
+}
+
+// abortSpliceUpload discards a failed multipart upload. The failure may be
+// the request context being canceled, in which case an abort on that context
+// never reaches the store and the parts linger; run it detached and bounded.
+func abortSpliceUpload(ctx context.Context, store spliceStore, key, uploadID string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	_ = store.AbortUpload(ctx, key, uploadID)
 }
 
 const (

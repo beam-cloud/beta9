@@ -195,7 +195,18 @@ func (c *ContainerMountManager) ensureBindMountSourceDirsWithOps(ctx context.Con
 func mkdirBindSource(localPath string, perm os.FileMode) error {
 	err := os.Mkdir(localPath, perm)
 	switch {
-	case err == nil, errors.Is(err, fs.ErrExist):
+	case err == nil:
+		return nil
+	case errors.Is(err, fs.ErrExist):
+		// EEXIST covers a regular file too, which cannot back a bind mount;
+		// report it the way os.MkdirAll does instead of claiming success.
+		info, statErr := os.Stat(localPath)
+		if statErr != nil {
+			return statErr
+		}
+		if !info.IsDir() {
+			return &os.PathError{Op: "mkdir", Path: localPath, Err: syscall.ENOTDIR}
+		}
 		return nil
 	case errors.Is(err, fs.ErrNotExist):
 		return os.MkdirAll(localPath, perm)

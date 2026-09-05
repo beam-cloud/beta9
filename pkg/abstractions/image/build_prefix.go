@@ -52,14 +52,40 @@ func dockerfileLines(dockerfile string) []string {
 }
 
 // prefixReusable reports whether opts describe a Dockerfile the gateway
-// rendered (custom Dockerfiles may span lines and are left alone).
+// rendered. Custom Dockerfiles are left alone: they may span lines, carry
+// several stages or ONBUILD triggers, none of which survive being cut at a
+// line boundary and re-based on another image.
 func (b *Builder) prefixReusable(opts *BuildOpts) bool {
 	return b.rdb != nil &&
 		opts.ClipVersion == uint32(types.ClipVersion2) &&
 		opts.Dockerfile != "" &&
 		opts.BaseImageName != "" &&
 		b.config.ImageService.BuildRegistry != "" &&
-		b.config.ImageService.BuildRepositoryName != ""
+		b.config.ImageService.BuildRepositoryName != "" &&
+		renderedDockerfile(opts)
+}
+
+// renderedDockerfile reports whether opts.Dockerfile has the shape
+// RenderV2Dockerfile produces: FROM the resolved base image, then one
+// instruction per line with no comments, continuations or further stages.
+// The base image fields alone do not tell a rendered Dockerfile from a custom
+// one, since base image pinning fills them in for custom Dockerfiles too.
+func renderedDockerfile(opts *BuildOpts) bool {
+	lines := dockerfileLines(opts.Dockerfile)
+	if len(lines) == 0 || lines[0] != "FROM "+getSourceImage(opts) {
+		return false
+	}
+	for _, line := range lines[1:] {
+		if line != strings.TrimLeft(line, " \t") || strings.HasSuffix(line, "\\") || strings.HasPrefix(line, "#") {
+			return false
+		}
+		instr, _, _ := strings.Cut(line, " ")
+		switch strings.ToUpper(instr) {
+		case "FROM", "ONBUILD":
+			return false
+		}
+	}
+	return true
 }
 
 // reuseBuiltPrefix looks for the longest already-built prefix of opts'

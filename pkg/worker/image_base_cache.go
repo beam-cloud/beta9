@@ -95,11 +95,17 @@ func (c *ImageClient) baseImage(ctx context.Context, request *types.ContainerReq
 	var cached []cachedLayer
 	var missing []v1.Descriptor
 	for i, layer := range manifest.Layers {
+		// The layout written from the cache files blobs under sha256/, so a
+		// layer addressed by another algorithm is only usable by pulling it.
+		if layer.Digest.Algorithm != "sha256" {
+			missing = append(missing, layer)
+			continue
+		}
 		if size, ok := lookup(layer.Digest.Hex); ok && size == layer.Size {
 			cached = append(cached, cachedLayer{desc: layer, hash: layer.Digest.Hex, size: size, compressed: true})
 			continue
 		}
-		if i < len(config.RootFS.DiffIDs) {
+		if i < len(config.RootFS.DiffIDs) && config.RootFS.DiffIDs[i].Algorithm == "sha256" {
 			diffID := config.RootFS.DiffIDs[i]
 			if size, ok := lookup(diffID.Hex); ok {
 				cached = append(cached, cachedLayer{desc: layer, hash: diffID.Hex, size: size})
@@ -144,7 +150,7 @@ func (c *ImageClient) warmBaseImageLayers(ctx context.Context, request *types.Co
 	var bytes int64
 	for _, desc := range missing {
 		layer, ok := byDigest[desc.Digest]
-		if !ok || ctx.Err() != nil {
+		if !ok || ctx.Err() != nil || desc.Digest.Algorithm != "sha256" {
 			continue
 		}
 		path := filepath.Join(dir, desc.Digest.Hex)

@@ -782,8 +782,9 @@ class Image(BaseAbstraction):
 
         Parameters:
             local_path: Directory to add, relative to the working directory.
-            remote_path: Where it appears in the container. Defaults to
-                `/mnt/code/<local_path>`, where synced files are mounted.
+            remote_path: Where it appears in the container. With `copy=False`
+                it defaults to `/mnt/code/<local_path>`, where synced files are
+                mounted; `copy=True` requires it.
             copy: Copy the files into the image at build time instead of
                 mounting them at run time.
 
@@ -812,24 +813,35 @@ class Image(BaseAbstraction):
             raise ValueError(f"{local_path} is not a directory.")
         if not is_dir and not os.path.isfile(local_path):
             raise ValueError(f"{local_path} is not a file.")
+        if remote_path is None and copy:
+            raise ValueError("remote_path is required with copy=True.")
 
-        self.include_files_patterns.append(f"{rel}/**" if is_dir else rel)
+        # The working directory itself is every synced file, as in add_local_path.
+        self.include_files_patterns.append(("*" if rel == "." else f"{rel}/**") if is_dir else rel)
         mounted = f"/mnt/code/{rel}" if rel != "." else "/mnt/code"
         if remote_path is None:
-            if copy:
-                raise ValueError("remote_path is required with copy=True.")
             return self
 
         remote = shlex.quote(remote_path)
         parent = shlex.quote(os.path.dirname(remote_path.rstrip("/")) or "/")
+        src = shlex.quote(mounted)
         if copy:
-            src = shlex.quote(mounted)
             if is_dir:
-                command = f"mkdir -p {remote} && cp -a {src}/. {remote}/"
+                # Only files are synced, so a directory with none to sync is
+                # absent from the mount; it still becomes an empty remote_path.
+                command = f"mkdir -p {remote} && if [ -d {src} ]; then cp -a {src}/. {remote}/; fi"
             else:
                 command = f"mkdir -p {parent} && cp -a {src} {remote}"
         else:
-            command = f"mkdir -p {parent} && ln -sfn {shlex.quote(mounted)} {remote}"
+            # ln -n keeps an existing symlink from being followed, but an
+            # existing (empty) directory would still be linked into; make
+            # remote_path itself the link, and let a non-empty one fail
+            # loudly rather than be replaced.
+            command = (
+                f"mkdir -p {parent} && "
+                f"if [ -d {remote} ] && [ ! -L {remote} ]; then rmdir {remote}; fi && "
+                f"ln -sfn {src} {remote}"
+            )
         self.build_steps.append(BuildStep(command=command, type="shell"))
         return self
 

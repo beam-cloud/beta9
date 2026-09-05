@@ -94,11 +94,19 @@ class TestIncrementalSync(TestCase):
         self.puts = []
 
         self.part_bodies = {}
+        self.part_attempts = {}
+        self.part_failures = {}  # url -> how many attempts fail with 503 first
+        self.put_kwargs = []
 
-        def fake_put(url, data=None, headers=None):
+        def fake_put(url, data=None, headers=None, **kwargs):
+            self.put_kwargs.append(kwargs)
             resp = MagicMock()
             resp.status_code = 200
             if isinstance(data, bytes):  # a multipart part
+                self.part_attempts[url] = self.part_attempts.get(url, 0) + 1
+                if self.part_failures.get(url, 0) >= self.part_attempts[url]:
+                    resp.status_code = 503
+                    return resp
                 self.part_bodies[url] = data
                 resp.headers = {"ETag": f'"etag-{len(self.part_bodies)}"'}
                 return resp
@@ -157,8 +165,9 @@ class TestIncrementalSync(TestCase):
         self.assertTrue(result.success)
         self.assertEqual(len(gw.deltas), 1, "the change goes up as a delta")
         self.assertEqual(gw.deltas[0].base_object_id, "obj-1")
-        self.assertEqual(len(gw.created), 2, "only the empty sync-nothing object, no second full upload")
-
+        self.assertEqual(
+            len(gw.created), 2, "only the empty sync-nothing object, no second full upload"
+        )
 
     def test_first_sync_uploads_everything_and_seeds_cache(self):
         gw = _FakeGateway()
@@ -177,6 +186,12 @@ class TestIncrementalSync(TestCase):
         cache = _SyncCache.load(self.root, [])
         self.assertEqual(cache.object_id, "obj-1")
         self.assertEqual(len(cache.manifest.entries), 6)
+        # The object record's size is the archive's byte length, like the
+        # stream and delta paths record it, not the uncompressed file total.
+        req = gw.created[0]
+        self.assertEqual(req.size, req.multipart_total_size)
+        self.assertEqual(req.object_metadata.size, req.multipart_total_size)
+        self.assertNotEqual(req.size, 5 * 10000 + len("print(1)\n"))
 
     def test_large_full_upload_goes_as_concurrent_parts(self):
         gw = _FakeGateway(part_size=20000)
@@ -298,6 +313,71 @@ class TestIncrementalSync(TestCase):
             (self.root / "main.py").write_text("print(4)\n")
             self._sync(gw)
             self.assertEqual(calc.call_count, 1)
+
+    def test_same_size_rewrite_with_preserved_mtime_is_rehashed(self):
+        # cp -p / rsync -t / touch -r can replace a file's bytes while keeping
+        # its size and mtime; only ctime, which user space cannot set, moves.
+        gw = _FakeGateway()
+        self._sync(gw)
+        target = self.root / "app" / "f1.bin"
+        st = target.stat()
+        target.write_bytes(bytes([7]) * 10000)  # same size, different content
+        os.utime(target, ns=(st.st_atime_ns, st.st_mtime_ns))
+        self.assertEqual(target.stat().st_mtime_ns, st.st_mtime_ns)
+
+        result = self._sync(gw)
+        self.assertTrue(result.success)
+        self.assertEqual(len(gw.deltas), 1, "the rewrite is seen and uploaded")
+        self.assertEqual(self.puts[-1], ("https://put/delta", ["app/f1.bin"]))
+
+    def test_cache_entry_without_ctime_is_rehashed_once_then_reused(self):
+        # An entry written by an SDK that did not record ctime cannot be
+        # trusted; hash it once and record ctime so the next sync reuses it.
+        gw = _FakeGateway()
+        self._sync(gw)
+        cache = _SyncCache.load(self.root, [])
+        entries = {
+            rel: _ManifestEntry(e.size, e.mtime_ns, e.sha256, e.mode)
+            for rel, e in cache.manifest.entries.items()
+        }
+        cache.save(cache.object_id, _Manifest(entries))
+        with patch.object(
+            FileSyncer, "_calculate_sha256", wraps=FileSyncer._calculate_sha256
+        ) as calc:
+            gw.known_hashes.add(gw.created[0].hash)
+            self._sync(gw)
+            self.assertEqual(calc.call_count, 6)
+            self._sync(gw)
+            self.assertEqual(calc.call_count, 6, "ctime recorded; nothing rehashed")
+
+    def test_malformed_cache_entry_is_a_miss_not_an_error(self):
+        gw = _FakeGateway()
+        self._sync(gw)
+        path = _SyncCache.load(self.root, []).path
+        for bad in ('{"version": 1, "object_id": "obj-1", "manifest": null}', "[]", "null"):
+            path.write_text(bad)
+            cache = _SyncCache.load(self.root, [])
+            self.assertEqual(cache.object_id, "", bad)
+            self.assertIsNone(cache.manifest, bad)
+            result = self._sync(gw)
+            self.assertTrue(result.success, bad)
+
+    def test_transient_part_failure_is_retried(self):
+        gw = _FakeGateway(part_size=20000)
+        self.part_failures["https://put/part/2"] = 1
+        result = self._sync(gw)
+        self.assertTrue(result.success)
+        self.assertEqual(self.part_attempts["https://put/part/2"], 2)
+        self.assertEqual(len(gw.completed), 1)
+        self.assertTrue(all("timeout" in kw for kw in self.put_kwargs), "parts have a timeout")
+
+    def test_persistent_part_failure_fails_the_upload(self):
+        gw = _FakeGateway(part_size=20000)
+        self.part_failures["https://put/part/1"] = 99
+        with self.assertRaises(SystemExit):  # terminal.error("File sync failed")
+            self._sync(gw)
+        self.assertEqual(self.part_attempts["https://put/part/1"], 3)
+        self.assertEqual(gw.completed, [], "a failed upload is never completed")
 
 
 class TestFileSyncer(TestCase):

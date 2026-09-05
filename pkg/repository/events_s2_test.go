@@ -1670,6 +1670,19 @@ func TestMetricsBucketAggregatesPerContainer(t *testing.T) {
 			},
 		},
 		{
+			name: "idle legacy gpu with only total memory still counts toward gpu memory",
+			samples: []metricsSample{
+				{"cpu-only", at(0), 0, 0, types.EventContainerMetricsData{}},
+				{"busy-gpu", at(0), 0, 0, types.EventContainerMetricsData{GPUMemoryUsed: 8 << 30, GPUMemoryTotal: 16 << 30}},
+				{"idle-gpu", at(0), 0, 0, types.EventContainerMetricsData{GPUMemoryUsed: 0, GPUMemoryTotal: 16 << 30}},
+			},
+			want: map[string]float64{
+				"gpu_memory_used_bytes_avg":   4 << 30,
+				"gpu_memory_used_bytes_total": 8 << 30,
+				"gpu_memory_total_bytes_avg":  16 << 30,
+			},
+		},
+		{
 			name: "rates use the reported interval and sum across containers",
 			samples: []metricsSample{
 				{"a", at(0), 0, 0, types.EventContainerMetricsData{SampleIntervalMs: 5000, DiskReadBytes: 10 << 20, DiskWriteBytes: 5 << 20, NetworkBytesRecv: 100 << 10, NetworkBytesSent: 50 << 10}},

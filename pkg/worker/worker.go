@@ -122,11 +122,11 @@ type Worker struct {
 	// poolHeadroom is the gateway's answer on the last keepalive: this worker
 	// is what keeps the pool's free capacity at its minimum, so it must not
 	// idle out (see shouldShutDown).
-	poolHeadroom            atomic.Bool
-	routeTransport          string
-	ctx                     context.Context
-	cancel                  func()
-	config                  types.AppConfig
+	poolHeadroom   atomic.Bool
+	routeTransport string
+	ctx            context.Context
+	cancel         func()
+	config         types.AppConfig
 }
 
 func (w *Worker) gpuVirtualizedForRequest(request *types.ContainerRequest) bool {
@@ -346,9 +346,53 @@ type ContainerOptions struct {
 	InitialSpec                 *specs.Spec
 	StartupStartedAt            time.Time
 	CheckpointFilesystemRestore *checkpointFilesystemRestore
-	// AddressesRegistered delivers the result of the address-map publication
-	// started as soon as host ports were reserved; RUNNING waits on it.
-	AddressesRegistered <-chan error
+	// AddressesRegistered is the address-map publication started as soon as
+	// host ports were reserved; RUNNING waits on it, and so does teardown.
+	AddressesRegistered *addressRegistration
+}
+
+// addressRegistration is the in-flight publication of a container's address
+// map. Any number of parties may wait on it: the runtime start joins it before
+// RUNNING is published, and teardown joins it so a publication cannot land
+// after the container state it belongs to has been deleted.
+type addressRegistration struct {
+	done chan struct{}
+	err  error
+}
+
+func newAddressRegistration(publish func() error) *addressRegistration {
+	r := &addressRegistration{done: make(chan struct{})}
+	go func() {
+		r.err = publish()
+		close(r.done)
+	}()
+	return r
+}
+
+// wait blocks until the publication has finished or ctx ends. A nil
+// registration is one that was never started and reports no error.
+func (r *addressRegistration) wait(ctx context.Context) error {
+	if r == nil {
+		return nil
+	}
+	select {
+	case <-r.done:
+		return r.err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// waitForTeardown joins the publication before the container's state is
+// deleted, so a late publication cannot outlive that deletion. It is bounded:
+// a stalled gateway must not hold up teardown.
+func (r *addressRegistration) waitForTeardown() {
+	if r == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), containerRepositoryRetryTimeout)
+	defer cancel()
+	_ = r.wait(ctx)
 }
 
 type stopContainerEvent struct {
@@ -1006,13 +1050,16 @@ func (s *Worker) shouldShutDown(lastContainerRequest time.Time) bool {
 			return false
 		}
 		if (time.Since(lastContainerRequest).Seconds() > defaultWorkerSpindownTimeS) && s.containerInstances.Len() == 0 {
-			// Idle, but is the pool below its minimum free capacity without
-			// this worker? Exiting then would only make the sizer start a
+			// Idle, but is this worker part of the pool's minimum free
+			// capacity? Exiting then would only make the sizer start a
 			// replacement and leave the pool cold while it boots. Ask again
-			// right now rather than trust a flag up to a keepalive old: two
-			// idle workers judging each other's presence from stale answers
-			// could both leave at once.
-			_ = s.setWorkerKeepAlive()
+			// right now rather than trust a flag up to a keepalive old, and
+			// stay when the answer cannot be had: leaving on a stale or
+			// missing answer is what empties the pool.
+			if err := s.setWorkerKeepAlive(); err != nil {
+				log.Warn().Err(err).Str("worker_id", s.workerId).Msg("staying up: could not refresh pool headroom before spindown")
+				return false
+			}
 			if s.poolHeadroom.Load() {
 				return false
 			}
@@ -1322,10 +1369,18 @@ func (s *Worker) keepalive() {
 	}
 }
 
+// setWorkerKeepAlive renews the worker's lease at the gateway. An idle worker
+// also learns whether it holds the pool's headroom (see shouldShutDown); the
+// call is bounded so a stalled gateway cannot hang the request loop.
 func (s *Worker) setWorkerKeepAlive() error {
-	resp, err := handleGRPCResponse(s.workerRepoClient.SetWorkerKeepAlive(s.ctx, &pb.SetWorkerKeepAliveRequest{
+	ctx, cancel := context.WithTimeout(s.ctx, workerShutdownRPCTimeout)
+	defer cancel()
+
+	idle := s.containerInstances == nil || s.containerInstances.Len() == 0
+	resp, err := handleGRPCResponse(s.workerRepoClient.SetWorkerKeepAlive(ctx, &pb.SetWorkerKeepAliveRequest{
 		WorkerId:  s.workerId,
 		MachineId: s.machineID,
+		Idle:      idle,
 	}))
 	if err != nil {
 		return err

@@ -59,6 +59,7 @@ const (
 	// background.
 	networkSlotPrimeCount                             = 4
 	networkSlotCleanupConcurrency                     = 16
+	sysClassNetPath                                   = "/sys/class/net"
 	networkSlotPoolLockTTL                            = 120
 	containerNetworkCleanupRPCTimeout   time.Duration = 30 * time.Second
 	containerNetworkCleanupLockRetries                = 14
@@ -121,6 +122,9 @@ type containerNetworkSlot struct {
 	ip        string
 	ipv6      string
 	netnsPath string
+	// hostVethPath is the host veth's sysfs entry, recorded when the slot was
+	// built; "" when sysfs did not show it and it cannot be checked that way.
+	hostVethPath string
 }
 
 func containerVethNames(containerId string) (string, string) {
@@ -1025,19 +1029,45 @@ func (m *ContainerNetworkManager) setupPreallocatedNetworkSlot(containerId strin
 	return true, nil
 }
 
-// prepareNetworkSlotForAssignment confirms the slot's namespace still exists.
-// The pool built the slot in this process, so its veth and address are not
-// re-read: those netlink dumps wait on the kernel's rtnl lock, which a
-// neighbouring container's namespace teardown holds for up to a few hundred
-// milliseconds, and that wait landed directly on the start path.
+// prepareNetworkSlotForAssignment confirms the slot's namespace and host veth
+// still exist. Both are checked through the filesystem (the netns bind mount
+// and the veth's sysfs entry) rather than netlink: a netlink lookup, even for
+// a single link by name, waits on the kernel's rtnl lock, which a neighbouring
+// container's namespace teardown holds for up to a few hundred milliseconds,
+// and that wait landed directly on the start path. The address inside the
+// namespace is not re-read: it was configured by this process and nothing
+// enters a pooled namespace before assignment, while a deleted veth (the drift
+// that does happen, from a partial teardown) also takes its peer with it and
+// is caught here.
 func (m *ContainerNetworkManager) prepareNetworkSlotForAssignment(slot *containerNetworkSlot) error {
 	if slot == nil || slot.ip == "" {
 		return errors.New("network slot is missing an IP address")
 	}
-	if _, err := os.Stat(filepath.Join(types.HostNetnsPath, slot.id)); err != nil {
+	netnsPath := slot.netnsPath
+	if netnsPath == "" {
+		netnsPath = filepath.Join(types.HostNetnsPath, slot.id)
+	}
+	if _, err := os.Stat(netnsPath); err != nil {
 		return fmt.Errorf("network slot %s is missing its namespace: %w", slot.id, err)
 	}
+	if slot.hostVethPath != "" {
+		if _, err := os.Stat(slot.hostVethPath); err != nil {
+			return fmt.Errorf("network slot %s is missing its host veth: %w", slot.id, err)
+		}
+	}
 	return nil
+}
+
+// hostLinkSysfsPath returns the sysfs entry for a link in the worker's network
+// namespace, or "" when sysfs does not show it (sysfs reflects the namespace
+// it was mounted in, which need not be the worker's), in which case the link
+// cannot be verified this way and is not.
+func hostLinkSysfsPath(name string) string {
+	path := filepath.Join(sysClassNetPath, name)
+	if _, err := os.Stat(path); err != nil {
+		return ""
+	}
+	return path
 }
 
 func (m *ContainerNetworkManager) clearNetworkSlotNeighbor(slot *containerNetworkSlot) error {
@@ -1293,12 +1323,13 @@ func (m *ContainerNetworkManager) createNetworkSlot() (*containerNetworkSlot, er
 
 	slotReady = true
 	return &containerNetworkSlot{
-		id:        slotID,
-		namespace: namespace,
-		vethHost:  vethHost,
-		ip:        ipAddr.IP.String(),
-		ipv6:      ipv6,
-		netnsPath: filepath.Join(types.HostNetnsPath, namespace),
+		id:           slotID,
+		namespace:    namespace,
+		vethHost:     vethHost,
+		ip:           ipAddr.IP.String(),
+		ipv6:         ipv6,
+		netnsPath:    filepath.Join(types.HostNetnsPath, namespace),
+		hostVethPath: hostLinkSysfsPath(vethHost),
 	}, nil
 }
 

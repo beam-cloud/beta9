@@ -311,6 +311,68 @@ func TestGetBuildContextDoesNotFallBackToWorkspaceFuseMount(t *testing.T) {
 	require.ErrorContains(t, err, "workspace storage credentials are required")
 }
 
+// Credentials the gateway vends arrive as username:password or as JSON, and
+// JSON may carry surrounding whitespace; all of them have to end up as a
+// username:password --creds value buildah can use.
+func TestGetBuildahAuthArgsParsesEveryCredentialForm(t *testing.T) {
+	client := &ImageClient{}
+	for name, creds := range map[string]string{
+		"plain":           "user:pa:ss",
+		"json":            `{"USERNAME":"user","PASSWORD":"pa:ss"}`,
+		"json-whitespace": "  \n" + `{"USERNAME":"user","PASSWORD":"pa:ss"}` + "\n",
+	} {
+		require.Equal(t, []string{"--creds", "user:pa:ss"}, client.getBuildahAuthArgs(context.Background(), "registry.example.com/img", creds), name)
+	}
+	require.Nil(t, client.getBuildahAuthArgs(context.Background(), "registry.example.com/img", ""))
+	require.Nil(t, client.getBuildahAuthArgs(context.Background(), "registry.example.com/img", `{"AWS_ACCESS_KEY_ID":"a","AWS_SECRET_ACCESS_KEY":"b"}`))
+}
+
+// RUN steps get a writable working directory holding the build context, and
+// what they write there does not reach the shared extracted context.
+func TestWritableBuildContextIsPrivateToTheBuild(t *testing.T) {
+	ctxDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(ctxDir, "pkg"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(ctxDir, "pkg", "main.py"), []byte("print('hi')\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(ctxDir, "setup.py"), []byte("setup()\n"), 0o755))
+
+	client := &ImageClient{imageCachePath: t.TempDir()}
+	request := &types.ContainerRequest{ContainerId: "build-1", ImageId: "img-1"}
+	// A context extracted into the build's own directory is already private
+	// and is handed back as is.
+	buildPath := t.TempDir()
+	privateCtx := filepath.Join(buildPath, "build-ctx")
+	require.NoError(t, os.MkdirAll(privateCtx, 0o755))
+	dir, cleanup, err := client.writableBuildContext(context.Background(), request, buildPath, privateCtx)
+	require.NoError(t, err)
+	require.Equal(t, privateCtx, dir)
+	cleanup()
+
+	dir, cleanup, err = client.writableBuildContext(context.Background(), request, buildPath, ctxDir)
+	require.NoError(t, err)
+	require.NotEqual(t, ctxDir, dir)
+
+	body, err := os.ReadFile(filepath.Join(dir, "pkg", "main.py"))
+	require.NoError(t, err)
+	require.Equal(t, "print('hi')\n", string(body))
+	info, err := os.Stat(filepath.Join(dir, "setup.py"))
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o755), info.Mode().Perm())
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "pkg", "generated.py"), []byte("x"), 0o644))
+	require.NoError(t, os.Remove(filepath.Join(dir, "setup.py")))
+	_, err = os.Stat(filepath.Join(ctxDir, "pkg", "generated.py"))
+	require.True(t, os.IsNotExist(err), "a build step's writes must not land in the shared context")
+	_, err = os.Stat(filepath.Join(ctxDir, "setup.py"))
+	require.NoError(t, err, "a build step's removals must not land in the shared context")
+
+	cleanup()
+	_, err = os.Stat(dir)
+	require.True(t, os.IsNotExist(err), "the build's copy is removed with the build")
+	entries, err := os.ReadDir(filepath.Join(client.imageCachePath, "spool"))
+	require.NoError(t, err)
+	require.Empty(t, entries)
+}
+
 func TestNewBuildahCommandUsesCancelableProcessGroup(t *testing.T) {
 	cmd := newBuildahCommand(
 		context.Background(),

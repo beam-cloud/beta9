@@ -57,6 +57,42 @@ func TestAptBuildVolumesLeavesNonUbuntuSourcesAlone(t *testing.T) {
 	require.Empty(t, volumes, "no timeouts configured and nothing to rewrite")
 }
 
+func TestAptBuildVolumesRefusesSymlinkedAptPaths(t *testing.T) {
+	// The rootfs is the user's base image; a symlink there must not lead the
+	// worker to read its own files.
+	outside := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(outside, "sources.list"), []byte("deb http://archive.ubuntu.com/ubuntu jammy main\n"), 0o644))
+
+	rootfs := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(rootfs, "etc", "apt"), 0o755))
+	require.NoError(t, os.Symlink(filepath.Join(outside, "sources.list"), filepath.Join(rootfs, "etc", "apt", "sources.list")))
+	volumes := aptBuildVolumes(types.BuildAptConfig{Mirror: "http://mirror/ubuntu"}, rootfs, t.TempDir())
+	require.Empty(t, volumes)
+
+	rootfs = t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(rootfs, "etc"), 0o755))
+	require.NoError(t, os.Symlink(outside, filepath.Join(rootfs, "etc", "apt")))
+	volumes = aptBuildVolumes(types.BuildAptConfig{TimeoutS: 20, Mirror: "http://mirror/ubuntu"}, rootfs, t.TempDir())
+	require.Empty(t, volumes, "a symlinked /etc/apt counts as no apt")
+}
+
+func TestRunStepsTouchAptConfig(t *testing.T) {
+	plan, err := parseDockerfilePlan("FROM ubuntu\nENV A=/etc/apt\nRUN apt-get update && apt-get install -y curl\nCOPY sources.list /opt/\n", nil)
+	require.NoError(t, err)
+	require.False(t, runStepsTouchAptConfig(plan.steps), "using apt is not configuring it")
+
+	for _, text := range []string{
+		"FROM ubuntu\nRUN sed -i 's|archive.ubuntu.com|mirror|' /etc/apt/sources.list\n",
+		"FROM ubuntu\nRUN add-apt-repository ppa:deadsnakes/ppa\n",
+		"FROM ubuntu\nRUN [\"tee\", \"/etc/apt/sources.list.d/ubuntu.sources\"]\n",
+		"FROM ubuntu\nCOPY sources.list /etc/apt/sources.list\n",
+	} {
+		plan, err := parseDockerfilePlan(text, nil)
+		require.NoError(t, err)
+		require.True(t, runStepsTouchAptConfig(plan.steps), text)
+	}
+}
+
 func splitVolume(t *testing.T, spec string) (source, target string) {
 	t.Helper()
 	parts := strings.Split(spec, ":")

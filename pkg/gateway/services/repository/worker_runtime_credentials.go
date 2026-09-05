@@ -75,7 +75,10 @@ func (s *WorkerRepositoryService) authorizeWorkerRuntimeCredentialRequest(ctx co
 		return s.runtimeCredentialsWorkspace(ctx, workspaceID, req)
 	}
 
-	if state == nil {
+	// A caller-supplied state only stands in for the lookup when it belongs to
+	// the requested container; otherwise the request is authorized against the
+	// container it names.
+	if state == nil || state.ContainerId != req.ContainerId {
 		if s.containerRepo == nil {
 			return nil, fmt.Errorf("container repository is unavailable")
 		}

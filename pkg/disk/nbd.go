@@ -96,20 +96,19 @@ func (m *Manager) freeNBDDevices() int {
 // /dev mount on the first qcow attachment. Kubernetes and Docker both give a
 // privileged worker its own /dev tmpfs, so loading the host module alone does
 // not guarantee that /dev/nbdN exists inside the worker. Validating every node
-// costs an exec per device, so a successful pass is remembered.
+// costs an exec per device, so a successful pass is remembered. Callers that
+// arrive while a pass is running wait for it rather than starting their own;
+// a failed pass is retried by the next caller.
 func (m *Manager) ensureNBDDevices(ctx context.Context) error {
-	m.mu.Lock()
-	ready := m.nbdDevicesReady
-	m.mu.Unlock()
-	if ready {
+	m.nbdReadyMu.Lock()
+	defer m.nbdReadyMu.Unlock()
+	if m.nbdDevicesReady {
 		return nil
 	}
 	if err := m.prepareNBDDevices(ctx); err != nil {
 		return err
 	}
-	m.mu.Lock()
 	m.nbdDevicesReady = true
-	m.mu.Unlock()
 	return nil
 }
 

@@ -117,13 +117,10 @@ type fakeWorkerRepoClient struct {
 	claimRelease <-chan struct{}
 }
 
-func (f *fakeWorkerRepoClient) ClaimContainer(ctx context.Context, req *pb.ClaimContainerRequest, _ ...grpc.CallOption) (*pb.ClaimContainerResponse, error) {
-	f.mu.Lock()
-	call := f.claims
-	f.claims++
-	f.lastClaim = req
-	started, release := f.claimStarted, f.claimRelease
-	f.mu.Unlock()
+// gateFakeCall lets a test observe a fake RPC while it is in flight: it signals
+// started (without blocking) and then holds the call until release fires or
+// ctx ends. A nil channel disables that half of the gate.
+func gateFakeCall(ctx context.Context, started chan struct{}, release <-chan struct{}) error {
 	if started != nil {
 		select {
 		case started <- struct{}{}:
@@ -134,8 +131,21 @@ func (f *fakeWorkerRepoClient) ClaimContainer(ctx context.Context, req *pb.Claim
 		select {
 		case <-release:
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return ctx.Err()
 		}
+	}
+	return nil
+}
+
+func (f *fakeWorkerRepoClient) ClaimContainer(ctx context.Context, req *pb.ClaimContainerRequest, _ ...grpc.CallOption) (*pb.ClaimContainerResponse, error) {
+	f.mu.Lock()
+	call := f.claims
+	f.claims++
+	f.lastClaim = req
+	started, release := f.claimStarted, f.claimRelease
+	f.mu.Unlock()
+	if err := gateFakeCall(ctx, started, release); err != nil {
+		return nil, err
 	}
 	if call < len(f.claimErrors) {
 		return nil, f.claimErrors[call]
@@ -1168,18 +1178,8 @@ func (f *fakeContainerRepoClient) GetContainerState(ctx context.Context, in *pb.
 		err = f.getStateError
 	}
 	f.mu.Unlock()
-	if started != nil {
-		select {
-		case started <- struct{}{}:
-		default:
-		}
-	}
-	if release != nil {
-		select {
-		case <-release:
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
+	if err := gateFakeCall(ctx, started, release); err != nil {
+		return nil, err
 	}
 	if err != nil {
 		return nil, err
@@ -1240,18 +1240,8 @@ func (f *fakeContainerRepoClient) UpdateContainerStatus(ctx context.Context, in 
 	started := f.updateStatusStarted
 	release := f.updateStatusRelease
 	f.mu.Unlock()
-	if started != nil {
-		select {
-		case started <- struct{}{}:
-		default:
-		}
-	}
-	if release != nil {
-		select {
-		case <-release:
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
+	if err := gateFakeCall(ctx, started, release); err != nil {
+		return nil, err
 	}
 	if err != nil {
 		return nil, err

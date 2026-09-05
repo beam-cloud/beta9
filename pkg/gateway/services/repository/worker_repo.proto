@@ -234,6 +234,10 @@ message UpdateWorkerCapacityResponse {
 message SetWorkerKeepAliveRequest {
   string worker_id = 1;
   string machine_id = 2;
+  // idle is set when the worker runs no containers. Only an idle worker can
+  // spin down, so only an idle worker needs pool_headroom answered; busy
+  // workers' keepalives skip the pool scan.
+  bool idle = 3;
 }
 
 message SetWorkerKeepAliveResponse {

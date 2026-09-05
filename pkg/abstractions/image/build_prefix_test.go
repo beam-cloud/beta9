@@ -2,6 +2,7 @@ package image
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/alicebob/miniredis/v2"
@@ -83,4 +84,31 @@ func TestReuseBuiltPrefixSkipsMissingImagesAndOtherContexts(t *testing.T) {
 	custom.BaseImageName = ""
 	_, _, ok = b.reuseBuiltPrefix(ctx, custom)
 	require.False(t, ok)
+}
+
+func TestPrefixReuseLeavesCustomDockerfilesAlone(t *testing.T) {
+	ctx := context.Background()
+	b := prefixTestBuilder(t, map[string]bool{"img-a": true})
+	b.recordBuiltDockerfile(ctx, renderedOpts(baseDockerfile), "img-a")
+
+	// Base image pinning fills in the base image fields for custom
+	// Dockerfiles too, so their shape is what tells them apart.
+	for name, dockerfile := range map[string]string{
+		"multi-stage":  baseDockerfile + "FROM scratch AS builder\nCOPY --from=builder /x /y\n",
+		"continuation": baseDockerfile + "RUN echo hi && \\\n    echo bye\n",
+		"comment":      baseDockerfile + "# a comment\nRUN echo hi\n",
+		"indented":     baseDockerfile + "  RUN echo hi\n",
+		"onbuild":      baseDockerfile + "ONBUILD RUN echo hi\n",
+		"other-from":   "FROM python:3.12\n" + strings.SplitN(baseDockerfile, "\n", 2)[1] + "RUN echo hi\n",
+	} {
+		opts := renderedOpts(dockerfile)
+		require.False(t, b.prefixReusable(opts), name)
+		_, _, ok := b.reuseBuiltPrefix(ctx, opts)
+		require.False(t, ok, name)
+		b.recordBuiltDockerfile(ctx, opts, "img-custom")
+	}
+	// A rendered Dockerfile still qualifies.
+	require.True(t, b.prefixReusable(renderedOpts(baseDockerfile+"RUN echo hi\n")))
+	_, _, ok := b.reuseBuiltPrefix(ctx, renderedOpts(baseDockerfile+"RUN echo hi\n"))
+	require.True(t, ok)
 }

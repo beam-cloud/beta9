@@ -304,15 +304,21 @@ func (b *Build) generateContainerRequest() (*types.ContainerRequest, error) {
 		sourceImagePtr = &sourceImage
 	}
 	dockerfile := b.opts.Dockerfile
+	sourceImageCreds := b.opts.BaseImageCreds
 	if b.dockerfile != "" {
 		dockerfile = b.dockerfile
 		sourceImagePtr = &b.sourceImage
+		// The prefix image lives in the build registry, so the user's base
+		// image credentials do not apply to it; left in place the worker
+		// would pull with them and be refused. Without them it falls back
+		// to the build registry credentials the gateway holds.
+		sourceImageCreds = ""
 	}
 
 	req := &types.ContainerRequest{
 		BuildOptions: types.BuildOptions{
 			SourceImage:      sourceImagePtr,
-			SourceImageCreds: b.opts.BaseImageCreds,
+			SourceImageCreds: sourceImageCreds,
 			Dockerfile:       &dockerfile,
 			BuildCtxObject:   &b.opts.BuildCtxObject,
 			BuildSecrets:     b.opts.BuildSecrets,
@@ -397,15 +403,69 @@ func generatePipInstallCommand(pythonPackages []string, pythonVersion string, vi
 	return command
 }
 
+// uvPipInstallFlags are the options `uv pip install` accepts, including its
+// pip-compatibility aliases (--no-cache-dir, --force-reinstall, --trusted-host,
+// --pre, --disable-pip-version-check). A user flag outside this set (pip-only
+// options such as --use-pep517, --prefer-binary or --progress-bar) would fail
+// uv's argument parsing, so such an install stays on pip.
+var uvPipInstallFlags = map[string]bool{
+	"--all-extras": true, "--allow-insecure-host": true, "--trusted-host": true, "--break-system-packages": true,
+	"--build-constraints": true, "--build-constraint": true, "-b": true, "--cache-dir": true, "--cert": true,
+	"--color": true, "--compile-bytecode": true, "--compile": true, "--config-file": true,
+	"--config-setting": true, "--config-settings": true, "-C": true, "--config-settings-package": true,
+	"--constraints": true, "--constraint": true, "-c": true, "--default-index": true, "--directory": true,
+	"--disable-pip-version-check": true, "--dry-run": true, "--editable": true, "-e": true, "--exact": true,
+	"--exclude-newer": true, "--exclude-newer-package": true, "--excludes": true, "--exclude": true,
+	"--extra": true, "--extra-index-url": true, "--find-links": true, "-f": true, "--fork-strategy": true,
+	"--group": true, "--index": true, "--index-strategy": true, "--index-url": true, "-i": true,
+	"--keyring-provider": true, "--link-mode": true, "--managed-python": true, "--no-managed-python": true,
+	"--no-binary": true, "--no-break-system-packages": true, "--no-build-isolation": true,
+	"--no-build-isolation-package": true, "--no-cache": true, "--no-cache-dir": true, "-n": true,
+	"--no-config": true, "--no-deps": true, "--no-editable": true, "--no-editable-package": true,
+	"--no-index": true, "--no-progress": true, "--no-python-downloads": true, "--no-sources": true,
+	"--no-sources-package": true, "--no-verify-hashes": true, "--offline": true, "--only-binary": true,
+	"--overrides": true, "--override": true, "--pre": true, "--prefix": true, "--prerelease": true,
+	"--prerelease-package": true, "--project": true, "--python": true, "-p": true, "--python-platform": true,
+	"--python-version": true, "--quiet": true, "-q": true, "--refresh": true, "--refresh-package": true,
+	"--reinstall": true, "--force-reinstall": true, "--reinstall-package": true, "--require-hashes": true,
+	"--requirements": true, "--requirement": true, "-r": true, "--resolution": true, "--strict": true,
+	"--system": true, "--system-certs": true, "--target": true, "-t": true, "--torch-backend": true,
+	"--upgrade": true, "-U": true, "--upgrade-group": true, "--upgrade-package": true, "-P": true,
+	"--verbose": true, "-v": true,
+}
+
+// uvAcceptsPipFlags reports whether every user-supplied flag line can be
+// handed to `uv pip install` as is. A flag line may carry its value, either
+// "--flag value" or "--flag=value".
+func uvAcceptsPipFlags(flagLines []string) bool {
+	for _, line := range flagLines {
+		flag := strings.TrimSpace(line)
+		if i := strings.IndexAny(flag, " =\t"); i >= 0 {
+			flag = flag[:i]
+		}
+		if !uvPipInstallFlags[flag] {
+			return false
+		}
+	}
+	return true
+}
+
 // generateStandardPipInstallCommand generates the package install command for
-// v2 dockerfile builds. System installs go through uv (the worker mounts it
-// into the build as uv-b9, so it never ends up in the image), which resolves
-// and installs several times faster than pip; virtual environments keep pip.
+// v2 dockerfile builds. Installs go through uv (the worker mounts it into the
+// build as uv-b9, so it never ends up in the image), which resolves and
+// installs several times faster than pip. Micromamba environments, and flags
+// uv does not understand, keep pip.
 func generateStandardPipInstallCommand(pythonPackages []string, pythonVersion string, virtualEnv bool) string {
 	flagLines, packages := parseFlagLinesAndPackages(pythonPackages)
 
 	command := fmt.Sprintf("%s -m pip install", pythonVersion)
-	if !virtualEnv && pythonVersion != "" {
+	if !virtualEnv && pythonVersion != "" && uvAcceptsPipFlags(flagLines) {
+		// The Dockerfile is rendered without probing the base image, so
+		// whether <pythonVersion> is a virtual environment or a system
+		// interpreter is unknown here. `--python <path>` installs into
+		// whatever environment that interpreter belongs to, exactly as
+		// `<pythonVersion> -m pip` did; `--system` would instead skip a
+		// virtual environment found on PATH and install elsewhere.
 		// The wheel cache is a mount on another filesystem, so hardlinking
 		// would fail and fall back to copying anyway; ask for it outright. The
 		// cache path is the worker's mount, named explicitly so it does not
@@ -413,7 +473,7 @@ func generateStandardPipInstallCommand(pythonPackages []string, pythonVersion st
 		// --compile-bytecode: pip writes .pyc files on install, uv does not
 		// unless asked, and without them every fresh container recompiles
 		// the package on first import (about 1.4 s for torch).
-		command = fmt.Sprintf("uv-b9 pip install --system --python %s --link-mode copy --compile-bytecode --cache-dir /root/.cache/uv", pythonVersion)
+		command = fmt.Sprintf(`uv-b9 pip install --python "$(command -v %s)" --link-mode copy --compile-bytecode --cache-dir /root/.cache/uv`, pythonVersion)
 	}
 
 	if len(flagLines) > 0 {

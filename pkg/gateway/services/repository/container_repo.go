@@ -55,6 +55,12 @@ func (s *ContainerRepositoryService) DeleteContainerState(ctx context.Context, r
 }
 
 func (s *ContainerRepositoryService) UpdateContainerStatus(ctx context.Context, req *pb.UpdateContainerStatusRequest) (*pb.UpdateContainerStatusResponse, error) {
+	// A non-positive expiry would make the repository expire the state on the
+	// spot; refuse it before anything is written.
+	if req.ExpirySeconds <= 0 {
+		return &pb.UpdateContainerStatusResponse{Ok: false, ErrorMsg: fmt.Sprintf("expiry_seconds must be positive, got %d", req.ExpirySeconds)}, nil
+	}
+
 	err := s.containerRepo.UpdateContainerStatus(req.ContainerId, types.ContainerStatus(req.Status), req.ExpirySeconds)
 	if err != nil {
 		return &pb.UpdateContainerStatusResponse{Ok: false, ErrorMsg: err.Error()}, nil

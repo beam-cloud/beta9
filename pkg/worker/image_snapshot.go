@@ -69,7 +69,7 @@ func (c *ImageClient) ArchiveLayer(ctx context.Context, request *types.Container
 		return err
 	}
 
-	result, err := c.publishLayeredImage(ctx, request, img, layers, imageId, tmpdir)
+	result, err := c.publishLayeredImageWithProgress(ctx, request, img, layers, imageId, tmpdir, report)
 	if err != nil {
 		return err
 	}
@@ -95,6 +95,20 @@ type publishResult struct {
 // the layout read fails and the image is indexed from the registry once the
 // push has landed. workDir holds the layout and the index archive.
 func (c *ImageClient) publishLayeredImage(ctx context.Context, request *types.ContainerRequest, img v1.Image, layers []*packedLayer, imageId, workDir string) (*publishResult, error) {
+	return c.publishLayeredImageWithProgress(ctx, request, img, layers, imageId, workDir, nil)
+}
+
+// publishLayeredImageWithProgress is publishLayeredImage reporting, through
+// progress (which may be nil), a percentage as the stages complete: the layers
+// are already packed when it is called (20%), the index being built brings it
+// to 60%, the push landing to 90%, and the final archive upload is what is
+// left before the caller's 100%.
+func (c *ImageClient) publishLayeredImageWithProgress(ctx context.Context, request *types.ContainerRequest, img v1.Image, layers []*packedLayer, imageId, workDir string, progress func(int)) (*publishResult, error) {
+	report := func(pct int) {
+		if progress != nil {
+			progress(pct)
+		}
+	}
 	buildRegistry := c.getBuildRegistry()
 	imageTag := fmt.Sprintf("%s/%s:%s", buildRegistry, c.config.ImageService.BuildRepositoryName, imageId)
 	targetRef, err := name.ParseReference(imageTag, c.buildRegistryNameOptions()...)
@@ -109,10 +123,19 @@ func (c *ImageClient) publishLayeredImage(ctx context.Context, request *types.Co
 	}
 	// The indexer resolves credentials and the content-cache routing key from
 	// the image id, so the new image has to be known before it is indexed.
+	// Until the push has landed the tag does not exist, so the mapping is
+	// withdrawn if publishing fails; otherwise a later ArchiveLayer of a
+	// sandbox running this image would stack on a base nobody can fetch.
 	c.v2ImageRefs.Set(imageId, imageTag)
+	published := false
+	defer func() {
+		if !published {
+			c.v2ImageRefs.Delete(imageId)
+		}
+	}()
 	indexRequest := *request
 	indexRequest.ImageId = imageId
-	archivePath := filepath.Join(workDir, fmt.Sprintf("%s.%s", imageId, c.registry.ImageFileExtension))
+	archivePath := c.archiveScratchPath(workDir, imageId)
 
 	layoutDir := filepath.Join(workDir, "layout")
 	if err := writeSparseOCILayout(layoutDir, img, layers); err != nil {
@@ -128,9 +151,13 @@ func (c *ImageClient) publishLayeredImage(ctx context.Context, request *types.Co
 	}()
 	indexErr := c.indexImage(ctx, &indexRequest, imageTag, layoutDir, archivePath)
 	result.indexed = time.Since(started)
+	if indexErr == nil {
+		report(60)
+	}
 	if err := <-pushErr; err != nil {
 		return nil, fmt.Errorf("push image %s: %w", imageTag, err)
 	}
+	published = true
 	if indexErr != nil {
 		log.Warn().Err(indexErr).Str("image_id", imageId).Msg("index from local layout failed, indexing from registry")
 		if indexErr = c.indexImage(ctx, &indexRequest, imageTag, "", archivePath); indexErr != nil {
@@ -138,6 +165,7 @@ func (c *ImageClient) publishLayeredImage(ctx context.Context, request *types.Co
 		}
 		result.indexed = time.Since(started)
 	}
+	report(90)
 	if err := c.registry.Push(ctx, archivePath, imageId); err != nil {
 		return nil, fmt.Errorf("publish index archive: %w", err)
 	}
@@ -192,9 +220,28 @@ func (c *ImageClient) buildRegistryAuthenticator(ctx context.Context, request *t
 	return &authn.Basic{Username: user, Password: pass}
 }
 
+// parseImageReference parses ref, permitting plain HTTP only when it points
+// at the build registry and that registry is configured insecure. A sandbox
+// may run on an image from an external registry; that registry keeps the
+// default (TLS) transport regardless of how the build registry is reached.
+func (c *ImageClient) parseImageReference(ref string) (name.Reference, error) {
+	parsed, err := name.ParseReference(ref)
+	if err != nil {
+		return nil, err
+	}
+	if !c.config.ImageService.BuildRegistryInsecure {
+		return parsed, nil
+	}
+	buildRegistry, err := name.NewRegistry(c.getBuildRegistry())
+	if err != nil || buildRegistry.RegistryStr() != parsed.Context().RegistryStr() {
+		return parsed, nil
+	}
+	return name.ParseReference(ref, name.Insecure)
+}
+
 // remoteBaseImage fetches the image the sandbox runs on, for this platform.
 func (c *ImageClient) remoteBaseImage(ctx context.Context, request *types.ContainerRequest, baseRef string) (v1.Image, []remote.Option, error) {
-	ref, err := name.ParseReference(baseRef, c.buildRegistryNameOptions()...)
+	ref, err := c.parseImageReference(baseRef)
 	if err != nil {
 		return nil, nil, err
 	}

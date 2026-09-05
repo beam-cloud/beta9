@@ -505,11 +505,17 @@ func (s *ContainerRuntimeServer) writeArchiveSpecs(ctx context.Context, instance
 	tempConfig.Process.Args = []string{"tail", "-f", "/dev/null"}
 	tempConfig.Root.Readonly = false
 
-	file, err := json.MarshalIndent(tempConfig, "", "  ")
+	return writeSpecFile(filepath.Join(instance.Overlay.TopLayerPath(), specBaseName), tempConfig)
+}
+
+// writeSpecFile serializes an OCI spec the way every spec on disk is written:
+// indented JSON, world-readable.
+func writeSpecFile(path string, spec specs.Spec) error {
+	b, err := json.MarshalIndent(spec, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(instance.Overlay.TopLayerPath(), specBaseName), file, 0644)
+	return os.WriteFile(path, b, 0644)
 }
 
 // writeInitialSpecFromImage builds an initial_config.json using the base runc config
@@ -550,11 +556,7 @@ func (s *ContainerRuntimeServer) writeInitialSpecFromImage(ctx context.Context, 
 		spec.Process.Cwd = "/"
 	}
 
-	b, err := json.MarshalIndent(spec, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(destPath, b, 0644)
+	return writeSpecFile(destPath, spec)
 }
 
 func cloneSpec(spec specs.Spec) (specs.Spec, error) {
@@ -589,16 +591,7 @@ func (s *ContainerRuntimeServer) addRequestEnvToInitialSpec(instance *ContainerI
 
 	spec.Process.Env = append(instance.Request.Env, spec.Process.Env...)
 
-	bytes, err = json.MarshalIndent(spec, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	if err = os.WriteFile(specPath, bytes, 0644); err != nil {
-		return err
-	}
-
-	return nil
+	return writeSpecFile(specPath, spec)
 }
 
 // ContainerSyncWorkspace syncs workspace files

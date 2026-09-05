@@ -135,7 +135,11 @@ func TestWaitForProcessManagerOutlivesSlowStartup(t *testing.T) {
 	instance := &ContainerInstance{
 		ContainerAddressMap: map[int32]string{types.WorkerSandboxProcessManagerPort: address},
 	}
-	client, ready, stats := (&Worker{}).waitForProcessManager(context.Background(), "slow", instance)
+	// The wait only returns on success or ctx; bound it so a server that never
+	// comes up fails the test instead of hanging it.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	client, ready, stats := (&Worker{}).waitForProcessManager(ctx, "slow", instance)
 	require.True(t, ready)
 	require.NotNil(t, client)
 	require.Greater(t, stats.Failures, 0)

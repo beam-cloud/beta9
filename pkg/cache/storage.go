@@ -61,7 +61,10 @@ type Store struct {
 	diskAvailableBytes      atomic.Int64
 	diskMonitorStarted      atomic.Bool
 	lastDiskGuardCheckNanos atomic.Int64
-	lastDiskGuardEvictNanos atomic.Int64
+	// diskGuardEvictMu serializes the write guard's on-demand eviction (see
+	// diskWriteAllowed); lastDiskGuardEvictNanos is written under it.
+	diskGuardEvictMu        sync.Mutex
+	lastDiskGuardEvictNanos int64
 	index                   contentIndex
 	// evictMu serializes eviction passes. The disk monitor and the embedded
 	// cache owner's ReclaimDisk both evict from a usage snapshot; two passes
@@ -1525,21 +1528,15 @@ func (cas *Store) diskWriteAllowed() bool {
 	if cas == nil {
 		return false
 	}
-	cas.mu.Lock()
-	exceeded := cas.diskCachedUsageExceeded
-	cas.mu.Unlock()
 	now := time.Now().UnixNano()
 	last := cas.lastDiskGuardCheckNanos.Load()
-	if exceeded && last == 0 {
-		return false
-	}
 	if last == 0 || time.Duration(now-last) >= diskCacheWriteGuardInterval {
 		if cas.lastDiskGuardCheckNanos.CompareAndSwap(last, now) {
 			cas.refreshDiskCacheUsage(false)
 		}
 	}
 	cas.mu.Lock()
-	exceeded = cas.diskCachedUsageExceeded
+	exceeded := cas.diskCachedUsageExceeded
 	cas.mu.Unlock()
 	if !exceeded {
 		return true
@@ -1551,17 +1548,20 @@ func (cas *Store) diskWriteAllowed() bool {
 	// seed) can cross the limit well inside one interval, and refusing the
 	// store then costs the next container a registry pull. Evict now, once
 	// per guard interval, and answer from the usage that leaves behind.
+	// Writers that arrive while a pass is running queue behind it and answer
+	// from its result too, instead of failing on the flag it is about to
+	// clear. Only writes that would otherwise be refused get here.
+	cas.diskGuardEvictMu.Lock()
 	now = time.Now().UnixNano()
-	lastEvict := cas.lastDiskGuardEvictNanos.Load()
-	if lastEvict == 0 || time.Duration(now-lastEvict) >= diskCacheWriteGuardInterval {
-		if cas.lastDiskGuardEvictNanos.CompareAndSwap(lastEvict, now) {
-			if _, err := cas.refreshDiskCacheUsage(true); err == nil {
-				cas.mu.Lock()
-				exceeded = cas.diskCachedUsageExceeded
-				cas.mu.Unlock()
-			}
-		}
+	if cas.lastDiskGuardEvictNanos == 0 || time.Duration(now-cas.lastDiskGuardEvictNanos) >= diskCacheWriteGuardInterval {
+		cas.lastDiskGuardEvictNanos = now
+		cas.refreshDiskCacheUsage(true)
 	}
+	cas.diskGuardEvictMu.Unlock()
+
+	cas.mu.Lock()
+	exceeded = cas.diskCachedUsageExceeded
+	cas.mu.Unlock()
 	return !exceeded
 }
 

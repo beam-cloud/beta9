@@ -663,6 +663,9 @@ func applyJobResourceOverhead(schedulable corev1.ResourceList, overhead types.Jo
 			return
 		}
 		q, err := resource.ParseQuantity(raw)
+		if err == nil {
+			err = validateJobResourceOverheadQuantity(name, q)
+		}
 		if err != nil {
 			log.Warn().Str("resource", string(name)).Str("value", raw).Err(err).Msg("ignoring invalid worker jobResourceOverhead")
 			return
@@ -677,4 +680,22 @@ func applyJobResourceOverhead(schedulable corev1.ResourceList, overhead types.Jo
 	add(corev1.ResourceCPU, overhead.CPU)
 	add(corev1.ResourceMemory, overhead.Memory)
 	return out
+}
+
+// validateJobResourceOverheadQuantity rejects quantities that parse but belong
+// to the other resource family: a CPU overhead in bytes ("512Mi") would make
+// every worker pod unschedulable, and a memory overhead in fractional bytes
+// ("500m") is refused by the API server ("must be an integer").
+func validateJobResourceOverheadQuantity(name corev1.ResourceName, q resource.Quantity) error {
+	switch name {
+	case corev1.ResourceCPU:
+		if q.Format == resource.BinarySI {
+			return fmt.Errorf("cpu overhead %s uses a memory unit", q.String())
+		}
+	case corev1.ResourceMemory:
+		if q.MilliValue()%1000 != 0 {
+			return fmt.Errorf("memory overhead %s is not a whole number of bytes", q.String())
+		}
+	}
+	return nil
 }

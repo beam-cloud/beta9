@@ -55,10 +55,12 @@ def temp_env_vars(d: dict):
 
 class TestImageLocalFiles(TestCase):
     def setUp(self):
+        import shutil
         import tempfile
 
         self.cwd = os.getcwd()
         self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         os.chdir(self.tmp)
         os.makedirs("assets/sub")
         with open("assets/sub/a.txt", "w") as f:
@@ -74,18 +76,29 @@ class TestImageLocalFiles(TestCase):
         self.assertEqual(image.include_files_patterns, ["assets/**"])
         self.assertEqual(image.build_steps, [])
 
+    def test_add_local_dir_of_working_directory_includes_everything(self):
+        # "./**" would match nothing: synced paths carry no "./" prefix.
+        image = Image().add_local_dir(".")
+        self.assertEqual(image.include_files_patterns, ["*"])
+        image = Image().add_local_dir(".", "/app")
+        self.assertIn("ln -sfn /mnt/code /app", image.build_steps[0].command)
+
     def test_add_local_dir_symlinked(self):
         image = Image().add_local_dir("./assets", "/app/assets")
         self.assertEqual(image.include_files_patterns, ["assets/**"])
         self.assertEqual(len(image.build_steps), 1)
         self.assertEqual(
-            image.build_steps[0].command, "mkdir -p /app && ln -sfn /mnt/code/assets /app/assets"
+            image.build_steps[0].command,
+            "mkdir -p /app && "
+            "if [ -d /app/assets ] && [ ! -L /app/assets ]; then rmdir /app/assets; fi && "
+            "ln -sfn /mnt/code/assets /app/assets",
         )
 
     def test_add_local_dir_copied(self):
         image = Image().add_local_dir("assets", "/app", copy=True)
         self.assertEqual(
-            image.build_steps[0].command, "mkdir -p /app && cp -a /mnt/code/assets/. /app/"
+            image.build_steps[0].command,
+            "mkdir -p /app && if [ -d /mnt/code/assets ]; then cp -a /mnt/code/assets/. /app/; fi",
         )
 
     def test_add_local_file_copied(self):
@@ -101,8 +114,10 @@ class TestImageLocalFiles(TestCase):
             Image().add_local_dir("..")
         with self.assertRaises(ValueError):
             Image().add_local_dir("missing")
+        image = Image()
         with self.assertRaises(ValueError):
-            Image().add_local_dir("assets", copy=True)
+            image.add_local_dir("assets", copy=True)
+        self.assertEqual(image.include_files_patterns, [], "a rejected call leaves no trace")
 
     def test_modal_style_aliases(self):
         image = (

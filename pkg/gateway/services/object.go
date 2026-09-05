@@ -12,12 +12,12 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
-	"github.com/rs/zerolog/log"
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"github.com/rs/zerolog/log"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -219,9 +219,9 @@ func (gws *GatewayService) createMultipartObjectUpload(ctx context.Context, stor
 	if partSize < objectMultipartMinPartSize {
 		partSize = objectMultipartMinPartSize
 	}
-	partCount := (size + partSize - 1) / partSize
-	if partCount > objectMultipartMaxParts {
-		return "", nil, fmt.Errorf("object of %d bytes needs %d parts of %d bytes, more than %d", size, partCount, partSize, objectMultipartMaxParts)
+	partCount, err := multipartPartCount(size, partSize)
+	if err != nil {
+		return "", nil, err
 	}
 
 	key := path.Join(types.DefaultObjectPrefix, objectID)
@@ -239,11 +239,7 @@ func (gws *GatewayService) createMultipartObjectUpload(ctx context.Context, stor
 	uploadID := aws.ToString(created.UploadId)
 
 	abort := func() {
-		_, _ = storageClient.S3Client().AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
-			Bucket:   aws.String(storageClient.BucketName()),
-			Key:      aws.String(key),
-			UploadId: aws.String(uploadID),
-		})
+		abortMultipartObjectUpload(ctx, storageClient.S3Client(), storageClient.BucketName(), key, uploadID)
 	}
 
 	parts := make([]*pb.ObjectUploadPart, 0, partCount)
@@ -269,6 +265,40 @@ func (gws *GatewayService) createMultipartObjectUpload(ctx context.Context, stor
 		})
 	}
 	return uploadID, parts, nil
+}
+
+// multipartPartCount is the number of parts of partSize bytes needed to cover
+// size bytes. Both come from the client, so the arithmetic must not overflow:
+// size+partSize-1 wraps negative for a size near MaxInt64, and a negative
+// count would panic in make.
+func multipartPartCount(size, partSize int64) (int64, error) {
+	if size <= 0 || partSize <= 0 {
+		return 0, fmt.Errorf("invalid multipart upload of %d bytes in parts of %d", size, partSize)
+	}
+	partCount := size / partSize
+	if size%partSize != 0 {
+		partCount++
+	}
+	if partCount > objectMultipartMaxParts {
+		return 0, fmt.Errorf("object of %d bytes needs %d parts of %d bytes, more than %d", size, partCount, partSize, objectMultipartMaxParts)
+	}
+	return partCount, nil
+}
+
+// abortMultipartObjectUpload discards an upload that will not complete, so
+// its parts do not linger in the bucket. It runs detached from the request
+// context: the request may already be canceled, and the abort must still
+// reach the bucket.
+func abortMultipartObjectUpload(ctx context.Context, client *s3.Client, bucket, key, uploadID string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	if _, err := client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
+		Bucket:   aws.String(bucket),
+		Key:      aws.String(key),
+		UploadId: aws.String(uploadID),
+	}); err != nil {
+		log.Warn().Err(err).Str("key", key).Msg("abort multipart object upload failed")
+	}
 }
 
 func (gws *GatewayService) CompleteObjectUpload(ctx context.Context, in *pb.CompleteObjectUploadRequest) (*pb.CompleteObjectUploadResponse, error) {
@@ -298,14 +328,18 @@ func (gws *GatewayService) CompleteObjectUpload(ctx context.Context, in *pb.Comp
 			ETag:       aws.String(part.Etag),
 		})
 	}
+	key := path.Join(types.DefaultObjectPrefix, object.ExternalId)
 	_, err = storageClient.S3Client().CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
 		Bucket:          aws.String(storageClient.BucketName()),
-		Key:             aws.String(path.Join(types.DefaultObjectPrefix, object.ExternalId)),
+		Key:             aws.String(key),
 		UploadId:        aws.String(in.UploadId),
 		MultipartUpload: &s3types.CompletedMultipartUpload{Parts: completed},
 	})
 	if err != nil {
 		log.Warn().Err(err).Str("object_id", object.ExternalId).Msg("complete multipart object upload failed")
+		// The client does not retry completion, so this upload is dead and
+		// its parts should go.
+		abortMultipartObjectUpload(ctx, storageClient.S3Client(), storageClient.BucketName(), key, in.UploadId)
 		return &pb.CompleteObjectUploadResponse{Ok: false, ErrorMsg: "Unable to complete upload"}, nil
 	}
 	return &pb.CompleteObjectUploadResponse{Ok: true}, nil

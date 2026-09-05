@@ -56,6 +56,7 @@ func TestContainerMetricRangeRejectsUnsupportedInterval(t *testing.T) {
 			_, _, interval, err := containerMetricRangeFromContext(ctx, "1h")
 			if tt.wantErr {
 				require.Error(t, err)
+				require.Contains(t, err.Error(), tt.interval)
 				return
 			}
 			require.NoError(t, err)

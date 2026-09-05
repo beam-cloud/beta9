@@ -10,9 +10,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 	"sync"
 	"syscall"
 
@@ -20,6 +22,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/partial"
 	ggcrtypes "github.com/google/go-containerregistry/pkg/v1/types"
 	"github.com/klauspost/pgzip"
+	"github.com/rs/zerolog/log"
 	"golang.org/x/sys/unix"
 )
 
@@ -71,7 +74,9 @@ type overlayEntry struct {
 // character device turns into an empty ".wh.<name>" entry and an opaque
 // directory gains a ".wh..wh..opq" child. Files are captured at the size seen
 // when their header is written; a sandbox may still be running, so a file
-// that shrinks meanwhile is zero-padded and one that grows is truncated.
+// that shrinks meanwhile is zero-padded and one that grows is truncated. A
+// file the sandbox removes or replaces between the walk and the read is left
+// out of the layer (see upperOpener).
 //
 // Directories, whiteouts and symlinks all go in the first layer; regular
 // files are dealt across layers in walk order so each holds about
@@ -82,9 +87,23 @@ func packOverlayLayers(upperDir, dir string, mediaType ggcrtypes.MediaType) ([]*
 	return packOverlayLayersWithTarget(upperDir, dir, mediaType, layerSplitTargetBytes)
 }
 
+// inode identifies a file across its hard links.
+type inode struct{ dev, ino uint64 }
+
+// hardLinkInode returns the inode of a regular file that has other links, and
+// false for anything else.
+func hardLinkInode(info os.FileInfo) (inode, bool) {
+	st, _ := info.Sys().(*syscall.Stat_t)
+	if st == nil || st.Nlink <= 1 || !info.Mode().IsRegular() {
+		return inode{}, false
+	}
+	return inode{uint64(st.Dev), uint64(st.Ino)}, true
+}
+
 func packOverlayLayersWithTarget(upperDir, dir string, mediaType ggcrtypes.MediaType, targetBytes int64) ([]*packedLayer, error) {
 	var entries []overlayEntry
 	var contentBytes int64
+	seenInodes := map[inode]struct{}{}
 	err := filepath.WalkDir(upperDir, func(path string, d os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -105,7 +124,15 @@ func packOverlayLayersWithTarget(upperDir, dir string, mediaType ggcrtypes.Media
 		}
 		if info.Mode().IsRegular() {
 			entry.size = info.Size()
-			contentBytes += entry.size
+			// Only the first link of an inode carries content; the others
+			// become empty link entries.
+			key, linked := hardLinkInode(info)
+			if _, seen := seenInodes[key]; !linked || !seen {
+				contentBytes += entry.size
+			}
+			if linked {
+				seenInodes[key] = struct{}{}
+			}
 		}
 		entries = append(entries, entry)
 		return nil
@@ -114,41 +141,20 @@ func packOverlayLayersWithTarget(upperDir, dir string, mediaType ggcrtypes.Media
 		return nil, err
 	}
 
-	target := targetBytes
+	// Assign each entry to a layer. Non-files pin to layer 0; files fill
+	// layers greedily. Hard-linked inodes stay together with their first
+	// occurrence so links resolve within the layer. Greedy filling can leave
+	// layers short (a file that does not fit starts the next one), so the
+	// target grows until the layer cap holds.
+	target := max(targetBytes, 1)
 	if minTarget := (contentBytes + layerSplitMaxLayers - 1) / layerSplitMaxLayers; minTarget > target {
 		target = minTarget
 	}
-	// Assign each entry to a layer. Non-files pin to layer 0; files fill
-	// layers greedily. Hard-linked inodes stay together with their first
-	// occurrence so links resolve within the layer.
-	type inode struct{ dev, ino uint64 }
-	inodeLayer := map[inode]int{}
-	assignment := make([]int, len(entries))
-	current, filled := 0, int64(0)
-	for i, entry := range entries {
-		if !entry.info.Mode().IsRegular() {
-			assignment[i] = 0
-			continue
-		}
-		st, _ := entry.info.Sys().(*syscall.Stat_t)
-		if st != nil && st.Nlink > 1 {
-			key := inode{uint64(st.Dev), uint64(st.Ino)}
-			if layer, seen := inodeLayer[key]; seen {
-				assignment[i] = layer
-				continue
-			}
-		}
-		if filled > 0 && filled+entry.size > target {
-			current++
-			filled = 0
-		}
-		filled += entry.size
-		assignment[i] = current
-		if st != nil && st.Nlink > 1 {
-			inodeLayer[inode{uint64(st.Dev), uint64(st.Ino)}] = current
-		}
+	assignment, layerCount := assignLayers(entries, target)
+	for layerCount > layerSplitMaxLayers {
+		target *= 2
+		assignment, layerCount = assignLayers(entries, target)
 	}
-	layerCount := current + 1
 
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
@@ -166,7 +172,7 @@ func packOverlayLayersWithTarget(upperDir, dir string, mediaType ggcrtypes.Media
 					mine = append(mine, entry)
 				}
 			}
-			layers[layer], errs[layer] = writeLayerTar(mine, filepath.Join(dir, fmt.Sprintf("layer-%d.tar.gz", layer)), mediaType, layerCount)
+			layers[layer], errs[layer] = writeLayerTar(upperDir, mine, filepath.Join(dir, fmt.Sprintf("layer-%d.tar.gz", layer)), mediaType, layerCount)
 		}(layer)
 	}
 	wg.Wait()
@@ -178,9 +184,48 @@ func packOverlayLayersWithTarget(upperDir, dir string, mediaType ggcrtypes.Media
 	return layers, nil
 }
 
+// assignLayers deals entries into layers of about target bytes of file
+// content each, returning each entry's layer and the number of layers.
+func assignLayers(entries []overlayEntry, target int64) ([]int, int) {
+	inodeLayer := map[inode]int{}
+	assignment := make([]int, len(entries))
+	current, filled := 0, int64(0)
+	for i, entry := range entries {
+		if !entry.info.Mode().IsRegular() {
+			assignment[i] = 0
+			continue
+		}
+		key, linked := hardLinkInode(entry.info)
+		if linked {
+			if layer, seen := inodeLayer[key]; seen {
+				assignment[i] = layer
+				continue
+			}
+		}
+		if filled > 0 && filled+entry.size > target {
+			current++
+			filled = 0
+		}
+		filled += entry.size
+		assignment[i] = current
+		if linked {
+			inodeLayer[key] = current
+		}
+	}
+	return assignment, current + 1
+}
+
 // writeLayerTar writes entries as one gzip'd layer tar, hashing the tar
-// (diffID) and the gzip output (digest) as it goes.
-func writeLayerTar(entries []overlayEntry, gzPath string, mediaType ggcrtypes.MediaType, concurrentLayers int) (*packedLayer, error) {
+// (diffID) and the gzip output (digest) as it goes. Regular files are opened
+// through an upperOpener rooted at upperDir; an entry that has vanished or is
+// no longer the file the walk saw is skipped, header and all.
+func writeLayerTar(upperDir string, entries []overlayEntry, gzPath string, mediaType ggcrtypes.MediaType, concurrentLayers int) (*packedLayer, error) {
+	opener, err := newUpperOpener(upperDir)
+	if err != nil {
+		return nil, err
+	}
+	defer opener.close()
+
 	out, err := os.Create(gzPath)
 	if err != nil {
 		return nil, err
@@ -203,13 +248,12 @@ func writeLayerTar(entries []overlayEntry, gzPath string, mediaType ggcrtypes.Me
 	diffHash := sha256.New()
 	tw := tar.NewWriter(io.MultiWriter(gz, diffHash))
 
-	type inode struct{ dev, ino uint64 }
 	linked := map[inode]string{}
 	var contentBytes int64
 
 	for _, entry := range entries {
-		info, st := entry.info, (*syscall.Stat_t)(nil)
-		st, _ = info.Sys().(*syscall.Stat_t)
+		info := entry.info
+		st, _ := info.Sys().(*syscall.Stat_t)
 
 		if info.Mode()&os.ModeCharDevice != 0 && st != nil && st.Rdev == 0 {
 			if err := tw.WriteHeader(&tar.Header{
@@ -227,25 +271,47 @@ func writeLayerTar(entries []overlayEntry, gzPath string, mediaType ggcrtypes.Me
 			return nil, err
 		}
 		hdr.Name = entry.rel
-		hdr.Xattrs, hdr.PAXRecords = nil, nil
 		if info.IsDir() {
 			hdr.Name += "/"
 		}
-		if hdr.Typeflag == tar.TypeReg && st != nil && st.Nlink > 1 {
-			key := inode{uint64(st.Dev), uint64(st.Ino)}
-			if target, seen := linked[key]; seen {
+
+		// A regular file is opened, and checked to still be the file the
+		// walk saw, before its header goes out, so a skipped entry never
+		// leaves a header without content. Only the first link of an inode
+		// that could be opened carries the content: if the sandbox removed
+		// that one, the next link becomes the carrier instead of pointing
+		// at an entry the layer does not have.
+		var content *os.File
+		if hdr.Typeflag == tar.TypeReg {
+			key, hardLinked := hardLinkInode(info)
+			if target, seen := linked[key]; hardLinked && seen {
 				hdr.Typeflag, hdr.Linkname, hdr.Size = tar.TypeLink, target, 0
 			} else {
-				linked[key] = entry.rel
+				content, err = opener.open(entry.rel, st)
+				if err != nil {
+					log.Debug().Err(err).Str("path", entry.rel).Msg("upper dir entry changed since the walk, left out of the layer")
+					continue
+				}
+				if hardLinked {
+					linked[key] = entry.rel
+				}
 			}
 		}
+		if content != nil {
+			hdr.PAXRecords = fdXattrRecords(int(content.Fd()))
+		} else {
+			hdr.PAXRecords = fileXattrRecords(entry.path)
+		}
 		if err := tw.WriteHeader(hdr); err != nil {
+			content.Close()
 			return nil, err
 		}
 
 		switch {
-		case hdr.Typeflag == tar.TypeReg && hdr.Size > 0:
-			if err := copyFixedSize(tw, entry.path, hdr.Size); err != nil {
+		case content != nil:
+			err := copyFixedSize(tw, content, hdr.Size)
+			content.Close()
+			if err != nil {
 				return nil, err
 			}
 			contentBytes += hdr.Size
@@ -277,15 +343,10 @@ func writeLayerTar(entries []overlayEntry, gzPath string, mediaType ggcrtypes.Me
 	}, nil
 }
 
-// copyFixedSize writes exactly size bytes of path to w, zero-padding if the
+// copyFixedSize writes exactly size bytes of r to w, zero-padding if the
 // file has shrunk since it was measured.
-func copyFixedSize(w io.Writer, path string, size int64) error {
-	f, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	n, err := io.CopyN(w, f, size)
+func copyFixedSize(w io.Writer, r io.Reader, size int64) error {
+	n, err := io.CopyN(w, r, size)
 	if err != nil && !errors.Is(err, io.EOF) {
 		return err
 	}
@@ -293,6 +354,101 @@ func copyFixedSize(w io.Writer, path string, size int64) error {
 		_, err = io.CopyN(w, zeroReader{}, size-n)
 	}
 	return err
+}
+
+// errUpperEntryChanged reports that what is at a path is no longer the regular
+// file the walk recorded there.
+var errUpperEntryChanged = errors.New("entry is not the regular file seen by the walk")
+
+// upperOpener opens regular files in a live sandbox's upper directory without
+// trusting the path. The sandbox writes there while the layer is packed, so
+// between the walk's lstat and the open it can swap a file, or any directory
+// on the way to it, for a symlink; os.Open would follow that to wherever on
+// the worker host it points and the snapshot would carry the target's bytes.
+// Every path component is instead opened relative to its parent's descriptor
+// with O_NOFOLLOW, and the opened file is fstat'd and required to be a
+// regular file with the walk's device and inode. The directory descriptor of
+// the most recent entry is kept, since the walk lists a directory's files
+// together.
+type upperOpener struct {
+	rootFd int
+	dirRel string
+	dirFd  int
+}
+
+func newUpperOpener(upperDir string) (*upperOpener, error) {
+	fd, err := unix.Open(upperDir, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, &os.PathError{Op: "open", Path: upperDir, Err: err}
+	}
+	return &upperOpener{rootFd: fd, dirFd: -1}, nil
+}
+
+func (o *upperOpener) close() {
+	if o.dirFd >= 0 {
+		unix.Close(o.dirFd)
+	}
+	unix.Close(o.rootFd)
+}
+
+// dir returns a descriptor for the upper-relative directory rel ("" is the
+// root), opening one component at a time with O_NOFOLLOW.
+func (o *upperOpener) dir(rel string) (int, error) {
+	if rel == "" {
+		return o.rootFd, nil
+	}
+	if rel == o.dirRel && o.dirFd >= 0 {
+		return o.dirFd, nil
+	}
+	fd := o.rootFd
+	for _, component := range strings.Split(rel, "/") {
+		next, err := unix.Openat(fd, component, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+		if fd != o.rootFd {
+			unix.Close(fd)
+		}
+		if err != nil {
+			return -1, &os.PathError{Op: "openat", Path: rel, Err: err}
+		}
+		fd = next
+	}
+	if o.dirFd >= 0 {
+		unix.Close(o.dirFd)
+	}
+	o.dirRel, o.dirFd = rel, fd
+	return fd, nil
+}
+
+// open opens the regular file at the upper-relative path rel and verifies it
+// is still the inode the walk lstat'd as want.
+func (o *upperOpener) open(rel string, want *syscall.Stat_t) (*os.File, error) {
+	if want == nil {
+		return nil, &os.PathError{Op: "open", Path: rel, Err: errUpperEntryChanged}
+	}
+	dirRel, base := path.Split(rel)
+	dirFd, err := o.dir(strings.TrimSuffix(dirRel, "/"))
+	if err != nil {
+		return nil, err
+	}
+	// O_NONBLOCK so that a FIFO put in the file's place does not hang the
+	// open; it is cleared once the file has passed the check.
+	fd, err := unix.Openat(dirFd, base, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, &os.PathError{Op: "openat", Path: rel, Err: err}
+	}
+	var got unix.Stat_t
+	if err := unix.Fstat(fd, &got); err != nil {
+		unix.Close(fd)
+		return nil, &os.PathError{Op: "fstat", Path: rel, Err: err}
+	}
+	if got.Mode&unix.S_IFMT != unix.S_IFREG || got.Ino != uint64(want.Ino) || uint64(got.Dev) != uint64(want.Dev) {
+		unix.Close(fd)
+		return nil, &os.PathError{Op: "open", Path: rel, Err: errUpperEntryChanged}
+	}
+	if err := unix.SetNonblock(fd, false); err != nil {
+		unix.Close(fd)
+		return nil, &os.PathError{Op: "open", Path: rel, Err: err}
+	}
+	return os.NewFile(uintptr(fd), rel), nil
 }
 
 type zeroReader struct{}
@@ -304,13 +460,104 @@ func (zeroReader) Read(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func readXattr(path, attr string) (string, error) {
-	buf := make([]byte, 64)
-	n, err := unix.Lgetxattr(path, attr, buf)
-	if err != nil {
-		return "", err
+// xattrFuncs lists and reads the attributes of one file, by path (without
+// following a final symlink) or by descriptor.
+type xattrFuncs struct {
+	list func(buf []byte) (int, error)
+	get  func(attr string, buf []byte) (int, error)
+}
+
+func pathXattrs(path string) xattrFuncs {
+	return xattrFuncs{
+		list: func(buf []byte) (int, error) { return unix.Llistxattr(path, buf) },
+		get:  func(attr string, buf []byte) (int, error) { return unix.Lgetxattr(path, attr, buf) },
 	}
-	return string(buf[:n]), nil
+}
+
+func fdXattrs(fd int) xattrFuncs {
+	return xattrFuncs{
+		list: func(buf []byte) (int, error) { return unix.Flistxattr(fd, buf) },
+		get:  func(attr string, buf []byte) (int, error) { return unix.Fgetxattr(fd, attr, buf) },
+	}
+}
+
+func readXattr(path, attr string) (string, error) {
+	return pathXattrs(path).read(attr)
+}
+
+func (x xattrFuncs) read(attr string) (string, error) {
+	buf := make([]byte, 64)
+	for {
+		n, err := x.get(attr, buf)
+		if err == unix.ERANGE {
+			buf = make([]byte, 2*len(buf))
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		return string(buf[:n]), nil
+	}
+}
+
+// skippedXattrPrefixes are attributes that describe the overlay or the
+// worker host rather than the file: overlayfs bookkeeping on the upper
+// directory (opaque, redirect, origin, impure, nlink, metacopy, whiteout...)
+// and the host's SELinux label.
+var skippedXattrPrefixes = []string{"trusted.overlay.", "user.overlay.", "security.selinux"}
+
+// fileXattrRecords returns the file's extended attributes as PAX records
+// (SCHILY.xattr.<name>, the form Docker and containers/storage use), so file
+// capabilities and the like survive into the image. Nothing is returned for
+// files without attributes or on filesystems without them.
+func fileXattrRecords(path string) map[string]string {
+	return pathXattrs(path).records()
+}
+
+// fdXattrRecords is fileXattrRecords for an open file, so the attributes are
+// read from the file that was verified rather than from whatever its path
+// resolves to now.
+func fdXattrRecords(fd int) map[string]string {
+	return fdXattrs(fd).records()
+}
+
+func (x xattrFuncs) records() map[string]string {
+	buf := make([]byte, 256)
+	var n int
+	for {
+		var err error
+		if n, err = x.list(buf); err == unix.ERANGE {
+			buf = make([]byte, 2*len(buf))
+			continue
+		} else if err != nil || n == 0 {
+			return nil
+		}
+		break
+	}
+	var records map[string]string
+	for _, name := range bytes.Split(bytes.TrimRight(buf[:n], "\x00"), []byte{0}) {
+		if len(name) == 0 || skippedXattr(string(name)) {
+			continue
+		}
+		value, err := x.read(string(name))
+		if err != nil {
+			continue
+		}
+		if records == nil {
+			records = map[string]string{}
+		}
+		records["SCHILY.xattr."+string(name)] = value
+	}
+	return records
+}
+
+func skippedXattr(name string) bool {
+	for _, prefix := range skippedXattrPrefixes {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // layerMediaTypeFor picks the layer media type matching an image manifest.

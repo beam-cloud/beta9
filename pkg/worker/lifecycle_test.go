@@ -55,6 +55,83 @@ func TestPruneUnreachableSDKMountsKeepsOnlyPresentSitePackages(t *testing.T) {
 	}, kept)
 }
 
+// Only a definite absence drops an SDK mount. A stat that fails for any other
+// reason (permissions, an I/O error from a lazily loaded image) keeps it, so a
+// transient read failure cannot silently ship a container without its SDK.
+func TestPruneUnreachableSDKMountsKeepsMountsOnStatErrors(t *testing.T) {
+	sdk := func(dest string) specs.Mount {
+		return specs.Mount{Destination: dest, Type: "bind", Source: sdkMountSource}
+	}
+	mounts := []specs.Mount{
+		sdk("/missing/site-packages/beta9"),
+		sdk("/notdir/site-packages/beta9"),
+		sdk("/denied/site-packages/beta9"),
+		sdk("/flaky/site-packages/beta9"),
+		sdk("/present/site-packages/beta9"),
+	}
+	stat := func(path string) (os.FileInfo, error) {
+		switch {
+		case strings.HasPrefix(path, "/root/missing/"):
+			return nil, &os.PathError{Op: "stat", Path: path, Err: syscall.ENOENT}
+		case strings.HasPrefix(path, "/root/notdir/"):
+			return nil, &os.PathError{Op: "stat", Path: path, Err: syscall.ENOTDIR}
+		case strings.HasPrefix(path, "/root/denied/"):
+			return nil, &os.PathError{Op: "stat", Path: path, Err: syscall.EACCES}
+		case strings.HasPrefix(path, "/root/flaky/"):
+			return nil, &os.PathError{Op: "stat", Path: path, Err: syscall.EIO}
+		}
+		return nil, nil
+	}
+
+	kept := pruneUnreachableSDKMountsWithStat(mounts, "/root", stat)
+
+	require.Equal(t, []specs.Mount{
+		sdk("/denied/site-packages/beta9"),
+		sdk("/flaky/site-packages/beta9"),
+		sdk("/present/site-packages/beta9"),
+	}, kept)
+}
+
+// The publication result is observable by every party that needs it, as often
+// as needed: the runtime start joins it to publish RUNNING, teardown joins it
+// so state deletion cannot race a publication still in flight.
+func TestAddressRegistrationJoinsFromEveryWaiter(t *testing.T) {
+	release := make(chan struct{})
+	published := errors.New("publish failed")
+	registration := newAddressRegistration(func() error {
+		<-release
+		return published
+	})
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, registration.wait(cancelled), context.Canceled)
+
+	teardownDone := make(chan struct{})
+	go func() {
+		registration.waitForTeardown()
+		close(teardownDone)
+	}()
+	select {
+	case <-teardownDone:
+		t.Fatal("teardown joined before the publication finished")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case <-teardownDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("teardown did not observe the finished publication")
+	}
+	require.ErrorIs(t, registration.wait(context.Background()), published)
+	require.ErrorIs(t, registration.wait(context.Background()), published)
+
+	var none *addressRegistration
+	require.NoError(t, none.wait(context.Background()))
+	none.waitForTeardown()
+}
+
 func TestWaitForRuntimeStartedDrainsQueuedPIDWhenRuntimeDone(t *testing.T) {
 	for i := 0; i < 1000; i++ {
 		runtimeStarted := make(chan int, 1)
@@ -330,10 +407,8 @@ func TestApplyRuntimeEnvironmentOverridesLeavesCheckpointEnvWithoutCheckpoints(t
 }
 
 // registeredAddresses stands in for a completed address-map publication.
-func registeredAddresses() <-chan error {
-	done := make(chan error, 1)
-	done <- nil
-	return done
+func registeredAddresses() *addressRegistration {
+	return newAddressRegistration(func() error { return nil })
 }
 
 func TestRegisterContainerPortsUsesNetworkManagerAddresses(t *testing.T) {
@@ -1978,8 +2053,9 @@ func TestRunContainerRestorePublishesAddressFromStartedHandler(t *testing.T) {
 		Runtime: rt,
 	})
 
-	addressesRegistered := make(chan error, 1)
-	addressesRegistered <- worker.registerContainerPorts(context.Background(), request, []PortBinding{{HostPort: 30001, ContainerPort: 8001}})
+	addressesRegistered := newAddressRegistration(func() error {
+		return worker.registerContainerPorts(context.Background(), request, []PortBinding{{HostPort: 30001, ContainerPort: 8001}})
+	})
 	exitCode, err := worker.runContainer(
 		context.Background(),
 		request,

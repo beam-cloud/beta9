@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -55,10 +56,12 @@ func TestMergeZipArchivesReplacesAddsAndRemoves(t *testing.T) {
 		"app/gone.py": "gone",
 		"README":      "readme",
 	}, zip.Store)
+	defer base.Close()
 	delta := writeZip(t, filepath.Join(dir, "delta.zip"), map[string]string{
 		"app/a.py":   "a v2",
 		"app/new.py": "new",
 	}, zip.Deflate)
+	defer delta.Close()
 
 	var out bytes.Buffer
 	size, err := mergeZipArchives(base, delta, []string{"app/gone.py"}, &out)
@@ -131,4 +134,45 @@ print("ok")`, mergedPath)
 	outb, err = check.CombinedOutput()
 	require.NoError(t, err, string(outb))
 	require.Contains(t, string(outb), "ok")
+}
+
+func TestObjectDeltaKeyIsPerBase(t *testing.T) {
+	// Same target object reached from two different bases: the deltas differ,
+	// so they must not share a staging key.
+	a := objectDeltaKey("obj-new", "obj-base-a")
+	b := objectDeltaKey("obj-new", "obj-base-b")
+	require.NotEqual(t, a, b)
+	require.Equal(t, a, objectDeltaKey("obj-new", "obj-base-a"))
+	require.NotEqual(t, a, objectDeltaKey("obj-other", "obj-base-a"))
+	// Staging keys never collide with an object's own archive key.
+	require.NotEqual(t, filepath.Join("objects", "obj-new"), a)
+}
+
+func TestMultipartPartCount(t *testing.T) {
+	const part = int64(objectMultipartMinPartSize)
+	for _, tc := range []struct {
+		size, partSize, want int64
+		wantErr              bool
+	}{
+		{size: part, partSize: part, want: 1},
+		{size: part + 1, partSize: part, want: 2},
+		{size: 3*part - 1, partSize: part, want: 3},
+		{size: 3 * part, partSize: part, want: 3},
+		{size: objectMultipartMaxParts * part, partSize: part, want: objectMultipartMaxParts},
+		{size: objectMultipartMaxParts*part + 1, partSize: part, wantErr: true},
+		{size: 0, partSize: part, wantErr: true},
+		{size: -1, partSize: part, wantErr: true},
+		{size: part, partSize: 0, wantErr: true},
+		// size+partSize-1 overflows; must be rejected, not made negative.
+		{size: math.MaxInt64, partSize: part, wantErr: true},
+		{size: math.MaxInt64, partSize: 2, wantErr: true},
+	} {
+		got, err := multipartPartCount(tc.size, tc.partSize)
+		if tc.wantErr {
+			require.Error(t, err, "size=%d partSize=%d", tc.size, tc.partSize)
+			continue
+		}
+		require.NoError(t, err, "size=%d partSize=%d", tc.size, tc.partSize)
+		require.Equal(t, tc.want, got, "size=%d partSize=%d", tc.size, tc.partSize)
+	}
 }

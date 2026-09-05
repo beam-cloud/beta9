@@ -113,7 +113,13 @@ func TestApplyJobResourceOverhead(t *testing.T) {
 	})
 
 	t.Run("empty, zero and invalid overhead leave resources unchanged", func(t *testing.T) {
-		for _, cfg := range []types.JobResourceOverheadConfig{{}, {CPU: "0", Memory: "0"}, {CPU: "lots", Memory: "-1Gi"}} {
+		for _, cfg := range []types.JobResourceOverheadConfig{
+			{},
+			{CPU: "0", Memory: "0"},
+			{CPU: "lots", Memory: "-1Gi"},
+			// Quantities from the other resource family parse but are nonsense.
+			{CPU: "512Mi", Memory: "500m"},
+		} {
 			out := applyJobResourceOverhead(schedulable, cfg)
 			if got := out[corev1.ResourceCPU]; got.MilliValue() != 4000 {
 				t.Fatalf("%+v: cpu = %s, want 4000m", cfg, got.String())

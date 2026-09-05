@@ -76,8 +76,9 @@ func parseDockerfilePlan(text string, buildArgs map[string]string) (*dockerfileP
 		return nil, err
 	}
 	plan := &dockerfilePlan{}
-	env := map[string]string{}  // ENV, persisted in the image
-	args := map[string]string{} // ARG, visible to later instructions only
+	env := map[string]string{}        // ENV, persisted in the image
+	args := map[string]string{}       // ARG inside the stage, visible to later instructions only
+	globalArgs := map[string]string{} // ARG before FROM: visible to FROM, and to a redeclaring ARG
 	lookup := func(name string) (string, bool) {
 		if v, ok := env[name]; ok {
 			return v, true
@@ -87,12 +88,20 @@ func parseDockerfilePlan(text string, buildArgs map[string]string) (*dockerfileP
 		}
 		return "", false
 	}
+	globalLookup := func(name string) (string, bool) {
+		v, ok := globalArgs[name]
+		return v, ok
+	}
+	// Relative WORKDIRs resolve against the previous one; before any, they
+	// would resolve against the base image's configured working directory.
 	workdir := ""
 
 	for _, line := range lines {
-		instr, rest, _ := strings.Cut(line, " ")
+		instr, rest := line, ""
+		if i := strings.IndexAny(line, " \t"); i >= 0 {
+			instr, rest = line[:i], strings.TrimSpace(line[i+1:])
+		}
 		instr = strings.ToUpper(instr)
-		rest = strings.TrimSpace(rest)
 		if plan.from == "" && instr != "FROM" && instr != "ARG" {
 			return nil, fmt.Errorf("%w: %s before FROM", errDockerfileUnsupported, instr)
 		}
@@ -112,7 +121,7 @@ func parseDockerfilePlan(text string, buildArgs map[string]string) (*dockerfileP
 			if len(fields) != 1 {
 				return nil, fmt.Errorf("%w: FROM %q", errDockerfileUnsupported, rest)
 			}
-			from, err := expandDockerfileVars(fields[0], lookup)
+			from, err := expandDockerfileVars(fields[0], globalLookup)
 			if err != nil {
 				return nil, err
 			}
@@ -160,11 +169,29 @@ func parseDockerfilePlan(text string, buildArgs map[string]string) (*dockerfileP
 				return nil, fmt.Errorf("%w: ARG %q", errDockerfileUnsupported, rest)
 			}
 			value, set := buildArgs[name]
+			if plan.from == "" {
+				// Before FROM the ARG is global: it only serves FROM, unless
+				// a stage redeclares it, and is no step of the build.
+				if !set && hasDefault {
+					if value, err = expandDockerfileVars(unquoteDockerfileWord(def), globalLookup); err != nil {
+						return nil, err
+					}
+					set = true
+				}
+				if set {
+					globalArgs[name] = value
+				}
+				continue
+			}
 			if !set && hasDefault {
 				if value, err = expandDockerfileVars(unquoteDockerfileWord(def), lookup); err != nil {
 					return nil, err
 				}
 				set = true
+			}
+			if !set {
+				// A bare redeclaration inherits the global ARG's value.
+				value, set = globalArgs[name]
 			}
 			if set {
 				args[name] = value
@@ -177,6 +204,11 @@ func parseDockerfilePlan(text string, buildArgs map[string]string) (*dockerfileP
 				return nil, err
 			}
 			if !path.IsAbs(dir) {
+				if workdir == "" {
+					// Relative to the base image's working directory, which
+					// is not known here.
+					return nil, fmt.Errorf("%w: relative WORKDIR %q before an absolute one", errDockerfileUnsupported, dir)
+				}
 				dir = path.Join(workdir, dir)
 			}
 			workdir = path.Clean(dir)
@@ -194,6 +226,9 @@ func parseDockerfilePlan(text string, buildArgs map[string]string) (*dockerfileP
 			fields := strings.Fields(rest)
 			for len(fields) > 0 && strings.HasPrefix(fields[0], "--") {
 				flag, value, _ := strings.Cut(fields[0], "=")
+				if value, err = expandDockerfileVars(value, lookup); err != nil {
+					return nil, err
+				}
 				switch flag {
 				case "--chown":
 					step.chown = value

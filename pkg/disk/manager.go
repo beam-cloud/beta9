@@ -101,13 +101,25 @@ type Manager struct {
 	execs         bool // run is the real exec runner, so binaries must exist
 	maxChainDepth int
 
-	mu              sync.Mutex
-	volumes         map[string]*Volume
-	nbdDevicesReady bool
+	mu      sync.Mutex
+	volumes map[string]*Volume
 	// spares are pre-built fresh volumes by virtual size (see spare.go).
 	spares      map[int64][]*Volume
 	spareBuilds map[int64]bool
 	closed      bool
+
+	// nbdReadyMu serializes the first NBD preparation so concurrent first
+	// attaches share one pass instead of each validating every device.
+	nbdReadyMu      sync.Mutex
+	nbdDevicesReady bool
+
+	// spareCtx is cancelled by destroySpares so in-flight spare builds stop,
+	// and spareWG lets shutdown wait for the builders to exit.
+	spareCtx    context.Context
+	spareCancel context.CancelFunc
+	spareWG     sync.WaitGroup
+	// spareSizesMu serializes the read-modify-write of spareSizesFile.
+	spareSizesMu sync.Mutex
 
 	preflightOnce sync.Once
 	preflightErr  error
@@ -131,6 +143,7 @@ func NewManager(config Config) *Manager {
 	if config.Runner != nil {
 		run = config.Runner
 	}
+	spareCtx, spareCancel := context.WithCancel(context.Background())
 	return &Manager{
 		root:          config.Root,
 		binaries:      config.Binaries,
@@ -142,6 +155,8 @@ func NewManager(config Config) *Manager {
 		volumes:       make(map[string]*Volume),
 		spares:        make(map[int64][]*Volume),
 		spareBuilds:   make(map[int64]bool),
+		spareCtx:      spareCtx,
+		spareCancel:   spareCancel,
 	}
 }
 
@@ -191,6 +206,11 @@ func (m *Manager) Attach(ctx context.Context, spec AttachSpec, source ChunkSourc
 	}
 	if spec.Key == "" || spec.Key != filepath.Base(spec.Key) {
 		return nil, fmt.Errorf("invalid volume key %q", spec.Key)
+	}
+	if isSpareKey(spec.Key) {
+		// Recover treats every directory with this prefix as a spare and
+		// removes it, so a real volume must never live under one.
+		return nil, fmt.Errorf("invalid volume key %q: the %s prefix is reserved", spec.Key, sparePrefix)
 	}
 	if spec.VirtualSizeBytes <= 0 {
 		return nil, fmt.Errorf("volume %s requires a positive size", spec.Key)

@@ -64,18 +64,30 @@ func TestWorkerLifecycleRelayRetriesUnacknowledgedBatch(t *testing.T) {
 
 type poisonLifecyclePushClient struct {
 	pb.WorkerRepositoryServiceClient
-	mu           sync.Mutex
-	acknowledged []*pb.PushContainerLifecycleEventsRequest
+	mu              sync.Mutex
+	poisonAttempts  int
+	poisonDeadlines []time.Time
+	acknowledged    []*pb.PushContainerLifecycleEventsRequest
 }
 
-func (c *poisonLifecyclePushClient) PushContainerLifecycleEvents(_ context.Context, request *pb.PushContainerLifecycleEventsRequest, _ ...grpc.CallOption) (*pb.PushContainerLifecycleEventsResponse, error) {
-	if len(request.Events) > 0 && strings.Contains(string(request.Events[0]), "container-poison") {
-		return &pb.PushContainerLifecycleEventsResponse{Ok: false, ErrorMsg: "unauthorized worker lifecycle event"}, nil
-	}
+func (c *poisonLifecyclePushClient) PushContainerLifecycleEvents(ctx context.Context, request *pb.PushContainerLifecycleEventsRequest, _ ...grpc.CallOption) (*pb.PushContainerLifecycleEventsResponse, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if len(request.Events) > 0 && strings.Contains(string(request.Events[0]), "container-poison") {
+		c.poisonAttempts++
+		if deadline, ok := ctx.Deadline(); ok {
+			c.poisonDeadlines = append(c.poisonDeadlines, deadline)
+		}
+		return &pb.PushContainerLifecycleEventsResponse{Ok: false, ErrorMsg: "unauthorized worker lifecycle event"}, nil
+	}
 	c.acknowledged = append(c.acknowledged, request)
 	return &pb.PushContainerLifecycleEventsResponse{Ok: true}, nil
+}
+
+func (c *poisonLifecyclePushClient) poisonAttemptCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.poisonAttempts
 }
 
 func (c *poisonLifecyclePushClient) acknowledgedContainer(containerID string) bool {
@@ -107,7 +119,10 @@ func TestWorkerLifecycleRelayDropsBatchAfterRetryBudget(t *testing.T) {
 		ContainerID: "container-poison",
 		StartTime:   time.Now(),
 	}))
-	time.Sleep(100 * time.Millisecond)
+	// Once the relay has attempted the poison batch it is sealed inside the
+	// retry loop, so the good event cannot be batched with it and must be
+	// delivered after the poison batch is dropped.
+	require.Eventually(t, func() bool { return client.poisonAttemptCount() >= 1 }, 3*time.Second, time.Millisecond)
 	require.True(t, relay.push(types.EventContainerLifecycleSchema{
 		ID:          types.ContainerLifecycleImageLoad,
 		ContainerID: "container-good",
@@ -115,6 +130,15 @@ func TestWorkerLifecycleRelayDropsBatchAfterRetryBudget(t *testing.T) {
 	}))
 
 	require.Eventually(t, func() bool { return client.acknowledgedContainer("container-good") }, 3*time.Second, 10*time.Millisecond)
+
+	// Every attempt, including the last one, was bounded by the batch's retry
+	// deadline rather than the full push timeout.
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	require.NotEmpty(t, client.poisonDeadlines)
+	for _, deadline := range client.poisonDeadlines {
+		require.Equal(t, client.poisonDeadlines[0], deadline)
+	}
 }
 
 func TestWorkerLifecycleRelayRejectsFullQueue(t *testing.T) {

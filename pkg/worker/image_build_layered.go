@@ -48,6 +48,8 @@ type layeredBuild struct {
 
 	container string
 	stepsDone int
+	// ARGs the Dockerfile has declared so far; only these reach RUN.
+	declaredArgs map[string]struct{}
 	// Image config accumulated from the instructions.
 	env        map[string]string
 	envOrder   []string
@@ -109,14 +111,18 @@ func (b *layeredBuild) execute() (upperDir string, err error) {
 
 	// apt inside RUN steps gets short timeouts, retries and (if configured)
 	// a nearby mirror, mounted for the step only. Needs a look at the base
-	// rootfs to know whether apt is there and what its sources say.
-	if mountPoint, err := b.quiet("mount", b.container); err == nil {
-		b.runVolumes = append(b.runVolumes, aptBuildVolumes(b.c.config.ImageService.BuildApt, mountPoint, b.tmpdir)...)
-		if _, err := b.quiet("umount", b.container); err != nil {
-			log.Debug().Err(err).Msg("buildah umount after apt inspection")
+	// rootfs to know whether apt is there and what its sources say. A
+	// Dockerfile that sets up apt itself is left to it: its edits could not
+	// land on the read-only mounts.
+	if b.c.config.ImageService.BuildApt != (types.BuildAptConfig{}) && !runStepsTouchAptConfig(b.plan.steps) {
+		if mountPoint, err := b.quiet("mount", b.container); err == nil {
+			b.runVolumes = append(b.runVolumes, aptBuildVolumes(b.c.config.ImageService.BuildApt, mountPoint, b.tmpdir)...)
+			if _, err := b.quiet("umount", b.container); err != nil {
+				log.Debug().Err(err).Msg("buildah umount after apt inspection")
+			}
+		} else {
+			log.Debug().Err(err).Msg("buildah mount for apt inspection")
 		}
-	} else {
-		log.Debug().Err(err).Msg("buildah mount for apt inspection")
 	}
 
 	for i, step := range b.plan.steps {
@@ -164,11 +170,13 @@ func (b *layeredBuild) step(step dockerfileStep) error {
 			args = append(args, "--volume", volume)
 		}
 		// ARG values reach RUN as environment without persisting in the
-		// image. They are handed over through buildah's own environment
+		// image, and only once the Dockerfile has declared them, as with
+		// Docker. They are handed over through buildah's own environment
 		// (--env NAME) so secrets stay off the command line.
 		var extraEnv []string
-		for name, value := range b.buildArgs {
-			if _, isEnv := b.env[name]; !isEnv {
+		for name := range b.declaredArgs {
+			value, given := b.buildArgs[name]
+			if _, isEnv := b.env[name]; given && !isEnv {
 				args = append(args, "--env", name)
 				extraEnv = append(extraEnv, name+"="+value)
 			}
@@ -177,12 +185,7 @@ func (b *layeredBuild) step(step dockerfileStep) error {
 		if step.exec != nil {
 			args = append(args, step.exec...)
 		} else {
-			shell := b.shell
-			if len(shell) == 0 {
-				shell = []string{"/bin/sh", "-c"}
-			}
-			args = append(args, shell...)
-			args = append(args, step.shell)
+			args = append(args, b.shellForm(step.shell)...)
 		}
 		output := newActiveOutputWriter(b.out)
 		stop := startSilentOutputHeartbeat(b.ctx, b.out, time.Now(), output, "Still running build step...")
@@ -204,9 +207,13 @@ func (b *layeredBuild) step(step dockerfileStep) error {
 		_, err := b.quiet("config", append(args, b.container)...)
 		return err
 	case stepArg:
-		// Already folded into buildArgs/expansion by the parser; an ARG with a
-		// default has to reach RUN too.
+		// Already folded into buildArgs/expansion by the parser; from here on
+		// the ARG reaches RUN, and one with a default has a value to carry.
+		if b.declaredArgs == nil {
+			b.declaredArgs = map[string]struct{}{}
+		}
 		for _, p := range step.pairs {
+			b.declaredArgs[p.key] = struct{}{}
 			if p.set {
 				if b.buildArgs == nil {
 					b.buildArgs = map[string]string{}
@@ -218,7 +225,7 @@ func (b *layeredBuild) step(step dockerfileStep) error {
 		}
 	case stepWorkdir:
 		b.workdir = step.value
-		if _, err := b.quiet("run", b.container, "--", "/bin/sh", "-c", "mkdir -p -- \"$0\"", step.value); err != nil {
+		if err := b.mkdir(step.value); err != nil {
 			return err
 		}
 		_, err := b.quiet("config", "--workingdir", step.value, b.container)
@@ -232,14 +239,14 @@ func (b *layeredBuild) step(step dockerfileStep) error {
 	case stepEntrypoint:
 		b.entrypoint = step.exec
 		if step.exec == nil {
-			b.entrypoint = []string{"/bin/sh", "-c", step.shell}
+			b.entrypoint = b.shellForm(step.shell)
 		}
 		// Docker resets CMD when ENTRYPOINT is set.
 		b.cmd = nil
 	case stepCmd:
 		b.cmd = step.exec
 		if step.exec == nil {
-			b.cmd = []string{"/bin/sh", "-c", step.shell}
+			b.cmd = b.shellForm(step.shell)
 		}
 	case stepLabel:
 		for _, p := range step.pairs {
@@ -273,6 +280,36 @@ func (b *layeredBuild) step(step dockerfileStep) error {
 		if _, err := b.quiet(sub, args...); err != nil {
 			return fmt.Errorf("build step failed: %s: %w", step.raw, err)
 		}
+	}
+	return nil
+}
+
+// shellForm wraps a shell-form command in the shell in effect (SHELL, else
+// /bin/sh -c), as Docker does for RUN, ENTRYPOINT and CMD alike.
+func (b *layeredBuild) shellForm(command string) []string {
+	shell := b.shell
+	if len(shell) == 0 {
+		shell = []string{"/bin/sh", "-c"}
+	}
+	return append(append([]string{}, shell...), command)
+}
+
+// mkdir creates dir (and its parents) in the working container for WORKDIR.
+// A shell does it in place; a base without /bin/sh (distroless, scratch)
+// gets the directory copied in through buildah, which needs nothing from the
+// image.
+func (b *layeredBuild) mkdir(dir string) error {
+	_, shellErr := b.quiet("run", b.container, "--", "/bin/sh", "-c", "mkdir -p -- \"$0\"", dir)
+	if shellErr == nil {
+		return nil
+	}
+	empty := filepath.Join(b.tmpdir, "workdir-"+fmt.Sprintf("%d", b.stepsDone))
+	if err := os.MkdirAll(empty, 0o755); err != nil {
+		return shellErr
+	}
+	defer os.RemoveAll(empty)
+	if _, err := b.quiet("copy", b.container, empty, dir); err != nil {
+		return fmt.Errorf("%w (and without a shell: %v)", shellErr, err)
 	}
 	return nil
 }
@@ -423,7 +460,11 @@ func (c *ImageClient) buildLayeredImage(ctx context.Context, outputLogger *slog.
 
 	outputLogger.Info("Publishing image...\n")
 	started = time.Now()
-	layersDir := filepath.Join(c.layerSpoolDir(), "build-"+request.ImageId)
+	spoolDir := c.layerSpoolDir()
+	if spoolDir == "" {
+		spoolDir = os.TempDir()
+	}
+	layersDir := filepath.Join(spoolDir, "build-"+request.ImageId)
 	defer os.RemoveAll(layersDir)
 	layers, err := packOverlayLayers(upperDir, layersDir, layerMediaTypeFor(base))
 	if err != nil {

@@ -7,8 +7,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/random"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
@@ -88,11 +90,114 @@ func TestCopyFixedSizePadsShrunkenFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "f")
 	require.NoError(t, os.WriteFile(path, []byte("abc"), 0o644))
 	var buf writerBuffer
-	require.NoError(t, copyFixedSize(&buf, path, 5))
+	require.NoError(t, copyFixedSize(&buf, strings.NewReader("abc"), 5))
 	require.Equal(t, []byte{'a', 'b', 'c', 0, 0}, buf.data)
 	buf.data = nil
-	require.NoError(t, copyFixedSize(&buf, path, 2))
+	require.NoError(t, copyFixedSize(&buf, strings.NewReader("abc"), 2))
 	require.Equal(t, []byte("ab"), buf.data)
+}
+
+// walkUpper collects the entries packOverlayLayers would, so a test can change
+// the tree between the walk and the write the way a running sandbox does.
+func walkUpper(t *testing.T, upper string) []overlayEntry {
+	var entries []overlayEntry
+	require.NoError(t, filepath.WalkDir(upper, func(path string, d os.DirEntry, err error) error {
+		require.NoError(t, err)
+		rel, _ := filepath.Rel(upper, path)
+		if rel == "." {
+			return nil
+		}
+		info, err := d.Info()
+		require.NoError(t, err)
+		entry := overlayEntry{path: path, rel: filepath.ToSlash(rel), info: info}
+		if info.Mode()&os.ModeSymlink != 0 {
+			entry.link, err = os.Readlink(path)
+			require.NoError(t, err)
+		}
+		if info.Mode().IsRegular() {
+			entry.size = info.Size()
+		}
+		entries = append(entries, entry)
+		return nil
+	}))
+	return entries
+}
+
+// A sandbox can swap a walked file, or a directory on the way to it, for a
+// symlink before the file is read. The symlink must not be followed (it could
+// point anywhere on the worker host); the entry is left out of the layer.
+func TestWriteLayerTarDoesNotFollowSymlinksSwappedInAfterTheWalk(t *testing.T) {
+	host := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(host, "secret"), []byte("host secret"), 0o600))
+	require.NoError(t, os.MkdirAll(filepath.Join(host, "etc"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(host, "etc", "passwd"), []byte("host passwd"), 0o644))
+
+	upper := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(upper, "etc"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(upper, "etc", "passwd"), []byte("sandbox passwd"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(upper, "swapped"), []byte("sandbox file"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(upper, "kept"), []byte("kept"), 0o644))
+	entries := walkUpper(t, upper)
+
+	// Final component swapped for a symlink to a host file.
+	require.NoError(t, os.Remove(filepath.Join(upper, "swapped")))
+	require.NoError(t, os.Symlink(filepath.Join(host, "secret"), filepath.Join(upper, "swapped")))
+	// Directory component swapped: etc -> host's etc, which has a passwd too.
+	require.NoError(t, os.RemoveAll(filepath.Join(upper, "etc")))
+	require.NoError(t, os.Symlink(filepath.Join(host, "etc"), filepath.Join(upper, "etc")))
+
+	layer, err := writeLayerTar(upper, entries, filepath.Join(t.TempDir(), "layer.tar.gz"), ggcrtypes.DockerLayer, 1)
+	require.NoError(t, err)
+	got := readLayerEntries(t, layer.path)
+	require.Equal(t, "kept", got["kept"].PAXRecords["body"])
+	require.NotContains(t, got, "swapped")
+	require.NotContains(t, got, "etc/passwd")
+	require.Equal(t, int64(len("kept")), layer.contentBytes)
+	// The directory header itself was written from the walk's info, as a
+	// directory; nothing under the swapped path was read.
+	require.Equal(t, byte(tar.TypeDir), got["etc/"].Typeflag)
+	for name, hdr := range got {
+		require.NotContains(t, hdr.PAXRecords["body"], "host", name)
+	}
+}
+
+// A file removed between the walk and the read is skipped rather than failing
+// the snapshot, and no header is left behind for it.
+func TestWriteLayerTarSkipsFilesDeletedAfterTheWalk(t *testing.T) {
+	upper := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(upper, "d"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(upper, "d", "gone"), []byte("gone"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(upper, "d", "kept"), []byte("kept"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(upper, "replaced"), []byte("old"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(upper, "other"), []byte("new"), 0o644))
+	// Hard links: the first link is removed, so the second must carry the content.
+	require.NoError(t, os.WriteFile(filepath.Join(upper, "link-a"), []byte("linked"), 0o644))
+	require.NoError(t, os.Link(filepath.Join(upper, "link-a"), filepath.Join(upper, "link-b")))
+	entries := walkUpper(t, upper)
+
+	require.NoError(t, os.Remove(filepath.Join(upper, "d", "gone")))
+	require.NoError(t, os.Remove(filepath.Join(upper, "link-a")))
+	// Another inode renamed over it: the name is there but it is not the
+	// walked file (renaming, unlike remove+create, cannot reuse the inode).
+	require.NoError(t, os.Rename(filepath.Join(upper, "other"), filepath.Join(upper, "replaced")))
+
+	layer, err := writeLayerTar(upper, entries, filepath.Join(t.TempDir(), "layer.tar.gz"), ggcrtypes.DockerLayer, 1)
+	require.NoError(t, err)
+	got := readLayerEntries(t, layer.path)
+	require.NotContains(t, got, "d/gone")
+	require.NotContains(t, got, "link-a")
+	require.NotContains(t, got, "replaced")
+	require.NotContains(t, got, "other")
+	require.Equal(t, "kept", got["d/kept"].PAXRecords["body"])
+	require.Equal(t, byte(tar.TypeReg), got["link-b"].Typeflag)
+	require.Equal(t, "linked", got["link-b"].PAXRecords["body"])
+	require.Equal(t, int64(len("kept")+len("linked")), layer.contentBytes)
+
+	// The tar is well formed: ggcr can hash it.
+	fromFile, err := tarball.LayerFromFile(layer.path)
+	require.NoError(t, err)
+	d, _ := fromFile.Digest()
+	require.Equal(t, d, layer.digest)
 }
 
 type writerBuffer struct{ data []byte }
@@ -154,7 +259,9 @@ func TestPackOverlayLayersSplitsLargeDeltasAndKeepsLinksResolvable(t *testing.T)
 	}
 	// Hard link to a file that lands in an earlier layer than the link's walk position.
 	require.NoError(t, os.Link(filepath.Join(upper, "lib", "f00.so"), filepath.Join(upper, "lib", "zz-hard")))
-	// Directory, symlink and small file: all pinned to layer 0.
+	// Directory and symlink are pinned to layer 0; the small file is a
+	// regular file, so it is dealt out like any other (it lands in whichever
+	// layer is being filled when the walk reaches it).
 	require.NoError(t, os.Symlink("lib/f01.so", filepath.Join(upper, "link")))
 	require.NoError(t, os.WriteFile(filepath.Join(upper, "small"), []byte("s"), 0o644))
 
@@ -213,4 +320,33 @@ func TestPackOverlayLayersOneLayerForSmallDelta(t *testing.T) {
 	layers, err := packOverlayLayers(upper, t.TempDir(), ggcrtypes.DockerLayer)
 	require.NoError(t, err)
 	require.Len(t, layers, 1)
+}
+
+// An insecure build registry must not loosen the transport used to fetch a
+// sandbox's base image from any other registry.
+func TestParseImageReferenceAppliesInsecureOnlyToBuildRegistry(t *testing.T) {
+	client := &ImageClient{config: types.AppConfig{ImageService: types.ImageServiceConfig{
+		BuildRegistry:         "registry.internal:5000",
+		BuildRegistryInsecure: true,
+	}}}
+
+	ref, err := client.parseImageReference("registry.internal:5000/beta9/images:snap-1")
+	require.NoError(t, err)
+	require.Equal(t, "http", ref.Context().Registry.Scheme())
+
+	for _, external := range []string{
+		"docker.io/library/python:3.11-slim",
+		"python:3.11-slim",
+		"ghcr.io/org/image@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"registry.internal:5001/beta9/images:snap-1", // different port, different registry
+	} {
+		ref, err := client.parseImageReference(external)
+		require.NoError(t, err)
+		require.Equal(t, "https", ref.Context().Registry.Scheme(), external)
+	}
+
+	client.config.ImageService.BuildRegistryInsecure = false
+	ref, err = client.parseImageReference("registry.internal:5000/beta9/images:snap-1")
+	require.NoError(t, err)
+	require.Equal(t, "https", ref.Context().Registry.Scheme())
 }

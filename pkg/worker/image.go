@@ -54,6 +54,9 @@ const (
 	imageLayerPrepareConcurrency             = 8
 	imageLayerPrepareGrace                   = 2 * time.Second
 	imageMountReadyTimeout                   = 5 * time.Second
+	// baseImageWarmTimeout bounds a background base image layer warm, which
+	// outlives the build that started it and so needs its own deadline.
+	baseImageWarmTimeout = 10 * time.Minute
 
 	// uv ships in the worker image and is mounted into v2 builds as uv-b9,
 	// the name the rendered Dockerfiles (and v1 build containers) use.
@@ -2162,14 +2165,9 @@ func (c *ImageClient) buildahAuthArgs(ctx context.Context, request *types.Contai
 	if registry == "localhost" || strings.HasPrefix(registry, "127.0.0.1") || !strings.ContainsAny(registry, ".:") {
 		return nil
 	}
-	creds := c.gatewayRegistryCredentials(ctx, registry, request)
-	if creds == "" {
-		return nil
-	}
-	if _, _, ok := strings.Cut(creds, ":"); ok && !strings.HasPrefix(creds, "{") {
-		return []string{"--creds", creds}
-	}
-	return c.getBuildahAuthArgs(ctx, imageRef, creds)
+	// Gateway credentials come as either username:password or JSON;
+	// getBuildahAuthArgs parses both.
+	return c.getBuildahAuthArgs(ctx, imageRef, c.gatewayRegistryCredentials(ctx, registry, request))
 }
 
 func (c *ImageClient) getBuildahAuthArgs(ctx context.Context, imageRef string, creds string) []string {
@@ -2440,6 +2438,33 @@ func (c *ImageClient) createOCIImageWithProgress(ctx context.Context, outputLogg
 	return nil
 }
 
+// warmBaseImageLayersInBackground stores the base image layers the content
+// cache lacks, so the next build on this base restores it instead of pulling.
+// The warm is best effort and must not hold up the build: it runs detached
+// from the build's context under its own deadline, and spools downloads into
+// its own directory on the disk-backed image cache rather than the build's
+// workspace, which is removed as soon as the build returns. The image and its
+// missing layers are resolved afresh inside the goroutine so that the layer
+// fetches are bound to the warm's context, not the build's.
+func (c *ImageClient) warmBaseImageLayersInBackground(ctx context.Context, request *types.ContainerRequest, sourceImage string) {
+	dir, err := os.MkdirTemp(c.layerSpoolDir(), "base-warm-")
+	if err != nil {
+		log.Warn().Err(err).Str("source_image", sourceImage).Msg("base image layer warm skipped: no spool directory")
+		return
+	}
+	warmCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), baseImageWarmTimeout)
+	go func() {
+		defer cancel()
+		defer os.RemoveAll(dir)
+		img, _, missing, err := c.baseImage(warmCtx, request, sourceImage)
+		if err != nil {
+			log.Warn().Err(err).Str("source_image", sourceImage).Msg("base image layer warm skipped: base image unavailable")
+			return
+		}
+		c.warmBaseImageLayers(warmCtx, request, img, missing, dir)
+	}()
+}
+
 func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *slog.Logger, request *types.ContainerRequest) error {
 	startTime := time.Now()
 
@@ -2499,11 +2524,10 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		sourceImage = *request.BuildOptions.SourceImage
 	}
 	dockerfile := *request.BuildOptions.Dockerfile
-	var baseWarmed chan struct{}
 	if sourceImage != "" {
 		insecure = c.config.ImageService.BuildRegistryInsecure
 
-		cachedBaseRef, cachedBase, baseImg, missingBaseLayers, cacheErr := c.cachedBaseImageOCIRef(ctx, outputLogger, request, sourceImage, buildPath)
+		cachedBaseRef, cachedBase, _, missingBaseLayers, cacheErr := c.cachedBaseImageOCIRef(ctx, outputLogger, request, sourceImage, buildPath)
 		if cacheErr != nil {
 			log.Warn().Err(cacheErr).Str("source_image", sourceImage).Msg("base image distributed cache unavailable")
 		}
@@ -2536,26 +2560,11 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 			// The pull is done, so the network is free: fetch the layers the
 			// cache lacks while the build runs, and the next build on this
 			// base restores it from cache instead of pulling.
-			if baseImg != nil && len(missingBaseLayers) > 0 {
-				baseWarmed = make(chan struct{})
-				go func() {
-					defer close(baseWarmed)
-					c.warmBaseImageLayers(ctx, request, baseImg, missingBaseLayers, buildPath)
-				}()
+			if len(missingBaseLayers) > 0 {
+				c.warmBaseImageLayersInBackground(ctx, request, sourceImage)
 			}
 		}
 	}
-	defer func() {
-		// The build worker exits right after the build; give the warm a
-		// moment to finish rather than letting the build wait on it.
-		if baseWarmed != nil {
-			select {
-			case <-baseWarmed:
-			case <-time.After(15 * time.Second):
-				log.Warn().Str("source_image", sourceImage).Msg("base image layer warm still running at build end")
-			}
-		}
-	}()
 
 	tempDockerFile := filepath.Join(buildPath, "Dockerfile")
 	f, err := os.Create(tempDockerFile)
@@ -2584,9 +2593,16 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	}
 	// Synced local files are visible to RUN steps where they are at run
 	// time, so add_local_dir(copy=True) and commands that install from the
-	// working directory work the same way in a build as in a container.
+	// working directory work the same way in a build as in a container. The
+	// container's copy is writable, so the build's is too (a throwaway one:
+	// see writableBuildContext).
 	if request.BuildOptions.BuildCtxObject != nil && *request.BuildOptions.BuildCtxObject != "" {
-		budArgs = append(budArgs, "--volume", buildCtxPath+":"+types.WorkerUserCodeVolume+":ro")
+		codeDir, cleanupCodeDir, err := c.writableBuildContext(ctx, request, buildPath, buildCtxPath)
+		if err != nil {
+			return err
+		}
+		defer cleanupCodeDir()
+		budArgs = append(budArgs, "--volume", codeDir+":"+types.WorkerUserCodeVolume)
 	}
 
 	// Add credentials for multi-stage builds and private base images
@@ -2630,15 +2646,14 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 						runVolumes = append(runVolumes, budArgs[i+1])
 					}
 				}
-				contextDir := buildCtxPath
-				if request.BuildOptions.BuildCtxObject == nil {
-					contextDir = ""
-				}
+				// The context dir is what bud gets: the extracted build
+				// context, or "." without one, so COPY and ADD behave the
+				// same on both paths.
 				return c.buildLayeredImage(ctx, outputLogger, request, &layeredBuild{
 					c: c, ctx: ctx, out: outputLogger, request: request, plan: plan,
 					sourceImage: manifestRef, fromRef: plan.from,
 					graphroot: graphroot, runroot: runroot, tmpdir: tmpdir, storage: storageDriver, storageConf: storageConf,
-					buildCtxPath: contextDir, runVolumes: runVolumes, buildArgs: buildArgMap(request.BuildOptions.BuildSecrets),
+					buildCtxPath: buildCtxPath, runVolumes: runVolumes, buildArgs: buildArgMap(request.BuildOptions.BuildSecrets),
 				})
 			}
 			log.Info().Err(planErr).Str("image_id", request.ImageId).Msg("dockerfile outside the layered builder's subset, building with bud")
@@ -2771,8 +2786,7 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 
 	// Clip v2: Create index-only clip archive from the source image (no unpack needed)
 	if c.config.ImageService.ClipVersion == uint32(types.ClipVersion2) {
-		archiveName := fmt.Sprintf("%s.%s.tmp", request.ImageId, c.registry.ImageFileExtension)
-		archivePath := filepath.Join("/dev/shm", archiveName)
+		archivePath := c.archiveScratchPath("/dev/shm", request.ImageId)
 
 		// Create index-only clip from the source docker image reference with progress reporting
 		if err = c.createOCIImageWithProgress(ctx, outputLogger, request, *request.BuildOptions.SourceImage, copyDir, archivePath, 2); err != nil {
@@ -2860,8 +2874,7 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath *PathInfo, imageId
 
 	startTime := time.Now()
 
-	archiveName := fmt.Sprintf("%s.%s.tmp", imageId, c.registry.ImageFileExtension)
-	archivePath := filepath.Join("/dev/shm", archiveName)
+	archivePath := c.archiveScratchPath("/dev/shm", imageId)
 
 	defer func() {
 		os.RemoveAll(archivePath)
@@ -2921,6 +2934,12 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath *PathInfo, imageId
 	return nil
 }
 
+// archiveScratchPath is where an image's clip index archive is written under
+// dir before it is uploaded; the registry names the object itself.
+func (c *ImageClient) archiveScratchPath(dir, imageId string) string {
+	return filepath.Join(dir, fmt.Sprintf("%s.%s.tmp", imageId, c.registry.ImageFileExtension))
+}
+
 func umociUnpackOptions() layer.UnpackOptions {
 	var unpackOptions layer.UnpackOptions
 	var meta umoci.Meta
@@ -2957,6 +2976,57 @@ func (c *ImageClient) getBuildContext(ctx context.Context, buildPath string, req
 	}
 
 	return buildCtxPath, nil
+}
+
+// writableBuildContext returns a directory holding the build context that RUN
+// steps may write to, mounted at the working directory during the build. The
+// container an image runs in gets a private, writable copy of the synced code
+// there, so a step that writes into the working directory (pip install .,
+// npm install, generated files) has to work in the build as well. The
+// context extracted under the build's own directory is private to the build
+// and is mounted as is. The extraction under the worker's shared object path
+// is read by other builds and containers, so it stays read-only: an overlay
+// puts a throwaway upper over it, or, where the mount is not possible, the
+// context is copied. Either lives on the disk-backed spool dir, as the
+// build's own temp dirs are in /dev/shm. Writes are discarded with the build,
+// as they would be in the container.
+func (c *ImageClient) writableBuildContext(ctx context.Context, request *types.ContainerRequest, buildPath, buildCtxPath string) (string, func(), error) {
+	if rel, err := filepath.Rel(buildPath, buildCtxPath); err == nil && rel != ".." && !strings.HasPrefix(rel, "../") {
+		return buildCtxPath, func() {}, nil
+	}
+
+	work, err := os.MkdirTemp(c.layerSpoolDir(), "build-ctx-"+request.ImageId+"-")
+	if err != nil {
+		return "", nil, fmt.Errorf("create writable build context: %w", err)
+	}
+	upper := filepath.Join(work, "upper")
+	if err := os.MkdirAll(upper, 0o755); err != nil {
+		os.RemoveAll(work)
+		return "", nil, fmt.Errorf("create writable build context: %w", err)
+	}
+	overlay := common.NewContainerOverlay(request, buildCtxPath, filepath.Join(work, "overlay"))
+	if err := overlay.AddLayer(upper); err == nil {
+		return overlay.TopLayerPath(), func() {
+			if err := overlay.Cleanup(); err != nil {
+				log.Warn().Err(err).Str("image_id", request.ImageId).Msg("unmount writable build context")
+			}
+			os.RemoveAll(work)
+		}, nil
+	} else {
+		log.Debug().Err(err).Str("image_id", request.ImageId).Msg("overlay for writable build context unavailable, copying the context")
+		os.RemoveAll(filepath.Join(work, "overlay"))
+	}
+
+	copyDir := filepath.Join(work, "code")
+	if err := os.MkdirAll(copyDir, 0o755); err != nil {
+		os.RemoveAll(work)
+		return "", nil, fmt.Errorf("create writable build context: %w", err)
+	}
+	if out, err := exec.CommandContext(ctx, "cp", "-a", buildCtxPath+"/.", copyDir).CombinedOutput(); err != nil {
+		os.RemoveAll(work)
+		return "", nil, fmt.Errorf("copy build context: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return copyDir, func() { os.RemoveAll(work) }, nil
 }
 
 func downloadWorkspaceBuildContext(ctx context.Context, request *types.ContainerRequest, objectID, destPath string) error {
@@ -3000,7 +3070,7 @@ func (s *buildahStore) args(sub string) []string {
 // recompressed nor uploaded, and the index cache then skips them too.
 func (c *ImageClient) publishFromStorage(ctx context.Context, outputLogger *slog.Logger, request *types.ContainerRequest, imageTag string, store *buildahStore) error {
 	buildRegistry := c.getBuildRegistry()
-	archivePath := filepath.Join(store.tmpdir, fmt.Sprintf("%s.%s.tmp", request.ImageId, c.registry.ImageFileExtension))
+	archivePath := c.archiveScratchPath(store.tmpdir, request.ImageId)
 
 	buildRegistryCredentials := request.BuildRegistryCredentials
 	if buildRegistryCredentials == "" {

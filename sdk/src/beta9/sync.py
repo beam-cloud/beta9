@@ -59,6 +59,11 @@ CHUNK_SIZE = 1024 * 1024 * 4
 # a single TCP stream, which on a typical uplink runs well below the link.
 MULTIPART_PART_SIZE = 16 * 1024 * 1024
 MULTIPART_CONCURRENCY = 8
+# A part PUT that stops moving bytes for this long is given up on and retried;
+# without a timeout one stalled connection hangs the whole sync. A part is
+# idempotent (re-PUT of the same part number replaces it), so retrying is safe.
+MULTIPART_PART_TIMEOUT_S = 60
+MULTIPART_PART_ATTEMPTS = 3
 
 
 def ignore_file_name() -> str:
@@ -256,7 +261,7 @@ class FileSyncer:
             if cache.object_id and cache.manifest is not None:
                 object_id = self._upload_delta(manifest, hash, size, cache)
             if object_id is None:
-                object_id = self._upload_full(manifest, hash, size)
+                object_id = self._upload_full(manifest, hash)
 
         if object_id is None:
             terminal.error("File sync failed")
@@ -269,8 +274,11 @@ class FileSyncer:
         return FileSyncResult(success=True, object_id=object_id)
 
     def _build_manifest(self, cache: "_SyncCache") -> "_Manifest":
-        """Hash every file to sync, reusing cached hashes for files whose size
-        and mtime are unchanged since the last sync of this directory."""
+        """Hash every file to sync, reusing cached hashes for files whose size,
+        mtime and ctime are unchanged since the last sync of this directory.
+        mtime alone is not enough: tools that preserve it (cp -p, rsync -t,
+        touch -r) can rewrite a file with different bytes of the same size.
+        ctime cannot be set from user space and moves on every write."""
         entries: Dict[str, _ManifestEntry] = {}
         previous = cache.manifest.entries if cache.manifest is not None else {}
         for file in self._collect_files():
@@ -282,7 +290,12 @@ class FileSyncer:
                 continue
             mode = st.st_mode & 0o777
             prev = previous.get(rel)
-            if prev is not None and prev.size == st.st_size and prev.mtime_ns == st.st_mtime_ns:
+            if (
+                prev is not None
+                and prev.size == st.st_size
+                and prev.mtime_ns == st.st_mtime_ns
+                and prev.ctime_ns == st.st_ctime_ns
+            ):
                 sha = prev.sha256
             else:
                 try:
@@ -291,7 +304,11 @@ class FileSyncer:
                     terminal.warn(f"Failed to add {file}: {e}")
                     continue
             entries[rel] = _ManifestEntry(
-                size=st.st_size, mtime_ns=st.st_mtime_ns, sha256=sha, mode=mode
+                size=st.st_size,
+                mtime_ns=st.st_mtime_ns,
+                sha256=sha,
+                mode=mode,
+                ctime_ns=st.st_ctime_ns,
             )
             terminal.detail(f"Added {file}")
         return _Manifest(entries)
@@ -327,10 +344,21 @@ class FileSyncer:
             with open(temp_zip_name, "rb") as file:
                 file.seek(part.start)
                 data = file.read(part.end - part.start)
-            response = requests.put(part.url, data=data)
-            if response.status_code != HTTPStatus.OK:
-                raise RuntimeError(f"part {part.number}: HTTP {response.status_code}")
-            return ObjectUploadedPart(number=part.number, etag=response.headers.get("ETag", ""))
+            last_error = None
+            for _ in range(MULTIPART_PART_ATTEMPTS):
+                try:
+                    response = requests.put(part.url, data=data, timeout=MULTIPART_PART_TIMEOUT_S)
+                except requests.RequestException as e:
+                    last_error = f"part {part.number}: {e}"
+                    continue
+                if response.status_code == HTTPStatus.OK:
+                    return ObjectUploadedPart(
+                        number=part.number, etag=response.headers.get("ETag", "")
+                    )
+                last_error = f"part {part.number}: HTTP {response.status_code}"
+                if response.status_code < HTTPStatus.INTERNAL_SERVER_ERROR:
+                    break  # the request itself is wrong; retrying will not help
+            raise RuntimeError(last_error)
 
         try:
             with ThreadPoolExecutor(max_workers=min(MULTIPART_CONCURRENCY, len(parts))) as pool:
@@ -348,16 +376,19 @@ class FileSyncer:
         )
         return complete.ok
 
-    def _upload_full(self, manifest: "_Manifest", hash: str, size: int) -> Optional[str]:
+    def _upload_full(self, manifest: "_Manifest", hash: str) -> Optional[str]:
         temp_zip_name = self._write_archive(sorted(manifest.entries))
         try:
             terminal.header("Uploading")
+            # The object record's size is the archive's byte length, as the
+            # stream and delta paths record it (the manifest's uncompressed
+            # total only drives the delta heuristic).
             archive_size = os.path.getsize(temp_zip_name)
             create_object_response: CreateObjectResponse = self.gateway_stub.create_object(
                 CreateObjectRequest(
-                    object_metadata=ObjectMetadata(name=hash, size=size),
+                    object_metadata=ObjectMetadata(name=hash, size=archive_size),
                     hash=hash,
-                    size=size,
+                    size=archive_size,
                     overwrite=True,
                     supports_put_headers=True,
                     multipart_part_size=MULTIPART_PART_SIZE,
@@ -467,6 +498,9 @@ class _ManifestEntry(NamedTuple):
     mtime_ns: int
     sha256: str
     mode: int
+    # 0 when unknown (entry written by an SDK that did not record it), which
+    # never matches a real ctime, so the file is hashed again once.
+    ctime_ns: int = 0
 
 
 class _Manifest:
@@ -488,13 +522,18 @@ class _Manifest:
         return sum(e.size for e in self.entries.values())
 
     def to_json(self) -> dict:
-        return {rel: [e.size, e.mtime_ns, e.sha256, e.mode] for rel, e in self.entries.items()}
+        return {
+            rel: [e.size, e.mtime_ns, e.sha256, e.mode, e.ctime_ns]
+            for rel, e in self.entries.items()
+        }
 
     @classmethod
     def from_json(cls, data: dict) -> "_Manifest":
         return cls(
             {
-                rel: _ManifestEntry(int(v[0]), int(v[1]), str(v[2]), int(v[3]))
+                rel: _ManifestEntry(
+                    int(v[0]), int(v[1]), str(v[2]), int(v[3]), int(v[4]) if len(v) > 4 else 0
+                )
                 for rel, v in data.items()
             }
         )
@@ -565,7 +604,9 @@ class _SyncCache:
             if data.get("version") == cls.VERSION and data.get("object_id"):
                 _Manifest.from_json(data["manifest"])
                 return data
-        except (OSError, ValueError, KeyError, TypeError, IndexError):
+        except (OSError, ValueError, KeyError, TypeError, IndexError, AttributeError):
+            # Unreadable or malformed (e.g. not an object, "manifest": null):
+            # a damaged cache is a cache miss, never a failed sync.
             pass
         return None
 

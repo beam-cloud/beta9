@@ -167,6 +167,20 @@ func (s *WorkerRepositoryService) ClaimContainer(ctx context.Context, req *pb.Cl
 	// The claim is idempotent for its delivery token, so a transient
 	// repository failure after it is answered with UNAVAILABLE and the worker
 	// retries. A missing state is authoritative: the container is gone.
+	//
+	// The scheduler wrote the pending lease when it queued the request; renew
+	// it now so a long backlog wait cannot expire the state mid-startup. The
+	// worker's status heartbeat takes over from here. The renewal is a no-op
+	// when the container has already moved on (a STOPPING that raced the
+	// claim is refused, not overwritten), so the state is read after it: the
+	// worker acts on the persisted status, never on a stale snapshot.
+	if err := s.containerRepo.UpdateContainerStatus(req.ContainerId, types.ContainerStatusPending, int64(types.ContainerStateTtlSWhilePending)); err != nil {
+		if (&types.ErrContainerStateNotFound{}).From(err) {
+			resp.ErrorMsg = err.Error()
+			return resp, nil
+		}
+		return nil, status.Error(codes.Unavailable, err.Error())
+	}
 	state, err := s.containerRepo.GetContainerState(req.ContainerId)
 	if err != nil {
 		if (&types.ErrContainerStateNotFound{}).From(err) {
@@ -174,14 +188,6 @@ func (s *WorkerRepositoryService) ClaimContainer(ctx context.Context, req *pb.Cl
 			return resp, nil
 		}
 		return nil, status.Error(codes.Unavailable, err.Error())
-	}
-	// The scheduler wrote the pending lease when it queued the request; renew
-	// it now so a long backlog wait cannot expire the state mid-startup. The
-	// worker's status heartbeat takes over from here.
-	if types.ContainerStatus(state.Status) == types.ContainerStatusPending {
-		if err := s.containerRepo.UpdateContainerStatus(req.ContainerId, types.ContainerStatusPending, int64(types.ContainerStateTtlSWhilePending)); err != nil {
-			return nil, status.Error(codes.Unavailable, err.Error())
-		}
 	}
 	resp.State = containerStateToProto(state)
 
@@ -263,11 +269,16 @@ func (s *WorkerRepositoryService) SetWorkerKeepAlive(ctx context.Context, req *p
 		return &pb.SetWorkerKeepAliveResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
-	// Tell the worker whether it is the pool's headroom, so it does not idle
-	// out and leave the pool cold until the sizer's replacement boots.
+	// Tell an idle worker whether it is the pool's headroom, so it does not
+	// idle out and leave the pool cold until the sizer's replacement boots.
+	// Only idle workers can spin down, so only they pay for the pool scan; a
+	// lookup failure answers "headroom" so the worker stays until a good read.
 	headroom := false
-	if worker, err := s.workerRepo.GetWorkerById(req.WorkerId); err == nil {
-		headroom = scheduler.WorkerHoldsPoolHeadroom(s.workerRepo, s.appConfig, worker)
+	if req.Idle {
+		headroom = true
+		if worker, err := s.workerRepo.GetWorkerById(req.WorkerId); err == nil {
+			headroom = scheduler.WorkerHoldsPoolHeadroom(s.workerRepo, s.appConfig, worker)
+		}
 	}
 
 	return &pb.SetWorkerKeepAliveResponse{Ok: true, PoolHeadroom: headroom}, nil
