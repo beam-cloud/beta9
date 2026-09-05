@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -34,7 +35,7 @@ func TestLockImageArchiveFileRespectsContextCancellation(t *testing.T) {
 	require.Less(t, time.Since(start), 500*time.Millisecond)
 }
 
-func TestGatewayCredentialProviderForImageFetchesScopedCredentials(t *testing.T) {
+func TestGatewayCredentialProviderForImageFetchesScopedCredentialsOnFirstUse(t *testing.T) {
 	repo := &fakeImageCredentialWorkerRepo{
 		resp: &pb.GetCacheOriginCredentialsResponse{
 			Ok:                  true,
@@ -51,24 +52,23 @@ func TestGatewayCredentialProviderForImageFetchesScopedCredentials(t *testing.T)
 		ImageId:     "image-a",
 	}
 
-	provider := client.gatewayCredentialProviderForImage(context.Background(), "image-a", "registry.example.com", request)
-	if provider == nil {
-		t.Fatal("expected gateway-vended credential provider")
-	}
-	if len(repo.requests) != 1 {
-		t.Fatalf("credential requests = %d, want 1", len(repo.requests))
-	}
-	req := repo.requests[0]
-	if req.WorkspaceId != "workspace-id" || req.StubId != "stub-id" || req.ImageId != "image-a" || req.Registry != "registry.example.com" {
-		t.Fatalf("unexpected credential request: %+v", req)
-	}
+	provider := client.gatewayCredentialProviderForImage("image-a", "registry.example.com", request, nil)
+	require.NotNil(t, provider)
+	require.Empty(t, repo.requests, "building the provider must not call the gateway")
 
-	if provider := client.gatewayCredentialProviderForImage(context.Background(), "image-a", "registry.example.com", request); provider == nil {
-		t.Fatal("expected cached gateway-vended credential provider")
-	}
-	if len(repo.requests) != 1 {
-		t.Fatalf("credential requests after cache hit = %d, want 1", len(repo.requests))
-	}
+	cfg, err := provider.GetCredentials(context.Background(), "registry.example.com", "team/image")
+	require.NoError(t, err)
+	require.Equal(t, "user", cfg.Username)
+	require.Len(t, repo.requests, 1)
+	req := repo.requests[0]
+	require.Equal(t, "workspace-id", req.WorkspaceId)
+	require.Equal(t, "stub-id", req.StubId)
+	require.Equal(t, "image-a", req.ImageId)
+	require.Equal(t, "registry.example.com", req.Registry)
+
+	_, err = provider.GetCredentials(context.Background(), "registry.example.com", "team/image")
+	require.NoError(t, err)
+	require.Len(t, repo.requests, 1, "credentials are cached for their TTL")
 
 	client.originCredsMu.Lock()
 	for _, cached := range client.originCredsCache {
@@ -80,11 +80,78 @@ func TestGatewayCredentialProviderForImageFetchesScopedCredentials(t *testing.T)
 		RegistryCredentials: "second-user:second-pass",
 	}
 
-	cfg, err := provider.GetCredentials(context.Background(), "registry.example.com", "team/image")
+	cfg, err = provider.GetCredentials(context.Background(), "registry.example.com", "team/image")
 	require.NoError(t, err)
 	require.Equal(t, "second-user", cfg.Username)
 	require.Equal(t, "second-pass", cfg.Password)
 	require.Len(t, repo.requests, 2)
+}
+
+func TestGatewayCredentialProviderFallsBackWhenGatewayHasNone(t *testing.T) {
+	repo := &fakeImageCredentialWorkerRepo{resp: &pb.GetCacheOriginCredentialsResponse{Ok: true}}
+	client := &ImageClient{workerRepoClient: repo, originCredsCache: make(map[string]*originCredentials)}
+	request := &types.ContainerRequest{WorkspaceId: "workspace-id", StubId: "stub-id", ImageId: "image-a"}
+
+	provider := client.gatewayCredentialProviderForImage("image-a", "registry.example.com", request, nil)
+	_, err := provider.GetCredentials(context.Background(), "registry.example.com", "team/image")
+	require.ErrorIs(t, err, clipCommon.ErrNoCredentials)
+
+	provider = client.gatewayCredentialProviderForImage("image-a", "registry.example.com", request, privateWorkerAnonymousRegistryProvider{})
+	cfg, err := provider.GetCredentials(context.Background(), "registry.example.com", "team/image")
+	require.NoError(t, err)
+	require.Empty(t, cfg.Username)
+}
+
+// Once the gateway stops vending credentials (revoked or expired), a refresh
+// must drop the cached provider so the fallback answers instead of the stale
+// credentials being reused.
+func TestGatewayCredentialProviderDropsStaleCredentialsWhenRefreshHasNone(t *testing.T) {
+	repo := &fakeImageCredentialWorkerRepo{resp: &pb.GetCacheOriginCredentialsResponse{Ok: true, RegistryCredentials: "user:pass"}}
+	client := &ImageClient{workerRepoClient: repo, originCredsCache: make(map[string]*originCredentials)}
+	request := &types.ContainerRequest{WorkspaceId: "workspace-id", StubId: "stub-id", ImageId: "image-a"}
+
+	provider := client.gatewayCredentialProviderForImage("image-a", "registry.example.com", request, privateWorkerAnonymousRegistryProvider{})
+	cfg, err := provider.GetCredentials(context.Background(), "registry.example.com", "team/image")
+	require.NoError(t, err)
+	require.Equal(t, "user", cfg.Username)
+
+	expireCachedCredentials := func() {
+		client.originCredsMu.Lock()
+		for _, cached := range client.originCredsCache {
+			cached.fetchedAt = time.Now().Add(-originCredentialsTTL - time.Second)
+		}
+		client.originCredsMu.Unlock()
+	}
+
+	expireCachedCredentials()
+	repo.resp = &pb.GetCacheOriginCredentialsResponse{Ok: true}
+	cfg, err = provider.GetCredentials(context.Background(), "registry.example.com", "team/image")
+	require.NoError(t, err)
+	require.Empty(t, cfg.Username, "the fallback answers once the gateway has no credentials")
+	require.Len(t, repo.requests, 2)
+
+	// A failed refresh is not an answer: the last known credentials stay.
+	expireCachedCredentials()
+	repo.resp = &pb.GetCacheOriginCredentialsResponse{Ok: true, RegistryCredentials: "user2:pass2"}
+	cfg, err = provider.GetCredentials(context.Background(), "registry.example.com", "team/image")
+	require.NoError(t, err)
+	require.Equal(t, "user2", cfg.Username)
+	expireCachedCredentials()
+	repo.err = errFakeGatewayUnavailable
+	cfg, err = provider.GetCredentials(context.Background(), "registry.example.com", "team/image")
+	require.NoError(t, err)
+	require.Equal(t, "user2", cfg.Username)
+
+	// Without a fallback, revoked credentials surface as no credentials.
+	repo.err = nil
+	repo.resp = &pb.GetCacheOriginCredentialsResponse{Ok: true, RegistryCredentials: "user:pass"}
+	bare := client.gatewayCredentialProviderForImage("image-b", "registry.example.com", &types.ContainerRequest{WorkspaceId: "workspace-id", StubId: "stub-id", ImageId: "image-b"}, nil)
+	_, err = bare.GetCredentials(context.Background(), "registry.example.com", "team/image")
+	require.NoError(t, err)
+	expireCachedCredentials()
+	repo.resp = &pb.GetCacheOriginCredentialsResponse{Ok: true}
+	_, err = bare.GetCredentials(context.Background(), "registry.example.com", "team/image")
+	require.ErrorIs(t, err, clipCommon.ErrNoCredentials)
 }
 
 func TestGatewayCredentialProviderPreventsAgentKeychainFallback(t *testing.T) {
@@ -196,12 +263,19 @@ func TestLazyMountOptionsForClipV2UsesGatewayRegistryCredentials(t *testing.T) {
 	require.Equal(t, "/images/cache", opts.CachePath)
 	require.Nil(t, opts.StorageInfo)
 	require.NotNil(t, opts.RegistryCredProvider)
+	require.Empty(t, repo.requests, "mounting must not wait on a credential round trip")
+	require.True(t, opts.UseCheckpoints)
+
+	provider, ok := opts.RegistryCredProvider.(clipCommon.RegistryCredentialProvider)
+	require.True(t, ok)
+	cfg, err := provider.GetCredentials(context.Background(), "registry.example.com", "team/image")
+	require.NoError(t, err)
+	require.Equal(t, "registry-user", cfg.Username)
 	require.Len(t, repo.requests, 1)
 	require.Equal(t, "workspace-id", repo.requests[0].WorkspaceId)
 	require.Equal(t, "stub-id", repo.requests[0].StubId)
 	require.Equal(t, "image-a", repo.requests[0].ImageId)
 	require.Equal(t, "registry.example.com", repo.requests[0].Registry)
-	require.True(t, opts.UseCheckpoints)
 }
 
 func TestLazyMountOptionsForPrivateClipV2UsesCheckpoints(t *testing.T) {
@@ -295,7 +369,7 @@ func TestGetCredentialProviderForAgentPoolImageAvoidsAmbientKeychainWithoutGatew
 
 			provider := client.getCredentialProviderForImage(context.Background(), "image-a", request)
 			require.NotNil(t, provider)
-			require.Equal(t, "private-worker-anonymous", provider.Name())
+			require.Empty(t, repo.requests)
 			cfg, err := provider.GetCredentials(context.Background(), "registry.example.com", "team/image")
 			require.NoError(t, err)
 			require.NotNil(t, cfg)
@@ -416,13 +490,19 @@ func agentPoolImageClient(mode types.PoolMode, repo *fakeImageCredentialWorkerRe
 	}
 }
 
+var errFakeGatewayUnavailable = errors.New("gateway unavailable")
+
 type fakeImageCredentialWorkerRepo struct {
 	pb.WorkerRepositoryServiceClient
 	resp     *pb.GetCacheOriginCredentialsResponse
+	err      error
 	requests []*pb.GetCacheOriginCredentialsRequest
 }
 
 func (f *fakeImageCredentialWorkerRepo) GetCacheOriginCredentials(ctx context.Context, req *pb.GetCacheOriginCredentialsRequest, opts ...grpc.CallOption) (*pb.GetCacheOriginCredentialsResponse, error) {
 	f.requests = append(f.requests, req)
+	if f.err != nil {
+		return nil, f.err
+	}
 	return f.resp, nil
 }

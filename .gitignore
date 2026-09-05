@@ -43,3 +43,6 @@ docs/*.md
 
 # Riptide artifacts (cloud-synced)
 .humanlayer/tasks/
+
+# staging okteto config: contains live credentials
+hack/stage/config.stage.yaml

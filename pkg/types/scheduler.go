@@ -888,6 +888,25 @@ func (e *ThrottledByConcurrencyLimitError) Error() string {
 	return "concurrency_limit_reached: " + e.Reason
 }
 
+// InsufficientCreditsError is returned when a workspace has no prepaid credit
+// (or has been blocked by billing) and so may not run serverless workloads.
+type InsufficientCreditsError struct {
+	WorkspaceId string
+	Code        string
+	Reason      string
+}
+
+func (e *InsufficientCreditsError) Error() string {
+	code := e.Code
+	if code == "" {
+		code = "insufficient_credits"
+	}
+	if e.Reason == "" {
+		return code
+	}
+	return code + ": " + e.Reason
+}
+
 type QuotaDoesNotExistError struct{}
 
 func (e *QuotaDoesNotExistError) Error() string {
@@ -922,6 +941,9 @@ const (
 	StopContainerReasonScheduler StopContainerReason = "SCHEDULER"
 	// StopContainerReasonAdmin is used when a container is stopped by an admin request (i.e. draining a worker)
 	StopContainerReasonAdmin StopContainerReason = "ADMIN"
+	// StopContainerReasonInsufficientCredits is used when the scheduler stops a
+	// container because its workspace has run out of prepaid credit
+	StopContainerReasonInsufficientCredits StopContainerReason = "INSUFFICIENT_CREDITS"
 
 	StopContainerReasonUnknown StopContainerReason = "UNKNOWN"
 )

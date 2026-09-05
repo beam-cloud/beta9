@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func writeTestNBDDevice(t *testing.T, sysBlock, name, deviceNumber string) {
@@ -46,6 +49,56 @@ func TestEnsureNBDDevicesUsesExistingKernelDevicesAndCreatesPrivateNodes(t *test
 	}
 	if len(calls) != 2 || !strings.HasPrefix(calls[0], "mknod ") || !strings.HasPrefix(calls[1], "stat ") {
 		t.Fatalf("commands = %#v", calls)
+	}
+}
+
+func TestEnsureNBDDevicesPreparesOnceUnderConcurrentFirstAttaches(t *testing.T) {
+	sysBlock, dev := t.TempDir(), t.TempDir()
+	const devices = 4
+	for i := 0; i < devices; i++ {
+		writeTestNBDDevice(t, sysBlock, "nbd"+strconv.Itoa(i), "43:"+strconv.Itoa(i))
+	}
+	var mu sync.Mutex
+	validations := 0
+	manager := NewManager(Config{
+		SysBlockPath: sysBlock,
+		DevPath:      dev,
+		Runner: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			switch name {
+			case "mknod":
+				return nil, os.WriteFile(args[2], nil, 0o600)
+			case "stat":
+				mu.Lock()
+				validations++
+				mu.Unlock()
+				// Widen the window in which an unserialized caller would start
+				// its own pass.
+				time.Sleep(2 * time.Millisecond)
+				return []byte("6180:2b:" + strings.TrimPrefix(filepath.Base(args[len(args)-1]), "nbd") + "\n"), nil
+			}
+			return nil, nil
+		},
+	})
+
+	const callers = 8
+	errs := make(chan error, callers)
+	var group sync.WaitGroup
+	for i := 0; i < callers; i++ {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			errs <- manager.ensureNBDDevices(context.Background())
+		}()
+	}
+	group.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if validations != devices {
+		t.Fatalf("concurrent first attaches validated devices %d times, want one pass of %d", validations, devices)
 	}
 }
 

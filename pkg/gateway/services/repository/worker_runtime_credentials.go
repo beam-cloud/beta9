@@ -23,9 +23,16 @@ const (
 // instead of introducing a persistence repository because this path does not own
 // durable state.
 func (s *WorkerRepositoryService) GetContainerRuntimeCredentials(ctx context.Context, req *pb.GetContainerRuntimeCredentialsRequest) (*pb.GetContainerRuntimeCredentialsResponse, error) {
-	workspace, err := s.authorizeWorkerRuntimeCredentialRequest(ctx, req)
+	return s.vendRuntimeCredentials(ctx, req, nil), nil
+}
+
+// vendRuntimeCredentials authorizes and fulfils a credential request. state is
+// the container's persisted state when the caller already holds it (the claim
+// path); nil means it is looked up here.
+func (s *WorkerRepositoryService) vendRuntimeCredentials(ctx context.Context, req *pb.GetContainerRuntimeCredentialsRequest, state *types.ContainerState) *pb.GetContainerRuntimeCredentialsResponse {
+	workspace, err := s.authorizeWorkerRuntimeCredentialRequest(ctx, req, state)
 	if err != nil {
-		return &pb.GetContainerRuntimeCredentialsResponse{Ok: false, ErrorMsg: err.Error()}, nil
+		return &pb.GetContainerRuntimeCredentialsResponse{Ok: false, ErrorMsg: err.Error()}
 	}
 
 	resp := &pb.GetContainerRuntimeCredentialsResponse{Ok: true}
@@ -33,7 +40,7 @@ func (s *WorkerRepositoryService) GetContainerRuntimeCredentials(ctx context.Con
 	if req.RuntimeToken || len(req.SecretNames) > 0 {
 		resp.Env, err = s.workerRuntimeEnv(ctx, workspace, req)
 		if err != nil {
-			return &pb.GetContainerRuntimeCredentialsResponse{Ok: false, ErrorMsg: err.Error()}, nil
+			return &pb.GetContainerRuntimeCredentialsResponse{Ok: false, ErrorMsg: err.Error()}
 		}
 	}
 
@@ -44,14 +51,14 @@ func (s *WorkerRepositoryService) GetContainerRuntimeCredentials(ctx context.Con
 	if len(req.MountCredentials) > 0 {
 		resp.MountCredentials, err = s.workerRuntimeMountCredentials(ctx, workspace, req)
 		if err != nil {
-			return &pb.GetContainerRuntimeCredentialsResponse{Ok: false, ErrorMsg: err.Error()}, nil
+			return &pb.GetContainerRuntimeCredentialsResponse{Ok: false, ErrorMsg: err.Error()}
 		}
 	}
 
-	return resp, nil
+	return resp
 }
 
-func (s *WorkerRepositoryService) authorizeWorkerRuntimeCredentialRequest(ctx context.Context, req *pb.GetContainerRuntimeCredentialsRequest) (*types.Workspace, error) {
+func (s *WorkerRepositoryService) authorizeWorkerRuntimeCredentialRequest(ctx context.Context, req *pb.GetContainerRuntimeCredentialsRequest, state *types.ContainerState) (*types.Workspace, error) {
 	if req == nil {
 		return nil, fmt.Errorf("request is required")
 	}
@@ -68,13 +75,16 @@ func (s *WorkerRepositoryService) authorizeWorkerRuntimeCredentialRequest(ctx co
 		return s.runtimeCredentialsWorkspace(ctx, workspaceID, req)
 	}
 
-	if s.containerRepo == nil {
-		return nil, fmt.Errorf("container repository is unavailable")
-	}
-
-	state, err := s.runtimeCredentialsContainerState(ctx, req.ContainerId)
-	if err != nil {
-		return nil, err
+	// A caller-supplied state only stands in for the lookup when it belongs to
+	// the requested container; otherwise the request is authorized against the
+	// container it names.
+	if state == nil || state.ContainerId != req.ContainerId {
+		if s.containerRepo == nil {
+			return nil, fmt.Errorf("container repository is unavailable")
+		}
+		if state, err = s.runtimeCredentialsContainerState(ctx, req.ContainerId); err != nil {
+			return nil, err
+		}
 	}
 	if state.WorkspaceId != req.WorkspaceId || state.StubId != req.StubId {
 		return nil, fmt.Errorf("container %q is not assigned to workspace/stub", req.ContainerId)

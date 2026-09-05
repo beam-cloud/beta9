@@ -323,11 +323,18 @@ func (c *StorageClient) UploadToBucket(ctx context.Context, key string, data []b
 }
 
 func (c *StorageClient) UploadToBucketWithReader(ctx context.Context, key string, data io.Reader, bucket string) error {
+	return c.UploadToBucketWithReaderAndMetadata(ctx, key, data, bucket, nil)
+}
+
+// UploadToBucketWithReaderAndMetadata is UploadToBucketWithReader with user
+// metadata attached to the object.
+func (c *StorageClient) UploadToBucketWithReaderAndMetadata(ctx context.Context, key string, data io.Reader, bucket string, metadata map[string]string) error {
 	uploader := newStorageMultipartUploader(c.s3Client, data)
 	_, err := uploader.Upload(ctx, &s3.PutObjectInput{
-		Bucket: aws.String(bucket),
-		Key:    aws.String(key),
-		Body:   data,
+		Bucket:   aws.String(bucket),
+		Key:      aws.String(key),
+		Body:     data,
+		Metadata: metadata,
 	})
 	return err
 }
@@ -645,6 +652,10 @@ func (c *WorkspaceStorageClient) Upload(ctx context.Context, key string, data []
 
 func (c *WorkspaceStorageClient) UploadWithReader(ctx context.Context, key string, data io.Reader) error {
 	return c.StorageClient.UploadToBucketWithReader(ctx, key, data, *c.WorkspaceStorage.BucketName)
+}
+
+func (c *WorkspaceStorageClient) UploadWithReaderAndMetadata(ctx context.Context, key string, data io.Reader, metadata map[string]string) error {
+	return c.StorageClient.UploadToBucketWithReaderAndMetadata(ctx, key, data, *c.WorkspaceStorage.BucketName, metadata)
 }
 
 func (c *WorkspaceStorageClient) Head(ctx context.Context, key string) (bool, *s3.HeadObjectOutput, error) {

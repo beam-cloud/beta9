@@ -2978,6 +2978,35 @@
         }
       }
     },
+    "gatewayCommitObjectDeltaResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "objectId": {
+          "type": "string"
+        },
+        "size": {
+          "type": "string",
+          "format": "int64"
+        },
+        "errorMsg": {
+          "type": "string"
+        }
+      }
+    },
+    "gatewayCompleteObjectUploadResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errorMsg": {
+          "type": "string"
+        }
+      }
+    },
     "gatewayCordonWorkerResponse": {
       "type": "object",
       "properties": {
@@ -3177,6 +3206,34 @@
         }
       }
     },
+    "gatewayCreateObjectDeltaResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "objectId": {
+          "type": "string"
+        },
+        "presignedUrl": {
+          "type": "string",
+          "title": "PUT the delta archive here"
+        },
+        "putHeaders": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "errorMsg": {
+          "type": "string"
+        },
+        "baseMissing": {
+          "type": "boolean",
+          "title": "base object is gone: fall back to a full upload"
+        }
+      }
+    },
     "gatewayCreateObjectRequest": {
       "type": "object",
       "properties": {
@@ -3195,6 +3252,16 @@
         },
         "supportsPutHeaders": {
           "type": "boolean"
+        },
+        "multipartPartSize": {
+          "type": "string",
+          "format": "int64",
+          "description": "When \u003e 0 the client can upload the object as concurrent parts of this\nmany bytes; the gateway answers with upload_parts instead of a single\npresigned_url for objects larger than one part."
+        },
+        "multipartTotalSize": {
+          "type": "string",
+          "format": "int64",
+          "description": "Byte length of the archive the parts cover (size is the manifest's\nuncompressed total, which is what the object record stores)."
         }
       }
     },
@@ -3217,6 +3284,16 @@
           "type": "object",
           "additionalProperties": {
             "type": "string"
+          }
+        },
+        "uploadId": {
+          "type": "string"
+        },
+        "uploadParts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/gatewayObjectUploadPart"
           }
         }
       }
@@ -4960,6 +5037,38 @@
         "size": {
           "type": "string",
           "format": "int64"
+        }
+      }
+    },
+    "gatewayObjectUploadPart": {
+      "type": "object",
+      "properties": {
+        "number": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "start": {
+          "type": "string",
+          "format": "int64"
+        },
+        "end": {
+          "type": "string",
+          "format": "int64"
+        },
+        "url": {
+          "type": "string"
+        }
+      }
+    },
+    "gatewayObjectUploadedPart": {
+      "type": "object",
+      "properties": {
+        "number": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "etag": {
+          "type": "string"
         }
       }
     },

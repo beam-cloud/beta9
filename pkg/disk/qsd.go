@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -28,10 +27,10 @@ const (
 	// Wait loops in this package (socket and pidfile appearance, NBD settle,
 	// daemon shutdown) start polling at minPollInterval and back off to
 	// maxPollInterval. The conditions usually hold within a millisecond or
-	// two of the preceding exec returning; a fixed 50ms tick was costing
-	// most of the attach time.
+	// two of the preceding exec returning, and the checks are single stats,
+	// so the cap stays low enough that a late condition is seen promptly.
 	minPollInterval = time.Millisecond
-	maxPollInterval = 50 * time.Millisecond
+	maxPollInterval = 8 * time.Millisecond
 )
 
 // waitFor polls ready until it returns true, the timeout elapses, or ctx is
@@ -103,8 +102,8 @@ func (m *Manager) startQSD(ctx context.Context, runtimeDir, headPath, fmtNode st
 		"--export", fmt.Sprintf("type=nbd,id=%s,node-name=%s,name=%s,writable=%s", qsdExportName, fmtNode, qsdExportName, boolOnOff(!readOnly)),
 	}
 
-	if output, err := exec.CommandContext(ctx, m.binaries.QSD, args...).CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("start qemu-storage-daemon: %w: %s", err, string(output))
+	if _, err := m.run(ctx, m.binaries.QSD, args...); err != nil {
+		return nil, fmt.Errorf("start qemu-storage-daemon: %w", err)
 	}
 
 	pid, err := waitForPidFile(ctx, pidFile, qsdStartTimeout)

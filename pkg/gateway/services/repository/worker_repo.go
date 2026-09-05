@@ -7,9 +7,12 @@ import (
 	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
+	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/rs/zerolog/log"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type WorkerRepositoryService struct {
@@ -147,6 +150,60 @@ func (s *WorkerRepositoryService) AddContainerToWorker(ctx context.Context, req 
 	return &pb.AddContainerToWorkerResponse{Ok: true}, nil
 }
 
+// ClaimContainer is the worker's single pre-start round trip: it acknowledges
+// the delivery (the same atomic script as AddContainerToWorker), refreshes the
+// pending lease, and vends runtime credentials against the state it just read.
+// Every step after the acknowledgement reports claimed=true so the worker knows
+// it owns the container's failure reporting.
+func (s *WorkerRepositoryService) ClaimContainer(ctx context.Context, req *pb.ClaimContainerRequest) (*pb.ClaimContainerResponse, error) {
+	logger := log.With().Str("pool_name", req.PoolName).Str("hostname", req.PodHostname).Str("worker_id", req.WorkerId).Str("container_id", req.ContainerId).Logger()
+
+	if err := s.workerRepo.AddContainerToWorker(req.WorkerId, req.ContainerId, req.DeliveryToken); err != nil {
+		logger.Warn().Err(err).Msg("container claim rejected")
+		return &pb.ClaimContainerResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+	resp := &pb.ClaimContainerResponse{Claimed: true}
+
+	// The claim is idempotent for its delivery token, so a transient
+	// repository failure after it is answered with UNAVAILABLE and the worker
+	// retries. A missing state is authoritative: the container is gone.
+	//
+	// The scheduler wrote the pending lease when it queued the request; renew
+	// it now so a long backlog wait cannot expire the state mid-startup. The
+	// worker's status heartbeat takes over from here. The renewal is a no-op
+	// when the container has already moved on (a STOPPING that raced the
+	// claim is refused, not overwritten), so the state is read after it: the
+	// worker acts on the persisted status, never on a stale snapshot.
+	if err := s.containerRepo.UpdateContainerStatus(req.ContainerId, types.ContainerStatusPending, int64(types.ContainerStateTtlSWhilePending)); err != nil {
+		if (&types.ErrContainerStateNotFound{}).From(err) {
+			resp.ErrorMsg = err.Error()
+			return resp, nil
+		}
+		return nil, status.Error(codes.Unavailable, err.Error())
+	}
+	state, err := s.containerRepo.GetContainerState(req.ContainerId)
+	if err != nil {
+		if (&types.ErrContainerStateNotFound{}).From(err) {
+			resp.ErrorMsg = err.Error()
+			return resp, nil
+		}
+		return nil, status.Error(codes.Unavailable, err.Error())
+	}
+	resp.State = containerStateToProto(state)
+
+	if req.Credentials != nil {
+		resp.Credentials = s.vendRuntimeCredentials(ctx, req.Credentials, state)
+		if !resp.Credentials.Ok {
+			resp.ErrorMsg = resp.Credentials.ErrorMsg
+			return resp, nil
+		}
+	}
+
+	logger.Info().Msg("container claimed by worker")
+	resp.Ok = true
+	return resp, nil
+}
+
 func (s *WorkerRepositoryService) RemoveContainerFromWorker(ctx context.Context, req *pb.RemoveContainerFromWorkerRequest) (*pb.RemoveContainerFromWorkerResponse, error) {
 	err := s.workerRepo.RemoveContainerFromWorker(req.WorkerId, req.ContainerId)
 	if err != nil {
@@ -212,7 +269,19 @@ func (s *WorkerRepositoryService) SetWorkerKeepAlive(ctx context.Context, req *p
 		return &pb.SetWorkerKeepAliveResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
-	return &pb.SetWorkerKeepAliveResponse{Ok: true}, nil
+	// Tell an idle worker whether it is the pool's headroom, so it does not
+	// idle out and leave the pool cold until the sizer's replacement boots.
+	// Only idle workers can spin down, so only they pay for the pool scan; a
+	// lookup failure answers "headroom" so the worker stays until a good read.
+	headroom := false
+	if req.Idle {
+		headroom = true
+		if worker, err := s.workerRepo.GetWorkerById(req.WorkerId); err == nil {
+			headroom = scheduler.WorkerHoldsPoolHeadroom(s.workerRepo, s.appConfig, worker)
+		}
+	}
+
+	return &pb.SetWorkerKeepAliveResponse{Ok: true, PoolHeadroom: headroom}, nil
 }
 
 func (s *WorkerRepositoryService) SetNetworkLock(ctx context.Context, req *pb.SetNetworkLockRequest) (*pb.SetNetworkLockResponse, error) {

@@ -14,6 +14,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/s2-streamstore/s2-sdk-go/s2"
+	"github.com/stretchr/testify/require"
 )
 
 func TestS2ContainerStreamNameUsesWorkspaceStubContainer(t *testing.T) {
@@ -1594,81 +1595,168 @@ func TestEventMetadataPoolNameRoundTrip(t *testing.T) {
 	}
 }
 
-func TestMetricsBucketCalculatesIORatesFromSampleInterval(t *testing.T) {
-	acc := &metricsBucketAccumulator{key: time.Unix(0, 0).UnixMilli()}
-	acc.add(types.EventContainerMetricsSchema{
-		ContainerID: "container-1",
-		ContainerMetrics: types.EventContainerMetricsData{
-			SampleIntervalMs: 5000,
-			DiskReadBytes:    10 * 1024 * 1024,
-			DiskWriteBytes:   5 * 1024 * 1024,
-			NetworkBytesRecv: 100 * 1024,
-			NetworkBytesSent: 50 * 1024,
-		},
-	})
+type metricsSample struct {
+	containerID string
+	at          time.Time
+	cpu         int64
+	gpuCount    uint32
+	metrics     types.EventContainerMetricsData
+}
 
-	bucket := acc.bucket()
-	if got, want := bucket.DiskReadBytesRateAvg.Value, float64(2*1024*1024); got != want {
-		t.Fatalf("unexpected disk read rate: got %f want %f", got, want)
+func TestMetricsBucketAggregatesPerContainer(t *testing.T) {
+	t0 := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+	at := func(seconds int) time.Time { return t0.Add(time.Duration(seconds) * time.Second) }
+	const interval = 3000
+
+	tests := []struct {
+		name    string
+		samples []metricsSample
+		want    map[string]float64
+	}{
+		{
+			name: "concurrency is peak overlap not distinct containers",
+			samples: []metricsSample{
+				// a and b overlap; c starts after both ended.
+				{"a", at(0), 1000, 1, types.EventContainerMetricsData{SampleIntervalMs: interval}},
+				{"a", at(3), 1000, 1, types.EventContainerMetricsData{SampleIntervalMs: interval}},
+				{"b", at(3), 2000, 0, types.EventContainerMetricsData{SampleIntervalMs: interval}},
+				{"b", at(6), 2000, 0, types.EventContainerMetricsData{SampleIntervalMs: interval}},
+				{"c", at(9), 1000, 2, types.EventContainerMetricsData{SampleIntervalMs: interval}},
+			},
+			want: map[string]float64{
+				"container_count":   2,
+				"cpu_concurrency":   3000,
+				"gpu_concurrency":   2,
+				"container_seconds": 15,
+			},
+		},
+		{
+			name: "container that starts after another ends does not overlap it",
+			samples: []metricsSample{
+				{"a", at(0), 1000, 0, types.EventContainerMetricsData{}},
+				{"a", at(3), 1000, 0, types.EventContainerMetricsData{}},
+				{"b", at(6), 1000, 0, types.EventContainerMetricsData{}},
+			},
+			want: map[string]float64{"container_count": 1, "cpu_concurrency": 1000},
+		},
+		{
+			name: "averages weight containers equally and totals sum them",
+			samples: []metricsSample{
+				// a is sampled three times as often as b.
+				{"a", at(0), 0, 0, types.EventContainerMetricsData{CPUUsed: 100, MemoryRSS: 1000}},
+				{"a", at(3), 0, 0, types.EventContainerMetricsData{CPUUsed: 100, MemoryRSS: 1000}},
+				{"a", at(6), 0, 0, types.EventContainerMetricsData{CPUUsed: 100, MemoryRSS: 1000}},
+				{"b", at(0), 0, 0, types.EventContainerMetricsData{CPUUsed: 500, MemoryRSS: 3000}},
+			},
+			want: map[string]float64{
+				"cpu_used_avg":           300,
+				"cpu_used_total":         600,
+				"memory_rss_bytes_avg":   2000,
+				"memory_rss_bytes_total": 4000,
+			},
+		},
+		{
+			name: "gpu memory ignores containers without a gpu",
+			samples: []metricsSample{
+				{"cpu-only", at(0), 0, 0, types.EventContainerMetricsData{}},
+				{"cpu-only", at(3), 0, 0, types.EventContainerMetricsData{}},
+				{"gpu", at(0), 0, 1, types.EventContainerMetricsData{GPUMemoryUsed: 4 << 30, GPUMemoryTotal: 16 << 30}},
+				{"legacy-gpu", at(0), 0, 0, types.EventContainerMetricsData{GPUMemoryUsed: 2 << 30, GPUMemoryTotal: 16 << 30}},
+			},
+			want: map[string]float64{
+				"gpu_memory_used_bytes_avg":   3 << 30,
+				"gpu_memory_used_bytes_total": 6 << 30,
+				"gpu_memory_total_bytes_avg":  16 << 30,
+			},
+		},
+		{
+			name: "idle legacy gpu with only total memory still counts toward gpu memory",
+			samples: []metricsSample{
+				{"cpu-only", at(0), 0, 0, types.EventContainerMetricsData{}},
+				{"busy-gpu", at(0), 0, 0, types.EventContainerMetricsData{GPUMemoryUsed: 8 << 30, GPUMemoryTotal: 16 << 30}},
+				{"idle-gpu", at(0), 0, 0, types.EventContainerMetricsData{GPUMemoryUsed: 0, GPUMemoryTotal: 16 << 30}},
+			},
+			want: map[string]float64{
+				"gpu_memory_used_bytes_avg":   4 << 30,
+				"gpu_memory_used_bytes_total": 8 << 30,
+				"gpu_memory_total_bytes_avg":  16 << 30,
+			},
+		},
+		{
+			name: "rates use the reported interval and sum across containers",
+			samples: []metricsSample{
+				{"a", at(0), 0, 0, types.EventContainerMetricsData{SampleIntervalMs: 5000, DiskReadBytes: 10 << 20, DiskWriteBytes: 5 << 20, NetworkBytesRecv: 100 << 10, NetworkBytesSent: 50 << 10}},
+				{"b", at(0), 0, 0, types.EventContainerMetricsData{SampleIntervalMs: 1000, NetworkBytesRecv: 10 << 10}},
+			},
+			want: map[string]float64{
+				"disk_read_bytes_per_second_avg":    2 << 20,
+				"disk_write_bytes_per_second_avg":   1 << 20,
+				"network_recv_bytes_per_second_avg": 30 << 10,
+				"network_sent_bytes_per_second_avg": 10 << 10,
+			},
+		},
+		{
+			name: "missing interval falls back to the gap between samples",
+			samples: []metricsSample{
+				// The first sample has no interval and no neighbour: no rate.
+				{"a", at(0), 0, 0, types.EventContainerMetricsData{NetworkBytesRecv: 999999}},
+				{"a", at(3), 0, 0, types.EventContainerMetricsData{NetworkBytesRecv: 3000}},
+				{"a", at(6), 0, 0, types.EventContainerMetricsData{NetworkBytesRecv: 6000}},
+			},
+			want: map[string]float64{
+				"network_recv_bytes_per_second_avg": 1500,
+				"container_seconds":                 6,
+			},
+		},
+		{
+			name: "single sample without interval reports no rate",
+			samples: []metricsSample{
+				{"a", at(0), 0, 0, types.EventContainerMetricsData{NetworkBytesRecv: 3000}},
+			},
+			want: map[string]float64{"network_recv_bytes_per_second_avg": 0, "container_count": 1, "container_seconds": 0},
+		},
 	}
-	if got, want := bucket.DiskWriteBytesRateAvg.Value, float64(1024*1024); got != want {
-		t.Fatalf("unexpected disk write rate: got %f want %f", got, want)
-	}
-	if got, want := bucket.NetworkRecvBytesRateAvg.Value, float64(20*1024); got != want {
-		t.Fatalf("unexpected network recv rate: got %f want %f", got, want)
-	}
-	if got, want := bucket.NetworkSentBytesRateAvg.Value, float64(10*1024); got != want {
-		t.Fatalf("unexpected network sent rate: got %f want %f", got, want)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			acc := &metricsBucketAccumulator{key: t0.UnixMilli()}
+			for _, s := range tt.samples {
+				acc.add(types.EventContainerMetricsSchema{ContainerID: s.containerID, CPU: s.cpu, GPUCount: s.gpuCount, ContainerMetrics: s.metrics}, s.at)
+			}
+			encoded, err := json.Marshal(acc.bucket())
+			require.NoError(t, err)
+			var got map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal(encoded, &got))
+
+			for key, want := range tt.want {
+				require.Contains(t, got, key)
+				var value types.MetricAverage
+				require.NoError(t, json.Unmarshal(got[key], &value), key)
+				require.InDelta(t, want, value.Value, 1e-6, key)
+			}
+		})
 	}
 }
 
-func TestMetricsBucketSumsContainerIORates(t *testing.T) {
-	acc := &metricsBucketAccumulator{key: time.Unix(0, 0).UnixMilli()}
-	acc.add(types.EventContainerMetricsSchema{
-		ContainerID: "container-1",
-		ContainerMetrics: types.EventContainerMetricsData{
-			SampleIntervalMs: 1000,
-			NetworkBytesRecv: 10 * 1024,
-		},
-	})
-	acc.add(types.EventContainerMetricsSchema{
-		ContainerID: "container-2",
-		ContainerMetrics: types.EventContainerMetricsData{
-			SampleIntervalMs: 1000,
-			NetworkBytesRecv: 20 * 1024,
-		},
-	})
-
-	bucket := acc.bucket()
-	if got, want := bucket.NetworkRecvBytesRateAvg.Value, float64(30*1024); got != want {
-		t.Fatalf("unexpected total network recv rate: got %f want %f", got, want)
+func TestMetricsScanStartKeepsNewestRecords(t *testing.T) {
+	tests := []struct {
+		name          string
+		startSeq      uint64
+		endSeq        uint64
+		wantSeq       uint64
+		wantTruncated bool
+	}{
+		{name: "within budget", startSeq: 10, endSeq: 10 + s2ReadScanLimit, wantSeq: 10},
+		{name: "empty range", startSeq: 10, endSeq: 10, wantSeq: 10},
+		{name: "over budget drops oldest", startSeq: 10, endSeq: 10 + s2ReadScanLimit + 1234, wantSeq: 1244, wantTruncated: true},
 	}
-}
 
-func TestMetricsBucketCountsUniqueContainers(t *testing.T) {
-	acc := &metricsBucketAccumulator{key: time.Unix(0, 0).UnixMilli()}
-	acc.add(types.EventContainerMetricsSchema{
-		ContainerID: "container-1",
-		ContainerMetrics: types.EventContainerMetricsData{
-			CPUTotal: 1000,
-		},
-	})
-	acc.add(types.EventContainerMetricsSchema{
-		ContainerID: "container-1",
-		ContainerMetrics: types.EventContainerMetricsData{
-			CPUTotal: 1000,
-		},
-	})
-	acc.add(types.EventContainerMetricsSchema{
-		ContainerID: "container-2",
-		ContainerMetrics: types.EventContainerMetricsData{
-			CPUTotal: 1000,
-		},
-	})
-
-	bucket := acc.bucket()
-	if got, want := bucket.ContainerCount.Value, float64(2); got != want {
-		t.Fatalf("unexpected container count: got %f want %f", got, want)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			seq, truncated := metricsScanStart(tt.startSeq, tt.endSeq)
+			require.Equal(t, tt.wantSeq, seq)
+			require.Equal(t, tt.wantTruncated, truncated)
+		})
 	}
 }
 

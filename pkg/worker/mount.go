@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"math/rand"
 	"os"
@@ -19,6 +20,7 @@ import (
 
 	abstractionscommon "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/singleflight"
 
 	"github.com/beam-cloud/beta9/pkg/clients"
@@ -44,6 +46,7 @@ const (
 	workspaceBindMountRetryBudget       = 3 * time.Minute
 	workspaceBindMountRetryInitialDelay = 250 * time.Millisecond
 	workspaceBindMountRetryMaxDelay     = 5 * time.Second
+	slowBindMountSourceDirThreshold     = 250 * time.Millisecond
 )
 
 type bindMountSourceDirOps struct {
@@ -56,7 +59,7 @@ type bindMountSourceDirOps struct {
 
 func defaultBindMountSourceDirOps() bindMountSourceDirOps {
 	return bindMountSourceDirOps{
-		mkdirAll:    os.MkdirAll,
+		mkdirAll:    mkdirBindSource,
 		now:         time.Now,
 		wait:        waitForRetry,
 		jitter:      jitterBindMountRetryDelay,
@@ -152,30 +155,65 @@ func (c *ContainerMountManager) ensureBindMountSourceDirs(ctx context.Context, m
 	return c.ensureBindMountSourceDirsWithOps(ctx, mounts, defaultBindMountSourceDirOps())
 }
 
+// ensureBindMountSourceDirsWithOps creates the source directories in
+// parallel: most live on network filesystems where each mkdir is a round
+// trip, and the paths are independent.
 func (c *ContainerMountManager) ensureBindMountSourceDirsWithOps(ctx context.Context, mounts []types.Mount, ops bindMountSourceDirOps) error {
+	group, ctx := errgroup.WithContext(ctx)
 	for _, mount := range mounts {
 		if mount.MountType == storage.StorageModeMountPoint || mount.LocalPath == "" {
 			continue
 		}
-		if err := ctx.Err(); err != nil {
-			return err
+		// Durable disks attach concurrently with this and create their own
+		// mountpoints (prepareDurableDiskMounts).
+		if mount.MountType == types.StorageModeDurableDisk {
+			continue
 		}
 		if mount.MountPath == types.WorkerUserOutputVolume {
 			if _, ready := c.readyOutputDirs.Load(mount.LocalPath); ready {
 				continue
 			}
 		}
-		retry := mount.MountType != storage.StorageModeLocal &&
-			mount.MountType != types.StorageModeDurableDisk && mount.DurableDisk == nil &&
+		retry := mount.MountType != storage.StorageModeLocal && mount.DurableDisk == nil &&
 			pathWithinBase(c.storageConfig.WorkspaceStorage.BaseMountPath, mount.LocalPath)
-		if err := ensureBindMountSourceDir(ctx, mount.LocalPath, retry, ops); err != nil {
-			return fmt.Errorf("create bind mount source %s for %s: %w", mount.LocalPath, mount.MountPath, err)
-		}
-		if mount.MountPath == types.WorkerUserOutputVolume {
-			c.readyOutputDirs.Store(mount.LocalPath, struct{}{})
-		}
+		group.Go(func() error {
+			if err := ensureBindMountSourceDir(ctx, mount.LocalPath, retry, ops); err != nil {
+				return fmt.Errorf("create bind mount source %s for %s: %w", mount.LocalPath, mount.MountPath, err)
+			}
+			if mount.MountPath == types.WorkerUserOutputVolume {
+				c.readyOutputDirs.Store(mount.LocalPath, struct{}{})
+			}
+			return nil
+		})
 	}
-	return nil
+	return group.Wait()
+}
+
+// mkdirBindSource creates localPath in one round trip when its parent exists,
+// which covers both an already present directory and a fresh one; sources sit
+// on network storage, where os.MkdirAll would spend a stat per path element.
+func mkdirBindSource(localPath string, perm os.FileMode) error {
+	err := os.Mkdir(localPath, perm)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, fs.ErrExist):
+		// EEXIST covers a regular file too, which cannot back a bind mount;
+		// report ENOTDIR (what the mount itself would fail with) instead of
+		// claiming success.
+		info, statErr := os.Stat(localPath)
+		if statErr != nil {
+			return statErr
+		}
+		if !info.IsDir() {
+			return &os.PathError{Op: "mkdir", Path: localPath, Err: syscall.ENOTDIR}
+		}
+		return nil
+	case errors.Is(err, fs.ErrNotExist):
+		return os.MkdirAll(localPath, perm)
+	default:
+		return err
+	}
 }
 
 func ensureBindMountSourceDir(ctx context.Context, localPath string, retry bool, ops bindMountSourceDirOps) error {
@@ -189,7 +227,11 @@ func ensureBindMountSourceDir(ctx context.Context, localPath string, retry bool,
 			return err
 		}
 		attempts++
+		mkdirStart := ops.now()
 		err := ops.mkdirAll(localPath, 0755)
+		if elapsed := ops.now().Sub(mkdirStart); elapsed > slowBindMountSourceDirThreshold {
+			log.Warn().Str("local_path", localPath).Dur("elapsed", elapsed).Err(err).Msg("slow bind mount source create")
+		}
 		if err == nil {
 			if retrying {
 				log.Info().Str("local_path", localPath).Int("attempts", attempts).Dur("elapsed", ops.now().Sub(startedAt)).Msg("workspace bind mount source recovered")

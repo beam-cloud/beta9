@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -16,6 +17,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 )
 
@@ -354,6 +356,37 @@ func TestDrainFreeNetworkSlots(t *testing.T) {
 	if manager.totalSlots != 1 {
 		t.Fatalf("expected only assigned slot to remain counted, got %d", manager.totalSlots)
 	}
+}
+
+// A pooled slot is only handed to a container while both the namespace and the
+// host veth it was built with are still present; either one missing sends the
+// container to on-demand setup instead of a half-torn-down slot.
+func TestPrepareNetworkSlotForAssignmentChecksNamespaceAndHostVeth(t *testing.T) {
+	root := t.TempDir()
+	netnsPath := filepath.Join(root, "netns", "slot-a")
+	vethPath := filepath.Join(root, "sys", "veth-a")
+	require.NoError(t, os.MkdirAll(filepath.Dir(netnsPath), 0o755))
+	require.NoError(t, os.WriteFile(netnsPath, nil, 0o644))
+	require.NoError(t, os.MkdirAll(vethPath, 0o755))
+
+	manager := &ContainerNetworkManager{}
+	slot := &containerNetworkSlot{id: "slot-a", ip: "10.0.0.2", netnsPath: netnsPath, hostVethPath: vethPath}
+	require.NoError(t, manager.prepareNetworkSlotForAssignment(slot))
+
+	require.NoError(t, os.Remove(vethPath))
+	err := manager.prepareNetworkSlotForAssignment(slot)
+	require.ErrorContains(t, err, "missing its host veth")
+
+	// A slot whose veth could not be observed through sysfs is not rejected
+	// for that reason.
+	slot.hostVethPath = ""
+	require.NoError(t, manager.prepareNetworkSlotForAssignment(slot))
+
+	require.NoError(t, os.Remove(netnsPath))
+	err = manager.prepareNetworkSlotForAssignment(slot)
+	require.ErrorContains(t, err, "missing its namespace")
+
+	require.ErrorContains(t, manager.prepareNetworkSlotForAssignment(&containerNetworkSlot{id: "slot-b"}), "missing an IP address")
 }
 
 func TestFillNetworkSlotPoolSkipsClosedPool(t *testing.T) {

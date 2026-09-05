@@ -45,6 +45,9 @@ type Builder struct {
 	tailscale     *network.Tailscale
 	eventBus      *common.EventBus
 	skopeoClient  common.SkopeoClient
+	rdb           *common.RedisClient
+	// existsOverride replaces the registry lookup in tests.
+	existsOverride func(context.Context, string) (bool, error)
 }
 
 func NewBuilder(config types.AppConfig, registry *registry.ImageRegistry, scheduler *scheduler.Scheduler, tailscale *network.Tailscale, containerRepo repository.ContainerRepository, rdb *common.RedisClient) (*Builder, error) {
@@ -56,6 +59,7 @@ func NewBuilder(config types.AppConfig, registry *registry.ImageRegistry, schedu
 		containerRepo: containerRepo,
 		eventBus:      common.NewEventBus(rdb),
 		skopeoClient:  common.NewSkopeoClient(config),
+		rdb:           rdb,
 	}, nil
 }
 
@@ -204,6 +208,9 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	if err != nil {
 		return err
 	}
+	if dockerfile, sourceImage, ok := b.reuseBuiltPrefix(ctx, opts); ok {
+		build.dockerfile, build.sourceImage = dockerfile, sourceImage
+	}
 
 	// Send a stop-build event to the worker if the user cancels the build
 	go b.handleBuildCancellation(ctx, build)
@@ -240,6 +247,10 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		if err := build.archive(); err != nil {
 			return err
 		}
+	}
+
+	if isV2 {
+		b.recordBuiltDockerfile(ctx, opts, build.imageID)
 	}
 
 	// Send final completion message with image ID

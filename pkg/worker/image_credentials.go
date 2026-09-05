@@ -14,22 +14,17 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func (c *ImageClient) gatewayCredentialProviderForImage(ctx context.Context, imageID, registry string, request *types.ContainerRequest) clipCommon.RegistryCredentialProvider {
-	creds := c.originCredentials(ctx, request, imageID, registry)
-	if creds == nil || creds.registryCredentials == "" {
-		return nil
-	}
-	provider := c.parseAndCreateProvider(ctx, creds.registryCredentials, registry, imageID, "gateway-vended")
-	if provider == nil {
-		return nil
-	}
+// gatewayCredentialProviderForImage vends registry credentials from the
+// gateway on first use. Registry access only happens on a content cache miss,
+// so the round trip stays off the mount path. When the gateway has none,
+// fallback answers instead.
+func (c *ImageClient) gatewayCredentialProviderForImage(imageID, registry string, request *types.ContainerRequest, fallback clipCommon.RegistryCredentialProvider) clipCommon.RegistryCredentialProvider {
 	return &gatewayRegistryCredentialProvider{
 		client:         c,
 		request:        request,
 		imageID:        imageID,
 		registry:       registry,
-		provider:       provider,
-		credentialsAt:  creds.fetchedAt,
+		fallback:       fallback,
 		preventAmbient: c.brokeredImageAccessRequest(request),
 	}
 }
@@ -106,6 +101,7 @@ type gatewayRegistryCredentialProvider struct {
 	registry       string
 	mu             sync.Mutex
 	provider       clipCommon.RegistryCredentialProvider
+	fallback       clipCommon.RegistryCredentialProvider
 	credentialsAt  time.Time
 	preventAmbient bool
 }
@@ -115,14 +111,23 @@ func (p *gatewayRegistryCredentialProvider) GetCredentials(ctx context.Context, 
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if creds != nil && creds.registryCredentials != "" && creds.fetchedAt.After(p.credentialsAt) {
-		if provider := p.client.parseAndCreateProvider(ctx, creds.registryCredentials, p.registry, p.imageID, "gateway-vended refresh"); provider != nil {
-			p.provider = provider
-			p.credentialsAt = creds.fetchedAt
+	if creds != nil && creds.fetchedAt.After(p.credentialsAt) {
+		// A newer answer from the gateway replaces whatever was cached,
+		// including an answer with no credentials: they were revoked or have
+		// expired, so the fallback must take over rather than the stale
+		// provider being reused. A failed fetch (creds == nil) keeps the
+		// cached provider, since nothing newer is known.
+		p.provider = nil
+		if creds.registryCredentials != "" {
+			p.provider = p.client.parseAndCreateProvider(ctx, creds.registryCredentials, p.registry, p.imageID, "gateway-vended")
 		}
+		p.credentialsAt = creds.fetchedAt
 	}
 	if p.provider == nil {
-		return nil, clipCommon.ErrNoCredentials
+		if p.fallback == nil {
+			return nil, clipCommon.ErrNoCredentials
+		}
+		return p.fallback.GetCredentials(ctx, registry, scope)
 	}
 	authConfig, err := p.provider.GetCredentials(ctx, registry, scope)
 	if p.preventAmbient && (err != nil || authConfig == nil) {

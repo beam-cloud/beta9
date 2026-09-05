@@ -184,15 +184,6 @@ func TestEnsureBindMountSourceDirsRetriesOnlyWorkspaceFusePaths(t *testing.T) {
 			err:   transientErr,
 		},
 		{
-			name: "durable disk under workspace root",
-			mount: types.Mount{
-				LocalPath: workspacePath,
-				MountPath: "/data",
-				MountType: types.StorageModeDurableDisk,
-			},
-			err: transientErr,
-		},
-		{
 			name: "durable disk metadata under workspace root",
 			mount: types.Mount{
 				LocalPath:   workspacePath,
@@ -636,4 +627,56 @@ func zipObjectBytes(files map[string]string) ([]byte, error) {
 		return nil, err
 	}
 	return buffer.Bytes(), nil
+}
+
+func TestEnsureBindMountSourceDirsSkipsDurableDisks(t *testing.T) {
+	manager := NewContainerMountManager(types.AppConfig{})
+	attempts := 0
+	ops := bindMountRetryTestOps(&bindMountRetryTestClock{current: time.Unix(1, 0)}, func(string, os.FileMode) error {
+		attempts++
+		return nil
+	})
+
+	err := manager.ensureBindMountSourceDirsWithOps(context.Background(), []types.Mount{
+		{LocalPath: "/disks/ws/data", MountPath: "/data", MountType: types.StorageModeDurableDisk, DurableDisk: &types.DurableDiskMountConfig{Name: "data"}},
+		{LocalPath: "/volumes/ws/vol", MountPath: "/vol"},
+	}, ops)
+
+	require.NoError(t, err)
+	require.Equal(t, 1, attempts)
+}
+
+func TestMkdirBindSourceHandlesExistingFreshAndDeepPaths(t *testing.T) {
+	root := t.TempDir()
+	existing := filepath.Join(root, "existing")
+	require.NoError(t, os.Mkdir(existing, 0755))
+
+	require.NoError(t, mkdirBindSource(existing, 0755))
+	require.NoError(t, mkdirBindSource(filepath.Join(root, "fresh"), 0755))
+	require.NoError(t, mkdirBindSource(filepath.Join(root, "a", "b", "c"), 0755))
+
+	for _, p := range []string{existing, filepath.Join(root, "fresh"), filepath.Join(root, "a", "b", "c")} {
+		info, err := os.Stat(p)
+		require.NoError(t, err)
+		require.True(t, info.IsDir())
+	}
+}
+
+// A regular file at the source path makes Mkdir fail with EEXIST just like an
+// existing directory does; it must not be reported as a usable directory.
+func TestMkdirBindSourceRejectsExistingFile(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "file")
+	require.NoError(t, os.WriteFile(file, []byte("x"), 0o644))
+
+	err := mkdirBindSource(file, 0755)
+	require.Error(t, err)
+	require.ErrorIs(t, err, syscall.ENOTDIR)
+
+	// A symlink to a directory is still a directory for a bind mount.
+	dir := filepath.Join(root, "dir")
+	require.NoError(t, os.Mkdir(dir, 0755))
+	link := filepath.Join(root, "link")
+	require.NoError(t, os.Symlink(dir, link))
+	require.NoError(t, mkdirBindSource(link, 0755))
 }

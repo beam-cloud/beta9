@@ -15,10 +15,17 @@ import (
 
 type lifecycleContainerRepo struct {
 	repository.ContainerRepository
-	state *types.ContainerState
+	state  *types.ContainerState
+	states map[string]*types.ContainerState
 }
 
-func (r *lifecycleContainerRepo) GetContainerState(string) (*types.ContainerState, error) {
+func (r *lifecycleContainerRepo) GetContainerState(containerID string) (*types.ContainerState, error) {
+	if r.states != nil {
+		if state, ok := r.states[containerID]; ok {
+			return state, nil
+		}
+		return nil, &types.ErrContainerStateNotFound{ContainerId: containerID}
+	}
 	return r.state, nil
 }
 
@@ -88,7 +95,8 @@ func TestPushContainerLifecycleEventsUsesAuthoritativeIdentity(t *testing.T) {
 	require.Equal(t, "machine-1", events.events[0].MachineID)
 }
 
-func TestPushContainerLifecycleEventsRejectsAnotherWorkspace(t *testing.T) {
+func TestPushContainerLifecycleEventsSkipsAnotherWorkspace(t *testing.T) {
+	events := &lifecycleEventRepo{}
 	service := &WorkerRepositoryService{
 		containerRepo: &lifecycleContainerRepo{state: &types.ContainerState{
 			ContainerId: "container-1",
@@ -99,7 +107,7 @@ func TestPushContainerLifecycleEventsRejectsAnotherWorkspace(t *testing.T) {
 		computeRepo: &lifecycleComputeRepo{slots: []*compute.AgentWorkerSlotState{{
 			WorkerID: "worker-1", WorkerTokenID: "token-1",
 		}}},
-		eventRepo: &lifecycleEventRepo{},
+		eventRepo: events,
 	}
 	data, err := json.Marshal(types.EventContainerLifecycleSchema{ID: types.ContainerLifecycleImageLoad, ContainerID: "container-1"})
 	require.NoError(t, err)
@@ -109,8 +117,40 @@ func TestPushContainerLifecycleEventsRejectsAnotherWorkspace(t *testing.T) {
 		Events:   [][]byte{data},
 	})
 	require.NoError(t, err)
-	require.False(t, response.Ok)
-	require.Equal(t, errWorkerLifecycleUnauthorized.Error(), response.ErrorMsg)
+	require.True(t, response.Ok)
+	require.Empty(t, events.events)
+}
+
+func TestPushContainerLifecycleEventsSkipsForeignContainerButKeepsValid(t *testing.T) {
+	events := &lifecycleEventRepo{}
+	service := &WorkerRepositoryService{
+		containerRepo: &lifecycleContainerRepo{states: map[string]*types.ContainerState{
+			"container-foreign": {ContainerId: "container-foreign", StubId: "stub-2", WorkspaceId: "workspace-1", WorkerId: "worker-2"},
+			"container-good":    {ContainerId: "container-good", StubId: "stub-1", WorkspaceId: "workspace-1", WorkerId: "worker-1"},
+		}},
+		workerRepo: &lifecycleWorkerRepo{worker: &types.Worker{Id: "worker-1", PoolName: "pool-1", MachineId: "machine-1"}},
+		computeRepo: &lifecycleComputeRepo{slots: []*compute.AgentWorkerSlotState{{
+			WorkerID: "worker-1", WorkerTokenID: "token-1",
+		}}},
+		eventRepo: events,
+	}
+	foreign, err := json.Marshal(types.EventContainerLifecycleSchema{ID: types.ContainerLifecycleImageLoad, ContainerID: "container-foreign"})
+	require.NoError(t, err)
+	missing, err := json.Marshal(types.EventContainerLifecycleSchema{ID: types.ContainerLifecycleImageLoad, ContainerID: "container-missing"})
+	require.NoError(t, err)
+	good, err := json.Marshal(types.EventContainerLifecycleSchema{ID: types.ContainerLifecycleImageLoad, ContainerID: "container-good"})
+	require.NoError(t, err)
+
+	response, err := service.PushContainerLifecycleEvents(workerLifecycleContext("workspace-1"), &pb.PushContainerLifecycleEventsRequest{
+		WorkerId: "worker-1",
+		Events:   [][]byte{foreign, missing, []byte("not json"), good},
+	})
+	require.NoError(t, err)
+	require.True(t, response.Ok)
+	require.Len(t, events.events, 1)
+	require.Equal(t, "container-good", events.events[0].ContainerID)
+	require.Equal(t, "stub-1", events.events[0].StubID)
+	require.Equal(t, "worker-1", events.events[0].WorkerID)
 }
 
 func TestPushContainerLifecycleEventsRejectsAnotherWorkerToken(t *testing.T) {

@@ -25,6 +25,7 @@ const (
 	WorkerRepositoryService_SetImagePullLock_FullMethodName                 = "/WorkerRepositoryService/SetImagePullLock"
 	WorkerRepositoryService_RemoveImagePullLock_FullMethodName              = "/WorkerRepositoryService/RemoveImagePullLock"
 	WorkerRepositoryService_AddContainerToWorker_FullMethodName             = "/WorkerRepositoryService/AddContainerToWorker"
+	WorkerRepositoryService_ClaimContainer_FullMethodName                   = "/WorkerRepositoryService/ClaimContainer"
 	WorkerRepositoryService_RemoveContainerFromWorker_FullMethodName        = "/WorkerRepositoryService/RemoveContainerFromWorker"
 	WorkerRepositoryService_GetWorkerById_FullMethodName                    = "/WorkerRepositoryService/GetWorkerById"
 	WorkerRepositoryService_ToggleWorkerAvailable_FullMethodName            = "/WorkerRepositoryService/ToggleWorkerAvailable"
@@ -73,7 +74,10 @@ type WorkerRepositoryServiceClient interface {
 	StreamWorkerEvents(ctx context.Context, in *StreamWorkerEventsRequest, opts ...grpc.CallOption) (WorkerRepositoryService_StreamWorkerEventsClient, error)
 	SetImagePullLock(ctx context.Context, in *SetImagePullLockRequest, opts ...grpc.CallOption) (*SetImagePullLockResponse, error)
 	RemoveImagePullLock(ctx context.Context, in *RemoveImagePullLockRequest, opts ...grpc.CallOption) (*RemoveImagePullLockResponse, error)
+	// Deprecated: workers claim containers with ClaimContainer. Kept so a
+	// gateway upgrade does not strand workers still running the old binary.
 	AddContainerToWorker(ctx context.Context, in *AddContainerToWorkerRequest, opts ...grpc.CallOption) (*AddContainerToWorkerResponse, error)
+	ClaimContainer(ctx context.Context, in *ClaimContainerRequest, opts ...grpc.CallOption) (*ClaimContainerResponse, error)
 	RemoveContainerFromWorker(ctx context.Context, in *RemoveContainerFromWorkerRequest, opts ...grpc.CallOption) (*RemoveContainerFromWorkerResponse, error)
 	GetWorkerById(ctx context.Context, in *GetWorkerByIdRequest, opts ...grpc.CallOption) (*GetWorkerByIdResponse, error)
 	ToggleWorkerAvailable(ctx context.Context, in *ToggleWorkerAvailableRequest, opts ...grpc.CallOption) (*ToggleWorkerAvailableResponse, error)
@@ -215,6 +219,15 @@ func (c *workerRepositoryServiceClient) RemoveImagePullLock(ctx context.Context,
 func (c *workerRepositoryServiceClient) AddContainerToWorker(ctx context.Context, in *AddContainerToWorkerRequest, opts ...grpc.CallOption) (*AddContainerToWorkerResponse, error) {
 	out := new(AddContainerToWorkerResponse)
 	err := c.cc.Invoke(ctx, WorkerRepositoryService_AddContainerToWorker_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerRepositoryServiceClient) ClaimContainer(ctx context.Context, in *ClaimContainerRequest, opts ...grpc.CallOption) (*ClaimContainerResponse, error) {
+	out := new(ClaimContainerResponse)
+	err := c.cc.Invoke(ctx, WorkerRepositoryService_ClaimContainer_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -563,7 +576,10 @@ type WorkerRepositoryServiceServer interface {
 	StreamWorkerEvents(*StreamWorkerEventsRequest, WorkerRepositoryService_StreamWorkerEventsServer) error
 	SetImagePullLock(context.Context, *SetImagePullLockRequest) (*SetImagePullLockResponse, error)
 	RemoveImagePullLock(context.Context, *RemoveImagePullLockRequest) (*RemoveImagePullLockResponse, error)
+	// Deprecated: workers claim containers with ClaimContainer. Kept so a
+	// gateway upgrade does not strand workers still running the old binary.
 	AddContainerToWorker(context.Context, *AddContainerToWorkerRequest) (*AddContainerToWorkerResponse, error)
+	ClaimContainer(context.Context, *ClaimContainerRequest) (*ClaimContainerResponse, error)
 	RemoveContainerFromWorker(context.Context, *RemoveContainerFromWorkerRequest) (*RemoveContainerFromWorkerResponse, error)
 	GetWorkerById(context.Context, *GetWorkerByIdRequest) (*GetWorkerByIdResponse, error)
 	ToggleWorkerAvailable(context.Context, *ToggleWorkerAvailableRequest) (*ToggleWorkerAvailableResponse, error)
@@ -625,6 +641,9 @@ func (UnimplementedWorkerRepositoryServiceServer) RemoveImagePullLock(context.Co
 }
 func (UnimplementedWorkerRepositoryServiceServer) AddContainerToWorker(context.Context, *AddContainerToWorkerRequest) (*AddContainerToWorkerResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method AddContainerToWorker not implemented")
+}
+func (UnimplementedWorkerRepositoryServiceServer) ClaimContainer(context.Context, *ClaimContainerRequest) (*ClaimContainerResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ClaimContainer not implemented")
 }
 func (UnimplementedWorkerRepositoryServiceServer) RemoveContainerFromWorker(context.Context, *RemoveContainerFromWorkerRequest) (*RemoveContainerFromWorkerResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RemoveContainerFromWorker not implemented")
@@ -861,6 +880,24 @@ func _WorkerRepositoryService_AddContainerToWorker_Handler(srv interface{}, ctx 
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(WorkerRepositoryServiceServer).AddContainerToWorker(ctx, req.(*AddContainerToWorkerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerRepositoryService_ClaimContainer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ClaimContainerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerRepositoryServiceServer).ClaimContainer(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerRepositoryService_ClaimContainer_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerRepositoryServiceServer).ClaimContainer(ctx, req.(*ClaimContainerRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1553,6 +1590,10 @@ var WorkerRepositoryService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AddContainerToWorker",
 			Handler:    _WorkerRepositoryService_AddContainerToWorker_Handler,
+		},
+		{
+			MethodName: "ClaimContainer",
+			Handler:    _WorkerRepositoryService_ClaimContainer_Handler,
 		},
 		{
 			MethodName: "RemoveContainerFromWorker",

@@ -103,6 +103,8 @@ var (
 	workspaceConcurrencyLimitReservation      string = "workspace:{%s}:concurrency_limit:reservation:%s"
 	workspaceConcurrencyLimitReservationIndex string = "workspace:{%s}:concurrency_limit:reservation_index"
 	workspaceAuthorizedToken                  string = "workspace:authorization:token:%s"
+	workspaceCreditGate                       string = "workspace:credit_gate:%s"
+	workspaceCreditGateEnforceLock            string = "workspace:credit_gate:enforce_lock"
 )
 
 var (
@@ -603,6 +605,14 @@ func (rk *redisKeys) WorkspaceConcurrencyLimitReservation(workspaceId, container
 
 func (rk *redisKeys) WorkspaceConcurrencyLimitReservationIndex(workspaceId string) string {
 	return fmt.Sprintf(workspaceConcurrencyLimitReservationIndex, workspaceId)
+}
+
+func (rk *redisKeys) WorkspaceCreditGate(workspaceId string) string {
+	return fmt.Sprintf(workspaceCreditGate, workspaceId)
+}
+
+func (rk *redisKeys) WorkspaceCreditGateEnforceLock() string {
+	return workspaceCreditGateEnforceLock
 }
 
 func (rk *redisKeys) WorkspaceVolumePathDownloadToken(token string) string {

@@ -16,20 +16,25 @@ const (
 	workerLifecycleQueueSize     = 16384
 	workerLifecyclePushTimeout   = 5 * time.Second
 	workerLifecycleRetryInterval = time.Second
+	workerLifecycleRetryBudget   = 30 * time.Second
 )
 
 type workerLifecycleRelay struct {
-	client   pb.WorkerRepositoryServiceClient
-	workerID string
-	events   chan types.EventContainerLifecycleSchema
+	client        pb.WorkerRepositoryServiceClient
+	workerID      string
+	events        chan types.EventContainerLifecycleSchema
+	retryInterval time.Duration
+	retryBudget   time.Duration
 }
 
 func NewWorkerEventClientRepo(config types.AppConfig, client pb.WorkerRepositoryServiceClient, workerID string) EventRepository {
 	events := NewEventClientRepo(config).(*EventClientRepo)
 	relay := &workerLifecycleRelay{
-		client:   client,
-		workerID: workerID,
-		events:   make(chan types.EventContainerLifecycleSchema, workerLifecycleQueueSize),
+		client:        client,
+		workerID:      workerID,
+		events:        make(chan types.EventContainerLifecycleSchema, workerLifecycleQueueSize),
+		retryInterval: workerLifecycleRetryInterval,
+		retryBudget:   workerLifecycleRetryBudget,
 	}
 	events.containerLifecyclePush = relay.push
 	go relay.run()
@@ -55,8 +60,17 @@ func (r *workerLifecycleRelay) run() {
 		if len(batch) == 0 {
 			return
 		}
-		for !r.flush(batch) {
-			time.Sleep(workerLifecycleRetryInterval)
+		// Every attempt, including the last one, finishes inside the retry
+		// budget: the RPC is bounded by the deadline and the backoff never
+		// sleeps past it.
+		deadline := time.Now().Add(r.retryBudget)
+		for !r.flush(batch, deadline) {
+			remaining := time.Until(deadline)
+			if remaining <= 0 {
+				log.Warn().Str("worker_id", r.workerID).Int("events", len(batch)).Msg("dropping worker lifecycle events after retry budget")
+				break
+			}
+			time.Sleep(min(r.retryInterval, remaining))
 		}
 		batch = batch[:0]
 	}
@@ -74,7 +88,9 @@ func (r *workerLifecycleRelay) run() {
 	}
 }
 
-func (r *workerLifecycleRelay) flush(events []types.EventContainerLifecycleSchema) bool {
+// flush pushes one batch. The RPC is bounded by the push timeout and by
+// deadline, whichever comes first.
+func (r *workerLifecycleRelay) flush(events []types.EventContainerLifecycleSchema, deadline time.Time) bool {
 	request := &pb.PushContainerLifecycleEventsRequest{
 		WorkerId: r.workerID,
 		Events:   make([][]byte, 0, len(events)),
@@ -90,7 +106,10 @@ func (r *workerLifecycleRelay) flush(events []types.EventContainerLifecycleSchem
 		return true
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), workerLifecyclePushTimeout)
+	if timeout := time.Now().Add(workerLifecyclePushTimeout); timeout.Before(deadline) {
+		deadline = timeout
+	}
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
 	defer cancel()
 	response, err := r.client.PushContainerLifecycleEvents(ctx, request)
 	if err != nil || response == nil || !response.Ok {

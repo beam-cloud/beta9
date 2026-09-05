@@ -172,7 +172,7 @@ func TestRenderV2Dockerfile_FromRegistryWithChainedCommands(t *testing.T) {
 			expected: []string{
 				"FROM docker.io/library/python:3.11-slim\n",
 				"RUN apt update\n",
-				"RUN python3.10 -m pip install",
+				"RUN uv-b9 pip install --python \"$(command -v python3.10)\"",
 				"numpy",
 				"RUN apt clean\n",
 			},
@@ -231,7 +231,7 @@ func TestPrepareBuildOptionsForImageID_V2ExistingImageAddsRuntimeRequirements(t 
 
 	assert.Contains(t, opts.PythonPackages, "rich==13.7.0")
 	assert.Contains(t, opts.Dockerfile, "FROM docker.io/library/python@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-	assert.Contains(t, opts.Dockerfile, "python3.10 -m pip install")
+	assert.Contains(t, opts.Dockerfile, "uv-b9 pip install --python \"$(command -v python3.10)\"")
 	assert.Contains(t, opts.Dockerfile, "rich==13.7.0")
 }
 
@@ -313,7 +313,7 @@ func TestPrepareBuildOptionsForImageID_V2ExistingImageIgnorePythonKeepsUserPacka
 	assert.NoError(t, err)
 
 	assert.Equal(t, []string{"numpy"}, opts.PythonPackages)
-	assert.Contains(t, opts.Dockerfile, "python3.10 -m pip install")
+	assert.Contains(t, opts.Dockerfile, "uv-b9 pip install --python \"$(command -v python3.10)\"")
 	assert.Contains(t, opts.Dockerfile, "numpy")
 	assert.NotContains(t, opts.Dockerfile, "rich==13.7.0")
 	assert.NotContains(t, opts.Dockerfile, "betterproto-beta9")
@@ -372,7 +372,7 @@ func TestRenderV2Dockerfile_ComprehensiveChaining(t *testing.T) {
 			},
 			expected: []string{
 				"FROM docker.io/library/python:3.11-slim\n",
-				"RUN python3.10 -m pip install",
+				"RUN uv-b9 pip install --python \"$(command -v python3.10)\"",
 				"numpy",
 				"pandas",
 				"RUN echo 'installed packages'\n",
@@ -398,7 +398,7 @@ func TestRenderV2Dockerfile_ComprehensiveChaining(t *testing.T) {
 				"FROM docker.io/library/python:3.11-slim\n",
 				"ENV API_KEY=secret\n",
 				"RUN apt update\n",
-				"RUN python3.10 -m pip install",
+				"RUN uv-b9 pip install --python \"$(command -v python3.10)\"",
 				"requests",
 				"RUN apt clean\n",
 			},
@@ -1409,7 +1409,7 @@ func TestBuild_prepareSteps_PythonExists(t *testing.T) {
 
 	// When NOT in venv, expect pip install with --system
 	expectedCommands := []string{
-		"uv-b9 pip install --system \"requests\" \"numpy\"",
+		"uv-b9 pip install --compile-bytecode --system \"requests\" \"numpy\"",
 		"echo hello",
 	}
 	assert.Equal(t, expectedCommands, build.commands)
@@ -1440,7 +1440,7 @@ func TestBuild_prepareSteps_PythonExistsInVenv(t *testing.T) {
 	// When in venv, expect the pyvenv.cfg update command and pip install without --system
 	assert.Len(t, build.commands, 3)
 	assert.Contains(t, build.commands[0], "include-system-site-packages = true")
-	assert.Equal(t, "uv-b9 pip install \"requests\" \"numpy\"", build.commands[1])
+	assert.Equal(t, "uv-b9 pip install --compile-bytecode \"requests\" \"numpy\"", build.commands[1])
 	assert.Equal(t, "echo hello", build.commands[2])
 	assert.NotEmpty(t, build.imageID)
 	mockContainerClient.AssertExpectations(t)
@@ -1467,7 +1467,7 @@ func TestBuild_prepareSteps_PythonNeedsInstall(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Expect installation command based on PythonStandaloneConfig
-	expectedPipCmd := "uv-b9 pip install --system \"pandas\""
+	expectedPipCmd := "uv-b9 pip install --compile-bytecode --system \"pandas\""
 
 	// Installation command should contain arch, os, vendor derived from runtime and template
 	assert.Contains(t, build.commands[0], "installing python cpython-3.11.5+20230826")
@@ -1536,10 +1536,10 @@ func TestBuild_prepareSteps_Micromamba(t *testing.T) {
 
 	expectedCommands := []string{
 		"micromamba config set use_lockfiles False",
-		"uv-b9 pip install -c \"conda-forge::numpy\" \"pytorch\"", // From PythonPackages
-		"micromamba install -y -n beta9 \"scipy\"",                // From BuildSteps (mamba)
+		"uv-b9 pip install --compile-bytecode -c \"conda-forge::numpy\" \"pytorch\"", // From PythonPackages
+		"micromamba install -y -n beta9 \"scipy\"",                                   // From BuildSteps (mamba)
 		"echo done mamba",
-		"uv-b9 pip install \"requests\" \"beautifulsoup4\"", // From BuildSteps (pip)
+		"uv-b9 pip install --compile-bytecode \"requests\" \"beautifulsoup4\"", // From BuildSteps (pip)
 	}
 
 	assert.Equal(t, expectedCommands, build.commands)
@@ -1635,12 +1635,57 @@ func Test_parseBuildStepsForDockerfile(t *testing.T) {
 
 	expected := []string{
 		"apt update",
-		"python3.9 -m pip install \"requests\" \"numpy\"",
+		"uv-b9 pip install --python \"$(command -v python3.9)\" --link-mode copy --compile-bytecode --cache-dir /root/.cache/uv \"requests\" \"numpy\"",
 		"echo done",
 	}
 
 	result := parseBuildStepsForDockerfile(steps, pythonVersion, false)
 	assert.Equal(t, expected, result)
+}
+
+// The v2 renderer cannot probe the base image, so the uv install must target
+// whatever environment <pythonVersion> resolves to (a venv or the system
+// interpreter) rather than forcing --system, which skips virtual environments.
+func Test_generateStandardPipInstallCommand_TargetsResolvedInterpreter(t *testing.T) {
+	cmd := generateStandardPipInstallCommand([]string{"numpy"}, "python3.11", false)
+	assert.Equal(t, "uv-b9 pip install --python \"$(command -v python3.11)\" --link-mode copy --compile-bytecode --cache-dir /root/.cache/uv \"numpy\"", cmd)
+	assert.NotContains(t, cmd, "--system")
+
+	assert.Equal(t, "python3.11 -m pip install \"numpy\"", generateStandardPipInstallCommand([]string{"numpy"}, "python3.11", true),
+		"micromamba/virtualenv installs keep pip")
+}
+
+// Flags pip accepts but uv rejects send the install back to pip; uv-compatible
+// flags (including uv's pip aliases) are passed through to uv.
+func Test_generateStandardPipInstallCommand_FallsBackToPipForUnsupportedFlags(t *testing.T) {
+	uvPrefix := "uv-b9 pip install --python \"$(command -v python3.10)\" --link-mode copy --compile-bytecode --cache-dir /root/.cache/uv"
+
+	for _, flags := range [][]string{
+		{"--extra-index-url https://download.pytorch.org/whl/cu121"},
+		{"--index-url=https://pypi.example.com/simple"},
+		{"--no-deps", "--pre", "-U"},
+		{"--no-build-isolation"},
+		{"--no-cache-dir", "--force-reinstall", "--trusted-host pypi.example.com"},
+		{"--disable-pip-version-check"},
+		{"-f https://example.com/wheels"},
+	} {
+		cmd := generateStandardPipInstallCommand(append(flags, "torch"), "python3.10", false)
+		assert.Equal(t, uvPrefix+" "+strings.Join(flags, " ")+" \"torch\"", cmd, "flags %v", flags)
+	}
+
+	for _, flags := range [][]string{
+		{"--use-pep517"},
+		{"--no-use-pep517"},
+		{"--prefer-binary"},
+		{"--progress-bar off"},
+		{"--use-feature=fast-deps"},
+		{"--user"}, // uv parses it only to reject it
+		{"--ignore-installed"},
+		{"--no-deps", "--timeout 60"}, // one unsupported flag is enough
+	} {
+		cmd := generateStandardPipInstallCommand(append(flags, "torch"), "python3.10", false)
+		assert.Equal(t, "python3.10 -m pip install "+strings.Join(flags, " ")+" \"torch\"", cmd, "flags %v", flags)
+	}
 }
 
 // TestGenerateContainerRequest_SourceImageHandling verifies that SourceImage is correctly set
@@ -1706,6 +1751,35 @@ func TestGenerateContainerRequest_SourceImageHandling(t *testing.T) {
 	}
 }
 
+// A build that starts from an already-built prefix pulls that image from the
+// build registry, so the credentials for the user's original base image must
+// not be sent along as the source image credentials.
+func TestGenerateContainerRequest_PrefixBuildDropsBaseImageCreds(t *testing.T) {
+	opts := &BuildOpts{
+		BaseImageRegistry: "docker.io",
+		BaseImageName:     "acme/private-base",
+		BaseImageTag:      "1.0",
+		BaseImageCreds:    "user:secret",
+		Dockerfile:        "FROM docker.io/acme/private-base:1.0\nRUN echo hi\nRUN echo bye\n",
+		PythonVersion:     "python3.10",
+	}
+	build, _, _ := setupTestBuild(t, opts)
+	build.config.ImageService.ClipVersion = 2
+
+	req, err := build.generateContainerRequest()
+	assert.NoError(t, err)
+	assert.Equal(t, "user:secret", req.BuildOptions.SourceImageCreds, "a plain build pulls the base image with the user's credentials")
+	assert.Equal(t, "docker.io/acme/private-base:1.0", *req.BuildOptions.SourceImage)
+
+	build.dockerfile = "FROM registry.example.com/beta9-build:img-prefix\nRUN echo bye\n"
+	build.sourceImage = "registry.example.com/beta9-build:img-prefix"
+	req, err = build.generateContainerRequest()
+	assert.NoError(t, err)
+	assert.Equal(t, "registry.example.com/beta9-build:img-prefix", *req.BuildOptions.SourceImage)
+	assert.Equal(t, build.dockerfile, *req.BuildOptions.Dockerfile)
+	assert.Empty(t, req.BuildOptions.SourceImageCreds, "the prefix image is in the build registry, not the user's registry")
+}
+
 func stringPtr(s string) *string {
 	return &s
 }
@@ -1728,12 +1802,12 @@ func Test_parseBuildSteps(t *testing.T) {
 
 	expected := []string{
 		"apt update",
-		"uv-b9 pip install --system \"requests\" \"numpy\"", // Coalesced pip
+		"uv-b9 pip install --compile-bytecode --system \"requests\" \"numpy\"", // Coalesced pip
 		"echo 'installing libs'",
 		"micromamba install -y -n beta9 -c pytorch \"conda-forge::pandas\" \"scipy\"", // Coalesced mamba (flags don't split mamba)
 		"echo 'done'",
-		"uv-b9 pip install --system --no-deps flask", // Flagged line isn't quoted
-		"uv-b9 pip install --system \"gunicorn\"",    // Second pip group
+		"uv-b9 pip install --compile-bytecode --system --no-deps flask", // Flagged line isn't quoted
+		"uv-b9 pip install --compile-bytecode --system \"gunicorn\"",    // Second pip group
 	}
 
 	result := parseBuildSteps(steps, pythonVersion, false)

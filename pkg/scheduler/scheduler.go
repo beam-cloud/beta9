@@ -76,6 +76,9 @@ type Scheduler struct {
 	credentials               *schedulerCredentialCache
 	agentPoolMu               sync.Mutex
 
+	// creditGate is the prepaid-credit check; nil allows everything.
+	creditGate *CreditGate
+
 	// pushComputeEvent ships placement and capacity events to the admin
 	// workspace's compute stream, the same path pool heartbeats take.
 	pushComputeEvent func(types.EventComputeSchema)
@@ -171,6 +174,7 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 		workerProvisioningBackoff: newWorkerProvisioningBackoff(),
 		credentials:               newSchedulerCredentialCache(),
 		pushComputeEvent:          pushPoolMetrics,
+		creditGate:                NewCreditGate(config.GatewayService.CreditGate, config.ManagedCompute.Billing.AuthToken, redisClient),
 	}, nil
 }
 
@@ -395,7 +399,14 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 
 	request.Timestamp = time.Now()
 
-	quota, err := s.getConcurrencyLimit(request)
+	exempt := s.privatePoolQuotaExempt(request)
+
+	if err := s.checkWorkspaceCredit(request, exempt); err != nil {
+		requestLog(log.Info(), request).Str("reason", err.Error()).Msg("run request rejected: insufficient credits")
+		return err
+	}
+
+	quota, err := s.concurrencyLimitFor(request, exempt)
 	if err != nil {
 		return err
 	}
@@ -425,11 +436,27 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 }
 
 func (s *Scheduler) getConcurrencyLimit(request *types.ContainerRequest) (*types.ConcurrencyLimit, error) {
-	if s.privatePoolQuotaExempt(request) {
+	return s.concurrencyLimitFor(request, s.privatePoolQuotaExempt(request))
+}
+
+func (s *Scheduler) concurrencyLimitFor(request *types.ContainerRequest, privatePoolExempt bool) (*types.ConcurrencyLimit, error) {
+	if privatePoolExempt {
 		return nil, nil
 	}
 
 	return s.managedConcurrencyLimit(request)
+}
+
+// checkWorkspaceCredit is the prepaid-credit gate. Credits are the only thing
+// that decides whether a workspace may run at all; the concurrency limit only
+// decides how much. Workloads on a workspace's own private pool are exempt
+// for the same reason they are exempt from the managed concurrency limit.
+func (s *Scheduler) checkWorkspaceCredit(request *types.ContainerRequest, privatePoolExempt bool) error {
+	if s.creditGate == nil || privatePoolExempt {
+		return nil
+	}
+
+	return s.creditGate.Check(s.ctx, request.WorkspaceId)
 }
 
 func (s *Scheduler) managedConcurrencyLimit(request *types.ContainerRequest) (*types.ConcurrencyLimit, error) {
@@ -494,8 +521,17 @@ func (s *Scheduler) privatePoolQuotaExempt(request *types.ContainerRequest) bool
 	return err == nil && pool != nil && pool.Config.Mode == types.PoolModePrivate
 }
 
+// CheckConcurrencyLimit is the pre-flight "may this run?" check used by
+// autoscalers and task submission before a container request is committed.
+// It applies the same gates as Run: credits first, then concurrency.
 func (s *Scheduler) CheckConcurrencyLimit(request *types.ContainerRequest) error {
-	quota, err := s.getConcurrencyLimit(request)
+	exempt := s.privatePoolQuotaExempt(request)
+
+	if err := s.checkWorkspaceCredit(request, exempt); err != nil {
+		return err
+	}
+
+	quota, err := s.concurrencyLimitFor(request, exempt)
 	if err != nil {
 		return err
 	}

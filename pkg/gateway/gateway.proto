@@ -34,6 +34,9 @@ service GatewayService {
     };
   }
   rpc PutObjectStream(stream PutObjectRequest) returns (PutObjectResponse) {}
+  rpc CompleteObjectUpload(CompleteObjectUploadRequest) returns (CompleteObjectUploadResponse) {}
+  rpc CreateObjectDelta(CreateObjectDeltaRequest) returns (CreateObjectDeltaResponse) {}
+  rpc CommitObjectDelta(CommitObjectDeltaRequest) returns (CommitObjectDeltaResponse) {}
 
   // Containers
   rpc CheckpointContainer(CheckpointContainerRequest)
@@ -492,6 +495,20 @@ message CreateObjectRequest {
   int64 size = 3;
   bool overwrite = 4;
   bool supports_put_headers = 5;
+  // When > 0 the client can upload the object as concurrent parts of this
+  // many bytes; the gateway answers with upload_parts instead of a single
+  // presigned_url for objects larger than one part.
+  int64 multipart_part_size = 6;
+  // Byte length of the archive the parts cover (size is the manifest's
+  // uncompressed total, which is what the object record stores).
+  int64 multipart_total_size = 7;
+}
+
+message ObjectUploadPart {
+  uint32 number = 1;
+  int64 start = 2;
+  int64 end = 3;
+  string url = 4;
 }
 
 message CreateObjectResponse {
@@ -500,6 +517,24 @@ message CreateObjectResponse {
   string presigned_url = 3;
   string error_msg = 4;
   map<string, string> put_headers = 5;
+  string upload_id = 6;
+  repeated ObjectUploadPart upload_parts = 7;
+}
+
+message ObjectUploadedPart {
+  uint32 number = 1;
+  string etag = 2;
+}
+
+message CompleteObjectUploadRequest {
+  string object_id = 1;
+  string upload_id = 2;
+  repeated ObjectUploadedPart parts = 3;
+}
+
+message CompleteObjectUploadResponse {
+  bool ok = 1;
+  string error_msg = 2;
 }
 
 message PutObjectRequest {
@@ -513,6 +548,39 @@ message PutObjectResponse {
   bool ok = 1;
   string object_id = 2;
   string error_msg = 3;
+}
+
+// Incremental sync: instead of re-uploading a whole workspace archive when a
+// few files changed, the client uploads an archive holding only the added and
+// modified files (the delta) and the gateway merges it with the archive of a
+// previous object of the same workspace into the new object.
+message CreateObjectDeltaRequest {
+  string hash = 1;           // identity of the merged object (content manifest hash)
+  int64 size = 2;            // expected size of the merged archive
+  string base_object_id = 3; // object the delta is relative to
+  int64 delta_size = 4;
+}
+
+message CreateObjectDeltaResponse {
+  bool ok = 1;
+  string object_id = 2;
+  string presigned_url = 3; // PUT the delta archive here
+  map<string, string> put_headers = 4;
+  string error_msg = 5;
+  bool base_missing = 6; // base object is gone: fall back to a full upload
+}
+
+message CommitObjectDeltaRequest {
+  string object_id = 1;
+  string base_object_id = 2;
+  repeated string removed_paths = 3; // base archive entries that no longer exist
+}
+
+message CommitObjectDeltaResponse {
+  bool ok = 1;
+  string object_id = 2;
+  int64 size = 3;
+  string error_msg = 4;
 }
 
 enum SyncContainerWorkspaceOperation {

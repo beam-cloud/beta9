@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/rs/zerolog/log"
@@ -83,8 +84,6 @@ type Config struct {
 	Root          string
 	Binaries      Binaries
 	MaxChainDepth int
-	// Debug adds per-phase timings to attach logs.
-	Debug bool
 
 	// Test hooks.
 	SysBlockPath string
@@ -99,11 +98,28 @@ type Manager struct {
 	sysBlockPath  string
 	devPath       string
 	run           runner
+	execs         bool // run is the real exec runner, so binaries must exist
 	maxChainDepth int
-	debug         bool
 
 	mu      sync.Mutex
 	volumes map[string]*Volume
+	// spares are pre-built fresh volumes by virtual size (see spare.go).
+	spares      map[int64][]*Volume
+	spareBuilds map[int64]bool
+	closed      bool
+
+	// nbdReadyMu serializes the first NBD preparation so concurrent first
+	// attaches share one pass instead of each validating every device.
+	nbdReadyMu      sync.Mutex
+	nbdDevicesReady bool
+
+	// spareCtx is cancelled by destroySpares so in-flight spare builds stop,
+	// and spareWG lets shutdown wait for the builders to exit.
+	spareCtx    context.Context
+	spareCancel context.CancelFunc
+	spareWG     sync.WaitGroup
+	// spareSizesMu serializes the read-modify-write of spareSizesFile.
+	spareSizesMu sync.Mutex
 
 	preflightOnce sync.Once
 	preflightErr  error
@@ -127,15 +143,20 @@ func NewManager(config Config) *Manager {
 	if config.Runner != nil {
 		run = config.Runner
 	}
+	spareCtx, spareCancel := context.WithCancel(context.Background())
 	return &Manager{
 		root:          config.Root,
 		binaries:      config.Binaries,
 		sysBlockPath:  config.SysBlockPath,
 		devPath:       config.DevPath,
 		run:           run,
+		execs:         config.Runner == nil,
 		maxChainDepth: config.MaxChainDepth,
-		debug:         config.Debug,
 		volumes:       make(map[string]*Volume),
+		spares:        make(map[int64][]*Volume),
+		spareBuilds:   make(map[int64]bool),
+		spareCtx:      spareCtx,
+		spareCancel:   spareCancel,
 	}
 }
 
@@ -159,6 +180,10 @@ func (m *Manager) lockDir() string {
 // so workers that never attach a qcow disk don't need qemu installed.
 func (m *Manager) preflight() error {
 	m.preflightOnce.Do(func() {
+		if !m.execs {
+			m.preflightErr = os.MkdirAll(m.root, 0o700)
+			return
+		}
 		for _, binary := range []string{
 			m.binaries.QemuImg, m.binaries.QSD, m.binaries.NBDClient,
 			m.binaries.Modprobe, m.binaries.Mknod, m.binaries.Stat,
@@ -181,6 +206,11 @@ func (m *Manager) Attach(ctx context.Context, spec AttachSpec, source ChunkSourc
 	}
 	if spec.Key == "" || spec.Key != filepath.Base(spec.Key) {
 		return nil, fmt.Errorf("invalid volume key %q", spec.Key)
+	}
+	if isSpareKey(spec.Key) {
+		// Recover treats every directory with this prefix as a spare and
+		// removes it, so a real volume must never live under one.
+		return nil, fmt.Errorf("invalid volume key %q: the %s prefix is reserved", spec.Key, sparePrefix)
 	}
 	if spec.VirtualSizeBytes <= 0 {
 		return nil, fmt.Errorf("volume %s requires a positive size", spec.Key)
@@ -236,6 +266,13 @@ func (m *Manager) Detach(ctx context.Context, key string) error {
 	return nil
 }
 
+// Close detaches every volume and destroys the spare pool. For worker
+// shutdown; an idle worker uses DetachAll and keeps its spares.
+func (m *Manager) Close(ctx context.Context) error {
+	m.destroySpares()
+	return m.DetachAll(ctx)
+}
+
 // DetachAll tears down every volume still owned by this worker. It is safe to
 // call after the last container exits and during worker shutdown.
 func (m *Manager) DetachAll(ctx context.Context) error {
@@ -261,6 +298,14 @@ func (m *Manager) DetachAll(ctx context.Context) error {
 // volumes (daemon running and filesystem mounted) are adopted; everything
 // else is torn down. Layer files always stay behind for reuse.
 func (m *Manager) Recover(ctx context.Context) error {
+	// Spares for the sizes this node saw last time are built while the worker
+	// is still booting, so its first fresh attach adopts one.
+	defer func() {
+		for _, size := range m.rememberedSpareSizes() {
+			m.replenishSpares(size)
+		}
+	}()
+
 	volumesDir := filepath.Join(m.root, "volumes")
 	entries, err := os.ReadDir(volumesDir)
 	if err != nil {
@@ -277,10 +322,18 @@ func (m *Manager) Recover(ctx context.Context) error {
 
 	for _, entry := range entries {
 		if !entry.IsDir() {
-			continue
+			continue // key index symlinks; the directories they point at are visited
 		}
 		dir := filepath.Join(volumesDir, entry.Name())
 		state, err := loadVolumeState(dir)
+		if strings.HasPrefix(entry.Name(), sparePrefix) && (state == nil || isSpareKey(state.Key)) {
+			// A spare that was never adopted holds no data.
+			if state != nil && state.Attached {
+				m.cleanupCrashedVolume(ctx, dir, state)
+			}
+			_ = os.RemoveAll(dir)
+			continue
+		}
 		if err != nil || state == nil || !state.Attached {
 			continue
 		}

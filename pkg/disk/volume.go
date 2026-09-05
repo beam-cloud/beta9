@@ -15,14 +15,6 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// attachPhases times the phases of an attach in debug mode; nil otherwise.
-func (m *Manager) attachPhases() *common.PhaseTimer {
-	if !m.debug {
-		return nil
-	}
-	return common.NewPhaseTimer()
-}
-
 // Volume is one attached qcow2-backed disk: a backing chain of immutable
 // layers, a writable head, one qemu-storage-daemon, and one NBD device
 // mounted as ext4 at Mountpoint.
@@ -80,12 +72,10 @@ func (v *Volume) ReadOnly() bool     { return v.state.ReadOnly }
 // attach materializes the chain and brings the volume online. Called with the
 // manager registration already reserved for this key.
 func (m *Manager) attach(ctx context.Context, spec AttachSpec, source ChunkSource) (*Volume, error) {
-	dir := m.volumeDir(spec.Key)
-	layersDir := filepath.Join(dir, layersSubdir)
-	if err := os.MkdirAll(layersDir, 0o700); err != nil {
+	dir, err := m.resolveVolumeDir(spec.Key)
+	if err != nil {
 		return nil, err
 	}
-
 	state, err := loadVolumeState(dir)
 	if err != nil {
 		return nil, err
@@ -94,6 +84,20 @@ func (m *Manager) attach(ctx context.Context, spec AttachSpec, source ChunkSourc
 		// Recovery marks crashed volumes detached at startup, so a state that
 		// still claims attachment belongs to a live volume.
 		return nil, fmt.Errorf("volume %s is already attached", spec.Key)
+	}
+
+	fresh := state == nil && len(spec.Chain) == 0 && !spec.ReadOnly
+	if fresh {
+		m.rememberSpareSize(spec.VirtualSizeBytes)
+		defer m.replenishSpares(spec.VirtualSizeBytes)
+		if volume := m.adoptSpare(ctx, spec); volume != nil {
+			return volume, nil
+		}
+	}
+
+	layersDir := filepath.Join(dir, layersSubdir)
+	if err := os.MkdirAll(layersDir, 0o700); err != nil {
+		return nil, err
 	}
 
 	freshHead := false
@@ -222,7 +226,7 @@ func (m *Manager) materializeChain(ctx context.Context, spec AttachSpec, layersD
 }
 
 // start launches the daemon, connects the NBD device, formats fresh disks,
-// and mounts the filesystem.
+// and mounts the filesystem. Spares have no mountpoint and stay unmounted.
 func (v *Volume) start(ctx context.Context) (err error) {
 	m := v.manager
 	state := v.state
@@ -234,10 +238,10 @@ func (v *Volume) start(ctx context.Context) (err error) {
 	}
 	v.fmtNode = fmtNodeName(state.PivotCount)
 
-	// In debug mode the attach log carries per-phase timings, so a slow attach
-	// can be blamed on the daemon, the kernel, mkfs, or the mount without a
+	// The attach log carries per-phase timings, so a slow attach can be
+	// blamed on the daemon, the kernel, mkfs, or the mount without a
 	// profiler. The phases that completed are logged on failure too.
-	phases := m.attachPhases()
+	phases := common.NewPhaseTimer()
 	defer func() {
 		event, msg := log.Info(), "qcow volume attached"
 		if err != nil {
@@ -277,11 +281,13 @@ func (v *Volume) start(ctx context.Context) (err error) {
 		state.Formatted = true
 		phases.Mark("mkfs")
 	}
-	if err := m.mountExt4(ctx, nbd.Path, state.Mountpoint, state.ReadOnly); err != nil {
-		cleanupOnError()
-		return err
+	if state.Mountpoint != "" {
+		if err := m.mountExt4(ctx, nbd.Path, state.Mountpoint, state.ReadOnly); err != nil {
+			cleanupOnError()
+			return err
+		}
+		phases.Mark("mount")
 	}
-	phases.Mark("mount")
 
 	v.qsd = qsd
 	state.Attached = true

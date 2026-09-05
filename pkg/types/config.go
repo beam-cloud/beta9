@@ -188,11 +188,83 @@ type GatewayServiceConfig struct {
 	// Both values must be > 0 for the default to take effect; otherwise
 	// workspaces without a row remain unlimited (legacy behavior).
 	DefaultConcurrencyLimit DefaultConcurrencyLimitConfig `key:"defaultConcurrencyLimit" json:"default_concurrency_limit"`
+	// CreditGate decides whether a workspace has prepaid credit to run
+	// serverless workloads. Independent of the concurrency limit, which is a
+	// capacity cap, not a paywall.
+	CreditGate CreditGateConfig `key:"creditGate" json:"credit_gate"`
 }
 
 type DefaultConcurrencyLimitConfig struct {
 	CPUMillicores uint32 `key:"cpuMillicores" json:"cpu_millicores"`
 	GPUCount      uint32 `key:"gpuCount" json:"gpu_count"`
+}
+
+const (
+	CreditGateModeNoop = "noop"
+	CreditGateModeHTTP = "http"
+)
+
+// CreditGateConfig configures the scheduler's prepaid-credit check.
+//
+// In "http" mode every container request (and the periodic enforcement sweep)
+// asks the billing service whether the workspace still has credit. Decisions
+// are cached in Redis for CacheTTL and reused for up to StaleTTL when billing
+// is unreachable; with no usable cached decision FailOpen decides.
+type CreditGateConfig struct {
+	Mode            string        `key:"mode" json:"mode"`
+	Endpoint        string        `key:"endpoint" json:"endpoint"`
+	AuthToken       string        `key:"authToken" json:"auth_token"`
+	Timeout         time.Duration `key:"timeout" json:"timeout"`
+	CacheTTL        time.Duration `key:"cacheTTL" json:"cache_ttl"`
+	StaleTTL        time.Duration `key:"staleTTL" json:"stale_ttl"`
+	FailOpen        *bool         `key:"failOpen" json:"fail_open"`
+	EnforceInterval time.Duration `key:"enforceInterval" json:"enforce_interval"`
+}
+
+// Enabled reports whether the gate consults billing at all: http mode with an
+// endpoint. Anything else allows everything.
+func (c CreditGateConfig) Enabled() bool {
+	return strings.EqualFold(strings.TrimSpace(c.Mode), CreditGateModeHTTP) && strings.TrimSpace(c.Endpoint) != ""
+}
+
+// TimeoutOrDefault bounds one billing call. The check may run an off-session
+// Stripe charge (auto top-up) before answering, so it needs Stripe latency
+// headroom; a cached decision serves the next 30s either way.
+func (c CreditGateConfig) TimeoutOrDefault() time.Duration {
+	if c.Timeout <= 0 {
+		return 10 * time.Second
+	}
+	return c.Timeout
+}
+
+func (c CreditGateConfig) CacheTTLOrDefault() time.Duration {
+	if c.CacheTTL <= 0 {
+		return 30 * time.Second
+	}
+	return c.CacheTTL
+}
+
+func (c CreditGateConfig) StaleTTLOrDefault() time.Duration {
+	if c.StaleTTL <= 0 {
+		return 10 * time.Minute
+	}
+	return c.StaleTTL
+}
+
+// FailOpenOrDefault: allow when billing cannot be reached and nothing is
+// cached, unless explicitly set to false.
+func (c CreditGateConfig) FailOpenOrDefault() bool {
+	if c.FailOpen == nil {
+		return true
+	}
+	return *c.FailOpen
+}
+
+func (c CreditGateConfig) EnforceIntervalOrDefault() time.Duration {
+	if c.EnforceInterval <= 0 {
+		return time.Minute
+	}
+	return c.EnforceInterval
 }
 
 type FileServiceConfig struct {
@@ -231,6 +303,32 @@ type ImageServiceConfig struct {
 	BuildRepositoryName            string                         `key:"buildRepositoryName" json:"build_repository_name"`
 	BuildRegistryCredentials       BuildRegistryCredentialsConfig `key:"buildRegistryCredentials" json:"build_registry_credentials"`
 	BuildRegistryInsecure          bool                           `key:"buildRegistryInsecure" json:"build_registry_insecure"`
+	// LayeredBuilds publishes a build's changes as layers packed straight from
+	// the working container instead of buildah commit + push + re-index.
+	// Dockerfiles outside the supported subset still go through buildah bud.
+	LayeredBuilds bool `key:"layeredBuilds" json:"layered_builds"`
+	// BuildApt tunes apt inside the RUN steps of a layered build. The settings
+	// are bind-mounted into each step and never land in the image.
+	BuildApt BuildAptConfig `key:"buildApt" json:"build_apt"`
+}
+
+// BuildAptConfig is applied to apt during image builds whose base image has
+// apt installed. Public archives are slow or stall from some regions
+// (archive.ubuntu.com measured at ~90 KB/s from us-east-1, with apt's default
+// 120 s timeouts turning a stalled connection into a many-minute build), so a
+// build gets short timeouts with retries and, when configured, a nearby
+// mirror or caching proxy.
+type BuildAptConfig struct {
+	// Mirror replaces http://archive.ubuntu.com/ubuntu and
+	// http://security.ubuntu.com/ubuntu in the base image's sources for the
+	// duration of each RUN step, e.g. http://mirrors.edge.kernel.org/ubuntu.
+	Mirror string `key:"mirror" json:"mirror"`
+	// Proxy is set as Acquire::http::Proxy (an apt-cacher-ng, for instance).
+	Proxy string `key:"proxy" json:"proxy"`
+	// TimeoutS is Acquire::http::Timeout / Acquire::https::Timeout; 0 keeps apt's default.
+	TimeoutS int `key:"timeoutS" json:"timeout_s"`
+	// Retries is Acquire::Retries; 0 keeps apt's default.
+	Retries int `key:"retries" json:"retries"`
 }
 
 // BuildRegistryCredentialsConfig stores credentials for generating tokens for the build registry
@@ -314,6 +412,13 @@ type JuiceFSConfig struct {
 	BlockSize    int64  `key:"blockSize" json:"block_size"`
 	Prefetch     int64  `key:"prefetch" json:"prefetch"`
 	BufferSize   int64  `key:"bufferSize" json:"buffer_size"`
+	// CacheDir holds the local block cache (--cache-dir); CacheSize bounds it in MiB.
+	CacheDir string `key:"cacheDir" json:"cache_dir"`
+	// Writeback acknowledges writes once they are in the local cache and
+	// uploads them in the background (--writeback). Needs a CacheDir.
+	Writeback bool `key:"writeback" json:"writeback"`
+	// MaxUploads is the number of blocks uploaded concurrently (--max-uploads, juicefs default 20).
+	MaxUploads int64 `key:"maxUploads" json:"max_uploads"`
 }
 
 type GeeseConfig struct {
@@ -323,6 +428,7 @@ type GeeseConfig struct {
 	MemoryLimit            int64         `key:"memoryLimit" json:"memory_limit"`                   // --memory-limit
 	MaxFlushers            int           `key:"maxFlushers" json:"max_flushers"`                   // --max-flushers
 	MaxParallelParts       int           `key:"maxParallelParts" json:"max_parallel_parts"`        // --max-parallel-parts
+	PartSizeMB             int64         `key:"partSizeMB" json:"part_size_mb"`                    // multipart upload part size for the first 1000 parts (default 64)
 	HTTPTimeout            time.Duration `key:"httpTimeout" json:"http_timeout"`                   // --http-timeout
 	ReadAheadKB            int           `key:"readAheadKB" json:"read_ahead_kb"`                  // --read-ahead-kb
 	ReadAheadLargeKB       int           `key:"readAheadLargeKB" json:"read_ahead_large_kb"`       // --read-ahead-large-kb
@@ -406,6 +512,17 @@ func NewMountPointConfigFromProto(in *pb.MountPointConfig) *MountPointConfig {
 	}
 }
 
+// JobResourceOverheadConfig is extra CPU/memory added to the worker pod's
+// requests and limits on top of the capacity the scheduler hands out to
+// containers. When jobResourcesEnforced is on, the pod limit is otherwise
+// exactly the schedulable capacity, so a fully packed worker leaves nothing
+// for the worker process itself (FUSE image/volume servers, log shipping,
+// runtime) and container I/O gets throttled with the containers.
+type JobResourceOverheadConfig struct {
+	CPU    string `key:"cpu" json:"cpu"`
+	Memory string `key:"memory" json:"memory"`
+}
+
 type WorkerConfig struct {
 	Pools                        map[string]WorkerPoolConfig   `key:"pools" json:"pools"`
 	HostNetwork                  bool                          `key:"hostNetwork" json:"host_network"`
@@ -418,6 +535,7 @@ type WorkerConfig struct {
 	Namespace                    string                        `key:"namespace" json:"namespace"`
 	ServiceAccountName           string                        `key:"serviceAccountName" json:"service_account_name"`
 	JobResourcesEnforced         bool                          `key:"jobResourcesEnforced" json:"job_resources_enforced"`
+	JobResourceOverhead          JobResourceOverheadConfig     `key:"jobResourceOverhead" json:"job_resource_overhead"`
 	ContainerResourceLimits      ContainerResourceLimitsConfig `key:"containerResourceLimits" json:"container_resource_limits"`
 	DefaultWorkerCPURequest      int64                         `key:"defaultWorkerCPURequest" json:"default_worker_cpu_request"`
 	DefaultWorkerMemoryRequest   int64                         `key:"defaultWorkerMemoryRequest" json:"default_worker_memory_request"`
@@ -430,6 +548,10 @@ type WorkerConfig struct {
 	TmpSizeLimit                 string                        `key:"tmpSizeLimit" json:"tmp_size_limit"`
 	ContainerLogLinesPerHour     int                           `key:"containerLogLinesPerHour" json:"container_log_lines_per_hour"`
 	ContainerRuntime             string                        `key:"containerRuntime" json:"container_runtime"`
+	// HeadroomWorkerMaxAge bounds how long an idle worker that holds its pool's
+	// minimum free capacity (poolSizing.minFree*) stays up before it exits and
+	// lets the pool sizer boot a fresh one. Zero disables the bound.
+	HeadroomWorkerMaxAge time.Duration `key:"headroomWorkerMaxAge" json:"headroom_worker_max_age"`
 }
 
 type ContainerResourceLimitsConfig struct {

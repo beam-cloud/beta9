@@ -473,7 +473,6 @@ const (
 	EventAttrFailureClass       = "failure_class"
 	EventAttrFailureClasses     = "failure_classes"
 	EventAttrFailureCount       = "failure_count"
-	EventAttrFirstTCPReadyMs    = "first_tcp_ready_ms"
 	EventAttrForce              = "force"
 	EventAttrGracePeriodSeconds = "grace_period_seconds"
 	EventAttrLifecycle          = "lifecycle"
@@ -573,6 +572,8 @@ const (
 	ContainerLifecycleReadBundleConfig            ContainerLifecycleID = "worker.read_bundle_config"
 	ContainerLifecycleWorkspaceMount              ContainerLifecycleID = "mount.workspace"
 	ContainerLifecycleSetupMounts                 ContainerLifecycleID = "mount.setup"
+	ContainerLifecycleBindMountDirs               ContainerLifecycleID = "mount.bind_source_dirs"
+	ContainerLifecycleDurableDiskPrepare          ContainerLifecycleID = "mount.durable_disk"
 	ContainerLifecycleSpecFromRequest             ContainerLifecycleID = "worker.spec_from_request"
 	ContainerLifecycleSetContainerAddr            ContainerLifecycleID = "worker.set_container_address"
 	ContainerLifecycleSetAddressMap               ContainerLifecycleID = "worker.set_address_map"
@@ -595,7 +596,6 @@ const (
 	ContainerLifecycleRuntimeStartToPID           ContainerLifecycleID = "runtime.start_to_pid"
 	ContainerLifecycleSandboxApplyCPUQuota        ContainerLifecycleID = "sandbox.apply_cpu_quota"
 	ContainerLifecycleRunnerApplyCPUQuota         ContainerLifecycleID = "runner.apply_cpu_quota"
-	ContainerLifecycleSandboxProcessManagerTCP    ContainerLifecycleID = "sandbox.process_manager_tcp_ready"
 	ContainerLifecycleSandboxProcessManagerReady  ContainerLifecycleID = "sandbox.process_manager_ready"
 	ContainerLifecycleServeReady                  ContainerLifecycleID = "serve.ready"
 	ContainerLifecycleResultDelivery              ContainerLifecycleID = "result.delivery"
@@ -657,6 +657,8 @@ var ContainerLifecycleDefinitions = map[ContainerLifecycleID]ContainerLifecycleD
 	ContainerLifecycleReadBundleConfig:            {ID: ContainerLifecycleReadBundleConfig, Domain: EventDomainWorker, ParentID: ContainerLifecycleStartup, Label: "Read bundle config"},
 	ContainerLifecycleWorkspaceMount:              {ID: ContainerLifecycleWorkspaceMount, Domain: EventDomainMount, ParentID: ContainerLifecycleStartup, Label: "Mount workspace storage"},
 	ContainerLifecycleSetupMounts:                 {ID: ContainerLifecycleSetupMounts, Domain: EventDomainMount, ParentID: ContainerLifecycleStartup, Label: "Setup mounts"},
+	ContainerLifecycleBindMountDirs:               {ID: ContainerLifecycleBindMountDirs, Domain: EventDomainMount, ParentID: ContainerLifecycleStartup, Label: "Create bind mount sources"},
+	ContainerLifecycleDurableDiskPrepare:          {ID: ContainerLifecycleDurableDiskPrepare, Domain: EventDomainMount, ParentID: ContainerLifecycleStartup, Label: "Attach durable disks"},
 	ContainerLifecycleSpecFromRequest:             {ID: ContainerLifecycleSpecFromRequest, Domain: EventDomainWorker, ParentID: ContainerLifecycleStartup, Label: "Spec from request"},
 	ContainerLifecycleSetContainerAddr:            {ID: ContainerLifecycleSetContainerAddr, Domain: EventDomainWorker, ParentID: ContainerLifecycleStartup, Label: "Set container address"},
 	ContainerLifecycleSetAddressMap:               {ID: ContainerLifecycleSetAddressMap, Domain: EventDomainWorker, ParentID: ContainerLifecycleStartup, Label: "Set address map"},
@@ -679,7 +681,6 @@ var ContainerLifecycleDefinitions = map[ContainerLifecycleID]ContainerLifecycleD
 	ContainerLifecycleRuntimeStartToPID:           {ID: ContainerLifecycleRuntimeStartToPID, Domain: EventDomainRuntime, ParentID: ContainerLifecycleStartup, Label: "Runtime start to PID", Required: true},
 	ContainerLifecycleSandboxApplyCPUQuota:        {ID: ContainerLifecycleSandboxApplyCPUQuota, Domain: EventDomainRuntime, ParentID: ContainerLifecycleStartup, Label: "Apply sandbox CPU quota"},
 	ContainerLifecycleRunnerApplyCPUQuota:         {ID: ContainerLifecycleRunnerApplyCPUQuota, Domain: EventDomainRuntime, ParentID: ContainerLifecycleStartup, Label: "Apply function CPU quota"},
-	ContainerLifecycleSandboxProcessManagerTCP:    {ID: ContainerLifecycleSandboxProcessManagerTCP, Domain: EventDomainNetwork, ParentID: ContainerLifecycleSandboxProcessManagerReady, Label: "Sandbox process manager TCP ready"},
 	ContainerLifecycleSandboxProcessManagerReady:  {ID: ContainerLifecycleSandboxProcessManagerReady, Domain: EventDomainRuntime, ParentID: ContainerLifecycleStartup, Label: "Sandbox process manager ready"},
 	ContainerLifecycleServeReady:                  {ID: ContainerLifecycleServeReady, Domain: EventDomainServe, ParentID: ContainerLifecycleStartup, Label: "Serve ready"},
 	ContainerLifecycleResultDelivery:              {ID: ContainerLifecycleResultDelivery, Domain: EventDomainResult, ParentID: ContainerLifecycleStartup, Label: "Result delivery"},
@@ -996,6 +997,7 @@ type MetricsAggregationBucket struct {
 	KeyAsString             string        `json:"key_as_string"`
 	DocCount                int           `json:"doc_count"`
 	ContainerCount          MetricAverage `json:"container_count"`
+	ContainerSeconds        MetricAverage `json:"container_seconds"`
 	CPUConcurrency          MetricAverage `json:"cpu_concurrency"`
 	GPUConcurrency          MetricAverage `json:"gpu_concurrency"`
 	DiskReadBytesRateAvg    MetricAverage `json:"disk_read_bytes_per_second_avg"`
@@ -1005,11 +1007,14 @@ type MetricsAggregationBucket struct {
 	CPUPercentAvg           MetricAverage `json:"cpu_pct_avg"`
 	CPUTotalAvg             MetricAverage `json:"cpu_total_avg"`
 	CPUUsedAvg              MetricAverage `json:"cpu_used_avg"`
+	CPUUsedTotal            MetricAverage `json:"cpu_used_total"`
 	DiskReadBytesAvg        MetricAverage `json:"disk_read_bytes_avg"`
 	DiskWriteBytesAvg       MetricAverage `json:"disk_write_bytes_avg"`
 	GPUMemoryTotalBytesAvg  MetricAverage `json:"gpu_memory_total_bytes_avg"`
 	GPUMemoryUsedBytesAvg   MetricAverage `json:"gpu_memory_used_bytes_avg"`
+	GPUMemoryUsedBytesTotal MetricAverage `json:"gpu_memory_used_bytes_total"`
 	MemoryRSSBytesAvg       MetricAverage `json:"memory_rss_bytes_avg"`
+	MemoryRSSBytesTotal     MetricAverage `json:"memory_rss_bytes_total"`
 	MemoryTotalBytesAvg     MetricAverage `json:"memory_total_bytes_avg"`
 	MemoryVMSBytesAvg       MetricAverage `json:"memory_vms_bytes_avg"`
 	MemorySwapBytesAvg      MetricAverage `json:"memory_swap_bytes_avg"`

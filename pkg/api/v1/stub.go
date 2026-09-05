@@ -804,6 +804,9 @@ type SandboxStatsResponse struct {
 	RatePerSecond  float64                `json:"rate_per_second"`
 	StatusCounts   map[string]int         `json:"status_counts"`
 	CreatedBuckets []SandboxCreatedBucket `json:"created_buckets"`
+	// Window the buckets, TotalCreated and RatePerSecond were computed over.
+	WindowStart time.Time `json:"window_start"`
+	WindowEnd   time.Time `json:"window_end"`
 }
 
 func sandboxListLimit(ctx echo.Context) (int, error) {
@@ -908,13 +911,16 @@ func (g *StubGroup) GetSandboxStats(ctx echo.Context) error {
 		SandboxStatusStopped:  0,
 		SandboxStatusFailed:   0,
 	}
+	chartRange := resolveSandboxChartRange(ctx, time.Now())
 	if len(stubs) == 0 {
 		return ctx.JSON(http.StatusOK, SandboxStatsResponse{
 			Concurrent:     0,
 			TotalCreated:   0,
 			RatePerSecond:  0,
 			StatusCounts:   statusCounts,
-			CreatedBuckets: buildSandboxSummaryCreatedBuckets(nil, ctx.QueryParam("chart_range")),
+			CreatedBuckets: buildSandboxSummaryCreatedBucketsForRange(nil, chartRange),
+			WindowStart:    chartRange.start,
+			WindowEnd:      chartRange.end(),
 		})
 	}
 
@@ -927,36 +933,43 @@ func (g *StubGroup) GetSandboxStats(ctx echo.Context) error {
 	}
 	sandboxRows := g.buildSandboxStatsRowsWithSummaries(ctx.Request().Context(), workspaceID, stubs, containersByStub, summaries)
 
+	// Concurrency and the status pills describe the fleet as it is right now;
+	// "created" and the rate describe the selected window so they agree with
+	// the chart underneath them.
 	concurrent := 0
-	var earliest, latest time.Time
+	total := 0
 	for i := range sandboxRows {
 		row := &sandboxRows[i]
-		createdAt := row.CreatedAt
-		if earliest.IsZero() || createdAt.Before(earliest) {
-			earliest = createdAt
-		}
-		if latest.IsZero() || createdAt.After(latest) {
-			latest = createdAt
-		}
-
 		if isActiveSandboxStatus(row.Status) {
 			concurrent++
 		}
 		statusCounts[row.Status]++
+		if chartRange.contains(row.CreatedAt) {
+			total++
+		}
 	}
 
-	total := len(sandboxRows)
 	ratePerSecond := 0.0
-	if total > 1 && !earliest.IsZero() && latest.After(earliest) {
-		ratePerSecond = float64(total) / latest.Sub(earliest).Seconds()
+	if total > 0 {
+		windowEnd := chartRange.end()
+		if now := time.Now().UTC(); now.Before(windowEnd) {
+			windowEnd = now
+		}
+		if span := windowEnd.Sub(chartRange.start).Seconds(); span > 0 {
+			ratePerSecond = float64(total) / span
+		}
 	}
 
 	return ctx.JSON(http.StatusOK, SandboxStatsResponse{
-		Concurrent:     concurrent,
-		TotalCreated:   total,
-		RatePerSecond:  ratePerSecond,
-		StatusCounts:   statusCounts,
-		CreatedBuckets: buildSandboxSummaryCreatedBuckets(summaries, ctx.QueryParam("chart_range")),
+		Concurrent:    concurrent,
+		TotalCreated:  total,
+		RatePerSecond: ratePerSecond,
+		StatusCounts:  statusCounts,
+		// Bucket the same rows the counters and the table are built from so
+		// the chart, "created" total and list never disagree.
+		CreatedBuckets: buildSandboxRowCreatedBucketsForRange(sandboxRows, chartRange),
+		WindowStart:    chartRange.start,
+		WindowEnd:      chartRange.end(),
 	})
 }
 
@@ -2166,6 +2179,69 @@ type sandboxChartRange struct {
 	count      int
 }
 
+// sandboxChartWindow is an explicit [start, end] window from the request, or
+// zero when the caller used a named chart_range preset.
+type sandboxChartWindow struct {
+	start time.Time
+	end   time.Time
+}
+
+func (w sandboxChartWindow) valid() bool {
+	return !w.start.IsZero() && !w.end.IsZero() && w.end.After(w.start)
+}
+
+// parseSandboxChartWindow reads `start`/`end` (unix milliseconds) query params.
+// `end` defaults to now. Returns a zero window when `start` is absent so the
+// preset path stays in effect.
+func parseSandboxChartWindow(ctx echo.Context, now time.Time) sandboxChartWindow {
+	startMs, err := strconv.ParseInt(strings.TrimSpace(ctx.QueryParam("start")), 10, 64)
+	if err != nil || startMs <= 0 {
+		return sandboxChartWindow{}
+	}
+	end := now.UTC()
+	if endMs, err := strconv.ParseInt(strings.TrimSpace(ctx.QueryParam("end")), 10, 64); err == nil && endMs > startMs {
+		end = time.UnixMilli(endMs).UTC()
+		if end.After(now) {
+			end = now.UTC()
+		}
+	}
+	start := time.UnixMilli(startMs).UTC()
+	if !end.After(start) {
+		return sandboxChartWindow{}
+	}
+	return sandboxChartWindow{start: start, end: end}
+}
+
+// sandboxChartRangeForWindow splits an explicit window into the same fixed
+// bucket count the presets use, so the x-axis density is identical whichever
+// way the range was chosen.
+func sandboxChartRangeForWindow(window sandboxChartWindow) sandboxChartRange {
+	const bucketCount = 60
+	bucketSize := window.end.Sub(window.start) / bucketCount
+	if bucketSize < time.Second {
+		bucketSize = time.Second
+	}
+	return sandboxChartRange{start: window.start, bucketSize: bucketSize, count: bucketCount}
+}
+
+// resolveSandboxChartRange prefers an explicit window and falls back to the
+// named preset.
+func resolveSandboxChartRange(ctx echo.Context, now time.Time) sandboxChartRange {
+	if window := parseSandboxChartWindow(ctx, now); window.valid() {
+		return sandboxChartRangeForWindow(window)
+	}
+	return sandboxCreatedChartRange(ctx.QueryParam("chart_range"), now)
+}
+
+func (r sandboxChartRange) end() time.Time {
+	return r.start.Add(time.Duration(r.count) * r.bucketSize)
+}
+
+func (r sandboxChartRange) contains(t time.Time) bool {
+	t = t.UTC()
+	return !t.Before(r.start) && t.Before(r.end())
+}
+
 func sandboxCreatedChartRange(value string, now time.Time) sandboxChartRange {
 	now = now.UTC()
 	rangeDuration := time.Hour
@@ -2222,7 +2298,10 @@ func buildCreatedBucketsAt(stubs []types.StubWithRelated, rangeValue string, now
 }
 
 func buildSandboxRowCreatedBucketsAt(rows []SandboxRow, rangeValue string, now time.Time) []SandboxCreatedBucket {
-	r := sandboxCreatedChartRange(rangeValue, now)
+	return buildSandboxRowCreatedBucketsForRange(rows, sandboxCreatedChartRange(rangeValue, now))
+}
+
+func buildSandboxRowCreatedBucketsForRange(rows []SandboxRow, r sandboxChartRange) []SandboxCreatedBucket {
 	buckets := make([]SandboxCreatedBucket, r.count)
 	for i := range buckets {
 		buckets[i] = SandboxCreatedBucket{Timestamp: r.start.Add(time.Duration(i) * r.bucketSize)}
@@ -2249,7 +2328,10 @@ func buildSandboxSummaryCreatedBuckets(summaries []sandboxContainerSummary, rang
 }
 
 func buildSandboxSummaryCreatedBucketsAt(summaries []sandboxContainerSummary, rangeValue string, now time.Time) []SandboxCreatedBucket {
-	r := sandboxCreatedChartRange(rangeValue, now)
+	return buildSandboxSummaryCreatedBucketsForRange(summaries, sandboxCreatedChartRange(rangeValue, now))
+}
+
+func buildSandboxSummaryCreatedBucketsForRange(summaries []sandboxContainerSummary, r sandboxChartRange) []SandboxCreatedBucket {
 	buckets := make([]SandboxCreatedBucket, r.count)
 	for i := range buckets {
 		buckets[i] = SandboxCreatedBucket{Timestamp: r.start.Add(time.Duration(i) * r.bucketSize)}

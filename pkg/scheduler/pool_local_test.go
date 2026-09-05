@@ -7,6 +7,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 func TestLocalWorkerPrometheusConfigurationSupportsHostNetworkBinPacking(t *testing.T) {
@@ -90,4 +91,42 @@ func workerConfigFromEnvironment(t *testing.T, env []corev1.EnvVar) types.AppCon
 	}
 	t.Fatal("CONFIG_JSON is missing")
 	return types.AppConfig{}
+}
+
+func TestApplyJobResourceOverhead(t *testing.T) {
+	schedulable := corev1.ResourceList{
+		corev1.ResourceCPU:    resource.MustParse("4000m"),
+		corev1.ResourceMemory: resource.MustParse("8192Mi"),
+	}
+
+	t.Run("adds overhead to the pod without touching schedulable capacity", func(t *testing.T) {
+		out := applyJobResourceOverhead(schedulable, types.JobResourceOverheadConfig{CPU: "1000m", Memory: "1Gi"})
+		if got := out[corev1.ResourceCPU]; got.MilliValue() != 5000 {
+			t.Fatalf("cpu = %s, want 5000m", got.String())
+		}
+		if got := out[corev1.ResourceMemory]; got.Value() != 9<<30 {
+			t.Fatalf("memory = %s, want 9Gi", got.String())
+		}
+		if got := schedulable[corev1.ResourceCPU]; got.MilliValue() != 4000 {
+			t.Fatalf("schedulable cpu mutated to %s", got.String())
+		}
+	})
+
+	t.Run("empty, zero and invalid overhead leave resources unchanged", func(t *testing.T) {
+		for _, cfg := range []types.JobResourceOverheadConfig{
+			{},
+			{CPU: "0", Memory: "0"},
+			{CPU: "lots", Memory: "-1Gi"},
+			// Quantities from the other resource family parse but are nonsense.
+			{CPU: "512Mi", Memory: "500m"},
+		} {
+			out := applyJobResourceOverhead(schedulable, cfg)
+			if got := out[corev1.ResourceCPU]; got.MilliValue() != 4000 {
+				t.Fatalf("%+v: cpu = %s, want 4000m", cfg, got.String())
+			}
+			if got := out[corev1.ResourceMemory]; got.Value() != 8<<30 {
+				t.Fatalf("%+v: memory = %s, want 8Gi", cfg, got.String())
+			}
+		}
+	})
 }

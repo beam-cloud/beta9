@@ -43,25 +43,33 @@ func (m *Manager) acquireNBDDevice(ctx context.Context, nbdSocket string, expect
 		return nil, fmt.Errorf("no nbd devices present; is the nbd kernel module loaded?")
 	}
 	var contentionErr error
-	for _, name := range names {
-		device, ok := m.tryLockNBDDevice(name)
-		if !ok {
-			continue
-		}
-		if err := m.connectNBDDevice(ctx, device, nbdSocket, expectedSizeBytes); err != nil {
-			// The kernel is the final arbiter across workers whose host mounts
-			// may not share a lock directory. If another worker connected this
-			// device after our free check, keep scanning instead of failing the
-			// container attach.
-			contended := m.nbdDeviceBusy(name)
-			device.release()
-			if contended {
-				contentionErr = err
+	// A spare holds a device too. When every device is taken, one spare is
+	// released and the scan runs once more before the attach fails.
+	for attempt := 0; attempt < 2; attempt++ {
+		for _, name := range names {
+			device, ok := m.tryLockNBDDevice(name)
+			if !ok {
 				continue
 			}
-			return nil, err
+			if err := m.connectNBDDevice(ctx, device, nbdSocket, expectedSizeBytes); err != nil {
+				// The kernel is the final arbiter across workers whose host mounts
+				// may not share a lock directory. If another worker connected this
+				// device after our free check, keep scanning instead of failing the
+				// container attach.
+				contended := m.nbdDeviceBusy(name)
+				device.release()
+				if contended {
+					contentionErr = err
+					continue
+				}
+				return nil, err
+			}
+			return device, nil
 		}
-		return device, nil
+		if attempt == 0 && m.reclaimSpare() {
+			continue
+		}
+		break
 	}
 	if contentionErr != nil {
 		return nil, fmt.Errorf("all %d nbd devices are busy after concurrent attach: %w", len(names), contentionErr)
@@ -69,11 +77,42 @@ func (m *Manager) acquireNBDDevice(ctx context.Context, nbdSocket string, expect
 	return nil, fmt.Errorf("all %d nbd devices are busy", len(names))
 }
 
+// freeNBDDevices counts devices the kernel has no server on.
+func (m *Manager) freeNBDDevices() int {
+	names, err := listNBDDeviceNames(m.sysBlockPath)
+	if err != nil {
+		return 0
+	}
+	free := 0
+	for _, name := range names {
+		if !m.nbdDeviceBusy(name) {
+			free++
+		}
+	}
+	return free
+}
+
 // ensureNBDDevices lazily prepares the host kernel and this worker's private
 // /dev mount on the first qcow attachment. Kubernetes and Docker both give a
 // privileged worker its own /dev tmpfs, so loading the host module alone does
-// not guarantee that /dev/nbdN exists inside the worker.
+// not guarantee that /dev/nbdN exists inside the worker. Validating every node
+// costs an exec per device, so a successful pass is remembered. Callers that
+// arrive while a pass is running wait for it rather than starting their own;
+// a failed pass is retried by the next caller.
 func (m *Manager) ensureNBDDevices(ctx context.Context) error {
+	m.nbdReadyMu.Lock()
+	defer m.nbdReadyMu.Unlock()
+	if m.nbdDevicesReady {
+		return nil
+	}
+	if err := m.prepareNBDDevices(ctx); err != nil {
+		return err
+	}
+	m.nbdDevicesReady = true
+	return nil
+}
+
+func (m *Manager) prepareNBDDevices(ctx context.Context) error {
 	names, err := listNBDDeviceNames(m.sysBlockPath)
 	if err != nil {
 		return err

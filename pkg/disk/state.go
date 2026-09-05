@@ -107,7 +107,13 @@ func saveVolumeState(dir string, state *volumeState) error {
 	if err != nil {
 		return err
 	}
-	tmpPath := filepath.Join(dir, stateFileName+".tmp")
+	return writeFileAtomic(filepath.Join(dir, stateFileName), data)
+}
+
+// writeFileAtomic replaces path with data through a synced temporary file and
+// a rename, so a crash mid-write never leaves a torn file behind.
+func writeFileAtomic(path string, data []byte) error {
+	tmpPath := path + ".tmp"
 	file, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
@@ -126,5 +132,5 @@ func saveVolumeState(dir string, state *volumeState) error {
 		os.Remove(tmpPath)
 		return err
 	}
-	return os.Rename(tmpPath, filepath.Join(dir, stateFileName))
+	return os.Rename(tmpPath, path)
 }

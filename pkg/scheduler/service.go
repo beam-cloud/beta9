@@ -14,6 +14,7 @@ type SchedulerService struct {
 
 func NewSchedulerService(scheduler *Scheduler) (*SchedulerService, error) {
 	go scheduler.StartProcessingRequests() // Start processing ContainerRequests
+	go scheduler.StartCreditEnforcement()  // Stop containers of workspaces that ran out of credit
 
 	return &SchedulerService{
 		Scheduler: scheduler,
@@ -66,4 +67,3 @@ func (wbs *SchedulerService) RunContainer(ctx context.Context, in *pb.RunContain
 		Error:   "",
 	}, nil
 }
-

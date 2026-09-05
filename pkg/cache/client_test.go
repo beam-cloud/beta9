@@ -2444,3 +2444,88 @@ func (m *failOnGetFsNodeMetadataStore) GetFsNode(ctx context.Context, id string)
 	m.t.Fatalf("content read hot path must not use cachefs metadata: %s", id)
 	return nil, errors.New("unexpected cachefs metadata lookup")
 }
+
+// A host joining the ring can push the host that stored a hash out of a
+// reader's top-N. The content is still one round trip away, so reads and
+// streams must ask the remaining hosts before reporting a miss.
+func TestReadsFindContentOnHostOutsideTopN(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := Config{
+		Server: ServerConfig{
+			DiskCacheMaxUsagePct: 90,
+			PageSizeBytes:        4,
+			ObjectTtlS:           300,
+		},
+		Client: ClientConfig{NTopHosts: 2},
+		Global: GlobalConfig{
+			GRPCMessageSizeBytes: 1024 * 1024,
+			GRPCDialTimeoutS:     1,
+		},
+	}
+
+	var hosts []*Host
+	var servers []*Server
+	for _, id := range []string{"host-a", "host-b", "host-c"} {
+		serverCfg := cfg
+		serverCfg.Server.DiskCacheDir = t.TempDir()
+		server, err := NewServerWithOptions(ctx, serverCfg, "test", WithServerMetadataStore(NewMockCacheMetadataStore()), WithServerHostID(id))
+		require.NoError(t, err)
+		addr, err := server.Serve("127.0.0.1:0", "")
+		require.NoError(t, err)
+		defer func() { require.NoError(t, server.Close()) }()
+		host := server.Host()
+		require.NotNil(t, host)
+		host.Addr = addr
+		host.PrivateAddr = addr
+		hosts = append(hosts, host)
+		servers = append(servers, server)
+	}
+
+	content := bytes.Repeat([]byte("stored-before-the-ring-grew;"), 64)
+	hash, _, err := servers[2].cas.AddReader(ctx, bytes.NewReader(content))
+	require.NoError(t, err)
+
+	client := &Client{
+		ctx:                   ctx,
+		locality:              "test",
+		clientConfig:          cfg.Client,
+		globalConfig:          cfg.Global,
+		grpcClients:           make(map[string]proto.CacheClient),
+		grpcConns:             make(map[string]*grpc.ClientConn),
+		localServers:          make(map[string]*Server),
+		rawReadPools:          make(map[string]*rawReadConnPool),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
+		hostMap:               NewHostMap(cfg.Global, nil),
+		hasher:                &orderedTestHasher{hosts: hosts}, // top-2 = a, b; content is on c
+		maxGetContentAttempts: 2,
+	}
+	for _, host := range hosts {
+		require.NoError(t, client.addHost(host))
+		client.hostMap.Set(host)
+	}
+	defer client.Cleanup()
+
+	dst := make([]byte, len(content))
+	n, err := client.ReadContentInto(ctx, hash, 0, dst, ClientOptions{RoutingKey: hash})
+	require.NoError(t, err)
+	require.Equal(t, int64(len(content)), n)
+	require.Equal(t, content, dst)
+
+	// The find is remembered, so the next read goes straight to host-c.
+	client.mu.RLock()
+	pinned := client.localHostCache[newLocalHostCacheKey(hash, hash)]
+	client.mu.RUnlock()
+	require.NotNil(t, pinned)
+	require.Equal(t, "host-c", pinned.host.HostId)
+
+	client.removeLocalHostCache(hash)
+	chunks, err := client.GetContentStream(hash, 0, int64(len(content)), struct{ RoutingKey string }{RoutingKey: hash})
+	require.NoError(t, err)
+	var streamed []byte
+	for chunk := range chunks {
+		streamed = append(streamed, chunk...)
+	}
+	require.Equal(t, content, streamed)
+}

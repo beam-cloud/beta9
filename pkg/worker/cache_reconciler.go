@@ -491,14 +491,10 @@ func (m *WorkerCacheManager) reconcileOnce(maintain bool) {
 	started := time.Now()
 	var stubCount int
 	defer func() {
-		// A sync should cost a coordinator round trip and little else; the
-		// trace says so, or says where a cycle went. Maintenance passes are
-		// rare enough to log at info as a heartbeat.
-		event := log.Debug()
-		if maintain {
-			event = log.Info()
-		}
-		event.
+		// A cycle should cost a coordinator round trip and little else; the
+		// trace says so, or says where a cycle went. Work that changes the
+		// cache (materialized items, prunes) logs itself at info.
+		log.Debug().
 			Str("locality", m.locality).
 			Bool("maintain", maintain).
 			Int("stubs", stubCount).
@@ -1593,7 +1589,7 @@ func (m *WorkerCacheManager) materializeOwnedItem(server *cache.Server, localHos
 		} else {
 			m.clearReconcileSuccess(item.Hash, routingKey)
 		}
-		m.reconcileLogFields(log.Info(), localHostID, stub, item).
+		m.reconcileLogFields(log.Debug(), localHostID, stub, item).
 			Str("status", status).Dur("duration", elapsed).
 			Msg("cache content reconciled")
 	case reconcileStatusIsFailure(status):

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
+	"math"
 	"net/http"
 	_ "net/http/pprof" // Import for side effects
 	"os"
@@ -119,10 +121,18 @@ type Worker struct {
 	qcowChains              sync.Map // live published qcow chain (rows + manifests) per volume key
 	userDataStorage         storage.Storage
 	persistent              bool
-	routeTransport          string
-	ctx                     context.Context
-	cancel                  func()
-	config                  types.AppConfig
+	// poolHeadroom is the gateway's answer on the last keepalive: this worker
+	// is what keeps the pool's free capacity at its minimum, so it must not
+	// idle out (see shouldShutDown).
+	poolHeadroom atomic.Bool
+	// startedAt and headroomMaxAge bound how long holding headroom keeps an
+	// idle worker up (see shouldExitIdle); a zero headroomMaxAge is no bound.
+	startedAt      time.Time
+	headroomMaxAge time.Duration
+	routeTransport string
+	ctx            context.Context
+	cancel         func()
+	config         types.AppConfig
 }
 
 func (w *Worker) gpuVirtualizedForRequest(request *types.ContainerRequest) bool {
@@ -342,6 +352,53 @@ type ContainerOptions struct {
 	InitialSpec                 *specs.Spec
 	StartupStartedAt            time.Time
 	CheckpointFilesystemRestore *checkpointFilesystemRestore
+	// AddressesRegistered is the address-map publication started as soon as
+	// host ports were reserved; RUNNING waits on it, and so does teardown.
+	AddressesRegistered *addressRegistration
+}
+
+// addressRegistration is the in-flight publication of a container's address
+// map. Any number of parties may wait on it: the runtime start joins it before
+// RUNNING is published, and teardown joins it so a publication cannot land
+// after the container state it belongs to has been deleted.
+type addressRegistration struct {
+	done chan struct{}
+	err  error
+}
+
+func newAddressRegistration(publish func() error) *addressRegistration {
+	r := &addressRegistration{done: make(chan struct{})}
+	go func() {
+		r.err = publish()
+		close(r.done)
+	}()
+	return r
+}
+
+// wait blocks until the publication has finished or ctx ends. A nil
+// registration is one that was never started and reports no error.
+func (r *addressRegistration) wait(ctx context.Context) error {
+	if r == nil {
+		return nil
+	}
+	select {
+	case <-r.done:
+		return r.err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// waitForTeardown joins the publication before the container's state is
+// deleted, so a late publication cannot outlive that deletion. It is bounded:
+// a stalled gateway must not hold up teardown.
+func (r *addressRegistration) waitForTeardown() {
+	if r == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), containerRepositoryRetryTimeout)
+	defer cancel()
+	_ = r.wait(ctx)
 }
 
 type stopContainerEvent struct {
@@ -608,12 +665,14 @@ func NewWorker() (_ *Worker, err error) {
 		stopContainerChan:   make(chan stopContainerEvent, 1000),
 		userDataStorage:     userDataStorage,
 		persistent:          persistent,
+		startedAt:           time.Now(),
+		headroomMaxAge:      headroomWorkerMaxAge(config.Worker.HeadroomWorkerMaxAge, workerId),
 		routeTransport:      routeTransport,
 	}
 
 	// Recover qcow volumes left behind by a previous worker process before any
 	// container can attach: live volumes are adopted, crashed ones cleaned up.
-	worker.diskManager = disk.NewManager(disk.Config{Debug: config.DebugMode})
+	worker.diskManager = disk.NewManager(disk.Config{})
 	if err := worker.diskManager.Recover(ctx); err != nil {
 		log.Warn().Err(err).Msg("failed to recover qcow durable disk volumes")
 	}
@@ -713,6 +772,7 @@ containerRequestStream:
 			if response.ContainerRequest != nil {
 				lastContainerRequest = time.Now()
 				request := types.NewContainerRequestFromProto(response.ContainerRequest)
+				request.DeliveryToken = response.DeliveryToken
 				if request.MachineId == "" {
 					request.MachineId = s.machineID
 				}
@@ -728,11 +788,6 @@ containerRequestStream:
 						"worker_id": s.workerId,
 					}))
 				}
-				if err := s.acknowledgeContainerRequest(request.ContainerId, response.DeliveryToken); err != nil {
-					log.Warn().Err(err).Str("worker_id", s.workerId).Str("container_id", request.ContainerId).Msg("failed to acknowledge container request")
-					s.completedRequests <- request
-					break
-				}
 				s.handleContainerRequest(request)
 			}
 
@@ -747,34 +802,6 @@ containerRequestStream:
 	}
 
 	return s.shutdown()
-}
-
-func (s *Worker) acknowledgeContainerRequest(containerID, deliveryToken string) error {
-	request := &pb.AddContainerToWorkerRequest{
-		WorkerId:      s.workerId,
-		ContainerId:   containerID,
-		PoolName:      s.poolName,
-		PodHostname:   s.podHostName,
-		DeliveryToken: deliveryToken,
-	}
-
-	for {
-		ctx, cancel := context.WithTimeout(s.ctx, containerRequestAckTimeout)
-		response, err := s.workerRepoClient.AddContainerToWorker(ctx, request)
-		cancel()
-		if err == nil {
-			if response != nil && response.Ok {
-				return nil
-			}
-			if response == nil {
-				return errors.New("empty container request acknowledgement")
-			}
-			return errors.New(response.ErrorMsg)
-		}
-		if !waitForReconnect(s.ctx, containerRequestStreamInterval) {
-			return s.ctx.Err()
-		}
-	}
 }
 
 func containerStartLimitForRuntime(runtimeType string) int {
@@ -870,13 +897,20 @@ func (s *Worker) runContainerRequestWithRunner(
 		s.unregisterContainerCancel(containerId)
 	}()
 	s.cancelContainerIfAlreadyStopping(cancelStartup, containerId)
-	startupAllowed, reconcileErr := s.awaitInitialContainerReconciliation(ctx, request)
-	if reconcileErr != nil {
-		log.Error().Str("container_id", containerId).Err(reconcileErr).Msg("unable to reconcile container state before startup")
-		s.failContainerRequest(containerId, request, reconcileErr)
-		return
-	}
-	if !startupAllowed {
+
+	// The claim uses the worker context, like the delivery stream that carried
+	// the request: a stop that races the claim is observed afterwards through
+	// the startup context, so the container is failed (and its exit reported)
+	// rather than silently forgotten while the gateway believes it is ours.
+	claimed, err := s.claimContainer(s.ctx, request)
+	if err != nil {
+		if !claimed {
+			log.Warn().Str("container_id", containerId).Err(err).Msg("container claim rejected")
+			s.releaseUnclaimedContainer(request)
+			return
+		}
+		log.Error().Str("container_id", containerId).Err(err).Msg("unable to claim container")
+		s.failContainerRequest(containerId, request, err)
 		return
 	}
 	if err := ctx.Err(); err != nil {
@@ -884,15 +918,12 @@ func (s *Worker) runContainerRequestWithRunner(
 		return
 	}
 
-	// The initial persisted-state reconciliation above gates startup. Continue
-	// the same lifecycle heartbeat before hydration, without repeating the
-	// already completed reconciliation immediately.
 	heartbeatCtx, cancelHeartbeat := context.WithCancel(s.ctx)
 	heartbeatDone := make(chan struct{})
 	go func() {
 		defer close(heartbeatDone)
 		defer cancelHeartbeat()
-		_ = s.updateContainerStatusAfterInitialReconciliation(heartbeatCtx, request)
+		s.updateContainerStatusLoop(heartbeatCtx, request)
 	}()
 	heartbeatHandedOff := false
 	defer func() {
@@ -902,12 +933,6 @@ func (s *Worker) runContainerRequestWithRunner(
 		}
 	}()
 
-	if err := s.hydrateRuntimeCredentials(ctx, request); err != nil {
-		log.Error().Str("container_id", containerId).Err(err).Msg("unable to hydrate runtime credentials")
-		s.failContainerRequest(containerId, request, err)
-		return
-	}
-
 	run := func() error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -916,7 +941,6 @@ func (s *Worker) runContainerRequestWithRunner(
 		return runContainer(ctx, request)
 	}
 
-	var err error
 	if request.IsBuildRequest() {
 		err = run()
 	} else {
@@ -949,6 +973,25 @@ func (s *Worker) runContainerRequestWithRunner(
 	// cancel, but leave the heartbeat alive until local exit or worker shutdown.
 	s.unregisterContainerCancel(containerId)
 	heartbeatHandedOff = true
+}
+
+// releaseUnclaimedContainer drops a request whose claim the gateway rejected.
+// The container is owned by another worker or already cancelled, so only local
+// bookkeeping is undone: no exit code, persisted state, or resources are
+// touched.
+func (s *Worker) releaseUnclaimedContainer(request *types.ContainerRequest) {
+	if instance, exists := s.containerInstances.Get(request.ContainerId); exists {
+		if request.Stub.Type.Kind() == types.StubTypeSandbox {
+			instance.signalProcessManagerReadiness(false)
+		}
+		s.containerInstances.Delete(request.ContainerId)
+	}
+	if s.completedRequests != nil {
+		select {
+		case s.completedRequests <- request:
+		case <-s.ctx.Done():
+		}
+	}
 }
 
 func (s *Worker) failContainerRequest(containerId string, request *types.ContainerRequest, runErr error) {
@@ -1011,69 +1054,95 @@ func (s *Worker) shouldShutDown(lastContainerRequest time.Time) bool {
 	case <-s.ctx.Done():
 		return true
 	default:
-		if s.persistent {
-			return false
-		}
-		if (time.Since(lastContainerRequest).Seconds() > defaultWorkerSpindownTimeS) && s.containerInstances.Len() == 0 {
-			s.disableSchedulingForShutdown()
-			err := s.storageManager.Cleanup()
-			if err != nil {
-				log.Error().Err(err).Msg("failed to cleanup workspace storage")
-			}
-
-			s.cancel() // Stops goroutines
-			return true
-		}
+	}
+	if !s.shouldExitIdle(lastContainerRequest, time.Now()) {
 		return false
 	}
+
+	s.disableSchedulingForShutdown()
+	if err := s.storageManager.Cleanup(); err != nil {
+		log.Error().Err(err).Msg("failed to cleanup workspace storage")
+	}
+
+	s.cancel() // Stops goroutines
+	return true
 }
 
-func (s *Worker) updateContainerStatus(ctx context.Context, request *types.ContainerRequest) error {
-	return s.updateContainerStatusLoop(ctx, request, true)
+// shouldExitIdle decides whether a worker with no containers and no request
+// for the spindown timeout leaves now. Persistent workers never do.
+//
+// An idle worker that is part of the pool's minimum free capacity stays:
+// exiting would only make the sizer start a replacement and leave the pool
+// cold while it boots. The gateway is asked right now rather than trusting a
+// flag up to a keepalive old, and the worker stays when the answer cannot be
+// had, since leaving on a stale or missing answer is what empties the pool.
+//
+// Holding headroom alone must not keep a worker up forever, though: an idle
+// pool would pin the same pod indefinitely, past image rollouts and node
+// drains. Past headroomMaxAge (id-jittered, see headroomWorkerMaxAge) an idle
+// headroom worker exits anyway; the sizer replaces it and the pool is cold for
+// one boot per period. Busy workers are never aged out: the bound applies only
+// when headroom is the sole reason the worker is still here.
+func (s *Worker) shouldExitIdle(lastContainerRequest, now time.Time) bool {
+	if s.persistent {
+		return false
+	}
+	if now.Sub(lastContainerRequest).Seconds() <= defaultWorkerSpindownTimeS || s.containerInstances.Len() != 0 {
+		return false
+	}
+	if err := s.setWorkerKeepAlive(); err != nil {
+		log.Warn().Err(err).Str("worker_id", s.workerId).Msg("staying up: could not refresh pool headroom before spindown")
+		return false
+	}
+	if !s.poolHeadroom.Load() {
+		return true
+	}
+	if s.headroomMaxAge <= 0 || now.Sub(s.startedAt) < s.headroomMaxAge {
+		return false
+	}
+	log.Info().
+		Str("worker_id", s.workerId).
+		Dur("age", now.Sub(s.startedAt)).
+		Dur("max_age", s.headroomMaxAge).
+		Msg("idle headroom worker reached its max age, exiting so the pool sizer replaces it")
+	return true
 }
 
-func (s *Worker) updateContainerStatusAfterInitialReconciliation(ctx context.Context, request *types.ContainerRequest) error {
-	return s.updateContainerStatusLoop(ctx, request, false)
+// headroomWorkerMaxAge is the configured bound plus up to 1/8 of it as jitter
+// derived from the worker id, so two headroom workers the sizer started
+// together do not reach the bound in the same instant and leave the pool with
+// no ready worker at all. Zero (or negative) base means no bound.
+func headroomWorkerMaxAge(base time.Duration, workerId string) time.Duration {
+	if base <= 0 {
+		return 0
+	}
+	h := fnv.New32a()
+	h.Write([]byte(workerId))
+	jitter := time.Duration(float64(base/8) * (float64(h.Sum32()) / float64(math.MaxUint32)))
+	return base + jitter
 }
 
-func (s *Worker) updateContainerStatusLoop(ctx context.Context, request *types.ContainerRequest, updateImmediately bool) error {
+// updateContainerStatusLoop is the container's lifetime status heartbeat. It
+// renews the persisted lease, reconciles pending->running from the runtime
+// start signal, and stops containers whose state disappeared or turned
+// STOPPING. The claim already refreshed the lease, so the first update runs a
+// full interval later. It returns when the instance exits or ctx ends.
+func (s *Worker) updateContainerStatusLoop(ctx context.Context, request *types.ContainerRequest) {
 	ticker := time.NewTicker(containerStatusUpdateInterval)
 	defer ticker.Stop()
 
 	for {
-		if updateImmediately {
-			done, err := s.updateContainerStatusOnce(ctx, request)
-			if err != nil {
-				log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to update container state")
-			}
-			if done {
-				return nil
-			}
-		}
-		updateImmediately = true
 		select {
 		case <-ctx.Done():
-			return nil
+			return
 		case <-ticker.C:
 		}
-	}
-}
-
-func (s *Worker) awaitInitialContainerReconciliation(ctx context.Context, request *types.ContainerRequest) (bool, error) {
-	reconcileCtx, cancel := context.WithTimeout(ctx, containerRepositoryRetryTimeout)
-	defer cancel()
-	var lastErr error
-	for {
-		done, err := s.updateContainerStatusOnce(reconcileCtx, request)
-		if err == nil {
-			if done {
-				return false, nil
-			}
-			return true, nil
+		done, err := s.updateContainerStatusOnce(ctx, request)
+		if err != nil {
+			log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to update container state")
 		}
-		lastErr = err
-		if err := waitForRetry(reconcileCtx, containerRepositoryRetryInterval); err != nil {
-			return false, fmt.Errorf("initial container state reconciliation failed: %w", lastErr)
+		if done {
+			return
 		}
 	}
 }
@@ -1346,12 +1415,26 @@ func (s *Worker) keepalive() {
 	}
 }
 
+// setWorkerKeepAlive renews the worker's lease at the gateway. An idle worker
+// also learns whether it holds the pool's headroom (see shouldShutDown); the
+// call is bounded so a stalled gateway cannot hang the request loop.
 func (s *Worker) setWorkerKeepAlive() error {
-	_, err := handleGRPCResponse(s.workerRepoClient.SetWorkerKeepAlive(s.ctx, &pb.SetWorkerKeepAliveRequest{
+	ctx, cancel := context.WithTimeout(s.ctx, workerShutdownRPCTimeout)
+	defer cancel()
+
+	idle := s.containerInstances == nil || s.containerInstances.Len() == 0
+	resp, err := handleGRPCResponse(s.workerRepoClient.SetWorkerKeepAlive(ctx, &pb.SetWorkerKeepAliveRequest{
 		WorkerId:  s.workerId,
 		MachineId: s.machineID,
+		Idle:      idle,
 	}))
-	return err
+	if err != nil {
+		return err
+	}
+	if headroom := resp.GetPoolHeadroom(); headroom != s.poolHeadroom.Swap(headroom) {
+		log.Info().Bool("pool_headroom", headroom).Str("worker_id", s.workerId).Msg("worker pool headroom changed")
+	}
+	return nil
 }
 
 func (s *Worker) profile() {
@@ -1428,7 +1511,7 @@ func (s *Worker) shutdown() error {
 	s.stopActiveContainersForShutdown()
 	if s.diskManager != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), durableDiskCleanupGrace)
-		if err := s.diskManager.DetachAll(ctx); err != nil {
+		if err := s.diskManager.Close(ctx); err != nil {
 			errs = errors.Join(errs, fmt.Errorf("failed to detach qcow volumes: %w", err))
 		}
 		cancel()

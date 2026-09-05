@@ -4,12 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
+	goprocpb "github.com/beam-cloud/goproc/proto"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -97,6 +101,65 @@ func TestWorkerDockerStartupCanceledTreatsMissingContainerAsTeardown(t *testing.
 	err := errors.New("rpc error: code = Unavailable desc = connection refused")
 
 	require.True(t, worker.dockerStartupCanceled(context.Background(), "already-cleaned-up", err))
+}
+
+type readyGoProcServer struct {
+	goprocpb.UnimplementedGoProcServer
+}
+
+func (readyGoProcServer) Ready(context.Context, *goprocpb.ReadyRequest) (*goprocpb.ReadyResponse, error) {
+	return &goprocpb.ReadyResponse{Ok: true}, nil
+}
+
+// The process manager comes up only after the runtime has exec'd it, which on a
+// cold node can trail image materialization by tens of seconds. The wait must
+// ride that out rather than give up on a clock.
+func TestWaitForProcessManagerOutlivesSlowStartup(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	address := listener.Addr().String()
+	require.NoError(t, listener.Close()) // port is now refusing connections
+
+	server := grpc.NewServer()
+	goprocpb.RegisterGoProcServer(server, readyGoProcServer{})
+	defer server.Stop()
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		listener, err := net.Listen("tcp", address)
+		if err != nil {
+			return
+		}
+		_ = server.Serve(listener)
+	}()
+
+	instance := &ContainerInstance{
+		ContainerAddressMap: map[int32]string{types.WorkerSandboxProcessManagerPort: address},
+	}
+	// The wait only returns on success or ctx; bound it so a server that never
+	// comes up fails the test instead of hanging it.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	client, ready, stats := (&Worker{}).waitForProcessManager(ctx, "slow", instance)
+	require.True(t, ready)
+	require.NotNil(t, client)
+	require.Greater(t, stats.Failures, 0)
+	require.Equal(t, "unavailable", stats.LastClass)
+	_ = client.Cleanup()
+}
+
+func TestWaitForProcessManagerStopsWithContainer(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+
+	instance := &ContainerInstance{ContainerIp: "127.0.0.1"}
+	client, ready, stats := (&Worker{}).waitForProcessManager(ctx, "gone", instance)
+	require.False(t, ready)
+	require.Nil(t, client)
+	require.Equal(t, context.Canceled.Error(), stats.LastError)
+	require.Greater(t, stats.Attempts, 1)
 }
 
 func TestSandboxProcessManagerEndpointFallsBackToContainerIP(t *testing.T) {

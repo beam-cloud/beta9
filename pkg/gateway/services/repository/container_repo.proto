@@ -47,6 +47,9 @@ message UpdateContainerStatusRequest {
 message UpdateContainerStatusResponse {
   bool ok = 1;
   string error_msg = 2;
+  // status is the persisted status after the update. It differs from the
+  // requested status when the transition was refused (STOPPING is terminal).
+  string status = 3;
 }
 
 message SetContainerExitCodeRequest {

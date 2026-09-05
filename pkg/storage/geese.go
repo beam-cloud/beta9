@@ -311,8 +311,14 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	} else {
 		flags.MountOptions = withDefaultMountOption(s.config.MountOptions, "max_read", strconv.Itoa(defaultGeeseFSMaxReadBytes))
 	}
+	// Smaller parts let a flush of one large file fan out over more
+	// concurrent uploads (a 1 GiB file is 16 parts of 64 MiB, 64 of 16 MiB).
+	partSize := uint64(defaultGeeseFSPartSizeBytes)
+	if s.config.PartSizeMB > 0 {
+		partSize = uint64(s.config.PartSizeMB) * 1024 * 1024
+	}
 	flags.PartSizes = []cfg.PartSizeConfig{
-		{PartSize: defaultGeeseFSPartSizeBytes, PartCount: 1000},
+		{PartSize: partSize, PartCount: 1000},
 		{PartSize: 128 * 1024 * 1024, PartCount: 8000},
 	}
 

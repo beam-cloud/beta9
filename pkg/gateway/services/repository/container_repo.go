@@ -25,21 +25,24 @@ func (s *ContainerRepositoryService) GetContainerState(ctx context.Context, req 
 		return &pb.GetContainerStateResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
-	return &pb.GetContainerStateResponse{
-		Ok:          true,
-		ContainerId: req.ContainerId,
-		State: &pb.ContainerState{
-			Status:      string(state.Status),
-			ContainerId: state.ContainerId,
-			StubId:      state.StubId,
-			ScheduledAt: state.ScheduledAt,
-			StartedAt:   state.StartedAt,
-			WorkspaceId: state.WorkspaceId,
-			Gpu:         state.Gpu,
-			GpuCount:    state.GpuCount,
-			Cpu:         state.Cpu,
-			Memory:      state.Memory,
-		}}, nil
+	return &pb.GetContainerStateResponse{Ok: true, ContainerId: req.ContainerId, State: containerStateToProto(state)}, nil
+}
+
+func containerStateToProto(state *types.ContainerState) *pb.ContainerState {
+	return &pb.ContainerState{
+		Status:      string(state.Status),
+		ContainerId: state.ContainerId,
+		StubId:      state.StubId,
+		ScheduledAt: state.ScheduledAt,
+		StartedAt:   state.StartedAt,
+		WorkspaceId: state.WorkspaceId,
+		Gpu:         state.Gpu,
+		GpuCount:    state.GpuCount,
+		Cpu:         state.Cpu,
+		Memory:      state.Memory,
+		WorkerId:    state.WorkerId,
+		MachineId:   state.MachineId,
+	}
 }
 
 func (s *ContainerRepositoryService) DeleteContainerState(ctx context.Context, req *pb.DeleteContainerStateRequest) (*pb.DeleteContainerStateResponse, error) {
@@ -52,12 +55,24 @@ func (s *ContainerRepositoryService) DeleteContainerState(ctx context.Context, r
 }
 
 func (s *ContainerRepositoryService) UpdateContainerStatus(ctx context.Context, req *pb.UpdateContainerStatusRequest) (*pb.UpdateContainerStatusResponse, error) {
+	// A non-positive expiry would make the repository expire the state on the
+	// spot; refuse it before anything is written.
+	if req.ExpirySeconds <= 0 {
+		return &pb.UpdateContainerStatusResponse{Ok: false, ErrorMsg: fmt.Sprintf("expiry_seconds must be positive, got %d", req.ExpirySeconds)}, nil
+	}
+
 	err := s.containerRepo.UpdateContainerStatus(req.ContainerId, types.ContainerStatus(req.Status), req.ExpirySeconds)
 	if err != nil {
 		return &pb.UpdateContainerStatusResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
-	return &pb.UpdateContainerStatusResponse{Ok: true}, nil
+	// A refused transition (STOPPING is terminal) returns nil above; report the
+	// persisted status so the worker can react without a second round trip.
+	state, err := s.containerRepo.GetContainerState(req.ContainerId)
+	if err != nil {
+		return &pb.UpdateContainerStatusResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+	return &pb.UpdateContainerStatusResponse{Ok: true, Status: string(state.Status)}, nil
 }
 
 func (s *ContainerRepositoryService) SetContainerExitCode(ctx context.Context, req *pb.SetContainerExitCodeRequest) (*pb.SetContainerExitCodeResponse, error) {

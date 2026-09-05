@@ -506,6 +506,40 @@ func TestGetContainerRuntimeCredentialsRejectsMismatchedContainerState(t *testin
 	require.Contains(t, resp.ErrorMsg, "not assigned")
 }
 
+func TestVendRuntimeCredentialsLooksUpStateForAnotherContainer(t *testing.T) {
+	containerRepo := &workerRuntimeCredentialsContainerRepo{
+		state: &types.ContainerState{ContainerId: "other-container", WorkspaceId: "other-workspace", StubId: "stub-id"},
+	}
+	service := &WorkerRepositoryService{
+		backendRepo: &workerRuntimeCredentialsBackendRepo{
+			workspace: &types.Workspace{Id: 7, ExternalId: "workspace-id"},
+			tokens:    []types.Token{{Key: "runtime-token", Active: true, TokenType: types.TokenTypeWorkspaceRestricted}},
+		},
+		containerRepo: containerRepo,
+	}
+	claimed := &types.ContainerState{ContainerId: "container-id", WorkspaceId: "workspace-id", StubId: "stub-id"}
+
+	// A nested request for the claimed container reuses the claim's state.
+	resp := service.vendRuntimeCredentials(
+		cacheRepositoryWorkspaceAuthContext("workspace-id"),
+		&pb.GetContainerRuntimeCredentialsRequest{WorkspaceId: "workspace-id", StubId: "stub-id", ContainerId: "container-id", RuntimeToken: true},
+		claimed,
+	)
+	require.True(t, resp.Ok, resp.ErrorMsg)
+	require.Zero(t, containerRepo.attempts)
+
+	// A nested request naming another container is authorized against that
+	// container's own assignment, not the claim's.
+	resp = service.vendRuntimeCredentials(
+		cacheRepositoryWorkspaceAuthContext("workspace-id"),
+		&pb.GetContainerRuntimeCredentialsRequest{WorkspaceId: "workspace-id", StubId: "stub-id", ContainerId: "other-container", RuntimeToken: true},
+		claimed,
+	)
+	require.False(t, resp.Ok)
+	require.Contains(t, resp.ErrorMsg, "not assigned")
+	require.Equal(t, 1, containerRepo.attempts)
+}
+
 func TestGetContainerRuntimeCredentialsRequiresWorkerToken(t *testing.T) {
 	service := &WorkerRepositoryService{}
 

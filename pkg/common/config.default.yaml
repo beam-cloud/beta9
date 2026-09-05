@@ -102,6 +102,19 @@ gateway:
   defaultConcurrencyLimit:
     cpuMillicores: 0
     gpuCount: 0
+  # Prepaid credit gate. In "http" mode the scheduler asks the billing
+  # service (POST {workspace_id} to endpoint) before running a container and
+  # periodically stops containers of workspaces that have run out of credit.
+  # "noop" allows everything (self-hosted default).
+  creditGate:
+    mode: noop
+    endpoint: ""
+    authToken: ""
+    timeout: 10s
+    cacheTTL: 30s
+    staleTTL: 10m
+    failOpen: true
+    enforceInterval: 1m
 fileService:
   enabled: true
   endpointUrl: http://juicefs-s3-gateway.beta9.svc.cluster.local:9900
@@ -117,6 +130,17 @@ imageService:
   archiveNanosecondsPerByte: 120
   # Default to clip v2. Set to 1 to force legacy image format. NOTE: This only applies to new images.
   clipVersion: 2
+  # Publish a build's delta as layers packed from the working container (no
+  # buildah commit/push/re-index). Unsupported Dockerfiles fall back to bud.
+  layeredBuilds: true
+  # apt settings for RUN steps of a build (bind-mounted, not baked into the
+  # image). Set mirror to a nearby Ubuntu mirror, e.g.
+  # http://mirrors.edge.kernel.org/ubuntu, when archive.ubuntu.com is slow.
+  buildApt:
+    mirror: ""
+    proxy: ""
+    timeoutS: 20
+    retries: 3
   registryStore: local
   registryCredentialProvider: docker
   buildRegistry: registry.localhost:5000
@@ -293,6 +317,12 @@ worker:
   # non-standard k8s job spec
   imagePVCName: beta9-images
   jobResourcesEnforced: false
+  # Extra CPU/memory for the worker process itself (FUSE image/volume servers,
+  # runtime, log shipping), added to the pod on top of the container capacity
+  # the scheduler hands out. Only applies when jobResourcesEnforced is true.
+  jobResourceOverhead:
+    cpu: ''
+    memory: ''
   containerResourceLimits:
     cpuEnforced: true
     cpuAffinityEnforced: false
@@ -302,6 +332,12 @@ worker:
   terminationGracePeriod: 30
   cleanupWorkerInterval: 1m
   cleanupPendingWorkerAgeLimit: 10m
+  # An idle worker holding a pool's minimum free capacity (poolSizing.minFree*)
+  # never idles out on its own. Past this age it exits anyway and the sizer
+  # replaces it (the pool is cold for one worker boot, ~4s, once per period).
+  # Each worker adds up to 1/8 of this as id-derived jitter so two headroom
+  # workers in a pool do not leave together. 0 disables the bound.
+  headroomWorkerMaxAge: 6h
   cacheEnabled: true
   containerLogLinesPerHour: 6000
   criu:
@@ -350,8 +386,8 @@ cache:
       enabled: true
       sendfile: true
       maxRequestSizeBytes: 67108864 # 64MiB; independent of the gRPC message limit.
-      maxInflightBytes: 536870912 # Eight maximum-sized raw reads server-wide.
-      maxConcurrentRequests: 64 # Also bounds tiny and zero-length raw requests.
+      maxInflightBytes: 1073741824 # Sixteen maximum-sized raw reads server-wide (not RAM with sendfile).
+      maxConcurrentRequests: 256 # One packed 16-CPU worker can have this many read-ahead windows in flight.
     metadata:
       mode: default
       redisInsecureSkipVerify: false

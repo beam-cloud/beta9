@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net"
 	"os"
@@ -410,12 +411,17 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 
 	phases.Mark("exit_code")
 
+	// Only the CPU set hand-back shares state with reserveContainerInstance.
+	// The GPU and network managers synchronize themselves, and their teardown
+	// (a Thunder RPC, a netns deletion that waits on the kernel) must not hold
+	// up the request stream, which reserves under the same lock.
 	s.containerLock.Lock()
 	if instance, exists := s.containerInstances.Get(containerId); exists {
 		instance.CPUSet = ""
 		instance.RestoreCPUAffinityDeferred = false
 		s.containerInstances.Set(containerId, instance)
 	}
+	s.containerLock.Unlock()
 
 	// De-allocate GPU devices so they are available for new containers
 	if request != nil && request.RequiresGPU() {
@@ -430,8 +436,6 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 
 	// Clean up upload directory
 	os.RemoveAll(filepath.Join(types.WorkerContainerUploadsHostPath, containerId))
-
-	s.containerLock.Unlock()
 
 	s.markContainerStopping(containerId, types.ContainerStateTtlS)
 
@@ -682,11 +686,14 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		_, imageLoaded, err = s.loadContainerImage(startupCtx, request, outputLogger)
 		return err
 	})
-	if s.containerMountManager.RequiresWorkspaceStorageMount(request) {
-		startup.Go(func() error { return s.mountWorkspaceStorage(startupCtx, request) })
-	}
+	startup.Go(func() error { return s.prepareContainerMounts(startupCtx, request, outputLogger) })
 	if request.HasDurableDiskMount() {
-		startup.Go(func() error { return s.prepareDurableDiskMounts(startupCtx, request) })
+		startup.Go(func() error {
+			phaseStart := time.Now()
+			err := s.prepareDurableDiskMounts(startupCtx, request)
+			s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleDurableDiskPrepare, phaseStart, err == nil, nil)
+			return err
+		})
 	}
 	if err := startup.Wait(); err != nil {
 		return err
@@ -740,6 +747,22 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleReadBundleConfig, phaseStart, true, map[string]string{"derived": fmt.Sprintf("%t", initialBundleSpec == nil)})
 
 	startupPortBindings := startupPortBindingsForRequest(request, requestedPorts, bindPorts)
+
+	// Publishing the address map is a gateway round trip that needs only the
+	// reserved host ports. It runs from here through spec generation, network
+	// setup, and the runtime start, and is joined before RUNNING is published.
+	addressesRegistered := newAddressRegistration(func() error {
+		return s.registerContainerPorts(ctx, request, startupPortBindings)
+	})
+	defer func() {
+		if !portsHandedOff {
+			// A failure from here on is followed by the container's state being
+			// deleted, which also removes its address map; the publication has
+			// to land first so that deletion does not leave it behind.
+			addressesRegistered.waitForTeardown()
+		}
+	}()
+
 	opts := &ContainerOptions{
 		BundlePath:                  bundlePath,
 		HostBindPort:                bindPorts[0],
@@ -748,23 +771,8 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		InitialSpec:                 initialBundleSpec,
 		StartupStartedAt:            startupStartedAt,
 		CheckpointFilesystemRestore: filesystemRestore,
+		AddressesRegistered:         addressesRegistered,
 	}
-
-	phaseStart = time.Now()
-	err = s.containerMountManager.SetupContainerMounts(ctx, request, outputLogger)
-	metrics.RecordWorkerStartupPhase("setup_mounts", time.Since(phaseStart), request, map[string]string{
-		"mount_count": fmt.Sprintf("%d", len(request.Mounts)),
-		"success":     fmt.Sprintf("%t", err == nil),
-	})
-	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSetupMounts, phaseStart, err == nil, map[string]string{"mount_count": fmt.Sprintf("%d", len(request.Mounts))})
-	if err != nil {
-		outputLogger.Info(fmt.Sprintf("failed to setup container mounts: %v", err))
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	var mountSetup errgroup.Group
-	mountSetup.Go(func() error { return s.containerMountManager.ensureBindMountSourceDirs(ctx, request.Mounts) })
 
 	// Generate dynamic runc spec for this container
 	phaseStart = time.Now()
@@ -775,10 +783,6 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		return err
 	}
 	log.Info().Str("container_id", containerId).Msg("successfully created spec from request")
-
-	if err := mountSetup.Wait(); err != nil {
-		return err
-	}
 
 	select {
 	case <-ctx.Done():
@@ -828,6 +832,38 @@ func validateCheckpointRestoreRuntime(request *types.ContainerRequest, rt runtim
 	)
 }
 
+// prepareContainerMounts readies every bind-mount source before the spec is
+// generated: workspace storage first (the other sources live on it), then the
+// per-mount setup, then the source directories, which sit on network storage
+// and cost a round trip each. It runs alongside the image load and disk
+// attach instead of after them. Durable disks create their own mountpoints.
+func (s *Worker) prepareContainerMounts(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger) error {
+	if s.containerMountManager.RequiresWorkspaceStorageMount(request) {
+		if err := s.mountWorkspaceStorage(ctx, request); err != nil {
+			return err
+		}
+	}
+
+	phaseStart := time.Now()
+	err := s.containerMountManager.SetupContainerMounts(ctx, request, outputLogger)
+	metrics.RecordWorkerStartupPhase("setup_mounts", time.Since(phaseStart), request, map[string]string{
+		"mount_count": fmt.Sprintf("%d", len(request.Mounts)),
+		"success":     fmt.Sprintf("%t", err == nil),
+	})
+	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSetupMounts, phaseStart, err == nil, map[string]string{"mount_count": fmt.Sprintf("%d", len(request.Mounts))})
+	if err != nil {
+		outputLogger.Info(fmt.Sprintf("failed to setup container mounts: %v", err))
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	phaseStart = time.Now()
+	err = s.containerMountManager.ensureBindMountSourceDirs(ctx, request.Mounts)
+	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleBindMountDirs, phaseStart, err == nil, nil)
+	return err
+}
+
 func (s *Worker) mountWorkspaceStorage(ctx context.Context, request *types.ContainerRequest) error {
 	log.Info().Str("container_id", request.ContainerId).Msg("mounting workspace storage")
 	startedAt := time.Now()
@@ -850,7 +886,7 @@ func (s *Worker) mountWorkspaceStorage(ctx context.Context, request *types.Conta
 }
 
 func (s *Worker) setWorkerAddress(ctx context.Context, request *types.ContainerRequest) error {
-	hostname := fmt.Sprintf("%s:%d", s.podAddr, s.containerServer.port)
+	hostname := joinHostPort(s.podAddr, s.containerServer.port)
 	startedAt := time.Now()
 	_, err := handleGRPCResponse(s.containerRepoClient.SetWorkerAddress(ctx, &pb.SetWorkerAddressRequest{
 		ContainerId: request.ContainerId,
@@ -905,12 +941,7 @@ func requiresPostBuildImageMaterialization(request *types.ContainerRequest, clip
 
 func (s *Worker) pullLazyWithMetrics(ctx context.Context, request *types.ContainerRequest, phase string, outputLogger *slog.Logger) (time.Duration, error) {
 	phaseStart := time.Now()
-	// A deployment must not eagerly inflate every OCI layer before its runtime
-	// can start. Large model images can spend tens of minutes on one compressed
-	// layer even when the entrypoint only needs a small working set. Checkpoint
-	// creation still requires a fully materialized root filesystem; ordinary
-	// deployments use CLIP's lazy, content-addressed read path.
-	elapsed, err := s.imageClient.PullLazy(ctx, request, outputLogger, request.CheckpointEnabled)
+	elapsed, err := s.imageClient.PullLazy(ctx, request)
 	metrics.RecordWorkerStartupPhase(phase, time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 	spanID := types.ContainerLifecycleImageLoad
 	if phase != "pull_lazy" && phase != "pull_lazy_after_build" {
@@ -988,43 +1019,6 @@ func startupPortBindingsForRequest(request *types.ContainerRequest, requestedPor
 	}
 
 	return bindings
-}
-
-func (s *Worker) publishContainerAddresses(ctx context.Context, request *types.ContainerRequest, bindings []PortBinding) error {
-	if s.agentWorker() {
-		return nil
-	}
-
-	containerId := request.ContainerId
-	addressMap := make(map[int32]string, len(bindings))
-	for _, binding := range bindings {
-		addressMap[int32(binding.ContainerPort)] = joinHostPort(s.podAddr, binding.HostPort)
-	}
-	s.cacheContainerAddressMap(containerId, addressMap)
-	var primaryPort int32
-	if len(bindings) > 0 {
-		primaryPort = int32(bindings[0].ContainerPort)
-	}
-
-	phaseStart := time.Now()
-	_, err := handleGRPCResponse(s.containerRepoClient.SetContainerAddressMap(context.Background(), &pb.SetContainerAddressMapRequest{
-		ContainerId: containerId,
-		AddressMap:  addressMap,
-		PrimaryPort: primaryPort,
-	}))
-	metrics.RecordWorkerStartupPhase("set_container_address_map", time.Since(phaseStart), request, map[string]string{"port_count": fmt.Sprintf("%d", len(addressMap))})
-	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleSetAddressMap, phaseStart, err == nil, map[string]string{"port_count": fmt.Sprintf("%d", len(addressMap))})
-	if err != nil {
-		return err
-	}
-
-	log.Info().
-		Str("container_id", containerId).
-		Str("stub_type", request.Stub.Type.Kind()).
-		Int("port_count", len(addressMap)).
-		Interface("address_map", addressMap).
-		Msg("set container address map")
-	return nil
 }
 
 func (s *Worker) buildOrPullBaseImage(ctx context.Context, request *types.ContainerRequest, containerId string, outputLogger *slog.Logger) error {
@@ -1281,7 +1275,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 			return nil, err
 		}
 
-		containerHostname := fmt.Sprintf("%s:%d", s.podAddr, options.HostBindPort)
+		containerHostname := joinHostPort(s.podAddr, options.HostBindPort)
 		containerHostnamePath := filepath.Join(checkpointSignalDir(request.ContainerId), checkpointContainerHostnameFileName)
 		err = os.WriteFile(containerHostnamePath, []byte(containerHostname), 0644)
 		if err != nil {
@@ -1479,6 +1473,44 @@ func (s *Worker) enableVolumeCaching(request *types.ContainerRequest, volumeCach
 	}
 }
 
+// sdkMountSource is the host path the base OCI spec binds into every Python
+// site-packages location an image might have.
+const sdkMountSource = "/workspace/sdk"
+
+// pruneUnreachableSDKMounts drops the SDK binds whose site-packages directory
+// is absent from the image. The base spec lists one for every Python layout,
+// so most are dead for any given image, and each one still costs runc a
+// mkdir through the overlay and a mount under the kernel's global mount
+// lock, which serializes concurrent starts. imageRoot is the immutable image
+// filesystem, not the writable overlay, so a checkpoint and its restore see
+// the same mount set whatever the container wrote in between.
+func pruneUnreachableSDKMounts(mounts []specs.Mount, imageRoot string) []specs.Mount {
+	return pruneUnreachableSDKMountsWithStat(mounts, imageRoot, os.Stat)
+}
+
+func pruneUnreachableSDKMountsWithStat(mounts []specs.Mount, imageRoot string, stat func(string) (os.FileInfo, error)) []specs.Mount {
+	kept := mounts[:0:0]
+	for _, mount := range mounts {
+		if mount.Source == sdkMountSource {
+			sitePackages := filepath.Join(imageRoot, filepath.Dir(mount.Destination))
+			_, err := stat(sitePackages)
+			switch {
+			case err == nil:
+			case errors.Is(err, fs.ErrNotExist), errors.Is(err, syscall.ENOTDIR):
+				// Definitely absent (or a path component is a file).
+				continue
+			default:
+				// Only a definite absence justifies dropping a mount the SDK
+				// depends on. Anything else (EACCES, EIO from a lazily loaded
+				// image) keeps it and lets the runtime report the real problem.
+				log.Warn().Err(err).Str("path", sitePackages).Msg("could not check SDK mount destination; keeping mount")
+			}
+		}
+		kept = append(kept, mount)
+	}
+	return kept
+}
+
 func (s *Worker) newSpecTemplate() (*specs.Spec, error) {
 	if s == nil || s.runtime == nil {
 		return nil, errors.New("container runtime is unavailable")
@@ -1578,6 +1610,9 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	defer func() {
 		s.finalizeContainer(containerId, request, exitCode, exitReported)
 	}()
+	// Runs before finalizeContainer: a start that fails before the runtime
+	// joined the publication must still not delete state underneath it.
+	defer opts.AddressesRegistered.waitForTeardown()
 
 	// Create overlayfs for container
 	overlay := s.createOverlay(request, opts.BundlePath)
@@ -1636,49 +1671,56 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	spec.Root.Readonly = false
 	spec.Root.Path = containerInstance.Overlay.TopLayerPath()
+	spec.Mounts = pruneUnreachableSDKMounts(spec.Mounts, containerInstance.Overlay.RootPath())
 
-	// Setup container network namespace / devices
-	phaseStart = time.Now()
-	err = s.containerNetworkManager.Setup(containerId, spec, request)
-	metrics.RecordWorkerStartupPhase("network_setup", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
-	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleNetworkSetup, phaseStart, err == nil, nil)
-	if err != nil {
-		log.Error().Str("container_id", containerId).Msgf("failed to setup container network: %v", err)
-		return
-	}
-
+	// Network setup (a gateway round trip) and GPU assignment (device
+	// discovery) are independent until the spec is amended, so they overlap.
 	// Virtualized GPU requests register with Thunder but never receive physical
 	// device mounts, CDI devices, or NVIDIA_VISIBLE_DEVICES pinning.
-	if request.RequiresGPU() && (s.gpuVirtualizedForRequest(request) || s.runtime.Capabilities().GPU) {
-		gpuManager := s.gpuManagerForRequest(request)
-
-		phaseStart = time.Now()
-		assignedDevices, err := gpuManager.AssignGPUDevices(ctx, request)
-		metrics.RecordWorkerStartupPhase("gpu_assignment", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
-		s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleGPUAssignment, phaseStart, err == nil, map[string]string{"gpu_count": fmt.Sprintf("%d", request.GpuCount)})
+	assignGPU := request.RequiresGPU() && (s.gpuVirtualizedForRequest(request) || s.runtime.Capabilities().GPU)
+	var gpuManager GPUManager
+	var assignedDevices []int
+	var deviceSetup errgroup.Group
+	deviceSetup.Go(func() error {
+		phaseStart := time.Now()
+		err := s.containerNetworkManager.Setup(containerId, spec, request)
+		metrics.RecordWorkerStartupPhase("network_setup", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
+		s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleNetworkSetup, phaseStart, err == nil, nil)
 		if err != nil {
-			log.Error().Str("container_id", request.ContainerId).Msgf("failed to assign GPUs: %v", err)
-			return
+			log.Error().Str("container_id", containerId).Msgf("failed to setup container network: %v", err)
 		}
-
-		if request.RequiresGPU() && !s.gpuVirtualizedForRequest(request) {
-			// Only use CDI if runtime supports it
-			if s.runtime.Capabilities().CDI {
-				cdiCache := cdi.GetDefaultCache()
-				devicesToInject := gpuManager.CDIDevices(assignedDevices)
-
-				unresolvable, err := cdiCache.InjectDevices(spec, devicesToInject...)
-				if err != nil {
-					log.Error().Str("container_id", request.ContainerId).Msgf("failed to inject devices: %v", err)
-					return
-				}
-				if len(unresolvable) > 0 {
-					log.Error().Str("container_id", request.ContainerId).Msgf("unresolvable devices: %v", unresolvable)
-					return
-				}
+		return err
+	})
+	if assignGPU {
+		gpuManager = s.gpuManagerForRequest(request)
+		deviceSetup.Go(func() error {
+			phaseStart := time.Now()
+			var err error
+			assignedDevices, err = gpuManager.AssignGPUDevices(ctx, request)
+			metrics.RecordWorkerStartupPhase("gpu_assignment", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
+			s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleGPUAssignment, phaseStart, err == nil, map[string]string{"gpu_count": fmt.Sprintf("%d", request.GpuCount)})
+			if err != nil {
+				log.Error().Str("container_id", containerId).Msgf("failed to assign GPUs: %v", err)
+			}
+			return err
+		})
+	}
+	if deviceSetup.Wait() != nil {
+		return
+	}
+	if assignGPU {
+		// Only use CDI if runtime supports it
+		if !s.gpuVirtualizedForRequest(request) && s.runtime.Capabilities().CDI {
+			unresolvable, err := cdi.GetDefaultCache().InjectDevices(spec, gpuManager.CDIDevices(assignedDevices)...)
+			if err != nil {
+				log.Error().Str("container_id", containerId).Msgf("failed to inject devices: %v", err)
+				return
+			}
+			if len(unresolvable) > 0 {
+				log.Error().Str("container_id", containerId).Msgf("unresolvable devices: %v", unresolvable)
+				return
 			}
 		}
-
 		spec.Process.Env = gpuManager.InjectAssignedEnvVars(spec.Process.Env, assignedDevices)
 	}
 
@@ -1699,11 +1741,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		"success":    "true",
 	})
 	s.recordStartupLifecycle(ctx, request, types.ContainerLifecycleNetworkExpose, phaseStart, true, map[string]string{"port_count": fmt.Sprintf("%d", len(opts.StartupPortBindings))})
-
-	if err := s.registerContainerPorts(ctx, request, opts.StartupPortBindings); err != nil {
-		log.Error().Str("container_id", containerId).Err(err).Msg("failed to register container network addresses")
-		return
-	}
 
 	// Modify sandbox entry point to point to process manager binary
 	if request.Stub.Type.Kind() == types.StubTypeSandbox {
@@ -1848,7 +1885,9 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			s.containerInstances.Set(containerId, instance)
 
 			if !processManagerReady {
-				log.Error().Str("container_id", containerId).Msg("failed to initialize process manager - sandbox may not be functional")
+				if ctx.Err() == nil {
+					log.Error().Str("container_id", containerId).Msg("failed to initialize process manager - sandbox may not be functional")
+				}
 				return
 			}
 
@@ -1875,7 +1914,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		s.setupOOMWatcher(ctx, containerId, pid, spec, request, outputLogger, &isOOMKilled)
 	}()
 
-	exitCode, _ = s.runContainer(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan, opts.StartupStartedAt, opts.StartupPortBindings, opts.CheckpointFilesystemRestore)
+	exitCode, _ = s.runContainer(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan, opts.StartupStartedAt, opts.AddressesRegistered, opts.CheckpointFilesystemRestore)
 
 	stopReason := types.StopContainerReasonUnknown
 	containerInstance, exists = s.containerInstances.Get(containerId)
@@ -1952,7 +1991,7 @@ func normalizeContainerExitCode(exitCode int, stopReason types.StopContainerReas
 		return int(types.ContainerExitCodeTtl)
 	case types.StopContainerReasonUser:
 		return int(types.ContainerExitCodeUser)
-	case types.StopContainerReasonAdmin:
+	case types.StopContainerReasonAdmin, types.StopContainerReasonInsufficientCredits:
 		return int(types.ContainerExitCodeAdmin)
 	}
 
@@ -1992,7 +2031,10 @@ func eventStopReason(stopReason types.StopContainerReason) string {
 	return string(stopReason)
 }
 
-func (s *Worker) runContainer(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, outputWriter *common.OutputWriter, startedChan chan int, checkpointPIDChan chan int, startupStartedAt time.Time, startupPortBindings []PortBinding, filesystemRestore *checkpointFilesystemRestore) (int, error) {
+// runContainer drives the runtime from start to exit. addressesRegistered
+// delivers the result of the concurrent address-map publication; RUNNING is
+// only published once the container is reachable.
+func (s *Worker) runContainer(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, outputWriter *common.OutputWriter, startedChan chan int, checkpointPIDChan chan int, startupStartedAt time.Time, addressesRegistered *addressRegistration, filesystemRestore *checkpointFilesystemRestore) (int, error) {
 	phaseStart := time.Now()
 	releaseStartupSlot := func() {}
 	if s.containerStartSem != nil {
@@ -2085,18 +2127,29 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 	var runtimeStartedPID atomic.Int64
 	runtimeStartedPID.Store(-1)
 
+	// The PID goes to monitoring and the sandbox readiness probe first, so the
+	// process manager comes up while the address map is joined and RUNNING is
+	// published; a failed registration stops the container and cancels both.
+	var joinAddresses sync.Once
+	var addressesErr error
 	publishRuntimeStarted := func(pid int) {
-		if err := s.publishContainerAddresses(ctx, request, startupPortBindings); err != nil {
-			log.Error().Err(err).Str("container_id", request.ContainerId).Msg("failed to publish container address")
-			s.handleObservedContainerStop(request.ContainerId, types.EventSourceWorkerRuntime, false)
-			return
-		}
 		runtimeStartedPublished.Do(func() {
 			select {
 			case startedChan <- pid:
 			case <-ctx.Done():
 			}
 		})
+		joinAddresses.Do(func() {
+			addressesErr = addressesRegistered.wait(ctx)
+		})
+		if errors.Is(addressesErr, context.Canceled) {
+			return
+		}
+		if addressesErr != nil {
+			log.Error().Err(addressesErr).Str("container_id", request.ContainerId).Msg("failed to register container network addresses")
+			s.handleObservedContainerStop(request.ContainerId, types.EventSourceWorkerRuntime, false)
+			return
+		}
 		s.markContainerRunning(ctx, request, startupStartedAt)
 	}
 
@@ -2399,31 +2452,25 @@ func (s *Worker) applyDeferredCheckpointRestoreCPUAffinity(ctx context.Context, 
 	return nil
 }
 
+// markContainerRunning publishes RUNNING in one round trip. The gateway refuses
+// to move a STOPPING container forward and reports the persisted status, so a
+// stop that raced the runtime start is detected from the same response.
 func (s *Worker) markContainerRunning(ctx context.Context, request *types.ContainerRequest, startupStartedAt time.Time) {
 	containerId := request.ContainerId
-	resp, err := s.getContainerStateForRunning(ctx, containerId)
+	phaseStart := time.Now()
+	status, err := s.updateContainerStatusRunning(ctx, containerId)
+	metrics.RecordWorkerStartupPhase("set_running_status", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 	if err != nil {
-		notFoundErr := &types.ErrContainerStateNotFound{}
-		if notFoundErr.From(err) {
+		if (&types.ErrContainerStateNotFound{}).From(err) {
 			log.Warn().Str("container_id", containerId).Msg("container state not found, returning")
 			return
 		}
-
-		log.Error().Str("container_id", containerId).Err(err).Msg("failed to get container state before marking running")
+		log.Error().Str("container_id", containerId).Err(err).Msg("failed to update container status to running")
 		return
 	}
-
-	if resp.State.Status == string(types.ContainerStatusStopping) {
+	if status == types.ContainerStatusStopping {
 		log.Info().Str("container_id", containerId).Msg("container started after stop request, sending stop signal")
 		s.handleObservedStoppingContainer(containerId, types.EventSourceWorkerStatusHeartbeat)
-		return
-	}
-
-	phaseStart := time.Now()
-	err = s.updateContainerStatusRunning(ctx, containerId)
-	metrics.RecordWorkerStartupPhase("set_running_status", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
-	if err != nil {
-		log.Error().Str("container_id", containerId).Err(err).Msg("failed to update container status to running")
 		return
 	}
 	if !startupStartedAt.IsZero() {
@@ -2435,40 +2482,29 @@ func (s *Worker) markContainerRunning(ctx context.Context, request *types.Contai
 	}
 }
 
-func (s *Worker) getContainerStateForRunning(ctx context.Context, containerId string) (*pb.GetContainerStateResponse, error) {
+// updateContainerStatusRunning requests RUNNING and returns the status the
+// gateway persisted. Transient failures are retried; a missing state is
+// authoritative and returned immediately.
+func (s *Worker) updateContainerStatusRunning(ctx context.Context, containerId string) (types.ContainerStatus, error) {
 	retryCtx, cancel := context.WithTimeout(ctx, markRunningRetryTimeout)
 	defer cancel()
 
 	var lastErr error
 	for {
-		resp, err := handleGRPCResponse(s.containerRepoClient.GetContainerState(retryCtx, &pb.GetContainerStateRequest{ContainerId: containerId}))
-		if err == nil {
-			return resp, nil
-		}
-		lastErr = err
-		if err := waitForMarkRunningRetry(retryCtx, lastErr); err != nil {
-			return resp, err
-		}
-	}
-}
-
-func (s *Worker) updateContainerStatusRunning(ctx context.Context, containerId string) error {
-	retryCtx, cancel := context.WithTimeout(ctx, markRunningRetryTimeout)
-	defer cancel()
-
-	var lastErr error
-	for {
-		_, err := handleGRPCResponse(s.containerRepoClient.UpdateContainerStatus(retryCtx, &pb.UpdateContainerStatusRequest{
+		resp, err := handleGRPCResponse(s.containerRepoClient.UpdateContainerStatus(retryCtx, &pb.UpdateContainerStatusRequest{
 			ContainerId:   containerId,
 			Status:        string(types.ContainerStatusRunning),
 			ExpirySeconds: int64(types.ContainerStateTtlS),
 		}))
 		if err == nil {
-			return nil
+			return types.ContainerStatus(resp.Status), nil
+		}
+		if (&types.ErrContainerStateNotFound{}).From(err) {
+			return "", err
 		}
 		lastErr = err
 		if err := waitForMarkRunningRetry(retryCtx, lastErr); err != nil {
-			return err
+			return "", err
 		}
 	}
 }

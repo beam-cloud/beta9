@@ -30,6 +30,108 @@ import (
 	"k8s.io/utils/cpuset"
 )
 
+func TestPruneUnreachableSDKMountsKeepsOnlyPresentSitePackages(t *testing.T) {
+	rootfs := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(rootfs, "usr/local/lib/python3.12/site-packages"), 0o755))
+
+	sdk := func(dest string) specs.Mount {
+		return specs.Mount{Destination: dest, Type: "bind", Source: sdkMountSource, Options: []string{"ro", "rbind"}}
+	}
+	other := specs.Mount{Destination: "/etc/hosts", Type: "bind", Source: "/tmp/hosts"}
+	mounts := []specs.Mount{
+		sdk("/usr/local/lib/python3.8/site-packages/beta9"),
+		sdk("/usr/local/lib/python3.12/site-packages/beta9"),
+		sdk("/usr/local/lib/python3.12/site-packages/beam"),
+		sdk("/opt/conda/lib/python3.12/site-packages/beta9"),
+		other,
+	}
+
+	kept := pruneUnreachableSDKMounts(mounts, rootfs)
+
+	require.Equal(t, []specs.Mount{
+		sdk("/usr/local/lib/python3.12/site-packages/beta9"),
+		sdk("/usr/local/lib/python3.12/site-packages/beam"),
+		other,
+	}, kept)
+}
+
+// Only a definite absence drops an SDK mount. A stat that fails for any other
+// reason (permissions, an I/O error from a lazily loaded image) keeps it, so a
+// transient read failure cannot silently ship a container without its SDK.
+func TestPruneUnreachableSDKMountsKeepsMountsOnStatErrors(t *testing.T) {
+	sdk := func(dest string) specs.Mount {
+		return specs.Mount{Destination: dest, Type: "bind", Source: sdkMountSource}
+	}
+	mounts := []specs.Mount{
+		sdk("/missing/site-packages/beta9"),
+		sdk("/notdir/site-packages/beta9"),
+		sdk("/denied/site-packages/beta9"),
+		sdk("/flaky/site-packages/beta9"),
+		sdk("/present/site-packages/beta9"),
+	}
+	stat := func(path string) (os.FileInfo, error) {
+		switch {
+		case strings.HasPrefix(path, "/root/missing/"):
+			return nil, &os.PathError{Op: "stat", Path: path, Err: syscall.ENOENT}
+		case strings.HasPrefix(path, "/root/notdir/"):
+			return nil, &os.PathError{Op: "stat", Path: path, Err: syscall.ENOTDIR}
+		case strings.HasPrefix(path, "/root/denied/"):
+			return nil, &os.PathError{Op: "stat", Path: path, Err: syscall.EACCES}
+		case strings.HasPrefix(path, "/root/flaky/"):
+			return nil, &os.PathError{Op: "stat", Path: path, Err: syscall.EIO}
+		}
+		return nil, nil
+	}
+
+	kept := pruneUnreachableSDKMountsWithStat(mounts, "/root", stat)
+
+	require.Equal(t, []specs.Mount{
+		sdk("/denied/site-packages/beta9"),
+		sdk("/flaky/site-packages/beta9"),
+		sdk("/present/site-packages/beta9"),
+	}, kept)
+}
+
+// The publication result is observable by every party that needs it, as often
+// as needed: the runtime start joins it to publish RUNNING, teardown joins it
+// so state deletion cannot race a publication still in flight.
+func TestAddressRegistrationJoinsFromEveryWaiter(t *testing.T) {
+	release := make(chan struct{})
+	published := errors.New("publish failed")
+	registration := newAddressRegistration(func() error {
+		<-release
+		return published
+	})
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, registration.wait(cancelled), context.Canceled)
+
+	teardownDone := make(chan struct{})
+	go func() {
+		registration.waitForTeardown()
+		close(teardownDone)
+	}()
+	select {
+	case <-teardownDone:
+		t.Fatal("teardown joined before the publication finished")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case <-teardownDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("teardown did not observe the finished publication")
+	}
+	require.ErrorIs(t, registration.wait(context.Background()), published)
+	require.ErrorIs(t, registration.wait(context.Background()), published)
+
+	var none *addressRegistration
+	require.NoError(t, none.wait(context.Background()))
+	none.waitForTeardown()
+}
+
 func TestWaitForRuntimeStartedDrainsQueuedPIDWhenRuntimeDone(t *testing.T) {
 	for i := 0; i < 1000; i++ {
 		runtimeStarted := make(chan int, 1)
@@ -304,6 +406,11 @@ func TestApplyRuntimeEnvironmentOverridesLeavesCheckpointEnvWithoutCheckpoints(t
 	require.Equal(t, "0", envMap["TORCHINDUCTOR_QUIESCE_ASYNC_COMPILE_POOL"])
 }
 
+// registeredAddresses stands in for a completed address-map publication.
+func registeredAddresses() *addressRegistration {
+	return newAddressRegistration(func() error { return nil })
+}
+
 func TestRegisterContainerPortsUsesNetworkManagerAddresses(t *testing.T) {
 	containerID := "container-route"
 	repoClient := &fakeContainerRepoClient{}
@@ -389,50 +496,6 @@ func TestRegisterContainerPortsKeepsLocalAddressBehavior(t *testing.T) {
 	require.True(t, exists)
 	require.Equal(t, "10.0.0.2:30001", instance.ContainerAddressMap[8001])
 	require.Equal(t, "10.0.0.2:30002", instance.ContainerAddressMap[2222])
-}
-
-func TestPublishContainerAddressesFormatsBracketedIPv6PodAddress(t *testing.T) {
-	containerID := "container-ipv6"
-	repoClient := &fakeContainerRepoClient{}
-	worker := &Worker{
-		containerRepoClient: repoClient,
-		containerInstances:  common.NewSafeMap[*ContainerInstance](),
-		podAddr:             "[2600:1f18:37a4:c02::7286]",
-	}
-	worker.containerInstances.Set(containerID, &ContainerInstance{})
-
-	err := worker.publishContainerAddresses(context.Background(), &types.ContainerRequest{
-		ContainerId: containerID,
-	}, []PortBinding{
-		{HostPort: 30001, ContainerPort: 8001},
-		{HostPort: 30002, ContainerPort: 2222},
-	})
-	require.NoError(t, err)
-
-	require.NotNil(t, repoClient.lastSetAddressMap)
-	require.Equal(t, int32(8001), repoClient.lastSetAddressMap.PrimaryPort)
-	require.Equal(t, "[2600:1f18:37a4:c02::7286]:30001", repoClient.lastSetAddressMap.AddressMap[8001])
-	require.Equal(t, "[2600:1f18:37a4:c02::7286]:30002", repoClient.lastSetAddressMap.AddressMap[2222])
-}
-
-func TestPublishContainerAddressesSkipsAgentWorkers(t *testing.T) {
-	repoClient := &fakeContainerRepoClient{}
-	worker := &Worker{
-		persistent:          true,
-		machineID:           "machine-one",
-		routeTransport:      types.BackendRouteTransportTSNet,
-		containerRepoClient: repoClient,
-		podAddr:             "127.0.0.1",
-	}
-
-	err := worker.publishContainerAddresses(context.Background(), &types.ContainerRequest{
-		ContainerId: "container-agent",
-	}, []PortBinding{
-		{HostPort: 60081, ContainerPort: 8001},
-	})
-	require.NoError(t, err)
-	require.Zero(t, repoClient.setAddressCalls)
-	require.Zero(t, repoClient.setAddressMapCalls)
 }
 
 func TestSpecFromRequestRespectsResourceEnforcementConfig(t *testing.T) {
@@ -1906,7 +1969,7 @@ func TestRunContainerDoesNotCancelRuntimeRunWithWorkerContext(t *testing.T) {
 			make(chan int, 1),
 			make(chan int, 1),
 			time.Now(),
-			nil,
+			registeredAddresses(),
 			nil,
 		)
 		result <- err
@@ -1968,12 +2031,13 @@ func TestRunContainerRestorePublishesAddressFromStartedHandler(t *testing.T) {
 		config: types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
 			"default": {CRIUEnabled: true},
 		}}},
-		podAddr:             "10.42.0.10",
-		criuManager:         &startedCRIUManager{},
-		cacheManager:        &WorkerCacheManager{checkpointRoot: filepath.Join(tmpDir, "checkpoints")},
-		containerRepoClient: repoClient,
-		backendRepoClient:   backendRepoClient,
-		containerInstances:  common.NewSafeMap[*ContainerInstance](),
+		podAddr:                 "10.42.0.10",
+		criuManager:             &startedCRIUManager{},
+		cacheManager:            &WorkerCacheManager{checkpointRoot: filepath.Join(tmpDir, "checkpoints")},
+		containerRepoClient:     repoClient,
+		backendRepoClient:       backendRepoClient,
+		containerInstances:      common.NewSafeMap[*ContainerInstance](),
+		containerNetworkManager: &fakeContainerNetworkController{},
 	}
 	request := &types.ContainerRequest{
 		ContainerId: "container-1",
@@ -1989,6 +2053,9 @@ func TestRunContainerRestorePublishesAddressFromStartedHandler(t *testing.T) {
 		Runtime: rt,
 	})
 
+	addressesRegistered := newAddressRegistration(func() error {
+		return worker.registerContainerPorts(context.Background(), request, []PortBinding{{HostPort: 30001, ContainerPort: 8001}})
+	})
 	exitCode, err := worker.runContainer(
 		context.Background(),
 		request,
@@ -1997,7 +2064,7 @@ func TestRunContainerRestorePublishesAddressFromStartedHandler(t *testing.T) {
 		make(chan int, 1),
 		make(chan int, 1),
 		time.Now(),
-		[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
+		addressesRegistered,
 		completedCheckpointFilesystemRestore(),
 	)
 
@@ -2006,7 +2073,7 @@ func TestRunContainerRestorePublishesAddressFromStartedHandler(t *testing.T) {
 	require.Zero(t, repoClient.setAddressCalls)
 	require.Equal(t, 1, repoClient.setAddressMapCalls)
 	require.Equal(t, int32(8001), repoClient.lastSetAddressMap.PrimaryPort)
-	require.Equal(t, "10.42.0.10:30001", repoClient.lastSetAddressMap.AddressMap[8001])
+	require.Equal(t, "10.0.0.2:30001", repoClient.lastSetAddressMap.AddressMap[8001])
 	require.Equal(t, 1, repoClient.updateStatusCalls)
 	require.Equal(t, string(types.ContainerStatusRunning), repoClient.lastUpdateStatus.Status)
 	require.Eventually(t, func() bool {
@@ -2140,7 +2207,7 @@ func TestFilesystemCheckpointRestoreCopiesOverlayThenColdRuns(t *testing.T) {
 		make(chan int, 1),
 		make(chan int, 1),
 		time.Now(),
-		[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
+		registeredAddresses(),
 		nil,
 	)
 
@@ -2248,7 +2315,7 @@ func TestRunContainerRestoreWaitsForRestoredRuntimeExitAndTerminalCheckpoint(t *
 			make(chan int, 1),
 			make(chan int, 1),
 			time.Now(),
-			[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
+			registeredAddresses(),
 			completedCheckpointFilesystemRestore(),
 		)
 		done <- err
@@ -2474,7 +2541,7 @@ func TestRunContainerRestoreFailureCleansRuntimeBeforeFallback(t *testing.T) {
 		make(chan int, 1),
 		make(chan int, 1),
 		time.Now(),
-		[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
+		registeredAddresses(),
 		completedCheckpointFilesystemRestore(),
 	)
 
@@ -2598,7 +2665,7 @@ func TestRunContainerMigratesLegacyForcedRuncCheckpointBeforeRestore(t *testing.
 				make(chan int, 1),
 				make(chan int, 1),
 				time.Now(),
-				nil,
+				registeredAddresses(),
 				&checkpointFilesystemRestore{done: restoreDone},
 			)
 
@@ -2906,7 +2973,7 @@ func TestRunContainerSandboxRestoreFallbackPolicy(t *testing.T) {
 				make(chan int, 1),
 				make(chan int, 1),
 				time.Now(),
-				nil,
+				registeredAddresses(),
 				&checkpointFilesystemRestore{done: filesystemRestoreDone},
 			)
 
@@ -2992,7 +3059,7 @@ func TestRunContainerMaterializeFailureFallsBackWithoutRestore(t *testing.T) {
 		make(chan int, 1),
 		make(chan int, 1),
 		time.Now(),
-		[]PortBinding{{HostPort: 30001, ContainerPort: 8001}},
+		registeredAddresses(),
 		nil,
 	)
 

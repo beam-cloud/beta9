@@ -293,45 +293,7 @@ func (g *EventGroup) StreamContainerEvents(ctx echo.Context) error {
 }
 
 func (g *EventGroup) writeEventStream(ctx echo.Context, stream repository.EventStream) error {
-	response := ctx.Response()
-	response.Header().Set("Content-Type", "text/event-stream")
-	response.Header().Set("Cache-Control", "no-cache")
-	response.Header().Set("Connection", "keep-alive")
-	response.WriteHeader(http.StatusOK)
-
-	flusher, _ := response.Writer.(http.Flusher)
-	if _, err := fmt.Fprint(response.Writer, ": connected\n\n"); err != nil {
-		return nil
-	}
-	if flusher != nil {
-		flusher.Flush()
-	}
-
-	for stream.Next() {
-		record := stream.Record()
-		payload, err := json.Marshal(record)
-		if err != nil {
-			continue
-		}
-		eventName := record.Type
-		if eventName == "" {
-			eventName = "event"
-		}
-		if err := writeSSEEvent(response.Writer, eventName, strconv.FormatUint(record.SeqNum, 10), payload); err != nil {
-			return nil
-		}
-		if flusher != nil {
-			flusher.Flush()
-		}
-	}
-	if err := stream.Err(); err != nil && ctx.Request().Context().Err() == nil {
-		payload, _ := json.Marshal(map[string]string{"error": err.Error()})
-		_ = writeSSEEvent(response.Writer, "error", "", payload)
-		if flusher != nil {
-			flusher.Flush()
-		}
-	}
-	return nil
+	return streamSSE(ctx, stream, encodeEventRecord("event"))
 }
 
 func (g *EventGroup) StreamStubEvents(ctx echo.Context) error {
@@ -1078,26 +1040,6 @@ func eventQueryTypes(values []string) []string {
 	return eventTypes
 }
 
-func writeSSEEvent(w http.ResponseWriter, eventName string, id string, data []byte) error {
-	if id != "" {
-		if _, err := fmt.Fprintf(w, "id: %s\n", id); err != nil {
-			return err
-		}
-	}
-	if eventName != "" {
-		if _, err := fmt.Fprintf(w, "event: %s\n", eventName); err != nil {
-			return err
-		}
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if _, err := fmt.Fprintf(w, "data: %s\n", line); err != nil {
-			return err
-		}
-	}
-	_, err := fmt.Fprint(w, "\n")
-	return err
-}
-
 func isClusterAdmin(authInfo *auth.AuthInfo) bool {
 	return authInfo != nil && authInfo.Token != nil && authInfo.Token.TokenType == types.TokenTypeClusterAdmin
 }
@@ -1839,6 +1781,8 @@ func orderedContainerLifecycleIDs() []types.ContainerLifecycleID {
 		types.ContainerLifecyclePortAllocation,
 		types.ContainerLifecycleReadBundleConfig,
 		types.ContainerLifecycleSetupMounts,
+		types.ContainerLifecycleBindMountDirs,
+		types.ContainerLifecycleDurableDiskPrepare,
 		types.ContainerLifecycleSpecFromRequest,
 		types.ContainerLifecycleSetContainerAddr,
 		types.ContainerLifecycleSetAddressMap,
@@ -1858,7 +1802,6 @@ func orderedContainerLifecycleIDs() []types.ContainerLifecycleID {
 		types.ContainerLifecycleConfigWrite,
 		types.ContainerLifecycleStartQueueWait,
 		types.ContainerLifecycleRuntimeStartToPID,
-		types.ContainerLifecycleSandboxProcessManagerTCP,
 		types.ContainerLifecycleSandboxProcessManagerReady,
 		types.ContainerLifecycleSandboxApplyCPUQuota,
 		types.ContainerLifecycleServeReady,

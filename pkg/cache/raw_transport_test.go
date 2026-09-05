@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -240,4 +241,120 @@ func TestClientLocalPageFileViewsReturnsLocalFinalPartialPage(t *testing.T) {
 	require.Equal(t, 4, regions[1].Length)
 	require.Equal(t, 2, regions[2].Length)
 	require.Contains(t, regions[0].Path, localStore.serverConfig.DiskCacheDir)
+}
+
+// A full admission queue waits briefly for a slot instead of answering busy
+// straight away: the slot is usually free again within a few milliseconds.
+func TestRawReadAdmissionQueuesForASlot(t *testing.T) {
+	admission := newRawReadAdmission(ServerReadTransportConfig{MaxConcurrentRequests: 1, MaxInflightBytes: 1 << 20})
+
+	release, err := admission.acquire(1024)
+	require.NoError(t, err)
+
+	got := make(chan error, 1)
+	go func() {
+		release2, err := admission.acquire(1024)
+		if err == nil {
+			release2()
+		}
+		got <- err
+	}()
+
+	select {
+	case err := <-got:
+		t.Fatalf("second acquire returned before the slot was released: %v", err)
+	case <-time.After(30 * time.Millisecond):
+	}
+	release()
+	select {
+	case err := <-got:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("second acquire did not proceed after release")
+	}
+
+	// A slot that never frees still reports busy once the wait is up.
+	release, err = admission.acquire(1024)
+	require.NoError(t, err)
+	defer release()
+	started := time.Now()
+	_, err = admission.acquire(1024)
+	require.ErrorIs(t, err, ErrRawReadBusy)
+	require.GreaterOrEqual(t, time.Since(started), rawReadAdmissionWait)
+}
+
+// A host whose raw-read admission is saturated must still serve the read: the
+// client retries and then falls back to gRPC rather than failing the window,
+// which the lazily loaded image would answer with a whole-layer wait.
+func TestReadContentIntoSurvivesSaturatedRawReadAdmission(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := Config{
+		Server: ServerConfig{
+			DiskCacheDir:         t.TempDir(),
+			DiskCacheMaxUsagePct: 90,
+			PageSizeBytes:        4096,
+			ObjectTtlS:           300,
+			ReadTransport:        ServerReadTransportConfig{Enabled: true, MaxConcurrentRequests: 1, MaxInflightBytes: 1 << 20},
+		},
+		Client: ClientConfig{NTopHosts: 1, ReadTransport: ClientReadTransportConfig{Enabled: true, RequestSizeBytes: 1 << 20}},
+		Global: GlobalConfig{
+			GRPCMessageSizeBytes: 16 * 1024 * 1024,
+			GRPCDialTimeoutS:     1,
+		},
+	}
+	server, err := NewServerWithOptions(ctx, cfg, "test", WithServerMetadataStore(NewMockCacheMetadataStore()), WithServerHostID("busy-host"))
+	require.NoError(t, err)
+	addr, err := server.Serve("127.0.0.1:0", "")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, server.Close()) })
+
+	content := bytes.Repeat([]byte("window-bytes-"), 4096)
+	hash, _, err := server.cas.AddReader(ctx, bytes.NewReader(content))
+	require.NoError(t, err)
+
+	// Hold the only admission slot for longer than the client is willing to
+	// retry, so every raw attempt is answered busy.
+	release, err := server.rawReadLimits.acquire(1)
+	require.NoError(t, err)
+	defer release()
+
+	host := server.Host()
+	host.Addr = addr
+	host.PrivateAddr = addr
+	client := &Client{
+		ctx:                   ctx,
+		locality:              "test",
+		clientConfig:          cfg.Client,
+		globalConfig:          cfg.Global,
+		grpcClients:           make(map[string]proto.CacheClient),
+		grpcConns:             make(map[string]*grpc.ClientConn),
+		localServers:          make(map[string]*Server),
+		rawReadPools:          make(map[string]*rawReadConnPool),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
+		hasher:                &orderedTestHasher{hosts: []*Host{host}},
+		maxGetContentAttempts: 1,
+	}
+	require.NoError(t, client.addHost(host))
+	defer client.Cleanup()
+
+	dst := make([]byte, len(content))
+	n, trace, err := client.ReadContentIntoWithTrace(ctx, hash, 0, dst, ClientOptions{RoutingKey: hash})
+	require.NoError(t, err)
+	require.Equal(t, int64(len(content)), n)
+	require.Equal(t, content, dst)
+
+	raw, grpcHits := 0, 0
+	for _, attempt := range trace.Attempts {
+		switch attempt.Source {
+		case "raw":
+			raw++
+			require.Contains(t, attempt.Error, ErrRawReadBusy.Error())
+		case "grpc":
+			grpcHits++
+		}
+	}
+	require.Equal(t, rawReadBusyRetries+1, raw, "raw attempts: %+v", trace.Attempts)
+	require.Equal(t, 1, grpcHits)
 }

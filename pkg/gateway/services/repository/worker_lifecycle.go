@@ -31,30 +31,37 @@ func (s *WorkerRepositoryService) PushContainerLifecycleEvents(ctx context.Conte
 	}
 	states := make(map[string]*types.ContainerState)
 	events := make([]types.EventContainerLifecycleSchema, 0, len(req.Events))
+	// Per-event problems drop that event only: a poison event must not wedge the worker's relay by failing every retry of the batch it is in.
 	for _, data := range req.Events {
 		var event types.EventContainerLifecycleSchema
 		if err := json.Unmarshal(data, &event); err != nil || event.ContainerID == "" {
-			return &pb.PushContainerLifecycleEventsResponse{ErrorMsg: "invalid lifecycle event"}, nil
+			continue
+		}
+		if event.ID == "" || len(event.ID) > 128 {
+			continue
 		}
 
-		state := states[event.ContainerID]
-		if state == nil {
+		state, seen := states[event.ContainerID]
+		if !seen {
 			state, err = s.containerRepo.GetContainerState(event.ContainerID)
 			if err != nil {
-				return &pb.PushContainerLifecycleEventsResponse{ErrorMsg: err.Error()}, nil
+				if !(&types.ErrContainerStateNotFound{}).From(err) {
+					return &pb.PushContainerLifecycleEventsResponse{ErrorMsg: err.Error()}, nil
+				}
+				state = nil
 			}
-			if state.WorkerId != req.WorkerId {
-				return &pb.PushContainerLifecycleEventsResponse{ErrorMsg: errWorkerLifecycleUnauthorized.Error()}, nil
+			if state != nil && state.WorkerId != req.WorkerId {
+				state = nil
 			}
-			if authInfo.Token.TokenType == types.TokenTypeWorkerPrivate && (authInfo.Workspace == nil || authInfo.Workspace.ExternalId != state.WorkspaceId) {
-				return &pb.PushContainerLifecycleEventsResponse{ErrorMsg: errWorkerLifecycleUnauthorized.Error()}, nil
+			if state != nil && authInfo.Token.TokenType == types.TokenTypeWorkerPrivate && (authInfo.Workspace == nil || authInfo.Workspace.ExternalId != state.WorkspaceId) {
+				state = nil
 			}
 			states[event.ContainerID] = state
 		}
-
-		if event.ID == "" || len(event.ID) > 128 {
-			return &pb.PushContainerLifecycleEventsResponse{ErrorMsg: "invalid lifecycle event identity"}, nil
+		if state == nil {
+			continue
 		}
+
 		event.ContainerID = state.ContainerId
 		event.StubID = state.StubId
 		event.WorkspaceID = state.WorkspaceId

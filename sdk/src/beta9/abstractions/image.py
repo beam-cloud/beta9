@@ -1,5 +1,6 @@
 import json
 import os
+import shlex
 import sys
 from pathlib import Path
 from typing import Dict, List, Literal, NamedTuple, Optional, Sequence, Tuple, TypedDict, Union
@@ -765,6 +766,116 @@ class Image(BaseAbstraction):
         self.include_files_patterns.append(path)
 
         return self
+
+    def add_local_dir(
+        self, local_path: str, remote_path: Optional[str] = None, copy: bool = False
+    ) -> "Image":
+        """
+        Make a local directory available in the image.
+
+        The directory has to live inside the current working directory; it is
+        uploaded with the rest of your synced files. With `copy=False` (the
+        default) the files are mounted when a container starts, so changing
+        them does not rebuild the image; `remote_path` becomes a symlink to the
+        mount. With `copy=True` the files are copied into the image at build
+        time, so later build steps can use them and the image is self-contained.
+
+        Parameters:
+            local_path: Directory to add, relative to the working directory.
+            remote_path: Where it appears in the container. With `copy=False`
+                it defaults to `/mnt/code/<local_path>`, where synced files are
+                mounted; `copy=True` requires it.
+            copy: Copy the files into the image at build time instead of
+                mounting them at run time.
+
+        Returns:
+            Image: The Image object.
+        """
+        return self._add_local(local_path, remote_path, copy, is_dir=True)
+
+    def add_local_file(
+        self, local_path: str, remote_path: Optional[str] = None, copy: bool = False
+    ) -> "Image":
+        """
+        Make a single local file available in the image. See `add_local_dir`.
+        """
+        return self._add_local(local_path, remote_path, copy, is_dir=False)
+
+    def _add_local(
+        self, local_path: str, remote_path: Optional[str], copy: bool, is_dir: bool
+    ) -> "Image":
+        rel = Path(os.path.relpath(local_path, os.getcwd())).as_posix()
+        if rel == ".." or rel.startswith("../") or os.path.isabs(rel):
+            raise ValueError(
+                f"{local_path} is outside the working directory; local paths are synced relative to it."
+            )
+        if is_dir and not os.path.isdir(local_path):
+            raise ValueError(f"{local_path} is not a directory.")
+        if not is_dir and not os.path.isfile(local_path):
+            raise ValueError(f"{local_path} is not a file.")
+        if remote_path is None and copy:
+            raise ValueError("remote_path is required with copy=True.")
+
+        # The working directory itself is every synced file, as in add_local_path.
+        self.include_files_patterns.append(("*" if rel == "." else f"{rel}/**") if is_dir else rel)
+        mounted = f"/mnt/code/{rel}" if rel != "." else "/mnt/code"
+        if remote_path is None:
+            return self
+
+        remote = shlex.quote(remote_path)
+        parent = shlex.quote(os.path.dirname(remote_path.rstrip("/")) or "/")
+        src = shlex.quote(mounted)
+        if copy:
+            if is_dir:
+                # Only files are synced, so a directory with none to sync is
+                # absent from the mount; it still becomes an empty remote_path.
+                command = f"mkdir -p {remote} && if [ -d {src} ]; then cp -a {src}/. {remote}/; fi"
+            else:
+                command = f"mkdir -p {parent} && cp -a {src} {remote}"
+        else:
+            # ln -n keeps an existing symlink from being followed, but an
+            # existing (empty) directory would still be linked into; make
+            # remote_path itself the link, and let a non-empty one fail
+            # loudly rather than be replaced.
+            command = (
+                f"mkdir -p {parent} && "
+                f"if [ -d {remote} ] && [ ! -L {remote} ]; then rmdir {remote}; fi && "
+                f"ln -sfn {src} {remote}"
+            )
+        self.build_steps.append(BuildStep(command=command, type="shell"))
+        return self
+
+    def apt_install(self, *packages: str) -> "Image":
+        """
+        Install Debian packages with apt-get.
+
+        Parameters:
+            packages: Package names, as given to `apt-get install`.
+
+        Returns:
+            Image: The Image object.
+        """
+        if not packages:
+            return self
+        pkgs = " ".join(shlex.quote(p) for p in packages)
+        return self.add_commands(
+            [
+                "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "
+                f"{pkgs} && rm -rf /var/lib/apt/lists/*"
+            ]
+        )
+
+    def pip_install(self, *packages: str) -> "Image":
+        """Alias of `add_python_packages`, taking packages as arguments."""
+        return self.add_python_packages(list(packages))
+
+    def run_commands(self, *commands: str) -> "Image":
+        """Alias of `add_commands`, taking commands as arguments."""
+        return self.add_commands(list(commands))
+
+    def env(self, env_vars: Dict[str, str]) -> "Image":
+        """Alias of `with_envs`."""
+        return self.with_envs(env_vars)
 
     def add_python_version(self, python_version: Union[str, PythonVersion]) -> "Image":
         """

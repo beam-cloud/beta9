@@ -92,6 +92,26 @@ class CreateObjectRequest(betterproto.Message):
     size: int = betterproto.int64_field(3)
     overwrite: bool = betterproto.bool_field(4)
     supports_put_headers: bool = betterproto.bool_field(5)
+    multipart_part_size: int = betterproto.int64_field(6)
+    """
+    When > 0 the client can upload the object as concurrent parts of this
+     many bytes; the gateway answers with upload_parts instead of a single
+     presigned_url for objects larger than one part.
+    """
+
+    multipart_total_size: int = betterproto.int64_field(7)
+    """
+    Byte length of the archive the parts cover (size is the manifest's
+     uncompressed total, which is what the object record stores).
+    """
+
+
+@dataclass(eq=False, repr=False)
+class ObjectUploadPart(betterproto.Message):
+    number: int = betterproto.uint32_field(1)
+    start: int = betterproto.int64_field(2)
+    end: int = betterproto.int64_field(3)
+    url: str = betterproto.string_field(4)
 
 
 @dataclass(eq=False, repr=False)
@@ -103,6 +123,27 @@ class CreateObjectResponse(betterproto.Message):
     put_headers: Dict[str, str] = betterproto.map_field(
         5, betterproto.TYPE_STRING, betterproto.TYPE_STRING
     )
+    upload_id: str = betterproto.string_field(6)
+    upload_parts: List["ObjectUploadPart"] = betterproto.message_field(7)
+
+
+@dataclass(eq=False, repr=False)
+class ObjectUploadedPart(betterproto.Message):
+    number: int = betterproto.uint32_field(1)
+    etag: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class CompleteObjectUploadRequest(betterproto.Message):
+    object_id: str = betterproto.string_field(1)
+    upload_id: str = betterproto.string_field(2)
+    parts: List["ObjectUploadedPart"] = betterproto.message_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class CompleteObjectUploadResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    error_msg: str = betterproto.string_field(2)
 
 
 @dataclass(eq=False, repr=False)
@@ -118,6 +159,48 @@ class PutObjectResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     object_id: str = betterproto.string_field(2)
     error_msg: str = betterproto.string_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class CreateObjectDeltaRequest(betterproto.Message):
+    """
+    Incremental sync: instead of re-uploading a whole workspace archive when a
+     few files changed, the client uploads an archive holding only the added and
+     modified files (the delta) and the gateway merges it with the archive of a
+     previous object of the same workspace into the new object.
+    """
+
+    hash: str = betterproto.string_field(1)
+    size: int = betterproto.int64_field(2)
+    base_object_id: str = betterproto.string_field(3)
+    delta_size: int = betterproto.int64_field(4)
+
+
+@dataclass(eq=False, repr=False)
+class CreateObjectDeltaResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    object_id: str = betterproto.string_field(2)
+    presigned_url: str = betterproto.string_field(3)
+    put_headers: Dict[str, str] = betterproto.map_field(
+        4, betterproto.TYPE_STRING, betterproto.TYPE_STRING
+    )
+    error_msg: str = betterproto.string_field(5)
+    base_missing: bool = betterproto.bool_field(6)
+
+
+@dataclass(eq=False, repr=False)
+class CommitObjectDeltaRequest(betterproto.Message):
+    object_id: str = betterproto.string_field(1)
+    base_object_id: str = betterproto.string_field(2)
+    removed_paths: List[str] = betterproto.string_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class CommitObjectDeltaResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    object_id: str = betterproto.string_field(2)
+    size: int = betterproto.int64_field(3)
+    error_msg: str = betterproto.string_field(4)
 
 
 @dataclass(eq=False, repr=False)
@@ -1929,6 +2012,33 @@ class GatewayServiceStub(SyncServiceStub):
             .future(put_object_request_iterator)
             .result()
         )
+
+    def complete_object_upload(
+        self, complete_object_upload_request: "CompleteObjectUploadRequest"
+    ) -> "CompleteObjectUploadResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/CompleteObjectUpload",
+            CompleteObjectUploadRequest,
+            CompleteObjectUploadResponse,
+        )(complete_object_upload_request)
+
+    def create_object_delta(
+        self, create_object_delta_request: "CreateObjectDeltaRequest"
+    ) -> "CreateObjectDeltaResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/CreateObjectDelta",
+            CreateObjectDeltaRequest,
+            CreateObjectDeltaResponse,
+        )(create_object_delta_request)
+
+    def commit_object_delta(
+        self, commit_object_delta_request: "CommitObjectDeltaRequest"
+    ) -> "CommitObjectDeltaResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/CommitObjectDelta",
+            CommitObjectDeltaRequest,
+            CommitObjectDeltaResponse,
+        )(commit_object_delta_request)
 
     def checkpoint_container(
         self, checkpoint_container_request: "CheckpointContainerRequest"

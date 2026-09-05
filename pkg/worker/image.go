@@ -52,8 +52,17 @@ const (
 	imageArchiveLockRetryInterval            = 100 * time.Millisecond
 	maxSyncV1ArchiveDataRestoreBytes         = 512 * 1024 * 1024
 	imageLayerPrepareConcurrency             = 8
-	imageLayerProgressInterval               = 3 * time.Second
+	imageLayerPrepareGrace                   = 2 * time.Second
 	imageMountReadyTimeout                   = 5 * time.Second
+	// baseImageWarmTimeout bounds a background base image layer warm, which
+	// outlives the build that started it and so needs its own deadline.
+	baseImageWarmTimeout = 10 * time.Minute
+
+	// uv ships in the worker image and is mounted into v2 builds as uv-b9,
+	// the name the rendered Dockerfiles (and v1 build containers) use.
+	uvBinaryPath     = "/usr/local/bin/uv"
+	uvBuildMountPath = "/usr/local/bin/uv-b9"
+	uvBuildCachePath = "/root/.cache/uv"
 )
 
 var (
@@ -273,7 +282,7 @@ func ociStorageInfo(meta *clipCommon.ClipArchiveMetadata) (*clipCommon.OCIStorag
 	return nil, false
 }
 
-func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, preload bool) (time.Duration, error) {
+func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequest) (time.Duration, error) {
 	startTime := time.Now()
 
 	if elapsed, ok := c.mountedImageHit(startTime, request, "clip_mounted_fuse_hit"); ok {
@@ -301,15 +310,8 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	}
 
 	mountOptions := c.lazyMountOptions(ctx, request, archive)
-	if preload && archive.usesOCIStorage() {
-		mountOptions.Context = ctx
-		mountOptions.PrepareConcurrency = imageLayerPrepareConcurrency
-		mountOptions.PrepareProgress = imageLayerPrepareProgressLogger(outputLogger)
-		if err := clip.PrepareArchiveContent(mountOptions); err != nil {
-			return time.Since(startTime), err
-		}
-		mountOptions.PrepareConcurrency = 0
-		mountOptions.PrepareProgress = nil
+	if archive.usesOCIStorage() {
+		c.scheduleImageLayerPrepare(context.WithoutCancel(ctx), request, mountOptions)
 	}
 
 	mountStart := time.Now()
@@ -347,36 +349,72 @@ func (c *ImageClient) recordSuccessfulImageLoad(ctx context.Context, request *ty
 	c.contentReporter.touchRecentStub(cacheRequestWorkspaceID(request), cacheRequestStubID(request))
 }
 
-func imageLayerPrepareProgressLogger(outputLogger *slog.Logger) func(clipStorage.PrepareProgress) {
-	if outputLogger == nil {
-		return nil
+// scheduleImageLayerPrepare materializes, in the background, the layers this
+// node cannot already read locally. The mount serves reads page-wise from the
+// content cache, so nothing waits for whole layers: not the runtime, and not a
+// checkpoint, which captures only the overlay upper directory. A layer whose
+// pages are all in a store on this node is served as page-file descriptors, so
+// a second copy under the layer cache would only cost disk and the CPU to hash
+// it. The rest is copied in after a grace period so the container's first
+// reads are not competing with a multi-gigabyte write, and all at once so the
+// runtime does not discover layers one FUSE read at a time. The mount outlives
+// this request, and so does its content.
+func (c *ImageClient) scheduleImageLayerPrepare(ctx context.Context, request *types.ContainerRequest, options clip.MountOptions) {
+	ociInfo, ok := ociStorageInfo(options.Metadata)
+	if !ok {
+		return
 	}
+	localComplete := func(string) bool { return false }
+	if c.cacheClient != nil {
+		localComplete = c.cacheClient.LocalContentComplete
+	}
+	remaining := layersToPrepare(ociInfo, localComplete)
+	if len(remaining) == 0 {
+		return
+	}
+	if len(remaining) < len(ociInfo.Layers) {
+		filtered := *ociInfo
+		filtered.Layers = remaining
+		meta := *options.Metadata
+		meta.StorageInfo = &filtered
+		options.Metadata = &meta
+	}
+	time.AfterFunc(imageLayerPrepareGrace, func() {
+		c.prepareImageLayers(ctx, request, options)
+	})
+}
+
+// layersToPrepare returns the layers not fully present in a local page store.
+func layersToPrepare(info *clipCommon.OCIStorageInfo, localComplete func(hash string) bool) []string {
+	remaining := make([]string, 0, len(info.Layers))
+	for _, layer := range info.Layers {
+		if hash := info.DecompressedHashByLayer[layer]; hash != "" && localComplete(hash) {
+			continue
+		}
+		remaining = append(remaining, layer)
+	}
+	return remaining
+}
+
+// prepareImageLayers materializes every OCI layer of the archive into the
+// local layer cache, imageLayerPrepareConcurrency at a time. Layers already on
+// disk cost a stat; in-flight materializations are shared process-wide, so a
+// concurrent FUSE read of the same layer waits on this work instead of
+// repeating it.
+func (c *ImageClient) prepareImageLayers(ctx context.Context, request *types.ContainerRequest, options clip.MountOptions) error {
+	options.Context = ctx
+	options.PrepareConcurrency = imageLayerPrepareConcurrency
 
 	startedAt := time.Now()
-	var mu sync.Mutex
-	var lastLog time.Time
-	return func(progress clipStorage.PrepareProgress) {
-		mu.Lock()
-		defer mu.Unlock()
-
-		now := time.Now()
-		if progress.Completed == 0 {
-			outputLogger.Info(fmt.Sprintf("Preparing %d image layers (%d concurrent)...\n", progress.Total, imageLayerPrepareConcurrency))
-			lastLog = now
-			return
-		}
-		if progress.Completed < progress.Total && now.Sub(lastLog) < imageLayerProgressInterval {
-			return
-		}
-
-		elapsed := now.Sub(startedAt).Round(100 * time.Millisecond)
-		if progress.Completed == progress.Total {
-			outputLogger.Info(fmt.Sprintf("Prepared %d image layers (%s) in %s\n", progress.Total, formatImageBytes(progress.Bytes), elapsed))
-		} else {
-			outputLogger.Info(fmt.Sprintf("Preparing image layers: %d/%d ready (%s, %s)\n", progress.Completed, progress.Total, formatImageBytes(progress.Bytes), elapsed))
-		}
-		lastLog = now
+	err := clip.PrepareArchiveContent(options)
+	c.recordImageLifecycle(request, types.ContainerLifecycleID("image.prepare_layers"), startedAt, time.Since(startedAt), err == nil, nil)
+	switch {
+	case err == nil:
+		log.Info().Str("image_id", request.ImageId).Dur("duration", time.Since(startedAt)).Msg("image layers prepared")
+	case ctx.Err() == nil:
+		log.Warn().Err(err).Str("image_id", request.ImageId).Msg("image layer preparation failed")
 	}
+	return err
 }
 
 type lazyImageArchive struct {
@@ -979,8 +1017,16 @@ func waitForImageMount(ctx context.Context, mountPoint string, serverErrors <-ch
 	return nil
 }
 
-// processPulledArchive extracts metadata and moves v2 OCI archives to canonical location
+// processPulledArchive parses the archive metadata and caches it for OCI images.
+// Image ids are content hashes, so metadata cached by an earlier parse (a
+// restore from the content cache validates the archive by parsing it) is
+// reused instead of decoding the same archive twice.
 func (c *ImageClient) processPulledArchive(downloadPath, imageId string) (*clipCommon.ClipArchiveMetadata, error) {
+	if c.v2ArchiveMetadata != nil {
+		if meta, ok := c.v2ArchiveMetadata.Get(imageId); ok && meta != nil {
+			return meta, nil
+		}
+	}
 	archiver := clip.NewClipArchiver()
 	meta, err := archiver.ExtractMetadata(downloadPath)
 	if err != nil {
@@ -1031,7 +1077,11 @@ func (c *ImageClient) cacheOCIMetadata(imageId string, meta *clipCommon.ClipArch
 	if ociInfo.Repository != "" && ociInfo.Reference != "" {
 		registryHost := strings.TrimPrefix(ociInfo.RegistryURL, "https://")
 		registryHost = strings.TrimPrefix(registryHost, "http://")
-		sourceRef := fmt.Sprintf("%s/%s:%s", registryHost, ociInfo.Repository, ociInfo.Reference)
+		separator := ":"
+		if strings.Contains(ociInfo.Reference, ":") { // a digest, not a tag
+			separator = "@"
+		}
+		sourceRef := registryHost + "/" + ociInfo.Repository + separator + ociInfo.Reference
 		c.v2ImageRefs.Set(imageId, sourceRef)
 		log.Info().Str("image_id", imageId).Str("source_ref", sourceRef).Msg("cached image reference from metadata")
 	}
@@ -1088,7 +1138,8 @@ func (c *ImageClient) GetCLIPImageMetadata(imageId string) (*clipCommon.ImageMet
 
 // getCredentialProviderForImage determines the appropriate credentials for an
 // image. Agent-hosted pools are gateway-only: request-embedded credentials are
-// stripped before scheduling and ignored here as a second guardrail.
+// stripped before scheduling and ignored here as a second guardrail, and an
+// anonymous provider keeps CLIP off the ambient node keychain.
 func (c *ImageClient) getCredentialProviderForImage(ctx context.Context, imageId string, request *types.ContainerRequest) clipCommon.RegistryCredentialProvider {
 	sourceRef, hasRef := c.v2ImageRefs.Get(imageId)
 	if !hasRef {
@@ -1101,28 +1152,23 @@ func (c *ImageClient) getCredentialProviderForImage(ctx context.Context, imageId
 	}
 
 	if c.brokeredImageAccessRequest(request) {
-		if provider := c.gatewayCredentialProviderForImage(ctx, imageId, registry, request); provider != nil {
-			return provider
-		}
-		log.Warn().
-			Str("image_id", imageId).
-			Str("registry", registry).
-			Msg("agent worker has no gateway-vended registry credentials; using anonymous auth and avoiding ambient keychain")
-		return privateWorkerAnonymousRegistryProvider{}
+		return c.gatewayCredentialProviderForImage(imageId, registry, request, privateWorkerAnonymousRegistryProvider{})
 	}
 
 	if request.ImageCredentials != "" {
 		return c.parseAndCreateProvider(ctx, request.ImageCredentials, registry, imageId, "runtime secret")
 	}
 
-	if provider := c.gatewayCredentialProviderForImage(ctx, imageId, registry, request); provider != nil {
-		return provider
-	}
+	return c.gatewayCredentialProviderForImage(imageId, registry, request, c.requestCredentialProvider(ctx, sourceRef, registry, imageId, request))
+}
 
-	// Build registry credentials for images we built and pushed.
-	// This must come before source image credentials because when we build with a custom base image,
-	// the final image is in the build registry, not the source image registry
-	// We check both the registry domain AND the build repository name to avoid false positives
+// requestCredentialProvider builds a provider from credentials carried on the
+// request itself: the build registry for images we built and pushed, else the
+// source image's own credentials. The build registry check must come first,
+// because a build from a custom base image lands in the build registry, not
+// the source registry; it matches on both domain and repository name to avoid
+// false positives.
+func (c *ImageClient) requestCredentialProvider(ctx context.Context, sourceRef, registry, imageId string, request *types.ContainerRequest) clipCommon.RegistryCredentialProvider {
 	buildRegistry := c.getBuildRegistry()
 	buildRepoName := c.config.ImageService.BuildRepositoryName
 	if buildRegistry != "" && buildRepoName != "" &&
@@ -1486,7 +1532,8 @@ func (c *ImageClient) pullImageArchiveFromEmbeddedCache(ctx context.Context, arc
 	if ok, err := c.copyImageArchiveFromContentCacheMetadata(ctx, archivePath, imageId); ok {
 		c.recordImageLifecycle(request, types.ContainerLifecycleImageEmbeddedCacheMetadata, metadataStart, time.Since(metadataStart), true, nil)
 		log.Info().Str("image_id", imageId).Msg("restored image archive from embedded cache")
-		return true, c.imageArchiveSourceRegistry(ctx, request), nil
+		// Only the v1 data path needs a source registry; it resolves one itself.
+		return true, nil, nil
 	} else if err != nil {
 		c.recordImageLifecycle(request, types.ContainerLifecycleImageEmbeddedCacheMetadata, metadataStart, time.Since(metadataStart), false, nil)
 		log.Warn().Err(err).Str("image_id", imageId).Msg("embedded image archive content cache metadata unavailable")
@@ -1907,6 +1954,33 @@ func (c *ImageClient) setupBuildahDirs() (graphroot, runroot, tmpdir string, cle
 	return graphroot, runroot, tmpdir, true
 }
 
+// layerSpoolDir is where the indexer spools decompressed layers before
+// seeding them into the content cache. It sits on the disk-backed image cache:
+// the build's temp dirs live in /dev/shm, where a multi-GiB layer would be
+// charged against the pod's memory.
+func (c *ImageClient) layerSpoolDir() string {
+	dir := filepath.Join(c.imageCachePath, "spool")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		log.Warn().Err(err).Str("dir", dir).Msg("layer spool dir unavailable, spooling to the default temp dir")
+		return ""
+	}
+	return dir
+}
+
+// uvCacheDir is the host directory mounted as uv's cache during a build: the
+// persistent build cache when there is one, otherwise a build-scoped temp dir.
+func uvCacheDir(tmpdir string) string {
+	if root := buildahLayerCacheRoot(); root != "" {
+		dir := filepath.Join(filepath.Dir(root), "uv")
+		if err := os.MkdirAll(dir, 0o700); err == nil {
+			return dir
+		}
+	}
+	dir := filepath.Join(tmpdir, "uv-cache")
+	os.MkdirAll(dir, 0o700)
+	return dir
+}
+
 func buildahLayerCacheRoot() string {
 	if dir := strings.TrimSpace(os.Getenv(types.AgentBuildCacheDirEnv)); dir != "" {
 		return filepath.Join(dir, "buildah")
@@ -2076,6 +2150,26 @@ func (c *ImageClient) buildahEnv(runroot, tmpdir, storageConf string) []string {
 // getBuildahAuthArgs returns buildah authentication arguments from user-provided credentials
 // Expects credentials in username:password format (either directly or in JSON)
 // For ECR/GCR, users should pass pre-generated tokens, not raw AWS/GCP credentials
+// buildahAuthArgs resolves --creds for pulling imageRef: the request's source
+// image credentials when given, else whatever the gateway holds for that
+// registry. The latter is how a build whose FROM is an earlier beta9 image in
+// the build registry gets to pull it.
+func (c *ImageClient) buildahAuthArgs(ctx context.Context, request *types.ContainerRequest, imageRef string) []string {
+	if args := c.getBuildahAuthArgs(ctx, imageRef, request.BuildOptions.SourceImageCreds); len(args) > 0 {
+		return args
+	}
+	registry := imageRef
+	if i := strings.IndexByte(registry, '/'); i > 0 {
+		registry = registry[:i]
+	}
+	if registry == "localhost" || strings.HasPrefix(registry, "127.0.0.1") || !strings.ContainsAny(registry, ".:") {
+		return nil
+	}
+	// Gateway credentials come as either username:password or JSON;
+	// getBuildahAuthArgs parses both.
+	return c.getBuildahAuthArgs(ctx, imageRef, c.gatewayRegistryCredentials(ctx, registry, request))
+}
+
 func (c *ImageClient) getBuildahAuthArgs(ctx context.Context, imageRef string, creds string) []string {
 	if creds == "" {
 		return nil
@@ -2326,7 +2420,8 @@ func (c *ImageClient) createOCIImageWithProgress(ctx context.Context, outputLogg
 		ProgressChan:     progressChan,
 		CredProvider:     c.getCredentialProviderForImage(ctx, request.ImageId, request),
 		ContentCache:     newImageContentCache(c.cacheClient, request.ImageId, "oci-layer-build", nil),
-		ContentCacheDir:  filepath.Dir(outputPath),
+		ContentCacheDir:  c.layerSpoolDir(),
+		SeedDecompressed: true, // first use of a new layer reads page-wise from the cache instead of materializing it
 		LayerIndexCache:  newImageLayerIndexCache(c.cacheClient),
 		IndexConcurrency: imageLayerPrepareConcurrency,
 	})
@@ -2341,6 +2436,33 @@ func (c *ImageClient) createOCIImageWithProgress(ctx context.Context, outputLogg
 
 	reporter.finish()
 	return nil
+}
+
+// warmBaseImageLayersInBackground stores the base image layers the content
+// cache lacks, so the next build on this base restores it instead of pulling.
+// The warm is best effort and must not hold up the build: it runs detached
+// from the build's context under its own deadline, and spools downloads into
+// its own directory on the disk-backed image cache rather than the build's
+// workspace, which is removed as soon as the build returns. The image and its
+// missing layers are resolved afresh inside the goroutine so that the layer
+// fetches are bound to the warm's context, not the build's.
+func (c *ImageClient) warmBaseImageLayersInBackground(ctx context.Context, request *types.ContainerRequest, sourceImage string) {
+	dir, err := os.MkdirTemp(c.layerSpoolDir(), "base-warm-")
+	if err != nil {
+		log.Warn().Err(err).Str("source_image", sourceImage).Msg("base image layer warm skipped: no spool directory")
+		return
+	}
+	warmCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), baseImageWarmTimeout)
+	go func() {
+		defer cancel()
+		defer os.RemoveAll(dir)
+		img, _, missing, err := c.baseImage(warmCtx, request, sourceImage)
+		if err != nil {
+			log.Warn().Err(err).Str("source_image", sourceImage).Msg("base image layer warm skipped: base image unavailable")
+			return
+		}
+		c.warmBaseImageLayers(warmCtx, request, img, missing, dir)
+	}()
 }
 
 func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *slog.Logger, request *types.ContainerRequest) error {
@@ -2405,9 +2527,9 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	if sourceImage != "" {
 		insecure = c.config.ImageService.BuildRegistryInsecure
 
-		cachedBaseRef, cachedBase, cacheErr := c.cachedBaseImageOCIRef(ctx, outputLogger, request, sourceImage, buildPath)
+		cachedBaseRef, cachedBase, _, missingBaseLayers, cacheErr := c.cachedBaseImageOCIRef(ctx, outputLogger, request, sourceImage, buildPath)
 		if cacheErr != nil {
-			log.Debug().Err(cacheErr).Str("source_image", sourceImage).Msg("base image distributed cache unavailable")
+			log.Warn().Err(cacheErr).Str("source_image", sourceImage).Msg("base image distributed cache unavailable")
 		}
 		if cachedBase {
 			dockerfile = strings.ReplaceAll(dockerfile, sourceImage, cachedBaseRef)
@@ -2420,7 +2542,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 			}
 
 			// Add credentials if provided
-			if authArgs := c.getBuildahAuthArgs(ctx, sourceImage, request.BuildOptions.SourceImageCreds); len(authArgs) > 0 {
+			if authArgs := c.buildahAuthArgs(ctx, request, sourceImage); len(authArgs) > 0 {
 				pullArgs = append(pullArgs, authArgs...)
 			}
 
@@ -2434,6 +2556,12 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 			)
 			if err := cmd.Run(); err != nil {
 				return err
+			}
+			// The pull is done, so the network is free: fetch the layers the
+			// cache lacks while the build runs, and the next build on this
+			// base restores it from cache instead of pulling.
+			if len(missingBaseLayers) > 0 {
+				c.warmBaseImageLayersInBackground(ctx, request, sourceImage)
 			}
 		}
 	}
@@ -2455,9 +2583,30 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	budArgs = append(budArgs, "--layers")           // Enable layer caching for faster rebuilds
 	budArgs = append(budArgs, "--format", "docker") // Use docker format to avoid conversion at push time
 	budArgs = append(budArgs, "--jobs", "8")        // Use parallel jobs for faster layer processing
+	// Rendered Dockerfiles install packages with uv-b9. It is mounted into
+	// each RUN step from the worker so it stays out of the image.
+	if _, err := os.Stat(uvBinaryPath); err == nil {
+		budArgs = append(budArgs, "--volume", uvBinaryPath+":"+uvBuildMountPath+":ro")
+		// uv's wheel cache lives on a mount so it never lands in a layer,
+		// and on a persistent build cache it carries over between builds.
+		budArgs = append(budArgs, "--volume", uvCacheDir(tmpdir)+":"+uvBuildCachePath)
+	}
+	// Synced local files are visible to RUN steps where they are at run
+	// time, so add_local_dir(copy=True) and commands that install from the
+	// working directory work the same way in a build as in a container. The
+	// container's copy is writable, so the build's is too (a throwaway one:
+	// see writableBuildContext).
+	if request.BuildOptions.BuildCtxObject != nil && *request.BuildOptions.BuildCtxObject != "" {
+		codeDir, cleanupCodeDir, err := c.writableBuildContext(ctx, request, buildPath, buildCtxPath)
+		if err != nil {
+			return err
+		}
+		defer cleanupCodeDir()
+		budArgs = append(budArgs, "--volume", codeDir+":"+types.WorkerUserCodeVolume)
+	}
 
 	// Add credentials for multi-stage builds and private base images
-	if authArgs := c.getBuildahAuthArgs(ctx, sourceImage, request.BuildOptions.SourceImageCreds); len(authArgs) > 0 {
+	if authArgs := c.buildahAuthArgs(ctx, request, sourceImage); len(authArgs) > 0 {
 		budArgs = append(budArgs, authArgs...)
 	}
 
@@ -2478,11 +2627,39 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	// replaces exported every layer to a local OCI layout (a full gzip pass
 	// over the rootfs) before publishing and indexing that copy.
 	if c.config.ImageService.ClipVersion == uint32(types.ClipVersion2) {
-		archiveName := fmt.Sprintf("%s.%s.tmp", request.ImageId, c.registry.ImageFileExtension)
-		archivePath := filepath.Join(tmpdir, archiveName)
+		// Layered build: run the instructions in a working container and
+		// publish its upper directory as layers, no commit, push from
+		// storage or re-index. Dockerfiles the plan parser does not cover
+		// take the bud path below.
+		// The delta is the working container's overlay upper directory, so
+		// the vfs driver (a full copy per layer) keeps the bud path.
+		if c.config.ImageService.LayeredBuilds && storageDriver == "overlay" {
+			plan, planErr := parseDockerfilePlan(dockerfile, buildArgMap(request.BuildOptions.BuildSecrets))
+			if planErr == nil {
+				manifestRef := sourceImage
+				if manifestRef == "" {
+					manifestRef = plan.from
+				}
+				var runVolumes []string
+				for i := 0; i+1 < len(budArgs); i++ {
+					if budArgs[i] == "--volume" {
+						runVolumes = append(runVolumes, budArgs[i+1])
+					}
+				}
+				// The context dir is what bud gets: the extracted build
+				// context, or "." without one, so COPY and ADD behave the
+				// same on both paths.
+				return c.buildLayeredImage(ctx, outputLogger, request, &layeredBuild{
+					c: c, ctx: ctx, out: outputLogger, request: request, plan: plan,
+					sourceImage: manifestRef, fromRef: plan.from,
+					graphroot: graphroot, runroot: runroot, tmpdir: tmpdir, storage: storageDriver, storageConf: storageConf,
+					buildCtxPath: buildCtxPath, runVolumes: runVolumes, buildArgs: buildArgMap(request.BuildOptions.BuildSecrets),
+				})
+			}
+			log.Info().Err(planErr).Str("image_id", request.ImageId).Msg("dockerfile outside the layered builder's subset, building with bud")
+		}
 
-		buildRegistry := c.getBuildRegistry()
-		imageTag := fmt.Sprintf("%s/%s:%s", buildRegistry, c.config.ImageService.BuildRepositoryName, request.ImageId)
+		imageTag := fmt.Sprintf("%s/%s:%s", c.getBuildRegistry(), c.config.ImageService.BuildRepositoryName, request.ImageId)
 
 		// Build w/ buildah
 		budArgs = append(budArgs, "-f", tempDockerFile, "-t", imageTag, buildCtxPath)
@@ -2497,53 +2674,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		}
 		outputLogger.Info(fmt.Sprintf("Image built in %.1fs\n", time.Since(buildStart).Seconds()))
 
-		buildRegistryCredentials := request.BuildRegistryCredentials
-		if buildRegistryCredentials == "" {
-			buildRegistryCredentials = c.gatewayRegistryCredentials(ctx, buildRegistry, request)
-		}
-		if buildRegistry == "localhost" || strings.HasPrefix(buildRegistry, "127.0.0.1") {
-			buildRegistryCredentials = ""
-		}
-
-		outputLogger.Info("Publishing image...\n")
-		pushArgs := []string{
-			"--root", graphroot,
-			"--runroot", runroot,
-			"--storage-driver=" + storageDriver,
-			"push",
-			"--compression-format", "gzip",
-			"--compression-level", "1",
-			"--retry", "5",
-			"--retry-delay", "1s",
-		}
-		if c.config.ImageService.BuildRegistryInsecure {
-			pushArgs = append(pushArgs, "--tls-verify=false")
-		}
-		if buildRegistryCredentials != "" {
-			pushArgs = append(pushArgs, "--creds", buildRegistryCredentials)
-		}
-		pushArgs = append(pushArgs, imageTag, "docker://"+imageTag)
-		var pushOutput strings.Builder
-		pushStart := time.Now()
-		pushHeartbeat := newActiveOutputWriter(outputLogger)
-		stopHeartbeat = startSilentOutputHeartbeat(ctx, outputLogger, pushStart, pushHeartbeat, "Still publishing image...")
-		cmd = newBuildahCommand(ctx, pushArgs, c.buildahEnv(runroot, tmpdir, storageConf), &pushOutput, &pushOutput)
-		err = cmd.Run()
-		stopHeartbeat()
-		if err != nil {
-			return fmt.Errorf("failed to publish image: %w: %s", err, strings.TrimSpace(pushOutput.String()))
-		}
-		outputLogger.Info(fmt.Sprintf("Image published in %.1fs\n", time.Since(pushStart).Seconds()))
-
-		c.v2ImageRefs.Set(request.ImageId, imageTag)
-		log.Info().Str("image_id", request.ImageId).Str("image_tag", imageTag).Msg("cached image reference")
-
-		if err = c.createOCIImageWithProgress(ctx, outputLogger, request, imageTag, "", archivePath, 2); err != nil {
-			return err
-		}
-
-		// Upload the clip archive to object storage
-		return c.registry.Push(ctx, archivePath, request.ImageId)
+		return c.publishFromStorage(ctx, outputLogger, request, imageTag, &buildahStore{graphroot: graphroot, runroot: runroot, tmpdir: tmpdir, driver: storageDriver, conf: storageConf})
 	}
 
 	// Clip v1: Build, push to OCI layout, then process locally
@@ -2655,8 +2786,7 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 
 	// Clip v2: Create index-only clip archive from the source image (no unpack needed)
 	if c.config.ImageService.ClipVersion == uint32(types.ClipVersion2) {
-		archiveName := fmt.Sprintf("%s.%s.tmp", request.ImageId, c.registry.ImageFileExtension)
-		archivePath := filepath.Join("/dev/shm", archiveName)
+		archivePath := c.archiveScratchPath("/dev/shm", request.ImageId)
 
 		// Create index-only clip from the source docker image reference with progress reporting
 		if err = c.createOCIImageWithProgress(ctx, outputLogger, request, *request.BuildOptions.SourceImage, copyDir, archivePath, 2); err != nil {
@@ -2744,8 +2874,7 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath *PathInfo, imageId
 
 	startTime := time.Now()
 
-	archiveName := fmt.Sprintf("%s.%s.tmp", imageId, c.registry.ImageFileExtension)
-	archivePath := filepath.Join("/dev/shm", archiveName)
+	archivePath := c.archiveScratchPath("/dev/shm", imageId)
 
 	defer func() {
 		os.RemoveAll(archivePath)
@@ -2805,6 +2934,12 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath *PathInfo, imageId
 	return nil
 }
 
+// archiveScratchPath is where an image's clip index archive is written under
+// dir before it is uploaded; the registry names the object itself.
+func (c *ImageClient) archiveScratchPath(dir, imageId string) string {
+	return filepath.Join(dir, fmt.Sprintf("%s.%s.tmp", imageId, c.registry.ImageFileExtension))
+}
+
 func umociUnpackOptions() layer.UnpackOptions {
 	var unpackOptions layer.UnpackOptions
 	var meta umoci.Meta
@@ -2843,6 +2978,57 @@ func (c *ImageClient) getBuildContext(ctx context.Context, buildPath string, req
 	return buildCtxPath, nil
 }
 
+// writableBuildContext returns a directory holding the build context that RUN
+// steps may write to, mounted at the working directory during the build. The
+// container an image runs in gets a private, writable copy of the synced code
+// there, so a step that writes into the working directory (pip install .,
+// npm install, generated files) has to work in the build as well. The
+// context extracted under the build's own directory is private to the build
+// and is mounted as is. The extraction under the worker's shared object path
+// is read by other builds and containers, so it stays read-only: an overlay
+// puts a throwaway upper over it, or, where the mount is not possible, the
+// context is copied. Either lives on the disk-backed spool dir, as the
+// build's own temp dirs are in /dev/shm. Writes are discarded with the build,
+// as they would be in the container.
+func (c *ImageClient) writableBuildContext(ctx context.Context, request *types.ContainerRequest, buildPath, buildCtxPath string) (string, func(), error) {
+	if rel, err := filepath.Rel(buildPath, buildCtxPath); err == nil && rel != ".." && !strings.HasPrefix(rel, "../") {
+		return buildCtxPath, func() {}, nil
+	}
+
+	work, err := os.MkdirTemp(c.layerSpoolDir(), "build-ctx-"+request.ImageId+"-")
+	if err != nil {
+		return "", nil, fmt.Errorf("create writable build context: %w", err)
+	}
+	upper := filepath.Join(work, "upper")
+	if err := os.MkdirAll(upper, 0o755); err != nil {
+		os.RemoveAll(work)
+		return "", nil, fmt.Errorf("create writable build context: %w", err)
+	}
+	overlay := common.NewContainerOverlay(request, buildCtxPath, filepath.Join(work, "overlay"))
+	if err := overlay.AddLayer(upper); err == nil {
+		return overlay.TopLayerPath(), func() {
+			if err := overlay.Cleanup(); err != nil {
+				log.Warn().Err(err).Str("image_id", request.ImageId).Msg("unmount writable build context")
+			}
+			os.RemoveAll(work)
+		}, nil
+	} else {
+		log.Debug().Err(err).Str("image_id", request.ImageId).Msg("overlay for writable build context unavailable, copying the context")
+		os.RemoveAll(filepath.Join(work, "overlay"))
+	}
+
+	copyDir := filepath.Join(work, "code")
+	if err := os.MkdirAll(copyDir, 0o755); err != nil {
+		os.RemoveAll(work)
+		return "", nil, fmt.Errorf("create writable build context: %w", err)
+	}
+	if out, err := exec.CommandContext(ctx, "cp", "-a", buildCtxPath+"/.", copyDir).CombinedOutput(); err != nil {
+		os.RemoveAll(work)
+		return "", nil, fmt.Errorf("copy build context: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return copyDir, func() { os.RemoveAll(work) }, nil
+}
+
 func downloadWorkspaceBuildContext(ctx context.Context, request *types.ContainerRequest, objectID, destPath string) error {
 	storageClient, err := clients.NewWorkspaceStorageClient(ctx, request.Workspace.Name, request.Workspace.Storage)
 	if err != nil {
@@ -2866,4 +3052,66 @@ func downloadWorkspaceBuildContext(ctx context.Context, request *types.Container
 	}
 
 	return nil
+}
+
+// buildahStore locates a buildah storage root for follow-up commands.
+type buildahStore struct {
+	graphroot, runroot, tmpdir, driver, conf string
+}
+
+func (s *buildahStore) args(sub string) []string {
+	return []string{"--root", s.graphroot, "--runroot", s.runroot, "--storage-driver=" + s.driver, sub}
+}
+
+// publishFromStorage pushes the image tagged imageTag straight from buildah
+// storage to the build registry, indexes the pushed image and uploads the
+// index archive. Pushing from storage lets the registry transport reuse layer
+// blobs it already holds: base layers shared with earlier builds are neither
+// recompressed nor uploaded, and the index cache then skips them too.
+func (c *ImageClient) publishFromStorage(ctx context.Context, outputLogger *slog.Logger, request *types.ContainerRequest, imageTag string, store *buildahStore) error {
+	buildRegistry := c.getBuildRegistry()
+	archivePath := c.archiveScratchPath(store.tmpdir, request.ImageId)
+
+	buildRegistryCredentials := request.BuildRegistryCredentials
+	if buildRegistryCredentials == "" {
+		buildRegistryCredentials = c.gatewayRegistryCredentials(ctx, buildRegistry, request)
+	}
+	if buildRegistry == "localhost" || strings.HasPrefix(buildRegistry, "127.0.0.1") {
+		buildRegistryCredentials = ""
+	}
+
+	outputLogger.Info("Publishing image...\n")
+	pushArgs := append(store.args("push"),
+		"--compression-format", "gzip",
+		"--compression-level", "1",
+		"--retry", "5",
+		"--retry-delay", "1s",
+	)
+	if c.config.ImageService.BuildRegistryInsecure {
+		pushArgs = append(pushArgs, "--tls-verify=false")
+	}
+	if buildRegistryCredentials != "" {
+		pushArgs = append(pushArgs, "--creds", buildRegistryCredentials)
+	}
+	pushArgs = append(pushArgs, imageTag, "docker://"+imageTag)
+	var pushOutput strings.Builder
+	pushStart := time.Now()
+	pushHeartbeat := newActiveOutputWriter(outputLogger)
+	stopHeartbeat := startSilentOutputHeartbeat(ctx, outputLogger, pushStart, pushHeartbeat, "Still publishing image...")
+	err := newBuildahCommand(ctx, pushArgs, c.buildahEnv(store.runroot, store.tmpdir, store.conf), &pushOutput, &pushOutput).Run()
+	stopHeartbeat()
+	if err != nil {
+		return fmt.Errorf("failed to publish image: %w: %s", err, strings.TrimSpace(pushOutput.String()))
+	}
+	outputLogger.Info(fmt.Sprintf("Image published in %.1fs\n", time.Since(pushStart).Seconds()))
+
+	c.v2ImageRefs.Set(request.ImageId, imageTag)
+	log.Info().Str("image_id", request.ImageId).Str("image_tag", imageTag).Msg("cached image reference")
+
+	if err = c.createOCIImageWithProgress(ctx, outputLogger, request, imageTag, "", archivePath, 2); err != nil {
+		return err
+	}
+
+	// Upload the clip archive to object storage
+	return c.registry.Push(ctx, archivePath, request.ImageId)
 }
