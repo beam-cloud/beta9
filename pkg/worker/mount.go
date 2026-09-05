@@ -199,7 +199,8 @@ func mkdirBindSource(localPath string, perm os.FileMode) error {
 		return nil
 	case errors.Is(err, fs.ErrExist):
 		// EEXIST covers a regular file too, which cannot back a bind mount;
-		// report it the way os.MkdirAll does instead of claiming success.
+		// report ENOTDIR (what the mount itself would fail with) instead of
+		// claiming success.
 		info, statErr := os.Stat(localPath)
 		if statErr != nil {
 			return statErr
