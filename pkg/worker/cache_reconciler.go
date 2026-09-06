@@ -834,7 +834,12 @@ func protectedContentFromRecentStubs(stubs []recentStubContent, accelerator stri
 	return protected, activeCheckpointIDs
 }
 
-func pressureProtectedContentFromRecentStubs(stubs []recentStubContent, accelerator string, usage cache.DiskUsage, softWatermark float64, minFreeBytes int64) map[string]struct{} {
+// pressureProtectedContentFromRecentStubs ranks recent stubs' content, newest
+// stub first, and protects it until the budget is spent. An item's size is what
+// its report carried or, failing that, what localSize says is on disk: CLIP v2
+// layer reports carry no size, and letting them through unbudgeted protects
+// every layer on the node, which is exactly the state eviction cannot leave.
+func pressureProtectedContentFromRecentStubs(stubs []recentStubContent, accelerator string, usage cache.DiskUsage, softWatermark float64, minFreeBytes int64, localSize func(hash string) int64) map[string]struct{} {
 	budget := pressureProtectionBudgetBytes(usage, softWatermark, minFreeBytes)
 	if budget <= 0 {
 		return map[string]struct{}{}
@@ -856,6 +861,9 @@ func pressureProtectedContentFromRecentStubs(stubs []recentStubContent, accelera
 				continue
 			}
 			sizeBytes := maxInt64(item.SizeBytes, 0)
+			if sizeBytes == 0 && localSize != nil {
+				sizeBytes = maxInt64(localSize(item.Hash), 0)
+			}
 			if sizeBytes > 0 && protectedBytes+sizeBytes > budget {
 				continue
 			}
@@ -961,7 +969,7 @@ func (m *WorkerCacheManager) pruneOwnerImageCache(stubs []recentStubContent, sof
 	bytesToFree := maxInt64(reconcilePressureBytesToFree(usage, softWatermark, minFreeBytes), 0)
 	var allowlist map[string]struct{}
 	if bytesToFree > 0 {
-		allowlist = pressureProtectedContentFromRecentStubs(stubs, m.accelerator, usage, softWatermark, minFreeBytes)
+		allowlist = pressureProtectedContentFromRecentStubs(stubs, m.accelerator, usage, softWatermark, minFreeBytes, nil)
 	}
 	mountRoot := filepath.Join(types.AgentImagesPath, "mnt")
 	mountSetComplete := m.pruneStaleImageMountPaths(mountRoot)
@@ -1395,7 +1403,7 @@ func (m *WorkerCacheManager) reconcileGatedByDiskUsage(server *cache.Server, loc
 
 	var reconcileAllowlist map[string]struct{}
 	if pressureMode && usage.TotalBytes > 0 {
-		reconcileAllowlist = pressureProtectedContentFromRecentStubs(stubContent, m.accelerator, usage, watermark, server.DiskMinFreeBytes())
+		reconcileAllowlist = pressureProtectedContentFromRecentStubs(stubContent, m.accelerator, usage, watermark, server.DiskMinFreeBytes(), server.ContentSizeBytes)
 		server.SetProtectedContent(reconcileAllowlist)
 	}
 

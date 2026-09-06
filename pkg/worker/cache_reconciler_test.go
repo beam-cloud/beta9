@@ -201,7 +201,7 @@ func TestPressureProtectedContentPrioritizesNewestStubWorkingSet(t *testing.T) {
 		},
 	}
 
-	protected := pressureProtectedContentFromRecentStubs(stubs, "", cache.DiskUsage{TotalBytes: 100}, 0.75, 0)
+	protected := pressureProtectedContentFromRecentStubs(stubs, "", cache.DiskUsage{TotalBytes: 100}, 0.75, 0, nil)
 
 	require.Contains(t, protected, "new-checkpoint")
 	require.Contains(t, protected, "new-volume")
@@ -252,6 +252,46 @@ func TestPressureProtectionBudgetSubtractsNonEvictableUsage(t *testing.T) {
 	require.Equal(t, int64(0), pressureProtectionBudgetBytes(swamped, 0.70, reserve))
 }
 
+// TestPressureProtectedContentBudgetsUnsizedItemsByLocalSize reproduces the
+// staging cache-server that sat at 83% with "candidates=382 protected=382
+// eligible=0": CLIP v2 layer reports carry no SizeBytes, so every layer was
+// protected outside the budget. Sizes must come from the local index instead.
+func TestPressureProtectedContentBudgetsUnsizedItemsByLocalSize(t *testing.T) {
+	now := time.Now()
+	// Budget: resume watermark 0.67 of 1000 = 670, minus 100 of non-cache usage = 570.
+	usage := cache.DiskUsage{TotalBytes: 1000, UsedBytes: 900, EvictableBytes: 800}
+	stubs := []recentStubContent{
+		{
+			stub: cache.RecentStub{WorkspaceID: "ws", StubID: "new", LastSeen: now},
+			items: []types.CacheRequiredContentItem{
+				{Hash: "new-layer-a", Kind: types.CacheContentKindClipV2},
+				{Hash: "new-layer-b", Kind: types.CacheContentKindClipV2},
+			},
+		},
+		{
+			stub: cache.RecentStub{WorkspaceID: "ws", StubID: "old", LastSeen: now.Add(-time.Hour)},
+			items: []types.CacheRequiredContentItem{
+				{Hash: "old-layer", Kind: types.CacheContentKindClipV2},
+				{Hash: "old-absent-layer", Kind: types.CacheContentKindClipV2},
+			},
+		},
+	}
+	onDisk := map[string]int64{"new-layer-a": 300, "new-layer-b": 200, "old-layer": 300}
+	localSize := func(hash string) int64 { return onDisk[hash] }
+
+	// Without a size source every unsized item is protected and nothing is evictable.
+	all := pressureProtectedContentFromRecentStubs(stubs, "", usage, 0.70, 0, nil)
+	require.Len(t, all, 4)
+
+	protected := pressureProtectedContentFromRecentStubs(stubs, "", usage, 0.70, 0, localSize)
+	require.Contains(t, protected, "new-layer-a")
+	require.Contains(t, protected, "new-layer-b")
+	require.NotContains(t, protected, "old-layer", "300 more bytes would exceed the 570 budget")
+	// Content the store does not hold costs nothing to protect; it only
+	// bounds what may be materialized once pressure clears.
+	require.Contains(t, protected, "old-absent-layer")
+}
+
 func TestPressureProtectedContentPrioritizesCheckpointWithinStub(t *testing.T) {
 	now := time.Now()
 	stubs := []recentStubContent{
@@ -264,7 +304,7 @@ func TestPressureProtectedContentPrioritizesCheckpointWithinStub(t *testing.T) {
 		},
 	}
 
-	protected := pressureProtectedContentFromRecentStubs(stubs, "", cache.DiskUsage{TotalBytes: 90}, 0.75, 0)
+	protected := pressureProtectedContentFromRecentStubs(stubs, "", cache.DiskUsage{TotalBytes: 90}, 0.75, 0, nil)
 
 	require.Contains(t, protected, "checkpoint")
 	require.NotContains(t, protected, "volume")
