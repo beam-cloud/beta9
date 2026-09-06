@@ -59,7 +59,8 @@ func TestOldestRemovableBuildahImagesOrdersByLocalAddTime(t *testing.T) {
 		{ID: "busy", Layer: "busy-top", Created: now.Add(-60 * 24 * time.Hour)},
 		{ID: "no-layer-record", Layer: "missing", Created: now.Add(-14 * 24 * time.Hour)},
 	})
-	writeBuildahStoreJSON(t, graphroot, "containers", "containers.json", []buildahStoredContainer{
+	// bud's stage containers are volatile and indexed apart from the rest.
+	writeBuildahStoreJSON(t, graphroot, "containers", "volatile-containers.json", []buildahStoredContainer{
 		{ID: "working", ImageID: "busy"},
 	})
 
@@ -98,6 +99,43 @@ func TestOldestRemovableBuildahImagesRefusesUnknownLiveness(t *testing.T) {
 
 	_, err := oldestRemovableBuildahImages(graphroot, "overlay", trimExclusions{minAdded: time.Now()}, 10)
 	require.Error(t, err, "a corrupt container index must stop the trim, not read as no containers")
+}
+
+// TestStaleBuildahContainersSpansBothIndexes mirrors a prod build node: 26
+// stage containers from builds killed hours ago sat in
+// volatile-containers.json holding 40 GB of unsized layers and pinning their
+// images, invisible to a reader of containers.json alone.
+func TestStaleBuildahContainersSpansBothIndexes(t *testing.T) {
+	graphroot := t.TempDir()
+	now := time.Now().UTC()
+	writeBuildahStoreJSON(t, graphroot, "containers", "volatile-containers.json", []buildahStoredContainer{
+		{ID: "killed-yesterday", ImageID: "a", Created: now.Add(-21 * time.Hour)},
+		{ID: "live-stage", ImageID: "b", Created: now.Add(-time.Minute)},
+		{ID: "killed-this-morning", ImageID: "c", Created: now.Add(-8 * time.Hour)},
+	})
+	writeBuildahStoreJSON(t, graphroot, "containers", "containers.json", []buildahStoredContainer{
+		{ID: "durable-old", ImageID: "d", Created: now.Add(-2 * 24 * time.Hour)},
+		{ID: "undated", ImageID: "e"},
+	})
+
+	stale, err := staleBuildahContainers(graphroot, "overlay", now.Add(-buildLayerCacheStaleContainerAge), nil)
+	require.NoError(t, err)
+	require.Equal(t, []string{"durable-old", "killed-this-morning", "killed-yesterday"}, stale,
+		"older than any build can run, from both indexes; a container with no created date is never assumed dead")
+
+	// A container built from an image named for a build in flight stays, as
+	// the image itself does on the rmi path.
+	writeBuildahStoreJSON(t, graphroot, "images", "images.json", []buildahStoredImage{
+		{ID: "c", Names: []string{"docker.io/library/python:3.12"}},
+	})
+	stale, err = staleBuildahContainers(graphroot, "overlay", now.Add(-buildLayerCacheStaleContainerAge), []inFlightBuild{{imageID: "abc", baseImage: "python:3.12"}})
+	require.NoError(t, err)
+	require.Equal(t, []string{"durable-old", "killed-yesterday"}, stale)
+
+	// An empty store has nothing stale and is not an error.
+	stale, err = staleBuildahContainers(t.TempDir(), "overlay", now, nil)
+	require.NoError(t, err)
+	require.Empty(t, stale)
 }
 
 func TestImageNamedForBuilds(t *testing.T) {
