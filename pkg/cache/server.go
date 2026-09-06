@@ -233,6 +233,19 @@ func (cs *Server) refreshDisk(evict bool) (DiskUsage, error) {
 	return usage, nil
 }
 
+// ContentSizeBytes is the on-disk size of hash as the local index knows it, or
+// 0 when the store does not hold it.
+func (cs *Server) ContentSizeBytes(hash string) int64 {
+	if cs == nil || cs.cas == nil {
+		return 0
+	}
+	entry, ok := cs.cas.index.get(hash)
+	if !ok {
+		return 0
+	}
+	return entry.size
+}
+
 func (cs *Server) DiskPressureExceeded() bool {
 	if cs == nil || cs.cas == nil {
 		return false
