@@ -226,7 +226,11 @@ func (cs *Server) refreshDisk(evict bool) (DiskUsage, error) {
 	if err != nil {
 		return DiskUsage{}, err
 	}
-	return diskUsageFromSnapshot(snapshot), nil
+	usage := diskUsageFromSnapshot(snapshot)
+	if indexed := cs.cas.index.bytes(); indexed > 0 {
+		usage.EvictableBytes = uint64(indexed)
+	}
+	return usage, nil
 }
 
 func (cs *Server) DiskPressureExceeded() bool {

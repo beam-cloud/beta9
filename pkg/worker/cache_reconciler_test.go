@@ -209,6 +209,49 @@ func TestPressureProtectedContentPrioritizesNewestStubWorkingSet(t *testing.T) {
 	require.NotContains(t, protected, "old-volume")
 }
 
+// TestPressureProtectionBudgetSubtractsNonEvictableUsage reproduces the staging
+// cache-server that parked at 81% with every object protected: 258.9 GB disk,
+// watermark 0.70 (resume 0.67), 40 GiB reserve, 168.6 GB of indexed content
+// and 41 GB of other usage (OS, uv/buildah caches) on the same volume.
+func TestPressureProtectionBudgetSubtractsNonEvictableUsage(t *testing.T) {
+	const gb = 1_000_000_000
+	total := uint64(258_906_374_144)
+	indexed := uint64(168_552_086_665)
+	other := uint64(41 * gb)
+	reserve := int64(42_949_672_960)
+	usage := cache.DiskUsage{
+		TotalBytes:     total,
+		UsedBytes:      indexed + other,
+		AvailableBytes: total - indexed - other,
+		EvictableBytes: indexed,
+	}
+	usage.UsagePct = float64(usage.UsedBytes) / float64(total)
+	require.InDelta(t, 0.81, usage.UsagePct, 0.005)
+
+	budget := pressureProtectionBudgetBytes(usage, 0.70, reserve)
+
+	// Protected content plus the other usage must land at the resume watermark.
+	resumeUsed := int64(0.67 * float64(total))
+	require.Equal(t, resumeUsed-int64(other), budget)
+	require.Less(t, budget, int64(indexed), "the budget must be below what is on disk, or nothing is ever evictable")
+	require.InDelta(t, 0.67, float64(budget+int64(other))/float64(total), 0.001)
+
+	// The reserve wins when it is the tighter bound, still net of other usage.
+	tight := pressureProtectionBudgetBytes(usage, 0.95, reserve)
+	require.Equal(t, int64(total)-reserve-int64(other), tight)
+
+	// Without an index reading the old whole-disk budget is used unchanged.
+	blind := usage
+	blind.EvictableBytes = 0
+	require.Equal(t, resumeUsed, pressureProtectionBudgetBytes(blind, 0.70, reserve))
+
+	// Other usage larger than the whole budget leaves nothing to protect.
+	swamped := usage
+	swamped.UsedBytes = total - 1*gb
+	swamped.EvictableBytes = 10 * gb
+	require.Equal(t, int64(0), pressureProtectionBudgetBytes(swamped, 0.70, reserve))
+}
+
 func TestPressureProtectedContentPrioritizesCheckpointWithinStub(t *testing.T) {
 	now := time.Now()
 	stubs := []recentStubContent{

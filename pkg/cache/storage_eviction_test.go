@@ -245,6 +245,48 @@ func TestContentIndexRebuildKeepsCompletionsRacingTheWalk(t *testing.T) {
 	require.False(t, store.Exists(drifted))
 }
 
+// TestDiskUsageReportsIndexedBytesAsEvictable: RefreshDiskUsage tells the
+// reconciler how much of the disk is content it can evict, so the protected
+// budget is net of everything else on the volume.
+func TestDiskUsageReportsIndexedBytesAsEvictable(t *testing.T) {
+	store := newTestStore(t, 5)
+	require.Equal(t, int64(0), store.index.bytes())
+
+	a := addEvictionTestContent(t, store, "first-object", time.Now())
+	addEvictionTestContent(t, store, "second-object-longer", time.Now())
+	sizeA, _ := store.index.get(a)
+	require.Greater(t, sizeA.size, int64(0))
+	require.Equal(t, int64(len("first-object")+len("second-object-longer")), store.index.bytes())
+
+	server := &Server{cas: store}
+	usage, err := server.RefreshDiskUsage()
+	require.NoError(t, err)
+	require.Equal(t, uint64(store.index.bytes()), usage.EvictableBytes)
+	require.Greater(t, usage.UsedBytes, usage.EvictableBytes, "the temp dir's filesystem holds more than the two objects")
+
+	store.index.forget(a)
+	require.Equal(t, int64(len("second-object-longer")), store.index.bytes())
+	store.index.forget(a)
+	require.Equal(t, int64(len("second-object-longer")), store.index.bytes(), "forgetting twice must not double-subtract")
+
+	// Overwriting an entry replaces its contribution rather than adding to it.
+	b := addEvictionTestContent(t, store, "third", time.Now())
+	entryB, _ := store.index.get(b)
+	entryB.size = 100
+	store.index.put(b, entryB)
+	require.Equal(t, int64(len("second-object-longer")+100), store.index.bytes())
+
+	// A rebuild from disk resets the total to what the walk found, which still
+	// includes the object whose index entry was forgotten above.
+	store.index.replace(store.scanContent(), time.Now())
+	require.Equal(t, int64(len("first-object")+len("second-object-longer")+len("third")), store.index.bytes())
+	var walked int64
+	for _, entry := range store.scanContent() {
+		walked += entry.size
+	}
+	require.Equal(t, walked, store.index.bytes())
+}
+
 func TestRemoveContentFailureLeavesTheLeftoverIndexed(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root ignores directory permissions")

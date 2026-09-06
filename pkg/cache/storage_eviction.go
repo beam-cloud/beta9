@@ -69,6 +69,9 @@ type contentEntry struct {
 type contentIndex struct {
 	mu      sync.RWMutex
 	entries map[string]contentEntry
+	// totalBytes is the running sum of entries' sizes, kept in step with
+	// every mutation so bytes() does not walk the map on each disk refresh.
+	totalBytes int64
 }
 
 func (idx *contentIndex) get(hash string) (contentEntry, bool) {
@@ -80,14 +83,26 @@ func (idx *contentIndex) get(hash string) (contentEntry, bool) {
 
 func (idx *contentIndex) put(hash string, entry contentEntry) {
 	idx.mu.Lock()
+	if previous, ok := idx.entries[hash]; ok {
+		idx.totalBytes -= previous.size
+	}
 	idx.entries[hash] = entry
+	idx.totalBytes += entry.size
 	idx.mu.Unlock()
 }
 
 func (idx *contentIndex) forget(hash string) {
 	idx.mu.Lock()
-	delete(idx.entries, hash)
+	idx.remove(hash)
 	idx.mu.Unlock()
+}
+
+// remove drops hash and its size from the running total; the caller holds mu.
+func (idx *contentIndex) remove(hash string) {
+	if entry, ok := idx.entries[hash]; ok {
+		idx.totalBytes -= entry.size
+		delete(idx.entries, hash)
+	}
 }
 
 // forgetIfUntouched drops the entry unless it has been accessed after since,
@@ -99,7 +114,7 @@ func (idx *contentIndex) forgetIfUntouched(hash string, since time.Time) bool {
 	if entry, ok := idx.entries[hash]; ok && entry.lastAccess.After(since) {
 		return false
 	}
-	delete(idx.entries, hash)
+	idx.remove(hash)
 	return true
 }
 
@@ -117,6 +132,14 @@ func (idx *contentIndex) touch(hash string, now time.Time, interval time.Duratio
 	entry.lastAccess = now
 	idx.entries[hash] = entry
 	return true, persist
+}
+
+// bytes is the size of every indexed object: the content on this disk that
+// eviction can act on, as opposed to whatever else shares the filesystem.
+func (idx *contentIndex) bytes() int64 {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	return idx.totalBytes
 }
 
 // candidates snapshots the index as eviction candidates, skipping in-flight
@@ -155,6 +178,10 @@ func (idx *contentIndex) replace(scanned map[string]contentEntry, since time.Tim
 		}
 	}
 	idx.entries = scanned
+	idx.totalBytes = 0
+	for _, entry := range scanned {
+		idx.totalBytes += entry.size
+	}
 }
 
 // rebuildContentIndex walks the cache directory once and replaces the index

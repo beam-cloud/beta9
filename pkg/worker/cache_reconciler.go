@@ -866,6 +866,13 @@ func pressureProtectedContentFromRecentStubs(stubs []recentStubContent, accelera
 	return protected
 }
 
+// pressureProtectionBudgetBytes is how much protected content may sit on the
+// disk for filesystem usage to come to rest at the resume watermark (and the
+// free-byte reserve). The watermark is measured on the whole filesystem but
+// eviction can only remove indexed cache content, so everything else on the
+// volume (OS, worker images, the uv and build caches) is taken off the top:
+// budgeting the cache as if it were alone parks the disk at watermark plus
+// that footprint, where every object is protected and nothing is evictable.
 func pressureProtectionBudgetBytes(usage cache.DiskUsage, softWatermark float64, minFreeBytes int64) int64 {
 	if usage.TotalBytes == 0 {
 		return 0
@@ -876,6 +883,9 @@ func pressureProtectionBudgetBytes(usage cache.DiskUsage, softWatermark float64,
 		if reserveBudget := int64(usage.TotalBytes) - minFreeBytes; reserveBudget < budget {
 			budget = reserveBudget
 		}
+	}
+	if usage.EvictableBytes > 0 && usage.UsedBytes > usage.EvictableBytes {
+		budget -= int64(usage.UsedBytes - usage.EvictableBytes)
 	}
 	return maxInt64(budget, 0)
 }
