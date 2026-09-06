@@ -266,6 +266,25 @@ func TestDiskUsageReportsIndexedBytesAsEvictable(t *testing.T) {
 
 	store.index.forget(a)
 	require.Equal(t, int64(len("second-object-longer")), store.index.bytes())
+	store.index.forget(a)
+	require.Equal(t, int64(len("second-object-longer")), store.index.bytes(), "forgetting twice must not double-subtract")
+
+	// Overwriting an entry replaces its contribution rather than adding to it.
+	b := addEvictionTestContent(t, store, "third", time.Now())
+	entryB, _ := store.index.get(b)
+	entryB.size = 100
+	store.index.put(b, entryB)
+	require.Equal(t, int64(len("second-object-longer")+100), store.index.bytes())
+
+	// A rebuild from disk resets the total to what the walk found, which still
+	// includes the object whose index entry was forgotten above.
+	store.index.replace(store.scanContent(), time.Now())
+	require.Equal(t, int64(len("first-object")+len("second-object-longer")+len("third")), store.index.bytes())
+	var walked int64
+	for _, entry := range store.scanContent() {
+		walked += entry.size
+	}
+	require.Equal(t, walked, store.index.bytes())
 }
 
 func TestRemoveContentFailureLeavesTheLeftoverIndexed(t *testing.T) {
