@@ -2503,6 +2503,17 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 			os.Remove(storageConf)
 		}
 	}()
+	sourceImage := ""
+	if request.BuildOptions.SourceImage != nil {
+		sourceImage = *request.BuildOptions.SourceImage
+	}
+	if !cleanupGraphroot {
+		// The persistent store outlives this build; keep it within bounds
+		// once this build is done, and keep concurrent trims off this
+		// build's own images meanwhile.
+		defer c.trimBuildLayerCacheInBackground(graphroot, storageDriver)
+		defer buildLayerCacheTrims.protectBuildImages(request.ImageId, sourceImage)()
+	}
 
 	buildCtxPath, err := c.getBuildContext(ctx, buildPath, request)
 	if err != nil {
@@ -2519,10 +2530,6 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 
 	// Pre-pull base image with insecure option if necessary
 	insecure := false
-	sourceImage := ""
-	if request.BuildOptions.SourceImage != nil {
-		sourceImage = *request.BuildOptions.SourceImage
-	}
 	dockerfile := *request.BuildOptions.Dockerfile
 	if sourceImage != "" {
 		insecure = c.config.ImageService.BuildRegistryInsecure

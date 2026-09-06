@@ -310,6 +310,10 @@ type ImageServiceConfig struct {
 	// BuildApt tunes apt inside the RUN steps of a layered build. The settings
 	// are bind-mounted into each step and never land in the image.
 	BuildApt BuildAptConfig `key:"buildApt" json:"build_apt"`
+	// BuildLayerCacheMaxPct bounds the persistent buildah layer store to this
+	// fraction of the filesystem it sits on; after a build, the oldest images
+	// are removed until it fits. Zero disables the bound.
+	BuildLayerCacheMaxPct float64 `key:"buildLayerCacheMaxPct" json:"build_layer_cache_max_pct"`
 }
 
 // BuildAptConfig is applied to apt during image builds whose base image has
