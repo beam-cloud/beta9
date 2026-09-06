@@ -5,12 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
+	goproc "github.com/beam-cloud/goproc/pkg"
 	goprocpb "github.com/beam-cloud/goproc/proto"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -210,6 +212,98 @@ func TestSandboxProcessManagerEndpointsIgnoreInvalidPublishedAddress(t *testing.
 	require.Len(t, endpoints, 1)
 	require.Equal(t, "192.168.0.81", endpoints[0].host)
 	require.Equal(t, int(types.WorkerSandboxProcessManagerPort), endpoints[0].port)
+}
+
+// On dual-stack nodes the worker publishes the process manager port on the
+// node's IPv6 address. goproc joins host and port with "%s:%d", so the host
+// must arrive bracketed or grpc rejects the target with "too many colons" and
+// the fallback endpoint is useless exactly when it is needed.
+func TestSandboxProcessManagerEndpointsBracketIPv6ForDialing(t *testing.T) {
+	endpoints := sandboxProcessManagerEndpoints(&ContainerInstance{
+		ContainerIp: "192.168.0.81",
+		ContainerAddressMap: map[int32]string{
+			types.WorkerSandboxProcessManagerPort: "[2600:1f18:37a4:c02::1a9b]:44209",
+		},
+	})
+
+	require.Len(t, endpoints, 2)
+	require.Equal(t, "192.168.0.81", endpoints[0].dialHost())
+	require.Equal(t, "2600:1f18:37a4:c02::1a9b", endpoints[1].host)
+	require.Equal(t, "[2600:1f18:37a4:c02::1a9b]", endpoints[1].dialHost())
+	require.Equal(t, 44209, endpoints[1].port)
+
+	require.Equal(t, "[fd00::5]", processManagerEndpoint{host: "fd00::5", port: 7111}.dialHost())
+	require.Equal(t, "[fd00::5]", processManagerEndpoint{host: "[fd00::5]", port: 7111}.dialHost())
+	require.Equal(t, "10.42.0.163", processManagerEndpoint{host: "10.42.0.163", port: 7111}.dialHost())
+	require.Equal(t, "sandbox.local", processManagerEndpoint{host: "sandbox.local", port: 7111}.dialHost())
+}
+
+// End-to-end version of the above: a real goproc server on an IPv6 address,
+// reachable only through the host-mapped fallback endpoint. Before dialHost()
+// this failed with "invalid target address ::1:<port> ... too many colons".
+func TestNewProcessManagerClientReachesIPv6FallbackEndpoint(t *testing.T) {
+	lis, err := net.Listen("tcp6", "[::1]:0")
+	if err != nil {
+		t.Skipf("no IPv6 loopback: %v", err)
+	}
+	srv := grpc.NewServer()
+	goprocpb.RegisterGoProcServer(srv, &goproc.GoProcServer{})
+	go srv.Serve(lis)
+	defer srv.Stop()
+
+	instance := &ContainerInstance{
+		ContainerAddressMap: map[int32]string{
+			types.WorkerSandboxProcessManagerPort: lis.Addr().String(),
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	client, err := newProcessManagerClient(ctx, instance)
+	require.NoError(t, err)
+	defer client.Cleanup()
+	require.NoError(t, client.ReadyContext(ctx))
+}
+
+// A restored sandbox has both endpoints. Right after restore the container-IP
+// endpoint can refuse for a moment (retryable), while the published address is
+// a host-mapped port the worker itself cannot reach (PREROUTING-only DNAT) and
+// fails in a non-retryable way. The retryable error has to win, otherwise the
+// exec fails immediately instead of riding out the blip.
+func TestNewProcessManagerClientKeepsRetryableErrorWhenFallbackFailsHard(t *testing.T) {
+	refused, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	primaryHost, primaryPort, _ := net.SplitHostPort(refused.Addr().String())
+	require.NoError(t, refused.Close()) // primary: nothing listening -> connection refused
+
+	// fallback: accepts and immediately hangs up -> "error reading server preface: EOF"
+	hangup, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer hangup.Close()
+	go func() {
+		for {
+			conn, err := hangup.Accept()
+			if err != nil {
+				return
+			}
+			conn.Close()
+		}
+	}()
+
+	port, err := strconv.Atoi(primaryPort)
+	require.NoError(t, err)
+	instance := &ContainerInstance{ContainerIp: primaryHost}
+	instance.setContainerAddressMap(map[int32]string{types.WorkerSandboxProcessManagerPort: hangup.Addr().String()})
+	endpoints := sandboxProcessManagerEndpoints(instance)
+	require.Len(t, endpoints, 2)
+	endpoints[0].port = port // the real primary is fixed at 7111, which a test cannot bind
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	client, err := newProcessManagerClientFromEndpoints(ctx, endpoints)
+	require.Nil(t, client)
+	require.Error(t, err)
+	require.True(t, isProcessManagerDialFailure(err), "expected the primary's retryable error, got: %v", err)
 }
 
 func TestDockerSandboxStartupCleanupRemovesStalePidFiles(t *testing.T) {

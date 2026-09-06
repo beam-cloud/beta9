@@ -54,8 +54,9 @@ class SDKSettings:
     app_url_template: str = os.getenv("BETA9_APP_URL_TEMPLATE", "")
 
     def __post_init__(self, **kwargs):
-        if p := os.getenv("CONFIG_PATH"):
-            self.config_path = Path(p).expanduser()
+        config_path = os.getenv("CONFIG_PATH")
+        if config_path:
+            self.config_path = Path(config_path).expanduser()
 
         # Handle Beam-specific environment variables if beam module is loaded
         if "beam" in sys.modules:
@@ -64,7 +65,8 @@ class SDKSettings:
             self.api_port = int(os.getenv("API_PORT", 443))
             self.gateway_host = os.getenv("GATEWAY_HOST", "gateway.beam.cloud")
             self.gateway_port = int(os.getenv("GATEWAY_PORT", 443))
-            self.config_path = Path("~/.beam/config.ini").expanduser()
+            if not config_path:
+                self.config_path = Path("~/.beam/config.ini").expanduser()
             self.use_defaults_in_prompt = True
             self.api_token = os.getenv("BEAM_TOKEN")
 

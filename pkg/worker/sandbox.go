@@ -527,24 +527,45 @@ func newProcessManagerClient(ctx context.Context, instance *ContainerInstance) (
 	if len(endpoints) == 0 {
 		return nil, fmt.Errorf("sandbox process manager address unavailable")
 	}
+	return newProcessManagerClientFromEndpoints(ctx, endpoints)
+}
 
-	var lastErr error
+// newProcessManagerClientFromEndpoints tries each endpoint in order and returns
+// the first that answers Ready. When none does, a retryable (dial) failure from
+// any endpoint takes precedence over a non-retryable one: a restored sandbox
+// briefly refuses on its container IP while its published host-mapped address
+// fails hard (the worker itself cannot reach a PREROUTING-only DNAT), and the
+// later hard failure must not turn the transient refusal into a fatal exec.
+func newProcessManagerClientFromEndpoints(ctx context.Context, endpoints []processManagerEndpoint) (*goproc.GoProcClient, error) {
+	var lastErr, retryableErr error
+	recordErr := func(err error) {
+		lastErr = err
+		if retryableErr == nil && isProcessManagerDialFailure(err) {
+			retryableErr = err
+		}
+	}
+
 	for _, endpoint := range endpoints {
-		client, err := goproc.NewGoProcClient(ctx, endpoint.host, uint(endpoint.port))
+		client, err := goproc.NewGoProcClient(ctx, endpoint.dialHost(), uint(endpoint.port))
 		if err != nil {
-			lastErr = err
+			recordErr(err)
 			continue
 		}
 
 		probeCtx, cancel := context.WithTimeout(ctx, goprocReadyProbeTimeout)
 		err = client.ReadyContext(probeCtx)
 		cancel()
-		if err == nil {
-			return client, nil
+		if err != nil {
+			_ = client.Cleanup()
+			recordErr(err)
+			continue
 		}
 
-		_ = client.Cleanup()
-		lastErr = err
+		return client, nil
+	}
+
+	if retryableErr != nil {
+		return nil, retryableErr
 	}
 	return nil, lastErr
 }
@@ -552,6 +573,18 @@ func newProcessManagerClient(ctx context.Context, instance *ContainerInstance) (
 type processManagerEndpoint struct {
 	host string
 	port int
+}
+
+// dialHost returns the host in the form goproc's client can join with a port
+// ("%s:%d" into grpc.NewClient). An IPv6 literal has to be bracketed there,
+// otherwise the dns resolver rejects the target ("too many colons") and the
+// host-mapped fallback endpoint is dead on every dual-stack node.
+func (e processManagerEndpoint) dialHost() string {
+	host := strings.TrimSuffix(strings.TrimPrefix(e.host, "["), "]")
+	if ip := net.ParseIP(host); ip != nil && ip.To4() == nil {
+		return "[" + host + "]"
+	}
+	return host
 }
 
 func sandboxProcessManagerEndpoints(instance *ContainerInstance) []processManagerEndpoint {
