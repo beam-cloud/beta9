@@ -62,6 +62,11 @@ const (
 	// the disable landed is delivered within the stream poll interval, so
 	// this covers that window with a wide margin.
 	workerDrainGrace time.Duration = 10 * time.Second
+	// workerDrainRetryInterval spaces out DisableWorker attempts once a worker
+	// is past its max age and the RPC fails, so a gateway that answers the
+	// request stream but not this call costs the stream loop at most one
+	// 5s RPC per interval rather than one per tick.
+	workerDrainRetryInterval time.Duration = 30 * time.Second
 )
 
 func ensureGVisorShmemTHP(path string) (bool, error) {
@@ -138,15 +143,16 @@ type Worker struct {
 	headroomMaxAge time.Duration
 	// maxAge bounds the worker's whole lifetime, busy or not: past it the
 	// worker drains (see maybeStartDraining) and exits once its containers are
-	// gone. Zero is no bound. draining and drainStartedAt are only touched from
-	// the request-stream loop that calls shouldShutDown.
-	maxAge         time.Duration
-	draining       bool
-	drainStartedAt time.Time
-	routeTransport string
-	ctx            context.Context
-	cancel         func()
-	config         types.AppConfig
+	// gone. Zero is no bound. draining, drainStartedAt and nextDrainAttempt are
+	// only touched from the request-stream loop that calls shouldShutDown.
+	maxAge           time.Duration
+	draining         bool
+	drainStartedAt   time.Time
+	nextDrainAttempt time.Time
+	routeTransport   string
+	ctx              context.Context
+	cancel           func()
+	config           types.AppConfig
 }
 
 func (w *Worker) gpuVirtualizedForRequest(request *types.ContainerRequest) bool {
@@ -1111,18 +1117,20 @@ func (s *Worker) shouldExit(lastContainerRequest, now time.Time) bool {
 // container goes to another worker (or the one the sizer boots to replace the
 // capacity this one no longer counts for), and lets the running containers
 // finish on their own. Persistent workers are external machines and are left
-// alone. A failed disable is retried on the next call rather than treated as
-// draining, since exiting while still schedulable is what strands requests.
+// alone. A failed disable is retried (no sooner than workerDrainRetryInterval
+// later) rather than treated as draining, since exiting while still
+// schedulable is what strands requests.
 func (s *Worker) maybeStartDraining(now time.Time) {
 	if s.draining || s.persistent || s.maxAge <= 0 {
 		return
 	}
 	age := now.Sub(s.startedAt)
-	if age < s.maxAge {
+	if age < s.maxAge || now.Before(s.nextDrainAttempt) {
 		return
 	}
 	if err := s.disableScheduling(); err != nil {
-		log.Warn().Err(err).Str("worker_id", s.workerId).Msg("worker reached its max age but could not disable scheduling, retrying")
+		s.nextDrainAttempt = now.Add(workerDrainRetryInterval)
+		log.Warn().Err(err).Str("worker_id", s.workerId).Dur("retry_in", workerDrainRetryInterval).Msg("worker reached its max age but could not disable scheduling, retrying")
 		return
 	}
 	s.draining = true
@@ -1164,7 +1172,7 @@ func (s *Worker) drained(lastContainerRequest, now time.Time) bool {
 //
 // Holding headroom alone must not keep a worker up forever, though: an idle
 // pool would pin the same pod indefinitely, past image rollouts and node
-// drains. Past headroomMaxAge (id-jittered, see headroomWorkerMaxAge) an idle
+// drains. Past headroomMaxAge (id-jittered, see jitteredWorkerAge) an idle
 // headroom worker exits anyway; the sizer replaces it and the pool is cold for
 // one boot per period. Busy workers are never aged out: the bound applies only
 // when headroom is the sole reason the worker is still here.

@@ -164,7 +164,7 @@ func (f *fakeWorkerRepoClient) keepAliveCalls() int {
 
 // idleTestWorker is a worker with no containers that asks repo for headroom
 // before an idle exit. Its max age is set directly so the id jitter of
-// headroomWorkerMaxAge stays out of the arithmetic.
+// jitteredWorkerAge stays out of the arithmetic.
 func idleTestWorker(repo *fakeWorkerRepoClient, startedAt time.Time, maxAge time.Duration) *Worker {
 	return &Worker{
 		workerId:           "w-test",
@@ -310,7 +310,7 @@ func TestMaxAgeDrain(t *testing.T) {
 		require.Equal(t, 1, repo.disableCalls())
 	})
 
-	t.Run("failed disable is retried and does not count as draining", func(t *testing.T) {
+	t.Run("failed disable is retried on an interval and does not count as draining", func(t *testing.T) {
 		repo := &fakeWorkerRepoClient{disableErr: status.Error(codes.Unavailable, "gateway restarting")}
 		w := busyWorker(repo, old)
 
@@ -318,10 +318,16 @@ func TestMaxAgeDrain(t *testing.T) {
 		require.False(t, w.draining)
 		require.Equal(t, 1, repo.disableCalls())
 
+		// Ticks inside the retry interval do not hit the gateway again.
+		w.maybeStartDraining(now.Add(time.Second))
+		w.maybeStartDraining(now.Add(workerDrainRetryInterval - time.Second))
+		require.Equal(t, 1, repo.disableCalls())
+		require.False(t, w.draining)
+
 		repo.mu.Lock()
 		repo.disableErr = nil
 		repo.mu.Unlock()
-		w.maybeStartDraining(now.Add(30 * time.Second))
+		w.maybeStartDraining(now.Add(workerDrainRetryInterval))
 		require.True(t, w.draining)
 		require.Equal(t, 2, repo.disableCalls())
 	})
