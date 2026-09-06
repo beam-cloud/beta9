@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	mathrand "math/rand/v2"
 	"os"
 	"path/filepath"
 	"sync"
@@ -122,19 +123,31 @@ func TestLayerScanUploadFetchRoundTrip(t *testing.T) {
 // Content-defined boundaries must survive shifts: a flatten relocates
 // unchanged disk content within the qcow2 file, and publish dedup relies on
 // those bytes keeping their chunk hashes.
+//
+// The gear hash's low chunkMeanMask bits depend on the last 22 bytes only,
+// so a shifted stream re-finds its boundaries as soon as one boundary
+// re-aligns. What delays that is the max-size clamp: with a 4 MiB mean and
+// 8 MiB max, ~17% of chunks are cut at chunkMaxSize (exp(-7/4)), and a
+// clamped cut is relative to the chunk start, not the content, so it
+// carries a misalignment into the next chunk. Only the run of chunks from
+// the insertion point to the first re-aligned boundary may differ; with
+// unseeded data that run is geometric and ~8% of the time long enough to
+// drop dedup below 3/4, so the input is seeded to keep the test stable.
 func TestScanLayerChunksSurviveContentShift(t *testing.T) {
 	dir := t.TempDir()
+	rng := mathrand.NewChaCha8([32]byte{'l', 'a', 'y', 'e', 'r', '-', 's', 'h', 'i', 'f', 't'})
 	base := make([]byte, 64<<20)
-	rand.Read(base)
+	rng.Read(base)
 	pathA := filepath.Join(dir, "a.qcow2")
 	if err := os.WriteFile(pathA, base, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	// Insert 64 KiB at 8 MiB, shifting everything after it.
+	const insertAt = 8 << 20
 	inserted := make([]byte, 64<<10)
-	rand.Read(inserted)
-	shifted := append(append(append([]byte{}, base[:8<<20]...), inserted...), base[8<<20:]...)
+	rng.Read(inserted)
+	shifted := append(append(append([]byte{}, base[:insertAt]...), inserted...), base[insertAt:]...)
 	pathB := filepath.Join(dir, "b.qcow2")
 	if err := os.WriteFile(pathB, shifted, 0o600); err != nil {
 		t.Fatal(err)
@@ -153,13 +166,33 @@ func TestScanLayerChunksSurviveContentShift(t *testing.T) {
 	for _, chunk := range layerA.Chunks {
 		digestsA[chunk.Digest] = true
 	}
+	// The chunks that miss must be one contiguous run starting at the chunk
+	// holding the insertion: everything before it is untouched, and once a
+	// boundary re-aligns every later boundary is content-defined from it.
 	var sharedBytes, totalBytes int64
-	for _, chunk := range layerB.Chunks {
+	firstMiss, lastMiss := -1, -1
+	for i, chunk := range layerB.Chunks {
 		totalBytes += chunk.SizeBytes
 		if digestsA[chunk.Digest] {
 			sharedBytes += chunk.SizeBytes
+			continue
 		}
+		if firstMiss == -1 {
+			firstMiss = i
+		} else if i != lastMiss+1 {
+			t.Fatalf("chunk %d at %d lost dedup after boundaries re-aligned at chunk %d", i, chunk.OffsetBytes, lastMiss+1)
+		}
+		lastMiss = i
 	}
+	if firstMiss == -1 {
+		t.Fatal("the chunk holding the inserted bytes cannot dedup")
+	}
+	if first := layerB.Chunks[firstMiss]; first.OffsetBytes > insertAt || first.OffsetBytes+first.SizeBytes <= insertAt {
+		t.Fatalf("chunk %d at %d lost dedup before the insertion at %d", firstMiss, first.OffsetBytes, insertAt)
+	}
+	// Each max-size clamp carries the shift one chunk further; with the seed
+	// above the missing run is short (logged for reference).
+	t.Logf("%d of %d bytes dedup after a 64KiB shift; %d chunks re-cut", sharedBytes, totalBytes, lastMiss-firstMiss+1)
 	if sharedBytes < totalBytes*3/4 {
 		t.Fatalf("only %d of %d bytes dedup after a 64KiB shift", sharedBytes, totalBytes)
 	}
