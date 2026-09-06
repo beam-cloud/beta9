@@ -141,6 +141,10 @@ imageService:
     proxy: ""
     timeoutS: 20
     retries: 3
+  # The buildah layer store under the build cache keeps every layer a build on
+  # the node produced. Cap it at this fraction of its filesystem; after each
+  # build the oldest images go until it fits. 0 disables the cap.
+  buildLayerCacheMaxPct: 0.20
   registryStore: local
   registryCredentialProvider: docker
   buildRegistry: registry.localhost:5000

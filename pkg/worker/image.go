@@ -2503,6 +2503,10 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 			os.Remove(storageConf)
 		}
 	}()
+	if !cleanupGraphroot {
+		// The persistent store outlives this build; keep it within bounds.
+		defer c.trimBuildLayerCacheInBackground(graphroot, storageDriver)
+	}
 
 	buildCtxPath, err := c.getBuildContext(ctx, buildPath, request)
 	if err != nil {
