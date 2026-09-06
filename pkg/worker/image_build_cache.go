@@ -20,13 +20,25 @@ import (
 // Left alone it grows until the node's disk is full (prod build nodes reached
 // 160-210 GB), starving the content cache on the same volume. After each build
 // the store is trimmed to its share of the filesystem, oldest images first.
-// buildah refuses to remove an image whose layers a working container or a
-// newer image still builds on, so a build running alongside the trim is never
-// pulled from under; those images are simply skipped.
+//
+// A trim runs alongside other builds, so it must not remove what they need:
+//   - anything added to the store within buildLayerCacheMinAge is left alone,
+//     which covers a base image a starting build has just pulled and an image
+//     a finishing build has committed but not yet pushed;
+//   - images named for a build in flight on this worker (its id, its base
+//     image) are left alone whatever their age;
+//   - images a working container is built from are left alone;
+//   - buildah itself refuses to remove a layer another image or container
+//     still builds on, so a stale view of the store fails safe.
 
 // buildLayerCacheTrimHysteresis is the fraction of the cap the trim aims for,
 // so a store just over the cap is not trimmed again after every build.
 const buildLayerCacheTrimHysteresis = 0.9
+
+// buildLayerCacheMinAge: images added to the store more recently than this
+// are never removed, so a build in progress cannot lose what it just pulled
+// or committed.
+const buildLayerCacheMinAge = time.Hour
 
 // buildLayerCacheTrimBatch is how many images one buildah rmi removes before
 // the store is re-measured.
@@ -34,9 +46,20 @@ const buildLayerCacheTrimBatch = 16
 
 const buildLayerCacheTrimTimeout = 30 * time.Minute
 
-// buildLayerCacheTrimMu serializes trims: a second build finishing while one
-// trim runs does not start another.
-var buildLayerCacheTrimMu sync.Mutex
+// buildLayerCacheTrimmer runs one trim at a time. A build finishing while a
+// trim is underway marks it pending, and the running trim goes again.
+type buildLayerCacheTrimmer struct {
+	mu      sync.Mutex
+	running bool
+	pending bool
+
+	// inFlight holds references (image ids, base image refs) of builds this
+	// worker is running, keyed by build; a trim never removes an image named
+	// for one of them.
+	inFlight map[string][]string
+}
+
+var buildLayerCacheTrims = &buildLayerCacheTrimmer{inFlight: map[string][]string{}}
 
 // buildahStoredLayer is a containers/storage layer record as written to
 // overlay-layers/layers.json (vfs-layers for the vfs driver).
@@ -76,17 +99,58 @@ func (c *ImageClient) buildLayerCacheMaxBytes(graphroot string) int64 {
 	return int64(pct * float64(usage.TotalBytes))
 }
 
+// protectBuildImages records a build's image references as in flight until
+// the returned func runs.
+func (t *buildLayerCacheTrimmer) protectBuildImages(buildKey string, refs ...string) func() {
+	t.mu.Lock()
+	t.inFlight[buildKey] = refs
+	t.mu.Unlock()
+	return func() {
+		t.mu.Lock()
+		delete(t.inFlight, buildKey)
+		t.mu.Unlock()
+	}
+}
+
+func (t *buildLayerCacheTrimmer) protectedRefs() []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var refs []string
+	for _, r := range t.inFlight {
+		refs = append(refs, r...)
+	}
+	return refs
+}
+
 // trimBuildLayerCacheInBackground trims the persistent store once the build
-// that used it has returned. At most one trim runs at a time.
+// that used it has returned. One trim runs at a time; a request during a trim
+// makes it run once more when done.
 func (c *ImageClient) trimBuildLayerCacheInBackground(graphroot, driver string) {
-	if !buildLayerCacheTrimMu.TryLock() {
+	t := buildLayerCacheTrims
+	t.mu.Lock()
+	if t.running {
+		t.pending = true
+		t.mu.Unlock()
 		return
 	}
+	t.running = true
+	t.mu.Unlock()
+
 	go func() {
-		defer buildLayerCacheTrimMu.Unlock()
-		ctx, cancel := context.WithTimeout(context.Background(), buildLayerCacheTrimTimeout)
-		defer cancel()
-		c.trimBuildLayerCache(ctx, graphroot, driver)
+		for {
+			ctx, cancel := context.WithTimeout(context.Background(), buildLayerCacheTrimTimeout)
+			c.trimBuildLayerCache(ctx, graphroot, driver)
+			cancel()
+
+			t.mu.Lock()
+			if !t.pending {
+				t.running = false
+				t.mu.Unlock()
+				return
+			}
+			t.pending = false
+			t.mu.Unlock()
+		}
 	}()
 }
 
@@ -120,16 +184,20 @@ func (c *ImageClient) trimBuildLayerCache(ctx context.Context, graphroot, driver
 
 	started := time.Now()
 	startBytes := size
-	removed, failed := 0, 0
-	// Every pass re-reads the store so removals that failed or freed less than
-	// expected (shared layers) do not end the trim early; an image that failed
-	// once is not retried within this trim.
+	attempted, removed, stuck := 0, 0, 0
+	// Each pass lists the oldest removable images afresh and re-measures the
+	// store afterwards, so removals that freed less than expected (shared
+	// layers) do not end the trim early. An image buildah refused (a newer
+	// image builds on it) is retried while passes still make progress, since
+	// removing that newer image may have freed it; it is set aside only once a
+	// whole pass removes nothing.
 	skip := map[string]struct{}{}
-	for size > target {
-		if ctx.Err() != nil {
-			break
-		}
-		batch, err := oldestRemovableBuildahImages(graphroot, driver, skip, buildLayerCacheTrimBatch)
+	for size > target && ctx.Err() == nil {
+		batch, err := oldestRemovableBuildahImages(graphroot, driver, trimExclusions{
+			skip:          skip,
+			protectedRefs: buildLayerCacheTrims.protectedRefs(),
+			minAdded:      time.Now().Add(-buildLayerCacheMinAge),
+		}, buildLayerCacheTrimBatch)
 		if err != nil {
 			log.Warn().Err(err).Msg("build layer cache trim stopped: cannot list images")
 			break
@@ -137,18 +205,33 @@ func (c *ImageClient) trimBuildLayerCache(ctx context.Context, graphroot, driver
 		if len(batch) == 0 {
 			break
 		}
-		for _, id := range batch {
-			skip[id] = struct{}{}
-		}
+		attempted += len(batch)
 		var out strings.Builder
 		args := append(store.args("rmi"), batch...)
 		if err := newBuildahCommand(ctx, args, env, &out, &out).Run(); err != nil {
-			// rmi keeps going past images it cannot remove and exits non-zero;
-			// the re-measure below shows what it did remove.
-			failed++
+			// rmi keeps going past images it cannot remove and exits
+			// non-zero; the re-read below shows which ones went.
 			log.Debug().Err(err).Str("output", strings.TrimSpace(out.String())).Msg("build layer cache trim: some images not removed")
 		}
-		removed += len(batch)
+
+		remaining, err := buildahStoredImageIDs(graphroot, driver)
+		if err != nil {
+			log.Warn().Err(err).Msg("build layer cache trim stopped: cannot re-read images")
+			break
+		}
+		progress := 0
+		for _, id := range batch {
+			if _, still := remaining[id]; !still {
+				progress++
+			}
+		}
+		removed += progress
+		if progress == 0 {
+			for _, id := range batch {
+				skip[id] = struct{}{}
+			}
+			stuck += len(batch)
+		}
 		if size, err = buildLayerStoreBytes(graphroot, driver); err != nil {
 			log.Warn().Err(err).Msg("build layer cache trim stopped: cannot re-size the store")
 			break
@@ -164,8 +247,9 @@ func (c *ImageClient) trimBuildLayerCache(ctx context.Context, graphroot, driver
 		Int64("end_bytes", size).
 		Int64("max_bytes", maxBytes).
 		Int64("target_bytes", target).
-		Int("images_attempted", removed).
-		Int("batches_with_failures", failed).
+		Int("images_attempted", attempted).
+		Int("images_removed", removed).
+		Int("images_stuck", stuck).
 		Dur("duration", time.Since(started)).
 		Msg("trimmed build layer cache")
 }
@@ -187,11 +271,19 @@ func buildLayerStoreBytes(graphroot, driver string) (int64, error) {
 	return total, nil
 }
 
+// trimExclusions is what a trim pass must leave in the store.
+type trimExclusions struct {
+	skip          map[string]struct{} // image ids set aside this trim
+	protectedRefs []string            // refs of builds in flight on this worker
+	minAdded      time.Time           // images added at or after this stay
+}
+
 // oldestRemovableBuildahImages returns up to limit image ids, oldest first by
 // when their top layer was added to this store (a pulled image's upstream
-// creation date says nothing about when this node fetched it). Images a
-// working container is built from, and ids in skip, are left out.
-func oldestRemovableBuildahImages(graphroot, driver string, skip map[string]struct{}, limit int) ([]string, error) {
+// creation date says nothing about when this node fetched it). Left out:
+// images a working container is built from, images named for a build in
+// flight, images added since minAdded, and ids in skip.
+func oldestRemovableBuildahImages(graphroot, driver string, excl trimExclusions, limit int) ([]string, error) {
 	layers, err := readBuildahStoredLayers(graphroot, driver)
 	if err != nil {
 		return nil, err
@@ -205,12 +297,15 @@ func oldestRemovableBuildahImages(graphroot, driver string, skip map[string]stru
 	if err := readBuildahStoreJSON(graphroot, driver, "images", "images.json", &images); err != nil {
 		return nil, err
 	}
-	inUse := map[string]struct{}{}
+	// An unreadable container index means unknown liveness: nothing is
+	// removable rather than everything.
 	var containers []buildahStoredContainer
-	if err := readBuildahStoreJSON(graphroot, driver, "containers", "containers.json", &containers); err == nil {
-		for _, container := range containers {
-			inUse[container.ImageID] = struct{}{}
-		}
+	if err := readBuildahStoreJSON(graphroot, driver, "containers", "containers.json", &containers); err != nil {
+		return nil, err
+	}
+	inUse := map[string]struct{}{}
+	for _, container := range containers {
+		inUse[container.ImageID] = struct{}{}
 	}
 
 	type aged struct {
@@ -219,15 +314,21 @@ func oldestRemovableBuildahImages(graphroot, driver string, skip map[string]stru
 	}
 	candidates := make([]aged, 0, len(images))
 	for _, image := range images {
-		if _, ok := skip[image.ID]; ok {
+		if _, ok := excl.skip[image.ID]; ok {
 			continue
 		}
 		if _, ok := inUse[image.ID]; ok {
 			continue
 		}
+		if imageNamedForRefs(image, excl.protectedRefs) {
+			continue
+		}
 		added, ok := layerCreated[image.Layer]
 		if !ok || added.IsZero() {
 			added = image.Created
+		}
+		if !added.Before(excl.minAdded) {
+			continue
 		}
 		candidates = append(candidates, aged{id: image.ID, added: added})
 	}
@@ -243,6 +344,45 @@ func oldestRemovableBuildahImages(graphroot, driver string, skip map[string]stru
 	ids := make([]string, 0, len(candidates))
 	for _, candidate := range candidates {
 		ids = append(ids, candidate.id)
+	}
+	return ids, nil
+}
+
+// imageNamedForRefs reports whether any of the image's names refers to one
+// of refs. A ref matches a name that contains it (a build id inside
+// registry/repo:build-id) or whose repo:tag or digest equals the ref's, so
+// python:3.12 covers docker.io/library/python:3.12.
+func imageNamedForRefs(image buildahStoredImage, refs []string) bool {
+	for _, ref := range refs {
+		if ref == "" {
+			continue
+		}
+		for _, name := range image.Names {
+			if strings.Contains(name, ref) || imageRefTail(name) == imageRefTail(ref) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// imageRefTail is the last path element of an image reference with its tag or
+// digest: repo:tag, or repo@sha256:... .
+func imageRefTail(ref string) string {
+	if i := strings.LastIndex(ref, "/"); i >= 0 {
+		ref = ref[i+1:]
+	}
+	return ref
+}
+
+func buildahStoredImageIDs(graphroot, driver string) (map[string]struct{}, error) {
+	var images []buildahStoredImage
+	if err := readBuildahStoreJSON(graphroot, driver, "images", "images.json", &images); err != nil {
+		return nil, err
+	}
+	ids := make(map[string]struct{}, len(images))
+	for _, image := range images {
+		ids[image.ID] = struct{}{}
 	}
 	return ids, nil
 }

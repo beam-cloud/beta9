@@ -2504,8 +2504,15 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		}
 	}()
 	if !cleanupGraphroot {
-		// The persistent store outlives this build; keep it within bounds.
+		// The persistent store outlives this build; keep it within bounds
+		// once this build is done, and keep concurrent trims off this
+		// build's own images meanwhile.
+		sourceImage := ""
+		if request.BuildOptions.SourceImage != nil {
+			sourceImage = *request.BuildOptions.SourceImage
+		}
 		defer c.trimBuildLayerCacheInBackground(graphroot, storageDriver)
+		defer buildLayerCacheTrims.protectBuildImages(request.ImageId, request.ImageId, sourceImage)()
 	}
 
 	buildCtxPath, err := c.getBuildContext(ctx, buildPath, request)
