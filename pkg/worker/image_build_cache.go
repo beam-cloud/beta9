@@ -194,7 +194,7 @@ func (c *ImageClient) trimBuildLayerCache(ctx context.Context, graphroot, driver
 	env := c.buildahEnv(runroot, tmpdir, storageConf)
 
 	// Leaked containers first: they hold unsized layers and pin images.
-	if stale, err := staleBuildahContainers(graphroot, driver, time.Now().Add(-buildLayerCacheStaleContainerAge)); err != nil {
+	if stale, err := staleBuildahContainers(graphroot, driver, time.Now().Add(-buildLayerCacheStaleContainerAge), buildLayerCacheTrims.inFlightBuilds()); err != nil {
 		log.Warn().Err(err).Msg("build layer cache trim: cannot list working containers")
 	} else if len(stale) > 0 {
 		var out strings.Builder
@@ -458,17 +458,35 @@ func readBuildahStoredContainers(graphroot, driver string) ([]buildahStoredConta
 }
 
 // staleBuildahContainers returns the ids of working containers created before
-// cutoff, sorted for deterministic removal.
-func staleBuildahContainers(graphroot, driver string, cutoff time.Time) ([]string, error) {
+// cutoff, sorted for deterministic removal. Containers created from an image
+// named for a build in flight are kept whatever their age, as the rmi path
+// keeps the images themselves.
+func staleBuildahContainers(graphroot, driver string, cutoff time.Time, inFlight []inFlightBuild) ([]string, error) {
 	containers, err := readBuildahStoredContainers(graphroot, driver)
 	if err != nil {
 		return nil, err
 	}
+	protected := map[string]struct{}{}
+	if len(inFlight) > 0 {
+		var images []buildahStoredImage
+		if err := readBuildahStoreJSON(graphroot, driver, "images", "images.json", &images); err != nil {
+			return nil, err
+		}
+		for _, image := range images {
+			if imageNamedForBuilds(image, inFlight) {
+				protected[image.ID] = struct{}{}
+			}
+		}
+	}
 	var stale []string
 	for _, container := range containers {
-		if !container.Created.IsZero() && container.Created.Before(cutoff) {
-			stale = append(stale, container.ID)
+		if container.Created.IsZero() || !container.Created.Before(cutoff) {
+			continue
 		}
+		if _, ok := protected[container.ImageID]; ok {
+			continue
+		}
+		stale = append(stale, container.ID)
 	}
 	sort.Strings(stale)
 	return stale, nil

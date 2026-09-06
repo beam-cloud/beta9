@@ -118,13 +118,22 @@ func TestStaleBuildahContainersSpansBothIndexes(t *testing.T) {
 		{ID: "undated", ImageID: "e"},
 	})
 
-	stale, err := staleBuildahContainers(graphroot, "overlay", now.Add(-buildLayerCacheStaleContainerAge))
+	stale, err := staleBuildahContainers(graphroot, "overlay", now.Add(-buildLayerCacheStaleContainerAge), nil)
 	require.NoError(t, err)
 	require.Equal(t, []string{"durable-old", "killed-this-morning", "killed-yesterday"}, stale,
 		"older than any build can run, from both indexes; a container with no created date is never assumed dead")
 
+	// A container built from an image named for a build in flight stays, as
+	// the image itself does on the rmi path.
+	writeBuildahStoreJSON(t, graphroot, "images", "images.json", []buildahStoredImage{
+		{ID: "c", Names: []string{"docker.io/library/python:3.12"}},
+	})
+	stale, err = staleBuildahContainers(graphroot, "overlay", now.Add(-buildLayerCacheStaleContainerAge), []inFlightBuild{{imageID: "abc", baseImage: "python:3.12"}})
+	require.NoError(t, err)
+	require.Equal(t, []string{"durable-old", "killed-yesterday"}, stale)
+
 	// An empty store has nothing stale and is not an error.
-	stale, err = staleBuildahContainers(t.TempDir(), "overlay", now)
+	stale, err = staleBuildahContainers(t.TempDir(), "overlay", now, nil)
 	require.NoError(t, err)
 	require.Empty(t, stale)
 }
