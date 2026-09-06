@@ -119,6 +119,18 @@ func (idx *contentIndex) touch(hash string, now time.Time, interval time.Duratio
 	return true, persist
 }
 
+// bytes sums the size of every indexed object: the content on this disk that
+// eviction can act on, as opposed to whatever else shares the filesystem.
+func (idx *contentIndex) bytes() int64 {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	var total int64
+	for _, entry := range idx.entries {
+		total += entry.size
+	}
+	return total
+}
+
 // candidates snapshots the index as eviction candidates, skipping in-flight
 // writes that are still inside their grace period.
 func (idx *contentIndex) candidates(now time.Time) []evictionCandidate {

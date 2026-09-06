@@ -1435,6 +1435,11 @@ type DiskUsage struct {
 	AvailableBytes uint64
 	UsedBytes      uint64
 	UsagePct       float64
+	// EvictableBytes is how much of UsedBytes is indexed cache content, the
+	// only part of the filesystem eviction can reclaim. The rest (OS, images,
+	// build and package caches on the same volume) has to be budgeted around.
+	// Zero when the store has not indexed anything yet.
+	EvictableBytes uint64
 }
 
 func diskUsageFromSnapshot(snapshot diskUsageSnapshot) DiskUsage {
