@@ -552,6 +552,11 @@ type WorkerConfig struct {
 	// minimum free capacity (poolSizing.minFree*) stays up before it exits and
 	// lets the pool sizer boot a fresh one. Zero disables the bound.
 	HeadroomWorkerMaxAge time.Duration `key:"headroomWorkerMaxAge" json:"headroom_worker_max_age"`
+	// MaxAge bounds a worker's whole lifetime, busy or idle. Past it the worker
+	// disables scheduling for itself, lets running containers finish and exits,
+	// so a worker with steady traffic still cycles onto the current image and
+	// off its node. Persistent workers are exempt. Zero disables the bound.
+	MaxAge time.Duration `key:"maxAge" json:"max_age"`
 }
 
 type ContainerResourceLimitsConfig struct {

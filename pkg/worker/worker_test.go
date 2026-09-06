@@ -123,6 +123,26 @@ type fakeWorkerRepoClient struct {
 	keepAliveErr      error
 	keepAlives        int
 	lastKeepAlive     *pb.SetWorkerKeepAliveRequest
+
+	// disableErr fails DisableWorker; disables counts calls.
+	disableErr error
+	disables   int
+}
+
+func (f *fakeWorkerRepoClient) DisableWorker(ctx context.Context, req *pb.DisableWorkerRequest, _ ...grpc.CallOption) (*pb.DisableWorkerResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.disables++
+	if f.disableErr != nil {
+		return nil, f.disableErr
+	}
+	return &pb.DisableWorkerResponse{Ok: true}, nil
+}
+
+func (f *fakeWorkerRepoClient) disableCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.disables
 }
 
 func (f *fakeWorkerRepoClient) SetWorkerKeepAlive(ctx context.Context, req *pb.SetWorkerKeepAliveRequest, _ ...grpc.CallOption) (*pb.SetWorkerKeepAliveResponse, error) {
@@ -228,18 +248,116 @@ func TestShouldExitIdle(t *testing.T) {
 	})
 }
 
-func TestHeadroomWorkerMaxAge(t *testing.T) {
-	require.Equal(t, time.Duration(0), headroomWorkerMaxAge(0, "1713919c"))
-	require.Equal(t, time.Duration(0), headroomWorkerMaxAge(-time.Hour, "1713919c"))
+// TestMaxAgeDrain covers the whole-lifetime bound: a busy worker past maxAge
+// disables scheduling once, keeps running until its containers are gone, and
+// then leaves without consulting the idle rules.
+func TestMaxAgeDrain(t *testing.T) {
+	now := time.Now()
+	maxAge := 24 * time.Hour
+	old := now.Add(-maxAge - time.Minute)
+	recent := now.Add(-time.Second) // a request just arrived
+	quiet := now.Add(-time.Hour)    // no request in a while
+
+	busyWorker := func(repo *fakeWorkerRepoClient, startedAt time.Time) *Worker {
+		w := idleTestWorker(repo, startedAt, 6*time.Hour)
+		w.maxAge = maxAge
+		w.containerInstances.Set("c1", &ContainerInstance{})
+		return w
+	}
+
+	t.Run("young busy worker is untouched", func(t *testing.T) {
+		repo := &fakeWorkerRepoClient{}
+		w := busyWorker(repo, now.Add(-time.Hour))
+		w.maybeStartDraining(now)
+		require.False(t, w.draining)
+		require.Equal(t, 0, repo.disableCalls())
+		require.False(t, w.shouldExit(recent, now))
+	})
+
+	t.Run("no bound when maxAge is zero", func(t *testing.T) {
+		repo := &fakeWorkerRepoClient{}
+		w := busyWorker(repo, now.Add(-100*24*time.Hour))
+		w.maxAge = 0
+		w.maybeStartDraining(now)
+		require.False(t, w.draining)
+		require.Equal(t, 0, repo.disableCalls())
+	})
+
+	t.Run("persistent workers are never drained", func(t *testing.T) {
+		repo := &fakeWorkerRepoClient{}
+		w := busyWorker(repo, old)
+		w.persistent = true
+		w.maybeStartDraining(now)
+		require.False(t, w.draining)
+		require.Equal(t, 0, repo.disableCalls())
+	})
+
+	t.Run("old busy worker disables scheduling once and keeps its containers", func(t *testing.T) {
+		repo := &fakeWorkerRepoClient{}
+		w := busyWorker(repo, old)
+
+		w.maybeStartDraining(now)
+		require.True(t, w.draining)
+		require.Equal(t, now, w.drainStartedAt)
+		require.Equal(t, 1, repo.disableCalls())
+
+		// Still running a container: stays, and the idle rules are not consulted.
+		require.False(t, w.shouldExit(recent, now))
+		require.Equal(t, 0, repo.keepAliveCalls())
+
+		// Later ticks do not disable again.
+		w.maybeStartDraining(now.Add(time.Minute))
+		require.Equal(t, 1, repo.disableCalls())
+	})
+
+	t.Run("failed disable is retried and does not count as draining", func(t *testing.T) {
+		repo := &fakeWorkerRepoClient{disableErr: status.Error(codes.Unavailable, "gateway restarting")}
+		w := busyWorker(repo, old)
+
+		w.maybeStartDraining(now)
+		require.False(t, w.draining)
+		require.Equal(t, 1, repo.disableCalls())
+
+		repo.mu.Lock()
+		repo.disableErr = nil
+		repo.mu.Unlock()
+		w.maybeStartDraining(now.Add(30 * time.Second))
+		require.True(t, w.draining)
+		require.Equal(t, 2, repo.disableCalls())
+	})
+
+	t.Run("drained worker exits after the grace, without the idle spindown wait", func(t *testing.T) {
+		repo := &fakeWorkerRepoClient{keepAliveHeadroom: true}
+		w := busyWorker(repo, old)
+		w.maybeStartDraining(now)
+		w.containerInstances.Delete("c1")
+
+		// Right after the disable: a request placed before it may still be in flight.
+		require.False(t, w.shouldExit(quiet, now))
+		require.False(t, w.shouldExit(quiet, now.Add(workerDrainGrace-time.Second)))
+		// A request delivered during the drain restarts the clock.
+		require.False(t, w.shouldExit(now.Add(2*workerDrainGrace-time.Second), now.Add(2*workerDrainGrace)))
+
+		// Past the grace on both counts it leaves; headroom would have kept an
+		// idle worker, and the 5-minute spindown has not elapsed, neither applies.
+		later := now.Add(workerDrainGrace)
+		require.True(t, w.shouldExit(now, later))
+		require.Equal(t, 0, repo.keepAliveCalls())
+	})
+}
+
+func TestJitteredWorkerAge(t *testing.T) {
+	require.Equal(t, time.Duration(0), jitteredWorkerAge(0, "1713919c"))
+	require.Equal(t, time.Duration(0), jitteredWorkerAge(-time.Hour, "1713919c"))
 
 	base := 6 * time.Hour
 	ids := []string{"1713919c", "cca87061", "3c51ead2", "df3dc97d", "00000000", "ffffffff", ""}
 	seen := map[time.Duration]bool{}
 	for _, id := range ids {
-		got := headroomWorkerMaxAge(base, id)
+		got := jitteredWorkerAge(base, id)
 		require.GreaterOrEqual(t, got, base, id)
 		require.LessOrEqual(t, got, base+base/8, id)
-		require.Equal(t, got, headroomWorkerMaxAge(base, id), "jitter must be stable for %q", id)
+		require.Equal(t, got, jitteredWorkerAge(base, id), "jitter must be stable for %q", id)
 		seen[got] = true
 	}
 	// Different ids spread out rather than all landing on the same instant.

@@ -338,6 +338,14 @@ worker:
   # Each worker adds up to 1/8 of this as id-derived jitter so two headroom
   # workers in a pool do not leave together. 0 disables the bound.
   headroomWorkerMaxAge: 6h
+  # Upper bound on any non-persistent worker's lifetime, busy or idle. Past it
+  # the worker stops accepting containers (the scheduler skips it and the pool
+  # sizer stops counting it, so a replacement starts right away), lets the
+  # containers it is running finish, and exits. Without this a worker with
+  # steady traffic never idles out and keeps running the image it booted with
+  # across releases. Same 1/8 id-derived jitter as headroomWorkerMaxAge.
+  # 0 disables the bound.
+  maxAge: 24h
   cacheEnabled: true
   containerLogLinesPerHour: 6000
   criu:
