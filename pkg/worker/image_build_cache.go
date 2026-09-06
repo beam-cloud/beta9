@@ -53,13 +53,19 @@ type buildLayerCacheTrimmer struct {
 	running bool
 	pending bool
 
-	// inFlight holds references (image ids, base image refs) of builds this
-	// worker is running, keyed by build; a trim never removes an image named
-	// for one of them.
-	inFlight map[string][]string
+	// inFlight holds the builds this worker is running, keyed by build; a
+	// trim never removes an image named for one of them.
+	inFlight map[string]inFlightBuild
 }
 
-var buildLayerCacheTrims = &buildLayerCacheTrimmer{inFlight: map[string][]string{}}
+// inFlightBuild is what a running build names in the store: the image it
+// commits under its id, and the base image it starts from.
+type inFlightBuild struct {
+	imageID   string
+	baseImage string
+}
+
+var buildLayerCacheTrims = &buildLayerCacheTrimmer{inFlight: map[string]inFlightBuild{}}
 
 // buildahStoredLayer is a containers/storage layer record as written to
 // overlay-layers/layers.json (vfs-layers for the vfs driver).
@@ -99,27 +105,27 @@ func (c *ImageClient) buildLayerCacheMaxBytes(graphroot string) int64 {
 	return int64(pct * float64(usage.TotalBytes))
 }
 
-// protectBuildImages records a build's image references as in flight until
-// the returned func runs.
-func (t *buildLayerCacheTrimmer) protectBuildImages(buildKey string, refs ...string) func() {
+// protectBuildImages records a build as in flight until the returned func
+// runs.
+func (t *buildLayerCacheTrimmer) protectBuildImages(imageID, baseImage string) func() {
 	t.mu.Lock()
-	t.inFlight[buildKey] = refs
+	t.inFlight[imageID] = inFlightBuild{imageID: imageID, baseImage: baseImage}
 	t.mu.Unlock()
 	return func() {
 		t.mu.Lock()
-		delete(t.inFlight, buildKey)
+		delete(t.inFlight, imageID)
 		t.mu.Unlock()
 	}
 }
 
-func (t *buildLayerCacheTrimmer) protectedRefs() []string {
+func (t *buildLayerCacheTrimmer) inFlightBuilds() []inFlightBuild {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	var refs []string
-	for _, r := range t.inFlight {
-		refs = append(refs, r...)
+	builds := make([]inFlightBuild, 0, len(t.inFlight))
+	for _, b := range t.inFlight {
+		builds = append(builds, b)
 	}
-	return refs
+	return builds
 }
 
 // trimBuildLayerCacheInBackground trims the persistent store once the build
@@ -194,9 +200,9 @@ func (c *ImageClient) trimBuildLayerCache(ctx context.Context, graphroot, driver
 	skip := map[string]struct{}{}
 	for size > target && ctx.Err() == nil {
 		batch, err := oldestRemovableBuildahImages(graphroot, driver, trimExclusions{
-			skip:          skip,
-			protectedRefs: buildLayerCacheTrims.protectedRefs(),
-			minAdded:      time.Now().Add(-buildLayerCacheMinAge),
+			skip:     skip,
+			inFlight: buildLayerCacheTrims.inFlightBuilds(),
+			minAdded: time.Now().Add(-buildLayerCacheMinAge),
 		}, buildLayerCacheTrimBatch)
 		if err != nil {
 			log.Warn().Err(err).Msg("build layer cache trim stopped: cannot list images")
@@ -273,9 +279,9 @@ func buildLayerStoreBytes(graphroot, driver string) (int64, error) {
 
 // trimExclusions is what a trim pass must leave in the store.
 type trimExclusions struct {
-	skip          map[string]struct{} // image ids set aside this trim
-	protectedRefs []string            // refs of builds in flight on this worker
-	minAdded      time.Time           // images added at or after this stay
+	skip     map[string]struct{} // image ids set aside this trim
+	inFlight []inFlightBuild     // builds running on this worker
+	minAdded time.Time           // images added at or after this stay
 }
 
 // oldestRemovableBuildahImages returns up to limit image ids, oldest first by
@@ -320,7 +326,7 @@ func oldestRemovableBuildahImages(graphroot, driver string, excl trimExclusions,
 		if _, ok := inUse[image.ID]; ok {
 			continue
 		}
-		if imageNamedForRefs(image, excl.protectedRefs) {
+		if imageNamedForBuilds(image, excl.inFlight) {
 			continue
 		}
 		added, ok := layerCreated[image.Layer]
@@ -348,26 +354,28 @@ func oldestRemovableBuildahImages(graphroot, driver string, excl trimExclusions,
 	return ids, nil
 }
 
-// imageNamedForRefs reports whether any of the image's names refers to one
-// of refs. A base image ref matches a name with the same final repo:tag (or
-// repo@digest), so python:3.12 covers docker.io/library/python:3.12 but
-// python alone covers only python:latest. A build id matches the name a build
-// gives its image: as the tag (registry/beta9-users:<id>) or as the repo
-// (<id>:latest).
-func imageNamedForRefs(image buildahStoredImage, refs []string) bool {
-	for _, ref := range refs {
-		if ref == "" {
-			continue
+// imageNamedForBuilds reports whether the image is named for a build in
+// flight: it is the image the build commits under its id (the id as the tag,
+// registry/beta9-users:<id>, or as the repo, <id>:latest), or it is the
+// build's base image, compared by final repo:tag or repo@digest with an
+// implicit :latest made explicit, so python and docker.io/library/python
+// both cover docker.io/library/python:latest and nothing else.
+func imageNamedForBuilds(image buildahStoredImage, builds []inFlightBuild) bool {
+	for _, build := range builds {
+		var baseTail string
+		if build.baseImage != "" {
+			baseTail = imageRefTail(build.baseImage)
 		}
-		refTail := imageRefTail(ref)
 		for _, name := range image.Names {
 			tail := imageRefTail(name)
-			if tail == refTail {
+			if baseTail != "" && tail == baseTail {
 				return true
 			}
-			repo, tag := splitImageRefTail(tail)
-			if ref == tag || (ref == repo && tag == "latest") {
-				return true
+			if build.imageID != "" {
+				repo, tag := splitImageRefTail(tail)
+				if tag == build.imageID || (repo == build.imageID && tag == "latest") {
+					return true
+				}
 			}
 		}
 	}
@@ -375,10 +383,13 @@ func imageNamedForRefs(image buildahStoredImage, refs []string) bool {
 }
 
 // imageRefTail is the last path element of an image reference with its tag or
-// digest: repo:tag, or repo@sha256:... .
+// digest, repo:tag or repo@sha256:..., with an implicit :latest made explicit.
 func imageRefTail(ref string) string {
 	if i := strings.LastIndex(ref, "/"); i >= 0 {
 		ref = ref[i+1:]
+	}
+	if !strings.ContainsAny(ref, ":@") {
+		ref += ":latest"
 	}
 	return ref
 }

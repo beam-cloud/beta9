@@ -2512,7 +2512,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		// once this build is done, and keep concurrent trims off this
 		// build's own images meanwhile.
 		defer c.trimBuildLayerCacheInBackground(graphroot, storageDriver)
-		defer buildLayerCacheTrims.protectBuildImages(request.ImageId, request.ImageId, sourceImage)()
+		defer buildLayerCacheTrims.protectBuildImages(request.ImageId, sourceImage)()
 	}
 
 	buildCtxPath, err := c.getBuildContext(ctx, buildPath, request)

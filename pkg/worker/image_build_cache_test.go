@@ -82,9 +82,9 @@ func TestOldestRemovableBuildahImagesOrdersByLocalAddTime(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"old-build", "no-layer-record", "base"}, ids)
 
-	// Images named for a build in flight stay: by build id inside the name,
-	// or by repo:tag regardless of registry prefix.
-	ids, err = oldestRemovableBuildahImages(graphroot, "overlay", trimExclusions{minAdded: now, protectedRefs: []string{"python:3.12", "old-build"}}, 10)
+	// Images named for a build in flight stay: the build's own image by id,
+	// its base by repo:tag regardless of registry prefix.
+	ids, err = oldestRemovableBuildahImages(graphroot, "overlay", trimExclusions{minAdded: now, inFlight: []inFlightBuild{{imageID: "old-build", baseImage: "python:3.12"}}}, 10)
 	require.NoError(t, err)
 	require.Equal(t, []string{"no-layer-record", "new-build"}, ids)
 }
@@ -100,30 +100,42 @@ func TestOldestRemovableBuildahImagesRefusesUnknownLiveness(t *testing.T) {
 	require.Error(t, err, "a corrupt container index must stop the trim, not read as no containers")
 }
 
-func TestImageNamedForRefs(t *testing.T) {
-	img := buildahStoredImage{Names: []string{
+func TestImageNamedForBuilds(t *testing.T) {
+	named := func(names ...string) buildahStoredImage { return buildahStoredImage{Names: names} }
+	img := named(
 		"187248174200.dkr.ecr.us-east-1.amazonaws.com/prod/beta9-users:6ec9ea3006729fb8",
 		"docker.io/library/python:3.12",
 		"public.ecr.aws/n4e0e1y0/beta9-runner@sha256:9ad4225de28a135f30a83dd7711d38bce0c3ead4b2167c3cc9fd485b07a00af5",
-	}}
-	require.True(t, imageNamedForRefs(img, []string{"6ec9ea3006729fb8"}), "build id as the tag")
-	require.True(t, imageNamedForRefs(buildahStoredImage{Names: []string{"6ec9ea3006729fb8:latest"}}, []string{"6ec9ea3006729fb8"}), "build id as the repo (bud path)")
-	require.True(t, imageNamedForRefs(img, []string{"python:3.12"}), "bare repo:tag matches the fully qualified name")
-	require.True(t, imageNamedForRefs(img, []string{"docker.io/library/python:3.12"}))
-	require.True(t, imageNamedForRefs(img, []string{"beta9-runner@sha256:9ad4225de28a135f30a83dd7711d38bce0c3ead4b2167c3cc9fd485b07a00af5"}))
-	require.False(t, imageNamedForRefs(img, []string{"python:3.11", "", "other-build"}))
-	require.False(t, imageNamedForRefs(img, []string{"python", "beta9", "6ec9ea30"}), "a bare repo (python means python:latest) or a substring protects nothing here")
-	require.True(t, imageNamedForRefs(buildahStoredImage{Names: []string{"docker.io/library/python:latest"}}, []string{"python"}))
-	require.False(t, imageNamedForRefs(buildahStoredImage{}, []string{"python:3.12"}), "intermediate images have no names")
+	)
+	build := func(id, base string) []inFlightBuild { return []inFlightBuild{{imageID: id, baseImage: base}} }
+
+	// The build's own image, by id.
+	require.True(t, imageNamedForBuilds(img, build("6ec9ea3006729fb8", "")), "build id as the tag")
+	require.True(t, imageNamedForBuilds(named("6ec9ea3006729fb8:latest"), build("6ec9ea3006729fb8", "")), "build id as the repo (bud path)")
+	require.False(t, imageNamedForBuilds(img, build("6ec9ea30", "")), "a prefix of the id is not the id")
+	require.False(t, imageNamedForBuilds(named("6ec9ea3006729fb8-x:latest", "x:6ec9ea3006729fb8x"), build("6ec9ea3006729fb8", "")), "the id must be the whole repo or tag")
+
+	// The build's base image, by repo:tag with :latest implicit.
+	require.True(t, imageNamedForBuilds(img, build("", "python:3.12")), "bare repo:tag matches the fully qualified name")
+	require.True(t, imageNamedForBuilds(img, build("", "docker.io/library/python:3.12")))
+	require.True(t, imageNamedForBuilds(img, build("", "beta9-runner@sha256:9ad4225de28a135f30a83dd7711d38bce0c3ead4b2167c3cc9fd485b07a00af5")))
+	require.True(t, imageNamedForBuilds(named("docker.io/library/python:latest"), build("", "python")))
+	require.True(t, imageNamedForBuilds(named("docker.io/library/python:latest"), build("", "docker.io/library/python")))
+	require.False(t, imageNamedForBuilds(img, build("", "python")), "python is python:latest, not python:3.12")
+	require.False(t, imageNamedForBuilds(named("other:python"), build("", "python")), "a base never matches as a tag")
+	require.False(t, imageNamedForBuilds(img, build("", "python:3.11")))
+	require.False(t, imageNamedForBuilds(img, build("other-build", "beta9")))
+	require.False(t, imageNamedForBuilds(buildahStoredImage{}, build("x", "python:3.12")), "intermediate images have no names")
+	require.False(t, imageNamedForBuilds(img, nil))
 }
 
 func TestBuildLayerCacheTrimmerProtectsInFlightBuilds(t *testing.T) {
-	tr := &buildLayerCacheTrimmer{inFlight: map[string][]string{}}
-	require.Empty(t, tr.protectedRefs())
-	done := tr.protectBuildImages("build-1", "build-1", "python:3.12")
-	require.ElementsMatch(t, []string{"build-1", "python:3.12"}, tr.protectedRefs())
+	tr := &buildLayerCacheTrimmer{inFlight: map[string]inFlightBuild{}}
+	require.Empty(t, tr.inFlightBuilds())
+	done := tr.protectBuildImages("build-1", "python:3.12")
+	require.Equal(t, []inFlightBuild{{imageID: "build-1", baseImage: "python:3.12"}}, tr.inFlightBuilds())
 	done()
-	require.Empty(t, tr.protectedRefs())
+	require.Empty(t, tr.inFlightBuilds())
 }
 
 func TestTrimBuildLayerCacheInBackgroundCoalesces(t *testing.T) {
