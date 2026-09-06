@@ -116,55 +116,53 @@ type fakeWorkerRepoClient struct {
 	claimStarted chan struct{}
 	claimRelease <-chan struct{}
 
-	// keepAliveHeadroom is the pool_headroom answer to SetWorkerKeepAlive;
-	// keepAliveErr fails the call instead. keepAlives counts calls and
-	// lastKeepAlive keeps the most recent request.
+	// SetWorkerKeepAlive answers keepAliveHeadroom as pool_headroom, or fails
+	// with keepAliveErr; DisableWorker fails with disableErr. Each counts its
+	// calls, and lastKeepAlive keeps the most recent keepalive request.
 	keepAliveHeadroom bool
 	keepAliveErr      error
 	keepAlives        int
 	lastKeepAlive     *pb.SetWorkerKeepAliveRequest
+	disableErr        error
+	disables          int
+}
 
-	// disableErr fails DisableWorker; disables counts calls.
-	disableErr error
-	disables   int
+// call records one fake RPC under the lock and returns its configured error.
+func (f *fakeWorkerRepoClient) call(calls *int, err *error, record func()) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	*calls++
+	if record != nil {
+		record()
+	}
+	return *err
+}
+
+func (f *fakeWorkerRepoClient) count(calls *int) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return *calls
 }
 
 func (f *fakeWorkerRepoClient) DisableWorker(ctx context.Context, req *pb.DisableWorkerRequest, _ ...grpc.CallOption) (*pb.DisableWorkerResponse, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.disables++
-	if f.disableErr != nil {
-		return nil, f.disableErr
+	if err := f.call(&f.disables, &f.disableErr, nil); err != nil {
+		return nil, err
 	}
 	return &pb.DisableWorkerResponse{Ok: true}, nil
 }
 
-func (f *fakeWorkerRepoClient) disableCalls() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.disables
-}
-
 func (f *fakeWorkerRepoClient) SetWorkerKeepAlive(ctx context.Context, req *pb.SetWorkerKeepAliveRequest, _ ...grpc.CallOption) (*pb.SetWorkerKeepAliveResponse, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.keepAlives++
-	f.lastKeepAlive = req
-	if f.keepAliveErr != nil {
-		return nil, f.keepAliveErr
+	if err := f.call(&f.keepAlives, &f.keepAliveErr, func() { f.lastKeepAlive = req }); err != nil {
+		return nil, err
 	}
 	return &pb.SetWorkerKeepAliveResponse{Ok: true, PoolHeadroom: f.keepAliveHeadroom}, nil
 }
 
-func (f *fakeWorkerRepoClient) keepAliveCalls() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.keepAlives
-}
+func (f *fakeWorkerRepoClient) disableCalls() int   { return f.count(&f.disables) }
+func (f *fakeWorkerRepoClient) keepAliveCalls() int { return f.count(&f.keepAlives) }
 
 // idleTestWorker is a worker with no containers that asks repo for headroom
-// before an idle exit. Its max age is set directly so the id jitter of
-// jitteredWorkerAge stays out of the arithmetic.
+// before an idle exit. Ages are set directly, without jitteredWorkerAge.
 func idleTestWorker(repo *fakeWorkerRepoClient, startedAt time.Time, maxAge time.Duration) *Worker {
 	return &Worker{
 		workerId:           "w-test",
@@ -248,9 +246,8 @@ func TestShouldExitIdle(t *testing.T) {
 	})
 }
 
-// TestMaxAgeDrain covers the whole-lifetime bound: a busy worker past maxAge
-// disables scheduling once, keeps running until its containers are gone, and
-// then leaves without consulting the idle rules.
+// TestMaxAgeDrain: a worker past maxAge disables scheduling once, keeps running
+// until its containers are gone, and leaves without consulting the idle rules.
 func TestMaxAgeDrain(t *testing.T) {
 	now := time.Now()
 	maxAge := 24 * time.Hour
@@ -329,6 +326,29 @@ func TestMaxAgeDrain(t *testing.T) {
 		repo.mu.Unlock()
 		w.maybeStartDraining(now.Add(workerDrainRetryInterval))
 		require.True(t, w.draining)
+		require.Equal(t, 2, repo.disableCalls())
+	})
+
+	t.Run("idle worker past max age exits only by draining, not while still schedulable", func(t *testing.T) {
+		// DisableWorker fails but keepalive works and reports no headroom: the
+		// idle rules would let it go while the scheduler can still place here.
+		repo := &fakeWorkerRepoClient{disableErr: status.Error(codes.Unavailable, "gateway restarting")}
+		w := busyWorker(repo, old)
+		w.containerInstances.Delete("c1")
+
+		w.maybeStartDraining(now)
+		require.False(t, w.draining)
+		require.False(t, w.shouldExit(quiet, now))
+		require.Equal(t, 0, repo.keepAliveCalls(), "idle rules must not be consulted past max age")
+
+		repo.mu.Lock()
+		repo.disableErr = nil
+		repo.mu.Unlock()
+		later := now.Add(workerDrainRetryInterval)
+		w.maybeStartDraining(later)
+		require.True(t, w.draining)
+		require.False(t, w.shouldExit(quiet, later))
+		require.True(t, w.shouldExit(quiet, later.Add(workerDrainGrace)))
 		require.Equal(t, 2, repo.disableCalls())
 	})
 

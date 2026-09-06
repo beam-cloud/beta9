@@ -56,16 +56,11 @@ const (
 	stuckContainerAbortDelay       time.Duration = 2 * time.Minute
 	gvisorShmemTHPPath                           = "/sys/kernel/mm/transparent_hugepage/shmem_enabled"
 
-	// workerDrainGrace is how long a draining worker must have been both
-	// disabled and without a new request before it treats an empty container
-	// set as fully drained: a request the scheduler placed here just before
-	// the disable landed is delivered within the stream poll interval, so
-	// this covers that window with a wide margin.
+	// A draining worker is drained once it has no containers and this long
+	// has passed since both its disable and its last request, so a container
+	// placed just before the disable landed is not orphaned.
 	workerDrainGrace time.Duration = 10 * time.Second
-	// workerDrainRetryInterval spaces out DisableWorker attempts once a worker
-	// is past its max age and the RPC fails, so a gateway that answers the
-	// request stream but not this call costs the stream loop at most one
-	// 5s RPC per interval rather than one per tick.
+	// Minimum spacing between DisableWorker retries for a worker past maxAge.
 	workerDrainRetryInterval time.Duration = 30 * time.Second
 )
 
@@ -134,17 +129,13 @@ type Worker struct {
 	userDataStorage         storage.Storage
 	persistent              bool
 	// poolHeadroom is the gateway's answer on the last keepalive: this worker
-	// is what keeps the pool's free capacity at its minimum, so it must not
-	// idle out (see shouldShutDown).
+	// holds the pool's minimum free capacity and must not idle out.
 	poolHeadroom atomic.Bool
-	// startedAt and headroomMaxAge bound how long holding headroom keeps an
-	// idle worker up (see shouldExitIdle); a zero headroomMaxAge is no bound.
-	startedAt      time.Time
-	headroomMaxAge time.Duration
-	// maxAge bounds the worker's whole lifetime, busy or not: past it the
-	// worker drains (see maybeStartDraining) and exits once its containers are
-	// gone. Zero is no bound. draining, drainStartedAt and nextDrainAttempt are
-	// only touched from the request-stream loop that calls shouldShutDown.
+	startedAt    time.Time
+	// headroomMaxAge bounds how long headroom alone keeps an idle worker up;
+	// maxAge bounds the whole lifetime, busy or not. Zero is no bound. The
+	// drain fields are only touched from the request-stream loop.
+	headroomMaxAge   time.Duration
 	maxAge           time.Duration
 	draining         bool
 	drainStartedAt   time.Time
@@ -1076,8 +1067,8 @@ func (s *Worker) disableScheduling() error {
 	return err
 }
 
-// Exit if there are no containers running and no containers have recently been spun up on this
-// worker, if the worker has drained past its max age, or if a shutdown signal has been received.
+// shouldShutDown is the request-stream loop's exit check: the context is done,
+// a worker past maxAge has drained, or an idle worker may leave.
 func (s *Worker) shouldShutDown(lastContainerRequest time.Time) bool {
 	select {
 	case <-s.ctx.Done():
@@ -1101,51 +1092,49 @@ func (s *Worker) shouldShutDown(lastContainerRequest time.Time) bool {
 	return true
 }
 
-// shouldExit is the exit decision behind shouldShutDown: a draining worker
-// leaves as soon as it is drained, any other worker follows the idle rules.
+// shouldExit: a worker past maxAge leaves only once drained, so the exit never
+// races a DisableWorker that has not landed; any other worker follows the
+// idle rules.
 func (s *Worker) shouldExit(lastContainerRequest, now time.Time) bool {
 	if s.draining {
 		return s.drained(lastContainerRequest, now)
 	}
+	if s.pastMaxAge(now) {
+		return false
+	}
 	return s.shouldExitIdle(lastContainerRequest, now)
 }
 
-// maybeStartDraining begins the end of life of a worker past maxAge. Busy
-// workers are otherwise never aged out (see shouldExitIdle), so a worker with
-// steady traffic, a cron every minute for instance, would run forever on the
-// image it booted with. Draining disables scheduling first, so the next
-// container goes to another worker (or the one the sizer boots to replace the
-// capacity this one no longer counts for), and lets the running containers
-// finish on their own. Persistent workers are external machines and are left
-// alone. A failed disable is retried (no sooner than workerDrainRetryInterval
-// later) rather than treated as draining, since exiting while still
-// schedulable is what strands requests.
+func (s *Worker) pastMaxAge(now time.Time) bool {
+	return !s.persistent && s.maxAge > 0 && now.Sub(s.startedAt) >= s.maxAge
+}
+
+// maybeStartDraining disables scheduling for a worker past maxAge: the
+// scheduler skips it, the sizer stops counting it and boots a replacement, and
+// this one exits once its containers are gone. Without it a worker with steady
+// traffic never idles out and runs the image it booted with forever. A failed
+// disable is retried every workerDrainRetryInterval.
 func (s *Worker) maybeStartDraining(now time.Time) {
-	if s.draining || s.persistent || s.maxAge <= 0 {
-		return
-	}
-	age := now.Sub(s.startedAt)
-	if age < s.maxAge || now.Before(s.nextDrainAttempt) {
+	if s.draining || !s.pastMaxAge(now) || now.Before(s.nextDrainAttempt) {
 		return
 	}
 	if err := s.disableScheduling(); err != nil {
 		s.nextDrainAttempt = now.Add(workerDrainRetryInterval)
-		log.Warn().Err(err).Str("worker_id", s.workerId).Dur("retry_in", workerDrainRetryInterval).Msg("worker reached its max age but could not disable scheduling, retrying")
+		log.Warn().Err(err).Str("worker_id", s.workerId).Dur("retry_in", workerDrainRetryInterval).Msg("worker past its max age could not disable scheduling, retrying")
 		return
 	}
 	s.draining = true
 	s.drainStartedAt = now
 	log.Info().
 		Str("worker_id", s.workerId).
-		Dur("age", age).
+		Dur("age", now.Sub(s.startedAt)).
 		Dur("max_age", s.maxAge).
 		Int("containers", s.containerInstances.Len()).
-		Msg("worker reached its max age, draining: scheduling disabled, exiting once running containers finish")
+		Msg("worker past its max age, draining: scheduling disabled, exiting once running containers finish")
 }
 
-// drained reports whether a draining worker can leave: no containers, and
-// long enough since both the disable and the last delivered request that
-// nothing placed here before the disable is still on its way.
+// drained: no containers, and workerDrainGrace since both the disable and the
+// last request, so nothing placed here before the disable is still on its way.
 func (s *Worker) drained(lastContainerRequest, now time.Time) bool {
 	if s.containerInstances.Len() != 0 {
 		return false
@@ -1162,20 +1151,12 @@ func (s *Worker) drained(lastContainerRequest, now time.Time) bool {
 }
 
 // shouldExitIdle decides whether a worker with no containers and no request
-// for the spindown timeout leaves now. Persistent workers never do.
-//
-// An idle worker that is part of the pool's minimum free capacity stays:
-// exiting would only make the sizer start a replacement and leave the pool
-// cold while it boots. The gateway is asked right now rather than trusting a
-// flag up to a keepalive old, and the worker stays when the answer cannot be
-// had, since leaving on a stale or missing answer is what empties the pool.
-//
-// Holding headroom alone must not keep a worker up forever, though: an idle
-// pool would pin the same pod indefinitely, past image rollouts and node
-// drains. Past headroomMaxAge (id-jittered, see jitteredWorkerAge) an idle
-// headroom worker exits anyway; the sizer replaces it and the pool is cold for
-// one boot per period. Busy workers are never aged out: the bound applies only
-// when headroom is the sole reason the worker is still here.
+// for the spindown timeout leaves. Persistent workers never do. A worker the
+// gateway says holds the pool's minimum free capacity stays, since exiting
+// would only make the sizer boot a replacement and leave the pool cold; the
+// gateway is asked now rather than trusting the last keepalive, and no answer
+// keeps the worker. Past headroomMaxAge headroom no longer holds it, so an
+// idle pool does not pin one pod across image rollouts and node drains.
 func (s *Worker) shouldExitIdle(lastContainerRequest, now time.Time) bool {
 	if s.persistent {
 		return false
@@ -1201,10 +1182,8 @@ func (s *Worker) shouldExitIdle(lastContainerRequest, now time.Time) bool {
 	return true
 }
 
-// jitteredWorkerAge is a configured age bound plus up to 1/8 of it as jitter
-// derived from the worker id, so workers the sizer started together do not
-// reach the bound in the same instant and leave the pool with no ready worker
-// at all. Zero (or negative) base means no bound.
+// jitteredWorkerAge adds up to 1/8 of base as worker-id-derived jitter, so
+// workers started together do not leave together. Non-positive base: no bound.
 func jitteredWorkerAge(base time.Duration, workerId string) time.Duration {
 	if base <= 0 {
 		return 0
