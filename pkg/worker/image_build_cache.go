@@ -349,16 +349,24 @@ func oldestRemovableBuildahImages(graphroot, driver string, excl trimExclusions,
 }
 
 // imageNamedForRefs reports whether any of the image's names refers to one
-// of refs. A ref matches a name that contains it (a build id inside
-// registry/repo:build-id) or whose repo:tag or digest equals the ref's, so
-// python:3.12 covers docker.io/library/python:3.12.
+// of refs. A base image ref matches a name with the same final repo:tag (or
+// repo@digest), so python:3.12 covers docker.io/library/python:3.12 but
+// python alone covers only python:latest. A build id matches the name a build
+// gives its image: as the tag (registry/beta9-users:<id>) or as the repo
+// (<id>:latest).
 func imageNamedForRefs(image buildahStoredImage, refs []string) bool {
 	for _, ref := range refs {
 		if ref == "" {
 			continue
 		}
+		refTail := imageRefTail(ref)
 		for _, name := range image.Names {
-			if strings.Contains(name, ref) || imageRefTail(name) == imageRefTail(ref) {
+			tail := imageRefTail(name)
+			if tail == refTail {
+				return true
+			}
+			repo, tag := splitImageRefTail(tail)
+			if ref == tag || (ref == repo && tag == "latest") {
 				return true
 			}
 		}
@@ -373,6 +381,17 @@ func imageRefTail(ref string) string {
 		ref = ref[i+1:]
 	}
 	return ref
+}
+
+// splitImageRefTail splits repo:tag or repo@digest into its two parts.
+func splitImageRefTail(tail string) (repo, tagOrDigest string) {
+	if i := strings.Index(tail, "@"); i >= 0 {
+		return tail[:i], tail[i+1:]
+	}
+	if i := strings.Index(tail, ":"); i >= 0 {
+		return tail[:i], tail[i+1:]
+	}
+	return tail, ""
 }
 
 func buildahStoredImageIDs(graphroot, driver string) (map[string]struct{}, error) {

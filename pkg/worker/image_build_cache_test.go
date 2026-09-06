@@ -106,10 +106,14 @@ func TestImageNamedForRefs(t *testing.T) {
 		"docker.io/library/python:3.12",
 		"public.ecr.aws/n4e0e1y0/beta9-runner@sha256:9ad4225de28a135f30a83dd7711d38bce0c3ead4b2167c3cc9fd485b07a00af5",
 	}}
-	require.True(t, imageNamedForRefs(img, []string{"6ec9ea3006729fb8"}), "build id inside a tag")
+	require.True(t, imageNamedForRefs(img, []string{"6ec9ea3006729fb8"}), "build id as the tag")
+	require.True(t, imageNamedForRefs(buildahStoredImage{Names: []string{"6ec9ea3006729fb8:latest"}}, []string{"6ec9ea3006729fb8"}), "build id as the repo (bud path)")
 	require.True(t, imageNamedForRefs(img, []string{"python:3.12"}), "bare repo:tag matches the fully qualified name")
+	require.True(t, imageNamedForRefs(img, []string{"docker.io/library/python:3.12"}))
 	require.True(t, imageNamedForRefs(img, []string{"beta9-runner@sha256:9ad4225de28a135f30a83dd7711d38bce0c3ead4b2167c3cc9fd485b07a00af5"}))
 	require.False(t, imageNamedForRefs(img, []string{"python:3.11", "", "other-build"}))
+	require.False(t, imageNamedForRefs(img, []string{"python", "beta9", "6ec9ea30"}), "a bare repo (python means python:latest) or a substring protects nothing here")
+	require.True(t, imageNamedForRefs(buildahStoredImage{Names: []string{"docker.io/library/python:latest"}}, []string{"python"}))
 	require.False(t, imageNamedForRefs(buildahStoredImage{}, []string{"python:3.12"}), "intermediate images have no names")
 }
 
