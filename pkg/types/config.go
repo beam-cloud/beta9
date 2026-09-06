@@ -548,10 +548,13 @@ type WorkerConfig struct {
 	TmpSizeLimit                 string                        `key:"tmpSizeLimit" json:"tmp_size_limit"`
 	ContainerLogLinesPerHour     int                           `key:"containerLogLinesPerHour" json:"container_log_lines_per_hour"`
 	ContainerRuntime             string                        `key:"containerRuntime" json:"container_runtime"`
-	// HeadroomWorkerMaxAge bounds how long an idle worker that holds its pool's
-	// minimum free capacity (poolSizing.minFree*) stays up before it exits and
-	// lets the pool sizer boot a fresh one. Zero disables the bound.
+	// HeadroomWorkerMaxAge bounds how long pool headroom alone keeps an idle
+	// worker up. Zero disables the bound.
 	HeadroomWorkerMaxAge time.Duration `key:"headroomWorkerMaxAge" json:"headroom_worker_max_age"`
+	// MaxAge bounds any non-persistent worker's lifetime, busy or idle: past it
+	// the worker disables scheduling, lets running containers finish and exits.
+	// Zero disables the bound.
+	MaxAge time.Duration `key:"maxAge" json:"max_age"`
 }
 
 type ContainerResourceLimitsConfig struct {
