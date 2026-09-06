@@ -30,6 +30,13 @@ import (
 //   - images a working container is built from are left alone;
 //   - buildah itself refuses to remove a layer another image or container
 //     still builds on, so a stale view of the store fails safe.
+//
+// bud's stage containers are volatile, so they and their read-write layers
+// are indexed in volatile-containers.json and volatile-layers.json, not the
+// non-volatile files. A build killed mid-way (the gateway's build timeout,
+// a worker exit) leaves them behind: their layers hold gigabytes the layer
+// index does not size, and they pin their images so rmi refuses them. Every
+// trim removes working containers older than any build can run.
 
 // buildLayerCacheTrimHysteresis is the fraction of the cap the trim aims for,
 // so a store just over the cap is not trimmed again after every build.
@@ -43,6 +50,12 @@ const buildLayerCacheMinAge = time.Hour
 // buildLayerCacheTrimBatch is how many images one buildah rmi removes before
 // the store is re-measured.
 const buildLayerCacheTrimBatch = 16
+
+// buildLayerCacheStaleContainerAge: a working container older than this
+// belongs to a build that is gone. Dockerfile builds are stopped by the
+// gateway after an hour (dockerfileContainerSpinupTimeout); the other bud
+// paths run for minutes.
+const buildLayerCacheStaleContainerAge = 3 * time.Hour
 
 const buildLayerCacheTrimTimeout = 30 * time.Minute
 
@@ -85,10 +98,11 @@ type buildahStoredImage struct {
 }
 
 // buildahStoredContainer is a working-container record from
-// overlay-containers/containers.json.
+// overlay-containers/containers.json or volatile-containers.json.
 type buildahStoredContainer struct {
-	ID      string `json:"id"`
-	ImageID string `json:"image"`
+	ID      string    `json:"id"`
+	ImageID string    `json:"image"`
+	Created time.Time `json:"created"`
 }
 
 // buildLayerCacheMaxBytes is the store's cap on the filesystem holding
@@ -165,15 +179,6 @@ func (c *ImageClient) trimBuildLayerCache(ctx context.Context, graphroot, driver
 	if maxBytes <= 0 {
 		return
 	}
-	size, err := buildLayerStoreBytes(graphroot, driver)
-	if err != nil {
-		log.Warn().Err(err).Str("graphroot", graphroot).Msg("build layer cache trim skipped: cannot size the store")
-		return
-	}
-	if size <= maxBytes {
-		return
-	}
-	target := int64(float64(maxBytes) * buildLayerCacheTrimHysteresis)
 
 	runroot := mustMkdirTempBuildahDir("buildah-trim-run-")
 	defer os.RemoveAll(runroot)
@@ -187,6 +192,27 @@ func (c *ImageClient) trimBuildLayerCache(ctx context.Context, graphroot, driver
 	defer os.Remove(storageConf)
 	store := &buildahStore{graphroot: graphroot, runroot: runroot, tmpdir: tmpdir, driver: driver, conf: storageConf}
 	env := c.buildahEnv(runroot, tmpdir, storageConf)
+
+	// Leaked containers first: they hold unsized layers and pin images.
+	if stale, err := staleBuildahContainers(graphroot, driver, time.Now().Add(-buildLayerCacheStaleContainerAge)); err != nil {
+		log.Warn().Err(err).Msg("build layer cache trim: cannot list working containers")
+	} else if len(stale) > 0 {
+		var out strings.Builder
+		args := append(store.args("rm"), stale...)
+		err := newBuildahCommand(ctx, args, env, &out, &out).Run()
+		log.Info().Err(err).Int("containers", len(stale)).Str("output", strings.TrimSpace(out.String())).
+			Msg("removed stale build containers")
+	}
+
+	size, err := buildLayerStoreBytes(graphroot, driver)
+	if err != nil {
+		log.Warn().Err(err).Str("graphroot", graphroot).Msg("build layer cache trim skipped: cannot size the store")
+		return
+	}
+	if size <= maxBytes {
+		return
+	}
+	target := int64(float64(maxBytes) * buildLayerCacheTrimHysteresis)
 
 	started := time.Now()
 	startBytes := size
@@ -305,8 +331,8 @@ func oldestRemovableBuildahImages(graphroot, driver string, excl trimExclusions,
 	}
 	// An unreadable container index means unknown liveness: nothing is
 	// removable rather than everything.
-	var containers []buildahStoredContainer
-	if err := readBuildahStoreJSON(graphroot, driver, "containers", "containers.json", &containers); err != nil {
+	containers, err := readBuildahStoredContainers(graphroot, driver)
+	if err != nil {
 		return nil, err
 	}
 	inUse := map[string]struct{}{}
@@ -415,6 +441,37 @@ func buildahStoredImageIDs(graphroot, driver string) (map[string]struct{}, error
 		ids[image.ID] = struct{}{}
 	}
 	return ids, nil
+}
+
+// readBuildahStoredContainers returns every working container in the store,
+// volatile (bud's stage containers) and not.
+func readBuildahStoredContainers(graphroot, driver string) ([]buildahStoredContainer, error) {
+	var containers []buildahStoredContainer
+	for _, name := range []string{"containers.json", "volatile-containers.json"} {
+		var part []buildahStoredContainer
+		if err := readBuildahStoreJSON(graphroot, driver, "containers", name, &part); err != nil {
+			return nil, err
+		}
+		containers = append(containers, part...)
+	}
+	return containers, nil
+}
+
+// staleBuildahContainers returns the ids of working containers created before
+// cutoff, sorted for deterministic removal.
+func staleBuildahContainers(graphroot, driver string, cutoff time.Time) ([]string, error) {
+	containers, err := readBuildahStoredContainers(graphroot, driver)
+	if err != nil {
+		return nil, err
+	}
+	var stale []string
+	for _, container := range containers {
+		if !container.Created.IsZero() && container.Created.Before(cutoff) {
+			stale = append(stale, container.ID)
+		}
+	}
+	sort.Strings(stale)
+	return stale, nil
 }
 
 func readBuildahStoredLayers(graphroot, driver string) ([]buildahStoredLayer, error) {
