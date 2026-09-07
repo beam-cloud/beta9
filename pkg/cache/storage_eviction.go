@@ -37,6 +37,10 @@ const (
 	// evictionRecentAccessGuard preserves hot content during normal eviction.
 	// Hard disk pressure may still evict it to keep the node healthy.
 	evictionRecentAccessGuard = 10 * time.Minute
+	// evictionRecentStoreGuard orders content written this recently last in
+	// every pass: a volume write is read minutes later by another container,
+	// and until then it looks colder than anything a running one just read.
+	evictionRecentStoreGuard = 30 * time.Minute
 	// evictionIncompleteContentGrace keeps in-flight writes out of eviction,
 	// while allowing abandoned marker-less v2 dirs to be reclaimed.
 	evictionIncompleteContentGrace = 30 * time.Minute
@@ -46,10 +50,11 @@ const (
 )
 
 type evictionCandidate struct {
-	hash       string
-	dir        string
-	lastAccess time.Time
-	sizeBytes  int64
+	hash        string
+	dir         string
+	lastAccess  time.Time
+	completedAt time.Time
+	sizeBytes   int64
 }
 
 // contentEntry is one object as the index knows it. complete mirrors the
@@ -152,7 +157,7 @@ func (idx *contentIndex) candidates(now time.Time) []evictionCandidate {
 		if !entry.complete && now.Sub(entry.lastAccess) < evictionIncompleteContentGrace {
 			continue
 		}
-		out = append(out, evictionCandidate{hash: hash, dir: entry.dir, lastAccess: entry.lastAccess, sizeBytes: entry.size})
+		out = append(out, evictionCandidate{hash: hash, dir: entry.dir, lastAccess: entry.lastAccess, completedAt: entry.completedAt, sizeBytes: entry.size})
 	}
 	return out
 }
@@ -403,7 +408,11 @@ func (cas *Store) evictLRUWithProtected(bytesToFree int64, protected map[string]
 	}
 
 	candidates := cas.evictionCandidates()
+	storeCutoff := time.Now().Add(-evictionRecentStoreGuard)
 	sort.Slice(candidates, func(i, j int) bool {
+		if fresh, other := candidates[i].completedAt.After(storeCutoff), candidates[j].completedAt.After(storeCutoff); fresh != other {
+			return other
+		}
 		return candidates[i].lastAccess.Before(candidates[j].lastAccess)
 	})
 
@@ -419,7 +428,7 @@ func (cas *Store) evictLRUWithProtected(bytesToFree int64, protected map[string]
 		}
 		// Oldest-first order: once we reach recently-read content, nothing
 		// after it is evictable either.
-		if !allowRecent && candidate.lastAccess.After(cutoff) {
+		if !allowRecent && (candidate.lastAccess.After(cutoff) || candidate.completedAt.After(storeCutoff)) {
 			break
 		}
 		if err := cas.removeContent(candidate); err != nil {
