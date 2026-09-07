@@ -25,6 +25,9 @@ type appBackendRepo struct {
 	stubsByApp       map[string][]types.StubWithRelated
 	secrets          map[string]string
 	secretLookups    int
+	// extraStubApps maps stub external IDs that aren't any app's latest stub
+	// to the app they belong to.
+	extraStubApps map[string]string
 }
 
 type appContainerRepo struct {
@@ -74,6 +77,45 @@ func (r *appBackendRepo) ListLatestDeploymentsByAppIDs(_ context.Context, _ uint
 		}
 	}
 	return deployments, nil
+}
+
+func (r *appBackendRepo) CountActiveDeploymentsByAppIDs(_ context.Context, _ uint, appExternalIDs []string) (map[string]int, error) {
+	counts := map[string]int{}
+	for _, appID := range appExternalIDs {
+		for _, deployment := range r.deploymentsByApp[appID] {
+			if deployment.Active {
+				counts[appID]++
+			}
+		}
+	}
+	return counts, nil
+}
+
+// ListAppIDsByStubExternalIDs resolves stubs through both the deployment and
+// stub fixtures, plus any explicit extra mappings (e.g. older stubs that are
+// no longer the app's latest).
+func (r *appBackendRepo) ListAppIDsByStubExternalIDs(_ context.Context, _ string, stubExternalIDs []string) (map[string]string, error) {
+	known := map[string]string{}
+	for appID, deployments := range r.deploymentsByApp {
+		for _, deployment := range deployments {
+			known[deployment.Stub.ExternalId] = appID
+		}
+	}
+	for appID, stubs := range r.stubsByApp {
+		for _, stub := range stubs {
+			known[stub.ExternalId] = appID
+		}
+	}
+	for stubID, appID := range r.extraStubApps {
+		known[stubID] = appID
+	}
+	result := map[string]string{}
+	for _, stubID := range stubExternalIDs {
+		if appID, ok := known[stubID]; ok {
+			result[stubID] = appID
+		}
+	}
+	return result, nil
 }
 
 func (r *appBackendRepo) ListStubs(_ context.Context, filters types.StubFilter) ([]types.StubWithRelated, error) {
@@ -181,12 +223,16 @@ func TestListAppWithLatestActivityIncludesCardEnrichment(t *testing.T) {
 				Data: []types.App{appWithDeployment, appWithStub},
 				Next: "",
 			},
+			extraStubApps: map[string]string{"old-stub": appWithDeployment.ExternalId},
 			deploymentsByApp: map[string][]types.DeploymentWithRelated{
 				appWithDeployment.ExternalId: {
 					{
+						// Latest deployment is stopped; an older function in
+						// the same app is still deployed (below).
 						Deployment: types.Deployment{
 							ExternalId:  "deployment-1",
 							Name:        "Deployment 1",
+							Active:      false,
 							WorkspaceId: workspace.Id,
 							AppId:       appWithDeployment.Id,
 						},
@@ -196,6 +242,26 @@ func TestListAppWithLatestActivityIncludesCardEnrichment(t *testing.T) {
 							Name:        "Stub Deploy",
 							Type:        types.StubType(types.StubTypePodDeployment),
 							Config:      `{"pool":{"name":"gpu-pool"},"is_service":true,"serving":{"app_kind":"llm_model","serving_protocol":"openai","llm":{"model_id":"Qwen/Qwen2.5-0.5B-Instruct","engine":"vllm","served_model_name":"qwen-test","context_length":4096,"metrics_path":"/metrics","slo_tier":"standard"}}}`,
+							WorkspaceId: workspace.Id,
+							AppId:       appWithDeployment.Id,
+						},
+						Workspace: *workspace,
+						App:       appWithDeployment,
+					},
+					{
+						Deployment: types.Deployment{
+							ExternalId:  "deployment-0",
+							Name:        "Deployment 0",
+							Active:      true,
+							WorkspaceId: workspace.Id,
+							AppId:       appWithDeployment.Id,
+						},
+						Stub: types.Stub{
+							Id:          3,
+							ExternalId:  "stub-older-fn",
+							Name:        "Older Function",
+							Type:        types.StubType(types.StubTypeEndpointDeployment),
+							Config:      "{}",
 							WorkspaceId: workspace.Id,
 							AppId:       appWithDeployment.Id,
 						},
@@ -228,7 +294,10 @@ func TestListAppWithLatestActivityIncludesCardEnrichment(t *testing.T) {
 				{StubId: "stub-deploy", Status: types.ContainerStatusRunning},
 				{StubId: "stub-deploy", Status: types.ContainerStatusPending},
 				{StubId: "stub-latest", Status: types.ContainerStatusRunning},
+				// An older stub of the deployment app: still counts for the app.
 				{StubId: "old-stub", Status: types.ContainerStatusRunning},
+				// Not in any listed app: ignored.
+				{StubId: "unknown-stub", Status: types.ContainerStatusRunning},
 			},
 		},
 	}
@@ -260,6 +329,7 @@ func TestListAppWithLatestActivityIncludesCardEnrichment(t *testing.T) {
 			ID                string `json:"id"`
 			PoolName          string `json:"pool_name"`
 			RunningContainers int    `json:"running_containers"`
+			ActiveDeployments int    `json:"active_deployments"`
 			IsService         bool   `json:"is_service"`
 			Serving           struct {
 				AppKind         string `json:"app_kind"`
@@ -295,6 +365,7 @@ func TestListAppWithLatestActivityIncludesCardEnrichment(t *testing.T) {
 	byID := map[string]struct {
 		PoolName          string
 		RunningContainers int
+		ActiveDeployments int
 		IsService         bool
 		Serving           struct {
 			AppKind         string `json:"app_kind"`
@@ -313,6 +384,7 @@ func TestListAppWithLatestActivityIncludesCardEnrichment(t *testing.T) {
 		byID[app.ID] = struct {
 			PoolName          string
 			RunningContainers int
+			ActiveDeployments int
 			IsService         bool
 			Serving           struct {
 				AppKind         string `json:"app_kind"`
@@ -329,21 +401,25 @@ func TestListAppWithLatestActivityIncludesCardEnrichment(t *testing.T) {
 		}{
 			PoolName:          app.PoolName,
 			RunningContainers: app.RunningContainers,
+			ActiveDeployments: app.ActiveDeployments,
 			IsService:         app.IsService,
 			Serving:           app.Serving,
 		}
 	}
 
 	deploymentApp := byID[appWithDeployment.ExternalId]
-	if deploymentApp.PoolName != "gpu-pool" || deploymentApp.RunningContainers != 2 || !deploymentApp.IsService {
+	if deploymentApp.PoolName != "gpu-pool" || deploymentApp.RunningContainers != 3 || !deploymentApp.IsService {
 		t.Fatalf("unexpected deployment app enrichment: %+v", deploymentApp)
+	}
+	if deploymentApp.ActiveDeployments != 1 {
+		t.Fatalf("expected the older active deployment to count, got %+v", deploymentApp)
 	}
 	if deploymentApp.Serving.AppKind != "llm_model" || deploymentApp.Serving.ServingProtocol != "openai" || deploymentApp.Serving.LLM.ModelID != "Qwen/Qwen2.5-0.5B-Instruct" || deploymentApp.Serving.LLM.ContextLength != 4096 {
 		t.Fatalf("unexpected deployment app llm enrichment: %+v", deploymentApp)
 	}
 
 	stubApp := byID[appWithStub.ExternalId]
-	if stubApp.PoolName != "cpu-pool" || stubApp.RunningContainers != 1 || !stubApp.IsService {
+	if stubApp.PoolName != "cpu-pool" || stubApp.RunningContainers != 1 || stubApp.ActiveDeployments != 0 || !stubApp.IsService {
 		t.Fatalf("unexpected stub app enrichment: %+v", stubApp)
 	}
 }

@@ -45,15 +45,21 @@ func NewAppGroup(g *echo.Group, backendRepo repository.BackendRepository, config
 
 type AppWithLatestStubOrDeployment struct {
 	types.App
-	Stub              *types.StubWithRelated       `json:"stub,omitempty" serializer:"stub"`
-	Deployment        *types.DeploymentWithRelated `json:"deployment,omitempty" serializer:"deployment"`
-	URL               string                       `json:"url,omitempty" serializer:"url,omitempty"`
-	InvokeURL         string                       `json:"invoke_url,omitempty" serializer:"invoke_url,omitempty"`
-	ConnectionURL     string                       `json:"connection_url,omitempty" serializer:"connection_url,omitempty"`
-	PoolName          string                       `json:"pool_name" serializer:"pool_name"`
-	RunningContainers int                          `json:"running_containers" serializer:"running_containers"`
-	IsService         bool                         `json:"is_service" serializer:"is_service"`
-	Serving           *types.ServingConfig         `json:"serving,omitempty" serializer:"serving"`
+	Stub          *types.StubWithRelated       `json:"stub,omitempty" serializer:"stub"`
+	Deployment    *types.DeploymentWithRelated `json:"deployment,omitempty" serializer:"deployment"`
+	URL           string                       `json:"url,omitempty" serializer:"url,omitempty"`
+	InvokeURL     string                       `json:"invoke_url,omitempty" serializer:"invoke_url,omitempty"`
+	ConnectionURL string                       `json:"connection_url,omitempty" serializer:"connection_url,omitempty"`
+	PoolName      string                       `json:"pool_name" serializer:"pool_name"`
+	// RunningContainers counts running containers across every stub in the
+	// app, not just the latest one, so multi-function and multi-config apps
+	// read as live whenever any of them is doing work.
+	RunningContainers int `json:"running_containers" serializer:"running_containers"`
+	// ActiveDeployments counts deployments in the app that are currently
+	// active (deployed and not stopped), across all of its functions.
+	ActiveDeployments int                  `json:"active_deployments" serializer:"active_deployments"`
+	IsService         bool                 `json:"is_service" serializer:"is_service"`
+	Serving           *types.ServingConfig `json:"serving,omitempty" serializer:"serving"`
 }
 
 func (a *AppGroup) ListAppWithLatestActivity(ctx echo.Context) error {
@@ -106,16 +112,20 @@ func (a *AppGroup) ListAppWithLatestActivity(ctx echo.Context) error {
 		return HTTPBadRequest("Failed to get apps")
 	}
 
-	latestStubIndexes := map[string][]int{}
+	activeDeploymentsByApp, err := a.backendRepo.CountActiveDeploymentsByAppIDs(ctx.Request().Context(), workspace.Id, appIDs)
+	if err != nil {
+		return HTTPBadRequest("Failed to get apps")
+	}
+
+	appIndexes := make(map[string]int, len(apps.Data))
 	for i := range apps.Data {
 		appsWithLatest.Data[i].App = apps.Data[i]
+		appsWithLatest.Data[i].ActiveDeployments = activeDeploymentsByApp[apps.Data[i].ExternalId]
+		appIndexes[apps.Data[i].ExternalId] = i
 
 		if deployment, ok := deploymentsByApp[apps.Data[i].ExternalId]; ok {
 			deploymentCopy := deployment
 			a.enrichAppWithStubConfig(&appsWithLatest.Data[i], &deploymentCopy.Stub, &deploymentCopy.Deployment, false)
-			if deploymentCopy.Stub.ExternalId != "" {
-				latestStubIndexes[deploymentCopy.Stub.ExternalId] = append(latestStubIndexes[deploymentCopy.Stub.ExternalId], i)
-			}
 			deploymentCopy.URL = appsWithLatest.Data[i].URL
 			deploymentCopy.InvokeURL = appsWithLatest.Data[i].InvokeURL
 			if err := sanitizeDeploymentWithRelated(&deploymentCopy); err != nil {
@@ -132,24 +142,21 @@ func (a *AppGroup) ListAppWithLatestActivity(ctx echo.Context) error {
 
 		stubCopy := stub
 		a.enrichAppWithStubConfig(&appsWithLatest.Data[i], &stubCopy.Stub, nil, false)
-		if stubCopy.Stub.ExternalId != "" {
-			latestStubIndexes[stubCopy.Stub.ExternalId] = append(latestStubIndexes[stubCopy.Stub.ExternalId], i)
-		}
 		appsWithLatest.Data[i].Stub = &stubCopy
 		if err := sanitizeStubWithRelated(appsWithLatest.Data[i].Stub); err != nil {
 			return HTTPInternalServerError("Failed to sanitize stub config")
 		}
 	}
 
-	if a.containerRepo != nil && len(latestStubIndexes) > 0 {
-		runningByStubID, err := countRunningContainersForStubs(a.containerRepo, workspaceID, latestStubIndexes)
+	if a.containerRepo != nil && len(appIndexes) > 0 {
+		runningByAppID, err := countRunningContainersForApps(ctx.Request().Context(), a.containerRepo, a.backendRepo, workspaceID)
 		if err != nil {
 			return HTTPInternalServerError("Failed to get running containers")
 		}
 
-		for stubID, indexes := range latestStubIndexes {
-			for _, index := range indexes {
-				appsWithLatest.Data[index].RunningContainers = runningByStubID[stubID]
+		for appID, count := range runningByAppID {
+			if index, ok := appIndexes[appID]; ok {
+				appsWithLatest.Data[index].RunningContainers = count
 			}
 		}
 	}
@@ -165,23 +172,45 @@ func (a *AppGroup) ListAppWithLatestActivity(ctx echo.Context) error {
 	)
 }
 
-func countRunningContainersForStubs(containerRepo repository.ContainerRepository, workspaceID string, latestStubIndexes map[string][]int) (map[string]int, error) {
-	runningByStubID := make(map[string]int, len(latestStubIndexes))
+// countRunningContainersForApps counts running containers per app across all
+// of the workspace's active containers, resolving each container's stub to its
+// app so containers from older stubs and other functions are included.
+func countRunningContainersForApps(ctx context.Context, containerRepo repository.ContainerRepository, backendRepo repository.BackendRepository, workspaceID string) (map[string]int, error) {
 	containers, err := containerRepo.GetActiveContainersByWorkspaceId(workspaceID)
 	if err != nil {
 		return nil, err
 	}
 
+	runningByStubID := map[string]int{}
 	for _, container := range containers {
-		if container.Status != types.ContainerStatusRunning {
+		if container.Status != types.ContainerStatusRunning || container.StubId == "" {
 			continue
 		}
-		if _, ok := latestStubIndexes[container.StubId]; ok {
-			runningByStubID[container.StubId]++
+		runningByStubID[container.StubId]++
+	}
+
+	runningByAppID := make(map[string]int, len(runningByStubID))
+	if len(runningByStubID) == 0 {
+		return runningByAppID, nil
+	}
+
+	stubIDs := make([]string, 0, len(runningByStubID))
+	for stubID := range runningByStubID {
+		stubIDs = append(stubIDs, stubID)
+	}
+
+	appIDsByStub, err := backendRepo.ListAppIDsByStubExternalIDs(ctx, workspaceID, stubIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	for stubID, count := range runningByStubID {
+		if appID, ok := appIDsByStub[stubID]; ok && appID != "" {
+			runningByAppID[appID] += count
 		}
 	}
 
-	return runningByStubID, nil
+	return runningByAppID, nil
 }
 
 func (a *AppGroup) enrichAppWithStubConfig(app *AppWithLatestStubOrDeployment, stub *types.Stub, deployment *types.Deployment, includeDatabaseSecretNames bool) {
@@ -292,6 +321,12 @@ func (a *AppGroup) hydrateDatabaseConnectionURL(ctx context.Context, workspace *
 
 func (a *AppGroup) appWithLatestStubOrDeployment(ctx context.Context, workspace *types.Workspace, app types.App) (AppWithLatestStubOrDeployment, error) {
 	appWithLatest := AppWithLatestStubOrDeployment{App: app}
+
+	activeDeploymentsByApp, err := a.backendRepo.CountActiveDeploymentsByAppIDs(ctx, workspace.Id, []string{app.ExternalId})
+	if err != nil {
+		return appWithLatest, err
+	}
+	appWithLatest.ActiveDeployments = activeDeploymentsByApp[app.ExternalId]
 
 	deploymentsByApp, err := a.backendRepo.ListLatestDeploymentsByAppIDs(ctx, workspace.Id, []string{app.ExternalId})
 	if err != nil {
