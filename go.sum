@@ -163,8 +163,8 @@ github.com/axiomhq/hyperloglog v0.0.0-20240319100328-84253e514e02/go.mod h1:k08r
 github.com/aybabtme/rgbterm v0.0.0-20170906152045-cc83f3b3ce59/go.mod h1:q/89r3U2H7sSsE2t6Kca0lfwTK8JdoNGS/yzM/4iH5I=
 github.com/beam-cloud/clip v0.0.0-20260907023706-9420edd6f9ec h1:zcr7+ud507kcRJBHotXr4hcUzEoqfPEgjtcMW6eCZwo=
 github.com/beam-cloud/clip v0.0.0-20260907023706-9420edd6f9ec/go.mod h1:uymwDNMk1qoxElmDSlPzwYqZDriHDnW5VVyfK3YNuz8=
-github.com/beam-cloud/geesefs v0.0.0-20260907142041-05899ece51a7 h1:2/bglvvI53cyEAYMvN3BckcDx8W4LyYscta2m0Wmejk=
-github.com/beam-cloud/geesefs v0.0.0-20260907142041-05899ece51a7/go.mod h1:q0qGsu0wiOzf/5m9JGLqZ7WteYDaaLGgBwNmstb3og0=
+github.com/beam-cloud/geesefs v0.0.0-20260907155448-03ce641cb6d6 h1:5dx5YTFYCl27hIrSBcrLJk2kWEMaYhMZ9aNnYfrIlDo=
+github.com/beam-cloud/geesefs v0.0.0-20260907155448-03ce641cb6d6/go.mod h1:q0qGsu0wiOzf/5m9JGLqZ7WteYDaaLGgBwNmstb3og0=
 github.com/beam-cloud/geesefs/s3ext v0.0.0-20250606164905-2f3593d03f4f h1:XzHOu+erxeBO6D3fKVbd5DAlipl+PYZ3u+Ywb8m7Ovk=
 github.com/beam-cloud/geesefs/s3ext v0.0.0-20250606164905-2f3593d03f4f/go.mod h1:YT41ScwaZw9hYfM0WbYZ64sQLNhPxWZFOXJOPug7O5M=
 github.com/beam-cloud/go-runc v0.0.0-20250911154456-bb45084abfe1 h1:EUB/gApGrZW0SzPdyk0jQILJk4Q8wUsWevTHGMkWU58=
