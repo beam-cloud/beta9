@@ -817,6 +817,9 @@ func TestReadContentIntoHandlesMissingGRPCClientAfterRawFailure(t *testing.T) {
 	require.Equal(t, "raw", trace.Attempts[0].Source)
 	require.Equal(t, "unavailable", trace.Attempts[0].Result)
 	require.Equal(t, ErrUnableToReachHost.Error(), trace.Attempts[0].Error)
+	require.Equal(t, "grpc_client", trace.Attempts[1].Source)
+	require.Equal(t, "unavailable", trace.Attempts[1].Result)
+	require.Equal(t, ErrSelectedHostUnavailable.Error(), trace.Attempts[1].Error)
 }
 
 // A raw read on a stale pooled connection must fall back to gRPC and leave a
