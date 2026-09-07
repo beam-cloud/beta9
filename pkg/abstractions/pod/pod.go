@@ -577,6 +577,14 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 		&stub.Stub,
 	)
 
+	// Sandboxes never create task records, so the dashboard's 24h activity
+	// strip reads this O(1) hourly counter instead of replaying event history.
+	if stub.Type == types.StubType(types.StubTypeSandbox) && appId != "" && s.containerRepo != nil {
+		if err := s.containerRepo.RecordSandboxCreated(workspace.ExternalId, appId, time.Now()); err != nil {
+			log.Warn().Err(err).Str("app_id", appId).Msg("failed to record sandbox activity")
+		}
+	}
+
 	return containerId, nil
 }
 

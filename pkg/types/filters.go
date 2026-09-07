@@ -75,10 +75,38 @@ type StubFilter struct {
 	Limit       uint32      `query:"limit"`
 }
 
+// AppState is how an app reads in the dashboard. It is derived, not stored:
+// running containers live in Redis, deployments in Postgres.
+type AppState string
+
+const (
+	// AppStateRunning: at least one container is running for any stub in the app.
+	AppStateRunning AppState = "running"
+	// AppStateIdle: nothing running right now, but at least one deployment is
+	// active, so the app scales up on the next request.
+	AppStateIdle AppState = "idle"
+	// AppStateStopped: nothing deployed and nothing running.
+	AppStateStopped AppState = "stopped"
+)
+
+func ParseAppState(s string) (AppState, bool) {
+	switch AppState(s) {
+	case AppStateRunning, AppStateIdle, AppStateStopped:
+		return AppState(s), true
+	}
+	return "", s == ""
+}
+
 type AppFilter struct {
 	Name   string `query:"name"`
+	State  string `query:"state"`
 	Cursor string `query:"cursor"`
 	Limit  uint32 `query:"limit"`
+
+	// Scoping computed server-side from live state. Untagged on purpose so the
+	// query binder can never set them from the request.
+	IncludeExternalIds []string
+	ExcludeExternalIds []string
 }
 
 type StubGetURLFilter struct {

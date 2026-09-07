@@ -1952,3 +1952,92 @@ func testContainerRequest(containerId, workspaceId string, cpu int64) *types.Con
 		},
 	}
 }
+
+// Stale index members (state hash gone, no exit code) must be pruned and live
+// ones returned, with the whole resolution pipelined rather than per-key.
+func TestListContainerStateByIndexPrunesStaleMembers(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := NewContainerRedisRepositoryForTest(rdb)
+	ctx := context.Background()
+
+	live := &types.ContainerState{ContainerId: "pod-live", StubId: "stub-a", WorkspaceId: "ws", Status: types.ContainerStatusRunning, ScheduledAt: time.Now().Unix()}
+	if err := repo.SetContainerState(live.ContainerId, live); err != nil {
+		t.Fatal(err)
+	}
+
+	indexKey := common.RedisKeys.SchedulerContainerWorkspaceIndex("ws")
+	// A container that exited: hash gone, exit code present → keep the index entry.
+	exitedKey := common.RedisKeys.SchedulerContainerState("pod-exited")
+	rdb.SAdd(ctx, indexKey, exitedKey)
+	rdb.Set(ctx, common.RedisKeys.SchedulerContainerExitCode("pod-exited"), 0, time.Minute)
+	// A dangling member: neither hash nor exit code → prune.
+	danglingKey := common.RedisKeys.SchedulerContainerState("pod-dangling")
+	rdb.SAdd(ctx, indexKey, danglingKey)
+
+	states, err := repo.GetActiveContainersByWorkspaceId("ws")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(states) != 1 || states[0].ContainerId != live.ContainerId {
+		t.Fatalf("expected only the live container, got %+v", states)
+	}
+
+	members, _ := rdb.SMembers(ctx, indexKey).Result()
+	if len(members) != 2 {
+		t.Fatalf("expected live + exited members to remain, got %v", members)
+	}
+	for _, m := range members {
+		if m == danglingKey {
+			t.Fatalf("dangling member should have been pruned: %v", members)
+		}
+	}
+}
+
+func TestSandboxActivityCountersBucketByHour(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := NewContainerRedisRepositoryForTest(rdb)
+
+	now := time.Date(2026, 9, 7, 15, 20, 0, 0, time.UTC)
+	for _, at := range []time.Time{now, now.Add(-5 * time.Minute), now.Add(-3 * time.Hour), now.Add(-30 * time.Hour)} {
+		if err := repo.RecordSandboxCreated("ws", "app-a", at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := repo.RecordSandboxCreated("ws", "app-b", now); err != nil {
+		t.Fatal(err)
+	}
+
+	activity, err := repo.GetSandboxActivity("ws", []string{"app-a", "app-b", "app-none"}, now.Add(-24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	a := activity["app-a"]
+	if len(a) != 2 {
+		t.Fatalf("expected two buckets inside the window for app-a, got %+v", a)
+	}
+	if !a[0].Time.Equal(now.Add(-3*time.Hour).Truncate(time.Hour)) || a[0].Total != 1 {
+		t.Fatalf("unexpected first bucket: %+v", a[0])
+	}
+	if !a[1].Time.Equal(now.Truncate(time.Hour)) || a[1].Total != 2 {
+		t.Fatalf("expected two creations in the current hour, got %+v", a[1])
+	}
+	if len(activity["app-b"]) != 1 || activity["app-b"][0].Total != 1 {
+		t.Fatalf("unexpected app-b activity: %+v", activity["app-b"])
+	}
+	if _, ok := activity["app-none"]; ok {
+		t.Fatalf("apps with no activity should be absent")
+	}
+
+	// The 30h-old bucket is trimmed on write, so the hash never grows past the window.
+	fields, _ := rdb.HKeys(context.Background(), common.RedisKeys.SchedulerAppSandboxActivity("ws", "app-a")).Result()
+	if len(fields) != 2 {
+		t.Fatalf("expected stale bucket to be trimmed, got fields %v", fields)
+	}
+}

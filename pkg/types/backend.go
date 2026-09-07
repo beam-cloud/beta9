@@ -407,6 +407,22 @@ type TaskCountPerDeployment struct {
 	TaskCount      uint   `db:"task_count" json:"task_count"`
 }
 
+// AppActivityBucket is one hour of an app's 24h activity strip: tasks created
+// (task-based stubs) plus sandboxes created (sandbox stubs), and how many of
+// those tasks ended in error.
+type AppActivityBucket struct {
+	Time   time.Time `json:"time"`
+	Total  int       `json:"total"`
+	Failed int       `json:"failed"`
+}
+
+type AppStateCounts struct {
+	All     int `json:"all" serializer:"all"`
+	Running int `json:"running" serializer:"running"`
+	Idle    int `json:"idle" serializer:"idle"`
+	Stopped int `json:"stopped" serializer:"stopped"`
+}
+
 type TaskCountByTime struct {
 	Time         time.Time       `db:"time" json:"time"`
 	Count        uint            `count:"count" json:"count"`

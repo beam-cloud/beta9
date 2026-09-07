@@ -915,6 +915,51 @@ func (c *PostgresBackendRepository) GetTaskCountPerDeployment(ctx context.Contex
 	return taskCounts, nil
 }
 
+type taskActivityRow struct {
+	AppExternalID string    `db:"app_external_id"`
+	Time          time.Time `db:"time"`
+	Total         int       `db:"total"`
+	Failed        int       `db:"failed"`
+}
+
+// AggregateTaskActivityByApp buckets tasks created since `since` by app and
+// hour, for a set of apps, in one query. Backs the dashboard's per-card
+// activity strips, replacing one aggregate request per card.
+func (c *PostgresBackendRepository) AggregateTaskActivityByApp(ctx context.Context, workspaceID uint, appExternalIDs []string, since time.Time) (map[string][]types.AppActivityBucket, error) {
+	result := make(map[string][]types.AppActivityBucket, len(appExternalIDs))
+	if workspaceID == 0 || len(appExternalIDs) == 0 {
+		return result, nil
+	}
+
+	query := `
+		SELECT a.external_id AS app_external_id,
+		       DATE_TRUNC('hour', t.created_at) AS time,
+		       COUNT(t.id) AS total,
+		       COUNT(t.id) FILTER (WHERE t.status = 'ERROR') AS failed
+		FROM task t
+		JOIN stub s ON s.id = t.stub_id
+		JOIN app a ON a.id = s.app_id
+		WHERE t.workspace_id = $1
+		  AND t.created_at >= $2
+		  AND a.external_id = ANY($3)
+		GROUP BY a.external_id, DATE_TRUNC('hour', t.created_at)
+		ORDER BY a.external_id, time;
+	`
+
+	var rows []taskActivityRow
+	if err := c.client.SelectContext(ctx, &rows, query, workspaceID, since, pq.Array(appExternalIDs)); err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		result[row.AppExternalID] = append(result[row.AppExternalID], types.AppActivityBucket{
+			Time:   row.Time.UTC(),
+			Total:  row.Total,
+			Failed: row.Failed,
+		})
+	}
+	return result, nil
+}
+
 func (c *PostgresBackendRepository) AggregateTasksByTimeWindow(ctx context.Context, filters types.TaskFilter) ([]types.TaskCountByTime, error) {
 	interval := strings.ToLower(filters.Interval)
 	if interval == "" {
@@ -1733,28 +1778,36 @@ type activeDeploymentCountRow struct {
 	Count         int    `db:"count"`
 }
 
-// CountActiveDeploymentsByAppIDs returns, per app, how many of its deployments
+// CountActiveDeploymentsByApp returns, per app, how many of its deployments
 // are currently active. Unlike ListLatestDeploymentsByAppIDs this considers
 // every deployment in the app, so an app whose newest deployment was stopped
-// while an older function is still deployed reports as live.
-func (c *PostgresBackendRepository) CountActiveDeploymentsByAppIDs(ctx context.Context, workspaceID uint, appExternalIDs []string) (map[string]int, error) {
+// while an older function is still deployed reports as idle rather than
+// stopped. A nil appExternalIDs covers every app in the workspace, which is
+// what the dashboard needs to compute workspace-wide state counts; apps with
+// no active deployment are simply absent from the result.
+func (c *PostgresBackendRepository) CountActiveDeploymentsByApp(ctx context.Context, workspaceID uint, appExternalIDs []string) (map[string]int, error) {
 	counts := make(map[string]int, len(appExternalIDs))
-	if workspaceID == 0 || len(appExternalIDs) == 0 {
+	if workspaceID == 0 || (appExternalIDs != nil && len(appExternalIDs) == 0) {
 		return counts, nil
 	}
 
-	query := `
-		SELECT a.external_id AS app_external_id, COUNT(d.id) AS count
-		FROM app a
-		JOIN deployment d ON d.app_id = a.id AND d.deleted_at IS NULL AND d.active = true
-		WHERE a.workspace_id = $1
-		  AND a.deleted_at IS NULL
-		  AND a.external_id = ANY($2)
-		GROUP BY a.external_id;
-	`
+	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).
+		Select("a.external_id AS app_external_id", "COUNT(d.id) AS count").
+		From("app a").
+		Join("deployment d ON d.app_id = a.id AND d.deleted_at IS NULL AND d.active = true").
+		Where(squirrel.Eq{"a.workspace_id": workspaceID}).
+		Where("a.deleted_at IS NULL").
+		GroupBy("a.external_id")
+	if appExternalIDs != nil {
+		qb = qb.Where(squirrel.Eq{"a.external_id": appExternalIDs})
+	}
+	query, args, err := qb.ToSql()
+	if err != nil {
+		return nil, err
+	}
 
 	var rows []activeDeploymentCountRow
-	if err := c.client.SelectContext(ctx, &rows, query, workspaceID, pq.Array(appExternalIDs)); err != nil {
+	if err := c.client.SelectContext(ctx, &rows, query, args...); err != nil {
 		return nil, err
 	}
 	for _, row := range rows {
@@ -2553,6 +2606,16 @@ func (r *PostgresBackendRepository) ListAppsPaginated(ctx context.Context, works
 		qb = qb.Where(squirrel.Like{"LOWER(a.name)": fmt.Sprintf("%%%s%%", strings.ToLower(filters.Name))})
 	}
 
+	// State filters arrive as explicit id sets (running / idle apps are known
+	// from Redis + deployments). An empty include set means "nothing matches";
+	// squirrel renders that as (1=0), which is what we want.
+	if filters.IncludeExternalIds != nil {
+		qb = qb.Where(squirrel.Eq{"a.external_id": filters.IncludeExternalIds})
+	}
+	if len(filters.ExcludeExternalIds) > 0 {
+		qb = qb.Where(squirrel.NotEq{"a.external_id": filters.ExcludeExternalIds})
+	}
+
 	page, err := common.Paginate(
 		common.SquirrelCursorPaginator[types.App]{
 			Client:          r.client,
@@ -2569,6 +2632,13 @@ func (r *PostgresBackendRepository) ListAppsPaginated(ctx context.Context, works
 	}
 
 	return *page, nil
+}
+
+// CountApps returns the number of live (non-deleted) apps in a workspace.
+func (r *PostgresBackendRepository) CountApps(ctx context.Context, workspaceId uint) (int, error) {
+	var count int
+	err := r.client.GetContext(ctx, &count, `SELECT COUNT(*) FROM app WHERE workspace_id = $1 AND deleted_at IS NULL;`, workspaceId)
+	return count, err
 }
 
 // Use to update the updated_at field of app when stub and deployment is created with app_id

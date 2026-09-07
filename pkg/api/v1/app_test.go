@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -28,15 +29,28 @@ type appBackendRepo struct {
 	// extraStubApps maps stub external IDs that aren't any app's latest stub
 	// to the app they belong to.
 	extraStubApps map[string]string
+	taskActivity  map[string][]types.AppActivityBucket
+	lastFilters   types.AppFilter
 }
 
 type appContainerRepo struct {
 	repository.ContainerRepository
-	states []types.ContainerState
+	states          []types.ContainerState
+	sandboxActivity map[string][]types.AppActivityBucket
 }
 
 func (r *appContainerRepo) GetActiveContainersByWorkspaceId(_ string) ([]types.ContainerState, error) {
 	return r.states, nil
+}
+
+func (r *appContainerRepo) GetSandboxActivity(_ string, appIds []string, _ time.Time) (map[string][]types.AppActivityBucket, error) {
+	out := map[string][]types.AppActivityBucket{}
+	for _, id := range appIds {
+		if b, ok := r.sandboxActivity[id]; ok {
+			out[id] = b
+		}
+	}
+	return out, nil
 }
 
 func (r *appBackendRepo) GetWorkspaceByExternalId(_ context.Context, externalId string) (types.Workspace, error) {
@@ -51,8 +65,49 @@ func (r *appBackendRepo) GetWorkspaceByExternalIdWithSigningKey(_ context.Contex
 	return r.GetWorkspaceByExternalId(context.Background(), externalId)
 }
 
-func (r *appBackendRepo) ListAppsPaginated(_ context.Context, _ uint, _ types.AppFilter) (repoCommon.CursorPaginationInfo[types.App], error) {
-	return r.apps, nil
+// ListAppsPaginated honours the include / exclude scoping the handler derives
+// from live state, the way the real query does.
+func (r *appBackendRepo) ListAppsPaginated(_ context.Context, _ uint, filters types.AppFilter) (repoCommon.CursorPaginationInfo[types.App], error) {
+	r.lastFilters = filters
+	page := repoCommon.CursorPaginationInfo[types.App]{Next: r.apps.Next}
+	for _, app := range r.apps.Data {
+		if filters.IncludeExternalIds != nil {
+			found := false
+			for _, id := range filters.IncludeExternalIds {
+				if id == app.ExternalId {
+					found = true
+				}
+			}
+			if !found {
+				continue
+			}
+		}
+		excluded := false
+		for _, id := range filters.ExcludeExternalIds {
+			if id == app.ExternalId {
+				excluded = true
+			}
+		}
+		if excluded {
+			continue
+		}
+		page.Data = append(page.Data, app)
+	}
+	return page, nil
+}
+
+func (r *appBackendRepo) CountApps(_ context.Context, _ uint) (int, error) {
+	return len(r.apps.Data), nil
+}
+
+func (r *appBackendRepo) AggregateTaskActivityByApp(_ context.Context, _ uint, appIDs []string, _ time.Time) (map[string][]types.AppActivityBucket, error) {
+	out := map[string][]types.AppActivityBucket{}
+	for _, id := range appIDs {
+		if b, ok := r.taskActivity[id]; ok {
+			out[id] = b
+		}
+	}
+	return out, nil
 }
 
 func (r *appBackendRepo) RetrieveApp(_ context.Context, workspaceID uint, appID string) (*types.App, error) {
@@ -79,7 +134,12 @@ func (r *appBackendRepo) ListLatestDeploymentsByAppIDs(_ context.Context, _ uint
 	return deployments, nil
 }
 
-func (r *appBackendRepo) CountActiveDeploymentsByAppIDs(_ context.Context, _ uint, appExternalIDs []string) (map[string]int, error) {
+func (r *appBackendRepo) CountActiveDeploymentsByApp(_ context.Context, _ uint, appExternalIDs []string) (map[string]int, error) {
+	if appExternalIDs == nil {
+		for appID := range r.deploymentsByApp {
+			appExternalIDs = append(appExternalIDs, appID)
+		}
+	}
 	counts := map[string]int{}
 	for _, appID := range appExternalIDs {
 		for _, deployment := range r.deploymentsByApp[appID] {
@@ -325,11 +385,13 @@ func TestListAppWithLatestActivityIncludesCardEnrichment(t *testing.T) {
 	}
 
 	var response struct {
-		Data []struct {
+		StateCounts types.AppStateCounts `json:"state_counts"`
+		Data        []struct {
 			ID                string `json:"id"`
 			PoolName          string `json:"pool_name"`
 			RunningContainers int    `json:"running_containers"`
 			ActiveDeployments int    `json:"active_deployments"`
+			State             string `json:"state"`
 			IsService         bool   `json:"is_service"`
 			Serving           struct {
 				AppKind         string `json:"app_kind"`
@@ -413,6 +475,16 @@ func TestListAppWithLatestActivityIncludesCardEnrichment(t *testing.T) {
 	}
 	if deploymentApp.ActiveDeployments != 1 {
 		t.Fatalf("expected the older active deployment to count, got %+v", deploymentApp)
+	}
+	// Both apps have running containers, so both are running and nothing is idle
+	// or stopped, workspace-wide.
+	if response.StateCounts != (types.AppStateCounts{All: 2, Running: 2}) {
+		t.Fatalf("unexpected state counts: %+v", response.StateCounts)
+	}
+	for _, app := range response.Data {
+		if app.State != string(types.AppStateRunning) {
+			t.Fatalf("expected %s to be running, got %q", app.ID, app.State)
+		}
 	}
 	if deploymentApp.Serving.AppKind != "llm_model" || deploymentApp.Serving.ServingProtocol != "openai" || deploymentApp.Serving.LLM.ModelID != "Qwen/Qwen2.5-0.5B-Instruct" || deploymentApp.Serving.LLM.ContextLength != 4096 {
 		t.Fatalf("unexpected deployment app llm enrichment: %+v", deploymentApp)
@@ -626,5 +698,184 @@ func TestEnrichAppWithStubConfigHidesDefaultPool(t *testing.T) {
 	}
 	if !app.IsService {
 		t.Fatal("expected service metadata to remain populated")
+	}
+}
+
+// Three apps in three states. Counts must describe the whole workspace and the
+// state filter must scope the page server-side.
+func TestListAppWithLatestActivityStateFilterAndCounts(t *testing.T) {
+	workspace := &types.Workspace{Id: 1, ExternalId: "workspace-1", Name: "Workspace 1"}
+	running := types.App{Id: 1, ExternalId: "app-running", Name: "Running", WorkspaceId: workspace.Id}
+	idle := types.App{Id: 2, ExternalId: "app-idle", Name: "Idle", WorkspaceId: workspace.Id}
+	stopped := types.App{Id: 3, ExternalId: "app-stopped", Name: "Stopped", WorkspaceId: workspace.Id}
+
+	deployment := func(app types.App, stubID string, active bool) types.DeploymentWithRelated {
+		return types.DeploymentWithRelated{
+			Deployment: types.Deployment{ExternalId: "dep-" + app.ExternalId, Name: app.Name, Active: active, WorkspaceId: workspace.Id, AppId: app.Id},
+			Stub:       types.Stub{ExternalId: stubID, Name: app.Name, Type: types.StubType(types.StubTypeEndpointDeployment), Config: "{}", WorkspaceId: workspace.Id, AppId: app.Id},
+			Workspace:  *workspace,
+			App:        app,
+		}
+	}
+
+	repo := &appBackendRepo{
+		workspace: workspace,
+		apps:      repoCommon.CursorPaginationInfo[types.App]{Data: []types.App{running, idle, stopped}},
+		deploymentsByApp: map[string][]types.DeploymentWithRelated{
+			running.ExternalId: {deployment(running, "stub-running", true)},
+			idle.ExternalId:    {deployment(idle, "stub-idle", true)},
+			stopped.ExternalId: {deployment(stopped, "stub-stopped", false)},
+		},
+		stubsByApp: map[string][]types.StubWithRelated{},
+	}
+	appGroup := &AppGroup{
+		backendRepo: repo,
+		containerRepo: &appContainerRepo{states: []types.ContainerState{
+			{StubId: "stub-running", Status: types.ContainerStatusRunning},
+		}},
+	}
+
+	call := func(query string) (struct {
+		StateCounts types.AppStateCounts `json:"state_counts"`
+		Data        []struct {
+			ID    string `json:"id"`
+			State string `json:"state"`
+		} `json:"data"`
+	}, types.AppFilter) {
+		e := echo.New()
+		req := httptest.NewRequest(http.MethodGet, "/workspace-1/latest"+query, nil)
+		rec := httptest.NewRecorder()
+		ctx := e.NewContext(req, rec)
+		ctx.SetParamNames("workspaceId")
+		ctx.SetParamValues(workspace.ExternalId)
+		if err := appGroup.ListAppWithLatestActivity(&auth.HttpAuthContext{
+			Context:  ctx,
+			AuthInfo: &auth.AuthInfo{Workspace: workspace, Token: &types.Token{TokenType: types.TokenTypeWorkspacePrimary}},
+		}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if rec.Code != http.StatusOK {
+			t.Fatalf("unexpected status %d: %s", rec.Code, rec.Body.String())
+		}
+		var out struct {
+			StateCounts types.AppStateCounts `json:"state_counts"`
+			Data        []struct {
+				ID    string `json:"id"`
+				State string `json:"state"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		return out, repo.lastFilters
+	}
+
+	all, _ := call("")
+	if all.StateCounts != (types.AppStateCounts{All: 3, Running: 1, Idle: 1, Stopped: 1}) {
+		t.Fatalf("unexpected counts: %+v", all.StateCounts)
+	}
+	states := map[string]string{}
+	for _, app := range all.Data {
+		states[app.ID] = app.State
+	}
+	if states[running.ExternalId] != "running" || states[idle.ExternalId] != "idle" || states[stopped.ExternalId] != "stopped" {
+		t.Fatalf("unexpected per-app states: %+v", states)
+	}
+
+	for _, tc := range []struct {
+		state string
+		want  string
+	}{{"running", running.ExternalId}, {"idle", idle.ExternalId}, {"stopped", stopped.ExternalId}} {
+		page, filters := call("?state=" + tc.state)
+		if len(page.Data) != 1 || page.Data[0].ID != tc.want {
+			t.Fatalf("state=%s: expected only %s, got %+v", tc.state, tc.want, page.Data)
+		}
+		// Counts stay workspace-wide regardless of the filter.
+		if page.StateCounts.All != 3 {
+			t.Fatalf("state=%s: counts should cover the workspace, got %+v", tc.state, page.StateCounts)
+		}
+		if tc.state == "stopped" && len(filters.ExcludeExternalIds) != 2 {
+			t.Fatalf("stopped should exclude running+idle, got %+v", filters)
+		}
+	}
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/workspace-1/latest?state=bogus", nil)
+	rec := httptest.NewRecorder()
+	ctx := e.NewContext(req, rec)
+	ctx.SetParamNames("workspaceId")
+	ctx.SetParamValues(workspace.ExternalId)
+	err := appGroup.ListAppWithLatestActivity(&auth.HttpAuthContext{
+		Context:  ctx,
+		AuthInfo: &auth.AuthInfo{Workspace: workspace, Token: &types.Token{TokenType: types.TokenTypeWorkspacePrimary}},
+	})
+	if err == nil {
+		t.Fatalf("expected an error for an invalid state filter")
+	}
+}
+
+func TestGetAppActivityMergesTasksAndSandboxesIntoFullSeries(t *testing.T) {
+	workspace := &types.Workspace{Id: 1, ExternalId: "workspace-1", Name: "Workspace 1"}
+	now := time.Now().UTC().Truncate(time.Hour)
+	appGroup := &AppGroup{
+		backendRepo: &appBackendRepo{
+			workspace: workspace,
+			taskActivity: map[string][]types.AppActivityBucket{
+				"app-a": {{Time: now.Add(-2 * time.Hour), Total: 5, Failed: 1}, {Time: now, Total: 2}},
+			},
+		},
+		containerRepo: &appContainerRepo{sandboxActivity: map[string][]types.AppActivityBucket{
+			"app-a": {{Time: now, Total: 3}},
+			"app-b": {{Time: now.Add(-time.Hour), Total: 7}},
+		}},
+	}
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/workspace-1/activity?app_ids=app-a,app-b,app-a,", nil)
+	rec := httptest.NewRecorder()
+	ctx := e.NewContext(req, rec)
+	ctx.SetParamNames("workspaceId")
+	ctx.SetParamValues(workspace.ExternalId)
+	if err := appGroup.GetAppActivity(&auth.HttpAuthContext{
+		Context:  ctx,
+		AuthInfo: &auth.AuthInfo{Workspace: workspace, Token: &types.Token{TokenType: types.TokenTypeWorkspacePrimary}},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var out map[string][]types.AppActivityBucket
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(out) != 2 {
+		t.Fatalf("expected two apps, got %d", len(out))
+	}
+	// 24h window + the current partial hour = 25 buckets, zero-filled.
+	if len(out["app-a"]) != 25 || len(out["app-b"]) != 25 {
+		t.Fatalf("expected 25 buckets per app, got %d / %d", len(out["app-a"]), len(out["app-b"]))
+	}
+	byTime := func(series []types.AppActivityBucket, at time.Time) types.AppActivityBucket {
+		for _, b := range series {
+			if b.Time.Equal(at) {
+				return b
+			}
+		}
+		t.Fatalf("missing bucket at %s", at)
+		return types.AppActivityBucket{}
+	}
+	if b := byTime(out["app-a"], now); b.Total != 5 || b.Failed != 0 {
+		t.Fatalf("expected tasks+sandboxes merged into the current hour, got %+v", b)
+	}
+	if b := byTime(out["app-a"], now.Add(-2*time.Hour)); b.Total != 5 || b.Failed != 1 {
+		t.Fatalf("unexpected older bucket: %+v", b)
+	}
+	if b := byTime(out["app-b"], now.Add(-time.Hour)); b.Total != 7 {
+		t.Fatalf("unexpected sandbox-only bucket: %+v", b)
+	}
+	if b := byTime(out["app-b"], now); b.Total != 0 {
+		t.Fatalf("expected zero-filled bucket, got %+v", b)
 	}
 }
