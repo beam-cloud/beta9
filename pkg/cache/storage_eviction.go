@@ -177,8 +177,13 @@ func (idx *contentIndex) replace(scanned map[string]contentEntry, since time.Tim
 		switch {
 		case completedDuringWalk && (!ok || !entry.complete):
 			scanned[hash] = current
-		case ok && current.lastAccess.After(entry.lastAccess):
-			entry.lastAccess = current.lastAccess
+		case ok:
+			if entry.complete {
+				entry.completedAt = current.completedAt
+			}
+			if current.lastAccess.After(entry.lastAccess) {
+				entry.lastAccess = current.lastAccess
+			}
 			scanned[hash] = entry
 		}
 	}
@@ -446,6 +451,7 @@ func (cas *Store) evictLRUWithProtected(bytesToFree int64, protected map[string]
 func (cas *Store) evictionCandidateStats(protected map[string]struct{}) (int, int, int, int) {
 	candidates := cas.evictionCandidates()
 	cutoff := time.Now().Add(-evictionRecentAccessGuard)
+	storeCutoff := time.Now().Add(-evictionRecentStoreGuard)
 	protectedCount := 0
 	recentCount := 0
 	evictableCount := 0
@@ -454,7 +460,7 @@ func (cas *Store) evictionCandidateStats(protected map[string]struct{}) (int, in
 			protectedCount++
 			continue
 		}
-		if candidate.lastAccess.After(cutoff) {
+		if candidate.lastAccess.After(cutoff) || candidate.completedAt.After(storeCutoff) {
 			recentCount++
 			continue
 		}

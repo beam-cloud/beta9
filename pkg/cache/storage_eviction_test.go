@@ -98,15 +98,10 @@ func TestEvictLRUEvictsFreshlyStoredContentLast(t *testing.T) {
 	require.True(t, ok)
 	entry.lastAccess = now.Add(-time.Minute)
 	store.index.put(hot, entry)
-	// Written two minutes ago and not read yet: colder than hot by access
+	// Written twenty minutes ago and not read yet: colder than hot by access
 	// time, but the write is what a container is about to read.
-	fresh, _, err := store.AddReader(context.Background(), bytes.NewReader([]byte("fresh-content")))
-	require.NoError(t, err)
-	entry, ok = store.index.get(fresh)
-	require.True(t, ok)
-	entry.lastAccess = now.Add(-2 * time.Minute)
-	entry.completedAt = entry.lastAccess
-	store.index.put(fresh, entry)
+	fresh := addEvictionTestContent(t, store, "fresh-content", now.Add(-20*time.Minute))
+	store.rebuildContentIndex()
 
 	// Normal pass: fresh content is guarded like recently-read content.
 	evicted, _ := store.evictLRUWithProtected(1<<30, nil, false)
