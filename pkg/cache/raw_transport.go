@@ -43,6 +43,7 @@ const (
 	// A connection burst can lose a SYN; TCP retransmits it after 1s, so a
 	// shorter dial timeout turns one dropped packet into a failed read.
 	rawReadDialTimeout = 3 * time.Second
+	rawReadIdleTimeout = time.Minute
 )
 
 type cacheMuxListener struct {
@@ -571,31 +572,73 @@ func (cs *Server) rawReadPageRegions(req rawReadRequest) ([]rawReadPageRegion, i
 }
 
 type rawReadConnPool struct {
-	addr     string
-	maxIdle  int
-	mu       sync.Mutex
-	idle     []net.Conn
-	active   map[net.Conn]struct{}
-	tokens   chan struct{}
-	closed   bool
-	closedCh chan struct{}
+	addr        string
+	maxIdle     int
+	idleTimeout time.Duration
+	mu          sync.Mutex
+	idle        []rawReadIdleConn
+	active      map[net.Conn]struct{}
+	tokens      chan struct{}
+	closed      bool
+	closedCh    chan struct{}
+}
+
+type rawReadIdleConn struct {
+	conn  net.Conn
+	since time.Time
 }
 
 func newRawReadConnPool(addr string, maxActive int, maxIdle int) *rawReadConnPool {
 	if maxActive <= 0 {
 		maxActive = 64
 	}
-	// Connections above the idle cap are closed, so every burst redials;
-	// an idle connection costs nothing, so default to keeping them all.
+	// Connections above the idle cap are closed, so every burst redials.
+	// Keep them all; the reaper closes the ones a quiet host stops using.
 	if maxIdle <= 0 {
 		maxIdle = maxActive
 	}
-	return &rawReadConnPool{
-		addr:     addr,
-		maxIdle:  maxIdle,
-		active:   make(map[net.Conn]struct{}),
-		tokens:   make(chan struct{}, maxActive),
-		closedCh: make(chan struct{}),
+	p := &rawReadConnPool{
+		addr:        addr,
+		maxIdle:     maxIdle,
+		idleTimeout: rawReadIdleTimeout,
+		active:      make(map[net.Conn]struct{}),
+		tokens:      make(chan struct{}, maxActive),
+		closedCh:    make(chan struct{}),
+	}
+	go p.reapLoop()
+	return p
+}
+
+func (p *rawReadConnPool) reapLoop() {
+	ticker := time.NewTicker(p.idleTimeout / 2)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-p.closedCh:
+			return
+		case now := <-ticker.C:
+			p.reapIdle(now)
+		}
+	}
+}
+
+// reapIdle closes connections idle past the timeout; the server holds no
+// deadline on an accepted connection, so this is what ends them on both sides.
+func (p *rawReadConnPool) reapIdle(now time.Time) {
+	p.mu.Lock()
+	kept := p.idle[:0]
+	var expired []net.Conn
+	for _, entry := range p.idle {
+		if now.Sub(entry.since) >= p.idleTimeout {
+			expired = append(expired, entry.conn)
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	p.idle = kept
+	p.mu.Unlock()
+	for _, conn := range expired {
+		_ = conn.Close()
 	}
 }
 
@@ -612,7 +655,7 @@ func (p *rawReadConnPool) get(ctx context.Context) (net.Conn, error) {
 	}
 	last := len(p.idle) - 1
 	if last >= 0 {
-		conn := p.idle[last]
+		conn := p.idle[last].conn
 		p.idle = p.idle[:last]
 		if err := ctx.Err(); err != nil {
 			p.mu.Unlock()
@@ -709,7 +752,7 @@ func (p *rawReadConnPool) put(conn net.Conn) {
 		p.release()
 		return
 	}
-	p.idle = append(p.idle, conn)
+	p.idle = append(p.idle, rawReadIdleConn{conn: conn, since: time.Now()})
 	p.release()
 }
 
@@ -732,7 +775,9 @@ func (p *rawReadConnPool) close() {
 	p.closed = true
 	close(p.closedCh)
 	conns := make([]net.Conn, 0, len(p.idle)+len(p.active))
-	conns = append(conns, p.idle...)
+	for _, entry := range p.idle {
+		conns = append(conns, entry.conn)
+	}
 	for conn := range p.active {
 		conns = append(conns, conn)
 	}

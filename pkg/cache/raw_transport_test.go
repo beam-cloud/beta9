@@ -358,3 +358,29 @@ func TestReadContentIntoSurvivesSaturatedRawReadAdmission(t *testing.T) {
 	require.Equal(t, rawReadBusyRetries+1, raw, "raw attempts: %+v", trace.Attempts)
 	require.Equal(t, 1, grpcHits)
 }
+
+func TestRawReadConnPoolReapsIdleConnections(t *testing.T) {
+	pool := newRawReadConnPool("127.0.0.1:0", 4, 4)
+	defer pool.close()
+
+	fresh, freshPeer := net.Pipe()
+	stale, stalePeer := net.Pipe()
+	defer freshPeer.Close()
+	defer stalePeer.Close()
+	for _, conn := range []net.Conn{fresh, stale} {
+		require.NoError(t, pool.acquire(context.Background()))
+		pool.put(conn)
+	}
+	pool.mu.Lock()
+	pool.idle[1].since = time.Now().Add(-2 * pool.idleTimeout)
+	pool.mu.Unlock()
+
+	pool.reapIdle(time.Now())
+
+	pool.mu.Lock()
+	require.Len(t, pool.idle, 1)
+	require.Same(t, fresh, pool.idle[0].conn)
+	pool.mu.Unlock()
+	_, err := stale.Write([]byte{0})
+	require.ErrorIs(t, err, io.ErrClosedPipe)
+}

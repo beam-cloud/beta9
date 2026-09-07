@@ -623,7 +623,7 @@ func (c *Client) checkHostEndpoint(host *Host) bool {
 	err := c.hostEndpointHealth(host)
 	if err != nil {
 		if !errors.Is(err, ErrHostNotFound) {
-			Logger.Infof("cache host endpoint probe failed @ %s (PrivateAddr=%s): %v", host.HostId, host.PrivateAddr, err)
+			Logger.Debugf("cache host endpoint probe failed @ %s (PrivateAddr=%s): %v", host.HostId, host.PrivateAddr, err)
 		}
 		c.removeHost(host)
 		return false

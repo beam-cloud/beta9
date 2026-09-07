@@ -208,7 +208,7 @@ func TestAttachWithoutSpareBuildsFreshVolume(t *testing.T) {
 		}
 	}
 	if created != 1 {
-		t.Fatalf("fresh attach formats exactly once: %v", host.commands)
+		t.Fatalf("fresh attach creates the volume image exactly once: %v", host.commands)
 	}
 	waitForSpares(t, manager, testSpareSize, spareTarget)
 	if err := manager.Close(ctx); err != nil {
