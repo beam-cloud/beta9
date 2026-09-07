@@ -67,6 +67,21 @@ func TestWorkerHoldsPoolHeadroom(t *testing.T) {
 	assert.True(t, WorkerHoldsPoolHeadroom(workerRepo, headroomTestConfig("12000m"), first))
 	assert.True(t, WorkerHoldsPoolHeadroom(workerRepo, headroomTestConfig("12000m"), second))
 
+	// A cordoned worker sorted ahead of the ready ones would otherwise be
+	// told it is headroom whenever they fall short, and sit idle forever.
+	// The scheduler will not place on it, so it never holds headroom; nor
+	// does a worker still pending.
+	cordoned := headroomTestWorker("0-cordoned", types.WorkerStatusDisabled, 10_000)
+	assert.Nil(t, workerRepo.AddWorker(cordoned))
+	assert.Nil(t, workerRepo.SetWorkerCordon(cordoned.Id, true))
+	cordoned, err = workerRepo.GetWorkerById(cordoned.Id)
+	assert.Nil(t, err)
+	assert.Equal(t, types.WorkerStatusDisabled, cordoned.Status)
+	assert.False(t, WorkerHoldsPoolHeadroom(workerRepo, headroomTestConfig("120000m"), cordoned))
+	assert.False(t, WorkerHoldsPoolHeadroom(workerRepo, headroomTestConfig("120000m"), pending))
+	// The ready workers behind it still hold the headroom themselves.
+	assert.True(t, WorkerHoldsPoolHeadroom(workerRepo, headroomTestConfig("120000m"), first))
+
 	// Unknown pool or nil worker: never headroom.
 	assert.False(t, WorkerHoldsPoolHeadroom(workerRepo, headroomTestConfig("4000m"), nil))
 	assert.False(t, WorkerHoldsPoolHeadroom(workerRepo, types.AppConfig{}, first))
