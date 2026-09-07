@@ -23,6 +23,7 @@ func addEvictionTestContent(t *testing.T, store *Store, content string, lastAcce
 	entry, ok := store.index.get(hash)
 	require.True(t, ok)
 	entry.lastAccess = lastAccess
+	entry.completedAt = lastAccess
 	store.index.put(hash, entry)
 	return hash
 }
@@ -84,6 +85,40 @@ func TestEvictLRUNeverRemovesRecentlyReadContent(t *testing.T) {
 	require.Zero(t, evicted)
 	require.Zero(t, freed)
 	require.True(t, store.Exists(hash))
+}
+
+func TestEvictLRUEvictsFreshlyStoredContentLast(t *testing.T) {
+	store := newTestStore(t, 5)
+
+	now := time.Now()
+	cold := addEvictionTestContent(t, store, "cold-content", now.Add(-2*time.Hour))
+	// Stored long ago, read a minute ago.
+	hot := addEvictionTestContent(t, store, "hot-content!", now.Add(-2*time.Hour))
+	entry, ok := store.index.get(hot)
+	require.True(t, ok)
+	entry.lastAccess = now.Add(-time.Minute)
+	store.index.put(hot, entry)
+	// Written two minutes ago and not read yet: colder than hot by access
+	// time, but the write is what a container is about to read.
+	fresh, _, err := store.AddReader(context.Background(), bytes.NewReader([]byte("fresh-content")))
+	require.NoError(t, err)
+	entry, ok = store.index.get(fresh)
+	require.True(t, ok)
+	entry.lastAccess = now.Add(-2 * time.Minute)
+	entry.completedAt = entry.lastAccess
+	store.index.put(fresh, entry)
+
+	// Normal pass: fresh content is guarded like recently-read content.
+	evicted, _ := store.evictLRUWithProtected(1<<30, nil, false)
+	require.Equal(t, 1, evicted)
+	require.False(t, store.Exists(cold))
+	require.True(t, store.Exists(fresh))
+
+	// Under pressure the recently-read object goes before the fresh write.
+	evicted, _ = store.evictLRUWithProtected(int64(len("hot-content!")), nil, true)
+	require.Equal(t, 1, evicted)
+	require.False(t, store.Exists(hot))
+	require.True(t, store.Exists(fresh))
 }
 
 func TestEvictWatermarkPctAcceptsWholePercent(t *testing.T) {
