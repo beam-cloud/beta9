@@ -1728,6 +1728,41 @@ func (c *PostgresBackendRepository) ListLatestDeploymentsByAppIDs(ctx context.Co
 	return deploymentsByApp, nil
 }
 
+type activeDeploymentCountRow struct {
+	AppExternalID string `db:"app_external_id"`
+	Count         int    `db:"count"`
+}
+
+// CountActiveDeploymentsByAppIDs returns, per app, how many of its deployments
+// are currently active. Unlike ListLatestDeploymentsByAppIDs this considers
+// every deployment in the app, so an app whose newest deployment was stopped
+// while an older function is still deployed reports as live.
+func (c *PostgresBackendRepository) CountActiveDeploymentsByAppIDs(ctx context.Context, workspaceID uint, appExternalIDs []string) (map[string]int, error) {
+	counts := make(map[string]int, len(appExternalIDs))
+	if workspaceID == 0 || len(appExternalIDs) == 0 {
+		return counts, nil
+	}
+
+	query := `
+		SELECT a.external_id AS app_external_id, COUNT(d.id) AS count
+		FROM app a
+		JOIN deployment d ON d.app_id = a.id AND d.deleted_at IS NULL AND d.active = true
+		WHERE a.workspace_id = $1
+		  AND a.deleted_at IS NULL
+		  AND a.external_id = ANY($2)
+		GROUP BY a.external_id;
+	`
+
+	var rows []activeDeploymentCountRow
+	if err := c.client.SelectContext(ctx, &rows, query, workspaceID, pq.Array(appExternalIDs)); err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		counts[row.AppExternalID] = row.Count
+	}
+	return counts, nil
+}
+
 func (c *PostgresBackendRepository) ListDeploymentsPaginated(ctx context.Context, filters types.DeploymentFilter) (common.CursorPaginationInfo[types.DeploymentWithRelated], error) {
 	qb := c.listDeploymentsQueryBuilder(filters)
 

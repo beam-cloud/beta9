@@ -200,8 +200,15 @@ func TestAttachWithoutSpareBuildsFreshVolume(t *testing.T) {
 	if volume.dir != manager.volumeDir("disk") || !volume.state.Formatted {
 		t.Fatalf("fresh attach must build in place, got %+v", volume.state)
 	}
-	if len(host.ran("mkfs.ext4")) != 1 {
-		t.Fatalf("fresh attach formats exactly once: %v", host.commands)
+	// Spare replenishment runs mkfs concurrently, so count the disk's own image.
+	created := 0
+	for _, command := range host.ran("qemu-img create") {
+		if strings.Contains(command, manager.volumeDir("disk")) {
+			created++
+		}
+	}
+	if created != 1 {
+		t.Fatalf("fresh attach creates the volume image exactly once: %v", host.commands)
 	}
 	waitForSpares(t, manager, testSpareSize, spareTarget)
 	if err := manager.Close(ctx); err != nil {
