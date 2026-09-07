@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -859,6 +860,80 @@ func TestReadContentIntoSkipsGRPCWhenRawHostUnreachable(t *testing.T) {
 	require.Equal(t, "raw", trace.Attempts[0].Source)
 	require.Equal(t, "unavailable", trace.Attempts[0].Result)
 	require.Equal(t, ErrUnableToReachHost.Error(), trace.Attempts[0].Error)
+}
+
+// A raw read on a stale pooled connection must fall back to gRPC and leave a
+// healthy host's endpoint active.
+func TestReadContentIntoStaleRawConnectionKeepsHealthyHost(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := Config{
+		Server: ServerConfig{
+			DiskCacheDir:         t.TempDir(),
+			DiskCacheMaxUsagePct: 90,
+			PageSizeBytes:        4,
+			ObjectTtlS:           300,
+			ReadTransport:        ServerReadTransportConfig{Enabled: true, Sendfile: true},
+		},
+		Client: ClientConfig{
+			NTopHosts:     1,
+			ReadTransport: ClientReadTransportConfig{Enabled: true, MaxActiveConnsPerHost: 2, MaxIdleConnsPerHost: 1},
+		},
+		Global: GlobalConfig{GRPCMessageSizeBytes: 1024 * 1024, GRPCDialTimeoutS: 1},
+	}
+	server, err := NewServerWithOptions(ctx, cfg, "test", WithServerMetadataStore(NewMockCacheMetadataStore()), WithServerHostID("remote-host"))
+	require.NoError(t, err)
+	addr, err := server.Serve("127.0.0.1:0", "")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, server.Close()) }()
+
+	content := []byte("served-over-grpc-after-raw-fails")
+	hash, _, err := server.cas.AddReader(ctx, bytes.NewReader(content))
+	require.NoError(t, err)
+
+	host := server.Host()
+	require.NotNil(t, host)
+	host.Addr = addr
+	host.PrivateAddr = addr
+
+	client := &Client{
+		ctx:                   ctx,
+		locality:              "test",
+		clientConfig:          cfg.Client,
+		globalConfig:          cfg.Global,
+		grpcClients:           make(map[string]proto.CacheClient),
+		grpcConns:             make(map[string]*grpc.ClientConn),
+		localServers:          make(map[string]*Server),
+		rawReadPools:          make(map[string]*rawReadConnPool),
+		localHostCache:        make(map[localHostCacheKey]*localClientCache),
+		hasher:                &orderedTestHasher{hosts: []*Host{host}},
+		maxGetContentAttempts: 1,
+	}
+	client.hostMap = NewHostMap(cfg.Global, client.addHost)
+	client.hostMap.Set(host)
+	defer client.Cleanup()
+
+	// Seed the pool with a connection the peer has already closed.
+	dead, peer := net.Pipe()
+	require.NoError(t, peer.Close())
+	pool := newRawReadConnPool(addr, cfg.Client.ReadTransport.MaxActiveConnsPerHost, cfg.Client.ReadTransport.MaxIdleConnsPerHost)
+	require.NoError(t, pool.acquire(ctx))
+	pool.put(dead)
+	client.mu.Lock()
+	client.rawReadPools[host.HostId] = pool
+	client.mu.Unlock()
+
+	readCtx, readCancel := context.WithTimeout(ctx, 3*time.Second)
+	defer readCancel()
+	dst := make([]byte, len(content))
+	n, trace, err := client.ReadContentIntoWithTrace(readCtx, hash, 0, dst, ClientOptions{RoutingKey: hash})
+	require.NoError(t, err)
+	require.Equal(t, int64(len(content)), n)
+	require.Equal(t, content, dst)
+	require.Equal(t, "raw", trace.Attempts[0].Source)
+	require.Equal(t, "unavailable", trace.Attempts[0].Result)
+	require.True(t, client.hostMap.Get(host.HostId).HasEndpoint())
 }
 
 func TestReadContentIntoUsesSelectedLocalServer(t *testing.T) {

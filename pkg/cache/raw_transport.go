@@ -40,6 +40,9 @@ const (
 	// buffer, and a short wait here is far cheaper than the client's fallback.
 	rawReadAdmissionWait               = 250 * time.Millisecond
 	defaultRawReadWriteProgressTimeout = 30 * time.Second
+	// A connection burst can lose a SYN; TCP retransmits it after 1s, so a
+	// shorter dial timeout turns one dropped packet into a failed read.
+	rawReadDialTimeout = 3 * time.Second
 )
 
 type cacheMuxListener struct {
@@ -582,8 +585,10 @@ func newRawReadConnPool(addr string, maxActive int, maxIdle int) *rawReadConnPoo
 	if maxActive <= 0 {
 		maxActive = 64
 	}
+	// Connections above the idle cap are closed, so every burst redials;
+	// an idle connection costs nothing, so default to keeping them all.
 	if maxIdle <= 0 {
-		maxIdle = 16
+		maxIdle = maxActive
 	}
 	return &rawReadConnPool{
 		addr:     addr,
@@ -621,7 +626,7 @@ func (p *rawReadConnPool) get(ctx context.Context) (net.Conn, error) {
 	}
 	p.mu.Unlock()
 
-	dialCtx, cancel := context.WithTimeout(ctx, time.Second)
+	dialCtx, cancel := context.WithTimeout(ctx, rawReadDialTimeout)
 	defer cancel()
 	dialer := &net.Dialer{}
 	conn, err := dialer.DialContext(dialCtx, "tcp", p.addr)

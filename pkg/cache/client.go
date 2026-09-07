@@ -622,6 +622,9 @@ func (c *Client) recordHostMonitorResult(host *Host, failures *int) bool {
 func (c *Client) checkHostEndpoint(host *Host) bool {
 	err := c.hostEndpointHealth(host)
 	if err != nil {
+		if !errors.Is(err, ErrHostNotFound) {
+			Logger.Infof("cache host endpoint probe failed @ %s (PrivateAddr=%s): %v", host.HostId, host.PrivateAddr, err)
+		}
 		c.removeHost(host)
 		return false
 	}
@@ -636,7 +639,7 @@ func (c *Client) hostEndpointHealth(host *Host) error {
 	c.mu.RLock()
 	client, exists := c.grpcClients[host.HostId]
 	c.mu.RUnlock()
-	if !exists {
+	if !exists || client == nil {
 		return ErrHostNotFound
 	}
 
@@ -1931,8 +1934,11 @@ func (c *Client) readContentIntoFromHost(ctx context.Context, host *Host, hostIn
 			return 0, err
 		}
 		if errors.Is(err, ErrUnableToReachHost) {
-			c.removeHost(host)
-			return 0, ErrSelectedHostUnavailable
+			// A stale pooled connection or a slow dial is not a dead host.
+			// Probe before deactivating; if the host is up, use gRPC.
+			if !c.checkHostEndpoint(host) {
+				return 0, ErrSelectedHostUnavailable
+			}
 		}
 		if err != nil {
 			cacheReadRawFallbackTotal.Inc()
