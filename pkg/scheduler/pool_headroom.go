@@ -28,8 +28,12 @@ import (
 // A failed worker lookup answers true: an idle worker that stays one keepalive
 // longer costs nothing, while one that leaves on a bad read leaves the pool
 // cold.
+//
+// A worker that is not available (cordoned, draining, or still pending) is
+// never headroom: the scheduler will not place on it, so keeping it changes
+// nothing for the pool and only pins a pod the operator asked to retire.
 func WorkerHoldsPoolHeadroom(workerRepo repository.WorkerRepository, config types.AppConfig, worker *types.Worker) bool {
-	if worker == nil || worker.PoolName == "" {
+	if worker == nil || worker.PoolName == "" || worker.Status != types.WorkerStatusAvailable {
 		return false
 	}
 	poolConfig, ok := config.Worker.Pools[worker.PoolName]
