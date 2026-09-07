@@ -177,8 +177,13 @@ func (idx *contentIndex) replace(scanned map[string]contentEntry, since time.Tim
 		switch {
 		case completedDuringWalk && (!ok || !entry.complete):
 			scanned[hash] = current
-		case ok && current.lastAccess.After(entry.lastAccess):
-			entry.lastAccess = current.lastAccess
+		case ok:
+			if entry.complete {
+				entry.completedAt = current.completedAt
+			}
+			if current.lastAccess.After(entry.lastAccess) {
+				entry.lastAccess = current.lastAccess
+			}
 			scanned[hash] = entry
 		}
 	}
@@ -308,12 +313,7 @@ func (cas *Store) maybeEvictDiskCache(snapshot diskUsageSnapshot) bool {
 
 	started := time.Now()
 	protected := cas.protectedContentSnapshot()
-	evicted, freed := cas.evictLRUWithProtected(bytesToFree, protected, false)
-	if freed < bytesToFree {
-		moreEvicted, moreFreed := cas.evictLRUWithProtected(bytesToFree-freed, protected, true)
-		evicted += moreEvicted
-		freed += moreFreed
-	}
+	evicted, freed := cas.evictLRUWithProtected(bytesToFree, protected, true)
 	protectedEvicted := 0
 	var protectedFreed int64
 	if criticalBytes := cas.criticalDiskPressureBytesToFree(snapshot, freed); criticalBytes > 0 {
@@ -426,6 +426,11 @@ func (cas *Store) evictLRUWithProtected(bytesToFree int64, protected map[string]
 		if _, ok := protected[candidate.hash]; ok {
 			continue
 		}
+		// A non-nil protection set also guards fresh writes. Only the
+		// critical pass (nil) may evict them, after older protected content.
+		if protected != nil && candidate.completedAt.After(storeCutoff) {
+			break
+		}
 		// Oldest-first order: once we reach recently-read content, nothing
 		// after it is evictable either.
 		if !allowRecent && (candidate.lastAccess.After(cutoff) || candidate.completedAt.After(storeCutoff)) {
@@ -446,6 +451,7 @@ func (cas *Store) evictLRUWithProtected(bytesToFree int64, protected map[string]
 func (cas *Store) evictionCandidateStats(protected map[string]struct{}) (int, int, int, int) {
 	candidates := cas.evictionCandidates()
 	cutoff := time.Now().Add(-evictionRecentAccessGuard)
+	storeCutoff := time.Now().Add(-evictionRecentStoreGuard)
 	protectedCount := 0
 	recentCount := 0
 	evictableCount := 0
@@ -454,7 +460,7 @@ func (cas *Store) evictionCandidateStats(protected map[string]struct{}) (int, in
 			protectedCount++
 			continue
 		}
-		if candidate.lastAccess.After(cutoff) {
+		if candidate.lastAccess.After(cutoff) || candidate.completedAt.After(storeCutoff) {
 			recentCount++
 			continue
 		}
@@ -518,9 +524,6 @@ func (cas *Store) protectedContentSnapshot() map[string]struct{} {
 	}
 	cas.protectedMu.RLock()
 	defer cas.protectedMu.RUnlock()
-	if len(cas.protectedContent) == 0 {
-		return nil
-	}
 	out := make(map[string]struct{}, len(cas.protectedContent))
 	for hash := range cas.protectedContent {
 		out[hash] = struct{}{}

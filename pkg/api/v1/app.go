@@ -197,7 +197,7 @@ func (a *AppGroup) ListAppWithLatestActivity(ctx echo.Context) error {
 	if err := ctx.Bind(&filters); err != nil {
 		return HTTPBadRequest("Failed to decode query parameters")
 	}
-	stateFilter, ok := types.ParseAppState(filters.State)
+	stateFilter, ok := types.ParseAppState(ctx.QueryParam("state"))
 	if !ok {
 		return HTTPBadRequest("Invalid state filter; expected running, idle or stopped")
 	}

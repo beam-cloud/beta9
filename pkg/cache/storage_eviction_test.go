@@ -98,15 +98,10 @@ func TestEvictLRUEvictsFreshlyStoredContentLast(t *testing.T) {
 	require.True(t, ok)
 	entry.lastAccess = now.Add(-time.Minute)
 	store.index.put(hot, entry)
-	// Written two minutes ago and not read yet: colder than hot by access
+	// Written twenty minutes ago and not read yet: colder than hot by access
 	// time, but the write is what a container is about to read.
-	fresh, _, err := store.AddReader(context.Background(), bytes.NewReader([]byte("fresh-content")))
-	require.NoError(t, err)
-	entry, ok = store.index.get(fresh)
-	require.True(t, ok)
-	entry.lastAccess = now.Add(-2 * time.Minute)
-	entry.completedAt = entry.lastAccess
-	store.index.put(fresh, entry)
+	fresh := addEvictionTestContent(t, store, "fresh-content", now.Add(-20*time.Minute))
+	store.rebuildContentIndex()
 
 	// Normal pass: fresh content is guarded like recently-read content.
 	evicted, _ := store.evictLRUWithProtected(1<<30, nil, false)
@@ -119,6 +114,8 @@ func TestEvictLRUEvictsFreshlyStoredContentLast(t *testing.T) {
 	require.Equal(t, 1, evicted)
 	require.False(t, store.Exists(hot))
 	require.True(t, store.Exists(fresh))
+	evicted, _ = store.evictLRUWithProtected(1<<30, map[string]struct{}{}, true)
+	require.Zero(t, evicted, "fresh writes survive normal pressure without any stub protection")
 }
 
 func TestEvictWatermarkPctAcceptsWholePercent(t *testing.T) {
@@ -138,7 +135,8 @@ func TestMaybeEvictDiskCacheEvictsRecentUnprotectedBeforeProtectedContent(t *tes
 
 	now := time.Now()
 	protected := addEvictionTestContent(t, store, "protected-hot-content", now.Add(-2*time.Minute))
-	unprotected := addEvictionTestContent(t, store, "unprotected-hot-content", now.Add(-time.Minute))
+	unprotected := addEvictionTestContent(t, store, "unprotected-hot-content", now.Add(-time.Hour))
+	store.touchContentAccess(unprotected)
 	store.SetProtectedContent(map[string]struct{}{protected: struct{}{}})
 
 	evicted := store.maybeEvictDiskCache(diskUsageSnapshot{
@@ -169,7 +167,8 @@ func TestMaybeEvictDiskCachePreservesProtectedContentAboveSoftWatermark(t *testi
 		events = append(events, event)
 	})
 
-	protected := addEvictionTestContent(t, store, "protected-hot-content", time.Now().Add(-time.Minute))
+	protected := addEvictionTestContent(t, store, "protected-hot-content", time.Now().Add(-time.Hour))
+	fresh := addEvictionTestContent(t, store, "fresh-volume-content", time.Now().Add(-20*time.Minute))
 	store.SetProtectedContent(map[string]struct{}{protected: struct{}{}})
 
 	evicted := store.maybeEvictDiskCache(diskUsageSnapshot{
@@ -181,9 +180,11 @@ func TestMaybeEvictDiskCachePreservesProtectedContentAboveSoftWatermark(t *testi
 
 	require.False(t, evicted)
 	require.True(t, store.Exists(protected))
+	require.True(t, store.Exists(fresh))
 	require.Len(t, events, 1)
 	require.Equal(t, CacheChurnStatusNothingEvictable, events[0].Status)
 	require.Equal(t, 1, events[0].ProtectedCandidates)
+	require.Equal(t, 1, events[0].RecentCandidates)
 }
 
 func TestMaybeEvictDiskCacheEvictsProtectedContentToClearHardReserve(t *testing.T) {
@@ -196,7 +197,8 @@ func TestMaybeEvictDiskCacheEvictsProtectedContentToClearHardReserve(t *testing.
 		events = append(events, event)
 	})
 
-	protected := addEvictionTestContent(t, store, "protected-hot-content", time.Now().Add(-time.Minute))
+	protected := addEvictionTestContent(t, store, "protected-hot-content", time.Now().Add(-time.Hour))
+	fresh := addEvictionTestContent(t, store, "fresh-volume-content", time.Now().Add(-20*time.Minute))
 	store.SetProtectedContent(map[string]struct{}{protected: struct{}{}})
 
 	evicted := store.maybeEvictDiskCache(diskUsageSnapshot{
@@ -208,9 +210,10 @@ func TestMaybeEvictDiskCacheEvictsProtectedContentToClearHardReserve(t *testing.
 
 	require.True(t, evicted)
 	require.False(t, store.Exists(protected))
+	require.False(t, store.Exists(fresh))
 	require.Len(t, events, 1)
 	require.Equal(t, CacheChurnStatusProtectedEvicted, events[0].Status)
-	require.Equal(t, 1, events[0].ProtectedObjects)
+	require.Equal(t, 2, events[0].ProtectedObjects)
 	require.Positive(t, events[0].ProtectedFreedBytes)
 }
 

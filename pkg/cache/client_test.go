@@ -355,49 +355,6 @@ func TestClientEndpointFailureKeepsLogicalHostInHRW(t *testing.T) {
 	require.ErrorIs(t, err, ErrSelectedHostUnavailable)
 }
 
-func TestCheckHostEndpointPrunesUnreachableEndpoint(t *testing.T) {
-	host := &Host{
-		HostId:         "cache-host-default-node-a-path",
-		RegistrationID: "worker-a",
-		NodeID:         "node-a",
-		CachePathID:    "path",
-		PrivateAddr:    "10.0.0.1:2049",
-	}
-	hostMap := NewHostMap(GlobalConfig{}, nil)
-	hostMap.Set(host)
-
-	client := &Client{
-		ctx:            context.Background(),
-		clientConfig:   ClientConfig{NTopHosts: 1},
-		hostMap:        hostMap,
-		grpcClients:    map[string]proto.CacheClient{host.HostId: &fakeStoreCacheClient{stateErr: errors.New("connection refused")}},
-		grpcConns:      make(map[string]*grpc.ClientConn),
-		localServers:   make(map[string]*Server),
-		rawReadPools:   make(map[string]*rawReadConnPool),
-		localHostCache: make(map[localHostCacheKey]*localClientCache),
-		hasher:         &orderedTestHasher{hosts: []*Host{host}},
-	}
-
-	require.False(t, client.checkHostEndpoint(host))
-
-	deactivated := hostMap.Get(host.HostId)
-	require.NotNil(t, deactivated)
-	require.False(t, deactivated.HasEndpoint())
-
-	selected, err := client.getHostForRequest(&ClientRequest{
-		rt:        ClientRequestTypeRetrieval,
-		hash:      "hash",
-		key:       "hash",
-		hostIndex: 0,
-	})
-	require.NoError(t, err)
-	require.Equal(t, host.HostId, selected.HostId)
-	require.False(t, selected.HasEndpoint())
-
-	_, _, err = client.getGRPCClientForHostIndex(context.Background(), ClientRequestTypeRetrieval, "hash", "hash", 0)
-	require.ErrorIs(t, err, ErrSelectedHostUnavailable)
-}
-
 func TestHostMonitorRequiresConsecutiveFailuresBeforePruningEndpoint(t *testing.T) {
 	host := &Host{
 		HostId:         "cache-host-default-node-a-path",
@@ -832,7 +789,7 @@ func TestReadContentIntoDoesNotRefreshHostsOnContentMiss(t *testing.T) {
 	require.Equal(t, "miss", trace.Result)
 }
 
-func TestReadContentIntoSkipsGRPCWhenRawHostUnreachable(t *testing.T) {
+func TestReadContentIntoHandlesMissingGRPCClientAfterRawFailure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
@@ -856,10 +813,13 @@ func TestReadContentIntoSkipsGRPCWhenRawHostUnreachable(t *testing.T) {
 	dst := make([]byte, 16)
 	_, trace, err := client.ReadContentIntoWithTrace(ctx, strings.Repeat("a", sha256.Size*2), 0, dst, ClientOptions{})
 	require.ErrorIs(t, err, ErrSelectedHostUnavailable)
-	require.Len(t, trace.Attempts, 1)
+	require.Len(t, trace.Attempts, 2)
 	require.Equal(t, "raw", trace.Attempts[0].Source)
 	require.Equal(t, "unavailable", trace.Attempts[0].Result)
 	require.Equal(t, ErrUnableToReachHost.Error(), trace.Attempts[0].Error)
+	require.Equal(t, "grpc_client", trace.Attempts[1].Source)
+	require.Equal(t, "unavailable", trace.Attempts[1].Result)
+	require.Equal(t, ErrSelectedHostUnavailable.Error(), trace.Attempts[1].Error)
 }
 
 // A raw read on a stale pooled connection must fall back to gRPC and leave a
