@@ -1780,17 +1780,15 @@ func (c *Client) tryReadContentIntoKnownHosts(ctx context.Context, hash string, 
 	// top-N, and the content is then on a host we have not asked. Every other
 	// host is one cheap round trip away; the alternative is the caller falling
 	// back to the registry for a whole layer.
-	if contentMissing || (lastErr != nil && !primaryUnavailable) {
-		for _, host := range c.remainingHostsForRequest(checked) {
-			if err := ctx.Err(); err != nil {
-				return 0, err
-			}
-			n, err := c.readContentIntoFromHost(ctx, host, len(checked), hash, offset, dst, trace)
-			if err == nil && n == length {
-				c.rememberHostForContent(hash, opts.RoutingKey, host)
-				Logger.Debugf("cache read-into found content off-ring: hash=%s host=%s", hash, host.HostId)
-				return n, nil
-			}
+	for _, host := range c.remainingHostsForRequest(checked) {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		n, err := c.readContentIntoFromHost(ctx, host, len(checked), hash, offset, dst, trace)
+		if err == nil && n == length {
+			c.rememberHostForContent(hash, opts.RoutingKey, host)
+			Logger.Debugf("cache read-into found content off-ring: hash=%s host=%s", hash, host.HostId)
+			return n, nil
 		}
 	}
 

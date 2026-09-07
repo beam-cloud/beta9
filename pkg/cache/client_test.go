@@ -2563,4 +2563,14 @@ func TestReadsFindContentOnHostOutsideTopN(t *testing.T) {
 		streamed = append(streamed, chunk...)
 	}
 	require.Equal(t, content, streamed)
+
+	// A departed primary must not hide a surviving off-ring copy either.
+	require.NoError(t, servers[0].Close())
+	client.removeLocalHostCache(hash)
+	client.maxGetContentAttempts = 1
+	clear(dst)
+	n, err = client.ReadContentInto(ctx, hash, 0, dst, ClientOptions{RoutingKey: hash})
+	require.NoError(t, err)
+	require.Equal(t, int64(len(content)), n)
+	require.Equal(t, content, dst)
 }
