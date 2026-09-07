@@ -99,7 +99,6 @@ func ParseAppState(s string) (AppState, bool) {
 
 type AppFilter struct {
 	Name   string `query:"name"`
-	State  string `query:"state"`
 	Cursor string `query:"cursor"`
 	Limit  uint32 `query:"limit"`
 
