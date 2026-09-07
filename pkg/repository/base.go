@@ -81,6 +81,8 @@ type ContainerRepository interface {
 	ReserveContainerConcurrencyForPending(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error
 	GetActiveContainersByStubId(stubId string) ([]types.ContainerState, error)
 	GetActiveContainersByWorkspaceId(workspaceId string) ([]types.ContainerState, error)
+	RecordSandboxCreated(workspaceId, appId string, at time.Time) error
+	GetSandboxActivity(workspaceId string, appIds []string, since time.Time) (map[string][]types.AppActivityBucket, error)
 	GetActiveContainersByWorkerId(workerId string) ([]types.ContainerState, error)
 	GetFailedContainersByStubId(stubId string) ([]string, error)
 	GetStubState(stubId string) (string, error)
@@ -221,7 +223,8 @@ type BackendRepository interface {
 	ListVolumesWithRelated(ctx context.Context, workspaceId uint) ([]types.VolumeWithRelated, error)
 	ListDeploymentsWithRelated(ctx context.Context, filters types.DeploymentFilter) ([]types.DeploymentWithRelated, error)
 	ListLatestDeploymentsByAppIDs(ctx context.Context, workspaceID uint, appExternalIDs []string) (map[string]types.DeploymentWithRelated, error)
-	CountActiveDeploymentsByAppIDs(ctx context.Context, workspaceID uint, appExternalIDs []string) (map[string]int, error)
+	CountActiveDeploymentsByApp(ctx context.Context, workspaceID uint, appExternalIDs []string) (map[string]int, error)
+	AggregateTaskActivityByApp(ctx context.Context, workspaceID uint, appExternalIDs []string, since time.Time) (map[string][]types.AppActivityBucket, error)
 	ListLatestDeploymentsWithRelatedPaginated(ctx context.Context, filters types.DeploymentFilter) (common.CursorPaginationInfo[types.DeploymentWithRelated], error)
 	ListDeploymentsPaginated(ctx context.Context, filters types.DeploymentFilter) (common.CursorPaginationInfo[types.DeploymentWithRelated], error)
 	GetLatestDeploymentByName(ctx context.Context, workspaceId uint, name string, stubType string, filterDeleted bool) (*types.DeploymentWithRelated, error)
@@ -263,6 +266,7 @@ type BackendRepository interface {
 	RetrieveAppByStubExternalId(ctx context.Context, stubExternalId string) (*types.App, error)
 	ListApps(ctx context.Context, workspaceId uint) ([]types.App, error)
 	ListAppsPaginated(ctx context.Context, workspaceId uint, filters types.AppFilter) (common.CursorPaginationInfo[types.App], error)
+	CountApps(ctx context.Context, workspaceId uint) (int, error)
 	DeleteApp(ctx context.Context, appId string) error
 	GetImageClipVersion(ctx context.Context, imageId string) (uint32, error)
 	CreateImage(ctx context.Context, imageId string, clipVersion uint32) (uint32, error)

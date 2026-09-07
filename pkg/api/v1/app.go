@@ -3,7 +3,9 @@ package apiv1
 import (
 	"context"
 	"net/http"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -14,6 +16,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types/serializer"
 	"github.com/labstack/echo/v4"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/sync/errgroup"
 )
 
 type AppGroup struct {
@@ -36,6 +39,7 @@ func NewAppGroup(g *echo.Group, backendRepo repository.BackendRepository, config
 	}
 
 	g.GET("/:workspaceId/latest", auth.WithWorkspaceAuth(group.ListAppWithLatestActivity))
+	g.GET("/:workspaceId/activity", auth.WithWorkspaceAuth(group.GetAppActivity))
 	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.ListApps))
 	g.GET("/:workspaceId/:appId", auth.WithWorkspaceAuth(group.RetrieveApp))
 	g.DELETE("/:workspaceId/:appId", auth.WithStrictWorkspaceAuth(group.DeleteApp))
@@ -57,9 +61,123 @@ type AppWithLatestStubOrDeployment struct {
 	RunningContainers int `json:"running_containers" serializer:"running_containers"`
 	// ActiveDeployments counts deployments in the app that are currently
 	// active (deployed and not stopped), across all of its functions.
-	ActiveDeployments int                  `json:"active_deployments" serializer:"active_deployments"`
-	IsService         bool                 `json:"is_service" serializer:"is_service"`
-	Serving           *types.ServingConfig `json:"serving,omitempty" serializer:"serving"`
+	ActiveDeployments int `json:"active_deployments" serializer:"active_deployments"`
+	// State is derived from the two counts above: running > idle > stopped.
+	// Only the list endpoint knows running containers, so only it sets this.
+	State     types.AppState       `json:"state,omitempty" serializer:"state,omitempty"`
+	IsService bool                 `json:"is_service" serializer:"is_service"`
+	Serving   *types.ServingConfig `json:"serving,omitempty" serializer:"serving"`
+}
+
+// AppListResponse is a page of apps plus workspace-wide state counts, so the
+// dashboard's Running / Idle / Stopped tabs describe the whole workspace and
+// not just the page that happens to be loaded.
+type AppListResponse struct {
+	repoCommon.CursorPaginationInfo[AppWithLatestStubOrDeployment]
+	StateCounts types.AppStateCounts `json:"state_counts" serializer:"state_counts"`
+}
+
+func appStateFor(runningContainers, activeDeployments int) types.AppState {
+	switch {
+	case runningContainers > 0:
+		return types.AppStateRunning
+	case activeDeployments > 0:
+		return types.AppStateIdle
+	default:
+		return types.AppStateStopped
+	}
+}
+
+// workspaceAppState is everything needed to classify every app in a workspace:
+// running containers per app (Redis) and active deployments per app (Postgres).
+// Apps in neither map are stopped.
+type workspaceAppState struct {
+	runningByApp map[string]int
+	activeByApp  map[string]int
+	totalApps    int
+}
+
+func (w workspaceAppState) counts() types.AppStateCounts {
+	counts := types.AppStateCounts{All: w.totalApps}
+	for appID := range w.runningByApp {
+		if w.runningByApp[appID] > 0 {
+			counts.Running++
+		}
+	}
+	for appID, active := range w.activeByApp {
+		if active > 0 && w.runningByApp[appID] == 0 {
+			counts.Idle++
+		}
+	}
+	counts.Stopped = counts.All - counts.Running - counts.Idle
+	if counts.Stopped < 0 {
+		counts.Stopped = 0
+	}
+	return counts
+}
+
+// scope narrows an AppFilter to the apps in the requested state. Running and
+// idle are finite id sets; stopped is everything else.
+func (w workspaceAppState) scope(filters *types.AppFilter, state types.AppState) {
+	running := make([]string, 0, len(w.runningByApp))
+	for appID, n := range w.runningByApp {
+		if n > 0 {
+			running = append(running, appID)
+		}
+	}
+	idle := make([]string, 0, len(w.activeByApp))
+	for appID, n := range w.activeByApp {
+		if n > 0 && w.runningByApp[appID] == 0 {
+			idle = append(idle, appID)
+		}
+	}
+	switch state {
+	case types.AppStateRunning:
+		filters.IncludeExternalIds = running
+	case types.AppStateIdle:
+		filters.IncludeExternalIds = idle
+	case types.AppStateStopped:
+		filters.ExcludeExternalIds = append(running, idle...)
+	}
+}
+
+// loadWorkspaceAppState fans out the three independent reads in parallel.
+func (a *AppGroup) loadWorkspaceAppState(ctx context.Context, workspace *types.Workspace) (workspaceAppState, error) {
+	state := workspaceAppState{runningByApp: map[string]int{}, activeByApp: map[string]int{}}
+	g, gctx := errgroup.WithContext(ctx)
+
+	g.Go(func() error {
+		if a.containerRepo == nil {
+			return nil
+		}
+		running, err := countRunningContainersForApps(gctx, a.containerRepo, a.backendRepo, workspace.ExternalId)
+		if err != nil {
+			return err
+		}
+		state.runningByApp = running
+		return nil
+	})
+	g.Go(func() error {
+		active, err := a.backendRepo.CountActiveDeploymentsByApp(gctx, workspace.Id, nil)
+		if err != nil {
+			return err
+		}
+		state.activeByApp = active
+		return nil
+	})
+	g.Go(func() error {
+		total, err := a.backendRepo.CountApps(gctx, workspace.Id)
+		if err != nil {
+			return err
+		}
+		state.totalApps = total
+		return nil
+	})
+
+	if err := g.Wait(); err != nil {
+		return workspaceAppState{}, err
+	}
+	return state, nil
 }
 
 func (a *AppGroup) ListAppWithLatestActivity(ctx echo.Context) error {
@@ -79,15 +197,34 @@ func (a *AppGroup) ListAppWithLatestActivity(ctx echo.Context) error {
 	if err := ctx.Bind(&filters); err != nil {
 		return HTTPBadRequest("Failed to decode query parameters")
 	}
+	stateFilter, ok := types.ParseAppState(filters.State)
+	if !ok {
+		return HTTPBadRequest("Invalid state filter; expected running, idle or stopped")
+	}
 
-	apps, err := a.backendRepo.ListAppsPaginated(ctx.Request().Context(), workspace.Id, filters)
+	reqCtx := ctx.Request().Context()
+
+	// Live state for the whole workspace comes first: it drives both the tab
+	// counts and, when a state filter is set, which apps the page may contain.
+	appState, err := a.loadWorkspaceAppState(reqCtx, &workspace)
+	if err != nil {
+		return HTTPInternalServerError("Failed to get app state")
+	}
+	if stateFilter != "" {
+		appState.scope(&filters, stateFilter)
+	}
+
+	apps, err := a.backendRepo.ListAppsPaginated(reqCtx, workspace.Id, filters)
 	if err != nil {
 		return err
 	}
 
-	appsWithLatest := repoCommon.CursorPaginationInfo[AppWithLatestStubOrDeployment]{
-		Data: make([]AppWithLatestStubOrDeployment, len(apps.Data)),
-		Next: apps.Next,
+	response := AppListResponse{
+		CursorPaginationInfo: repoCommon.CursorPaginationInfo[AppWithLatestStubOrDeployment]{
+			Data: make([]AppWithLatestStubOrDeployment, len(apps.Data)),
+			Next: apps.Next,
+		},
+		StateCounts: appState.counts(),
 	}
 
 	appIDs := make([]string, 0, len(apps.Data))
@@ -95,7 +232,7 @@ func (a *AppGroup) ListAppWithLatestActivity(ctx echo.Context) error {
 		appIDs = append(appIDs, apps.Data[i].ExternalId)
 	}
 
-	deploymentsByApp, err := a.backendRepo.ListLatestDeploymentsByAppIDs(ctx.Request().Context(), workspace.Id, appIDs)
+	deploymentsByApp, err := a.backendRepo.ListLatestDeploymentsByAppIDs(reqCtx, workspace.Id, appIDs)
 	if err != nil {
 		return HTTPBadRequest("Failed to get apps")
 	}
@@ -107,31 +244,27 @@ func (a *AppGroup) ListAppWithLatestActivity(ctx echo.Context) error {
 		}
 	}
 
-	stubsByApp, err := a.backendRepo.ListLatestStubsByAppIDs(ctx.Request().Context(), workspace.Id, appIDsWithoutDeployment)
+	stubsByApp, err := a.backendRepo.ListLatestStubsByAppIDs(reqCtx, workspace.Id, appIDsWithoutDeployment)
 	if err != nil {
 		return HTTPBadRequest("Failed to get apps")
 	}
 
-	activeDeploymentsByApp, err := a.backendRepo.CountActiveDeploymentsByAppIDs(ctx.Request().Context(), workspace.Id, appIDs)
-	if err != nil {
-		return HTTPBadRequest("Failed to get apps")
-	}
-
-	appIndexes := make(map[string]int, len(apps.Data))
 	for i := range apps.Data {
-		appsWithLatest.Data[i].App = apps.Data[i]
-		appsWithLatest.Data[i].ActiveDeployments = activeDeploymentsByApp[apps.Data[i].ExternalId]
-		appIndexes[apps.Data[i].ExternalId] = i
+		app := &response.Data[i]
+		app.App = apps.Data[i]
+		app.RunningContainers = appState.runningByApp[apps.Data[i].ExternalId]
+		app.ActiveDeployments = appState.activeByApp[apps.Data[i].ExternalId]
+		app.State = appStateFor(app.RunningContainers, app.ActiveDeployments)
 
 		if deployment, ok := deploymentsByApp[apps.Data[i].ExternalId]; ok {
 			deploymentCopy := deployment
-			a.enrichAppWithStubConfig(&appsWithLatest.Data[i], &deploymentCopy.Stub, &deploymentCopy.Deployment, false)
-			deploymentCopy.URL = appsWithLatest.Data[i].URL
-			deploymentCopy.InvokeURL = appsWithLatest.Data[i].InvokeURL
+			a.enrichAppWithStubConfig(app, &deploymentCopy.Stub, &deploymentCopy.Deployment, false)
+			deploymentCopy.URL = app.URL
+			deploymentCopy.InvokeURL = app.InvokeURL
 			if err := sanitizeDeploymentWithRelated(&deploymentCopy); err != nil {
 				return HTTPInternalServerError("Failed to sanitize stub config")
 			}
-			appsWithLatest.Data[i].Deployment = &deploymentCopy
+			app.Deployment = &deploymentCopy
 			continue
 		}
 
@@ -141,35 +274,115 @@ func (a *AppGroup) ListAppWithLatestActivity(ctx echo.Context) error {
 		}
 
 		stubCopy := stub
-		a.enrichAppWithStubConfig(&appsWithLatest.Data[i], &stubCopy.Stub, nil, false)
-		appsWithLatest.Data[i].Stub = &stubCopy
-		if err := sanitizeStubWithRelated(appsWithLatest.Data[i].Stub); err != nil {
+		a.enrichAppWithStubConfig(app, &stubCopy.Stub, nil, false)
+		app.Stub = &stubCopy
+		if err := sanitizeStubWithRelated(app.Stub); err != nil {
 			return HTTPInternalServerError("Failed to sanitize stub config")
 		}
 	}
 
-	if a.containerRepo != nil && len(appIndexes) > 0 {
-		runningByAppID, err := countRunningContainersForApps(ctx.Request().Context(), a.containerRepo, a.backendRepo, workspaceID)
-		if err != nil {
-			return HTTPInternalServerError("Failed to get running containers")
-		}
-
-		for appID, count := range runningByAppID {
-			if index, ok := appIndexes[appID]; ok {
-				appsWithLatest.Data[index].RunningContainers = count
-			}
-		}
-	}
-
-	serializedAppsWithLatest, err := serializer.Serialize(appsWithLatest)
+	serialized, err := serializer.Serialize(response)
 	if err != nil {
 		return HTTPInternalServerError("Failed to serialize response")
 	}
 
-	return ctx.JSON(
-		http.StatusOK,
-		serializedAppsWithLatest,
-	)
+	return ctx.JSON(http.StatusOK, serialized)
+}
+
+const (
+	appActivityWindow  = 24 * time.Hour
+	maxActivityAppIDs  = 100
+	activityBucketSize = time.Hour
+)
+
+// GetAppActivity returns the last 24h of hourly activity for a set of apps in
+// one call: tasks created (and failed) from Postgres, sandboxes created from
+// the Redis counters bumped at creation. Every app gets a full, zero-filled
+// series so the client never has to align buckets itself.
+func (a *AppGroup) GetAppActivity(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+	workspaceID := ctx.Param("workspaceId")
+
+	if cc.AuthInfo.Workspace.ExternalId != workspaceID && cc.AuthInfo.Token.TokenType != types.TokenTypeClusterAdmin {
+		return HTTPNotFound()
+	}
+
+	workspace, err := a.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceID)
+	if err != nil {
+		return HTTPBadRequest("Failed to retrieve workspace")
+	}
+
+	appIDs := uniqueNonEmpty(strings.Split(ctx.QueryParam("app_ids"), ","))
+	if len(appIDs) == 0 {
+		return HTTPBadRequest("app_ids is required")
+	}
+	if len(appIDs) > maxActivityAppIDs {
+		return HTTPBadRequest("Too many app_ids")
+	}
+
+	now := time.Now().UTC()
+	since := now.Add(-appActivityWindow).Truncate(activityBucketSize)
+
+	var tasks, sandboxes map[string][]types.AppActivityBucket
+	g, gctx := errgroup.WithContext(ctx.Request().Context())
+	g.Go(func() error {
+		var err error
+		tasks, err = a.backendRepo.AggregateTaskActivityByApp(gctx, workspace.Id, appIDs, since)
+		return err
+	})
+	g.Go(func() error {
+		if a.containerRepo == nil {
+			return nil
+		}
+		var err error
+		sandboxes, err = a.containerRepo.GetSandboxActivity(workspaceID, appIDs, since)
+		return err
+	})
+	if err := g.Wait(); err != nil {
+		return HTTPInternalServerError("Failed to get app activity")
+	}
+
+	bucketCount := int(appActivityWindow/activityBucketSize) + 1
+	response := make(map[string][]types.AppActivityBucket, len(appIDs))
+	for _, appID := range appIDs {
+		byHour := make(map[int64]*types.AppActivityBucket, bucketCount)
+		series := make([]types.AppActivityBucket, 0, bucketCount)
+		for t := since; !t.After(now); t = t.Add(activityBucketSize) {
+			series = append(series, types.AppActivityBucket{Time: t})
+		}
+		for i := range series {
+			byHour[series[i].Time.Unix()] = &series[i]
+		}
+		for _, source := range [][]types.AppActivityBucket{tasks[appID], sandboxes[appID]} {
+			for _, b := range source {
+				if target, ok := byHour[b.Time.UTC().Truncate(activityBucketSize).Unix()]; ok {
+					target.Total += b.Total
+					target.Failed += b.Failed
+				}
+			}
+		}
+		response[appID] = series
+	}
+
+	return ctx.JSON(http.StatusOK, response)
+}
+
+func uniqueNonEmpty(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, v := range values {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			continue
+		}
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // countRunningContainersForApps counts running containers per app across all
@@ -322,7 +535,7 @@ func (a *AppGroup) hydrateDatabaseConnectionURL(ctx context.Context, workspace *
 func (a *AppGroup) appWithLatestStubOrDeployment(ctx context.Context, workspace *types.Workspace, app types.App) (AppWithLatestStubOrDeployment, error) {
 	appWithLatest := AppWithLatestStubOrDeployment{App: app}
 
-	activeDeploymentsByApp, err := a.backendRepo.CountActiveDeploymentsByAppIDs(ctx, workspace.Id, []string{app.ExternalId})
+	activeDeploymentsByApp, err := a.backendRepo.CountActiveDeploymentsByApp(ctx, workspace.Id, []string{app.ExternalId})
 	if err != nil {
 		return appWithLatest, err
 	}

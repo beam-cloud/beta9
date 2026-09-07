@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -926,34 +927,37 @@ func (cr *ContainerRedisRepository) GetWorkerAddress(ctx context.Context, contai
 	}
 }
 
+// listContainerStateByIndex resolves the container state hashes behind an
+// index set. Everything is pipelined: one round-trip to read every hash, one
+// to check exit codes for the hashes that have expired, one to prune stale
+// index members. The previous per-key loop cost two serial round-trips per
+// container, which dominated the dashboard's list endpoints on busy workspaces.
 func (cr *ContainerRedisRepository) listContainerStateByIndex(indexKey string, keys []string) ([]types.ContainerState, error) {
-	containerStates := make([]types.ContainerState, 0)
+	containerStates := make([]types.ContainerState, 0, len(keys))
+	if len(keys) == 0 {
+		return containerStates, nil
+	}
+	ctx := context.TODO()
 
-	for _, key := range keys {
-		exists, err := cr.rdb.Exists(context.TODO(), key).Result()
+	// HGETALL on a missing key returns an empty map, so a single pass tells us
+	// both which states exist and what they contain.
+	pipe := cr.rdb.Pipeline()
+	hashCmds := make([]*redis.MapStringStringCmd, len(keys))
+	for i, key := range keys {
+		hashCmds[i] = pipe.HGetAll(ctx, key)
+	}
+	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
+		return nil, fmt.Errorf("failed to read container states: %v", err)
+	}
+
+	missing := make([]string, 0)
+	for i, key := range keys {
+		res, err := hashCmds[i].Result()
 		if err != nil {
 			continue
 		}
-		if exists == 0 {
-			containerId := strings.Split(key, ":")[len(strings.Split(key, ":"))-1]
-			exitCodeKey := common.RedisKeys.SchedulerContainerExitCode(containerId)
-
-			exitCodeKeyExists, err := cr.rdb.Exists(context.TODO(), exitCodeKey).Result()
-			if err != nil {
-				continue
-			}
-
-			if exitCodeKeyExists > 0 {
-				continue
-			}
-
-			// We don't have an exit code, or a state key, remove key from set
-			cr.rdb.SRem(context.TODO(), indexKey, key)
-			continue
-		}
-
-		res, err := cr.rdb.HGetAll(context.TODO(), key).Result()
-		if err != nil {
+		if len(res) == 0 {
+			missing = append(missing, key)
 			continue
 		}
 
@@ -961,15 +965,128 @@ func (cr *ContainerRedisRepository) listContainerStateByIndex(indexKey string, k
 		if err = common.ToStruct(res, &state); err != nil {
 			continue
 		}
-
 		if state.ContainerId == "" {
 			continue
 		}
-
 		containerStates = append(containerStates, state)
 	}
 
+	if len(missing) == 0 {
+		return containerStates, nil
+	}
+
+	// A state hash that is gone but whose exit code is still around belongs to
+	// a container that just finished; leave the index entry for the reaper.
+	// Anything else is a dangling index member and gets pruned.
+	exitPipe := cr.rdb.Pipeline()
+	exitCmds := make([]*redis.IntCmd, len(missing))
+	for i, key := range missing {
+		parts := strings.Split(key, ":")
+		exitCmds[i] = exitPipe.Exists(ctx, common.RedisKeys.SchedulerContainerExitCode(parts[len(parts)-1]))
+	}
+	if _, err := exitPipe.Exec(ctx); err != nil && err != redis.Nil {
+		return containerStates, nil
+	}
+
+	stale := make([]interface{}, 0, len(missing))
+	for i, key := range missing {
+		if exists, err := exitCmds[i].Result(); err == nil && exists == 0 {
+			stale = append(stale, key)
+		}
+	}
+	if len(stale) > 0 {
+		cr.rdb.SRem(ctx, indexKey, stale...)
+	}
+
 	return containerStates, nil
+}
+
+// Sandbox activity is kept as one hash per app keyed by hour epoch. Buckets
+// older than the retention window are trimmed on write, so the hash stays at
+// most ~25 fields and reads are a single HGETALL per app.
+const sandboxActivityRetention = 26 * time.Hour
+
+func (cr *ContainerRedisRepository) RecordSandboxCreated(workspaceId, appId string, at time.Time) error {
+	if workspaceId == "" || appId == "" {
+		return nil
+	}
+	ctx := context.TODO()
+	key := common.RedisKeys.SchedulerAppSandboxActivity(workspaceId, appId)
+	hour := at.UTC().Truncate(time.Hour).Unix()
+
+	pipe := cr.rdb.Pipeline()
+	pipe.HIncrBy(ctx, key, strconv.FormatInt(hour, 10), 1)
+	pipe.Expire(ctx, key, sandboxActivityRetention)
+	fields := pipe.HKeys(ctx, key)
+	if _, err := pipe.Exec(ctx); err != nil {
+		return err
+	}
+
+	// Trim relative to the newest bucket present, not this write's timestamp,
+	// so a late/out-of-order write can never resurrect old buckets.
+	epochs := make(map[string]int64, len(fields.Val()))
+	newest := hour
+	for _, field := range fields.Val() {
+		epoch, err := strconv.ParseInt(field, 10, 64)
+		if err != nil {
+			continue
+		}
+		epochs[field] = epoch
+		if epoch > newest {
+			newest = epoch
+		}
+	}
+	cutoff := newest - int64(sandboxActivityRetention/time.Second)
+	stale := make([]string, 0)
+	for field, epoch := range epochs {
+		if epoch < cutoff {
+			stale = append(stale, field)
+		}
+	}
+	if len(stale) > 0 {
+		cr.rdb.HDel(ctx, key, stale...)
+	}
+	return nil
+}
+
+func (cr *ContainerRedisRepository) GetSandboxActivity(workspaceId string, appIds []string, since time.Time) (map[string][]types.AppActivityBucket, error) {
+	result := make(map[string][]types.AppActivityBucket, len(appIds))
+	if workspaceId == "" || len(appIds) == 0 {
+		return result, nil
+	}
+	ctx := context.TODO()
+
+	pipe := cr.rdb.Pipeline()
+	cmds := make([]*redis.MapStringStringCmd, len(appIds))
+	for i, appId := range appIds {
+		cmds[i] = pipe.HGetAll(ctx, common.RedisKeys.SchedulerAppSandboxActivity(workspaceId, appId))
+	}
+	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
+		return nil, err
+	}
+
+	cutoff := since.UTC().Truncate(time.Hour).Unix()
+	for i, appId := range appIds {
+		fields, err := cmds[i].Result()
+		if err != nil || len(fields) == 0 {
+			continue
+		}
+		buckets := make([]types.AppActivityBucket, 0, len(fields))
+		for field, raw := range fields {
+			epoch, err := strconv.ParseInt(field, 10, 64)
+			if err != nil || epoch < cutoff {
+				continue
+			}
+			count, err := strconv.Atoi(raw)
+			if err != nil || count == 0 {
+				continue
+			}
+			buckets = append(buckets, types.AppActivityBucket{Time: time.Unix(epoch, 0).UTC(), Total: count})
+		}
+		sort.Slice(buckets, func(a, b int) bool { return buckets[a].Time.Before(buckets[b].Time) })
+		result[appId] = buckets
+	}
+	return result, nil
 }
 
 func (cr *ContainerRedisRepository) GetActiveContainersByStubId(stubId string) ([]types.ContainerState, error) {
