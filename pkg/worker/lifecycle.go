@@ -287,10 +287,10 @@ func (s *Worker) stopObservedContainer(containerID string, request *types.Contai
 		if stillRunning || (runtimeAbsent && stopSignalErr != nil) {
 			instance.StopEscalationStarted.Store(false)
 			log.Warn().Str("container_id", containerID).Msg("container termination is not confirmed; allowing the next status heartbeat to retry")
-			runtimeStarted, _ := instance.runtimeStartState()
-			if !runtimeStarted {
-				s.scheduleStuckWorkspaceMountRecovery(instance, request, stuckContainerAbortDelay)
-			}
+			// A started runtime can remain alive after SIGKILL while a process
+			// waits for a wedged FUSE request. Recover that mount too; the
+			// recovery rechecks that every container sharing it is stopping.
+			s.scheduleStuckWorkspaceMountRecovery(instance, request, stuckContainerAbortDelay)
 			return
 		}
 	}
