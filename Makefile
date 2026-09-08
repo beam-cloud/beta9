@@ -97,18 +97,19 @@ runner: runner-python runner-micromamba
 
 # Build just one native runner with: make runner-python runnerVersions=3.12
 .PHONY: runner runner-python runner-micromamba
-runner-python:
+define build-runner
 	set -e; for version in $(runnerVersions); do \
-		target=py$${version//./}; \
-		docker build . --target $$target --platform=$(runnerPlatform) -f ./docker/Dockerfile.runner -t localhost:5001/beta9-runner:$$target-$(runnerTag) --progress=plain; \
+		target=$(1); \
+		docker build . --target $(2) --platform=$(runnerPlatform) -f ./docker/Dockerfile.runner $(3) -t localhost:5001/beta9-runner:$$target-$(runnerTag) --progress=plain; \
 		docker push localhost:5001/beta9-runner:$$target-$(runnerTag); \
 	done
+endef
+
+runner-python:
+	$(call build-runner,py$${version//./},$$target)
 
 runner-micromamba:
-	set -e; for version in $(runnerVersions); do \
-		docker build . --build-arg PYTHON_VERSION=$$version --target micromamba --platform=$(runnerPlatform) -f ./docker/Dockerfile.runner -t localhost:5001/beta9-runner:micromamba$$version-$(runnerTag) --progress=plain; \
-		docker push localhost:5001/beta9-runner:micromamba$$version-$(runnerTag); \
-	done
+	$(call build-runner,micromamba$$version,micromamba,--build-arg PYTHON_VERSION=$$version)
 
 # Local (k3d) and staging (EKS) okteto sessions can run side by side. Okteto
 # stores session state under $OKTETO_FOLDER/<namespace>/<dev>, keyed by name
