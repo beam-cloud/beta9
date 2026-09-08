@@ -1,3 +1,3 @@
-from .abstractions.integrations import VLLM, MCPServer, MCPServerArgs, VLLMArgs
+from .abstractions.integrations import MCPServer, MCPServerArgs
 
-__all__ = ["VLLM", "VLLMArgs", "MCPServer", "MCPServerArgs"]
+__all__ = ["MCPServer", "MCPServerArgs"]

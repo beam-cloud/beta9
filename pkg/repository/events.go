@@ -142,10 +142,6 @@ func eventTimeForData(data interface{}) time.Time {
 		if !d.Timestamp.IsZero() {
 			return d.Timestamp
 		}
-	case types.EventLLMRouteSchema:
-		if !d.Timestamp.IsZero() {
-			return d.Timestamp
-		}
 	case types.EventContainerEventSchema:
 		if !d.Timestamp.IsZero() {
 			return d.Timestamp
@@ -373,14 +369,6 @@ func (r *EventClientRepo) PushPlatformLogEvent(entry types.EventPlatformLogSchem
 	}
 
 	r.pushEvent(types.EventPlatformLog, types.EventPlatformLogSchemaVersion, entry)
-}
-
-func (r *EventClientRepo) PushLLMRouteEvent(event types.EventLLMRouteSchema) {
-	if event.Timestamp.IsZero() {
-		event.Timestamp = time.Now().UTC()
-	}
-
-	r.pushEvent(types.EventLLMRoute, types.EventLLMRouteSchemaVersion, event)
 }
 
 func (r *EventClientRepo) PushContainerRequestEvent(workerID string, request *types.ContainerRequest, eventID types.ContainerEventID, opts types.ContainerEventOptions) {
@@ -957,10 +945,6 @@ func eventTaskSchemaFromTask(task *types.TaskWithRelated) types.EventTaskSchema 
 		event.EndedAt = &task.EndedAt.Time
 	}
 
-	if task.ExternalWorkspace != nil && task.ExternalWorkspace.ExternalId != nil {
-		event.ExternalWorkspaceID = *task.ExternalWorkspace.ExternalId
-	}
-
 	if task.Deployment.ExternalId != nil {
 		event.DeploymentID = *task.Deployment.ExternalId
 	}
@@ -1141,8 +1125,6 @@ func eventMetadataFromData(data interface{}) eventMetadata {
 		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, TaskID: d.TaskID, WorkerID: d.WorkerID, MachineID: d.MachineID, WorkspaceID: d.WorkspaceID, AppID: d.AppID}
 	case types.EventPlatformLogSchema:
 		return eventMetadata{WorkspaceID: d.WorkspaceID, WorkerID: d.WorkerID, MachineID: d.MachineID, PoolName: d.PoolName, ServiceName: d.Service, InstanceID: d.InstanceID}
-	case types.EventLLMRouteSchema:
-		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, WorkspaceID: d.WorkspaceID, AppID: d.AppID}
 	case types.EventTaskSchema:
 		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, TaskID: d.ID, WorkspaceID: d.WorkspaceID, AppID: d.AppID}
 	case types.EventStubSchema:

@@ -22,7 +22,6 @@ from ...clients.gateway import (
     GetOrCreateStubResponse,
     GetUrlRequest,
     GetUrlResponse,
-    LlmConfig as LLMConfigProto,
     SecretVar,
     ServingConfig as ServingConfigProto,
 )
@@ -35,7 +34,6 @@ from ...clients.gateway import (
 from ...clients.gateway import TaskPolicy as TaskPolicyProto
 from ...clients.shell import ShellServiceStub
 from ...clients.types import CheckpointTrigger
-from ...clients.types import PricingPolicy as PricingPolicyProto
 from ...config import ConfigContext, SDKSettings, get_config_context, get_settings
 from ...env import called_on_import, is_notebook_env
 from ...exceptions import ImageBuildError
@@ -47,9 +45,7 @@ from ...type import (
     DurableDisk,
     GpuType,
     GpuTypeAlias,
-    LLMConfig,
     Pool,
-    PricingPolicy,
     QueueDepthAutoscaler,
     ServingConfig,
     TaskPolicy,
@@ -131,7 +127,6 @@ class RunnerAbstraction(BaseAbstraction):
         checkpoint_enabled: bool = False,
         entrypoint: Optional[List[str]] = None,
         ports: Optional[List[int]] = [],
-        pricing: Optional[PricingPolicy] = None,
         inputs: Optional[Schema] = None,
         outputs: Optional[Schema] = None,
         tcp: bool = False,
@@ -142,7 +137,6 @@ class RunnerAbstraction(BaseAbstraction):
         pool: Optional[Union[str, Pool]] = None,
         app_kind: str = "",
         serving_protocol: str = "",
-        llm: Optional[LLMConfig] = None,
         serving: Optional[ServingConfig] = None,
         disks: Optional[List[DurableDisk]] = None,
         checkpoint_readiness_path: Optional[str] = None,
@@ -206,7 +200,6 @@ class RunnerAbstraction(BaseAbstraction):
         self.serving = ServingConfig.from_options(
             app_kind=app_kind,
             serving_protocol=serving_protocol,
-            llm=llm,
             serving=serving,
         )
         self.extra: dict = {}
@@ -239,7 +232,6 @@ class RunnerAbstraction(BaseAbstraction):
         self.tmp_files: List[TempFile] = []
         self.is_websocket: bool = False
         self.ports: List[int] = ports or []
-        self.pricing: Optional[PricingPolicy] = pricing
         self.inputs: Optional[Schema] = inputs
         self.outputs: Optional[Schema] = outputs
         self.client: Optional[Client] = None
@@ -272,20 +264,10 @@ class RunnerAbstraction(BaseAbstraction):
     def serving_protocol(self, value: str) -> None:
         self.serving.serving_protocol = value or ""
 
-    @property
-    def llm(self) -> Optional[LLMConfig]:
-        return self.serving.llm
-
-    @llm.setter
-    def llm(self, value: Optional[LLMConfig]) -> None:
-        self.serving.llm = value
-        self.serving.normalize()
-
     def _serving_config_proto(self) -> Optional[ServingConfigProto]:
         if not self.serving or self.serving.is_empty():
             return None
 
-        llm = self.serving.llm
         return ServingConfigProto(
             app_kind=self.serving.app_kind,
             serving_protocol=self.serving.serving_protocol,
@@ -302,17 +284,6 @@ class RunnerAbstraction(BaseAbstraction):
                 connection_url_secret_name=self.serving.database.connection_url_secret_name,
             )
             if self.serving.database
-            else None,
-            llm=LLMConfigProto(
-                model_id=llm.model_id,
-                engine=llm.engine,
-                served_model_name=llm.served_model_name,
-                context_length=llm.context_length,
-                tokenizer=llm.tokenizer,
-                metrics_path=llm.metrics_path,
-                slo_tier=llm.slo_tier,
-            )
-            if llm
             else None,
         )
 
@@ -752,14 +723,6 @@ class RunnerAbstraction(BaseAbstraction):
             extra=json.dumps(self.extra),
             entrypoint=self.entrypoint,
             ports=self.ports,
-            pricing=PricingPolicyProto(
-                cost_per_task=self.pricing.cost_per_task,
-                cost_per_task_duration_ms=self.pricing.cost_per_task_duration_ms,
-                cost_model=self.pricing.cost_model,
-                max_in_flight=self.pricing.max_in_flight,
-            )
-            if self.pricing
-            else None,
             inputs=inputs,
             outputs=outputs,
             docker_enabled=self.docker_enabled,

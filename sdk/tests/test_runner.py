@@ -11,7 +11,6 @@ from beta9.abstractions.experimental.bot.bot import Bot
 from beta9.abstractions.function import Function, Schedule
 from beta9.abstractions.image import ImageBuildResult
 from beta9.abstractions.integrations.fastmcp import MCPServer
-from beta9.abstractions.integrations.vllm import VLLM
 from beta9.abstractions.pod import Pod
 from beta9.abstractions.sandbox import Sandbox
 from beta9.abstractions.taskqueue import TaskQueue
@@ -139,7 +138,6 @@ class TestRunner(unittest.TestCase):
             Sandbox,
             Bot,
             MCPServer,
-            VLLM,
         ):
             self.assertIn("disks", signature(cls.__init__).parameters, cls.__name__)
 

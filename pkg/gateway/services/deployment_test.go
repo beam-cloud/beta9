@@ -266,30 +266,6 @@ func TestScalePodDeploymentZeroEnablesScaleToZero(t *testing.T) {
 	require.Equal(t, uint(1), backend.stubConfigs[20].Autoscaler.MaxContainers)
 }
 
-func TestScalePodDeploymentPreservesLLMAutoscaler(t *testing.T) {
-	gws, backend := newDeploymentLifecycleGateway(t)
-	setDeploymentStubConfig(t, backend, types.StubConfigV1{
-		Autoscaler: &types.Autoscaler{
-			Type:              types.LLMTokenPressureAutoscaler,
-			MinContainers:     1,
-			MaxContainers:     4,
-			TasksPerContainer: 16,
-		},
-	})
-
-	resp, err := gws.ScaleDeployment(deploymentLifecycleContext(types.TokenTypeWorkspace), &pb.ScaleDeploymentRequest{
-		Id:         "deployment-id",
-		Containers: 2,
-	})
-
-	require.NoError(t, err)
-	require.True(t, resp.Ok, resp.ErrMsg)
-	require.Equal(t, types.LLMTokenPressureAutoscaler, backend.stubConfigs[20].Autoscaler.Type)
-	require.Equal(t, uint(16), backend.stubConfigs[20].Autoscaler.TasksPerContainer)
-	require.Equal(t, uint(2), backend.stubConfigs[20].Autoscaler.MinContainers)
-	require.Equal(t, uint(2), backend.stubConfigs[20].Autoscaler.MaxContainers)
-}
-
 func TestScalePodDeploymentRestoresDurableDiskToRegularPoolWhenPrivatePoolGone(t *testing.T) {
 	gws, backend := newDeploymentLifecycleGateway(t)
 	gws.computeRepo = &deploymentLifecycleComputeRepo{states: map[string]*compute.PoolState{

@@ -57,7 +57,6 @@ type connection struct {
 	finishOnce       sync.Once
 	enqueuedAt       time.Time
 	dialTimeout      time.Duration
-	llm              *llmRequestInfo
 	retryBackendDial bool
 	pinned           bool
 	retryCount       int
@@ -110,7 +109,6 @@ type PodProxyBuffer struct {
 	stubConfig              *types.StubConfigV1
 	stubType                string
 	appID                   string
-	eventRepo               llmRouteEventPusher
 	httpClient              *http.Client
 	backendTransports       sync.Map
 	tailscale               *network.Tailscale
@@ -121,8 +119,6 @@ type PodProxyBuffer struct {
 	totalConnections        atomic.Int64
 	containerConnections    sync.Map
 	pendingKeepWarmLocks    sync.Map
-	llmMetricsRefreshAfter  sync.Map
-	llmRouteCounter         atomic.Uint64
 	idleSnapshotUntil       atomic.Int64
 	proxyIndexRefreshAfter  atomic.Int64
 	buffer                  *abstractions.RingBuffer[*connection]
@@ -141,7 +137,6 @@ func NewPodProxyBuffer(ctx, drainCtx context.Context,
 	stubConfig *types.StubConfigV1,
 	stubType string,
 	appID string,
-	eventRepo llmRouteEventPusher,
 	tailscale *network.Tailscale,
 	tsConfig types.TailscaleConfig,
 ) *PodProxyBuffer {
@@ -163,7 +158,6 @@ func NewPodProxyBuffer(ctx, drainCtx context.Context,
 		stubConfig:              stubConfig,
 		stubType:                stubType,
 		appID:                   appID,
-		eventRepo:               eventRepo,
 		tailscale:               tailscale,
 		tsConfig:                tsConfig,
 		availableContainers:     []container{},
@@ -197,21 +191,10 @@ func (pb *PodProxyBuffer) ForwardRequest(ctx echo.Context) error {
 		return ctx.String(http.StatusBadRequest, "Invalid port")
 	}
 
-	llmInfo, err := pb.inspectLLMRequest(ctx)
-	if err != nil {
-		return ctx.String(http.StatusBadRequest, "Failed to inspect LLM request")
-	}
-	if denied, reason := pb.llmAdmissionDenied(llmInfo); denied {
-		ctx.Response().Header().Set(echo.HeaderRetryAfter, "1")
-		pb.pushRejectedLLMRouteEvent(llmInfo, http.StatusTooManyRequests, reason)
-		return ctx.String(http.StatusTooManyRequests, reason)
-	}
-
 	done := make(chan struct{})
 	conn := &connection{
 		ctx:              ctx,
 		done:             done,
-		llm:              llmInfo,
 		retryBackendDial: true,
 	}
 
@@ -219,7 +202,7 @@ func (pb *PodProxyBuffer) ForwardRequest(ctx echo.Context) error {
 		return nil
 	}
 
-	container, ok, hasContainers, hasPort := pb.reserveContainerForRequest(int32(port), llmInfo)
+	container, ok, hasContainers, hasPort := pb.reserveContainerForPort(int32(port))
 	if ok {
 		conn.claim()
 		if pb.handleConnection(conn, container, int32(port)) {
@@ -397,7 +380,7 @@ func (pb *PodProxyBuffer) processBuffer() {
 					continue
 				}
 
-				container, ok, hasContainers, hasPort := pb.reserveContainerForRequest(int32(port), conn.llm)
+				container, ok, hasContainers, hasPort := pb.reserveContainerForPort(int32(port))
 				if !ok {
 					if !hasContainers || hasPort {
 						pb.requeueConnection(conn)
@@ -458,7 +441,6 @@ func (pb *PodProxyBuffer) failConnection(conn *connection, status int, message s
 		conn.ctx.Response().Header().Set(echo.HeaderConnection, "close")
 		_ = conn.ctx.String(status, message)
 	}
-	pb.recordFailedQueuedLLMRoute(conn, status, message)
 	conn.finish()
 }
 
@@ -560,13 +542,6 @@ func (pb *PodProxyBuffer) reserveContainerForPort(port int32) (container, bool, 
 	}
 
 	return container{}, false, true, hasPort
-}
-
-func (pb *PodProxyBuffer) reserveContainerForRequest(port int32, llmInfo *llmRequestInfo) (container, bool, bool, bool) {
-	if llmInfo != nil && llmInfo.Enabled {
-		return pb.reserveLLMContainerForPort(port, llmInfo)
-	}
-	return pb.reserveContainerForPort(port)
 }
 
 func (pb *PodProxyBuffer) primeContainerPort(containerID string, port int32, timeout time.Duration) bool {
@@ -723,16 +698,12 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection, container container
 			conn.finish()
 		}
 	}()
-	var llmTracker *llmRequestTracker
 	attemptReleased := false
 	releaseAttempt := func() {
 		if attemptReleased {
 			return
 		}
 		attemptReleased = true
-		if llmTracker != nil {
-			llmTracker.finish()
-		}
 		_ = pb.decrementContainerConnections(container.id)
 	}
 	defer releaseAttempt()
@@ -745,8 +716,6 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection, container container
 		conn.ctx.String(http.StatusServiceUnavailable, "Port not available")
 		return false
 	}
-	llmTracker = pb.startLLMRequest(conn.llm, container.id, targetHost)
-
 	subPath := conn.ctx.Param("subPath")
 	if subPath != "" && subPath[0] != '/' {
 		subPath = "/" + subPath
@@ -777,12 +746,6 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection, container container
 	}
 
 	var retryErr error
-	if llmTracker != nil {
-		proxy.ModifyResponse = func(resp *http.Response) error {
-			llmTracker.markFirstResponse(resp.StatusCode)
-			return nil
-		}
-	}
 	proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, err error) {
 		var dialErr *backendDialError
 		if conn.retryBackendDial &&
@@ -792,9 +755,6 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection, container container
 			!conn.ctx.Response().Committed {
 			retryErr = err
 			return
-		}
-		if llmTracker != nil {
-			llmTracker.markError(err.Error())
 		}
 		http.Error(rw, "Backend route unavailable", http.StatusBadGateway)
 	}
@@ -820,9 +780,6 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection, container container
 
 	if retryErr == nil {
 		return false
-	}
-	if llmTracker != nil {
-		llmTracker.markError(retryErr.Error())
 	}
 	releaseAttempt()
 	if pb.retryBackendConnection(conn, container, retryErr) {
@@ -926,9 +883,6 @@ func (pb *PodProxyBuffer) recordQueuedRequestWait(conn *connection, protocol str
 		return
 	}
 	wait := time.Since(conn.enqueuedAt)
-	if conn.llm != nil {
-		conn.llm.QueueWait = wait
-	}
 	metrics.RecordProxyQueuedRequestWait("pod", pb.workspaceName(), pb.stubId, protocol, wait)
 }
 

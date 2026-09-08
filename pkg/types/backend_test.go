@@ -163,7 +163,7 @@ func TestStubConfigSetReplicaCountInitializesAutoscaler(t *testing.T) {
 func TestStubConfigSetReplicaCountPreservesAutoscalerType(t *testing.T) {
 	config := &StubConfigV1{
 		Autoscaler: &Autoscaler{
-			Type:              LLMTokenPressureAutoscaler,
+			Type:              AutoscalerType("custom"),
 			MinContainers:     1,
 			MaxContainers:     4,
 			TasksPerContainer: 8,
@@ -172,8 +172,8 @@ func TestStubConfigSetReplicaCountPreservesAutoscalerType(t *testing.T) {
 
 	config.SetReplicaCount(2)
 
-	if config.Autoscaler.Type != LLMTokenPressureAutoscaler {
-		t.Fatalf("autoscaler type = %q, want %q", config.Autoscaler.Type, LLMTokenPressureAutoscaler)
+	if config.Autoscaler.Type != AutoscalerType("custom") {
+		t.Fatalf("autoscaler type = %q, want %q", config.Autoscaler.Type, "custom")
 	}
 	if config.Autoscaler.TasksPerContainer != 8 {
 		t.Fatalf("tasks per container = %d, want 8", config.Autoscaler.TasksPerContainer)

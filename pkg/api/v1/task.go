@@ -145,7 +145,7 @@ func (g *TaskGroup) SubscribeTask(ctx echo.Context) error {
 		return HTTPNotFound()
 	}
 
-	if task.WorkspaceId != cc.AuthInfo.Workspace.Id && *task.ExternalWorkspaceId != cc.AuthInfo.Workspace.Id {
+	if task.WorkspaceId != cc.AuthInfo.Workspace.Id {
 		return HTTPNotFound()
 	}
 
@@ -216,15 +216,7 @@ func (g *TaskGroup) SubscribeTask(ctx echo.Context) error {
 }
 
 func (g *TaskGroup) hasTaskAccess(task *types.TaskWithRelated, authInfo *auth.AuthInfo) bool {
-	if task.WorkspaceId == authInfo.Workspace.Id {
-		return true
-	}
-
-	if task.ExternalWorkspaceId != nil && *task.ExternalWorkspaceId == authInfo.Workspace.Id {
-		return true
-	}
-
-	return false
+	return task.WorkspaceId == authInfo.Workspace.Id
 }
 
 func (g *TaskGroup) RetrieveTask(ctx echo.Context) error {
@@ -411,14 +403,7 @@ func (g *TaskGroup) preprocessFilters(ctx echo.Context) (*types.TaskFilter, erro
 		return nil, HTTPBadRequest("Failed to decode query parameters")
 	}
 
-	public, _ := strconv.ParseBool(ctx.QueryParam("public"))
-
-	if public && !filters.All {
-		filters.ExternalWorkspaceID = workspace.Id
-		filters.WorkspaceID = 0
-	} else {
-		filters.WorkspaceID = workspace.Id
-	}
+	filters.WorkspaceID = workspace.Id
 
 	return &filters, nil
 }

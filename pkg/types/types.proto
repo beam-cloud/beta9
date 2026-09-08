@@ -205,13 +205,6 @@ message Object {
   google.protobuf.Timestamp created_at = 6;
 }
 
-message PricingPolicy {
-  int64 max_in_flight = 1;
-  string cost_model = 2;
-  double cost_per_task = 3;
-  double cost_per_task_duration_ms = 4;
-}
-
 message ProcessInfo {
   bool running = 1;
   int32 pid = 2;

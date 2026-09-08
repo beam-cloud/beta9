@@ -37,7 +37,6 @@ from ..type import (
     DurableDisk,
     GpuType,
     GpuTypeAlias,
-    LLMConfig,
     Pool,
     ServingConfig,
     TaskStatus,
@@ -204,7 +203,6 @@ class Pod(RunnerAbstraction, DeployableMixin):
         checkpoint_readiness_interval: int = 1,
         app_kind: str = "",
         serving_protocol: str = "",
-        llm: Optional[LLMConfig] = None,
         serving: Optional[ServingConfig] = None,
     ) -> None:
         super().__init__(
@@ -236,7 +234,6 @@ class Pod(RunnerAbstraction, DeployableMixin):
             checkpoint_readiness_interval=checkpoint_readiness_interval,
             app_kind=app_kind,
             serving_protocol=serving_protocol,
-            llm=llm,
             serving=serving,
         )
         self.parent = self

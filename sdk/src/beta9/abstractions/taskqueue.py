@@ -30,7 +30,6 @@ from ..type import (
     GpuType,
     GpuTypeAlias,
     Pool,
-    PricingPolicy,
     QueueDepthAutoscaler,
     TaskPolicy,
 )
@@ -155,7 +154,6 @@ class TaskQueue(RunnerAbstraction):
         task_policy: TaskPolicy = TaskPolicy(),
         checkpoint_enabled: bool = False,
         retry_for: Optional[List[Type[Exception]]] = None,
-        pricing: Optional[PricingPolicy] = None,
         inputs: Optional[Schema] = None,
         outputs: Optional[Schema] = None,
         pool: Optional[Union[str, Pool]] = None,
@@ -185,7 +183,6 @@ class TaskQueue(RunnerAbstraction):
             task_policy=task_policy,
             checkpoint_enabled=checkpoint_enabled,
             app=app,
-            pricing=pricing,
             inputs=inputs,
             outputs=outputs,
             pool=pool,

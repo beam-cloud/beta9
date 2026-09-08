@@ -301,7 +301,7 @@ func TestListAppWithLatestActivityIncludesCardEnrichment(t *testing.T) {
 							ExternalId:  "stub-deploy",
 							Name:        "Stub Deploy",
 							Type:        types.StubType(types.StubTypePodDeployment),
-							Config:      `{"pool":{"name":"gpu-pool"},"is_service":true,"serving":{"app_kind":"llm_model","serving_protocol":"openai","llm":{"model_id":"Qwen/Qwen2.5-0.5B-Instruct","engine":"vllm","served_model_name":"qwen-test","context_length":4096,"metrics_path":"/metrics","slo_tier":"standard"}}}`,
+							Config:      `{"pool":{"name":"gpu-pool"},"is_service":true,"serving":{"app_kind":"database","serving_protocol":"postgres"}}`,
 							WorkspaceId: workspace.Id,
 							AppId:       appWithDeployment.Id,
 						},
@@ -396,14 +396,6 @@ func TestListAppWithLatestActivityIncludesCardEnrichment(t *testing.T) {
 			Serving           struct {
 				AppKind         string `json:"app_kind"`
 				ServingProtocol string `json:"serving_protocol"`
-				LLM             struct {
-					ModelID         string `json:"model_id"`
-					Engine          string `json:"engine"`
-					ServedModelName string `json:"served_model_name"`
-					ContextLength   int    `json:"context_length"`
-					MetricsPath     string `json:"metrics_path"`
-					SLOTier         string `json:"slo_tier"`
-				} `json:"llm"`
 			} `json:"serving"`
 		} `json:"data"`
 	}
@@ -432,14 +424,6 @@ func TestListAppWithLatestActivityIncludesCardEnrichment(t *testing.T) {
 		Serving           struct {
 			AppKind         string `json:"app_kind"`
 			ServingProtocol string `json:"serving_protocol"`
-			LLM             struct {
-				ModelID         string `json:"model_id"`
-				Engine          string `json:"engine"`
-				ServedModelName string `json:"served_model_name"`
-				ContextLength   int    `json:"context_length"`
-				MetricsPath     string `json:"metrics_path"`
-				SLOTier         string `json:"slo_tier"`
-			} `json:"llm"`
 		}
 	}{}
 	for _, app := range response.Data {
@@ -451,14 +435,6 @@ func TestListAppWithLatestActivityIncludesCardEnrichment(t *testing.T) {
 			Serving           struct {
 				AppKind         string `json:"app_kind"`
 				ServingProtocol string `json:"serving_protocol"`
-				LLM             struct {
-					ModelID         string `json:"model_id"`
-					Engine          string `json:"engine"`
-					ServedModelName string `json:"served_model_name"`
-					ContextLength   int    `json:"context_length"`
-					MetricsPath     string `json:"metrics_path"`
-					SLOTier         string `json:"slo_tier"`
-				} `json:"llm"`
 			}
 		}{
 			PoolName:          app.PoolName,
@@ -486,8 +462,8 @@ func TestListAppWithLatestActivityIncludesCardEnrichment(t *testing.T) {
 			t.Fatalf("expected %s to be running, got %q", app.ID, app.State)
 		}
 	}
-	if deploymentApp.Serving.AppKind != "llm_model" || deploymentApp.Serving.ServingProtocol != "openai" || deploymentApp.Serving.LLM.ModelID != "Qwen/Qwen2.5-0.5B-Instruct" || deploymentApp.Serving.LLM.ContextLength != 4096 {
-		t.Fatalf("unexpected deployment app llm enrichment: %+v", deploymentApp)
+	if deploymentApp.Serving.AppKind != "database" || deploymentApp.Serving.ServingProtocol != "postgres" {
+		t.Fatalf("unexpected deployment app serving enrichment: %+v", deploymentApp)
 	}
 
 	stubApp := byID[appWithStub.ExternalId]

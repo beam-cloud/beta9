@@ -33,7 +33,6 @@ from ..type import (
     GpuType,
     GpuTypeAlias,
     Pool,
-    PricingPolicy,
     QueueDepthAutoscaler,
     TaskPolicy,
 )
@@ -154,7 +153,6 @@ class Endpoint(RunnerAbstraction):
         callback_url: Optional[str] = None,
         task_policy: TaskPolicy = TaskPolicy(),
         checkpoint_enabled: bool = False,
-        pricing: Optional[PricingPolicy] = None,
         inputs: Optional[Schema] = None,
         outputs: Optional[Schema] = None,
         pool: Optional[Union[str, Pool]] = None,
@@ -185,7 +183,6 @@ class Endpoint(RunnerAbstraction):
             concurrent_requests=self.concurrent_requests,
             checkpoint_enabled=checkpoint_enabled,
             app=app,
-            pricing=pricing,
             inputs=inputs,
             outputs=outputs,
             pool=pool,
@@ -326,7 +323,6 @@ class ASGI(Endpoint):
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
         callback_url: Optional[str] = None,
         checkpoint_enabled: bool = False,
-        pricing: Optional[PricingPolicy] = None,
         pool: Optional[Union[str, Pool]] = None,
         allow_marketplace: bool = False,
     ):
@@ -353,7 +349,6 @@ class ASGI(Endpoint):
             callback_url=callback_url,
             checkpoint_enabled=checkpoint_enabled,
             app=app,
-            pricing=pricing,
             pool=pool,
             allow_marketplace=allow_marketplace,
         )
@@ -470,7 +465,6 @@ class RealtimeASGI(ASGI):
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
         callback_url: Optional[str] = None,
         checkpoint_enabled: bool = False,
-        pricing: Optional[PricingPolicy] = None,
         pool: Optional[Union[str, Pool]] = None,
         allow_marketplace: bool = False,
     ):
@@ -496,7 +490,6 @@ class RealtimeASGI(ASGI):
             callback_url=callback_url,
             concurrent_requests=concurrent_requests,
             checkpoint_enabled=checkpoint_enabled,
-            pricing=pricing,
             pool=pool,
             allow_marketplace=allow_marketplace,
         )

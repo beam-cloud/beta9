@@ -9,7 +9,6 @@ import (
 	"time"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
-	"github.com/beam-cloud/beta9/pkg/auth"
 	taskmetrics "github.com/beam-cloud/beta9/pkg/task"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
@@ -27,7 +26,6 @@ func (t *FunctionTask) Execute(ctx context.Context, options ...interface{}) erro
 		return err
 	}
 
-	authInfo := options[0].(*auth.AuthInfo)
 	stubConfig := options[1].(types.StubConfigV1)
 
 	taskId := t.msg.TaskId
@@ -62,18 +60,11 @@ func (t *FunctionTask) Execute(ctx context.Context, options ...interface{}) erro
 		}
 	}
 
-	var externalWorkspaceId *uint
-	if stubConfig.Pricing != nil && stub.Workspace.ExternalId != authInfo.Workspace.ExternalId {
-		abstractions.TrackTaskCount(stub, t.fs.usageMetricsRepo, t.msg.TaskId, authInfo.Workspace.ExternalId)
-		externalWorkspaceId = &authInfo.Workspace.Id
-	}
-
 	task, err := t.fs.backendRepo.CreateTask(ctx, &types.TaskParams{
-		WorkspaceId:         stub.WorkspaceId,
-		StubId:              stub.Id,
-		TaskId:              taskId,
-		ContainerId:         containerId,
-		ExternalWorkspaceId: externalWorkspaceId,
+		WorkspaceId: stub.WorkspaceId,
+		StubId:      stub.Id,
+		TaskId:      taskId,
+		ContainerId: containerId,
 	})
 	if err != nil {
 		return err

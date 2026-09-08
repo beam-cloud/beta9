@@ -84,16 +84,6 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		}, nil
 	}
 
-	var pricing *types.PricingPolicy = nil
-	if in.Pricing != nil {
-		pricing = &types.PricingPolicy{
-			CostModel:             string(in.Pricing.CostModel),
-			MaxInFlight:           int(in.Pricing.MaxInFlight),
-			CostPerTask:           float64(in.Pricing.CostPerTask),
-			CostPerTaskDurationMs: float64(in.Pricing.CostPerTaskDurationMs),
-		}
-	}
-
 	// If checkpoint/restore is enabled, we need to handle a few additional things to ensure dump/restore will work properly
 	if in.CheckpointEnabled {
 		checkpointWarning, err := gws.handleCheckpointEnabled(ctx, authInfo, in, gpus)
@@ -147,7 +137,6 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		EntryPoint:         in.Entrypoint,
 		Ports:              in.Ports,
 		Env:                in.Env,
-		Pricing:            pricing,
 		Inputs:             inputs,
 		Outputs:            outputs,
 		TCP:                in.Tcp,
@@ -559,22 +548,6 @@ func poolConfigFromProto(in *pb.PoolConfig) *types.PoolConfig {
 	}
 }
 
-func llmConfigFromProto(in *pb.LLMConfig) *types.LLMConfig {
-	if in == nil {
-		return nil
-	}
-
-	return &types.LLMConfig{
-		ModelID:         in.ModelId,
-		Engine:          in.Engine,
-		ServedModelName: in.ServedModelName,
-		ContextLength:   int(in.ContextLength),
-		Tokenizer:       in.Tokenizer,
-		MetricsPath:     in.MetricsPath,
-		SLOTier:         in.SloTier,
-	}
-}
-
 func databaseConfigFromProto(in *pb.DatabaseServingConfig) *types.DatabaseServingConfig {
 	if in == nil {
 		return nil
@@ -602,7 +575,6 @@ func servingConfigFromProto(in *pb.ServingConfig) *types.ServingConfig {
 	return compactServingConfig(&types.ServingConfig{
 		AppKind:         in.AppKind,
 		ServingProtocol: in.ServingProtocol,
-		LLM:             llmConfigFromProto(in.Llm),
 		Database:        databaseConfigFromProto(in.Database),
 	})
 }
@@ -611,7 +583,7 @@ func compactServingConfig(in *types.ServingConfig) *types.ServingConfig {
 	if in == nil {
 		return nil
 	}
-	if strings.TrimSpace(in.AppKind) == "" && strings.TrimSpace(in.ServingProtocol) == "" && in.LLM == nil && in.Database == nil {
+	if strings.TrimSpace(in.AppKind) == "" && strings.TrimSpace(in.ServingProtocol) == "" && in.Database == nil {
 		return nil
 	}
 	return in
@@ -1044,10 +1016,6 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 
 func (gws *GatewayService) hasStubAccess(ctx context.Context, authInfo *auth.AuthInfo, stub *types.StubWithRelated, config *types.StubConfigV1) (bool, error) {
 	if !config.Authorized {
-		return true, nil
-	}
-
-	if config.Pricing != nil {
 		return true, nil
 	}
 

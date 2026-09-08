@@ -460,10 +460,6 @@ func cloneServingConfig(serving *types.ServingConfig) *types.ServingConfig {
 		database := *serving.Database
 		clone.Database = &database
 	}
-	if serving.LLM != nil {
-		llm := *serving.LLM
-		clone.LLM = &llm
-	}
 	return &clone
 }
 

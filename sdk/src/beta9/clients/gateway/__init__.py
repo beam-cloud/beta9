@@ -374,17 +374,6 @@ class Autoscaler(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class LlmConfig(betterproto.Message):
-    model_id: str = betterproto.string_field(1)
-    engine: str = betterproto.string_field(2)
-    served_model_name: str = betterproto.string_field(3)
-    context_length: int = betterproto.int64_field(4)
-    tokenizer: str = betterproto.string_field(5)
-    metrics_path: str = betterproto.string_field(6)
-    slo_tier: str = betterproto.string_field(7)
-
-
-@dataclass(eq=False, repr=False)
 class DatabaseServingConfig(betterproto.Message):
     kind: str = betterproto.string_field(1)
     port: int = betterproto.uint32_field(2)
@@ -402,7 +391,6 @@ class DatabaseServingConfig(betterproto.Message):
 class ServingConfig(betterproto.Message):
     app_kind: str = betterproto.string_field(1)
     serving_protocol: str = betterproto.string_field(2)
-    llm: "LlmConfig" = betterproto.message_field(3)
     database: "DatabaseServingConfig" = betterproto.message_field(4)
 
 
@@ -493,7 +481,6 @@ class GetOrCreateStubRequest(betterproto.Message):
     ports: List[int] = betterproto.uint32_field(31)
     env: List[str] = betterproto.string_field(32)
     app_name: str = betterproto.string_field(33)
-    pricing: "_types__.PricingPolicy" = betterproto.message_field(34)
     inputs: "Schema" = betterproto.message_field(35)
     outputs: "Schema" = betterproto.message_field(36)
     tcp: bool = betterproto.bool_field(37)

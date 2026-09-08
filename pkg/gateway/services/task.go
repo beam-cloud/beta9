@@ -2,12 +2,10 @@ package gatewayservices
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"strings"
 	"time"
 
-	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/metrics"
@@ -169,26 +167,7 @@ func (gws *GatewayService) EndTask(ctx context.Context, in *pb.EndTaskRequest) (
 		gws.eventRepo.PushTaskEndEvents(ctx, gws.redisClient, task, endedAt)
 	}
 
-	var workspace *types.Workspace = authInfo.Workspace
-
-	// Track cost for external/public tasks
-	if task.ExternalWorkspaceId != nil {
-		workspace, err = gws.backendRepo.GetWorkspace(context.Background(), *task.ExternalWorkspaceId)
-		if err != nil {
-			return &pb.EndTaskResponse{
-				Ok: false,
-			}, nil
-
-		}
-
-		duration := time.Duration(float64(in.TaskDuration) * float64(time.Millisecond))
-		err = gws.trackExternalTaskCost(task, workspace, duration)
-		if err != nil {
-			return &pb.EndTaskResponse{
-				Ok: false,
-			}, nil
-		}
-	}
+	workspace := authInfo.Workspace
 
 	// Store task result in persistent storage
 	if in.Result != nil && workspace.StorageAvailable() {
@@ -262,22 +241,6 @@ func copyPhaseLabels(labels map[string]string) map[string]string {
 		copied[key] = value
 	}
 	return copied
-}
-
-func (gws *GatewayService) trackExternalTaskCost(task *types.TaskWithRelated, externalWorkspace *types.Workspace, duration time.Duration) error {
-	stubWithRelated, err := gws.backendRepo.GetStubByExternalId(context.Background(), task.Stub.ExternalId)
-	if err != nil {
-		return err
-	}
-
-	stubConfig := types.StubConfigV1{}
-	err = json.Unmarshal([]byte(task.Stub.Config), &stubConfig)
-	if err != nil {
-		return err
-	}
-
-	abstractions.TrackTaskCost(duration, stubWithRelated, stubConfig.Pricing, gws.usageMetricsRepo, task.ExternalId, externalWorkspace.ExternalId)
-	return nil
 }
 
 func (gws *GatewayService) ListTasks(ctx context.Context, in *pb.ListTasksRequest) (*pb.ListTasksResponse, error) {
