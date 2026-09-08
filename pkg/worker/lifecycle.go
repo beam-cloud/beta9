@@ -941,19 +941,24 @@ func requiresPostBuildImageMaterialization(request *types.ContainerRequest, clip
 
 func (s *Worker) pullLazyWithMetrics(ctx context.Context, request *types.ContainerRequest, phase string, outputLogger *slog.Logger) (time.Duration, error) {
 	phaseStart := time.Now()
-	outputLogger.Info("Loading image metadata...\n")
-	stopHeartbeat := startSilentOutputHeartbeat(ctx, outputLogger, phaseStart, newActiveOutputWriter(outputLogger), "Loading image metadata...")
+	message := fmt.Sprintf("Loading image <%s>", request.ImageId)
+	// Fast runtime starts stay quiet; builds and slow loads retain progress.
+	if request.IsBuildRequest() {
+		outputLogger.Info(message + "...\n")
+	}
+	stopHeartbeat := startSilentOutputHeartbeat(ctx, outputLogger, phaseStart, newActiveOutputWriter(outputLogger), message)
 	elapsed, err := s.imageClient.PullLazy(ctx, request)
 	stopHeartbeat()
-	if err == nil {
-		outputLogger.Info("Image metadata loaded\n")
+	duration := time.Since(phaseStart)
+	if err == nil && (request.IsBuildRequest() || duration >= buildOutputHeartbeatInterval) {
+		outputLogger.Info(fmt.Sprintf("Loaded image <%s> in %s\n", request.ImageId, duration.Round(time.Millisecond)))
 	}
-	metrics.RecordWorkerStartupPhase(phase, time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
+	metrics.RecordWorkerStartupPhase(phase, duration, request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 	spanID := types.ContainerLifecycleImageLoad
 	if phase != "pull_lazy" && phase != "pull_lazy_after_build" {
 		spanID = types.ContainerLifecycleID("image." + phase)
 	}
-	s.recordContainerLifecycle(ctx, request, containerLifecycleFromDuration(spanID, request, phaseStart, time.Since(phaseStart), err == nil, map[string]string{
+	s.recordContainerLifecycle(ctx, request, containerLifecycleFromDuration(spanID, request, phaseStart, duration, err == nil, map[string]string{
 		types.EventAttrLifecycle: phase,
 		"image_id":               request.ImageId,
 		"elapsed_raw":            elapsed.String(),
