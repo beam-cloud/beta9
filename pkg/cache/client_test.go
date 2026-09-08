@@ -479,7 +479,7 @@ func TestLogicalOnlyHostStaysInHRWButHasNoEndpoint(t *testing.T) {
 	require.ErrorIs(t, err, ErrSelectedHostUnavailable)
 }
 
-func TestReadContentIntoDoesNotUseNonSelectedLocalReplica(t *testing.T) {
+func TestReadContentIntoRecoversFromUnavailablePrimaryWithLocalReplica(t *testing.T) {
 	store := newTestStore(t, 5)
 	content := []byte("local-cache-content")
 	hash, _, err := store.AddReader(context.Background(), bytes.NewReader(content))
@@ -504,10 +504,11 @@ func TestReadContentIntoDoesNotUseNonSelectedLocalReplica(t *testing.T) {
 
 	dst := make([]byte, len(content))
 	_, err = client.ReadContentInto(context.Background(), hash, 0, dst, ClientOptions{})
-	require.ErrorIs(t, err, ErrSelectedHostUnavailable)
+	require.NoError(t, err)
+	require.Equal(t, content, dst)
 
 	_, err = client.ClientLocalPageFileViews(hash, 3, 6, ClientOptions{})
-	require.ErrorIs(t, err, ErrContentNotFound)
+	require.NoError(t, err)
 }
 
 func TestReadContentIntoDoesNotMaskSelectedHostMissWithDifferentHost(t *testing.T) {
@@ -2563,4 +2564,14 @@ func TestReadsFindContentOnHostOutsideTopN(t *testing.T) {
 		streamed = append(streamed, chunk...)
 	}
 	require.Equal(t, content, streamed)
+
+	// A departed primary must not hide a surviving off-ring copy either.
+	require.NoError(t, servers[0].Close())
+	client.removeLocalHostCache(hash)
+	client.maxGetContentAttempts = 1
+	clear(dst)
+	n, err = client.ReadContentInto(ctx, hash, 0, dst, ClientOptions{RoutingKey: hash})
+	require.NoError(t, err)
+	require.Equal(t, int64(len(content)), n)
+	require.Equal(t, content, dst)
 }
