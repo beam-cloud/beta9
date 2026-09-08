@@ -80,10 +80,14 @@ def print_json(data: Any, **kwargs: Any) -> None:
     _console.print_json(data=data, indent=2, default=lambda o: str(o), **kwargs)
 
 
+def _no_input() -> bool:
+    return os.getenv("BETA9_NO_INPUT") == "1"
+
+
 def prompt(
     *, text: str, default: Optional[Any] = None, markup: bool = False, password: bool = False
 ) -> Any:
-    if os.getenv("BETA9_NO_INPUT") == "1":
+    if _no_input():
         if default is None:
             error(f"Input required: {text}. Provide it explicitly when using --no-input.")
         return default
@@ -306,7 +310,7 @@ BRAND_COLOR = "#4CCACC"
 
 def is_interactive() -> bool:
     """True when both stdin and stdout are TTYs and the terminal isn't dumb."""
-    if os.getenv("BETA9_NO_INPUT") == "1":
+    if _no_input():
         return False
     try:
         return sys.stdin.isatty() and sys.stdout.isatty() and os.environ.get("TERM", "") != "dumb"
@@ -341,7 +345,7 @@ def select(
     ]
     if not opts:
         raise ValueError("select() requires at least one option")
-    if os.getenv("BETA9_NO_INPUT") == "1":
+    if _no_input():
         return opts[max(0, min(default_index, len(opts) - 1))].value
 
     if is_interactive():
@@ -455,7 +459,7 @@ def confirm(text: str, default: bool = True) -> bool:
     Single-keypress y/n confirmation. Falls back to line input when the
     terminal can't do raw-mode reads.
     """
-    if os.getenv("BETA9_NO_INPUT") == "1":
+    if _no_input():
         error("Confirmation required. Use an explicit confirmation flag such as --yes.")
     suffix = "[Y/n]" if default else "[y/N]"
     prompt_text = Text(text, style="bold").append(f" {suffix} ", style="dim")

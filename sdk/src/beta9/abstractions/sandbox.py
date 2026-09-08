@@ -361,15 +361,7 @@ class Sandbox(Pod):
 
         self.stub_id = create_response.stub_id
 
-        terminal.resource(
-            f"{self.name or 'Sandbox'} · submitted",
-            {
-                "Container": create_response.container_id,
-                "Timeout": f"{self.keep_warm_seconds}s"
-                if self.keep_warm_seconds >= 0
-                else "No timeout",
-            },
-        )
+        self._print_submission(create_response.container_id)
 
         return SandboxInstance(
             stub_id=self.stub_id,
@@ -419,21 +411,24 @@ class Sandbox(Pod):
         if not create_response.ok:
             raise SandboxConnectionError(create_response.error_msg)
 
-        terminal.resource(
-            f"{self.name or 'Sandbox'} · submitted",
-            {
-                "Container": create_response.container_id,
-                "Timeout": f"{self.keep_warm_seconds}s"
-                if self.keep_warm_seconds >= 0
-                else "No timeout",
-            },
-        )
+        self._print_submission(create_response.container_id)
 
         return SandboxInstance(
             stub_id=self.stub_id,
             container_id=create_response.container_id,
             ok=create_response.ok,
             error_msg=create_response.error_msg,
+        )
+
+    def _print_submission(self, container_id: str):
+        terminal.resource(
+            f"{self.name or 'Sandbox'} · submitted",
+            {
+                "Container": container_id,
+                "Timeout": f"{self.keep_warm_seconds}s"
+                if self.keep_warm_seconds >= 0
+                else "No timeout",
+            },
         )
 
 
@@ -1023,17 +1018,22 @@ class SandboxProcessManager:
             if isinstance(stdin, (str, bytes))
             else stdin
         )
-        target = f"/tmp/.beta9-stdin-{uuid.uuid4().hex}"
-        self.sandbox_instance.fs._upload(target, source, 0o600)
+        directory = f"/tmp/.beta9-stdin-{uuid.uuid4().hex}"
         command = args[0] if isinstance(args[0], list) else args
         try:
+            process = self._exec("mkdir", "-m", "700", "--", directory, cwd="/tmp")
+            if process.wait(30) != 0:
+                raise SandboxProcessError(process.stderr.read())
+            # The container user owns the directory so it can rename and unlink
+            # worker-owned files; 0700 keeps the readable input private.
+            self.sandbox_instance.fs._upload(f"{directory}/input", source, 0o644)
             # Unlink after opening so the process owns the input's lifetime.
             return self._exec(
                 "sh",
                 "-c",
-                'exec 3< "$1"; rm -- "$1"; shift; exec "$@" <&3',
+                'exec 3< "$1/input"; rm -- "$1/input"; rmdir -- "$1"; shift; exec "$@" <&3',
                 "beta9-stdin",
-                target,
+                directory,
                 *command,
                 cwd=cwd,
                 env=env,
@@ -1041,7 +1041,7 @@ class SandboxProcessManager:
         except BaseException:
             try:
                 with rpc_timeout(3):
-                    self.sandbox_instance.fs.delete_file(target)
+                    self.sandbox_instance.fs.delete_directory(directory)
             except Exception:
                 pass
             raise

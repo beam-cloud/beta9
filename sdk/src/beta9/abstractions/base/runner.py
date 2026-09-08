@@ -352,7 +352,11 @@ class RunnerAbstraction(BaseAbstraction):
             terminal.print("")
             return res
 
-        headers = ['-H "Authorization: Bearer $BETA9_TOKEN"'] if self.authorized else []
+        headers = (
+            ['-H "Authorization: Bearer ${BETA9_TOKEN:?Set BETA9_TOKEN to your profile token}"']
+            if self.authorized
+            else []
+        )
         if self.is_websocket:
             res.url = res.url.replace("http://", "ws://").replace("https://", "wss://")
             commands = [f"websocat '{res.url}'", *headers]
@@ -365,7 +369,10 @@ class RunnerAbstraction(BaseAbstraction):
             ]
 
         terminal.resource("Endpoint", {"URL": res.url})
-        terminal.debug(" ".join(commands))
+        if self.authorized and os.getenv("BETA9_TOKEN") != self.config_context.token:
+            terminal.detail("Set the token from your selected profile:", dim=False)
+            terminal.print("export BETA9_TOKEN='<your-profile-token>'", crop=False)
+        terminal.print(" ".join(commands), crop=False, overflow="ignore")
 
         return res
 

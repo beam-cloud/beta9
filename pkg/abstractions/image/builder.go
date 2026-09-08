@@ -159,6 +159,9 @@ func (b *Builder) waitForBuildContainer(ctx context.Context, build *Build, logsD
 					case <-ctx.Done():
 						return ctx.Err()
 					}
+					if err := ctx.Err(); err != nil {
+						return err
+					}
 					if exitCode != 0 {
 						exitCodeMsg := getExitCodeMsg(exitCode)
 						build.log(true, fmt.Sprintf("Build failed: %s\n", exitCodeMsg))

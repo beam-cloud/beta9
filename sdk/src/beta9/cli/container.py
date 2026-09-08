@@ -23,7 +23,7 @@ from ..clients.gateway import (
     StopContainerResponse,
 )
 from ..logging import StoredStdoutInterceptor
-from ..exceptions import SandboxConnectionError, SandboxProcessError
+from ..exceptions import SandboxConnectionError, SandboxFileSystemError, SandboxProcessError
 from .extraclick import ClickCommonGroup, ClickManagementGroup
 
 
@@ -125,6 +125,7 @@ def exec_container(service, container_id, command, cwd, timeout):
                 timed_out = time.monotonic() >= deadline
                 try:
                     if process is not None and process.exit_code < 0:
+                        # The execution deadline has unwound; cancellation gets its own budget.
                         with rpc_timeout(3):
                             process.kill()
                 except Exception as exc:
@@ -171,11 +172,14 @@ def copy_container_file(service, source, destination):
     download = ":" in source
     remote, local = (source, destination) if download else (destination, source)
     container_id, remote_path = remote.split(":", 1)
-    sandbox = _connect_sandbox(container_id, 30)
-    if download:
-        sandbox.fs.download_file(remote_path, local)
-    else:
-        sandbox.fs.upload_file(local, remote_path)
+    try:
+        sandbox = _connect_sandbox(container_id, 30)
+        if download:
+            sandbox.fs.download_file(remote_path, local)
+        else:
+            sandbox.fs.upload_file(local, remote_path)
+    except (SandboxConnectionError, SandboxFileSystemError, OSError) as exc:
+        terminal.error(str(exc))
 
 
 AVAILABLE_LIST_COLUMNS = {

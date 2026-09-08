@@ -102,7 +102,7 @@ class Beta9Command(click.Command):
     }
 
     def get_params(self, ctx):
-        params = super().get_params(ctx)
+        params = list(super().get_params(ctx))
         if self.name in ("run", "deploy"):
             params.append(
                 click.Option(

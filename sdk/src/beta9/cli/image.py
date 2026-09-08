@@ -39,10 +39,14 @@ def build_image(service, handler, dockerfile, context_dir, format):
             step.ok = result.success
         if not result.success:
             summary = (result.error.strip() or "Build ended without a result").splitlines()[-1]
-            terminal.error(f"Image build failed:\n{summary}")
+            terminal.error(f"Image build failed:\n{summary}", exit=False)
     if format == "json":
-        terminal.print_json({**result._asdict(), "context": selected_context()})
-    else:
+        terminal.print_json(
+            {**result._asdict(), "error": result.error, "context": selected_context()}
+        )
+    if not result.success:
+        raise click.exceptions.Exit(1)
+    if format != "json":
         terminal.resource("Image", {"ID": result.image_id, "Context": selected_context()})
 
 

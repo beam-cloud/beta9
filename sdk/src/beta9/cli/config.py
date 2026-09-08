@@ -185,7 +185,8 @@ def create_context(config_path: Path, api_url: str, **kwargs):
 
     # Prompt user for context settings
     name, context = prompt_for_config_context(require_token=True, **kwargs)
-    context.api_url = api_url
+    if api_url is not None:
+        context.api_url = api_url
 
     # Save context to config
     contexts[name] = context

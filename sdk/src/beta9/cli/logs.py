@@ -290,7 +290,7 @@ def _follow(session, url, params, source, tail, emit):
             requests.exceptions.ChunkedEncodingError,
         ):
             attempts += 1
-            if initial or not headers or attempts > 3:
+            if attempts > 3:
                 raise
             terminal.warn(f"Log connection lost; reconnecting ({attempts}/3).")
             time.sleep(attempts)

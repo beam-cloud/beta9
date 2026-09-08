@@ -37,6 +37,10 @@ DEFAULT_ASCII_LOGO = """
 """
 
 
+def _http_url(host: str, port: int) -> str:
+    return f"{'https' if int(port) == 443 else 'http'}://{host}:{port}"
+
+
 @dataclass
 class SDKSettings:
     name: str = DEFAULT_CLI_NAME
@@ -55,9 +59,7 @@ class SDKSettings:
 
     @property
     def api_url(self) -> str:
-        return (
-            f"{'https' if int(self.api_port) == 443 else 'http'}://{self.api_host}:{self.api_port}"
-        )
+        return _http_url(self.api_host, self.api_port)
 
     def __post_init__(self, **kwargs):
         config_path = os.getenv("CONFIG_PATH")
@@ -98,7 +100,7 @@ class ConfigContext:
             return self.api_url.rstrip("/")
         port = int(self.gateway_port or DEFAULT_GATEWAY_PORT)
         port = DEFAULT_API_PORT if port == DEFAULT_GATEWAY_PORT else port
-        return f"{'https' if port == 443 else 'http'}://{self.gateway_host}:{port}"
+        return _http_url(self.gateway_host, port)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "ConfigContext":
