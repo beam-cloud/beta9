@@ -101,6 +101,8 @@ class DeployableMixin:
 
         return {
             "deployment_id": deploy_response.deployment_id,
+            "stub_id": self.parent.stub_id,
+            "status": "accepted",
             "deployment_name": self.parent.name,
             "invoke_url": deploy_response.invoke_url,
             "version": deploy_response.version,

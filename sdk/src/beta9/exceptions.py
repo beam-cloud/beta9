@@ -10,6 +10,17 @@ class InvalidFunctionArgumentsError(RuntimeError):
         super().__init__("Invalid function arguments")
 
 
+class RemoteExecutionError(RuntimeError):
+    """A failed remote task, with its identity, status, and captured output."""
+
+    def __init__(self, task_id: str, status: str, exit_code: int, output: str = ""):
+        self.task_id = task_id
+        self.status = status
+        self.exit_code = exit_code
+        self.output = output
+        super().__init__(f"Remote task {task_id} {status} (exit code {exit_code})\n{output}".rstrip())
+
+
 class FunctionSetResultError(RunnerException):
     def __init__(self):
         super().__init__("Unable to set function result")

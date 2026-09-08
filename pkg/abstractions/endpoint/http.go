@@ -1,6 +1,8 @@
 package endpoint
 
 import (
+	"strings"
+
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -28,6 +30,9 @@ func registerEndpointRoutes(g *echo.Group, es *HttpEndpointService) *endpointGro
 	g.GET("/:deploymentName/latest", auth.WithAuth(group.EndpointRequest))
 	g.GET("/:deploymentName/v:version", auth.WithAuth(group.EndpointRequest))
 	g.GET("/public/:stubId", auth.WithAssumedStubAuth(group.EndpointRequest, group.es.IsPublic))
+	for _, route := range []string{"/id/:stubId/health", "/:deploymentName/health", "/:deploymentName/latest/health", "/:deploymentName/v:version/health"} {
+		g.GET(route, auth.WithAuth(group.EndpointRequest))
+	}
 
 	g.POST("/id/:stubId/warmup", auth.WithAuth(group.WarmUpEndpoint))
 	g.POST("/:deploymentName/warmup", auth.WithAuth(group.WarmUpEndpoint))
@@ -76,6 +81,12 @@ func (g *endpointGroup) EndpointRequest(ctx echo.Context) error {
 		return err
 	}
 
+	if strings.HasSuffix(ctx.Path(), "/health") {
+		values := append(ctx.ParamValues(), "health")
+		ctx.SetParamNames(append(ctx.ParamNames(), "subPath")...)
+		ctx.SetParamValues(values...)
+		return g.es.forwardASGIHealthRequest(ctx, stubId)
+	}
 	return g.es.forwardRequest(ctx, cc.AuthInfo, stubId)
 }
 

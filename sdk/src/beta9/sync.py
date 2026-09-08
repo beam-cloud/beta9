@@ -33,25 +33,9 @@ from .clients.gateway import (
     SyncContainerWorkspaceOperation,
 )
 from .config import get_settings
-from .env import is_local, is_notebook_env
+from .env import is_local
 
 _sync_lock = threading.Lock()
-
-# Global workspace object id to signal to any other threads that the workspace has already been synced
-_workspace_object_id = ""
-
-
-def set_workspace_object_id(object_id: str) -> None:
-    global _workspace_object_id
-    _workspace_object_id = object_id
-
-
-def get_workspace_object_id() -> str:
-    global _workspace_object_id
-    if not _workspace_object_id:
-        _workspace_object_id = ""
-    return _workspace_object_id
-
 
 CHUNK_SIZE = 1024 * 1024 * 4
 
@@ -135,7 +119,7 @@ class FileSyncer:
         if not is_local():
             return []
 
-        terminal.detail(f"Reading {ignore_file_name()} file")
+        terminal.debug(f"Reading {ignore_file_name()} file")
 
         patterns = []
 
@@ -166,7 +150,7 @@ class FileSyncer:
         if self.ignore_patterns == ["*"]:
             return
 
-        terminal.detail(f"Collecting files from {self.root_dir}")
+        terminal.debug(f"Collecting files from {self.root_dir}")
 
         for root, dirs, files in os.walk(self.root_dir):
             dirs[:] = [d for d in dirs if not self._should_ignore(os.path.join(root, d))]
@@ -191,9 +175,6 @@ class FileSyncer:
         cache_object_id: bool = True,
     ) -> FileSyncResult:
         with _sync_lock:
-            if self.is_workspace_dir and get_workspace_object_id() != "" and not is_notebook_env():
-                terminal.header("Files already synced")
-                return FileSyncResult(success=True, object_id=get_workspace_object_id())
             return self._sync(
                 ignore_patterns=ignore_patterns,
                 include_patterns=include_patterns,
@@ -242,7 +223,7 @@ class FileSyncer:
         size = manifest.size()
 
         if ignore_patterns != ["*"]:
-            terminal.detail(f"Collected object is {terminal.humanize_memory(size, base=10)}")
+            terminal.debug(f"Collected object is {terminal.humanize_memory(size, base=10)}")
 
         object_id = None
         head_response: HeadObjectResponse = self.gateway_stub.head_object(
@@ -251,8 +232,6 @@ class FileSyncer:
         if head_response.exists and head_response.ok:
             if not sync_nothing:
                 cache.save(head_response.object_id, manifest)
-            if self.is_workspace_dir and cache_object_id:
-                set_workspace_object_id(head_response.object_id)
             return FileSyncResult(success=True, object_id=head_response.object_id)
 
         if not head_response.use_workspace_storage:
@@ -269,8 +248,6 @@ class FileSyncer:
 
         if not sync_nothing:
             cache.save(object_id, manifest)
-        if self.is_workspace_dir and cache_object_id:
-            set_workspace_object_id(object_id)
         return FileSyncResult(success=True, object_id=object_id)
 
     def _build_manifest(self, cache: "_SyncCache") -> "_Manifest":
@@ -310,7 +287,7 @@ class FileSyncer:
                 mode=mode,
                 ctime_ns=st.st_ctime_ns,
             )
-            terminal.detail(f"Added {file}")
+            terminal.debug(f"Added {file}")
         return _Manifest(entries)
 
     def _write_archive(self, paths: List[str]) -> str:

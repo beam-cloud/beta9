@@ -23,6 +23,7 @@ _EXPORTS = {
     "Pool": (".type", "Pool"),
     "PythonVersion": (".type", "PythonVersion"),
     "Output": (".abstractions.output", "Output"),
+    "RemoteExecutionError": (".exceptions", "RemoteExecutionError"),
     "QueueDepthAutoscaler": (".type", "QueueDepthAutoscaler"),
     "ServingConfig": (".type", "ServingConfig"),
     "experimental": (".abstractions.experimental", None),

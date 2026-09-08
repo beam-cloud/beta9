@@ -1,12 +1,16 @@
 import asyncio
-import atexit
+import hashlib
 import io
+import os
+import re
 import shlex
 import time
+import uuid
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Set, Tuple, Union
+from typing import BinaryIO, Callable, Dict, List, Optional, Set, Tuple, Union
 
 from .. import terminal
+from ..channel import rpc_timeout
 from ..abstractions.base import set_channel, unset_channel
 from ..abstractions.base.runner import (
     RUNTIME_PREPARE_FAILED_MSG,
@@ -57,7 +61,6 @@ from ..clients.pod import (
     PodServiceStub,
 )
 from ..config import ConfigContext
-from ..env import is_remote
 from ..exceptions import SandboxConnectionError, SandboxFileSystemError, SandboxProcessError
 from ..type import DurableDisk, GpuType, GpuTypeAlias, Pool
 from ..utils import retry_on_transient_error
@@ -485,17 +488,12 @@ class SandboxInstance(BaseAbstraction):
         self.process = SandboxProcessManager(self)
         self.docker = SandboxDockerManager(self)
         self.terminated = False
-        atexit.register(self._cleanup)
 
-    def _cleanup(self):
-        try:
-            if hasattr(self, "container_id") and self.container_id and not self.terminated:
-                if not is_remote():
-                    terminal.warn(
-                        f'WARNING: {self.container_id} is still running, to terminate use Sandbox().connect("{self.container_id}").terminate()'
-                    )
-        except BaseException as e:
-            terminal.warn(f"Error during sandbox cleanup: {e}")
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.terminate()
 
     def terminate(self) -> bool:
         """
@@ -515,6 +513,8 @@ class SandboxInstance(BaseAbstraction):
                 print("Sandbox terminated successfully")
             ```
         """
+        if self.terminated:
+            return True
         res: "StopContainerResponse" = self.gateway_stub.stop_container(
             StopContainerRequest(container_id=self.container_id)
         )
@@ -840,8 +840,8 @@ class SandboxProcessResponse:
     Attributes:
         pid (int): The process ID of the executed command.
         exit_code (int): The exit code of the process (0 typically indicates success).
-        stdout (SandboxProcessStream): Stream containing the standard output.
-        stderr (SandboxProcessStream): Stream containing the standard error output.
+        stdout (str): The captured standard output.
+        stderr (str): The captured standard error output.
         result (str): Combined stdout and stderr output as a string.
 
     Example:
@@ -862,7 +862,9 @@ class SandboxProcessResponse:
     ):
         self.pid = pid
         self.exit_code = exit_code
-        self.result: str = stdout.read() + stderr.read()
+        self.stdout = stdout.read()
+        self.stderr = stderr.read()
+        self.result: str = self.stdout + self.stderr
 
     @classmethod
     def from_output(
@@ -876,6 +878,8 @@ class SandboxProcessResponse:
         response = cls.__new__(cls)
         response.pid = pid
         response.exit_code = exit_code
+        response.stdout = stdout
+        response.stderr = stderr
         response.result = stdout + stderr
         return response
 
@@ -977,17 +981,19 @@ class SandboxProcessManager:
         *args,
         cwd: Optional[str] = "/workspace",
         env: Optional[Dict[str, str]] = None,
+        stdin: Optional[Union[str, bytes, BinaryIO]] = None,
     ) -> "SandboxProcess":
         """
         Run an arbitrary command in the sandbox.
 
-        This method executes shell commands within the sandbox environment.
-        The command is executed using the shell available in the sandbox.
+        Arguments are passed literally. Use ``sh -c`` explicitly for shell expansion.
 
         Parameters:
             *args: The command and its arguments to execute.
             cwd (Optional[str]): The working directory to run the command in. Default is None.
             env (Optional[Dict[str, str]]): Environment variables to set for the command. Default is None.
+            stdin: Text, bytes, or a binary file to supply as input, followed by EOF.
+                Input is uploaded before execution; this is not an interactive stream.
 
         Returns:
             SandboxProcess: A process object that can be used to interact with the running command.
@@ -999,13 +1005,43 @@ class SandboxProcessManager:
             process.wait()
 
             # Run with custom environment
-            process = pm.exec("echo", "$CUSTOM_VAR", env={"CUSTOM_VAR": "hello"})
+            process = pm.exec("sh", "-c", 'echo "$CUSTOM_VAR"', env={"CUSTOM_VAR": "hello"})
 
             # Run in specific directory
             process = pm.exec("pwd", cwd="/tmp")
             ```
         """
-        return self._exec(*args, cwd=cwd, env=env)
+        if not args:
+            raise ValueError("A command is required")
+        if stdin is None:
+            return self._exec(*args, cwd=cwd, env=env)
+        source = (
+            io.BytesIO(stdin.encode() if isinstance(stdin, str) else stdin)
+            if isinstance(stdin, (str, bytes))
+            else stdin
+        )
+        target = f"/tmp/.beta9-stdin-{uuid.uuid4().hex}"
+        self.sandbox_instance.fs._upload(target, source, 0o600)
+        command = args[0] if isinstance(args[0], list) else args
+        try:
+            # Unlink after opening so the process owns the input's lifetime.
+            return self._exec(
+                "sh",
+                "-c",
+                'exec 3< "$1"; rm -- "$1"; shift; exec "$@" <&3',
+                "beta9-stdin",
+                target,
+                *command,
+                cwd=cwd,
+                env=env,
+            )
+        except BaseException:
+            try:
+                with rpc_timeout(3):
+                    self.sandbox_instance.fs.delete_file(target)
+            except Exception:
+                pass
+            raise
 
     def _exec(
         self,
@@ -1249,7 +1285,7 @@ class SandboxProcessStream:
 
     def read(self):
         """
-        Return whatever output is currently available in the stream.
+        Drain currently available output. Iterate over the stream to wait for EOF.
         """
         data = self._buffer
         self._buffer = ""
@@ -1331,7 +1367,8 @@ class SandboxProcess:
         the exit code. It polls the process status until completion.
 
         Parameters:
-            timeout (Optional[float]): Maximum seconds to wait. Default is None.
+            timeout (Optional[float]): Maximum seconds to wait, without killing the process.
+                Default is None. Call kill() to cancel execution after a wait timeout.
 
         Returns:
             int: The exit code of the completed process.
@@ -1349,7 +1386,9 @@ class SandboxProcess:
 
         while self.exit_code < 0:
             if deadline is not None and time.monotonic() >= deadline:
-                raise SandboxProcessError(f"Process {self.pid} did not exit within {timeout} seconds")
+                raise SandboxProcessError(
+                    f"Process {self.pid} did not exit within {timeout} seconds"
+                )
             self.exit_code, self._status = self.status()
             time.sleep(SANDBOX_WAIT_POLL_INTERVAL_SECONDS)
 
@@ -1480,9 +1519,7 @@ class SandboxProcess:
             PodSandboxStdoutRequest,
             PodSandboxStdoutResponse,
         )(
-            PodSandboxStdoutRequest(
-                container_id=self.sandbox_instance.container_id, pid=self.pid
-            ),
+            PodSandboxStdoutRequest(container_id=self.sandbox_instance.container_id, pid=self.pid),
             timeout=SANDBOX_OUTPUT_RPC_TIMEOUT_SECONDS,
         )
         if not response.ok:
@@ -1495,9 +1532,7 @@ class SandboxProcess:
             PodSandboxStderrRequest,
             PodSandboxStderrResponse,
         )(
-            PodSandboxStderrRequest(
-                container_id=self.sandbox_instance.container_id, pid=self.pid
-            ),
+            PodSandboxStderrRequest(container_id=self.sandbox_instance.container_id, pid=self.pid),
             timeout=SANDBOX_OUTPUT_RPC_TIMEOUT_SECONDS,
         )
         if not response.ok:
@@ -1809,50 +1844,82 @@ class SandboxFileSystem:
             ```
         """
         with open(local_path, "rb") as f:
-            content = f.read()
+            self._upload(sandbox_path, f, 0o644)
 
-            response = self.sandbox_instance.stub.sandbox_upload_file(
-                PodSandboxUploadFileRequest(
-                    container_id=self.sandbox_instance.container_id,
-                    container_path=sandbox_path,
-                    data=content,
-                    mode=644,
-                )
-            )
-
-            if not response.ok:
-                raise SandboxFileSystemError(
-                    message=response.error_msg,
-                    operation="upload_file",
-                    path=sandbox_path,
-                    container_id=self.sandbox_instance.container_id,
-                )
-
-    def write_bytes(self, sandbox_path: str, data: bytes, mode: int = 644):
+    def write_bytes(self, sandbox_path: str, data: bytes, mode: int = 0o644):
         """
         Write bytes to a file in the sandbox.
         """
-        response = self.sandbox_instance.stub.sandbox_upload_file(
-            PodSandboxUploadFileRequest(
-                container_id=self.sandbox_instance.container_id,
-                container_path=sandbox_path,
-                data=data,
-                mode=mode,
-            )
-        )
-        if not response.ok:
-            raise SandboxFileSystemError(
-                message=response.error_msg,
-                operation="write_bytes",
-                path=sandbox_path,
-                container_id=self.sandbox_instance.container_id,
-            )
+        self._upload(sandbox_path, io.BytesIO(data), mode)
 
-    def write_text(self, sandbox_path: str, text: str, encoding: str = "utf-8", mode: int = 644):
+    def write_text(self, sandbox_path: str, text: str, encoding: str = "utf-8", mode: int = 0o644):
         """
         Write text to a file in the sandbox.
         """
         self.write_bytes(sandbox_path, text.encode(encoding), mode=mode)
+
+    def _upload(self, sandbox_path, source, mode):
+        # Large uploads are staged beside the destination, checked, then renamed.
+        # Failed transfers leave the previous destination intact and remove the staging file.
+        chunk_size = 4 * 1024 * 1024
+        chunk = source.read(chunk_size)
+        pending = source.read(chunk_size)
+        staged = bool(pending)
+        target = f"{sandbox_path}.beta9-{uuid.uuid4().hex}" if staged else sandbox_path
+        offset = 0
+        digest = hashlib.sha256()
+        try:
+            while True:
+                with rpc_timeout(30):
+                    response = self.sandbox_instance.stub.sandbox_upload_file(
+                        PodSandboxUploadFileRequest(
+                            container_id=self.sandbox_instance.container_id,
+                            container_path=target,
+                            data=chunk,
+                            mode=mode,
+                            offset=offset,
+                        )
+                    )
+                if not response.ok:
+                    raise SandboxFileSystemError(
+                        response.error_msg,
+                        "upload_file",
+                        sandbox_path,
+                        self.sandbox_instance.container_id,
+                    )
+                digest.update(chunk)
+                offset += len(chunk)
+                if not pending:
+                    break
+                chunk, pending = pending, source.read(chunk_size)
+            if staged:
+                with rpc_timeout(30):
+                    process = self.sandbox_instance.process.exec("sha256sum", "--", target)
+                    if process.wait(30) != 0 or process.stdout.read().split()[:1] != [
+                        digest.hexdigest()
+                    ]:
+                        raise SandboxFileSystemError(
+                            "Upload checksum mismatch",
+                            "upload_file",
+                            sandbox_path,
+                            self.sandbox_instance.container_id,
+                        )
+                    process = self.sandbox_instance.process.exec("mv", "--", target, sandbox_path)
+                    if process.wait(30) != 0:
+                        raise SandboxFileSystemError(
+                            process.stderr.read(),
+                            "upload_file",
+                            sandbox_path,
+                            self.sandbox_instance.container_id,
+                        )
+                staged = False
+        finally:
+            if staged:
+                try:
+                    with rpc_timeout(3):
+                        self.delete_file(target)
+                except Exception:
+                    pass  # Keep the original transfer error if cleanup cannot reach the sandbox.
 
     def download_file(self, sandbox_path: str, local_path: str):
         """
@@ -1877,42 +1944,46 @@ class SandboxFileSystem:
             fs.download_file("/output/result.txt", "./results/result.txt")
             ```
         """
-        response = self.sandbox_instance.stub.sandbox_download_file(
-            PodSandboxDownloadFileRequest(
-                container_id=self.sandbox_instance.container_id,
-                container_path=sandbox_path,
-            )
-        )
-
-        if not response.ok:
-            raise SandboxFileSystemError(
-                message=response.error_msg,
-                operation="download_file",
-                path=sandbox_path,
-                container_id=self.sandbox_instance.container_id,
-            )
-
-        with open(local_path, "wb") as f:
-            f.write(response.data)
+        temporary = f"{local_path}.beta9-{uuid.uuid4().hex}"
+        try:
+            with open(temporary, "wb") as f:
+                for chunk in self._download(sandbox_path):
+                    f.write(chunk)
+            os.replace(temporary, local_path)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
 
     def read_bytes(self, sandbox_path: str) -> bytes:
         """
         Read a file from the sandbox and return its bytes.
         """
-        response = self.sandbox_instance.stub.sandbox_download_file(
-            PodSandboxDownloadFileRequest(
-                container_id=self.sandbox_instance.container_id,
-                container_path=sandbox_path,
-            )
-        )
-        if not response.ok:
-            raise SandboxFileSystemError(
-                message=response.error_msg,
-                operation="read_bytes",
-                path=sandbox_path,
-                container_id=self.sandbox_instance.container_id,
-            )
-        return response.data
+        return b"".join(self._download(sandbox_path))
+
+    def _download(self, sandbox_path):
+        offset = 0
+        chunk_size = 4 * 1024 * 1024
+        while True:
+            with rpc_timeout(30):
+                response = self.sandbox_instance.stub.sandbox_download_file(
+                    PodSandboxDownloadFileRequest(
+                        container_id=self.sandbox_instance.container_id,
+                        container_path=sandbox_path,
+                        offset=offset,
+                        length=chunk_size,
+                    )
+                )
+            if not response.ok:
+                raise SandboxFileSystemError(
+                    response.error_msg,
+                    "download_file",
+                    sandbox_path,
+                    self.sandbox_instance.container_id,
+                )
+            yield response.data
+            offset += len(response.data)
+            if len(response.data) < chunk_size:
+                break
 
     def read_text(self, sandbox_path: str, encoding: str = "utf-8") -> str:
         """
@@ -1971,6 +2042,29 @@ class SandboxFileSystem:
                 "group": response.file_info.group,
                 "permissions": response.file_info.permissions,
             }
+        )
+
+    def wait_for(
+        self, sandbox_path: str, timeout: float = 60, *, size: Optional[int] = None
+    ) -> "SandboxFileInfo":
+        """Wait for a path (and optional size) to become visible to this sandbox.
+
+        This observes eventual visibility; it does not commit writes or guarantee durability.
+        Publish immutable paths to distinguish new data from an older file of the same size.
+        """
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                with rpc_timeout(deadline - time.monotonic()):
+                    info = self.stat_file(sandbox_path)
+                if size is None or info.size == size:
+                    return info
+            except SandboxFileSystemError as exc:
+                if "no such file or directory" not in exc.message.lower():
+                    raise
+            time.sleep(min(0.1, max(0, deadline - time.monotonic())))
+        raise TimeoutError(
+            f"{sandbox_path} was not visible within {timeout}s in {self.sandbox_instance.container_id}"
         )
 
     def list_files(self, sandbox_path: str) -> List["SandboxFileInfo"]:
@@ -2129,7 +2223,9 @@ class SandboxFileSystem:
             return self.delete_directory(sandbox_path)
         return self.delete_file(sandbox_path)
 
-    def replace_in_files(self, sandbox_path: str, old_string: str, new_string: str):
+    def replace_in_files(
+        self, sandbox_path: str, old_string: str, new_string: str, *, regex: bool = False
+    ):
         r"""
         Replace a string in all files in a directory.
 
@@ -2141,6 +2237,7 @@ class SandboxFileSystem:
             sandbox_path (str): The directory path to search in.
             old_string (str): The string to find and replace.
             new_string (str): The string to replace with.
+            regex (bool): Interpret old_string as a regular expression. Default is literal.
 
         Raises:
             SandboxFileSystemError: If the operation fails.
@@ -2158,8 +2255,8 @@ class SandboxFileSystem:
             PodSandboxReplaceInFilesRequest(
                 container_id=self.sandbox_instance.container_id,
                 container_path=sandbox_path,
-                pattern=old_string,
-                new_string=new_string,
+                pattern=old_string if regex else re.escape(old_string),
+                new_string=new_string if regex else new_string.replace("$", "$$"),
             )
         )
 
@@ -3381,7 +3478,7 @@ class AsyncSandboxProcess:
         """The environment variables."""
         return self._sync.env
 
-    async def wait(self) -> int:
+    async def wait(self, timeout: Optional[float] = None) -> int:
         """
         Wait for the process to complete asynchronously.
 
@@ -3396,7 +3493,7 @@ class AsyncSandboxProcess:
                 print("Command completed successfully")
             ```
         """
-        return await asyncio.to_thread(self._sync.wait)
+        return await asyncio.to_thread(self._sync.wait, timeout)
 
     async def kill(self):
         """
@@ -3469,6 +3566,8 @@ class AsyncSandboxProcessResponse:
     def __init__(self, sync_response: "SandboxProcessResponse"):
         self.pid = sync_response.pid
         self.exit_code = sync_response.exit_code
+        self.stdout = sync_response.stdout
+        self.stderr = sync_response.stderr
         self.result = sync_response.result
 
 
@@ -3532,6 +3631,7 @@ class AsyncSandboxProcessManager:
         *args,
         cwd: Optional[str] = "/workspace",
         env: Optional[Dict[str, str]] = None,
+        stdin: Optional[Union[str, bytes, BinaryIO]] = None,
     ) -> "AsyncSandboxProcess":
         """
         Run an arbitrary command in the sandbox asynchronously.
@@ -3551,7 +3651,9 @@ class AsyncSandboxProcessManager:
             output = await process.stdout.read()
             ```
         """
-        sync_process = await asyncio.to_thread(self._sync.exec, *args, cwd=cwd, env=env)
+        sync_process = await asyncio.to_thread(
+            self._sync.exec, *args, cwd=cwd, env=env, stdin=stdin
+        )
         return AsyncSandboxProcess(sync_process)
 
     async def list_processes(self) -> Dict[int, "AsyncSandboxProcess"]:
@@ -3621,14 +3723,14 @@ class AsyncSandboxFileSystem:
         """
         return await asyncio.to_thread(self._sync.upload_file, local_path, sandbox_path)
 
-    async def write_bytes(self, sandbox_path: str, data: bytes, mode: int = 644):
+    async def write_bytes(self, sandbox_path: str, data: bytes, mode: int = 0o644):
         """
         Write bytes to a sandbox file asynchronously.
         """
         return await asyncio.to_thread(self._sync.write_bytes, sandbox_path, data, mode)
 
     async def write_text(
-        self, sandbox_path: str, text: str, encoding: str = "utf-8", mode: int = 644
+        self, sandbox_path: str, text: str, encoding: str = "utf-8", mode: int = 0o644
     ):
         """
         Write text to a sandbox file asynchronously.
@@ -3674,6 +3776,12 @@ class AsyncSandboxFileSystem:
             SandboxFileSystemError: If the file doesn't exist or stat fails.
         """
         return await asyncio.to_thread(self._sync.stat_file, sandbox_path)
+
+    async def wait_for(
+        self, sandbox_path: str, timeout: float = 60, *, size: Optional[int] = None
+    ) -> "SandboxFileInfo":
+        """Wait for eventual file visibility; this does not guarantee durable storage."""
+        return await asyncio.to_thread(self._sync.wait_for, sandbox_path, timeout, size=size)
 
     async def list_files(self, sandbox_path: str) -> List["SandboxFileInfo"]:
         """
@@ -3732,7 +3840,9 @@ class AsyncSandboxFileSystem:
         """
         return await asyncio.to_thread(self._sync.remove, sandbox_path)
 
-    async def replace_in_files(self, sandbox_path: str, old_string: str, new_string: str):
+    async def replace_in_files(
+        self, sandbox_path: str, old_string: str, new_string: str, *, regex: bool = False
+    ):
         """
         Replace a string in all files in a directory asynchronously.
 
@@ -3745,7 +3855,7 @@ class AsyncSandboxFileSystem:
             SandboxFileSystemError: If the operation fails.
         """
         return await asyncio.to_thread(
-            self._sync.replace_in_files, sandbox_path, old_string, new_string
+            self._sync.replace_in_files, sandbox_path, old_string, new_string, regex=regex
         )
 
     async def find_in_files(

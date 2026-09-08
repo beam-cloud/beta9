@@ -421,6 +421,8 @@ class Pod(RunnerAbstraction, DeployableMixin):
 
         return {
             "deployment_id": deploy_response.deployment_id,
+            "stub_id": self.stub_id,
+            "status": "accepted",
             "deployment_name": self.name,
             "invoke_url": invoke_url,
             "version": deploy_response.version,

@@ -43,6 +43,7 @@ if env.is_local():
     rich.traceback.install()
 
 _console = Console()
+_error_console = Console(stderr=True)
 _current_status = None
 _status_lock = threading.Lock()
 _status_count = 0
@@ -64,6 +65,10 @@ def print_json(data: Any, **kwargs: Any) -> None:
 def prompt(
     *, text: str, default: Optional[Any] = None, markup: bool = False, password: bool = False
 ) -> Any:
+    if os.getenv("BETA9_NO_INPUT") == "1":
+        if default is None:
+            error(f"Input required: {text}. Provide it explicitly when using --no-input.")
+        return default
     prompt_text = f"{text} [{default}]: " if default is not None else f"{text}: "
     user_input = _console.input(prompt_text, markup=markup, password=password).strip()
     return user_input if user_input else default
@@ -71,7 +76,13 @@ def prompt(
 
 def detail(text: str, dim: bool = True, **kwargs) -> None:
     style = "dim" if dim else ""
+    kwargs.setdefault("soft_wrap", True)
     _console.print(Text(text, style=style), **kwargs)
+
+
+def debug(text: str) -> None:
+    if os.getenv("BETA9_VERBOSE") == "1":
+        _error_console.print(Text(text, style="dim"), soft_wrap=True)
 
 
 def success(text: str) -> None:
@@ -79,13 +90,13 @@ def success(text: str) -> None:
 
 
 def warn(text: str) -> None:
-    _console.print(Text("! ", style="bold yellow").append(text, style="bold yellow"))
+    _error_console.print(Text("! ", style="bold yellow").append(text, style="bold yellow"))
 
 
 def error(text: str, exit: bool = True, hint: Optional[str] = None) -> None:
-    _console.print(Text("✗ ", style="bold red").append(text, style="bold red"))
+    _error_console.print(Text("✗ ", style="bold red").append(text, style="bold red"))
     if hint:
-        _console.print(Text(f"  hint: {hint}", style="dim"))
+        _error_console.print(Text(f"  hint: {hint}", style="dim"))
 
     if exit:
         reset_terminal()
@@ -263,7 +274,7 @@ def StyledProgress() -> CustomProgress:
         ],
         auto_refresh=True,
         refresh_per_second=60,
-        disable=False,
+        disable=not _console.is_terminal,
     )
 
 
@@ -417,6 +428,8 @@ def confirm(text: str, default: bool = True) -> bool:
     Single-keypress y/n confirmation. Falls back to line input when the
     terminal can't do raw-mode reads.
     """
+    if os.getenv("BETA9_NO_INPUT") == "1":
+        error("Confirmation required. Use an explicit confirmation flag such as --yes.")
     suffix = "[Y/n]" if default else "[y/N]"
     prompt_text = Text(text, style="bold").append(f" {suffix} ", style="dim")
 

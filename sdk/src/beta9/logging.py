@@ -58,6 +58,7 @@ class StdoutJsonInterceptor(io.TextIOBase):
                 log_record = {
                     "message": f"{line}\n",
                     **self.ctx,
+                    "beta9_log": True,
                 }
 
                 self.stream.write(json.dumps(log_record))
@@ -103,6 +104,7 @@ class ContextualStdoutJsonInterceptor(io.TextIOBase):
                 log_record = {
                     "message": f"{line}\n",
                     **self.context_getter(),
+                    "beta9_log": True,
                 }
 
                 self.stream.write(json.dumps(log_record))
@@ -140,30 +142,33 @@ class StoredStdoutInterceptor(io.TextIOBase):
 
     def __enter__(self):
         self.logs = []
+        self.previous_stdout = sys.stdout
         sys.stdout = self
         return self
 
-    def __exit__(self, *_, **__):
-        sys.stdout = sys.__stdout__
+    def __exit__(self, exc_type, exc_value, traceback):
+        sys.stdout = self.previous_stdout
+        if exc_type is not None and self.capture_logs:
+            sys.stderr.write("".join(self.logs))
 
     def write(self, data: str):
         self.logs.append(data)
         if not self.capture_logs:
-            sys.__stdout__.write(data)
-            sys.__stdout__.flush()
+            self.previous_stdout.write(data)
+            self.previous_stdout.flush()
 
     def flush(self):
         if not self.capture_logs:
-            sys.__stdout__.flush()
+            self.previous_stdout.flush()
 
     def fileno(self) -> int:
         try:
-            return sys.__stdout__.fileno()
+            return self.previous_stdout.fileno()
         except (AttributeError, io.UnsupportedOperation):
             return -1
 
     def isatty(self) -> bool:
-        return sys.__stdout__.isatty()
+        return not self.capture_logs and self.previous_stdout.isatty()
 
     def writable(self) -> bool:
         return True

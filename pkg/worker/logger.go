@@ -23,6 +23,8 @@ const (
 )
 
 type ContainerLogMessage struct {
+	// Only SDK envelopes carry beta9_log; arbitrary JSON belongs to the user.
+	Internal    bool                        `json:"beta9_log"`
 	Level       string                      `json:"level"`
 	Message     string                      `json:"message"`
 	TaskID      *string                     `json:"task_id"`
@@ -97,7 +99,6 @@ func (r *ContainerLogger) CaptureLogs(request *types.ContainerRequest, logChan c
 	rateLimitMessageLogged := false
 	firstByteRecorded := false
 
-	var msg ContainerLogMessage
 	for o := range logChan {
 		if !request.IsBuildRequest() && !limiter.Allow() {
 			if !rateLimitMessageLogged {
@@ -125,25 +126,17 @@ func (r *ContainerLogger) CaptureLogs(request *types.ContainerRequest, logChan c
 
 		rateLimitMessageLogged = false
 
-		dec := json.NewDecoder(strings.NewReader(o.Message))
-		msgDecoded := false
-
-		for {
-			// Clear the message struct to avoid carrying over previous values
-			msg = ContainerLogMessage{}
-
-			err := dec.Decode(&msg)
-			if err != nil {
-				/*
-					Either the json parsing ends with an EOF error indicating that the
-					JSON string is complete, or with a json decode error indicating that
-					the JSON string is invalid. In either case, we can break out of the
-					decode loop and continue processing the next message.
-				*/
-				break
+		for remaining := o.Message; remaining != ""; {
+			msg := ContainerLogMessage{Message: remaining}
+			var envelope ContainerLogMessage
+			dec := json.NewDecoder(strings.NewReader(remaining))
+			if err := dec.Decode(&envelope); err == nil && ((envelope.Internal && envelope.Message != "") || envelope.RunnerEvent != nil) {
+				msg = envelope
+				remaining = remaining[dec.InputOffset():]
+			} else {
+				// JSON printed by user code is output, not a runner envelope.
+				remaining = ""
 			}
-
-			msgDecoded = true
 
 			if msg.RunnerEvent != nil {
 				if r.eventRepo != nil {
@@ -188,37 +181,6 @@ func (r *ContainerLogger) CaptureLogs(request *types.ContainerRequest, logChan c
 					} else {
 						log.Info().Str("container_id", request.ContainerId).Msg(line)
 					}
-				}
-			}
-		}
-
-		// Fallback in case the message was not JSON
-		if !msgDecoded && o.Message != "" {
-			f.WithFields(logrus.Fields{
-				"container_id": request.ContainerId,
-				"stub_id":      instance.StubId,
-			}).Info(o.Message)
-
-			lines := strings.Split(o.Message, "\n")
-			for _, line := range lines {
-				if line == "" {
-					continue
-				}
-
-				log.Info().Str("container_id", request.ContainerId).Msg(line)
-			}
-
-			// Write logs to in-memory log buffer as well
-			if !instance.LogBuffer.Write([]byte(o.Message)) && eventsEnabled {
-				r.eventRepo.PushContainerLogDropped(r.workerID, request, types.EventMessageLogBufferDroppedRawMessage, "")
-			}
-			for _, line := range strings.Split(o.Message, "\n") {
-				pushLogLine("", line)
-			}
-			if !firstByteRecorded {
-				firstByteRecorded = true
-				if eventsEnabled {
-					r.eventRepo.PushContainerLogFirstByte(r.workerID, request, "")
 				}
 			}
 		}

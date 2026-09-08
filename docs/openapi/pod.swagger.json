@@ -303,6 +303,21 @@
             "required": true,
             "type": "string",
             "pattern": ".+"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "type": "string",
+            "format": "int64"
+          },
+          {
+            "name": "length",
+            "description": "Zero preserves the legacy whole-file download.",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int32"
           }
         ],
         "tags": [
@@ -1052,6 +1067,11 @@
         "data": {
           "type": "string",
           "format": "byte"
+        },
+        "offset": {
+          "type": "string",
+          "format": "int64",
+          "description": "Zero starts a new file; nonzero offsets overwrite a chunk."
         }
       }
     },

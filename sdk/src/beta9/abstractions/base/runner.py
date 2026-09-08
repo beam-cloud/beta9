@@ -231,7 +231,7 @@ class RunnerAbstraction(BaseAbstraction):
         self._shell_stub: Optional[ShellServiceStub] = None
         self.syncer: FileSyncer = FileSyncer(self.gateway_stub)
         self.settings: SDKSettings = get_settings()
-        self.config_context: ConfigContext = get_config_context()
+        self.config_context: ConfigContext = getattr(self.channel, "config", None) or get_config_context()
         self.tmp_files: List[TempFile] = []
         self.is_websocket: bool = False
         self.ports: List[int] = ports or []

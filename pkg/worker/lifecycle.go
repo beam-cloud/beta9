@@ -899,11 +899,11 @@ func (s *Worker) setWorkerAddress(ctx context.Context, request *types.ContainerR
 }
 
 func (s *Worker) loadContainerImage(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger) (time.Duration, bool, error) {
-	outputLogger.Info(fmt.Sprintf("Loading image <%s>...\n", request.ImageId))
+	log.Debug().Str("container_id", request.ContainerId).Str("image_id", request.ImageId).Msg("loading image")
 
 	elapsed, err := s.pullLazyWithMetrics(ctx, request, "pull_lazy", outputLogger)
 	if err == nil {
-		outputLogger.Info(fmt.Sprintf("Loaded image <%s>, took: %s\n", request.ImageId, elapsed))
+		log.Debug().Str("container_id", request.ContainerId).Str("image_id", request.ImageId).Dur("duration", elapsed).Msg("loaded image")
 		return elapsed, true, nil
 	}
 
@@ -931,7 +931,7 @@ func (s *Worker) loadContainerImage(ctx context.Context, request *types.Containe
 		return elapsed, false, err
 	}
 
-	outputLogger.Info(fmt.Sprintf("Loaded image <%s>, took: %s\n", request.ImageId, elapsed))
+	log.Debug().Str("container_id", request.ContainerId).Str("image_id", request.ImageId).Dur("duration", elapsed).Msg("loaded image")
 	return elapsed, true, nil
 }
 

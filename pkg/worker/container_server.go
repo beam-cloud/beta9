@@ -218,12 +218,6 @@ func (s *ContainerRuntimeServer) ContainerKill(ctx context.Context, in *pb.Conta
 
 // ContainerExec executes a command inside a running container
 func (s *ContainerRuntimeServer) ContainerExec(ctx context.Context, in *pb.ContainerExecRequest) (*pb.ContainerExecResponse, error) {
-	cmd := fmt.Sprintf("sh -c '%s'", in.Cmd)
-	parsedCmd, err := shlex.Split(cmd)
-	if err != nil {
-		return &pb.ContainerExecResponse{}, err
-	}
-
 	instance, exists := s.containerInstances.Get(in.ContainerId)
 	if !exists {
 		return &pb.ContainerExecResponse{Ok: false}, nil
@@ -231,7 +225,7 @@ func (s *ContainerRuntimeServer) ContainerExec(ctx context.Context, in *pb.Conta
 
 	instanceSpec := instance.Spec.Process
 	process := *s.baseConfigSpec.Process
-	process.Args = slices.Clone(parsedCmd)
+	process.Args = []string{"sh", "-c", in.Cmd}
 	process.Cwd = instanceSpec.Cwd
 	process.Env = slices.Concat(instanceSpec.Env, in.Env)
 
@@ -243,7 +237,7 @@ func (s *ContainerRuntimeServer) ContainerExec(ctx context.Context, in *pb.Conta
 
 	// Use the worker's configured runtime for exec
 	rt := s.getRuntime()
-	err = rt.Exec(ctx, in.ContainerId, process, &runtime.ExecOpts{
+	err := rt.Exec(ctx, in.ContainerId, process, &runtime.ExecOpts{
 		OutputWriter: instance.OutputWriter,
 	})
 
@@ -1239,6 +1233,9 @@ func (s *ContainerRuntimeServer) ContainerSandboxListProcesses(ctx context.Conte
 }
 
 func (s *ContainerRuntimeServer) ContainerSandboxUploadFile(ctx context.Context, in *pb.ContainerSandboxUploadFileRequest) (*pb.ContainerSandboxUploadFileResponse, error) {
+	if in.Offset < 0 {
+		return &pb.ContainerSandboxUploadFileResponse{ErrorMsg: "Offset must be nonnegative"}, nil
+	}
 	instance, exists := s.containerInstances.Get(in.ContainerId)
 	if !exists {
 		return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: "Container not found"}, nil
@@ -1276,6 +1273,10 @@ func (s *ContainerRuntimeServer) ContainerSandboxUploadFile(ctx context.Context,
 			in.Mode,
 			common.ShellQuote(containerPath),
 		)
+		if in.Offset > 0 {
+			cmd = fmt.Sprintf("dd if=%s of=%s bs=1M seek=%d oflag=seek_bytes conv=notrunc status=none && rm %s",
+				common.ShellQuote(tempContainerPath), common.ShellQuote(containerPath), in.Offset, common.ShellQuote(tempContainerPath))
+		}
 
 		if resp, err := s.ContainerExec(ctx, &pb.ContainerExecRequest{
 			ContainerId: in.ContainerId,
@@ -1283,7 +1284,7 @@ func (s *ContainerRuntimeServer) ContainerSandboxUploadFile(ctx context.Context,
 			Env:         instance.Spec.Process.Env,
 		}); err != nil || !resp.Ok {
 			os.Remove(tempHostPath)
-			return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: "mv failed"}, nil
+			return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: "Failed to write uploaded data"}, nil
 		}
 
 		return &pb.ContainerSandboxUploadFileResponse{Ok: true}, nil
@@ -1294,7 +1295,16 @@ func (s *ContainerRuntimeServer) ContainerSandboxUploadFile(ctx context.Context,
 	if err := os.MkdirAll(filepath.Dir(hostPath), 0755); err != nil {
 		return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: fmt.Sprintf("failed to create directory for %s: %s", containerPath, err.Error())}, nil
 	}
-	if err := os.WriteFile(hostPath, in.Data, os.FileMode(in.Mode)); err != nil {
+	flags := os.O_CREATE | os.O_WRONLY
+	if in.Offset == 0 {
+		flags |= os.O_TRUNC
+	}
+	file, err := os.OpenFile(hostPath, flags, os.FileMode(in.Mode))
+	if err != nil {
+		return &pb.ContainerSandboxUploadFileResponse{ErrorMsg: err.Error()}, nil
+	}
+	defer file.Close()
+	if _, err := file.WriteAt(in.Data, in.Offset); err != nil {
 		return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: fmt.Sprintf("failed to write file to %s: %s", containerPath, err.Error())}, nil
 	}
 
@@ -1348,6 +1358,9 @@ func (s *ContainerRuntimeServer) ContainerSandboxDeleteDirectory(ctx context.Con
 }
 
 func (s *ContainerRuntimeServer) ContainerSandboxDownloadFile(ctx context.Context, in *pb.ContainerSandboxDownloadFileRequest) (*pb.ContainerSandboxDownloadFileResponse, error) {
+	if in.Offset < 0 || in.Length < 0 || in.Length > 4*1024*1024 {
+		return &pb.ContainerSandboxDownloadFileResponse{ErrorMsg: "Invalid download range (maximum chunk: 4 MiB)"}, nil
+	}
 	instance, exists := s.containerInstances.Get(in.ContainerId)
 	if !exists {
 		return &pb.ContainerSandboxDownloadFileResponse{Ok: false, ErrorMsg: "Container not found"}, nil
@@ -1364,9 +1377,21 @@ func (s *ContainerRuntimeServer) ContainerSandboxDownloadFile(ctx context.Contex
 	}
 
 	hostPath := s.getHostPathFromContainerPath(containerPath, instance)
-	data, err := os.ReadFile(hostPath)
+	file, err := os.Open(hostPath)
 	if err != nil {
 		return &pb.ContainerSandboxDownloadFileResponse{Ok: false, ErrorMsg: fmt.Sprintf("failed to read file from %s: %s", containerPath, err.Error())}, nil
+	}
+	defer file.Close()
+	if _, err := file.Seek(in.Offset, io.SeekStart); err != nil {
+		return &pb.ContainerSandboxDownloadFileResponse{ErrorMsg: err.Error()}, nil
+	}
+	var reader io.Reader = file
+	if in.Length > 0 {
+		reader = io.LimitReader(file, int64(in.Length))
+	}
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return &pb.ContainerSandboxDownloadFileResponse{ErrorMsg: err.Error()}, nil
 	}
 
 	return &pb.ContainerSandboxDownloadFileResponse{Ok: true, Data: data}, nil

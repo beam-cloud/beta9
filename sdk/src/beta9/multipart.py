@@ -727,8 +727,6 @@ class Beta9Handler(RemoteHandler):
             with terminal.progress("Working...") as s:
                 yield s
 
-            # Move cursor up 2x, clear line, and redraw the progress bar
-            terminal.print("\033[A\033[A\r", highlight=False)
             p.start()
 
         return progress_callback, completion_callback

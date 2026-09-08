@@ -2,7 +2,6 @@ import functools
 import inspect
 import os
 import shlex
-import sys
 import textwrap
 from gettext import gettext
 from typing import Any, Callable, Dict, List, Optional
@@ -43,10 +42,27 @@ config_context_option = click.option(
 )
 
 
+def set_cli_flag(ctx, param, value):
+    if value:
+        os.environ[f"BETA9_{param.name.upper()}"] = "1"
+
+
 class Beta9Command(click.Command):
     def cli_name(self, ctx: click.Context) -> str:
         name, *_ = ctx.command_path.split()
         return name
+
+    def format_options(self, ctx, formatter):
+        groups = {"Options": [], "Advanced options": []}
+        for param in self.get_params(ctx):
+            record = param.get_help_record(ctx)
+            if record:
+                advanced = param.name.startswith(("llm_", "checkpoint_", "gpu_", "reservation_"))
+                groups["Advanced options" if advanced else "Options"].append(record)
+        for name, records in groups.items():
+            if records:
+                with formatter.section(name):
+                    formatter.write_dl(records)
 
     def format_epilog(self, ctx: click.Context, formatter: click.HelpFormatter):
         """
@@ -104,6 +120,18 @@ class CommandGroupCollection(click.CommandCollection):
     def __init__(self, *args, **kwargs):
         params = kwargs.get("params", [])
         params.append(config_context_param)
+        for name in ("no-input", "verbose"):
+            params.append(
+                click.Option(
+                    [f"--{name}"],
+                    is_flag=True,
+                    expose_value=False,
+                    callback=set_cli_flag,
+                    help="Disable prompts."
+                    if name == "no-input"
+                    else "Show SDK diagnostic details.",
+                )
+            )
         kwargs["params"] = params
 
         super().__init__(*args, **kwargs)
@@ -133,8 +161,7 @@ class CommandGroupCollection(click.CommandCollection):
             if group := self.sources_map.get(ctx.protected_args[0]):
                 group.invoke(ctx)
             else:
-                print(self.get_help(ctx))
-                sys.exit(1)
+                ctx.fail(f"No such command '{ctx.protected_args[0]}'.")
         else:
             super().invoke(ctx)
 
@@ -199,20 +226,7 @@ def pass_service_client(func: Callable):
     def decorator(context: Optional[str] = None, *args, **kwargs):
         ctx = click.get_current_context()
 
-        context = context or ctx.params.get("context", None)
-
-        if context is None and hasattr(ctx, "parent") and hasattr(ctx.parent, "params"):
-            context = ctx.parent.params.get("context", None)
-
-        if (
-            context is None
-            and hasattr(ctx, "parent")
-            and hasattr(ctx.parent, "parent")
-            and hasattr(ctx.parent.parent, "params")
-        ):
-            context = ctx.parent.parent.params.get("context", "")
-
-        config = get_config_context(context or DEFAULT_CONTEXT_NAME)
+        config = get_config_context(context or selected_context(ctx))
 
         with ServiceClient(config) as client:
             base_abstraction.set_channel(client.channel)
@@ -224,6 +238,20 @@ def pass_service_client(func: Callable):
     return decorator
 
 
+def selected_context(ctx: Optional[click.Context] = None) -> str:
+    ctx = ctx or click.get_current_context()
+    while ctx is not None:
+        if ctx.params.get("context"):
+            return ctx.params["context"]
+        ctx = ctx.parent
+    return DEFAULT_CONTEXT_NAME
+
+
+def command_hint() -> str:
+    ctx = click.get_current_context()
+    return f"{ctx.command_path.split()[0]} --context {shlex.quote(selected_context(ctx))}"
+
+
 def filter_values_callback(
     ctx: click.Context,
     param: click.Option,
@@ -232,7 +260,7 @@ def filter_values_callback(
     filters: Dict[str, StringList] = {}
 
     for value in values:
-        key, value = value.split("=")
+        key, _, value = value.partition("=")
         value_list = value.split(",") if "," in value else [value]
 
         if key == "status":

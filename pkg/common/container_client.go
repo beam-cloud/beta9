@@ -245,20 +245,12 @@ func (c *ContainerClient) SandboxKill(containerId string, pid int32) (*pb.Contai
 	return resp, nil
 }
 
-func (c *ContainerClient) SandboxUploadFile(containerId, path string, data []byte, mode int32) (*pb.ContainerSandboxUploadFileResponse, error) {
-	resp, err := c.client.ContainerSandboxUploadFile(context.TODO(), &pb.ContainerSandboxUploadFileRequest{ContainerId: containerId, ContainerPath: path, Data: data, Mode: mode})
-	if err != nil {
-		return resp, err
-	}
-	return resp, nil
+func (c *ContainerClient) SandboxUploadFile(ctx context.Context, in *pb.ContainerSandboxUploadFileRequest) (*pb.ContainerSandboxUploadFileResponse, error) {
+	return c.client.ContainerSandboxUploadFile(ctx, in)
 }
 
-func (c *ContainerClient) SandboxDownloadFile(containerId, containerPath string) (*pb.ContainerSandboxDownloadFileResponse, error) {
-	resp, err := c.client.ContainerSandboxDownloadFile(context.TODO(), &pb.ContainerSandboxDownloadFileRequest{ContainerId: containerId, ContainerPath: containerPath})
-	if err != nil {
-		return resp, err
-	}
-	return resp, nil
+func (c *ContainerClient) SandboxDownloadFile(ctx context.Context, in *pb.ContainerSandboxDownloadFileRequest) (*pb.ContainerSandboxDownloadFileResponse, error) {
+	return c.client.ContainerSandboxDownloadFile(ctx, in)
 }
 
 func (c *ContainerClient) SandboxDeleteFile(containerId, containerPath string) (*pb.ContainerSandboxDeleteFileResponse, error) {

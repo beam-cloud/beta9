@@ -1,4 +1,7 @@
 import datetime
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
 
 import click
@@ -7,7 +10,9 @@ from rich.table import Column, Table, box
 
 from .. import terminal
 from ..abstractions.base.container import Container
-from ..channel import ServiceClient
+from ..abstractions.image import Image
+from ..abstractions.sandbox import Sandbox
+from ..channel import ServiceClient, rpc_timeout
 from ..cli import extraclick
 from ..clients.gateway import (
     CheckpointContainerRequest,
@@ -15,6 +20,7 @@ from ..clients.gateway import (
     StopContainerRequest,
     StopContainerResponse,
 )
+from ..logging import StoredStdoutInterceptor
 from .extraclick import ClickCommonGroup, ClickManagementGroup
 
 
@@ -32,6 +38,110 @@ def management():
     pass
 
 
+@management.command("create", help="Create a sandbox for exec and file operations.")
+@click.option("--image-id", help="Use an existing image built with image build.")
+@click.option("--name", help="App name for this sandbox.")
+@click.option("--cpu", type=float, default=1.0)
+@click.option("--memory", type=int, default=256, help="Memory in MiB.")
+@click.option("--ttl", type=click.IntRange(min=1), default=600, help="Sandbox lifetime in seconds.")
+@click.option("--pool", default=None)
+@click.option("--format", type=click.Choice(("table", "json")), default="table")
+@extraclick.pass_service_client
+def create_container(service, image_id, name, cpu, memory, ttl, pool, format):
+    with StoredStdoutInterceptor(capture_logs=format == "json"):
+        sandbox = Sandbox(
+            image=Image.from_id(image_id) if image_id else Image(python_version="python3.11"),
+            name=name,
+            cpu=cpu,
+            memory=memory,
+            keep_warm_seconds=ttl,
+            pool=pool,
+        ).create()
+        if not sandbox.ok:
+            terminal.error(sandbox.error_msg)
+    if format == "json":
+        terminal.print_json(
+            {
+                "container_id": sandbox.container_id,
+                "stub_id": sandbox.stub_id,
+                "context": extraclick.selected_context(),
+                "status": "submitted",
+            }
+        )
+    else:
+        terminal.detail(
+            f"  exec: {extraclick.command_hint()} container exec {sandbox.container_id} -- COMMAND"
+        )
+
+
+@management.command(
+    "exec", help="Execute argv in a sandbox; preserve output streams and exit status."
+)
+@click.argument("container_id")
+@click.argument("command", nargs=-1, required=True, type=click.UNPROCESSED)
+@click.option("--cwd", default=None)
+@click.option(
+    "--timeout",
+    type=click.FloatRange(min=0, min_open=True),
+    default=300,
+    help="Execution deadline in seconds.",
+)
+@extraclick.pass_service_client
+def exec_container(service, container_id, command, cwd, timeout):
+    process = None
+    deadline = time.monotonic() + timeout
+    try:
+        with rpc_timeout(timeout):
+            sandbox = Sandbox().connect(container_id)
+            process = sandbox.process.exec(
+                *command, cwd=cwd, stdin=None if sys.stdin.isatty() else sys.stdin.buffer
+            )
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                outputs = [
+                    executor.submit(_copy_output, stream, target, deadline)
+                    for stream, target in (
+                        (process.stdout, sys.stdout),
+                        (process.stderr, sys.stderr),
+                    )
+                ]
+                exit_code = process.wait(timeout)
+                for output in outputs:
+                    output.result()
+        raise click.exceptions.Exit(exit_code)
+    finally:
+        if process is not None and process.exit_code < 0:
+            try:
+                with rpc_timeout(3):
+                    process.kill()
+            except Exception as exc:
+                terminal.warn(f"Unable to cancel process {process.pid}: {exc}")
+
+
+def _copy_output(stream, target, deadline):
+    with rpc_timeout(deadline - time.monotonic()):
+        for chunk in stream:
+            target.write(chunk)
+            target.flush()
+
+
+@management.command("cp", help="Copy a file. Use CONTAINER_ID:/path for the remote side.")
+@click.argument("source")
+@click.argument("destination")
+@extraclick.pass_service_client
+def copy_container_file(service, source, destination):
+    if (":" in source) == (":" in destination):
+        raise click.UsageError("Specify one local path and one CONTAINER_ID:/path.")
+    download = ":" in source
+    remote, local = (source, destination) if download else (destination, source)
+    container_id, remote_path = remote.split(":", 1)
+    with rpc_timeout(30):
+        sandbox = Sandbox().connect(container_id)
+    if download:
+        sandbox.fs.download_file(remote_path, local)
+    else:
+        sandbox.fs.upload_file(local, remote_path)
+
+
 AVAILABLE_LIST_COLUMNS = {
     "container_id": "ID",
     "status": "Status",
@@ -44,9 +154,7 @@ AVAILABLE_LIST_COLUMNS = {
 }
 
 
-def _format_uptime(
-    started_at: Optional[datetime.datetime], now: datetime.datetime
-) -> str:
+def _format_uptime(started_at: Optional[datetime.datetime], now: datetime.datetime) -> str:
     if started_at is None:
         return "N/A"
     epoch = datetime.datetime.fromtimestamp(0, tz=started_at.tzinfo)
@@ -111,6 +219,10 @@ def list_containers(
         return
 
     user_requested_columns = set(columns.split(","))
+    if unknown := user_requested_columns - AVAILABLE_LIST_COLUMNS.keys():
+        raise click.BadParameter(
+            f"Unknown columns: {', '.join(sorted(unknown))}", param_hint="--columns"
+        )
 
     if machine_id:
         user_requested_columns.add("machine_id")
@@ -160,6 +272,7 @@ def list_containers(
 )
 @extraclick.pass_service_client
 def stop_container(service: ServiceClient, container_ids: List[str]):
+    failed = False
     for container_id in container_ids:
         res: StopContainerResponse
         res = service.gateway.stop_container(StopContainerRequest(container_id=container_id))
@@ -168,6 +281,9 @@ def stop_container(service: ServiceClient, container_ids: List[str]):
             terminal.success(f"Stopped container: {container_id}")
         else:
             terminal.error(f"{res.error_msg}", exit=False)
+            failed = True
+    if failed:
+        raise click.exceptions.Exit(1)
 
 
 @management.command(

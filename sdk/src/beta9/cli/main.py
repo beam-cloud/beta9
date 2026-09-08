@@ -18,6 +18,8 @@ from . import (
     deployment,
     dev,
     disk,
+    image,
+    logs,
     machine,
     pool,
     run,
@@ -103,6 +105,8 @@ def load_cli(check_config=True, **kwargs: Any) -> CLI:
     cli.register(serve)
     cli.register(volume)
     cli.register(disk)
+    cli.register(image)
+    cli.register(logs)
     cli.register(config)
     cli.register(pool)
     cli.register(container)

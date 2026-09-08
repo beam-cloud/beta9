@@ -74,7 +74,9 @@ class SDKSettings:
             # at app.<domain> (e.g. app.beam.cloud -> platform.beam.cloud)
             host = self.api_host.split(":")[0]
             if not self.app_url_template and host.startswith("app."):
-                self.app_url_template = f"https://platform.{host[len('app.'):]}/app/{{app_id}}/overview"
+                self.app_url_template = (
+                    f"https://platform.{host[len('app.') :]}/app/{{app_id}}/overview"
+                )
 
 
 @dataclass
@@ -82,6 +84,15 @@ class ConfigContext:
     token: Optional[str] = None
     gateway_host: Optional[str] = None
     gateway_port: Optional[int] = None
+    api_url: Optional[str] = None
+
+    @property
+    def http_url(self) -> str:
+        if self.api_url:
+            return self.api_url.rstrip("/")
+        port = int(self.gateway_port or DEFAULT_GATEWAY_PORT)
+        port = DEFAULT_API_PORT if port == DEFAULT_GATEWAY_PORT else port
+        return f"{'https' if port == 443 else 'http'}://{self.gateway_host}:{port}"
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "ConfigContext":
@@ -181,6 +192,10 @@ def get_config_context(name: str = DEFAULT_CONTEXT_NAME) -> ConfigContext:
             gateway_port=gateway_port,
         )
 
+    if not sys.stdin.isatty():
+        terminal.error(
+            f"Context '{name}' does not exist. Configure it with {settings.name.lower()} config create."
+        )
     terminal.header(f"Context '{name}' does not exist. Let's try setting it up.")
     contexts[name] = prompt_for_config_context(name=name, require_token=True)[1]
     save_config(contexts)

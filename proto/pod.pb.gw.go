@@ -395,6 +395,8 @@ func local_request_PodService_SandboxUploadFile_0(ctx context.Context, marshaler
 	return msg, metadata, err
 }
 
+var filter_PodService_SandboxDownloadFile_0 = &utilities.DoubleArray{Encoding: map[string]int{"container_id": 0, "container_path": 1}, Base: []int{1, 1, 2, 0, 0}, Check: []int{0, 1, 1, 2, 3}}
+
 func request_PodService_SandboxDownloadFile_0(ctx context.Context, marshaler runtime.Marshaler, client PodServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
 		protoReq PodSandboxDownloadFileRequest
@@ -419,6 +421,12 @@ func request_PodService_SandboxDownloadFile_0(ctx context.Context, marshaler run
 	protoReq.ContainerPath, err = runtime.String(val)
 	if err != nil {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "container_path", err)
+	}
+	if err := req.ParseForm(); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_PodService_SandboxDownloadFile_0); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 	msg, err := client.SandboxDownloadFile(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
 	return msg, metadata, err
@@ -445,6 +453,12 @@ func local_request_PodService_SandboxDownloadFile_0(ctx context.Context, marshal
 	protoReq.ContainerPath, err = runtime.String(val)
 	if err != nil {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "container_path", err)
+	}
+	if err := req.ParseForm(); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_PodService_SandboxDownloadFile_0); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 	msg, err := server.SandboxDownloadFile(ctx, &protoReq)
 	return msg, metadata, err

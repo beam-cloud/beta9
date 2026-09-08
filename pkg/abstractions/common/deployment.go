@@ -38,8 +38,10 @@ func ParseAndValidateDeploymentStubId(
 	backendRepo repository.BackendRepository,
 ) (string, error) {
 	cacheKey := makeCacheKey(authInfo, stubId, deploymentName, version, stubType)
+	// A name without a pinned version must resolve the current deployment.
+	cacheable := deploymentName == "" || version != ""
 
-	if cached, ok := deploymentStubCache.Get(cacheKey); ok {
+	if cached, ok := deploymentStubCache.Get(cacheKey); ok && cacheable {
 		return cached, nil
 	}
 
@@ -93,7 +95,7 @@ func ParseAndValidateDeploymentStubId(
 		}
 	}
 
-	if stubId != "" {
+	if stubId != "" && cacheable {
 		deploymentStubCache.Add(cacheKey, stubId)
 	}
 
