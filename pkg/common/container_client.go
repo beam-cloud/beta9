@@ -245,20 +245,12 @@ func (c *ContainerClient) SandboxKill(containerId string, pid int32) (*pb.Contai
 	return resp, nil
 }
 
-func (c *ContainerClient) SandboxUploadFile(containerId, path string, data []byte, mode int32) (*pb.ContainerSandboxUploadFileResponse, error) {
-	resp, err := c.client.ContainerSandboxUploadFile(context.TODO(), &pb.ContainerSandboxUploadFileRequest{ContainerId: containerId, ContainerPath: path, Data: data, Mode: mode})
-	if err != nil {
-		return resp, err
-	}
-	return resp, nil
+func (c *ContainerClient) SandboxUploadFile(ctx context.Context, in *pb.ContainerSandboxUploadFileRequest) (*pb.ContainerSandboxUploadFileResponse, error) {
+	return c.client.ContainerSandboxUploadFile(ctx, in)
 }
 
-func (c *ContainerClient) SandboxDownloadFile(containerId, containerPath string) (*pb.ContainerSandboxDownloadFileResponse, error) {
-	resp, err := c.client.ContainerSandboxDownloadFile(context.TODO(), &pb.ContainerSandboxDownloadFileRequest{ContainerId: containerId, ContainerPath: containerPath})
-	if err != nil {
-		return resp, err
-	}
-	return resp, nil
+func (c *ContainerClient) SandboxDownloadFile(ctx context.Context, in *pb.ContainerSandboxDownloadFileRequest) (*pb.ContainerSandboxDownloadFileResponse, error) {
+	return c.client.ContainerSandboxDownloadFile(ctx, in)
 }
 
 func (c *ContainerClient) SandboxDeleteFile(containerId, containerPath string) (*pb.ContainerSandboxDeleteFileResponse, error) {
@@ -356,6 +348,8 @@ func (c *ContainerClient) StreamLogs(ctx context.Context, containerId string, ou
 // StreamLogsWithReady reports when the stream attachment attempt completes.
 // Callers can use ready to keep exit handling from racing log backfill.
 func (c *ContainerClient) StreamLogsWithReady(ctx context.Context, containerId string, outputChan chan OutputMsg, ready func()) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	stream, err := c.client.ContainerStreamLogs(ctx, &pb.ContainerStreamLogsRequest{ContainerId: containerId})
 	if err != nil {
 		return fmt.Errorf("error creating log stream: %w", err)
@@ -374,7 +368,11 @@ func (c *ContainerClient) StreamLogsWithReady(ctx context.Context, containerId s
 		for {
 			select {
 			case <-ticker.C:
-				outputChan <- OutputMsg{Msg: ""}
+				select {
+				case outputChan <- OutputMsg{Msg: ""}:
+				case <-ctx.Done():
+					return
+				}
 			case <-ctx.Done():
 				return
 			}
@@ -397,7 +395,11 @@ func (c *ContainerClient) StreamLogsWithReady(ctx context.Context, containerId s
 			}
 
 			if logEntry.Msg != "" {
-				outputChan <- OutputMsg{Msg: logEntry.Msg}
+				select {
+				case outputChan <- OutputMsg{Msg: logEntry.Msg}:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
 			}
 		}
 	}

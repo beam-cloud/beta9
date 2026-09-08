@@ -16,6 +16,7 @@ from ...client.client import Client
 from ...clients.gateway import Autoscaler as AutoscalerProto
 from ...clients.gateway import (
     DatabaseServingConfig as DatabaseServingConfigProto,
+    ExportWorkspaceConfigRequest,
     GatewayServiceStub,
     GetOrCreateStubRequest,
     GetOrCreateStubResponse,
@@ -37,6 +38,7 @@ from ...clients.types import CheckpointTrigger
 from ...clients.types import PricingPolicy as PricingPolicyProto
 from ...config import ConfigContext, SDKSettings, get_config_context, get_settings
 from ...env import called_on_import, is_notebook_env
+from ...exceptions import ImageBuildError
 from ...schema import Schema
 from ...sync import FileSyncer
 from ...type import (
@@ -231,7 +233,9 @@ class RunnerAbstraction(BaseAbstraction):
         self._shell_stub: Optional[ShellServiceStub] = None
         self.syncer: FileSyncer = FileSyncer(self.gateway_stub)
         self.settings: SDKSettings = get_settings()
-        self.config_context: ConfigContext = get_config_context()
+        self.config_context: ConfigContext = (
+            getattr(self.channel, "config", None) or get_config_context()
+        )
         self.tmp_files: List[TempFile] = []
         self.is_websocket: bool = False
         self.ports: List[int] = ports or []
@@ -243,7 +247,13 @@ class RunnerAbstraction(BaseAbstraction):
     def get_client(self) -> Union[Client, None]:
         if self.client:
             return self.client
-        self.client = Client(token=self.config_context.token) if self.config_context.token else None
+        if not self.config_context.token:
+            return None
+        api_url = self.config_context.api_url
+        if not api_url:
+            config = self.gateway_stub.export_workspace_config(ExportWorkspaceConfigRequest())
+            api_url = f"{'https' if config.gateway_http_tls else 'http'}://{config.gateway_http_host}:{config.gateway_http_port}"
+        self.client = Client(token=self.config_context.token, api_url=api_url)
         return self.client
 
     @property
@@ -342,31 +352,27 @@ class RunnerAbstraction(BaseAbstraction):
             terminal.print("")
             return res
 
-        terminal.header("Invocation details")
-        commands = [
-            f"curl -X POST '{res.url}' \\",
-            "-H 'Connection: keep-alive' \\",
-            "-H 'Content-Type: application/json' \\",
-            *(
-                [f"-H 'Authorization: Bearer {self.config_context.token}' \\"]
-                if self.authorized
-                else []
-            ),
-            "-d '{}'",
-        ]
-
+        headers = (
+            ['-H "Authorization: Bearer ${BETA9_TOKEN:?Set BETA9_TOKEN to your profile token}"']
+            if self.authorized
+            else []
+        )
         if self.is_websocket:
             res.url = res.url.replace("http://", "ws://").replace("https://", "wss://")
+            commands = [f"websocat '{res.url}'", *headers]
+        else:
             commands = [
-                f"websocat '{res.url}' \\",
-                *(
-                    [f"-H 'Authorization: Bearer {self.config_context.token}'"]
-                    if self.authorized
-                    else []
-                ),
+                f"curl -X POST '{res.url}'",
+                "-H 'Content-Type: application/json'",
+                *headers,
+                "-d '{}'",
             ]
 
-        terminal.print("\n".join(commands), crop=False, overflow="ignore")
+        terminal.resource("Endpoint", {"URL": res.url})
+        if self.authorized and os.getenv("BETA9_TOKEN") != self.config_context.token:
+            terminal.detail("Set the token from your selected profile:", dim=False)
+            terminal.print("export BETA9_TOKEN='<your-profile-token>'", crop=False)
+        terminal.print(" ".join(commands), crop=False, overflow="ignore")
 
         return res
 
@@ -644,8 +650,7 @@ class RunnerAbstraction(BaseAbstraction):
             self.image.python_version = image_build_result.python_version
             return True
 
-        terminal.error("Image build failed", exit=False)
-        return False
+        raise ImageBuildError(f"Image build failed:\n{image_build_result.error}")
 
     def _sync_runtime_files(self, ignore_patterns: Optional[List[str]]) -> bool:
         if self.files_synced:

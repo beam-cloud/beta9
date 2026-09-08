@@ -23,6 +23,10 @@ const (
 )
 
 type ContainerLogMessage struct {
+	// Only SDK envelopes carry beta9_log; arbitrary JSON belongs to the user.
+	Internal bool `json:"beta9_log"`
+	// SDK stdout and stderr envelopes share the same transport.
+	Stream      string                      `json:"stream"`
 	Level       string                      `json:"level"`
 	Message     string                      `json:"message"`
 	TaskID      *string                     `json:"task_id"`
@@ -83,9 +87,9 @@ func (r *ContainerLogger) CaptureLogs(request *types.ContainerRequest, logChan c
 		return errors.New("container not found")
 	}
 	defer instance.LogBuffer.Close()
-	pushLogLine := func(taskID string, line string) {
+	pushLogLine := func(taskID, stream, line string) {
 		if r.eventRepo != nil {
-			r.eventRepo.PushContainerRequestLogLine(r.workerID, request, taskID, types.EventLogStreamStdout, line)
+			r.eventRepo.PushContainerRequestLogLine(r.workerID, request, taskID, stream, line)
 		}
 	}
 	eventsEnabled := r.eventRepo != nil
@@ -97,7 +101,6 @@ func (r *ContainerLogger) CaptureLogs(request *types.ContainerRequest, logChan c
 	rateLimitMessageLogged := false
 	firstByteRecorded := false
 
-	var msg ContainerLogMessage
 	for o := range logChan {
 		if !request.IsBuildRequest() && !limiter.Allow() {
 			if !rateLimitMessageLogged {
@@ -110,7 +113,7 @@ func (r *ContainerLogger) CaptureLogs(request *types.ContainerRequest, logChan c
 					r.eventRepo.PushContainerLogDropped(r.workerID, request, types.EventMessageLogBufferDroppedRateLimit, "")
 				}
 				for _, line := range strings.Split(rateLimitMsg, "\n") {
-					pushLogLine("", line)
+					pushLogLine("", "system", line)
 				}
 				if !firstByteRecorded {
 					firstByteRecorded = true
@@ -125,25 +128,28 @@ func (r *ContainerLogger) CaptureLogs(request *types.ContainerRequest, logChan c
 
 		rateLimitMessageLogged = false
 
-		dec := json.NewDecoder(strings.NewReader(o.Message))
-		msgDecoded := false
-
-		for {
-			// Clear the message struct to avoid carrying over previous values
-			msg = ContainerLogMessage{}
-
-			err := dec.Decode(&msg)
-			if err != nil {
-				/*
-					Either the json parsing ends with an EOF error indicating that the
-					JSON string is complete, or with a json decode error indicating that
-					the JSON string is invalid. In either case, we can break out of the
-					decode loop and continue processing the next message.
-				*/
-				break
+		for remaining := o.Message; remaining != ""; {
+			stream, _ := o.Attrs["stream"].(string)
+			if stream == "" {
+				stream = "system"
 			}
-
-			msgDecoded = true
+			msg := ContainerLogMessage{Message: remaining}
+			var envelope ContainerLogMessage
+			dec := json.NewDecoder(strings.NewReader(remaining))
+			if err := dec.Decode(&envelope); err == nil && ((envelope.Internal && envelope.Message != "") || envelope.RunnerEvent != nil) {
+				msg = envelope
+				if msg.Stream == "stdout" || msg.Stream == "stderr" {
+					stream = msg.Stream
+				}
+				remaining = remaining[dec.InputOffset():]
+				// Discard trailing envelope whitespace while preserving raw user output.
+				if strings.TrimSpace(remaining) == "" {
+					remaining = ""
+				}
+			} else {
+				// JSON printed by user code is output, not a runner envelope.
+				remaining = ""
+			}
 
 			if msg.RunnerEvent != nil {
 				if r.eventRepo != nil {
@@ -166,7 +172,7 @@ func (r *ContainerLogger) CaptureLogs(request *types.ContainerRequest, logChan c
 					r.eventRepo.PushContainerLogDropped(r.workerID, request, types.EventMessageLogBufferDroppedMessage, stringPtrValue(msg.TaskID))
 				}
 				for _, line := range strings.Split(msg.Message, "\n") {
-					pushLogLine(stringPtrValue(msg.TaskID), line)
+					pushLogLine(stringPtrValue(msg.TaskID), stream, line)
 				}
 				if !firstByteRecorded {
 					firstByteRecorded = true
@@ -188,37 +194,6 @@ func (r *ContainerLogger) CaptureLogs(request *types.ContainerRequest, logChan c
 					} else {
 						log.Info().Str("container_id", request.ContainerId).Msg(line)
 					}
-				}
-			}
-		}
-
-		// Fallback in case the message was not JSON
-		if !msgDecoded && o.Message != "" {
-			f.WithFields(logrus.Fields{
-				"container_id": request.ContainerId,
-				"stub_id":      instance.StubId,
-			}).Info(o.Message)
-
-			lines := strings.Split(o.Message, "\n")
-			for _, line := range lines {
-				if line == "" {
-					continue
-				}
-
-				log.Info().Str("container_id", request.ContainerId).Msg(line)
-			}
-
-			// Write logs to in-memory log buffer as well
-			if !instance.LogBuffer.Write([]byte(o.Message)) && eventsEnabled {
-				r.eventRepo.PushContainerLogDropped(r.workerID, request, types.EventMessageLogBufferDroppedRawMessage, "")
-			}
-			for _, line := range strings.Split(o.Message, "\n") {
-				pushLogLine("", line)
-			}
-			if !firstByteRecorded {
-				firstByteRecorded = true
-				if eventsEnabled {
-					r.eventRepo.PushContainerLogFirstByte(r.workerID, request, "")
 				}
 			}
 		}

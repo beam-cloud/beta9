@@ -32,6 +32,7 @@ type Event struct {
 
 // RunOpts contains options for running a container
 type RunOpts struct {
+	ErrorWriter   OutputWriter
 	OutputWriter  OutputWriter
 	Started       chan<- int // PID channel
 	DockerEnabled bool       // Enable Docker-in-Docker runtime options

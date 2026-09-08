@@ -26,10 +26,23 @@ LOCAL_PYTHON_VERSION = f"python{sys.version_info.major}.{sys.version_info.minor}
 _DEFAULT_IMAGE_BUILD_CACHE_TTL_SECONDS = 300.0
 
 
-class ImageBuildResult(NamedTuple):
+class _ImageBuildResult(NamedTuple):
     success: bool = False
     image_id: str = ""
     python_version: str = ""
+
+
+class ImageBuildResult(_ImageBuildResult):
+    """Build outcome retaining the original three-value tuple layout."""
+
+    error: str = ""
+
+    def __new__(
+        cls, success: bool = False, image_id: str = "", python_version: str = "", error: str = ""
+    ) -> "ImageBuildResult":
+        result = super().__new__(cls, success, image_id, python_version)
+        result.error = error
+        return result
 
 
 _image_build_cache = TTLCache(
@@ -340,11 +353,13 @@ class Image(BaseAbstraction):
         self._stub: Optional[ImageServiceStub] = None
         self.dockerfile = ""
         self.dockerfile_path = ""
+        self.dockerfile_context_dir = ""
         self.build_ctx_object = ""
         self.gpu = GpuType.NoGPU
         self.ignore_python = False
         self.override_python_version = False
         self.image_id = image_id or ""
+        self._explicit_image_id = self.image_id
         self.include_files_patterns = []
 
         self.with_envs(env_vars or [])
@@ -406,8 +421,8 @@ class Image(BaseAbstraction):
         """
         Build the base image based on a Dockerfile.
 
-        This method will sync the context directory and use the Dockerfile at the provided path to
-        build the base image.
+        The context directory is synced when the image is verified or built, using the Dockerfile
+        at the provided path.
 
         Parameters:
             path: The path to the Dockerfile.
@@ -424,28 +439,42 @@ class Image(BaseAbstraction):
         if not context_dir:
             context_dir = os.path.dirname(path) or "."
 
-        image.sync_files(context_dir)
-
         with open(path, "r") as f:
             dockerfile = f.read()
         image.dockerfile = dockerfile
-        image.dockerfile_path = path
+        image.dockerfile_path = os.path.abspath(path)
+        image.dockerfile_context_dir = os.path.abspath(context_dir)
         return image
 
-    def sync_files(self, context_dir: Optional[str] = None, cache_object_id: bool = True) -> None:
+    def sync_files(self, context_dir: Optional[str] = None) -> None:
         syncer = FileSyncer(
             gateway_stub=self.gateway_stub, root_dir=context_dir or os.path.dirname("./")
         )
+        # Dockerfile COPY sources must not be filtered by added local-file patterns.
         result = syncer.sync(
-            include_patterns=self.include_files_patterns, cache_object_id=cache_object_id
+            include_patterns=[] if self.dockerfile_path else self.include_files_patterns
         )
         if not result.success:
             raise ValueError("Failed to sync context directory.")
 
         self.build_ctx_object = result.object_id
 
+    def _prepare_context(self) -> None:
+        if self.base_image and self.dockerfile:
+            raise ValueError("Cannot use from_dockerfile and provide a custom base image.")
+
+        if self.dockerfile_path or self.include_files_patterns:
+            terminal.detail("Syncing image build context...", dim=False)
+
+        if self.dockerfile_path:
+            self.dockerfile = Path(self.dockerfile_path).read_text()
+            self.sync_files(self.dockerfile_context_dir)
+        elif self.include_files_patterns:
+            self.sync_files()
+
     def _cache_key(self) -> str:
         spec = {
+            "channel": str(getattr(self.channel, "cache_key", id(self.channel))),
             "python_packages": self.python_packages,
             "python_version": self.python_version,
             "commands": self.commands,
@@ -457,7 +486,7 @@ class Image(BaseAbstraction):
             "secrets": self.secrets,
             "gpu": self.gpu,
             "ignore_python": self.ignore_python,
-            "image_id": self.image_id,
+            "image_id": self._explicit_image_id,
             "include_files_patterns": self.include_files_patterns,
         }
         return json.dumps(spec, sort_keys=True, separators=(",", ":"))
@@ -545,6 +574,10 @@ class Image(BaseAbstraction):
         )
 
     def exists(self) -> Tuple[bool, ImageBuildResult]:
+        self._prepare_context()
+        return self._exists()
+
+    def _exists(self) -> Tuple[bool, ImageBuildResult]:
         with sdk_timing("image.verify_build"):
             r: VerifyImageBuildResponse = self.stub.verify_image_build(
                 VerifyImageBuildRequest(
@@ -560,7 +593,7 @@ class Image(BaseAbstraction):
                     secrets=self.secrets,
                     gpu=self.gpu,
                     ignore_python=self.ignore_python,
-                    image_id=self.image_id,
+                    image_id=self._explicit_image_id,
                 )
             )
 
@@ -580,26 +613,19 @@ class Image(BaseAbstraction):
                     f"Local version {LOCAL_PYTHON_VERSION.value} differs from image version {self.python_version}. This may cause issues in your remote environment."
                 )
 
-        if self.base_image != "" and self.dockerfile != "":
-            raise ValueError("Cannot use from_dockerfile and provide a custom base image.")
-
-        if not self.dockerfile and len(self.include_files_patterns) > 0:
-            # We don't want to cache the object id for a regular build context, because it doesn't upload all files
-            # Compared to a custom Dockerfile build context, which does upload all files.
-            self.sync_files(cache_object_id=False)
+        self._prepare_context()
 
         cache_key = self._cache_key()
         if cached_result := self._cached_build_result(cache_key):
-            terminal.header("Using cached image")
+            terminal.detail(f"Using cached image {cached_result.image_id}", dim=False)
             self.image_id = cached_result.image_id
             self.python_version = cached_result.python_version
             return cached_result
 
-        terminal.header("Building image")
-
-        exists, exists_response = self.exists()
+        terminal.detail("Checking image cache...", dim=False)
+        exists, exists_response = self._exists()
         if exists:
-            terminal.header("Using cached image")
+            terminal.detail(f"Using cached image {exists_response.image_id}", dim=False)
             result = ImageBuildResult(
                 success=True,
                 image_id=exists_response.image_id,
@@ -608,9 +634,15 @@ class Image(BaseAbstraction):
             self._remember_build_result(cache_key, result)
             return result
 
+        if self._explicit_image_id:
+            return ImageBuildResult(
+                success=False, error=f"Image {self._explicit_image_id} was not found"
+            )
+
         with sdk_timing("image.build_stream"):
-            with terminal.progress("Working..."):
+            with terminal.progress("Building image"):
                 last_response = BuildImageResponse(success=False)
+                output = ""
                 for r in self.stub.build_image(
                     BuildImageRequest(
                         python_packages=self.python_packages,
@@ -627,20 +659,22 @@ class Image(BaseAbstraction):
                         ignore_python=self.ignore_python,
                     )
                 ):
+                    output = (output + r.msg)[-8192:]
                     if r.warning:
                         terminal.warn("WARNING: " + r.msg)
                     elif r.msg != "" and not r.done:
-                        terminal.detail(r.msg, end="")
+                        terminal.detail(r.msg, end="", dim=False)
 
                     if r.done:
                         last_response = r
                         break
 
         if not last_response.success:
-            terminal.error(str(last_response.msg).rstrip(), exit=False)
-            return ImageBuildResult(success=False)
+            return ImageBuildResult(
+                success=False, error=output.rstrip() or "Build ended without a result"
+            )
 
-        terminal.header("Build complete 🎉")
+        terminal.header("Image built")
         result = ImageBuildResult(
             success=True,
             image_id=last_response.image_id,

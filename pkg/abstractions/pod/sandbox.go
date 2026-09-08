@@ -452,7 +452,9 @@ func (s *GenericPodService) SandboxUploadFile(ctx context.Context, in *pb.PodSan
 		}, nil
 	}
 
-	resp, err := client.SandboxUploadFile(in.ContainerId, in.ContainerPath, in.Data, in.Mode)
+	resp, err := client.SandboxUploadFile(ctx, &pb.ContainerSandboxUploadFileRequest{
+		ContainerId: in.ContainerId, ContainerPath: in.ContainerPath, Data: in.Data, Mode: in.Mode, Offset: in.Offset,
+	})
 	if err != nil {
 		return &pb.PodSandboxUploadFileResponse{
 			Ok:       false,
@@ -483,7 +485,9 @@ func (s *GenericPodService) SandboxDownloadFile(ctx context.Context, in *pb.PodS
 		}, nil
 	}
 
-	resp, err := client.SandboxDownloadFile(in.ContainerId, in.ContainerPath)
+	resp, err := client.SandboxDownloadFile(ctx, &pb.ContainerSandboxDownloadFileRequest{
+		ContainerId: in.ContainerId, ContainerPath: in.ContainerPath, Offset: in.Offset, Length: in.Length,
+	})
 	if err != nil {
 		return &pb.PodSandboxDownloadFileResponse{
 			Ok:       false,

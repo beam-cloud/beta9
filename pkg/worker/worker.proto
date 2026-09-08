@@ -226,6 +226,7 @@ message ContainerSandboxUploadFileRequest {
   string container_path = 2;
   bytes data = 3;
   int32 mode = 4;
+  int64 offset = 5;
 }
 
 message ContainerSandboxUploadFileResponse {
@@ -236,6 +237,8 @@ message ContainerSandboxUploadFileResponse {
 message ContainerSandboxDownloadFileRequest {
   string container_id = 1;
   string container_path = 2;
+  int64 offset = 3;
+  int32 length = 4;
 }
 
 message ContainerSandboxDownloadFileResponse {

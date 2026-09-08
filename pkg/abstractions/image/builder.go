@@ -116,12 +116,12 @@ func (b *Builder) startBuildContainer(ctx context.Context, build *Build) error {
 	return build.connectToHost(hostname, b.tailscale)
 }
 
-func (b *Builder) waitForBuildContainer(ctx context.Context, build *Build) error {
+func (b *Builder) waitForBuildContainer(ctx context.Context, build *Build, logsDone <-chan error) error {
 	isV2Build := b.config.ImageService.ClipVersion == uint32(types.ClipVersion2)
 
 	// Set appropriate log message based on build version
 	if isV2Build {
-		build.log(false, "Building image...\n")
+		build.log(false, fmt.Sprintf("Building image %s\n", build.imageID))
 	} else {
 		build.log(false, "Setting up build container...\n")
 	}
@@ -148,9 +148,22 @@ func (b *Builder) waitForBuildContainer(ctx context.Context, build *Build) error
 				// For v2 builds, exit indicates completion (success or failure)
 				// For v1 builds, non-zero exit indicates premature failure
 				if isV2Build {
+					// Exit status can arrive before the worker's final log records.
+					select {
+					case err := <-logsDone:
+						if err != nil {
+							build.logWarning(fmt.Sprintf("Build log stream interrupted: %v\n", err))
+						}
+					case <-time.After(5 * time.Second):
+						build.logWarning("Timed out waiting for final build logs.\n")
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+					if err := ctx.Err(); err != nil {
+						return err
+					}
 					if exitCode != 0 {
 						exitCodeMsg := getExitCodeMsg(exitCode)
-						time.Sleep(200 * time.Millisecond)
 						build.log(true, fmt.Sprintf("Build failed: %s\n", exitCodeMsg))
 						return errors.New(fmt.Sprintf("build failed: %s", exitCodeMsg))
 					}
@@ -197,6 +210,8 @@ func (b *Builder) waitForBuildContainer(ctx context.Context, build *Build) error
 
 // Build user image
 func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan common.OutputMsg) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	build, err := NewBuild(ctx, opts, outputChan, b.config)
 	if err != nil {
 		return err
@@ -216,18 +231,24 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	go b.handleBuildCancellation(ctx, build)
 	defer build.killContainer() // Kill and remove container after the build completes
 
+	build.log(false, fmt.Sprintf("Waiting for build worker (image %s)...\n", build.imageID))
 	err = b.startBuildContainer(ctx, build)
 	if err != nil {
 		build.log(true, "Failed to start build container: "+err.Error())
 		return err
 	}
 
+	logsDone := make(chan error, 1)
 	if build.containerClient != nil {
-		go build.streamLogs()
+		go func() {
+			logsDone <- build.containerClient.StreamLogs(ctx, build.containerID, outputChan)
+		}()
+	} else {
+		logsDone <- nil
 	}
 
 	// Wait for the build container lifecycle to complete
-	err = b.waitForBuildContainer(ctx, build)
+	err = b.waitForBuildContainer(ctx, build, logsDone)
 	if err != nil {
 		return err
 	}
@@ -706,8 +727,8 @@ func getImageTagOrDigest(digest string, tag string) string {
 
 func getExitCodeMsg(exitCode int) string {
 	msg, ok := types.WorkerContainerExitCodes[types.ContainerExitCode(exitCode)]
-	if !ok {
-		msg = types.WorkerContainerExitCodes[types.ContainerExitCodeUnknownError]
+	if !ok || exitCode == int(types.ContainerExitCodeUnknownError) {
+		return fmt.Sprintf("build container exited with code %d", exitCode)
 	}
 	return msg
 }

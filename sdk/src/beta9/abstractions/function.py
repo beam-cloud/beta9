@@ -2,13 +2,15 @@ import asyncio
 import concurrent.futures
 import inspect
 import os
+import time
+from collections import deque
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple, Union
 
 import cloudpickle
+import grpc
 
 from .. import terminal
-from ..abstractions.base.capacity import cli_name
 from ..abstractions.base.runner import (
     FUNCTION_DEPLOYMENT_STUB_TYPE,
     FUNCTION_STUB_TYPE,
@@ -19,14 +21,16 @@ from ..abstractions.base.runner import (
 )
 from ..abstractions.image import Image
 from ..abstractions.volume import CloudBucket, Volume
-from ..channel import with_grpc_error_handling
+from ..channel import rpc_timeout, with_grpc_error_handling
 from ..clients.function import (
     FunctionInvokeRequest,
     FunctionInvokeResponse,
     FunctionScheduleRequest,
     FunctionServiceStub,
 )
+from ..clients.gateway import ListTasksRequest, StringList
 from ..env import called_on_import, is_local
+from ..exceptions import RemoteExecutionError
 from ..schema import Schema
 from ..sync import FileSyncer
 from ..type import DurableDisk, GpuType, GpuTypeAlias, Pool, PricingPolicy, TaskPolicy
@@ -184,19 +188,14 @@ class _CallableWrapper(DeployableMixin):
             return self.local(*args, **kwargs)
 
         try:
-            if not self.parent.prepare_runtime(
-                func=self.func,
-                stub_type=self.base_stub_type,
-            ):
-                return
+            self._prepare_runtime()
         except KeyboardInterrupt:
             terminal.error("Exiting shell. Your build was stopped.")
 
         try:
-            status_text = (
-                f"Scheduling on {self.parent.gpu}..." if self.parent.gpu else "Scheduling..."
-            )
-            with terminal.progress(status_text):
+            with terminal.StepTracker().step(
+                f"Running {self.parent.name or self.parent.handler}", "Function complete"
+            ):
                 return self._call_remote(*args, **kwargs)
         except KeyboardInterrupt:
             if self.parent.headless:
@@ -205,6 +204,10 @@ class _CallableWrapper(DeployableMixin):
                 terminal.error("Exiting shell. Your function will be terminated.")
 
     @with_grpc_error_handling
+    def _prepare_runtime(self) -> None:
+        if not self.parent.prepare_runtime(func=self.func, stub_type=self.base_stub_type):
+            raise RuntimeError("Unable to prepare function runtime")
+
     def _call_remote(self, *args, **kwargs) -> Any:
         args = cloudpickle.dumps(
             {
@@ -213,9 +216,10 @@ class _CallableWrapper(DeployableMixin):
             },
         )
 
-        terminal.header(f"Running function: <{self.parent.handler}>")
+        terminal.debug(f"Running function: {self.parent.handler}")
         last_response: Optional[FunctionInvokeResponse] = None
-        running = False
+        output = deque()
+        output_size = 0
 
         for r in self.parent.function_stub.function_invoke(
             FunctionInvokeRequest(
@@ -224,30 +228,37 @@ class _CallableWrapper(DeployableMixin):
                 headless=self.parent.headless,
             )
         ):
-            if not running:
-                running = True
-                terminal.update_progress("Running...")
-
             if r.output != "":
+                output.append(r.output[-65536:])
+                output_size += len(output[-1])
+                while output_size - len(output[0]) >= 65536:
+                    output_size -= len(output.popleft())
                 terminal.detail(r.output, end="")
 
             if r.done or r.exit_code != 0:
                 last_response = r
                 break
 
-        if last_response is None or not last_response.done or last_response.exit_code != 0:
-            task_id = last_response.task_id if last_response else "unknown"
-            terminal.error(
-                f"Function failed <{task_id}>",
-                exit=False,
-                hint=f"see the failure reason with '{cli_name()} task list --filter status=error'",
-            )
-            return
+        if last_response is None:
+            raise RuntimeError("Function invocation ended without a task result")
 
-        terminal.header(f"Function complete <{last_response.task_id}>")
-        # Sometimes the result is empty (task timed out)
-        if not last_response.result:
-            return None
+        if not last_response.done or last_response.exit_code != 0 or not last_response.result:
+            task_id = last_response.task_id
+            status = "failed"
+            try:
+                with rpc_timeout(5):
+                    tasks = self.parent.gateway_stub.list_tasks(
+                        ListTasksRequest(filters={"id": StringList(values=[task_id])}, limit=1)
+                    )
+                if tasks.ok and tasks.tasks:
+                    status = tasks.tasks[0].status
+            except grpc.RpcError:
+                pass  # Preserve the execution failure if status lookup is unavailable.
+            raise RemoteExecutionError(
+                task_id, status, last_response.exit_code, "".join(output)[-65536:]
+            )
+
+        terminal.debug(f"Function complete: {last_response.task_id}")
         return cloudpickle.loads(last_response.result)
 
     def local(self, *args, **kwargs) -> Any:
@@ -271,18 +282,28 @@ class _CallableWrapper(DeployableMixin):
         return args
 
     def _threaded_map(self, inputs: Sequence[Any]) -> Iterator[Any]:
-        with terminal.progress(f"Running {len(inputs)} container(s)..."):
-            with concurrent.futures.ThreadPoolExecutor(max_workers=len(inputs)) as pool:
-                futures = [
-                    pool.submit(self._call_remote, *self._format_args(args)) for args in inputs
-                ]
+        started = time.monotonic()
+        failed = 0
+        terminal.header(f"{self.parent.name or self.parent.handler}", f"{len(inputs)} calls")
+        with terminal.progress(f"Completed 0/{len(inputs)} calls"):
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(32, len(inputs))) as pool:
+                futures = {
+                    pool.submit(self._call_remote, *self._format_args(args)): index
+                    for index, args in enumerate(inputs, 1)
+                }
                 try:
-                    for future in concurrent.futures.as_completed(futures):
+                    for completed, future in enumerate(concurrent.futures.as_completed(futures), 1):
                         try:
-                            yield future.result()
-                        except Exception as e:
-                            terminal.error(f"Task failed during map: {e}", exit=False)
-                            yield None
+                            result = future.result()
+                        except Exception as error:
+                            failed += 1
+                            message = (
+                                error.details() if isinstance(error, grpc.RpcError) else str(error)
+                            )
+                            terminal.error(f"Input {futures[future]} failed: {message}", exit=False)
+                            result = None
+                        terminal.update_progress(f"Completed {completed}/{len(inputs)} calls")
+                        yield result
                 except KeyboardInterrupt:
                     pool.shutdown(wait=False, cancel_futures=True)
                     terminal.error(
@@ -290,17 +311,20 @@ class _CallableWrapper(DeployableMixin):
                         exit=False,
                     )
                     os._exit(1)
+        if failed:
+            terminal.warn(f"Completed {len(inputs)} calls; {failed} failed")
+            return
+        terminal.done(f"Completed {len(inputs)} calls", started)
 
     def map(self, inputs: Sequence[Any]) -> Iterator[Any]:
-        if not self.parent.prepare_runtime(
-            func=self.func,
-            stub_type=self.base_stub_type,
-        ):
-            # prepare_runtime already reported the specific failure
-            raise SystemExit(1)
+        """Map positional arguments; wrap a single list argument in a tuple: ``([1, 2],)``.
 
-        iterator = self._threaded_map(inputs)
-        yield from iterator
+        Results arrive in completion order. Failed inputs are reported and yield ``None``.
+        """
+        if not inputs:
+            return
+        self._prepare_runtime()
+        yield from self._threaded_map(inputs)
 
 
 class ScheduleWrapper(_CallableWrapper):

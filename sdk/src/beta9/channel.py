@@ -1,8 +1,13 @@
+import atexit
 import functools
 import sys
+import time
 import traceback
+import uuid
+import weakref
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any, Callable, Generator, List, NewType, Optional, Sequence, Tuple, cast
 
 import grpc
@@ -10,8 +15,8 @@ from grpc import ChannelCredentials, RpcError
 from grpc._interceptor import _Channel as InterceptorChannel
 
 from . import terminal
-from .clients.gateway import AuthorizeRequest, AuthorizeResponse, GatewayServiceStub
 from .clients.disk import DiskServiceStub
+from .clients.gateway import AuthorizeRequest, AuthorizeResponse, GatewayServiceStub
 from .clients.secret import SecretServiceStub
 from .clients.volume import VolumeServiceStub
 from .config import (
@@ -27,6 +32,27 @@ from .env import is_remote
 from .exceptions import RunnerException
 
 GRPC_MAX_MESSAGE_SIZE = 16 * 1024 * 1024
+_channels = weakref.WeakSet()
+_deadline = ContextVar("beta9_rpc_deadline", default=None)
+
+
+@contextmanager
+def rpc_timeout(seconds: float):
+    """Bound all RPCs in this scope, including time already spent between calls."""
+    deadline = time.monotonic() + seconds
+    current = _deadline.get()
+    token = _deadline.set(min(current, deadline) if current is not None else deadline)
+    try:
+        yield
+    finally:
+        _deadline.reset(token)
+
+
+@atexit.register
+def _close_channels() -> None:
+    # Close before interpreter teardown, while gRPC's monitor threads can still exit.
+    for channel in list(_channels):
+        channel.close()
 
 
 def channel_reconnect_event(connect_status: grpc.ChannelConnectivity) -> None:
@@ -72,6 +98,12 @@ class Channel(InterceptorChannel):
 
         interceptor = AuthTokenInterceptor(token)
         super().__init__(channel=channel, interceptor=interceptor)
+        self.cache_key = uuid.uuid4().hex
+        _channels.add(self)
+
+    def close(self) -> None:
+        super().close()
+        _channels.discard(self)
 
 
 MetadataType = NewType("MetadataType", List[Tuple[Any, Any]])
@@ -119,6 +151,12 @@ class AuthTokenInterceptor(
     def intercept_call(self, continuation, client_call_details, request):
         """Intercept all types of calls to add auth token."""
         new_details = self._add_auth_metadata(client_call_details)
+        if (deadline := _deadline.get()) is not None:
+            remaining = max(0, deadline - time.monotonic())
+            timeout = new_details.timeout
+            new_details = new_details._replace(
+                timeout=min(timeout, remaining) if timeout is not None else remaining
+            )
 
         return continuation(new_details, request)
 
@@ -141,9 +179,11 @@ def handle_grpc_error(error: grpc.RpcError):
     elif code == grpc.StatusCode.UNAVAILABLE:
         terminal.error("Unable to connect to gateway.")
     elif code == grpc.StatusCode.CANCELLED:
-        return
+        terminal.error("Request cancelled.")
+    elif code == grpc.StatusCode.DEADLINE_EXCEEDED:
+        terminal.error("Request timed out.")
     elif code == grpc.StatusCode.RESOURCE_EXHAUSTED:
-        terminal.error("Please ensure your payload or function arguments are less than 4 MiB.")
+        terminal.error(f"Resource limit exceeded: {details}")
     elif code == grpc.StatusCode.UNKNOWN:
         terminal.error(f"Error {details}")
     else:
@@ -164,10 +204,12 @@ def get_channel(context: Optional[ConfigContext] = None) -> Channel:
     if not context:
         _, context = prompt_for_config_context()
 
-    return Channel(
+    channel = Channel(
         addr=f"{context.gateway_host}:{context.gateway_port}",
         token=context.token,
     )
+    channel.config = context
+    return channel
 
 
 def prompt_first_auth(settings: SDKSettings) -> None:
@@ -177,6 +219,7 @@ def prompt_first_auth(settings: SDKSettings) -> None:
             token=settings.api_token,
             gateway_host=settings.gateway_host,
             gateway_port=settings.gateway_port,
+            api_url=settings.api_url,
         )
     else:
         terminal.header(f"Welcome to {settings.name.title()}! Let's get started 📡")
@@ -275,8 +318,7 @@ class ServiceClient:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        if self._channel:
-            self._channel.close()
+        self.close()
 
     @classmethod
     def with_channel(cls, channel: Channel) -> "ServiceClient":

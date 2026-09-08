@@ -2,6 +2,7 @@ import os
 import time
 from dataclasses import dataclass
 from queue import Empty, Queue
+from threading import Event
 from typing import Callable, Optional
 
 from watchdog.observers import Observer
@@ -48,7 +49,11 @@ class Container(BaseAbstraction):
         Attach to a running container and stream messages back and forth. Also, optionally sync a directory to the container workspace.
         """
 
-        terminal.header(f"Connecting to {container_id}...")
+        terminal.debug(f"Connecting to {container_id}")
+        if not hide_logs:
+            terminal.header("Logs")
+
+        stopped = Event()
 
         def _container_stream_generator():
             yield ContainerStreamMessage(
@@ -57,23 +62,26 @@ class Container(BaseAbstraction):
 
             if sync_dir:
                 yield from self._sync_dir_to_workspace(
-                    dir=sync_dir, container_id=container_id, hide_logs=hide_logs
+                    dir=sync_dir, container_id=container_id, hide_logs=hide_logs, stopped=stopped
                 )
             else:
-                while True:
-                    time.sleep(DEFAULT_SYNC_INTERVAL)
+                while not stopped.wait(DEFAULT_SYNC_INTERVAL):
                     yield ContainerStreamMessage()
 
         # Connect to the remote container and stream messages back and forth
         stream = self.gateway_stub.attach_to_container(_container_stream_generator())
 
         r = None
-        for r in stream:
-            if r.output and not hide_logs:
-                terminal.detail(r.output, end="")
+        try:
+            for r in stream:
+                if r.output and not hide_logs:
+                    terminal.detail(r.output, end="")
 
-            if r.done or r.exit_code != 0:
-                break
+                if r.done or r.exit_code != 0:
+                    break
+        finally:
+            stopped.set()
+            stream.close()
 
         if r is None:
             terminal.error("Container failed")
@@ -95,9 +103,6 @@ class Container(BaseAbstraction):
             terminal.error(f"\n{r.output}")
             return result
 
-        if not hide_logs:
-            terminal.header(r.output)
-
         return result
 
     def _sync_dir_to_workspace(
@@ -105,6 +110,7 @@ class Container(BaseAbstraction):
         *,
         dir: str,
         container_id: str,
+        stopped: Event,
         on_event: Optional[Callable] = None,
         hide_logs: bool = False,
     ):
@@ -116,35 +122,39 @@ class Container(BaseAbstraction):
         observer.start()
 
         terminal.header(f"Watching '{dir}' for changes...")
-        while True:
-            try:
-                operation, path, new_path = file_update_queue.get_nowait()
+        try:
+            while not stopped.is_set():
+                try:
+                    operation, path, new_path = file_update_queue.get_nowait()
 
-                if on_event:
-                    on_event(operation, path, new_path)
+                    if on_event:
+                        on_event(operation, path, new_path)
 
-                req = SyncContainerWorkspaceRequest(
-                    container_id=container_id,
-                    path=os.path.relpath(path, start=dir),
-                    is_dir=os.path.isdir(path),
-                    op=operation,
-                )
+                    req = SyncContainerWorkspaceRequest(
+                        container_id=container_id,
+                        path=os.path.relpath(path, start=dir),
+                        is_dir=os.path.isdir(path),
+                        op=operation,
+                    )
 
-                if operation == SyncContainerWorkspaceOperation.WRITE:
-                    if not req.is_dir:
-                        with open(path, "rb") as f:
-                            req.data = f.read()
+                    if operation == SyncContainerWorkspaceOperation.WRITE:
+                        if not req.is_dir:
+                            with open(path, "rb") as f:
+                                req.data = f.read()
 
-                elif operation == SyncContainerWorkspaceOperation.DELETE:
-                    pass
+                    elif operation == SyncContainerWorkspaceOperation.DELETE:
+                        pass
 
-                elif operation == SyncContainerWorkspaceOperation.MOVED:
-                    req.new_path = os.path.relpath(new_path, start=dir)
+                    elif operation == SyncContainerWorkspaceOperation.MOVED:
+                        req.new_path = os.path.relpath(new_path, start=dir)
 
-                yield ContainerStreamMessage(sync_container_workspace=req)
+                    yield ContainerStreamMessage(sync_container_workspace=req)
 
-                file_update_queue.task_done()
-            except Empty:
-                time.sleep(DEFAULT_SYNC_INTERVAL)
-            except BaseException as e:
-                terminal.warn(str(e))
+                    file_update_queue.task_done()
+                except Empty:
+                    time.sleep(DEFAULT_SYNC_INTERVAL)
+                except Exception as e:
+                    terminal.warn(str(e))
+        finally:
+            observer.stop()
+            observer.join(timeout=1)

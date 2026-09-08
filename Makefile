@@ -4,6 +4,7 @@ workerTag := latest
 workerPlatform := linux/$(shell uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/')
 runnerTag := latest
 runnerPlatform := linux/$(shell uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/')
+runnerVersions ?= 3.12 3.11 3.10 3.9 3.8
 BENCH_SDK_PYTHON ?= uv run --project ./sdk --no-sync python
 CACHE_BENCHMARK_FILE_PLAN ?=
 CACHE_BENCH_PROFILE ?=
@@ -92,15 +93,23 @@ worker-e2e-check:
 worker-e2e-push:
 	@./hack/worker-e2e-image.sh push
 
-runner:
-	for target in py312 py311 py310 py39 py38; do \
-		docker build . --target $$target --platform=$(runnerPlatform) -f ./docker/Dockerfile.runner -t localhost:5001/beta9-runner:$$target-$(runnerTag) --progress=plain; \
+runner: runner-python runner-micromamba
+
+# Build just one native runner with: make runner-python runnerVersions=3.12
+.PHONY: runner runner-python runner-micromamba
+define build-runner
+	set -e; for version in $(runnerVersions); do \
+		target=$(1); \
+		docker build . --target $(2) --platform=$(runnerPlatform) -f ./docker/Dockerfile.runner $(3) -t localhost:5001/beta9-runner:$$target-$(runnerTag) --progress=plain; \
 		docker push localhost:5001/beta9-runner:$$target-$(runnerTag); \
 	done
-	for version in "3.12" "3.11" "3.10" "3.9" "3.8"; do \
-		docker build . --build-arg PYTHON_VERSION=$$version --target micromamba --platform=$(runnerPlatform) -f ./docker/Dockerfile.runner -t localhost:5001/beta9-runner:micromamba$$version-$(runnerTag) --progress=plain; \
-		docker push localhost:5001/beta9-runner:micromamba$$version-$(runnerTag); \
-	done
+endef
+
+runner-python:
+	$(call build-runner,py$${version//./},$$target)
+
+runner-micromamba:
+	$(call build-runner,micromamba$$version,micromamba,--build-arg PYTHON_VERSION=$$version)
 
 # Local (k3d) and staging (EKS) okteto sessions can run side by side. Okteto
 # stores session state under $OKTETO_FOLDER/<namespace>/<dev>, keyed by name

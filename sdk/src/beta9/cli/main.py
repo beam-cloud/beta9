@@ -3,14 +3,17 @@ import os
 os.environ["GRPC_VERBOSITY"] = os.getenv("GRPC_VERBOSITY") or "NONE"
 
 import shutil
+import sys
 from types import ModuleType
 from typing import Any, Optional
 
 import click
 import grpc
 
+from .. import terminal
 from ..channel import handle_grpc_error, prompt_first_auth
 from ..config import SDKSettings, is_config_empty, set_settings
+from ..exceptions import ImageBuildError
 from . import (
     config,
     container,
@@ -18,6 +21,8 @@ from . import (
     deployment,
     dev,
     disk,
+    image,
+    logs,
     machine,
     pool,
     run,
@@ -57,10 +62,11 @@ class CLI:
         self.common_group = CommandGroupCollection(
             sources=[self.management_group],
             context_settings=context_settings,
+            help="Run code, deploy services, and manage your workspace.",
         )
 
-    def __call__(self, **kwargs) -> None:
-        self.common_group.main(prog_name=self.settings.name.lower(), **kwargs)
+    def __call__(self, **kwargs) -> Any:
+        return self.common_group.main(prog_name=self.settings.name.lower(), **kwargs)
 
     def register(self, module: ModuleType) -> None:
         if hasattr(module, "common"):
@@ -69,7 +75,9 @@ class CLI:
             self.management_group.add_command(module.management)
 
     def check_config(self) -> None:
-        if os.getenv("CI"):
+        if os.getenv("CI") or any(
+            arg in ("--help", "-h", "--help-all", "--version") for arg in sys.argv[1:]
+        ):
             return
         if is_config_empty(self.settings.config_path):
             prompt_first_auth(self.settings)
@@ -103,6 +111,8 @@ def load_cli(check_config=True, **kwargs: Any) -> CLI:
     cli.register(serve)
     cli.register(volume)
     cli.register(disk)
+    cli.register(image)
+    cli.register(logs)
     cli.register(config)
     cli.register(pool)
     cli.register(container)
@@ -130,3 +140,5 @@ def start():
         cli()
     except grpc.RpcError as error:
         handle_grpc_error(error=error)
+    except ImageBuildError as error:
+        terminal.error(str(error))

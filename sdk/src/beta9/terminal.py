@@ -4,6 +4,7 @@ import sys
 import threading
 import time
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from io import BytesIO
 from os import PathLike
@@ -14,7 +15,7 @@ import rich.columns
 import rich.control
 import rich.status
 import rich.traceback
-from rich.console import Console
+from rich.console import Console, Group
 from rich.control import STRIP_CONTROL_CODES as _STRIP_CONTROL_CODES
 from rich.markup import escape
 from rich.progress import (
@@ -43,14 +44,32 @@ if env.is_local():
     rich.traceback.install()
 
 _console = Console()
+_error_console = Console(stderr=True)
 _current_status = None
 _status_lock = threading.Lock()
 _status_count = 0
+_step_depth = ContextVar("beta9_step_depth", default=0)
 
 
 def header(text: str, subtext: str = "") -> None:
-    header_text = f"[bold #4CCACC]=> {text}[/bold #4CCACC]"
-    _console.print(header_text, subtext)
+    if _step_depth.get():
+        debug(text)
+        return
+    line = Text("◆ ", style=BRAND_COLOR).append(text, style="bold")
+    if subtext:
+        line.append(f"  {subtext}", style="dim")
+    _console.print(line)
+
+
+def resource(title: str, fields: dict, *, show_labels: bool = True) -> None:
+    """Show an operation's result and next actions in a compact, copyable tree."""
+    rows = [Text(title, style="bold")]
+    fields = [(label, value) for label, value in fields.items() if value]
+    for index, (label, value) in enumerate(fields):
+        guide = "└── " if index == len(fields) - 1 else "├── "
+        prefix = f"{guide}{label:<10} " if show_labels else guide
+        rows.append(Text().append(prefix, style="dim").append(str(value)))
+    _console.print(Group(*rows), soft_wrap=True)
 
 
 def print(*objects: Any, **kwargs: Any) -> None:
@@ -61,9 +80,17 @@ def print_json(data: Any, **kwargs: Any) -> None:
     _console.print_json(data=data, indent=2, default=lambda o: str(o), **kwargs)
 
 
+def _no_input() -> bool:
+    return os.getenv("BETA9_NO_INPUT") == "1"
+
+
 def prompt(
     *, text: str, default: Optional[Any] = None, markup: bool = False, password: bool = False
 ) -> Any:
+    if _no_input():
+        if default is None:
+            error(f"Input required: {text}. Provide it explicitly when using --no-input.")
+        return default
     prompt_text = f"{text} [{default}]: " if default is not None else f"{text}: "
     user_input = _console.input(prompt_text, markup=markup, password=password).strip()
     return user_input if user_input else default
@@ -71,7 +98,13 @@ def prompt(
 
 def detail(text: str, dim: bool = True, **kwargs) -> None:
     style = "dim" if dim else ""
+    kwargs.setdefault("soft_wrap", True)
     _console.print(Text(text, style=style), **kwargs)
+
+
+def debug(text: str) -> None:
+    if os.getenv("BETA9_VERBOSE") == "1":
+        _error_console.print(Text(text, style="dim"), soft_wrap=True)
 
 
 def success(text: str) -> None:
@@ -79,13 +112,16 @@ def success(text: str) -> None:
 
 
 def warn(text: str) -> None:
-    _console.print(Text("! ", style="bold yellow").append(text, style="bold yellow"))
+    _error_console.print(Text("! ", style="bold yellow").append(text, style="bold yellow"))
 
 
 def error(text: str, exit: bool = True, hint: Optional[str] = None) -> None:
-    _console.print(Text("✗ ", style="bold red").append(text, style="bold red"))
+    title, _, details = text.partition("\n")
+    _error_console.print(Text(f"✗ {title}", style="bold red"))
+    if details:
+        _error_console.print(Text(details), soft_wrap=True)
     if hint:
-        _console.print(Text(f"  hint: {hint}", style="dim"))
+        _error_console.print(Text(f"  hint: {hint}", style="dim"))
 
     if exit:
         reset_terminal()
@@ -103,6 +139,8 @@ def progress(task_name: str) -> Generator[rich.status.Status, None, None]:
     with _status_lock:
         if _current_status is None:
             _current_status = _console.status(task_name, spinner="dots", spinner_style="white")
+            if not _console.is_terminal or _console.is_dumb_terminal:
+                _console.print(Text(f"{task_name}...", style="dim"))
             _current_status.start()
         _status_count += 1
 
@@ -263,7 +301,7 @@ def StyledProgress() -> CustomProgress:
         ],
         auto_refresh=True,
         refresh_per_second=60,
-        disable=False,
+        disable=not _console.is_terminal,
     )
 
 
@@ -272,6 +310,8 @@ BRAND_COLOR = "#4CCACC"
 
 def is_interactive() -> bool:
     """True when both stdin and stdout are TTYs and the terminal isn't dumb."""
+    if _no_input():
+        return False
     try:
         return sys.stdin.isatty() and sys.stdout.isatty() and os.environ.get("TERM", "") != "dumb"
     except Exception:
@@ -305,6 +345,8 @@ def select(
     ]
     if not opts:
         raise ValueError("select() requires at least one option")
+    if _no_input():
+        return opts[max(0, min(default_index, len(opts) - 1))].value
 
     if is_interactive():
         try:
@@ -417,6 +459,8 @@ def confirm(text: str, default: bool = True) -> bool:
     Single-keypress y/n confirmation. Falls back to line input when the
     terminal can't do raw-mode reads.
     """
+    if _no_input():
+        error("Confirmation required. Use an explicit confirmation flag such as --yes.")
     suffix = "[Y/n]" if default else "[y/N]"
     prompt_text = Text(text, style="bold").append(f" {suffix} ", style="dim")
 
@@ -453,13 +497,7 @@ class Step:
 
 
 class StepTracker:
-    """
-    Step narration: a ✓/✗ line with the elapsed time when each step
-    completes. Steps print no start line of their own — the work inside a
-    step announces itself (e.g. `=> Building image`), keeping one consistent
-    gutter — and they hold no rich live display, so code inside a step can
-    safely start its own spinners and progress bars.
-    """
+    """One transient status and one timed result per step; nested headings are diagnostic."""
 
     def __init__(self, title: str = ""):
         self._started_at = time.monotonic()
@@ -470,13 +508,16 @@ class StepTracker:
     def step(self, name: str, done_name: str = ""):
         start = time.monotonic()
         handle = Step()
+        token = _step_depth.set(_step_depth.get() + 1)
         try:
-            yield handle
+            with progress(name):
+                yield handle
         except BaseException:
             handle.ok = False
-            self._finish(name, "", start, ok=False)
             raise
-        self._finish(name, done_name, start, ok=handle.ok)
+        finally:
+            _step_depth.reset(token)
+            self._finish(name, done_name, start, ok=handle.ok)
 
     def _finish(self, name: str, done_name: str, start: float, ok: bool) -> None:
         if ok:
@@ -484,7 +525,7 @@ class StepTracker:
         else:
             line = Text("✗ ", style="bold red").append(name)
         line.append(f" ({_format_elapsed(start)})", style="dim")
-        _console.print(line)
+        (_console if ok else _error_console).print(line)
 
     def note(self, text: str) -> None:
         _console.print(Text(f"  {text}", style="dim"))
@@ -495,6 +536,8 @@ class StepTracker:
 
 def _format_elapsed(start: float) -> str:
     seconds = time.monotonic() - start
+    if seconds < 1:
+        return f"{seconds * 1000:.0f}ms"
     if seconds < 60:
         return f"{seconds:.1f}s"
     minutes, secs = divmod(int(seconds), 60)
@@ -511,10 +554,10 @@ def done(text: str, start_time: Optional[float] = None) -> None:
 
 @contextmanager
 def redirect_terminal_to_buffer(buffer):
-    global _console
-    original_console = _console
-    _console = Console(file=buffer, force_terminal=False)
+    global _console, _error_console
+    original_console, original_error_console = _console, _error_console
+    _console = _error_console = Console(file=buffer, force_terminal=False)
     try:
         yield
     finally:
-        _console = original_console
+        _console, _error_console = original_console, original_error_console

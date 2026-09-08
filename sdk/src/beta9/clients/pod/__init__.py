@@ -125,6 +125,7 @@ class PodSandboxUploadFileRequest(betterproto.Message):
     container_path: str = betterproto.string_field(2)
     mode: int = betterproto.int32_field(3)
     data: bytes = betterproto.bytes_field(4)
+    offset: int = betterproto.int64_field(5)
 
 
 @dataclass(eq=False, repr=False)
@@ -137,6 +138,8 @@ class PodSandboxUploadFileResponse(betterproto.Message):
 class PodSandboxDownloadFileRequest(betterproto.Message):
     container_id: str = betterproto.string_field(1)
     container_path: str = betterproto.string_field(2)
+    offset: int = betterproto.int64_field(3)
+    length: int = betterproto.int32_field(4)
 
 
 @dataclass(eq=False, repr=False)

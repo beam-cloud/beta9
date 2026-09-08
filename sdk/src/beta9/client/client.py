@@ -22,6 +22,7 @@ class Client:
         gateway_host: str = "",
         gateway_port: int = 0,
         tls: bool = False,
+        api_url: str = "",
     ) -> None:
         self.token: str = token
         self.gateway_host: str = gateway_host
@@ -37,10 +38,8 @@ class Client:
 
         else:
             settings = get_settings()
-            config_context = get_config_context()
-
             if not self.token:
-                self.token = config_context.token
+                self.token = get_config_context().token
 
             if not gateway_host:
                 self.gateway_host = settings.api_host
@@ -51,7 +50,7 @@ class Client:
         if not self.tls and self.gateway_port == 443:
             self.tls = True
 
-        self.base_url: str = self._get_base_url()
+        self.base_url: str = api_url.rstrip("/") if api_url else self._get_base_url()
         self._load_workspace()
 
     def _load_workspace(self):

@@ -211,6 +211,7 @@ func (es *HttpEndpointService) forwardRequest(
 }
 
 func (es *HttpEndpointService) forwardASGIHealthRequest(ctx echo.Context, stubId string) error {
+	ctx.Response().Header().Set("X-Beta9-Stub-Id", stubId)
 	instance, err := es.getOrCreateEndpointInstance(ctx.Request().Context(), stubId)
 	if err != nil {
 		return err

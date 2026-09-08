@@ -286,7 +286,7 @@ func (gws *GatewayService) AttachToContainer(stream pb.GatewayService_AttachToCo
 	}
 
 	exitCallback := func(exitCode int32) error {
-		output := fmt.Sprintf("\nContainer was stopped.\n\nExit code: %d", exitCode)
+		output := fmt.Sprintf("\nContainer exited with code %d.\n", exitCode)
 		if exitCode != 0 {
 			exitCodeMessage, ok := types.ExitCodeMessages[types.ContainerExitCode(exitCode)]
 			if ok {

@@ -30,54 +30,15 @@ class StdoutJsonContext:
         return False
 
 
-class StdoutJsonInterceptor(io.TextIOBase):
-    def __init__(self, stream=sys.__stdout__, **ctx: Any):
-        self.ctx = ctx
-        self.stream = stream
-        self.previous_stdout = None
-        self.previous_stderr = None
-
-    def __enter__(self):
-        self.previous_stdout = sys.stdout
-        self.previous_stderr = sys.stderr
-        sys.stdout = self
-        sys.stderr = self
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        sys.stdout = self.previous_stdout or sys.__stdout__
-        sys.stderr = self.previous_stderr or sys.__stderr__
-        return False
-
-    def write(self, buf: str):
-        try:
-            for line in buf.splitlines():
-                if line == "":
-                    continue
-
-                log_record = {
-                    "message": f"{line}\n",
-                    **self.ctx,
-                }
-
-                self.stream.write(json.dumps(log_record))
-        except BaseException:
-            self.stream.write(buf)
-
-    def flush(self):
-        return self.stream.flush()
-
-    def fileno(self) -> int:
-        return -1
-
-
 class ContextualStdoutJsonInterceptor(io.TextIOBase):
     def __init__(
         self,
         stream=sys.__stdout__,
         context_getter: Callable[[], Dict[str, Any]] = get_stdout_json_context,
+        source: str = "stdout",
     ):
         self.context_getter = context_getter
+        self.source = source
         self.stream = stream
         self.previous_stdout = None
         self.previous_stderr = None
@@ -86,7 +47,7 @@ class ContextualStdoutJsonInterceptor(io.TextIOBase):
         self.previous_stdout = sys.stdout
         self.previous_stderr = sys.stderr
         sys.stdout = self
-        sys.stderr = self
+        sys.stderr = ContextualStdoutJsonInterceptor(self.stream, self.context_getter, "stderr")
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -103,6 +64,8 @@ class ContextualStdoutJsonInterceptor(io.TextIOBase):
                 log_record = {
                     "message": f"{line}\n",
                     **self.context_getter(),
+                    "beta9_log": True,
+                    "stream": self.source,
                 }
 
                 self.stream.write(json.dumps(log_record))
@@ -114,6 +77,12 @@ class ContextualStdoutJsonInterceptor(io.TextIOBase):
 
     def fileno(self) -> int:
         return -1
+
+
+class StdoutJsonInterceptor(ContextualStdoutJsonInterceptor):
+    def __init__(self, stream=sys.__stdout__, **ctx: Any):
+        self.ctx = ctx
+        super().__init__(stream, lambda: self.ctx)
 
 
 def json_output_interceptor(**ctx: Any):
@@ -134,36 +103,40 @@ def json_output_interceptor(**ctx: Any):
 
 
 class StoredStdoutInterceptor(io.TextIOBase):
+    """Keep command logs, streaming them to stderr when stdout is reserved for JSON."""
+
     def __init__(self, capture_logs: bool = False):
         self.logs = []
         self.capture_logs = capture_logs
 
     def __enter__(self):
         self.logs = []
+        self.previous_stdout = sys.stdout
+        self.stream = sys.stderr if self.capture_logs else sys.stdout
         sys.stdout = self
         return self
 
-    def __exit__(self, *_, **__):
-        sys.stdout = sys.__stdout__
+    def __exit__(self, exc_type, exc_value, traceback):
+        sys.stdout = self.previous_stdout
 
     def write(self, data: str):
         self.logs.append(data)
-        if not self.capture_logs:
-            sys.__stdout__.write(data)
-            sys.__stdout__.flush()
+        self.stream.write(data)
+        self.stream.flush()
+        return len(data)
 
     def flush(self):
-        if not self.capture_logs:
-            sys.__stdout__.flush()
+        if hasattr(self, "stream"):
+            self.stream.flush()
 
     def fileno(self) -> int:
         try:
-            return sys.__stdout__.fileno()
+            return self.stream.fileno()
         except (AttributeError, io.UnsupportedOperation):
             return -1
 
     def isatty(self) -> bool:
-        return sys.__stdout__.isatty()
+        return not self.capture_logs and self.stream.isatty()
 
     def writable(self) -> bool:
         return True

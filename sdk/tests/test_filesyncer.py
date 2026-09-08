@@ -132,7 +132,7 @@ class TestIncrementalSync(TestCase):
 
     def _sync(self, gw):
         syncer = FileSyncer(gateway_stub=gw, root_dir=str(self.root))
-        return syncer.sync(cache_object_id=False)
+        return syncer.sync()
 
     def test_manifest_hash_depends_on_content_path_and_mode(self):
         a = _Manifest({"x": _ManifestEntry(1, 1, "h1", 0o644)})
@@ -153,9 +153,7 @@ class TestIncrementalSync(TestCase):
         gw = _FakeGateway()
         self._sync(gw)
         self.assertEqual(len(gw.created), 1)
-        FileSyncer(gateway_stub=gw, root_dir=str(self.root)).sync(
-            ignore_patterns=["*"], cache_object_id=False
-        )
+        FileSyncer(gateway_stub=gw, root_dir=str(self.root)).sync(ignore_patterns=["*"])
         cache = _SyncCache.load(self.root, [])
         self.assertEqual(cache.object_id, "obj-1")
         self.assertEqual(len(cache.manifest.entries), 6)
@@ -258,7 +256,7 @@ class TestIncrementalSync(TestCase):
         one did not cover."""
         gw = _FakeGateway()
         syncer = FileSyncer(gateway_stub=gw, root_dir=str(self.root))
-        first = syncer.sync(include_patterns=["app/**"], cache_object_id=False)
+        first = syncer.sync(include_patterns=["app/**"])
         self.assertTrue(first.success)
         self.assertEqual(len(gw.created), 1)
         self.assertEqual(self.puts[-1][1], [f"app/f{i}.bin" for i in range(5)])

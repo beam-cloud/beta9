@@ -37,6 +37,10 @@ DEFAULT_ASCII_LOGO = """
 """
 
 
+def _http_url(host: str, port: int) -> str:
+    return f"{'https' if int(port) == 443 else 'http'}://{host}:{port}"
+
+
 @dataclass
 class SDKSettings:
     name: str = DEFAULT_CLI_NAME
@@ -52,6 +56,10 @@ class SDKSettings:
     # "https://platform.beam.cloud/app/{app_id}/overview". Empty when there is
     # no dashboard to link to (plain beta9 installs without one).
     app_url_template: str = os.getenv("BETA9_APP_URL_TEMPLATE", "")
+
+    @property
+    def api_url(self) -> str:
+        return _http_url(self.api_host, self.api_port)
 
     def __post_init__(self, **kwargs):
         config_path = os.getenv("CONFIG_PATH")
@@ -74,7 +82,9 @@ class SDKSettings:
             # at app.<domain> (e.g. app.beam.cloud -> platform.beam.cloud)
             host = self.api_host.split(":")[0]
             if not self.app_url_template and host.startswith("app."):
-                self.app_url_template = f"https://platform.{host[len('app.'):]}/app/{{app_id}}/overview"
+                self.app_url_template = (
+                    f"https://platform.{host[len('app.') :]}/app/{{app_id}}/overview"
+                )
 
 
 @dataclass
@@ -82,6 +92,15 @@ class ConfigContext:
     token: Optional[str] = None
     gateway_host: Optional[str] = None
     gateway_port: Optional[int] = None
+    api_url: Optional[str] = None
+
+    @property
+    def http_url(self) -> str:
+        if self.api_url:
+            return self.api_url.rstrip("/")
+        port = int(self.gateway_port or DEFAULT_GATEWAY_PORT)
+        port = DEFAULT_API_PORT if port == DEFAULT_GATEWAY_PORT else port
+        return _http_url(self.gateway_host, port)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "ConfigContext":
@@ -179,8 +198,15 @@ def get_config_context(name: str = DEFAULT_CONTEXT_NAME) -> ConfigContext:
             token=token,
             gateway_host=gateway_host,
             gateway_port=gateway_port,
+            api_url=settings.api_url
+            if (gateway_host, gateway_port) == (settings.gateway_host, settings.gateway_port)
+            else None,
         )
 
+    if not sys.stdin.isatty():
+        terminal.error(
+            f"Context '{name}' does not exist. Configure it with {settings.name.lower()} config create."
+        )
     terminal.header(f"Context '{name}' does not exist. Let's try setting it up.")
     contexts[name] = prompt_for_config_context(name=name, require_token=True)[1]
     save_config(contexts)
@@ -235,6 +261,9 @@ def prompt_for_config_context(
         token=token,
         gateway_host=gateway_host,
         gateway_port=gateway_port,
+        api_url=settings.api_url
+        if (gateway_host, int(gateway_port)) == (settings.gateway_host, settings.gateway_port)
+        else None,
     )
 
 

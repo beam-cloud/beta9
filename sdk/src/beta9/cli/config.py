@@ -1,4 +1,5 @@
 import json
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
@@ -7,9 +8,9 @@ from rich.style import Style
 from rich.table import Column, Table, box
 
 from .. import terminal
-from ..channel import ServiceClient
+from ..channel import ServiceClient, rpc_timeout
 from ..cli import extraclick
-from ..clients.gateway import ExportWorkspaceConfigRequest
+from ..clients.gateway import AuthorizeRequest, ExportWorkspaceConfigRequest
 from ..config import (
     DEFAULT_CONTEXT_NAME,
     ConfigContext,
@@ -18,7 +19,45 @@ from ..config import (
     prompt_for_config_context,
     save_config,
 )
-from .extraclick import ClickManagementGroup
+from .extraclick import ClickCommonGroup, ClickManagementGroup
+
+
+@click.group(cls=ClickCommonGroup)
+def common(**_):
+    pass
+
+
+@common.command(
+    "doctor", help="Check the selected gateway and authentication without creating resources."
+)
+@click.option("--format", type=click.Choice(("table", "json")), default="table")
+@extraclick.pass_service_client
+def doctor(service: ServiceClient, format: str):
+    with rpc_timeout(10):
+        result = service.gateway.authorize(AuthorizeRequest())
+    try:
+        sdk_version = version("beta9")
+    except PackageNotFoundError:
+        sdk_version = "unknown"
+    details = {
+        "sdk_version": sdk_version,
+        "context": extraclick.selected_context(),
+        "gateway": f"{service._config.gateway_host}:{service._config.gateway_port}",
+        "authenticated": result.ok,
+        "error": result.error_msg,
+    }
+    if not result.ok:
+        if format == "json":
+            terminal.print_json(details)
+        else:
+            terminal.error(result.error_msg, exit=False)
+        raise click.exceptions.Exit(1)
+    if format == "json":
+        terminal.print_json(details)
+    else:
+        terminal.success(
+            f"{details['context']}: {details['gateway']} (SDK {details['sdk_version']})"
+        )
 
 
 def get_setting_callback(ctx: click.Context, param: click.Parameter, value: Any):
@@ -134,7 +173,8 @@ def delete_context(name: str, config_path: Path):
     callback=get_setting_callback,
     help="Path to a config file.",
 )
-def create_context(config_path: Path, **kwargs):
+@click.option("--api-url", help="HTTP API URL when it differs from the gateway host.")
+def create_context(config_path: Path, api_url: str, **kwargs):
     contexts = load_config(config_path)
 
     if name := kwargs.get("name"):
@@ -145,6 +185,8 @@ def create_context(config_path: Path, **kwargs):
 
     # Prompt user for context settings
     name, context = prompt_for_config_context(require_token=True, **kwargs)
+    if api_url is not None:
+        context.api_url = api_url
 
     # Save context to config
     contexts[name] = context

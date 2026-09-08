@@ -1,9 +1,12 @@
 import os
+import time
 from typing import Dict, List, Optional
 
 import click
+import requests
 from betterproto import Casing
 from rich.table import Column, Table, box
+from rich.text import Text
 
 from .. import terminal
 from ..abstractions.image import Image
@@ -12,11 +15,12 @@ from ..abstractions.service import (
     Service,
     resolve_service_ports,
 )
-from ..channel import ServiceClient
+from ..channel import ServiceClient, rpc_timeout
 from ..cli import extraclick
 from ..clients.gateway import (
     DeleteDeploymentRequest,
     DeleteDeploymentResponse,
+    GetUrlRequest,
     ListDeploymentsRequest,
     ListDeploymentsResponse,
     ScaleDeploymentRequest,
@@ -55,17 +59,8 @@ def common(**_):
     epilog="""
       Examples:
 
-        {cli_name} deploy --name my-app app.py:my_func
-
-        {cli_name} deploy --name web --dockerfile Dockerfile
-
-        {cli_name} deploy --name api --dockerfile Dockerfile --pool web-cpu
-
-        {cli_name} deploy --name api --dockerfile Dockerfile --always-on
-
-        {cli_name} deploy --name worker --image ghcr.io/acme/worker:latest --command "npm start"
-
-        {cli_name} deploy --name qwen --dockerfile Dockerfile --port 8000 --llm
+        {cli_name} deploy app.py:handler --name api
+        {cli_name} deploy --dockerfile Dockerfile --name web --port 8000
         \b
     """,
 )
@@ -73,7 +68,7 @@ def common(**_):
     "--name",
     "-n",
     type=click.STRING,
-    help="The name the deployment.",
+    help="Name of the deployment.",
     required=False,
 )
 @click.argument(
@@ -156,6 +151,72 @@ def deploy(
 )
 def management():
     pass
+
+
+@management.command(
+    "wait", help="Wait for an endpoint's exact deployed revision to serve health checks."
+)
+@click.argument("deployment_id")
+@click.option("--timeout", type=click.FloatRange(min=0, min_open=True), default=300)
+@extraclick.pass_service_client
+def wait_deployment(service: ServiceClient, deployment_id: str, timeout: float):
+    start = time.monotonic()
+    deadline = start + timeout
+    with rpc_timeout(timeout):
+        result = service.gateway.list_deployments(
+            ListDeploymentsRequest(
+                filters={"id": StringList([deployment_id])},
+                limit=1,
+            )
+        )
+        if not result.ok or not result.deployments:
+            terminal.error(result.err_msg or f"Deployment {deployment_id} was not found.")
+        deployment = result.deployments[0]
+        if not deployment.active or deployment.stub_type not in (
+            "endpoint/deployment",
+            "asgi/deployment",
+        ):
+            raise click.UsageError(
+                "Readiness checks require an active endpoint or ASGI deployment."
+            )
+        url = service.gateway.get_url(
+            GetUrlRequest(deployment_id=deployment_id, stub_id=deployment.stub_id, url_type="path")
+        )
+        if not url.ok:
+            terminal.error(url.err_msg)
+    last_error = "No healthy response"
+    with requests.Session() as session:
+        session.headers["Authorization"] = f"Bearer {service._config.token}"
+        while (remaining := deadline - time.monotonic()) > 0:
+            try:
+                response = session.get(
+                    url.url.rstrip("/") + "/health",
+                    timeout=min(5, remaining),
+                    allow_redirects=False,
+                )
+                if (
+                    response.status_code == 200
+                    and response.headers.get("X-Beta9-Stub-Id") == deployment.stub_id
+                ):
+                    terminal.print_json(
+                        {
+                            "deployment_id": deployment_id,
+                            "stub_id": deployment.stub_id,
+                            "version": deployment.version,
+                            "status": "ready",
+                            "ready_seconds": time.monotonic() - start,
+                        }
+                    )
+                    return
+                last_error = f"HTTP {response.status_code}; revision {response.headers.get('X-Beta9-Stub-Id', 'unknown')}: {response.text[:200]}"
+                if response.status_code in (401, 403):
+                    break
+            except requests.RequestException as exc:
+                last_error = str(exc)
+            time.sleep(min(0.2, max(0, deadline - time.monotonic())))
+    terminal.error(
+        f"Deployment {deployment_id} did not become ready within {timeout}s: {last_error}"
+    )
 
 
 def _merge_port_options(kwargs: Dict) -> None:
@@ -278,25 +339,6 @@ def _generate_service_module(name: Optional[str], kwargs: Dict) -> Service:
     return Service(**service_kwargs)
 
 
-def _release_deployment_grpc_refs(user_obj) -> None:
-    seen = set()
-
-    def clear(obj) -> None:
-        if obj is None or id(obj) in seen:
-            return
-
-        seen.add(id(obj))
-        attrs = getattr(obj, "__dict__", {})
-        for attr in ("syncer", "_gateway_stub", "_shell_stub", "_stub", "_pod_stub"):
-            if attr in attrs:
-                setattr(obj, attr, None)
-
-        clear(attrs.get("parent"))
-        clear(attrs.get("image"))
-
-    clear(user_obj)
-
-
 @management.command(
     name="create",
     help="Create a new deployment.",
@@ -366,58 +408,54 @@ def create_deployment(
     entrypoint = kwargs["entrypoint"]
 
     logs = []
-    user_obj = None
 
     with StoredStdoutInterceptor(capture_logs=format == "json") as capture_logs:
-        try:
-            if handler:
-                user_obj, module_name, obj_name = load_module_spec(handler, "deploy")
+        if handler:
+            user_obj, module_name, obj_name = load_module_spec(handler, "deploy")
 
-                if hasattr(user_obj, "set_handler"):
-                    user_obj.set_handler(f"{module_name}:{obj_name}")
+            if hasattr(user_obj, "set_handler"):
+                user_obj.set_handler(f"{module_name}:{obj_name}")
 
-            else:
-                try:
-                    _autodetect_dockerfile(kwargs)
-                    if (
-                        entrypoint
-                        or kwargs.get("dockerfile") is not None
-                        or kwargs.get("image") is not None
-                    ):
-                        user_obj = _generate_service_module(name, kwargs)
-                    else:
-                        terminal.error("No handler, entrypoint, image, or Dockerfile specified")
-                        return
-                except (OSError, ValueError) as exc:
-                    terminal.error(f"Invalid service configuration: {exc}")
+        else:
+            try:
+                _autodetect_dockerfile(kwargs)
+                if (
+                    entrypoint
+                    or kwargs.get("dockerfile") is not None
+                    or kwargs.get("image") is not None
+                ):
+                    user_obj = _generate_service_module(name, kwargs)
+                else:
+                    terminal.error("No handler, entrypoint, image, or Dockerfile specified")
                     return
-
-            if not handle_config_override(user_obj, kwargs):
+            except (OSError, ValueError) as exc:
+                terminal.error(f"Invalid service configuration: {exc}")
                 return
 
-            if not _apply_llm_metadata_if_requested(user_obj, kwargs):
-                return
+        if not handle_config_override(user_obj, kwargs):
+            raise click.exceptions.Exit(1)
 
-            if hasattr(user_obj, "generate_deployment_artifacts"):
-                user_obj.generate_deployment_artifacts(**kwargs)
+        if not _apply_llm_metadata_if_requested(user_obj, kwargs):
+            raise click.exceptions.Exit(1)
 
-            response, ok = user_obj.deploy(
-                name=name,
-                context=service._config,
-                rollout=rollout,
-                url_type=url_type,
-            )
-            if not ok:
-                terminal.error("Deployment failed")
-                return
+        if hasattr(user_obj, "generate_deployment_artifacts"):
+            user_obj.generate_deployment_artifacts(**kwargs)
 
-            if hasattr(user_obj, "cleanup_deployment_artifacts"):
-                user_obj.cleanup_deployment_artifacts()
+        response, ok = user_obj.deploy(
+            name=name,
+            context=service._config,
+            rollout=rollout,
+            url_type=url_type,
+        )
+        if not ok:
+            terminal.error("Deployment failed")
+            return
 
-            if capture_logs.capture_logs:
-                logs.extend(capture_logs.logs)
-        finally:
-            _release_deployment_grpc_refs(user_obj)
+        if hasattr(user_obj, "cleanup_deployment_artifacts"):
+            user_obj.cleanup_deployment_artifacts()
+
+        if capture_logs.capture_logs:
+            logs.extend(capture_logs.logs)
 
     if format == "json":
         terminal.print_json(
@@ -426,6 +464,18 @@ def create_deployment(
                 **response,
             }
         )
+    else:
+        cli = extraclick.command_hint()
+        actions = {}
+        if getattr(user_obj, "deployment_stub_type", None) in (
+            "endpoint/deployment",
+            "asgi/deployment",
+        ):
+            actions["Wait"] = f"{cli} deployment wait {response['deployment_id']}"
+        if response.get("stub_id"):
+            actions["Logs"] = f"{cli} logs --stub-id {response['stub_id']}"
+        actions["Stop"] = f"{cli} deployment stop {response['deployment_id']}"
+        terminal.resource("Next steps", actions, show_labels=False)
 
 
 @management.command(
@@ -469,11 +519,13 @@ def create_deployment(
     help="Filters deployments. Add this option for each field you want to filter on.",
 )
 @extraclick.pass_service_client
+@click.option("--details", is_flag=True, help="Include source, workspace, and full deployment IDs.")
 def list_deployments(
     service: ServiceClient,
     limit: int,
     format: str,
     filter: Dict[str, StringList],
+    details: bool,
 ):
     res: ListDeploymentsResponse
     res = service.gateway.list_deployments(ListDeploymentsRequest(filter, limit))
@@ -486,33 +538,44 @@ def list_deployments(
         terminal.print_json(deployments)
         return
 
-    table = Table(
-        Column("ID"),
+    if format == "none":
+        return
+
+    if not res.deployments:
+        terminal.resource(
+            "No deployments",
+            {"Deploy": f"{extraclick.command_hint()} deploy app.py:handler --name api"},
+        )
+        return
+
+    columns = [
         Column("Name"),
-        Column("Active"),
+        Column("State"),
         Column("Version", justify="right"),
-        Column("Created At"),
-        Column("Updated At"),
-        Column("Stub Name"),
-        Column("Workspace Name"),
-        box=box.SIMPLE,
-    )
+        Column("Updated"),
+    ]
+    if details:
+        columns.extend([Column("ID"), Column("Source"), Column("Workspace")])
+    table = Table(*columns, box=box.SIMPLE, header_style="bold cyan")
 
     for deployment in res.deployments:
-        table.add_row(
-            deployment.id,
-            deployment.name,
-            "Yes" if deployment.active else "No",
-            str(deployment.version),
-            terminal.humanize_date(deployment.created_at),
+        row = [
+            Text(deployment.name),
+            "[green]Active[/green]" if deployment.active else "[dim]Stopped[/dim]",
+            f"v{deployment.version}",
             terminal.humanize_date(deployment.updated_at),
-            deployment.stub_name,
-            deployment.workspace_name,
-        )
+        ]
+        if details:
+            row.extend(
+                Text(value)
+                for value in (deployment.id, deployment.stub_name, deployment.workspace_name)
+            )
+        table.add_row(*row)
 
     table.add_section()
-    table.add_row(f"[bold]{len(res.deployments)} items")
+    table.add_row(f"[bold]{len(res.deployments)} total")
     terminal.print(table)
+    terminal.detail("Use --details or --format json for deployment IDs.")
 
 
 @management.command(
@@ -537,15 +600,19 @@ def list_deployments(
 )
 @extraclick.pass_service_client
 def stop_deployments(service: ServiceClient, deployment_ids: List[str]):
+    failed = False
     for id in deployment_ids:
         res: StopDeploymentResponse
         res = service.gateway.stop_deployment(StopDeploymentRequest(id))
 
         if not res.ok:
             terminal.error(res.err_msg, exit=False)
+            failed = True
             continue
 
         terminal.success(f"Stopped deployment: {id}")
+    if failed:
+        raise click.exceptions.Exit(1)
 
 
 @management.command(

@@ -307,16 +307,17 @@ class Pod(RunnerAbstraction, DeployableMixin):
 
         url = ""
         if create_response.ok:
-            terminal.done(f"Container created ===> {create_response.container_id}")
-
-            if self.keep_warm_seconds < 0:
-                terminal.header("This container has no timeout, it will run until it completes.")
-            elif self.keep_warm_seconds == 0:
-                terminal.header("This container will stop as soon as it is idle.")
-            else:
-                terminal.header(
-                    f"This container will timeout after {self.keep_warm_seconds} seconds."
-                )
+            terminal.resource(
+                f"{self.name or 'Container'} · submitted",
+                {
+                    "Container": create_response.container_id,
+                    "Timeout": f"{self.keep_warm_seconds}s"
+                    if self.keep_warm_seconds > 0
+                    else "No timeout"
+                    if self.keep_warm_seconds < 0
+                    else "Stop when idle",
+                },
+            )
 
             url_res = self.print_invocation_snippet()
             url = url_res.url
@@ -421,6 +422,8 @@ class Pod(RunnerAbstraction, DeployableMixin):
 
         return {
             "deployment_id": deploy_response.deployment_id,
+            "stub_id": self.stub_id,
+            "status": "accepted" if deploy_response.ok else "failed",
             "deployment_name": self.name,
             "invoke_url": invoke_url,
             "version": deploy_response.version,

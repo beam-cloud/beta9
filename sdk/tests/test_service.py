@@ -668,7 +668,8 @@ class TestService(TestCase):
         self.assertEqual(service.entrypoint, [])
         self.assertEqual(service.ports, [8080])
         self.assertIn("PORT=8080", service.env)
-        sync_files_mock.assert_called_once_with(str(Path(tmpdir)))
+        self.assertEqual(kwargs["dockerfile"].dockerfile_context_dir, str(Path(tmpdir)))
+        sync_files_mock.assert_not_called()
 
     def test_dockerfile_parser_does_not_sync_during_click_parsing(self):
         with TemporaryDirectory() as tmpdir:
@@ -689,11 +690,12 @@ class TestService(TestCase):
             previous_cwd = os.getcwd()
             try:
                 os.chdir(tmpdir)
-                image_from_dockerfile_option("Dockerfile")
+                image = image_from_dockerfile_option("Dockerfile")
             finally:
                 os.chdir(previous_cwd)
 
-        sync_files_mock.assert_called_once_with(".")
+        self.assertEqual(Path(image.dockerfile_context_dir).resolve(), Path(tmpdir).resolve())
+        sync_files_mock.assert_not_called()
 
     def test_ports_from_dockerfile_ignores_comments_and_protocols(self):
         image = Image()

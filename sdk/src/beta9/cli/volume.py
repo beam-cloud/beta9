@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Iterable, List, Optional, Union
 
 import click
+from betterproto import Casing
 from rich.table import Column, Table, box
 
 from beta9 import multipart
@@ -66,12 +67,17 @@ def common(**_):
     required=True,
 )
 @extraclick.pass_service_client
-def ls(service: ServiceClient, remote_path: str):
+@click.option("--format", type=click.Choice(("table", "json")), default="table")
+def ls(service: ServiceClient, remote_path: str, format: str):
     res: ListPathResponse
     res = service.volume.list_path(ListPathRequest(path=remote_path))
 
     if not res.ok:
         terminal.error(f"{remote_path} ({res.err_msg})")
+
+    if format == "json":
+        terminal.print_json([p.to_dict(casing=Casing.SNAKE) for p in res.path_infos])
+        return
 
     table = Table(
         Column("Name"),
@@ -290,7 +296,7 @@ def cp(
         with StyledProgress() as p:
             multipart.copy(source, destination, service=service.volume, progress=p)
     except (KeyboardInterrupt, EOFError):
-        terminal.warn("\rCancelled")
+        raise click.Abort()
     except Exception as e:
         terminal.error(f"\rFailed: {e}")
     finally:
@@ -393,12 +399,17 @@ def management():
     help="List available volumes.",
 )
 @extraclick.pass_service_client
-def list_volumes(service: ServiceClient):
+@click.option("--format", type=click.Choice(("table", "json")), default="table")
+def list_volumes(service: ServiceClient, format: str):
     res: ListVolumesResponse
     res = service.volume.list_volumes(ListVolumesRequest())
 
     if not res.ok:
         terminal.error(res.err_msg)
+
+    if format == "json":
+        terminal.print_json([v.to_dict(casing=Casing.SNAKE) for v in res.volumes])
+        return
 
     table = Table(
         Column("Name"),
@@ -433,13 +444,17 @@ def list_volumes(service: ServiceClient):
     required=True,
 )
 @extraclick.pass_service_client
-def create_volume(service: ServiceClient, name: str):
+@click.option("--format", type=click.Choice(("table", "json")), default="table")
+def create_volume(service: ServiceClient, name: str, format: str):
     res: GetOrCreateVolumeResponse
     res = service.volume.get_or_create_volume(GetOrCreateVolumeRequest(name=name))
 
     if not res.ok:
-        terminal.print(res.volume)
         terminal.error(res.err_msg)
+
+    if format == "json":
+        terminal.print_json(res.volume.to_dict(casing=Casing.SNAKE))
+        return
 
     table = Table(
         Column("Name"),
@@ -468,18 +483,20 @@ def create_volume(service: ServiceClient, name: str):
     required=True,
 )
 @extraclick.pass_service_client
-def delete_volume(service: ServiceClient, name: str):
-    terminal.warn(
-        "Any apps (functions, endpoints, taskqueue, etc) that\n"
-        "refer to this volume should be updated before it is deleted."
-    )
-
-    if not terminal.confirm("Are you sure?", default=False):
-        return
+@click.option("--yes", "-y", is_flag=True, help="Delete without prompting.")
+@click.option("--format", type=click.Choice(("table", "json")), default="table")
+def delete_volume(service: ServiceClient, name: str, yes: bool, format: str):
+    terminal.warn("Update apps that reference this volume before deleting it.")
+    if not yes:
+        if not terminal.confirm(f"Delete volume {name} and its contents?", default=False):
+            return
 
     res: DeleteVolumeResponse
     res = service.volume.delete_volume(DeleteVolumeRequest(name=name))
 
     if not res.ok:
         terminal.error(res.err_msg, exit=True)
-    terminal.success(f"Deleted volume {name}")
+    if format == "json":
+        terminal.print_json({"name": name, "deleted": True})
+    else:
+        terminal.success(f"Deleted volume {name}")

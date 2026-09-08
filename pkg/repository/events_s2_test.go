@@ -721,11 +721,75 @@ func TestNextTailReadWindow(t *testing.T) {
 	if offset, count := nextTailReadWindow(0, 250, 0); offset != 250 || count != 250 {
 		t.Fatalf("unexpected zero chunk window: got offset=%d count=%d want offset=250 count=250", offset, count)
 	}
-	// A historical end position skips records appended later instead of
-	// spending the 50k scan budget walking backward from the live tail.
-	start := logTailOffsetBeforeSeq(185443, 125443)
-	if offset, count := nextTailReadWindow(start, 185443, 100); start != 60000 || offset != 60100 || count != 100 {
-		t.Fatalf("unexpected positioned window: start=%d offset=%d count=%d", start, offset, count)
+}
+
+func TestReadLogSeqWindowCoversByteCappedBatches(t *testing.T) {
+	// Emulate S2's 1 MiB unary cap: every read returns at most 3 records
+	// regardless of count, so a 10-record window needs several requests.
+	var calls [][2]uint64
+	read := func(_ context.Context, seqNum, count uint64) (*s2.ReadBatch, error) {
+		calls = append(calls, [2]uint64{seqNum, count})
+		batch := &s2.ReadBatch{}
+		for seq := seqNum; seq < seqNum+min(count, 3); seq++ {
+			batch.Records = append(batch.Records, s2.SequencedRecord{SeqNum: seq})
+		}
+		return batch, nil
+	}
+
+	records, err := readLogSeqWindow(context.Background(), read, 100, 110)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(records) != 10 {
+		t.Fatalf("expected the full window of 10 records, got %d", len(records))
+	}
+	for i, record := range records {
+		if record.SeqNum != 100+uint64(i) {
+			t.Fatalf("record %d has seq %d, want %d", i, record.SeqNum, 100+uint64(i))
+		}
+	}
+	want := [][2]uint64{{100, 10}, {103, 7}, {106, 4}, {109, 1}}
+	if len(calls) != len(want) {
+		t.Fatalf("expected %d reads, got %d: %v", len(want), len(calls), calls)
+	}
+	for i := range want {
+		if calls[i] != want[i] {
+			t.Fatalf("read %d requested %v, want %v", i, calls[i], want[i])
+		}
+	}
+}
+
+func TestReadLogSeqWindowStopsAtTrimmedPrefixAndTail(t *testing.T) {
+	// Records below 50 were trimmed: S2 clamps the read forward to the first
+	// retained record, so a request for [40, 60) yields records past 60.
+	read := func(_ context.Context, seqNum, count uint64) (*s2.ReadBatch, error) {
+		batch := &s2.ReadBatch{}
+		for seq := max(seqNum, 50); seq < max(seqNum, 50)+count; seq++ {
+			batch.Records = append(batch.Records, s2.SequencedRecord{SeqNum: seq})
+		}
+		return batch, nil
+	}
+	records, err := readLogSeqWindow(context.Background(), read, 40, 60)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(records) != 10 || records[0].SeqNum != 50 || records[9].SeqNum != 59 {
+		t.Fatalf("expected records 50..59, got %d records (%v)", len(records), records)
+	}
+
+	// An empty batch or a 416 past the tail ends the window without error.
+	empty := func(context.Context, uint64, uint64) (*s2.ReadBatch, error) { return &s2.ReadBatch{}, nil }
+	if records, err := readLogSeqWindow(context.Background(), empty, 0, 5); err != nil || len(records) != 0 {
+		t.Fatalf("expected no records from an empty read, got %d err=%v", len(records), err)
+	}
+	pastTail := func(context.Context, uint64, uint64) (*s2.ReadBatch, error) {
+		return nil, &s2.RangeNotSatisfiableError{S2Error: &s2.S2Error{Status: httpStatusRangeNotSatisfiable, Origin: "server"}}
+	}
+	if records, err := readLogSeqWindow(context.Background(), pastTail, 0, 5); err != nil || len(records) != 0 {
+		t.Fatalf("expected no records from a past-tail read, got %d err=%v", len(records), err)
+	}
+	if records, err := readLogSeqWindow(context.Background(), read, 60, 60); err != nil || len(records) != 0 {
+		t.Fatalf("expected an empty window, got %d err=%v", len(records), err)
 	}
 }
 
@@ -1811,15 +1875,22 @@ func TestS2EndPositionPastTailFallsBackToLiveTail(t *testing.T) {
 		Status: httpStatusRangeNotSatisfiable,
 		Origin: "server",
 	}}
-	offset, positionErr := logEndPositionTailOffset(100, nil, err)
-	if positionErr != nil || offset != 0 {
-		t.Fatalf("expected live-tail fallback, got offset=%d err=%v", offset, positionErr)
+	end, positionErr := logEndPositionSeq(100, nil, err)
+	if positionErr != nil || end != 100 {
+		t.Fatalf("expected live-tail fallback, got end=%d err=%v", end, positionErr)
+	}
+
+	// A clamped read that lands on the tail (nothing past the end time yet)
+	// returns no records and also scans from the live tail.
+	end, positionErr = logEndPositionSeq(100, &s2.ReadBatch{}, nil)
+	if positionErr != nil || end != 100 {
+		t.Fatalf("expected live-tail fallback for empty batch, got end=%d err=%v", end, positionErr)
 	}
 
 	batch := &s2.ReadBatch{Records: []s2.SequencedRecord{{SeqNum: 40}}}
-	offset, positionErr = logEndPositionTailOffset(100, batch, nil)
-	if positionErr != nil || offset != 60 {
-		t.Fatalf("expected historical offset 60, got offset=%d err=%v", offset, positionErr)
+	end, positionErr = logEndPositionSeq(100, batch, nil)
+	if positionErr != nil || end != 40 {
+		t.Fatalf("expected historical end position 40, got end=%d err=%v", end, positionErr)
 	}
 }
 

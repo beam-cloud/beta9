@@ -251,6 +251,7 @@ message PodSandboxUploadFileRequest {
   string container_path = 2;
   int32 mode = 3;
   bytes data = 4;
+  int64 offset = 5; // Zero starts a new file; nonzero offsets overwrite a chunk.
 }
 
 message PodSandboxUploadFileResponse {
@@ -261,6 +262,8 @@ message PodSandboxUploadFileResponse {
 message PodSandboxDownloadFileRequest {
   string container_id = 1;
   string container_path = 2;
+  int64 offset = 3;
+  int32 length = 4; // Zero preserves the legacy whole-file download.
 }
 
 message PodSandboxDownloadFileResponse {
