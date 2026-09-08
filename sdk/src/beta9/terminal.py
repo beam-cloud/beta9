@@ -4,7 +4,6 @@ import sys
 import threading
 import time
 from contextlib import contextmanager
-from contextvars import ContextVar
 from dataclasses import dataclass
 from io import BytesIO
 from os import PathLike
@@ -48,14 +47,10 @@ _error_console = Console(stderr=True)
 _current_status = None
 _status_lock = threading.Lock()
 _status_count = 0
-_step_depth = ContextVar("beta9_step_depth", default=0)
 
 
 def header(text: str, subtext: str = "") -> None:
-    if _step_depth.get():
-        debug(text)
-        return
-    line = Text("◆ ", style=BRAND_COLOR).append(text, style="bold")
+    line = Text(f"◆ {text}", style=f"bold {BRAND_COLOR}")
     if subtext:
         line.append(f"  {subtext}", style="dim")
     _console.print(line)
@@ -138,7 +133,11 @@ def progress(task_name: str) -> Generator[rich.status.Status, None, None]:
 
     with _status_lock:
         if _current_status is None:
-            _current_status = _console.status(task_name, spinner="dots", spinner_style="white")
+            _current_status = _console.status(
+                Text(task_name, style=f"bold {BRAND_COLOR}"),
+                spinner="dots",
+                spinner_style=BRAND_COLOR,
+            )
             if not _console.is_terminal or _console.is_dumb_terminal:
                 _console.print(Text(f"{task_name}...", style="dim"))
             _current_status.start()
@@ -158,7 +157,7 @@ def update_progress(text: str) -> None:
     """Update the text of the currently active progress spinner, if any."""
     with _status_lock:
         if _current_status is not None:
-            _current_status.update(text)
+            _current_status.update(Text(text, style=f"bold {BRAND_COLOR}"))
 
 
 def progress_open(file: Union[str, PathLike, bytes], mode: str, **kwargs: Any) -> BytesIO:
@@ -497,7 +496,7 @@ class Step:
 
 
 class StepTracker:
-    """One transient status and one timed result per step; nested headings are diagnostic."""
+    """One transient status and one timed result per step."""
 
     def __init__(self, title: str = ""):
         self._started_at = time.monotonic()
@@ -508,7 +507,6 @@ class StepTracker:
     def step(self, name: str, done_name: str = ""):
         start = time.monotonic()
         handle = Step()
-        token = _step_depth.set(_step_depth.get() + 1)
         try:
             with progress(name):
                 yield handle
@@ -516,7 +514,6 @@ class StepTracker:
             handle.ok = False
             raise
         finally:
-            _step_depth.reset(token)
             self._finish(name, done_name, start, ok=handle.ok)
 
     def _finish(self, name: str, done_name: str, start: float, ok: bool) -> None:

@@ -617,7 +617,7 @@ class Image(BaseAbstraction):
 
         cache_key = self._cache_key()
         if cached_result := self._cached_build_result(cache_key):
-            terminal.detail(f"Using cached image {cached_result.image_id}", dim=False)
+            terminal.header("Using cached image", cached_result.image_id)
             self.image_id = cached_result.image_id
             self.python_version = cached_result.python_version
             return cached_result
@@ -625,7 +625,7 @@ class Image(BaseAbstraction):
         terminal.detail("Checking image cache...", dim=False)
         exists, exists_response = self._exists()
         if exists:
-            terminal.detail(f"Using cached image {exists_response.image_id}", dim=False)
+            terminal.header("Using cached image", exists_response.image_id)
             result = ImageBuildResult(
                 success=True,
                 image_id=exists_response.image_id,
@@ -640,6 +640,7 @@ class Image(BaseAbstraction):
             )
 
         with sdk_timing("image.build_stream"):
+            terminal.header("Building image")
             with terminal.progress("Building image"):
                 last_response = BuildImageResponse(success=False)
                 output = ""
@@ -674,7 +675,6 @@ class Image(BaseAbstraction):
                 success=False, error=output.rstrip() or "Build ended without a result"
             )
 
-        terminal.header("Image built")
         result = ImageBuildResult(
             success=True,
             image_id=last_response.image_id,
