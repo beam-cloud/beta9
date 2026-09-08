@@ -49,7 +49,9 @@ class Container(BaseAbstraction):
         Attach to a running container and stream messages back and forth. Also, optionally sync a directory to the container workspace.
         """
 
-        terminal.header(f"Connecting to {container_id}...")
+        terminal.debug(f"Connecting to {container_id}")
+        if not hide_logs:
+            terminal.header("Logs")
 
         stopped = Event()
 

@@ -172,20 +172,17 @@ class FileSyncer:
         self,
         ignore_patterns: List[str] = [],
         include_patterns: List[str] = [],
-        cache_object_id: bool = True,
     ) -> FileSyncResult:
         with _sync_lock:
             return self._sync(
                 ignore_patterns=ignore_patterns,
                 include_patterns=include_patterns,
-                cache_object_id=cache_object_id,
             )
 
     def _sync(
         self,
         ignore_patterns: List[str] = [],
         include_patterns: List[str] = [],
-        cache_object_id: bool = True,
     ) -> FileSyncResult:
         terminal.header("Syncing files")
 

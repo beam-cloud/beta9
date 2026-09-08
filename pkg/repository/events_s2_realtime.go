@@ -723,7 +723,11 @@ func (r *S2EventRepository) readLogStreamPage(ctx context.Context, streamName s2
 		return total, []types.LogRecord{}, nil
 	}
 
-	scannedFromTail := uint64(0)
+	// Exclusive upper bound of the region still to scan. The scan walks
+	// backwards over absolute sequence windows: tail-relative offsets drift
+	// while a live stream keeps appending mid-scan, so windows would overlap
+	// and re-read records.
+	nextSeq := tail.Tail.SeqNum
 	if query.EndTime != nil {
 		endTimestamp := uint64(query.EndTime.UTC().UnixMilli())
 		count, clamp := uint64(1), true
@@ -731,7 +735,7 @@ func (r *S2EventRepository) readLogStreamPage(ctx context.Context, streamName s2
 		if isS2StreamNotFound(err) {
 			return 0, nil, nil
 		}
-		scannedFromTail, err = logEndPositionTailOffset(tail.Tail.SeqNum, batch, err)
+		nextSeq, err = logEndPositionSeq(tail.Tail.SeqNum, batch, err)
 		if err != nil {
 			return 0, nil, fmt.Errorf("position s2 log stream %q at end time: %w", streamName, err)
 		}
@@ -747,33 +751,30 @@ func (r *S2EventRepository) readLogStreamPage(ctx context.Context, streamName s2
 		chunkSize = maxS2LogReadLimit
 	}
 
+	stream := r.basin.Stream(streamName)
+	read := func(ctx context.Context, seqNum, count uint64) (*s2.ReadBatch, error) {
+		return stream.Read(ctx, &s2.ReadOptions{SeqNum: &seqNum, Count: &count})
+	}
+
 	matchesNewestFirst := make([]types.LogRecord, 0, targetMatches)
 	recordsScanned := uint64(0)
 	exhausted := false
-	for scannedFromTail < tail.Tail.SeqNum && recordsScanned < s2ReadScanLimit {
-		tailOffset, count := nextTailReadWindow(scannedFromTail, tail.Tail.SeqNum, chunkSize)
-		tailOffsetValue := int64(tailOffset)
-		batch, err := r.basin.Stream(streamName).Read(ctx, &s2.ReadOptions{
-			TailOffset: &tailOffsetValue,
-			Count:      &count,
-		})
+	for nextSeq > 0 && recordsScanned < s2ReadScanLimit {
+		windowStart := uint64(0)
+		if nextSeq > chunkSize {
+			windowStart = nextSeq - chunkSize
+		}
+		window, err := readLogSeqWindow(ctx, read, windowStart, nextSeq)
 		if err != nil {
-			if isS2ReadEmpty(err) {
-				break
-			}
 			return 0, nil, fmt.Errorf("read logs from s2 stream %q: %w", streamName, err)
 		}
-		if len(batch.Records) == 0 {
-			break
-		}
-		recordsScanned += uint64(len(batch.Records))
-		scannedFromTail = tailOffset
+		recordsScanned += uint64(len(window))
 
-		for i := len(batch.Records) - 1; i >= 0; i-- {
-			if logRecordHeadersSkip(batch.Records[i], query) {
+		for i := len(window) - 1; i >= 0; i-- {
+			if logRecordHeadersSkip(window[i], query) {
 				continue
 			}
-			logRecord, ok := logRecordFromS2(batch.Records[i])
+			logRecord, ok := logRecordFromS2(window[i])
 			if !ok || !logRecordMatchesQuery(logRecord, query) {
 				continue
 			}
@@ -782,10 +783,14 @@ func (r *S2EventRepository) readLogStreamPage(ctx context.Context, streamName s2
 				break
 			}
 		}
-		exhausted = uint64(len(batch.Records)) < count || scannedFromTail == tail.Tail.SeqNum
-		if query.StartTime != nil && batch.Records[0].Timestamp < uint64(query.StartTime.UTC().UnixMilli()) {
+		// Nothing older remains once the window reaches the first sequence
+		// number, or when the records below it have been trimmed (S2 clamps
+		// the read forward past a trimmed prefix, so the window starts late).
+		exhausted = windowStart == 0 || len(window) == 0 || window[0].SeqNum > windowStart
+		if query.StartTime != nil && len(window) > 0 && window[0].Timestamp < uint64(query.StartTime.UTC().UnixMilli()) {
 			exhausted = true
 		}
+		nextSeq = windowStart
 		if len(matchesNewestFirst) >= targetMatches || exhausted {
 			break
 		}
@@ -809,23 +814,60 @@ func (r *S2EventRepository) readLogStreamPage(ctx context.Context, streamName s2
 	return filteredTotal, logs, nil
 }
 
-func logTailOffsetBeforeSeq(tailSeqNum, endSeqNum uint64) uint64 {
-	if endSeqNum >= tailSeqNum {
-		return 0
-	}
-	return tailSeqNum - endSeqNum
-}
-
-func logEndPositionTailOffset(tailSeqNum uint64, batch *s2.ReadBatch, err error) (uint64, error) {
+// logEndPositionSeq resolves the exclusive sequence number bound for a scan
+// ending at a timestamp, given the read positioned at that timestamp: the
+// first record at or past the end time is where the backwards scan starts.
+func logEndPositionSeq(tailSeqNum uint64, batch *s2.ReadBatch, err error) (uint64, error) {
 	// S2 returns 416 when the requested timestamp is newer than the stream
 	// tail. Scanning from the live tail is already the correct end position.
 	if isS2RangeNotSatisfiable(err) {
-		return 0, nil
+		return tailSeqNum, nil
 	}
 	if err != nil || batch == nil || len(batch.Records) == 0 {
-		return 0, err
+		return tailSeqNum, err
 	}
-	return logTailOffsetBeforeSeq(tailSeqNum, batch.Records[0].SeqNum), nil
+	return min(tailSeqNum, batch.Records[0].SeqNum), nil
+}
+
+// s2SeqReader reads up to count records starting at seqNum.
+type s2SeqReader func(ctx context.Context, seqNum, count uint64) (*s2.ReadBatch, error)
+
+// readLogSeqWindow returns every record with a sequence number in [lo, hi),
+// oldest first. A unary S2 read is capped at 1 MiB as well as by count, so a
+// window of long lines can take several requests to cover; taking the first
+// short batch as the whole window silently dropped its newest records and
+// made the scan believe it had reached the start of the stream.
+func readLogSeqWindow(ctx context.Context, read s2SeqReader, lo, hi uint64) ([]s2.SequencedRecord, error) {
+	if hi <= lo {
+		return nil, nil
+	}
+	records := make([]s2.SequencedRecord, 0, hi-lo)
+	for cursor := lo; cursor < hi; {
+		batch, err := read(ctx, cursor, hi-cursor)
+		if err != nil {
+			if isS2ReadEmpty(err) {
+				break
+			}
+			return nil, err
+		}
+		if len(batch.Records) == 0 {
+			break
+		}
+		for _, record := range batch.Records {
+			// A read below a trimmed prefix is clamped forward and can run
+			// past the window.
+			if record.SeqNum >= hi {
+				break
+			}
+			records = append(records, record)
+		}
+		last := batch.Records[len(batch.Records)-1].SeqNum
+		if last < cursor || last+1 >= hi {
+			break
+		}
+		cursor = last + 1
+	}
+	return records, nil
 }
 
 // nextTailReadWindow returns the next tail offset and record count for scanning

@@ -20,6 +20,8 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type FunctionService interface {
@@ -127,6 +129,9 @@ func (fs *ContainerFunctionService) invoke(ctx context.Context, authInfo *auth.A
 	stub, err := fs.backendRepo.GetStubByExternalId(ctx, stubId)
 	if err != nil {
 		return nil, err
+	}
+	if stub == nil {
+		return nil, status.Error(codes.NotFound, "Function not found")
 	}
 
 	stubConfig := types.StubConfigV1{}

@@ -486,9 +486,10 @@ def create_volume(service: ServiceClient, name: str, format: str):
 @click.option("--yes", "-y", is_flag=True, help="Delete without prompting.")
 @click.option("--format", type=click.Choice(("table", "json")), default="table")
 def delete_volume(service: ServiceClient, name: str, yes: bool, format: str):
+    terminal.warn("Update apps that reference this volume before deleting it.")
     if not yes:
         if not terminal.confirm(f"Delete volume {name} and its contents?", default=False):
-            raise click.Abort()
+            return
 
     res: DeleteVolumeResponse
     res = service.volume.delete_volume(DeleteVolumeRequest(name=name))

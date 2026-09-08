@@ -24,7 +24,9 @@ const (
 
 type ContainerLogMessage struct {
 	// Only SDK envelopes carry beta9_log; arbitrary JSON belongs to the user.
-	Internal    bool                        `json:"beta9_log"`
+	Internal bool `json:"beta9_log"`
+	// SDK stdout and stderr envelopes share the same transport.
+	Stream      string                      `json:"stream"`
 	Level       string                      `json:"level"`
 	Message     string                      `json:"message"`
 	TaskID      *string                     `json:"task_id"`
@@ -85,9 +87,9 @@ func (r *ContainerLogger) CaptureLogs(request *types.ContainerRequest, logChan c
 		return errors.New("container not found")
 	}
 	defer instance.LogBuffer.Close()
-	pushLogLine := func(taskID string, line string) {
+	pushLogLine := func(taskID, stream, line string) {
 		if r.eventRepo != nil {
-			r.eventRepo.PushContainerRequestLogLine(r.workerID, request, taskID, types.EventLogStreamStdout, line)
+			r.eventRepo.PushContainerRequestLogLine(r.workerID, request, taskID, stream, line)
 		}
 	}
 	eventsEnabled := r.eventRepo != nil
@@ -111,7 +113,7 @@ func (r *ContainerLogger) CaptureLogs(request *types.ContainerRequest, logChan c
 					r.eventRepo.PushContainerLogDropped(r.workerID, request, types.EventMessageLogBufferDroppedRateLimit, "")
 				}
 				for _, line := range strings.Split(rateLimitMsg, "\n") {
-					pushLogLine("", line)
+					pushLogLine("", "system", line)
 				}
 				if !firstByteRecorded {
 					firstByteRecorded = true
@@ -127,12 +129,23 @@ func (r *ContainerLogger) CaptureLogs(request *types.ContainerRequest, logChan c
 		rateLimitMessageLogged = false
 
 		for remaining := o.Message; remaining != ""; {
+			stream, _ := o.Attrs["stream"].(string)
+			if stream == "" {
+				stream = "system"
+			}
 			msg := ContainerLogMessage{Message: remaining}
 			var envelope ContainerLogMessage
 			dec := json.NewDecoder(strings.NewReader(remaining))
 			if err := dec.Decode(&envelope); err == nil && ((envelope.Internal && envelope.Message != "") || envelope.RunnerEvent != nil) {
 				msg = envelope
+				if msg.Stream == "stdout" || msg.Stream == "stderr" {
+					stream = msg.Stream
+				}
 				remaining = remaining[dec.InputOffset():]
+				// Discard trailing envelope whitespace while preserving raw user output.
+				if strings.TrimSpace(remaining) == "" {
+					remaining = ""
+				}
 			} else {
 				// JSON printed by user code is output, not a runner envelope.
 				remaining = ""
@@ -159,7 +172,7 @@ func (r *ContainerLogger) CaptureLogs(request *types.ContainerRequest, logChan c
 					r.eventRepo.PushContainerLogDropped(r.workerID, request, types.EventMessageLogBufferDroppedMessage, stringPtrValue(msg.TaskID))
 				}
 				for _, line := range strings.Split(msg.Message, "\n") {
-					pushLogLine(stringPtrValue(msg.TaskID), line)
+					pushLogLine(stringPtrValue(msg.TaskID), stream, line)
 				}
 				if !firstByteRecorded {
 					firstByteRecorded = true

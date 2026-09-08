@@ -1274,8 +1274,10 @@ func (s *ContainerRuntimeServer) ContainerSandboxUploadFile(ctx context.Context,
 			common.ShellQuote(containerPath),
 		)
 		if in.Offset > 0 {
-			cmd = fmt.Sprintf("dd if=%s of=%s bs=1M seek=%d oflag=seek_bytes conv=notrunc status=none && rm %s",
-				common.ShellQuote(tempContainerPath), common.ShellQuote(containerPath), in.Offset, common.ShellQuote(tempContainerPath))
+			cmd = fmt.Sprintf("mkdir -p %s && dd if=%s of=%s bs=1M seek=%d oflag=seek_bytes conv=notrunc status=none && chmod %o %s && rm %s",
+				common.ShellQuote(filepath.Dir(containerPath)),
+				common.ShellQuote(tempContainerPath), common.ShellQuote(containerPath), in.Offset,
+				in.Mode, common.ShellQuote(containerPath), common.ShellQuote(tempContainerPath))
 		}
 
 		if resp, err := s.ContainerExec(ctx, &pb.ContainerExecRequest{

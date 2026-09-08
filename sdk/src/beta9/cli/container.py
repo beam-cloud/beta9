@@ -1,10 +1,12 @@
 import datetime
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextvars import copy_context
 from typing import List, Optional
 
 import click
+import grpc
 from betterproto import Casing
 from rich.table import Column, Table, box
 
@@ -21,6 +23,7 @@ from ..clients.gateway import (
     StopContainerResponse,
 )
 from ..logging import StoredStdoutInterceptor
+from ..exceptions import SandboxConnectionError, SandboxProcessError
 from .extraclick import ClickCommonGroup, ClickManagementGroup
 
 
@@ -69,8 +72,14 @@ def create_container(service, image_id, name, cpu, memory, ttl, pool, format):
             }
         )
     else:
-        terminal.detail(
-            f"  exec: {extraclick.command_hint()} container exec {sandbox.container_id} -- COMMAND"
+        cli = extraclick.command_hint()
+        terminal.resource(
+            "Next steps",
+            {
+                "Exec": f"{cli} container exec {sandbox.container_id} -- COMMAND",
+                "Stop": f"{cli} container stop {sandbox.container_id}",
+            },
+            show_labels=False,
         )
 
 
@@ -90,31 +99,59 @@ def create_container(service, image_id, name, cpu, memory, ttl, pool, format):
 def exec_container(service, container_id, command, cwd, timeout):
     process = None
     deadline = time.monotonic() + timeout
+    timed_out = False
     try:
-        with rpc_timeout(timeout):
-            sandbox = Sandbox().connect(container_id)
-            process = sandbox.process.exec(
-                *command, cwd=cwd, stdin=None if sys.stdin.isatty() else sys.stdin.buffer
-            )
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                outputs = [
-                    executor.submit(_copy_output, stream, target, deadline)
-                    for stream, target in (
-                        (process.stdout, sys.stdout),
-                        (process.stderr, sys.stderr),
-                    )
-                ]
-                exit_code = process.wait(timeout)
-                for output in outputs:
-                    output.result()
-        raise click.exceptions.Exit(exit_code)
-    finally:
-        if process is not None and process.exit_code < 0:
+        with ThreadPoolExecutor(max_workers=3) as executor:
             try:
-                with rpc_timeout(3):
-                    process.kill()
-            except Exception as exc:
-                terminal.warn(f"Unable to cancel process {process.pid}: {exc}")
+                with rpc_timeout(timeout):
+                    sandbox = _connect_sandbox(container_id, timeout)
+                    process = sandbox.process.exec(
+                        *command, cwd=cwd, stdin=None if sys.stdin.isatty() else sys.stdin.buffer
+                    )
+                    outputs = [
+                        executor.submit(_copy_output, stream, target, deadline)
+                        for stream, target in (
+                            (process.stdout, sys.stdout),
+                            (process.stderr, sys.stderr),
+                        )
+                    ]
+                    result = executor.submit(
+                        copy_context().run, process.wait, max(0, deadline - time.monotonic())
+                    )
+                    for completed in as_completed([*outputs, result]):
+                        completed.result()
+                    exit_code = result.result()
+            except BaseException:
+                timed_out = time.monotonic() >= deadline
+                try:
+                    if process is not None and process.exit_code < 0:
+                        with rpc_timeout(3):
+                            process.kill()
+                except Exception as exc:
+                    terminal.warn(f"Unable to cancel process {process.pid}: {exc}")
+                finally:
+                    service.close()
+                raise
+        raise click.exceptions.Exit(exit_code)
+    except (
+        SandboxConnectionError,
+        SandboxProcessError,
+        OSError,
+        UnicodeError,
+        grpc.RpcError,
+    ) as exc:
+        if timed_out and isinstance(
+            exc, (SandboxConnectionError, SandboxProcessError, grpc.RpcError)
+        ):
+            terminal.error(f"Command timed out after {timeout:g}s")
+        if isinstance(exc, grpc.RpcError):
+            raise
+        terminal.error(str(exc))
+
+
+def _connect_sandbox(container_id, timeout):
+    with rpc_timeout(timeout):
+        return Sandbox().connect(container_id)
 
 
 def _copy_output(stream, target, deadline):
@@ -134,8 +171,7 @@ def copy_container_file(service, source, destination):
     download = ":" in source
     remote, local = (source, destination) if download else (destination, source)
     container_id, remote_path = remote.split(":", 1)
-    with rpc_timeout(30):
-        sandbox = Sandbox().connect(container_id)
+    sandbox = _connect_sandbox(container_id, 30)
     if download:
         sandbox.fs.download_file(remote_path, local)
     else:
@@ -179,7 +215,7 @@ def _format_uptime(started_at: Optional[datetime.datetime], now: datetime.dateti
 @click.option(
     "--columns",
     type=click.STRING,
-    default="container_id,status,stub_id,scheduled_at,deployment_id,uptime",
+    default="container_id,status,uptime",
     help="""
       Specify columns to display.
       Available columns: container_id, status, stub_id, scheduled_at, deployment_id, uptime
@@ -227,23 +263,23 @@ def list_containers(
     if machine_id:
         user_requested_columns.add("machine_id")
 
-    # If admin columns are present on every container, include them.
-    add_admin_columns = all(c.worker_id for c in res.containers)
-    if add_admin_columns:
-        user_requested_columns.update(["worker_id", "machine_id"])
-
     # Build the ordered list of columns based on the ordering of AVAILABLE_LIST_COLUMNS
     ordered_columns = [
         col for col in AVAILABLE_LIST_COLUMNS.keys() if col in user_requested_columns
     ]
 
-    table_cols = [Column(AVAILABLE_LIST_COLUMNS[col]) for col in ordered_columns]
+    table_cols = [
+        Column(AVAILABLE_LIST_COLUMNS[col], no_wrap=True, overflow="ellipsis")
+        for col in ordered_columns
+    ]
 
     if len(res.containers) == 0:
-        terminal.print("No containers found.")
+        terminal.resource(
+            "No running containers", {"Create": f"{extraclick.command_hint()} container create"}
+        )
         return
 
-    table = Table(*table_cols, box=box.SIMPLE)
+    table = Table(*table_cols, box=box.SIMPLE, header_style="bold cyan")
     for container in res.containers:
         row = []
         for col in ordered_columns:
@@ -257,8 +293,9 @@ def list_containers(
         table.add_row(*row)
 
     table.add_section()
-    table.add_row(f"[bold]{len(res.containers)} items")
+    table.add_row(f"[bold]{len(res.containers)} total")
     terminal.print(table)
+    terminal.detail("Use --format json for full IDs and resource details.")
 
 
 @management.command(

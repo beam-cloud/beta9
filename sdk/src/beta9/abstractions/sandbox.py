@@ -2,15 +2,15 @@ import asyncio
 import hashlib
 import io
 import os
-import re
 import shlex
 import time
 import uuid
 from dataclasses import dataclass, field
 from typing import BinaryIO, Callable, Dict, List, Optional, Set, Tuple, Union
 
+import grpc
+
 from .. import terminal
-from ..channel import rpc_timeout
 from ..abstractions.base import set_channel, unset_channel
 from ..abstractions.base.runner import (
     RUNTIME_PREPARE_FAILED_MSG,
@@ -20,6 +20,7 @@ from ..abstractions.base.runner import (
 from ..abstractions.image import Image
 from ..abstractions.pod import Pod
 from ..abstractions.volume import CloudBucket, Volume
+from ..channel import rpc_timeout
 from ..clients.gateway import GatewayServiceStub, StopContainerRequest, StopContainerResponse
 from ..clients.pod import (
     CreatePodRequest,
@@ -360,14 +361,15 @@ class Sandbox(Pod):
 
         self.stub_id = create_response.stub_id
 
-        terminal.header(f"Sandbox created successfully ===> {create_response.container_id}")
-
-        if self.keep_warm_seconds < 0:
-            terminal.header(
-                "This sandbox has no timeout, it will run until it is shut down manually."
-            )
-        else:
-            terminal.header(f"This sandbox will timeout after {self.keep_warm_seconds} seconds.")
+        terminal.resource(
+            f"{self.name or 'Sandbox'} · submitted",
+            {
+                "Container": create_response.container_id,
+                "Timeout": f"{self.keep_warm_seconds}s"
+                if self.keep_warm_seconds >= 0
+                else "No timeout",
+            },
+        )
 
         return SandboxInstance(
             stub_id=self.stub_id,
@@ -417,14 +419,15 @@ class Sandbox(Pod):
         if not create_response.ok:
             raise SandboxConnectionError(create_response.error_msg)
 
-        terminal.header(f"Sandbox created successfully ===> {create_response.container_id}")
-
-        if self.keep_warm_seconds < 0:
-            terminal.header(
-                "This sandbox has no timeout, it will run until it is shut down manually."
-            )
-        else:
-            terminal.header(f"This sandbox will timeout after {self.keep_warm_seconds} seconds.")
+        terminal.resource(
+            f"{self.name or 'Sandbox'} · submitted",
+            {
+                "Container": create_response.container_id,
+                "Timeout": f"{self.keep_warm_seconds}s"
+                if self.keep_warm_seconds >= 0
+                else "No timeout",
+            },
+        )
 
         return SandboxInstance(
             stub_id=self.stub_id,
@@ -1859,13 +1862,13 @@ class SandboxFileSystem:
         self.write_bytes(sandbox_path, text.encode(encoding), mode=mode)
 
     def _upload(self, sandbox_path, source, mode):
-        # Large uploads are staged beside the destination, checked, then renamed.
+        # Uploads are staged beside the destination, checked, then renamed.
         # Failed transfers leave the previous destination intact and remove the staging file.
         chunk_size = 4 * 1024 * 1024
         chunk = source.read(chunk_size)
         pending = source.read(chunk_size)
-        staged = bool(pending)
-        target = f"{sandbox_path}.beta9-{uuid.uuid4().hex}" if staged else sandbox_path
+        staged = True
+        target = f"{sandbox_path}.beta9-{uuid.uuid4().hex}"
         offset = 0
         digest = hashlib.sha256()
         try:
@@ -1892,27 +1895,26 @@ class SandboxFileSystem:
                 if not pending:
                     break
                 chunk, pending = pending, source.read(chunk_size)
-            if staged:
-                with rpc_timeout(30):
-                    process = self.sandbox_instance.process.exec("sha256sum", "--", target)
-                    if process.wait(30) != 0 or process.stdout.read().split()[:1] != [
-                        digest.hexdigest()
-                    ]:
-                        raise SandboxFileSystemError(
-                            "Upload checksum mismatch",
-                            "upload_file",
-                            sandbox_path,
-                            self.sandbox_instance.container_id,
-                        )
-                    process = self.sandbox_instance.process.exec("mv", "--", target, sandbox_path)
-                    if process.wait(30) != 0:
-                        raise SandboxFileSystemError(
-                            process.stderr.read(),
-                            "upload_file",
-                            sandbox_path,
-                            self.sandbox_instance.container_id,
-                        )
-                staged = False
+            with rpc_timeout(30):
+                process = self.sandbox_instance.process.exec("sha256sum", "--", target)
+                if process.wait(30) != 0 or process.stdout.read().split()[:1] != [
+                    digest.hexdigest()
+                ]:
+                    raise SandboxFileSystemError(
+                        "Upload checksum mismatch",
+                        "upload_file",
+                        sandbox_path,
+                        self.sandbox_instance.container_id,
+                    )
+                process = self.sandbox_instance.process.exec("mv", "--", target, sandbox_path)
+                if process.wait(30) != 0:
+                    raise SandboxFileSystemError(
+                        process.stderr.read(),
+                        "upload_file",
+                        sandbox_path,
+                        self.sandbox_instance.container_id,
+                    )
+            staged = False
         finally:
             if staged:
                 try:
@@ -2062,6 +2064,10 @@ class SandboxFileSystem:
             except SandboxFileSystemError as exc:
                 if "no such file or directory" not in exc.message.lower():
                     raise
+            except grpc.RpcError as exc:
+                if exc.code() != grpc.StatusCode.DEADLINE_EXCEEDED or time.monotonic() < deadline:
+                    raise
+                break
             time.sleep(min(0.1, max(0, deadline - time.monotonic())))
         raise TimeoutError(
             f"{sandbox_path} was not visible within {timeout}s in {self.sandbox_instance.container_id}"
@@ -2251,11 +2257,17 @@ class SandboxFileSystem:
             fs.replace_in_files("/app", "1.0.0", "1.1.0")
             ```
         """
+        # Match Go's regexp.QuoteMeta: control characters remain literal.
+        pattern = (
+            old_string
+            if regex
+            else "".join(f"\\{char}" if char in r"\.+*?()|[]{}^$" else char for char in old_string)
+        )
         response = self.sandbox_instance.stub.sandbox_replace_in_files(
             PodSandboxReplaceInFilesRequest(
                 container_id=self.sandbox_instance.container_id,
                 container_path=sandbox_path,
-                pattern=old_string if regex else re.escape(old_string),
+                pattern=pattern,
                 new_string=new_string if regex else new_string.replace("$", "$$"),
             )
         )

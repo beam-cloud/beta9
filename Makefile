@@ -4,6 +4,7 @@ workerTag := latest
 workerPlatform := linux/$(shell uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/')
 runnerTag := latest
 runnerPlatform := linux/$(shell uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/')
+runnerVersions ?= 3.12 3.11 3.10 3.9 3.8
 BENCH_SDK_PYTHON ?= uv run --project ./sdk --no-sync python
 CACHE_BENCHMARK_FILE_PLAN ?=
 CACHE_BENCH_PROFILE ?=
@@ -92,12 +93,19 @@ worker-e2e-check:
 worker-e2e-push:
 	@./hack/worker-e2e-image.sh push
 
-runner:
-	for target in py312 py311 py310 py39 py38; do \
+runner: runner-python runner-micromamba
+
+# Build just one native runner with: make runner-python runnerVersions=3.12
+.PHONY: runner runner-python runner-micromamba
+runner-python:
+	set -e; for version in $(runnerVersions); do \
+		target=py$${version//./}; \
 		docker build . --target $$target --platform=$(runnerPlatform) -f ./docker/Dockerfile.runner -t localhost:5001/beta9-runner:$$target-$(runnerTag) --progress=plain; \
 		docker push localhost:5001/beta9-runner:$$target-$(runnerTag); \
 	done
-	for version in "3.12" "3.11" "3.10" "3.9" "3.8"; do \
+
+runner-micromamba:
+	set -e; for version in $(runnerVersions); do \
 		docker build . --build-arg PYTHON_VERSION=$$version --target micromamba --platform=$(runnerPlatform) -f ./docker/Dockerfile.runner -t localhost:5001/beta9-runner:micromamba$$version-$(runnerTag) --progress=plain; \
 		docker push localhost:5001/beta9-runner:micromamba$$version-$(runnerTag); \
 	done

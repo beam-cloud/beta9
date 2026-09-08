@@ -33,11 +33,8 @@ def common(**_):
     epilog="""
       Examples:
 
-        {cli_name} run app.py:handler
-
-        {cli_name} run app.py:my_func
-
-        {cli_name} run --image python:3.10 --gpu T4
+        {cli_name} run app.py:pod
+        {cli_name} run app.py:pod --detach --json
         \b
     """,
 )
@@ -104,7 +101,8 @@ def run(
         _print_detached_run(result, pod_spec)
         return
 
-    _print_run_links(result)
+    if app_url := _app_dashboard_url(result.app_id):
+        terminal.url(app_url)
     try:
         Container(container_id=result.container_id).attach(
             container_id=result.container_id, sync_dir="./" if sync else None
@@ -150,21 +148,17 @@ def _app_dashboard_url(app_id: str) -> str:
     return template.format(app_id=app_id)
 
 
-def _print_run_links(result: PodInstance) -> None:
-    cli_name = command_hint()
-    if app_url := _app_dashboard_url(result.app_id):
-        terminal.detail(f"  app:       {app_url}")
-    if result.task_id:
-        terminal.detail(f"  task:      {result.task_id} ({cli_name} task list)")
-
-
 def _print_detached_run(result: PodInstance, pod_spec: Pod) -> None:
     cli_name = command_hint()
-    terminal.success(f"Detached; container {result.container_id} keeps running")
-    _print_run_links(result)
-    terminal.detail(f"  shell:     {cli_name} shell --container-id {result.container_id}")
-    terminal.detail(f"  reattach:  {cli_name} container attach {result.container_id}")
-    terminal.detail(f"  stop:      {cli_name} container stop {result.container_id}")
+    terminal.resource(
+        "Detached · container keeps running",
+        {
+            "Dashboard": _app_dashboard_url(result.app_id),
+            "Logs": f"{cli_name} logs --container-id {result.container_id} --follow",
+            "Attach": f"{cli_name} container attach {result.container_id}",
+            "Stop": f"{cli_name} container stop {result.container_id}",
+        },
+    )
 
     pool = getattr(pod_spec, "pool_config", None)
     if pool is not None and pool.name:

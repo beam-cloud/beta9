@@ -941,7 +941,13 @@ func requiresPostBuildImageMaterialization(request *types.ContainerRequest, clip
 
 func (s *Worker) pullLazyWithMetrics(ctx context.Context, request *types.ContainerRequest, phase string, outputLogger *slog.Logger) (time.Duration, error) {
 	phaseStart := time.Now()
+	outputLogger.Info("Loading image metadata...\n")
+	stopHeartbeat := startSilentOutputHeartbeat(ctx, outputLogger, phaseStart, newActiveOutputWriter(outputLogger), "Loading image metadata...")
 	elapsed, err := s.imageClient.PullLazy(ctx, request)
+	stopHeartbeat()
+	if err == nil {
+		outputLogger.Info("Image metadata loaded\n")
+	}
 	metrics.RecordWorkerStartupPhase(phase, time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 	spanID := types.ContainerLifecycleImageLoad
 	if phase != "pull_lazy" && phase != "pull_lazy_after_build" {
@@ -1632,7 +1638,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	containerInstance.Spec = spec
 	containerInstance.setExitCode(-1)
 	containerInstance.OutputWriter = common.NewOutputWriter(func(s string) {
-		outputLogger.Info(s, "done", false, "success", false)
+		outputLogger.Info(s, "done", false, "success", false, "stream", "stdout")
 	})
 	s.containerInstances.Set(containerId, containerInstance)
 
@@ -2330,7 +2336,10 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 
 	runtimeStart = time.Now()
 	exitCode, err := instance.Runtime.Run(context.WithoutCancel(ctx), request.ContainerId, bundlePath, &runtime.RunOpts{
-		OutputWriter:  outputWriter,
+		OutputWriter: outputWriter,
+		ErrorWriter: common.NewOutputWriter(func(message string) {
+			outputLogger.Info(message, "stream", "stderr")
+		}),
 		Started:       runtimeStartedChan,
 		DockerEnabled: request.DockerEnabled,
 	})

@@ -53,6 +53,12 @@ class SDKSettings:
     # no dashboard to link to (plain beta9 installs without one).
     app_url_template: str = os.getenv("BETA9_APP_URL_TEMPLATE", "")
 
+    @property
+    def api_url(self) -> str:
+        return (
+            f"{'https' if int(self.api_port) == 443 else 'http'}://{self.api_host}:{self.api_port}"
+        )
+
     def __post_init__(self, **kwargs):
         config_path = os.getenv("CONFIG_PATH")
         if config_path:
@@ -190,6 +196,9 @@ def get_config_context(name: str = DEFAULT_CONTEXT_NAME) -> ConfigContext:
             token=token,
             gateway_host=gateway_host,
             gateway_port=gateway_port,
+            api_url=settings.api_url
+            if (gateway_host, gateway_port) == (settings.gateway_host, settings.gateway_port)
+            else None,
         )
 
     if not sys.stdin.isatty():
@@ -250,6 +259,9 @@ def prompt_for_config_context(
         token=token,
         gateway_host=gateway_host,
         gateway_port=gateway_port,
+        api_url=settings.api_url
+        if (gateway_host, int(gateway_port)) == (settings.gateway_host, settings.gateway_port)
+        else None,
     )
 
 

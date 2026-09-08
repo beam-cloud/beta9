@@ -6,6 +6,7 @@ import click
 import requests
 from betterproto import Casing
 from rich.table import Column, Table, box
+from rich.text import Text
 
 from .. import terminal
 from ..abstractions.image import Image
@@ -58,17 +59,8 @@ def common(**_):
     epilog="""
       Examples:
 
-        {cli_name} deploy --name my-app app.py:my_func
-
-        {cli_name} deploy --name web --dockerfile Dockerfile
-
-        {cli_name} deploy --name api --dockerfile Dockerfile --pool web-cpu
-
-        {cli_name} deploy --name api --dockerfile Dockerfile --always-on
-
-        {cli_name} deploy --name worker --image ghcr.io/acme/worker:latest --command "npm start"
-
-        {cli_name} deploy --name qwen --dockerfile Dockerfile --port 8000 --llm
+        {cli_name} deploy app.py:handler --name api
+        {cli_name} deploy --dockerfile Dockerfile --name web --port 8000
         \b
     """,
 )
@@ -76,7 +68,7 @@ def common(**_):
     "--name",
     "-n",
     type=click.STRING,
-    help="The name the deployment.",
+    help="Name of the deployment.",
     required=False,
 )
 @click.argument(
@@ -472,6 +464,18 @@ def create_deployment(
                 **response,
             }
         )
+    else:
+        cli = extraclick.command_hint()
+        actions = {}
+        if getattr(user_obj, "deployment_stub_type", None) in (
+            "endpoint/deployment",
+            "asgi/deployment",
+        ):
+            actions["Wait"] = f"{cli} deployment wait {response['deployment_id']}"
+        if response.get("stub_id"):
+            actions["Logs"] = f"{cli} logs --stub-id {response['stub_id']}"
+        actions["Stop"] = f"{cli} deployment stop {response['deployment_id']}"
+        terminal.resource("Next steps", actions, show_labels=False)
 
 
 @management.command(
@@ -515,11 +519,13 @@ def create_deployment(
     help="Filters deployments. Add this option for each field you want to filter on.",
 )
 @extraclick.pass_service_client
+@click.option("--details", is_flag=True, help="Include source, workspace, and full deployment IDs.")
 def list_deployments(
     service: ServiceClient,
     limit: int,
     format: str,
     filter: Dict[str, StringList],
+    details: bool,
 ):
     res: ListDeploymentsResponse
     res = service.gateway.list_deployments(ListDeploymentsRequest(filter, limit))
@@ -532,33 +538,44 @@ def list_deployments(
         terminal.print_json(deployments)
         return
 
-    table = Table(
-        Column("ID"),
+    if format == "none":
+        return
+
+    if not res.deployments:
+        terminal.resource(
+            "No deployments",
+            {"Deploy": f"{extraclick.command_hint()} deploy app.py:handler --name api"},
+        )
+        return
+
+    columns = [
         Column("Name"),
-        Column("Active"),
+        Column("State"),
         Column("Version", justify="right"),
-        Column("Created At"),
-        Column("Updated At"),
-        Column("Stub Name"),
-        Column("Workspace Name"),
-        box=box.SIMPLE,
-    )
+        Column("Updated"),
+    ]
+    if details:
+        columns.extend([Column("ID"), Column("Source"), Column("Workspace")])
+    table = Table(*columns, box=box.SIMPLE, header_style="bold cyan")
 
     for deployment in res.deployments:
-        table.add_row(
-            deployment.id,
-            deployment.name,
-            "Yes" if deployment.active else "No",
-            str(deployment.version),
-            terminal.humanize_date(deployment.created_at),
+        row = [
+            Text(deployment.name),
+            "[green]Active[/green]" if deployment.active else "[dim]Stopped[/dim]",
+            f"v{deployment.version}",
             terminal.humanize_date(deployment.updated_at),
-            deployment.stub_name,
-            deployment.workspace_name,
-        )
+        ]
+        if details:
+            row.extend(
+                Text(value)
+                for value in (deployment.id, deployment.stub_name, deployment.workspace_name)
+            )
+        table.add_row(*row)
 
     table.add_section()
-    table.add_row(f"[bold]{len(res.deployments)} items")
+    table.add_row(f"[bold]{len(res.deployments)} total")
     terminal.print(table)
+    terminal.detail("Use --details or --format json for deployment IDs.")
 
 
 @management.command(

@@ -184,6 +184,10 @@ func (r *Runsc) Run(ctx context.Context, containerID, bundlePath string, opts *R
 		cmd.Stderr = opts.OutputWriter
 	}
 
+	if opts != nil && opts.ErrorWriter != nil {
+		cmd.Stderr = opts.ErrorWriter
+	}
+
 	if err := cmd.Start(); err != nil {
 		return -1, err
 	}

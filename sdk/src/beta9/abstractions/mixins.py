@@ -89,7 +89,7 @@ class DeployableMixin:
         if deploy_response.ok:
             if warn_msg:
                 terminal.warn(warn_msg)
-            terminal.done("Deployed 🎉", deploy_started_at)
+            terminal.done(f"{self.parent.name} · deployment accepted", deploy_started_at)
             if invocation_details_func:
                 invocation_details_func(
                     **invocation_details_options,
@@ -102,7 +102,7 @@ class DeployableMixin:
         return {
             "deployment_id": deploy_response.deployment_id,
             "stub_id": self.parent.stub_id,
-            "status": "accepted",
+            "status": "accepted" if deploy_response.ok else "failed",
             "deployment_name": self.parent.name,
             "invoke_url": deploy_response.invoke_url,
             "version": deploy_response.version,

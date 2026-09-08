@@ -348,6 +348,8 @@ func (c *ContainerClient) StreamLogs(ctx context.Context, containerId string, ou
 // StreamLogsWithReady reports when the stream attachment attempt completes.
 // Callers can use ready to keep exit handling from racing log backfill.
 func (c *ContainerClient) StreamLogsWithReady(ctx context.Context, containerId string, outputChan chan OutputMsg, ready func()) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	stream, err := c.client.ContainerStreamLogs(ctx, &pb.ContainerStreamLogsRequest{ContainerId: containerId})
 	if err != nil {
 		return fmt.Errorf("error creating log stream: %w", err)
@@ -366,7 +368,11 @@ func (c *ContainerClient) StreamLogsWithReady(ctx context.Context, containerId s
 		for {
 			select {
 			case <-ticker.C:
-				outputChan <- OutputMsg{Msg: ""}
+				select {
+				case outputChan <- OutputMsg{Msg: ""}:
+				case <-ctx.Done():
+					return
+				}
 			case <-ctx.Done():
 				return
 			}
@@ -389,7 +395,11 @@ func (c *ContainerClient) StreamLogsWithReady(ctx context.Context, containerId s
 			}
 
 			if logEntry.Msg != "" {
-				outputChan <- OutputMsg{Msg: logEntry.Msg}
+				select {
+				case outputChan <- OutputMsg{Msg: logEntry.Msg}:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
 			}
 		}
 	}

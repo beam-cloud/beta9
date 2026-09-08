@@ -30,6 +30,7 @@ func registerEndpointRoutes(g *echo.Group, es *HttpEndpointService) *endpointGro
 	g.GET("/:deploymentName/latest", auth.WithAuth(group.EndpointRequest))
 	g.GET("/:deploymentName/v:version", auth.WithAuth(group.EndpointRequest))
 	g.GET("/public/:stubId", auth.WithAssumedStubAuth(group.EndpointRequest, group.es.IsPublic))
+	g.GET("/public/:stubId/health", auth.WithAssumedStubAuth(group.EndpointRequest, group.es.IsPublic))
 	for _, route := range []string{"/id/:stubId/health", "/:deploymentName/health", "/:deploymentName/latest/health", "/:deploymentName/v:version/health"} {
 		g.GET(route, auth.WithAuth(group.EndpointRequest))
 	}
@@ -65,32 +66,19 @@ func registerASGIRoutes(g *echo.Group, es *HttpEndpointService) *endpointGroup {
 }
 
 func (g *endpointGroup) EndpointRequest(ctx echo.Context) error {
-	cc, _ := ctx.(*auth.HttpAuthContext)
-
-	stubId, err := abstractions.ParseAndValidateDeploymentStubId(
-		ctx.Request().Context(),
-		g.cache,
-		cc.AuthInfo,
-		ctx.Param("stubId"),
-		ctx.Param("deploymentName"),
-		ctx.Param("version"),
-		types.StubTypeEndpointDeployment,
-		g.es.backendRepo,
-	)
-	if err != nil {
-		return err
-	}
-
 	if strings.HasSuffix(ctx.Path(), "/health") {
 		values := append(ctx.ParamValues(), "health")
 		ctx.SetParamNames(append(ctx.ParamNames(), "subPath")...)
 		ctx.SetParamValues(values...)
-		return g.es.forwardASGIHealthRequest(ctx, stubId)
 	}
-	return g.es.forwardRequest(ctx, cc.AuthInfo, stubId)
+	return g.dispatchRequest(ctx, types.StubTypeEndpointDeployment)
 }
 
 func (g *endpointGroup) ASGIRequest(ctx echo.Context) error {
+	return g.dispatchRequest(ctx, types.StubTypeASGIDeployment)
+}
+
+func (g *endpointGroup) dispatchRequest(ctx echo.Context, stubType string) error {
 	cc, _ := ctx.(*auth.HttpAuthContext)
 
 	stubId, err := abstractions.ParseAndValidateDeploymentStubId(
@@ -100,7 +88,7 @@ func (g *endpointGroup) ASGIRequest(ctx echo.Context) error {
 		ctx.Param("stubId"),
 		ctx.Param("deploymentName"),
 		ctx.Param("version"),
-		types.StubTypeASGIDeployment,
+		stubType,
 		g.es.backendRepo,
 	)
 	if err != nil {

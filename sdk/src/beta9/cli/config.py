@@ -1,5 +1,5 @@
 import json
-from importlib.metadata import version
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
@@ -35,23 +35,29 @@ def common(**_):
 def doctor(service: ServiceClient, format: str):
     with rpc_timeout(10):
         result = service.gateway.authorize(AuthorizeRequest())
+    try:
+        sdk_version = version("beta9")
+    except PackageNotFoundError:
+        sdk_version = "unknown"
     details = {
-        "sdk_version": version("beta9"),
+        "sdk_version": sdk_version,
         "context": extraclick.selected_context(),
         "gateway": f"{service._config.gateway_host}:{service._config.gateway_port}",
         "authenticated": result.ok,
         "error": result.error_msg,
     }
+    if not result.ok:
+        if format == "json":
+            terminal.print_json(details)
+        else:
+            terminal.error(result.error_msg, exit=False)
+        raise click.exceptions.Exit(1)
     if format == "json":
         terminal.print_json(details)
-    elif result.ok:
+    else:
         terminal.success(
             f"{details['context']}: {details['gateway']} (SDK {details['sdk_version']})"
         )
-    else:
-        terminal.error(result.error_msg, exit=False)
-    if not result.ok:
-        raise click.exceptions.Exit(1)
 
 
 def get_setting_callback(ctx: click.Context, param: click.Parameter, value: Any):

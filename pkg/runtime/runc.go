@@ -82,6 +82,10 @@ func (r *Runc) Run(ctx context.Context, containerID, bundlePath string, opts *Ru
 		if opts.OutputWriter != nil {
 			runcOpts.OutputWriter = opts.OutputWriter
 		}
+		if opts.ErrorWriter != nil {
+			runcOpts.OutputWriter = nil
+			runcOpts.IO = &outputIO{stdout: opts.OutputWriter, stderr: opts.ErrorWriter}
+		}
 		if opts.Started != nil {
 			runcOpts.Started = opts.Started
 		}
@@ -89,6 +93,15 @@ func (r *Runc) Run(ctx context.Context, containerID, bundlePath string, opts *Ru
 
 	return r.handle.Run(ctx, containerID, bundlePath, runcOpts)
 }
+
+// outputIO connects runc directly to the supplied writers without merging streams.
+type outputIO struct{ stdout, stderr io.Writer }
+
+func (o *outputIO) Set(cmd *exec.Cmd)     { cmd.Stdout, cmd.Stderr = o.stdout, o.stderr }
+func (o *outputIO) Close() error          { return nil }
+func (o *outputIO) Stdin() io.WriteCloser { return nil }
+func (o *outputIO) Stdout() io.ReadCloser { return nil }
+func (o *outputIO) Stderr() io.ReadCloser { return nil }
 
 func (r *Runc) Exec(ctx context.Context, containerID string, proc specs.Process, opts *ExecOpts) error {
 	runcOpts := &runc.ExecOpts{}

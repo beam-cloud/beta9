@@ -16,7 +16,12 @@ def management():
 @click.argument("handler", required=False)
 @click.option("--dockerfile", type=click.Path(exists=True, dir_okay=False))
 @click.option("--context-dir", type=click.Path(exists=True, file_okay=False))
-@click.option("--format", type=click.Choice(("table", "json")), default="table")
+@click.option(
+    "--format",
+    type=click.Choice(("table", "json")),
+    default="table",
+    help="Result format. JSON sends live build logs to stderr.",
+)
 @pass_service_client
 def build_image(service, handler, dockerfile, context_dir, format):
     if bool(handler) == bool(dockerfile):
@@ -29,13 +34,16 @@ def build_image(service, handler, dockerfile, context_dir, format):
         )
         if not isinstance(image, Image):
             raise click.UsageError("The handler must be an Image.")
-        result = image.build()
+        with terminal.StepTracker().step("Preparing image", "Image ready") as step:
+            result = image.build()
+            step.ok = result.success
         if not result.success:
-            terminal.error(result.error or "Image build failed.")
+            summary = (result.error.strip() or "Build ended without a result").splitlines()[-1]
+            terminal.error(f"Image build failed:\n{summary}")
     if format == "json":
         terminal.print_json({**result._asdict(), "context": selected_context()})
     else:
-        terminal.success(f"Image: {result.image_id}")
+        terminal.resource("Image", {"ID": result.image_id, "Context": selected_context()})
 
 
 @management.command("get", help="Check whether an image is available.")

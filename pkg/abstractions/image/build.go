@@ -261,10 +261,6 @@ func (b *Build) connectToHost(hostname string, tailscale *network.Tailscale) err
 	return nil
 }
 
-func (b *Build) streamLogs() {
-	go b.containerClient.StreamLogs(b.ctx, b.containerID, b.outputChan)
-}
-
 func (b *Build) killContainer() error {
 	if b.containerClient == nil {
 		return nil

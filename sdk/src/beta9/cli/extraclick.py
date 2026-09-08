@@ -44,21 +44,95 @@ config_context_option = click.option(
 
 def set_cli_flag(ctx, param, value):
     if value:
-        os.environ[f"BETA9_{param.name.upper()}"] = "1"
+        key = f"BETA9_{param.name.upper()}"
+        previous = os.environ.get(key)
+
+        def restore():
+            if previous is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = previous
+
+        ctx.call_on_close(restore)
+        os.environ[key] = "1"
+
+
+class HelpFormatter(click.HelpFormatter):
+    def write_heading(self, heading):
+        super().write_heading(click.style(heading, fg="cyan", bold=True))
+
+    def write_dl(self, rows, **kwargs):
+        super().write_dl([(click.style(name, bold=True), text) for name, text in rows], **kwargs)
+
+
+class Context(click.Context):
+    formatter_class = HelpFormatter
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if "NO_COLOR" in os.environ or os.getenv("TERM") == "dumb":
+            self.color = False
+
+
+def show_all_help(ctx, param, value):
+    if value and not ctx.resilient_parsing:
+        ctx.meta["help_all"] = True
+        click.echo(ctx.get_help(), color=ctx.color)
+        ctx.exit()
 
 
 class Beta9Command(click.Command):
+    context_class = Context
+    common_options = {
+        "name": "Name of the workload.",
+        "image": "Base image, such as python:3.12.",
+        "dockerfile": "Build from a Dockerfile.",
+        "entrypoint": "Command to run when no handler is provided.",
+        "cpu": "CPU cores, such as 0.5 or 2.",
+        "memory": "Memory, such as 512Mi or 2Gi.",
+        "gpu": "GPU type, such as T4.",
+        "port": "Port to expose; repeat for multiple ports.",
+        "env": "Environment variable; repeat for multiple values.",
+        "detach": "Submit and return without attaching to logs.",
+        "replicas": "Fixed number of service replicas.",
+        "json_output": "Print the operation result as JSON.",
+        "context": "Saved connection profile.",
+        "help": "Show common options and examples.",
+        "help_all": "Show all options, including scaling and advanced settings.",
+    }
+
+    def get_params(self, ctx):
+        params = super().get_params(ctx)
+        if self.name in ("run", "deploy"):
+            params.append(
+                click.Option(
+                    ["--help-all"],
+                    is_flag=True,
+                    is_eager=True,
+                    expose_value=False,
+                    callback=show_all_help,
+                    help="Show every option, including scaling and advanced settings.",
+                )
+            )
+        return params
+
     def cli_name(self, ctx: click.Context) -> str:
         name, *_ = ctx.command_path.split()
         return name
 
     def format_options(self, ctx, formatter):
-        groups = {"Options": [], "Advanced options": []}
+        groups = {"Options": [], "Additional options": []}
         for param in self.get_params(ctx):
             record = param.get_help_record(ctx)
             if record:
-                advanced = param.name.startswith(("llm_", "checkpoint_", "gpu_", "reservation_"))
-                groups["Advanced options" if advanced else "Options"].append(record)
+                additional = (
+                    self.name in ("run", "deploy") and param.name not in self.common_options
+                )
+                if additional and not ctx.meta.get("help_all"):
+                    continue
+                if self.name in ("run", "deploy") and not ctx.meta.get("help_all"):
+                    record = (record[0], self.common_options[param.name])
+                groups["Additional options" if additional else "Options"].append(record)
         for name, records in groups.items():
             if records:
                 with formatter.section(name):
@@ -73,7 +147,8 @@ class Beta9Command(click.Command):
 
         name = self.cli_name(ctx)
         text = self.epilog.format(cli_name=name)
-        text = textwrap.dedent(text)
+        text = textwrap.dedent(text).replace("\b", "").strip()
+        formatter.write_paragraph()
         formatter.write(text)
         formatter.write("\n")
 
@@ -97,13 +172,12 @@ class Beta9Command(click.Command):
             formatter.write_paragraph()
 
             with formatter.indentation():
-                text = textwrap.indent(text, " " * formatter.current_indent)
-                formatter.write(text)
-                formatter.write("\n")
+                formatter.write_text(text)
 
 
 class ClickCommonGroup(click.Group):
     command_class = Beta9Command
+    context_class = Context
 
     def list_commands(self, ctx) -> List[str]:
         return list(self.commands)
@@ -111,12 +185,15 @@ class ClickCommonGroup(click.Group):
 
 class ClickManagementGroup(click.Group):
     command_class = Beta9Command
+    context_class = Context
 
     def list_commands(self, ctx) -> List[str]:
         return list(self.commands)
 
 
 class CommandGroupCollection(click.CommandCollection):
+    context_class = Context
+
     def __init__(self, *args, **kwargs):
         params = kwargs.get("params", [])
         params.append(config_context_param)
@@ -157,51 +234,41 @@ class CommandGroupCollection(click.CommandCollection):
         return r
 
     def invoke(self, ctx: click.Context) -> Any:
-        if ctx.protected_args:
-            if group := self.sources_map.get(ctx.protected_args[0]):
-                group.invoke(ctx)
-            else:
-                ctx.fail(f"No such command '{ctx.protected_args[0]}'.")
-        else:
-            super().invoke(ctx)
+        if not ctx.protected_args:
+            return super().invoke(ctx)
+        group = self.sources_map.get(ctx.protected_args[0])
+        if group is None:
+            ctx.fail(f"No such command '{ctx.protected_args[0]}'.")
+        return group.invoke(ctx)
 
     def format_commands(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
-        """
-        Extra format methods for multi methods that adds all the commands after
-        the options.
-        """
-        commands = {}
-        commands["common"] = []
-        commands["management"] = []
-
-        for subcommand in self.list_commands(ctx):
-            cmd = self.get_command(ctx, subcommand)
-            if cmd is None:
-                continue
-            if cmd.hidden:
-                continue
-
-            if isinstance(cmd, ClickManagementGroup):
-                commands["management"].append((subcommand, cmd))
-            else:
-                commands["common"].append((subcommand, cmd))
-
-        # sort the management commands
-        commands["management"].sort(key=lambda x: x[0])
-
-        for cmdtype, cmds in commands.items():
-            if not len(cmds):
-                continue
-
-            limit = formatter.width - 6 - max(len(cmd[0]) for cmd in cmds)
-
-            rows = []
-            for subcommand, cmd in cmds:
-                help = cmd.get_short_help_str(limit)
-                rows.append((subcommand, help))
-
+        groups = {
+            "Work": "run deploy dev serve shell logs doctor".split(),
+            "Resources": "container deployment image task volume disk db ls cp rm mv".split(),
+        }
+        remaining = set(self.list_commands(ctx)) - {
+            name for names in groups.values() for name in names
+        }
+        groups["Settings & infrastructure"] = sorted(remaining)
+        summaries = {
+            "dev": "Develop with live file sync.",
+            "shell": "Open a shell in a container.",
+            "logs": "Read or follow workload logs.",
+            "doctor": "Check your connection and credentials.",
+            "disk": "Manage durable disks.",
+            "mv": "Move files within a volume.",
+            "machine": "Browse and manage machines.",
+            "pool": "Manage groups of machines.",
+            "worker": "Inspect and maintain workers.",
+        }
+        for title, names in groups.items():
+            rows = [
+                (name, summaries.get(name) or command.get_short_help_str(formatter.width - 16))
+                for name in names
+                if (command := self.get_command(ctx, name)) is not None and not command.hidden
+            ]
             if rows:
-                with formatter.section(gettext(cmdtype.title() + " Commands")):
+                with formatter.section(title):
                     formatter.write_dl(rows)
 
     def list_commands(self, ctx):

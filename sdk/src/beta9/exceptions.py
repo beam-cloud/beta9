@@ -10,6 +10,10 @@ class InvalidFunctionArgumentsError(RuntimeError):
         super().__init__("Invalid function arguments")
 
 
+class ImageBuildError(RuntimeError):
+    """The image required by a workload could not be built."""
+
+
 class RemoteExecutionError(RuntimeError):
     """A failed remote task, with its identity, status, and captured output."""
 

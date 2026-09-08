@@ -46,3 +46,6 @@ docs/*.md
 
 # staging okteto config: contains live credentials
 hack/stage/config.stage.yaml
+
+# Local evaluation reports and captures
+/docs/reports/

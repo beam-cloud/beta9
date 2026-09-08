@@ -10,7 +10,6 @@ from beta9.sync import FileSyncResult
 
 class FakeSandboxStub:
     def __init__(self):
-        self.uploads = []
         self.deleted_files = []
         self.deleted_dirs = []
         self.statuses = []
@@ -24,10 +23,6 @@ class FakeSandboxStub:
             group="",
             permissions=644,
         )
-
-    def sandbox_upload_file(self, request):
-        self.uploads.append(request)
-        return SimpleNamespace(ok=True, error_msg="")
 
     def sandbox_download_file(self, request):
         return SimpleNamespace(ok=True, error_msg="", data=b"hello")
@@ -59,14 +54,15 @@ def fake_instance(stub):
 def test_sandbox_filesystem_text_bytes_and_remove_wrappers():
     stub = FakeSandboxStub()
     fs = SandboxFileSystem(fake_instance(stub))
+    fs._upload = MagicMock()
 
     fs.write_text("/workspace/message.txt", "hello")
-    assert stub.uploads[-1].container_path == "/workspace/message.txt"
-    assert stub.uploads[-1].data == b"hello"
+    path, source, mode = fs._upload.call_args.args
+    assert (path, source.getvalue(), mode) == ("/workspace/message.txt", b"hello", 0o644)
 
     fs.write_bytes("/workspace/blob.bin", b"\x00\x01")
-    assert stub.uploads[-1].container_path == "/workspace/blob.bin"
-    assert stub.uploads[-1].data == b"\x00\x01"
+    path, source, mode = fs._upload.call_args.args
+    assert (path, source.getvalue(), mode) == ("/workspace/blob.bin", b"\x00\x01", 0o644)
 
     assert fs.read_bytes("/workspace/message.txt") == b"hello"
     assert fs.read_text("/workspace/message.txt") == "hello"
@@ -104,9 +100,13 @@ def test_sandbox_instance_poll_defaults_terminal_exit_code():
 def test_sandbox_prepare_runtime_uses_idle_entrypoint():
     sandbox = Sandbox()
     sandbox.image.build = MagicMock(
-        return_value=ImageBuildResult(success=True, image_id="image-id", python_version="python3.11")
+        return_value=ImageBuildResult(
+            success=True, image_id="image-id", python_version="python3.11"
+        )
     )
-    sandbox.syncer.sync = MagicMock(return_value=FileSyncResult(success=True, object_id="object-id"))
+    sandbox.syncer.sync = MagicMock(
+        return_value=FileSyncResult(success=True, object_id="object-id")
+    )
     sandbox.gateway_stub.get_or_create_stub = MagicMock(
         return_value=GetOrCreateStubResponse(ok=True, stub_id="stub-id")
     )

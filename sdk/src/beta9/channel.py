@@ -219,6 +219,7 @@ def prompt_first_auth(settings: SDKSettings) -> None:
             token=settings.api_token,
             gateway_host=settings.gateway_host,
             gateway_port=settings.gateway_port,
+            api_url=settings.api_url,
         )
     else:
         terminal.header(f"Welcome to {settings.name.title()}! Let's get started 📡")
