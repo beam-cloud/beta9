@@ -10,6 +10,7 @@ import (
 	_ "net/http/pprof" // Import for side effects
 	"os"
 	"os/signal"
+	"path"
 	"strconv"
 	"strings"
 	"sync"
@@ -1351,6 +1352,16 @@ func (s *Worker) abortStuckWorkspaceMount(request *types.ContainerRequest) {
 	}
 
 	log.Warn().Str("container_id", request.ContainerId).Str("workspace", workspaceName).Msg("aborting stuck workspace mount after SIGKILL timeout")
+	if mount, ok := s.storageManager.mounts.Get(workspaceName); ok {
+		if aborter, ok := mount.(interface{ AbortPendingOperations(string) error }); ok {
+			// A lazy unmount alone does not release in-flight FUSE requests.
+			// Abort while holding the workspace lock, before detaching the mount.
+			localPath := path.Join(s.storageManager.config.WorkspaceStorage.BaseMountPath, workspaceName)
+			if err := aborter.AbortPendingOperations(localPath); err != nil {
+				log.Warn().Err(err).Str("workspace", workspaceName).Msg("failed to abort stuck workspace filesystem operations")
+			}
+		}
+	}
 	if err := s.storageManager.unmountLocked(workspaceName); err != nil {
 		log.Warn().Err(err).Str("workspace", workspaceName).Msg("stuck workspace mount recovery completed with errors")
 	}
