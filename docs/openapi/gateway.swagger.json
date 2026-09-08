@@ -3909,9 +3909,6 @@
         "appName": {
           "type": "string"
         },
-        "pricing": {
-          "$ref": "#/definitions/typesPricingPolicy"
-        },
         "inputs": {
           "$ref": "#/definitions/gatewaySchema"
         },
@@ -4156,33 +4153,6 @@
         },
         "bootstrap": {
           "$ref": "#/definitions/gatewayAgentBootstrapConfig"
-        }
-      }
-    },
-    "gatewayLLMConfig": {
-      "type": "object",
-      "properties": {
-        "modelId": {
-          "type": "string"
-        },
-        "engine": {
-          "type": "string"
-        },
-        "servedModelName": {
-          "type": "string"
-        },
-        "contextLength": {
-          "type": "string",
-          "format": "int64"
-        },
-        "tokenizer": {
-          "type": "string"
-        },
-        "metricsPath": {
-          "type": "string"
-        },
-        "sloTier": {
-          "type": "string"
         }
       }
     },
@@ -5539,9 +5509,6 @@
         "servingProtocol": {
           "type": "string"
         },
-        "llm": {
-          "$ref": "#/definitions/gatewayLLMConfig"
-        },
         "database": {
           "$ref": "#/definitions/gatewayDatabaseServingConfig"
         }
@@ -6079,26 +6046,6 @@
         },
         "forcePathStyle": {
           "type": "boolean"
-        }
-      }
-    },
-    "typesPricingPolicy": {
-      "type": "object",
-      "properties": {
-        "maxInFlight": {
-          "type": "string",
-          "format": "int64"
-        },
-        "costModel": {
-          "type": "string"
-        },
-        "costPerTask": {
-          "type": "number",
-          "format": "double"
-        },
-        "costPerTaskDurationMs": {
-          "type": "number",
-          "format": "double"
         }
       }
     },
