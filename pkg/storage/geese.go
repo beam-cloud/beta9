@@ -570,6 +570,12 @@ func (s *GeeseStorage) Unmount(localPath string) error {
 	return errs
 }
 
+// AbortPendingOperations releases processes stuck in FUSE calls even after
+// SIGKILL. Callers must first ensure no running container still uses this mount.
+func (s *GeeseStorage) AbortPendingOperations(localPath string) error {
+	return abortFuseConnection(localPath)
+}
+
 func abortFuseConnection(localPath string) error {
 	mountInfo, err := os.ReadFile("/proc/self/mountinfo")
 	if err != nil {
