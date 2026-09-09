@@ -55,8 +55,8 @@ func (gws *GatewayService) managedEndpointStubConfig(ctx context.Context, authIn
 		}
 		config.Endpoint.Normalize()
 		policy := gws.managedEndpointValidation()
-		if gws.managedEndpointRepo != nil {
-			services, err := gws.managedEndpointRepo.ListServices(ctx)
+		if gws.endpointRepo != nil {
+			services, err := gws.endpointRepo.ListServices(ctx)
 			if err != nil {
 				return nil, fmt.Errorf("failed to resolve managed services: %w", err)
 			}
@@ -156,13 +156,13 @@ func managedTargetGpuTypes(config *types.ManagedEndpointStubConfig) ([]types.Gpu
 // immediately; later versions are registered as canaries and the controller's
 // rollout loop promotes or rolls them back.
 func (gws *GatewayService) registerManagedDeployment(ctx context.Context, stub *types.StubWithRelated, config *types.StubConfigV1, deployment *types.Deployment) error {
-	if gws.managedEndpointRepo == nil || config == nil || config.ManagedEndpoint == nil {
+	if gws.endpointRepo == nil || config == nil || config.ManagedEndpoint == nil {
 		return errors.New("managed endpoint registry is unavailable")
 	}
 	now := time.Now()
 
 	if service := config.ManagedEndpoint.Service; service != nil {
-		existing, err := gws.managedEndpointRepo.GetService(ctx, service.Name)
+		existing, err := gws.endpointRepo.GetService(ctx, service.Name)
 		if err != nil {
 			return err
 		}
@@ -175,7 +175,7 @@ func (gws *GatewayService) registerManagedDeployment(ctx context.Context, stub *
 				record.Status = existing.Status
 			}
 		}
-		return gws.managedEndpointRepo.SaveService(ctx, record)
+		return gws.endpointRepo.SaveService(ctx, record)
 	}
 
 	spec := config.ManagedEndpoint.Endpoint
@@ -191,11 +191,11 @@ func (gws *GatewayService) registerManagedDeployment(ctx context.Context, stub *
 		State:      types.VersionStateCanary,
 		CreatedAt:  now,
 	}
-	existing, err := gws.managedEndpointRepo.GetEndpoint(ctx, spec.ID)
+	existing, err := gws.endpointRepo.GetEndpoint(ctx, spec.ID)
 	if err != nil {
 		return err
 	}
-	rollout, err := gws.managedEndpointRepo.GetRollout(ctx, spec.ID)
+	rollout, err := gws.endpointRepo.GetRollout(ctx, spec.ID)
 	if err != nil {
 		return err
 	}
@@ -212,7 +212,7 @@ func (gws *GatewayService) registerManagedDeployment(ctx context.Context, stub *
 		if existing != nil {
 			record.CreatedAt = existing.CreatedAt
 		}
-		if err := gws.managedEndpointRepo.SaveEndpoint(ctx, record); err != nil {
+		if err := gws.endpointRepo.SaveEndpoint(ctx, record); err != nil {
 			return err
 		}
 		rollout.ActiveVersion = deployment.Version
@@ -234,14 +234,14 @@ func (gws *GatewayService) registerManagedDeployment(ctx context.Context, stub *
 		rollout.LastDecisionAt = now
 	}
 
-	if err := gws.managedEndpointRepo.SaveVersion(ctx, version); err != nil {
+	if err := gws.endpointRepo.SaveVersion(ctx, version); err != nil {
 		return err
 	}
-	return gws.managedEndpointRepo.SaveRollout(ctx, rollout)
+	return gws.endpointRepo.SaveRollout(ctx, rollout)
 }
 
 func (gws *GatewayService) retireManagedVersion(ctx context.Context, endpointID string, version uint, state types.EndpointVersionState) error {
-	versions, err := gws.managedEndpointRepo.ListVersions(ctx, endpointID)
+	versions, err := gws.endpointRepo.ListVersions(ctx, endpointID)
 	if err != nil {
 		return err
 	}
@@ -250,7 +250,7 @@ func (gws *GatewayService) retireManagedVersion(ctx context.Context, endpointID 
 			continue
 		}
 		v.State = state
-		return gws.managedEndpointRepo.SaveVersion(ctx, v)
+		return gws.endpointRepo.SaveVersion(ctx, v)
 	}
 	return nil
 }

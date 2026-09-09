@@ -474,8 +474,8 @@ func (ss *SSHShellService) CreateStandaloneShell(ctx context.Context, in *pb.Cre
 		if err != nil || machineWorker == nil {
 			return &pb.CreateStandaloneShellResponse{Ok: false, ErrMsg: "machine worker is not ready"}, nil
 		}
-		stubConfig.MachineID = machineID
 		stubConfig.Pool = &types.PoolConfig{Name: machine.PoolName, Selector: machine.PoolName}
+		stubConfig.MachineID = machineID
 	}
 
 	containerId := ss.genContainerId(stub.ExternalId)

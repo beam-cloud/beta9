@@ -39,14 +39,14 @@ func (gws *GatewayService) GetProviderEarnings(ctx context.Context, in *pb.GetPr
 	if authInfo == nil || authInfo.Workspace == nil {
 		return &pb.GetProviderEarningsResponse{Ok: false, ErrMsg: "missing workspace auth"}, nil
 	}
-	if gws.managedEndpointRepo == nil {
+	if gws.endpointRepo == nil {
 		return &pb.GetProviderEarningsResponse{Ok: false, ErrMsg: "provider earnings are unavailable"}, nil
 	}
 	days := int(in.GetDays())
 	if days <= 0 {
 		days = 30
 	}
-	report, err := gws.managedEndpointRepo.GetProviderEarnings(ctx, authInfo.Workspace.ExternalId, days)
+	report, err := gws.endpointRepo.GetProviderEarnings(ctx, authInfo.Workspace.ExternalId, days)
 	if err != nil {
 		return &pb.GetProviderEarningsResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
@@ -69,6 +69,7 @@ func providerEarningsToProto(e types.ProviderEarnings) *pb.ProviderEarnings {
 		Images: e.Images, EarningsMicroUsd: e.EarningsMicroUSD,
 	}
 }
+
 func (gws *GatewayService) ListMachineContainers(ctx context.Context, in *pb.ListMachineContainersRequest) (*pb.ListMachineContainersResponse, error) {
 	return gws.computeService.ListMachineContainers(ctx, in)
 }

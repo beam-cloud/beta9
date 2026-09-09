@@ -610,8 +610,8 @@ func (s *GenericPodService) configureMachinePlacement(ctx context.Context, works
 	if selector := stubConfig.PoolSelector(); selector != "" && selector != machine.PoolName {
 		return fmt.Errorf("machine %s does not belong to pool %s", machineID, selector)
 	}
-	stubConfig.MachineID = machineID
 	stubConfig.Pool = &types.PoolConfig{Name: machine.PoolName, Selector: machine.PoolName}
+	stubConfig.MachineID = machineID
 	return nil
 }
 

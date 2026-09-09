@@ -36,8 +36,7 @@ type GatewayService struct {
 	tailscale        *network.Tailscale
 	keyEventManager  *common.KeyEventManager
 	clientCache      *sync.Map
-	// managedEndpointRepo is nil when managed endpoints are disabled.
-	managedEndpointRepo repository.ManagedEndpointRepository
+	endpointRepo     repository.ManagedEndpointRepository // nil when managed endpoints are disabled
 	pb.UnimplementedGatewayServiceServer
 }
 
@@ -60,9 +59,7 @@ type GatewayServiceOpts struct {
 	UsageMetricsRepo repository.UsageMetricsRepository
 	Tailscale        *network.Tailscale
 	KeyEventManager  *common.KeyEventManager
-	// ManagedEndpointRepo is optional; when nil and managed endpoints are
-	// enabled a Redis-backed repository is created from RedisClient.
-	ManagedEndpointRepo repository.ManagedEndpointRepository
+	EndpointRepo     repository.ManagedEndpointRepository // optional; created from RedisClient when nil
 }
 
 func NewGatewayService(opts *GatewayServiceOpts) (*GatewayService, error) {
@@ -98,31 +95,31 @@ func NewGatewayService(opts *GatewayServiceOpts) (*GatewayService, error) {
 		computeService.Start(opts.Ctx)
 	}
 
-	managedEndpointRepo := opts.ManagedEndpointRepo
-	if managedEndpointRepo == nil && opts.Config.ManagedEndpoints.Enabled && opts.RedisClient != nil {
-		managedEndpointRepo = repository.NewManagedEndpointRedisRepository(opts.RedisClient)
+	endpointRepo := opts.EndpointRepo
+	if endpointRepo == nil && opts.Config.ManagedEndpoints.Enabled && opts.RedisClient != nil {
+		endpointRepo = repository.NewManagedEndpointRedisRepository(opts.RedisClient)
 	}
 
 	return &GatewayService{
-		ctx:                 opts.Ctx,
-		appConfig:           opts.Config,
-		backendRepo:         opts.BackendRepo,
-		workspaceRepo:       opts.WorkspaceRepo,
-		containerRepo:       opts.ContainerRepo,
-		providerRepo:        opts.ProviderRepo,
-		scheduler:           opts.Scheduler,
-		taskDispatcher:      opts.TaskDispatcher,
-		redisClient:         opts.RedisClient,
-		eventRepo:           opts.EventRepo,
-		workerRepo:          opts.WorkerRepo,
-		workerPoolRepo:      opts.WorkerPoolRepo,
-		computeRepo:         computeRepo,
-		computeService:      computeService,
-		thunderService:      opts.ThunderService,
-		usageMetricsRepo:    opts.UsageMetricsRepo,
-		tailscale:           opts.Tailscale,
-		keyEventManager:     keyEventManager,
-		clientCache:         &sync.Map{},
-		managedEndpointRepo: managedEndpointRepo,
+		ctx:              opts.Ctx,
+		appConfig:        opts.Config,
+		backendRepo:      opts.BackendRepo,
+		workspaceRepo:    opts.WorkspaceRepo,
+		containerRepo:    opts.ContainerRepo,
+		providerRepo:     opts.ProviderRepo,
+		scheduler:        opts.Scheduler,
+		taskDispatcher:   opts.TaskDispatcher,
+		redisClient:      opts.RedisClient,
+		eventRepo:        opts.EventRepo,
+		workerRepo:       opts.WorkerRepo,
+		workerPoolRepo:   opts.WorkerPoolRepo,
+		computeRepo:      computeRepo,
+		computeService:   computeService,
+		thunderService:   opts.ThunderService,
+		usageMetricsRepo: opts.UsageMetricsRepo,
+		tailscale:        opts.Tailscale,
+		keyEventManager:  keyEventManager,
+		clientCache:      &sync.Map{},
+		endpointRepo:     endpointRepo,
 	}, nil
 }
