@@ -51,6 +51,7 @@ const (
 	// gitopsRetryBackoff spaces out runs that only retry failed endpoints at
 	// an unchanged commit.
 	gitopsRetryBackoff   = 15 * time.Minute
+	gitopsSyncWarnAfter  = 2 * time.Minute
 	gitopsStubName       = "managed-endpoints-deployer"
 	gitopsContainerPfx   = "me-deployer"
 	gitopsDeployerCPU    = int64(2000)
@@ -67,6 +68,7 @@ type gitops struct {
 	s       *Service
 	lock    *common.RedisLock
 	pending chan gitopsRequest
+	stub    *types.StubWithRelated // deployer stub, resolved once per process
 }
 
 type gitopsRequest struct {
@@ -122,14 +124,38 @@ func (g *gitops) run(ctx context.Context) {
 		case req = <-g.pending:
 		}
 		// The lease is renewed for as long as sync runs (resolving the remote
-		// head alone can take a while) and sync is cancelled if it is lost.
+		// head alone can take a while) and sync is cancelled if it is lost. A
+		// sync that does not return (a hung storage mount, an unresponsive
+		// backend) keeps the lease and silently stops all reconciliation, so
+		// it is reported while it is stuck.
 		err := g.lock.WithLease(ctx, gitopsLockKey, common.RedisLockOptions{TtlS: int(gitopsLockTTL.Seconds()), Retries: 0}, func(ctx context.Context) error {
+			stop := warnIfStuck(gitopsSyncWarnAfter, "managed endpoints: gitops sync has not returned; reconciliation is stalled")
+			defer stop()
 			return g.sync(ctx, req)
 		})
 		if err != nil && !common.IsRedisLockNotObtained(err) {
 			log.Error().Err(err).Msg("managed endpoints: gitops sync failed")
 		}
 	}
+}
+
+// warnIfStuck logs msg every interval until the returned stop is called.
+func warnIfStuck(interval time.Duration, msg string) (stop func()) {
+	done := make(chan struct{})
+	started := time.Now()
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				log.Error().Dur("running_for", time.Since(started)).Msg(msg)
+			}
+		}
+	}()
+	return func() { close(done) }
 }
 
 // sync is one reconciler pass: expire a stuck run, then launch a deployer if
@@ -417,8 +443,13 @@ func (g *gitops) launch(ctx context.Context, state *types.GitOpsState, sha strin
 }
 
 // deployerStub returns the pod stub the deployer runs under, creating it on
-// first use. The stub is recreated when the configured image changes.
+// first use. The stub is recreated when the configured image changes. It is
+// resolved once per process: the empty stub object is written to workspace
+// storage, which sync must not depend on every run.
 func (g *gitops) deployerStub(ctx context.Context, workspace *types.Workspace, image string) (*types.StubWithRelated, error) {
+	if g.stub != nil {
+		return g.stub, nil
+	}
 	config := types.StubConfigV1{Runtime: types.Runtime{Cpu: gitopsDeployerCPU, Memory: gitopsDeployerMemory, ImageId: image}}
 	app, err := g.s.backend.GetOrCreateApp(ctx, workspace.Id, gitopsStubName)
 	if err != nil {
@@ -432,7 +463,8 @@ func (g *gitops) deployerStub(ctx context.Context, workspace *types.Workspace, i
 	if err != nil {
 		return nil, fmt.Errorf("deployer stub: %w", err)
 	}
-	return &types.StubWithRelated{Stub: stub, Workspace: *workspace, App: app, Object: object}, nil
+	g.stub = &types.StubWithRelated{Stub: stub, Workspace: *workspace, App: app, Object: object}
+	return g.stub, nil
 }
 
 // failRun closes an in-flight run as failed and releases its token.
