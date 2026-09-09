@@ -893,29 +893,43 @@ class ListProviderMachinesResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class GetProviderEarningsRequest(betterproto.Message):
-    days: int = betterproto.uint32_field(1)
-    """Trailing window in days (today included); defaults to 30."""
+class GetEndpointUsageRequest(betterproto.Message):
+    """
+    Managed endpoint usage of the calling workspace: what it spent calling
+     models ("spend") or earned serving them on its contributed machines ("earned").
+    """
+
+    kind: str = betterproto.string_field(1)
+    days: int = betterproto.uint32_field(2)
+    """
+    Trailing window in days (today included); defaults to 30. Ignored when
+     start_date is set.
+    """
+
+    start_date: str = betterproto.string_field(3)
+    """Inclusive UTC day bounds (YYYY-MM-DD); end_date defaults to today."""
+
+    end_date: str = betterproto.string_field(4)
 
 
 @dataclass(eq=False, repr=False)
-class ProviderEarnings(betterproto.Message):
+class EndpointUsage(betterproto.Message):
     requests: int = betterproto.int64_field(1)
     prompt_tokens: int = betterproto.int64_field(2)
     completion_tokens: int = betterproto.int64_field(3)
     images: int = betterproto.int64_field(4)
-    earnings_micro_usd: int = betterproto.int64_field(5)
+    micro_usd: int = betterproto.int64_field(5)
 
 
 @dataclass(eq=False, repr=False)
-class GetProviderEarningsResponse(betterproto.Message):
+class GetEndpointUsageResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
-    total: "ProviderEarnings" = betterproto.message_field(3)
-    per_machine: Dict[str, "ProviderEarnings"] = betterproto.map_field(
+    total: "EndpointUsage" = betterproto.message_field(3)
+    per_model: Dict[str, "EndpointUsage"] = betterproto.map_field(
         4, betterproto.TYPE_STRING, betterproto.TYPE_MESSAGE
     )
-    per_day: Dict[str, "ProviderEarnings"] = betterproto.map_field(
+    per_day: Dict[str, "EndpointUsage"] = betterproto.map_field(
         5, betterproto.TYPE_STRING, betterproto.TYPE_MESSAGE
     )
 
@@ -2019,14 +2033,14 @@ class GatewayServiceStub(SyncServiceStub):
             ListProviderMachinesResponse,
         )(list_provider_machines_request)
 
-    def get_provider_earnings(
-        self, get_provider_earnings_request: "GetProviderEarningsRequest"
-    ) -> "GetProviderEarningsResponse":
+    def get_endpoint_usage(
+        self, get_endpoint_usage_request: "GetEndpointUsageRequest"
+    ) -> "GetEndpointUsageResponse":
         return self._unary_unary(
-            "/gateway.GatewayService/GetProviderEarnings",
-            GetProviderEarningsRequest,
-            GetProviderEarningsResponse,
-        )(get_provider_earnings_request)
+            "/gateway.GatewayService/GetEndpointUsage",
+            GetEndpointUsageRequest,
+            GetEndpointUsageResponse,
+        )(get_endpoint_usage_request)
 
     def list_machine_containers(
         self, list_machine_containers_request: "ListMachineContainersRequest"

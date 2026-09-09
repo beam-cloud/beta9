@@ -1,11 +1,12 @@
 package managedendpoint
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"net/url"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/common/llmroute"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -90,11 +91,11 @@ func TestRouteFromPath(t *testing.T) {
 }
 
 func TestDecorateJSON(t *testing.T) {
-	body := []byte(`{"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	body := []byte(`{"id":"chatcmpl-upstream","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
 	out := decorateJSON(body, "gen-abc", Usage{Found: true, PromptTokens: 1, CompletionTokens: 1}, 2_500)
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal(out, &payload))
-	assert.Equal(t, "gen-abc", payload["id"])
+	assert.Equal(t, "gen-abc", payload["id"], "the engine's id is replaced by the gateway generation id")
 	assert.Equal(t, providerName, payload["provider"])
 	assert.InDelta(t, 0.0025, payload["usage"].(map[string]any)["cost"], 1e-9)
 
@@ -155,68 +156,52 @@ func TestChooseReservesInflightAtomically(t *testing.T) {
 	assert.Equal(t, int64(5), counter(&r.inflight, "replica-c").Load())
 }
 
-func TestEnqueueUsageBackpressure(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	r := &router{s: &Service{ctx: ctx}, usageQueue: make(chan types.EventEndpointRouteSchema, 1)}
-	r.usageQueue <- types.EventEndpointRouteSchema{RequestID: "first"}
+func TestStampSSE(t *testing.T) {
+	stamped := stampSSE([]byte("data: {\"id\":\"chatcmpl-1\",\"choices\":[]}\n"), "gen-abc")
+	var chunk map[string]any
+	require.NoError(t, json.Unmarshal(bytes.TrimPrefix(stamped, []byte("data: ")), &chunk))
+	assert.Equal(t, "gen-abc", chunk["id"])
+	assert.Equal(t, []any{}, chunk["choices"])
+	assert.True(t, bytes.HasSuffix(stamped, []byte("\n")))
 
-	// A full queue waits for the drainer instead of dropping.
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		r.enqueueUsage(types.EventEndpointRouteSchema{RequestID: "second"})
-	}()
-	select {
-	case <-done:
-		t.Fatal("enqueue returned while the queue was full")
-	case <-time.After(50 * time.Millisecond):
+	// Chunks without an id, non-JSON payloads and [DONE] pass through untouched.
+	for _, line := range []string{"data: {\"choices\":[]}\n", "data: [DONE]\n", "data: not json\n", "data:\n"} {
+		assert.Equal(t, []byte(line), stampSSE([]byte(line), "gen-abc"), line)
 	}
-	assert.Equal(t, "first", (<-r.usageQueue).RequestID)
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("enqueue did not complete after the queue drained")
-	}
-	assert.Equal(t, "second", (<-r.usageQueue).RequestID)
-	assert.Equal(t, int64(0), r.usageDropped.Load())
-
-	// On shutdown nothing will drain the queue; drop promptly and count it.
-	r.usageQueue <- types.EventEndpointRouteSchema{RequestID: "third"}
-	cancel()
-	started := time.Now()
-	r.enqueueUsage(types.EventEndpointRouteSchema{RequestID: "fourth"})
-	assert.Less(t, time.Since(started), usageEnqueueTimeout)
-	assert.Equal(t, int64(1), r.usageDropped.Load())
 }
 
-func TestEvaluateRollout(t *testing.T) {
-	ready := []*types.EndpointReplica{{Status: types.ReplicaStatusReady, Capacity: types.ReplicaCapacity{TPOTMs: 20, DecodeTokensPerSec: 1000}}}
-	slow := []*types.EndpointReplica{{Status: types.ReplicaStatusReady, Capacity: types.ReplicaCapacity{TPOTMs: 40, DecodeTokensPerSec: 400}}}
-	th := types.RolloutThresholds{}
+func TestUpstreamQueryDropsAuthToken(t *testing.T) {
+	q := url.Values{"auth_token": {"secret"}, "foo": {"bar"}}
+	assert.Equal(t, "foo=bar", upstreamQuery(q))
+	assert.Empty(t, upstreamQuery(url.Values{"auth_token": {"secret"}}))
+}
 
-	promote, reason := evaluateRollout(nil, nil, ready, nil, rolloutConfig(th))
-	assert.False(t, promote, reason)
+func TestSetModelRewritesUpstreamBody(t *testing.T) {
+	rq := &routeRequest{body: []byte(`{"model":"acme/first","models":["acme/first","acme/second"],"stream":true}`)}
+	rq.setModel("acme/second")
+	assert.Equal(t, "acme/second", rq.model)
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(rq.body, &payload))
+	assert.Equal(t, "acme/second", payload["model"])
+	_, hasModels := payload["models"]
+	assert.False(t, hasModels, "the fallback list never reaches the engine")
+	assert.Equal(t, true, payload["stream"])
 
-	promote, _ = evaluateRollout(nil, nil, ready, ready, rolloutConfig(th))
-	assert.True(t, promote)
+	// A body already naming the selected model is left byte-for-byte alone.
+	original := []byte(`{"model": "acme/model", "n": 1}`)
+	rq = &routeRequest{body: original}
+	rq.setModel("acme/model")
+	assert.Equal(t, original, rq.body)
 
-	active := &types.RouteMetrics{Requests: 200, Errors: 1, TTFTSumMs: 20_000, TTFTCount: 200}
-	bad := &types.RouteMetrics{Requests: 50, Errors: 5, TTFTSumMs: 5_000, TTFTCount: 50}
-	promote, reason = evaluateRollout(active, bad, ready, ready, rolloutConfig(th))
-	assert.False(t, promote)
-	assert.Contains(t, reason, "error rate")
+	// A path model with a body that names none: the engine sees the endpoint.
+	rq = &routeRequest{body: []byte(`{"input":"hi"}`)}
+	rq.setModel("acme/embed")
+	require.NoError(t, json.Unmarshal(rq.body, &payload))
+	assert.Equal(t, "acme/embed", payload["model"])
 
-	slowTTFT := &types.RouteMetrics{Requests: 50, TTFTSumMs: 10_000, TTFTCount: 50} // 200ms vs 100ms
-	promote, reason = evaluateRollout(active, slowTTFT, ready, ready, rolloutConfig(th))
-	assert.False(t, promote)
-	assert.Contains(t, reason, "TTFT")
-
-	same := &types.RouteMetrics{Requests: 50, TTFTSumMs: 5_000, TTFTCount: 50}
-	promote, reason = evaluateRollout(active, same, ready, slow, rolloutConfig(th))
-	assert.False(t, promote)
-	assert.Contains(t, reason, "TPOT")
-
-	promote, _ = evaluateRollout(active, same, ready, ready, rolloutConfig(th))
-	assert.True(t, promote)
+	// Non-object bodies (multipart) only record the selection.
+	rq = &routeRequest{body: []byte("--boundary\r\n")}
+	rq.setModel("acme/img")
+	assert.Equal(t, "acme/img", rq.model)
+	assert.Equal(t, []byte("--boundary\r\n"), rq.body)
 }

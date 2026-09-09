@@ -202,7 +202,7 @@ class RunnerAbstraction(BaseAbstraction):
         )
         self.extra: dict = {}
         # JSON-encoded managed endpoint / service spec; only set by the
-        # ManagedEndpoint and ManagedService abstractions.
+        # ManagedEndpoint abstraction.
         self.managed_endpoint: str = ""
         self.entrypoint: Optional[List[str]] = entrypoint
         self.tcp = tcp

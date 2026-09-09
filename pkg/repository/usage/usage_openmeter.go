@@ -136,6 +136,13 @@ func openMeterEventID(source, name string, data map[string]interface{}) string {
 		sum := sha256.Sum256(identity)
 		return fmt.Sprintf("%x", sum)
 	}
+	// Managed endpoint requests are metered once per request id and leg
+	// (metric name + workspace), so a replayed accounting leg is a no-op.
+	if requestID, ok := data["request_id"].(string); ok && requestID != "" {
+		identity, _ := json.Marshal([]interface{}{source, name, data["workspace_id"], requestID, data["endpoint_id"]})
+		sum := sha256.Sum256(identity)
+		return fmt.Sprintf("%x", sum)
+	}
 
 	start, startOK := data["interval_start"].(string)
 	if !startOK {

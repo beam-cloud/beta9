@@ -1302,38 +1302,6 @@
         ]
       }
     },
-    "/provider/earnings": {
-      "get": {
-        "operationId": "GatewayService_GetProviderEarnings",
-        "responses": {
-          "200": {
-            "description": "A successful response.",
-            "schema": {
-              "$ref": "#/definitions/gatewayGetProviderEarningsResponse"
-            }
-          },
-          "default": {
-            "description": "An unexpected error response.",
-            "schema": {
-              "$ref": "#/definitions/rpcStatus"
-            }
-          }
-        },
-        "parameters": [
-          {
-            "name": "days",
-            "description": "Trailing window in days (today included); defaults to 30.",
-            "in": "query",
-            "required": false,
-            "type": "integer",
-            "format": "int64"
-          }
-        ],
-        "tags": [
-          "GatewayService"
-        ]
-      }
-    },
     "/provider/join-command": {
       "post": {
         "summary": "Sell compute: contribute machines to the managed endpoint fleet and earn\na share of the tokens sold on them.",
@@ -1738,6 +1706,58 @@
             "name": "tokenId",
             "in": "path",
             "required": true,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/usage/endpoints": {
+      "get": {
+        "operationId": "GatewayService_GetEndpointUsage",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayGetEndpointUsageResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "kind",
+            "description": "spend (default) | earned",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "days",
+            "description": "Trailing window in days (today included); defaults to 30. Ignored when\nstart_date is set.",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int64"
+          },
+          {
+            "name": "startDate",
+            "description": "Inclusive UTC day bounds (YYYY-MM-DD); end_date defaults to today.",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "endDate",
+            "in": "query",
+            "required": false,
             "type": "string"
           }
         ],
@@ -3153,6 +3173,31 @@
         }
       }
     },
+    "gatewayEndpointUsage": {
+      "type": "object",
+      "properties": {
+        "requests": {
+          "type": "string",
+          "format": "int64"
+        },
+        "promptTokens": {
+          "type": "string",
+          "format": "int64"
+        },
+        "completionTokens": {
+          "type": "string",
+          "format": "int64"
+        },
+        "images": {
+          "type": "string",
+          "format": "int64"
+        },
+        "microUsd": {
+          "type": "string",
+          "format": "int64"
+        }
+      }
+    },
     "gatewayExportWorkspaceConfigResponse": {
       "type": "object",
       "properties": {
@@ -3234,6 +3279,32 @@
         },
         "byoc": {
           "$ref": "#/definitions/gatewayBYOCPoolState"
+        }
+      }
+    },
+    "gatewayGetEndpointUsageResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        },
+        "total": {
+          "$ref": "#/definitions/gatewayEndpointUsage"
+        },
+        "perModel": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/gatewayEndpointUsage"
+          }
+        },
+        "perDay": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/gatewayEndpointUsage"
+          }
         }
       }
     },
@@ -3466,32 +3537,6 @@
         "expiresAt": {
           "type": "string",
           "format": "date-time"
-        }
-      }
-    },
-    "gatewayGetProviderEarningsResponse": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "type": "boolean"
-        },
-        "errMsg": {
-          "type": "string"
-        },
-        "total": {
-          "$ref": "#/definitions/gatewayProviderEarnings"
-        },
-        "perMachine": {
-          "type": "object",
-          "additionalProperties": {
-            "$ref": "#/definitions/gatewayProviderEarnings"
-          }
-        },
-        "perDay": {
-          "type": "object",
-          "additionalProperties": {
-            "$ref": "#/definitions/gatewayProviderEarnings"
-          }
         }
       }
     },
@@ -4536,31 +4581,6 @@
         },
         "byoc": {
           "$ref": "#/definitions/gatewayBYOCPoolState"
-        }
-      }
-    },
-    "gatewayProviderEarnings": {
-      "type": "object",
-      "properties": {
-        "requests": {
-          "type": "string",
-          "format": "int64"
-        },
-        "promptTokens": {
-          "type": "string",
-          "format": "int64"
-        },
-        "completionTokens": {
-          "type": "string",
-          "format": "int64"
-        },
-        "images": {
-          "type": "string",
-          "format": "int64"
-        },
-        "earningsMicroUsd": {
-          "type": "string",
-          "format": "int64"
         }
       }
     },

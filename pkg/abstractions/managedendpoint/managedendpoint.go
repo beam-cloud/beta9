@@ -9,15 +9,16 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
-	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
+	"net"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
 
+	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
@@ -42,18 +43,15 @@ const (
 	EnvEndpointID     = "BEAM_ENDPOINT_ID"
 	EnvReplicaID      = "BEAM_REPLICA_ID"
 	EnvReplicaSecret  = "BEAM_REPLICA_SECRET" // presented on harness RPCs as x-beam-replica-secret
-	EnvReplicaRole    = "BEAM_ENDPOINT_ROLE"
-	EnvGpuTarget      = "BEAM_GPU_TARGET"
+	EnvGpu            = "BEAM_GPU"
 	EnvLocality       = "BEAM_LOCALITY"
 	EnvEndpointPort   = "BEAM_ENDPOINT_PORT"
 	EnvHarnessEnabled = "BEAM_HARNESS_ENABLED"
 	EnvHarnessConfig  = "BEAM_HARNESS_CONFIG"
-	EnvKVCache        = "BEAM_KV_CACHE"
 	// EnvDrainSeconds is how long the engine has after SIGTERM (eviction or
 	// scale-down) before the worker kills it. Engines without the harness
 	// still get a correct drain window from this alone.
-	EnvDrainSeconds  = "BEAM_DRAIN_SECONDS"
-	EnvServicePrefix = "BEAM_SERVICE_"
+	EnvDrainSeconds = "BEAM_DRAIN_SECONDS"
 )
 
 var (
@@ -104,7 +102,8 @@ type Service struct {
 
 	adminMu        sync.Mutex
 	adminWorkspace *types.Workspace
-	runtimeToken   string
+
+	transports sync.Map // replica address -> *http.Transport; dropped when the replica finishes
 
 	pb.UnimplementedEndpointHarnessServiceServer
 	pb.UnimplementedEndpointAdminServiceServer
@@ -199,36 +198,6 @@ func (s *Service) AdminWorkspace(ctx context.Context) (*types.Workspace, error) 
 	return &copied, nil
 }
 
-// runtimeTokenKey returns a reusable restricted token of the admin workspace
-// that replica containers use to call EndpointHarnessService.
-func (s *Service) runtimeTokenKey(ctx context.Context) (string, error) {
-	workspace, err := s.AdminWorkspace(ctx)
-	if err != nil {
-		return "", err
-	}
-	s.adminMu.Lock()
-	defer s.adminMu.Unlock()
-	if s.runtimeToken != "" {
-		return s.runtimeToken, nil
-	}
-	tokens, err := s.backend.ListTokens(ctx, workspace.Id)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return "", err
-	}
-	for _, token := range tokens {
-		if token.Active && !token.DisabledByClusterAdmin && token.TokenType == types.TokenTypeWorkspaceRestricted {
-			s.runtimeToken = token.Key
-			return token.Key, nil
-		}
-	}
-	token, err := s.backend.CreateToken(ctx, workspace.Id, types.TokenTypeWorkspaceRestricted, true)
-	if err != nil {
-		return "", err
-	}
-	s.runtimeToken = token.Key
-	return token.Key, nil
-}
-
 // authorizeAdmin accepts cluster admin tokens only.
 func (s *Service) authorizeAdmin(ctx context.Context) error {
 	if !s.Enabled() {
@@ -241,33 +210,10 @@ func (s *Service) authorizeAdmin(ctx context.Context) error {
 	return nil
 }
 
-// authorizeHarness accepts any active token of the admin workspace (replica
-// containers carry a restricted one) or a cluster admin token.
-func (s *Service) authorizeHarness(ctx context.Context) error {
-	if !s.Enabled() {
-		return status.Error(codes.FailedPrecondition, errNotEnabled.Error())
-	}
-	authInfo, ok := auth.AuthInfoFromContext(ctx)
-	if !ok || authInfo == nil || authInfo.Token == nil || authInfo.Workspace == nil {
-		return status.Error(codes.Unauthenticated, "token required")
-	}
-	if authInfo.Token.TokenType == types.TokenTypeClusterAdmin {
-		return nil
-	}
-	workspace, err := s.AdminWorkspace(ctx)
-	if err != nil {
-		return status.Error(codes.Internal, err.Error())
-	}
-	if workspace.Id != authInfo.Workspace.Id {
-		return status.Error(codes.PermissionDenied, "harness calls must come from a managed endpoint replica")
-	}
-	return nil
-}
-
-// Replica secrets bind harness calls to one replica. The admin-workspace
-// runtime token only proves a caller is some managed endpoint container; the
-// secret, minted per replica and delivered as BEAM_REPLICA_SECRET, proves
-// which one, so a replica cannot heartbeat, ack or drain on behalf of another.
+// Replicas hold no workspace token. The only credential a replica container
+// receives is its own secret, minted here and delivered as BEAM_REPLICA_SECRET;
+// harness RPCs are exempt from token auth and are authorized by that secret
+// alone, so a compromised model host learns nothing beyond its own replica.
 const replicaSecretHeader = "x-beam-replica-secret"
 
 func newReplicaSecret() (secret, hash string) {
@@ -282,17 +228,53 @@ func hashReplicaSecret(secret string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// harnessReplica authorizes a harness call for one replica: the caller must
-// hold an admin-workspace token and present the replica's secret.
+// transport returns the pooled transport for one replica address. Every hop
+// to a replica (proxying, health, metrics) dials through it, so provider
+// route:// addresses and tailscale backends behave the same everywhere.
+func (s *Service) transport(address string) *http.Transport {
+	if t, ok := s.transports.Load(address); ok {
+		return t.(*http.Transport)
+	}
+	transport := &http.Transport{
+		MaxIdleConns:        512,
+		MaxIdleConnsPerHost: 64,
+		IdleConnTimeout:     90 * time.Second,
+		DisableCompression:  true,
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			conn, err := network.ConnectToBackend(ctx, address, replicaDialTimeout, s.tailscale, s.appConfig.Tailscale, s.containers)
+			if err != nil {
+				return nil, err
+			}
+			// -1: no read deadline; streams are bounded by the request context.
+			abstractions.SetConnOptions(conn, true, 30*time.Second, -1)
+			return conn, nil
+		},
+	}
+	actual, loaded := s.transports.LoadOrStore(address, transport)
+	if loaded {
+		transport.CloseIdleConnections()
+	}
+	return actual.(*http.Transport)
+}
+
+// probeClient is the short-timeout client the controller probes a replica with.
+func (s *Service) probeClient(address string) *http.Client {
+	return &http.Client{Transport: s.transport(address), Timeout: probeTimeout}
+}
+
+func (s *Service) forgetTransport(address string) {
+	if t, ok := s.transports.LoadAndDelete(address); ok {
+		t.(*http.Transport).CloseIdleConnections()
+	}
+}
+
+// harnessReplica authorizes a harness call for one replica by its secret.
 func (s *Service) harnessReplica(ctx context.Context, replica *types.EndpointReplica) error {
-	if err := s.authorizeHarness(ctx); err != nil {
-		return err
+	if !s.Enabled() {
+		return status.Error(codes.FailedPrecondition, errNotEnabled.Error())
 	}
 	if replica == nil {
 		return status.Error(codes.NotFound, "replica not found")
-	}
-	if authInfo, _ := auth.AuthInfoFromContext(ctx); authInfo != nil && authInfo.Token != nil && authInfo.Token.TokenType == types.TokenTypeClusterAdmin {
-		return nil
 	}
 	presented := ""
 	if md, ok := metadata.FromIncomingContext(ctx); ok {
@@ -321,63 +303,18 @@ func (s *Service) emit(eventType string, event types.EventEndpointSchema) {
 func (s *Service) replicaEvent(replica *types.EndpointReplica, action, message string, data map[string]any) {
 	s.emit(types.EventEndpointReplica, types.EventEndpointSchema{
 		EndpointID: replica.EndpointID, Action: action, ReplicaID: replica.ID, ContainerID: replica.ContainerID,
-		GPU: replica.GPU, Role: replica.Role, Version: replica.Version, WorkerID: replica.WorkerID,
+		GPU: replica.GPU, Version: replica.Version, WorkerID: replica.WorkerID,
 		PoolName: replica.PoolName, Locality: replica.Locality, Message: message, Data: data,
 	})
 }
 
-// effectiveRevision resolves the config a replica should run: a replica-scoped
-// revision (tuning) wins over the fleet revision for its role/target.
-func (s *Service) effectiveRevision(ctx context.Context, replica *types.EndpointReplica) (*types.EndpointConfigRevision, error) {
-	if replica.Tuning {
-		revision, err := s.repo.LatestConfigRevision(ctx, replica.EndpointID, types.ConfigScopeReplica, replica.ID)
-		if err != nil || revision != nil {
-			return revision, err
-		}
-	}
-	return s.repo.LatestConfigRevision(ctx, replica.EndpointID, types.ConfigScopeTarget, fleetKey(replica.Role, replica.GPU, replica.Version))
-}
-
-// targetKey identifies a (role, gpu target) within an endpoint: "serve:H100x1".
-func targetKey(role, gpu string) string {
-	if role == "" {
-		role = types.ReplicaRoleServe
-	}
-	return role + ":" + gpu
-}
-
-// fleetKey is the target-scope key for fleet config. It carries the endpoint
-// version so an active fleet and a baking canary each follow their own
-// revision stream instead of fighting over one "latest".
-func fleetKey(role, gpu string, version uint) string {
-	return fmt.Sprintf("%s@v%d", targetKey(role, gpu), version)
-}
-
-// parseFleetKey splits "serve:cpu@v3" into its target key and version.
-// Version is 0 when the key has no suffix.
-func parseFleetKey(key string) (string, uint) {
-	idx := strings.LastIndex(key, "@v")
-	if idx < 0 {
-		return key, 0
-	}
-	var version uint
-	if _, err := fmt.Sscanf(key[idx+2:], "%d", &version); err != nil {
-		return key, 0
-	}
-	return key[:idx], version
-}
-
-// normalizeGPUKey canonicalizes an admin-supplied target key ("h100" ->
-// "H100x1", "a100x2" -> "A100x2", "cpu" -> "cpu").
+// normalizeGPUKey canonicalizes an admin-supplied GPU key ("h100" -> "H100",
+// "" -> "" so filters stay optional).
 func normalizeGPUKey(gpu string) string {
-	gpu = strings.TrimSpace(gpu)
-	if gpu == "" || gpu == "cpu" {
-		return gpu
+	if strings.TrimSpace(gpu) == "" {
+		return ""
 	}
-	if idx := strings.LastIndex(gpu, "x"); idx > 0 {
-		return string(types.NormalizeGPUType(gpu[:idx])) + gpu[idx:]
-	}
-	return string(types.NormalizeGPUType(gpu)) + "x1"
+	return types.GPUKey(gpu)
 }
 
 // rpcError maps registry errors onto gRPC statuses.
@@ -400,7 +337,6 @@ func replicaLog(replica *types.EndpointReplica) *zerolog.Logger {
 		Str("replica_id", replica.ID).
 		Str("container_id", replica.ContainerID).
 		Str("gpu", replica.GPU).
-		Str("role", replica.Role).
 		Logger()
 	return &logger
 }
@@ -426,7 +362,7 @@ func mustJSON(v any) string {
 }
 
 func capacityToProto(c types.ReplicaCapacity) *pb.ReplicaCapacity {
-	out := &pb.ReplicaCapacity{
+	return &pb.ReplicaCapacity{
 		InFlight:            c.InFlight,
 		MaxConcurrency:      c.MaxConcurrency,
 		Running:             c.Running,
@@ -438,15 +374,13 @@ func capacityToProto(c types.ReplicaCapacity) *pb.ReplicaCapacity {
 		TpotMs:              c.TPOTMs,
 		PrefixCacheHitMilli: c.PrefixCacheHitMilli,
 	}
-	out.KvTransferJson = string(c.KVTransfer)
-	return out
 }
 
 func capacityFromProto(c *pb.ReplicaCapacity) types.ReplicaCapacity {
 	if c == nil {
 		return types.ReplicaCapacity{}
 	}
-	out := types.ReplicaCapacity{
+	return types.ReplicaCapacity{
 		InFlight:            c.InFlight,
 		MaxConcurrency:      c.MaxConcurrency,
 		Running:             c.Running,
@@ -458,25 +392,22 @@ func capacityFromProto(c *pb.ReplicaCapacity) types.ReplicaCapacity {
 		TPOTMs:              c.TpotMs,
 		PrefixCacheHitMilli: c.PrefixCacheHitMilli,
 	}
-	if json.Valid([]byte(c.KvTransferJson)) {
-		out.KVTransfer = json.RawMessage(c.KvTransferJson)
-	}
-	return out
 }
 
-func revisionToProto(r *types.EndpointConfigRevision) *pb.ConfigRevision {
-	if r == nil {
+func configToProto(c types.ReplicaConfig) *pb.ReplicaConfig {
+	if c.Revision == 0 {
 		return nil
 	}
-	return &pb.ConfigRevision{
-		Revision:        r.Revision,
-		EndpointId:      r.EndpointID,
-		Scope:           string(r.Scope),
-		ScopeKey:        r.ScopeKey,
-		ConfigJson:      mustJSON(r.Config),
-		Author:          r.Author,
-		Source:          string(r.Source),
-		CreatedAtUnixMs: unixMs(r.CreatedAt),
+	return &pb.ReplicaConfig{
+		Revision:      c.Revision,
+		ConfigJson:    string(c.Config),
+		Author:        c.Author,
+		SetAtUnixMs:   unixMs(c.SetAt),
+		AckedRevision: c.AckedRevision,
+		Applied:       c.Applied,
+		Error:         c.Error,
+		EffectiveJson: string(c.Effective),
+		AckedAtUnixMs: unixMs(c.AckedAt),
 	}
 }
 
@@ -488,25 +419,26 @@ func replicaToProto(r *types.EndpointReplica) *pb.EndpointReplica {
 		Id:                  r.ID,
 		EndpointId:          r.EndpointID,
 		Version:             uint32(r.Version),
-		Role:                r.Role,
 		Gpu:                 r.GPU,
 		GpuCount:            r.GPUCount,
 		Locality:            r.Locality,
 		PoolName:            r.PoolName,
 		ContainerId:         r.ContainerID,
 		WorkerId:            r.WorkerID,
+		MachineId:           r.MachineID,
+		ProviderWorkspaceId: r.ProviderWorkspaceID,
 		Address:             r.Address,
 		Status:              string(r.Status),
+		StatusReason:        r.StatusReason,
 		Protected:           r.Protected,
-		Tuning:              r.Tuning,
 		HarnessEnabled:      r.HarnessEnabled,
-		ConfigRevision:      r.ConfigRevision,
+		Config:              configToProto(r.Config),
 		Capacity:            capacityToProto(r.Capacity),
 		CapabilitiesJson:    string(r.Capabilities),
+		EngineMetricsJson:   string(r.EngineMetrics),
 		StartedAtUnixMs:     unixMs(r.StartedAt),
 		ReadyAtUnixMs:       unixMs(r.ReadyAt),
 		LastHeartbeatUnixMs: unixMs(r.LastHeartbeat),
-		StatusReason:        r.StatusReason,
 	}
 }
 
@@ -518,73 +450,33 @@ func replicasToProto(replicas []*types.EndpointReplica) []*pb.EndpointReplica {
 	return out
 }
 
-// endpointToProto builds the listing entry, counting live replicas.
-func endpointToProto(e *types.ManagedEndpoint, replicas []*types.EndpointReplica) *pb.ManagedEndpoint {
+// endpointToProto builds the listing entry with live replica counts and the
+// fleet placements for the endpoint.
+func endpointToProto(e *types.ManagedEndpoint, fleet *types.Fleet, replicas []*types.EndpointReplica) *pb.ManagedEndpoint {
 	out := &pb.ManagedEndpoint{
 		Id:              e.Spec.ID,
 		SpecJson:        mustJSON(e.Spec),
 		StubId:          e.StubID,
 		Version:         uint32(e.Version),
 		GitSha:          e.GitSHA,
-		Enabled:         e.Enabled(),
 		Status:          string(e.Status),
 		CreatedAtUnixMs: unixMs(e.CreatedAt),
 		UpdatedAtUnixMs: unixMs(e.UpdatedAt),
 	}
-	out.ReadyReplicas, out.TotalReplicas = countReplicas(replicas, e.Spec.ID)
-	return out
-}
-
-// countReplicas returns the ready and non-terminal replica counts for an id.
-func countReplicas(replicas []*types.EndpointReplica, id string) (ready, total uint32) {
+	if fleet != nil {
+		placements := map[string]types.Placement{}
+		for _, t := range fleet.Placements(e.Spec.ID) {
+			placements[t.GPU] = t.Placement
+		}
+		out.PlacementsJson = mustJSON(placements)
+	}
 	for _, r := range replicas {
-		if r.EndpointID == id && !r.Status.Terminal() {
-			total++
+		if r.EndpointID == e.Spec.ID && !r.Status.Terminal() {
+			out.TotalReplicas++
 			if r.Status == types.ReplicaStatusReady {
-				ready++
+				out.ReadyReplicas++
 			}
 		}
-	}
-	return ready, total
-}
-
-func serviceToProto(s *types.ManagedService, replicas []*types.EndpointReplica) *pb.ManagedService {
-	out := &pb.ManagedService{
-		Name:     s.Spec.Name,
-		SpecJson: mustJSON(s.Spec),
-		StubId:   s.StubID,
-		Version:  uint32(s.Version),
-		GitSha:   s.GitSHA,
-		Enabled:  s.Enabled(),
-		Status:   string(s.Status),
-	}
-	out.ReadyReplicas, out.TotalReplicas = countReplicas(replicas, serviceReplicaID(s.Spec.Name))
-	return out
-}
-
-func rolloutToProto(r *types.RolloutState, versions []*types.EndpointVersion) *pb.RolloutState {
-	if r == nil {
-		return nil
-	}
-	out := &pb.RolloutState{
-		EndpointId:           r.EndpointID,
-		ActiveVersion:        uint32(r.ActiveVersion),
-		CanaryVersion:        uint32(r.CanaryVersion),
-		PinnedVersion:        uint32(r.PinnedVersion),
-		Phase:                string(r.Phase),
-		BakeStartedAtUnixMs:  unixMs(r.BakeStartedAt),
-		LastDecision:         r.LastDecision,
-		LastDecisionAtUnixMs: unixMs(r.LastDecisionAt),
-	}
-	for _, v := range versions {
-		out.Versions = append(out.Versions, &pb.EndpointVersion{
-			EndpointId:      v.EndpointID,
-			Version:         uint32(v.Version),
-			StubId:          v.StubID,
-			GitSha:          v.GitSHA,
-			State:           string(v.State),
-			CreatedAtUnixMs: unixMs(v.CreatedAt),
-		})
 	}
 	return out
 }
@@ -597,13 +489,13 @@ func gitopsToProto(state *types.GitOpsState) *pb.GitOpsState {
 		TargetSha:       state.TargetSHA,
 		LastRunAtUnixMs: unixMs(state.LastRunAt),
 		LastError:       state.LastError,
+		FleetError:      state.FleetError,
 		Running:         state.Running,
 	}
 	for _, e := range state.PerEndpoint {
 		out.Endpoints = append(out.Endpoints, &pb.GitOpsEndpointState{
 			Path:            e.Path,
 			Id:              e.ID,
-			Kind:            e.Kind,
 			AppliedSha:      e.AppliedSHA,
 			Status:          string(e.Status),
 			Error:           e.Error,

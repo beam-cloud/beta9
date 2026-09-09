@@ -52,7 +52,7 @@ const (
 	GatewayService_ScaleBYOCPool_FullMethodName                   = "/gateway.GatewayService/ScaleBYOCPool"
 	GatewayService_GetProviderJoinCommand_FullMethodName          = "/gateway.GatewayService/GetProviderJoinCommand"
 	GatewayService_ListProviderMachines_FullMethodName            = "/gateway.GatewayService/ListProviderMachines"
-	GatewayService_GetProviderEarnings_FullMethodName             = "/gateway.GatewayService/GetProviderEarnings"
+	GatewayService_GetEndpointUsage_FullMethodName                = "/gateway.GatewayService/GetEndpointUsage"
 	GatewayService_ListMachineContainers_FullMethodName           = "/gateway.GatewayService/ListMachineContainers"
 	GatewayService_CreatePool_FullMethodName                      = "/gateway.GatewayService/CreatePool"
 	GatewayService_DeletePool_FullMethodName                      = "/gateway.GatewayService/DeletePool"
@@ -136,7 +136,7 @@ type GatewayServiceClient interface {
 	// a share of the tokens sold on them.
 	GetProviderJoinCommand(ctx context.Context, in *GetProviderJoinCommandRequest, opts ...grpc.CallOption) (*GetProviderJoinCommandResponse, error)
 	ListProviderMachines(ctx context.Context, in *ListProviderMachinesRequest, opts ...grpc.CallOption) (*ListProviderMachinesResponse, error)
-	GetProviderEarnings(ctx context.Context, in *GetProviderEarningsRequest, opts ...grpc.CallOption) (*GetProviderEarningsResponse, error)
+	GetEndpointUsage(ctx context.Context, in *GetEndpointUsageRequest, opts ...grpc.CallOption) (*GetEndpointUsageResponse, error)
 	ListMachineContainers(ctx context.Context, in *ListMachineContainersRequest, opts ...grpc.CallOption) (*ListMachineContainersResponse, error)
 	CreatePool(ctx context.Context, in *CreatePoolRequest, opts ...grpc.CallOption) (*CreatePoolResponse, error)
 	DeletePool(ctx context.Context, in *DeletePoolRequest, opts ...grpc.CallOption) (*DeletePoolResponse, error)
@@ -529,9 +529,9 @@ func (c *gatewayServiceClient) ListProviderMachines(ctx context.Context, in *Lis
 	return out, nil
 }
 
-func (c *gatewayServiceClient) GetProviderEarnings(ctx context.Context, in *GetProviderEarningsRequest, opts ...grpc.CallOption) (*GetProviderEarningsResponse, error) {
-	out := new(GetProviderEarningsResponse)
-	err := c.cc.Invoke(ctx, GatewayService_GetProviderEarnings_FullMethodName, in, out, opts...)
+func (c *gatewayServiceClient) GetEndpointUsage(ctx context.Context, in *GetEndpointUsageRequest, opts ...grpc.CallOption) (*GetEndpointUsageResponse, error) {
+	out := new(GetEndpointUsageResponse)
+	err := c.cc.Invoke(ctx, GatewayService_GetEndpointUsage_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -939,7 +939,7 @@ type GatewayServiceServer interface {
 	// a share of the tokens sold on them.
 	GetProviderJoinCommand(context.Context, *GetProviderJoinCommandRequest) (*GetProviderJoinCommandResponse, error)
 	ListProviderMachines(context.Context, *ListProviderMachinesRequest) (*ListProviderMachinesResponse, error)
-	GetProviderEarnings(context.Context, *GetProviderEarningsRequest) (*GetProviderEarningsResponse, error)
+	GetEndpointUsage(context.Context, *GetEndpointUsageRequest) (*GetEndpointUsageResponse, error)
 	ListMachineContainers(context.Context, *ListMachineContainersRequest) (*ListMachineContainersResponse, error)
 	CreatePool(context.Context, *CreatePoolRequest) (*CreatePoolResponse, error)
 	DeletePool(context.Context, *DeletePoolRequest) (*DeletePoolResponse, error)
@@ -1084,8 +1084,8 @@ func (UnimplementedGatewayServiceServer) GetProviderJoinCommand(context.Context,
 func (UnimplementedGatewayServiceServer) ListProviderMachines(context.Context, *ListProviderMachinesRequest) (*ListProviderMachinesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListProviderMachines not implemented")
 }
-func (UnimplementedGatewayServiceServer) GetProviderEarnings(context.Context, *GetProviderEarningsRequest) (*GetProviderEarningsResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetProviderEarnings not implemented")
+func (UnimplementedGatewayServiceServer) GetEndpointUsage(context.Context, *GetEndpointUsageRequest) (*GetEndpointUsageResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetEndpointUsage not implemented")
 }
 func (UnimplementedGatewayServiceServer) ListMachineContainers(context.Context, *ListMachineContainersRequest) (*ListMachineContainersResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListMachineContainers not implemented")
@@ -1812,20 +1812,20 @@ func _GatewayService_ListProviderMachines_Handler(srv interface{}, ctx context.C
 	return interceptor(ctx, in, info, handler)
 }
 
-func _GatewayService_GetProviderEarnings_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetProviderEarningsRequest)
+func _GatewayService_GetEndpointUsage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetEndpointUsageRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(GatewayServiceServer).GetProviderEarnings(ctx, in)
+		return srv.(GatewayServiceServer).GetEndpointUsage(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: GatewayService_GetProviderEarnings_FullMethodName,
+		FullMethod: GatewayService_GetEndpointUsage_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(GatewayServiceServer).GetProviderEarnings(ctx, req.(*GetProviderEarningsRequest))
+		return srv.(GatewayServiceServer).GetEndpointUsage(ctx, req.(*GetEndpointUsageRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2585,8 +2585,8 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _GatewayService_ListProviderMachines_Handler,
 		},
 		{
-			MethodName: "GetProviderEarnings",
-			Handler:    _GatewayService_GetProviderEarnings_Handler,
+			MethodName: "GetEndpointUsage",
+			Handler:    _GatewayService_GetEndpointUsage_Handler,
 		},
 		{
 			MethodName: "ListMachineContainers",

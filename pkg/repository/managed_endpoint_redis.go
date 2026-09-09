@@ -20,20 +20,20 @@ const (
 	managedEndpointPrefix        = "managed_endpoint"
 	managedEndpointMetricsBucket = time.Minute
 	managedEndpointMetricsRetain = 25 * time.Hour
-	managedEndpointRevisionKeep  = 200
-	providerEarningsRetain       = 95 * 24 * time.Hour
-	providerEarningsMaxDays      = 90
+	usageRetain                  = 95 * 24 * time.Hour
+	usageMaxDays                 = 90
 	metricsAggregateGPU          = "_all"
-	metricsAggregateVersion      = "0"
+	metricsAggregateReplica      = "-"
 )
 
 // ManagedEndpointRedisRepository implements ManagedEndpointRepository on Redis. Keys (under managed_endpoint:):
 //
-//	endpoint:<id>, service:<name>, version:<id>:<n>, replica:<rid>   JSON, indexed by the sets endpoints, services, versions:<id>, replicas, replicas:<id>
-//	replica_container:<cid> -> rid; replica_lock:<rid>, drain:<rid>, backoff:<id>:<target>
-//	rollout:<id>, gitops, config_ack:<rid>:<rev>, generation:<request_id>   JSON
-//	config_seq:<id> INCR; config:<id>:<rev> JSON; config_index:<id>:<scope>:<key> ZSET rev; config_events:<id> pub/sub
-//	metrics:<id>:<gpu>:<version>:<minute>, earnings:<workspace>:<day>       HASH counters
+//	endpoint:<id>, replica:<rid>                      JSON, indexed by the sets endpoints, replicas, replicas:<id>
+//	replica_container:<cid> -> rid; replica_lock:<rid>, drain:<rid>, backoff:<id>:<gpu>
+//	fleet, gitops, generation:<request_id>            JSON
+//	config_events:<rid>                               pub/sub, replica config revision numbers
+//	metrics:<id>:<gpu>:<version>:<minute>             HASH counters
+//	usage:<spend|earned>:<workspace>:<day>            HASH counters, fields "<model>|<counter>"
 type ManagedEndpointRedisRepository struct {
 	rdb  *common.RedisClient
 	lock *common.RedisLock
@@ -58,13 +58,42 @@ func meKeys(members []string, prefix ...string) []string {
 
 func u64(n uint64) string { return strconv.FormatUint(n, 10) }
 
-// getJSON returns nil, nil when the key does not exist.
+// getJSON returns nil, nil when the key does not exist or no longer decodes
+// (see listLenient); the next save overwrites a stale record.
 func getJSON[T any](ctx context.Context, rdb *common.RedisClient, key string) (*T, error) {
-	out, err := listJSON[T](ctx, rdb, []string{key})
+	out, err := listLenient[T](ctx, rdb, []string{key})
 	if err != nil || len(out) == 0 {
 		return nil, err
 	}
 	return out[0], nil
+}
+
+// listLenient MGETs keys and decodes each value, skipping (and logging) records
+// that no longer decode into T. One stale record written by an older gateway
+// must not take a whole listing, and with it the /v1 catalog, offline; the
+// GitOps reconciler rewrites such records on its next forced pass.
+func listLenient[T any](ctx context.Context, rdb *common.RedisClient, keys []string) ([]*T, error) {
+	if len(keys) == 0 {
+		return []*T{}, nil
+	}
+	values, err := rdb.MGet(ctx, keys...).Result()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*T, 0, len(values))
+	for i, value := range values {
+		data, ok := jsonBytes(value)
+		if !ok {
+			continue
+		}
+		var v T
+		if err := json.Unmarshal(data, &v); err != nil {
+			log.Warn().Err(err).Str("key", keys[i]).Msg("managed endpoints: skipping undecodable record")
+			continue
+		}
+		out = append(out, &v)
+	}
+	return out, nil
 }
 
 // listIndexed MGETs meKey(keyPrefix..., member) for every member of the index set, sorted by less.
@@ -73,7 +102,7 @@ func listIndexed[T any](ctx context.Context, rdb *common.RedisClient, indexKey s
 	if err != nil {
 		return nil, err
 	}
-	out, err := listJSON[T](ctx, rdb, meKeys(members, keyPrefix...))
+	out, err := listLenient[T](ctx, rdb, meKeys(members, keyPrefix...))
 	if err != nil {
 		return nil, err
 	}
@@ -136,6 +165,8 @@ func (r *ManagedEndpointRedisRepository) hgetAll(ctx context.Context, keys []str
 	return out, nil
 }
 
+// --- registry ------------------------------------------------------------------
+
 func (r *ManagedEndpointRedisRepository) SaveEndpoint(ctx context.Context, endpoint *types.ManagedEndpoint) error {
 	if endpoint == nil || endpoint.Spec.ID == "" {
 		return errors.New("endpoint id is required")
@@ -154,54 +185,33 @@ func (r *ManagedEndpointRedisRepository) ListEndpoints(ctx context.Context) ([]*
 }
 
 func (r *ManagedEndpointRedisRepository) DeleteEndpoint(ctx context.Context, endpointID string) error {
-	return r.deleteIndexed(ctx, []string{meKey("endpoint", endpointID), meKey("rollout", endpointID)}, endpointID, meKey("endpoints"))
+	return r.deleteIndexed(ctx, []string{meKey("endpoint", endpointID)}, endpointID, meKey("endpoints"))
 }
 
-func (r *ManagedEndpointRedisRepository) SaveService(ctx context.Context, service *types.ManagedService) error {
-	if service == nil || service.Spec.Name == "" {
-		return errors.New("service name is required")
+func (r *ManagedEndpointRedisRepository) SaveFleet(ctx context.Context, fleet *types.Fleet) error {
+	if fleet == nil {
+		return errors.New("fleet is required")
 	}
-	service.UpdatedAt = time.Now()
-	service.CreatedAt = cmp.Or(service.CreatedAt, service.UpdatedAt)
-	return r.saveIndexed(ctx, meKey("service", service.Spec.Name), meKey("services"), service.Spec.Name, service, nil)
+	fleet.UpdatedAt = time.Now()
+	return r.setJSON(ctx, meKey("fleet"), fleet, 0)
 }
 
-func (r *ManagedEndpointRedisRepository) GetService(ctx context.Context, name string) (*types.ManagedService, error) {
-	return getJSON[types.ManagedService](ctx, r.rdb, meKey("service", name))
-}
-
-func (r *ManagedEndpointRedisRepository) ListServices(ctx context.Context) ([]*types.ManagedService, error) {
-	return listIndexed(ctx, r.rdb, meKey("services"), func(a, b *types.ManagedService) bool { return a.Spec.Name < b.Spec.Name }, "service")
-}
-
-func (r *ManagedEndpointRedisRepository) DeleteService(ctx context.Context, name string) error {
-	return r.deleteIndexed(ctx, []string{meKey("service", name)}, name, meKey("services"))
-}
-
-func (r *ManagedEndpointRedisRepository) SaveVersion(ctx context.Context, version *types.EndpointVersion) error {
-	if version == nil || version.EndpointID == "" || version.Version == 0 {
-		return errors.New("endpoint id and version are required")
+// GetFleet returns the stored fleet, or an empty one when none was applied yet.
+func (r *ManagedEndpointRedisRepository) GetFleet(ctx context.Context) (*types.Fleet, error) {
+	fleet, err := getJSON[types.Fleet](ctx, r.rdb, meKey("fleet"))
+	if err != nil {
+		return nil, err
 	}
-	version.UpdatedAt = time.Now()
-	version.CreatedAt = cmp.Or(version.CreatedAt, version.UpdatedAt)
-	return r.saveIndexed(ctx, meKey("version", version.EndpointID, u64(uint64(version.Version))), meKey("versions", version.EndpointID), u64(uint64(version.Version)), version, nil)
-}
-
-func (r *ManagedEndpointRedisRepository) ListVersions(ctx context.Context, endpointID string) ([]*types.EndpointVersion, error) {
-	return listIndexed(ctx, r.rdb, meKey("versions", endpointID), func(a, b *types.EndpointVersion) bool { return a.Version < b.Version }, "version", endpointID)
-}
-
-func (r *ManagedEndpointRedisRepository) SaveRollout(ctx context.Context, rollout *types.RolloutState) error {
-	if rollout == nil || rollout.EndpointID == "" {
-		return errors.New("endpoint id is required")
+	if fleet == nil {
+		fleet = &types.Fleet{}
 	}
-	rollout.UpdatedAt = time.Now()
-	return r.setJSON(ctx, meKey("rollout", rollout.EndpointID), rollout, 0)
+	if fleet.Targets == nil {
+		fleet.Targets = map[string]map[string]types.Placement{}
+	}
+	return fleet, nil
 }
 
-func (r *ManagedEndpointRedisRepository) GetRollout(ctx context.Context, endpointID string) (*types.RolloutState, error) {
-	return getJSON[types.RolloutState](ctx, r.rdb, meKey("rollout", endpointID))
-}
+// --- replicas ------------------------------------------------------------------
 
 func (r *ManagedEndpointRedisRepository) SaveReplica(ctx context.Context, replica *types.EndpointReplica) error {
 	if replica == nil || replica.ID == "" || replica.EndpointID == "" {
@@ -274,119 +284,48 @@ func (r *ManagedEndpointRedisRepository) DrainRequested(ctx context.Context, rep
 	return true, uint32(seconds), nil
 }
 
-func (r *ManagedEndpointRedisRepository) SetScheduleBackoff(ctx context.Context, endpointID, targetKey string, ttl time.Duration) error {
+func (r *ManagedEndpointRedisRepository) SetScheduleBackoff(ctx context.Context, endpointID, gpu string, ttl time.Duration) error {
 	if ttl <= 0 {
 		return nil
 	}
-	return r.rdb.Set(ctx, meKey("backoff", endpointID, targetKey), "1", ttl).Err()
+	return r.rdb.Set(ctx, meKey("backoff", endpointID, gpu), "1", ttl).Err()
 }
 
-func (r *ManagedEndpointRedisRepository) InScheduleBackoff(ctx context.Context, endpointID, targetKey string) (bool, error) {
-	n, err := r.rdb.Exists(ctx, meKey("backoff", endpointID, targetKey)).Result()
+func (r *ManagedEndpointRedisRepository) InScheduleBackoff(ctx context.Context, endpointID, gpu string) (bool, error) {
+	n, err := r.rdb.Exists(ctx, meKey("backoff", endpointID, gpu)).Result()
 	return n > 0, err
 }
 
-func (r *ManagedEndpointRedisRepository) CreateConfigRevision(ctx context.Context, revision *types.EndpointConfigRevision) error {
-	if revision == nil || revision.EndpointID == "" || revision.Scope == "" || revision.ScopeKey == "" {
-		return errors.New("endpoint id, scope and scope key are required")
-	}
-	if revision.Config == nil {
-		revision.Config = map[string]any{}
-	}
-	seq, err := r.rdb.Incr(ctx, meKey("config_seq", revision.EndpointID)).Result()
-	if err != nil {
-		return err
-	}
-	revision.Revision = uint64(seq)
-	revision.CreatedAt = time.Now()
-	data, err := json.Marshal(revision)
-	if err != nil {
-		return err
-	}
-	index := meKey("config_index", revision.EndpointID, string(revision.Scope), revision.ScopeKey)
-	rev := u64(revision.Revision)
-	_, err = r.rdb.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-		pipe.Set(ctx, meKey("config", revision.EndpointID, rev), data, 0)
-		pipe.ZAdd(ctx, index, redis.Z{Score: float64(revision.Revision), Member: rev})
-		pipe.ZRemRangeByRank(ctx, index, 0, -managedEndpointRevisionKeep-1)
-		pipe.Publish(ctx, meKey("config_events", revision.EndpointID), data)
-		return nil
-	})
-	return err
+// NotifyReplicaConfig wakes the replica's WatchConfig stream after its
+// config was saved with a new revision.
+func (r *ManagedEndpointRedisRepository) NotifyReplicaConfig(ctx context.Context, replicaID string, revision uint64) error {
+	return r.rdb.Publish(ctx, meKey("config_events", replicaID), u64(revision)).Err()
 }
 
-func (r *ManagedEndpointRedisRepository) GetConfigRevision(ctx context.Context, endpointID string, revision uint64) (*types.EndpointConfigRevision, error) {
-	return getJSON[types.EndpointConfigRevision](ctx, r.rdb, meKey("config", endpointID, u64(revision)))
-}
-
-func (r *ManagedEndpointRedisRepository) LatestConfigRevision(ctx context.Context, endpointID string, scope types.ConfigRevisionScope, scopeKey string) (*types.EndpointConfigRevision, error) {
-	revisions, err := r.ListConfigRevisions(ctx, endpointID, scope, scopeKey, 1)
-	if err != nil || len(revisions) == 0 {
-		return nil, err
-	}
-	return revisions[0], nil
-}
-
-// ListConfigRevisions returns up to limit revisions, newest first.
-func (r *ManagedEndpointRedisRepository) ListConfigRevisions(ctx context.Context, endpointID string, scope types.ConfigRevisionScope, scopeKey string, limit int) ([]*types.EndpointConfigRevision, error) {
-	if limit <= 0 {
-		limit = 20
-	}
-	members, err := r.rdb.ZRevRange(ctx, meKey("config_index", endpointID, string(scope), scopeKey), 0, int64(limit-1)).Result()
-	if err != nil {
-		return nil, err
-	}
-	out, err := listJSON[types.EndpointConfigRevision](ctx, r.rdb, meKeys(members, "config", endpointID))
-	if err != nil {
-		return nil, err
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Revision > out[j].Revision })
-	return out, nil
-}
-
-func (r *ManagedEndpointRedisRepository) DeleteConfigRevisions(ctx context.Context, endpointID string, scope types.ConfigRevisionScope, scopeKey string) error {
-	index := meKey("config_index", endpointID, string(scope), scopeKey)
-	members, err := r.rdb.ZRange(ctx, index, 0, -1).Result()
-	if err != nil {
-		return err
-	}
-	return r.rdb.Del(ctx, append(meKeys(members, "config", endpointID), index)...).Err()
-}
-
-func (r *ManagedEndpointRedisRepository) SubscribeConfigRevisions(ctx context.Context, endpointID string) (<-chan *types.EndpointConfigRevision, error) {
-	messages, errs := r.rdb.Subscribe(ctx, meKey("config_events", endpointID))
-	out := make(chan *types.EndpointConfigRevision, 16)
+func (r *ManagedEndpointRedisRepository) SubscribeReplicaConfig(ctx context.Context, replicaID string) (<-chan uint64, error) {
+	messages, errs := r.rdb.Subscribe(ctx, meKey("config_events", replicaID))
+	out := make(chan uint64, 16)
 	go func() {
 		defer close(out)
 		for message := range messages {
-			var revision types.EndpointConfigRevision
-			if err := json.Unmarshal([]byte(message.Payload), &revision); err != nil {
+			revision, err := strconv.ParseUint(message.Payload, 10, 64)
+			if err != nil {
 				continue
 			}
 			select {
-			case out <- &revision:
+			case out <- revision:
 			case <-ctx.Done():
 				return
 			}
 		}
 		if err := <-errs; err != nil {
-			log.Warn().Err(err).Str("endpoint_id", endpointID).Msg("managed endpoint config subscription error")
+			log.Warn().Err(err).Str("replica_id", replicaID).Msg("managed endpoint config subscription error")
 		}
 	}()
 	return out, nil
 }
 
-func (r *ManagedEndpointRedisRepository) SaveConfigAck(ctx context.Context, ack *types.ConfigAck) error {
-	if ack == nil || ack.ReplicaID == "" {
-		return errors.New("replica id is required")
-	}
-	ack.At = cmp.Or(ack.At, time.Now())
-	return r.setJSON(ctx, meKey("config_ack", ack.ReplicaID, u64(ack.Revision)), ack, 24*time.Hour)
-}
-
-func (r *ManagedEndpointRedisRepository) GetConfigAck(ctx context.Context, replicaID string, revision uint64) (*types.ConfigAck, error) {
-	return getJSON[types.ConfigAck](ctx, r.rdb, meKey("config_ack", replicaID, u64(revision)))
-}
+// --- gitops ------------------------------------------------------------------
 
 func (r *ManagedEndpointRedisRepository) SaveGitOpsState(ctx context.Context, state *types.GitOpsState) error {
 	if state == nil {
@@ -404,8 +343,10 @@ func (r *ManagedEndpointRedisRepository) GetGitOpsState(ctx context.Context) (*t
 	return state, err
 }
 
-func metricsKey(endpointID, gpu, version string, bucket time.Time) string {
-	return meKey("metrics", endpointID, gpu, version, strconv.FormatInt(bucket.Unix(), 10))
+// --- route metrics -----------------------------------------------------------
+
+func metricsKey(endpointID, gpu, replica string, bucket time.Time) string {
+	return meKey("metrics", endpointID, gpu, replica, strconv.FormatInt(bucket.Unix(), 10))
 }
 
 func routeMetricsFields(m *types.RouteMetrics) map[string]*int64 {
@@ -416,18 +357,21 @@ func routeMetricsFields(m *types.RouteMetrics) map[string]*int64 {
 	}
 }
 
-// RecordRouteSample increments the minute bucket for the exact (gpu, version) and for the aggregates.
+// RecordRouteSample increments the minute bucket for the endpoint, for its
+// GPU type and for the exact replica, so tuning can read one replica's traffic
+// apart from the fleet's.
 func (r *ManagedEndpointRedisRepository) RecordRouteSample(ctx context.Context, sample types.RouteSample) error {
 	if sample.EndpointID == "" {
 		return errors.New("endpoint id is required")
 	}
 	bucket := cmp.Or(sample.At, time.Now()).Truncate(managedEndpointMetricsBucket)
-	gpu, version := cmp.Or(sample.GPU, metricsAggregateGPU), u64(uint64(sample.Version))
+	gpu := cmp.Or(sample.GPU, metricsAggregateGPU)
 	keys := map[string]struct{}{
-		metricsKey(sample.EndpointID, metricsAggregateGPU, metricsAggregateVersion, bucket): {},
-		metricsKey(sample.EndpointID, gpu, metricsAggregateVersion, bucket):                 {},
-		metricsKey(sample.EndpointID, metricsAggregateGPU, version, bucket):                 {},
-		metricsKey(sample.EndpointID, gpu, version, bucket):                                 {},
+		metricsKey(sample.EndpointID, metricsAggregateGPU, metricsAggregateReplica, bucket): {},
+		metricsKey(sample.EndpointID, gpu, metricsAggregateReplica, bucket):                 {},
+	}
+	if sample.ReplicaID != "" {
+		keys[metricsKey(sample.EndpointID, gpu, sample.ReplicaID, bucket)] = struct{}{}
 	}
 	delta := types.RouteMetrics{
 		Requests: 1, PromptTokens: sample.PromptTokens, CompletionTokens: sample.CompletionTokens, Images: sample.Images,
@@ -454,23 +398,25 @@ func (r *ManagedEndpointRedisRepository) RecordRouteSample(ctx context.Context, 
 	return err
 }
 
-func (r *ManagedEndpointRedisRepository) GetRouteMetrics(ctx context.Context, endpointID, gpu string, version uint, window time.Duration) (*types.RouteMetrics, error) {
+// GetRouteMetrics sums the window for the endpoint (gpu and replica empty),
+// one GPU type, or one replica (its gpu must be given).
+func (r *ManagedEndpointRedisRepository) GetRouteMetrics(ctx context.Context, endpointID, gpu, replicaID string, window time.Duration) (*types.RouteMetrics, error) {
 	if window <= 0 {
 		window = 5 * time.Minute
 	}
 	window = min(window, managedEndpointMetricsRetain-time.Hour)
-	gpu = cmp.Or(gpu, metricsAggregateGPU)
+	gpu, replica := cmp.Or(gpu, metricsAggregateGPU), cmp.Or(replicaID, metricsAggregateReplica)
 	now := time.Now()
 	end := now.Truncate(managedEndpointMetricsBucket)
 	var keys []string
 	for bucket := now.Add(-window).Truncate(managedEndpointMetricsBucket); !bucket.After(end); bucket = bucket.Add(managedEndpointMetricsBucket) {
-		keys = append(keys, metricsKey(endpointID, gpu, u64(uint64(version)), bucket))
+		keys = append(keys, metricsKey(endpointID, gpu, replica, bucket))
 	}
 	buckets, err := r.hgetAll(ctx, keys)
 	if err != nil {
 		return nil, err
 	}
-	metrics := &types.RouteMetrics{EndpointID: endpointID, Version: version, Window: window}
+	metrics := &types.RouteMetrics{EndpointID: endpointID, ReplicaID: replicaID, Window: window}
 	if gpu != metricsAggregateGPU {
 		metrics.GPU = gpu
 	}
@@ -495,76 +441,90 @@ func (r *ManagedEndpointRedisRepository) GetGeneration(ctx context.Context, gene
 	return getJSON[types.EventEndpointRouteSchema](ctx, r.rdb, meKey("generation", generationID))
 }
 
-func providerEarningsFields(e *types.ProviderEarnings) map[string]*int64 {
+// --- usage -------------------------------------------------------------------
+
+func usageFields(u *types.Usage) map[string]*int64 {
 	return map[string]*int64{
-		"requests": &e.Requests, "prompt_tokens": &e.PromptTokens, "completion_tokens": &e.CompletionTokens,
-		"images": &e.Images, "earnings_micro_usd": &e.EarningsMicroUSD,
+		"requests": &u.Requests, "prompt_tokens": &u.PromptTokens, "completion_tokens": &u.CompletionTokens,
+		"images": &u.Images, "micro_usd": &u.MicroUSD,
 	}
 }
 
-// AddProviderEarnings credits one served request to the provider workspace's
-// daily bucket, both in total and under a "m:<machine>:" field prefix.
-func (r *ManagedEndpointRedisRepository) AddProviderEarnings(ctx context.Context, workspaceID, machineID string, at time.Time, delta types.ProviderEarnings) error {
-	if workspaceID == "" {
-		return errors.New("provider workspace id is required")
+// AddUsage credits one request to a workspace's daily bucket for kind
+// ("spend" for the caller, "earned" for the provider of the machine that
+// served it), both in total and under the model.
+func (r *ManagedEndpointRedisRepository) AddUsage(ctx context.Context, kind types.UsageKind, workspaceID, model, requestID string, at time.Time, delta types.Usage) error {
+	if workspaceID == "" || model == "" || requestID == "" {
+		return errors.New("workspace id, model and request id are required")
 	}
-	key := meKey("earnings", workspaceID, at.UTC().Format(time.DateOnly))
-	_, err := r.rdb.Pipelined(ctx, func(pipe redis.Pipeliner) error {
-		for field, value := range providerEarningsFields(&delta) {
+	// One request is counted once per leg: a replayed request id is a no-op.
+	fresh, err := r.rdb.SetNX(ctx, meKey("usage", "seen", string(kind), requestID), "1", usageRetain).Result()
+	if err != nil || !fresh {
+		return err
+	}
+	key := meKey("usage", string(kind), workspaceID, at.UTC().Format(time.DateOnly))
+	_, err = r.rdb.Pipelined(ctx, func(pipe redis.Pipeliner) error {
+		for field, value := range usageFields(&delta) {
 			if *value <= 0 {
 				continue
 			}
 			pipe.HIncrBy(ctx, key, field, *value)
-			if machineID != "" {
-				pipe.HIncrBy(ctx, key, "m:"+machineID+":"+field, *value)
-			}
+			pipe.HIncrBy(ctx, key, model+"|"+field, *value)
 		}
-		pipe.Expire(ctx, key, providerEarningsRetain)
+		pipe.Expire(ctx, key, usageRetain)
 		return nil
 	})
 	return err
 }
 
-// GetProviderEarnings folds the trailing days (today included) into totals,
-// per machine and per day.
-func (r *ManagedEndpointRedisRepository) GetProviderEarnings(ctx context.Context, workspaceID string, days int) (*types.ProviderEarningsReport, error) {
-	days = max(1, min(days, providerEarningsMaxDays))
+// GetUsage folds the UTC days from..to (inclusive, clamped to today and to
+// usageMaxDays) into totals, per model and per day.
+func (r *ManagedEndpointRedisRepository) GetUsage(ctx context.Context, kind types.UsageKind, workspaceID string, from, to time.Time) (*types.UsageReport, error) {
 	today := time.Now().UTC().Truncate(24 * time.Hour)
-	keys, dates := make([]string, 0, days), make([]string, 0, days)
-	for i := days - 1; i >= 0; i-- {
-		day := today.AddDate(0, 0, -i).Format(time.DateOnly)
-		dates = append(dates, day)
-		keys = append(keys, meKey("earnings", workspaceID, day))
+	first, last := from.UTC().Truncate(24*time.Hour), to.UTC().Truncate(24*time.Hour)
+	if last.After(today) {
+		last = today
+	}
+	if first.After(last) {
+		first = last
+	}
+	if oldest := last.AddDate(0, 0, -(usageMaxDays - 1)); first.Before(oldest) {
+		first = oldest
+	}
+	var keys, dates []string
+	for day := first; !day.After(last); day = day.AddDate(0, 0, 1) {
+		dates = append(dates, day.Format(time.DateOnly))
+		keys = append(keys, meKey("usage", string(kind), workspaceID, dates[len(dates)-1]))
 	}
 	buckets, err := r.hgetAll(ctx, keys)
 	if err != nil {
 		return nil, err
 	}
-	report := &types.ProviderEarningsReport{PerMachine: map[string]types.ProviderEarnings{}, PerDay: map[string]types.ProviderEarnings{}}
+	report := &types.UsageReport{PerModel: map[string]types.Usage{}, PerDay: map[string]types.Usage{}}
 	for i, values := range buckets {
-		var day types.ProviderEarnings
-		perMachine := map[string]*types.ProviderEarnings{}
+		var day types.Usage
+		perModel := map[string]*types.Usage{}
 		for field, raw := range values {
 			n, _ := strconv.ParseInt(raw, 10, 64)
 			target := &day
-			if machine, name, ok := strings.Cut(strings.TrimPrefix(field, "m:"), ":"); ok && strings.HasPrefix(field, "m:") {
-				if perMachine[machine] == nil {
-					perMachine[machine] = &types.ProviderEarnings{}
+			if model, name, ok := strings.Cut(field, "|"); ok {
+				if perModel[model] == nil {
+					perModel[model] = &types.Usage{}
 				}
-				target, field = perMachine[machine], name
+				target, field = perModel[model], name
 			}
-			if slot := providerEarningsFields(target)[field]; slot != nil {
+			if slot := usageFields(target)[field]; slot != nil {
 				*slot += n
 			}
 		}
-		if day != (types.ProviderEarnings{}) {
+		if day != (types.Usage{}) {
 			report.PerDay[dates[i]] = day
 			report.Total.Add(day)
 		}
-		for machine, e := range perMachine {
-			total := report.PerMachine[machine]
-			total.Add(*e)
-			report.PerMachine[machine] = total
+		for model, u := range perModel {
+			total := report.PerModel[model]
+			total.Add(*u)
+			report.PerModel[model] = total
 		}
 	}
 	return report, nil

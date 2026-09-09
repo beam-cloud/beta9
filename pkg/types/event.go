@@ -1203,7 +1203,6 @@ const (
 	EventEndpointRoute   = "endpoint.route"
 	EventEndpointReplica = "endpoint.replica"
 	EventEndpointConfig  = "endpoint.config"
-	EventEndpointRollout = "endpoint.rollout"
 	EventEndpointGitOps  = "endpoint.gitops"
 	EventEndpointHarness = "endpoint.harness"
 )
@@ -1223,7 +1222,6 @@ type EventEndpointSchema struct {
 	WorkerID    string         `json:"worker_id,omitempty"`
 	PoolName    string         `json:"pool_name,omitempty"`
 	GPU         string         `json:"gpu,omitempty"`
-	Role        string         `json:"role,omitempty"`
 	Locality    string         `json:"locality,omitempty"`
 	Revision    uint64         `json:"revision,omitempty"`
 	Message     string         `json:"message,omitempty"`
@@ -1244,7 +1242,6 @@ type EventEndpointRouteSchema struct {
 	ContainerID string `json:"container_id,omitempty"`
 	MachineID   string `json:"machine_id,omitempty"`
 	GPU         string `json:"gpu"`
-	Role        string `json:"role,omitempty"`
 	Locality    string `json:"locality,omitempty"`
 	// Provider attribution: set when the serving replica ran on a
 	// workspace-contributed machine; ProviderShareMicroUSD is that

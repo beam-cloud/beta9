@@ -7,9 +7,11 @@ REDEPLOY (comma-separated app paths to redeploy even if unchanged), RUN_ID
 (echoed in the report) and DEPLOY_KEY (SSH private key or https token), plus
 BETA9_TOKEN and BETA9_GATEWAY_HOST[_HTTP] / BETA9_GATEWAY_PORT[_HTTP].
 
-Every directory containing an app.py that exports a ManagedEndpoint or
-ManagedService is a managed stub, deployed from its own directory. The run ends
-with one POST to /api/v1/endpoints/gitops/report.
+Every directory under REPO_PATH containing an app.py that exports a
+ManagedEndpoint is deployed from its own directory. fleet.yaml at the repo root
+({gpu: {endpoint: {share, min, max, count}}}) is sent verbatim in the report;
+the gateway parses, validates and applies it. The run ends with one POST to
+/api/v1/endpoints/gitops/report.
 """
 
 import importlib.util
@@ -82,8 +84,10 @@ def checkout():
 
 def changed_paths():
     """Set of files changed since LAST_SHA, or None for 'everything'."""
-    if FORCE or not LAST_SHA or LAST_SHA == SHA:
+    if FORCE or not LAST_SHA:
         return None
+    if LAST_SHA == SHA:
+        return set()  # retry run: only REDEPLOY paths are redeployed
     try:
         git("fetch", "-q", "--depth", "1", "origin", LAST_SHA)
         out = git("diff", "--name-only", LAST_SHA, SHA).stdout
@@ -108,6 +112,8 @@ def app_changed(rel, changed, app_dirs):
         return True
     prefix = f"{REPO_PATH}/" if REPO_PATH else ""
     for path in changed:
+        if path == "fleet.yaml":
+            continue  # placement only; the gateway applies it without a redeploy
         if not path.startswith(prefix):
             return True
         inner = path[len(prefix) :]
@@ -188,8 +194,17 @@ def post_report(report):
     return False
 
 
+def load_fleet():
+    """Raw fleet.yaml from the repo root (the gateway parses and validates it)."""
+    path = REPO / "fleet.yaml"
+    if not path.is_file():
+        log("no fleet.yaml; nothing will be placed")
+        return ""
+    return path.read_text()
+
+
 def deploy_app(app, root, changed, app_dirs, report):
-    from beta9 import ManagedEndpoint, ManagedService
+    from beta9 import ManagedEndpoint
 
     rel = str(app.parent.relative_to(root))
     os.chdir(app.parent)
@@ -199,19 +214,18 @@ def deploy_app(app, root, changed, app_dirs, report):
         traceback.print_exc()
         detail = f"exited with {exc.code}" if isinstance(exc, SystemExit) else str(exc)
         report["results"].append(
-            {"path": rel, "id": "", "kind": "", "ok": False, "error": f"import failed: {detail}"}
+            {"path": rel, "id": "", "ok": False, "error": f"import failed: {detail}"}
         )
         return
     for obj in list(vars(module).values()):
-        if not isinstance(obj, (ManagedEndpoint, ManagedService)):
+        if not isinstance(obj, ManagedEndpoint):
             continue
-        kind = "service" if isinstance(obj, ManagedService) else "endpoint"
-        result = {"path": rel, "id": obj.spec_name, "kind": kind, "ok": False, "skipped": False}
+        result = {"path": rel, "id": obj.id, "ok": False, "skipped": False}
         report["results"].append(result)
         if not app_changed(rel.strip("./"), changed, app_dirs):
             result.update(ok=True, skipped=True)
             continue
-        log(f"deploying {kind} {obj.spec_name} from {rel}")
+        log(f"deploying {obj.id} from {rel}")
         try:
             out, ok = obj.deploy(git_sha=SHA)
             version = int(out.get("version") or 0)
@@ -239,6 +253,7 @@ def main():
         log(f"{len(apps)} app(s) at {SHA[:8]}; changed={n_changed}")
         for app in apps:
             deploy_app(app, root, changed, app_dirs, report)
+        report["fleet_yaml"] = load_fleet()
     except (Exception, SystemExit) as exc:  # noqa: BLE001  (the report must always be posted)
         traceback.print_exc()
         report["error"] = f"exited with {exc.code}" if isinstance(exc, SystemExit) else str(exc)

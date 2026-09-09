@@ -23,6 +23,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 	"github.com/rs/zerolog/log"
+	"gopkg.in/yaml.v2"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -117,13 +118,14 @@ func (g *gitops) run(ctx context.Context) {
 		case <-ticker.C:
 		case req = <-g.pending:
 		}
-		if err := g.lock.Acquire(ctx, gitopsLockKey, common.RedisLockOptions{TtlS: int(gitopsLockTTL.Seconds()), Retries: 0}); err != nil {
-			continue
-		}
-		if err := g.sync(ctx, req); err != nil {
+		// The lease is renewed for as long as sync runs (resolving the remote
+		// head alone can take a while) and sync is cancelled if it is lost.
+		err := g.lock.WithLease(ctx, gitopsLockKey, common.RedisLockOptions{TtlS: int(gitopsLockTTL.Seconds()), Retries: 0}, func(ctx context.Context) error {
+			return g.sync(ctx, req)
+		})
+		if err != nil && !common.IsRedisLockNotObtained(err) {
 			log.Error().Err(err).Msg("managed endpoints: gitops sync failed")
 		}
-		_ = g.lock.Release(gitopsLockKey)
 	}
 }
 
@@ -159,10 +161,13 @@ func (g *gitops) sync(ctx context.Context, req gitopsRequest) error {
 			retry = append(retry, e.Path)
 		}
 	}
-	if !req.force && sha == state.LastSHA && len(retry) == 0 {
+	// A gateway upgrade that changed the record schema redeploys everything so
+	// records written by the previous shape are rewritten.
+	force := req.force || (state.LastSHA != "" && state.Schema != types.ManagedEndpointSchema)
+	if !force && sha == state.LastSHA && len(retry) == 0 {
 		return nil
 	}
-	return g.launch(ctx, state, sha, req.force, retry)
+	return g.launch(ctx, state, sha, force, retry)
 }
 
 func (g *gitops) state(ctx context.Context) (*types.GitOpsState, error) {
@@ -475,9 +480,9 @@ func (g *gitops) applyReport(ctx context.Context, report *types.GitOpsReport) er
 			failed++
 			continue
 		}
-		key := r.Kind + ":" + r.ID
+		key := r.ID
 		entry := state.PerEndpoint[key]
-		entry.Path, entry.ID, entry.Kind, entry.UpdatedAt = r.Path, r.ID, r.Kind, now
+		entry.Path, entry.ID, entry.UpdatedAt = r.Path, r.ID, now
 		if r.OK {
 			// Unchanged (skipped) directories move forward with the repo head too.
 			entry.Status, entry.Error, entry.AppliedSHA = types.GitOpsStatusApplied, "", report.SHA
@@ -498,7 +503,7 @@ func (g *gitops) applyReport(ctx context.Context, report *types.GitOpsReport) er
 	present := map[string]bool{}
 	for _, r := range report.Results {
 		if r.ID != "" {
-			present[r.Kind+":"+r.ID] = true
+			present[r.ID] = true
 		}
 	}
 	claimed := map[string]bool{} // import failures attributed to a known stub
@@ -512,9 +517,9 @@ func (g *gitops) applyReport(ctx context.Context, report *types.GitOpsReport) er
 			state.PerEndpoint[key] = entry
 			continue
 		}
-		if err := g.retire(ctx, entry.Kind, entry.ID, report.SHA); err != nil {
-			// Keep LastSHA behind so the next sync relaunches at this commit and
-			// the retirement is retried.
+		if err := g.retire(ctx, entry.ID, report.SHA); err != nil {
+			// Flagged failed with its path, so the next sync relaunches and,
+			// finding the directory still gone, retries the retirement.
 			log.Warn().Err(err).Str("id", entry.ID).Msg("managed endpoints: gitops retire failed")
 			entry.Status, entry.Error, entry.UpdatedAt = types.GitOpsStatusFailed, "retire: "+err.Error(), now
 			state.PerEndpoint[key] = entry
@@ -537,10 +542,22 @@ func (g *gitops) applyReport(ctx context.Context, report *types.GitOpsReport) er
 		}
 	}
 
-	state.TargetSHA = report.SHA
-	if failed == 0 {
-		state.LastSHA, state.LastError = report.SHA, ""
-	} else {
+	// fleet.yaml is applied against the endpoints that exist after this run.
+	// A fleet that fails validation is not applied: the previous placement
+	// stays in force and the error is surfaced on the GitOps status.
+	skipped, err := g.applyFleet(ctx, report)
+	state.FleetError = skipped
+	if err != nil {
+		state.FleetError = err.Error()
+		failed++
+	}
+
+	// LastSHA advances even when some stubs failed: they are tracked per
+	// endpoint and retried on their own, so a broken app never redeploys the
+	// healthy ones.
+	state.TargetSHA, state.LastSHA, state.Schema = report.SHA, report.SHA, types.ManagedEndpointSchema
+	state.LastError = ""
+	if failed > 0 {
 		state.LastError = fmt.Sprintf("%d stub(s) failed to deploy at %.8s", failed, report.SHA)
 	}
 	if err := g.s.repo.SaveGitOpsState(ctx, state); err != nil {
@@ -554,33 +571,55 @@ func (g *gitops) applyReport(ctx context.Context, report *types.GitOpsReport) er
 	return nil
 }
 
-// retire disables an endpoint or service removed from the repo. Replicas are
-// drained by the controller; usage history and versions are kept.
-func (g *gitops) retire(ctx context.Context, kind, id, sha string) error {
-	now := time.Now()
-	if kind == "service" {
-		service, err := g.s.repo.GetService(ctx, id)
-		if err != nil || service == nil {
-			return err
-		}
-		service.Status, service.UpdatedAt = types.EndpointStatusRetired, now
-		if err := g.s.repo.SaveService(ctx, service); err != nil {
-			return err
-		}
-	} else {
-		endpoint, err := g.s.repo.GetEndpoint(ctx, id)
-		if err != nil || endpoint == nil {
-			return err
-		}
-		endpoint.Status, endpoint.UpdatedAt = types.EndpointStatusRetired, now
-		if err := g.s.repo.SaveEndpoint(ctx, endpoint); err != nil {
-			return err
-		}
+// retire disables an endpoint removed from the repo. Replicas are drained
+// by the controller; usage history is kept.
+func (g *gitops) retire(ctx context.Context, id, sha string) error {
+	endpoint, err := g.s.repo.GetEndpoint(ctx, id)
+	if err != nil || endpoint == nil {
+		return err
+	}
+	endpoint.Status, endpoint.UpdatedAt = types.EndpointStatusRetired, time.Now()
+	if err := g.s.repo.SaveEndpoint(ctx, endpoint); err != nil {
+		return err
 	}
 	g.s.emit(types.EventEndpointGitOps, types.EventEndpointSchema{
-		EndpointID: id, Action: "gitops.retired", Message: "removed from repo", Data: map[string]any{"kind": kind, "sha": sha},
+		EndpointID: id, Action: "gitops.retired", Message: "removed from repo", Data: map[string]any{"sha": sha},
 	})
 	return nil
+}
+
+// applyFleet parses and validates the report's fleet.yaml, drops placements
+// for endpoints that are not deployed (reported as skipped, so a failed deploy
+// never blocks the rest of the fleet) and saves the result. A fleet that fails
+// validation is not applied: the previous placement stays in force.
+func (g *gitops) applyFleet(ctx context.Context, report *types.GitOpsReport) (skipped string, err error) {
+	endpoints, err := g.s.repo.ListEndpoints(ctx)
+	if err != nil {
+		return "", err
+	}
+	known := map[string]*types.ManagedEndpointSpec{}
+	for _, e := range endpoints {
+		if e.Enabled() {
+			known[e.Spec.ID] = &e.Spec
+		}
+	}
+	fleet := &types.Fleet{GitSHA: report.SHA}
+	if err := yaml.Unmarshal([]byte(report.FleetYAML), &fleet.Targets); err != nil {
+		return "", fmt.Errorf("fleet.yaml: %w", err)
+	}
+	fleet.Normalize()
+	if err := fleet.Validate(); err != nil {
+		return "", fmt.Errorf("fleet.yaml: %w", err)
+	}
+	dropped := fleet.Prune(known)
+	if err := g.s.repo.SaveFleet(ctx, fleet); err != nil {
+		return "", err
+	}
+	g.s.emit(types.EventEndpointGitOps, types.EventEndpointSchema{Action: "gitops.fleet", Message: report.SHA, Data: map[string]any{"fleet": fleet.Targets, "skipped": dropped}})
+	if len(dropped) > 0 {
+		return "skipped: " + strings.Join(dropped, "; "), nil
+	}
+	return "", nil
 }
 
 // --- HTTP ----------------------------------------------------------------------
@@ -616,19 +655,27 @@ func (g *gitops) handleWebhook(ctx echo.Context) error {
 	return ctx.JSON(http.StatusAccepted, map[string]any{"ok": true, "started": started, "after": push.After})
 }
 
-// handleReport receives the deployer's result. It accepts any active token of
-// the admin workspace (the run token) or a cluster admin token.
+// handleReport receives the deployer's result. Only the token minted for the
+// run in flight (or a cluster admin) may report on it.
 func (g *gitops) handleReport(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
-	if cc, ok := ctx.(*auth.HttpAuthContext); ok && cc.AuthInfo != nil {
-		reqCtx = auth.ContextWithAuthInfo(reqCtx, cc.AuthInfo)
+	cc, ok := ctx.(*auth.HttpAuthContext)
+	if !ok || cc.AuthInfo == nil || cc.AuthInfo.Token == nil {
+		return echo.NewHTTPError(http.StatusUnauthorized, "token required")
 	}
-	if err := g.s.authorizeHarness(reqCtx); err != nil {
-		return httpError(err)
-	}
+	reqCtx = auth.ContextWithAuthInfo(reqCtx, cc.AuthInfo)
 	var report types.GitOpsReport
 	if err := json.NewDecoder(io.LimitReader(ctx.Request().Body, 4<<20)).Decode(&report); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+	if cc.AuthInfo.Token.TokenType != types.TokenTypeClusterAdmin {
+		state, err := g.s.repo.GetGitOpsState(reqCtx)
+		if err != nil {
+			return httpError(err)
+		}
+		if state == nil || !state.Running || report.RunID != state.RunID || cc.AuthInfo.Token.ExternalId != state.TokenID {
+			return echo.NewHTTPError(http.StatusForbidden, "not the token of the run in flight")
+		}
 	}
 	if err := g.applyReport(reqCtx, &report); err != nil {
 		return echo.NewHTTPError(http.StatusConflict, err.Error())

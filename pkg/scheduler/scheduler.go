@@ -525,7 +525,7 @@ func (s *Scheduler) privatePoolQuotaExempt(request *types.ContainerRequest) bool
 	}
 	// Managed endpoint replicas are platform workloads in the cluster admin
 	// workspace: they are neither credit-gated nor counted against a quota.
-	if request.Stub.Type.IsManaged() {
+	if request.Stub.Type.IsManagedEndpoint() {
 		return true
 	}
 	if s.workerPoolManager == nil {
@@ -1062,7 +1062,7 @@ func providerControllerAllowed(controller WorkerPoolController, request *types.C
 }
 
 func isManagedRequest(request *types.ContainerRequest) bool {
-	return request != nil && request.Stub.Type.IsManaged()
+	return request != nil && request.Stub.Type.IsManagedEndpoint()
 }
 
 // filterWorkersByMachine restricts machine-pinned requests to the pinned

@@ -37,20 +37,24 @@ class ReplicaCapacity(betterproto.Message):
     ttft_ms: int = betterproto.int64_field(8)
     tpot_ms: int = betterproto.int64_field(9)
     prefix_cache_hit_milli: int = betterproto.int64_field(10)
-    kv_transfer_json: str = betterproto.string_field(11)
-    """JSON-encoded KV transfer stats (connector specific), optional."""
 
 
 @dataclass(eq=False, repr=False)
-class ConfigRevision(betterproto.Message):
+class ReplicaConfig(betterproto.Message):
+    """
+    ReplicaConfig is the live harness config of one replica: the requested
+     revision and the engine's answer to it.
+    """
+
     revision: int = betterproto.uint64_field(1)
-    endpoint_id: str = betterproto.string_field(2)
-    scope: str = betterproto.string_field(3)
-    scope_key: str = betterproto.string_field(4)
-    config_json: str = betterproto.string_field(5)
-    author: str = betterproto.string_field(6)
-    source: str = betterproto.string_field(7)
-    created_at_unix_ms: int = betterproto.int64_field(8)
+    config_json: str = betterproto.string_field(2)
+    author: str = betterproto.string_field(3)
+    set_at_unix_ms: int = betterproto.int64_field(4)
+    acked_revision: int = betterproto.uint64_field(5)
+    applied: bool = betterproto.bool_field(6)
+    error: str = betterproto.string_field(7)
+    effective_json: str = betterproto.string_field(8)
+    acked_at_unix_ms: int = betterproto.int64_field(9)
 
 
 @dataclass(eq=False, repr=False)
@@ -58,25 +62,27 @@ class EndpointReplica(betterproto.Message):
     id: str = betterproto.string_field(1)
     endpoint_id: str = betterproto.string_field(2)
     version: int = betterproto.uint32_field(3)
-    role: str = betterproto.string_field(4)
-    gpu: str = betterproto.string_field(5)
-    gpu_count: int = betterproto.uint32_field(6)
-    locality: str = betterproto.string_field(7)
-    pool_name: str = betterproto.string_field(8)
-    container_id: str = betterproto.string_field(9)
-    worker_id: str = betterproto.string_field(10)
-    address: str = betterproto.string_field(11)
-    status: str = betterproto.string_field(12)
+    gpu: str = betterproto.string_field(4)
+    gpu_count: int = betterproto.uint32_field(5)
+    locality: str = betterproto.string_field(6)
+    pool_name: str = betterproto.string_field(7)
+    container_id: str = betterproto.string_field(8)
+    worker_id: str = betterproto.string_field(9)
+    address: str = betterproto.string_field(10)
+    status: str = betterproto.string_field(11)
+    status_reason: str = betterproto.string_field(12)
     protected: bool = betterproto.bool_field(13)
-    tuning: bool = betterproto.bool_field(15)
-    harness_enabled: bool = betterproto.bool_field(16)
-    config_revision: int = betterproto.uint64_field(17)
-    capacity: "ReplicaCapacity" = betterproto.message_field(18)
-    capabilities_json: str = betterproto.string_field(19)
-    started_at_unix_ms: int = betterproto.int64_field(20)
-    ready_at_unix_ms: int = betterproto.int64_field(21)
-    last_heartbeat_unix_ms: int = betterproto.int64_field(22)
-    status_reason: str = betterproto.string_field(23)
+    harness_enabled: bool = betterproto.bool_field(14)
+    config: "ReplicaConfig" = betterproto.message_field(15)
+    capacity: "ReplicaCapacity" = betterproto.message_field(16)
+    capabilities_json: str = betterproto.string_field(17)
+    engine_metrics_json: str = betterproto.string_field(18)
+    started_at_unix_ms: int = betterproto.int64_field(19)
+    ready_at_unix_ms: int = betterproto.int64_field(20)
+    last_heartbeat_unix_ms: int = betterproto.int64_field(21)
+    machine_id: str = betterproto.string_field(22)
+    provider_workspace_id: str = betterproto.string_field(23)
+    """Set when the replica runs on a workspace's contributed machine."""
 
 
 @dataclass(eq=False, repr=False)
@@ -86,27 +92,13 @@ class ManagedEndpoint(betterproto.Message):
     stub_id: str = betterproto.string_field(3)
     version: int = betterproto.uint32_field(4)
     git_sha: str = betterproto.string_field(5)
-    enabled: bool = betterproto.bool_field(6)
-    status: str = betterproto.string_field(7)
-    created_at_unix_ms: int = betterproto.int64_field(8)
-    updated_at_unix_ms: int = betterproto.int64_field(9)
-    ready_replicas: int = betterproto.uint32_field(10)
-    """Summary counters for listings."""
-
-    total_replicas: int = betterproto.uint32_field(11)
-
-
-@dataclass(eq=False, repr=False)
-class ManagedService(betterproto.Message):
-    name: str = betterproto.string_field(1)
-    spec_json: str = betterproto.string_field(2)
-    stub_id: str = betterproto.string_field(3)
-    version: int = betterproto.uint32_field(4)
-    git_sha: str = betterproto.string_field(5)
-    enabled: bool = betterproto.bool_field(6)
-    status: str = betterproto.string_field(7)
-    ready_replicas: int = betterproto.uint32_field(8)
-    total_replicas: int = betterproto.uint32_field(9)
+    status: str = betterproto.string_field(6)
+    created_at_unix_ms: int = betterproto.int64_field(7)
+    updated_at_unix_ms: int = betterproto.int64_field(8)
+    ready_replicas: int = betterproto.uint32_field(9)
+    total_replicas: int = betterproto.uint32_field(10)
+    placements_json: str = betterproto.string_field(11)
+    """Where the fleet places this endpoint: JSON {gpu: placement}."""
 
 
 @dataclass(eq=False, repr=False)
@@ -134,11 +126,10 @@ class HarnessRegisterResponse(betterproto.Message):
     err_msg: str = betterproto.string_field(2)
     replica_id: str = betterproto.string_field(3)
     endpoint_id: str = betterproto.string_field(4)
-    role: str = betterproto.string_field(5)
-    gpu: str = betterproto.string_field(6)
-    locality: str = betterproto.string_field(7)
-    heartbeat_interval_seconds: int = betterproto.uint32_field(8)
-    current: "ConfigRevision" = betterproto.message_field(9)
+    gpu: str = betterproto.string_field(5)
+    heartbeat_interval_seconds: int = betterproto.uint32_field(6)
+    current: "ReplicaConfig" = betterproto.message_field(7)
+    """Current live config; unset when none was pushed to this replica."""
 
 
 @dataclass(eq=False, repr=False)
@@ -173,9 +164,7 @@ class HarnessHeartbeatRequest(betterproto.Message):
     capacity: "ReplicaCapacity" = betterproto.message_field(3)
     applied_revision: int = betterproto.uint64_field(4)
     metrics_json: str = betterproto.string_field(5)
-    """JSON engine metrics window summary (harness MetricsWindow)."""
-
-    dropped_events: int = betterproto.uint32_field(6)
+    """JSON engine metrics summary."""
 
 
 @dataclass(eq=False, repr=False)
@@ -204,7 +193,7 @@ class HarnessPublishEventsResponse(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class ListEndpointsRequest(betterproto.Message):
-    include_disabled: bool = betterproto.bool_field(1)
+    pass
 
 
 @dataclass(eq=False, repr=False)
@@ -225,7 +214,6 @@ class GetEndpointResponse(betterproto.Message):
     err_msg: str = betterproto.string_field(2)
     endpoint: "ManagedEndpoint" = betterproto.message_field(3)
     replicas: List["EndpointReplica"] = betterproto.message_field(4)
-    rollout: "RolloutState" = betterproto.message_field(5)
 
 
 @dataclass(eq=False, repr=False)
@@ -233,7 +221,6 @@ class ListReplicasRequest(betterproto.Message):
     endpoint_id: str = betterproto.string_field(1)
     status: str = betterproto.string_field(2)
     gpu: str = betterproto.string_field(3)
-    role: str = betterproto.string_field(4)
 
 
 @dataclass(eq=False, repr=False)
@@ -278,98 +265,45 @@ class GetMetricsResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class GetConfigRequest(betterproto.Message):
-    endpoint_id: str = betterproto.string_field(1)
-    scope: str = betterproto.string_field(2)
-    scope_key: str = betterproto.string_field(3)
-    """
-    target: "<gpu key>", "<role>:<gpu key>" or "<role>:<gpu key>@v<version>";
-     without a version suffix the active version is used. replica: replica id.
-    """
+class SetReplicaConfigRequest(betterproto.Message):
+    replica_id: str = betterproto.string_field(1)
+    config_json: str = betterproto.string_field(2)
+    author: str = betterproto.string_field(3)
+    wait_seconds: int = betterproto.uint32_field(4)
+    """Wait up to this long for the harness ack (0 = default)."""
 
 
 @dataclass(eq=False, repr=False)
-class GetConfigResponse(betterproto.Message):
+class SetReplicaConfigResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
-    revision: "ConfigRevision" = betterproto.message_field(3)
+    replica: "EndpointReplica" = betterproto.message_field(3)
 
 
 @dataclass(eq=False, repr=False)
-class ListConfigRevisionsRequest(betterproto.Message):
-    endpoint_id: str = betterproto.string_field(1)
-    scope: str = betterproto.string_field(2)
-    scope_key: str = betterproto.string_field(3)
-    limit: int = betterproto.uint32_field(4)
+class StopReplicaRequest(betterproto.Message):
+    replica_id: str = betterproto.string_field(1)
+    drain_seconds: int = betterproto.uint32_field(2)
+    """Grace for in-flight requests; zero stops immediately."""
 
 
 @dataclass(eq=False, repr=False)
-class ListConfigRevisionsResponse(betterproto.Message):
+class StopReplicaResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
-    revisions: List["ConfigRevision"] = betterproto.message_field(3)
-
-
-@dataclass(eq=False, repr=False)
-class EndpointVersion(betterproto.Message):
-    endpoint_id: str = betterproto.string_field(1)
-    version: int = betterproto.uint32_field(2)
-    stub_id: str = betterproto.string_field(3)
-    git_sha: str = betterproto.string_field(4)
-    state: str = betterproto.string_field(5)
-    created_at_unix_ms: int = betterproto.int64_field(6)
-
-
-@dataclass(eq=False, repr=False)
-class RolloutState(betterproto.Message):
-    endpoint_id: str = betterproto.string_field(1)
-    active_version: int = betterproto.uint32_field(2)
-    canary_version: int = betterproto.uint32_field(3)
-    pinned_version: int = betterproto.uint32_field(4)
-    phase: str = betterproto.string_field(5)
-    bake_started_at_unix_ms: int = betterproto.int64_field(6)
-    last_decision: str = betterproto.string_field(7)
-    last_decision_at_unix_ms: int = betterproto.int64_field(8)
-    versions: List["EndpointVersion"] = betterproto.message_field(9)
-
-
-@dataclass(eq=False, repr=False)
-class PromoteRolloutRequest(betterproto.Message):
-    endpoint_id: str = betterproto.string_field(1)
-    version: int = betterproto.uint32_field(2)
-
-
-@dataclass(eq=False, repr=False)
-class RollbackRolloutRequest(betterproto.Message):
-    endpoint_id: str = betterproto.string_field(1)
-    version: int = betterproto.uint32_field(2)
-
-
-@dataclass(eq=False, repr=False)
-class PinVersionRequest(betterproto.Message):
-    endpoint_id: str = betterproto.string_field(1)
-    version: int = betterproto.uint32_field(2)
-    """Zero unpins."""
-
-
-@dataclass(eq=False, repr=False)
-class RolloutActionResponse(betterproto.Message):
-    ok: bool = betterproto.bool_field(1)
-    err_msg: str = betterproto.string_field(2)
-    rollout: "RolloutState" = betterproto.message_field(3)
+    replica: "EndpointReplica" = betterproto.message_field(3)
 
 
 @dataclass(eq=False, repr=False)
 class GitOpsEndpointState(betterproto.Message):
     path: str = betterproto.string_field(1)
     id: str = betterproto.string_field(2)
-    kind: str = betterproto.string_field(3)
-    applied_sha: str = betterproto.string_field(4)
-    status: str = betterproto.string_field(5)
-    error: str = betterproto.string_field(6)
-    stub_id: str = betterproto.string_field(7)
-    version: int = betterproto.uint32_field(8)
-    updated_at_unix_ms: int = betterproto.int64_field(9)
+    applied_sha: str = betterproto.string_field(3)
+    status: str = betterproto.string_field(4)
+    error: str = betterproto.string_field(5)
+    stub_id: str = betterproto.string_field(6)
+    version: int = betterproto.uint32_field(7)
+    updated_at_unix_ms: int = betterproto.int64_field(8)
 
 
 @dataclass(eq=False, repr=False)
@@ -380,8 +314,9 @@ class GitOpsState(betterproto.Message):
     target_sha: str = betterproto.string_field(4)
     last_run_at_unix_ms: int = betterproto.int64_field(5)
     last_error: str = betterproto.string_field(6)
-    running: bool = betterproto.bool_field(7)
-    endpoints: List["GitOpsEndpointState"] = betterproto.message_field(8)
+    fleet_error: str = betterproto.string_field(7)
+    running: bool = betterproto.bool_field(8)
+    endpoints: List["GitOpsEndpointState"] = betterproto.message_field(9)
 
 
 @dataclass(eq=False, repr=False)
@@ -394,6 +329,8 @@ class GetGitOpsStatusResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
     state: "GitOpsState" = betterproto.message_field(3)
+    fleet_json: str = betterproto.string_field(4)
+    """The applied fleet.yaml as JSON {gpu: {endpoint: placement}}."""
 
 
 @dataclass(eq=False, repr=False)
@@ -409,83 +346,6 @@ class TriggerGitOpsSyncResponse(betterproto.Message):
     started: bool = betterproto.bool_field(3)
 
 
-@dataclass(eq=False, repr=False)
-class SetEndpointEnabledRequest(betterproto.Message):
-    endpoint_id: str = betterproto.string_field(1)
-    enabled: bool = betterproto.bool_field(2)
-
-
-@dataclass(eq=False, repr=False)
-class SetEndpointEnabledResponse(betterproto.Message):
-    ok: bool = betterproto.bool_field(1)
-    err_msg: str = betterproto.string_field(2)
-    endpoint: "ManagedEndpoint" = betterproto.message_field(3)
-
-
-@dataclass(eq=False, repr=False)
-class ListServicesRequest(betterproto.Message):
-    pass
-
-
-@dataclass(eq=False, repr=False)
-class ListServicesResponse(betterproto.Message):
-    ok: bool = betterproto.bool_field(1)
-    err_msg: str = betterproto.string_field(2)
-    services: List["ManagedService"] = betterproto.message_field(3)
-
-
-@dataclass(eq=False, repr=False)
-class StartTuningReplicaRequest(betterproto.Message):
-    endpoint_id: str = betterproto.string_field(1)
-    gpu: str = betterproto.string_field(2)
-    role: str = betterproto.string_field(3)
-    wait_seconds: int = betterproto.uint32_field(4)
-    """
-    Wait up to this long for the replica to become ready (0 = return immediately).
-    """
-
-
-@dataclass(eq=False, repr=False)
-class StopReplicaRequest(betterproto.Message):
-    replica_id: str = betterproto.string_field(1)
-    drain_seconds: int = betterproto.uint32_field(2)
-    """Grace for in-flight requests; zero stops immediately."""
-
-
-@dataclass(eq=False, repr=False)
-class ReplicaResponse(betterproto.Message):
-    ok: bool = betterproto.bool_field(1)
-    err_msg: str = betterproto.string_field(2)
-    replica: "EndpointReplica" = betterproto.message_field(3)
-
-
-@dataclass(eq=False, repr=False)
-class SetConfigRequest(betterproto.Message):
-    endpoint_id: str = betterproto.string_field(1)
-    scope: str = betterproto.string_field(2)
-    scope_key: str = betterproto.string_field(3)
-    config_json: str = betterproto.string_field(4)
-    author: str = betterproto.string_field(5)
-    wait_seconds: int = betterproto.uint32_field(6)
-    """
-    Replica scope: wait up to this long for the harness ack (0 = default).
-    """
-
-
-@dataclass(eq=False, repr=False)
-class SetConfigResponse(betterproto.Message):
-    ok: bool = betterproto.bool_field(1)
-    err_msg: str = betterproto.string_field(2)
-    revision: "ConfigRevision" = betterproto.message_field(3)
-    acked: bool = betterproto.bool_field(4)
-    """
-    Replica scope only: the harness ack, when it arrived within the wait.
-    """
-
-    applied: bool = betterproto.bool_field(5)
-    apply_error: str = betterproto.string_field(6)
-
-
 class EndpointHarnessServiceStub(SyncServiceStub):
     def register(
         self, harness_register_request: "HarnessRegisterRequest"
@@ -498,11 +358,11 @@ class EndpointHarnessServiceStub(SyncServiceStub):
 
     def watch_config(
         self, harness_watch_config_request: "HarnessWatchConfigRequest"
-    ) -> Iterator["ConfigRevision"]:
+    ) -> Iterator["ReplicaConfig"]:
         for response in self._unary_stream(
             "/managedendpoint.EndpointHarnessService/WatchConfig",
             HarnessWatchConfigRequest,
-            ConfigRevision,
+            ReplicaConfig,
         )(harness_watch_config_request):
             yield response
 
@@ -571,48 +431,23 @@ class EndpointAdminServiceStub(SyncServiceStub):
             GetMetricsResponse,
         )(get_metrics_request)
 
-    def get_config(self, get_config_request: "GetConfigRequest") -> "GetConfigResponse":
+    def set_replica_config(
+        self, set_replica_config_request: "SetReplicaConfigRequest"
+    ) -> "SetReplicaConfigResponse":
         return self._unary_unary(
-            "/managedendpoint.EndpointAdminService/GetConfig",
-            GetConfigRequest,
-            GetConfigResponse,
-        )(get_config_request)
+            "/managedendpoint.EndpointAdminService/SetReplicaConfig",
+            SetReplicaConfigRequest,
+            SetReplicaConfigResponse,
+        )(set_replica_config_request)
 
-    def list_config_revisions(
-        self, list_config_revisions_request: "ListConfigRevisionsRequest"
-    ) -> "ListConfigRevisionsResponse":
+    def stop_replica(
+        self, stop_replica_request: "StopReplicaRequest"
+    ) -> "StopReplicaResponse":
         return self._unary_unary(
-            "/managedendpoint.EndpointAdminService/ListConfigRevisions",
-            ListConfigRevisionsRequest,
-            ListConfigRevisionsResponse,
-        )(list_config_revisions_request)
-
-    def promote_rollout(
-        self, promote_rollout_request: "PromoteRolloutRequest"
-    ) -> "RolloutActionResponse":
-        return self._unary_unary(
-            "/managedendpoint.EndpointAdminService/PromoteRollout",
-            PromoteRolloutRequest,
-            RolloutActionResponse,
-        )(promote_rollout_request)
-
-    def rollback_rollout(
-        self, rollback_rollout_request: "RollbackRolloutRequest"
-    ) -> "RolloutActionResponse":
-        return self._unary_unary(
-            "/managedendpoint.EndpointAdminService/RollbackRollout",
-            RollbackRolloutRequest,
-            RolloutActionResponse,
-        )(rollback_rollout_request)
-
-    def pin_version(
-        self, pin_version_request: "PinVersionRequest"
-    ) -> "RolloutActionResponse":
-        return self._unary_unary(
-            "/managedendpoint.EndpointAdminService/PinVersion",
-            PinVersionRequest,
-            RolloutActionResponse,
-        )(pin_version_request)
+            "/managedendpoint.EndpointAdminService/StopReplica",
+            StopReplicaRequest,
+            StopReplicaResponse,
+        )(stop_replica_request)
 
     def get_git_ops_status(
         self, get_git_ops_status_request: "GetGitOpsStatusRequest"
@@ -631,46 +466,3 @@ class EndpointAdminServiceStub(SyncServiceStub):
             TriggerGitOpsSyncRequest,
             TriggerGitOpsSyncResponse,
         )(trigger_git_ops_sync_request)
-
-    def set_endpoint_enabled(
-        self, set_endpoint_enabled_request: "SetEndpointEnabledRequest"
-    ) -> "SetEndpointEnabledResponse":
-        return self._unary_unary(
-            "/managedendpoint.EndpointAdminService/SetEndpointEnabled",
-            SetEndpointEnabledRequest,
-            SetEndpointEnabledResponse,
-        )(set_endpoint_enabled_request)
-
-    def list_services(
-        self, list_services_request: "ListServicesRequest"
-    ) -> "ListServicesResponse":
-        return self._unary_unary(
-            "/managedendpoint.EndpointAdminService/ListServices",
-            ListServicesRequest,
-            ListServicesResponse,
-        )(list_services_request)
-
-    def start_tuning_replica(
-        self, start_tuning_replica_request: "StartTuningReplicaRequest"
-    ) -> "ReplicaResponse":
-        return self._unary_unary(
-            "/managedendpoint.EndpointAdminService/StartTuningReplica",
-            StartTuningReplicaRequest,
-            ReplicaResponse,
-        )(start_tuning_replica_request)
-
-    def stop_replica(
-        self, stop_replica_request: "StopReplicaRequest"
-    ) -> "ReplicaResponse":
-        return self._unary_unary(
-            "/managedendpoint.EndpointAdminService/StopReplica",
-            StopReplicaRequest,
-            ReplicaResponse,
-        )(stop_replica_request)
-
-    def set_config(self, set_config_request: "SetConfigRequest") -> "SetConfigResponse":
-        return self._unary_unary(
-            "/managedendpoint.EndpointAdminService/SetConfig",
-            SetConfigRequest,
-            SetConfigResponse,
-        )(set_config_request)

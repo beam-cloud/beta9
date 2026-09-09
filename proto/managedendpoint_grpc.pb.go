@@ -31,10 +31,9 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type EndpointHarnessServiceClient interface {
 	// Register announces a replica's harness and returns its identity and the
-	// current config revision. Idempotent per container.
+	// current live config, if any. Idempotent per container.
 	Register(ctx context.Context, in *HarnessRegisterRequest, opts ...grpc.CallOption) (*HarnessRegisterResponse, error)
-	// WatchConfig streams config revisions targeted at the replica (fleet or
-	// replica scoped). The first message is the current revision.
+	// WatchConfig streams live config revisions set on the replica.
 	WatchConfig(ctx context.Context, in *HarnessWatchConfigRequest, opts ...grpc.CallOption) (EndpointHarnessService_WatchConfigClient, error)
 	// AckConfig reports whether a revision was applied.
 	AckConfig(ctx context.Context, in *HarnessAckConfigRequest, opts ...grpc.CallOption) (*HarnessAckConfigResponse, error)
@@ -77,7 +76,7 @@ func (c *endpointHarnessServiceClient) WatchConfig(ctx context.Context, in *Harn
 }
 
 type EndpointHarnessService_WatchConfigClient interface {
-	Recv() (*ConfigRevision, error)
+	Recv() (*ReplicaConfig, error)
 	grpc.ClientStream
 }
 
@@ -85,8 +84,8 @@ type endpointHarnessServiceWatchConfigClient struct {
 	grpc.ClientStream
 }
 
-func (x *endpointHarnessServiceWatchConfigClient) Recv() (*ConfigRevision, error) {
-	m := new(ConfigRevision)
+func (x *endpointHarnessServiceWatchConfigClient) Recv() (*ReplicaConfig, error) {
+	m := new(ReplicaConfig)
 	if err := x.ClientStream.RecvMsg(m); err != nil {
 		return nil, err
 	}
@@ -125,10 +124,9 @@ func (c *endpointHarnessServiceClient) PublishEvents(ctx context.Context, in *Ha
 // for forward compatibility
 type EndpointHarnessServiceServer interface {
 	// Register announces a replica's harness and returns its identity and the
-	// current config revision. Idempotent per container.
+	// current live config, if any. Idempotent per container.
 	Register(context.Context, *HarnessRegisterRequest) (*HarnessRegisterResponse, error)
-	// WatchConfig streams config revisions targeted at the replica (fleet or
-	// replica scoped). The first message is the current revision.
+	// WatchConfig streams live config revisions set on the replica.
 	WatchConfig(*HarnessWatchConfigRequest, EndpointHarnessService_WatchConfigServer) error
 	// AckConfig reports whether a revision was applied.
 	AckConfig(context.Context, *HarnessAckConfigRequest) (*HarnessAckConfigResponse, error)
@@ -199,7 +197,7 @@ func _EndpointHarnessService_WatchConfig_Handler(srv interface{}, stream grpc.Se
 }
 
 type EndpointHarnessService_WatchConfigServer interface {
-	Send(*ConfigRevision) error
+	Send(*ReplicaConfig) error
 	grpc.ServerStream
 }
 
@@ -207,7 +205,7 @@ type endpointHarnessServiceWatchConfigServer struct {
 	grpc.ServerStream
 }
 
-func (x *endpointHarnessServiceWatchConfigServer) Send(m *ConfigRevision) error {
+func (x *endpointHarnessServiceWatchConfigServer) Send(m *ReplicaConfig) error {
 	return x.ServerStream.SendMsg(m)
 }
 
@@ -300,22 +298,14 @@ var EndpointHarnessService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	EndpointAdminService_ListEndpoints_FullMethodName       = "/managedendpoint.EndpointAdminService/ListEndpoints"
-	EndpointAdminService_GetEndpoint_FullMethodName         = "/managedendpoint.EndpointAdminService/GetEndpoint"
-	EndpointAdminService_ListReplicas_FullMethodName        = "/managedendpoint.EndpointAdminService/ListReplicas"
-	EndpointAdminService_GetMetrics_FullMethodName          = "/managedendpoint.EndpointAdminService/GetMetrics"
-	EndpointAdminService_GetConfig_FullMethodName           = "/managedendpoint.EndpointAdminService/GetConfig"
-	EndpointAdminService_ListConfigRevisions_FullMethodName = "/managedendpoint.EndpointAdminService/ListConfigRevisions"
-	EndpointAdminService_PromoteRollout_FullMethodName      = "/managedendpoint.EndpointAdminService/PromoteRollout"
-	EndpointAdminService_RollbackRollout_FullMethodName     = "/managedendpoint.EndpointAdminService/RollbackRollout"
-	EndpointAdminService_PinVersion_FullMethodName          = "/managedendpoint.EndpointAdminService/PinVersion"
-	EndpointAdminService_GetGitOpsStatus_FullMethodName     = "/managedendpoint.EndpointAdminService/GetGitOpsStatus"
-	EndpointAdminService_TriggerGitOpsSync_FullMethodName   = "/managedendpoint.EndpointAdminService/TriggerGitOpsSync"
-	EndpointAdminService_SetEndpointEnabled_FullMethodName  = "/managedendpoint.EndpointAdminService/SetEndpointEnabled"
-	EndpointAdminService_ListServices_FullMethodName        = "/managedendpoint.EndpointAdminService/ListServices"
-	EndpointAdminService_StartTuningReplica_FullMethodName  = "/managedendpoint.EndpointAdminService/StartTuningReplica"
-	EndpointAdminService_StopReplica_FullMethodName         = "/managedendpoint.EndpointAdminService/StopReplica"
-	EndpointAdminService_SetConfig_FullMethodName           = "/managedendpoint.EndpointAdminService/SetConfig"
+	EndpointAdminService_ListEndpoints_FullMethodName     = "/managedendpoint.EndpointAdminService/ListEndpoints"
+	EndpointAdminService_GetEndpoint_FullMethodName       = "/managedendpoint.EndpointAdminService/GetEndpoint"
+	EndpointAdminService_ListReplicas_FullMethodName      = "/managedendpoint.EndpointAdminService/ListReplicas"
+	EndpointAdminService_GetMetrics_FullMethodName        = "/managedendpoint.EndpointAdminService/GetMetrics"
+	EndpointAdminService_SetReplicaConfig_FullMethodName  = "/managedendpoint.EndpointAdminService/SetReplicaConfig"
+	EndpointAdminService_StopReplica_FullMethodName       = "/managedendpoint.EndpointAdminService/StopReplica"
+	EndpointAdminService_GetGitOpsStatus_FullMethodName   = "/managedendpoint.EndpointAdminService/GetGitOpsStatus"
+	EndpointAdminService_TriggerGitOpsSync_FullMethodName = "/managedendpoint.EndpointAdminService/TriggerGitOpsSync"
 )
 
 // EndpointAdminServiceClient is the client API for EndpointAdminService service.
@@ -326,22 +316,14 @@ type EndpointAdminServiceClient interface {
 	GetEndpoint(ctx context.Context, in *GetEndpointRequest, opts ...grpc.CallOption) (*GetEndpointResponse, error)
 	ListReplicas(ctx context.Context, in *ListReplicasRequest, opts ...grpc.CallOption) (*ListReplicasResponse, error)
 	GetMetrics(ctx context.Context, in *GetMetricsRequest, opts ...grpc.CallOption) (*GetMetricsResponse, error)
-	GetConfig(ctx context.Context, in *GetConfigRequest, opts ...grpc.CallOption) (*GetConfigResponse, error)
-	ListConfigRevisions(ctx context.Context, in *ListConfigRevisionsRequest, opts ...grpc.CallOption) (*ListConfigRevisionsResponse, error)
-	PromoteRollout(ctx context.Context, in *PromoteRolloutRequest, opts ...grpc.CallOption) (*RolloutActionResponse, error)
-	RollbackRollout(ctx context.Context, in *RollbackRolloutRequest, opts ...grpc.CallOption) (*RolloutActionResponse, error)
-	PinVersion(ctx context.Context, in *PinVersionRequest, opts ...grpc.CallOption) (*RolloutActionResponse, error)
+	// SetReplicaConfig pushes a live config to one replica's harness and waits
+	// for its ack. A winning setting becomes a commit to the repo (engine args
+	// or harness seed); nothing here is durable.
+	SetReplicaConfig(ctx context.Context, in *SetReplicaConfigRequest, opts ...grpc.CallOption) (*SetReplicaConfigResponse, error)
+	// StopReplica drains and stops a replica; the controller refills.
+	StopReplica(ctx context.Context, in *StopReplicaRequest, opts ...grpc.CallOption) (*StopReplicaResponse, error)
 	GetGitOpsStatus(ctx context.Context, in *GetGitOpsStatusRequest, opts ...grpc.CallOption) (*GetGitOpsStatusResponse, error)
 	TriggerGitOpsSync(ctx context.Context, in *TriggerGitOpsSyncRequest, opts ...grpc.CallOption) (*TriggerGitOpsSyncResponse, error)
-	SetEndpointEnabled(ctx context.Context, in *SetEndpointEnabledRequest, opts ...grpc.CallOption) (*SetEndpointEnabledResponse, error)
-	ListServices(ctx context.Context, in *ListServicesRequest, opts ...grpc.CallOption) (*ListServicesResponse, error)
-	// Live tuning. An agent starts a dedicated tuning replica (no public
-	// traffic; address it with X-Beam-Endpoint-Replica), pushes replica-scoped
-	// configs with SetConfig and reads GetMetrics, then promotes the winner to
-	// the fleet with a target-scoped SetConfig and stops the replica.
-	StartTuningReplica(ctx context.Context, in *StartTuningReplicaRequest, opts ...grpc.CallOption) (*ReplicaResponse, error)
-	StopReplica(ctx context.Context, in *StopReplicaRequest, opts ...grpc.CallOption) (*ReplicaResponse, error)
-	SetConfig(ctx context.Context, in *SetConfigRequest, opts ...grpc.CallOption) (*SetConfigResponse, error)
 }
 
 type endpointAdminServiceClient struct {
@@ -388,45 +370,18 @@ func (c *endpointAdminServiceClient) GetMetrics(ctx context.Context, in *GetMetr
 	return out, nil
 }
 
-func (c *endpointAdminServiceClient) GetConfig(ctx context.Context, in *GetConfigRequest, opts ...grpc.CallOption) (*GetConfigResponse, error) {
-	out := new(GetConfigResponse)
-	err := c.cc.Invoke(ctx, EndpointAdminService_GetConfig_FullMethodName, in, out, opts...)
+func (c *endpointAdminServiceClient) SetReplicaConfig(ctx context.Context, in *SetReplicaConfigRequest, opts ...grpc.CallOption) (*SetReplicaConfigResponse, error) {
+	out := new(SetReplicaConfigResponse)
+	err := c.cc.Invoke(ctx, EndpointAdminService_SetReplicaConfig_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *endpointAdminServiceClient) ListConfigRevisions(ctx context.Context, in *ListConfigRevisionsRequest, opts ...grpc.CallOption) (*ListConfigRevisionsResponse, error) {
-	out := new(ListConfigRevisionsResponse)
-	err := c.cc.Invoke(ctx, EndpointAdminService_ListConfigRevisions_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *endpointAdminServiceClient) PromoteRollout(ctx context.Context, in *PromoteRolloutRequest, opts ...grpc.CallOption) (*RolloutActionResponse, error) {
-	out := new(RolloutActionResponse)
-	err := c.cc.Invoke(ctx, EndpointAdminService_PromoteRollout_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *endpointAdminServiceClient) RollbackRollout(ctx context.Context, in *RollbackRolloutRequest, opts ...grpc.CallOption) (*RolloutActionResponse, error) {
-	out := new(RolloutActionResponse)
-	err := c.cc.Invoke(ctx, EndpointAdminService_RollbackRollout_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *endpointAdminServiceClient) PinVersion(ctx context.Context, in *PinVersionRequest, opts ...grpc.CallOption) (*RolloutActionResponse, error) {
-	out := new(RolloutActionResponse)
-	err := c.cc.Invoke(ctx, EndpointAdminService_PinVersion_FullMethodName, in, out, opts...)
+func (c *endpointAdminServiceClient) StopReplica(ctx context.Context, in *StopReplicaRequest, opts ...grpc.CallOption) (*StopReplicaResponse, error) {
+	out := new(StopReplicaResponse)
+	err := c.cc.Invoke(ctx, EndpointAdminService_StopReplica_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -451,51 +406,6 @@ func (c *endpointAdminServiceClient) TriggerGitOpsSync(ctx context.Context, in *
 	return out, nil
 }
 
-func (c *endpointAdminServiceClient) SetEndpointEnabled(ctx context.Context, in *SetEndpointEnabledRequest, opts ...grpc.CallOption) (*SetEndpointEnabledResponse, error) {
-	out := new(SetEndpointEnabledResponse)
-	err := c.cc.Invoke(ctx, EndpointAdminService_SetEndpointEnabled_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *endpointAdminServiceClient) ListServices(ctx context.Context, in *ListServicesRequest, opts ...grpc.CallOption) (*ListServicesResponse, error) {
-	out := new(ListServicesResponse)
-	err := c.cc.Invoke(ctx, EndpointAdminService_ListServices_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *endpointAdminServiceClient) StartTuningReplica(ctx context.Context, in *StartTuningReplicaRequest, opts ...grpc.CallOption) (*ReplicaResponse, error) {
-	out := new(ReplicaResponse)
-	err := c.cc.Invoke(ctx, EndpointAdminService_StartTuningReplica_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *endpointAdminServiceClient) StopReplica(ctx context.Context, in *StopReplicaRequest, opts ...grpc.CallOption) (*ReplicaResponse, error) {
-	out := new(ReplicaResponse)
-	err := c.cc.Invoke(ctx, EndpointAdminService_StopReplica_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *endpointAdminServiceClient) SetConfig(ctx context.Context, in *SetConfigRequest, opts ...grpc.CallOption) (*SetConfigResponse, error) {
-	out := new(SetConfigResponse)
-	err := c.cc.Invoke(ctx, EndpointAdminService_SetConfig_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 // EndpointAdminServiceServer is the server API for EndpointAdminService service.
 // All implementations must embed UnimplementedEndpointAdminServiceServer
 // for forward compatibility
@@ -504,22 +414,14 @@ type EndpointAdminServiceServer interface {
 	GetEndpoint(context.Context, *GetEndpointRequest) (*GetEndpointResponse, error)
 	ListReplicas(context.Context, *ListReplicasRequest) (*ListReplicasResponse, error)
 	GetMetrics(context.Context, *GetMetricsRequest) (*GetMetricsResponse, error)
-	GetConfig(context.Context, *GetConfigRequest) (*GetConfigResponse, error)
-	ListConfigRevisions(context.Context, *ListConfigRevisionsRequest) (*ListConfigRevisionsResponse, error)
-	PromoteRollout(context.Context, *PromoteRolloutRequest) (*RolloutActionResponse, error)
-	RollbackRollout(context.Context, *RollbackRolloutRequest) (*RolloutActionResponse, error)
-	PinVersion(context.Context, *PinVersionRequest) (*RolloutActionResponse, error)
+	// SetReplicaConfig pushes a live config to one replica's harness and waits
+	// for its ack. A winning setting becomes a commit to the repo (engine args
+	// or harness seed); nothing here is durable.
+	SetReplicaConfig(context.Context, *SetReplicaConfigRequest) (*SetReplicaConfigResponse, error)
+	// StopReplica drains and stops a replica; the controller refills.
+	StopReplica(context.Context, *StopReplicaRequest) (*StopReplicaResponse, error)
 	GetGitOpsStatus(context.Context, *GetGitOpsStatusRequest) (*GetGitOpsStatusResponse, error)
 	TriggerGitOpsSync(context.Context, *TriggerGitOpsSyncRequest) (*TriggerGitOpsSyncResponse, error)
-	SetEndpointEnabled(context.Context, *SetEndpointEnabledRequest) (*SetEndpointEnabledResponse, error)
-	ListServices(context.Context, *ListServicesRequest) (*ListServicesResponse, error)
-	// Live tuning. An agent starts a dedicated tuning replica (no public
-	// traffic; address it with X-Beam-Endpoint-Replica), pushes replica-scoped
-	// configs with SetConfig and reads GetMetrics, then promotes the winner to
-	// the fleet with a target-scoped SetConfig and stops the replica.
-	StartTuningReplica(context.Context, *StartTuningReplicaRequest) (*ReplicaResponse, error)
-	StopReplica(context.Context, *StopReplicaRequest) (*ReplicaResponse, error)
-	SetConfig(context.Context, *SetConfigRequest) (*SetConfigResponse, error)
 	mustEmbedUnimplementedEndpointAdminServiceServer()
 }
 
@@ -539,41 +441,17 @@ func (UnimplementedEndpointAdminServiceServer) ListReplicas(context.Context, *Li
 func (UnimplementedEndpointAdminServiceServer) GetMetrics(context.Context, *GetMetricsRequest) (*GetMetricsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetMetrics not implemented")
 }
-func (UnimplementedEndpointAdminServiceServer) GetConfig(context.Context, *GetConfigRequest) (*GetConfigResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetConfig not implemented")
+func (UnimplementedEndpointAdminServiceServer) SetReplicaConfig(context.Context, *SetReplicaConfigRequest) (*SetReplicaConfigResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetReplicaConfig not implemented")
 }
-func (UnimplementedEndpointAdminServiceServer) ListConfigRevisions(context.Context, *ListConfigRevisionsRequest) (*ListConfigRevisionsResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ListConfigRevisions not implemented")
-}
-func (UnimplementedEndpointAdminServiceServer) PromoteRollout(context.Context, *PromoteRolloutRequest) (*RolloutActionResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method PromoteRollout not implemented")
-}
-func (UnimplementedEndpointAdminServiceServer) RollbackRollout(context.Context, *RollbackRolloutRequest) (*RolloutActionResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method RollbackRollout not implemented")
-}
-func (UnimplementedEndpointAdminServiceServer) PinVersion(context.Context, *PinVersionRequest) (*RolloutActionResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method PinVersion not implemented")
+func (UnimplementedEndpointAdminServiceServer) StopReplica(context.Context, *StopReplicaRequest) (*StopReplicaResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method StopReplica not implemented")
 }
 func (UnimplementedEndpointAdminServiceServer) GetGitOpsStatus(context.Context, *GetGitOpsStatusRequest) (*GetGitOpsStatusResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetGitOpsStatus not implemented")
 }
 func (UnimplementedEndpointAdminServiceServer) TriggerGitOpsSync(context.Context, *TriggerGitOpsSyncRequest) (*TriggerGitOpsSyncResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method TriggerGitOpsSync not implemented")
-}
-func (UnimplementedEndpointAdminServiceServer) SetEndpointEnabled(context.Context, *SetEndpointEnabledRequest) (*SetEndpointEnabledResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method SetEndpointEnabled not implemented")
-}
-func (UnimplementedEndpointAdminServiceServer) ListServices(context.Context, *ListServicesRequest) (*ListServicesResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ListServices not implemented")
-}
-func (UnimplementedEndpointAdminServiceServer) StartTuningReplica(context.Context, *StartTuningReplicaRequest) (*ReplicaResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method StartTuningReplica not implemented")
-}
-func (UnimplementedEndpointAdminServiceServer) StopReplica(context.Context, *StopReplicaRequest) (*ReplicaResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method StopReplica not implemented")
-}
-func (UnimplementedEndpointAdminServiceServer) SetConfig(context.Context, *SetConfigRequest) (*SetConfigResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method SetConfig not implemented")
 }
 func (UnimplementedEndpointAdminServiceServer) mustEmbedUnimplementedEndpointAdminServiceServer() {}
 
@@ -660,92 +538,38 @@ func _EndpointAdminService_GetMetrics_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
-func _EndpointAdminService_GetConfig_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetConfigRequest)
+func _EndpointAdminService_SetReplicaConfig_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetReplicaConfigRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(EndpointAdminServiceServer).GetConfig(ctx, in)
+		return srv.(EndpointAdminServiceServer).SetReplicaConfig(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: EndpointAdminService_GetConfig_FullMethodName,
+		FullMethod: EndpointAdminService_SetReplicaConfig_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(EndpointAdminServiceServer).GetConfig(ctx, req.(*GetConfigRequest))
+		return srv.(EndpointAdminServiceServer).SetReplicaConfig(ctx, req.(*SetReplicaConfigRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _EndpointAdminService_ListConfigRevisions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ListConfigRevisionsRequest)
+func _EndpointAdminService_StopReplica_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StopReplicaRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(EndpointAdminServiceServer).ListConfigRevisions(ctx, in)
+		return srv.(EndpointAdminServiceServer).StopReplica(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: EndpointAdminService_ListConfigRevisions_FullMethodName,
+		FullMethod: EndpointAdminService_StopReplica_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(EndpointAdminServiceServer).ListConfigRevisions(ctx, req.(*ListConfigRevisionsRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _EndpointAdminService_PromoteRollout_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(PromoteRolloutRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(EndpointAdminServiceServer).PromoteRollout(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: EndpointAdminService_PromoteRollout_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(EndpointAdminServiceServer).PromoteRollout(ctx, req.(*PromoteRolloutRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _EndpointAdminService_RollbackRollout_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RollbackRolloutRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(EndpointAdminServiceServer).RollbackRollout(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: EndpointAdminService_RollbackRollout_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(EndpointAdminServiceServer).RollbackRollout(ctx, req.(*RollbackRolloutRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _EndpointAdminService_PinVersion_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(PinVersionRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(EndpointAdminServiceServer).PinVersion(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: EndpointAdminService_PinVersion_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(EndpointAdminServiceServer).PinVersion(ctx, req.(*PinVersionRequest))
+		return srv.(EndpointAdminServiceServer).StopReplica(ctx, req.(*StopReplicaRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -786,96 +610,6 @@ func _EndpointAdminService_TriggerGitOpsSync_Handler(srv interface{}, ctx contex
 	return interceptor(ctx, in, info, handler)
 }
 
-func _EndpointAdminService_SetEndpointEnabled_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SetEndpointEnabledRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(EndpointAdminServiceServer).SetEndpointEnabled(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: EndpointAdminService_SetEndpointEnabled_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(EndpointAdminServiceServer).SetEndpointEnabled(ctx, req.(*SetEndpointEnabledRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _EndpointAdminService_ListServices_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ListServicesRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(EndpointAdminServiceServer).ListServices(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: EndpointAdminService_ListServices_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(EndpointAdminServiceServer).ListServices(ctx, req.(*ListServicesRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _EndpointAdminService_StartTuningReplica_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(StartTuningReplicaRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(EndpointAdminServiceServer).StartTuningReplica(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: EndpointAdminService_StartTuningReplica_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(EndpointAdminServiceServer).StartTuningReplica(ctx, req.(*StartTuningReplicaRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _EndpointAdminService_StopReplica_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(StopReplicaRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(EndpointAdminServiceServer).StopReplica(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: EndpointAdminService_StopReplica_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(EndpointAdminServiceServer).StopReplica(ctx, req.(*StopReplicaRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _EndpointAdminService_SetConfig_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SetConfigRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(EndpointAdminServiceServer).SetConfig(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: EndpointAdminService_SetConfig_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(EndpointAdminServiceServer).SetConfig(ctx, req.(*SetConfigRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 // EndpointAdminService_ServiceDesc is the grpc.ServiceDesc for EndpointAdminService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -900,24 +634,12 @@ var EndpointAdminService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _EndpointAdminService_GetMetrics_Handler,
 		},
 		{
-			MethodName: "GetConfig",
-			Handler:    _EndpointAdminService_GetConfig_Handler,
+			MethodName: "SetReplicaConfig",
+			Handler:    _EndpointAdminService_SetReplicaConfig_Handler,
 		},
 		{
-			MethodName: "ListConfigRevisions",
-			Handler:    _EndpointAdminService_ListConfigRevisions_Handler,
-		},
-		{
-			MethodName: "PromoteRollout",
-			Handler:    _EndpointAdminService_PromoteRollout_Handler,
-		},
-		{
-			MethodName: "RollbackRollout",
-			Handler:    _EndpointAdminService_RollbackRollout_Handler,
-		},
-		{
-			MethodName: "PinVersion",
-			Handler:    _EndpointAdminService_PinVersion_Handler,
+			MethodName: "StopReplica",
+			Handler:    _EndpointAdminService_StopReplica_Handler,
 		},
 		{
 			MethodName: "GetGitOpsStatus",
@@ -926,26 +648,6 @@ var EndpointAdminService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "TriggerGitOpsSync",
 			Handler:    _EndpointAdminService_TriggerGitOpsSync_Handler,
-		},
-		{
-			MethodName: "SetEndpointEnabled",
-			Handler:    _EndpointAdminService_SetEndpointEnabled_Handler,
-		},
-		{
-			MethodName: "ListServices",
-			Handler:    _EndpointAdminService_ListServices_Handler,
-		},
-		{
-			MethodName: "StartTuningReplica",
-			Handler:    _EndpointAdminService_StartTuningReplica_Handler,
-		},
-		{
-			MethodName: "StopReplica",
-			Handler:    _EndpointAdminService_StopReplica_Handler,
-		},
-		{
-			MethodName: "SetConfig",
-			Handler:    _EndpointAdminService_SetConfig_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

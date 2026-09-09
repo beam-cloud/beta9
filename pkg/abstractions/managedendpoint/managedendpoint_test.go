@@ -56,36 +56,41 @@ func adminCtx() context.Context {
 
 const testReplicaSecret = "replica-secret-1"
 
-// harnessCtx is what a replica container presents: the admin workspace's
-// runtime token plus its own replica secret.
+// harnessCtx is what a replica container presents: no workspace token, only
+// its own replica secret in gRPC metadata.
 func harnessCtx() context.Context {
-	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
-		Workspace: &types.Workspace{Id: 1, ExternalId: "admin-ws"},
-		Token:     &types.Token{TokenType: types.TokenTypeWorkspaceRestricted, ExternalId: "runtime"},
-	})
-	return metadata.NewIncomingContext(ctx, metadata.Pairs(replicaSecretHeader, testReplicaSecret))
+	return metadata.NewIncomingContext(context.Background(), metadata.Pairs(replicaSecretHeader, testReplicaSecret))
 }
 
+// seedEndpoint registers acme/model (an H100 vLLM endpoint with the harness)
+// as version 1 and places it on H100 through the fleet.
 func seedEndpoint(t *testing.T, s *Service) *types.ManagedEndpoint {
 	t.Helper()
 	spec := types.ManagedEndpointSpec{
-		ID: "acme/model", Kind: types.EndpointKindLLM, Engine: "vllm", Port: 8000,
-		Gpu:     []types.GpuTarget{{Type: "H100", Count: 1, MinReplicas: 1, MaxReplicas: 4, Share: 0.5, Harness: map[string]any{"max_num_seqs": 64}}},
+		ID: "acme/model", Kind: types.EndpointKindLLM, Engine: "vllm", Port: 8000, Entrypoint: []string{"vllm", "serve"},
+		Gpu:     map[string]types.GpuSpec{"H100": {Harness: map[string]any{"max_num_seqs": 64}}},
 		Harness: true,
 		Catalog: types.Catalog{Public: true},
 	}
 	spec.Normalize()
-	endpoint := &types.ManagedEndpoint{Spec: spec, ManagedRecord: types.ManagedRecord{StubID: "stub-1", Version: 1, Status: types.EndpointStatusActive}}
+	endpoint := &types.ManagedEndpoint{Spec: spec, StubID: "stub-1", Version: 1, Status: types.EndpointStatusActive}
 	require.NoError(t, s.repo.SaveEndpoint(context.Background(), endpoint))
-	require.NoError(t, s.repo.SaveVersion(context.Background(), &types.EndpointVersion{EndpointID: spec.ID, Version: 1, StubID: "stub-1", State: types.VersionStateActive}))
-	require.NoError(t, s.repo.SaveRollout(context.Background(), &types.RolloutState{EndpointID: spec.ID, ActiveVersion: 1, Phase: types.RolloutPhaseIdle}))
+	seedFleet(t, s, map[string]map[string]types.Placement{"H100": {spec.ID: {Share: 0.5, Min: 1, Max: 4, Count: 1}}})
 	return endpoint
+}
+
+func seedFleet(t *testing.T, s *Service, targets map[string]map[string]types.Placement) *types.Fleet {
+	t.Helper()
+	fleet := &types.Fleet{GitSHA: "fleet-sha", Targets: targets}
+	fleet.Normalize()
+	require.NoError(t, s.repo.SaveFleet(context.Background(), fleet))
+	return fleet
 }
 
 func seedReplica(t *testing.T, s *Service, endpoint *types.ManagedEndpoint) *types.EndpointReplica {
 	t.Helper()
 	replica := &types.EndpointReplica{
-		ID: "rep-1", EndpointID: endpoint.Spec.ID, Version: 1, Role: types.ReplicaRoleServe, GPU: "H100x1", GPUCount: 1,
+		ID: "rep-1", EndpointID: endpoint.Spec.ID, Version: 1, GPU: "H100", GPUCount: 1,
 		ContainerID: "managed-stub-1-abc", Status: types.ReplicaStatusScheduling, HarnessEnabled: true, StartedAt: time.Now(),
 		SecretHash: hashReplicaSecret(testReplicaSecret),
 	}
@@ -99,33 +104,34 @@ func TestAuthorization(t *testing.T) {
 	_, err := s.ListEndpoints(context.Background(), &pb.ListEndpointsRequest{})
 	assert.Equal(t, codes.PermissionDenied, status.Code(err))
 
-	_, err = s.ListEndpoints(harnessCtx(), &pb.ListEndpointsRequest{})
+	workspaceToken := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
+		Workspace: &types.Workspace{Id: 1, ExternalId: "admin-ws"},
+		Token:     &types.Token{TokenType: types.TokenTypeWorkspace, ExternalId: "tok"},
+	})
+	_, err = s.ListEndpoints(workspaceToken, &pb.ListEndpointsRequest{})
 	assert.Equal(t, codes.PermissionDenied, status.Code(err), "workspace tokens cannot use admin RPCs")
 
+	// Harness RPCs are authorized by the replica secret alone; an unknown
+	// replica has none to compare against.
 	_, err = s.Heartbeat(context.Background(), &pb.HarnessHeartbeatRequest{ReplicaId: "x"})
-	assert.Equal(t, codes.Unauthenticated, status.Code(err))
+	assert.Equal(t, codes.NotFound, status.Code(err))
 
-	foreign := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
-		Workspace: &types.Workspace{Id: 99, ExternalId: "other"},
-		Token:     &types.Token{TokenType: types.TokenTypeWorkspace},
-	})
-	_, err = s.Heartbeat(foreign, &pb.HarnessHeartbeatRequest{ReplicaId: "x"})
-	assert.Equal(t, codes.PermissionDenied, status.Code(err), "only admin-workspace tokens may call harness RPCs")
-
-	// The shared runtime token alone does not identify a replica: each call
-	// must carry that replica's own secret.
+	// Neither a workspace token nor a cluster-admin token stands in for the
+	// replica's own secret.
 	endpoint := seedEndpoint(t, s)
 	replica := seedReplica(t, s, endpoint)
-	noSecret := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
-		Workspace: &types.Workspace{Id: 1, ExternalId: "admin-ws"},
-		Token:     &types.Token{TokenType: types.TokenTypeWorkspaceRestricted, ExternalId: "runtime"},
-	})
-	_, err = s.Heartbeat(noSecret, &pb.HarnessHeartbeatRequest{ReplicaId: replica.ID})
+	_, err = s.Heartbeat(context.Background(), &pb.HarnessHeartbeatRequest{ReplicaId: replica.ID})
 	assert.Equal(t, codes.PermissionDenied, status.Code(err))
-	wrong := metadata.NewIncomingContext(noSecret, metadata.Pairs(replicaSecretHeader, "someone-else"))
+	_, err = s.Heartbeat(workspaceToken, &pb.HarnessHeartbeatRequest{ReplicaId: replica.ID})
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+	_, err = s.Heartbeat(adminCtx(), &pb.HarnessHeartbeatRequest{ReplicaId: replica.ID})
+	assert.Equal(t, codes.PermissionDenied, status.Code(err), "no cluster-admin bypass for harness RPCs")
+	wrong := metadata.NewIncomingContext(context.Background(), metadata.Pairs(replicaSecretHeader, "someone-else"))
 	_, err = s.Register(wrong, &pb.HarnessRegisterRequest{ContainerId: replica.ContainerID})
 	assert.Equal(t, codes.PermissionDenied, status.Code(err))
 	_, err = s.PublishEvents(wrong, &pb.HarnessPublishEventsRequest{ReplicaId: replica.ID})
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+	_, err = s.AckConfig(wrong, &pb.HarnessAckConfigRequest{ReplicaId: replica.ID, Revision: 1})
 	assert.Equal(t, codes.PermissionDenied, status.Code(err))
 	hb, err := s.Heartbeat(harnessCtx(), &pb.HarnessHeartbeatRequest{ReplicaId: replica.ID, Status: "ready"})
 	require.NoError(t, err)
@@ -143,9 +149,6 @@ func TestHarnessLifecycle(t *testing.T) {
 	replica := seedReplica(t, s, endpoint)
 	ctx := harnessCtx()
 
-	// Fleet config from git lands before the harness registers.
-	require.NoError(t, s.controller.ensureFleetRevisions(context.Background(), endpoint))
-
 	reg, err := s.Register(ctx, &pb.HarnessRegisterRequest{ContainerId: "nope"})
 	require.NoError(t, err)
 	assert.False(t, reg.Ok)
@@ -155,9 +158,8 @@ func TestHarnessLifecycle(t *testing.T) {
 	require.True(t, reg.Ok, reg.ErrMsg)
 	assert.Equal(t, replica.ID, reg.ReplicaId)
 	assert.Equal(t, endpoint.Spec.ID, reg.EndpointId)
-	require.NotNil(t, reg.Current)
-	assert.Equal(t, uint64(1), reg.Current.Revision)
-	assert.JSONEq(t, `{"max_num_seqs":64}`, reg.Current.ConfigJson)
+	assert.Equal(t, "H100", reg.Gpu)
+	assert.Nil(t, reg.Current, "no live config has been pushed yet; the harness seed comes from the environment")
 	assert.Equal(t, uint32(5), reg.HeartbeatIntervalSeconds)
 
 	stored, err := s.repo.GetReplica(context.Background(), replica.ID)
@@ -167,8 +169,9 @@ func TestHarnessLifecycle(t *testing.T) {
 
 	// Heartbeats drive status and capacity; drain is not requested yet.
 	hb, err := s.Heartbeat(ctx, &pb.HarnessHeartbeatRequest{
-		ReplicaId: replica.ID, Status: "ready", AppliedRevision: 1,
-		Capacity: &pb.ReplicaCapacity{InFlight: 2, MaxConcurrency: 64, KvCacheFreeMilli: 800},
+		ReplicaId: replica.ID, Status: "ready",
+		Capacity:    &pb.ReplicaCapacity{InFlight: 2, MaxConcurrency: 64, KvCacheFreeMilli: 800},
+		MetricsJson: `{"running":2}`,
 	})
 	require.NoError(t, err)
 	require.True(t, hb.Ok)
@@ -178,17 +181,42 @@ func TestHarnessLifecycle(t *testing.T) {
 	assert.Equal(t, types.ReplicaStatusReady, stored.Status)
 	assert.False(t, stored.ReadyAt.IsZero())
 	assert.Equal(t, int64(64), stored.Capacity.MaxConcurrency)
-	assert.Equal(t, uint64(1), stored.ConfigRevision)
+	assert.JSONEq(t, `{"running":2}`, string(stored.EngineMetrics))
+	assert.Equal(t, uint64(0), stored.Config.Revision)
 
-	// Ack a config revision.
+	// An engine that reloads reports loading and leaves the serving set until
+	// it is ready again.
+	_, err = s.Heartbeat(ctx, &pb.HarnessHeartbeatRequest{ReplicaId: replica.ID, Status: "loading"})
+	require.NoError(t, err)
+	stored, _ = s.repo.GetReplica(context.Background(), replica.ID)
+	assert.Equal(t, types.ReplicaStatusLoading, stored.Status)
+	assert.False(t, stored.Serving())
+	_, err = s.Heartbeat(ctx, &pb.HarnessHeartbeatRequest{ReplicaId: replica.ID, Status: "ready"})
+	require.NoError(t, err)
+	stored, _ = s.repo.GetReplica(context.Background(), replica.ID)
+	assert.Equal(t, types.ReplicaStatusReady, stored.Status)
+
+	// A config revision is pushed by an admin and acked by the harness.
+	_, err = s.updateReplica(context.Background(), replica.ID, func(r *types.EndpointReplica) {
+		r.Config.Revision, r.Config.Config = 2, []byte(`{"max_num_seqs":128}`)
+	})
+	require.NoError(t, err)
 	ack, err := s.AckConfig(ctx, &pb.HarnessAckConfigRequest{ReplicaId: replica.ID, Revision: 2, Applied: true, EffectiveJson: `{"max_num_seqs":128}`})
 	require.NoError(t, err)
 	assert.True(t, ack.Ok)
-	got, err := s.repo.GetConfigAck(context.Background(), replica.ID, 2)
-	require.NoError(t, err)
-	assert.True(t, got.Applied)
 	stored, _ = s.repo.GetReplica(context.Background(), replica.ID)
-	assert.Equal(t, uint64(2), stored.ConfigRevision)
+	assert.Equal(t, uint64(2), stored.Config.AckedRevision)
+	assert.True(t, stored.Config.Applied)
+	assert.True(t, stored.Config.Acked())
+	assert.JSONEq(t, `{"max_num_seqs":128}`, string(stored.Config.Effective))
+	assert.False(t, stored.Config.AckedAt.IsZero())
+
+	// A stale ack never moves the acked revision backwards.
+	_, err = s.AckConfig(ctx, &pb.HarnessAckConfigRequest{ReplicaId: replica.ID, Revision: 1, Applied: false, Error: "old"})
+	require.NoError(t, err)
+	stored, _ = s.repo.GetReplica(context.Background(), replica.ID)
+	assert.Equal(t, uint64(2), stored.Config.AckedRevision)
+	assert.True(t, stored.Config.Applied)
 
 	// A drain request surfaces on the next heartbeat; control-plane states are sticky.
 	require.NoError(t, s.controller.drainReplica(context.Background(), stored, 30, false, "test"))
@@ -207,62 +235,91 @@ func TestHarnessLifecycle(t *testing.T) {
 	assert.Equal(t, uint32(1), events.Accepted)
 }
 
-// fakeWatchStream captures streamed revisions.
+// fakeWatchStream captures streamed configs.
 type fakeWatchStream struct {
 	grpc.ServerStream
 	ctx  context.Context
-	sent chan *pb.ConfigRevision
+	sent chan *pb.ReplicaConfig
 }
 
-func (f *fakeWatchStream) Context() context.Context        { return f.ctx }
-func (f *fakeWatchStream) Send(r *pb.ConfigRevision) error { f.sent <- r; return nil }
-func (f *fakeWatchStream) SetHeader(metadata.MD) error     { return nil }
-func (f *fakeWatchStream) SendHeader(metadata.MD) error    { return nil }
-func (f *fakeWatchStream) SetTrailer(metadata.MD)          {}
+func (f *fakeWatchStream) Context() context.Context       { return f.ctx }
+func (f *fakeWatchStream) Send(r *pb.ReplicaConfig) error { f.sent <- r; return nil }
+func (f *fakeWatchStream) SetHeader(metadata.MD) error    { return nil }
+func (f *fakeWatchStream) SendHeader(metadata.MD) error   { return nil }
+func (f *fakeWatchStream) SetTrailer(metadata.MD)         {}
 
-func TestWatchConfigStreamsFleetAndReplicaRevisions(t *testing.T) {
+func TestWatchConfigStreamsReplicaConfig(t *testing.T) {
 	s := newServiceForTest(t)
 	endpoint := seedEndpoint(t, s)
 	replica := seedReplica(t, s, endpoint)
-	require.NoError(t, s.controller.ensureFleetRevisions(context.Background(), endpoint))
 
 	ctx, cancel := context.WithCancel(harnessCtx())
 	defer cancel()
-	stream := &fakeWatchStream{ctx: ctx, sent: make(chan *pb.ConfigRevision, 8)}
+	stream := &fakeWatchStream{ctx: ctx, sent: make(chan *pb.ReplicaConfig, 8)}
 	done := make(chan error, 1)
 	go func() { done <- s.WatchConfig(&pb.HarnessWatchConfigRequest{ReplicaId: replica.ID}, stream) }()
 
-	first := <-stream.sent
-	assert.Equal(t, uint64(1), first.Revision)
-	assert.Equal(t, "target", first.Scope)
-
-	// A new fleet revision for this target is pushed.
-	require.NoError(t, s.repo.CreateConfigRevision(context.Background(), &types.EndpointConfigRevision{
-		EndpointID: endpoint.Spec.ID, Scope: types.ConfigScopeTarget, ScopeKey: "serve:H100x1@v1",
-		Config: map[string]any{"max_num_seqs": 96}, Author: "live@v1:agent", Source: types.ConfigSourceLive,
-	}))
+	// Nothing is sent until an admin pushes a revision.
 	select {
-	case second := <-stream.sent:
-		assert.Equal(t, uint64(2), second.Revision)
-		assert.JSONEq(t, `{"max_num_seqs":96}`, second.ConfigJson)
-	case <-time.After(3 * time.Second):
-		t.Fatal("fleet revision not streamed")
+	case first := <-stream.sent:
+		t.Fatalf("unexpected config before any revision: %v", first)
+	case <-time.After(200 * time.Millisecond):
 	}
 
-	// Revisions for other targets are filtered out.
-	require.NoError(t, s.repo.CreateConfigRevision(context.Background(), &types.EndpointConfigRevision{
-		EndpointID: endpoint.Spec.ID, Scope: types.ConfigScopeTarget, ScopeKey: "serve:A100x1@v1", Config: map[string]any{}, Source: types.ConfigSourceGit,
-	}))
-	// Replica-scoped revisions reach only that replica.
-	require.NoError(t, s.repo.CreateConfigRevision(context.Background(), &types.EndpointConfigRevision{
-		EndpointID: endpoint.Spec.ID, Scope: types.ConfigScopeReplica, ScopeKey: replica.ID, Config: map[string]any{"max_num_seqs": 8}, Source: types.ConfigSourceLive,
-	}))
+	set := make(chan *pb.SetReplicaConfigResponse, 1)
+	go func() {
+		resp, err := s.SetReplicaConfig(adminCtx(), &pb.SetReplicaConfigRequest{ReplicaId: replica.ID, ConfigJson: `{"max_num_seqs":96}`, Author: "agent", WaitSeconds: 10})
+		if err != nil {
+			resp = &pb.SetReplicaConfigResponse{ErrMsg: err.Error()}
+		}
+		set <- resp
+	}()
+
+	var pushed *pb.ReplicaConfig
 	select {
-	case third := <-stream.sent:
-		assert.Equal(t, uint64(4), third.Revision)
-		assert.Equal(t, "replica", third.Scope)
+	case pushed = <-stream.sent:
 	case <-time.After(3 * time.Second):
-		t.Fatal("replica revision not streamed")
+		t.Fatal("config revision not streamed")
+	}
+	assert.Equal(t, uint64(1), pushed.Revision)
+	assert.Equal(t, "agent", pushed.Author)
+	assert.JSONEq(t, `{"max_num_seqs":96}`, pushed.ConfigJson)
+	assert.Equal(t, uint64(0), pushed.AckedRevision)
+
+	// The admin call is still waiting for the ack ...
+	select {
+	case resp := <-set:
+		t.Fatalf("SetReplicaConfig returned before the harness acked: %v", resp)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	// ... and returns the acked replica once the harness answers.
+	_, err := s.AckConfig(harnessCtx(), &pb.HarnessAckConfigRequest{ReplicaId: replica.ID, Revision: pushed.Revision, Applied: true, EffectiveJson: `{"max_num_seqs":96}`})
+	require.NoError(t, err)
+	select {
+	case resp := <-set:
+		require.True(t, resp.Ok, resp.ErrMsg)
+		require.NotNil(t, resp.Replica.Config)
+		assert.Equal(t, uint64(1), resp.Replica.Config.Revision)
+		assert.Equal(t, uint64(1), resp.Replica.Config.AckedRevision)
+		assert.True(t, resp.Replica.Config.Applied)
+		assert.JSONEq(t, `{"max_num_seqs":96}`, resp.Replica.Config.EffectiveJson)
+	case <-time.After(3 * time.Second):
+		t.Fatal("SetReplicaConfig did not return after the ack")
+	}
+
+	// Another replica's revision is not delivered here.
+	other := &types.EndpointReplica{ID: "rep-2", EndpointID: endpoint.Spec.ID, Version: 1, GPU: "H100", ContainerID: "managed-stub-1-def", Status: types.ReplicaStatusReady, HarnessEnabled: true, StartedAt: time.Now()}
+	require.NoError(t, s.repo.SaveReplica(context.Background(), other))
+	resp, err := s.SetReplicaConfig(adminCtx(), &pb.SetReplicaConfigRequest{ReplicaId: other.ID, ConfigJson: `{"max_num_seqs":8}`, WaitSeconds: 1})
+	require.NoError(t, err)
+	require.True(t, resp.Ok, resp.ErrMsg)
+	assert.Equal(t, "admin", resp.Replica.Config.Author)
+	assert.Equal(t, uint64(0), resp.Replica.Config.AckedRevision, "returned unacked after the wait")
+	select {
+	case leaked := <-stream.sent:
+		t.Fatalf("revision for another replica leaked: %v", leaked)
+	case <-time.After(200 * time.Millisecond):
 	}
 
 	cancel()
@@ -274,13 +331,47 @@ func TestWatchConfigStreamsFleetAndReplicaRevisions(t *testing.T) {
 	}
 }
 
-func TestAdminReadAndRolloutRPCs(t *testing.T) {
+func TestSetReplicaConfigRejectsBadInput(t *testing.T) {
+	s := newServiceForTest(t)
+	endpoint := seedEndpoint(t, s)
+	replica := seedReplica(t, s, endpoint)
+	ctx := adminCtx()
+
+	resp, err := s.SetReplicaConfig(ctx, &pb.SetReplicaConfigRequest{ReplicaId: "missing", ConfigJson: `{}`})
+	require.NoError(t, err)
+	assert.False(t, resp.Ok)
+	assert.Contains(t, resp.ErrMsg, "not found")
+
+	resp, err = s.SetReplicaConfig(ctx, &pb.SetReplicaConfigRequest{ReplicaId: replica.ID, ConfigJson: `[1]`})
+	require.NoError(t, err)
+	assert.False(t, resp.Ok)
+	assert.Contains(t, resp.ErrMsg, "JSON object")
+
+	// Without the harness there is nothing to configure.
+	replica.HarnessEnabled = false
+	require.NoError(t, s.repo.SaveReplica(context.Background(), replica))
+	resp, err = s.SetReplicaConfig(ctx, &pb.SetReplicaConfigRequest{ReplicaId: replica.ID, ConfigJson: `{}`})
+	require.NoError(t, err)
+	assert.False(t, resp.Ok)
+	assert.Contains(t, resp.ErrMsg, "harness")
+
+	// Nor is there on a replica that is already gone.
+	replica.HarnessEnabled, replica.Status = true, types.ReplicaStatusStopped
+	require.NoError(t, s.repo.SaveReplica(context.Background(), replica))
+	resp, err = s.SetReplicaConfig(ctx, &pb.SetReplicaConfigRequest{ReplicaId: replica.ID, ConfigJson: `{}`})
+	require.NoError(t, err)
+	assert.False(t, resp.Ok)
+	assert.Contains(t, resp.ErrMsg, "stopped")
+	stored, _ := s.repo.GetReplica(context.Background(), replica.ID)
+	assert.Equal(t, uint64(0), stored.Config.Revision, "rejected calls do not bump the revision")
+}
+
+func TestAdminReadRPCs(t *testing.T) {
 	s := newServiceForTest(t)
 	endpoint := seedEndpoint(t, s)
 	replica := seedReplica(t, s, endpoint)
 	replica.Status = types.ReplicaStatusReady
 	require.NoError(t, s.repo.SaveReplica(context.Background(), replica))
-	require.NoError(t, s.controller.ensureFleetRevisions(context.Background(), endpoint))
 	ctx := adminCtx()
 
 	list, err := s.ListEndpoints(ctx, &pb.ListEndpointsRequest{})
@@ -288,188 +379,136 @@ func TestAdminReadAndRolloutRPCs(t *testing.T) {
 	require.True(t, list.Ok)
 	require.Len(t, list.Endpoints, 1)
 	assert.Equal(t, uint32(1), list.Endpoints[0].ReadyReplicas)
+	assert.Equal(t, uint32(1), list.Endpoints[0].TotalReplicas)
+	assert.Equal(t, string(types.EndpointStatusActive), list.Endpoints[0].Status)
+	assert.JSONEq(t, `{"H100":{"share":0.5,"min":1,"max":4,"count":1}}`, list.Endpoints[0].PlacementsJson)
 
 	get, err := s.GetEndpoint(ctx, &pb.GetEndpointRequest{EndpointId: endpoint.Spec.ID})
 	require.NoError(t, err)
 	require.True(t, get.Ok)
 	assert.Len(t, get.Replicas, 1)
-	assert.Equal(t, uint32(1), get.Rollout.ActiveVersion)
-	assert.Len(t, get.Rollout.Versions, 1)
+	assert.Equal(t, endpoint.Spec.ID, get.Endpoint.Id)
+	assert.Contains(t, get.Endpoint.SpecJson, `"H100"`)
+	get, err = s.GetEndpoint(ctx, &pb.GetEndpointRequest{EndpointId: "acme/missing"})
+	require.NoError(t, err)
+	assert.False(t, get.Ok)
+	assert.Contains(t, get.ErrMsg, "not found")
 
-	cfg, err := s.GetConfig(ctx, &pb.GetConfigRequest{EndpointId: endpoint.Spec.ID, ScopeKey: "H100x1"})
+	replicas, err := s.ListReplicas(ctx, &pb.ListReplicasRequest{Gpu: "h100", Status: "ready"})
 	require.NoError(t, err)
-	require.True(t, cfg.Ok, cfg.ErrMsg)
-	assert.JSONEq(t, `{"max_num_seqs":64}`, cfg.Revision.ConfigJson)
+	require.True(t, replicas.Ok)
+	assert.Len(t, replicas.Replicas, 1)
+	replicas, err = s.ListReplicas(ctx, &pb.ListReplicasRequest{EndpointId: endpoint.Spec.ID, Gpu: "A100"})
+	require.NoError(t, err)
+	assert.Empty(t, replicas.Replicas)
 
-	revs, err := s.ListConfigRevisions(ctx, &pb.ListConfigRevisionsRequest{EndpointId: endpoint.Spec.ID, ScopeKey: "serve:H100x1"})
-	require.NoError(t, err)
-	assert.Len(t, revs.Revisions, 1)
-
-	pin, err := s.PinVersion(ctx, &pb.PinVersionRequest{EndpointId: endpoint.Spec.ID, Version: 1})
-	require.NoError(t, err)
-	require.True(t, pin.Ok)
-	assert.Equal(t, uint32(1), pin.Rollout.PinnedVersion)
-	pin, err = s.PinVersion(ctx, &pb.PinVersionRequest{EndpointId: endpoint.Spec.ID, Version: 9})
-	require.NoError(t, err)
-	assert.False(t, pin.Ok)
-
-	action, err := s.PromoteRollout(ctx, &pb.PromoteRolloutRequest{EndpointId: endpoint.Spec.ID})
-	require.NoError(t, err)
-	assert.False(t, action.Ok, "nothing baking")
-	action, err = s.RollbackRollout(ctx, &pb.RollbackRolloutRequest{EndpointId: endpoint.Spec.ID})
-	require.NoError(t, err)
-	assert.False(t, action.Ok, "no previous version")
-
-	toggled, err := s.SetEndpointEnabled(ctx, &pb.SetEndpointEnabledRequest{EndpointId: endpoint.Spec.ID, Enabled: false})
-	require.NoError(t, err)
-	require.True(t, toggled.Ok)
-	assert.False(t, toggled.Endpoint.Enabled)
-	list, _ = s.ListEndpoints(ctx, &pb.ListEndpointsRequest{})
-	assert.Empty(t, list.Endpoints)
-	list, _ = s.ListEndpoints(ctx, &pb.ListEndpointsRequest{IncludeDisabled: true})
-	assert.Len(t, list.Endpoints, 1)
-
-	metrics, err := s.GetMetrics(ctx, &pb.GetMetricsRequest{EndpointId: endpoint.Spec.ID, Gpu: "H100x1"})
+	metrics, err := s.GetMetrics(ctx, &pb.GetMetricsRequest{EndpointId: endpoint.Spec.ID, Gpu: "H100"})
 	require.NoError(t, err)
 	require.True(t, metrics.Ok)
 	assert.Len(t, metrics.Replicas, 1)
-
-	gitops, err := s.TriggerGitOpsSync(ctx, &pb.TriggerGitOpsSyncRequest{})
-	require.NoError(t, err)
-	assert.False(t, gitops.Ok)
-}
-
-func TestTuningReplicaRequiresHarnessAndKnownTarget(t *testing.T) {
-	s := newServiceForTest(t)
-	endpoint := seedEndpoint(t, s)
-	ctx := adminCtx()
-
-	resp, err := s.StartTuningReplica(ctx, &pb.StartTuningReplicaRequest{EndpointId: endpoint.Spec.ID, Gpu: "A100"})
-	require.NoError(t, err)
-	assert.False(t, resp.Ok)
-	assert.Contains(t, resp.ErrMsg, "no target")
+	assert.Equal(t, uint32(1), metrics.Metrics.ReadyReplicas)
 
 	stop, err := s.StopReplica(ctx, &pb.StopReplicaRequest{ReplicaId: "missing"})
 	require.NoError(t, err)
 	assert.False(t, stop.Ok)
-
-	set, err := s.SetConfig(ctx, &pb.SetConfigRequest{EndpointId: endpoint.Spec.ID, Scope: "target", ScopeKey: "H100x1", ConfigJson: `{"max_num_seqs":8}`, Author: "agent"})
+	stop, err = s.StopReplica(ctx, &pb.StopReplicaRequest{ReplicaId: replica.ID, DrainSeconds: 30})
 	require.NoError(t, err)
-	require.True(t, set.Ok, set.ErrMsg)
-	assert.Equal(t, string(types.ConfigSourceLive), set.Revision.Source)
-	cfg, err := s.GetConfig(ctx, &pb.GetConfigRequest{EndpointId: endpoint.Spec.ID, ScopeKey: "H100x1"})
+	require.True(t, stop.Ok, stop.ErrMsg)
+	assert.Equal(t, string(types.ReplicaStatusDraining), stop.Replica.Status)
+	list, _ = s.ListEndpoints(ctx, &pb.ListEndpointsRequest{})
+	assert.Equal(t, uint32(0), list.Endpoints[0].ReadyReplicas)
+
+	gitops, err := s.GetGitOpsStatus(ctx, &pb.GetGitOpsStatusRequest{})
 	require.NoError(t, err)
-	assert.JSONEq(t, `{"max_num_seqs":8}`, cfg.Revision.ConfigJson)
-
-	// Without the harness there is nothing to tune.
-	endpoint.Spec.Harness = false
-	require.NoError(t, s.repo.SaveEndpoint(context.Background(), endpoint))
-	resp, err = s.StartTuningReplica(ctx, &pb.StartTuningReplicaRequest{EndpointId: endpoint.Spec.ID, Gpu: "H100"})
+	require.True(t, gitops.Ok)
+	assert.JSONEq(t, `{"H100":{"acme/model":{"share":0.5,"min":1,"max":4,"count":1}}}`, gitops.FleetJson)
+	sync, err := s.TriggerGitOpsSync(ctx, &pb.TriggerGitOpsSyncRequest{})
 	require.NoError(t, err)
-	assert.False(t, resp.Ok)
-	assert.Contains(t, resp.ErrMsg, "harness")
-	set, err = s.SetConfig(ctx, &pb.SetConfigRequest{EndpointId: endpoint.Spec.ID, Scope: "target", ScopeKey: "H100x1", ConfigJson: `{}`})
-	require.NoError(t, err)
-	assert.False(t, set.Ok)
-}
-
-func TestFleetRevisionsFollowVersions(t *testing.T) {
-	s := newServiceForTest(t)
-	endpoint := seedEndpoint(t, s)
-	ctx := context.Background()
-
-	require.NoError(t, s.controller.ensureFleetRevisions(ctx, endpoint))
-	require.NoError(t, s.controller.ensureFleetRevisions(ctx, endpoint))
-	revs, _ := s.repo.ListConfigRevisions(ctx, endpoint.Spec.ID, types.ConfigScopeTarget, "serve:H100x1@v1", 10)
-	assert.Len(t, revs, 1, "idempotent for the same version")
-
-	// A live fleet edit on this version is preserved.
-	require.NoError(t, s.repo.CreateConfigRevision(ctx, &types.EndpointConfigRevision{
-		EndpointID: endpoint.Spec.ID, Scope: types.ConfigScopeTarget, ScopeKey: "serve:H100x1@v1",
-		Config: map[string]any{"max_num_seqs": 200}, Author: "live@v1:agent", Source: types.ConfigSourceLive,
-	}))
-	require.NoError(t, s.controller.ensureFleetRevisions(ctx, endpoint))
-	latest, _ := s.repo.LatestConfigRevision(ctx, endpoint.Spec.ID, types.ConfigScopeTarget, "serve:H100x1@v1")
-	require.NotNil(t, latest)
-	assert.Equal(t, float64(200), latest.Config["max_num_seqs"])
-
-	// A new version gets its own stream seeded from git; the old version's
-	// stream (still serving until promotion) is untouched, so an active
-	// fleet and a baking canary never flip-flop over one "latest".
-	canary := *endpoint
-	canary.Version = 2
-	canary.Spec.Gpu[0].Harness = map[string]any{"max_num_seqs": 32}
-	require.NoError(t, s.controller.ensureFleetRevisions(ctx, &canary))
-	require.NoError(t, s.controller.ensureFleetRevisions(ctx, endpoint))
-	require.NoError(t, s.controller.ensureFleetRevisions(ctx, &canary))
-
-	v2, _ := s.repo.LatestConfigRevision(ctx, endpoint.Spec.ID, types.ConfigScopeTarget, "serve:H100x1@v2")
-	require.NotNil(t, v2)
-	assert.Equal(t, float64(32), v2.Config["max_num_seqs"])
-	assert.Equal(t, types.ConfigSourceGit, v2.Source)
-	v1, _ := s.repo.LatestConfigRevision(ctx, endpoint.Spec.ID, types.ConfigScopeTarget, "serve:H100x1@v1")
-	assert.Equal(t, latest.Revision, v1.Revision, "live edit on v1 survives the canary")
-	v2revs, _ := s.repo.ListConfigRevisions(ctx, endpoint.Spec.ID, types.ConfigScopeTarget, "serve:H100x1@v2", 10)
-	assert.Len(t, v2revs, 1)
-
-	// Admin reads default to the active version and accept an explicit one.
-	ctx = adminCtx()
-	cfg, err := s.GetConfig(ctx, &pb.GetConfigRequest{EndpointId: endpoint.Spec.ID, ScopeKey: "H100x1"})
-	require.NoError(t, err)
-	require.True(t, cfg.Ok, cfg.ErrMsg)
-	assert.Equal(t, "serve:H100x1@v1", cfg.Revision.ScopeKey)
-	cfg, err = s.GetConfig(ctx, &pb.GetConfigRequest{EndpointId: endpoint.Spec.ID, ScopeKey: "serve:H100x1@v2"})
-	require.NoError(t, err)
-	require.True(t, cfg.Ok, cfg.ErrMsg)
-	assert.JSONEq(t, `{"max_num_seqs":32}`, cfg.Revision.ConfigJson)
+	assert.False(t, sync.Ok, "no repo configured")
 }
 
 func TestRouteRecordCreditsProviderWorkspace(t *testing.T) {
 	s := newServiceForTest(t)
-	r := &router{s: s, usageQueue: make(chan types.EventEndpointRouteSchema, 4)}
+	r := &router{s: s}
+	now := time.Now()
 	endpoint := &types.ManagedEndpoint{Spec: types.ManagedEndpointSpec{ID: "acme/model", Pricing: types.Pricing{CompletionTokens: "0.000001"}}}
 	replica := &types.EndpointReplica{ID: "rep-1", GPU: "H100", MachineID: "machine-a", ProviderWorkspaceID: "ws-provider"}
 	rq := &routeRequest{
 		auth:      &auth.AuthInfo{Workspace: &types.Workspace{ExternalId: "ws-tenant"}, Token: &types.Token{ExternalId: "tok"}},
 		requestID: "req-1", route: types.EndpointRouteChatCompletions, models: []string{"acme/model"}, startedAt: time.Now(),
 	}
-	r.record(rq, endpoint, replica, 200, Usage{CompletionTokens: 1000, Found: true}, 0, "")
+	ctx := context.Background()
+	// record persists synchronously; the generation record is the event as written.
+	generation := func(requestID string) *types.EventEndpointRouteSchema {
+		t.Helper()
+		record, err := s.repo.GetGeneration(ctx, requestID)
+		require.NoError(t, err)
+		require.NotNil(t, record)
+		return record
+	}
 
-	event := <-r.usageQueue
+	r.record(rq, endpoint, replica, 200, Usage{CompletionTokens: 1000, Found: true}, 0, "")
+	event := generation("req-1")
 	require.Equal(t, int64(1000), event.CostMicroUSD)
 	require.Equal(t, "ws-provider", event.ProviderWorkspaceID)
 	require.Equal(t, "machine-a", event.MachineID)
 	require.Equal(t, int64(700), event.ProviderShareMicroUSD) // default 70% share
+	require.Equal(t, "acme/model", event.Model)
+	require.Equal(t, "ws-tenant", event.WorkspaceID)
 
-	r.persist(event)
-	report, err := s.repo.GetProviderEarnings(context.Background(), "ws-provider", 1)
+	spend, err := s.repo.GetUsage(ctx, types.UsageSpend, "ws-tenant", now, now)
 	require.NoError(t, err)
-	require.Equal(t, types.ProviderEarnings{Requests: 1, CompletionTokens: 1000, EarningsMicroUSD: 700}, report.PerMachine["machine-a"])
+	require.Equal(t, types.Usage{Requests: 1, CompletionTokens: 1000, MicroUSD: 1000}, spend.PerModel["acme/model"])
+	earned, err := s.repo.GetUsage(ctx, types.UsageEarned, "ws-provider", now, now)
+	require.NoError(t, err)
+	require.Equal(t, types.Usage{Requests: 1, CompletionTokens: 1000, MicroUSD: 700}, earned.PerModel["acme/model"])
+
+	// Recording the same request twice (a retried accounting leg) never double-counts.
+	r.record(rq, endpoint, replica, 200, Usage{CompletionTokens: 1000, Found: true}, 0, "")
+	replayed, err := s.repo.GetUsage(ctx, types.UsageSpend, "ws-tenant", now, now)
+	require.NoError(t, err)
+	require.Equal(t, spend.Total, replayed.Total)
 
 	// Free requests earn nothing and carry no provider attribution.
+	rq.requestID = "req-2"
 	r.record(rq, endpoint, replica, 200, Usage{Found: true}, 0, "")
-	require.Empty(t, (<-r.usageQueue).ProviderWorkspaceID)
+	require.Empty(t, generation("req-2").ProviderWorkspaceID)
+
+	// Failed requests are recorded but never billed.
+	rq.requestID = "req-3"
+	r.record(rq, endpoint, replica, 502, Usage{CompletionTokens: 5, Found: true}, 0, "boom")
+	failed := generation("req-3")
+	require.Zero(t, failed.CostMicroUSD)
+	require.Equal(t, "boom", failed.Error)
+	spend, err = s.repo.GetUsage(ctx, types.UsageSpend, "ws-tenant", now, now)
+	require.NoError(t, err)
+	require.Equal(t, int64(2), spend.Total.Requests, "the free request counts, the failed one does not")
+
+	// Every sample lands in the serving replica's own metrics bucket.
+	metrics, err := s.repo.GetRouteMetrics(ctx, "acme/model", "H100", "rep-1", time.Minute)
+	require.NoError(t, err)
+	require.EqualValues(t, 4, metrics.Requests)
+	require.EqualValues(t, 1, metrics.Errors)
 }
 
 // TestProxyStreamWithoutUsageIsNotBilled: a billable SSE stream that completes
 // without a usage chunk reaches the client intact but is recorded as a 502
-// with no cost, like the buffered path, so it is neither billed nor counted
-// as a rollout success.
+// with no cost, like the buffered path, so it is not billed.
 func TestProxyStreamWithoutUsageIsNotBilled(t *testing.T) {
 	s := newServiceForTest(t)
-	r := &router{s: s, states: map[string]*llmroute.State{}, usageQueue: make(chan types.EventEndpointRouteSchema, 4)}
+	r := &router{s: s, states: map[string]*llmroute.State{}}
 
 	var withUsage atomic.Bool
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"id\":\"chatcmpl-upstream\",\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n")
 		if withUsage.Load() {
-			fmt.Fprint(w, "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":7}}\n\n")
+			fmt.Fprint(w, "data: {\"id\":\"chatcmpl-upstream\",\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":7}}\n\n")
 		}
 		fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
 	defer upstream.Close()
-	r.transports.Store(upstream.Listener.Addr().String(), &http.Transport{
+	r.s.transports.Store(upstream.Listener.Addr().String(), &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return net.Dial("tcp", upstream.Listener.Addr().String())
 		},
@@ -488,12 +527,17 @@ func TestProxyStreamWithoutUsageIsNotBilled(t *testing.T) {
 		retry, err := r.proxy(context.Background(), rq, endpoint, replica)
 		require.NoError(t, err)
 		require.False(t, retry)
-		return rec, <-r.usageQueue
+		event, err := s.repo.GetGeneration(context.Background(), rq.requestID)
+		require.NoError(t, err)
+		require.NotNil(t, event, "record persists the generation synchronously")
+		return rec, *event
 	}
 
 	rec, event := proxyOnce()
 	assert.Equal(t, http.StatusOK, rec.Code, "the stream already reached the client")
 	assert.Contains(t, rec.Body.String(), "data: [DONE]")
+	assert.Contains(t, rec.Body.String(), `"id":"req-1"`, "chunks carry the gateway generation id")
+	assert.NotContains(t, rec.Body.String(), "chatcmpl-upstream")
 	assert.Equal(t, http.StatusBadGateway, event.StatusCode)
 	assert.Equal(t, errMissingUsage.Message, event.Error)
 	assert.Zero(t, event.CostMicroUSD)

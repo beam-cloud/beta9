@@ -107,12 +107,14 @@ func TestScheduleEvictsToCoverShortfall(t *testing.T) {
 	assert.Equal(t, string(types.ContainerStatusRunning), survivor["status"])
 	assert.NotEqual(t, "true", survivor["evicting"])
 
-	// Capacity moved from the victim to the new request: free = 0 + 1 - 1 GPU.
+	// Only the GPU shortfall is drawn from the victim (free = 0 + 1 - 1); its
+	// CPU and memory stay held until it actually leaves the worker, and the
+	// request's CPU/memory come out of what was already free.
 	stored, err := repo.GetWorkerById(worker.Id)
 	assert.NoError(t, err)
 	assert.Equal(t, uint32(0), stored.FreeGpuCount)
-	assert.Equal(t, int64(2500), stored.FreeCpu)
-	assert.Equal(t, int64(5500+1250-625), stored.FreeMemory)
+	assert.Equal(t, int64(2000-500), stored.FreeCpu)
+	assert.Equal(t, int64(5500-625), stored.FreeMemory)
 	assert.Equal(t, uint32(1), stored.EvictableGpuCount)
 	assert.Equal(t, int64(1000), stored.EvictableCpu)
 	assert.Equal(t, int64(1250), stored.EvictableMemory)
@@ -327,12 +329,12 @@ func TestScheduleMixedBatchDoesNotEvictToFitIdleOnlyRequests(t *testing.T) {
 	assert.Equal(t, int64(0), rdb.LLen(context.TODO(), common.RedisKeys.SchedulerWorkerRequests(worker.Id)).Val())
 }
 
-func TestReconcileCapacityCountsEvictingVictimOnceBeneficiaryLeaves(t *testing.T) {
+func TestReconcileCapacityCountsEvictingVictimUntilItLeaves(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	assert.NoError(t, err)
 	repo := NewWorkerRedisRepositoryForTest(rdb).(*WorkerRedisRepository)
 
-	worker := &types.Worker{Id: "worker-orphaned-victim", Status: types.WorkerStatusPending, Gpu: "A10G",
+	worker := &types.Worker{Id: "worker-draining-victim", Status: types.WorkerStatusPending, Gpu: "A10G",
 		TotalCpu: 4000, TotalMemory: 8000, TotalGpuCount: 2, FreeCpu: 4000, FreeMemory: 8000, FreeGpuCount: 2}
 	assert.NoError(t, repo.AddWorker(worker))
 	seedRunningContainer(t, rdb, worker.Id, &types.ContainerState{ContainerId: "protected", Cpu: 1000, Memory: 1000, Gpu: "A10G", GpuCount: 1})
@@ -340,8 +342,9 @@ func TestReconcileCapacityCountsEvictingVictimOnceBeneficiaryLeaves(t *testing.T
 	assert.NoError(t, rdb.HSet(context.TODO(), victim, "status", string(types.ContainerStatusStopping), "evicting", "true",
 		containerEvictedForField, "replacement").Err())
 
-	// While the replacement is queued here the victim's capacity is the
-	// replacement's: only the replacement is counted.
+	// While the victim drains it still holds its GPU, and the queued
+	// replacement that displaced it is counted too: nothing on this worker is
+	// free until the victim is gone, and the victim is not evictable again.
 	replacement, err := json.Marshal(&types.ContainerRequest{ContainerId: "replacement", Cpu: 500, Memory: 500, Gpu: "A10G", GpuCount: 1})
 	assert.NoError(t, err)
 	assert.NoError(t, rdb.RPush(context.TODO(), common.RedisKeys.SchedulerWorkerRequests(worker.Id), replacement).Err())
@@ -349,33 +352,17 @@ func TestReconcileCapacityCountsEvictingVictimOnceBeneficiaryLeaves(t *testing.T
 	stored, err := repo.GetWorkerById(worker.Id)
 	assert.NoError(t, err)
 	assert.Equal(t, uint32(0), stored.FreeGpuCount)
-	assert.Equal(t, int64(4000-1000-500), stored.FreeCpu)
+	assert.Equal(t, int64(4000-1000-1000-500), stored.FreeCpu)
 	assert.Equal(t, uint32(0), stored.EvictableGpuCount)
+	assert.Equal(t, int64(0), stored.EvictableCpu)
 
-	// The replacement is requeued elsewhere before the victim finalizes. The
-	// victim still holds its GPU, so it must be counted as held (and not as
-	// evictable again) instead of the GPU being published as free.
+	// The replacement being requeued elsewhere changes nothing for the victim.
 	assert.NoError(t, rdb.Del(context.TODO(), common.RedisKeys.SchedulerWorkerRequests(worker.Id)).Err())
 	stub := &types.ContainerRequest{ContainerId: "probe", Cpu: 1, Memory: 1}
 	assert.NoError(t, repo.UpdateWorkerCapacity(worker, stub, types.AddCapacity))
 	assert.Equal(t, uint32(0), worker.FreeGpuCount)
 	assert.Equal(t, int64(4000-1000-1000), worker.FreeCpu)
 	assert.Equal(t, int64(8000-1250-1250), worker.FreeMemory)
-	assert.Equal(t, uint32(0), worker.EvictableGpuCount)
-	assert.Equal(t, int64(0), worker.EvictableCpu)
-
-	// A running replacement (indexed on this worker) accounts for the victim's
-	// capacity just like a queued one.
-	seedRunningContainer(t, rdb, worker.Id, &types.ContainerState{ContainerId: "replacement", Cpu: 500, Memory: 500, Gpu: "A10G", GpuCount: 1})
-	assert.NoError(t, repo.UpdateWorkerCapacity(worker, stub, types.AddCapacity))
-	assert.Equal(t, uint32(0), worker.FreeGpuCount)
-	assert.Equal(t, int64(4000-1000-500), worker.FreeCpu)
-
-	// Once the replacement moves to another worker the victim counts again.
-	assert.NoError(t, rdb.HSet(context.TODO(), common.RedisKeys.SchedulerContainerState("replacement"), "worker_id", "elsewhere").Err())
-	assert.NoError(t, repo.UpdateWorkerCapacity(worker, stub, types.AddCapacity))
-	assert.Equal(t, uint32(0), worker.FreeGpuCount)
-	assert.Equal(t, int64(4000-1000-1000), worker.FreeCpu)
 
 	// Once the victim finalizes and drops out of the index, its GPU is free.
 	assert.NoError(t, rdb.Del(context.TODO(), victim).Err())
@@ -384,18 +371,7 @@ func TestReconcileCapacityCountsEvictingVictimOnceBeneficiaryLeaves(t *testing.T
 	assert.Equal(t, int64(3000), worker.FreeCpu)
 }
 
-func TestEvictionBeneficiariesAccounted(t *testing.T) {
-	accounted := map[string]struct{}{"a": {}, "b": {}}
-	assert.True(t, evictionBeneficiariesAccounted("", accounted))
-	assert.True(t, evictionBeneficiariesAccounted("a", accounted))
-	assert.True(t, evictionBeneficiariesAccounted("a,b", accounted))
-	// A victim whose capacity went to a whole batch stays excluded only while
-	// every request in that batch is still here.
-	assert.False(t, evictionBeneficiariesAccounted("a,c", accounted))
-	assert.False(t, evictionBeneficiariesAccounted("c", accounted))
-}
-
-func TestReconcileCapacityCountsEvictableAndSkipsEvicting(t *testing.T) {
+func TestReconcileCapacityCountsEvictingAsHeldNotEvictable(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	assert.NoError(t, err)
 	repo := NewWorkerRedisRepositoryForTest(rdb).(*WorkerRedisRepository)
@@ -405,8 +381,8 @@ func TestReconcileCapacityCountsEvictableAndSkipsEvicting(t *testing.T) {
 	assert.NoError(t, repo.AddWorker(worker))
 	seedRunningContainer(t, rdb, worker.Id, &types.ContainerState{ContainerId: "protected", Cpu: 1000, Memory: 1000, Gpu: "A10G", GpuCount: 1})
 	seedRunningContainer(t, rdb, worker.Id, &types.ContainerState{ContainerId: "replica", Cpu: 1000, Memory: 1000, Gpu: "A10G", GpuCount: 1, Evictable: true})
-	// An evicting victim's capacity already belongs to the request that
-	// displaced it; the request is queued and counted separately.
+	// An evicting victim still holds its GPU while it drains; the queued
+	// request that displaced it is counted as well, so the worker reads full.
 	evicting := seedRunningContainer(t, rdb, worker.Id, &types.ContainerState{ContainerId: "victim", Cpu: 1000, Memory: 1000, Gpu: "A10G", GpuCount: 1, Evictable: true})
 	assert.NoError(t, rdb.HSet(context.TODO(), evicting, "status", string(types.ContainerStatusStopping), "evicting", "true").Err())
 	replacement, err := json.Marshal(&types.ContainerRequest{ContainerId: "replacement", Cpu: 500, Memory: 500, Gpu: "A10G", GpuCount: 1})
@@ -416,8 +392,8 @@ func TestReconcileCapacityCountsEvictableAndSkipsEvicting(t *testing.T) {
 	assert.NoError(t, repo.ToggleWorkerAvailable(worker.Id, ""))
 	stored, err := repo.GetWorkerById(worker.Id)
 	assert.NoError(t, err)
-	assert.Equal(t, int64(4000-1000-1000-500), stored.FreeCpu)
-	assert.Equal(t, int64(8000-1250-1250-625), stored.FreeMemory)
+	assert.Equal(t, int64(4000-1000-1000-1000-500), stored.FreeCpu)
+	assert.Equal(t, int64(8000-1250-1250-1250-625), stored.FreeMemory)
 	assert.Equal(t, uint32(0), stored.FreeGpuCount)
 	assert.Equal(t, int64(1000), stored.EvictableCpu)
 	assert.Equal(t, int64(1250), stored.EvictableMemory)

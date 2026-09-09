@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
@@ -54,20 +56,16 @@ func TestGitOpsApplyReportRecordsVersionsAndRetires(t *testing.T) {
 	s, g := newGitOpsForTest(t)
 	ctx := context.Background()
 
-	// Two endpoints and a service exist from an earlier commit.
+	// Two endpoints exist from an earlier commit.
 	seedEndpoint(t, s)
 	require.NoError(t, s.repo.SaveEndpoint(ctx, &types.ManagedEndpoint{
-		Spec: types.ManagedEndpointSpec{ID: "acme/old", Kind: types.EndpointKindLLM, Engine: "vllm", Port: 8000}, ManagedRecord: types.ManagedRecord{StubID: "stub-old", Version: 1, Status: types.EndpointStatusActive},
-	}))
-	require.NoError(t, s.repo.SaveService(ctx, &types.ManagedService{
-		Spec: types.ManagedServiceSpec{Name: "mooncake", Port: 9000}, ManagedRecord: types.ManagedRecord{StubID: "stub-svc", Version: 1, Status: types.EndpointStatusActive},
+		Spec: types.ManagedEndpointSpec{ID: "acme/old", Kind: types.EndpointKindLLM, Engine: "vllm", Port: 8000}, StubID: "stub-old", Version: 1, Status: types.EndpointStatusActive,
 	}))
 	require.NoError(t, s.repo.SaveGitOpsState(ctx, &types.GitOpsState{
 		LastSHA: "aaaaaaaa", Running: true, RunID: "run-1", TargetSHA: "bbbbbbbb", StartedAt: time.Now(),
 		PerEndpoint: map[string]types.GitOpsEndpointState{
-			"endpoint:acme/model": {Path: "acme/model", ID: "acme/model", Kind: "endpoint", Status: types.GitOpsStatusApplied, AppliedSHA: "aaaaaaaa"},
-			"endpoint:acme/old":   {Path: "acme/old", ID: "acme/old", Kind: "endpoint", Status: types.GitOpsStatusApplied, AppliedSHA: "aaaaaaaa"},
-			"service:mooncake":    {Path: "services/mooncake", ID: "mooncake", Kind: "service", Status: types.GitOpsStatusApplied, AppliedSHA: "aaaaaaaa"},
+			"acme/model": {Path: "acme/model", ID: "acme/model", Status: types.GitOpsStatusApplied, AppliedSHA: "aaaaaaaa"},
+			"acme/old":   {Path: "acme/old", ID: "acme/old", Status: types.GitOpsStatusApplied, AppliedSHA: "aaaaaaaa"},
 		},
 	}))
 
@@ -75,15 +73,15 @@ func TestGitOpsApplyReportRecordsVersionsAndRetires(t *testing.T) {
 	err := g.applyReport(ctx, &types.GitOpsReport{RunID: "stale", SHA: "bbbbbbbb"})
 	require.Error(t, err)
 
-	// acme/model redeployed, mooncake unchanged, acme/old removed from the repo,
-	// and one directory failed to import.
+	// acme/model redeployed, acme/old removed from the repo, one directory
+	// failed to import, and fleet.yaml places acme/model on H100.
 	report := &types.GitOpsReport{
 		RunID: "run-1", SHA: "bbbbbbbb",
 		Results: []types.GitOpsDeployResult{
-			{Path: "acme/model", ID: "acme/model", Kind: "endpoint", OK: true, StubID: "stub-2", Version: 2},
-			{Path: "services/mooncake", ID: "mooncake", Kind: "service", OK: true, Skipped: true},
+			{Path: "acme/model", ID: "acme/model", OK: true, StubID: "stub-2", Version: 2},
 			{Path: "acme/broken", OK: false, Error: "import failed: boom"},
 		},
+		FleetYAML: "h100:\n  acme/model:\n    share: 0.5\n    min: 1\n",
 	}
 	require.NoError(t, g.applyReport(ctx, report))
 
@@ -91,21 +89,18 @@ func TestGitOpsApplyReportRecordsVersionsAndRetires(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, state.Running)
 	assert.Empty(t, state.RunID)
-	assert.Equal(t, "aaaaaaaa", state.LastSHA, "a failed stub keeps LastSHA so the run is retried")
+	assert.Equal(t, "bbbbbbbb", state.LastSHA, "LastSHA advances; the failed stub is retried on its own")
 	assert.Equal(t, "bbbbbbbb", state.TargetSHA)
 	assert.Contains(t, state.LastError, "1 stub(s) failed")
+	assert.Empty(t, state.FleetError)
 
-	model := state.PerEndpoint["endpoint:acme/model"]
+	model := state.PerEndpoint["acme/model"]
 	assert.Equal(t, types.GitOpsStatusApplied, model.Status)
 	assert.Equal(t, "bbbbbbbb", model.AppliedSHA)
 	assert.Equal(t, "stub-2", model.StubID)
 	assert.Equal(t, uint(2), model.Version)
 
-	svc := state.PerEndpoint["service:mooncake"]
-	assert.Equal(t, types.GitOpsStatusApplied, svc.Status)
-	assert.Equal(t, "bbbbbbbb", svc.AppliedSHA, "unchanged stubs follow the repo head")
-
-	old := state.PerEndpoint["endpoint:acme/old"]
+	old := state.PerEndpoint["acme/old"]
 	assert.Equal(t, types.GitOpsStatusRetired, old.Status)
 	retired, err := s.repo.GetEndpoint(ctx, "acme/old")
 	require.NoError(t, err)
@@ -116,19 +111,22 @@ func TestGitOpsApplyReportRecordsVersionsAndRetires(t *testing.T) {
 	assert.Equal(t, types.GitOpsStatusFailed, broken.Status)
 	assert.Contains(t, broken.Error, "boom")
 
+	fleet, err := s.repo.GetFleet(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "bbbbbbbb", fleet.GitSHA)
+	assert.Equal(t, []types.FleetTarget{{GPU: "H100", Placement: types.Placement{Share: 0.5, Min: 1, Count: 1}}}, fleet.Placements("acme/model"), "fleet keys are normalized")
+
 	// A duplicate report for the same run is rejected once the run closed.
 	require.Error(t, g.applyReport(ctx, report))
 
 	// Next run: everything applies, the broken path is gone; LastSHA advances
-	// and the stale failure entry is dropped.
+	// and the stale failure entry is dropped. A repo without fleet.yaml
+	// places nothing.
 	state.Running, state.RunID = true, "run-2"
 	require.NoError(t, s.repo.SaveGitOpsState(ctx, state))
 	require.NoError(t, g.applyReport(ctx, &types.GitOpsReport{
 		RunID: "run-2", SHA: "cccccccc",
-		Results: []types.GitOpsDeployResult{
-			{Path: "acme/model", ID: "acme/model", Kind: "endpoint", OK: true, Skipped: true},
-			{Path: "services/mooncake", ID: "mooncake", Kind: "service", OK: true, Skipped: true},
-		},
+		Results: []types.GitOpsDeployResult{{Path: "acme/model", ID: "acme/model", OK: true, Skipped: true}},
 	}))
 	state, err = s.repo.GetGitOpsState(ctx)
 	require.NoError(t, err)
@@ -136,7 +134,102 @@ func TestGitOpsApplyReportRecordsVersionsAndRetires(t *testing.T) {
 	assert.Empty(t, state.LastError)
 	_, hasBroken := state.PerEndpoint["path:acme/broken"]
 	assert.False(t, hasBroken)
-	assert.Equal(t, types.GitOpsStatusRetired, state.PerEndpoint["endpoint:acme/old"].Status, "retired entries are kept for visibility")
+	assert.Equal(t, types.GitOpsStatusRetired, state.PerEndpoint["acme/old"].Status, "retired entries are kept for visibility")
+	assert.Equal(t, "cccccccc", state.PerEndpoint["acme/model"].AppliedSHA, "unchanged stubs follow the repo head")
+	fleet, err = s.repo.GetFleet(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "cccccccc", fleet.GitSHA)
+	assert.Empty(t, fleet.Placements("acme/model"))
+}
+
+func TestGitOpsApplyReportInvalidFleetKeepsPrevious(t *testing.T) {
+	s, g := newGitOpsForTest(t)
+	ctx := context.Background()
+	seedEndpoint(t, s) // places acme/model on H100
+	require.NoError(t, s.repo.SaveEndpoint(ctx, &types.ManagedEndpoint{
+		Spec: types.ManagedEndpointSpec{ID: "acme/retired", Gpu: map[string]types.GpuSpec{"H100": {}}}, StubID: "stub-r", Version: 1, Status: types.EndpointStatusRetired,
+	}))
+	require.NoError(t, s.repo.SaveGitOpsState(ctx, &types.GitOpsState{
+		LastSHA: "aaaaaaaa", Running: true, RunID: "run-1", TargetSHA: "bbbbbbbb", StartedAt: time.Now(),
+		PerEndpoint: map[string]types.GitOpsEndpointState{"acme/model": {Path: "acme/model", ID: "acme/model", Status: types.GitOpsStatusApplied, AppliedSHA: "aaaaaaaa"}},
+	}))
+
+	// fleet.yaml is structurally broken (shares over-subscribed, unknown GPU
+	// type): every stub applied, but the fleet is rejected as a whole.
+	require.NoError(t, g.applyReport(ctx, &types.GitOpsReport{
+		RunID: "run-1", SHA: "bbbbbbbb",
+		Results:   []types.GitOpsDeployResult{{Path: "acme/model", ID: "acme/model", OK: true, Skipped: true}},
+		FleetYAML: "H100:\n  acme/model: {share: 0.7}\n  acme/other: {share: 0.6}\nNOTAGPU:\n  acme/model: {share: 1}\n",
+	}))
+	state, err := s.repo.GetGitOpsState(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "bbbbbbbb", state.LastSHA, "the stubs applied; only the fleet is held back")
+	assert.Contains(t, state.LastError, "1 stub(s) failed")
+	for _, want := range []string{"fleet.yaml", "shares sum to 1.30", "NOTAGPU: unknown GPU type"} {
+		assert.Contains(t, state.FleetError, want)
+	}
+	assert.Equal(t, types.GitOpsStatusApplied, state.PerEndpoint["acme/model"].Status)
+
+	fleet, err := s.repo.GetFleet(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "fleet-sha", fleet.GitSHA, "the previous placement stays in force")
+	assert.Len(t, fleet.Placements("acme/model"), 1)
+
+	// Unparseable yaml is rejected the same way.
+	state.Running, state.RunID = true, "run-1b"
+	require.NoError(t, s.repo.SaveGitOpsState(ctx, state))
+	require.NoError(t, g.applyReport(ctx, &types.GitOpsReport{
+		RunID: "run-1b", SHA: "bbbbbbb1",
+		Results:   []types.GitOpsDeployResult{{Path: "acme/model", ID: "acme/model", OK: true, Skipped: true}},
+		FleetYAML: "H100: [not, a, map]\n",
+	}))
+	state, err = s.repo.GetGitOpsState(ctx)
+	require.NoError(t, err)
+	assert.Contains(t, state.FleetError, "fleet.yaml")
+	fleet, err = s.repo.GetFleet(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "fleet-sha", fleet.GitSHA)
+
+	// A fleet naming a retired endpoint, a typo and a GPU the app does not
+	// declare is applied without those placements; the drops are surfaced as
+	// skipped rather than failing the run.
+	state.Running, state.RunID = true, "run-2"
+	require.NoError(t, s.repo.SaveGitOpsState(ctx, state))
+	require.NoError(t, g.applyReport(ctx, &types.GitOpsReport{
+		RunID: "run-2", SHA: "cccccccc",
+		Results:   []types.GitOpsDeployResult{{Path: "acme/model", ID: "acme/model", OK: true, Skipped: true}},
+		FleetYAML: "H100:\n  acme/model: {share: 0.5, min: 1}\n  acme/retired: {share: 0.1}\n  acme/typo: {share: 0.1}\nA10G:\n  acme/model: {share: 1}\n",
+	}))
+	state, err = s.repo.GetGitOpsState(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "cccccccc", state.LastSHA)
+	assert.Empty(t, state.LastError, "pruned placements are not a failure")
+	for _, want := range []string{"skipped:", "acme/retired is not a deployed endpoint", "acme/typo is not a deployed endpoint", `does not declare gpu "A10G"`} {
+		assert.Contains(t, state.FleetError, want)
+	}
+	fleet, err = s.repo.GetFleet(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "cccccccc", fleet.GitSHA)
+	assert.Equal(t, []types.FleetTarget{{GPU: "H100", Placement: types.Placement{Share: 0.5, Min: 1, Count: 1}}}, fleet.Placements("acme/model"))
+	assert.Empty(t, fleet.Targets["H100"]["acme/typo"])
+	assert.Empty(t, fleet.Targets["A10G"])
+
+	// The fix lands: the fleet applies cleanly and the error clears.
+	state.Running, state.RunID = true, "run-3"
+	require.NoError(t, s.repo.SaveGitOpsState(ctx, state))
+	require.NoError(t, g.applyReport(ctx, &types.GitOpsReport{
+		RunID: "run-3", SHA: "dddddddd",
+		Results:   []types.GitOpsDeployResult{{Path: "acme/model", ID: "acme/model", OK: true, Skipped: true}},
+		FleetYAML: "H100:\n  acme/model: {share: 1, min: 2, count: 2}\n",
+	}))
+	state, err = s.repo.GetGitOpsState(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "dddddddd", state.LastSHA)
+	assert.Empty(t, state.FleetError)
+	fleet, err = s.repo.GetFleet(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "dddddddd", fleet.GitSHA)
+	assert.Equal(t, types.Placement{Share: 1, Min: 2, Count: 2}, fleet.Targets["H100"]["acme/model"])
 }
 
 func TestGitOpsApplyReportImportFailureKeepsPriorEndpoint(t *testing.T) {
@@ -144,12 +237,12 @@ func TestGitOpsApplyReportImportFailureKeepsPriorEndpoint(t *testing.T) {
 	ctx := context.Background()
 
 	require.NoError(t, s.repo.SaveEndpoint(ctx, &types.ManagedEndpoint{
-		Spec: types.ManagedEndpointSpec{ID: "acme/model", Kind: types.EndpointKindLLM, Engine: "vllm", Port: 8000}, ManagedRecord: types.ManagedRecord{StubID: "stub-1", Version: 3, Status: types.EndpointStatusActive},
+		Spec: types.ManagedEndpointSpec{ID: "acme/model", Kind: types.EndpointKindLLM, Engine: "vllm", Port: 8000}, StubID: "stub-1", Version: 3, Status: types.EndpointStatusActive,
 	}))
 	require.NoError(t, s.repo.SaveGitOpsState(ctx, &types.GitOpsState{
 		LastSHA: "aaaaaaaa", Running: true, RunID: "run-1", TargetSHA: "bbbbbbbb", StartedAt: time.Now(),
 		PerEndpoint: map[string]types.GitOpsEndpointState{
-			"endpoint:acme/model": {Path: "acme/model", ID: "acme/model", Kind: "endpoint", Status: types.GitOpsStatusApplied, AppliedSHA: "aaaaaaaa", StubID: "stub-1", Version: 3},
+			"acme/model": {Path: "acme/model", ID: "acme/model", Status: types.GitOpsStatusApplied, AppliedSHA: "aaaaaaaa", StubID: "stub-1", Version: 3},
 		},
 	}))
 
@@ -162,10 +255,10 @@ func TestGitOpsApplyReportImportFailureKeepsPriorEndpoint(t *testing.T) {
 
 	state, err := s.repo.GetGitOpsState(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, "aaaaaaaa", state.LastSHA)
+	assert.Equal(t, "bbbbbbbb", state.LastSHA, "LastSHA follows the repo head; the broken stub is retried on its own")
 	assert.Contains(t, state.LastError, "1 stub(s) failed")
 
-	model := state.PerEndpoint["endpoint:acme/model"]
+	model := state.PerEndpoint["acme/model"]
 	assert.Equal(t, types.GitOpsStatusFailed, model.Status, "a broken directory marks the stub failed instead of retiring it")
 	assert.Contains(t, model.Error, "SyntaxError")
 	assert.Equal(t, "aaaaaaaa", model.AppliedSHA, "the last applied version is kept")
@@ -185,13 +278,13 @@ func TestGitOpsApplyReportImportFailureKeepsPriorEndpoint(t *testing.T) {
 	// The fix lands: the directory imports again and is redeployed.
 	require.NoError(t, g.applyReport(ctx, &types.GitOpsReport{
 		RunID: "run-2", SHA: "cccccccc",
-		Results: []types.GitOpsDeployResult{{Path: "acme/model", ID: "acme/model", Kind: "endpoint", OK: true, StubID: "stub-2", Version: 4}},
+		Results: []types.GitOpsDeployResult{{Path: "acme/model", ID: "acme/model", OK: true, StubID: "stub-2", Version: 4}},
 	}))
 	state, err = s.repo.GetGitOpsState(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, "cccccccc", state.LastSHA)
 	assert.Empty(t, state.LastError)
-	model = state.PerEndpoint["endpoint:acme/model"]
+	model = state.PerEndpoint["acme/model"]
 	assert.Equal(t, types.GitOpsStatusApplied, model.Status)
 	assert.Empty(t, model.Error)
 	assert.Equal(t, uint(4), model.Version)
@@ -202,38 +295,50 @@ func TestGitOpsApplyReportImportFailureKeepsPriorEndpoint(t *testing.T) {
 	require.NoError(t, g.applyReport(ctx, &types.GitOpsReport{RunID: "run-3", SHA: "dddddddd"}))
 	state, err = s.repo.GetGitOpsState(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, types.GitOpsStatusRetired, state.PerEndpoint["endpoint:acme/model"].Status)
+	assert.Equal(t, types.GitOpsStatusRetired, state.PerEndpoint["acme/model"].Status)
 	endpoint, err = s.repo.GetEndpoint(ctx, "acme/model")
 	require.NoError(t, err)
 	assert.False(t, endpoint.Enabled())
+}
+
+// failingEndpointRepo cannot read endpoint records.
+type failingEndpointRepo struct {
+	repository.ManagedEndpointRepository
+}
+
+func (failingEndpointRepo) GetEndpoint(context.Context, string) (*types.ManagedEndpoint, error) {
+	return nil, errors.New("redis: connection refused")
 }
 
 func TestGitOpsApplyReportRetireFailureIsRetried(t *testing.T) {
 	s, g := newGitOpsForTest(t)
 	ctx := context.Background()
 
-	// A corrupt record makes GetEndpoint (and so retire) fail.
-	key := "managed_endpoint:endpoint:acme/old"
-	require.NoError(t, s.rdb.Set(ctx, key, "{not json", 0).Err())
+	// The registry is unreachable while the run is applied, so retire fails.
+	repo := s.repo
+	s.repo = failingEndpointRepo{repo}
+	require.NoError(t, repo.SaveEndpoint(ctx, &types.ManagedEndpoint{
+		Spec: types.ManagedEndpointSpec{ID: "acme/old", Kind: types.EndpointKindLLM, Engine: "vllm", Port: 8000}, StubID: "stub-old", Version: 1, Status: types.EndpointStatusActive,
+	}))
 	require.NoError(t, s.repo.SaveGitOpsState(ctx, &types.GitOpsState{
 		LastSHA: "aaaaaaaa", Running: true, RunID: "run-1", TargetSHA: "bbbbbbbb", StartedAt: time.Now(),
 		PerEndpoint: map[string]types.GitOpsEndpointState{
-			"endpoint:acme/old": {Path: "acme/old", ID: "acme/old", Kind: "endpoint", Status: types.GitOpsStatusApplied, AppliedSHA: "aaaaaaaa"},
+			"acme/old": {Path: "acme/old", ID: "acme/old", Status: types.GitOpsStatusApplied, AppliedSHA: "aaaaaaaa"},
 		},
 	}))
 
 	require.NoError(t, g.applyReport(ctx, &types.GitOpsReport{RunID: "run-1", SHA: "bbbbbbbb"}))
 	state, err := s.repo.GetGitOpsState(ctx)
 	require.NoError(t, err)
-	old := state.PerEndpoint["endpoint:acme/old"]
+	old := state.PerEndpoint["acme/old"]
 	assert.Equal(t, types.GitOpsStatusFailed, old.Status, "a failed retirement is recorded, not silently skipped")
 	assert.Contains(t, old.Error, "retire:")
-	assert.Equal(t, "aaaaaaaa", state.LastSHA, "LastSHA does not advance past a failed retirement")
+	assert.Equal(t, "bbbbbbbb", state.LastSHA, "LastSHA advances; the failed entry alone drives the retry")
 	assert.Equal(t, "bbbbbbbb", state.TargetSHA)
 	assert.Contains(t, state.LastError, "1 stub(s) failed")
 
-	// sync would relaunch at the same SHA: it differs from LastSHA and the
-	// entry is on the retry list, so the same-SHA short-circuit does not apply.
+	// sync would relaunch at the same SHA: the entry is on the retry list, so
+	// the same-SHA short-circuit does not apply.
 	var retry []string
 	for _, e := range state.PerEndpoint {
 		if e.Status == types.GitOpsStatusFailed && e.Path != "" {
@@ -243,16 +348,14 @@ func TestGitOpsApplyReportRetireFailureIsRetried(t *testing.T) {
 	assert.Equal(t, []string{"acme/old"}, retry)
 	assert.False(t, "bbbbbbbb" == state.LastSHA && len(retry) == 0)
 
-	// The record is repaired; the retried run retires it and LastSHA advances.
-	require.NoError(t, s.repo.SaveEndpoint(ctx, &types.ManagedEndpoint{
-		Spec: types.ManagedEndpointSpec{ID: "acme/old", Kind: types.EndpointKindLLM, Engine: "vllm", Port: 8000}, ManagedRecord: types.ManagedRecord{StubID: "stub-old", Version: 1, Status: types.EndpointStatusActive},
-	}))
+	// The registry is back; the retried run retires it and LastSHA advances.
+	s.repo = repo
 	state.Running, state.RunID = true, "run-2"
 	require.NoError(t, s.repo.SaveGitOpsState(ctx, state))
 	require.NoError(t, g.applyReport(ctx, &types.GitOpsReport{RunID: "run-2", SHA: "bbbbbbbb"}))
 	state, err = s.repo.GetGitOpsState(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, types.GitOpsStatusRetired, state.PerEndpoint["endpoint:acme/old"].Status)
+	assert.Equal(t, types.GitOpsStatusRetired, state.PerEndpoint["acme/old"].Status)
 	assert.Equal(t, "bbbbbbbb", state.LastSHA)
 	assert.Empty(t, state.LastError)
 	retired, err := s.repo.GetEndpoint(ctx, "acme/old")
@@ -455,28 +558,69 @@ func TestGitOpsWebhook(t *testing.T) {
 
 func TestGitOpsReportRouteAuth(t *testing.T) {
 	s, g := newGitOpsForTest(t)
-	require.NoError(t, s.repo.SaveGitOpsState(context.Background(), &types.GitOpsState{Running: true, RunID: "run-1", TargetSHA: "bbbbbbbb", StartedAt: time.Now()}))
+	ctx := context.Background()
+	require.NoError(t, s.repo.SaveGitOpsState(ctx, &types.GitOpsState{Running: true, RunID: "run-1", TokenID: "run-token", TargetSHA: "bbbbbbbb", StartedAt: time.Now()}))
 	e := echo.New()
 	body, _ := json.Marshal(types.GitOpsReport{RunID: "run-1", SHA: "bbbbbbbb"})
+	runToken := func(externalID string) context.Context {
+		return auth.ContextWithAuthInfo(ctx, &auth.AuthInfo{
+			Workspace: &types.Workspace{Id: 1, ExternalId: "admin-ws"},
+			Token:     &types.Token{TokenType: types.TokenTypeWorkspace, ExternalId: externalID},
+		})
+	}
+	post := func(authCtx context.Context, body []byte) (*httptest.ResponseRecorder, error) {
+		req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+		if authCtx != nil {
+			c = authedEchoContext(c, authCtx)
+		}
+		return rec, g.handleReport(c)
+	}
+	httpCode := func(err error) int {
+		var httpErr *echo.HTTPError
+		require.ErrorAs(t, err, &httpErr)
+		return httpErr.Code
+	}
 
 	// Unauthenticated echo context: rejected.
-	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
-	err := g.handleReport(e.NewContext(req, httptest.NewRecorder()))
-	var httpErr *echo.HTTPError
-	require.ErrorAs(t, err, &httpErr)
-	assert.Equal(t, http.StatusUnauthorized, httpErr.Code)
+	_, err := post(nil, body)
+	assert.Equal(t, http.StatusUnauthorized, httpCode(err))
 
-	// Admin-workspace token (the run token) is accepted.
-	req = httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
-	rec := httptest.NewRecorder()
-	c := e.NewContext(req, rec)
-	require.NoError(t, g.handleReport(authedEchoContext(c, harnessCtx())))
+	// Any other admin-workspace token is not the run's token.
+	_, err = post(runToken("someone-else"), body)
+	assert.Equal(t, http.StatusForbidden, httpCode(err))
+
+	// The run token may only report on its own run.
+	other, _ := json.Marshal(types.GitOpsReport{RunID: "run-other", SHA: "bbbbbbbb"})
+	_, err = post(runToken("run-token"), other)
+	assert.Equal(t, http.StatusForbidden, httpCode(err))
+
+	rec, err := post(runToken("run-token"), body)
+	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, rec.Code)
-
-	state, err := s.repo.GetGitOpsState(context.Background())
+	state, err := s.repo.GetGitOpsState(ctx)
 	require.NoError(t, err)
 	assert.False(t, state.Running)
 	assert.Equal(t, "bbbbbbbb", state.LastSHA)
+
+	// Once the run closed the token is no longer accepted ...
+	_, err = post(runToken("run-token"), body)
+	assert.Equal(t, http.StatusForbidden, httpCode(err))
+
+	// ... while a cluster admin bypasses the token check (the report still
+	// has to match a run in flight).
+	_, err = post(adminCtx(), body)
+	assert.Equal(t, http.StatusConflict, httpCode(err))
+	state.Running, state.RunID, state.TokenID = true, "run-2", "run-token-2"
+	require.NoError(t, s.repo.SaveGitOpsState(ctx, state))
+	second, _ := json.Marshal(types.GitOpsReport{RunID: "run-2", SHA: "cccccccc"})
+	rec, err = post(adminCtx(), second)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	state, err = s.repo.GetGitOpsState(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "cccccccc", state.LastSHA)
 }
 
 func authedEchoContext(c echo.Context, ctx context.Context) echo.Context {

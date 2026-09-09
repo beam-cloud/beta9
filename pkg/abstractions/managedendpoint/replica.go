@@ -1,10 +1,10 @@
 package managedendpoint
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 
@@ -18,7 +18,7 @@ import (
 // Replica lifecycle: observe container state, probe health when no harness
 // is present, and start / drain / stop containers.
 
-var probeClient = &http.Client{Timeout: 3 * time.Second}
+const probeTimeout = 3 * time.Second
 
 // observeReplicas syncs each replica record with its container and returns
 // the replicas that are still alive.
@@ -207,12 +207,13 @@ func (c *controller) exitStatus(replica *types.EndpointReplica) types.ReplicaSta
 // the health path and, for LLM engines, capacity from Prometheus metrics.
 func (c *controller) probeReplica(ctx context.Context, replica *types.EndpointReplica, probe probeTarget) {
 	spec := probe.Endpoint
-	baseURL := "http://" + replica.Address
+	client := c.s.probeClient(replica.Address)
+	baseURL := "http://replica"
 	paths := llmroute.ReadinessPaths("")
 	if strings.TrimSpace(probe.Health) != "" {
 		paths = []string{probe.Health}
 	}
-	ready := llmroute.CheckReady(ctx, probeClient, baseURL, paths, probeClient.Timeout)
+	ready := llmroute.CheckReady(ctx, client, baseURL, paths, probeTimeout)
 	now := time.Now()
 	replica.LastHeartbeat = now
 	switch {
@@ -228,10 +229,17 @@ func (c *controller) probeReplica(ctx context.Context, replica *types.EndpointRe
 	if !ready || spec == nil || spec.Kind != types.EndpointKindLLM {
 		return
 	}
-	metrics, ok, err := llmroute.FetchEngineMetrics(ctx, probeClient, baseURL+llmroute.NormalizeMetricsPath(spec.Metrics), llmroute.EngineMetrics{})
+	// Rates derive from counter deltas, so the previous scrape is kept per replica.
+	c.metricsMu.Lock()
+	previous := c.lastMetrics[replica.ID]
+	c.metricsMu.Unlock()
+	metrics, ok, err := llmroute.FetchEngineMetrics(ctx, client, baseURL+llmroute.NormalizeMetricsPath(spec.Metrics), previous)
 	if err != nil || !ok {
 		return
 	}
+	c.metricsMu.Lock()
+	c.lastMetrics[replica.ID] = metrics
+	c.metricsMu.Unlock()
 	replica.Capacity.Running = metrics.RunningRequests
 	replica.Capacity.Waiting = metrics.WaitingRequests
 	replica.Capacity.TTFTMs = metrics.TTFTMs
@@ -242,29 +250,19 @@ func (c *controller) probeReplica(ctx context.Context, replica *types.EndpointRe
 	replica.Capacity.PrefixCacheHitMilli = metrics.PrefixCacheHitMilli
 }
 
-// probeTarget is what the controller probes on a replica without a harness.
-type probeTarget struct {
-	Port uint32
-	// Health is the readiness path; empty falls back to the engine defaults.
-	Health string
-	// Endpoint is the endpoint spec (nil for service replicas), used for
-	// engine metrics.
-	Endpoint *types.ManagedEndpointSpec
-}
-
-// replicaProbe resolves the port and health path a replica is probed on from
-// its endpoint or service spec.
+// replicaProbe resolves the port, health path and spec a replica is probed with.
 func (c *controller) replicaProbe(ctx context.Context, replica *types.EndpointReplica) probeTarget {
-	if strings.HasPrefix(replica.EndpointID, serviceReplicaPrefix) {
-		if service, err := c.s.repo.GetService(ctx, strings.TrimPrefix(replica.EndpointID, serviceReplicaPrefix)); err == nil && service != nil {
-			return probeTarget{Port: service.Spec.Port, Health: service.Spec.Health}
-		}
-		return probeTarget{}
-	}
 	if endpoint, err := c.s.repo.GetEndpoint(ctx, replica.EndpointID); err == nil && endpoint != nil {
 		return probeTarget{Port: endpoint.Spec.Port, Health: endpoint.Spec.Health, Endpoint: &endpoint.Spec}
 	}
 	return probeTarget{}
+}
+
+// probeTarget is what the controller probes on a replica without a harness.
+type probeTarget struct {
+	Port     uint32
+	Health   string
+	Endpoint *types.ManagedEndpointSpec
 }
 
 // finishReplica records a terminal status.
@@ -272,19 +270,27 @@ func (c *controller) finishReplica(ctx context.Context, replica *types.EndpointR
 	replica.Status = status
 	replica.StatusReason = reason
 	replica.EndedAt = time.Now()
+	c.s.forgetTransport(replica.Address)
+	c.metricsMu.Lock()
+	delete(c.lastMetrics, replica.ID)
+	c.metricsMu.Unlock()
 	if status == types.ReplicaStatusFailed {
-		_ = c.s.repo.SetScheduleBackoff(ctx, replica.EndpointID, targetKey(replica.Role, replica.GPU), c.s.config.Fill.FailureBackoff)
+		_ = c.s.repo.SetScheduleBackoff(ctx, replica.EndpointID, replica.GPU, c.s.config.Fill.FailureBackoff)
 	}
 	c.s.replicaEvent(replica, "replica."+string(status), reason, nil)
 	replicaLog(replica).Info().Str("status", string(status)).Str("reason", reason).Msg("managed endpoints: replica finished")
 	return nil
 }
 
-// stopAndFinish stops the container and records the terminal status.
+// stopAndFinish stops the container and records the terminal status. A
+// failed stop leaves the replica live so the next observation retries it: a
+// terminal record must mean the container was told to stop, never that a
+// still-running workload was forgotten while a replacement launched.
 func (c *controller) stopAndFinish(ctx context.Context, replica *types.EndpointReplica, status types.ReplicaStatus, reason string) error {
 	if c.s.scheduler != nil {
 		if err := c.s.scheduler.Stop(&types.StopContainerArgs{ContainerId: replica.ContainerID, Force: true, Reason: types.StopContainerReasonScheduler}); err != nil {
-			replicaLog(replica).Warn().Err(err).Msg("managed endpoints: stop container failed")
+			replica.StatusReason = "stop failed: " + err.Error()
+			return fmt.Errorf("stop container %s: %w", replica.ContainerID, err)
 		}
 	}
 	return c.finishReplica(ctx, replica, status, reason)
@@ -325,46 +331,16 @@ func (c *controller) drainReplica(ctx context.Context, replica *types.EndpointRe
 
 // startSpec is everything needed to launch one replica container.
 type startSpec struct {
-	EndpointID string
-	Version    uint
-	StubID     string
-	Role       string
-	Target     types.GpuTarget
-	Port       uint32
-	Locality   string
-	PoolName   string
-	Protected  bool
-	Tuning     bool
-	Harness    bool
-	Entrypoint []string
-	// Services maps a service name to its address for BEAM_SERVICE_* env.
-	Services map[string]string
-	// KVCache is the endpoint's kv_cache spec, injected as JSON for the harness.
-	KVCache *types.KVCacheSpec
-	// Evictable replicas may be preempted by serverless workloads.
-	Evictable bool
-	// DrainSeconds is the grace an evicted replica gets to finish in-flight
-	// requests before the worker kills it.
-	DrainSeconds uint32
-	GitSHA       string
-}
-
-// evictOrder ranks roles for preemption: prefill replicas go first because
-// decode replicas hold the KV cache for in-flight generations.
-func evictOrder(role string) int32 {
-	switch role {
-	case types.ReplicaRolePrefill:
-		return 0
-	case types.ReplicaRoleDecode:
-		return 2
-	default:
-		return 1
-	}
+	Endpoint  *types.ManagedEndpoint
+	Target    types.FleetTarget
+	Pool      eligiblePool
+	Protected bool
 }
 
 // startReplica submits a container request for one replica and records it.
 func (c *controller) startReplica(ctx context.Context, spec startSpec) (*types.EndpointReplica, error) {
-	stub, stubConfig, err := c.stub(ctx, spec.StubID)
+	endpoint, target := spec.Endpoint, spec.Target
+	stub, stubConfig, err := c.stub(ctx, endpoint.StubID)
 	if err != nil {
 		return nil, err
 	}
@@ -372,11 +348,7 @@ func (c *controller) startReplica(ctx context.Context, spec startSpec) (*types.E
 	if err != nil {
 		return nil, err
 	}
-	tokenKey, err := c.s.runtimeTokenKey(ctx)
-	if err != nil {
-		return nil, err
-	}
-	replicaID := fmt.Sprintf("%s-%s", strings.ReplaceAll(spec.EndpointID, "/", "-"), uuid.New().String()[:8])
+	replicaID := fmt.Sprintf("%s-%s", strings.ReplaceAll(endpoint.Spec.ID, "/", "-"), uuid.New().String()[:8])
 	containerID := fmt.Sprintf("%s-%s-%s", containerPrefix, stub.ExternalId, uuid.New().String()[:8])
 	replicaSecret, secretHash := newReplicaSecret()
 
@@ -389,46 +361,38 @@ func (c *controller) startReplica(ctx context.Context, spec startSpec) (*types.E
 		return nil, err
 	}
 
+	gpuSpec := endpoint.Spec.Gpu[target.GPU]
+	drainSeconds := cmp.Or(endpoint.Spec.DrainSeconds, c.s.config.Preemption.DefaultDrainSeconds)
 	env := append(append([]string{}, stubConfig.Env...), secrets...)
 	env = append(env,
-		"BETA9_TOKEN="+tokenKey,
 		EnvReplicaSecret+"="+replicaSecret,
 		"STUB_ID="+stub.ExternalId,
 		"STUB_TYPE="+string(stub.Type),
-		EnvEndpointID+"="+spec.EndpointID,
+		EnvEndpointID+"="+endpoint.Spec.ID,
 		EnvReplicaID+"="+replicaID,
-		EnvReplicaRole+"="+spec.Role,
-		EnvGpuTarget+"="+spec.Target.Key(),
-		EnvLocality+"="+spec.Locality,
-		fmt.Sprintf("%s=%d", EnvEndpointPort, spec.Port),
-		fmt.Sprintf("%s=%t", EnvHarnessEnabled, spec.Harness),
-		fmt.Sprintf("%s=%d", EnvDrainSeconds, spec.DrainSeconds),
+		EnvGpu+"="+target.GPU,
+		EnvLocality+"="+spec.Pool.Locality,
+		fmt.Sprintf("%s=%d", EnvEndpointPort, endpoint.Spec.Port),
+		fmt.Sprintf("%s=%t", EnvHarnessEnabled, endpoint.Spec.Harness),
+		fmt.Sprintf("%s=%d", EnvDrainSeconds, drainSeconds),
 	)
-	if len(spec.Target.Harness) > 0 {
-		env = append(env, EnvHarnessConfig+"="+mustJSON(spec.Target.Harness))
-	}
-	if spec.KVCache != nil {
-		env = append(env, EnvKVCache+"="+mustJSON(spec.KVCache))
-	}
-	for name, addr := range spec.Services {
-		env = append(env, EnvServicePrefix+strings.ToUpper(strings.ReplaceAll(name, "-", "_"))+"="+addr)
+	if len(gpuSpec.Harness) > 0 {
+		env = append(env, EnvHarnessConfig+"="+mustJSON(gpuSpec.Harness))
 	}
 
-	entrypoint := spec.Entrypoint
+	entrypoint := endpoint.Spec.Entrypoint
 	if len(entrypoint) == 0 {
 		entrypoint = stubConfig.EntryPoint
 	}
 	var gpu string
 	var gpuRequest []string
 	var gpuCount uint32
-	if !spec.Target.IsCPU() {
-		gpu = string(types.NormalizeGPUType(spec.Target.Type))
-		gpuRequest = []string{gpu}
-		gpuCount = spec.Target.Count
+	if !target.IsCPU() {
+		gpu, gpuRequest, gpuCount = target.GPU, []string{target.GPU}, max(target.Count, 1)
 	}
 	request := &types.ContainerRequest{
 		ContainerId:       containerID,
-		EntryPoint:        appendEngineArgs(entrypoint, spec.Target.EngineArgs),
+		EntryPoint:        appendEngineArgs(entrypoint, gpuSpec.EngineArgs),
 		Env:               env,
 		Cpu:               stubConfig.Runtime.Cpu,
 		Memory:            stubConfig.Runtime.Memory,
@@ -442,12 +406,11 @@ func (c *controller) startReplica(ctx context.Context, spec startSpec) (*types.E
 		Workspace:         *workspace,
 		Stub:              *stub,
 		Mounts:            mounts,
-		Ports:             []uint32{spec.Port},
-		PoolSelector:      spec.PoolName,
-		Evictable:         spec.Evictable && !spec.Protected,
+		Ports:             []uint32{endpoint.Spec.Port},
+		PoolSelector:      spec.Pool.Name,
+		Evictable:         !spec.Protected && c.s.config.Preemption.Enabled,
 		OpportunisticOnly: !spec.Protected,
-		DrainSeconds:      spec.DrainSeconds,
-		EvictOrder:        evictOrder(spec.Role),
+		DrainSeconds:      drainSeconds,
 		Timestamp:         time.Now(),
 	}
 	if err := abstractions.ConfigureContainerRequestNetwork(request, *stubConfig); err != nil {
@@ -456,19 +419,17 @@ func (c *controller) startReplica(ctx context.Context, spec startSpec) (*types.E
 
 	replica := &types.EndpointReplica{
 		ID:             replicaID,
-		EndpointID:     spec.EndpointID,
-		Version:        spec.Version,
-		Role:           spec.Role,
-		GPU:            spec.Target.Key(),
+		EndpointID:     endpoint.Spec.ID,
+		Version:        endpoint.Version,
+		GPU:            target.GPU,
 		GPUCount:       gpuCount,
-		Locality:       spec.Locality,
-		PoolName:       spec.PoolName,
+		Locality:       spec.Pool.Locality,
+		PoolName:       spec.Pool.Name,
 		ContainerID:    containerID,
 		Status:         types.ReplicaStatusScheduling,
 		Protected:      spec.Protected,
-		Tuning:         spec.Tuning,
 		SecretHash:     secretHash,
-		HarnessEnabled: spec.Harness,
+		HarnessEnabled: endpoint.Spec.Harness,
 		StartedAt:      time.Now(),
 	}
 	if err := c.s.repo.SaveReplica(ctx, replica); err != nil {
@@ -479,7 +440,7 @@ func (c *controller) startReplica(ctx context.Context, spec startSpec) (*types.E
 		_ = c.s.repo.SaveReplica(ctx, replica)
 		return nil, err
 	}
-	c.s.replicaEvent(replica, "replica.scheduled", "", map[string]any{"protected": spec.Protected, "tuning": spec.Tuning, "git_sha": spec.GitSHA})
+	c.s.replicaEvent(replica, "replica.scheduled", "", map[string]any{"protected": spec.Protected, "git_sha": endpoint.GitSHA})
 	log.Info().Str("endpoint_id", replica.EndpointID).Str("replica_id", replica.ID).Str("gpu", replica.GPU).
 		Str("pool", replica.PoolName).Bool("protected", replica.Protected).Msg("managed endpoints: replica scheduled")
 	return replica, nil

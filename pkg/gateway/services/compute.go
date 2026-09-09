@@ -2,6 +2,8 @@ package gatewayservices
 
 import (
 	"context"
+	"fmt"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -34,40 +36,60 @@ func (gws *GatewayService) ListProviderMachines(ctx context.Context, in *pb.List
 	return gws.computeService.ListProviderMachines(ctx, in)
 }
 
-func (gws *GatewayService) GetProviderEarnings(ctx context.Context, in *pb.GetProviderEarningsRequest) (*pb.GetProviderEarningsResponse, error) {
+func (gws *GatewayService) GetEndpointUsage(ctx context.Context, in *pb.GetEndpointUsageRequest) (*pb.GetEndpointUsageResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 	if authInfo == nil || authInfo.Workspace == nil {
-		return &pb.GetProviderEarningsResponse{Ok: false, ErrMsg: "missing workspace auth"}, nil
+		return &pb.GetEndpointUsageResponse{Ok: false, ErrMsg: "missing workspace auth"}, nil
 	}
 	if gws.endpointRepo == nil {
-		return &pb.GetProviderEarningsResponse{Ok: false, ErrMsg: "provider earnings are unavailable"}, nil
+		return &pb.GetEndpointUsageResponse{Ok: false, ErrMsg: "managed endpoints are not enabled"}, nil
 	}
-	days := int(in.GetDays())
-	if days <= 0 {
-		days = 30
+	kind := types.UsageSpend
+	if in.GetKind() == string(types.UsageEarned) {
+		kind = types.UsageEarned
 	}
-	report, err := gws.endpointRepo.GetProviderEarnings(ctx, authInfo.Workspace.ExternalId, days)
+	from, to, err := usageWindow(in)
 	if err != nil {
-		return &pb.GetProviderEarningsResponse{Ok: false, ErrMsg: err.Error()}, nil
+		return &pb.GetEndpointUsageResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
-	toProto := func(m map[string]types.ProviderEarnings) map[string]*pb.ProviderEarnings {
-		out := make(map[string]*pb.ProviderEarnings, len(m))
+	report, err := gws.endpointRepo.GetUsage(ctx, kind, authInfo.Workspace.ExternalId, from, to)
+	if err != nil {
+		return &pb.GetEndpointUsageResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+	toProto := func(m map[string]types.Usage) map[string]*pb.EndpointUsage {
+		out := make(map[string]*pb.EndpointUsage, len(m))
 		for k, v := range m {
-			out[k] = providerEarningsToProto(v)
+			out[k] = usageToProto(v)
 		}
 		return out
 	}
-	return &pb.GetProviderEarningsResponse{
-		Ok: true, Total: providerEarningsToProto(report.Total),
-		PerMachine: toProto(report.PerMachine), PerDay: toProto(report.PerDay),
-	}, nil
+	return &pb.GetEndpointUsageResponse{Ok: true, Total: usageToProto(report.Total), PerModel: toProto(report.PerModel), PerDay: toProto(report.PerDay)}, nil
 }
 
-func providerEarningsToProto(e types.ProviderEarnings) *pb.ProviderEarnings {
-	return &pb.ProviderEarnings{
-		Requests: e.Requests, PromptTokens: e.PromptTokens, CompletionTokens: e.CompletionTokens,
-		Images: e.Images, EarningsMicroUsd: e.EarningsMicroUSD,
+// usageWindow resolves the request's inclusive UTC day range: explicit
+// start/end dates when given, else the trailing `days` ending today.
+func usageWindow(in *pb.GetEndpointUsageRequest) (from, to time.Time, err error) {
+	to = time.Now().UTC()
+	if in.GetStartDate() == "" {
+		days := int(in.GetDays())
+		if days <= 0 {
+			days = 30
+		}
+		return to.AddDate(0, 0, -(days - 1)), to, nil
 	}
+	if from, err = time.Parse(time.DateOnly, in.GetStartDate()); err != nil {
+		return from, to, fmt.Errorf("invalid start_date: %w", err)
+	}
+	if in.GetEndDate() != "" {
+		if to, err = time.Parse(time.DateOnly, in.GetEndDate()); err != nil {
+			return from, to, fmt.Errorf("invalid end_date: %w", err)
+		}
+	}
+	return from, to, nil
+}
+
+func usageToProto(u types.Usage) *pb.EndpointUsage {
+	return &pb.EndpointUsage{Requests: u.Requests, PromptTokens: u.PromptTokens, CompletionTokens: u.CompletionTokens, Images: u.Images, MicroUsd: u.MicroUSD}
 }
 
 func (gws *GatewayService) ListMachineContainers(ctx context.Context, in *pb.ListMachineContainersRequest) (*pb.ListMachineContainersResponse, error) {

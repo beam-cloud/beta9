@@ -194,10 +194,10 @@ service GatewayService {
       get : "/provider/machines"
     };
   }
-  rpc GetProviderEarnings(GetProviderEarningsRequest)
-      returns (GetProviderEarningsResponse) {
+  rpc GetEndpointUsage(GetEndpointUsageRequest)
+      returns (GetEndpointUsageResponse) {
     option (google.api.http) = {
-      get : "/provider/earnings"
+      get : "/usage/endpoints"
     };
   }
   rpc ListMachineContainers(ListMachineContainersRequest)
@@ -1091,25 +1091,32 @@ message ListProviderMachinesResponse {
   repeated Machine machines = 3;
 }
 
-message GetProviderEarningsRequest {
-  // Trailing window in days (today included); defaults to 30.
-  uint32 days = 1;
+// Managed endpoint usage of the calling workspace: what it spent calling
+// models ("spend") or earned serving them on its contributed machines ("earned").
+message GetEndpointUsageRequest {
+  string kind = 1; // spend (default) | earned
+  // Trailing window in days (today included); defaults to 30. Ignored when
+  // start_date is set.
+  uint32 days = 2;
+  // Inclusive UTC day bounds (YYYY-MM-DD); end_date defaults to today.
+  string start_date = 3;
+  string end_date = 4;
 }
 
-message ProviderEarnings {
+message EndpointUsage {
   int64 requests = 1;
   int64 prompt_tokens = 2;
   int64 completion_tokens = 3;
   int64 images = 4;
-  int64 earnings_micro_usd = 5;
+  int64 micro_usd = 5;
 }
 
-message GetProviderEarningsResponse {
+message GetEndpointUsageResponse {
   bool ok = 1;
   string err_msg = 2;
-  ProviderEarnings total = 3;
-  map<string, ProviderEarnings> per_machine = 4;
-  map<string, ProviderEarnings> per_day = 5;
+  EndpointUsage total = 3;
+  map<string, EndpointUsage> per_model = 4;
+  map<string, EndpointUsage> per_day = 5;
 }
 
 message ListMachineContainersRequest {

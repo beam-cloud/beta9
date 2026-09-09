@@ -443,9 +443,13 @@ if not current_cpu or not current_memory or not current_gpu or not current_versi
 	or not current_evictable_cpu or not current_evictable_memory or not current_evictable_gpu then
 	return {-5}
 end
-local free_cpu = current_cpu + victim_cpu - requested_cpu
-local free_memory = current_memory + victim_memory - requested_memory
-local free_gpu = current_gpu + victim_gpu - requested_gpu
+-- Victims physically hold their resources until the worker finishes stopping
+-- them, so only the shortfall the placement needs is drawn from them now. The
+-- remainder is not free: it becomes free when the victim leaves the worker's
+-- index and capacity is reconciled (see addContainerState).
+local free_cpu = current_cpu + math.min(victim_cpu, math.max(requested_cpu - current_cpu, 0)) - requested_cpu
+local free_memory = current_memory + math.min(victim_memory, math.max(requested_memory - current_memory, 0)) - requested_memory
+local free_gpu = current_gpu + math.min(victim_gpu, math.max(requested_gpu - current_gpu, 0)) - requested_gpu
 if free_cpu < 0 or free_memory < 0 or free_gpu < 0 then
 	return {-3}
 end
@@ -466,10 +470,10 @@ redis.call("HSET", KEYS[1],
 -- Mark victims. STOPPING lets the worker's heartbeat path finish the stop
 -- even if this request is later requeued elsewhere, so the capacity we just
 -- handed out is always reclaimed. evicted_for names the requests that took
--- the victim's capacity, so reconciliation can count the victim again if they
--- leave this worker before it finalizes. The key keeps at least the stopping
--- TTL: it must outlive a slow drain, or the worker's accounting loses the
--- victim while it still holds its resources.
+-- the victim's capacity (for operators; capacity accounting does not depend
+-- on it). The key keeps at least the stopping TTL: it must outlive a slow
+-- drain, or the worker's accounting loses the victim while it still holds
+-- its resources.
 for i = first_victim, first_request - 1, 4 do
 	redis.call("HSET", ARGV[i], "status", "STOPPING", "evicting", "true", "stop_reason", "EVICTED", "evicted_for", evicted_for)
 	if redis.call("TTL", ARGV[i]) < victim_ttl then
@@ -848,20 +852,8 @@ func (r *WorkerRedisRepository) getWorkerReservedCapacity(ctx context.Context, w
 		return usage, fmt.Errorf("failed to list active containers for worker <%s>: %w", workerId, err)
 	}
 
-	// Collect the indexed containers first: whether an evicting victim still
-	// counts depends on whether the requests that took its capacity are still
-	// accounted here, and those may be indexed after the victim.
-	type indexedContainer struct {
-		state      *types.ContainerState
-		evictedFor string
-	}
-	accounted := make(map[string]struct{}, len(requestContainerIDs)+len(containerStateKeys))
-	for containerID := range requestContainerIDs {
-		accounted[containerID] = struct{}{}
-	}
-	indexed := make([]indexedContainer, 0, len(containerStateKeys))
 	for _, key := range containerStateKeys {
-		state, fields, exists, err := r.getIndexedContainerStateFields(ctx, workerId, key)
+		state, _, exists, err := r.getIndexedContainerStateFields(ctx, workerId, key)
 		if err != nil {
 			return usage, err
 		}
@@ -880,34 +872,10 @@ func (r *WorkerRedisRepository) getWorkerReservedCapacity(ctx context.Context, w
 		if _, queued := requestContainerIDs[state.ContainerId]; queued {
 			continue
 		}
-		accounted[state.ContainerId] = struct{}{}
-		indexed = append(indexed, indexedContainer{state: state, evictedFor: fields[containerEvictedForField]})
-	}
-
-	for _, container := range indexed {
-		usage.addContainerState(container.state, evictionBeneficiariesAccounted(container.evictedFor, accounted))
+		usage.addContainerState(state)
 	}
 
 	return usage, nil
-}
-
-// evictionBeneficiariesAccounted reports whether every container that took an
-// evicting victim's capacity is still accounted on the worker. An empty
-// evictedFor (victims marked before the field existed) is treated as still
-// accounted so those victims keep the pre-existing behaviour.
-func evictionBeneficiariesAccounted(evictedFor string, accounted map[string]struct{}) bool {
-	if evictedFor == "" {
-		return true
-	}
-	for _, containerID := range strings.Split(evictedFor, ",") {
-		if containerID == "" {
-			continue
-		}
-		if _, ok := accounted[containerID]; !ok {
-			return false
-		}
-	}
-	return true
 }
 
 func containerIDFromStateKey(key string) string {
@@ -954,30 +922,18 @@ func (c *workerReservedCapacity) addRequest(request *types.ContainerRequest) {
 		gpuCountForCapacity(request.Gpu, request.GpuRequest, request.GpuCount), request.Evictable)
 }
 
-// addContainerState counts an indexed container. beneficiariesAccounted says
-// whether the requests an evicting victim gave its capacity to are still
-// accounted on this worker.
-func (c *workerReservedCapacity) addContainerState(state *types.ContainerState, beneficiariesAccounted bool) {
+// addContainerState counts an indexed container. An evicting victim still
+// physically holds its resources until the worker finishes stopping it, so it
+// counts as held (the replacement that displaced it counts too; the sum is
+// clamped at the worker's total, which is why free reads zero while a drain
+// is in flight) but not as evictable: it cannot be evicted a second time.
+func (c *workerReservedCapacity) addContainerState(state *types.ContainerState) {
 	if state == nil {
 		return
 	}
 	memory := capacityMemoryForRequest(&types.ContainerRequest{Memory: state.Memory})
 	gpu := gpuCountForCapacity(state.Gpu, nil, state.GpuCount)
-	if state.Evicting {
-		if beneficiariesAccounted {
-			// The scheduler already handed this container's capacity to the
-			// request that displaced it; counting it again would double-book.
-			return
-		}
-		// The replacement left this worker (cancelled, requeued, failed)
-		// before the victim finalized, so nothing accounts for the resources
-		// it still physically holds. Count it as held, but not as evictable:
-		// it is already stopping and cannot be evicted a second time.
-		c.add(state.Cpu, memory, gpu, false)
-		return
-	}
-
-	c.add(state.Cpu, memory, gpu, state.Evictable)
+	c.add(state.Cpu, memory, gpu, state.Evictable && !state.Evicting)
 }
 
 func (c *workerReservedCapacity) add(cpu, memory int64, gpu uint32, evictable bool) {

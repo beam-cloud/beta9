@@ -1118,11 +1118,11 @@ func local_request_GatewayService_ListProviderMachines_0(ctx context.Context, ma
 	return msg, metadata, err
 }
 
-var filter_GatewayService_GetProviderEarnings_0 = &utilities.DoubleArray{Encoding: map[string]int{}, Base: []int(nil), Check: []int(nil)}
+var filter_GatewayService_GetEndpointUsage_0 = &utilities.DoubleArray{Encoding: map[string]int{}, Base: []int(nil), Check: []int(nil)}
 
-func request_GatewayService_GetProviderEarnings_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+func request_GatewayService_GetEndpointUsage_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
-		protoReq GetProviderEarningsRequest
+		protoReq GetEndpointUsageRequest
 		metadata runtime.ServerMetadata
 	)
 	if req.Body != nil {
@@ -1131,25 +1131,25 @@ func request_GatewayService_GetProviderEarnings_0(ctx context.Context, marshaler
 	if err := req.ParseForm(); err != nil {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
-	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_GatewayService_GetProviderEarnings_0); err != nil {
+	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_GatewayService_GetEndpointUsage_0); err != nil {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
-	msg, err := client.GetProviderEarnings(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
+	msg, err := client.GetEndpointUsage(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
 	return msg, metadata, err
 }
 
-func local_request_GatewayService_GetProviderEarnings_0(ctx context.Context, marshaler runtime.Marshaler, server GatewayServiceServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+func local_request_GatewayService_GetEndpointUsage_0(ctx context.Context, marshaler runtime.Marshaler, server GatewayServiceServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
-		protoReq GetProviderEarningsRequest
+		protoReq GetEndpointUsageRequest
 		metadata runtime.ServerMetadata
 	)
 	if err := req.ParseForm(); err != nil {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
-	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_GatewayService_GetProviderEarnings_0); err != nil {
+	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_GatewayService_GetEndpointUsage_0); err != nil {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
-	msg, err := server.GetProviderEarnings(ctx, &protoReq)
+	msg, err := server.GetEndpointUsage(ctx, &protoReq)
 	return msg, metadata, err
 }
 
@@ -3027,25 +3027,25 @@ func RegisterGatewayServiceHandlerServer(ctx context.Context, mux *runtime.Serve
 		}
 		forward_GatewayService_ListProviderMachines_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodGet, pattern_GatewayService_GetProviderEarnings_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodGet, pattern_GatewayService_GetEndpointUsage_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/GetProviderEarnings", runtime.WithHTTPPathPattern("/provider/earnings"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/GetEndpointUsage", runtime.WithHTTPPathPattern("/usage/endpoints"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		resp, md, err := local_request_GatewayService_GetProviderEarnings_0(annotatedContext, inboundMarshaler, server, req, pathParams)
+		resp, md, err := local_request_GatewayService_GetEndpointUsage_0(annotatedContext, inboundMarshaler, server, req, pathParams)
 		md.HeaderMD, md.TrailerMD = metadata.Join(md.HeaderMD, stream.Header()), metadata.Join(md.TrailerMD, stream.Trailer())
 		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
 		if err != nil {
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_GatewayService_GetProviderEarnings_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_GatewayService_GetEndpointUsage_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
 	mux.Handle(http.MethodGet, pattern_GatewayService_ListMachineContainers_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
@@ -4302,22 +4302,22 @@ func RegisterGatewayServiceHandlerClient(ctx context.Context, mux *runtime.Serve
 		}
 		forward_GatewayService_ListProviderMachines_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodGet, pattern_GatewayService_GetProviderEarnings_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodGet, pattern_GatewayService_GetEndpointUsage_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/GetProviderEarnings", runtime.WithHTTPPathPattern("/provider/earnings"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/GetEndpointUsage", runtime.WithHTTPPathPattern("/usage/endpoints"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		resp, md, err := request_GatewayService_GetProviderEarnings_0(annotatedContext, inboundMarshaler, client, req, pathParams)
+		resp, md, err := request_GatewayService_GetEndpointUsage_0(annotatedContext, inboundMarshaler, client, req, pathParams)
 		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
 		if err != nil {
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_GatewayService_GetProviderEarnings_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_GatewayService_GetEndpointUsage_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
 	mux.Handle(http.MethodGet, pattern_GatewayService_ListMachineContainers_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
@@ -4934,7 +4934,7 @@ var (
 	pattern_GatewayService_ScaleBYOCPool_0                   = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2, 2, 3}, []string{"pools", "pool_name", "byoc", "scale"}, ""))
 	pattern_GatewayService_GetProviderJoinCommand_0          = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"provider", "join-command"}, ""))
 	pattern_GatewayService_ListProviderMachines_0            = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"provider", "machines"}, ""))
-	pattern_GatewayService_GetProviderEarnings_0             = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"provider", "earnings"}, ""))
+	pattern_GatewayService_GetEndpointUsage_0                = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"usage", "endpoints"}, ""))
 	pattern_GatewayService_ListMachineContainers_0           = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2, 1, 0, 4, 1, 5, 3, 2, 4}, []string{"pools", "pool_name", "machines", "machine_id", "containers"}, ""))
 	pattern_GatewayService_CreatePool_0                      = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"pools"}, ""))
 	pattern_GatewayService_DeletePool_0                      = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1}, []string{"pools", "name"}, ""))
@@ -5005,7 +5005,7 @@ var (
 	forward_GatewayService_ScaleBYOCPool_0                   = runtime.ForwardResponseMessage
 	forward_GatewayService_GetProviderJoinCommand_0          = runtime.ForwardResponseMessage
 	forward_GatewayService_ListProviderMachines_0            = runtime.ForwardResponseMessage
-	forward_GatewayService_GetProviderEarnings_0             = runtime.ForwardResponseMessage
+	forward_GatewayService_GetEndpointUsage_0                = runtime.ForwardResponseMessage
 	forward_GatewayService_ListMachineContainers_0           = runtime.ForwardResponseMessage
 	forward_GatewayService_CreatePool_0                      = runtime.ForwardResponseMessage
 	forward_GatewayService_DeletePool_0                      = runtime.ForwardResponseMessage

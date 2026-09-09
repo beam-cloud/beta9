@@ -26,9 +26,10 @@ import (
 )
 
 // EndpointAdminService: cluster-admin RPCs used by tuning agents and the
-// frontend. Domain errors come back as ok=false with err_msg; a gRPC status is
-// only returned for auth failures. The same handlers are mirrored as REST
-// under /api/v1/endpoints (see mountAdminRoutes).
+// frontend. The repo is the source of truth, so these only read state, push
+// live config to a replica and drive GitOps syncs. Domain errors come back as
+// ok=false with err_msg; a gRPC status is only returned for auth failures. The
+// same handlers are mirrored as REST under /api/v1/endpoints (mountAdminRoutes).
 
 const (
 	defaultAckWait    = 30 * time.Second
@@ -61,7 +62,10 @@ func admin[T adminResponse](s *Service, ctx context.Context, out T, fn func() er
 	return out, nil
 }
 
-var errEndpointNotFound = errors.New("endpoint not found")
+var (
+	errEndpointNotFound = errors.New("endpoint not found")
+	errReplicaNotFound  = errors.New("replica not found")
+)
 
 func (s *Service) endpoint(ctx context.Context, id string) (*types.ManagedEndpoint, error) {
 	endpoint, err := s.repo.GetEndpoint(ctx, id)
@@ -71,13 +75,12 @@ func (s *Service) endpoint(ctx context.Context, id string) (*types.ManagedEndpoi
 	return endpoint, err
 }
 
-func (s *Service) rolloutProto(ctx context.Context, endpointID string) (*pb.RolloutState, error) {
-	rollout, err := s.repo.GetRollout(ctx, endpointID)
-	if err != nil {
-		return nil, err
+func (s *Service) replica(ctx context.Context, id string) (*types.EndpointReplica, error) {
+	replica, err := s.repo.GetReplica(ctx, id)
+	if err == nil && replica == nil {
+		err = errReplicaNotFound
 	}
-	versions, err := s.repo.ListVersions(ctx, endpointID)
-	return rolloutToProto(rollout, versions), err
+	return replica, err
 }
 
 // waitFor polls done until it returns true, wait elapses or ctx ends.
@@ -96,20 +99,22 @@ func waitFor(ctx context.Context, wait time.Duration, done func() bool) bool {
 	return true
 }
 
-// --- endpoints ---------------------------------------------------------------
+// --- read ------------------------------------------------------------------------
 
-func (s *Service) ListEndpoints(ctx context.Context, in *pb.ListEndpointsRequest) (*pb.ListEndpointsResponse, error) {
+func (s *Service) ListEndpoints(ctx context.Context, _ *pb.ListEndpointsRequest) (*pb.ListEndpointsResponse, error) {
 	out := &pb.ListEndpointsResponse{}
 	return admin(s, ctx, out, func() error {
 		endpoints, err := s.repo.ListEndpoints(ctx)
 		if err != nil {
 			return err
 		}
+		fleet, err := s.repo.GetFleet(ctx)
+		if err != nil {
+			return err
+		}
 		replicas, err := s.repo.ListAllReplicas(ctx)
 		for _, endpoint := range endpoints {
-			if in.IncludeDisabled || endpoint.Enabled() {
-				out.Endpoints = append(out.Endpoints, endpointToProto(endpoint, replicas))
-			}
+			out.Endpoints = append(out.Endpoints, endpointToProto(endpoint, fleet, replicas))
 		}
 		return err
 	})
@@ -122,12 +127,12 @@ func (s *Service) GetEndpoint(ctx context.Context, in *pb.GetEndpointRequest) (*
 		if err != nil {
 			return err
 		}
-		replicas, err := s.repo.ListReplicas(ctx, endpoint.Spec.ID)
+		fleet, err := s.repo.GetFleet(ctx)
 		if err != nil {
 			return err
 		}
-		out.Endpoint, out.Replicas = endpointToProto(endpoint, replicas), replicasToProto(replicas)
-		out.Rollout, err = s.rolloutProto(ctx, endpoint.Spec.ID)
+		replicas, err := s.repo.ListReplicas(ctx, endpoint.Spec.ID)
+		out.Endpoint, out.Replicas = endpointToProto(endpoint, fleet, replicas), replicasToProto(replicas)
 		return err
 	})
 }
@@ -144,7 +149,7 @@ func (s *Service) ListReplicas(ctx context.Context, in *pb.ListReplicasRequest) 
 		}
 		gpu := normalizeGPUKey(in.Gpu)
 		for _, r := range replicas {
-			if (in.Status == "" || string(r.Status) == in.Status) && (gpu == "" || r.GPU == gpu) && (in.Role == "" || r.Role == in.Role) {
+			if (in.Status == "" || string(r.Status) == in.Status) && (gpu == "" || r.GPU == gpu) {
 				out.Replicas = append(out.Replicas, replicaToProto(r))
 			}
 		}
@@ -157,266 +162,96 @@ func (s *Service) GetMetrics(ctx context.Context, in *pb.GetMetricsRequest) (*pb
 	return admin(s, ctx, out, func() error {
 		window := cmp.Or(time.Duration(in.WindowSeconds)*time.Second, defaultMetricsWin)
 		gpu := normalizeGPUKey(in.Gpu)
-		metrics, err := s.repo.GetRouteMetrics(ctx, in.EndpointId, gpu, 0, window)
+		replicas, err := s.repo.ListReplicas(ctx, in.EndpointId)
 		if err != nil {
 			return err
 		}
-		replicas, err := s.repo.ListReplicas(ctx, in.EndpointId)
 		replicas = slices.DeleteFunc(replicas, func(r *types.EndpointReplica) bool {
 			return r.Status.Terminal() || (gpu != "" && r.GPU != gpu) || (in.ReplicaId != "" && r.ID != in.ReplicaId)
 		})
+		if in.ReplicaId != "" {
+			// A replica's traffic is kept apart from the fleet's so a tuning
+			// experiment is measured on its own requests only.
+			if len(replicas) != 1 {
+				return fmt.Errorf("replica %s: %w", in.ReplicaId, errNotFound)
+			}
+			gpu = replicas[0].GPU
+		}
+		metrics, err := s.repo.GetRouteMetrics(ctx, in.EndpointId, gpu, in.ReplicaId, window)
+		if err != nil {
+			return err
+		}
 		out.Metrics, out.Replicas = routeMetricsToProto(metrics, replicas), replicasToProto(replicas)
 		return err
 	})
 }
 
-func (s *Service) SetEndpointEnabled(ctx context.Context, in *pb.SetEndpointEnabledRequest) (*pb.SetEndpointEnabledResponse, error) {
-	out := &pb.SetEndpointEnabledResponse{}
+// --- tune ------------------------------------------------------------------------
+
+// SetReplicaConfig pushes a live config to one replica and waits for the
+// harness to ack it. The config is whatever the engine's control catalog
+// (replica.capabilities_json) accepts; the gateway only requires a JSON object.
+func (s *Service) SetReplicaConfig(ctx context.Context, in *pb.SetReplicaConfigRequest) (*pb.SetReplicaConfigResponse, error) {
+	out := &pb.SetReplicaConfigResponse{}
 	return admin(s, ctx, out, func() error {
-		endpoint, err := s.endpoint(ctx, in.EndpointId)
+		replica, err := s.replica(ctx, in.ReplicaId)
 		if err != nil {
 			return err
 		}
-		if endpoint.Enabled() != in.Enabled {
-			endpoint.Status, endpoint.UpdatedAt = types.EndpointStatusDisabled, time.Now()
-			action := "endpoint.disabled"
-			if in.Enabled {
-				endpoint.Status, action = types.EndpointStatusActive, "endpoint.enabled"
-			}
-			if err := s.repo.SaveEndpoint(ctx, endpoint); err != nil {
-				return err
-			}
-			s.emit(types.EventEndpointConfig, types.EventEndpointSchema{EndpointID: endpoint.Spec.ID, Action: action, Version: endpoint.Version})
+		if !replica.Alive() {
+			return fmt.Errorf("replica is %s", replica.Status)
 		}
-		replicas, err := s.repo.ListReplicas(ctx, endpoint.Spec.ID)
-		out.Endpoint = endpointToProto(endpoint, replicas)
-		return err
-	})
-}
-
-func (s *Service) ListServices(ctx context.Context, _ *pb.ListServicesRequest) (*pb.ListServicesResponse, error) {
-	out := &pb.ListServicesResponse{}
-	return admin(s, ctx, out, func() error {
-		services, err := s.repo.ListServices(ctx)
-		if err != nil {
-			return err
-		}
-		replicas, err := s.repo.ListAllReplicas(ctx)
-		for _, service := range services {
-			out.Services = append(out.Services, serviceToProto(service, replicas))
-		}
-		return err
-	})
-}
-
-// --- config ------------------------------------------------------------------
-
-// scopeKey normalizes an admin-supplied scope. Target keys accept "<gpu>",
-// "<role>:<gpu>" and "<role>:<gpu>@v<N>"; without a version suffix they
-// resolve to the endpoint's active version.
-func (s *Service) scopeKey(ctx context.Context, endpointID, scope, key string) (types.ConfigRevisionScope, string, error) {
-	switch strings.ToLower(strings.TrimSpace(scope)) {
-	case "replica":
-		return types.ConfigScopeReplica, key, nil
-	case "", "target":
-	default:
-		return "", "", fmt.Errorf("unknown scope %q (target|replica)", scope)
-	}
-	target, version := parseFleetKey(key)
-	role, gpu, ok := strings.Cut(target, ":")
-	if !ok {
-		role, gpu = types.ReplicaRoleServe, target
-	}
-	if version == 0 {
-		endpoint, err := s.endpoint(ctx, endpointID)
-		if err != nil {
-			return "", "", err
-		}
-		version = endpoint.Version
-	}
-	return types.ConfigScopeTarget, fleetKey(role, normalizeGPUKey(gpu), version), nil
-}
-
-func (s *Service) GetConfig(ctx context.Context, in *pb.GetConfigRequest) (*pb.GetConfigResponse, error) {
-	out := &pb.GetConfigResponse{}
-	return admin(s, ctx, out, func() error {
-		scope, key, err := s.scopeKey(ctx, in.EndpointId, in.Scope, in.ScopeKey)
-		if err != nil {
-			return err
-		}
-		revision, err := s.repo.LatestConfigRevision(ctx, in.EndpointId, scope, key)
-		if err == nil && revision == nil {
-			return errors.New("no config revision")
-		}
-		out.Revision = revisionToProto(revision)
-		return err
-	})
-}
-
-func (s *Service) ListConfigRevisions(ctx context.Context, in *pb.ListConfigRevisionsRequest) (*pb.ListConfigRevisionsResponse, error) {
-	out := &pb.ListConfigRevisionsResponse{}
-	return admin(s, ctx, out, func() error {
-		scope, key, err := s.scopeKey(ctx, in.EndpointId, in.Scope, in.ScopeKey)
-		if err != nil {
-			return err
-		}
-		revisions, err := s.repo.ListConfigRevisions(ctx, in.EndpointId, scope, key, int(cmp.Or(in.Limit, 20)))
-		for _, r := range revisions {
-			out.Revisions = append(out.Revisions, revisionToProto(r))
-		}
-		return err
-	})
-}
-
-// SetConfig publishes a live harness config revision. Target scope updates
-// the fleet for the active version; replica scope updates one replica and
-// waits for its harness ack.
-func (s *Service) SetConfig(ctx context.Context, in *pb.SetConfigRequest) (*pb.SetConfigResponse, error) {
-	out := &pb.SetConfigResponse{}
-	return admin(s, ctx, out, func() error {
-		endpoint, err := s.endpoint(ctx, in.EndpointId)
-		if err != nil {
-			return err
-		}
-		if !endpoint.Spec.Harness {
-			return errors.New("endpoint does not enable the harness; live config is unavailable")
-		}
-		scope, key, err := s.scopeKey(ctx, endpoint.Spec.ID, in.Scope, in.ScopeKey)
-		if err != nil {
-			return err
+		if !replica.HarnessEnabled {
+			return errors.New("replica has no harness; live config is unavailable")
 		}
 		var config map[string]any
 		if err := json.Unmarshal([]byte(in.ConfigJson), &config); err != nil || config == nil {
 			return errors.New("config_json must be a JSON object")
 		}
-		if scope == types.ConfigScopeReplica {
-			replica, err := s.repo.GetReplica(ctx, key)
-			if err != nil {
-				return err
-			}
-			if replica == nil || replica.EndpointID != endpoint.Spec.ID || !replica.Alive() {
-				return fmt.Errorf("replica %q is not a live replica of %s", key, endpoint.Spec.ID)
-			}
-		}
-		revision := &types.EndpointConfigRevision{
-			EndpointID: endpoint.Spec.ID, Scope: scope, ScopeKey: key, Config: config,
-			Author: cmp.Or(in.Author, "admin"), Source: types.ConfigSourceLive,
-		}
-		if err := s.repo.CreateConfigRevision(ctx, revision); err != nil {
+		replica, err = s.updateReplica(ctx, replica.ID, func(r *types.EndpointReplica) {
+			r.Config.Revision++
+			r.Config.Config, r.Config.Author, r.Config.SetAt = json.RawMessage(mustJSON(config)), cmp.Or(in.Author, "admin"), time.Now()
+		})
+		if err != nil {
 			return err
 		}
-		out.Revision = revisionToProto(revision)
-		s.emit(types.EventEndpointConfig, types.EventEndpointSchema{
-			EndpointID: endpoint.Spec.ID, Action: "config." + string(scope), Version: endpoint.Version,
-			Revision: revision.Revision, Data: map[string]any{"scope_key": key, "author": revision.Author, "config": config},
-		})
-		if scope != types.ConfigScopeReplica {
-			return nil
+		if err := s.repo.NotifyReplicaConfig(ctx, replica.ID, replica.Config.Revision); err != nil {
+			return err
 		}
-		wait := min(cmp.Or(time.Duration(in.WaitSeconds)*time.Second, defaultAckWait), maxAckWait)
-		out.Acked = waitFor(ctx, wait, func() bool {
-			ack, err := s.repo.GetConfigAck(ctx, key, revision.Revision)
-			if err != nil || ack == nil {
-				return false
-			}
-			out.Applied, out.ApplyError = ack.Applied, ack.Error
-			return true
+		s.emit(types.EventEndpointConfig, types.EventEndpointSchema{
+			EndpointID: replica.EndpointID, Action: "config.set", ReplicaID: replica.ID, GPU: replica.GPU, Version: replica.Version,
+			Revision: replica.Config.Revision, Data: map[string]any{"author": replica.Config.Author, "config": config},
 		})
+		wait := time.Duration(in.WaitSeconds) * time.Second
+		if wait <= 0 {
+			wait = defaultAckWait
+		}
+		waitFor(ctx, min(wait, maxAckWait), func() bool {
+			current, err := s.repo.GetReplica(ctx, replica.ID)
+			if err != nil || current == nil {
+				return true
+			}
+			replica = current
+			return current.Config.Acked()
+		})
+		out.Replica = replicaToProto(replica)
 		return nil
 	})
 }
 
-// --- rollouts ----------------------------------------------------------------
-
-func (s *Service) PromoteRollout(ctx context.Context, in *pb.PromoteRolloutRequest) (*pb.RolloutActionResponse, error) {
-	return s.rolloutAction(ctx, in.EndpointId, uint(in.Version), true)
-}
-
-func (s *Service) RollbackRollout(ctx context.Context, in *pb.RollbackRolloutRequest) (*pb.RolloutActionResponse, error) {
-	return s.rolloutAction(ctx, in.EndpointId, uint(in.Version), false)
-}
-
-// rolloutAction promotes or rolls back. With a baking canary the action
-// decides it; otherwise "promote <version>" re-activates a retired version
-// and "rollback" re-activates the most recent retired version.
-func (s *Service) rolloutAction(ctx context.Context, endpointID string, version uint, promote bool) (*pb.RolloutActionResponse, error) {
-	out := &pb.RolloutActionResponse{}
+// StopReplica drains and stops any replica; the controller refills the
+// target on its next tick if the fleet still wants the capacity.
+func (s *Service) StopReplica(ctx context.Context, in *pb.StopReplicaRequest) (*pb.StopReplicaResponse, error) {
+	out := &pb.StopReplicaResponse{}
 	return admin(s, ctx, out, func() error {
-		endpoint, err := s.endpoint(ctx, endpointID)
+		replica, err := s.replica(ctx, in.ReplicaId)
 		if err != nil {
 			return err
 		}
-		rollout, err := s.repo.GetRollout(ctx, endpointID)
-		if err != nil {
+		if err := s.controller.drainReplica(ctx, replica, in.DrainSeconds, false, "stopped by admin"); err != nil {
 			return err
 		}
-		versions, err := s.repo.ListVersions(ctx, endpointID)
-		if err != nil {
-			return err
-		}
-		if rollout == nil {
-			rollout = &types.RolloutState{EndpointID: endpointID, ActiveVersion: endpoint.Version, Phase: types.RolloutPhaseIdle}
-		}
-		reason := "manual rollback by admin"
-		if promote {
-			reason = "manual promote by admin"
-		}
-		switch {
-		case rollout.CanaryVersion != 0 && (version == 0 || version == rollout.CanaryVersion):
-			err = s.controller.finishRollout(ctx, endpoint, rollout, promote, reason)
-		case promote && version != 0 && version != endpoint.Version:
-			err = s.controller.activateVersion(ctx, endpoint, rollout, versions, version, reason)
-		case !promote:
-			target := version
-			if target == 0 {
-				for _, v := range versions {
-					if v.State == types.VersionStateRetired && v.Version < endpoint.Version && v.Version > target {
-						target = v.Version
-					}
-				}
-			}
-			if target == 0 || target == endpoint.Version {
-				return errors.New("no previous version to roll back to")
-			}
-			err = s.controller.activateVersion(ctx, endpoint, rollout, versions, target, reason)
-		default:
-			return errors.New("nothing to promote")
-		}
-		if err != nil {
-			return err
-		}
-		out.Rollout, err = s.rolloutProto(ctx, endpointID)
-		return err
-	})
-}
-
-func (s *Service) PinVersion(ctx context.Context, in *pb.PinVersionRequest) (*pb.RolloutActionResponse, error) {
-	out := &pb.RolloutActionResponse{}
-	return admin(s, ctx, out, func() error {
-		rollout, err := s.repo.GetRollout(ctx, in.EndpointId)
-		if err != nil {
-			return err
-		}
-		if rollout == nil {
-			return errEndpointNotFound
-		}
-		versions, err := s.repo.ListVersions(ctx, in.EndpointId)
-		if err != nil {
-			return err
-		}
-		if in.Version != 0 && findVersion(versions, uint(in.Version)) == nil {
-			return fmt.Errorf("version %d not found", in.Version)
-		}
-		rollout.PinnedVersion = uint(in.Version)
-		rollout.LastDecision, rollout.LastDecisionAt = "unpinned", time.Now()
-		if in.Version != 0 {
-			rollout.LastDecision = fmt.Sprintf("pinned version %d", in.Version)
-		}
-		if err := s.repo.SaveRollout(ctx, rollout); err != nil {
-			return err
-		}
-		s.emit(types.EventEndpointRollout, types.EventEndpointSchema{EndpointID: in.EndpointId, Action: "rollout.pinned", Version: uint(in.Version)})
-		out.Rollout = rolloutToProto(rollout, versions)
+		out.Replica = replicaToProto(replica)
 		return nil
 	})
 }
@@ -427,11 +262,18 @@ func (s *Service) GetGitOpsStatus(ctx context.Context, _ *pb.GetGitOpsStatusRequ
 	out := &pb.GetGitOpsStatusResponse{}
 	return admin(s, ctx, out, func() error {
 		state, err := s.repo.GetGitOpsState(ctx)
+		if err != nil {
+			return err
+		}
 		if state == nil {
 			state = &types.GitOpsState{RepoURL: s.config.Repo.URL, Ref: s.config.Repo.Ref}
 		}
-		out.State = gitopsToProto(state)
-		return err
+		fleet, err := s.repo.GetFleet(ctx)
+		if err != nil {
+			return err
+		}
+		out.State, out.FleetJson = gitopsToProto(state), mustJSON(fleet.Targets)
+		return nil
 	})
 }
 
@@ -446,82 +288,6 @@ func (s *Service) TriggerGitOpsSync(ctx context.Context, in *pb.TriggerGitOpsSyn
 	})
 }
 
-// --- tuning ------------------------------------------------------------------
-
-// StartTuningReplica starts one dedicated, protected replica for a target.
-// It never receives public traffic; agents address it with
-// X-Beam-Endpoint-Replica and push configs with replica-scoped SetConfig.
-func (s *Service) StartTuningReplica(ctx context.Context, in *pb.StartTuningReplicaRequest) (*pb.ReplicaResponse, error) {
-	out := &pb.ReplicaResponse{}
-	return admin(s, ctx, out, func() error {
-		endpoint, err := s.endpoint(ctx, in.EndpointId)
-		if err != nil {
-			return err
-		}
-		if !endpoint.Spec.Harness {
-			return errors.New("endpoint does not enable the harness; live tuning is unavailable")
-		}
-		role, gpu := cmp.Or(strings.TrimSpace(in.Role), types.ReplicaRoleServe), normalizeGPUKey(in.Gpu)
-		targets := endpoint.Spec.Targets()
-		idx := slices.IndexFunc(targets, func(rt types.RoleTarget) bool { return rt.Role == role && rt.Target.Key() == gpu })
-		if idx < 0 {
-			return fmt.Errorf("endpoint has no target %s on %s", role, gpu)
-		}
-		live, err := s.repo.ListAllReplicas(ctx)
-		if err != nil {
-			return err
-		}
-		for _, r := range live {
-			if r.EndpointID == endpoint.Spec.ID && r.Tuning && r.Alive() {
-				return fmt.Errorf("tuning replica %s is already running; stop it first", r.ID)
-			}
-		}
-		services, missing := serviceAddresses(endpoint.Spec.Services, live)
-		if len(missing) > 0 {
-			return fmt.Errorf("required services not ready: %s", strings.Join(missing, ", "))
-		}
-		spec := s.controller.endpointStartSpec(endpoint, targets[idx], services)
-		spec.Protected, spec.Tuning, spec.Evictable = true, true, false
-		replica, err := s.controller.startReplica(ctx, spec)
-		if err != nil {
-			return err
-		}
-		waitFor(ctx, time.Duration(in.WaitSeconds)*time.Second, func() bool {
-			current, err := s.repo.GetReplica(ctx, replica.ID)
-			if err != nil || current == nil {
-				return true
-			}
-			replica = current
-			return replica.Status == types.ReplicaStatusReady || replica.Status.Terminal()
-		})
-		out.Replica = replicaToProto(replica)
-		return nil
-	})
-}
-
-// StopReplica drains and stops any replica; the controller refills the
-// target on its next tick if the endpoint still wants the capacity.
-func (s *Service) StopReplica(ctx context.Context, in *pb.StopReplicaRequest) (*pb.ReplicaResponse, error) {
-	out := &pb.ReplicaResponse{}
-	return admin(s, ctx, out, func() error {
-		replica, err := s.repo.GetReplica(ctx, in.ReplicaId)
-		if err != nil {
-			return err
-		}
-		if replica == nil {
-			return errors.New("replica not found")
-		}
-		if err := s.controller.drainReplica(ctx, replica, in.DrainSeconds, false, "stopped by admin"); err != nil {
-			return err
-		}
-		if replica.Tuning {
-			_ = s.repo.DeleteConfigRevisions(ctx, replica.EndpointID, types.ConfigScopeReplica, replica.ID)
-		}
-		out.Replica = replicaToProto(replica)
-		return nil
-	})
-}
-
 // --- REST mirror ---------------------------------------------------------------
 
 var jsonMarshaler = protojson.MarshalOptions{UseProtoNames: true, EmitUnpopulated: true}
@@ -531,15 +297,16 @@ var jsonMarshaler = protojson.MarshalOptions{UseProtoNames: true, EmitUnpopulate
 func (s *Service) mountAdminRoutes(group *echo.Group) {
 	g := group.Group("", func(next echo.HandlerFunc) echo.HandlerFunc { return auth.WithClusterAdminAuth(next) })
 	id := func(c echo.Context) string { return pathParam(c, "id") }
-	list := rest(s.ListEndpoints, func(c echo.Context, in *pb.ListEndpointsRequest) {
-		in.IncludeDisabled, _ = strconv.ParseBool(c.QueryParam("include_disabled"))
-	})
+	list := rest(s.ListEndpoints, nil)
 
 	g.GET("", list)
 	g.GET("/", list)
-	g.GET("/services", rest(s.ListServices, nil))
 	g.GET("/gitops", rest(s.GetGitOpsStatus, nil))
 	g.POST("/gitops/sync", rest(s.TriggerGitOpsSync, nil))
+	g.GET("/replicas", rest(s.ListReplicas, func(c echo.Context, in *pb.ListReplicasRequest) {
+		in.Status, in.Gpu = c.QueryParam("status"), c.QueryParam("gpu")
+	}))
+	g.POST("/replicas/:replica/config", rest(s.SetReplicaConfig, func(c echo.Context, in *pb.SetReplicaConfigRequest) { in.ReplicaId = pathParam(c, "replica") }))
 	g.POST("/replicas/:replica/stop", rest(s.StopReplica, func(c echo.Context, in *pb.StopReplicaRequest) { in.ReplicaId = pathParam(c, "replica") }))
 
 	// Endpoint IDs may contain one "/" (vendor/slug). Echo matches :id on the
@@ -547,23 +314,11 @@ func (s *Service) mountAdminRoutes(group *echo.Group) {
 	// unescapes it; see TestAdminRESTEndpointIDWithSlash.
 	g.GET("/:id", rest(s.GetEndpoint, func(c echo.Context, in *pb.GetEndpointRequest) { in.EndpointId = id(c) }))
 	g.GET("/:id/replicas", rest(s.ListReplicas, func(c echo.Context, in *pb.ListReplicasRequest) {
-		in.EndpointId, in.Status, in.Gpu, in.Role = id(c), c.QueryParam("status"), c.QueryParam("gpu"), c.QueryParam("role")
+		in.EndpointId, in.Status, in.Gpu = id(c), c.QueryParam("status"), c.QueryParam("gpu")
 	}))
 	g.GET("/:id/metrics", rest(s.GetMetrics, func(c echo.Context, in *pb.GetMetricsRequest) {
 		in.EndpointId, in.Gpu, in.ReplicaId, in.WindowSeconds = id(c), c.QueryParam("gpu"), c.QueryParam("replica_id"), queryUint(c, "window_seconds")
 	}))
-	g.GET("/:id/config", rest(s.GetConfig, func(c echo.Context, in *pb.GetConfigRequest) {
-		in.EndpointId, in.Scope, in.ScopeKey = id(c), c.QueryParam("scope"), c.QueryParam("scope_key")
-	}))
-	g.POST("/:id/config", rest(s.SetConfig, func(c echo.Context, in *pb.SetConfigRequest) { in.EndpointId = id(c) }))
-	g.GET("/:id/config/revisions", rest(s.ListConfigRevisions, func(c echo.Context, in *pb.ListConfigRevisionsRequest) {
-		in.EndpointId, in.Scope, in.ScopeKey, in.Limit = id(c), c.QueryParam("scope"), c.QueryParam("scope_key"), queryUint(c, "limit")
-	}))
-	g.POST("/:id/rollout/promote", rest(s.PromoteRollout, func(c echo.Context, in *pb.PromoteRolloutRequest) { in.EndpointId = id(c) }))
-	g.POST("/:id/rollout/rollback", rest(s.RollbackRollout, func(c echo.Context, in *pb.RollbackRolloutRequest) { in.EndpointId = id(c) }))
-	g.POST("/:id/rollout/pin", rest(s.PinVersion, func(c echo.Context, in *pb.PinVersionRequest) { in.EndpointId = id(c) }))
-	g.POST("/:id/enabled", rest(s.SetEndpointEnabled, func(c echo.Context, in *pb.SetEndpointEnabledRequest) { in.EndpointId = id(c) }))
-	g.POST("/:id/tuning", rest(s.StartTuningReplica, func(c echo.Context, in *pb.StartTuningReplicaRequest) { in.EndpointId = id(c) }))
 }
 
 // rest adapts a gRPC handler to an echo route: the JSON body (if any) binds

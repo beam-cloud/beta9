@@ -844,7 +844,9 @@ func (r *EventClientRepo) PushComputeEvent(eventType string, event types.EventCo
 }
 
 func (r *EventClientRepo) PushEndpointEvent(eventType string, event types.EventEndpointSchema) {
-	if eventType == "" || event.EndpointID == "" {
+	// GitOps run-level events (started/applied/failed/fleet) span the whole
+	// repo and are identified by their action and sha rather than an endpoint.
+	if eventType == "" || (event.EndpointID == "" && eventType != types.EventEndpointGitOps) {
 		return
 	}
 	if event.Timestamp.IsZero() {

@@ -49,7 +49,6 @@ type ManagedEndpointsConfig struct {
 	DeployerImage  string                        `key:"deployerImage" json:"deployer_image"`
 	Preemption     ManagedEndpointsPreemption    `key:"preemption" json:"preemption"`
 	Fill           ManagedEndpointsFillConfig    `key:"fill" json:"fill"`
-	Rollout        ManagedEndpointsRolloutConfig `key:"rollout" json:"rollout"`
 	Routing        ManagedEndpointsRoutingConfig `key:"routing" json:"routing"`
 	AllowedEngines []string                      `key:"allowedEngines" json:"allowed_engines"`
 	AllowedKinds   []string                      `key:"allowedKinds" json:"allowed_kinds"`
@@ -88,28 +87,13 @@ type ManagedEndpointsFillConfig struct {
 	FailureBackoff time.Duration `key:"failureBackoff" json:"failure_backoff"`
 }
 
-type ManagedEndpointsRolloutConfig struct {
-	CanaryReplicas uint32 `key:"canaryReplicas" json:"canary_replicas"`
-	BakeSeconds    uint32 `key:"bakeSeconds" json:"bake_seconds"`
-	// MinCanaryRequests is the sample size below which the canary error rate
-	// is not judged; a bake with less traffic promotes on health alone.
-	MinCanaryRequests uint32            `key:"minCanaryRequests" json:"min_canary_requests"`
-	Thresholds        RolloutThresholds `key:"thresholds" json:"thresholds"`
-}
-
-// RolloutThresholds are relative regressions (fraction) that fail a canary.
-type RolloutThresholds struct {
-	ErrorRate  float64 `key:"errorRate" json:"error_rate"`
-	TTFT       float64 `key:"ttft" json:"ttft"`
-	TPOT       float64 `key:"tpot" json:"tpot"`
-	Throughput float64 `key:"throughput" json:"throughput"`
-}
-
 type ManagedEndpointsRoutingConfig struct {
-	MaxQueueWait            time.Duration `key:"maxQueueWait" json:"max_queue_wait"`
-	SlowStartSeconds        uint32        `key:"slowStartSeconds" json:"slow_start_seconds"`
-	PerWorkspaceConcurrency uint32        `key:"perWorkspaceConcurrency" json:"per_workspace_concurrency"`
-	PerEndpointConcurrency  uint32        `key:"perEndpointConcurrency" json:"per_endpoint_concurrency"`
+	MaxQueueWait     time.Duration `key:"maxQueueWait" json:"max_queue_wait"`
+	SlowStartSeconds uint32        `key:"slowStartSeconds" json:"slow_start_seconds"`
+	// Per-gateway in-flight caps (each gateway admits up to this many); the
+	// cluster-wide bound is the replicas' MaxConcurrency.
+	PerWorkspaceConcurrency uint32 `key:"perWorkspaceConcurrency" json:"per_workspace_concurrency"`
+	PerEndpointConcurrency  uint32 `key:"perEndpointConcurrency" json:"per_endpoint_concurrency"`
 }
 
 // ApplyDefaults fills zero values with production defaults so consumers can
@@ -138,30 +122,8 @@ func (c *ManagedEndpointsConfig) ApplyDefaults() {
 	if c.Fill.MaxClusterShare <= 0 || c.Fill.MaxClusterShare > 1 {
 		c.Fill.MaxClusterShare = 0.5
 	}
-	if c.Rollout.CanaryReplicas == 0 {
-		c.Rollout.CanaryReplicas = 1
-	}
-	if c.Rollout.BakeSeconds == 0 {
-		c.Rollout.BakeSeconds = 300
-	}
-	if c.Rollout.MinCanaryRequests == 0 {
-		c.Rollout.MinCanaryRequests = 20
-	}
 	if c.Routing.SlowStartSeconds == 0 {
 		c.Routing.SlowStartSeconds = 30
-	}
-	for _, f := range []struct {
-		v   *float64
-		def float64
-	}{
-		{&c.Rollout.Thresholds.ErrorRate, 0.02},
-		{&c.Rollout.Thresholds.TTFT, 0.25},
-		{&c.Rollout.Thresholds.TPOT, 0.25},
-		{&c.Rollout.Thresholds.Throughput, 0.25},
-	} {
-		if *f.v <= 0 {
-			*f.v = f.def
-		}
 	}
 	for _, d := range []struct {
 		v   *time.Duration

@@ -12,18 +12,16 @@ import (
 	"math/big"
 	"mime"
 	"mime/multipart"
-	"net"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/abstractions/common/llmroute"
 	"github.com/beam-cloud/beta9/pkg/auth"
-	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
@@ -40,8 +38,6 @@ const (
 	queuePollInterval     = 100 * time.Millisecond
 	replicaDialTimeout    = 5 * time.Second
 	generationTTL         = time.Hour
-	usageQueueSize        = 4096
-	usageEnqueueTimeout   = 2 * time.Second // record() runs after the response; a bounded wait beats losing billing
 	headerReplicaPin      = "X-Beam-Endpoint-Replica"
 	headerRequestID       = "X-Request-ID"
 	headerEndpointID      = "X-Beam-Endpoint-ID"
@@ -58,20 +54,12 @@ type router struct {
 	stateMu sync.Mutex
 	states  map[string]*llmroute.State
 
-	transports sync.Map // address -> *http.Transport
-	inflight   sync.Map // replica id -> *atomic.Int64
-	admission  sync.Map // endpoint id / endpoint|workspace -> *atomic.Int64
-
-	usageQueue   chan types.EventEndpointRouteSchema
-	usageDropped atomic.Int64 // route records lost to a saturated queue (billing gaps)
-	usageWG      sync.WaitGroup
+	inflight  sync.Map // replica id -> *atomic.Int64
+	admission sync.Map // endpoint id / endpoint|workspace -> *atomic.Int64 (per gateway; see admit)
 }
 
 func newRouter(s *Service) *router {
-	r := &router{s: s, prefix: s.config.RoutePrefix, states: map[string]*llmroute.State{}, usageQueue: make(chan types.EventEndpointRouteSchema, usageQueueSize)}
-	r.usageWG.Add(1)
-	go r.drainUsage()
-	return r
+	return &router{s: s, prefix: s.config.RoutePrefix, states: map[string]*llmroute.State{}}
 }
 
 func (r *router) mount(group *echo.Group, authMiddleware echo.MiddlewareFunc) {
@@ -300,7 +288,8 @@ type routeRequest struct {
 	adapter    adapter
 	route      types.EndpointRoute
 	requestID  string
-	models     []string
+	models     []string // requested, in preference order
+	model      string   // the endpoint selected (what the engine sees and what is billed)
 	body       []byte
 	stream     bool
 	info       *llmroute.RequestInfo
@@ -340,6 +329,7 @@ func (r *router) handleRoute(ctx echo.Context) error {
 	if rerr != nil {
 		return rerr.write(ctx)
 	}
+	rq.setModel(endpoint.Spec.ID)
 	if rerr := r.admit(ctx.Request().Context(), rq, endpoint); rerr != nil {
 		return rerr.write(ctx)
 	}
@@ -394,6 +384,24 @@ func (r *router) readRequest(rq *routeRequest, pathModel string) *routeError {
 		return &routeError{http.StatusBadRequest, "missing_model", "the model field is required"}
 	}
 	return nil
+}
+
+// setModel makes the selected endpoint the model the engine sees: a "models"
+// fallback or a path model must not forward the caller's first choice.
+func (rq *routeRequest) setModel(model string) {
+	rq.model = model
+	var payload map[string]any
+	if json.Unmarshal(rq.body, &payload) != nil || payload == nil {
+		return
+	}
+	if current, _ := payload["model"].(string); current == model && payload["models"] == nil {
+		return
+	}
+	payload["model"] = model
+	delete(payload, "models")
+	if body, err := json.Marshal(payload); err == nil {
+		rq.body = body
+	}
 }
 
 func multipartModel(boundary string, body []byte) string {
@@ -472,7 +480,10 @@ func (r *router) admissionKeys(rq *routeRequest, endpoint *types.ManagedEndpoint
 	return keys, caps
 }
 
-// admit applies the credit gate and concurrency caps.
+// admit applies the credit gate and concurrency caps. The caps are
+// per-gateway safeguards against one workspace or endpoint monopolizing this
+// gateway's connections; the cluster-wide bound on an endpoint is the
+// replicas' own MaxConcurrency, enforced per replica in reserve.
 func (r *router) admit(ctx context.Context, rq *routeRequest, endpoint *types.ManagedEndpoint) *routeError {
 	if billable(endpoint) && r.s.scheduler != nil && rq.auth.Token.TokenType != types.TokenTypeClusterAdmin {
 		if gate := r.s.scheduler.CreditGate(); gate != nil {
@@ -507,16 +518,13 @@ func (r *router) release(rq *routeRequest, endpoint *types.ManagedEndpoint) {
 	}
 }
 
-// servingReplicas lists replicas that may take this request right now:
-// ready serve/decode replicas on the active version or a baking canary.
+// servingReplicas lists replicas that may take this request right now. Old
+// versions keep serving while the controller rolls the new one out; a pinned
+// replica (X-Beam-Endpoint-Replica, used by tuning agents) bypasses the pool.
 func (r *router) servingReplicas(ctx context.Context, endpoint *types.ManagedEndpoint, pin string, exclude map[string]bool) []*types.EndpointReplica {
 	replicas, err := r.s.repo.ListReplicas(ctx, endpoint.Spec.ID)
 	if err != nil {
 		return nil
-	}
-	canaryVersion := uint(0)
-	if rollout, err := r.s.repo.GetRollout(ctx, endpoint.Spec.ID); err == nil && rollout != nil {
-		canaryVersion = rollout.CanaryVersion
 	}
 	var out []*types.EndpointReplica
 	for _, replica := range replicas {
@@ -529,8 +537,7 @@ func (r *router) servingReplicas(ctx context.Context, endpoint *types.ManagedEnd
 			}
 			continue
 		}
-		onVersion := replica.Version == endpoint.Version || (canaryVersion != 0 && replica.Version == canaryVersion)
-		if replica.Serving() && onVersion && (replica.Role == types.ReplicaRoleServe || replica.Role == types.ReplicaRoleDecode) {
+		if replica.Serving() {
 			out = append(out, replica)
 		}
 	}
@@ -645,32 +652,6 @@ func engineMetrics(c types.ReplicaCapacity) llmroute.EngineMetrics {
 
 // --- proxy ---------------------------------------------------------------------
 
-func (r *router) transport(address string) *http.Transport {
-	if t, ok := r.transports.Load(address); ok {
-		return t.(*http.Transport)
-	}
-	transport := &http.Transport{
-		MaxIdleConns:        512,
-		MaxIdleConnsPerHost: 64,
-		IdleConnTimeout:     90 * time.Second,
-		DisableCompression:  true,
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			conn, err := network.ConnectToBackend(ctx, address, replicaDialTimeout, r.s.tailscale, r.s.appConfig.Tailscale, r.s.containers)
-			if err != nil {
-				return nil, err
-			}
-			// -1: no read deadline; streams are bounded by the request context.
-			abstractions.SetConnOptions(conn, true, 30*time.Second, -1)
-			return conn, nil
-		},
-	}
-	actual, loaded := r.transports.LoadOrStore(address, transport)
-	if loaded {
-		transport.CloseIdleConnections()
-	}
-	return actual.(*http.Transport)
-}
-
 var hopHeaders = map[string]bool{
 	"Connection": true, "Keep-Alive": true, "Proxy-Authenticate": true, "Proxy-Authorization": true,
 	"Te": true, "Trailer": true, "Transfer-Encoding": true, "Upgrade": true, "Authorization": true,
@@ -740,7 +721,7 @@ func (r *router) proxy(ctx context.Context, rq *routeRequest, endpoint *types.Ma
 	}()
 
 	url := "http://replica" + rq.adapter.UpstreamPath
-	if q := rq.ctx.Request().URL.RawQuery; q != "" {
+	if q := upstreamQuery(rq.ctx.Request().URL.Query()); q != "" {
 		url += "?" + q
 	}
 	req, err := http.NewRequestWithContext(upstreamCtx, http.MethodPost, url, bytes.NewReader(rq.body))
@@ -757,7 +738,7 @@ func (r *router) proxy(ctx context.Context, rq *routeRequest, endpoint *types.Ma
 	req.ContentLength = int64(len(rq.body))
 
 	sentAt := time.Now()
-	resp, err := r.transport(replica.Address).RoundTrip(req)
+	resp, err := r.s.transport(replica.Address).RoundTrip(req)
 	if err != nil {
 		return true, err
 	}
@@ -782,25 +763,35 @@ func (r *router) proxy(ctx context.Context, rq *routeRequest, endpoint *types.Ma
 
 	contentType, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 	if contentType == "text/event-stream" {
-		// Headers arrive with the first token on SSE, so this is a real TTFT.
-		// Buffered JSON responses carry the whole generation and record none.
 		w.WriteHeader(resp.StatusCode)
-		usage, err := relayStream(w, resp.Body)
-		if err == nil && resp.StatusCode < 300 && billable(endpoint) && !usage.Found {
+		usage, ttft, err := relayStream(w, resp.Body, rq.requestID, sentAt)
+		status := resp.StatusCode
+		if err != nil && status < 300 {
+			status = http.StatusBadGateway // the stream broke: not a success, not billed
+		}
+		if err == nil && status < 300 && billable(endpoint) && !usage.Found {
 			// The stream completed but the engine never sent its usage chunk.
 			// The bytes are already with the client, so this cannot become a
-			// 502 on the wire; it is recorded as one so it is neither billed
-			// nor counted as a rollout success, like the buffered path.
-			r.recordMissingUsage(rq, endpoint, replica, usage, time.Since(sentAt))
+			// 502 on the wire; it is recorded as one so it is not billed.
+			r.recordMissingUsage(rq, endpoint, replica, usage, ttft)
 			return false, nil
 		}
-		r.record(rq, endpoint, replica, resp.StatusCode, usage, time.Since(sentAt), errString(err))
+		r.record(rq, endpoint, replica, status, usage, ttft, errString(err))
 		return false, err
 	}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
-	if err != nil {
-		return false, err
+	// Nothing has been written yet, so an upstream body failure is still a
+	// gateway error on the wire rather than an empty 200.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
+	switch {
+	case err != nil:
+		rerr := &routeError{http.StatusBadGateway, "upstream_failed", "upstream response ended early"}
+		r.record(rq, endpoint, replica, rerr.Status, Usage{}, 0, err.Error())
+		return false, rerr.write(rq.ctx)
+	case len(body) > maxBody:
+		rerr := &routeError{http.StatusBadGateway, "upstream_too_large", "upstream response exceeds 64MB"}
+		r.record(rq, endpoint, replica, rerr.Status, Usage{}, 0, rerr.Message)
+		return false, rerr.write(rq.ctx)
 	}
 	usage := Usage{}
 	if resp.StatusCode < 300 {
@@ -818,6 +809,13 @@ func (r *router) proxy(ctx context.Context, rq *routeRequest, endpoint *types.Ma
 	_, werr := w.Write(body)
 	r.record(rq, endpoint, replica, resp.StatusCode, usage, 0, errString(werr))
 	return false, nil
+}
+
+// upstreamQuery drops the gateway's own query parameters (auth_token
+// authenticates to the gateway and must never reach an engine).
+func upstreamQuery(q url.Values) string {
+	q.Del("auth_token")
+	return q.Encode()
 }
 
 func errString(err error) string {
@@ -839,43 +837,69 @@ func (r *router) recordMissingUsage(rq *routeRequest, endpoint *types.ManagedEnd
 	log.Warn().Str("endpoint_id", endpoint.Spec.ID).Str("replica_id", replica.ID).Str("request_id", rq.requestID).Bool("stream", rq.stream).Msg("managed endpoints: upstream response carried no usage; request not billed")
 }
 
-// relayStream forwards SSE events as they arrive, flushing per event, and
-// pulls usage from the final chunk.
-func relayStream(w *echo.Response, body io.Reader) (Usage, error) {
+// relayStream forwards SSE events as they arrive, flushing per event. It
+// stamps the gateway generation id on every chunk (so /generation lookups
+// match what the client saw), pulls usage from the final chunk and measures
+// TTFT at the first data line.
+func relayStream(w *echo.Response, body io.Reader, requestID string, sentAt time.Time) (Usage, time.Duration, error) {
 	flusher, _ := w.Writer.(http.Flusher)
 	reader := bufio.NewReaderSize(body, 64<<10)
 	var usage Usage
+	var ttft time.Duration
 	for {
 		line, err := reader.ReadBytes('\n')
 		if len(line) > 0 {
+			if bytes.HasPrefix(line, []byte("data:")) {
+				if ttft == 0 {
+					ttft = time.Since(sentAt)
+				}
+				line = stampSSE(line, requestID)
+			}
 			if u, ok := sseUsage(line); ok {
 				usage = u
 			}
 			if _, werr := w.Write(line); werr != nil {
-				return usage, werr
+				return usage, ttft, werr
 			}
 			if flusher != nil && (len(bytes.TrimSpace(line)) == 0 || bytes.HasPrefix(line, []byte("data:"))) {
 				flusher.Flush()
 			}
 		}
 		if errors.Is(err, io.EOF) {
-			return usage, nil
+			return usage, ttft, nil
 		}
 		if err != nil {
-			return usage, err
+			return usage, ttft, err
 		}
 	}
 }
 
+// stampSSE rewrites the id of a JSON SSE chunk to the gateway generation id.
+func stampSSE(line []byte, requestID string) []byte {
+	payload := bytes.TrimSpace(line[len("data:"):])
+	if len(payload) == 0 || payload[0] != '{' || !bytes.Contains(payload, []byte(`"id"`)) {
+		return line
+	}
+	var chunk map[string]any
+	if json.Unmarshal(payload, &chunk) != nil || chunk["id"] == requestID {
+		return line
+	}
+	chunk["id"] = requestID
+	out, err := json.Marshal(chunk)
+	if err != nil {
+		return line
+	}
+	return append(append([]byte("data: "), out...), '\n')
+}
+
 // decorateJSON adds OpenRouter-style fields to a successful JSON object body.
+// The id is the gateway generation id, which /generation resolves.
 func decorateJSON(body []byte, requestID string, usage Usage, costMicro int64) []byte {
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil || payload == nil {
 		return body
 	}
-	if _, ok := payload["id"]; !ok {
-		payload["id"] = requestID
-	}
+	payload["id"] = requestID
 	payload["provider"] = providerName
 	if u, ok := payload["usage"].(map[string]any); ok && usage.Found {
 		u["cost"] = costUSD(costMicro)
@@ -904,7 +928,7 @@ func (r *router) record(rq *routeRequest, endpoint *types.ManagedEndpoint, repli
 	}
 	event := types.EventEndpointRouteSchema{
 		EndpointID: endpoint.Spec.ID, WorkspaceID: rq.auth.Workspace.ExternalId, TokenID: rq.auth.Token.ExternalId,
-		RequestID: rq.requestID, Route: string(rq.route), Model: rq.models[0], Version: endpoint.Version,
+		RequestID: rq.requestID, Route: string(rq.route), Model: endpoint.Spec.ID, Version: endpoint.Version,
 		StatusCode: status, Stream: rq.stream, Retried: rq.retried,
 		PromptTokens: usage.PromptTokens, CompletionTokens: usage.CompletionTokens, CachedTokens: usage.CachedTokens,
 		Images: usage.Images, CostMicroUSD: cost,
@@ -912,9 +936,9 @@ func (r *router) record(rq *routeRequest, endpoint *types.ManagedEndpoint, repli
 		Error: errMsg, Timestamp: now.UTC(),
 	}
 	if replica != nil {
-		sample.GPU, sample.ReplicaID, sample.Version = replica.GPU, replica.ID, replica.Version
+		sample.GPU, sample.ReplicaID = replica.GPU, replica.ID
 		event.Version, event.ReplicaID, event.ContainerID = replica.Version, replica.ID, replica.ContainerID
-		event.GPU, event.Role, event.Locality, event.MachineID = replica.GPU, replica.Role, replica.Locality, replica.MachineID
+		event.GPU, event.Locality, event.MachineID = replica.GPU, replica.Locality, replica.MachineID
 		if replica.ProviderWorkspaceID != "" && cost > 0 {
 			event.ProviderWorkspaceID = replica.ProviderWorkspaceID
 			event.ProviderShareMicroUSD = int64(float64(cost) * r.s.config.ProviderRevenueShare)
@@ -929,98 +953,56 @@ func (r *router) record(rq *routeRequest, endpoint *types.ManagedEndpoint, repli
 	if err := r.s.repo.RecordRouteSample(context.Background(), sample); err != nil {
 		log.Debug().Err(err).Msg("managed endpoints: record route sample")
 	}
-	r.enqueueUsage(event)
+	r.persist(event)
 }
 
-// enqueueUsage hands a route record to drainUsage. Under queue pressure it
-// applies bounded backpressure (the response is already written, so a short
-// wait costs the client nothing) and only then drops, since a dropped record
-// is a billing/earnings gap. Waiting stops early when the service is shutting
-// down: drainUsage exits once it has flushed, so nothing would ever consume.
-func (r *router) enqueueUsage(event types.EventEndpointRouteSchema) {
-	select {
-	case r.usageQueue <- event:
-		return
-	default:
-	}
-	var shutdown <-chan struct{} // nil (never fires) when the service has no context
-	if r.s.ctx != nil {
-		shutdown = r.s.ctx.Done()
-	}
-	timer := time.NewTimer(usageEnqueueTimeout)
-	defer timer.Stop()
-	select {
-	case r.usageQueue <- event:
-		return
-	case <-timer.C:
-	case <-shutdown:
-	}
-	dropped := r.usageDropped.Add(1)
-	log.Warn().Str("endpoint_id", event.EndpointID).Str("request_id", event.RequestID).Int64("total_dropped", dropped).
-		Msg("managed endpoints: usage queue full; dropping route record")
-}
-
-// drainUsage persists route records off the request path. It runs until the
-// service context ends and then flushes what is queued.
-func (r *router) drainUsage() {
-	defer r.usageWG.Done()
-	for {
-		select {
-		case event := <-r.usageQueue:
-			r.persist(event)
-		case <-r.s.ctx.Done():
-			for {
-				select {
-				case event := <-r.usageQueue:
-					r.persist(event)
-				default:
-					return
-				}
-			}
-		}
-	}
-}
-
-// persist emits the route event (the billing/analytics record of one request),
-// keeps the generation for /generation lookups and, for successful requests,
-// bumps the workspace usage counters billing consumes, and credits the
-// provider workspace when the replica ran on contributed hardware.
+// persist is the accounting for one request, run on the handler goroutine
+// after the response so a busy billing backend slows the handler, never drops
+// a record. Every leg is idempotent on the request id: the route event (the
+// durable record billing/analytics consume), the generation for /generation,
+// the daily counters behind the usage page for the caller and, on contributed
+// hardware, the provider's earnings, and the usage metrics billing meters.
+// Replaying a request id is a no-op, so a retried leg never double-counts.
 func (r *router) persist(event types.EventEndpointRouteSchema) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	warn := func(leg string, err error) {
+		if err != nil {
+			log.Warn().Err(err).Str("request_id", event.RequestID).Str("leg", leg).Msg("managed endpoints: accounting leg failed")
+		}
+	}
 	if r.s.events != nil {
 		r.s.events.PushEndpointRouteEvent(event)
 	}
-	_ = r.s.repo.SaveGeneration(ctx, &event, generationTTL)
+	warn("generation", r.s.repo.SaveGeneration(ctx, &event, generationTTL))
 	if event.StatusCode >= 300 {
 		return
 	}
+	usage := types.Usage{Requests: 1, PromptTokens: event.PromptTokens, CompletionTokens: event.CompletionTokens, Images: event.Images, MicroUSD: event.CostMicroUSD}
+	warn("spend", r.s.repo.AddUsage(ctx, types.UsageSpend, event.WorkspaceID, event.Model, event.RequestID, event.Timestamp, usage))
 	if event.ProviderWorkspaceID != "" {
-		_ = r.s.repo.AddProviderEarnings(ctx, event.ProviderWorkspaceID, event.MachineID, event.Timestamp, types.ProviderEarnings{
-			Requests: 1, PromptTokens: event.PromptTokens, CompletionTokens: event.CompletionTokens, Images: event.Images,
-			EarningsMicroUSD: event.ProviderShareMicroUSD,
-		})
+		usage.MicroUSD = event.ProviderShareMicroUSD
+		warn("earned", r.s.repo.AddUsage(ctx, types.UsageEarned, event.ProviderWorkspaceID, event.Model, event.RequestID, event.Timestamp, usage))
 	}
-	if r.s.usage == nil {
-		return
-	}
-	counters := map[string]float64{
-		types.UsageMetricsEndpointPromptTokens:     float64(event.PromptTokens),
-		types.UsageMetricsEndpointCompletionTokens: float64(event.CompletionTokens),
-		types.UsageMetricsEndpointImages:           float64(event.Images),
-		types.UsageMetricsEndpointRequests:         1,
-		types.UsageMetricsEndpointCost:             float64(event.CostMicroUSD) / 10_000, // billing consumes cents
-	}
-	labels := map[string]any{"workspace_id": event.WorkspaceID, "endpoint_id": event.EndpointID}
-	for metric, value := range counters {
-		if value > 0 {
-			_ = r.s.usage.IncrementCounter(metric, labels, value)
+	if r.s.usage != nil {
+		counters := map[string]float64{
+			types.UsageMetricsEndpointPromptTokens:     float64(event.PromptTokens),
+			types.UsageMetricsEndpointCompletionTokens: float64(event.CompletionTokens),
+			types.UsageMetricsEndpointImages:           float64(event.Images),
+			types.UsageMetricsEndpointRequests:         1,
+			types.UsageMetricsEndpointCost:             float64(event.CostMicroUSD) / 10_000, // billing consumes cents
 		}
-	}
-	if event.ProviderShareMicroUSD > 0 {
-		_ = r.s.usage.IncrementCounter(types.UsageMetricsEndpointProviderEarnings,
-			map[string]any{"workspace_id": event.ProviderWorkspaceID, "endpoint_id": event.EndpointID}, float64(event.ProviderShareMicroUSD)/10_000)
+		labels := map[string]any{"workspace_id": event.WorkspaceID, "endpoint_id": event.EndpointID, "request_id": event.RequestID}
+		for metric, value := range counters {
+			if value > 0 {
+				warn(metric, r.s.usage.IncrementCounter(metric, labels, value))
+			}
+		}
+		if event.ProviderShareMicroUSD > 0 {
+			warn("provider_earnings", r.s.usage.IncrementCounter(types.UsageMetricsEndpointProviderEarnings,
+				map[string]any{"workspace_id": event.ProviderWorkspaceID, "endpoint_id": event.EndpointID, "request_id": event.RequestID}, float64(event.ProviderShareMicroUSD)/10_000))
+		}
 	}
 	if event.CostMicroUSD > 0 && r.s.scheduler != nil {
 		if gate := r.s.scheduler.CreditGate(); gate != nil {

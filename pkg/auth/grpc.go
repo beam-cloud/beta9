@@ -37,7 +37,14 @@ func NewAuthInterceptor(config types.AppConfig, backendRepo repository.BackendRe
 		backendRepo:   backendRepo,
 		workspaceRepo: workspaceRepo,
 		unauthenticatedMethods: map[string]bool{
-			pb.GatewayService_Authorize_FullMethodName:                                 true,
+			pb.GatewayService_Authorize_FullMethodName: true,
+			// Replica harness calls carry no workspace token; the service
+			// authorizes them with the per-replica secret.
+			pb.EndpointHarnessService_Register_FullMethodName:                          true,
+			pb.EndpointHarnessService_WatchConfig_FullMethodName:                       true,
+			pb.EndpointHarnessService_AckConfig_FullMethodName:                         true,
+			pb.EndpointHarnessService_Heartbeat_FullMethodName:                         true,
+			pb.EndpointHarnessService_PublishEvents_FullMethodName:                     true,
 			pb.GatewayService_JoinAgent_FullMethodName:                                 true,
 			pb.GatewayService_ListAgentRoutes_FullMethodName:                           true,
 			pb.GatewayService_RequestAgentTransportCredential_FullMethodName:           true,

@@ -91,14 +91,10 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 			ErrMsg: err.Error(),
 		}, nil
 	}
-	if managedEndpoint != nil {
-		// The stub runtime carries the union of target GPU types; the endpoint
-		// controller sets the exact type/count on each replica's container request.
-		targetGpus, targetCount := managedTargetGpuTypes(managedEndpoint)
-		if len(targetGpus) > 0 {
-			gpus = targetGpus
-			in.GpuCount = targetCount
-		}
+	if managedGpus := managedGpuTypes(managedEndpoint); len(managedGpus) > 0 {
+		// The stub runtime carries the GPU types the app supports; the endpoint
+		// controller sets the exact type/count on each replica from fleet.yaml.
+		gpus = managedGpus
 	}
 
 	// If checkpoint/restore is enabled, we need to handle a few additional things to ensure dump/restore will work properly
@@ -1004,7 +1000,7 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 		}, nil
 	}
 
-	if stub.Type.IsManaged() {
+	if stub.Type.IsManagedEndpoint() {
 		if err := gws.registerManagedDeployment(ctx, stub, &config, deployment); err != nil {
 			log.Error().Err(err).Str("stub_id", stub.ExternalId).Msg("failed to register managed endpoint deployment")
 			return &pb.DeployStubResponse{

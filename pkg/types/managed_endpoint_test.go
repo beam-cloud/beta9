@@ -13,9 +13,9 @@ func validEndpointSpec() ManagedEndpointSpec {
 		Kind:       EndpointKindLLM,
 		Engine:     "vllm",
 		Entrypoint: []string{"python", "-m", "vllm.entrypoints.openai.api_server"},
-		Gpu: []GpuTarget{
-			{Type: "H100", Count: 2, MinReplicas: 1, MaxReplicas: 4, Share: 0.3},
-			{Type: "A100-80", Count: 4, MaxReplicas: 2},
+		Gpu: map[string]GpuSpec{
+			"h100":    {EngineArgs: []string{"--tp", "2"}, Harness: map[string]any{"max_num_seqs": 64}},
+			"A100-80": {},
 		},
 		Pricing: Pricing{PromptTokens: "0.0000002", CompletionTokens: "0.0000011"},
 		Catalog: Catalog{Public: true, ContextLength: 131072},
@@ -30,49 +30,35 @@ func TestManagedEndpointSpecNormalizeDefaults(t *testing.T) {
 	require.Equal(t, uint32(8000), spec.Port)
 	require.Equal(t, "/health", spec.Health)
 	require.Equal(t, []EndpointRoute{EndpointRouteChatCompletions, EndpointRouteCompletions}, spec.Routes)
-	require.Equal(t, uint32(5), spec.Policy.DrainSeconds)
-	require.InDelta(t, 0.2, spec.Policy.SpareShare, 1e-9)
+	require.Equal(t, uint32(5), spec.DrainSeconds)
 	require.Equal(t, "zai-org/glm-4.5-air", spec.Catalog.Name)
 
-	require.Equal(t, "H100x2", spec.Gpu[0].Key())
-	require.InDelta(t, 0.3, spec.Gpu[0].Share, 1e-9)
-	require.Equal(t, "A100-80x4", spec.Gpu[1].Key())
-	require.InDelta(t, 0.2, spec.Gpu[1].Share, 1e-9)
-	require.Equal(t, uint32(2), spec.Gpu[1].MaxReplicas)
+	// GPU keys are canonicalized; the per-GPU spec survives.
+	require.Len(t, spec.Gpu, 2)
+	require.Contains(t, spec.Gpu, "H100")
+	require.Contains(t, spec.Gpu, "A100-80")
+	require.Equal(t, []string{"--tp", "2"}, spec.Gpu["H100"].EngineArgs)
 	require.NoError(t, spec.Validate(ManagedEndpointValidation{}))
-
-	targets := spec.Targets()
-	require.Len(t, targets, 2)
-	require.Equal(t, "serve:H100x2", targets[0].Key())
 }
 
 func TestManagedEndpointSpecCPUDefault(t *testing.T) {
 	spec := ManagedEndpointSpec{ID: "acme/echo", Kind: EndpointKindCustom, Entrypoint: []string{"python", "app.py"}}
 	spec.Normalize()
-	require.Len(t, spec.Gpu, 1)
-	require.True(t, spec.Gpu[0].IsCPU())
-	require.Equal(t, "cpu", spec.Gpu[0].Key())
+	require.Equal(t, map[string]GpuSpec{CPUInventoryKey: {}}, spec.Gpu)
 	require.Equal(t, []EndpointRoute{EndpointRouteInvoke}, spec.Routes)
 	require.NoError(t, spec.Validate(ManagedEndpointValidation{}))
 
-	// An explicit "cpu" target (what the SDK sends for GpuTarget(type="cpu"))
-	// is the same as declaring no GPUs.
+	// An explicit "cpu" key (or an empty one) is the same as declaring no GPUs.
 	explicit := ManagedEndpointSpec{ID: "acme/echo", Kind: EndpointKindLLM, Engine: "fake", Entrypoint: []string{"python", "app.py"},
-		Gpu: []GpuTarget{{Type: "cpu", Count: 1, MinReplicas: 1, MaxReplicas: 3, Share: 1}}}
+		Gpu: map[string]GpuSpec{"CPU": {EngineArgs: []string{"--fake"}}}}
 	explicit.Normalize()
 	require.Len(t, explicit.Gpu, 1)
-	require.True(t, explicit.Gpu[0].IsCPU())
-	require.Equal(t, "cpu", explicit.Gpu[0].Key())
-	require.Equal(t, uint32(0), explicit.Gpu[0].Count)
-	require.Equal(t, uint32(3), explicit.Gpu[0].MaxReplicas)
+	require.Equal(t, []string{"--fake"}, explicit.Gpu[CPUInventoryKey].EngineArgs)
 	require.NoError(t, explicit.Validate(ManagedEndpointValidation{}))
 
-	// A GPU type with the count omitted is a one-GPU target, not CPU.
-	omitted := ManagedEndpointSpec{ID: "acme/llm", Kind: EndpointKindLLM, Engine: "vllm", Entrypoint: []string{"python", "app.py"},
-		Gpu: []GpuTarget{{Type: "H100"}}}
-	omitted.Normalize()
-	require.False(t, omitted.Gpu[0].IsCPU())
-	require.Equal(t, "H100x1", omitted.Gpu[0].Key())
+	require.Equal(t, "cpu", GPUKey(""))
+	require.Equal(t, "cpu", GPUKey(" Cpu "))
+	require.Equal(t, "H100", GPUKey("h100"))
 }
 
 func TestManagedEndpointSpecValidateErrors(t *testing.T) {
@@ -82,9 +68,7 @@ func TestManagedEndpointSpecValidateErrors(t *testing.T) {
 	spec.Entrypoint = nil
 	spec.Routes = []EndpointRoute{EndpointRouteImageEdits}
 	spec.Pricing.Request = "1e-3"
-	spec.Gpu = append(spec.Gpu, GpuTarget{Type: "H100", Count: 2, MinReplicas: 3, MaxReplicas: 1, Share: 2})
-	spec.Gpu = append(spec.Gpu, GpuTarget{Type: "NOTAGPU", Count: 9})
-	spec.Gpu = append(spec.Gpu, GpuTarget{Type: "any", Count: 1})
+	spec.Gpu["NOTAGPU"] = GpuSpec{}
 	spec.Normalize()
 
 	err := spec.Validate(ManagedEndpointValidation{AllowedEngines: []string{"vllm"}})
@@ -96,36 +80,16 @@ func TestManagedEndpointSpecValidateErrors(t *testing.T) {
 		"entrypoint is required",
 		"route \"images/edits\" is not valid for kind \"llm\"",
 		"pricing.request",
-		"min_replicas 3 > max_replicas 1",
-		"share 2 must be in (0, 1]",
-		"duplicate target H100x2",
-		"unknown gpu type \"NOTAGPU\"",
-		"count 9 exceeds 8",
-		"gpu type \"any\" is not allowed",
+		"gpu \"NOTAGPU\" is not a known GPU type",
 	} {
 		require.Contains(t, msg, want)
 	}
-}
 
-func TestManagedEndpointSpecDisaggregated(t *testing.T) {
-	spec := validEndpointSpec()
-	spec.Topology = map[string][]GpuTarget{
-		ReplicaRolePrefill: {{Type: "H100", Count: 1, MaxReplicas: 2}},
-		ReplicaRoleDecode:  {{Type: "H100", Count: 2, MaxReplicas: 4}},
-	}
-	spec.Normalize()
-	require.ErrorContains(t, spec.Validate(ManagedEndpointValidation{}), "requires kv_cache")
-
-	spec.KVCache = &KVCacheSpec{Connector: "mooncake", Service: "mooncake-master"}
-	spec.Normalize()
-	require.ErrorContains(t, spec.Validate(ManagedEndpointValidation{KnownServices: map[string]struct{}{}}), "service \"mooncake-master\" is not deployed")
-	require.NoError(t, spec.Validate(ManagedEndpointValidation{KnownServices: map[string]struct{}{"mooncake-master": {}}}))
-	require.Contains(t, spec.Services, "mooncake-master")
-
-	targets := spec.Targets()
-	require.Len(t, targets, 2)
-	require.Equal(t, "decode:H100x2", targets[0].Key())
-	require.Equal(t, "prefill:H100x1", targets[1].Key())
+	image := ManagedEndpointSpec{ID: "acme/img", Kind: EndpointKindImage, Entrypoint: []string{"x"}}
+	image.Normalize()
+	require.ErrorContains(t, image.Validate(ManagedEndpointValidation{}), "image endpoints must price")
+	image.Catalog.Free = true
+	require.NoError(t, image.Validate(ManagedEndpointValidation{}))
 }
 
 func TestPricingValidateAndRat(t *testing.T) {
@@ -144,16 +108,95 @@ func TestPricingValidateAndRat(t *testing.T) {
 	require.Zero(t, zero.Sign())
 }
 
-func TestManagedServiceSpec(t *testing.T) {
-	spec := ManagedServiceSpec{Name: "mooncake-master", Entrypoint: []string{"mooncake_master"}, Replicas: 2}
-	spec.Normalize()
-	require.Len(t, spec.Gpu, 1)
-	require.Equal(t, uint32(2), spec.Gpu[0].MinReplicas)
-	require.Equal(t, uint32(2), spec.Gpu[0].MaxReplicas)
-	require.NoError(t, spec.Validate())
+func TestFleetNormalizeAndPlacements(t *testing.T) {
+	fleet := Fleet{Targets: map[string]map[string]Placement{
+		"h100": {" Acme/Model ": {Share: 0.5, Min: 3, Max: 1}, "acme/other": {Share: 0.25}},
+		"cpu":  {"acme/model": {Share: 1, Min: 1, Count: 4}},
+	}}
+	fleet.Normalize()
 
-	spec.Name = "Bad_Name"
-	require.ErrorContains(t, spec.Validate(), "service name")
+	require.Equal(t, Placement{Share: 0.5, Min: 3, Max: 3, Count: 1}, fleet.Targets["H100"]["acme/model"], "count defaults to 1; max is raised to min")
+	require.Equal(t, Placement{Share: 0.25, Count: 1}, fleet.Targets["H100"]["acme/other"], "max 0 stays uncapped")
+	require.Equal(t, Placement{Share: 1, Min: 1}, fleet.Targets[CPUInventoryKey]["acme/model"], "cpu placements carry no GPU count")
+
+	placements := fleet.Placements("acme/model")
+	require.Len(t, placements, 2)
+	require.Equal(t, "H100", placements[0].GPU, "sorted by GPU key")
+	require.False(t, placements[0].IsCPU())
+	require.Equal(t, CPUInventoryKey, placements[1].GPU)
+	require.True(t, placements[1].IsCPU())
+	require.Empty(t, fleet.Placements("acme/none"))
+}
+
+func TestFleetValidate(t *testing.T) {
+	model := validEndpointSpec()
+	model.Normalize()
+	endpoints := map[string]*ManagedEndpointSpec{model.ID: &model}
+
+	good := Fleet{Targets: map[string]map[string]Placement{"H100": {model.ID: {Share: 0.5, Min: 1}}}}
+	good.Normalize()
+	require.NoError(t, good.Validate())
+	require.Empty(t, good.Prune(endpoints))
+	require.Len(t, good.Targets["H100"], 1)
+
+	bad := Fleet{Targets: map[string]map[string]Placement{
+		"H100": {
+			model.ID:    {Share: 0.7, Count: 9},
+			"acme/typo": {Share: 0.6},
+		},
+		"A10G":    {model.ID: {Share: 1}},
+		"NOTAGPU": {model.ID: {Share: -1}},
+	}}
+	bad.Normalize()
+	err := bad.Validate()
+	require.Error(t, err)
+	msg := err.Error()
+	for _, want := range []string{
+		"H100: shares sum to 1.30",
+		"count 9 exceeds 8",
+		"NOTAGPU: unknown GPU type",
+		"share -1 must be in [0, 1]",
+	} {
+		require.Contains(t, msg, want)
+	}
+	require.NotContains(t, msg, "acme/typo", "structural validation does not know about deployed endpoints")
+
+	dropped := bad.Prune(endpoints)
+	require.Equal(t, []string{
+		"A10G: zai-org/glm-4.5-air does not declare gpu \"A10G\" in its app",
+		"H100: acme/typo is not a deployed endpoint",
+		"NOTAGPU: zai-org/glm-4.5-air does not declare gpu \"NOTAGPU\" in its app",
+	}, dropped)
+	require.NotContains(t, bad.Targets["H100"], "acme/typo")
+	require.Contains(t, bad.Targets["H100"], model.ID, "valid placements survive")
+	require.Empty(t, bad.Targets["A10G"])
+	require.Empty(t, bad.Targets["NOTAGPU"])
+}
+
+func TestDefaultRoutesUnknownKind(t *testing.T) {
+	require.Nil(t, defaultRoutes(EndpointKind("nope")))
+	require.Equal(t, []EndpointRoute{EndpointRouteChatCompletions, EndpointRouteCompletions}, defaultRoutes(EndpointKindLLM))
+	require.Equal(t, []EndpointRoute{EndpointRouteImageGenerations}, defaultRoutes(EndpointKindImage))
+
+	spec := ManagedEndpointSpec{ID: "acme/x", Kind: EndpointKind("nope"), Entrypoint: []string{"x"}}
+	spec.Normalize()
+	require.Empty(t, spec.Routes)
+	require.Error(t, spec.Validate(ManagedEndpointValidation{}))
+}
+
+func TestReplicaConfigAckedAndServing(t *testing.T) {
+	require.True(t, ReplicaConfig{}.Acked(), "nothing was ever set")
+	require.False(t, ReplicaConfig{Revision: 2, AckedRevision: 1}.Acked())
+	require.True(t, ReplicaConfig{Revision: 2, AckedRevision: 2}.Acked())
+
+	var none *EndpointReplica
+	require.False(t, none.Serving())
+	require.True(t, (&EndpointReplica{Status: ReplicaStatusReady}).Serving())
+	require.False(t, (&EndpointReplica{Status: ReplicaStatusDraining}).Serving())
+	require.True(t, (&EndpointReplica{Status: ReplicaStatusLoading}).Alive())
+	require.False(t, (&EndpointReplica{Status: ReplicaStatusDraining}).Alive())
+	require.True(t, ReplicaStatusEvicted.Terminal())
+	require.False(t, ReplicaStatusEvicting.Terminal())
 }
 
 func TestStubConfigCarriesManagedEndpoint(t *testing.T) {
@@ -168,9 +211,8 @@ func TestStubConfigCarriesManagedEndpoint(t *testing.T) {
 	require.NotNil(t, decoded.ManagedEndpoint)
 	require.Equal(t, "abc123", decoded.ManagedEndpoint.GitSHA)
 	require.Equal(t, spec.ID, decoded.ManagedEndpoint.Endpoint.ID)
-	require.Equal(t, spec.Gpu, decoded.ManagedEndpoint.Endpoint.Gpu)
+	require.Equal(t, spec.Gpu["H100"].EngineArgs, decoded.ManagedEndpoint.Endpoint.Gpu["H100"].EngineArgs)
 
 	require.True(t, StubType(StubTypeManagedEndpointDeployment).IsManagedEndpoint())
-	require.True(t, StubType(StubTypeManagedServiceDeployment).IsManaged())
-	require.False(t, StubType(StubTypePodDeployment).IsManaged())
+	require.False(t, StubType(StubTypePodDeployment).IsManagedEndpoint())
 }

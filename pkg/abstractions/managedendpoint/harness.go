@@ -3,6 +3,7 @@ package managedendpoint
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -15,7 +16,9 @@ import (
 
 const (
 	maxEventsPerPublish = 256
-	watchKeepAlive      = 30 * time.Second
+	// maxEngineMetricsBytes bounds the engine status kept from a heartbeat.
+	maxEngineMetricsBytes = 64 << 10
+	watchKeepAlive        = 30 * time.Second
 )
 
 // updateReplica applies fn to the stored replica under its lock and saves it.
@@ -38,9 +41,6 @@ func (s *Service) updateReplica(ctx context.Context, replicaID string, fn func(*
 }
 
 func (s *Service) Register(ctx context.Context, in *pb.HarnessRegisterRequest) (*pb.HarnessRegisterResponse, error) {
-	if err := s.authorizeHarness(ctx); err != nil {
-		return nil, err
-	}
 	containerID := strings.TrimSpace(in.ContainerId)
 	if containerID == "" {
 		return &pb.HarnessRegisterResponse{Ok: false, ErrMsg: "container_id is required"}, nil
@@ -72,40 +72,29 @@ func (s *Service) Register(ctx context.Context, in *pb.HarnessRegisterRequest) (
 	if err != nil {
 		return nil, rpcError(err)
 	}
-	revision, err := s.effectiveRevision(ctx, replica)
-	if err != nil {
-		return nil, rpcError(err)
-	}
-
 	limits := json.RawMessage("null")
 	if json.Valid([]byte(in.LimitsJson)) {
 		limits = json.RawMessage(in.LimitsJson)
 	}
 	s.emit(types.EventEndpointHarness, types.EventEndpointSchema{
 		EndpointID: replica.EndpointID, Action: "harness.registered", ReplicaID: replica.ID, ContainerID: replica.ContainerID,
-		GPU: replica.GPU, Role: replica.Role, Version: replica.Version,
+		GPU: replica.GPU, Version: replica.Version,
 		Data: map[string]any{"engine": in.Engine, "engine_version": in.EngineVersion, "limits": limits},
 	})
 	return &pb.HarnessRegisterResponse{
 		Ok:                       true,
 		ReplicaId:                replica.ID,
 		EndpointId:               replica.EndpointID,
-		Role:                     replica.Role,
 		Gpu:                      replica.GPU,
-		Locality:                 replica.Locality,
 		HeartbeatIntervalSeconds: uint32(s.config.HeartbeatInterval.Seconds()),
-		Current:                  revisionToProto(revision),
+		Current:                  configToProto(replica.Config),
 	}, nil
 }
 
-// WatchConfig streams config revisions that apply to the replica: its own
-// (while tuning) or its fleet's. A keep-alive re-resolve covers missed
-// pub/sub messages and replicas flipping in or out of tuning.
+// WatchConfig streams the replica's live config whenever an admin sets a new
+// revision. A keep-alive re-read covers missed pub/sub messages.
 func (s *Service) WatchConfig(in *pb.HarnessWatchConfigRequest, stream pb.EndpointHarnessService_WatchConfigServer) error {
 	ctx := stream.Context()
-	if err := s.authorizeHarness(ctx); err != nil {
-		return err
-	}
 	replica, err := s.repo.GetReplica(ctx, in.ReplicaId)
 	if err != nil {
 		return rpcError(err)
@@ -113,28 +102,28 @@ func (s *Service) WatchConfig(in *pb.HarnessWatchConfigRequest, stream pb.Endpoi
 	if err := s.harnessReplica(ctx, replica); err != nil {
 		return err
 	}
-	updates, err := s.repo.SubscribeConfigRevisions(ctx, replica.EndpointID)
+	updates, err := s.repo.SubscribeReplicaConfig(ctx, replica.ID)
 	if err != nil {
 		return rpcError(err)
 	}
 
 	sent := in.AfterRevision
-	send := func(revision *types.EndpointConfigRevision) error {
-		if revision == nil || revision.Revision <= sent {
+	send := func() error {
+		fresh, err := s.repo.GetReplica(ctx, replica.ID)
+		if err != nil || fresh == nil || fresh.Status.Terminal() {
+			return errWatchDone
+		}
+		if fresh.Config.Revision <= sent {
 			return nil
 		}
-		if err := stream.Send(revisionToProto(revision)); err != nil {
+		if err := stream.Send(configToProto(fresh.Config)); err != nil {
 			return err
 		}
-		sent = revision.Revision
+		sent = fresh.Config.Revision
 		return nil
 	}
-	current, err := s.effectiveRevision(ctx, replica)
-	if err != nil {
-		return rpcError(err)
-	}
-	if err := send(current); err != nil {
-		return err
+	if err := send(); err != nil {
+		return ignoreWatchDone(err)
 	}
 
 	keepAlive := time.NewTicker(watchKeepAlive)
@@ -146,53 +135,27 @@ func (s *Service) WatchConfig(in *pb.HarnessWatchConfigRequest, stream pb.Endpoi
 		case <-s.ctx.Done():
 			return nil
 		case <-keepAlive.C:
-			fresh, err := s.repo.GetReplica(ctx, replica.ID)
-			if err != nil || fresh == nil || fresh.Status.Terminal() {
-				return nil
-			}
-			replica = fresh
-			if current, err := s.effectiveRevision(ctx, replica); err == nil {
-				if err := send(current); err != nil {
-					return err
-				}
-			}
-		case revision, ok := <-updates:
+		case _, ok := <-updates:
 			if !ok {
 				return nil
 			}
-			if !revisionTargets(revision, replica) {
-				continue
-			}
-			if replica.Tuning && revision.Scope == types.ConfigScopeTarget {
-				// A replica in tuning ignores fleet revisions while it has its own.
-				if own, err := s.repo.LatestConfigRevision(ctx, replica.EndpointID, types.ConfigScopeReplica, replica.ID); err == nil && own != nil {
-					continue
-				}
-			}
-			if err := send(revision); err != nil {
-				return err
-			}
+		}
+		if err := send(); err != nil {
+			return ignoreWatchDone(err)
 		}
 	}
 }
 
-func revisionTargets(revision *types.EndpointConfigRevision, replica *types.EndpointReplica) bool {
-	if revision == nil || revision.EndpointID != replica.EndpointID {
-		return false
+var errWatchDone = errors.New("watch done")
+
+func ignoreWatchDone(err error) error {
+	if errors.Is(err, errWatchDone) {
+		return nil
 	}
-	switch revision.Scope {
-	case types.ConfigScopeReplica:
-		return revision.ScopeKey == replica.ID
-	case types.ConfigScopeTarget:
-		return revision.ScopeKey == fleetKey(replica.Role, replica.GPU, replica.Version)
-	}
-	return false
+	return err
 }
 
 func (s *Service) AckConfig(ctx context.Context, in *pb.HarnessAckConfigRequest) (*pb.HarnessAckConfigResponse, error) {
-	if err := s.authorizeHarness(ctx); err != nil {
-		return nil, err
-	}
 	replica, err := s.repo.GetReplica(ctx, in.ReplicaId)
 	if err != nil {
 		return nil, rpcError(err)
@@ -200,33 +163,31 @@ func (s *Service) AckConfig(ctx context.Context, in *pb.HarnessAckConfigRequest)
 	if err := s.harnessReplica(ctx, replica); err != nil {
 		return nil, err
 	}
-	ack := &types.ConfigAck{ReplicaID: replica.ID, Revision: in.Revision, Applied: in.Applied, Error: in.Error, At: time.Now()}
-	if json.Valid([]byte(in.EffectiveJson)) {
-		ack.Effective = json.RawMessage(in.EffectiveJson)
-	}
-	if err := s.repo.SaveConfigAck(ctx, ack); err != nil {
+	replica, err = s.updateReplica(ctx, replica.ID, func(r *types.EndpointReplica) {
+		if in.Revision < r.Config.AckedRevision {
+			return
+		}
+		r.Config.AckedRevision, r.Config.Applied, r.Config.Error, r.Config.AckedAt = in.Revision, in.Applied, in.Error, time.Now()
+		r.Config.Effective = nil
+		if json.Valid([]byte(in.EffectiveJson)) {
+			r.Config.Effective = json.RawMessage(in.EffectiveJson)
+		}
+	})
+	if err != nil {
 		return nil, rpcError(err)
 	}
 	action := "config.rejected"
 	if in.Applied {
 		action = "config.applied"
-		if _, err := s.updateReplica(ctx, replica.ID, func(r *types.EndpointReplica) {
-			r.ConfigRevision = max(r.ConfigRevision, in.Revision)
-		}); err != nil {
-			return nil, rpcError(err)
-		}
 	}
 	s.emit(types.EventEndpointConfig, types.EventEndpointSchema{
-		EndpointID: replica.EndpointID, Action: action, ReplicaID: replica.ID, GPU: replica.GPU, Role: replica.Role,
+		EndpointID: replica.EndpointID, Action: action, ReplicaID: replica.ID, GPU: replica.GPU,
 		Revision: in.Revision, Message: in.Error,
 	})
 	return &pb.HarnessAckConfigResponse{Ok: true}, nil
 }
 
 func (s *Service) Heartbeat(ctx context.Context, in *pb.HarnessHeartbeatRequest) (*pb.HarnessHeartbeatResponse, error) {
-	if err := s.authorizeHarness(ctx); err != nil {
-		return nil, err
-	}
 	current, err := s.repo.GetReplica(ctx, in.ReplicaId)
 	if err != nil {
 		return nil, rpcError(err)
@@ -260,7 +221,12 @@ func (s *Service) applyHeartbeat(replica *types.EndpointReplica, in *pb.HarnessH
 	if in.Capacity != nil {
 		replica.Capacity = capacityFromProto(in.Capacity)
 	}
-	replica.ConfigRevision = max(replica.ConfigRevision, in.AppliedRevision)
+	if in.AppliedRevision > replica.Config.AckedRevision {
+		replica.Config.AckedRevision, replica.Config.Applied, replica.Config.Error = in.AppliedRevision, true, ""
+	}
+	if len(in.MetricsJson) > 0 && len(in.MetricsJson) <= maxEngineMetricsBytes && json.Valid([]byte(in.MetricsJson)) {
+		replica.EngineMetrics = json.RawMessage(in.MetricsJson)
+	}
 	if !replica.Alive() {
 		return
 	}
@@ -273,7 +239,9 @@ func (s *Service) applyHeartbeat(replica *types.EndpointReplica, in *pb.HarnessH
 		}
 		replica.Status = types.ReplicaStatusReady
 	case types.ReplicaStatusLoading:
-		if replica.Status == types.ReplicaStatusScheduling {
+		// A ready engine that reports loading (model/config reload) leaves the
+		// serving set until it reports ready again.
+		if replica.Status == types.ReplicaStatusScheduling || replica.Status == types.ReplicaStatusReady {
 			replica.Status = types.ReplicaStatusLoading
 		}
 	case types.ReplicaStatusDraining:
@@ -282,9 +250,6 @@ func (s *Service) applyHeartbeat(replica *types.EndpointReplica, in *pb.HarnessH
 }
 
 func (s *Service) PublishEvents(ctx context.Context, in *pb.HarnessPublishEventsRequest) (*pb.HarnessPublishEventsResponse, error) {
-	if err := s.authorizeHarness(ctx); err != nil {
-		return nil, err
-	}
 	replica, err := s.repo.GetReplica(ctx, in.ReplicaId)
 	if err != nil {
 		return nil, rpcError(err)
@@ -305,8 +270,8 @@ func (s *Service) PublishEvents(ctx context.Context, in *pb.HarnessPublishEvents
 		}
 		s.emit(types.EventEndpointHarness, types.EventEndpointSchema{
 			EndpointID: replica.EndpointID, Action: "harness." + strings.TrimPrefix(event.Name, "harness."),
-			ReplicaID: replica.ID, ContainerID: replica.ContainerID, GPU: replica.GPU, Role: replica.Role,
-			Version: replica.Version, Revision: replica.ConfigRevision, Data: data, Timestamp: at,
+			ReplicaID: replica.ID, ContainerID: replica.ContainerID, GPU: replica.GPU,
+			Version: replica.Version, Revision: replica.Config.AckedRevision, Data: data, Timestamp: at,
 		})
 		accepted++
 	}

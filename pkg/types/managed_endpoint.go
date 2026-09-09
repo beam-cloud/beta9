@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"math/big"
 	"regexp"
 	"slices"
@@ -13,22 +12,19 @@ import (
 	"time"
 )
 
-// Managed endpoints are inference endpoints owned by the platform (not by a
-// user workspace). Their specs live in a git repository as beta9 apps
-// (ManagedEndpoint / ManagedService in the SDK), are deployed as stubs in the
-// system workspace, filled opportunistically onto spare GPU capacity and served
-// through the OpenRouter-compatible /v1 route.
+// Managed endpoints are inference endpoints owned by the platform, not by a
+// user workspace. A git repository is the source of truth: each app.py there
+// declares one endpoint (ManagedEndpointSpec, deployed as a stub in the admin
+// workspace) and fleet.yaml declares how spare GPU capacity is divided between
+// endpoints (Fleet). The controller fills replicas accordingly and the /v1
+// route serves them with an OpenAI/OpenRouter-compatible API.
 
 const (
 	StubTypeManagedEndpoint           string = "managed_endpoint"
 	StubTypeManagedEndpointDeployment string = "managed_endpoint/deployment"
-	StubTypeManagedService            string = "managed_service"
-	StubTypeManagedServiceDeployment  string = "managed_service/deployment"
 )
 
 func (t StubType) IsManagedEndpoint() bool { return t.Kind() == StubTypeManagedEndpoint }
-func (t StubType) IsManagedService() bool  { return t.Kind() == StubTypeManagedService }
-func (t StubType) IsManaged() bool         { return t.IsManagedEndpoint() || t.IsManagedService() }
 
 type EndpointKind string
 
@@ -62,48 +58,33 @@ var kindRoutes = map[EndpointKind][]EndpointRoute{
 }
 
 func defaultRoutes(kind EndpointKind) []EndpointRoute {
+	routes := kindRoutes[kind]
+	n := 1
 	if kind == EndpointKindLLM {
-		return kindRoutes[kind][:2]
+		n = 2
 	}
-	return kindRoutes[kind][:1]
+	return routes[:min(n, len(routes))] // unknown kinds get none; Validate rejects them
 }
 
-// GpuTarget is one hardware shape an endpoint may run on, with the tuned
-// engine args (restart-class) and harness knobs (live) for that shape.
-type GpuTarget struct {
-	Type        string         `json:"type"`
-	Count       uint32         `json:"count"`
-	MinReplicas uint32         `json:"min_replicas"`
-	MaxReplicas uint32         `json:"max_replicas"`
-	Share       float64        `json:"share"`
-	EngineArgs  []string       `json:"engine_args,omitempty"`
-	Harness     map[string]any `json:"harness,omitempty"`
-}
+// CPUInventoryKey is the GPU key for CPU-only placement.
+const CPUInventoryKey = "cpu"
 
-// IsCPU reports whether the target describes CPU-only placement. A GPU type
-// with an omitted count is still a GPU target; Normalize defaults it to one.
-func (t GpuTarget) IsCPU() bool {
-	return strings.TrimSpace(t.Type) == "" || NormalizeGPUType(t.Type) == NO_GPU
-}
-
-// Key uniquely identifies a target within an endpoint ("H100x2", "cpu").
-func (t GpuTarget) Key() string {
-	if t.IsCPU() {
-		return "cpu"
+// GPUKey canonicalizes a GPU type name into the key used by specs, fleet.yaml
+// and inventory: "h100" -> "H100", "" / "cpu" -> "cpu".
+func GPUKey(gpu string) string {
+	gpu = strings.TrimSpace(gpu)
+	if gpu == "" || strings.EqualFold(gpu, CPUInventoryKey) || NormalizeGPUType(gpu) == NO_GPU {
+		return CPUInventoryKey
 	}
-	return fmt.Sprintf("%sx%d", NormalizeGPUType(t.Type), t.Count)
+	return string(NormalizeGPUType(gpu))
 }
 
-// CPUTarget is the implicit target for endpoints declaring no GPUs.
-func CPUTarget() GpuTarget { return GpuTarget{Type: string(NO_GPU), MaxReplicas: 1} }
-
-// RoleTarget pairs a replica role with a GPU target.
-type RoleTarget struct {
-	Role   string
-	Target GpuTarget
+// GpuSpec is how an endpoint runs on one GPU type: engine args appended to the
+// entrypoint (restart-class settings) and the harness seed (live settings).
+type GpuSpec struct {
+	EngineArgs []string       `json:"engine_args,omitempty"`
+	Harness    map[string]any `json:"harness,omitempty"`
 }
-
-func (rt RoleTarget) Key() string { return rt.Role + ":" + rt.Target.Key() }
 
 // Catalog is the public listing metadata for an endpoint (OpenRouter shape).
 type Catalog struct {
@@ -161,67 +142,32 @@ func PricingRat(value string) (*big.Rat, error) {
 	return rat, nil
 }
 
-// ReplicaPolicy controls how replicas of an endpoint behave under preemption.
-type ReplicaPolicy struct {
-	Evictable    bool    `json:"evictable"`
-	DrainSeconds uint32  `json:"drain_seconds"`
-	SpareShare   float64 `json:"spare_share"`
-}
-
-// KVCacheSpec opts an endpoint into a shared KV store within a locality.
-type KVCacheSpec struct {
-	Connector   string         `json:"connector,omitempty"`
-	Service     string         `json:"service,omitempty"`
-	MinReplicas uint32         `json:"min_replicas,omitempty"`
-	Extra       map[string]any `json:"extra,omitempty"`
-}
-
-const (
-	ReplicaRoleServe   = "serve"
-	ReplicaRolePrefill = "prefill"
-	ReplicaRoleDecode  = "decode"
-)
-
 // ManagedEndpointSpec is the repo contract: everything an endpoint app declares.
+// Where and how many replicas run is not part of it; see Fleet.
 type ManagedEndpointSpec struct {
-	ID      string          `json:"id"`
-	Kind    EndpointKind    `json:"kind"`
-	Engine  string          `json:"engine,omitempty"`
-	Port    uint32          `json:"port"`
-	Health  string          `json:"health,omitempty"`
-	Metrics string          `json:"metrics,omitempty"`
-	Gpu     []GpuTarget     `json:"gpu"`
-	Routes  []EndpointRoute `json:"routes,omitempty"`
-	Pricing Pricing         `json:"pricing"`
-	Catalog Catalog         `json:"catalog"`
-	Policy  ReplicaPolicy   `json:"policy"`
+	ID      string       `json:"id"`
+	Kind    EndpointKind `json:"kind"`
+	Engine  string       `json:"engine,omitempty"`
+	Port    uint32       `json:"port"`
+	Health  string       `json:"health,omitempty"`
+	Metrics string       `json:"metrics,omitempty"`
+	// Gpu maps a GPU key ("H100", "cpu") to how the engine runs there. An
+	// endpoint may only be placed on GPU types it lists.
+	Gpu     map[string]GpuSpec `json:"gpu"`
+	Routes  []EndpointRoute    `json:"routes,omitempty"`
+	Pricing Pricing            `json:"pricing"`
+	Catalog Catalog            `json:"catalog"`
 	// Harness enables the in-engine harness (live knobs over EndpointHarnessService).
-	Harness bool         `json:"harness"`
-	KVCache *KVCacheSpec `json:"kv_cache,omitempty"`
-	// Topology maps prefill/decode roles to the GPU targets each may run on.
-	// Empty means a monolithic endpoint served from Gpu.
-	Topology   map[string][]GpuTarget `json:"topology,omitempty"`
-	Services   []string               `json:"services,omitempty"`
-	Locality   []string               `json:"locality,omitempty"`
-	Entrypoint []string               `json:"entrypoint,omitempty"`
-}
-
-// ManagedServiceSpec is a protected shared-infrastructure service (e.g. a
-// Mooncake master) with the same placement shape but no public surface.
-type ManagedServiceSpec struct {
-	Name        string      `json:"name"`
-	Port        uint32      `json:"port"`
-	Health      string      `json:"health,omitempty"`
-	Gpu         []GpuTarget `json:"gpu"`
-	Replicas    uint32      `json:"replicas"`
-	PerLocality bool        `json:"per_locality"`
-	Entrypoint  []string    `json:"entrypoint,omitempty"`
+	Harness bool `json:"harness"`
+	// DrainSeconds is the grace an evicted or retired replica gets to finish
+	// in-flight requests before the worker kills it.
+	DrainSeconds uint32   `json:"drain_seconds"`
+	Entrypoint   []string `json:"entrypoint,omitempty"`
 }
 
 // ManagedEndpointStubConfig is embedded in StubConfigV1 for managed stubs.
 type ManagedEndpointStubConfig struct {
 	Endpoint *ManagedEndpointSpec `json:"endpoint,omitempty"`
-	Service  *ManagedServiceSpec  `json:"service,omitempty"`
 	// GitSHA is the source revision the deployer built this stub from.
 	GitSHA string `json:"git_sha,omitempty"`
 }
@@ -231,19 +177,11 @@ type ManagedEndpointStubConfig struct {
 type ManagedEndpointValidation struct {
 	AllowedEngines []string
 	AllowedKinds   []EndpointKind
-	// KnownServices resolves spec.Services references; nil skips the check.
-	KnownServices map[string]struct{}
 }
 
-var (
-	endpointIDPattern  = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)?$`)
-	serviceNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
-)
+var endpointIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)?$`)
 
 func cleanPath(p string) string { return "/" + strings.TrimPrefix(strings.TrimSpace(p), "/") }
-
-// Disaggregated reports whether the endpoint splits prefill and decode.
-func (s *ManagedEndpointSpec) Disaggregated() bool { return len(s.Topology) > 0 }
 
 // Normalize fills defaults so downstream code can rely on a canonical spec.
 func (s *ManagedEndpointSpec) Normalize() {
@@ -265,47 +203,19 @@ func (s *ManagedEndpointSpec) Normalize() {
 	for i := range s.Routes {
 		s.Routes[i] = EndpointRoute(strings.Trim(strings.TrimSpace(string(s.Routes[i])), "/"))
 	}
-	if s.Policy.DrainSeconds == 0 {
-		s.Policy.DrainSeconds = 5
+	if s.DrainSeconds == 0 {
+		s.DrainSeconds = 5
 	}
-	if s.Policy.SpareShare <= 0 {
-		s.Policy.SpareShare = 0.2
+	gpu := make(map[string]GpuSpec, len(s.Gpu))
+	for key, spec := range s.Gpu {
+		gpu[GPUKey(key)] = spec
 	}
-	if len(s.Gpu) == 0 {
-		s.Gpu = []GpuTarget{CPUTarget()}
+	if len(gpu) == 0 {
+		gpu[CPUInventoryKey] = GpuSpec{}
 	}
-	normalizeTargets(s.Gpu, s.Policy.SpareShare)
-	for role := range s.Topology {
-		normalizeTargets(s.Topology[role], s.Policy.SpareShare)
-	}
-	if s.KVCache != nil {
-		if s.KVCache.MinReplicas == 0 {
-			s.KVCache.MinReplicas = 2
-		}
-		if s.KVCache.Service != "" && !slices.Contains(s.Services, s.KVCache.Service) {
-			s.Services = append(s.Services, s.KVCache.Service)
-		}
-	}
+	s.Gpu = gpu
 	if s.Catalog.Name == "" {
 		s.Catalog.Name = s.ID
-	}
-}
-
-func normalizeTargets(targets []GpuTarget, spareShare float64) {
-	for i := range targets {
-		t := &targets[i]
-		if t.IsCPU() {
-			t.Type, t.Count = string(NO_GPU), 0
-		} else {
-			t.Type = string(NormalizeGPUType(t.Type))
-			t.Count = max(t.Count, 1)
-		}
-		if t.MaxReplicas == 0 {
-			t.MaxReplicas = max(t.MinReplicas, 1)
-		}
-		if t.Share <= 0 {
-			t.Share = spareShare
-		}
 	}
 }
 
@@ -344,87 +254,12 @@ func (s *ManagedEndpointSpec) Validate(policy ManagedEndpointValidation) error {
 	if s.Kind == EndpointKindImage && s.Pricing.Image == "" && s.Pricing.Request == "" && !s.Catalog.Free {
 		fail("image endpoints must price per image or per request, or be marked free")
 	}
-	if s.Policy.SpareShare <= 0 || s.Policy.SpareShare > 1 {
-		fail("policy.spare_share %v must be in (0, 1]", s.Policy.SpareShare)
-	}
-	errs = append(errs, validateTargets("gpu", s.Gpu)...)
-	if s.Disaggregated() {
-		for _, role := range []string{ReplicaRolePrefill, ReplicaRoleDecode} {
-			if len(s.Topology[role]) == 0 {
-				fail("topology.%s is required for disaggregated mode", role)
-			}
-		}
-		for role, targets := range s.Topology {
-			if role != ReplicaRolePrefill && role != ReplicaRoleDecode {
-				fail("topology.%s: unknown role", role)
-			}
-			errs = append(errs, validateTargets("topology."+role, targets)...)
-		}
-		if s.KVCache == nil {
-			fail("disaggregated topology requires kv_cache")
-		}
-	}
-	if s.KVCache != nil && s.KVCache.Connector == "" {
-		fail("kv_cache.connector is required")
-	}
-	for _, service := range s.Services {
-		if _, ok := policy.KnownServices[service]; policy.KnownServices != nil && !ok {
-			fail("service %q is not deployed", service)
+	for key := range s.Gpu {
+		if key != CPUInventoryKey && !KnownGPUType(GpuType(key)) {
+			fail("gpu %q is not a known GPU type", key)
 		}
 	}
 	return errors.Join(errs...)
-}
-
-func validateTargets(field string, targets []GpuTarget) []error {
-	var errs []error
-	seen := map[string]bool{}
-	for i, t := range targets {
-		fail := func(format string, args ...any) {
-			errs = append(errs, fmt.Errorf("%s[%d]: %s", field, i, fmt.Sprintf(format, args...)))
-		}
-		switch {
-		case GpuType(t.Type) == GPU_ANY:
-			// Placement indexes inventory by concrete GPU type; "any" never fills.
-			fail("gpu type %q is not allowed; list concrete types as alternatives", t.Type)
-		case !t.IsCPU() && !KnownGPUType(GpuType(t.Type)):
-			fail("unknown gpu type %q", t.Type)
-		}
-		if t.Count > 8 {
-			fail("count %d exceeds 8", t.Count)
-		}
-		if t.MinReplicas > t.MaxReplicas {
-			fail("min_replicas %d > max_replicas %d", t.MinReplicas, t.MaxReplicas)
-		}
-		if t.Share <= 0 || t.Share > 1 {
-			fail("share %v must be in (0, 1]", t.Share)
-		}
-		if seen[t.Key()] {
-			fail("duplicate target %s", t.Key())
-		}
-		seen[t.Key()] = true
-	}
-	return errs
-}
-
-// Targets returns every (role, target) placement for the endpoint, roles in
-// sorted order.
-func (s *ManagedEndpointSpec) Targets() []RoleTarget {
-	if !s.Disaggregated() {
-		return roleTargets(ReplicaRoleServe, s.Gpu)
-	}
-	var out []RoleTarget
-	for _, role := range slices.Sorted(maps.Keys(s.Topology)) {
-		out = append(out, roleTargets(role, s.Topology[role])...)
-	}
-	return out
-}
-
-func roleTargets(role string, targets []GpuTarget) []RoleTarget {
-	out := make([]RoleTarget, 0, len(targets))
-	for _, t := range targets {
-		out = append(out, RoleTarget{Role: role, Target: t})
-	}
-	return out
 }
 
 // ServesRoute reports whether the endpoint declares a route.
@@ -432,117 +267,151 @@ func (s *ManagedEndpointSpec) ServesRoute(route EndpointRoute) bool {
 	return slices.Contains(s.Routes, route)
 }
 
-// Normalize fills service defaults. Every target runs exactly Replicas
-// protected replicas.
-func (s *ManagedServiceSpec) Normalize() {
-	s.Name = strings.ToLower(strings.TrimSpace(s.Name))
-	if s.Port == 0 {
-		s.Port = 8000
-	}
-	if s.Health != "" {
-		s.Health = cleanPath(s.Health)
-	}
-	s.Replicas = max(s.Replicas, 1)
-	if len(s.Gpu) == 0 {
-		s.Gpu = []GpuTarget{CPUTarget()}
-	}
-	normalizeTargets(s.Gpu, 1)
-	for i := range s.Gpu {
-		s.Gpu[i].Share, s.Gpu[i].MinReplicas, s.Gpu[i].MaxReplicas = 1, s.Replicas, s.Replicas
-	}
+// --- Fleet ---------------------------------------------------------------------
+
+// Placement is one fleet.yaml entry: how much of a GPU type one endpoint gets.
+type Placement struct {
+	// Share is the fraction of the GPU type's spare capacity the endpoint may
+	// fill opportunistically. Zero means only Min replicas run.
+	Share float64 `json:"share"`
+	// Min replicas are protected: they may provision workers and are never
+	// evicted for serverless workloads.
+	Min uint32 `json:"min"`
+	// Max caps replicas; zero means no cap beyond the share.
+	Max uint32 `json:"max"`
+	// Count is GPUs per replica (tensor parallelism); ignored for cpu.
+	Count uint32 `json:"count"`
 }
 
-// Validate checks a service spec. Call Normalize first.
-func (s *ManagedServiceSpec) Validate() error {
-	var errs []error
-	if !serviceNamePattern.MatchString(s.Name) {
-		errs = append(errs, fmt.Errorf("service name %q must be lowercase [a-z0-9-]", s.Name))
-	}
-	if len(s.Entrypoint) == 0 {
-		errs = append(errs, errors.New("entrypoint is required"))
-	}
-	if s.Port == 0 || s.Port > 65535 {
-		errs = append(errs, fmt.Errorf("port %d is invalid", s.Port))
-	}
-	return errors.Join(append(errs, validateTargets("gpu", s.Gpu)...)...)
+// Fleet is fleet.yaml: GPU key -> endpoint id -> placement. It is the only
+// place that decides where endpoints run and how spare capacity is split.
+type Fleet struct {
+	GitSHA    string                          `json:"git_sha,omitempty"`
+	Targets   map[string]map[string]Placement `json:"targets"`
+	UpdatedAt time.Time                       `json:"updated_at"`
 }
+
+// Normalize canonicalizes GPU keys and endpoint ids and fills defaults.
+func (f *Fleet) Normalize() {
+	targets := make(map[string]map[string]Placement, len(f.Targets))
+	for gpu, entries := range f.Targets {
+		key := GPUKey(gpu)
+		out := targets[key]
+		if out == nil {
+			out = map[string]Placement{}
+			targets[key] = out
+		}
+		for id, p := range entries {
+			if key == CPUInventoryKey {
+				p.Count = 0
+			} else {
+				p.Count = max(p.Count, 1)
+			}
+			if p.Max != 0 {
+				p.Max = max(p.Max, p.Min)
+			}
+			out[strings.ToLower(strings.TrimSpace(id))] = p
+		}
+	}
+	f.Targets = targets
+}
+
+// Validate checks placements against the deployed endpoints. Call Normalize
+// first. Unknown endpoints and GPU types an endpoint does not support are
+// errors so a typo in fleet.yaml cannot silently leave a model unplaced.
+func (f *Fleet) Validate() error {
+	var errs []error
+	for gpu, entries := range f.Targets {
+		if gpu != CPUInventoryKey && !KnownGPUType(GpuType(gpu)) {
+			errs = append(errs, fmt.Errorf("%s: unknown GPU type", gpu))
+		}
+		var shares float64
+		for id, p := range entries {
+			if p.Share < 0 || p.Share > 1 {
+				errs = append(errs, fmt.Errorf("%s: %s share %v must be in [0, 1]", gpu, id, p.Share))
+			}
+			if p.Count > 8 {
+				errs = append(errs, fmt.Errorf("%s: %s count %d exceeds 8", gpu, id, p.Count))
+			}
+			shares += p.Share
+		}
+		if shares > 1+1e-9 {
+			errs = append(errs, fmt.Errorf("%s: shares sum to %.2f, must not exceed 1", gpu, shares))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// Prune drops placements for endpoints that are not deployed or do not declare
+// the GPU type in their app, so one broken deploy never blocks the rest of the
+// fleet. It returns one message per dropped placement.
+func (f *Fleet) Prune(endpoints map[string]*ManagedEndpointSpec) []string {
+	var dropped []string
+	for gpu, entries := range f.Targets {
+		for id := range entries {
+			spec, ok := endpoints[id]
+			switch {
+			case !ok:
+				dropped = append(dropped, fmt.Sprintf("%s: %s is not a deployed endpoint", gpu, id))
+			case spec != nil:
+				if _, ok := spec.Gpu[gpu]; ok {
+					continue
+				}
+				dropped = append(dropped, fmt.Sprintf("%s: %s does not declare gpu %q in its app", gpu, id, gpu))
+			default:
+				continue
+			}
+			delete(entries, id)
+		}
+	}
+	slices.Sort(dropped)
+	return dropped
+}
+
+// Placements returns the (gpu, placement) pairs for one endpoint, GPU keys sorted.
+func (f *Fleet) Placements(endpointID string) []FleetTarget {
+	var out []FleetTarget
+	for gpu, entries := range f.Targets {
+		if p, ok := entries[endpointID]; ok {
+			out = append(out, FleetTarget{GPU: gpu, Placement: p})
+		}
+	}
+	slices.SortFunc(out, func(a, b FleetTarget) int { return strings.Compare(a.GPU, b.GPU) })
+	return out
+}
+
+// FleetTarget is one endpoint's placement on one GPU type.
+type FleetTarget struct {
+	GPU string
+	Placement
+}
+
+func (t FleetTarget) IsCPU() bool { return t.GPU == CPUInventoryKey }
 
 // --- Registry ------------------------------------------------------------------
 
 type EndpointStatus string
 
 const (
-	EndpointStatusActive   EndpointStatus = "active"
-	EndpointStatusDisabled EndpointStatus = "disabled"
-	EndpointStatusRetired  EndpointStatus = "retired"
+	EndpointStatusActive  EndpointStatus = "active"
+	EndpointStatusRetired EndpointStatus = "retired"
 )
 
-// ManagedRecord is the registry bookkeeping shared by deployed endpoints and
-// services: which stub serves the current version and whether it is live.
-type ManagedRecord struct {
-	StubID    string         `json:"stub_id"`
-	Version   uint           `json:"version"`
-	GitSHA    string         `json:"git_sha,omitempty"`
-	Status    EndpointStatus `json:"status"`
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
-}
-
-// Enabled reports whether the record may be filled and routed to.
-func (r ManagedRecord) Enabled() bool { return r.Status == EndpointStatusActive }
-
-// ManagedEndpoint is the registry record for a deployed endpoint.
+// ManagedEndpoint is the registry record for a deployed endpoint: the spec of
+// its current version and which stub serves it. A new deploy bumps Version;
+// the controller replaces replicas of older versions.
 type ManagedEndpoint struct {
-	Spec ManagedEndpointSpec `json:"spec"`
-	ManagedRecord
+	Spec      ManagedEndpointSpec `json:"spec"`
+	StubID    string              `json:"stub_id"`
+	Version   uint                `json:"version"`
+	GitSHA    string              `json:"git_sha,omitempty"`
+	Status    EndpointStatus      `json:"status"`
+	CreatedAt time.Time           `json:"created_at"`
+	UpdatedAt time.Time           `json:"updated_at"`
 }
 
-// ManagedService is the registry record for a deployed shared service.
-type ManagedService struct {
-	Spec ManagedServiceSpec `json:"spec"`
-	ManagedRecord
-}
-
-type EndpointVersionState string
-
-const (
-	VersionStateCanary     EndpointVersionState = "canary"
-	VersionStateActive     EndpointVersionState = "active"
-	VersionStateRetired    EndpointVersionState = "retired"
-	VersionStateRolledBack EndpointVersionState = "rolled_back"
-)
-
-// EndpointVersion tracks one deployed stub version of an endpoint.
-type EndpointVersion struct {
-	EndpointID string               `json:"endpoint_id"`
-	Version    uint                 `json:"version"`
-	StubID     string               `json:"stub_id"`
-	GitSHA     string               `json:"git_sha,omitempty"`
-	State      EndpointVersionState `json:"state"`
-	CreatedAt  time.Time            `json:"created_at"`
-	UpdatedAt  time.Time            `json:"updated_at"`
-}
-
-type RolloutPhase string
-
-const (
-	RolloutPhaseIdle       RolloutPhase = "idle"
-	RolloutPhaseBaking     RolloutPhase = "baking"
-	RolloutPhaseRolledBack RolloutPhase = "rolled_back"
-)
-
-// RolloutState describes the active canary/promotion for an endpoint.
-type RolloutState struct {
-	EndpointID     string       `json:"endpoint_id"`
-	ActiveVersion  uint         `json:"active_version"`
-	CanaryVersion  uint         `json:"canary_version,omitempty"`
-	PinnedVersion  uint         `json:"pinned_version,omitempty"`
-	Phase          RolloutPhase `json:"phase"`
-	BakeStartedAt  time.Time    `json:"bake_started_at,omitempty"`
-	LastDecision   string       `json:"last_decision,omitempty"`
-	LastDecisionAt time.Time    `json:"last_decision_at,omitempty"`
-	UpdatedAt      time.Time    `json:"updated_at"`
-}
+// Enabled reports whether the endpoint may be filled and routed to.
+func (e *ManagedEndpoint) Enabled() bool { return e.Status == EndpointStatusActive }
 
 // --- Replicas ------------------------------------------------------------------
 
@@ -576,19 +445,36 @@ type ReplicaCapacity struct {
 	TTFTMs              int64 `json:"ttft_ms"`
 	TPOTMs              int64 `json:"tpot_ms"`
 	PrefixCacheHitMilli int64 `json:"prefix_cache_hit_milli"`
-	// KVTransfer is the connector's own transfer stats (opaque JSON).
-	KVTransfer json.RawMessage `json:"kv_transfer,omitempty"`
 }
 
-// EndpointReplica is one running container serving an endpoint role/target.
+// ReplicaConfig is the live harness config of one replica: what an admin last
+// asked for (Revision/Config) and what the engine reported back. Live config
+// dies with the replica; durable settings belong in the repo.
+type ReplicaConfig struct {
+	Revision uint64          `json:"revision"`
+	Config   json.RawMessage `json:"config,omitempty"`
+	Author   string          `json:"author,omitempty"`
+	SetAt    time.Time       `json:"set_at,omitempty"`
+	// AckedRevision, Applied, Error and Effective describe the engine's
+	// answer to the most recent revision it processed.
+	AckedRevision uint64          `json:"acked_revision"`
+	Applied       bool            `json:"applied"`
+	Error         string          `json:"error,omitempty"`
+	Effective     json.RawMessage `json:"effective,omitempty"`
+	AckedAt       time.Time       `json:"acked_at,omitempty"`
+}
+
+// Acked reports whether the engine has answered the current revision.
+func (c ReplicaConfig) Acked() bool { return c.AckedRevision >= c.Revision }
+
+// EndpointReplica is one running container serving an endpoint on one GPU type.
 type EndpointReplica struct {
 	ID          string `json:"id"`
 	EndpointID  string `json:"endpoint_id"`
 	Version     uint   `json:"version"`
-	Role        string `json:"role"`
 	GPU         string `json:"gpu"`
 	GPUCount    uint32 `json:"gpu_count"`
-	Locality    string `json:"locality"`
+	Locality    string `json:"locality,omitempty"`
 	PoolName    string `json:"pool_name,omitempty"`
 	ContainerID string `json:"container_id"`
 	WorkerID    string `json:"worker_id,omitempty"`
@@ -600,73 +486,32 @@ type EndpointReplica struct {
 	Address             string        `json:"address,omitempty"`
 	Status              ReplicaStatus `json:"status"`
 	StatusReason        string        `json:"status_reason,omitempty"`
-	// Protected replicas satisfy min_replicas: they may trigger provisioning
-	// and are never evictable. Everything else is opportunistic.
+	// Protected replicas satisfy the fleet's min: they may trigger
+	// provisioning and are never evictable. Everything else is opportunistic.
 	Protected bool `json:"protected"`
-	// Tuning replicas are dedicated to live tuning and take no public traffic.
-	Tuning bool `json:"tuning"`
 	// SecretHash is the SHA-256 of the per-replica secret handed to the
 	// container as BEAM_REPLICA_SECRET; harness RPCs must present it.
 	SecretHash     string          `json:"secret_hash,omitempty"`
 	HarnessEnabled bool            `json:"harness_enabled"`
-	ConfigRevision uint64          `json:"config_revision"`
+	Config         ReplicaConfig   `json:"config"`
 	Capacity       ReplicaCapacity `json:"capacity"`
 	Capabilities   json.RawMessage `json:"capabilities,omitempty"`
-	StartedAt      time.Time       `json:"started_at"`
-	ReadyAt        time.Time       `json:"ready_at,omitempty"`
-	LastHeartbeat  time.Time       `json:"last_heartbeat"`
-	EndedAt        time.Time       `json:"ended_at,omitempty"`
-	DrainDeadline  time.Time       `json:"drain_deadline,omitempty"`
+	// EngineMetrics is the engine status the harness attached to its last heartbeat.
+	EngineMetrics json.RawMessage `json:"engine_metrics,omitempty"`
+	StartedAt     time.Time       `json:"started_at"`
+	ReadyAt       time.Time       `json:"ready_at,omitempty"`
+	LastHeartbeat time.Time       `json:"last_heartbeat"`
+	EndedAt       time.Time       `json:"ended_at,omitempty"`
+	DrainDeadline time.Time       `json:"drain_deadline,omitempty"`
 }
 
 // Serving reports whether the replica may receive traffic.
-func (r *EndpointReplica) Serving() bool {
-	return r != nil && r.Status == ReplicaStatusReady && !r.Tuning
-}
+func (r *EndpointReplica) Serving() bool { return r != nil && r.Status == ReplicaStatusReady }
 
 // Alive reports whether the replica is scheduling, loading or ready, i.e.
 // counts toward a target's live set (draining and evicting replicas do not).
 func (r *EndpointReplica) Alive() bool {
 	return r.Status == ReplicaStatusScheduling || r.Status == ReplicaStatusLoading || r.Status == ReplicaStatusReady
-}
-
-// --- Live config -----------------------------------------------------------------
-
-type ConfigRevisionScope string
-
-const (
-	ConfigScopeTarget  ConfigRevisionScope = "target"
-	ConfigScopeReplica ConfigRevisionScope = "replica"
-)
-
-type ConfigRevisionSource string
-
-const (
-	ConfigSourceGit  ConfigRevisionSource = "git"
-	ConfigSourceLive ConfigRevisionSource = "live"
-)
-
-// EndpointConfigRevision is one version of the live harness config for a
-// GPU target (fleet) or a single replica (tuning).
-type EndpointConfigRevision struct {
-	Revision   uint64               `json:"revision"`
-	EndpointID string               `json:"endpoint_id"`
-	Scope      ConfigRevisionScope  `json:"scope"`
-	ScopeKey   string               `json:"scope_key"`
-	Config     map[string]any       `json:"config"`
-	Author     string               `json:"author,omitempty"`
-	Source     ConfigRevisionSource `json:"source"`
-	CreatedAt  time.Time            `json:"created_at"`
-}
-
-// ConfigAck is a replica's report on applying a config revision.
-type ConfigAck struct {
-	ReplicaID string          `json:"replica_id"`
-	Revision  uint64          `json:"revision"`
-	Applied   bool            `json:"applied"`
-	Error     string          `json:"error,omitempty"`
-	Effective json.RawMessage `json:"effective,omitempty"`
-	At        time.Time       `json:"at"`
 }
 
 // --- GitOps ------------------------------------------------------------------------
@@ -683,7 +528,6 @@ const (
 type GitOpsEndpointState struct {
 	Path       string       `json:"path"`
 	ID         string       `json:"id"`
-	Kind       string       `json:"kind"` // "endpoint" | "service"
 	AppliedSHA string       `json:"applied_sha,omitempty"`
 	Status     GitOpsStatus `json:"status"`
 	Error      string       `json:"error,omitempty"`
@@ -692,14 +536,24 @@ type GitOpsEndpointState struct {
 	UpdatedAt  time.Time    `json:"updated_at"`
 }
 
+// ManagedEndpointSchema is bumped whenever the JSON shape of the registry
+// records above changes incompatibly. The GitOps reconciler redeploys every
+// stub when the stamp on its state differs, rewriting stale records.
+const ManagedEndpointSchema = 3
+
 // GitOpsState is the reconciler's view of the endpoints repo.
 type GitOpsState struct {
-	RepoURL     string                         `json:"repo_url"`
-	Ref         string                         `json:"ref"`
-	LastSHA     string                         `json:"last_sha,omitempty"`
-	TargetSHA   string                         `json:"target_sha,omitempty"`
-	LastRunAt   time.Time                      `json:"last_run_at,omitempty"`
-	LastError   string                         `json:"last_error,omitempty"`
+	// Schema is the ManagedEndpointSchema the last full deploy wrote records with.
+	Schema    int       `json:"schema,omitempty"`
+	RepoURL   string    `json:"repo_url"`
+	Ref       string    `json:"ref"`
+	LastSHA   string    `json:"last_sha,omitempty"`
+	TargetSHA string    `json:"target_sha,omitempty"`
+	LastRunAt time.Time `json:"last_run_at,omitempty"`
+	LastError string    `json:"last_error,omitempty"`
+	// FleetError is why fleet.yaml was not applied, or which placements were
+	// skipped ("skipped: ...") when it was.
+	FleetError  string                         `json:"fleet_error,omitempty"`
 	Running     bool                           `json:"running"`
 	PerEndpoint map[string]GitOpsEndpointState `json:"per_endpoint"`
 	UpdatedAt   time.Time                      `json:"updated_at"`
@@ -713,12 +567,15 @@ type GitOpsState struct {
 }
 
 // GitOpsReport is what the deployer posts back after applying one SHA: one
-// result per app directory found in the repo.
+// result per app directory found in the repo plus the parsed fleet.yaml.
 type GitOpsReport struct {
 	RunID   string               `json:"run_id"`
 	SHA     string               `json:"sha"`
 	Error   string               `json:"error,omitempty"`
 	Results []GitOpsDeployResult `json:"results"`
+	// FleetYAML is the raw fleet.yaml ({gpu: {endpoint: placement}}); empty
+	// when the repo has none (nothing is placed until it does).
+	FleetYAML string `json:"fleet_yaml,omitempty"`
 }
 
 // GitOpsDeployResult is the outcome for one app directory. ID is empty when
@@ -726,7 +583,6 @@ type GitOpsReport struct {
 type GitOpsDeployResult struct {
 	Path    string `json:"path"`
 	ID      string `json:"id"`
-	Kind    string `json:"kind"`
 	OK      bool   `json:"ok"`
 	Skipped bool   `json:"skipped"` // unchanged since the last applied SHA
 	Error   string `json:"error,omitempty"`
@@ -741,7 +597,6 @@ type RouteSample struct {
 	EndpointID       string        `json:"endpoint_id"`
 	GPU              string        `json:"gpu"`
 	ReplicaID        string        `json:"replica_id"`
-	Version          uint          `json:"version"`
 	StatusCode       int           `json:"status_code"`
 	PromptTokens     int64         `json:"prompt_tokens"`
 	CompletionTokens int64         `json:"completion_tokens"`
@@ -753,14 +608,14 @@ type RouteSample struct {
 	At               time.Time     `json:"at"`
 }
 
-// Failed reports whether the sample counts as an error for rollout decisions.
+// Failed reports whether the sample counts as an error.
 func (s RouteSample) Failed() bool { return s.StatusCode >= 500 || s.StatusCode == 0 }
 
 // RouteMetrics aggregates RouteSamples over a window.
 type RouteMetrics struct {
 	EndpointID       string        `json:"endpoint_id"`
 	GPU              string        `json:"gpu,omitempty"`
-	Version          uint          `json:"version,omitempty"`
+	ReplicaID        string        `json:"replica_id,omitempty"`
 	Window           time.Duration `json:"window"`
 	Requests         int64         `json:"requests"`
 	Errors           int64         `json:"errors"`
@@ -796,26 +651,38 @@ func (m RouteMetrics) MeanTPOTMs() int64 {
 	return max(m.DurationSumMs-m.TTFTSumMs, 0) / m.CompletionTokens
 }
 
-// ProviderEarnings is what a workspace earned from requests served by its
-// contributed machines.
-type ProviderEarnings struct {
+// --- Usage and earnings ------------------------------------------------------------
+
+// UsageKind separates what a workspace spent calling models from what it
+// earned serving them on contributed machines.
+type UsageKind string
+
+const (
+	UsageSpend  UsageKind = "spend"
+	UsageEarned UsageKind = "earned"
+)
+
+// Usage is what one workspace consumed on (or earned from) one model: the
+// daily counters behind the usage page and provider payouts.
+type Usage struct {
 	Requests         int64 `json:"requests"`
 	PromptTokens     int64 `json:"prompt_tokens"`
 	CompletionTokens int64 `json:"completion_tokens"`
 	Images           int64 `json:"images"`
-	EarningsMicroUSD int64 `json:"earnings_micro_usd"`
+	MicroUSD         int64 `json:"micro_usd"`
 }
 
-func (e *ProviderEarnings) Add(o ProviderEarnings) {
-	e.Requests += o.Requests
-	e.PromptTokens += o.PromptTokens
-	e.CompletionTokens += o.CompletionTokens
-	e.Images += o.Images
-	e.EarningsMicroUSD += o.EarningsMicroUSD
+func (u *Usage) Add(o Usage) {
+	u.Requests += o.Requests
+	u.PromptTokens += o.PromptTokens
+	u.CompletionTokens += o.CompletionTokens
+	u.Images += o.Images
+	u.MicroUSD += o.MicroUSD
 }
 
-type ProviderEarningsReport struct {
-	Total      ProviderEarnings            `json:"total"`
-	PerMachine map[string]ProviderEarnings `json:"per_machine"`
-	PerDay     map[string]ProviderEarnings `json:"per_day"`
+// UsageReport is a workspace's usage (or provider earnings) over a range of days.
+type UsageReport struct {
+	Total    Usage            `json:"total"`
+	PerModel map[string]Usage `json:"per_model"`
+	PerDay   map[string]Usage `json:"per_day"`
 }
