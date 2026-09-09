@@ -211,15 +211,15 @@ func poolCapacityFromWorkers(workers []*types.Worker) *WorkerPoolCapacity {
 				capacity.PendingGpu += uint(worker.TotalGpuCount)
 			}
 		default:
-			// Evictable containers (managed endpoint replicas filling spare
-			// capacity) are reclaimable; pool sizing must not scale up or
-			// hold nodes on their account.
-			freeCpu := worker.FreeCpu + worker.EvictableCpu
-			freeMemory := worker.FreeMemory + worker.EvictableMemory
-			capacity.FreeCpu += freeCpu
-			capacity.FreeMemory += freeMemory
-			if worker.Gpu != "" && (freeCpu > 0 && freeMemory > 0) {
-				capacity.FreeGpu += uint(worker.FreeGpuCount + worker.EvictableGpuCount)
+			// Physical idle capacity only. A GPU held by a managed endpoint
+			// replica is reclaimable but not immediately usable, so it does
+			// not satisfy a minimum-free floor; the replica controller keeps
+			// that floor idle (see managedendpoint inventory) so replicas do
+			// not make the pool provision on their account either.
+			capacity.FreeCpu += worker.FreeCpu
+			capacity.FreeMemory += worker.FreeMemory
+			if worker.Gpu != "" && (worker.FreeCpu > 0 && worker.FreeMemory > 0) {
+				capacity.FreeGpu += uint(worker.FreeGpuCount)
 			}
 		}
 	}

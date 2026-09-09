@@ -7,6 +7,7 @@ import (
 	"runtime/debug"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -42,6 +43,10 @@ type controller struct {
 
 	metricsMu   sync.Mutex
 	lastMetrics map[string]llmroute.EngineMetrics // replica id -> previous scrape
+
+	// inv is the inventory of the pass in progress (set by reconcile) so
+	// retire can tell whether a replacement replica could start right now.
+	inv *clusterInventory
 
 	// startedAt is when this gateway came up. Heartbeats cannot arrive while
 	// no gateway is serving the harness RPC, so a replica is only stale once
@@ -107,6 +112,7 @@ func (c *controller) reconcile(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
+	c.inv = inv
 	endpoints, err := c.s.repo.ListEndpoints(ctx)
 	if err != nil {
 		return err
@@ -199,9 +205,13 @@ func localityOf(name string, cfg types.WorkerPoolConfig) string {
 	return cmp.Or(strings.TrimSpace(cfg.Locality), name)
 }
 
-// inventory lists the eligible pools and their free GPUs. GPUs of replicas
-// still being scheduled are counted as taken: the worker has not reserved
-// them yet, and without this every pass until it does would start more.
+// inventory lists the eligible pools and the GPUs replicas may fill: idle
+// GPUs less the pool's minFreeGPU floor, which stays physically idle for
+// serverless work (a GPU held by a replica is reclaimable, not free, and must
+// not count towards that floor or the pool would either provision on the
+// replica's account or lose its warm headroom). GPUs of replicas still being
+// scheduled are counted as taken: the worker has not reserved them yet, and
+// without this every pass until it does would start more.
 func (c *controller) inventory(replicas []*types.EndpointReplica) (*clusterInventory, error) {
 	workers, err := c.s.workers.GetAllWorkers()
 	if err != nil {
@@ -238,7 +248,31 @@ func (c *controller) inventory(replicas []*types.EndpointReplica) (*clusterInven
 			inv.free[r.GPU][r.PoolName] = free - min(free, max(r.GPUCount, 1))
 		}
 	}
+	for key, pools := range inv.free {
+		for name, free := range pools {
+			cfg, _ := c.poolConfig(name)
+			floor, _ := strconv.ParseUint(cfg.PoolSizing.MinFreeGPU, 10, 32)
+			inv.free[key][name] = free - min(free, uint32(floor))
+		}
+	}
 	return inv, nil
+}
+
+// canPlace reports whether one replica of the endpoint on gpu would fit in
+// idle capacity right now, without reserving it.
+func (inv *clusterInventory) canPlace(gpu string, count uint32) bool {
+	if inv == nil {
+		return false
+	}
+	if gpu == types.CPUInventoryKey {
+		return len(inv.pools[gpu]) > 0
+	}
+	for _, pool := range inv.pools[gpu] {
+		if inv.free[gpu][pool.Name] >= max(count, 1) {
+			return true
+		}
+	}
+	return false
 }
 
 // place picks the pool for one replica and reserves its GPUs in the in-memory
@@ -306,11 +340,17 @@ func scaleDownOrder(replicas []*types.EndpointReplica) {
 
 // retire drains the replicas an endpoint no longer wants: all of them when it
 // is retired, otherwise those that no longer match the template (older
-// version, or a GPU type fleet.yaml no longer lists it on), one per tick. A
-// stale replica that is serving is kept until a matching replica is ready to
-// take the traffic, whether the change is a new version or a move to another
-// GPU type; only when fleet.yaml lists the endpoint nowhere is it drained
-// outright.
+// version, or a GPU type fleet.yaml no longer lists it on), one per tick.
+//
+// A stale replica that is serving is kept while a matching replica can still
+// come up beside it: when one is ready it takes the traffic, and when idle
+// capacity exists fill starts one first. When nothing is idle (an uncapped
+// fleet fills every GPU by design) the rollout has to make its own room, so
+// one stale replica is drained per tick as long as another replica of the
+// endpoint keeps serving. An endpoint with a single serving replica and no
+// idle capacity keeps serving the old version; availability wins that
+// tradeoff, and the stall is logged so an operator can cap a lower-priority
+// entry or add capacity.
 func (c *controller) retire(ctx context.Context, endpoint *types.ManagedEndpoint, fleet *types.Fleet, live []*types.EndpointReplica) {
 	spec := &endpoint.Spec
 	if !endpoint.Enabled() {
@@ -325,17 +365,36 @@ func (c *controller) retire(ctx context.Context, endpoint *types.ManagedEndpoint
 	matches := func(r *types.EndpointReplica) bool {
 		return r.Version == endpoint.Version && fleet.Lists(spec.ID, r.GPU)
 	}
-	var currentReady int
+	var currentReady, serving int
 	for _, r := range live {
-		if r.EndpointID == spec.ID && matches(r) && r.Serving() {
+		if r.EndpointID != spec.ID || !r.Serving() {
+			continue
+		}
+		serving++
+		if matches(r) {
 			currentReady++
 		}
+	}
+	roomFor := func(r *types.EndpointReplica) bool {
+		return c.inv.canPlace(r.GPU, spec.Gpu[r.GPU].Count)
 	}
 	for _, r := range live {
 		if r.EndpointID != spec.ID || !r.Alive() || matches(r) {
 			continue
 		}
 		if r.Serving() && currentReady == 0 && listed {
+			if roomFor(r) || serving < 2 {
+				if !roomFor(r) {
+					log.Warn().Str("endpoint_id", spec.ID).Str("replica_id", r.ID).Uint("version", endpoint.Version).
+						Msg("managed endpoints: rollout waiting; the only serving replica holds the last GPU")
+				}
+				continue
+			}
+			// No idle GPU anywhere for the replacement: release this one so
+			// fill can start the new version on it while the others serve.
+			if err := c.drainReplica(ctx, r, spec.DrainSeconds, false, fmt.Sprintf("version %d retired (making room for version %d)", r.Version, endpoint.Version)); err == nil {
+				return
+			}
 			continue
 		}
 		reason := fmt.Sprintf("version %d retired", r.Version)

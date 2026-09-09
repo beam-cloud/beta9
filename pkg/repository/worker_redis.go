@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -407,10 +408,11 @@ for i = first_request, #ARGV, 4 do
 	end
 end
 
--- Victims are evictable containers the caller picked to cover the shortfall.
--- Re-validate them under the worker lease: each must still be running here,
--- evictable, and not already being evicted; otherwise the caller's view of
--- capacity is stale and the whole placement is rejected.
+-- Victims are reclaimable containers the caller picked to cover the
+-- shortfall. Re-validate them under the worker lease (see reclaimable): each
+-- must still be assigned here, queued/starting/running, evictable, and not
+-- already being evicted; otherwise the caller's view of capacity is stale and
+-- the whole placement is rejected.
 local victim_cpu = 0
 local victim_memory = 0
 local victim_gpu = 0
@@ -421,7 +423,8 @@ for i = first_victim, first_request - 1, 4 do
 	end
 	local evictable = redis.call("HGET", state, "evictable")
 	local evicting = redis.call("HGET", state, "evicting")
-	if redis.call("HGET", state, "status") ~= "RUNNING"
+	local victim_status = redis.call("HGET", state, "status")
+	if (victim_status ~= "RUNNING" and victim_status ~= "PENDING")
 		or redis.call("HGET", state, "worker_id") ~= ARGV[5]
 		or (evictable ~= "true" and evictable ~= "1")
 		or (evicting == "true" or evicting == "1") then
@@ -833,6 +836,7 @@ func (r *WorkerRedisRepository) getWorkerReservedCapacity(ctx context.Context, w
 		queuedRequests = append(queuedRequests, pending.Request)
 	}
 
+	queued := make([]*types.ContainerRequest, 0, len(queuedRequests))
 	for _, rawRequest := range queuedRequests {
 		var request types.ContainerRequest
 		if err := json.Unmarshal([]byte(rawRequest), &request); err != nil {
@@ -844,35 +848,30 @@ func (r *WorkerRedisRepository) getWorkerReservedCapacity(ctx context.Context, w
 			}
 			requestContainerIDs[request.ContainerId] = struct{}{}
 		}
-		usage.addRequest(&request)
+		queued = append(queued, &request)
 	}
 
-	containerStateKeys, err := r.rdb.SMembers(ctx, common.RedisKeys.SchedulerContainerWorkerIndex(workerId)).Result()
+	states, err := r.indexedContainerStates(ctx, workerId)
 	if err != nil {
 		return usage, fmt.Errorf("failed to list active containers for worker <%s>: %w", workerId, err)
 	}
-
-	for _, key := range containerStateKeys {
-		state, _, exists, err := r.getIndexedContainerStateFields(ctx, workerId, key)
-		if err != nil {
-			return usage, err
+	byID := make(map[string]*types.ContainerState, len(states))
+	for _, state := range states {
+		byID[state.ContainerId] = state
+	}
+	for _, request := range queued {
+		evictable := request.Evictable
+		if state, ok := byID[request.ContainerId]; ok {
+			evictable = reclaimable(state, workerId)
 		}
-		if !exists {
-			continue
-		}
-		if state.WorkerId != workerId {
-			if err := r.rdb.SRem(ctx, common.RedisKeys.SchedulerContainerWorkerIndex(workerId), key).Err(); err != nil {
-				return usage, fmt.Errorf("failed to remove mismatched container index entry <%s> for worker <%s>: %w", key, workerId, err)
-			}
-			continue
-		}
-		if state.ContainerId == "" {
-			state.ContainerId = containerIDFromStateKey(key)
-		}
+		usage.add(request.Cpu, capacityMemoryForRequest(request),
+			gpuCountForCapacity(request.Gpu, request.GpuRequest, request.GpuCount), evictable)
+	}
+	for _, state := range states {
 		if _, queued := requestContainerIDs[state.ContainerId]; queued {
 			continue
 		}
-		usage.addContainerState(state)
+		usage.addContainerState(state, workerId)
 	}
 
 	return usage, nil
@@ -886,54 +885,18 @@ func containerIDFromStateKey(key string) string {
 	return ""
 }
 
-func (r *WorkerRedisRepository) getIndexedContainerState(ctx context.Context, workerId string, key string) (*types.ContainerState, bool, error) {
-	state, _, exists, err := r.getIndexedContainerStateFields(ctx, workerId, key)
-	return state, exists, err
-}
-
-// getIndexedContainerStateFields loads an indexed container state along with
-// the raw hash, for fields the scheduler keeps outside ContainerState.
-func (r *WorkerRedisRepository) getIndexedContainerStateFields(ctx context.Context, workerId string, key string) (*types.ContainerState, map[string]string, bool, error) {
-	res, err := r.rdb.HGetAll(ctx, key).Result()
-	if err != nil {
-		return nil, nil, false, fmt.Errorf("failed to get indexed container state <%s> for worker <%s>: %w", key, workerId, err)
-	}
-	if len(res) == 0 {
-		if err := r.rdb.SRem(ctx, common.RedisKeys.SchedulerContainerWorkerIndex(workerId), key).Err(); err != nil {
-			return nil, nil, false, fmt.Errorf("failed to remove stale container index entry <%s> for worker <%s>: %w", key, workerId, err)
-		}
-		return nil, nil, false, nil
-	}
-
-	state := &types.ContainerState{}
-	if err := common.ToStruct(res, state); err != nil {
-		return nil, nil, false, fmt.Errorf("failed to deserialize indexed container state <%s> for worker <%s>: %w", key, workerId, err)
-	}
-
-	return state, res, true, nil
-}
-
-func (c *workerReservedCapacity) addRequest(request *types.ContainerRequest) {
-	if request == nil {
-		return
-	}
-
-	c.add(request.Cpu, capacityMemoryForRequest(request),
-		gpuCountForCapacity(request.Gpu, request.GpuRequest, request.GpuCount), request.Evictable)
-}
-
-// addContainerState counts an indexed container. An evicting victim still
-// physically holds its resources until the worker finishes stopping it, so it
-// counts as held (the replacement that displaced it counts too; the sum is
-// clamped at the worker's total, which is why free reads zero while a drain
-// is in flight) but not as evictable: it cannot be evicted a second time.
-func (c *workerReservedCapacity) addContainerState(state *types.ContainerState) {
+// addContainerState counts an indexed container. A container that is
+// stopping, evicted or not, still physically holds its resources until the
+// worker finishes with it, so it counts as held (the replacement that
+// displaced it counts too; the sum is clamped at the worker's total, which is
+// why free reads zero while a drain is in flight) but never as reclaimable.
+func (c *workerReservedCapacity) addContainerState(state *types.ContainerState, workerID string) {
 	if state == nil {
 		return
 	}
 	memory := capacityMemoryForRequest(&types.ContainerRequest{Memory: state.Memory})
 	gpu := gpuCountForCapacity(state.Gpu, nil, state.GpuCount)
-	c.add(state.Cpu, memory, gpu, state.Evictable && !state.Evicting)
+	c.add(state.Cpu, memory, gpu, reclaimable(state, workerID))
 }
 
 func (c *workerReservedCapacity) add(cpu, memory int64, gpu uint32, evictable bool) {
@@ -1082,20 +1045,11 @@ func (r *WorkerRedisRepository) workerHasOutstandingWork(ctx context.Context, wo
 	if err != nil || pending > 0 {
 		return pending > 0, err
 	}
-	keys, err := r.rdb.SMembers(ctx, common.RedisKeys.SchedulerContainerWorkerIndex(workerId)).Result()
+	states, err := r.indexedContainerStates(ctx, workerId)
 	if err != nil {
 		return false, err
 	}
-	for _, key := range keys {
-		state, exists, err := r.getIndexedContainerState(ctx, workerId, key)
-		if err != nil {
-			return false, err
-		}
-		if exists && state != nil {
-			return true, nil
-		}
-	}
-	return false, nil
+	return len(states) > 0, nil
 }
 
 func (r *WorkerRedisRepository) saveWorkerFields(ctx context.Context, stateKey string, fields ...any) error {
@@ -1230,14 +1184,7 @@ func (r *WorkerRedisRepository) getWorkersFromKeys(keys []string, cleanupIndexKe
 			continue
 		}
 
-		workerId := strings.Split(keys[i], ":")[len(strings.Split(keys[i], ":"))-1]
-		worker := &types.Worker{Id: workerId}
-
-		if err = common.ToStruct(res, worker); err != nil {
-			return nil, fmt.Errorf("failed to deserialize worker state <%v>: %v", keys[i], err)
-		}
-
-		workers = append(workers, worker)
+		workers = append(workers, workerFromHash(keys[i], res))
 	}
 
 	return workers, nil
@@ -1268,24 +1215,82 @@ func (r *WorkerRedisRepository) filterIndexedWorkers(ctx context.Context, worker
 }
 
 func (r *WorkerRedisRepository) getWorkerFromKey(key string) (*types.Worker, error) {
-	workerId := strings.Split(key, ":")[len(strings.Split(key, ":"))-1]
-	worker := &types.Worker{
-		Id: workerId,
-	}
-
 	res, err := r.rdb.HGetAll(context.TODO(), key).Result()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get worker <%s>: %v", key, err)
 	}
 	if len(res) == 0 {
-		return nil, &types.ErrWorkerNotFound{WorkerId: workerId}
+		return nil, &types.ErrWorkerNotFound{WorkerId: key[strings.LastIndex(key, ":")+1:]}
 	}
+	return workerFromHash(key, res), nil
+}
 
-	if err = common.ToStruct(res, worker); err != nil {
-		return nil, fmt.Errorf("failed to deserialize worker state <%v>: %v", key, err)
+// workerFromHash decodes a worker state hash. The scheduler lists every
+// worker on every batch, so this is a direct field switch rather than the
+// reflective common.ToStruct; unknown fields are ignored and unparsable
+// numbers read as zero, as they always have.
+func workerFromHash(key string, res map[string]string) *types.Worker {
+	worker := &types.Worker{Id: key[strings.LastIndex(key, ":")+1:]}
+	i64 := func(v string) int64 { n, _ := strconv.ParseInt(v, 10, 64); return n }
+	u32 := func(v string) uint32 { n, _ := strconv.ParseUint(v, 10, 32); return uint32(n) }
+	boolean := func(v string) bool { b, _ := strconv.ParseBool(v); return b }
+	for field, v := range res {
+		switch field {
+		case "id":
+			worker.Id = v
+		case "status":
+			worker.Status = types.WorkerStatus(v)
+		case "total_cpu":
+			worker.TotalCpu = i64(v)
+		case "total_memory":
+			worker.TotalMemory = i64(v)
+		case "total_gpu_count":
+			worker.TotalGpuCount = u32(v)
+		case "free_cpu":
+			worker.FreeCpu = i64(v)
+		case "free_memory":
+			worker.FreeMemory = i64(v)
+		case "gpu_count":
+			worker.FreeGpuCount = u32(v)
+		case "gpu":
+			worker.Gpu = v
+		case "pool_name":
+			worker.PoolName = v
+		case "machine_id":
+			worker.MachineId = v
+		case "resource_version":
+			worker.ResourceVersion = i64(v)
+		case "requires_pool_selector":
+			worker.RequiresPoolSelector = boolean(v)
+		case "priority":
+			worker.Priority = int32(i64(v))
+		case "preemptable":
+			worker.Preemptable = boolean(v)
+		case "build_version":
+			worker.BuildVersion = v
+		case "runtime":
+			worker.Runtime = v
+		case "pool_selector":
+			worker.PoolSelector = v
+		case "cordon_requested":
+			worker.CordonRequested = boolean(v)
+		case "rollout_generation":
+			worker.RolloutGeneration = v
+		case "worker_image_override":
+			worker.WorkerImageOverride = v
+		case "evictable_cpu":
+			worker.EvictableCpu = i64(v)
+		case "evictable_memory":
+			worker.EvictableMemory = i64(v)
+		case "evictable_gpu_count":
+			worker.EvictableGpuCount = u32(v)
+		case "workspace_id":
+			worker.WorkspaceId = v
+		case "control_plane_managed":
+			worker.ControlPlaneManaged = boolean(v)
+		}
 	}
-
-	return worker, nil
+	return worker
 }
 
 func (r *WorkerRedisRepository) GetGpuCounts() (map[string]int, error) {
@@ -1616,8 +1621,9 @@ func (r *WorkerRedisRepository) ScheduleContainerRequests(worker *types.Worker, 
 	var capacity workerCapacityResult
 	var scheduledAt time.Time
 	var victimIDs []string
-	var victimDrain uint32
 	var victimCPU, victimMemory, victimGPU int64
+	var dependencies map[string][]string
+	var drains map[string]uint32
 	evictableAfter := [3]int64{worker.EvictableCpu, worker.EvictableMemory, int64(worker.EvictableGpuCount)}
 	committed := false
 	err := r.lock.WithLease(ctx, common.RedisKeys.SchedulerWorkerLock(worker.Id), schedulerWorkerLockOptions, func(ctx context.Context) error {
@@ -1672,9 +1678,6 @@ func (r *WorkerRedisRepository) ScheduleContainerRequests(worker *types.Worker, 
 		}
 		for _, victim := range victims {
 			victimIDs = append(victimIDs, victim.containerID)
-			if victim.drainSeconds > victimDrain {
-				victimDrain = victim.drainSeconds
-			}
 			victimCPU += victim.cpu
 			victimMemory += victim.memory
 			victimGPU += int64(victim.gpu)
@@ -1685,14 +1688,16 @@ func (r *WorkerRedisRepository) ScheduleContainerRequests(worker *types.Worker, 
 			maxInt64(int64(current.EvictableGpuCount)-victimGPU, 0) + evictableGPU,
 		}
 
+		// Each request depends only on the victims whose capacity it takes;
+		// one that fits idle capacity starts without waiting on any drain.
+		dependencies, drains = requestDependencies(queued,
+			[3]int64{current.FreeCpu, current.FreeMemory, int64(current.FreeGpuCount)}, victims)
 		for index := range queued {
 			queuedRequest := *queued[index].request
 			queuedRequest.Timestamp = scheduledAt
 			queuedRequest.MachineId = current.MachineId
-			if len(victimIDs) > 0 && requestMayEvict(&queuedRequest) {
-				queuedRequest.EvictContainerIds = victimIDs
-				queuedRequest.EvictDrainSeconds = victimDrain
-			}
+			queuedRequest.EvictContainerIds = dependencies[queuedRequest.ContainerId]
+			queuedRequest.EvictDrainSeconds = drains[queuedRequest.ContainerId]
 			payload, err := json.Marshal(&queuedRequest)
 			if err != nil {
 				return fmt.Errorf("failed to serialize request: %w", err)
@@ -1774,10 +1779,8 @@ func (r *WorkerRedisRepository) ScheduleContainerRequests(worker *types.Worker, 
 	for _, item := range queued {
 		item.request.MachineId = capacity.machineID
 		item.request.Timestamp = scheduledAt
-		if len(victimIDs) > 0 && requestMayEvict(item.request) {
-			item.request.EvictContainerIds = victimIDs
-			item.request.EvictDrainSeconds = victimDrain
-		}
+		item.request.EvictContainerIds = dependencies[item.request.ContainerId]
+		item.request.EvictDrainSeconds = drains[item.request.ContainerId]
 	}
 	metrics.RecordWorkerQueueDepth(worker.Id, r.rdb.LLen(ctx, common.RedisKeys.SchedulerWorkerRequests(worker.Id)).Val())
 

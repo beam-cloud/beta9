@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
 )
@@ -16,8 +17,15 @@ import (
 // variable so tests can shorten it.
 var evictionKillTimeout = 60 * time.Second
 
-// evictionPollInterval is how often victims are checked for finalization.
-const evictionPollInterval = 250 * time.Millisecond
+// evictionRecheckInterval is a safety net behind the release notification:
+// victims are re-checked at least this often even if no signal arrives.
+const evictionRecheckInterval = time.Second
+
+// maxPreemptionDrain caps how long a victim may keep its resources after a
+// serverless request has been placed on them. An endpoint's drain_seconds
+// governs graceful retirement by its controller; preemption is the platform's
+// deadline and a model's own drain preference does not extend it.
+var maxPreemptionDrain = 10 * time.Second
 
 // ErrEvictionIncomplete is returned when victims chosen for a request were
 // still holding their resources after the drain and kill windows passed.
@@ -38,7 +46,7 @@ func (s *Worker) evictForRequest(ctx context.Context, request *types.ContainerRe
 		return nil
 	}
 
-	drain := time.Duration(request.EvictDrainSeconds) * time.Second
+	drain := min(time.Duration(request.EvictDrainSeconds)*time.Second, maxPreemptionDrain)
 	victims := make([]string, 0, len(request.EvictContainerIds))
 	for _, victimID := range request.EvictContainerIds {
 		if victimID == "" || victimID == request.ContainerId {
@@ -57,7 +65,12 @@ func (s *Worker) evictForRequest(ctx context.Context, request *types.ContainerRe
 		Strs("evict_container_ids", victims).
 		Dur("drain", drain).
 		Msg("waiting for evicted containers before starting request")
+	waitStart := time.Now()
 	remaining := s.waitForContainersFinalized(ctx, victims, drain+evictionKillTimeout)
+	metrics.RecordWorkerStartupPhase("evict_wait", time.Since(waitStart), request, map[string]string{
+		"victims":  fmt.Sprintf("%d", len(victims)),
+		"released": fmt.Sprintf("%t", len(remaining) == 0),
+	})
 	if len(remaining) == 0 {
 		return nil
 	}
@@ -144,12 +157,17 @@ func (s *Worker) escalateEviction(containerID string, drain time.Duration) {
 
 // waitForContainersFinalized blocks until every listed container has been
 // removed from the worker's instance table, the timeout passes, or ctx ends.
-// It returns the containers that are still present.
+// It wakes on the instance table's removal signal, so the incoming request
+// resumes as soon as the last victim's resources are released, with a slow
+// re-check as a safety net. It returns the containers still present.
 func (s *Worker) waitForContainersFinalized(ctx context.Context, containerIDs []string, timeout time.Duration) []string {
 	deadline := time.Now().Add(timeout)
-	ticker := time.NewTicker(evictionPollInterval)
-	defer ticker.Stop()
+	recheck := time.NewTicker(evictionRecheckInterval)
+	defer recheck.Stop()
 	for {
+		// Take the signal before checking so a removal between the check and
+		// the wait cannot be missed.
+		removed := s.containerInstances.Removed()
 		remaining := make([]string, 0, len(containerIDs))
 		for _, id := range containerIDs {
 			if _, exists := s.containerInstances.Get(id); exists {
@@ -165,7 +183,8 @@ func (s *Worker) waitForContainersFinalized(ctx context.Context, containerIDs []
 		select {
 		case <-ctx.Done():
 			return remaining
-		case <-ticker.C:
+		case <-removed:
+		case <-recheck.C:
 		}
 	}
 }

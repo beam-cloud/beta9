@@ -18,14 +18,35 @@ type RequestBacklog struct {
 	ready chan struct{}
 }
 
+// popReadyBacklogScript pops ready requests from the foreground lane first
+// and fills what is left of the batch from the background lane, so a burst of
+// managed endpoint replicas never occupies a batch ahead of serverless work.
 var popReadyBacklogScript = redis.NewScript(`
-local requests = redis.call("ZRANGEBYSCORE", KEYS[1], "-inf", ARGV[1], "LIMIT", 0, ARGV[2])
-if #requests == 0 then
-	return requests
+local limit = tonumber(ARGV[2])
+local out = {}
+for _, key in ipairs(KEYS) do
+	if limit <= 0 then
+		break
+	end
+	local requests = redis.call("ZRANGEBYSCORE", key, "-inf", ARGV[1], "LIMIT", 0, limit)
+	if #requests > 0 then
+		redis.call("ZREM", key, unpack(requests))
+		for _, request in ipairs(requests) do
+			out[#out + 1] = request
+		end
+		limit = limit - #requests
+	end
 end
-redis.call("ZREM", KEYS[1], unpack(requests))
-return requests
+return out
 `)
+
+// lane is the backlog sorted set a request waits in.
+func lane(request *types.ContainerRequest) string {
+	if request.Evictable || request.OpportunisticOnly {
+		return common.RedisKeys.SchedulerBackgroundRequests()
+	}
+	return common.RedisKeys.SchedulerContainerRequests()
+}
 
 func NewRequestBacklog(rdb *common.RedisClient) *RequestBacklog {
 	return &RequestBacklog{rdb: rdb, ready: make(chan struct{}, 1)}
@@ -47,7 +68,7 @@ func (rb *RequestBacklog) PushAfter(request *types.ContainerRequest, delay time.
 		readyAt = request.Timestamp
 	}
 
-	if err := rb.rdb.ZAdd(context.TODO(), common.RedisKeys.SchedulerContainerRequests(), redis.Z{Score: float64(readyAt.UnixNano()), Member: jsonData}).Err(); err != nil {
+	if err := rb.rdb.ZAdd(context.TODO(), lane(request), redis.Z{Score: float64(readyAt.UnixNano()), Member: jsonData}).Err(); err != nil {
 		return err
 	}
 
@@ -57,7 +78,7 @@ func (rb *RequestBacklog) PushAfter(request *types.ContainerRequest, delay time.
 		default:
 		}
 	}
-	metrics.RecordSchedulerBacklogDepth(rb.rdb.ZCard(context.TODO(), common.RedisKeys.SchedulerContainerRequests()).Val())
+	metrics.RecordSchedulerBacklogDepth(rb.Len())
 	return nil
 }
 
@@ -76,7 +97,7 @@ func (rb *RequestBacklog) PopN(count int64) ([]*types.ContainerRequest, error) {
 	result, err := popReadyBacklogScript.Run(
 		context.TODO(),
 		rb.rdb,
-		[]string{common.RedisKeys.SchedulerContainerRequests()},
+		[]string{common.RedisKeys.SchedulerContainerRequests(), common.RedisKeys.SchedulerBackgroundRequests()},
 		time.Now().UnixNano(),
 		count,
 	).Result()
@@ -108,11 +129,13 @@ func (rb *RequestBacklog) PopN(count int64) ([]*types.ContainerRequest, error) {
 		requests = append(requests, &poppedItem)
 	}
 
-	metrics.RecordSchedulerBacklogDepth(rb.rdb.ZCard(context.TODO(), common.RedisKeys.SchedulerContainerRequests()).Val())
+	metrics.RecordSchedulerBacklogDepth(rb.Len())
 	return requests, nil
 }
 
-// Gets the length of the sorted set
+// Len is the number of requests waiting in both lanes.
 func (rb *RequestBacklog) Len() int64 {
-	return rb.rdb.ZCard(context.TODO(), common.RedisKeys.SchedulerContainerRequests()).Val()
+	ctx := context.TODO()
+	return rb.rdb.ZCard(ctx, common.RedisKeys.SchedulerContainerRequests()).Val() +
+		rb.rdb.ZCard(ctx, common.RedisKeys.SchedulerBackgroundRequests()).Val()
 }

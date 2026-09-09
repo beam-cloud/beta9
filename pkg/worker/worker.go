@@ -1315,7 +1315,7 @@ func (s *Worker) updateContainerStatusOnce(ctx context.Context, request *types.C
 			// displacing request normally drives the stop, but if it was
 			// requeued elsewhere this path still reclaims the capacity, on
 			// the container's own drain window.
-			s.evictContainer(request.ContainerId, time.Duration(state.DrainSeconds)*time.Second, "")
+			s.evictContainer(request.ContainerId, min(time.Duration(state.DrainSeconds)*time.Second, maxPreemptionDrain), "")
 			return false, nil
 		}
 		s.handleObservedStoppingContainer(request.ContainerId, types.EventSourceWorkerStatusHeartbeat)

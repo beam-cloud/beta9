@@ -138,9 +138,9 @@ func TestProcessRequestBatchCommitsMixedOpportunisticAndEvictingRequests(t *test
 	assert.Equal(t, uint32(1), workers[0].FreeGpuCount)
 	assert.Equal(t, uint32(1), workers[0].EvictableGpuCount)
 
-	// Planned in this order, the replica takes the idle GPU in memory and the
-	// serverless request draws the evictable one. The commit must place both
-	// rather than refusing to evict because the batch contains a replica.
+	// Whatever order they arrive in, the serverless request claims the idle
+	// GPU and starts without an eviction; the opportunistic replica may not
+	// evict and is left for a later pass.
 	opportunistic := &types.ContainerRequest{
 		ContainerId: "replica-b", Cpu: 1000, Memory: 1000, GpuRequest: []string{"A10G"}, GpuCount: 1,
 		Evictable: true, OpportunisticOnly: true, Timestamp: time.Now(),
@@ -153,22 +153,12 @@ func TestProcessRequestBatchCommitsMixedOpportunisticAndEvictingRequests(t *test
 
 	queued, err := wb.workerRepo.GetNextContainerRequests(worker.Id, 10)
 	assert.NoError(t, err)
-	assert.Len(t, queued, 2)
-	for _, request := range queued {
-		switch request.ContainerId {
-		case "serverless":
-			assert.Equal(t, []string{"replica-a"}, request.EvictContainerIds)
-			assert.Equal(t, uint32(10), request.EvictDrainSeconds)
-		case "replica-b":
-			assert.Empty(t, request.EvictContainerIds)
-		default:
-			t.Fatalf("unexpected queued request %s", request.ContainerId)
-		}
-	}
-	assert.Equal(t, int64(0), wb.requestBacklog.Len())
+	assert.Len(t, queued, 1)
+	assert.Equal(t, "serverless", queued[0].ContainerId)
+	assert.Empty(t, queued[0].EvictContainerIds)
 	status, err := rdb.HGet(context.TODO(), victimKey, "status").Result()
 	assert.NoError(t, err)
-	assert.Equal(t, string(types.ContainerStatusStopping), status)
+	assert.Equal(t, string(types.ContainerStatusRunning), status, "the replica keeps its GPU; nothing needed evicting")
 }
 
 func TestOpportunisticRequestFailsFastWithoutIdleCapacity(t *testing.T) {
@@ -205,16 +195,18 @@ func TestOpportunisticRequestFailsFastWithoutIdleCapacity(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestFreePoolCapacityCountsEvictableAsFree(t *testing.T) {
+func TestFreePoolCapacityIsPhysicalIdleOnly(t *testing.T) {
 	held := evictableWorker("held", "beta9-a10g", 0, 2)
 	held.FreeCpu, held.FreeMemory = 0, 0
 	held.EvictableCpu, held.EvictableMemory = 8000, 16000
 	pending := evictableWorker("pending", "beta9-a10g", 1, 0)
 	pending.Status = types.WorkerStatusPending
 
+	// A GPU held by a replica is reclaimable, not free: it does not satisfy
+	// a minFreeGPU floor (the replica controller keeps that floor idle).
 	capacity := poolCapacityFromWorkers([]*types.Worker{held, pending})
-	assert.Equal(t, uint(2), capacity.FreeGpu)
-	assert.Equal(t, int64(8000), capacity.FreeCpu)
-	assert.Equal(t, int64(16000), capacity.FreeMemory)
+	assert.Equal(t, uint(0), capacity.FreeGpu)
+	assert.Equal(t, int64(0), capacity.FreeCpu)
+	assert.Equal(t, int64(0), capacity.FreeMemory)
 	assert.Equal(t, uint(1), capacity.PendingGpu)
 }

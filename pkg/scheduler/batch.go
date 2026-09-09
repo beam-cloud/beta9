@@ -1,11 +1,13 @@
 package scheduler
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/metrics"
+	repo "github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
 )
@@ -57,6 +59,11 @@ func (b *schedulingBatch) plan(requests []*types.ContainerRequest) {
 		batched = err == nil
 	}
 
+	// Foreground work claims idle capacity before background work (managed
+	// endpoint replicas) in the same batch, whatever order it arrived in;
+	// otherwise a replica could take the last idle GPU and leave a serverless
+	// request to wait on a drain that would not have been needed.
+	requests = foregroundFirst(requests)
 	for _, request := range requests {
 		attempt := newSchedulingAttempt(b.scheduler, request, b.workers)
 		runnable := false
@@ -185,6 +192,16 @@ func (b *schedulingBatch) completeSchedule(schedule plannedSchedule, err error) 
 
 		attempt.recordBacklogWait(false, "schedule_failed")
 		metrics.RecordSchedulerWorkerWait(time.Since(schedule.request.Timestamp), schedule.request, "schedule_failed")
+		// Reclaimable capacity that moved under us (a victim left, was taken
+		// by another batch, or the worker's view was stale) is a capacity
+		// wait, not a fault of this request: requeue it on the capacity-wait
+		// clock instead of charging its retry budget.
+		if errors.Is(err, repo.ErrEvictionVictimsChanged) || errors.Is(err, repo.ErrInsufficientEvictableCapacity) {
+			if attempt.runnable() {
+				attempt.requeueForWorkerWaitDelay(provisioningWorkerRequeueDelay, "reclaimable_capacity_changed")
+			}
+			return
+		}
 		attempt.retryIfRunnable("schedule_failed")
 		return
 	}
@@ -198,6 +215,28 @@ func (b *schedulingBatch) completeSchedule(schedule plannedSchedule, err error) 
 	)
 	metrics.RecordRequestSchedulingDuration(duration, schedule.request)
 	metrics.RecordSchedulerWorkerWait(duration, schedule.request, "scheduled")
+}
+
+// isBackground reports whether a request only fills spare capacity.
+func isBackground(request *types.ContainerRequest) bool {
+	return request != nil && (request.Evictable || request.OpportunisticOnly)
+}
+
+// foregroundFirst returns requests with background ones moved to the end,
+// keeping the relative order within each group.
+func foregroundFirst(requests []*types.ContainerRequest) []*types.ContainerRequest {
+	ordered := make([]*types.ContainerRequest, 0, len(requests))
+	for _, request := range requests {
+		if !isBackground(request) {
+			ordered = append(ordered, request)
+		}
+	}
+	for _, request := range requests {
+		if isBackground(request) {
+			ordered = append(ordered, request)
+		}
+	}
+	return ordered
 }
 
 func cloneWorker(worker *types.Worker) *types.Worker {

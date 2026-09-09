@@ -8,6 +8,7 @@ import (
 var (
 	schedulerPrefix                   string = "scheduler:"
 	schedulerContainerRequests        string = "scheduler:container_requests"
+	schedulerBackgroundRequests       string = "scheduler:background_requests"
 	schedulerWorkerLock               string = "scheduler:worker:lock:%s"
 	schedulerWorkerRequests           string = "scheduler:worker:requests:%s"
 	schedulerWorkerRequestChannel     string = "scheduler:worker:requests"
@@ -194,6 +195,13 @@ func (rk *redisKeys) SchedulerWorkerMachineIndex(machineId string) string {
 
 func (rk *redisKeys) SchedulerContainerRequests() string {
 	return schedulerContainerRequests
+}
+
+// SchedulerBackgroundRequests is the backlog lane for requests that only fill
+// spare capacity (evictable / opportunistic); it is drained after the
+// foreground lane.
+func (rk *redisKeys) SchedulerBackgroundRequests() string {
+	return schedulerBackgroundRequests
 }
 
 func (rk *redisKeys) SchedulerWorkerLock(workerId string) string {

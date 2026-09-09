@@ -129,7 +129,7 @@ func TestEvictForRequestWaitsForVictimAlreadyFinalizing(t *testing.T) {
 
 	released := make(chan struct{})
 	go func() {
-		time.Sleep(3 * evictionPollInterval)
+		time.Sleep(300 * time.Millisecond)
 		worker.containerInstances.Delete("victim-1")
 		close(released)
 	}()
@@ -147,7 +147,7 @@ func TestEvictForRequestWaitsForVictimAlreadyFinalizing(t *testing.T) {
 }
 
 func TestEvictForRequestFailsWhenVictimsOutliveKillWindow(t *testing.T) {
-	shortenEvictionKillTimeout(t, 3*evictionPollInterval)
+	shortenEvictionKillTimeout(t, 300*time.Millisecond)
 	worker, rt := evictionWorkerForTest(false)
 	rt.ignoreKill = true
 	addRunningInstance(worker, rt, "victim-1")
@@ -173,7 +173,7 @@ func TestEvictForRequestFailsWhenVictimsOutliveKillWindow(t *testing.T) {
 }
 
 func TestRunContainerRequestFailsInsteadOfStartingOnHeldResources(t *testing.T) {
-	shortenEvictionKillTimeout(t, 3*evictionPollInterval)
+	shortenEvictionKillTimeout(t, 300*time.Millisecond)
 	workerCtx, cancelWorker := context.WithCancel(context.Background())
 	defer cancelWorker()
 	repoClient := &fakeContainerRepoClient{}

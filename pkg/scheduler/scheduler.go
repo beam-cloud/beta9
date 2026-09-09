@@ -1422,13 +1422,16 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 		if scoredWorkers[i].storageRank != scoredWorkers[j].storageRank {
 			return scoredWorkers[i].storageRank < scoredWorkers[j].storageRank
 		}
-		if scoredWorkers[i].score != scoredWorkers[j].score {
-			return scoredWorkers[i].score > scoredWorkers[j].score
-		}
-		// Idle capacity before eviction: stopping a managed endpoint replica
-		// throws away a loaded model, so only do it when nothing else fits.
+		// Idle capacity before eviction, ahead of pool priority: a worker that
+		// can start the request now beats a preferred worker that first has to
+		// drain a managed endpoint replica (and throw away its loaded model).
+		// Hard constraints (isolation, storage, explicit failover order) were
+		// applied above and are not traded for this.
 		if scoredWorkers[i].evictionRank != scoredWorkers[j].evictionRank {
 			return scoredWorkers[i].evictionRank < scoredWorkers[j].evictionRank
+		}
+		if scoredWorkers[i].score != scoredWorkers[j].score {
+			return scoredWorkers[i].score > scoredWorkers[j].score
 		}
 		// Best-fit: prefer the fullest worker that still fits so idle workers
 		// drain to zero, hit their spindown timeout, and release their nodes.
