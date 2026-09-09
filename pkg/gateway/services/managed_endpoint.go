@@ -203,7 +203,7 @@ func (gws *GatewayService) registerManagedDeployment(ctx context.Context, stub *
 		return err
 	}
 	if rollout == nil {
-		rollout = &types.RolloutState{EndpointID: spec.ID, Phase: "idle"}
+		rollout = &types.RolloutState{EndpointID: spec.ID, Phase: types.RolloutPhaseIdle}
 	}
 
 	firstVersion := existing == nil || existing.Status == types.EndpointStatusRetired || rollout.ActiveVersion == 0
@@ -225,7 +225,7 @@ func (gws *GatewayService) registerManagedDeployment(ctx context.Context, stub *
 		}
 		rollout.ActiveVersion = deployment.Version
 		rollout.CanaryVersion = 0
-		rollout.Phase = "idle"
+		rollout.Phase = types.RolloutPhaseIdle
 		rollout.LastDecision = "initial deploy"
 		rollout.LastDecisionAt = now
 	} else {
@@ -236,7 +236,7 @@ func (gws *GatewayService) registerManagedDeployment(ctx context.Context, stub *
 			}
 		}
 		rollout.CanaryVersion = deployment.Version
-		rollout.Phase = "baking"
+		rollout.Phase = types.RolloutPhaseBaking
 		rollout.BakeStartedAt = time.Time{}
 		rollout.LastDecision = "new version deployed; canary pending"
 		rollout.LastDecisionAt = now

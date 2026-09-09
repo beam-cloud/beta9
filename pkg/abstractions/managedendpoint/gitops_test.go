@@ -38,14 +38,14 @@ func newGitOpsForTest(t *testing.T) (*Service, *gitops) {
 func TestGitOpsTriggerValidatesAndCoalesces(t *testing.T) {
 	_, g := newGitOpsForTest(t)
 
-	_, err := g.Trigger(context.Background(), "not a sha")
+	_, err := g.Trigger("not a sha")
 	require.Error(t, err)
 
-	started, err := g.Trigger(context.Background(), "")
+	started, err := g.Trigger("")
 	require.NoError(t, err)
 	assert.True(t, started)
 
-	started, err = g.Trigger(context.Background(), "abcdef1")
+	started, err = g.Trigger("abcdef1")
 	require.NoError(t, err)
 	assert.False(t, started, "a second trigger while one is queued is coalesced")
 }
@@ -65,9 +65,9 @@ func TestGitOpsApplyReportRecordsVersionsAndRetires(t *testing.T) {
 	require.NoError(t, s.repo.SaveGitOpsState(ctx, &types.GitOpsState{
 		LastSHA: "aaaaaaaa", Running: true, RunID: "run-1", TargetSHA: "bbbbbbbb", StartedAt: time.Now(),
 		PerEndpoint: map[string]types.GitOpsEndpointState{
-			"endpoint:acme/model": {Path: "acme/model", ID: "acme/model", Kind: "endpoint", Status: gitopsStatusApplied, AppliedSHA: "aaaaaaaa"},
-			"endpoint:acme/old":   {Path: "acme/old", ID: "acme/old", Kind: "endpoint", Status: gitopsStatusApplied, AppliedSHA: "aaaaaaaa"},
-			"service:mooncake":    {Path: "services/mooncake", ID: "mooncake", Kind: "service", Status: gitopsStatusApplied, AppliedSHA: "aaaaaaaa"},
+			"endpoint:acme/model": {Path: "acme/model", ID: "acme/model", Kind: "endpoint", Status: types.GitOpsStatusApplied, AppliedSHA: "aaaaaaaa"},
+			"endpoint:acme/old":   {Path: "acme/old", ID: "acme/old", Kind: "endpoint", Status: types.GitOpsStatusApplied, AppliedSHA: "aaaaaaaa"},
+			"service:mooncake":    {Path: "services/mooncake", ID: "mooncake", Kind: "service", Status: types.GitOpsStatusApplied, AppliedSHA: "aaaaaaaa"},
 		},
 	}))
 
@@ -100,26 +100,25 @@ func TestGitOpsApplyReportRecordsVersionsAndRetires(t *testing.T) {
 	assert.Contains(t, state.LastError, "1 stub(s) failed")
 
 	model := state.PerEndpoint["endpoint:acme/model"]
-	assert.Equal(t, gitopsStatusApplied, model.Status)
+	assert.Equal(t, types.GitOpsStatusApplied, model.Status)
 	assert.Equal(t, "bbbbbbbb", model.AppliedSHA)
 	assert.Equal(t, "stub-2", model.StubID)
 	assert.Equal(t, uint(2), model.Version)
 
 	svc := state.PerEndpoint["service:mooncake"]
-	assert.Equal(t, gitopsStatusApplied, svc.Status)
+	assert.Equal(t, types.GitOpsStatusApplied, svc.Status)
 	assert.Equal(t, "bbbbbbbb", svc.AppliedSHA, "unchanged stubs follow the repo head")
 
 	old := state.PerEndpoint["endpoint:acme/old"]
-	assert.Equal(t, gitopsStatusRetired, old.Status)
+	assert.Equal(t, types.GitOpsStatusRetired, old.Status)
 	retired, err := s.repo.GetEndpoint(ctx, "acme/old")
 	require.NoError(t, err)
 	assert.False(t, retired.Enabled)
 	assert.Equal(t, types.EndpointStatusRetired, retired.Status)
 
 	broken := state.PerEndpoint["path:acme/broken"]
-	assert.Equal(t, gitopsStatusFailed, broken.Status)
+	assert.Equal(t, types.GitOpsStatusFailed, broken.Status)
 	assert.Contains(t, broken.Error, "boom")
-	assert.Equal(t, []string{"acme/broken"}, g.failedPaths(state))
 
 	// A duplicate report for the same run is rejected once the run closed.
 	require.Error(t, g.applyReport(ctx, report))
@@ -142,7 +141,7 @@ func TestGitOpsApplyReportRecordsVersionsAndRetires(t *testing.T) {
 	assert.Empty(t, state.LastError)
 	_, hasBroken := state.PerEndpoint["path:acme/broken"]
 	assert.False(t, hasBroken)
-	assert.Equal(t, gitopsStatusRetired, state.PerEndpoint["endpoint:acme/old"].Status, "retired entries are kept for visibility")
+	assert.Equal(t, types.GitOpsStatusRetired, state.PerEndpoint["endpoint:acme/old"].Status, "retired entries are kept for visibility")
 }
 
 func TestGitOpsApplyReportDeployerError(t *testing.T) {

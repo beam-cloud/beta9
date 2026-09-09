@@ -63,7 +63,7 @@ func seedEndpoint(t *testing.T, s *Service) *types.ManagedEndpoint {
 	endpoint := &types.ManagedEndpoint{Spec: spec, StubID: "stub-1", Version: 1, Enabled: true, Status: types.EndpointStatusActive}
 	require.NoError(t, s.repo.SaveEndpoint(context.Background(), endpoint))
 	require.NoError(t, s.repo.SaveVersion(context.Background(), &types.EndpointVersion{EndpointID: spec.ID, Version: 1, StubID: "stub-1", State: types.VersionStateActive}))
-	require.NoError(t, s.repo.SaveRollout(context.Background(), &types.RolloutState{EndpointID: spec.ID, ActiveVersion: 1, Phase: rolloutPhaseIdle}))
+	require.NoError(t, s.repo.SaveRollout(context.Background(), &types.RolloutState{EndpointID: spec.ID, ActiveVersion: 1, Phase: types.RolloutPhaseIdle}))
 	return endpoint
 }
 
@@ -204,7 +204,7 @@ func TestWatchConfigStreamsFleetAndReplicaRevisions(t *testing.T) {
 	// A new fleet revision for this target is pushed.
 	require.NoError(t, s.repo.CreateConfigRevision(context.Background(), &types.EndpointConfigRevision{
 		EndpointID: endpoint.Spec.ID, Scope: types.ConfigScopeTarget, ScopeKey: "serve:H100x1@v1",
-		Config: map[string]any{"max_num_seqs": 96}, Author: liveAuthor(1, "agent"), Source: types.ConfigSourceLive,
+		Config: map[string]any{"max_num_seqs": 96}, Author: "live@v1:agent", Source: types.ConfigSourceLive,
 	}))
 	select {
 	case second := <-stream.sent:
@@ -349,7 +349,7 @@ func TestFleetRevisionsFollowVersions(t *testing.T) {
 	// A live fleet edit on this version is preserved.
 	require.NoError(t, s.repo.CreateConfigRevision(ctx, &types.EndpointConfigRevision{
 		EndpointID: endpoint.Spec.ID, Scope: types.ConfigScopeTarget, ScopeKey: "serve:H100x1@v1",
-		Config: map[string]any{"max_num_seqs": 200}, Author: liveAuthor(1, "agent"), Source: types.ConfigSourceLive,
+		Config: map[string]any{"max_num_seqs": 200}, Author: "live@v1:agent", Source: types.ConfigSourceLive,
 	}))
 	require.NoError(t, s.controller.ensureFleetRevisions(ctx, endpoint))
 	latest, _ := s.repo.LatestConfigRevision(ctx, endpoint.Spec.ID, types.ConfigScopeTarget, "serve:H100x1@v1")

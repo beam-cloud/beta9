@@ -63,7 +63,7 @@ message EndpointReplica {
   string address = 11;
   string status = 12;
   bool protected = 13;
-  bool candidate = 14;
+  reserved 14;
   bool tuning = 15;
   bool harness_enabled = 16;
   uint64 config_revision = 17;

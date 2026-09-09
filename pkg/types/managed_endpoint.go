@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/big"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -45,9 +46,7 @@ const (
 	EndpointKindCustom    EndpointKind = "custom"
 )
 
-func AllEndpointKinds() []EndpointKind {
-	return []EndpointKind{EndpointKindLLM, EndpointKindEmbedding, EndpointKindImage, EndpointKindCustom}
-}
+var endpointKinds = []EndpointKind{EndpointKindLLM, EndpointKindEmbedding, EndpointKindImage, EndpointKindCustom}
 
 // EndpointRoute is an OpenAI-style route suffix under /v1 that an endpoint serves.
 type EndpointRoute string
@@ -76,8 +75,8 @@ func DefaultRoutesForKind(kind EndpointKind) []EndpointRoute {
 	}
 }
 
-// AllowedRoutesForKind returns every route an endpoint of a kind may declare.
-func AllowedRoutesForKind(kind EndpointKind) []EndpointRoute {
+// allowedRoutesForKind returns every route an endpoint of a kind may declare.
+func allowedRoutesForKind(kind EndpointKind) []EndpointRoute {
 	switch kind {
 	case EndpointKindLLM:
 		return []EndpointRoute{EndpointRouteChatCompletions, EndpointRouteCompletions, EndpointRouteEmbeddings, EndpointRouteImageGenerations}
@@ -277,36 +276,13 @@ type ManagedEndpointStubConfig struct {
 var endpointIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)?$`)
 var serviceNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
-// ManagedEndpointValidation configures spec validation.
+// ManagedEndpointValidation configures spec validation. Empty allow lists
+// allow everything.
 type ManagedEndpointValidation struct {
 	AllowedEngines []string
 	AllowedKinds   []EndpointKind
-	// KnownServices resolves spec.Services references.
+	// KnownServices resolves spec.Services references; nil skips the check.
 	KnownServices map[string]struct{}
-}
-
-func (v ManagedEndpointValidation) engineAllowed(engine string) bool {
-	if len(v.AllowedEngines) == 0 {
-		return true
-	}
-	for _, allowed := range v.AllowedEngines {
-		if strings.EqualFold(allowed, engine) {
-			return true
-		}
-	}
-	return false
-}
-
-func (v ManagedEndpointValidation) kindAllowed(kind EndpointKind) bool {
-	if len(v.AllowedKinds) == 0 {
-		return true
-	}
-	for _, allowed := range v.AllowedKinds {
-		if allowed == kind {
-			return true
-		}
-	}
-	return false
 }
 
 // Normalize fills defaults so downstream code can rely on a canonical spec.
@@ -382,18 +358,13 @@ func (s *ManagedEndpointSpec) Validate(policy ManagedEndpointValidation) error {
 	if !endpointIDPattern.MatchString(s.ID) {
 		errs = append(errs, fmt.Errorf("id %q must look like vendor/slug (lowercase, [a-z0-9._-])", s.ID))
 	}
-	validKind := false
-	for _, kind := range AllEndpointKinds() {
-		if kind == s.Kind {
-			validKind = true
-		}
-	}
+	validKind := slices.Contains(endpointKinds, s.Kind)
 	if !validKind {
 		errs = append(errs, fmt.Errorf("kind %q is not one of llm, embedding, image, custom", s.Kind))
-	} else if !policy.kindAllowed(s.Kind) {
+	} else if len(policy.AllowedKinds) > 0 && !slices.Contains(policy.AllowedKinds, s.Kind) {
 		errs = append(errs, fmt.Errorf("kind %q is not enabled on this cluster", s.Kind))
 	}
-	if s.Engine != "" && !policy.engineAllowed(s.Engine) {
+	if s.Engine != "" && len(policy.AllowedEngines) > 0 && !slices.ContainsFunc(policy.AllowedEngines, func(e string) bool { return strings.EqualFold(e, s.Engine) }) {
 		errs = append(errs, fmt.Errorf("engine %q is not in the allowed engine list", s.Engine))
 	}
 	if s.Port == 0 || s.Port > 65535 {
@@ -403,15 +374,9 @@ func (s *ManagedEndpointSpec) Validate(policy ManagedEndpointValidation) error {
 		errs = append(errs, errors.New("entrypoint is required"))
 	}
 	if validKind {
-		allowed := AllowedRoutesForKind(s.Kind)
+		allowed := allowedRoutesForKind(s.Kind)
 		for _, route := range s.Routes {
-			ok := false
-			for _, a := range allowed {
-				if a == route {
-					ok = true
-				}
-			}
-			if !ok {
+			if !slices.Contains(allowed, route) {
 				errs = append(errs, fmt.Errorf("route %q is not valid for kind %q", route, s.Kind))
 			}
 		}
@@ -445,12 +410,12 @@ func (s *ManagedEndpointSpec) Validate(policy ManagedEndpointValidation) error {
 		if s.KVCache.Connector == "" {
 			errs = append(errs, errors.New("kv_cache.connector is required"))
 		}
-		if s.KVCache.Service != "" {
-			s.Services = appendUnique(s.Services, s.KVCache.Service)
+		if s.KVCache.Service != "" && !slices.Contains(s.Services, s.KVCache.Service) {
+			s.Services = append(s.Services, s.KVCache.Service)
 		}
 	}
-	for _, service := range s.Services {
-		if policy.KnownServices != nil {
+	if policy.KnownServices != nil {
+		for _, service := range s.Services {
 			if _, ok := policy.KnownServices[service]; !ok {
 				errs = append(errs, fmt.Errorf("service %q is not deployed", service))
 			}
@@ -488,15 +453,6 @@ func validateTargets(field string, targets []GpuTarget) []error {
 	return errs
 }
 
-func appendUnique(values []string, value string) []string {
-	for _, v := range values {
-		if v == value {
-			return values
-		}
-	}
-	return append(values, value)
-}
-
 // Targets returns every (role, target) placement for the endpoint.
 func (s *ManagedEndpointSpec) Targets() []RoleTarget {
 	if s.Topology != nil && s.Topology.EffectiveMode() == TopologyDisaggregated {
@@ -532,12 +488,7 @@ func (rt RoleTarget) Key() string {
 
 // ServesRoute reports whether the endpoint declares a route.
 func (s *ManagedEndpointSpec) ServesRoute(route EndpointRoute) bool {
-	for _, r := range s.Routes {
-		if r == route {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(s.Routes, route)
 }
 
 // Normalize fills service defaults.
@@ -637,11 +588,10 @@ func (s ReplicaStatus) Terminal() bool {
 
 // KVTransferStats are reported by harnesses using a KV connector.
 type KVTransferStats struct {
-	TransferBytes      int64   `json:"transfer_bytes,omitempty"`
-	StoreHitRateMilli  int64   `json:"store_hit_rate_milli,omitempty"`
-	RemotePrefillCount int64   `json:"remote_prefill_count,omitempty"`
-	StoreUsageMilli    int64   `json:"store_usage_milli,omitempty"`
-	Extra              float64 `json:"extra,omitempty"`
+	TransferBytes      int64 `json:"transfer_bytes,omitempty"`
+	StoreHitRateMilli  int64 `json:"store_hit_rate_milli,omitempty"`
+	RemotePrefillCount int64 `json:"remote_prefill_count,omitempty"`
+	StoreUsageMilli    int64 `json:"store_usage_milli,omitempty"`
 }
 
 // ReplicaCapacity is the harness- or probe-reported serving capacity.
@@ -661,20 +611,22 @@ type ReplicaCapacity struct {
 
 // EndpointReplica is one running container serving an endpoint role/target.
 type EndpointReplica struct {
-	ID             string          `json:"id"`
-	EndpointID     string          `json:"endpoint_id"`
-	Version        uint            `json:"version"`
-	Role           string          `json:"role"`
-	GPU            string          `json:"gpu"`
-	GPUCount       uint32          `json:"gpu_count"`
-	Locality       string          `json:"locality"`
-	PoolName       string          `json:"pool_name,omitempty"`
-	ContainerID    string          `json:"container_id"`
-	WorkerID       string          `json:"worker_id,omitempty"`
-	Address        string          `json:"address,omitempty"`
-	Status         ReplicaStatus   `json:"status"`
-	Protected      bool            `json:"protected"`
-	Candidate      bool            `json:"candidate"`
+	ID          string        `json:"id"`
+	EndpointID  string        `json:"endpoint_id"`
+	Version     uint          `json:"version"`
+	Role        string        `json:"role"`
+	GPU         string        `json:"gpu"`
+	GPUCount    uint32        `json:"gpu_count"`
+	Locality    string        `json:"locality"`
+	PoolName    string        `json:"pool_name,omitempty"`
+	ContainerID string        `json:"container_id"`
+	WorkerID    string        `json:"worker_id,omitempty"`
+	Address     string        `json:"address,omitempty"`
+	Status      ReplicaStatus `json:"status"`
+	// Protected replicas satisfy min_replicas: they may trigger provisioning
+	// and are never evictable. Everything else is opportunistic.
+	Protected bool `json:"protected"`
+	// Tuning replicas belong to an experiment and take no public traffic.
 	Tuning         bool            `json:"tuning"`
 	HarnessEnabled bool            `json:"harness_enabled"`
 	ConfigRevision uint64          `json:"config_revision"`
@@ -690,7 +642,17 @@ type EndpointReplica struct {
 
 // Serving reports whether the replica may receive traffic.
 func (r *EndpointReplica) Serving() bool {
-	return r != nil && r.Status == ReplicaStatusReady && !r.Tuning && !r.Candidate
+	return r != nil && r.Status == ReplicaStatusReady && !r.Tuning
+}
+
+// Alive reports whether the replica is scheduling, loading or ready, i.e.
+// counts toward a target's live set (draining and evicting replicas do not).
+func (r *EndpointReplica) Alive() bool {
+	switch r.Status {
+	case ReplicaStatusScheduling, ReplicaStatusLoading, ReplicaStatusReady:
+		return true
+	}
+	return false
 }
 
 type ConfigRevisionScope string
@@ -727,7 +689,6 @@ const (
 	VersionStateActive     EndpointVersionState = "active"
 	VersionStateRetired    EndpointVersionState = "retired"
 	VersionStateRolledBack EndpointVersionState = "rolled_back"
-	VersionStatePinned     EndpointVersionState = "pinned"
 )
 
 // EndpointVersion tracks one deployed stub version of an endpoint.
@@ -741,26 +702,25 @@ type EndpointVersion struct {
 	UpdatedAt  time.Time            `json:"updated_at"`
 }
 
+type RolloutPhase string
+
+const (
+	RolloutPhaseIdle       RolloutPhase = "idle"
+	RolloutPhaseBaking     RolloutPhase = "baking"
+	RolloutPhaseRolledBack RolloutPhase = "rolled_back"
+)
+
 // RolloutState describes the active canary/promotion for an endpoint.
 type RolloutState struct {
-	EndpointID     string    `json:"endpoint_id"`
-	ActiveVersion  uint      `json:"active_version"`
-	CanaryVersion  uint      `json:"canary_version,omitempty"`
-	PinnedVersion  uint      `json:"pinned_version,omitempty"`
-	Phase          string    `json:"phase"` // idle|baking|promoting|rolled_back
-	BakeStartedAt  time.Time `json:"bake_started_at,omitempty"`
-	LastDecision   string    `json:"last_decision,omitempty"`
-	LastDecisionAt time.Time `json:"last_decision_at,omitempty"`
-	UpdatedAt      time.Time `json:"updated_at"`
-}
-
-// EndpointCandidate is a replica held out of serving for validation.
-type EndpointCandidate struct {
-	ReplicaID  string    `json:"replica_id"`
-	EndpointID string    `json:"endpoint_id"`
-	Version    uint      `json:"version"`
-	Reason     string    `json:"reason"`
-	CreatedAt  time.Time `json:"created_at"`
+	EndpointID     string       `json:"endpoint_id"`
+	ActiveVersion  uint         `json:"active_version"`
+	CanaryVersion  uint         `json:"canary_version,omitempty"`
+	PinnedVersion  uint         `json:"pinned_version,omitempty"`
+	Phase          RolloutPhase `json:"phase"`
+	BakeStartedAt  time.Time    `json:"bake_started_at,omitempty"`
+	LastDecision   string       `json:"last_decision,omitempty"`
+	LastDecisionAt time.Time    `json:"last_decision_at,omitempty"`
+	UpdatedAt      time.Time    `json:"updated_at"`
 }
 
 // ExperimentStep is one applied config + its observed metrics/bench.
@@ -801,17 +761,30 @@ type Experiment struct {
 	EndedAt          time.Time         `json:"ended_at,omitempty"`
 }
 
+type GitOpsStatus string
+
+const (
+	GitOpsStatusApplied GitOpsStatus = "applied"
+	GitOpsStatusFailed  GitOpsStatus = "failed"
+	GitOpsStatusRetired GitOpsStatus = "retired"
+)
+
+const (
+	GitOpsKindEndpoint = "endpoint"
+	GitOpsKindService  = "service"
+)
+
 // GitOpsEndpointState is the apply state of one repo directory.
 type GitOpsEndpointState struct {
-	Path       string    `json:"path"`
-	ID         string    `json:"id"`
-	Kind       string    `json:"kind"` // endpoint|service
-	AppliedSHA string    `json:"applied_sha,omitempty"`
-	Status     string    `json:"status"` // pending|applied|failed|retired
-	Error      string    `json:"error,omitempty"`
-	StubID     string    `json:"stub_id,omitempty"`
-	Version    uint      `json:"version,omitempty"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	Path       string       `json:"path"`
+	ID         string       `json:"id"`
+	Kind       string       `json:"kind"` // GitOpsKindEndpoint|GitOpsKindService
+	AppliedSHA string       `json:"applied_sha,omitempty"`
+	Status     GitOpsStatus `json:"status"`
+	Error      string       `json:"error,omitempty"`
+	StubID     string       `json:"stub_id,omitempty"`
+	Version    uint         `json:"version,omitempty"`
+	UpdatedAt  time.Time    `json:"updated_at"`
 }
 
 // GitOpsState is the reconciler's view of the endpoints repo.

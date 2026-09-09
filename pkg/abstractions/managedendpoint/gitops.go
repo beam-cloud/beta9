@@ -3,23 +3,28 @@ package managedendpoint
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"crypto/subtle"
 	_ "embed"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 	"github.com/rs/zerolog/log"
 
-	"github.com/beam-cloud/beta9/pkg/abstractions/common"
+	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
@@ -46,20 +51,13 @@ const (
 	gitopsDeployerCPU    = int64(2000)
 	gitopsDeployerMemory = int64(4096)
 	gitopsResolveTimeout = 30 * time.Second
-
-	gitopsStatusPending = "pending"
-	gitopsStatusApplied = "applied"
-	gitopsStatusFailed  = "failed"
-	gitopsStatusRetired = "retired"
 )
 
 var shaPattern = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
 
 type gitops struct {
-	s    *Service
-	lock *common.RedisLock
-
-	mu      sync.Mutex
+	s       *Service
+	lock    *common.RedisLock
 	pending chan gitopsRequest
 }
 
@@ -72,17 +70,13 @@ func newGitOps(s *Service) *gitops {
 	if s == nil || strings.TrimSpace(s.config.Repo.URL) == "" || s.rdb == nil {
 		return nil
 	}
-	return &gitops{
-		s:       s,
-		lock:    common.NewRedisLock(s.rdb),
-		pending: make(chan gitopsRequest, 1),
-	}
+	return &gitops{s: s, lock: common.NewRedisLock(s.rdb), pending: make(chan gitopsRequest, 1)}
 }
 
 // Trigger requests a sync. With an empty sha the remote head of the
 // configured ref is resolved; a non-empty sha forces a redeploy of every stub
 // at that commit. It returns false when a sync is already queued.
-func (g *gitops) Trigger(_ context.Context, sha string) (bool, error) {
+func (g *gitops) Trigger(sha string) (bool, error) {
 	sha = strings.ToLower(strings.TrimSpace(sha))
 	if sha != "" && !shaPattern.MatchString(sha) {
 		return false, errors.New("sha must be a hex commit id")
@@ -111,7 +105,6 @@ func (g *gitops) mount(public *echo.Group, authed *echo.Group) {
 func (g *gitops) run(ctx context.Context) {
 	ticker := time.NewTicker(g.s.config.Repo.PollIntervalOrDefault())
 	defer ticker.Stop()
-
 	for {
 		var req gitopsRequest
 		select {
@@ -120,7 +113,6 @@ func (g *gitops) run(ctx context.Context) {
 		case <-ticker.C:
 		case req = <-g.pending:
 		}
-
 		if err := g.lock.Acquire(ctx, gitopsLockKey, common.RedisLockOptions{TtlS: int(gitopsLockTTL.Seconds()), Retries: 0}); err != nil {
 			continue
 		}
@@ -139,27 +131,30 @@ func (g *gitops) sync(ctx context.Context, req gitopsRequest) error {
 		return err
 	}
 	if state.Running {
-		if g.runFinishedWithoutReport(state) {
+		switch {
+		case g.exitedWithoutReport(state):
 			g.failRun(ctx, state, "deployer exited without reporting")
-		} else if time.Since(state.StartedAt) > gitopsRunTimeout {
+		case time.Since(state.StartedAt) > gitopsRunTimeout:
 			g.failRun(ctx, state, "deployer timed out")
-		} else {
+		default:
 			return nil
 		}
 	}
-
 	sha := req.sha
 	if sha == "" {
-		sha, err = g.resolveHead(ctx)
-		if err != nil {
+		if sha, err = g.resolveHead(ctx); err != nil {
 			state.LastError = "resolve head: " + err.Error()
 			state.LastRunAt = time.Now()
 			_ = g.s.repo.SaveGitOpsState(ctx, state)
 			return err
 		}
 	}
-
-	retry := g.failedPaths(state)
+	var retry []string
+	for _, e := range state.PerEndpoint {
+		if e.Status == types.GitOpsStatusFailed && e.Path != "" {
+			retry = append(retry, e.Path)
+		}
+	}
 	if !req.force && sha == state.LastSHA && len(retry) == 0 {
 		return nil
 	}
@@ -179,25 +174,12 @@ func (g *gitops) state(ctx context.Context) (*types.GitOpsState, error) {
 	return state, nil
 }
 
-func (g *gitops) failedPaths(state *types.GitOpsState) []string {
-	var paths []string
-	for _, e := range state.PerEndpoint {
-		if e.Status == gitopsStatusFailed && e.Path != "" {
-			paths = append(paths, e.Path)
-		}
-	}
-	return paths
-}
-
-// runFinishedWithoutReport is true when the deployer container has exited but
-// no report arrived; the SDK deploy may have partially applied.
-func (g *gitops) runFinishedWithoutReport(state *types.GitOpsState) bool {
-	if state.ContainerID == "" || g.s.containers == nil {
-		return false
-	}
-	// Give the scheduler time to actually create the container before treating
-	// a missing state as an exit.
-	if time.Since(state.StartedAt) < 2*time.Minute {
+// exitedWithoutReport is true when the deployer container is gone but no
+// report arrived; the SDK deploy may have partially applied. The scheduler
+// gets a couple of minutes to create the container before a missing state
+// counts as an exit.
+func (g *gitops) exitedWithoutReport(state *types.GitOpsState) bool {
+	if state.ContainerID == "" || g.s.containers == nil || time.Since(state.StartedAt) < 2*time.Minute {
 		return false
 	}
 	_, err := g.s.containers.GetContainerState(state.ContainerID)
@@ -241,21 +223,19 @@ func (g *gitops) resolveHead(ctx context.Context) (string, error) {
 
 	url := g.s.config.Repo.URL
 	env := append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
-	if strings.HasPrefix(key, "-----BEGIN") {
+	switch {
+	case strings.HasPrefix(key, "-----BEGIN"):
 		dir, err := os.MkdirTemp("", "endpoints-key-")
 		if err != nil {
 			return "", err
 		}
 		defer os.RemoveAll(dir)
 		keyPath := filepath.Join(dir, "deploy_key")
-		if !strings.HasSuffix(key, "\n") {
-			key += "\n"
-		}
-		if err := os.WriteFile(keyPath, []byte(key), 0o600); err != nil {
+		if err := os.WriteFile(keyPath, []byte(strings.TrimRight(key, "\n")+"\n"), 0o600); err != nil {
 			return "", err
 		}
-		env = append(env, fmt.Sprintf("GIT_SSH_COMMAND=ssh -i %s -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new", keyPath))
-	} else if key != "" && strings.HasPrefix(url, "https://") {
+		env = append(env, "GIT_SSH_COMMAND=ssh -i "+keyPath+" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new")
+	case key != "" && strings.HasPrefix(url, "https://"):
 		url = "https://x-access-token:" + key + "@" + strings.TrimPrefix(url, "https://")
 	}
 
@@ -324,7 +304,6 @@ func (g *gitops) launch(ctx context.Context, state *types.GitOpsState, sha strin
 	if key != "" {
 		env = append(env, "ENDPOINTS_DEPLOY_KEY="+key)
 	}
-
 	request := &types.ContainerRequest{
 		ContainerId: containerID,
 		EntryPoint:  []string{"sh", "-c", `printf '%s' "$ENDPOINTS_DEPLOYER" > /tmp/deployer.py && exec python3 /tmp/deployer.py`},
@@ -368,11 +347,7 @@ func (g *gitops) launch(ctx context.Context, state *types.GitOpsState, sha strin
 // deployerStub returns the pod stub the deployer runs under, creating it on
 // first use. The stub is recreated when the configured image changes.
 func (g *gitops) deployerStub(ctx context.Context, workspace *types.Workspace, image string) (*types.StubWithRelated, error) {
-	config := types.StubConfigV1{
-		Runtime:    types.Runtime{Cpu: gitopsDeployerCPU, Memory: gitopsDeployerMemory, ImageId: image},
-		Authorized: false,
-		TaskPolicy: types.TaskPolicy{},
-	}
+	config := types.StubConfigV1{Runtime: types.Runtime{Cpu: gitopsDeployerCPU, Memory: gitopsDeployerMemory, ImageId: image}}
 	app, err := g.s.backend.GetOrCreateApp(ctx, workspace.Id, gitopsStubName)
 	if err != nil {
 		return nil, fmt.Errorf("deployer app: %w", err)
@@ -398,6 +373,8 @@ func (g *gitops) failRun(ctx context.Context, state *types.GitOpsState, reason s
 	log.Warn().Str("sha", state.TargetSHA).Str("reason", reason).Msg("managed endpoints: gitops run failed")
 }
 
+// finishRun revokes the run token, stops a lingering container and clears
+// the in-flight markers.
 func (g *gitops) finishRun(ctx context.Context, state *types.GitOpsState) {
 	if state.TokenID != "" && g.s.backend != nil {
 		if workspace, err := g.s.AdminWorkspace(ctx); err == nil {
@@ -410,9 +387,7 @@ func (g *gitops) finishRun(ctx context.Context, state *types.GitOpsState) {
 		}
 	}
 	state.Running = false
-	state.RunID = ""
-	state.ContainerID = ""
-	state.TokenID = ""
+	state.RunID, state.ContainerID, state.TokenID = "", "", ""
 }
 
 // applyReport folds the deployer's report into the registry: records
@@ -441,35 +416,26 @@ func (g *gitops) applyReport(ctx context.Context, report *types.GitOpsReport) er
 	}
 
 	failed := 0
+	failedPaths := map[string]bool{}
 	for _, r := range report.Results {
 		if r.ID == "" {
 			// Import failure: keyed by path so it stays visible.
-			state.PerEndpoint["path:"+r.Path] = types.GitOpsEndpointState{
-				Path: r.Path, Status: gitopsStatusFailed, Error: r.Error, UpdatedAt: now,
-			}
+			state.PerEndpoint["path:"+r.Path] = types.GitOpsEndpointState{Path: r.Path, Status: types.GitOpsStatusFailed, Error: r.Error, UpdatedAt: now}
+			failedPaths[r.Path] = true
 			failed++
 			continue
 		}
 		key := r.Kind + ":" + r.ID
 		entry := state.PerEndpoint[key]
 		entry.Path, entry.ID, entry.Kind, entry.UpdatedAt = r.Path, r.ID, r.Kind, now
-		switch {
-		case r.OK && r.Skipped:
-			if entry.Status != gitopsStatusApplied {
-				entry.Status = gitopsStatusApplied
+		if r.OK {
+			// Unchanged (skipped) directories move forward with the repo head too.
+			entry.Status, entry.Error, entry.AppliedSHA = types.GitOpsStatusApplied, "", report.SHA
+			if !r.Skipped {
+				entry.StubID, entry.Version = r.StubID, r.Version
 			}
-			entry.Error = ""
-			// Unchanged directories move forward with the repo head.
-			entry.AppliedSHA = report.SHA
-		case r.OK:
-			entry.Status = gitopsStatusApplied
-			entry.Error = ""
-			entry.AppliedSHA = report.SHA
-			entry.StubID = r.StubID
-			entry.Version = r.Version
-		default:
-			entry.Status = gitopsStatusFailed
-			entry.Error = r.Error
+		} else {
+			entry.Status, entry.Error = types.GitOpsStatusFailed, r.Error
 			failed++
 		}
 		state.PerEndpoint[key] = entry
@@ -481,33 +447,27 @@ func (g *gitops) applyReport(ctx context.Context, report *types.GitOpsReport) er
 		present[d.Kind+":"+d.ID] = true
 	}
 	for key, entry := range state.PerEndpoint {
-		if strings.HasPrefix(key, "path:") {
-			if failedPathStillPresent(report, entry.Path) {
+		switch {
+		case strings.HasPrefix(key, "path:"):
+			if !failedPaths[entry.Path] {
+				delete(state.PerEndpoint, key)
+			}
+		case !present[key] && entry.Status != types.GitOpsStatusRetired:
+			if err := g.retire(ctx, entry.Kind, entry.ID, report.SHA); err != nil {
+				log.Warn().Err(err).Str("id", entry.ID).Msg("managed endpoints: gitops retire failed")
 				continue
 			}
-			delete(state.PerEndpoint, key)
-			continue
+			entry.Status, entry.Error, entry.UpdatedAt = types.GitOpsStatusRetired, "", now
+			state.PerEndpoint[key] = entry
 		}
-		if present[key] || entry.Status == gitopsStatusRetired {
-			continue
-		}
-		if err := g.retire(ctx, entry.Kind, entry.ID, report.SHA); err != nil {
-			log.Warn().Err(err).Str("id", entry.ID).Msg("managed endpoints: gitops retire failed")
-			continue
-		}
-		entry.Status = gitopsStatusRetired
-		entry.Error = ""
-		entry.UpdatedAt = now
-		state.PerEndpoint[key] = entry
 	}
 
-	if failed == 0 {
-		state.LastSHA = report.SHA
-		state.LastError = ""
-	} else {
-		state.LastError = fmt.Sprintf("%d stub(s) failed to deploy at %s", failed, shortSHA(report.SHA))
-	}
 	state.TargetSHA = report.SHA
+	if failed == 0 {
+		state.LastSHA, state.LastError = report.SHA, ""
+	} else {
+		state.LastError = fmt.Sprintf("%d stub(s) failed to deploy at %.8s", failed, report.SHA)
+	}
 	if err := g.s.repo.SaveGitOpsState(ctx, state); err != nil {
 		return err
 	}
@@ -519,50 +479,36 @@ func (g *gitops) applyReport(ctx context.Context, report *types.GitOpsReport) er
 	return nil
 }
 
-func failedPathStillPresent(report *types.GitOpsReport, path string) bool {
-	for _, r := range report.Results {
-		if r.Path == path && r.ID == "" {
-			return true
-		}
-	}
-	return false
-}
-
 // retire disables an endpoint or service removed from the repo. Replicas are
 // drained by the controller; usage history and versions are kept.
 func (g *gitops) retire(ctx context.Context, kind, id, sha string) error {
-	switch kind {
-	case "service":
+	now := time.Now()
+	if kind == "service" {
 		service, err := g.s.repo.GetService(ctx, id)
 		if err != nil || service == nil {
 			return err
 		}
-		service.Enabled = false
-		service.Status = types.EndpointStatusRetired
-		service.UpdatedAt = time.Now()
+		service.Enabled, service.Status, service.UpdatedAt = false, types.EndpointStatusRetired, now
 		if err := g.s.repo.SaveService(ctx, service); err != nil {
 			return err
 		}
-	default:
+	} else {
 		endpoint, err := g.s.repo.GetEndpoint(ctx, id)
 		if err != nil || endpoint == nil {
 			return err
 		}
-		endpoint.Enabled = false
-		endpoint.Status = types.EndpointStatusRetired
-		endpoint.UpdatedAt = time.Now()
+		endpoint.Enabled, endpoint.Status, endpoint.UpdatedAt = false, types.EndpointStatusRetired, now
 		if err := g.s.repo.SaveEndpoint(ctx, endpoint); err != nil {
 			return err
 		}
 	}
 	g.s.emit(types.EventEndpointGitOps, types.EventEndpointSchema{
-		EndpointID: id, Action: "gitops.retired", Message: "removed from repo",
-		Data: map[string]any{"kind": kind, "sha": sha},
+		EndpointID: id, Action: "gitops.retired", Message: "removed from repo", Data: map[string]any{"kind": kind, "sha": sha},
 	})
 	return nil
 }
 
-// --- HTTP -----------------------------------------------------------------
+// --- HTTP ----------------------------------------------------------------------
 
 // handleWebhook accepts GitHub/GitLab push notifications. The body is
 // verified with Webhook.Secret; pushes to other refs are ignored.
@@ -571,41 +517,39 @@ func (g *gitops) handleWebhook(ctx echo.Context) error {
 	if secret == "" {
 		return echo.NewHTTPError(http.StatusNotFound, "webhook is not configured")
 	}
-	body, err := readBody(ctx.Request(), 1<<20)
+	body, err := io.ReadAll(io.LimitReader(ctx.Request().Body, 1<<20))
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "read body")
 	}
 	if !verifyWebhook(ctx.Request().Header, body, secret) {
 		return echo.NewHTTPError(http.StatusUnauthorized, "invalid signature")
 	}
-
 	push, ok := parsePush(body)
-	if !ok {
+	want := g.s.config.Repo.RefOrDefault()
+	switch {
+	case !ok:
 		// Ping / non-push events are acknowledged and ignored.
 		return ctx.JSON(http.StatusOK, map[string]any{"ok": true, "ignored": true})
-	}
-	want := g.s.config.Repo.RefOrDefault()
-	if push.Ref != want && push.Ref != "refs/heads/"+want && push.Ref != "refs/tags/"+want {
+	case push.Ref != want && push.Ref != "refs/heads/"+want && push.Ref != "refs/tags/"+want:
 		return ctx.JSON(http.StatusOK, map[string]any{"ok": true, "ignored": true, "ref": push.Ref})
-	}
-	if push.Deleted {
+	case push.Deleted:
 		return ctx.JSON(http.StatusOK, map[string]any{"ok": true, "ignored": true, "deleted": true})
 	}
 	// Let the poller resolve the head rather than trusting the payload sha,
 	// so a burst of pushes collapses into one run at the latest commit.
-	started, _ := g.Trigger(ctx.Request().Context(), "")
+	started, _ := g.Trigger("")
 	return ctx.JSON(http.StatusAccepted, map[string]any{"ok": true, "started": started, "after": push.After})
 }
 
 // handleReport receives the deployer's result. It accepts any active token of
 // the admin workspace (the run token) or a cluster admin token.
 func (g *gitops) handleReport(ctx echo.Context) error {
-	reqCtx := httpCtx(ctx)
+	reqCtx := requestContext(ctx)
 	if err := g.s.authorizeHarness(reqCtx); err != nil {
-		return respond(ctx, nil, err)
+		return httpError(err)
 	}
 	var report types.GitOpsReport
-	if err := decodeJSON(ctx.Request(), 4<<20, &report); err != nil {
+	if err := json.NewDecoder(io.LimitReader(ctx.Request().Body, 4<<20)).Decode(&report); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 	if err := g.applyReport(reqCtx, &report); err != nil {
@@ -614,9 +558,48 @@ func (g *gitops) handleReport(ctx echo.Context) error {
 	return ctx.JSON(http.StatusOK, map[string]any{"ok": true})
 }
 
-func shortSHA(sha string) string {
-	if len(sha) > 8 {
-		return sha[:8]
+// pushEvent is the subset of a GitHub/GitLab push payload the reconciler needs.
+type pushEvent struct {
+	Ref     string
+	After   string
+	Deleted bool
+}
+
+// parsePush extracts ref/after from GitHub and GitLab push payloads. It
+// returns false for payloads that are not pushes (pings, PR events, ...).
+func parsePush(body []byte) (pushEvent, bool) {
+	var raw struct {
+		Ref        string `json:"ref"`
+		After      string `json:"after"`
+		Deleted    bool   `json:"deleted"`
+		ObjectKind string `json:"object_kind"` // gitlab
+		Zen        string `json:"zen"`         // github ping
 	}
-	return sha
+	if err := json.Unmarshal(body, &raw); err != nil || raw.Ref == "" || raw.Zen != "" {
+		return pushEvent{}, false
+	}
+	if raw.ObjectKind != "" && raw.ObjectKind != "push" && raw.ObjectKind != "tag_push" {
+		return pushEvent{}, false
+	}
+	return pushEvent{Ref: raw.Ref, After: raw.After, Deleted: raw.Deleted || strings.Trim(raw.After, "0") == ""}, true
+}
+
+// verifyWebhook accepts GitHub's HMAC-SHA256 signature
+// (X-Hub-Signature-256: sha256=<hex>), GitLab's shared token
+// (X-Gitlab-Token) and a generic bearer/plain token in X-Webhook-Token.
+func verifyWebhook(header http.Header, body []byte, secret string) bool {
+	if sig := strings.TrimSpace(header.Get("X-Hub-Signature-256")); sig != "" {
+		mac := hmac.New(sha256.New, []byte(secret))
+		mac.Write(body)
+		return hmac.Equal([]byte(strings.ToLower(sig)), []byte("sha256="+hex.EncodeToString(mac.Sum(nil))))
+	}
+	for _, name := range []string{"X-Gitlab-Token", "X-Webhook-Token"} {
+		if token := strings.TrimSpace(header.Get(name)); token != "" {
+			return subtle.ConstantTimeCompare([]byte(token), []byte(secret)) == 1
+		}
+	}
+	if authz := strings.TrimSpace(header.Get("Authorization")); strings.HasPrefix(authz, "Bearer ") {
+		return subtle.ConstantTimeCompare([]byte(strings.TrimPrefix(authz, "Bearer ")), []byte(secret)) == 1
+	}
+	return false
 }

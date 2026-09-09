@@ -2,7 +2,6 @@ package managedendpoint
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -48,30 +47,23 @@ func (c *controller) observeReplica(ctx context.Context, replica *types.Endpoint
 	var out *types.EndpointReplica
 	err := c.s.repo.WithReplicaLock(ctx, replica.ID, func(ctx context.Context) error {
 		current, err := c.s.repo.GetReplica(ctx, replica.ID)
-		if err != nil {
-			return err
-		}
-		if current == nil || current.Status.Terminal() {
+		if err != nil || current == nil || current.Status.Terminal() {
 			out = current
-			return nil
+			return err
 		}
 		before := *current
 		if err := c.syncReplica(ctx, current); err != nil {
 			return err
 		}
 		out = current
-		if replicaChanged(&before, current) {
+		if before.Status != current.Status || before.Address != current.Address || before.WorkerID != current.WorkerID ||
+			before.Capacity != current.Capacity || before.StatusReason != current.StatusReason || !before.ReadyAt.Equal(current.ReadyAt) ||
+			!before.LastHeartbeat.Equal(current.LastHeartbeat) || !before.EndedAt.Equal(current.EndedAt) {
 			return c.s.repo.SaveReplica(ctx, current)
 		}
 		return nil
 	})
 	return out, err
-}
-
-func replicaChanged(a, b *types.EndpointReplica) bool {
-	return a.Status != b.Status || a.Address != b.Address || a.WorkerID != b.WorkerID ||
-		a.Capacity != b.Capacity || a.StatusReason != b.StatusReason || !a.ReadyAt.Equal(b.ReadyAt) ||
-		!a.LastHeartbeat.Equal(b.LastHeartbeat) || !a.EndedAt.Equal(b.EndedAt)
 }
 
 // syncReplica folds the container's state into the replica. Terminal
@@ -95,7 +87,6 @@ func (c *controller) syncReplica(ctx context.Context, replica *types.EndpointRep
 		}
 		return c.finishReplica(ctx, replica, c.exitStatus(replica), "container exited")
 	}
-
 	if state.WorkerId != "" && replica.WorkerID == "" {
 		replica.WorkerID = state.WorkerId
 	}
@@ -106,9 +97,8 @@ func (c *controller) syncReplica(ctx context.Context, replica *types.EndpointRep
 			return c.stopAndFinish(ctx, replica, types.ReplicaStatusFailed, "not scheduled within grace period")
 		}
 		return nil
-
 	case types.ContainerStatusStopping:
-		if replica.Status != types.ReplicaStatusDraining && replica.Status != types.ReplicaStatusEvicting {
+		if replica.Alive() {
 			if state.Evicting {
 				// The scheduler picked this replica as a victim for a
 				// serverless workload. Pull it from rotation now; the worker
@@ -117,17 +107,11 @@ func (c *controller) syncReplica(ctx context.Context, replica *types.EndpointRep
 				replica.StatusReason = "evicted for higher priority workload"
 				replica.DrainDeadline = now.Add(time.Duration(state.DrainSeconds) * time.Second)
 				if replica.HarnessEnabled {
-					// Tell the harness on its next heartbeat so the engine
-					// stops admitting work and finishes what it has.
 					if err := c.s.repo.RequestDrain(ctx, replica.ID, state.DrainSeconds); err != nil {
 						replicaLog(replica).Warn().Err(err).Msg("managed endpoints: request drain for evicted replica failed")
 					}
 				}
-				c.s.emit(types.EventEndpointReplica, types.EventEndpointSchema{
-					EndpointID: replica.EndpointID, Action: "replica." + string(replica.Status), ReplicaID: replica.ID,
-					ContainerID: replica.ContainerID, GPU: replica.GPU, Role: replica.Role, Version: replica.Version,
-					WorkerID: replica.WorkerID, PoolName: replica.PoolName, Locality: replica.Locality, Message: replica.StatusReason,
-				})
+				c.s.replicaEvent(replica, "replica.evicting", replica.StatusReason, nil)
 				replicaLog(replica).Info().Msg("managed endpoints: replica evicted by scheduler")
 			} else {
 				replica.Status = types.ReplicaStatusDraining
@@ -138,17 +122,15 @@ func (c *controller) syncReplica(ctx context.Context, replica *types.EndpointRep
 			}
 		}
 		return nil
-
 	case types.ContainerStatusRunning:
-		// fallthrough below
 	default:
 		return nil
 	}
 
+	port, spec := c.replicaSpec(ctx, replica)
 	if replica.Address == "" {
-		addresses, err := c.s.containers.GetContainerAddressMap(replica.ContainerID)
-		if err == nil {
-			if addr, ok := addresses[int32(c.replicaPort(ctx, replica))]; ok && strings.TrimSpace(addr) != "" {
+		if addresses, err := c.s.containers.GetContainerAddressMap(replica.ContainerID); err == nil {
+			if addr, ok := addresses[int32(port)]; ok && strings.TrimSpace(addr) != "" {
 				replica.Address = addr
 			}
 		}
@@ -174,9 +156,8 @@ func (c *controller) syncReplica(ctx context.Context, replica *types.EndpointRep
 			return c.stopAndFinish(ctx, replica, types.ReplicaStatusFailed, "harness heartbeat stale")
 		}
 	} else if replica.Address != "" {
-		c.probeReplica(ctx, replica)
+		c.probeReplica(ctx, replica, spec)
 	}
-
 	if replica.Status == types.ReplicaStatusLoading && now.Sub(replica.StartedAt) > loadingGrace {
 		return c.stopAndFinish(ctx, replica, types.ReplicaStatusFailed, "did not become ready within grace period")
 	}
@@ -195,10 +176,7 @@ func (c *controller) exitStatus(replica *types.EndpointReplica) types.ReplicaSta
 	if err == nil && exitCode == int(types.ContainerExitCodeEvicted) {
 		return types.ReplicaStatusEvicted
 	}
-	if replica.Status == types.ReplicaStatusDraining {
-		return types.ReplicaStatusStopped
-	}
-	if err == nil && exitCode == 0 {
+	if replica.Status == types.ReplicaStatusDraining || (err == nil && exitCode == 0) {
 		return types.ReplicaStatusStopped
 	}
 	if !replica.Protected && replica.Status == types.ReplicaStatusReady {
@@ -210,8 +188,7 @@ func (c *controller) exitStatus(replica *types.EndpointReplica) types.ReplicaSta
 
 // probeReplica drives status for endpoints without a harness: readiness from
 // the health path and, for LLM engines, capacity from Prometheus metrics.
-func (c *controller) probeReplica(ctx context.Context, replica *types.EndpointReplica) {
-	spec := c.endpointSpec(ctx, replica.EndpointID)
+func (c *controller) probeReplica(ctx context.Context, replica *types.EndpointReplica, spec *types.ManagedEndpointSpec) {
 	baseURL := "http://" + replica.Address
 	paths := llmroute.ReadinessPaths("")
 	if spec != nil && strings.TrimSpace(spec.Health) != "" {
@@ -225,21 +202,15 @@ func (c *controller) probeReplica(ctx context.Context, replica *types.EndpointRe
 		replica.Status = types.ReplicaStatusReady
 		replica.ReadyAt = now
 		replica.StatusReason = ""
-		c.s.emit(types.EventEndpointReplica, types.EventEndpointSchema{
-			EndpointID: replica.EndpointID, Action: "replica.ready", ReplicaID: replica.ID,
-			ContainerID: replica.ContainerID, GPU: replica.GPU, Role: replica.Role, Version: replica.Version,
-			WorkerID: replica.WorkerID, PoolName: replica.PoolName, Locality: replica.Locality,
-		})
+		c.s.replicaEvent(replica, "replica.ready", "", nil)
 	case !ready && replica.Status == types.ReplicaStatusReady:
 		replica.Status = types.ReplicaStatusLoading
 		replica.StatusReason = "health check failing"
 	}
-
 	if !ready || spec == nil || spec.Kind != types.EndpointKindLLM {
 		return
 	}
-	metricsURL := baseURL + llmroute.NormalizeMetricsPath(spec.Metrics)
-	metrics, ok, err := llmroute.FetchEngineMetrics(ctx, probeClient, metricsURL, llmroute.EngineMetrics{})
+	metrics, ok, err := llmroute.FetchEngineMetrics(ctx, probeClient, baseURL+llmroute.NormalizeMetricsPath(spec.Metrics), llmroute.EngineMetrics{})
 	if err != nil || !ok {
 		return
 	}
@@ -253,22 +224,19 @@ func (c *controller) probeReplica(ctx context.Context, replica *types.EndpointRe
 	replica.Capacity.PrefixCacheHitMilli = metrics.PrefixCacheHitMilli
 }
 
-func (c *controller) endpointSpec(ctx context.Context, endpointID string) *types.ManagedEndpointSpec {
-	endpoint, err := c.s.repo.GetEndpoint(ctx, endpointID)
-	if err != nil || endpoint == nil {
-		return nil
+// replicaSpec returns the port a replica serves on and, for endpoint
+// replicas, the endpoint spec (nil for service replicas).
+func (c *controller) replicaSpec(ctx context.Context, replica *types.EndpointReplica) (uint32, *types.ManagedEndpointSpec) {
+	if strings.HasPrefix(replica.EndpointID, serviceReplicaPrefix) {
+		if service, err := c.s.repo.GetService(ctx, strings.TrimPrefix(replica.EndpointID, serviceReplicaPrefix)); err == nil && service != nil {
+			return service.Spec.Port, nil
+		}
+		return 0, nil
 	}
-	return &endpoint.Spec
-}
-
-func (c *controller) replicaPort(ctx context.Context, replica *types.EndpointReplica) uint32 {
-	if spec := c.endpointSpec(ctx, replica.EndpointID); spec != nil {
-		return spec.Port
+	if endpoint, err := c.s.repo.GetEndpoint(ctx, replica.EndpointID); err == nil && endpoint != nil {
+		return endpoint.Spec.Port, &endpoint.Spec
 	}
-	if service, err := c.s.repo.GetService(ctx, replica.EndpointID); err == nil && service != nil {
-		return service.Spec.Port
-	}
-	return 0
+	return 0, nil
 }
 
 // finishReplica records a terminal status.
@@ -279,11 +247,7 @@ func (c *controller) finishReplica(ctx context.Context, replica *types.EndpointR
 	if status == types.ReplicaStatusFailed {
 		_ = c.s.repo.SetScheduleBackoff(ctx, replica.EndpointID, targetKey(replica.Role, replica.GPU), c.s.config.Fill.FailureBackoffOrDefault())
 	}
-	c.s.emit(types.EventEndpointReplica, types.EventEndpointSchema{
-		EndpointID: replica.EndpointID, Action: "replica." + string(status), ReplicaID: replica.ID,
-		ContainerID: replica.ContainerID, GPU: replica.GPU, Role: replica.Role, Version: replica.Version,
-		WorkerID: replica.WorkerID, PoolName: replica.PoolName, Locality: replica.Locality, Message: reason,
-	})
+	c.s.replicaEvent(replica, "replica."+string(status), reason, nil)
 	replicaLog(replica).Info().Str("status", string(status)).Str("reason", reason).Msg("managed endpoints: replica finished")
 	return nil
 }
@@ -303,16 +267,10 @@ func (c *controller) stopAndFinish(ctx context.Context, replica *types.EndpointR
 func (c *controller) drainReplica(ctx context.Context, replica *types.EndpointReplica, drainSeconds uint32, evict bool, reason string) error {
 	return c.s.repo.WithReplicaLock(ctx, replica.ID, func(ctx context.Context) error {
 		current, err := c.s.repo.GetReplica(ctx, replica.ID)
-		if err != nil || current == nil || current.Status.Terminal() {
+		if err != nil || current == nil || !current.Alive() {
 			return err
 		}
-		if current.Status == types.ReplicaStatusDraining || current.Status == types.ReplicaStatusEvicting {
-			return nil
-		}
-		status := types.ReplicaStatusDraining
-		if evict {
-			status = types.ReplicaStatusEvicting
-		}
+		defer func() { *replica = *current }()
 		if drainSeconds == 0 || current.Status != types.ReplicaStatusReady {
 			final := types.ReplicaStatusStopped
 			if evict {
@@ -321,21 +279,18 @@ func (c *controller) drainReplica(ctx context.Context, replica *types.EndpointRe
 			if err := c.stopAndFinish(ctx, current, final, reason); err != nil {
 				return err
 			}
-			*replica = *current
 			return c.s.repo.SaveReplica(ctx, current)
 		}
-		current.Status = status
+		current.Status = types.ReplicaStatusDraining
+		if evict {
+			current.Status = types.ReplicaStatusEvicting
+		}
 		current.StatusReason = reason
 		current.DrainDeadline = time.Now().Add(time.Duration(drainSeconds) * time.Second)
 		if err := c.s.repo.RequestDrain(ctx, current.ID, drainSeconds); err != nil {
 			return err
 		}
-		c.s.emit(types.EventEndpointReplica, types.EventEndpointSchema{
-			EndpointID: current.EndpointID, Action: "replica." + string(status), ReplicaID: current.ID,
-			ContainerID: current.ContainerID, GPU: current.GPU, Role: current.Role, Version: current.Version,
-			WorkerID: current.WorkerID, PoolName: current.PoolName, Locality: current.Locality, Message: reason,
-		})
-		*replica = *current
+		c.s.replicaEvent(current, "replica."+string(current.Status), reason, nil)
 		return c.s.repo.SaveReplica(ctx, current)
 	})
 }
@@ -351,7 +306,6 @@ type startSpec struct {
 	Locality   string
 	PoolName   string
 	Protected  bool
-	Candidate  bool
 	Tuning     bool
 	Harness    bool
 	Entrypoint []string
@@ -394,7 +348,6 @@ func (c *controller) startReplica(ctx context.Context, spec startSpec) (*types.E
 	if err != nil {
 		return nil, err
 	}
-
 	replicaID := fmt.Sprintf("%s-%s", strings.ReplaceAll(spec.EndpointID, "/", "-"), uuid.New().String()[:8])
 	containerID := fmt.Sprintf("%s-%s-%s", containerPrefix, stub.ExternalId, uuid.New().String()[:8])
 
@@ -407,54 +360,45 @@ func (c *controller) startReplica(ctx context.Context, spec startSpec) (*types.E
 		return nil, err
 	}
 
-	env := append([]string{}, stubConfig.Env...)
-	env = append(env, secrets...)
+	env := append(append([]string{}, stubConfig.Env...), secrets...)
 	env = append(env,
-		fmt.Sprintf("BETA9_TOKEN=%s", tokenKey),
-		fmt.Sprintf("STUB_ID=%s", stub.ExternalId),
-		fmt.Sprintf("STUB_TYPE=%s", stub.Type),
-		fmt.Sprintf("%s=%s", EnvEndpointID, spec.EndpointID),
-		fmt.Sprintf("%s=%s", EnvReplicaID, replicaID),
-		fmt.Sprintf("%s=%s", EnvReplicaRole, spec.Role),
-		fmt.Sprintf("%s=%s", EnvGpuTarget, spec.Target.Key()),
-		fmt.Sprintf("%s=%s", EnvLocality, spec.Locality),
+		"BETA9_TOKEN="+tokenKey,
+		"STUB_ID="+stub.ExternalId,
+		"STUB_TYPE="+string(stub.Type),
+		EnvEndpointID+"="+spec.EndpointID,
+		EnvReplicaID+"="+replicaID,
+		EnvReplicaRole+"="+spec.Role,
+		EnvGpuTarget+"="+spec.Target.Key(),
+		EnvLocality+"="+spec.Locality,
 		fmt.Sprintf("%s=%d", EnvEndpointPort, spec.Port),
 		fmt.Sprintf("%s=%t", EnvHarnessEnabled, spec.Harness),
 		fmt.Sprintf("%s=%d", EnvDrainSeconds, spec.DrainSeconds),
 	)
 	if len(spec.Target.Harness) > 0 {
-		if raw, err := json.Marshal(spec.Target.Harness); err == nil {
-			env = append(env, fmt.Sprintf("%s=%s", EnvHarnessConfig, raw))
-		}
+		env = append(env, EnvHarnessConfig+"="+mustJSON(spec.Target.Harness))
 	}
 	if spec.KVCache != nil {
-		if raw, err := json.Marshal(spec.KVCache); err == nil {
-			env = append(env, fmt.Sprintf("BEAM_KV_CACHE=%s", raw))
-		}
+		env = append(env, EnvKVCache+"="+mustJSON(spec.KVCache))
 	}
 	for name, addr := range spec.Services {
-		env = append(env, fmt.Sprintf("%s%s=%s", EnvServicePrefix, strings.ToUpper(strings.ReplaceAll(name, "-", "_")), addr))
+		env = append(env, EnvServicePrefix+strings.ToUpper(strings.ReplaceAll(name, "-", "_"))+"="+addr)
 	}
 
 	entrypoint := spec.Entrypoint
 	if len(entrypoint) == 0 {
 		entrypoint = stubConfig.EntryPoint
 	}
-	entrypoint = appendEngineArgs(entrypoint, spec.Target.EngineArgs)
-
+	var gpu string
 	var gpuRequest []string
 	var gpuCount uint32
-	gpu := ""
 	if !spec.Target.IsCPU() {
 		gpu = string(types.NormalizeGPUType(spec.Target.Type))
 		gpuRequest = []string{gpu}
 		gpuCount = spec.Target.Count
 	}
-
-	ports := []uint32{spec.Port}
 	request := &types.ContainerRequest{
 		ContainerId:       containerID,
-		EntryPoint:        entrypoint,
+		EntryPoint:        appendEngineArgs(entrypoint, spec.Target.EngineArgs),
 		Env:               env,
 		Cpu:               stubConfig.Runtime.Cpu,
 		Memory:            stubConfig.Runtime.Memory,
@@ -468,7 +412,7 @@ func (c *controller) startReplica(ctx context.Context, spec startSpec) (*types.E
 		Workspace:         *workspace,
 		Stub:              *stub,
 		Mounts:            mounts,
-		Ports:             ports,
+		Ports:             []uint32{spec.Port},
 		PoolSelector:      spec.PoolName,
 		Evictable:         spec.Evictable && !spec.Protected,
 		OpportunisticOnly: !spec.Protected,
@@ -492,7 +436,6 @@ func (c *controller) startReplica(ctx context.Context, spec startSpec) (*types.E
 		ContainerID:    containerID,
 		Status:         types.ReplicaStatusScheduling,
 		Protected:      spec.Protected,
-		Candidate:      spec.Candidate,
 		Tuning:         spec.Tuning,
 		HarnessEnabled: spec.Harness,
 		StartedAt:      time.Now(),
@@ -505,13 +448,7 @@ func (c *controller) startReplica(ctx context.Context, spec startSpec) (*types.E
 		_ = c.s.repo.SaveReplica(ctx, replica)
 		return nil, err
 	}
-
-	c.s.emit(types.EventEndpointReplica, types.EventEndpointSchema{
-		EndpointID: replica.EndpointID, Action: "replica.scheduled", ReplicaID: replica.ID,
-		ContainerID: replica.ContainerID, GPU: replica.GPU, Role: replica.Role, Version: replica.Version,
-		PoolName: replica.PoolName, Locality: replica.Locality,
-		Data: map[string]any{"protected": spec.Protected, "candidate": spec.Candidate, "git_sha": spec.GitSHA},
-	})
+	c.s.replicaEvent(replica, "replica.scheduled", "", map[string]any{"protected": spec.Protected, "tuning": spec.Tuning, "git_sha": spec.GitSHA})
 	log.Info().Str("endpoint_id", replica.EndpointID).Str("replica_id", replica.ID).Str("gpu", replica.GPU).
 		Str("pool", replica.PoolName).Bool("protected", replica.Protected).Msg("managed endpoints: replica scheduled")
 	return replica, nil

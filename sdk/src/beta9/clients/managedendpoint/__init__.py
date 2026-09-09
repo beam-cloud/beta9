@@ -68,7 +68,6 @@ class EndpointReplica(betterproto.Message):
     address: str = betterproto.string_field(11)
     status: str = betterproto.string_field(12)
     protected: bool = betterproto.bool_field(13)
-    candidate: bool = betterproto.bool_field(14)
     tuning: bool = betterproto.bool_field(15)
     harness_enabled: bool = betterproto.bool_field(16)
     config_revision: int = betterproto.uint64_field(17)

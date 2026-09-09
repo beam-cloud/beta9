@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"runtime/debug"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -16,6 +18,11 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// The controller is the reconciliation loop: observe replicas, compute the
+// GPU inventory endpoints may occupy, divide it between endpoints by share,
+// and start / drain replicas to converge. Exactly one gateway replica runs
+// it at a time (Redis lock); others stand by and take over when it lapses.
+
 const (
 	controllerLockKey  = "managed_endpoint:controller"
 	controllerLockTTL  = 30 * time.Second
@@ -25,10 +32,14 @@ const (
 	loadingGrace       = 30 * time.Minute
 	containerLostGrace = 20 * time.Second
 	maxStartsPerTick   = 8
+
+	serviceReplicaPrefix = "service:"
+	serviceDrainSeconds  = 30
 )
 
-// controller is the reconciliation loop. Exactly one gateway replica runs it
-// at a time (Redis lock); others stand by and take over when the lock lapses.
+// serviceReplicaID namespaces service replicas away from endpoint ids.
+func serviceReplicaID(name string) string { return serviceReplicaPrefix + name }
+
 type controller struct {
 	s    *Service
 	lock *common.RedisLock
@@ -47,16 +58,6 @@ type controller struct {
 	leaderSince atomic.Int64
 }
 
-// silentFor reports how long a replica has gone without a heartbeat that we
-// could have observed.
-func (c *controller) silentFor(lastHeartbeat time.Time, now time.Time) time.Duration {
-	since := lastHeartbeat
-	if leader := time.Unix(0, c.leaderSince.Load()); leader.After(since) {
-		since = leader
-	}
-	return now.Sub(since)
-}
-
 type cachedStub struct {
 	stub    *types.StubWithRelated
 	config  *types.StubConfigV1
@@ -64,16 +65,11 @@ type cachedStub struct {
 }
 
 func newController(s *Service) *controller {
-	return &controller{
-		s:         s,
-		lock:      common.NewRedisLock(s.rdb),
-		stubCache: map[string]cachedStub{},
-	}
+	return &controller{s: s, lock: common.NewRedisLock(s.rdb), stubCache: map[string]cachedStub{}}
 }
 
 func (c *controller) run(ctx context.Context) {
-	interval := c.s.config.Fill.ReconcileIntervalOrDefault()
-	ticker := time.NewTicker(interval)
+	ticker := time.NewTicker(c.s.config.Fill.ReconcileIntervalOrDefault())
 	defer ticker.Stop()
 
 	leader := false
@@ -100,46 +96,50 @@ func (c *controller) run(ctx context.Context) {
 			continue
 		}
 
-		if err := c.safeReconcile(ctx); err != nil {
+		if err := c.reconcile(ctx); err != nil {
 			log.Error().Err(err).Msg("managed endpoints: reconcile failed")
 		}
 	}
 }
 
-// safeReconcile keeps a bug in one pass from taking the gateway down.
-func (c *controller) safeReconcile(ctx context.Context) (err error) {
+// silentFor reports how long a replica has gone without a heartbeat that we
+// could have observed.
+func (c *controller) silentFor(lastHeartbeat, now time.Time) time.Duration {
+	if leader := time.Unix(0, c.leaderSince.Load()); leader.After(lastHeartbeat) {
+		lastHeartbeat = leader
+	}
+	return now.Sub(lastHeartbeat)
+}
+
+// reconcile is one pass: observe replicas, compute inventory, fill services
+// then endpoints, and drain what is no longer wanted. A panic in one pass
+// is reported as an error rather than taking the gateway down.
+func (c *controller) reconcile(ctx context.Context) (err error) {
+	c.reconcileMu.Lock()
+	defer c.reconcileMu.Unlock()
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("reconcile panicked: %v\n%s", r, debug.Stack())
 		}
 	}()
-	return c.reconcile(ctx)
-}
-
-// reconcile is one pass: observe replicas, compute inventory, fill services
-// then endpoints, and drain what is no longer wanted.
-func (c *controller) reconcile(ctx context.Context) error {
-	c.reconcileMu.Lock()
-	defer c.reconcileMu.Unlock()
 
 	replicas, err := c.s.repo.ListAllReplicas(ctx)
 	if err != nil {
 		return err
 	}
 	live := c.observeReplicas(ctx, replicas)
-
-	inventory, err := c.inventory(ctx, live)
+	inv, err := c.inventory(live)
 	if err != nil {
 		return err
 	}
 
+	var errs []error
 	services, err := c.s.repo.ListServices(ctx)
 	if err != nil {
 		return err
 	}
-	var errs []error
 	for _, service := range services {
-		if err := c.reconcileService(ctx, service, live, inventory); err != nil {
+		if err := c.reconcileService(ctx, service, live, inv); err != nil {
 			errs = append(errs, fmt.Errorf("service %s: %w", service.Spec.Name, err))
 		}
 	}
@@ -150,20 +150,131 @@ func (c *controller) reconcile(ctx context.Context) error {
 	}
 	sort.Slice(endpoints, func(i, j int) bool { return endpoints[i].Spec.ID < endpoints[j].Spec.ID })
 
-	targets, byEndpoint := c.collectTargets(ctx, endpoints, live)
-	plans := planFill(inventory.byType, targets, c.s.config.Fill.MaxClusterShareOrDefault())
+	// Every enabled endpoint's targets compete for the same inventory, so the
+	// fill plan is computed once across all of them.
+	var targets []fillTarget
+	for _, endpoint := range endpoints {
+		if !endpoint.Enabled {
+			continue
+		}
+		for _, rt := range endpoint.Spec.Targets() {
+			targets = append(targets, fillTarget{EndpointID: endpoint.Spec.ID, RoleTarget: rt, Demand: c.demand(ctx, endpoint, rt, live)})
+		}
+	}
+	plans := planFill(inv.byType, targets, c.s.config.Fill.MaxClusterShareOrDefault())
 
 	for _, endpoint := range endpoints {
-		if err := c.reconcileEndpoint(ctx, endpoint, byEndpoint[endpoint.Spec.ID], plans, live, inventory); err != nil {
+		if err := c.reconcileEndpoint(ctx, endpoint, plans, live, inv); err != nil {
 			errs = append(errs, fmt.Errorf("endpoint %s: %w", endpoint.Spec.ID, err))
 		}
 	}
 	return errors.Join(errs...)
 }
 
-// clusterInventory is the eligible GPU inventory keyed by normalized GPU type.
+// stub returns the stub record and parsed config for a stub id, cached briefly.
+func (c *controller) stub(ctx context.Context, stubID string) (*types.StubWithRelated, *types.StubConfigV1, error) {
+	c.stubMu.Lock()
+	entry, ok := c.stubCache[stubID]
+	c.stubMu.Unlock()
+	if ok && time.Since(entry.fetched) < stubCacheTTL {
+		return entry.stub, entry.config, nil
+	}
+	stub, err := c.s.backend.GetStubByExternalId(ctx, stubID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if stub == nil || stub.ExternalId == "" {
+		return nil, nil, fmt.Errorf("stub %q: %w", stubID, errNotFound)
+	}
+	config, err := stub.UnmarshalConfig()
+	if err != nil {
+		return nil, nil, err
+	}
+	c.stubMu.Lock()
+	c.stubCache[stubID] = cachedStub{stub: stub, config: config, fetched: time.Now()}
+	c.stubMu.Unlock()
+	return stub, config, nil
+}
+
+// endpointSpecFromStub extracts the endpoint spec a version's stub carries.
+func (c *controller) endpointSpecFromStub(ctx context.Context, stubID string) (*types.ManagedEndpointSpec, error) {
+	_, cfg, err := c.stub(ctx, stubID)
+	if err != nil {
+		return nil, err
+	}
+	if cfg == nil || cfg.ManagedEndpoint == nil || cfg.ManagedEndpoint.Endpoint == nil {
+		return nil, fmt.Errorf("stub %s has no endpoint spec", stubID)
+	}
+	return cfg.ManagedEndpoint.Endpoint, nil
+}
+
+// --- inventory -----------------------------------------------------------------
+
+// workerSlot is one worker's inventory of a single GPU type.
+type workerSlot struct {
+	WorkerID string
+	PoolName string
+	Locality string
+	// Total is the worker's GPU count; Free is what the scheduler reports as
+	// unallocated right now; Held is what managed endpoint replicas occupy.
+	Total uint32
+	Free  uint32
+	Held  uint32
+	// MaxShare is the pool's cap on the fraction of its GPUs endpoints may
+	// hold; zero means "use the cluster default".
+	MaxShare float64
+}
+
+// gpuInventory is all eligible workers carrying one GPU type.
+type gpuInventory struct {
+	GPU     string
+	Workers []workerSlot
+}
+
+// allowance is the number of GPUs endpoints may hold after applying the
+// cluster and per-pool share caps. Free GPUs plus those endpoints already
+// hold count; GPUs held by serverless workloads never do.
+func (g *gpuInventory) allowance(clusterShare float64) uint32 {
+	var allowed float64
+	for _, w := range g.Workers {
+		share := clusterShare
+		if w.MaxShare > 0 && w.MaxShare < share {
+			share = w.MaxShare
+		}
+		allowed += float64(w.Free+w.Held) * share
+	}
+	return uint32(math.Floor(allowed + 1e-9))
+}
+
+// pickWorker returns the index of the worker with the most free GPUs that can
+// fit count GPUs and passes accept (nil accepts all). Preferring the
+// least-loaded worker spreads replicas across the fleet.
+func (g *gpuInventory) pickWorker(count uint32, accept func(workerSlot) bool) (int, bool) {
+	count = max(count, 1)
+	best := -1
+	for i, w := range g.Workers {
+		if w.Free < count || (accept != nil && !accept(w)) {
+			continue
+		}
+		if best < 0 || w.Free > g.Workers[best].Free || (w.Free == g.Workers[best].Free && w.Held < g.Workers[best].Held) {
+			best = i
+		}
+	}
+	return best, best >= 0
+}
+
+// reserve records that count GPUs on worker i are now held by a replica so
+// later picks in the same tick see the reduced free capacity.
+func (g *gpuInventory) reserve(i int, count uint32) {
+	count = max(count, 1)
+	w := &g.Workers[i]
+	w.Free -= min(w.Free, count)
+	w.Held += count
+}
+
+// clusterInventory is the GPU inventory endpoints may use, keyed by GPU type.
 type clusterInventory struct {
-	byType     map[string]gpuInventory
+	byType     map[string]*gpuInventory
 	localities map[string][]string // gpu type -> localities present
 	cpuPools   []string
 }
@@ -178,30 +289,29 @@ func (c *controller) poolConfig(name string) (types.WorkerPoolConfig, bool) {
 	return types.WorkerPoolConfig{}, false
 }
 
-func poolLocality(name string, cfg types.WorkerPoolConfig) string {
-	if strings.TrimSpace(cfg.Locality) != "" {
+// poolLocality is the network domain of a pool: its configured locality or,
+// failing that, the pool name.
+func (c *controller) poolLocality(name string) string {
+	if cfg, ok := c.poolConfig(name); ok && strings.TrimSpace(cfg.Locality) != "" {
 		return cfg.Locality
 	}
 	return name
 }
 
 // inventory reads worker state and folds in what replicas already hold.
-func (c *controller) inventory(ctx context.Context, replicas []*types.EndpointReplica) (*clusterInventory, error) {
+func (c *controller) inventory(replicas []*types.EndpointReplica) (*clusterInventory, error) {
 	workers, err := c.s.workers.GetAllWorkers()
 	if err != nil {
 		return nil, err
 	}
-
 	heldByWorker := map[string]uint32{}
 	for _, r := range replicas {
-		if r.WorkerID != "" && r.GPUCount > 0 && !r.Status.Terminal() {
+		if r.WorkerID != "" && !r.Status.Terminal() {
 			heldByWorker[r.WorkerID] += r.GPUCount
 		}
 	}
 
-	inv := &clusterInventory{byType: map[string]gpuInventory{}, localities: map[string][]string{}}
-	seenLocality := map[string]map[string]bool{}
-	cpuPools := map[string]bool{}
+	inv := &clusterInventory{byType: map[string]*gpuInventory{}, localities: map[string][]string{}}
 	for _, w := range workers {
 		if w == nil || w.Status == types.WorkerStatusDisabled {
 			continue
@@ -210,38 +320,31 @@ func (c *controller) inventory(ctx context.Context, replicas []*types.EndpointRe
 		if !ok || !cfg.ManagedEndpoints.Enabled {
 			continue
 		}
-		locality := poolLocality(w.PoolName, cfg)
 		if w.TotalGpuCount == 0 || w.Gpu == "" {
-			cpuPools[w.PoolName] = true
+			if !slices.Contains(inv.cpuPools, w.PoolName) {
+				inv.cpuPools = append(inv.cpuPools, w.PoolName)
+			}
 			continue
 		}
 		gpuType := string(types.NormalizeGPUType(w.Gpu))
-		held := heldByWorker[w.Id]
-		if held > w.TotalGpuCount {
-			held = w.TotalGpuCount
-		}
+		locality := c.poolLocality(w.PoolName)
 		entry := inv.byType[gpuType]
-		entry.GPU = gpuType
+		if entry == nil {
+			entry = &gpuInventory{GPU: gpuType}
+			inv.byType[gpuType] = entry
+		}
 		entry.Workers = append(entry.Workers, workerSlot{
 			WorkerID: w.Id,
 			PoolName: w.PoolName,
 			Locality: locality,
 			Total:    w.TotalGpuCount,
 			Free:     w.FreeGpuCount,
-			Held:     held,
+			Held:     min(heldByWorker[w.Id], w.TotalGpuCount),
 			MaxShare: cfg.ManagedEndpoints.MaxShare,
 		})
-		inv.byType[gpuType] = entry
-		if seenLocality[gpuType] == nil {
-			seenLocality[gpuType] = map[string]bool{}
-		}
-		if !seenLocality[gpuType][locality] {
-			seenLocality[gpuType][locality] = true
+		if !slices.Contains(inv.localities[gpuType], locality) {
 			inv.localities[gpuType] = append(inv.localities[gpuType], locality)
 		}
-	}
-	for name := range cpuPools {
-		inv.cpuPools = append(inv.cpuPools, name)
 	}
 	sort.Strings(inv.cpuPools)
 	for _, l := range inv.localities {
@@ -250,78 +353,145 @@ func (c *controller) inventory(ctx context.Context, replicas []*types.EndpointRe
 	return inv, nil
 }
 
-// stub returns the stub record and parsed config for a stub id, cached briefly.
-func (c *controller) stub(ctx context.Context, stubID string) (*types.StubWithRelated, *types.StubConfigV1, error) {
-	c.stubMu.Lock()
-	entry, ok := c.stubCache[stubID]
-	c.stubMu.Unlock()
-	if ok && time.Since(entry.fetched) < stubCacheTTL {
-		return entry.stub, entry.config, nil
+// place chooses a pool (and its locality) for a target, reserving the GPUs
+// in the in-memory inventory. CPU targets go to any endpoint-enabled CPU
+// pool; GPU targets go to the least-loaded eligible worker.
+func (c *controller) place(inv *clusterInventory, target types.GpuTarget, localities []string) (pool string, locality string, ok bool) {
+	accept := func(w workerSlot) bool {
+		return len(localities) == 0 || slices.Contains(localities, w.Locality)
 	}
-
-	stub, err := c.s.backend.GetStubByExternalId(ctx, stubID)
-	if err != nil {
-		return nil, nil, err
+	if target.IsCPU() {
+		for _, name := range inv.cpuPools {
+			if loc := c.poolLocality(name); accept(workerSlot{Locality: loc}) {
+				return name, loc, true
+			}
+		}
+		return "", "", false
 	}
-	if stub == nil || stub.ExternalId == "" {
-		return nil, nil, notFound("stub", stubID)
+	entry := inv.byType[string(types.NormalizeGPUType(target.Type))]
+	if entry == nil {
+		return "", "", false
 	}
-	config, err := stub.UnmarshalConfig()
-	if err != nil {
-		return nil, nil, err
+	i, ok := entry.pickWorker(target.Count, accept)
+	if !ok {
+		return "", "", false
 	}
-	c.stubMu.Lock()
-	c.stubCache[stubID] = cachedStub{stub: stub, config: config, fetched: time.Now()}
-	c.stubMu.Unlock()
-	return stub, config, nil
+	entry.reserve(i, target.Count)
+	return entry.Workers[i].PoolName, entry.Workers[i].Locality, true
 }
 
-// collectTargets turns every enabled endpoint's active (and canary) versions
-// into fill targets, attaching router demand.
-func (c *controller) collectTargets(ctx context.Context, endpoints []*types.ManagedEndpoint, live []*types.EndpointReplica) ([]fillTarget, map[string]*endpointPlanInput) {
-	var targets []fillTarget
-	byEndpoint := map[string]*endpointPlanInput{}
-	for _, endpoint := range endpoints {
-		if !endpoint.Enabled {
-			continue
-		}
-		input := &endpointPlanInput{endpoint: endpoint}
-		byEndpoint[endpoint.Spec.ID] = input
+// --- fill planning -------------------------------------------------------------
 
-		rollout, err := c.s.repo.GetRollout(ctx, endpoint.Spec.ID)
-		if err != nil {
-			log.Warn().Err(err).Str("endpoint_id", endpoint.Spec.ID).Msg("managed endpoints: rollout state unavailable")
-		}
-		input.rollout = rollout
-
-		for _, rt := range endpoint.Spec.Targets() {
-			demand := c.demand(ctx, endpoint, rt, live)
-			targets = append(targets, fillTarget{
-				EndpointID: endpoint.Spec.ID,
-				Role:       rt.Role,
-				GPU:        rt.Target.Key(),
-				Type:       gpuTypeOf(rt.Target),
-				Count:      rt.Target.Count,
-				Share:      rt.Target.Share,
-				Min:        rt.Target.MinReplicas,
-				Max:        rt.Target.MaxReplicas,
-				Demand:     demand,
-			})
-		}
-	}
-	return targets, byEndpoint
+// fillTarget is one (endpoint, role, gpu target) unit of placement.
+type fillTarget struct {
+	EndpointID string
+	types.RoleTarget
+	// Demand is the replica count the router asks for (queue pressure); it
+	// may exceed the fair-share quota when spare capacity exists.
+	Demand uint32
 }
 
-type endpointPlanInput struct {
-	endpoint *types.ManagedEndpoint
-	rollout  *types.RolloutState
-}
+func (t fillTarget) key() string { return t.EndpointID + "|" + t.RoleTarget.Key() }
 
-func gpuTypeOf(t types.GpuTarget) string {
-	if t.IsCPU() {
+// gpuType is the inventory bucket the target draws from ("cpu" or "H100").
+func (t fillTarget) gpuType() string {
+	if t.Target.IsCPU() {
 		return "cpu"
 	}
-	return string(types.NormalizeGPUType(t.Type))
+	return string(types.NormalizeGPUType(t.Target.Type))
+}
+
+// fillPlan is the placement decision for one fillTarget.
+type fillPlan struct {
+	// Quota is the fair-share allocation in replicas.
+	Quota uint32
+	// Desired is what the controller converges toward this tick.
+	Desired uint32
+}
+
+// planFill divides each GPU type's allowance between the targets that want it
+// in proportion to their declared shares, then clamps by min/max replicas.
+// Shares of targets on the same GPU type are normalized when they sum to more
+// than one, so over-subscribed specs degrade gracefully instead of exceeding
+// the cluster cap.
+func planFill(inventory map[string]*gpuInventory, targets []fillTarget, clusterShare float64) map[string]fillPlan {
+	plans := make(map[string]fillPlan, len(targets))
+	byType := map[string][]fillTarget{}
+	for _, t := range targets {
+		byType[t.gpuType()] = append(byType[t.gpuType()], t)
+	}
+	for gpuType, group := range byType {
+		var allowance uint32
+		if inv := inventory[gpuType]; inv != nil {
+			allowance = inv.allowance(clusterShare)
+		}
+		var shareSum float64
+		for _, t := range group {
+			shareSum += math.Max(t.Target.Share, 0)
+		}
+		norm := 1.0
+		if shareSum > 1 {
+			norm = 1 / shareSum
+		}
+		for _, t := range group {
+			var quota uint32
+			if t.Target.Share > 0 && allowance > 0 {
+				quota = uint32(math.Floor(float64(allowance)*t.Target.Share*norm/float64(max(t.Target.Count, 1)) + 1e-9))
+			}
+			desired := max(quota, t.Demand, t.Target.MinReplicas)
+			if t.Target.MaxReplicas > 0 {
+				desired = min(desired, t.Target.MaxReplicas)
+			}
+			plans[t.key()] = fillPlan{Quota: quota, Desired: desired}
+		}
+	}
+	return plans
+}
+
+// replicaSet is the live replicas for one fillTarget, partitioned for
+// scale decisions.
+type replicaSet struct {
+	Live      []*types.EndpointReplica // scheduling|loading|ready, serving-eligible
+	Ready     []*types.EndpointReplica // subset of Live that is ready
+	Protected uint32
+}
+
+func partitionReplicas(replicas []*types.EndpointReplica, endpointID, role, gpu string, version uint) replicaSet {
+	var set replicaSet
+	for _, r := range replicas {
+		if r.EndpointID != endpointID || r.Role != role || r.GPU != gpu || r.Version != version || !r.Alive() || r.Tuning {
+			continue
+		}
+		set.Live = append(set.Live, r)
+		if r.Status == types.ReplicaStatusReady {
+			set.Ready = append(set.Ready, r)
+		}
+		if r.Protected {
+			set.Protected++
+		}
+	}
+	return set
+}
+
+// scaleDownCandidates orders live replicas so the least valuable are drained
+// first: unprotected before protected, then not-yet-ready before ready, then
+// the least loaded, then the newest.
+func scaleDownCandidates(set replicaSet) []*types.EndpointReplica {
+	out := slices.Clone(set.Live)
+	sort.SliceStable(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		if a.Protected != b.Protected {
+			return !a.Protected
+		}
+		if aReady, bReady := a.Status == types.ReplicaStatusReady, b.Status == types.ReplicaStatusReady; aReady != bReady {
+			return !aReady
+		}
+		if a.Capacity.InFlight != b.Capacity.InFlight {
+			return a.Capacity.InFlight < b.Capacity.InFlight
+		}
+		return a.StartedAt.After(b.StartedAt)
+	})
+	return out
 }
 
 // demand asks for one more replica than currently serving when the recent
@@ -350,4 +520,318 @@ func (c *controller) demand(ctx context.Context, endpoint *types.ManagedEndpoint
 		return ready + 1
 	}
 	return ready
+}
+
+// --- endpoints -----------------------------------------------------------------
+
+// reconcileEndpoint converges one endpoint's replicas toward the fill plan.
+func (c *controller) reconcileEndpoint(ctx context.Context, endpoint *types.ManagedEndpoint, plans map[string]fillPlan, live []*types.EndpointReplica, inv *clusterInventory) error {
+	spec := &endpoint.Spec
+	drainSeconds := spec.Policy.DrainSeconds
+
+	if !endpoint.Enabled {
+		for _, r := range live {
+			if r.EndpointID == spec.ID {
+				_ = c.drainReplica(ctx, r, drainSeconds, false, "endpoint disabled")
+			}
+		}
+		return nil
+	}
+
+	rollout, err := c.s.repo.GetRollout(ctx, spec.ID)
+	if err != nil {
+		return err
+	}
+	if rollout == nil {
+		rollout = &types.RolloutState{EndpointID: spec.ID, ActiveVersion: endpoint.Version, Phase: types.RolloutPhaseIdle}
+	}
+	if err := c.stepRollout(ctx, endpoint, rollout, live); err != nil {
+		log.Warn().Err(err).Str("endpoint_id", spec.ID).Msg("managed endpoints: rollout step failed")
+	}
+	if err := c.ensureFleetRevisions(ctx, endpoint); err != nil {
+		log.Warn().Err(err).Str("endpoint_id", spec.ID).Msg("managed endpoints: fleet config revisions")
+	}
+
+	services, missing := serviceAddresses(spec.Services, live)
+	if len(missing) > 0 {
+		// Keep what is running but do not grow until dependencies are up.
+		log.Debug().Str("endpoint_id", spec.ID).Strs("missing_services", missing).Msg("managed endpoints: waiting on services")
+	}
+
+	for _, rt := range spec.Targets() {
+		plan := plans[fillTarget{EndpointID: spec.ID, RoleTarget: rt}.key()]
+		set := partitionReplicas(live, spec.ID, rt.Role, rt.Target.Key(), endpoint.Version)
+		current := uint32(len(set.Live))
+
+		switch {
+		case current < plan.Desired && len(missing) == 0:
+			c.growTarget(ctx, endpoint, rt, plan.Desired-current, set.Protected, inv, services)
+		case current > plan.Desired:
+			excess := current - plan.Desired
+			for _, r := range scaleDownCandidates(set) {
+				if excess == 0 {
+					break
+				}
+				if r.Protected && current-excess < rt.Target.MinReplicas {
+					continue
+				}
+				if err := c.drainReplica(ctx, r, drainSeconds, false, "scale down to fair share"); err == nil {
+					excess--
+				}
+			}
+		}
+		c.retireStaleVersions(ctx, endpoint, rollout, rt, live, drainSeconds)
+	}
+	return nil
+}
+
+// growTarget starts up to need replicas. Replicas needed to satisfy
+// min_replicas are protected (they may trigger provisioning); the rest are
+// opportunistic and only land on free capacity.
+func (c *controller) growTarget(ctx context.Context, endpoint *types.ManagedEndpoint, rt types.RoleTarget, need, protectedLive uint32, inv *clusterInventory, services map[string]string) {
+	spec := &endpoint.Spec
+	protectedNeeded := rt.Target.MinReplicas - min(rt.Target.MinReplicas, protectedLive)
+	backoff, _ := c.s.repo.InScheduleBackoff(ctx, spec.ID, rt.Key())
+
+	for i := uint32(0); i < min(need, maxStartsPerTick); i++ {
+		protected := protectedNeeded > 0
+		if !protected && backoff {
+			return
+		}
+		pool, locality, ok := c.place(inv, rt.Target, spec.Locality)
+		if !ok && !protected {
+			return
+		}
+		drain := spec.Policy.DrainSeconds
+		if drain == 0 {
+			drain = c.s.config.Preemption.DefaultDrainSeconds
+		}
+		_, err := c.startReplica(ctx, startSpec{
+			EndpointID:   spec.ID,
+			Version:      endpoint.Version,
+			StubID:       endpoint.StubID,
+			Role:         rt.Role,
+			Target:       rt.Target,
+			Port:         spec.Port,
+			Locality:     locality,
+			PoolName:     pool,
+			Protected:    protected,
+			Harness:      spec.Harness.Enabled,
+			Entrypoint:   spec.Entrypoint,
+			Services:     services,
+			KVCache:      spec.KVCache,
+			Evictable:    spec.Policy.Evictable && c.s.config.Preemption.Enabled,
+			DrainSeconds: drain,
+			GitSHA:       endpoint.GitSHA,
+		})
+		if err != nil {
+			log.Warn().Err(err).Str("endpoint_id", spec.ID).Str("target", rt.Key()).Msg("managed endpoints: start replica failed")
+			return
+		}
+		if protected {
+			protectedNeeded--
+		}
+	}
+}
+
+// retireStaleVersions drains replicas running versions that are neither
+// active nor the current canary, one per target per tick, and only once the
+// active version has something ready to take the traffic.
+func (c *controller) retireStaleVersions(ctx context.Context, endpoint *types.ManagedEndpoint, rollout *types.RolloutState, rt types.RoleTarget, live []*types.EndpointReplica, drainSeconds uint32) {
+	activeReady := len(partitionReplicas(live, endpoint.Spec.ID, rt.Role, rt.Target.Key(), endpoint.Version).Ready)
+	for _, r := range live {
+		if r.EndpointID != endpoint.Spec.ID || r.Role != rt.Role || r.GPU != rt.Target.Key() || !r.Alive() {
+			continue
+		}
+		if r.Version == endpoint.Version || (rollout.CanaryVersion != 0 && r.Version == rollout.CanaryVersion) {
+			continue
+		}
+		if r.Status == types.ReplicaStatusReady && activeReady == 0 {
+			continue // keep serving the old version until the new one is up
+		}
+		if err := c.drainReplica(ctx, r, drainSeconds, false, fmt.Sprintf("version %d retired", r.Version)); err == nil {
+			return
+		}
+	}
+}
+
+// ensureFleetRevisions seeds the git-sourced harness config for each target
+// of one endpoint version. Fleet config streams are keyed by version, so
+// this runs once per version and live fleet edits made afterwards stay in
+// force for that version only; the next version starts from git again.
+func (c *controller) ensureFleetRevisions(ctx context.Context, endpoint *types.ManagedEndpoint) error {
+	if !endpoint.Spec.Harness.Enabled {
+		return nil
+	}
+	for _, rt := range endpoint.Spec.Targets() {
+		key := fleetKey(rt.Role, rt.Target.Key(), endpoint.Version)
+		latest, err := c.s.repo.LatestConfigRevision(ctx, endpoint.Spec.ID, types.ConfigScopeTarget, key)
+		if err != nil {
+			return err
+		}
+		if latest != nil {
+			continue
+		}
+		config := rt.Target.Harness
+		if config == nil {
+			config = map[string]any{}
+		}
+		revision := &types.EndpointConfigRevision{
+			EndpointID: endpoint.Spec.ID,
+			Scope:      types.ConfigScopeTarget,
+			ScopeKey:   key,
+			Config:     config,
+			Author:     fmt.Sprintf("git@v%d", endpoint.Version),
+			Source:     types.ConfigSourceGit,
+		}
+		if err := c.s.repo.CreateConfigRevision(ctx, revision); err != nil {
+			return err
+		}
+		c.s.emit(types.EventEndpointConfig, types.EventEndpointSchema{
+			EndpointID: endpoint.Spec.ID, Action: "config.fleet", Version: endpoint.Version,
+			Role: rt.Role, GPU: rt.Target.Key(), Revision: revision.Revision,
+			Data: map[string]any{"source": "git", "git_sha": endpoint.GitSHA},
+		})
+	}
+	return nil
+}
+
+// serviceAddresses resolves the addresses of the shared services an endpoint
+// depends on. Missing names are returned so fill can wait for them.
+func serviceAddresses(names []string, live []*types.EndpointReplica) (map[string]string, []string) {
+	if len(names) == 0 {
+		return nil, nil
+	}
+	out := map[string]string{}
+	var missing []string
+	for _, name := range names {
+		var addrs []string
+		for _, r := range live {
+			if r.EndpointID == serviceReplicaID(name) && r.Status == types.ReplicaStatusReady && r.Address != "" {
+				addrs = append(addrs, r.Address)
+			}
+		}
+		if len(addrs) == 0 {
+			missing = append(missing, name)
+			continue
+		}
+		sort.Strings(addrs)
+		out[name] = strings.Join(addrs, ",")
+	}
+	return out, missing
+}
+
+// --- services ------------------------------------------------------------------
+
+// reconcileService keeps a shared service at its replica count, per locality
+// when requested. Service replicas are always protected.
+func (c *controller) reconcileService(ctx context.Context, service *types.ManagedService, live []*types.EndpointReplica, inv *clusterInventory) error {
+	spec := &service.Spec
+	id := serviceReplicaID(spec.Name)
+
+	if !service.Enabled {
+		for _, r := range live {
+			if r.EndpointID == id {
+				_ = c.drainReplica(ctx, r, serviceDrainSeconds, false, "service disabled")
+			}
+		}
+		return nil
+	}
+
+	groups := []string{""}
+	if spec.PerLocality {
+		groups = c.serviceLocalities(spec, inv)
+	}
+	for _, locality := range groups {
+		var set replicaSet
+		for _, r := range live {
+			if r.EndpointID == id && r.Version == service.Version && r.Alive() && (locality == "" || r.Locality == locality) {
+				set.Live = append(set.Live, r)
+				if r.Status == types.ReplicaStatusReady {
+					set.Ready = append(set.Ready, r)
+				}
+			}
+		}
+		current := uint32(len(set.Live))
+		switch {
+		case current < spec.Replicas:
+			var want []string
+			if locality != "" {
+				want = []string{locality}
+			}
+			for i := uint32(0); i < min(spec.Replicas-current, maxStartsPerTick); i++ {
+				target, pool, loc := c.placeService(inv, spec, want)
+				if _, err := c.startReplica(ctx, startSpec{
+					EndpointID: id,
+					Version:    service.Version,
+					StubID:     service.StubID,
+					Role:       types.ReplicaRoleServe,
+					Target:     target,
+					Port:       spec.Port,
+					Locality:   loc,
+					PoolName:   pool,
+					Protected:  true,
+					Entrypoint: spec.Entrypoint,
+					GitSHA:     service.GitSHA,
+				}); err != nil {
+					log.Warn().Err(err).Str("service", spec.Name).Msg("managed endpoints: start service replica failed")
+					break
+				}
+			}
+		case current > spec.Replicas:
+			for _, r := range scaleDownCandidates(set)[:current-spec.Replicas] {
+				_ = c.drainReplica(ctx, r, serviceDrainSeconds, false, "service scale down")
+			}
+		}
+
+		// Retire old versions once the new one is fully ready.
+		if uint32(len(set.Ready)) >= spec.Replicas {
+			for _, r := range live {
+				if r.EndpointID == id && r.Version != service.Version && r.Alive() && (locality == "" || r.Locality == locality) {
+					_ = c.drainReplica(ctx, r, serviceDrainSeconds, false, fmt.Sprintf("version %d retired", r.Version))
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// serviceLocalities lists every locality where at least one of the service's
+// targets could run.
+func (c *controller) serviceLocalities(spec *types.ManagedServiceSpec, inv *clusterInventory) []string {
+	var out []string
+	for _, t := range spec.Gpu {
+		if t.IsCPU() {
+			for _, name := range inv.cpuPools {
+				out = append(out, c.poolLocality(name))
+			}
+			continue
+		}
+		out = append(out, inv.localities[string(types.NormalizeGPUType(t.Type))]...)
+	}
+	sort.Strings(out)
+	out = slices.Compact(out)
+	if len(out) == 0 {
+		out = []string{""}
+	}
+	return out
+}
+
+// placeService picks the first target with free capacity; when none has,
+// the first target is used and the (protected) request may provision.
+func (c *controller) placeService(inv *clusterInventory, spec *types.ManagedServiceSpec, localities []string) (types.GpuTarget, string, string) {
+	targets := spec.Gpu
+	if len(targets) == 0 {
+		targets = []types.GpuTarget{types.CPUTarget()}
+	}
+	for _, t := range targets {
+		if pool, loc, ok := c.place(inv, t, localities); ok {
+			return t, pool, loc
+		}
+	}
+	loc := ""
+	if len(localities) > 0 {
+		loc = localities[0]
+	}
+	return targets[0], "", loc
 }
