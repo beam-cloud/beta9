@@ -7,6 +7,7 @@ deploys both.
 """
 
 import json
+import os
 import shlex
 from dataclasses import asdict, dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
@@ -81,7 +82,13 @@ class Catalog:
         return {**asdict(self), "public": bool(self.public)}
 
 
-GpuArg = Union[Dict[Union[GpuTypeAlias, str], Union[Gpu, None]], List[Union[GpuTypeAlias, str]], GpuTypeAlias, str, None]
+GpuArg = Union[
+    Dict[Union[GpuTypeAlias, str], Union[Gpu, None]],
+    List[Union[GpuTypeAlias, str]],
+    GpuTypeAlias,
+    str,
+    None,
+]
 
 
 def _gpu_key(gpu: Union[GpuTypeAlias, str]) -> str:
@@ -201,24 +208,37 @@ class ManagedEndpoint(RunnerAbstraction):
         git_sha: str = "",
         **_: Any,
     ) -> Tuple[Dict[str, Any], bool]:
-        """Deploy this endpoint; ``name`` must match ``id`` when given."""
+        """Deploy this endpoint; ``name`` must match ``id`` when given.
+
+        On failure ``deploy_error`` holds the reason (the deployer reports it).
+        """
+        self.deploy_error = ""
         if name and name != self.id:
-            terminal.error(f"Deployment name {name!r} must match the endpoint id {self.id!r}.", exit=False)
-            return {}, False
+            return self._fail(f"Deployment name {name!r} must match the endpoint id {self.id!r}.")
         self.name = self.id
         if context is not None:
             self.config_context = context
         if not self.entrypoint:
-            terminal.error("You must specify an entrypoint.", exit=False)
-            return {}, False
+            return self._fail("You must specify an entrypoint.")
 
         image = self.image
+        # Credentials named (not given) in app.py are read from the environment at build time.
+        named = image.base_image_creds if isinstance(image.base_image_creds, (list, tuple)) else []
+        if missing := [key for key in named if not os.getenv(key)]:
+            return self._fail(
+                f"Registry credentials {', '.join(missing)} are not set. The deployer runs with the "
+                "admin workspace's secrets, so add them there (beam secret create <NAME>) and re-sync."
+            )
         # Only an image the user supplied (base image, Dockerfile or explicit id)
         # skips code sync; an id produced by an earlier Image.build() does not.
         custom_image = bool(image.base_image or image.dockerfile or image._explicit_image_id)
         if not custom_image:
             # exec so SIGTERM from an eviction or drain reaches the engine, not a wrapper shell.
-            self.entrypoint = ["sh", "-c", f"cd {USER_CODE_DIR} && exec {shlex.join(self.entrypoint)}"]
+            self.entrypoint = [
+                "sh",
+                "-c",
+                f"cd {USER_CODE_DIR} && exec {shlex.join(self.entrypoint)}",
+            ]
         self.managed_endpoint = json.dumps({"endpoint": self.spec(), "git_sha": git_sha})
 
         if not self.prepare_runtime(
@@ -226,6 +246,7 @@ class ManagedEndpoint(RunnerAbstraction):
             force_create_stub=True,
             ignore_patterns=["**"] if custom_image else [],
         ):
+            self.deploy_error = "stub preparation failed (see the deployer log)"
             return {}, False
 
         terminal.header("Deploying")
@@ -233,8 +254,16 @@ class ManagedEndpoint(RunnerAbstraction):
             DeployStubRequest(stub_id=self.stub_id, name=self.name, rollout="auto")
         )
         self.deployment_id = resp.deployment_id
-        if resp.ok:
-            terminal.done("Deployed 🎉")
-        elif resp.err_msg:
-            terminal.error(resp.err_msg, exit=False)
-        return {"deployment_id": resp.deployment_id, "version": resp.version, "id": self.id}, resp.ok
+        if not resp.ok:
+            return self._fail(resp.err_msg or "deploy failed")
+        terminal.done("Deployed 🎉")
+        return {
+            "deployment_id": resp.deployment_id,
+            "version": resp.version,
+            "id": self.id,
+        }, True
+
+    def _fail(self, reason: str) -> Tuple[Dict[str, Any], bool]:
+        self.deploy_error = reason
+        terminal.error(reason, exit=False)
+        return {}, False

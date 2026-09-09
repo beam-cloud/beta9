@@ -231,7 +231,7 @@ def deploy_app(app, root, changed, app_dirs, report):
             version = int(out.get("version") or 0)
             result.update(ok=bool(ok), stub_id=obj.stub_id or "", version=version)
             if not ok:
-                result["error"] = "deploy failed"
+                result["error"] = getattr(obj, "deploy_error", "") or "deploy failed"
         except SystemExit as exc:
             result["error"] = f"deploy exited: {exc}"
         except Exception as exc:  # noqa: BLE001

@@ -674,6 +674,13 @@ func (g *gitops) applyResults(ctx context.Context, state *types.GitOpsState, rep
 			state.PerEndpoint["path:"+path] = types.GitOpsEndpointState{Path: path, Status: types.GitOpsStatusFailed, Error: msg, UpdatedAt: now}
 		}
 	}
+	// Entries are keyed by endpoint id or "path:<dir>"; anything else is left
+	// over from an older key scheme and would show as a duplicate row.
+	for key, entry := range state.PerEndpoint {
+		if key != entry.ID && key != "path:"+entry.Path {
+			delete(state.PerEndpoint, key)
+		}
+	}
 	return failed
 }
 
