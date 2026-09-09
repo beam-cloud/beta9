@@ -13,6 +13,13 @@ var (
 	UsageMetricsManagedComputeReservationSeconds = "managed_compute_reservation_seconds"
 	UsageMetricsManagedComputeReservationCost    = "managed_compute_reservation_cost_cents"
 	UsageMetricsNodeUsage                        = "node_usage"
+
+	// Managed endpoint (/v1 route) keys
+	UsageMetricsEndpointPromptTokens     = "endpoint_prompt_tokens"
+	UsageMetricsEndpointCompletionTokens = "endpoint_completion_tokens"
+	UsageMetricsEndpointImages           = "endpoint_images"
+	UsageMetricsEndpointRequests         = "endpoint_requests"
+	UsageMetricsEndpointCost             = "endpoint_cost_cents"
 )
 
 type TaskMetrics struct {

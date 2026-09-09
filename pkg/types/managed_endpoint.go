@@ -683,6 +683,8 @@ type EndpointReplica struct {
 	StartedAt      time.Time       `json:"started_at"`
 	ReadyAt        time.Time       `json:"ready_at,omitempty"`
 	LastHeartbeat  time.Time       `json:"last_heartbeat"`
+	EndedAt        time.Time       `json:"ended_at,omitempty"`
+	DrainDeadline  time.Time       `json:"drain_deadline,omitempty"`
 	StatusReason   string          `json:"status_reason,omitempty"`
 }
 
@@ -823,6 +825,41 @@ type GitOpsState struct {
 	Running     bool                           `json:"running"`
 	PerEndpoint map[string]GitOpsEndpointState `json:"per_endpoint"`
 	UpdatedAt   time.Time                      `json:"updated_at"`
+
+	// In-flight deployer run. RunID ties the deployer's report back to this
+	// state; ContainerID and TokenID are cleaned up when the run finishes.
+	RunID       string    `json:"run_id,omitempty"`
+	ContainerID string    `json:"container_id,omitempty"`
+	TokenID     string    `json:"token_id,omitempty"`
+	StartedAt   time.Time `json:"started_at,omitempty"`
+}
+
+// GitOpsReport is what the deployer posts back after applying one SHA.
+type GitOpsReport struct {
+	RunID      string               `json:"run_id"`
+	SHA        string               `json:"sha"`
+	Error      string               `json:"error,omitempty"`
+	Discovered []GitOpsDiscovered   `json:"discovered"`
+	Results    []GitOpsDeployResult `json:"results"`
+}
+
+// GitOpsDiscovered is one endpoint or service found in the repo at the SHA.
+type GitOpsDiscovered struct {
+	Path string `json:"path"`
+	ID   string `json:"id"`
+	Kind string `json:"kind"` // endpoint|service
+}
+
+// GitOpsDeployResult is the outcome of deploying one discovered stub.
+type GitOpsDeployResult struct {
+	Path    string `json:"path"`
+	ID      string `json:"id"`
+	Kind    string `json:"kind"`
+	OK      bool   `json:"ok"`
+	Skipped bool   `json:"skipped"` // unchanged since the last applied SHA
+	Error   string `json:"error,omitempty"`
+	StubID  string `json:"stub_id,omitempty"`
+	Version uint   `json:"version,omitempty"`
 }
 
 // EndpointUsage is one billable request record for the /v1 route.

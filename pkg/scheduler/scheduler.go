@@ -503,8 +503,38 @@ func (s *Scheduler) defaultConcurrencyLimit() *types.ConcurrencyLimit {
 	}
 }
 
+// CreditGate exposes the prepaid-credit check so other admission points (the
+// managed endpoints route) share one decision cache. May be nil.
+func (s *Scheduler) CreditGate() *CreditGate {
+	if s == nil {
+		return nil
+	}
+	return s.creditGate
+}
+
+// PoolConfig returns the effective config for a registered worker pool,
+// including pools created dynamically at runtime.
+func (s *Scheduler) PoolConfig(name string) (types.WorkerPoolConfig, bool) {
+	if s == nil || s.workerPoolManager == nil {
+		return types.WorkerPoolConfig{}, false
+	}
+	pool, ok := s.workerPoolManager.GetPool(name)
+	if !ok || pool == nil {
+		return types.WorkerPoolConfig{}, false
+	}
+	return pool.Config, true
+}
+
 func (s *Scheduler) privatePoolQuotaExempt(request *types.ContainerRequest) bool {
-	if s == nil || request == nil || s.workerPoolManager == nil {
+	if s == nil || request == nil {
+		return false
+	}
+	// Managed endpoint replicas are platform workloads in the cluster admin
+	// workspace: they are neither credit-gated nor counted against a quota.
+	if request.Stub.Type.IsManaged() {
+		return true
+	}
+	if s.workerPoolManager == nil {
 		return false
 	}
 

@@ -295,6 +295,15 @@ type ContainerRequest struct {
 	// Hostname preserved across checkpoint and restore.
 	Hostname             string `json:"hostname,omitempty"`
 	ProvisioningAttempts int    `json:"provisioning_attempts,omitempty" go2proto:"ignore"`
+	// Evictable marks a container that the scheduler may stop to make room for
+	// a non-evictable request (managed endpoint replicas above min_replicas).
+	Evictable bool `json:"evictable,omitempty"`
+	// OpportunisticOnly restricts placement to capacity that is already free:
+	// the request never triggers pool scale-up or provisioning.
+	OpportunisticOnly bool `json:"opportunistic_only,omitempty"`
+	// EvictContainerIds lists evictable containers the worker must stop before
+	// starting this one. Set by the scheduler, never by callers.
+	EvictContainerIds []string `json:"evict_container_ids,omitempty"`
 }
 
 // @go2proto

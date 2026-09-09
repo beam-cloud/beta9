@@ -154,6 +154,14 @@ func eventTimeForData(data interface{}) time.Time {
 		if !d.Timestamp.IsZero() {
 			return d.Timestamp
 		}
+	case types.EventEndpointSchema:
+		if !d.Timestamp.IsZero() {
+			return d.Timestamp
+		}
+	case types.EventEndpointRouteSchema:
+		if !d.Timestamp.IsZero() {
+			return d.Timestamp
+		}
 	case types.EventStubCacheRequiredContentSchema:
 		if !d.Timestamp.IsZero() {
 			return d.Timestamp
@@ -835,6 +843,26 @@ func (r *EventClientRepo) PushComputeEvent(eventType string, event types.EventCo
 	r.pushEvent(eventType, types.EventComputeSchemaVersion, event)
 }
 
+func (r *EventClientRepo) PushEndpointEvent(eventType string, event types.EventEndpointSchema) {
+	if eventType == "" || event.EndpointID == "" {
+		return
+	}
+	if event.Timestamp.IsZero() {
+		event.Timestamp = time.Now().UTC()
+	}
+	r.pushEvent(eventType, types.EventEndpointSchemaVersion, event)
+}
+
+func (r *EventClientRepo) PushEndpointRouteEvent(event types.EventEndpointRouteSchema) {
+	if event.EndpointID == "" {
+		return
+	}
+	if event.Timestamp.IsZero() {
+		event.Timestamp = time.Now().UTC()
+	}
+	r.pushEvent(types.EventEndpointRoute, types.EventEndpointSchemaVersion, event)
+}
+
 func (r *EventClientRepo) PushContainerResourceMetricsEvent(workerID string, request *types.ContainerRequest, metrics types.EventContainerMetricsData) {
 	r.pushEvent(
 		types.EventContainerMetrics,
@@ -1145,6 +1173,10 @@ func eventMetadataFromData(data interface{}) eventMetadata {
 			PoolName:    d.PoolName,
 			Action:      d.Action,
 		}
+	case types.EventEndpointSchema:
+		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, WorkspaceID: d.WorkspaceID, WorkerID: d.WorkerID, PoolName: d.PoolName, Action: d.Action}
+	case types.EventEndpointRouteSchema:
+		return eventMetadata{ContainerID: d.ContainerID, WorkspaceID: d.WorkspaceID}
 	case types.EventStubCacheRequiredContentSchema:
 		return eventMetadata{StubID: d.StubID, WorkspaceID: d.WorkspaceID}
 	case types.EventPlatformCacheSchema:

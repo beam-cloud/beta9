@@ -40,10 +40,12 @@ type AppConfig struct {
 // other value has a production default. Endpoint stubs are owned by the
 // cluster admin workspace.
 type ManagedEndpointsConfig struct {
-	Enabled        bool                          `key:"enabled" json:"enabled"`
-	RoutePrefix    string                        `key:"routePrefix" json:"route_prefix"`
-	Repo           ManagedEndpointsRepoConfig    `key:"repo" json:"repo"`
-	Webhook        ManagedEndpointsWebhookConfig `key:"webhook" json:"webhook"`
+	Enabled     bool                          `key:"enabled" json:"enabled"`
+	RoutePrefix string                        `key:"routePrefix" json:"route_prefix"`
+	Repo        ManagedEndpointsRepoConfig    `key:"repo" json:"repo"`
+	Webhook     ManagedEndpointsWebhookConfig `key:"webhook" json:"webhook"`
+	// DeployerImage is the beta9 image id (built once with the SDK and git
+	// installed) the GitOps deployer container runs from.
 	DeployerImage  string                        `key:"deployerImage" json:"deployer_image"`
 	Preemption     ManagedEndpointsPreemption    `key:"preemption" json:"preemption"`
 	Fill           ManagedEndpointsFillConfig    `key:"fill" json:"fill"`

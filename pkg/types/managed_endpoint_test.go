@@ -54,6 +54,18 @@ func TestManagedEndpointSpecCPUDefault(t *testing.T) {
 	require.Equal(t, "cpu", spec.Gpu[0].Key())
 	require.Equal(t, []EndpointRoute{EndpointRouteInvoke}, spec.Routes)
 	require.NoError(t, spec.Validate(ManagedEndpointValidation{}))
+
+	// An explicit "cpu" target (what the SDK sends for GpuTarget(type="cpu"))
+	// is the same as declaring no GPUs.
+	explicit := ManagedEndpointSpec{ID: "acme/echo", Kind: EndpointKindLLM, Engine: "fake", Entrypoint: []string{"python", "app.py"},
+		Gpu: []GpuTarget{{Type: "cpu", Count: 1, MinReplicas: 1, MaxReplicas: 3, Share: 1}}}
+	explicit.Normalize()
+	require.Len(t, explicit.Gpu, 1)
+	require.True(t, explicit.Gpu[0].IsCPU())
+	require.Equal(t, "cpu", explicit.Gpu[0].Key())
+	require.Equal(t, uint32(0), explicit.Gpu[0].Count)
+	require.Equal(t, uint32(3), explicit.Gpu[0].MaxReplicas)
+	require.NoError(t, explicit.Validate(ManagedEndpointValidation{}))
 }
 
 func TestManagedEndpointSpecValidateErrors(t *testing.T) {

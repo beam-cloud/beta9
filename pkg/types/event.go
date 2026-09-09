@@ -1191,3 +1191,71 @@ func EventSummaryKeyForLifecycle(id ContainerLifecycleID) string {
 		return strings.ReplaceAll(string(id), ".", "_") + "_ms"
 	}
 }
+
+// Managed endpoint events. Every event carries the endpoint id so the admin
+// RPCs and UI can query history per endpoint (and per GPU target).
+const (
+	EventEndpointRoute      = "endpoint.route"
+	EventEndpointUsage      = "endpoint.usage"
+	EventEndpointReplica    = "endpoint.replica"
+	EventEndpointConfig     = "endpoint.config"
+	EventEndpointExperiment = "endpoint.experiment"
+	EventEndpointRollout    = "endpoint.rollout"
+	EventEndpointGitOps     = "endpoint.gitops"
+	EventEndpointHarness    = "endpoint.harness"
+)
+
+var EventEndpointSchemaVersion = "1.0"
+
+// EventEndpointSchema is the shared envelope for endpoint.* events. Action
+// names the sub-event (e.g. "replica.ready", "experiment.step", "rollout.promoted").
+type EventEndpointSchema struct {
+	EndpointID  string         `json:"endpoint_id"`
+	Action      string         `json:"action"`
+	WorkspaceID string         `json:"workspace_id,omitempty"`
+	StubID      string         `json:"stub_id,omitempty"`
+	Version     uint           `json:"version,omitempty"`
+	ReplicaID   string         `json:"replica_id,omitempty"`
+	ContainerID string         `json:"container_id,omitempty"`
+	WorkerID    string         `json:"worker_id,omitempty"`
+	PoolName    string         `json:"pool_name,omitempty"`
+	GPU         string         `json:"gpu,omitempty"`
+	Role        string         `json:"role,omitempty"`
+	Locality    string         `json:"locality,omitempty"`
+	Revision    uint64         `json:"revision,omitempty"`
+	Experiment  string         `json:"experiment_id,omitempty"`
+	Message     string         `json:"message,omitempty"`
+	Data        map[string]any `json:"data,omitempty"`
+	Timestamp   time.Time      `json:"timestamp"`
+}
+
+// EventEndpointRouteSchema is emitted once per /v1 request.
+type EventEndpointRouteSchema struct {
+	EndpointID       string    `json:"endpoint_id"`
+	WorkspaceID      string    `json:"workspace_id"`
+	TokenID          string    `json:"token_id,omitempty"`
+	RequestID        string    `json:"request_id"`
+	Route            string    `json:"route"`
+	Model            string    `json:"model"`
+	Version          uint      `json:"version"`
+	ReplicaID        string    `json:"replica_id"`
+	ContainerID      string    `json:"container_id,omitempty"`
+	GPU              string    `json:"gpu"`
+	Role             string    `json:"role,omitempty"`
+	Locality         string    `json:"locality,omitempty"`
+	StatusCode       int       `json:"status_code"`
+	Stream           bool      `json:"stream"`
+	Retried          bool      `json:"retried"`
+	RouteReason      string    `json:"route_reason,omitempty"`
+	KVHitSource      string    `json:"kv_hit_source,omitempty"`
+	PromptTokens     int64     `json:"prompt_tokens"`
+	CompletionTokens int64     `json:"completion_tokens"`
+	CachedTokens     int64     `json:"cached_tokens"`
+	Images           int64     `json:"images"`
+	CostMicroUSD     int64     `json:"cost_micro_usd"`
+	DurationMs       int64     `json:"duration_ms"`
+	TTFTMs           int64     `json:"ttft_ms"`
+	QueueWaitMs      int64     `json:"queue_wait_ms"`
+	Error            string    `json:"error,omitempty"`
+	Timestamp        time.Time `json:"timestamp"`
+}

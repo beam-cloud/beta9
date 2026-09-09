@@ -229,6 +229,12 @@ type ManagedEndpointRepository interface {
 	// Route metrics (minute buckets, bounded retention)
 	RecordRouteSample(ctx context.Context, sample types.RouteSample) error
 	GetRouteMetrics(ctx context.Context, endpointID, gpu string, version uint, window time.Duration) (*types.RouteMetrics, error)
+
+	// Route records: generation lookups and per-workspace spend (daily buckets)
+	SaveGeneration(ctx context.Context, record *types.EventEndpointRouteSchema, ttl time.Duration) error
+	GetGeneration(ctx context.Context, generationID string) (*types.EventEndpointRouteSchema, error)
+	AddWorkspaceUsage(ctx context.Context, usage types.EndpointUsage, at time.Time) error
+	GetWorkspaceUsage(ctx context.Context, workspaceID string, days int) (types.EndpointUsage, map[string]types.EndpointUsage, error)
 }
 
 type WorkspaceRepository interface {
@@ -440,6 +446,8 @@ type EventRepository interface {
 	PushWorkerStoppedEvent(workerID string)
 	PushWorkerDeletedEvent(workerID, machineID, poolName string, reason types.DeletedWorkerReason)
 	PushComputeEvent(eventType string, event types.EventComputeSchema)
+	PushEndpointEvent(eventType string, event types.EventEndpointSchema)
+	PushEndpointRouteEvent(event types.EventEndpointRouteSchema)
 	PushDeployStubEvent(workspaceId string, stub *types.Stub)
 	PushServeStubEvent(workspaceId string, stub *types.Stub)
 	PushRunStubEvent(workspaceId string, stub *types.Stub)

@@ -42,7 +42,7 @@ message ConfigRevision {
   uint64 revision = 1;
   string endpoint_id = 2;
   string scope = 3;      // target | replica
-  string scope_key = 4;  // "<role>:<gpu key>" or replica id
+  string scope_key = 4;  // target: "<role>:<gpu key>@v<version>"; replica: replica id
   string config_json = 5;
   string author = 6;
   string source = 7;     // git | live
@@ -302,6 +302,8 @@ message GetMetricsResponse {
 message GetConfigRequest {
   string endpoint_id = 1;
   string scope = 2;     // target | replica
+  // target: "<gpu key>", "<role>:<gpu key>" or "<role>:<gpu key>@v<version>";
+  // without a version suffix the active version is used. replica: replica id.
   string scope_key = 3;
 }
 
@@ -314,7 +316,7 @@ message GetConfigResponse {
 message ListConfigRevisionsRequest {
   string endpoint_id = 1;
   string scope = 2;
-  string scope_key = 3;
+  string scope_key = 3; // same forms as GetConfigRequest.scope_key
   uint32 limit = 4;
 }
 

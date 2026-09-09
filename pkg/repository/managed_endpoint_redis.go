@@ -844,3 +844,135 @@ func hashInt64(values map[string]string, field string) int64 {
 	}
 	return n
 }
+
+// --- Route records ---------------------------------------------------------
+
+const (
+	usageDayLayout    = "2006-01-02"
+	usageDayRetention = 45 * 24 * time.Hour
+	usageFieldPrompt  = "prompt_tokens"
+	usageFieldComp    = "completion_tokens"
+	usageFieldCached  = "cached_tokens"
+	usageFieldReqs    = "requests"
+	usageFieldImages  = "images"
+	usageFieldCost    = "cost_micro_usd"
+)
+
+func (r *ManagedEndpointRedisRepository) SaveGeneration(ctx context.Context, record *types.EventEndpointRouteSchema, ttl time.Duration) error {
+	if record == nil || record.RequestID == "" {
+		return errors.New("generation id is required")
+	}
+	data, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+	return r.rdb.Set(ctx, meKey("generation", record.RequestID), data, ttl).Err()
+}
+
+func (r *ManagedEndpointRedisRepository) GetGeneration(ctx context.Context, generationID string) (*types.EventEndpointRouteSchema, error) {
+	var record types.EventEndpointRouteSchema
+	ok, err := r.getJSON(ctx, meKey("generation", generationID), &record)
+	if err != nil || !ok {
+		return nil, err
+	}
+	return &record, nil
+}
+
+func usageKey(workspaceID string, day time.Time) string {
+	return meKey("usage", workspaceID, day.UTC().Format(usageDayLayout))
+}
+
+// AddWorkspaceUsage folds one request into the workspace's daily bucket,
+// both in aggregate and per endpoint.
+func (r *ManagedEndpointRedisRepository) AddWorkspaceUsage(ctx context.Context, usage types.EndpointUsage, at time.Time) error {
+	if usage.WorkspaceID == "" {
+		return errors.New("workspace id is required")
+	}
+	if at.IsZero() {
+		at = time.Now()
+	}
+	key := usageKey(usage.WorkspaceID, at)
+	_, err := r.rdb.Pipelined(ctx, func(pipe redis.Pipeliner) error {
+		for _, prefix := range []string{"", usage.EndpointID + "|"} {
+			if prefix == "|" {
+				continue
+			}
+			incr := func(field string, value int64) {
+				if value != 0 {
+					pipe.HIncrBy(ctx, key, prefix+field, value)
+				}
+			}
+			incr(usageFieldPrompt, usage.PromptTokens)
+			incr(usageFieldComp, usage.CompletionTokens)
+			incr(usageFieldCached, usage.CachedTokens)
+			incr(usageFieldReqs, usage.Requests)
+			incr(usageFieldImages, usage.Images)
+			incr(usageFieldCost, usage.CostMicroUSD)
+		}
+		pipe.Expire(ctx, key, usageDayRetention)
+		return nil
+	})
+	return err
+}
+
+// GetWorkspaceUsage sums the last `days` daily buckets (today included).
+func (r *ManagedEndpointRedisRepository) GetWorkspaceUsage(ctx context.Context, workspaceID string, days int) (types.EndpointUsage, map[string]types.EndpointUsage, error) {
+	if days <= 0 {
+		days = 1
+	}
+	total := types.EndpointUsage{WorkspaceID: workspaceID}
+	perEndpoint := map[string]types.EndpointUsage{}
+	now := time.Now().UTC()
+	cmds := make([]*redis.MapStringStringCmd, 0, days)
+	_, err := r.rdb.Pipelined(ctx, func(pipe redis.Pipeliner) error {
+		for i := 0; i < days; i++ {
+			cmds = append(cmds, pipe.HGetAll(ctx, usageKey(workspaceID, now.AddDate(0, 0, -i))))
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, redis.Nil) {
+		return total, nil, err
+	}
+	for _, cmd := range cmds {
+		values, err := cmd.Result()
+		if err != nil {
+			continue
+		}
+		for field, raw := range values {
+			n, err := strconv.ParseInt(raw, 10, 64)
+			if err != nil {
+				continue
+			}
+			target := &total
+			name := field
+			if idx := strings.LastIndex(field, "|"); idx >= 0 {
+				endpointID, f := field[:idx], field[idx+1:]
+				entry := perEndpoint[endpointID]
+				entry.EndpointID = endpointID
+				entry.WorkspaceID = workspaceID
+				addUsageField(&entry, f, n)
+				perEndpoint[endpointID] = entry
+				continue
+			}
+			addUsageField(target, name, n)
+		}
+	}
+	return total, perEndpoint, nil
+}
+
+func addUsageField(u *types.EndpointUsage, field string, n int64) {
+	switch field {
+	case usageFieldPrompt:
+		u.PromptTokens += n
+	case usageFieldComp:
+		u.CompletionTokens += n
+	case usageFieldCached:
+		u.CachedTokens += n
+	case usageFieldReqs:
+		u.Requests += n
+	case usageFieldImages:
+		u.Images += n
+	case usageFieldCost:
+		u.CostMicroUSD += n
+	}
+}

@@ -68,8 +68,10 @@ func (gws *GatewayService) managedEndpointStubConfig(ctx context.Context, authIn
 		if err := config.Endpoint.Validate(policy); err != nil {
 			return nil, fmt.Errorf("invalid managed endpoint spec: %w", err)
 		}
-		if in.Name != "" && in.Name != config.Endpoint.ID {
-			return nil, fmt.Errorf("stub name %q must match endpoint id %q", in.Name, config.Endpoint.ID)
+		// The stub name is the SDK's "<type>/<handler>" label; the deployment
+		// (app) name is what must match the endpoint id.
+		if in.AppName != "" && in.AppName != config.Endpoint.ID {
+			return nil, fmt.Errorf("app name %q must match endpoint id %q", in.AppName, config.Endpoint.ID)
 		}
 	case stubType.IsManagedService():
 		if config.Service == nil {
@@ -83,8 +85,8 @@ func (gws *GatewayService) managedEndpointStubConfig(ctx context.Context, authIn
 		if err := config.Service.Validate(); err != nil {
 			return nil, fmt.Errorf("invalid managed service spec: %w", err)
 		}
-		if in.Name != "" && in.Name != config.Service.Name {
-			return nil, fmt.Errorf("stub name %q must match service name %q", in.Name, config.Service.Name)
+		if in.AppName != "" && in.AppName != config.Service.Name {
+			return nil, fmt.Errorf("app name %q must match service name %q", in.AppName, config.Service.Name)
 		}
 	}
 
