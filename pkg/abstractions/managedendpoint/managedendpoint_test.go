@@ -2,13 +2,21 @@ package managedendpoint
 
 import (
 	"context"
+	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/abstractions/common/llmroute"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -441,4 +449,58 @@ func TestRouteRecordCreditsProviderWorkspace(t *testing.T) {
 	// Free requests earn nothing and carry no provider attribution.
 	r.record(rq, endpoint, replica, 200, Usage{Found: true}, 0, "")
 	require.Empty(t, (<-r.usageQueue).ProviderWorkspaceID)
+}
+
+// TestProxyStreamWithoutUsageIsNotBilled: a billable SSE stream that completes
+// without a usage chunk reaches the client intact but is recorded as a 502
+// with no cost, like the buffered path, so it is neither billed nor counted
+// as a rollout success.
+func TestProxyStreamWithoutUsageIsNotBilled(t *testing.T) {
+	s := newServiceForTest(t)
+	r := &router{s: s, states: map[string]*llmroute.State{}, usageQueue: make(chan types.EventEndpointRouteSchema, 4)}
+
+	var withUsage atomic.Bool
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n")
+		if withUsage.Load() {
+			fmt.Fprint(w, "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":7}}\n\n")
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer upstream.Close()
+	r.transports.Store(upstream.Listener.Addr().String(), &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return net.Dial("tcp", upstream.Listener.Addr().String())
+		},
+	})
+
+	endpoint := &types.ManagedEndpoint{Spec: types.ManagedEndpointSpec{ID: "acme/model", Pricing: types.Pricing{CompletionTokens: "0.000001"}}}
+	replica := &types.EndpointReplica{ID: "rep-1", Address: upstream.Listener.Addr().String(), GPU: "H100"}
+	proxyOnce := func() (*httptest.ResponseRecorder, types.EventEndpointRouteSchema) {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"acme/model","stream":true}`))
+		rq := &routeRequest{
+			ctx: echo.New().NewContext(req, rec), adapter: adapters[types.EndpointRouteChatCompletions], route: types.EndpointRouteChatCompletions,
+			auth:      &auth.AuthInfo{Workspace: &types.Workspace{ExternalId: "ws-tenant"}, Token: &types.Token{ExternalId: "tok"}},
+			requestID: "req-1", models: []string{"acme/model"}, body: []byte(`{"model":"acme/model","stream":true}`), stream: true, startedAt: time.Now(),
+		}
+		retry, err := r.proxy(context.Background(), rq, endpoint, replica)
+		require.NoError(t, err)
+		require.False(t, retry)
+		return rec, <-r.usageQueue
+	}
+
+	rec, event := proxyOnce()
+	assert.Equal(t, http.StatusOK, rec.Code, "the stream already reached the client")
+	assert.Contains(t, rec.Body.String(), "data: [DONE]")
+	assert.Equal(t, http.StatusBadGateway, event.StatusCode)
+	assert.Equal(t, errMissingUsage.Message, event.Error)
+	assert.Zero(t, event.CostMicroUSD)
+
+	withUsage.Store(true)
+	_, event = proxyOnce()
+	assert.Equal(t, http.StatusOK, event.StatusCode)
+	assert.Equal(t, int64(7), event.CompletionTokens)
+	assert.Equal(t, int64(7), event.CostMicroUSD)
 }

@@ -364,7 +364,7 @@ func TestReplicaProbeUsesServiceHealthPath(t *testing.T) {
 
 // --- rollouts ------------------------------------------------------------------
 
-func TestJudgeCanaryHonorsMinCanaryRequests(t *testing.T) {
+func TestEvaluateRolloutHonorsMinCanaryRequests(t *testing.T) {
 	ready := []*types.EndpointReplica{{Status: types.ReplicaStatusReady}}
 	few := &types.RouteMetrics{Requests: 10, Errors: 5}
 	cfg := types.ManagedEndpointsRolloutConfig{MinCanaryRequests: 20}
