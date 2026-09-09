@@ -78,13 +78,13 @@ func seedEndpoint(t *testing.T, s *Service) *types.ManagedEndpoint {
 	spec.Normalize()
 	endpoint := &types.ManagedEndpoint{Spec: spec, StubID: "stub-1", Version: 1, Status: types.EndpointStatusActive}
 	require.NoError(t, s.repo.SaveEndpoint(context.Background(), endpoint))
-	seedFleet(t, s, map[string]map[string]uint32{spec.ID: {"H100": 2}})
+	seedFleet(t, s, map[string][]types.FleetEntry{"H100": {{EndpointID: spec.ID, Max: 2}}})
 	return endpoint
 }
 
-func seedFleet(t *testing.T, s *Service, replicas map[string]map[string]uint32) *types.Fleet {
+func seedFleet(t *testing.T, s *Service, priority map[string][]types.FleetEntry) *types.Fleet {
 	t.Helper()
-	fleet := &types.Fleet{GitSHA: "fleet-sha", Replicas: replicas}
+	fleet := &types.Fleet{GitSHA: "fleet-sha", Priority: priority}
 	fleet.Normalize()
 	require.NoError(t, s.repo.SaveFleet(context.Background(), fleet))
 	return fleet
@@ -460,7 +460,7 @@ func TestAdminReadRPCs(t *testing.T) {
 	assert.Equal(t, uint32(1), list.Endpoints[0].ReadyReplicas)
 	assert.Equal(t, uint32(1), list.Endpoints[0].TotalReplicas)
 	assert.Equal(t, string(types.EndpointStatusActive), list.Endpoints[0].Status)
-	assert.JSONEq(t, `{"H100":2}`, list.Endpoints[0].ReplicasJson)
+	assert.JSONEq(t, `{"H100":2}`, list.Endpoints[0].PlacementsJson)
 
 	get, err := s.GetEndpoint(ctx, &pb.GetEndpointRequest{EndpointId: endpoint.Spec.ID})
 	require.NoError(t, err)
@@ -500,7 +500,7 @@ func TestAdminReadRPCs(t *testing.T) {
 	gitops, err := s.GetGitOpsStatus(ctx, &pb.GetGitOpsStatusRequest{})
 	require.NoError(t, err)
 	require.True(t, gitops.Ok)
-	assert.JSONEq(t, `{"acme/model":{"H100":2}}`, gitops.FleetJson)
+	assert.JSONEq(t, `{"H100":[{"endpoint_id":"acme/model","max":2}]}`, gitops.FleetJson)
 	sync, err := s.TriggerGitOpsSync(ctx, &pb.TriggerGitOpsSyncRequest{})
 	require.NoError(t, err)
 	assert.False(t, sync.Ok, "no repo configured")

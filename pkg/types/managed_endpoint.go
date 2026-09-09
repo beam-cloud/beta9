@@ -145,7 +145,7 @@ func PricingRat(value string) (*big.Rat, error) {
 }
 
 // ManagedEndpointSpec is the repo contract: everything an endpoint app declares.
-// Where and how many replicas run is not part of it; see Fleet.
+// Where replicas run is not part of it; see Fleet.
 type ManagedEndpointSpec struct {
 	ID      string       `json:"id"`
 	Kind    EndpointKind `json:"kind"`
@@ -280,44 +280,62 @@ func (s *ManagedEndpointSpec) ServesRoute(route EndpointRoute) bool {
 
 // --- Fleet ---------------------------------------------------------------------
 
-// Fleet is fleet.yaml: endpoint id -> GPU key -> replica count. It is the
-// only thing that decides how many replicas of each endpoint run and where.
+// Fleet is fleet.yaml: for each GPU key, the endpoints that fill its idle GPUs
+// in priority order. Idle GPUs go to the first entry until it reaches its cap
+// (none by default), then to the next; when a higher entry is short of GPUs
+// the entries below it give theirs back. It is the only thing that decides
+// where replicas run.
 type Fleet struct {
-	GitSHA    string                       `json:"git_sha,omitempty"`
-	Replicas  map[string]map[string]uint32 `json:"replicas"`
-	UpdatedAt time.Time                    `json:"updated_at"`
+	GitSHA    string                  `json:"git_sha,omitempty"`
+	Priority  map[string][]FleetEntry `json:"priority"`
+	UpdatedAt time.Time               `json:"updated_at"`
+}
+
+// FleetEntry is one endpoint in a GPU type's priority list. Max is the most
+// replicas it runs on that type; 0 means every idle GPU it can get.
+type FleetEntry struct {
+	EndpointID string `json:"endpoint_id"`
+	Max        uint32 `json:"max,omitempty"`
 }
 
 const maxFleetReplicas = 64
 
-// Normalize canonicalizes endpoint ids and GPU keys and drops zero counts.
+// Normalize canonicalizes GPU keys and endpoint ids and drops empty lists.
 func (f *Fleet) Normalize() {
-	out := make(map[string]map[string]uint32, len(f.Replicas))
-	for id, entries := range f.Replicas {
-		id = strings.ToLower(strings.TrimSpace(id))
-		for gpu, n := range entries {
-			if n == 0 {
-				continue
+	out := make(map[string][]FleetEntry, len(f.Priority))
+	for gpu, entries := range f.Priority {
+		var kept []FleetEntry
+		for _, e := range entries {
+			if e.EndpointID = strings.ToLower(strings.TrimSpace(e.EndpointID)); e.EndpointID != "" {
+				kept = append(kept, e)
 			}
-			if out[id] == nil {
-				out[id] = map[string]uint32{}
-			}
-			out[id][GPUKey(gpu)] = n
+		}
+		if len(kept) > 0 {
+			out[GPUKey(gpu)] = kept
 		}
 	}
-	f.Replicas = out
+	f.Priority = out
 }
 
-// Validate checks GPU keys and counts. Call Normalize first.
+// Validate checks GPU keys, caps and duplicates. CPU entries must be capped:
+// there is no GPU inventory to run out of. Call Normalize first.
 func (f *Fleet) Validate() error {
 	var errs []error
-	for id, entries := range f.Replicas {
-		for gpu, n := range entries {
-			if gpu != CPUInventoryKey && !KnownGPUType(GpuType(gpu)) {
-				errs = append(errs, fmt.Errorf("%s: %s is not a known GPU type", id, gpu))
+	for gpu, entries := range f.Priority {
+		if gpu != CPUInventoryKey && !KnownGPUType(GpuType(gpu)) {
+			errs = append(errs, fmt.Errorf("%s is not a known GPU type", gpu))
+		}
+		seen := map[string]bool{}
+		for _, e := range entries {
+			if seen[e.EndpointID] {
+				errs = append(errs, fmt.Errorf("%s: %s is listed twice", gpu, e.EndpointID))
 			}
-			if n > maxFleetReplicas {
-				errs = append(errs, fmt.Errorf("%s: %s replicas %d exceeds %d", id, gpu, n, maxFleetReplicas))
+			seen[e.EndpointID] = true
+			if e.Max > maxFleetReplicas {
+				errs = append(errs, fmt.Errorf("%s: %s max %d exceeds %d", gpu, e.EndpointID, e.Max, maxFleetReplicas))
+			}
+			if gpu == CPUInventoryKey && e.Max == 0 {
+				errs = append(errs, fmt.Errorf("cpu: %s needs a replica count", e.EndpointID))
 			}
 		}
 	}
@@ -329,41 +347,66 @@ func (f *Fleet) Validate() error {
 // fleet. It returns one message per dropped entry.
 func (f *Fleet) Prune(endpoints map[string]*ManagedEndpointSpec) []string {
 	var dropped []string
-	for id, entries := range f.Replicas {
-		spec, ok := endpoints[id]
-		if !ok {
-			dropped = append(dropped, fmt.Sprintf("%s is not a deployed endpoint", id))
-			delete(f.Replicas, id)
-			continue
-		}
-		if spec == nil {
-			continue
-		}
-		for gpu := range entries {
-			if _, ok := spec.Gpu[gpu]; !ok {
-				dropped = append(dropped, fmt.Sprintf("%s does not declare gpu %q in its app", id, gpu))
-				delete(entries, gpu)
+	for gpu, entries := range f.Priority {
+		kept := entries[:0]
+		for _, e := range entries {
+			spec, ok := endpoints[e.EndpointID]
+			if !ok {
+				dropped = append(dropped, fmt.Sprintf("%s is not a deployed endpoint", e.EndpointID))
+				continue
 			}
+			if spec != nil {
+				if _, ok := spec.Gpu[gpu]; !ok {
+					dropped = append(dropped, fmt.Sprintf("%s does not declare gpu %q in its app", e.EndpointID, gpu))
+					continue
+				}
+			}
+			kept = append(kept, e)
+		}
+		if len(kept) == 0 {
+			delete(f.Priority, gpu)
+		} else {
+			f.Priority[gpu] = kept
 		}
 	}
 	slices.Sort(dropped)
-	return dropped
+	return slices.Compact(dropped)
 }
 
-// Placements returns one endpoint's (gpu, replicas) pairs, GPU keys sorted.
+// GPUs returns the GPU keys with a priority list, sorted.
+func (f *Fleet) GPUs() []string {
+	out := make([]string, 0, len(f.Priority))
+	for gpu := range f.Priority {
+		out = append(out, gpu)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// Lists reports whether the endpoint is in the GPU type's priority list.
+func (f *Fleet) Lists(endpointID, gpu string) bool {
+	return slices.ContainsFunc(f.Priority[gpu], func(e FleetEntry) bool { return e.EndpointID == endpointID })
+}
+
+// Placements returns one endpoint's (gpu, max) pairs, GPU keys sorted.
 func (f *Fleet) Placements(endpointID string) []FleetTarget {
 	var out []FleetTarget
-	for gpu, n := range f.Replicas[endpointID] {
-		out = append(out, FleetTarget{GPU: gpu, Replicas: n})
+	for gpu, entries := range f.Priority {
+		for _, e := range entries {
+			if e.EndpointID == endpointID {
+				out = append(out, FleetTarget{GPU: gpu, Max: e.Max})
+			}
+		}
 	}
 	slices.SortFunc(out, func(a, b FleetTarget) int { return strings.Compare(a.GPU, b.GPU) })
 	return out
 }
 
-// FleetTarget is the replica count of one endpoint on one GPU type.
+// FleetTarget is one endpoint's place on one GPU type: the type and its
+// replica cap there (0 = every idle GPU).
 type FleetTarget struct {
-	GPU      string
-	Replicas uint32
+	GPU string
+	Max uint32
 }
 
 func (t FleetTarget) IsCPU() bool { return t.GPU == CPUInventoryKey }
@@ -616,7 +659,7 @@ type GitOpsReport struct {
 	SHA     string               `json:"sha"`
 	Error   string               `json:"error,omitempty"`
 	Results []GitOpsDeployResult `json:"results"`
-	// FleetYAML is the raw fleet.yaml ({gpu: {endpoint: placement}}); empty
+	// FleetYAML is the raw fleet.yaml ({gpu: [endpoint | {endpoint: max}]}); empty
 	// when the repo has none (nothing is placed until it does).
 	FleetYAML string `json:"fleet_yaml,omitempty"`
 }

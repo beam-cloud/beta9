@@ -58,18 +58,18 @@ func TestManagedEndpointFleet(t *testing.T) {
 	empty, err := repo.GetFleet(ctx)
 	require.NoError(t, err)
 	require.NotNil(t, empty)
-	require.NotNil(t, empty.Replicas, "an unset fleet reads as empty, never nil")
+	require.NotNil(t, empty.Priority, "an unset fleet reads as empty, never nil")
 	require.Empty(t, empty.Placements("acme/model"))
 
 	require.Error(t, repo.SaveFleet(ctx, nil))
-	fleet := &types.Fleet{GitSHA: "abc", Replicas: map[string]map[string]uint32{"acme/model": {"H100": 2}}}
+	fleet := &types.Fleet{GitSHA: "abc", Priority: map[string][]types.FleetEntry{"H100": {{EndpointID: "acme/model", Max: 2}}}}
 	require.NoError(t, repo.SaveFleet(ctx, fleet))
 	require.False(t, fleet.UpdatedAt.IsZero())
 
 	got, err := repo.GetFleet(ctx)
 	require.NoError(t, err)
 	require.Equal(t, "abc", got.GitSHA)
-	require.Equal(t, []types.FleetTarget{{GPU: "H100", Replicas: 2}}, got.Placements("acme/model"))
+	require.Equal(t, []types.FleetTarget{{GPU: "H100", Max: 2}}, got.Placements("acme/model"))
 }
 
 func TestManagedEndpointReplicas(t *testing.T) {

@@ -318,13 +318,13 @@ func (c *controller) drainReplica(ctx context.Context, replica *types.EndpointRe
 // startSpec is everything needed to launch one replica container.
 type startSpec struct {
 	Endpoint *types.ManagedEndpoint
-	Target   types.FleetTarget
+	GPU      string
 	Pool     eligiblePool
 }
 
 // startReplica submits a container request for one replica and records it.
 func (c *controller) startReplica(ctx context.Context, spec startSpec) (*types.EndpointReplica, error) {
-	endpoint, target := spec.Endpoint, spec.Target
+	endpoint, gpu := spec.Endpoint, spec.GPU
 	stub, stubConfig, err := c.stub(ctx, endpoint.StubID)
 	if err != nil {
 		return nil, err
@@ -346,7 +346,7 @@ func (c *controller) startReplica(ctx context.Context, spec startSpec) (*types.E
 		return nil, err
 	}
 
-	gpuSpec := endpoint.Spec.Gpu[target.GPU]
+	gpuSpec := endpoint.Spec.Gpu[gpu]
 	drainSeconds := cmp.Or(endpoint.Spec.DrainSeconds, c.s.config.Preemption.DefaultDrainSeconds)
 	env := append(append([]string{}, stubConfig.Env...), secrets...)
 	env = append(env,
@@ -355,7 +355,7 @@ func (c *controller) startReplica(ctx context.Context, spec startSpec) (*types.E
 		"STUB_TYPE="+string(stub.Type),
 		EnvEndpointID+"="+endpoint.Spec.ID,
 		EnvReplicaID+"="+replicaID,
-		EnvGpu+"="+target.GPU,
+		EnvGpu+"="+gpu,
 		EnvLocality+"="+spec.Pool.Locality,
 		fmt.Sprintf("%s=%d", EnvEndpointPort, endpoint.Spec.Port),
 		fmt.Sprintf("%s=%t", EnvHarnessEnabled, endpoint.Spec.Harness),
@@ -369,11 +369,11 @@ func (c *controller) startReplica(ctx context.Context, spec startSpec) (*types.E
 	if len(entrypoint) == 0 {
 		entrypoint = stubConfig.EntryPoint
 	}
-	var gpu string
+	var requestGpu string
 	var gpuRequest []string
 	var gpuCount uint32
-	if !target.IsCPU() {
-		gpu, gpuRequest, gpuCount = target.GPU, []string{target.GPU}, max(gpuSpec.Count, 1)
+	if gpu != types.CPUInventoryKey {
+		requestGpu, gpuRequest, gpuCount = gpu, []string{gpu}, max(gpuSpec.Count, 1)
 	}
 	request := &types.ContainerRequest{
 		ContainerId:  containerID,
@@ -381,7 +381,7 @@ func (c *controller) startReplica(ctx context.Context, spec startSpec) (*types.E
 		Env:          env,
 		Cpu:          stubConfig.Runtime.Cpu,
 		Memory:       stubConfig.Runtime.Memory,
-		Gpu:          gpu,
+		Gpu:          requestGpu,
 		GpuRequest:   gpuRequest,
 		GpuCount:     gpuCount,
 		ImageId:      stubConfig.Runtime.ImageId,
@@ -409,7 +409,7 @@ func (c *controller) startReplica(ctx context.Context, spec startSpec) (*types.E
 		ID:             replicaID,
 		EndpointID:     endpoint.Spec.ID,
 		Version:        endpoint.Version,
-		GPU:            target.GPU,
+		GPU:            gpu,
 		GPUCount:       gpuCount,
 		Locality:       spec.Pool.Locality,
 		PoolName:       spec.Pool.Name,

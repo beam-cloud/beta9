@@ -1,8 +1,9 @@
 """
 Managed endpoints: platform-owned inference endpoints declared in a git repo
 and served through ``/v1``. An ``app.py`` exports one ``ManagedEndpoint`` that
-says how the engine runs; ``fleet.yaml`` at the repo root says where and how
-many replicas run. The GitOps reconciler deploys both.
+says how the engine runs; ``fleet.yaml`` at the repo root says which endpoints
+fill each GPU type, in what order and with what cap. The GitOps reconciler
+deploys both.
 """
 
 import json
@@ -36,8 +37,8 @@ def _drop_empty(value: Any) -> Any:
 @dataclass
 class Gpu:
     """How the engine runs on one GPU type: GPUs per replica (tensor parallel),
-    restart-class args and the live harness seed. How many replicas run is
-    fleet.yaml's decision, not the app's."""
+    restart-class args and the live harness seed. Where and how many replicas
+    run is fleet.yaml's decision, not the app's."""
 
     count: int = 1
     engine_args: List[str] = field(default_factory=list)
@@ -108,7 +109,7 @@ class ManagedEndpoint(RunnerAbstraction):
         engine: Engine name for validation/observability (``vllm``, ``sglang``...).
         port / health / metrics: Where the engine listens and its readiness / Prometheus paths.
         gpu: GPU types the engine can run on, optionally with per-type ``Gpu`` settings.
-            Which of these are actually used, and how many replicas, is ``fleet.yaml``'s call.
+            Which of these are actually used, and with what priority and cap, is ``fleet.yaml``'s call.
         routes: Override the default routes for ``kind``.
         pricing / catalog: Billing and ``/v1/models`` metadata.
         harness: Whether the engine runs the beta9 harness (live tuning over RPC).

@@ -454,7 +454,7 @@ func replicasToProto(replicas []*types.EndpointReplica) []*pb.EndpointReplica {
 }
 
 // endpointToProto builds the listing entry with live replica counts and the
-// fleet's replica targets for the endpoint.
+// fleet's placements for the endpoint.
 func endpointToProto(e *types.ManagedEndpoint, fleet *types.Fleet, replicas []*types.EndpointReplica) *pb.ManagedEndpoint {
 	out := &pb.ManagedEndpoint{
 		Id:              e.Spec.ID,
@@ -467,11 +467,11 @@ func endpointToProto(e *types.ManagedEndpoint, fleet *types.Fleet, replicas []*t
 		UpdatedAtUnixMs: unixMs(e.UpdatedAt),
 	}
 	if fleet != nil {
-		replicas := fleet.Replicas[e.Spec.ID]
-		if replicas == nil {
-			replicas = map[string]uint32{}
+		placements := map[string]uint32{}
+		for _, t := range fleet.Placements(e.Spec.ID) {
+			placements[t.GPU] = t.Max
 		}
-		out.ReplicasJson = mustJSON(replicas)
+		out.PlacementsJson = mustJSON(placements)
 	}
 	for _, r := range replicas {
 		if r.EndpointID == e.Spec.ID && !r.Status.Terminal() {

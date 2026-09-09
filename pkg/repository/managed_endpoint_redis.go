@@ -178,8 +178,8 @@ func (r *ManagedEndpointRedisRepository) GetFleet(ctx context.Context) (*types.F
 	if fleet == nil {
 		fleet = &types.Fleet{}
 	}
-	if fleet.Replicas == nil {
-		fleet.Replicas = map[string]map[string]uint32{}
+	if fleet.Priority == nil {
+		fleet.Priority = map[string][]types.FleetEntry{}
 	}
 	return fleet, nil
 }

@@ -109,20 +109,26 @@ func TestPricingValidateAndRat(t *testing.T) {
 }
 
 func TestFleetNormalizeAndPlacements(t *testing.T) {
-	fleet := Fleet{Replicas: map[string]map[string]uint32{
-		" Acme/Model ": {"h100": 3, "cpu": 1, "A10G": 0},
-		"acme/other":   {"h100": 0},
+	fleet := Fleet{Priority: map[string][]FleetEntry{
+		"h100": {{EndpointID: " Acme/Model ", Max: 3}, {EndpointID: "acme/other"}},
+		"cpu":  {{EndpointID: "acme/model", Max: 1}},
+		"A10G": {{EndpointID: "  "}},
 	}}
 	fleet.Normalize()
 
-	require.Equal(t, map[string]map[string]uint32{"acme/model": {"H100": 3, CPUInventoryKey: 1}}, fleet.Replicas, "ids and GPU keys are canonical; zero counts are dropped")
+	require.Equal(t, map[string][]FleetEntry{
+		"H100":          {{EndpointID: "acme/model", Max: 3}, {EndpointID: "acme/other"}},
+		CPUInventoryKey: {{EndpointID: "acme/model", Max: 1}},
+	}, fleet.Priority, "ids and GPU keys are canonical; blank entries and empty lists are dropped")
+	require.Equal(t, []string{"H100", CPUInventoryKey}, fleet.GPUs())
 
 	placements := fleet.Placements("acme/model")
-	require.Len(t, placements, 2)
-	require.Equal(t, FleetTarget{GPU: "H100", Replicas: 3}, placements[0], "sorted by GPU key")
+	require.Equal(t, []FleetTarget{{GPU: "H100", Max: 3}, {GPU: CPUInventoryKey, Max: 1}}, placements, "sorted by GPU key")
 	require.False(t, placements[0].IsCPU())
-	require.Equal(t, CPUInventoryKey, placements[1].GPU)
 	require.True(t, placements[1].IsCPU())
+	require.Equal(t, []FleetTarget{{GPU: "H100"}}, fleet.Placements("acme/other"), "no cap reads as 0")
+	require.True(t, fleet.Lists("acme/other", "H100"))
+	require.False(t, fleet.Lists("acme/other", CPUInventoryKey))
 	require.Empty(t, fleet.Placements("acme/none"))
 }
 
@@ -131,31 +137,35 @@ func TestFleetValidate(t *testing.T) {
 	model.Normalize()
 	endpoints := map[string]*ManagedEndpointSpec{model.ID: &model}
 
-	good := Fleet{Replicas: map[string]map[string]uint32{model.ID: {"H100": 2}}}
+	good := Fleet{Priority: map[string][]FleetEntry{"H100": {{EndpointID: model.ID, Max: 2}}}}
 	good.Normalize()
 	require.NoError(t, good.Validate())
 	require.Empty(t, good.Prune(endpoints))
-	require.Equal(t, uint32(2), good.Replicas[model.ID]["H100"])
+	require.Equal(t, []FleetTarget{{GPU: "H100", Max: 2}}, good.Placements(model.ID))
 
-	bad := Fleet{Replicas: map[string]map[string]uint32{
-		model.ID:    {"H100": 1, "A10G": 1, "NOTAGPU": 65},
-		"acme/typo": {"H100": 1},
+	bad := Fleet{Priority: map[string][]FleetEntry{
+		"H100":    {{EndpointID: model.ID, Max: 1}, {EndpointID: "acme/typo"}, {EndpointID: model.ID}},
+		"A10G":    {{EndpointID: model.ID}},
+		"NOTAGPU": {{EndpointID: model.ID, Max: 65}},
+		"cpu":     {{EndpointID: "acme/typo"}},
 	}}
 	bad.Normalize()
 	err := bad.Validate()
 	require.Error(t, err)
 	msg := err.Error()
 	require.Contains(t, msg, "NOTAGPU is not a known GPU type")
-	require.Contains(t, msg, "replicas 65 exceeds 64")
-	require.NotContains(t, msg, "acme/typo", "structural validation does not know about deployed endpoints")
+	require.Contains(t, msg, "max 65 exceeds 64")
+	require.Contains(t, msg, "H100: zai-org/glm-4.5-air is listed twice")
+	require.Contains(t, msg, "cpu: acme/typo needs a replica count", "an uncapped cpu entry would start without limit")
+	require.NotContains(t, msg, "acme/typo is not", "structural validation does not know about deployed endpoints")
 
 	dropped := bad.Prune(endpoints)
 	require.Equal(t, []string{
 		"acme/typo is not a deployed endpoint",
 		"zai-org/glm-4.5-air does not declare gpu \"A10G\" in its app",
 		"zai-org/glm-4.5-air does not declare gpu \"NOTAGPU\" in its app",
-	}, dropped)
-	require.Equal(t, map[string]map[string]uint32{model.ID: {"H100": 1}}, bad.Replicas, "valid entries survive")
+	}, dropped, "one message per dropped entry, deduplicated")
+	require.Equal(t, map[string][]FleetEntry{"H100": {{EndpointID: model.ID, Max: 1}, {EndpointID: model.ID}}}, bad.Priority, "valid entries survive in order; emptied lists go")
 }
 
 func TestDefaultRoutesUnknownKind(t *testing.T) {

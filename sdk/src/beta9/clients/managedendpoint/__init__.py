@@ -97,8 +97,10 @@ class ManagedEndpoint(betterproto.Message):
     updated_at_unix_ms: int = betterproto.int64_field(8)
     ready_replicas: int = betterproto.uint32_field(9)
     total_replicas: int = betterproto.uint32_field(10)
-    replicas_json: str = betterproto.string_field(11)
-    """Replica count per GPU type from fleet.yaml: JSON {gpu: replicas}."""
+    placements_json: str = betterproto.string_field(11)
+    """
+    Where fleet.yaml places the endpoint: JSON {gpu: max replicas}, 0 = every idle GPU.
+    """
 
 
 @dataclass(eq=False, repr=False)
@@ -335,7 +337,9 @@ class GetGitOpsStatusResponse(betterproto.Message):
     err_msg: str = betterproto.string_field(2)
     state: "GitOpsState" = betterproto.message_field(3)
     fleet_json: str = betterproto.string_field(4)
-    """The applied fleet.yaml as JSON {endpoint: {gpu: replicas}}."""
+    """
+    The applied fleet.yaml as JSON {gpu: [{endpoint_id, max}]} in priority order.
+    """
 
 
 @dataclass(eq=False, repr=False)

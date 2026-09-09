@@ -117,13 +117,14 @@ func statusOf(t *testing.T, s *Service, id string) types.ReplicaStatus {
 	return replica.Status
 }
 
-func TestRetireStaleWaitsForCurrentReady(t *testing.T) {
+func TestRetireWaitsForCurrentReady(t *testing.T) {
 	s := newServiceForTest(t)
 	endpoint := seedEndpoint(t, s)
 	endpoint.Version = 2
 	require.NoError(t, s.repo.SaveEndpoint(context.Background(), endpoint))
 	ctx := context.Background()
-	placed := map[string]bool{"H100": true}
+	fleet, err := s.repo.GetFleet(ctx)
+	require.NoError(t, err)
 
 	oldReady := versionReplica(t, s, "v1-ready", 1, types.ReplicaStatusReady)
 	oldLoading := versionReplica(t, s, "v1-loading", 1, types.ReplicaStatusLoading)
@@ -132,20 +133,20 @@ func TestRetireStaleWaitsForCurrentReady(t *testing.T) {
 
 	// Nothing of v2 is ready: the serving v1 replica keeps the traffic, but
 	// a v1 replica that is not serving anyway is retired right away.
-	s.controller.retireStale(ctx, endpoint, placed, 1, live)
+	s.controller.retire(ctx, endpoint, fleet, live)
 	assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, oldReady.ID))
 	assert.Equal(t, types.ReplicaStatusStopped, statusOf(t, s, oldLoading.ID), "a loading replica is stopped without a drain window")
 	assert.Equal(t, types.ReplicaStatusLoading, statusOf(t, s, newLoading.ID))
 
 	// Only one stale replica is retired per tick, so a second pass with the
 	// same picture drains nothing more (the ready one is still needed).
-	s.controller.retireStale(ctx, endpoint, placed, 1, live)
+	s.controller.retire(ctx, endpoint, fleet, live)
 	assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, oldReady.ID))
 
 	// Once v2 has a ready replica the old one is drained with the spec's grace.
 	newLoading.Status = types.ReplicaStatusReady
 	require.NoError(t, s.repo.SaveReplica(ctx, newLoading))
-	s.controller.retireStale(ctx, endpoint, placed, 1, live)
+	s.controller.retire(ctx, endpoint, fleet, live)
 	stale, err := s.repo.GetReplica(ctx, oldReady.ID)
 	require.NoError(t, err)
 	assert.Equal(t, types.ReplicaStatusDraining, stale.Status)
@@ -156,7 +157,7 @@ func TestRetireStaleWaitsForCurrentReady(t *testing.T) {
 
 // Moving an endpoint to another GPU type is a replacement like any other: the
 // serving replica on the old type stays until the new type has one ready.
-func TestRetireStaleKeepsServingReplicaAcrossGPUMove(t *testing.T) {
+func TestRetireKeepsServingReplicaAcrossGPUMove(t *testing.T) {
 	s := newServiceForTest(t)
 	endpoint := seedEndpoint(t, s)
 	ctx := context.Background()
@@ -165,64 +166,120 @@ func TestRetireStaleKeepsServingReplicaAcrossGPUMove(t *testing.T) {
 	onA100.GPU = "A100-80"
 	require.NoError(t, s.repo.SaveReplica(ctx, onA100))
 	live := []*types.EndpointReplica{onH100, onA100}
-	placed := map[string]bool{"A100-80": true}
+	fleet := seedFleet(t, s, map[string][]types.FleetEntry{"A100-80": {{EndpointID: "acme/model"}}})
 
-	s.controller.retireStale(ctx, endpoint, placed, 1, live)
+	s.controller.retire(ctx, endpoint, fleet, live)
 	assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, onH100.ID), "no A100 replica is ready yet")
 
 	onA100.Status = types.ReplicaStatusReady
 	require.NoError(t, s.repo.SaveReplica(ctx, onA100))
-	s.controller.retireStale(ctx, endpoint, placed, 1, live)
+	s.controller.retire(ctx, endpoint, fleet, live)
 	drained, err := s.repo.GetReplica(ctx, onH100.ID)
 	require.NoError(t, err)
 	assert.Equal(t, types.ReplicaStatusDraining, drained.Status)
 	assert.Equal(t, "removed from fleet.yaml", drained.StatusReason)
 
-	// An endpoint dropped from fleet.yaml entirely is drained outright.
+	// An endpoint listed nowhere is drained outright.
 	gone := versionReplica(t, s, "gone", 1, types.ReplicaStatusReady)
-	s.controller.retireStale(ctx, endpoint, map[string]bool{}, 0, []*types.EndpointReplica{gone})
+	s.controller.retire(ctx, endpoint, &types.Fleet{}, []*types.EndpointReplica{gone})
 	assert.Equal(t, types.ReplicaStatusDraining, statusOf(t, s, gone.ID))
+
+	// A retired endpoint drains everything it still has.
+	endpoint.Status = types.EndpointStatusRetired
+	survivor := versionReplica(t, s, "survivor", 1, types.ReplicaStatusLoading)
+	s.controller.retire(ctx, endpoint, fleet, []*types.EndpointReplica{survivor})
+	assert.Equal(t, types.ReplicaStatusStopped, statusOf(t, s, survivor.ID))
 }
 
-func TestReconcileEndpointConvergesOnFleetCount(t *testing.T) {
+// noRoomInventory has an eligible H100 pool with nothing idle, so growth
+// stops for lack of GPUs rather than for lack of a pool.
+func noRoomInventory() *clusterInventory {
+	return &clusterInventory{
+		pools: map[string][]eligiblePool{"H100": {{Name: "gpu-a", Locality: "gpu-a"}}},
+		free:  map[string]map[string]uint32{"H100": {"gpu-a": 0}},
+	}
+}
+
+func TestFillDrainsDownToCap(t *testing.T) {
 	s := newServiceForTest(t)
-	endpoint := seedEndpoint(t, s) // fleet: acme/model H100: 2
+	endpoint := seedEndpoint(t, s) // fleet: H100: [acme/model: 2]
 	ctx := context.Background()
-	inv := &clusterInventory{pools: map[string][]eligiblePool{}, free: map[string]map[string]uint32{}}
+	endpoints := map[string]*types.ManagedEndpoint{endpoint.Spec.ID: endpoint}
+	entries := []types.FleetEntry{{EndpointID: endpoint.Spec.ID, Max: 2}}
 
-	placed := versionReplica(t, s, "on-h100", 1, types.ReplicaStatusLoading)
-	unplaced := versionReplica(t, s, "on-a100", 1, types.ReplicaStatusLoading)
-	unplaced.GPU = "A100"
-	require.NoError(t, s.repo.SaveReplica(ctx, unplaced))
-
-	// fleet.yaml only places acme/model on H100: the A100 replica goes. Below
-	// the count with no pool opted in, nothing can be started.
-	fleet, err := s.repo.GetFleet(ctx)
-	require.NoError(t, err)
-	s.controller.reconcileEndpoint(ctx, endpoint, fleet, []*types.EndpointReplica{placed, unplaced}, inv)
-	assert.Equal(t, types.ReplicaStatusLoading, statusOf(t, s, placed.ID))
-	assert.Equal(t, types.ReplicaStatusStopped, statusOf(t, s, unplaced.ID))
-	reason, _ := s.repo.GetReplica(ctx, unplaced.ID)
-	assert.Equal(t, "removed from fleet.yaml", reason.StatusReason)
-
-	// Over the count: the least valuable replicas are drained down to it.
+	first := versionReplica(t, s, "first", 1, types.ReplicaStatusLoading)
 	second := versionReplica(t, s, "second", 1, types.ReplicaStatusReady)
 	extra := versionReplica(t, s, "extra", 1, types.ReplicaStatusLoading)
-	s.controller.reconcileEndpoint(ctx, endpoint, fleet, []*types.EndpointReplica{placed, second, extra}, inv)
+	s.controller.fill(ctx, "H100", entries, endpoints, []*types.EndpointReplica{first, second, extra}, noRoomInventory())
 	assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, second.ID))
 	stopped := 0
-	for _, id := range []string{placed.ID, extra.ID} {
+	for _, id := range []string{first.ID, extra.ID} {
 		if statusOf(t, s, id) == types.ReplicaStatusStopped {
 			stopped++
 		}
 	}
 	assert.Equal(t, 1, stopped, "one loading replica goes, the ready one stays")
+}
 
-	// A retired endpoint drains everything it still has.
-	endpoint.Status = types.EndpointStatusRetired
-	survivor := versionReplica(t, s, "survivor", 1, types.ReplicaStatusLoading)
-	s.controller.reconcileEndpoint(ctx, endpoint, fleet, []*types.EndpointReplica{survivor}, inv)
-	assert.Equal(t, types.ReplicaStatusStopped, statusOf(t, s, survivor.ID))
+// Priority order is enforced by giving GPUs back: when a higher entry is short
+// and nothing is idle, the entries below it drain one replica per tick.
+func TestFillReclaimsForHigherPriority(t *testing.T) {
+	s := newServiceForTest(t)
+	high := seedEndpoint(t, s)
+	low := &types.ManagedEndpoint{Spec: high.Spec, StubID: "stub-low", Version: 1, Status: types.EndpointStatusActive}
+	low.Spec.ID = "acme/low"
+	ctx := context.Background()
+	require.NoError(t, s.repo.SaveEndpoint(ctx, low))
+	endpoints := map[string]*types.ManagedEndpoint{high.Spec.ID: high, low.Spec.ID: low}
+	entries := []types.FleetEntry{{EndpointID: high.Spec.ID}, {EndpointID: low.Spec.ID}}
+
+	lowReplica := func(id string, status types.ReplicaStatus) *types.EndpointReplica {
+		r := versionReplica(t, s, id, 1, status)
+		r.EndpointID = low.Spec.ID
+		require.NoError(t, s.repo.SaveReplica(ctx, r))
+		return r
+	}
+	highReady := versionReplica(t, s, "high-ready", 1, types.ReplicaStatusReady)
+	lowBusy := lowReplica("low-busy", types.ReplicaStatusReady)
+	lowBusy.Capacity.InFlight = 3
+	require.NoError(t, s.repo.SaveReplica(ctx, lowBusy))
+	lowIdle := lowReplica("low-idle", types.ReplicaStatusReady)
+	live := []*types.EndpointReplica{highReady, lowBusy, lowIdle}
+
+	// The uncapped high entry wants more and nothing is idle: the least
+	// valuable low replica is drained, and only one per tick.
+	s.controller.fill(ctx, "H100", entries, endpoints, live, noRoomInventory())
+	assert.Equal(t, types.ReplicaStatusDraining, statusOf(t, s, lowIdle.ID))
+	assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, lowBusy.ID))
+	drained, _ := s.repo.GetReplica(ctx, lowIdle.ID)
+	assert.Equal(t, "gpu reclaimed for acme/model", drained.StatusReason)
+
+	// While the high entry is still bringing a replica up, nothing more is
+	// taken from the low one: a replica that cannot start must not drain
+	// the others.
+	highLoading := versionReplica(t, s, "high-loading", 1, types.ReplicaStatusLoading)
+	s.controller.fill(ctx, "H100", entries, endpoints, []*types.EndpointReplica{highReady, highLoading, lowBusy}, noRoomInventory())
+	assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, lowBusy.ID))
+
+	// A capped high entry that is at its cap wants nothing: the low one keeps its GPUs.
+	capped := []types.FleetEntry{{EndpointID: high.Spec.ID, Max: 1}, {EndpointID: low.Spec.ID}}
+	s.controller.fill(ctx, "H100", capped, endpoints, []*types.EndpointReplica{highReady, lowBusy}, noRoomInventory())
+	assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, lowBusy.ID))
+}
+
+func TestInventoryCountsSchedulingReplicasAsTaken(t *testing.T) {
+	s := newServiceForTest(t)
+	s.workers = repository.NewWorkerRedisRepositoryForTest(s.rdb)
+	s.appConfig.Worker.Pools = map[string]types.WorkerPoolConfig{"gpu-a": {GPUType: "H100", ManagedEndpoints: types.WorkerPoolManagedEndpointsConfig{Enabled: true}}}
+	require.NoError(t, s.workers.AddWorker(&types.Worker{Id: "w1", PoolName: "gpu-a", Gpu: "H100", TotalGpuCount: 4, FreeGpuCount: 4, Status: types.WorkerStatusAvailable}))
+
+	inv, err := s.controller.inventory([]*types.EndpointReplica{
+		{ID: "pending", GPU: "H100", GPUCount: 2, PoolName: "gpu-a", Status: types.ReplicaStatusScheduling},
+		{ID: "placed", GPU: "H100", GPUCount: 1, PoolName: "gpu-a", Status: types.ReplicaStatusLoading},
+		{ID: "elsewhere", GPU: "H100", GPUCount: 1, PoolName: "other", Status: types.ReplicaStatusScheduling},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, uint32(2), inv.free["H100"]["gpu-a"], "a replica the scheduler has not placed yet still holds its GPUs; a placed one is already in the worker's count")
 }
 
 // --- eviction ------------------------------------------------------------------

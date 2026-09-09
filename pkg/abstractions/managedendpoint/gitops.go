@@ -700,6 +700,50 @@ type fleetInvalidError struct{ err error }
 func (e *fleetInvalidError) Error() string { return "fleet.yaml: " + e.err.Error() }
 func (e *fleetInvalidError) Unwrap() error { return e.err }
 
+// parseFleet reads fleet.yaml: a GPU type maps to its priority list, whose
+// items are an endpoint id ("vendor/model", every idle GPU) or a one-key map
+// ("vendor/model: 2", at most two replicas there).
+func parseFleet(text string) (*types.Fleet, error) {
+	var raw map[string][]any
+	if err := yaml.Unmarshal([]byte(text), &raw); err != nil {
+		return nil, err
+	}
+	fleet := &types.Fleet{Priority: map[string][]types.FleetEntry{}}
+	for gpu, items := range raw {
+		for _, item := range items {
+			entry, err := fleetEntry(item)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", gpu, err)
+			}
+			fleet.Priority[gpu] = append(fleet.Priority[gpu], entry)
+		}
+	}
+	fleet.Normalize()
+	if err := fleet.Validate(); err != nil {
+		return nil, err
+	}
+	return fleet, nil
+}
+
+func fleetEntry(item any) (types.FleetEntry, error) {
+	switch v := item.(type) {
+	case string:
+		return types.FleetEntry{EndpointID: v}, nil
+	case map[any]any:
+		if len(v) != 1 {
+			return types.FleetEntry{}, fmt.Errorf("%v: an entry is an endpoint id or one \"endpoint id: max replicas\" pair", v)
+		}
+		for id, n := range v {
+			count, ok := n.(int)
+			if !ok || count < 0 {
+				return types.FleetEntry{}, fmt.Errorf("%v: max replicas must be a non-negative integer", id)
+			}
+			return types.FleetEntry{EndpointID: fmt.Sprint(id), Max: uint32(count)}, nil
+		}
+	}
+	return types.FleetEntry{}, fmt.Errorf("%v: an entry is an endpoint id or one \"endpoint id: max replicas\" pair", item)
+}
+
 // applyFleet parses and validates the report's fleet.yaml, drops entries for
 // endpoints that are not deployed (reported as skipped, so a failed deploy
 // never blocks the rest of the fleet) and saves the result. A fleet that fails
@@ -715,19 +759,16 @@ func (g *gitops) applyFleet(ctx context.Context, report *types.GitOpsReport) (sk
 			known[e.Spec.ID] = &e.Spec
 		}
 	}
-	fleet := &types.Fleet{GitSHA: report.SHA}
-	if err := yaml.Unmarshal([]byte(report.FleetYAML), &fleet.Replicas); err != nil {
+	fleet, err := parseFleet(report.FleetYAML)
+	if err != nil {
 		return "", &fleetInvalidError{err}
 	}
-	fleet.Normalize()
-	if err := fleet.Validate(); err != nil {
-		return "", &fleetInvalidError{err}
-	}
+	fleet.GitSHA = report.SHA
 	dropped := fleet.Prune(known)
 	if err := g.s.repo.SaveFleet(ctx, fleet); err != nil {
 		return "", err
 	}
-	g.s.emit(types.EventEndpointGitOps, types.EventEndpointSchema{Action: "gitops.fleet", Message: report.SHA, Data: map[string]any{"fleet": fleet.Replicas, "skipped": dropped}})
+	g.s.emit(types.EventEndpointGitOps, types.EventEndpointSchema{Action: "gitops.fleet", Message: report.SHA, Data: map[string]any{"fleet": fleet.Priority, "skipped": dropped}})
 	if len(dropped) > 0 {
 		return "skipped: " + strings.Join(dropped, "; "), nil
 	}
