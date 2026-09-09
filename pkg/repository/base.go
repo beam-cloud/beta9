@@ -168,6 +168,69 @@ type ManagedPoolRepository interface {
 	DeleteManagedPoolState(ctx context.Context, workspaceID, name string) error
 }
 
+// ManagedEndpointRepository stores the fast-changing state of the managed
+// endpoints platform: the registry of deployed endpoint/service versions,
+// live replicas, harness config revisions and acks, tuning experiments,
+// rollout and GitOps state, and rolled-up route metrics. The durable stub
+// itself lives in Postgres; everything here can be rebuilt from stubs +
+// heartbeats.
+type ManagedEndpointRepository interface {
+	// Registry
+	SaveEndpoint(ctx context.Context, endpoint *types.ManagedEndpoint) error
+	GetEndpoint(ctx context.Context, endpointID string) (*types.ManagedEndpoint, error)
+	ListEndpoints(ctx context.Context) ([]*types.ManagedEndpoint, error)
+	DeleteEndpoint(ctx context.Context, endpointID string) error
+	SaveService(ctx context.Context, service *types.ManagedService) error
+	GetService(ctx context.Context, name string) (*types.ManagedService, error)
+	ListServices(ctx context.Context) ([]*types.ManagedService, error)
+	DeleteService(ctx context.Context, name string) error
+
+	// Versions and rollout
+	SaveVersion(ctx context.Context, version *types.EndpointVersion) error
+	ListVersions(ctx context.Context, endpointID string) ([]*types.EndpointVersion, error)
+	SaveRollout(ctx context.Context, rollout *types.RolloutState) error
+	GetRollout(ctx context.Context, endpointID string) (*types.RolloutState, error)
+
+	// Replicas
+	SaveReplica(ctx context.Context, replica *types.EndpointReplica) error
+	GetReplica(ctx context.Context, replicaID string) (*types.EndpointReplica, error)
+	GetReplicaByContainer(ctx context.Context, containerID string) (*types.EndpointReplica, error)
+	ListReplicas(ctx context.Context, endpointID string) ([]*types.EndpointReplica, error)
+	ListAllReplicas(ctx context.Context) ([]*types.EndpointReplica, error)
+	DeleteReplica(ctx context.Context, replicaID string) error
+	WithReplicaLock(ctx context.Context, replicaID string, fn func(context.Context) error) error
+	RequestDrain(ctx context.Context, replicaID string, drainSeconds uint32) error
+	DrainRequested(ctx context.Context, replicaID string) (bool, uint32, error)
+	SetScheduleBackoff(ctx context.Context, endpointID, targetKey string, ttl time.Duration) error
+	InScheduleBackoff(ctx context.Context, endpointID, targetKey string) (bool, error)
+
+	// Harness config revisions
+	CreateConfigRevision(ctx context.Context, revision *types.EndpointConfigRevision) error
+	GetConfigRevision(ctx context.Context, endpointID string, revision uint64) (*types.EndpointConfigRevision, error)
+	LatestConfigRevision(ctx context.Context, endpointID string, scope types.ConfigRevisionScope, scopeKey string) (*types.EndpointConfigRevision, error)
+	ListConfigRevisions(ctx context.Context, endpointID string, scope types.ConfigRevisionScope, scopeKey string, limit int) ([]*types.EndpointConfigRevision, error)
+	DeleteConfigRevisions(ctx context.Context, endpointID string, scope types.ConfigRevisionScope, scopeKey string) error
+	// SubscribeConfigRevisions delivers new revisions for an endpoint until ctx ends.
+	SubscribeConfigRevisions(ctx context.Context, endpointID string) (<-chan *types.EndpointConfigRevision, error)
+	SaveConfigAck(ctx context.Context, ack *types.ConfigAck) error
+	GetConfigAck(ctx context.Context, replicaID string, revision uint64) (*types.ConfigAck, error)
+
+	// Experiments
+	SaveExperiment(ctx context.Context, experiment *types.Experiment, ttl time.Duration, keep int) error
+	GetExperiment(ctx context.Context, experimentID string) (*types.Experiment, error)
+	ListExperiments(ctx context.Context, endpointID string, limit int) ([]*types.Experiment, error)
+	AcquireExperimentLock(ctx context.Context, endpointID, experimentID string, ttl time.Duration) (bool, string, error)
+	ReleaseExperimentLock(ctx context.Context, endpointID, experimentID string) error
+
+	// GitOps
+	SaveGitOpsState(ctx context.Context, state *types.GitOpsState) error
+	GetGitOpsState(ctx context.Context) (*types.GitOpsState, error)
+
+	// Route metrics (minute buckets, bounded retention)
+	RecordRouteSample(ctx context.Context, sample types.RouteSample) error
+	GetRouteMetrics(ctx context.Context, endpointID, gpu string, version uint, window time.Duration) (*types.RouteMetrics, error)
+}
+
 type WorkspaceRepository interface {
 	GetConcurrencyLimitByWorkspaceId(workspaceId string) (*types.ConcurrencyLimit, error)
 	SetConcurrencyLimitByWorkspaceId(workspaceId string, limit *types.ConcurrencyLimit) error

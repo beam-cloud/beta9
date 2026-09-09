@@ -84,6 +84,23 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		}, nil
 	}
 
+	managedEndpoint, err := gws.managedEndpointStubConfig(ctx, authInfo, in)
+	if err != nil {
+		return &pb.GetOrCreateStubResponse{
+			Ok:     false,
+			ErrMsg: err.Error(),
+		}, nil
+	}
+	if managedEndpoint != nil {
+		// The stub runtime carries the union of target GPU types; the endpoint
+		// controller sets the exact type/count on each replica's container request.
+		targetGpus, targetCount := managedTargetGpuTypes(managedEndpoint)
+		if len(targetGpus) > 0 {
+			gpus = targetGpus
+			in.GpuCount = targetCount
+		}
+	}
+
 	// If checkpoint/restore is enabled, we need to handle a few additional things to ensure dump/restore will work properly
 	if in.CheckpointEnabled {
 		checkpointWarning, err := gws.handleCheckpointEnabled(ctx, authInfo, in, gpus)
@@ -149,6 +166,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		Serving:            servingConfig,
 		Pool:               resourcePolicy.pool,
 		Disks:              in.Disks,
+		ManagedEndpoint:    managedEndpoint,
 	}
 
 	// A persistent root is shorthand for a qcow machine-root disk: the
@@ -985,6 +1003,16 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 		return &pb.DeployStubResponse{
 			Ok: false,
 		}, nil
+	}
+
+	if stub.Type.IsManaged() {
+		if err := gws.registerManagedDeployment(ctx, stub, &config, deployment); err != nil {
+			log.Error().Err(err).Str("stub_id", stub.ExternalId).Msg("failed to register managed endpoint deployment")
+			return &pb.DeployStubResponse{
+				Ok:     false,
+				ErrMsg: fmt.Sprintf("Failed to register managed endpoint: %v", err),
+			}, nil
+		}
 	}
 
 	// TODO: Remove this field once `pkg/api/v1/stub.go:GetURL()` is used by frontend and SDK version can be force upgraded

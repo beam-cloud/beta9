@@ -497,6 +497,11 @@ class GetOrCreateStubRequest(betterproto.Message):
     """Hostname to set inside the container."""
 
     persistent_root: "PersistentRoot" = betterproto.message_field(48)
+    managed_endpoint: str = betterproto.string_field(49)
+    """
+    JSON-encoded types.ManagedEndpointStubConfig for managed_endpoint/* and
+     managed_service/* stubs (system workspace only).
+    """
 
 
 @dataclass(eq=False, repr=False)

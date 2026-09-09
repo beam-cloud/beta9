@@ -499,6 +499,46 @@ managedCompute:
     reconcileInterval: 1m
     minimumCreditCents: 2500
     failureGracePeriod: 10m
+managedEndpoints:
+  enabled: false
+  routePrefix: /v1
+  repo:
+    url: ""
+    ref: main
+    path: ""
+    deployKeySecret: ""
+    pollInterval: 2m
+  webhook:
+    secret: ""
+  deployerImage: ""
+  preemption:
+    enabled: true
+    defaultDrainSeconds: 5
+  fill:
+    maxClusterShare: 0.5
+    reconcileInterval: 10s
+    failureBackoff: 30s
+  rollout:
+    canaryReplicas: 1
+    bakeSeconds: 300
+    thresholds:
+      errorRate: 0.02
+      ttft: 0.25
+      tpot: 0.25
+      throughput: 0.25
+  tuning:
+    maxConcurrentExperiments: 1
+    experimentTTL: 168h
+    keepExperiments: 50
+  routing:
+    maxQueueWait: 2s
+    slowStartSeconds: 30
+    perWorkspaceConcurrency: 0
+    perEndpointConcurrency: 0
+  allowedEngines: []
+  allowedKinds: []
+  heartbeatInterval: 5s
+  replicaStaleAfter: 15s
 abstractions:
   bot:
     systemPrompt: ""

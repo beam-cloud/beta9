@@ -203,6 +203,9 @@ class RunnerAbstraction(BaseAbstraction):
             serving=serving,
         )
         self.extra: dict = {}
+        # JSON-encoded managed endpoint / service spec; only set by the
+        # ManagedEndpoint and ManagedService abstractions.
+        self.managed_endpoint: str = ""
         self.entrypoint: Optional[List[str]] = entrypoint
         self.tcp = tcp
         self.block_network = block_network
@@ -734,6 +737,7 @@ class RunnerAbstraction(BaseAbstraction):
             is_service=self.is_service,
             serving=self._serving_config_proto(),
             disks=[disk.export() for disk in self.disks],
+            managed_endpoint=self.managed_endpoint,
         )
 
     def _checkpoint_trigger_proto(self) -> Optional[CheckpointTrigger]:

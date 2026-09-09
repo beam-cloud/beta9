@@ -3958,6 +3958,10 @@
         },
         "persistentRoot": {
           "$ref": "#/definitions/gatewayPersistentRoot"
+        },
+        "managedEndpoint": {
+          "type": "string",
+          "description": "JSON-encoded types.ManagedEndpointStubConfig for managed_endpoint/* and\nmanaged_service/* stubs (system workspace only)."
         }
       }
     },

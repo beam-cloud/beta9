@@ -817,6 +817,9 @@ message GetOrCreateStubRequest {
   // Hostname to set inside the container.
   string hostname = 47;
   PersistentRoot persistent_root = 48;
+  // JSON-encoded types.ManagedEndpointStubConfig for managed_endpoint/* and
+  // managed_service/* stubs (system workspace only).
+  string managed_endpoint = 49;
 }
 
 message GetOrCreateStubResponse {

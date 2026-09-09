@@ -30,6 +30,196 @@ type AppConfig struct {
 	Abstractions   AbstractionConfig    `key:"abstractions" json:"abstractions"`
 	Cache          cache.Config         `key:"cache" json:"cache"`
 	Agent          AgentConfig          `key:"agent" json:"agent"`
+	// ManagedEndpoints configures the platform-owned inference endpoints
+	// (GitOps-driven stubs filled onto spare GPU capacity, served under /v1).
+	ManagedEndpoints ManagedEndpointsConfig `key:"managedEndpoints" json:"managed_endpoints"`
+}
+
+// ManagedEndpointsConfig is the cluster-level configuration for the managed
+// endpoints platform. Only Enabled and Repo are required to turn it on; every
+// other value has a production default. Endpoint stubs are owned by the
+// cluster admin workspace.
+type ManagedEndpointsConfig struct {
+	Enabled        bool                          `key:"enabled" json:"enabled"`
+	RoutePrefix    string                        `key:"routePrefix" json:"route_prefix"`
+	Repo           ManagedEndpointsRepoConfig    `key:"repo" json:"repo"`
+	Webhook        ManagedEndpointsWebhookConfig `key:"webhook" json:"webhook"`
+	DeployerImage  string                        `key:"deployerImage" json:"deployer_image"`
+	Preemption     ManagedEndpointsPreemption    `key:"preemption" json:"preemption"`
+	Fill           ManagedEndpointsFillConfig    `key:"fill" json:"fill"`
+	Rollout        ManagedEndpointsRolloutConfig `key:"rollout" json:"rollout"`
+	Tuning         ManagedEndpointsTuningConfig  `key:"tuning" json:"tuning"`
+	Routing        ManagedEndpointsRoutingConfig `key:"routing" json:"routing"`
+	AllowedEngines []string                      `key:"allowedEngines" json:"allowed_engines"`
+	AllowedKinds   []string                      `key:"allowedKinds" json:"allowed_kinds"`
+	// HeartbeatInterval is what replicas are told to heartbeat at.
+	HeartbeatInterval time.Duration `key:"heartbeatInterval" json:"heartbeat_interval"`
+	// ReplicaStaleAfter marks replicas failed when no heartbeat/probe arrives.
+	ReplicaStaleAfter time.Duration `key:"replicaStaleAfter" json:"replica_stale_after"`
+}
+
+type ManagedEndpointsRepoConfig struct {
+	URL             string        `key:"url" json:"url"`
+	Ref             string        `key:"ref" json:"ref"`
+	Path            string        `key:"path" json:"path"`
+	DeployKeySecret string        `key:"deployKeySecret" json:"deploy_key_secret"`
+	PollInterval    time.Duration `key:"pollInterval" json:"poll_interval"`
+}
+
+type ManagedEndpointsWebhookConfig struct {
+	Secret string `key:"secret" json:"secret"`
+}
+
+type ManagedEndpointsPreemption struct {
+	Enabled             bool   `key:"enabled" json:"enabled"`
+	DefaultDrainSeconds uint32 `key:"defaultDrainSeconds" json:"default_drain_seconds"`
+}
+
+type ManagedEndpointsFillConfig struct {
+	// MaxClusterShare caps the fraction of each GPU type's capacity that all
+	// endpoints together may occupy.
+	MaxClusterShare   float64       `key:"maxClusterShare" json:"max_cluster_share"`
+	ReconcileInterval time.Duration `key:"reconcileInterval" json:"reconcile_interval"`
+	// FailureBackoff delays rescheduling after a replica fails.
+	FailureBackoff time.Duration `key:"failureBackoff" json:"failure_backoff"`
+}
+
+type ManagedEndpointsRolloutConfig struct {
+	CanaryReplicas uint32            `key:"canaryReplicas" json:"canary_replicas"`
+	BakeSeconds    uint32            `key:"bakeSeconds" json:"bake_seconds"`
+	Thresholds     RolloutThresholds `key:"thresholds" json:"thresholds"`
+}
+
+// RolloutThresholds are relative regressions (fraction) that fail a canary.
+type RolloutThresholds struct {
+	ErrorRate  float64 `key:"errorRate" json:"error_rate"`
+	TTFT       float64 `key:"ttft" json:"ttft"`
+	TPOT       float64 `key:"tpot" json:"tpot"`
+	Throughput float64 `key:"throughput" json:"throughput"`
+}
+
+type ManagedEndpointsTuningConfig struct {
+	MaxConcurrentExperiments uint32        `key:"maxConcurrentExperiments" json:"max_concurrent_experiments"`
+	ExperimentTTL            time.Duration `key:"experimentTTL" json:"experiment_ttl"`
+	KeepExperiments          int           `key:"keepExperiments" json:"keep_experiments"`
+}
+
+type ManagedEndpointsRoutingConfig struct {
+	MaxQueueWait            time.Duration `key:"maxQueueWait" json:"max_queue_wait"`
+	SlowStartSeconds        uint32        `key:"slowStartSeconds" json:"slow_start_seconds"`
+	PerWorkspaceConcurrency uint32        `key:"perWorkspaceConcurrency" json:"per_workspace_concurrency"`
+	PerEndpointConcurrency  uint32        `key:"perEndpointConcurrency" json:"per_endpoint_concurrency"`
+}
+
+func (c ManagedEndpointsConfig) RoutePrefixOrDefault() string {
+	if strings.TrimSpace(c.RoutePrefix) == "" {
+		return "/v1"
+	}
+	return "/" + strings.Trim(strings.TrimSpace(c.RoutePrefix), "/")
+}
+
+func (c ManagedEndpointsConfig) HeartbeatIntervalOrDefault() time.Duration {
+	if c.HeartbeatInterval <= 0 {
+		return 5 * time.Second
+	}
+	return c.HeartbeatInterval
+}
+
+func (c ManagedEndpointsConfig) ReplicaStaleAfterOrDefault() time.Duration {
+	if c.ReplicaStaleAfter <= 0 {
+		return 3 * c.HeartbeatIntervalOrDefault()
+	}
+	return c.ReplicaStaleAfter
+}
+
+func (c ManagedEndpointsFillConfig) ReconcileIntervalOrDefault() time.Duration {
+	if c.ReconcileInterval <= 0 {
+		return 10 * time.Second
+	}
+	return c.ReconcileInterval
+}
+
+func (c ManagedEndpointsFillConfig) MaxClusterShareOrDefault() float64 {
+	if c.MaxClusterShare <= 0 || c.MaxClusterShare > 1 {
+		return 0.5
+	}
+	return c.MaxClusterShare
+}
+
+func (c ManagedEndpointsFillConfig) FailureBackoffOrDefault() time.Duration {
+	if c.FailureBackoff <= 0 {
+		return 30 * time.Second
+	}
+	return c.FailureBackoff
+}
+
+func (c ManagedEndpointsRepoConfig) PollIntervalOrDefault() time.Duration {
+	if c.PollInterval <= 0 {
+		return 2 * time.Minute
+	}
+	return c.PollInterval
+}
+
+func (c ManagedEndpointsRepoConfig) RefOrDefault() string {
+	if strings.TrimSpace(c.Ref) == "" {
+		return "main"
+	}
+	return c.Ref
+}
+
+func (c ManagedEndpointsRoutingConfig) MaxQueueWaitOrDefault() time.Duration {
+	if c.MaxQueueWait <= 0 {
+		return 2 * time.Second
+	}
+	return c.MaxQueueWait
+}
+
+func (c ManagedEndpointsRoutingConfig) SlowStartOrDefault() time.Duration {
+	if c.SlowStartSeconds == 0 {
+		return 30 * time.Second
+	}
+	return time.Duration(c.SlowStartSeconds) * time.Second
+}
+
+func (c ManagedEndpointsTuningConfig) ExperimentTTLOrDefault() time.Duration {
+	if c.ExperimentTTL <= 0 {
+		return 7 * 24 * time.Hour
+	}
+	return c.ExperimentTTL
+}
+
+func (c ManagedEndpointsTuningConfig) KeepExperimentsOrDefault() int {
+	if c.KeepExperiments <= 0 {
+		return 50
+	}
+	return c.KeepExperiments
+}
+
+func (c ManagedEndpointsRolloutConfig) BakeDuration() time.Duration {
+	if c.BakeSeconds == 0 {
+		return 5 * time.Minute
+	}
+	return time.Duration(c.BakeSeconds) * time.Second
+}
+
+func (c ManagedEndpointsRolloutConfig) CanaryReplicasOrDefault() uint32 {
+	if c.CanaryReplicas == 0 {
+		return 1
+	}
+	return c.CanaryReplicas
+}
+
+// WorkerPoolManagedEndpointsConfig opts a pool into hosting endpoint replicas.
+type WorkerPoolManagedEndpointsConfig struct {
+	Enabled  bool    `key:"enabled" json:"enabled"`
+	MaxShare float64 `key:"maxShare" json:"max_share"`
+}
+
+func (c WorkerPoolManagedEndpointsConfig) MaxShareOrDefault() float64 {
+	if c.MaxShare <= 0 || c.MaxShare > 1 {
+		return 1
+	}
+	return c.MaxShare
 }
 
 type DatabaseConfig struct {
@@ -623,6 +813,11 @@ type WorkerPoolConfig struct {
 	DurableDisksPath          string                            `key:"durableDisksPath" json:"durable_disks_path"` // Host path backing durable disks; agent pools fall back to storagePath or the installer state dir.
 	Cache                     WorkerPoolCacheConfig             `key:"cache" json:"cache"`
 	HourlyCostCents           int64                             `key:"hourlyCostCents" json:"hourly_cost_cents"` // Cost of one machine in this pool, in cents per hour (e.g. 120 for $1.20/hr)
+	// ManagedEndpoints lets platform endpoint replicas fill this pool's spare GPUs.
+	ManagedEndpoints WorkerPoolManagedEndpointsConfig `key:"managedEndpoints" json:"managed_endpoints"`
+	// Locality is the network domain used to scope KV caching and P/D pairing.
+	// Defaults to the pool name.
+	Locality string `key:"locality" json:"locality"`
 }
 
 // AgentHosted reports whether this concrete pool uses the agent control path.
