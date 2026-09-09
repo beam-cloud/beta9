@@ -946,6 +946,17 @@ func (s *Worker) runContainerRequestWithRunner(
 		}
 	}()
 
+	// Make room first: the scheduler handed this request capacity that
+	// evictable containers still physically hold. The drain window is bounded
+	// by the request itself and runs before the startup timer starts.
+	if len(request.EvictContainerIds) > 0 {
+		s.evictForRequest(ctx, request)
+		if err := ctx.Err(); err != nil {
+			s.failContainerRequest(containerId, request, err)
+			return
+		}
+	}
+
 	run := func() error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -1304,6 +1315,14 @@ func (s *Worker) updateContainerStatusOnce(ctx context.Context, request *types.C
 	}
 	// Finalization owns the STOPPING lease; the normal heartbeat must not renew it.
 	if status == types.ContainerStatusStopping {
+		if state.Evicting {
+			// The scheduler picked this container as an eviction victim. The
+			// displacing request normally drives the stop, but if it was
+			// requeued elsewhere this path still reclaims the capacity, on
+			// the container's own drain window.
+			s.evictContainer(request.ContainerId, time.Duration(state.DrainSeconds)*time.Second, "")
+			return false, nil
+		}
 		s.handleObservedStoppingContainer(request.ContainerId, types.EventSourceWorkerStatusHeartbeat)
 		return false, nil
 	}

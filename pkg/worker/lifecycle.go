@@ -2004,6 +2004,8 @@ func normalizeContainerExitCode(exitCode int, stopReason types.StopContainerReas
 		return int(types.ContainerExitCodeUser)
 	case types.StopContainerReasonAdmin, types.StopContainerReasonInsufficientCredits:
 		return int(types.ContainerExitCodeAdmin)
+	case types.StopContainerReasonEvicted:
+		return int(types.ContainerExitCodeEvicted)
 	}
 
 	if oomKilled {

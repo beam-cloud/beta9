@@ -30,18 +30,22 @@ func (s *ContainerRepositoryService) GetContainerState(ctx context.Context, req 
 
 func containerStateToProto(state *types.ContainerState) *pb.ContainerState {
 	return &pb.ContainerState{
-		Status:      string(state.Status),
-		ContainerId: state.ContainerId,
-		StubId:      state.StubId,
-		ScheduledAt: state.ScheduledAt,
-		StartedAt:   state.StartedAt,
-		WorkspaceId: state.WorkspaceId,
-		Gpu:         state.Gpu,
-		GpuCount:    state.GpuCount,
-		Cpu:         state.Cpu,
-		Memory:      state.Memory,
-		WorkerId:    state.WorkerId,
-		MachineId:   state.MachineId,
+		Status:       string(state.Status),
+		ContainerId:  state.ContainerId,
+		StubId:       state.StubId,
+		ScheduledAt:  state.ScheduledAt,
+		StartedAt:    state.StartedAt,
+		WorkspaceId:  state.WorkspaceId,
+		Gpu:          state.Gpu,
+		GpuCount:     state.GpuCount,
+		Cpu:          state.Cpu,
+		Memory:       state.Memory,
+		WorkerId:     state.WorkerId,
+		MachineId:    state.MachineId,
+		Evictable:    state.Evictable,
+		Evicting:     state.Evicting,
+		DrainSeconds: state.DrainSeconds,
+		EvictOrder:   state.EvictOrder,
 	}
 }
 

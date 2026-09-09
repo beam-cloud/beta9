@@ -156,7 +156,7 @@ type ConfigRevision struct {
 	Revision        uint64 `protobuf:"varint,1,opt,name=revision,proto3" json:"revision,omitempty"`
 	EndpointId      string `protobuf:"bytes,2,opt,name=endpoint_id,json=endpointId,proto3" json:"endpoint_id,omitempty"`
 	Scope           string `protobuf:"bytes,3,opt,name=scope,proto3" json:"scope,omitempty"`                       // target | replica
-	ScopeKey        string `protobuf:"bytes,4,opt,name=scope_key,json=scopeKey,proto3" json:"scope_key,omitempty"` // "<role>:<gpu key>" or replica id
+	ScopeKey        string `protobuf:"bytes,4,opt,name=scope_key,json=scopeKey,proto3" json:"scope_key,omitempty"` // target: "<role>:<gpu key>@v<version>"; replica: replica id
 	ConfigJson      string `protobuf:"bytes,5,opt,name=config_json,json=configJson,proto3" json:"config_json,omitempty"`
 	Author          string `protobuf:"bytes,6,opt,name=author,proto3" json:"author,omitempty"`
 	Source          string `protobuf:"bytes,7,opt,name=source,proto3" json:"source,omitempty"` // git | live
@@ -2131,7 +2131,9 @@ type GetConfigRequest struct {
 
 	EndpointId string `protobuf:"bytes,1,opt,name=endpoint_id,json=endpointId,proto3" json:"endpoint_id,omitempty"`
 	Scope      string `protobuf:"bytes,2,opt,name=scope,proto3" json:"scope,omitempty"` // target | replica
-	ScopeKey   string `protobuf:"bytes,3,opt,name=scope_key,json=scopeKey,proto3" json:"scope_key,omitempty"`
+	// target: "<gpu key>", "<role>:<gpu key>" or "<role>:<gpu key>@v<version>";
+	// without a version suffix the active version is used. replica: replica id.
+	ScopeKey string `protobuf:"bytes,3,opt,name=scope_key,json=scopeKey,proto3" json:"scope_key,omitempty"`
 }
 
 func (x *GetConfigRequest) Reset() {
@@ -2257,7 +2259,7 @@ type ListConfigRevisionsRequest struct {
 
 	EndpointId string `protobuf:"bytes,1,opt,name=endpoint_id,json=endpointId,proto3" json:"endpoint_id,omitempty"`
 	Scope      string `protobuf:"bytes,2,opt,name=scope,proto3" json:"scope,omitempty"`
-	ScopeKey   string `protobuf:"bytes,3,opt,name=scope_key,json=scopeKey,proto3" json:"scope_key,omitempty"`
+	ScopeKey   string `protobuf:"bytes,3,opt,name=scope_key,json=scopeKey,proto3" json:"scope_key,omitempty"` // same forms as GetConfigRequest.scope_key
 	Limit      uint32 `protobuf:"varint,4,opt,name=limit,proto3" json:"limit,omitempty"`
 }
 

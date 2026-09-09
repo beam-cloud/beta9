@@ -42,6 +42,15 @@ func (a *schedulingAttempt) run() {
 }
 
 func (a *schedulingAttempt) runWaitingOrProvisioning() {
+	// Opportunistic requests (managed endpoint replicas above min_replicas)
+	// only ever fill idle capacity. They never queue against pending workers
+	// or provision new ones; the controller retries on its own cadence.
+	if a.request.OpportunisticOnly {
+		metrics.RecordSchedulerWorkerWait(time.Since(a.request.Timestamp), a.request, string(types.ContainerSchedulingFailureNoOpportunisticCapacity))
+		a.fail(types.ContainerSchedulingFailureNoOpportunisticCapacity)
+		return
+	}
+
 	if a.reservePendingWorkerCapacity() {
 		return
 	}

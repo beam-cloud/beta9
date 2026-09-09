@@ -1161,8 +1161,11 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 		cpu := request.Cpu
 		memory := capacityMemoryForScheduling(request)
 
-		// Check if the worker has enough free cpu and memory to run the container
-		if worker.FreeCpu < cpu || worker.FreeMemory < memory {
+		// Check if the worker has enough free cpu and memory to run the container.
+		// Requests that may evict also count capacity held by evictable
+		// containers; the repository picks the victims when it commits.
+		freeCPU, freeMemory, freeGPU := schedulableCapacity(worker, request)
+		if freeCPU < cpu || freeMemory < memory {
 			continue
 		}
 
@@ -1184,7 +1187,7 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 			// Failover widens eligibility to the chain's pools, whatever GPU
 			// they host. Scoring keeps them behind the requested GPU type.
 			validGpu = validGpu || chain.contains(worker.PoolName)
-			if !validGpu || worker.FreeGpuCount < gpuCount {
+			if !validGpu || freeGPU < gpuCount {
 				continue
 			}
 		}
@@ -1192,6 +1195,24 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 		filteredWorkers = append(filteredWorkers, worker)
 	}
 	return filteredWorkers
+}
+
+// requestMayEvict reports whether a request may displace evictable containers.
+// Evictable and opportunistic requests never do: they only fill idle capacity.
+func requestMayEvict(request *types.ContainerRequest) bool {
+	return request != nil && !request.Evictable && !request.OpportunisticOnly
+}
+
+// schedulableCapacity is the capacity a request may claim on a worker: free
+// capacity, plus whatever evictable containers hold if the request may evict.
+func schedulableCapacity(worker *types.Worker, request *types.ContainerRequest) (int64, int64, uint32) {
+	cpu, memory, gpu := worker.FreeCpu, worker.FreeMemory, worker.FreeGpuCount
+	if requestMayEvict(request) {
+		cpu += worker.EvictableCpu
+		memory += worker.EvictableMemory
+		gpu += worker.EvictableGpuCount
+	}
+	return cpu, memory, gpu
 }
 
 func availableCheckpoint(request *types.ContainerRequest) *types.Checkpoint {
@@ -1338,6 +1359,8 @@ type scoredWorker struct {
 	score        int32
 	failoverRank int32
 	storageRank  int32
+	// evictionRank is 1 when placing here would stop evictable containers.
+	evictionRank int32
 }
 
 // Constants used for scoring workers
@@ -1392,6 +1415,7 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 			score:        score,
 			failoverRank: failoverRankForWorker(chain, worker, request),
 			storageRank:  s.storagePreferenceRank(worker, request),
+			evictionRank: evictionRankForWorker(worker, request),
 		})
 	}
 
@@ -1409,12 +1433,32 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 		if scoredWorkers[i].score != scoredWorkers[j].score {
 			return scoredWorkers[i].score > scoredWorkers[j].score
 		}
+		// Idle capacity before eviction: stopping a managed endpoint replica
+		// throws away a loaded model, so only do it when nothing else fits.
+		if scoredWorkers[i].evictionRank != scoredWorkers[j].evictionRank {
+			return scoredWorkers[i].evictionRank < scoredWorkers[j].evictionRank
+		}
 		// Best-fit: prefer the fullest worker that still fits so idle workers
 		// drain to zero, hit their spindown timeout, and release their nodes.
 		return workerFreeCapacityScore(scoredWorkers[i].worker, request) < workerFreeCapacityScore(scoredWorkers[j].worker, request)
 	})
 
 	return scoredWorkers[0].worker, nil
+}
+
+// evictionRankForWorker is 0 when the request fits in the worker's free
+// capacity and 1 when it only fits by evicting containers.
+func evictionRankForWorker(worker *types.Worker, request *types.ContainerRequest) int32 {
+	if worker == nil || request == nil || !requestMayEvict(request) {
+		return 0
+	}
+	if worker.FreeCpu < request.Cpu || worker.FreeMemory < capacityMemoryForScheduling(request) {
+		return 1
+	}
+	if request.RequiresGPU() && worker.FreeGpuCount < gpuCountForScheduling(request) {
+		return 1
+	}
+	return 0
 }
 
 func failoverRankForWorker(chain *failoverChain, worker *types.Worker, request *types.ContainerRequest) int32 {

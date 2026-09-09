@@ -22,6 +22,15 @@ func isServiceReplica(replica *types.EndpointReplica) bool {
 	return replica != nil && strings.HasPrefix(replica.EndpointID, serviceReplicaPrefix)
 }
 
+// evictionDrainSeconds is the grace an evicted replica of spec gets to finish
+// in-flight work: the endpoint's own drain policy, or the cluster default.
+func (c *controller) evictionDrainSeconds(spec *types.ManagedEndpointSpec) uint32 {
+	if spec != nil && spec.Policy.DrainSeconds > 0 {
+		return spec.Policy.DrainSeconds
+	}
+	return c.s.config.Preemption.DefaultDrainSeconds
+}
+
 // reconcileEndpoint converges one endpoint's replicas toward the fill plan.
 func (c *controller) reconcileEndpoint(ctx context.Context, endpoint *types.ManagedEndpoint, input *endpointPlanInput, plans map[string]fillPlan, live []*types.EndpointReplica, inv *clusterInventory) error {
 	spec := &endpoint.Spec
@@ -107,21 +116,22 @@ func (c *controller) growTarget(ctx context.Context, endpoint *types.ManagedEndp
 			return
 		}
 		_, err := c.startReplica(ctx, startSpec{
-			EndpointID: spec.ID,
-			Version:    endpoint.Version,
-			StubID:     endpoint.StubID,
-			Role:       rt.Role,
-			Target:     rt.Target,
-			Port:       spec.Port,
-			Locality:   locality,
-			PoolName:   pool,
-			Protected:  protected,
-			Harness:    spec.Harness.Enabled,
-			Entrypoint: spec.Entrypoint,
-			Services:   services,
-			KVCache:    spec.KVCache,
-			Evictable:  spec.Policy.Evictable,
-			GitSHA:     endpoint.GitSHA,
+			EndpointID:   spec.ID,
+			Version:      endpoint.Version,
+			StubID:       endpoint.StubID,
+			Role:         rt.Role,
+			Target:       rt.Target,
+			Port:         spec.Port,
+			Locality:     locality,
+			PoolName:     pool,
+			Protected:    protected,
+			Harness:      spec.Harness.Enabled,
+			Entrypoint:   spec.Entrypoint,
+			Services:     services,
+			KVCache:      spec.KVCache,
+			Evictable:    spec.Policy.Evictable && c.s.config.Preemption.Enabled,
+			DrainSeconds: c.evictionDrainSeconds(spec),
+			GitSHA:       endpoint.GitSHA,
 		})
 		if err != nil {
 			log.Warn().Err(err).Str("endpoint_id", spec.ID).Str("target", rt.Key()).Msg("managed endpoints: start replica failed")

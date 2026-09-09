@@ -253,6 +253,9 @@ func (cr *ContainerRedisRepository) setContainerState(containerId string, state 
 		"memory", state.Memory,
 		"worker_id", state.WorkerId,
 		"machine_id", state.MachineId,
+		"evictable", state.Evictable,
+		"drain_seconds", state.DrainSeconds,
+		"evict_order", state.EvictOrder,
 	)
 	pipe.Expire(ctx, stateKey, time.Duration(types.ContainerStateTtlSWhilePending)*time.Second)
 	pipe.SAdd(ctx, stubIndexKey, stateKey)
@@ -1219,16 +1222,19 @@ func (c *ContainerRedisRepository) createContainerState(quota *types.Concurrency
 		}
 	}
 	err = c.setContainerState(request.ContainerId, &types.ContainerState{
-		ContainerId: request.ContainerId,
-		StubId:      request.StubId,
-		WorkspaceId: request.WorkspaceId,
-		Status:      types.ContainerStatusPending,
-		ScheduledAt: time.Now().Unix(),
-		Gpu:         request.Gpu,
-		GpuCount:    request.GpuCount,
-		Cpu:         request.Cpu,
-		Memory:      request.Memory,
-		MachineId:   request.MachineId,
+		ContainerId:  request.ContainerId,
+		StubId:       request.StubId,
+		WorkspaceId:  request.WorkspaceId,
+		Status:       types.ContainerStatusPending,
+		ScheduledAt:  time.Now().Unix(),
+		Gpu:          request.Gpu,
+		GpuCount:     request.GpuCount,
+		Cpu:          request.Cpu,
+		Memory:       request.Memory,
+		MachineId:    request.MachineId,
+		Evictable:    request.Evictable,
+		DrainSeconds: request.DrainSeconds,
+		EvictOrder:   request.EvictOrder,
 	})
 	if err == nil {
 		return nil

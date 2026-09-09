@@ -1481,6 +1481,7 @@ func TestScheduleBatchMarkerSurvivesImmediateContainerFinalization(t *testing.T)
 		common.RedisKeys.SchedulerContainerWorkerIndex(worker.Id),
 	}, request.Cpu, capacityMemoryForRequest(request), 0, 1, worker.Id,
 		schedulerAssignmentIDField, schedulerDeliveryTokenField, schedulerDeliveryAttemptField, batchID,
+		0, 0, 0, 0,
 		stateKey, payload, "", assignment).Result()
 	assert.NoError(t, err)
 	_, err = parseWorkerCapacityResult(worker.Id, result)
@@ -1491,6 +1492,7 @@ func TestScheduleBatchMarkerSurvivesImmediateContainerFinalization(t *testing.T)
 		common.RedisKeys.SchedulerContainerWorkerIndex(worker.Id),
 	}, request.Cpu, capacityMemoryForRequest(request), 0, 1, worker.Id,
 		schedulerAssignmentIDField, schedulerDeliveryTokenField, schedulerDeliveryAttemptField, batchID,
+		0, 0, 0, 0,
 		stateKey, payload, "", assignment).Result()
 	assert.NoError(t, err)
 	_, err = parseWorkerCapacityResult(worker.Id, retried)

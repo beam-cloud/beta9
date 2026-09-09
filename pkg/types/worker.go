@@ -160,6 +160,7 @@ func (c ContainerExitCode) IsFailed() bool {
 			ContainerExitCodeTtl,
 			ContainerExitCodeUser,
 			ContainerExitCodeAdmin,
+			ContainerExitCodeEvicted,
 		},
 		c,
 	)
@@ -177,6 +178,9 @@ const (
 	ContainerExitCodeTtl                ContainerExitCode = 559
 	ContainerExitCodeUser               ContainerExitCode = 560
 	ContainerExitCodeAdmin              ContainerExitCode = 561
+	// ContainerExitCodeEvicted is reported for evictable containers the
+	// scheduler stopped to make room for a non-evictable request.
+	ContainerExitCodeEvicted ContainerExitCode = 562
 )
 
 const (
@@ -185,6 +189,7 @@ const (
 	WorkerContainerExitCodeTtlMessage       = "Container stopped due to TTL expiration"
 	WorkerContainerExitCodeUserMessage      = "Container stopped by user"
 	WorkerContainerExitCodeAdminMessage     = "Container stopped by admin"
+	WorkerContainerExitCodeEvictedMessage   = "Container evicted to make room for a higher priority workload"
 )
 
 var ExitCodeMessages = map[ContainerExitCode]string{
@@ -193,6 +198,7 @@ var ExitCodeMessages = map[ContainerExitCode]string{
 	ContainerExitCodeTtl:       WorkerContainerExitCodeTtlMessage,
 	ContainerExitCodeUser:      WorkerContainerExitCodeUserMessage,
 	ContainerExitCodeAdmin:     WorkerContainerExitCodeAdminMessage,
+	ContainerExitCodeEvicted:   WorkerContainerExitCodeEvictedMessage,
 }
 
 var WorkerContainerExitCodes = map[ContainerExitCode]string{

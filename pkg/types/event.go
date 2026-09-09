@@ -412,6 +412,7 @@ const (
 	EventSourceWorkerNetwork            EventSource = "worker.network"
 	EventSourceWorkerRuntime            EventSource = "worker.runtime"
 	EventSourceWorkerStatusHeartbeat    EventSource = "worker.status_heartbeat"
+	EventSourceWorkerEviction           EventSource = "worker.eviction"
 	EventSourceRunnerStdout             EventSource = "runner.stdout"
 	EventSourceClipFUSE                 EventSource = "clip.fuse"
 )
@@ -450,6 +451,7 @@ const (
 	EventMessageWorkerOrphanStateMissing       EventMessage = "container state was missing during worker heartbeat"
 	EventMessagePendingReconciledRunning       EventMessage = "pending state reconciled to running after runtime start"
 	EventMessageStoppingGraceKill              EventMessage = "container exceeded stopping grace period and will be force killed"
+	EventMessageEvicted                        EventMessage = "container evicted to make room for a higher priority workload"
 	EventMessageRuntimeExited                  EventMessage = "runtime process exited"
 	EventMessageRuntimeOOMKilled               EventMessage = "runtime process was oom killed"
 )
@@ -714,6 +716,7 @@ const (
 	ContainerEventWorkerOrphanStateMissing  ContainerEventID = "worker.orphan_state_missing"
 	ContainerEventWorkerPendingReconciled   ContainerEventID = "worker.pending_reconciled_running"
 	ContainerEventWorkerStoppingGraceKill   ContainerEventID = "worker.stopping_grace_kill"
+	ContainerEventWorkerEvicted             ContainerEventID = "worker.evicted"
 	ContainerEventRuntimeExited             ContainerEventID = "runtime.exited"
 	ContainerEventRuntimeOOMKilled          ContainerEventID = "runtime.oom_killed"
 	ContainerEventGatewayAttachDisconnected ContainerEventID = "gateway.attach_disconnected"
@@ -750,6 +753,7 @@ var ContainerEventDefinitions = map[ContainerEventID]ContainerEventDefinition{
 	ContainerEventWorkerOrphanStateMissing:  {ID: ContainerEventWorkerOrphanStateMissing, Domain: EventDomainWorker, Label: "Worker orphan state missing"},
 	ContainerEventWorkerPendingReconciled:   {ID: ContainerEventWorkerPendingReconciled, Domain: EventDomainWorker, Label: "Pending reconciled to running"},
 	ContainerEventWorkerStoppingGraceKill:   {ID: ContainerEventWorkerStoppingGraceKill, Domain: EventDomainWorker, Label: "Stopping grace kill"},
+	ContainerEventWorkerEvicted:             {ID: ContainerEventWorkerEvicted, Domain: EventDomainWorker, Label: "Evicted"},
 	ContainerEventRuntimeExited:             {ID: ContainerEventRuntimeExited, Domain: EventDomainRuntime, Label: "Runtime exited"},
 	ContainerEventRuntimeOOMKilled:          {ID: ContainerEventRuntimeOOMKilled, Domain: EventDomainRuntime, Label: "Runtime OOM killed"},
 	ContainerEventGatewayAttachDisconnected: {ID: ContainerEventGatewayAttachDisconnected, Domain: EventDomainGateway, Label: "Attach disconnected"},
@@ -1090,6 +1094,7 @@ func IsContainerRootCauseCandidate(id ContainerEventID) bool {
 		ContainerEventWorkerStopEventReceived,
 		ContainerEventWorkerOrphanStateMissing,
 		ContainerEventWorkerStoppingGraceKill,
+		ContainerEventWorkerEvicted,
 		ContainerEventRuntimeExited,
 		ContainerEventRuntimeOOMKilled,
 		ContainerEventGatewayServeLockDeleted,

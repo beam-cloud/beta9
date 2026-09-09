@@ -52,6 +52,10 @@ const (
 	ContainerSchedulingFailureRetryLimit                      ContainerSchedulingFailureReason = "retry_limit"
 	ContainerSchedulingFailureManagedFallbackConcurrencyLimit ContainerSchedulingFailureReason = "managed_fallback_concurrency_limit"
 	ContainerSchedulingFailureManagedFallbackNoCapacity       ContainerSchedulingFailureReason = "managed_fallback_no_capacity"
+	// ContainerSchedulingFailureNoOpportunisticCapacity is reported when an
+	// OpportunisticOnly request finds no idle worker; it never waits or
+	// provisions.
+	ContainerSchedulingFailureNoOpportunisticCapacity ContainerSchedulingFailureReason = "no_opportunistic_capacity"
 )
 
 // @go2proto
@@ -82,6 +86,12 @@ type Worker struct {
 	RolloutGeneration   string `json:"rollout_generation" redis:"rollout_generation"`
 	RolloutBuildVersion string `json:"rollout_build_version" redis:"-"`
 	WorkerImageOverride string `json:"worker_image_override" redis:"worker_image_override"`
+	// Evictable* is the share of used capacity held by evictable containers
+	// (managed endpoint replicas above min_replicas). Non-evictable requests
+	// may claim it; the scheduler stops the holders first.
+	EvictableCpu        int64  `json:"evictable_cpu" redis:"evictable_cpu"`
+	EvictableMemory     int64  `json:"evictable_memory" redis:"evictable_memory"`
+	EvictableGpuCount   uint32 `json:"evictable_gpu_count" redis:"evictable_gpu_count"`
 	WorkspaceId         string `json:"-" redis:"workspace_id" go2proto:"ignore"`
 	ControlPlaneManaged bool   `json:"-" redis:"control_plane_managed" go2proto:"ignore"`
 }
@@ -112,6 +122,9 @@ func (w *Worker) ToProto() *pb.Worker {
 		FreeCpu:              w.FreeCpu,
 		FreeMemory:           w.FreeMemory,
 		FreeGpuCount:         w.FreeGpuCount,
+		EvictableCpu:         w.EvictableCpu,
+		EvictableMemory:      w.EvictableMemory,
+		EvictableGpuCount:    w.EvictableGpuCount,
 		Gpu:                  w.Gpu,
 		PoolName:             w.PoolName,
 		MachineId:            w.MachineId,
@@ -145,6 +158,9 @@ func NewWorkerFromProto(in *pb.Worker) *Worker {
 		FreeCpu:              in.FreeCpu,
 		FreeMemory:           in.FreeMemory,
 		FreeGpuCount:         in.FreeGpuCount,
+		EvictableCpu:         in.EvictableCpu,
+		EvictableMemory:      in.EvictableMemory,
+		EvictableGpuCount:    in.EvictableGpuCount,
 		Gpu:                  in.Gpu,
 		PoolName:             in.PoolName,
 		MachineId:            in.MachineId,
@@ -200,6 +216,14 @@ type ContainerState struct {
 	StartedAt   int64           `redis:"started_at" json:"started_at"`
 	WorkerId    string          `redis:"worker_id" json:"worker_id"`
 	MachineId   string          `redis:"machine_id" json:"machine_id"`
+	// Evictable mirrors ContainerRequest.Evictable: the scheduler may stop
+	// this container to place a non-evictable request.
+	Evictable bool `redis:"evictable" json:"evictable,omitempty"`
+	// Evicting is set once the scheduler has picked this container as a
+	// victim; its resources are no longer counted as held.
+	Evicting     bool   `redis:"evicting" json:"evicting,omitempty"`
+	DrainSeconds uint32 `redis:"drain_seconds" json:"drain_seconds,omitempty"`
+	EvictOrder   int32  `redis:"evict_order" json:"evict_order,omitempty"`
 }
 
 // @go2proto
@@ -304,6 +328,16 @@ type ContainerRequest struct {
 	// EvictContainerIds lists evictable containers the worker must stop before
 	// starting this one. Set by the scheduler, never by callers.
 	EvictContainerIds []string `json:"evict_container_ids,omitempty"`
+	// EvictDrainSeconds is how long the worker lets the victims in
+	// EvictContainerIds drain after SIGTERM before killing them. Set by the
+	// scheduler from the victims' own DrainSeconds.
+	EvictDrainSeconds uint32 `json:"evict_drain_seconds,omitempty"`
+	// DrainSeconds is the grace this container gets to finish in-flight work
+	// when it is evicted. Only meaningful with Evictable.
+	DrainSeconds uint32 `json:"drain_seconds,omitempty"`
+	// EvictOrder ranks evictable containers on a worker: lower values are
+	// evicted first. Ties fall to the most recently started container.
+	EvictOrder int32 `json:"evict_order,omitempty"`
 }
 
 // @go2proto
@@ -640,6 +674,12 @@ func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 		RuntimeTokenRequired:     c.RuntimeTokenRequired,
 		CheckpointTrigger:        c.CheckpointTrigger.ToProto(),
 		Hostname:                 c.Hostname,
+		Evictable:                c.Evictable,
+		OpportunisticOnly:        c.OpportunisticOnly,
+		EvictContainerIds:        c.EvictContainerIds,
+		EvictDrainSeconds:        c.EvictDrainSeconds,
+		DrainSeconds:             c.DrainSeconds,
+		EvictOrder:               c.EvictOrder,
 	}
 }
 
@@ -701,6 +741,12 @@ func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
 		RuntimeTokenRequired:     in.RuntimeTokenRequired,
 		CheckpointTrigger:        NewCheckpointTriggerFromProto(in.CheckpointTrigger),
 		Hostname:                 in.Hostname,
+		Evictable:                in.Evictable,
+		OpportunisticOnly:        in.OpportunisticOnly,
+		EvictContainerIds:        in.EvictContainerIds,
+		EvictDrainSeconds:        in.EvictDrainSeconds,
+		DrainSeconds:             in.DrainSeconds,
+		EvictOrder:               in.EvictOrder,
 	}
 }
 
@@ -953,6 +999,9 @@ const (
 	// StopContainerReasonInsufficientCredits is used when the scheduler stops a
 	// container because its workspace has run out of prepaid credit
 	StopContainerReasonInsufficientCredits StopContainerReason = "INSUFFICIENT_CREDITS"
+	// StopContainerReasonEvicted is used when the scheduler stops an evictable
+	// container to make room for a non-evictable request
+	StopContainerReasonEvicted StopContainerReason = "EVICTED"
 
 	StopContainerReasonUnknown StopContainerReason = "UNKNOWN"
 )

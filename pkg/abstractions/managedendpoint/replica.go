@@ -85,6 +85,14 @@ func (c *controller) syncReplica(ctx context.Context, replica *types.EndpointRep
 		if now.Sub(replica.StartedAt) < containerLostGrace {
 			return nil
 		}
+		if replica.Status == types.ReplicaStatusScheduling {
+			// Opportunistic requests fail fast when no worker has idle
+			// capacity; the failure backoff keeps the fill loop from
+			// re-submitting every tick.
+			if status, err := c.s.containers.GetContainerRequestStatus(replica.ContainerID); err == nil && status == types.ContainerRequestStatusFailed {
+				return c.finishReplica(ctx, replica, types.ReplicaStatusFailed, "not scheduled: no idle capacity")
+			}
+		}
 		return c.finishReplica(ctx, replica, c.exitStatus(replica), "container exited")
 	}
 
@@ -101,10 +109,32 @@ func (c *controller) syncReplica(ctx context.Context, replica *types.EndpointRep
 
 	case types.ContainerStatusStopping:
 		if replica.Status != types.ReplicaStatusDraining && replica.Status != types.ReplicaStatusEvicting {
-			replica.Status = types.ReplicaStatusDraining
-			replica.StatusReason = "container stopping"
-			if replica.DrainDeadline.IsZero() {
-				replica.DrainDeadline = now
+			if state.Evicting {
+				// The scheduler picked this replica as a victim for a
+				// serverless workload. Pull it from rotation now; the worker
+				// gives it DrainSeconds to finish in-flight requests.
+				replica.Status = types.ReplicaStatusEvicting
+				replica.StatusReason = "evicted for higher priority workload"
+				replica.DrainDeadline = now.Add(time.Duration(state.DrainSeconds) * time.Second)
+				if replica.HarnessEnabled {
+					// Tell the harness on its next heartbeat so the engine
+					// stops admitting work and finishes what it has.
+					if err := c.s.repo.RequestDrain(ctx, replica.ID, state.DrainSeconds); err != nil {
+						replicaLog(replica).Warn().Err(err).Msg("managed endpoints: request drain for evicted replica failed")
+					}
+				}
+				c.s.emit(types.EventEndpointReplica, types.EventEndpointSchema{
+					EndpointID: replica.EndpointID, Action: "replica." + string(replica.Status), ReplicaID: replica.ID,
+					ContainerID: replica.ContainerID, GPU: replica.GPU, Role: replica.Role, Version: replica.Version,
+					WorkerID: replica.WorkerID, PoolName: replica.PoolName, Locality: replica.Locality, Message: replica.StatusReason,
+				})
+				replicaLog(replica).Info().Msg("managed endpoints: replica evicted by scheduler")
+			} else {
+				replica.Status = types.ReplicaStatusDraining
+				replica.StatusReason = "container stopping"
+				if replica.DrainDeadline.IsZero() {
+					replica.DrainDeadline = now
+				}
 			}
 		}
 		return nil
@@ -164,6 +194,9 @@ func (c *controller) exitStatus(replica *types.EndpointReplica) types.ReplicaSta
 	exitCode, err := c.s.containers.GetContainerExitCode(replica.ContainerID)
 	if err == nil && exitCode == 0 {
 		return types.ReplicaStatusStopped
+	}
+	if err == nil && exitCode == int(types.ContainerExitCodeEvicted) {
+		return types.ReplicaStatusEvicted
 	}
 	if !replica.Protected && replica.Status == types.ReplicaStatusReady {
 		// Unprotected replicas that were serving are most often preempted.
@@ -325,7 +358,23 @@ type startSpec struct {
 	KVCache *types.KVCacheSpec
 	// Evictable replicas may be preempted by serverless workloads.
 	Evictable bool
-	GitSHA    string
+	// DrainSeconds is the grace an evicted replica gets to finish in-flight
+	// requests before the worker kills it.
+	DrainSeconds uint32
+	GitSHA       string
+}
+
+// evictOrder ranks roles for preemption: prefill replicas go first because
+// decode replicas hold the KV cache for in-flight generations.
+func evictOrder(role string) int32 {
+	switch role {
+	case types.ReplicaRolePrefill:
+		return 0
+	case types.ReplicaRoleDecode:
+		return 2
+	default:
+		return 1
+	}
 }
 
 // startReplica submits a container request for one replica and records it.
@@ -419,6 +468,8 @@ func (c *controller) startReplica(ctx context.Context, spec startSpec) (*types.E
 		PoolSelector:      spec.PoolName,
 		Evictable:         spec.Evictable && !spec.Protected,
 		OpportunisticOnly: !spec.Protected,
+		DrainSeconds:      spec.DrainSeconds,
+		EvictOrder:        evictOrder(spec.Role),
 		Timestamp:         time.Now(),
 	}
 	if err := abstractions.ConfigureContainerRequestNetwork(request, *stubConfig); err != nil {

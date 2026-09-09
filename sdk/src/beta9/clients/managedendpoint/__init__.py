@@ -285,6 +285,10 @@ class GetConfigRequest(betterproto.Message):
     endpoint_id: str = betterproto.string_field(1)
     scope: str = betterproto.string_field(2)
     scope_key: str = betterproto.string_field(3)
+    """
+    target: "<gpu key>", "<role>:<gpu key>" or "<role>:<gpu key>@v<version>";
+     without a version suffix the active version is used. replica: replica id.
+    """
 
 
 @dataclass(eq=False, repr=False)

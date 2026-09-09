@@ -6136,6 +6136,18 @@
         },
         "workerImageOverride": {
           "type": "string"
+        },
+        "evictableCpu": {
+          "type": "string",
+          "format": "int64"
+        },
+        "evictableMemory": {
+          "type": "string",
+          "format": "int64"
+        },
+        "evictableGpuCount": {
+          "type": "integer",
+          "format": "int64"
         }
       }
     },
