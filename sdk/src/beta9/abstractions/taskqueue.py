@@ -157,7 +157,6 @@ class TaskQueue(RunnerAbstraction):
         inputs: Optional[Schema] = None,
         outputs: Optional[Schema] = None,
         pool: Optional[Union[str, Pool]] = None,
-        allow_marketplace: bool = False,
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -186,7 +185,6 @@ class TaskQueue(RunnerAbstraction):
             inputs=inputs,
             outputs=outputs,
             pool=pool,
-            allow_marketplace=allow_marketplace,
         )
         self._taskqueue_stub: Optional[TaskQueueServiceStub] = None
         self.retry_for = retry_for or []

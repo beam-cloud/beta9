@@ -260,15 +260,13 @@ class EndpointMetrics(betterproto.Message):
     errors: int = betterproto.int64_field(5)
     prompt_tokens: int = betterproto.int64_field(6)
     completion_tokens: int = betterproto.int64_field(7)
-    ttft_ms_p50: int = betterproto.int64_field(8)
-    ttft_ms_p95: int = betterproto.int64_field(9)
-    tpot_ms_p50: int = betterproto.int64_field(10)
-    tpot_ms_p95: int = betterproto.int64_field(11)
-    decode_tokens_per_sec: int = betterproto.int64_field(12)
-    queue_wait_ms_p95: int = betterproto.int64_field(13)
-    cost_micro_usd: int = betterproto.int64_field(14)
-    ready_replicas: int = betterproto.uint32_field(15)
-    aggregate_capacity: "ReplicaCapacity" = betterproto.message_field(16)
+    ttft_ms: int = betterproto.int64_field(8)
+    tpot_ms: int = betterproto.int64_field(9)
+    decode_tokens_per_sec: int = betterproto.int64_field(10)
+    queue_wait_ms: int = betterproto.int64_field(11)
+    cost_micro_usd: int = betterproto.int64_field(12)
+    ready_replicas: int = betterproto.uint32_field(13)
+    aggregate_capacity: "ReplicaCapacity" = betterproto.message_field(14)
 
 
 @dataclass(eq=False, repr=False)
@@ -333,18 +331,6 @@ class RolloutState(betterproto.Message):
     last_decision: str = betterproto.string_field(7)
     last_decision_at_unix_ms: int = betterproto.int64_field(8)
     versions: List["EndpointVersion"] = betterproto.message_field(9)
-
-
-@dataclass(eq=False, repr=False)
-class GetRolloutRequest(betterproto.Message):
-    endpoint_id: str = betterproto.string_field(1)
-
-
-@dataclass(eq=False, repr=False)
-class GetRolloutResponse(betterproto.Message):
-    ok: bool = betterproto.bool_field(1)
-    err_msg: str = betterproto.string_field(2)
-    rollout: "RolloutState" = betterproto.message_field(3)
 
 
 @dataclass(eq=False, repr=False)
@@ -449,133 +435,55 @@ class ListServicesResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class ValidateEndpointSpecRequest(betterproto.Message):
-    spec_json: str = betterproto.string_field(1)
-    kind: str = betterproto.string_field(2)
-    """endpoint" (default) or "service"."""
-
-
-@dataclass(eq=False, repr=False)
-class ValidateEndpointSpecResponse(betterproto.Message):
-    ok: bool = betterproto.bool_field(1)
-    err_msg: str = betterproto.string_field(2)
-    spec_json: str = betterproto.string_field(3)
-    """Normalized spec JSON."""
-
-    errors: List[str] = betterproto.string_field(4)
-
-
-@dataclass(eq=False, repr=False)
-class ExperimentStep(betterproto.Message):
-    revision: int = betterproto.uint64_field(1)
-    config_json: str = betterproto.string_field(2)
-    applied: bool = betterproto.bool_field(3)
-    error: str = betterproto.string_field(4)
-    bench_json: str = betterproto.string_field(5)
-    engine_metrics: "ReplicaCapacity" = betterproto.message_field(6)
-    at_unix_ms: int = betterproto.int64_field(7)
-
-
-@dataclass(eq=False, repr=False)
-class Experiment(betterproto.Message):
-    id: str = betterproto.string_field(1)
-    endpoint_id: str = betterproto.string_field(2)
-    gpu: str = betterproto.string_field(3)
-    role: str = betterproto.string_field(4)
-    replica_id: str = betterproto.string_field(5)
-    baseline_revision: int = betterproto.uint64_field(6)
-    current_revision: int = betterproto.uint64_field(7)
-    steps: List["ExperimentStep"] = betterproto.message_field(8)
-    outcome: str = betterproto.string_field(9)
-    notes: str = betterproto.string_field(10)
-    author: str = betterproto.string_field(11)
-    budget: str = betterproto.string_field(12)
-    started_at_unix_ms: int = betterproto.int64_field(13)
-    ended_at_unix_ms: int = betterproto.int64_field(14)
-    replica: "EndpointReplica" = betterproto.message_field(15)
-    """Replica the agent should target with X-Beam-Endpoint-Replica."""
-
-
-@dataclass(eq=False, repr=False)
-class StartExperimentRequest(betterproto.Message):
+class StartTuningReplicaRequest(betterproto.Message):
     endpoint_id: str = betterproto.string_field(1)
     gpu: str = betterproto.string_field(2)
     role: str = betterproto.string_field(3)
-    author: str = betterproto.string_field(4)
-    budget: str = betterproto.string_field(5)
+    wait_seconds: int = betterproto.uint32_field(4)
+    """
+    Wait up to this long for the replica to become ready (0 = return immediately).
+    """
+
+
+@dataclass(eq=False, repr=False)
+class StopReplicaRequest(betterproto.Message):
+    replica_id: str = betterproto.string_field(1)
+    drain_seconds: int = betterproto.uint32_field(2)
+    """Grace for in-flight requests; zero stops immediately."""
+
+
+@dataclass(eq=False, repr=False)
+class ReplicaResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    replica: "EndpointReplica" = betterproto.message_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class SetConfigRequest(betterproto.Message):
+    endpoint_id: str = betterproto.string_field(1)
+    scope: str = betterproto.string_field(2)
+    scope_key: str = betterproto.string_field(3)
+    config_json: str = betterproto.string_field(4)
+    author: str = betterproto.string_field(5)
     wait_seconds: int = betterproto.uint32_field(6)
     """
-    Wait up to this long for the tuning replica to become ready (0 = return immediately).
+    Replica scope: wait up to this long for the harness ack (0 = default).
     """
 
 
 @dataclass(eq=False, repr=False)
-class ExperimentResponse(betterproto.Message):
+class SetConfigResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
-    experiment: "Experiment" = betterproto.message_field(3)
+    revision: "ConfigRevision" = betterproto.message_field(3)
+    acked: bool = betterproto.bool_field(4)
+    """
+    Replica scope only: the harness ack, when it arrived within the wait.
+    """
 
-
-@dataclass(eq=False, repr=False)
-class GetExperimentRequest(betterproto.Message):
-    experiment_id: str = betterproto.string_field(1)
-
-
-@dataclass(eq=False, repr=False)
-class ListExperimentsRequest(betterproto.Message):
-    endpoint_id: str = betterproto.string_field(1)
-    gpu: str = betterproto.string_field(2)
-    limit: int = betterproto.uint32_field(3)
-
-
-@dataclass(eq=False, repr=False)
-class ListExperimentsResponse(betterproto.Message):
-    ok: bool = betterproto.bool_field(1)
-    err_msg: str = betterproto.string_field(2)
-    experiments: List["Experiment"] = betterproto.message_field(3)
-
-
-@dataclass(eq=False, repr=False)
-class ApplyExperimentConfigRequest(betterproto.Message):
-    experiment_id: str = betterproto.string_field(1)
-    config_json: str = betterproto.string_field(2)
-    expected_revision: int = betterproto.uint64_field(3)
-    wait_seconds: int = betterproto.uint32_field(4)
-    """Wait up to this long for the harness ack (0 = default)."""
-
-
-@dataclass(eq=False, repr=False)
-class GetExperimentMetricsRequest(betterproto.Message):
-    experiment_id: str = betterproto.string_field(1)
-    window_seconds: int = betterproto.uint32_field(2)
-
-
-@dataclass(eq=False, repr=False)
-class GetExperimentMetricsResponse(betterproto.Message):
-    ok: bool = betterproto.bool_field(1)
-    err_msg: str = betterproto.string_field(2)
-    capacity: "ReplicaCapacity" = betterproto.message_field(3)
-    metrics_json: str = betterproto.string_field(4)
-    route_metrics: "EndpointMetrics" = betterproto.message_field(5)
-
-
-@dataclass(eq=False, repr=False)
-class RecordExperimentBenchRequest(betterproto.Message):
-    experiment_id: str = betterproto.string_field(1)
-    bench_json: str = betterproto.string_field(2)
-
-
-@dataclass(eq=False, repr=False)
-class RevertExperimentRequest(betterproto.Message):
-    experiment_id: str = betterproto.string_field(1)
-    wait_seconds: int = betterproto.uint32_field(2)
-
-
-@dataclass(eq=False, repr=False)
-class StopExperimentRequest(betterproto.Message):
-    experiment_id: str = betterproto.string_field(1)
-    outcome: str = betterproto.string_field(2)
-    notes: str = betterproto.string_field(3)
+    applied: bool = betterproto.bool_field(5)
+    apply_error: str = betterproto.string_field(6)
 
 
 class EndpointHarnessServiceStub(SyncServiceStub):
@@ -679,15 +587,6 @@ class EndpointAdminServiceStub(SyncServiceStub):
             ListConfigRevisionsResponse,
         )(list_config_revisions_request)
 
-    def get_rollout(
-        self, get_rollout_request: "GetRolloutRequest"
-    ) -> "GetRolloutResponse":
-        return self._unary_unary(
-            "/managedendpoint.EndpointAdminService/GetRollout",
-            GetRolloutRequest,
-            GetRolloutResponse,
-        )(get_rollout_request)
-
     def promote_rollout(
         self, promote_rollout_request: "PromoteRolloutRequest"
     ) -> "RolloutActionResponse":
@@ -751,83 +650,27 @@ class EndpointAdminServiceStub(SyncServiceStub):
             ListServicesResponse,
         )(list_services_request)
 
-    def validate_endpoint_spec(
-        self, validate_endpoint_spec_request: "ValidateEndpointSpecRequest"
-    ) -> "ValidateEndpointSpecResponse":
+    def start_tuning_replica(
+        self, start_tuning_replica_request: "StartTuningReplicaRequest"
+    ) -> "ReplicaResponse":
         return self._unary_unary(
-            "/managedendpoint.EndpointAdminService/ValidateEndpointSpec",
-            ValidateEndpointSpecRequest,
-            ValidateEndpointSpecResponse,
-        )(validate_endpoint_spec_request)
+            "/managedendpoint.EndpointAdminService/StartTuningReplica",
+            StartTuningReplicaRequest,
+            ReplicaResponse,
+        )(start_tuning_replica_request)
 
-    def start_experiment(
-        self, start_experiment_request: "StartExperimentRequest"
-    ) -> "ExperimentResponse":
+    def stop_replica(
+        self, stop_replica_request: "StopReplicaRequest"
+    ) -> "ReplicaResponse":
         return self._unary_unary(
-            "/managedendpoint.EndpointAdminService/StartExperiment",
-            StartExperimentRequest,
-            ExperimentResponse,
-        )(start_experiment_request)
+            "/managedendpoint.EndpointAdminService/StopReplica",
+            StopReplicaRequest,
+            ReplicaResponse,
+        )(stop_replica_request)
 
-    def get_experiment(
-        self, get_experiment_request: "GetExperimentRequest"
-    ) -> "ExperimentResponse":
+    def set_config(self, set_config_request: "SetConfigRequest") -> "SetConfigResponse":
         return self._unary_unary(
-            "/managedendpoint.EndpointAdminService/GetExperiment",
-            GetExperimentRequest,
-            ExperimentResponse,
-        )(get_experiment_request)
-
-    def list_experiments(
-        self, list_experiments_request: "ListExperimentsRequest"
-    ) -> "ListExperimentsResponse":
-        return self._unary_unary(
-            "/managedendpoint.EndpointAdminService/ListExperiments",
-            ListExperimentsRequest,
-            ListExperimentsResponse,
-        )(list_experiments_request)
-
-    def apply_experiment_config(
-        self, apply_experiment_config_request: "ApplyExperimentConfigRequest"
-    ) -> "ExperimentResponse":
-        return self._unary_unary(
-            "/managedendpoint.EndpointAdminService/ApplyExperimentConfig",
-            ApplyExperimentConfigRequest,
-            ExperimentResponse,
-        )(apply_experiment_config_request)
-
-    def get_experiment_metrics(
-        self, get_experiment_metrics_request: "GetExperimentMetricsRequest"
-    ) -> "GetExperimentMetricsResponse":
-        return self._unary_unary(
-            "/managedendpoint.EndpointAdminService/GetExperimentMetrics",
-            GetExperimentMetricsRequest,
-            GetExperimentMetricsResponse,
-        )(get_experiment_metrics_request)
-
-    def record_experiment_bench(
-        self, record_experiment_bench_request: "RecordExperimentBenchRequest"
-    ) -> "ExperimentResponse":
-        return self._unary_unary(
-            "/managedendpoint.EndpointAdminService/RecordExperimentBench",
-            RecordExperimentBenchRequest,
-            ExperimentResponse,
-        )(record_experiment_bench_request)
-
-    def revert_experiment(
-        self, revert_experiment_request: "RevertExperimentRequest"
-    ) -> "ExperimentResponse":
-        return self._unary_unary(
-            "/managedendpoint.EndpointAdminService/RevertExperiment",
-            RevertExperimentRequest,
-            ExperimentResponse,
-        )(revert_experiment_request)
-
-    def stop_experiment(
-        self, stop_experiment_request: "StopExperimentRequest"
-    ) -> "ExperimentResponse":
-        return self._unary_unary(
-            "/managedendpoint.EndpointAdminService/StopExperiment",
-            StopExperimentRequest,
-            ExperimentResponse,
-        )(stop_experiment_request)
+            "/managedendpoint.EndpointAdminService/SetConfig",
+            SetConfigRequest,
+            SetConfigResponse,
+        )(set_config_request)

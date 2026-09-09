@@ -474,8 +474,8 @@ func (ss *SSHShellService) CreateStandaloneShell(ctx context.Context, in *pb.Cre
 		if err != nil || machineWorker == nil {
 			return &pb.CreateStandaloneShellResponse{Ok: false, ErrMsg: "machine worker is not ready"}, nil
 		}
-		stubConfig.Pool = &types.PoolConfig{Name: machine.PoolName, Selector: machine.PoolName}
 		stubConfig.MachineID = machineID
+		stubConfig.Pool = &types.PoolConfig{Name: machine.PoolName, Selector: machine.PoolName}
 	}
 
 	containerId := ss.genContainerId(stub.ExternalId)
@@ -556,23 +556,22 @@ func (ss *SSHShellService) CreateStandaloneShell(ctx context.Context, in *pb.Cre
 	}
 
 	runRequest := &types.ContainerRequest{
-		ContainerId:      containerId,
-		Env:              env,
-		Cpu:              stubConfig.Runtime.Cpu,
-		Memory:           stubConfig.Runtime.Memory,
-		GpuRequest:       gpuRequest,
-		GpuCount:         uint32(gpuCount),
-		ImageId:          stubConfig.Runtime.ImageId,
-		StubId:           stub.ExternalId,
-		AppId:            "",
-		WorkspaceId:      authInfo.Workspace.ExternalId,
-		Workspace:        *authInfo.Workspace,
-		EntryPoint:       entryPoint,
-		Mounts:           mounts,
-		Stub:             *stub,
-		PoolSelector:     stubConfig.PoolSelector(),
-		AllowMarketplace: stubConfig.AllowMarketplace,
-		MachineId:        stubConfig.MachineID,
+		ContainerId:  containerId,
+		Env:          env,
+		Cpu:          stubConfig.Runtime.Cpu,
+		Memory:       stubConfig.Runtime.Memory,
+		GpuRequest:   gpuRequest,
+		GpuCount:     uint32(gpuCount),
+		ImageId:      stubConfig.Runtime.ImageId,
+		StubId:       stub.ExternalId,
+		AppId:        "",
+		WorkspaceId:  authInfo.Workspace.ExternalId,
+		Workspace:    *authInfo.Workspace,
+		EntryPoint:   entryPoint,
+		Mounts:       mounts,
+		Stub:         *stub,
+		PoolSelector: stubConfig.PoolSelector(),
+		MachineId:    stubConfig.MachineID,
 	}
 	if stub.App != nil {
 		runRequest.AppId = stub.App.ExternalId
@@ -657,10 +656,10 @@ func (ss *SSHShellService) genContainerId(stubId string) string {
 	return ContainerIDForStub(stubId)
 }
 
-// The helpers below let the gateway provision shells outside this service
-// (marketplace rental shells). Containers created with this prefix and TTL
-// key are lifecycle-managed by the running SSHShellService instance exactly
-// like CreateStandaloneShell containers.
+// The helpers below let the gateway provision shells outside this service.
+// Containers created with this prefix and TTL key are lifecycle-managed by
+// the running SSHShellService instance exactly like CreateStandaloneShell
+// containers.
 
 func ContainerIDForStub(stubId string) string {
 	return fmt.Sprintf("%s-%s-%s", shellContainerPrefix, stubId, uuid.New().String()[:8])

@@ -13,9 +13,9 @@ package managedendpoint;
 //     revisions, acks them, heartbeats capacity and publishes events.
 //   - EndpointAdminService: called by operators, external tuning agents and
 //     the frontend (cluster admin token auth). Read state, drive rollouts and
-//     GitOps, and run single-replica live tuning experiments.
+//     GitOps, and tune live config on a dedicated replica or the fleet.
 //
-// Free-form documents (specs, harness configs, capabilities, benchmarks) are
+// Free-form documents (specs, harness configs, capabilities) are
 // carried as JSON strings so the contract can evolve engine-side without a
 // proto change; the gateway validates them against pkg/types.
 
@@ -210,7 +210,6 @@ service EndpointAdminService {
   rpc GetMetrics(GetMetricsRequest) returns (GetMetricsResponse) {}
   rpc GetConfig(GetConfigRequest) returns (GetConfigResponse) {}
   rpc ListConfigRevisions(ListConfigRevisionsRequest) returns (ListConfigRevisionsResponse) {}
-  rpc GetRollout(GetRolloutRequest) returns (GetRolloutResponse) {}
   rpc PromoteRollout(PromoteRolloutRequest) returns (RolloutActionResponse) {}
   rpc RollbackRollout(RollbackRolloutRequest) returns (RolloutActionResponse) {}
   rpc PinVersion(PinVersionRequest) returns (RolloutActionResponse) {}
@@ -218,17 +217,14 @@ service EndpointAdminService {
   rpc TriggerGitOpsSync(TriggerGitOpsSyncRequest) returns (TriggerGitOpsSyncResponse) {}
   rpc SetEndpointEnabled(SetEndpointEnabledRequest) returns (SetEndpointEnabledResponse) {}
   rpc ListServices(ListServicesRequest) returns (ListServicesResponse) {}
-  rpc ValidateEndpointSpec(ValidateEndpointSpecRequest) returns (ValidateEndpointSpecResponse) {}
 
-  // Live tuning (one dedicated replica per endpoint at a time).
-  rpc StartExperiment(StartExperimentRequest) returns (ExperimentResponse) {}
-  rpc GetExperiment(GetExperimentRequest) returns (ExperimentResponse) {}
-  rpc ListExperiments(ListExperimentsRequest) returns (ListExperimentsResponse) {}
-  rpc ApplyExperimentConfig(ApplyExperimentConfigRequest) returns (ExperimentResponse) {}
-  rpc GetExperimentMetrics(GetExperimentMetricsRequest) returns (GetExperimentMetricsResponse) {}
-  rpc RecordExperimentBench(RecordExperimentBenchRequest) returns (ExperimentResponse) {}
-  rpc RevertExperiment(RevertExperimentRequest) returns (ExperimentResponse) {}
-  rpc StopExperiment(StopExperimentRequest) returns (ExperimentResponse) {}
+  // Live tuning. An agent starts a dedicated tuning replica (no public
+  // traffic; address it with X-Beam-Endpoint-Replica), pushes replica-scoped
+  // configs with SetConfig and reads GetMetrics, then promotes the winner to
+  // the fleet with a target-scoped SetConfig and stops the replica.
+  rpc StartTuningReplica(StartTuningReplicaRequest) returns (ReplicaResponse) {}
+  rpc StopReplica(StopReplicaRequest) returns (ReplicaResponse) {}
+  rpc SetConfig(SetConfigRequest) returns (SetConfigResponse) {}
 }
 
 message ListEndpointsRequest {
@@ -281,15 +277,13 @@ message EndpointMetrics {
   int64 errors = 5;
   int64 prompt_tokens = 6;
   int64 completion_tokens = 7;
-  int64 ttft_ms_p50 = 8;
-  int64 ttft_ms_p95 = 9;
-  int64 tpot_ms_p50 = 10;
-  int64 tpot_ms_p95 = 11;
-  int64 decode_tokens_per_sec = 12;
-  int64 queue_wait_ms_p95 = 13;
-  int64 cost_micro_usd = 14;
-  uint32 ready_replicas = 15;
-  ReplicaCapacity aggregate_capacity = 16;
+  int64 ttft_ms = 8;            // mean over the window
+  int64 tpot_ms = 9;            // mean over the window
+  int64 decode_tokens_per_sec = 10;
+  int64 queue_wait_ms = 11;     // mean over the window
+  int64 cost_micro_usd = 12;
+  uint32 ready_replicas = 13;
+  ReplicaCapacity aggregate_capacity = 14;
 }
 
 message GetMetricsResponse {
@@ -345,16 +339,6 @@ message RolloutState {
   string last_decision = 7;
   int64 last_decision_at_unix_ms = 8;
   repeated EndpointVersion versions = 9;
-}
-
-message GetRolloutRequest {
-  string endpoint_id = 1;
-}
-
-message GetRolloutResponse {
-  bool ok = 1;
-  string err_msg = 2;
-  RolloutState rollout = 3;
 }
 
 message PromoteRolloutRequest {
@@ -440,114 +424,42 @@ message ListServicesResponse {
   repeated ManagedService services = 3;
 }
 
-message ValidateEndpointSpecRequest {
-  string spec_json = 1;
-  // "endpoint" (default) or "service".
-  string kind = 2;
-}
-
-message ValidateEndpointSpecResponse {
-  bool ok = 1;
-  string err_msg = 2;
-  // Normalized spec JSON.
-  string spec_json = 3;
-  repeated string errors = 4;
-}
-
-message ExperimentStep {
-  uint64 revision = 1;
-  string config_json = 2;
-  bool applied = 3;
-  string error = 4;
-  string bench_json = 5;
-  ReplicaCapacity engine_metrics = 6;
-  int64 at_unix_ms = 7;
-}
-
-message Experiment {
-  string id = 1;
-  string endpoint_id = 2;
-  string gpu = 3;
-  string role = 4;
-  string replica_id = 5;
-  uint64 baseline_revision = 6;
-  uint64 current_revision = 7;
-  repeated ExperimentStep steps = 8;
-  string outcome = 9;
-  string notes = 10;
-  string author = 11;
-  string budget = 12;
-  int64 started_at_unix_ms = 13;
-  int64 ended_at_unix_ms = 14;
-  // Replica the agent should target with X-Beam-Endpoint-Replica.
-  EndpointReplica replica = 15;
-}
-
-message StartExperimentRequest {
+message StartTuningReplicaRequest {
   string endpoint_id = 1;
   string gpu = 2;   // GPU target key, e.g. "H100x2"
   string role = 3;  // defaults to serve
-  string author = 4;
-  string budget = 5;
-  // Wait up to this long for the tuning replica to become ready (0 = return immediately).
-  uint32 wait_seconds = 6;
-}
-
-message ExperimentResponse {
-  bool ok = 1;
-  string err_msg = 2;
-  Experiment experiment = 3;
-}
-
-message GetExperimentRequest {
-  string experiment_id = 1;
-}
-
-message ListExperimentsRequest {
-  string endpoint_id = 1;
-  string gpu = 2;
-  uint32 limit = 3;
-}
-
-message ListExperimentsResponse {
-  bool ok = 1;
-  string err_msg = 2;
-  repeated Experiment experiments = 3;
-}
-
-message ApplyExperimentConfigRequest {
-  string experiment_id = 1;
-  string config_json = 2;
-  uint64 expected_revision = 3;
-  // Wait up to this long for the harness ack (0 = default).
+  // Wait up to this long for the replica to become ready (0 = return immediately).
   uint32 wait_seconds = 4;
 }
 
-message GetExperimentMetricsRequest {
-  string experiment_id = 1;
-  uint32 window_seconds = 2;
+message StopReplicaRequest {
+  string replica_id = 1;
+  // Grace for in-flight requests; zero stops immediately.
+  uint32 drain_seconds = 2;
 }
 
-message GetExperimentMetricsResponse {
+message ReplicaResponse {
   bool ok = 1;
   string err_msg = 2;
-  ReplicaCapacity capacity = 3;
-  string metrics_json = 4;
-  EndpointMetrics route_metrics = 5;
+  EndpointReplica replica = 3;
 }
 
-message RecordExperimentBenchRequest {
-  string experiment_id = 1;
-  string bench_json = 2;
+message SetConfigRequest {
+  string endpoint_id = 1;
+  string scope = 2;      // target | replica
+  string scope_key = 3;  // same forms as GetConfigRequest.scope_key
+  string config_json = 4;
+  string author = 5;
+  // Replica scope: wait up to this long for the harness ack (0 = default).
+  uint32 wait_seconds = 6;
 }
 
-message RevertExperimentRequest {
-  string experiment_id = 1;
-  uint32 wait_seconds = 2;
-}
-
-message StopExperimentRequest {
-  string experiment_id = 1;
-  string outcome = 2; // keep | discard
-  string notes = 3;
+message SetConfigResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  ConfigRevision revision = 3;
+  // Replica scope only: the harness ack, when it arrived within the wait.
+  bool acked = 4;
+  bool applied = 5;
+  string apply_error = 6;
 }

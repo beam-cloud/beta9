@@ -546,11 +546,10 @@ type StubConfigV1 struct {
 	BlockNetwork       bool               `json:"block_network"`
 	AllowList          []string           `json:"allow_list"`
 	DockerEnabled      bool               `json:"docker_enabled"`
-	AllowMarketplace   bool               `json:"allow_marketplace"`
 	// Hostname to set inside the container.
 	Hostname string `json:"hostname,omitempty"`
-	// MachineID pins the stub's containers to one agent machine. Only set by
-	// the gateway for marketplace rental workloads; not exposed to the SDK.
+	// MachineID pins the stub's containers to one agent machine (pod/shell
+	// `--machine`); not exposed to the SDK decorators.
 	MachineID string            `json:"machine_id,omitempty"`
 	IsService bool              `json:"is_service"`
 	Serving   *ServingConfig    `json:"serving,omitempty"`

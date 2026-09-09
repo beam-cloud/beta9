@@ -179,81 +179,25 @@ service GatewayService {
       body : "*"
     };
   }
-  rpc CreateMarketplaceListing(CreateMarketplaceListingRequest)
-      returns (CreateMarketplaceListingResponse) {
+  // Sell compute: contribute machines to the managed endpoint fleet and earn
+  // a share of the tokens sold on them.
+  rpc GetProviderJoinCommand(GetProviderJoinCommandRequest)
+      returns (GetProviderJoinCommandResponse) {
     option (google.api.http) = {
-      post : "/marketplace/listings"
+      post : "/provider/join-command"
       body : "*"
     };
   }
-  rpc UpdateMarketplaceListing(UpdateMarketplaceListingRequest)
-      returns (UpdateMarketplaceListingResponse) {
+  rpc ListProviderMachines(ListProviderMachinesRequest)
+      returns (ListProviderMachinesResponse) {
     option (google.api.http) = {
-      post : "/marketplace/listings/{listing_id}"
-      body : "*"
+      get : "/provider/machines"
     };
   }
-  rpc DeleteMarketplaceListing(DeleteMarketplaceListingRequest)
-      returns (DeleteMarketplaceListingResponse) {
+  rpc GetProviderEarnings(GetProviderEarningsRequest)
+      returns (GetProviderEarningsResponse) {
     option (google.api.http) = {
-      delete : "/marketplace/listings/{listing_id}"
-    };
-  }
-  rpc ListMarketplaceListings(ListMarketplaceListingsRequest)
-      returns (ListMarketplaceListingsResponse) {
-    option (google.api.http) = {
-      get : "/marketplace/listings"
-    };
-  }
-  rpc GetMarketplaceJoinCommand(GetMarketplaceJoinCommandRequest)
-      returns (GetMarketplaceJoinCommandResponse) {
-    option (google.api.http) = {
-      post : "/marketplace/listings/{listing_id}/join-command"
-      body : "*"
-    };
-  }
-  rpc ListMarketplaceOffers(ListMarketplaceOffersRequest)
-      returns (ListMarketplaceOffersResponse) {
-    option (google.api.http) = {
-      get : "/marketplace/offers"
-    };
-  }
-  rpc GetMarketplaceOffer(GetMarketplaceOfferRequest)
-      returns (GetMarketplaceOfferResponse) {
-    option (google.api.http) = {
-      get : "/marketplace/offers/{listing_id}"
-    };
-  }
-  rpc CreateMarketplaceRental(CreateMarketplaceRentalRequest)
-      returns (CreateMarketplaceRentalResponse) {
-    option (google.api.http) = {
-      post : "/marketplace/rentals"
-      body : "*"
-    };
-  }
-  rpc ListMarketplaceRentals(ListMarketplaceRentalsRequest)
-      returns (ListMarketplaceRentalsResponse) {
-    option (google.api.http) = {
-      get : "/marketplace/rentals"
-    };
-  }
-  rpc DeleteMarketplaceRental(DeleteMarketplaceRentalRequest)
-      returns (DeleteMarketplaceRentalResponse) {
-    option (google.api.http) = {
-      delete : "/marketplace/rentals/{rental_id}"
-    };
-  }
-  rpc LaunchRentalWorkload(LaunchRentalWorkloadRequest)
-      returns (LaunchRentalWorkloadResponse) {
-    option (google.api.http) = {
-      post : "/marketplace/rentals/{rental_id}/launch"
-      body : "*"
-    };
-  }
-  rpc ListMarketplaceMachines(ListMarketplaceMachinesRequest)
-      returns (ListMarketplaceMachinesResponse) {
-    option (google.api.http) = {
-      get : "/marketplace/listings/{listing_id}/machines"
+      get : "/provider/earnings"
     };
   }
   rpc ListMachineContainers(ListMachineContainersRequest)
@@ -812,7 +756,6 @@ message GetOrCreateStubRequest {
   bool is_service = 42;
   ServingConfig serving = 43;
   repeated DurableDisk disks = 44;
-  bool allow_marketplace = 45;
   types.CheckpointTrigger checkpoint_trigger = 46;
   // Hostname to set inside the container.
   string hostname = 47;
@@ -1125,214 +1068,48 @@ message ScaleBYOCPoolResponse {
   BYOCPoolState byoc = 4;
 }
 
-message MarketplaceListing {
-  string id = 1;
-  string seller_workspace_id = 2;
-  string display_name = 3;
-  string gpu = 4;
-  uint32 gpu_count = 5;
-  string source = 6;
-  bool preemptible = 7;
-  bool public = 8;
-  string status = 9;
-  string pool_name = 10;
-  google.protobuf.Timestamp created_at = 11;
-  google.protobuf.Timestamp updated_at = 12;
-  uint32 machine_count = 13;
-  uint32 ready_machine_count = 14;
-  string region = 15;
-  string runtime = 16;
-  // Seller-set on-demand rate, per GPU per hour.
-  uint32 price_per_gpu_hour_cents = 17;
-}
-
-message MarketplaceOffer {
-  string listing_id = 1;
-  string seller_workspace_id = 2;
-  string display_name = 3;
-  string gpu = 4;
-  uint32 gpu_count = 5;
-  string source = 6;
-  bool preemptible = 7;
-  uint32 machine_count = 8;
-  uint32 ready_machine_count = 9;
-  string runtime = 10;
-  string region = 11;
-  uint32 cpu_cores = 12;
-  uint64 memory_mb = 13;
-  uint64 disk_gb = 14;
-  uint32 free_gpu_count = 15;
-  float reliability = 16;
-  google.protobuf.Timestamp created_at = 17;
-  // False for unlisted offers: reachable via direct share link only, never
-  // returned by marketplace search.
-  bool public = 18;
-  uint32 price_per_gpu_hour_cents = 19;
-}
-
-message CreateMarketplaceListingRequest {
-  string display_name = 1;
-  string gpu = 2;
-  uint32 gpu_count = 3;
-  string source = 4;
-  bool preemptible = 5;
-  bool public = 6;
-  string region = 7;
-  // Optional pool the listing's machines join. Reusing a pool across listings
-  // shares machine caches; defaults to a name derived from the GPU type.
-  string pool_name = 8;
-  uint32 price_per_gpu_hour_cents = 9;
-}
-
-message CreateMarketplaceListingResponse {
-  bool ok = 1;
-  string err_msg = 2;
-  MarketplaceListing listing = 3;
-}
-
-message UpdateMarketplaceListingRequest {
-  string listing_id = 1;
-  string display_name = 2;
-  string gpu = 3;
-  uint32 gpu_count = 4;
-  string source = 5;
-  optional bool preemptible = 6;
-  optional bool public = 7;
-  string status = 8;
-  string region = 9;
-  optional uint32 price_per_gpu_hour_cents = 10;
-}
-
-message UpdateMarketplaceListingResponse {
-  bool ok = 1;
-  string err_msg = 2;
-  MarketplaceListing listing = 3;
-}
-
-message DeleteMarketplaceListingRequest { string listing_id = 1; }
-
-message DeleteMarketplaceListingResponse {
-  bool ok = 1;
-  string err_msg = 2;
-}
-
-message ListMarketplaceListingsRequest { uint32 limit = 1; }
-
-message ListMarketplaceListingsResponse {
-  bool ok = 1;
-  string err_msg = 2;
-  repeated MarketplaceListing listings = 3;
-}
-
-message GetMarketplaceJoinCommandRequest {
-  string listing_id = 1;
+message GetProviderJoinCommandRequest {
+  // GPU type of the machines that will join (one provider pool per GPU type).
+  string gpu = 1;
   string ttl = 2;
 }
 
-message GetMarketplaceJoinCommandResponse {
+message GetProviderJoinCommandResponse {
   bool ok = 1;
   string err_msg = 2;
   string command = 3;
   string token = 4;
   google.protobuf.Timestamp expires_at = 5;
+  string pool_name = 6;
 }
 
-message ListMarketplaceOffersRequest {
-  string gpu = 1;
-  uint32 limit = 2;
-}
+message ListProviderMachinesRequest {}
 
-message ListMarketplaceOffersResponse {
-  bool ok = 1;
-  string err_msg = 2;
-  repeated MarketplaceOffer offers = 3;
-}
-
-message GetMarketplaceOfferRequest { string listing_id = 1; }
-
-message GetMarketplaceOfferResponse {
-  bool ok = 1;
-  string err_msg = 2;
-  MarketplaceOffer offer = 3;
-}
-
-// A buyer's exclusive hold on GPUs of one seller machine. Billed on-demand
-// while held; workloads are launched onto it machine-pinned.
-message MarketplaceRental {
-  string id = 1;
-  string listing_id = 2;
-  string listing_name = 3;
-  string pool_name = 4;
-  string machine_id = 5;
-  string gpu = 6;
-  uint32 gpu_count = 7;
-  string region = 8;
-  bool machine_connected = 9;
-  google.protobuf.Timestamp created_at = 10;
-  // Rate snapshotted when the rental was created; seller price changes don't
-  // affect rentals already held.
-  uint32 price_per_gpu_hour_cents = 11;
-}
-
-message CreateMarketplaceRentalRequest {
-  string listing_id = 1;
-  string machine_id = 2;
-  uint32 gpu_count = 3;
-}
-
-message CreateMarketplaceRentalResponse {
-  bool ok = 1;
-  string err_msg = 2;
-  MarketplaceRental rental = 3;
-}
-
-message ListMarketplaceRentalsRequest {}
-
-message ListMarketplaceRentalsResponse {
-  bool ok = 1;
-  string err_msg = 2;
-  repeated MarketplaceRental rentals = 3;
-}
-
-message DeleteMarketplaceRentalRequest { string rental_id = 1; }
-
-message DeleteMarketplaceRentalResponse {
-  bool ok = 1;
-  string err_msg = 2;
-}
-
-message LaunchRentalWorkloadRequest {
-  string rental_id = 1;
-  // "pod" runs the image's own entrypoint (e.g. a vLLM server); "shell"
-  // starts an SSH-able container reachable via `beam shell`.
-  string kind = 2;
-  string image_id = 3;
-  repeated string command = 4;
-  repeated uint32 ports = 5;
-  uint32 gpu_count = 6;
-  repeated string env = 7;
-}
-
-message LaunchRentalWorkloadResponse {
-  bool ok = 1;
-  string err_msg = 2;
-  string container_id = 3;
-  string stub_id = 4;
-  string url = 5;
-  string shell_command = 6;
-  string username = 7;
-  string password = 8;
-}
-
-message ListMarketplaceMachinesRequest {
-  string listing_id = 1;
-  uint32 limit = 2;
-}
-
-message ListMarketplaceMachinesResponse {
+message ListProviderMachinesResponse {
   bool ok = 1;
   string err_msg = 2;
   repeated Machine machines = 3;
+}
+
+message GetProviderEarningsRequest {
+  // Trailing window in days (today included); defaults to 30.
+  uint32 days = 1;
+}
+
+message ProviderEarnings {
+  int64 requests = 1;
+  int64 prompt_tokens = 2;
+  int64 completion_tokens = 3;
+  int64 images = 4;
+  int64 earnings_micro_usd = 5;
+}
+
+message GetProviderEarningsResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  ProviderEarnings total = 3;
+  map<string, ProviderEarnings> per_machine = 4;
+  map<string, ProviderEarnings> per_day = 5;
 }
 
 message ListMachineContainersRequest {
@@ -1444,17 +1221,6 @@ message AgentBootstrapConfig {
   uint32 image_clip_version = 12;
   bool image_local_cache_enabled = 13;
   AgentTelemetryConfig telemetry = 14;
-  // Only set for marketplace pools: lets workers on seller machines meter
-  // buyer usage and report it to the billing service.
-  AgentBillingConfig billing = 15;
-}
-
-message AgentBillingConfig {
-  string usage_endpoint = 1;
-  string usage_token = 2;
-  string cost_hook_endpoint = 3;
-  string cost_hook_token = 4;
-  double billable_margin_pct = 5;
 }
 
 message AgentTelemetryConfig {
@@ -1594,16 +1360,10 @@ message AgentWorkerSlot {
   string worker_image = 11;
   uint32 network_slot_pool_size = 12;
   uint32 container_start_concurrency = 13;
-  // Pool mode ("private" / "marketplace" / "external") and the container
-  // runtime the worker must run with. Marketplace slots prefer gVisor but can
-  // fall back to runc for incompatible GPU families.
+  // Pool mode ("private" / "provider" / "external") and the container
+  // runtime the worker must run with.
   string mode = 14;
   string container_runtime = 15;
-  // Marketplace identity of the machine backing this slot. Machines join a
-  // (possibly shared) pool through exactly one listing; the worker reports
-  // buyer usage against it, so the request itself carries no billing fields.
-  string marketplace_listing_id = 16;
-  string seller_workspace_id = 17;
   bool requires_pool_selector = 18;
   int32 priority = 19;
   bool preemptable = 20;

@@ -50,7 +50,7 @@ func (c *failoverChain) rank(poolName string) int32 {
 // failoverChainFor resolves the chain a request may fail over through, or nil
 // when failover does not apply. Binding is narrow on purpose: only serverless
 // GPU requests bind, and only to the first requested GPU type that has a
-// chain. Selector-bound requests (private and marketplace pools) have their
+// chain. Selector-bound requests (private and provider pools) have their
 // own fallback, and "any"-GPU requests already see every pool.
 func (s *Scheduler) failoverChainFor(request *types.ContainerRequest) *failoverChain {
 	config := s.config.Scheduling.Failover

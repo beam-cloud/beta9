@@ -37,8 +37,8 @@ type AppConfig struct {
 
 // ManagedEndpointsConfig is the cluster-level configuration for the managed
 // endpoints platform. Only Enabled and Repo are required to turn it on; every
-// other value has a production default. Endpoint stubs are owned by the
-// cluster admin workspace.
+// other value has a production default (see ApplyDefaults). Endpoint stubs
+// are owned by the cluster admin workspace.
 type ManagedEndpointsConfig struct {
 	Enabled     bool                          `key:"enabled" json:"enabled"`
 	RoutePrefix string                        `key:"routePrefix" json:"route_prefix"`
@@ -50,7 +50,6 @@ type ManagedEndpointsConfig struct {
 	Preemption     ManagedEndpointsPreemption    `key:"preemption" json:"preemption"`
 	Fill           ManagedEndpointsFillConfig    `key:"fill" json:"fill"`
 	Rollout        ManagedEndpointsRolloutConfig `key:"rollout" json:"rollout"`
-	Tuning         ManagedEndpointsTuningConfig  `key:"tuning" json:"tuning"`
 	Routing        ManagedEndpointsRoutingConfig `key:"routing" json:"routing"`
 	AllowedEngines []string                      `key:"allowedEngines" json:"allowed_engines"`
 	AllowedKinds   []string                      `key:"allowedKinds" json:"allowed_kinds"`
@@ -58,6 +57,9 @@ type ManagedEndpointsConfig struct {
 	HeartbeatInterval time.Duration `key:"heartbeatInterval" json:"heartbeat_interval"`
 	// ReplicaStaleAfter marks replicas failed when no heartbeat/probe arrives.
 	ReplicaStaleAfter time.Duration `key:"replicaStaleAfter" json:"replica_stale_after"`
+	// ProviderRevenueShare is the fraction of billed token revenue credited to
+	// the workspace whose contributed machine served the request.
+	ProviderRevenueShare float64 `key:"providerRevenueShare" json:"provider_revenue_share"`
 }
 
 type ManagedEndpointsRepoConfig struct {
@@ -100,12 +102,6 @@ type RolloutThresholds struct {
 	Throughput float64 `key:"throughput" json:"throughput"`
 }
 
-type ManagedEndpointsTuningConfig struct {
-	MaxConcurrentExperiments uint32        `key:"maxConcurrentExperiments" json:"max_concurrent_experiments"`
-	ExperimentTTL            time.Duration `key:"experimentTTL" json:"experiment_ttl"`
-	KeepExperiments          int           `key:"keepExperiments" json:"keep_experiments"`
-}
-
 type ManagedEndpointsRoutingConfig struct {
 	MaxQueueWait            time.Duration `key:"maxQueueWait" json:"max_queue_wait"`
 	SlowStartSeconds        uint32        `key:"slowStartSeconds" json:"slow_start_seconds"`
@@ -113,115 +109,71 @@ type ManagedEndpointsRoutingConfig struct {
 	PerEndpointConcurrency  uint32        `key:"perEndpointConcurrency" json:"per_endpoint_concurrency"`
 }
 
-func (c ManagedEndpointsConfig) RoutePrefixOrDefault() string {
-	if strings.TrimSpace(c.RoutePrefix) == "" {
-		return "/v1"
+// ApplyDefaults fills zero values with production defaults so consumers can
+// read the config directly.
+func (c *ManagedEndpointsConfig) ApplyDefaults() {
+	c.RoutePrefix = "/" + strings.Trim(strings.TrimSpace(c.RoutePrefix), "/")
+	if c.RoutePrefix == "/" {
+		c.RoutePrefix = "/v1"
 	}
-	return "/" + strings.Trim(strings.TrimSpace(c.RoutePrefix), "/")
-}
-
-func (c ManagedEndpointsConfig) HeartbeatIntervalOrDefault() time.Duration {
+	if strings.TrimSpace(c.Repo.Ref) == "" {
+		c.Repo.Ref = "main"
+	}
 	if c.HeartbeatInterval <= 0 {
-		return 5 * time.Second
+		c.HeartbeatInterval = 5 * time.Second
 	}
-	return c.HeartbeatInterval
-}
-
-func (c ManagedEndpointsConfig) ReplicaStaleAfterOrDefault() time.Duration {
+	if c.ProviderRevenueShare <= 0 || c.ProviderRevenueShare > 1 {
+		c.ProviderRevenueShare = 0.7
+	}
 	if c.ReplicaStaleAfter <= 0 {
-		return 3 * c.HeartbeatIntervalOrDefault()
+		c.ReplicaStaleAfter = 3 * c.HeartbeatInterval
 	}
-	return c.ReplicaStaleAfter
-}
-
-func (c ManagedEndpointsFillConfig) ReconcileIntervalOrDefault() time.Duration {
-	if c.ReconcileInterval <= 0 {
-		return 10 * time.Second
+	if c.Fill.MaxClusterShare <= 0 || c.Fill.MaxClusterShare > 1 {
+		c.Fill.MaxClusterShare = 0.5
 	}
-	return c.ReconcileInterval
-}
-
-func (c ManagedEndpointsFillConfig) MaxClusterShareOrDefault() float64 {
-	if c.MaxClusterShare <= 0 || c.MaxClusterShare > 1 {
-		return 0.5
+	if c.Rollout.CanaryReplicas == 0 {
+		c.Rollout.CanaryReplicas = 1
 	}
-	return c.MaxClusterShare
-}
-
-func (c ManagedEndpointsFillConfig) FailureBackoffOrDefault() time.Duration {
-	if c.FailureBackoff <= 0 {
-		return 30 * time.Second
+	if c.Rollout.BakeSeconds == 0 {
+		c.Rollout.BakeSeconds = 300
 	}
-	return c.FailureBackoff
-}
-
-func (c ManagedEndpointsRepoConfig) PollIntervalOrDefault() time.Duration {
-	if c.PollInterval <= 0 {
-		return 2 * time.Minute
+	if c.Routing.SlowStartSeconds == 0 {
+		c.Routing.SlowStartSeconds = 30
 	}
-	return c.PollInterval
-}
-
-func (c ManagedEndpointsRepoConfig) RefOrDefault() string {
-	if strings.TrimSpace(c.Ref) == "" {
-		return "main"
+	for _, f := range []struct {
+		v   *float64
+		def float64
+	}{
+		{&c.Rollout.Thresholds.ErrorRate, 0.02},
+		{&c.Rollout.Thresholds.TTFT, 0.25},
+		{&c.Rollout.Thresholds.TPOT, 0.25},
+		{&c.Rollout.Thresholds.Throughput, 0.25},
+	} {
+		if *f.v <= 0 {
+			*f.v = f.def
+		}
 	}
-	return c.Ref
-}
-
-func (c ManagedEndpointsRoutingConfig) MaxQueueWaitOrDefault() time.Duration {
-	if c.MaxQueueWait <= 0 {
-		return 2 * time.Second
+	for _, d := range []struct {
+		v   *time.Duration
+		def time.Duration
+	}{
+		{&c.Repo.PollInterval, 2 * time.Minute},
+		{&c.Fill.ReconcileInterval, 10 * time.Second},
+		{&c.Fill.FailureBackoff, 30 * time.Second},
+		{&c.Routing.MaxQueueWait, 2 * time.Second},
+	} {
+		if *d.v <= 0 {
+			*d.v = d.def
+		}
 	}
-	return c.MaxQueueWait
-}
-
-func (c ManagedEndpointsRoutingConfig) SlowStartOrDefault() time.Duration {
-	if c.SlowStartSeconds == 0 {
-		return 30 * time.Second
-	}
-	return time.Duration(c.SlowStartSeconds) * time.Second
-}
-
-func (c ManagedEndpointsTuningConfig) ExperimentTTLOrDefault() time.Duration {
-	if c.ExperimentTTL <= 0 {
-		return 7 * 24 * time.Hour
-	}
-	return c.ExperimentTTL
-}
-
-func (c ManagedEndpointsTuningConfig) KeepExperimentsOrDefault() int {
-	if c.KeepExperiments <= 0 {
-		return 50
-	}
-	return c.KeepExperiments
-}
-
-func (c ManagedEndpointsRolloutConfig) BakeDuration() time.Duration {
-	if c.BakeSeconds == 0 {
-		return 5 * time.Minute
-	}
-	return time.Duration(c.BakeSeconds) * time.Second
-}
-
-func (c ManagedEndpointsRolloutConfig) CanaryReplicasOrDefault() uint32 {
-	if c.CanaryReplicas == 0 {
-		return 1
-	}
-	return c.CanaryReplicas
 }
 
 // WorkerPoolManagedEndpointsConfig opts a pool into hosting endpoint replicas.
 type WorkerPoolManagedEndpointsConfig struct {
-	Enabled  bool    `key:"enabled" json:"enabled"`
+	Enabled bool `key:"enabled" json:"enabled"`
+	// MaxShare caps the fraction of the pool's GPUs endpoints may hold; zero
+	// means the cluster-wide fill.maxClusterShare.
 	MaxShare float64 `key:"maxShare" json:"max_share"`
-}
-
-func (c WorkerPoolManagedEndpointsConfig) MaxShareOrDefault() float64 {
-	if c.MaxShare <= 0 || c.MaxShare > 1 {
-		return 1
-	}
-	return c.MaxShare
 }
 
 type DatabaseConfig struct {
@@ -765,10 +717,12 @@ type WorkerPoolManagementSource string
 type WorkerPoolController string
 
 var (
-	PoolModeLocal       PoolMode = "local"
-	PoolModeExternal    PoolMode = "external"
-	PoolModePrivate     PoolMode = "private"
-	PoolModeMarketplace PoolMode = "marketplace"
+	PoolModeLocal    PoolMode = "local"
+	PoolModeExternal PoolMode = "external"
+	PoolModePrivate  PoolMode = "private"
+	// Provider pools are workspace-contributed machines that serve managed
+	// endpoints only; the workspace earns a share of the tokens sold on them.
+	PoolModeProvider PoolMode = "provider"
 )
 
 const (
@@ -784,7 +738,7 @@ const (
 // machines outside the cluster. Such workers hold no static credentials and
 // use gateway-brokered access for images and caches.
 func (m PoolMode) AgentHosted() bool {
-	return m == PoolModePrivate || m == PoolModeMarketplace
+	return m == PoolModePrivate || m == PoolModeProvider
 }
 
 type WorkerPoolConfig struct {
@@ -1186,11 +1140,6 @@ type ManagedComputeConfig struct {
 	Billing           ManagedComputeBillingConfig `key:"billing" json:"billing"`
 	BYOC              ManagedComputeBYOCConfig    `key:"byoc" json:"byoc"`
 	SSH               ManagedComputeSSHConfig     `key:"ssh" json:"ssh"`
-	// Marketplace identity of the machine this worker runs on, set by the
-	// agent in the generated worker config. Buyer usage on the worker is
-	// billed against this listing.
-	MarketplaceListingID string `key:"marketplaceListingID" json:"marketplace_listing_id"`
-	SellerWorkspaceID    string `key:"sellerWorkspaceID" json:"seller_workspace_id"`
 }
 
 type ManagedComputeSSHConfig struct {

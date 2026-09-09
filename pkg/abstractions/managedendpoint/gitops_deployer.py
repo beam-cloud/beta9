@@ -1,25 +1,15 @@
 """
-GitOps deployer driver.
-
-Runs inside a one-shot container launched by the gateway's GitOps reconciler.
-The container image only needs git and the beta9 SDK. Everything else comes
-from the environment:
-
-  ENDPOINTS_REPO_URL   clone URL
-  ENDPOINTS_REPO_SHA   commit to apply
-  ENDPOINTS_LAST_SHA   previously applied commit ("" on the first run)
-  ENDPOINTS_REPO_REF   branch or tag the SHA came from (fallback fetch)
-  ENDPOINTS_REPO_PATH  sub-directory holding the endpoint apps ("" = repo root)
-  ENDPOINTS_FORCE      "1" to redeploy every stub regardless of the diff
-  ENDPOINTS_REDEPLOY   comma-separated app paths to redeploy even if unchanged
-  ENDPOINTS_RUN_ID     opaque id echoed back in the report
-  ENDPOINTS_DEPLOY_KEY optional SSH private key or https token
-  BETA9_TOKEN, BETA9_GATEWAY_HOST[_HTTP], BETA9_GATEWAY_PORT[_HTTP]
+GitOps deployer: runs in a one-shot container launched by the gateway's GitOps
+reconciler (needs only git and the beta9 SDK). Configured by ENDPOINTS_* env:
+REPO_URL, REPO_SHA, LAST_SHA ("" on the first run), REPO_REF (fallback fetch),
+REPO_PATH (sub-directory holding the apps), FORCE ("1" redeploys everything),
+REDEPLOY (comma-separated app paths to redeploy even if unchanged), RUN_ID
+(echoed in the report) and DEPLOY_KEY (SSH private key or https token), plus
+BETA9_TOKEN and BETA9_GATEWAY_HOST[_HTTP] / BETA9_GATEWAY_PORT[_HTTP].
 
 Every directory containing an app.py that exports a ManagedEndpoint or
-ManagedService is a managed stub. Each app directory is deployed from its own
-working directory so only that directory is uploaded with the stub. The run
-ends with one POST to /api/v1/endpoints/gitops/report.
+ManagedService is a managed stub, deployed from its own directory. The run ends
+with one POST to /api/v1/endpoints/gitops/report.
 """
 
 import importlib.util
@@ -29,6 +19,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import traceback
 import urllib.error
 import urllib.request
@@ -48,69 +39,54 @@ FORCE = env("ENDPOINTS_FORCE") == "1"
 REDEPLOY = {p.strip("/") for p in env("ENDPOINTS_REDEPLOY").split(",") if p.strip()}
 RUN_ID = env("ENDPOINTS_RUN_ID")
 DEPLOY_KEY = os.environ.get("ENDPOINTS_DEPLOY_KEY", "")
+SSH_KEY = DEPLOY_KEY.startswith("-----BEGIN")
 WORKDIR = Path(tempfile.mkdtemp(prefix="endpoints-"))
+REPO = WORKDIR / "repo"
+GIT_ENV = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+if SSH_KEY:
+    KEY_PATH = WORKDIR / "deploy_key"
+    KEY_PATH.write_text(DEPLOY_KEY.rstrip("\n") + "\n")
+    KEY_PATH.chmod(0o600)
+    SSH_OPTS = "-o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+    GIT_ENV["GIT_SSH_COMMAND"] = f"ssh -i {KEY_PATH} {SSH_OPTS}"
 
 
 def log(msg):
     print(f"[gitops] {msg}", flush=True)
 
 
-def git_env():
-    e = dict(os.environ)
-    e["GIT_TERMINAL_PROMPT"] = "0"
-    if DEPLOY_KEY.startswith("-----BEGIN"):
-        key_path = WORKDIR / "deploy_key"
-        key_path.write_text(DEPLOY_KEY if DEPLOY_KEY.endswith("\n") else DEPLOY_KEY + "\n")
-        key_path.chmod(0o600)
-        e["GIT_SSH_COMMAND"] = (
-            f"ssh -i {key_path} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
-        )
-    return e
-
-
-def clone_url():
-    if DEPLOY_KEY and not DEPLOY_KEY.startswith("-----BEGIN") and REPO_URL.startswith("https://"):
-        return REPO_URL.replace("https://", f"https://x-access-token:{DEPLOY_KEY}@", 1)
-    return REPO_URL
-
-
-def git(*args, check=True, cwd=None):
+def git(*args):
     return subprocess.run(
-        ["git", *args],
-        cwd=str(cwd or WORKDIR / "repo"),
-        env=git_env(),
-        check=check,
-        text=True,
-        capture_output=True,
+        ["git", *args], cwd=str(REPO), env=GIT_ENV, check=True, text=True, capture_output=True
     )
 
 
 def checkout():
-    repo = WORKDIR / "repo"
-    repo.mkdir(parents=True)
-    git("init", "-q", cwd=repo)
-    git("remote", "add", "origin", clone_url(), cwd=repo)
+    url = REPO_URL
+    if DEPLOY_KEY and not SSH_KEY and url.startswith("https://"):
+        url = url.replace("https://", f"https://x-access-token:{DEPLOY_KEY}@", 1)
+    REPO.mkdir(parents=True)
+    git("init", "-q")
+    git("remote", "add", "origin", url)
     try:
-        git("fetch", "-q", "--depth", "1", "origin", SHA, cwd=repo)
+        git("fetch", "-q", "--depth", "1", "origin", SHA)
     except subprocess.CalledProcessError as exc:
-        # Servers that refuse fetch-by-sha: take the ref head and insist it
-        # is the commit we were asked to apply.
+        # Servers that refuse fetch-by-sha: take the ref head and insist it is our commit.
         log(f"fetch by sha refused ({exc.stderr.strip()}); fetching {REF}")
-        git("fetch", "-q", "--depth", "1", "origin", REF, cwd=repo)
-        head = git("rev-parse", "FETCH_HEAD", cwd=repo).stdout.strip()
+        git("fetch", "-q", "--depth", "1", "origin", REF)
+        head = git("rev-parse", "FETCH_HEAD").stdout.strip()
         if not head.startswith(SHA):
             raise RuntimeError(f"ref {REF} is at {head[:8]}, expected {SHA[:8]}")
-    git("checkout", "-q", "--detach", "FETCH_HEAD", cwd=repo)
-    return repo
+    git("checkout", "-q", "--detach", "FETCH_HEAD")
 
 
-def changed_paths(repo):
-    """Return the set of changed file paths since LAST_SHA, or None for 'everything'."""
+def changed_paths():
+    """Set of files changed since LAST_SHA, or None for 'everything'."""
     if FORCE or not LAST_SHA or LAST_SHA == SHA:
         return None
     try:
-        git("fetch", "-q", "--depth", "1", "origin", LAST_SHA, cwd=repo)
-        out = git("diff", "--name-only", LAST_SHA, SHA, cwd=repo).stdout
+        git("fetch", "-q", "--depth", "1", "origin", LAST_SHA)
+        out = git("diff", "--name-only", LAST_SHA, SHA).stdout
     except subprocess.CalledProcessError as exc:
         log(f"diff against {LAST_SHA[:8]} unavailable ({exc.stderr.strip()}); redeploying all")
         return None
@@ -118,39 +94,32 @@ def changed_paths(repo):
 
 
 def discover(root):
-    apps = []
-    for app in sorted(root.rglob("app.py")):
-        rel = app.parent.relative_to(root)
-        if any(
-            part.startswith(".") or part in {"__pycache__", "node_modules"} for part in rel.parts
-        ):
-            continue
-        apps.append(app)
-    return apps
+    skip = {"__pycache__", "node_modules"}
+    return [
+        app
+        for app in sorted(root.rglob("app.py"))
+        if not any(p.startswith(".") or p in skip for p in app.parent.relative_to(root).parts)
+    ]
 
 
-def app_changed(rel_dir, changed, app_dirs):
-    if changed is None:
-        return True
-    rel = str(rel_dir).strip("./")
-    if rel in REDEPLOY:
+def app_changed(rel, changed, app_dirs):
+    """A change outside the endpoints tree or in a shared file redeploys everything."""
+    if changed is None or rel in REDEPLOY:
         return True
     prefix = f"{REPO_PATH}/" if REPO_PATH else ""
     for path in changed:
         if not path.startswith(prefix):
-            # A change outside the endpoints tree (shared tooling) redeploys everything.
             return True
         inner = path[len(prefix) :]
         if rel and inner.startswith(rel + "/"):
             return True
         if not any(inner.startswith(d + "/") for d in app_dirs if d):
-            # Shared file inside the endpoints tree.
             return True
     return False
 
 
 def load_module(app_path):
-    name = "endpoint_app_" + str(abs(hash(str(app_path))))
+    name = f"endpoint_app_{abs(hash(str(app_path)))}"
     spec = importlib.util.spec_from_file_location(name, app_path)
     module = importlib.util.module_from_spec(spec)
     sys.path.insert(0, str(app_path.parent))
@@ -161,25 +130,14 @@ def load_module(app_path):
     return module
 
 
-def report_url():
+def post_report(report):
     host = env("BETA9_GATEWAY_HOST_HTTP") or env("BETA9_GATEWAY_HOST")
     port = env("BETA9_GATEWAY_PORT_HTTP") or "1994"
-    scheme = "https" if port == "443" else "http"
     netloc = host if port in {"80", "443"} else f"{host}:{port}"
-    return f"{scheme}://{netloc}/api/v1/endpoints/gitops/report"
-
-
-def post_report(report):
+    url = f"{'https' if port == '443' else 'http'}://{netloc}/api/v1/endpoints/gitops/report"
+    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {env('BETA9_TOKEN')}"}
     body = json.dumps(report).encode()
-    req = urllib.request.Request(
-        report_url(),
-        data=body,
-        method="POST",
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {env('BETA9_TOKEN')}",
-        },
-    )
+    req = urllib.request.Request(url, data=body, method="POST", headers=headers)
     for attempt in range(5):
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
@@ -191,76 +149,61 @@ def post_report(report):
                 return False
         except Exception as exc:  # noqa: BLE001
             log(f"report failed: {exc}")
-        import time
-
         time.sleep(2 * (attempt + 1))
     return False
+
+
+def deploy_app(app, root, changed, app_dirs, report):
+    from beta9 import ManagedEndpoint, ManagedService
+
+    rel = str(app.parent.relative_to(root))
+    os.chdir(app.parent)
+    try:
+        module = load_module(app)
+    except Exception as exc:  # noqa: BLE001
+        traceback.print_exc()
+        report["results"].append(
+            {"path": rel, "id": "", "kind": "", "ok": False, "error": f"import failed: {exc}"}
+        )
+        return
+    for obj in list(vars(module).values()):
+        if not isinstance(obj, (ManagedEndpoint, ManagedService)):
+            continue
+        kind = "service" if isinstance(obj, ManagedService) else "endpoint"
+        report["discovered"].append({"path": rel, "id": obj.spec_name, "kind": kind})
+        result = {"path": rel, "id": obj.spec_name, "kind": kind, "ok": False, "skipped": False}
+        report["results"].append(result)
+        if not app_changed(rel.strip("./"), changed, app_dirs):
+            result.update(ok=True, skipped=True)
+            continue
+        log(f"deploying {kind} {obj.spec_name} from {rel}")
+        try:
+            out, ok = obj.deploy(git_sha=SHA)
+            version = int(out.get("version") or 0)
+            result.update(ok=bool(ok), stub_id=obj.stub_id or "", version=version)
+            if not ok:
+                result["error"] = "deploy failed"
+        except SystemExit as exc:
+            result["error"] = f"deploy exited: {exc}"
+        except Exception as exc:  # noqa: BLE001
+            traceback.print_exc()
+            result["error"] = str(exc)
 
 
 def main():
     report = {"run_id": RUN_ID, "sha": SHA, "discovered": [], "results": [], "error": ""}
     try:
-        from beta9 import ManagedEndpoint, ManagedService
-
-        repo = checkout()
-        root = repo / REPO_PATH if REPO_PATH else repo
+        checkout()
+        root = REPO / REPO_PATH if REPO_PATH else REPO
         if not root.is_dir():
             raise RuntimeError(f"endpoints path {REPO_PATH!r} not found at {SHA[:8]}")
-
         apps = discover(root)
         app_dirs = [str(a.parent.relative_to(root)) for a in apps]
-        changed = changed_paths(repo)
-        log(
-            f"{len(apps)} app(s) at {SHA[:8]}; changed={'all' if changed is None else len(changed)}"
-        )
-
+        changed = changed_paths()
+        n_changed = "all" if changed is None else len(changed)
+        log(f"{len(apps)} app(s) at {SHA[:8]}; changed={n_changed}")
         for app in apps:
-            rel_dir = app.parent.relative_to(root)
-            rel = str(rel_dir)
-            os.chdir(app.parent)
-            try:
-                module = load_module(app)
-            except Exception as exc:  # noqa: BLE001
-                traceback.print_exc()
-                report["results"].append(
-                    {
-                        "path": rel,
-                        "id": "",
-                        "kind": "",
-                        "ok": False,
-                        "error": f"import failed: {exc}",
-                    }
-                )
-                continue
-
-            objs = [
-                v for v in vars(module).values() if isinstance(v, (ManagedEndpoint, ManagedService))
-            ]
-            for obj in objs:
-                kind = "service" if isinstance(obj, ManagedService) else "endpoint"
-                ident = obj.spec_name
-                report["discovered"].append({"path": rel, "id": ident, "kind": kind})
-                result = {"path": rel, "id": ident, "kind": kind, "ok": False, "skipped": False}
-                if not app_changed(rel_dir, changed, app_dirs):
-                    result.update(ok=True, skipped=True)
-                    report["results"].append(result)
-                    continue
-                log(f"deploying {kind} {ident} from {rel}")
-                try:
-                    out, ok = obj.deploy(git_sha=SHA)
-                    result.update(
-                        ok=bool(ok),
-                        stub_id=getattr(obj, "stub_id", "") or "",
-                        version=int(out.get("version") or 0) if isinstance(out, dict) else 0,
-                    )
-                    if not ok:
-                        result["error"] = "deploy failed"
-                except SystemExit as exc:
-                    result["error"] = f"deploy exited: {exc}"
-                except Exception as exc:  # noqa: BLE001
-                    traceback.print_exc()
-                    result["error"] = str(exc)
-                report["results"].append(result)
+            deploy_app(app, root, changed, app_dirs, report)
     except Exception as exc:  # noqa: BLE001
         traceback.print_exc()
         report["error"] = str(exc)
@@ -268,12 +211,11 @@ def main():
         os.chdir("/")
         shutil.rmtree(WORKDIR, ignore_errors=True)
 
-    ok = post_report(report)
+    sent = post_report(report)
     failed = [r for r in report["results"] if not r["ok"]]
-    log(
-        f"done: {len(report['results'])} result(s), {len(failed)} failed, report={'sent' if ok else 'lost'}"
-    )
-    sys.exit(0 if ok and not failed and not report["error"] else 1)
+    status = "sent" if sent else "lost"
+    log(f"done: {len(report['results'])} result(s), {len(failed)} failed, report={status}")
+    sys.exit(0 if sent and not failed and not report["error"] else 1)
 
 
 if __name__ == "__main__":

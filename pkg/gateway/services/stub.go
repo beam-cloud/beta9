@@ -160,7 +160,6 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		BlockNetwork:       in.BlockNetwork,
 		AllowList:          in.AllowList,
 		DockerEnabled:      in.DockerEnabled,
-		AllowMarketplace:   in.AllowMarketplace,
 		Hostname:           in.Hostname,
 		IsService:          in.IsService,
 		Serving:            servingConfig,
@@ -251,7 +250,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 			// Only stubs with no pool config get a capacity verdict: targeting
 			// a pool is an explicit placement choice the scheduler will honor.
 			if resourcePolicy.pool == nil {
-				verdict, err := gws.computeCapacityVerdict(ctx, authInfo.Workspace.ExternalId, gpus, in.AllowMarketplace, len(lowCapacityGpus) > 0)
+				verdict, err := gws.computeCapacityVerdict(ctx, authInfo.Workspace.ExternalId, gpus, len(lowCapacityGpus) > 0)
 				if err != nil {
 					// The verdict is advisory; never fail stub creation over it.
 					log.Warn().Err(err).Str("workspace_id", authInfo.Workspace.ExternalId).Msg("failed to compute stub capacity verdict")
@@ -416,7 +415,7 @@ type stubCapacityVerdict struct {
 // gpuPoolChecker answers whether any serverless pool config supports a GPU
 // type. Implemented by *scheduler.Scheduler.
 type gpuPoolChecker interface {
-	HasManagedPoolForGPU(gpuType string, allowMarketplace bool) bool
+	HasManagedPoolForGPU(gpuType string) bool
 }
 
 // privatePoolFinder locates ready workspace private pools for a GPU request.
@@ -425,7 +424,7 @@ type privatePoolFinder interface {
 	FindReadyPrivatePoolForGPU(ctx context.Context, workspaceID string, gpus []types.GpuType) (string, error)
 }
 
-func (gws *GatewayService) computeCapacityVerdict(ctx context.Context, workspaceID string, gpus []types.GpuType, allowMarketplace bool, lowCapacity bool) (stubCapacityVerdict, error) {
+func (gws *GatewayService) computeCapacityVerdict(ctx context.Context, workspaceID string, gpus []types.GpuType, lowCapacity bool) (stubCapacityVerdict, error) {
 	if gws.scheduler == nil {
 		return stubCapacityVerdict{}, nil
 	}
@@ -433,7 +432,7 @@ func (gws *GatewayService) computeCapacityVerdict(ctx context.Context, workspace
 	if gws.computeService != nil {
 		finder = gws.computeService
 	}
-	return computeCapacityVerdict(ctx, gws.scheduler, finder, workspaceID, gpus, allowMarketplace, lowCapacity)
+	return computeCapacityVerdict(ctx, gws.scheduler, finder, workspaceID, gpus, lowCapacity)
 }
 
 // computeCapacityVerdict determines whether a GPU request can ever be
@@ -442,14 +441,14 @@ func (gws *GatewayService) computeCapacityVerdict(ctx context.Context, workspace
 // available. When no serverless pool supports any requested GPU — a
 // guaranteed scheduling blackhole — it checks the workspace's private pools
 // for ready capacity the client can target instead.
-func computeCapacityVerdict(ctx context.Context, checker gpuPoolChecker, finder privatePoolFinder, workspaceID string, gpus []types.GpuType, allowMarketplace bool, lowCapacity bool) (stubCapacityVerdict, error) {
+func computeCapacityVerdict(ctx context.Context, checker gpuPoolChecker, finder privatePoolFinder, workspaceID string, gpus []types.GpuType, lowCapacity bool) (stubCapacityVerdict, error) {
 	verdict := stubCapacityVerdict{}
 	anySupported := false
 	for _, gpu := range gpus {
 		if gpu == types.NO_GPU {
 			continue
 		}
-		if checker.HasManagedPoolForGPU(gpu.String(), allowMarketplace) {
+		if checker.HasManagedPoolForGPU(gpu.String()) {
 			anySupported = true
 			continue
 		}

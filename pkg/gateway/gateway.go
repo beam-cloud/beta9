@@ -584,7 +584,6 @@ func (g *Gateway) registerServices() error {
 		BackendRepo:      g.BackendRepo,
 		ContainerRepo:    g.ContainerRepo,
 		WorkerRepo:       g.workerRepo,
-		WorkerPoolRepo:   g.WorkerPoolRepo,
 		WorkspaceRepo:    g.WorkspaceRepo,
 		EventRepo:        g.EventRepo,
 		UsageMetricsRepo: g.UsageMetricsRepo,

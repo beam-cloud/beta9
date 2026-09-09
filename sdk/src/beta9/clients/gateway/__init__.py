@@ -491,7 +491,6 @@ class GetOrCreateStubRequest(betterproto.Message):
     is_service: bool = betterproto.bool_field(42)
     serving: "ServingConfig" = betterproto.message_field(43)
     disks: List["DurableDisk"] = betterproto.message_field(44)
-    allow_marketplace: bool = betterproto.bool_field(45)
     checkpoint_trigger: "_types__.CheckpointTrigger" = betterproto.message_field(46)
     hostname: str = betterproto.string_field(47)
     """Hostname to set inside the container."""
@@ -862,266 +861,63 @@ class ScaleByocPoolResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class MarketplaceListing(betterproto.Message):
-    id: str = betterproto.string_field(1)
-    seller_workspace_id: str = betterproto.string_field(2)
-    display_name: str = betterproto.string_field(3)
-    gpu: str = betterproto.string_field(4)
-    gpu_count: int = betterproto.uint32_field(5)
-    source: str = betterproto.string_field(6)
-    preemptible: bool = betterproto.bool_field(7)
-    public: bool = betterproto.bool_field(8)
-    status: str = betterproto.string_field(9)
-    pool_name: str = betterproto.string_field(10)
-    created_at: datetime = betterproto.message_field(11)
-    updated_at: datetime = betterproto.message_field(12)
-    machine_count: int = betterproto.uint32_field(13)
-    ready_machine_count: int = betterproto.uint32_field(14)
-    region: str = betterproto.string_field(15)
-    runtime: str = betterproto.string_field(16)
-    price_per_gpu_hour_cents: int = betterproto.uint32_field(17)
-    """Seller-set on-demand rate, per GPU per hour."""
-
-
-@dataclass(eq=False, repr=False)
-class MarketplaceOffer(betterproto.Message):
-    listing_id: str = betterproto.string_field(1)
-    seller_workspace_id: str = betterproto.string_field(2)
-    display_name: str = betterproto.string_field(3)
-    gpu: str = betterproto.string_field(4)
-    gpu_count: int = betterproto.uint32_field(5)
-    source: str = betterproto.string_field(6)
-    preemptible: bool = betterproto.bool_field(7)
-    machine_count: int = betterproto.uint32_field(8)
-    ready_machine_count: int = betterproto.uint32_field(9)
-    runtime: str = betterproto.string_field(10)
-    region: str = betterproto.string_field(11)
-    cpu_cores: int = betterproto.uint32_field(12)
-    memory_mb: int = betterproto.uint64_field(13)
-    disk_gb: int = betterproto.uint64_field(14)
-    free_gpu_count: int = betterproto.uint32_field(15)
-    reliability: float = betterproto.float_field(16)
-    created_at: datetime = betterproto.message_field(17)
-    public: bool = betterproto.bool_field(18)
+class GetProviderJoinCommandRequest(betterproto.Message):
+    gpu: str = betterproto.string_field(1)
     """
-    False for unlisted offers: reachable via direct share link only, never
-     returned by marketplace search.
+    GPU type of the machines that will join (one provider pool per GPU type).
     """
 
-    price_per_gpu_hour_cents: int = betterproto.uint32_field(19)
-
-
-@dataclass(eq=False, repr=False)
-class CreateMarketplaceListingRequest(betterproto.Message):
-    display_name: str = betterproto.string_field(1)
-    gpu: str = betterproto.string_field(2)
-    gpu_count: int = betterproto.uint32_field(3)
-    source: str = betterproto.string_field(4)
-    preemptible: bool = betterproto.bool_field(5)
-    public: bool = betterproto.bool_field(6)
-    region: str = betterproto.string_field(7)
-    pool_name: str = betterproto.string_field(8)
-    """
-    Optional pool the listing's machines join. Reusing a pool across listings
-     shares machine caches; defaults to a name derived from the GPU type.
-    """
-
-    price_per_gpu_hour_cents: int = betterproto.uint32_field(9)
-
-
-@dataclass(eq=False, repr=False)
-class CreateMarketplaceListingResponse(betterproto.Message):
-    ok: bool = betterproto.bool_field(1)
-    err_msg: str = betterproto.string_field(2)
-    listing: "MarketplaceListing" = betterproto.message_field(3)
-
-
-@dataclass(eq=False, repr=False)
-class UpdateMarketplaceListingRequest(betterproto.Message):
-    listing_id: str = betterproto.string_field(1)
-    display_name: str = betterproto.string_field(2)
-    gpu: str = betterproto.string_field(3)
-    gpu_count: int = betterproto.uint32_field(4)
-    source: str = betterproto.string_field(5)
-    preemptible: Optional[bool] = betterproto.bool_field(6, optional=True)
-    public: Optional[bool] = betterproto.bool_field(7, optional=True)
-    status: str = betterproto.string_field(8)
-    region: str = betterproto.string_field(9)
-    price_per_gpu_hour_cents: Optional[int] = betterproto.uint32_field(
-        10, optional=True
-    )
-
-
-@dataclass(eq=False, repr=False)
-class UpdateMarketplaceListingResponse(betterproto.Message):
-    ok: bool = betterproto.bool_field(1)
-    err_msg: str = betterproto.string_field(2)
-    listing: "MarketplaceListing" = betterproto.message_field(3)
-
-
-@dataclass(eq=False, repr=False)
-class DeleteMarketplaceListingRequest(betterproto.Message):
-    listing_id: str = betterproto.string_field(1)
-
-
-@dataclass(eq=False, repr=False)
-class DeleteMarketplaceListingResponse(betterproto.Message):
-    ok: bool = betterproto.bool_field(1)
-    err_msg: str = betterproto.string_field(2)
-
-
-@dataclass(eq=False, repr=False)
-class ListMarketplaceListingsRequest(betterproto.Message):
-    limit: int = betterproto.uint32_field(1)
-
-
-@dataclass(eq=False, repr=False)
-class ListMarketplaceListingsResponse(betterproto.Message):
-    ok: bool = betterproto.bool_field(1)
-    err_msg: str = betterproto.string_field(2)
-    listings: List["MarketplaceListing"] = betterproto.message_field(3)
-
-
-@dataclass(eq=False, repr=False)
-class GetMarketplaceJoinCommandRequest(betterproto.Message):
-    listing_id: str = betterproto.string_field(1)
     ttl: str = betterproto.string_field(2)
 
 
 @dataclass(eq=False, repr=False)
-class GetMarketplaceJoinCommandResponse(betterproto.Message):
+class GetProviderJoinCommandResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
     command: str = betterproto.string_field(3)
     token: str = betterproto.string_field(4)
     expires_at: datetime = betterproto.message_field(5)
+    pool_name: str = betterproto.string_field(6)
 
 
 @dataclass(eq=False, repr=False)
-class ListMarketplaceOffersRequest(betterproto.Message):
-    gpu: str = betterproto.string_field(1)
-    limit: int = betterproto.uint32_field(2)
-
-
-@dataclass(eq=False, repr=False)
-class ListMarketplaceOffersResponse(betterproto.Message):
-    ok: bool = betterproto.bool_field(1)
-    err_msg: str = betterproto.string_field(2)
-    offers: List["MarketplaceOffer"] = betterproto.message_field(3)
-
-
-@dataclass(eq=False, repr=False)
-class GetMarketplaceOfferRequest(betterproto.Message):
-    listing_id: str = betterproto.string_field(1)
-
-
-@dataclass(eq=False, repr=False)
-class GetMarketplaceOfferResponse(betterproto.Message):
-    ok: bool = betterproto.bool_field(1)
-    err_msg: str = betterproto.string_field(2)
-    offer: "MarketplaceOffer" = betterproto.message_field(3)
-
-
-@dataclass(eq=False, repr=False)
-class MarketplaceRental(betterproto.Message):
-    """
-    A buyer's exclusive hold on GPUs of one seller machine. Billed on-demand
-     while held; workloads are launched onto it machine-pinned.
-    """
-
-    id: str = betterproto.string_field(1)
-    listing_id: str = betterproto.string_field(2)
-    listing_name: str = betterproto.string_field(3)
-    pool_name: str = betterproto.string_field(4)
-    machine_id: str = betterproto.string_field(5)
-    gpu: str = betterproto.string_field(6)
-    gpu_count: int = betterproto.uint32_field(7)
-    region: str = betterproto.string_field(8)
-    machine_connected: bool = betterproto.bool_field(9)
-    created_at: datetime = betterproto.message_field(10)
-    price_per_gpu_hour_cents: int = betterproto.uint32_field(11)
-    """
-    Rate snapshotted when the rental was created; seller price changes don't
-     affect rentals already held.
-    """
-
-
-@dataclass(eq=False, repr=False)
-class CreateMarketplaceRentalRequest(betterproto.Message):
-    listing_id: str = betterproto.string_field(1)
-    machine_id: str = betterproto.string_field(2)
-    gpu_count: int = betterproto.uint32_field(3)
-
-
-@dataclass(eq=False, repr=False)
-class CreateMarketplaceRentalResponse(betterproto.Message):
-    ok: bool = betterproto.bool_field(1)
-    err_msg: str = betterproto.string_field(2)
-    rental: "MarketplaceRental" = betterproto.message_field(3)
-
-
-@dataclass(eq=False, repr=False)
-class ListMarketplaceRentalsRequest(betterproto.Message):
+class ListProviderMachinesRequest(betterproto.Message):
     pass
 
 
 @dataclass(eq=False, repr=False)
-class ListMarketplaceRentalsResponse(betterproto.Message):
-    ok: bool = betterproto.bool_field(1)
-    err_msg: str = betterproto.string_field(2)
-    rentals: List["MarketplaceRental"] = betterproto.message_field(3)
-
-
-@dataclass(eq=False, repr=False)
-class DeleteMarketplaceRentalRequest(betterproto.Message):
-    rental_id: str = betterproto.string_field(1)
-
-
-@dataclass(eq=False, repr=False)
-class DeleteMarketplaceRentalResponse(betterproto.Message):
-    ok: bool = betterproto.bool_field(1)
-    err_msg: str = betterproto.string_field(2)
-
-
-@dataclass(eq=False, repr=False)
-class LaunchRentalWorkloadRequest(betterproto.Message):
-    rental_id: str = betterproto.string_field(1)
-    kind: str = betterproto.string_field(2)
-    """
-    "pod" runs the image's own entrypoint (e.g. a vLLM server); "shell"
-     starts an SSH-able container reachable via `beam shell`.
-    """
-
-    image_id: str = betterproto.string_field(3)
-    command: List[str] = betterproto.string_field(4)
-    ports: List[int] = betterproto.uint32_field(5)
-    gpu_count: int = betterproto.uint32_field(6)
-    env: List[str] = betterproto.string_field(7)
-
-
-@dataclass(eq=False, repr=False)
-class LaunchRentalWorkloadResponse(betterproto.Message):
-    ok: bool = betterproto.bool_field(1)
-    err_msg: str = betterproto.string_field(2)
-    container_id: str = betterproto.string_field(3)
-    stub_id: str = betterproto.string_field(4)
-    url: str = betterproto.string_field(5)
-    shell_command: str = betterproto.string_field(6)
-    username: str = betterproto.string_field(7)
-    password: str = betterproto.string_field(8)
-
-
-@dataclass(eq=False, repr=False)
-class ListMarketplaceMachinesRequest(betterproto.Message):
-    listing_id: str = betterproto.string_field(1)
-    limit: int = betterproto.uint32_field(2)
-
-
-@dataclass(eq=False, repr=False)
-class ListMarketplaceMachinesResponse(betterproto.Message):
+class ListProviderMachinesResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
     machines: List["Machine"] = betterproto.message_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class GetProviderEarningsRequest(betterproto.Message):
+    days: int = betterproto.uint32_field(1)
+    """Trailing window in days (today included); defaults to 30."""
+
+
+@dataclass(eq=False, repr=False)
+class ProviderEarnings(betterproto.Message):
+    requests: int = betterproto.int64_field(1)
+    prompt_tokens: int = betterproto.int64_field(2)
+    completion_tokens: int = betterproto.int64_field(3)
+    images: int = betterproto.int64_field(4)
+    earnings_micro_usd: int = betterproto.int64_field(5)
+
+
+@dataclass(eq=False, repr=False)
+class GetProviderEarningsResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    total: "ProviderEarnings" = betterproto.message_field(3)
+    per_machine: Dict[str, "ProviderEarnings"] = betterproto.map_field(
+        4, betterproto.TYPE_STRING, betterproto.TYPE_MESSAGE
+    )
+    per_day: Dict[str, "ProviderEarnings"] = betterproto.map_field(
+        5, betterproto.TYPE_STRING, betterproto.TYPE_MESSAGE
+    )
 
 
 @dataclass(eq=False, repr=False)
@@ -1257,20 +1053,6 @@ class AgentBootstrapConfig(betterproto.Message):
     image_clip_version: int = betterproto.uint32_field(12)
     image_local_cache_enabled: bool = betterproto.bool_field(13)
     telemetry: "AgentTelemetryConfig" = betterproto.message_field(14)
-    billing: "AgentBillingConfig" = betterproto.message_field(15)
-    """
-    Only set for marketplace pools: lets workers on seller machines meter
-     buyer usage and report it to the billing service.
-    """
-
-
-@dataclass(eq=False, repr=False)
-class AgentBillingConfig(betterproto.Message):
-    usage_endpoint: str = betterproto.string_field(1)
-    usage_token: str = betterproto.string_field(2)
-    cost_hook_endpoint: str = betterproto.string_field(3)
-    cost_hook_token: str = betterproto.string_field(4)
-    billable_margin_pct: float = betterproto.double_field(5)
 
 
 @dataclass(eq=False, repr=False)
@@ -1440,20 +1222,11 @@ class AgentWorkerSlot(betterproto.Message):
     container_start_concurrency: int = betterproto.uint32_field(13)
     mode: str = betterproto.string_field(14)
     """
-    Pool mode ("private" / "marketplace" / "external") and the container
-     runtime the worker must run with. Marketplace slots prefer gVisor but can
-     fall back to runc for incompatible GPU families.
+    Pool mode ("private" / "provider" / "external") and the container
+     runtime the worker must run with.
     """
 
     container_runtime: str = betterproto.string_field(15)
-    marketplace_listing_id: str = betterproto.string_field(16)
-    """
-    Marketplace identity of the machine backing this slot. Machines join a
-     (possibly shared) pool through exactly one listing; the worker reports
-     buyer usage against it, so the request itself carries no billing fields.
-    """
-
-    seller_workspace_id: str = betterproto.string_field(17)
     requires_pool_selector: bool = betterproto.bool_field(18)
     priority: int = betterproto.int32_field(19)
     preemptable: bool = betterproto.bool_field(20)
@@ -2228,113 +2001,32 @@ class GatewayServiceStub(SyncServiceStub):
             ScaleByocPoolResponse,
         )(scale_byoc_pool_request)
 
-    def create_marketplace_listing(
-        self, create_marketplace_listing_request: "CreateMarketplaceListingRequest"
-    ) -> "CreateMarketplaceListingResponse":
+    def get_provider_join_command(
+        self, get_provider_join_command_request: "GetProviderJoinCommandRequest"
+    ) -> "GetProviderJoinCommandResponse":
         return self._unary_unary(
-            "/gateway.GatewayService/CreateMarketplaceListing",
-            CreateMarketplaceListingRequest,
-            CreateMarketplaceListingResponse,
-        )(create_marketplace_listing_request)
+            "/gateway.GatewayService/GetProviderJoinCommand",
+            GetProviderJoinCommandRequest,
+            GetProviderJoinCommandResponse,
+        )(get_provider_join_command_request)
 
-    def update_marketplace_listing(
-        self, update_marketplace_listing_request: "UpdateMarketplaceListingRequest"
-    ) -> "UpdateMarketplaceListingResponse":
+    def list_provider_machines(
+        self, list_provider_machines_request: "ListProviderMachinesRequest"
+    ) -> "ListProviderMachinesResponse":
         return self._unary_unary(
-            "/gateway.GatewayService/UpdateMarketplaceListing",
-            UpdateMarketplaceListingRequest,
-            UpdateMarketplaceListingResponse,
-        )(update_marketplace_listing_request)
+            "/gateway.GatewayService/ListProviderMachines",
+            ListProviderMachinesRequest,
+            ListProviderMachinesResponse,
+        )(list_provider_machines_request)
 
-    def delete_marketplace_listing(
-        self, delete_marketplace_listing_request: "DeleteMarketplaceListingRequest"
-    ) -> "DeleteMarketplaceListingResponse":
+    def get_provider_earnings(
+        self, get_provider_earnings_request: "GetProviderEarningsRequest"
+    ) -> "GetProviderEarningsResponse":
         return self._unary_unary(
-            "/gateway.GatewayService/DeleteMarketplaceListing",
-            DeleteMarketplaceListingRequest,
-            DeleteMarketplaceListingResponse,
-        )(delete_marketplace_listing_request)
-
-    def list_marketplace_listings(
-        self, list_marketplace_listings_request: "ListMarketplaceListingsRequest"
-    ) -> "ListMarketplaceListingsResponse":
-        return self._unary_unary(
-            "/gateway.GatewayService/ListMarketplaceListings",
-            ListMarketplaceListingsRequest,
-            ListMarketplaceListingsResponse,
-        )(list_marketplace_listings_request)
-
-    def get_marketplace_join_command(
-        self, get_marketplace_join_command_request: "GetMarketplaceJoinCommandRequest"
-    ) -> "GetMarketplaceJoinCommandResponse":
-        return self._unary_unary(
-            "/gateway.GatewayService/GetMarketplaceJoinCommand",
-            GetMarketplaceJoinCommandRequest,
-            GetMarketplaceJoinCommandResponse,
-        )(get_marketplace_join_command_request)
-
-    def list_marketplace_offers(
-        self, list_marketplace_offers_request: "ListMarketplaceOffersRequest"
-    ) -> "ListMarketplaceOffersResponse":
-        return self._unary_unary(
-            "/gateway.GatewayService/ListMarketplaceOffers",
-            ListMarketplaceOffersRequest,
-            ListMarketplaceOffersResponse,
-        )(list_marketplace_offers_request)
-
-    def get_marketplace_offer(
-        self, get_marketplace_offer_request: "GetMarketplaceOfferRequest"
-    ) -> "GetMarketplaceOfferResponse":
-        return self._unary_unary(
-            "/gateway.GatewayService/GetMarketplaceOffer",
-            GetMarketplaceOfferRequest,
-            GetMarketplaceOfferResponse,
-        )(get_marketplace_offer_request)
-
-    def create_marketplace_rental(
-        self, create_marketplace_rental_request: "CreateMarketplaceRentalRequest"
-    ) -> "CreateMarketplaceRentalResponse":
-        return self._unary_unary(
-            "/gateway.GatewayService/CreateMarketplaceRental",
-            CreateMarketplaceRentalRequest,
-            CreateMarketplaceRentalResponse,
-        )(create_marketplace_rental_request)
-
-    def list_marketplace_rentals(
-        self, list_marketplace_rentals_request: "ListMarketplaceRentalsRequest"
-    ) -> "ListMarketplaceRentalsResponse":
-        return self._unary_unary(
-            "/gateway.GatewayService/ListMarketplaceRentals",
-            ListMarketplaceRentalsRequest,
-            ListMarketplaceRentalsResponse,
-        )(list_marketplace_rentals_request)
-
-    def delete_marketplace_rental(
-        self, delete_marketplace_rental_request: "DeleteMarketplaceRentalRequest"
-    ) -> "DeleteMarketplaceRentalResponse":
-        return self._unary_unary(
-            "/gateway.GatewayService/DeleteMarketplaceRental",
-            DeleteMarketplaceRentalRequest,
-            DeleteMarketplaceRentalResponse,
-        )(delete_marketplace_rental_request)
-
-    def launch_rental_workload(
-        self, launch_rental_workload_request: "LaunchRentalWorkloadRequest"
-    ) -> "LaunchRentalWorkloadResponse":
-        return self._unary_unary(
-            "/gateway.GatewayService/LaunchRentalWorkload",
-            LaunchRentalWorkloadRequest,
-            LaunchRentalWorkloadResponse,
-        )(launch_rental_workload_request)
-
-    def list_marketplace_machines(
-        self, list_marketplace_machines_request: "ListMarketplaceMachinesRequest"
-    ) -> "ListMarketplaceMachinesResponse":
-        return self._unary_unary(
-            "/gateway.GatewayService/ListMarketplaceMachines",
-            ListMarketplaceMachinesRequest,
-            ListMarketplaceMachinesResponse,
-        )(list_marketplace_machines_request)
+            "/gateway.GatewayService/GetProviderEarnings",
+            GetProviderEarningsRequest,
+            GetProviderEarningsResponse,
+        )(get_provider_earnings_request)
 
     def list_machine_containers(
         self, list_machine_containers_request: "ListMachineContainersRequest"

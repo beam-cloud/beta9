@@ -51,17 +51,15 @@ func (c *controller) observeReplica(ctx context.Context, replica *types.Endpoint
 			out = current
 			return err
 		}
-		before := *current
+		before := mustJSON(current)
 		if err := c.syncReplica(ctx, current); err != nil {
 			return err
 		}
 		out = current
-		if before.Status != current.Status || before.Address != current.Address || before.WorkerID != current.WorkerID ||
-			before.Capacity != current.Capacity || before.StatusReason != current.StatusReason || !before.ReadyAt.Equal(current.ReadyAt) ||
-			!before.LastHeartbeat.Equal(current.LastHeartbeat) || !before.EndedAt.Equal(current.EndedAt) {
-			return c.s.repo.SaveReplica(ctx, current)
+		if mustJSON(current) == before {
+			return nil
 		}
-		return nil
+		return c.s.repo.SaveReplica(ctx, current)
 	})
 	return out, err
 }
@@ -88,7 +86,12 @@ func (c *controller) syncReplica(ctx context.Context, replica *types.EndpointRep
 		return c.finishReplica(ctx, replica, c.exitStatus(replica), "container exited")
 	}
 	if state.WorkerId != "" && replica.WorkerID == "" {
-		replica.WorkerID = state.WorkerId
+		replica.WorkerID, replica.MachineID = state.WorkerId, state.MachineId
+		if cfg, ok := c.poolConfig(replica.PoolName); ok && cfg.Mode == types.PoolModeProvider {
+			if worker, err := c.s.workers.GetWorkerById(state.WorkerId); err == nil && worker != nil {
+				replica.ProviderWorkspaceID = worker.WorkspaceId
+			}
+		}
 	}
 
 	switch state.Status {
@@ -152,7 +155,7 @@ func (c *controller) syncReplica(ctx context.Context, replica *types.EndpointRep
 	}
 
 	if replica.HarnessEnabled {
-		if !replica.LastHeartbeat.IsZero() && c.silentFor(replica.LastHeartbeat, now) > c.s.config.ReplicaStaleAfterOrDefault() {
+		if !replica.LastHeartbeat.IsZero() && c.silentFor(replica.LastHeartbeat, now) > c.s.config.ReplicaStaleAfter {
 			return c.stopAndFinish(ctx, replica, types.ReplicaStatusFailed, "harness heartbeat stale")
 		}
 	} else if replica.Address != "" {
@@ -245,7 +248,7 @@ func (c *controller) finishReplica(ctx context.Context, replica *types.EndpointR
 	replica.StatusReason = reason
 	replica.EndedAt = time.Now()
 	if status == types.ReplicaStatusFailed {
-		_ = c.s.repo.SetScheduleBackoff(ctx, replica.EndpointID, targetKey(replica.Role, replica.GPU), c.s.config.Fill.FailureBackoffOrDefault())
+		_ = c.s.repo.SetScheduleBackoff(ctx, replica.EndpointID, targetKey(replica.Role, replica.GPU), c.s.config.Fill.FailureBackoff)
 	}
 	c.s.replicaEvent(replica, "replica."+string(status), reason, nil)
 	replicaLog(replica).Info().Str("status", string(status)).Str("reason", reason).Msg("managed endpoints: replica finished")

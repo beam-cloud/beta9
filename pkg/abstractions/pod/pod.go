@@ -551,7 +551,6 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 		CheckpointTrigger: stubConfig.CheckpointTrigger,
 		Checkpoint:        checkpoint,
 		PoolSelector:      stubConfig.PoolSelector(),
-		AllowMarketplace:  stubConfig.AllowMarketplace,
 		MachineId:         stubConfig.MachineID,
 		Hostname:          stubConfig.Hostname,
 	}
@@ -611,8 +610,8 @@ func (s *GenericPodService) configureMachinePlacement(ctx context.Context, works
 	if selector := stubConfig.PoolSelector(); selector != "" && selector != machine.PoolName {
 		return fmt.Errorf("machine %s does not belong to pool %s", machineID, selector)
 	}
-	stubConfig.Pool = &types.PoolConfig{Name: machine.PoolName, Selector: machine.PoolName}
 	stubConfig.MachineID = machineID
+	stubConfig.Pool = &types.PoolConfig{Name: machine.PoolName, Selector: machine.PoolName}
 	return nil
 }
 

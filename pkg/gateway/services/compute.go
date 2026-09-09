@@ -3,6 +3,8 @@ package gatewayservices
 import (
 	"context"
 
+	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
@@ -24,54 +26,49 @@ func (gws *GatewayService) ScaleBYOCPool(ctx context.Context, in *pb.ScaleBYOCPo
 	return gws.computeService.ScaleBYOCPool(ctx, in)
 }
 
-func (gws *GatewayService) CreateMarketplaceListing(ctx context.Context, in *pb.CreateMarketplaceListingRequest) (*pb.CreateMarketplaceListingResponse, error) {
-	return gws.computeService.CreateMarketplaceListing(ctx, in)
+func (gws *GatewayService) GetProviderJoinCommand(ctx context.Context, in *pb.GetProviderJoinCommandRequest) (*pb.GetProviderJoinCommandResponse, error) {
+	return gws.computeService.GetProviderJoinCommand(ctx, in)
 }
 
-func (gws *GatewayService) UpdateMarketplaceListing(ctx context.Context, in *pb.UpdateMarketplaceListingRequest) (*pb.UpdateMarketplaceListingResponse, error) {
-	return gws.computeService.UpdateMarketplaceListing(ctx, in)
+func (gws *GatewayService) ListProviderMachines(ctx context.Context, in *pb.ListProviderMachinesRequest) (*pb.ListProviderMachinesResponse, error) {
+	return gws.computeService.ListProviderMachines(ctx, in)
 }
 
-func (gws *GatewayService) DeleteMarketplaceListing(ctx context.Context, in *pb.DeleteMarketplaceListingRequest) (*pb.DeleteMarketplaceListingResponse, error) {
-	return gws.computeService.DeleteMarketplaceListing(ctx, in)
+func (gws *GatewayService) GetProviderEarnings(ctx context.Context, in *pb.GetProviderEarningsRequest) (*pb.GetProviderEarningsResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+	if authInfo == nil || authInfo.Workspace == nil {
+		return &pb.GetProviderEarningsResponse{Ok: false, ErrMsg: "missing workspace auth"}, nil
+	}
+	if gws.managedEndpointRepo == nil {
+		return &pb.GetProviderEarningsResponse{Ok: false, ErrMsg: "provider earnings are unavailable"}, nil
+	}
+	days := int(in.GetDays())
+	if days <= 0 {
+		days = 30
+	}
+	report, err := gws.managedEndpointRepo.GetProviderEarnings(ctx, authInfo.Workspace.ExternalId, days)
+	if err != nil {
+		return &pb.GetProviderEarningsResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+	toProto := func(m map[string]types.ProviderEarnings) map[string]*pb.ProviderEarnings {
+		out := make(map[string]*pb.ProviderEarnings, len(m))
+		for k, v := range m {
+			out[k] = providerEarningsToProto(v)
+		}
+		return out
+	}
+	return &pb.GetProviderEarningsResponse{
+		Ok: true, Total: providerEarningsToProto(report.Total),
+		PerMachine: toProto(report.PerMachine), PerDay: toProto(report.PerDay),
+	}, nil
 }
 
-func (gws *GatewayService) ListMarketplaceListings(ctx context.Context, in *pb.ListMarketplaceListingsRequest) (*pb.ListMarketplaceListingsResponse, error) {
-	return gws.computeService.ListMarketplaceListings(ctx, in)
+func providerEarningsToProto(e types.ProviderEarnings) *pb.ProviderEarnings {
+	return &pb.ProviderEarnings{
+		Requests: e.Requests, PromptTokens: e.PromptTokens, CompletionTokens: e.CompletionTokens,
+		Images: e.Images, EarningsMicroUsd: e.EarningsMicroUSD,
+	}
 }
-
-func (gws *GatewayService) GetMarketplaceJoinCommand(ctx context.Context, in *pb.GetMarketplaceJoinCommandRequest) (*pb.GetMarketplaceJoinCommandResponse, error) {
-	return gws.computeService.GetMarketplaceJoinCommand(ctx, in)
-}
-
-func (gws *GatewayService) ListMarketplaceOffers(ctx context.Context, in *pb.ListMarketplaceOffersRequest) (*pb.ListMarketplaceOffersResponse, error) {
-	return gws.computeService.ListMarketplaceOffers(ctx, in)
-}
-
-func (gws *GatewayService) GetMarketplaceOffer(ctx context.Context, in *pb.GetMarketplaceOfferRequest) (*pb.GetMarketplaceOfferResponse, error) {
-	return gws.computeService.GetMarketplaceOffer(ctx, in)
-}
-
-func (gws *GatewayService) ListMarketplaceMachines(ctx context.Context, in *pb.ListMarketplaceMachinesRequest) (*pb.ListMarketplaceMachinesResponse, error) {
-	return gws.computeService.ListMarketplaceMachines(ctx, in)
-}
-
-func (gws *GatewayService) CreateMarketplaceRental(ctx context.Context, in *pb.CreateMarketplaceRentalRequest) (*pb.CreateMarketplaceRentalResponse, error) {
-	return gws.computeService.CreateMarketplaceRental(ctx, in)
-}
-
-func (gws *GatewayService) ListMarketplaceRentals(ctx context.Context, in *pb.ListMarketplaceRentalsRequest) (*pb.ListMarketplaceRentalsResponse, error) {
-	return gws.computeService.ListMarketplaceRentals(ctx, in)
-}
-
-func (gws *GatewayService) DeleteMarketplaceRental(ctx context.Context, in *pb.DeleteMarketplaceRentalRequest) (*pb.DeleteMarketplaceRentalResponse, error) {
-	return gws.computeService.DeleteMarketplaceRental(ctx, in)
-}
-
-func (gws *GatewayService) LaunchRentalWorkload(ctx context.Context, in *pb.LaunchRentalWorkloadRequest) (*pb.LaunchRentalWorkloadResponse, error) {
-	return gws.computeService.LaunchRentalWorkload(ctx, in)
-}
-
 func (gws *GatewayService) ListMachineContainers(ctx context.Context, in *pb.ListMachineContainersRequest) (*pb.ListMachineContainersResponse, error) {
 	return gws.computeService.ListMachineContainers(ctx, in)
 }

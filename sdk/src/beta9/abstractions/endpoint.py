@@ -156,7 +156,6 @@ class Endpoint(RunnerAbstraction):
         inputs: Optional[Schema] = None,
         outputs: Optional[Schema] = None,
         pool: Optional[Union[str, Pool]] = None,
-        allow_marketplace: bool = False,
     ):
         super().__init__(
             cpu=cpu,
@@ -186,7 +185,6 @@ class Endpoint(RunnerAbstraction):
             inputs=inputs,
             outputs=outputs,
             pool=pool,
-            allow_marketplace=allow_marketplace,
         )
 
         self._endpoint_stub: Optional[EndpointServiceStub] = None
@@ -324,7 +322,6 @@ class ASGI(Endpoint):
         callback_url: Optional[str] = None,
         checkpoint_enabled: bool = False,
         pool: Optional[Union[str, Pool]] = None,
-        allow_marketplace: bool = False,
     ):
         self.concurrent_requests = concurrent_requests
         super().__init__(
@@ -350,7 +347,6 @@ class ASGI(Endpoint):
             checkpoint_enabled=checkpoint_enabled,
             app=app,
             pool=pool,
-            allow_marketplace=allow_marketplace,
         )
 
         self.is_asgi = True
@@ -466,7 +462,6 @@ class RealtimeASGI(ASGI):
         callback_url: Optional[str] = None,
         checkpoint_enabled: bool = False,
         pool: Optional[Union[str, Pool]] = None,
-        allow_marketplace: bool = False,
     ):
         super().__init__(
             cpu=cpu,
@@ -491,7 +486,6 @@ class RealtimeASGI(ASGI):
             concurrent_requests=concurrent_requests,
             checkpoint_enabled=checkpoint_enabled,
             pool=pool,
-            allow_marketplace=allow_marketplace,
         )
         self.is_websocket = True
 

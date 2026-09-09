@@ -16,26 +16,36 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newTestRedis(t *testing.T) *common.RedisClient {
+func newTestState(t *testing.T) *State {
 	t.Helper()
 	server, err := miniredis.Run()
 	require.NoError(t, err)
 	t.Cleanup(server.Close)
 	rdb, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{server.Addr()}, Mode: types.RedisModeSingle})
 	require.NoError(t, err)
-	return rdb
+	return NewState(rdb, "pod:workspace:stub")
+}
+
+func inspect(t *testing.T, method, path, body string, headers map[string]string) (*RequestInfo, *http.Request) {
+	t.Helper()
+	var reader io.Reader
+	if body != "" {
+		reader = strings.NewReader(body)
+	}
+	req := httptest.NewRequest(method, path, reader)
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	info, err := Inspect(req, path, InspectOptions{DefaultModel: "configured"})
+	require.NoError(t, err)
+	return info, req
 }
 
 func TestInspectParsesOpenAIChatAndRestoresBody(t *testing.T) {
-	body := `{"model":"zai-org/GLM-4.5-Air-FP8","user":"session-1","stream":true,"max_tokens":64,"messages":[{"role":"system","content":"You are terse."},{"role":"user","content":"Explain prefix caching for LLM serving."}]}`
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
-
-	path, ok := NormalizePath(req.URL.Path)
-	require.True(t, ok)
-	info, err := Inspect(req, path, InspectOptions{DefaultModel: "fallback-model"})
-	require.NoError(t, err)
-
+	body := `{"model":"zai-org/GLM-4.5-Air-FP8","user":"session-1","stream":true,"max_tokens":64,"messages":[{"role":"system","content":"You are terse."},{"role":"user","content":[{"type":"text","text":"Explain prefix caching for LLM serving."}]}]}`
+	info, req := inspect(t, http.MethodPost, "/v1/chat/completions", body, map[string]string{"X-Request-ID": "req-1"})
 	require.Equal(t, "zai-org/GLM-4.5-Air-FP8", info.Model)
+	require.Equal(t, "req-1", info.RequestID)
 	require.True(t, info.Stream)
 	require.EqualValues(t, 64, info.OutputTokens)
 	require.Equal(t, "session-1", info.SessionKey)
@@ -43,7 +53,7 @@ func TestInspectParsesOpenAIChatAndRestoresBody(t *testing.T) {
 	require.Equal(t, info.SessionHash, info.AffinityKey)
 	require.NotEmpty(t, info.PrefixHash)
 	require.NotEmpty(t, info.PrefixBlocks)
-	require.Greater(t, info.PromptTokens, int64(0))
+	require.EqualValues(t, estimateTokens("You are terse.\nExplain prefix caching for LLM serving."), info.PromptTokens)
 	require.Equal(t, info.PromptTokens+info.OutputTokens, info.TokenPressure)
 
 	restored, err := io.ReadAll(req.Body)
@@ -51,183 +61,96 @@ func TestInspectParsesOpenAIChatAndRestoresBody(t *testing.T) {
 	require.Equal(t, body, string(restored))
 }
 
-func TestInspectFallsBackToDefaultModelAndHeaderSession(t *testing.T) {
-	req := httptest.NewRequest(http.MethodPost, "/v1/completions", strings.NewReader(`{"prompt":"hello"}`))
-	req.Header.Set("X-Beam-LLM-Session", "thread-123")
-
-	info, err := Inspect(req, "/v1/completions", InspectOptions{DefaultModel: "configured"})
-	require.NoError(t, err)
+func TestInspectFallbacks(t *testing.T) {
+	info, _ := inspect(t, http.MethodPost, "/v1/completions", `{"prompt":"hello"}`, map[string]string{"X-Beam-LLM-Session": "thread-123"})
 	require.Equal(t, "configured", info.Model)
 	require.Equal(t, "thread-123", info.SessionKey)
-	require.EqualValues(t, DefaultOutputTokens, info.OutputTokens)
-}
+	require.EqualValues(t, defaultOutputTokens, info.OutputTokens)
 
-func TestInspectGetRequestUsesMinimalPressure(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
-	info, err := Inspect(req, "/v1/models", InspectOptions{})
-	require.NoError(t, err)
+	info, _ = inspect(t, http.MethodGet, "/v1/models", "", nil)
 	require.EqualValues(t, 1, info.PromptTokens)
-	require.EqualValues(t, 1+DefaultOutputTokens, info.TokenPressure)
-}
+	require.EqualValues(t, 1+defaultOutputTokens, info.TokenPressure)
 
-func TestNormalizePath(t *testing.T) {
-	cases := map[string]struct {
-		path string
-		ok   bool
-	}{
-		"/v1/chat/completions":                        {"/v1/chat/completions", true},
-		"/pod/public/stub-1/8000/v1/chat/completions": {"/v1/chat/completions", true},
-		"v1/embeddings/":                              {"/v1/embeddings", true},
-		"/v1/models":                                  {"/v1/models", true},
-		"/health":                                     {"/health", false},
-		"":                                            {"/", false},
-	}
-	for input, want := range cases {
-		got, ok := NormalizePath(input)
-		require.Equal(t, want.ok, ok, input)
-		require.Equal(t, want.path, got, input)
-	}
-}
-
-func TestReadAndRestoreBodyReportsOverflow(t *testing.T) {
-	payload := strings.Repeat("x", 100)
-	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(payload))
-	head, overflow, err := ReadAndRestoreBody(req, 10)
-	require.NoError(t, err)
-	require.True(t, overflow)
-	require.Len(t, head, 10)
-
+	// Oversized bodies are hashed from the inspected head and fully restored.
+	big := strings.Repeat("x", int(maxInspectBytes)+100)
+	info, req := inspect(t, http.MethodPost, "/v1/completions", big, nil)
+	require.EqualValues(t, maxInspectBytes/4, info.PromptTokens)
+	require.Equal(t, info.PrefixHash, info.AffinityKey)
 	restored, err := io.ReadAll(req.Body)
 	require.NoError(t, err)
-	require.Equal(t, payload, string(restored))
+	require.Equal(t, big, string(restored))
 }
 
 func TestPrefixBlockHashesShareLeadingBlocks(t *testing.T) {
 	shared := strings.Repeat("shared system prompt and retrieval context ", 30)
-	a := PrefixBlockHashes("model", shared+"first question")
-	b := PrefixBlockHashes("model", shared+"second question")
+	a := prefixBlockHashes("model", shared+"first question")
+	b := prefixBlockHashes("model", shared+"second question")
 	require.NotEmpty(t, a)
-	require.NotEmpty(t, b)
+	require.NotEqual(t, a, b)
+	require.Equal(t, a[0], b[0], "expected shared prefix blocks")
+	require.NotEqual(t, prefixHash("model", shared+"first question"), prefixHash("model", shared+"second question"))
+}
 
-	common := 0
-	for i := 0; i < len(a) && i < len(b); i++ {
-		if a[i] == b[i] {
-			common++
-		}
+func TestSelectAffinityAndLoad(t *testing.T) {
+	session := &RequestInfo{AffinityKey: "session", SessionHash: "session", PrefixHash: "session"}
+	plain := &RequestInfo{Model: "model", Path: "/v1/chat/completions"}
+	busy := Pressure{ActiveStreams: 1, TokenPressure: 512}
+	overloaded := Pressure{ActiveStreams: 10, TokenPressure: 4096}
+	cases := []struct {
+		name       string
+		info       *RequestInfo
+		candidates []Candidate
+		affinity   Affinity
+		wantID     string
+		wantReason string
+	}{
+		{"exact prefix affinity when balanced", &RequestInfo{AffinityKey: "affinity", PrefixHash: "affinity"}, []Candidate{{ID: "a"}, {ID: "b"}}, Affinity{ExactID: "b"}, "b", "prefix_affinity"},
+		{"session affinity", session, []Candidate{{ID: "a"}, {ID: "b"}}, Affinity{ExactID: "a", ExactIsSession: true}, "a", "session_affinity"},
+		{"spills busy affinity target", session, []Candidate{{ID: "a", Pressure: busy}, {ID: "b"}}, Affinity{ExactID: "a", ExactIsSession: true}, "b", "least_pressure"},
+		{"ignores affinity when imbalanced", session, []Candidate{{ID: "a", Pressure: overloaded}, {ID: "b"}}, Affinity{ExactID: "a", ExactIsSession: true}, "b", "load_imbalance"},
+		{"prefix block affinity", plain, []Candidate{{ID: "a"}, {ID: "b"}}, Affinity{PrefixMatches: map[string]int{"b": 3}}, "b", "prefix_block_affinity"},
+		{"engine metrics pressure", plain, []Candidate{
+			{ID: "a", Engine: EngineMetrics{WaitingRequests: 3, TTFTMs: 700}},
+			{ID: "b", Engine: EngineMetrics{DecodeTokensPerSecond: 300, PrefixCacheHitMilli: 700}},
+		}, Affinity{}, "b", "power_of_two_load"},
 	}
-	require.Greater(t, common, 0, "expected shared prefix blocks")
-	require.NotEqual(t, PrefixHash("model", shared+"first question"), PrefixHash("model", shared+"second question"))
-}
-
-func TestSelectPrefersExactAffinityWhenBalanced(t *testing.T) {
-	var selector Selector
-	info := &RequestInfo{AffinityKey: "affinity", PrefixHash: "affinity"}
-	candidates := []Candidate{{ID: "container-a"}, {ID: "container-b"}}
-
-	selection, ok := selector.Select(candidates, Affinity{ExactID: "container-b"}, info)
-	require.True(t, ok)
-	require.Equal(t, "container-b", selection.Candidate.ID)
-	require.Equal(t, "prefix_affinity", selection.Reason)
-	require.Equal(t, "prefix_affinity", info.RouteReason)
-	require.Equal(t, 2, info.CandidateCount)
-}
-
-func TestSelectSessionAffinityReason(t *testing.T) {
-	var selector Selector
-	info := &RequestInfo{AffinityKey: "session", SessionHash: "session"}
-	selection, ok := selector.Select([]Candidate{{ID: "a"}, {ID: "b"}}, Affinity{ExactID: "a", ExactIsSession: true}, info)
-	require.True(t, ok)
-	require.Equal(t, "a", selection.Candidate.ID)
-	require.Equal(t, "session_affinity", selection.Reason)
-}
-
-func TestSelectSpillsBusyAffinityTarget(t *testing.T) {
-	var selector Selector
-	info := &RequestInfo{AffinityKey: "session", SessionHash: "session", PrefixHash: "session", PromptTokens: 128, OutputTokens: 128}
-	candidates := []Candidate{
-		{ID: "container-a", Pressure: Pressure{ActiveStreams: 1, TokenPressure: 512}},
-		{ID: "container-b"},
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var selector Selector
+			selection, ok := selector.Select(tc.candidates, tc.affinity, tc.info)
+			require.True(t, ok)
+			require.Equal(t, tc.wantID, selection.Candidate.ID)
+			require.Equal(t, tc.wantReason, selection.Reason)
+			require.Equal(t, tc.wantReason, tc.info.RouteReason)
+			require.Equal(t, tc.affinity.PrefixMatches[tc.wantID], tc.info.PrefixCacheMatches)
+		})
 	}
-	selection, ok := selector.Select(candidates, Affinity{ExactID: "container-a", ExactIsSession: true}, info)
-	require.True(t, ok)
-	require.Equal(t, "container-b", selection.Candidate.ID)
-	require.Equal(t, "least_pressure", selection.Reason)
 }
 
-func TestSelectIgnoresAffinityWhenLoadIsImbalanced(t *testing.T) {
-	var selector Selector
-	info := &RequestInfo{AffinityKey: "session", SessionHash: "session", PrefixHash: "session"}
-	candidates := []Candidate{
-		{ID: "container-a", Pressure: Pressure{ActiveStreams: 10, TokenPressure: 4096}},
-		{ID: "container-b"},
-	}
-	selection, ok := selector.Select(candidates, Affinity{ExactID: "container-a", ExactIsSession: true}, info)
-	require.True(t, ok)
-	require.Equal(t, "container-b", selection.Candidate.ID)
-	require.Equal(t, "load_imbalance", selection.Reason)
-}
-
-func TestSelectUsesPrefixBlockAffinity(t *testing.T) {
+func TestSelectSpreadTieBreakAndEdgeCases(t *testing.T) {
 	var selector Selector
 	info := &RequestInfo{Model: "model", Path: "/v1/chat/completions"}
-	candidates := []Candidate{{ID: "container-a"}, {ID: "container-b"}}
-	selection, ok := selector.Select(candidates, Affinity{PrefixMatches: map[string]int{"container-b": 3}}, info)
-	require.True(t, ok)
-	require.Equal(t, "container-b", selection.Candidate.ID)
-	require.Equal(t, "prefix_block_affinity", selection.Reason)
-	require.Equal(t, 3, selection.PrefixMatches)
-}
-
-func findSpreadPreference(t *testing.T, info *RequestInfo, prefix string) {
-	t.Helper()
-	for i := 0; i < 1000; i++ {
-		info.AffinityKey = prefix + strconv.Itoa(i)
+	for i := 0; ; i++ {
+		require.Less(t, i, 1000, "no prefix prefers container-b")
+		info.AffinityKey = "prefix-" + strconv.Itoa(i)
 		info.PrefixHash = info.AffinityKey
 		if spreadScore("container-b", info) < spreadScore("container-a", info) {
-			return
+			break
 		}
 	}
-	t.Fatal("test setup did not find a prefix that prefers container-b")
-}
-
-func TestSelectUsesSpreadTieBreak(t *testing.T) {
-	var selector Selector
-	info := &RequestInfo{Model: "model", Path: "/v1/chat/completions"}
-	findSpreadPreference(t, info, "prefix-spread-")
 
 	selection, ok := selector.Select([]Candidate{{ID: "container-a"}, {ID: "container-b"}}, Affinity{}, info)
 	require.True(t, ok)
 	require.Equal(t, "container-b", selection.Candidate.ID)
 	require.Equal(t, "least_pressure", selection.Reason)
-}
 
-func TestSelectConnectionPressureBeatsSpread(t *testing.T) {
-	var selector Selector
-	info := &RequestInfo{Model: "model", Path: "/v1/chat/completions"}
-	findSpreadPreference(t, info, "prefix-pressure-")
-
-	selection, ok := selector.Select([]Candidate{{ID: "container-a"}, {ID: "container-b", Connections: 1}}, Affinity{}, info)
+	selection, ok = selector.Select([]Candidate{{ID: "container-a"}, {ID: "container-b", Connections: 1}}, Affinity{}, info)
 	require.True(t, ok)
 	require.Equal(t, "container-a", selection.Candidate.ID)
-}
 
-func TestSelectUsesEngineMetricsPressure(t *testing.T) {
-	var selector Selector
-	candidates := []Candidate{
-		{ID: "container-a", Engine: EngineMetrics{WaitingRequests: 3, TTFTMs: 700}},
-		{ID: "container-b", Engine: EngineMetrics{DecodeTokensPerSecond: 300, PrefixCacheHitMilli: 700}},
-	}
-	selection, ok := selector.Select(candidates, Affinity{}, &RequestInfo{Model: "model", Path: "/v1/chat/completions"})
-	require.True(t, ok)
-	require.Equal(t, "container-b", selection.Candidate.ID)
-}
-
-func TestSelectEmptyAndSingle(t *testing.T) {
-	var selector Selector
-	_, ok := selector.Select(nil, Affinity{}, nil)
+	_, ok = selector.Select(nil, Affinity{}, nil)
 	require.False(t, ok)
-
-	selection, ok := selector.Select([]Candidate{{ID: "only", Payload: 42}}, Affinity{}, nil)
+	selection, ok = selector.Select([]Candidate{{ID: "only", Payload: 42}}, Affinity{}, nil)
 	require.True(t, ok)
 	require.Equal(t, "only", selection.Candidate.ID)
 	require.Equal(t, 42, selection.Candidate.Payload)
@@ -236,18 +159,12 @@ func TestSelectEmptyAndSingle(t *testing.T) {
 func TestEngineMetricsFromPrometheusUsesVLLMDeltas(t *testing.T) {
 	now := time.Unix(100, 0)
 	previous := EngineMetrics{
-		GenerationTokensTotal:   100,
-		PromptTokensTotal:       50,
-		PrefixCacheHitsTotal:    25,
-		PrefixCacheQueriesTotal: 50,
-		TTFTSumSeconds:          1.0,
-		TTFTCount:               4,
-		TPOTSumSeconds:          0.4,
-		TPOTCount:               10,
-		UpdatedAtUnixMs:         now.Add(-5 * time.Second).UnixMilli(),
+		GenerationTokensTotal: 100, PromptTokensTotal: 50,
+		PrefixCacheHitsTotal: 25, PrefixCacheQueriesTotal: 50,
+		TTFTSumSeconds: 1.0, TTFTCount: 4, TPOTSumSeconds: 0.4, TPOTCount: 10,
+		UpdatedAtUnixMs: now.Add(-5 * time.Second).UnixMilli(),
 	}
-	body := `
-	# HELP vllm:num_requests_running running
+	body := `# HELP vllm:num_requests_running running
 	vllm:num_requests_running{model_name="qwen"} 2
 	vllm:num_requests_waiting{model_name="qwen"} 1
 	vllm:kv_cache_usage_perc{model_name="qwen"} 0.92
@@ -260,8 +177,7 @@ vllm:time_to_first_token_seconds_count{model_name="qwen"} 6
 vllm:time_per_output_token_seconds_sum{model_name="qwen"} 0.7
 vllm:time_per_output_token_seconds_count{model_name="qwen"} 20
 `
-
-	got := EngineMetricsFromPrometheus([]byte(body), previous, now)
+	got := engineMetricsFromPrometheus([]byte(body), previous, now)
 	require.EqualValues(t, 2, got.RunningRequests)
 	require.EqualValues(t, 1, got.WaitingRequests)
 	require.EqualValues(t, 920, got.GPUCacheUsageMilli)
@@ -270,31 +186,34 @@ vllm:time_per_output_token_seconds_count{model_name="qwen"} 20
 	require.EqualValues(t, 30, got.TPOTMs)
 	require.EqualValues(t, 30, got.DecodeTokensPerSecond)
 	require.EqualValues(t, 12, got.PromptTokensPerSecond)
-	require.True(t, got.HasData())
-	require.False(t, got.Stale(now))
-	require.True(t, got.Stale(now.Add(MetricsStaleAfter+time.Second)))
+	require.True(t, got.hasData())
+	require.False(t, EngineMetrics{UpdatedAtUnixMs: 1}.hasData())
 }
 
 func TestStatePressureLifecycle(t *testing.T) {
-	state := NewState(newTestRedis(t), "pod:workspace:stub")
+	state := newTestState(t)
 	ctx := context.Background()
 
 	require.NoError(t, state.AddPressure(ctx, "container-a", 1, 150))
-	total, err := state.Pressure(ctx, PressureTargetTotal)
-	require.NoError(t, err)
-	require.Equal(t, Pressure{ActiveStreams: 1, TokenPressure: 150}, total)
-	replica, err := state.Pressure(ctx, "container-a")
-	require.NoError(t, err)
-	require.Equal(t, Pressure{ActiveStreams: 1, TokenPressure: 150}, replica)
+	for _, target := range []string{PressureTargetTotal, "container-a"} {
+		got, err := state.Pressure(ctx, target)
+		require.NoError(t, err)
+		require.Equal(t, Pressure{ActiveStreams: 1, TokenPressure: 150}, got)
+	}
 
 	require.NoError(t, state.AddPressure(ctx, "container-a", -1, -150))
-	total, err = state.Pressure(ctx, PressureTargetTotal)
+	total, err := state.Pressure(ctx, PressureTargetTotal)
 	require.NoError(t, err)
 	require.Equal(t, Pressure{}, total)
+
+	var nilState *State
+	require.NoError(t, nilState.AddPressure(ctx, "x", 1, 1))
+	require.Empty(t, nilState.Affinity(ctx, &RequestInfo{AffinityKey: "k"}).ExactID)
+	nilState.RecordAffinity(ctx, &RequestInfo{AffinityKey: "k"}, "x")
 }
 
 func TestStateAffinityRoundTrip(t *testing.T) {
-	state := NewState(newTestRedis(t), "pod:workspace:stub")
+	state := newTestState(t)
 	ctx := context.Background()
 
 	shared := strings.Repeat("shared system prompt and retrieval context ", 30)
@@ -319,50 +238,14 @@ func TestStateAffinityRoundTrip(t *testing.T) {
 	require.True(t, got.ExactIsSession)
 }
 
-func TestStateEngineMetricsRoundTrip(t *testing.T) {
-	state := NewState(newTestRedis(t), "pod:workspace:stub")
-	ctx := context.Background()
-	want := EngineMetrics{
-		RunningRequests:         2,
-		WaitingRequests:         1,
-		TTFTMs:                  180,
-		TPOTMs:                  25,
-		DecodeTokensPerSecond:   220,
-		GPUCacheUsageMilli:      700,
-		PrefixCacheHitMilli:     850,
-		GenerationTokensTotal:   1234,
-		PrefixCacheHitsTotal:    700,
-		PrefixCacheQueriesTotal: 1000,
-		TTFTSumSeconds:          3.5,
-		TTFTCount:               10,
-		UpdatedAtUnixMs:         time.Now().UnixMilli(),
-	}
-	require.NoError(t, state.WriteEngineMetrics(ctx, "container-a", want))
-	got, err := state.EngineMetrics(ctx, "container-a")
-	require.NoError(t, err)
-	require.Equal(t, want, got)
-}
-
-func TestNilStateIsNoop(t *testing.T) {
-	var state *State
-	ctx := context.Background()
-	require.NoError(t, state.AddPressure(ctx, "x", 1, 1))
-	p, err := state.Pressure(ctx, "x")
-	require.NoError(t, err)
-	require.Equal(t, Pressure{}, p)
-	require.Empty(t, state.Affinity(ctx, &RequestInfo{AffinityKey: "k"}).ExactID)
-}
-
-func TestReadinessPathsDedupesMetricsPath(t *testing.T) {
-	paths := ReadinessPaths("v1/models")
-	require.Equal(t, []string{"/v1/models", "/health", "/server_info", "/get_model_info"}, paths)
-	paths = ReadinessPaths("/metrics")
-	require.Equal(t, "/metrics", paths[len(paths)-1])
+func TestProbes(t *testing.T) {
+	defaults := []string{"/v1/models", "/health", "/server_info", "/get_model_info"}
+	require.Equal(t, defaults, ReadinessPaths("v1/models"))
+	require.Equal(t, defaults, ReadinessPaths(" "))
+	require.Equal(t, append(defaults, "/metrics"), ReadinessPaths("/metrics"))
 	require.Equal(t, "/metrics", NormalizeMetricsPath(""))
 	require.Equal(t, "/custom", NormalizeMetricsPath("custom"))
-}
 
-func TestCheckReadyAndFetchEngineMetrics(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/health":
@@ -374,12 +257,17 @@ func TestCheckReadyAndFetchEngineMetrics(t *testing.T) {
 		}
 	}))
 	defer server.Close()
+	ctx := context.Background()
 
-	require.True(t, CheckReady(context.Background(), server.Client(), server.URL, ReadinessPaths(""), time.Second))
-	require.False(t, CheckReady(context.Background(), server.Client(), server.URL, []string{"/missing"}, time.Second))
+	require.True(t, CheckReady(ctx, server.Client(), server.URL, ReadinessPaths(""), time.Second))
+	require.False(t, CheckReady(ctx, server.Client(), server.URL, []string{"/missing"}, time.Second))
 
-	metrics, ok, err := FetchEngineMetrics(context.Background(), server.Client(), server.URL+"/metrics", EngineMetrics{})
+	metrics, ok, err := FetchEngineMetrics(ctx, server.Client(), server.URL+"/metrics", EngineMetrics{})
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.EqualValues(t, 4, metrics.RunningRequests)
+
+	_, ok, err = FetchEngineMetrics(ctx, server.Client(), server.URL+"/missing", EngineMetrics{})
+	require.NoError(t, err)
+	require.False(t, ok)
 }

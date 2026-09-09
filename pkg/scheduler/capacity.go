@@ -3,7 +3,7 @@ package scheduler
 import "github.com/beam-cloud/beta9/pkg/types"
 
 // GetServerlessGPUAvailability reports live GPU capacity that a selector-less
-// serverless request can actually use. Private and marketplace workers must not
+// serverless request can actually use. Private and provider workers must not
 // leak into the global availability shown to other workspaces.
 func (s *Scheduler) GetServerlessGPUAvailability() (map[string]bool, error) {
 	availability := emptyGPUAvailability()
@@ -28,7 +28,7 @@ func (s *Scheduler) serverlessGPUAvailability(workers []*types.Worker) map[strin
 		if !ok || pool.Controller == nil || pool.Controller.RequiresPoolSelector() || worker.RequiresPoolSelector {
 			continue
 		}
-		if pool.Config.Mode == types.PoolModeMarketplace || pool.Config.Mode == types.PoolModePrivate {
+		if pool.Config.Mode == types.PoolModeProvider || pool.Config.Mode == types.PoolModePrivate {
 			continue
 		}
 		if worker.WorkspaceId != "" && !worker.ControlPlaneManaged {
@@ -52,8 +52,9 @@ func emptyGPUAvailability() map[string]bool {
 // HasManagedPoolForGPU reports whether any registered pool that is usable
 // without a pool selector could serve the given GPU type. The check is
 // pool-config-based rather than live-worker-based, so scale-to-zero pools
-// still count as supported. gpuType may be types.GPU_ANY.
-func (s *Scheduler) HasManagedPoolForGPU(gpuType string, allowMarketplace bool) bool {
+// still count as supported. gpuType may be types.GPU_ANY. Provider pools never
+// count: they only host managed endpoint replicas.
+func (s *Scheduler) HasManagedPoolForGPU(gpuType string) bool {
 	if s == nil || s.workerPoolManager == nil {
 		return false
 	}
@@ -62,7 +63,7 @@ func (s *Scheduler) HasManagedPoolForGPU(gpuType string, allowMarketplace bool) 
 		if pool.Controller == nil || pool.Controller.RequiresPoolSelector() {
 			continue
 		}
-		if pool.Controller.Mode() == types.PoolModeMarketplace && !allowMarketplace {
+		if pool.Controller.Mode() == types.PoolModeProvider {
 			continue
 		}
 		return true

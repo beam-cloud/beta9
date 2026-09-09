@@ -125,34 +125,26 @@ var (
 )
 
 var (
-	computePoolState                     string = "compute:{%s}:pool:%s"
-	computePoolStateLock                 string = "compute:{%s}:pool:%s:lock"
-	computePoolIndex                     string = "compute:{%s}:pools"
-	computePoolWorkspaceIndex            string = "compute:workspaces"
-	computeManagedPoolState              string = "compute:managed:{%s}:pool:%s:state"
-	computeManagedPoolStateLock          string = "compute:managed:{%s}:pool:%s:lock"
-	computeManagedPoolIndex              string = "compute:managed:{%s}:pools"
-	computeManagedPoolUpdates            string = "compute:managed_pools:updates"
-	computeJoinToken                     string = "compute:join:%s"
-	computeAgentToken                    string = "compute:agent:token:%s"
-	computeAgentMachine                  string = "compute:{%s}:pool:%s:machine:%s"
-	computeAgentMachinePool              string = "compute:{%s}:machine:%s:pool"
-	computeAgentMachineIndex             string = "compute:{%s}:pool:%s:machines"
-	computeMachineSSHState               string = "compute:{%s}:pool:%s:machine:%s:ssh"
-	computeMachineSSHStateLock           string = "compute:{%s}:pool:%s:machine:%s:ssh:lock"
-	computeAgentSlot                     string = "compute:{%s}:pool:%s:machine:%s:worker:%s"
-	computeAgentSlotIndex                string = "compute:{%s}:pool:%s:machine:%s:workers"
-	computeMarketplaceListing            string = "compute:marketplace:{%s}:listing:%s"
-	computeMarketplaceIndex              string = "compute:marketplace:{%s}:listings"
-	computeMarketplaceGlobal             string = "compute:marketplace:listings"
-	computeMarketplaceRental             string = "compute:marketplace:rental:{%s}:%s"
-	computeMarketplaceRentalIndex        string = "compute:marketplace:rental:{%s}:index"
-	computeMarketplaceRentalMachineIndex string = "compute:marketplace:rental:machine:%s"
-	computeMarketplaceRentalMachineLock  string = "compute:marketplace:rental:machine:%s:lock"
-	computeMarketplaceRentalGlobal       string = "compute:marketplace:rentals"
-	computeFailoverDemand                string = "compute:failover:demand:%s"
-	computeFailoverDemandIndex           string = "compute:failover:demand"
-	computeOnDemandSpend                 string = "compute:ondemand:spend:%s"
+	computePoolState            string = "compute:{%s}:pool:%s"
+	computePoolStateLock        string = "compute:{%s}:pool:%s:lock"
+	computePoolIndex            string = "compute:{%s}:pools"
+	computePoolWorkspaceIndex   string = "compute:workspaces"
+	computeManagedPoolState     string = "compute:managed:{%s}:pool:%s:state"
+	computeManagedPoolStateLock string = "compute:managed:{%s}:pool:%s:lock"
+	computeManagedPoolIndex     string = "compute:managed:{%s}:pools"
+	computeManagedPoolUpdates   string = "compute:managed_pools:updates"
+	computeJoinToken            string = "compute:join:%s"
+	computeAgentToken           string = "compute:agent:token:%s"
+	computeAgentMachine         string = "compute:{%s}:pool:%s:machine:%s"
+	computeAgentMachinePool     string = "compute:{%s}:machine:%s:pool"
+	computeAgentMachineIndex    string = "compute:{%s}:pool:%s:machines"
+	computeMachineSSHState      string = "compute:{%s}:pool:%s:machine:%s:ssh"
+	computeMachineSSHStateLock  string = "compute:{%s}:pool:%s:machine:%s:ssh:lock"
+	computeAgentSlot            string = "compute:{%s}:pool:%s:machine:%s:worker:%s"
+	computeAgentSlotIndex       string = "compute:{%s}:pool:%s:machine:%s:workers"
+	computeFailoverDemand       string = "compute:failover:demand:%s"
+	computeFailoverDemandIndex  string = "compute:failover:demand"
+	computeOnDemandSpend        string = "compute:ondemand:spend:%s"
 )
 
 var (
@@ -466,38 +458,6 @@ func (rk *redisKeys) ComputeAgentSlot(workspaceID, poolName, machineID, workerID
 
 func (rk *redisKeys) ComputeAgentSlotIndex(workspaceID, poolName, machineID string) string {
 	return fmt.Sprintf(computeAgentSlotIndex, workspaceID, poolName, machineID)
-}
-
-func (rk *redisKeys) ComputeMarketplaceListing(workspaceID, listingID string) string {
-	return fmt.Sprintf(computeMarketplaceListing, workspaceID, listingID)
-}
-
-func (rk *redisKeys) ComputeMarketplaceIndex(workspaceID string) string {
-	return fmt.Sprintf(computeMarketplaceIndex, workspaceID)
-}
-
-func (rk *redisKeys) ComputeMarketplaceGlobalIndex() string {
-	return computeMarketplaceGlobal
-}
-
-func (rk *redisKeys) ComputeMarketplaceRental(buyerWorkspaceID, rentalID string) string {
-	return fmt.Sprintf(computeMarketplaceRental, buyerWorkspaceID, rentalID)
-}
-
-func (rk *redisKeys) ComputeMarketplaceRentalIndex(buyerWorkspaceID string) string {
-	return fmt.Sprintf(computeMarketplaceRentalIndex, buyerWorkspaceID)
-}
-
-func (rk *redisKeys) ComputeMarketplaceRentalMachineIndex(machineID string) string {
-	return fmt.Sprintf(computeMarketplaceRentalMachineIndex, machineID)
-}
-
-func (rk *redisKeys) ComputeMarketplaceRentalMachineLock(machineID string) string {
-	return fmt.Sprintf(computeMarketplaceRentalMachineLock, machineID)
-}
-
-func (rk *redisKeys) ComputeMarketplaceRentalGlobalIndex() string {
-	return computeMarketplaceRentalGlobal
 }
 
 func (rk *redisKeys) ComputeFailoverDemand(gpu string) string {

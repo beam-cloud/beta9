@@ -716,12 +716,7 @@ func NewWorker() (_ *Worker, err error) {
 		return nil, err
 	}
 
-	usageRecorder := clients.NewManagedComputeContainerUsageRecorder(config.ManagedCompute, clients.WorkerIdentity{
-		WorkerID:  workerId,
-		PoolName:  workerPoolName,
-		MachineID: machineID,
-		Runtime:   defaultRuntime.Name(),
-	})
+	usageRecorder := clients.NewManagedComputeContainerUsageRecorder(config.ManagedCompute)
 
 	workerMetrics, err := NewWorkerUsageMetrics(ctx, workerId, config, gpuType, poolConfig.Mode, usageRecorder)
 	if err != nil {

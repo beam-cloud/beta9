@@ -82,7 +82,7 @@ func (gws *GatewayService) supportedServerlessGpus() map[string]bool {
 		if gpu == types.GPU_ANY {
 			continue
 		}
-		supported[gpu.String()] = gws.scheduler.HasManagedPoolForGPU(gpu.String(), false)
+		supported[gpu.String()] = gws.scheduler.HasManagedPoolForGPU(gpu.String())
 	}
 	return supported
 }

@@ -135,20 +135,6 @@ type ComputeRepository interface {
 	SaveAgentWorkerSlotState(ctx context.Context, state *compute.AgentWorkerSlotState) error
 	ListAgentWorkerSlotStates(ctx context.Context, workspaceID, poolName, machineID string) ([]*compute.AgentWorkerSlotState, error)
 	DeleteAgentWorkerSlotState(ctx context.Context, workspaceID, poolName, machineID, workerID string) error
-	SaveMarketplaceListing(ctx context.Context, state *compute.MarketplaceListingState) error
-	GetMarketplaceListing(ctx context.Context, sellerWorkspaceID, listingID string) (*compute.MarketplaceListingState, error)
-	GetMarketplaceListingByID(ctx context.Context, listingID string) (*compute.MarketplaceListingState, error)
-	ListMarketplaceListings(ctx context.Context, sellerWorkspaceID string, limit int) ([]*compute.MarketplaceListingState, error)
-	ListAllMarketplaceListings(ctx context.Context, limit int) ([]*compute.MarketplaceListingState, error)
-	DeleteMarketplaceListing(ctx context.Context, sellerWorkspaceID, listingID string) error
-	LockMachineRentals(ctx context.Context, machineID string) error
-	UnlockMachineRentals(machineID string) error
-	SaveMarketplaceRental(ctx context.Context, state *compute.MarketplaceRentalState) error
-	GetMarketplaceRental(ctx context.Context, buyerWorkspaceID, rentalID string) (*compute.MarketplaceRentalState, error)
-	ListMarketplaceRentals(ctx context.Context, buyerWorkspaceID string) ([]*compute.MarketplaceRentalState, error)
-	ListMarketplaceRentalsForMachine(ctx context.Context, machineID string) ([]*compute.MarketplaceRentalState, error)
-	ListAllMarketplaceRentals(ctx context.Context) ([]*compute.MarketplaceRentalState, error)
-	DeleteMarketplaceRental(ctx context.Context, state *compute.MarketplaceRentalState) error
 	PushFailoverDemand(ctx context.Context, demand *compute.FailoverDemand, ttl time.Duration) error
 	ListFailoverDemand(ctx context.Context) ([]*compute.FailoverDemand, error)
 	DeleteFailoverDemand(ctx context.Context, gpu string) error
@@ -215,13 +201,6 @@ type ManagedEndpointRepository interface {
 	SaveConfigAck(ctx context.Context, ack *types.ConfigAck) error
 	GetConfigAck(ctx context.Context, replicaID string, revision uint64) (*types.ConfigAck, error)
 
-	// Experiments
-	SaveExperiment(ctx context.Context, experiment *types.Experiment, ttl time.Duration, keep int) error
-	GetExperiment(ctx context.Context, experimentID string) (*types.Experiment, error)
-	ListExperiments(ctx context.Context, endpointID string, limit int) ([]*types.Experiment, error)
-	AcquireExperimentLock(ctx context.Context, endpointID, experimentID string, ttl time.Duration) (bool, string, error)
-	ReleaseExperimentLock(ctx context.Context, endpointID, experimentID string) error
-
 	// GitOps
 	SaveGitOpsState(ctx context.Context, state *types.GitOpsState) error
 	GetGitOpsState(ctx context.Context) (*types.GitOpsState, error)
@@ -230,11 +209,13 @@ type ManagedEndpointRepository interface {
 	RecordRouteSample(ctx context.Context, sample types.RouteSample) error
 	GetRouteMetrics(ctx context.Context, endpointID, gpu string, version uint, window time.Duration) (*types.RouteMetrics, error)
 
-	// Route records: generation lookups and per-workspace spend (daily buckets)
+	// Route records: generation lookups
 	SaveGeneration(ctx context.Context, record *types.EventEndpointRouteSchema, ttl time.Duration) error
 	GetGeneration(ctx context.Context, generationID string) (*types.EventEndpointRouteSchema, error)
-	AddWorkspaceUsage(ctx context.Context, usage types.EndpointUsage, at time.Time) error
-	GetWorkspaceUsage(ctx context.Context, workspaceID string, days int) (types.EndpointUsage, map[string]types.EndpointUsage, error)
+
+	// Provider earnings (daily buckets per provider workspace)
+	AddProviderEarnings(ctx context.Context, workspaceID, machineID string, at time.Time, delta types.ProviderEarnings) error
+	GetProviderEarnings(ctx context.Context, workspaceID string, days int) (*types.ProviderEarningsReport, error)
 }
 
 type WorkspaceRepository interface {

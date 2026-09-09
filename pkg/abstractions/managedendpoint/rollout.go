@@ -3,6 +3,7 @@ package managedendpoint
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -19,12 +20,20 @@ import (
 const canaryStartGrace = 30 * time.Minute
 
 func findVersion(versions []*types.EndpointVersion, version uint) *types.EndpointVersion {
-	for _, v := range versions {
-		if v.Version == version {
-			return v
-		}
+	if i := slices.IndexFunc(versions, func(v *types.EndpointVersion) bool { return v.Version == version }); i >= 0 {
+		return versions[i]
 	}
 	return nil
+}
+
+func readyCount(replicas []*types.EndpointReplica) int {
+	n := 0
+	for _, r := range replicas {
+		if r.Status == types.ReplicaStatusReady {
+			n++
+		}
+	}
+	return n
 }
 
 // stepRollout advances a baking canary: it keeps canary replicas up, starts
@@ -35,8 +44,8 @@ func (c *controller) stepRollout(ctx context.Context, endpoint *types.ManagedEnd
 	if rollout.CanaryVersion == 0 || rollout.Phase != types.RolloutPhaseBaking {
 		return nil
 	}
-	spec := &endpoint.Spec
-	versions, err := c.s.repo.ListVersions(ctx, spec.ID)
+	id := endpoint.Spec.ID
+	versions, err := c.s.repo.ListVersions(ctx, id)
 	if err != nil {
 		return err
 	}
@@ -48,62 +57,43 @@ func (c *controller) stepRollout(ctx context.Context, endpoint *types.ManagedEnd
 	if err != nil {
 		return c.finishRollout(ctx, endpoint, rollout, false, err.Error())
 	}
+	canaryEndpoint := &types.ManagedEndpoint{Spec: *canarySpec, StubID: canary.StubID, Version: canary.Version, GitSHA: canary.GitSHA}
 
 	// Keep canary replicas up: one per target, bounded by the configured total.
 	var canaryReplicas []*types.EndpointReplica
 	for _, r := range live {
-		if r.EndpointID == spec.ID && r.Version == rollout.CanaryVersion && !r.Tuning {
+		if r.EndpointID == id && r.Version == rollout.CanaryVersion && !r.Tuning {
 			canaryReplicas = append(canaryReplicas, r)
 		}
 	}
-	wanted := c.s.config.Rollout.CanaryReplicasOrDefault()
+	wanted := c.s.config.Rollout.CanaryReplicas
 	if services, missing := serviceAddresses(canarySpec.Services, live); uint32(len(canaryReplicas)) < wanted && len(missing) == 0 {
 		for _, rt := range canarySpec.Targets() {
 			if uint32(len(canaryReplicas)) >= wanted {
 				break
 			}
-			if len(partitionReplicas(canaryReplicas, spec.ID, rt.Role, rt.Target.Key(), rollout.CanaryVersion).Live) > 0 {
+			if len(partitionReplicas(canaryReplicas, id, rt.Role, rt.Target.Key(), rollout.CanaryVersion).Live) > 0 {
 				continue
 			}
-			replica, err := c.startReplica(ctx, startSpec{
-				EndpointID: spec.ID,
-				Version:    rollout.CanaryVersion,
-				StubID:     canary.StubID,
-				Role:       rt.Role,
-				Target:     rt.Target,
-				Port:       canarySpec.Port,
-				Protected:  true,
-				Harness:    canarySpec.Harness.Enabled,
-				Entrypoint: canarySpec.Entrypoint,
-				Services:   services,
-				KVCache:    canarySpec.KVCache,
-				GitSHA:     canary.GitSHA,
-			})
+			spec := c.endpointStartSpec(canaryEndpoint, rt, services)
+			spec.Protected, spec.Evictable = true, false
+			replica, err := c.startReplica(ctx, spec)
 			if err != nil {
-				log.Warn().Err(err).Str("endpoint_id", spec.ID).Uint("version", rollout.CanaryVersion).Msg("managed endpoints: start canary failed")
+				log.Warn().Err(err).Str("endpoint_id", id).Uint("version", rollout.CanaryVersion).Msg("managed endpoints: start canary failed")
 				break
 			}
 			canaryReplicas = append(canaryReplicas, replica)
 		}
 	}
-	// Canary replicas follow their own version's fleet config, not the
-	// active fleet's tuning.
-	if err := c.ensureFleetRevisions(ctx, &types.ManagedEndpoint{Spec: *canarySpec, Version: rollout.CanaryVersion, GitSHA: canary.GitSHA}); err != nil {
-		log.Warn().Err(err).Str("endpoint_id", spec.ID).Msg("managed endpoints: canary config revisions")
+	// Canary replicas follow their own version's fleet config.
+	if err := c.ensureFleetRevisions(ctx, canaryEndpoint); err != nil {
+		log.Warn().Err(err).Str("endpoint_id", id).Msg("managed endpoints: canary config revisions")
 	}
 
-	readyCanaries := 0
-	for _, r := range canaryReplicas {
-		if r.Status == types.ReplicaStatusReady {
-			readyCanaries++
-		}
-	}
 	now := time.Now()
 	if rollout.BakeStartedAt.IsZero() {
-		if readyCanaries > 0 {
-			rollout.BakeStartedAt = now
-			rollout.LastDecision = "canary ready; baking"
-			rollout.LastDecisionAt = now
+		if readyCount(canaryReplicas) > 0 {
+			rollout.BakeStartedAt, rollout.LastDecision, rollout.LastDecisionAt = now, "canary ready; baking", now
 			return c.s.repo.SaveRollout(ctx, rollout)
 		}
 		if now.Sub(canary.CreatedAt) > canaryStartGrace {
@@ -111,22 +101,22 @@ func (c *controller) stepRollout(ctx context.Context, endpoint *types.ManagedEnd
 		}
 		return nil
 	}
-	window := c.s.config.Rollout.BakeDuration()
+	window := time.Duration(c.s.config.Rollout.BakeSeconds) * time.Second
 	if now.Sub(rollout.BakeStartedAt) < window || (rollout.PinnedVersion != 0 && rollout.PinnedVersion != rollout.CanaryVersion) {
 		return nil
 	}
 
-	activeMetrics, err := c.s.repo.GetRouteMetrics(ctx, spec.ID, "", rollout.ActiveVersion, window)
+	activeMetrics, err := c.s.repo.GetRouteMetrics(ctx, id, "", rollout.ActiveVersion, window)
 	if err != nil {
 		return err
 	}
-	canaryMetrics, err := c.s.repo.GetRouteMetrics(ctx, spec.ID, "", rollout.CanaryVersion, window)
+	canaryMetrics, err := c.s.repo.GetRouteMetrics(ctx, id, "", rollout.CanaryVersion, window)
 	if err != nil {
 		return err
 	}
 	var activeReplicas []*types.EndpointReplica
 	for _, r := range live {
-		if r.EndpointID == spec.ID && r.Version == rollout.ActiveVersion && r.Status == types.ReplicaStatusReady {
+		if r.EndpointID == id && r.Version == rollout.ActiveVersion && r.Status == types.ReplicaStatusReady {
 			activeReplicas = append(activeReplicas, r)
 		}
 	}
@@ -143,7 +133,6 @@ func (c *controller) finishRollout(ctx context.Context, endpoint *types.ManagedE
 		return err
 	}
 	canary := findVersion(versions, canaryVersion)
-
 	if promote && canary != nil {
 		return c.switchVersion(ctx, endpoint, rollout, versions, canary, "rollout.promoted", "promoted: "+reason)
 	}
@@ -160,11 +149,8 @@ func (c *controller) finishRollout(ctx context.Context, endpoint *types.ManagedE
 			}
 		}
 	}
-	rollout.CanaryVersion = 0
-	rollout.BakeStartedAt = time.Time{}
-	rollout.Phase = types.RolloutPhaseRolledBack
-	rollout.LastDecision = "rolled back: " + reason
-	rollout.LastDecisionAt = time.Now()
+	rollout.CanaryVersion, rollout.BakeStartedAt, rollout.Phase = 0, time.Time{}, types.RolloutPhaseRolledBack
+	rollout.LastDecision, rollout.LastDecisionAt = "rolled back: "+reason, time.Now()
 	if err := c.s.repo.SaveRollout(ctx, rollout); err != nil {
 		return err
 	}
@@ -196,12 +182,8 @@ func (c *controller) switchVersion(ctx context.Context, endpoint *types.ManagedE
 	}
 	now := time.Now()
 	previous := endpoint.Version
-	endpoint.Spec = *spec
-	endpoint.StubID = target.StubID
-	endpoint.Version = target.Version
-	endpoint.GitSHA = target.GitSHA
-	endpoint.Status = types.EndpointStatusActive
-	endpoint.UpdatedAt = now
+	endpoint.Spec, endpoint.StubID, endpoint.Version, endpoint.GitSHA = *spec, target.StubID, target.Version, target.GitSHA
+	endpoint.Status, endpoint.UpdatedAt = types.EndpointStatusActive, now
 	if err := c.s.repo.SaveEndpoint(ctx, endpoint); err != nil {
 		return err
 	}
@@ -220,12 +202,8 @@ func (c *controller) switchVersion(ctx context.Context, endpoint *types.ManagedE
 			return err
 		}
 	}
-	rollout.ActiveVersion = target.Version
-	rollout.CanaryVersion = 0
-	rollout.BakeStartedAt = time.Time{}
-	rollout.Phase = types.RolloutPhaseIdle
-	rollout.LastDecision = decision
-	rollout.LastDecisionAt = now
+	rollout.ActiveVersion, rollout.CanaryVersion, rollout.BakeStartedAt, rollout.Phase = target.Version, 0, time.Time{}, types.RolloutPhaseIdle
+	rollout.LastDecision, rollout.LastDecisionAt = decision, now
 	if err := c.s.repo.SaveRollout(ctx, rollout); err != nil {
 		return err
 	}
@@ -242,47 +220,27 @@ func (c *controller) switchVersion(ctx context.Context, endpoint *types.ManagedE
 // healthy canary is promoted; with traffic, any threshold regression rolls
 // back.
 func evaluateRollout(active, canary *types.RouteMetrics, activeReplicas, canaryReplicas []*types.EndpointReplica, th types.RolloutThresholds) (bool, string) {
-	orDefault := func(v, def float64) float64 {
-		if v <= 0 {
-			return def
-		}
-		return v
-	}
-	errorRate := orDefault(th.ErrorRate, 0.02)
-	ttftRegress := orDefault(th.TTFT, 0.25)
-	tpotRegress := orDefault(th.TPOT, 0.25)
-	throughputRegress := orDefault(th.Throughput, 0.25)
-
-	readyCanaries := 0
-	for _, r := range canaryReplicas {
-		if r.Status == types.ReplicaStatusReady {
-			readyCanaries++
-		}
-	}
-	if readyCanaries == 0 {
+	if readyCount(canaryReplicas) == 0 {
 		return false, "no ready canary replica at end of bake"
 	}
 	if canary == nil || canary.Requests == 0 {
 		return true, "canary healthy with no traffic during bake"
 	}
-	if canary.Requests >= 20 && canary.ErrorRate() > errorRate {
-		return false, fmt.Sprintf("canary error rate %.2f%% exceeds %.2f%%", canary.ErrorRate()*100, errorRate*100)
+	if canary.Requests >= 20 && canary.ErrorRate() > th.ErrorRate {
+		return false, fmt.Sprintf("canary error rate %.2f%% exceeds %.2f%%", canary.ErrorRate()*100, th.ErrorRate*100)
 	}
 	if active == nil || active.Requests == 0 {
 		return true, "canary healthy; active version had no traffic to compare"
 	}
-	if active.TTFTCount > 0 && canary.TTFTCount > 0 {
-		a, b := float64(active.MeanTTFTMs()), float64(canary.MeanTTFTMs())
-		if a > 0 && b > a*(1+ttftRegress) {
-			return false, fmt.Sprintf("canary TTFT %.0fms regressed vs %.0fms", b, a)
-		}
+	if a, b := float64(active.MeanTTFTMs()), float64(canary.MeanTTFTMs()); a > 0 && b > a*(1+th.TTFT) {
+		return false, fmt.Sprintf("canary TTFT %.0fms regressed vs %.0fms", b, a)
 	}
 	aTPOT, aTPS := meanEngine(activeReplicas)
 	bTPOT, bTPS := meanEngine(canaryReplicas)
-	if aTPOT > 0 && bTPOT > aTPOT*(1+tpotRegress) {
+	if aTPOT > 0 && bTPOT > aTPOT*(1+th.TPOT) {
 		return false, fmt.Sprintf("canary TPOT %.1fms regressed vs %.1fms", bTPOT, aTPOT)
 	}
-	if aTPS > 0 && bTPS > 0 && bTPS < aTPS*(1-throughputRegress) {
+	if aTPS > 0 && bTPS > 0 && bTPS < aTPS*(1-th.Throughput) {
 		return false, fmt.Sprintf("canary decode throughput %.0f tok/s regressed vs %.0f", bTPS, aTPS)
 	}
 	return true, fmt.Sprintf("canary within thresholds over %d requests", canary.Requests)

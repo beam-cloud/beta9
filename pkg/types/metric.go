@@ -20,6 +20,8 @@ var (
 	UsageMetricsEndpointImages           = "endpoint_images"
 	UsageMetricsEndpointRequests         = "endpoint_requests"
 	UsageMetricsEndpointCost             = "endpoint_cost_cents"
+	// Credited to the provider workspace whose machine served the request.
+	UsageMetricsEndpointProviderEarnings = "endpoint_provider_earnings_cents"
 )
 
 type TaskMetrics struct {

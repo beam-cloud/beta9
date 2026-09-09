@@ -611,22 +611,27 @@ type ReplicaCapacity struct {
 
 // EndpointReplica is one running container serving an endpoint role/target.
 type EndpointReplica struct {
-	ID          string        `json:"id"`
-	EndpointID  string        `json:"endpoint_id"`
-	Version     uint          `json:"version"`
-	Role        string        `json:"role"`
-	GPU         string        `json:"gpu"`
-	GPUCount    uint32        `json:"gpu_count"`
-	Locality    string        `json:"locality"`
-	PoolName    string        `json:"pool_name,omitempty"`
-	ContainerID string        `json:"container_id"`
-	WorkerID    string        `json:"worker_id,omitempty"`
-	Address     string        `json:"address,omitempty"`
-	Status      ReplicaStatus `json:"status"`
+	ID          string `json:"id"`
+	EndpointID  string `json:"endpoint_id"`
+	Version     uint   `json:"version"`
+	Role        string `json:"role"`
+	GPU         string `json:"gpu"`
+	GPUCount    uint32 `json:"gpu_count"`
+	Locality    string `json:"locality"`
+	PoolName    string `json:"pool_name,omitempty"`
+	ContainerID string `json:"container_id"`
+	WorkerID    string `json:"worker_id,omitempty"`
+	MachineID   string `json:"machine_id,omitempty"`
+	// ProviderWorkspaceID is set when the replica runs on a workspace's
+	// contributed (provider pool) machine; that workspace earns a share of
+	// the revenue routed to the replica.
+	ProviderWorkspaceID string        `json:"provider_workspace_id,omitempty"`
+	Address             string        `json:"address,omitempty"`
+	Status              ReplicaStatus `json:"status"`
 	// Protected replicas satisfy min_replicas: they may trigger provisioning
 	// and are never evictable. Everything else is opportunistic.
 	Protected bool `json:"protected"`
-	// Tuning replicas belong to an experiment and take no public traffic.
+	// Tuning replicas are dedicated to live tuning and take no public traffic.
 	Tuning         bool            `json:"tuning"`
 	HarnessEnabled bool            `json:"harness_enabled"`
 	ConfigRevision uint64          `json:"config_revision"`
@@ -670,7 +675,7 @@ const (
 )
 
 // EndpointConfigRevision is one version of the live harness config for a
-// GPU target (fleet) or a single replica (experiment).
+// GPU target (fleet) or a single replica (tuning).
 type EndpointConfigRevision struct {
 	Revision   uint64               `json:"revision"`
 	EndpointID string               `json:"endpoint_id"`
@@ -721,44 +726,6 @@ type RolloutState struct {
 	LastDecision   string       `json:"last_decision,omitempty"`
 	LastDecisionAt time.Time    `json:"last_decision_at,omitempty"`
 	UpdatedAt      time.Time    `json:"updated_at"`
-}
-
-// ExperimentStep is one applied config + its observed metrics/bench.
-type ExperimentStep struct {
-	Revision      uint64          `json:"revision"`
-	Config        map[string]any  `json:"config"`
-	Applied       bool            `json:"applied"`
-	Error         string          `json:"error,omitempty"`
-	Bench         json.RawMessage `json:"bench,omitempty"`
-	EngineMetrics ReplicaCapacity `json:"engine_metrics"`
-	At            time.Time       `json:"at"`
-}
-
-type ExperimentOutcome string
-
-const (
-	ExperimentOutcomeRunning ExperimentOutcome = "running"
-	ExperimentOutcomeKeep    ExperimentOutcome = "keep"
-	ExperimentOutcomeDiscard ExperimentOutcome = "discard"
-	ExperimentOutcomeFailed  ExperimentOutcome = "failed"
-)
-
-// Experiment is a live-tuning session on one dedicated replica.
-type Experiment struct {
-	ID               string            `json:"id"`
-	EndpointID       string            `json:"endpoint_id"`
-	GPU              string            `json:"gpu"`
-	Role             string            `json:"role"`
-	ReplicaID        string            `json:"replica_id"`
-	BaselineRevision uint64            `json:"baseline_revision"`
-	CurrentRevision  uint64            `json:"current_revision"`
-	Steps            []ExperimentStep  `json:"steps"`
-	Outcome          ExperimentOutcome `json:"outcome"`
-	Notes            string            `json:"notes,omitempty"`
-	Author           string            `json:"author,omitempty"`
-	Budget           string            `json:"budget,omitempty"`
-	StartedAt        time.Time         `json:"started_at"`
-	EndedAt          time.Time         `json:"ended_at,omitempty"`
 }
 
 type GitOpsStatus string
@@ -835,19 +802,6 @@ type GitOpsDeployResult struct {
 	Version uint   `json:"version,omitempty"`
 }
 
-// EndpointUsage is one billable request record for the /v1 route.
-type EndpointUsage struct {
-	EndpointID       string `json:"endpoint_id"`
-	WorkspaceID      string `json:"workspace_id"`
-	TokenID          string `json:"token_id,omitempty"`
-	PromptTokens     int64  `json:"prompt_tokens"`
-	CompletionTokens int64  `json:"completion_tokens"`
-	CachedTokens     int64  `json:"cached_tokens"`
-	Requests         int64  `json:"requests"`
-	Images           int64  `json:"images"`
-	CostMicroUSD     int64  `json:"cost_micro_usd"`
-}
-
 // ConfigAck is a replica's report on applying a config revision.
 type ConfigAck struct {
 	ReplicaID string          `json:"replica_id"`
@@ -878,6 +832,30 @@ type RouteSample struct {
 // Failed reports whether the sample counts as an error for rollout decisions.
 func (s RouteSample) Failed() bool {
 	return s.StatusCode >= 500 || s.StatusCode == 0
+}
+
+// ProviderEarnings is what a workspace earned from requests served by its
+// contributed machines.
+type ProviderEarnings struct {
+	Requests         int64 `json:"requests"`
+	PromptTokens     int64 `json:"prompt_tokens"`
+	CompletionTokens int64 `json:"completion_tokens"`
+	Images           int64 `json:"images"`
+	EarningsMicroUSD int64 `json:"earnings_micro_usd"`
+}
+
+func (e *ProviderEarnings) Add(o ProviderEarnings) {
+	e.Requests += o.Requests
+	e.PromptTokens += o.PromptTokens
+	e.CompletionTokens += o.CompletionTokens
+	e.Images += o.Images
+	e.EarningsMicroUSD += o.EarningsMicroUSD
+}
+
+type ProviderEarningsReport struct {
+	Total      ProviderEarnings            `json:"total"`
+	PerMachine map[string]ProviderEarnings `json:"per_machine"`
+	PerDay     map[string]ProviderEarnings `json:"per_day"`
 }
 
 // RouteMetrics aggregates RouteSamples over a window.
@@ -922,12 +900,4 @@ func (m RouteMetrics) MeanTPOTMs() int64 {
 		decode = 0
 	}
 	return decode / m.CompletionTokens
-}
-
-// TokensPerSecond is aggregate completion throughput over the window.
-func (m RouteMetrics) TokensPerSecond() int64 {
-	if m.Window <= 0 {
-		return 0
-	}
-	return int64(float64(m.CompletionTokens) / m.Window.Seconds())
 }

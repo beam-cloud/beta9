@@ -46,7 +46,7 @@ func TestClassifyMachinePool(t *testing.T) {
 		"agent-provider":    {Mode: types.PoolModeExternal, Provider: &agentProvider},
 		"provider-external": {Mode: types.PoolModeExternal, Provider: &externalProvider},
 		"private":           {Mode: types.PoolModePrivate},
-		"marketplace":       {Mode: types.PoolModeMarketplace},
+		"provider-pool":     {Mode: types.PoolModeProvider},
 	}}}}
 
 	tests := map[string]machinePoolBackend{
@@ -57,7 +57,7 @@ func TestClassifyMachinePool(t *testing.T) {
 		"agent-provider":    machinePoolManagedAgent,
 		"provider-external": machinePoolProvider,
 		"private":           machinePoolManagedAgent,
-		"marketplace":       machinePoolManagedAgent,
+		"provider-pool":     machinePoolManagedAgent,
 	}
 	for poolName, want := range tests {
 		t.Run(poolName, func(t *testing.T) {

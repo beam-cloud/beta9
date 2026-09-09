@@ -1,6 +1,7 @@
 package managedendpoint
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -47,9 +48,6 @@ type controller struct {
 	stubMu    sync.Mutex
 	stubCache map[string]cachedStub
 
-	// reconcileMu serializes on-demand reconciles (admin RPCs) with the loop.
-	reconcileMu sync.Mutex
-
 	// leaderSince is when this instance last became leader. Heartbeats
 	// cannot arrive while no gateway is serving the harness RPC, so a
 	// replica is only stale once it has been silent for the full window
@@ -69,7 +67,7 @@ func newController(s *Service) *controller {
 }
 
 func (c *controller) run(ctx context.Context) {
-	ticker := time.NewTicker(c.s.config.Fill.ReconcileIntervalOrDefault())
+	ticker := time.NewTicker(c.s.config.Fill.ReconcileInterval)
 	defer ticker.Stop()
 
 	leader := false
@@ -115,8 +113,6 @@ func (c *controller) silentFor(lastHeartbeat, now time.Time) time.Duration {
 // then endpoints, and drain what is no longer wanted. A panic in one pass
 // is reported as an error rather than taking the gateway down.
 func (c *controller) reconcile(ctx context.Context) (err error) {
-	c.reconcileMu.Lock()
-	defer c.reconcileMu.Unlock()
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("reconcile panicked: %v\n%s", r, debug.Stack())
@@ -132,37 +128,33 @@ func (c *controller) reconcile(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
-
-	var errs []error
 	services, err := c.s.repo.ListServices(ctx)
 	if err != nil {
 		return err
 	}
+	endpoints, err := c.s.repo.ListEndpoints(ctx)
+	if err != nil {
+		return err
+	}
+	slices.SortFunc(endpoints, func(a, b *types.ManagedEndpoint) int { return strings.Compare(a.Spec.ID, b.Spec.ID) })
+
+	var errs []error
 	for _, service := range services {
 		if err := c.reconcileService(ctx, service, live, inv); err != nil {
 			errs = append(errs, fmt.Errorf("service %s: %w", service.Spec.Name, err))
 		}
 	}
-
-	endpoints, err := c.s.repo.ListEndpoints(ctx)
-	if err != nil {
-		return err
-	}
-	sort.Slice(endpoints, func(i, j int) bool { return endpoints[i].Spec.ID < endpoints[j].Spec.ID })
-
 	// Every enabled endpoint's targets compete for the same inventory, so the
 	// fill plan is computed once across all of them.
 	var targets []fillTarget
 	for _, endpoint := range endpoints {
-		if !endpoint.Enabled {
-			continue
-		}
-		for _, rt := range endpoint.Spec.Targets() {
-			targets = append(targets, fillTarget{EndpointID: endpoint.Spec.ID, RoleTarget: rt, Demand: c.demand(ctx, endpoint, rt, live)})
+		if endpoint.Enabled {
+			for _, rt := range endpoint.Spec.Targets() {
+				targets = append(targets, fillTarget{EndpointID: endpoint.Spec.ID, RoleTarget: rt, Demand: c.demand(ctx, endpoint, rt, live)})
+			}
 		}
 	}
-	plans := planFill(inv.byType, targets, c.s.config.Fill.MaxClusterShareOrDefault())
-
+	plans := planFill(inv.byType, targets, c.s.config.Fill.MaxClusterShare)
 	for _, endpoint := range endpoints {
 		if err := c.reconcileEndpoint(ctx, endpoint, plans, live, inv); err != nil {
 			errs = append(errs, fmt.Errorf("endpoint %s: %w", endpoint.Spec.ID, err))
@@ -210,18 +202,17 @@ func (c *controller) endpointSpecFromStub(ctx context.Context, stubID string) (*
 
 // --- inventory -----------------------------------------------------------------
 
-// workerSlot is one worker's inventory of a single GPU type.
+// workerSlot is one worker's inventory of a single GPU type. Free is what the
+// scheduler reports as unallocated; Held is what endpoint replicas occupy.
 type workerSlot struct {
 	WorkerID string
 	PoolName string
 	Locality string
-	// Total is the worker's GPU count; Free is what the scheduler reports as
-	// unallocated right now; Held is what managed endpoint replicas occupy.
-	Total uint32
-	Free  uint32
-	Held  uint32
+	Total    uint32
+	Free     uint32
+	Held     uint32
 	// MaxShare is the pool's cap on the fraction of its GPUs endpoints may
-	// hold; zero means "use the cluster default".
+	// hold; zero means the cluster default.
 	MaxShare float64
 }
 
@@ -238,38 +229,34 @@ func (g *gpuInventory) allowance(clusterShare float64) uint32 {
 	var allowed float64
 	for _, w := range g.Workers {
 		share := clusterShare
-		if w.MaxShare > 0 && w.MaxShare < share {
-			share = w.MaxShare
+		if w.MaxShare > 0 {
+			share = min(share, w.MaxShare)
 		}
 		allowed += float64(w.Free+w.Held) * share
 	}
 	return uint32(math.Floor(allowed + 1e-9))
 }
 
-// pickWorker returns the index of the worker with the most free GPUs that can
-// fit count GPUs and passes accept (nil accepts all). Preferring the
-// least-loaded worker spreads replicas across the fleet.
-func (g *gpuInventory) pickWorker(count uint32, accept func(workerSlot) bool) (int, bool) {
+// reserve picks the least-loaded worker that fits count GPUs and passes
+// accept, records the GPUs as held and returns the slot.
+func (g *gpuInventory) reserve(count uint32, accept func(workerSlot) bool) (workerSlot, bool) {
 	count = max(count, 1)
 	best := -1
 	for i, w := range g.Workers {
-		if w.Free < count || (accept != nil && !accept(w)) {
+		if w.Free < count || !accept(w) {
 			continue
 		}
 		if best < 0 || w.Free > g.Workers[best].Free || (w.Free == g.Workers[best].Free && w.Held < g.Workers[best].Held) {
 			best = i
 		}
 	}
-	return best, best >= 0
-}
-
-// reserve records that count GPUs on worker i are now held by a replica so
-// later picks in the same tick see the reduced free capacity.
-func (g *gpuInventory) reserve(i int, count uint32) {
-	count = max(count, 1)
-	w := &g.Workers[i]
+	if best < 0 {
+		return workerSlot{}, false
+	}
+	w := &g.Workers[best]
 	w.Free -= min(w.Free, count)
 	w.Held += count
+	return *w, true
 }
 
 // clusterInventory is the GPU inventory endpoints may use, keyed by GPU type.
@@ -292,10 +279,8 @@ func (c *controller) poolConfig(name string) (types.WorkerPoolConfig, bool) {
 // poolLocality is the network domain of a pool: its configured locality or,
 // failing that, the pool name.
 func (c *controller) poolLocality(name string) string {
-	if cfg, ok := c.poolConfig(name); ok && strings.TrimSpace(cfg.Locality) != "" {
-		return cfg.Locality
-	}
-	return name
+	cfg, _ := c.poolConfig(name)
+	return cmp.Or(strings.TrimSpace(cfg.Locality), name)
 }
 
 // inventory reads worker state and folds in what replicas already hold.
@@ -334,12 +319,8 @@ func (c *controller) inventory(replicas []*types.EndpointReplica) (*clusterInven
 			inv.byType[gpuType] = entry
 		}
 		entry.Workers = append(entry.Workers, workerSlot{
-			WorkerID: w.Id,
-			PoolName: w.PoolName,
-			Locality: locality,
-			Total:    w.TotalGpuCount,
-			Free:     w.FreeGpuCount,
-			Held:     min(heldByWorker[w.Id], w.TotalGpuCount),
+			WorkerID: w.Id, PoolName: w.PoolName, Locality: locality,
+			Total: w.TotalGpuCount, Free: w.FreeGpuCount, Held: min(heldByWorker[w.Id], w.TotalGpuCount),
 			MaxShare: cfg.ManagedEndpoints.MaxShare,
 		})
 		if !slices.Contains(inv.localities[gpuType], locality) {
@@ -357,9 +338,7 @@ func (c *controller) inventory(replicas []*types.EndpointReplica) (*clusterInven
 // in the in-memory inventory. CPU targets go to any endpoint-enabled CPU
 // pool; GPU targets go to the least-loaded eligible worker.
 func (c *controller) place(inv *clusterInventory, target types.GpuTarget, localities []string) (pool string, locality string, ok bool) {
-	accept := func(w workerSlot) bool {
-		return len(localities) == 0 || slices.Contains(localities, w.Locality)
-	}
+	accept := func(w workerSlot) bool { return len(localities) == 0 || slices.Contains(localities, w.Locality) }
 	if target.IsCPU() {
 		for _, name := range inv.cpuPools {
 			if loc := c.poolLocality(name); accept(workerSlot{Locality: loc}) {
@@ -372,22 +351,18 @@ func (c *controller) place(inv *clusterInventory, target types.GpuTarget, locali
 	if entry == nil {
 		return "", "", false
 	}
-	i, ok := entry.pickWorker(target.Count, accept)
-	if !ok {
-		return "", "", false
-	}
-	entry.reserve(i, target.Count)
-	return entry.Workers[i].PoolName, entry.Workers[i].Locality, true
+	slot, ok := entry.reserve(target.Count, accept)
+	return slot.PoolName, slot.Locality, ok
 }
 
 // --- fill planning -------------------------------------------------------------
 
-// fillTarget is one (endpoint, role, gpu target) unit of placement.
+// fillTarget is one (endpoint, role, gpu target) unit of placement. Demand is
+// the replica count the router asks for (queue pressure); it may exceed the
+// fair-share quota when spare capacity exists.
 type fillTarget struct {
 	EndpointID string
 	types.RoleTarget
-	// Demand is the replica count the router asks for (queue pressure); it
-	// may exceed the fair-share quota when spare capacity exists.
 	Demand uint32
 }
 
@@ -401,11 +376,10 @@ func (t fillTarget) gpuType() string {
 	return string(types.NormalizeGPUType(t.Target.Type))
 }
 
-// fillPlan is the placement decision for one fillTarget.
+// fillPlan is the placement decision for one fillTarget: Quota is the
+// fair-share allocation, Desired what the controller converges toward.
 type fillPlan struct {
-	// Quota is the fair-share allocation in replicas.
-	Quota uint32
-	// Desired is what the controller converges toward this tick.
+	Quota   uint32
 	Desired uint32
 }
 
@@ -429,10 +403,7 @@ func planFill(inventory map[string]*gpuInventory, targets []fillTarget, clusterS
 		for _, t := range group {
 			shareSum += math.Max(t.Target.Share, 0)
 		}
-		norm := 1.0
-		if shareSum > 1 {
-			norm = 1 / shareSum
-		}
+		norm := 1 / math.Max(shareSum, 1)
 		for _, t := range group {
 			var quota uint32
 			if t.Target.Share > 0 && allowance > 0 {
@@ -507,8 +478,7 @@ func (c *controller) demand(ctx context.Context, endpoint *types.ManagedEndpoint
 	if err != nil || metrics == nil || metrics.Requests == 0 {
 		return ready
 	}
-	meanQueueWait := time.Duration(metrics.QueueWaitSumMs/metrics.Requests) * time.Millisecond
-	if meanQueueWait > c.s.config.Routing.MaxQueueWaitOrDefault()/2 {
+	if meanQueueWait := time.Duration(metrics.QueueWaitSumMs/metrics.Requests) * time.Millisecond; meanQueueWait > c.s.config.Routing.MaxQueueWait/2 {
 		return ready + 1
 	}
 	var inFlight, maxConcurrency int64
@@ -523,6 +493,19 @@ func (c *controller) demand(ctx context.Context, endpoint *types.ManagedEndpoint
 }
 
 // --- endpoints -----------------------------------------------------------------
+
+// endpointStartSpec is the launch spec for one replica of an endpoint target.
+// Callers set placement (PoolName, Locality) and protection.
+func (c *controller) endpointStartSpec(endpoint *types.ManagedEndpoint, rt types.RoleTarget, services map[string]string) startSpec {
+	spec := &endpoint.Spec
+	return startSpec{
+		EndpointID: spec.ID, Version: endpoint.Version, StubID: endpoint.StubID, GitSHA: endpoint.GitSHA,
+		Role: rt.Role, Target: rt.Target, Port: spec.Port, Harness: spec.Harness.Enabled,
+		Entrypoint: spec.Entrypoint, Services: services, KVCache: spec.KVCache,
+		Evictable:    spec.Policy.Evictable && c.s.config.Preemption.Enabled,
+		DrainSeconds: cmp.Or(spec.Policy.DrainSeconds, c.s.config.Preemption.DefaultDrainSeconds),
+	}
+}
 
 // reconcileEndpoint converges one endpoint's replicas toward the fill plan.
 func (c *controller) reconcileEndpoint(ctx context.Context, endpoint *types.ManagedEndpoint, plans map[string]fillPlan, live []*types.EndpointReplica, inv *clusterInventory) error {
@@ -552,17 +535,12 @@ func (c *controller) reconcileEndpoint(ctx context.Context, endpoint *types.Mana
 		log.Warn().Err(err).Str("endpoint_id", spec.ID).Msg("managed endpoints: fleet config revisions")
 	}
 
+	// Keep what is running but do not grow until dependencies are up.
 	services, missing := serviceAddresses(spec.Services, live)
-	if len(missing) > 0 {
-		// Keep what is running but do not grow until dependencies are up.
-		log.Debug().Str("endpoint_id", spec.ID).Strs("missing_services", missing).Msg("managed endpoints: waiting on services")
-	}
-
 	for _, rt := range spec.Targets() {
 		plan := plans[fillTarget{EndpointID: spec.ID, RoleTarget: rt}.key()]
 		set := partitionReplicas(live, spec.ID, rt.Role, rt.Target.Key(), endpoint.Version)
 		current := uint32(len(set.Live))
-
 		switch {
 		case current < plan.Desired && len(missing) == 0:
 			c.growTarget(ctx, endpoint, rt, plan.Desired-current, set.Protected, inv, services)
@@ -589,46 +567,24 @@ func (c *controller) reconcileEndpoint(ctx context.Context, endpoint *types.Mana
 // min_replicas are protected (they may trigger provisioning); the rest are
 // opportunistic and only land on free capacity.
 func (c *controller) growTarget(ctx context.Context, endpoint *types.ManagedEndpoint, rt types.RoleTarget, need, protectedLive uint32, inv *clusterInventory, services map[string]string) {
-	spec := &endpoint.Spec
 	protectedNeeded := rt.Target.MinReplicas - min(rt.Target.MinReplicas, protectedLive)
-	backoff, _ := c.s.repo.InScheduleBackoff(ctx, spec.ID, rt.Key())
+	backoff, _ := c.s.repo.InScheduleBackoff(ctx, endpoint.Spec.ID, rt.Key())
 
 	for i := uint32(0); i < min(need, maxStartsPerTick); i++ {
-		protected := protectedNeeded > 0
-		if !protected && backoff {
+		spec := c.endpointStartSpec(endpoint, rt, services)
+		spec.Protected = protectedNeeded > 0
+		if !spec.Protected && backoff {
 			return
 		}
-		pool, locality, ok := c.place(inv, rt.Target, spec.Locality)
-		if !ok && !protected {
+		var ok bool
+		if spec.PoolName, spec.Locality, ok = c.place(inv, rt.Target, endpoint.Spec.Locality); !ok && !spec.Protected {
 			return
 		}
-		drain := spec.Policy.DrainSeconds
-		if drain == 0 {
-			drain = c.s.config.Preemption.DefaultDrainSeconds
-		}
-		_, err := c.startReplica(ctx, startSpec{
-			EndpointID:   spec.ID,
-			Version:      endpoint.Version,
-			StubID:       endpoint.StubID,
-			Role:         rt.Role,
-			Target:       rt.Target,
-			Port:         spec.Port,
-			Locality:     locality,
-			PoolName:     pool,
-			Protected:    protected,
-			Harness:      spec.Harness.Enabled,
-			Entrypoint:   spec.Entrypoint,
-			Services:     services,
-			KVCache:      spec.KVCache,
-			Evictable:    spec.Policy.Evictable && c.s.config.Preemption.Enabled,
-			DrainSeconds: drain,
-			GitSHA:       endpoint.GitSHA,
-		})
-		if err != nil {
-			log.Warn().Err(err).Str("endpoint_id", spec.ID).Str("target", rt.Key()).Msg("managed endpoints: start replica failed")
+		if _, err := c.startReplica(ctx, spec); err != nil {
+			log.Warn().Err(err).Str("endpoint_id", endpoint.Spec.ID).Str("target", rt.Key()).Msg("managed endpoints: start replica failed")
 			return
 		}
-		if protected {
+		if spec.Protected {
 			protectedNeeded--
 		}
 	}
@@ -677,12 +633,8 @@ func (c *controller) ensureFleetRevisions(ctx context.Context, endpoint *types.M
 			config = map[string]any{}
 		}
 		revision := &types.EndpointConfigRevision{
-			EndpointID: endpoint.Spec.ID,
-			Scope:      types.ConfigScopeTarget,
-			ScopeKey:   key,
-			Config:     config,
-			Author:     fmt.Sprintf("git@v%d", endpoint.Version),
-			Source:     types.ConfigSourceGit,
+			EndpointID: endpoint.Spec.ID, Scope: types.ConfigScopeTarget, ScopeKey: key, Config: config,
+			Author: fmt.Sprintf("git@v%d", endpoint.Version), Source: types.ConfigSourceGit,
 		}
 		if err := c.s.repo.CreateConfigRevision(ctx, revision); err != nil {
 			return err
@@ -761,19 +713,12 @@ func (c *controller) reconcileService(ctx context.Context, service *types.Manage
 			}
 			for i := uint32(0); i < min(spec.Replicas-current, maxStartsPerTick); i++ {
 				target, pool, loc := c.placeService(inv, spec, want)
-				if _, err := c.startReplica(ctx, startSpec{
-					EndpointID: id,
-					Version:    service.Version,
-					StubID:     service.StubID,
-					Role:       types.ReplicaRoleServe,
-					Target:     target,
-					Port:       spec.Port,
-					Locality:   loc,
-					PoolName:   pool,
-					Protected:  true,
-					Entrypoint: spec.Entrypoint,
-					GitSHA:     service.GitSHA,
-				}); err != nil {
+				_, err := c.startReplica(ctx, startSpec{
+					EndpointID: id, Version: service.Version, StubID: service.StubID, GitSHA: service.GitSHA,
+					Role: types.ReplicaRoleServe, Target: target, Port: spec.Port, Locality: loc, PoolName: pool,
+					Protected: true, Entrypoint: spec.Entrypoint,
+				})
+				if err != nil {
 					log.Warn().Err(err).Str("service", spec.Name).Msg("managed endpoints: start service replica failed")
 					break
 				}
@@ -810,8 +755,7 @@ func (c *controller) serviceLocalities(spec *types.ManagedServiceSpec, inv *clus
 		out = append(out, inv.localities[string(types.NormalizeGPUType(t.Type))]...)
 	}
 	sort.Strings(out)
-	out = slices.Compact(out)
-	if len(out) == 0 {
+	if out = slices.Compact(out); len(out) == 0 {
 		out = []string{""}
 	}
 	return out

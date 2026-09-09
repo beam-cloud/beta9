@@ -292,7 +292,7 @@ func TestOnDemandFailoverPoolIsNotNativeCapacity(t *testing.T) {
 	worker.RequiresPoolSelector = true
 
 	scheduler.workerPoolManager.DeletePool("beta9-a10g")
-	assert.False(t, scheduler.HasManagedPoolForGPU("A10G", false))
+	assert.False(t, scheduler.HasManagedPoolForGPU("A10G"))
 
 	scheduler.config.Scheduling.Failover.Enabled = false
 	selected, err := scheduler.selectWorkerFromWorkers([]*types.Worker{worker}, &types.ContainerRequest{

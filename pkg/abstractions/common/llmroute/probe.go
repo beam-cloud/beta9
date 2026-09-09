@@ -4,46 +4,33 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 )
 
 const (
-	ReadinessTimeout   time.Duration = 5 * time.Second
-	readinessBodyLimit int64         = 4 * 1024
-	MetricsTimeout     time.Duration = 750 * time.Millisecond
-	DefaultMetricsPath               = "/metrics"
+	readinessTimeout   = 5 * time.Second
+	readinessBodyLimit = 4 * 1024
+	metricsTimeout     = 750 * time.Millisecond
+	defaultMetricsPath = "/metrics"
 )
 
-// ReadinessPaths returns the ordered set of HTTP paths that indicate an
-// OpenAI-compatible engine is serving, including the metrics path if given.
+// ReadinessPaths returns the ordered HTTP paths that indicate an
+// OpenAI-compatible engine is serving, plus the metrics path if given.
 func ReadinessPaths(metricsPath string) []string {
 	paths := []string{"/v1/models", "/health", "/server_info", "/get_model_info"}
-	if strings.TrimSpace(metricsPath) != "" {
-		paths = append(paths, metricsPath)
+	if p := NormalizeMetricsPath(metricsPath); strings.TrimSpace(metricsPath) != "" && p != "/" && !slices.Contains(paths, p) {
+		return append(paths, p)
 	}
-
-	seen := map[string]struct{}{}
-	out := make([]string, 0, len(paths))
-	for _, path := range paths {
-		path = "/" + strings.TrimPrefix(strings.TrimSpace(path), "/")
-		if path == "/" {
-			continue
-		}
-		if _, ok := seen[path]; ok {
-			continue
-		}
-		seen[path] = struct{}{}
-		out = append(out, path)
-	}
-	return out
+	return paths
 }
 
 // NormalizeMetricsPath returns metricsPath with a leading slash or the default.
 func NormalizeMetricsPath(metricsPath string) string {
 	metricsPath = strings.TrimSpace(metricsPath)
 	if metricsPath == "" {
-		return DefaultMetricsPath
+		return defaultMetricsPath
 	}
 	return "/" + strings.TrimPrefix(metricsPath, "/")
 }
@@ -53,69 +40,44 @@ func CheckReady(ctx context.Context, client *http.Client, baseURL string, paths 
 	if baseURL == "" {
 		return false
 	}
-	if timeout < ReadinessTimeout {
-		timeout = ReadinessTimeout
-	}
-	if client == nil {
-		client = &http.Client{Timeout: timeout}
-	}
 	baseURL = strings.TrimRight(baseURL, "/")
-
+	timeout = max(timeout, readinessTimeout)
 	for _, path := range paths {
-		probeCtx, cancel := context.WithTimeout(ctx, timeout)
-		req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, baseURL+path, nil)
-		if err != nil {
-			cancel()
-			continue
-		}
-		req.Header.Set("Accept", "application/json")
-
-		resp, err := client.Do(req)
-		if err != nil {
-			cancel()
-			continue
-		}
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, readinessBodyLimit))
-		_ = resp.Body.Close()
-		cancel()
-
-		if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
+		if status, _, _ := get(ctx, client, baseURL+path, "application/json", timeout, readinessBodyLimit); status/100 == 2 {
 			return true
 		}
 	}
 	return false
 }
 
-// FetchEngineMetrics scrapes the engine's Prometheus endpoint and folds it
-// into a snapshot relative to previous. It returns false when no data was
-// retrieved.
+// FetchEngineMetrics scrapes the engine's Prometheus endpoint into a snapshot
+// relative to previous. The boolean is false when no data was retrieved.
 func FetchEngineMetrics(ctx context.Context, client *http.Client, metricsURL string, previous EngineMetrics) (EngineMetrics, bool, error) {
-	if client == nil {
-		client = &http.Client{Timeout: MetricsTimeout}
-	}
-	ctx, cancel := context.WithTimeout(ctx, MetricsTimeout)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, metricsURL, nil)
-	if err != nil {
-		return EngineMetrics{}, false, err
-	}
-	req.Header.Set("Accept", "text/plain")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return EngineMetrics{}, false, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, readinessBodyLimit))
+	status, body, err := get(ctx, client, metricsURL, "text/plain", metricsTimeout, metricsBodyLimit)
+	if status != 0 && status/100 != 2 {
 		return EngineMetrics{}, false, nil
 	}
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, MetricsBodyLimit))
 	if err != nil {
 		return EngineMetrics{}, false, err
 	}
-	snapshot := EngineMetricsFromPrometheus(body, previous, time.Now())
-	return snapshot, snapshot.HasData(), nil
+	snapshot := engineMetricsFromPrometheus(body, previous, time.Now())
+	return snapshot, snapshot.hasData(), nil
+}
+
+// get performs a bounded GET, returning the status (0 if no response) and up to limit body bytes.
+func get(ctx context.Context, client *http.Client, url, accept string, timeout time.Duration, limit int64) (int, []byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Accept", accept)
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, limit))
+	return resp.StatusCode, body, err
 }

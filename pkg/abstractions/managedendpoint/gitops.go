@@ -25,6 +25,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
+	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
@@ -103,7 +104,7 @@ func (g *gitops) mount(public *echo.Group, authed *echo.Group) {
 // run polls the remote ref and services triggers. Like the controller it is
 // leader-elected so only one gateway launches deployers.
 func (g *gitops) run(ctx context.Context) {
-	ticker := time.NewTicker(g.s.config.Repo.PollIntervalOrDefault())
+	ticker := time.NewTicker(g.s.config.Repo.PollInterval)
 	defer ticker.Stop()
 	for {
 		var req gitopsRequest
@@ -170,7 +171,7 @@ func (g *gitops) state(ctx context.Context) (*types.GitOpsState, error) {
 		state = &types.GitOpsState{PerEndpoint: map[string]types.GitOpsEndpointState{}}
 	}
 	state.RepoURL = g.s.config.Repo.URL
-	state.Ref = g.s.config.Repo.RefOrDefault()
+	state.Ref = g.s.config.Repo.Ref
 	return state, nil
 }
 
@@ -239,7 +240,7 @@ func (g *gitops) resolveHead(ctx context.Context) (string, error) {
 		url = "https://x-access-token:" + key + "@" + strings.TrimPrefix(url, "https://")
 	}
 
-	ref := g.s.config.Repo.RefOrDefault()
+	ref := g.s.config.Repo.Ref
 	cmd := exec.CommandContext(ctx, "git", "ls-remote", "--heads", "--tags", url, ref, "refs/heads/"+ref, "refs/tags/"+ref)
 	cmd.Env = env
 	var stdout, stderr bytes.Buffer
@@ -292,7 +293,7 @@ func (g *gitops) launch(ctx context.Context, state *types.GitOpsState, sha strin
 		"ENDPOINTS_REPO_URL=" + g.s.config.Repo.URL,
 		"ENDPOINTS_REPO_SHA=" + sha,
 		"ENDPOINTS_LAST_SHA=" + state.LastSHA,
-		"ENDPOINTS_REPO_REF=" + g.s.config.Repo.RefOrDefault(),
+		"ENDPOINTS_REPO_REF=" + g.s.config.Repo.Ref,
 		"ENDPOINTS_REPO_PATH=" + strings.Trim(g.s.config.Repo.Path, "/"),
 		"ENDPOINTS_RUN_ID=" + runID,
 		"ENDPOINTS_REDEPLOY=" + strings.Join(retry, ","),
@@ -525,7 +526,7 @@ func (g *gitops) handleWebhook(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusUnauthorized, "invalid signature")
 	}
 	push, ok := parsePush(body)
-	want := g.s.config.Repo.RefOrDefault()
+	want := g.s.config.Repo.Ref
 	switch {
 	case !ok:
 		// Ping / non-push events are acknowledged and ignored.
@@ -544,7 +545,10 @@ func (g *gitops) handleWebhook(ctx echo.Context) error {
 // handleReport receives the deployer's result. It accepts any active token of
 // the admin workspace (the run token) or a cluster admin token.
 func (g *gitops) handleReport(ctx echo.Context) error {
-	reqCtx := requestContext(ctx)
+	reqCtx := ctx.Request().Context()
+	if cc, ok := ctx.(*auth.HttpAuthContext); ok && cc.AuthInfo != nil {
+		reqCtx = auth.ContextWithAuthInfo(reqCtx, cc.AuthInfo)
+	}
 	if err := g.s.authorizeHarness(reqCtx); err != nil {
 		return httpError(err)
 	}

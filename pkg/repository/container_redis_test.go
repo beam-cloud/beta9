@@ -983,7 +983,7 @@ func TestReadyWorkerRouteSurvivesOneHundredConcurrentRegistrations(t *testing.T)
 	}
 
 	opening := ready
-	opening.WorkspaceID = "buyer-workspace"
+	opening.WorkspaceID = "consumer-workspace"
 	opening.ProxyTarget = ""
 	opening.State = types.BackendRouteStateOpening
 	opening.UpdatedAt = 0
@@ -1160,8 +1160,8 @@ func TestBackendRoutesAreIndexedByMachineID(t *testing.T) {
 
 	route := types.BackendRoute{
 		RouteID:     "route-one",
-		WorkspaceID: "buyer-one",
-		PoolName:    "marketplace-one",
+		WorkspaceID: "admin-one",
+		PoolName:    "provider-one",
 		MachineID:   "machine-one",
 		WorkerID:    "worker-one",
 		ContainerID: "container-one",
@@ -1192,8 +1192,8 @@ func TestBackendRoutesAreIndexedByMachineID(t *testing.T) {
 
 	if err := repo.SetBackendRoute(ctx, types.BackendRoute{
 		RouteID:     "route-two",
-		WorkspaceID: "buyer-one",
-		PoolName:    "marketplace-one",
+		WorkspaceID: "admin-one",
+		PoolName:    "provider-one",
 		MachineID:   "machine-two",
 		ContainerID: "container-two",
 		Kind:        types.BackendRouteKindContainer,
@@ -1211,7 +1211,7 @@ func TestBackendRoutesAreIndexedByMachineID(t *testing.T) {
 	}
 }
 
-func TestDeleteBackendRoutesByMachineRemovesRoutesIndexedUnderBuyerWorkspace(t *testing.T) {
+func TestDeleteBackendRoutesByMachineRemovesRoutesIndexedUnderConsumerWorkspace(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	if err != nil {
 		t.Fatal(err)
@@ -1221,8 +1221,8 @@ func TestDeleteBackendRoutesByMachineRemovesRoutesIndexedUnderBuyerWorkspace(t *
 	ctx := context.Background()
 	route := types.BackendRoute{
 		RouteID:     "route-one",
-		WorkspaceID: "buyer-one",
-		PoolName:    "marketplace-one",
+		WorkspaceID: "admin-one",
+		PoolName:    "provider-one",
 		MachineID:   "machine-one",
 		WorkerID:    "worker-one",
 		ContainerID: "container-one",
@@ -1235,7 +1235,7 @@ func TestDeleteBackendRoutesByMachineRemovesRoutesIndexedUnderBuyerWorkspace(t *
 		t.Fatal(err)
 	}
 
-	if err := repo.DeleteBackendRoutesByMachine(ctx, "seller-one", "marketplace-one", "machine-one"); err != nil {
+	if err := repo.DeleteBackendRoutesByMachine(ctx, "owner-one", "provider-one", "machine-one"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := repo.GetBackendRoute(ctx, route.RouteID); err == nil {
@@ -1248,12 +1248,12 @@ func TestDeleteBackendRoutesByMachineRemovesRoutesIndexedUnderBuyerWorkspace(t *
 	if len(routes) != 0 {
 		t.Fatalf("machine id routes after delete = %#v, want empty", routes)
 	}
-	routes, err = repo.ListBackendRoutesByMachine(ctx, "buyer-one", "marketplace-one", "machine-one")
+	routes, err = repo.ListBackendRoutesByMachine(ctx, "admin-one", "provider-one", "machine-one")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(routes) != 0 {
-		t.Fatalf("buyer workspace routes after delete = %#v, want empty", routes)
+		t.Fatalf("consumer workspace routes after delete = %#v, want empty", routes)
 	}
 }
 

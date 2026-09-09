@@ -25,9 +25,11 @@ func newServiceForTest(t *testing.T) *Service {
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
+	config := types.ManagedEndpointsConfig{Enabled: true}
+	config.ApplyDefaults()
 	s := &Service{
 		ctx:            ctx,
-		config:         types.ManagedEndpointsConfig{Enabled: true},
+		config:         config,
 		repo:           repository.NewManagedEndpointRedisRepository(rdb),
 		rdb:            rdb,
 		drainCtx:       ctx,
@@ -299,41 +301,43 @@ func TestAdminReadAndRolloutRPCs(t *testing.T) {
 	require.True(t, metrics.Ok)
 	assert.Len(t, metrics.Replicas, 1)
 
-	valid, err := s.ValidateEndpointSpec(ctx, &pb.ValidateEndpointSpecRequest{SpecJson: `{"id":"a/b","kind":"llm","engine":"vllm","port":8000,"gpu":[{"type":"H100","count":1,"share":0.2}],"entrypoint":["vllm","serve"]}`})
-	require.NoError(t, err)
-	assert.True(t, valid.Ok, valid.ErrMsg)
-	assert.Contains(t, valid.SpecJson, `"chat/completions"`)
-
-	invalid, err := s.ValidateEndpointSpec(ctx, &pb.ValidateEndpointSpecRequest{SpecJson: `{"id":"BAD ID","kind":"llm"}`})
-	require.NoError(t, err)
-	assert.False(t, invalid.Ok)
-	assert.NotEmpty(t, invalid.Errors)
-
 	gitops, err := s.TriggerGitOpsSync(ctx, &pb.TriggerGitOpsSyncRequest{})
 	require.NoError(t, err)
 	assert.False(t, gitops.Ok)
 }
 
-func TestExperimentRequiresHarnessAndKnownTarget(t *testing.T) {
+func TestTuningReplicaRequiresHarnessAndKnownTarget(t *testing.T) {
 	s := newServiceForTest(t)
 	endpoint := seedEndpoint(t, s)
 	ctx := adminCtx()
 
-	resp, err := s.StartExperiment(ctx, &pb.StartExperimentRequest{EndpointId: endpoint.Spec.ID, Gpu: "A100"})
+	resp, err := s.StartTuningReplica(ctx, &pb.StartTuningReplicaRequest{EndpointId: endpoint.Spec.ID, Gpu: "A100"})
 	require.NoError(t, err)
 	assert.False(t, resp.Ok)
 	assert.Contains(t, resp.ErrMsg, "no target")
 
+	stop, err := s.StopReplica(ctx, &pb.StopReplicaRequest{ReplicaId: "missing"})
+	require.NoError(t, err)
+	assert.False(t, stop.Ok)
+
+	set, err := s.SetConfig(ctx, &pb.SetConfigRequest{EndpointId: endpoint.Spec.ID, Scope: "target", ScopeKey: "H100x1", ConfigJson: `{"max_num_seqs":8}`, Author: "agent"})
+	require.NoError(t, err)
+	require.True(t, set.Ok, set.ErrMsg)
+	assert.Equal(t, string(types.ConfigSourceLive), set.Revision.Source)
+	cfg, err := s.GetConfig(ctx, &pb.GetConfigRequest{EndpointId: endpoint.Spec.ID, ScopeKey: "H100x1"})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"max_num_seqs":8}`, cfg.Revision.ConfigJson)
+
+	// Without the harness there is nothing to tune.
 	endpoint.Spec.Harness.Enabled = false
 	require.NoError(t, s.repo.SaveEndpoint(context.Background(), endpoint))
-	resp, err = s.StartExperiment(ctx, &pb.StartExperimentRequest{EndpointId: endpoint.Spec.ID, Gpu: "H100"})
+	resp, err = s.StartTuningReplica(ctx, &pb.StartTuningReplicaRequest{EndpointId: endpoint.Spec.ID, Gpu: "H100"})
 	require.NoError(t, err)
 	assert.False(t, resp.Ok)
 	assert.Contains(t, resp.ErrMsg, "harness")
-
-	resp, err = s.GetExperiment(ctx, &pb.GetExperimentRequest{ExperimentId: "missing"})
+	set, err = s.SetConfig(ctx, &pb.SetConfigRequest{EndpointId: endpoint.Spec.ID, Scope: "target", ScopeKey: "H100x1", ConfigJson: `{}`})
 	require.NoError(t, err)
-	assert.False(t, resp.Ok)
+	assert.False(t, set.Ok)
 }
 
 func TestFleetRevisionsFollowVersions(t *testing.T) {
@@ -385,4 +389,31 @@ func TestFleetRevisionsFollowVersions(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, cfg.Ok, cfg.ErrMsg)
 	assert.JSONEq(t, `{"max_num_seqs":32}`, cfg.Revision.ConfigJson)
+}
+
+func TestRouteRecordCreditsProviderWorkspace(t *testing.T) {
+	s := newServiceForTest(t)
+	r := &router{s: s, usageQueue: make(chan types.EventEndpointRouteSchema, 4)}
+	endpoint := &types.ManagedEndpoint{Spec: types.ManagedEndpointSpec{ID: "acme/model", Pricing: types.Pricing{CompletionTokens: "0.000001"}}}
+	replica := &types.EndpointReplica{ID: "rep-1", GPU: "H100", MachineID: "machine-a", ProviderWorkspaceID: "ws-provider"}
+	rq := &routeRequest{
+		auth:      &auth.AuthInfo{Workspace: &types.Workspace{ExternalId: "ws-tenant"}, Token: &types.Token{ExternalId: "tok"}},
+		requestID: "req-1", route: types.EndpointRouteChatCompletions, models: []string{"acme/model"}, startedAt: time.Now(),
+	}
+	r.record(rq, endpoint, replica, 200, Usage{CompletionTokens: 1000, Found: true}, 0, "")
+
+	event := <-r.usageQueue
+	require.Equal(t, int64(1000), event.CostMicroUSD)
+	require.Equal(t, "ws-provider", event.ProviderWorkspaceID)
+	require.Equal(t, "machine-a", event.MachineID)
+	require.Equal(t, int64(700), event.ProviderShareMicroUSD) // default 70% share
+
+	r.persist(event)
+	report, err := s.repo.GetProviderEarnings(context.Background(), "ws-provider", 1)
+	require.NoError(t, err)
+	require.Equal(t, types.ProviderEarnings{Requests: 1, CompletionTokens: 1000, EarningsMicroUSD: 700}, report.PerMachine["machine-a"])
+
+	// Free requests earn nothing and carry no provider attribution.
+	r.record(rq, endpoint, replica, 200, Usage{Found: true}, 0, "")
+	require.Empty(t, (<-r.usageQueue).ProviderWorkspaceID)
 }

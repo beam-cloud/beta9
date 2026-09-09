@@ -2238,10 +2238,6 @@ func (m *WorkerCacheManager) auditCacheChurnEvent(localHostID string, event cach
 }
 
 func cacheChurnWorkspaceID(config types.AppConfig) string {
-	if workspaceID := strings.TrimSpace(config.ManagedCompute.SellerWorkspaceID); workspaceID != "" {
-		return workspaceID
-	}
-
 	parts := strings.Split(strings.Trim(config.Database.S2.EventStreamPrefix, "/"), "/")
 	for i := 0; i+1 < len(parts); i++ {
 		if parts[i] == "workspaces" {

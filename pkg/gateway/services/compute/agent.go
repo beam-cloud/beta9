@@ -77,8 +77,6 @@ func (s *Service) JoinAgent(ctx context.Context, in *pb.JoinAgentRequest) (*pb.J
 		WorkspaceID:               tokenState.WorkspaceID,
 		PoolName:                  tokenState.PoolName,
 		Mode:                      tokenState.Mode,
-		MarketplaceListingID:      tokenState.MarketplaceListingID,
-		SellerWorkspaceID:         tokenState.SellerWorkspaceID,
 		ManagedPoolInstanceID:     tokenState.ManagedPoolInstanceID,
 		MachineID:                 machineID,
 		MachineFingerprint:        in.MachineFingerprint,
@@ -190,8 +188,6 @@ func (s *Service) commitPrivateAgentJoin(ctx context.Context, token *model.JoinT
 			return errors.New("join token was issued for a previous instance of this pool")
 		}
 		agent.Mode = firstNonEmpty(token.Mode, pool.Mode)
-		agent.MarketplaceListingID = firstNonEmpty(token.MarketplaceListingID, pool.MarketplaceListingID)
-		agent.SellerWorkspaceID = firstNonEmpty(token.SellerWorkspaceID, pool.SellerWorkspaceID)
 		if err := s.enforcePoolGPUType(lockCtx, pool, agent); err != nil {
 			return err
 		}
@@ -709,7 +705,8 @@ func (s *Service) workerTokenWorkspaceAndType(ctx context.Context, agentState *m
 	if agentState == nil {
 		return nil, "", fmt.Errorf("agent state is unavailable")
 	}
-	if agentState.Mode == string(types.PoolModeMarketplace) {
+	if agentState.Mode == string(types.PoolModeProvider) {
+		// Provider machines run platform-owned managed endpoint replicas.
 		workspace, err := s.backendRepo.GetAdminWorkspace(ctx)
 		return workspace, types.TokenTypeWorker, err
 	}
@@ -726,8 +723,8 @@ func (s *Service) workerTokenWorkspaceAndType(ctx context.Context, agentState *m
 
 // agentWorkerToken mints (or reuses) the worker token for an agent worker
 // slot. Private-pool workers use workspace-scoped TokenTypeWorkerPrivate;
-// marketplace and managed external workers use trusted worker tokens from
-// the admin workspace because they serve workloads from many workspaces.
+// provider and managed external workers use trusted worker tokens from the
+// admin workspace because they serve platform workloads.
 func (s *Service) agentWorkerToken(ctx context.Context, workspaceID uint, tokenType string, existing *model.AgentWorkerSlotState) (string, string, string, error) {
 	if existing != nil && existing.WorkerTokenID != "" {
 		token, err := s.backendRepo.GetTokenByExternalId(ctx, workspaceID, existing.WorkerTokenID)
@@ -768,7 +765,7 @@ func (s *Service) pruneAgentWorkerSlots(ctx context.Context, agentState *model.A
 }
 
 func agentWorkerSlotState(config types.AppConfig, agentState *model.AgentTokenState, worker *types.Worker, poolConfig types.WorkerPoolConfig, tokenID, tokenHash string) *model.AgentWorkerSlotState {
-	runtimeName := agentWorkerRuntime(agentState, worker)
+	runtimeName := agentWorkerRuntime(worker)
 	networkSlots := agentState.NetworkSlotPoolSize
 	startConcurrency := agentState.ContainerStartConcurrency
 	requiresPoolSelector := worker.RequiresPoolSelector
@@ -805,8 +802,6 @@ func agentWorkerSlotState(config types.AppConfig, agentState *model.AgentTokenSt
 		ContainerRuntime:          runtimeName,
 		ContainerRuntimeConfig:    poolConfig.ContainerRuntimeConfig.WithDefaults(runtimeName),
 		CPUAffinityEnforced:       cpuAffinityEnforced,
-		MarketplaceListingID:      agentState.MarketplaceListingID,
-		SellerWorkspaceID:         agentState.SellerWorkspaceID,
 		CPU:                       worker.TotalCpu,
 		Memory:                    worker.TotalMemory,
 		GPU:                       worker.Gpu,
@@ -841,26 +836,11 @@ func setAgentWorkerSlotGeneration(slot *model.AgentWorkerSlotState) error {
 }
 
 // agentWorkerRuntime picks the container runtime for an agent worker slot.
-// Marketplace machines prefer gVisor, but GPU families without gVisor CUDA
-// support fall back to runc and are advertised as such.
-func agentWorkerRuntime(agentState *model.AgentTokenState, worker *types.Worker) string {
+func agentWorkerRuntime(worker *types.Worker) string {
 	if worker != nil && worker.Runtime != "" {
 		return worker.Runtime
 	}
-	if agentState != nil && agentState.Mode == string(types.PoolModeMarketplace) {
-		return types.MarketplaceContainerRuntimeForGPU(agentWorkerGPU(agentState, worker))
-	}
 	return types.ContainerRuntimeRunc.String()
-}
-
-func agentWorkerGPU(agentState *model.AgentTokenState, worker *types.Worker) string {
-	if worker != nil && worker.Gpu != "" {
-		return worker.Gpu
-	}
-	if agentState != nil && len(agentState.GPUs) > 0 {
-		return agentState.GPUs[0]
-	}
-	return ""
 }
 
 func agentWorkerImage(config types.AppConfig) string {
@@ -891,8 +871,6 @@ func agentWorkerSlotToProto(slot *model.AgentWorkerSlotState, workerToken string
 		GvisorPlatform:            slot.ContainerRuntimeConfig.GVisorPlatform,
 		GvisorRoot:                slot.ContainerRuntimeConfig.GVisorRoot,
 		GvisorExtraArgs:           append([]string(nil), slot.ContainerRuntimeConfig.GVisorExtraArgs...),
-		MarketplaceListingId:      slot.MarketplaceListingID,
-		SellerWorkspaceId:         slot.SellerWorkspaceID,
 		Cpu:                       slot.CPU,
 		Memory:                    slot.Memory,
 		Gpu:                       slot.GPU,
@@ -1085,7 +1063,6 @@ func (s *Service) agentBootstrapConfig(ctx context.Context, workspaceID string, 
 		ImageClipVersion:       s.appConfig.ImageService.ClipVersion,
 		ImageLocalCacheEnabled: s.appConfig.ImageService.LocalCacheEnabled,
 		Telemetry:              telemetryConfig,
-		Billing:                s.agentBillingConfig(poolState),
 		DisabledServices: []string{
 			"redis",
 			"postgres",
@@ -1096,26 +1073,6 @@ func (s *Service) agentBootstrapConfig(ctx context.Context, workspaceID string, 
 			"k3s",
 		},
 	}, nil
-}
-
-// agentBillingConfig ships the marketplace usage endpoint (and container cost
-// hook) to workers on seller machines so they can meter buyer usage. Private
-// pools never receive billing credentials.
-func (s *Service) agentBillingConfig(poolState *model.PoolState) *pb.AgentBillingConfig {
-	if poolState == nil || poolState.Mode != string(types.PoolModeMarketplace) {
-		return nil
-	}
-	billing := s.appConfig.ManagedCompute.Billing
-	if strings.TrimSpace(billing.Endpoint) == "" {
-		return nil
-	}
-	return &pb.AgentBillingConfig{
-		UsageEndpoint:     billing.Endpoint,
-		UsageToken:        billing.AuthToken,
-		CostHookEndpoint:  s.appConfig.Monitoring.ContainerCostHookConfig.Endpoint,
-		CostHookToken:     s.appConfig.Monitoring.ContainerCostHookConfig.Token,
-		BillableMarginPct: s.appConfig.ManagedCompute.BillableMarginPctOrDefault(),
-	}
 }
 
 func (s *Service) agentPoolGPUVirtualized(ctx context.Context, agentState *model.AgentTokenState) (bool, error) {

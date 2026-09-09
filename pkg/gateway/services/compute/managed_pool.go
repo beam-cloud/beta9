@@ -152,7 +152,6 @@ func newManagedPoolState(workspaceID, name string, source types.WorkerPoolManage
 		Transport:         defaultPrivateTransport,
 		Fallback:          defaultPrivateFallback,
 		Priority:          config.Priority,
-		Preemptible:       config.Preemptable,
 		CreatedByTokenID:  createdBy,
 		CreatedAt:         now,
 		UpdatedAt:         now,
@@ -174,7 +173,6 @@ func managedPoolStateWithConfig(state *model.PoolState, config types.WorkerPoolC
 	next.Transport = defaultPrivateTransport
 	next.Fallback = defaultPrivateFallback
 	next.Priority = config.Priority
-	next.Preemptible = config.Preemptable
 	next.WorkerConfig = &configCopy
 	return &next
 }

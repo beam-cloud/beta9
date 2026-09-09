@@ -51,9 +51,8 @@ const (
 )
 
 var (
-	errNotEnabled  = errors.New("managed endpoints are not enabled")
-	errNotFound    = errors.New("not found")
-	errUnavailable = errors.New("registry unavailable")
+	errNotEnabled = errors.New("managed endpoints are not enabled")
+	errNotFound   = errors.New("not found")
 )
 
 // Opts wires the service into the gateway.
@@ -62,7 +61,6 @@ type Opts struct {
 	BackendRepo      repository.BackendRepository
 	ContainerRepo    repository.ContainerRepository
 	WorkerRepo       repository.WorkerRepository
-	WorkerPoolRepo   repository.WorkerPoolRepository
 	WorkspaceRepo    repository.WorkspaceRepository
 	EndpointRepo     repository.ManagedEndpointRepository
 	EventRepo        repository.EventRepository
@@ -86,7 +84,6 @@ type Service struct {
 	backend    repository.BackendRepository
 	containers repository.ContainerRepository
 	workers    repository.WorkerRepository
-	pools      repository.WorkerPoolRepository
 	repo       repository.ManagedEndpointRepository
 	events     repository.EventRepository
 	usage      repository.UsageMetricsRepository
@@ -118,7 +115,6 @@ func New(ctx context.Context, opts Opts) (*Service, error) {
 		backend:    opts.BackendRepo,
 		containers: opts.ContainerRepo,
 		workers:    opts.WorkerRepo,
-		pools:      opts.WorkerPoolRepo,
 		repo:       opts.EndpointRepo,
 		events:     opts.EventRepo,
 		usage:      opts.UsageMetricsRepo,
@@ -127,6 +123,7 @@ func New(ctx context.Context, opts Opts) (*Service, error) {
 		tailscale:  opts.Tailscale,
 		drainCtx:   opts.DrainContext,
 	}
+	s.config.ApplyDefaults()
 	if s.drainCtx == nil {
 		s.drainCtx = ctx
 	}
@@ -342,11 +339,8 @@ func rpcError(err error) error {
 	if _, ok := status.FromError(err); ok {
 		return err
 	}
-	switch {
-	case errors.Is(err, errNotFound):
+	if errors.Is(err, errNotFound) {
 		return status.Error(codes.NotFound, err.Error())
-	case errors.Is(err, errUnavailable):
-		return status.Error(codes.Unavailable, err.Error())
 	}
 	return status.Error(codes.Internal, err.Error())
 }
@@ -493,16 +487,21 @@ func endpointToProto(e *types.ManagedEndpoint, replicas []*types.EndpointReplica
 		CreatedAtUnixMs: unixMs(e.CreatedAt),
 		UpdatedAtUnixMs: unixMs(e.UpdatedAt),
 	}
+	out.ReadyReplicas, out.TotalReplicas = countReplicas(replicas, e.Spec.ID)
+	return out
+}
+
+// countReplicas returns the ready and non-terminal replica counts for an id.
+func countReplicas(replicas []*types.EndpointReplica, id string) (ready, total uint32) {
 	for _, r := range replicas {
-		if r.EndpointID != e.Spec.ID || r.Status.Terminal() {
-			continue
-		}
-		out.TotalReplicas++
-		if r.Status == types.ReplicaStatusReady {
-			out.ReadyReplicas++
+		if r.EndpointID == id && !r.Status.Terminal() {
+			total++
+			if r.Status == types.ReplicaStatusReady {
+				ready++
+			}
 		}
 	}
-	return out
+	return ready, total
 }
 
 func serviceToProto(s *types.ManagedService, replicas []*types.EndpointReplica) *pb.ManagedService {
@@ -515,15 +514,7 @@ func serviceToProto(s *types.ManagedService, replicas []*types.EndpointReplica) 
 		Enabled:  s.Enabled,
 		Status:   string(s.Status),
 	}
-	for _, r := range replicas {
-		if r.EndpointID != serviceReplicaID(s.Spec.Name) || r.Status.Terminal() {
-			continue
-		}
-		out.TotalReplicas++
-		if r.Status == types.ReplicaStatusReady {
-			out.ReadyReplicas++
-		}
-	}
+	out.ReadyReplicas, out.TotalReplicas = countReplicas(replicas, serviceReplicaID(s.Spec.Name))
 	return out
 }
 
@@ -580,37 +571,6 @@ func gitopsToProto(state *types.GitOpsState) *pb.GitOpsState {
 	return out
 }
 
-func experimentToProto(e *types.Experiment, replica *types.EndpointReplica) *pb.Experiment {
-	out := &pb.Experiment{
-		Id:               e.ID,
-		EndpointId:       e.EndpointID,
-		Gpu:              e.GPU,
-		Role:             e.Role,
-		ReplicaId:        e.ReplicaID,
-		BaselineRevision: e.BaselineRevision,
-		CurrentRevision:  e.CurrentRevision,
-		Outcome:          string(e.Outcome),
-		Notes:            e.Notes,
-		Author:           e.Author,
-		Budget:           e.Budget,
-		StartedAtUnixMs:  unixMs(e.StartedAt),
-		EndedAtUnixMs:    unixMs(e.EndedAt),
-		Replica:          replicaToProto(replica),
-	}
-	for _, step := range e.Steps {
-		out.Steps = append(out.Steps, &pb.ExperimentStep{
-			Revision:      step.Revision,
-			ConfigJson:    mustJSON(step.Config),
-			Applied:       step.Applied,
-			Error:         step.Error,
-			BenchJson:     string(step.Bench),
-			EngineMetrics: capacityToProto(step.EngineMetrics),
-			AtUnixMs:      unixMs(step.At),
-		})
-	}
-	return out
-}
-
 // routeMetricsToProto combines a route window with the ready replicas'
 // engine-reported capacity.
 func routeMetricsToProto(m *types.RouteMetrics, replicas []*types.EndpointReplica) *pb.EndpointMetrics {
@@ -625,12 +585,12 @@ func routeMetricsToProto(m *types.RouteMetrics, replicas []*types.EndpointReplic
 		Errors:           m.Errors,
 		PromptTokens:     m.PromptTokens,
 		CompletionTokens: m.CompletionTokens,
-		TtftMsP50:        m.MeanTTFTMs(),
-		TpotMsP50:        m.MeanTPOTMs(),
+		TtftMs:           m.MeanTTFTMs(),
+		TpotMs:           m.MeanTPOTMs(),
 		CostMicroUsd:     m.CostMicroUSD,
 	}
 	if m.Requests > 0 {
-		out.QueueWaitMsP95 = m.QueueWaitSumMs / m.Requests
+		out.QueueWaitMs = m.QueueWaitSumMs / m.Requests
 	}
 	var aggregate types.ReplicaCapacity
 	for _, replica := range replicas {

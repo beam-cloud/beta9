@@ -92,7 +92,7 @@ func (s *Service) Register(ctx context.Context, in *pb.HarnessRegisterRequest) (
 		Role:                     replica.Role,
 		Gpu:                      replica.GPU,
 		Locality:                 replica.Locality,
-		HeartbeatIntervalSeconds: uint32(s.config.HeartbeatIntervalOrDefault().Seconds()),
+		HeartbeatIntervalSeconds: uint32(s.config.HeartbeatInterval.Seconds()),
 		Current:                  revisionToProto(revision),
 	}, nil
 }
@@ -238,7 +238,7 @@ func (s *Service) Heartbeat(ctx context.Context, in *pb.HarnessHeartbeatRequest)
 		Ok:                       true,
 		Drain:                    drain || replica.Status == types.ReplicaStatusDraining || replica.Status == types.ReplicaStatusEvicting,
 		DrainSeconds:             drainSeconds,
-		HeartbeatIntervalSeconds: uint32(s.config.HeartbeatIntervalOrDefault().Seconds()),
+		HeartbeatIntervalSeconds: uint32(s.config.HeartbeatInterval.Seconds()),
 	}, nil
 }
 

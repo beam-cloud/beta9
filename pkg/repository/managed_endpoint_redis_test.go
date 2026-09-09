@@ -31,14 +31,14 @@ func TestManagedEndpointRegistryRoundTrip(t *testing.T) {
 	require.Equal(t, spec.Gpu, got.Spec.Gpu)
 	require.False(t, got.CreatedAt.IsZero())
 
-	list, err := repo.ListEndpoints(ctx)
-	require.NoError(t, err)
-	require.Len(t, list, 2)
-	require.Equal(t, "acme/model", list[0].Spec.ID)
-
 	missing, err := repo.GetEndpoint(ctx, "nope")
 	require.NoError(t, err)
 	require.Nil(t, missing)
+
+	list, err := repo.ListEndpoints(ctx)
+	require.NoError(t, err)
+	require.Len(t, list, 2)
+	require.Equal(t, "acme/model", list[0].Spec.ID, "sorted by id")
 
 	require.NoError(t, repo.DeleteEndpoint(ctx, "zeta/other"))
 	list, err = repo.ListEndpoints(ctx)
@@ -67,7 +67,7 @@ func TestManagedEndpointVersionsAndRollout(t *testing.T) {
 	versions, err := repo.ListVersions(ctx, "acme/model")
 	require.NoError(t, err)
 	require.Len(t, versions, 2)
-	require.Equal(t, uint(1), versions[0].Version)
+	require.Equal(t, uint(1), versions[0].Version, "ordered by version")
 	require.Equal(t, uint(2), versions[1].Version)
 
 	rollout, err := repo.GetRollout(ctx, "acme/model")
@@ -90,7 +90,6 @@ func TestManagedEndpointReplicas(t *testing.T) {
 	byContainer, err := repo.GetReplicaByContainer(ctx, "container-1")
 	require.NoError(t, err)
 	require.Equal(t, "rep-1", byContainer.ID)
-
 	perEndpoint, err := repo.ListReplicas(ctx, "acme/model")
 	require.NoError(t, err)
 	require.Len(t, perEndpoint, 1)
@@ -111,11 +110,11 @@ func TestManagedEndpointReplicas(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, types.ReplicaStatusReady, updated.Status)
 
-	drain, seconds, err := repo.DrainRequested(ctx, "rep-1")
+	drain, _, err := repo.DrainRequested(ctx, "rep-1")
 	require.NoError(t, err)
 	require.False(t, drain)
 	require.NoError(t, repo.RequestDrain(ctx, "rep-1", 7))
-	drain, seconds, err = repo.DrainRequested(ctx, "rep-1")
+	drain, seconds, err := repo.DrainRequested(ctx, "rep-1")
 	require.NoError(t, err)
 	require.True(t, drain)
 	require.Equal(t, uint32(7), seconds)
@@ -151,7 +150,6 @@ func TestManagedEndpointConfigRevisions(t *testing.T) {
 	target := &types.EndpointConfigRevision{EndpointID: "acme/model", Scope: types.ConfigScopeTarget, ScopeKey: "serve:H100x2", Config: map[string]any{"max_num_seqs": 256}, Source: types.ConfigSourceGit}
 	require.NoError(t, repo.CreateConfigRevision(ctx, target))
 	require.Equal(t, uint64(1), target.Revision)
-
 	replicaScoped := &types.EndpointConfigRevision{EndpointID: "acme/model", Scope: types.ConfigScopeReplica, ScopeKey: "rep-1", Config: map[string]any{"max_num_seqs": 128}, Source: types.ConfigSourceLive, Author: "agent"}
 	require.NoError(t, repo.CreateConfigRevision(ctx, replicaScoped))
 	require.Equal(t, uint64(2), replicaScoped.Revision)
@@ -167,7 +165,6 @@ func TestManagedEndpointConfigRevisions(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), latest.Revision)
 	require.EqualValues(t, 256, latest.Config["max_num_seqs"])
-
 	none, err := repo.LatestConfigRevision(ctx, "acme/model", types.ConfigScopeTarget, "serve:A100x1")
 	require.NoError(t, err)
 	require.Nil(t, none)
@@ -177,8 +174,7 @@ func TestManagedEndpointConfigRevisions(t *testing.T) {
 	require.Len(t, revisions, 1)
 	require.Equal(t, "agent", revisions[0].Author)
 
-	ack := &types.ConfigAck{ReplicaID: "rep-1", Revision: 2, Applied: true}
-	require.NoError(t, repo.SaveConfigAck(ctx, ack))
+	require.NoError(t, repo.SaveConfigAck(ctx, &types.ConfigAck{ReplicaID: "rep-1", Revision: 2, Applied: true}))
 	gotAck, err := repo.GetConfigAck(ctx, "rep-1", 2)
 	require.NoError(t, err)
 	require.True(t, gotAck.Applied)
@@ -191,47 +187,6 @@ func TestManagedEndpointConfigRevisions(t *testing.T) {
 	byRev, err := repo.GetConfigRevision(ctx, "acme/model", 2)
 	require.NoError(t, err)
 	require.Nil(t, byRev)
-}
-
-func TestManagedEndpointExperiments(t *testing.T) {
-	repo := newManagedEndpointRepoForTest(t)
-	ctx := context.Background()
-
-	ok, holder, err := repo.AcquireExperimentLock(ctx, "acme/model", "exp-1", time.Minute)
-	require.NoError(t, err)
-	require.True(t, ok)
-	require.Equal(t, "exp-1", holder)
-
-	ok, holder, err = repo.AcquireExperimentLock(ctx, "acme/model", "exp-2", time.Minute)
-	require.NoError(t, err)
-	require.False(t, ok)
-	require.Equal(t, "exp-1", holder)
-
-	ok, _, err = repo.AcquireExperimentLock(ctx, "acme/model", "exp-1", time.Minute)
-	require.NoError(t, err)
-	require.True(t, ok, "lock is re-entrant for the holder")
-
-	require.NoError(t, repo.ReleaseExperimentLock(ctx, "acme/model", "exp-2"))
-	ok, _, err = repo.AcquireExperimentLock(ctx, "acme/model", "exp-2", time.Minute)
-	require.NoError(t, err)
-	require.False(t, ok, "release by a non-holder is a no-op")
-	require.NoError(t, repo.ReleaseExperimentLock(ctx, "acme/model", "exp-1"))
-	ok, _, err = repo.AcquireExperimentLock(ctx, "acme/model", "exp-2", time.Minute)
-	require.NoError(t, err)
-	require.True(t, ok)
-
-	for i, id := range []string{"exp-a", "exp-b", "exp-c"} {
-		exp := &types.Experiment{ID: id, EndpointID: "acme/model", GPU: "H100x2", Outcome: types.ExperimentOutcomeRunning, StartedAt: time.Now().Add(time.Duration(i) * time.Second)}
-		require.NoError(t, repo.SaveExperiment(ctx, exp, time.Hour, 2))
-	}
-	list, err := repo.ListExperiments(ctx, "acme/model", 10)
-	require.NoError(t, err)
-	require.Len(t, list, 2, "keep trims the oldest experiment from the index")
-	require.Equal(t, "exp-c", list[0].ID)
-
-	got, err := repo.GetExperiment(ctx, "exp-c")
-	require.NoError(t, err)
-	require.Equal(t, types.ExperimentOutcomeRunning, got.Outcome)
 }
 
 func TestManagedEndpointGitOpsAndMetrics(t *testing.T) {
@@ -264,6 +219,7 @@ func TestManagedEndpointGitOpsAndMetrics(t *testing.T) {
 	require.EqualValues(t, 130, all.PromptTokens)
 	require.EqualValues(t, 70, all.CompletionTokens)
 	require.EqualValues(t, 12, all.CostMicroUSD)
+	require.EqualValues(t, 4000, all.DurationSumMs)
 	require.EqualValues(t, 150, all.MeanTTFTMs())
 	require.InDelta(t, 1.0/3.0, all.ErrorRate(), 1e-9)
 
@@ -271,6 +227,7 @@ func TestManagedEndpointGitOpsAndMetrics(t *testing.T) {
 	require.NoError(t, err)
 	require.EqualValues(t, 1, h100v2.Requests)
 	require.EqualValues(t, 1, h100v2.Errors)
+	require.Equal(t, "H100x2", h100v2.GPU)
 
 	v1, err := repo.GetRouteMetrics(ctx, "acme/model", "", 1, 10*time.Minute)
 	require.NoError(t, err)
@@ -280,4 +237,44 @@ func TestManagedEndpointGitOpsAndMetrics(t *testing.T) {
 	recent, err := repo.GetRouteMetrics(ctx, "acme/model", "", 0, time.Minute)
 	require.NoError(t, err)
 	require.EqualValues(t, 2, recent.Requests, "older bucket falls outside the window")
+}
+
+func TestManagedEndpointGenerations(t *testing.T) {
+	repo := newManagedEndpointRepoForTest(t)
+	ctx := context.Background()
+
+	missing, err := repo.GetGeneration(ctx, "gen-1")
+	require.NoError(t, err)
+	require.Nil(t, missing)
+	require.NoError(t, repo.SaveGeneration(ctx, &types.EventEndpointRouteSchema{RequestID: "gen-1", EndpointID: "acme/model"}, time.Hour))
+	record, err := repo.GetGeneration(ctx, "gen-1")
+	require.NoError(t, err)
+	require.Equal(t, "acme/model", record.EndpointID)
+}
+
+func TestManagedEndpointProviderEarnings(t *testing.T) {
+	repo := newManagedEndpointRepoForTest(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	empty, err := repo.GetProviderEarnings(ctx, "ws-provider", 7)
+	require.NoError(t, err)
+	require.Equal(t, types.ProviderEarnings{}, empty.Total)
+
+	require.NoError(t, repo.AddProviderEarnings(ctx, "ws-provider", "machine-a", now, types.ProviderEarnings{Requests: 1, PromptTokens: 100, CompletionTokens: 50, EarningsMicroUSD: 700}))
+	require.NoError(t, repo.AddProviderEarnings(ctx, "ws-provider", "machine-b", now, types.ProviderEarnings{Requests: 1, Images: 2, EarningsMicroUSD: 300}))
+	require.NoError(t, repo.AddProviderEarnings(ctx, "ws-provider", "machine-a", now.AddDate(0, 0, -1), types.ProviderEarnings{Requests: 1, EarningsMicroUSD: 1000}))
+
+	report, err := repo.GetProviderEarnings(ctx, "ws-provider", 7)
+	require.NoError(t, err)
+	require.Equal(t, types.ProviderEarnings{Requests: 3, PromptTokens: 100, CompletionTokens: 50, Images: 2, EarningsMicroUSD: 2000}, report.Total)
+	require.Equal(t, types.ProviderEarnings{Requests: 2, PromptTokens: 100, CompletionTokens: 50, EarningsMicroUSD: 1700}, report.PerMachine["machine-a"])
+	require.Equal(t, types.ProviderEarnings{Requests: 1, Images: 2, EarningsMicroUSD: 300}, report.PerMachine["machine-b"])
+	require.Len(t, report.PerDay, 2)
+	require.Equal(t, int64(1000), report.PerDay[now.AddDate(0, 0, -1).Format(time.DateOnly)].EarningsMicroUSD)
+
+	// Only today is in a 1-day window.
+	today, err := repo.GetProviderEarnings(ctx, "ws-provider", 1)
+	require.NoError(t, err)
+	require.Equal(t, int64(1000), today.Total.EarningsMicroUSD)
 }

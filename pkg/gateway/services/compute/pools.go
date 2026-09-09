@@ -391,8 +391,8 @@ func (s *Service) ListPrivateMachines(ctx context.Context, authInfo *auth.AuthIn
 }
 
 // ListMachineContainers lists the active containers scheduled on one machine.
-// Works for private pools and marketplace listing pools alike — both are
-// stored under the owning workspace, so sellers can see what runs on their
+// Works for private and provider pools alike — both are stored under the
+// owning workspace, so providers can see what runs on their
 // hardware.
 func (s *Service) ListMachineContainers(ctx context.Context, in *pb.ListMachineContainersRequest) (*pb.ListMachineContainersResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
@@ -579,8 +579,10 @@ func (s *Service) privateMachineForDelete(ctx context.Context, workspaceID, pool
 		poolName = machine.PoolName
 	}
 
+	// Owners can remove machines from their private pools and from the
+	// provider pools they contribute to the managed endpoint fleet.
 	pool, err := s.getPrivatePoolState(ctx, workspaceID, poolName)
-	if err != nil || pool == nil || !poolStateIsPrivate(pool) {
+	if err != nil || pool == nil || !(poolStateIsPrivate(pool) || pool.Mode == string(types.PoolModeProvider)) {
 		return nil, "", err
 	}
 	machine, err := s.computeRepo.GetAgentMachineState(ctx, workspaceID, poolName, machineID)

@@ -66,21 +66,21 @@ func TestPlanFillDemandGrowsPastQuotaWithinMax(t *testing.T) {
 	assert.Equal(t, fillPlan{Quota: 0, Desired: 3}, plans[targets[0].key()])
 }
 
-func TestPickWorkerPrefersMostFreeAndReserves(t *testing.T) {
+func TestReservePrefersMostFreeWorker(t *testing.T) {
 	inv := h100Inventory()["H100"]
-	i, ok := inv.pickWorker(2, nil)
+	any := func(workerSlot) bool { return true }
+	slot, ok := inv.reserve(2, any)
 	require.True(t, ok)
 	// w1 and w3 both have 8 free; w1 has fewer held -> tie broken by held then order
-	assert.Equal(t, "w1", inv.Workers[i].WorkerID)
-	inv.reserve(i, 2)
-	assert.Equal(t, uint32(6), inv.Workers[i].Free)
-	assert.Equal(t, uint32(2), inv.Workers[i].Held)
+	assert.Equal(t, "w1", slot.WorkerID)
+	assert.Equal(t, uint32(6), inv.Workers[0].Free)
+	assert.Equal(t, uint32(2), inv.Workers[0].Held)
 
-	j, ok := inv.pickWorker(1, func(w workerSlot) bool { return w.Locality == "eu-west" })
+	slot, ok = inv.reserve(1, func(w workerSlot) bool { return w.Locality == "eu-west" })
 	require.True(t, ok)
-	assert.Equal(t, "w3", inv.Workers[j].WorkerID)
+	assert.Equal(t, "w3", slot.WorkerID)
 
-	_, ok = inv.pickWorker(16, nil)
+	_, ok = inv.reserve(16, any)
 	assert.False(t, ok)
 }
 

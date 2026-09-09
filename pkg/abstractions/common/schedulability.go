@@ -10,7 +10,7 @@ import (
 // GPUPoolChecker answers whether any serverless pool config supports a GPU
 // type. Implemented by *scheduler.Scheduler.
 type GPUPoolChecker interface {
-	HasManagedPoolForGPU(gpuType string, allowMarketplace bool) bool
+	HasManagedPoolForGPU(gpuType string) bool
 }
 
 // StubSchedulable reports whether a stub's containers could ever be placed by
@@ -33,7 +33,7 @@ func StubSchedulable(s GPUPoolChecker, stubConfig *types.StubConfigV1) (bool, st
 
 	unsupported := []string{}
 	for _, gpu := range stubGPUTypes(stubConfig) {
-		if s.HasManagedPoolForGPU(gpu, stubConfig.AllowMarketplace) {
+		if s.HasManagedPoolForGPU(gpu) {
 			return true, ""
 		}
 		unsupported = append(unsupported, gpu)

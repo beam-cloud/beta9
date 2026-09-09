@@ -1,13 +1,13 @@
 package llmroute
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"encoding/binary"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
-	"time"
 )
 
 const (
@@ -23,37 +23,25 @@ const (
 
 // Candidate is a ready replica that could serve the request.
 type Candidate struct {
-	// ID uniquely identifies the replica (container id).
-	ID string
-	// Connections is the number of in-flight proxied connections.
-	Connections int64
-	// Pressure is the router-tracked stream/token load for the replica.
-	Pressure Pressure
-	// Engine is the latest engine metrics snapshot for the replica.
-	Engine EngineMetrics
-	// ContextLen is the model context length used to normalize token pressure.
-	ContextLen int64
-	// Payload is opaque caller data returned with the selection.
-	Payload any
+	ID          string
+	Connections int64         // in-flight proxied connections
+	Pressure    Pressure      // router-tracked stream/token load
+	Engine      EngineMetrics // latest engine metrics snapshot
+	ContextLen  int64         // model context length used to normalize token pressure
+	Payload     any           // opaque caller data returned with the selection
 }
 
 // Affinity describes which replicas previously served this session / prompt.
 type Affinity struct {
-	// ExactID is the replica that last served the exact affinity key.
-	ExactID string
-	// ExactIsSession is true when ExactID came from a session key rather than a
-	// prompt prefix hash.
-	ExactIsSession bool
-	// PrefixMatches counts prefix-block hits per replica id.
-	PrefixMatches map[string]int
+	ExactID        string         // replica that last served the exact affinity key
+	ExactIsSession bool           // ExactID came from a session key, not a prompt hash
+	PrefixMatches  map[string]int // prefix-block hits per replica id
 }
 
 // Selection is the outcome of Select.
 type Selection struct {
-	Candidate     Candidate
-	Score         int64
-	Reason        string
-	PrefixMatches int
+	Candidate Candidate
+	Reason    string
 }
 
 type scored struct {
@@ -64,20 +52,17 @@ type scored struct {
 	prefixMatches int
 }
 
-// Selector picks replicas. The zero value is ready to use; Counter provides
-// deterministic power-of-two sampling across calls.
+// Selector picks replicas; the zero value is ready to use.
 type Selector struct {
 	Counter atomic.Uint64
 }
 
 // Select chooses the best candidate for info, applying affinity bonuses when
 // load is balanced and falling back to power-of-two-choices otherwise.
-// It returns false when there are no candidates.
 func (s *Selector) Select(candidates []Candidate, affinity Affinity, info *RequestInfo) (Selection, bool) {
 	if len(candidates) == 0 {
 		return Selection{}, false
 	}
-
 	scoredCandidates := make([]scored, 0, len(candidates))
 	for _, c := range candidates {
 		scoredCandidates = append(scoredCandidates, scoreCandidate(c, affinity, info))
@@ -91,150 +76,94 @@ func (s *Selector) Select(candidates []Candidate, affinity Affinity, info *Reque
 		for i := range scoredCandidates {
 			scoredCandidates[i] = applyAffinity(scoredCandidates[i], affinity)
 		}
-		sort.SliceStable(scoredCandidates, func(i, j int) bool {
-			if scoredCandidates[i].score == scoredCandidates[j].score {
-				return scoredCandidates[i].ID < scoredCandidates[j].ID
-			}
-			return scoredCandidates[i].score < scoredCandidates[j].score
-		})
-		selected = scoredCandidates[0]
+		selected = slices.MinFunc(scoredCandidates, compareScored)
 	default:
-		reason := "power_of_two_load"
-		if hasAffinitySignal(scoredCandidates, affinity) {
-			reason = "load_imbalance"
+		selected = s.powerOfTwo(scoredCandidates, info)
+		selected.reason = "power_of_two_load"
+		if affinity.ExactID != "" || slices.ContainsFunc(scoredCandidates, func(c scored) bool { return c.prefixMatches > 0 }) {
+			selected.reason = "load_imbalance"
 		}
-		selected = s.powerOfTwo(scoredCandidates, info, reason)
 	}
 
 	if info != nil {
 		info.RouteReason = selected.reason
-		info.RouteScore = selected.score
-		info.CandidateCount = len(candidates)
 		info.PrefixCacheMatches = selected.prefixMatches
 	}
-	return Selection{
-		Candidate:     selected.Candidate,
-		Score:         selected.score,
-		Reason:        selected.reason,
-		PrefixMatches: selected.prefixMatches,
-	}, true
+	return Selection{Candidate: selected.Candidate, Reason: selected.reason}, true
+}
+
+func compareScored(a, b scored) int {
+	return cmp.Or(cmp.Compare(a.score, b.score), strings.Compare(a.ID, b.ID))
 }
 
 func scoreCandidate(c Candidate, affinity Affinity, info *RequestInfo) scored {
 	contextLen := c.ContextLen
 	if contextLen <= 0 {
-		contextLen = DefaultContextLen
+		contextLen = defaultContextLen
 	}
-	loadScore := c.Connections*connectionWeight +
+	load := c.Connections*connectionWeight +
 		c.Pressure.ActiveStreams*activeStreamWeight +
 		(c.Pressure.TokenPressure*tokenPressureWeight)/contextLen +
-		c.Engine.Score()
-
+		c.Engine.score()
 	return scored{
 		Candidate:     c,
-		score:         loadScore + spreadScore(c.ID, info),
+		score:         load + spreadScore(c.ID, info),
 		queueDepth:    c.Connections + c.Pressure.ActiveStreams + c.Engine.RunningRequests + c.Engine.WaitingRequests,
 		reason:        "least_pressure",
 		prefixMatches: affinity.PrefixMatches[c.ID],
 	}
 }
 
-func applyAffinity(candidate scored, affinity Affinity) scored {
-	if affinity.ExactID != "" && affinity.ExactID == candidate.ID {
-		if affinity.ExactIsSession {
-			candidate.score -= sessionAffinityBonus
-			candidate.reason = "session_affinity"
-		} else {
-			candidate.score -= exactPrefixBonus
-			candidate.reason = "prefix_affinity"
-		}
-	} else if candidate.prefixMatches > 0 {
-		candidate.score -= int64(candidate.prefixMatches) * prefixBlockBonus
-		candidate.reason = "prefix_block_affinity"
+func applyAffinity(c scored, affinity Affinity) scored {
+	exact := affinity.ExactID != "" && affinity.ExactID == c.ID
+	switch {
+	case exact && affinity.ExactIsSession:
+		c.score -= sessionAffinityBonus
+		c.reason = "session_affinity"
+	case exact:
+		c.score -= exactPrefixBonus
+		c.reason = "prefix_affinity"
+	case c.prefixMatches > 0:
+		c.score -= int64(c.prefixMatches) * prefixBlockBonus
+		c.reason = "prefix_block_affinity"
 	}
-	return candidate
+	return c
 }
 
+// balanced reports whether queue depths are close enough for affinity to override load.
 func balanced(candidates []scored) bool {
-	if len(candidates) < 2 {
-		return true
+	lo, hi := candidates[0].queueDepth, candidates[0].queueDepth
+	for _, c := range candidates[1:] {
+		lo, hi = min(lo, c.queueDepth), max(hi, c.queueDepth)
 	}
-	minDepth, maxDepth := candidates[0].queueDepth, candidates[0].queueDepth
-	for _, candidate := range candidates[1:] {
-		minDepth = min(minDepth, candidate.queueDepth)
-		maxDepth = max(maxDepth, candidate.queueDepth)
-	}
-	return maxDepth-minDepth <= affinityImbalanceThreshold
+	return hi-lo <= affinityImbalanceThreshold
 }
 
-func hasAffinitySignal(candidates []scored, affinity Affinity) bool {
-	if affinity.ExactID != "" {
-		return true
-	}
-	for _, candidate := range candidates {
-		if candidate.prefixMatches > 0 {
-			return true
-		}
-	}
-	return false
-}
-
-func (s *Selector) powerOfTwo(candidates []scored, info *RequestInfo, reason string) scored {
-	if len(candidates) == 1 {
-		candidates[0].reason = reason
-		return candidates[0]
-	}
-
-	left, right := s.powerOfTwoIndices(len(candidates), info)
-	selected := candidates[left]
-	other := candidates[right]
-	if other.score < selected.score || (other.score == selected.score && other.ID < selected.ID) {
-		selected = other
-	}
-	selected.reason = reason
-	return selected
-}
-
-func (s *Selector) powerOfTwoIndices(count int, info *RequestInfo) (int, int) {
-	if count <= 1 {
-		return 0, 0
-	}
-
-	var counter uint64
-	if s != nil {
-		counter = s.Counter.Add(1)
-	} else {
-		counter = uint64(time.Now().UnixNano())
-	}
-
+// powerOfTwo deterministically samples two candidates and returns the less loaded one.
+func (s *Selector) powerOfTwo(candidates []scored, info *RequestInfo) scored {
 	key := ""
 	if info != nil {
 		key = strings.Join([]string{info.Model, info.Path, info.AffinityKey, info.RequestID}, "\n")
 	}
-	sum := sha256.Sum256([]byte(key + "\n" + strconv.FormatUint(counter, 10)))
-	left := int(binary.BigEndian.Uint64(sum[:8]) % uint64(count))
-	right := int(binary.BigEndian.Uint64(sum[8:16]) % uint64(count-1))
+	sum := sha256.Sum256([]byte(key + "\n" + strconv.FormatUint(s.Counter.Add(1), 10)))
+	n := len(candidates)
+	left := int(binary.BigEndian.Uint64(sum[:8]) % uint64(n))
+	right := int(binary.BigEndian.Uint64(sum[8:16]) % uint64(n-1))
 	if right >= left {
 		right++
 	}
-	return left, right
+	if compareScored(candidates[right], candidates[left]) < 0 {
+		return candidates[right]
+	}
+	return candidates[left]
 }
 
-// spreadScore adds a small deterministic jitter so equal-load replicas are
-// spread by affinity key rather than always picking the lowest id.
+// spreadScore is a small deterministic jitter so equal-load replicas are spread by key.
 func spreadScore(replicaID string, info *RequestInfo) int64 {
 	if replicaID == "" || info == nil {
 		return 0
 	}
-
-	key := info.AffinityKey
-	if key == "" {
-		key = info.PrefixHash
-	}
-	if key == "" {
-		key = info.Model + ":" + info.Path
-	}
-
+	key := cmp.Or(info.AffinityKey, info.PrefixHash, info.Model+":"+info.Path)
 	hash := sha256.Sum256([]byte(key + "\n" + replicaID))
 	return int64(binary.BigEndian.Uint16(hash[:2])) % spreadScoreMax
 }

@@ -300,29 +300,22 @@ var EndpointHarnessService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	EndpointAdminService_ListEndpoints_FullMethodName         = "/managedendpoint.EndpointAdminService/ListEndpoints"
-	EndpointAdminService_GetEndpoint_FullMethodName           = "/managedendpoint.EndpointAdminService/GetEndpoint"
-	EndpointAdminService_ListReplicas_FullMethodName          = "/managedendpoint.EndpointAdminService/ListReplicas"
-	EndpointAdminService_GetMetrics_FullMethodName            = "/managedendpoint.EndpointAdminService/GetMetrics"
-	EndpointAdminService_GetConfig_FullMethodName             = "/managedendpoint.EndpointAdminService/GetConfig"
-	EndpointAdminService_ListConfigRevisions_FullMethodName   = "/managedendpoint.EndpointAdminService/ListConfigRevisions"
-	EndpointAdminService_GetRollout_FullMethodName            = "/managedendpoint.EndpointAdminService/GetRollout"
-	EndpointAdminService_PromoteRollout_FullMethodName        = "/managedendpoint.EndpointAdminService/PromoteRollout"
-	EndpointAdminService_RollbackRollout_FullMethodName       = "/managedendpoint.EndpointAdminService/RollbackRollout"
-	EndpointAdminService_PinVersion_FullMethodName            = "/managedendpoint.EndpointAdminService/PinVersion"
-	EndpointAdminService_GetGitOpsStatus_FullMethodName       = "/managedendpoint.EndpointAdminService/GetGitOpsStatus"
-	EndpointAdminService_TriggerGitOpsSync_FullMethodName     = "/managedendpoint.EndpointAdminService/TriggerGitOpsSync"
-	EndpointAdminService_SetEndpointEnabled_FullMethodName    = "/managedendpoint.EndpointAdminService/SetEndpointEnabled"
-	EndpointAdminService_ListServices_FullMethodName          = "/managedendpoint.EndpointAdminService/ListServices"
-	EndpointAdminService_ValidateEndpointSpec_FullMethodName  = "/managedendpoint.EndpointAdminService/ValidateEndpointSpec"
-	EndpointAdminService_StartExperiment_FullMethodName       = "/managedendpoint.EndpointAdminService/StartExperiment"
-	EndpointAdminService_GetExperiment_FullMethodName         = "/managedendpoint.EndpointAdminService/GetExperiment"
-	EndpointAdminService_ListExperiments_FullMethodName       = "/managedendpoint.EndpointAdminService/ListExperiments"
-	EndpointAdminService_ApplyExperimentConfig_FullMethodName = "/managedendpoint.EndpointAdminService/ApplyExperimentConfig"
-	EndpointAdminService_GetExperimentMetrics_FullMethodName  = "/managedendpoint.EndpointAdminService/GetExperimentMetrics"
-	EndpointAdminService_RecordExperimentBench_FullMethodName = "/managedendpoint.EndpointAdminService/RecordExperimentBench"
-	EndpointAdminService_RevertExperiment_FullMethodName      = "/managedendpoint.EndpointAdminService/RevertExperiment"
-	EndpointAdminService_StopExperiment_FullMethodName        = "/managedendpoint.EndpointAdminService/StopExperiment"
+	EndpointAdminService_ListEndpoints_FullMethodName       = "/managedendpoint.EndpointAdminService/ListEndpoints"
+	EndpointAdminService_GetEndpoint_FullMethodName         = "/managedendpoint.EndpointAdminService/GetEndpoint"
+	EndpointAdminService_ListReplicas_FullMethodName        = "/managedendpoint.EndpointAdminService/ListReplicas"
+	EndpointAdminService_GetMetrics_FullMethodName          = "/managedendpoint.EndpointAdminService/GetMetrics"
+	EndpointAdminService_GetConfig_FullMethodName           = "/managedendpoint.EndpointAdminService/GetConfig"
+	EndpointAdminService_ListConfigRevisions_FullMethodName = "/managedendpoint.EndpointAdminService/ListConfigRevisions"
+	EndpointAdminService_PromoteRollout_FullMethodName      = "/managedendpoint.EndpointAdminService/PromoteRollout"
+	EndpointAdminService_RollbackRollout_FullMethodName     = "/managedendpoint.EndpointAdminService/RollbackRollout"
+	EndpointAdminService_PinVersion_FullMethodName          = "/managedendpoint.EndpointAdminService/PinVersion"
+	EndpointAdminService_GetGitOpsStatus_FullMethodName     = "/managedendpoint.EndpointAdminService/GetGitOpsStatus"
+	EndpointAdminService_TriggerGitOpsSync_FullMethodName   = "/managedendpoint.EndpointAdminService/TriggerGitOpsSync"
+	EndpointAdminService_SetEndpointEnabled_FullMethodName  = "/managedendpoint.EndpointAdminService/SetEndpointEnabled"
+	EndpointAdminService_ListServices_FullMethodName        = "/managedendpoint.EndpointAdminService/ListServices"
+	EndpointAdminService_StartTuningReplica_FullMethodName  = "/managedendpoint.EndpointAdminService/StartTuningReplica"
+	EndpointAdminService_StopReplica_FullMethodName         = "/managedendpoint.EndpointAdminService/StopReplica"
+	EndpointAdminService_SetConfig_FullMethodName           = "/managedendpoint.EndpointAdminService/SetConfig"
 )
 
 // EndpointAdminServiceClient is the client API for EndpointAdminService service.
@@ -335,7 +328,6 @@ type EndpointAdminServiceClient interface {
 	GetMetrics(ctx context.Context, in *GetMetricsRequest, opts ...grpc.CallOption) (*GetMetricsResponse, error)
 	GetConfig(ctx context.Context, in *GetConfigRequest, opts ...grpc.CallOption) (*GetConfigResponse, error)
 	ListConfigRevisions(ctx context.Context, in *ListConfigRevisionsRequest, opts ...grpc.CallOption) (*ListConfigRevisionsResponse, error)
-	GetRollout(ctx context.Context, in *GetRolloutRequest, opts ...grpc.CallOption) (*GetRolloutResponse, error)
 	PromoteRollout(ctx context.Context, in *PromoteRolloutRequest, opts ...grpc.CallOption) (*RolloutActionResponse, error)
 	RollbackRollout(ctx context.Context, in *RollbackRolloutRequest, opts ...grpc.CallOption) (*RolloutActionResponse, error)
 	PinVersion(ctx context.Context, in *PinVersionRequest, opts ...grpc.CallOption) (*RolloutActionResponse, error)
@@ -343,16 +335,13 @@ type EndpointAdminServiceClient interface {
 	TriggerGitOpsSync(ctx context.Context, in *TriggerGitOpsSyncRequest, opts ...grpc.CallOption) (*TriggerGitOpsSyncResponse, error)
 	SetEndpointEnabled(ctx context.Context, in *SetEndpointEnabledRequest, opts ...grpc.CallOption) (*SetEndpointEnabledResponse, error)
 	ListServices(ctx context.Context, in *ListServicesRequest, opts ...grpc.CallOption) (*ListServicesResponse, error)
-	ValidateEndpointSpec(ctx context.Context, in *ValidateEndpointSpecRequest, opts ...grpc.CallOption) (*ValidateEndpointSpecResponse, error)
-	// Live tuning (one dedicated replica per endpoint at a time).
-	StartExperiment(ctx context.Context, in *StartExperimentRequest, opts ...grpc.CallOption) (*ExperimentResponse, error)
-	GetExperiment(ctx context.Context, in *GetExperimentRequest, opts ...grpc.CallOption) (*ExperimentResponse, error)
-	ListExperiments(ctx context.Context, in *ListExperimentsRequest, opts ...grpc.CallOption) (*ListExperimentsResponse, error)
-	ApplyExperimentConfig(ctx context.Context, in *ApplyExperimentConfigRequest, opts ...grpc.CallOption) (*ExperimentResponse, error)
-	GetExperimentMetrics(ctx context.Context, in *GetExperimentMetricsRequest, opts ...grpc.CallOption) (*GetExperimentMetricsResponse, error)
-	RecordExperimentBench(ctx context.Context, in *RecordExperimentBenchRequest, opts ...grpc.CallOption) (*ExperimentResponse, error)
-	RevertExperiment(ctx context.Context, in *RevertExperimentRequest, opts ...grpc.CallOption) (*ExperimentResponse, error)
-	StopExperiment(ctx context.Context, in *StopExperimentRequest, opts ...grpc.CallOption) (*ExperimentResponse, error)
+	// Live tuning. An agent starts a dedicated tuning replica (no public
+	// traffic; address it with X-Beam-Endpoint-Replica), pushes replica-scoped
+	// configs with SetConfig and reads GetMetrics, then promotes the winner to
+	// the fleet with a target-scoped SetConfig and stops the replica.
+	StartTuningReplica(ctx context.Context, in *StartTuningReplicaRequest, opts ...grpc.CallOption) (*ReplicaResponse, error)
+	StopReplica(ctx context.Context, in *StopReplicaRequest, opts ...grpc.CallOption) (*ReplicaResponse, error)
+	SetConfig(ctx context.Context, in *SetConfigRequest, opts ...grpc.CallOption) (*SetConfigResponse, error)
 }
 
 type endpointAdminServiceClient struct {
@@ -411,15 +400,6 @@ func (c *endpointAdminServiceClient) GetConfig(ctx context.Context, in *GetConfi
 func (c *endpointAdminServiceClient) ListConfigRevisions(ctx context.Context, in *ListConfigRevisionsRequest, opts ...grpc.CallOption) (*ListConfigRevisionsResponse, error) {
 	out := new(ListConfigRevisionsResponse)
 	err := c.cc.Invoke(ctx, EndpointAdminService_ListConfigRevisions_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *endpointAdminServiceClient) GetRollout(ctx context.Context, in *GetRolloutRequest, opts ...grpc.CallOption) (*GetRolloutResponse, error) {
-	out := new(GetRolloutResponse)
-	err := c.cc.Invoke(ctx, EndpointAdminService_GetRollout_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -489,81 +469,27 @@ func (c *endpointAdminServiceClient) ListServices(ctx context.Context, in *ListS
 	return out, nil
 }
 
-func (c *endpointAdminServiceClient) ValidateEndpointSpec(ctx context.Context, in *ValidateEndpointSpecRequest, opts ...grpc.CallOption) (*ValidateEndpointSpecResponse, error) {
-	out := new(ValidateEndpointSpecResponse)
-	err := c.cc.Invoke(ctx, EndpointAdminService_ValidateEndpointSpec_FullMethodName, in, out, opts...)
+func (c *endpointAdminServiceClient) StartTuningReplica(ctx context.Context, in *StartTuningReplicaRequest, opts ...grpc.CallOption) (*ReplicaResponse, error) {
+	out := new(ReplicaResponse)
+	err := c.cc.Invoke(ctx, EndpointAdminService_StartTuningReplica_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *endpointAdminServiceClient) StartExperiment(ctx context.Context, in *StartExperimentRequest, opts ...grpc.CallOption) (*ExperimentResponse, error) {
-	out := new(ExperimentResponse)
-	err := c.cc.Invoke(ctx, EndpointAdminService_StartExperiment_FullMethodName, in, out, opts...)
+func (c *endpointAdminServiceClient) StopReplica(ctx context.Context, in *StopReplicaRequest, opts ...grpc.CallOption) (*ReplicaResponse, error) {
+	out := new(ReplicaResponse)
+	err := c.cc.Invoke(ctx, EndpointAdminService_StopReplica_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *endpointAdminServiceClient) GetExperiment(ctx context.Context, in *GetExperimentRequest, opts ...grpc.CallOption) (*ExperimentResponse, error) {
-	out := new(ExperimentResponse)
-	err := c.cc.Invoke(ctx, EndpointAdminService_GetExperiment_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *endpointAdminServiceClient) ListExperiments(ctx context.Context, in *ListExperimentsRequest, opts ...grpc.CallOption) (*ListExperimentsResponse, error) {
-	out := new(ListExperimentsResponse)
-	err := c.cc.Invoke(ctx, EndpointAdminService_ListExperiments_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *endpointAdminServiceClient) ApplyExperimentConfig(ctx context.Context, in *ApplyExperimentConfigRequest, opts ...grpc.CallOption) (*ExperimentResponse, error) {
-	out := new(ExperimentResponse)
-	err := c.cc.Invoke(ctx, EndpointAdminService_ApplyExperimentConfig_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *endpointAdminServiceClient) GetExperimentMetrics(ctx context.Context, in *GetExperimentMetricsRequest, opts ...grpc.CallOption) (*GetExperimentMetricsResponse, error) {
-	out := new(GetExperimentMetricsResponse)
-	err := c.cc.Invoke(ctx, EndpointAdminService_GetExperimentMetrics_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *endpointAdminServiceClient) RecordExperimentBench(ctx context.Context, in *RecordExperimentBenchRequest, opts ...grpc.CallOption) (*ExperimentResponse, error) {
-	out := new(ExperimentResponse)
-	err := c.cc.Invoke(ctx, EndpointAdminService_RecordExperimentBench_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *endpointAdminServiceClient) RevertExperiment(ctx context.Context, in *RevertExperimentRequest, opts ...grpc.CallOption) (*ExperimentResponse, error) {
-	out := new(ExperimentResponse)
-	err := c.cc.Invoke(ctx, EndpointAdminService_RevertExperiment_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *endpointAdminServiceClient) StopExperiment(ctx context.Context, in *StopExperimentRequest, opts ...grpc.CallOption) (*ExperimentResponse, error) {
-	out := new(ExperimentResponse)
-	err := c.cc.Invoke(ctx, EndpointAdminService_StopExperiment_FullMethodName, in, out, opts...)
+func (c *endpointAdminServiceClient) SetConfig(ctx context.Context, in *SetConfigRequest, opts ...grpc.CallOption) (*SetConfigResponse, error) {
+	out := new(SetConfigResponse)
+	err := c.cc.Invoke(ctx, EndpointAdminService_SetConfig_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -580,7 +506,6 @@ type EndpointAdminServiceServer interface {
 	GetMetrics(context.Context, *GetMetricsRequest) (*GetMetricsResponse, error)
 	GetConfig(context.Context, *GetConfigRequest) (*GetConfigResponse, error)
 	ListConfigRevisions(context.Context, *ListConfigRevisionsRequest) (*ListConfigRevisionsResponse, error)
-	GetRollout(context.Context, *GetRolloutRequest) (*GetRolloutResponse, error)
 	PromoteRollout(context.Context, *PromoteRolloutRequest) (*RolloutActionResponse, error)
 	RollbackRollout(context.Context, *RollbackRolloutRequest) (*RolloutActionResponse, error)
 	PinVersion(context.Context, *PinVersionRequest) (*RolloutActionResponse, error)
@@ -588,16 +513,13 @@ type EndpointAdminServiceServer interface {
 	TriggerGitOpsSync(context.Context, *TriggerGitOpsSyncRequest) (*TriggerGitOpsSyncResponse, error)
 	SetEndpointEnabled(context.Context, *SetEndpointEnabledRequest) (*SetEndpointEnabledResponse, error)
 	ListServices(context.Context, *ListServicesRequest) (*ListServicesResponse, error)
-	ValidateEndpointSpec(context.Context, *ValidateEndpointSpecRequest) (*ValidateEndpointSpecResponse, error)
-	// Live tuning (one dedicated replica per endpoint at a time).
-	StartExperiment(context.Context, *StartExperimentRequest) (*ExperimentResponse, error)
-	GetExperiment(context.Context, *GetExperimentRequest) (*ExperimentResponse, error)
-	ListExperiments(context.Context, *ListExperimentsRequest) (*ListExperimentsResponse, error)
-	ApplyExperimentConfig(context.Context, *ApplyExperimentConfigRequest) (*ExperimentResponse, error)
-	GetExperimentMetrics(context.Context, *GetExperimentMetricsRequest) (*GetExperimentMetricsResponse, error)
-	RecordExperimentBench(context.Context, *RecordExperimentBenchRequest) (*ExperimentResponse, error)
-	RevertExperiment(context.Context, *RevertExperimentRequest) (*ExperimentResponse, error)
-	StopExperiment(context.Context, *StopExperimentRequest) (*ExperimentResponse, error)
+	// Live tuning. An agent starts a dedicated tuning replica (no public
+	// traffic; address it with X-Beam-Endpoint-Replica), pushes replica-scoped
+	// configs with SetConfig and reads GetMetrics, then promotes the winner to
+	// the fleet with a target-scoped SetConfig and stops the replica.
+	StartTuningReplica(context.Context, *StartTuningReplicaRequest) (*ReplicaResponse, error)
+	StopReplica(context.Context, *StopReplicaRequest) (*ReplicaResponse, error)
+	SetConfig(context.Context, *SetConfigRequest) (*SetConfigResponse, error)
 	mustEmbedUnimplementedEndpointAdminServiceServer()
 }
 
@@ -623,9 +545,6 @@ func (UnimplementedEndpointAdminServiceServer) GetConfig(context.Context, *GetCo
 func (UnimplementedEndpointAdminServiceServer) ListConfigRevisions(context.Context, *ListConfigRevisionsRequest) (*ListConfigRevisionsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListConfigRevisions not implemented")
 }
-func (UnimplementedEndpointAdminServiceServer) GetRollout(context.Context, *GetRolloutRequest) (*GetRolloutResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetRollout not implemented")
-}
 func (UnimplementedEndpointAdminServiceServer) PromoteRollout(context.Context, *PromoteRolloutRequest) (*RolloutActionResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method PromoteRollout not implemented")
 }
@@ -647,32 +566,14 @@ func (UnimplementedEndpointAdminServiceServer) SetEndpointEnabled(context.Contex
 func (UnimplementedEndpointAdminServiceServer) ListServices(context.Context, *ListServicesRequest) (*ListServicesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListServices not implemented")
 }
-func (UnimplementedEndpointAdminServiceServer) ValidateEndpointSpec(context.Context, *ValidateEndpointSpecRequest) (*ValidateEndpointSpecResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ValidateEndpointSpec not implemented")
+func (UnimplementedEndpointAdminServiceServer) StartTuningReplica(context.Context, *StartTuningReplicaRequest) (*ReplicaResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method StartTuningReplica not implemented")
 }
-func (UnimplementedEndpointAdminServiceServer) StartExperiment(context.Context, *StartExperimentRequest) (*ExperimentResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method StartExperiment not implemented")
+func (UnimplementedEndpointAdminServiceServer) StopReplica(context.Context, *StopReplicaRequest) (*ReplicaResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method StopReplica not implemented")
 }
-func (UnimplementedEndpointAdminServiceServer) GetExperiment(context.Context, *GetExperimentRequest) (*ExperimentResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetExperiment not implemented")
-}
-func (UnimplementedEndpointAdminServiceServer) ListExperiments(context.Context, *ListExperimentsRequest) (*ListExperimentsResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ListExperiments not implemented")
-}
-func (UnimplementedEndpointAdminServiceServer) ApplyExperimentConfig(context.Context, *ApplyExperimentConfigRequest) (*ExperimentResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ApplyExperimentConfig not implemented")
-}
-func (UnimplementedEndpointAdminServiceServer) GetExperimentMetrics(context.Context, *GetExperimentMetricsRequest) (*GetExperimentMetricsResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetExperimentMetrics not implemented")
-}
-func (UnimplementedEndpointAdminServiceServer) RecordExperimentBench(context.Context, *RecordExperimentBenchRequest) (*ExperimentResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method RecordExperimentBench not implemented")
-}
-func (UnimplementedEndpointAdminServiceServer) RevertExperiment(context.Context, *RevertExperimentRequest) (*ExperimentResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method RevertExperiment not implemented")
-}
-func (UnimplementedEndpointAdminServiceServer) StopExperiment(context.Context, *StopExperimentRequest) (*ExperimentResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method StopExperiment not implemented")
+func (UnimplementedEndpointAdminServiceServer) SetConfig(context.Context, *SetConfigRequest) (*SetConfigResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetConfig not implemented")
 }
 func (UnimplementedEndpointAdminServiceServer) mustEmbedUnimplementedEndpointAdminServiceServer() {}
 
@@ -791,24 +692,6 @@ func _EndpointAdminService_ListConfigRevisions_Handler(srv interface{}, ctx cont
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(EndpointAdminServiceServer).ListConfigRevisions(ctx, req.(*ListConfigRevisionsRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _EndpointAdminService_GetRollout_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetRolloutRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(EndpointAdminServiceServer).GetRollout(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: EndpointAdminService_GetRollout_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(EndpointAdminServiceServer).GetRollout(ctx, req.(*GetRolloutRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -939,164 +822,56 @@ func _EndpointAdminService_ListServices_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
-func _EndpointAdminService_ValidateEndpointSpec_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ValidateEndpointSpecRequest)
+func _EndpointAdminService_StartTuningReplica_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StartTuningReplicaRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(EndpointAdminServiceServer).ValidateEndpointSpec(ctx, in)
+		return srv.(EndpointAdminServiceServer).StartTuningReplica(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: EndpointAdminService_ValidateEndpointSpec_FullMethodName,
+		FullMethod: EndpointAdminService_StartTuningReplica_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(EndpointAdminServiceServer).ValidateEndpointSpec(ctx, req.(*ValidateEndpointSpecRequest))
+		return srv.(EndpointAdminServiceServer).StartTuningReplica(ctx, req.(*StartTuningReplicaRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _EndpointAdminService_StartExperiment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(StartExperimentRequest)
+func _EndpointAdminService_StopReplica_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StopReplicaRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(EndpointAdminServiceServer).StartExperiment(ctx, in)
+		return srv.(EndpointAdminServiceServer).StopReplica(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: EndpointAdminService_StartExperiment_FullMethodName,
+		FullMethod: EndpointAdminService_StopReplica_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(EndpointAdminServiceServer).StartExperiment(ctx, req.(*StartExperimentRequest))
+		return srv.(EndpointAdminServiceServer).StopReplica(ctx, req.(*StopReplicaRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _EndpointAdminService_GetExperiment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetExperimentRequest)
+func _EndpointAdminService_SetConfig_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetConfigRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(EndpointAdminServiceServer).GetExperiment(ctx, in)
+		return srv.(EndpointAdminServiceServer).SetConfig(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: EndpointAdminService_GetExperiment_FullMethodName,
+		FullMethod: EndpointAdminService_SetConfig_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(EndpointAdminServiceServer).GetExperiment(ctx, req.(*GetExperimentRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _EndpointAdminService_ListExperiments_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ListExperimentsRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(EndpointAdminServiceServer).ListExperiments(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: EndpointAdminService_ListExperiments_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(EndpointAdminServiceServer).ListExperiments(ctx, req.(*ListExperimentsRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _EndpointAdminService_ApplyExperimentConfig_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ApplyExperimentConfigRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(EndpointAdminServiceServer).ApplyExperimentConfig(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: EndpointAdminService_ApplyExperimentConfig_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(EndpointAdminServiceServer).ApplyExperimentConfig(ctx, req.(*ApplyExperimentConfigRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _EndpointAdminService_GetExperimentMetrics_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetExperimentMetricsRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(EndpointAdminServiceServer).GetExperimentMetrics(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: EndpointAdminService_GetExperimentMetrics_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(EndpointAdminServiceServer).GetExperimentMetrics(ctx, req.(*GetExperimentMetricsRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _EndpointAdminService_RecordExperimentBench_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RecordExperimentBenchRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(EndpointAdminServiceServer).RecordExperimentBench(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: EndpointAdminService_RecordExperimentBench_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(EndpointAdminServiceServer).RecordExperimentBench(ctx, req.(*RecordExperimentBenchRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _EndpointAdminService_RevertExperiment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RevertExperimentRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(EndpointAdminServiceServer).RevertExperiment(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: EndpointAdminService_RevertExperiment_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(EndpointAdminServiceServer).RevertExperiment(ctx, req.(*RevertExperimentRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _EndpointAdminService_StopExperiment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(StopExperimentRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(EndpointAdminServiceServer).StopExperiment(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: EndpointAdminService_StopExperiment_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(EndpointAdminServiceServer).StopExperiment(ctx, req.(*StopExperimentRequest))
+		return srv.(EndpointAdminServiceServer).SetConfig(ctx, req.(*SetConfigRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1133,10 +908,6 @@ var EndpointAdminService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _EndpointAdminService_ListConfigRevisions_Handler,
 		},
 		{
-			MethodName: "GetRollout",
-			Handler:    _EndpointAdminService_GetRollout_Handler,
-		},
-		{
 			MethodName: "PromoteRollout",
 			Handler:    _EndpointAdminService_PromoteRollout_Handler,
 		},
@@ -1165,40 +936,16 @@ var EndpointAdminService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _EndpointAdminService_ListServices_Handler,
 		},
 		{
-			MethodName: "ValidateEndpointSpec",
-			Handler:    _EndpointAdminService_ValidateEndpointSpec_Handler,
+			MethodName: "StartTuningReplica",
+			Handler:    _EndpointAdminService_StartTuningReplica_Handler,
 		},
 		{
-			MethodName: "StartExperiment",
-			Handler:    _EndpointAdminService_StartExperiment_Handler,
+			MethodName: "StopReplica",
+			Handler:    _EndpointAdminService_StopReplica_Handler,
 		},
 		{
-			MethodName: "GetExperiment",
-			Handler:    _EndpointAdminService_GetExperiment_Handler,
-		},
-		{
-			MethodName: "ListExperiments",
-			Handler:    _EndpointAdminService_ListExperiments_Handler,
-		},
-		{
-			MethodName: "ApplyExperimentConfig",
-			Handler:    _EndpointAdminService_ApplyExperimentConfig_Handler,
-		},
-		{
-			MethodName: "GetExperimentMetrics",
-			Handler:    _EndpointAdminService_GetExperimentMetrics_Handler,
-		},
-		{
-			MethodName: "RecordExperimentBench",
-			Handler:    _EndpointAdminService_RecordExperimentBench_Handler,
-		},
-		{
-			MethodName: "RevertExperiment",
-			Handler:    _EndpointAdminService_RevertExperiment_Handler,
-		},
-		{
-			MethodName: "StopExperiment",
-			Handler:    _EndpointAdminService_StopExperiment_Handler,
+			MethodName: "SetConfig",
+			Handler:    _EndpointAdminService_SetConfig_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

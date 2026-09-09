@@ -252,162 +252,93 @@ func TestDockerEnabledRequestsCanUseRuncWorkersAndControllers(t *testing.T) {
 	assert.Equal(t, workers, filteredWorkers)
 }
 
-// A preemptible marketplace listing (e.g. Vast-listed hardware) must stay
-// schedulable for requests that opted in with AllowMarketplace: joining the
-// marketplace implies accepting seller-side preemption, and nothing else sets
-// request.Preemptable for typical serverless stubs.
-func TestPreemptibleMarketplaceCapacityReachableWithAllowMarketplace(t *testing.T) {
-	preemptibleMarketplace := &LocalWorkerPoolControllerForTest{
-		name:        "marketplace",
-		mode:        types.PoolModeMarketplace,
-		preemptable: true,
-	}
-	request := &types.ContainerRequest{AllowMarketplace: true, Workspace: testWorkspaceWithStorage()}
-	assert.Equal(
-		t,
-		[]WorkerPoolController{preemptibleMarketplace},
-		filterControllersByFlags([]WorkerPoolController{preemptibleMarketplace}, request),
-	)
-
-	// Preemptible capacity outside the marketplace still requires an explicit
-	// request.Preemptable opt-in.
-	preemptibleSpot := &LocalWorkerPoolControllerForTest{name: "spot", preemptable: true}
-	assert.Empty(t, filterControllersByFlags([]WorkerPoolController{preemptibleSpot}, request))
-
-	scheduler := &Scheduler{workerPoolManager: NewWorkerPoolManager()}
-	scheduler.workerPoolManager.SetPool("marketplace", types.WorkerPoolConfig{
-		Mode:        types.PoolModeMarketplace,
-		GPUType:     "A10G",
-		Preemptable: true,
-	}, nil)
-
-	preemptibleWorker := &types.Worker{
-		Id:            "marketplace-worker",
-		PoolName:      "marketplace",
-		Status:        types.WorkerStatusAvailable,
-		Preemptable:   true,
-		TotalCpu:      1000,
-		FreeCpu:       1000,
-		TotalMemory:   1024,
-		FreeMemory:    1024,
-		TotalGpuCount: 1,
-		FreeGpuCount:  1,
-		Gpu:           "A10G",
-	}
-
-	worker, err := scheduler.selectWorkerFromWorkers([]*types.Worker{preemptibleWorker}, &types.ContainerRequest{
-		Cpu:              1000,
-		Memory:           512,
-		GpuRequest:       []string{"A10G"},
-		GpuCount:         1,
-		AllowMarketplace: true,
-		Workspace:        testWorkspaceWithStorage(),
-	})
-	assert.NoError(t, err)
-	assert.Equal(t, preemptibleWorker.Id, worker.Id)
-
-	// A preemptible worker outside the marketplace stays unreachable without
-	// request.Preemptable.
-	spotWorker := &types.Worker{
-		Id:          "spot-worker",
-		PoolName:    "spot",
-		Status:      types.WorkerStatusAvailable,
-		Preemptable: true,
-		TotalCpu:    1000,
-		FreeCpu:     1000,
-		TotalMemory: 1024,
-		FreeMemory:  1024,
-	}
-	_, err = scheduler.selectWorkerFromWorkers([]*types.Worker{spotWorker}, &types.ContainerRequest{
-		Cpu:              1000,
-		Memory:           512,
-		AllowMarketplace: true,
-	})
-	assert.Error(t, err)
-}
-
-func TestMarketplaceControllersRequireExplicitSafeOptIn(t *testing.T) {
-	marketplace := &LocalWorkerPoolControllerForTest{name: "marketplace", mode: types.PoolModeMarketplace}
+// Provider pools (workspace-supplied machines) only run platform-owned managed
+// endpoint replicas; ordinary requests never reach them, even by selector.
+func TestProviderControllersOnlyAdmitManagedRequests(t *testing.T) {
+	provider := &LocalWorkerPoolControllerForTest{name: "provider", mode: types.PoolModeProvider, requiresSelector: true}
 	regular := &LocalWorkerPoolControllerForTest{name: "regular", mode: types.PoolModeLocal}
+	controllers := []WorkerPoolController{provider, regular}
 	workspace := testWorkspaceWithStorage()
 
-	assert.Equal(t, []WorkerPoolController{regular}, filterControllersByFlags([]WorkerPoolController{marketplace, regular}, &types.ContainerRequest{Workspace: workspace}))
-	assert.Equal(t, []WorkerPoolController{marketplace, regular}, filterControllersByFlags([]WorkerPoolController{marketplace, regular}, &types.ContainerRequest{AllowMarketplace: true, Workspace: workspace}))
-	assert.Equal(t, []WorkerPoolController{regular}, filterControllersByFlags([]WorkerPoolController{marketplace, regular}, &types.ContainerRequest{AllowMarketplace: true, DockerEnabled: true, Workspace: workspace}))
-	assert.Equal(t, []WorkerPoolController{regular}, filterControllersByFlags([]WorkerPoolController{marketplace, regular}, &types.ContainerRequest{AllowMarketplace: true, PoolSelector: "regular", Workspace: workspace}))
+	assert.Equal(t, []WorkerPoolController{regular}, filterControllersByFlags(controllers, &types.ContainerRequest{Workspace: workspace}))
+	assert.Empty(t, filterControllersByFlags(controllers, &types.ContainerRequest{PoolSelector: "provider", Workspace: workspace}))
+
+	managed := &types.ContainerRequest{PoolSelector: "provider", Workspace: workspace}
+	managed.Stub.Type = types.StubType(types.StubTypeManagedEndpointDeployment)
+	assert.Equal(t, []WorkerPoolController{provider}, filterControllersByFlags(controllers, managed))
+
+	// Provider capacity gets no preemption exception.
+	preemptible := &LocalWorkerPoolControllerForTest{name: "provider", mode: types.PoolModeProvider, requiresSelector: true, preemptable: true}
+	assert.Empty(t, filterControllersByFlags([]WorkerPoolController{preemptible}, managed))
 }
 
-func TestMarketplaceWorkersRequireExplicitSafeOptIn(t *testing.T) {
-	marketplaceWorker := &types.Worker{
-		Id:            "marketplace-worker",
-		PoolName:      "marketplace",
-		Status:        types.WorkerStatusAvailable,
-		TotalCpu:      1000,
-		FreeCpu:       1000,
-		TotalMemory:   1024,
-		FreeMemory:    1024,
-		TotalGpuCount: 1,
-		FreeGpuCount:  1,
-		Gpu:           "A10G",
+func TestProviderWorkersOnlyAdmitManagedRequests(t *testing.T) {
+	providerWorker := &types.Worker{
+		Id:                   "provider-worker",
+		PoolName:             "provider",
+		PoolSelector:         "provider",
+		RequiresPoolSelector: true,
+		WorkspaceId:          "provider-workspace",
+		Status:               types.WorkerStatusAvailable,
+		TotalCpu:             1000,
+		FreeCpu:              1000,
+		TotalMemory:          1024,
+		FreeMemory:           1024,
+		TotalGpuCount:        1,
+		FreeGpuCount:         1,
+		Gpu:                  "A10G",
 	}
 	scheduler := &Scheduler{workerPoolManager: NewWorkerPoolManager()}
-	scheduler.workerPoolManager.SetPool("marketplace", types.WorkerPoolConfig{
-		Mode:                 types.PoolModeMarketplace,
+	scheduler.workerPoolManager.SetPool("provider", types.WorkerPoolConfig{
+		Mode:                 types.PoolModeProvider,
 		GPUType:              "A10G",
-		RequiresPoolSelector: false,
+		RequiresPoolSelector: true,
 	}, nil)
 
-	baseRequest := &types.ContainerRequest{Cpu: 1000, Memory: 512, GpuRequest: []string{"A10G"}, GpuCount: 1, Workspace: testWorkspaceWithStorage()}
+	baseRequest := &types.ContainerRequest{Cpu: 1000, Memory: 512, GpuRequest: []string{"A10G"}, GpuCount: 1, WorkspaceId: "admin-workspace", Workspace: testWorkspaceWithStorage()}
 
-	_, err := scheduler.selectWorkerFromWorkers([]*types.Worker{marketplaceWorker}, baseRequest.Clone())
+	// Ordinary requests never see provider capacity, with or without a selector.
+	_, err := scheduler.selectWorkerFromWorkers([]*types.Worker{providerWorker}, baseRequest.Clone())
 	assert.Error(t, err)
 
-	allowed := baseRequest.Clone()
-	allowed.AllowMarketplace = true
-	worker, err := scheduler.selectWorkerFromWorkers([]*types.Worker{marketplaceWorker}, allowed)
+	selected := baseRequest.Clone()
+	selected.PoolSelector = "provider"
+	_, err = scheduler.selectWorkerFromWorkers([]*types.Worker{providerWorker}, selected)
+	assert.Error(t, err)
+
+	// A managed endpoint replica addressed to the pool is admitted.
+	managed := selected.Clone()
+	managed.Stub.Type = types.StubType(types.StubTypeManagedEndpointDeployment)
+	worker, err := scheduler.selectWorkerFromWorkers([]*types.Worker{providerWorker}, managed)
 	assert.NoError(t, err)
-	assert.Equal(t, marketplaceWorker.Id, worker.Id)
+	assert.Equal(t, providerWorker.Id, worker.Id)
 
-	docker := allowed.Clone()
-	docker.DockerEnabled = true
-	_, err = scheduler.selectWorkerFromWorkers([]*types.Worker{marketplaceWorker}, docker)
+	// Managed replicas still need the selector: provider pools are opt-in only.
+	unselected := managed.Clone()
+	unselected.PoolSelector = ""
+	_, err = scheduler.selectWorkerFromWorkers([]*types.Worker{providerWorker}, unselected)
 	assert.Error(t, err)
-
-	selected := allowed.Clone()
-	selected.PoolSelector = "marketplace"
-	_, err = scheduler.selectWorkerFromWorkers([]*types.Worker{marketplaceWorker}, selected)
-	assert.Error(t, err)
-
-	dockerMount := allowed.Clone()
-	dockerMount.Mounts = []types.Mount{{
-		LocalPath: "/var/run/docker.sock",
-		MountPath: "/var/run/docker.sock",
-	}}
-	_, err = scheduler.selectWorkerFromWorkers([]*types.Worker{marketplaceWorker}, dockerMount)
-	assert.Error(t, err)
-
-	codeMount := allowed.Clone()
-	codeMount.Mounts = []types.Mount{{
-		LocalPath: "/data/objects/workspace/stub",
-		MountPath: "/mnt/code",
-	}}
-	_, err = scheduler.selectWorkerFromWorkers([]*types.Worker{marketplaceWorker}, codeMount)
-	assert.NoError(t, err)
 }
 
-func TestMarketplacePoolRuntimeFallsBackForUnsupportedGPU(t *testing.T) {
-	state := &compute.PoolState{
-		Mode: string(types.PoolModeMarketplace),
-		Config: &pb.PoolConfig{
-			Gpu: []string{"V100"},
-		},
-	}
-	config := normalizeAgentWorkerPoolConfig(state)
-	assert.Equal(t, types.ContainerRuntimeRunc.String(), config.ContainerRuntime)
+func TestNormalizeProviderAgentPool(t *testing.T) {
+	config := normalizeAgentWorkerPoolConfig(&compute.PoolState{
+		Mode:   string(types.PoolModeProvider),
+		Config: &pb.PoolConfig{Gpu: []string{"A10G"}},
+	})
 
-	state.Config.Gpu = []string{"A10G"}
-	config = normalizeAgentWorkerPoolConfig(state)
-	assert.Equal(t, types.ContainerRuntimeGvisor.String(), config.ContainerRuntime)
+	assert.Equal(t, types.PoolModeProvider, config.Mode)
+	assert.Equal(t, types.ContainerRuntimeRunc.String(), config.ContainerRuntime)
+	assert.True(t, config.RequiresPoolSelector)
+	assert.False(t, config.Preemptable)
+	assert.Equal(t, int32(100), config.Priority)
+	assert.Equal(t, "A10G", config.GPUType)
+	assert.Equal(t, types.WorkerPoolManagedEndpointsConfig{Enabled: true, MaxShare: 1}, config.ManagedEndpoints)
+
+	// Provider pools are addressed globally by pool name, not per workspace.
+	assert.Equal(t, "provider-a10g", agentPoolControllerKey("provider-workspace", &compute.PoolState{
+		Mode: string(types.PoolModeProvider),
+		Name: "provider-a10g",
+	}))
 }
 
 func TestEnsureAgentPoolNormalizesPersistedManagedConfig(t *testing.T) {
@@ -549,11 +480,9 @@ func TestLoadedPrivatePoolDoesNotReconcileOnRequest(t *testing.T) {
 	assert.Equal(t, version, worker.ResourceVersion)
 }
 
-// Machine-pinned requests (marketplace rentals) must only ever see the pinned
-// machine's worker, regardless of pool selector requirements.
 func TestFilterWorkersByMachinePinsWorker(t *testing.T) {
 	workers := []*types.Worker{
-		{Id: "w1", MachineId: "machine-1", PoolName: "marketplace-a100", RequiresPoolSelector: false},
+		{Id: "w1", MachineId: "machine-1", PoolName: "provider-a100", RequiresPoolSelector: true},
 		{Id: "w2", MachineId: "machine-2", PoolName: "private-pool", RequiresPoolSelector: true},
 	}
 
@@ -572,17 +501,24 @@ func TestFilterWorkersByMachinePinsWorker(t *testing.T) {
 
 func TestFilterWorkersByWorkspaceScope(t *testing.T) {
 	scheduler := &Scheduler{workerPoolManager: NewWorkerPoolManager()}
-	scheduler.workerPoolManager.SetPool("marketplace", types.WorkerPoolConfig{Mode: types.PoolModeMarketplace}, nil)
+	scheduler.workerPoolManager.SetPool("provider", types.WorkerPoolConfig{Mode: types.PoolModeProvider}, nil)
 
 	workers := []*types.Worker{
 		{Id: "local"},
 		{Id: "owned-private", WorkspaceId: "workspace-1"},
 		{Id: "foreign-private", WorkspaceId: "workspace-2"},
 		{Id: "managed", WorkspaceId: "admin-workspace", ControlPlaneManaged: true},
-		{Id: "marketplace", WorkspaceId: "seller-workspace", PoolName: "marketplace"},
+		{Id: "provider", WorkspaceId: "provider-workspace", PoolName: "provider"},
 	}
 
+	// Provider workers are foreign capacity for ordinary requests...
 	filtered := scheduler.filterWorkersByWorkspaceScope(workers, &types.ContainerRequest{WorkspaceId: "workspace-1"})
+	assert.Equal(t, []*types.Worker{workers[0], workers[1], workers[3]}, filtered)
+
+	// ...but global for managed endpoint replicas.
+	managed := &types.ContainerRequest{WorkspaceId: "workspace-1"}
+	managed.Stub.Type = types.StubType(types.StubTypeManagedEndpointDeployment)
+	filtered = scheduler.filterWorkersByWorkspaceScope(workers, managed)
 	assert.Equal(t, []*types.Worker{workers[0], workers[1], workers[3], workers[4]}, filtered)
 }
 
@@ -621,63 +557,6 @@ func TestSelectorCannotScheduleForeignPrivateWorker(t *testing.T) {
 	selected, err = scheduler.selectWorkerFromWorkers([]*types.Worker{worker}, request)
 	assert.NoError(t, err)
 	assert.Equal(t, worker, selected)
-}
-
-// Rented GPUs are invisible to serverless marketplace requests; machine-pinned
-// rental workloads still see the full machine.
-func TestMarketplaceRentalCapacityHiddenFromServerless(t *testing.T) {
-	redisServer, err := miniredis.Run()
-	assert.NoError(t, err)
-	t.Cleanup(redisServer.Close)
-	redisClient, err := common.NewRedisClient(types.RedisConfig{
-		Addrs: []string{redisServer.Addr()},
-		Mode:  types.RedisModeSingle,
-	})
-	assert.NoError(t, err)
-
-	computeRepo := repo.NewComputeRedisRepository(redisClient)
-	assert.NoError(t, computeRepo.SaveMarketplaceRental(context.Background(), &compute.MarketplaceRentalState{
-		ID:               "rental-1",
-		BuyerWorkspaceID: "buyer-1",
-		MachineID:        "machine-1",
-		GPUCount:         2,
-	}))
-
-	scheduler := &Scheduler{workerPoolManager: NewWorkerPoolManager(), computeRepo: computeRepo}
-	scheduler.workerPoolManager.SetPool("marketplace-a100", types.WorkerPoolConfig{
-		Mode: types.PoolModeMarketplace,
-	}, nil)
-
-	worker := &types.Worker{
-		Id:            "w1",
-		MachineId:     "machine-1",
-		PoolName:      "marketplace-a100",
-		Gpu:           "A100-40",
-		FreeGpuCount:  8,
-		TotalGpuCount: 8,
-	}
-
-	serverless := &types.ContainerRequest{AllowMarketplace: true, GpuRequest: []string{"A100-40"}, GpuCount: 7}
-	assert.Empty(t, scheduler.filterMarketplaceWorkers([]*types.Worker{worker}, serverless),
-		"7 GPUs must not fit when 2 of 8 are rented")
-
-	serverless.GpuCount = 6
-	assert.Len(t, scheduler.filterMarketplaceWorkers([]*types.Worker{worker}, serverless), 1,
-		"6 GPUs fit alongside the 2-GPU rental")
-
-	pinned := &types.ContainerRequest{AllowMarketplace: true, MachineId: "machine-1", GpuRequest: []string{"A100-40"}, GpuCount: 2}
-	assert.Len(t, scheduler.filterMarketplaceWorkers([]*types.Worker{worker}, pinned), 1,
-		"the renter's machine-pinned workload consumes the rented capacity")
-
-	// Fail closed: if rentals can't be read, serverless requests must not see
-	// marketplace capacity (it may be exclusively rented), while pinned rental
-	// workloads keep working.
-	redisServer.Close()
-	serverless.GpuCount = 1
-	assert.Empty(t, scheduler.filterMarketplaceWorkers([]*types.Worker{worker}, serverless),
-		"rental lookup failure must hide marketplace capacity from serverless requests")
-	assert.Len(t, scheduler.filterMarketplaceWorkers([]*types.Worker{worker}, pinned), 1,
-		"pinned rental workloads don't depend on the rental index")
 }
 
 type LocalWorkerPoolControllerForTest struct {

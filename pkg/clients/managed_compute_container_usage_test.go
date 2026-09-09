@@ -29,7 +29,7 @@ func managedComputeUsageTestRecorder(endpoint string) *ManagedComputeContainerUs
 		Billing: types.ManagedComputeBillingConfig{
 			PoolRoutes: []types.ManagedComputeBillingPoolRouteConfig{{PoolNamePrefix: "tama-", Endpoint: endpoint}},
 		},
-	}, WorkerIdentity{})
+	})
 }
 
 func TestManagedComputeContainerUsageRecorderReportsTamaCPUUsage(t *testing.T) {
@@ -60,7 +60,7 @@ func TestManagedComputeContainerUsageRecorderReportsTamaCPUUsage(t *testing.T) {
 				AuthToken:      "runtime-token",
 			}},
 		},
-	}, WorkerIdentity{})
+	})
 	if recorder == nil {
 		t.Fatal("expected recorder")
 	}
@@ -117,7 +117,9 @@ func TestManagedComputeContainerUsageRecorderRetriesTransientFailures(t *testing
 	}
 }
 
-func TestManagedComputeContainerUsageRecorderChoosesOneLedger(t *testing.T) {
+// The top-level billing endpoint is not a fallback ledger: usage that matches
+// no PoolRoute prefix is not reported anywhere.
+func TestManagedComputeContainerUsageRecorderOnlyReportsRoutedUsage(t *testing.T) {
 	var tamaCalls atomic.Int32
 	tama := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		tamaCalls.Add(1)
@@ -125,24 +127,22 @@ func TestManagedComputeContainerUsageRecorderChoosesOneLedger(t *testing.T) {
 	}))
 	defer tama.Close()
 
-	var marketplaceCalls atomic.Int32
-	marketplace := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		marketplaceCalls.Add(1)
+	var fallbackCalls atomic.Int32
+	fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fallbackCalls.Add(1)
 		_, _ = w.Write([]byte(`{"ok":true}`))
 	}))
-	defer marketplace.Close()
+	defer fallback.Close()
 
 	recorder := NewManagedComputeContainerUsageRecorder(types.ManagedComputeConfig{
 		Billing: types.ManagedComputeBillingConfig{
-			Endpoint: marketplace.URL,
+			Endpoint: fallback.URL,
 			PoolRoutes: []types.ManagedComputeBillingPoolRouteConfig{{
 				PoolNamePrefix: "tama-",
 				Endpoint:       tama.URL,
 			}},
 		},
-		MarketplaceListingID: "listing-1",
-		SellerWorkspaceID:    "seller-1",
-	}, WorkerIdentity{WorkerID: "worker-1", PoolName: "shared", MachineID: "machine-1", Runtime: "runc"})
+	})
 	if recorder == nil {
 		t.Fatal("expected recorder")
 	}
@@ -153,8 +153,8 @@ func TestManagedComputeContainerUsageRecorderChoosesOneLedger(t *testing.T) {
 	if err := recorder.RecordContainerUsage(context.Background(), request, start, start.Add(time.Second), &cost); err != nil {
 		t.Fatal(err)
 	}
-	if tamaCalls.Load() != 1 || marketplaceCalls.Load() != 0 {
-		t.Fatalf("Tama/marketplace calls = %d/%d, want 1/0", tamaCalls.Load(), marketplaceCalls.Load())
+	if tamaCalls.Load() != 1 || fallbackCalls.Load() != 0 {
+		t.Fatalf("Tama/fallback calls = %d/%d, want 1/0", tamaCalls.Load(), fallbackCalls.Load())
 	}
 
 	request.Stub.Name = "regular-sandbox"
@@ -162,8 +162,21 @@ func TestManagedComputeContainerUsageRecorderChoosesOneLedger(t *testing.T) {
 	if err := recorder.RecordContainerUsage(context.Background(), request, start, start.Add(time.Second), &cost); err != nil {
 		t.Fatal(err)
 	}
-	if tamaCalls.Load() != 1 || marketplaceCalls.Load() != 1 {
-		t.Fatalf("Tama/marketplace calls = %d/%d, want 1/1", tamaCalls.Load(), marketplaceCalls.Load())
+	if tamaCalls.Load() != 1 || fallbackCalls.Load() != 0 {
+		t.Fatalf("Tama/fallback calls = %d/%d, want 1/0", tamaCalls.Load(), fallbackCalls.Load())
+	}
+}
+
+func TestManagedComputeContainerUsageRecorderIsNilWithoutRoutes(t *testing.T) {
+	recorder := NewManagedComputeContainerUsageRecorder(types.ManagedComputeConfig{
+		Billing: types.ManagedComputeBillingConfig{Endpoint: "https://billing.example.com"},
+	})
+	if recorder != nil {
+		t.Fatalf("recorder = %+v, want nil without pool routes", recorder)
+	}
+	cost := 1.0
+	if err := recorder.RecordContainerUsage(context.Background(), managedComputeUsageTestRequest("tama-machine-1"), time.Now(), time.Now().Add(time.Second), &cost); err != nil {
+		t.Fatalf("nil recorder returned %v", err)
 	}
 }
 

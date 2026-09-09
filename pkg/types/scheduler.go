@@ -309,9 +309,8 @@ type ContainerRequest struct {
 	DockerEnabled            bool            `json:"docker_enabled"` // Enable Docker-in-Docker
 	RuntimeSecretNames       []string        `json:"runtime_secret_names,omitempty"`
 	RuntimeTokenRequired     bool            `json:"runtime_token_required,omitempty"`
-	AllowMarketplace         bool            `json:"allow_marketplace"`
-	// MachineId pins scheduling to a single agent machine (e.g. a marketplace
-	// rental); empty means any machine.
+	// MachineId pins scheduling to a single agent machine; empty means any
+	// machine. The scheduler fills it in after placement on agent pools.
 	MachineId         string             `json:"machine_id,omitempty"`
 	CheckpointTrigger *CheckpointTrigger `json:"checkpoint_trigger,omitempty"`
 	TaskId            string             `json:"task_id,omitempty"`
@@ -668,7 +667,6 @@ func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 		BlockNetwork:             c.BlockNetwork,
 		AllowList:                c.AllowList,
 		DockerEnabled:            c.DockerEnabled,
-		AllowMarketplace:         c.AllowMarketplace,
 		MachineId:                c.MachineId,
 		RuntimeSecretNames:       c.RuntimeSecretNames,
 		RuntimeTokenRequired:     c.RuntimeTokenRequired,
@@ -735,7 +733,6 @@ func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
 		BlockNetwork:             in.BlockNetwork,
 		AllowList:                in.AllowList,
 		DockerEnabled:            in.DockerEnabled,
-		AllowMarketplace:         in.AllowMarketplace,
 		MachineId:                in.MachineId,
 		RuntimeSecretNames:       in.RuntimeSecretNames,
 		RuntimeTokenRequired:     in.RuntimeTokenRequired,

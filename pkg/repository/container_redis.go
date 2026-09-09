@@ -49,7 +49,8 @@ var errConcurrencyCounterRepairing = errors.New("concurrency counter repair in p
 // Opening worker routes are republished for every container startup. Once the
 // agent has made an identical shared route ready, those registrations must not
 // demote it or erase its proxy target. WorkspaceID is deliberately not part of
-// the target identity because marketplace workers can serve buyer workspaces.
+// the target identity because provider-pool workers serve managed endpoint
+// replicas owned by a different workspace than the machine's owner.
 var setOpeningWorkerBackendRouteScript = redis.NewScript(`
 local incoming = cjson.decode(ARGV[1])
 local current = redis.call("GET", KEYS[1])
