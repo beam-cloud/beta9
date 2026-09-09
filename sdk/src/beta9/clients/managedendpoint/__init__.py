@@ -55,6 +55,7 @@ class ReplicaConfig(betterproto.Message):
     error: str = betterproto.string_field(7)
     effective_json: str = betterproto.string_field(8)
     acked_at_unix_ms: int = betterproto.int64_field(9)
+    actor: str = betterproto.string_field(10)
 
 
 @dataclass(eq=False, repr=False)
@@ -235,6 +236,10 @@ class GetMetricsRequest(betterproto.Message):
     gpu: str = betterproto.string_field(2)
     replica_id: str = betterproto.string_field(3)
     window_seconds: int = betterproto.uint32_field(4)
+    config_revision: int = betterproto.uint64_field(5)
+    """
+    With replica_id: only requests served under this acknowledged live config.
+    """
 
 
 @dataclass(eq=False, repr=False)
@@ -253,6 +258,7 @@ class EndpointMetrics(betterproto.Message):
     cost_micro_usd: int = betterproto.int64_field(12)
     ready_replicas: int = betterproto.uint32_field(13)
     aggregate_capacity: "ReplicaCapacity" = betterproto.message_field(14)
+    config_revision: int = betterproto.uint64_field(15)
 
 
 @dataclass(eq=False, repr=False)

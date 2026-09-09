@@ -35,6 +35,23 @@ redis.call("PEXPIRE", key, ARGV[1])
 return 1
 `
 
+// reserveStreamScript takes one active stream on a replica's pressure hash
+// unless that would exceed the bound (ARGV[2], 0 for unbounded), in which case
+// nothing changes. ARGV is ttl_ms, max_streams, token_delta.
+const reserveStreamScript = `
+local key = KEYS[1]
+local n = redis.call("HINCRBY", key, "active_streams", 1)
+local max = tonumber(ARGV[2])
+if max > 0 and n > max then
+  redis.call("HINCRBY", key, "active_streams", -1)
+  redis.call("PEXPIRE", key, ARGV[1])
+  return 0
+end
+redis.call("HINCRBY", key, "token_pressure", ARGV[3])
+redis.call("PEXPIRE", key, ARGV[1])
+return 1
+`
+
 // State stores pressure and affinity in Redis under a caller-provided key prefix.
 type State struct {
 	rdb    *common.RedisClient
@@ -80,6 +97,31 @@ func (s *State) AddPressure(ctx context.Context, replicaID string, activeStreams
 	}
 	_, err := pipe.Exec(ctx)
 	return err
+}
+
+// Reserve atomically takes one active stream on replicaID, refusing when the
+// replica already has maxStreams in flight across every gateway (0 means no
+// bound). It is the shared counterpart of a gateway-local inflight counter;
+// release with AddPressure(replicaID, -1, -tokenPressure). A disabled state
+// always admits.
+func (s *State) Reserve(ctx context.Context, replicaID string, tokenPressure, maxStreams int64) (bool, error) {
+	if !s.enabled() || replicaID == "" {
+		return true, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, stateOpTimeout)
+	defer cancel()
+	pipe := s.rdb.Pipeline()
+	reserved := pipe.Eval(ctx, reserveStreamScript, []string{s.key("pressure", replicaID)}, pressureTTL.Milliseconds(), maxStreams, tokenPressure)
+	pipe.Eval(ctx, addPressureScript, []string{s.key("pressure", PressureTargetTotal)}, pressureTTL.Milliseconds(), "active_streams", 1, "token_pressure", tokenPressure)
+	if _, err := pipe.Exec(ctx); err != nil {
+		return false, err
+	}
+	if n, _ := reserved.Int64(); n == 1 {
+		return true, nil
+	}
+	// Refused: the total was bumped optimistically alongside; take it back.
+	_ = s.rdb.Eval(ctx, addPressureScript, []string{s.key("pressure", PressureTargetTotal)}, pressureTTL.Milliseconds(), "active_streams", -1, "token_pressure", -tokenPressure).Err()
+	return false, nil
 }
 
 // Affinity resolves the exact and prefix-block affinity for a request.

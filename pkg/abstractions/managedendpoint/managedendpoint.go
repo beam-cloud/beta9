@@ -98,6 +98,7 @@ type Service struct {
 
 	controller *controller
 	router     *router
+	meter      *meter
 	gitops     *gitops // nil when no repo is configured
 
 	adminMu        sync.Mutex
@@ -144,6 +145,7 @@ func New(ctx context.Context, opts Opts) (*Service, error) {
 
 	s.controller = newController(s)
 	s.router = newRouter(s)
+	s.meter = newMeter(s)
 	s.gitops = newGitOps(s)
 
 	authMiddleware := auth.AuthMiddleware(opts.BackendRepo, opts.WorkspaceRepo)
@@ -159,6 +161,7 @@ func New(ctx context.Context, opts Opts) (*Service, error) {
 	}
 
 	go s.controller.run(ctx)
+	go s.meter.run(ctx)
 	if s.gitops != nil {
 		go s.gitops.run(ctx)
 	}
@@ -408,6 +411,7 @@ func configToProto(c types.ReplicaConfig) *pb.ReplicaConfig {
 		Error:         c.Error,
 		EffectiveJson: string(c.Effective),
 		AckedAtUnixMs: unixMs(c.AckedAt),
+		Actor:         c.Actor,
 	}
 }
 
@@ -516,6 +520,7 @@ func routeMetricsToProto(m *types.RouteMetrics, replicas []*types.EndpointReplic
 		EndpointId:       m.EndpointID,
 		Gpu:              m.GPU,
 		WindowSeconds:    uint32(m.Window.Seconds()),
+		ConfigRevision:   m.ConfigRevision,
 		Requests:         m.Requests,
 		Errors:           m.Errors,
 		PromptTokens:     m.PromptTokens,

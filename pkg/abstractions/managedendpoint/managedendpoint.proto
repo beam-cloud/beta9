@@ -44,6 +44,7 @@ message ReplicaConfig {
   string error = 7;
   string effective_json = 8;
   int64 acked_at_unix_ms = 9;
+  string actor = 10;  // authenticated token that set the revision
 }
 
 message EndpointReplica {
@@ -239,6 +240,8 @@ message GetMetricsRequest {
   string gpu = 2;
   string replica_id = 3;
   uint32 window_seconds = 4;
+  // With replica_id: only requests served under this acknowledged live config.
+  uint64 config_revision = 5;
 }
 
 message EndpointMetrics {
@@ -256,6 +259,7 @@ message EndpointMetrics {
   int64 cost_micro_usd = 12;
   uint32 ready_replicas = 13;
   ReplicaCapacity aggregate_capacity = 14;
+  uint64 config_revision = 15;
 }
 
 message GetMetricsResponse {

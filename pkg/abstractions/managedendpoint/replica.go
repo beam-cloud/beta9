@@ -135,10 +135,9 @@ func (c *controller) syncReplica(ctx context.Context, replica *types.EndpointRep
 		return nil
 	}
 
-	probe := c.replicaProbe(ctx, replica)
 	if replica.Address == "" {
 		if addresses, err := c.s.containers.GetContainerAddressMap(replica.ContainerID); err == nil {
-			if addr, ok := addresses[int32(probe.Port)]; ok && strings.TrimSpace(addr) != "" {
+			if addr, ok := addresses[int32(replica.Probe.Port)]; ok && strings.TrimSpace(addr) != "" {
 				replica.Address = addr
 			}
 		}
@@ -155,8 +154,7 @@ func (c *controller) syncReplica(ctx context.Context, replica *types.EndpointRep
 		}
 		return nil
 	case types.ReplicaStatusScheduling:
-		replica.Status = types.ReplicaStatusLoading
-		replica.StatusReason = ""
+		replica.EnterLoading(now, "")
 	}
 
 	if replica.HarnessEnabled {
@@ -164,9 +162,9 @@ func (c *controller) syncReplica(ctx context.Context, replica *types.EndpointRep
 			return c.stopAndFinish(ctx, replica, types.ReplicaStatusFailed, "harness heartbeat stale")
 		}
 	} else if replica.Address != "" {
-		c.probeReplica(ctx, replica, probe)
+		c.probeReplica(ctx, replica)
 	}
-	if replica.Status == types.ReplicaStatusLoading && now.Sub(replica.StartedAt) > loadingGrace {
+	if replica.Status == types.ReplicaStatusLoading && replica.LoadingFor(now) > loadingGrace {
 		return c.stopAndFinish(ctx, replica, types.ReplicaStatusFailed, "did not become ready within grace period")
 	}
 	return nil
@@ -199,14 +197,14 @@ func (c *controller) exitStatus(replica *types.EndpointReplica) types.ReplicaSta
 }
 
 // probeReplica drives status for endpoints without a harness: readiness from
-// the health path and, for LLM engines, capacity from Prometheus metrics.
-func (c *controller) probeReplica(ctx context.Context, replica *types.EndpointReplica, probe probeTarget) {
-	spec := probe.Endpoint
+// the replica's own health path and, when it exposes one, capacity from its
+// Prometheus metrics path.
+func (c *controller) probeReplica(ctx context.Context, replica *types.EndpointReplica) {
 	client := c.s.probeClient(replica.Address)
 	baseURL := "http://replica"
 	paths := llmroute.ReadinessPaths("")
-	if strings.TrimSpace(probe.Health) != "" {
-		paths = []string{probe.Health}
+	if strings.TrimSpace(replica.Probe.Health) != "" {
+		paths = []string{replica.Probe.Health}
 	}
 	ready := llmroute.CheckReady(ctx, client, baseURL, paths, probeTimeout)
 	now := time.Now()
@@ -218,17 +216,16 @@ func (c *controller) probeReplica(ctx context.Context, replica *types.EndpointRe
 		replica.StatusReason = ""
 		c.s.replicaEvent(replica, "replica.ready", "", nil)
 	case !ready && replica.Status == types.ReplicaStatusReady:
-		replica.Status = types.ReplicaStatusLoading
-		replica.StatusReason = "health check failing"
+		replica.EnterLoading(now, "health check failing")
 	}
-	if !ready || spec == nil || spec.Kind != types.EndpointKindLLM {
+	if !ready || replica.Probe.Metrics == "" {
 		return
 	}
 	// Rates derive from counter deltas, so the previous scrape is kept per replica.
 	c.metricsMu.Lock()
 	previous := c.lastMetrics[replica.ID]
 	c.metricsMu.Unlock()
-	metrics, ok, err := llmroute.FetchEngineMetrics(ctx, client, baseURL+llmroute.NormalizeMetricsPath(spec.Metrics), previous)
+	metrics, ok, err := llmroute.FetchEngineMetrics(ctx, client, baseURL+replica.Probe.Metrics, previous)
 	if err != nil || !ok {
 		return
 	}
@@ -245,19 +242,13 @@ func (c *controller) probeReplica(ctx context.Context, replica *types.EndpointRe
 	replica.Capacity.PrefixCacheHitMilli = metrics.PrefixCacheHitMilli
 }
 
-// replicaProbe resolves the port, health path and spec a replica is probed with.
-func (c *controller) replicaProbe(ctx context.Context, replica *types.EndpointReplica) probeTarget {
-	if endpoint, err := c.s.repo.GetEndpoint(ctx, replica.EndpointID); err == nil && endpoint != nil {
-		return probeTarget{Port: endpoint.Spec.Port, Health: endpoint.Spec.Health, Endpoint: &endpoint.Spec}
+// probeFor snapshots the probe contract of the deployment a replica is started from.
+func probeFor(spec *types.ManagedEndpointSpec) types.ReplicaProbe {
+	probe := types.ReplicaProbe{Port: spec.Port, Health: spec.Health}
+	if spec.Kind == types.EndpointKindLLM {
+		probe.Metrics = llmroute.NormalizeMetricsPath(spec.Metrics)
 	}
-	return probeTarget{}
-}
-
-// probeTarget is what the controller probes on a replica without a harness.
-type probeTarget struct {
-	Port     uint32
-	Health   string
-	Endpoint *types.ManagedEndpointSpec
+	return probe
 }
 
 // finishReplica records a terminal status.
@@ -422,6 +413,7 @@ func (c *controller) startReplica(ctx context.Context, spec startSpec) (*types.E
 		Status:         types.ReplicaStatusScheduling,
 		SecretHash:     secretHash,
 		HarnessEnabled: endpoint.Spec.Harness,
+		Probe:          probeFor(&endpoint.Spec),
 		StartedAt:      time.Now(),
 	}
 	if err := c.s.repo.SaveReplica(ctx, replica); err != nil {

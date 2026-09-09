@@ -2,6 +2,8 @@ package managedendpoint
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -44,6 +46,7 @@ func newServiceForTest(t *testing.T) *Service {
 		adminWorkspace: &types.Workspace{Id: 1, ExternalId: "admin-ws", Name: "admin"},
 	}
 	s.controller = newController(s)
+	s.meter = newMeter(s)
 	return s
 }
 
@@ -92,7 +95,7 @@ func seedReplica(t *testing.T, s *Service, endpoint *types.ManagedEndpoint) *typ
 	replica := &types.EndpointReplica{
 		ID: "rep-1", EndpointID: endpoint.Spec.ID, Version: 1, GPU: "H100", GPUCount: 1,
 		ContainerID: "managed-stub-1-abc", Status: types.ReplicaStatusScheduling, HarnessEnabled: true, StartedAt: time.Now(),
-		SecretHash: hashReplicaSecret(testReplicaSecret),
+		SecretHash: hashReplicaSecret(testReplicaSecret), Probe: probeFor(&endpoint.Spec),
 	}
 	require.NoError(t, s.repo.SaveReplica(context.Background(), replica))
 	return replica
@@ -366,6 +369,82 @@ func TestSetReplicaConfigRejectsBadInput(t *testing.T) {
 	assert.Equal(t, uint64(0), stored.Config.Revision, "rejected calls do not bump the revision")
 }
 
+// capturingEvents records endpoint.* events; every other push is dropped.
+type capturingEvents struct {
+	repository.EventRepository
+	events []types.EventEndpointSchema
+}
+
+func (c *capturingEvents) PushEndpointEvent(_ string, event types.EventEndpointSchema) {
+	c.events = append(c.events, event)
+}
+func (c *capturingEvents) PushEndpointRouteEvent(types.EventEndpointRouteSchema) {}
+
+func (c *capturingEvents) find(action string) *types.EventEndpointSchema {
+	for i := range c.events {
+		if c.events[i].Action == action {
+			return &c.events[i]
+		}
+	}
+	return nil
+}
+
+type notifyFailingRepo struct {
+	repository.ManagedEndpointRepository
+}
+
+func (notifyFailingRepo) NotifyReplicaConfig(context.Context, string, uint64) error {
+	return errors.New("synthetic publish outage")
+}
+
+// A live config change is audited the moment it is saved (the harness applies
+// it on its next keepalive read even if the wakeup fails), with the
+// authenticated actor; the ack event carries requested and effective config so
+// the history is complete without the replica record.
+func TestConfigHistoryIsCompleteAndBounded(t *testing.T) {
+	s := newServiceForTest(t)
+	endpoint := seedEndpoint(t, s)
+	replica := seedReplica(t, s, endpoint)
+	events := &capturingEvents{}
+	s.events = events
+	s.repo = notifyFailingRepo{s.repo}
+
+	resp, err := s.SetReplicaConfig(adminCtx(), &pb.SetReplicaConfigRequest{ReplicaId: replica.ID, ConfigJson: `{"max_num_seqs":96}`, Author: "agent", WaitSeconds: 1})
+	require.NoError(t, err)
+	assert.True(t, resp.Ok, resp.ErrMsg)
+	set := events.find("config.set")
+	require.NotNil(t, set, "the revision is history even though the wakeup failed")
+	assert.EqualValues(t, 1, set.Revision)
+	assert.Equal(t, "tok", set.Data["actor"])
+	assert.Equal(t, "agent", set.Data["author"])
+	assert.Equal(t, "tok", resp.Replica.Config.Actor)
+
+	// An ack for a revision that was never issued is refused and leaves the
+	// cursor alone; so does a heartbeat claiming one.
+	ack, err := s.AckConfig(harnessCtx(), &pb.HarnessAckConfigRequest{ReplicaId: replica.ID, Revision: 100, Applied: true})
+	require.NoError(t, err)
+	assert.False(t, ack.Ok)
+	_, err = s.Heartbeat(harnessCtx(), &pb.HarnessHeartbeatRequest{ReplicaId: replica.ID, Status: "ready", AppliedRevision: 100})
+	require.NoError(t, err)
+	stored, _ := s.repo.GetReplica(context.Background(), replica.ID)
+	assert.EqualValues(t, 0, stored.Config.AckedRevision)
+	assert.False(t, stored.Config.Acked())
+
+	ack, err = s.AckConfig(harnessCtx(), &pb.HarnessAckConfigRequest{ReplicaId: replica.ID, Revision: 1, Applied: true, EffectiveJson: `{"max_num_seqs":64}`})
+	require.NoError(t, err)
+	assert.True(t, ack.Ok)
+	applied := events.find("config.applied")
+	require.NotNil(t, applied)
+	assert.EqualValues(t, 1, applied.Revision)
+	assert.JSONEq(t, `{"max_num_seqs":96}`, string(applied.Data["requested"].(json.RawMessage)))
+	assert.JSONEq(t, `{"max_num_seqs":64}`, string(applied.Data["effective"].(json.RawMessage)), "the engine's effective value, not the request")
+	assert.Equal(t, "tok", applied.Data["actor"])
+
+	// Requests served under the acknowledged revision are attributed to it.
+	stored, _ = s.repo.GetReplica(context.Background(), replica.ID)
+	assert.EqualValues(t, 1, stored.Config.AckedRevision)
+}
+
 func TestAdminReadRPCs(t *testing.T) {
 	s := newServiceForTest(t)
 	endpoint := seedEndpoint(t, s)
@@ -485,7 +564,7 @@ func TestRouteRecordCreditsProviderWorkspace(t *testing.T) {
 	require.Equal(t, int64(2), spend.Total.Requests, "the free request counts, the failed one does not")
 
 	// Every sample lands in the serving replica's own metrics bucket.
-	metrics, err := s.repo.GetRouteMetrics(ctx, "acme/model", "H100", "rep-1", time.Minute)
+	metrics, err := s.repo.GetRouteMetrics(ctx, "acme/model", "H100", "rep-1", 0, time.Minute)
 	require.NoError(t, err)
 	require.EqualValues(t, 4, metrics.Requests)
 	require.EqualValues(t, 1, metrics.Errors)

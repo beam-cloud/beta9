@@ -191,7 +191,7 @@ type ManagedEndpointRepository interface {
 
 	// Route metrics (minute buckets, bounded retention)
 	RecordRouteSample(ctx context.Context, sample types.RouteSample) error
-	GetRouteMetrics(ctx context.Context, endpointID, gpu, replicaID string, window time.Duration) (*types.RouteMetrics, error)
+	GetRouteMetrics(ctx context.Context, endpointID, gpu, replicaID string, configRevision uint64, window time.Duration) (*types.RouteMetrics, error)
 
 	// Route records: generation lookups
 	SaveGeneration(ctx context.Context, record *types.EventEndpointRouteSchema, ttl time.Duration) error
@@ -200,6 +200,10 @@ type ManagedEndpointRepository interface {
 	// Usage: daily per-workspace, per-model counters (spend and provider earnings)
 	AddUsage(ctx context.Context, kind types.UsageKind, workspaceID, model, requestID string, at time.Time, delta types.Usage) error
 	GetUsage(ctx context.Context, kind types.UsageKind, workspaceID string, from, to time.Time) (*types.UsageReport, error)
+
+	// Metering: closed minute buckets of usage not yet sent to the billing meter
+	ListMeterBuckets(ctx context.Context, before time.Time) ([]types.MeterBucket, error)
+	DeleteMeterBucket(ctx context.Context, key string) error
 }
 
 type WorkspaceRepository interface {

@@ -45,27 +45,24 @@ func TestOpenMeterEventTimeUsesIntervalStart(t *testing.T) {
 	}
 }
 
-func TestOpenMeterRequestEventIDIsStable(t *testing.T) {
-	data := map[string]interface{}{"workspace_id": "ws-1", "endpoint_id": "acme/model", "request_id": "req-1", "value": 3}
+func TestOpenMeterEndpointBucketEventIDIsStable(t *testing.T) {
+	data := map[string]interface{}{"workspace_id": "ws-1", "endpoint_id": "acme/model", "interval_start": "2026-09-09T17:00:00Z", "interval_end": "2026-09-09T17:01:00Z", "value": 3}
 	first := openMeterEventID("gateway", "endpoint_requests", data)
 	data["value"] = 7
 	if again := openMeterEventID("gateway", "endpoint_requests", data); again != first {
 		t.Fatalf("event id changed with the value: %s != %s", again, first)
 	}
 	for name, other := range map[string]map[string]interface{}{
-		"request":   {"workspace_id": "ws-1", "endpoint_id": "acme/model", "request_id": "req-2"},
-		"workspace": {"workspace_id": "ws-2", "endpoint_id": "acme/model", "request_id": "req-1"},
-		"endpoint":  {"workspace_id": "ws-1", "endpoint_id": "acme/other", "request_id": "req-1"},
+		"bucket":    {"workspace_id": "ws-1", "endpoint_id": "acme/model", "interval_start": "2026-09-09T17:01:00Z", "interval_end": "2026-09-09T17:02:00Z"},
+		"workspace": {"workspace_id": "ws-2", "endpoint_id": "acme/model", "interval_start": "2026-09-09T17:00:00Z", "interval_end": "2026-09-09T17:01:00Z"},
+		"endpoint":  {"workspace_id": "ws-1", "endpoint_id": "acme/other", "interval_start": "2026-09-09T17:00:00Z", "interval_end": "2026-09-09T17:01:00Z"},
 	} {
 		if openMeterEventID("gateway", "endpoint_requests", other) == first {
 			t.Fatalf("a different %s produced the same event id", name)
 		}
 	}
 	if openMeterEventID("gateway", "endpoint_cost", data) == first {
-		t.Fatal("different metrics for one request must not collide")
-	}
-	if openMeterEventID("gateway", "endpoint_requests", map[string]interface{}{"workspace_id": "ws-1"}) == openMeterEventID("gateway", "endpoint_requests", map[string]interface{}{"workspace_id": "ws-1"}) {
-		t.Fatal("without request_id or interval the id is random")
+		t.Fatal("different metrics for one bucket must not collide")
 	}
 }
 

@@ -363,6 +363,108 @@ func TestGitOpsApplyReportRetireFailureIsRetried(t *testing.T) {
 	assert.False(t, retired.Enabled())
 }
 
+type failOnceRepo struct {
+	repository.ManagedEndpointRepository
+	fleetFailures int
+	stateFailures int
+}
+
+func (r *failOnceRepo) SaveFleet(ctx context.Context, f *types.Fleet) error {
+	if r.fleetFailures > 0 {
+		r.fleetFailures--
+		return errors.New("synthetic fleet persistence outage")
+	}
+	return r.ManagedEndpointRepository.SaveFleet(ctx, f)
+}
+
+func (r *failOnceRepo) SaveGitOpsState(ctx context.Context, state *types.GitOpsState) error {
+	if r.stateFailures > 0 {
+		r.stateFailures--
+		return errors.New("synthetic state persistence outage")
+	}
+	return r.ManagedEndpointRepository.SaveGitOpsState(ctx, state)
+}
+
+// A fleet write that fails is retried at the same SHA even when every app
+// applied; an invalid fleet is not (nothing changes until the next commit).
+func TestGitOpsFailedFleetWriteIsRetried(t *testing.T) {
+	s, g := newGitOpsForTest(t)
+	endpoint := seedEndpoint(t, s)
+	ctx := context.Background()
+	repo := &failOnceRepo{ManagedEndpointRepository: s.repo, fleetFailures: 1}
+	s.repo = repo
+	require.NoError(t, s.repo.SaveGitOpsState(ctx, &types.GitOpsState{Running: true, RunID: "r", PerEndpoint: map[string]types.GitOpsEndpointState{}}))
+	report := &types.GitOpsReport{RunID: "r", SHA: "abcdef1", Results: []types.GitOpsDeployResult{{ID: endpoint.Spec.ID, Path: "model", OK: true}}, FleetYAML: "acme/model:\n  H100: 3\n"}
+	require.NoError(t, g.applyReport(ctx, report))
+	state, err := s.repo.GetGitOpsState(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "abcdef1", state.LastSHA)
+	assert.Empty(t, state.FleetSHA, "the fleet was not applied")
+	assert.Contains(t, state.FleetError, "synthetic")
+	needsRun := func() bool { return state.LastSHA != state.FleetSHA }
+	assert.True(t, needsRun(), "sync must relaunch at the same SHA")
+
+	state.Running, state.RunID = true, "r2"
+	require.NoError(t, s.repo.SaveGitOpsState(ctx, state))
+	report.RunID = "r2"
+	report.Results[0].Skipped = true
+	require.NoError(t, g.applyReport(ctx, report))
+	state, err = s.repo.GetGitOpsState(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "abcdef1", state.FleetSHA)
+	assert.Empty(t, state.FleetError)
+	assert.False(t, needsRun())
+	fleet, err := s.repo.GetFleet(ctx)
+	require.NoError(t, err)
+	assert.EqualValues(t, 3, fleet.Replicas["acme/model"]["H100"])
+
+	// Invalid fleet: surfaced, but checkpointed so the poller does not loop.
+	state.Running, state.RunID = true, "r3"
+	require.NoError(t, s.repo.SaveGitOpsState(ctx, state))
+	report.RunID, report.SHA, report.FleetYAML = "r3", "abcdef2", "acme/model:\n  NOTAGPU: 1\n"
+	require.NoError(t, g.applyReport(ctx, report))
+	state, err = s.repo.GetGitOpsState(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "abcdef2", state.FleetSHA)
+	assert.Contains(t, state.FleetError, "not a known GPU type")
+	fleet, _ = s.repo.GetFleet(ctx)
+	assert.EqualValues(t, 3, fleet.Replicas["acme/model"]["H100"], "previous fleet stays in force")
+}
+
+// The run's outcome is saved before its token/container are cleaned up and a
+// report for any other run is fenced out, so a report cannot be lost to a
+// failed save or clobber a newer run.
+func TestGitOpsReportIsFencedAndAcceptedBeforeCleanup(t *testing.T) {
+	s, g := newGitOpsForTest(t)
+	endpoint := seedEndpoint(t, s)
+	ctx := context.Background()
+	require.NoError(t, s.repo.SaveGitOpsState(ctx, &types.GitOpsState{Running: true, RunID: "r", TokenID: "tok-r", PerEndpoint: map[string]types.GitOpsEndpointState{}}))
+	s.repo = &failOnceRepo{ManagedEndpointRepository: s.repo, stateFailures: 1}
+	report := &types.GitOpsReport{RunID: "r", SHA: "abcdef1", Results: []types.GitOpsDeployResult{{ID: endpoint.Spec.ID, Path: "model", OK: true, Version: 2}}}
+
+	require.Error(t, g.applyReport(ctx, report), "the save failed")
+	state, err := s.repo.GetGitOpsState(ctx)
+	require.NoError(t, err)
+	assert.True(t, state.Running, "the run is still in flight: its token stays valid for the retry")
+	assert.Equal(t, "tok-r", state.TokenID)
+
+	require.NoError(t, g.applyReport(ctx, report), "the deployer's retry lands")
+	state, err = s.repo.GetGitOpsState(ctx)
+	require.NoError(t, err)
+	assert.False(t, state.Running)
+	assert.Empty(t, state.TokenID)
+	assert.Equal(t, "abcdef1", state.LastSHA)
+
+	// Duplicate and stale reports are rejected once the run is closed.
+	require.ErrorContains(t, g.applyReport(ctx, report), "not in flight")
+	state.Running, state.RunID = true, "newer"
+	require.NoError(t, s.repo.SaveGitOpsState(ctx, state))
+	require.ErrorContains(t, g.applyReport(ctx, &types.GitOpsReport{RunID: "r", SHA: "stale"}), "not in flight")
+	state, _ = s.repo.GetGitOpsState(ctx)
+	assert.Equal(t, "newer", state.RunID)
+	assert.Equal(t, "abcdef1", state.LastSHA)
+}
+
 func TestGitOpsApplyReportDeployerError(t *testing.T) {
 	s, g := newGitOpsForTest(t)
 	ctx := context.Background()

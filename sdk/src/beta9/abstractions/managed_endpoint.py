@@ -172,7 +172,7 @@ class ManagedEndpoint(RunnerAbstraction):
 
     def spec(self) -> Dict[str, Any]:
         """The endpoint spec as the gateway validates it (pkg/types ManagedEndpointSpec)."""
-        return _drop_empty(
+        spec = _drop_empty(
             {
                 "id": self.id,
                 "kind": self.kind,
@@ -180,7 +180,6 @@ class ManagedEndpoint(RunnerAbstraction):
                 "port": self.port,
                 "health": self.health,
                 "metrics": self.metrics,
-                "gpu": {key: g.to_dict() for key, g in self.gpus.items()},
                 "routes": self.routes,
                 "pricing": self.pricing.to_dict(),
                 "catalog": self.catalog.to_dict(),
@@ -188,6 +187,10 @@ class ManagedEndpoint(RunnerAbstraction):
                 "drain_seconds": self.drain_seconds,
             }
         )
+        # A GPU key with no settings still declares the GPU; it must never be pruned.
+        if self.gpus:
+            spec["gpu"] = {key: _drop_empty(g.to_dict()) for key, g in self.gpus.items()}
+        return spec
 
     def deploy(
         self,

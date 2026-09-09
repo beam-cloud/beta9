@@ -293,12 +293,17 @@ func (c *controller) reconcileEndpoint(ctx context.Context, endpoint *types.Mana
 		return
 	}
 
+	// The desired template is (current version, a GPU type fleet.yaml places
+	// the endpoint on). Any spec change bumps the version, so GPU count and
+	// probe changes replace replicas the same way code changes do.
 	placed := map[string]bool{}
+	var desired uint32
 	for _, ft := range fleet.Placements(spec.ID) {
 		if _, ok := spec.Gpu[ft.GPU]; !ok {
 			continue // fleet.yaml names a GPU the app cannot run on; the fleet apply already reported it
 		}
 		placed[ft.GPU] = true
+		desired += ft.Replicas
 		current, _ := liveReplicas(live, spec.ID, ft.GPU, endpoint.Version)
 		switch n := uint32(len(current)); {
 		case n < ft.Replicas:
@@ -309,12 +314,37 @@ func (c *controller) reconcileEndpoint(ctx context.Context, endpoint *types.Mana
 				_ = c.drainReplica(ctx, r, spec.DrainSeconds, false, "scaled down by fleet.yaml")
 			}
 		}
-		c.retireStaleVersions(ctx, endpoint, ft.GPU, live)
 	}
-	// Replicas on GPU types fleet.yaml no longer places this endpoint on.
+	c.retireStale(ctx, endpoint, placed, desired, live)
+}
+
+// retireStale drains replicas that no longer match the template (older
+// version, or a GPU type fleet.yaml no longer places the endpoint on), one per
+// tick. A stale replica that is serving is kept until a matching replica is
+// ready to take the traffic, whether the change is a new version or a move to
+// another GPU type; only when fleet.yaml wants no replicas at all is the
+// endpoint drained outright.
+func (c *controller) retireStale(ctx context.Context, endpoint *types.ManagedEndpoint, placed map[string]bool, desired uint32, live []*types.EndpointReplica) {
+	matches := func(r *types.EndpointReplica) bool { return r.Version == endpoint.Version && placed[r.GPU] }
+	var currentReady int
 	for _, r := range live {
-		if r.EndpointID == spec.ID && !placed[r.GPU] {
-			_ = c.drainReplica(ctx, r, spec.DrainSeconds, false, "removed from fleet.yaml")
+		if r.EndpointID == endpoint.Spec.ID && matches(r) && r.Serving() {
+			currentReady++
+		}
+	}
+	for _, r := range live {
+		if r.EndpointID != endpoint.Spec.ID || !r.Alive() || matches(r) {
+			continue
+		}
+		if r.Serving() && currentReady == 0 && desired > 0 {
+			continue
+		}
+		reason := fmt.Sprintf("version %d retired", r.Version)
+		if !placed[r.GPU] {
+			reason = "removed from fleet.yaml"
+		}
+		if err := c.drainReplica(ctx, r, endpoint.Spec.DrainSeconds, false, reason); err == nil {
+			return
 		}
 	}
 }
@@ -334,24 +364,6 @@ func (c *controller) grow(ctx context.Context, endpoint *types.ManagedEndpoint, 
 		}
 		if _, err := c.startReplica(ctx, startSpec{Endpoint: endpoint, Target: ft, Pool: pool}); err != nil {
 			log.Warn().Err(err).Str("endpoint_id", endpoint.Spec.ID).Str("gpu", ft.GPU).Msg("managed endpoints: start replica failed")
-			return
-		}
-	}
-}
-
-// retireStaleVersions drains replicas running an older version, one per GPU
-// per tick, once the current version has something ready to take the
-// traffic (or the old replica is not serving anyway).
-func (c *controller) retireStaleVersions(ctx context.Context, endpoint *types.ManagedEndpoint, gpu string, live []*types.EndpointReplica) {
-	_, currentReady := liveReplicas(live, endpoint.Spec.ID, gpu, endpoint.Version)
-	for _, r := range live {
-		if r.EndpointID != endpoint.Spec.ID || r.GPU != gpu || r.Version == endpoint.Version || !r.Alive() {
-			continue
-		}
-		if r.Status == types.ReplicaStatusReady && currentReady == 0 {
-			continue
-		}
-		if err := c.drainReplica(ctx, r, endpoint.Spec.DrainSeconds, false, fmt.Sprintf("version %d retired", r.Version)); err == nil {
 			return
 		}
 	}

@@ -161,7 +161,7 @@ func (g *gitops) sync(ctx context.Context, req gitopsRequest) error {
 			retry = append(retry, e.Path)
 		}
 	}
-	if !req.force && sha == state.LastSHA && len(retry) == 0 {
+	if !req.force && sha == state.LastSHA && len(retry) == 0 && state.FleetSHA == state.LastSHA {
 		return nil
 	}
 	return g.launch(ctx, state, sha, req.force, retry)
@@ -443,8 +443,12 @@ func (g *gitops) finishRun(ctx context.Context, state *types.GitOpsState) {
 }
 
 // applyReport folds the deployer's report into the registry: records
-// per-endpoint status, advances LastSHA when everything applied, and retires
-// endpoints and services whose directories disappeared.
+// per-endpoint status, advances LastSHA, retires endpoints whose directories
+// disappeared and applies fleet.yaml. It runs under the gitops lease and is
+// fenced by the run id, so a stale or duplicate report cannot touch a newer
+// run. The state is saved (the run durably accepted) before the run's token
+// and container are cleaned up: if the save fails the deployer's token is
+// still valid and its retry re-applies the same report idempotently.
 func (g *gitops) applyReport(ctx context.Context, report *types.GitOpsReport) error {
 	if report == nil || report.RunID == "" {
 		return errors.New("run_id is required")
@@ -457,16 +461,64 @@ func (g *gitops) applyReport(ctx context.Context, report *types.GitOpsReport) er
 		return fmt.Errorf("run %s is not in flight", report.RunID)
 	}
 	now := time.Now()
-	g.finishRun(ctx, state)
+	run := *state // for cleanup once the outcome is saved
+	state.Running = false
+	state.RunID, state.ContainerID, state.TokenID = "", "", ""
 	state.LastRunAt = now
 
 	if report.Error != "" {
 		state.LastError = report.Error
-		_ = g.s.repo.SaveGitOpsState(ctx, state)
+		if err := g.s.repo.SaveGitOpsState(ctx, state); err != nil {
+			return err
+		}
+		g.finishRun(ctx, &run)
 		g.s.emit(types.EventEndpointGitOps, types.EventEndpointSchema{Action: "gitops.failed", Message: report.Error, Data: map[string]any{"sha": report.SHA}})
 		return nil
 	}
 
+	failed := g.applyResults(ctx, state, report, now)
+
+	// fleet.yaml is applied against the endpoints that exist after this run.
+	// An invalid fleet is not applied (the previous placement stays in force,
+	// the error is surfaced) and there is nothing to retry at this commit; a
+	// failed write leaves FleetSHA behind so sync relaunches at the same SHA.
+	skipped, err := g.applyFleet(ctx, report)
+	state.FleetError = skipped
+	var invalid *fleetInvalidError
+	switch {
+	case err == nil:
+		state.FleetSHA = report.SHA
+	case errors.As(err, &invalid):
+		state.FleetSHA, state.FleetError = report.SHA, err.Error()
+		failed++
+	default:
+		state.FleetError = err.Error()
+		failed++
+	}
+
+	// LastSHA advances even when some stubs failed: they are tracked per
+	// endpoint and retried on their own, so a broken app never redeploys the
+	// healthy ones.
+	state.TargetSHA, state.LastSHA = report.SHA, report.SHA
+	state.LastError = ""
+	if failed > 0 {
+		state.LastError = fmt.Sprintf("%d stub(s) failed to deploy at %.8s", failed, report.SHA)
+	}
+	if err := g.s.repo.SaveGitOpsState(ctx, state); err != nil {
+		return err
+	}
+	g.finishRun(ctx, &run)
+	g.s.emit(types.EventEndpointGitOps, types.EventEndpointSchema{
+		Action: "gitops.applied", Message: report.SHA,
+		Data: map[string]any{"sha": report.SHA, "results": len(report.Results), "failed": failed},
+	})
+	log.Info().Str("sha", report.SHA).Int("results", len(report.Results)).Int("failed", failed).Msg("managed endpoints: gitops report applied")
+	return nil
+}
+
+// applyResults records each app's outcome and retires endpoints that
+// disappeared from the repo. It returns how many failed.
+func (g *gitops) applyResults(ctx context.Context, state *types.GitOpsState, report *types.GitOpsReport, now time.Time) int {
 	failed := 0
 	// importErrors holds directories whose app.py failed to import (no ID is
 	// known for them), keyed by path.
@@ -538,34 +590,7 @@ func (g *gitops) applyReport(ctx context.Context, report *types.GitOpsReport) er
 			state.PerEndpoint["path:"+path] = types.GitOpsEndpointState{Path: path, Status: types.GitOpsStatusFailed, Error: msg, UpdatedAt: now}
 		}
 	}
-
-	// fleet.yaml is applied against the endpoints that exist after this run.
-	// A fleet that fails validation is not applied: the previous placement
-	// stays in force and the error is surfaced on the GitOps status.
-	skipped, err := g.applyFleet(ctx, report)
-	state.FleetError = skipped
-	if err != nil {
-		state.FleetError = err.Error()
-		failed++
-	}
-
-	// LastSHA advances even when some stubs failed: they are tracked per
-	// endpoint and retried on their own, so a broken app never redeploys the
-	// healthy ones.
-	state.TargetSHA, state.LastSHA = report.SHA, report.SHA
-	state.LastError = ""
-	if failed > 0 {
-		state.LastError = fmt.Sprintf("%d stub(s) failed to deploy at %.8s", failed, report.SHA)
-	}
-	if err := g.s.repo.SaveGitOpsState(ctx, state); err != nil {
-		return err
-	}
-	g.s.emit(types.EventEndpointGitOps, types.EventEndpointSchema{
-		Action: "gitops.applied", Message: report.SHA,
-		Data: map[string]any{"sha": report.SHA, "results": len(report.Results), "failed": failed},
-	})
-	log.Info().Str("sha", report.SHA).Int("results", len(report.Results)).Int("failed", failed).Msg("managed endpoints: gitops report applied")
-	return nil
+	return failed
 }
 
 // retire disables an endpoint removed from the repo. Replicas are drained
@@ -585,6 +610,12 @@ func (g *gitops) retire(ctx context.Context, id, sha string) error {
 	return nil
 }
 
+// fleetInvalidError is a fleet.yaml that cannot be applied at this commit.
+type fleetInvalidError struct{ err error }
+
+func (e *fleetInvalidError) Error() string { return "fleet.yaml: " + e.err.Error() }
+func (e *fleetInvalidError) Unwrap() error { return e.err }
+
 // applyFleet parses and validates the report's fleet.yaml, drops entries for
 // endpoints that are not deployed (reported as skipped, so a failed deploy
 // never blocks the rest of the fleet) and saves the result. A fleet that fails
@@ -602,11 +633,11 @@ func (g *gitops) applyFleet(ctx context.Context, report *types.GitOpsReport) (sk
 	}
 	fleet := &types.Fleet{GitSHA: report.SHA}
 	if err := yaml.Unmarshal([]byte(report.FleetYAML), &fleet.Replicas); err != nil {
-		return "", fmt.Errorf("fleet.yaml: %w", err)
+		return "", &fleetInvalidError{err}
 	}
 	fleet.Normalize()
 	if err := fleet.Validate(); err != nil {
-		return "", fmt.Errorf("fleet.yaml: %w", err)
+		return "", &fleetInvalidError{err}
 	}
 	dropped := fleet.Prune(known)
 	if err := g.s.repo.SaveFleet(ctx, fleet); err != nil {
@@ -674,8 +705,22 @@ func (g *gitops) handleReport(ctx echo.Context) error {
 			return echo.NewHTTPError(http.StatusForbidden, "not the token of the run in flight")
 		}
 	}
-	if err := g.applyReport(reqCtx, &report); err != nil {
-		return echo.NewHTTPError(http.StatusConflict, err.Error())
+	// Report application shares the sync lease so the poller cannot fail or
+	// relaunch the run while its report is being applied. A busy lease is a
+	// 503, which the deployer retries; a fenced-out report is a 409, which it
+	// does not.
+	var applyErr error
+	err := g.lock.WithLease(reqCtx, gitopsLockKey, common.RedisLockOptions{TtlS: int(gitopsLockTTL.Seconds()), Retries: 10, RetryInterval: 500 * time.Millisecond}, func(ctx context.Context) error {
+		applyErr = g.applyReport(ctx, &report)
+		return nil
+	})
+	switch {
+	case err != nil:
+		return echo.NewHTTPError(http.StatusServiceUnavailable, err.Error())
+	case applyErr != nil && strings.Contains(applyErr.Error(), "not in flight"):
+		return echo.NewHTTPError(http.StatusConflict, applyErr.Error())
+	case applyErr != nil:
+		return echo.NewHTTPError(http.StatusServiceUnavailable, applyErr.Error())
 	}
 	return ctx.JSON(http.StatusOK, map[string]any{"ok": true})
 }

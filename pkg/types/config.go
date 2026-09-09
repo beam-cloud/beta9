@@ -88,7 +88,8 @@ type ManagedEndpointsRoutingConfig struct {
 	MaxQueueWait     time.Duration `key:"maxQueueWait" json:"max_queue_wait"`
 	SlowStartSeconds uint32        `key:"slowStartSeconds" json:"slow_start_seconds"`
 	// Per-gateway in-flight caps (each gateway admits up to this many); the
-	// cluster-wide bound is the replicas' MaxConcurrency.
+	// cluster-wide bound is the replicas' MaxConcurrency, reserved atomically
+	// in Redis per request.
 	PerWorkspaceConcurrency uint32 `key:"perWorkspaceConcurrency" json:"per_workspace_concurrency"`
 	PerEndpointConcurrency  uint32 `key:"perEndpointConcurrency" json:"per_endpoint_concurrency"`
 }

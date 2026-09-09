@@ -32,8 +32,10 @@ const (
 //	replica_container:<cid> -> rid; replica_lock:<rid>, drain:<rid>, backoff:<id>:<gpu>
 //	fleet, gitops, generation:<request_id>            JSON
 //	config_events:<rid>                               pub/sub, replica config revision numbers
-//	metrics:<id>:<gpu>:<version>:<minute>             HASH counters
+//	metrics:<id>:<gpu>:<replica[@revision]>:<minute>  HASH counters
+//	usage:seen:<kind>:<request_id>                    request dedupe marker
 //	usage:<spend|earned>:<workspace>:<day>            HASH counters, fields "<model>|<counter>"
+//	meter:<kind>:<minute>, meter:buckets              HASH counters "<workspace>|<model>|<counter>" awaiting the billing flush, and their ZSET index
 type ManagedEndpointRedisRepository struct {
 	rdb  *common.RedisClient
 	lock *common.RedisLock
@@ -343,6 +345,9 @@ func (r *ManagedEndpointRedisRepository) RecordRouteSample(ctx context.Context, 
 	}
 	if sample.ReplicaID != "" {
 		keys[metricsKey(sample.EndpointID, gpu, sample.ReplicaID, bucket)] = struct{}{}
+		if sample.ConfigRevision > 0 {
+			keys[metricsKey(sample.EndpointID, gpu, replicaRevisionKey(sample.ReplicaID, sample.ConfigRevision), bucket)] = struct{}{}
+		}
 	}
 	delta := types.RouteMetrics{
 		Requests: 1, PromptTokens: sample.PromptTokens, CompletionTokens: sample.CompletionTokens, Images: sample.Images,
@@ -369,13 +374,22 @@ func (r *ManagedEndpointRedisRepository) RecordRouteSample(ctx context.Context, 
 	return err
 }
 
+// replicaRevisionKey scopes a replica's metrics to one live config revision.
+func replicaRevisionKey(replicaID string, revision uint64) string {
+	return replicaID + "@" + strconv.FormatUint(revision, 10)
+}
+
 // GetRouteMetrics sums the window for the endpoint (gpu and replica empty),
-// one GPU type, or one replica (its gpu must be given).
-func (r *ManagedEndpointRedisRepository) GetRouteMetrics(ctx context.Context, endpointID, gpu, replicaID string, window time.Duration) (*types.RouteMetrics, error) {
+// one GPU type, one replica (its gpu must be given), or the requests one
+// replica served under one acknowledged config revision.
+func (r *ManagedEndpointRedisRepository) GetRouteMetrics(ctx context.Context, endpointID, gpu, replicaID string, configRevision uint64, window time.Duration) (*types.RouteMetrics, error) {
 	if window <= 0 {
 		window = 5 * time.Minute
 	}
 	window = min(window, managedEndpointMetricsRetain-time.Hour)
+	if replicaID != "" && configRevision > 0 {
+		replicaID = replicaRevisionKey(replicaID, configRevision)
+	}
 	gpu, replica := cmp.Or(gpu, metricsAggregateGPU), cmp.Or(replicaID, metricsAggregateReplica)
 	now := time.Now()
 	end := now.Truncate(managedEndpointMetricsBucket)
@@ -387,7 +401,7 @@ func (r *ManagedEndpointRedisRepository) GetRouteMetrics(ctx context.Context, en
 	if err != nil {
 		return nil, err
 	}
-	metrics := &types.RouteMetrics{EndpointID: endpointID, ReplicaID: replicaID, Window: window}
+	metrics := &types.RouteMetrics{EndpointID: endpointID, ReplicaID: strings.SplitN(replicaID, "@", 2)[0], ConfigRevision: configRevision, Window: window}
 	if gpu != metricsAggregateGPU {
 		metrics.GPU = gpu
 	}
@@ -421,31 +435,53 @@ func usageFields(u *types.Usage) map[string]*int64 {
 	}
 }
 
+// addUsageScript records one request atomically: the seen marker, the day
+// counters behind the usage page and the current minute's meter bucket commit
+// together, so a failed or ambiguous write can be replayed with the same
+// request id and either applies once or is a no-op. The meter bucket is keyed
+// by the time of recording (Redis TIME), so a bucket whose minute has passed
+// never changes again and can be delivered to billing idempotently.
+//
+// KEYS[1] seen marker, KEYS[2] day bucket, KEYS[3] meter bucket index;
+// ARGV[1] usage ttl seconds, ARGV[2] meter ttl seconds, ARGV[3] meter key
+// prefix, ARGV[4] workspace, ARGV[5] model, then (field, value) pairs.
+var addUsageScript = redis.NewScript(`
+if redis.call('SET', KEYS[1], '1', 'NX', 'EX', ARGV[1]) == false then
+	return 0
+end
+local minute = math.floor(redis.call('TIME')[1] / 60) * 60
+local meter = ARGV[3] .. ':' .. minute
+for i = 6, #ARGV, 2 do
+	redis.call('HINCRBY', KEYS[2], ARGV[i], ARGV[i + 1])
+	redis.call('HINCRBY', KEYS[2], ARGV[5] .. '|' .. ARGV[i], ARGV[i + 1])
+	redis.call('HINCRBY', meter, ARGV[4] .. '|' .. ARGV[5] .. '|' .. ARGV[i], ARGV[i + 1])
+end
+redis.call('EXPIRE', KEYS[2], ARGV[1])
+redis.call('EXPIRE', meter, ARGV[2])
+redis.call('ZADD', KEYS[3], minute, meter)
+return 1
+`)
+
 // AddUsage credits one request to a workspace's daily bucket for kind
 // ("spend" for the caller, "earned" for the provider of the machine that
-// served it), both in total and under the model.
+// served it), both in total and under the model. A replayed request id is a
+// no-op.
 func (r *ManagedEndpointRedisRepository) AddUsage(ctx context.Context, kind types.UsageKind, workspaceID, model, requestID string, at time.Time, delta types.Usage) error {
 	if workspaceID == "" || model == "" || requestID == "" {
 		return errors.New("workspace id, model and request id are required")
 	}
-	// One request is counted once per leg: a replayed request id is a no-op.
-	fresh, err := r.rdb.SetNX(ctx, meKey("usage", "seen", string(kind), requestID), "1", usageRetain).Result()
-	if err != nil || !fresh {
-		return err
-	}
-	key := meKey("usage", string(kind), workspaceID, at.UTC().Format(time.DateOnly))
-	_, err = r.rdb.Pipelined(ctx, func(pipe redis.Pipeliner) error {
-		for field, value := range usageFields(&delta) {
-			if *value <= 0 {
-				continue
-			}
-			pipe.HIncrBy(ctx, key, field, *value)
-			pipe.HIncrBy(ctx, key, model+"|"+field, *value)
+	args := []any{int(usageRetain.Seconds()), int(meterBucketRetain.Seconds()), meKey("meter", string(kind)), workspaceID, model}
+	for field, value := range usageFields(&delta) {
+		if *value > 0 {
+			args = append(args, field, *value)
 		}
-		pipe.Expire(ctx, key, usageRetain)
-		return nil
-	})
-	return err
+	}
+	keys := []string{
+		meKey("usage", "seen", string(kind), requestID),
+		meKey("usage", string(kind), workspaceID, at.UTC().Format(time.DateOnly)),
+		meKey("meter", "buckets"),
+	}
+	return addUsageScript.Run(ctx, r.rdb, keys, args...).Err()
 }
 
 // GetUsage folds the UTC days from..to (inclusive, clamped to today and to
@@ -499,4 +535,75 @@ func (r *ManagedEndpointRedisRepository) GetUsage(ctx context.Context, kind type
 		}
 	}
 	return report, nil
+}
+
+// --- metering --------------------------------------------------------------------
+
+// Minute buckets are what the meter flush sends to billing (see meter.go);
+// a bucket is closed once the minute has passed and is removed after delivery.
+const meterBucketRetain = 7 * 24 * time.Hour
+
+// ListMeterBuckets returns every bucket that started before the cutoff, oldest
+// first, with its rows parsed.
+func (r *ManagedEndpointRedisRepository) ListMeterBuckets(ctx context.Context, before time.Time) ([]types.MeterBucket, error) {
+	keys, err := r.rdb.ZRangeByScore(ctx, meKey("meter", "buckets"), &redis.ZRangeBy{Min: "-inf", Max: strconv.FormatInt(before.Unix(), 10)}).Result()
+	if err != nil {
+		return nil, err
+	}
+	var out []types.MeterBucket
+	for _, key := range keys {
+		parts := strings.Split(strings.TrimPrefix(key, meKey("meter")+":"), ":")
+		if len(parts) != 2 {
+			continue
+		}
+		minute, _ := strconv.ParseInt(parts[1], 10, 64)
+		bucket := types.MeterBucket{Key: key, Kind: types.UsageKind(parts[0]), Start: time.Unix(minute, 0).UTC()}
+		fields, err := r.rdb.HGetAll(ctx, key).Result()
+		if err != nil {
+			return nil, err
+		}
+		rows := map[string]*types.MeterRow{}
+		for field, raw := range fields {
+			workspace, model, name, ok := splitMeterField(field)
+			if !ok {
+				continue
+			}
+			row := rows[workspace+"|"+model]
+			if row == nil {
+				row = &types.MeterRow{WorkspaceID: workspace, Model: model}
+				rows[workspace+"|"+model] = row
+			}
+			if value, ok := usageFields(&row.Usage)[name]; ok {
+				*value, _ = strconv.ParseInt(raw, 10, 64)
+			}
+		}
+		for _, row := range rows {
+			bucket.Rows = append(bucket.Rows, *row)
+		}
+		sort.Slice(bucket.Rows, func(i, j int) bool {
+			return bucket.Rows[i].WorkspaceID+bucket.Rows[i].Model < bucket.Rows[j].WorkspaceID+bucket.Rows[j].Model
+		})
+		out = append(out, bucket)
+	}
+	return out, nil
+}
+
+// splitMeterField parses "<workspace>|<model>|<field>"; models contain no "|".
+func splitMeterField(field string) (workspace, model, name string, ok bool) {
+	i := strings.Index(field, "|")
+	j := strings.LastIndex(field, "|")
+	if i < 0 || j <= i {
+		return "", "", "", false
+	}
+	return field[:i], field[i+1 : j], field[j+1:], true
+}
+
+// DeleteMeterBucket removes a delivered bucket.
+func (r *ManagedEndpointRedisRepository) DeleteMeterBucket(ctx context.Context, key string) error {
+	_, err := r.rdb.Pipelined(ctx, func(pipe redis.Pipeliner) error {
+		pipe.ZRem(ctx, meKey("meter", "buckets"), key)
+		pipe.Del(ctx, key)
+		return nil
+	})
+	return err
 }

@@ -1,6 +1,8 @@
 import json
 from unittest import mock
 
+import pytest
+
 from beta9 import Catalog, Gpu, Image, ManagedEndpoint, Pricing
 
 
@@ -34,6 +36,14 @@ def test_endpoint_spec_serializes():
 def test_gpu_list_and_cpu_default():
     assert list(ManagedEndpoint(id="a/b", gpu=["H100", "A10G"]).gpus) == ["H100", "A10G"]
     assert ManagedEndpoint(id="a/b").gpus == {}
+    assert "gpu" not in ManagedEndpoint(id="a/b").spec()
+
+
+@pytest.mark.parametrize("gpu", ["H100", ["H100", "A10G"], {"H100": None}, {"H100": Gpu()}])
+def test_plain_gpu_declarations_survive_serialization(gpu):
+    """A GPU with empty settings is still a supported GPU; fleet.yaml can only place what the spec declares."""
+    spec = ManagedEndpoint(id="audit/model", gpu=gpu).spec()
+    assert spec["gpu"]["H100"] == {"count": 1}
 
 
 def test_deploy_sets_managed_endpoint_json():

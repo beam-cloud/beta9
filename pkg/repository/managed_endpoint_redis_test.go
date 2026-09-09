@@ -3,10 +3,13 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 )
 
@@ -179,7 +182,7 @@ func TestManagedEndpointGitOpsAndMetrics(t *testing.T) {
 
 	now := time.Now()
 	samples := []types.RouteSample{
-		{EndpointID: "acme/model", GPU: "H100", ReplicaID: "rep-1", StatusCode: 200, PromptTokens: 100, CompletionTokens: 50, Duration: 2 * time.Second, TTFT: 200 * time.Millisecond, CostMicroUSD: 12, At: now},
+		{EndpointID: "acme/model", GPU: "H100", ReplicaID: "rep-1", ConfigRevision: 2, StatusCode: 200, PromptTokens: 100, CompletionTokens: 50, Duration: 2 * time.Second, TTFT: 200 * time.Millisecond, CostMicroUSD: 12, At: now},
 		{EndpointID: "acme/model", GPU: "H100", ReplicaID: "rep-2", StatusCode: 500, PromptTokens: 10, Duration: time.Second, At: now},
 		{EndpointID: "acme/model", GPU: "A100", StatusCode: 200, PromptTokens: 20, CompletionTokens: 20, Duration: time.Second, TTFT: 100 * time.Millisecond, At: now.Add(-2 * time.Minute)},
 	}
@@ -187,7 +190,7 @@ func TestManagedEndpointGitOpsAndMetrics(t *testing.T) {
 		require.NoError(t, repo.RecordRouteSample(ctx, sample))
 	}
 
-	all, err := repo.GetRouteMetrics(ctx, "acme/model", "", "", 10*time.Minute)
+	all, err := repo.GetRouteMetrics(ctx, "acme/model", "", "", 0, 10*time.Minute)
 	require.NoError(t, err)
 	require.EqualValues(t, 3, all.Requests)
 	require.EqualValues(t, 1, all.Errors)
@@ -198,30 +201,40 @@ func TestManagedEndpointGitOpsAndMetrics(t *testing.T) {
 	require.EqualValues(t, 150, all.MeanTTFTMs())
 	require.InDelta(t, 1.0/3.0, all.ErrorRate(), 1e-9)
 
-	h100, err := repo.GetRouteMetrics(ctx, "acme/model", "H100", "", 10*time.Minute)
+	h100, err := repo.GetRouteMetrics(ctx, "acme/model", "H100", "", 0, 10*time.Minute)
 	require.NoError(t, err)
 	require.EqualValues(t, 2, h100.Requests, "the GPU aggregate spans both replicas")
 	require.EqualValues(t, 1, h100.Errors)
 	require.Equal(t, "H100", h100.GPU)
 	require.Empty(t, h100.ReplicaID)
 
-	rep2, err := repo.GetRouteMetrics(ctx, "acme/model", "H100", "rep-2", 10*time.Minute)
+	rep2, err := repo.GetRouteMetrics(ctx, "acme/model", "H100", "rep-2", 0, 10*time.Minute)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, rep2.Requests, "a replica bucket holds only its own samples")
 	require.EqualValues(t, 1, rep2.Errors)
 	require.Equal(t, "rep-2", rep2.ReplicaID)
 
-	rep1, err := repo.GetRouteMetrics(ctx, "acme/model", "H100", "rep-1", 10*time.Minute)
+	rep1, err := repo.GetRouteMetrics(ctx, "acme/model", "H100", "rep-1", 0, 10*time.Minute)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, rep1.Requests)
 	require.Zero(t, rep1.Errors)
 	require.EqualValues(t, 12, rep1.CostMicroUSD)
 
-	wrongGPU, err := repo.GetRouteMetrics(ctx, "acme/model", "A100", "rep-1", 10*time.Minute)
+	// A replica's traffic can be split by the live config it had acknowledged.
+	rev2, err := repo.GetRouteMetrics(ctx, "acme/model", "H100", "rep-1", 2, 10*time.Minute)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, rev2.Requests)
+	require.EqualValues(t, 2, rev2.ConfigRevision)
+	require.Equal(t, "rep-1", rev2.ReplicaID)
+	rev1, err := repo.GetRouteMetrics(ctx, "acme/model", "H100", "rep-1", 1, 10*time.Minute)
+	require.NoError(t, err)
+	require.Zero(t, rev1.Requests)
+
+	wrongGPU, err := repo.GetRouteMetrics(ctx, "acme/model", "A100", "rep-1", 0, 10*time.Minute)
 	require.NoError(t, err)
 	require.Zero(t, wrongGPU.Requests, "replica samples live under the replica's own gpu")
 
-	recent, err := repo.GetRouteMetrics(ctx, "acme/model", "", "", time.Minute)
+	recent, err := repo.GetRouteMetrics(ctx, "acme/model", "", "", 0, time.Minute)
 	require.NoError(t, err)
 	require.EqualValues(t, 2, recent.Requests, "older bucket falls outside the window")
 }
@@ -289,4 +302,42 @@ func TestManagedEndpointUsage(t *testing.T) {
 	tenantEarned, err := repo.GetUsage(ctx, types.UsageEarned, "ws-tenant", now.AddDate(0, 0, -6), now)
 	require.NoError(t, err)
 	require.Equal(t, types.Usage{}, tenantEarned.Total)
+}
+
+type failOnceHook struct {
+	command string
+	failed  atomic.Bool
+}
+
+func (h *failOnceHook) DialHook(next redis.DialHook) redis.DialHook { return next }
+func (h *failOnceHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
+	return func(ctx context.Context, cmd redis.Cmder) error {
+		if cmd.Name() == h.command && h.failed.CompareAndSwap(false, true) {
+			return errors.New("synthetic transport failure")
+		}
+		return next(ctx, cmd)
+	}
+}
+func (h *failOnceHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return next
+}
+
+// A request whose write failed must be repairable by replaying the same
+// request id: the dedupe marker and the counters commit together or not at all.
+func TestManagedEndpointUsageReplayRepairsFailedWrite(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	require.NoError(t, err)
+	rdb.AddHook(&failOnceHook{command: "evalsha"})
+	repo := NewManagedEndpointRedisRepository(rdb)
+	ctx := context.Background()
+	now := time.Now()
+	u := types.Usage{Requests: 1, MicroUSD: 7}
+
+	require.Error(t, repo.AddUsage(ctx, types.UsageSpend, "tenant", "acme/model", "request-1", now, u))
+	require.NoError(t, repo.AddUsage(ctx, types.UsageSpend, "tenant", "acme/model", "request-1", now, u))
+	require.NoError(t, repo.AddUsage(ctx, types.UsageSpend, "tenant", "acme/model", "request-1", now, u), "a second replay is a no-op")
+	result, err := repo.GetUsage(ctx, types.UsageSpend, "tenant", now, now)
+	require.NoError(t, err)
+	require.Equal(t, u, result.Total)
+	require.Equal(t, u, result.PerModel["acme/model"])
 }

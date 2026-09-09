@@ -38,6 +38,9 @@ func (s *WorkerRepositoryService) vendRuntimeCredentials(ctx context.Context, re
 	resp := &pb.GetContainerRuntimeCredentialsResponse{Ok: true}
 
 	if req.RuntimeToken || len(req.SecretNames) > 0 {
+		if err := s.authorizeRuntimeEnv(ctx, req); err != nil {
+			return &pb.GetContainerRuntimeCredentialsResponse{Ok: false, ErrorMsg: err.Error()}
+		}
 		resp.Env, err = s.workerRuntimeEnv(ctx, workspace, req)
 		if err != nil {
 			return &pb.GetContainerRuntimeCredentialsResponse{Ok: false, ErrorMsg: err.Error()}
@@ -95,6 +98,39 @@ func (s *WorkerRepositoryService) authorizeWorkerRuntimeCredentialRequest(ctx co
 		return nil, err
 	}
 	return workspace, nil
+}
+
+// authorizeRuntimeEnv bounds what a worker may obtain for a managed endpoint
+// replica. Those containers live in the platform admin workspace and may run on
+// contributed (provider) hardware, so the host holding the worker token is not
+// trusted with the workspace: replicas authenticate with their own replica
+// secret and never receive a workspace token, and they may only read the
+// secrets their stub declares.
+func (s *WorkerRepositoryService) authorizeRuntimeEnv(ctx context.Context, req *pb.GetContainerRuntimeCredentialsRequest) error {
+	stub, err := s.workerRuntimeStub(ctx, req.StubId, req.WorkspaceId)
+	if err != nil {
+		return err
+	}
+	if !stub.Type.IsManagedEndpoint() {
+		return nil
+	}
+	if req.RuntimeToken {
+		return fmt.Errorf("managed endpoint replicas do not receive workspace tokens")
+	}
+	stubConfig, err := stub.UnmarshalConfig()
+	if err != nil {
+		return err
+	}
+	declared := make(map[string]struct{}, len(stubConfig.Secrets))
+	for _, secret := range stubConfig.Secrets {
+		declared[secret.Name] = struct{}{}
+	}
+	for _, name := range uniqueRuntimeSecretNames(req.SecretNames) {
+		if _, ok := declared[name]; !ok {
+			return fmt.Errorf("secret %q is not declared by stub %q", name, req.StubId)
+		}
+	}
+	return nil
 }
 
 func (s *WorkerRepositoryService) runtimeCredentialsContainerState(ctx context.Context, containerID string) (*types.ContainerState, error) {
@@ -338,8 +374,19 @@ func (s *WorkerRepositoryService) workerRuntimeMountCredentials(ctx context.Cont
 	return out, nil
 }
 
-func (s *WorkerRepositoryService) workerRuntimeStubConfig(ctx context.Context, stubID, workspaceID string) (*types.StubConfigV1, error) {
+func (s *WorkerRepositoryService) workerRuntimeStub(ctx context.Context, stubID, workspaceID string) (*types.StubWithRelated, error) {
 	stub, err := s.backendRepo.GetStubByExternalId(ctx, stubID, types.QueryFilter{Field: "workspace_id", Value: workspaceID})
+	if err != nil {
+		return nil, err
+	}
+	if stub == nil || stub.ExternalId == "" {
+		return nil, fmt.Errorf("stub %q not found in workspace %q", stubID, workspaceID)
+	}
+	return stub, nil
+}
+
+func (s *WorkerRepositoryService) workerRuntimeStubConfig(ctx context.Context, stubID, workspaceID string) (*types.StubConfigV1, error) {
+	stub, err := s.workerRuntimeStub(ctx, stubID, workspaceID)
 	if err != nil {
 		return nil, err
 	}

@@ -61,6 +61,9 @@ func (r *workerRuntimeCredentialsBackendRepo) CreateToken(ctx context.Context, w
 }
 
 func (r *workerRuntimeCredentialsBackendRepo) GetStubByExternalId(ctx context.Context, externalID string, queryFilters ...types.QueryFilter) (*types.StubWithRelated, error) {
+	if r.stub == nil {
+		return &types.StubWithRelated{Stub: types.Stub{ExternalId: externalID, Type: types.StubType(types.StubTypePodDeployment), Config: "{}"}}, nil
+	}
 	return r.stub, nil
 }
 
@@ -559,4 +562,57 @@ func testSigningKey(t *testing.T) (string, []byte) {
 	_, err := rand.Read(key)
 	require.NoError(t, err)
 	return "sk_" + base64.StdEncoding.EncodeToString(key), key
+}
+
+// Managed endpoint replicas authenticate with their own replica secret and
+// may run on contributed hardware, so the worker token that claims them must
+// not be able to turn into an admin-workspace token or read undeclared secrets.
+func TestGetContainerRuntimeCredentialsBoundsManagedEndpointReplicas(t *testing.T) {
+	signingKey, signingKeyBytes := testSigningKey(t)
+	hfToken, err := common.Encrypt(signingKeyBytes, "hf-secret")
+	require.NoError(t, err)
+	configJSON, err := json.Marshal(types.StubConfigV1{Secrets: []types.Secret{{Name: "HF_TOKEN", Value: hfToken}}})
+	require.NoError(t, err)
+	workspace := &types.Workspace{Id: 7, ExternalId: "platform-admin", SigningKey: &signingKey}
+	stub := &types.StubWithRelated{Stub: types.Stub{
+		ExternalId: "model-stub",
+		Type:       types.StubType(types.StubTypeManagedEndpointDeployment),
+		Config:     string(configJSON),
+	}}
+	newService := func() *WorkerRepositoryService {
+		return &WorkerRepositoryService{
+			backendRepo: &workerRuntimeCredentialsBackendRepo{
+				workspace: workspace,
+				stub:      stub,
+				tokens:    []types.Token{{Key: "admin-runtime-token", Active: true, TokenType: types.TokenTypeWorkspaceRestricted}},
+				secrets:   []types.Secret{{Name: "STRIPE_KEY", Value: "unrelated"}},
+			},
+			containerRepo: &workerRuntimeCredentialsContainerRepo{
+				state: &types.ContainerState{ContainerId: "replica", WorkspaceId: workspace.ExternalId, StubId: "model-stub"},
+			},
+		}
+	}
+	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{Workspace: workspace, Token: &types.Token{TokenType: types.TokenTypeWorker}})
+	base := pb.GetContainerRuntimeCredentialsRequest{WorkspaceId: workspace.ExternalId, StubId: "model-stub", ContainerId: "replica"}
+
+	token := base
+	token.RuntimeToken = true
+	resp, err := newService().GetContainerRuntimeCredentials(ctx, &token)
+	require.NoError(t, err)
+	require.False(t, resp.Ok)
+	require.Empty(t, resp.Env)
+
+	undeclared := base
+	undeclared.SecretNames = []string{"HF_TOKEN", "STRIPE_KEY"}
+	resp, err = newService().GetContainerRuntimeCredentials(ctx, &undeclared)
+	require.NoError(t, err)
+	require.False(t, resp.Ok)
+	require.Contains(t, resp.ErrorMsg, "STRIPE_KEY")
+
+	declared := base
+	declared.SecretNames = []string{"HF_TOKEN"}
+	resp, err = newService().GetContainerRuntimeCredentials(ctx, &declared)
+	require.NoError(t, err)
+	require.True(t, resp.Ok, resp.ErrorMsg)
+	require.Equal(t, []string{"HF_TOKEN=hf-secret"}, resp.Env)
 }

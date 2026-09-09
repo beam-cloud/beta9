@@ -162,7 +162,9 @@ class Harness:
             ack.applied, ack.effective_json = True, json.dumps(effective or {})
             self.log(f"applied revision {revision}")
         try:
-            self.stub.ack_config(ack)
+            resp = self.stub.ack_config(ack)
+            if not resp.ok:
+                self.log(f"ack refused: {resp.err_msg}")
         except Exception as exc:  # noqa: BLE001
             self.log(f"ack failed: {exc}")
 

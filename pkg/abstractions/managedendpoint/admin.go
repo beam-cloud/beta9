@@ -18,6 +18,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/labstack/echo/v4"
+	"github.com/rs/zerolog/log"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -177,7 +178,7 @@ func (s *Service) GetMetrics(ctx context.Context, in *pb.GetMetricsRequest) (*pb
 			}
 			gpu = replicas[0].GPU
 		}
-		metrics, err := s.repo.GetRouteMetrics(ctx, in.EndpointId, gpu, in.ReplicaId, window)
+		metrics, err := s.repo.GetRouteMetrics(ctx, in.EndpointId, gpu, in.ReplicaId, in.ConfigRevision, window)
 		if err != nil {
 			return err
 		}
@@ -208,20 +209,27 @@ func (s *Service) SetReplicaConfig(ctx context.Context, in *pb.SetReplicaConfigR
 		if err := json.Unmarshal([]byte(in.ConfigJson), &config); err != nil || config == nil {
 			return errors.New("config_json must be a JSON object")
 		}
+		actor := "cluster-admin"
+		if info, ok := auth.AuthInfoFromContext(ctx); ok && info.Token != nil {
+			actor = info.Token.ExternalId
+		}
 		replica, err = s.updateReplica(ctx, replica.ID, func(r *types.EndpointReplica) {
 			r.Config.Revision++
-			r.Config.Config, r.Config.Author, r.Config.SetAt = json.RawMessage(mustJSON(config)), cmp.Or(in.Author, "admin"), time.Now()
+			r.Config.Config, r.Config.Author, r.Config.Actor, r.Config.SetAt = json.RawMessage(mustJSON(config)), cmp.Or(in.Author, "admin"), actor, time.Now()
 		})
 		if err != nil {
 			return err
 		}
-		if err := s.repo.NotifyReplicaConfig(ctx, replica.ID, replica.Config.Revision); err != nil {
-			return err
-		}
+		// The revision is history the moment it is saved: the harness applies it
+		// on wakeup or on its next keepalive read either way, so the audit event
+		// is emitted before the wakeup and a failed wakeup is not an error.
 		s.emit(types.EventEndpointConfig, types.EventEndpointSchema{
-			EndpointID: replica.EndpointID, Action: "config.set", ReplicaID: replica.ID, GPU: replica.GPU, Version: replica.Version,
-			Revision: replica.Config.Revision, Data: map[string]any{"author": replica.Config.Author, "config": config},
+			EndpointID: replica.EndpointID, Action: "config.set", ReplicaID: replica.ID, ContainerID: replica.ContainerID, GPU: replica.GPU, Version: replica.Version,
+			Revision: replica.Config.Revision, Data: map[string]any{"author": replica.Config.Author, "actor": actor, "config": config},
 		})
+		if err := s.repo.NotifyReplicaConfig(ctx, replica.ID, replica.Config.Revision); err != nil {
+			log.Warn().Err(err).Str("replica_id", replica.ID).Msg("managed endpoints: config wakeup failed; harness keepalive will pick it up")
+		}
 		wait := time.Duration(in.WaitSeconds) * time.Second
 		if wait <= 0 {
 			wait = defaultAckWait
@@ -318,6 +326,7 @@ func (s *Service) mountAdminRoutes(group *echo.Group) {
 	}))
 	g.GET("/:id/metrics", rest(s.GetMetrics, func(c echo.Context, in *pb.GetMetricsRequest) {
 		in.EndpointId, in.Gpu, in.ReplicaId, in.WindowSeconds = id(c), c.QueryParam("gpu"), c.QueryParam("replica_id"), queryUint(c, "window_seconds")
+		in.ConfigRevision = uint64(queryUint(c, "config_revision"))
 	}))
 }
 

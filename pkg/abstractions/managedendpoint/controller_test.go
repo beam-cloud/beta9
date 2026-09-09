@@ -9,6 +9,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
+	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -112,12 +113,13 @@ func statusOf(t *testing.T, s *Service, id string) types.ReplicaStatus {
 	return replica.Status
 }
 
-func TestRetireStaleVersionsWaitsForCurrentReady(t *testing.T) {
+func TestRetireStaleWaitsForCurrentReady(t *testing.T) {
 	s := newServiceForTest(t)
 	endpoint := seedEndpoint(t, s)
 	endpoint.Version = 2
 	require.NoError(t, s.repo.SaveEndpoint(context.Background(), endpoint))
 	ctx := context.Background()
+	placed := map[string]bool{"H100": true}
 
 	oldReady := versionReplica(t, s, "v1-ready", 1, types.ReplicaStatusReady)
 	oldLoading := versionReplica(t, s, "v1-loading", 1, types.ReplicaStatusLoading)
@@ -126,33 +128,56 @@ func TestRetireStaleVersionsWaitsForCurrentReady(t *testing.T) {
 
 	// Nothing of v2 is ready: the serving v1 replica keeps the traffic, but
 	// a v1 replica that is not serving anyway is retired right away.
-	s.controller.retireStaleVersions(ctx, endpoint, "H100", live)
+	s.controller.retireStale(ctx, endpoint, placed, 1, live)
 	assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, oldReady.ID))
 	assert.Equal(t, types.ReplicaStatusStopped, statusOf(t, s, oldLoading.ID), "a loading replica is stopped without a drain window")
 	assert.Equal(t, types.ReplicaStatusLoading, statusOf(t, s, newLoading.ID))
 
 	// Only one stale replica is retired per tick, so a second pass with the
 	// same picture drains nothing more (the ready one is still needed).
-	s.controller.retireStaleVersions(ctx, endpoint, "H100", live)
+	s.controller.retireStale(ctx, endpoint, placed, 1, live)
 	assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, oldReady.ID))
 
 	// Once v2 has a ready replica the old one is drained with the spec's grace.
 	newLoading.Status = types.ReplicaStatusReady
 	require.NoError(t, s.repo.SaveReplica(ctx, newLoading))
-	s.controller.retireStaleVersions(ctx, endpoint, "H100", live)
+	s.controller.retireStale(ctx, endpoint, placed, 1, live)
 	stale, err := s.repo.GetReplica(ctx, oldReady.ID)
 	require.NoError(t, err)
 	assert.Equal(t, types.ReplicaStatusDraining, stale.Status)
 	assert.Contains(t, stale.StatusReason, "version 1 retired")
 	assert.WithinDuration(t, time.Now().Add(time.Duration(endpoint.Spec.DrainSeconds)*time.Second), stale.DrainDeadline, 2*time.Second)
 	assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, newLoading.ID), "current-version replicas are untouched")
+}
 
-	// Replicas on another GPU type are out of scope for this call.
-	otherGPU := versionReplica(t, s, "v1-a100", 1, types.ReplicaStatusReady)
-	otherGPU.GPU = "A100"
-	require.NoError(t, s.repo.SaveReplica(ctx, otherGPU))
-	s.controller.retireStaleVersions(ctx, endpoint, "H100", []*types.EndpointReplica{otherGPU, newLoading})
-	assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, otherGPU.ID))
+// Moving an endpoint to another GPU type is a replacement like any other: the
+// serving replica on the old type stays until the new type has one ready.
+func TestRetireStaleKeepsServingReplicaAcrossGPUMove(t *testing.T) {
+	s := newServiceForTest(t)
+	endpoint := seedEndpoint(t, s)
+	ctx := context.Background()
+	onH100 := versionReplica(t, s, "h100", 1, types.ReplicaStatusReady)
+	onA100 := versionReplica(t, s, "a100", 1, types.ReplicaStatusLoading)
+	onA100.GPU = "A100-80"
+	require.NoError(t, s.repo.SaveReplica(ctx, onA100))
+	live := []*types.EndpointReplica{onH100, onA100}
+	placed := map[string]bool{"A100-80": true}
+
+	s.controller.retireStale(ctx, endpoint, placed, 1, live)
+	assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, onH100.ID), "no A100 replica is ready yet")
+
+	onA100.Status = types.ReplicaStatusReady
+	require.NoError(t, s.repo.SaveReplica(ctx, onA100))
+	s.controller.retireStale(ctx, endpoint, placed, 1, live)
+	drained, err := s.repo.GetReplica(ctx, onH100.ID)
+	require.NoError(t, err)
+	assert.Equal(t, types.ReplicaStatusDraining, drained.Status)
+	assert.Equal(t, "removed from fleet.yaml", drained.StatusReason)
+
+	// An endpoint dropped from fleet.yaml entirely is drained outright.
+	gone := versionReplica(t, s, "gone", 1, types.ReplicaStatusReady)
+	s.controller.retireStale(ctx, endpoint, map[string]bool{}, 0, []*types.EndpointReplica{gone})
+	assert.Equal(t, types.ReplicaStatusDraining, statusOf(t, s, gone.ID))
 }
 
 func TestReconcileEndpointConvergesOnFleetCount(t *testing.T) {
@@ -287,17 +312,61 @@ func TestContainerStateNotFound(t *testing.T) {
 	assert.False(t, containerStateNotFound(nil))
 }
 
-func TestReplicaProbeUsesEndpointHealthPath(t *testing.T) {
+// An old version keeps serving during replacement, so it is probed with the
+// contract it was started with, not the endpoint's latest spec.
+func TestReplicaKeepsItsOwnProbeContract(t *testing.T) {
 	s := newServiceForTest(t)
 	ctx := context.Background()
 	endpoint := seedEndpoint(t, s)
-	probe := s.controller.replicaProbe(ctx, seedReplica(t, s, endpoint))
-	assert.Equal(t, uint32(8000), probe.Port)
-	assert.Equal(t, "/health", probe.Health)
-	require.NotNil(t, probe.Endpoint)
-	assert.Equal(t, endpoint.Spec.ID, probe.Endpoint.ID)
+	replica := seedReplica(t, s, endpoint)
+	assert.Equal(t, types.ReplicaProbe{Port: 8000, Health: "/health", Metrics: "/metrics"}, replica.Probe)
 
-	assert.Equal(t, probeTarget{}, s.controller.replicaProbe(ctx, &types.EndpointReplica{EndpointID: "acme/missing"}))
+	endpoint.Version, endpoint.Spec.Port, endpoint.Spec.Health = 2, 9000, "/ready-v2"
+	require.NoError(t, s.repo.SaveEndpoint(ctx, endpoint))
+	stored, err := s.repo.GetReplica(ctx, replica.ID)
+	require.NoError(t, err)
+	assert.EqualValues(t, 8000, stored.Probe.Port)
+	assert.Equal(t, "/health", stored.Probe.Health)
+
+	embedding := &types.ManagedEndpointSpec{Kind: types.EndpointKindEmbedding, Port: 7000, Health: "/healthz"}
+	assert.Equal(t, types.ReplicaProbe{Port: 7000, Health: "/healthz"}, probeFor(embedding), "only LLM engines are scraped for capacity")
+}
+
+// A ready engine that goes back to loading (reload, failing health check)
+// gets a fresh loading grace instead of inheriting the container's age.
+func TestReloadHasFreshLoadingGrace(t *testing.T) {
+	s := newServiceForTest(t)
+	s.containers = repository.NewContainerRedisRepositoryForTest(s.rdb)
+	endpoint := seedEndpoint(t, s)
+	r := seedReplica(t, s, endpoint)
+	r.StartedAt = time.Now().Add(-time.Hour)
+	r.Status = types.ReplicaStatusReady
+	r.Address = "existing-address"
+	require.NoError(t, s.containers.SetContainerState(r.ContainerID, &types.ContainerState{ContainerId: r.ContainerID, Status: types.ContainerStatusRunning}))
+
+	s.applyHeartbeat(r, &pb.HarnessHeartbeatRequest{Status: "loading"})
+	require.NoError(t, s.controller.syncReplica(context.Background(), r))
+	assert.Equal(t, types.ReplicaStatusLoading, r.Status)
+	assert.WithinDuration(t, time.Now(), r.LoadingSince, time.Minute)
+
+	// The phase clock is not reset by repeated loading heartbeats...
+	since := r.LoadingSince
+	s.applyHeartbeat(r, &pb.HarnessHeartbeatRequest{Status: "loading"})
+	assert.Equal(t, since, r.LoadingSince)
+	// ...and does expire once the phase itself outlives the grace.
+	r.LoadingSince = time.Now().Add(-loadingGrace - time.Minute)
+	require.NoError(t, s.controller.syncReplica(context.Background(), r))
+	assert.Equal(t, types.ReplicaStatusFailed, r.Status)
+
+	// Initial startup still measures from container start.
+	fresh := seedReplica(t, s, endpoint)
+	fresh.StartedAt = time.Now().Add(-loadingGrace - time.Minute)
+	require.NoError(t, s.containers.SetContainerState(fresh.ContainerID, &types.ContainerState{ContainerId: fresh.ContainerID, Status: types.ContainerStatusRunning}))
+	require.NoError(t, s.controller.syncReplica(context.Background(), fresh))
+	assert.Equal(t, types.ReplicaStatusLoading, fresh.Status, "scheduling -> loading starts the phase clock now")
+	fresh.LoadingSince = time.Now().Add(-loadingGrace - time.Minute)
+	require.NoError(t, s.controller.syncReplica(context.Background(), fresh))
+	assert.Equal(t, types.ReplicaStatusFailed, fresh.Status)
 }
 
 func TestSyncReplicaBacksOffWhenSchedulerFailsRequest(t *testing.T) {

@@ -368,6 +368,23 @@ type FleetTarget struct {
 
 func (t FleetTarget) IsCPU() bool { return t.GPU == CPUInventoryKey }
 
+// --- Metering ------------------------------------------------------------------
+
+// MeterBucket is one closed minute of usage for one kind, not yet delivered to
+// the billing meter. Rows are per workspace and model.
+type MeterBucket struct {
+	Key   string
+	Kind  UsageKind
+	Start time.Time
+	Rows  []MeterRow
+}
+
+type MeterRow struct {
+	WorkspaceID string
+	Model       string
+	Usage       Usage
+}
+
 // --- Registry ------------------------------------------------------------------
 
 type EndpointStatus string
@@ -433,8 +450,11 @@ type ReplicaCapacity struct {
 type ReplicaConfig struct {
 	Revision uint64          `json:"revision"`
 	Config   json.RawMessage `json:"config,omitempty"`
-	Author   string          `json:"author,omitempty"`
-	SetAt    time.Time       `json:"set_at,omitempty"`
+	// Author is the caller's label for the change; Actor is the authenticated
+	// token that made it.
+	Author string    `json:"author,omitempty"`
+	Actor  string    `json:"actor,omitempty"`
+	SetAt  time.Time `json:"set_at,omitempty"`
 	// AckedRevision, Applied, Error and Effective describe the engine's
 	// answer to the most recent revision it processed.
 	AckedRevision uint64          `json:"acked_revision"`
@@ -446,6 +466,21 @@ type ReplicaConfig struct {
 
 // Acked reports whether the engine has answered the current revision.
 func (c ReplicaConfig) Acked() bool { return c.AckedRevision >= c.Revision }
+
+// Ack records the engine's answer to revision. Only revisions that were
+// issued and not already superseded by a later answer are accepted, so a
+// buggy or restarting harness cannot make future revisions look acknowledged.
+func (c *ReplicaConfig) Ack(revision uint64, applied bool, errMsg string, effective json.RawMessage, now time.Time) bool {
+	if revision > c.Revision || revision < c.AckedRevision {
+		return false
+	}
+	c.AckedRevision, c.Applied, c.Error, c.AckedAt = revision, applied, errMsg, now
+	c.Effective = nil
+	if json.Valid(effective) {
+		c.Effective = effective
+	}
+	return true
+}
 
 // EndpointReplica is one running container serving an endpoint on one GPU type.
 type EndpointReplica struct {
@@ -468,22 +503,57 @@ type EndpointReplica struct {
 	StatusReason        string        `json:"status_reason,omitempty"`
 	// SecretHash is the SHA-256 of the per-replica secret handed to the
 	// container as BEAM_REPLICA_SECRET; harness RPCs must present it.
-	SecretHash     string          `json:"secret_hash,omitempty"`
-	HarnessEnabled bool            `json:"harness_enabled"`
-	Config         ReplicaConfig   `json:"config"`
-	Capacity       ReplicaCapacity `json:"capacity"`
-	Capabilities   json.RawMessage `json:"capabilities,omitempty"`
+	SecretHash     string `json:"secret_hash,omitempty"`
+	HarnessEnabled bool   `json:"harness_enabled"`
+	// Probe is the port and paths of the deployment this replica runs,
+	// snapshotted at start: an old version keeps its own contract while a
+	// newer one is rolling out.
+	Probe        ReplicaProbe    `json:"probe"`
+	Config       ReplicaConfig   `json:"config"`
+	Capacity     ReplicaCapacity `json:"capacity"`
+	Capabilities json.RawMessage `json:"capabilities,omitempty"`
 	// EngineMetrics is the engine status the harness attached to its last heartbeat.
 	EngineMetrics json.RawMessage `json:"engine_metrics,omitempty"`
 	StartedAt     time.Time       `json:"started_at"`
-	ReadyAt       time.Time       `json:"ready_at,omitempty"`
-	LastHeartbeat time.Time       `json:"last_heartbeat"`
-	EndedAt       time.Time       `json:"ended_at,omitempty"`
-	DrainDeadline time.Time       `json:"drain_deadline,omitempty"`
+	// LoadingSince is when the current loading phase began: container start,
+	// or the moment a ready engine went back to loading (reload, failing
+	// health check). The loading grace runs from here, not from StartedAt.
+	LoadingSince  time.Time `json:"loading_since,omitempty"`
+	ReadyAt       time.Time `json:"ready_at,omitempty"`
+	LastHeartbeat time.Time `json:"last_heartbeat"`
+	EndedAt       time.Time `json:"ended_at,omitempty"`
+	DrainDeadline time.Time `json:"drain_deadline,omitempty"`
+}
+
+// ReplicaProbe is the immutable probe contract of one deployment version.
+type ReplicaProbe struct {
+	Port   uint32 `json:"port"`
+	Health string `json:"health,omitempty"`
+	// Metrics is the Prometheus path to scrape for capacity; empty for
+	// engines that expose none (non-LLM kinds).
+	Metrics string `json:"metrics,omitempty"`
 }
 
 // Serving reports whether the replica may receive traffic.
 func (r *EndpointReplica) Serving() bool { return r != nil && r.Status == ReplicaStatusReady }
+
+// EnterLoading moves the replica into loading and starts a fresh loading
+// phase unless it is already in one.
+func (r *EndpointReplica) EnterLoading(now time.Time, reason string) {
+	if r.Status != ReplicaStatusLoading {
+		r.LoadingSince = now
+	}
+	r.Status = ReplicaStatusLoading
+	r.StatusReason = reason
+}
+
+// LoadingFor is how long the current loading phase has lasted.
+func (r *EndpointReplica) LoadingFor(now time.Time) time.Duration {
+	if r.LoadingSince.IsZero() {
+		return now.Sub(r.StartedAt)
+	}
+	return now.Sub(r.LoadingSince)
+}
 
 // Alive reports whether the replica is scheduling, loading or ready, i.e.
 // counts toward a target's live set (draining and evicting replicas do not).
@@ -522,8 +592,11 @@ type GitOpsState struct {
 	LastRunAt time.Time `json:"last_run_at,omitempty"`
 	LastError string    `json:"last_error,omitempty"`
 	// FleetError is why fleet.yaml was not applied, or which placements were
-	// skipped ("skipped: ...") when it was.
+	// skipped ("skipped: ...") when it was. FleetSHA is the commit whose
+	// fleet.yaml was last applied (or rejected as invalid); it trails LastSHA
+	// only while a fleet write is still to be retried.
 	FleetError  string                         `json:"fleet_error,omitempty"`
+	FleetSHA    string                         `json:"fleet_sha,omitempty"`
 	Running     bool                           `json:"running"`
 	PerEndpoint map[string]GitOpsEndpointState `json:"per_endpoint"`
 	UpdatedAt   time.Time                      `json:"updated_at"`
@@ -564,9 +637,12 @@ type GitOpsDeployResult struct {
 
 // RouteSample is one completed /v1 request observed by the router.
 type RouteSample struct {
-	EndpointID       string        `json:"endpoint_id"`
-	GPU              string        `json:"gpu"`
-	ReplicaID        string        `json:"replica_id"`
+	EndpointID string `json:"endpoint_id"`
+	GPU        string `json:"gpu"`
+	ReplicaID  string `json:"replica_id"`
+	// ConfigRevision is the live config the replica had acknowledged when it
+	// served the request, so a tuning experiment is measured per revision.
+	ConfigRevision   uint64        `json:"config_revision,omitempty"`
 	StatusCode       int           `json:"status_code"`
 	PromptTokens     int64         `json:"prompt_tokens"`
 	CompletionTokens int64         `json:"completion_tokens"`
@@ -586,6 +662,7 @@ type RouteMetrics struct {
 	EndpointID       string        `json:"endpoint_id"`
 	GPU              string        `json:"gpu,omitempty"`
 	ReplicaID        string        `json:"replica_id,omitempty"`
+	ConfigRevision   uint64        `json:"config_revision,omitempty"`
 	Window           time.Duration `json:"window"`
 	Requests         int64         `json:"requests"`
 	Errors           int64         `json:"errors"`

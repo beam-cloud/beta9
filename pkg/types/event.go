@@ -1243,6 +1243,8 @@ type EventEndpointRouteSchema struct {
 	MachineID   string `json:"machine_id,omitempty"`
 	GPU         string `json:"gpu"`
 	Locality    string `json:"locality,omitempty"`
+	// ConfigRevision is the replica's acknowledged live config at the time.
+	ConfigRevision uint64 `json:"config_revision,omitempty"`
 	// Provider attribution: set when the serving replica ran on a
 	// workspace-contributed machine; ProviderShareMicroUSD is that
 	// workspace's cut of CostMicroUSD.

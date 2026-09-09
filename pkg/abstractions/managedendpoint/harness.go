@@ -66,7 +66,7 @@ func (s *Service) Register(ctx context.Context, in *pb.HarnessRegisterRequest) (
 			r.Capabilities = json.RawMessage(in.CapabilitiesJson)
 		}
 		if r.Status == types.ReplicaStatusScheduling {
-			r.Status = types.ReplicaStatusLoading
+			r.EnterLoading(time.Now(), "")
 		}
 	})
 	if err != nil {
@@ -163,26 +163,26 @@ func (s *Service) AckConfig(ctx context.Context, in *pb.HarnessAckConfigRequest)
 	if err := s.harnessReplica(ctx, replica); err != nil {
 		return nil, err
 	}
+	accepted := false
 	replica, err = s.updateReplica(ctx, replica.ID, func(r *types.EndpointReplica) {
-		if in.Revision < r.Config.AckedRevision {
-			return
-		}
-		r.Config.AckedRevision, r.Config.Applied, r.Config.Error, r.Config.AckedAt = in.Revision, in.Applied, in.Error, time.Now()
-		r.Config.Effective = nil
-		if json.Valid([]byte(in.EffectiveJson)) {
-			r.Config.Effective = json.RawMessage(in.EffectiveJson)
-		}
+		accepted = r.Config.Ack(in.Revision, in.Applied, in.Error, json.RawMessage(in.EffectiveJson), time.Now())
 	})
 	if err != nil {
 		return nil, rpcError(err)
+	}
+	if !accepted {
+		return &pb.HarnessAckConfigResponse{Ok: false, ErrMsg: fmt.Sprintf("revision %d was not issued (current %d, acked %d)", in.Revision, replica.Config.Revision, replica.Config.AckedRevision)}, nil
 	}
 	action := "config.rejected"
 	if in.Applied {
 		action = "config.applied"
 	}
+	// The outcome is recorded with the requested and effective config so the
+	// history stands on its own once the replica record is gone.
+	data := map[string]any{"requested": rawJSON(replica.Config.Config), "effective": rawJSON(replica.Config.Effective), "author": replica.Config.Author, "actor": replica.Config.Actor}
 	s.emit(types.EventEndpointConfig, types.EventEndpointSchema{
-		EndpointID: replica.EndpointID, Action: action, ReplicaID: replica.ID, GPU: replica.GPU,
-		Revision: in.Revision, Message: in.Error,
+		EndpointID: replica.EndpointID, Action: action, ReplicaID: replica.ID, ContainerID: replica.ContainerID, GPU: replica.GPU, Version: replica.Version,
+		Revision: in.Revision, Message: in.Error, Data: data,
 	})
 	return &pb.HarnessAckConfigResponse{Ok: true}, nil
 }
@@ -221,7 +221,9 @@ func (s *Service) applyHeartbeat(replica *types.EndpointReplica, in *pb.HarnessH
 	if in.Capacity != nil {
 		replica.Capacity = capacityFromProto(in.Capacity)
 	}
-	if in.AppliedRevision > replica.Config.AckedRevision {
+	// A heartbeat may recover a missed ack for an issued revision, never
+	// advance past what was issued.
+	if in.AppliedRevision > replica.Config.AckedRevision && in.AppliedRevision <= replica.Config.Revision {
 		replica.Config.AckedRevision, replica.Config.Applied, replica.Config.Error = in.AppliedRevision, true, ""
 	}
 	if len(in.MetricsJson) > 0 && len(in.MetricsJson) <= maxEngineMetricsBytes && json.Valid([]byte(in.MetricsJson)) {
@@ -242,7 +244,7 @@ func (s *Service) applyHeartbeat(replica *types.EndpointReplica, in *pb.HarnessH
 		// A ready engine that reports loading (model/config reload) leaves the
 		// serving set until it reports ready again.
 		if replica.Status == types.ReplicaStatusScheduling || replica.Status == types.ReplicaStatusReady {
-			replica.Status = types.ReplicaStatusLoading
+			replica.EnterLoading(now, "engine reported loading")
 		}
 	case types.ReplicaStatusDraining:
 		replica.Status = types.ReplicaStatusDraining
@@ -276,4 +278,12 @@ func (s *Service) PublishEvents(ctx context.Context, in *pb.HarnessPublishEvents
 		accepted++
 	}
 	return &pb.HarnessPublishEventsResponse{Ok: true, Accepted: accepted}, nil
+}
+
+// rawJSON keeps a stored JSON document as-is inside an event payload.
+func rawJSON(raw json.RawMessage) any {
+	if len(raw) == 0 {
+		return nil
+	}
+	return raw
 }
