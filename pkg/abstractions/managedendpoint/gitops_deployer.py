@@ -206,7 +206,6 @@ def deploy_app(app, root, changed, app_dirs, report):
         if not isinstance(obj, (ManagedEndpoint, ManagedService)):
             continue
         kind = "service" if isinstance(obj, ManagedService) else "endpoint"
-        report["discovered"].append({"path": rel, "id": obj.spec_name, "kind": kind})
         result = {"path": rel, "id": obj.spec_name, "kind": kind, "ok": False, "skipped": False}
         report["results"].append(result)
         if not app_changed(rel.strip("./"), changed, app_dirs):
@@ -227,7 +226,7 @@ def deploy_app(app, root, changed, app_dirs, report):
 
 
 def main():
-    report = {"run_id": RUN_ID, "sha": SHA, "discovered": [], "results": [], "error": ""}
+    report = {"run_id": RUN_ID, "sha": SHA, "results": [], "error": ""}
     try:
         checkout()
         root = REPO / REPO_PATH if REPO_PATH else REPO

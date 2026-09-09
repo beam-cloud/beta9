@@ -424,7 +424,7 @@ func (r *router) resolveEndpoint(ctx context.Context, rq *routeRequest) (*types.
 			return nil, errRegistry
 		}
 		switch {
-		case endpoint == nil || !endpoint.Enabled:
+		case endpoint == nil || !endpoint.Enabled():
 			continue
 		case !endpoint.Spec.ServesRoute(rq.route):
 			denied = &routeError{http.StatusNotFound, "route_not_supported", fmt.Sprintf("model %s does not serve %s", model, rq.route)}
@@ -1087,7 +1087,7 @@ func (r *router) handleListModels(ctx echo.Context) error {
 	if err != nil {
 		return errRegistry.write(ctx)
 	}
-	endpoints := slices.DeleteFunc(all, func(e *types.ManagedEndpoint) bool { return !e.Enabled || !r.allowed(rctx, e, cc.AuthInfo) })
+	endpoints := slices.DeleteFunc(all, func(e *types.ManagedEndpoint) bool { return !e.Enabled() || !r.allowed(rctx, e, cc.AuthInfo) })
 	slices.SortFunc(endpoints, func(a, b *types.ManagedEndpoint) int { return strings.Compare(a.Spec.ID, b.Spec.ID) })
 	if ctx.QueryParam("format") == "openrouter-provider" {
 		return r.providerDocument(ctx, endpoints)

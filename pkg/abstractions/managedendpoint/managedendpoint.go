@@ -438,9 +438,7 @@ func capacityToProto(c types.ReplicaCapacity) *pb.ReplicaCapacity {
 		TpotMs:              c.TPOTMs,
 		PrefixCacheHitMilli: c.PrefixCacheHitMilli,
 	}
-	if c.KVTransfer != nil {
-		out.KvTransferJson = mustJSON(c.KVTransfer)
-	}
+	out.KvTransferJson = string(c.KVTransfer)
 	return out
 }
 
@@ -460,11 +458,8 @@ func capacityFromProto(c *pb.ReplicaCapacity) types.ReplicaCapacity {
 		TPOTMs:              c.TpotMs,
 		PrefixCacheHitMilli: c.PrefixCacheHitMilli,
 	}
-	if c.KvTransferJson != "" {
-		var kv types.KVTransferStats
-		if err := json.Unmarshal([]byte(c.KvTransferJson), &kv); err == nil {
-			out.KVTransfer = &kv
-		}
+	if json.Valid([]byte(c.KvTransferJson)) {
+		out.KVTransfer = json.RawMessage(c.KvTransferJson)
 	}
 	return out
 }
@@ -531,7 +526,7 @@ func endpointToProto(e *types.ManagedEndpoint, replicas []*types.EndpointReplica
 		StubId:          e.StubID,
 		Version:         uint32(e.Version),
 		GitSha:          e.GitSHA,
-		Enabled:         e.Enabled,
+		Enabled:         e.Enabled(),
 		Status:          string(e.Status),
 		CreatedAtUnixMs: unixMs(e.CreatedAt),
 		UpdatedAtUnixMs: unixMs(e.UpdatedAt),
@@ -560,7 +555,7 @@ func serviceToProto(s *types.ManagedService, replicas []*types.EndpointReplica) 
 		StubId:   s.StubID,
 		Version:  uint32(s.Version),
 		GitSha:   s.GitSHA,
-		Enabled:  s.Enabled,
+		Enabled:  s.Enabled(),
 		Status:   string(s.Status),
 	}
 	out.ReadyReplicas, out.TotalReplicas = countReplicas(replicas, serviceReplicaID(s.Spec.Name))

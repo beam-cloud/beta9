@@ -347,7 +347,7 @@ func TestReplicaProbeUsesServiceHealthPath(t *testing.T) {
 	s := newServiceForTest(t)
 	ctx := context.Background()
 	require.NoError(t, s.repo.SaveService(ctx, &types.ManagedService{
-		Spec: types.ManagedServiceSpec{Name: "mooncake", Port: 9000, Health: "/healthz"}, StubID: "svc-1", Version: 1, Enabled: true,
+		Spec: types.ManagedServiceSpec{Name: "mooncake", Port: 9000, Health: "/healthz"}, ManagedRecord: types.ManagedRecord{StubID: "svc-1", Version: 1, Status: types.EndpointStatusActive},
 	}))
 	probe := s.controller.replicaProbe(ctx, &types.EndpointReplica{ID: "svc-rep", EndpointID: serviceReplicaID("mooncake")})
 	assert.Equal(t, probeTarget{Port: 9000, Health: "/healthz"}, probe)
@@ -389,10 +389,10 @@ func TestRequiredRolesAndReadiness(t *testing.T) {
 	mono := &types.ManagedEndpointSpec{Gpu: []types.GpuTarget{{Type: "H100", Count: 1}, {Type: "A100-80G", Count: 1}}}
 	assert.Equal(t, []string{types.ReplicaRoleServe}, requiredRoles(mono))
 
-	pd := &types.ManagedEndpointSpec{Topology: &types.TopologySpec{Mode: types.TopologyDisaggregated, Roles: map[string][]types.GpuTarget{
+	pd := &types.ManagedEndpointSpec{Topology: map[string][]types.GpuTarget{
 		types.ReplicaRolePrefill: {{Type: "H100", Count: 1}},
 		types.ReplicaRoleDecode:  {{Type: "H100", Count: 1}, {Type: "H100", Count: 2}},
-	}}}
+	}}
 	roles := requiredRoles(pd)
 	assert.ElementsMatch(t, []string{types.ReplicaRolePrefill, types.ReplicaRoleDecode}, roles)
 
@@ -416,12 +416,12 @@ func TestRequiredRolesAndReadiness(t *testing.T) {
 func seedCanary(t *testing.T, s *Service, endpoint *types.ManagedEndpoint) (*types.ManagedEndpointSpec, *types.RolloutState) {
 	t.Helper()
 	spec := endpoint.Spec
-	spec.Harness = types.HarnessSpec{}
+	spec.Harness = false
 	spec.KVCache = &types.KVCacheSpec{Connector: "lmcache"}
-	spec.Topology = &types.TopologySpec{Mode: types.TopologyDisaggregated, Roles: map[string][]types.GpuTarget{
+	spec.Topology = map[string][]types.GpuTarget{
 		types.ReplicaRolePrefill: {{Type: "H100", Count: 1}},
 		types.ReplicaRoleDecode:  {{Type: "H100", Count: 1}},
-	}}
+	}
 	spec.Normalize()
 	s.controller.stubCache["stub-2"] = cachedStub{
 		stub:    &types.StubWithRelated{Stub: types.Stub{ExternalId: "stub-2"}},

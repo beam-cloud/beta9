@@ -22,8 +22,8 @@ func TestManagedEndpointRegistryRoundTrip(t *testing.T) {
 
 	spec := types.ManagedEndpointSpec{ID: "acme/model", Kind: types.EndpointKindLLM, Entrypoint: []string{"x"}}
 	spec.Normalize()
-	require.NoError(t, repo.SaveEndpoint(ctx, &types.ManagedEndpoint{Spec: spec, StubID: "stub-1", Version: 1, Enabled: true, Status: types.EndpointStatusActive}))
-	require.NoError(t, repo.SaveEndpoint(ctx, &types.ManagedEndpoint{Spec: types.ManagedEndpointSpec{ID: "zeta/other"}, StubID: "stub-2", Version: 1}))
+	require.NoError(t, repo.SaveEndpoint(ctx, &types.ManagedEndpoint{Spec: spec, ManagedRecord: types.ManagedRecord{StubID: "stub-1", Version: 1, Status: types.EndpointStatusActive}}))
+	require.NoError(t, repo.SaveEndpoint(ctx, &types.ManagedEndpoint{Spec: types.ManagedEndpointSpec{ID: "zeta/other"}, ManagedRecord: types.ManagedRecord{StubID: "stub-2", Version: 1}}))
 
 	got, err := repo.GetEndpoint(ctx, "acme/model")
 	require.NoError(t, err)
@@ -45,7 +45,7 @@ func TestManagedEndpointRegistryRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, list, 1)
 
-	require.NoError(t, repo.SaveService(ctx, &types.ManagedService{Spec: types.ManagedServiceSpec{Name: "mooncake-master"}, StubID: "svc-1"}))
+	require.NoError(t, repo.SaveService(ctx, &types.ManagedService{Spec: types.ManagedServiceSpec{Name: "mooncake-master"}, ManagedRecord: types.ManagedRecord{StubID: "svc-1"}}))
 	services, err := repo.ListServices(ctx)
 	require.NoError(t, err)
 	require.Len(t, services, 1)

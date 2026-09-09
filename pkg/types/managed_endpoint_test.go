@@ -19,7 +19,7 @@ func validEndpointSpec() ManagedEndpointSpec {
 		},
 		Pricing: Pricing{PromptTokens: "0.0000002", CompletionTokens: "0.0000011"},
 		Catalog: Catalog{Public: true, ContextLength: 131072},
-		Harness: HarnessSpec{Enabled: true},
+		Harness: true,
 	}
 }
 
@@ -109,17 +109,15 @@ func TestManagedEndpointSpecValidateErrors(t *testing.T) {
 
 func TestManagedEndpointSpecDisaggregated(t *testing.T) {
 	spec := validEndpointSpec()
-	spec.Topology = &TopologySpec{
-		Mode: TopologyDisaggregated,
-		Roles: map[string][]GpuTarget{
-			ReplicaRolePrefill: {{Type: "H100", Count: 1, MaxReplicas: 2}},
-			ReplicaRoleDecode:  {{Type: "H100", Count: 2, MaxReplicas: 4}},
-		},
+	spec.Topology = map[string][]GpuTarget{
+		ReplicaRolePrefill: {{Type: "H100", Count: 1, MaxReplicas: 2}},
+		ReplicaRoleDecode:  {{Type: "H100", Count: 2, MaxReplicas: 4}},
 	}
 	spec.Normalize()
 	require.ErrorContains(t, spec.Validate(ManagedEndpointValidation{}), "requires kv_cache")
 
 	spec.KVCache = &KVCacheSpec{Connector: "mooncake", Service: "mooncake-master"}
+	spec.Normalize()
 	require.ErrorContains(t, spec.Validate(ManagedEndpointValidation{KnownServices: map[string]struct{}{}}), "service \"mooncake-master\" is not deployed")
 	require.NoError(t, spec.Validate(ManagedEndpointValidation{KnownServices: map[string]struct{}{"mooncake-master": {}}}))
 	require.Contains(t, spec.Services, "mooncake-master")

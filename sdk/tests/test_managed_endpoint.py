@@ -9,7 +9,6 @@ from beta9 import (
     ManagedEndpoint,
     ManagedService,
     Pricing,
-    Topology,
 )
 
 
@@ -35,10 +34,7 @@ def test_endpoint_spec_serializes():
         catalog=Catalog(name="GLM", context_length=131072, public=True),
         harness=True,
         kv_cache=KVCache(connector="mooncake", service="mooncake-master"),
-        topology=Topology(
-            mode="disaggregated",
-            roles={"prefill": [GpuTarget("H100")], "decode": [GpuTarget("H100", count=2)]},
-        ),
+        topology={"prefill": [GpuTarget("H100")], "decode": [GpuTarget("H100", count=2)]},
     )
     spec = ep.spec()
     assert spec["id"] == "zai-org/glm-4.5-air"
@@ -47,9 +43,9 @@ def test_endpoint_spec_serializes():
     assert spec["gpu"][1]["type"] == "A100-80"
     assert spec["pricing"] == {"prompt_tokens": "0.0000002"}
     assert spec["catalog"]["public"] is True
-    assert spec["harness"] == {"enabled": True}
+    assert spec["harness"] is True
     assert spec["kv_cache"]["service"] == "mooncake-master"
-    assert spec["topology"]["roles"]["decode"][0]["count"] == 2
+    assert spec["topology"]["decode"][0]["count"] == 2
     assert "routes" not in spec
     cfg = json.loads(json.dumps(ep.stub_config(git_sha="abc")))
     assert cfg["git_sha"] == "abc"

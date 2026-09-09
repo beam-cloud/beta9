@@ -496,8 +496,10 @@ func (g *gitops) applyReport(ctx context.Context, report *types.GitOpsReport) er
 	// its last applied state and is flagged failed, so a bad commit never
 	// tears down what the previous commit deployed.
 	present := map[string]bool{}
-	for _, d := range report.Discovered {
-		present[d.Kind+":"+d.ID] = true
+	for _, r := range report.Results {
+		if r.ID != "" {
+			present[r.Kind+":"+r.ID] = true
+		}
 	}
 	claimed := map[string]bool{} // import failures attributed to a known stub
 	for key, entry := range state.PerEndpoint {
@@ -546,7 +548,7 @@ func (g *gitops) applyReport(ctx context.Context, report *types.GitOpsReport) er
 	}
 	g.s.emit(types.EventEndpointGitOps, types.EventEndpointSchema{
 		Action: "gitops.applied", Message: report.SHA,
-		Data: map[string]any{"sha": report.SHA, "results": len(report.Results), "failed": failed, "discovered": len(report.Discovered)},
+		Data: map[string]any{"sha": report.SHA, "results": len(report.Results), "failed": failed},
 	})
 	log.Info().Str("sha", report.SHA).Int("results", len(report.Results)).Int("failed", failed).Msg("managed endpoints: gitops report applied")
 	return nil
@@ -561,7 +563,7 @@ func (g *gitops) retire(ctx context.Context, kind, id, sha string) error {
 		if err != nil || service == nil {
 			return err
 		}
-		service.Enabled, service.Status, service.UpdatedAt = false, types.EndpointStatusRetired, now
+		service.Status, service.UpdatedAt = types.EndpointStatusRetired, now
 		if err := g.s.repo.SaveService(ctx, service); err != nil {
 			return err
 		}
@@ -570,7 +572,7 @@ func (g *gitops) retire(ctx context.Context, kind, id, sha string) error {
 		if err != nil || endpoint == nil {
 			return err
 		}
-		endpoint.Enabled, endpoint.Status, endpoint.UpdatedAt = false, types.EndpointStatusRetired, now
+		endpoint.Status, endpoint.UpdatedAt = types.EndpointStatusRetired, now
 		if err := g.s.repo.SaveEndpoint(ctx, endpoint); err != nil {
 			return err
 		}

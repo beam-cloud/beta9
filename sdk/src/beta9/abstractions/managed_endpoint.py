@@ -99,7 +99,6 @@ class ReplicaPolicy:
 
     evictable: bool = True
     drain_seconds: int = 5
-    keep_warm_seconds: int = 0
     spare_share: float = 0.2
 
     to_dict = asdict
@@ -115,18 +114,6 @@ class KVCache:
     extra: Dict[str, Any] = field(default_factory=dict)
 
     to_dict = asdict
-
-
-@dataclass
-class Topology:
-    """Prefill/decode disaggregation; ``roles`` maps a role to its GPU targets."""
-
-    mode: str = "monolithic"
-    roles: Dict[str, List[GpuTarget]] = field(default_factory=dict)
-
-    def to_dict(self) -> Dict[str, Any]:
-        roles = {role: [t.to_dict() for t in targets] for role, targets in self.roles.items()}
-        return {"mode": self.mode, "roles": roles}
 
 
 def _normalize_targets(gpu: GpuArg) -> List[GpuTarget]:
@@ -258,7 +245,7 @@ class ManagedEndpoint(_ManagedStub):
         policy: Optional[ReplicaPolicy] = None,
         harness: bool = False,
         kv_cache: Optional[KVCache] = None,
-        topology: Optional[Topology] = None,
+        topology: Optional[Dict[str, GpuArg]] = None,
         services: Optional[List[str]] = None,
         locality: Optional[List[str]] = None,
         cpu: Union[int, float, str] = 4.0,
@@ -279,7 +266,8 @@ class ManagedEndpoint(_ManagedStub):
         self.policy = policy or ReplicaPolicy()
         self.harness = bool(harness)
         self.kv_cache = kv_cache
-        self.topology = topology
+        # Prefill/decode disaggregation: role -> GPU targets that role may run on.
+        self.topology = {role: _normalize_targets(targets) for role, targets in (topology or {}).items()}
         self.services = list(services or [])
         self.locality = list(locality or [])
         super().__init__(id, image, entrypoint, port, cpu, memory, volumes, secrets, env)
@@ -292,9 +280,9 @@ class ManagedEndpoint(_ManagedStub):
             pricing=self.pricing.to_dict(),
             catalog=self.catalog.to_dict(),
             policy=self.policy.to_dict(),
-            harness={"enabled": self.harness},
+            harness=self.harness,
             kv_cache=self.kv_cache.to_dict() if self.kv_cache else None,
-            topology=self.topology.to_dict() if self.topology else None,
+            topology={role: [t.to_dict() for t in targets] for role, targets in self.topology.items()},
         )
         return _drop_empty(spec)
 

@@ -148,7 +148,7 @@ func (c *controller) reconcile(ctx context.Context) (err error) {
 	// fill plan is computed once across all of them.
 	var targets []fillTarget
 	for _, endpoint := range endpoints {
-		if endpoint.Enabled {
+		if endpoint.Enabled() {
 			for _, rt := range endpoint.Spec.Targets() {
 				targets = append(targets, fillTarget{EndpointID: endpoint.Spec.ID, RoleTarget: rt, Demand: c.demand(ctx, endpoint, rt, live)})
 			}
@@ -578,7 +578,7 @@ func (c *controller) endpointStartSpec(endpoint *types.ManagedEndpoint, rt types
 	spec := &endpoint.Spec
 	return startSpec{
 		EndpointID: spec.ID, Version: endpoint.Version, StubID: endpoint.StubID, GitSHA: endpoint.GitSHA,
-		Role: rt.Role, Target: rt.Target, Port: spec.Port, Harness: spec.Harness.Enabled,
+		Role: rt.Role, Target: rt.Target, Port: spec.Port, Harness: spec.Harness,
 		Entrypoint: spec.Entrypoint, Services: services, KVCache: spec.KVCache,
 		Evictable:    spec.Policy.Evictable && c.s.config.Preemption.Enabled,
 		DrainSeconds: cmp.Or(spec.Policy.DrainSeconds, c.s.config.Preemption.DefaultDrainSeconds),
@@ -590,7 +590,7 @@ func (c *controller) reconcileEndpoint(ctx context.Context, endpoint *types.Mana
 	spec := &endpoint.Spec
 	drainSeconds := spec.Policy.DrainSeconds
 
-	if !endpoint.Enabled {
+	if !endpoint.Enabled() {
 		for _, r := range live {
 			if r.EndpointID == spec.ID {
 				_ = c.drainReplica(ctx, r, drainSeconds, false, "endpoint disabled")
@@ -699,7 +699,7 @@ func (c *controller) retireStaleVersions(ctx context.Context, endpoint *types.Ma
 // this runs once per version and live fleet edits made afterwards stay in
 // force for that version only; the next version starts from git again.
 func (c *controller) ensureFleetRevisions(ctx context.Context, endpoint *types.ManagedEndpoint) error {
-	if !endpoint.Spec.Harness.Enabled {
+	if !endpoint.Spec.Harness {
 		return nil
 	}
 	for _, rt := range endpoint.Spec.Targets() {
@@ -764,7 +764,7 @@ func (c *controller) reconcileService(ctx context.Context, service *types.Manage
 	spec := &service.Spec
 	id := serviceReplicaID(spec.Name)
 
-	if !service.Enabled {
+	if !service.Enabled() {
 		for _, r := range live {
 			if r.EndpointID == id {
 				_ = c.drainReplica(ctx, r, serviceDrainSeconds, false, "service disabled")

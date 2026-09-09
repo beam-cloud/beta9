@@ -57,10 +57,10 @@ func TestGitOpsApplyReportRecordsVersionsAndRetires(t *testing.T) {
 	// Two endpoints and a service exist from an earlier commit.
 	seedEndpoint(t, s)
 	require.NoError(t, s.repo.SaveEndpoint(ctx, &types.ManagedEndpoint{
-		Spec: types.ManagedEndpointSpec{ID: "acme/old", Kind: types.EndpointKindLLM, Engine: "vllm", Port: 8000}, StubID: "stub-old", Version: 1, Enabled: true, Status: types.EndpointStatusActive,
+		Spec: types.ManagedEndpointSpec{ID: "acme/old", Kind: types.EndpointKindLLM, Engine: "vllm", Port: 8000}, ManagedRecord: types.ManagedRecord{StubID: "stub-old", Version: 1, Status: types.EndpointStatusActive},
 	}))
 	require.NoError(t, s.repo.SaveService(ctx, &types.ManagedService{
-		Spec: types.ManagedServiceSpec{Name: "mooncake", Port: 9000}, StubID: "stub-svc", Version: 1, Enabled: true, Status: types.EndpointStatusActive,
+		Spec: types.ManagedServiceSpec{Name: "mooncake", Port: 9000}, ManagedRecord: types.ManagedRecord{StubID: "stub-svc", Version: 1, Status: types.EndpointStatusActive},
 	}))
 	require.NoError(t, s.repo.SaveGitOpsState(ctx, &types.GitOpsState{
 		LastSHA: "aaaaaaaa", Running: true, RunID: "run-1", TargetSHA: "bbbbbbbb", StartedAt: time.Now(),
@@ -79,10 +79,6 @@ func TestGitOpsApplyReportRecordsVersionsAndRetires(t *testing.T) {
 	// and one directory failed to import.
 	report := &types.GitOpsReport{
 		RunID: "run-1", SHA: "bbbbbbbb",
-		Discovered: []types.GitOpsDiscovered{
-			{Path: "acme/model", ID: "acme/model", Kind: "endpoint"},
-			{Path: "services/mooncake", ID: "mooncake", Kind: "service"},
-		},
 		Results: []types.GitOpsDeployResult{
 			{Path: "acme/model", ID: "acme/model", Kind: "endpoint", OK: true, StubID: "stub-2", Version: 2},
 			{Path: "services/mooncake", ID: "mooncake", Kind: "service", OK: true, Skipped: true},
@@ -113,7 +109,7 @@ func TestGitOpsApplyReportRecordsVersionsAndRetires(t *testing.T) {
 	assert.Equal(t, types.GitOpsStatusRetired, old.Status)
 	retired, err := s.repo.GetEndpoint(ctx, "acme/old")
 	require.NoError(t, err)
-	assert.False(t, retired.Enabled)
+	assert.False(t, retired.Enabled())
 	assert.Equal(t, types.EndpointStatusRetired, retired.Status)
 
 	broken := state.PerEndpoint["path:acme/broken"]
@@ -129,7 +125,6 @@ func TestGitOpsApplyReportRecordsVersionsAndRetires(t *testing.T) {
 	require.NoError(t, s.repo.SaveGitOpsState(ctx, state))
 	require.NoError(t, g.applyReport(ctx, &types.GitOpsReport{
 		RunID: "run-2", SHA: "cccccccc",
-		Discovered: []types.GitOpsDiscovered{{Path: "acme/model", ID: "acme/model", Kind: "endpoint"}, {Path: "services/mooncake", ID: "mooncake", Kind: "service"}},
 		Results: []types.GitOpsDeployResult{
 			{Path: "acme/model", ID: "acme/model", Kind: "endpoint", OK: true, Skipped: true},
 			{Path: "services/mooncake", ID: "mooncake", Kind: "service", OK: true, Skipped: true},
@@ -149,7 +144,7 @@ func TestGitOpsApplyReportImportFailureKeepsPriorEndpoint(t *testing.T) {
 	ctx := context.Background()
 
 	require.NoError(t, s.repo.SaveEndpoint(ctx, &types.ManagedEndpoint{
-		Spec: types.ManagedEndpointSpec{ID: "acme/model", Kind: types.EndpointKindLLM, Engine: "vllm", Port: 8000}, StubID: "stub-1", Version: 3, Enabled: true, Status: types.EndpointStatusActive,
+		Spec: types.ManagedEndpointSpec{ID: "acme/model", Kind: types.EndpointKindLLM, Engine: "vllm", Port: 8000}, ManagedRecord: types.ManagedRecord{StubID: "stub-1", Version: 3, Status: types.EndpointStatusActive},
 	}))
 	require.NoError(t, s.repo.SaveGitOpsState(ctx, &types.GitOpsState{
 		LastSHA: "aaaaaaaa", Running: true, RunID: "run-1", TargetSHA: "bbbbbbbb", StartedAt: time.Now(),
@@ -180,7 +175,7 @@ func TestGitOpsApplyReportImportFailureKeepsPriorEndpoint(t *testing.T) {
 
 	endpoint, err := s.repo.GetEndpoint(ctx, "acme/model")
 	require.NoError(t, err)
-	assert.True(t, endpoint.Enabled, "the previously deployed endpoint keeps serving")
+	assert.True(t, endpoint.Enabled(), "the previously deployed endpoint keeps serving")
 	assert.Equal(t, types.EndpointStatusActive, endpoint.Status)
 
 	// The failed path is queued for redeploy; the same SHA is not suppressed.
@@ -190,8 +185,7 @@ func TestGitOpsApplyReportImportFailureKeepsPriorEndpoint(t *testing.T) {
 	// The fix lands: the directory imports again and is redeployed.
 	require.NoError(t, g.applyReport(ctx, &types.GitOpsReport{
 		RunID: "run-2", SHA: "cccccccc",
-		Discovered: []types.GitOpsDiscovered{{Path: "acme/model", ID: "acme/model", Kind: "endpoint"}},
-		Results:    []types.GitOpsDeployResult{{Path: "acme/model", ID: "acme/model", Kind: "endpoint", OK: true, StubID: "stub-2", Version: 4}},
+		Results: []types.GitOpsDeployResult{{Path: "acme/model", ID: "acme/model", Kind: "endpoint", OK: true, StubID: "stub-2", Version: 4}},
 	}))
 	state, err = s.repo.GetGitOpsState(ctx)
 	require.NoError(t, err)
@@ -211,7 +205,7 @@ func TestGitOpsApplyReportImportFailureKeepsPriorEndpoint(t *testing.T) {
 	assert.Equal(t, types.GitOpsStatusRetired, state.PerEndpoint["endpoint:acme/model"].Status)
 	endpoint, err = s.repo.GetEndpoint(ctx, "acme/model")
 	require.NoError(t, err)
-	assert.False(t, endpoint.Enabled)
+	assert.False(t, endpoint.Enabled())
 }
 
 func TestGitOpsApplyReportRetireFailureIsRetried(t *testing.T) {
@@ -251,7 +245,7 @@ func TestGitOpsApplyReportRetireFailureIsRetried(t *testing.T) {
 
 	// The record is repaired; the retried run retires it and LastSHA advances.
 	require.NoError(t, s.repo.SaveEndpoint(ctx, &types.ManagedEndpoint{
-		Spec: types.ManagedEndpointSpec{ID: "acme/old", Kind: types.EndpointKindLLM, Engine: "vllm", Port: 8000}, StubID: "stub-old", Version: 1, Enabled: true, Status: types.EndpointStatusActive,
+		Spec: types.ManagedEndpointSpec{ID: "acme/old", Kind: types.EndpointKindLLM, Engine: "vllm", Port: 8000}, ManagedRecord: types.ManagedRecord{StubID: "stub-old", Version: 1, Status: types.EndpointStatusActive},
 	}))
 	state.Running, state.RunID = true, "run-2"
 	require.NoError(t, s.repo.SaveGitOpsState(ctx, state))
@@ -263,7 +257,7 @@ func TestGitOpsApplyReportRetireFailureIsRetried(t *testing.T) {
 	assert.Empty(t, state.LastError)
 	retired, err := s.repo.GetEndpoint(ctx, "acme/old")
 	require.NoError(t, err)
-	assert.False(t, retired.Enabled)
+	assert.False(t, retired.Enabled())
 }
 
 func TestGitOpsApplyReportDeployerError(t *testing.T) {

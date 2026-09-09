@@ -131,7 +131,7 @@ func (c *controller) stepRollout(ctx context.Context, endpoint *types.ManagedEnd
 	if err != nil {
 		return c.finishRollout(ctx, endpoint, rollout, false, err.Error())
 	}
-	canaryEndpoint := &types.ManagedEndpoint{Spec: *canarySpec, StubID: canary.StubID, Version: canary.Version, GitSHA: canary.GitSHA}
+	canaryEndpoint := &types.ManagedEndpoint{Spec: *canarySpec, ManagedRecord: types.ManagedRecord{StubID: canary.StubID, Version: canary.Version, GitSHA: canary.GitSHA}}
 
 	// Keep canary replicas up: CanaryReplicas per required role, so a
 	// disaggregated endpoint never bakes (or promotes) with a role missing.

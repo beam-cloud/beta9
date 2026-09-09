@@ -107,7 +107,7 @@ func (s *Service) ListEndpoints(ctx context.Context, in *pb.ListEndpointsRequest
 		}
 		replicas, err := s.repo.ListAllReplicas(ctx)
 		for _, endpoint := range endpoints {
-			if in.IncludeDisabled || endpoint.Enabled {
+			if in.IncludeDisabled || endpoint.Enabled() {
 				out.Endpoints = append(out.Endpoints, endpointToProto(endpoint, replicas))
 			}
 		}
@@ -177,8 +177,8 @@ func (s *Service) SetEndpointEnabled(ctx context.Context, in *pb.SetEndpointEnab
 		if err != nil {
 			return err
 		}
-		if endpoint.Enabled != in.Enabled {
-			endpoint.Enabled, endpoint.Status, endpoint.UpdatedAt = in.Enabled, types.EndpointStatusDisabled, time.Now()
+		if endpoint.Enabled() != in.Enabled {
+			endpoint.Status, endpoint.UpdatedAt = types.EndpointStatusDisabled, time.Now()
 			action := "endpoint.disabled"
 			if in.Enabled {
 				endpoint.Status, action = types.EndpointStatusActive, "endpoint.enabled"
@@ -278,7 +278,7 @@ func (s *Service) SetConfig(ctx context.Context, in *pb.SetConfigRequest) (*pb.S
 		if err != nil {
 			return err
 		}
-		if !endpoint.Spec.Harness.Enabled {
+		if !endpoint.Spec.Harness {
 			return errors.New("endpoint does not enable the harness; live config is unavailable")
 		}
 		scope, key, err := s.scopeKey(ctx, endpoint.Spec.ID, in.Scope, in.ScopeKey)
@@ -458,7 +458,7 @@ func (s *Service) StartTuningReplica(ctx context.Context, in *pb.StartTuningRepl
 		if err != nil {
 			return err
 		}
-		if !endpoint.Spec.Harness.Enabled {
+		if !endpoint.Spec.Harness {
 			return errors.New("endpoint does not enable the harness; live tuning is unavailable")
 		}
 		role, gpu := cmp.Or(strings.TrimSpace(in.Role), types.ReplicaRoleServe), normalizeGPUKey(in.Gpu)

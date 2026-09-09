@@ -41,7 +41,6 @@ _EXPORTS = {
     "Catalog": (".abstractions.managed_endpoint", "Catalog"),
     "ReplicaPolicy": (".abstractions.managed_endpoint", "ReplicaPolicy"),
     "KVCache": (".abstractions.managed_endpoint", "KVCache"),
-    "Topology": (".abstractions.managed_endpoint", "Topology"),
     "Service": (".abstractions.service", "Service"),
     "Client": (".client.client", "Client"),
     "Task": (".client.task", "Task"),

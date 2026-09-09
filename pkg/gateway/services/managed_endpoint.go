@@ -166,17 +166,14 @@ func (gws *GatewayService) registerManagedDeployment(ctx context.Context, stub *
 		if err != nil {
 			return err
 		}
-		record := &types.ManagedService{
-			Spec:    *service,
-			StubID:  stub.ExternalId,
-			Version: deployment.Version,
-			GitSHA:  config.ManagedEndpoint.GitSHA,
-			Enabled: true,
-			Status:  types.EndpointStatusActive,
-		}
+		record := &types.ManagedService{Spec: *service, ManagedRecord: types.ManagedRecord{
+			StubID: stub.ExternalId, Version: deployment.Version, GitSHA: config.ManagedEndpoint.GitSHA, Status: types.EndpointStatusActive,
+		}}
 		if existing != nil {
 			record.CreatedAt = existing.CreatedAt
-			record.Enabled = existing.Enabled
+			if existing.Status == types.EndpointStatusDisabled {
+				record.Status = existing.Status
+			}
 		}
 		return gws.managedEndpointRepo.SaveService(ctx, record)
 	}
@@ -209,14 +206,9 @@ func (gws *GatewayService) registerManagedDeployment(ctx context.Context, stub *
 	firstVersion := existing == nil || existing.Status == types.EndpointStatusRetired || rollout.ActiveVersion == 0
 	if firstVersion {
 		version.State = types.VersionStateActive
-		record := &types.ManagedEndpoint{
-			Spec:    *spec,
-			StubID:  stub.ExternalId,
-			Version: deployment.Version,
-			GitSHA:  config.ManagedEndpoint.GitSHA,
-			Enabled: true,
-			Status:  types.EndpointStatusActive,
-		}
+		record := &types.ManagedEndpoint{Spec: *spec, ManagedRecord: types.ManagedRecord{
+			StubID: stub.ExternalId, Version: deployment.Version, GitSHA: config.ManagedEndpoint.GitSHA, Status: types.EndpointStatusActive,
+		}}
 		if existing != nil {
 			record.CreatedAt = existing.CreatedAt
 		}

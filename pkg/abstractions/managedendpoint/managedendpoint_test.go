@@ -71,11 +71,11 @@ func seedEndpoint(t *testing.T, s *Service) *types.ManagedEndpoint {
 	spec := types.ManagedEndpointSpec{
 		ID: "acme/model", Kind: types.EndpointKindLLM, Engine: "vllm", Port: 8000,
 		Gpu:     []types.GpuTarget{{Type: "H100", Count: 1, MinReplicas: 1, MaxReplicas: 4, Share: 0.5, Harness: map[string]any{"max_num_seqs": 64}}},
-		Harness: types.HarnessSpec{Enabled: true},
+		Harness: true,
 		Catalog: types.Catalog{Public: true},
 	}
 	spec.Normalize()
-	endpoint := &types.ManagedEndpoint{Spec: spec, StubID: "stub-1", Version: 1, Enabled: true, Status: types.EndpointStatusActive}
+	endpoint := &types.ManagedEndpoint{Spec: spec, ManagedRecord: types.ManagedRecord{StubID: "stub-1", Version: 1, Status: types.EndpointStatusActive}}
 	require.NoError(t, s.repo.SaveEndpoint(context.Background(), endpoint))
 	require.NoError(t, s.repo.SaveVersion(context.Background(), &types.EndpointVersion{EndpointID: spec.ID, Version: 1, StubID: "stub-1", State: types.VersionStateActive}))
 	require.NoError(t, s.repo.SaveRollout(context.Background(), &types.RolloutState{EndpointID: spec.ID, ActiveVersion: 1, Phase: types.RolloutPhaseIdle}))
@@ -362,7 +362,7 @@ func TestTuningReplicaRequiresHarnessAndKnownTarget(t *testing.T) {
 	assert.JSONEq(t, `{"max_num_seqs":8}`, cfg.Revision.ConfigJson)
 
 	// Without the harness there is nothing to tune.
-	endpoint.Spec.Harness.Enabled = false
+	endpoint.Spec.Harness = false
 	require.NoError(t, s.repo.SaveEndpoint(context.Background(), endpoint))
 	resp, err = s.StartTuningReplica(ctx, &pb.StartTuningReplicaRequest{EndpointId: endpoint.Spec.ID, Gpu: "H100"})
 	require.NoError(t, err)

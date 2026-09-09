@@ -1,13 +1,14 @@
 package types
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math/big"
 	"regexp"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 )
@@ -25,17 +26,9 @@ const (
 	StubTypeManagedServiceDeployment  string = "managed_service/deployment"
 )
 
-func (t StubType) IsManagedEndpoint() bool {
-	return t.Kind() == StubTypeManagedEndpoint
-}
-
-func (t StubType) IsManagedService() bool {
-	return t.Kind() == StubTypeManagedService
-}
-
-func (t StubType) IsManaged() bool {
-	return t.IsManagedEndpoint() || t.IsManagedService()
-}
+func (t StubType) IsManagedEndpoint() bool { return t.Kind() == StubTypeManagedEndpoint }
+func (t StubType) IsManagedService() bool  { return t.Kind() == StubTypeManagedService }
+func (t StubType) IsManaged() bool         { return t.IsManagedEndpoint() || t.IsManagedService() }
 
 type EndpointKind string
 
@@ -45,8 +38,6 @@ const (
 	EndpointKindImage     EndpointKind = "image"
 	EndpointKindCustom    EndpointKind = "custom"
 )
-
-var endpointKinds = []EndpointKind{EndpointKindLLM, EndpointKindEmbedding, EndpointKindImage, EndpointKindCustom}
 
 // EndpointRoute is an OpenAI-style route suffix under /v1 that an endpoint serves.
 type EndpointRoute string
@@ -60,33 +51,21 @@ const (
 	EndpointRouteInvoke           EndpointRoute = "invoke"
 )
 
-// DefaultRoutesForKind returns the routes an endpoint of a kind serves when
-// the spec does not name them explicitly.
-func DefaultRoutesForKind(kind EndpointKind) []EndpointRoute {
-	switch kind {
-	case EndpointKindLLM:
-		return []EndpointRoute{EndpointRouteChatCompletions, EndpointRouteCompletions}
-	case EndpointKindEmbedding:
-		return []EndpointRoute{EndpointRouteEmbeddings}
-	case EndpointKindImage:
-		return []EndpointRoute{EndpointRouteImageGenerations}
-	default:
-		return []EndpointRoute{EndpointRouteInvoke}
-	}
+// kindRoutes lists the routes each kind may declare. The routes a kind serves
+// by default are the leading ones: both completion routes for an LLM, the
+// first route for everything else.
+var kindRoutes = map[EndpointKind][]EndpointRoute{
+	EndpointKindLLM:       {EndpointRouteChatCompletions, EndpointRouteCompletions, EndpointRouteEmbeddings, EndpointRouteImageGenerations},
+	EndpointKindEmbedding: {EndpointRouteEmbeddings},
+	EndpointKindImage:     {EndpointRouteImageGenerations, EndpointRouteImageEdits},
+	EndpointKindCustom:    {EndpointRouteInvoke},
 }
 
-// allowedRoutesForKind returns every route an endpoint of a kind may declare.
-func allowedRoutesForKind(kind EndpointKind) []EndpointRoute {
-	switch kind {
-	case EndpointKindLLM:
-		return []EndpointRoute{EndpointRouteChatCompletions, EndpointRouteCompletions, EndpointRouteEmbeddings, EndpointRouteImageGenerations}
-	case EndpointKindEmbedding:
-		return []EndpointRoute{EndpointRouteEmbeddings}
-	case EndpointKindImage:
-		return []EndpointRoute{EndpointRouteImageGenerations, EndpointRouteImageEdits}
-	default:
-		return []EndpointRoute{EndpointRouteInvoke}
+func defaultRoutes(kind EndpointKind) []EndpointRoute {
+	if kind == EndpointKindLLM {
+		return kindRoutes[kind][:2]
 	}
+	return kindRoutes[kind][:1]
 }
 
 // GpuTarget is one hardware shape an endpoint may run on, with the tuned
@@ -116,9 +95,15 @@ func (t GpuTarget) Key() string {
 }
 
 // CPUTarget is the implicit target for endpoints declaring no GPUs.
-func CPUTarget() GpuTarget {
-	return GpuTarget{Type: string(NO_GPU), Count: 0, MinReplicas: 0, MaxReplicas: 1}
+func CPUTarget() GpuTarget { return GpuTarget{Type: string(NO_GPU), MaxReplicas: 1} }
+
+// RoleTarget pairs a replica role with a GPU target.
+type RoleTarget struct {
+	Role   string
+	Target GpuTarget
 }
+
+func (rt RoleTarget) Key() string { return rt.Role + ":" + rt.Target.Key() }
 
 // Catalog is the public listing metadata for an endpoint (OpenRouter shape).
 type Catalog struct {
@@ -147,54 +132,40 @@ type Pricing struct {
 }
 
 // IsZero reports whether no dimension is priced.
-func (p Pricing) IsZero() bool {
-	return p == Pricing{}
-}
-
-var pricingPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)(\.[0-9]{1,18})?$`)
+func (p Pricing) IsZero() bool { return p == Pricing{} }
 
 // Validate checks that every set dimension is a non-negative USD decimal.
 func (p Pricing) Validate() error {
 	for name, value := range map[string]string{
-		"prompt_tokens":        p.PromptTokens,
-		"completion_tokens":    p.CompletionTokens,
-		"cached_prompt_tokens": p.CachedPromptTokens,
-		"request":              p.Request,
-		"image":                p.Image,
+		"prompt_tokens": p.PromptTokens, "completion_tokens": p.CompletionTokens,
+		"cached_prompt_tokens": p.CachedPromptTokens, "request": p.Request, "image": p.Image,
 	} {
-		if value == "" {
-			continue
-		}
-		if !pricingPattern.MatchString(value) {
-			return fmt.Errorf("pricing.%s: %q is not a non-negative decimal amount", name, value)
+		if _, err := PricingRat(value); err != nil {
+			return fmt.Errorf("pricing.%s: %w", name, err)
 		}
 	}
 	return nil
 }
 
-// Rat parses a pricing dimension into an exact rational; empty is zero.
+var pricingPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)(\.[0-9]{1,18})?$`)
+
+// PricingRat parses a pricing dimension into an exact rational; empty is zero.
 func PricingRat(value string) (*big.Rat, error) {
-	if strings.TrimSpace(value) == "" {
+	if value == "" {
 		return new(big.Rat), nil
 	}
 	rat, ok := new(big.Rat).SetString(value)
-	if !ok || rat.Sign() < 0 {
-		return nil, fmt.Errorf("invalid pricing amount %q", value)
+	if !ok || !pricingPattern.MatchString(value) {
+		return nil, fmt.Errorf("%q is not a non-negative decimal amount", value)
 	}
 	return rat, nil
 }
 
 // ReplicaPolicy controls how replicas of an endpoint behave under preemption.
 type ReplicaPolicy struct {
-	Evictable       bool    `json:"evictable"`
-	DrainSeconds    uint32  `json:"drain_seconds"`
-	KeepWarmSeconds uint32  `json:"keep_warm_seconds"`
-	SpareShare      float64 `json:"spare_share"`
-}
-
-// HarnessSpec enables the in-engine harness (live knobs over EndpointHarnessService).
-type HarnessSpec struct {
-	Enabled bool `json:"enabled"`
+	Evictable    bool    `json:"evictable"`
+	DrainSeconds uint32  `json:"drain_seconds"`
+	SpareShare   float64 `json:"spare_share"`
 }
 
 // KVCacheSpec opts an endpoint into a shared KV store within a locality.
@@ -205,52 +176,34 @@ type KVCacheSpec struct {
 	Extra       map[string]any `json:"extra,omitempty"`
 }
 
-type TopologyMode string
-
-const (
-	TopologyMonolithic    TopologyMode = "monolithic"
-	TopologyDisaggregated TopologyMode = "disaggregated"
-)
-
 const (
 	ReplicaRoleServe   = "serve"
 	ReplicaRolePrefill = "prefill"
 	ReplicaRoleDecode  = "decode"
 )
 
-// TopologySpec describes prefill/decode disaggregation. Roles maps a role to
-// the GPU targets that role may run on.
-type TopologySpec struct {
-	Mode  TopologyMode           `json:"mode,omitempty"`
-	Roles map[string][]GpuTarget `json:"roles,omitempty"`
-}
-
-func (t *TopologySpec) EffectiveMode() TopologyMode {
-	if t == nil || t.Mode == "" {
-		return TopologyMonolithic
-	}
-	return t.Mode
-}
-
 // ManagedEndpointSpec is the repo contract: everything an endpoint app declares.
 type ManagedEndpointSpec struct {
-	ID         string          `json:"id"`
-	Kind       EndpointKind    `json:"kind"`
-	Engine     string          `json:"engine,omitempty"`
-	Port       uint32          `json:"port"`
-	Health     string          `json:"health,omitempty"`
-	Metrics    string          `json:"metrics,omitempty"`
-	Gpu        []GpuTarget     `json:"gpu"`
-	Routes     []EndpointRoute `json:"routes,omitempty"`
-	Pricing    Pricing         `json:"pricing"`
-	Catalog    Catalog         `json:"catalog"`
-	Policy     ReplicaPolicy   `json:"policy"`
-	Harness    HarnessSpec     `json:"harness"`
-	KVCache    *KVCacheSpec    `json:"kv_cache,omitempty"`
-	Topology   *TopologySpec   `json:"topology,omitempty"`
-	Services   []string        `json:"services,omitempty"`
-	Locality   []string        `json:"locality,omitempty"`
-	Entrypoint []string        `json:"entrypoint,omitempty"`
+	ID      string          `json:"id"`
+	Kind    EndpointKind    `json:"kind"`
+	Engine  string          `json:"engine,omitempty"`
+	Port    uint32          `json:"port"`
+	Health  string          `json:"health,omitempty"`
+	Metrics string          `json:"metrics,omitempty"`
+	Gpu     []GpuTarget     `json:"gpu"`
+	Routes  []EndpointRoute `json:"routes,omitempty"`
+	Pricing Pricing         `json:"pricing"`
+	Catalog Catalog         `json:"catalog"`
+	Policy  ReplicaPolicy   `json:"policy"`
+	// Harness enables the in-engine harness (live knobs over EndpointHarnessService).
+	Harness bool         `json:"harness"`
+	KVCache *KVCacheSpec `json:"kv_cache,omitempty"`
+	// Topology maps prefill/decode roles to the GPU targets each may run on.
+	// Empty means a monolithic endpoint served from Gpu.
+	Topology   map[string][]GpuTarget `json:"topology,omitempty"`
+	Services   []string               `json:"services,omitempty"`
+	Locality   []string               `json:"locality,omitempty"`
+	Entrypoint []string               `json:"entrypoint,omitempty"`
 }
 
 // ManagedServiceSpec is a protected shared-infrastructure service (e.g. a
@@ -273,9 +226,6 @@ type ManagedEndpointStubConfig struct {
 	GitSHA string `json:"git_sha,omitempty"`
 }
 
-var endpointIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)?$`)
-var serviceNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
-
 // ManagedEndpointValidation configures spec validation. Empty allow lists
 // allow everything.
 type ManagedEndpointValidation struct {
@@ -284,6 +234,16 @@ type ManagedEndpointValidation struct {
 	// KnownServices resolves spec.Services references; nil skips the check.
 	KnownServices map[string]struct{}
 }
+
+var (
+	endpointIDPattern  = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)?$`)
+	serviceNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+)
+
+func cleanPath(p string) string { return "/" + strings.TrimPrefix(strings.TrimSpace(p), "/") }
+
+// Disaggregated reports whether the endpoint splits prefill and decode.
+func (s *ManagedEndpointSpec) Disaggregated() bool { return len(s.Topology) > 0 }
 
 // Normalize fills defaults so downstream code can rely on a canonical spec.
 func (s *ManagedEndpointSpec) Normalize() {
@@ -295,15 +255,12 @@ func (s *ManagedEndpointSpec) Normalize() {
 	if s.Port == 0 {
 		s.Port = 8000
 	}
-	if s.Health == "" {
-		s.Health = "/health"
-	}
-	s.Health = "/" + strings.TrimPrefix(strings.TrimSpace(s.Health), "/")
+	s.Health = cleanPath(cmp.Or(s.Health, "health"))
 	if s.Metrics != "" {
-		s.Metrics = "/" + strings.TrimPrefix(strings.TrimSpace(s.Metrics), "/")
+		s.Metrics = cleanPath(s.Metrics)
 	}
 	if len(s.Routes) == 0 {
-		s.Routes = DefaultRoutesForKind(s.Kind)
+		s.Routes = defaultRoutes(s.Kind)
 	}
 	for i := range s.Routes {
 		s.Routes[i] = EndpointRoute(strings.Trim(strings.TrimSpace(string(s.Routes[i])), "/"))
@@ -318,13 +275,16 @@ func (s *ManagedEndpointSpec) Normalize() {
 		s.Gpu = []GpuTarget{CPUTarget()}
 	}
 	normalizeTargets(s.Gpu, s.Policy.SpareShare)
-	if s.Topology != nil {
-		for role := range s.Topology.Roles {
-			normalizeTargets(s.Topology.Roles[role], s.Policy.SpareShare)
-		}
+	for role := range s.Topology {
+		normalizeTargets(s.Topology[role], s.Policy.SpareShare)
 	}
-	if s.KVCache != nil && s.KVCache.MinReplicas == 0 {
-		s.KVCache.MinReplicas = 2
+	if s.KVCache != nil {
+		if s.KVCache.MinReplicas == 0 {
+			s.KVCache.MinReplicas = 2
+		}
+		if s.KVCache.Service != "" && !slices.Contains(s.Services, s.KVCache.Service) {
+			s.Services = append(s.Services, s.KVCache.Service)
+		}
 	}
 	if s.Catalog.Name == "" {
 		s.Catalog.Name = s.ID
@@ -335,13 +295,10 @@ func normalizeTargets(targets []GpuTarget, spareShare float64) {
 	for i := range targets {
 		t := &targets[i]
 		if t.IsCPU() {
-			t.Type = string(NO_GPU)
-			t.Count = 0
+			t.Type, t.Count = string(NO_GPU), 0
 		} else {
 			t.Type = string(NormalizeGPUType(t.Type))
-			if t.Count == 0 {
-				t.Count = 1
-			}
+			t.Count = max(t.Count, 1)
 		}
 		if t.MaxReplicas == 0 {
 			t.MaxReplicas = max(t.MinReplicas, 1)
@@ -355,139 +312,119 @@ func normalizeTargets(targets []GpuTarget, spareShare float64) {
 // Validate checks the spec against platform policy. Call Normalize first.
 func (s *ManagedEndpointSpec) Validate(policy ManagedEndpointValidation) error {
 	var errs []error
+	fail := func(format string, args ...any) { errs = append(errs, fmt.Errorf(format, args...)) }
+
 	if !endpointIDPattern.MatchString(s.ID) {
-		errs = append(errs, fmt.Errorf("id %q must look like vendor/slug (lowercase, [a-z0-9._-])", s.ID))
+		fail("id %q must look like vendor/slug (lowercase, [a-z0-9._-])", s.ID)
 	}
-	validKind := slices.Contains(endpointKinds, s.Kind)
-	if !validKind {
-		errs = append(errs, fmt.Errorf("kind %q is not one of llm, embedding, image, custom", s.Kind))
-	} else if len(policy.AllowedKinds) > 0 && !slices.Contains(policy.AllowedKinds, s.Kind) {
-		errs = append(errs, fmt.Errorf("kind %q is not enabled on this cluster", s.Kind))
+	allowed, validKind := kindRoutes[s.Kind]
+	switch {
+	case !validKind:
+		fail("kind %q is not one of llm, embedding, image, custom", s.Kind)
+	case len(policy.AllowedKinds) > 0 && !slices.Contains(policy.AllowedKinds, s.Kind):
+		fail("kind %q is not enabled on this cluster", s.Kind)
 	}
 	if s.Engine != "" && len(policy.AllowedEngines) > 0 && !slices.ContainsFunc(policy.AllowedEngines, func(e string) bool { return strings.EqualFold(e, s.Engine) }) {
-		errs = append(errs, fmt.Errorf("engine %q is not in the allowed engine list", s.Engine))
+		fail("engine %q is not in the allowed engine list", s.Engine)
 	}
 	if s.Port == 0 || s.Port > 65535 {
-		errs = append(errs, fmt.Errorf("port %d is invalid", s.Port))
+		fail("port %d is invalid", s.Port)
 	}
 	if len(s.Entrypoint) == 0 {
-		errs = append(errs, errors.New("entrypoint is required"))
+		fail("entrypoint is required")
 	}
-	if validKind {
-		allowed := allowedRoutesForKind(s.Kind)
-		for _, route := range s.Routes {
-			if !slices.Contains(allowed, route) {
-				errs = append(errs, fmt.Errorf("route %q is not valid for kind %q", route, s.Kind))
-			}
+	for _, route := range s.Routes {
+		if validKind && !slices.Contains(allowed, route) {
+			fail("route %q is not valid for kind %q", route, s.Kind)
 		}
 	}
 	if err := s.Pricing.Validate(); err != nil {
 		errs = append(errs, err)
 	}
 	if s.Kind == EndpointKindImage && s.Pricing.Image == "" && s.Pricing.Request == "" && !s.Catalog.Free {
-		errs = append(errs, errors.New("image endpoints must price per image or per request, or be marked free"))
-	}
-	errs = append(errs, validateTargets("gpu", s.Gpu)...)
-	if s.Topology != nil && s.Topology.EffectiveMode() == TopologyDisaggregated {
-		for _, role := range []string{ReplicaRolePrefill, ReplicaRoleDecode} {
-			targets, ok := s.Topology.Roles[role]
-			if !ok || len(targets) == 0 {
-				errs = append(errs, fmt.Errorf("topology.roles.%s is required for disaggregated mode", role))
-				continue
-			}
-			errs = append(errs, validateTargets("topology.roles."+role, targets)...)
-		}
-		for role := range s.Topology.Roles {
-			if role != ReplicaRolePrefill && role != ReplicaRoleDecode {
-				errs = append(errs, fmt.Errorf("topology.roles.%s: unknown role", role))
-			}
-		}
-		if s.KVCache == nil {
-			errs = append(errs, errors.New("disaggregated topology requires kv_cache"))
-		}
-	}
-	if s.KVCache != nil {
-		if s.KVCache.Connector == "" {
-			errs = append(errs, errors.New("kv_cache.connector is required"))
-		}
-		if s.KVCache.Service != "" && !slices.Contains(s.Services, s.KVCache.Service) {
-			s.Services = append(s.Services, s.KVCache.Service)
-		}
-	}
-	if policy.KnownServices != nil {
-		for _, service := range s.Services {
-			if _, ok := policy.KnownServices[service]; !ok {
-				errs = append(errs, fmt.Errorf("service %q is not deployed", service))
-			}
-		}
+		fail("image endpoints must price per image or per request, or be marked free")
 	}
 	if s.Policy.SpareShare <= 0 || s.Policy.SpareShare > 1 {
-		errs = append(errs, fmt.Errorf("policy.spare_share %v must be in (0, 1]", s.Policy.SpareShare))
+		fail("policy.spare_share %v must be in (0, 1]", s.Policy.SpareShare)
+	}
+	errs = append(errs, validateTargets("gpu", s.Gpu)...)
+	if s.Disaggregated() {
+		for _, role := range []string{ReplicaRolePrefill, ReplicaRoleDecode} {
+			if len(s.Topology[role]) == 0 {
+				fail("topology.%s is required for disaggregated mode", role)
+			}
+		}
+		for role, targets := range s.Topology {
+			if role != ReplicaRolePrefill && role != ReplicaRoleDecode {
+				fail("topology.%s: unknown role", role)
+			}
+			errs = append(errs, validateTargets("topology."+role, targets)...)
+		}
+		if s.KVCache == nil {
+			fail("disaggregated topology requires kv_cache")
+		}
+	}
+	if s.KVCache != nil && s.KVCache.Connector == "" {
+		fail("kv_cache.connector is required")
+	}
+	for _, service := range s.Services {
+		if _, ok := policy.KnownServices[service]; policy.KnownServices != nil && !ok {
+			fail("service %q is not deployed", service)
+		}
 	}
 	return errors.Join(errs...)
 }
 
 func validateTargets(field string, targets []GpuTarget) []error {
 	var errs []error
-	seen := map[string]struct{}{}
+	seen := map[string]bool{}
 	for i, t := range targets {
-		prefix := fmt.Sprintf("%s[%d]", field, i)
-		if !t.IsCPU() && !KnownGPUType(GpuType(t.Type)) {
-			errs = append(errs, fmt.Errorf("%s: unknown gpu type %q", prefix, t.Type))
+		fail := func(format string, args ...any) {
+			errs = append(errs, fmt.Errorf("%s[%d]: %s", field, i, fmt.Sprintf(format, args...)))
 		}
-		// Placement indexes inventory by concrete GPU type; "any" never fills.
-		if GpuType(t.Type) == GPU_ANY {
-			errs = append(errs, fmt.Errorf("%s: gpu type %q is not allowed; list concrete types as alternatives", prefix, t.Type))
+		switch {
+		case GpuType(t.Type) == GPU_ANY:
+			// Placement indexes inventory by concrete GPU type; "any" never fills.
+			fail("gpu type %q is not allowed; list concrete types as alternatives", t.Type)
+		case !t.IsCPU() && !KnownGPUType(GpuType(t.Type)):
+			fail("unknown gpu type %q", t.Type)
 		}
 		if t.Count > 8 {
-			errs = append(errs, fmt.Errorf("%s: count %d exceeds 8", prefix, t.Count))
+			fail("count %d exceeds 8", t.Count)
 		}
 		if t.MinReplicas > t.MaxReplicas {
-			errs = append(errs, fmt.Errorf("%s: min_replicas %d > max_replicas %d", prefix, t.MinReplicas, t.MaxReplicas))
+			fail("min_replicas %d > max_replicas %d", t.MinReplicas, t.MaxReplicas)
 		}
 		if t.Share <= 0 || t.Share > 1 {
-			errs = append(errs, fmt.Errorf("%s: share %v must be in (0, 1]", prefix, t.Share))
+			fail("share %v must be in (0, 1]", t.Share)
 		}
-		key := t.Key()
-		if _, dup := seen[key]; dup {
-			errs = append(errs, fmt.Errorf("%s: duplicate target %s", prefix, key))
+		if seen[t.Key()] {
+			fail("duplicate target %s", t.Key())
 		}
-		seen[key] = struct{}{}
+		seen[t.Key()] = true
 	}
 	return errs
 }
 
-// Targets returns every (role, target) placement for the endpoint.
+// Targets returns every (role, target) placement for the endpoint, roles in
+// sorted order.
 func (s *ManagedEndpointSpec) Targets() []RoleTarget {
-	if s.Topology != nil && s.Topology.EffectiveMode() == TopologyDisaggregated {
-		roles := make([]string, 0, len(s.Topology.Roles))
-		for role := range s.Topology.Roles {
-			roles = append(roles, role)
-		}
-		sort.Strings(roles)
-		var out []RoleTarget
-		for _, role := range roles {
-			for _, t := range s.Topology.Roles[role] {
-				out = append(out, RoleTarget{Role: role, Target: t})
-			}
-		}
-		return out
+	if !s.Disaggregated() {
+		return roleTargets(ReplicaRoleServe, s.Gpu)
 	}
-	out := make([]RoleTarget, 0, len(s.Gpu))
-	for _, t := range s.Gpu {
-		out = append(out, RoleTarget{Role: ReplicaRoleServe, Target: t})
+	var out []RoleTarget
+	for _, role := range slices.Sorted(maps.Keys(s.Topology)) {
+		out = append(out, roleTargets(role, s.Topology[role])...)
 	}
 	return out
 }
 
-// RoleTarget pairs a replica role with a GPU target.
-type RoleTarget struct {
-	Role   string
-	Target GpuTarget
-}
-
-func (rt RoleTarget) Key() string {
-	return rt.Role + ":" + rt.Target.Key()
+func roleTargets(role string, targets []GpuTarget) []RoleTarget {
+	out := make([]RoleTarget, 0, len(targets))
+	for _, t := range targets {
+		out = append(out, RoleTarget{Role: role, Target: t})
+	}
+	return out
 }
 
 // ServesRoute reports whether the endpoint declares a route.
@@ -495,26 +432,23 @@ func (s *ManagedEndpointSpec) ServesRoute(route EndpointRoute) bool {
 	return slices.Contains(s.Routes, route)
 }
 
-// Normalize fills service defaults.
+// Normalize fills service defaults. Every target runs exactly Replicas
+// protected replicas.
 func (s *ManagedServiceSpec) Normalize() {
 	s.Name = strings.ToLower(strings.TrimSpace(s.Name))
 	if s.Port == 0 {
 		s.Port = 8000
 	}
 	if s.Health != "" {
-		s.Health = "/" + strings.TrimPrefix(strings.TrimSpace(s.Health), "/")
+		s.Health = cleanPath(s.Health)
 	}
-	if s.Replicas == 0 {
-		s.Replicas = 1
-	}
+	s.Replicas = max(s.Replicas, 1)
 	if len(s.Gpu) == 0 {
 		s.Gpu = []GpuTarget{CPUTarget()}
 	}
 	normalizeTargets(s.Gpu, 1)
 	for i := range s.Gpu {
-		s.Gpu[i].Share = 1
-		s.Gpu[i].MinReplicas = s.Replicas
-		s.Gpu[i].MaxReplicas = s.Replicas
+		s.Gpu[i].Share, s.Gpu[i].MinReplicas, s.Gpu[i].MaxReplicas = 1, s.Replicas, s.Replicas
 	}
 }
 
@@ -530,11 +464,10 @@ func (s *ManagedServiceSpec) Validate() error {
 	if s.Port == 0 || s.Port > 65535 {
 		errs = append(errs, fmt.Errorf("port %d is invalid", s.Port))
 	}
-	errs = append(errs, validateTargets("gpu", s.Gpu)...)
-	return errors.Join(errs...)
+	return errors.Join(append(errs, validateTargets("gpu", s.Gpu)...)...)
 }
 
-// --- Runtime state -------------------------------------------------------
+// --- Registry ------------------------------------------------------------------
 
 type EndpointStatus string
 
@@ -544,154 +477,30 @@ const (
 	EndpointStatusRetired  EndpointStatus = "retired"
 )
 
-// ManagedEndpoint is the registry record for a deployed endpoint version.
+// ManagedRecord is the registry bookkeeping shared by deployed endpoints and
+// services: which stub serves the current version and whether it is live.
+type ManagedRecord struct {
+	StubID    string         `json:"stub_id"`
+	Version   uint           `json:"version"`
+	GitSHA    string         `json:"git_sha,omitempty"`
+	Status    EndpointStatus `json:"status"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+}
+
+// Enabled reports whether the record may be filled and routed to.
+func (r ManagedRecord) Enabled() bool { return r.Status == EndpointStatusActive }
+
+// ManagedEndpoint is the registry record for a deployed endpoint.
 type ManagedEndpoint struct {
-	Spec      ManagedEndpointSpec `json:"spec"`
-	StubID    string              `json:"stub_id"`
-	Version   uint                `json:"version"`
-	GitSHA    string              `json:"git_sha,omitempty"`
-	Enabled   bool                `json:"enabled"`
-	Status    EndpointStatus      `json:"status"`
-	CreatedAt time.Time           `json:"created_at"`
-	UpdatedAt time.Time           `json:"updated_at"`
+	Spec ManagedEndpointSpec `json:"spec"`
+	ManagedRecord
 }
 
 // ManagedService is the registry record for a deployed shared service.
 type ManagedService struct {
-	Spec      ManagedServiceSpec `json:"spec"`
-	StubID    string             `json:"stub_id"`
-	Version   uint               `json:"version"`
-	GitSHA    string             `json:"git_sha,omitempty"`
-	Enabled   bool               `json:"enabled"`
-	Status    EndpointStatus     `json:"status"`
-	CreatedAt time.Time          `json:"created_at"`
-	UpdatedAt time.Time          `json:"updated_at"`
-}
-
-type ReplicaStatus string
-
-const (
-	ReplicaStatusScheduling ReplicaStatus = "scheduling"
-	ReplicaStatusLoading    ReplicaStatus = "loading"
-	ReplicaStatusReady      ReplicaStatus = "ready"
-	ReplicaStatusDraining   ReplicaStatus = "draining"
-	ReplicaStatusEvicting   ReplicaStatus = "evicting"
-	ReplicaStatusEvicted    ReplicaStatus = "evicted"
-	ReplicaStatusFailed     ReplicaStatus = "failed"
-	ReplicaStatusStopped    ReplicaStatus = "stopped"
-)
-
-// Terminal reports whether a replica in this status will never serve again.
-func (s ReplicaStatus) Terminal() bool {
-	switch s {
-	case ReplicaStatusEvicted, ReplicaStatusFailed, ReplicaStatusStopped:
-		return true
-	}
-	return false
-}
-
-// KVTransferStats are reported by harnesses using a KV connector.
-type KVTransferStats struct {
-	TransferBytes      int64 `json:"transfer_bytes,omitempty"`
-	StoreHitRateMilli  int64 `json:"store_hit_rate_milli,omitempty"`
-	RemotePrefillCount int64 `json:"remote_prefill_count,omitempty"`
-	StoreUsageMilli    int64 `json:"store_usage_milli,omitempty"`
-}
-
-// ReplicaCapacity is the harness- or probe-reported serving capacity.
-type ReplicaCapacity struct {
-	InFlight            int64            `json:"in_flight"`
-	MaxConcurrency      int64            `json:"max_concurrency"`
-	Running             int64            `json:"running"`
-	Waiting             int64            `json:"waiting"`
-	KVCacheFreeMilli    int64            `json:"kv_cache_free_milli"`
-	DecodeTokensPerSec  int64            `json:"decode_tokens_per_sec"`
-	PromptTokensPerSec  int64            `json:"prompt_tokens_per_sec"`
-	TTFTMs              int64            `json:"ttft_ms"`
-	TPOTMs              int64            `json:"tpot_ms"`
-	PrefixCacheHitMilli int64            `json:"prefix_cache_hit_milli"`
-	KVTransfer          *KVTransferStats `json:"kv_transfer,omitempty"`
-}
-
-// EndpointReplica is one running container serving an endpoint role/target.
-type EndpointReplica struct {
-	ID          string `json:"id"`
-	EndpointID  string `json:"endpoint_id"`
-	Version     uint   `json:"version"`
-	Role        string `json:"role"`
-	GPU         string `json:"gpu"`
-	GPUCount    uint32 `json:"gpu_count"`
-	Locality    string `json:"locality"`
-	PoolName    string `json:"pool_name,omitempty"`
-	ContainerID string `json:"container_id"`
-	WorkerID    string `json:"worker_id,omitempty"`
-	MachineID   string `json:"machine_id,omitempty"`
-	// ProviderWorkspaceID is set when the replica runs on a workspace's
-	// contributed (provider pool) machine; that workspace earns a share of
-	// the revenue routed to the replica.
-	ProviderWorkspaceID string        `json:"provider_workspace_id,omitempty"`
-	Address             string        `json:"address,omitempty"`
-	Status              ReplicaStatus `json:"status"`
-	// Protected replicas satisfy min_replicas: they may trigger provisioning
-	// and are never evictable. Everything else is opportunistic.
-	Protected bool `json:"protected"`
-	// Tuning replicas are dedicated to live tuning and take no public traffic.
-	Tuning bool `json:"tuning"`
-	// SecretHash is the SHA-256 of the per-replica secret handed to the
-	// container as BEAM_REPLICA_SECRET; harness RPCs must present it.
-	SecretHash     string          `json:"secret_hash,omitempty"`
-	HarnessEnabled bool            `json:"harness_enabled"`
-	ConfigRevision uint64          `json:"config_revision"`
-	Capacity       ReplicaCapacity `json:"capacity"`
-	Capabilities   json.RawMessage `json:"capabilities,omitempty"`
-	StartedAt      time.Time       `json:"started_at"`
-	ReadyAt        time.Time       `json:"ready_at,omitempty"`
-	LastHeartbeat  time.Time       `json:"last_heartbeat"`
-	EndedAt        time.Time       `json:"ended_at,omitempty"`
-	DrainDeadline  time.Time       `json:"drain_deadline,omitempty"`
-	StatusReason   string          `json:"status_reason,omitempty"`
-}
-
-// Serving reports whether the replica may receive traffic.
-func (r *EndpointReplica) Serving() bool {
-	return r != nil && r.Status == ReplicaStatusReady && !r.Tuning
-}
-
-// Alive reports whether the replica is scheduling, loading or ready, i.e.
-// counts toward a target's live set (draining and evicting replicas do not).
-func (r *EndpointReplica) Alive() bool {
-	switch r.Status {
-	case ReplicaStatusScheduling, ReplicaStatusLoading, ReplicaStatusReady:
-		return true
-	}
-	return false
-}
-
-type ConfigRevisionScope string
-
-const (
-	ConfigScopeTarget  ConfigRevisionScope = "target"
-	ConfigScopeReplica ConfigRevisionScope = "replica"
-)
-
-type ConfigRevisionSource string
-
-const (
-	ConfigSourceGit  ConfigRevisionSource = "git"
-	ConfigSourceLive ConfigRevisionSource = "live"
-)
-
-// EndpointConfigRevision is one version of the live harness config for a
-// GPU target (fleet) or a single replica (tuning).
-type EndpointConfigRevision struct {
-	Revision   uint64               `json:"revision"`
-	EndpointID string               `json:"endpoint_id"`
-	Scope      ConfigRevisionScope  `json:"scope"`
-	ScopeKey   string               `json:"scope_key"`
-	Config     map[string]any       `json:"config"`
-	Author     string               `json:"author,omitempty"`
-	Source     ConfigRevisionSource `json:"source"`
-	CreatedAt  time.Time            `json:"created_at"`
+	Spec ManagedServiceSpec `json:"spec"`
+	ManagedRecord
 }
 
 type EndpointVersionState string
@@ -735,6 +544,133 @@ type RolloutState struct {
 	UpdatedAt      time.Time    `json:"updated_at"`
 }
 
+// --- Replicas ------------------------------------------------------------------
+
+type ReplicaStatus string
+
+const (
+	ReplicaStatusScheduling ReplicaStatus = "scheduling"
+	ReplicaStatusLoading    ReplicaStatus = "loading"
+	ReplicaStatusReady      ReplicaStatus = "ready"
+	ReplicaStatusDraining   ReplicaStatus = "draining"
+	ReplicaStatusEvicting   ReplicaStatus = "evicting"
+	ReplicaStatusEvicted    ReplicaStatus = "evicted"
+	ReplicaStatusFailed     ReplicaStatus = "failed"
+	ReplicaStatusStopped    ReplicaStatus = "stopped"
+)
+
+// Terminal reports whether a replica in this status will never serve again.
+func (s ReplicaStatus) Terminal() bool {
+	return s == ReplicaStatusEvicted || s == ReplicaStatusFailed || s == ReplicaStatusStopped
+}
+
+// ReplicaCapacity is the harness- or probe-reported serving capacity.
+type ReplicaCapacity struct {
+	InFlight            int64 `json:"in_flight"`
+	MaxConcurrency      int64 `json:"max_concurrency"`
+	Running             int64 `json:"running"`
+	Waiting             int64 `json:"waiting"`
+	KVCacheFreeMilli    int64 `json:"kv_cache_free_milli"`
+	DecodeTokensPerSec  int64 `json:"decode_tokens_per_sec"`
+	PromptTokensPerSec  int64 `json:"prompt_tokens_per_sec"`
+	TTFTMs              int64 `json:"ttft_ms"`
+	TPOTMs              int64 `json:"tpot_ms"`
+	PrefixCacheHitMilli int64 `json:"prefix_cache_hit_milli"`
+	// KVTransfer is the connector's own transfer stats (opaque JSON).
+	KVTransfer json.RawMessage `json:"kv_transfer,omitempty"`
+}
+
+// EndpointReplica is one running container serving an endpoint role/target.
+type EndpointReplica struct {
+	ID          string `json:"id"`
+	EndpointID  string `json:"endpoint_id"`
+	Version     uint   `json:"version"`
+	Role        string `json:"role"`
+	GPU         string `json:"gpu"`
+	GPUCount    uint32 `json:"gpu_count"`
+	Locality    string `json:"locality"`
+	PoolName    string `json:"pool_name,omitempty"`
+	ContainerID string `json:"container_id"`
+	WorkerID    string `json:"worker_id,omitempty"`
+	MachineID   string `json:"machine_id,omitempty"`
+	// ProviderWorkspaceID is set when the replica runs on a workspace's
+	// contributed (provider pool) machine; that workspace earns a share of
+	// the revenue routed to the replica.
+	ProviderWorkspaceID string        `json:"provider_workspace_id,omitempty"`
+	Address             string        `json:"address,omitempty"`
+	Status              ReplicaStatus `json:"status"`
+	StatusReason        string        `json:"status_reason,omitempty"`
+	// Protected replicas satisfy min_replicas: they may trigger provisioning
+	// and are never evictable. Everything else is opportunistic.
+	Protected bool `json:"protected"`
+	// Tuning replicas are dedicated to live tuning and take no public traffic.
+	Tuning bool `json:"tuning"`
+	// SecretHash is the SHA-256 of the per-replica secret handed to the
+	// container as BEAM_REPLICA_SECRET; harness RPCs must present it.
+	SecretHash     string          `json:"secret_hash,omitempty"`
+	HarnessEnabled bool            `json:"harness_enabled"`
+	ConfigRevision uint64          `json:"config_revision"`
+	Capacity       ReplicaCapacity `json:"capacity"`
+	Capabilities   json.RawMessage `json:"capabilities,omitempty"`
+	StartedAt      time.Time       `json:"started_at"`
+	ReadyAt        time.Time       `json:"ready_at,omitempty"`
+	LastHeartbeat  time.Time       `json:"last_heartbeat"`
+	EndedAt        time.Time       `json:"ended_at,omitempty"`
+	DrainDeadline  time.Time       `json:"drain_deadline,omitempty"`
+}
+
+// Serving reports whether the replica may receive traffic.
+func (r *EndpointReplica) Serving() bool {
+	return r != nil && r.Status == ReplicaStatusReady && !r.Tuning
+}
+
+// Alive reports whether the replica is scheduling, loading or ready, i.e.
+// counts toward a target's live set (draining and evicting replicas do not).
+func (r *EndpointReplica) Alive() bool {
+	return r.Status == ReplicaStatusScheduling || r.Status == ReplicaStatusLoading || r.Status == ReplicaStatusReady
+}
+
+// --- Live config -----------------------------------------------------------------
+
+type ConfigRevisionScope string
+
+const (
+	ConfigScopeTarget  ConfigRevisionScope = "target"
+	ConfigScopeReplica ConfigRevisionScope = "replica"
+)
+
+type ConfigRevisionSource string
+
+const (
+	ConfigSourceGit  ConfigRevisionSource = "git"
+	ConfigSourceLive ConfigRevisionSource = "live"
+)
+
+// EndpointConfigRevision is one version of the live harness config for a
+// GPU target (fleet) or a single replica (tuning).
+type EndpointConfigRevision struct {
+	Revision   uint64               `json:"revision"`
+	EndpointID string               `json:"endpoint_id"`
+	Scope      ConfigRevisionScope  `json:"scope"`
+	ScopeKey   string               `json:"scope_key"`
+	Config     map[string]any       `json:"config"`
+	Author     string               `json:"author,omitempty"`
+	Source     ConfigRevisionSource `json:"source"`
+	CreatedAt  time.Time            `json:"created_at"`
+}
+
+// ConfigAck is a replica's report on applying a config revision.
+type ConfigAck struct {
+	ReplicaID string          `json:"replica_id"`
+	Revision  uint64          `json:"revision"`
+	Applied   bool            `json:"applied"`
+	Error     string          `json:"error,omitempty"`
+	Effective json.RawMessage `json:"effective,omitempty"`
+	At        time.Time       `json:"at"`
+}
+
+// --- GitOps ------------------------------------------------------------------------
+
 type GitOpsStatus string
 
 const (
@@ -743,16 +679,11 @@ const (
 	GitOpsStatusRetired GitOpsStatus = "retired"
 )
 
-const (
-	GitOpsKindEndpoint = "endpoint"
-	GitOpsKindService  = "service"
-)
-
 // GitOpsEndpointState is the apply state of one repo directory.
 type GitOpsEndpointState struct {
 	Path       string       `json:"path"`
 	ID         string       `json:"id"`
-	Kind       string       `json:"kind"` // GitOpsKindEndpoint|GitOpsKindService
+	Kind       string       `json:"kind"` // "endpoint" | "service"
 	AppliedSHA string       `json:"applied_sha,omitempty"`
 	Status     GitOpsStatus `json:"status"`
 	Error      string       `json:"error,omitempty"`
@@ -781,23 +712,17 @@ type GitOpsState struct {
 	StartedAt   time.Time `json:"started_at,omitempty"`
 }
 
-// GitOpsReport is what the deployer posts back after applying one SHA.
+// GitOpsReport is what the deployer posts back after applying one SHA: one
+// result per app directory found in the repo.
 type GitOpsReport struct {
-	RunID      string               `json:"run_id"`
-	SHA        string               `json:"sha"`
-	Error      string               `json:"error,omitempty"`
-	Discovered []GitOpsDiscovered   `json:"discovered"`
-	Results    []GitOpsDeployResult `json:"results"`
+	RunID   string               `json:"run_id"`
+	SHA     string               `json:"sha"`
+	Error   string               `json:"error,omitempty"`
+	Results []GitOpsDeployResult `json:"results"`
 }
 
-// GitOpsDiscovered is one endpoint or service found in the repo at the SHA.
-type GitOpsDiscovered struct {
-	Path string `json:"path"`
-	ID   string `json:"id"`
-	Kind string `json:"kind"` // endpoint|service
-}
-
-// GitOpsDeployResult is the outcome of deploying one discovered stub.
+// GitOpsDeployResult is the outcome for one app directory. ID is empty when
+// the directory's app failed to import.
 type GitOpsDeployResult struct {
 	Path    string `json:"path"`
 	ID      string `json:"id"`
@@ -809,15 +734,7 @@ type GitOpsDeployResult struct {
 	Version uint   `json:"version,omitempty"`
 }
 
-// ConfigAck is a replica's report on applying a config revision.
-type ConfigAck struct {
-	ReplicaID string          `json:"replica_id"`
-	Revision  uint64          `json:"revision"`
-	Applied   bool            `json:"applied"`
-	Error     string          `json:"error,omitempty"`
-	Effective json.RawMessage `json:"effective,omitempty"`
-	At        time.Time       `json:"at"`
-}
+// --- Traffic -------------------------------------------------------------------------
 
 // RouteSample is one completed /v1 request observed by the router.
 type RouteSample struct {
@@ -837,33 +754,7 @@ type RouteSample struct {
 }
 
 // Failed reports whether the sample counts as an error for rollout decisions.
-func (s RouteSample) Failed() bool {
-	return s.StatusCode >= 500 || s.StatusCode == 0
-}
-
-// ProviderEarnings is what a workspace earned from requests served by its
-// contributed machines.
-type ProviderEarnings struct {
-	Requests         int64 `json:"requests"`
-	PromptTokens     int64 `json:"prompt_tokens"`
-	CompletionTokens int64 `json:"completion_tokens"`
-	Images           int64 `json:"images"`
-	EarningsMicroUSD int64 `json:"earnings_micro_usd"`
-}
-
-func (e *ProviderEarnings) Add(o ProviderEarnings) {
-	e.Requests += o.Requests
-	e.PromptTokens += o.PromptTokens
-	e.CompletionTokens += o.CompletionTokens
-	e.Images += o.Images
-	e.EarningsMicroUSD += o.EarningsMicroUSD
-}
-
-type ProviderEarningsReport struct {
-	Total      ProviderEarnings            `json:"total"`
-	PerMachine map[string]ProviderEarnings `json:"per_machine"`
-	PerDay     map[string]ProviderEarnings `json:"per_day"`
-}
+func (s RouteSample) Failed() bool { return s.StatusCode >= 500 || s.StatusCode == 0 }
 
 // RouteMetrics aggregates RouteSamples over a window.
 type RouteMetrics struct {
@@ -902,9 +793,29 @@ func (m RouteMetrics) MeanTPOTMs() int64 {
 	if m.CompletionTokens == 0 {
 		return 0
 	}
-	decode := m.DurationSumMs - m.TTFTSumMs
-	if decode < 0 {
-		decode = 0
-	}
-	return decode / m.CompletionTokens
+	return max(m.DurationSumMs-m.TTFTSumMs, 0) / m.CompletionTokens
+}
+
+// ProviderEarnings is what a workspace earned from requests served by its
+// contributed machines.
+type ProviderEarnings struct {
+	Requests         int64 `json:"requests"`
+	PromptTokens     int64 `json:"prompt_tokens"`
+	CompletionTokens int64 `json:"completion_tokens"`
+	Images           int64 `json:"images"`
+	EarningsMicroUSD int64 `json:"earnings_micro_usd"`
+}
+
+func (e *ProviderEarnings) Add(o ProviderEarnings) {
+	e.Requests += o.Requests
+	e.PromptTokens += o.PromptTokens
+	e.CompletionTokens += o.CompletionTokens
+	e.Images += o.Images
+	e.EarningsMicroUSD += o.EarningsMicroUSD
+}
+
+type ProviderEarningsReport struct {
+	Total      ProviderEarnings            `json:"total"`
+	PerMachine map[string]ProviderEarnings `json:"per_machine"`
+	PerDay     map[string]ProviderEarnings `json:"per_day"`
 }
