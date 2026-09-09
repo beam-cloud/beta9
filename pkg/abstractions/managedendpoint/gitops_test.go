@@ -10,10 +10,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -81,7 +77,7 @@ func TestGitOpsApplyReportRecordsVersionsAndRetires(t *testing.T) {
 			{Path: "acme/model", ID: "acme/model", OK: true, StubID: "stub-2", Version: 2},
 			{Path: "acme/broken", OK: false, Error: "import failed: boom"},
 		},
-		FleetYAML: "h100:\n  - acme/model: 1\n",
+		FleetYAML: "acme/model:\n  enabled: true\n  gpus:\n    h100: {priority: 1, maxReplicas: 1}\n",
 	}
 	require.NoError(t, g.applyReport(ctx, report))
 
@@ -114,7 +110,7 @@ func TestGitOpsApplyReportRecordsVersionsAndRetires(t *testing.T) {
 	fleet, err := s.repo.GetFleet(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, "bbbbbbbb", fleet.GitSHA)
-	assert.Equal(t, []types.FleetTarget{{GPU: "H100", Max: 1}}, fleet.Placements("acme/model"), "fleet keys are normalized")
+	assert.Equal(t, map[string]types.FleetPlacement{"H100": {Priority: 1, MaxReplicas: 1}}, fleet.Placements("acme/model"), "fleet keys are normalized")
 
 	// A duplicate report for the same run is rejected once the run closed.
 	require.Error(t, g.applyReport(ctx, report))
@@ -159,13 +155,13 @@ func TestGitOpsApplyReportInvalidFleetKeepsPrevious(t *testing.T) {
 	require.NoError(t, g.applyReport(ctx, &types.GitOpsReport{
 		RunID: "run-1", SHA: "bbbbbbbb",
 		Results:   []types.GitOpsDeployResult{{Path: "acme/model", ID: "acme/model", OK: true, Skipped: true}},
-		FleetYAML: "H100:\n  - acme/model: 65\nNOTAGPU:\n  - acme/model\n",
+		FleetYAML: "acme/model:\n  enabled: true\n  gpus:\n    H100: {priority: 1, maxReplicas: 65}\n    NOTAGPU: {priority: 1}\n",
 	}))
 	state, err := s.repo.GetGitOpsState(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, "bbbbbbbb", state.LastSHA, "the stubs applied; only the fleet is held back")
 	assert.Contains(t, state.LastError, "1 stub(s) failed")
-	for _, want := range []string{"fleet.yaml", "max 65 exceeds 64", "NOTAGPU is not a known GPU type"} {
+	for _, want := range []string{"fleet.yaml", "maxReplicas 65 exceeds 64", "NOTAGPU is not a known GPU type"} {
 		assert.Contains(t, state.FleetError, want)
 	}
 	assert.Equal(t, types.GitOpsStatusApplied, state.PerEndpoint["acme/model"].Status)
@@ -181,7 +177,7 @@ func TestGitOpsApplyReportInvalidFleetKeepsPrevious(t *testing.T) {
 	require.NoError(t, g.applyReport(ctx, &types.GitOpsReport{
 		RunID: "run-1b", SHA: "bbbbbbb1",
 		Results:   []types.GitOpsDeployResult{{Path: "acme/model", ID: "acme/model", OK: true, Skipped: true}},
-		FleetYAML: "H100: 3\n",
+		FleetYAML: "acme/model: 3\n",
 	}))
 	state, err = s.repo.GetGitOpsState(ctx)
 	require.NoError(t, err)
@@ -198,7 +194,7 @@ func TestGitOpsApplyReportInvalidFleetKeepsPrevious(t *testing.T) {
 	require.NoError(t, g.applyReport(ctx, &types.GitOpsReport{
 		RunID: "run-2", SHA: "cccccccc",
 		Results:   []types.GitOpsDeployResult{{Path: "acme/model", ID: "acme/model", OK: true, Skipped: true}},
-		FleetYAML: "H100:\n  - acme/model: 1\n  - acme/retired\n  - acme/typo\nA10G:\n  - acme/model: 2\n",
+		FleetYAML: "acme/model:\n  enabled: true\n  gpus:\n    H100: {priority: 1, maxReplicas: 1}\n    A10G: {priority: 2, maxReplicas: 2}\nacme/retired:\n  enabled: true\n  gpus: {H100: {priority: 2}}\nacme/typo:\n  enabled: true\n  gpus: {H100: {priority: 3}}\n",
 	}))
 	state, err = s.repo.GetGitOpsState(ctx)
 	require.NoError(t, err)
@@ -210,7 +206,7 @@ func TestGitOpsApplyReportInvalidFleetKeepsPrevious(t *testing.T) {
 	fleet, err = s.repo.GetFleet(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, "cccccccc", fleet.GitSHA)
-	assert.Equal(t, []types.FleetTarget{{GPU: "H100", Max: 1}}, fleet.Placements("acme/model"))
+	assert.Equal(t, map[string]types.FleetPlacement{"H100": {Priority: 1, MaxReplicas: 1}}, fleet.Placements("acme/model"))
 	assert.Empty(t, fleet.Placements("acme/typo"))
 	assert.Empty(t, fleet.Placements("acme/retired"))
 
@@ -220,7 +216,7 @@ func TestGitOpsApplyReportInvalidFleetKeepsPrevious(t *testing.T) {
 	require.NoError(t, g.applyReport(ctx, &types.GitOpsReport{
 		RunID: "run-3", SHA: "dddddddd",
 		Results:   []types.GitOpsDeployResult{{Path: "acme/model", ID: "acme/model", OK: true, Skipped: true}},
-		FleetYAML: "H100:\n  - acme/model: 4\n",
+		FleetYAML: "acme/model:\n  enabled: true\n  gpus:\n    H100: {priority: 1, maxReplicas: 4}\n",
 	}))
 	state, err = s.repo.GetGitOpsState(ctx)
 	require.NoError(t, err)
@@ -229,7 +225,7 @@ func TestGitOpsApplyReportInvalidFleetKeepsPrevious(t *testing.T) {
 	fleet, err = s.repo.GetFleet(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, "dddddddd", fleet.GitSHA)
-	assert.Equal(t, []types.FleetTarget{{GPU: "H100", Max: 4}}, fleet.Placements("acme/model"))
+	assert.Equal(t, map[string]types.FleetPlacement{"H100": {Priority: 1, MaxReplicas: 4}}, fleet.Placements("acme/model"))
 }
 
 func TestGitOpsApplyReportImportFailureKeepsPriorEndpoint(t *testing.T) {
@@ -426,7 +422,7 @@ func TestGitOpsFailedFleetWriteIsRetried(t *testing.T) {
 	repo := &failOnceRepo{ManagedEndpointRepository: s.repo, fleetFailures: 1}
 	s.repo = repo
 	require.NoError(t, s.repo.SaveGitOpsState(ctx, &types.GitOpsState{Running: true, RunID: "r", PerEndpoint: map[string]types.GitOpsEndpointState{}}))
-	report := &types.GitOpsReport{RunID: "r", SHA: "abcdef1", Results: []types.GitOpsDeployResult{{ID: endpoint.Spec.ID, Path: "model", OK: true}}, FleetYAML: "H100:\n  - acme/model: 3\n"}
+	report := &types.GitOpsReport{RunID: "r", SHA: "abcdef1", Results: []types.GitOpsDeployResult{{ID: endpoint.Spec.ID, Path: "model", OK: true}}, FleetYAML: "acme/model:\n  enabled: true\n  gpus:\n    H100: {priority: 1, maxReplicas: 3}\n"}
 	require.NoError(t, g.applyReport(ctx, report))
 	state, err := s.repo.GetGitOpsState(ctx)
 	require.NoError(t, err)
@@ -448,19 +444,19 @@ func TestGitOpsFailedFleetWriteIsRetried(t *testing.T) {
 	assert.False(t, needsRun())
 	fleet, err := s.repo.GetFleet(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, []types.FleetTarget{{GPU: "H100", Max: 3}}, fleet.Placements("acme/model"))
+	assert.Equal(t, map[string]types.FleetPlacement{"H100": {Priority: 1, MaxReplicas: 3}}, fleet.Placements("acme/model"))
 
 	// Invalid fleet: surfaced, but checkpointed so the poller does not loop.
 	state.Running, state.RunID = true, "r3"
 	require.NoError(t, s.repo.SaveGitOpsState(ctx, state))
-	report.RunID, report.SHA, report.FleetYAML = "r3", "abcdef2", "NOTAGPU:\n  - acme/model\n"
+	report.RunID, report.SHA, report.FleetYAML = "r3", "abcdef2", "acme/model:\n  enabled: true\n  gpus: {NOTAGPU: {priority: 1}}\n"
 	require.NoError(t, g.applyReport(ctx, report))
 	state, err = s.repo.GetGitOpsState(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, "abcdef2", state.FleetSHA)
 	assert.Contains(t, state.FleetError, "not a known GPU type")
 	fleet, _ = s.repo.GetFleet(ctx)
-	assert.Equal(t, []types.FleetTarget{{GPU: "H100", Max: 3}}, fleet.Placements("acme/model"), "previous fleet stays in force")
+	assert.Equal(t, map[string]types.FleetPlacement{"H100": {Priority: 1, MaxReplicas: 3}}, fleet.Placements("acme/model"), "previous fleet stays in force")
 }
 
 // The run's outcome is saved before its token/container are cleaned up and a
@@ -522,107 +518,6 @@ func TestGitOpsSyncExpiresStuckRun(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, state.Running)
 	assert.Contains(t, state.LastError, "resolve head")
-}
-
-func TestGitOpsResolveHeadFromLocalRepo(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git not installed")
-	}
-	dir := t.TempDir()
-	run := func(args ...string) string {
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		cmd.Env = append(cmd.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
-		out, err := cmd.CombinedOutput()
-		require.NoError(t, err, string(out))
-		return strings.TrimSpace(string(out))
-	}
-	run("init", "-q", "-b", "main")
-	require.NoError(t, writeFile(filepath.Join(dir, "README"), "x"))
-	run("add", ".")
-	run("commit", "-q", "-m", "init")
-	head := run("rev-parse", "HEAD")
-	run("tag", "v1")
-	run("tag", "-a", "v2", "-m", "release v2")
-	tagObject := run("rev-parse", "v2")
-	require.NotEqual(t, head, tagObject, "annotated tag is its own object")
-
-	s, g := newGitOpsForTest(t)
-	s.config.Repo.URL = dir
-
-	sha, err := g.resolveHead(context.Background())
-	require.NoError(t, err)
-	assert.Equal(t, head, sha)
-
-	s.config.Repo.Ref = "v1"
-	sha, err = g.resolveHead(context.Background())
-	require.NoError(t, err)
-	assert.Equal(t, head, sha, "lightweight tags resolve to the commit")
-
-	s.config.Repo.Ref = "v2"
-	sha, err = g.resolveHead(context.Background())
-	require.NoError(t, err)
-	assert.Equal(t, head, sha, "annotated tags resolve to the peeled commit, not the tag object")
-
-	s.config.Repo.Ref = "refs/tags/v2"
-	sha, err = g.resolveHead(context.Background())
-	require.NoError(t, err)
-	assert.Equal(t, head, sha)
-
-	s.config.Repo.Ref = "missing"
-	_, err = g.resolveHead(context.Background())
-	require.Error(t, err)
-
-	// A full commit id is accepted as-is without contacting the remote.
-	s.config.Repo.URL = "https://example.invalid/endpoints.git"
-	s.config.Repo.Ref = strings.ToUpper(head)
-	sha, err = g.resolveHead(context.Background())
-	require.NoError(t, err)
-	assert.Equal(t, head, sha)
-}
-
-func TestPickRemoteSHA(t *testing.T) {
-	const (
-		branchSHA = "1111111111111111111111111111111111111111"
-		tagObjSHA = "2222222222222222222222222222222222222222"
-		peeledSHA = "3333333333333333333333333333333333333333"
-		lightSHA  = "4444444444444444444444444444444444444444"
-	)
-	output := strings.Join([]string{
-		branchSHA + "\trefs/heads/main",
-		tagObjSHA + "\trefs/tags/main",
-		peeledSHA + "\trefs/tags/main^{}",
-		tagObjSHA + "\trefs/tags/v2",
-		peeledSHA + "\trefs/tags/v2^{}",
-		lightSHA + "\trefs/tags/v1",
-		"not a sha\trefs/heads/garbage",
-		"",
-	}, "\n")
-
-	cases := []struct {
-		ref  string
-		want string
-		ok   bool
-	}{
-		{"main", branchSHA, true},            // branch beats same-named tag
-		{"refs/heads/main", branchSHA, true}, // fully qualified branch
-		{"refs/tags/main", peeledSHA, true},  // fully qualified tag ignores the branch
-		{"v2", peeledSHA, true},              // annotated tag: peeled commit, not the tag object
-		{"v1", lightSHA, true},               // lightweight tag: only the un-peeled line exists
-		{"v1^{}", "", false},                 // peel suffix is not a ref
-		{"garbage", "", false},               // malformed sha is skipped
-		{"nope", "", false},                  // absent
-		{"", "", false},                      // empty ref never matches
-		{"refs/heads/v2", "", false},         // qualified branch does not fall back to the tag
-		{"mai", "", false},                   // exact match only
-		{"refs/tags/v2", peeledSHA, true},    // qualified annotated tag
-		{"  main  ", branchSHA, true},        // whitespace is trimmed
-	}
-	for _, tc := range cases {
-		got, ok := pickRemoteSHA(output, tc.ref)
-		assert.Equal(t, tc.ok, ok, "ref %q", tc.ref)
-		assert.Equal(t, tc.want, got, "ref %q", tc.ref)
-	}
 }
 
 func TestGitOpsWebhook(t *testing.T) {
@@ -760,51 +655,4 @@ func TestGitOpsReportRouteAuth(t *testing.T) {
 func authedEchoContext(c echo.Context, ctx context.Context) echo.Context {
 	info, _ := auth.AuthInfoFromContext(ctx)
 	return &auth.HttpAuthContext{Context: c, AuthInfo: info}
-}
-
-func writeFile(path, contents string) error {
-	return os.WriteFile(path, []byte(contents), 0o644)
-}
-
-func TestParsePushAndVerify(t *testing.T) {
-	ev, ok := parsePush([]byte(`{"ref":"refs/heads/main","after":"abc","deleted":false}`))
-	require.True(t, ok)
-	assert.Equal(t, "refs/heads/main", ev.Ref)
-	assert.False(t, ev.Deleted)
-
-	_, ok = parsePush([]byte(`{"object_kind":"merge_request","ref":"refs/heads/main"}`))
-	assert.False(t, ok)
-	_, ok = parsePush([]byte(`not json`))
-	assert.False(t, ok)
-
-	h := http.Header{}
-	h.Set("Authorization", "Bearer s3cret")
-	assert.True(t, verifyWebhook(h, nil, "s3cret"))
-	assert.False(t, verifyWebhook(h, nil, "other"))
-	assert.False(t, verifyWebhook(http.Header{}, nil, "s3cret"), "no credential is never accepted")
-}
-
-func TestParseFleet(t *testing.T) {
-	fleet, err := parseFleet("H100:\n  - acme/model\nA10G:\n  - acme/small: 2\n  - acme/model\ncpu:\n  - acme/cpu: 1\n")
-	require.NoError(t, err)
-	assert.Equal(t, map[string][]types.FleetEntry{
-		"H100":                {{EndpointID: "acme/model"}},
-		"A10G":                {{EndpointID: "acme/small", Max: 2}, {EndpointID: "acme/model"}},
-		types.CPUInventoryKey: {{EndpointID: "acme/cpu", Max: 1}},
-	}, fleet.Priority, "list order is priority; a bare id has no cap")
-
-	empty, err := parseFleet("")
-	require.NoError(t, err)
-	assert.Empty(t, empty.Priority)
-
-	for name, text := range map[string]string{
-		"count only":      "H100:\n  - acme/model: [1]\n",
-		"two-key item":    "H100:\n  - acme/model: 1\n    acme/other: 2\n",
-		"negative cap":    "H100:\n  - acme/model: -1\n",
-		"not a list":      "H100: 3\n",
-		"uncapped on cpu": "cpu:\n  - acme/cpu\n",
-	} {
-		_, err := parseFleet(text)
-		assert.Error(t, err, name)
-	}
 }

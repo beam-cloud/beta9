@@ -15,13 +15,9 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// Replica lifecycle: observe container state, probe health when no harness
-// is present, and start / drain / stop containers.
-
 const probeTimeout = 3 * time.Second
 
-// observeReplicas syncs each replica record with its container and returns
-// the replicas that are still alive.
+// observeReplicas syncs each replica with its container and returns the ones still alive.
 func (c *controller) observeReplicas(ctx context.Context, replicas []*types.EndpointReplica) []*types.EndpointReplica {
 	live := make([]*types.EndpointReplica, 0, len(replicas))
 	for _, replica := range replicas {
@@ -65,25 +61,19 @@ func (c *controller) observeReplica(ctx context.Context, replica *types.Endpoint
 	return out, err
 }
 
-// syncReplica folds the container's state into the replica. Terminal
-// transitions stop the container when it is still around.
+// syncReplica folds the container's state into the replica.
 func (c *controller) syncReplica(ctx context.Context, replica *types.EndpointReplica) error {
 	now := time.Now()
 	state, err := c.s.containers.GetContainerState(replica.ContainerID)
 	if err != nil && !containerStateNotFound(err) {
-		// A transient repository error says nothing about the container;
-		// leave the replica untouched for the next observation.
 		return err
 	}
 	if err != nil || state == nil {
-		// The container record is gone: it exited, was evicted, or was never
-		// scheduled. Give the scheduler a moment after Run before concluding.
+		// The container is gone: exited, evicted, or never scheduled.
 		if now.Sub(replica.StartedAt) < containerLostGrace {
 			return nil
 		}
 		if replica.Status == types.ReplicaStatusScheduling {
-			// The failure backoff keeps the controller from re-submitting a
-			// request the scheduler rejected on every tick.
 			if status, err := c.s.containers.GetContainerRequestStatus(replica.ContainerID); err == nil && status == types.ContainerRequestStatusFailed {
 				return c.finishReplica(ctx, replica, types.ReplicaStatusFailed, "scheduler failed the request")
 			}
@@ -108,9 +98,7 @@ func (c *controller) syncReplica(ctx context.Context, replica *types.EndpointRep
 	case types.ContainerStatusStopping:
 		if replica.Alive() {
 			if state.Evicting {
-				// The scheduler picked this replica as a victim for a
-				// serverless workload. Pull it from rotation now; the worker
-				// gives it DrainSeconds to finish in-flight requests.
+				// Picked as an eviction victim; the worker gives it DrainSeconds.
 				replica.Status = types.ReplicaStatusEvicting
 				replica.StatusReason = "evicted for higher priority workload"
 				replica.DrainDeadline = now.Add(time.Duration(state.DrainSeconds) * time.Second)
@@ -170,9 +158,7 @@ func (c *controller) syncReplica(ctx context.Context, replica *types.EndpointRep
 	return nil
 }
 
-// containerStateNotFound reports whether err is the container repository's
-// "no such container state" sentinel, either as the typed error or in its
-// string form after crossing a wrapper.
+// containerStateNotFound matches the typed sentinel or its string form after crossing a wrapper.
 func containerStateNotFound(err error) bool {
 	var notFound *types.ErrContainerStateNotFound
 	return errors.As(err, &notFound) || (&types.ErrContainerStateNotFound{}).From(err)
@@ -184,9 +170,7 @@ func (c *controller) exitStatus(replica *types.EndpointReplica) types.ReplicaSta
 		return types.ReplicaStatusEvicted
 	}
 	exitCode, err := c.s.containers.GetContainerExitCode(replica.ContainerID)
-	// The worker's exit code is authoritative for evictions: an engine that
-	// drains fast on SIGTERM reports "draining" through the harness before
-	// the controller ever sees the container marked as a victim.
+	// The worker's exit code is authoritative for evictions.
 	if err == nil && exitCode == int(types.ContainerExitCodeEvicted) {
 		return types.ReplicaStatusEvicted
 	}
@@ -196,9 +180,8 @@ func (c *controller) exitStatus(replica *types.EndpointReplica) types.ReplicaSta
 	return types.ReplicaStatusFailed
 }
 
-// probeReplica drives status for endpoints without a harness: readiness from
-// the replica's own health path and, when it exposes one, capacity from its
-// Prometheus metrics path.
+// probeReplica drives status for endpoints without a harness from the health
+// path and, when present, the metrics path.
 func (c *controller) probeReplica(ctx context.Context, replica *types.EndpointReplica) {
 	client := c.s.probeClient(replica.Address)
 	baseURL := "http://replica"
@@ -268,10 +251,8 @@ func (c *controller) finishReplica(ctx context.Context, replica *types.EndpointR
 	return nil
 }
 
-// stopAndFinish stops the container and records the terminal status. A
-// failed stop leaves the replica live so the next observation retries it: a
-// terminal record must mean the container was told to stop, never that a
-// still-running workload was forgotten while a replacement launched.
+// stopAndFinish stops the container and records the terminal status. A failed
+// stop leaves the replica live so the next pass retries it.
 func (c *controller) stopAndFinish(ctx context.Context, replica *types.EndpointReplica, status types.ReplicaStatus, reason string) error {
 	if c.s.scheduler != nil {
 		if err := c.s.scheduler.Stop(&types.StopContainerArgs{ContainerId: replica.ContainerID, Force: true, Reason: types.StopContainerReasonScheduler}); err != nil {
@@ -282,8 +263,7 @@ func (c *controller) stopAndFinish(ctx context.Context, replica *types.EndpointR
 	return c.finishReplica(ctx, replica, status, reason)
 }
 
-// drainReplica takes a replica out of rotation and asks the harness (or the
-// deadline) to finish in-flight work before the container is stopped.
+// drainReplica takes a replica out of rotation and lets in-flight work finish before the stop.
 func (c *controller) drainReplica(ctx context.Context, replica *types.EndpointReplica, drainSeconds uint32, evict bool, reason string) error {
 	return c.s.repo.WithReplicaLock(ctx, replica.ID, func(ctx context.Context) error {
 		current, err := c.s.repo.GetReplica(ctx, replica.ID)
@@ -376,26 +356,23 @@ func (c *controller) startReplica(ctx context.Context, spec startSpec) (*types.E
 		requestGpu, gpuRequest, gpuCount = gpu, []string{gpu}, max(gpuSpec.Count, 1)
 	}
 	request := &types.ContainerRequest{
-		ContainerId:  containerID,
-		EntryPoint:   appendEngineArgs(entrypoint, gpuSpec.EngineArgs),
-		Env:          env,
-		Cpu:          stubConfig.Runtime.Cpu,
-		Memory:       stubConfig.Runtime.Memory,
-		Gpu:          requestGpu,
-		GpuRequest:   gpuRequest,
-		GpuCount:     gpuCount,
-		ImageId:      stubConfig.Runtime.ImageId,
-		StubId:       stub.ExternalId,
-		AppId:        stub.App.ExternalId,
-		WorkspaceId:  workspace.ExternalId,
-		Workspace:    *workspace,
-		Stub:         *stub,
-		Mounts:       mounts,
-		Ports:        []uint32{endpoint.Spec.Port},
-		PoolSelector: spec.Pool.Name,
-		// Replicas fill idle capacity only: the scheduler never waits for or
-		// provisions a worker for one, and (when preemption is on) stops it
-		// to make room for a serverless workload.
+		ContainerId:       containerID,
+		EntryPoint:        appendEngineArgs(entrypoint, gpuSpec.EngineArgs),
+		Env:               env,
+		Cpu:               stubConfig.Runtime.Cpu,
+		Memory:            stubConfig.Runtime.Memory,
+		Gpu:               requestGpu,
+		GpuRequest:        gpuRequest,
+		GpuCount:          gpuCount,
+		ImageId:           stubConfig.Runtime.ImageId,
+		StubId:            stub.ExternalId,
+		AppId:             stub.App.ExternalId,
+		WorkspaceId:       workspace.ExternalId,
+		Workspace:         *workspace,
+		Stub:              *stub,
+		Mounts:            mounts,
+		Ports:             []uint32{endpoint.Spec.Port},
+		PoolSelector:      spec.Pool.Name,
 		OpportunisticOnly: true,
 		Evictable:         c.s.config.Preemption.Enabled,
 		DrainSeconds:      drainSeconds,
@@ -434,9 +411,7 @@ func (c *controller) startReplica(ctx context.Context, spec startSpec) (*types.E
 	return replica, nil
 }
 
-// appendEngineArgs adds target-specific engine args to the stub's entrypoint.
-// SDK entrypoints are `sh -c "<script>"`, so args are appended to the script;
-// plain argv entrypoints get them appended as arguments.
+// appendEngineArgs appends engine args to a `sh -c` script or a plain argv entrypoint.
 func appendEngineArgs(entrypoint []string, args []string) []string {
 	if len(args) == 0 {
 		return entrypoint

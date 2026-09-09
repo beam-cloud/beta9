@@ -10,21 +10,14 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// Metering follows the managed compute pattern: the request path only
-// increments Redis counters (AddUsage, one atomic write per request), and a
-// periodic flush sends each closed minute bucket to the billing meter as one
-// event per workspace, model and metric. Bucket ids make the events idempotent
-// at the meter, and a bucket is deleted only after every event landed, so a
-// meter outage delays billing and never loses or duplicates it. One gateway
-// flushes at a time under a lease.
+// meter flushes closed minute buckets (see AddUsage) to the billing meter as
+// idempotent events; a bucket is deleted only after every event landed.
 
 const (
 	meterLockKey  = "managed_endpoint:meter"
 	meterLockTTL  = 30 * time.Second
 	meterInterval = time.Minute
-	// meterGrace keeps the current minute open; buckets are keyed by the time of
-	// recording, so anything older than this is final.
-	meterGrace = 2 * time.Minute
+	meterGrace    = 2 * time.Minute // buckets older than this are final
 )
 
 type meter struct {
@@ -50,8 +43,7 @@ func (m *meter) run(ctx context.Context) {
 	}
 }
 
-// flush delivers closed buckets oldest first and stops at the first failure so
-// billing stays ordered and the failed bucket is retried next tick.
+// flush delivers closed buckets oldest first, stopping at the first failure.
 func (m *meter) flush(ctx context.Context) error {
 	buckets, err := m.s.repo.ListMeterBuckets(ctx, time.Now().Add(-meterGrace))
 	if err != nil {

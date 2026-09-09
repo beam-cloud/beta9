@@ -28,10 +28,8 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// The /v1 route: OpenRouter/OpenAI-compatible inference surface over managed
-// endpoint replicas. One pipeline for every kind; adapters carry the
-// per-route differences. Listings mirror OpenRouter's paths and field names
-// so its SDKs and provider tooling work unchanged.
+// The /v1 route: an OpenAI/OpenRouter-compatible surface over replicas. One
+// pipeline for every kind; adapters carry the per-route differences.
 
 const (
 	maxBody               = 64 << 20
@@ -87,15 +85,10 @@ func counter(m *sync.Map, key string) *atomic.Int64 {
 	return v.(*atomic.Int64)
 }
 
-// --- adapters ------------------------------------------------------------------
-
-// An adapter describes how one OpenAI-style route is proxied and metered.
-// Adding a modality (audio, ...) is a new adapter, nothing else.
+// adapter is how one OpenAI-style route is proxied and metered.
 type adapter struct {
 	UpstreamPath string
-	// LLM routes use prompt/session affinity and token-aware selection and
-	// accept "stream": true (usage must arrive in the final SSE chunk).
-	LLM bool
+	LLM          bool // affinity and token-aware selection; streams carry usage in the final chunk
 	// Usage extracts billable usage from a complete (non-stream) JSON body.
 	Usage func(body []byte) Usage
 }
@@ -109,9 +102,8 @@ var adapters = map[types.EndpointRoute]adapter{
 	types.EndpointRouteInvoke:           {"/invoke", false, func([]byte) Usage { return Usage{Requests: 1, Found: true} }},
 }
 
-// Usage is the authoritative billable usage extracted from an upstream
-// response. Never estimated: when the engine reports nothing, the request is
-// not billed and is flagged as missing usage.
+// Usage is the billable usage the engine reported. It is never estimated: a
+// response without usage is not billed.
 type Usage struct {
 	PromptTokens     int64
 	CompletionTokens int64
@@ -166,8 +158,7 @@ func sseUsage(line []byte) (Usage, bool) {
 	return u, u.Found
 }
 
-// forceIncludeUsage rewrites a streaming request so the engine emits a final
-// usage chunk (stream_options.include_usage). Reports whether it is a stream.
+// forceIncludeUsage asks a streaming request for a final usage chunk and reports whether it is a stream.
 func forceIncludeUsage(payload map[string]any) bool {
 	if stream, _ := payload["stream"].(bool); !stream {
 		return false
@@ -181,8 +172,6 @@ func forceIncludeUsage(payload map[string]any) bool {
 	return true
 }
 
-// routeFromPath maps "/v1/chat/completions" -> chat/completions and
-// "/v1/models/<id>/invoke" -> invoke with the model id.
 func routeFromPath(prefix, path string) (types.EndpointRoute, string, bool) {
 	rest := strings.TrimPrefix(strings.TrimPrefix(strings.TrimSuffix(path, "/"), prefix), "/")
 	if id, ok := strings.CutPrefix(rest, "models/"); ok {
@@ -194,11 +183,7 @@ func routeFromPath(prefix, path string) (types.EndpointRoute, string, bool) {
 	return route, "", ok && route != types.EndpointRouteInvoke
 }
 
-// --- pricing -------------------------------------------------------------------
-
-// computeCostMicroUSD prices usage with exact rational arithmetic and rounds
-// half-up to micro-dollars. Cached prompt tokens (a subset of PromptTokens)
-// are billed at the cached rate when one is set, else at the prompt rate.
+// computeCostMicroUSD prices usage exactly and rounds half-up to micro-dollars.
 func computeCostMicroUSD(p types.Pricing, u Usage) (int64, error) {
 	if p.IsZero() {
 		return 0, nil
@@ -250,8 +235,6 @@ func billable(endpoint *types.ManagedEndpoint) bool {
 	return !endpoint.Spec.Catalog.Free && !endpoint.Spec.Pricing.IsZero()
 }
 
-// --- errors --------------------------------------------------------------------
-
 type routeError struct {
 	Status  int
 	Code    string
@@ -278,8 +261,6 @@ func (e *routeError) write(ctx echo.Context) error {
 }
 
 var errRegistry = &routeError{http.StatusServiceUnavailable, "registry_unavailable", "endpoint registry unavailable"}
-
-// --- request pipeline ----------------------------------------------------------
 
 // routeRequest is the state of one inference request through the pipeline.
 type routeRequest struct {
@@ -331,8 +312,7 @@ func (r *router) handleRoute(ctx echo.Context) error {
 	}
 	rq.model = endpoint.Spec.ID
 	if rq.route != types.EndpointRouteInvoke {
-		// OpenAI-protocol payloads name the model; /invoke is selected by path
-		// and its payload is the app's own schema, left untouched.
+		// /invoke payloads are the app's own schema and are left untouched.
 		rq.setModel(endpoint.Spec.ID)
 	}
 	if rerr := r.admit(ctx.Request().Context(), rq, endpoint); rerr != nil {
@@ -342,8 +322,6 @@ func (r *router) handleRoute(ctx echo.Context) error {
 	return r.serve(rq, endpoint)
 }
 
-// readRequest buffers the body, extracts the model list and prepares the
-// payload (forcing usage in streams).
 func (r *router) readRequest(rq *routeRequest, pathModel string) *routeError {
 	req := rq.ctx.Request()
 	body, err := io.ReadAll(io.LimitReader(req.Body, maxBody+1))
@@ -391,8 +369,7 @@ func (r *router) readRequest(rq *routeRequest, pathModel string) *routeError {
 	return nil
 }
 
-// setModel makes the selected endpoint the model the engine sees: a "models"
-// fallback or a path model must not forward the caller's first choice.
+// setModel makes the selected endpoint the model the engine sees.
 func (rq *routeRequest) setModel(model string) {
 	var payload map[string]any
 	if json.Unmarshal(rq.body, &payload) != nil || payload == nil {
@@ -426,7 +403,7 @@ func multipartModel(boundary string, body []byte) string {
 }
 
 // resolveEndpoint picks the first requested model the caller may use that
-// serves the route, preferring one with ready replicas ("models" fallback).
+// serves the route, preferring one with ready replicas.
 func (r *router) resolveEndpoint(ctx context.Context, rq *routeRequest) (*types.ManagedEndpoint, *routeError) {
 	var first *types.ManagedEndpoint
 	var denied *routeError
@@ -472,8 +449,7 @@ func (r *router) allowed(ctx context.Context, endpoint *types.ManagedEndpoint, a
 	return slices.Contains(allowed, authInfo.Workspace.ExternalId) || slices.Contains(allowed, authInfo.Workspace.Name)
 }
 
-// admissionKeys are the concurrency counters a request holds: per endpoint
-// and per endpoint|workspace, each only when its cap is configured.
+// admissionKeys are the configured concurrency counters a request holds.
 func (r *router) admissionKeys(rq *routeRequest, endpoint *types.ManagedEndpoint) (keys []string, caps []uint32) {
 	if c := r.s.config.Routing.PerEndpointConcurrency; c > 0 {
 		keys, caps = append(keys, endpoint.Spec.ID), append(caps, c)
@@ -484,10 +460,8 @@ func (r *router) admissionKeys(rq *routeRequest, endpoint *types.ManagedEndpoint
 	return keys, caps
 }
 
-// admit applies the credit gate and concurrency caps. The caps are
-// per-gateway safeguards against one workspace or endpoint monopolizing this
-// gateway's connections; the cluster-wide bound on an endpoint is the
-// replicas' own MaxConcurrency, enforced per replica in reserve.
+// admit applies the credit gate and this gateway's concurrency caps; the
+// cluster-wide bound is the replicas' MaxConcurrency, enforced in reserve.
 func (r *router) admit(ctx context.Context, rq *routeRequest, endpoint *types.ManagedEndpoint) *routeError {
 	if billable(endpoint) && r.s.scheduler != nil && rq.auth.Token.TokenType != types.TokenTypeClusterAdmin {
 		if gate := r.s.scheduler.CreditGate(); gate != nil {
@@ -522,9 +496,8 @@ func (r *router) release(rq *routeRequest, endpoint *types.ManagedEndpoint) {
 	}
 }
 
-// servingReplicas lists replicas that may take this request right now. Old
-// versions keep serving while the controller rolls the new one out; a pinned
-// replica (X-Beam-Endpoint-Replica, used by tuning agents) bypasses the pool.
+// servingReplicas lists replicas that may take this request; a pinned replica
+// (X-Beam-Endpoint-Replica) bypasses the pool.
 func (r *router) servingReplicas(ctx context.Context, endpoint *types.ManagedEndpoint, pin string, exclude map[string]bool) []*types.EndpointReplica {
 	replicas, err := r.s.repo.ListReplicas(ctx, endpoint.Spec.ID)
 	if err != nil {
@@ -571,10 +544,9 @@ func (r *router) pick(ctx context.Context, rq *routeRequest, endpoint *types.Man
 	}
 }
 
-// choose scores candidates. LLM routes use llmroute (capacity, pressure,
-// affinity, power-of-two); other kinds pick the least loaded replica. Nil
-// means every candidate is saturated. The returned replica has one inflight
-// slot reserved (see reserve); the caller must releaseReplica it exactly once.
+// choose picks a replica (llmroute for LLMs, least loaded otherwise) with one
+// inflight slot reserved; the caller must releaseReplica it exactly once. Nil
+// means every candidate is saturated.
 func (r *router) choose(ctx context.Context, rq *routeRequest, endpoint *types.ManagedEndpoint, candidates []*types.EndpointReplica) *types.EndpointReplica {
 	now := time.Now()
 	slowStart := time.Duration(r.s.config.Routing.SlowStartSeconds) * time.Second
@@ -607,9 +579,7 @@ func (r *router) choose(ctx context.Context, rq *routeRequest, endpoint *types.M
 	if rq.adapter.LLM && rq.info != nil {
 		affinity = state.Affinity(ctx, rq.info)
 	}
-	// Reservation is atomic with selection: concurrent requests that all
-	// picked the same replica race on the counter, and the losers move on
-	// to the next candidate instead of overcommitting it.
+	// Losers of the reservation race move on to the next candidate.
 	for len(eligible) > 0 {
 		selection, ok := r.selector.Select(eligible, affinity, rq.info)
 		if !ok {
@@ -624,11 +594,9 @@ func (r *router) choose(ctx context.Context, rq *routeRequest, endpoint *types.M
 	return nil
 }
 
-// reserve takes one inflight slot on replica: the gateway-local counter (used
-// for scoring) and the shared active-stream reservation in Redis, which is
-// what bounds MaxConcurrency across every gateway. Both are left untouched
-// when the replica is full. If Redis is unreachable the local bound alone
-// applies rather than refusing all traffic.
+// reserve takes one inflight slot: the local counter and the shared Redis
+// reservation that bounds MaxConcurrency across gateways. If Redis is
+// unreachable the local bound alone applies.
 func (r *router) reserve(ctx context.Context, rq *routeRequest, state *llmroute.State, replica *types.EndpointReplica) bool {
 	inflight := counter(&r.inflight, replica.ID)
 	if n := inflight.Add(1); replica.Capacity.MaxConcurrency > 0 && n > replica.Capacity.MaxConcurrency {
@@ -673,17 +641,14 @@ func engineMetrics(c types.ReplicaCapacity) llmroute.EngineMetrics {
 	}
 }
 
-// --- proxy ---------------------------------------------------------------------
-
 var hopHeaders = map[string]bool{
 	"Connection": true, "Keep-Alive": true, "Proxy-Authenticate": true, "Proxy-Authorization": true,
 	"Te": true, "Trailer": true, "Transfer-Encoding": true, "Upgrade": true, "Authorization": true,
 	"Content-Length": true, "Host": true,
 }
 
-// serve runs the selection -> proxy -> meter pipeline, retrying once on a
-// different replica when the first attempt fails before any byte reached
-// the client.
+// serve runs select -> proxy -> meter, retrying once on another replica when
+// the first attempt fails before any byte reached the client.
 func (r *router) serve(rq *routeRequest, endpoint *types.ManagedEndpoint) error {
 	ctx := rq.ctx.Request().Context()
 	if rq.adapter.LLM {
@@ -720,10 +685,7 @@ func (r *router) serve(rq *routeRequest, endpoint *types.ManagedEndpoint) error 
 	return rerr.write(rq.ctx)
 }
 
-// proxy sends the request to one replica and relays the response. The bool
-// reports whether a retry on another replica is safe (nothing was written).
-// The replica's inflight slot (local and shared pressure) is held by the
-// caller for the whole attempt.
+// proxy relays one attempt; the bool reports whether a retry is safe (nothing was written).
 func (r *router) proxy(ctx context.Context, rq *routeRequest, endpoint *types.ManagedEndpoint, replica *types.EndpointReplica) (bool, error) {
 	// Upstream lives until the client is gone or the gateway drains.
 	upstreamCtx, cancel := context.WithCancel(ctx)
@@ -786,9 +748,7 @@ func (r *router) proxy(ctx context.Context, rq *routeRequest, endpoint *types.Ma
 			status = http.StatusBadGateway // the stream broke: not a success, not billed
 		}
 		if err == nil && status < 300 && billable(endpoint) && !usage.Found {
-			// The stream completed but the engine never sent its usage chunk.
-			// The bytes are already with the client, so this cannot become a
-			// 502 on the wire; it is recorded as one so it is not billed.
+			// The stream is already with the client; record a 502 so it is not billed.
 			r.recordMissingUsage(rq, endpoint, replica, usage, ttft)
 			return false, nil
 		}
@@ -796,8 +756,6 @@ func (r *router) proxy(ctx context.Context, rq *routeRequest, endpoint *types.Ma
 		return false, err
 	}
 
-	// Nothing has been written yet, so an upstream body failure is still a
-	// gateway error on the wire rather than an empty 200.
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
 	switch {
 	case err != nil:
@@ -827,8 +785,7 @@ func (r *router) proxy(ctx context.Context, rq *routeRequest, endpoint *types.Ma
 	return false, nil
 }
 
-// upstreamQuery drops the gateway's own query parameters (auth_token
-// authenticates to the gateway and must never reach an engine).
+// upstreamQuery drops the gateway's own query parameters (auth_token).
 func upstreamQuery(q url.Values) string {
 	q.Del("auth_token")
 	return q.Encode()
@@ -843,20 +800,16 @@ func errString(err error) string {
 
 var errMissingUsage = &routeError{http.StatusBadGateway, "missing_usage", "upstream response carried no usage; request not billed"}
 
-// recordMissingUsage files a billable response that carried no usage object
-// as a 502: the request is not billed, counts as an error for rollout
-// decisions, and raises the route.missing_usage harness event. Streams and
-// buffered responses share this so both surface in the same place.
+// recordMissingUsage files a billable response without usage as a 502: not
+// billed, counted as an error, and raised as a route.missing_usage event.
 func (r *router) recordMissingUsage(rq *routeRequest, endpoint *types.ManagedEndpoint, replica *types.EndpointReplica, usage Usage, ttft time.Duration) {
 	r.record(rq, endpoint, replica, errMissingUsage.Status, usage, ttft, errMissingUsage.Message)
 	r.s.emit(types.EventEndpointHarness, types.EventEndpointSchema{EndpointID: endpoint.Spec.ID, Action: "route.missing_usage", ReplicaID: replica.ID, GPU: replica.GPU, Version: replica.Version})
 	log.Warn().Str("endpoint_id", endpoint.Spec.ID).Str("replica_id", replica.ID).Str("request_id", rq.requestID).Bool("stream", rq.stream).Msg("managed endpoints: upstream response carried no usage; request not billed")
 }
 
-// relayStream forwards SSE events as they arrive, flushing per event. It
-// stamps the gateway generation id on every chunk (so /generation lookups
-// match what the client saw), pulls usage from the final chunk and measures
-// TTFT at the first chunk carrying generated output (see generatesOutput).
+// relayStream forwards SSE events as they arrive, stamping the generation id,
+// pulling usage from the final chunk and measuring TTFT at the first output.
 func relayStream(w *echo.Response, body io.Reader, requestID string, sentAt time.Time) (Usage, time.Duration, error) {
 	flusher, _ := w.Writer.(http.Flusher)
 	reader := bufio.NewReaderSize(body, 64<<10)
@@ -890,10 +843,8 @@ func relayStream(w *echo.Response, body io.Reader, requestID string, sentAt time
 	}
 }
 
-// generatesOutput reports whether an SSE data line carries the first thing a
-// caller can use: content, a tool call or a completion text. Role-only
-// preambles, usage-only chunks, empty deltas and [DONE] do not count, so TTFT
-// is the time to the first generated token rather than to the engine's
+// generatesOutput reports whether an SSE line carries content, a tool call or
+// completion text, so TTFT is the first generated token and not the engine's
 // opening frame.
 func generatesOutput(line []byte) bool {
 	payload := bytes.TrimSpace(line[len("data:"):])
@@ -945,8 +896,7 @@ func stampSSE(line []byte, requestID string) []byte {
 	return append(append([]byte("data: "), out...), '\n')
 }
 
-// decorateJSON adds OpenRouter-style fields to a successful JSON object body.
-// The id is the gateway generation id, which /generation resolves.
+// decorateJSON adds OpenRouter-style fields (generation id, usage, cost) to a JSON body.
 func decorateJSON(body []byte, requestID string, usage Usage, costMicro int64) []byte {
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil || payload == nil {
@@ -964,10 +914,6 @@ func decorateJSON(body []byte, requestID string, usage Usage, costMicro int64) [
 	return out
 }
 
-// --- metering ------------------------------------------------------------------
-
-// record writes the route sample the controller reads (rollouts, demand) and
-// queues the route event and usage counters for the request.
 func (r *router) record(rq *routeRequest, endpoint *types.ManagedEndpoint, replica *types.EndpointReplica, status int, usage Usage, ttft time.Duration, errMsg string) {
 	now := time.Now()
 	cost := int64(0)
@@ -1010,11 +956,8 @@ func (r *router) record(rq *routeRequest, endpoint *types.ManagedEndpoint, repli
 	r.persist(event)
 }
 
-// persist is the accounting for one request, run on the handler goroutine
-// after the response. Each leg is idempotent on the request id: the route
-// event (analytics), the generation for /generation, and AddUsage, the one
-// atomic write billing depends on (daily usage counters and the minute meter
-// bucket; see meter.go). A replayed request id never double-counts.
+// persist is the accounting for one request: route event, generation and
+// AddUsage, each idempotent on the request id.
 func (r *router) persist(event types.EventEndpointRouteSchema) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -1043,8 +986,6 @@ func (r *router) persist(event types.EventEndpointRouteSchema) {
 		}
 	}
 }
-
-// --- listings ------------------------------------------------------------------
 
 func modalities(spec *types.ManagedEndpointSpec) (input []string, output []string) {
 	input, output = []string{"text"}, []string{"text"}
@@ -1141,8 +1082,7 @@ func (r *router) handleListModels(ctx echo.Context) error {
 	return ctx.JSON(http.StatusOK, map[string]any{"object": "list", "data": data})
 }
 
-// providerDocument renders the OpenRouter provider listing: one model per
-// endpoint with readiness, capacity and datacenters derived from localities.
+// providerDocument renders the OpenRouter provider listing.
 func (r *router) providerDocument(ctx echo.Context, endpoints []*types.ManagedEndpoint) error {
 	replicas, _ := r.s.repo.ListAllReplicas(ctx.Request().Context())
 	models := make([]map[string]any, 0, len(endpoints))

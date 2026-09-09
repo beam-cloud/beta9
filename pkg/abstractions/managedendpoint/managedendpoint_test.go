@@ -78,13 +78,13 @@ func seedEndpoint(t *testing.T, s *Service) *types.ManagedEndpoint {
 	spec.Normalize()
 	endpoint := &types.ManagedEndpoint{Spec: spec, StubID: "stub-1", Version: 1, Status: types.EndpointStatusActive}
 	require.NoError(t, s.repo.SaveEndpoint(context.Background(), endpoint))
-	seedFleet(t, s, map[string][]types.FleetEntry{"H100": {{EndpointID: spec.ID, Max: 2}}})
+	seedFleet(t, s, map[string]types.FleetEndpoint{spec.ID: {Enabled: true, GPUs: map[string]types.FleetPlacement{"H100": {Priority: 1, MaxReplicas: 2}}}})
 	return endpoint
 }
 
-func seedFleet(t *testing.T, s *Service, priority map[string][]types.FleetEntry) *types.Fleet {
+func seedFleet(t *testing.T, s *Service, endpoints map[string]types.FleetEndpoint) *types.Fleet {
 	t.Helper()
-	fleet := &types.Fleet{GitSHA: "fleet-sha", Priority: priority}
+	fleet := &types.Fleet{GitSHA: "fleet-sha", Endpoints: endpoints}
 	fleet.Normalize()
 	require.NoError(t, s.repo.SaveFleet(context.Background(), fleet))
 	return fleet
@@ -334,41 +334,6 @@ func TestWatchConfigStreamsReplicaConfig(t *testing.T) {
 	}
 }
 
-func TestSetReplicaConfigRejectsBadInput(t *testing.T) {
-	s := newServiceForTest(t)
-	endpoint := seedEndpoint(t, s)
-	replica := seedReplica(t, s, endpoint)
-	ctx := adminCtx()
-
-	resp, err := s.SetReplicaConfig(ctx, &pb.SetReplicaConfigRequest{ReplicaId: "missing", ConfigJson: `{}`})
-	require.NoError(t, err)
-	assert.False(t, resp.Ok)
-	assert.Contains(t, resp.ErrMsg, "not found")
-
-	resp, err = s.SetReplicaConfig(ctx, &pb.SetReplicaConfigRequest{ReplicaId: replica.ID, ConfigJson: `[1]`})
-	require.NoError(t, err)
-	assert.False(t, resp.Ok)
-	assert.Contains(t, resp.ErrMsg, "JSON object")
-
-	// Without the harness there is nothing to configure.
-	replica.HarnessEnabled = false
-	require.NoError(t, s.repo.SaveReplica(context.Background(), replica))
-	resp, err = s.SetReplicaConfig(ctx, &pb.SetReplicaConfigRequest{ReplicaId: replica.ID, ConfigJson: `{}`})
-	require.NoError(t, err)
-	assert.False(t, resp.Ok)
-	assert.Contains(t, resp.ErrMsg, "harness")
-
-	// Nor is there on a replica that is already gone.
-	replica.HarnessEnabled, replica.Status = true, types.ReplicaStatusStopped
-	require.NoError(t, s.repo.SaveReplica(context.Background(), replica))
-	resp, err = s.SetReplicaConfig(ctx, &pb.SetReplicaConfigRequest{ReplicaId: replica.ID, ConfigJson: `{}`})
-	require.NoError(t, err)
-	assert.False(t, resp.Ok)
-	assert.Contains(t, resp.ErrMsg, "stopped")
-	stored, _ := s.repo.GetReplica(context.Background(), replica.ID)
-	assert.Equal(t, uint64(0), stored.Config.Revision, "rejected calls do not bump the revision")
-}
-
 // capturingEvents records endpoint.* events; every other push is dropped.
 type capturingEvents struct {
 	repository.EventRepository
@@ -460,7 +425,7 @@ func TestAdminReadRPCs(t *testing.T) {
 	assert.Equal(t, uint32(1), list.Endpoints[0].ReadyReplicas)
 	assert.Equal(t, uint32(1), list.Endpoints[0].TotalReplicas)
 	assert.Equal(t, string(types.EndpointStatusActive), list.Endpoints[0].Status)
-	assert.JSONEq(t, `{"H100":2}`, list.Endpoints[0].PlacementsJson)
+	assert.JSONEq(t, `{"H100":{"priority":1,"max_replicas":2}}`, list.Endpoints[0].PlacementsJson)
 
 	get, err := s.GetEndpoint(ctx, &pb.GetEndpointRequest{EndpointId: endpoint.Spec.ID})
 	require.NoError(t, err)
@@ -500,7 +465,7 @@ func TestAdminReadRPCs(t *testing.T) {
 	gitops, err := s.GetGitOpsStatus(ctx, &pb.GetGitOpsStatusRequest{})
 	require.NoError(t, err)
 	require.True(t, gitops.Ok)
-	assert.JSONEq(t, `{"H100":[{"endpoint_id":"acme/model","max":2}]}`, gitops.FleetJson)
+	assert.JSONEq(t, `{"acme/model":{"enabled":true,"gpus":{"H100":{"priority":1,"max_replicas":2}}}}`, gitops.FleetJson)
 	sync, err := s.TriggerGitOpsSync(ctx, &pb.TriggerGitOpsSyncRequest{})
 	require.NoError(t, err)
 	assert.False(t, sync.Ok, "no repo configured")

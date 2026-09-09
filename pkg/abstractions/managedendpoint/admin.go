@@ -26,11 +26,9 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
-// EndpointAdminService: cluster-admin RPCs used by tuning agents and the
-// frontend. The repo is the source of truth, so these only read state, push
-// live config to a replica and drive GitOps syncs. Domain errors come back as
-// ok=false with err_msg; a gRPC status is only returned for auth failures. The
-// same handlers are mirrored as REST under /api/v1/endpoints (mountAdminRoutes).
+// EndpointAdminService: cluster-admin RPCs for tuning agents and the frontend,
+// mirrored as REST under /api/v1/endpoints. Domain errors are ok=false with
+// err_msg; a gRPC status is only returned for auth failures.
 
 const (
 	defaultAckWait    = 30 * time.Second
@@ -46,8 +44,6 @@ type adminResponse interface {
 	GetErrMsg() string
 }
 
-// admin runs fn under cluster-admin auth and maps its error onto out's
-// ok/err_msg fields.
 func admin[T adminResponse](s *Service, ctx context.Context, out T, fn func() error) (T, error) {
 	if err := s.authorizeAdmin(ctx); err != nil {
 		var zero T
@@ -99,8 +95,6 @@ func waitFor(ctx context.Context, wait time.Duration, done func() bool) bool {
 	}
 	return true
 }
-
-// --- read ------------------------------------------------------------------------
 
 func (s *Service) ListEndpoints(ctx context.Context, _ *pb.ListEndpointsRequest) (*pb.ListEndpointsResponse, error) {
 	out := &pb.ListEndpointsResponse{}
@@ -171,8 +165,6 @@ func (s *Service) GetMetrics(ctx context.Context, in *pb.GetMetricsRequest) (*pb
 			return r.Status.Terminal() || (gpu != "" && r.GPU != gpu) || (in.ReplicaId != "" && r.ID != in.ReplicaId)
 		})
 		if in.ReplicaId != "" {
-			// A replica's traffic is kept apart from the fleet's so a tuning
-			// experiment is measured on its own requests only.
 			if len(replicas) != 1 {
 				return fmt.Errorf("replica %s: %w", in.ReplicaId, errNotFound)
 			}
@@ -187,11 +179,7 @@ func (s *Service) GetMetrics(ctx context.Context, in *pb.GetMetricsRequest) (*pb
 	})
 }
 
-// --- tune ------------------------------------------------------------------------
-
-// SetReplicaConfig pushes a live config to one replica and waits for the
-// harness to ack it. The config is whatever the engine's control catalog
-// (replica.capabilities_json) accepts; the gateway only requires a JSON object.
+// SetReplicaConfig pushes a live config to one replica and waits for the harness to ack it.
 func (s *Service) SetReplicaConfig(ctx context.Context, in *pb.SetReplicaConfigRequest) (*pb.SetReplicaConfigResponse, error) {
 	out := &pb.SetReplicaConfigResponse{}
 	return admin(s, ctx, out, func() error {
@@ -220,9 +208,7 @@ func (s *Service) SetReplicaConfig(ctx context.Context, in *pb.SetReplicaConfigR
 		if err != nil {
 			return err
 		}
-		// The revision is history the moment it is saved: the harness applies it
-		// on wakeup or on its next keepalive read either way, so the audit event
-		// is emitted before the wakeup and a failed wakeup is not an error.
+		// The harness picks the revision up on wakeup or its next keepalive read.
 		s.emit(types.EventEndpointConfig, types.EventEndpointSchema{
 			EndpointID: replica.EndpointID, Action: "config.set", ReplicaID: replica.ID, ContainerID: replica.ContainerID, GPU: replica.GPU, Version: replica.Version,
 			Revision: replica.Config.Revision, Data: map[string]any{"author": replica.Config.Author, "actor": actor, "config": config},
@@ -247,8 +233,7 @@ func (s *Service) SetReplicaConfig(ctx context.Context, in *pb.SetReplicaConfigR
 	})
 }
 
-// StopReplica drains and stops any replica; the controller refills the
-// target on its next tick if the fleet still wants the capacity.
+// StopReplica drains and stops a replica; the controller refills on its next tick.
 func (s *Service) StopReplica(ctx context.Context, in *pb.StopReplicaRequest) (*pb.StopReplicaResponse, error) {
 	out := &pb.StopReplicaResponse{}
 	return admin(s, ctx, out, func() error {
@@ -264,8 +249,6 @@ func (s *Service) StopReplica(ctx context.Context, in *pb.StopReplicaRequest) (*
 	})
 }
 
-// --- gitops ------------------------------------------------------------------
-
 func (s *Service) GetGitOpsStatus(ctx context.Context, _ *pb.GetGitOpsStatusRequest) (*pb.GetGitOpsStatusResponse, error) {
 	out := &pb.GetGitOpsStatusResponse{}
 	return admin(s, ctx, out, func() error {
@@ -280,7 +263,7 @@ func (s *Service) GetGitOpsStatus(ctx context.Context, _ *pb.GetGitOpsStatusRequ
 		if err != nil {
 			return err
 		}
-		out.State, out.FleetJson = gitopsToProto(state), mustJSON(fleet.Priority)
+		out.State, out.FleetJson = gitopsToProto(state), mustJSON(fleet.Endpoints)
 		return nil
 	})
 }
@@ -296,12 +279,9 @@ func (s *Service) TriggerGitOpsSync(ctx context.Context, in *pb.TriggerGitOpsSyn
 	})
 }
 
-// --- REST mirror ---------------------------------------------------------------
-
 var jsonMarshaler = protojson.MarshalOptions{UseProtoNames: true, EmitUnpopulated: true}
 
-// mountAdminRoutes exposes the admin RPCs as JSON under group. Every route
-// delegates to the gRPC method so the two surfaces cannot drift.
+// mountAdminRoutes exposes the admin RPCs as JSON under group.
 func (s *Service) mountAdminRoutes(group *echo.Group) {
 	g := group.Group("", func(next echo.HandlerFunc) echo.HandlerFunc { return auth.WithClusterAdminAuth(next) })
 	id := func(c echo.Context) string { return pathParam(c, "id") }
@@ -317,9 +297,7 @@ func (s *Service) mountAdminRoutes(group *echo.Group) {
 	g.POST("/replicas/:replica/config", rest(s.SetReplicaConfig, func(c echo.Context, in *pb.SetReplicaConfigRequest) { in.ReplicaId = pathParam(c, "replica") }))
 	g.POST("/replicas/:replica/stop", rest(s.StopReplica, func(c echo.Context, in *pb.StopReplicaRequest) { in.ReplicaId = pathParam(c, "replica") }))
 
-	// Endpoint IDs may contain one "/" (vendor/slug). Echo matches :id on the
-	// raw, still-escaped path, so callers send acme%2Fmodel and pathParam
-	// unescapes it; see TestAdminRESTEndpointIDWithSlash.
+	// Endpoint ids contain a "/", so callers send acme%2Fmodel and pathParam unescapes it.
 	g.GET("/:id", rest(s.GetEndpoint, func(c echo.Context, in *pb.GetEndpointRequest) { in.EndpointId = id(c) }))
 	g.GET("/:id/replicas", rest(s.ListReplicas, func(c echo.Context, in *pb.ListReplicasRequest) {
 		in.EndpointId, in.Status, in.Gpu = id(c), c.QueryParam("status"), c.QueryParam("gpu")
@@ -330,9 +308,8 @@ func (s *Service) mountAdminRoutes(group *echo.Group) {
 	}))
 }
 
-// rest adapts a gRPC handler to an echo route: the JSON body (if any) binds
-// into the request, fill copies path/query params over it, and the response
-// is written as protojson with ok=false mapped to 4xx.
+// rest adapts a gRPC handler to an echo route; fill copies path/query params
+// over the bound request body.
 func rest[Req any, PReq interface {
 	*Req
 	proto.Message

@@ -84,7 +84,7 @@ message ManagedEndpoint {
   int64 updated_at_unix_ms = 8;
   uint32 ready_replicas = 9;
   uint32 total_replicas = 10;
-  // Where fleet.yaml places the endpoint: JSON {gpu: max replicas}, 0 = every idle GPU.
+  // Where fleet.yaml places the endpoint: JSON {gpu: {priority, max_replicas}}; max_replicas 0 = every idle GPU.
   string placements_json = 11;
 }
 
@@ -324,7 +324,7 @@ message GetGitOpsStatusResponse {
   bool ok = 1;
   string err_msg = 2;
   GitOpsState state = 3;
-  // The applied fleet.yaml as JSON {gpu: [{endpoint_id, max}]} in priority order.
+  // The applied fleet.yaml as JSON {endpoint_id: {enabled, gpus: {gpu: {priority, max_replicas}}}}.
   string fleet_json = 4;
 }
 

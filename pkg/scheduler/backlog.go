@@ -18,9 +18,7 @@ type RequestBacklog struct {
 	ready chan struct{}
 }
 
-// popReadyBacklogScript pops ready requests from the foreground lane first
-// and fills what is left of the batch from the background lane, so a burst of
-// managed endpoint replicas never occupies a batch ahead of serverless work.
+// popReadyBacklogScript fills the batch from the foreground lane first, then the background lane.
 var popReadyBacklogScript = redis.NewScript(`
 local limit = tonumber(ARGV[2])
 local out = {}

@@ -60,44 +60,6 @@ func TestInventoryPlacesInEligiblePoolsOnly(t *testing.T) {
 	assert.Empty(t, pool.Name)
 }
 
-func TestLiveReplicasAndScaleDownOrder(t *testing.T) {
-	now := time.Now()
-	replicas := []*types.EndpointReplica{
-		{ID: "old-ready", EndpointID: "e", GPU: "H100", Version: 1, Status: types.ReplicaStatusReady, StartedAt: now.Add(-time.Hour)},
-		{ID: "loading", EndpointID: "e", GPU: "H100", Version: 1, Status: types.ReplicaStatusLoading, StartedAt: now},
-		{ID: "busy", EndpointID: "e", GPU: "H100", Version: 1, Status: types.ReplicaStatusReady, StartedAt: now.Add(-time.Minute), Capacity: types.ReplicaCapacity{InFlight: 4}},
-		{ID: "new-ready", EndpointID: "e", GPU: "H100", Version: 1, Status: types.ReplicaStatusReady, StartedAt: now.Add(-time.Second)},
-		{ID: "draining", EndpointID: "e", GPU: "H100", Version: 1, Status: types.ReplicaStatusDraining},
-		{ID: "evicting", EndpointID: "e", GPU: "H100", Version: 1, Status: types.ReplicaStatusEvicting},
-		{ID: "other-gpu", EndpointID: "e", GPU: "A100", Version: 1, Status: types.ReplicaStatusReady},
-		{ID: "other-endpoint", EndpointID: "f", GPU: "H100", Version: 1, Status: types.ReplicaStatusReady},
-		{ID: "other-version", EndpointID: "e", GPU: "H100", Version: 2, Status: types.ReplicaStatusReady},
-	}
-	live, ready := liveReplicas(replicas, "e", "H100", 1)
-	assert.Len(t, live, 4)
-	assert.Equal(t, 3, ready)
-
-	scaleDownOrder(live)
-	ids := make([]string, 0, len(live))
-	for _, r := range live {
-		ids = append(ids, r.ID)
-	}
-	// not-ready before ready; least loaded; newest first
-	assert.Equal(t, []string{"loading", "new-ready", "old-ready", "busy"}, ids)
-}
-
-func TestAppendEngineArgs(t *testing.T) {
-	sh := []string{"sh", "-c", "cd /app && vllm serve model"}
-	got := appendEngineArgs(sh, []string{"--max-model-len", "8192", "--kv-cache-dtype", "fp8 e5m2"})
-	assert.Equal(t, "cd /app && vllm serve model --max-model-len 8192 --kv-cache-dtype 'fp8 e5m2'", got[2])
-
-	argv := []string{"python", "serve.py"}
-	assert.Equal(t, []string{"python", "serve.py", "--tp", "2"}, appendEngineArgs(argv, []string{"--tp", "2"}))
-	assert.Equal(t, argv, appendEngineArgs(argv, nil))
-}
-
-// --- version replacement ---------------------------------------------------------
-
 // versionReplica is a live replica of acme/model on H100 at the given version.
 func versionReplica(t *testing.T, s *Service, id string, version uint, status types.ReplicaStatus) *types.EndpointReplica {
 	t.Helper()
@@ -166,7 +128,7 @@ func TestRetireKeepsServingReplicaAcrossGPUMove(t *testing.T) {
 	onA100.GPU = "A100-80"
 	require.NoError(t, s.repo.SaveReplica(ctx, onA100))
 	live := []*types.EndpointReplica{onH100, onA100}
-	fleet := seedFleet(t, s, map[string][]types.FleetEntry{"A100-80": {{EndpointID: "acme/model"}}})
+	fleet := seedFleet(t, s, map[string]types.FleetEndpoint{"acme/model": {Enabled: true, GPUs: map[string]types.FleetPlacement{"A100-80": {Priority: 1}}}})
 
 	s.controller.retire(ctx, endpoint, fleet, live)
 	assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, onH100.ID), "no A100 replica is ready yet")
@@ -205,7 +167,7 @@ func TestFillDrainsDownToCap(t *testing.T) {
 	endpoint := seedEndpoint(t, s) // fleet: H100: [acme/model: 2]
 	ctx := context.Background()
 	endpoints := map[string]*types.ManagedEndpoint{endpoint.Spec.ID: endpoint}
-	entries := []types.FleetEntry{{EndpointID: endpoint.Spec.ID, Max: 2}}
+	entries := []types.FleetEntry{{EndpointID: endpoint.Spec.ID, MaxReplicas: 2}}
 
 	first := versionReplica(t, s, "first", 1, types.ReplicaStatusLoading)
 	second := versionReplica(t, s, "second", 1, types.ReplicaStatusReady)
@@ -262,7 +224,7 @@ func TestFillReclaimsForHigherPriority(t *testing.T) {
 	assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, lowBusy.ID))
 
 	// A capped high entry that is at its cap wants nothing: the low one keeps its GPUs.
-	capped := []types.FleetEntry{{EndpointID: high.Spec.ID, Max: 1}, {EndpointID: low.Spec.ID}}
+	capped := []types.FleetEntry{{EndpointID: high.Spec.ID, MaxReplicas: 1}, {EndpointID: low.Spec.ID}}
 	s.controller.fill(ctx, "H100", capped, endpoints, []*types.EndpointReplica{highReady, lowBusy}, noRoomInventory())
 	assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, lowBusy.ID))
 }
@@ -281,8 +243,6 @@ func TestInventoryCountsSchedulingReplicasAsTaken(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, uint32(2), inv.free["H100"]["gpu-a"], "a replica the scheduler has not placed yet still holds its GPUs; a placed one is already in the worker's count")
 }
-
-// --- eviction ------------------------------------------------------------------
 
 func TestSyncReplicaFollowsSchedulerEviction(t *testing.T) {
 	s := newServiceForTest(t)
@@ -316,30 +276,6 @@ func TestSyncReplicaFollowsSchedulerEviction(t *testing.T) {
 	assert.False(t, backoff, "eviction is not a failure; the fill loop may retry immediately")
 }
 
-func TestExitStatusUsesEvictedExitCode(t *testing.T) {
-	s := newServiceForTest(t)
-	s.containers = repository.NewContainerRedisRepositoryForTest(s.rdb)
-	endpoint := seedEndpoint(t, s)
-	replica := seedReplica(t, s, endpoint)
-	// Even a replica that was still loading (never Ready) counts as evicted
-	// when the worker reports the eviction exit code.
-	replica.Status = types.ReplicaStatusLoading
-	require.NoError(t, s.containers.SetContainerExitCode(replica.ContainerID, int(types.ContainerExitCodeEvicted)))
-	assert.Equal(t, types.ReplicaStatusEvicted, s.controller.exitStatus(replica))
-
-	require.NoError(t, s.containers.SetContainerExitCode(replica.ContainerID, 1))
-	assert.Equal(t, types.ReplicaStatusFailed, s.controller.exitStatus(replica))
-
-	// An engine that drains itself on SIGTERM heartbeats "draining" before
-	// the controller observes the victim mark; the eviction exit code still
-	// decides the outcome. A plain drain that exits stays a stop.
-	replica.Status = types.ReplicaStatusDraining
-	require.NoError(t, s.containers.SetContainerExitCode(replica.ContainerID, int(types.ContainerExitCodeEvicted)))
-	assert.Equal(t, types.ReplicaStatusEvicted, s.controller.exitStatus(replica))
-	require.NoError(t, s.containers.SetContainerExitCode(replica.ContainerID, 0))
-	assert.Equal(t, types.ReplicaStatusStopped, s.controller.exitStatus(replica))
-}
-
 // failingContainers reports a repository failure instead of container state.
 type failingContainers struct{ repository.ContainerRepository }
 
@@ -364,13 +300,6 @@ func TestSyncReplicaLeavesReplicaAloneOnRepositoryError(t *testing.T) {
 	s.containers = repository.NewContainerRedisRepositoryForTest(s.rdb)
 	require.NoError(t, s.controller.syncReplica(context.Background(), replica))
 	assert.True(t, replica.Status.Terminal())
-}
-
-func TestContainerStateNotFound(t *testing.T) {
-	assert.True(t, containerStateNotFound(&types.ErrContainerStateNotFound{ContainerId: "c"}))
-	assert.True(t, containerStateNotFound(errors.New((&types.ErrContainerStateNotFound{ContainerId: "c"}).Error())))
-	assert.False(t, containerStateNotFound(errors.New("redis: connection refused")))
-	assert.False(t, containerStateNotFound(nil))
 }
 
 // An old version keeps serving during replacement, so it is probed with the

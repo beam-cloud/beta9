@@ -59,10 +59,7 @@ func (b *schedulingBatch) plan(requests []*types.ContainerRequest) {
 		batched = err == nil
 	}
 
-	// Foreground work claims idle capacity before background work (managed
-	// endpoint replicas) in the same batch, whatever order it arrived in;
-	// otherwise a replica could take the last idle GPU and leave a serverless
-	// request to wait on a drain that would not have been needed.
+	// Serverless work claims idle capacity before managed endpoint replicas.
 	requests = foregroundFirst(requests)
 	for _, request := range requests {
 		attempt := newSchedulingAttempt(b.scheduler, request, b.workers)
@@ -192,10 +189,8 @@ func (b *schedulingBatch) completeSchedule(schedule plannedSchedule, err error) 
 
 		attempt.recordBacklogWait(false, "schedule_failed")
 		metrics.RecordSchedulerWorkerWait(time.Since(schedule.request.Timestamp), schedule.request, "schedule_failed")
-		// Reclaimable capacity that moved under us (a victim left, was taken
-		// by another batch, or the worker's view was stale) is a capacity
-		// wait, not a fault of this request: requeue it on the capacity-wait
-		// clock instead of charging its retry budget.
+		// Reclaimable capacity that moved under us is a capacity wait, not a
+		// fault of this request.
 		if errors.Is(err, repo.ErrEvictionVictimsChanged) || errors.Is(err, repo.ErrInsufficientEvictableCapacity) {
 			if attempt.runnable() {
 				attempt.requeueForWorkerWaitDelay(provisioningWorkerRequeueDelay, "reclaimable_capacity_changed")

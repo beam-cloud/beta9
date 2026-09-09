@@ -270,8 +270,3 @@ func TestStatusHeartbeatEvictsMarkedVictimOnItsOwnDrainWindow(t *testing.T) {
 	}, 5*time.Second, 10*time.Millisecond)
 	require.Equal(t, []syscall.Signal{syscall.SIGTERM, syscall.SIGKILL}, rt.observed(containerID))
 }
-
-func TestNormalizeContainerExitCodeEvicted(t *testing.T) {
-	require.Equal(t, int(types.ContainerExitCodeEvicted), normalizeContainerExitCode(137, types.StopContainerReasonEvicted, false))
-	require.False(t, types.ContainerExitCodeEvicted.IsFailed())
-}

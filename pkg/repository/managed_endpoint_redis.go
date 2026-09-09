@@ -138,8 +138,6 @@ func (r *ManagedEndpointRedisRepository) hgetAll(ctx context.Context, keys []str
 	return out, nil
 }
 
-// --- registry ------------------------------------------------------------------
-
 func (r *ManagedEndpointRedisRepository) SaveEndpoint(ctx context.Context, endpoint *types.ManagedEndpoint) error {
 	if endpoint == nil || endpoint.Spec.ID == "" {
 		return errors.New("endpoint id is required")
@@ -178,13 +176,11 @@ func (r *ManagedEndpointRedisRepository) GetFleet(ctx context.Context) (*types.F
 	if fleet == nil {
 		fleet = &types.Fleet{}
 	}
-	if fleet.Priority == nil {
-		fleet.Priority = map[string][]types.FleetEntry{}
+	if fleet.Endpoints == nil {
+		fleet.Endpoints = map[string]types.FleetEndpoint{}
 	}
 	return fleet, nil
 }
-
-// --- replicas ------------------------------------------------------------------
 
 func (r *ManagedEndpointRedisRepository) SaveReplica(ctx context.Context, replica *types.EndpointReplica) error {
 	if replica == nil || replica.ID == "" || replica.EndpointID == "" {
@@ -269,8 +265,6 @@ func (r *ManagedEndpointRedisRepository) InScheduleBackoff(ctx context.Context, 
 	return n > 0, err
 }
 
-// NotifyReplicaConfig wakes the replica's WatchConfig stream after its
-// config was saved with a new revision.
 func (r *ManagedEndpointRedisRepository) NotifyReplicaConfig(ctx context.Context, replicaID string, revision uint64) error {
 	return r.rdb.Publish(ctx, meKey("config_events", replicaID), u64(revision)).Err()
 }
@@ -298,8 +292,6 @@ func (r *ManagedEndpointRedisRepository) SubscribeReplicaConfig(ctx context.Cont
 	return out, nil
 }
 
-// --- gitops ------------------------------------------------------------------
-
 func (r *ManagedEndpointRedisRepository) SaveGitOpsState(ctx context.Context, state *types.GitOpsState) error {
 	if state == nil {
 		return errors.New("gitops state is required")
@@ -316,8 +308,6 @@ func (r *ManagedEndpointRedisRepository) GetGitOpsState(ctx context.Context) (*t
 	return state, err
 }
 
-// --- route metrics -----------------------------------------------------------
-
 func metricsKey(endpointID, gpu, replica string, bucket time.Time) string {
 	return meKey("metrics", endpointID, gpu, replica, strconv.FormatInt(bucket.Unix(), 10))
 }
@@ -330,9 +320,7 @@ func routeMetricsFields(m *types.RouteMetrics) map[string]*int64 {
 	}
 }
 
-// RecordRouteSample increments the minute bucket for the endpoint, for its
-// GPU type and for the exact replica, so tuning can read one replica's traffic
-// apart from the fleet's.
+// RecordRouteSample increments the minute buckets for the endpoint, its GPU type and the replica.
 func (r *ManagedEndpointRedisRepository) RecordRouteSample(ctx context.Context, sample types.RouteSample) error {
 	if sample.EndpointID == "" {
 		return errors.New("endpoint id is required")
@@ -379,9 +367,8 @@ func replicaRevisionKey(replicaID string, revision uint64) string {
 	return replicaID + "@" + strconv.FormatUint(revision, 10)
 }
 
-// GetRouteMetrics sums the window for the endpoint (gpu and replica empty),
-// one GPU type, one replica (its gpu must be given), or the requests one
-// replica served under one acknowledged config revision.
+// GetRouteMetrics sums the window for the endpoint, one GPU type, one replica
+// or one replica under one config revision.
 func (r *ManagedEndpointRedisRepository) GetRouteMetrics(ctx context.Context, endpointID, gpu, replicaID string, configRevision uint64, window time.Duration) (*types.RouteMetrics, error) {
 	if window <= 0 {
 		window = 5 * time.Minute
@@ -426,8 +413,6 @@ func (r *ManagedEndpointRedisRepository) GetGeneration(ctx context.Context, gene
 	return getJSON[types.EventEndpointRouteSchema](ctx, r.rdb, meKey("generation", generationID))
 }
 
-// --- usage -------------------------------------------------------------------
-
 func usageFields(u *types.Usage) map[string]*int64 {
 	return map[string]*int64{
 		"requests": &u.Requests, "prompt_tokens": &u.PromptTokens, "completion_tokens": &u.CompletionTokens,
@@ -435,12 +420,8 @@ func usageFields(u *types.Usage) map[string]*int64 {
 	}
 }
 
-// addUsageScript records one request atomically: the seen marker, the day
-// counters behind the usage page and the current minute's meter bucket commit
-// together, so a failed or ambiguous write can be replayed with the same
-// request id and either applies once or is a no-op. The meter bucket is keyed
-// by the time of recording (Redis TIME), so a bucket whose minute has passed
-// never changes again and can be delivered to billing idempotently.
+// addUsageScript records one request atomically (seen marker, day counters,
+// minute meter bucket) so a replay with the same request id is a no-op.
 //
 // KEYS[1] seen marker, KEYS[2] day bucket, KEYS[3] meter bucket index;
 // ARGV[1] usage ttl seconds, ARGV[2] meter ttl seconds, ARGV[3] meter key
@@ -462,10 +443,8 @@ redis.call('ZADD', KEYS[3], minute, meter)
 return 1
 `)
 
-// AddUsage credits one request to a workspace's daily bucket for kind
-// ("spend" for the caller, "earned" for the provider of the machine that
-// served it), both in total and under the model. A replayed request id is a
-// no-op.
+// AddUsage credits one request to a workspace's daily bucket for kind; a
+// replayed request id is a no-op.
 func (r *ManagedEndpointRedisRepository) AddUsage(ctx context.Context, kind types.UsageKind, workspaceID, model, requestID string, at time.Time, delta types.Usage) error {
 	if workspaceID == "" || model == "" || requestID == "" {
 		return errors.New("workspace id, model and request id are required")
@@ -484,8 +463,7 @@ func (r *ManagedEndpointRedisRepository) AddUsage(ctx context.Context, kind type
 	return addUsageScript.Run(ctx, r.rdb, keys, args...).Err()
 }
 
-// GetUsage folds the UTC days from..to (inclusive, clamped to today and to
-// usageMaxDays) into totals, per model and per day.
+// GetUsage folds the UTC days from..to (clamped to usageMaxDays) into a report.
 func (r *ManagedEndpointRedisRepository) GetUsage(ctx context.Context, kind types.UsageKind, workspaceID string, from, to time.Time) (*types.UsageReport, error) {
 	today := time.Now().UTC().Truncate(24 * time.Hour)
 	first, last := from.UTC().Truncate(24*time.Hour), to.UTC().Truncate(24*time.Hour)
@@ -537,14 +515,9 @@ func (r *ManagedEndpointRedisRepository) GetUsage(ctx context.Context, kind type
 	return report, nil
 }
 
-// --- metering --------------------------------------------------------------------
-
-// Minute buckets are what the meter flush sends to billing (see meter.go);
-// a bucket is closed once the minute has passed and is removed after delivery.
 const meterBucketRetain = 7 * 24 * time.Hour
 
-// ListMeterBuckets returns every bucket that started before the cutoff, oldest
-// first, with its rows parsed.
+// ListMeterBuckets returns every bucket that started before the cutoff, oldest first.
 func (r *ManagedEndpointRedisRepository) ListMeterBuckets(ctx context.Context, before time.Time) ([]types.MeterBucket, error) {
 	keys, err := r.rdb.ZRangeByScore(ctx, meKey("meter", "buckets"), &redis.ZRangeBy{Min: "-inf", Max: strconv.FormatInt(before.Unix(), 10)}).Result()
 	if err != nil {

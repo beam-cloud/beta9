@@ -12,12 +12,8 @@ import (
 	"time"
 )
 
-// Managed endpoints are inference endpoints owned by the platform, not by a
-// user workspace. A git repository is the source of truth: each app.py there
-// declares one endpoint (ManagedEndpointSpec, deployed as a stub in the admin
-// workspace) and fleet.yaml declares how spare GPU capacity is divided between
-// endpoints (Fleet). The controller fills replicas accordingly and the /v1
-// route serves them with an OpenAI/OpenRouter-compatible API.
+// Managed endpoints are platform-owned inference endpoints deployed from a git
+// repository: app.py declares a ManagedEndpointSpec, fleet.yaml a Fleet.
 
 const (
 	StubTypeManagedEndpoint           string = "managed_endpoint"
@@ -47,9 +43,8 @@ const (
 	EndpointRouteInvoke           EndpointRoute = "invoke"
 )
 
-// kindRoutes lists the routes each kind may declare. The routes a kind serves
-// by default are the leading ones: both completion routes for an LLM, the
-// first route for everything else.
+// kindRoutes lists the routes each kind may declare; defaults are the leading
+// ones (both completion routes for an LLM, the first for everything else).
 var kindRoutes = map[EndpointKind][]EndpointRoute{
 	EndpointKindLLM:       {EndpointRouteChatCompletions, EndpointRouteCompletions, EndpointRouteEmbeddings, EndpointRouteImageGenerations},
 	EndpointKindEmbedding: {EndpointRouteEmbeddings},
@@ -63,14 +58,13 @@ func defaultRoutes(kind EndpointKind) []EndpointRoute {
 	if kind == EndpointKindLLM {
 		n = 2
 	}
-	return routes[:min(n, len(routes))] // unknown kinds get none; Validate rejects them
+	return routes[:min(n, len(routes))]
 }
 
 // CPUInventoryKey is the GPU key for CPU-only placement.
 const CPUInventoryKey = "cpu"
 
-// GPUKey canonicalizes a GPU type name into the key used by specs, fleet.yaml
-// and inventory: "h100" -> "H100", "" / "cpu" -> "cpu".
+// GPUKey canonicalizes a GPU type name: "h100" -> "H100", "" -> "cpu".
 func GPUKey(gpu string) string {
 	gpu = strings.TrimSpace(gpu)
 	if gpu == "" || strings.EqualFold(gpu, CPUInventoryKey) || NormalizeGPUType(gpu) == NO_GPU {
@@ -79,11 +73,9 @@ func GPUKey(gpu string) string {
 	return string(NormalizeGPUType(gpu))
 }
 
-// GpuSpec is how an endpoint runs on one GPU type: engine args appended to the
-// entrypoint (restart-class settings) and the harness seed (live settings).
+// GpuSpec is how an endpoint runs on one GPU type.
 type GpuSpec struct {
-	// Count is GPUs per replica (tensor parallelism); ignored for cpu.
-	Count      uint32         `json:"count,omitempty"`
+	Count      uint32         `json:"count,omitempty"` // GPUs per replica
 	EngineArgs []string       `json:"engine_args,omitempty"`
 	Harness    map[string]any `json:"harness,omitempty"`
 }
@@ -104,8 +96,7 @@ type Catalog struct {
 	Free                bool     `json:"free,omitempty"`
 }
 
-// Pricing holds USD decimal strings per billable unit. Empty means free for
-// that dimension. Amounts are parsed with arbitrary precision at deploy time.
+// Pricing holds USD decimal strings per billable unit; empty means free.
 type Pricing struct {
 	PromptTokens       string `json:"prompt_tokens,omitempty"`
 	CompletionTokens   string `json:"completion_tokens,omitempty"`
@@ -114,10 +105,8 @@ type Pricing struct {
 	Image              string `json:"image,omitempty"`
 }
 
-// IsZero reports whether no dimension is priced.
 func (p Pricing) IsZero() bool { return p == Pricing{} }
 
-// Validate checks that every set dimension is a non-negative USD decimal.
 func (p Pricing) Validate() error {
 	for name, value := range map[string]string{
 		"prompt_tokens": p.PromptTokens, "completion_tokens": p.CompletionTokens,
@@ -144,38 +133,31 @@ func PricingRat(value string) (*big.Rat, error) {
 	return rat, nil
 }
 
-// ManagedEndpointSpec is the repo contract: everything an endpoint app declares.
-// Where replicas run is not part of it; see Fleet.
+// ManagedEndpointSpec is everything an endpoint's app.py declares. Where
+// replicas run is Fleet's decision.
 type ManagedEndpointSpec struct {
-	ID      string       `json:"id"`
-	Kind    EndpointKind `json:"kind"`
-	Engine  string       `json:"engine,omitempty"`
-	Port    uint32       `json:"port"`
-	Health  string       `json:"health,omitempty"`
-	Metrics string       `json:"metrics,omitempty"`
-	// Gpu maps a GPU key ("H100", "cpu") to how the engine runs there. An
-	// endpoint may only be placed on GPU types it lists.
-	Gpu     map[string]GpuSpec `json:"gpu"`
-	Routes  []EndpointRoute    `json:"routes,omitempty"`
-	Pricing Pricing            `json:"pricing"`
-	Catalog Catalog            `json:"catalog"`
-	// Harness enables the in-engine harness (live knobs over EndpointHarnessService).
-	Harness bool `json:"harness"`
-	// DrainSeconds is the grace an evicted or retired replica gets to finish
-	// in-flight requests before the worker kills it.
-	DrainSeconds uint32   `json:"drain_seconds"`
-	Entrypoint   []string `json:"entrypoint,omitempty"`
+	ID           string             `json:"id"`
+	Kind         EndpointKind       `json:"kind"`
+	Engine       string             `json:"engine,omitempty"`
+	Port         uint32             `json:"port"`
+	Health       string             `json:"health,omitempty"`
+	Metrics      string             `json:"metrics,omitempty"`
+	Gpu          map[string]GpuSpec `json:"gpu"` // GPU key -> how the engine runs there
+	Routes       []EndpointRoute    `json:"routes,omitempty"`
+	Pricing      Pricing            `json:"pricing"`
+	Catalog      Catalog            `json:"catalog"`
+	Harness      bool               `json:"harness"`
+	DrainSeconds uint32             `json:"drain_seconds"` // grace to finish in-flight requests on eviction or retirement
+	Entrypoint   []string           `json:"entrypoint,omitempty"`
 }
 
 // ManagedEndpointStubConfig is embedded in StubConfigV1 for managed stubs.
 type ManagedEndpointStubConfig struct {
 	Endpoint *ManagedEndpointSpec `json:"endpoint,omitempty"`
-	// GitSHA is the source revision the deployer built this stub from.
-	GitSHA string `json:"git_sha,omitempty"`
+	GitSHA   string               `json:"git_sha,omitempty"`
 }
 
-// ManagedEndpointValidation configures spec validation. Empty allow lists
-// allow everything.
+// ManagedEndpointValidation is the cluster's spec policy; empty lists allow everything.
 type ManagedEndpointValidation struct {
 	AllowedEngines []string
 	AllowedKinds   []EndpointKind
@@ -185,7 +167,6 @@ var endpointIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0
 
 func cleanPath(p string) string { return "/" + strings.TrimPrefix(strings.TrimSpace(p), "/") }
 
-// Normalize fills defaults so downstream code can rely on a canonical spec.
 func (s *ManagedEndpointSpec) Normalize() {
 	s.ID = strings.ToLower(strings.TrimSpace(s.ID))
 	s.Engine = strings.ToLower(strings.TrimSpace(s.Engine))
@@ -227,7 +208,7 @@ func (s *ManagedEndpointSpec) Normalize() {
 	}
 }
 
-// Validate checks the spec against platform policy. Call Normalize first.
+// Validate checks a normalized spec against platform policy.
 func (s *ManagedEndpointSpec) Validate(policy ManagedEndpointValidation) error {
 	var errs []error
 	fail := func(format string, args ...any) { errs = append(errs, fmt.Errorf(format, args...)) }
@@ -273,148 +254,150 @@ func (s *ManagedEndpointSpec) Validate(policy ManagedEndpointValidation) error {
 	return errors.Join(errs...)
 }
 
-// ServesRoute reports whether the endpoint declares a route.
 func (s *ManagedEndpointSpec) ServesRoute(route EndpointRoute) bool {
 	return slices.Contains(s.Routes, route)
 }
 
-// --- Fleet ---------------------------------------------------------------------
-
-// Fleet is fleet.yaml: for each GPU key, the endpoints that fill its idle GPUs
-// in priority order. Idle GPUs go to the first entry until it reaches its cap
-// (none by default), then to the next; when a higher entry is short of GPUs
-// the entries below it give theirs back. It is the only thing that decides
-// where replicas run.
+// Fleet is fleet.yaml: for each endpoint, whether it runs and which GPU types
+// it fills, with a priority among the endpoints on that type and an optional
+// replica cap. It is the only thing that decides where replicas run.
 type Fleet struct {
-	GitSHA    string                  `json:"git_sha,omitempty"`
-	Priority  map[string][]FleetEntry `json:"priority"`
-	UpdatedAt time.Time               `json:"updated_at"`
+	GitSHA    string                   `json:"git_sha,omitempty"`
+	Endpoints map[string]FleetEndpoint `json:"endpoints"`
+	UpdatedAt time.Time                `json:"updated_at"`
 }
 
-// FleetEntry is one endpoint in a GPU type's priority list. Max is the most
-// replicas it runs on that type; 0 means every idle GPU it can get.
+type FleetEndpoint struct {
+	Enabled bool                      `json:"enabled" yaml:"enabled"`
+	GPUs    map[string]FleetPlacement `json:"gpus" yaml:"gpus"`
+}
+
+// FleetPlacement is one endpoint on one GPU type. Priority 1 fills first;
+// MaxReplicas 0 means every idle GPU.
+type FleetPlacement struct {
+	Priority    uint32 `json:"priority" yaml:"priority"`
+	MaxReplicas uint32 `json:"max_replicas,omitempty" yaml:"maxReplicas"`
+}
+
+// FleetEntry is an endpoint's place in one GPU type's priority order.
 type FleetEntry struct {
-	EndpointID string `json:"endpoint_id"`
-	Max        uint32 `json:"max,omitempty"`
+	EndpointID  string
+	Priority    uint32
+	MaxReplicas uint32
 }
 
 const maxFleetReplicas = 64
 
-// Normalize canonicalizes GPU keys and endpoint ids and drops empty lists.
 func (f *Fleet) Normalize() {
-	out := make(map[string][]FleetEntry, len(f.Priority))
-	for gpu, entries := range f.Priority {
-		var kept []FleetEntry
-		for _, e := range entries {
-			if e.EndpointID = strings.ToLower(strings.TrimSpace(e.EndpointID)); e.EndpointID != "" {
-				kept = append(kept, e)
-			}
+	out := make(map[string]FleetEndpoint, len(f.Endpoints))
+	for id, e := range f.Endpoints {
+		gpus := make(map[string]FleetPlacement, len(e.GPUs))
+		for gpu, p := range e.GPUs {
+			gpus[GPUKey(gpu)] = p
 		}
-		if len(kept) > 0 {
-			out[GPUKey(gpu)] = kept
+		e.GPUs = gpus
+		if id = strings.ToLower(strings.TrimSpace(id)); id != "" {
+			out[id] = e
 		}
 	}
-	f.Priority = out
+	f.Endpoints = out
 }
 
-// Validate checks GPU keys, caps and duplicates. CPU entries must be capped:
-// there is no GPU inventory to run out of. Call Normalize first.
+// Validate checks GPU keys, priorities and caps. Call Normalize first.
 func (f *Fleet) Validate() error {
 	var errs []error
-	for gpu, entries := range f.Priority {
-		if gpu != CPUInventoryKey && !KnownGPUType(GpuType(gpu)) {
-			errs = append(errs, fmt.Errorf("%s is not a known GPU type", gpu))
-		}
-		seen := map[string]bool{}
-		for _, e := range entries {
-			if seen[e.EndpointID] {
-				errs = append(errs, fmt.Errorf("%s: %s is listed twice", gpu, e.EndpointID))
+	for id, e := range f.Endpoints {
+		for gpu, p := range e.GPUs {
+			if gpu != CPUInventoryKey && !KnownGPUType(GpuType(gpu)) {
+				errs = append(errs, fmt.Errorf("%s: %s is not a known GPU type", id, gpu))
 			}
-			seen[e.EndpointID] = true
-			if e.Max > maxFleetReplicas {
-				errs = append(errs, fmt.Errorf("%s: %s max %d exceeds %d", gpu, e.EndpointID, e.Max, maxFleetReplicas))
+			if p.Priority == 0 {
+				errs = append(errs, fmt.Errorf("%s: %s: priority is required (1 fills first)", id, gpu))
 			}
-			if gpu == CPUInventoryKey && e.Max == 0 {
-				errs = append(errs, fmt.Errorf("cpu: %s needs a replica count", e.EndpointID))
+			if p.MaxReplicas > maxFleetReplicas {
+				errs = append(errs, fmt.Errorf("%s: %s: maxReplicas %d exceeds %d", id, gpu, p.MaxReplicas, maxFleetReplicas))
+			}
+			if gpu == CPUInventoryKey && p.MaxReplicas == 0 {
+				errs = append(errs, fmt.Errorf("%s: cpu needs maxReplicas", id))
 			}
 		}
 	}
 	return errors.Join(errs...)
 }
 
-// Prune drops entries for endpoints that are not deployed or do not declare
-// the GPU type in their app, so one broken deploy never blocks the rest of the
-// fleet. It returns one message per dropped entry.
+// Prune drops endpoints that are not deployed and GPU types their app does
+// not declare, so one broken deploy never blocks the rest of the fleet.
 func (f *Fleet) Prune(endpoints map[string]*ManagedEndpointSpec) []string {
 	var dropped []string
-	for gpu, entries := range f.Priority {
-		kept := entries[:0]
-		for _, e := range entries {
-			spec, ok := endpoints[e.EndpointID]
-			if !ok {
-				dropped = append(dropped, fmt.Sprintf("%s is not a deployed endpoint", e.EndpointID))
-				continue
-			}
-			if spec != nil {
-				if _, ok := spec.Gpu[gpu]; !ok {
-					dropped = append(dropped, fmt.Sprintf("%s does not declare gpu %q in its app", e.EndpointID, gpu))
-					continue
-				}
-			}
-			kept = append(kept, e)
+	for id, e := range f.Endpoints {
+		spec, ok := endpoints[id]
+		if !ok {
+			dropped = append(dropped, fmt.Sprintf("%s is not a deployed endpoint", id))
+			delete(f.Endpoints, id)
+			continue
 		}
-		if len(kept) == 0 {
-			delete(f.Priority, gpu)
-		} else {
-			f.Priority[gpu] = kept
+		for gpu := range e.GPUs {
+			if _, ok := spec.Gpu[gpu]; !ok {
+				dropped = append(dropped, fmt.Sprintf("%s does not declare gpu %q in its app", id, gpu))
+				delete(e.GPUs, gpu)
+			}
 		}
 	}
 	slices.Sort(dropped)
-	return slices.Compact(dropped)
+	return dropped
 }
 
-// GPUs returns the GPU keys with a priority list, sorted.
+// GPUs returns the GPU keys any enabled endpoint fills, sorted.
 func (f *Fleet) GPUs() []string {
-	out := make([]string, 0, len(f.Priority))
-	for gpu := range f.Priority {
+	seen := map[string]bool{}
+	for _, e := range f.Endpoints {
+		if e.Enabled {
+			for gpu := range e.GPUs {
+				seen[gpu] = true
+			}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for gpu := range seen {
 		out = append(out, gpu)
 	}
 	slices.Sort(out)
 	return out
 }
 
-// Lists reports whether the endpoint is in the GPU type's priority list.
-func (f *Fleet) Lists(endpointID, gpu string) bool {
-	return slices.ContainsFunc(f.Priority[gpu], func(e FleetEntry) bool { return e.EndpointID == endpointID })
-}
-
-// Placements returns one endpoint's (gpu, max) pairs, GPU keys sorted.
-func (f *Fleet) Placements(endpointID string) []FleetTarget {
-	var out []FleetTarget
-	for gpu, entries := range f.Priority {
-		for _, e := range entries {
-			if e.EndpointID == endpointID {
-				out = append(out, FleetTarget{GPU: gpu, Max: e.Max})
-			}
+// Entries returns the enabled endpoints on a GPU type in priority order.
+func (f *Fleet) Entries(gpu string) []FleetEntry {
+	var out []FleetEntry
+	for id, e := range f.Endpoints {
+		if p, ok := e.GPUs[gpu]; ok && e.Enabled {
+			out = append(out, FleetEntry{EndpointID: id, Priority: p.Priority, MaxReplicas: p.MaxReplicas})
 		}
 	}
-	slices.SortFunc(out, func(a, b FleetTarget) int { return strings.Compare(a.GPU, b.GPU) })
+	slices.SortFunc(out, func(a, b FleetEntry) int {
+		return cmp.Or(cmp.Compare(a.Priority, b.Priority), strings.Compare(a.EndpointID, b.EndpointID))
+	})
 	return out
 }
 
-// FleetTarget is one endpoint's place on one GPU type: the type and its
-// replica cap there (0 = every idle GPU).
-type FleetTarget struct {
-	GPU string
-	Max uint32
+// Lists reports whether the endpoint is enabled and fills the GPU type.
+func (f *Fleet) Lists(endpointID, gpu string) bool {
+	e, ok := f.Endpoints[endpointID]
+	if !ok || !e.Enabled {
+		return false
+	}
+	_, ok = e.GPUs[gpu]
+	return ok
 }
 
-func (t FleetTarget) IsCPU() bool { return t.GPU == CPUInventoryKey }
+// Placements returns the GPU types an enabled endpoint fills, sorted by key.
+func (f *Fleet) Placements(endpointID string) map[string]FleetPlacement {
+	if e, ok := f.Endpoints[endpointID]; ok && e.Enabled {
+		return e.GPUs
+	}
+	return nil
+}
 
-// --- Metering ------------------------------------------------------------------
-
-// MeterBucket is one closed minute of usage for one kind, not yet delivered to
-// the billing meter. Rows are per workspace and model.
+// MeterBucket is one closed minute of usage not yet delivered to the billing meter.
 type MeterBucket struct {
 	Key   string
 	Kind  UsageKind
@@ -428,8 +411,6 @@ type MeterRow struct {
 	Usage       Usage
 }
 
-// --- Registry ------------------------------------------------------------------
-
 type EndpointStatus string
 
 const (
@@ -437,9 +418,8 @@ const (
 	EndpointStatusRetired EndpointStatus = "retired"
 )
 
-// ManagedEndpoint is the registry record for a deployed endpoint: the spec of
-// its current version and which stub serves it. A new deploy bumps Version;
-// the controller replaces replicas of older versions.
+// ManagedEndpoint is the registry record of a deployed endpoint. A new deploy
+// bumps Version; the controller replaces replicas of older versions.
 type ManagedEndpoint struct {
 	Spec      ManagedEndpointSpec `json:"spec"`
 	StubID    string              `json:"stub_id"`
@@ -450,10 +430,7 @@ type ManagedEndpoint struct {
 	UpdatedAt time.Time           `json:"updated_at"`
 }
 
-// Enabled reports whether the endpoint may be filled and routed to.
 func (e *ManagedEndpoint) Enabled() bool { return e.Status == EndpointStatusActive }
-
-// --- Replicas ------------------------------------------------------------------
 
 type ReplicaStatus string
 
@@ -468,7 +445,6 @@ const (
 	ReplicaStatusStopped    ReplicaStatus = "stopped"
 )
 
-// Terminal reports whether a replica in this status will never serve again.
 func (s ReplicaStatus) Terminal() bool {
 	return s == ReplicaStatusEvicted || s == ReplicaStatusFailed || s == ReplicaStatusStopped
 }
@@ -487,19 +463,14 @@ type ReplicaCapacity struct {
 	PrefixCacheHitMilli int64 `json:"prefix_cache_hit_milli"`
 }
 
-// ReplicaConfig is the live harness config of one replica: what an admin last
-// asked for (Revision/Config) and what the engine reported back. Live config
-// dies with the replica; durable settings belong in the repo.
+// ReplicaConfig is the live harness config of one replica: the revision last
+// asked for and the engine's answer to it. It dies with the replica.
 type ReplicaConfig struct {
-	Revision uint64          `json:"revision"`
-	Config   json.RawMessage `json:"config,omitempty"`
-	// Author is the caller's label for the change; Actor is the authenticated
-	// token that made it.
-	Author string    `json:"author,omitempty"`
-	Actor  string    `json:"actor,omitempty"`
-	SetAt  time.Time `json:"set_at,omitempty"`
-	// AckedRevision, Applied, Error and Effective describe the engine's
-	// answer to the most recent revision it processed.
+	Revision      uint64          `json:"revision"`
+	Config        json.RawMessage `json:"config,omitempty"`
+	Author        string          `json:"author,omitempty"` // caller's label
+	Actor         string          `json:"actor,omitempty"`  // authenticated token
+	SetAt         time.Time       `json:"set_at,omitempty"`
 	AckedRevision uint64          `json:"acked_revision"`
 	Applied       bool            `json:"applied"`
 	Error         string          `json:"error,omitempty"`
@@ -507,12 +478,9 @@ type ReplicaConfig struct {
 	AckedAt       time.Time       `json:"acked_at,omitempty"`
 }
 
-// Acked reports whether the engine has answered the current revision.
 func (c ReplicaConfig) Acked() bool { return c.AckedRevision >= c.Revision }
 
-// Ack records the engine's answer to revision. Only revisions that were
-// issued and not already superseded by a later answer are accepted, so a
-// buggy or restarting harness cannot make future revisions look acknowledged.
+// Ack records the engine's answer to an issued, not yet superseded revision.
 func (c *ReplicaConfig) Ack(revision uint64, applied bool, errMsg string, effective json.RawMessage, now time.Time) bool {
 	if revision > c.Revision || revision < c.AckedRevision {
 		return false
@@ -527,61 +495,45 @@ func (c *ReplicaConfig) Ack(revision uint64, applied bool, errMsg string, effect
 
 // EndpointReplica is one running container serving an endpoint on one GPU type.
 type EndpointReplica struct {
-	ID          string `json:"id"`
-	EndpointID  string `json:"endpoint_id"`
-	Version     uint   `json:"version"`
-	GPU         string `json:"gpu"`
-	GPUCount    uint32 `json:"gpu_count"`
-	Locality    string `json:"locality,omitempty"`
-	PoolName    string `json:"pool_name,omitempty"`
-	ContainerID string `json:"container_id"`
-	WorkerID    string `json:"worker_id,omitempty"`
-	MachineID   string `json:"machine_id,omitempty"`
-	// ProviderWorkspaceID is set when the replica runs on a workspace's
-	// contributed (provider pool) machine; that workspace earns a share of
-	// the revenue routed to the replica.
-	ProviderWorkspaceID string        `json:"provider_workspace_id,omitempty"`
-	Address             string        `json:"address,omitempty"`
-	Status              ReplicaStatus `json:"status"`
-	StatusReason        string        `json:"status_reason,omitempty"`
-	// SecretHash is the SHA-256 of the per-replica secret handed to the
-	// container as BEAM_REPLICA_SECRET; harness RPCs must present it.
-	SecretHash     string `json:"secret_hash,omitempty"`
-	HarnessEnabled bool   `json:"harness_enabled"`
-	// Probe is the port and paths of the deployment this replica runs,
-	// snapshotted at start: an old version keeps its own contract while a
-	// newer one is rolling out.
-	Probe        ReplicaProbe    `json:"probe"`
-	Config       ReplicaConfig   `json:"config"`
-	Capacity     ReplicaCapacity `json:"capacity"`
-	Capabilities json.RawMessage `json:"capabilities,omitempty"`
-	// EngineMetrics is the engine status the harness attached to its last heartbeat.
-	EngineMetrics json.RawMessage `json:"engine_metrics,omitempty"`
-	StartedAt     time.Time       `json:"started_at"`
-	// LoadingSince is when the current loading phase began: container start,
-	// or the moment a ready engine went back to loading (reload, failing
-	// health check). The loading grace runs from here, not from StartedAt.
-	LoadingSince  time.Time `json:"loading_since,omitempty"`
-	ReadyAt       time.Time `json:"ready_at,omitempty"`
-	LastHeartbeat time.Time `json:"last_heartbeat"`
-	EndedAt       time.Time `json:"ended_at,omitempty"`
-	DrainDeadline time.Time `json:"drain_deadline,omitempty"`
+	ID                  string          `json:"id"`
+	EndpointID          string          `json:"endpoint_id"`
+	Version             uint            `json:"version"`
+	GPU                 string          `json:"gpu"`
+	GPUCount            uint32          `json:"gpu_count"`
+	Locality            string          `json:"locality,omitempty"`
+	PoolName            string          `json:"pool_name,omitempty"`
+	ContainerID         string          `json:"container_id"`
+	WorkerID            string          `json:"worker_id,omitempty"`
+	MachineID           string          `json:"machine_id,omitempty"`
+	ProviderWorkspaceID string          `json:"provider_workspace_id,omitempty"` // set on contributed machines; earns a revenue share
+	Address             string          `json:"address,omitempty"`
+	Status              ReplicaStatus   `json:"status"`
+	StatusReason        string          `json:"status_reason,omitempty"`
+	SecretHash          string          `json:"secret_hash,omitempty"` // SHA-256 of BEAM_REPLICA_SECRET
+	HarnessEnabled      bool            `json:"harness_enabled"`
+	Probe               ReplicaProbe    `json:"probe"` // snapshotted at start; an old version keeps its own contract
+	Config              ReplicaConfig   `json:"config"`
+	Capacity            ReplicaCapacity `json:"capacity"`
+	Capabilities        json.RawMessage `json:"capabilities,omitempty"`
+	EngineMetrics       json.RawMessage `json:"engine_metrics,omitempty"`
+	StartedAt           time.Time       `json:"started_at"`
+	LoadingSince        time.Time       `json:"loading_since,omitempty"` // start of the current loading phase; the grace runs from here
+	ReadyAt             time.Time       `json:"ready_at,omitempty"`
+	LastHeartbeat       time.Time       `json:"last_heartbeat"`
+	EndedAt             time.Time       `json:"ended_at,omitempty"`
+	DrainDeadline       time.Time       `json:"drain_deadline,omitempty"`
 }
 
-// ReplicaProbe is the immutable probe contract of one deployment version.
+// ReplicaProbe is the probe contract of one deployment version.
 type ReplicaProbe struct {
-	Port   uint32 `json:"port"`
-	Health string `json:"health,omitempty"`
-	// Metrics is the Prometheus path to scrape for capacity; empty for
-	// engines that expose none (non-LLM kinds).
-	Metrics string `json:"metrics,omitempty"`
+	Port    uint32 `json:"port"`
+	Health  string `json:"health,omitempty"`
+	Metrics string `json:"metrics,omitempty"` // Prometheus path; empty for non-LLM engines
 }
 
-// Serving reports whether the replica may receive traffic.
 func (r *EndpointReplica) Serving() bool { return r != nil && r.Status == ReplicaStatusReady }
 
-// EnterLoading moves the replica into loading and starts a fresh loading
-// phase unless it is already in one.
+// EnterLoading starts a fresh loading phase unless one is already running.
 func (r *EndpointReplica) EnterLoading(now time.Time, reason string) {
 	if r.Status != ReplicaStatusLoading {
 		r.LoadingSince = now
@@ -590,7 +542,6 @@ func (r *EndpointReplica) EnterLoading(now time.Time, reason string) {
 	r.StatusReason = reason
 }
 
-// LoadingFor is how long the current loading phase has lasted.
 func (r *EndpointReplica) LoadingFor(now time.Time) time.Duration {
 	if r.LoadingSince.IsZero() {
 		return now.Sub(r.StartedAt)
@@ -598,13 +549,10 @@ func (r *EndpointReplica) LoadingFor(now time.Time) time.Duration {
 	return now.Sub(r.LoadingSince)
 }
 
-// Alive reports whether the replica is scheduling, loading or ready, i.e.
-// counts toward a target's live set (draining and evicting replicas do not).
+// Alive reports whether the replica counts toward the live set (draining and evicting do not).
 func (r *EndpointReplica) Alive() bool {
 	return r.Status == ReplicaStatusScheduling || r.Status == ReplicaStatusLoading || r.Status == ReplicaStatusReady
 }
-
-// --- GitOps ------------------------------------------------------------------------
 
 type GitOpsStatus string
 
@@ -614,7 +562,6 @@ const (
 	GitOpsStatusRetired GitOpsStatus = "retired"
 )
 
-// GitOpsEndpointState is the apply state of one repo directory.
 type GitOpsEndpointState struct {
 	Path       string       `json:"path"`
 	ID         string       `json:"id"`
@@ -628,44 +575,36 @@ type GitOpsEndpointState struct {
 
 // GitOpsState is the reconciler's view of the endpoints repo.
 type GitOpsState struct {
-	RepoURL   string    `json:"repo_url"`
-	Ref       string    `json:"ref"`
-	LastSHA   string    `json:"last_sha,omitempty"`
-	TargetSHA string    `json:"target_sha,omitempty"`
-	LastRunAt time.Time `json:"last_run_at,omitempty"`
-	LastError string    `json:"last_error,omitempty"`
-	// FleetError is why fleet.yaml was not applied, or which placements were
-	// skipped ("skipped: ...") when it was. FleetSHA is the commit whose
-	// fleet.yaml was last applied (or rejected as invalid); it trails LastSHA
-	// only while a fleet write is still to be retried.
-	FleetError  string                         `json:"fleet_error,omitempty"`
-	FleetSHA    string                         `json:"fleet_sha,omitempty"`
+	RepoURL     string                         `json:"repo_url"`
+	Ref         string                         `json:"ref"`
+	LastSHA     string                         `json:"last_sha,omitempty"`
+	TargetSHA   string                         `json:"target_sha,omitempty"`
+	LastRunAt   time.Time                      `json:"last_run_at,omitempty"`
+	LastError   string                         `json:"last_error,omitempty"`
+	FleetError  string                         `json:"fleet_error,omitempty"` // why fleet.yaml was rejected, or "skipped: ..." entries
+	FleetSHA    string                         `json:"fleet_sha,omitempty"`   // trails LastSHA only while a fleet write is retried
 	Running     bool                           `json:"running"`
 	PerEndpoint map[string]GitOpsEndpointState `json:"per_endpoint"`
 	UpdatedAt   time.Time                      `json:"updated_at"`
 
-	// In-flight deployer run. RunID ties the deployer's report back to this
-	// state; ContainerID and TokenID are cleaned up when the run finishes.
+	// In-flight deployer run.
 	RunID       string    `json:"run_id,omitempty"`
 	ContainerID string    `json:"container_id,omitempty"`
 	TokenID     string    `json:"token_id,omitempty"`
 	StartedAt   time.Time `json:"started_at,omitempty"`
 }
 
-// GitOpsReport is what the deployer posts back after applying one SHA: one
-// result per app directory found in the repo plus the parsed fleet.yaml.
+// GitOpsReport is what the deployer posts back after applying one SHA.
 type GitOpsReport struct {
-	RunID   string               `json:"run_id"`
-	SHA     string               `json:"sha"`
-	Error   string               `json:"error,omitempty"`
-	Results []GitOpsDeployResult `json:"results"`
-	// FleetYAML is the raw fleet.yaml ({gpu: [endpoint | {endpoint: max}]}); empty
-	// when the repo has none (nothing is placed until it does).
-	FleetYAML string `json:"fleet_yaml,omitempty"`
+	RunID     string               `json:"run_id"`
+	SHA       string               `json:"sha"`
+	Error     string               `json:"error,omitempty"`
+	Results   []GitOpsDeployResult `json:"results"`
+	FleetYAML string               `json:"fleet_yaml,omitempty"` // raw fleet.yaml; empty when the repo has none
 }
 
-// GitOpsDeployResult is the outcome for one app directory. ID is empty when
-// the directory's app failed to import.
+// GitOpsDeployResult is the outcome for one app directory; ID is empty when
+// the app failed to import.
 type GitOpsDeployResult struct {
 	Path    string `json:"path"`
 	ID      string `json:"id"`
@@ -676,16 +615,12 @@ type GitOpsDeployResult struct {
 	Version uint   `json:"version,omitempty"`
 }
 
-// --- Traffic -------------------------------------------------------------------------
-
-// RouteSample is one completed /v1 request observed by the router.
+// RouteSample is one completed /v1 request.
 type RouteSample struct {
-	EndpointID string `json:"endpoint_id"`
-	GPU        string `json:"gpu"`
-	ReplicaID  string `json:"replica_id"`
-	// ConfigRevision is the live config the replica had acknowledged when it
-	// served the request, so a tuning experiment is measured per revision.
-	ConfigRevision   uint64        `json:"config_revision,omitempty"`
+	EndpointID       string        `json:"endpoint_id"`
+	GPU              string        `json:"gpu"`
+	ReplicaID        string        `json:"replica_id"`
+	ConfigRevision   uint64        `json:"config_revision,omitempty"` // live config acknowledged when the request was served
 	StatusCode       int           `json:"status_code"`
 	PromptTokens     int64         `json:"prompt_tokens"`
 	CompletionTokens int64         `json:"completion_tokens"`
@@ -697,7 +632,6 @@ type RouteSample struct {
 	At               time.Time     `json:"at"`
 }
 
-// Failed reports whether the sample counts as an error.
 func (s RouteSample) Failed() bool { return s.StatusCode >= 500 || s.StatusCode == 0 }
 
 // RouteMetrics aggregates RouteSamples over a window.
@@ -733,15 +667,12 @@ func (m RouteMetrics) MeanTTFTMs() int64 {
 	return m.TTFTSumMs / m.TTFTCount
 }
 
-// MeanTPOTMs approximates time per output token from duration minus TTFT.
 func (m RouteMetrics) MeanTPOTMs() int64 {
 	if m.CompletionTokens == 0 {
 		return 0
 	}
 	return max(m.DurationSumMs-m.TTFTSumMs, 0) / m.CompletionTokens
 }
-
-// --- Usage and earnings ------------------------------------------------------------
 
 // UsageKind separates what a workspace spent calling models from what it
 // earned serving them on contributed machines.
@@ -752,8 +683,7 @@ const (
 	UsageEarned UsageKind = "earned"
 )
 
-// Usage is what one workspace consumed on (or earned from) one model: the
-// daily counters behind the usage page and provider payouts.
+// Usage is what one workspace consumed on (or earned from) one model.
 type Usage struct {
 	Requests         int64 `json:"requests"`
 	PromptTokens     int64 `json:"prompt_tokens"`
@@ -770,7 +700,6 @@ func (u *Usage) Add(o Usage) {
 	u.MicroUSD += o.MicroUSD
 }
 
-// UsageReport is a workspace's usage (or provider earnings) over a range of days.
 type UsageReport struct {
 	Total    Usage            `json:"total"`
 	PerModel map[string]Usage `json:"per_model"`

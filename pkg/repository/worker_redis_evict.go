@@ -11,14 +11,9 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// ErrEvictionVictimsChanged is returned when the evictable containers chosen to
-// make room for a request were stopped, evicted, or moved before the
-// placement committed. The caller should re-read the worker and retry.
+// ErrEvictionVictimsChanged means the chosen victims changed before the placement committed.
 var ErrEvictionVictimsChanged = errors.New("eviction victims changed before placement committed")
 
-// ErrInsufficientEvictableCapacity is returned when a request does not fit in
-// a worker's free capacity and its evictable containers cannot cover the
-// shortfall either.
 var ErrInsufficientEvictableCapacity = errors.New("unable to schedule container, worker out of free and evictable capacity")
 
 // requestMayEvict reports whether a request may displace evictable containers.
@@ -27,13 +22,10 @@ func requestMayEvict(request *types.ContainerRequest) bool {
 	return request != nil && !request.Evictable && !request.OpportunisticOnly
 }
 
-// reclaimable is the one definition of "this container's capacity can be
-// taken by a non-evictable request": an evictable container assigned to the
-// worker that is queued, starting or running, and not already being evicted.
-// Capacity advertisement (evictable_* on the worker), victim selection and
-// the Lua re-validation all use it, so what the scheduler is shown it can
-// reclaim is exactly what the commit can reclaim. A STOPPING container is
-// leaving on its own and is neither advertised nor selectable.
+// reclaimable is the one definition of capacity a non-evictable request may
+// take: an evictable container on the worker that is pending or running and
+// not already being evicted. Advertisement, victim selection and the Lua
+// re-validation all use it.
 func reclaimable(state *types.ContainerState, workerID string) bool {
 	return state != nil && state.Evictable && !state.Evicting && state.WorkerId == workerID &&
 		(state.Status == types.ContainerStatusPending || state.Status == types.ContainerStatusRunning)
@@ -55,9 +47,7 @@ type evictionVictim struct {
 var indexedContainerFields = []string{"container_id", "status", "worker_id", "evictable", "evicting",
 	"cpu", "memory", "gpu", "gpu_count", "drain_seconds", "evict_order", "started_at"}
 
-// indexedContainerStates loads the worker's indexed containers in one
-// pipelined round trip and drops index entries whose state is gone or belongs
-// to another worker. The returned states are decoded without reflection.
+// indexedContainerStates loads the worker's containers in one pipelined round trip.
 func (r *WorkerRedisRepository) indexedContainerStates(ctx context.Context, workerID string) ([]*types.ContainerState, error) {
 	indexKey := common.RedisKeys.SchedulerContainerWorkerIndex(workerID)
 	keys, err := r.rdb.SMembers(ctx, indexKey).Result()
@@ -131,13 +121,8 @@ func containerStateFromFields(values []interface{}) (*types.ContainerState, bool
 	}, true
 }
 
-// selectEvictionVictims picks the reclaimable containers on a worker that
-// cover a capacity shortfall. Deficits at or below zero mean the request
-// already fits on that axis. Candidates are ordered by EvictOrder (lower
-// first, so prefill replicas go before decode/serve), then containers that
-// have not started serving yet, then newest first so the replicas that have
-// been serving longest keep their warm caches. Callers hold the worker lease;
-// the Lua schedule script re-validates each victim.
+// selectEvictionVictims picks reclaimable containers covering a shortfall:
+// lowest EvictOrder first, then not yet running, then newest.
 func (r *WorkerRedisRepository) selectEvictionVictims(ctx context.Context, workerID string, deficitCPU, deficitMemory, deficitGPU int64) ([]evictionVictim, error) {
 	if deficitCPU <= 0 && deficitMemory <= 0 && deficitGPU <= 0 {
 		return nil, nil
@@ -208,12 +193,9 @@ func chooseVictims(states []*types.ContainerState, workerID string, deficitCPU, 
 	return victims, nil
 }
 
-// requestDependencies assigns each queued request only the victims whose
-// capacity it actually consumes. Requests are walked in commit order: idle
-// capacity is drawn first, then victims in selection order for the
-// remainder, so a request that fits what is free carries no eviction
-// dependency and starts as soon as the worker picks it up. The returned
-// drain is the longest drain among that request's victims.
+// requestDependencies assigns each request only the victims whose capacity it
+// consumes: idle capacity first, so a request that fits what is free carries
+// no eviction dependency.
 func requestDependencies(queued []queuedContainerRequest, free [3]int64, victims []evictionVictim) (map[string][]string, map[string]uint32) {
 	deps := make(map[string][]string, len(queued))
 	drains := make(map[string]uint32, len(queued))

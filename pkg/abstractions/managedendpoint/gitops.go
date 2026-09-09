@@ -31,26 +31,18 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
-// GitOps keeps the endpoint registry in sync with the endpoints repository.
-//
-// The gateway itself never imports Python: on a new commit it launches a
-// one-shot deployer container (SDK + git) in the admin workspace that checks
-// out the SHA, discovers every app.py exporting a ManagedEndpoint or
-// ManagedService, runs the SDK deploy for the changed ones and posts a report
-// back to /api/v1/endpoints/gitops/report. The report drives version records,
-// per-endpoint status and retirement of directories that disappeared.
+// gitops keeps the registry in sync with the endpoints repo. On a new commit
+// a one-shot deployer container (SDK + git) deploys the changed apps and
+// posts a report to /api/v1/endpoints/gitops/report.
 
 //go:embed gitops_deployer.py
 var gitopsDeployerScript string
 
 const (
-	gitopsLockKey = "managed_endpoint:gitops:lock"
-	gitopsLockTTL = 30 * time.Second
-	// gitopsRunTimeout bounds one deployer run, including image builds.
-	gitopsRunTimeout = 45 * time.Minute
-	// gitopsRetryBackoff spaces out runs that only retry failed endpoints at
-	// an unchanged commit.
-	gitopsRetryBackoff   = 15 * time.Minute
+	gitopsLockKey        = "managed_endpoint:gitops:lock"
+	gitopsLockTTL        = 30 * time.Second
+	gitopsRunTimeout     = 45 * time.Minute // one deployer run, including image builds
+	gitopsRetryBackoff   = 15 * time.Minute // between runs that only retry failures at an unchanged commit
 	gitopsSyncWarnAfter  = 2 * time.Minute
 	gitopsStubName       = "managed-endpoints-deployer"
 	gitopsContainerPfx   = "me-deployer"
@@ -83,9 +75,8 @@ func newGitOps(s *Service) *gitops {
 	return &gitops{s: s, lock: common.NewRedisLock(s.rdb), pending: make(chan gitopsRequest, 1)}
 }
 
-// Trigger requests a sync. With an empty sha the remote head of the
-// configured ref is resolved; a non-empty sha forces a redeploy of every stub
-// at that commit. It returns false when a sync is already queued.
+// Trigger requests a sync; a non-empty sha forces a redeploy of every stub at
+// that commit. It returns false when a sync is already queued.
 func (g *gitops) Trigger(sha string) (bool, error) {
 	sha = strings.ToLower(strings.TrimSpace(sha))
 	if sha != "" && !shaPattern.MatchString(sha) {
@@ -99,8 +90,6 @@ func (g *gitops) Trigger(sha string) (bool, error) {
 	}
 }
 
-// mount registers the unauthenticated webhook and the token-authenticated
-// deployer report route.
 func (g *gitops) mount(public *echo.Group, authed *echo.Group) {
 	if public != nil {
 		public.POST("/gitops/webhook", g.handleWebhook)
@@ -110,8 +99,6 @@ func (g *gitops) mount(public *echo.Group, authed *echo.Group) {
 	}
 }
 
-// run polls the remote ref and services triggers. Like the controller it is
-// leader-elected so only one gateway launches deployers.
 func (g *gitops) run(ctx context.Context) {
 	ticker := time.NewTicker(g.s.config.Repo.PollInterval)
 	defer ticker.Stop()
@@ -123,11 +110,6 @@ func (g *gitops) run(ctx context.Context) {
 		case <-ticker.C:
 		case req = <-g.pending:
 		}
-		// The lease is renewed for as long as sync runs (resolving the remote
-		// head alone can take a while) and sync is cancelled if it is lost. A
-		// sync that does not return (a hung storage mount, an unresponsive
-		// backend) keeps the lease and silently stops all reconciliation, so
-		// it is reported while it is stuck.
 		err := g.lock.WithLease(ctx, gitopsLockKey, common.RedisLockOptions{TtlS: int(gitopsLockTTL.Seconds()), Retries: 0}, func(ctx context.Context) error {
 			stop := warnIfStuck(gitopsSyncWarnAfter, "managed endpoints: gitops sync has not returned; reconciliation is stalled")
 			defer stop()
@@ -158,8 +140,6 @@ func warnIfStuck(interval time.Duration, msg string) (stop func()) {
 	return func() { close(done) }
 }
 
-// sync is one reconciler pass: expire a stuck run, then launch a deployer if
-// the target commit differs from the last applied one.
 func (g *gitops) sync(ctx context.Context, req gitopsRequest) error {
 	state, err := g.state(ctx)
 	if err != nil {
@@ -191,13 +171,9 @@ func (g *gitops) sync(ctx context.Context, req gitopsRequest) error {
 	return g.launch(ctx, state, sha, req.force, retry)
 }
 
-// needsRun decides whether a deployer should be launched for sha and which
-// failed endpoints it should redeploy. A new commit or a forced trigger runs
-// immediately. When nothing changed and the run would only retry failures
-// (broken apps, a failed retirement or fleet write), it waits
-// gitopsRetryBackoff since the last run: those failures rarely fix themselves
-// between polls (a missing image, a bad app.py) and rerunning them every poll
-// only rebuilds and re-fails.
+// needsRun decides whether to launch a deployer for sha and which failed
+// endpoints to redeploy. A run that would only retry failures at an unchanged
+// commit waits gitopsRetryBackoff.
 func needsRun(state *types.GitOpsState, sha string, force bool, now time.Time) (retry []string, run bool) {
 	for _, e := range state.PerEndpoint {
 		if e.Status == types.GitOpsStatusFailed && e.Path != "" {
@@ -226,10 +202,7 @@ func (g *gitops) state(ctx context.Context) (*types.GitOpsState, error) {
 	return state, nil
 }
 
-// exitedWithoutReport is true when the deployer container is gone but no
-// report arrived; the SDK deploy may have partially applied. The scheduler
-// gets a couple of minutes to create the container before a missing state
-// counts as an exit.
+// exitedWithoutReport is true when the deployer container is gone but no report arrived.
 func (g *gitops) exitedWithoutReport(state *types.GitOpsState) bool {
 	if state.ContainerID == "" || g.s.containers == nil || time.Since(state.StartedAt) < 2*time.Minute {
 		return false
@@ -239,11 +212,8 @@ func (g *gitops) exitedWithoutReport(state *types.GitOpsState) bool {
 	return errors.As(err, &notFound)
 }
 
-// deployerSecrets is the admin workspace's secrets as NAME=value pairs. The
-// deployer builds every app image, so registry credentials an app names in
-// Image.from_registry(credentials=[...]) (GITHUB_USERNAME/GITHUB_TOKEN for a
-// private ghcr.io image, ...) are plain workspace secrets read from its
-// environment, the same way a developer's shell provides them locally.
+// deployerSecrets is the admin workspace's secrets as NAME=value pairs; the
+// deployer reads image registry credentials from its environment.
 func (g *gitops) deployerSecrets(ctx context.Context, workspace *types.Workspace) ([]string, error) {
 	listed, err := g.s.backend.ListSecrets(ctx, workspace)
 	if err != nil {
@@ -267,8 +237,6 @@ func (g *gitops) deployerSecrets(ctx context.Context, workspace *types.Workspace
 	return env, nil
 }
 
-// deployKey returns the decrypted deploy key secret (SSH private key or https
-// token) from the admin workspace, or "" when none is configured.
 func (g *gitops) deployKey(ctx context.Context) (string, error) {
 	name := strings.TrimSpace(g.s.config.Repo.DeployKeySecret)
 	if name == "" {
@@ -292,8 +260,6 @@ func (g *gitops) deployKey(ctx context.Context) (string, error) {
 	return common.Decrypt(signingKey, secret.Value)
 }
 
-// resolveHead runs `git ls-remote` for the configured ref. A ref that is
-// already a full commit id is returned as-is.
 func (g *gitops) resolveHead(ctx context.Context) (string, error) {
 	ref := strings.TrimSpace(g.s.config.Repo.Ref)
 	if pinned := strings.ToLower(ref); fullSHAPattern.MatchString(pinned) {
@@ -324,8 +290,6 @@ func (g *gitops) resolveHead(ctx context.Context) (string, error) {
 		url = "https://x-access-token:" + key + "@" + strings.TrimPrefix(url, "https://")
 	}
 
-	// The peeled `<tag>^{}` line is only printed when a pattern matches it, so
-	// ask for it explicitly; otherwise an annotated tag yields its tag object.
 	cmd := exec.CommandContext(ctx, "git", "ls-remote", "--heads", "--tags", url,
 		ref, ref+"^{}", "refs/heads/"+ref, "refs/tags/"+ref, "refs/tags/"+ref+"^{}")
 	cmd.Env = env
@@ -341,12 +305,8 @@ func (g *gitops) resolveHead(ctx context.Context) (string, error) {
 	return sha, nil
 }
 
-// pickRemoteSHA chooses the commit id for ref from `git ls-remote` output. A
-// branch wins over a same-named tag. For tags the peeled `refs/tags/<ref>^{}`
-// line (the commit an annotated tag points at) is preferred; the un-peeled
-// line is only used when no peeled line exists, i.e. for lightweight tags.
-// ref may be a short name or a fully qualified refs/heads/… or refs/tags/…
-// name, in which case only that namespace is considered.
+// pickRemoteSHA chooses the commit for ref from `git ls-remote` output: a
+// branch wins over a same-named tag, and a peeled tag over its tag object.
 func pickRemoteSHA(output, ref string) (string, bool) {
 	ref = strings.TrimSpace(ref)
 	wantHeads, wantTags := true, true
@@ -474,10 +434,7 @@ func (g *gitops) launch(ctx context.Context, state *types.GitOpsState, sha strin
 	return nil
 }
 
-// deployerStub returns the pod stub the deployer runs under, creating it on
-// first use. The stub is recreated when the configured image changes. It is
-// resolved once per process: the empty stub object is written to workspace
-// storage, which sync must not depend on every run.
+// deployerStub is the pod stub the deployer runs under, resolved once per process.
 func (g *gitops) deployerStub(ctx context.Context, workspace *types.Workspace, image string) (*types.StubWithRelated, error) {
 	if g.stub != nil {
 		return g.stub, nil
@@ -509,8 +466,6 @@ func (g *gitops) failRun(ctx context.Context, state *types.GitOpsState, reason s
 	log.Warn().Str("sha", state.TargetSHA).Str("reason", reason).Msg("managed endpoints: gitops run failed")
 }
 
-// finishRun revokes the run token, stops a lingering container and clears
-// the in-flight markers.
 func (g *gitops) finishRun(ctx context.Context, state *types.GitOpsState) {
 	if state.TokenID != "" && g.s.backend != nil {
 		if workspace, err := g.s.AdminWorkspace(ctx); err == nil {
@@ -526,13 +481,9 @@ func (g *gitops) finishRun(ctx context.Context, state *types.GitOpsState) {
 	state.RunID, state.ContainerID, state.TokenID = "", "", ""
 }
 
-// applyReport folds the deployer's report into the registry: records
-// per-endpoint status, advances LastSHA, retires endpoints whose directories
-// disappeared and applies fleet.yaml. It runs under the gitops lease and is
-// fenced by the run id, so a stale or duplicate report cannot touch a newer
-// run. The state is saved (the run durably accepted) before the run's token
-// and container are cleaned up: if the save fails the deployer's token is
-// still valid and its retry re-applies the same report idempotently.
+// applyReport folds the deployer's report into the registry. It is fenced by
+// the run id and saves state before cleaning up the run, so a failed save
+// leaves the deployer's token valid for a retry.
 func (g *gitops) applyReport(ctx context.Context, report *types.GitOpsReport) error {
 	if report == nil || report.RunID == "" {
 		return errors.New("run_id is required")
@@ -562,10 +513,8 @@ func (g *gitops) applyReport(ctx context.Context, report *types.GitOpsReport) er
 
 	failed := g.applyResults(ctx, state, report, now)
 
-	// fleet.yaml is applied against the endpoints that exist after this run.
-	// An invalid fleet is not applied (the previous placement stays in force,
-	// the error is surfaced) and there is nothing to retry at this commit; a
-	// failed write leaves FleetSHA behind so sync relaunches at the same SHA.
+	// An invalid fleet is not applied and not retried; a failed write leaves
+	// FleetSHA behind so sync relaunches at the same SHA.
 	skipped, err := g.applyFleet(ctx, report)
 	state.FleetError = skipped
 	var invalid *fleetInvalidError
@@ -580,9 +529,7 @@ func (g *gitops) applyReport(ctx context.Context, report *types.GitOpsReport) er
 		failed++
 	}
 
-	// LastSHA advances even when some stubs failed: they are tracked per
-	// endpoint and retried on their own, so a broken app never redeploys the
-	// healthy ones.
+	// LastSHA advances even when some stubs failed; they are retried on their own.
 	state.TargetSHA, state.LastSHA = report.SHA, report.SHA
 	state.LastError = ""
 	if failed > 0 {
@@ -604,9 +551,7 @@ func (g *gitops) applyReport(ctx context.Context, report *types.GitOpsReport) er
 // disappeared from the repo. It returns how many failed.
 func (g *gitops) applyResults(ctx context.Context, state *types.GitOpsState, report *types.GitOpsReport, now time.Time) int {
 	failed := 0
-	// importErrors holds directories whose app.py failed to import (no ID is
-	// known for them), keyed by path.
-	importErrors := map[string]string{}
+	importErrors := map[string]string{} // path -> error, for directories whose app.py failed to import
 	for _, r := range report.Results {
 		if r.ID == "" {
 			importErrors[r.Path] = r.Error
@@ -629,10 +574,8 @@ func (g *gitops) applyResults(ctx context.Context, state *types.GitOpsState, rep
 		state.PerEndpoint[key] = entry
 	}
 
-	// Anything previously applied that is no longer discovered is retired,
-	// unless its directory is still there but failed to import: that stub keeps
-	// its last applied state and is flagged failed, so a bad commit never
-	// tears down what the previous commit deployed.
+	// Anything no longer discovered is retired, unless its directory is still
+	// there but failed to import: a bad commit never tears down the previous one.
 	present := map[string]bool{}
 	for _, r := range report.Results {
 		if r.ID != "" {
@@ -651,8 +594,6 @@ func (g *gitops) applyResults(ctx context.Context, state *types.GitOpsState, rep
 			continue
 		}
 		if err := g.retire(ctx, entry.ID, report.SHA); err != nil {
-			// Flagged failed with its path, so the next sync relaunches and,
-			// finding the directory still gone, retries the retirement.
 			log.Warn().Err(err).Str("id", entry.ID).Msg("managed endpoints: gitops retire failed")
 			entry.Status, entry.Error, entry.UpdatedAt = types.GitOpsStatusFailed, "retire: "+err.Error(), now
 			state.PerEndpoint[key] = entry
@@ -662,8 +603,7 @@ func (g *gitops) applyResults(ctx context.Context, state *types.GitOpsState, rep
 		entry.Status, entry.Error, entry.UpdatedAt = types.GitOpsStatusRetired, "", now
 		state.PerEndpoint[key] = entry
 	}
-	// Import failures in directories with no known stub are keyed by path so
-	// they stay visible; stale path entries from earlier runs are dropped.
+	// Import failures with no known stub are keyed by path; stale ones are dropped.
 	for key, entry := range state.PerEndpoint {
 		if _, broken := importErrors[entry.Path]; strings.HasPrefix(key, "path:") && (!broken || claimed[entry.Path]) {
 			delete(state.PerEndpoint, key)
@@ -674,8 +614,6 @@ func (g *gitops) applyResults(ctx context.Context, state *types.GitOpsState, rep
 			state.PerEndpoint["path:"+path] = types.GitOpsEndpointState{Path: path, Status: types.GitOpsStatusFailed, Error: msg, UpdatedAt: now}
 		}
 	}
-	// Entries are keyed by endpoint id or "path:<dir>"; anything else is left
-	// over from an older key scheme and would show as a duplicate row.
 	for key, entry := range state.PerEndpoint {
 		if key != entry.ID && key != "path:"+entry.Path {
 			delete(state.PerEndpoint, key)
@@ -684,8 +622,7 @@ func (g *gitops) applyResults(ctx context.Context, state *types.GitOpsState, rep
 	return failed
 }
 
-// retire disables an endpoint removed from the repo. Replicas are drained
-// by the controller; usage history is kept.
+// retire disables an endpoint removed from the repo; the controller drains its replicas.
 func (g *gitops) retire(ctx context.Context, id, sha string) error {
 	endpoint, err := g.s.repo.GetEndpoint(ctx, id)
 	if err != nil || endpoint == nil {
@@ -707,23 +644,11 @@ type fleetInvalidError struct{ err error }
 func (e *fleetInvalidError) Error() string { return "fleet.yaml: " + e.err.Error() }
 func (e *fleetInvalidError) Unwrap() error { return e.err }
 
-// parseFleet reads fleet.yaml: a GPU type maps to its priority list, whose
-// items are an endpoint id ("vendor/model", every idle GPU) or a one-key map
-// ("vendor/model: 2", at most two replicas there).
+// parseFleet reads fleet.yaml: endpoint id -> {enabled, gpus: {<gpu>: {priority, maxReplicas}}}.
 func parseFleet(text string) (*types.Fleet, error) {
-	var raw map[string][]any
-	if err := yaml.Unmarshal([]byte(text), &raw); err != nil {
+	fleet := &types.Fleet{Endpoints: map[string]types.FleetEndpoint{}}
+	if err := yaml.UnmarshalStrict([]byte(text), &fleet.Endpoints); err != nil {
 		return nil, err
-	}
-	fleet := &types.Fleet{Priority: map[string][]types.FleetEntry{}}
-	for gpu, items := range raw {
-		for _, item := range items {
-			entry, err := fleetEntry(item)
-			if err != nil {
-				return nil, fmt.Errorf("%s: %w", gpu, err)
-			}
-			fleet.Priority[gpu] = append(fleet.Priority[gpu], entry)
-		}
 	}
 	fleet.Normalize()
 	if err := fleet.Validate(); err != nil {
@@ -732,29 +657,9 @@ func parseFleet(text string) (*types.Fleet, error) {
 	return fleet, nil
 }
 
-func fleetEntry(item any) (types.FleetEntry, error) {
-	switch v := item.(type) {
-	case string:
-		return types.FleetEntry{EndpointID: v}, nil
-	case map[any]any:
-		if len(v) != 1 {
-			return types.FleetEntry{}, fmt.Errorf("%v: an entry is an endpoint id or one \"endpoint id: max replicas\" pair", v)
-		}
-		for id, n := range v {
-			count, ok := n.(int)
-			if !ok || count < 0 {
-				return types.FleetEntry{}, fmt.Errorf("%v: max replicas must be a non-negative integer", id)
-			}
-			return types.FleetEntry{EndpointID: fmt.Sprint(id), Max: uint32(count)}, nil
-		}
-	}
-	return types.FleetEntry{}, fmt.Errorf("%v: an entry is an endpoint id or one \"endpoint id: max replicas\" pair", item)
-}
-
-// applyFleet parses and validates the report's fleet.yaml, drops entries for
-// endpoints that are not deployed (reported as skipped, so a failed deploy
-// never blocks the rest of the fleet) and saves the result. A fleet that fails
-// validation is not applied: the previous one stays in force.
+// applyFleet validates and saves the report's fleet.yaml, dropping entries for
+// endpoints that are not deployed (reported as skipped). An invalid fleet is
+// not applied; the previous one stays in force.
 func (g *gitops) applyFleet(ctx context.Context, report *types.GitOpsReport) (skipped string, err error) {
 	endpoints, err := g.s.repo.ListEndpoints(ctx)
 	if err != nil {
@@ -775,17 +680,14 @@ func (g *gitops) applyFleet(ctx context.Context, report *types.GitOpsReport) (sk
 	if err := g.s.repo.SaveFleet(ctx, fleet); err != nil {
 		return "", err
 	}
-	g.s.emit(types.EventEndpointGitOps, types.EventEndpointSchema{Action: "gitops.fleet", Message: report.SHA, Data: map[string]any{"fleet": fleet.Priority, "skipped": dropped}})
+	g.s.emit(types.EventEndpointGitOps, types.EventEndpointSchema{Action: "gitops.fleet", Message: report.SHA, Data: map[string]any{"fleet": fleet.Endpoints, "skipped": dropped}})
 	if len(dropped) > 0 {
 		return "skipped: " + strings.Join(dropped, "; "), nil
 	}
 	return "", nil
 }
 
-// --- HTTP ----------------------------------------------------------------------
-
-// handleWebhook accepts GitHub/GitLab push notifications. The body is
-// verified with Webhook.Secret; pushes to other refs are ignored.
+// handleWebhook accepts GitHub/GitLab push notifications for the configured ref.
 func (g *gitops) handleWebhook(ctx echo.Context) error {
 	secret := strings.TrimSpace(g.s.config.Webhook.Secret)
 	if secret == "" {
@@ -809,14 +711,12 @@ func (g *gitops) handleWebhook(ctx echo.Context) error {
 	case push.Deleted:
 		return ctx.JSON(http.StatusOK, map[string]any{"ok": true, "ignored": true, "deleted": true})
 	}
-	// Let the poller resolve the head rather than trusting the payload sha,
-	// so a burst of pushes collapses into one run at the latest commit.
+	// The poller resolves the head, so a burst of pushes collapses into one run.
 	started, _ := g.Trigger("")
 	return ctx.JSON(http.StatusAccepted, map[string]any{"ok": true, "started": started, "after": push.After})
 }
 
-// handleReport receives the deployer's result. Only the token minted for the
-// run in flight (or a cluster admin) may report on it.
+// handleReport receives the deployer's result from the run's token or a cluster admin.
 func (g *gitops) handleReport(ctx echo.Context) error {
 	reqCtx := ctx.Request().Context()
 	cc, ok := ctx.(*auth.HttpAuthContext)
@@ -837,10 +737,7 @@ func (g *gitops) handleReport(ctx echo.Context) error {
 			return echo.NewHTTPError(http.StatusForbidden, "not the token of the run in flight")
 		}
 	}
-	// Report application shares the sync lease so the poller cannot fail or
-	// relaunch the run while its report is being applied. A busy lease is a
-	// 503, which the deployer retries; a fenced-out report is a 409, which it
-	// does not.
+	// A busy lease is a 503 (the deployer retries); a fenced-out report a 409.
 	var applyErr error
 	err := g.lock.WithLease(reqCtx, gitopsLockKey, common.RedisLockOptions{TtlS: int(gitopsLockTTL.Seconds()), Retries: 10, RetryInterval: 500 * time.Millisecond}, func(ctx context.Context) error {
 		applyErr = g.applyReport(ctx, &report)
@@ -864,8 +761,7 @@ type pushEvent struct {
 	Deleted bool
 }
 
-// parsePush extracts ref/after from GitHub and GitLab push payloads. It
-// returns false for payloads that are not pushes (pings, PR events, ...).
+// parsePush extracts ref/after from GitHub and GitLab push payloads.
 func parsePush(body []byte) (pushEvent, bool) {
 	var raw struct {
 		Ref        string `json:"ref"`
@@ -883,9 +779,8 @@ func parsePush(body []byte) (pushEvent, bool) {
 	return pushEvent{Ref: raw.Ref, After: raw.After, Deleted: raw.Deleted || strings.Trim(raw.After, "0") == ""}, true
 }
 
-// verifyWebhook accepts GitHub's HMAC-SHA256 signature
-// (X-Hub-Signature-256: sha256=<hex>), GitLab's shared token
-// (X-Gitlab-Token) and a generic bearer/plain token in X-Webhook-Token.
+// verifyWebhook accepts GitHub's X-Hub-Signature-256, GitLab's X-Gitlab-Token
+// and a plain X-Webhook-Token.
 func verifyWebhook(header http.Header, body []byte, secret string) bool {
 	if sig := strings.TrimSpace(header.Get("X-Hub-Signature-256")); sig != "" {
 		mac := hmac.New(sha256.New, []byte(secret))

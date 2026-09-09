@@ -22,7 +22,6 @@ const (
 )
 
 // updateReplica applies fn to the stored replica under its lock and saves it.
-// It returns the saved record.
 func (s *Service) updateReplica(ctx context.Context, replicaID string, fn func(*types.EndpointReplica)) (*types.EndpointReplica, error) {
 	var out *types.EndpointReplica
 	err := s.repo.WithReplicaLock(ctx, replicaID, func(ctx context.Context) error {
@@ -91,8 +90,7 @@ func (s *Service) Register(ctx context.Context, in *pb.HarnessRegisterRequest) (
 	}, nil
 }
 
-// WatchConfig streams the replica's live config whenever an admin sets a new
-// revision. A keep-alive re-read covers missed pub/sub messages.
+// WatchConfig streams the replica's live config on every new revision.
 func (s *Service) WatchConfig(in *pb.HarnessWatchConfigRequest, stream pb.EndpointHarnessService_WatchConfigServer) error {
 	ctx := stream.Context()
 	replica, err := s.repo.GetReplica(ctx, in.ReplicaId)
@@ -177,8 +175,6 @@ func (s *Service) AckConfig(ctx context.Context, in *pb.HarnessAckConfigRequest)
 	if in.Applied {
 		action = "config.applied"
 	}
-	// The outcome is recorded with the requested and effective config so the
-	// history stands on its own once the replica record is gone.
 	data := map[string]any{"requested": rawJSON(replica.Config.Config), "effective": rawJSON(replica.Config.Effective), "author": replica.Config.Author, "actor": replica.Config.Actor}
 	s.emit(types.EventEndpointConfig, types.EventEndpointSchema{
 		EndpointID: replica.EndpointID, Action: action, ReplicaID: replica.ID, ContainerID: replica.ContainerID, GPU: replica.GPU, Version: replica.Version,
@@ -211,9 +207,8 @@ func (s *Service) Heartbeat(ctx context.Context, in *pb.HarnessHeartbeatRequest)
 	}, nil
 }
 
-// applyHeartbeat folds a heartbeat into the replica record. Status
-// transitions reported by the harness are only accepted while the replica is
-// alive; control-plane states (draining/evicting/terminal) are sticky.
+// applyHeartbeat folds a heartbeat into the replica; control-plane states
+// (draining/evicting/terminal) are sticky.
 func (s *Service) applyHeartbeat(replica *types.EndpointReplica, in *pb.HarnessHeartbeatRequest) {
 	now := time.Now()
 	replica.LastHeartbeat = now
@@ -221,8 +216,6 @@ func (s *Service) applyHeartbeat(replica *types.EndpointReplica, in *pb.HarnessH
 	if in.Capacity != nil {
 		replica.Capacity = capacityFromProto(in.Capacity)
 	}
-	// A heartbeat may recover a missed ack for an issued revision, never
-	// advance past what was issued.
 	if in.AppliedRevision > replica.Config.AckedRevision && in.AppliedRevision <= replica.Config.Revision {
 		replica.Config.AckedRevision, replica.Config.Applied, replica.Config.Error = in.AppliedRevision, true, ""
 	}
@@ -241,8 +234,6 @@ func (s *Service) applyHeartbeat(replica *types.EndpointReplica, in *pb.HarnessH
 		}
 		replica.Status = types.ReplicaStatusReady
 	case types.ReplicaStatusLoading:
-		// A ready engine that reports loading (model/config reload) leaves the
-		// serving set until it reports ready again.
 		if replica.Status == types.ReplicaStatusScheduling || replica.Status == types.ReplicaStatusReady {
 			replica.EnterLoading(now, "engine reported loading")
 		}

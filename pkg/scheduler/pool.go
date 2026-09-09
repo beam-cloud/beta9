@@ -211,11 +211,8 @@ func poolCapacityFromWorkers(workers []*types.Worker) *WorkerPoolCapacity {
 				capacity.PendingGpu += uint(worker.TotalGpuCount)
 			}
 		default:
-			// Physical idle capacity only. A GPU held by a managed endpoint
-			// replica is reclaimable but not immediately usable, so it does
-			// not satisfy a minimum-free floor; the replica controller keeps
-			// that floor idle (see managedendpoint inventory) so replicas do
-			// not make the pool provision on their account either.
+			// Physical idle capacity only: a GPU held by a managed endpoint
+			// replica does not satisfy the minimum-free floor.
 			capacity.FreeCpu += worker.FreeCpu
 			capacity.FreeMemory += worker.FreeMemory
 			if worker.Gpu != "" && (worker.FreeCpu > 0 && worker.FreeMemory > 0) {

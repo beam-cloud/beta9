@@ -1,7 +1,5 @@
-// Package managedendpoint implements the managed endpoints platform: the
-// registry of GitOps-deployed inference endpoints, the controller that fills
-// them onto spare GPU capacity, the harness and admin gRPC services, and the
-// OpenRouter-compatible /v1 route.
+// Package managedendpoint hosts GitOps-deployed inference endpoints on spare
+// GPU capacity and serves them under an OpenAI-compatible /v1 route.
 package managedendpoint
 
 import (
@@ -35,9 +33,7 @@ import (
 )
 
 const (
-	// containerPrefix must not collide with other abstractions' prefixes (the
-	// serverless endpoint service claims "endpoint-*" containers by prefix).
-	containerPrefix = "managed"
+	containerPrefix = "managed" // "endpoint-*" is claimed by the serverless endpoint service
 
 	// Environment injected into every replica container.
 	EnvEndpointID     = "BEAM_ENDPOINT_ID"
@@ -48,10 +44,7 @@ const (
 	EnvEndpointPort   = "BEAM_ENDPOINT_PORT"
 	EnvHarnessEnabled = "BEAM_HARNESS_ENABLED"
 	EnvHarnessConfig  = "BEAM_HARNESS_CONFIG"
-	// EnvDrainSeconds is how long the engine has after SIGTERM (eviction or
-	// scale-down) before the worker kills it. Engines without the harness
-	// still get a correct drain window from this alone.
-	EnvDrainSeconds = "BEAM_DRAIN_SECONDS"
+	EnvDrainSeconds   = "BEAM_DRAIN_SECONDS" // grace after SIGTERM before the worker kills the engine
 )
 
 var (
@@ -110,9 +103,8 @@ type Service struct {
 	pb.UnimplementedEndpointAdminServiceServer
 }
 
-// New constructs the service. When managed endpoints are disabled the
-// returned service registers no routes and every RPC fails with
-// FailedPrecondition, so callers can register it unconditionally.
+// New constructs the service. When disabled it registers no routes and every
+// RPC fails with FailedPrecondition.
 func New(ctx context.Context, opts Opts) (*Service, error) {
 	s := &Service{
 		ctx:        ctx,
@@ -173,9 +165,7 @@ func (s *Service) Enabled() bool {
 	return s != nil && s.config.Enabled && s.repo != nil
 }
 
-// AdminWorkspace returns the cluster admin workspace, which owns every
-// managed stub and replica. The signing key is filled in because container
-// mounts and secret decryption need it.
+// AdminWorkspace is the cluster admin workspace that owns every managed stub and replica.
 func (s *Service) AdminWorkspace(ctx context.Context) (*types.Workspace, error) {
 	s.adminMu.Lock()
 	defer s.adminMu.Unlock()
@@ -213,10 +203,8 @@ func (s *Service) authorizeAdmin(ctx context.Context) error {
 	return nil
 }
 
-// Replicas hold no workspace token. The only credential a replica container
-// receives is its own secret, minted here and delivered as BEAM_REPLICA_SECRET;
-// harness RPCs are exempt from token auth and are authorized by that secret
-// alone, so a compromised model host learns nothing beyond its own replica.
+// A replica's only credential is its own secret (BEAM_REPLICA_SECRET), which
+// authorizes the harness RPCs.
 const replicaSecretHeader = "x-beam-replica-secret"
 
 func newReplicaSecret() (secret, hash string) {
@@ -231,9 +219,7 @@ func hashReplicaSecret(secret string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// transport returns the pooled transport for one replica address. Every hop
-// to a replica (proxying, health, metrics) dials through it, so provider
-// route:// addresses and tailscale backends behave the same everywhere.
+// transport is the pooled transport for one replica address (route:// and tailscale aware).
 func (s *Service) transport(address string) *http.Transport {
 	if t, ok := s.transports.Load(address); ok {
 		return t.(*http.Transport)
@@ -311,8 +297,6 @@ func (s *Service) replicaEvent(replica *types.EndpointReplica, action, message s
 	})
 }
 
-// normalizeGPUKey canonicalizes an admin-supplied GPU key ("h100" -> "H100",
-// "" -> "" so filters stay optional).
 func normalizeGPUKey(gpu string) string {
 	if strings.TrimSpace(gpu) == "" {
 		return ""
@@ -343,8 +327,6 @@ func replicaLog(replica *types.EndpointReplica) *zerolog.Logger {
 		Logger()
 	return &logger
 }
-
-// --- proto conversion --------------------------------------------------------
 
 func unixMs(t time.Time) int64 {
 	if t.IsZero() {
@@ -453,8 +435,6 @@ func replicasToProto(replicas []*types.EndpointReplica) []*pb.EndpointReplica {
 	return out
 }
 
-// endpointToProto builds the listing entry with live replica counts and the
-// fleet's placements for the endpoint.
 func endpointToProto(e *types.ManagedEndpoint, fleet *types.Fleet, replicas []*types.EndpointReplica) *pb.ManagedEndpoint {
 	out := &pb.ManagedEndpoint{
 		Id:              e.Spec.ID,
@@ -467,11 +447,7 @@ func endpointToProto(e *types.ManagedEndpoint, fleet *types.Fleet, replicas []*t
 		UpdatedAtUnixMs: unixMs(e.UpdatedAt),
 	}
 	if fleet != nil {
-		placements := map[string]uint32{}
-		for _, t := range fleet.Placements(e.Spec.ID) {
-			placements[t.GPU] = t.Max
-		}
-		out.PlacementsJson = mustJSON(placements)
+		out.PlacementsJson = mustJSON(fleet.Placements(e.Spec.ID))
 	}
 	for _, r := range replicas {
 		if r.EndpointID == e.Spec.ID && !r.Status.Terminal() {
@@ -510,8 +486,6 @@ func gitopsToProto(state *types.GitOpsState) *pb.GitOpsState {
 	return out
 }
 
-// routeMetricsToProto combines a route window with the ready replicas'
-// engine-reported capacity.
 func routeMetricsToProto(m *types.RouteMetrics, replicas []*types.EndpointReplica) *pb.EndpointMetrics {
 	if m == nil {
 		return nil
