@@ -646,6 +646,25 @@ func TestEnsureBindMountSourceDirsSkipsDurableDisks(t *testing.T) {
 	require.Equal(t, 1, attempts)
 }
 
+// A failed user code extraction leaves the mount pointing at the object file;
+// creating a directory there would shadow the object for every later start.
+func TestEnsureBindMountSourceDirsNeverCreatesTheUserCodeSource(t *testing.T) {
+	manager := NewContainerMountManager(types.AppConfig{})
+	var created []string
+	ops := bindMountRetryTestOps(&bindMountRetryTestClock{current: time.Unix(1, 0)}, func(p string, _ os.FileMode) error {
+		created = append(created, p)
+		return nil
+	})
+
+	err := manager.ensureBindMountSourceDirsWithOps(context.Background(), []types.Mount{
+		{LocalPath: filepath.Join(types.DefaultObjectPath, "ws", "object-id"), MountPath: types.WorkerUserCodeVolume},
+		{LocalPath: "/volumes/ws/vol", MountPath: "/vol"},
+	}, ops)
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"/volumes/ws/vol"}, created)
+}
+
 func TestMkdirBindSourceHandlesExistingFreshAndDeepPaths(t *testing.T) {
 	root := t.TempDir()
 	existing := filepath.Join(root, "existing")

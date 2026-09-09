@@ -169,6 +169,14 @@ func (c *ContainerMountManager) ensureBindMountSourceDirsWithOps(ctx context.Con
 		if mount.MountType == types.StorageModeDurableDisk {
 			continue
 		}
+		// The user code source is the directory setupUserCodeMount extracted
+		// into, which already exists. If that step failed the LocalPath is
+		// still the object *file* under /data/objects: creating a directory
+		// there would shadow the object and make every later start of the
+		// stub fail with "is a directory".
+		if mount.MountPath == types.WorkerUserCodeVolume {
+			continue
+		}
 		if mount.MountPath == types.WorkerUserOutputVolume {
 			if _, ready := c.readyOutputDirs.Load(mount.LocalPath); ready {
 				continue
