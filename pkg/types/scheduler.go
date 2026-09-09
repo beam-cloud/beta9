@@ -87,8 +87,8 @@ type Worker struct {
 	RolloutBuildVersion string `json:"rollout_build_version" redis:"-"`
 	WorkerImageOverride string `json:"worker_image_override" redis:"worker_image_override"`
 	// Evictable* is the share of used capacity held by evictable containers
-	// (managed endpoint replicas above min_replicas). Non-evictable requests
-	// may claim it; the scheduler stops the holders first.
+	// (managed endpoint replicas). Non-evictable requests may claim it; the
+	// scheduler stops the holders first.
 	EvictableCpu        int64  `json:"evictable_cpu" redis:"evictable_cpu"`
 	EvictableMemory     int64  `json:"evictable_memory" redis:"evictable_memory"`
 	EvictableGpuCount   uint32 `json:"evictable_gpu_count" redis:"evictable_gpu_count"`
@@ -322,7 +322,7 @@ type ContainerRequest struct {
 	Hostname             string `json:"hostname,omitempty"`
 	ProvisioningAttempts int    `json:"provisioning_attempts,omitempty" go2proto:"ignore"`
 	// Evictable marks a container that the scheduler may stop to make room for
-	// a non-evictable request (managed endpoint replicas above min_replicas).
+	// a non-evictable request (managed endpoint replicas).
 	Evictable bool `json:"evictable,omitempty"`
 	// OpportunisticOnly restricts placement to capacity that is already free:
 	// the request never triggers pool scale-up or provisioning.

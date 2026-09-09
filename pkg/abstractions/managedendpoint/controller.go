@@ -227,24 +227,33 @@ func (c *controller) inventory(replicas []*types.EndpointReplica) (*clusterInven
 }
 
 // place picks the pool for one replica and reserves its GPUs in the in-memory
-// inventory: the eligible pool with the most free GPUs of the type, or the
-// first eligible pool when none has room (the scheduler then provisions or
-// waits). A replica is never submitted without a pool, so it cannot land on a
-// pool that did not opt in.
+// inventory: the eligible pool with the most idle GPUs of the type. Replicas
+// only ever fill capacity that is idle right now; when no eligible pool has
+// room nothing is submitted (the scheduler is never asked to wait for or
+// provision a worker) and the next pass tries again. CPU replicas have no GPU
+// inventory to check and go to the first eligible CPU pool; the scheduler
+// fits them by cpu/memory. A replica is never submitted without a pool, so it
+// cannot land on a pool that did not opt in.
 func (inv *clusterInventory) place(gpu string, count uint32) (eligiblePool, bool) {
 	pools := inv.pools[gpu]
 	if len(pools) == 0 {
 		return eligiblePool{}, false
 	}
-	best, bestFree := pools[0], uint32(0)
+	if gpu == types.CPUInventoryKey {
+		return pools[0], true
+	}
+	need := max(count, 1)
+	var best eligiblePool
+	bestFree := uint32(0)
 	for _, pool := range pools {
-		if free := inv.free[gpu][pool.Name]; free >= max(count, 1) && free > bestFree {
+		if free := inv.free[gpu][pool.Name]; free >= need && free > bestFree {
 			best, bestFree = pool, free
 		}
 	}
-	if bestFree > 0 {
-		inv.free[gpu][best.Name] -= max(count, 1)
+	if bestFree == 0 {
+		return eligiblePool{}, false
 	}
+	inv.free[gpu][best.Name] -= need
 	return best, true
 }
 
@@ -359,7 +368,7 @@ func (c *controller) grow(ctx context.Context, endpoint *types.ManagedEndpoint, 
 	for range min(need, maxStartsPerTick) {
 		pool, ok := inv.place(ft.GPU, endpoint.Spec.Gpu[ft.GPU].Count)
 		if !ok {
-			log.Debug().Str("endpoint_id", endpoint.Spec.ID).Str("gpu", ft.GPU).Msg("managed endpoints: no pool opted in for this GPU type")
+			log.Debug().Str("endpoint_id", endpoint.Spec.ID).Str("gpu", ft.GPU).Msg("managed endpoints: no idle capacity in any eligible pool")
 			return
 		}
 		if _, err := c.startReplica(ctx, startSpec{Endpoint: endpoint, Target: ft, Pool: pool}); err != nil {

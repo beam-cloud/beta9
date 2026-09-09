@@ -39,11 +39,15 @@ func TestInventoryPlacesInEligiblePoolsOnly(t *testing.T) {
 	assert.Equal(t, "gpu-b", pool.Name)
 	assert.Equal(t, uint32(1), inv.free["H100"]["gpu-b"])
 
-	// Nothing fits any more: the first eligible pool takes the request and
-	// the scheduler provisions (or waits).
+	// Nothing fits any more: nothing is submitted. Replicas only fill idle
+	// GPUs; the scheduler is never asked to wait for or provision one.
 	pool, ok = inv.place("H100", 2)
-	require.True(t, ok)
-	assert.Equal(t, eligiblePool{Name: "gpu-a", Locality: "us-east"}, pool)
+	assert.False(t, ok)
+	assert.Empty(t, pool.Name)
+	assert.Equal(t, uint32(1), inv.free["H100"]["gpu-b"], "a refused placement reserves nothing")
+	pool, ok = inv.place("H100", 1)
+	require.True(t, ok, "a smaller replica still fits the last GPU")
+	assert.Equal(t, "gpu-b", pool.Name)
 
 	// CPU targets go to the first eligible CPU pool.
 	pool, ok = inv.place(types.CPUInventoryKey, 0)

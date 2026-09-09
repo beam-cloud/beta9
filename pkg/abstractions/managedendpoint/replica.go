@@ -393,9 +393,13 @@ func (c *controller) startReplica(ctx context.Context, spec startSpec) (*types.E
 		Mounts:       mounts,
 		Ports:        []uint32{endpoint.Spec.Port},
 		PoolSelector: spec.Pool.Name,
-		Evictable:    c.s.config.Preemption.Enabled,
-		DrainSeconds: drainSeconds,
-		Timestamp:    time.Now(),
+		// Replicas fill idle capacity only: the scheduler never waits for or
+		// provisions a worker for one, and (when preemption is on) stops it
+		// to make room for a serverless workload.
+		OpportunisticOnly: true,
+		Evictable:         c.s.config.Preemption.Enabled,
+		DrainSeconds:      drainSeconds,
+		Timestamp:         time.Now(),
 	}
 	if err := abstractions.ConfigureContainerRequestNetwork(request, *stubConfig); err != nil {
 		return nil, err
