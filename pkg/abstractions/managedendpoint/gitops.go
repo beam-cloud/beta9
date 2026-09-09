@@ -239,6 +239,34 @@ func (g *gitops) exitedWithoutReport(state *types.GitOpsState) bool {
 	return errors.As(err, &notFound)
 }
 
+// deployerSecrets is the admin workspace's secrets as NAME=value pairs. The
+// deployer builds every app image, so registry credentials an app names in
+// Image.from_registry(credentials=[...]) (GITHUB_USERNAME/GITHUB_TOKEN for a
+// private ghcr.io image, ...) are plain workspace secrets read from its
+// environment, the same way a developer's shell provides them locally.
+func (g *gitops) deployerSecrets(ctx context.Context, workspace *types.Workspace) ([]string, error) {
+	listed, err := g.s.backend.ListSecrets(ctx, workspace)
+	if err != nil {
+		return nil, fmt.Errorf("list admin secrets: %w", err)
+	}
+	if len(listed) == 0 {
+		return nil, nil
+	}
+	names := make([]string, 0, len(listed))
+	for _, secret := range listed {
+		names = append(names, secret.Name)
+	}
+	secrets, err := g.s.backend.GetSecretsByNameDecrypted(ctx, workspace, names)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt admin secrets: %w", err)
+	}
+	env := make([]string, 0, len(secrets))
+	for _, secret := range secrets {
+		env = append(env, secret.Name+"="+secret.Value)
+	}
+	return env, nil
+}
+
 // deployKey returns the decrypted deploy key secret (SSH private key or https
 // token) from the admin workspace, or "" when none is configured.
 func (g *gitops) deployKey(ctx context.Context) (string, error) {
@@ -376,6 +404,10 @@ func (g *gitops) launch(ctx context.Context, state *types.GitOpsState, sha strin
 	if err != nil {
 		return err
 	}
+	secrets, err := g.deployerSecrets(ctx, workspace)
+	if err != nil {
+		return err
+	}
 	token, err := g.s.backend.CreateToken(ctx, workspace.Id, types.TokenTypeWorkspace, true)
 	if err != nil {
 		return fmt.Errorf("mint deployer token: %w", err)
@@ -383,19 +415,19 @@ func (g *gitops) launch(ctx context.Context, state *types.GitOpsState, sha strin
 
 	runID := uuid.New().String()
 	containerID := fmt.Sprintf("%s-%s", gitopsContainerPfx, runID[:8])
-	env := []string{
-		"BETA9_TOKEN=" + token.Key,
-		"STUB_ID=" + stub.ExternalId,
-		"STUB_TYPE=" + string(stub.Type),
-		"ENDPOINTS_REPO_URL=" + g.s.config.Repo.URL,
-		"ENDPOINTS_REPO_SHA=" + sha,
-		"ENDPOINTS_LAST_SHA=" + state.LastSHA,
-		"ENDPOINTS_REPO_REF=" + g.s.config.Repo.Ref,
-		"ENDPOINTS_REPO_PATH=" + strings.Trim(g.s.config.Repo.Path, "/"),
-		"ENDPOINTS_RUN_ID=" + runID,
-		"ENDPOINTS_REDEPLOY=" + strings.Join(retry, ","),
-		"ENDPOINTS_DEPLOYER=" + gitopsDeployerScript,
-	}
+	env := append(secrets,
+		"BETA9_TOKEN="+token.Key,
+		"STUB_ID="+stub.ExternalId,
+		"STUB_TYPE="+string(stub.Type),
+		"ENDPOINTS_REPO_URL="+g.s.config.Repo.URL,
+		"ENDPOINTS_REPO_SHA="+sha,
+		"ENDPOINTS_LAST_SHA="+state.LastSHA,
+		"ENDPOINTS_REPO_REF="+g.s.config.Repo.Ref,
+		"ENDPOINTS_REPO_PATH="+strings.Trim(g.s.config.Repo.Path, "/"),
+		"ENDPOINTS_RUN_ID="+runID,
+		"ENDPOINTS_REDEPLOY="+strings.Join(retry, ","),
+		"ENDPOINTS_DEPLOYER="+gitopsDeployerScript,
+	)
 	if force {
 		env = append(env, "ENDPOINTS_FORCE=1")
 	}

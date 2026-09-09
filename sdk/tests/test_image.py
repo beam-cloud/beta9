@@ -43,6 +43,13 @@ class TestImage(TestCase):
 
             self.assertTrue("Did not find the environment variable Key2." in str(context.exception))
 
+    def test_image_credentials_in_container_sends_what_is_present(self):
+        # Inside a container (the managed endpoints deployer) the environment is
+        # the workspace's secrets; a missing key is left to the registry to report.
+        with temp_env_vars({"CONTAINER_ID": "c-1", "Key1": "1234", "Key2": ""}):
+            image = Image(base_image_creds=["Key1", "Key2"])
+            self.assertEqual(image.get_credentials_from_env(), {"Key1": "1234"})
+
 
 @contextmanager
 def temp_env_vars(d: dict):
@@ -50,7 +57,7 @@ def temp_env_vars(d: dict):
         os.environ[key] = value
     yield
     for key in d.keys():
-        os.unsetenv(key)
+        os.environ.pop(key, None)
 
 
 class TestImageLocalFiles(TestCase):

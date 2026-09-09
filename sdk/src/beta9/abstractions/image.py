@@ -684,9 +684,13 @@ class Image(BaseAbstraction):
         return result
 
     def get_credentials_from_env(self) -> Dict[str, str]:
-        if env.is_remote():
-            return {}
+        """Registry credentials named by base_image_creds, read from the environment.
 
+        Locally a missing key is an error the developer can fix in their shell. In a
+        container (e.g. the managed endpoints deployer, whose environment carries the
+        workspace's secrets) whatever is present is sent and the build reports any
+        registry failure.
+        """
         keys = (
             self.base_image_creds.keys()
             if isinstance(self.base_image_creds, dict)
@@ -697,7 +701,7 @@ class Image(BaseAbstraction):
         for key in keys:
             if v := os.getenv(key):
                 creds[key] = v
-            else:
+            elif env.is_local():
                 raise ImageCredentialValueNotFound(key)
         return creds
 
