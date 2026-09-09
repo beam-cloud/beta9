@@ -95,20 +95,20 @@ func TestRetireWaitsForCurrentReady(t *testing.T) {
 
 	// Nothing of v2 is ready: the serving v1 replica keeps the traffic, but
 	// a v1 replica that is not serving anyway is retired right away.
-	s.controller.retire(ctx, endpoint, fleet, live)
+	s.controller.retire(ctx, endpoint, fleet, live, nil)
 	assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, oldReady.ID))
 	assert.Equal(t, types.ReplicaStatusStopped, statusOf(t, s, oldLoading.ID), "a loading replica is stopped without a drain window")
 	assert.Equal(t, types.ReplicaStatusLoading, statusOf(t, s, newLoading.ID))
 
 	// Only one stale replica is retired per tick, so a second pass with the
 	// same picture drains nothing more (the ready one is still needed).
-	s.controller.retire(ctx, endpoint, fleet, live)
+	s.controller.retire(ctx, endpoint, fleet, live, nil)
 	assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, oldReady.ID))
 
 	// Once v2 has a ready replica the old one is drained with the spec's grace.
 	newLoading.Status = types.ReplicaStatusReady
 	require.NoError(t, s.repo.SaveReplica(ctx, newLoading))
-	s.controller.retire(ctx, endpoint, fleet, live)
+	s.controller.retire(ctx, endpoint, fleet, live, nil)
 	stale, err := s.repo.GetReplica(ctx, oldReady.ID)
 	require.NoError(t, err)
 	assert.Equal(t, types.ReplicaStatusDraining, stale.Status)
@@ -130,12 +130,12 @@ func TestRetireKeepsServingReplicaAcrossGPUMove(t *testing.T) {
 	live := []*types.EndpointReplica{onH100, onA100}
 	fleet := seedFleet(t, s, map[string]types.FleetEndpoint{"acme/model": {Enabled: true, GPUs: map[string]types.FleetPlacement{"A100-80": {Priority: 1}}}})
 
-	s.controller.retire(ctx, endpoint, fleet, live)
+	s.controller.retire(ctx, endpoint, fleet, live, nil)
 	assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, onH100.ID), "no A100 replica is ready yet")
 
 	onA100.Status = types.ReplicaStatusReady
 	require.NoError(t, s.repo.SaveReplica(ctx, onA100))
-	s.controller.retire(ctx, endpoint, fleet, live)
+	s.controller.retire(ctx, endpoint, fleet, live, nil)
 	drained, err := s.repo.GetReplica(ctx, onH100.ID)
 	require.NoError(t, err)
 	assert.Equal(t, types.ReplicaStatusDraining, drained.Status)
@@ -143,13 +143,13 @@ func TestRetireKeepsServingReplicaAcrossGPUMove(t *testing.T) {
 
 	// An endpoint listed nowhere is drained outright.
 	gone := versionReplica(t, s, "gone", 1, types.ReplicaStatusReady)
-	s.controller.retire(ctx, endpoint, &types.Fleet{}, []*types.EndpointReplica{gone})
+	s.controller.retire(ctx, endpoint, &types.Fleet{}, []*types.EndpointReplica{gone}, nil)
 	assert.Equal(t, types.ReplicaStatusDraining, statusOf(t, s, gone.ID))
 
 	// A retired endpoint drains everything it still has.
 	endpoint.Status = types.EndpointStatusRetired
 	survivor := versionReplica(t, s, "survivor", 1, types.ReplicaStatusLoading)
-	s.controller.retire(ctx, endpoint, fleet, []*types.EndpointReplica{survivor})
+	s.controller.retire(ctx, endpoint, fleet, []*types.EndpointReplica{survivor}, nil)
 	assert.Equal(t, types.ReplicaStatusStopped, statusOf(t, s, survivor.ID))
 }
 

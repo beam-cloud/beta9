@@ -24,7 +24,6 @@ import (
 const (
 	controllerLockKey  = "managed_endpoint:controller"
 	controllerLockTTL  = 30 * time.Second
-	stubCacheTTL       = time.Minute
 	terminalRetention  = 30 * time.Minute
 	schedulingGrace    = 10 * time.Minute
 	loadingGrace       = 30 * time.Minute
@@ -36,24 +35,14 @@ type controller struct {
 	s    *Service
 	lock *common.RedisLock
 
-	stubMu    sync.Mutex
-	stubCache map[string]cachedStub
-
 	metricsMu   sync.Mutex
 	lastMetrics map[string]llmroute.EngineMetrics // replica id -> previous scrape
 
-	inv       *clusterInventory // inventory of the pass in progress
-	startedAt time.Time         // heartbeats could not arrive before this; see silentFor
-}
-
-type cachedStub struct {
-	stub    *types.StubWithRelated
-	config  *types.StubConfigV1
-	fetched time.Time
+	startedAt time.Time // heartbeats could not arrive before this; see silentFor
 }
 
 func newController(s *Service) *controller {
-	return &controller{s: s, lock: common.NewRedisLock(s.rdb), stubCache: map[string]cachedStub{}, lastMetrics: map[string]llmroute.EngineMetrics{}, startedAt: time.Now()}
+	return &controller{s: s, lock: common.NewRedisLock(s.rdb), lastMetrics: map[string]llmroute.EngineMetrics{}, startedAt: time.Now()}
 }
 
 func (c *controller) run(ctx context.Context) {
@@ -98,7 +87,6 @@ func (c *controller) reconcile(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
-	c.inv = inv
 	endpoints, err := c.s.repo.ListEndpoints(ctx)
 	if err != nil {
 		return err
@@ -107,40 +95,15 @@ func (c *controller) reconcile(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
-	slices.SortFunc(endpoints, func(a, b *types.ManagedEndpoint) int { return strings.Compare(a.Spec.ID, b.Spec.ID) })
 	byID := make(map[string]*types.ManagedEndpoint, len(endpoints))
 	for _, endpoint := range endpoints {
 		byID[endpoint.Spec.ID] = endpoint
-		c.retire(ctx, endpoint, fleet, live)
+		c.retire(ctx, endpoint, fleet, live, inv)
 	}
 	for _, gpu := range fleet.GPUs() {
 		c.fill(ctx, gpu, fleet.Entries(gpu), byID, live, inv)
 	}
 	return nil
-}
-
-func (c *controller) stub(ctx context.Context, stubID string) (*types.StubWithRelated, *types.StubConfigV1, error) {
-	c.stubMu.Lock()
-	entry, ok := c.stubCache[stubID]
-	c.stubMu.Unlock()
-	if ok && time.Since(entry.fetched) < stubCacheTTL {
-		return entry.stub, entry.config, nil
-	}
-	stub, err := c.s.backend.GetStubByExternalId(ctx, stubID)
-	if err != nil {
-		return nil, nil, err
-	}
-	if stub == nil || stub.ExternalId == "" {
-		return nil, nil, fmt.Errorf("stub %q: %w", stubID, errNotFound)
-	}
-	config, err := stub.UnmarshalConfig()
-	if err != nil {
-		return nil, nil, err
-	}
-	c.stubMu.Lock()
-	c.stubCache[stubID] = cachedStub{stub: stub, config: config, fetched: time.Now()}
-	c.stubMu.Unlock()
-	return stub, config, nil
 }
 
 type eligiblePool struct {
@@ -304,7 +267,7 @@ func scaleDownOrder(replicas []*types.EndpointReplica) {
 // stale replica stays until a current one is ready or can start on idle
 // capacity; when nothing is idle it is drained to make room, unless it is the
 // only replica serving.
-func (c *controller) retire(ctx context.Context, endpoint *types.ManagedEndpoint, fleet *types.Fleet, live []*types.EndpointReplica) {
+func (c *controller) retire(ctx context.Context, endpoint *types.ManagedEndpoint, fleet *types.Fleet, live []*types.EndpointReplica, inv *clusterInventory) {
 	spec := &endpoint.Spec
 	if !endpoint.Enabled() {
 		for _, r := range live {
@@ -314,9 +277,10 @@ func (c *controller) retire(ctx context.Context, endpoint *types.ManagedEndpoint
 		}
 		return
 	}
-	listed := len(fleet.Placements(spec.ID)) > 0
+	placements := fleet.Placements(spec.ID)
 	matches := func(r *types.EndpointReplica) bool {
-		return r.Version == endpoint.Version && fleet.Lists(spec.ID, r.GPU)
+		_, listed := placements[r.GPU]
+		return r.Version == endpoint.Version && listed
 	}
 	var currentReady, serving int
 	for _, r := range live {
@@ -328,29 +292,24 @@ func (c *controller) retire(ctx context.Context, endpoint *types.ManagedEndpoint
 			currentReady++
 		}
 	}
-	roomFor := func(r *types.EndpointReplica) bool {
-		return c.inv.canPlace(r.GPU, spec.Gpu[r.GPU].Count)
-	}
 	for _, r := range live {
 		if r.EndpointID != spec.ID || !r.Alive() || matches(r) {
 			continue
 		}
-		if r.Serving() && currentReady == 0 && listed {
-			if roomFor(r) || serving < 2 {
-				if !roomFor(r) {
-					log.Warn().Str("endpoint_id", spec.ID).Str("replica_id", r.ID).Uint("version", endpoint.Version).
-						Msg("managed endpoints: rollout waiting; the only serving replica holds the last GPU")
-				}
+		reason := fmt.Sprintf("version %d retired", r.Version)
+		if _, listed := placements[r.GPU]; !listed {
+			reason = "removed from fleet.yaml"
+		}
+		if r.Serving() && currentReady == 0 && len(placements) > 0 {
+			if inv.canPlace(r.GPU, spec.Gpu[r.GPU].Count) {
 				continue
 			}
-			if err := c.drainReplica(ctx, r, spec.DrainSeconds, false, fmt.Sprintf("version %d retired (making room for version %d)", r.Version, endpoint.Version)); err == nil {
-				return
+			if serving < 2 {
+				log.Warn().Str("endpoint_id", spec.ID).Str("replica_id", r.ID).Uint("version", endpoint.Version).
+					Msg("managed endpoints: rollout waiting; the only serving replica holds the last GPU")
+				continue
 			}
-			continue
-		}
-		reason := fmt.Sprintf("version %d retired", r.Version)
-		if !fleet.Lists(spec.ID, r.GPU) {
-			reason = "removed from fleet.yaml"
+			reason = fmt.Sprintf("version %d retired (making room for version %d)", r.Version, endpoint.Version)
 		}
 		if err := c.drainReplica(ctx, r, spec.DrainSeconds, false, reason); err == nil {
 			return
@@ -410,7 +369,7 @@ func (c *controller) grow(ctx context.Context, endpoint *types.ManagedEndpoint, 
 			log.Debug().Str("endpoint_id", endpoint.Spec.ID).Str("gpu", gpu).Msg("managed endpoints: no idle capacity in any eligible pool")
 			return true
 		}
-		if _, err := c.startReplica(ctx, startSpec{Endpoint: endpoint, GPU: gpu, Pool: pool}); err != nil {
+		if _, err := c.startReplica(ctx, endpoint, gpu, pool); err != nil {
 			log.Warn().Err(err).Str("endpoint_id", endpoint.Spec.ID).Str("gpu", gpu).Msg("managed endpoints: start replica failed")
 			return false
 		}

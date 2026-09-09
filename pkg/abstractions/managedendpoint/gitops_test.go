@@ -103,7 +103,7 @@ func TestGitOpsApplyReportRecordsVersionsAndRetires(t *testing.T) {
 	assert.False(t, retired.Enabled())
 	assert.Equal(t, types.EndpointStatusRetired, retired.Status)
 
-	broken := state.PerEndpoint["path:acme/broken"]
+	broken := state.PerEndpoint["acme/broken"]
 	assert.Equal(t, types.GitOpsStatusFailed, broken.Status)
 	assert.Contains(t, broken.Error, "boom")
 
@@ -128,7 +128,7 @@ func TestGitOpsApplyReportRecordsVersionsAndRetires(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "cccccccc", state.LastSHA)
 	assert.Empty(t, state.LastError)
-	_, hasBroken := state.PerEndpoint["path:acme/broken"]
+	_, hasBroken := state.PerEndpoint["acme/broken"]
 	assert.False(t, hasBroken)
 	assert.Equal(t, types.GitOpsStatusRetired, state.PerEndpoint["acme/old"].Status, "retired entries are kept for visibility")
 	assert.Equal(t, "cccccccc", state.PerEndpoint["acme/model"].AppliedSHA, "unchanged stubs follow the repo head")
@@ -259,8 +259,6 @@ func TestGitOpsApplyReportImportFailureKeepsPriorEndpoint(t *testing.T) {
 	assert.Contains(t, model.Error, "SyntaxError")
 	assert.Equal(t, "aaaaaaaa", model.AppliedSHA, "the last applied version is kept")
 	assert.Equal(t, "stub-1", model.StubID)
-	_, hasPathEntry := state.PerEndpoint["path:acme/model"]
-	assert.False(t, hasPathEntry, "the failure is attributed to the known stub, not duplicated by path")
 
 	endpoint, err := s.repo.GetEndpoint(ctx, "acme/model")
 	require.NoError(t, err)
@@ -568,17 +566,10 @@ func TestGitOpsWebhook(t *testing.T) {
 	got := <-g.pending
 	assert.Equal(t, gitopsRequest{}, got)
 
-	// GitLab-style shared token, tag push to the configured ref.
-	s.config.Repo.Ref = "release"
-	body, _ = json.Marshal(map[string]any{"object_kind": "tag_push", "ref": "refs/tags/release", "after": "abc"})
-	rec = post(body, map[string]string{"X-Gitlab-Token": s.config.Webhook.Secret})
-	assert.Equal(t, http.StatusAccepted, rec.Code)
-	<-g.pending
-
 	// Branch deletion is ignored; ping is acknowledged.
-	body, _ = json.Marshal(map[string]any{"ref": "refs/tags/release", "after": "0000000000000000000000000000000000000000", "deleted": true})
-	rec = post(body, map[string]string{"X-Gitlab-Token": s.config.Webhook.Secret})
-	assert.Contains(t, rec.Body.String(), `"deleted":true`)
+	body, _ = json.Marshal(map[string]any{"ref": "refs/heads/main", "after": "0000000000000000000000000000000000000000", "deleted": true})
+	rec = post(body, map[string]string{"X-Hub-Signature-256": sign(body)})
+	assert.Contains(t, rec.Body.String(), `"ignored":true`)
 	body, _ = json.Marshal(map[string]any{"zen": "keep it simple", "hook_id": 1})
 	rec = post(body, map[string]string{"X-Hub-Signature-256": sign(body)})
 	assert.Contains(t, rec.Body.String(), `"ignored":true`)

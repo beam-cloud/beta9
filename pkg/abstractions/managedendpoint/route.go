@@ -32,16 +32,15 @@ import (
 // pipeline for every kind; adapters carry the per-route differences.
 
 const (
-	maxBody               = 64 << 20
-	queuePollInterval     = 100 * time.Millisecond
-	replicaDialTimeout    = 5 * time.Second
-	generationTTL         = time.Hour
-	headerReplicaPin      = "X-Beam-Endpoint-Replica"
-	headerRequestID       = "X-Request-ID"
-	headerEndpointID      = "X-Beam-Endpoint-ID"
-	headerReplicaServed   = "X-Beam-Replica"
-	providerName          = "beam"
-	providerSchemaVersion = "2.4"
+	maxBody             = 64 << 20
+	queuePollInterval   = 100 * time.Millisecond
+	replicaDialTimeout  = 5 * time.Second
+	generationTTL       = time.Hour
+	headerReplicaPin    = "X-Beam-Endpoint-Replica"
+	headerRequestID     = "X-Request-ID"
+	headerEndpointID    = "X-Beam-Endpoint-ID"
+	headerReplicaServed = "X-Beam-Replica"
+	providerName        = "beam"
 )
 
 type router struct {
@@ -1008,15 +1007,15 @@ func modalities(spec *types.ManagedEndpointSpec) (input []string, output []strin
 }
 
 // pricingEntry renders per-unit prices as OpenRouter does ("0" when unset).
-func pricingEntry(p types.Pricing, includeCacheRead bool) map[string]any {
+func pricingEntry(p types.Pricing) map[string]any {
 	entry := map[string]any{
 		"prompt":     cmp.Or(p.PromptTokens, "0"),
 		"completion": cmp.Or(p.CompletionTokens, "0"),
 		"request":    cmp.Or(p.Request, "0"),
 		"image":      cmp.Or(p.Image, "0"),
 	}
-	if includeCacheRead || p.CachedPromptTokens != "" {
-		entry["input_cache_read"] = cmp.Or(p.CachedPromptTokens, "0")
+	if p.CachedPromptTokens != "" {
+		entry["input_cache_read"] = p.CachedPromptTokens
 	}
 	return entry
 }
@@ -1044,14 +1043,27 @@ func (r *router) handleListModels(ctx echo.Context) error {
 		return errRegistry.write(ctx)
 	}
 	endpoints := slices.DeleteFunc(all, func(e *types.ManagedEndpoint) bool { return !e.Enabled() || !r.allowed(rctx, e, cc.AuthInfo) })
-	slices.SortFunc(endpoints, func(a, b *types.ManagedEndpoint) int { return strings.Compare(a.Spec.ID, b.Spec.ID) })
-	if ctx.QueryParam("format") == "openrouter-provider" {
-		return r.providerDocument(ctx, endpoints)
+	replicas, _ := r.s.repo.ListAllReplicas(rctx)
+	ready := map[string]bool{}
+	regions := map[string][]string{} // endpoint id -> localities with a serving replica
+	for _, replica := range replicas {
+		if !replica.Serving() {
+			continue
+		}
+		ready[replica.EndpointID] = true
+		if replica.Locality != "" && !slices.Contains(regions[replica.EndpointID], replica.Locality) {
+			regions[replica.EndpointID] = append(regions[replica.EndpointID], replica.Locality)
+		}
 	}
 	data := make([]map[string]any, 0, len(endpoints))
 	for _, endpoint := range endpoints {
 		spec := &endpoint.Spec
 		input, output := modalities(spec)
+		routes := map[string]any{}
+		for _, route := range spec.Routes {
+			routes[strings.ReplaceAll(string(route), "/", "_")] = r.prefix + "/" + string(route)
+		}
+		slices.Sort(regions[spec.ID])
 		data = append(data, map[string]any{
 			"id":             spec.ID,
 			"canonical_slug": spec.ID,
@@ -1066,7 +1078,7 @@ func (r *router) handleListModels(ctx echo.Context) error {
 				"tokenizer":         spec.Catalog.Tokenizer,
 				"instruct_type":     orNil(spec.Catalog.InstructType),
 			},
-			"pricing": pricingEntry(spec.Pricing, false),
+			"pricing": pricingEntry(spec.Pricing),
 			"top_provider": map[string]any{
 				"context_length":        spec.Catalog.ContextLength,
 				"max_completion_tokens": orNil(spec.Catalog.MaxCompletionTokens),
@@ -1077,58 +1089,13 @@ func (r *router) handleListModels(ctx echo.Context) error {
 			"hugging_face_id":      spec.Catalog.HFID,
 			"owned_by":             providerName,
 			"object":               "model",
+			// Beam extensions: live state for the dashboard and OpenRouter-style route paths.
+			"is_ready":    ready[spec.ID],
+			"datacenters": orEmpty(regions[spec.ID]),
+			"endpoints":   routes,
 		})
 	}
 	return ctx.JSON(http.StatusOK, map[string]any{"object": "list", "data": data})
-}
-
-// providerDocument renders the OpenRouter provider listing.
-func (r *router) providerDocument(ctx echo.Context, endpoints []*types.ManagedEndpoint) error {
-	replicas, _ := r.s.repo.ListAllReplicas(ctx.Request().Context())
-	models := make([]map[string]any, 0, len(endpoints))
-	for _, endpoint := range endpoints {
-		spec := &endpoint.Spec
-		input, output := modalities(spec)
-		ready, maxConcurrency, datacenters := 0, int64(0), []string{}
-		for _, replica := range replicas {
-			if replica.EndpointID != spec.ID || !replica.Serving() {
-				continue
-			}
-			ready++
-			maxConcurrency += replica.Capacity.MaxConcurrency
-			if replica.Locality != "" && !slices.Contains(datacenters, replica.Locality) {
-				datacenters = append(datacenters, replica.Locality)
-			}
-		}
-		slices.Sort(datacenters)
-		routes := map[string]any{}
-		for name, route := range map[string]types.EndpointRoute{
-			"chat_completions": types.EndpointRouteChatCompletions, "completions": types.EndpointRouteCompletions,
-			"embeddings": types.EndpointRouteEmbeddings, "image_generations": types.EndpointRouteImageGenerations,
-		} {
-			routes[name] = nil
-			if spec.ServesRoute(route) {
-				routes[name] = r.prefix + "/" + string(route)
-			}
-		}
-		models = append(models, map[string]any{
-			"id":                    spec.ID,
-			"name":                  cmp.Or(spec.Catalog.Name, spec.ID),
-			"hugging_face_id":       spec.Catalog.HFID,
-			"is_ready":              ready > 0,
-			"description":           spec.Catalog.Description,
-			"context_length":        spec.Catalog.ContextLength,
-			"max_completion_tokens": spec.Catalog.MaxCompletionTokens,
-			"quantization":          "",
-			"modalities":            map[string]any{"input": input, "output": output},
-			"pricing":               pricingEntry(spec.Pricing, true),
-			"capacity":              map[string]any{"ready_replicas": ready, "max_concurrency": maxConcurrency},
-			"supported_parameters":  orEmpty(spec.Catalog.SupportedParameters),
-			"datacenters":           datacenters,
-			"endpoints":             routes,
-		})
-	}
-	return ctx.JSON(http.StatusOK, map[string]any{"schema_version": providerSchemaVersion, "provider": providerName, "models": models})
 }
 
 // handleGeneration returns the metered record of one request by id.

@@ -59,15 +59,10 @@ func admin[T adminResponse](s *Service, ctx context.Context, out T, fn func() er
 	return out, nil
 }
 
-var (
-	errEndpointNotFound = errors.New("endpoint not found")
-	errReplicaNotFound  = errors.New("replica not found")
-)
-
 func (s *Service) endpoint(ctx context.Context, id string) (*types.ManagedEndpoint, error) {
 	endpoint, err := s.repo.GetEndpoint(ctx, id)
 	if err == nil && endpoint == nil {
-		err = errEndpointNotFound
+		err = fmt.Errorf("endpoint %s: %w", id, errNotFound)
 	}
 	return endpoint, err
 }
@@ -75,7 +70,7 @@ func (s *Service) endpoint(ctx context.Context, id string) (*types.ManagedEndpoi
 func (s *Service) replica(ctx context.Context, id string) (*types.EndpointReplica, error) {
 	replica, err := s.repo.GetReplica(ctx, id)
 	if err == nil && replica == nil {
-		err = errReplicaNotFound
+		err = fmt.Errorf("replica %s: %w", id, errNotFound)
 	}
 	return replica, err
 }

@@ -295,17 +295,16 @@ func (c *controller) drainReplica(ctx context.Context, replica *types.EndpointRe
 	})
 }
 
-// startSpec is everything needed to launch one replica container.
-type startSpec struct {
-	Endpoint *types.ManagedEndpoint
-	GPU      string
-	Pool     eligiblePool
-}
-
 // startReplica submits a container request for one replica and records it.
-func (c *controller) startReplica(ctx context.Context, spec startSpec) (*types.EndpointReplica, error) {
-	endpoint, gpu := spec.Endpoint, spec.GPU
-	stub, stubConfig, err := c.stub(ctx, endpoint.StubID)
+func (c *controller) startReplica(ctx context.Context, endpoint *types.ManagedEndpoint, gpu string, pool eligiblePool) (*types.EndpointReplica, error) {
+	stub, err := c.s.backend.GetStubByExternalId(ctx, endpoint.StubID)
+	if err != nil {
+		return nil, err
+	}
+	if stub == nil || stub.ExternalId == "" {
+		return nil, fmt.Errorf("stub %q: %w", endpoint.StubID, errNotFound)
+	}
+	stubConfig, err := stub.UnmarshalConfig()
 	if err != nil {
 		return nil, err
 	}
@@ -336,7 +335,7 @@ func (c *controller) startReplica(ctx context.Context, spec startSpec) (*types.E
 		EnvEndpointID+"="+endpoint.Spec.ID,
 		EnvReplicaID+"="+replicaID,
 		EnvGpu+"="+gpu,
-		EnvLocality+"="+spec.Pool.Locality,
+		EnvLocality+"="+pool.Locality,
 		fmt.Sprintf("%s=%d", EnvEndpointPort, endpoint.Spec.Port),
 		fmt.Sprintf("%s=%t", EnvHarnessEnabled, endpoint.Spec.Harness),
 		fmt.Sprintf("%s=%d", EnvDrainSeconds, drainSeconds),
@@ -372,7 +371,7 @@ func (c *controller) startReplica(ctx context.Context, spec startSpec) (*types.E
 		Stub:              *stub,
 		Mounts:            mounts,
 		Ports:             []uint32{endpoint.Spec.Port},
-		PoolSelector:      spec.Pool.Name,
+		PoolSelector:      pool.Name,
 		OpportunisticOnly: true,
 		Evictable:         c.s.config.Preemption.Enabled,
 		DrainSeconds:      drainSeconds,
@@ -388,8 +387,8 @@ func (c *controller) startReplica(ctx context.Context, spec startSpec) (*types.E
 		Version:        endpoint.Version,
 		GPU:            gpu,
 		GPUCount:       gpuCount,
-		Locality:       spec.Pool.Locality,
-		PoolName:       spec.Pool.Name,
+		Locality:       pool.Locality,
+		PoolName:       pool.Name,
 		ContainerID:    containerID,
 		Status:         types.ReplicaStatusScheduling,
 		SecretHash:     secretHash,

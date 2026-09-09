@@ -157,12 +157,6 @@ type ManagedEndpointStubConfig struct {
 	GitSHA   string               `json:"git_sha,omitempty"`
 }
 
-// ManagedEndpointValidation is the cluster's spec policy; empty lists allow everything.
-type ManagedEndpointValidation struct {
-	AllowedEngines []string
-	AllowedKinds   []EndpointKind
-}
-
 var endpointIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)?$`)
 
 func cleanPath(p string) string { return "/" + strings.TrimPrefix(strings.TrimSpace(p), "/") }
@@ -208,8 +202,8 @@ func (s *ManagedEndpointSpec) Normalize() {
 	}
 }
 
-// Validate checks a normalized spec against platform policy.
-func (s *ManagedEndpointSpec) Validate(policy ManagedEndpointValidation) error {
+// Validate checks a normalized spec.
+func (s *ManagedEndpointSpec) Validate() error {
 	var errs []error
 	fail := func(format string, args ...any) { errs = append(errs, fmt.Errorf(format, args...)) }
 
@@ -217,14 +211,8 @@ func (s *ManagedEndpointSpec) Validate(policy ManagedEndpointValidation) error {
 		fail("id %q must look like vendor/slug (lowercase, [a-z0-9._-])", s.ID)
 	}
 	allowed, validKind := kindRoutes[s.Kind]
-	switch {
-	case !validKind:
+	if !validKind {
 		fail("kind %q is not one of llm, embedding, image, custom", s.Kind)
-	case len(policy.AllowedKinds) > 0 && !slices.Contains(policy.AllowedKinds, s.Kind):
-		fail("kind %q is not enabled on this cluster", s.Kind)
-	}
-	if s.Engine != "" && len(policy.AllowedEngines) > 0 && !slices.ContainsFunc(policy.AllowedEngines, func(e string) bool { return strings.EqualFold(e, s.Engine) }) {
-		fail("engine %q is not in the allowed engine list", s.Engine)
 	}
 	if s.Port == 0 || s.Port > 65535 {
 		fail("port %d is invalid", s.Port)
@@ -379,17 +367,7 @@ func (f *Fleet) Entries(gpu string) []FleetEntry {
 	return out
 }
 
-// Lists reports whether the endpoint is enabled and fills the GPU type.
-func (f *Fleet) Lists(endpointID, gpu string) bool {
-	e, ok := f.Endpoints[endpointID]
-	if !ok || !e.Enabled {
-		return false
-	}
-	_, ok = e.GPUs[gpu]
-	return ok
-}
-
-// Placements returns the GPU types an enabled endpoint fills, sorted by key.
+// Placements returns the GPU types an enabled endpoint fills.
 func (f *Fleet) Placements(endpointID string) map[string]FleetPlacement {
 	if e, ok := f.Endpoints[endpointID]; ok && e.Enabled {
 		return e.GPUs
@@ -651,13 +629,6 @@ type RouteMetrics struct {
 	TTFTSumMs        int64         `json:"ttft_sum_ms"`
 	TTFTCount        int64         `json:"ttft_count"`
 	QueueWaitSumMs   int64         `json:"queue_wait_sum_ms"`
-}
-
-func (m RouteMetrics) ErrorRate() float64 {
-	if m.Requests == 0 {
-		return 0
-	}
-	return float64(m.Errors) / float64(m.Requests)
 }
 
 func (m RouteMetrics) MeanTTFTMs() int64 {

@@ -45,7 +45,7 @@ func (gws *GatewayService) managedEndpointStubConfig(ctx context.Context, authIn
 		config.Endpoint.Entrypoint = in.Entrypoint
 	}
 	config.Endpoint.Normalize()
-	if err := config.Endpoint.Validate(gws.managedEndpointValidation()); err != nil {
+	if err := config.Endpoint.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid managed endpoint spec: %w", err)
 	}
 	// The stub name is the SDK's "<type>/<handler>" label; the deployment
@@ -70,14 +70,6 @@ func (gws *GatewayService) canManageEndpoints(ctx context.Context, authInfo *aut
 		return false
 	}
 	return adminWorkspace.Id == authInfo.Workspace.Id
-}
-
-func (gws *GatewayService) managedEndpointValidation() types.ManagedEndpointValidation {
-	policy := types.ManagedEndpointValidation{AllowedEngines: gws.appConfig.ManagedEndpoints.AllowedEngines}
-	for _, kind := range gws.appConfig.ManagedEndpoints.AllowedKinds {
-		policy.AllowedKinds = append(policy.AllowedKinds, types.EndpointKind(strings.ToLower(strings.TrimSpace(kind))))
-	}
-	return policy
 }
 
 // managedGpuTypes returns the GPU types the endpoint can run on so the stub

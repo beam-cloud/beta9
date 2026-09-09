@@ -44,11 +44,6 @@ func TestManagedEndpointRegistryRoundTrip(t *testing.T) {
 	require.Len(t, list, 2)
 
 	require.Equal(t, "acme/model", list[0].Spec.ID, "sorted by id")
-
-	require.NoError(t, repo.DeleteEndpoint(ctx, "zeta/other"))
-	list, err = repo.ListEndpoints(ctx)
-	require.NoError(t, err)
-	require.Len(t, list, 1)
 }
 
 func TestManagedEndpointFleet(t *testing.T) {
@@ -199,7 +194,6 @@ func TestManagedEndpointGitOpsAndMetrics(t *testing.T) {
 	require.EqualValues(t, 12, all.CostMicroUSD)
 	require.EqualValues(t, 4000, all.DurationSumMs)
 	require.EqualValues(t, 150, all.MeanTTFTMs())
-	require.InDelta(t, 1.0/3.0, all.ErrorRate(), 1e-9)
 
 	h100, err := repo.GetRouteMetrics(ctx, "acme/model", "H100", "", 0, 10*time.Minute)
 	require.NoError(t, err)

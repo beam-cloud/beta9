@@ -1,17 +1,9 @@
 """
-GitOps deployer: runs in a one-shot container launched by the gateway's GitOps
-reconciler (needs only git and the beta9 SDK). Configured by ENDPOINTS_* env:
-REPO_URL, REPO_SHA, LAST_SHA ("" on the first run), REPO_REF (fallback fetch),
-REPO_PATH (sub-directory holding the apps), FORCE ("1" redeploys everything),
-REDEPLOY (comma-separated app paths to redeploy even if unchanged), RUN_ID
-(echoed in the report) and DEPLOY_KEY (SSH private key or https token), plus
-BETA9_TOKEN and BETA9_GATEWAY_HOST[_HTTP] / BETA9_GATEWAY_PORT[_HTTP].
-
-Every directory under REPO_PATH containing an app.py that exports a
-ManagedEndpoint is deployed from its own directory. fleet.yaml at the repo root
-({endpoint: {gpu: replicas}}) is sent verbatim in the report;
-the gateway parses, validates and applies it. The run ends with one POST to
-/api/v1/endpoints/gitops/report.
+GitOps deployer: a one-shot container (git + the beta9 SDK) launched by the
+gateway. Configured by ENDPOINTS_* env (see gitops.go launch): it checks out
+REPO_SHA, deploys every app.py under REPO_PATH that changed since LAST_SHA (or
+everything with FORCE, plus REDEPLOY paths), and POSTs one report with the
+results and the raw fleet.yaml to /api/v1/endpoints/gitops/report.
 """
 
 import importlib.util
@@ -128,36 +120,22 @@ _LOADED = 0
 
 
 def _in_repo(module):
-    """True when a module was loaded from the checked-out repo (an app helper)."""
-    origin = getattr(module, "__file__", None)
-    if not origin:
-        path = getattr(module, "__path__", None)  # namespace package
-        origin = next(iter(path), None) if path else None
-    if not origin:
-        return False
-    try:
-        Path(origin).resolve().relative_to(REPO.resolve())
-    except (OSError, ValueError):
-        return False
-    return True
+    origin = getattr(module, "__file__", None) or next(iter(getattr(module, "__path__", None) or []), None)
+    return bool(origin) and Path(origin).resolve().is_relative_to(REPO.resolve())
 
 
 def load_module(app_path):
-    """Execute app.py as a throwaway module.
+    """Execute app.py as a throwaway module with its directory on sys.path.
 
-    The module is registered in sys.modules while it runs so normal import
-    semantics hold (dataclasses with postponed annotations, pickling, ...), and
-    every module the app pulled in from the repo is evicted afterwards so a
-    second app directory with a same-named helper gets its own copy rather than
-    the first app's cached one. sys.path is restored to its pre-load state.
+    Every repo module it imported is evicted afterwards, so a same-named helper
+    in another app directory gets its own copy instead of this one's.
     """
     global _LOADED
     _LOADED += 1
     name = f"endpoint_app_{_LOADED}"
     spec = importlib.util.spec_from_file_location(name, app_path)
     module = importlib.util.module_from_spec(spec)
-    before_modules = set(sys.modules)
-    before_path = list(sys.path)
+    before_modules, before_path = set(sys.modules), list(sys.path)
     sys.path.insert(0, str(app_path.parent))
     sys.modules[name] = module
     try:
@@ -165,9 +143,8 @@ def load_module(app_path):
     finally:
         sys.path[:] = before_path
         for added in set(sys.modules) - before_modules:
-            if added == name or _in_repo(sys.modules.get(added)):
+            if added == name or _in_repo(sys.modules[added]):
                 sys.modules.pop(added, None)
-        sys.modules.pop(name, None)
     return module
 
 

@@ -165,7 +165,6 @@ type ManagedEndpointRepository interface {
 	SaveEndpoint(ctx context.Context, endpoint *types.ManagedEndpoint) error
 	GetEndpoint(ctx context.Context, endpointID string) (*types.ManagedEndpoint, error)
 	ListEndpoints(ctx context.Context) ([]*types.ManagedEndpoint, error)
-	DeleteEndpoint(ctx context.Context, endpointID string) error
 	SaveFleet(ctx context.Context, fleet *types.Fleet) error
 	GetFleet(ctx context.Context) (*types.Fleet, error)
 

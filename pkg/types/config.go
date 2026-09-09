@@ -46,12 +46,10 @@ type ManagedEndpointsConfig struct {
 	Webhook     ManagedEndpointsWebhookConfig `key:"webhook" json:"webhook"`
 	// DeployerImage is the beta9 image id (built once with the SDK and git
 	// installed) the GitOps deployer container runs from.
-	DeployerImage  string                        `key:"deployerImage" json:"deployer_image"`
-	Preemption     ManagedEndpointsPreemption    `key:"preemption" json:"preemption"`
-	Reconcile      ManagedEndpointsReconcile     `key:"reconcile" json:"reconcile"`
-	Routing        ManagedEndpointsRoutingConfig `key:"routing" json:"routing"`
-	AllowedEngines []string                      `key:"allowedEngines" json:"allowed_engines"`
-	AllowedKinds   []string                      `key:"allowedKinds" json:"allowed_kinds"`
+	DeployerImage string                        `key:"deployerImage" json:"deployer_image"`
+	Preemption    ManagedEndpointsPreemption    `key:"preemption" json:"preemption"`
+	Reconcile     ManagedEndpointsReconcile     `key:"reconcile" json:"reconcile"`
+	Routing       ManagedEndpointsRoutingConfig `key:"routing" json:"routing"`
 	// HeartbeatInterval is what replicas are told to heartbeat at.
 	HeartbeatInterval time.Duration `key:"heartbeatInterval" json:"heartbeat_interval"`
 	// ReplicaStaleAfter marks replicas failed when no heartbeat/probe arrives.

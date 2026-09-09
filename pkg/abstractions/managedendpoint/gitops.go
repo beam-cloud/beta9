@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
-	"crypto/subtle"
 	_ "embed"
 	"encoding/hex"
 	"encoding/json"
@@ -51,10 +50,7 @@ const (
 	gitopsResolveTimeout = 30 * time.Second
 )
 
-var (
-	shaPattern     = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
-	fullSHAPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
-)
+var shaPattern = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
 
 type gitops struct {
 	s       *Service
@@ -246,24 +242,21 @@ func (g *gitops) deployKey(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	secret, err := g.s.backend.GetSecretByName(ctx, workspace, name)
+	secrets, err := g.s.backend.GetSecretsByNameDecrypted(ctx, workspace, []string{name})
 	if err != nil {
 		return "", fmt.Errorf("deploy key secret %q: %w", name, err)
 	}
-	if secret == nil || workspace.SigningKey == nil {
+	if len(secrets) == 0 {
 		return "", fmt.Errorf("deploy key secret %q not found in admin workspace", name)
 	}
-	signingKey, err := common.ParseSecretKey(*workspace.SigningKey)
-	if err != nil {
-		return "", err
-	}
-	return common.Decrypt(signingKey, secret.Value)
+	return secrets[0].Value, nil
 }
 
+// resolveHead is the commit the configured ref (a branch, or refs/... in full) points at.
 func (g *gitops) resolveHead(ctx context.Context) (string, error) {
 	ref := strings.TrimSpace(g.s.config.Repo.Ref)
-	if pinned := strings.ToLower(ref); fullSHAPattern.MatchString(pinned) {
-		return pinned, nil
+	if !strings.HasPrefix(ref, "refs/") {
+		ref = "refs/heads/" + ref
 	}
 	key, err := g.deployKey(ctx)
 	if err != nil {
@@ -290,57 +283,18 @@ func (g *gitops) resolveHead(ctx context.Context) (string, error) {
 		url = "https://x-access-token:" + key + "@" + strings.TrimPrefix(url, "https://")
 	}
 
-	cmd := exec.CommandContext(ctx, "git", "ls-remote", "--heads", "--tags", url,
-		ref, ref+"^{}", "refs/heads/"+ref, "refs/tags/"+ref, "refs/tags/"+ref+"^{}")
+	cmd := exec.CommandContext(ctx, "git", "ls-remote", "--exit-code", url, ref)
 	cmd.Env = env
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("git ls-remote: %v: %s", err, strings.TrimSpace(stderr.String()))
+		return "", fmt.Errorf("git ls-remote %s: %v: %s", ref, err, strings.TrimSpace(stderr.String()))
 	}
-	sha, ok := pickRemoteSHA(stdout.String(), ref)
-	if !ok {
+	fields := strings.Fields(stdout.String())
+	if len(fields) < 2 || !shaPattern.MatchString(fields[0]) {
 		return "", fmt.Errorf("ref %q not found on %s", ref, g.s.config.Repo.URL)
 	}
-	return sha, nil
-}
-
-// pickRemoteSHA chooses the commit for ref from `git ls-remote` output: a
-// branch wins over a same-named tag, and a peeled tag over its tag object.
-func pickRemoteSHA(output, ref string) (string, bool) {
-	ref = strings.TrimSpace(ref)
-	wantHeads, wantTags := true, true
-	switch {
-	case strings.HasPrefix(ref, "refs/heads/"):
-		ref, wantTags = strings.TrimPrefix(ref, "refs/heads/"), false
-	case strings.HasPrefix(ref, "refs/tags/"):
-		ref, wantHeads = strings.TrimPrefix(ref, "refs/tags/"), false
-	}
-	if ref == "" {
-		return "", false
-	}
-	var branch, peeledTag, tag string
-	for _, line := range strings.Split(output, "\n") {
-		fields := strings.Fields(line)
-		if len(fields) != 2 || !shaPattern.MatchString(fields[0]) {
-			continue
-		}
-		sha, name := fields[0], fields[1]
-		switch {
-		case wantHeads && name == "refs/heads/"+ref:
-			branch = sha
-		case wantTags && name == "refs/tags/"+ref+"^{}":
-			peeledTag = sha
-		case wantTags && name == "refs/tags/"+ref:
-			tag = sha
-		}
-	}
-	for _, sha := range []string{branch, peeledTag, tag} {
-		if sha != "" {
-			return sha, true
-		}
-	}
-	return "", false
+	return fields[0], nil
 }
 
 // launch starts the deployer container for sha and marks the run in flight.
@@ -512,20 +466,7 @@ func (g *gitops) applyReport(ctx context.Context, report *types.GitOpsReport) er
 	}
 
 	failed := g.applyResults(ctx, state, report, now)
-
-	// An invalid fleet is not applied and not retried; a failed write leaves
-	// FleetSHA behind so sync relaunches at the same SHA.
-	skipped, err := g.applyFleet(ctx, report)
-	state.FleetError = skipped
-	var invalid *fleetInvalidError
-	switch {
-	case err == nil:
-		state.FleetSHA = report.SHA
-	case errors.As(err, &invalid):
-		state.FleetSHA, state.FleetError = report.SHA, err.Error()
-		failed++
-	default:
-		state.FleetError = err.Error()
+	if !g.applyFleet(ctx, state, report) {
 		failed++
 	}
 
@@ -547,22 +488,21 @@ func (g *gitops) applyReport(ctx context.Context, report *types.GitOpsReport) er
 	return nil
 }
 
-// applyResults records each app's outcome and retires endpoints that
-// disappeared from the repo. It returns how many failed.
+// applyResults records each app directory's outcome (PerEndpoint is keyed by
+// path) and retires endpoints whose directory is gone. A directory that is
+// still there but failed to import keeps its endpoint: a bad commit never
+// tears down the previous one. It returns how many failed.
 func (g *gitops) applyResults(ctx context.Context, state *types.GitOpsState, report *types.GitOpsReport, now time.Time) int {
 	failed := 0
-	importErrors := map[string]string{} // path -> error, for directories whose app.py failed to import
+	seen := map[string]bool{}
 	for _, r := range report.Results {
-		if r.ID == "" {
-			importErrors[r.Path] = r.Error
-			failed++
-			continue
+		seen[r.Path] = true
+		entry := state.PerEndpoint[r.Path]
+		entry.Path, entry.UpdatedAt = r.Path, now
+		if r.ID != "" {
+			entry.ID = r.ID
 		}
-		key := r.ID
-		entry := state.PerEndpoint[key]
-		entry.Path, entry.ID, entry.UpdatedAt = r.Path, r.ID, now
 		if r.OK {
-			// Unchanged (skipped) directories move forward with the repo head too.
 			entry.Status, entry.Error, entry.AppliedSHA = types.GitOpsStatusApplied, "", report.SHA
 			if !r.Skipped {
 				entry.StubID, entry.Version = r.StubID, r.Version
@@ -571,53 +511,23 @@ func (g *gitops) applyResults(ctx context.Context, state *types.GitOpsState, rep
 			entry.Status, entry.Error = types.GitOpsStatusFailed, r.Error
 			failed++
 		}
-		state.PerEndpoint[key] = entry
+		state.PerEndpoint[r.Path] = entry
 	}
-
-	// Anything no longer discovered is retired, unless its directory is still
-	// there but failed to import: a bad commit never tears down the previous one.
-	present := map[string]bool{}
-	for _, r := range report.Results {
-		if r.ID != "" {
-			present[r.ID] = true
-		}
-	}
-	claimed := map[string]bool{} // import failures attributed to a known stub
-	for key, entry := range state.PerEndpoint {
-		if strings.HasPrefix(key, "path:") || present[key] || entry.Status == types.GitOpsStatusRetired {
+	for path, entry := range state.PerEndpoint {
+		if seen[path] || entry.Status == types.GitOpsStatusRetired {
 			continue
 		}
-		if msg, broken := importErrors[entry.Path]; broken {
-			claimed[entry.Path] = true
-			entry.Status, entry.Error, entry.UpdatedAt = types.GitOpsStatusFailed, msg, now
-			state.PerEndpoint[key] = entry
-			continue
-		}
-		if err := g.retire(ctx, entry.ID, report.SHA); err != nil {
-			log.Warn().Err(err).Str("id", entry.ID).Msg("managed endpoints: gitops retire failed")
-			entry.Status, entry.Error, entry.UpdatedAt = types.GitOpsStatusFailed, "retire: "+err.Error(), now
-			state.PerEndpoint[key] = entry
-			failed++
+		if path != entry.Path || entry.ID == "" {
+			delete(state.PerEndpoint, path) // legacy key, or an import failure whose directory is gone
 			continue
 		}
 		entry.Status, entry.Error, entry.UpdatedAt = types.GitOpsStatusRetired, "", now
-		state.PerEndpoint[key] = entry
-	}
-	// Import failures with no known stub are keyed by path; stale ones are dropped.
-	for key, entry := range state.PerEndpoint {
-		if _, broken := importErrors[entry.Path]; strings.HasPrefix(key, "path:") && (!broken || claimed[entry.Path]) {
-			delete(state.PerEndpoint, key)
+		if err := g.retire(ctx, entry.ID, report.SHA); err != nil {
+			log.Warn().Err(err).Str("id", entry.ID).Msg("managed endpoints: gitops retire failed")
+			entry.Status, entry.Error = types.GitOpsStatusFailed, "retire: "+err.Error()
+			failed++
 		}
-	}
-	for path, msg := range importErrors {
-		if !claimed[path] {
-			state.PerEndpoint["path:"+path] = types.GitOpsEndpointState{Path: path, Status: types.GitOpsStatusFailed, Error: msg, UpdatedAt: now}
-		}
-	}
-	for key, entry := range state.PerEndpoint {
-		if key != entry.ID && key != "path:"+entry.Path {
-			delete(state.PerEndpoint, key)
-		}
+		state.PerEndpoint[path] = entry
 	}
 	return failed
 }
@@ -638,12 +548,6 @@ func (g *gitops) retire(ctx context.Context, id, sha string) error {
 	return nil
 }
 
-// fleetInvalidError is a fleet.yaml that cannot be applied at this commit.
-type fleetInvalidError struct{ err error }
-
-func (e *fleetInvalidError) Error() string { return "fleet.yaml: " + e.err.Error() }
-func (e *fleetInvalidError) Unwrap() error { return e.err }
-
 // parseFleet reads fleet.yaml: endpoint id -> {enabled, gpus: {<gpu>: {priority, maxReplicas}}}.
 func parseFleet(text string) (*types.Fleet, error) {
 	fleet := &types.Fleet{Endpoints: map[string]types.FleetEndpoint{}}
@@ -651,19 +555,23 @@ func parseFleet(text string) (*types.Fleet, error) {
 		return nil, err
 	}
 	fleet.Normalize()
-	if err := fleet.Validate(); err != nil {
-		return nil, err
-	}
-	return fleet, nil
+	return fleet, fleet.Validate()
 }
 
 // applyFleet validates and saves the report's fleet.yaml, dropping entries for
 // endpoints that are not deployed (reported as skipped). An invalid fleet is
-// not applied; the previous one stays in force.
-func (g *gitops) applyFleet(ctx context.Context, report *types.GitOpsReport) (skipped string, err error) {
+// not applied and not retried; a failed write leaves FleetSHA behind so sync
+// relaunches at the same SHA.
+func (g *gitops) applyFleet(ctx context.Context, state *types.GitOpsState, report *types.GitOpsReport) bool {
+	fleet, err := parseFleet(report.FleetYAML)
+	if err != nil {
+		state.FleetSHA, state.FleetError = report.SHA, "fleet.yaml: "+err.Error()
+		return false
+	}
 	endpoints, err := g.s.repo.ListEndpoints(ctx)
 	if err != nil {
-		return "", err
+		state.FleetError = err.Error()
+		return false
 	}
 	known := map[string]*types.ManagedEndpointSpec{}
 	for _, e := range endpoints {
@@ -671,23 +579,21 @@ func (g *gitops) applyFleet(ctx context.Context, report *types.GitOpsReport) (sk
 			known[e.Spec.ID] = &e.Spec
 		}
 	}
-	fleet, err := parseFleet(report.FleetYAML)
-	if err != nil {
-		return "", &fleetInvalidError{err}
-	}
 	fleet.GitSHA = report.SHA
 	dropped := fleet.Prune(known)
 	if err := g.s.repo.SaveFleet(ctx, fleet); err != nil {
-		return "", err
+		state.FleetError = err.Error()
+		return false
 	}
 	g.s.emit(types.EventEndpointGitOps, types.EventEndpointSchema{Action: "gitops.fleet", Message: report.SHA, Data: map[string]any{"fleet": fleet.Endpoints, "skipped": dropped}})
+	state.FleetSHA, state.FleetError = report.SHA, ""
 	if len(dropped) > 0 {
-		return "skipped: " + strings.Join(dropped, "; "), nil
+		state.FleetError = "skipped: " + strings.Join(dropped, "; ")
 	}
-	return "", nil
+	return true
 }
 
-// handleWebhook accepts GitHub/GitLab push notifications for the configured ref.
+// handleWebhook accepts GitHub push events (X-Hub-Signature-256) for the configured ref.
 func (g *gitops) handleWebhook(ctx echo.Context) error {
 	secret := strings.TrimSpace(g.s.config.Webhook.Secret)
 	if secret == "" {
@@ -697,19 +603,21 @@ func (g *gitops) handleWebhook(ctx echo.Context) error {
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "read body")
 	}
-	if !verifyWebhook(ctx.Request().Header, body, secret) {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(body)
+	want := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+	if !hmac.Equal([]byte(strings.ToLower(strings.TrimSpace(ctx.Request().Header.Get("X-Hub-Signature-256")))), []byte(want)) {
 		return echo.NewHTTPError(http.StatusUnauthorized, "invalid signature")
 	}
-	push, ok := parsePush(body)
-	want := g.s.config.Repo.Ref
-	switch {
-	case !ok:
-		// Ping / non-push events are acknowledged and ignored.
-		return ctx.JSON(http.StatusOK, map[string]any{"ok": true, "ignored": true})
-	case push.Ref != want && push.Ref != "refs/heads/"+want && push.Ref != "refs/tags/"+want:
+	var push struct {
+		Ref     string `json:"ref"`
+		After   string `json:"after"`
+		Deleted bool   `json:"deleted"`
+	}
+	ref := g.s.config.Repo.Ref
+	if json.Unmarshal(body, &push) != nil || push.Deleted || (push.Ref != ref && push.Ref != "refs/heads/"+ref && push.Ref != "refs/tags/"+ref) {
+		// Pings, other refs and deletions are acknowledged and ignored.
 		return ctx.JSON(http.StatusOK, map[string]any{"ok": true, "ignored": true, "ref": push.Ref})
-	case push.Deleted:
-		return ctx.JSON(http.StatusOK, map[string]any{"ok": true, "ignored": true, "deleted": true})
 	}
 	// The poller resolves the head, so a burst of pushes collapses into one run.
 	started, _ := g.Trigger("")
@@ -752,48 +660,4 @@ func (g *gitops) handleReport(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusServiceUnavailable, applyErr.Error())
 	}
 	return ctx.JSON(http.StatusOK, map[string]any{"ok": true})
-}
-
-// pushEvent is the subset of a GitHub/GitLab push payload the reconciler needs.
-type pushEvent struct {
-	Ref     string
-	After   string
-	Deleted bool
-}
-
-// parsePush extracts ref/after from GitHub and GitLab push payloads.
-func parsePush(body []byte) (pushEvent, bool) {
-	var raw struct {
-		Ref        string `json:"ref"`
-		After      string `json:"after"`
-		Deleted    bool   `json:"deleted"`
-		ObjectKind string `json:"object_kind"` // gitlab
-		Zen        string `json:"zen"`         // github ping
-	}
-	if err := json.Unmarshal(body, &raw); err != nil || raw.Ref == "" || raw.Zen != "" {
-		return pushEvent{}, false
-	}
-	if raw.ObjectKind != "" && raw.ObjectKind != "push" && raw.ObjectKind != "tag_push" {
-		return pushEvent{}, false
-	}
-	return pushEvent{Ref: raw.Ref, After: raw.After, Deleted: raw.Deleted || strings.Trim(raw.After, "0") == ""}, true
-}
-
-// verifyWebhook accepts GitHub's X-Hub-Signature-256, GitLab's X-Gitlab-Token
-// and a plain X-Webhook-Token.
-func verifyWebhook(header http.Header, body []byte, secret string) bool {
-	if sig := strings.TrimSpace(header.Get("X-Hub-Signature-256")); sig != "" {
-		mac := hmac.New(sha256.New, []byte(secret))
-		mac.Write(body)
-		return hmac.Equal([]byte(strings.ToLower(sig)), []byte("sha256="+hex.EncodeToString(mac.Sum(nil))))
-	}
-	for _, name := range []string{"X-Gitlab-Token", "X-Webhook-Token"} {
-		if token := strings.TrimSpace(header.Get(name)); token != "" {
-			return subtle.ConstantTimeCompare([]byte(token), []byte(secret)) == 1
-		}
-	}
-	if authz := strings.TrimSpace(header.Get("Authorization")); strings.HasPrefix(authz, "Bearer ") {
-		return subtle.ConstantTimeCompare([]byte(strings.TrimPrefix(authz, "Bearer ")), []byte(secret)) == 1
-	}
-	return false
 }

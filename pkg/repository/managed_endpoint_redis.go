@@ -108,18 +108,6 @@ func (r *ManagedEndpointRedisRepository) saveIndexed(ctx context.Context, key, i
 	return err
 }
 
-// deleteIndexed deletes keys and removes member from every index set atomically.
-func (r *ManagedEndpointRedisRepository) deleteIndexed(ctx context.Context, keys []string, member string, indexKeys ...string) error {
-	_, err := r.rdb.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-		pipe.Del(ctx, keys...)
-		for _, index := range indexKeys {
-			pipe.SRem(ctx, index, member)
-		}
-		return nil
-	})
-	return err
-}
-
 func (r *ManagedEndpointRedisRepository) hgetAll(ctx context.Context, keys []string) ([]map[string]string, error) {
 	cmds := make([]*redis.MapStringStringCmd, 0, len(keys))
 	_, err := r.rdb.Pipelined(ctx, func(pipe redis.Pipeliner) error {
@@ -153,10 +141,6 @@ func (r *ManagedEndpointRedisRepository) GetEndpoint(ctx context.Context, endpoi
 
 func (r *ManagedEndpointRedisRepository) ListEndpoints(ctx context.Context) ([]*types.ManagedEndpoint, error) {
 	return listIndexed(ctx, r.rdb, meKey("endpoints"), func(a, b *types.ManagedEndpoint) bool { return a.Spec.ID < b.Spec.ID }, "endpoint")
-}
-
-func (r *ManagedEndpointRedisRepository) DeleteEndpoint(ctx context.Context, endpointID string) error {
-	return r.deleteIndexed(ctx, []string{meKey("endpoint", endpointID)}, endpointID, meKey("endpoints"))
 }
 
 func (r *ManagedEndpointRedisRepository) SaveFleet(ctx context.Context, fleet *types.Fleet) error {
@@ -222,14 +206,18 @@ func (r *ManagedEndpointRedisRepository) DeleteReplica(ctx context.Context, repl
 	if err != nil {
 		return err
 	}
-	keys, indexes := []string{meKey("replica", replicaID), meKey("drain", replicaID)}, []string{meKey("replicas")}
-	if replica != nil {
-		indexes = append(indexes, meKey("replicas", replica.EndpointID))
-	}
-	if replica != nil && replica.ContainerID != "" {
-		keys = append(keys, meKey("replica_container", replica.ContainerID))
-	}
-	return r.deleteIndexed(ctx, keys, replicaID, indexes...)
+	_, err = r.rdb.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+		pipe.Del(ctx, meKey("replica", replicaID), meKey("drain", replicaID))
+		pipe.SRem(ctx, meKey("replicas"), replicaID)
+		if replica != nil {
+			pipe.SRem(ctx, meKey("replicas", replica.EndpointID), replicaID)
+			if replica.ContainerID != "" {
+				pipe.Del(ctx, meKey("replica_container", replica.ContainerID))
+			}
+		}
+		return nil
+	})
+	return err
 }
 
 func (r *ManagedEndpointRedisRepository) WithReplicaLock(ctx context.Context, replicaID string, fn func(context.Context) error) error {
