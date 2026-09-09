@@ -337,16 +337,11 @@ func TestGitOpsApplyReportRetireFailureIsRetried(t *testing.T) {
 	assert.Equal(t, "bbbbbbbb", state.TargetSHA)
 	assert.Contains(t, state.LastError, "1 stub(s) failed")
 
-	// sync would relaunch at the same SHA: the entry is on the retry list, so
-	// the same-SHA short-circuit does not apply.
-	var retry []string
-	for _, e := range state.PerEndpoint {
-		if e.Status == types.GitOpsStatusFailed && e.Path != "" {
-			retry = append(retry, e.Path)
-		}
-	}
+	// sync relaunches at the same SHA once the retry backoff has passed, with
+	// the failed entry on the redeploy list.
+	retry, run := needsRun(state, "bbbbbbbb", false, state.LastRunAt.Add(gitopsRetryBackoff))
+	assert.True(t, run)
 	assert.Equal(t, []string{"acme/old"}, retry)
-	assert.False(t, "bbbbbbbb" == state.LastSHA && len(retry) == 0)
 
 	// The registry is back; the retried run retires it and LastSHA advances.
 	s.repo = repo
@@ -387,6 +382,43 @@ func (r *failOnceRepo) SaveGitOpsState(ctx context.Context, state *types.GitOpsS
 
 // A fleet write that fails is retried at the same SHA even when every app
 // applied; an invalid fleet is not (nothing changes until the next commit).
+// A stub that fails at a commit (e.g. its image does not exist) must not be
+// rebuilt on every poll; only a new commit or a forced trigger runs at once.
+func TestNeedsRunBacksOffRetriesAtUnchangedCommit(t *testing.T) {
+	now := time.Now()
+	state := &types.GitOpsState{
+		LastSHA: "aaaaaaaa", FleetSHA: "aaaaaaaa", LastRunAt: now,
+		PerEndpoint: map[string]types.GitOpsEndpointState{
+			"qwen/qwen3-8b": {Path: "qwen/qwen3-8b", ID: "qwen/qwen3-8b", Status: types.GitOpsStatusFailed, Error: "Image build failed"},
+			"acme/ok":       {Path: "acme/ok", ID: "acme/ok", Status: types.GitOpsStatusApplied},
+		},
+	}
+
+	_, run := needsRun(state, "aaaaaaaa", false, now.Add(2*time.Minute))
+	assert.False(t, run, "the next poll does not rebuild a stub that just failed")
+
+	retry, run := needsRun(state, "aaaaaaaa", false, now.Add(gitopsRetryBackoff))
+	assert.True(t, run)
+	assert.Equal(t, []string{"qwen/qwen3-8b"}, retry)
+
+	retry, run = needsRun(state, "bbbbbbbb", false, now.Add(time.Second))
+	assert.True(t, run, "a new commit runs immediately")
+	assert.Equal(t, []string{"qwen/qwen3-8b"}, retry, "and still redeploys the failed stub")
+
+	_, run = needsRun(state, "aaaaaaaa", true, now.Add(time.Second))
+	assert.True(t, run, "a forced trigger runs immediately")
+
+	clean := &types.GitOpsState{LastSHA: "aaaaaaaa", FleetSHA: "aaaaaaaa", LastRunAt: now}
+	_, run = needsRun(clean, "aaaaaaaa", false, now.Add(time.Hour))
+	assert.False(t, run, "nothing to do at an unchanged commit")
+
+	fleetPending := &types.GitOpsState{LastSHA: "aaaaaaaa", FleetSHA: "", LastRunAt: now}
+	_, run = needsRun(fleetPending, "aaaaaaaa", false, now.Add(time.Minute))
+	assert.False(t, run, "a failed fleet write is a retry too and backs off")
+	_, run = needsRun(fleetPending, "aaaaaaaa", false, now.Add(gitopsRetryBackoff))
+	assert.True(t, run)
+}
+
 func TestGitOpsFailedFleetWriteIsRetried(t *testing.T) {
 	s, g := newGitOpsForTest(t)
 	endpoint := seedEndpoint(t, s)

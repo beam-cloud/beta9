@@ -47,7 +47,10 @@ const (
 	gitopsLockKey = "managed_endpoint:gitops:lock"
 	gitopsLockTTL = 30 * time.Second
 	// gitopsRunTimeout bounds one deployer run, including image builds.
-	gitopsRunTimeout     = 45 * time.Minute
+	gitopsRunTimeout = 45 * time.Minute
+	// gitopsRetryBackoff spaces out runs that only retry failed endpoints at
+	// an unchanged commit.
+	gitopsRetryBackoff   = 15 * time.Minute
 	gitopsStubName       = "managed-endpoints-deployer"
 	gitopsContainerPfx   = "me-deployer"
 	gitopsDeployerCPU    = int64(2000)
@@ -155,16 +158,33 @@ func (g *gitops) sync(ctx context.Context, req gitopsRequest) error {
 			return err
 		}
 	}
-	var retry []string
+	retry, run := needsRun(state, sha, req.force, time.Now())
+	if !run {
+		return nil
+	}
+	return g.launch(ctx, state, sha, req.force, retry)
+}
+
+// needsRun decides whether a deployer should be launched for sha and which
+// failed endpoints it should redeploy. A new commit or a forced trigger runs
+// immediately. When nothing changed and the run would only retry failures
+// (broken apps, a failed retirement or fleet write), it waits
+// gitopsRetryBackoff since the last run: those failures rarely fix themselves
+// between polls (a missing image, a bad app.py) and rerunning them every poll
+// only rebuilds and re-fails.
+func needsRun(state *types.GitOpsState, sha string, force bool, now time.Time) (retry []string, run bool) {
 	for _, e := range state.PerEndpoint {
 		if e.Status == types.GitOpsStatusFailed && e.Path != "" {
 			retry = append(retry, e.Path)
 		}
 	}
-	if !req.force && sha == state.LastSHA && len(retry) == 0 && state.FleetSHA == state.LastSHA {
-		return nil
+	if force || sha != state.LastSHA {
+		return retry, true
 	}
-	return g.launch(ctx, state, sha, req.force, retry)
+	if len(retry) == 0 && state.FleetSHA == state.LastSHA {
+		return nil, false
+	}
+	return retry, now.Sub(state.LastRunAt) >= gitopsRetryBackoff
 }
 
 func (g *gitops) state(ctx context.Context) (*types.GitOpsState, error) {
