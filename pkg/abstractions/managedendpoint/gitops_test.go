@@ -144,6 +144,128 @@ func TestGitOpsApplyReportRecordsVersionsAndRetires(t *testing.T) {
 	assert.Equal(t, types.GitOpsStatusRetired, state.PerEndpoint["endpoint:acme/old"].Status, "retired entries are kept for visibility")
 }
 
+func TestGitOpsApplyReportImportFailureKeepsPriorEndpoint(t *testing.T) {
+	s, g := newGitOpsForTest(t)
+	ctx := context.Background()
+
+	require.NoError(t, s.repo.SaveEndpoint(ctx, &types.ManagedEndpoint{
+		Spec: types.ManagedEndpointSpec{ID: "acme/model", Kind: types.EndpointKindLLM, Engine: "vllm", Port: 8000}, StubID: "stub-1", Version: 3, Enabled: true, Status: types.EndpointStatusActive,
+	}))
+	require.NoError(t, s.repo.SaveGitOpsState(ctx, &types.GitOpsState{
+		LastSHA: "aaaaaaaa", Running: true, RunID: "run-1", TargetSHA: "bbbbbbbb", StartedAt: time.Now(),
+		PerEndpoint: map[string]types.GitOpsEndpointState{
+			"endpoint:acme/model": {Path: "acme/model", ID: "acme/model", Kind: "endpoint", Status: types.GitOpsStatusApplied, AppliedSHA: "aaaaaaaa", StubID: "stub-1", Version: 3},
+		},
+	}))
+
+	// The new commit breaks acme/model/app.py: it is not discovered, only an
+	// import failure for its path is reported.
+	require.NoError(t, g.applyReport(ctx, &types.GitOpsReport{
+		RunID: "run-1", SHA: "bbbbbbbb",
+		Results: []types.GitOpsDeployResult{{Path: "acme/model", OK: false, Error: "import failed: SyntaxError"}},
+	}))
+
+	state, err := s.repo.GetGitOpsState(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "aaaaaaaa", state.LastSHA)
+	assert.Contains(t, state.LastError, "1 stub(s) failed")
+
+	model := state.PerEndpoint["endpoint:acme/model"]
+	assert.Equal(t, types.GitOpsStatusFailed, model.Status, "a broken directory marks the stub failed instead of retiring it")
+	assert.Contains(t, model.Error, "SyntaxError")
+	assert.Equal(t, "aaaaaaaa", model.AppliedSHA, "the last applied version is kept")
+	assert.Equal(t, "stub-1", model.StubID)
+	_, hasPathEntry := state.PerEndpoint["path:acme/model"]
+	assert.False(t, hasPathEntry, "the failure is attributed to the known stub, not duplicated by path")
+
+	endpoint, err := s.repo.GetEndpoint(ctx, "acme/model")
+	require.NoError(t, err)
+	assert.True(t, endpoint.Enabled, "the previously deployed endpoint keeps serving")
+	assert.Equal(t, types.EndpointStatusActive, endpoint.Status)
+
+	// The failed path is queued for redeploy; the same SHA is not suppressed.
+	state.Running, state.RunID = true, "run-2"
+	require.NoError(t, s.repo.SaveGitOpsState(ctx, state))
+
+	// The fix lands: the directory imports again and is redeployed.
+	require.NoError(t, g.applyReport(ctx, &types.GitOpsReport{
+		RunID: "run-2", SHA: "cccccccc",
+		Discovered: []types.GitOpsDiscovered{{Path: "acme/model", ID: "acme/model", Kind: "endpoint"}},
+		Results:    []types.GitOpsDeployResult{{Path: "acme/model", ID: "acme/model", Kind: "endpoint", OK: true, StubID: "stub-2", Version: 4}},
+	}))
+	state, err = s.repo.GetGitOpsState(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "cccccccc", state.LastSHA)
+	assert.Empty(t, state.LastError)
+	model = state.PerEndpoint["endpoint:acme/model"]
+	assert.Equal(t, types.GitOpsStatusApplied, model.Status)
+	assert.Empty(t, model.Error)
+	assert.Equal(t, uint(4), model.Version)
+
+	// The directory is really deleted afterwards: now it is retired.
+	state.Running, state.RunID = true, "run-3"
+	require.NoError(t, s.repo.SaveGitOpsState(ctx, state))
+	require.NoError(t, g.applyReport(ctx, &types.GitOpsReport{RunID: "run-3", SHA: "dddddddd"}))
+	state, err = s.repo.GetGitOpsState(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, types.GitOpsStatusRetired, state.PerEndpoint["endpoint:acme/model"].Status)
+	endpoint, err = s.repo.GetEndpoint(ctx, "acme/model")
+	require.NoError(t, err)
+	assert.False(t, endpoint.Enabled)
+}
+
+func TestGitOpsApplyReportRetireFailureIsRetried(t *testing.T) {
+	s, g := newGitOpsForTest(t)
+	ctx := context.Background()
+
+	// A corrupt record makes GetEndpoint (and so retire) fail.
+	key := "managed_endpoint:endpoint:acme/old"
+	require.NoError(t, s.rdb.Set(ctx, key, "{not json", 0).Err())
+	require.NoError(t, s.repo.SaveGitOpsState(ctx, &types.GitOpsState{
+		LastSHA: "aaaaaaaa", Running: true, RunID: "run-1", TargetSHA: "bbbbbbbb", StartedAt: time.Now(),
+		PerEndpoint: map[string]types.GitOpsEndpointState{
+			"endpoint:acme/old": {Path: "acme/old", ID: "acme/old", Kind: "endpoint", Status: types.GitOpsStatusApplied, AppliedSHA: "aaaaaaaa"},
+		},
+	}))
+
+	require.NoError(t, g.applyReport(ctx, &types.GitOpsReport{RunID: "run-1", SHA: "bbbbbbbb"}))
+	state, err := s.repo.GetGitOpsState(ctx)
+	require.NoError(t, err)
+	old := state.PerEndpoint["endpoint:acme/old"]
+	assert.Equal(t, types.GitOpsStatusFailed, old.Status, "a failed retirement is recorded, not silently skipped")
+	assert.Contains(t, old.Error, "retire:")
+	assert.Equal(t, "aaaaaaaa", state.LastSHA, "LastSHA does not advance past a failed retirement")
+	assert.Equal(t, "bbbbbbbb", state.TargetSHA)
+	assert.Contains(t, state.LastError, "1 stub(s) failed")
+
+	// sync would relaunch at the same SHA: it differs from LastSHA and the
+	// entry is on the retry list, so the same-SHA short-circuit does not apply.
+	var retry []string
+	for _, e := range state.PerEndpoint {
+		if e.Status == types.GitOpsStatusFailed && e.Path != "" {
+			retry = append(retry, e.Path)
+		}
+	}
+	assert.Equal(t, []string{"acme/old"}, retry)
+	assert.False(t, "bbbbbbbb" == state.LastSHA && len(retry) == 0)
+
+	// The record is repaired; the retried run retires it and LastSHA advances.
+	require.NoError(t, s.repo.SaveEndpoint(ctx, &types.ManagedEndpoint{
+		Spec: types.ManagedEndpointSpec{ID: "acme/old", Kind: types.EndpointKindLLM, Engine: "vllm", Port: 8000}, StubID: "stub-old", Version: 1, Enabled: true, Status: types.EndpointStatusActive,
+	}))
+	state.Running, state.RunID = true, "run-2"
+	require.NoError(t, s.repo.SaveGitOpsState(ctx, state))
+	require.NoError(t, g.applyReport(ctx, &types.GitOpsReport{RunID: "run-2", SHA: "bbbbbbbb"}))
+	state, err = s.repo.GetGitOpsState(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, types.GitOpsStatusRetired, state.PerEndpoint["endpoint:acme/old"].Status)
+	assert.Equal(t, "bbbbbbbb", state.LastSHA)
+	assert.Empty(t, state.LastError)
+	retired, err := s.repo.GetEndpoint(ctx, "acme/old")
+	require.NoError(t, err)
+	assert.False(t, retired.Enabled)
+}
+
 func TestGitOpsApplyReportDeployerError(t *testing.T) {
 	s, g := newGitOpsForTest(t)
 	ctx := context.Background()
@@ -190,6 +312,9 @@ func TestGitOpsResolveHeadFromLocalRepo(t *testing.T) {
 	run("commit", "-q", "-m", "init")
 	head := run("rev-parse", "HEAD")
 	run("tag", "v1")
+	run("tag", "-a", "v2", "-m", "release v2")
+	tagObject := run("rev-parse", "v2")
+	require.NotEqual(t, head, tagObject, "annotated tag is its own object")
 
 	s, g := newGitOpsForTest(t)
 	s.config.Repo.URL = dir
@@ -201,11 +326,72 @@ func TestGitOpsResolveHeadFromLocalRepo(t *testing.T) {
 	s.config.Repo.Ref = "v1"
 	sha, err = g.resolveHead(context.Background())
 	require.NoError(t, err)
-	assert.Equal(t, head, sha, "tags resolve to the commit, not the tag object")
+	assert.Equal(t, head, sha, "lightweight tags resolve to the commit")
+
+	s.config.Repo.Ref = "v2"
+	sha, err = g.resolveHead(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, head, sha, "annotated tags resolve to the peeled commit, not the tag object")
+
+	s.config.Repo.Ref = "refs/tags/v2"
+	sha, err = g.resolveHead(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, head, sha)
 
 	s.config.Repo.Ref = "missing"
 	_, err = g.resolveHead(context.Background())
 	require.Error(t, err)
+
+	// A full commit id is accepted as-is without contacting the remote.
+	s.config.Repo.URL = "https://example.invalid/endpoints.git"
+	s.config.Repo.Ref = strings.ToUpper(head)
+	sha, err = g.resolveHead(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, head, sha)
+}
+
+func TestPickRemoteSHA(t *testing.T) {
+	const (
+		branchSHA = "1111111111111111111111111111111111111111"
+		tagObjSHA = "2222222222222222222222222222222222222222"
+		peeledSHA = "3333333333333333333333333333333333333333"
+		lightSHA  = "4444444444444444444444444444444444444444"
+	)
+	output := strings.Join([]string{
+		branchSHA + "\trefs/heads/main",
+		tagObjSHA + "\trefs/tags/main",
+		peeledSHA + "\trefs/tags/main^{}",
+		tagObjSHA + "\trefs/tags/v2",
+		peeledSHA + "\trefs/tags/v2^{}",
+		lightSHA + "\trefs/tags/v1",
+		"not a sha\trefs/heads/garbage",
+		"",
+	}, "\n")
+
+	cases := []struct {
+		ref  string
+		want string
+		ok   bool
+	}{
+		{"main", branchSHA, true},            // branch beats same-named tag
+		{"refs/heads/main", branchSHA, true}, // fully qualified branch
+		{"refs/tags/main", peeledSHA, true},  // fully qualified tag ignores the branch
+		{"v2", peeledSHA, true},              // annotated tag: peeled commit, not the tag object
+		{"v1", lightSHA, true},               // lightweight tag: only the un-peeled line exists
+		{"v1^{}", "", false},                 // peel suffix is not a ref
+		{"garbage", "", false},               // malformed sha is skipped
+		{"nope", "", false},                  // absent
+		{"", "", false},                      // empty ref never matches
+		{"refs/heads/v2", "", false},         // qualified branch does not fall back to the tag
+		{"mai", "", false},                   // exact match only
+		{"refs/tags/v2", peeledSHA, true},    // qualified annotated tag
+		{"  main  ", branchSHA, true},        // whitespace is trimmed
+	}
+	for _, tc := range cases {
+		got, ok := pickRemoteSHA(output, tc.ref)
+		assert.Equal(t, tc.ok, ok, "ref %q", tc.ref)
+		assert.Equal(t, tc.want, got, "ref %q", tc.ref)
+	}
 }
 
 func TestGitOpsWebhook(t *testing.T) {

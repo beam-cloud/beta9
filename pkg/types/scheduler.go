@@ -309,6 +309,9 @@ type ContainerRequest struct {
 	DockerEnabled            bool            `json:"docker_enabled"` // Enable Docker-in-Docker
 	RuntimeSecretNames       []string        `json:"runtime_secret_names,omitempty"`
 	RuntimeTokenRequired     bool            `json:"runtime_token_required,omitempty"`
+	// Proto field 33 was allow_marketplace. go2proto numbers fields by struct
+	// position, so this blank keeps the wire numbering of everything below it.
+	_ struct{}
 	// MachineId pins scheduling to a single agent machine; empty means any
 	// machine. The scheduler fills it in after placement on agent pools.
 	MachineId         string             `json:"machine_id,omitempty"`

@@ -89,9 +89,12 @@ type ManagedEndpointsFillConfig struct {
 }
 
 type ManagedEndpointsRolloutConfig struct {
-	CanaryReplicas uint32            `key:"canaryReplicas" json:"canary_replicas"`
-	BakeSeconds    uint32            `key:"bakeSeconds" json:"bake_seconds"`
-	Thresholds     RolloutThresholds `key:"thresholds" json:"thresholds"`
+	CanaryReplicas uint32 `key:"canaryReplicas" json:"canary_replicas"`
+	BakeSeconds    uint32 `key:"bakeSeconds" json:"bake_seconds"`
+	// MinCanaryRequests is the sample size below which the canary error rate
+	// is not judged; a bake with less traffic promotes on health alone.
+	MinCanaryRequests uint32            `key:"minCanaryRequests" json:"min_canary_requests"`
+	Thresholds        RolloutThresholds `key:"thresholds" json:"thresholds"`
 }
 
 // RolloutThresholds are relative regressions (fraction) that fail a canary.
@@ -119,15 +122,19 @@ func (c *ManagedEndpointsConfig) ApplyDefaults() {
 	if strings.TrimSpace(c.Repo.Ref) == "" {
 		c.Repo.Ref = "main"
 	}
+	// The harness receives the interval in whole seconds, and a replica must
+	// be allowed to miss at least one heartbeat before it is considered stale.
 	if c.HeartbeatInterval <= 0 {
 		c.HeartbeatInterval = 5 * time.Second
 	}
+	c.HeartbeatInterval = max(c.HeartbeatInterval.Round(time.Second), time.Second)
 	if c.ProviderRevenueShare <= 0 || c.ProviderRevenueShare > 1 {
 		c.ProviderRevenueShare = 0.7
 	}
 	if c.ReplicaStaleAfter <= 0 {
 		c.ReplicaStaleAfter = 3 * c.HeartbeatInterval
 	}
+	c.ReplicaStaleAfter = max(c.ReplicaStaleAfter, 2*c.HeartbeatInterval)
 	if c.Fill.MaxClusterShare <= 0 || c.Fill.MaxClusterShare > 1 {
 		c.Fill.MaxClusterShare = 0.5
 	}
@@ -136,6 +143,9 @@ func (c *ManagedEndpointsConfig) ApplyDefaults() {
 	}
 	if c.Rollout.BakeSeconds == 0 {
 		c.Rollout.BakeSeconds = 300
+	}
+	if c.Rollout.MinCanaryRequests == 0 {
+		c.Rollout.MinCanaryRequests = 20
 	}
 	if c.Routing.SlowStartSeconds == 0 {
 		c.Routing.SlowStartSeconds = 30

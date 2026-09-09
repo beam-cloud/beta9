@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -9,22 +10,32 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const (
-	// evictionKillTimeout bounds how long a killed victim may take to release
-	// its resources before the incoming container proceeds regardless.
-	evictionKillTimeout = 60 * time.Second
-	// evictionPollInterval is how often victims are checked for finalization.
-	evictionPollInterval = 250 * time.Millisecond
-)
+// evictionKillTimeout bounds how long a killed victim may take to release its
+// resources after its drain window. Victims still present after this fail the
+// incoming request rather than letting it start on top of them. It is a
+// variable so tests can shorten it.
+var evictionKillTimeout = 60 * time.Second
+
+// evictionPollInterval is how often victims are checked for finalization.
+const evictionPollInterval = 250 * time.Millisecond
+
+// ErrEvictionIncomplete is returned when victims chosen for a request were
+// still holding their resources after the drain and kill windows passed.
+var ErrEvictionIncomplete = errors.New("evicted containers did not release their resources in time")
 
 // evictForRequest stops the evictable containers the scheduler chose as
 // victims for request and waits until they have been finalized, so the
 // incoming container never competes with them for GPU memory. Victims get
 // request.EvictDrainSeconds after SIGTERM to finish in-flight work; anything
 // still running after that is killed.
-func (s *Worker) evictForRequest(ctx context.Context, request *types.ContainerRequest) {
+//
+// If any victim is still present once the kill window has also passed, the
+// scheduler-granted capacity is not actually free. The request's startup
+// context is cancelled so the caller fails it through the usual pre-start
+// path, and ErrEvictionIncomplete is returned.
+func (s *Worker) evictForRequest(ctx context.Context, request *types.ContainerRequest) error {
 	if request == nil || len(request.EvictContainerIds) == 0 {
-		return
+		return nil
 	}
 
 	drain := time.Duration(request.EvictDrainSeconds) * time.Second
@@ -38,7 +49,7 @@ func (s *Worker) evictForRequest(ctx context.Context, request *types.ContainerRe
 		}
 	}
 	if len(victims) == 0 {
-		return
+		return nil
 	}
 
 	log.Info().
@@ -46,25 +57,37 @@ func (s *Worker) evictForRequest(ctx context.Context, request *types.ContainerRe
 		Strs("evict_container_ids", victims).
 		Dur("drain", drain).
 		Msg("waiting for evicted containers before starting request")
-	if remaining := s.waitForContainersFinalized(ctx, victims, drain+evictionKillTimeout); len(remaining) > 0 {
-		log.Warn().
-			Str("container_id", request.ContainerId).
-			Strs("evict_container_ids", remaining).
-			Msg("evicted containers did not finalize in time; starting request anyway")
+	remaining := s.waitForContainersFinalized(ctx, victims, drain+evictionKillTimeout)
+	if len(remaining) == 0 {
+		return nil
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	log.Error().
+		Str("container_id", request.ContainerId).
+		Strs("evict_container_ids", remaining).
+		Msg("evicted containers did not finalize in time; failing request instead of starting on held resources")
+	s.cancelContainer(request.ContainerId)
+	return fmt.Errorf("%w: %v", ErrEvictionIncomplete, remaining)
 }
 
 // evictContainer begins evicting one local container: it records the reason,
 // sends SIGTERM, and escalates to SIGKILL once the drain window passes. It
-// reports whether the container was present and still running. Calling it
-// again for a container already being evicted is a no-op.
+// reports whether the container is present, and therefore must be waited for
+// before the incoming request starts. A container that already has a terminal
+// exit code is still finalizing (its GPU and instance entry are released after
+// the exit code is recorded), so it counts as a victim to wait for but is not
+// signalled again. Calling it again for a container already being evicted is
+// a no-op.
 func (s *Worker) evictContainer(containerID string, drain time.Duration, forContainerID string) bool {
 	instance, exists := s.containerInstances.Get(containerID)
 	if !exists || instance == nil {
 		return false
 	}
 	if exitCode, _ := instance.lifecycleState(); exitCode >= 0 {
-		return false
+		return true
 	}
 	instance.setStopReason(types.StopContainerReasonEvicted)
 	s.containerInstances.Set(containerID, instance)

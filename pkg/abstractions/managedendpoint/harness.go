@@ -9,8 +9,6 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // EndpointHarnessService: called from inside replica containers.
@@ -53,6 +51,9 @@ func (s *Service) Register(ctx context.Context, in *pb.HarnessRegisterRequest) (
 	}
 	if replica == nil {
 		return &pb.HarnessRegisterResponse{Ok: false, ErrMsg: "container is not a managed endpoint replica"}, nil
+	}
+	if err := s.harnessReplica(ctx, replica); err != nil {
+		return nil, err
 	}
 	if replica.Status.Terminal() {
 		return &pb.HarnessRegisterResponse{Ok: false, ErrMsg: "replica is " + string(replica.Status)}, nil
@@ -109,8 +110,8 @@ func (s *Service) WatchConfig(in *pb.HarnessWatchConfigRequest, stream pb.Endpoi
 	if err != nil {
 		return rpcError(err)
 	}
-	if replica == nil {
-		return status.Error(codes.NotFound, "replica not found")
+	if err := s.harnessReplica(ctx, replica); err != nil {
+		return err
 	}
 	updates, err := s.repo.SubscribeConfigRevisions(ctx, replica.EndpointID)
 	if err != nil {
@@ -196,8 +197,8 @@ func (s *Service) AckConfig(ctx context.Context, in *pb.HarnessAckConfigRequest)
 	if err != nil {
 		return nil, rpcError(err)
 	}
-	if replica == nil {
-		return &pb.HarnessAckConfigResponse{Ok: false, ErrMsg: "replica not found"}, nil
+	if err := s.harnessReplica(ctx, replica); err != nil {
+		return nil, err
 	}
 	ack := &types.ConfigAck{ReplicaID: replica.ID, Revision: in.Revision, Applied: in.Applied, Error: in.Error, At: time.Now()}
 	if json.Valid([]byte(in.EffectiveJson)) {
@@ -224,6 +225,13 @@ func (s *Service) AckConfig(ctx context.Context, in *pb.HarnessAckConfigRequest)
 
 func (s *Service) Heartbeat(ctx context.Context, in *pb.HarnessHeartbeatRequest) (*pb.HarnessHeartbeatResponse, error) {
 	if err := s.authorizeHarness(ctx); err != nil {
+		return nil, err
+	}
+	current, err := s.repo.GetReplica(ctx, in.ReplicaId)
+	if err != nil {
+		return nil, rpcError(err)
+	}
+	if err := s.harnessReplica(ctx, current); err != nil {
 		return nil, err
 	}
 	replica, err := s.updateReplica(ctx, in.ReplicaId, func(r *types.EndpointReplica) { s.applyHeartbeat(r, in) })
@@ -281,8 +289,8 @@ func (s *Service) PublishEvents(ctx context.Context, in *pb.HarnessPublishEvents
 	if err != nil {
 		return nil, rpcError(err)
 	}
-	if replica == nil {
-		return &pb.HarnessPublishEventsResponse{Ok: false, ErrMsg: "replica not found"}, nil
+	if err := s.harnessReplica(ctx, replica); err != nil {
+		return nil, err
 	}
 	var accepted uint32
 	for i, event := range in.Events {

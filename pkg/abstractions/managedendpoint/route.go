@@ -41,6 +41,7 @@ const (
 	replicaDialTimeout    = 5 * time.Second
 	generationTTL         = time.Hour
 	usageQueueSize        = 4096
+	usageEnqueueTimeout   = 2 * time.Second // record() runs after the response; a bounded wait beats losing billing
 	headerReplicaPin      = "X-Beam-Endpoint-Replica"
 	headerRequestID       = "X-Request-ID"
 	headerEndpointID      = "X-Beam-Endpoint-ID"
@@ -61,8 +62,9 @@ type router struct {
 	inflight   sync.Map // replica id -> *atomic.Int64
 	admission  sync.Map // endpoint id / endpoint|workspace -> *atomic.Int64
 
-	usageQueue chan types.EventEndpointRouteSchema
-	usageWG    sync.WaitGroup
+	usageQueue   chan types.EventEndpointRouteSchema
+	usageDropped atomic.Int64 // route records lost to a saturated queue (billing gaps)
+	usageWG      sync.WaitGroup
 }
 
 func newRouter(s *Service) *router {
@@ -560,7 +562,8 @@ func (r *router) pick(ctx context.Context, rq *routeRequest, endpoint *types.Man
 
 // choose scores candidates. LLM routes use llmroute (capacity, pressure,
 // affinity, power-of-two); other kinds pick the least loaded replica. Nil
-// means every candidate is saturated.
+// means every candidate is saturated. The returned replica has one inflight
+// slot reserved (see reserve); the caller must releaseReplica it exactly once.
 func (r *router) choose(ctx context.Context, rq *routeRequest, endpoint *types.ManagedEndpoint, candidates []*types.EndpointReplica) *types.EndpointReplica {
 	now := time.Now()
 	slowStart := time.Duration(r.s.config.Routing.SlowStartSeconds) * time.Second
@@ -593,11 +596,37 @@ func (r *router) choose(ctx context.Context, rq *routeRequest, endpoint *types.M
 	if rq.adapter.LLM && rq.info != nil {
 		affinity = state.Affinity(ctx, rq.info)
 	}
-	selection, ok := r.selector.Select(eligible, affinity, rq.info)
-	if !ok {
-		return nil
+	// Reservation is atomic with selection: concurrent requests that all
+	// picked the same replica race on the counter, and the losers move on
+	// to the next candidate instead of overcommitting it.
+	for len(eligible) > 0 {
+		selection, ok := r.selector.Select(eligible, affinity, rq.info)
+		if !ok {
+			return nil
+		}
+		replica := selection.Candidate.Payload.(*types.EndpointReplica)
+		if r.reserve(replica) {
+			return replica
+		}
+		eligible = slices.DeleteFunc(eligible, func(c llmroute.Candidate) bool { return c.ID == replica.ID })
 	}
-	return selection.Candidate.Payload.(*types.EndpointReplica)
+	return nil
+}
+
+// reserve takes one local inflight slot on replica, refusing (and leaving the
+// counter untouched) when that would exceed its MaxConcurrency.
+func (r *router) reserve(replica *types.EndpointReplica) bool {
+	inflight := counter(&r.inflight, replica.ID)
+	if n := inflight.Add(1); replica.Capacity.MaxConcurrency > 0 && n > replica.Capacity.MaxConcurrency {
+		inflight.Add(-1)
+		return false
+	}
+	return true
+}
+
+// releaseReplica returns the slot taken by reserve.
+func (r *router) releaseReplica(replica *types.EndpointReplica) {
+	counter(&r.inflight, replica.ID).Add(-1)
 }
 
 func engineMetrics(c types.ReplicaCapacity) llmroute.EngineMetrics {
@@ -670,6 +699,7 @@ func (r *router) serve(rq *routeRequest, endpoint *types.ManagedEndpoint) error 
 			return rerr.write(rq.ctx)
 		}
 		retry, err := r.proxy(ctx, rq, endpoint, replica)
+		r.releaseReplica(replica) // the slot reserved by pick/choose; the single owner
 		if err == nil {
 			return nil
 		}
@@ -688,11 +718,8 @@ func (r *router) serve(rq *routeRequest, endpoint *types.ManagedEndpoint) error 
 
 // proxy sends the request to one replica and relays the response. The bool
 // reports whether a retry on another replica is safe (nothing was written).
+// The replica's inflight slot is held by the caller for the whole attempt.
 func (r *router) proxy(ctx context.Context, rq *routeRequest, endpoint *types.ManagedEndpoint, replica *types.EndpointReplica) (bool, error) {
-	inflight := counter(&r.inflight, replica.ID)
-	inflight.Add(1)
-	defer inflight.Add(-1)
-
 	state := r.state(endpoint.Spec.ID)
 	var tokenPressure int64
 	if rq.info != nil {
@@ -759,6 +786,14 @@ func (r *router) proxy(ctx context.Context, rq *routeRequest, endpoint *types.Ma
 		// Buffered JSON responses carry the whole generation and record none.
 		w.WriteHeader(resp.StatusCode)
 		usage, err := relayStream(w, resp.Body)
+		if err == nil && resp.StatusCode < 300 && billable(endpoint) && !usage.Found {
+			// The stream completed but the engine never sent its usage chunk.
+			// The bytes are already with the client, so this cannot become a
+			// 502 on the wire; it is recorded as one so it is neither billed
+			// nor counted as a rollout success, like the buffered path.
+			r.recordMissingUsage(rq, endpoint, replica, usage, time.Since(sentAt))
+			return false, nil
+		}
 		r.record(rq, endpoint, replica, resp.StatusCode, usage, time.Since(sentAt), errString(err))
 		return false, err
 	}
@@ -771,10 +806,8 @@ func (r *router) proxy(ctx context.Context, rq *routeRequest, endpoint *types.Ma
 	if resp.StatusCode < 300 {
 		usage = rq.adapter.Usage(body)
 		if billable(endpoint) && !usage.Found {
-			rerr := &routeError{http.StatusBadGateway, "missing_usage", "upstream response carried no usage; request not billed"}
-			r.record(rq, endpoint, replica, rerr.Status, usage, 0, rerr.Message)
-			r.s.emit(types.EventEndpointHarness, types.EventEndpointSchema{EndpointID: endpoint.Spec.ID, Action: "route.missing_usage", ReplicaID: replica.ID, GPU: replica.GPU, Version: replica.Version})
-			return false, rerr.write(rq.ctx)
+			r.recordMissingUsage(rq, endpoint, replica, usage, 0)
+			return false, errMissingUsage.write(rq.ctx)
 		}
 		if strings.Contains(contentType, "json") {
 			body = decorateJSON(body, rq.requestID, usage, r.cost(endpoint, usage))
@@ -792,6 +825,18 @@ func errString(err error) string {
 		return ""
 	}
 	return err.Error()
+}
+
+var errMissingUsage = &routeError{http.StatusBadGateway, "missing_usage", "upstream response carried no usage; request not billed"}
+
+// recordMissingUsage files a billable response that carried no usage object
+// as a 502: the request is not billed, counts as an error for rollout
+// decisions, and raises the route.missing_usage harness event. Streams and
+// buffered responses share this so both surface in the same place.
+func (r *router) recordMissingUsage(rq *routeRequest, endpoint *types.ManagedEndpoint, replica *types.EndpointReplica, usage Usage, ttft time.Duration) {
+	r.record(rq, endpoint, replica, errMissingUsage.Status, usage, ttft, errMissingUsage.Message)
+	r.s.emit(types.EventEndpointHarness, types.EventEndpointSchema{EndpointID: endpoint.Spec.ID, Action: "route.missing_usage", ReplicaID: replica.ID, GPU: replica.GPU, Version: replica.Version})
+	log.Warn().Str("endpoint_id", endpoint.Spec.ID).Str("replica_id", replica.ID).Str("request_id", rq.requestID).Bool("stream", rq.stream).Msg("managed endpoints: upstream response carried no usage; request not billed")
 }
 
 // relayStream forwards SSE events as they arrive, flushing per event, and
@@ -884,12 +929,35 @@ func (r *router) record(rq *routeRequest, endpoint *types.ManagedEndpoint, repli
 	if err := r.s.repo.RecordRouteSample(context.Background(), sample); err != nil {
 		log.Debug().Err(err).Msg("managed endpoints: record route sample")
 	}
+	r.enqueueUsage(event)
+}
 
+// enqueueUsage hands a route record to drainUsage. Under queue pressure it
+// applies bounded backpressure (the response is already written, so a short
+// wait costs the client nothing) and only then drops, since a dropped record
+// is a billing/earnings gap. Waiting stops early when the service is shutting
+// down: drainUsage exits once it has flushed, so nothing would ever consume.
+func (r *router) enqueueUsage(event types.EventEndpointRouteSchema) {
 	select {
 	case r.usageQueue <- event:
+		return
 	default:
-		log.Warn().Str("endpoint_id", endpoint.Spec.ID).Msg("managed endpoints: usage queue full; dropping route record")
 	}
+	var shutdown <-chan struct{} // nil (never fires) when the service has no context
+	if r.s.ctx != nil {
+		shutdown = r.s.ctx.Done()
+	}
+	timer := time.NewTimer(usageEnqueueTimeout)
+	defer timer.Stop()
+	select {
+	case r.usageQueue <- event:
+		return
+	case <-timer.C:
+	case <-shutdown:
+	}
+	dropped := r.usageDropped.Add(1)
+	log.Warn().Str("endpoint_id", event.EndpointID).Str("request_id", event.RequestID).Int64("total_dropped", dropped).
+		Msg("managed endpoints: usage queue full; dropping route record")
 }
 
 // drainUsage persists route records off the request path. It runs until the

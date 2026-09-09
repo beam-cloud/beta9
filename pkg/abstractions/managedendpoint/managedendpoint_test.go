@@ -46,11 +46,16 @@ func adminCtx() context.Context {
 	})
 }
 
+const testReplicaSecret = "replica-secret-1"
+
+// harnessCtx is what a replica container presents: the admin workspace's
+// runtime token plus its own replica secret.
 func harnessCtx() context.Context {
-	return auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
+	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
 		Workspace: &types.Workspace{Id: 1, ExternalId: "admin-ws"},
 		Token:     &types.Token{TokenType: types.TokenTypeWorkspaceRestricted, ExternalId: "runtime"},
 	})
+	return metadata.NewIncomingContext(ctx, metadata.Pairs(replicaSecretHeader, testReplicaSecret))
 }
 
 func seedEndpoint(t *testing.T, s *Service) *types.ManagedEndpoint {
@@ -74,6 +79,7 @@ func seedReplica(t *testing.T, s *Service, endpoint *types.ManagedEndpoint) *typ
 	replica := &types.EndpointReplica{
 		ID: "rep-1", EndpointID: endpoint.Spec.ID, Version: 1, Role: types.ReplicaRoleServe, GPU: "H100x1", GPUCount: 1,
 		ContainerID: "managed-stub-1-abc", Status: types.ReplicaStatusScheduling, HarnessEnabled: true, StartedAt: time.Now(),
+		SecretHash: hashReplicaSecret(testReplicaSecret),
 	}
 	require.NoError(t, s.repo.SaveReplica(context.Background(), replica))
 	return replica
@@ -97,6 +103,25 @@ func TestAuthorization(t *testing.T) {
 	})
 	_, err = s.Heartbeat(foreign, &pb.HarnessHeartbeatRequest{ReplicaId: "x"})
 	assert.Equal(t, codes.PermissionDenied, status.Code(err), "only admin-workspace tokens may call harness RPCs")
+
+	// The shared runtime token alone does not identify a replica: each call
+	// must carry that replica's own secret.
+	endpoint := seedEndpoint(t, s)
+	replica := seedReplica(t, s, endpoint)
+	noSecret := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
+		Workspace: &types.Workspace{Id: 1, ExternalId: "admin-ws"},
+		Token:     &types.Token{TokenType: types.TokenTypeWorkspaceRestricted, ExternalId: "runtime"},
+	})
+	_, err = s.Heartbeat(noSecret, &pb.HarnessHeartbeatRequest{ReplicaId: replica.ID})
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+	wrong := metadata.NewIncomingContext(noSecret, metadata.Pairs(replicaSecretHeader, "someone-else"))
+	_, err = s.Register(wrong, &pb.HarnessRegisterRequest{ContainerId: replica.ContainerID})
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+	_, err = s.PublishEvents(wrong, &pb.HarnessPublishEventsRequest{ReplicaId: replica.ID})
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+	hb, err := s.Heartbeat(harnessCtx(), &pb.HarnessHeartbeatRequest{ReplicaId: replica.ID, Status: "ready"})
+	require.NoError(t, err)
+	assert.True(t, hb.Ok)
 
 	disabled := newServiceForTest(t)
 	disabled.config.Enabled = false

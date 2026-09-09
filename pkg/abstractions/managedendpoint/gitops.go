@@ -54,7 +54,10 @@ const (
 	gitopsResolveTimeout = 30 * time.Second
 )
 
-var shaPattern = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
+var (
+	shaPattern     = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
+	fullSHAPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
+)
 
 type gitops struct {
 	s       *Service
@@ -213,8 +216,13 @@ func (g *gitops) deployKey(ctx context.Context) (string, error) {
 	return common.Decrypt(signingKey, secret.Value)
 }
 
-// resolveHead runs `git ls-remote` for the configured ref.
+// resolveHead runs `git ls-remote` for the configured ref. A ref that is
+// already a full commit id is returned as-is.
 func (g *gitops) resolveHead(ctx context.Context) (string, error) {
+	ref := strings.TrimSpace(g.s.config.Repo.Ref)
+	if pinned := strings.ToLower(ref); fullSHAPattern.MatchString(pinned) {
+		return pinned, nil
+	}
 	key, err := g.deployKey(ctx)
 	if err != nil {
 		return "", err
@@ -240,22 +248,63 @@ func (g *gitops) resolveHead(ctx context.Context) (string, error) {
 		url = "https://x-access-token:" + key + "@" + strings.TrimPrefix(url, "https://")
 	}
 
-	ref := g.s.config.Repo.Ref
-	cmd := exec.CommandContext(ctx, "git", "ls-remote", "--heads", "--tags", url, ref, "refs/heads/"+ref, "refs/tags/"+ref)
+	// The peeled `<tag>^{}` line is only printed when a pattern matches it, so
+	// ask for it explicitly; otherwise an annotated tag yields its tag object.
+	cmd := exec.CommandContext(ctx, "git", "ls-remote", "--heads", "--tags", url,
+		ref, ref+"^{}", "refs/heads/"+ref, "refs/tags/"+ref, "refs/tags/"+ref+"^{}")
 	cmd.Env = env
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("git ls-remote: %v: %s", err, strings.TrimSpace(stderr.String()))
 	}
-	// Prefer the branch over a same-named tag; the first matching line wins.
-	for _, line := range strings.Split(stdout.String(), "\n") {
+	sha, ok := pickRemoteSHA(stdout.String(), ref)
+	if !ok {
+		return "", fmt.Errorf("ref %q not found on %s", ref, g.s.config.Repo.URL)
+	}
+	return sha, nil
+}
+
+// pickRemoteSHA chooses the commit id for ref from `git ls-remote` output. A
+// branch wins over a same-named tag. For tags the peeled `refs/tags/<ref>^{}`
+// line (the commit an annotated tag points at) is preferred; the un-peeled
+// line is only used when no peeled line exists, i.e. for lightweight tags.
+// ref may be a short name or a fully qualified refs/heads/… or refs/tags/…
+// name, in which case only that namespace is considered.
+func pickRemoteSHA(output, ref string) (string, bool) {
+	ref = strings.TrimSpace(ref)
+	wantHeads, wantTags := true, true
+	switch {
+	case strings.HasPrefix(ref, "refs/heads/"):
+		ref, wantTags = strings.TrimPrefix(ref, "refs/heads/"), false
+	case strings.HasPrefix(ref, "refs/tags/"):
+		ref, wantHeads = strings.TrimPrefix(ref, "refs/tags/"), false
+	}
+	if ref == "" {
+		return "", false
+	}
+	var branch, peeledTag, tag string
+	for _, line := range strings.Split(output, "\n") {
 		fields := strings.Fields(line)
-		if len(fields) == 2 && shaPattern.MatchString(fields[0]) && !strings.HasSuffix(fields[1], "^{}") {
-			return fields[0], nil
+		if len(fields) != 2 || !shaPattern.MatchString(fields[0]) {
+			continue
+		}
+		sha, name := fields[0], fields[1]
+		switch {
+		case wantHeads && name == "refs/heads/"+ref:
+			branch = sha
+		case wantTags && name == "refs/tags/"+ref+"^{}":
+			peeledTag = sha
+		case wantTags && name == "refs/tags/"+ref:
+			tag = sha
 		}
 	}
-	return "", fmt.Errorf("ref %q not found on %s", ref, g.s.config.Repo.URL)
+	for _, sha := range []string{branch, peeledTag, tag} {
+		if sha != "" {
+			return sha, true
+		}
+	}
+	return "", false
 }
 
 // launch starts the deployer container for sha and marks the run in flight.
@@ -417,12 +466,12 @@ func (g *gitops) applyReport(ctx context.Context, report *types.GitOpsReport) er
 	}
 
 	failed := 0
-	failedPaths := map[string]bool{}
+	// importErrors holds directories whose app.py failed to import (no ID is
+	// known for them), keyed by path.
+	importErrors := map[string]string{}
 	for _, r := range report.Results {
 		if r.ID == "" {
-			// Import failure: keyed by path so it stays visible.
-			state.PerEndpoint["path:"+r.Path] = types.GitOpsEndpointState{Path: r.Path, Status: types.GitOpsStatusFailed, Error: r.Error, UpdatedAt: now}
-			failedPaths[r.Path] = true
+			importErrors[r.Path] = r.Error
 			failed++
 			continue
 		}
@@ -442,24 +491,47 @@ func (g *gitops) applyReport(ctx context.Context, report *types.GitOpsReport) er
 		state.PerEndpoint[key] = entry
 	}
 
-	// Anything previously applied that is no longer discovered is retired.
+	// Anything previously applied that is no longer discovered is retired,
+	// unless its directory is still there but failed to import: that stub keeps
+	// its last applied state and is flagged failed, so a bad commit never
+	// tears down what the previous commit deployed.
 	present := map[string]bool{}
 	for _, d := range report.Discovered {
 		present[d.Kind+":"+d.ID] = true
 	}
+	claimed := map[string]bool{} // import failures attributed to a known stub
 	for key, entry := range state.PerEndpoint {
-		switch {
-		case strings.HasPrefix(key, "path:"):
-			if !failedPaths[entry.Path] {
-				delete(state.PerEndpoint, key)
-			}
-		case !present[key] && entry.Status != types.GitOpsStatusRetired:
-			if err := g.retire(ctx, entry.Kind, entry.ID, report.SHA); err != nil {
-				log.Warn().Err(err).Str("id", entry.ID).Msg("managed endpoints: gitops retire failed")
-				continue
-			}
-			entry.Status, entry.Error, entry.UpdatedAt = types.GitOpsStatusRetired, "", now
+		if strings.HasPrefix(key, "path:") || present[key] || entry.Status == types.GitOpsStatusRetired {
+			continue
+		}
+		if msg, broken := importErrors[entry.Path]; broken {
+			claimed[entry.Path] = true
+			entry.Status, entry.Error, entry.UpdatedAt = types.GitOpsStatusFailed, msg, now
 			state.PerEndpoint[key] = entry
+			continue
+		}
+		if err := g.retire(ctx, entry.Kind, entry.ID, report.SHA); err != nil {
+			// Keep LastSHA behind so the next sync relaunches at this commit and
+			// the retirement is retried.
+			log.Warn().Err(err).Str("id", entry.ID).Msg("managed endpoints: gitops retire failed")
+			entry.Status, entry.Error, entry.UpdatedAt = types.GitOpsStatusFailed, "retire: "+err.Error(), now
+			state.PerEndpoint[key] = entry
+			failed++
+			continue
+		}
+		entry.Status, entry.Error, entry.UpdatedAt = types.GitOpsStatusRetired, "", now
+		state.PerEndpoint[key] = entry
+	}
+	// Import failures in directories with no known stub are keyed by path so
+	// they stay visible; stale path entries from earlier runs are dropped.
+	for key, entry := range state.PerEndpoint {
+		if _, broken := importErrors[entry.Path]; strings.HasPrefix(key, "path:") && (!broken || claimed[entry.Path]) {
+			delete(state.PerEndpoint, key)
+		}
+	}
+	for path, msg := range importErrors {
+		if !claimed[path] {
+			state.PerEndpoint["path:"+path] = types.GitOpsEndpointState{Path: path, Status: types.GitOpsStatusFailed, Error: msg, UpdatedAt: now}
 		}
 	}
 

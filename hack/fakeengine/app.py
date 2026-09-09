@@ -286,7 +286,13 @@ class Harness:
 
     def __init__(self, stop: threading.Event, server: ThreadingHTTPServer) -> None:
         addr = f"{os.environ['BETA9_GATEWAY_HOST']}:{os.environ['BETA9_GATEWAY_PORT']}"
-        channel = Channel(addr=addr, token=os.environ["BETA9_TOKEN"])
+        # The runtime token proves this is a managed endpoint container; the
+        # replica secret proves which replica.
+        channel = Channel(
+            addr=addr,
+            token=os.environ["BETA9_TOKEN"],
+            metadata=[("x-beam-replica-secret", os.environ.get("BEAM_REPLICA_SECRET", ""))],
+        )
         self.stub = pb.EndpointHarnessServiceStub(channel)
         self.stop = stop
         self.server = server

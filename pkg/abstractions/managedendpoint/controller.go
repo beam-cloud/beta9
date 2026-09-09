@@ -259,11 +259,55 @@ func (g *gpuInventory) reserve(count uint32, accept func(workerSlot) bool) (work
 	return *w, true
 }
 
+// cpuInventoryKey is the inventory bucket for CPU-only targets and pools.
+const cpuInventoryKey = "cpu"
+
+// inventoryKey is the bucket a target draws from ("cpu" or a GPU type).
+func inventoryKey(target types.GpuTarget) string {
+	if target.IsCPU() {
+		return cpuInventoryKey
+	}
+	return string(types.NormalizeGPUType(target.Type))
+}
+
+// eligiblePool is a pool that opted into managed endpoints. It is known even
+// when none of its workers currently has free capacity, so protected
+// replicas that may provision a worker still land in a pool that agreed to
+// host them.
+type eligiblePool struct {
+	Name     string
+	Locality string
+}
+
 // clusterInventory is the GPU inventory endpoints may use, keyed by GPU type.
 type clusterInventory struct {
 	byType     map[string]*gpuInventory
 	localities map[string][]string // gpu type -> localities present
 	cpuPools   []string
+	// pools lists the endpoint-enabled pools per inventory key ("cpu" or GPU
+	// type), regardless of current worker capacity.
+	pools map[string][]eligiblePool
+}
+
+// fallbackPool picks an eligible pool for a target with no free capacity.
+// A requested locality is honored in preference order; only a target that
+// declared no locality may land in any eligible pool.
+func (inv *clusterInventory) fallbackPool(gpuType string, localities []string) (eligiblePool, bool) {
+	pools := inv.pools[gpuType]
+	if len(localities) == 0 {
+		if len(pools) == 0 {
+			return eligiblePool{}, false
+		}
+		return pools[0], true
+	}
+	for _, locality := range localities {
+		for _, p := range pools {
+			if p.Locality == locality {
+				return p, true
+			}
+		}
+	}
+	return eligiblePool{}, false
 }
 
 func (c *controller) poolConfig(name string) (types.WorkerPoolConfig, bool) {
@@ -276,11 +320,31 @@ func (c *controller) poolConfig(name string) (types.WorkerPoolConfig, bool) {
 	return types.WorkerPoolConfig{}, false
 }
 
-// poolLocality is the network domain of a pool: its configured locality or,
+// poolConfigs lists every known pool: the static worker config plus pools
+// the scheduler registered at runtime (agent pools).
+func (c *controller) poolConfigs() map[string]types.WorkerPoolConfig {
+	out := map[string]types.WorkerPoolConfig{}
+	if c.s.scheduler != nil {
+		for name, cfg := range c.s.scheduler.PoolConfigs() {
+			out[name] = cfg
+		}
+	}
+	for name, cfg := range c.s.appConfig.Worker.Pools {
+		out[name] = cfg
+	}
+	return out
+}
+
+// localityOf is the network domain of a pool: its configured locality or,
 // failing that, the pool name.
+func localityOf(name string, cfg types.WorkerPoolConfig) string {
+	return cmp.Or(strings.TrimSpace(cfg.Locality), name)
+}
+
+// poolLocality is localityOf for a pool looked up by name.
 func (c *controller) poolLocality(name string) string {
 	cfg, _ := c.poolConfig(name)
-	return cmp.Or(strings.TrimSpace(cfg.Locality), name)
+	return localityOf(name, cfg)
 }
 
 // inventory reads worker state and folds in what replicas already hold.
@@ -296,7 +360,20 @@ func (c *controller) inventory(replicas []*types.EndpointReplica) (*clusterInven
 		}
 	}
 
-	inv := &clusterInventory{byType: map[string]*gpuInventory{}, localities: map[string][]string{}}
+	inv := &clusterInventory{byType: map[string]*gpuInventory{}, localities: map[string][]string{}, pools: map[string][]eligiblePool{}}
+	for name, cfg := range c.poolConfigs() {
+		if !cfg.ManagedEndpoints.Enabled {
+			continue
+		}
+		key := cpuInventoryKey
+		if gpu := types.NormalizeGPUType(cfg.GPUType); gpu != "" && gpu != types.NO_GPU {
+			key = string(gpu)
+		}
+		inv.pools[key] = append(inv.pools[key], eligiblePool{Name: name, Locality: localityOf(name, cfg)})
+	}
+	for _, pools := range inv.pools {
+		slices.SortFunc(pools, func(a, b eligiblePool) int { return strings.Compare(a.Name, b.Name) })
+	}
 	for _, w := range workers {
 		if w == nil || w.Status == types.WorkerStatusDisabled {
 			continue
@@ -336,8 +413,12 @@ func (c *controller) inventory(replicas []*types.EndpointReplica) (*clusterInven
 
 // place chooses a pool (and its locality) for a target, reserving the GPUs
 // in the in-memory inventory. CPU targets go to any endpoint-enabled CPU
-// pool; GPU targets go to the least-loaded eligible worker.
-func (c *controller) place(inv *clusterInventory, target types.GpuTarget, localities []string) (pool string, locality string, ok bool) {
+// pool; GPU targets go to the least-loaded eligible worker. When no worker
+// has room, a protected target (which may provision a new worker) falls
+// back to an eligible pool honoring its localities; a managed replica is
+// never submitted without a pool, so the scheduler cannot place it on a
+// pool that did not opt in.
+func (c *controller) place(inv *clusterInventory, target types.GpuTarget, localities []string, protected bool) (pool string, locality string, ok bool) {
 	accept := func(w workerSlot) bool { return len(localities) == 0 || slices.Contains(localities, w.Locality) }
 	if target.IsCPU() {
 		for _, name := range inv.cpuPools {
@@ -345,14 +426,16 @@ func (c *controller) place(inv *clusterInventory, target types.GpuTarget, locali
 				return name, loc, true
 			}
 		}
+	} else if entry := inv.byType[inventoryKey(target)]; entry != nil {
+		if slot, ok := entry.reserve(target.Count, accept); ok {
+			return slot.PoolName, slot.Locality, true
+		}
+	}
+	if !protected {
 		return "", "", false
 	}
-	entry := inv.byType[string(types.NormalizeGPUType(target.Type))]
-	if entry == nil {
-		return "", "", false
-	}
-	slot, ok := entry.reserve(target.Count, accept)
-	return slot.PoolName, slot.Locality, ok
+	p, ok := inv.fallbackPool(inventoryKey(target), localities)
+	return p.Name, p.Locality, ok
 }
 
 // --- fill planning -------------------------------------------------------------
@@ -369,12 +452,7 @@ type fillTarget struct {
 func (t fillTarget) key() string { return t.EndpointID + "|" + t.RoleTarget.Key() }
 
 // gpuType is the inventory bucket the target draws from ("cpu" or "H100").
-func (t fillTarget) gpuType() string {
-	if t.Target.IsCPU() {
-		return "cpu"
-	}
-	return string(types.NormalizeGPUType(t.Target.Type))
-}
+func (t fillTarget) gpuType() string { return inventoryKey(t.Target) }
 
 // fillPlan is the placement decision for one fillTarget: Quota is the
 // fair-share allocation, Desired what the controller converges toward.
@@ -528,7 +606,7 @@ func (c *controller) reconcileEndpoint(ctx context.Context, endpoint *types.Mana
 	if rollout == nil {
 		rollout = &types.RolloutState{EndpointID: spec.ID, ActiveVersion: endpoint.Version, Phase: types.RolloutPhaseIdle}
 	}
-	if err := c.stepRollout(ctx, endpoint, rollout, live); err != nil {
+	if err := c.stepRollout(ctx, endpoint, rollout, live, inv); err != nil {
 		log.Warn().Err(err).Str("endpoint_id", spec.ID).Msg("managed endpoints: rollout step failed")
 	}
 	if err := c.ensureFleetRevisions(ctx, endpoint); err != nil {
@@ -576,10 +654,15 @@ func (c *controller) growTarget(ctx context.Context, endpoint *types.ManagedEndp
 		if !spec.Protected && backoff {
 			return
 		}
-		var ok bool
-		if spec.PoolName, spec.Locality, ok = c.place(inv, rt.Target, endpoint.Spec.Locality); !ok && !spec.Protected {
+		pool, locality, ok := c.place(inv, rt.Target, endpoint.Spec.Locality, spec.Protected)
+		if !ok {
+			if spec.Protected {
+				log.Debug().Str("endpoint_id", endpoint.Spec.ID).Str("target", rt.Key()).Strs("locality", endpoint.Spec.Locality).
+					Msg("managed endpoints: no eligible pool for protected replica")
+			}
 			return
 		}
+		spec.PoolName, spec.Locality = pool, locality
 		if _, err := c.startReplica(ctx, spec); err != nil {
 			log.Warn().Err(err).Str("endpoint_id", endpoint.Spec.ID).Str("target", rt.Key()).Msg("managed endpoints: start replica failed")
 			return
@@ -712,7 +795,11 @@ func (c *controller) reconcileService(ctx context.Context, service *types.Manage
 				want = []string{locality}
 			}
 			for i := uint32(0); i < min(spec.Replicas-current, maxStartsPerTick); i++ {
-				target, pool, loc := c.placeService(inv, spec, want)
+				target, pool, loc, ok := c.placeService(inv, spec, want)
+				if !ok {
+					log.Debug().Str("service", spec.Name).Strs("locality", want).Msg("managed endpoints: no eligible pool for service replica")
+					break
+				}
 				_, err := c.startReplica(ctx, startSpec{
 					EndpointID: id, Version: service.Version, StubID: service.StubID, GitSHA: service.GitSHA,
 					Role: types.ReplicaRoleServe, Target: target, Port: spec.Port, Locality: loc, PoolName: pool,
@@ -762,20 +849,22 @@ func (c *controller) serviceLocalities(spec *types.ManagedServiceSpec, inv *clus
 }
 
 // placeService picks the first target with free capacity; when none has,
-// the first target is used and the (protected) request may provision.
-func (c *controller) placeService(inv *clusterInventory, spec *types.ManagedServiceSpec, localities []string) (types.GpuTarget, string, string) {
+// the first target with an eligible pool is used and the (protected) request
+// may provision there. Without any eligible pool nothing is placed.
+func (c *controller) placeService(inv *clusterInventory, spec *types.ManagedServiceSpec, localities []string) (types.GpuTarget, string, string, bool) {
 	targets := spec.Gpu
 	if len(targets) == 0 {
 		targets = []types.GpuTarget{types.CPUTarget()}
 	}
 	for _, t := range targets {
-		if pool, loc, ok := c.place(inv, t, localities); ok {
-			return t, pool, loc
+		if pool, loc, ok := c.place(inv, t, localities, false); ok {
+			return t, pool, loc, true
 		}
 	}
-	loc := ""
-	if len(localities) > 0 {
-		loc = localities[0]
+	for _, t := range targets {
+		if pool, loc, ok := c.place(inv, t, localities, true); ok {
+			return t, pool, loc, true
+		}
 	}
-	return targets[0], "", loc
+	return types.GpuTarget{}, "", "", false
 }

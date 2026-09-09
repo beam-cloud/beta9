@@ -542,6 +542,9 @@ func (s *Service) mountAdminRoutes(group *echo.Group) {
 	g.POST("/gitops/sync", rest(s.TriggerGitOpsSync, nil))
 	g.POST("/replicas/:replica/stop", rest(s.StopReplica, func(c echo.Context, in *pb.StopReplicaRequest) { in.ReplicaId = pathParam(c, "replica") }))
 
+	// Endpoint IDs may contain one "/" (vendor/slug). Echo matches :id on the
+	// raw, still-escaped path, so callers send acme%2Fmodel and pathParam
+	// unescapes it; see TestAdminRESTEndpointIDWithSlash.
 	g.GET("/:id", rest(s.GetEndpoint, func(c echo.Context, in *pb.GetEndpointRequest) { in.EndpointId = id(c) }))
 	g.GET("/:id/replicas", rest(s.ListReplicas, func(c echo.Context, in *pb.ListReplicasRequest) {
 		in.EndpointId, in.Status, in.Gpu, in.Role = id(c), c.QueryParam("status"), c.QueryParam("gpu"), c.QueryParam("role")

@@ -503,6 +503,22 @@ func (s *Scheduler) PoolConfig(name string) (types.WorkerPoolConfig, bool) {
 	return pool.Config, true
 }
 
+// PoolConfigs returns the effective config of every registered worker pool,
+// keyed by the pool selector, including pools created dynamically at runtime.
+func (s *Scheduler) PoolConfigs() map[string]types.WorkerPoolConfig {
+	out := map[string]types.WorkerPoolConfig{}
+	if s == nil || s.workerPoolManager == nil {
+		return out
+	}
+	s.workerPoolManager.poolMap.Range(func(_ string, pool *WorkerPool) bool {
+		if pool != nil {
+			out[pool.Name] = pool.Config
+		}
+		return true
+	})
+	return out
+}
+
 func (s *Scheduler) privatePoolQuotaExempt(request *types.ContainerRequest) bool {
 	if s == nil || request == nil {
 		return false

@@ -110,6 +110,11 @@ message Event {
 
 // ---------------------------------------------------------------------------
 // EndpointHarnessService (in-container, runtime token)
+//
+// Every call carries the admin workspace's runtime token (BETA9_TOKEN) as the
+// bearer credential and the replica's own secret (BEAM_REPLICA_SECRET) in the
+// `x-beam-replica-secret` metadata key. The token admits managed endpoint
+// containers as a class; the secret binds the call to one replica.
 // ---------------------------------------------------------------------------
 
 service EndpointHarnessService {

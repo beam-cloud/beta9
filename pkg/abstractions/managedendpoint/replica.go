@@ -2,6 +2,7 @@ package managedendpoint
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -69,6 +70,11 @@ func (c *controller) observeReplica(ctx context.Context, replica *types.Endpoint
 func (c *controller) syncReplica(ctx context.Context, replica *types.EndpointReplica) error {
 	now := time.Now()
 	state, err := c.s.containers.GetContainerState(replica.ContainerID)
+	if err != nil && !containerStateNotFound(err) {
+		// A transient repository error says nothing about the container;
+		// leave the replica untouched for the next observation.
+		return err
+	}
 	if err != nil || state == nil {
 		// The container record is gone: it exited, was evicted, or was never
 		// scheduled. Give the scheduler a moment after Run before concluding.
@@ -130,10 +136,10 @@ func (c *controller) syncReplica(ctx context.Context, replica *types.EndpointRep
 		return nil
 	}
 
-	port, spec := c.replicaSpec(ctx, replica)
+	probe := c.replicaProbe(ctx, replica)
 	if replica.Address == "" {
 		if addresses, err := c.s.containers.GetContainerAddressMap(replica.ContainerID); err == nil {
-			if addr, ok := addresses[int32(port)]; ok && strings.TrimSpace(addr) != "" {
+			if addr, ok := addresses[int32(probe.Port)]; ok && strings.TrimSpace(addr) != "" {
 				replica.Address = addr
 			}
 		}
@@ -159,12 +165,20 @@ func (c *controller) syncReplica(ctx context.Context, replica *types.EndpointRep
 			return c.stopAndFinish(ctx, replica, types.ReplicaStatusFailed, "harness heartbeat stale")
 		}
 	} else if replica.Address != "" {
-		c.probeReplica(ctx, replica, spec)
+		c.probeReplica(ctx, replica, probe)
 	}
 	if replica.Status == types.ReplicaStatusLoading && now.Sub(replica.StartedAt) > loadingGrace {
 		return c.stopAndFinish(ctx, replica, types.ReplicaStatusFailed, "did not become ready within grace period")
 	}
 	return nil
+}
+
+// containerStateNotFound reports whether err is the container repository's
+// "no such container state" sentinel, either as the typed error or in its
+// string form after crossing a wrapper.
+func containerStateNotFound(err error) bool {
+	var notFound *types.ErrContainerStateNotFound
+	return errors.As(err, &notFound) || (&types.ErrContainerStateNotFound{}).From(err)
 }
 
 // exitStatus decides what a vanished container means for its replica.
@@ -191,11 +205,12 @@ func (c *controller) exitStatus(replica *types.EndpointReplica) types.ReplicaSta
 
 // probeReplica drives status for endpoints without a harness: readiness from
 // the health path and, for LLM engines, capacity from Prometheus metrics.
-func (c *controller) probeReplica(ctx context.Context, replica *types.EndpointReplica, spec *types.ManagedEndpointSpec) {
+func (c *controller) probeReplica(ctx context.Context, replica *types.EndpointReplica, probe probeTarget) {
+	spec := probe.Endpoint
 	baseURL := "http://" + replica.Address
 	paths := llmroute.ReadinessPaths("")
-	if spec != nil && strings.TrimSpace(spec.Health) != "" {
-		paths = []string{spec.Health}
+	if strings.TrimSpace(probe.Health) != "" {
+		paths = []string{probe.Health}
 	}
 	ready := llmroute.CheckReady(ctx, probeClient, baseURL, paths, probeClient.Timeout)
 	now := time.Now()
@@ -227,19 +242,29 @@ func (c *controller) probeReplica(ctx context.Context, replica *types.EndpointRe
 	replica.Capacity.PrefixCacheHitMilli = metrics.PrefixCacheHitMilli
 }
 
-// replicaSpec returns the port a replica serves on and, for endpoint
-// replicas, the endpoint spec (nil for service replicas).
-func (c *controller) replicaSpec(ctx context.Context, replica *types.EndpointReplica) (uint32, *types.ManagedEndpointSpec) {
+// probeTarget is what the controller probes on a replica without a harness.
+type probeTarget struct {
+	Port uint32
+	// Health is the readiness path; empty falls back to the engine defaults.
+	Health string
+	// Endpoint is the endpoint spec (nil for service replicas), used for
+	// engine metrics.
+	Endpoint *types.ManagedEndpointSpec
+}
+
+// replicaProbe resolves the port and health path a replica is probed on from
+// its endpoint or service spec.
+func (c *controller) replicaProbe(ctx context.Context, replica *types.EndpointReplica) probeTarget {
 	if strings.HasPrefix(replica.EndpointID, serviceReplicaPrefix) {
 		if service, err := c.s.repo.GetService(ctx, strings.TrimPrefix(replica.EndpointID, serviceReplicaPrefix)); err == nil && service != nil {
-			return service.Spec.Port, nil
+			return probeTarget{Port: service.Spec.Port, Health: service.Spec.Health}
 		}
-		return 0, nil
+		return probeTarget{}
 	}
 	if endpoint, err := c.s.repo.GetEndpoint(ctx, replica.EndpointID); err == nil && endpoint != nil {
-		return endpoint.Spec.Port, &endpoint.Spec
+		return probeTarget{Port: endpoint.Spec.Port, Health: endpoint.Spec.Health, Endpoint: &endpoint.Spec}
 	}
-	return 0, nil
+	return probeTarget{}
 }
 
 // finishReplica records a terminal status.
@@ -353,6 +378,7 @@ func (c *controller) startReplica(ctx context.Context, spec startSpec) (*types.E
 	}
 	replicaID := fmt.Sprintf("%s-%s", strings.ReplaceAll(spec.EndpointID, "/", "-"), uuid.New().String()[:8])
 	containerID := fmt.Sprintf("%s-%s-%s", containerPrefix, stub.ExternalId, uuid.New().String()[:8])
+	replicaSecret, secretHash := newReplicaSecret()
 
 	mounts, err := abstractions.ConfigureContainerRequestMounts(containerID, stub, workspace, *stubConfig)
 	if err != nil {
@@ -366,6 +392,7 @@ func (c *controller) startReplica(ctx context.Context, spec startSpec) (*types.E
 	env := append(append([]string{}, stubConfig.Env...), secrets...)
 	env = append(env,
 		"BETA9_TOKEN="+tokenKey,
+		EnvReplicaSecret+"="+replicaSecret,
 		"STUB_ID="+stub.ExternalId,
 		"STUB_TYPE="+string(stub.Type),
 		EnvEndpointID+"="+spec.EndpointID,
@@ -440,6 +467,7 @@ func (c *controller) startReplica(ctx context.Context, spec startSpec) (*types.E
 		Status:         types.ReplicaStatusScheduling,
 		Protected:      spec.Protected,
 		Tuning:         spec.Tuning,
+		SecretHash:     secretHash,
 		HarnessEnabled: spec.Harness,
 		StartedAt:      time.Now(),
 	}

@@ -51,7 +51,8 @@ func CheckReady(ctx context.Context, client *http.Client, baseURL string, paths 
 }
 
 // FetchEngineMetrics scrapes the engine's Prometheus endpoint into a snapshot
-// relative to previous. The boolean is false when no data was retrieved.
+// relative to previous. The boolean is false when the scrape carried no
+// recognized engine metric (an idle engine reporting zeros is still data).
 func FetchEngineMetrics(ctx context.Context, client *http.Client, metricsURL string, previous EngineMetrics) (EngineMetrics, bool, error) {
 	status, body, err := get(ctx, client, metricsURL, "text/plain", metricsTimeout, metricsBodyLimit)
 	if status != 0 && status/100 != 2 {
@@ -60,8 +61,8 @@ func FetchEngineMetrics(ctx context.Context, client *http.Client, metricsURL str
 	if err != nil {
 		return EngineMetrics{}, false, err
 	}
-	snapshot := engineMetricsFromPrometheus(body, previous, time.Now())
-	return snapshot, snapshot.hasData(), nil
+	snapshot, found := engineMetricsFromPrometheus(body, previous, time.Now())
+	return snapshot, found, nil
 }
 
 // get performs a bounded GET, returning the status (0 if no response) and up to limit body bytes.

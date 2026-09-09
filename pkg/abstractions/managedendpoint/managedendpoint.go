@@ -6,7 +6,11 @@ package managedendpoint
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,6 +29,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
@@ -36,6 +41,7 @@ const (
 	// Environment injected into every replica container.
 	EnvEndpointID     = "BEAM_ENDPOINT_ID"
 	EnvReplicaID      = "BEAM_REPLICA_ID"
+	EnvReplicaSecret  = "BEAM_REPLICA_SECRET" // presented on harness RPCs as x-beam-replica-secret
 	EnvReplicaRole    = "BEAM_ENDPOINT_ROLE"
 	EnvGpuTarget      = "BEAM_GPU_TARGET"
 	EnvLocality       = "BEAM_LOCALITY"
@@ -254,6 +260,49 @@ func (s *Service) authorizeHarness(ctx context.Context) error {
 	}
 	if workspace.Id != authInfo.Workspace.Id {
 		return status.Error(codes.PermissionDenied, "harness calls must come from a managed endpoint replica")
+	}
+	return nil
+}
+
+// Replica secrets bind harness calls to one replica. The admin-workspace
+// runtime token only proves a caller is some managed endpoint container; the
+// secret, minted per replica and delivered as BEAM_REPLICA_SECRET, proves
+// which one, so a replica cannot heartbeat, ack or drain on behalf of another.
+const replicaSecretHeader = "x-beam-replica-secret"
+
+func newReplicaSecret() (secret, hash string) {
+	buf := make([]byte, 32)
+	_, _ = rand.Read(buf)
+	secret = hex.EncodeToString(buf)
+	return secret, hashReplicaSecret(secret)
+}
+
+func hashReplicaSecret(secret string) string {
+	sum := sha256.Sum256([]byte(secret))
+	return hex.EncodeToString(sum[:])
+}
+
+// harnessReplica authorizes a harness call for one replica: the caller must
+// hold an admin-workspace token and present the replica's secret.
+func (s *Service) harnessReplica(ctx context.Context, replica *types.EndpointReplica) error {
+	if err := s.authorizeHarness(ctx); err != nil {
+		return err
+	}
+	if replica == nil {
+		return status.Error(codes.NotFound, "replica not found")
+	}
+	if authInfo, _ := auth.AuthInfoFromContext(ctx); authInfo != nil && authInfo.Token != nil && authInfo.Token.TokenType == types.TokenTypeClusterAdmin {
+		return nil
+	}
+	presented := ""
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		if values := md.Get(replicaSecretHeader); len(values) > 0 {
+			presented = strings.TrimSpace(values[0])
+		}
+	}
+	if replica.SecretHash == "" || presented == "" ||
+		subtle.ConstantTimeCompare([]byte(hashReplicaSecret(presented)), []byte(replica.SecretHash)) != 1 {
+		return status.Error(codes.PermissionDenied, "replica secret required")
 	}
 	return nil
 }

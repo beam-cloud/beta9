@@ -66,6 +66,13 @@ func TestManagedEndpointSpecCPUDefault(t *testing.T) {
 	require.Equal(t, uint32(0), explicit.Gpu[0].Count)
 	require.Equal(t, uint32(3), explicit.Gpu[0].MaxReplicas)
 	require.NoError(t, explicit.Validate(ManagedEndpointValidation{}))
+
+	// A GPU type with the count omitted is a one-GPU target, not CPU.
+	omitted := ManagedEndpointSpec{ID: "acme/llm", Kind: EndpointKindLLM, Engine: "vllm", Entrypoint: []string{"python", "app.py"},
+		Gpu: []GpuTarget{{Type: "H100"}}}
+	omitted.Normalize()
+	require.False(t, omitted.Gpu[0].IsCPU())
+	require.Equal(t, "H100x1", omitted.Gpu[0].Key())
 }
 
 func TestManagedEndpointSpecValidateErrors(t *testing.T) {
@@ -77,6 +84,7 @@ func TestManagedEndpointSpecValidateErrors(t *testing.T) {
 	spec.Pricing.Request = "1e-3"
 	spec.Gpu = append(spec.Gpu, GpuTarget{Type: "H100", Count: 2, MinReplicas: 3, MaxReplicas: 1, Share: 2})
 	spec.Gpu = append(spec.Gpu, GpuTarget{Type: "NOTAGPU", Count: 9})
+	spec.Gpu = append(spec.Gpu, GpuTarget{Type: "any", Count: 1})
 	spec.Normalize()
 
 	err := spec.Validate(ManagedEndpointValidation{AllowedEngines: []string{"vllm"}})
@@ -93,6 +101,7 @@ func TestManagedEndpointSpecValidateErrors(t *testing.T) {
 		"duplicate target H100x2",
 		"unknown gpu type \"NOTAGPU\"",
 		"count 9 exceeds 8",
+		"gpu type \"any\" is not allowed",
 	} {
 		require.Contains(t, msg, want)
 	}

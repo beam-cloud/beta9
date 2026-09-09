@@ -109,16 +109,16 @@ message ContainerRequest {
   bool docker_enabled = 30;
   repeated string runtime_secret_names = 31;
   bool runtime_token_required = 32;
-  string machine_id = 33;
-  CheckpointTrigger checkpoint_trigger = 34;
-  string task_id = 35;
-  string hostname = 37;
-  bool evictable = 39;
-  bool opportunistic_only = 40;
-  repeated string evict_container_ids = 41;
-  uint32 evict_drain_seconds = 42;
-  uint32 drain_seconds = 43;
-  int32 evict_order = 44;
+  string machine_id = 34;
+  CheckpointTrigger checkpoint_trigger = 35;
+  string task_id = 36;
+  string hostname = 38;
+  bool evictable = 40;
+  bool opportunistic_only = 41;
+  repeated string evict_container_ids = 42;
+  uint32 evict_drain_seconds = 43;
+  uint32 drain_seconds = 44;
+  int32 evict_order = 45;
 }
 
 message ContainerState {

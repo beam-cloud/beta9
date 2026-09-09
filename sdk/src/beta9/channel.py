@@ -76,6 +76,7 @@ class Channel(InterceptorChannel):
             channel_reconnect_event,
             True,
         ),
+        metadata: Optional[Sequence[Tuple[str, str]]] = None,
     ):
         if options is None:
             options = [
@@ -96,7 +97,7 @@ class Channel(InterceptorChannel):
         if not is_remote():
             channel.subscribe(*retry)
 
-        interceptor = AuthTokenInterceptor(token)
+        interceptor = AuthTokenInterceptor(token, metadata)
         super().__init__(channel=channel, interceptor=interceptor)
         self.cache_key = uuid.uuid4().hex
         _channels.add(self)
@@ -128,21 +129,24 @@ class AuthTokenInterceptor(
 ):
     """A generic interceptor to add an authentication token to gRPC requests."""
 
-    def __init__(self, token: Optional[str] = None):
-        """Initialize the interceptor with an optional authentication token."""
+    def __init__(
+        self, token: Optional[str] = None, metadata: Optional[Sequence[Tuple[str, str]]] = None
+    ):
+        """Initialize the interceptor with an optional authentication token and
+        extra metadata attached to every call."""
         self._token = token
+        self._metadata = list(metadata or [])
 
     def _add_auth_metadata(
         self,
         client_call_details: ClientCallDetails,
     ) -> ClientCallDetails:
         """Add authentication metadata to the client call."""
+        headers = list(self._metadata)
         if self._token:
-            auth_headers = [("authorization", f"Bearer {self._token}")]
-            if client_call_details.metadata is not None:
-                new_metadata = client_call_details.metadata + auth_headers
-            else:
-                new_metadata = auth_headers
+            headers.append(("authorization", f"Bearer {self._token}"))
+        if headers:
+            new_metadata = list(client_call_details.metadata or []) + headers
         else:
             new_metadata = client_call_details.metadata
 

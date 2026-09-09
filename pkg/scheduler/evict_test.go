@@ -1,9 +1,11 @@
 package scheduler
 
 import (
+	"context"
 	"testing"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/tj/assert"
 )
@@ -111,6 +113,62 @@ func TestReserveWorkerCapacityDrawsEvictableForRequestsThatMayEvict(t *testing.T
 	}))
 	assert.Equal(t, uint32(0), idleOnly.FreeGpuCount)
 	assert.Equal(t, uint32(1), idleOnly.EvictableGpuCount)
+}
+
+func TestProcessRequestBatchCommitsMixedOpportunisticAndEvictingRequests(t *testing.T) {
+	wb, err := NewSchedulerForTest()
+	assert.NoError(t, err)
+	rdb := wb.requestBacklog.rdb
+
+	// Two GPUs: one idle, one held by an evictable replica.
+	worker := &types.Worker{
+		Id: "worker-mixed-batch", Status: types.WorkerStatusAvailable, Gpu: "A10G", PoolName: "beta9-a10g",
+		TotalCpu: 8000, TotalMemory: 16000, TotalGpuCount: 2,
+	}
+	victimKey := common.RedisKeys.SchedulerContainerState("replica-a")
+	assert.NoError(t, rdb.HSet(context.TODO(), victimKey, common.ToSlice(&types.ContainerState{
+		ContainerId: "replica-a", Status: types.ContainerStatusRunning, WorkerId: worker.Id,
+		Cpu: 1000, Memory: 1000, Gpu: "A10G", GpuCount: 1, Evictable: true, DrainSeconds: 10,
+	})).Err())
+	assert.NoError(t, rdb.SAdd(context.TODO(), common.RedisKeys.SchedulerContainerWorkerIndex(worker.Id), victimKey).Err())
+	assert.NoError(t, wb.workerRepo.AddWorker(worker))
+	workers, err := wb.workerRepo.GetAllWorkers()
+	assert.NoError(t, err)
+	assert.Len(t, workers, 1)
+	assert.Equal(t, uint32(1), workers[0].FreeGpuCount)
+	assert.Equal(t, uint32(1), workers[0].EvictableGpuCount)
+
+	// Planned in this order, the replica takes the idle GPU in memory and the
+	// serverless request draws the evictable one. The commit must place both
+	// rather than refusing to evict because the batch contains a replica.
+	opportunistic := &types.ContainerRequest{
+		ContainerId: "replica-b", Cpu: 1000, Memory: 1000, GpuRequest: []string{"A10G"}, GpuCount: 1,
+		Evictable: true, OpportunisticOnly: true, Timestamp: time.Now(),
+	}
+	serverless := &types.ContainerRequest{
+		ContainerId: "serverless", Cpu: 1000, Memory: 1000, GpuRequest: []string{"A10G"}, GpuCount: 1, Timestamp: time.Now(),
+	}
+	setPendingSchedulerRequests(t, wb, opportunistic, serverless)
+	wb.processRequestBatch([]*types.ContainerRequest{opportunistic, serverless}, workers)
+
+	queued, err := wb.workerRepo.GetNextContainerRequests(worker.Id, 10)
+	assert.NoError(t, err)
+	assert.Len(t, queued, 2)
+	for _, request := range queued {
+		switch request.ContainerId {
+		case "serverless":
+			assert.Equal(t, []string{"replica-a"}, request.EvictContainerIds)
+			assert.Equal(t, uint32(10), request.EvictDrainSeconds)
+		case "replica-b":
+			assert.Empty(t, request.EvictContainerIds)
+		default:
+			t.Fatalf("unexpected queued request %s", request.ContainerId)
+		}
+	}
+	assert.Equal(t, int64(0), wb.requestBacklog.Len())
+	status, err := rdb.HGet(context.TODO(), victimKey, "status").Result()
+	assert.NoError(t, err)
+	assert.Equal(t, string(types.ContainerStatusStopping), status)
 }
 
 func TestOpportunisticRequestFailsFastWithoutIdleCapacity(t *testing.T) {

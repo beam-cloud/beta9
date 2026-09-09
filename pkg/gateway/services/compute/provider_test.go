@@ -75,3 +75,43 @@ func TestProviderJoinCommandRequiresGPU(t *testing.T) {
 		t.Fatalf("GetProviderJoinCommand() on private pool = %+v, %v; want error", res, err)
 	}
 }
+
+func TestDeleteProviderMachineStopsReplicasFirst(t *testing.T) {
+	ctx := testAuthContext("workspace-1", "owner-token")
+	repo := &fakeComputeRepo{}
+	containerRepo := &fakeContainerRepo{containers: []types.ContainerState{
+		{ContainerId: "managed-stub-1-aaa", Status: types.ContainerStatusRunning},
+		{ContainerId: "managed-stub-1-bbb", Status: types.ContainerStatusStopping},
+	}}
+	service := &Service{computeRepo: repo, containerRepo: containerRepo, workerRepo: &fakeWorkerRepo{}}
+
+	join, err := service.GetProviderJoinCommand(ctx, &pb.GetProviderJoinCommandRequest{Gpu: "H100"})
+	if err != nil || !join.Ok {
+		t.Fatalf("GetProviderJoinCommand() = %+v, %v", join, err)
+	}
+	joined, err := service.JoinAgent(context.Background(), &pb.JoinAgentRequest{
+		JoinToken: join.Token, MachineFingerprint: "fp-1", CpuCount: 8, MemoryMb: 32768, Gpu: []string{"H100"}, GpuCount: 1, Schedulable: true,
+	})
+	if err != nil || !joined.Ok {
+		t.Fatalf("JoinAgent() = %+v, %v", joined, err)
+	}
+
+	// Another workspace cannot remove the provider's machine.
+	res, err := service.DeletePrivateMachine(testAuthContext("workspace-2", "t"), &pb.DeleteMachineRequest{PoolName: join.PoolName, MachineId: joined.MachineId})
+	if err != nil || res.Ok {
+		t.Fatalf("cross-workspace DeletePrivateMachine() = %+v, %v; want failure", res, err)
+	}
+
+	res, err = service.DeletePrivateMachine(ctx, &pb.DeleteMachineRequest{PoolName: join.PoolName, MachineId: joined.MachineId})
+	if err != nil || !res.Ok {
+		t.Fatalf("DeletePrivateMachine() = %+v, %v", res, err)
+	}
+	// The running replica is stopped through the scheduler path so the
+	// endpoint controller replaces it; one already stopping is left alone.
+	if got, want := containerRepo.stopped, []string{"managed-stub-1-aaa"}; !sameStrings(got, want) {
+		t.Fatalf("stopped containers = %v, want %v", got, want)
+	}
+	if machines, _ := service.ListProviderMachines(ctx, &pb.ListProviderMachinesRequest{}); len(machines.Machines) != 0 {
+		t.Fatalf("ListProviderMachines() after delete = %+v, want none", machines.Machines)
+	}
+}

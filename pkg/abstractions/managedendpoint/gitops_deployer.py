@@ -118,15 +118,50 @@ def app_changed(rel, changed, app_dirs):
     return False
 
 
+_LOADED = 0
+
+
+def _in_repo(module):
+    """True when a module was loaded from the checked-out repo (an app helper)."""
+    origin = getattr(module, "__file__", None)
+    if not origin:
+        path = getattr(module, "__path__", None)  # namespace package
+        origin = next(iter(path), None) if path else None
+    if not origin:
+        return False
+    try:
+        Path(origin).resolve().relative_to(REPO.resolve())
+    except (OSError, ValueError):
+        return False
+    return True
+
+
 def load_module(app_path):
-    name = f"endpoint_app_{abs(hash(str(app_path)))}"
+    """Execute app.py as a throwaway module.
+
+    The module is registered in sys.modules while it runs so normal import
+    semantics hold (dataclasses with postponed annotations, pickling, ...), and
+    every module the app pulled in from the repo is evicted afterwards so a
+    second app directory with a same-named helper gets its own copy rather than
+    the first app's cached one. sys.path is restored to its pre-load state.
+    """
+    global _LOADED
+    _LOADED += 1
+    name = f"endpoint_app_{_LOADED}"
     spec = importlib.util.spec_from_file_location(name, app_path)
     module = importlib.util.module_from_spec(spec)
+    before_modules = set(sys.modules)
+    before_path = list(sys.path)
     sys.path.insert(0, str(app_path.parent))
+    sys.modules[name] = module
     try:
         spec.loader.exec_module(module)
     finally:
-        sys.path.pop(0)
+        sys.path[:] = before_path
+        for added in set(sys.modules) - before_modules:
+            if added == name or _in_repo(sys.modules.get(added)):
+                sys.modules.pop(added, None)
+        sys.modules.pop(name, None)
     return module
 
 
@@ -160,10 +195,11 @@ def deploy_app(app, root, changed, app_dirs, report):
     os.chdir(app.parent)
     try:
         module = load_module(app)
-    except Exception as exc:  # noqa: BLE001
+    except (Exception, SystemExit) as exc:  # noqa: BLE001  (an app may sys.exit() at import)
         traceback.print_exc()
+        detail = f"exited with {exc.code}" if isinstance(exc, SystemExit) else str(exc)
         report["results"].append(
-            {"path": rel, "id": "", "kind": "", "ok": False, "error": f"import failed: {exc}"}
+            {"path": rel, "id": "", "kind": "", "ok": False, "error": f"import failed: {detail}"}
         )
         return
     for obj in list(vars(module).values()):
@@ -204,9 +240,9 @@ def main():
         log(f"{len(apps)} app(s) at {SHA[:8]}; changed={n_changed}")
         for app in apps:
             deploy_app(app, root, changed, app_dirs, report)
-    except Exception as exc:  # noqa: BLE001
+    except (Exception, SystemExit) as exc:  # noqa: BLE001  (the report must always be posted)
         traceback.print_exc()
-        report["error"] = str(exc)
+        report["error"] = f"exited with {exc.code}" if isinstance(exc, SystemExit) else str(exc)
     finally:
         os.chdir("/")
         shutil.rmtree(WORKDIR, ignore_errors=True)

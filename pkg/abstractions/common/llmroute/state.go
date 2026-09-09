@@ -13,10 +13,27 @@ const (
 	// PressureTargetTotal is the pseudo-replica id aggregating pressure across a deployment.
 	PressureTargetTotal = "total"
 
-	pressureTTL    = 30 * time.Second
+	// pressureTTL bounds how long a pressure hash outlives its last update. It
+	// is refreshed on every increment and decrement, so it only needs to exceed
+	// the longest single generation; pressure is a soft routing signal.
+	pressureTTL    = 10 * time.Minute
 	affinityTTL    = 10 * time.Minute
 	stateOpTimeout = time.Second
 )
+
+// addPressureScript applies field deltas to a pressure hash, floors each
+// field at zero (a decrement after the key expired must not go negative) and
+// refreshes the lease. KEYS[1] is the hash; ARGV is ttl_ms, field, delta, ...
+const addPressureScript = `
+local key = KEYS[1]
+for i = 2, #ARGV, 2 do
+  if redis.call("HINCRBY", key, ARGV[i], ARGV[i + 1]) < 0 then
+    redis.call("HSET", key, ARGV[i], 0)
+  end
+end
+redis.call("PEXPIRE", key, ARGV[1])
+return 1
+`
 
 // State stores pressure and affinity in Redis under a caller-provided key prefix.
 type State struct {
@@ -45,20 +62,21 @@ func (s *State) Pressure(ctx context.Context, target string) (Pressure, error) {
 	return Pressure{ActiveStreams: fieldInt64(values[0]), TokenPressure: fieldInt64(values[1])}, nil
 }
 
-// AddPressure adjusts pressure for the total aggregate and, if non-empty, replicaID.
+// AddPressure adjusts pressure for the total aggregate and, if non-empty,
+// replicaID. Counters never go below zero and every call renews the lease, so
+// a stream that outlives pressureTTL cannot corrupt a recreated hash.
 func (s *State) AddPressure(ctx context.Context, replicaID string, activeStreamsDelta, tokenPressureDelta int64) error {
 	if !s.enabled() {
 		return nil
 	}
+	// One EVAL per key: the targets hash to different slots in cluster mode.
 	pipe := s.rdb.Pipeline()
 	for _, target := range []string{PressureTargetTotal, replicaID} {
 		if target == "" {
 			continue
 		}
-		key := s.key("pressure", target)
-		pipe.HIncrBy(ctx, key, "active_streams", activeStreamsDelta)
-		pipe.HIncrBy(ctx, key, "token_pressure", tokenPressureDelta)
-		pipe.Expire(ctx, key, pressureTTL)
+		pipe.Eval(ctx, addPressureScript, []string{s.key("pressure", target)},
+			pressureTTL.Milliseconds(), "active_streams", activeStreamsDelta, "token_pressure", tokenPressureDelta)
 	}
 	_, err := pipe.Exec(ctx)
 	return err

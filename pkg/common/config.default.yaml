@@ -513,6 +513,11 @@ managedEndpoints:
     enabled: true
     defaultDrainSeconds: 5
   rollout:
+    canaryReplicas: 1
+    bakeSeconds: 300
+    # Canary error rate is judged only once the canary served this many
+    # requests; below it a healthy bake promotes.
+    minCanaryRequests: 20
     thresholds:
       errorRate: 0.02
       ttft: 0.25

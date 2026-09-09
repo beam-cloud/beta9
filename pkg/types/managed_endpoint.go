@@ -101,10 +101,10 @@ type GpuTarget struct {
 	Harness     map[string]any `json:"harness,omitempty"`
 }
 
-// IsCPU reports whether the target describes CPU-only placement.
+// IsCPU reports whether the target describes CPU-only placement. A GPU type
+// with an omitted count is still a GPU target; Normalize defaults it to one.
 func (t GpuTarget) IsCPU() bool {
-	normalized := NormalizeGPUType(t.Type)
-	return t.Type == "" || normalized == NO_GPU || t.Count == 0
+	return strings.TrimSpace(t.Type) == "" || NormalizeGPUType(t.Type) == NO_GPU
 }
 
 // Key uniquely identifies a target within an endpoint ("H100x2", "cpu").
@@ -435,6 +435,10 @@ func validateTargets(field string, targets []GpuTarget) []error {
 		if !t.IsCPU() && !KnownGPUType(GpuType(t.Type)) {
 			errs = append(errs, fmt.Errorf("%s: unknown gpu type %q", prefix, t.Type))
 		}
+		// Placement indexes inventory by concrete GPU type; "any" never fills.
+		if GpuType(t.Type) == GPU_ANY {
+			errs = append(errs, fmt.Errorf("%s: gpu type %q is not allowed; list concrete types as alternatives", prefix, t.Type))
+		}
 		if t.Count > 8 {
 			errs = append(errs, fmt.Errorf("%s: count %d exceeds 8", prefix, t.Count))
 		}
@@ -632,7 +636,10 @@ type EndpointReplica struct {
 	// and are never evictable. Everything else is opportunistic.
 	Protected bool `json:"protected"`
 	// Tuning replicas are dedicated to live tuning and take no public traffic.
-	Tuning         bool            `json:"tuning"`
+	Tuning bool `json:"tuning"`
+	// SecretHash is the SHA-256 of the per-replica secret handed to the
+	// container as BEAM_REPLICA_SECRET; harness RPCs must present it.
+	SecretHash     string          `json:"secret_hash,omitempty"`
 	HarnessEnabled bool            `json:"harness_enabled"`
 	ConfigRevision uint64          `json:"config_revision"`
 	Capacity       ReplicaCapacity `json:"capacity"`

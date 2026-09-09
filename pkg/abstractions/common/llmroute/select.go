@@ -63,9 +63,10 @@ func (s *Selector) Select(candidates []Candidate, affinity Affinity, info *Reque
 	if len(candidates) == 0 {
 		return Selection{}, false
 	}
+	spreadKey := s.spreadKey(info)
 	scoredCandidates := make([]scored, 0, len(candidates))
 	for _, c := range candidates {
-		scoredCandidates = append(scoredCandidates, scoreCandidate(c, affinity, info))
+		scoredCandidates = append(scoredCandidates, scoreCandidate(c, affinity, spreadKey))
 	}
 
 	var selected scored
@@ -96,7 +97,7 @@ func compareScored(a, b scored) int {
 	return cmp.Or(cmp.Compare(a.score, b.score), strings.Compare(a.ID, b.ID))
 }
 
-func scoreCandidate(c Candidate, affinity Affinity, info *RequestInfo) scored {
+func scoreCandidate(c Candidate, affinity Affinity, spreadKey string) scored {
 	contextLen := c.ContextLen
 	if contextLen <= 0 {
 		contextLen = defaultContextLen
@@ -107,7 +108,7 @@ func scoreCandidate(c Candidate, affinity Affinity, info *RequestInfo) scored {
 		c.Engine.score()
 	return scored{
 		Candidate:     c,
-		score:         load + spreadScore(c.ID, info),
+		score:         load + spreadScore(c.ID, spreadKey),
 		queueDepth:    c.Connections + c.Pressure.ActiveStreams + c.Engine.RunningRequests + c.Engine.WaitingRequests,
 		reason:        "least_pressure",
 		prefixMatches: affinity.PrefixMatches[c.ID],
@@ -158,12 +159,24 @@ func (s *Selector) powerOfTwo(candidates []scored, info *RequestInfo) scored {
 	return candidates[left]
 }
 
+// spreadKey is the per-request seed for spreadScore: the request's affinity
+// key when it has one, otherwise a per-selection nonce so requests without
+// routing info (image/custom endpoints) rotate across equal-load replicas
+// instead of always landing on the lexicographically smallest id.
+func (s *Selector) spreadKey(info *RequestInfo) string {
+	if info != nil {
+		if key := cmp.Or(info.AffinityKey, info.PrefixHash, info.Model+":"+info.Path); key != ":" {
+			return key
+		}
+	}
+	return "nonce:" + strconv.FormatUint(s.Counter.Add(1), 10)
+}
+
 // spreadScore is a small deterministic jitter so equal-load replicas are spread by key.
-func spreadScore(replicaID string, info *RequestInfo) int64 {
-	if replicaID == "" || info == nil {
+func spreadScore(replicaID, key string) int64 {
+	if replicaID == "" || key == "" {
 		return 0
 	}
-	key := cmp.Or(info.AffinityKey, info.PrefixHash, info.Model+":"+info.Path)
 	hash := sha256.Sum256([]byte(key + "\n" + replicaID))
 	return int64(binary.BigEndian.Uint16(hash[:2])) % spreadScoreMax
 }

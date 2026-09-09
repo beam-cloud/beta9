@@ -18,12 +18,18 @@ import (
 
 func newTestState(t *testing.T) *State {
 	t.Helper()
+	_, state := newTestStateServer(t)
+	return state
+}
+
+func newTestStateServer(t *testing.T) (*miniredis.Miniredis, *State) {
+	t.Helper()
 	server, err := miniredis.Run()
 	require.NoError(t, err)
 	t.Cleanup(server.Close)
 	rdb, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{server.Addr()}, Mode: types.RedisModeSingle})
 	require.NoError(t, err)
-	return NewState(rdb, "pod:workspace:stub")
+	return server, NewState(rdb, "pod:workspace:stub")
 }
 
 func inspect(t *testing.T, method, path, body string, headers map[string]string) (*RequestInfo, *http.Request) {
@@ -134,7 +140,7 @@ func TestSelectSpreadTieBreakAndEdgeCases(t *testing.T) {
 		require.Less(t, i, 1000, "no prefix prefers container-b")
 		info.AffinityKey = "prefix-" + strconv.Itoa(i)
 		info.PrefixHash = info.AffinityKey
-		if spreadScore("container-b", info) < spreadScore("container-a", info) {
+		if spreadScore("container-b", info.AffinityKey) < spreadScore("container-a", info.AffinityKey) {
 			break
 		}
 	}
@@ -154,6 +160,98 @@ func TestSelectSpreadTieBreakAndEdgeCases(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, "only", selection.Candidate.ID)
 	require.Equal(t, 42, selection.Candidate.Payload)
+}
+
+func TestSelectWithoutRequestInfoRotatesEqualReplicas(t *testing.T) {
+	var selector Selector
+	candidates := []Candidate{{ID: "container-a"}, {ID: "container-b"}, {ID: "container-c"}}
+	seen := map[string]int{}
+	for i := 0; i < 300; i++ {
+		selection, ok := selector.Select(candidates, Affinity{}, nil)
+		require.True(t, ok)
+		seen[selection.Candidate.ID]++
+	}
+	require.Len(t, seen, 3, "equal-load replicas should all be selected: %v", seen)
+	for id, n := range seen {
+		require.Greater(t, n, 30, "replica %s starved: %v", id, seen)
+	}
+
+	// Load still dominates the jitter.
+	for i := 0; i < 50; i++ {
+		selection, ok := selector.Select([]Candidate{{ID: "container-a", Connections: 1}, {ID: "container-b"}}, Affinity{}, nil)
+		require.True(t, ok)
+		require.Equal(t, "container-b", selection.Candidate.ID)
+	}
+}
+
+func TestParsePrometheusSamplesIgnoresTimestampsAndLabelSpaces(t *testing.T) {
+	body := "vllm:num_requests_running{model_name=\"qwen\"} 3 1725840000000\n" +
+		"vllm:num_requests_waiting 2 1725840000000\n" +
+		"vllm:generation_tokens_total{model_name=\"a b\",x=\"y\"} 40\n" +
+		"vllm:generation_tokens_total{model_name=\"c\"} 2\n" +
+		"vllm:time_to_first_token_seconds_bucket{le=\"+Inf\"} 7\n" +
+		"malformed\n"
+	samples := parsePrometheusSamples([]byte(body))
+	require.EqualValues(t, 3, samples["vllm:num_requests_running"])
+	require.EqualValues(t, 2, samples["vllm:num_requests_waiting"])
+	require.EqualValues(t, 42, samples["vllm:generation_tokens_total"])
+	require.EqualValues(t, 7, samples["vllm:time_to_first_token_seconds_bucket"])
+	require.NotContains(t, samples, "malformed")
+
+	got, found := engineMetricsFromPrometheus([]byte(body), EngineMetrics{}, time.Unix(100, 0))
+	require.True(t, found)
+	require.EqualValues(t, 3, got.RunningRequests)
+	require.EqualValues(t, 2, got.WaitingRequests)
+}
+
+func TestEngineMetricsFromPrometheusIdleEngineIsStillData(t *testing.T) {
+	now := time.Unix(100, 0)
+	got, found := engineMetricsFromPrometheus([]byte("vllm:num_requests_running{model_name=\"qwen\"} 0\nvllm:num_requests_waiting{model_name=\"qwen\"} 0\n"), EngineMetrics{RunningRequests: 5}, now)
+	require.True(t, found, "an all-zero scrape from an idle engine must replace stale data")
+	require.EqualValues(t, 0, got.RunningRequests)
+
+	_, found = engineMetricsFromPrometheus([]byte("# just comments\nprocess_cpu_seconds_total 12\n"), EngineMetrics{}, now)
+	require.False(t, found)
+	_, found = engineMetricsFromPrometheus(nil, EngineMetrics{}, now)
+	require.False(t, found)
+}
+
+func TestEngineMetricsFromPrometheusParsesSGLang(t *testing.T) {
+	now := time.Unix(100, 0)
+	previous := EngineMetrics{
+		GenerationTokensTotal: 100, PromptTokensTotal: 50,
+		TTFTSumSeconds: 1.0, TTFTCount: 4, TPOTSumSeconds: 0.4, TPOTCount: 10,
+		UpdatedAtUnixMs: now.Add(-5 * time.Second).UnixMilli(),
+	}
+	body := `# HELP sglang:num_running_reqs The number of running requests.
+sglang:num_running_reqs{model_name="qwen"} 2.0
+sglang:num_queue_reqs{model_name="qwen"} 1.0
+sglang:token_usage{model_name="qwen"} 0.92
+sglang:cache_hit_rate{model_name="qwen"} 0.8
+sglang:prompt_tokens_total{model_name="qwen"} 110.0
+sglang:generation_tokens_total{model_name="qwen"} 250.0
+sglang:time_to_first_token_seconds_sum{model_name="qwen"} 1.6
+sglang:time_to_first_token_seconds_count{model_name="qwen"} 6.0
+sglang:inter_token_latency_seconds_sum{model_name="qwen"} 0.7
+sglang:inter_token_latency_seconds_count{model_name="qwen"} 20.0
+sglang:e2e_request_latency_seconds_sum{model_name="qwen"} 12.0
+sglang:e2e_request_latency_seconds_count{model_name="qwen"} 6.0
+`
+	got, found := engineMetricsFromPrometheus([]byte(body), previous, now)
+	require.True(t, found)
+	require.EqualValues(t, 2, got.RunningRequests)
+	require.EqualValues(t, 1, got.WaitingRequests)
+	require.EqualValues(t, 920, got.GPUCacheUsageMilli)
+	require.EqualValues(t, 800, got.PrefixCacheHitMilli)
+	require.EqualValues(t, 300, got.TTFTMs)
+	require.EqualValues(t, 30, got.TPOTMs)
+	require.EqualValues(t, 30, got.DecodeTokensPerSecond)
+	require.EqualValues(t, 12, got.PromptTokensPerSecond)
+
+	// Older SGLang builds expose TPOT under the vLLM-style name.
+	got, found = engineMetricsFromPrometheus([]byte("sglang:time_per_output_token_seconds_sum 0.5\nsglang:time_per_output_token_seconds_count 10\n"), EngineMetrics{}, now)
+	require.True(t, found)
+	require.EqualValues(t, 50, got.TPOTMs)
 }
 
 func TestEngineMetricsFromPrometheusUsesVLLMDeltas(t *testing.T) {
@@ -177,7 +275,8 @@ vllm:time_to_first_token_seconds_count{model_name="qwen"} 6
 vllm:time_per_output_token_seconds_sum{model_name="qwen"} 0.7
 vllm:time_per_output_token_seconds_count{model_name="qwen"} 20
 `
-	got := engineMetricsFromPrometheus([]byte(body), previous, now)
+	got, found := engineMetricsFromPrometheus([]byte(body), previous, now)
+	require.True(t, found)
 	require.EqualValues(t, 2, got.RunningRequests)
 	require.EqualValues(t, 1, got.WaitingRequests)
 	require.EqualValues(t, 920, got.GPUCacheUsageMilli)
@@ -186,12 +285,10 @@ vllm:time_per_output_token_seconds_count{model_name="qwen"} 20
 	require.EqualValues(t, 30, got.TPOTMs)
 	require.EqualValues(t, 30, got.DecodeTokensPerSecond)
 	require.EqualValues(t, 12, got.PromptTokensPerSecond)
-	require.True(t, got.hasData())
-	require.False(t, EngineMetrics{UpdatedAtUnixMs: 1}.hasData())
 }
 
 func TestStatePressureLifecycle(t *testing.T) {
-	state := newTestState(t)
+	server, state := newTestStateServer(t)
 	ctx := context.Background()
 
 	require.NoError(t, state.AddPressure(ctx, "container-a", 1, 150))
@@ -205,6 +302,34 @@ func TestStatePressureLifecycle(t *testing.T) {
 	total, err := state.Pressure(ctx, PressureTargetTotal)
 	require.NoError(t, err)
 	require.Equal(t, Pressure{}, total)
+
+	// A long stream keeps the lease alive: every increment and decrement
+	// refreshes the TTL, so a concurrent stream's exit cannot expire it.
+	key := state.key("pressure", "container-a")
+	require.NoError(t, state.AddPressure(ctx, "container-a", 1, 100))
+	require.NoError(t, state.AddPressure(ctx, "container-a", 1, 100))
+	server.FastForward(pressureTTL / 2)
+	require.NoError(t, state.AddPressure(ctx, "container-a", -1, -100))
+	require.InDelta(t, pressureTTL, server.TTL(key), float64(time.Second), "decrement must refresh the lease")
+	got, err := state.Pressure(ctx, "container-a")
+	require.NoError(t, err)
+	require.Equal(t, Pressure{ActiveStreams: 1, TokenPressure: 100}, got)
+
+	// A stream that outlives the lease finds a fresh hash owned by newer
+	// requests; its decrement floors at zero instead of corrupting their load.
+	server.FastForward(pressureTTL + time.Second)
+	require.False(t, server.Exists(key))
+	require.NoError(t, state.AddPressure(ctx, "container-a", -1, -100))
+	for _, target := range []string{PressureTargetTotal, "container-a"} {
+		got, err := state.Pressure(ctx, target)
+		require.NoError(t, err)
+		require.Equal(t, Pressure{}, got, "stale decrement must not go negative")
+	}
+	require.NoError(t, state.AddPressure(ctx, "container-b", 1, 50))
+	require.NoError(t, state.AddPressure(ctx, "container-a", -1, -100))
+	total, err = state.Pressure(ctx, PressureTargetTotal)
+	require.NoError(t, err)
+	require.Equal(t, Pressure{}, total, "each field is floored at zero independently")
 
 	var nilState *State
 	require.NoError(t, nilState.AddPressure(ctx, "x", 1, 1))

@@ -36,11 +36,85 @@ func readyCount(replicas []*types.EndpointReplica) int {
 	return n
 }
 
-// stepRollout advances a baking canary: it keeps canary replicas up, starts
-// the bake clock when the first one is ready, and after the bake window
-// promotes or rolls back based on route metrics. Admin pins suspend automatic
-// promotion.
-func (c *controller) stepRollout(ctx context.Context, endpoint *types.ManagedEndpoint, rollout *types.RolloutState, live []*types.EndpointReplica) error {
+// requiredRoles lists the roles a version must run for the endpoint to
+// serve: "serve" for a monolithic spec, prefill and decode when
+// disaggregated. Order follows Targets().
+func requiredRoles(spec *types.ManagedEndpointSpec) []string {
+	var roles []string
+	for _, rt := range spec.Targets() {
+		if !slices.Contains(roles, rt.Role) {
+			roles = append(roles, rt.Role)
+		}
+	}
+	return roles
+}
+
+// roleReplicas filters replicas to one role, alive ones only.
+func roleReplicas(replicas []*types.EndpointReplica, role string) []*types.EndpointReplica {
+	var out []*types.EndpointReplica
+	for _, r := range replicas {
+		if r.Role == role && r.Alive() {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// missingReadyRole returns the first required role with no ready replica.
+func missingReadyRole(replicas []*types.EndpointReplica, roles []string) (string, bool) {
+	for _, role := range roles {
+		if readyCount(roleReplicas(replicas, role)) == 0 {
+			return role, true
+		}
+	}
+	return "", false
+}
+
+// growCanaryRole starts canary replicas for one role until wanted are alive
+// and returns the ones it started. Targets with the fewest canaries are
+// tried first; a target with no eligible pool is skipped, and the loop ends
+// once every target has been skipped in a row or a start fails.
+func (c *controller) growCanaryRole(ctx context.Context, canary *types.ManagedEndpoint, rollout *types.RolloutState, role string, replicas []*types.EndpointReplica, wanted uint32, inv *clusterInventory, services map[string]string) (started []*types.EndpointReplica) {
+	var targets []types.RoleTarget
+	for _, rt := range canary.Spec.Targets() {
+		if rt.Role == role {
+			targets = append(targets, rt)
+		}
+	}
+	perTarget := map[string]int{}
+	for _, r := range replicas {
+		perTarget[r.GPU]++
+	}
+	slices.SortStableFunc(targets, func(a, b types.RoleTarget) int { return perTarget[a.Target.Key()] - perTarget[b.Target.Key()] })
+
+	have, skipped := uint32(len(replicas)), 0
+	for i := 0; have < wanted && len(targets) > 0 && skipped < len(targets); i++ {
+		rt := targets[i%len(targets)]
+		spec := c.endpointStartSpec(canary, rt, services)
+		spec.Protected, spec.Evictable = true, false
+		var ok bool
+		if spec.PoolName, spec.Locality, ok = c.place(inv, rt.Target, canary.Spec.Locality, true); !ok {
+			skipped++
+			log.Debug().Str("endpoint_id", canary.Spec.ID).Uint("version", rollout.CanaryVersion).Str("target", rt.Key()).
+				Msg("managed endpoints: no eligible pool for canary replica")
+			continue
+		}
+		replica, err := c.startReplica(ctx, spec)
+		if err != nil {
+			log.Warn().Err(err).Str("endpoint_id", canary.Spec.ID).Uint("version", rollout.CanaryVersion).Msg("managed endpoints: start canary failed")
+			break
+		}
+		started = append(started, replica)
+		have, skipped = have+1, 0
+	}
+	return started
+}
+
+// stepRollout advances a baking canary: it keeps canary replicas up for
+// every required role, starts the bake clock once each role has a ready
+// replica, and after the bake window promotes or rolls back based on route
+// metrics. Admin pins suspend automatic promotion.
+func (c *controller) stepRollout(ctx context.Context, endpoint *types.ManagedEndpoint, rollout *types.RolloutState, live []*types.EndpointReplica, inv *clusterInventory) error {
 	if rollout.CanaryVersion == 0 || rollout.Phase != types.RolloutPhaseBaking {
 		return nil
 	}
@@ -59,30 +133,19 @@ func (c *controller) stepRollout(ctx context.Context, endpoint *types.ManagedEnd
 	}
 	canaryEndpoint := &types.ManagedEndpoint{Spec: *canarySpec, StubID: canary.StubID, Version: canary.Version, GitSHA: canary.GitSHA}
 
-	// Keep canary replicas up: one per target, bounded by the configured total.
+	// Keep canary replicas up: CanaryReplicas per required role, so a
+	// disaggregated endpoint never bakes (or promotes) with a role missing.
 	var canaryReplicas []*types.EndpointReplica
 	for _, r := range live {
 		if r.EndpointID == id && r.Version == rollout.CanaryVersion && !r.Tuning {
 			canaryReplicas = append(canaryReplicas, r)
 		}
 	}
+	roles := requiredRoles(canarySpec)
 	wanted := c.s.config.Rollout.CanaryReplicas
-	if services, missing := serviceAddresses(canarySpec.Services, live); uint32(len(canaryReplicas)) < wanted && len(missing) == 0 {
-		for _, rt := range canarySpec.Targets() {
-			if uint32(len(canaryReplicas)) >= wanted {
-				break
-			}
-			if len(partitionReplicas(canaryReplicas, id, rt.Role, rt.Target.Key(), rollout.CanaryVersion).Live) > 0 {
-				continue
-			}
-			spec := c.endpointStartSpec(canaryEndpoint, rt, services)
-			spec.Protected, spec.Evictable = true, false
-			replica, err := c.startReplica(ctx, spec)
-			if err != nil {
-				log.Warn().Err(err).Str("endpoint_id", id).Uint("version", rollout.CanaryVersion).Msg("managed endpoints: start canary failed")
-				break
-			}
-			canaryReplicas = append(canaryReplicas, replica)
+	if services, missing := serviceAddresses(canarySpec.Services, live); len(missing) == 0 {
+		for _, role := range roles {
+			canaryReplicas = append(canaryReplicas, c.growCanaryRole(ctx, canaryEndpoint, rollout, role, roleReplicas(canaryReplicas, role), wanted, inv, services)...)
 		}
 	}
 	// Canary replicas follow their own version's fleet config.
@@ -92,7 +155,7 @@ func (c *controller) stepRollout(ctx context.Context, endpoint *types.ManagedEnd
 
 	now := time.Now()
 	if rollout.BakeStartedAt.IsZero() {
-		if readyCount(canaryReplicas) > 0 {
+		if _, missing := missingReadyRole(canaryReplicas, roles); !missing {
 			rollout.BakeStartedAt, rollout.LastDecision, rollout.LastDecisionAt = now, "canary ready; baking", now
 			return c.s.repo.SaveRollout(ctx, rollout)
 		}
@@ -104,6 +167,9 @@ func (c *controller) stepRollout(ctx context.Context, endpoint *types.ManagedEnd
 	window := time.Duration(c.s.config.Rollout.BakeSeconds) * time.Second
 	if now.Sub(rollout.BakeStartedAt) < window || (rollout.PinnedVersion != 0 && rollout.PinnedVersion != rollout.CanaryVersion) {
 		return nil
+	}
+	if role, missing := missingReadyRole(canaryReplicas, roles); missing {
+		return c.finishRollout(ctx, endpoint, rollout, false, fmt.Sprintf("no ready %s canary replica at end of bake", role))
 	}
 
 	activeMetrics, err := c.s.repo.GetRouteMetrics(ctx, id, "", rollout.ActiveVersion, window)
@@ -120,7 +186,7 @@ func (c *controller) stepRollout(ctx context.Context, endpoint *types.ManagedEnd
 			activeReplicas = append(activeReplicas, r)
 		}
 	}
-	promote, reason := evaluateRollout(activeMetrics, canaryMetrics, activeReplicas, canaryReplicas, c.s.config.Rollout.Thresholds)
+	promote, reason := evaluateRollout(activeMetrics, canaryMetrics, activeReplicas, canaryReplicas, c.s.config.Rollout)
 	return c.finishRollout(ctx, endpoint, rollout, promote, reason)
 }
 
@@ -136,17 +202,21 @@ func (c *controller) finishRollout(ctx context.Context, endpoint *types.ManagedE
 	if promote && canary != nil {
 		return c.switchVersion(ctx, endpoint, rollout, versions, canary, "rollout.promoted", "promoted: "+reason)
 	}
+	// A rollback is only recorded once the canary replicas are drained; if
+	// they cannot be listed the rollout stays baking and is retried.
+	replicas, err := c.s.repo.ListReplicas(ctx, endpoint.Spec.ID)
+	if err != nil {
+		return err
+	}
 	if canary != nil {
 		canary.State = types.VersionStateRolledBack
 		if err := c.s.repo.SaveVersion(ctx, canary); err != nil {
 			return err
 		}
 	}
-	if replicas, err := c.s.repo.ListReplicas(ctx, endpoint.Spec.ID); err == nil {
-		for _, r := range replicas {
-			if r.Version == canaryVersion && !r.Status.Terminal() {
-				_ = c.drainReplica(ctx, r, endpoint.Spec.Policy.DrainSeconds, false, "canary rolled back")
-			}
+	for _, r := range replicas {
+		if r.Version == canaryVersion && !r.Status.Terminal() {
+			_ = c.drainReplica(ctx, r, endpoint.Spec.Policy.DrainSeconds, false, "canary rolled back")
 		}
 	}
 	rollout.CanaryVersion, rollout.BakeStartedAt, rollout.Phase = 0, time.Time{}, types.RolloutPhaseRolledBack
@@ -218,16 +288,20 @@ func (c *controller) switchVersion(ctx context.Context, endpoint *types.ManagedE
 // evaluateRollout decides whether a baked canary is at least as good as the
 // active version. It is conservative: with no traffic on either side a
 // healthy canary is promoted; with traffic, any threshold regression rolls
-// back.
-func evaluateRollout(active, canary *types.RouteMetrics, activeReplicas, canaryReplicas []*types.EndpointReplica, th types.RolloutThresholds) (bool, string) {
+// back. The error rate is only judged once the canary served at least
+// rollout.MinCanaryRequests, so a handful of early failures cannot decide
+// the rollout.
+func evaluateRollout(active, canary *types.RouteMetrics, activeReplicas, canaryReplicas []*types.EndpointReplica, rollout types.ManagedEndpointsRolloutConfig) (bool, string) {
+	th := rollout.Thresholds
 	if readyCount(canaryReplicas) == 0 {
 		return false, "no ready canary replica at end of bake"
 	}
 	if canary == nil || canary.Requests == 0 {
 		return true, "canary healthy with no traffic during bake"
 	}
-	if canary.Requests >= 20 && canary.ErrorRate() > th.ErrorRate {
-		return false, fmt.Sprintf("canary error rate %.2f%% exceeds %.2f%%", canary.ErrorRate()*100, th.ErrorRate*100)
+	if canary.Requests >= int64(rollout.MinCanaryRequests) && canary.ErrorRate() > th.ErrorRate {
+		return false, fmt.Sprintf("canary error rate %.2f%% exceeds %.2f%% over %d requests (min sample %d)",
+			canary.ErrorRate()*100, th.ErrorRate*100, canary.Requests, rollout.MinCanaryRequests)
 	}
 	if active == nil || active.Requests == 0 {
 		return true, "canary healthy; active version had no traffic to compare"

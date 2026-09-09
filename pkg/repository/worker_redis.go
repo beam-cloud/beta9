@@ -31,6 +31,9 @@ const (
 	schedulerDeliveryTokenField   = "schedule_delivery_token"
 	schedulerDeliveryAttemptField = "schedule_delivery_attempt"
 	schedulerLastBatchIDField     = "last_schedule_batch_id"
+	// containerEvictedForField records, on an evicting victim's state, the
+	// container ids whose placement consumed its capacity (comma separated).
+	containerEvictedForField = "evicted_for"
 )
 
 var schedulerWorkerLockOptions = common.RedisLockOptions{
@@ -366,6 +369,8 @@ local evictable_cpu = tonumber(ARGV[10])
 local evictable_memory = tonumber(ARGV[11])
 local evictable_gpu = tonumber(ARGV[12])
 local victim_count = tonumber(ARGV[13])
+local victim_ttl = tonumber(ARGV[14])
+local evicted_for = ARGV[15]
 if not requested_cpu or requested_cpu < 0
 	or not requested_memory or requested_memory < 0
 	or not requested_gpu or requested_gpu < 0
@@ -373,10 +378,11 @@ if not requested_cpu or requested_cpu < 0
 	or not evictable_cpu or evictable_cpu < 0
 	or not evictable_memory or evictable_memory < 0
 	or not evictable_gpu or evictable_gpu < 0
-	or not victim_count or victim_count < 0 then
+	or not victim_count or victim_count < 0
+	or not victim_ttl or victim_ttl <= 0 then
 	return {-5}
 end
-local first_victim = 14
+local first_victim = 16
 local first_request = first_victim + victim_count * 4
 
 local queue_type = redis.call("TYPE", KEYS[2]).ok
@@ -459,9 +465,16 @@ redis.call("HSET", KEYS[1],
 	"last_schedule_batch_id", ARGV[9])
 -- Mark victims. STOPPING lets the worker's heartbeat path finish the stop
 -- even if this request is later requeued elsewhere, so the capacity we just
--- handed out is always reclaimed.
+-- handed out is always reclaimed. evicted_for names the requests that took
+-- the victim's capacity, so reconciliation can count the victim again if they
+-- leave this worker before it finalizes. The key keeps at least the stopping
+-- TTL: it must outlive a slow drain, or the worker's accounting loses the
+-- victim while it still holds its resources.
 for i = first_victim, first_request - 1, 4 do
-	redis.call("HSET", ARGV[i], "status", "STOPPING", "evicting", "true", "stop_reason", "EVICTED")
+	redis.call("HSET", ARGV[i], "status", "STOPPING", "evicting", "true", "stop_reason", "EVICTED", "evicted_for", evicted_for)
+	if redis.call("TTL", ARGV[i]) < victim_ttl then
+		redis.call("EXPIRE", ARGV[i], victim_ttl)
+	end
 end
 local machine_id = redis.call("HGET", KEYS[1], "machine_id") or ""
 for i = first_request, #ARGV, 4 do
@@ -835,8 +848,20 @@ func (r *WorkerRedisRepository) getWorkerReservedCapacity(ctx context.Context, w
 		return usage, fmt.Errorf("failed to list active containers for worker <%s>: %w", workerId, err)
 	}
 
+	// Collect the indexed containers first: whether an evicting victim still
+	// counts depends on whether the requests that took its capacity are still
+	// accounted here, and those may be indexed after the victim.
+	type indexedContainer struct {
+		state      *types.ContainerState
+		evictedFor string
+	}
+	accounted := make(map[string]struct{}, len(requestContainerIDs)+len(containerStateKeys))
+	for containerID := range requestContainerIDs {
+		accounted[containerID] = struct{}{}
+	}
+	indexed := make([]indexedContainer, 0, len(containerStateKeys))
 	for _, key := range containerStateKeys {
-		state, exists, err := r.getIndexedContainerState(ctx, workerId, key)
+		state, fields, exists, err := r.getIndexedContainerStateFields(ctx, workerId, key)
 		if err != nil {
 			return usage, err
 		}
@@ -849,18 +874,40 @@ func (r *WorkerRedisRepository) getWorkerReservedCapacity(ctx context.Context, w
 			}
 			continue
 		}
-		containerID := state.ContainerId
-		if containerID == "" {
-			containerID = containerIDFromStateKey(key)
+		if state.ContainerId == "" {
+			state.ContainerId = containerIDFromStateKey(key)
 		}
-		if _, queued := requestContainerIDs[containerID]; queued {
+		if _, queued := requestContainerIDs[state.ContainerId]; queued {
 			continue
 		}
+		accounted[state.ContainerId] = struct{}{}
+		indexed = append(indexed, indexedContainer{state: state, evictedFor: fields[containerEvictedForField]})
+	}
 
-		usage.addContainerState(state)
+	for _, container := range indexed {
+		usage.addContainerState(container.state, evictionBeneficiariesAccounted(container.evictedFor, accounted))
 	}
 
 	return usage, nil
+}
+
+// evictionBeneficiariesAccounted reports whether every container that took an
+// evicting victim's capacity is still accounted on the worker. An empty
+// evictedFor (victims marked before the field existed) is treated as still
+// accounted so those victims keep the pre-existing behaviour.
+func evictionBeneficiariesAccounted(evictedFor string, accounted map[string]struct{}) bool {
+	if evictedFor == "" {
+		return true
+	}
+	for _, containerID := range strings.Split(evictedFor, ",") {
+		if containerID == "" {
+			continue
+		}
+		if _, ok := accounted[containerID]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func containerIDFromStateKey(key string) string {
@@ -872,23 +919,30 @@ func containerIDFromStateKey(key string) string {
 }
 
 func (r *WorkerRedisRepository) getIndexedContainerState(ctx context.Context, workerId string, key string) (*types.ContainerState, bool, error) {
+	state, _, exists, err := r.getIndexedContainerStateFields(ctx, workerId, key)
+	return state, exists, err
+}
+
+// getIndexedContainerStateFields loads an indexed container state along with
+// the raw hash, for fields the scheduler keeps outside ContainerState.
+func (r *WorkerRedisRepository) getIndexedContainerStateFields(ctx context.Context, workerId string, key string) (*types.ContainerState, map[string]string, bool, error) {
 	res, err := r.rdb.HGetAll(ctx, key).Result()
 	if err != nil {
-		return nil, false, fmt.Errorf("failed to get indexed container state <%s> for worker <%s>: %w", key, workerId, err)
+		return nil, nil, false, fmt.Errorf("failed to get indexed container state <%s> for worker <%s>: %w", key, workerId, err)
 	}
 	if len(res) == 0 {
 		if err := r.rdb.SRem(ctx, common.RedisKeys.SchedulerContainerWorkerIndex(workerId), key).Err(); err != nil {
-			return nil, false, fmt.Errorf("failed to remove stale container index entry <%s> for worker <%s>: %w", key, workerId, err)
+			return nil, nil, false, fmt.Errorf("failed to remove stale container index entry <%s> for worker <%s>: %w", key, workerId, err)
 		}
-		return nil, false, nil
+		return nil, nil, false, nil
 	}
 
 	state := &types.ContainerState{}
 	if err := common.ToStruct(res, state); err != nil {
-		return nil, false, fmt.Errorf("failed to deserialize indexed container state <%s> for worker <%s>: %w", key, workerId, err)
+		return nil, nil, false, fmt.Errorf("failed to deserialize indexed container state <%s> for worker <%s>: %w", key, workerId, err)
 	}
 
-	return state, true, nil
+	return state, res, true, nil
 }
 
 func (c *workerReservedCapacity) addRequest(request *types.ContainerRequest) {
@@ -900,18 +954,30 @@ func (c *workerReservedCapacity) addRequest(request *types.ContainerRequest) {
 		gpuCountForCapacity(request.Gpu, request.GpuRequest, request.GpuCount), request.Evictable)
 }
 
-func (c *workerReservedCapacity) addContainerState(state *types.ContainerState) {
+// addContainerState counts an indexed container. beneficiariesAccounted says
+// whether the requests an evicting victim gave its capacity to are still
+// accounted on this worker.
+func (c *workerReservedCapacity) addContainerState(state *types.ContainerState, beneficiariesAccounted bool) {
 	if state == nil {
 		return
 	}
+	memory := capacityMemoryForRequest(&types.ContainerRequest{Memory: state.Memory})
+	gpu := gpuCountForCapacity(state.Gpu, nil, state.GpuCount)
 	if state.Evicting {
-		// The scheduler already handed this container's capacity to the
-		// request that displaced it; counting it again would double-book.
+		if beneficiariesAccounted {
+			// The scheduler already handed this container's capacity to the
+			// request that displaced it; counting it again would double-book.
+			return
+		}
+		// The replacement left this worker (cancelled, requeued, failed)
+		// before the victim finalized, so nothing accounts for the resources
+		// it still physically holds. Count it as held, but not as evictable:
+		// it is already stopping and cannot be evicted a second time.
+		c.add(state.Cpu, memory, gpu, false)
 		return
 	}
 
-	c.add(state.Cpu, capacityMemoryForRequest(&types.ContainerRequest{Memory: state.Memory}),
-		gpuCountForCapacity(state.Gpu, nil, state.GpuCount), state.Evictable)
+	c.add(state.Cpu, memory, gpu, state.Evictable)
 }
 
 func (c *workerReservedCapacity) add(cpu, memory int64, gpu uint32, evictable bool) {
@@ -1606,28 +1672,42 @@ func (r *WorkerRedisRepository) ScheduleContainerRequests(worker *types.Worker, 
 		scheduledAt = time.Now()
 		var cpu, memory, gpu int64
 		var evictableCPU, evictableMemory, evictableGPU int64
-		mayEvict := true
+		// idleOnly* is the share requested by evictable and opportunistic
+		// requests. They only ever take free capacity and never displace
+		// another container, so they must fit in what is idle right now.
+		var idleOnlyCPU, idleOnlyMemory, idleOnlyGPU int64
+		beneficiaries := make([]string, 0, len(queued))
 		for index := range queued {
 			request := queued[index].request
 			requestGPU := int64(gpuCountForCapacity(request.Gpu, request.GpuRequest, request.GpuCount))
+			requestMemory := capacityMemoryForRequest(request)
 			cpu += request.Cpu
-			memory += capacityMemoryForRequest(request)
+			memory += requestMemory
 			gpu += requestGPU
 			if request.Evictable {
 				evictableCPU += request.Cpu
-				evictableMemory += capacityMemoryForRequest(request)
+				evictableMemory += requestMemory
 				evictableGPU += requestGPU
 			}
-			if request.Evictable || request.OpportunisticOnly {
-				// Evictable and opportunistic requests only ever take free
-				// capacity; they never displace another container.
-				mayEvict = false
+			if requestMayEvict(request) {
+				beneficiaries = append(beneficiaries, request.ContainerId)
+			} else {
+				idleOnlyCPU += request.Cpu
+				idleOnlyMemory += requestMemory
+				idleOnlyGPU += requestGPU
 			}
 		}
 
-		// Cover any shortfall by evicting evictable containers on this worker.
+		// Cover any shortfall by evicting evictable containers on this worker,
+		// but only on behalf of requests that may evict: a batch mixing an
+		// opportunistic replica with a serverless request must still let the
+		// serverless request displace a victim, while the replica's own share
+		// has to come out of idle capacity. If it does not fit, the script
+		// rejects the batch on capacity without touching any victim.
 		var victims []evictionVictim
-		if mayEvict {
+		idleOnlyFits := idleOnlyCPU <= current.FreeCpu && idleOnlyMemory <= current.FreeMemory &&
+			idleOnlyGPU <= int64(current.FreeGpuCount)
+		if len(beneficiaries) > 0 && idleOnlyFits {
 			victims, err = r.selectEvictionVictims(ctx, worker.Id,
 				cpu-current.FreeCpu, memory-current.FreeMemory, gpu-int64(current.FreeGpuCount))
 			if err != nil {
@@ -1653,7 +1733,7 @@ func (r *WorkerRedisRepository) ScheduleContainerRequests(worker *types.Worker, 
 			queuedRequest := *queued[index].request
 			queuedRequest.Timestamp = scheduledAt
 			queuedRequest.MachineId = current.MachineId
-			if len(victimIDs) > 0 {
+			if len(victimIDs) > 0 && requestMayEvict(&queuedRequest) {
 				queuedRequest.EvictContainerIds = victimIDs
 				queuedRequest.EvictDrainSeconds = victimDrain
 			}
@@ -1673,7 +1753,8 @@ func (r *WorkerRedisRepository) ScheduleContainerRequests(worker *types.Worker, 
 
 		args := []interface{}{cpu, memory, gpu, int64(len(requests)), worker.Id,
 			schedulerAssignmentIDField, schedulerDeliveryTokenField, schedulerDeliveryAttemptField, batchID,
-			evictableCPU, evictableMemory, evictableGPU, int64(len(victims))}
+			evictableCPU, evictableMemory, evictableGPU, int64(len(victims)),
+			types.ContainerStateTtlSWhileStopping, strings.Join(beneficiaries, ",")}
 		for _, victim := range victims {
 			args = append(args, victim.stateKey, victim.cpu, victim.memory, int64(victim.gpu))
 		}
@@ -1737,7 +1818,7 @@ func (r *WorkerRedisRepository) ScheduleContainerRequests(worker *types.Worker, 
 	for _, item := range queued {
 		item.request.MachineId = capacity.machineID
 		item.request.Timestamp = scheduledAt
-		if len(victimIDs) > 0 {
+		if len(victimIDs) > 0 && requestMayEvict(item.request) {
 			item.request.EvictContainerIds = victimIDs
 			item.request.EvictDrainSeconds = victimDrain
 		}

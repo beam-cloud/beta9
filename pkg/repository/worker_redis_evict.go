@@ -19,6 +19,12 @@ var ErrEvictionVictimsChanged = errors.New("eviction victims changed before plac
 // shortfall either.
 var ErrInsufficientEvictableCapacity = errors.New("unable to schedule container, worker out of free and evictable capacity")
 
+// requestMayEvict reports whether a request may displace evictable containers.
+// Evictable and opportunistic requests never do: they only fill idle capacity.
+func requestMayEvict(request *types.ContainerRequest) bool {
+	return request != nil && !request.Evictable && !request.OpportunisticOnly
+}
+
 // evictionVictim is a running evictable container the scheduler will stop to
 // make room for a non-evictable request.
 type evictionVictim struct {

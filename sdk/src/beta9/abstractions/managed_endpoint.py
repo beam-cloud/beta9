@@ -150,7 +150,7 @@ class _ManagedStub(RunnerAbstraction):
     def __init__(
         self,
         name: str,
-        image: Image,
+        image: Optional[Image],
         entrypoint: Optional[List[str]],
         port: int,
         cpu: Union[int, float, str],
@@ -159,10 +159,12 @@ class _ManagedStub(RunnerAbstraction):
         secrets: Optional[List[str]],
         env: Optional[Dict[str, str]],
     ) -> None:
+        # A fresh Image per stub: the deployer loads many apps in one process,
+        # and Image.build() mutates the instance it was given.
         super().__init__(
             cpu=cpu,
             memory=memory,
-            image=image,
+            image=image if image is not None else Image(),
             volumes=volumes,
             secrets=secrets,
             env=env,
@@ -204,7 +206,9 @@ class _ManagedStub(RunnerAbstraction):
             return {}, False
 
         image = self.image
-        custom_image = bool(image.base_image or image.dockerfile or image.image_id)
+        # Only an image the user supplied (base image, Dockerfile or explicit id)
+        # skips code sync; an id produced by an earlier Image.build() does not.
+        custom_image = bool(image.base_image or image.dockerfile or image._explicit_image_id)
         if not custom_image:
             # exec so SIGTERM from an eviction or drain reaches the engine, not a wrapper shell.
             cmd = f"cd {USER_CODE_DIR} && exec {shlex.join(self.entrypoint)}"
@@ -241,7 +245,7 @@ class ManagedEndpoint(_ManagedStub):
         self,
         id: str,
         kind: str = "llm",
-        image: Image = Image(),
+        image: Optional[Image] = None,
         entrypoint: Optional[List[str]] = None,
         engine: str = "",
         port: int = 8000,
@@ -304,7 +308,7 @@ class ManagedService(_ManagedStub):
     def __init__(
         self,
         name: str,
-        image: Image = Image(),
+        image: Optional[Image] = None,
         entrypoint: Optional[List[str]] = None,
         port: int = 8000,
         health: str = "",
