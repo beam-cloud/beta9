@@ -58,42 +58,13 @@ func meKeys(members []string, prefix ...string) []string {
 
 func u64(n uint64) string { return strconv.FormatUint(n, 10) }
 
-// getJSON returns nil, nil when the key does not exist or no longer decodes
-// (see listLenient); the next save overwrites a stale record.
+// getJSON returns nil, nil when the key does not exist.
 func getJSON[T any](ctx context.Context, rdb *common.RedisClient, key string) (*T, error) {
-	out, err := listLenient[T](ctx, rdb, []string{key})
+	out, err := listJSON[T](ctx, rdb, []string{key})
 	if err != nil || len(out) == 0 {
 		return nil, err
 	}
 	return out[0], nil
-}
-
-// listLenient MGETs keys and decodes each value, skipping (and logging) records
-// that no longer decode into T. One stale record written by an older gateway
-// must not take a whole listing, and with it the /v1 catalog, offline; the
-// GitOps reconciler rewrites such records on its next forced pass.
-func listLenient[T any](ctx context.Context, rdb *common.RedisClient, keys []string) ([]*T, error) {
-	if len(keys) == 0 {
-		return []*T{}, nil
-	}
-	values, err := rdb.MGet(ctx, keys...).Result()
-	if err != nil {
-		return nil, err
-	}
-	out := make([]*T, 0, len(values))
-	for i, value := range values {
-		data, ok := jsonBytes(value)
-		if !ok {
-			continue
-		}
-		var v T
-		if err := json.Unmarshal(data, &v); err != nil {
-			log.Warn().Err(err).Str("key", keys[i]).Msg("managed endpoints: skipping undecodable record")
-			continue
-		}
-		out = append(out, &v)
-	}
-	return out, nil
 }
 
 // listIndexed MGETs meKey(keyPrefix..., member) for every member of the index set, sorted by less.
@@ -102,7 +73,7 @@ func listIndexed[T any](ctx context.Context, rdb *common.RedisClient, indexKey s
 	if err != nil {
 		return nil, err
 	}
-	out, err := listLenient[T](ctx, rdb, meKeys(members, keyPrefix...))
+	out, err := listJSON[T](ctx, rdb, meKeys(members, keyPrefix...))
 	if err != nil {
 		return nil, err
 	}
@@ -205,8 +176,8 @@ func (r *ManagedEndpointRedisRepository) GetFleet(ctx context.Context) (*types.F
 	if fleet == nil {
 		fleet = &types.Fleet{}
 	}
-	if fleet.Targets == nil {
-		fleet.Targets = map[string]map[string]types.Placement{}
+	if fleet.Replicas == nil {
+		fleet.Replicas = map[string]map[string]uint32{}
 	}
 	return fleet, nil
 }

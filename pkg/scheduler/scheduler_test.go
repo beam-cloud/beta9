@@ -332,7 +332,7 @@ func TestNormalizeProviderAgentPool(t *testing.T) {
 	assert.False(t, config.Preemptable)
 	assert.Equal(t, int32(100), config.Priority)
 	assert.Equal(t, "A10G", config.GPUType)
-	assert.Equal(t, types.WorkerPoolManagedEndpointsConfig{Enabled: true, MaxShare: 1}, config.ManagedEndpoints)
+	assert.Equal(t, types.WorkerPoolManagedEndpointsConfig{Enabled: true}, config.ManagedEndpoints)
 
 	// Provider pools are addressed globally by pool name, not per workspace.
 	assert.Equal(t, "provider-a10g", agentPoolControllerKey("provider-workspace", &compute.PoolState{

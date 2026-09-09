@@ -82,11 +82,10 @@ func (c *controller) syncReplica(ctx context.Context, replica *types.EndpointRep
 			return nil
 		}
 		if replica.Status == types.ReplicaStatusScheduling {
-			// Opportunistic requests fail fast when no worker has idle
-			// capacity; the failure backoff keeps the fill loop from
-			// re-submitting every tick.
+			// The failure backoff keeps the controller from re-submitting a
+			// request the scheduler rejected on every tick.
 			if status, err := c.s.containers.GetContainerRequestStatus(replica.ContainerID); err == nil && status == types.ContainerRequestStatusFailed {
-				return c.finishReplica(ctx, replica, types.ReplicaStatusFailed, "not scheduled: no idle capacity")
+				return c.finishReplica(ctx, replica, types.ReplicaStatusFailed, "scheduler failed the request")
 			}
 		}
 		return c.finishReplica(ctx, replica, c.exitStatus(replica), "container exited")
@@ -196,10 +195,6 @@ func (c *controller) exitStatus(replica *types.EndpointReplica) types.ReplicaSta
 	if replica.Status == types.ReplicaStatusDraining || (err == nil && exitCode == 0) {
 		return types.ReplicaStatusStopped
 	}
-	if !replica.Protected && replica.Status == types.ReplicaStatusReady {
-		// Unprotected replicas that were serving are most often preempted.
-		return types.ReplicaStatusEvicted
-	}
 	return types.ReplicaStatusFailed
 }
 
@@ -275,7 +270,7 @@ func (c *controller) finishReplica(ctx context.Context, replica *types.EndpointR
 	delete(c.lastMetrics, replica.ID)
 	c.metricsMu.Unlock()
 	if status == types.ReplicaStatusFailed {
-		_ = c.s.repo.SetScheduleBackoff(ctx, replica.EndpointID, replica.GPU, c.s.config.Fill.FailureBackoff)
+		_ = c.s.repo.SetScheduleBackoff(ctx, replica.EndpointID, replica.GPU, c.s.config.Reconcile.FailureBackoff)
 	}
 	c.s.replicaEvent(replica, "replica."+string(status), reason, nil)
 	replicaLog(replica).Info().Str("status", string(status)).Str("reason", reason).Msg("managed endpoints: replica finished")
@@ -331,10 +326,9 @@ func (c *controller) drainReplica(ctx context.Context, replica *types.EndpointRe
 
 // startSpec is everything needed to launch one replica container.
 type startSpec struct {
-	Endpoint  *types.ManagedEndpoint
-	Target    types.FleetTarget
-	Pool      eligiblePool
-	Protected bool
+	Endpoint *types.ManagedEndpoint
+	Target   types.FleetTarget
+	Pool     eligiblePool
 }
 
 // startReplica submits a container request for one replica and records it.
@@ -388,30 +382,29 @@ func (c *controller) startReplica(ctx context.Context, spec startSpec) (*types.E
 	var gpuRequest []string
 	var gpuCount uint32
 	if !target.IsCPU() {
-		gpu, gpuRequest, gpuCount = target.GPU, []string{target.GPU}, max(target.Count, 1)
+		gpu, gpuRequest, gpuCount = target.GPU, []string{target.GPU}, max(gpuSpec.Count, 1)
 	}
 	request := &types.ContainerRequest{
-		ContainerId:       containerID,
-		EntryPoint:        appendEngineArgs(entrypoint, gpuSpec.EngineArgs),
-		Env:               env,
-		Cpu:               stubConfig.Runtime.Cpu,
-		Memory:            stubConfig.Runtime.Memory,
-		Gpu:               gpu,
-		GpuRequest:        gpuRequest,
-		GpuCount:          gpuCount,
-		ImageId:           stubConfig.Runtime.ImageId,
-		StubId:            stub.ExternalId,
-		AppId:             stub.App.ExternalId,
-		WorkspaceId:       workspace.ExternalId,
-		Workspace:         *workspace,
-		Stub:              *stub,
-		Mounts:            mounts,
-		Ports:             []uint32{endpoint.Spec.Port},
-		PoolSelector:      spec.Pool.Name,
-		Evictable:         !spec.Protected && c.s.config.Preemption.Enabled,
-		OpportunisticOnly: !spec.Protected,
-		DrainSeconds:      drainSeconds,
-		Timestamp:         time.Now(),
+		ContainerId:  containerID,
+		EntryPoint:   appendEngineArgs(entrypoint, gpuSpec.EngineArgs),
+		Env:          env,
+		Cpu:          stubConfig.Runtime.Cpu,
+		Memory:       stubConfig.Runtime.Memory,
+		Gpu:          gpu,
+		GpuRequest:   gpuRequest,
+		GpuCount:     gpuCount,
+		ImageId:      stubConfig.Runtime.ImageId,
+		StubId:       stub.ExternalId,
+		AppId:        stub.App.ExternalId,
+		WorkspaceId:  workspace.ExternalId,
+		Workspace:    *workspace,
+		Stub:         *stub,
+		Mounts:       mounts,
+		Ports:        []uint32{endpoint.Spec.Port},
+		PoolSelector: spec.Pool.Name,
+		Evictable:    c.s.config.Preemption.Enabled,
+		DrainSeconds: drainSeconds,
+		Timestamp:    time.Now(),
 	}
 	if err := abstractions.ConfigureContainerRequestNetwork(request, *stubConfig); err != nil {
 		return nil, err
@@ -427,7 +420,6 @@ func (c *controller) startReplica(ctx context.Context, spec startSpec) (*types.E
 		PoolName:       spec.Pool.Name,
 		ContainerID:    containerID,
 		Status:         types.ReplicaStatusScheduling,
-		Protected:      spec.Protected,
 		SecretHash:     secretHash,
 		HarnessEnabled: endpoint.Spec.Harness,
 		StartedAt:      time.Now(),
@@ -440,9 +432,9 @@ func (c *controller) startReplica(ctx context.Context, spec startSpec) (*types.E
 		_ = c.s.repo.SaveReplica(ctx, replica)
 		return nil, err
 	}
-	c.s.replicaEvent(replica, "replica.scheduled", "", map[string]any{"protected": spec.Protected, "git_sha": endpoint.GitSHA})
+	c.s.replicaEvent(replica, "replica.scheduled", "", map[string]any{"git_sha": endpoint.GitSHA})
 	log.Info().Str("endpoint_id", replica.EndpointID).Str("replica_id", replica.ID).Str("gpu", replica.GPU).
-		Str("pool", replica.PoolName).Bool("protected", replica.Protected).Msg("managed endpoints: replica scheduled")
+		Str("pool", replica.PoolName).Msg("managed endpoints: replica scheduled")
 	return replica, nil
 }
 

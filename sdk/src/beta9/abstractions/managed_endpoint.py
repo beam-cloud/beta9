@@ -35,8 +35,11 @@ def _drop_empty(value: Any) -> Any:
 
 @dataclass
 class Gpu:
-    """How the engine runs on one GPU type: restart-class args and the live harness seed."""
+    """How the engine runs on one GPU type: GPUs per replica (tensor parallel),
+    restart-class args and the live harness seed. How many replicas run is
+    fleet.yaml's decision, not the app's."""
 
+    count: int = 1
     engine_args: List[str] = field(default_factory=list)
     harness: Dict[str, Any] = field(default_factory=dict)
 

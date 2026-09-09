@@ -1095,12 +1095,9 @@ message ListProviderMachinesResponse {
 // models ("spend") or earned serving them on its contributed machines ("earned").
 message GetEndpointUsageRequest {
   string kind = 1; // spend (default) | earned
-  // Trailing window in days (today included); defaults to 30. Ignored when
-  // start_date is set.
-  uint32 days = 2;
   // Inclusive UTC day bounds (YYYY-MM-DD); end_date defaults to today.
-  string start_date = 3;
-  string end_date = 4;
+  string start_date = 2;
+  string end_date = 3;
 }
 
 message EndpointUsage {

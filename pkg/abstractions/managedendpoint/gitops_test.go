@@ -81,7 +81,7 @@ func TestGitOpsApplyReportRecordsVersionsAndRetires(t *testing.T) {
 			{Path: "acme/model", ID: "acme/model", OK: true, StubID: "stub-2", Version: 2},
 			{Path: "acme/broken", OK: false, Error: "import failed: boom"},
 		},
-		FleetYAML: "h100:\n  acme/model:\n    share: 0.5\n    min: 1\n",
+		FleetYAML: "acme/model:\n  h100: 1\n",
 	}
 	require.NoError(t, g.applyReport(ctx, report))
 
@@ -114,7 +114,7 @@ func TestGitOpsApplyReportRecordsVersionsAndRetires(t *testing.T) {
 	fleet, err := s.repo.GetFleet(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, "bbbbbbbb", fleet.GitSHA)
-	assert.Equal(t, []types.FleetTarget{{GPU: "H100", Placement: types.Placement{Share: 0.5, Min: 1, Count: 1}}}, fleet.Placements("acme/model"), "fleet keys are normalized")
+	assert.Equal(t, []types.FleetTarget{{GPU: "H100", Replicas: 1}}, fleet.Placements("acme/model"), "fleet keys are normalized")
 
 	// A duplicate report for the same run is rejected once the run closed.
 	require.Error(t, g.applyReport(ctx, report))
@@ -154,18 +154,18 @@ func TestGitOpsApplyReportInvalidFleetKeepsPrevious(t *testing.T) {
 		PerEndpoint: map[string]types.GitOpsEndpointState{"acme/model": {Path: "acme/model", ID: "acme/model", Status: types.GitOpsStatusApplied, AppliedSHA: "aaaaaaaa"}},
 	}))
 
-	// fleet.yaml is structurally broken (shares over-subscribed, unknown GPU
-	// type): every stub applied, but the fleet is rejected as a whole.
+	// fleet.yaml is structurally broken (unknown GPU type, absurd count):
+	// every stub applied, but the fleet is rejected as a whole.
 	require.NoError(t, g.applyReport(ctx, &types.GitOpsReport{
 		RunID: "run-1", SHA: "bbbbbbbb",
 		Results:   []types.GitOpsDeployResult{{Path: "acme/model", ID: "acme/model", OK: true, Skipped: true}},
-		FleetYAML: "H100:\n  acme/model: {share: 0.7}\n  acme/other: {share: 0.6}\nNOTAGPU:\n  acme/model: {share: 1}\n",
+		FleetYAML: "acme/model:\n  H100: 65\n  NOTAGPU: 1\n",
 	}))
 	state, err := s.repo.GetGitOpsState(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, "bbbbbbbb", state.LastSHA, "the stubs applied; only the fleet is held back")
 	assert.Contains(t, state.LastError, "1 stub(s) failed")
-	for _, want := range []string{"fleet.yaml", "shares sum to 1.30", "NOTAGPU: unknown GPU type"} {
+	for _, want := range []string{"fleet.yaml", "replicas 65 exceeds 64", "NOTAGPU is not a known GPU type"} {
 		assert.Contains(t, state.FleetError, want)
 	}
 	assert.Equal(t, types.GitOpsStatusApplied, state.PerEndpoint["acme/model"].Status)
@@ -181,7 +181,7 @@ func TestGitOpsApplyReportInvalidFleetKeepsPrevious(t *testing.T) {
 	require.NoError(t, g.applyReport(ctx, &types.GitOpsReport{
 		RunID: "run-1b", SHA: "bbbbbbb1",
 		Results:   []types.GitOpsDeployResult{{Path: "acme/model", ID: "acme/model", OK: true, Skipped: true}},
-		FleetYAML: "H100: [not, a, map]\n",
+		FleetYAML: "acme/model: [not, a, map]\n",
 	}))
 	state, err = s.repo.GetGitOpsState(ctx)
 	require.NoError(t, err)
@@ -191,28 +191,28 @@ func TestGitOpsApplyReportInvalidFleetKeepsPrevious(t *testing.T) {
 	assert.Equal(t, "fleet-sha", fleet.GitSHA)
 
 	// A fleet naming a retired endpoint, a typo and a GPU the app does not
-	// declare is applied without those placements; the drops are surfaced as
+	// declare is applied without those entries; the drops are surfaced as
 	// skipped rather than failing the run.
 	state.Running, state.RunID = true, "run-2"
 	require.NoError(t, s.repo.SaveGitOpsState(ctx, state))
 	require.NoError(t, g.applyReport(ctx, &types.GitOpsReport{
 		RunID: "run-2", SHA: "cccccccc",
 		Results:   []types.GitOpsDeployResult{{Path: "acme/model", ID: "acme/model", OK: true, Skipped: true}},
-		FleetYAML: "H100:\n  acme/model: {share: 0.5, min: 1}\n  acme/retired: {share: 0.1}\n  acme/typo: {share: 0.1}\nA10G:\n  acme/model: {share: 1}\n",
+		FleetYAML: "acme/model:\n  H100: 1\n  A10G: 2\nacme/retired:\n  H100: 1\nacme/typo:\n  H100: 1\n",
 	}))
 	state, err = s.repo.GetGitOpsState(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, "cccccccc", state.LastSHA)
-	assert.Empty(t, state.LastError, "pruned placements are not a failure")
+	assert.Empty(t, state.LastError, "pruned entries are not a failure")
 	for _, want := range []string{"skipped:", "acme/retired is not a deployed endpoint", "acme/typo is not a deployed endpoint", `does not declare gpu "A10G"`} {
 		assert.Contains(t, state.FleetError, want)
 	}
 	fleet, err = s.repo.GetFleet(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, "cccccccc", fleet.GitSHA)
-	assert.Equal(t, []types.FleetTarget{{GPU: "H100", Placement: types.Placement{Share: 0.5, Min: 1, Count: 1}}}, fleet.Placements("acme/model"))
-	assert.Empty(t, fleet.Targets["H100"]["acme/typo"])
-	assert.Empty(t, fleet.Targets["A10G"])
+	assert.Equal(t, []types.FleetTarget{{GPU: "H100", Replicas: 1}}, fleet.Placements("acme/model"))
+	assert.Empty(t, fleet.Replicas["acme/typo"])
+	assert.Empty(t, fleet.Replicas["acme/retired"])
 
 	// The fix lands: the fleet applies cleanly and the error clears.
 	state.Running, state.RunID = true, "run-3"
@@ -220,7 +220,7 @@ func TestGitOpsApplyReportInvalidFleetKeepsPrevious(t *testing.T) {
 	require.NoError(t, g.applyReport(ctx, &types.GitOpsReport{
 		RunID: "run-3", SHA: "dddddddd",
 		Results:   []types.GitOpsDeployResult{{Path: "acme/model", ID: "acme/model", OK: true, Skipped: true}},
-		FleetYAML: "H100:\n  acme/model: {share: 1, min: 2, count: 2}\n",
+		FleetYAML: "acme/model:\n  H100: 4\n",
 	}))
 	state, err = s.repo.GetGitOpsState(ctx)
 	require.NoError(t, err)
@@ -229,7 +229,7 @@ func TestGitOpsApplyReportInvalidFleetKeepsPrevious(t *testing.T) {
 	fleet, err = s.repo.GetFleet(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, "dddddddd", fleet.GitSHA)
-	assert.Equal(t, types.Placement{Share: 1, Min: 2, Count: 2}, fleet.Targets["H100"]["acme/model"])
+	assert.Equal(t, uint32(4), fleet.Replicas["acme/model"]["H100"])
 }
 
 func TestGitOpsApplyReportImportFailureKeepsPriorEndpoint(t *testing.T) {

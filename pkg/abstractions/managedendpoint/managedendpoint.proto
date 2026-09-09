@@ -59,7 +59,6 @@ message EndpointReplica {
   string address = 10;
   string status = 11;
   string status_reason = 12;
-  bool protected = 13;
   bool harness_enabled = 14;
   ReplicaConfig config = 15;
   ReplicaCapacity capacity = 16;
@@ -84,8 +83,8 @@ message ManagedEndpoint {
   int64 updated_at_unix_ms = 8;
   uint32 ready_replicas = 9;
   uint32 total_replicas = 10;
-  // Where the fleet places this endpoint: JSON {gpu: placement}.
-  string placements_json = 11;
+  // Replica count per GPU type from fleet.yaml: JSON {gpu: replicas}.
+  string replicas_json = 11;
 }
 
 message Event {
@@ -321,7 +320,7 @@ message GetGitOpsStatusResponse {
   bool ok = 1;
   string err_msg = 2;
   GitOpsState state = 3;
-  // The applied fleet.yaml as JSON {gpu: {endpoint: placement}}.
+  // The applied fleet.yaml as JSON {endpoint: {gpu: replicas}}.
   string fleet_json = 4;
 }
 

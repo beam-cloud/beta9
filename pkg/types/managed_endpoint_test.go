@@ -109,19 +109,17 @@ func TestPricingValidateAndRat(t *testing.T) {
 }
 
 func TestFleetNormalizeAndPlacements(t *testing.T) {
-	fleet := Fleet{Targets: map[string]map[string]Placement{
-		"h100": {" Acme/Model ": {Share: 0.5, Min: 3, Max: 1}, "acme/other": {Share: 0.25}},
-		"cpu":  {"acme/model": {Share: 1, Min: 1, Count: 4}},
+	fleet := Fleet{Replicas: map[string]map[string]uint32{
+		" Acme/Model ": {"h100": 3, "cpu": 1, "A10G": 0},
+		"acme/other":   {"h100": 0},
 	}}
 	fleet.Normalize()
 
-	require.Equal(t, Placement{Share: 0.5, Min: 3, Max: 3, Count: 1}, fleet.Targets["H100"]["acme/model"], "count defaults to 1; max is raised to min")
-	require.Equal(t, Placement{Share: 0.25, Count: 1}, fleet.Targets["H100"]["acme/other"], "max 0 stays uncapped")
-	require.Equal(t, Placement{Share: 1, Min: 1}, fleet.Targets[CPUInventoryKey]["acme/model"], "cpu placements carry no GPU count")
+	require.Equal(t, map[string]map[string]uint32{"acme/model": {"H100": 3, CPUInventoryKey: 1}}, fleet.Replicas, "ids and GPU keys are canonical; zero counts are dropped")
 
 	placements := fleet.Placements("acme/model")
 	require.Len(t, placements, 2)
-	require.Equal(t, "H100", placements[0].GPU, "sorted by GPU key")
+	require.Equal(t, FleetTarget{GPU: "H100", Replicas: 3}, placements[0], "sorted by GPU key")
 	require.False(t, placements[0].IsCPU())
 	require.Equal(t, CPUInventoryKey, placements[1].GPU)
 	require.True(t, placements[1].IsCPU())
@@ -133,44 +131,31 @@ func TestFleetValidate(t *testing.T) {
 	model.Normalize()
 	endpoints := map[string]*ManagedEndpointSpec{model.ID: &model}
 
-	good := Fleet{Targets: map[string]map[string]Placement{"H100": {model.ID: {Share: 0.5, Min: 1}}}}
+	good := Fleet{Replicas: map[string]map[string]uint32{model.ID: {"H100": 2}}}
 	good.Normalize()
 	require.NoError(t, good.Validate())
 	require.Empty(t, good.Prune(endpoints))
-	require.Len(t, good.Targets["H100"], 1)
+	require.Equal(t, uint32(2), good.Replicas[model.ID]["H100"])
 
-	bad := Fleet{Targets: map[string]map[string]Placement{
-		"H100": {
-			model.ID:    {Share: 0.7, Count: 9},
-			"acme/typo": {Share: 0.6},
-		},
-		"A10G":    {model.ID: {Share: 1}},
-		"NOTAGPU": {model.ID: {Share: -1}},
+	bad := Fleet{Replicas: map[string]map[string]uint32{
+		model.ID:    {"H100": 1, "A10G": 1, "NOTAGPU": 65},
+		"acme/typo": {"H100": 1},
 	}}
 	bad.Normalize()
 	err := bad.Validate()
 	require.Error(t, err)
 	msg := err.Error()
-	for _, want := range []string{
-		"H100: shares sum to 1.30",
-		"count 9 exceeds 8",
-		"NOTAGPU: unknown GPU type",
-		"share -1 must be in [0, 1]",
-	} {
-		require.Contains(t, msg, want)
-	}
+	require.Contains(t, msg, "NOTAGPU is not a known GPU type")
+	require.Contains(t, msg, "replicas 65 exceeds 64")
 	require.NotContains(t, msg, "acme/typo", "structural validation does not know about deployed endpoints")
 
 	dropped := bad.Prune(endpoints)
 	require.Equal(t, []string{
-		"A10G: zai-org/glm-4.5-air does not declare gpu \"A10G\" in its app",
-		"H100: acme/typo is not a deployed endpoint",
-		"NOTAGPU: zai-org/glm-4.5-air does not declare gpu \"NOTAGPU\" in its app",
+		"acme/typo is not a deployed endpoint",
+		"zai-org/glm-4.5-air does not declare gpu \"A10G\" in its app",
+		"zai-org/glm-4.5-air does not declare gpu \"NOTAGPU\" in its app",
 	}, dropped)
-	require.NotContains(t, bad.Targets["H100"], "acme/typo")
-	require.Contains(t, bad.Targets["H100"], model.ID, "valid placements survive")
-	require.Empty(t, bad.Targets["A10G"])
-	require.Empty(t, bad.Targets["NOTAGPU"])
+	require.Equal(t, map[string]map[string]uint32{model.ID: {"H100": 1}}, bad.Replicas, "valid entries survive")
 }
 
 func TestDefaultRoutesUnknownKind(t *testing.T) {

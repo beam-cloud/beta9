@@ -82,6 +82,8 @@ func GPUKey(gpu string) string {
 // GpuSpec is how an endpoint runs on one GPU type: engine args appended to the
 // entrypoint (restart-class settings) and the harness seed (live settings).
 type GpuSpec struct {
+	// Count is GPUs per replica (tensor parallelism); ignored for cpu.
+	Count      uint32         `json:"count,omitempty"`
 	EngineArgs []string       `json:"engine_args,omitempty"`
 	Harness    map[string]any `json:"harness,omitempty"`
 }
@@ -208,7 +210,13 @@ func (s *ManagedEndpointSpec) Normalize() {
 	}
 	gpu := make(map[string]GpuSpec, len(s.Gpu))
 	for key, spec := range s.Gpu {
-		gpu[GPUKey(key)] = spec
+		key = GPUKey(key)
+		if key == CPUInventoryKey {
+			spec.Count = 0
+		} else {
+			spec.Count = max(spec.Count, 1)
+		}
+		gpu[key] = spec
 	}
 	if len(gpu) == 0 {
 		gpu[CPUInventoryKey] = GpuSpec{}
@@ -254,9 +262,12 @@ func (s *ManagedEndpointSpec) Validate(policy ManagedEndpointValidation) error {
 	if s.Kind == EndpointKindImage && s.Pricing.Image == "" && s.Pricing.Request == "" && !s.Catalog.Free {
 		fail("image endpoints must price per image or per request, or be marked free")
 	}
-	for key := range s.Gpu {
+	for key, spec := range s.Gpu {
 		if key != CPUInventoryKey && !KnownGPUType(GpuType(key)) {
 			fail("gpu %q is not a known GPU type", key)
+		}
+		if spec.Count > 8 {
+			fail("gpu %q count %d exceeds 8", key, spec.Count)
 		}
 	}
 	return errors.Join(errs...)
@@ -269,121 +280,90 @@ func (s *ManagedEndpointSpec) ServesRoute(route EndpointRoute) bool {
 
 // --- Fleet ---------------------------------------------------------------------
 
-// Placement is one fleet.yaml entry: how much of a GPU type one endpoint gets.
-type Placement struct {
-	// Share is the fraction of the GPU type's spare capacity the endpoint may
-	// fill opportunistically. Zero means only Min replicas run.
-	Share float64 `json:"share"`
-	// Min replicas are protected: they may provision workers and are never
-	// evicted for serverless workloads.
-	Min uint32 `json:"min"`
-	// Max caps replicas; zero means no cap beyond the share.
-	Max uint32 `json:"max"`
-	// Count is GPUs per replica (tensor parallelism); ignored for cpu.
-	Count uint32 `json:"count"`
-}
-
-// Fleet is fleet.yaml: GPU key -> endpoint id -> placement. It is the only
-// place that decides where endpoints run and how spare capacity is split.
+// Fleet is fleet.yaml: endpoint id -> GPU key -> replica count. It is the
+// only thing that decides how many replicas of each endpoint run and where.
 type Fleet struct {
-	GitSHA    string                          `json:"git_sha,omitempty"`
-	Targets   map[string]map[string]Placement `json:"targets"`
-	UpdatedAt time.Time                       `json:"updated_at"`
+	GitSHA    string                       `json:"git_sha,omitempty"`
+	Replicas  map[string]map[string]uint32 `json:"replicas"`
+	UpdatedAt time.Time                    `json:"updated_at"`
 }
 
-// Normalize canonicalizes GPU keys and endpoint ids and fills defaults.
+const maxFleetReplicas = 64
+
+// Normalize canonicalizes endpoint ids and GPU keys and drops zero counts.
 func (f *Fleet) Normalize() {
-	targets := make(map[string]map[string]Placement, len(f.Targets))
-	for gpu, entries := range f.Targets {
-		key := GPUKey(gpu)
-		out := targets[key]
-		if out == nil {
-			out = map[string]Placement{}
-			targets[key] = out
-		}
-		for id, p := range entries {
-			if key == CPUInventoryKey {
-				p.Count = 0
-			} else {
-				p.Count = max(p.Count, 1)
+	out := make(map[string]map[string]uint32, len(f.Replicas))
+	for id, entries := range f.Replicas {
+		id = strings.ToLower(strings.TrimSpace(id))
+		for gpu, n := range entries {
+			if n == 0 {
+				continue
 			}
-			if p.Max != 0 {
-				p.Max = max(p.Max, p.Min)
+			if out[id] == nil {
+				out[id] = map[string]uint32{}
 			}
-			out[strings.ToLower(strings.TrimSpace(id))] = p
+			out[id][GPUKey(gpu)] = n
 		}
 	}
-	f.Targets = targets
+	f.Replicas = out
 }
 
-// Validate checks placements against the deployed endpoints. Call Normalize
-// first. Unknown endpoints and GPU types an endpoint does not support are
-// errors so a typo in fleet.yaml cannot silently leave a model unplaced.
+// Validate checks GPU keys and counts. Call Normalize first.
 func (f *Fleet) Validate() error {
 	var errs []error
-	for gpu, entries := range f.Targets {
-		if gpu != CPUInventoryKey && !KnownGPUType(GpuType(gpu)) {
-			errs = append(errs, fmt.Errorf("%s: unknown GPU type", gpu))
-		}
-		var shares float64
-		for id, p := range entries {
-			if p.Share < 0 || p.Share > 1 {
-				errs = append(errs, fmt.Errorf("%s: %s share %v must be in [0, 1]", gpu, id, p.Share))
+	for id, entries := range f.Replicas {
+		for gpu, n := range entries {
+			if gpu != CPUInventoryKey && !KnownGPUType(GpuType(gpu)) {
+				errs = append(errs, fmt.Errorf("%s: %s is not a known GPU type", id, gpu))
 			}
-			if p.Count > 8 {
-				errs = append(errs, fmt.Errorf("%s: %s count %d exceeds 8", gpu, id, p.Count))
+			if n > maxFleetReplicas {
+				errs = append(errs, fmt.Errorf("%s: %s replicas %d exceeds %d", id, gpu, n, maxFleetReplicas))
 			}
-			shares += p.Share
-		}
-		if shares > 1+1e-9 {
-			errs = append(errs, fmt.Errorf("%s: shares sum to %.2f, must not exceed 1", gpu, shares))
 		}
 	}
 	return errors.Join(errs...)
 }
 
-// Prune drops placements for endpoints that are not deployed or do not declare
+// Prune drops entries for endpoints that are not deployed or do not declare
 // the GPU type in their app, so one broken deploy never blocks the rest of the
-// fleet. It returns one message per dropped placement.
+// fleet. It returns one message per dropped entry.
 func (f *Fleet) Prune(endpoints map[string]*ManagedEndpointSpec) []string {
 	var dropped []string
-	for gpu, entries := range f.Targets {
-		for id := range entries {
-			spec, ok := endpoints[id]
-			switch {
-			case !ok:
-				dropped = append(dropped, fmt.Sprintf("%s: %s is not a deployed endpoint", gpu, id))
-			case spec != nil:
-				if _, ok := spec.Gpu[gpu]; ok {
-					continue
-				}
-				dropped = append(dropped, fmt.Sprintf("%s: %s does not declare gpu %q in its app", gpu, id, gpu))
-			default:
-				continue
+	for id, entries := range f.Replicas {
+		spec, ok := endpoints[id]
+		if !ok {
+			dropped = append(dropped, fmt.Sprintf("%s is not a deployed endpoint", id))
+			delete(f.Replicas, id)
+			continue
+		}
+		if spec == nil {
+			continue
+		}
+		for gpu := range entries {
+			if _, ok := spec.Gpu[gpu]; !ok {
+				dropped = append(dropped, fmt.Sprintf("%s does not declare gpu %q in its app", id, gpu))
+				delete(entries, gpu)
 			}
-			delete(entries, id)
 		}
 	}
 	slices.Sort(dropped)
 	return dropped
 }
 
-// Placements returns the (gpu, placement) pairs for one endpoint, GPU keys sorted.
+// Placements returns one endpoint's (gpu, replicas) pairs, GPU keys sorted.
 func (f *Fleet) Placements(endpointID string) []FleetTarget {
 	var out []FleetTarget
-	for gpu, entries := range f.Targets {
-		if p, ok := entries[endpointID]; ok {
-			out = append(out, FleetTarget{GPU: gpu, Placement: p})
-		}
+	for gpu, n := range f.Replicas[endpointID] {
+		out = append(out, FleetTarget{GPU: gpu, Replicas: n})
 	}
 	slices.SortFunc(out, func(a, b FleetTarget) int { return strings.Compare(a.GPU, b.GPU) })
 	return out
 }
 
-// FleetTarget is one endpoint's placement on one GPU type.
+// FleetTarget is the replica count of one endpoint on one GPU type.
 type FleetTarget struct {
-	GPU string
-	Placement
+	GPU      string
+	Replicas uint32
 }
 
 func (t FleetTarget) IsCPU() bool { return t.GPU == CPUInventoryKey }
@@ -486,9 +466,6 @@ type EndpointReplica struct {
 	Address             string        `json:"address,omitempty"`
 	Status              ReplicaStatus `json:"status"`
 	StatusReason        string        `json:"status_reason,omitempty"`
-	// Protected replicas satisfy the fleet's min: they may trigger
-	// provisioning and are never evictable. Everything else is opportunistic.
-	Protected bool `json:"protected"`
 	// SecretHash is the SHA-256 of the per-replica secret handed to the
 	// container as BEAM_REPLICA_SECRET; harness RPCs must present it.
 	SecretHash     string          `json:"secret_hash,omitempty"`
@@ -536,15 +513,8 @@ type GitOpsEndpointState struct {
 	UpdatedAt  time.Time    `json:"updated_at"`
 }
 
-// ManagedEndpointSchema is bumped whenever the JSON shape of the registry
-// records above changes incompatibly. The GitOps reconciler redeploys every
-// stub when the stamp on its state differs, rewriting stale records.
-const ManagedEndpointSchema = 3
-
 // GitOpsState is the reconciler's view of the endpoints repo.
 type GitOpsState struct {
-	// Schema is the ManagedEndpointSchema the last full deploy wrote records with.
-	Schema    int       `json:"schema,omitempty"`
 	RepoURL   string    `json:"repo_url"`
 	Ref       string    `json:"ref"`
 	LastSHA   string    `json:"last_sha,omitempty"`

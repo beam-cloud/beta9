@@ -66,20 +66,13 @@ func (gws *GatewayService) GetEndpointUsage(ctx context.Context, in *pb.GetEndpo
 	return &pb.GetEndpointUsageResponse{Ok: true, Total: usageToProto(report.Total), PerModel: toProto(report.PerModel), PerDay: toProto(report.PerDay)}, nil
 }
 
-// usageWindow resolves the request's inclusive UTC day range: explicit
-// start/end dates when given, else the trailing `days` ending today.
+// usageWindow parses the request's inclusive UTC day range; end_date
+// defaults to today.
 func usageWindow(in *pb.GetEndpointUsageRequest) (from, to time.Time, err error) {
-	to = time.Now().UTC()
-	if in.GetStartDate() == "" {
-		days := int(in.GetDays())
-		if days <= 0 {
-			days = 30
-		}
-		return to.AddDate(0, 0, -(days - 1)), to, nil
-	}
 	if from, err = time.Parse(time.DateOnly, in.GetStartDate()); err != nil {
 		return from, to, fmt.Errorf("invalid start_date: %w", err)
 	}
+	to = time.Now().UTC()
 	if in.GetEndDate() != "" {
 		if to, err = time.Parse(time.DateOnly, in.GetEndDate()); err != nil {
 			return from, to, fmt.Errorf("invalid end_date: %w", err)

@@ -13,186 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fullInventory has eligible pools for H100 and CPU but no free GPU anywhere.
-func fullInventory() *clusterInventory {
-	return &clusterInventory{
-		byType: map[string]*gpuInventory{
-			"H100": {GPU: "H100", Workers: []workerSlot{{WorkerID: "w1", PoolName: "gpu-b", Locality: "eu-west", Total: 8, Free: 0, Held: 4}}},
-		},
-		pools: map[string][]eligiblePool{
-			"H100":                {{Name: "gpu-a", Locality: "us-east"}, {Name: "gpu-b", Locality: "eu-west"}},
-			types.CPUInventoryKey: {{Name: "cpu-a", Locality: "us-east"}},
-		},
-	}
-}
-
-func h100Inventory() map[string]*gpuInventory {
-	return map[string]*gpuInventory{
-		"H100": {GPU: "H100", clusterShare: 0.5, Workers: []workerSlot{
-			{WorkerID: "w1", PoolName: "gpu-a", Locality: "us-east", Total: 8, Free: 8},
-			{WorkerID: "w2", PoolName: "gpu-a", Locality: "us-east", Total: 8, Free: 4, Held: 2},
-			{WorkerID: "w3", PoolName: "gpu-b", Locality: "eu-west", Total: 8, Free: 8, MaxShare: 0.25},
-		}},
-	}
-}
-
-func fleetTarget(gpu string, count uint32, share float64, minR, maxR uint32) types.FleetTarget {
-	return types.FleetTarget{GPU: gpu, Placement: types.Placement{Share: share, Min: minR, Max: maxR, Count: count}}
-}
-
-func target(endpointID, gpu string, count uint32, share float64, minR, maxR, demand uint32) fillTarget {
-	return fillTarget{EndpointID: endpointID, FleetTarget: fleetTarget(gpu, count, share, minR, maxR), Demand: demand}
-}
-
-func TestInventoryAllowance(t *testing.T) {
-	inv := h100Inventory()["H100"]
-	// 0.5 cluster share over free+held (serverless-held GPUs on w2 excluded):
-	// w1 4 + w2 3 + w3 min(0.5,0.25)*8=2 -> 9
-	assert.Equal(t, uint32(9), inv.allowance())
-	assert.Equal(t, uint32(7), inv.poolAllowance("gpu-a"))
-	assert.Equal(t, uint32(2), inv.poolAllowance("gpu-b"))
-	assert.Equal(t, uint32(2), inv.poolHeld("gpu-a"))
-}
-
-func TestPlanFillDividesByShareAndClamps(t *testing.T) {
-	targets := []fillTarget{
-		target("a", "H100", 1, 0.5, 0, 0, 0),
-		target("b", "H100", 2, 0.5, 1, 1, 0),
-		target("c", "A100", 1, 1, 1, 0, 0),
-	}
-	plans := planFill(h100Inventory(), targets)
-
-	// allowance 9: a gets floor(9*0.5/1)=4, b gets floor(9*0.5/2)=2 clamped to max 1
-	assert.Equal(t, fillPlan{Quota: 4, Desired: 4}, plans[targets[0].key()])
-	assert.Equal(t, fillPlan{Quota: 2, Desired: 1}, plans[targets[1].key()])
-	// no A100 inventory: quota 0, min still requested
-	assert.Equal(t, fillPlan{Quota: 0, Desired: 1}, plans[targets[2].key()])
-}
-
-func TestPlanFillNormalizesOversubscribedShares(t *testing.T) {
-	targets := []fillTarget{target("a", "H100", 1, 1, 0, 0, 0), target("b", "H100", 1, 1, 0, 0, 0)}
-	plans := planFill(h100Inventory(), targets)
-	total := plans[targets[0].key()].Quota + plans[targets[1].key()].Quota
-	assert.LessOrEqual(t, total, uint32(9))
-	assert.Equal(t, plans[targets[0].key()].Quota, plans[targets[1].key()].Quota)
-}
-
-func TestPlanFillDemandGrowsPastQuotaWithinMax(t *testing.T) {
-	targets := []fillTarget{target("a", "H100", 1, 0.1, 0, 3, 5)}
-	plans := planFill(h100Inventory(), targets)
-	assert.Equal(t, fillPlan{Quota: 0, Desired: 3}, plans[targets[0].key()])
-
-	// Zero share: nothing opportunistic, only the protected min.
-	targets = []fillTarget{target("a", "H100", 1, 0, 2, 0, 0)}
-	plans = planFill(h100Inventory(), targets)
-	assert.Equal(t, fillPlan{Quota: 0, Desired: 2}, plans[targets[0].key()])
-}
-
-// TestPlanFillFromFleetPlacements: the controller builds one fillTarget per
-// (endpoint, gpu) pair the fleet places, and each GPU type is divided
-// independently.
-func TestPlanFillFromFleetPlacements(t *testing.T) {
-	fleet := &types.Fleet{Targets: map[string]map[string]types.Placement{
-		"h100": {"acme/big": {Share: 0.75, Min: 1, Count: 2}, "acme/small": {Share: 0.25, Max: 1}},
-		"cpu":  {"acme/small": {Min: 2}},
-	}}
-	fleet.Normalize()
-
-	var targets []fillTarget
-	for _, id := range []string{"acme/big", "acme/small"} {
-		for _, ft := range fleet.Placements(id) {
-			targets = append(targets, fillTarget{EndpointID: id, FleetTarget: ft})
-		}
-	}
-	require.Len(t, targets, 3)
-	plans := planFill(h100Inventory(), targets)
-
-	// allowance 9: big gets floor(9*0.75/2)=3, small floor(9*0.25/1)=2 capped at 1.
-	assert.Equal(t, fillPlan{Quota: 3, Desired: 3}, plans["acme/big|H100"])
-	assert.Equal(t, fillPlan{Quota: 2, Desired: 1}, plans["acme/small|H100"])
-	// No cpu inventory and no share: just the protected min.
-	assert.Equal(t, fillPlan{Quota: 0, Desired: 2}, plans["acme/small|cpu"])
-	_, unplaced := plans["acme/big|cpu"]
-	assert.False(t, unplaced, "an endpoint gets no plan on a GPU the fleet does not place it on")
-}
-
-func TestReservePrefersMostFreeWorker(t *testing.T) {
-	inv := h100Inventory()["H100"]
-	slot, ok := inv.reserve(2)
-	require.True(t, ok)
-	// w1 and w3 both have 8 free; w1 has fewer held -> tie broken by held then order
-	assert.Equal(t, "w1", slot.WorkerID)
-	assert.Equal(t, uint32(6), inv.Workers[0].Free)
-	assert.Equal(t, uint32(2), inv.Workers[0].Held)
-
-	// Now w3 has the most free GPUs.
-	slot, ok = inv.reserve(1)
-	require.True(t, ok)
-	assert.Equal(t, "w3", slot.WorkerID)
-
-	_, ok = inv.reserve(16)
-	assert.False(t, ok)
-}
-
-func TestReserveHonoursPoolBudget(t *testing.T) {
-	// gpu-b is capped at 0.25 of 8 GPUs: two may be held there, however many are free.
-	inv := &gpuInventory{GPU: "H100", clusterShare: 0.5, Workers: []workerSlot{
-		{WorkerID: "w3", PoolName: "gpu-b", Total: 8, Free: 8, MaxShare: 0.25},
-	}}
-	slot, ok := inv.reserve(2)
-	require.True(t, ok)
-	assert.Equal(t, "w3", slot.WorkerID)
-	assert.Equal(t, uint32(6), inv.Workers[0].Free)
-	_, ok = inv.reserve(1)
-	assert.False(t, ok, "the pool's budget is spent even though the worker has free GPUs")
-
-	// A pool that cannot fit the whole request is skipped for one that can.
-	inv = h100Inventory()["H100"]
-	slot, ok = inv.reserve(3)
-	require.True(t, ok)
-	assert.Equal(t, "w1", slot.WorkerID, "gpu-b (allowance 2) cannot host 3 GPUs; gpu-a can")
-}
-
-func TestPlaceProtectedFallsBackToEligiblePoolOnly(t *testing.T) {
-	c := newServiceForTest(t).controller
-	h100 := fleetTarget("H100", 1, 0.5, 0, 0)
-
-	// Free capacity wins regardless of protection.
-	free := &clusterInventory{byType: h100Inventory(), pools: map[string][]eligiblePool{"H100": {{Name: "other", Locality: "ap"}}}}
-	pool, ok := c.place(free, h100, true)
-	require.True(t, ok)
-	assert.Equal(t, eligiblePool{Name: "gpu-a", Locality: "us-east"}, pool)
-
-	// No free worker: opportunistic replicas are not placed at all.
-	_, ok = c.place(fullInventory(), h100, false)
-	assert.False(t, ok)
-
-	// A protected replica gets an eligible pool, never an empty selector.
-	pool, ok = c.place(fullInventory(), h100, true)
-	require.True(t, ok)
-	assert.Equal(t, eligiblePool{Name: "gpu-a", Locality: "us-east"}, pool)
-
-	// A GPU type no pool opted in for places nothing, even when protected.
-	pool, ok = c.place(fullInventory(), fleetTarget("A100-80G", 1, 0.5, 1, 0), true)
-	assert.False(t, ok)
-	assert.Empty(t, pool.Name)
-
-	// CPU has no GPU inventory to reserve: targets go to the first eligible
-	// CPU pool whether protected or not, and nowhere when no pool opted in.
-	cpu := fleetTarget(types.CPUInventoryKey, 0, 1, 1, 0)
-	pool, ok = c.place(fullInventory(), cpu, true)
-	require.True(t, ok)
-	assert.Equal(t, eligiblePool{Name: "cpu-a", Locality: "us-east"}, pool)
-	pool, ok = c.place(fullInventory(), cpu, false)
-	require.True(t, ok)
-	assert.Equal(t, "cpu-a", pool.Name)
-	noCPU := fullInventory()
-	delete(noCPU.pools, types.CPUInventoryKey)
-	_, ok = c.place(noCPU, cpu, true)
-	assert.False(t, ok)
-}
-
-func TestInventoryListsEligiblePoolsWithoutFreeWorkers(t *testing.T) {
+func TestInventoryPlacesInEligiblePoolsOnly(t *testing.T) {
 	s := newServiceForTest(t)
 	s.workers = repository.NewWorkerRedisRepositoryForTest(s.rdb)
 	s.appConfig.Worker.Pools = map[string]types.WorkerPoolConfig{
@@ -201,72 +22,63 @@ func TestInventoryListsEligiblePoolsWithoutFreeWorkers(t *testing.T) {
 		"cpu-a":   {ManagedEndpoints: types.WorkerPoolManagedEndpointsConfig{Enabled: true}},
 		"opt-out": {GPUType: "H100"},
 	}
-	require.NoError(t, s.workers.AddWorker(&types.Worker{Id: "w1", PoolName: "gpu-b", Gpu: "H100", TotalGpuCount: 8, FreeGpuCount: 8, Status: types.WorkerStatusAvailable}))
+	require.NoError(t, s.workers.AddWorker(&types.Worker{Id: "w1", PoolName: "gpu-b", Gpu: "H100", TotalGpuCount: 3, FreeGpuCount: 3, Status: types.WorkerStatusAvailable}))
 	require.NoError(t, s.workers.AddWorker(&types.Worker{Id: "w2", PoolName: "opt-out", Gpu: "H100", TotalGpuCount: 8, FreeGpuCount: 8, Status: types.WorkerStatusAvailable}))
 
-	held := []*types.EndpointReplica{{ID: "r", EndpointID: "e", WorkerID: "w1", GPUCount: 2, Status: types.ReplicaStatusReady}}
-	inv, err := s.controller.inventory(held)
+	inv, err := s.controller.inventory(nil)
 	require.NoError(t, err)
 	assert.Equal(t, []eligiblePool{{Name: "gpu-a", Locality: "us-east"}, {Name: "gpu-b", Locality: "gpu-b"}}, inv.pools["H100"])
 	assert.Equal(t, []eligiblePool{{Name: "cpu-a", Locality: "cpu-a"}}, inv.pools[types.CPUInventoryKey])
-	require.Len(t, inv.byType["H100"].Workers, 1, "workers in pools that did not opt in are invisible")
-	assert.Equal(t, uint32(2), inv.byType["H100"].Workers[0].Held)
+	assert.Equal(t, map[string]uint32{"gpu-b": 3}, inv.free["H100"], "workers in pools that did not opt in are invisible")
 
-	// Exhaust the only worker: fallback placement must still find a pool.
-	inv.byType["H100"].Workers[0].Free = 0
-	h100 := fleetTarget("H100", 1, 0.5, 1, 0)
-	_, ok := s.controller.place(inv, h100, false)
-	assert.False(t, ok, "no free capacity for opportunistic replicas")
-	pool, ok := s.controller.place(inv, h100, true)
+	// Free capacity wins; the reservation is tracked so the next replica
+	// does not count on the same GPUs.
+	pool, ok := inv.place("H100", 2)
 	require.True(t, ok)
-	assert.Equal(t, "gpu-a", pool.Name)
+	assert.Equal(t, "gpu-b", pool.Name)
+	assert.Equal(t, uint32(1), inv.free["H100"]["gpu-b"])
+
+	// Nothing fits any more: the first eligible pool takes the request and
+	// the scheduler provisions (or waits).
+	pool, ok = inv.place("H100", 2)
+	require.True(t, ok)
+	assert.Equal(t, eligiblePool{Name: "gpu-a", Locality: "us-east"}, pool)
+
+	// CPU targets go to the first eligible CPU pool.
+	pool, ok = inv.place(types.CPUInventoryKey, 0)
+	require.True(t, ok)
+	assert.Equal(t, "cpu-a", pool.Name)
+
+	// A GPU type no pool opted in for places nothing.
+	pool, ok = inv.place("A100-80G", 1)
+	assert.False(t, ok)
+	assert.Empty(t, pool.Name)
 }
 
-func TestPartitionAndScaleDownOrdering(t *testing.T) {
+func TestLiveReplicasAndScaleDownOrder(t *testing.T) {
 	now := time.Now()
 	replicas := []*types.EndpointReplica{
 		{ID: "old-ready", EndpointID: "e", GPU: "H100", Version: 1, Status: types.ReplicaStatusReady, StartedAt: now.Add(-time.Hour)},
-		{ID: "protected", EndpointID: "e", GPU: "H100", Version: 1, Status: types.ReplicaStatusReady, Protected: true, StartedAt: now.Add(-2 * time.Hour)},
 		{ID: "loading", EndpointID: "e", GPU: "H100", Version: 1, Status: types.ReplicaStatusLoading, StartedAt: now},
 		{ID: "busy", EndpointID: "e", GPU: "H100", Version: 1, Status: types.ReplicaStatusReady, StartedAt: now.Add(-time.Minute), Capacity: types.ReplicaCapacity{InFlight: 4}},
+		{ID: "new-ready", EndpointID: "e", GPU: "H100", Version: 1, Status: types.ReplicaStatusReady, StartedAt: now.Add(-time.Second)},
 		{ID: "draining", EndpointID: "e", GPU: "H100", Version: 1, Status: types.ReplicaStatusDraining},
 		{ID: "evicting", EndpointID: "e", GPU: "H100", Version: 1, Status: types.ReplicaStatusEvicting},
 		{ID: "other-gpu", EndpointID: "e", GPU: "A100", Version: 1, Status: types.ReplicaStatusReady},
 		{ID: "other-endpoint", EndpointID: "f", GPU: "H100", Version: 1, Status: types.ReplicaStatusReady},
 		{ID: "other-version", EndpointID: "e", GPU: "H100", Version: 2, Status: types.ReplicaStatusReady},
 	}
-	set := partitionReplicas(replicas, "e", "H100", 1)
-	assert.Len(t, set.Live, 4)
-	assert.Len(t, set.Ready, 3)
-	assert.Equal(t, uint32(1), set.Protected)
+	live, ready := liveReplicas(replicas, "e", "H100", 1)
+	assert.Len(t, live, 4)
+	assert.Equal(t, 3, ready)
 
-	ids := make([]string, 0, len(set.Live))
-	for _, r := range scaleDownCandidates(set) {
+	scaleDownOrder(live)
+	ids := make([]string, 0, len(live))
+	for _, r := range live {
 		ids = append(ids, r.ID)
 	}
-	// unprotected first; not-ready before ready; least loaded; newest first
-	assert.Equal(t, []string{"loading", "old-ready", "busy", "protected"}, ids)
-}
-
-func TestDemandFollowsRecentTraffic(t *testing.T) {
-	s := newServiceForTest(t)
-	endpoint := seedEndpoint(t, s)
-	ctx := context.Background()
-	ft := fleetTarget("H100", 1, 0.5, 0, 0)
-	ready := &types.EndpointReplica{ID: "r1", EndpointID: endpoint.Spec.ID, GPU: "H100", Version: 1, Status: types.ReplicaStatusReady, Capacity: types.ReplicaCapacity{MaxConcurrency: 10}}
-	live := []*types.EndpointReplica{ready}
-
-	assert.Equal(t, uint32(0), s.controller.demand(ctx, endpoint, ft, nil), "nothing ready, nothing demanded")
-	assert.Equal(t, uint32(0), s.controller.demand(ctx, endpoint, ft, live), "idle for the whole window: capacity returns to quota and min")
-
-	// Traffic a couple of minutes ago: the last minute is quiet but the
-	// endpoint is not idle, so what is serving is kept.
-	require.NoError(t, s.repo.RecordRouteSample(ctx, types.RouteSample{EndpointID: endpoint.Spec.ID, GPU: "H100", StatusCode: 200, At: time.Now().Add(-2 * time.Minute)}))
-	assert.Equal(t, uint32(1), s.controller.demand(ctx, endpoint, ft, live))
-
-	// Queueing at the router in the last minute asks for one more.
-	require.NoError(t, s.repo.RecordRouteSample(ctx, types.RouteSample{EndpointID: endpoint.Spec.ID, GPU: "H100", StatusCode: 200, QueueWait: 2 * s.config.Routing.MaxQueueWait, At: time.Now()}))
-	assert.Equal(t, uint32(2), s.controller.demand(ctx, endpoint, ft, live))
+	// not-ready before ready; least loaded; newest first
+	assert.Equal(t, []string{"loading", "new-ready", "old-ready", "busy"}, ids)
 }
 
 func TestAppendEngineArgs(t *testing.T) {
@@ -343,43 +155,44 @@ func TestRetireStaleVersionsWaitsForCurrentReady(t *testing.T) {
 	assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, otherGPU.ID))
 }
 
-func TestReconcileEndpointDrainsUnplacedAndRetired(t *testing.T) {
+func TestReconcileEndpointConvergesOnFleetCount(t *testing.T) {
 	s := newServiceForTest(t)
-	endpoint := seedEndpoint(t, s)
+	endpoint := seedEndpoint(t, s) // fleet: acme/model H100: 2
 	ctx := context.Background()
-	inv := &clusterInventory{byType: map[string]*gpuInventory{}, pools: map[string][]eligiblePool{}}
+	inv := &clusterInventory{pools: map[string][]eligiblePool{}, free: map[string]map[string]uint32{}}
 
 	placed := versionReplica(t, s, "on-h100", 1, types.ReplicaStatusLoading)
 	unplaced := versionReplica(t, s, "on-a100", 1, types.ReplicaStatusLoading)
 	unplaced.GPU = "A100"
 	require.NoError(t, s.repo.SaveReplica(ctx, unplaced))
-	live := []*types.EndpointReplica{placed, unplaced}
 
-	// fleet.yaml only places acme/model on H100: the A100 replica goes.
+	// fleet.yaml only places acme/model on H100: the A100 replica goes. Below
+	// the count with no pool opted in, nothing can be started.
 	fleet, err := s.repo.GetFleet(ctx)
 	require.NoError(t, err)
-	plans := map[string]fillPlan{"acme/model|H100": {Quota: 1, Desired: 1}}
-	require.NoError(t, s.controller.reconcileEndpoint(ctx, endpoint, fleet, plans, live, inv))
+	s.controller.reconcileEndpoint(ctx, endpoint, fleet, []*types.EndpointReplica{placed, unplaced}, inv)
 	assert.Equal(t, types.ReplicaStatusLoading, statusOf(t, s, placed.ID))
 	assert.Equal(t, types.ReplicaStatusStopped, statusOf(t, s, unplaced.ID))
 	reason, _ := s.repo.GetReplica(ctx, unplaced.ID)
-	assert.Equal(t, "removed from fleet", reason.StatusReason)
+	assert.Equal(t, "removed from fleet.yaml", reason.StatusReason)
 
-	// Over the plan: the excess is scaled down (nothing protected here).
+	// Over the count: the least valuable replicas are drained down to it.
+	second := versionReplica(t, s, "second", 1, types.ReplicaStatusReady)
 	extra := versionReplica(t, s, "extra", 1, types.ReplicaStatusLoading)
-	require.NoError(t, s.controller.reconcileEndpoint(ctx, endpoint, fleet, plans, []*types.EndpointReplica{placed, extra}, inv))
+	s.controller.reconcileEndpoint(ctx, endpoint, fleet, []*types.EndpointReplica{placed, second, extra}, inv)
+	assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, second.ID))
 	stopped := 0
 	for _, id := range []string{placed.ID, extra.ID} {
 		if statusOf(t, s, id) == types.ReplicaStatusStopped {
 			stopped++
 		}
 	}
-	assert.Equal(t, 1, stopped)
+	assert.Equal(t, 1, stopped, "one loading replica goes, the ready one stays")
 
 	// A retired endpoint drains everything it still has.
 	endpoint.Status = types.EndpointStatusRetired
 	survivor := versionReplica(t, s, "survivor", 1, types.ReplicaStatusLoading)
-	require.NoError(t, s.controller.reconcileEndpoint(ctx, endpoint, fleet, plans, []*types.EndpointReplica{survivor}, inv))
+	s.controller.reconcileEndpoint(ctx, endpoint, fleet, []*types.EndpointReplica{survivor}, inv)
 	assert.Equal(t, types.ReplicaStatusStopped, statusOf(t, s, survivor.ID))
 }
 
@@ -425,7 +238,6 @@ func TestExitStatusUsesEvictedExitCode(t *testing.T) {
 	// Even a replica that was still loading (never Ready) counts as evicted
 	// when the worker reports the eviction exit code.
 	replica.Status = types.ReplicaStatusLoading
-	replica.Protected = true
 	require.NoError(t, s.containers.SetContainerExitCode(replica.ContainerID, int(types.ContainerExitCodeEvicted)))
 	assert.Equal(t, types.ReplicaStatusEvicted, s.controller.exitStatus(replica))
 
@@ -488,7 +300,7 @@ func TestReplicaProbeUsesEndpointHealthPath(t *testing.T) {
 	assert.Equal(t, probeTarget{}, s.controller.replicaProbe(ctx, &types.EndpointReplica{EndpointID: "acme/missing"}))
 }
 
-func TestSyncReplicaBacksOffWhenOpportunisticPlacementFails(t *testing.T) {
+func TestSyncReplicaBacksOffWhenSchedulerFailsRequest(t *testing.T) {
 	s := newServiceForTest(t)
 	s.containers = repository.NewContainerRedisRepositoryForTest(s.rdb)
 	endpoint := seedEndpoint(t, s)
@@ -496,11 +308,11 @@ func TestSyncReplicaBacksOffWhenOpportunisticPlacementFails(t *testing.T) {
 	replica.StartedAt = time.Now().Add(-time.Minute)
 	ctx := context.Background()
 
-	// The scheduler failed the request fast: no state, failed request status.
+	// The scheduler failed the request: no state, failed request status.
 	require.NoError(t, s.containers.SetContainerRequestStatus(replica.ContainerID, types.ContainerRequestStatusFailed))
 	require.NoError(t, s.controller.syncReplica(ctx, replica))
 	assert.Equal(t, types.ReplicaStatusFailed, replica.Status)
-	assert.Equal(t, "not scheduled: no idle capacity", replica.StatusReason)
+	assert.Equal(t, "scheduler failed the request", replica.StatusReason)
 	backoff, err := s.repo.InScheduleBackoff(ctx, endpoint.Spec.ID, replica.GPU)
 	require.NoError(t, err)
 	assert.True(t, backoff)

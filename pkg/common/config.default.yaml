@@ -512,17 +512,9 @@ managedEndpoints:
   preemption:
     enabled: true
     defaultDrainSeconds: 5
-  rollout:
-    canaryReplicas: 1
-    bakeSeconds: 300
-    # Canary error rate is judged only once the canary served this many
-    # requests; below it a healthy bake promotes.
-    minCanaryRequests: 20
-    thresholds:
-      errorRate: 0.02
-      ttft: 0.25
-      tpot: 0.25
-      throughput: 0.25
+  reconcile:
+    interval: 10s
+    failureBackoff: 30s
   # Share of billed token revenue credited to the workspace whose contributed
   # (provider pool) machine served the request.
   providerRevenueShare: 0.7

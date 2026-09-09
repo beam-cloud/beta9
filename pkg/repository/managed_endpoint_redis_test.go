@@ -40,13 +40,6 @@ func TestManagedEndpointRegistryRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, list, 2)
 
-	// A record written by an older gateway (harness was an object) is skipped, not fatal.
-	rdb := repo.(*ManagedEndpointRedisRepository).rdb
-	require.NoError(t, rdb.Set(ctx, meKey("endpoint", "old/shape"), `{"spec":{"id":"old/shape","harness":{"enabled":true}}}`, 0).Err())
-	require.NoError(t, rdb.SAdd(ctx, meKey("endpoints"), "old/shape").Err())
-	list, err = repo.ListEndpoints(ctx)
-	require.NoError(t, err)
-	require.Len(t, list, 2)
 	require.Equal(t, "acme/model", list[0].Spec.ID, "sorted by id")
 
 	require.NoError(t, repo.DeleteEndpoint(ctx, "zeta/other"))
@@ -62,20 +55,18 @@ func TestManagedEndpointFleet(t *testing.T) {
 	empty, err := repo.GetFleet(ctx)
 	require.NoError(t, err)
 	require.NotNil(t, empty)
-	require.NotNil(t, empty.Targets, "an unset fleet reads as empty, never nil")
+	require.NotNil(t, empty.Replicas, "an unset fleet reads as empty, never nil")
 	require.Empty(t, empty.Placements("acme/model"))
 
 	require.Error(t, repo.SaveFleet(ctx, nil))
-	fleet := &types.Fleet{GitSHA: "abc", Targets: map[string]map[string]types.Placement{
-		"H100": {"acme/model": {Share: 0.5, Min: 1, Count: 2}},
-	}}
+	fleet := &types.Fleet{GitSHA: "abc", Replicas: map[string]map[string]uint32{"acme/model": {"H100": 2}}}
 	require.NoError(t, repo.SaveFleet(ctx, fleet))
 	require.False(t, fleet.UpdatedAt.IsZero())
 
 	got, err := repo.GetFleet(ctx)
 	require.NoError(t, err)
 	require.Equal(t, "abc", got.GitSHA)
-	require.Equal(t, []types.FleetTarget{{GPU: "H100", Placement: types.Placement{Share: 0.5, Min: 1, Count: 2}}}, got.Placements("acme/model"))
+	require.Equal(t, []types.FleetTarget{{GPU: "H100", Replicas: 2}}, got.Placements("acme/model"))
 }
 
 func TestManagedEndpointReplicas(t *testing.T) {

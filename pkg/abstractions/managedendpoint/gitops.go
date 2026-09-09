@@ -161,13 +161,10 @@ func (g *gitops) sync(ctx context.Context, req gitopsRequest) error {
 			retry = append(retry, e.Path)
 		}
 	}
-	// A gateway upgrade that changed the record schema redeploys everything so
-	// records written by the previous shape are rewritten.
-	force := req.force || (state.LastSHA != "" && state.Schema != types.ManagedEndpointSchema)
-	if !force && sha == state.LastSHA && len(retry) == 0 {
+	if !req.force && sha == state.LastSHA && len(retry) == 0 {
 		return nil
 	}
-	return g.launch(ctx, state, sha, force, retry)
+	return g.launch(ctx, state, sha, req.force, retry)
 }
 
 func (g *gitops) state(ctx context.Context) (*types.GitOpsState, error) {
@@ -555,7 +552,7 @@ func (g *gitops) applyReport(ctx context.Context, report *types.GitOpsReport) er
 	// LastSHA advances even when some stubs failed: they are tracked per
 	// endpoint and retried on their own, so a broken app never redeploys the
 	// healthy ones.
-	state.TargetSHA, state.LastSHA, state.Schema = report.SHA, report.SHA, types.ManagedEndpointSchema
+	state.TargetSHA, state.LastSHA = report.SHA, report.SHA
 	state.LastError = ""
 	if failed > 0 {
 		state.LastError = fmt.Sprintf("%d stub(s) failed to deploy at %.8s", failed, report.SHA)
@@ -588,10 +585,10 @@ func (g *gitops) retire(ctx context.Context, id, sha string) error {
 	return nil
 }
 
-// applyFleet parses and validates the report's fleet.yaml, drops placements
-// for endpoints that are not deployed (reported as skipped, so a failed deploy
+// applyFleet parses and validates the report's fleet.yaml, drops entries for
+// endpoints that are not deployed (reported as skipped, so a failed deploy
 // never blocks the rest of the fleet) and saves the result. A fleet that fails
-// validation is not applied: the previous placement stays in force.
+// validation is not applied: the previous one stays in force.
 func (g *gitops) applyFleet(ctx context.Context, report *types.GitOpsReport) (skipped string, err error) {
 	endpoints, err := g.s.repo.ListEndpoints(ctx)
 	if err != nil {
@@ -604,7 +601,7 @@ func (g *gitops) applyFleet(ctx context.Context, report *types.GitOpsReport) (sk
 		}
 	}
 	fleet := &types.Fleet{GitSHA: report.SHA}
-	if err := yaml.Unmarshal([]byte(report.FleetYAML), &fleet.Targets); err != nil {
+	if err := yaml.Unmarshal([]byte(report.FleetYAML), &fleet.Replicas); err != nil {
 		return "", fmt.Errorf("fleet.yaml: %w", err)
 	}
 	fleet.Normalize()
@@ -615,7 +612,7 @@ func (g *gitops) applyFleet(ctx context.Context, report *types.GitOpsReport) (sk
 	if err := g.s.repo.SaveFleet(ctx, fleet); err != nil {
 		return "", err
 	}
-	g.s.emit(types.EventEndpointGitOps, types.EventEndpointSchema{Action: "gitops.fleet", Message: report.SHA, Data: map[string]any{"fleet": fleet.Targets, "skipped": dropped}})
+	g.s.emit(types.EventEndpointGitOps, types.EventEndpointSchema{Action: "gitops.fleet", Message: report.SHA, Data: map[string]any{"fleet": fleet.Replicas, "skipped": dropped}})
 	if len(dropped) > 0 {
 		return "skipped: " + strings.Join(dropped, "; "), nil
 	}

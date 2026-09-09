@@ -48,7 +48,7 @@ type ManagedEndpointsConfig struct {
 	// installed) the GitOps deployer container runs from.
 	DeployerImage  string                        `key:"deployerImage" json:"deployer_image"`
 	Preemption     ManagedEndpointsPreemption    `key:"preemption" json:"preemption"`
-	Fill           ManagedEndpointsFillConfig    `key:"fill" json:"fill"`
+	Reconcile      ManagedEndpointsReconcile     `key:"reconcile" json:"reconcile"`
 	Routing        ManagedEndpointsRoutingConfig `key:"routing" json:"routing"`
 	AllowedEngines []string                      `key:"allowedEngines" json:"allowed_engines"`
 	AllowedKinds   []string                      `key:"allowedKinds" json:"allowed_kinds"`
@@ -78,11 +78,8 @@ type ManagedEndpointsPreemption struct {
 	DefaultDrainSeconds uint32 `key:"defaultDrainSeconds" json:"default_drain_seconds"`
 }
 
-type ManagedEndpointsFillConfig struct {
-	// MaxClusterShare caps the fraction of each GPU type's capacity that all
-	// endpoints together may occupy.
-	MaxClusterShare   float64       `key:"maxClusterShare" json:"max_cluster_share"`
-	ReconcileInterval time.Duration `key:"reconcileInterval" json:"reconcile_interval"`
+type ManagedEndpointsReconcile struct {
+	Interval time.Duration `key:"interval" json:"interval"`
 	// FailureBackoff delays rescheduling after a replica fails.
 	FailureBackoff time.Duration `key:"failureBackoff" json:"failure_backoff"`
 }
@@ -119,9 +116,6 @@ func (c *ManagedEndpointsConfig) ApplyDefaults() {
 		c.ReplicaStaleAfter = 3 * c.HeartbeatInterval
 	}
 	c.ReplicaStaleAfter = max(c.ReplicaStaleAfter, 2*c.HeartbeatInterval)
-	if c.Fill.MaxClusterShare <= 0 || c.Fill.MaxClusterShare > 1 {
-		c.Fill.MaxClusterShare = 0.5
-	}
 	if c.Routing.SlowStartSeconds == 0 {
 		c.Routing.SlowStartSeconds = 30
 	}
@@ -130,8 +124,8 @@ func (c *ManagedEndpointsConfig) ApplyDefaults() {
 		def time.Duration
 	}{
 		{&c.Repo.PollInterval, 2 * time.Minute},
-		{&c.Fill.ReconcileInterval, 10 * time.Second},
-		{&c.Fill.FailureBackoff, 30 * time.Second},
+		{&c.Reconcile.Interval, 10 * time.Second},
+		{&c.Reconcile.FailureBackoff, 30 * time.Second},
 		{&c.Routing.MaxQueueWait, 2 * time.Second},
 	} {
 		if *d.v <= 0 {
@@ -143,9 +137,6 @@ func (c *ManagedEndpointsConfig) ApplyDefaults() {
 // WorkerPoolManagedEndpointsConfig opts a pool into hosting endpoint replicas.
 type WorkerPoolManagedEndpointsConfig struct {
 	Enabled bool `key:"enabled" json:"enabled"`
-	// MaxShare caps the fraction of the pool's GPUs endpoints may hold; zero
-	// means the cluster-wide fill.maxClusterShare.
-	MaxShare float64 `key:"maxShare" json:"max_share"`
 }
 
 type DatabaseConfig struct {

@@ -342,7 +342,7 @@ func normalizeAgentWorkerPoolConfig(state *compute.PoolState) types.WorkerPoolCo
 		config.ContainerRuntime = types.ContainerRuntimeRunc.String()
 		config.RequiresPoolSelector = true
 		config.Priority = int32(100)
-		config.ManagedEndpoints = types.WorkerPoolManagedEndpointsConfig{Enabled: true, MaxShare: 1}
+		config.ManagedEndpoints = types.WorkerPoolManagedEndpointsConfig{Enabled: true}
 	}
 	if state.Priority != 0 {
 		config.Priority = state.Priority

@@ -900,16 +900,10 @@ class GetEndpointUsageRequest(betterproto.Message):
     """
 
     kind: str = betterproto.string_field(1)
-    days: int = betterproto.uint32_field(2)
-    """
-    Trailing window in days (today included); defaults to 30. Ignored when
-     start_date is set.
-    """
-
-    start_date: str = betterproto.string_field(3)
+    start_date: str = betterproto.string_field(2)
     """Inclusive UTC day bounds (YYYY-MM-DD); end_date defaults to today."""
 
-    end_date: str = betterproto.string_field(4)
+    end_date: str = betterproto.string_field(3)
 
 
 @dataclass(eq=False, repr=False)

@@ -9,7 +9,7 @@ BETA9_TOKEN and BETA9_GATEWAY_HOST[_HTTP] / BETA9_GATEWAY_PORT[_HTTP].
 
 Every directory under REPO_PATH containing an app.py that exports a
 ManagedEndpoint is deployed from its own directory. fleet.yaml at the repo root
-({gpu: {endpoint: {share, min, max, count}}}) is sent verbatim in the report;
+({endpoint: {gpu: replicas}}) is sent verbatim in the report;
 the gateway parses, validates and applies it. The run ends with one POST to
 /api/v1/endpoints/gitops/report.
 """

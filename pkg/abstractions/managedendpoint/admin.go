@@ -272,7 +272,7 @@ func (s *Service) GetGitOpsStatus(ctx context.Context, _ *pb.GetGitOpsStatusRequ
 		if err != nil {
 			return err
 		}
-		out.State, out.FleetJson = gitopsToProto(state), mustJSON(fleet.Targets)
+		out.State, out.FleetJson = gitopsToProto(state), mustJSON(fleet.Replicas)
 		return nil
 	})
 }
