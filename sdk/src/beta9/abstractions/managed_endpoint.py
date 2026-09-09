@@ -289,7 +289,9 @@ class _ManagedStub(RunnerAbstraction):
         is_custom_image = self._uses_custom_image_entrypoint()
         ignore_patterns = ["**"] if is_custom_image else []
         if not is_custom_image:
-            self.entrypoint = ["sh", "-c", f"cd {USER_CODE_DIR} && {shlex.join(self.entrypoint)}"]
+            # exec so the engine is PID 1's direct replacement: SIGTERM from an
+            # eviction or drain has to reach the engine, not a wrapper shell.
+            self.entrypoint = ["sh", "-c", f"cd {USER_CODE_DIR} && exec {shlex.join(self.entrypoint)}"]
 
         self.managed_endpoint = json.dumps(self.stub_config(git_sha=git_sha))
 

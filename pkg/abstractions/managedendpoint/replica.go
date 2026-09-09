@@ -185,18 +185,21 @@ func (c *controller) syncReplica(ctx context.Context, replica *types.EndpointRep
 
 // exitStatus decides what a vanished container means for its replica.
 func (c *controller) exitStatus(replica *types.EndpointReplica) types.ReplicaStatus {
-	switch replica.Status {
-	case types.ReplicaStatusDraining:
-		return types.ReplicaStatusStopped
-	case types.ReplicaStatusEvicting:
+	if replica.Status == types.ReplicaStatusEvicting {
 		return types.ReplicaStatusEvicted
 	}
 	exitCode, err := c.s.containers.GetContainerExitCode(replica.ContainerID)
-	if err == nil && exitCode == 0 {
-		return types.ReplicaStatusStopped
-	}
+	// The worker's exit code is authoritative for evictions: an engine that
+	// drains fast on SIGTERM reports "draining" through the harness before
+	// the controller ever sees the container marked as a victim.
 	if err == nil && exitCode == int(types.ContainerExitCodeEvicted) {
 		return types.ReplicaStatusEvicted
+	}
+	if replica.Status == types.ReplicaStatusDraining {
+		return types.ReplicaStatusStopped
+	}
+	if err == nil && exitCode == 0 {
+		return types.ReplicaStatusStopped
 	}
 	if !replica.Protected && replica.Status == types.ReplicaStatusReady {
 		// Unprotected replicas that were serving are most often preempted.
@@ -417,6 +420,7 @@ func (c *controller) startReplica(ctx context.Context, spec startSpec) (*types.E
 		fmt.Sprintf("%s=%s", EnvLocality, spec.Locality),
 		fmt.Sprintf("%s=%d", EnvEndpointPort, spec.Port),
 		fmt.Sprintf("%s=%t", EnvHarnessEnabled, spec.Harness),
+		fmt.Sprintf("%s=%d", EnvDrainSeconds, spec.DrainSeconds),
 	)
 	if len(spec.Target.Harness) > 0 {
 		if raw, err := json.Marshal(spec.Target.Harness); err == nil {

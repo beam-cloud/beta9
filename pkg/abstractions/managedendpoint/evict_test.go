@@ -64,6 +64,15 @@ func TestExitStatusUsesEvictedExitCode(t *testing.T) {
 
 	require.NoError(t, s.containers.SetContainerExitCode(replica.ContainerID, 1))
 	assert.Equal(t, types.ReplicaStatusFailed, s.controller.exitStatus(replica))
+
+	// An engine that drains itself on SIGTERM heartbeats "draining" before
+	// the controller observes the victim mark; the eviction exit code still
+	// decides the outcome. A plain drain that exits stays a stop.
+	replica.Status = types.ReplicaStatusDraining
+	require.NoError(t, s.containers.SetContainerExitCode(replica.ContainerID, int(types.ContainerExitCodeEvicted)))
+	assert.Equal(t, types.ReplicaStatusEvicted, s.controller.exitStatus(replica))
+	require.NoError(t, s.containers.SetContainerExitCode(replica.ContainerID, 0))
+	assert.Equal(t, types.ReplicaStatusStopped, s.controller.exitStatus(replica))
 }
 
 func TestSyncReplicaBacksOffWhenOpportunisticPlacementFails(t *testing.T) {

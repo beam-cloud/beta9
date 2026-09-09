@@ -76,6 +76,43 @@ func TestSelectWorkerPrefersIdleCapacityOverEviction(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestReserveWorkerCapacityDrawsEvictableForRequestsThatMayEvict(t *testing.T) {
+	scheduler := &Scheduler{workerPoolManager: NewWorkerPoolManager()}
+
+	// A CPU worker shaped like a local pool node: 500m idle, 1000m held by an
+	// evictable replica. A 1 CPU serverless pod fits only by evicting.
+	worker := &types.Worker{
+		Id: "cpu", PoolName: "default", Status: types.WorkerStatusAvailable,
+		TotalCpu: 2500, TotalMemory: 4096,
+		FreeCpu: 500, FreeMemory: 2816,
+		EvictableCpu: 1000, EvictableMemory: 640,
+	}
+	serverless := &types.ContainerRequest{Cpu: 1000, Memory: 256}
+	assert.True(t, scheduler.reserveWorkerCapacity(worker, serverless))
+	assert.Equal(t, int64(0), worker.FreeCpu)
+	assert.Equal(t, int64(500), worker.EvictableCpu)
+	assert.Equal(t, int64(2496), worker.FreeMemory)
+	assert.Equal(t, int64(640), worker.EvictableMemory)
+
+	// Whatever is left is spoken for: the next request in the batch that
+	// needs more than the remaining evictable share must go elsewhere.
+	assert.False(t, scheduler.reserveWorkerCapacity(worker, &types.ContainerRequest{Cpu: 1000, Memory: 256}))
+	assert.True(t, scheduler.reserveWorkerCapacity(worker, &types.ContainerRequest{Cpu: 500, Memory: 256}))
+	assert.Equal(t, int64(0), worker.EvictableCpu)
+
+	// Opportunistic and evictable requests only ever see idle capacity.
+	idleOnly := evictableWorker("gpu", "beta9-a10g", 0, 2)
+	assert.False(t, scheduler.reserveWorkerCapacity(idleOnly, &types.ContainerRequest{
+		Cpu: 1000, Memory: 1000, GpuRequest: []string{"A10G"}, GpuCount: 1, Evictable: true, OpportunisticOnly: true,
+	}))
+	assert.Equal(t, uint32(2), idleOnly.EvictableGpuCount)
+	assert.True(t, scheduler.reserveWorkerCapacity(idleOnly, &types.ContainerRequest{
+		Cpu: 1000, Memory: 1000, GpuRequest: []string{"A10G"}, GpuCount: 1,
+	}))
+	assert.Equal(t, uint32(0), idleOnly.FreeGpuCount)
+	assert.Equal(t, uint32(1), idleOnly.EvictableGpuCount)
+}
+
 func TestOpportunisticRequestFailsFastWithoutIdleCapacity(t *testing.T) {
 	scheduler, err := NewSchedulerForTest()
 	assert.NoError(t, err)

@@ -659,23 +659,43 @@ func gpuCountForScheduling(request *types.ContainerRequest) uint32 {
 	return request.GpuCount
 }
 
+// reserveWorkerCapacity debits a request from the in-memory worker so later
+// requests in the same batch see what is left. Requests that may evict draw
+// idle capacity first and evictable capacity for the remainder, mirroring
+// what the repository does when it commits the schedule.
 func (s *Scheduler) reserveWorkerCapacity(worker *types.Worker, request *types.ContainerRequest) bool {
 	normalizeGPURequest(request)
 
 	cpu := request.Cpu
 	memory := capacityMemoryForScheduling(request)
-	if worker.FreeCpu < cpu || worker.FreeMemory < memory {
+	freeCPU, freeMemory, freeGPU := schedulableCapacity(worker, request)
+	if freeCPU < cpu || freeMemory < memory {
 		return false
 	}
 
 	if request.RequiresGPU() {
-		if worker.FreeGpuCount < request.GpuCount {
+		if freeGPU < request.GpuCount {
 			return false
 		}
-		worker.FreeGpuCount -= request.GpuCount
+		worker.FreeGpuCount, worker.EvictableGpuCount = drawCapacity(worker.FreeGpuCount, worker.EvictableGpuCount, request.GpuCount)
 	}
 
-	worker.FreeCpu -= cpu
-	worker.FreeMemory -= memory
+	worker.FreeCpu, worker.EvictableCpu = drawCapacity(worker.FreeCpu, worker.EvictableCpu, cpu)
+	worker.FreeMemory, worker.EvictableMemory = drawCapacity(worker.FreeMemory, worker.EvictableMemory, memory)
 	return true
+}
+
+// drawCapacity takes need from free first and the shortfall from evictable.
+// Callers check fit beforehand; evictable is floored at zero regardless.
+func drawCapacity[T int64 | uint32](free, evictable, need T) (T, T) {
+	if need <= free {
+		return free - need, evictable
+	}
+	shortfall := need - free
+	if shortfall > evictable {
+		evictable = 0
+	} else {
+		evictable -= shortfall
+	}
+	return 0, evictable
 }

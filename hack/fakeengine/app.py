@@ -20,6 +20,7 @@ import json
 import math
 import os
 import random
+import signal
 import sys
 import threading
 import time
@@ -514,7 +515,13 @@ class Harness:
 
 
 def drain_and_exit(server: ThreadingHTTPServer, stop: threading.Event, seconds: int) -> None:
-    ENGINE.draining = True
+    """Stop admitting work, let in-flight requests finish (bounded by
+    ``seconds``), then shut the server down. Idempotent: the harness drain
+    RPC and SIGTERM both land here and the second caller is a no-op."""
+    with ENGINE.lock:
+        if ENGINE.draining:
+            return
+        ENGINE.draining = True
     deadline = time.time() + seconds
     while time.time() < deadline:
         with ENGINE.lock:
@@ -531,6 +538,16 @@ def serve() -> None:
     server.daemon_threads = True
     stop = threading.Event()
     print(f"[fake-engine] listening on :{port}", flush=True)
+
+    # The worker sends SIGTERM on eviction or scale-down and kills after
+    # BEAM_DRAIN_SECONDS; drain within that window like a real engine would.
+    drain_seconds = int(os.environ.get("BEAM_DRAIN_SECONDS") or 5)
+
+    def on_sigterm(*_: object) -> None:
+        print(f"[fake-engine] SIGTERM: draining ({drain_seconds}s)", flush=True)
+        threading.Thread(target=drain_and_exit, args=(server, stop, drain_seconds), daemon=True).start()
+
+    signal.signal(signal.SIGTERM, on_sigterm)
 
     if os.environ.get("BEAM_HARNESS_ENABLED", "").lower() == "true":
         initial = os.environ.get("BEAM_HARNESS_CONFIG")

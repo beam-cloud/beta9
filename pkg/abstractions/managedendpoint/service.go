@@ -41,7 +41,11 @@ const (
 	EnvEndpointPort   = "BEAM_ENDPOINT_PORT"
 	EnvHarnessEnabled = "BEAM_HARNESS_ENABLED"
 	EnvHarnessConfig  = "BEAM_HARNESS_CONFIG"
-	EnvServicePrefix  = "BEAM_SERVICE_"
+	// EnvDrainSeconds is how long the engine has after SIGTERM (eviction or
+	// scale-down) before the worker kills it. Engines without the harness
+	// still get a correct drain window from this alone.
+	EnvDrainSeconds  = "BEAM_DRAIN_SECONDS"
+	EnvServicePrefix = "BEAM_SERVICE_"
 )
 
 var (
