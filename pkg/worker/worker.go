@@ -887,12 +887,12 @@ func (s *Worker) handleContainerRequest(request *types.ContainerRequest) {
 }
 
 func (s *Worker) runContainerRequest(request *types.ContainerRequest) {
-	s.runContainerRequestWithRunner(request, s.RunContainer)
+	s.runContainerRequestWithRunner(request, s.runContainerWithEvictionBarrier)
 }
 
 func (s *Worker) runContainerRequestWithRunner(
 	request *types.ContainerRequest,
-	runContainer func(context.Context, *types.ContainerRequest) error,
+	runContainer func(context.Context, *types.ContainerRequest, func() error) error,
 ) {
 	containerId := request.ContainerId
 	log.Info().Str("container_id", containerId).Msg("running container")
@@ -941,23 +941,35 @@ func (s *Worker) runContainerRequestWithRunner(
 		}
 	}()
 
-	// Make room first: the scheduler handed this request capacity that
-	// evictable containers still physically hold. The drain window is bounded
-	// by the request itself and runs before the startup timer starts.
-	if len(request.EvictContainerIds) > 0 {
-		s.evictForRequest(ctx, request)
-		if err := ctx.Err(); err != nil {
-			s.failContainerRequest(containerId, request, err)
-			return
-		}
-	}
-
 	run := func() error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-
-		return runContainer(ctx, request)
+		// Start reclamation alongside image/mount/spec preparation. The runner
+		// joins this barrier before GPU assignment or starting any process.
+		// The no-victim path has no goroutine, channel or extra repository call.
+		var waitForEviction func() error
+		if len(request.EvictContainerIds) > 0 {
+			done := make(chan struct{})
+			var evictionErr error
+			go func() {
+				defer close(done)
+				evictionErr = s.evictForRequest(ctx, request)
+			}()
+			waitForEviction = func() error {
+				select {
+				case <-done:
+					return evictionErr
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
+			defer func() {
+				cancelStartup()
+				<-done
+			}()
+		}
+		return runContainer(ctx, request, waitForEviction)
 	}
 
 	if request.IsBuildRequest() {

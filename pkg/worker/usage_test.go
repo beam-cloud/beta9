@@ -1082,3 +1082,18 @@ func (r *usageMetricsRecorder) IncrementCounter(name string, labels map[string]i
 func (r *usageMetricsRecorder) SetGauge(string, map[string]interface{}, float64) error {
 	return nil
 }
+
+func TestEmitContainerUsageSkipsPlatformWorkloads(t *testing.T) {
+	for _, kind := range []string{types.StubTypeManagedEndpointDeployment, types.StubTypePlatformDeployer} {
+		repo := &usageMetricsRecorder{}
+		external := &containerUsageRecorder{}
+		metrics := &WorkerUsageMetrics{metricsRepo: repo, usageRecorder: external}
+		request := &types.ContainerRequest{ContainerId: "platform", Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(kind)}}}
+		// An uncancelled context returns immediately without asking for a quote,
+		// recording GPU duration or starting a billing ticker.
+		metrics.EmitContainerUsage(context.Background(), request)
+		if repo.count != 0 || external.count != 0 {
+			t.Fatalf("platform workload %s emitted customer usage", kind)
+		}
+	}
+}

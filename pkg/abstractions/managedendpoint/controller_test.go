@@ -376,3 +376,32 @@ func TestSyncReplicaBacksOffWhenSchedulerFailsRequest(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, backoff)
 }
+
+func TestReplaceRolloutMakesRoomOnSingleGPU(t *testing.T) {
+	for _, protected := range []bool{false, true} {
+		s := newServiceForTest(t)
+		endpoint := seedEndpoint(t, s)
+		endpoint.Version = 2
+		endpoint.Spec.Rollout = "replace"
+		endpoint.Spec.Protected = protected
+		endpoint.Spec.DrainSeconds = 0
+		old := versionReplica(t, s, "old", 1, types.ReplicaStatusReady)
+		fleet, err := s.repo.GetFleet(context.Background())
+		require.NoError(t, err)
+		s.controller.retire(context.Background(), endpoint, fleet, []*types.EndpointReplica{old}, noRoomInventory())
+		assert.Equal(t, types.ReplicaStatusStopped, statusOf(t, s, old.ID))
+	}
+}
+
+func TestReplaceRolloutPreservesServiceWhileReplacementLoads(t *testing.T) {
+	s := newServiceForTest(t)
+	endpoint := seedEndpoint(t, s)
+	endpoint.Version = 2
+	endpoint.Spec.Rollout = "replace"
+	old := versionReplica(t, s, "old", 1, types.ReplicaStatusReady)
+	starting := versionReplica(t, s, "new", 2, types.ReplicaStatusLoading)
+	fleet, err := s.repo.GetFleet(context.Background())
+	require.NoError(t, err)
+	s.controller.retire(context.Background(), endpoint, fleet, []*types.EndpointReplica{old, starting}, noRoomInventory())
+	assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, old.ID))
+}

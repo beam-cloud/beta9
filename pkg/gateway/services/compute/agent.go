@@ -589,6 +589,23 @@ func agentCanManageRoute(agentState *model.AgentTokenState, route types.BackendR
 }
 
 func (s *Service) agentSlotsForMachine(ctx context.Context, agentState *model.AgentTokenState) ([]*pb.AgentWorkerSlot, error) {
+	// A published slot and its worker rollout target form one transition.
+	// Serialize snapshots across gateway replicas, including rollback.
+	if s.redisClient == nil {
+		return s.agentSlotsForMachineLocked(ctx, agentState)
+	}
+	var slots []*pb.AgentWorkerSlot
+	err := common.NewRedisLock(s.redisClient).WithLease(ctx,
+		"compute:agent:slots:lock:"+agentState.MachineID,
+		common.RedisLockOptions{TtlS: 30, Retries: 3}, func(ctx context.Context) error {
+			var err error
+			slots, err = s.agentSlotsForMachineLocked(ctx, agentState)
+			return err
+		})
+	return slots, err
+}
+
+func (s *Service) agentSlotsForMachineLocked(ctx context.Context, agentState *model.AgentTokenState) ([]*pb.AgentWorkerSlot, error) {
 	poolState, err := s.getAgentPoolState(ctx, agentState)
 	if err != nil {
 		return nil, err
@@ -666,6 +683,11 @@ func (s *Service) ensureAgentWorkerSlot(ctx context.Context, agentState *model.A
 		slot.CreatedAt = existing.CreatedAt
 	}
 	if existing != nil && existing.Generation == slot.Generation {
+		if worker.RolloutGeneration != "" && worker.RolloutGeneration != slot.Generation {
+			if err := s.workerRepo.CancelWorkerRollout(worker.Id, worker.RolloutGeneration); err != nil {
+				return nil, "", err
+			}
+		}
 		return existing, token, nil
 	}
 	if existing != nil {

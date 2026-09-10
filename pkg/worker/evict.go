@@ -109,6 +109,14 @@ func (s *Worker) evictContainer(containerID string, drain time.Duration, forCont
 		Attrs:       attrs,
 	})
 	log.Info().Str("container_id", containerID).Dur("drain", drain).Msg("evicting container")
+	if drain == 0 {
+		// Immediate preemption needs one runtime signal. A synchronous TERM
+		// followed by KILL adds a second runsc invocation before GPU cleanup.
+		if err := s.stopContainer(containerID, true); err != nil && !runtimeContainerNotFound(err) {
+			log.Warn().Str("container_id", containerID).Err(err).Msg("failed to kill evicted container")
+		}
+		return true
+	}
 	if err := s.stopContainer(containerID, false); err != nil && !runtimeContainerNotFound(err) {
 		log.Warn().Str("container_id", containerID).Err(err).Msg("failed to send graceful stop to evicted container")
 	}

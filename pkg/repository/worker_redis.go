@@ -555,6 +555,7 @@ func (r *WorkerRedisRepository) addWorker(ctx context.Context, worker *types.Wor
 		oldControlState := oldWorker.CordonRequested || oldWorker.RolloutGeneration != ""
 		worker.CordonRequested = oldWorker.CordonRequested
 		worker.RolloutGeneration = oldWorker.RolloutGeneration
+		worker.RolloutPreviousStatus = oldWorker.RolloutPreviousStatus
 		if oldWorker.BuildVersion != "" {
 			worker.BuildVersion = oldWorker.BuildVersion
 		}
@@ -993,6 +994,7 @@ func (r *WorkerRedisRepository) ToggleWorkerAvailable(workerId, generation strin
 			"status", string(worker.Status),
 			"build_version", worker.BuildVersion,
 			"rollout_generation", worker.RolloutGeneration,
+			"rollout_previous_status", "",
 			"free_cpu", worker.FreeCpu,
 			"free_memory", worker.FreeMemory,
 			"gpu_count", worker.FreeGpuCount,
@@ -1011,6 +1013,10 @@ func (r *WorkerRedisRepository) SetWorkerCordon(workerId string, cordoned bool) 
 		} else if worker.CordonRequested && worker.RolloutGeneration == "" {
 			status = types.WorkerStatusAvailable
 		}
+		if !cordoned && worker.CordonRequested && worker.RolloutGeneration != "" && worker.RolloutPreviousStatus == types.WorkerStatusDisabled {
+			// Preserve an explicit uncordon if this rollout is later cancelled.
+			return r.saveWorkerFields(ctx, stateKey, "cordon_requested", false, "status", string(status), "rollout_previous_status", string(types.WorkerStatusAvailable))
+		}
 		return r.saveWorkerFields(ctx, stateKey, "cordon_requested", cordoned, "status", string(status))
 	})
 }
@@ -1026,7 +1032,11 @@ func (r *WorkerRedisRepository) PrepareWorkerRollout(workerId, generation string
 	ready := false
 	err := r.withWorker(workerId, func(ctx context.Context, stateKey string, worker *types.Worker) error {
 		if worker.Status != types.WorkerStatusDisabled || worker.RolloutGeneration != generation {
-			if err := r.saveWorkerFields(ctx, stateKey, "status", string(types.WorkerStatusDisabled), "rollout_generation", generation); err != nil {
+			previousStatus := worker.RolloutPreviousStatus
+			if worker.RolloutGeneration == "" {
+				previousStatus = worker.Status
+			}
+			if err := r.saveWorkerFields(ctx, stateKey, "status", string(types.WorkerStatusDisabled), "rollout_generation", generation, "rollout_previous_status", string(previousStatus)); err != nil {
 				return fmt.Errorf("failed to cordon worker for rollout <%s>: %w", workerId, err)
 			}
 		}
@@ -1035,6 +1045,37 @@ func (r *WorkerRedisRepository) PrepareWorkerRollout(workerId, generation string
 		return err
 	})
 	return ready, err
+}
+
+// CancelWorkerRollout restores an unpublished rollout's original readiness.
+// The caller holds the agent slot lock and has verified that the published
+// slot still matches the desired generation. Compare the pending target under
+// the scheduling lock so a stale snapshot cannot cancel another transition.
+func (r *WorkerRedisRepository) CancelWorkerRollout(workerId, generation string) error {
+	return r.withWorker(workerId, func(ctx context.Context, stateKey string, worker *types.Worker) error {
+		if generation == "" || worker.RolloutGeneration != generation {
+			return nil
+		}
+		status := worker.RolloutPreviousStatus
+		if status == "" {
+			// Older gateways did not persist readiness. Require a worker
+			// startup acknowledgment rather than declaring it healthy.
+			status = types.WorkerStatusPending
+		}
+		if worker.CordonRequested {
+			status = types.WorkerStatusDisabled
+		}
+		if status == types.WorkerStatusAvailable {
+			if err := r.reconcileWorkerCapacity(ctx, worker); err != nil {
+				return err
+			}
+		}
+		return r.saveWorkerFields(ctx, stateKey,
+			"status", string(status), "rollout_generation", "", "rollout_previous_status", "",
+			"free_cpu", worker.FreeCpu, "free_memory", worker.FreeMemory, "gpu_count", worker.FreeGpuCount,
+			"evictable_cpu", worker.EvictableCpu, "evictable_memory", worker.EvictableMemory, "evictable_gpu_count", worker.EvictableGpuCount,
+		)
+	})
 }
 
 func (r *WorkerRedisRepository) workerHasOutstandingWork(ctx context.Context, workerId string) (bool, error) {
@@ -1276,6 +1317,8 @@ func workerFromHash(key string, res map[string]string) *types.Worker {
 			worker.CordonRequested = boolean(v)
 		case "rollout_generation":
 			worker.RolloutGeneration = v
+		case "rollout_previous_status":
+			worker.RolloutPreviousStatus = types.WorkerStatus(v)
 		case "worker_image_override":
 			worker.WorkerImageOverride = v
 		case "evictable_cpu":

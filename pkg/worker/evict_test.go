@@ -112,7 +112,7 @@ func TestEvictForRequestKillsAfterDrainWindow(t *testing.T) {
 		_, exists := worker.containerInstances.Get("victim-1")
 		return !exists
 	}, 5*time.Second, 10*time.Millisecond)
-	require.Equal(t, []syscall.Signal{syscall.SIGTERM, syscall.SIGKILL}, rt.observed("victim-1"))
+	require.Equal(t, []syscall.Signal{syscall.SIGKILL}, rt.observed("victim-1"))
 }
 
 func TestEvictForRequestWaitsForVictimAlreadyFinalizing(t *testing.T) {
@@ -165,9 +165,9 @@ func TestEvictForRequestFailsWhenVictimsOutliveKillWindow(t *testing.T) {
 	})
 	require.ErrorIs(t, err, ErrEvictionIncomplete)
 	require.ErrorIs(t, ctx.Err(), context.Canceled)
-	// The victim was still driven through SIGTERM and SIGKILL; it just never
+	// The victim received an immediate SIGKILL; it just never
 	// went away, so the request cannot claim its resources.
-	require.Equal(t, []syscall.Signal{syscall.SIGTERM, syscall.SIGKILL}, rt.observed("victim-1"))
+	require.Equal(t, []syscall.Signal{syscall.SIGKILL}, rt.observed("victim-1"))
 	_, exists := worker.containerInstances.Get("victim-1")
 	require.True(t, exists)
 }
@@ -205,9 +205,14 @@ func TestRunContainerRequestFailsInsteadOfStartingOnHeldResources(t *testing.T) 
 	require.True(t, worker.reserveContainerInstance(request))
 
 	runnerStarted := make(chan struct{}, 1)
+	preparationStarted := make(chan struct{}, 1)
 	done := make(chan struct{})
 	go func() {
-		worker.runContainerRequestWithRunner(request, func(context.Context, *types.ContainerRequest) error {
+		worker.runContainerRequestWithRunner(request, func(_ context.Context, _ *types.ContainerRequest, waitForEviction func() error) error {
+			preparationStarted <- struct{}{}
+			if err := waitForEviction(); err != nil {
+				return err
+			}
 			runnerStarted <- struct{}{}
 			return nil
 		})
@@ -223,6 +228,7 @@ func TestRunContainerRequestFailsInsteadOfStartingOnHeldResources(t *testing.T) 
 	// path as a container that fails to run: a failed exit code is recorded
 	// and the instance is dropped so the worker's accounting is released.
 	require.Empty(t, runnerStarted)
+	require.Len(t, preparationStarted, 1, "preparation overlaps reclamation even when the GPU cannot be released")
 	require.Equal(t, 1, repoClient.setExitCodeCalls)
 	require.Equal(t, "incoming", repoClient.lastSetExitCode.ContainerId)
 	require.Equal(t, int32(1), repoClient.lastSetExitCode.ExitCode)
@@ -268,5 +274,5 @@ func TestStatusHeartbeatEvictsMarkedVictimOnItsOwnDrainWindow(t *testing.T) {
 		_, exists := worker.containerInstances.Get(containerID)
 		return !exists
 	}, 5*time.Second, 10*time.Millisecond)
-	require.Equal(t, []syscall.Signal{syscall.SIGTERM, syscall.SIGKILL}, rt.observed(containerID))
+	require.Equal(t, []syscall.Signal{syscall.SIGKILL}, rt.observed(containerID))
 }

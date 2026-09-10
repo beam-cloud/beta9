@@ -22,6 +22,7 @@ type WorkerRepository interface {
 	ToggleWorkerAvailable(workerId, generation string) error
 	SetWorkerCordon(workerId string, cordoned bool) error
 	PrepareWorkerRollout(workerId, generation string) (bool, error)
+	CancelWorkerRollout(workerId, generation string) error
 	UpdateWorkerStatus(workerId string, status types.WorkerStatus) error
 	RemoveWorker(workerId string) error
 	SetWorkerKeepAlive(workerId string, keepAlive types.WorkerKeepAlive) error

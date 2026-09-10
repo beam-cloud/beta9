@@ -361,7 +361,7 @@ func (g *gitops) launch(ctx context.Context, state *types.GitOpsState, sha strin
 	return nil
 }
 
-// deployerStub is the pod stub the deployer runs under, resolved once per process.
+// deployerStub gives GitOps a service-owned billing identity, resolved once per process.
 func (g *gitops) deployerStub(ctx context.Context, workspace *types.Workspace, image string) (*types.StubWithRelated, error) {
 	if g.stub != nil {
 		return g.stub, nil
@@ -375,7 +375,7 @@ func (g *gitops) deployerStub(ctx context.Context, workspace *types.Workspace, i
 	if err != nil {
 		return nil, fmt.Errorf("deployer object: %w", err)
 	}
-	stub, err := g.s.backend.GetOrCreateStub(ctx, gitopsStubName, types.StubTypePod, config, object.Id, workspace.Id, false, app.Id)
+	stub, err := g.s.backend.GetOrCreateStub(ctx, gitopsStubName, types.StubTypePlatformDeployer, config, object.Id, workspace.Id, false, app.Id)
 	if err != nil {
 		return nil, fmt.Errorf("deployer stub: %w", err)
 	}

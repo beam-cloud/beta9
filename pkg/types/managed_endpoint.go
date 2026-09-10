@@ -18,9 +18,16 @@ import (
 const (
 	StubTypeManagedEndpoint           string = "managed_endpoint"
 	StubTypeManagedEndpointDeployment string = "managed_endpoint/deployment"
+	StubTypePlatformDeployer          string = "platform_deployer"
 )
 
 func (t StubType) IsManagedEndpoint() bool { return t.Kind() == StubTypeManagedEndpoint }
+
+// IsPlatformWorkload identifies service-owned containers, not paying callers.
+// Platform deployer stubs can only be created internally by the control plane.
+func (t StubType) IsPlatformWorkload() bool {
+	return t.IsManagedEndpoint() || t.Kind() == StubTypePlatformDeployer
+}
 
 type EndpointKind string
 
@@ -148,6 +155,7 @@ type ManagedEndpointSpec struct {
 	Catalog      Catalog            `json:"catalog"`
 	Harness      bool               `json:"harness"`
 	Protected    bool               `json:"protected,omitempty"` // serverless work cannot evict its replicas; a change rolls them
+	Rollout      string             `json:"rollout,omitempty"`   // wait_for_capacity (default) or replace (allows downtime)
 	DrainSeconds uint32             `json:"drain_seconds"`       // grace on eviction or retirement; 0 is immediate
 	Entrypoint   []string           `json:"entrypoint,omitempty"`
 }
@@ -217,6 +225,9 @@ func (s *ManagedEndpointSpec) Validate() error {
 	}
 	if len(s.Entrypoint) == 0 {
 		fail("entrypoint is required")
+	}
+	if s.Rollout != "" && s.Rollout != "wait_for_capacity" && s.Rollout != "replace" {
+		fail("rollout %q must be wait_for_capacity or replace", s.Rollout)
 	}
 	for _, route := range s.Routes {
 		if validKind && !slices.Contains(allowed, route) {

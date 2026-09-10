@@ -6,6 +6,7 @@ everything with FORCE, plus REDEPLOY paths), and POSTs one report with the
 results and the raw fleet.yaml to /api/v1/endpoints/gitops/report.
 """
 
+import fnmatch
 import importlib.util
 import json
 import os
@@ -51,7 +52,12 @@ def log(msg):
 
 def git(*args):
     return subprocess.run(
-        ["git", *args], cwd=str(REPO), env=GIT_ENV, check=True, text=True, capture_output=True
+        ["git", *args],
+        cwd=str(REPO),
+        env=GIT_ENV,
+        check=True,
+        text=True,
+        capture_output=True,
     )
 
 
@@ -86,7 +92,26 @@ def changed_paths():
     except subprocess.CalledProcessError as exc:
         log(f"diff against {LAST_SHA[:8]} unavailable ({exc.stderr.strip()}); redeploying all")
         return None
-    return {line.strip() for line in out.splitlines() if line.strip()}
+    paths = {line.strip() for line in out.splitlines() if line.strip()}
+    return {path for path in paths if not ignored_change(path)}
+
+
+def ignored_change(path):
+    """Repository-root globs for files that cannot affect deployed models.
+
+    Model directories remain authoritative: ignore rules cannot suppress an
+    endpoint edit. Image build sources may be ignored when apps pin images.
+    """
+    prefix = f"{REPO_PATH}/" if REPO_PATH else ""
+    if path.startswith(prefix):
+        return False
+    if path == ".gitopsignore":
+        return True
+    ignore = REPO / ".gitopsignore"
+    if not ignore.is_file():
+        return False
+    patterns = [line.strip() for line in ignore.read_text().splitlines()]
+    return any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns if pattern and not pattern.startswith("#"))
 
 
 def discover(root):
@@ -153,7 +178,10 @@ def post_report(report):
     port = env("BETA9_GATEWAY_PORT_HTTP") or "1994"
     netloc = host if port in {"80", "443"} else f"{host}:{port}"
     url = f"{'https' if port == '443' else 'http'}://{netloc}/api/v1/endpoints/gitops/report"
-    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {env('BETA9_TOKEN')}"}
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {env('BETA9_TOKEN')}",
+    }
     body = json.dumps(report).encode()
     req = urllib.request.Request(url, data=body, method="POST", headers=headers)
     for attempt in range(5):
@@ -190,9 +218,7 @@ def deploy_app(app, root, changed, app_dirs, report):
     except (Exception, SystemExit) as exc:  # noqa: BLE001  (an app may sys.exit() at import)
         traceback.print_exc()
         detail = f"exited with {exc.code}" if isinstance(exc, SystemExit) else str(exc)
-        report["results"].append(
-            {"path": rel, "id": "", "ok": False, "error": f"import failed: {detail}"}
-        )
+        report["results"].append({"path": rel, "id": "", "ok": False, "error": f"import failed: {detail}"})
         return
     for obj in list(vars(module).values()):
         if not isinstance(obj, ManagedEndpoint):

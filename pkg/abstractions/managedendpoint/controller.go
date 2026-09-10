@@ -279,8 +279,8 @@ func scaleDownOrder(replicas []*types.EndpointReplica) {
 // retire drains replicas the endpoint no longer wants (older version, GPU
 // type it no longer fills, or the whole endpoint), one per tick. A serving
 // stale replica stays until a current one is ready or can start on idle
-// capacity; when nothing is idle it is drained to make room, unless it is the
-// only replica serving.
+// capacity. The explicit replace policy permits downtime to release the last
+// GPU; the default waits for capacity and keeps the sole serving replica.
 func (c *controller) retire(ctx context.Context, endpoint *types.ManagedEndpoint, fleet *types.Fleet, live []*types.EndpointReplica, inv *clusterInventory) {
 	spec := &endpoint.Spec
 	if !endpoint.Enabled() {
@@ -297,7 +297,11 @@ func (c *controller) retire(ctx context.Context, endpoint *types.ManagedEndpoint
 		return r.Version == endpoint.Version && listed
 	}
 	var currentReady, serving int
+	currentStarting := false
 	for _, r := range live {
+		if r.EndpointID == spec.ID && matches(r) && r.Alive() && !r.Serving() {
+			currentStarting = true
+		}
 		if r.EndpointID != spec.ID || !r.Serving() {
 			continue
 		}
@@ -315,10 +319,16 @@ func (c *controller) retire(ctx context.Context, endpoint *types.ManagedEndpoint
 			reason = "removed from fleet.yaml"
 		}
 		if r.Serving() && currentReady == 0 && len(placements) > 0 {
+			if currentStarting {
+				continue
+			}
 			if inv.canPlace(r.GPU, spec.Gpu[r.GPU].Count) {
 				continue
 			}
-			if serving < 2 {
+			_, sameGPU := placements[r.GPU]
+			canReplace := spec.Rollout == "replace" && sameGPU && inv != nil &&
+				len(inv.pools[r.GPU]) > 0 && r.GPUCount >= max(spec.Gpu[r.GPU].Count, 1)
+			if serving < 2 && !canReplace {
 				log.Warn().Str("endpoint_id", spec.ID).Str("replica_id", r.ID).Uint("version", endpoint.Version).
 					Msg("managed endpoints: rollout waiting; the only serving replica holds the last GPU")
 				continue

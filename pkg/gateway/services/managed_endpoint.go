@@ -17,6 +17,9 @@ import (
 // Managed stubs may only be created by cluster admins or from the configured
 // system workspace, so the repo contract cannot be spoofed by a tenant.
 func (gws *GatewayService) managedEndpointStubConfig(ctx context.Context, authInfo *auth.AuthInfo, in *pb.GetOrCreateStubRequest) (*types.ManagedEndpointStubConfig, error) {
+	if types.StubType(in.StubType).Kind() == types.StubTypePlatformDeployer {
+		return nil, errors.New("platform deployer stubs are reserved for the control plane")
+	}
 	raw := strings.TrimSpace(in.ManagedEndpoint)
 	if !types.StubType(in.StubType).IsManagedEndpoint() {
 		if raw != "" {

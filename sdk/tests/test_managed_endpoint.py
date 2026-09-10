@@ -15,7 +15,10 @@ def test_endpoint_spec_serializes():
         engine="vllm",
         image=Image(base_image="vllm/vllm-openai:latest"),
         entrypoint=["vllm", "serve", "x"],
-        gpu={"H100": Gpu(count=2, engine_args=["--tp", "2"], harness={"max_num_seqs": 256}), "A100-80": None},
+        gpu={
+            "H100": Gpu(count=2, engine_args=["--tp", "2"], harness={"max_num_seqs": 256}),
+            "A100-80": None,
+        },
         pricing=Pricing(prompt_tokens="0.0000002"),
         catalog=Catalog(name="GLM", context_length=131072, public=True),
         harness=True,
@@ -94,3 +97,10 @@ def test_deploy_cached_private_image_without_registry_credentials(monkeypatch):
     assert ok
     exists.assert_called_once()
     credentials.assert_not_called()
+
+
+def test_rollout_policy_is_explicit_and_validated():
+    assert ManagedEndpoint(id="a/b").spec()["rollout"] == "wait_for_capacity"
+    assert ManagedEndpoint(id="a/b", rollout="replace").spec()["rollout"] == "replace"
+    with pytest.raises(ValueError, match="rollout"):
+        ManagedEndpoint(id="a/b", rollout="typo")

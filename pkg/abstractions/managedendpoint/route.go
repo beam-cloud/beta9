@@ -312,7 +312,7 @@ func (r *router) handleRoute(ctx echo.Context) error {
 	rq.model = endpoint.Spec.ID
 	if rq.route != types.EndpointRouteInvoke {
 		// /invoke payloads are the app's own schema and are left untouched.
-		rq.setModel(endpoint.Spec.ID)
+		rq.setModel(endpoint.Spec.ID, endpoint.Spec.Engine == "vllm")
 	}
 	if rerr := r.admit(ctx.Request().Context(), rq, endpoint); rerr != nil {
 		return rerr.write(ctx)
@@ -355,10 +355,16 @@ func (r *router) readRequest(rq *routeRequest, pathModel string) *routeError {
 				}
 			}
 		}
-		if payload != nil && rq.adapter.LLM && forceIncludeUsage(payload) {
-			rq.stream = true
-			if body, err := json.Marshal(payload); err == nil {
-				rq.body = body
+		if payload != nil && rq.adapter.LLM {
+			changed, err := normalizeReasoning(payload)
+			if err != nil {
+				return &routeError{http.StatusBadRequest, "invalid_reasoning", err.Error()}
+			}
+			rq.stream = forceIncludeUsage(payload)
+			if changed || rq.stream {
+				if body, err := json.Marshal(payload); err == nil {
+					rq.body = body
+				}
 			}
 		}
 	}
@@ -369,16 +375,29 @@ func (r *router) readRequest(rq *routeRequest, pathModel string) *routeError {
 }
 
 // setModel makes the selected endpoint the model the engine sees.
-func (rq *routeRequest) setModel(model string) {
+func (rq *routeRequest) setModel(model string, continuousUsage bool) {
 	var payload map[string]any
 	if json.Unmarshal(rq.body, &payload) != nil || payload == nil {
 		return
 	}
-	if current, _ := payload["model"].(string); current == model && payload["models"] == nil {
+	continuousUsage = continuousUsage && rq.stream
+	if current, _ := payload["model"].(string); current == model && payload["models"] == nil && !continuousUsage {
 		return
 	}
 	payload["model"] = model
 	delete(payload, "models")
+	if continuousUsage {
+		// vLLM reports cumulative counters on every chunk. A preemption can
+		// then retain observed token usage even when the final chunk is lost.
+		// Failed streams remain unbilled under the existing error policy.
+		options, _ := payload["stream_options"].(map[string]any)
+		if options == nil {
+			options = map[string]any{}
+		}
+		options["include_usage"] = true
+		options["continuous_usage_stats"] = true
+		payload["stream_options"] = options
+	}
 	if body, err := json.Marshal(payload); err == nil {
 		rq.body = body
 	}

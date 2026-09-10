@@ -605,6 +605,10 @@ func retryContainerRepositoryCall(call func(context.Context) error) error {
 
 // Spawn a single container and stream output to stdout/stderr
 func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerRequest) error {
+	return s.runContainerWithEvictionBarrier(ctx, request, func() error { return s.evictForRequest(ctx, request) })
+}
+
+func (s *Worker) runContainerWithEvictionBarrier(ctx context.Context, request *types.ContainerRequest, waitForEviction func() error) error {
 	containerId := request.ContainerId
 	startupStartedAt := time.Now()
 
@@ -783,6 +787,14 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		return err
 	}
 	log.Info().Str("container_id", containerId).Msg("successfully created spec from request")
+
+	// All preparation above owns only this request's paths and reservations.
+	// Do not assign devices or start a process until every victim is finalized.
+	if waitForEviction != nil {
+		if err := waitForEviction(); err != nil {
+			return err
+		}
+	}
 
 	select {
 	case <-ctx.Done():

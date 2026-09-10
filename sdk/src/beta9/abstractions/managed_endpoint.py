@@ -121,6 +121,8 @@ class ManagedEndpoint(RunnerAbstraction):
         harness: Whether the engine runs the beta9 harness (live tuning over RPC).
         preemptible: Whether serverless work may evict replicas (default). ``False`` holds the GPUs.
         drain_seconds: Grace for in-flight requests on eviction or replacement; ``0`` is immediate.
+        rollout: ``wait_for_capacity`` preserves the last serving replica. ``replace`` allows
+            downtime to release its GPU for a new version when there is no spare capacity.
     """
 
     def __init__(
@@ -145,6 +147,7 @@ class ManagedEndpoint(RunnerAbstraction):
         volumes: Optional[List[Union[Volume, CloudBucket]]] = None,
         secrets: Optional[List[str]] = None,
         env: Optional[Dict[str, str]] = None,
+        rollout: str = "wait_for_capacity",
     ) -> None:
         self.id = id
         self.kind = kind
@@ -158,6 +161,9 @@ class ManagedEndpoint(RunnerAbstraction):
         self.harness = bool(harness)
         self.preemptible = bool(preemptible)
         self.drain_seconds = int(drain_seconds)
+        if rollout not in {"wait_for_capacity", "replace"}:
+            raise ValueError("rollout must be wait_for_capacity or replace")
+        self.rollout = rollout
         # A fresh Image per stub: the deployer loads many apps in one process,
         # and Image.build() mutates the instance it was given.
         super().__init__(
@@ -194,6 +200,7 @@ class ManagedEndpoint(RunnerAbstraction):
                 "pricing": self.pricing.to_dict(),
                 "catalog": self.catalog.to_dict(),
                 "harness": self.harness,
+                "rollout": self.rollout,
             }
         )
         # Always sent: an explicit False / 0 must not be pruned.
