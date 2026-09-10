@@ -7,7 +7,6 @@ deploys both.
 """
 
 import json
-import os
 import shlex
 from dataclasses import asdict, dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
@@ -227,13 +226,6 @@ class ManagedEndpoint(RunnerAbstraction):
             return self._fail("You must specify an entrypoint.")
 
         image = self.image
-        # Credentials named (not given) in app.py are read from the environment at build time.
-        named = image.base_image_creds if isinstance(image.base_image_creds, (list, tuple)) else []
-        if missing := [key for key in named if not os.getenv(key)]:
-            return self._fail(
-                f"Registry credentials {', '.join(missing)} are not set. The deployer runs with the "
-                "admin workspace's secrets, so add them there (beam secret create <NAME>) and re-sync."
-            )
         # Only an image the user supplied (base image, Dockerfile or explicit id)
         # skips code sync; an id produced by an earlier Image.build() does not.
         custom_image = bool(image.base_image or image.dockerfile or image._explicit_image_id)
