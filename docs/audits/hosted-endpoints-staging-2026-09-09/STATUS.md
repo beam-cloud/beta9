@@ -50,7 +50,7 @@ Evidence: [idle baseline](fixes-idle-baseline-timings.json), [active eviction](f
 
 ## Deployment and cleanup
 
-Backend branch: `codex/hosted-staging-validation`, implementation through `307bb8b3`. GPU worker `8e290b6f` uses `codex-hosted-minimums-sdk-20260910` (SDK `e4a96fad`) with physical GPUs 2 and 3. Gateway source runs through Okteto with the existing `codex-hosted-fixes-recovery-20260910` bootstrap image; no gateway image rebuild was needed. Gateway PID 106042 and source fingerprint `37c2c29439616dd2924db9579fc0efcd23c7e1f80706bbd14d6754719a9635b9` were verified healthy, with both v16 Qwen containers unchanged across this reload. The public model listing omits placement mode, and no SDK mode argument exists. AWS config was forced and byte-verified before reload. [Latest reload and interface verification](config-only-model-interface.json). The mode-0600 local bootstrap file must remain available for the whole active Okteto session because reconnects reread it.
+Backend branch: `codex/hosted-staging-validation`, implementation through `f75d15d1`. GPU worker `8e290b6f` uses `codex-hosted-minimums-sdk-20260910` (SDK `e4a96fad`) with physical GPUs 2 and 3. Gateway source runs through Okteto with the existing `codex-hosted-fixes-recovery-20260910` bootstrap image; no gateway image rebuild was needed. Gateway PID 116873 and source fingerprint `29174abbdcfeeb41263f39d3b499b1e9dee31bae484483d8ca7f523e6686c74d` were verified healthy, with both v16 Qwen containers unchanged across this reload. The public model listing omits placement mode, and no SDK mode argument exists. AWS config was forced and byte-verified before reload. [Latest reload and workspace storage verification](workspace-storage-staging.json); [common model interface verification](config-only-model-interface.json). The mode-0600 local bootstrap file must remain available for the whole active Okteto session because reconnects reread it.
 
 Internal API and Celery use `codex-hosted-token-metering-20260910` (`c99355ec`) from an isolated worktree. The old writers were drained before the Decimal credit migration to prevent truncation by an old IntegerField writer. API 2/2 and Celery 1/1 were restored; authentication and configuration mounts were preserved. AWS internal-api config `1587bb4a-8b78-4ca2-93d5-a618e169affc` includes the dedicated canonical-counter connection and was exactly synced before deployment. Frontend staging `e278b946` uses a common catalog and connection interface for every model, with no placement mode label, field, special guidance or ranking. Models remain callable at zero ready replicas; earlier itemized usage work is unchanged. Production branches and the user's unrelated local edits remain untouched.
 
@@ -160,3 +160,12 @@ Affected Go suites, SDK tests, frontend type/lint checks, model validator/cache 
 Live multi-node failover, multi-GPU models, image endpoints, user-owned provider payouts, high concurrency, production latency comparison, and long-duration fault injection remain outside this single-node exercise. The dashboard exposes observation and Stop, with live tuning and control history available through the agent API/client. The remaining measurable preemption latency prevents signoff against the stated zero-impact requirement.
 
 Follow-up evidence: [branch config](branch-config-staging.json), [running source](source-gateway-deployment.json), [catalog and client](simplified-catalog-staging-smoke.json), [live UI](simplified-catalog-ui.json), [automatic tuning and audit](automatic-harness-catalog.json), [four-minute outage](gateway-outage-recovery.json), [outage timeline](gateway-outage-events.jsonl), [serverless reclaim timing](gateway-recovery-preemption-timings.json), [final automatic recovery](readiness-v13-after-preemption.json).
+
+## Hosted workspace storage
+
+Staging Qwen uses the admin workspace bucket for its live model cache and outputs.
+The hosted owner now requires workspace storage and refreshes missing cached
+metadata after attachment. Both replicas survived the Okteto reload, and fresh,
+cached, and streaming buyer requests reconciled all token charges exactly.
+Production admin storage migration is delegated separately and is not yet complete.
+See [storage ownership, safeguard, and evidence](WORKSPACE-STORAGE.md).

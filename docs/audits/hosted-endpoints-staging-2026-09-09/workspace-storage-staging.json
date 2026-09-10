@@ -1,0 +1,117 @@
+{
+  "ok": true,
+  "verified_at": "2026-09-10T18:52:56.517721+00:00",
+  "source_sha": "f75d15d17ec734ccdddf2924f6da817010d10e15",
+  "gateway_pid": "116873",
+  "source_fingerprint": "29174abbdcfeeb41263f39d3b499b1e9dee31bae484483d8ca7f523e6686c74d",
+  "image_rebuilt": false,
+  "storage": {
+    "access_key_configured": true,
+    "bucket": "workspace-stage-6a96a1ce-bc17-4f47-9fc7-3a040c6933be",
+    "default_bucket_name": "workspace-stage-6a96a1ce-bc17-4f47-9fc7-3a040c6933be",
+    "default_storage_credentials_configured": true,
+    "default_storage_endpoint": "https://t3.storage.dev",
+    "default_storage_mode": "geese",
+    "endpoint": "https://t3.storage.dev",
+    "legacy_mount_path": "/data",
+    "managed_endpoints_enabled": true,
+    "secret_key_configured": true,
+    "storage_attached": true,
+    "storage_id": 562,
+    "workspace_external_id": "6a96a1ce-bc17-4f47-9fc7-3a040c6933be",
+    "workspace_id": 1,
+    "workspace_name": "6195ce",
+    "environment": "staging",
+    "gateway_pod": "beta9-gateway-okteto-54d9bbdfdd-7868d"
+  },
+  "mounts": {
+    "bindings": {
+      "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-183a5ebd": [
+        {
+          "destination": "/outputs",
+          "type": "none",
+          "source": "/workspace/data/6195ce/outputs/33b8f307-7225-4e03-a0aa-ff83d9e3b468",
+          "options": [
+            "rbind",
+            "rw"
+          ]
+        },
+        {
+          "destination": "/root/.cache/huggingface",
+          "type": "none",
+          "source": "/workspace/data/6195ce/volumes/6d2f5529-21e2-4e3e-91b5-a6e0c9a190cc",
+          "options": [
+            "rbind",
+            "rw"
+          ]
+        },
+        {
+          "destination": "/volumes/root/.cache/huggingface",
+          "type": "none",
+          "source": "/workspace/data/6195ce/volumes/6d2f5529-21e2-4e3e-91b5-a6e0c9a190cc",
+          "options": [
+            "rbind",
+            "rw"
+          ]
+        }
+      ],
+      "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-1a280d52": [
+        {
+          "destination": "/outputs",
+          "type": "none",
+          "source": "/workspace/data/6195ce/outputs/33b8f307-7225-4e03-a0aa-ff83d9e3b468",
+          "options": [
+            "rbind",
+            "rw"
+          ]
+        },
+        {
+          "destination": "/root/.cache/huggingface",
+          "type": "none",
+          "source": "/workspace/data/6195ce/volumes/6d2f5529-21e2-4e3e-91b5-a6e0c9a190cc",
+          "options": [
+            "rbind",
+            "rw"
+          ]
+        },
+        {
+          "destination": "/volumes/root/.cache/huggingface",
+          "type": "none",
+          "source": "/workspace/data/6195ce/volumes/6d2f5529-21e2-4e3e-91b5-a6e0c9a190cc",
+          "options": [
+            "rbind",
+            "rw"
+          ]
+        }
+      ]
+    },
+    "workspace_mount": [
+      "workspace-stage-6a96a1ce-bc17-4f47-9fc7-3a040c6933be /workspace/data/6195ce fuse.geesefs rw,nosuid,nodev,relatime,user_id=0,group_id=0,default_permissions,max_read=524288 0 0"
+    ]
+  },
+  "same_ready_containers": true,
+  "replicas": [
+    {
+      "id": "qwen-qwen3-8b-2024a25f",
+      "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-1a280d52",
+      "version": 16,
+      "status": "ready",
+      "protected": false
+    },
+    {
+      "id": "qwen-qwen3-8b-8f411457",
+      "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-183a5ebd",
+      "version": 16,
+      "status": "ready",
+      "protected": true
+    }
+  ],
+  "harness_effective_config_readable": true,
+  "gitops_last_sha": "1684ce746f9434ad18c8d58ffd684f4a29133409",
+  "gitops_errors": false,
+  "race_tests": "go test -race ./pkg/abstractions/managedendpoint -count=1: PASS (7.853s)",
+  "ci_run": 34516515632,
+  "secret_sha256": "04fd693d96e03af999c10ffea537f441c5ccfe45dce162562dddfdda3bbf188d",
+  "secret_version": "80e72265-c7f1-4ebe-880e-79d372fd5759",
+  "secret_sync_resource_version": "566316461"
+}
