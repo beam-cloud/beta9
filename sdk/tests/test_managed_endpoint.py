@@ -29,8 +29,15 @@ def test_endpoint_spec_serializes():
     assert spec["catalog"]["public"] is True
     assert spec["harness"] is True
     assert spec["drain_seconds"] == 30
+    assert spec["protected"] is False
     assert "routes" not in spec
     assert ep.ports == [8000]
+
+
+def test_policy_fields_survive_pruning():
+    spec = ManagedEndpoint(id="a/b", preemptible=False, drain_seconds=0).spec()
+    assert spec["protected"] is True
+    assert spec["drain_seconds"] == 0
 
 
 def test_gpu_list_and_cpu_default():

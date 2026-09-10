@@ -72,8 +72,9 @@ func seedEndpoint(t *testing.T, s *Service) *types.ManagedEndpoint {
 	spec := types.ManagedEndpointSpec{
 		ID: "acme/model", Kind: types.EndpointKindLLM, Engine: "vllm", Port: 8000, Entrypoint: []string{"vllm", "serve"},
 		Gpu:     map[string]types.GpuSpec{"H100": {Harness: map[string]any{"max_num_seqs": 64}}},
-		Harness: true,
-		Catalog: types.Catalog{Public: true},
+		Harness:      true,
+		DrainSeconds: 5,
+		Catalog:      types.Catalog{Public: true},
 	}
 	spec.Normalize()
 	endpoint := &types.ManagedEndpoint{Spec: spec, StubID: "stub-1", Version: 1, Status: types.EndpointStatusActive}

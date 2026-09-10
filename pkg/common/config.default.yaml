@@ -511,7 +511,6 @@ managedEndpoints:
   deployerImage: ""
   preemption:
     enabled: true
-    defaultDrainSeconds: 5
   reconcile:
     interval: 10s
     failureBackoff: 30s

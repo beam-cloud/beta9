@@ -133,8 +133,13 @@ func (s *Worker) allocateContainerCPUSet(request *types.ContainerRequest) string
 	return selectRequestedCPUs(request.Cpu, available, load)
 }
 
+// requestForcesResourceLimits: a caller asked for hard limits, or the request
+// is a managed endpoint replica. Replicas fill spare capacity beside
+// serverless containers, so they are always held to the CPU, memory and CPU
+// set they reserved, whatever the pool's defaults for GPU work.
 func requestForcesResourceLimits(request *types.ContainerRequest) bool {
-	return request != nil && types.StubConfigForcesResourceLimits(request.Stub.Config)
+	return request != nil && (request.Stub.Type.IsManagedEndpoint() ||
+		types.StubConfigForcesResourceLimits(request.Stub.Config))
 }
 
 func (s *Worker) cpuLimitsEnforced(request *types.ContainerRequest) bool {

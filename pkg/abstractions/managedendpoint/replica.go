@@ -1,7 +1,6 @@
 package managedendpoint
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -326,7 +325,7 @@ func (c *controller) startReplica(ctx context.Context, endpoint *types.ManagedEn
 	}
 
 	gpuSpec := endpoint.Spec.Gpu[gpu]
-	drainSeconds := cmp.Or(endpoint.Spec.DrainSeconds, c.s.config.Preemption.DefaultDrainSeconds)
+	drainSeconds := endpoint.Spec.DrainSeconds
 	env := append(append([]string{}, stubConfig.Env...), secrets...)
 	env = append(env,
 		EnvReplicaSecret+"="+replicaSecret,
@@ -373,7 +372,7 @@ func (c *controller) startReplica(ctx context.Context, endpoint *types.ManagedEn
 		Ports:             []uint32{endpoint.Spec.Port},
 		PoolSelector:      pool.Name,
 		OpportunisticOnly: true,
-		Evictable:         c.s.config.Preemption.Enabled,
+		Evictable:         c.s.config.Preemption.Enabled && !endpoint.Spec.Protected,
 		DrainSeconds:      drainSeconds,
 		Timestamp:         time.Now(),
 	}

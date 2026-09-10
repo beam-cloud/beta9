@@ -72,8 +72,7 @@ type ManagedEndpointsWebhookConfig struct {
 }
 
 type ManagedEndpointsPreemption struct {
-	Enabled             bool   `key:"enabled" json:"enabled"`
-	DefaultDrainSeconds uint32 `key:"defaultDrainSeconds" json:"default_drain_seconds"`
+	Enabled bool `key:"enabled" json:"enabled"`
 }
 
 type ManagedEndpointsReconcile struct {

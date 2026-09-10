@@ -14,6 +14,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/common/llmroute"
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
 )
@@ -145,15 +146,20 @@ func localityOf(name string, cfg types.WorkerPoolConfig) string {
 	return cmp.Or(strings.TrimSpace(cfg.Locality), name)
 }
 
-// inventory is the idle GPUs replicas may fill: free GPUs of opted-in workers,
-// less replicas still being scheduled (the worker has not reserved them yet)
-// and less the pool's minFreeGPU floor, which stays idle for serverless work.
+// inventory is the idle GPUs replicas may fill: free GPUs of ready, opted-in
+// workers, less replicas still being scheduled (the worker has not reserved
+// them yet) and less the pool's minFree* floor, which stays idle for
+// serverless work. A pool with no CPU or memory above its floor has no room
+// either, however many GPUs are idle. This snapshot guides placement; the
+// scheduler enforces the same floor when it admits each replica.
 func (c *controller) inventory(replicas []*types.EndpointReplica) (*clusterInventory, error) {
 	workers, err := c.s.workers.GetAllWorkers()
 	if err != nil {
 		return nil, err
 	}
 	inv := &clusterInventory{pools: map[string][]eligiblePool{}, free: map[string]map[string]uint32{}}
+	type slack struct{ cpu, memory int64 }
+	ready := map[string]*slack{}
 	for name, cfg := range c.poolConfigs() {
 		if cfg.ManagedEndpoints.Enabled {
 			key := types.GPUKey(cfg.GPUType)
@@ -177,6 +183,11 @@ func (c *controller) inventory(replicas []*types.EndpointReplica) (*clusterInven
 			inv.free[key] = map[string]uint32{}
 		}
 		inv.free[key][w.PoolName] += w.FreeGpuCount
+		if ready[w.PoolName] == nil {
+			ready[w.PoolName] = &slack{}
+		}
+		ready[w.PoolName].cpu += w.FreeCpu
+		ready[w.PoolName].memory += w.FreeMemory
 	}
 	for _, r := range replicas {
 		if r.Status != types.ReplicaStatusScheduling || r.GPU == types.CPUInventoryKey {
@@ -190,6 +201,11 @@ func (c *controller) inventory(replicas []*types.EndpointReplica) (*clusterInven
 		for name, free := range pools {
 			cfg, _ := c.poolConfig(name)
 			floor, _ := strconv.ParseUint(cfg.PoolSizing.MinFreeGPU, 10, 32)
+			minCPU, _ := scheduler.ParseCPU(cfg.PoolSizing.MinFreeCPU)
+			minMemory, _ := scheduler.ParseMemory(cfg.PoolSizing.MinFreeMemory)
+			if s := ready[name]; (minCPU > 0 && s.cpu <= minCPU) || (minMemory > 0 && s.memory <= minMemory) {
+				free = 0
+			}
 			inv.free[key][name] = free - min(free, uint32(floor))
 		}
 	}

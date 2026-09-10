@@ -136,19 +136,24 @@ func PricingRat(value string) (*big.Rat, error) {
 // ManagedEndpointSpec is everything an endpoint's app.py declares. Where
 // replicas run is Fleet's decision.
 type ManagedEndpointSpec struct {
-	ID           string             `json:"id"`
-	Kind         EndpointKind       `json:"kind"`
-	Engine       string             `json:"engine,omitempty"`
-	Port         uint32             `json:"port"`
-	Health       string             `json:"health,omitempty"`
-	Metrics      string             `json:"metrics,omitempty"`
-	Gpu          map[string]GpuSpec `json:"gpu"` // GPU key -> how the engine runs there
-	Routes       []EndpointRoute    `json:"routes,omitempty"`
-	Pricing      Pricing            `json:"pricing"`
-	Catalog      Catalog            `json:"catalog"`
-	Harness      bool               `json:"harness"`
-	DrainSeconds uint32             `json:"drain_seconds"` // grace to finish in-flight requests on eviction or retirement
-	Entrypoint   []string           `json:"entrypoint,omitempty"`
+	ID      string             `json:"id"`
+	Kind    EndpointKind       `json:"kind"`
+	Engine  string             `json:"engine,omitempty"`
+	Port    uint32             `json:"port"`
+	Health  string             `json:"health,omitempty"`
+	Metrics string             `json:"metrics,omitempty"`
+	Gpu     map[string]GpuSpec `json:"gpu"` // GPU key -> how the engine runs there
+	Routes  []EndpointRoute    `json:"routes,omitempty"`
+	Pricing Pricing            `json:"pricing"`
+	Catalog Catalog            `json:"catalog"`
+	Harness bool               `json:"harness"`
+	// Protected replicas hold their GPUs: serverless work cannot evict them.
+	// The default (preemptible) yields to serverless. A change is a new
+	// deployment version, so the controller rolls the replicas and the live
+	// containers always carry the policy the registry shows.
+	Protected    bool     `json:"protected,omitempty"`
+	DrainSeconds uint32   `json:"drain_seconds"` // grace to finish in-flight requests on eviction or retirement; 0 is immediate
+	Entrypoint   []string `json:"entrypoint,omitempty"`
 }
 
 // ManagedEndpointStubConfig is embedded in StubConfigV1 for managed stubs.
@@ -179,9 +184,6 @@ func (s *ManagedEndpointSpec) Normalize() {
 	}
 	for i := range s.Routes {
 		s.Routes[i] = EndpointRoute(strings.Trim(strings.TrimSpace(string(s.Routes[i])), "/"))
-	}
-	if s.DrainSeconds == 0 {
-		s.DrainSeconds = 5
 	}
 	gpu := make(map[string]GpuSpec, len(s.Gpu))
 	for key, spec := range s.Gpu {

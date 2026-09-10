@@ -14,12 +14,21 @@ import (
 
 const requestSchedulingParallelism = 128
 
+// backgroundSettle bounds how many unplaceable background requests are being
+// failed at once, across batches.
+var backgroundSettle = make(chan struct{}, 16)
+
 type schedulingBatch struct {
 	scheduler *Scheduler
 	workers   []*types.Worker
 	batchSize int
 
 	schedules []plannedSchedule
+	// deferred holds background requests that found no idle capacity. Failing
+	// one is a dozen Redis calls (state delete under lock, indexes, status);
+	// they run after the batch is committed and off the scheduling loop so
+	// serverless dispatch never waits behind them.
+	deferred []*schedulingAttempt
 }
 
 type plannedSchedule struct {
@@ -44,6 +53,7 @@ func (s *Scheduler) processRequestBatch(requests []*types.ContainerRequest, work
 	batch := newSchedulingBatch(s, workers, len(requests))
 	batch.plan(requests)
 	batch.dispatch()
+	batch.settleDeferred()
 }
 
 func (b *schedulingBatch) plan(requests []*types.ContainerRequest) {
@@ -102,9 +112,7 @@ func (b *schedulingBatch) planRequest(request *types.ContainerRequest, attempt *
 		"candidate_workers": fmt.Sprintf("%d", len(b.workers)),
 	})
 	if err != nil || worker == nil {
-		if attempt.runnable() {
-			attempt.runWaitingOrProvisioning()
-		}
+		b.unplaced(attempt)
 		return
 	}
 
@@ -115,9 +123,7 @@ func (b *schedulingBatch) planRequest(request *types.ContainerRequest, attempt *
 		"worker_id": worker.Id,
 	})
 	if !reserved {
-		if attempt.runnable() {
-			attempt.runWaitingOrProvisioning()
-		}
+		b.unplaced(attempt)
 		return
 	}
 
@@ -126,6 +132,31 @@ func (b *schedulingBatch) planRequest(request *types.ContainerRequest, attempt *
 		request: request,
 	})
 	planned = true
+}
+
+// unplaced handles a request that fits no worker in this batch. Serverless
+// work moves on to waiting or provisioning now; background work is failed
+// after the batch is dispatched (see deferred).
+func (b *schedulingBatch) unplaced(attempt *schedulingAttempt) {
+	if isBackground(attempt.request) {
+		b.deferred = append(b.deferred, attempt)
+		return
+	}
+	if attempt.runnable() {
+		attempt.runWaitingOrProvisioning()
+	}
+}
+
+func (b *schedulingBatch) settleDeferred() {
+	for _, attempt := range b.deferred {
+		backgroundSettle <- struct{}{}
+		go func(attempt *schedulingAttempt) {
+			defer func() { <-backgroundSettle }()
+			if attempt.runnable() {
+				attempt.runWaitingOrProvisioning()
+			}
+		}(attempt)
+	}
 }
 
 func (b *schedulingBatch) dispatch() {

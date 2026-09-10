@@ -120,7 +120,10 @@ class ManagedEndpoint(RunnerAbstraction):
         routes: Override the default routes for ``kind``.
         pricing / catalog: Billing and ``/v1/models`` metadata.
         harness: Whether the engine runs the beta9 harness (live tuning over RPC).
-        drain_seconds: Grace for in-flight requests when a replica is evicted or replaced.
+        preemptible: Whether serverless work may evict replicas to take their GPUs
+            (the default). ``False`` protects the model: it holds its GPUs until retired.
+        drain_seconds: Grace for in-flight requests when a replica is evicted or
+            replaced; ``0`` stops immediately.
     """
 
     def __init__(
@@ -138,6 +141,7 @@ class ManagedEndpoint(RunnerAbstraction):
         pricing: Optional[Pricing] = None,
         catalog: Optional[Catalog] = None,
         harness: bool = False,
+        preemptible: bool = True,
         drain_seconds: int = 5,
         cpu: Union[int, float, str] = 4.0,
         memory: Union[int, str] = "16Gi",
@@ -155,6 +159,7 @@ class ManagedEndpoint(RunnerAbstraction):
         self.pricing = pricing or Pricing()
         self.catalog = catalog or Catalog()
         self.harness = bool(harness)
+        self.preemptible = bool(preemptible)
         self.drain_seconds = int(drain_seconds)
         # A fresh Image per stub: the deployer loads many apps in one process,
         # and Image.build() mutates the instance it was given.
@@ -192,9 +197,12 @@ class ManagedEndpoint(RunnerAbstraction):
                 "pricing": self.pricing.to_dict(),
                 "catalog": self.catalog.to_dict(),
                 "harness": self.harness,
-                "drain_seconds": self.drain_seconds,
             }
         )
+        # Policy fields are sent even when falsy: the gateway must see an
+        # explicit protected=False / drain_seconds=0, not a pruned default.
+        spec["protected"] = not self.preemptible
+        spec["drain_seconds"] = self.drain_seconds
         # A GPU key with no settings still declares the GPU; it must never be pruned.
         if self.gpus:
             spec["gpu"] = {key: _drop_empty(g.to_dict()) for key, g in self.gpus.items()}
