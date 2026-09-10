@@ -172,6 +172,85 @@ func TestDecorateJSONPreservesOpaqueResponseValues(t *testing.T) {
 	require.Contains(t, decorated, `"cost":0.000005`)
 }
 
+func TestDecorateJSONNormalizesOnlyCompletedToolCalls(t *testing.T) {
+	const toolMessage = `{"content":null,"tool_calls":[{"id":"call-original","type":"function","function":{"name":"lookup","arguments":"{\"id\":9007199254740993}"}}],"opaque_integer":9007199254740993}`
+	for _, tc := range []struct {
+		name, message, reason, want string
+	}{
+		{"completed tools", toolMessage, `"stop"`, `"tool_calls"`},
+		{"already correct", toolMessage, `"tool_calls"`, `"tool_calls"`},
+		{"truncated tools", toolMessage, `"length"`, `"length"`},
+		{"failed tools", toolMessage, `"error"`, `"error"`},
+		{"filtered tools", toolMessage, `"content_filter"`, `"content_filter"`},
+		{"unfinished tools", toolMessage, `null`, `null`},
+		{"ordinary stop", `{"content":"hello"}`, `"stop"`, `"stop"`},
+		{"empty tools", `{"content":"hello","tool_calls":[]}`, `"stop"`, `"stop"`},
+		{"null tools", `{"content":"hello","tool_calls":null}`, `"stop"`, `"stop"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := []byte(`{"choices":[{"index":0,"message":` + tc.message + `,"finish_reason":` + tc.reason + `}]}`)
+			var result struct {
+				Choices []struct {
+					Message      json.RawMessage `json:"message"`
+					FinishReason json.RawMessage `json:"finish_reason"`
+				} `json:"choices"`
+			}
+			require.NoError(t, json.Unmarshal(decorateJSON(body, "gen-test", Usage{}, 0), &result))
+			require.Equal(t, tc.want, string(result.Choices[0].FinishReason))
+			require.Equal(t, tc.message, string(result.Choices[0].Message), "nested arguments and exact numbers remain opaque")
+		})
+	}
+
+	body := []byte(`{"choices":[{"index":2,"message":` + toolMessage + `,"finish_reason":"stop"},{"index":0,"message":{"content":"hello"},"finish_reason":"stop"},{"index":1,"message":` + toolMessage + `,"finish_reason":"length"}]}`)
+	var result struct {
+		Choices []struct {
+			Index        int    `json:"index"`
+			FinishReason string `json:"finish_reason"`
+		} `json:"choices"`
+	}
+	require.NoError(t, json.Unmarshal(decorateJSON(body, "gen-test", Usage{}, 0), &result))
+	require.Equal(t, []int{2, 0, 1}, []int{result.Choices[0].Index, result.Choices[1].Index, result.Choices[2].Index})
+	require.Equal(t, []string{"tool_calls", "stop", "length"}, []string{result.Choices[0].FinishReason, result.Choices[1].FinishReason, result.Choices[2].FinishReason})
+}
+
+func TestRelayStreamTracksToolCompletionByChoiceAcrossChunks(t *testing.T) {
+	const first = `{"choices":[{"index":2,"delta":{"tool_calls":[{"index":0,"id":"call-original","type":"function","function":{"name":"lookup","arguments":"{\"id\":9007199254740993}"}}]},"finish_reason":null},{"index":1,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{"}}]},"finish_reason":null}]}`
+	const last = `{"choices":[{"index":0,"delta":{"content":"hello","tool_calls":[]},"finish_reason":"stop"},{"index":1,"delta":{},"finish_reason":"length"},{"index":2,"delta":{},"finish_reason":"stop"}],"opaque_integer":9007199254740993}`
+	recorder := httptest.NewRecorder()
+	_, _, err := relayStream(echo.NewResponse(recorder, echo.New()), strings.NewReader("data: "+first+"\n\ndata: "+last+"\n\ndata: [DONE]\n\n"), "gen-test", time.Now(), nil)
+	require.NoError(t, err)
+	var frames []map[string]json.RawMessage
+	for line := range strings.SplitSeq(recorder.Body.String(), "\n") {
+		if !strings.HasPrefix(line, "data: {") {
+			continue
+		}
+		var frame map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &frame))
+		frames = append(frames, frame)
+	}
+	require.Len(t, frames, 2)
+	var choices []struct {
+		Index        int    `json:"index"`
+		FinishReason string `json:"finish_reason"`
+	}
+	require.NoError(t, json.Unmarshal(frames[1]["choices"], &choices))
+	require.Equal(t, []int{0, 1, 2}, []int{choices[0].Index, choices[1].Index, choices[2].Index})
+	require.Equal(t, []string{"stop", "length", "tool_calls"}, []string{choices[0].FinishReason, choices[1].FinishReason, choices[2].FinishReason})
+	require.Contains(t, string(frames[0]["choices"]), `"arguments":"{\"id\":9007199254740993}"`)
+	require.Equal(t, "9007199254740993", string(frames[1]["opaque_integer"]))
+	require.Contains(t, recorder.Body.String(), "[DONE]")
+}
+
+func TestStampSSEPreservesOtherToolFinishReasons(t *testing.T) {
+	for _, reason := range []string{`"length"`, `"error"`, `"content_filter"`, `null`} {
+		tools := map[int]bool{2: true}
+		line := []byte(`data: {"choices":[{"index":2,"delta":{},"finish_reason":` + reason + `}]}`)
+		require.Contains(t, string(stampSSE(line, "gen-test", tools)), `"finish_reason":`+reason)
+	}
+	line := []byte(`data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-original"}]},"finish_reason":"stop"}]}`)
+	require.Contains(t, string(stampSSE(line, "gen-test", make(map[int]bool))), `"finish_reason":"tool_calls"`, "a tool and its terminal reason can share one chunk")
+}
+
 func TestStreamErrorHasSingleTerminalChoiceAndNumericStatus(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	writeStreamError(echo.NewResponse(recorder, echo.New()), "gen-test", "acme/model", streamFailureFor(nil))

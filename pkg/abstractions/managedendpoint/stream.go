@@ -64,6 +64,7 @@ func relayStreamWithKeepalive(w *echo.Response, body io.Reader, requestID string
 	const keepalive = ": keepalive\n\n"
 	var usage Usage
 	var ttft time.Duration
+	toolChoices := make(map[int]bool)
 	// Flush the HTTP response immediately, even if the engine has sent only
 	// headers. No generated-token metric is inferred from this comment.
 	if err := write([]byte(keepalive)); err != nil {
@@ -106,7 +107,7 @@ func relayStreamWithKeepalive(w *echo.Response, body io.Reader, requestID string
 				if next := tokenUsage(payload); next.Found {
 					usage = next
 				}
-				result.event = replaceSSEData(result.event, bytes.TrimSuffix(stampSSE(line, requestID), []byte("\n")))
+				result.event = replaceSSEData(result.event, bytes.TrimSuffix(stampSSE(line, requestID, toolChoices), []byte("\n")))
 			}
 			if err := write(result.event); err != nil {
 				return usage, ttft, err
@@ -203,15 +204,16 @@ func generatesOutput(line []byte) bool {
 	return false
 }
 
-// RawMessage preserves nested tool/reasoning fields and integers exactly; only
-// the gateway-owned top-level generation id is rewritten.
-func stampSSE(line []byte, requestID string) []byte {
+// RawMessage preserves nested tool/reasoning fields and integers exactly while
+// stamping the generation id and correcting completed tool-call finish reasons.
+func stampSSE(line []byte, requestID string, toolChoices map[int]bool) []byte {
 	payload := bytes.TrimSpace(bytes.TrimPrefix(line, []byte("data:")))
 	var chunk map[string]json.RawMessage
 	if json.Unmarshal(payload, &chunk) != nil || chunk == nil {
 		return line
 	}
 	chunk["id"], _ = json.Marshal(requestID)
+	normalizeToolFinishReasons(chunk, toolChoices)
 	out, err := json.Marshal(chunk)
 	if err != nil {
 		return line
@@ -226,6 +228,7 @@ func decorateJSON(body []byte, requestID string, usage Usage, costMicro int64) [
 	}
 	payload["id"], _ = json.Marshal(requestID)
 	payload["provider"], _ = json.Marshal(providerName)
+	normalizeToolFinishReasons(payload, nil)
 	if usage.Found {
 		var reported map[string]json.RawMessage
 		if json.Unmarshal(payload["usage"], &reported) == nil && reported != nil {
@@ -238,6 +241,52 @@ func decorateJSON(body []byte, requestID string, usage Usage, costMicro int64) [
 		return body
 	}
 	return out
+}
+
+// Some engines finish valid tool calls with "stop". OpenAI clients need
+// "tool_calls" to continue the tool loop. Never hide truncation or errors.
+// Streamed calls can arrive before the final reason, independently per choice.
+func normalizeToolFinishReasons(payload map[string]json.RawMessage, toolChoices map[int]bool) {
+	var choices []json.RawMessage
+	if json.Unmarshal(payload["choices"], &choices) != nil {
+		return
+	}
+	changed := false
+	for i, raw := range choices {
+		var choice struct {
+			Index        int    `json:"index"`
+			FinishReason string `json:"finish_reason"`
+			Message      struct {
+				ToolCalls []json.RawMessage `json:"tool_calls"`
+			} `json:"message"`
+			Delta struct {
+				ToolCalls []json.RawMessage `json:"tool_calls"`
+			} `json:"delta"`
+		}
+		if json.Unmarshal(raw, &choice) != nil {
+			continue
+		}
+		hasTools := len(choice.Message.ToolCalls) > 0
+		if toolChoices != nil {
+			if len(choice.Delta.ToolCalls) > 0 {
+				toolChoices[choice.Index] = true
+			}
+			hasTools = toolChoices[choice.Index]
+		}
+		if !hasTools || choice.FinishReason != "stop" {
+			continue
+		}
+		var fields map[string]json.RawMessage
+		if json.Unmarshal(raw, &fields) != nil || fields == nil {
+			continue
+		}
+		fields["finish_reason"] = json.RawMessage(`"tool_calls"`)
+		choices[i], _ = json.Marshal(fields)
+		changed = true
+	}
+	if changed {
+		payload["choices"], _ = json.Marshal(choices)
+	}
 }
 
 type streamFailure struct {
