@@ -3187,6 +3187,31 @@
         "microUsd": {
           "type": "string",
           "format": "int64"
+        },
+        "cachedTokens": {
+          "type": "string",
+          "format": "int64",
+          "description": "Cached tokens are included in prompt_tokens. Prompt cost excludes cache."
+        },
+        "promptMicroUsd": {
+          "type": "string",
+          "format": "int64"
+        },
+        "completionMicroUsd": {
+          "type": "string",
+          "format": "int64"
+        },
+        "cachedMicroUsd": {
+          "type": "string",
+          "format": "int64"
+        },
+        "requestMicroUsd": {
+          "type": "string",
+          "format": "int64"
+        },
+        "imageMicroUsd": {
+          "type": "string",
+          "format": "int64"
         }
       }
     },

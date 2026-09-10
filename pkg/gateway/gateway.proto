@@ -1106,6 +1106,13 @@ message EndpointUsage {
   int64 completion_tokens = 3;
   int64 images = 4;
   int64 micro_usd = 5;
+  // Cached tokens are included in prompt_tokens. Prompt cost excludes cache.
+  int64 cached_tokens = 6;
+  int64 prompt_micro_usd = 7;
+  int64 completion_micro_usd = 8;
+  int64 cached_micro_usd = 9;
+  int64 request_micro_usd = 10;
+  int64 image_micro_usd = 11;
 }
 
 message GetEndpointUsageResponse {

@@ -1,6 +1,7 @@
 package managedendpoint
 
 import (
+	"errors"
 	"io"
 	"net/http/httptest"
 	"strings"
@@ -24,7 +25,7 @@ func TestRelayStreamRequiresCompletionAndRetainsLatestUsage(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
 			response := echo.NewResponse(recorder, echo.New())
-			usage, ttft, err := relayStream(response, strings.NewReader(chunks+tc.ending), "gen-test", time.Now().Add(-time.Second))
+			usage, ttft, err := relayStream(response, strings.NewReader(chunks+tc.ending), "gen-test", time.Now().Add(-time.Second), nil)
 			if tc.failed {
 				require.ErrorIs(t, err, io.ErrUnexpectedEOF)
 			} else {
@@ -36,5 +37,31 @@ func TestRelayStreamRequiresCompletionAndRetainsLatestUsage(t *testing.T) {
 			require.Positive(t, ttft)
 			require.Contains(t, recorder.Body.String(), "hello")
 		})
+	}
+}
+
+func TestRelayStreamCommitsAccountingBeforeTerminalMarker(t *testing.T) {
+	const stream = "data: {\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":7,\"prompt_tokens_details\":{\"cached_tokens\":64}}}\n\ndata: [DONE]\n\ndata: [DONE]\n\n"
+	for _, fail := range []bool{false, true} {
+		recorder := httptest.NewRecorder()
+		response := echo.NewResponse(recorder, echo.New())
+		calls := 0
+		_, _, err := relayStream(response, strings.NewReader(stream), "gen-test", time.Now(), func(u Usage, _ time.Duration) error {
+			calls++
+			require.NotContains(t, recorder.Body.String(), "[DONE]")
+			require.EqualValues(t, 64, u.CachedTokens)
+			if fail {
+				return errors.New("accounting unavailable")
+			}
+			return nil
+		})
+		require.Equal(t, 1, calls)
+		if fail {
+			require.Error(t, err)
+			require.NotContains(t, recorder.Body.String(), "[DONE]")
+		} else {
+			require.NoError(t, err)
+			require.Equal(t, 1, strings.Count(recorder.Body.String(), "[DONE]"))
+		}
 	}
 }

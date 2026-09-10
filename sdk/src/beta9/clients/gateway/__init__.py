@@ -913,6 +913,16 @@ class EndpointUsage(betterproto.Message):
     completion_tokens: int = betterproto.int64_field(3)
     images: int = betterproto.int64_field(4)
     micro_usd: int = betterproto.int64_field(5)
+    cached_tokens: int = betterproto.int64_field(6)
+    """
+    Cached tokens are included in prompt_tokens. Prompt cost excludes cache.
+    """
+
+    prompt_micro_usd: int = betterproto.int64_field(7)
+    completion_micro_usd: int = betterproto.int64_field(8)
+    cached_micro_usd: int = betterproto.int64_field(9)
+    request_micro_usd: int = betterproto.int64_field(10)
+    image_micro_usd: int = betterproto.int64_field(11)
 
 
 @dataclass(eq=False, repr=False)

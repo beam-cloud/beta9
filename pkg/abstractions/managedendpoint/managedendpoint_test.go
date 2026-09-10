@@ -531,7 +531,7 @@ func TestRouteRecordCreditsProviderWorkspace(t *testing.T) {
 
 	spend, err := s.repo.GetUsage(ctx, types.UsageSpend, "ws-tenant", now, now)
 	require.NoError(t, err)
-	require.Equal(t, types.Usage{Requests: 1, CompletionTokens: 1000, MicroUSD: 1000}, spend.PerModel["acme/model"])
+	require.Equal(t, types.Usage{Requests: 1, CompletionTokens: 1000, MicroUSD: 1000, CompletionMicroUSD: 1000}, spend.PerModel["acme/model"])
 	earned, err := s.repo.GetUsage(ctx, types.UsageEarned, "ws-provider", now, now)
 	require.NoError(t, err)
 	require.Equal(t, types.Usage{Requests: 1, CompletionTokens: 1000, MicroUSD: 700}, earned.PerModel["acme/model"])
@@ -597,8 +597,15 @@ func TestProxyStreamWithoutUsageIsNotBilled(t *testing.T) {
 			auth:      &auth.AuthInfo{Workspace: &types.Workspace{ExternalId: "ws-tenant"}, Token: &types.Token{ExternalId: "tok"}},
 			requestID: "req-1", models: []string{"acme/model"}, body: []byte(`{"model":"acme/model","stream":true}`), stream: true, startedAt: time.Now(),
 		}
+		if withUsage.Load() {
+			rq.requestID = "req-with-usage"
+		}
 		retry, err := r.proxy(context.Background(), rq, endpoint, replica)
-		require.NoError(t, err)
+		if withUsage.Load() {
+			require.NoError(t, err)
+		} else {
+			require.Error(t, err)
+		}
 		require.False(t, retry)
 		event, err := s.repo.GetGeneration(context.Background(), rq.requestID)
 		require.NoError(t, err)
@@ -608,7 +615,8 @@ func TestProxyStreamWithoutUsageIsNotBilled(t *testing.T) {
 
 	rec, event := proxyOnce()
 	assert.Equal(t, http.StatusOK, rec.Code, "the stream already reached the client")
-	assert.Contains(t, rec.Body.String(), "data: [DONE]")
+	assert.NotContains(t, rec.Body.String(), "data: [DONE]", "missing usage cannot complete a successful billed stream")
+	assert.Contains(t, rec.Body.String(), "upstream_stream_interrupted")
 	assert.Contains(t, rec.Body.String(), `"id":"req-1"`, "chunks carry the gateway generation id")
 	assert.NotContains(t, rec.Body.String(), "chatcmpl-upstream")
 	assert.Equal(t, http.StatusBadGateway, event.StatusCode)

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -394,7 +395,58 @@ func (r *ManagedEndpointRedisRepository) SaveGeneration(ctx context.Context, rec
 	if record == nil || record.RequestID == "" {
 		return errors.New("generation id is required")
 	}
-	return r.setJSON(ctx, meKey("generation", record.RequestID), record, ttl)
+	data, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+	// A successful response is also the durable accounting outbox. Do not
+	// expire it until spend and provider earnings have both been applied.
+	pending := record.StatusCode >= 200 && record.StatusCode < 300
+	return saveGenerationScript.Run(ctx, r.rdb, []string{meKey("generation", record.RequestID), meKey("accounting", "pending")}, string(data), record.RequestID, record.Timestamp.Unix(), int(ttl.Seconds()), pending).Err()
+}
+
+var saveGenerationScript = redis.NewScript(`
+if redis.call('EXISTS', KEYS[1]) == 1 then return 0 end
+local pendingType = redis.call('TYPE', KEYS[2]).ok
+if ARGV[5] == '1' and pendingType ~= 'none' and pendingType ~= 'zset' then
+	return redis.error_reply('invalid pending accounting index')
+end
+redis.call('SET', KEYS[1], ARGV[1])
+if ARGV[5] == '1' then
+	redis.call('ZADD', KEYS[2], ARGV[3], ARGV[2])
+else
+	redis.call('EXPIRE', KEYS[1], ARGV[4])
+end
+return 1
+`)
+
+func (r *ManagedEndpointRedisRepository) ListPendingAccounting(ctx context.Context, limit int64) ([]types.EventEndpointRouteSchema, error) {
+	ids, err := r.rdb.ZRange(ctx, meKey("accounting", "pending"), 0, limit-1).Result()
+	if err != nil {
+		return nil, err
+	}
+	records := make([]types.EventEndpointRouteSchema, 0, len(ids))
+	for _, id := range ids {
+		record, err := r.GetGeneration(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if record == nil {
+			return nil, fmt.Errorf("missing pending accounting record %s", id)
+		}
+		records = append(records, *record)
+	}
+	return records, nil
+}
+
+var completeAccountingScript = redis.NewScript(`
+redis.call('ZREM', KEYS[1], ARGV[1])
+redis.call('EXPIRE', KEYS[2], ARGV[2])
+return 1
+`)
+
+func (r *ManagedEndpointRedisRepository) CompleteAccounting(ctx context.Context, generationID string, ttl time.Duration) error {
+	return completeAccountingScript.Run(ctx, r.rdb, []string{meKey("accounting", "pending"), meKey("generation", generationID)}, generationID, int(ttl.Seconds())).Err()
 }
 
 func (r *ManagedEndpointRedisRepository) GetGeneration(ctx context.Context, generationID string) (*types.EventEndpointRouteSchema, error) {
@@ -405,6 +457,9 @@ func usageFields(u *types.Usage) map[string]*int64 {
 	return map[string]*int64{
 		"requests": &u.Requests, "prompt_tokens": &u.PromptTokens, "completion_tokens": &u.CompletionTokens,
 		"images": &u.Images, "micro_usd": &u.MicroUSD,
+		"cached_tokens":    &u.CachedTokens,
+		"prompt_micro_usd": &u.PromptMicroUSD, "completion_micro_usd": &u.CompletionMicroUSD,
+		"cached_micro_usd": &u.CachedMicroUSD, "request_micro_usd": &u.RequestMicroUSD, "image_micro_usd": &u.ImageMicroUSD,
 	}
 }
 
@@ -412,21 +467,44 @@ func usageFields(u *types.Usage) map[string]*int64 {
 // minute meter bucket) so a replay with the same request id is a no-op.
 //
 // KEYS[1] seen marker, KEYS[2] day bucket, KEYS[3] meter bucket index;
-// ARGV[1] usage ttl seconds, ARGV[2] meter ttl seconds, ARGV[3] meter key
-// prefix, ARGV[4] workspace, ARGV[5] model, then (field, value) pairs.
+// ARGV[1] usage ttl seconds, ARGV[2] meter key prefix, ARGV[3] workspace,
+// ARGV[4] model, then (field, value) pairs.
 var addUsageScript = redis.NewScript(`
-if redis.call('SET', KEYS[1], '1', 'NX', 'EX', ARGV[1]) == false then
-	return 0
-end
+if redis.call('EXISTS', KEYS[1]) == 1 then return 0 end
 local minute = math.floor(redis.call('TIME')[1] / 60) * 60
-local meter = ARGV[3] .. ':' .. minute
-for i = 6, #ARGV, 2 do
-	redis.call('HINCRBY', KEYS[2], ARGV[i], ARGV[i + 1])
-	redis.call('HINCRBY', KEYS[2], ARGV[5] .. '|' .. ARGV[i], ARGV[i + 1])
-	redis.call('HINCRBY', meter, ARGV[4] .. '|' .. ARGV[5] .. '|' .. ARGV[i], ARGV[i + 1])
+local meter = ARGV[2] .. ':' .. minute
+-- Lua scripts do not roll back runtime errors. Validate all increments before
+-- writing anything, including types and exact-integer bounds.
+local indexType = redis.call('TYPE', KEYS[3]).ok
+if indexType ~= 'none' and indexType ~= 'zset' then return redis.error_reply('invalid meter index') end
+for _, key in ipairs({KEYS[2], meter}) do
+	local kind = redis.call('TYPE', key).ok
+	if kind ~= 'none' and kind ~= 'hash' then return redis.error_reply('invalid usage bucket') end
 end
+local function validIncrement(key, field, amount)
+	local raw = redis.call('HGET', key, field)
+	if raw and raw ~= '0' and not string.match(raw, '^[1-9][0-9]*$') then return false end
+	local value = 0
+	if raw then value = tonumber(raw) end
+	return value and value >= 0 and value == math.floor(value) and value + amount <= 9007199254740991
+end
+for i = 5, #ARGV, 2 do
+	local amount = tonumber(ARGV[i + 1])
+	if not amount or amount < 0 or amount ~= math.floor(amount) or
+		not validIncrement(KEYS[2], ARGV[i], amount) or
+		not validIncrement(KEYS[2], ARGV[4] .. '|' .. ARGV[i], amount) or
+		not validIncrement(meter, ARGV[3] .. '|' .. ARGV[4] .. '|' .. ARGV[i], amount) then
+		return redis.error_reply('invalid usage counter or overflow')
+	end
+end
+for i = 5, #ARGV, 2 do
+	redis.call('HINCRBY', KEYS[2], ARGV[i], ARGV[i + 1])
+	redis.call('HINCRBY', KEYS[2], ARGV[4] .. '|' .. ARGV[i], ARGV[i + 1])
+	redis.call('HINCRBY', meter, ARGV[3] .. '|' .. ARGV[4] .. '|' .. ARGV[i], ARGV[i + 1])
+end
+redis.call('SET', KEYS[1], '1', 'EX', ARGV[1])
 redis.call('EXPIRE', KEYS[2], ARGV[1])
-redis.call('EXPIRE', meter, ARGV[2])
+redis.call('PERSIST', meter)
 redis.call('ZADD', KEYS[3], minute, meter)
 return 1
 `)
@@ -437,8 +515,20 @@ func (r *ManagedEndpointRedisRepository) AddUsage(ctx context.Context, kind type
 	if workspaceID == "" || model == "" || requestID == "" {
 		return errors.New("workspace id, model and request id are required")
 	}
-	args := []any{int(usageRetain.Seconds()), int(meterBucketRetain.Seconds()), meKey("meter", string(kind)), workspaceID, model}
+	if kind != types.UsageSpend && kind != types.UsageEarned {
+		return errors.New("invalid usage kind")
+	}
+	if strings.ContainsAny(workspaceID+model, "|") {
+		return errors.New("invalid usage identifier")
+	}
+	if delta.CachedTokens > delta.PromptTokens {
+		return errors.New("cached tokens exceed prompt tokens")
+	}
+	args := []any{int(usageRetain.Seconds()), meKey("meter", string(kind)), workspaceID, model}
 	for field, value := range usageFields(&delta) {
+		if *value < 0 || *value > 9_007_199_254_740_991 {
+			return errors.New("invalid usage counter")
+		}
 		if *value > 0 {
 			args = append(args, field, *value)
 		}
@@ -503,8 +593,6 @@ func (r *ManagedEndpointRedisRepository) GetUsage(ctx context.Context, kind type
 	return report, nil
 }
 
-const meterBucketRetain = 7 * 24 * time.Hour
-
 // ListMeterBuckets returns every bucket that started before the cutoff, oldest first.
 func (r *ManagedEndpointRedisRepository) ListMeterBuckets(ctx context.Context, before time.Time) ([]types.MeterBucket, error) {
 	keys, err := r.rdb.ZRangeByScore(ctx, meKey("meter", "buckets"), &redis.ZRangeBy{Min: "-inf", Max: strconv.FormatInt(before.Unix(), 10)}).Result()
@@ -513,6 +601,10 @@ func (r *ManagedEndpointRedisRepository) ListMeterBuckets(ctx context.Context, b
 	}
 	var out []types.MeterBucket
 	for _, key := range keys {
+		// Pending billing must not expire during an extended meter outage.
+		if err := r.rdb.Persist(ctx, key).Err(); err != nil {
+			return nil, err
+		}
 		parts := strings.Split(strings.TrimPrefix(key, meKey("meter")+":"), ":")
 		if len(parts) != 2 {
 			continue
@@ -561,7 +653,7 @@ func splitMeterField(field string) (workspace, model, name string, ok bool) {
 
 // DeleteMeterBucket removes a delivered bucket.
 func (r *ManagedEndpointRedisRepository) DeleteMeterBucket(ctx context.Context, key string) error {
-	_, err := r.rdb.Pipelined(ctx, func(pipe redis.Pipeliner) error {
+	_, err := r.rdb.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
 		pipe.ZRem(ctx, meKey("meter", "buckets"), key)
 		pipe.Del(ctx, key)
 		return nil

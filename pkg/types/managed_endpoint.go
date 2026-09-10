@@ -705,16 +705,30 @@ type Usage struct {
 	Requests         int64 `json:"requests"`
 	PromptTokens     int64 `json:"prompt_tokens"`
 	CompletionTokens int64 `json:"completion_tokens"`
-	Images           int64 `json:"images"`
-	MicroUSD         int64 `json:"micro_usd"`
+	// CachedTokens is a subset of PromptTokens. PromptMicroUSD prices only
+	// uncached input; cached input has its own cost even without a discount.
+	CachedTokens       int64 `json:"cached_tokens"`
+	Images             int64 `json:"images"`
+	MicroUSD           int64 `json:"micro_usd"`
+	PromptMicroUSD     int64 `json:"prompt_micro_usd"`
+	CompletionMicroUSD int64 `json:"completion_micro_usd"`
+	CachedMicroUSD     int64 `json:"cached_micro_usd"`
+	RequestMicroUSD    int64 `json:"request_micro_usd"`
+	ImageMicroUSD      int64 `json:"image_micro_usd"`
 }
 
 func (u *Usage) Add(o Usage) {
 	u.Requests += o.Requests
 	u.PromptTokens += o.PromptTokens
 	u.CompletionTokens += o.CompletionTokens
+	u.CachedTokens += o.CachedTokens
 	u.Images += o.Images
 	u.MicroUSD += o.MicroUSD
+	u.PromptMicroUSD += o.PromptMicroUSD
+	u.CompletionMicroUSD += o.CompletionMicroUSD
+	u.CachedMicroUSD += o.CachedMicroUSD
+	u.RequestMicroUSD += o.RequestMicroUSD
+	u.ImageMicroUSD += o.ImageMicroUSD
 }
 
 type UsageReport struct {

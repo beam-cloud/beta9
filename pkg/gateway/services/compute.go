@@ -82,7 +82,12 @@ func usageWindow(in *pb.GetEndpointUsageRequest) (from, to time.Time, err error)
 }
 
 func usageToProto(u types.Usage) *pb.EndpointUsage {
-	return &pb.EndpointUsage{Requests: u.Requests, PromptTokens: u.PromptTokens, CompletionTokens: u.CompletionTokens, Images: u.Images, MicroUsd: u.MicroUSD}
+	return &pb.EndpointUsage{
+		Requests: u.Requests, PromptTokens: u.PromptTokens, CompletionTokens: u.CompletionTokens,
+		CachedTokens: u.CachedTokens, Images: u.Images, MicroUsd: u.MicroUSD,
+		PromptMicroUsd: u.PromptMicroUSD, CompletionMicroUsd: u.CompletionMicroUSD,
+		CachedMicroUsd: u.CachedMicroUSD, RequestMicroUsd: u.RequestMicroUSD, ImageMicroUsd: u.ImageMicroUSD,
+	}
 }
 
 func (gws *GatewayService) ListMachineContainers(ctx context.Context, in *pb.ListMachineContainersRequest) (*pb.ListMachineContainersResponse, error) {

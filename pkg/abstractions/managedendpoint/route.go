@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/big"
 	"mime"
 	"mime/multipart"
 	"net/http"
@@ -130,6 +129,9 @@ func tokenUsage(body []byte) Usage {
 	if env.Usage.Details != nil {
 		u.CachedTokens = env.Usage.Details.CachedTokens
 	}
+	if u.PromptTokens < 0 || u.CompletionTokens < 0 || u.CachedTokens < 0 || u.CachedTokens > u.PromptTokens {
+		return Usage{}
+	}
 	return u
 }
 
@@ -182,40 +184,6 @@ func routeFromPath(prefix, path string) (types.EndpointRoute, string, bool) {
 	return route, "", ok && route != types.EndpointRouteInvoke
 }
 
-// computeCostMicroUSD prices usage exactly and rounds half-up to micro-dollars.
-func computeCostMicroUSD(p types.Pricing, u Usage) (int64, error) {
-	if p.IsZero() {
-		return 0, nil
-	}
-	cached := min(u.CachedTokens, u.PromptTokens)
-	if p.CachedPromptTokens == "" {
-		cached = 0
-	}
-	total := new(big.Rat)
-	for _, line := range []struct {
-		price    string
-		quantity int64
-	}{
-		{p.PromptTokens, u.PromptTokens - cached},
-		{p.CachedPromptTokens, cached},
-		{p.CompletionTokens, u.CompletionTokens},
-		{p.Image, u.Images},
-		{p.Request, u.Requests},
-	} {
-		if line.quantity <= 0 || line.price == "" {
-			continue
-		}
-		rate, err := types.PricingRat(line.price)
-		if err != nil {
-			return 0, err
-		}
-		total.Add(total, rate.Mul(rate, big.NewRat(line.quantity, 1)))
-	}
-	total.Mul(total, big.NewRat(1_000_000, 1))
-	total.Add(total, big.NewRat(1, 2)) // round half-up
-	return new(big.Int).Quo(total.Num(), total.Denom()).Int64(), nil
-}
-
 // costUSD renders micro-dollars as the float OpenRouter puts in usage.cost.
 func costUSD(microUSD int64) float64 { return float64(microUSD) / 1_000_000 }
 
@@ -223,11 +191,11 @@ func (r *router) cost(endpoint *types.ManagedEndpoint, usage Usage) int64 {
 	if !billable(endpoint) || !usage.Found {
 		return 0
 	}
-	cost, err := computeCostMicroUSD(endpoint.Spec.Pricing, usage)
+	priced, err := priceUsage(endpoint.Spec.Pricing, usage)
 	if err != nil {
 		log.Warn().Err(err).Str("endpoint_id", endpoint.Spec.ID).Msg("managed endpoints: pricing error")
 	}
-	return cost
+	return priced.MicroUSD
 }
 
 func billable(endpoint *types.ManagedEndpoint) bool {
@@ -763,7 +731,15 @@ func (r *router) proxy(ctx context.Context, rq *routeRequest, endpoint *types.Ma
 	contentType, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 	if contentType == "text/event-stream" {
 		w.WriteHeader(resp.StatusCode)
-		usage, ttft, err := relayStream(w, resp.Body, rq.requestID, sentAt)
+		recorded := false
+		usage, ttft, err := relayStream(w, resp.Body, rq.requestID, sentAt, func(usage Usage, ttft time.Duration) error {
+			recorded = true
+			if resp.StatusCode < 300 && billable(endpoint) && !usage.Found {
+				r.recordMissingUsage(rq, endpoint, replica, usage, ttft)
+				return errors.New("upstream response carried no usage")
+			}
+			return r.record(rq, endpoint, replica, resp.StatusCode, usage, ttft, "")
+		})
 		status := resp.StatusCode
 		if err != nil && status < 300 {
 			status = http.StatusBadGateway // the stream broke: not a success, not billed
@@ -779,7 +755,9 @@ func (r *router) proxy(ctx context.Context, rq *routeRequest, endpoint *types.Ma
 			r.recordMissingUsage(rq, endpoint, replica, usage, ttft)
 			return false, nil
 		}
-		r.record(rq, endpoint, replica, status, usage, ttft, errString(err))
+		if !recorded {
+			r.record(rq, endpoint, replica, status, usage, ttft, errString(err))
+		}
 		return false, err
 	}
 
@@ -805,10 +783,12 @@ func (r *router) proxy(ctx context.Context, rq *routeRequest, endpoint *types.Ma
 			body = decorateJSON(body, rq.requestID, usage, r.cost(endpoint, usage))
 		}
 	}
+	if err := r.record(rq, endpoint, replica, resp.StatusCode, usage, 0, ""); err != nil {
+		return false, errAccountingUnavailable.write(rq.ctx)
+	}
 	w.Header().Set("Content-Length", fmt.Sprint(len(body)))
 	w.WriteHeader(resp.StatusCode)
-	_, werr := w.Write(body)
-	r.record(rq, endpoint, replica, resp.StatusCode, usage, 0, errString(werr))
+	_, _ = w.Write(body)
 	return false, nil
 }
 
@@ -825,6 +805,8 @@ func errString(err error) string {
 	return err.Error()
 }
 
+var errAccountingUnavailable = &routeError{http.StatusServiceUnavailable, "accounting_unavailable", "Unable to record request usage"}
+
 var errMissingUsage = &routeError{http.StatusBadGateway, "missing_usage", "upstream response carried no usage; request not billed"}
 
 // recordMissingUsage files a billable response without usage as a 502: not
@@ -838,7 +820,7 @@ func (r *router) recordMissingUsage(rq *routeRequest, endpoint *types.ManagedEnd
 // relayStream forwards SSE events as they arrive, stamping the generation id,
 // retaining cumulative usage and measuring TTFT at the first output. A clean
 // transport EOF without the OpenAI terminal marker is still an incomplete reply.
-func relayStream(w *echo.Response, body io.Reader, requestID string, sentAt time.Time) (Usage, time.Duration, error) {
+func relayStream(w *echo.Response, body io.Reader, requestID string, sentAt time.Time, finalize func(Usage, time.Duration) error) (Usage, time.Duration, error) {
 	flusher, _ := w.Writer.(http.Flusher)
 	reader := bufio.NewReaderSize(body, 64<<10)
 	var usage Usage
@@ -850,7 +832,17 @@ func relayStream(w *echo.Response, body io.Reader, requestID string, sentAt time
 		if len(line) > 0 {
 			if bytes.HasPrefix(line, []byte("data:")) {
 				payload := bytes.TrimSpace(line[len("data:"):])
-				done = done || bytes.Equal(payload, []byte("[DONE]"))
+				if bytes.Equal(payload, []byte("[DONE]")) {
+					if upstreamError {
+						return usage, ttft, io.ErrUnexpectedEOF
+					}
+					if finalize != nil {
+						if err := finalize(usage, ttft); err != nil {
+							return usage, ttft, err
+						}
+					}
+					done = true
+				}
 				if bytes.Contains(payload, []byte(`"error"`)) {
 					var frame struct {
 						Error json.RawMessage `json:"error"`
@@ -873,6 +865,15 @@ func relayStream(w *echo.Response, body io.Reader, requestID string, sentAt time
 			if flusher != nil && (len(bytes.TrimSpace(line)) == 0 || bytes.HasPrefix(line, []byte("data:"))) {
 				flusher.Flush()
 			}
+		}
+		if done {
+			if _, err := w.Write([]byte("\n")); err != nil {
+				return usage, ttft, err
+			}
+			if flusher != nil {
+				flusher.Flush()
+			}
+			return usage, ttft, nil
 		}
 		if errors.Is(err, io.EOF) {
 			if !done || upstreamError {
@@ -957,12 +958,17 @@ func decorateJSON(body []byte, requestID string, usage Usage, costMicro int64) [
 	return out
 }
 
-func (r *router) record(rq *routeRequest, endpoint *types.ManagedEndpoint, replica *types.EndpointReplica, status int, usage Usage, ttft time.Duration, errMsg string) {
+func (r *router) record(rq *routeRequest, endpoint *types.ManagedEndpoint, replica *types.EndpointReplica, status int, usage Usage, ttft time.Duration, errMsg string) error {
 	now := time.Now()
-	cost := int64(0)
-	if status < 300 {
-		cost = r.cost(endpoint, usage)
+	var priced types.Usage
+	if status < 300 && usage.Found {
+		var err error
+		priced, err = priceUsage(endpoint.Spec.Pricing, usage)
+		if err != nil {
+			return err
+		}
 	}
+	cost := priced.MicroUSD
 	sample := types.RouteSample{
 		EndpointID: endpoint.Spec.ID, StatusCode: status,
 		PromptTokens: usage.PromptTokens, CompletionTokens: usage.CompletionTokens, Images: usage.Images, CostMicroUSD: cost,
@@ -974,6 +980,8 @@ func (r *router) record(rq *routeRequest, endpoint *types.ManagedEndpoint, repli
 		StatusCode: status, Stream: rq.stream, Retried: rq.retried,
 		PromptTokens: usage.PromptTokens, CompletionTokens: usage.CompletionTokens, CachedTokens: usage.CachedTokens,
 		Images: usage.Images, CostMicroUSD: cost,
+		PromptMicroUSD: priced.PromptMicroUSD, CompletionMicroUSD: priced.CompletionMicroUSD,
+		CachedMicroUSD: priced.CachedMicroUSD, RequestMicroUSD: priced.RequestMicroUSD, ImageMicroUSD: priced.ImageMicroUSD,
 		DurationMs: sample.Duration.Milliseconds(), TTFTMs: ttft.Milliseconds(), QueueWaitMs: rq.queueWait.Milliseconds(),
 		Error: errMsg, Timestamp: now.UTC(),
 	}
@@ -993,41 +1001,57 @@ func (r *router) record(rq *routeRequest, endpoint *types.ManagedEndpoint, repli
 			event.KVHitSource = "engine"
 		}
 	}
-	if err := r.s.repo.RecordRouteSample(context.Background(), sample); err != nil {
+	if err := r.persist(event); err != nil {
+		log.Error().Err(err).Str("request_id", event.RequestID).Msg("managed endpoints: accounting pending or unavailable")
+		return err
+	}
+	metricsCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := r.s.repo.RecordRouteSample(metricsCtx, sample); err != nil {
 		log.Debug().Err(err).Msg("managed endpoints: record route sample")
 	}
-	r.persist(event)
+	return nil
 }
 
-// persist is the accounting for one request: route event, generation and
-// AddUsage, each idempotent on the request id.
-func (r *router) persist(event types.EventEndpointRouteSchema) {
+// persist journals the immutable request before applying its counters. The
+// meter retries unfinished journal entries after errors or gateway restarts.
+func (r *router) persist(event types.EventEndpointRouteSchema) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-
-	warn := func(leg string, err error) {
-		if err != nil {
-			log.Warn().Err(err).Str("request_id", event.RequestID).Str("leg", leg).Msg("managed endpoints: accounting leg failed")
-		}
+	if err := r.s.repo.SaveGeneration(ctx, &event, generationTTL); err != nil {
+		return fmt.Errorf("journal request usage: %w", err)
 	}
 	if r.s.events != nil {
 		r.s.events.PushEndpointRouteEvent(event)
 	}
-	warn("generation", r.s.repo.SaveGeneration(ctx, &event, generationTTL))
 	if event.StatusCode >= 300 {
-		return
+		return nil
 	}
-	usage := types.Usage{Requests: 1, PromptTokens: event.PromptTokens, CompletionTokens: event.CompletionTokens, Images: event.Images, MicroUSD: event.CostMicroUSD}
-	warn("spend", r.s.repo.AddUsage(ctx, types.UsageSpend, event.WorkspaceID, event.Model, event.RequestID, event.Timestamp, usage))
-	if event.ProviderWorkspaceID != "" {
-		usage.MicroUSD = event.ProviderShareMicroUSD
-		warn("earned", r.s.repo.AddUsage(ctx, types.UsageEarned, event.ProviderWorkspaceID, event.Model, event.RequestID, event.Timestamp, usage))
+	return r.account(ctx, event)
+}
+
+func (r *router) account(ctx context.Context, event types.EventEndpointRouteSchema) error {
+	usage := types.Usage{
+		Requests: 1, PromptTokens: event.PromptTokens, CompletionTokens: event.CompletionTokens,
+		CachedTokens: event.CachedTokens, Images: event.Images, MicroUSD: event.CostMicroUSD,
+		PromptMicroUSD: event.PromptMicroUSD, CompletionMicroUSD: event.CompletionMicroUSD,
+		CachedMicroUSD: event.CachedMicroUSD, RequestMicroUSD: event.RequestMicroUSD, ImageMicroUSD: event.ImageMicroUSD,
+	}
+	if err := r.s.repo.AddUsage(ctx, types.UsageSpend, event.WorkspaceID, event.Model, event.RequestID, event.Timestamp, usage); err != nil {
+		return fmt.Errorf("record request spend: %w", err)
 	}
 	if event.CostMicroUSD > 0 && r.s.scheduler != nil {
 		if gate := r.s.scheduler.CreditGate(); gate != nil {
 			gate.Invalidate(ctx, event.WorkspaceID)
 		}
 	}
+	if event.ProviderWorkspaceID != "" {
+		earned := types.Usage{Requests: 1, PromptTokens: event.PromptTokens, CompletionTokens: event.CompletionTokens, CachedTokens: event.CachedTokens, Images: event.Images, MicroUSD: event.ProviderShareMicroUSD}
+		if err := r.s.repo.AddUsage(ctx, types.UsageEarned, event.ProviderWorkspaceID, event.Model, event.RequestID, event.Timestamp, earned); err != nil {
+			return fmt.Errorf("record provider earnings: %w", err)
+		}
+	}
+	return r.s.repo.CompleteAccounting(ctx, event.RequestID, generationTTL)
 }
 
 // pricingEntry renders per-unit prices as OpenRouter does ("0" when unset).

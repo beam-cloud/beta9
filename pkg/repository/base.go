@@ -197,6 +197,8 @@ type ManagedEndpointRepository interface {
 	// Route records: generation lookups
 	SaveGeneration(ctx context.Context, record *types.EventEndpointRouteSchema, ttl time.Duration) error
 	GetGeneration(ctx context.Context, generationID string) (*types.EventEndpointRouteSchema, error)
+	ListPendingAccounting(ctx context.Context, limit int64) ([]types.EventEndpointRouteSchema, error)
+	CompleteAccounting(ctx context.Context, generationID string, ttl time.Duration) error
 
 	// Usage: daily per-workspace, per-model counters (spend and provider earnings)
 	AddUsage(ctx context.Context, kind types.UsageKind, workspaceID, model, requestID string, at time.Time, delta types.Usage) error

@@ -1259,6 +1259,11 @@ type EventEndpointRouteSchema struct {
 	CachedTokens          int64     `json:"cached_tokens"`
 	Images                int64     `json:"images"`
 	CostMicroUSD          int64     `json:"cost_micro_usd"`
+	PromptMicroUSD        int64     `json:"prompt_micro_usd"`
+	CompletionMicroUSD    int64     `json:"completion_micro_usd"`
+	CachedMicroUSD        int64     `json:"cached_micro_usd"`
+	RequestMicroUSD       int64     `json:"request_micro_usd"`
+	ImageMicroUSD         int64     `json:"image_micro_usd"`
 	DurationMs            int64     `json:"duration_ms"`
 	TTFTMs                int64     `json:"ttft_ms"`
 	QueueWaitMs           int64     `json:"queue_wait_ms"`

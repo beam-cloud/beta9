@@ -335,3 +335,26 @@ func TestManagedEndpointUsageReplayRepairsFailedWrite(t *testing.T) {
 	require.Equal(t, u, result.Total)
 	require.Equal(t, u, result.PerModel["acme/model"])
 }
+
+func TestUsageLuaFailureDoesNotCommitDedupeOrPartialCounters(t *testing.T) {
+	for _, corrupt := range []string{"not-an-integer", "9007199254740991"} {
+		t.Run(corrupt, func(t *testing.T) {
+			rdb, err := NewRedisClientForTest()
+			require.NoError(t, err)
+			repo := NewManagedEndpointRedisRepository(rdb)
+			ctx, now := context.Background(), time.Now()
+			key := meKey("usage", "spend", "buyer", now.UTC().Format(time.DateOnly))
+			require.NoError(t, rdb.HSet(ctx, key, "micro_usd", corrupt).Err())
+			usage := types.Usage{Requests: 1, PromptTokens: 20, CachedTokens: 10, MicroUSD: 7, PromptMicroUSD: 4, CachedMicroUSD: 3}
+			require.Error(t, repo.AddUsage(ctx, types.UsageSpend, "buyer", "acme/model", "req-1", now, usage))
+			require.EqualValues(t, 0, rdb.Exists(ctx, meKey("usage", "seen", "spend", "req-1")).Val())
+			require.EqualValues(t, 1, rdb.HLen(ctx, key).Val(), "preflight rejects before any increment")
+			require.NoError(t, rdb.HDel(ctx, key, "micro_usd").Err())
+			require.NoError(t, repo.AddUsage(ctx, types.UsageSpend, "buyer", "acme/model", "req-1", now, usage))
+			report, err := repo.GetUsage(ctx, types.UsageSpend, "buyer", now, now)
+			require.NoError(t, err)
+			require.Equal(t, usage, report.Total)
+			require.Equal(t, usage, report.PerDay[now.UTC().Format(time.DateOnly)])
+		})
+	}
+}
