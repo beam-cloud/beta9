@@ -505,10 +505,11 @@ managedEndpoints:
     url: ""
     ref: main
     path: ""
-    deployKeySecret: ""
+    deployKey: ""
   webhook:
     secret: ""
   deployerImage: ""
+  deployerSecrets: {}
   preemption:
     enabled: true
   reconcile:

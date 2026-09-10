@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -51,6 +52,7 @@ const (
 )
 
 var shaPattern = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
+var deployerSecretNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 type gitops struct {
 	s       *Service
@@ -208,48 +210,21 @@ func (g *gitops) exitedWithoutReport(state *types.GitOpsState) bool {
 	return errors.As(err, &notFound)
 }
 
-// deployerSecrets is the admin workspace's secrets as NAME=value pairs; the
-// deployer reads image registry credentials from its environment.
-func (g *gitops) deployerSecrets(ctx context.Context, workspace *types.Workspace) ([]string, error) {
-	listed, err := g.s.backend.ListSecrets(ctx, workspace)
-	if err != nil {
-		return nil, fmt.Errorf("list admin secrets: %w", err)
+// deployerSecrets never reads workspace secrets. The cluster config explicitly
+// names which credentials the repository's build code may access.
+func (g *gitops) deployerSecrets() ([]string, error) {
+	env := make([]string, 0, len(g.s.config.DeployerSecrets))
+	for name, value := range g.s.config.DeployerSecrets {
+		if !deployerSecretNamePattern.MatchString(name) || strings.ContainsRune(value, '\x00') {
+			return nil, fmt.Errorf("invalid managedEndpoints.deployerSecrets entry %q", name)
+		}
+		if strings.HasPrefix(name, "BETA9_") || strings.HasPrefix(name, "ENDPOINTS_") || name == "STUB_ID" || name == "STUB_TYPE" {
+			return nil, fmt.Errorf("managedEndpoints.deployerSecrets entry %q is reserved", name)
+		}
+		env = append(env, name+"="+value)
 	}
-	if len(listed) == 0 {
-		return nil, nil
-	}
-	names := make([]string, 0, len(listed))
-	for _, secret := range listed {
-		names = append(names, secret.Name)
-	}
-	secrets, err := g.s.backend.GetSecretsByNameDecrypted(ctx, workspace, names)
-	if err != nil {
-		return nil, fmt.Errorf("decrypt admin secrets: %w", err)
-	}
-	env := make([]string, 0, len(secrets))
-	for _, secret := range secrets {
-		env = append(env, secret.Name+"="+secret.Value)
-	}
+	sort.Strings(env)
 	return env, nil
-}
-
-func (g *gitops) deployKey(ctx context.Context) (string, error) {
-	name := strings.TrimSpace(g.s.config.Repo.DeployKeySecret)
-	if name == "" {
-		return "", nil
-	}
-	workspace, err := g.s.AdminWorkspace(ctx)
-	if err != nil {
-		return "", err
-	}
-	secrets, err := g.s.backend.GetSecretsByNameDecrypted(ctx, workspace, []string{name})
-	if err != nil {
-		return "", fmt.Errorf("deploy key secret %q: %w", name, err)
-	}
-	if len(secrets) == 0 {
-		return "", fmt.Errorf("deploy key secret %q not found in admin workspace", name)
-	}
-	return secrets[0].Value, nil
 }
 
 // resolveHead is the commit the configured ref (a branch, or refs/... in full) points at.
@@ -258,10 +233,7 @@ func (g *gitops) resolveHead(ctx context.Context) (string, error) {
 	if !strings.HasPrefix(ref, "refs/") {
 		ref = "refs/heads/" + ref
 	}
-	key, err := g.deployKey(ctx)
-	if err != nil {
-		return "", err
-	}
+	key := strings.TrimSpace(g.s.config.Repo.DeployKey)
 	ctx, cancel := context.WithTimeout(ctx, gitopsResolveTimeout)
 	defer cancel()
 
@@ -288,7 +260,11 @@ func (g *gitops) resolveHead(ctx context.Context) (string, error) {
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("git ls-remote %s: %v: %s", ref, err, strings.TrimSpace(stderr.String()))
+		detail := strings.TrimSpace(stderr.String())
+		if key != "" {
+			detail = strings.ReplaceAll(detail, key, "[redacted]")
+		}
+		return "", fmt.Errorf("git ls-remote %s: %v: %s", ref, err, detail)
 	}
 	fields := strings.Fields(stdout.String())
 	if len(fields) < 2 || !shaPattern.MatchString(fields[0]) {
@@ -310,15 +286,12 @@ func (g *gitops) launch(ctx context.Context, state *types.GitOpsState, sha strin
 	if err != nil {
 		return err
 	}
-	key, err := g.deployKey(ctx)
-	if err != nil {
-		return err
-	}
+	key := strings.TrimSpace(g.s.config.Repo.DeployKey)
 	stub, err := g.deployerStub(ctx, workspace, image)
 	if err != nil {
 		return err
 	}
-	secrets, err := g.deployerSecrets(ctx, workspace)
+	secrets, err := g.deployerSecrets()
 	if err != nil {
 		return err
 	}

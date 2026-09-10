@@ -491,7 +491,7 @@ type ManagedEndpoint struct {
 	UpdatedAtUnixMs int64  `protobuf:"varint,8,opt,name=updated_at_unix_ms,json=updatedAtUnixMs,proto3" json:"updated_at_unix_ms,omitempty"`
 	ReadyReplicas   uint32 `protobuf:"varint,9,opt,name=ready_replicas,json=readyReplicas,proto3" json:"ready_replicas,omitempty"`
 	TotalReplicas   uint32 `protobuf:"varint,10,opt,name=total_replicas,json=totalReplicas,proto3" json:"total_replicas,omitempty"`
-	// Where fleet.yaml places the endpoint: JSON {gpu: max replicas}, 0 = every idle GPU.
+	// Where fleet.yaml places the endpoint: JSON {gpu: {priority, max_replicas}}; max_replicas 0 = every idle GPU.
 	PlacementsJson string `protobuf:"bytes,11,opt,name=placements_json,json=placementsJson,proto3" json:"placements_json,omitempty"`
 }
 
@@ -2482,7 +2482,7 @@ type GetGitOpsStatusResponse struct {
 	Ok     bool         `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
 	ErrMsg string       `protobuf:"bytes,2,opt,name=err_msg,json=errMsg,proto3" json:"err_msg,omitempty"`
 	State  *GitOpsState `protobuf:"bytes,3,opt,name=state,proto3" json:"state,omitempty"`
-	// The applied fleet.yaml as JSON {gpu: [{endpoint_id, max}]} in priority order.
+	// The applied fleet.yaml as JSON {endpoint_id: {enabled, gpus: {gpu: {priority, max_replicas}}}}.
 	FleetJson string `protobuf:"bytes,4,opt,name=fleet_json,json=fleetJson,proto3" json:"fleet_json,omitempty"`
 }
 

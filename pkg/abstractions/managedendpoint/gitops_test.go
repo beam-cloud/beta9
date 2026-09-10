@@ -10,6 +10,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -31,6 +33,55 @@ func newGitOpsForTest(t *testing.T) (*Service, *gitops) {
 	g := &gitops{s: s, lock: common.NewRedisLock(s.rdb), pending: make(chan gitopsRequest, 1)}
 	s.gitops = g
 	return s, g
+}
+
+func TestGitOpsUsesOnlyConfiguredDeployerSecrets(t *testing.T) {
+	s, g := newGitOpsForTest(t)
+	s.backend = nil // Secret resolution must not consult the admin workspace.
+	s.config.DeployerSecrets = map[string]string{"GITHUB_TOKEN": "package-token", "HF_TOKEN": "model-token"}
+	env, err := g.deployerSecrets()
+	require.NoError(t, err)
+	assert.Equal(t, []string{"GITHUB_TOKEN=package-token", "HF_TOKEN=model-token"}, env)
+
+	for _, name := range []string{"BAD=NAME", "BETA9_TOKEN", "ENDPOINTS_REPO_URL", "STUB_ID", "STUB_TYPE"} {
+		t.Run(name, func(t *testing.T) {
+			s.config.DeployerSecrets = map[string]string{name: "must-not-leak"}
+			_, err := g.deployerSecrets()
+			require.Error(t, err)
+			assert.NotContains(t, err.Error(), "must-not-leak")
+		})
+	}
+}
+
+func TestGitOpsResolveHeadUsesConfigDeployKey(t *testing.T) {
+	s, g := newGitOpsForTest(t)
+	s.backend = nil
+	s.config.Repo.URL = "git@example.invalid:models.git"
+	s.config.Repo.DeployKey = "-----BEGIN TEST KEY-----\n"
+	bin := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte(`#!/bin/sh
+key_path=${GIT_SSH_COMMAND#ssh -i }
+key_path=${key_path%% -o *}
+[ "$(cat "$key_path")" = "-----BEGIN TEST KEY-----" ] || exit 1
+printf 'abcdef1234567 refs/heads/main\n'
+`), 0o700))
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	sha, err := g.resolveHead(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "abcdef1234567", sha)
+}
+
+func TestGitOpsResolveHeadRedactsConfigTokenOnFailure(t *testing.T) {
+	s, g := newGitOpsForTest(t)
+	s.backend = nil
+	s.config.Repo.DeployKey = "private-config-token"
+	bin := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\necho \"$@\" >&2\nexit 1\n"), 0o700))
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	_, err := g.resolveHead(context.Background())
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), s.config.Repo.DeployKey)
+	assert.Contains(t, err.Error(), "[redacted]")
 }
 
 func TestGitOpsTriggerValidatesAndCoalesces(t *testing.T) {

@@ -46,10 +46,13 @@ type ManagedEndpointsConfig struct {
 	Webhook     ManagedEndpointsWebhookConfig `key:"webhook" json:"webhook"`
 	// DeployerImage is the beta9 image id (built once with the SDK and git
 	// installed) the GitOps deployer container runs from.
-	DeployerImage string                        `key:"deployerImage" json:"deployer_image"`
-	Preemption    ManagedEndpointsPreemption    `key:"preemption" json:"preemption"`
-	Reconcile     ManagedEndpointsReconcile     `key:"reconcile" json:"reconcile"`
-	Routing       ManagedEndpointsRoutingConfig `key:"routing" json:"routing"`
+	DeployerImage string `key:"deployerImage" json:"deployer_image"`
+	// DeployerSecrets supplies explicitly configured build credentials to the
+	// GitOps deployer. Store these values in the cluster's secret config.
+	DeployerSecrets map[string]string             `key:"deployerSecrets" json:"deployer_secrets"`
+	Preemption      ManagedEndpointsPreemption    `key:"preemption" json:"preemption"`
+	Reconcile       ManagedEndpointsReconcile     `key:"reconcile" json:"reconcile"`
+	Routing         ManagedEndpointsRoutingConfig `key:"routing" json:"routing"`
 	// HeartbeatInterval is what replicas are told to heartbeat at.
 	HeartbeatInterval time.Duration `key:"heartbeatInterval" json:"heartbeat_interval"`
 	// ReplicaStaleAfter marks replicas failed when no heartbeat/probe arrives.
@@ -60,11 +63,12 @@ type ManagedEndpointsConfig struct {
 }
 
 type ManagedEndpointsRepoConfig struct {
-	URL             string        `key:"url" json:"url"`
-	Ref             string        `key:"ref" json:"ref"`
-	Path            string        `key:"path" json:"path"`
-	DeployKeySecret string        `key:"deployKeySecret" json:"deploy_key_secret"`
-	PollInterval    time.Duration `key:"pollInterval" json:"poll_interval"`
+	URL  string `key:"url" json:"url"`
+	Ref  string `key:"ref" json:"ref"`
+	Path string `key:"path" json:"path"`
+	// DeployKey is an SSH private key (or HTTPS token), stored in secret config.
+	DeployKey    string        `key:"deployKey" json:"deploy_key"`
+	PollInterval time.Duration `key:"pollInterval" json:"poll_interval"`
 }
 
 type ManagedEndpointsWebhookConfig struct {
