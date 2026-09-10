@@ -164,7 +164,9 @@ func (c *controller) inventory(replicas []*types.EndpointReplica) (*clusterInven
 		slices.SortFunc(pools, func(a, b eligiblePool) int { return strings.Compare(a.Name, b.Name) })
 	}
 	for _, w := range workers {
-		if w == nil || w.Status == types.WorkerStatusDisabled || w.Gpu == "" {
+		// Only workers that can take a container now: a pending worker's GPUs
+		// are not usable by serverless yet, so they must not satisfy the floor.
+		if w == nil || w.Status != types.WorkerStatusAvailable || w.Gpu == "" {
 			continue
 		}
 		if cfg, ok := c.poolConfig(w.PoolName); !ok || !cfg.ManagedEndpoints.Enabled {

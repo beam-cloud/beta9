@@ -385,36 +385,23 @@ func (cr *ContainerRedisRepository) UpdateContainerStatus(containerId string, re
 		}
 		// A reclaimable container that stops on its own (drained by its
 		// controller, crashed, finished) is no longer something the scheduler
-		// may take capacity from; stop advertising it right away rather than
-		// at the next capacity reconciliation. Eviction victims were already
-		// taken off the books by the schedule script that chose them.
-		if storedStatus != types.ContainerStatusStopping && state.Evictable && !state.Evicting && state.WorkerId != "" {
-			if err := withdrawEvictableCapacityScript.Run(context.TODO(), cr.rdb,
-				[]string{common.RedisKeys.SchedulerWorkerState(state.WorkerId)},
-				state.Cpu, capacityMemoryForRequest(&types.ContainerRequest{Memory: state.Memory}), gpuCountForCapacity(state.Gpu, nil, state.GpuCount)).Err(); err != nil && !errors.Is(err, redis.Nil) {
-				return fmt.Errorf("failed to withdraw evictable capacity for container <%s>: %w", containerId, err)
+		// may take capacity from. Re-derive the worker's advertised capacity
+		// from container state under the worker lease, the same way capacity
+		// reconciliation does: STOPPING is already persisted, so the result is
+		// correct and idempotent regardless of how this interleaves with a
+		// concurrent reconciliation or a retry of this call.
+		if state.Evictable && state.WorkerId != "" {
+			workers := &WorkerRedisRepository{rdb: cr.rdb, lock: cr.lock}
+			err := workers.withWorker(state.WorkerId, workers.reconcileStoredWorkerCapacity)
+			var notFound *types.ErrWorkerNotFound
+			if err != nil && !errors.As(err, &notFound) {
+				return fmt.Errorf("failed to reconcile worker capacity for stopping container <%s>: %w", containerId, err)
 			}
 		}
 	}
 
 	return nil
 }
-
-// withdrawEvictableCapacityScript subtracts a stopping container's share from
-// the worker's advertised reclaimable capacity, floored at zero.
-var withdrawEvictableCapacityScript = redis.NewScript(`
-if redis.call("EXISTS", KEYS[1]) == 0 then
-	return 0
-end
-local function take(field, amount)
-	local current = tonumber(redis.call("HGET", KEYS[1], field) or "0")
-	redis.call("HSET", KEYS[1], field, math.max(current - tonumber(amount), 0))
-end
-take("evictable_cpu", ARGV[1])
-take("evictable_memory", ARGV[2])
-take("evictable_gpu_count", ARGV[3])
-return 1
-`)
 
 func containerStatusTransitionAllowed(storedStatus, requestedStatus types.ContainerStatus) bool {
 	switch storedStatus {

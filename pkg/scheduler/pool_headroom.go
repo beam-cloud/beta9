@@ -78,3 +78,67 @@ func (c *WorkerPoolCapacity) belowMinimum(sizing *types.WorkerPoolSizingConfig) 
 		c.FreeMemory < sizing.MinFreeMemory ||
 		(sizing.MinFreeGpu > 0 && c.FreeGpu < sizing.MinFreeGpu)
 }
+
+// filterWorkersByPoolHeadroom keeps an opportunistic request (a managed
+// endpoint replica) from spending the pool's minFree* floor: it drops every
+// worker of a pool whose ready free capacity, less the request, would fall
+// under the minimum. The fleet controller applies the same floor to its
+// inventory snapshot; this applies it to what is actually free at admission,
+// so a pool that filled up in between still keeps its idle GPU for serverless
+// work. Only ready workers count, and the capacity seen here has already been
+// debited by earlier requests in the same batch.
+func (s *Scheduler) filterWorkersByPoolHeadroom(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
+	if request == nil || !request.OpportunisticOnly {
+		return workers
+	}
+	ready := map[string]*WorkerPoolCapacity{}
+	for _, w := range workers {
+		if w.Status != types.WorkerStatusAvailable {
+			continue
+		}
+		c := ready[w.PoolName]
+		if c == nil {
+			c = &WorkerPoolCapacity{}
+			ready[w.PoolName] = c
+		}
+		c.FreeCpu += w.FreeCpu
+		c.FreeMemory += w.FreeMemory
+		if w.Gpu != "" {
+			c.FreeGpu += uint(w.FreeGpuCount)
+		}
+	}
+	keep := map[string]bool{}
+	for name, c := range ready {
+		sizing := s.poolSizing(name)
+		if sizing == nil {
+			keep[name] = true
+			continue
+		}
+		after := WorkerPoolCapacity{
+			FreeCpu:    c.FreeCpu - request.Cpu,
+			FreeMemory: c.FreeMemory - capacityMemoryForScheduling(request),
+			FreeGpu:    c.FreeGpu - min(c.FreeGpu, uint(gpuCountForScheduling(request))),
+		}
+		keep[name] = !after.belowMinimum(sizing)
+	}
+	filtered := make([]*types.Worker, 0, len(workers))
+	for _, w := range workers {
+		if keep[w.PoolName] {
+			filtered = append(filtered, w)
+		}
+	}
+	return filtered
+}
+
+func (s *Scheduler) poolSizing(poolName string) *types.WorkerPoolSizingConfig {
+	poolConfig, ok := s.config.Worker.Pools[poolName]
+	if !ok {
+		return nil
+	}
+	sizing, err := parsePoolSizingConfig(poolConfig.PoolSizing)
+	if err != nil {
+		return nil
+	}
+	applyBuildPoolSizingMinimums(poolName, s.config, sizing)
+	return sizing
+}

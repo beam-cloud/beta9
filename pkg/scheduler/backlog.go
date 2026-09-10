@@ -18,7 +18,9 @@ type RequestBacklog struct {
 	ready chan struct{}
 }
 
-// popReadyBacklogScript fills the batch from the foreground lane first, then the background lane.
+// popReadyBacklogScript fills the batch from the foreground lane first, then
+// the background lane. The last element is the depth left in both lanes, so
+// the metric costs no extra round trip.
 var popReadyBacklogScript = redis.NewScript(`
 local limit = tonumber(ARGV[2])
 local out = {}
@@ -35,6 +37,11 @@ for _, key in ipairs(KEYS) do
 		limit = limit - #requests
 	end
 end
+local depth = 0
+for _, key in ipairs(KEYS) do
+	depth = depth + redis.call("ZCARD", key)
+end
+out[#out + 1] = depth
 return out
 `)
 
@@ -66,7 +73,12 @@ func (rb *RequestBacklog) PushAfter(request *types.ContainerRequest, delay time.
 		readyAt = request.Timestamp
 	}
 
-	if err := rb.rdb.ZAdd(context.TODO(), lane(request), redis.Z{Score: float64(readyAt.UnixNano()), Member: jsonData}).Err(); err != nil {
+	ctx := context.TODO()
+	pipe := rb.rdb.Pipeline()
+	pipe.ZAdd(ctx, lane(request), redis.Z{Score: float64(readyAt.UnixNano()), Member: jsonData})
+	foreground := pipe.ZCard(ctx, common.RedisKeys.SchedulerContainerRequests())
+	background := pipe.ZCard(ctx, common.RedisKeys.SchedulerBackgroundRequests())
+	if _, err := pipe.Exec(ctx); err != nil {
 		return err
 	}
 
@@ -76,7 +88,7 @@ func (rb *RequestBacklog) PushAfter(request *types.ContainerRequest, delay time.
 		default:
 		}
 	}
-	metrics.RecordSchedulerBacklogDepth(rb.Len())
+	metrics.RecordSchedulerBacklogDepth(foreground.Val() + background.Val())
 	return nil
 }
 
@@ -104,9 +116,16 @@ func (rb *RequestBacklog) PopN(count int64) ([]*types.ContainerRequest, error) {
 	}
 
 	items, ok := result.([]interface{})
-	if !ok {
+	if !ok || len(items) == 0 {
 		return nil, fmt.Errorf("unexpected backlog pop result: %T", result)
 	}
+
+	depth, ok := items[len(items)-1].(int64)
+	if !ok {
+		return nil, fmt.Errorf("unexpected backlog depth type: %T", items[len(items)-1])
+	}
+	items = items[:len(items)-1]
+	metrics.RecordSchedulerBacklogDepth(depth)
 
 	if len(items) == 0 {
 		return nil, errors.New("backlog empty")
@@ -127,13 +146,18 @@ func (rb *RequestBacklog) PopN(count int64) ([]*types.ContainerRequest, error) {
 		requests = append(requests, &poppedItem)
 	}
 
-	metrics.RecordSchedulerBacklogDepth(rb.Len())
 	return requests, nil
 }
 
-// Len is the number of requests waiting in both lanes.
+// Len is the number of requests waiting in both lanes. Not on the scheduling
+// path: push and pop learn the depth from their own round trip.
 func (rb *RequestBacklog) Len() int64 {
 	ctx := context.TODO()
-	return rb.rdb.ZCard(ctx, common.RedisKeys.SchedulerContainerRequests()).Val() +
-		rb.rdb.ZCard(ctx, common.RedisKeys.SchedulerBackgroundRequests()).Val()
+	pipe := rb.rdb.Pipeline()
+	foreground := pipe.ZCard(ctx, common.RedisKeys.SchedulerContainerRequests())
+	background := pipe.ZCard(ctx, common.RedisKeys.SchedulerBackgroundRequests())
+	if _, err := pipe.Exec(ctx); err != nil {
+		return 0
+	}
+	return foreground.Val() + background.Val()
 }

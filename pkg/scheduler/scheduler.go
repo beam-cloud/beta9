@@ -1384,7 +1384,8 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 	// binds no chain, which makes every failover seam below a no-op.
 	chain := s.failoverChainFor(request)
 
-	filteredWorkers := filterWorkersByMachine(workers, request) // Machine-pinned requests only see their machine's worker
+	filteredWorkers := s.filterWorkersByPoolHeadroom(workers, request) // Opportunistic requests leave the pool's minFree* floor idle
+	filteredWorkers = filterWorkersByMachine(filteredWorkers, request) // Machine-pinned requests only see their machine's worker
 	filteredWorkers = s.filterWorkersByWorkspaceScope(filteredWorkers, request)
 	filteredWorkers = filterWorkersByPoolSelectorForFailover(filteredWorkers, request, chain)
 	filteredWorkers = s.filterAgentWorkersByStorage(filteredWorkers, request)
