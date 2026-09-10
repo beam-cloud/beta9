@@ -767,6 +767,12 @@ func (r *router) proxy(ctx context.Context, rq *routeRequest, endpoint *types.Ma
 		status := resp.StatusCode
 		if err != nil && status < 300 {
 			status = http.StatusBadGateway // the stream broke: not a success, not billed
+			if ctx.Err() == nil {
+				// HTTP headers are already committed. An SSE error lets SDKs
+				// distinguish preemption from a completed generation.
+				_, _ = w.Write([]byte("data: {\"error\":{\"message\":\"Upstream inference stream ended before completion\",\"type\":\"upstream_error\",\"code\":\"upstream_stream_interrupted\"}}\n\n"))
+				w.Flush()
+			}
 		}
 		if err == nil && status < 300 && billable(endpoint) && !usage.Found {
 			// The stream is already with the client; record a 502 so it is not billed.
@@ -830,16 +836,29 @@ func (r *router) recordMissingUsage(rq *routeRequest, endpoint *types.ManagedEnd
 }
 
 // relayStream forwards SSE events as they arrive, stamping the generation id,
-// pulling usage from the final chunk and measuring TTFT at the first output.
+// retaining cumulative usage and measuring TTFT at the first output. A clean
+// transport EOF without the OpenAI terminal marker is still an incomplete reply.
 func relayStream(w *echo.Response, body io.Reader, requestID string, sentAt time.Time) (Usage, time.Duration, error) {
 	flusher, _ := w.Writer.(http.Flusher)
 	reader := bufio.NewReaderSize(body, 64<<10)
 	var usage Usage
 	var ttft time.Duration
+	var done bool
+	var upstreamError bool
 	for {
 		line, err := reader.ReadBytes('\n')
 		if len(line) > 0 {
 			if bytes.HasPrefix(line, []byte("data:")) {
+				payload := bytes.TrimSpace(line[len("data:"):])
+				done = done || bytes.Equal(payload, []byte("[DONE]"))
+				if bytes.Contains(payload, []byte(`"error"`)) {
+					var frame struct {
+						Error json.RawMessage `json:"error"`
+					}
+					if json.Unmarshal(payload, &frame) == nil && len(frame.Error) > 0 && string(frame.Error) != "null" {
+						upstreamError = true
+					}
+				}
 				if ttft == 0 && generatesOutput(line) {
 					ttft = time.Since(sentAt)
 				}
@@ -856,6 +875,9 @@ func relayStream(w *echo.Response, body io.Reader, requestID string, sentAt time
 			}
 		}
 		if errors.Is(err, io.EOF) {
+			if !done || upstreamError {
+				return usage, ttft, io.ErrUnexpectedEOF
+			}
 			return usage, ttft, nil
 		}
 		if err != nil {
