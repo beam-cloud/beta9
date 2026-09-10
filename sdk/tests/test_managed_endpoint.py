@@ -34,14 +34,13 @@ def test_endpoint_spec_serializes():
     assert spec["public"] is True
     assert "harness" not in spec
     assert spec["drain_seconds"] == 30
-    assert spec["protected"] is False
+    assert "protected" not in spec
     assert "routes" not in spec
     assert ep.ports == [8000]
 
 
 def test_policy_fields_survive_pruning():
-    spec = ManagedEndpoint(id="a/b", preemptible=False, drain_seconds=0).spec()
-    assert spec["protected"] is True
+    spec = ManagedEndpoint(id="a/b", drain_seconds=0).spec()
     assert spec["drain_seconds"] == 0
 
 
@@ -59,6 +58,7 @@ def test_access_is_private_by_default_and_separate_from_catalog():
         (Catalog, {"free": True}),
         (Gpu, {"harness": {}}),
         (ManagedEndpoint, {"id": "a/b", "harness": True}),
+        (ManagedEndpoint, {"id": "a/b", "preemptible": False}),
     ],
 )
 def test_removed_options_are_rejected(factory, kwargs):

@@ -1,7 +1,7 @@
 """
 Managed endpoints: platform-owned inference endpoints declared in a git repo
 and served through ``/v1``. An ``app.py`` exports one ``ManagedEndpoint`` that
-says how the engine runs; ``fleet.yaml`` at the repo root says which endpoints
+says how the engine runs; ``config.yaml`` at the repo root says which endpoints
 fill each GPU type, in what order and with what cap. The GitOps reconciler
 deploys both. Beam handles placement automatically.
 """
@@ -38,7 +38,7 @@ def _drop_empty(value: Any) -> Any:
 class Gpu:
     """How the engine runs on one GPU type: GPUs per replica (tensor parallel),
     restart-class args and the live engine config. Where and how many replicas
-    run is fleet.yaml's decision, not the app's."""
+    run is config.yaml's decision, not the app's."""
 
     count: int = 1
     engine_args: List[str] = field(default_factory=list)
@@ -105,12 +105,11 @@ class ManagedEndpoint(RunnerAbstraction):
         engine: Engine name for validation/observability (``vllm``, ``sglang``...).
         port / health / metrics: Where the engine listens and its readiness / Prometheus paths.
         gpu: GPU types the engine can run on, optionally with per-type ``Gpu`` settings.
-            Which of these are actually used, and with what priority and cap, is ``fleet.yaml``'s call.
+            ``config.yaml`` sets replica minimums, limits, priority, and preemption.
         routes: Override the default routes for ``kind``.
         pricing / catalog: Billing and ``/v1/models`` metadata.
         public / allowed_workspaces: Who may discover and call the endpoint. Defaults to admin-only.
         Instrumented engines register live tuning automatically; Gpu.config supplies their seed.
-        preemptible: Whether serverless work may evict replicas (default). ``False`` holds the GPUs.
         drain_seconds: Grace for in-flight requests on eviction or replacement; ``0`` is immediate.
         rollout: ``wait_for_capacity`` preserves the last serving replica. ``replace`` allows
             downtime to release its GPU for a new version when there is no spare capacity.
@@ -132,7 +131,6 @@ class ManagedEndpoint(RunnerAbstraction):
         catalog: Optional[Catalog] = None,
         public: bool = False,
         allowed_workspaces: Optional[List[str]] = None,
-        preemptible: bool = True,
         drain_seconds: int = 5,
         cpu: Union[int, float, str] = 4.0,
         memory: Union[int, str] = "16Gi",
@@ -152,7 +150,6 @@ class ManagedEndpoint(RunnerAbstraction):
         self.catalog = catalog or Catalog()
         self.public = bool(public)
         self.allowed_workspaces = list(allowed_workspaces or [])
-        self.preemptible = bool(preemptible)
         self.drain_seconds = int(drain_seconds)
         if rollout not in {"wait_for_capacity", "replace"}:
             raise ValueError("rollout must be wait_for_capacity or replace")
@@ -198,7 +195,6 @@ class ManagedEndpoint(RunnerAbstraction):
             }
         )
         # Always sent: an explicit False / 0 must not be pruned.
-        spec["protected"] = not self.preemptible
         spec["drain_seconds"] = self.drain_seconds
         # A GPU key with no settings still declares the GPU; it must never be pruned.
         if self.gpus:
