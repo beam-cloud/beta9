@@ -307,7 +307,7 @@ func (s *Service) replicaEvent(replica *types.EndpointReplica, action, message s
 	s.emit(types.EventEndpointReplica, types.EventEndpointSchema{
 		EndpointID: replica.EndpointID, Action: action, ReplicaID: replica.ID, ContainerID: replica.ContainerID,
 		GPU: replica.GPU, Version: replica.Version, WorkerID: replica.WorkerID,
-		PoolName: replica.PoolName, Locality: replica.Locality, Message: message, Data: data,
+		PoolName: replica.PoolName, Message: message, Data: data,
 	})
 }
 

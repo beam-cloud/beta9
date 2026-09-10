@@ -26,6 +26,55 @@ func (s *captureEventSink) PushEventSync(event cloudevents.Event) error {
 	return s.PushEvent(event)
 }
 
+func TestHostedAuditPayloadKeepsPlacementPrivate(t *testing.T) {
+	storage, callback := &captureEventSink{}, &captureEventSink{}
+	repo := &EventClientRepo{storageSinks: []eventSink{storage}, callbackSinks: []eventSink{callback}}
+	private := types.EventEndpointRouteSchema{
+		EndpointID: "qwen/model", WorkspaceID: "customer", RequestID: "request-1", Model: "qwen/model",
+		Locality: "internal-placement", PromptTokens: 42, CompletionTokens: 9, CostMicroUSD: 7,
+		ProviderWorkspaceID: "provider", ProviderShareMicroUSD: 3,
+	}
+	before := private
+	repo.PushEndpointRouteEvent(private)
+	if !reflect.DeepEqual(private, before) {
+		t.Fatal("public audit serialization changed the caller's private accounting record")
+	}
+	// Authored data is evidence, not platform placement metadata. Keep it exact.
+	data := map[string]any{"locality": "experiment-label", "region": "author-label"}
+	repo.PushEndpointEvent(types.EventEndpointReplica, types.EventEndpointSchema{
+		EndpointID: "qwen/model", Action: "replica.ready", Data: data,
+	})
+	for _, sink := range []*captureEventSink{storage, callback} {
+		if len(sink.events) != 2 {
+			t.Fatalf("expected route and replica audit events, got %d", len(sink.events))
+		}
+		for index, event := range sink.events {
+			var payload map[string]any
+			if err := json.Unmarshal(event.Data(), &payload); err != nil {
+				t.Fatal(err)
+			}
+			for _, field := range []string{"locality", "region", "regions", "datacenters"} {
+				if _, exists := payload[field]; exists {
+					t.Fatalf("%s audit event exposed platform placement field %s", event.Type(), field)
+				}
+			}
+			if index == 0 {
+				for field, expected := range map[string]any{
+					"request_id": "request-1", "workspace_id": "customer", "model": "qwen/model",
+					"prompt_tokens": float64(42), "completion_tokens": float64(9), "cost_micro_usd": float64(7),
+					"provider_workspace_id": "provider", "provider_share_micro_usd": float64(3),
+				} {
+					if payload[field] != expected {
+						t.Fatalf("route audit field %s = %v, want %v", field, payload[field], expected)
+					}
+				}
+			} else if !reflect.DeepEqual(payload["data"], data) {
+				t.Fatalf("author-provided audit data changed: %v", payload["data"])
+			}
+		}
+	}
+}
+
 func TestEventHTTPSinkDeliversCloudEvent(t *testing.T) {
 	type callbackRequest struct {
 		body []byte

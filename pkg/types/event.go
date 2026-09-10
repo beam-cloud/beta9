@@ -1222,7 +1222,6 @@ type EventEndpointSchema struct {
 	WorkerID    string         `json:"worker_id,omitempty"`
 	PoolName    string         `json:"pool_name,omitempty"`
 	GPU         string         `json:"gpu,omitempty"`
-	Locality    string         `json:"locality,omitempty"`
 	Revision    uint64         `json:"revision,omitempty"`
 	Message     string         `json:"message,omitempty"`
 	Data        map[string]any `json:"data,omitempty"`

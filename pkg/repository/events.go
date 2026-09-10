@@ -862,6 +862,9 @@ func (r *EventClientRepo) PushEndpointRouteEvent(event types.EventEndpointRouteS
 	if event.Timestamp.IsZero() {
 		event.Timestamp = time.Now().UTC()
 	}
+	// Placement belongs to private accounting state, not the hosted audit API.
+	// This value copy leaves the caller's generation record unchanged.
+	event.Locality = ""
 	r.pushEvent(types.EventEndpointRoute, types.EventEndpointSchemaVersion, event)
 }
 
