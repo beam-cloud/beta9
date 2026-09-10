@@ -37,12 +37,12 @@ def _drop_empty(value: Any) -> Any:
 @dataclass
 class Gpu:
     """How the engine runs on one GPU type: GPUs per replica (tensor parallel),
-    restart-class args and the live harness seed. Where and how many replicas
+    restart-class args and the live engine config. Where and how many replicas
     run is fleet.yaml's decision, not the app's."""
 
     count: int = 1
     engine_args: List[str] = field(default_factory=list)
-    harness: Dict[str, Any] = field(default_factory=dict)
+    config: Dict[str, Any] = field(default_factory=dict)
 
     to_dict = asdict
 
@@ -62,23 +62,13 @@ class Pricing:
 
 @dataclass
 class Catalog:
-    """Public listing metadata for ``GET /v1/models`` (OpenRouter shape)."""
+    """Display metadata. Pricing, access, and runtime behavior live on the endpoint."""
 
     name: str = ""
     description: str = ""
-    hf_id: str = ""
     context_length: int = 0
-    max_completion_tokens: int = 0
-    tokenizer: str = ""
-    instruct_type: str = ""
-    modalities: List[str] = field(default_factory=list)
-    supported_parameters: List[str] = field(default_factory=list)
-    public: bool = False
-    allowed_workspaces: List[str] = field(default_factory=list)
-    free: bool = False
 
-    def to_dict(self) -> Dict[str, Any]:
-        return {**asdict(self), "public": bool(self.public)}
+    to_dict = asdict
 
 
 GpuArg = Union[
@@ -118,7 +108,8 @@ class ManagedEndpoint(RunnerAbstraction):
             Which of these are actually used, and with what priority and cap, is ``fleet.yaml``'s call.
         routes: Override the default routes for ``kind``.
         pricing / catalog: Billing and ``/v1/models`` metadata.
-        harness: Whether the engine runs the beta9 harness (live tuning over RPC).
+        public / allowed_workspaces: Who may discover and call the endpoint. Defaults to admin-only.
+        Instrumented engines register live tuning automatically; Gpu.config supplies their seed.
         preemptible: Whether serverless work may evict replicas (default). ``False`` holds the GPUs.
         drain_seconds: Grace for in-flight requests on eviction or replacement; ``0`` is immediate.
         rollout: ``wait_for_capacity`` preserves the last serving replica. ``replace`` allows
@@ -139,7 +130,8 @@ class ManagedEndpoint(RunnerAbstraction):
         routes: Optional[List[str]] = None,
         pricing: Optional[Pricing] = None,
         catalog: Optional[Catalog] = None,
-        harness: bool = False,
+        public: bool = False,
+        allowed_workspaces: Optional[List[str]] = None,
         preemptible: bool = True,
         drain_seconds: int = 5,
         cpu: Union[int, float, str] = 4.0,
@@ -158,7 +150,8 @@ class ManagedEndpoint(RunnerAbstraction):
         self.routes = list(routes or [])
         self.pricing = pricing or Pricing()
         self.catalog = catalog or Catalog()
-        self.harness = bool(harness)
+        self.public = bool(public)
+        self.allowed_workspaces = list(allowed_workspaces or [])
         self.preemptible = bool(preemptible)
         self.drain_seconds = int(drain_seconds)
         if rollout not in {"wait_for_capacity", "replace"}:
@@ -199,7 +192,8 @@ class ManagedEndpoint(RunnerAbstraction):
                 "routes": self.routes,
                 "pricing": self.pricing.to_dict(),
                 "catalog": self.catalog.to_dict(),
-                "harness": self.harness,
+                "public": self.public,
+                "allowed_workspaces": self.allowed_workspaces,
                 "rollout": self.rollout,
             }
         )

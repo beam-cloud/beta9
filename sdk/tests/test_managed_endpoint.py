@@ -16,23 +16,23 @@ def test_endpoint_spec_serializes():
         image=Image(base_image="vllm/vllm-openai:latest"),
         entrypoint=["vllm", "serve", "x"],
         gpu={
-            "H100": Gpu(count=2, engine_args=["--tp", "2"], harness={"max_num_seqs": 256}),
+            "H100": Gpu(count=2, engine_args=["--tp", "2"], config={"max_num_seqs": 256}),
             "A100-80": None,
         },
         pricing=Pricing(prompt_tokens="0.0000002"),
-        catalog=Catalog(name="GLM", context_length=131072, public=True),
-        harness=True,
+        catalog=Catalog(name="GLM", context_length=131072),
+        public=True,
         drain_seconds=30,
     )
     spec = ep.spec()
     assert spec["id"] == "zai-org/glm-4.5-air"
     assert spec["gpu"] == {
-        "H100": {"count": 2, "engine_args": ["--tp", "2"], "harness": {"max_num_seqs": 256}},
+        "H100": {"count": 2, "engine_args": ["--tp", "2"], "config": {"max_num_seqs": 256}},
         "A100-80": {"count": 1},
     }
     assert spec["pricing"] == {"prompt_tokens": "0.0000002"}
-    assert spec["catalog"]["public"] is True
-    assert spec["harness"] is True
+    assert spec["public"] is True
+    assert "harness" not in spec
     assert spec["drain_seconds"] == 30
     assert spec["protected"] is False
     assert "routes" not in spec
@@ -43,6 +43,27 @@ def test_policy_fields_survive_pruning():
     spec = ManagedEndpoint(id="a/b", preemptible=False, drain_seconds=0).spec()
     assert spec["protected"] is True
     assert spec["drain_seconds"] == 0
+
+
+def test_access_is_private_by_default_and_separate_from_catalog():
+    spec = ManagedEndpoint(id="a/b", allowed_workspaces=["workspace-id"]).spec()
+    assert spec["public"] is False
+    assert spec["allowed_workspaces"] == ["workspace-id"]
+    assert set(Catalog().to_dict()) == {"name", "description", "context_length"}
+
+
+@pytest.mark.parametrize(
+    "factory,kwargs",
+    [
+        (Catalog, {"public": True}),
+        (Catalog, {"free": True}),
+        (Gpu, {"harness": {}}),
+        (ManagedEndpoint, {"id": "a/b", "harness": True}),
+    ],
+)
+def test_removed_options_are_rejected(factory, kwargs):
+    with pytest.raises(TypeError, match="unexpected keyword"):
+        factory(**kwargs)
 
 
 def test_gpu_list_and_cpu_default():
