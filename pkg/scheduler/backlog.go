@@ -19,8 +19,7 @@ type RequestBacklog struct {
 }
 
 // popReadyBacklogScript fills the batch from the foreground lane first, then
-// the background lane. The last element is the depth left in both lanes, so
-// the metric costs no extra round trip.
+// the background lane. The last element is the remaining depth of both lanes.
 var popReadyBacklogScript = redis.NewScript(`
 local limit = tonumber(ARGV[2])
 local out = {}
@@ -149,8 +148,7 @@ func (rb *RequestBacklog) PopN(count int64) ([]*types.ContainerRequest, error) {
 	return requests, nil
 }
 
-// Len is the number of requests waiting in both lanes. Not on the scheduling
-// path: push and pop learn the depth from their own round trip.
+// Len is the number of requests waiting in both lanes.
 func (rb *RequestBacklog) Len() int64 {
 	ctx := context.TODO()
 	pipe := rb.rdb.Pipeline()

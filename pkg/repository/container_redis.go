@@ -383,13 +383,9 @@ func (cr *ContainerRedisRepository) UpdateContainerStatus(containerId string, re
 		if err := cr.releaseContainerConcurrencyReservation(context.TODO(), state.WorkspaceId, containerId); err != nil {
 			return err
 		}
-		// A reclaimable container that stops on its own (drained by its
-		// controller, crashed, finished) is no longer something the scheduler
-		// may take capacity from. Re-derive the worker's advertised capacity
-		// from container state under the worker lease, the same way capacity
-		// reconciliation does: STOPPING is already persisted, so the result is
-		// correct and idempotent regardless of how this interleaves with a
-		// concurrent reconciliation or a retry of this call.
+		// Stop advertising an evictable container as reclaimable. Re-deriving
+		// under the worker lease (STOPPING is already persisted) is idempotent
+		// and safe against concurrent reconciliation.
 		if state.Evictable && state.WorkerId != "" {
 			workers := &WorkerRedisRepository{rdb: cr.rdb, lock: cr.lock}
 			err := workers.withWorker(state.WorkerId, workers.reconcileStoredWorkerCapacity)

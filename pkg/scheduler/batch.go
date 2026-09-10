@@ -14,8 +14,7 @@ import (
 
 const requestSchedulingParallelism = 128
 
-// backgroundSettle bounds how many unplaceable background requests are being
-// failed at once, across batches.
+// backgroundSettle bounds concurrent background failure handling.
 var backgroundSettle = make(chan struct{}, 16)
 
 type schedulingBatch struct {
@@ -24,10 +23,8 @@ type schedulingBatch struct {
 	batchSize int
 
 	schedules []plannedSchedule
-	// deferred holds background requests that found no idle capacity. Failing
-	// one is a dozen Redis calls (state delete under lock, indexes, status);
-	// they run after the batch is committed and off the scheduling loop so
-	// serverless dispatch never waits behind them.
+	// deferred is background work that found no idle capacity; it is failed
+	// after dispatch so serverless requests never wait behind its cleanup.
 	deferred []*schedulingAttempt
 }
 
@@ -134,9 +131,7 @@ func (b *schedulingBatch) planRequest(request *types.ContainerRequest, attempt *
 	planned = true
 }
 
-// unplaced handles a request that fits no worker in this batch. Serverless
-// work moves on to waiting or provisioning now; background work is failed
-// after the batch is dispatched (see deferred).
+// unplaced handles a request that fits no worker in this batch.
 func (b *schedulingBatch) unplaced(attempt *schedulingAttempt) {
 	if isBackground(attempt.request) {
 		b.deferred = append(b.deferred, attempt)

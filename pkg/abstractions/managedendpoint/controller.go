@@ -147,11 +147,8 @@ func localityOf(name string, cfg types.WorkerPoolConfig) string {
 }
 
 // inventory is the idle GPUs replicas may fill: free GPUs of ready, opted-in
-// workers, less replicas still being scheduled (the worker has not reserved
-// them yet) and less the pool's minFree* floor, which stays idle for
-// serverless work. A pool with no CPU or memory above its floor has no room
-// either, however many GPUs are idle. This snapshot guides placement; the
-// scheduler enforces the same floor when it admits each replica.
+// workers, less replicas still being scheduled and the pool's minFree* floor.
+// The scheduler enforces the same floor at admission.
 func (c *controller) inventory(replicas []*types.EndpointReplica) (*clusterInventory, error) {
 	workers, err := c.s.workers.GetAllWorkers()
 	if err != nil {
@@ -170,8 +167,7 @@ func (c *controller) inventory(replicas []*types.EndpointReplica) (*clusterInven
 		slices.SortFunc(pools, func(a, b eligiblePool) int { return strings.Compare(a.Name, b.Name) })
 	}
 	for _, w := range workers {
-		// Only workers that can take a container now: a pending worker's GPUs
-		// are not usable by serverless yet, so they must not satisfy the floor.
+		// Pending workers cannot serve anything yet and must not satisfy the floor.
 		if w == nil || w.Status != types.WorkerStatusAvailable || w.Gpu == "" {
 			continue
 		}

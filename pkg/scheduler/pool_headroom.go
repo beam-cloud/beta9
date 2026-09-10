@@ -79,14 +79,10 @@ func (c *WorkerPoolCapacity) belowMinimum(sizing *types.WorkerPoolSizingConfig) 
 		(sizing.MinFreeGpu > 0 && c.FreeGpu < sizing.MinFreeGpu)
 }
 
-// filterWorkersByPoolHeadroom keeps an opportunistic request (a managed
-// endpoint replica) from spending the pool's minFree* floor: it drops every
-// worker of a pool whose ready free capacity, less the request, would fall
-// under the minimum. The fleet controller applies the same floor to its
-// inventory snapshot; this applies it to what is actually free at admission,
-// so a pool that filled up in between still keeps its idle GPU for serverless
-// work. Only ready workers count, and the capacity seen here has already been
-// debited by earlier requests in the same batch.
+// filterWorkersByPoolHeadroom drops, for an opportunistic request, every worker
+// of a pool whose ready free capacity would fall under its minFree* floor once
+// the request is placed. Capacity here is already debited by earlier requests
+// in the batch.
 func (s *Scheduler) filterWorkersByPoolHeadroom(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
 	if request == nil || !request.OpportunisticOnly {
 		return workers

@@ -120,10 +120,8 @@ class ManagedEndpoint(RunnerAbstraction):
         routes: Override the default routes for ``kind``.
         pricing / catalog: Billing and ``/v1/models`` metadata.
         harness: Whether the engine runs the beta9 harness (live tuning over RPC).
-        preemptible: Whether serverless work may evict replicas to take their GPUs
-            (the default). ``False`` protects the model: it holds its GPUs until retired.
-        drain_seconds: Grace for in-flight requests when a replica is evicted or
-            replaced; ``0`` stops immediately.
+        preemptible: Whether serverless work may evict replicas (default). ``False`` holds the GPUs.
+        drain_seconds: Grace for in-flight requests on eviction or replacement; ``0`` is immediate.
     """
 
     def __init__(
@@ -199,8 +197,7 @@ class ManagedEndpoint(RunnerAbstraction):
                 "harness": self.harness,
             }
         )
-        # Policy fields are sent even when falsy: the gateway must see an
-        # explicit protected=False / drain_seconds=0, not a pruned default.
+        # Always sent: an explicit False / 0 must not be pruned.
         spec["protected"] = not self.preemptible
         spec["drain_seconds"] = self.drain_seconds
         # A GPU key with no settings still declares the GPU; it must never be pruned.
