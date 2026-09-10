@@ -19,8 +19,10 @@ fi
 
 # Reattaching an Okteto terminal must not start another watcher or gateway.
 exec 9>"$runtime_dir/reload.lock"
-# A short-lived sleep child may still own the descriptor after terminal exit.
-flock -w 2 9 || { echo 'A hosted gateway source watcher is already running.'; exit 1; }
+# Keep a reattached Okteto session alive while the existing watcher supervises
+# the gateway. Exiting here also ends the client's source synchronization.
+# If that watcher exits, this one acquires the lock and resumes supervision.
+until flock -w 2 9; do sleep 1; done
 printf '%s\n' "$$" >"$runtime_dir/reload.pid"
 
 log() { printf '[hosted-dev] %s\n' "$*"; }

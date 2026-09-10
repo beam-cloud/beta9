@@ -22,8 +22,9 @@ the packaged gateway during initial compilation or rollback. Routing and model
 supervision remain active. Source-built gateways use the normal mounted AWS
 config at `/etc/beta9/config.yaml`. Neither AWS config nor its branch selection
 needs a compatibility alias. The private bootstrap file never enters source sync
-or the repository; Okteto copies it separately. Remove the local file after the
-session is started, and regenerate it from the verified secret for the next one.
+or the repository; Okteto copies it separately. Keep the mode-0600 file for the
+whole session: Okteto rereads it when reconnecting. Remove it only after the
+session is stopped, and regenerate it from the verified secret for the next one.
 
 Use an explicit staging context and a separate Okteto state directory so local
 k3d development remains independent:
@@ -57,7 +58,8 @@ pod restart. Edits arriving during a build are compiled before restarting once.
 
 The watcher ignores terminal hangups and records its PID in
 `/var/tmp/beta9-hosted-dev/reload.pid`. A file lock prevents duplicate watchers.
-To pause builds and binary replacement while keeping the gateway supervised,
+A reattached session waits for the existing watcher instead of exiting and
+stopping source sync. To pause builds and binary replacement while keeping the gateway supervised,
 create `/var/tmp/beta9-hosted-dev/build-hold` in the pod; remove it to resume.
 The hold also prevents replacement if it is created during an ongoing build.
 
