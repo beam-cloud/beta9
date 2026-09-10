@@ -164,6 +164,13 @@ func (g *gitops) sync(ctx context.Context, req gitopsRequest) error {
 	}
 	retry, run := needsRun(state, sha, req.force, time.Now())
 	if !run {
+		// A recovered repository can still point at the already applied commit.
+		// Clear only the lookup failure after actually resolving the ref; other
+		// deployment errors must survive a poll that does not run a deployer.
+		if req.sha == "" && strings.HasPrefix(state.LastError, "resolve head: ") {
+			state.LastError = ""
+			return g.s.repo.SaveGitOpsState(ctx, state)
+		}
 		return nil
 	}
 	if err := g.launch(ctx, state, sha, req.force, retry); err != nil {

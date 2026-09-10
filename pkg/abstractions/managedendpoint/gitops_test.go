@@ -85,6 +85,41 @@ func TestGitOpsResolveHeadRedactsConfigTokenOnFailure(t *testing.T) {
 	assert.Contains(t, err.Error(), "[redacted]")
 }
 
+func TestGitOpsPollRecoversAtUnchangedCommit(t *testing.T) {
+	sha := strings.Repeat("a", 40)
+	bin := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\nprintf '"+sha+" refs/heads/main\\n'\n"), 0o700))
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	for _, tc := range []struct {
+		name, requestedSHA, previousError, wantError string
+	}{
+		{name: "recovered poll", previousError: "resolve head: permission denied"},
+		{name: "explicit SHA does not verify access", requestedSHA: sha, previousError: "resolve head: permission denied", wantError: "resolve head: permission denied"},
+		{name: "deployment error remains visible", previousError: "launch deployer: unavailable", wantError: "launch deployer: unavailable"},
+		{name: "healthy poll"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, g := newGitOpsForTest(t)
+			s.backend = nil // An unchanged commit must not launch a deployer.
+			ctx := context.Background()
+			lastRun := time.Now().Add(-time.Minute).UTC().Truncate(time.Millisecond)
+			require.NoError(t, s.repo.SaveGitOpsState(ctx, &types.GitOpsState{
+				LastSHA: sha, TargetSHA: sha, FleetSHA: sha, LastError: tc.previousError,
+				LastRunAt: lastRun, PerEndpoint: map[string]types.GitOpsEndpointState{},
+			}))
+			require.NoError(t, g.sync(ctx, gitopsRequest{sha: tc.requestedSHA}))
+			state, err := s.repo.GetGitOpsState(ctx)
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantError, state.LastError)
+			assert.Equal(t, sha, state.LastSHA)
+			assert.Equal(t, sha, state.TargetSHA)
+			assert.Equal(t, lastRun, state.LastRunAt, "a lookup recovery must not reset deployment retry backoff")
+			assert.False(t, state.Running)
+			assert.Empty(t, state.RunID)
+		})
+	}
+}
+
 func TestGitOpsTriggerValidatesAndCoalesces(t *testing.T) {
 	_, g := newGitOpsForTest(t)
 
