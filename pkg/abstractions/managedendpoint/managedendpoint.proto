@@ -53,7 +53,7 @@ message EndpointReplica {
   uint32 version = 3;
   string gpu = 4;
   uint32 gpu_count = 5;
-  string locality = 6;
+  reserved 6;
   string pool_name = 7;
   string container_id = 8;
   string worker_id = 9;

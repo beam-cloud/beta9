@@ -65,7 +65,6 @@ class EndpointReplica(betterproto.Message):
     version: int = betterproto.uint32_field(3)
     gpu: str = betterproto.string_field(4)
     gpu_count: int = betterproto.uint32_field(5)
-    locality: str = betterproto.string_field(6)
     pool_name: str = betterproto.string_field(7)
     container_id: str = betterproto.string_field(8)
     worker_id: str = betterproto.string_field(9)

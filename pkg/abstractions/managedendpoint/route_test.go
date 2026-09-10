@@ -2,15 +2,60 @@ package managedendpoint
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/common/llmroute"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestHostedResponsesKeepPlacementInternal(t *testing.T) {
+	s := newServiceForTest(t)
+	r := newRouter(s)
+	endpoint := seedEndpoint(t, s)
+	replica := seedReplica(t, s, endpoint)
+	replica.Locality = "internal-placement"
+	replica.Status = types.ReplicaStatusReady
+	require.NoError(t, s.repo.SaveReplica(context.Background(), replica))
+	require.NoError(t, s.repo.SaveGeneration(context.Background(), &types.EventEndpointRouteSchema{
+		RequestID: "req-placement", Model: endpoint.Spec.ID, WorkspaceID: "user-ws",
+		Locality: replica.Locality, Timestamp: time.Now(), PromptTokens: 10,
+	}, generationTTL))
+	get := func(path string, handler echo.HandlerFunc) map[string]any {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		ctx := &auth.HttpAuthContext{
+			Context:  echo.New().NewContext(httptest.NewRequest(http.MethodGet, path, nil), rec),
+			AuthInfo: &auth.AuthInfo{Workspace: &types.Workspace{ExternalId: "user-ws"}, Token: &types.Token{}},
+		}
+		require.NoError(t, handler(ctx))
+		require.Equal(t, http.StatusOK, rec.Code)
+		var body map[string]any
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+		return body
+	}
+	models := get("/v1/models", r.handleListModels)["data"].([]any)
+	require.Len(t, models, 1)
+	model := models[0].(map[string]any)
+	assert.Equal(t, endpoint.Spec.ID, model["id"])
+	assert.Equal(t, true, model["is_ready"])
+	generation := get("/v1/generation?id=req-placement", r.handleGeneration)["data"].(map[string]any)
+	assert.Equal(t, "req-placement", generation["id"])
+	assert.EqualValues(t, 10, generation["tokens_prompt"])
+	for _, record := range []map[string]any{model, generation} {
+		for _, field := range []string{"region", "regions", "locality", "datacenters"} {
+			assert.NotContains(t, record, field)
+		}
+	}
+}
 
 func TestEndpointAccessIsIndependentOfCatalog(t *testing.T) {
 	s := newServiceForTest(t)

@@ -1044,13 +1044,6 @@ func pricingEntry(p types.Pricing) map[string]any {
 	return entry
 }
 
-func orEmpty(list []string) []string {
-	if list == nil {
-		return []string{}
-	}
-	return list
-}
-
 func (r *router) handleListModels(ctx echo.Context) error {
 	cc := ctx.(*auth.HttpAuthContext)
 	rctx := ctx.Request().Context()
@@ -1061,15 +1054,11 @@ func (r *router) handleListModels(ctx echo.Context) error {
 	endpoints := slices.DeleteFunc(all, func(e *types.ManagedEndpoint) bool { return !e.Enabled() || !r.allowed(rctx, e, cc.AuthInfo) })
 	replicas, _ := r.s.repo.ListAllReplicas(rctx)
 	ready := map[string]bool{}
-	regions := map[string][]string{} // endpoint id -> localities with a serving replica
 	for _, replica := range replicas {
 		if !replica.Serving() {
 			continue
 		}
 		ready[replica.EndpointID] = true
-		if replica.Locality != "" && !slices.Contains(regions[replica.EndpointID], replica.Locality) {
-			regions[replica.EndpointID] = append(regions[replica.EndpointID], replica.Locality)
-		}
 	}
 	data := make([]map[string]any, 0, len(endpoints))
 	for _, endpoint := range endpoints {
@@ -1078,7 +1067,6 @@ func (r *router) handleListModels(ctx echo.Context) error {
 		for _, route := range spec.Routes {
 			routes[strings.ReplaceAll(string(route), "/", "_")] = r.prefix + "/" + string(route)
 		}
-		slices.Sort(regions[spec.ID])
 		data = append(data, map[string]any{
 			"id":             spec.ID,
 			"name":           cmp.Or(spec.Catalog.Name, spec.ID),
@@ -1090,9 +1078,8 @@ func (r *router) handleListModels(ctx echo.Context) error {
 			"owned_by":       providerName,
 			"object":         "model",
 			// Beam extensions: live state for the dashboard and OpenRouter-style route paths.
-			"is_ready":    ready[spec.ID],
-			"datacenters": orEmpty(regions[spec.ID]),
-			"endpoints":   routes,
+			"is_ready":  ready[spec.ID],
+			"endpoints": routes,
 		})
 	}
 	return ctx.JSON(http.StatusOK, map[string]any{"object": "list", "data": data})
@@ -1129,7 +1116,6 @@ func (r *router) handleGeneration(ctx echo.Context) error {
 		"finish_reason":            nil,
 		"is_byok":                  false,
 		"gpu":                      record.GPU,
-		"locality":                 record.Locality,
 		"status_code":              record.StatusCode,
 	}})
 }

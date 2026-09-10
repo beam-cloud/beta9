@@ -421,7 +421,6 @@ func replicaToProto(r *types.EndpointReplica) *pb.EndpointReplica {
 		Version:             uint32(r.Version),
 		Gpu:                 r.GPU,
 		GpuCount:            r.GPUCount,
-		Locality:            r.Locality,
 		PoolName:            r.PoolName,
 		ContainerId:         r.ContainerID,
 		WorkerId:            r.WorkerID,

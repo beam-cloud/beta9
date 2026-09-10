@@ -3,7 +3,7 @@ Managed endpoints: platform-owned inference endpoints declared in a git repo
 and served through ``/v1``. An ``app.py`` exports one ``ManagedEndpoint`` that
 says how the engine runs; ``fleet.yaml`` at the repo root says which endpoints
 fill each GPU type, in what order and with what cap. The GitOps reconciler
-deploys both.
+deploys both. Beam handles placement automatically.
 """
 
 import json

@@ -1,6 +1,7 @@
 package managedendpoint
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -20,6 +21,9 @@ func TestAdminRESTEndpointIDWithSlash(t *testing.T) {
 	s := newServiceForTest(t)
 	endpoint := seedEndpoint(t, s)
 	require.Contains(t, endpoint.Spec.ID, "/")
+	replica := seedReplica(t, s, endpoint)
+	replica.Locality = "internal-placement"
+	require.NoError(t, s.repo.SaveReplica(context.Background(), replica))
 
 	e := echo.New()
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
@@ -50,6 +54,16 @@ func TestAdminRESTEndpointIDWithSlash(t *testing.T) {
 
 	rec = get("/api/v1/endpoints/acme%2Fmodel/replicas")
 	assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var replicas struct {
+		Replicas []map[string]any `json:"replicas"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &replicas))
+	require.Len(t, replicas.Replicas, 1)
+	assert.Equal(t, replica.ID, replicas.Replicas[0]["id"])
+	assert.NotContains(t, replicas.Replicas[0], "locality")
+	stored, err := s.repo.GetReplica(context.Background(), replica.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "internal-placement", stored.Locality, "placement remains internal")
 
 	// An unencoded slash is two segments and matches nothing.
 	assert.Equal(t, http.StatusNotFound, get("/api/v1/endpoints/acme/model").Code)
