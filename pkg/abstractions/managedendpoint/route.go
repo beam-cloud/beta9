@@ -525,6 +525,9 @@ func (r *router) pick(ctx context.Context, rq *routeRequest, endpoint *types.Man
 	deadline := rq.startedAt.Add(r.s.config.Routing.MaxQueueWait)
 	for {
 		candidates := r.servingReplicas(ctx, endpoint, rq.pinReplica, exclude)
+		if len(candidates) == 0 && len(exclude) > 0 {
+			return nil, &routeError{http.StatusBadGateway, "upstream_unavailable", "upstream replicas failed"}
+		}
 		if replica := r.choose(ctx, rq, endpoint, candidates); replica != nil {
 			rq.queueWait = time.Since(rq.startedAt)
 			return replica, nil

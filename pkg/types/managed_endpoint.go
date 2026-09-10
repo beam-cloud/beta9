@@ -487,7 +487,8 @@ type EndpointReplica struct {
 	StatusReason        string          `json:"status_reason,omitempty"`
 	SecretHash          string          `json:"secret_hash,omitempty"` // SHA-256 of BEAM_REPLICA_SECRET
 	HarnessEnabled      bool            `json:"harness_enabled"`
-	Probe               ReplicaProbe    `json:"probe"` // snapshotted at start; an old version keeps its own contract
+	EngineReady         bool            `json:"engine_ready,omitempty"` // harness readiness; HTTP health must also pass before serving
+	Probe               ReplicaProbe    `json:"probe"`                  // snapshotted at start; an old version keeps its own contract
 	Config              ReplicaConfig   `json:"config"`
 	Capacity            ReplicaCapacity `json:"capacity"`
 	Capabilities        json.RawMessage `json:"capabilities,omitempty"`

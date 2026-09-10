@@ -152,6 +152,17 @@ func TestHarnessLifecycle(t *testing.T) {
 	endpoint := seedEndpoint(t, s)
 	replica := seedReplica(t, s, endpoint)
 	ctx := harnessCtx()
+	health := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer health.Close()
+	probe := func() {
+		_, err := s.updateReplica(context.Background(), replica.ID, func(r *types.EndpointReplica) {
+			r.Address = strings.TrimPrefix(health.URL, "http://")
+			s.controller.probeReplica(context.Background(), r)
+		})
+		require.NoError(t, err)
+	}
 
 	reg, err := s.Register(ctx, &pb.HarnessRegisterRequest{ContainerId: "nope"})
 	require.NoError(t, err)
@@ -171,7 +182,7 @@ func TestHarnessLifecycle(t *testing.T) {
 	assert.Equal(t, types.ReplicaStatusLoading, stored.Status)
 	assert.JSONEq(t, `{"knobs":["max_num_seqs"]}`, string(stored.Capabilities))
 
-	// Heartbeats drive status and capacity; drain is not requested yet.
+	// Heartbeats report engine readiness and capacity; HTTP health gates routing.
 	hb, err := s.Heartbeat(ctx, &pb.HarnessHeartbeatRequest{
 		ReplicaId: replica.ID, Status: "ready",
 		Capacity:    &pb.ReplicaCapacity{InFlight: 2, MaxConcurrency: 64, KvCacheFreeMilli: 800},
@@ -181,6 +192,10 @@ func TestHarnessLifecycle(t *testing.T) {
 	require.True(t, hb.Ok)
 	assert.False(t, hb.Drain)
 
+	stored, _ = s.repo.GetReplica(context.Background(), replica.ID)
+	assert.Equal(t, types.ReplicaStatusLoading, stored.Status)
+	assert.True(t, stored.EngineReady)
+	probe()
 	stored, _ = s.repo.GetReplica(context.Background(), replica.ID)
 	assert.Equal(t, types.ReplicaStatusReady, stored.Status)
 	assert.False(t, stored.ReadyAt.IsZero())
@@ -197,6 +212,10 @@ func TestHarnessLifecycle(t *testing.T) {
 	assert.False(t, stored.Serving())
 	_, err = s.Heartbeat(ctx, &pb.HarnessHeartbeatRequest{ReplicaId: replica.ID, Status: "ready"})
 	require.NoError(t, err)
+	stored, _ = s.repo.GetReplica(context.Background(), replica.ID)
+	assert.Equal(t, types.ReplicaStatusLoading, stored.Status)
+	assert.True(t, stored.EngineReady)
+	probe()
 	stored, _ = s.repo.GetReplica(context.Background(), replica.ID)
 	assert.Equal(t, types.ReplicaStatusReady, stored.Status)
 

@@ -163,3 +163,17 @@ func TestCheckCapacityRestoresDefaultSingleGPUForReplacement(t *testing.T) {
 
 	assert.True(t, result.CanSchedule)
 }
+
+func TestServerlessAvailabilityIncludesOnlyReclaimableHostedGPUs(t *testing.T) {
+	manager := NewWorkerPoolManager()
+	manager.SetPool("test", types.WorkerPoolConfig{GPUType: "RTX5090"}, &LocalWorkerPoolControllerForTest{name: "test"})
+	s := &Scheduler{workerPoolManager: manager}
+	worker := &types.Worker{Id: "hosted", PoolName: "test", Status: types.WorkerStatusAvailable,
+		Gpu: "RTX5090", TotalGpuCount: 1, FreeGpuCount: 0, EvictableGpuCount: 1}
+	assert.True(t, s.serverlessGPUAvailability([]*types.Worker{worker})["RTX5090"])
+	worker.EvictableGpuCount = 0
+	assert.False(t, s.serverlessGPUAvailability([]*types.Worker{worker})["RTX5090"], "protected models cannot supply serverless capacity")
+	worker.EvictableGpuCount = 1
+	worker.Status = types.WorkerStatusDisabled
+	assert.False(t, s.serverlessGPUAvailability([]*types.Worker{worker})["RTX5090"], "disabled workers stay unavailable")
+}

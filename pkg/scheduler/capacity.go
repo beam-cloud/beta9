@@ -21,7 +21,7 @@ func (s *Scheduler) GetServerlessGPUAvailability() (map[string]bool, error) {
 func (s *Scheduler) serverlessGPUAvailability(workers []*types.Worker) map[string]bool {
 	availability := emptyGPUAvailability()
 	for _, worker := range workers {
-		if worker == nil || worker.Status != types.WorkerStatusAvailable || worker.Gpu == "" || worker.FreeGpuCount == 0 {
+		if worker == nil || worker.Status != types.WorkerStatusAvailable || worker.Gpu == "" || (worker.FreeGpuCount == 0 && worker.EvictableGpuCount == 0) {
 			continue
 		}
 		pool, ok := s.workerPoolManager.GetPool(workerPoolSelector(worker))

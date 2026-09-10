@@ -227,17 +227,19 @@ func (s *Service) applyHeartbeat(replica *types.EndpointReplica, in *pb.HarnessH
 	}
 	switch types.ReplicaStatus(strings.ToLower(strings.TrimSpace(in.Status))) {
 	case types.ReplicaStatusReady:
-		if replica.Status != types.ReplicaStatusReady {
-			replica.ReadyAt = now
-			replica.StatusReason = ""
-			s.replicaEvent(replica, "replica.ready", "", nil)
+		// The engine core can register before its HTTP server starts. Only
+		// the controller's health probe may admit the replica to routing.
+		replica.EngineReady = true
+		if replica.Status == types.ReplicaStatusScheduling {
+			replica.EnterLoading(now, "awaiting HTTP readiness")
 		}
-		replica.Status = types.ReplicaStatusReady
 	case types.ReplicaStatusLoading:
+		replica.EngineReady = false
 		if replica.Status == types.ReplicaStatusScheduling || replica.Status == types.ReplicaStatusReady {
 			replica.EnterLoading(now, "engine reported loading")
 		}
 	case types.ReplicaStatusDraining:
+		replica.EngineReady = false
 		replica.Status = types.ReplicaStatusDraining
 	}
 }

@@ -148,7 +148,8 @@ func (c *controller) syncReplica(ctx context.Context, replica *types.EndpointRep
 		if !replica.LastHeartbeat.IsZero() && c.silentFor(replica.LastHeartbeat, now) > c.s.config.ReplicaStaleAfter {
 			return c.stopAndFinish(ctx, replica, types.ReplicaStatusFailed, "harness heartbeat stale")
 		}
-	} else if replica.Address != "" {
+	}
+	if replica.Address != "" && (!replica.HarnessEnabled || replica.EngineReady) {
 		c.probeReplica(ctx, replica)
 	}
 	if replica.Status == types.ReplicaStatusLoading && replica.LoadingFor(now) > loadingGrace {
@@ -179,8 +180,8 @@ func (c *controller) exitStatus(replica *types.EndpointReplica) types.ReplicaSta
 	return types.ReplicaStatusFailed
 }
 
-// probeReplica drives status for endpoints without a harness from the health
-// path and, when present, the metrics path.
+// probeReplica verifies the serving path even when the engine has a harness.
+// Harness heartbeats remain authoritative for engine liveness and capacity.
 func (c *controller) probeReplica(ctx context.Context, replica *types.EndpointReplica) {
 	client := c.s.probeClient(replica.Address)
 	baseURL := "http://replica"
@@ -190,7 +191,9 @@ func (c *controller) probeReplica(ctx context.Context, replica *types.EndpointRe
 	}
 	ready := llmroute.CheckReady(ctx, client, baseURL, paths, probeTimeout)
 	now := time.Now()
-	replica.LastHeartbeat = now
+	if !replica.HarnessEnabled {
+		replica.LastHeartbeat = now
+	}
 	switch {
 	case ready && replica.Status != types.ReplicaStatusReady:
 		replica.Status = types.ReplicaStatusReady
@@ -200,7 +203,7 @@ func (c *controller) probeReplica(ctx context.Context, replica *types.EndpointRe
 	case !ready && replica.Status == types.ReplicaStatusReady:
 		replica.EnterLoading(now, "health check failing")
 	}
-	if !ready || replica.Probe.Metrics == "" {
+	if !ready || replica.HarnessEnabled || replica.Probe.Metrics == "" {
 		return
 	}
 	// Rates derive from counter deltas, so the previous scrape is kept per replica.
