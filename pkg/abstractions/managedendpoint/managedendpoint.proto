@@ -1,0 +1,342 @@
+syntax = "proto3";
+
+option go_package = "github.com/beam-cloud/beta9/proto";
+
+package managedendpoint;
+
+// Managed endpoints: platform-owned inference endpoints filled onto spare GPU
+// capacity and served through the OpenRouter-compatible /v1 route. The git
+// repository (apps + config.yaml) is the source of truth; these services only
+// observe the platform and tune live engine settings on running replicas.
+//
+//   - EndpointHarnessService: called by the engine-side harness inside a
+//     replica container (runtime token + per-replica secret). It registers,
+//     streams live config, acks it, heartbeats capacity and publishes events.
+//   - EndpointAdminService: called by operators, tuning agents and the
+//     frontend (cluster admin token). Read state, set live config on a
+//     replica, stop replicas and drive GitOps syncs.
+//
+// Free-form documents (specs, configs, capabilities) are JSON strings so the
+// contract can evolve engine-side without a proto change.
+
+message ReplicaCapacity {
+  int64 in_flight = 1;
+  int64 max_concurrency = 2;
+  int64 running = 3;
+  int64 waiting = 4;
+  int64 kv_cache_free_milli = 5;
+  int64 decode_tokens_per_sec = 6;
+  int64 prompt_tokens_per_sec = 7;
+  int64 ttft_ms = 8;
+  int64 tpot_ms = 9;
+  int64 prefix_cache_hit_milli = 10;
+}
+
+// ReplicaConfig is the live harness config of one replica: the requested
+// revision and the engine's answer to it.
+message ReplicaConfig {
+  uint64 revision = 1;
+  string config_json = 2;
+  string author = 3;
+  int64 set_at_unix_ms = 4;
+  uint64 acked_revision = 5;
+  bool applied = 6;
+  string error = 7;
+  string effective_json = 8;
+  int64 acked_at_unix_ms = 9;
+  string actor = 10;  // authenticated token that set the revision
+}
+
+message EndpointReplica {
+  string id = 1;
+  string endpoint_id = 2;
+  uint32 version = 3;
+  string gpu = 4;
+  uint32 gpu_count = 5;
+  reserved 6;
+  string pool_name = 7;
+  string container_id = 8;
+  string worker_id = 9;
+  string address = 10;
+  string status = 11;
+  string status_reason = 12;
+  bool harness_enabled = 14;
+  ReplicaConfig config = 15;
+  ReplicaCapacity capacity = 16;
+  string capabilities_json = 17;
+  string engine_metrics_json = 18;
+  int64 started_at_unix_ms = 19;
+  int64 ready_at_unix_ms = 20;
+  int64 last_heartbeat_unix_ms = 21;
+  string machine_id = 22;
+  // Set when the replica runs on a workspace's contributed machine.
+  string provider_workspace_id = 23;
+  // True for a replica reserved to satisfy a non-preemptible minimum.
+  bool protected = 24;
+}
+
+message ManagedEndpoint {
+  string id = 1;
+  string spec_json = 2;
+  string stub_id = 3;
+  uint32 version = 4;
+  string git_sha = 5;
+  string status = 6;
+  int64 created_at_unix_ms = 7;
+  int64 updated_at_unix_ms = 8;
+  uint32 ready_replicas = 9;
+  uint32 total_replicas = 10;
+  // config.yaml placement: JSON {gpu: {priority, min_replicas, max_replicas, preemption}}.
+  string placements_json = 11;
+}
+
+message Event {
+  string name = 1;         // endpoint.* event name
+  string payload_json = 2; // event schema payload
+  int64 at_unix_ms = 3;
+}
+
+// ---------------------------------------------------------------------------
+// EndpointHarnessService (in-container)
+//
+// Every call carries the replica's own secret (BEAM_REPLICA_SECRET) in the
+// `x-beam-replica-secret` metadata key; no workspace token is involved.
+// ---------------------------------------------------------------------------
+
+service EndpointHarnessService {
+  // Register announces a replica's harness and returns its identity and the
+  // current live config, if any. Idempotent per container.
+  rpc Register(HarnessRegisterRequest) returns (HarnessRegisterResponse) {}
+  // WatchConfig streams live config revisions set on the replica.
+  rpc WatchConfig(HarnessWatchConfigRequest) returns (stream ReplicaConfig) {}
+  // AckConfig reports whether a revision was applied.
+  rpc AckConfig(HarnessAckConfigRequest) returns (HarnessAckConfigResponse) {}
+  // Heartbeat reports liveness, capacity and engine metrics.
+  rpc Heartbeat(HarnessHeartbeatRequest) returns (HarnessHeartbeatResponse) {}
+  // PublishEvents forwards engine-side events into the platform event stream.
+  rpc PublishEvents(HarnessPublishEventsRequest) returns (HarnessPublishEventsResponse) {}
+}
+
+message HarnessRegisterRequest {
+  string container_id = 1;
+  string engine = 2;
+  string engine_version = 3;
+  // JSON control catalog / capabilities advertised by the harness.
+  string capabilities_json = 4;
+  // JSON startup limits (max_num_seqs, max_model_len, ...).
+  string limits_json = 5;
+}
+
+message HarnessRegisterResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  string replica_id = 3;
+  string endpoint_id = 4;
+  string gpu = 5;
+  uint32 heartbeat_interval_seconds = 6;
+  // Current live config; unset when none was pushed to this replica.
+  ReplicaConfig current = 7;
+}
+
+message HarnessWatchConfigRequest {
+  string replica_id = 1;
+  // Resume from this revision (exclusive); zero sends the current revision.
+  uint64 after_revision = 2;
+}
+
+message HarnessAckConfigRequest {
+  string replica_id = 1;
+  uint64 revision = 2;
+  bool applied = 3;
+  string error = 4;
+  // JSON of the effective config after apply.
+  string effective_json = 5;
+}
+
+message HarnessAckConfigResponse {
+  bool ok = 1;
+  string err_msg = 2;
+}
+
+message HarnessHeartbeatRequest {
+  string replica_id = 1;
+  string status = 2;  // loading | ready | draining
+  ReplicaCapacity capacity = 3;
+  uint64 applied_revision = 4;
+  // JSON engine metrics summary.
+  string metrics_json = 5;
+}
+
+message HarnessHeartbeatResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  // Set when the control plane wants the replica to drain and exit.
+  bool drain = 3;
+  uint32 drain_seconds = 4;
+  uint32 heartbeat_interval_seconds = 5;
+}
+
+message HarnessPublishEventsRequest {
+  string replica_id = 1;
+  repeated Event events = 2;
+}
+
+message HarnessPublishEventsResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  uint32 accepted = 3;
+}
+
+// ---------------------------------------------------------------------------
+// EndpointAdminService (cluster admin token)
+// ---------------------------------------------------------------------------
+
+service EndpointAdminService {
+  rpc ListEndpoints(ListEndpointsRequest) returns (ListEndpointsResponse) {}
+  rpc GetEndpoint(GetEndpointRequest) returns (GetEndpointResponse) {}
+  rpc ListReplicas(ListReplicasRequest) returns (ListReplicasResponse) {}
+  rpc GetMetrics(GetMetricsRequest) returns (GetMetricsResponse) {}
+  // SetReplicaConfig pushes a live config to one replica's harness and waits
+  // for its ack. A winning setting becomes a commit to the repo (engine args
+  // or harness seed); nothing here is durable.
+  rpc SetReplicaConfig(SetReplicaConfigRequest) returns (SetReplicaConfigResponse) {}
+  // StopReplica drains and stops a replica; the controller refills.
+  rpc StopReplica(StopReplicaRequest) returns (StopReplicaResponse) {}
+  rpc GetGitOpsStatus(GetGitOpsStatusRequest) returns (GetGitOpsStatusResponse) {}
+  rpc TriggerGitOpsSync(TriggerGitOpsSyncRequest) returns (TriggerGitOpsSyncResponse) {}
+}
+
+message ListEndpointsRequest {}
+
+message ListEndpointsResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  repeated ManagedEndpoint endpoints = 3;
+}
+
+message GetEndpointRequest {
+  string endpoint_id = 1;
+}
+
+message GetEndpointResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  ManagedEndpoint endpoint = 3;
+  repeated EndpointReplica replicas = 4;
+}
+
+message ListReplicasRequest {
+  string endpoint_id = 1;
+  string status = 2;
+  string gpu = 3;
+}
+
+message ListReplicasResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  repeated EndpointReplica replicas = 3;
+}
+
+message GetMetricsRequest {
+  string endpoint_id = 1;
+  string gpu = 2;
+  string replica_id = 3;
+  uint32 window_seconds = 4;
+  // With replica_id: only requests served under this acknowledged live config.
+  uint64 config_revision = 5;
+}
+
+message EndpointMetrics {
+  string endpoint_id = 1;
+  string gpu = 2;
+  uint32 window_seconds = 3;
+  int64 requests = 4;
+  int64 errors = 5;
+  int64 prompt_tokens = 6;
+  int64 completion_tokens = 7;
+  int64 ttft_ms = 8;            // mean over the window
+  int64 tpot_ms = 9;            // mean over the window
+  int64 decode_tokens_per_sec = 10;
+  int64 queue_wait_ms = 11;     // mean over the window
+  int64 cost_micro_usd = 12;
+  uint32 ready_replicas = 13;
+  ReplicaCapacity aggregate_capacity = 14;
+  uint64 config_revision = 15;
+}
+
+message GetMetricsResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  EndpointMetrics metrics = 3;
+  repeated EndpointReplica replicas = 4;
+}
+
+message SetReplicaConfigRequest {
+  string replica_id = 1;
+  string config_json = 2;
+  string author = 3;
+  // Wait up to this long for the harness ack (0 = default).
+  uint32 wait_seconds = 4;
+}
+
+message SetReplicaConfigResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  EndpointReplica replica = 3;
+}
+
+message StopReplicaRequest {
+  string replica_id = 1;
+  // Grace for in-flight requests; zero stops immediately.
+  uint32 drain_seconds = 2;
+}
+
+message StopReplicaResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  EndpointReplica replica = 3;
+}
+
+message GitOpsEndpointState {
+  string path = 1;
+  string id = 2;
+  string applied_sha = 3;
+  string status = 4;
+  string error = 5;
+  string stub_id = 6;
+  uint32 version = 7;
+  int64 updated_at_unix_ms = 8;
+}
+
+message GitOpsState {
+  string repo_url = 1;
+  string ref = 2;
+  string last_sha = 3;
+  string target_sha = 4;
+  int64 last_run_at_unix_ms = 5;
+  string last_error = 6;
+  string fleet_error = 7;
+  bool running = 8;
+  repeated GitOpsEndpointState endpoints = 9;
+}
+
+message GetGitOpsStatusRequest {}
+
+message GetGitOpsStatusResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  GitOpsState state = 3;
+  // The applied config.yaml as JSON {endpoint_id: {enabled, gpus: {gpu: {priority, min_replicas, max_replicas, preemption}}}}.
+  string fleet_json = 4;
+}
+
+message TriggerGitOpsSyncRequest {
+  // Optional explicit SHA; empty resolves the configured ref.
+  string sha = 1;
+}
+
+message TriggerGitOpsSyncResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  bool started = 3;
+}

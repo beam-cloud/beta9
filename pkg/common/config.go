@@ -108,7 +108,13 @@ func minimalConfigEnabled() bool {
 
 // Print returns a string representation of the current configuration state.
 func (cm *ConfigManager[T]) Print() string {
-	return cm.kf.Sprint()
+	config := cm.kf.Copy()
+	for _, root := range []string{"managedEndpoints", "managed_endpoints"} {
+		for _, path := range []string{"repo.deployKey", "repo.deploy_key", "deployerSecrets", "deployer_secrets", "webhook.secret"} {
+			config.Delete(root + "." + path)
+		}
+	}
+	return config.Sprint()
 }
 
 // GetConfig retrieves the current configuration of type 'T' from the ConfigManager.

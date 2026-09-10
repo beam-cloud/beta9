@@ -18,14 +18,39 @@ type RequestBacklog struct {
 	ready chan struct{}
 }
 
+// popReadyBacklogScript fills the batch from the foreground lane first, then
+// the background lane. The last element is the remaining depth of both lanes.
 var popReadyBacklogScript = redis.NewScript(`
-local requests = redis.call("ZRANGEBYSCORE", KEYS[1], "-inf", ARGV[1], "LIMIT", 0, ARGV[2])
-if #requests == 0 then
-	return requests
+local limit = tonumber(ARGV[2])
+local out = {}
+for _, key in ipairs(KEYS) do
+	if limit <= 0 then
+		break
+	end
+	local requests = redis.call("ZRANGEBYSCORE", key, "-inf", ARGV[1], "LIMIT", 0, limit)
+	if #requests > 0 then
+		redis.call("ZREM", key, unpack(requests))
+		for _, request in ipairs(requests) do
+			out[#out + 1] = request
+		end
+		limit = limit - #requests
+	end
 end
-redis.call("ZREM", KEYS[1], unpack(requests))
-return requests
+local depth = 0
+for _, key in ipairs(KEYS) do
+	depth = depth + redis.call("ZCARD", key)
+end
+out[#out + 1] = depth
+return out
 `)
+
+// lane is the backlog sorted set a request waits in.
+func lane(request *types.ContainerRequest) string {
+	if request.Evictable || request.OpportunisticOnly {
+		return common.RedisKeys.SchedulerBackgroundRequests()
+	}
+	return common.RedisKeys.SchedulerContainerRequests()
+}
 
 func NewRequestBacklog(rdb *common.RedisClient) *RequestBacklog {
 	return &RequestBacklog{rdb: rdb, ready: make(chan struct{}, 1)}
@@ -47,7 +72,12 @@ func (rb *RequestBacklog) PushAfter(request *types.ContainerRequest, delay time.
 		readyAt = request.Timestamp
 	}
 
-	if err := rb.rdb.ZAdd(context.TODO(), common.RedisKeys.SchedulerContainerRequests(), redis.Z{Score: float64(readyAt.UnixNano()), Member: jsonData}).Err(); err != nil {
+	ctx := context.TODO()
+	pipe := rb.rdb.Pipeline()
+	pipe.ZAdd(ctx, lane(request), redis.Z{Score: float64(readyAt.UnixNano()), Member: jsonData})
+	foreground := pipe.ZCard(ctx, common.RedisKeys.SchedulerContainerRequests())
+	background := pipe.ZCard(ctx, common.RedisKeys.SchedulerBackgroundRequests())
+	if _, err := pipe.Exec(ctx); err != nil {
 		return err
 	}
 
@@ -57,7 +87,7 @@ func (rb *RequestBacklog) PushAfter(request *types.ContainerRequest, delay time.
 		default:
 		}
 	}
-	metrics.RecordSchedulerBacklogDepth(rb.rdb.ZCard(context.TODO(), common.RedisKeys.SchedulerContainerRequests()).Val())
+	metrics.RecordSchedulerBacklogDepth(foreground.Val() + background.Val())
 	return nil
 }
 
@@ -76,7 +106,7 @@ func (rb *RequestBacklog) PopN(count int64) ([]*types.ContainerRequest, error) {
 	result, err := popReadyBacklogScript.Run(
 		context.TODO(),
 		rb.rdb,
-		[]string{common.RedisKeys.SchedulerContainerRequests()},
+		[]string{common.RedisKeys.SchedulerContainerRequests(), common.RedisKeys.SchedulerBackgroundRequests()},
 		time.Now().UnixNano(),
 		count,
 	).Result()
@@ -85,9 +115,16 @@ func (rb *RequestBacklog) PopN(count int64) ([]*types.ContainerRequest, error) {
 	}
 
 	items, ok := result.([]interface{})
-	if !ok {
+	if !ok || len(items) == 0 {
 		return nil, fmt.Errorf("unexpected backlog pop result: %T", result)
 	}
+
+	depth, ok := items[len(items)-1].(int64)
+	if !ok {
+		return nil, fmt.Errorf("unexpected backlog depth type: %T", items[len(items)-1])
+	}
+	items = items[:len(items)-1]
+	metrics.RecordSchedulerBacklogDepth(depth)
 
 	if len(items) == 0 {
 		return nil, errors.New("backlog empty")
@@ -108,11 +145,17 @@ func (rb *RequestBacklog) PopN(count int64) ([]*types.ContainerRequest, error) {
 		requests = append(requests, &poppedItem)
 	}
 
-	metrics.RecordSchedulerBacklogDepth(rb.rdb.ZCard(context.TODO(), common.RedisKeys.SchedulerContainerRequests()).Val())
 	return requests, nil
 }
 
-// Gets the length of the sorted set
+// Len is the number of requests waiting in both lanes.
 func (rb *RequestBacklog) Len() int64 {
-	return rb.rdb.ZCard(context.TODO(), common.RedisKeys.SchedulerContainerRequests()).Val()
+	ctx := context.TODO()
+	pipe := rb.rdb.Pipeline()
+	foreground := pipe.ZCard(ctx, common.RedisKeys.SchedulerContainerRequests())
+	background := pipe.ZCard(ctx, common.RedisKeys.SchedulerBackgroundRequests())
+	if _, err := pipe.Exec(ctx); err != nil {
+		return 0
+	}
+	return foreground.Val() + background.Val()
 }

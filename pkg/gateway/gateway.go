@@ -24,6 +24,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/abstractions/endpoint"
 	bot "github.com/beam-cloud/beta9/pkg/abstractions/experimental/bot"
 	_signal "github.com/beam-cloud/beta9/pkg/abstractions/experimental/signal"
+	"github.com/beam-cloud/beta9/pkg/abstractions/managedendpoint"
 	pod "github.com/beam-cloud/beta9/pkg/abstractions/pod"
 	_shell "github.com/beam-cloud/beta9/pkg/abstractions/shell"
 	"github.com/beam-cloud/beta9/pkg/clients"
@@ -575,6 +576,29 @@ func (g *Gateway) registerServices() error {
 		return err
 	}
 	pb.RegisterShellServiceServer(g.grpcServer, ss)
+
+	// Register managed endpoints (harness + admin RPCs, /v1 route, controller).
+	// Disabled clusters still register the servers so RPCs fail cleanly.
+	me, err := managedendpoint.New(g.ctx, managedendpoint.Opts{
+		Config:           g.Config,
+		BackendRepo:      g.BackendRepo,
+		ContainerRepo:    g.ContainerRepo,
+		WorkerRepo:       g.workerRepo,
+		WorkspaceRepo:    g.WorkspaceRepo,
+		EventRepo:        g.EventRepo,
+		UsageMetricsRepo: g.UsageMetricsRepo,
+		Scheduler:        g.Scheduler,
+		RedisClient:      g.RedisClient,
+		Tailscale:        g.Tailscale,
+		RouteGroup:       g.rootRouteGroup,
+		AdminRouteGroup:  g.baseRouteGroup.Group("/endpoints"),
+		DrainContext:     g.drainCtx,
+	})
+	if err != nil {
+		return err
+	}
+	pb.RegisterEndpointHarnessServiceServer(g.grpcServer, me)
+	pb.RegisterEndpointAdminServiceServer(g.grpcServer, me)
 
 	// Register scheduler
 	s, err := scheduler.NewSchedulerService(g.Scheduler)

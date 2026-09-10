@@ -3,9 +3,6 @@ from unittest import TestCase, mock
 from unittest.mock import MagicMock
 
 from beta9 import Image, Pod, Service, asgi, endpoint, function, realtime, schedule, task_queue
-from beta9.integrations import VLLM, VLLMArgs
-
-PHI_VISION_INSTRUCT = "microsoft/Phi-3.5-vision-instruct"
 
 
 class GatewayStubMock:
@@ -240,49 +237,6 @@ class TestDeployment(TestCase):
 
         with mock.patch.object(Service, "print_invocation_snippet"):
             resp, ok = test_service.deploy()
-
-        self.assertEqual(ok, gateway_stub_mock.deploy_stub().ok)
-        self.assertEqual(resp["deployment_id"], gateway_stub_mock.deploy_stub().deployment_id)
-
-    @mock.patch(
-        "beta9.abstractions.integrations.vllm.VLLM.prepare_runtime",
-        return_value=True,
-    )
-    @mock.patch(
-        "beta9.abstractions.integrations.vllm.VLLM.gateway_stub",
-        return_value=MagicMock(
-            deploy_stub=MagicMock(
-                return_value=MagicMock(
-                    deployment_id="test-deployment-id",
-                    ok=True,
-                )
-            )
-        ),
-    )
-    def test_vllm_deploy(self, gateway_stub_mock, prepare_runtime_mock):
-        test_vllm = VLLM(
-            name=PHI_VISION_INSTRUCT.split("/")[-1],
-            cpu=8,
-            memory="16Gi",
-            gpu="A100-40",
-            vllm_args=VLLMArgs(
-                model=PHI_VISION_INSTRUCT,
-                served_model_name=[PHI_VISION_INSTRUCT],
-                trust_remote_code=True,
-                max_model_len=4096,
-                limit_mm_per_prompt={"image": 2},
-            ),
-        )
-
-        self.assertEqual(test_vllm.app_kind, "llm_model")
-        self.assertEqual(test_vllm.serving_protocol, "openai")
-        self.assertEqual(test_vllm.llm.model_id, PHI_VISION_INSTRUCT)
-        self.assertEqual(test_vllm.llm.engine, "vllm")
-        self.assertEqual(test_vllm.llm.served_model_name, PHI_VISION_INSTRUCT)
-        self.assertEqual(test_vllm.llm.context_length, 4096)
-        self.assertEqual(test_vllm.llm.metrics_path, "/metrics")
-
-        resp, ok = test_vllm.deploy()
 
         self.assertEqual(ok, gateway_stub_mock.deploy_stub().ok)
         self.assertEqual(resp["deployment_id"], gateway_stub_mock.deploy_stub().deployment_id)

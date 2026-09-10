@@ -31,6 +31,29 @@ func TestS2ContainerStreamNameUsesWorkspaceStubContainer(t *testing.T) {
 	}
 }
 
+func TestEndpointControlAuditIsReachableThroughHistoryAPI(t *testing.T) {
+	repo := &S2EventRepository{streamPrefix: "events"}
+	for _, eventType := range []string{types.EventEndpointConfig, types.EventEndpointHarness, types.EventEndpointReplica, types.EventEndpointGitOps} {
+		t.Run(eventType, func(t *testing.T) {
+			metadata := eventMetadata{WorkspaceID: "admin-ws", StubID: "stub-1", ContainerID: "managed-stub-1-abc", WorkerID: "worker-1"}
+			if eventType == types.EventEndpointGitOps {
+				metadata = eventMetadata{WorkspaceID: "admin-ws"}
+			}
+			written := repo.streamNamesForEvent(eventType, metadata)
+			queries := []types.EventQuery{{WorkspaceID: metadata.WorkspaceID, EventTypes: []string{eventType}}}
+			if metadata.ContainerID != "" {
+				queries = append(queries, types.EventQuery{WorkspaceID: metadata.WorkspaceID, StubID: metadata.StubID, ContainerID: metadata.ContainerID, EventTypes: []string{eventType}})
+			}
+			for _, query := range queries {
+				read, err := repo.resolveEventHistoryStreams(context.Background(), query)
+				require.NoError(t, err)
+				require.Len(t, read, 1)
+				require.Contains(t, written, read[0], "authenticated history must read a stream containing the audit event")
+			}
+		})
+	}
+}
+
 func TestS2ContainerEventsAlsoUseStubAggregateStream(t *testing.T) {
 	repo := &S2EventRepository{streamPrefix: "events"}
 

@@ -340,11 +340,10 @@ func (i *AutoscaledInstance) CheckConcurrencyLimit() error {
 	}
 
 	request := &types.ContainerRequest{
-		Cpu:              i.StubConfig.Runtime.Cpu,
-		GpuCount:         uint32(gpuCount),
-		WorkspaceId:      i.Workspace.ExternalId,
-		Workspace:        *i.Workspace,
-		AllowMarketplace: i.StubConfig.AllowMarketplace,
+		Cpu:         i.StubConfig.Runtime.Cpu,
+		GpuCount:    uint32(gpuCount),
+		WorkspaceId: i.Workspace.ExternalId,
+		Workspace:   *i.Workspace,
 	}
 	if i.Stub != nil {
 		request.StubId = i.Stub.ExternalId

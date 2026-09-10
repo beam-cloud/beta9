@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"math"
 	"net"
-	"path"
 	"reflect"
 	"slices"
 	"sort"
@@ -34,25 +33,6 @@ const (
 	// workers, and the orphaned requests provision duplicate workers.
 	pendingWorkerReservationTTL   time.Duration = 3 * time.Minute
 	maxWorkerProvisioningAttempts               = 3
-)
-
-var (
-	marketplaceBlockedHostMounts = map[string]struct{}{
-		"/":     {},
-		"/home": {},
-		"/var":  {},
-	}
-
-	marketplaceBlockedHostMountPrefixes = []string{
-		"/dev",
-		"/etc",
-		"/proc",
-		"/root",
-		"/run",
-		"/sys",
-		"/var/lib",
-		"/var/run",
-	}
 )
 
 type Scheduler struct {
@@ -218,7 +198,9 @@ func agentPoolControllerKey(workspaceID string, state *compute.PoolState) string
 	if state != nil {
 		selector = firstNonEmpty(state.Selector, state.Name)
 	}
-	if selector == "" || workspaceID == "" || state.ManagementSource != "" || state.Mode == string(types.PoolModeMarketplace) {
+	// Provider pools are addressed globally: the cluster admin workspace's
+	// managed-endpoint requests reach them by PoolSelector = pool name.
+	if selector == "" || workspaceID == "" || state.ManagementSource != "" || state.Mode == string(types.PoolModeProvider) {
 		return selector
 	}
 	return strings.Join([]string{"agent", workspaceID, selector}, ":")
@@ -352,12 +334,15 @@ func normalizeAgentWorkerPoolConfig(state *compute.PoolState) types.WorkerPoolCo
 	if state == nil {
 		return config
 	}
-	if state.Mode == string(types.PoolModeMarketplace) {
-		config.Mode = types.PoolModeMarketplace
-		config.ContainerRuntime = marketplacePoolRuntime(state)
-		config.RequiresPoolSelector = false
+	if state.Mode == string(types.PoolModeProvider) {
+		// Provider machines serve only managed endpoint replicas. Opting the
+		// pool into ManagedEndpoints lets the endpoint controller's inventory
+		// pick these workers up via PoolConfig(name).
+		config.Mode = types.PoolModeProvider
+		config.ContainerRuntime = types.ContainerRuntimeRunc.String()
+		config.RequiresPoolSelector = true
 		config.Priority = int32(100)
-		config.Preemptable = state.Preemptible
+		config.ManagedEndpoints = types.WorkerPoolManagedEndpointsConfig{Enabled: true}
 	}
 	if state.Priority != 0 {
 		config.Priority = state.Priority
@@ -374,13 +359,6 @@ func normalizeAgentWorkerPoolConfig(state *compute.PoolState) types.WorkerPoolCo
 		}
 	}
 	return config
-}
-
-func marketplacePoolRuntime(state *compute.PoolState) string {
-	if state != nil && state.Config != nil && len(state.Config.Gpu) > 0 {
-		return types.MarketplaceContainerRuntimeForGPU(state.Config.Gpu[0])
-	}
-	return types.ContainerRuntimeGvisor.String()
 }
 
 func firstNonEmpty(values ...string) string {
@@ -503,8 +481,54 @@ func (s *Scheduler) defaultConcurrencyLimit() *types.ConcurrencyLimit {
 	}
 }
 
+// CreditGate exposes the prepaid-credit check so other admission points (the
+// managed endpoints route) share one decision cache. May be nil.
+func (s *Scheduler) CreditGate() *CreditGate {
+	if s == nil {
+		return nil
+	}
+	return s.creditGate
+}
+
+// PoolConfig returns the effective config for a registered worker pool,
+// including pools created dynamically at runtime.
+func (s *Scheduler) PoolConfig(name string) (types.WorkerPoolConfig, bool) {
+	if s == nil || s.workerPoolManager == nil {
+		return types.WorkerPoolConfig{}, false
+	}
+	pool, ok := s.workerPoolManager.GetPool(name)
+	if !ok || pool == nil {
+		return types.WorkerPoolConfig{}, false
+	}
+	return pool.Config, true
+}
+
+// PoolConfigs returns the effective config of every registered worker pool,
+// keyed by the pool selector, including pools created dynamically at runtime.
+func (s *Scheduler) PoolConfigs() map[string]types.WorkerPoolConfig {
+	out := map[string]types.WorkerPoolConfig{}
+	if s == nil || s.workerPoolManager == nil {
+		return out
+	}
+	s.workerPoolManager.poolMap.Range(func(_ string, pool *WorkerPool) bool {
+		if pool != nil {
+			out[pool.Name] = pool.Config
+		}
+		return true
+	})
+	return out
+}
+
 func (s *Scheduler) privatePoolQuotaExempt(request *types.ContainerRequest) bool {
-	if s == nil || request == nil || s.workerPoolManager == nil {
+	if s == nil || request == nil {
+		return false
+	}
+	// Managed endpoint replicas are platform workloads in the cluster admin
+	// workspace: they are neither credit-gated nor counted against a quota.
+	if request.Stub.Type.IsPlatformWorkload() {
+		return true
+	}
+	if s.workerPoolManager == nil {
 		return false
 	}
 
@@ -1010,14 +1034,10 @@ func filterControllersByFlagsForFailover(controllers []WorkerPoolController, req
 		if !request.StorageAvailable() && controllerUsesAgentCapacity(controller) {
 			continue
 		}
-		if !marketplaceControllerAllowed(controller, request) {
+		if !providerControllerAllowed(controller, request) {
 			continue
 		}
-
-		// Marketplace capacity is inherently interruptible (seller machines can
-		// vanish); opting in with AllowMarketplace implies accepting preemption,
-		// so the preemptable gate only applies to non-marketplace pools.
-		if !request.Preemptable && controller.IsPreemptable() && controller.Mode() != types.PoolModeMarketplace {
+		if !request.Preemptable && controller.IsPreemptable() {
 			continue
 		}
 
@@ -1032,19 +1052,22 @@ func filterControllersByFlagsForFailover(controllers []WorkerPoolController, req
 	return filteredControllers
 }
 
-func marketplaceControllerAllowed(controller WorkerPoolController, request *types.ContainerRequest) bool {
-	if controller == nil || controller.Mode() != types.PoolModeMarketplace {
+// providerControllerAllowed enforces that provider pools (workspace-supplied
+// machines) only ever run platform-owned managed endpoint replicas.
+func providerControllerAllowed(controller WorkerPoolController, request *types.ContainerRequest) bool {
+	if controller == nil || controller.Mode() != types.PoolModeProvider {
 		return true
 	}
-	if request == nil || !request.AllowMarketplace {
-		return false
-	}
-	return marketplaceRequestSafe(request)
+	return isManagedRequest(request)
 }
 
-// filterWorkersByMachine restricts machine-pinned requests (marketplace
-// rentals) to the pinned machine's worker. The pin is stronger than any pool
-// selector: it identifies exactly one worker.
+func isManagedRequest(request *types.ContainerRequest) bool {
+	return request != nil && request.Stub.Type.IsManagedEndpoint()
+}
+
+// filterWorkersByMachine restricts machine-pinned requests to the pinned
+// machine's worker. The pin is stronger than any pool selector: it identifies
+// exactly one worker.
 func filterWorkersByMachine(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
 	if request.MachineId == "" {
 		return workers
@@ -1084,9 +1107,11 @@ func (s *Scheduler) filterWorkersByWorkspaceScope(workers []*types.Worker, reque
 		if worker == nil {
 			continue
 		}
-		// Unmanaged agent capacity belongs to its workspace. Managed and
-		// marketplace workers are admitted by their existing global policies.
-		if worker.WorkspaceId == "" || worker.ControlPlaneManaged || s.isMarketplaceWorker(worker) ||
+		// Unmanaged agent capacity belongs to its workspace. Control-plane
+		// managed workers are global; provider workers are global only for
+		// managed endpoint replicas.
+		if worker.WorkspaceId == "" || worker.ControlPlaneManaged ||
+			(s.isProviderWorker(worker) && isManagedRequest(request)) ||
 			(request != nil && worker.WorkspaceId == request.WorkspaceId) {
 			filteredWorkers = append(filteredWorkers, worker)
 		}
@@ -1131,8 +1156,11 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 		cpu := request.Cpu
 		memory := capacityMemoryForScheduling(request)
 
-		// Check if the worker has enough free cpu and memory to run the container
-		if worker.FreeCpu < cpu || worker.FreeMemory < memory {
+		// Check if the worker has enough free cpu and memory to run the container.
+		// Requests that may evict also count capacity held by evictable
+		// containers; the repository picks the victims when it commits.
+		freeCPU, freeMemory, freeGPU := schedulableCapacity(worker, request)
+		if freeCPU < cpu || freeMemory < memory {
 			continue
 		}
 
@@ -1154,7 +1182,7 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 			// Failover widens eligibility to the chain's pools, whatever GPU
 			// they host. Scoring keeps them behind the requested GPU type.
 			validGpu = validGpu || chain.contains(worker.PoolName)
-			if !validGpu || worker.FreeGpuCount < gpuCount {
+			if !validGpu || freeGPU < gpuCount {
 				continue
 			}
 		}
@@ -1162,6 +1190,24 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 		filteredWorkers = append(filteredWorkers, worker)
 	}
 	return filteredWorkers
+}
+
+// requestMayEvict reports whether a request may displace evictable containers.
+// Evictable and opportunistic requests never do: they only fill idle capacity.
+func requestMayEvict(request *types.ContainerRequest) bool {
+	return request != nil && !request.Evictable && !request.OpportunisticOnly
+}
+
+// schedulableCapacity is the capacity a request may claim on a worker: free
+// capacity, plus whatever evictable containers hold if the request may evict.
+func schedulableCapacity(worker *types.Worker, request *types.ContainerRequest) (int64, int64, uint32) {
+	cpu, memory, gpu := worker.FreeCpu, worker.FreeMemory, worker.FreeGpuCount
+	if requestMayEvict(request) {
+		cpu += worker.EvictableCpu
+		memory += worker.EvictableMemory
+		gpu += worker.EvictableGpuCount
+	}
+	return cpu, memory, gpu
 }
 
 func availableCheckpoint(request *types.ContainerRequest) *types.Checkpoint {
@@ -1274,10 +1320,7 @@ func capacityMemoryForScheduling(request *types.ContainerRequest) int64 {
 func (s *Scheduler) filterWorkersByFlags(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
 	filteredWorkers := []*types.Worker{}
 	for _, worker := range workers {
-		// Preemptible marketplace workers stay eligible: reaching this filter
-		// means the request already opted in with AllowMarketplace, which
-		// implies accepting seller-side preemption.
-		if !request.Preemptable && worker.Preemptable && !s.isMarketplaceWorker(worker) {
+		if !request.Preemptable && worker.Preemptable {
 			continue
 		}
 
@@ -1308,6 +1351,8 @@ type scoredWorker struct {
 	score        int32
 	failoverRank int32
 	storageRank  int32
+	// evictionRank is 1 when placing here would stop evictable containers.
+	evictionRank int32
 }
 
 // Constants used for scoring workers
@@ -1339,11 +1384,12 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 	// binds no chain, which makes every failover seam below a no-op.
 	chain := s.failoverChainFor(request)
 
-	filteredWorkers := filterWorkersByMachine(workers, request) // Machine-pinned requests only see their machine's worker
+	filteredWorkers := s.filterWorkersByPoolHeadroom(workers, request) // Opportunistic requests leave the pool's minFree* floor idle
+	filteredWorkers = filterWorkersByMachine(filteredWorkers, request) // Machine-pinned requests only see their machine's worker
 	filteredWorkers = s.filterWorkersByWorkspaceScope(filteredWorkers, request)
 	filteredWorkers = filterWorkersByPoolSelectorForFailover(filteredWorkers, request, chain)
 	filteredWorkers = s.filterAgentWorkersByStorage(filteredWorkers, request)
-	filteredWorkers = s.filterMarketplaceWorkers(filteredWorkers, request)
+	filteredWorkers = s.filterProviderWorkers(filteredWorkers, request)
 	filteredWorkers = s.filterLivePrivateAgentWorkers(filteredWorkers, request)
 	filteredWorkers = filterWorkersByResources(filteredWorkers, request, chain) // Filter workers resource requirements
 	filteredWorkers = s.filterWorkersByFlags(filteredWorkers, request)          // Filter workers by flags
@@ -1362,6 +1408,7 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 			score:        score,
 			failoverRank: failoverRankForWorker(chain, worker, request),
 			storageRank:  s.storagePreferenceRank(worker, request),
+			evictionRank: evictionRankForWorker(worker, request),
 		})
 	}
 
@@ -1376,6 +1423,14 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 		if scoredWorkers[i].storageRank != scoredWorkers[j].storageRank {
 			return scoredWorkers[i].storageRank < scoredWorkers[j].storageRank
 		}
+		// Idle capacity before eviction, ahead of pool priority: a worker that
+		// can start the request now beats a preferred worker that first has to
+		// drain a managed endpoint replica (and throw away its loaded model).
+		// Hard constraints (isolation, storage, explicit failover order) were
+		// applied above and are not traded for this.
+		if scoredWorkers[i].evictionRank != scoredWorkers[j].evictionRank {
+			return scoredWorkers[i].evictionRank < scoredWorkers[j].evictionRank
+		}
 		if scoredWorkers[i].score != scoredWorkers[j].score {
 			return scoredWorkers[i].score > scoredWorkers[j].score
 		}
@@ -1385,6 +1440,21 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 	})
 
 	return scoredWorkers[0].worker, nil
+}
+
+// evictionRankForWorker is 0 when the request fits in the worker's free
+// capacity and 1 when it only fits by evicting containers.
+func evictionRankForWorker(worker *types.Worker, request *types.ContainerRequest) int32 {
+	if worker == nil || request == nil || !requestMayEvict(request) {
+		return 0
+	}
+	if worker.FreeCpu < request.Cpu || worker.FreeMemory < capacityMemoryForScheduling(request) {
+		return 1
+	}
+	if request.RequiresGPU() && worker.FreeGpuCount < gpuCountForScheduling(request) {
+		return 1
+	}
+	return 0
 }
 
 func failoverRankForWorker(chain *failoverChain, worker *types.Worker, request *types.ContainerRequest) int32 {
@@ -1444,156 +1514,32 @@ func (s *Scheduler) filterAgentWorkersByStorage(workers []*types.Worker, request
 	return filtered
 }
 
-func (s *Scheduler) filterMarketplaceWorkers(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
+// filterProviderWorkers drops provider-pool workers unless the request is a
+// managed endpoint replica; workspace-supplied machines never run ordinary
+// workloads, even when addressed by pool selector.
+func (s *Scheduler) filterProviderWorkers(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
 	if len(workers) == 0 || s == nil || s.workerPoolManager == nil {
 		return workers
 	}
-	// Loaded once per filter pass (single indexed read), only when a
-	// serverless marketplace candidate actually needs it.
-	var rentedByMachine map[string]uint32
-	rentedLoaded := false
-
 	filtered := make([]*types.Worker, 0, len(workers))
 	for _, worker := range workers {
 		if worker == nil {
 			continue
 		}
-		if !s.isMarketplaceWorker(worker) {
-			filtered = append(filtered, worker)
+		if s.isProviderWorker(worker) && !isManagedRequest(request) {
 			continue
-		}
-		if request == nil || !request.AllowMarketplace || !marketplaceRequestSafe(request) {
-			continue
-		}
-		// Rented GPUs are invisible to serverless requests; only the renter's
-		// machine-pinned workloads may consume them. Machine-pinned requests
-		// are entitled to the rented capacity, so no subtraction applies.
-		if request.MachineId == "" {
-			if !rentedLoaded {
-				rentedByMachine = s.rentedGPUsByMachine()
-				rentedLoaded = true
-			}
-			// Fail closed: without rental visibility we can't prove this
-			// capacity isn't exclusively held by a renter.
-			if rentedByMachine == nil {
-				continue
-			}
-			if !workerFitsWithRentals(worker, request, rentedByMachine[worker.MachineId]) {
-				continue
-			}
 		}
 		filtered = append(filtered, worker)
 	}
 	return filtered
 }
 
-// rentedGPUsByMachine sums active rental GPUs per machine. Returns nil when
-// the lookup fails so callers can fail closed; a scheduler without a compute
-// repo (no marketplace support) reports no rentals.
-func (s *Scheduler) rentedGPUsByMachine() map[string]uint32 {
-	rented := map[string]uint32{}
-	if s.computeRepo == nil {
-		return rented
-	}
-	ctx := s.ctx
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	rentals, err := s.computeRepo.ListAllMarketplaceRentals(ctx)
-	if err != nil {
-		log.Warn().Err(err).Msg("failed to list marketplace rentals; hiding marketplace capacity from serverless requests")
-		return nil
-	}
-	for _, rental := range rentals {
-		if rental != nil && rental.MachineID != "" {
-			rented[rental.MachineID] += rental.GPUCount
-		}
-	}
-	return rented
-}
-
-// workerFitsWithRentals reports whether a serverless request still fits after
-// subtracting the machine's rented GPUs from free capacity. Free already
-// accounts for running containers (including rental workloads), so
-// subtracting full rentals is conservative: rented-but-idle GPUs are held
-// back, rented-and-busy GPUs are never double counted below zero fit.
-func workerFitsWithRentals(worker *types.Worker, request *types.ContainerRequest, rented uint32) bool {
-	if rented == 0 || !request.RequiresGPU() {
-		return true
-	}
-	if worker.FreeGpuCount < rented {
-		return false
-	}
-	return worker.FreeGpuCount-rented >= gpuCountForScheduling(request)
-}
-
-func (s *Scheduler) isMarketplaceWorker(worker *types.Worker) bool {
+func (s *Scheduler) isProviderWorker(worker *types.Worker) bool {
 	if s == nil || s.workerPoolManager == nil || worker == nil {
 		return false
 	}
 	pool, ok := s.workerPoolManager.GetPool(workerPoolSelector(worker))
-	return ok && pool.Config.Mode == types.PoolModeMarketplace
-}
-
-func marketplaceRequestSafe(request *types.ContainerRequest) bool {
-	if request == nil {
-		return false
-	}
-	if request.DockerEnabled {
-		return false
-	}
-	if request.PoolSelector != "" {
-		return false
-	}
-	if marketplaceRequestHasUnsafeMount(request) {
-		return false
-	}
-	return true
-}
-
-func marketplaceRequestHasUnsafeMount(request *types.ContainerRequest) bool {
-	if request == nil {
-		return false
-	}
-	for _, mount := range request.Mounts {
-		if mount.MountType == types.StorageModeDurableDisk || mount.DurableDisk != nil {
-			return true
-		}
-		if marketplaceMountUnsafe(mount) {
-			return true
-		}
-	}
-	return false
-}
-
-func marketplaceMountUnsafe(mount types.Mount) bool {
-	localPath := cleanMarketplaceMountPath(mount.LocalPath)
-	mountPath := cleanMarketplaceMountPath(mount.MountPath)
-	return strings.Contains(localPath, "docker.sock") ||
-		strings.Contains(mountPath, "docker.sock") ||
-		marketplaceBroadHostPath(localPath)
-}
-
-func cleanMarketplaceMountPath(value string) string {
-	return path.Clean(strings.TrimSpace(value))
-}
-
-func marketplaceBroadHostPath(localPath string) bool {
-	if localPath == "" || localPath == "." {
-		return false
-	}
-	if _, ok := marketplaceBlockedHostMounts[localPath]; ok {
-		return true
-	}
-	for _, prefix := range marketplaceBlockedHostMountPrefixes {
-		if localPath == prefix {
-			return true
-		}
-		if strings.HasPrefix(localPath, prefix+"/") {
-			return true
-		}
-	}
-	return false
+	return ok && pool.Config.Mode == types.PoolModeProvider
 }
 
 func (s *Scheduler) filterLivePrivateAgentWorkers(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {

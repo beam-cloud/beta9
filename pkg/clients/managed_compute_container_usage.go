@@ -26,22 +26,18 @@ type managedComputeContainerUsageRoute struct {
 	client    *http.Client
 }
 
-// ManagedComputeContainerUsageRecorder chooses one external ledger per interval.
-// Tama gives shared-pool sandbox stubs the same prefix as its private pools, so
-// one PoolRoute selects Tama billing in both placement modes. Marketplace is the
-// fallback only when no route matches.
+// ManagedComputeContainerUsageRecorder reports sandbox container usage to the
+// external ledger whose PoolRoute prefix matches the stub. Tama gives
+// shared-pool sandbox stubs the same prefix as its private pools, so one
+// PoolRoute selects Tama billing in both placement modes. Usage that matches no
+// route is not reported.
 type ManagedComputeContainerUsageRecorder struct {
-	routes      []managedComputeContainerUsageRoute
-	marketplace *ManagedComputeUsageRecorder
+	routes []managedComputeContainerUsageRoute
 }
 
-func NewManagedComputeContainerUsageRecorder(
-	config types.ManagedComputeConfig,
-	worker WorkerIdentity,
-) *ManagedComputeContainerUsageRecorder {
+func NewManagedComputeContainerUsageRecorder(config types.ManagedComputeConfig) *ManagedComputeContainerUsageRecorder {
 	recorder := &ManagedComputeContainerUsageRecorder{
-		marketplace: NewManagedComputeUsageRecorder(config, worker),
-		routes:      make([]managedComputeContainerUsageRoute, 0, len(config.Billing.PoolRoutes)),
+		routes: make([]managedComputeContainerUsageRoute, 0, len(config.Billing.PoolRoutes)),
 	}
 	for _, configured := range config.Billing.PoolRoutes {
 		prefix := strings.TrimSpace(configured.PoolNamePrefix)
@@ -57,7 +53,7 @@ func NewManagedComputeContainerUsageRecorder(
 			client:    &http.Client{Timeout: routeConfig.TimeoutOrDefault()},
 		})
 	}
-	if len(recorder.routes) == 0 && recorder.marketplace == nil {
+	if len(recorder.routes) == 0 {
 		return nil
 	}
 	return recorder
@@ -73,17 +69,15 @@ func (r *ManagedComputeContainerUsageRecorder) RecordContainerUsage(
 		return nil
 	}
 
-	if route := r.routeFor(request); route != nil {
-		body, err := managedComputeContainerUsageBody(request, start, end, costCents)
-		if err != nil {
-			return err
-		}
-		return route.post(ctx, body)
+	route := r.routeFor(request)
+	if route == nil {
+		return nil
 	}
-	if r.marketplace != nil {
-		return r.marketplace.RecordContainerUsage(ctx, request, start, end, costCents)
+	body, err := managedComputeContainerUsageBody(request, start, end, costCents)
+	if err != nil {
+		return err
 	}
-	return nil
+	return route.post(ctx, body)
 }
 
 func (r *ManagedComputeContainerUsageRecorder) routeFor(request *types.ContainerRequest) *managedComputeContainerUsageRoute {

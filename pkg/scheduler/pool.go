@@ -189,7 +189,11 @@ func freePoolCapacity(workerRepo repository.WorkerRepository, poolName string) (
 	if err != nil {
 		return nil, err
 	}
+	return poolCapacityFromWorkers(workers), nil
+}
 
+// poolCapacityFromWorkers sums schedulable capacity across a pool's workers.
+func poolCapacityFromWorkers(workers []*types.Worker) *WorkerPoolCapacity {
 	capacity := &WorkerPoolCapacity{
 		FreeCpu:    0,
 		FreeMemory: 0,
@@ -207,6 +211,8 @@ func freePoolCapacity(workerRepo repository.WorkerRepository, poolName string) (
 				capacity.PendingGpu += uint(worker.TotalGpuCount)
 			}
 		default:
+			// Physical idle capacity only: a GPU held by a managed endpoint
+			// replica does not satisfy the minimum-free floor.
 			capacity.FreeCpu += worker.FreeCpu
 			capacity.FreeMemory += worker.FreeMemory
 			if worker.Gpu != "" && (worker.FreeCpu > 0 && worker.FreeMemory > 0) {
@@ -215,7 +221,7 @@ func freePoolCapacity(workerRepo repository.WorkerRepository, poolName string) (
 		}
 	}
 
-	return capacity, nil
+	return capacity
 }
 
 func calculateMemoryQuantity(percentStr string, memoryTotal int64) resource.Quantity {

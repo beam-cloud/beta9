@@ -22,6 +22,7 @@ type WorkerRepository interface {
 	ToggleWorkerAvailable(workerId, generation string) error
 	SetWorkerCordon(workerId string, cordoned bool) error
 	PrepareWorkerRollout(workerId, generation string) (bool, error)
+	CancelWorkerRollout(workerId, generation string) error
 	UpdateWorkerStatus(workerId string, status types.WorkerStatus) error
 	RemoveWorker(workerId string) error
 	SetWorkerKeepAlive(workerId string, keepAlive types.WorkerKeepAlive) error
@@ -135,20 +136,6 @@ type ComputeRepository interface {
 	SaveAgentWorkerSlotState(ctx context.Context, state *compute.AgentWorkerSlotState) error
 	ListAgentWorkerSlotStates(ctx context.Context, workspaceID, poolName, machineID string) ([]*compute.AgentWorkerSlotState, error)
 	DeleteAgentWorkerSlotState(ctx context.Context, workspaceID, poolName, machineID, workerID string) error
-	SaveMarketplaceListing(ctx context.Context, state *compute.MarketplaceListingState) error
-	GetMarketplaceListing(ctx context.Context, sellerWorkspaceID, listingID string) (*compute.MarketplaceListingState, error)
-	GetMarketplaceListingByID(ctx context.Context, listingID string) (*compute.MarketplaceListingState, error)
-	ListMarketplaceListings(ctx context.Context, sellerWorkspaceID string, limit int) ([]*compute.MarketplaceListingState, error)
-	ListAllMarketplaceListings(ctx context.Context, limit int) ([]*compute.MarketplaceListingState, error)
-	DeleteMarketplaceListing(ctx context.Context, sellerWorkspaceID, listingID string) error
-	LockMachineRentals(ctx context.Context, machineID string) error
-	UnlockMachineRentals(machineID string) error
-	SaveMarketplaceRental(ctx context.Context, state *compute.MarketplaceRentalState) error
-	GetMarketplaceRental(ctx context.Context, buyerWorkspaceID, rentalID string) (*compute.MarketplaceRentalState, error)
-	ListMarketplaceRentals(ctx context.Context, buyerWorkspaceID string) ([]*compute.MarketplaceRentalState, error)
-	ListMarketplaceRentalsForMachine(ctx context.Context, machineID string) ([]*compute.MarketplaceRentalState, error)
-	ListAllMarketplaceRentals(ctx context.Context) ([]*compute.MarketplaceRentalState, error)
-	DeleteMarketplaceRental(ctx context.Context, state *compute.MarketplaceRentalState) error
 	PushFailoverDemand(ctx context.Context, demand *compute.FailoverDemand, ttl time.Duration) error
 	ListFailoverDemand(ctx context.Context) ([]*compute.FailoverDemand, error)
 	DeleteFailoverDemand(ctx context.Context, gpu string) error
@@ -166,6 +153,60 @@ type ManagedPoolRepository interface {
 	GetManagedPoolState(ctx context.Context, workspaceID, name string) (*compute.PoolState, error)
 	ListManagedPoolStates(ctx context.Context, workspaceID string, limit int) ([]*compute.PoolState, error)
 	DeleteManagedPoolState(ctx context.Context, workspaceID, name string) error
+}
+
+// ManagedEndpointRepository stores the fast-changing state of the managed
+// endpoints platform: the registry of deployed endpoint/service versions,
+// live replicas, harness config revisions and acks, tuning experiments,
+// rollout and GitOps state, and rolled-up route metrics. The durable stub
+// itself lives in Postgres; everything here can be rebuilt from stubs +
+// heartbeats.
+type ManagedEndpointRepository interface {
+	// Registry: the deployed endpoints and the fleet (placement) from the repo
+	SaveEndpoint(ctx context.Context, endpoint *types.ManagedEndpoint) error
+	GetEndpoint(ctx context.Context, endpointID string) (*types.ManagedEndpoint, error)
+	ListEndpoints(ctx context.Context) ([]*types.ManagedEndpoint, error)
+	SaveFleet(ctx context.Context, fleet *types.Fleet) error
+	GetFleet(ctx context.Context) (*types.Fleet, error)
+
+	// Replicas
+	SaveReplica(ctx context.Context, replica *types.EndpointReplica) error
+	GetReplica(ctx context.Context, replicaID string) (*types.EndpointReplica, error)
+	GetReplicaByContainer(ctx context.Context, containerID string) (*types.EndpointReplica, error)
+	ListReplicas(ctx context.Context, endpointID string) ([]*types.EndpointReplica, error)
+	ListAllReplicas(ctx context.Context) ([]*types.EndpointReplica, error)
+	DeleteReplica(ctx context.Context, replicaID string) error
+	WithReplicaLock(ctx context.Context, replicaID string, fn func(context.Context) error) error
+	SetReplicaProtection(ctx context.Context, replicaID string, protected bool) (*types.EndpointReplica, error)
+	RequestDrain(ctx context.Context, replicaID string, drainSeconds uint32) error
+	DrainRequested(ctx context.Context, replicaID string) (bool, uint32, error)
+	SetScheduleBackoff(ctx context.Context, endpointID, gpu string, ttl time.Duration) error
+	InScheduleBackoff(ctx context.Context, endpointID, gpu string) (bool, error)
+	// Live config: the replica record holds the config; these wake WatchConfig streams.
+	NotifyReplicaConfig(ctx context.Context, replicaID string, revision uint64) error
+	SubscribeReplicaConfig(ctx context.Context, replicaID string) (<-chan uint64, error)
+
+	// GitOps
+	SaveGitOpsState(ctx context.Context, state *types.GitOpsState) error
+	GetGitOpsState(ctx context.Context) (*types.GitOpsState, error)
+
+	// Route metrics (minute buckets, bounded retention)
+	RecordRouteSample(ctx context.Context, sample types.RouteSample) error
+	GetRouteMetrics(ctx context.Context, endpointID, gpu, replicaID string, configRevision uint64, window time.Duration) (*types.RouteMetrics, error)
+
+	// Route records: generation lookups
+	SaveGeneration(ctx context.Context, record *types.EventEndpointRouteSchema, ttl time.Duration) error
+	GetGeneration(ctx context.Context, generationID string) (*types.EventEndpointRouteSchema, error)
+	ListPendingAccounting(ctx context.Context, limit int64) ([]types.EventEndpointRouteSchema, error)
+	CompleteAccounting(ctx context.Context, generationID string, ttl time.Duration) error
+
+	// Usage: daily per-workspace, per-model counters (spend and provider earnings)
+	AddUsage(ctx context.Context, kind types.UsageKind, workspaceID, model, requestID string, at time.Time, delta types.Usage) error
+	GetUsage(ctx context.Context, kind types.UsageKind, workspaceID string, from, to time.Time) (*types.UsageReport, error)
+
+	// Metering: closed minute buckets of usage not yet sent to the billing meter
+	ListMeterBuckets(ctx context.Context, before time.Time) ([]types.MeterBucket, error)
+	DeleteMeterBucket(ctx context.Context, key string) error
 }
 
 type WorkspaceRepository interface {
@@ -347,7 +388,6 @@ type EventRepository interface {
 	PushContainerLogEvent(entry types.EventContainerLogSchema)
 	PushContainerLogEventQueued(entry types.EventContainerLogSchema) error
 	PushPlatformLogEvent(entry types.EventPlatformLogSchema)
-	PushLLMRouteEvent(event types.EventLLMRouteSchema)
 	PushContainerRequestEvent(workerID string, request *types.ContainerRequest, eventID types.ContainerEventID, opts types.ContainerEventOptions)
 	PushContainerRequestLifecycle(workerID string, request *types.ContainerRequest, lifecycleID types.ContainerLifecycleID, startedAt time.Time, duration time.Duration, success bool, opts types.ContainerLifecycleOptions)
 	PushContainerTaskEvent(task *types.TaskWithRelated, eventID types.ContainerEventID, opts types.ContainerEventOptions)
@@ -378,6 +418,8 @@ type EventRepository interface {
 	PushWorkerStoppedEvent(workerID string)
 	PushWorkerDeletedEvent(workerID, machineID, poolName string, reason types.DeletedWorkerReason)
 	PushComputeEvent(eventType string, event types.EventComputeSchema)
+	PushEndpointEvent(eventType string, event types.EventEndpointSchema)
+	PushEndpointRouteEvent(event types.EventEndpointRouteSchema)
 	PushDeployStubEvent(workspaceId string, stub *types.Stub)
 	PushServeStubEvent(workspaceId string, stub *types.Stub)
 	PushRunStubEvent(workspaceId string, stub *types.Stub)

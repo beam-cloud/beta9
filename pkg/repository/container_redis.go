@@ -49,7 +49,8 @@ var errConcurrencyCounterRepairing = errors.New("concurrency counter repair in p
 // Opening worker routes are republished for every container startup. Once the
 // agent has made an identical shared route ready, those registrations must not
 // demote it or erase its proxy target. WorkspaceID is deliberately not part of
-// the target identity because marketplace workers can serve buyer workspaces.
+// the target identity because provider-pool workers serve managed endpoint
+// replicas owned by a different workspace than the machine's owner.
 var setOpeningWorkerBackendRouteScript = redis.NewScript(`
 local incoming = cjson.decode(ARGV[1])
 local current = redis.call("GET", KEYS[1])
@@ -253,6 +254,9 @@ func (cr *ContainerRedisRepository) setContainerState(containerId string, state 
 		"memory", state.Memory,
 		"worker_id", state.WorkerId,
 		"machine_id", state.MachineId,
+		"evictable", state.Evictable,
+		"drain_seconds", state.DrainSeconds,
+		"evict_order", state.EvictOrder,
 	)
 	pipe.Expire(ctx, stateKey, time.Duration(types.ContainerStateTtlSWhilePending)*time.Second)
 	pipe.SAdd(ctx, stubIndexKey, stateKey)
@@ -313,9 +317,20 @@ func (cr *ContainerRedisRepository) GetContainerExitCode(containerId string) (in
 	return exitCode, nil
 }
 
-func (cr *ContainerRedisRepository) UpdateContainerStatus(containerId string, requestedStatus types.ContainerStatus, expirySeconds int64) error {
-	expiry := time.Duration(expirySeconds) * time.Second
+// The scheduler commits eviction under the worker lock, not the container lock.
+// Compare the observed status atomically so a delayed heartbeat cannot overwrite
+// that STOPPING transition or any assignment/eviction metadata written with it.
+var updateContainerStatusScript = redis.NewScript(`
+local status = redis.call("HGET", KEYS[1], "status")
+if not status then return -1 end
+if status ~= ARGV[1] then return 0 end
+redis.call("HSET", KEYS[1], "status", ARGV[2], "started_at", ARGV[3])
+redis.call("EXPIRE", KEYS[1], ARGV[4])
+redis.call("ZADD", KEYS[2], ARGV[5], KEYS[1])
+return 1
+`)
 
+func (cr *ContainerRedisRepository) UpdateContainerStatus(containerId string, requestedStatus types.ContainerStatus, expirySeconds int64) error {
 	switch requestedStatus {
 	case types.ContainerStatusPending, types.ContainerStatusRunning, types.ContainerStatusStopping:
 		// continue
@@ -352,6 +367,22 @@ func (cr *ContainerRedisRepository) UpdateContainerStatus(containerId string, re
 		// particular, STOPPING is terminal until the state is deleted.
 		return nil
 	}
+	if requestedStatus == types.ContainerStatusRunning && strings.HasPrefix(containerId, "managed-") {
+		// The prefix only avoids extra reads for ordinary serverless heartbeats.
+		// The controller's live replica and its assignment authorize the longer
+		// ownership lease, including for protected (non-evictable) models. Never
+		// recreate missing state or extend a STOPPING transition.
+		replicas := &ManagedEndpointRedisRepository{rdb: cr.rdb}
+		replica, err := replicas.GetReplicaByContainer(context.TODO(), containerId)
+		if err != nil {
+			return fmt.Errorf("failed to resolve managed container lease <%s>: %w", containerId, err)
+		}
+		if replica != nil && replica.ContainerID == containerId && replica.Alive() && state.WorkerId != "" &&
+			(replica.WorkerID == "" || replica.WorkerID == state.WorkerId) {
+			expirySeconds = max(expirySeconds, types.ContainerStateTtlSManagedEndpoint)
+		}
+	}
+	expiry := time.Duration(expirySeconds) * time.Second
 
 	// Update StartedAt if this is the first time we set container status to RUNNING
 	if requestedStatus == types.ContainerStatusRunning && storedStatus != types.ContainerStatusRunning {
@@ -361,16 +392,17 @@ func (cr *ContainerRedisRepository) UpdateContainerStatus(containerId string, re
 	// Update status
 	state.Status = requestedStatus
 
-	// Save state to database
-	pipe := cr.rdb.TxPipeline()
-	pipe.HSet(context.TODO(), stateKey, common.ToSlice(state))
-	pipe.Expire(context.TODO(), stateKey, expiry)
-	pipe.ZAdd(context.TODO(), common.RedisKeys.SchedulerContainerStateIndex(), redis.Z{
-		Score:  float64(time.Now().Add(expiry).Unix()),
-		Member: stateKey,
-	})
-	if _, err = pipe.Exec(context.TODO()); err != nil {
+	updated, err := updateContainerStatusScript.Run(context.TODO(), cr.rdb, []string{
+		stateKey, common.RedisKeys.SchedulerContainerStateIndex(),
+	}, string(storedStatus), string(requestedStatus), state.StartedAt, expirySeconds, time.Now().Add(expiry).Unix()).Int()
+	if err != nil {
 		return fmt.Errorf("failed to set container state ttl <%v>: %w", stateKey, err)
+	}
+	if updated < 0 {
+		return &types.ErrContainerStateNotFound{ContainerId: containerId}
+	}
+	if updated == 0 {
+		return nil
 	}
 
 	if requestedStatus == types.ContainerStatusStopping {
@@ -378,6 +410,17 @@ func (cr *ContainerRedisRepository) UpdateContainerStatus(containerId string, re
 		// callers can retry if a previous release failed after status persisted.
 		if err := cr.releaseContainerConcurrencyReservation(context.TODO(), state.WorkspaceId, containerId); err != nil {
 			return err
+		}
+		// Stop advertising an evictable container as reclaimable. Re-deriving
+		// under the worker lease (STOPPING is already persisted) is idempotent
+		// and safe against concurrent reconciliation.
+		if state.Evictable && state.WorkerId != "" {
+			workers := &WorkerRedisRepository{rdb: cr.rdb, lock: cr.lock}
+			err := workers.withWorker(state.WorkerId, workers.reconcileStoredWorkerCapacity)
+			var notFound *types.ErrWorkerNotFound
+			if err != nil && !errors.As(err, &notFound) {
+				return fmt.Errorf("failed to reconcile worker capacity for stopping container <%s>: %w", containerId, err)
+			}
 		}
 	}
 
@@ -1219,16 +1262,19 @@ func (c *ContainerRedisRepository) createContainerState(quota *types.Concurrency
 		}
 	}
 	err = c.setContainerState(request.ContainerId, &types.ContainerState{
-		ContainerId: request.ContainerId,
-		StubId:      request.StubId,
-		WorkspaceId: request.WorkspaceId,
-		Status:      types.ContainerStatusPending,
-		ScheduledAt: time.Now().Unix(),
-		Gpu:         request.Gpu,
-		GpuCount:    request.GpuCount,
-		Cpu:         request.Cpu,
-		Memory:      request.Memory,
-		MachineId:   request.MachineId,
+		ContainerId:  request.ContainerId,
+		StubId:       request.StubId,
+		WorkspaceId:  request.WorkspaceId,
+		Status:       types.ContainerStatusPending,
+		ScheduledAt:  time.Now().Unix(),
+		Gpu:          request.Gpu,
+		GpuCount:     request.GpuCount,
+		Cpu:          request.Cpu,
+		Memory:       request.Memory,
+		MachineId:    request.MachineId,
+		Evictable:    request.Evictable,
+		DrainSeconds: request.DrainSeconds,
+		EvictOrder:   request.EvictOrder,
 	})
 	if err == nil {
 		return nil

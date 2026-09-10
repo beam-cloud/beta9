@@ -401,7 +401,9 @@ func (wpc *AgentWorkerPoolController) machineAvailableCapacity(machine *compute.
 	}
 	switch worker.Status {
 	case types.WorkerStatusAvailable:
-		return worker.FreeCpu, worker.FreeMemory, worker.FreeGpuCount
+		// Capacity held by evictable containers is reclaimable, so it counts
+		// as available for the serverless requests that decide provisioning.
+		return worker.FreeCpu + worker.EvictableCpu, worker.FreeMemory + worker.EvictableMemory, worker.FreeGpuCount + worker.EvictableGpuCount
 	case types.WorkerStatusPending:
 		return worker.TotalCpu, worker.TotalMemory, worker.TotalGpuCount
 	case types.WorkerStatusDisabled:

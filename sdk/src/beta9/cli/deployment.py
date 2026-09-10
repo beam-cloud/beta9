@@ -258,22 +258,6 @@ def _service_image_option(kwargs: Dict) -> Optional[Image]:
     return kwargs.get("image")
 
 
-def _llm_options_present(kwargs: Dict) -> bool:
-    return any(
-        key.startswith("llm_") and value not in (None, "", 0, False)
-        for key, value in kwargs.items()
-    )
-
-
-def _service_llm_metadata(kwargs: Dict, image: Optional[Image], entrypoint: Optional[List[str]]):
-    if not _llm_options_present(kwargs):
-        return None
-
-    from .llm import service_llm_metadata
-
-    return service_llm_metadata(kwargs, image=image, entrypoint=entrypoint)
-
-
 def _service_checkpoint_options(kwargs: Dict) -> Dict:
     options = {
         "checkpoint_enabled": bool(kwargs.get("checkpoint_enabled")),
@@ -289,14 +273,6 @@ def _service_checkpoint_options(kwargs: Dict) -> Dict:
         )
     return options
 
-
-def _apply_llm_metadata_if_requested(user_obj, kwargs: Dict) -> bool:
-    if not _llm_options_present(kwargs):
-        return True
-
-    from .llm import apply_llm_metadata
-
-    return apply_llm_metadata(user_obj, kwargs)
 
 
 def _generate_service_module(name: Optional[str], kwargs: Dict) -> Service:
@@ -323,13 +299,6 @@ def _generate_service_module(name: Optional[str], kwargs: Dict) -> Service:
         "tcp": bool(kwargs.get("tcp")),
     }
     service_kwargs.update(_service_checkpoint_options(kwargs))
-    llm_metadata = _service_llm_metadata(
-        kwargs,
-        image=service_image,
-        entrypoint=service_kwargs["entrypoint"],
-    )
-    if llm_metadata is not None:
-        service_kwargs.update(llm_metadata)
 
     for key in ("cpu", "memory", "gpu", "gpu_count", "secrets"):
         value = kwargs.get(key)
@@ -433,9 +402,6 @@ def create_deployment(
                 return
 
         if not handle_config_override(user_obj, kwargs):
-            raise click.exceptions.Exit(1)
-
-        if not _apply_llm_metadata_if_requested(user_obj, kwargs):
             raise click.exceptions.Exit(1)
 
         if hasattr(user_obj, "generate_deployment_artifacts"):

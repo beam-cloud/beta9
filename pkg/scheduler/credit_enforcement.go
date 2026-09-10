@@ -45,9 +45,8 @@ func (s *Scheduler) StartCreditEnforcement() {
 	}
 }
 
-// enforceCredits stops every managed container whose workspace is denied by
-// the credit gate. Containers on the workspace's own private pools are left
-// alone, mirroring the exemption in Run.
+// enforceCredits stops customer containers whose workspace is denied by the
+// credit gate. Private pools and platform endpoint replicas are exempt, as in Run.
 func (s *Scheduler) enforceCredits(ctx context.Context) error {
 	workers, err := s.workerRepo.GetAllWorkers()
 	if err != nil {
@@ -89,6 +88,37 @@ func (s *Scheduler) enforceCredits(ctx context.Context) error {
 			continue
 		}
 		if decision.OK {
+			continue
+		}
+
+		// Resolve immutable stub types only for denied workspaces, once per
+		// stub per sweep. This adds no I/O to serverless admission and also
+		// covers containers created by older gateways. Container ID prefixes
+		// and Evictable are not authoritative (protected endpoints are exempt too).
+		exemptStubs := map[string]bool{}
+		billable := containers[:0]
+		for _, container := range containers {
+			if container.StubId != "" {
+				exempt, known := exemptStubs[container.StubId]
+				if !known {
+					stub, err := s.backendRepo.GetStubByExternalId(ctx, container.StubId)
+					if err != nil || stub == nil {
+						log.Warn().Err(err).Str("stub_id", container.StubId).Msg("credit gate: skipping enforcement, stub unavailable")
+						// Never stop an unknown workload based on a guessed type.
+						exempt = true
+					} else {
+						exempt = stub.Type.IsPlatformWorkload()
+					}
+					exemptStubs[container.StubId] = exempt
+				}
+				if exempt {
+					continue
+				}
+			}
+			billable = append(billable, container)
+		}
+		containers = billable
+		if len(containers) == 0 {
 			continue
 		}
 

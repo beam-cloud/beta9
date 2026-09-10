@@ -343,7 +343,7 @@ func TestBackendDialerTSNetCallerCancellationWins(t *testing.T) {
 	}
 }
 
-// A dead peer (offline seller machine) produces netmap miss + NXDOMAIN on
+// A dead peer (offline provider machine) produces netmap miss + NXDOMAIN on
 // every dial. That failure must remain local to the request; recycling the
 // shared tsnet server would drop every other route.
 func TestBackendDialerTSNetDeadPeerDoesNotRecycleServer(t *testing.T) {

@@ -11,10 +11,7 @@ type fakeGPUPoolChecker struct {
 	supported map[string]bool
 }
 
-func (f fakeGPUPoolChecker) HasManagedPoolForGPU(gpuType string, allowMarketplace bool) bool {
-	if allowMarketplace {
-		return f.supported[gpuType] || f.supported[gpuType+":marketplace"]
-	}
+func (f fakeGPUPoolChecker) HasManagedPoolForGPU(gpuType string) bool {
 	return f.supported[gpuType]
 }
 
@@ -67,18 +64,4 @@ func TestStubSchedulableSkipsMachinePinnedStubs(t *testing.T) {
 
 	ok, _ := StubSchedulable(checker, config)
 	require.True(t, ok, "machine-pinned stubs must never fail fast")
-}
-
-func TestStubSchedulableMarketplaceOptIn(t *testing.T) {
-	checker := fakeGPUPoolChecker{supported: map[string]bool{"A6000:marketplace": true}}
-	config := &types.StubConfigV1{
-		Runtime: types.Runtime{Gpus: []types.GpuType{types.GpuType("A6000")}},
-	}
-
-	ok, _ := StubSchedulable(checker, config)
-	require.False(t, ok)
-
-	config.AllowMarketplace = true
-	ok, _ = StubSchedulable(checker, config)
-	require.True(t, ok)
 }

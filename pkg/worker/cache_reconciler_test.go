@@ -120,7 +120,7 @@ func TestAuditCacheChurnEventIncludesMachineFields(t *testing.T) {
 	events := &fakeEventRepo{}
 	manager := &WorkerCacheManager{
 		config: types.AppConfig{
-			ManagedCompute: types.ManagedComputeConfig{SellerWorkspaceID: "workspace-a"},
+			Database: types.DatabaseConfig{S2: types.S2Config{EventStreamPrefix: "workspaces/workspace-a/events"}},
 		},
 		eventRepo: events,
 		workerID:  "worker-a",

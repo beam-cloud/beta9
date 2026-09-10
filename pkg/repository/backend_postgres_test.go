@@ -103,6 +103,25 @@ func TestGetAdminWorkspaceMapsExternalID(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestGetAdminWorkspaceIncludesStorageForAgentScheduling(t *testing.T) {
+	repo, mock := NewBackendPostgresRepositoryForTest()
+	createdAt := time.Now().UTC()
+	mock.ExpectQuery(adminWorkspaceQueryPattern).WillReturnRows(sqlmock.NewRows([]string{
+		"id", "external_id", "name", "created_at", "storage.id", "storage.bucket_name", "storage.endpoint_url", "storage.region",
+	}).AddRow(uint(7), "admin-workspace", "Admin", createdAt, uint(9), "admin-model-cache", "https://storage.example.com", "us-east-1"))
+
+	workspace, err := repo.GetAdminWorkspace(context.Background())
+	require.NoError(t, err)
+	require.True(t, workspace.StorageAvailable(), "hosted replicas need workspace storage to use agent workers")
+	require.Equal(t, "admin-model-cache", *workspace.Storage.BucketName)
+	require.True(t, (&types.ContainerRequest{Workspace: *workspace}).StorageAvailable())
+	// The cached record must retain the same storage metadata.
+	cached, err := repo.GetAdminWorkspace(context.Background())
+	require.NoError(t, err)
+	require.True(t, cached.StorageAvailable())
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func waitForAdminWorkspaceLoad(t *testing.T, repo *PostgresBackendRepository) {
 	t.Helper()
 	require.Eventually(t, func() bool {

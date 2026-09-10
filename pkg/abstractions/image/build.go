@@ -195,7 +195,7 @@ func (b *Build) setupPythonEnv() error {
 }
 
 func (b *Build) executeCommands() error {
-	log.Info().Str("container_id", b.containerID).Interface("options", b.opts).Msg("container building")
+	log.Info().Str("container_id", b.containerID).Str("python_version", b.opts.PythonVersion).Msg("container building")
 	startTime := time.Now()
 
 	for _, cmd := range b.commands {
@@ -328,6 +328,12 @@ func (b *Build) generateContainerRequest() (*types.ContainerRequest, error) {
 		Workspace:   *b.authInfo.Workspace,
 		EntryPoint:  []string{"tail", "-f", "/dev/null"},
 		Mounts:      b.mounts,
+	}
+	// The controller's short-lived deployer credential is the authority for
+	// platform builds. Workspace credentials and request-supplied fields cannot
+	// opt ordinary builds out of prepaid admission or compute billing.
+	if b.authInfo.Token != nil && b.authInfo.Token.TokenType == types.TokenTypePlatformDeployer {
+		req.Stub.Type = types.StubType(types.StubTypePlatformDeployer)
 	}
 
 	if b.opts.BuildCtxObject != "" {

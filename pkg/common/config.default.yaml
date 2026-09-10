@@ -499,6 +499,25 @@ managedCompute:
     reconcileInterval: 1m
     minimumCreditCents: 2500
     failureGracePeriod: 10m
+managedEndpoints:
+  enabled: false
+  repo:
+    url: ""
+    branch: main
+    path: ""
+    deployKey: ""
+  webhook:
+    secret: ""
+  deployerImage: ""
+  deployerSecrets: {}
+  preemption:
+    enabled: true
+  reconcile:
+    interval: 10s
+    failureBackoff: 30s
+  # Share of billed token revenue credited to the workspace whose contributed
+  # (provider pool) machine served the request.
+  providerRevenueShare: 0.7
 abstractions:
   bot:
     systemPrompt: ""

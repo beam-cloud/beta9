@@ -5,7 +5,6 @@ from typing import Dict, List, Optional, Tuple, Union
 from ..type import (
     GpuType,
     GpuTypeAlias,
-    LLMConfig,
     Pool,
     QueueDepthAutoscaler,
     ServingConfig,
@@ -194,7 +193,6 @@ class Service(Pod):
         allow_list: Optional[List[str]] = None,
         docker_enabled: bool = False,
         pool: Optional[Union[str, Pool]] = None,
-        allow_marketplace: bool = False,
         checkpoint_enabled: bool = False,
         checkpoint_readiness_path: Optional[str] = None,
         checkpoint_readiness_port: Optional[int] = None,
@@ -202,16 +200,10 @@ class Service(Pod):
         checkpoint_readiness_interval: int = 1,
         app_kind: str = "",
         serving_protocol: str = "",
-        llm: Optional[LLMConfig] = None,
         serving: Optional[ServingConfig] = None,
     ) -> None:
         if command is not None and entrypoint:
             raise ValueError("Specify either command or entrypoint, not both.")
-
-        requested_llm = llm or (serving.llm if serving else None)
-        if requested_llm is not None and pool and not gpu and gpu_count == 0:
-            gpu = GpuType.Any
-            gpu_count = 1
 
         service_entrypoint = entrypoint
 
@@ -247,7 +239,6 @@ class Service(Pod):
             allow_list=allow_list,
             docker_enabled=docker_enabled,
             pool=pool,
-            allow_marketplace=allow_marketplace,
             checkpoint_enabled=checkpoint_enabled,
             checkpoint_readiness_path=checkpoint_readiness_path,
             checkpoint_readiness_port=checkpoint_readiness_port,
@@ -255,7 +246,6 @@ class Service(Pod):
             checkpoint_readiness_interval=checkpoint_readiness_interval,
             app_kind=app_kind,
             serving_protocol=serving_protocol,
-            llm=llm,
             serving=serving,
         )
         self.is_service = True
@@ -264,17 +254,6 @@ class Service(Pod):
             max_replicas=max_replicas,
             always_on=always_on,
         )
-        self.configure_serving_autoscaler()
-
-    def configure_serving_autoscaler(self) -> None:
-        autoscaler = self.serving.autoscaler_for_replicas(
-            min_containers=self.min_replicas,
-            max_containers=self.max_replicas,
-        )
-        if autoscaler is None:
-            return
-
-        self.autoscaler = autoscaler
 
     def configure_replicas(
         self,

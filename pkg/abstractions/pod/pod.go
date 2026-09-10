@@ -350,7 +350,7 @@ func (ps *GenericPodService) getOrCreatePodInstance(stubId string, options ...fu
 		return nil, err
 	}
 
-	instance.buffer = NewPodProxyBuffer(autoscaledInstance.Ctx, ps.drainCtx, ps.rdb, &stub.Workspace, stubId, podProxyBufferSize, ps.containerRepo, ps.keyEventManager, stubConfig, string(stub.Type), stub.App.ExternalId, ps.eventRepo, ps.tailscale, ps.config.Tailscale)
+	instance.buffer = NewPodProxyBuffer(autoscaledInstance.Ctx, ps.drainCtx, ps.rdb, &stub.Workspace, stubId, podProxyBufferSize, ps.containerRepo, ps.keyEventManager, stubConfig, string(stub.Type), stub.App.ExternalId, ps.tailscale, ps.config.Tailscale)
 
 	// Embed autoscaled instance struct
 	instance.AutoscaledInstance = autoscaledInstance
@@ -551,7 +551,6 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 		CheckpointTrigger: stubConfig.CheckpointTrigger,
 		Checkpoint:        checkpoint,
 		PoolSelector:      stubConfig.PoolSelector(),
-		AllowMarketplace:  stubConfig.AllowMarketplace,
 		MachineId:         stubConfig.MachineID,
 		Hostname:          stubConfig.Hostname,
 	}

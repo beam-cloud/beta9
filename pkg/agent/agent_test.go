@@ -521,14 +521,8 @@ func TestAgentWorkerConfigDefaultsToPrivateRunc(t *testing.T) {
 	if pool.Priority != 1000 {
 		t.Fatalf("legacy slot priority = %d, want private default 1000", pool.Priority)
 	}
-	if config.ManagedCompute != nil {
-		t.Fatal("private workers must not receive billing config")
-	}
 	if !config.Worker.ContainerResourceLimits.CPUAffinityEnforced {
 		t.Fatal("agent CPU affinity must default to enabled")
-	}
-	if config.Monitoring.ContainerCostHook != nil {
-		t.Fatal("private workers must not receive cost hook config")
 	}
 }
 
@@ -586,57 +580,51 @@ func TestGVisorAgentWorkerConfigEnforcesMemory(t *testing.T) {
 	}
 }
 
-func TestAgentWorkerConfigMarketplaceSlotUsesGatewayRuntimeWithBilling(t *testing.T) {
+// Provider pools are workspace machines that serve only platform-managed
+// endpoints. Revenue share is computed gateway-side from inference usage, so
+// the worker config carries no billing identity; otherwise the slot behaves
+// like a private pool that is addressed by selector.
+func TestAgentWorkerConfigProviderSlotUsesGatewayRuntime(t *testing.T) {
 	slot := &pb.AgentWorkerSlot{
-		PoolName:             "marketplace-listing-1",
-		Mode:                 string(types.PoolModeMarketplace),
-		ContainerRuntime:     types.ContainerRuntimeRunc.String(),
-		MarketplaceListingId: "listing-1",
-		SellerWorkspaceId:    "seller-1",
-		Cpu:                  4000,
-		Memory:               8192,
+		PoolName:         "provider-pool-1",
+		Mode:             string(types.PoolModeProvider),
+		ContainerRuntime: types.ContainerRuntimeGvisor.String(),
+		Cpu:              4000,
+		Memory:           8192,
 	}
-	bootstrap := bootstrapConfig{
-		Billing: &billingBootstrapConfig{
-			UsageEndpoint:     "https://api.example.com/v2/payment/marketplace/usage/",
-			UsageToken:        "usage-token",
-			CostHookEndpoint:  "https://api.example.com/v2/cost/",
-			CostHookToken:     "cost-token",
-			BillableMarginPct: 0.1,
-		},
-	}
-	config := newAgentWorkerConfig(bootstrap, slot).sanitizedForAgent()
+	config := newAgentWorkerConfig(bootstrapConfig{WorkspaceID: "workspace-a"}, slot).sanitizedForAgent()
 
-	pool, ok := config.Worker.Pools["marketplace-listing-1"]
+	pool, ok := config.Worker.Pools["provider-pool-1"]
 	if !ok {
 		t.Fatal("pool missing from worker config")
 	}
-	if pool.Mode != string(types.PoolModeMarketplace) {
-		t.Fatalf("pool mode = %q, want marketplace (must survive sanitize)", pool.Mode)
+	if pool.Mode != string(types.PoolModeProvider) {
+		t.Fatalf("pool mode = %q, want provider (must survive sanitize)", pool.Mode)
 	}
-	if pool.ContainerRuntime != types.ContainerRuntimeRunc.String() {
+	if pool.ContainerRuntime != types.ContainerRuntimeGvisor.String() {
 		t.Fatalf("pool runtime = %q, want gateway-provided runtime", pool.ContainerRuntime)
 	}
-	if pool.RequiresPoolSelector {
-		t.Fatal("marketplace pool must not require pool selector")
-	}
-	if config.Worker.ContainerRuntime != types.ContainerRuntimeRunc.String() {
+	if config.Worker.ContainerRuntime != types.ContainerRuntimeGvisor.String() {
 		t.Fatalf("worker runtime = %q, want gateway-provided runtime", config.Worker.ContainerRuntime)
 	}
-	if config.ManagedCompute == nil || config.ManagedCompute.Billing.Endpoint != bootstrap.Billing.UsageEndpoint {
-		t.Fatalf("marketplace billing config = %+v, want usage endpoint threaded through", config.ManagedCompute)
+	if !pool.RequiresPoolSelector {
+		t.Fatal("provider pool must require pool selector")
 	}
-	if config.ManagedCompute.BillableMarginPct != 0.1 {
-		t.Fatalf("billable margin = %f, want 0.1", config.ManagedCompute.BillableMarginPct)
+	if pool.Priority != 1000 {
+		t.Fatalf("provider slot priority = %d, want default 1000", pool.Priority)
 	}
-	// The worker attributes buyer usage to itself, so the slot's marketplace
-	// identity must land in its generated config.
-	if config.ManagedCompute.MarketplaceListingID != "listing-1" || config.ManagedCompute.SellerWorkspaceID != "seller-1" {
-		t.Fatalf("managed compute identity = %q/%q, want listing-1/seller-1",
-			config.ManagedCompute.MarketplaceListingID, config.ManagedCompute.SellerWorkspaceID)
+	if config.Cache.Global == nil || config.Cache.Global.DefaultLocality != "workspace-a/provider-pool-1" {
+		t.Fatalf("cache locality = %#v, want workspace-scoped pool", config.Cache.Global)
 	}
-	if config.Monitoring.ContainerCostHook == nil || config.Monitoring.ContainerCostHook.Endpoint != bootstrap.Billing.CostHookEndpoint {
-		t.Fatalf("cost hook config = %+v, want endpoint threaded through", config.Monitoring.ContainerCostHook)
+
+	data, err := json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"managedCompute", "containerCostHook", "billing"} {
+		if strings.Contains(string(data), `"`+key+`"`) {
+			t.Fatalf("worker config carries %q; provider workers must not receive billing config: %s", key, data)
+		}
 	}
 }
 
@@ -724,23 +712,41 @@ func TestAgentWorkerConfigPreservesExplicitZeroPriority(t *testing.T) {
 	}
 }
 
-func TestAgentWorkerConfigMarketplaceRuntimeDefaultsAndOverrides(t *testing.T) {
+func TestAgentWorkerConfigProviderRuntimeDefaultsAndOverrides(t *testing.T) {
 	for name, slot := range map[string]*pb.AgentWorkerSlot{
-		"missing runtime defaults to gvisor": {
-			PoolName: "marketplace-listing-1",
-			Mode:     string(types.PoolModeMarketplace),
+		"missing runtime defaults to runc": {
+			PoolName: "provider-pool-1",
+			Mode:     string(types.PoolModeProvider),
 		},
-		"runc sent by gateway is respected": {
-			PoolName:         "marketplace-listing-1",
-			Mode:             string(types.PoolModeMarketplace),
-			ContainerRuntime: types.ContainerRuntimeRunc.String(),
+		"gvisor sent by gateway is respected": {
+			PoolName:         "provider-pool-1",
+			Mode:             string(types.PoolModeProvider),
+			ContainerRuntime: types.ContainerRuntimeGvisor.String(),
 		},
 	} {
 		config := newAgentWorkerConfig(bootstrapConfig{}, slot).sanitizedForAgent()
-		want := firstNonEmpty(slot.ContainerRuntime, types.ContainerRuntimeGvisor.String())
-		if got := config.Worker.Pools["marketplace-listing-1"].ContainerRuntime; got != want {
+		want := firstNonEmpty(slot.ContainerRuntime, types.ContainerRuntimeRunc.String())
+		if got := config.Worker.Pools["provider-pool-1"].ContainerRuntime; got != want {
 			t.Fatalf("%s: pool runtime = %q, want %q", name, got, want)
 		}
+	}
+}
+
+func TestSlotPoolModeAcceptsOnlyExplicitAgentModes(t *testing.T) {
+	for mode, want := range map[string]string{
+		"":                             string(types.PoolModePrivate),
+		string(types.PoolModePrivate):  string(types.PoolModePrivate),
+		string(types.PoolModeProvider): string(types.PoolModeProvider),
+		string(types.PoolModeExternal): string(types.PoolModeExternal),
+		string(types.PoolModeLocal):    string(types.PoolModePrivate),
+		"unknown-mode":                 string(types.PoolModePrivate),
+	} {
+		if got := slotPoolMode(&pb.AgentWorkerSlot{Mode: mode}); got != want {
+			t.Fatalf("slotPoolMode(%q) = %q, want %q", mode, got, want)
+		}
+	}
+	if got := slotPoolMode(nil); got != string(types.PoolModePrivate) {
+		t.Fatalf("slotPoolMode(nil) = %q, want private", got)
 	}
 }
 

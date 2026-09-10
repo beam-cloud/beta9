@@ -1380,6 +1380,11 @@ func (r *S2EventRepository) streamNamesForEvent(eventType string, metadata event
 	if isStubEvent(eventType) && metadata.WorkspaceID != "" {
 		add(r.workspaceStreamName(metadata.WorkspaceID))
 	}
+	if metadata.WorkspaceID != "" && (eventType == types.EventEndpointConfig ||
+		eventType == types.EventEndpointHarness || eventType == types.EventEndpointReplica ||
+		eventType == types.EventEndpointGitOps) {
+		add(r.workspaceStreamName(metadata.WorkspaceID))
+	}
 	if isWorkspaceContainerRealtimeEvent(eventType) && metadata.WorkspaceID != "" {
 		add(r.workspaceStreamName(metadata.WorkspaceID))
 		if metadata.AppID != "" {

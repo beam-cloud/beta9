@@ -2,7 +2,11 @@ package gatewayservices
 
 import (
 	"context"
+	"fmt"
+	"time"
 
+	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
@@ -24,52 +28,66 @@ func (gws *GatewayService) ScaleBYOCPool(ctx context.Context, in *pb.ScaleBYOCPo
 	return gws.computeService.ScaleBYOCPool(ctx, in)
 }
 
-func (gws *GatewayService) CreateMarketplaceListing(ctx context.Context, in *pb.CreateMarketplaceListingRequest) (*pb.CreateMarketplaceListingResponse, error) {
-	return gws.computeService.CreateMarketplaceListing(ctx, in)
+func (gws *GatewayService) GetProviderJoinCommand(ctx context.Context, in *pb.GetProviderJoinCommandRequest) (*pb.GetProviderJoinCommandResponse, error) {
+	return gws.computeService.GetProviderJoinCommand(ctx, in)
 }
 
-func (gws *GatewayService) UpdateMarketplaceListing(ctx context.Context, in *pb.UpdateMarketplaceListingRequest) (*pb.UpdateMarketplaceListingResponse, error) {
-	return gws.computeService.UpdateMarketplaceListing(ctx, in)
+func (gws *GatewayService) ListProviderMachines(ctx context.Context, in *pb.ListProviderMachinesRequest) (*pb.ListProviderMachinesResponse, error) {
+	return gws.computeService.ListProviderMachines(ctx, in)
 }
 
-func (gws *GatewayService) DeleteMarketplaceListing(ctx context.Context, in *pb.DeleteMarketplaceListingRequest) (*pb.DeleteMarketplaceListingResponse, error) {
-	return gws.computeService.DeleteMarketplaceListing(ctx, in)
+func (gws *GatewayService) GetEndpointUsage(ctx context.Context, in *pb.GetEndpointUsageRequest) (*pb.GetEndpointUsageResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+	if authInfo == nil || authInfo.Workspace == nil {
+		return &pb.GetEndpointUsageResponse{Ok: false, ErrMsg: "missing workspace auth"}, nil
+	}
+	if gws.endpointRepo == nil {
+		return &pb.GetEndpointUsageResponse{Ok: false, ErrMsg: "managed endpoints are not enabled"}, nil
+	}
+	kind := types.UsageSpend
+	if in.GetKind() == string(types.UsageEarned) {
+		kind = types.UsageEarned
+	}
+	from, to, err := usageWindow(in)
+	if err != nil {
+		return &pb.GetEndpointUsageResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+	report, err := gws.endpointRepo.GetUsage(ctx, kind, authInfo.Workspace.ExternalId, from, to)
+	if err != nil {
+		return &pb.GetEndpointUsageResponse{Ok: false, ErrMsg: err.Error()}, nil
+	}
+	toProto := func(m map[string]types.Usage) map[string]*pb.EndpointUsage {
+		out := make(map[string]*pb.EndpointUsage, len(m))
+		for k, v := range m {
+			out[k] = usageToProto(v)
+		}
+		return out
+	}
+	return &pb.GetEndpointUsageResponse{Ok: true, Total: usageToProto(report.Total), PerModel: toProto(report.PerModel), PerDay: toProto(report.PerDay)}, nil
 }
 
-func (gws *GatewayService) ListMarketplaceListings(ctx context.Context, in *pb.ListMarketplaceListingsRequest) (*pb.ListMarketplaceListingsResponse, error) {
-	return gws.computeService.ListMarketplaceListings(ctx, in)
+// usageWindow parses the request's inclusive UTC day range; end_date
+// defaults to today.
+func usageWindow(in *pb.GetEndpointUsageRequest) (from, to time.Time, err error) {
+	if from, err = time.Parse(time.DateOnly, in.GetStartDate()); err != nil {
+		return from, to, fmt.Errorf("invalid start_date: %w", err)
+	}
+	to = time.Now().UTC()
+	if in.GetEndDate() != "" {
+		if to, err = time.Parse(time.DateOnly, in.GetEndDate()); err != nil {
+			return from, to, fmt.Errorf("invalid end_date: %w", err)
+		}
+	}
+	return from, to, nil
 }
 
-func (gws *GatewayService) GetMarketplaceJoinCommand(ctx context.Context, in *pb.GetMarketplaceJoinCommandRequest) (*pb.GetMarketplaceJoinCommandResponse, error) {
-	return gws.computeService.GetMarketplaceJoinCommand(ctx, in)
-}
-
-func (gws *GatewayService) ListMarketplaceOffers(ctx context.Context, in *pb.ListMarketplaceOffersRequest) (*pb.ListMarketplaceOffersResponse, error) {
-	return gws.computeService.ListMarketplaceOffers(ctx, in)
-}
-
-func (gws *GatewayService) GetMarketplaceOffer(ctx context.Context, in *pb.GetMarketplaceOfferRequest) (*pb.GetMarketplaceOfferResponse, error) {
-	return gws.computeService.GetMarketplaceOffer(ctx, in)
-}
-
-func (gws *GatewayService) ListMarketplaceMachines(ctx context.Context, in *pb.ListMarketplaceMachinesRequest) (*pb.ListMarketplaceMachinesResponse, error) {
-	return gws.computeService.ListMarketplaceMachines(ctx, in)
-}
-
-func (gws *GatewayService) CreateMarketplaceRental(ctx context.Context, in *pb.CreateMarketplaceRentalRequest) (*pb.CreateMarketplaceRentalResponse, error) {
-	return gws.computeService.CreateMarketplaceRental(ctx, in)
-}
-
-func (gws *GatewayService) ListMarketplaceRentals(ctx context.Context, in *pb.ListMarketplaceRentalsRequest) (*pb.ListMarketplaceRentalsResponse, error) {
-	return gws.computeService.ListMarketplaceRentals(ctx, in)
-}
-
-func (gws *GatewayService) DeleteMarketplaceRental(ctx context.Context, in *pb.DeleteMarketplaceRentalRequest) (*pb.DeleteMarketplaceRentalResponse, error) {
-	return gws.computeService.DeleteMarketplaceRental(ctx, in)
-}
-
-func (gws *GatewayService) LaunchRentalWorkload(ctx context.Context, in *pb.LaunchRentalWorkloadRequest) (*pb.LaunchRentalWorkloadResponse, error) {
-	return gws.computeService.LaunchRentalWorkload(ctx, in)
+func usageToProto(u types.Usage) *pb.EndpointUsage {
+	return &pb.EndpointUsage{
+		Requests: u.Requests, PromptTokens: u.PromptTokens, CompletionTokens: u.CompletionTokens,
+		CachedTokens: u.CachedTokens, Images: u.Images, MicroUsd: u.MicroUSD,
+		PromptMicroUsd: u.PromptMicroUSD, CompletionMicroUsd: u.CompletionMicroUSD,
+		CachedMicroUsd: u.CachedMicroUSD, RequestMicroUsd: u.RequestMicroUSD, ImageMicroUsd: u.ImageMicroUSD,
+	}
 }
 
 func (gws *GatewayService) ListMachineContainers(ctx context.Context, in *pb.ListMachineContainersRequest) (*pb.ListMachineContainersResponse, error) {

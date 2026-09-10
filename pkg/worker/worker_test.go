@@ -683,7 +683,7 @@ func TestClaimOutcomeGatesStartup(t *testing.T) {
 			runtimeStarted := make(chan struct{}, 1)
 			done := make(chan struct{})
 			go func() {
-				worker.runContainerRequestWithRunner(request, func(ctx context.Context, _ *types.ContainerRequest) error {
+				worker.runContainerRequestWithRunner(request, func(ctx context.Context, _ *types.ContainerRequest, _ func() error) error {
 					// Mirror the runtime: a stop observed during the claim
 					// cancels the startup context before the runner runs.
 					if ctx.Err() != nil {
@@ -744,7 +744,7 @@ func TestRunContainerRequestWaitsForClaimBeforeRuntimeHandoff(t *testing.T) {
 	runnerStarted := make(chan struct{}, 1)
 	requestDone := make(chan struct{})
 	go func() {
-		worker.runContainerRequestWithRunner(request, func(context.Context, *types.ContainerRequest) error {
+		worker.runContainerRequestWithRunner(request, func(context.Context, *types.ContainerRequest, func() error) error {
 			runnerStarted <- struct{}{}
 			return nil
 		})

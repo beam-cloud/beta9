@@ -35,6 +35,12 @@ func TestExtractStubIdFromStubScopedContainerId(t *testing.T) {
 			wantOK:      true,
 		},
 		{
+			name:        "managed",
+			containerID: "managed-" + stubID + "-1717f4fc",
+			wantStubID:  stubID,
+			wantOK:      true,
+		},
+		{
 			name:        "function task id is not a stub id",
 			containerID: "function-" + stubID + "-1717f4fc",
 			wantOK:      false,

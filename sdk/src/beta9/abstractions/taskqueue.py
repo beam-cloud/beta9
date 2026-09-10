@@ -30,7 +30,6 @@ from ..type import (
     GpuType,
     GpuTypeAlias,
     Pool,
-    PricingPolicy,
     QueueDepthAutoscaler,
     TaskPolicy,
 )
@@ -155,11 +154,9 @@ class TaskQueue(RunnerAbstraction):
         task_policy: TaskPolicy = TaskPolicy(),
         checkpoint_enabled: bool = False,
         retry_for: Optional[List[Type[Exception]]] = None,
-        pricing: Optional[PricingPolicy] = None,
         inputs: Optional[Schema] = None,
         outputs: Optional[Schema] = None,
         pool: Optional[Union[str, Pool]] = None,
-        allow_marketplace: bool = False,
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -185,11 +182,9 @@ class TaskQueue(RunnerAbstraction):
             task_policy=task_policy,
             checkpoint_enabled=checkpoint_enabled,
             app=app,
-            pricing=pricing,
             inputs=inputs,
             outputs=outputs,
             pool=pool,
-            allow_marketplace=allow_marketplace,
         )
         self._taskqueue_stub: Optional[TaskQueueServiceStub] = None
         self.retry_for = retry_for or []

@@ -3,7 +3,7 @@ Interactive capacity flow.
 
 When stub creation reports that no serverless pool supports the requested GPU
 (a guaranteed scheduling blackhole), this module lets the user launch
-on-demand hardware from the compute marketplace and routes the workload onto
+on-demand hardware from a cloud provider offer and routes the workload onto
 it — or fails fast with an actionable error in headless environments.
 """
 

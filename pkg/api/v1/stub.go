@@ -187,17 +187,13 @@ func (g *StubGroup) GetURL(ctx echo.Context) error {
 		return HTTPInternalServerError("Failed to decode stub config")
 	}
 
-	// Allow public stubs to be accessed by any workspace
 	workspaceId := stub.WorkspaceId
-	if stubConfig.Pricing != nil {
-		filter.WorkspaceId = stub.Workspace.ExternalId
-		workspaceId = stub.Workspace.Id
-	} else if stub.Workspace.ExternalId != authInfo.Workspace.ExternalId {
+	if stub.Workspace.ExternalId != authInfo.Workspace.ExternalId {
 		return HTTPNotFound()
 	}
 
-	// Get URL for Serves, Pods, and public stubs
-	if stub.Type.IsServe() || stub.Type.Kind() == types.StubTypeShell || stubConfig.Pricing != nil {
+	// Get URL for Serves and Pods
+	if stub.Type.IsServe() || stub.Type.Kind() == types.StubTypeShell {
 		invokeUrl := common.BuildStubURL(g.config.GatewayService.HTTP.GetExternalURL(), filter.URLType, stub)
 		return ctx.JSON(http.StatusOK, map[string]string{"url": invokeUrl})
 	} else if stub.Type.Kind() == types.StubTypePod || stub.Type.Kind() == types.StubTypeSandbox {
@@ -569,13 +565,12 @@ func (g *StubGroup) GetConfig(ctx echo.Context) error {
 		return HTTPInternalServerError("Failed to decode stub config")
 	}
 
-	// If there is no pricing policy, only allow access to the config if the user is the owner of the stub
-	if stubConfig.Pricing == nil && cc != nil && cc.AuthInfo != nil && cc.AuthInfo.Workspace.Id != stub.WorkspaceId {
+	// Only the owning workspace may read the stub config
+	if cc != nil && cc.AuthInfo != nil && cc.AuthInfo.Workspace.Id != stub.WorkspaceId {
 		return HTTPNotFound()
 	}
 
 	limitedConfig := &types.StubConfigLimitedValues{
-		Pricing:       stubConfig.Pricing,
 		Inputs:        stubConfig.Inputs,
 		Outputs:       stubConfig.Outputs,
 		TaskPolicy:    stubConfig.TaskPolicy,

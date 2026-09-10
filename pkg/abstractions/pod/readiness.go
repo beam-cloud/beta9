@@ -15,9 +15,6 @@ const (
 )
 
 func (pb *PodProxyBuffer) checkContainerReady(address string, timeout time.Duration) bool {
-	if llmEnabled(pb.stubConfig) {
-		return pb.checkLLMContainerReady(address, timeout)
-	}
 	if pb.stubConfig != nil {
 		if database := pb.stubConfig.EffectiveDatabaseConfig(); database != nil && database.IsPostgres() {
 			return pb.checkPostgresContainerReady(address, timeout)

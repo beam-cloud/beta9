@@ -1,16 +1,21 @@
 package scheduler
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/metrics"
+	repo "github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
 )
 
 const requestSchedulingParallelism = 128
+
+// backgroundSettle bounds concurrent background failure handling.
+var backgroundSettle = make(chan struct{}, 16)
 
 type schedulingBatch struct {
 	scheduler *Scheduler
@@ -18,6 +23,9 @@ type schedulingBatch struct {
 	batchSize int
 
 	schedules []plannedSchedule
+	// deferred is background work that found no idle capacity; it is failed
+	// after dispatch so serverless requests never wait behind its cleanup.
+	deferred []*schedulingAttempt
 }
 
 type plannedSchedule struct {
@@ -42,6 +50,7 @@ func (s *Scheduler) processRequestBatch(requests []*types.ContainerRequest, work
 	batch := newSchedulingBatch(s, workers, len(requests))
 	batch.plan(requests)
 	batch.dispatch()
+	batch.settleDeferred()
 }
 
 func (b *schedulingBatch) plan(requests []*types.ContainerRequest) {
@@ -57,6 +66,8 @@ func (b *schedulingBatch) plan(requests []*types.ContainerRequest) {
 		batched = err == nil
 	}
 
+	// Serverless work claims idle capacity before managed endpoint replicas.
+	requests = foregroundFirst(requests)
 	for _, request := range requests {
 		attempt := newSchedulingAttempt(b.scheduler, request, b.workers)
 		runnable := false
@@ -98,9 +109,7 @@ func (b *schedulingBatch) planRequest(request *types.ContainerRequest, attempt *
 		"candidate_workers": fmt.Sprintf("%d", len(b.workers)),
 	})
 	if err != nil || worker == nil {
-		if attempt.runnable() {
-			attempt.runWaitingOrProvisioning()
-		}
+		b.unplaced(attempt)
 		return
 	}
 
@@ -111,9 +120,7 @@ func (b *schedulingBatch) planRequest(request *types.ContainerRequest, attempt *
 		"worker_id": worker.Id,
 	})
 	if !reserved {
-		if attempt.runnable() {
-			attempt.runWaitingOrProvisioning()
-		}
+		b.unplaced(attempt)
 		return
 	}
 
@@ -122,6 +129,29 @@ func (b *schedulingBatch) planRequest(request *types.ContainerRequest, attempt *
 		request: request,
 	})
 	planned = true
+}
+
+// unplaced handles a request that fits no worker in this batch.
+func (b *schedulingBatch) unplaced(attempt *schedulingAttempt) {
+	if isBackground(attempt.request) {
+		b.deferred = append(b.deferred, attempt)
+		return
+	}
+	if attempt.runnable() {
+		attempt.runWaitingOrProvisioning()
+	}
+}
+
+func (b *schedulingBatch) settleDeferred() {
+	for _, attempt := range b.deferred {
+		backgroundSettle <- struct{}{}
+		go func(attempt *schedulingAttempt) {
+			defer func() { <-backgroundSettle }()
+			if attempt.runnable() {
+				attempt.runWaitingOrProvisioning()
+			}
+		}(attempt)
+	}
 }
 
 func (b *schedulingBatch) dispatch() {
@@ -185,6 +215,14 @@ func (b *schedulingBatch) completeSchedule(schedule plannedSchedule, err error) 
 
 		attempt.recordBacklogWait(false, "schedule_failed")
 		metrics.RecordSchedulerWorkerWait(time.Since(schedule.request.Timestamp), schedule.request, "schedule_failed")
+		// Reclaimable capacity that moved under us is a capacity wait, not a
+		// fault of this request.
+		if errors.Is(err, repo.ErrEvictionVictimsChanged) || errors.Is(err, repo.ErrInsufficientEvictableCapacity) {
+			if attempt.runnable() {
+				attempt.requeueForWorkerWaitDelay(provisioningWorkerRequeueDelay, "reclaimable_capacity_changed")
+			}
+			return
+		}
 		attempt.retryIfRunnable("schedule_failed")
 		return
 	}
@@ -198,6 +236,28 @@ func (b *schedulingBatch) completeSchedule(schedule plannedSchedule, err error) 
 	)
 	metrics.RecordRequestSchedulingDuration(duration, schedule.request)
 	metrics.RecordSchedulerWorkerWait(duration, schedule.request, "scheduled")
+}
+
+// isBackground reports whether a request only fills spare capacity.
+func isBackground(request *types.ContainerRequest) bool {
+	return request != nil && (request.Evictable || request.OpportunisticOnly)
+}
+
+// foregroundFirst returns requests with background ones moved to the end,
+// keeping the relative order within each group.
+func foregroundFirst(requests []*types.ContainerRequest) []*types.ContainerRequest {
+	ordered := make([]*types.ContainerRequest, 0, len(requests))
+	for _, request := range requests {
+		if !isBackground(request) {
+			ordered = append(ordered, request)
+		}
+	}
+	for _, request := range requests {
+		if isBackground(request) {
+			ordered = append(ordered, request)
+		}
+	}
+	return ordered
 }
 
 func cloneWorker(worker *types.Worker) *types.Worker {

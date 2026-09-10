@@ -1931,3 +1931,17 @@ func Test_hasWorkToDo(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildBillingIdentityComesOnlyFromControllerToken(t *testing.T) {
+	for _, tokenType := range []string{types.TokenTypePlatformDeployer, types.TokenTypeWorkspace, types.TokenTypeClusterAdmin, types.TokenTypeWorker} {
+		t.Run(tokenType, func(t *testing.T) {
+			build, _, _ := setupTestBuild(t, nil)
+			build.config.ImageService.ClipVersion = 2
+			build.authInfo.Token = &types.Token{TokenType: tokenType}
+			request, err := build.generateContainerRequest()
+			assert.NoError(t, err)
+			assert.Equal(t, tokenType == types.TokenTypePlatformDeployer, request.Stub.Type.IsPlatformWorkload())
+			assert.True(t, request.IsBuildRequest())
+		})
+	}
+}

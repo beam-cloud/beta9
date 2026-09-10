@@ -109,11 +109,16 @@ message ContainerRequest {
   bool docker_enabled = 30;
   repeated string runtime_secret_names = 31;
   bool runtime_token_required = 32;
-  bool allow_marketplace = 33;
   string machine_id = 34;
   CheckpointTrigger checkpoint_trigger = 35;
   string task_id = 36;
   string hostname = 38;
+  bool evictable = 40;
+  bool opportunistic_only = 41;
+  repeated string evict_container_ids = 42;
+  uint32 evict_drain_seconds = 43;
+  uint32 drain_seconds = 44;
+  int32 evict_order = 45;
 }
 
 message ContainerState {
@@ -129,6 +134,10 @@ message ContainerState {
   int64 started_at = 10;
   string worker_id = 11;
   string machine_id = 12;
+  bool evictable = 13;
+  bool evicting = 14;
+  uint32 drain_seconds = 15;
+  int32 evict_order = 16;
 }
 
 message DurableDiskMountConfig {
@@ -205,13 +214,6 @@ message Object {
   google.protobuf.Timestamp created_at = 6;
 }
 
-message PricingPolicy {
-  int64 max_in_flight = 1;
-  string cost_model = 2;
-  double cost_per_task = 3;
-  double cost_per_task_duration_ms = 4;
-}
-
 message ProcessInfo {
   bool running = 1;
   int32 pid = 2;
@@ -267,6 +269,9 @@ message Worker {
   string rollout_generation = 21;
   string rollout_build_version = 22;
   string worker_image_override = 23;
+  int64 evictable_cpu = 24;
+  int64 evictable_memory = 25;
+  uint32 evictable_gpu_count = 26;
 }
 
 message WorkerPoolState {

@@ -22,9 +22,6 @@ type PoolState struct {
 	Transport            string         `json:"transport"`
 	Fallback             string         `json:"fallback"`
 	Priority             int32          `json:"priority"`
-	Preemptible          bool           `json:"preemptible,omitempty"`
-	MarketplaceListingID string         `json:"marketplace_listing_id,omitempty"`
-	SellerWorkspaceID    string         `json:"seller_workspace_id,omitempty"`
 	CreatedByTokenID     string         `json:"created_by_token_id"`
 	CreatedAt            time.Time      `json:"created_at"`
 	UpdatedAt            time.Time      `json:"updated_at"`
@@ -62,11 +59,6 @@ type ManagedPool struct {
 	ReadyMachineCount int                              `json:"ready_machine_count"`
 }
 
-const (
-	MarketplaceListingStatusActive   = "active"
-	MarketplaceListingStatusInactive = "inactive"
-)
-
 // FailoverDemand records that the entire serverless estate refused a request
 // whose failover chain ends in on-demand hardware. The scheduler writes one
 // short-lived record per GPU type; the reconcile loop consumes it. Records
@@ -80,45 +72,6 @@ type FailoverDemand struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// MarketplaceRentalState is a buyer's exclusive hold on GPUs of one seller
-// machine. Rented GPUs are invisible to serverless marketplace scheduling;
-// only the buyer's machine-pinned workloads consume them.
-type MarketplaceRentalState struct {
-	ID                string `json:"id"`
-	BuyerWorkspaceID  string `json:"buyer_workspace_id"`
-	SellerWorkspaceID string `json:"seller_workspace_id"`
-	ListingID         string `json:"listing_id"`
-	PoolName          string `json:"pool_name"`
-	MachineID         string `json:"machine_id"`
-	GPU               string `json:"gpu"`
-	GPUCount          uint32 `json:"gpu_count"`
-	// PricePerGPUHourCents is snapshotted from the listing at reserve time so
-	// seller price changes never reprice a rental already held.
-	PricePerGPUHourCents uint32    `json:"price_per_gpu_hour_cents,omitempty"`
-	CreatedAt            time.Time `json:"created_at"`
-	// LastBilledAt is the end of the last rental usage interval the gateway
-	// emitted; rentals bill wall-clock while held, including idle time.
-	LastBilledAt time.Time `json:"last_billed_at,omitempty"`
-}
-
-type MarketplaceListingState struct {
-	ID                string `json:"id"`
-	SellerWorkspaceID string `json:"seller_workspace_id"`
-	DisplayName       string `json:"display_name"`
-	GPU               string `json:"gpu"`
-	GPUCount          uint32 `json:"gpu_count"`
-	Source            string `json:"source"`
-	Preemptible       bool   `json:"preemptible"`
-	Public            bool   `json:"public"`
-	Status            string `json:"status"`
-	PoolName          string `json:"pool_name"`
-	Region            string `json:"region,omitempty"` // seller-declared, e.g. "us-east"
-	// PricePerGPUHourCents is the seller-set on-demand rate, per GPU per hour.
-	PricePerGPUHourCents uint32    `json:"price_per_gpu_hour_cents,omitempty"`
-	CreatedAt            time.Time `json:"created_at"`
-	UpdatedAt            time.Time `json:"updated_at"`
-}
-
 type BYOCProviderState struct {
 	Provider     string            `json:"provider,omitempty"`
 	AccountID    string            `json:"account_id,omitempty"`
@@ -130,15 +83,13 @@ type BYOCProviderState struct {
 }
 
 type JoinTokenState struct {
-	TokenHash            string    `json:"token_hash"`
-	WorkspaceID          string    `json:"workspace_id"`
-	PoolName             string    `json:"pool_name"`
-	MachineID            string    `json:"machine_id,omitempty"`
-	PoolCreatedAt        time.Time `json:"pool_created_at,omitempty"`
-	CreatedAt            time.Time `json:"created_at"`
-	Mode                 string    `json:"mode,omitempty"`
-	MarketplaceListingID string    `json:"marketplace_listing_id,omitempty"`
-	SellerWorkspaceID    string    `json:"seller_workspace_id,omitempty"`
+	TokenHash     string    `json:"token_hash"`
+	WorkspaceID   string    `json:"workspace_id"`
+	PoolName      string    `json:"pool_name"`
+	MachineID     string    `json:"machine_id,omitempty"`
+	PoolCreatedAt time.Time `json:"pool_created_at,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	Mode          string    `json:"mode,omitempty"`
 	// A zero ExpiresAt is a persistent bootstrap token; it must be explicitly
 	// revoked when the owning resource is deleted.
 	ExpiresAt time.Time `json:"expires_at"`
@@ -154,8 +105,6 @@ type AgentTokenState struct {
 	WorkspaceID               string                `json:"workspace_id"`
 	PoolName                  string                `json:"pool_name"`
 	Mode                      string                `json:"mode,omitempty"`
-	MarketplaceListingID      string                `json:"marketplace_listing_id,omitempty"`
-	SellerWorkspaceID         string                `json:"seller_workspace_id,omitempty"`
 	ManagedPoolInstanceID     string                `json:"managed_pool_instance_id,omitempty"`
 	MachineID                 string                `json:"machine_id"`
 	MachineFingerprint        string                `json:"machine_fingerprint"`
@@ -262,8 +211,6 @@ type AgentWorkerSlotState struct {
 	ContainerRuntime          string              `json:"container_runtime,omitempty"`
 	ContainerRuntimeConfig    types.RuntimeConfig `json:"container_runtime_config,omitempty"`
 	CPUAffinityEnforced       *bool               `json:"cpu_affinity_enforced,omitempty"`
-	MarketplaceListingID      string              `json:"marketplace_listing_id,omitempty"`
-	SellerWorkspaceID         string              `json:"seller_workspace_id,omitempty"`
 	CPU                       int64               `json:"cpu"`
 	Memory                    int64               `json:"memory"`
 	GPU                       string              `json:"gpu"`

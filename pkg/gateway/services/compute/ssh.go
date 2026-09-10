@@ -140,7 +140,7 @@ func (s *Service) ensureMachineSSHStateForJoin(ctx context.Context, pool *model.
 		!hasAgentCapability(agent, model.AgentCapabilityManagedHostSSHV1) ||
 		agent == nil ||
 		agent.ManagedPoolInstanceID != "" ||
-		agent.MarketplaceListingID != "" {
+		agent.Mode == string(types.PoolModeProvider) {
 		return nil
 	}
 	existing, err := s.computeRepo.GetMachineSSHState(ctx, agent.WorkspaceID, agent.PoolName, agent.MachineID)
@@ -406,7 +406,7 @@ func (s *Service) agentSSHConfig(ctx context.Context, agentState *model.AgentTok
 	if !s.appConfig.ManagedCompute.SSH.Enabled ||
 		!hasAgentCapability(agentState, model.AgentCapabilityManagedHostSSHV1) ||
 		agentState.ManagedPoolInstanceID != "" ||
-		agentState.MarketplaceListingID != "" {
+		agentState.Mode == string(types.PoolModeProvider) {
 		return nil, nil
 	}
 	state, err := s.computeRepo.GetMachineSSHState(ctx, agentState.WorkspaceID, agentState.PoolName, agentState.MachineID)

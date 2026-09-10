@@ -316,7 +316,7 @@ func TestLazyMountOptionsForPrivateClipV2UsesCheckpoints(t *testing.T) {
 }
 
 func TestGetCredentialProviderForAgentPoolImageUsesGatewayCredentialsOnly(t *testing.T) {
-	for _, mode := range []types.PoolMode{types.PoolModePrivate, types.PoolModeMarketplace, types.PoolModeExternal} {
+	for _, mode := range []types.PoolMode{types.PoolModePrivate, types.PoolModeProvider, types.PoolModeExternal} {
 		t.Run(string(mode), func(t *testing.T) {
 			repo := &fakeImageCredentialWorkerRepo{
 				resp: &pb.GetCacheOriginCredentialsResponse{
@@ -353,7 +353,7 @@ func TestGetCredentialProviderForAgentPoolImageUsesGatewayCredentialsOnly(t *tes
 }
 
 func TestGetCredentialProviderForAgentPoolImageAvoidsAmbientKeychainWithoutGatewayCredentials(t *testing.T) {
-	for _, mode := range []types.PoolMode{types.PoolModePrivate, types.PoolModeMarketplace, types.PoolModeExternal} {
+	for _, mode := range []types.PoolMode{types.PoolModePrivate, types.PoolModeProvider, types.PoolModeExternal} {
 		t.Run(string(mode), func(t *testing.T) {
 			repo := &fakeImageCredentialWorkerRepo{
 				resp: &pb.GetCacheOriginCredentialsResponse{Ok: true},
@@ -420,7 +420,7 @@ func TestPullImageArchiveFromBrokeredOriginUsesURL(t *testing.T) {
 }
 
 func TestPullImageFromRegistryAgentPoolsRequireBrokeredOrigin(t *testing.T) {
-	for _, mode := range []types.PoolMode{types.PoolModePrivate, types.PoolModeMarketplace, types.PoolModeExternal} {
+	for _, mode := range []types.PoolMode{types.PoolModePrivate, types.PoolModeProvider, types.PoolModeExternal} {
 		t.Run(string(mode), func(t *testing.T) {
 			repo := &fakeImageCredentialWorkerRepo{
 				resp: &pb.GetCacheOriginCredentialsResponse{Ok: true},
@@ -448,7 +448,7 @@ func TestPullImageFromRegistryAgentPoolsUseWorkerPoolWhenRequestSelectorIsEmpty(
 	repo := &fakeImageCredentialWorkerRepo{
 		resp: &pb.GetCacheOriginCredentialsResponse{Ok: true},
 	}
-	client := agentPoolImageClient(types.PoolModeMarketplace, repo)
+	client := agentPoolImageClient(types.PoolModeProvider, repo)
 	archivePath := filepath.Join(t.TempDir(), "image-a.rclip")
 	request := &types.ContainerRequest{
 		WorkspaceId: "workspace-id",

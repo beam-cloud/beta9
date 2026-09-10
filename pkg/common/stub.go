@@ -10,6 +10,7 @@ var stubScopedContainerPrefixes = map[string]struct{}{
 	"pod":       {},
 	"endpoint":  {},
 	"taskqueue": {},
+	"managed":   {},
 }
 
 func ExtractStubIdFromContainerId(containerId string) (string, error) {

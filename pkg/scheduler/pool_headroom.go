@@ -78,3 +78,63 @@ func (c *WorkerPoolCapacity) belowMinimum(sizing *types.WorkerPoolSizingConfig) 
 		c.FreeMemory < sizing.MinFreeMemory ||
 		(sizing.MinFreeGpu > 0 && c.FreeGpu < sizing.MinFreeGpu)
 }
+
+// filterWorkersByPoolHeadroom drops, for an opportunistic request, every worker
+// of a pool whose ready free capacity would fall under its minFree* floor once
+// the request is placed. Capacity here is already debited by earlier requests
+// in the batch.
+func (s *Scheduler) filterWorkersByPoolHeadroom(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
+	if request == nil || !request.OpportunisticOnly {
+		return workers
+	}
+	ready := map[string]*WorkerPoolCapacity{}
+	for _, w := range workers {
+		if w.Status != types.WorkerStatusAvailable {
+			continue
+		}
+		c := ready[w.PoolName]
+		if c == nil {
+			c = &WorkerPoolCapacity{}
+			ready[w.PoolName] = c
+		}
+		c.FreeCpu += w.FreeCpu
+		c.FreeMemory += w.FreeMemory
+		if w.Gpu != "" {
+			c.FreeGpu += uint(w.FreeGpuCount)
+		}
+	}
+	keep := map[string]bool{}
+	for name, c := range ready {
+		sizing := s.poolSizing(name)
+		if sizing == nil {
+			keep[name] = true
+			continue
+		}
+		after := WorkerPoolCapacity{
+			FreeCpu:    c.FreeCpu - request.Cpu,
+			FreeMemory: c.FreeMemory - capacityMemoryForScheduling(request),
+			FreeGpu:    c.FreeGpu - min(c.FreeGpu, uint(gpuCountForScheduling(request))),
+		}
+		keep[name] = !after.belowMinimum(sizing)
+	}
+	filtered := make([]*types.Worker, 0, len(workers))
+	for _, w := range workers {
+		if keep[w.PoolName] {
+			filtered = append(filtered, w)
+		}
+	}
+	return filtered
+}
+
+func (s *Scheduler) poolSizing(poolName string) *types.WorkerPoolSizingConfig {
+	poolConfig, ok := s.config.Worker.Pools[poolName]
+	if !ok {
+		return nil
+	}
+	sizing, err := parsePoolSizingConfig(poolConfig.PoolSizing)
+	if err != nil {
+		return nil
+	}
+	applyBuildPoolSizingMinimums(poolName, s.config, sizing)
+	return sizing
+}

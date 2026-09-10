@@ -36,6 +36,7 @@ type GatewayService struct {
 	tailscale        *network.Tailscale
 	keyEventManager  *common.KeyEventManager
 	clientCache      *sync.Map
+	endpointRepo     repository.ManagedEndpointRepository // nil when managed endpoints are disabled
 	pb.UnimplementedGatewayServiceServer
 }
 
@@ -58,6 +59,7 @@ type GatewayServiceOpts struct {
 	UsageMetricsRepo repository.UsageMetricsRepository
 	Tailscale        *network.Tailscale
 	KeyEventManager  *common.KeyEventManager
+	EndpointRepo     repository.ManagedEndpointRepository // optional; created from RedisClient when nil
 }
 
 func NewGatewayService(opts *GatewayServiceOpts) (*GatewayService, error) {
@@ -93,6 +95,11 @@ func NewGatewayService(opts *GatewayServiceOpts) (*GatewayService, error) {
 		computeService.Start(opts.Ctx)
 	}
 
+	endpointRepo := opts.EndpointRepo
+	if endpointRepo == nil && opts.Config.ManagedEndpoints.Enabled && opts.RedisClient != nil {
+		endpointRepo = repository.NewManagedEndpointRedisRepository(opts.RedisClient)
+	}
+
 	return &GatewayService{
 		ctx:              opts.Ctx,
 		appConfig:        opts.Config,
@@ -113,5 +120,6 @@ func NewGatewayService(opts *GatewayServiceOpts) (*GatewayService, error) {
 		tailscale:        opts.Tailscale,
 		keyEventManager:  keyEventManager,
 		clientCache:      &sync.Map{},
+		endpointRepo:     endpointRepo,
 	}, nil
 }

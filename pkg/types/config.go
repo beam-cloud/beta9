@@ -30,6 +30,114 @@ type AppConfig struct {
 	Abstractions   AbstractionConfig    `key:"abstractions" json:"abstractions"`
 	Cache          cache.Config         `key:"cache" json:"cache"`
 	Agent          AgentConfig          `key:"agent" json:"agent"`
+	// ManagedEndpoints configures the platform-owned inference endpoints
+	// (GitOps-driven stubs filled onto spare GPU capacity, served under /v1).
+	ManagedEndpoints ManagedEndpointsConfig `key:"managedEndpoints" json:"managed_endpoints"`
+}
+
+// ManagedEndpointsConfig is the cluster-level configuration for the managed
+// endpoints platform. Only Enabled and Repo are required to turn it on; every
+// other value has a production default (see ApplyDefaults). Endpoint stubs
+// are owned by the cluster admin workspace.
+type ManagedEndpointsConfig struct {
+	Enabled     bool                          `key:"enabled" json:"enabled"`
+	RoutePrefix string                        `key:"routePrefix" json:"route_prefix"`
+	Repo        ManagedEndpointsRepoConfig    `key:"repo" json:"repo"`
+	Webhook     ManagedEndpointsWebhookConfig `key:"webhook" json:"webhook"`
+	// DeployerImage is the beta9 image id (built once with the SDK and git
+	// installed) the GitOps deployer container runs from.
+	DeployerImage string `key:"deployerImage" json:"deployer_image"`
+	// DeployerSecrets supplies explicitly configured build credentials to the
+	// GitOps deployer. Store these values in the cluster's secret config.
+	DeployerSecrets map[string]string             `key:"deployerSecrets" json:"deployer_secrets"`
+	Preemption      ManagedEndpointsPreemption    `key:"preemption" json:"preemption"`
+	Reconcile       ManagedEndpointsReconcile     `key:"reconcile" json:"reconcile"`
+	Routing         ManagedEndpointsRoutingConfig `key:"routing" json:"routing"`
+	// HeartbeatInterval is what replicas are told to heartbeat at.
+	HeartbeatInterval time.Duration `key:"heartbeatInterval" json:"heartbeat_interval"`
+	// ReplicaStaleAfter marks replicas failed when no heartbeat/probe arrives.
+	ReplicaStaleAfter time.Duration `key:"replicaStaleAfter" json:"replica_stale_after"`
+	// ProviderRevenueShare is the fraction of billed token revenue credited to
+	// the workspace whose contributed machine served the request.
+	ProviderRevenueShare float64 `key:"providerRevenueShare" json:"provider_revenue_share"`
+}
+
+type ManagedEndpointsRepoConfig struct {
+	URL    string `key:"url" json:"url"`
+	Branch string `key:"branch" json:"branch"`
+	Path   string `key:"path" json:"path"`
+	// DeployKey is an SSH private key (or HTTPS token), stored in secret config.
+	DeployKey    string        `key:"deployKey" json:"deploy_key"`
+	PollInterval time.Duration `key:"pollInterval" json:"poll_interval"`
+}
+
+type ManagedEndpointsWebhookConfig struct {
+	Secret string `key:"secret" json:"secret"`
+}
+
+type ManagedEndpointsPreemption struct {
+	Enabled bool `key:"enabled" json:"enabled"`
+}
+
+type ManagedEndpointsReconcile struct {
+	Interval time.Duration `key:"interval" json:"interval"`
+	// FailureBackoff delays rescheduling after a replica fails.
+	FailureBackoff time.Duration `key:"failureBackoff" json:"failure_backoff"`
+}
+
+type ManagedEndpointsRoutingConfig struct {
+	SlowStartSeconds uint32 `key:"slowStartSeconds" json:"slow_start_seconds"`
+	// Per-gateway in-flight caps (each gateway admits up to this many); the
+	// cluster-wide bound is the replicas' MaxConcurrency, reserved atomically
+	// in Redis per request.
+	PerWorkspaceConcurrency uint32 `key:"perWorkspaceConcurrency" json:"per_workspace_concurrency"`
+	PerEndpointConcurrency  uint32 `key:"perEndpointConcurrency" json:"per_endpoint_concurrency"`
+}
+
+// ApplyDefaults fills zero values with production defaults so consumers can
+// read the config directly.
+func (c *ManagedEndpointsConfig) ApplyDefaults() {
+	c.RoutePrefix = "/" + strings.Trim(strings.TrimSpace(c.RoutePrefix), "/")
+	if c.RoutePrefix == "/" {
+		c.RoutePrefix = "/v1"
+	}
+	c.Repo.Branch = strings.TrimSpace(c.Repo.Branch)
+	if c.Repo.Branch == "" {
+		c.Repo.Branch = "main"
+	}
+	// The harness receives the interval in whole seconds, and a replica must
+	// be allowed to miss at least one heartbeat before it is considered stale.
+	if c.HeartbeatInterval <= 0 {
+		c.HeartbeatInterval = 5 * time.Second
+	}
+	c.HeartbeatInterval = max(c.HeartbeatInterval.Round(time.Second), time.Second)
+	if c.ProviderRevenueShare <= 0 || c.ProviderRevenueShare > 1 {
+		c.ProviderRevenueShare = 0.7
+	}
+	if c.ReplicaStaleAfter <= 0 {
+		c.ReplicaStaleAfter = 3 * c.HeartbeatInterval
+	}
+	c.ReplicaStaleAfter = max(c.ReplicaStaleAfter, 2*c.HeartbeatInterval)
+	if c.Routing.SlowStartSeconds == 0 {
+		c.Routing.SlowStartSeconds = 30
+	}
+	for _, d := range []struct {
+		v   *time.Duration
+		def time.Duration
+	}{
+		{&c.Repo.PollInterval, 2 * time.Minute},
+		{&c.Reconcile.Interval, 10 * time.Second},
+		{&c.Reconcile.FailureBackoff, 30 * time.Second},
+	} {
+		if *d.v <= 0 {
+			*d.v = d.def
+		}
+	}
+}
+
+// WorkerPoolManagedEndpointsConfig opts a pool into hosting endpoint replicas.
+type WorkerPoolManagedEndpointsConfig struct {
+	Enabled bool `key:"enabled" json:"enabled"`
 }
 
 type DatabaseConfig struct {
@@ -573,10 +681,12 @@ type WorkerPoolManagementSource string
 type WorkerPoolController string
 
 var (
-	PoolModeLocal       PoolMode = "local"
-	PoolModeExternal    PoolMode = "external"
-	PoolModePrivate     PoolMode = "private"
-	PoolModeMarketplace PoolMode = "marketplace"
+	PoolModeLocal    PoolMode = "local"
+	PoolModeExternal PoolMode = "external"
+	PoolModePrivate  PoolMode = "private"
+	// Provider pools are workspace-contributed machines that serve managed
+	// endpoints only; the workspace earns a share of the tokens sold on them.
+	PoolModeProvider PoolMode = "provider"
 )
 
 const (
@@ -592,7 +702,7 @@ const (
 // machines outside the cluster. Such workers hold no static credentials and
 // use gateway-brokered access for images and caches.
 func (m PoolMode) AgentHosted() bool {
-	return m == PoolModePrivate || m == PoolModeMarketplace
+	return m == PoolModePrivate || m == PoolModeProvider
 }
 
 type WorkerPoolConfig struct {
@@ -623,6 +733,11 @@ type WorkerPoolConfig struct {
 	DurableDisksPath          string                            `key:"durableDisksPath" json:"durable_disks_path"` // Host path backing durable disks; agent pools fall back to storagePath or the installer state dir.
 	Cache                     WorkerPoolCacheConfig             `key:"cache" json:"cache"`
 	HourlyCostCents           int64                             `key:"hourlyCostCents" json:"hourly_cost_cents"` // Cost of one machine in this pool, in cents per hour (e.g. 120 for $1.20/hr)
+	// ManagedEndpoints lets platform endpoint replicas fill this pool's spare GPUs.
+	ManagedEndpoints WorkerPoolManagedEndpointsConfig `key:"managedEndpoints" json:"managed_endpoints"`
+	// Locality is the network domain used to scope KV caching and P/D pairing.
+	// Defaults to the pool name.
+	Locality string `key:"locality" json:"locality"`
 }
 
 // AgentHosted reports whether this concrete pool uses the agent control path.
@@ -989,11 +1104,6 @@ type ManagedComputeConfig struct {
 	Billing           ManagedComputeBillingConfig `key:"billing" json:"billing"`
 	BYOC              ManagedComputeBYOCConfig    `key:"byoc" json:"byoc"`
 	SSH               ManagedComputeSSHConfig     `key:"ssh" json:"ssh"`
-	// Marketplace identity of the machine this worker runs on, set by the
-	// agent in the generated worker config. Buyer usage on the worker is
-	// billed against this listing.
-	MarketplaceListingID string `key:"marketplaceListingID" json:"marketplace_listing_id"`
-	SellerWorkspaceID    string `key:"sellerWorkspaceID" json:"seller_workspace_id"`
 }
 
 type ManagedComputeSSHConfig struct {

@@ -147,11 +147,6 @@ func (fs *ContainerFunctionService) invoke(ctx context.Context, authInfo *auth.A
 	}
 	policy.Expires = time.Now().Add(time.Duration(policy.TTL) * time.Second)
 
-	// Functions called by external workspaces should not be retried if they fail
-	if stubConfig.Pricing != nil && stub.Workspace.ExternalId != authInfo.Workspace.ExternalId {
-		policy.MaxRetries = 0
-	}
-
 	task, err := fs.taskDispatcher.SendAndExecute(ctx, string(types.ExecutorFunction), &auth.AuthInfo{
 		Workspace: &stub.Workspace,
 	}, stubId, payload, policy, authInfo, stubConfig)

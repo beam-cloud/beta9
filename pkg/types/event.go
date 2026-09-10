@@ -36,7 +36,6 @@ var (
 	EventStubClone          = "stub.clone"
 
 	EventGatewayEndpointCalled = "gateway.endpoint.called"
-	EventLLMRoute              = "llm.route"
 
 	EventComputePool      = "compute.pool"
 	EventComputeJoinToken = "compute.join_token"
@@ -330,22 +329,21 @@ type EventStubSchema struct {
 var EventTaskSchemaVersion = "1.0"
 
 type EventTaskSchema struct {
-	ID                  string     `json:"id"`
-	Status              TaskStatus `json:"status"`
-	FailureReason       string     `json:"failure_reason,omitempty"`
-	ContainerID         string     `json:"container_id"`
-	StartedAt           *time.Time `json:"started_at"`
-	EndedAt             *time.Time `json:"ended_at"`
-	WorkspaceID         string     `json:"workspace_id"`
-	ExternalWorkspaceID string     `json:"external_workspace_id"`
-	StubID              string     `json:"stub_id"`
-	StubType            StubType   `json:"stub_type,omitempty"`
-	CreatedAt           time.Time  `json:"created_at"`
-	UpdatedAt           time.Time  `json:"updated_at"`
-	AppID               string     `json:"app_id"`
-	DeploymentID        string     `json:"deployment_id,omitempty"`
-	DeploymentName      string     `json:"deployment_name,omitempty"`
-	DeploymentVersion   string     `json:"deployment_version,omitempty"`
+	ID                string     `json:"id"`
+	Status            TaskStatus `json:"status"`
+	FailureReason     string     `json:"failure_reason,omitempty"`
+	ContainerID       string     `json:"container_id"`
+	StartedAt         *time.Time `json:"started_at"`
+	EndedAt           *time.Time `json:"ended_at"`
+	WorkspaceID       string     `json:"workspace_id"`
+	StubID            string     `json:"stub_id"`
+	StubType          StubType   `json:"stub_type,omitempty"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
+	AppID             string     `json:"app_id"`
+	DeploymentID      string     `json:"deployment_id,omitempty"`
+	DeploymentName    string     `json:"deployment_name,omitempty"`
+	DeploymentVersion string     `json:"deployment_version,omitempty"`
 }
 
 var EventStubStateSchemaVersion = "1.0"
@@ -414,6 +412,7 @@ const (
 	EventSourceWorkerNetwork            EventSource = "worker.network"
 	EventSourceWorkerRuntime            EventSource = "worker.runtime"
 	EventSourceWorkerStatusHeartbeat    EventSource = "worker.status_heartbeat"
+	EventSourceWorkerEviction           EventSource = "worker.eviction"
 	EventSourceRunnerStdout             EventSource = "runner.stdout"
 	EventSourceClipFUSE                 EventSource = "clip.fuse"
 )
@@ -452,6 +451,7 @@ const (
 	EventMessageWorkerOrphanStateMissing       EventMessage = "container state was missing during worker heartbeat"
 	EventMessagePendingReconciledRunning       EventMessage = "pending state reconciled to running after runtime start"
 	EventMessageStoppingGraceKill              EventMessage = "container exceeded stopping grace period and will be force killed"
+	EventMessageEvicted                        EventMessage = "container evicted to make room for a higher priority workload"
 	EventMessageRuntimeExited                  EventMessage = "runtime process exited"
 	EventMessageRuntimeOOMKilled               EventMessage = "runtime process was oom killed"
 )
@@ -716,6 +716,7 @@ const (
 	ContainerEventWorkerOrphanStateMissing  ContainerEventID = "worker.orphan_state_missing"
 	ContainerEventWorkerPendingReconciled   ContainerEventID = "worker.pending_reconciled_running"
 	ContainerEventWorkerStoppingGraceKill   ContainerEventID = "worker.stopping_grace_kill"
+	ContainerEventWorkerEvicted             ContainerEventID = "worker.evicted"
 	ContainerEventRuntimeExited             ContainerEventID = "runtime.exited"
 	ContainerEventRuntimeOOMKilled          ContainerEventID = "runtime.oom_killed"
 	ContainerEventGatewayAttachDisconnected ContainerEventID = "gateway.attach_disconnected"
@@ -752,6 +753,7 @@ var ContainerEventDefinitions = map[ContainerEventID]ContainerEventDefinition{
 	ContainerEventWorkerOrphanStateMissing:  {ID: ContainerEventWorkerOrphanStateMissing, Domain: EventDomainWorker, Label: "Worker orphan state missing"},
 	ContainerEventWorkerPendingReconciled:   {ID: ContainerEventWorkerPendingReconciled, Domain: EventDomainWorker, Label: "Pending reconciled to running"},
 	ContainerEventWorkerStoppingGraceKill:   {ID: ContainerEventWorkerStoppingGraceKill, Domain: EventDomainWorker, Label: "Stopping grace kill"},
+	ContainerEventWorkerEvicted:             {ID: ContainerEventWorkerEvicted, Domain: EventDomainWorker, Label: "Evicted"},
 	ContainerEventRuntimeExited:             {ID: ContainerEventRuntimeExited, Domain: EventDomainRuntime, Label: "Runtime exited"},
 	ContainerEventRuntimeOOMKilled:          {ID: ContainerEventRuntimeOOMKilled, Domain: EventDomainRuntime, Label: "Runtime OOM killed"},
 	ContainerEventGatewayAttachDisconnected: {ID: ContainerEventGatewayAttachDisconnected, Domain: EventDomainGateway, Label: "Attach disconnected"},
@@ -852,51 +854,6 @@ type EventPlatformLogSchema struct {
 	Level       string    `json:"level,omitempty"`
 	Stream      string    `json:"stream,omitempty"`
 	Line        string    `json:"line"`
-}
-
-var EventLLMRouteSchemaVersion = "1.0"
-
-type EventLLMRouteSchema struct {
-	Timestamp                time.Time `json:"timestamp"`
-	WorkspaceID              string    `json:"workspace_id,omitempty"`
-	AppID                    string    `json:"app_id,omitempty"`
-	StubID                   string    `json:"stub_id,omitempty"`
-	StubType                 string    `json:"stub_type,omitempty"`
-	ContainerID              string    `json:"container_id,omitempty"`
-	Method                   string    `json:"method,omitempty"`
-	Path                     string    `json:"path,omitempty"`
-	RequestID                string    `json:"request_id,omitempty"`
-	Model                    string    `json:"model,omitempty"`
-	Engine                   string    `json:"engine,omitempty"`
-	RouteReason              string    `json:"route_reason,omitempty"`
-	RouteScore               int64     `json:"route_score,omitempty"`
-	CandidateCount           int       `json:"candidate_count,omitempty"`
-	ReadyContainerCount      int       `json:"ready_container_count,omitempty"`
-	SessionHash              string    `json:"session_hash,omitempty"`
-	PrefixHash               string    `json:"prefix_hash,omitempty"`
-	PrefixBlockCount         int       `json:"prefix_block_count,omitempty"`
-	PrefixCacheMatches       int       `json:"prefix_cache_matches,omitempty"`
-	PromptTokens             int64     `json:"prompt_tokens,omitempty"`
-	OutputTokens             int64     `json:"output_tokens,omitempty"`
-	TokenPressure            int64     `json:"token_pressure,omitempty"`
-	Stream                   bool      `json:"stream,omitempty"`
-	TotalActiveStreams       int64     `json:"total_active_streams,omitempty"`
-	TotalTokenPressure       int64     `json:"total_token_pressure,omitempty"`
-	ContainerActiveStreams   int64     `json:"container_active_streams,omitempty"`
-	ContainerTokenPressure   int64     `json:"container_token_pressure,omitempty"`
-	EngineRunningRequests    int64     `json:"engine_running_requests,omitempty"`
-	EngineWaitingRequests    int64     `json:"engine_waiting_requests,omitempty"`
-	EngineTTFTMs             int64     `json:"engine_ttft_ms,omitempty"`
-	EngineTPOTMs             int64     `json:"engine_tpot_ms,omitempty"`
-	EngineDecodeTokensPerS   int64     `json:"engine_decode_tokens_per_s,omitempty"`
-	EngineGPUCacheUsageMilli int64     `json:"engine_gpu_cache_usage_milli,omitempty"`
-	EnginePrefixCacheMilli   int64     `json:"engine_prefix_cache_hit_milli,omitempty"`
-	QueueWaitMs              int64     `json:"queue_wait_ms,omitempty"`
-	FirstResponseMs          int64     `json:"first_response_ms,omitempty"`
-	DurationMs               int64     `json:"duration_ms,omitempty"`
-	StatusCode               int       `json:"status_code,omitempty"`
-	BackendError             bool      `json:"backend_error,omitempty"`
-	ErrorMessage             string    `json:"error_message,omitempty"`
 }
 
 type EventQuery struct {
@@ -1137,6 +1094,7 @@ func IsContainerRootCauseCandidate(id ContainerEventID) bool {
 		ContainerEventWorkerStopEventReceived,
 		ContainerEventWorkerOrphanStateMissing,
 		ContainerEventWorkerStoppingGraceKill,
+		ContainerEventWorkerEvicted,
 		ContainerEventRuntimeExited,
 		ContainerEventRuntimeOOMKilled,
 		ContainerEventGatewayServeLockDeleted,
@@ -1237,4 +1195,78 @@ func EventSummaryKeyForLifecycle(id ContainerLifecycleID) string {
 	default:
 		return strings.ReplaceAll(string(id), ".", "_") + "_ms"
 	}
+}
+
+// Managed endpoint events. Every event carries the endpoint id so the admin
+// RPCs and UI can query history per endpoint (and per GPU target).
+const (
+	EventEndpointRoute   = "endpoint.route"
+	EventEndpointReplica = "endpoint.replica"
+	EventEndpointConfig  = "endpoint.config"
+	EventEndpointGitOps  = "endpoint.gitops"
+	EventEndpointHarness = "endpoint.harness"
+)
+
+var EventEndpointSchemaVersion = "1.0"
+
+// EventEndpointSchema is the shared envelope for endpoint.* events. Action
+// names the sub-event (e.g. "replica.ready", "config.fleet", "rollout.promoted").
+type EventEndpointSchema struct {
+	EndpointID  string         `json:"endpoint_id"`
+	Action      string         `json:"action"`
+	WorkspaceID string         `json:"workspace_id,omitempty"`
+	StubID      string         `json:"stub_id,omitempty"`
+	Version     uint           `json:"version,omitempty"`
+	ReplicaID   string         `json:"replica_id,omitempty"`
+	ContainerID string         `json:"container_id,omitempty"`
+	WorkerID    string         `json:"worker_id,omitempty"`
+	PoolName    string         `json:"pool_name,omitempty"`
+	GPU         string         `json:"gpu,omitempty"`
+	Revision    uint64         `json:"revision,omitempty"`
+	Message     string         `json:"message,omitempty"`
+	Data        map[string]any `json:"data,omitempty"`
+	Timestamp   time.Time      `json:"timestamp"`
+}
+
+// EventEndpointRouteSchema is emitted once per /v1 request.
+type EventEndpointRouteSchema struct {
+	EndpointID  string `json:"endpoint_id"`
+	WorkspaceID string `json:"workspace_id"`
+	TokenID     string `json:"token_id,omitempty"`
+	RequestID   string `json:"request_id"`
+	Route       string `json:"route"`
+	Model       string `json:"model"`
+	Version     uint   `json:"version"`
+	ReplicaID   string `json:"replica_id"`
+	ContainerID string `json:"container_id,omitempty"`
+	MachineID   string `json:"machine_id,omitempty"`
+	GPU         string `json:"gpu"`
+	Locality    string `json:"locality,omitempty"`
+	// ConfigRevision is the replica's acknowledged live config at the time.
+	ConfigRevision uint64 `json:"config_revision,omitempty"`
+	// Provider attribution: set when the serving replica ran on a
+	// workspace-contributed machine; ProviderShareMicroUSD is that
+	// workspace's cut of CostMicroUSD.
+	ProviderWorkspaceID   string    `json:"provider_workspace_id,omitempty"`
+	ProviderShareMicroUSD int64     `json:"provider_share_micro_usd,omitempty"`
+	StatusCode            int       `json:"status_code"`
+	Stream                bool      `json:"stream"`
+	Retried               bool      `json:"retried"`
+	RouteReason           string    `json:"route_reason,omitempty"`
+	KVHitSource           string    `json:"kv_hit_source,omitempty"`
+	PromptTokens          int64     `json:"prompt_tokens"`
+	CompletionTokens      int64     `json:"completion_tokens"`
+	CachedTokens          int64     `json:"cached_tokens"`
+	Images                int64     `json:"images"`
+	CostMicroUSD          int64     `json:"cost_micro_usd"`
+	PromptMicroUSD        int64     `json:"prompt_micro_usd"`
+	CompletionMicroUSD    int64     `json:"completion_micro_usd"`
+	CachedMicroUSD        int64     `json:"cached_micro_usd"`
+	RequestMicroUSD       int64     `json:"request_micro_usd"`
+	ImageMicroUSD         int64     `json:"image_micro_usd"`
+	DurationMs            int64     `json:"duration_ms"`
+	TTFTMs                int64     `json:"ttft_ms"`
+	QueueWaitMs           int64     `json:"queue_wait_ms"`
+	Error                 string    `json:"error,omitempty"`
+	Timestamp             time.Time `json:"timestamp"`
 }

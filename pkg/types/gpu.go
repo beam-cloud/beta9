@@ -160,7 +160,7 @@ func NormalizeGPUType(value string) GpuType {
 	if key == "ANY" {
 		return GPU_ANY
 	}
-	if key == "NOGPU" || key == "NONE" {
+	if key == "NOGPU" || key == "NONE" || key == "CPU" {
 		return NO_GPU
 	}
 	if strings.Contains(key, "A100") && strings.Contains(key, "80G") {

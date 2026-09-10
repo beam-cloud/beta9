@@ -24,37 +24,15 @@ func ManagedMachineID(workspaceID, poolName, seed string) string {
 	return shortComputeID("managed", workspaceID, poolName, seed)
 }
 
-func MarketplaceListingID(workspaceID, displayName string) string {
-	return shortComputeID("marketplace", workspaceID, displayName, nowSeed())
-}
-
-func MarketplaceRentalID(buyerWorkspaceID, machineID string) string {
-	return shortComputeID("rental", buyerWorkspaceID, machineID, nowSeed())
-}
-
-// MarketplacePoolName builds the pool name behind a marketplace listing from a
-// seller-provided name or the listing's GPU type (e.g. "marketplace-a100").
-// Pool names feed cache locality keys, so they are stable and human-readable;
-// sellers can point multiple listings at one pool to share machine caches.
-func MarketplacePoolName(slug string) string {
-	slug = strings.Trim(strings.TrimPrefix(cleanNodeNamePart(slug), "marketplace"), "-")
+// ProviderPoolName is the pool a workspace's contributed machines of one GPU
+// type join (e.g. "provider-h100-ab12cd"). Pool names feed cache locality
+// keys, so they are stable per workspace and GPU.
+func ProviderPoolName(workspaceID, gpu string) string {
+	slug := strings.Trim(cleanNodeNamePart(strings.ToLower(gpu)), "-")
 	if slug == "" {
 		return ""
 	}
-	if len(slug) > 40 {
-		slug = strings.Trim(slug[:40], "-")
-	}
-	return "marketplace-" + slug
-}
-
-// MarketplacePoolNameForSeller keeps shared pools stable within one seller
-// while making their worker/controller identity globally unambiguous.
-func MarketplacePoolNameForSeller(workspaceID, slug string) string {
-	name := MarketplacePoolName(slug)
-	if name == "" {
-		return ""
-	}
-	return name + "-" + shortComputeID("seller", workspaceID)
+	return "provider-" + slug + "-" + shortComputeID("provider", workspaceID)
 }
 
 func AgentMachineWorkerID(machineID string) string {

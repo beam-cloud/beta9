@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -286,10 +285,17 @@ func (r *PostgresBackendRepository) GetAdminWorkspace(ctx context.Context) (*typ
 		r.adminWorkspaceMu.Unlock()
 
 		var adminWorkspace types.Workspace
-		query := `SELECT w.id, w.external_id, w.name, w.created_at, w.concurrency_limit_id, w.volume_cache_enabled, w.multi_gpu_enabled
+		query := `SELECT w.id, w.external_id, w.name, w.created_at, w.concurrency_limit_id, w.volume_cache_enabled, w.multi_gpu_enabled,
+	ws.id "storage.id", ws.bucket_name "storage.bucket_name", ws.access_key "storage.access_key",
+	ws.secret_key "storage.secret_key", ws.endpoint_url "storage.endpoint_url", ws.region "storage.region",
+	ws.created_at "storage.created_at", ws.updated_at "storage.updated_at"
 	FROM workspace w
+	LEFT JOIN workspace_storage ws ON w.storage_id = ws.id
 	WHERE w.is_cluster_admin;`
 		err := r.client.GetContext(ctx, &adminWorkspace, query)
+		if err == nil && adminWorkspace.StorageAvailable() {
+			err = r.decryptFields(adminWorkspace.Storage)
+		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			err = ctxErr
 		}
@@ -603,14 +609,14 @@ func (r *PostgresBackendRepository) CreateTask(ctx context.Context, params *type
 	}
 
 	query := `
-    INSERT INTO task (external_id, container_id, workspace_id, external_workspace_id, stub_id)
-    VALUES ($1, $2, $3, $4, $5)
-    RETURNING id, external_id, status, failure_reason, container_id, workspace_id, external_workspace_id, stub_id, started_at, ended_at, created_at, updated_at;
+    INSERT INTO task (external_id, container_id, workspace_id, stub_id)
+    VALUES ($1, $2, $3, $4)
+    RETURNING id, external_id, status, failure_reason, container_id, workspace_id, stub_id, started_at, ended_at, created_at, updated_at;
     `
 
 	var newTask types.Task
 
-	if err := r.client.GetContext(ctx, &newTask, query, params.TaskId, params.ContainerId, params.WorkspaceId, params.ExternalWorkspaceId, params.StubId); err != nil {
+	if err := r.client.GetContext(ctx, &newTask, query, params.TaskId, params.ContainerId, params.WorkspaceId, params.StubId); err != nil {
 		return &types.Task{}, err
 	}
 
@@ -650,7 +656,7 @@ func (r *PostgresBackendRepository) DeleteTask(ctx context.Context, externalId s
 
 func (r *PostgresBackendRepository) GetTask(ctx context.Context, externalId string) (*types.Task, error) {
 	var task types.Task
-	query := `SELECT id, external_id, status, failure_reason, container_id, started_at, ended_at, workspace_id, external_workspace_id, stub_id, created_at, updated_at FROM task WHERE external_id = $1;`
+	query := `SELECT id, external_id, status, failure_reason, container_id, started_at, ended_at, workspace_id, stub_id, created_at, updated_at FROM task WHERE external_id = $1;`
 	err := r.client.GetContext(ctx, &task, query, externalId)
 	if err != nil {
 		return &types.Task{}, err
@@ -679,9 +685,6 @@ func (r *PostgresBackendRepository) GetTaskWithRelated(ctx context.Context, exte
 		w.name AS "workspace.name",
 		w.created_at AS "workspace.created_at",
 		w.updated_at AS "workspace.updated_at",
-		ew.id AS "external_workspace.id",
-		ew.external_id AS "external_workspace.external_id",
-		ew.name AS "external_workspace.name",
 		s.external_id AS "stub.external_id",
 		s.name AS "stub.name",
 		s.config AS "stub.config",
@@ -697,7 +700,6 @@ func (r *PostgresBackendRepository) GetTaskWithRelated(ctx context.Context, exte
 	JOIN workspace w ON t.workspace_id = w.id
 	JOIN stub s ON t.stub_id = s.id
 	JOIN app a ON s.app_id = a.id
-	LEFT JOIN workspace ew ON ew.id = t.external_workspace_id
 	LEFT JOIN deployment d ON d.stub_id = s.id
 	WHERE t.external_id = $1;
 	`
@@ -713,11 +715,6 @@ func (r *PostgresBackendRepository) GetTaskWithRelated(ctx context.Context, exte
 		}
 
 		return nil, err
-	}
-
-	// If external_workspace.id is nil, set ExternalWorkspace to nil
-	if taskWithRelated.ExternalWorkspace != nil && taskWithRelated.ExternalWorkspace.Id == nil {
-		taskWithRelated.ExternalWorkspace = nil
 	}
 
 	return &taskWithRelated, nil
@@ -776,15 +773,8 @@ func (c *PostgresBackendRepository) listTaskWithRelatedQueryBuilder(filters type
 	}
 
 	// Apply filters
-	if filters.All {
-		qb = qb.Where(squirrel.Or{
-			squirrel.Eq{"t.external_workspace_id": filters.WorkspaceID},
-			squirrel.Eq{"t.workspace_id": filters.WorkspaceID},
-		})
-	} else if filters.WorkspaceID > 0 {
+	if filters.WorkspaceID > 0 {
 		qb = qb.Where(squirrel.Eq{"t.workspace_id": filters.WorkspaceID})
-	} else if filters.ExternalWorkspaceID > 0 {
-		qb = qb.Where(squirrel.Eq{"t.external_workspace_id": filters.ExternalWorkspaceID})
 	}
 
 	if len(filters.StubIds) > 0 {
@@ -855,8 +845,6 @@ func (c *PostgresBackendRepository) listTaskWithRelatedQueryBuilder(filters type
 		qb = qb.Join("app a ON s.app_id = a.id")
 		if filters.WorkspaceID > 0 {
 			qb = qb.Where(squirrel.Eq{"a.workspace_id": filters.WorkspaceID})
-		} else if filters.ExternalWorkspaceID > 0 {
-			qb = qb.Where(squirrel.Eq{"a.workspace_id": filters.ExternalWorkspaceID})
 		}
 		qb = qb.Where(squirrel.Eq{"a.external_id": filters.AppId})
 		qb = qb.Where("a.deleted_at IS NULL")
@@ -996,13 +984,9 @@ func (c *PostgresBackendRepository) AggregateTasksByTimeWindow(ctx context.Conte
 	}
 
 	if filters.AppId != "" {
-		appWorkspaceId := filters.WorkspaceID
-		if appWorkspaceId == 0 {
-			appWorkspaceId = filters.ExternalWorkspaceID
-		}
 		appStubIds := squirrel.Select("app_stub.id").From("stub app_stub").
 			Join("app app_scope ON app_stub.app_id = app_scope.id").
-			Where(squirrel.Eq{"app_scope.workspace_id": appWorkspaceId}).
+			Where(squirrel.Eq{"app_scope.workspace_id": filters.WorkspaceID}).
 			Where(squirrel.Eq{"app_scope.external_id": filters.AppId}).
 			Where("app_scope.deleted_at IS NULL")
 		qb = qb.Where(squirrel.Expr("t.stub_id IN (?)", appStubIds))
@@ -1032,17 +1016,6 @@ func (c *PostgresBackendRepository) AggregateTasksByTimeWindow(ctx context.Conte
 }
 
 func (c *PostgresBackendRepository) ListTasksWithRelated(ctx context.Context, filters types.TaskFilter) ([]types.TaskWithRelated, error) {
-	if filters.All {
-		filters.Limit = 0
-
-		tasks, err := c.listAllTasksWithRelatedPaginated(ctx, filters)
-		if err != nil {
-			return nil, err
-		}
-
-		return tasks.Data, nil
-	}
-
 	qb := c.listTaskWithRelatedQueryBuilder(filters, false)
 
 	sql, args, err := qb.ToSql()
@@ -1060,10 +1033,6 @@ func (c *PostgresBackendRepository) ListTasksWithRelated(ctx context.Context, fi
 }
 
 func (c *PostgresBackendRepository) ListTasksWithRelatedPaginated(ctx context.Context, filters types.TaskFilter) (common.CursorPaginationInfo[types.TaskWithRelated], error) {
-	if filters.All {
-		return c.listAllTasksWithRelatedPaginated(ctx, filters)
-	}
-
 	pageOnly := filters.AppId != ""
 	qb := c.listTaskWithRelatedQueryBuilder(filters, pageOnly)
 	queryWrapper := func(page squirrel.SelectBuilder, pageSize int) squirrel.SelectBuilder {
@@ -1094,68 +1063,6 @@ func (c *PostgresBackendRepository) ListTasksWithRelatedPaginated(ctx context.Co
 	}
 
 	return *page, nil
-}
-
-func (c *PostgresBackendRepository) listAllTasksWithRelatedPaginated(ctx context.Context, filters types.TaskFilter) (common.CursorPaginationInfo[types.TaskWithRelated], error) {
-	// Apply limit// Apply limit
-	pageSize := filters.Limit
-	if pageSize <= 0 {
-		pageSize = 10
-	}
-
-	filtersWorkspace := filters
-	filtersWorkspace.All = false
-	filtersWorkspace.WorkspaceID = filters.WorkspaceID
-	filtersWorkspace.ExternalWorkspaceID = 0
-	// We want to get one more result past the page size to check if there is more data
-	filtersWorkspace.Limit = pageSize + 1
-
-	filtersExternalWorkspace := filters
-	filtersExternalWorkspace.All = false
-	filtersExternalWorkspace.WorkspaceID = 0
-	filtersExternalWorkspace.ExternalWorkspaceID = filters.WorkspaceID
-	// We want to get one more result past the page size to check if there is more data
-	filtersExternalWorkspace.Limit = pageSize + 1
-
-	// Get results from both calls
-	resultWorkspace, err := c.ListTasksWithRelatedPaginated(ctx, filtersWorkspace)
-	if err != nil {
-		return common.CursorPaginationInfo[types.TaskWithRelated]{}, err
-	}
-
-	resultExternalWorkspace, err := c.ListTasksWithRelatedPaginated(ctx, filtersExternalWorkspace)
-	if err != nil {
-		return common.CursorPaginationInfo[types.TaskWithRelated]{}, err
-	}
-
-	// Merge and sort results
-	allTasks := append(resultWorkspace.Data, resultExternalWorkspace.Data...)
-
-	// Sort by created_at DESC, id DESC
-	sort.Slice(allTasks, func(i, j int) bool {
-		if allTasks[i].CreatedAt.Equal(allTasks[j].CreatedAt.Time) {
-			return allTasks[i].Id > allTasks[j].Id
-		}
-
-		return allTasks[i].CreatedAt.After(allTasks[j].CreatedAt.Time)
-	})
-
-	var nextCursor string
-	if len(allTasks) > int(pageSize) {
-		allTasks = allTasks[:pageSize]
-		lastRow := allTasks[pageSize-1]
-
-		newCursor := common.DatetimeCursor{
-			Value: lastRow.CreatedAt.Format(common.CursorTimestampFormat),
-			Id:    lastRow.Id,
-		}
-		nextCursor = common.EncodeCursor(newCursor)
-	}
-
-	return common.CursorPaginationInfo[types.TaskWithRelated]{
-		Next: nextCursor,
-		Data: allTasks,
-	}, nil
 }
 
 // Stub

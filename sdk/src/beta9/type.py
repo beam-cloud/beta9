@@ -285,12 +285,9 @@ class Pool:
 
 
 QUEUE_DEPTH_AUTOSCALER_TYPE = "queue_depth"
-LLM_TOKEN_PRESSURE_AUTOSCALER_TYPE = "llm_token_pressure"
 DEFAULT_AUTOSCALER_MAX_CONTAINERS = 1
 DEFAULT_AUTOSCALER_TASKS_PER_CONTAINER = 1
 DEFAULT_AUTOSCALER_MIN_CONTAINERS = 0
-LLM_APP_KIND = "llm_model"
-OPENAI_SERVING_PROTOCOL = "openai"
 
 
 @dataclass
@@ -303,22 +300,6 @@ class Autoscaler:
 @dataclass
 class QueueDepthAutoscaler(Autoscaler):
     pass
-
-
-@dataclass
-class LLMTokenPressureAutoscaler(Autoscaler):
-    pass
-
-
-@dataclass
-class LLMConfig:
-    model_id: str = ""
-    engine: str = ""
-    served_model_name: str = ""
-    context_length: int = 0
-    tokenizer: str = ""
-    metrics_path: str = ""
-    slo_tier: str = ""
 
 
 @dataclass
@@ -361,7 +342,6 @@ class DurableDisk:
 class ServingConfig:
     app_kind: str = ""
     serving_protocol: str = ""
-    llm: Optional[LLMConfig] = None
     database: Optional[DatabaseServingConfig] = None
 
     @classmethod
@@ -370,41 +350,21 @@ class ServingConfig:
         *,
         app_kind: str = "",
         serving_protocol: str = "",
-        llm: Optional[LLMConfig] = None,
         serving: Optional["ServingConfig"] = None,
     ) -> "ServingConfig":
-        config = serving or cls(
-            app_kind=app_kind, serving_protocol=serving_protocol, llm=llm
-        )
+        config = serving or cls(app_kind=app_kind, serving_protocol=serving_protocol)
         return config.normalize()
 
     def normalize(self) -> "ServingConfig":
         self.app_kind = self.app_kind or ""
         self.serving_protocol = self.serving_protocol or ""
-        if self.llm:
-            self.app_kind = self.app_kind or LLM_APP_KIND
-            self.serving_protocol = self.serving_protocol or OPENAI_SERVING_PROTOCOL
         if self.database:
             self.app_kind = self.app_kind or "database"
             self.serving_protocol = self.serving_protocol or self.database.kind
         return self
 
     def is_empty(self) -> bool:
-        return not (self.app_kind or self.serving_protocol or self.llm or self.database)
-
-    def uses_token_pressure_autoscaling(self) -> bool:
-        return bool(self.llm and self.serving_protocol == OPENAI_SERVING_PROTOCOL)
-
-    def autoscaler_for_replicas(
-        self, *, min_containers: int, max_containers: int
-    ) -> Optional[Autoscaler]:
-        if not self.uses_token_pressure_autoscaling():
-            return None
-
-        return LLMTokenPressureAutoscaler(
-            min_containers=min_containers,
-            max_containers=max_containers,
-        )
+        return not (self.app_kind or self.serving_protocol or self.database)
 
 
 @dataclass
@@ -428,20 +388,6 @@ class TaskPolicy:
     ttl: int = 0
 
 
-class PricingPolicyCostModel(str, Enum):
-    Task = "task"
-    Duration = "duration"
-
-
-@dataclass
-class PricingPolicy:
-    max_in_flight: int = 10
-    cost_model: PricingPolicyCostModel = PricingPolicyCostModel.Task
-    cost_per_task: float = 0.000000000000000000
-    cost_per_task_duration_ms: float = 0.000000000000000000
-
-
 _AUTOSCALER_TYPES: Dict[Type[Autoscaler], str] = {
     QueueDepthAutoscaler: QUEUE_DEPTH_AUTOSCALER_TYPE,
-    LLMTokenPressureAutoscaler: LLM_TOKEN_PRESSURE_AUTOSCALER_TYPE,
 }

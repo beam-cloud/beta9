@@ -33,7 +33,7 @@ from ..env import called_on_import, is_local
 from ..exceptions import RemoteExecutionError
 from ..schema import Schema
 from ..sync import FileSyncer
-from ..type import DurableDisk, GpuType, GpuTypeAlias, Pool, PricingPolicy, TaskPolicy
+from ..type import DurableDisk, GpuType, GpuTypeAlias, Pool, TaskPolicy
 from .mixins import DeployableMixin
 
 
@@ -123,11 +123,9 @@ class Function(RunnerAbstraction):
         task_policy: TaskPolicy = TaskPolicy(),
         on_deploy: Optional[AbstractCallableWrapper] = None,
         headless: bool = False,
-        pricing: Optional[PricingPolicy] = None,
         inputs: Optional[Schema] = None,
         outputs: Optional[Schema] = None,
         pool: Optional[Union[str, Pool]] = None,
-        allow_marketplace: bool = False,
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -146,11 +144,9 @@ class Function(RunnerAbstraction):
             task_policy=task_policy,
             on_deploy=on_deploy,
             app=app,
-            pricing=pricing,
             inputs=inputs,
             outputs=outputs,
             pool=pool,
-            allow_marketplace=allow_marketplace,
         )
 
         self._function_stub: Optional[FunctionServiceStub] = None

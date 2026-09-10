@@ -5,7 +5,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
@@ -35,7 +34,6 @@ type Service struct {
 	redisClient          *common.RedisClient
 	telemetryCredentials telemetryCredentialIssuer
 	billing              managedComputeBillingClient
-	rentalUsage          *clients.MarketplaceUsageClient
 	tailscale            *network.Tailscale
 	routePrewarm         routePrewarmer
 	reconcileOnce        sync.Once
@@ -74,7 +72,6 @@ func New(opts Options) *Service {
 		keyEventManager:      opts.KeyEventManager,
 		redisClient:          opts.RedisClient,
 		billing:              newRoutedManagedComputeBillingClient(opts.Config.ManagedCompute.Billing),
-		rentalUsage:          clients.NewMarketplaceUsageClient(opts.Config.ManagedCompute.Billing),
 		tailscale:            opts.Tailscale,
 		routePrewarm:         routePrewarmer{activeTargets: map[string]struct{}{}},
 		managedPoolInstances: map[string]string{},

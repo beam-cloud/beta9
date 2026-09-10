@@ -223,6 +223,9 @@ const (
 	TokenTypeClusterAdmin     string = "admin"
 	TokenTypeWorkspacePrimary string = "workspace_primary"
 	TokenTypeWorkspace        string = "workspace"
+	// Minted only by the GitOps controller and revoked when its run finishes.
+	// Image builds from this token belong to the platform, not a customer.
+	TokenTypePlatformDeployer string = "platform_deployer"
 	TokenTypeWorker           string = "worker"
 	// TokenTypeWorkerPrivate is a worker token minted for private-pool (agent)
 	// compute running on customer machines. It carries the pool owner's
@@ -359,27 +362,25 @@ const (
 )
 
 type TaskParams struct {
-	TaskId              string
-	ContainerId         string
-	StubId              uint
-	WorkspaceId         uint
-	ExternalWorkspaceId *uint
+	TaskId      string
+	ContainerId string
+	StubId      uint
+	WorkspaceId uint
 }
 
 type Task struct {
-	Id                  uint       `db:"id" json:"id,omitempty" serializer:"id,source:external_id"`
-	ExternalId          string     `db:"external_id" json:"external_id,omitempty" serializer:"external_id"`
-	Status              TaskStatus `db:"status" json:"status,omitempty" serializer:"status"`
-	FailureReason       string     `db:"failure_reason" json:"failure_reason,omitempty" serializer:"failure_reason"`
-	ContainerId         string     `db:"container_id" json:"container_id,omitempty" serializer:"container_id"`
-	StartedAt           NullTime   `db:"started_at" json:"started_at,omitempty" serializer:"started_at"`
-	EndedAt             NullTime   `db:"ended_at" json:"ended_at,omitempty" serializer:"ended_at"`
-	WorkspaceId         uint       `db:"workspace_id" json:"workspace_id,omitempty"`                   // Foreign key to Workspace
-	ExternalWorkspaceId *uint      `db:"external_workspace_id" json:"external_workspace_id,omitempty"` // Foreign key to Workspace
-	StubId              uint       `db:"stub_id" json:"stub_id,omitempty"`                             // Foreign key to Stub
-	AppId               *uint      `db:"app_id" json:"app_id,omitempty"`                               // Foreign key to App
-	CreatedAt           Time       `db:"created_at" json:"created_at,omitempty" serializer:"created_at"`
-	UpdatedAt           Time       `db:"updated_at" json:"updated_at,omitempty" serializer:"updated_at"`
+	Id            uint       `db:"id" json:"id,omitempty" serializer:"id,source:external_id"`
+	ExternalId    string     `db:"external_id" json:"external_id,omitempty" serializer:"external_id"`
+	Status        TaskStatus `db:"status" json:"status,omitempty" serializer:"status"`
+	FailureReason string     `db:"failure_reason" json:"failure_reason,omitempty" serializer:"failure_reason"`
+	ContainerId   string     `db:"container_id" json:"container_id,omitempty" serializer:"container_id"`
+	StartedAt     NullTime   `db:"started_at" json:"started_at,omitempty" serializer:"started_at"`
+	EndedAt       NullTime   `db:"ended_at" json:"ended_at,omitempty" serializer:"ended_at"`
+	WorkspaceId   uint       `db:"workspace_id" json:"workspace_id,omitempty"` // Foreign key to Workspace
+	StubId        uint       `db:"stub_id" json:"stub_id,omitempty"`           // Foreign key to Stub
+	AppId         *uint      `db:"app_id" json:"app_id,omitempty"`             // Foreign key to App
+	CreatedAt     Time       `db:"created_at" json:"created_at,omitempty" serializer:"created_at"`
+	UpdatedAt     Time       `db:"updated_at" json:"updated_at,omitempty" serializer:"updated_at"`
 }
 
 type TaskWithRelated struct {
@@ -389,17 +390,12 @@ type TaskWithRelated struct {
 		Name       *string `db:"name" json:"name" serializer:"name"`
 		Version    *uint   `db:"version" json:"version" serializer:"version"`
 	} `db:"deployment" json:"deployment" serializer:"deployment"`
-	Outputs           []TaskOutput    `json:"outputs" serializer:"outputs"`
-	Stats             TaskStats       `json:"stats" serializer:"stats"`
-	Result            json.RawMessage `json:"result" serializer:"result"`
-	Workspace         Workspace       `db:"workspace" json:"workspace" serializer:"workspace"`
-	ExternalWorkspace *struct {
-		Id         *uint   `db:"id" json:"id"`
-		ExternalId *string `db:"external_id" json:"external_id"`
-		Name       *string `db:"name" json:"name"`
-	} `db:"external_workspace" json:"external_workspace" serializer:"external_workspace"`
-	Stub Stub `db:"stub" json:"stub" serializer:"stub"`
-	App  App  `db:"app" json:"app" serializer:"app"`
+	Outputs   []TaskOutput    `json:"outputs" serializer:"outputs"`
+	Stats     TaskStats       `json:"stats" serializer:"stats"`
+	Result    json.RawMessage `json:"result" serializer:"result"`
+	Workspace Workspace       `db:"workspace" json:"workspace" serializer:"workspace"`
+	Stub      Stub            `db:"stub" json:"stub" serializer:"stub"`
+	App       App             `db:"app" json:"app" serializer:"app"`
 }
 
 type TaskCountPerDeployment struct {
@@ -439,22 +435,6 @@ type TaskStats struct {
 	ActiveContainers uint32 `json:"active_containers" serializer:"active_containers"`
 	QueueDepth       uint32 `json:"queue_depth" serializer:"queue_depth"`
 }
-
-// @go2proto
-type PricingPolicy struct {
-	MaxInFlight           int     `json:"max_in_flight"`
-	CostModel             string  `json:"cost_model"`
-	CostPerTask           float64 `json:"cost_per_task"`
-	CostPerTaskDurationMs float64 `json:"cost_per_task_duration_ms"`
-}
-
-// @go2proto
-type PricingPolicyCostModel string
-
-const (
-	PricingPolicyCostModelTask     PricingPolicyCostModel = "task"
-	PricingPolicyCostModelDuration PricingPolicyCostModel = "duration"
-)
 
 // @go2proto
 type Checkpoint struct {
@@ -563,23 +543,24 @@ type StubConfigV1 struct {
 	WorkDir            string             `json:"work_dir"`
 	EntryPoint         []string           `json:"entry_point"`
 	Ports              []uint32           `json:"ports"`
-	Pricing            *PricingPolicy     `json:"pricing"`
 	Inputs             *Schema            `json:"inputs"`
 	Outputs            *Schema            `json:"outputs"`
 	TCP                bool               `json:"tcp"`
 	BlockNetwork       bool               `json:"block_network"`
 	AllowList          []string           `json:"allow_list"`
 	DockerEnabled      bool               `json:"docker_enabled"`
-	AllowMarketplace   bool               `json:"allow_marketplace"`
 	// Hostname to set inside the container.
 	Hostname string `json:"hostname,omitempty"`
-	// MachineID pins the stub's containers to one agent machine. Only set by
-	// the gateway for marketplace rental workloads; not exposed to the SDK.
+	// MachineID pins the stub's containers to one agent machine (pod/shell
+	// `--machine`); not exposed to the SDK decorators.
 	MachineID string            `json:"machine_id,omitempty"`
 	IsService bool              `json:"is_service"`
 	Serving   *ServingConfig    `json:"serving,omitempty"`
 	Pool      *PoolConfig       `json:"pool,omitempty"`
 	Disks     []*pb.DurableDisk `json:"disks,omitempty"`
+	// ManagedEndpoint carries the platform endpoint/service spec for
+	// managed_endpoint/* and managed_service/* stubs.
+	ManagedEndpoint *ManagedEndpointStubConfig `json:"managed_endpoint,omitempty"`
 }
 
 const (
@@ -615,7 +596,6 @@ func StubConfigForcesResourceLimits(config string) bool {
 type ServingConfig struct {
 	AppKind         string                 `json:"app_kind,omitempty" serializer:"app_kind,omitempty"`
 	ServingProtocol string                 `json:"serving_protocol,omitempty" serializer:"serving_protocol,omitempty"`
-	LLM             *LLMConfig             `json:"llm,omitempty" serializer:"llm,omitempty"`
 	Database        *DatabaseServingConfig `json:"database,omitempty" serializer:"database,omitempty"`
 }
 
@@ -683,21 +663,11 @@ func (c *DatabaseServingConfig) IsRedisCompatible() bool {
 	}
 }
 
-type LLMConfig struct {
-	ModelID         string `json:"model_id,omitempty" serializer:"model_id,omitempty"`
-	Engine          string `json:"engine,omitempty" serializer:"engine,omitempty"`
-	ServedModelName string `json:"served_model_name,omitempty" serializer:"served_model_name,omitempty"`
-	ContextLength   int    `json:"context_length,omitempty" serializer:"context_length,omitempty"`
-	Tokenizer       string `json:"tokenizer,omitempty" serializer:"tokenizer,omitempty"`
-	MetricsPath     string `json:"metrics_path,omitempty" serializer:"metrics_path,omitempty"`
-	SLOTier         string `json:"slo_tier,omitempty" serializer:"slo_tier,omitempty"`
-}
-
 func (c *StubConfigV1) EffectiveServingConfig() *ServingConfig {
 	if c == nil || c.Serving == nil {
 		return nil
 	}
-	if c.Serving.AppKind == "" && c.Serving.ServingProtocol == "" && c.Serving.LLM == nil && c.Serving.Database == nil {
+	if c.Serving.AppKind == "" && c.Serving.ServingProtocol == "" && c.Serving.Database == nil {
 		return nil
 	}
 	return c.Serving
@@ -715,13 +685,6 @@ func (c *StubConfigV1) EffectiveServingProtocol() string {
 		return serving.ServingProtocol
 	}
 	return ""
-}
-
-func (c *StubConfigV1) EffectiveLLMConfig() *LLMConfig {
-	if serving := c.EffectiveServingConfig(); serving != nil {
-		return serving.LLM
-	}
-	return nil
 }
 
 func (c *StubConfigV1) EffectiveDatabaseConfig() *DatabaseServingConfig {
@@ -772,12 +735,11 @@ func (c *StubConfigV1) PoolSelector() string {
 }
 
 type StubConfigLimitedValues struct {
-	Pricing       *PricingPolicy `json:"pricing"`
-	Inputs        *Schema        `json:"inputs"`
-	Outputs       *Schema        `json:"outputs"`
-	TaskPolicy    TaskPolicy     `json:"task_policy"`
-	PythonVersion string         `json:"python_version"`
-	Runtime       Runtime        `json:"runtime"`
+	Inputs        *Schema    `json:"inputs"`
+	Outputs       *Schema    `json:"outputs"`
+	TaskPolicy    TaskPolicy `json:"task_policy"`
+	PythonVersion string     `json:"python_version"`
+	Runtime       Runtime    `json:"runtime"`
 }
 
 type Schema struct {
@@ -843,8 +805,7 @@ func (c *StubConfigV1) RequiresGPU() bool {
 type AutoscalerType string
 
 const (
-	QueueDepthAutoscaler       AutoscalerType = "queue_depth"
-	LLMTokenPressureAutoscaler AutoscalerType = "llm_token_pressure"
+	QueueDepthAutoscaler AutoscalerType = "queue_depth"
 )
 
 type Autoscaler struct {

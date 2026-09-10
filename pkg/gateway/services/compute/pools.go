@@ -391,8 +391,8 @@ func (s *Service) ListPrivateMachines(ctx context.Context, authInfo *auth.AuthIn
 }
 
 // ListMachineContainers lists the active containers scheduled on one machine.
-// Works for private pools and marketplace listing pools alike — both are
-// stored under the owning workspace, so sellers can see what runs on their
+// Works for private and provider pools alike — both are stored under the
+// owning workspace, so providers can see what runs on their
 // hardware.
 func (s *Service) ListMachineContainers(ctx context.Context, in *pb.ListMachineContainersRequest) (*pb.ListMachineContainersResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
@@ -479,11 +479,19 @@ func (s *Service) DeletePrivateMachine(ctx context.Context, in *pb.DeleteMachine
 		return &pb.DeleteMachineResponse{Ok: false, ErrMsg: "machine id is required"}, nil
 	}
 
-	machine, poolName, err := s.privateMachineForDelete(ctx, workspaceID, in.PoolName, in.MachineId)
+	machine, pool, poolName, err := s.privateMachineForDelete(ctx, workspaceID, in.PoolName, in.MachineId)
 	if err != nil {
 		return &pb.DeleteMachineResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	if machine != nil {
+		if pool != nil && pool.Mode == string(types.PoolModeProvider) {
+			// The provider is pulling hardware that serves other workspaces'
+			// endpoint replicas. Stop them through the scheduler first so the
+			// endpoint controller records the loss and replaces them, instead
+			// of leaving orphaned containers running on a machine we no longer
+			// route to.
+			s.stopWorkerContainers(ctx, model.AgentMachineWorkerID(machine.MachineID), reconcileReasonMachineReleased)
+		}
 		if err := s.releasePrivateMachine(ctx, machine); err != nil {
 			return &pb.DeleteMachineResponse{Ok: false, ErrMsg: err.Error()}, nil
 		}
@@ -569,20 +577,23 @@ func (s *Service) releasePrivateReservationForDelete(ctx context.Context, worksp
 	return true, s.removePrivateMachine(ctx, machine)
 }
 
-func (s *Service) privateMachineForDelete(ctx context.Context, workspaceID, poolName, machineID string) (*model.AgentTokenState, string, error) {
+// privateMachineForDelete resolves a machine the workspace may delete: one in
+// its private pools, or one it contributes to a provider pool. The pool is
+// returned so the caller can tell the two apart.
+func (s *Service) privateMachineForDelete(ctx context.Context, workspaceID, poolName, machineID string) (*model.AgentTokenState, *model.PoolState, string, error) {
 	poolName = strings.TrimSpace(poolName)
 	if poolName == "" {
 		machine, err := s.computeRepo.GetAgentMachineStateForWorkspace(ctx, workspaceID, machineID)
 		if err != nil || machine == nil {
-			return machine, "", err
+			return machine, nil, "", err
 		}
 		poolName = machine.PoolName
 	}
 
 	pool, err := s.getPrivatePoolState(ctx, workspaceID, poolName)
-	if err != nil || pool == nil || !poolStateIsPrivate(pool) {
-		return nil, "", err
+	if err != nil || pool == nil || !(poolStateIsPrivate(pool) || pool.Mode == string(types.PoolModeProvider)) {
+		return nil, nil, "", err
 	}
 	machine, err := s.computeRepo.GetAgentMachineState(ctx, workspaceID, poolName, machineID)
-	return machine, poolName, err
+	return machine, pool, poolName, err
 }

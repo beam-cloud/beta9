@@ -22,7 +22,6 @@ from ...clients.gateway import (
     GetOrCreateStubResponse,
     GetUrlRequest,
     GetUrlResponse,
-    LlmConfig as LLMConfigProto,
     SecretVar,
     ServingConfig as ServingConfigProto,
 )
@@ -35,7 +34,6 @@ from ...clients.gateway import (
 from ...clients.gateway import TaskPolicy as TaskPolicyProto
 from ...clients.shell import ShellServiceStub
 from ...clients.types import CheckpointTrigger
-from ...clients.types import PricingPolicy as PricingPolicyProto
 from ...config import ConfigContext, SDKSettings, get_config_context, get_settings
 from ...env import called_on_import, is_notebook_env
 from ...exceptions import ImageBuildError
@@ -47,9 +45,7 @@ from ...type import (
     DurableDisk,
     GpuType,
     GpuTypeAlias,
-    LLMConfig,
     Pool,
-    PricingPolicy,
     QueueDepthAutoscaler,
     ServingConfig,
     TaskPolicy,
@@ -131,18 +127,15 @@ class RunnerAbstraction(BaseAbstraction):
         checkpoint_enabled: bool = False,
         entrypoint: Optional[List[str]] = None,
         ports: Optional[List[int]] = [],
-        pricing: Optional[PricingPolicy] = None,
         inputs: Optional[Schema] = None,
         outputs: Optional[Schema] = None,
         tcp: bool = False,
         block_network: bool = False,
         allow_list: Optional[List[str]] = None,
         docker_enabled: bool = False,
-        allow_marketplace: bool = False,
         pool: Optional[Union[str, Pool]] = None,
         app_kind: str = "",
         serving_protocol: str = "",
-        llm: Optional[LLMConfig] = None,
         serving: Optional[ServingConfig] = None,
         disks: Optional[List[DurableDisk]] = None,
         checkpoint_readiness_path: Optional[str] = None,
@@ -201,15 +194,16 @@ class RunnerAbstraction(BaseAbstraction):
         self.checkpoint_readiness_timeout = checkpoint_readiness_timeout
         self.checkpoint_readiness_interval = checkpoint_readiness_interval
         self.docker_enabled = docker_enabled
-        self.allow_marketplace = allow_marketplace
         self.is_service = False
         self.serving = ServingConfig.from_options(
             app_kind=app_kind,
             serving_protocol=serving_protocol,
-            llm=llm,
             serving=serving,
         )
         self.extra: dict = {}
+        # JSON-encoded managed endpoint / service spec; only set by the
+        # ManagedEndpoint abstraction.
+        self.managed_endpoint: str = ""
         self.entrypoint: Optional[List[str]] = entrypoint
         self.tcp = tcp
         self.block_network = block_network
@@ -239,7 +233,6 @@ class RunnerAbstraction(BaseAbstraction):
         self.tmp_files: List[TempFile] = []
         self.is_websocket: bool = False
         self.ports: List[int] = ports or []
-        self.pricing: Optional[PricingPolicy] = pricing
         self.inputs: Optional[Schema] = inputs
         self.outputs: Optional[Schema] = outputs
         self.client: Optional[Client] = None
@@ -272,20 +265,10 @@ class RunnerAbstraction(BaseAbstraction):
     def serving_protocol(self, value: str) -> None:
         self.serving.serving_protocol = value or ""
 
-    @property
-    def llm(self) -> Optional[LLMConfig]:
-        return self.serving.llm
-
-    @llm.setter
-    def llm(self, value: Optional[LLMConfig]) -> None:
-        self.serving.llm = value
-        self.serving.normalize()
-
     def _serving_config_proto(self) -> Optional[ServingConfigProto]:
         if not self.serving or self.serving.is_empty():
             return None
 
-        llm = self.serving.llm
         return ServingConfigProto(
             app_kind=self.serving.app_kind,
             serving_protocol=self.serving.serving_protocol,
@@ -302,17 +285,6 @@ class RunnerAbstraction(BaseAbstraction):
                 connection_url_secret_name=self.serving.database.connection_url_secret_name,
             )
             if self.serving.database
-            else None,
-            llm=LLMConfigProto(
-                model_id=llm.model_id,
-                engine=llm.engine,
-                served_model_name=llm.served_model_name,
-                context_length=llm.context_length,
-                tokenizer=llm.tokenizer,
-                metrics_path=llm.metrics_path,
-                slo_tier=llm.slo_tier,
-            )
-            if llm
             else None,
         )
 
@@ -752,18 +724,9 @@ class RunnerAbstraction(BaseAbstraction):
             extra=json.dumps(self.extra),
             entrypoint=self.entrypoint,
             ports=self.ports,
-            pricing=PricingPolicyProto(
-                cost_per_task=self.pricing.cost_per_task,
-                cost_per_task_duration_ms=self.pricing.cost_per_task_duration_ms,
-                cost_model=self.pricing.cost_model,
-                max_in_flight=self.pricing.max_in_flight,
-            )
-            if self.pricing
-            else None,
             inputs=inputs,
             outputs=outputs,
             docker_enabled=self.docker_enabled,
-            allow_marketplace=self.allow_marketplace,
             tcp=self.tcp,
             block_network=self.block_network,
             allow_list=self.allow_list,
@@ -771,6 +734,7 @@ class RunnerAbstraction(BaseAbstraction):
             is_service=self.is_service,
             serving=self._serving_config_proto(),
             disks=[disk.export() for disk in self.disks],
+            managed_endpoint=self.managed_endpoint,
         )
 
     def _checkpoint_trigger_proto(self) -> Optional[CheckpointTrigger]:

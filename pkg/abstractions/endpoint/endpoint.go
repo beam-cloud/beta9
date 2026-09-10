@@ -263,6 +263,12 @@ func (es *HttpEndpointService) getOrCreateEndpointInstance(ctx context.Context, 
 		return nil, errors.New("invalid stub id")
 	}
 
+	// Container events are matched by id prefix, so a foreign stub can reach
+	// this factory; never autoscale a stub this service does not own.
+	if kind := stub.Type.Kind(); kind != types.StubTypeEndpoint && kind != types.StubTypeASGI {
+		return nil, fmt.Errorf("stub %s is not an endpoint (%s)", stubId, stub.Type)
+	}
+
 	var stubConfig *types.StubConfigV1 = &types.StubConfigV1{}
 	err = json.Unmarshal([]byte(stub.Config), stubConfig)
 	if err != nil {

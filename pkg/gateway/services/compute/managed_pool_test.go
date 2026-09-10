@@ -328,7 +328,7 @@ func TestManagedPoolLifecyclePreservesWorkerConfiguration(t *testing.T) {
 	if err := service.ReconcileManagedPools(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if !service.scheduler.HasManagedPoolForGPU("H100", false) {
+	if !service.scheduler.HasManagedPoolForGPU("H100") {
 		t.Fatal("managed pool was not available to serverless scheduling")
 	}
 	createdInstanceID := state.ManagedInstanceID

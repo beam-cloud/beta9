@@ -716,12 +716,7 @@ func NewWorker() (_ *Worker, err error) {
 		return nil, err
 	}
 
-	usageRecorder := clients.NewManagedComputeContainerUsageRecorder(config.ManagedCompute, clients.WorkerIdentity{
-		WorkerID:  workerId,
-		PoolName:  workerPoolName,
-		MachineID: machineID,
-		Runtime:   defaultRuntime.Name(),
-	})
+	usageRecorder := clients.NewManagedComputeContainerUsageRecorder(config.ManagedCompute)
 
 	workerMetrics, err := NewWorkerUsageMetrics(ctx, workerId, config, gpuType, poolConfig.Mode, usageRecorder)
 	if err != nil {
@@ -892,12 +887,12 @@ func (s *Worker) handleContainerRequest(request *types.ContainerRequest) {
 }
 
 func (s *Worker) runContainerRequest(request *types.ContainerRequest) {
-	s.runContainerRequestWithRunner(request, s.RunContainer)
+	s.runContainerRequestWithRunner(request, s.runContainerWithEvictionBarrier)
 }
 
 func (s *Worker) runContainerRequestWithRunner(
 	request *types.ContainerRequest,
-	runContainer func(context.Context, *types.ContainerRequest) error,
+	runContainer func(context.Context, *types.ContainerRequest, func() error) error,
 ) {
 	containerId := request.ContainerId
 	log.Info().Str("container_id", containerId).Msg("running container")
@@ -950,8 +945,31 @@ func (s *Worker) runContainerRequestWithRunner(
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-
-		return runContainer(ctx, request)
+		// Start reclamation alongside image/mount/spec preparation. The runner
+		// joins this barrier before GPU assignment or starting any process.
+		// The no-victim path has no goroutine, channel or extra repository call.
+		var waitForEviction func() error
+		if len(request.EvictContainerIds) > 0 {
+			done := make(chan struct{})
+			var evictionErr error
+			go func() {
+				defer close(done)
+				evictionErr = s.evictForRequest(ctx, request)
+			}()
+			waitForEviction = func() error {
+				select {
+				case <-done:
+					return evictionErr
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
+			defer func() {
+				cancelStartup()
+				<-done
+			}()
+		}
+		return runContainer(ctx, request, waitForEviction)
 	}
 
 	if request.IsBuildRequest() {
@@ -1304,6 +1322,14 @@ func (s *Worker) updateContainerStatusOnce(ctx context.Context, request *types.C
 	}
 	// Finalization owns the STOPPING lease; the normal heartbeat must not renew it.
 	if status == types.ContainerStatusStopping {
+		if state.Evicting {
+			// The scheduler picked this container as an eviction victim. The
+			// displacing request normally drives the stop, but if it was
+			// requeued elsewhere this path still reclaims the capacity, on
+			// the container's own drain window.
+			s.evictContainer(request.ContainerId, min(time.Duration(state.DrainSeconds)*time.Second, maxPreemptionDrain), "")
+			return false, nil
+		}
 		s.handleObservedStoppingContainer(request.ContainerId, types.EventSourceWorkerStatusHeartbeat)
 		return false, nil
 	}

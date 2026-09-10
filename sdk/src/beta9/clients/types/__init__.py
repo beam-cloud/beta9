@@ -119,11 +119,16 @@ class ContainerRequest(betterproto.Message):
     docker_enabled: bool = betterproto.bool_field(30)
     runtime_secret_names: List[str] = betterproto.string_field(31)
     runtime_token_required: bool = betterproto.bool_field(32)
-    allow_marketplace: bool = betterproto.bool_field(33)
     machine_id: str = betterproto.string_field(34)
     checkpoint_trigger: "CheckpointTrigger" = betterproto.message_field(35)
     task_id: str = betterproto.string_field(36)
     hostname: str = betterproto.string_field(38)
+    evictable: bool = betterproto.bool_field(40)
+    opportunistic_only: bool = betterproto.bool_field(41)
+    evict_container_ids: List[str] = betterproto.string_field(42)
+    evict_drain_seconds: int = betterproto.uint32_field(43)
+    drain_seconds: int = betterproto.uint32_field(44)
+    evict_order: int = betterproto.int32_field(45)
 
 
 @dataclass(eq=False, repr=False)
@@ -140,6 +145,10 @@ class ContainerState(betterproto.Message):
     started_at: int = betterproto.int64_field(10)
     worker_id: str = betterproto.string_field(11)
     machine_id: str = betterproto.string_field(12)
+    evictable: bool = betterproto.bool_field(13)
+    evicting: bool = betterproto.bool_field(14)
+    drain_seconds: int = betterproto.uint32_field(15)
+    evict_order: int = betterproto.int32_field(16)
 
 
 @dataclass(eq=False, repr=False)
@@ -227,14 +236,6 @@ class Object(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class PricingPolicy(betterproto.Message):
-    max_in_flight: int = betterproto.int64_field(1)
-    cost_model: str = betterproto.string_field(2)
-    cost_per_task: float = betterproto.double_field(3)
-    cost_per_task_duration_ms: float = betterproto.double_field(4)
-
-
-@dataclass(eq=False, repr=False)
 class ProcessInfo(betterproto.Message):
     running: bool = betterproto.bool_field(1)
     pid: int = betterproto.int32_field(2)
@@ -293,6 +294,9 @@ class Worker(betterproto.Message):
     rollout_generation: str = betterproto.string_field(21)
     rollout_build_version: str = betterproto.string_field(22)
     worker_image_override: str = betterproto.string_field(23)
+    evictable_cpu: int = betterproto.int64_field(24)
+    evictable_memory: int = betterproto.int64_field(25)
+    evictable_gpu_count: int = betterproto.uint32_field(26)
 
 
 @dataclass(eq=False, repr=False)

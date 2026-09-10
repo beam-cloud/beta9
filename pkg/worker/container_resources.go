@@ -133,8 +133,11 @@ func (s *Worker) allocateContainerCPUSet(request *types.ContainerRequest) string
 	return selectRequestedCPUs(request.Cpu, available, load)
 }
 
+// Managed endpoint replicas share hosts with serverless work and are always
+// held to what they reserved.
 func requestForcesResourceLimits(request *types.ContainerRequest) bool {
-	return request != nil && types.StubConfigForcesResourceLimits(request.Stub.Config)
+	return request != nil && (request.Stub.Type.IsManagedEndpoint() ||
+		types.StubConfigForcesResourceLimits(request.Stub.Config))
 }
 
 func (s *Worker) cpuLimitsEnforced(request *types.ContainerRequest) bool {
