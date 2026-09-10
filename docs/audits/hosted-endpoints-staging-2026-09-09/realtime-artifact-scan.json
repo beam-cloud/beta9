@@ -1,0 +1,11 @@
+{
+  "ok": true,
+  "checked_artifacts": 13,
+  "credential_values_found": false,
+  "credential_patterns_found": false,
+  "gitops_branch": "staging",
+  "temporary_deployer_secrets_empty": true,
+  "bootstrap_file_mode": "0o600",
+  "bootstrap_retained_for_active_okteto_reconnect": true,
+  "screenshots": "Real usage and credit crops reviewed; no connection snippets or credentials."
+}

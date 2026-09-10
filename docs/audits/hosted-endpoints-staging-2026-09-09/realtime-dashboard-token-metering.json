@@ -1,0 +1,200 @@
+{
+  "automatic_top_up_requested": false,
+  "completed_request_accounting": true,
+  "identity_id": 2,
+  "ok": true,
+  "purpose": "Live dashboard cache usage; separate prepaid buyer test verifies exact credit debit",
+  "samples": [
+    {
+      "canonical_day_usage": {
+        "cached_micro_usd": 0,
+        "cached_tokens": 0,
+        "completion_micro_usd": 60,
+        "completion_tokens": 1413,
+        "image_micro_usd": 0,
+        "images": 0,
+        "micro_usd": 660,
+        "prompt_micro_usd": 232,
+        "prompt_tokens": 2349,
+        "request_micro_usd": 0,
+        "requests": 5,
+        "unitemized_micro_usd": 368
+      },
+      "credit_after_cents": "3718.9340000000",
+      "credit_before_cents": "3718.9571000000",
+      "credit_check_ms": 238.2,
+      "credit_debit_cents": "0.0231000000",
+      "credit_observed_after_response_ms": 238.214,
+      "engine_usage": {
+        "completion_tokens": 4,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "cost": 0.000231,
+        "prompt_tokens": 2293,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "created_cache_tokens": 2288,
+          "multimodal_tokens": null
+        },
+        "total_tokens": 2297
+      },
+      "expected_delta": {
+        "cachedMicroUsd": 0,
+        "cachedTokens": 0,
+        "completionMicroUsd": 1,
+        "completionTokens": 4,
+        "imageMicroUsd": 0,
+        "microUsd": 231,
+        "promptMicroUsd": 230,
+        "promptTokens": 2293,
+        "requestMicroUsd": 0,
+        "requests": 1
+      },
+      "inference_ms": 786.617,
+      "label": "fresh",
+      "replica_id": "qwen-qwen3-8b-2bb319cd",
+      "request_id": "gen-23eab481829e4e39a340",
+      "usage_delta": {
+        "cachedMicroUsd": 0,
+        "cachedTokens": 0,
+        "completionMicroUsd": 1,
+        "completionTokens": 4,
+        "imageMicroUsd": 0,
+        "microUsd": 231,
+        "promptMicroUsd": 230,
+        "promptTokens": 2293,
+        "requestMicroUsd": 0,
+        "requests": 1
+      },
+      "usage_observed_after_response_ms": 244.101
+    },
+    {
+      "canonical_day_usage": {
+        "cached_micro_usd": 0,
+        "cached_tokens": 0,
+        "completion_micro_usd": 61,
+        "completion_tokens": 1417,
+        "image_micro_usd": 0,
+        "images": 0,
+        "micro_usd": 891,
+        "prompt_micro_usd": 462,
+        "prompt_tokens": 4642,
+        "request_micro_usd": 0,
+        "requests": 6,
+        "unitemized_micro_usd": 368
+      },
+      "credit_after_cents": "3718.9109000000",
+      "credit_before_cents": "3718.9340000000",
+      "credit_check_ms": 238.167,
+      "credit_debit_cents": "0.0231000000",
+      "credit_observed_after_response_ms": 238.182,
+      "engine_usage": {
+        "completion_tokens": 4,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "cost": 0.000231,
+        "prompt_tokens": 2293,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "created_cache_tokens": 2288,
+          "multimodal_tokens": null
+        },
+        "total_tokens": 2297
+      },
+      "expected_delta": {
+        "cachedMicroUsd": 0,
+        "cachedTokens": 0,
+        "completionMicroUsd": 1,
+        "completionTokens": 4,
+        "imageMicroUsd": 0,
+        "microUsd": 231,
+        "promptMicroUsd": 230,
+        "promptTokens": 2293,
+        "requestMicroUsd": 0,
+        "requests": 1
+      },
+      "inference_ms": 912.763,
+      "label": "repeat",
+      "replica_id": "qwen-qwen3-8b-9818eea5",
+      "request_id": "gen-4ee09baf78964a7e9e55",
+      "usage_delta": {
+        "cachedMicroUsd": 0,
+        "cachedTokens": 0,
+        "completionMicroUsd": 1,
+        "completionTokens": 4,
+        "imageMicroUsd": 0,
+        "microUsd": 231,
+        "promptMicroUsd": 230,
+        "promptTokens": 2293,
+        "requestMicroUsd": 0,
+        "requests": 1
+      },
+      "usage_observed_after_response_ms": 243.766
+    },
+    {
+      "canonical_day_usage": {
+        "cached_micro_usd": 57,
+        "cached_tokens": 2288,
+        "completion_micro_usd": 62,
+        "completion_tokens": 1421,
+        "image_micro_usd": 0,
+        "images": 0,
+        "micro_usd": 950,
+        "prompt_micro_usd": 463,
+        "prompt_tokens": 6935,
+        "request_micro_usd": 0,
+        "requests": 7,
+        "unitemized_micro_usd": 368
+      },
+      "credit_after_cents": "3718.9050000000",
+      "credit_before_cents": "3718.9109000000",
+      "credit_check_ms": 168.468,
+      "credit_debit_cents": "0.0059000000",
+      "credit_observed_after_response_ms": 168.482,
+      "engine_usage": {
+        "completion_tokens": 4,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "prompt_tokens": 2293,
+        "prompt_tokens_details": {
+          "cached_tokens": 2288,
+          "created_cache_tokens": 0
+        },
+        "total_tokens": 2297
+      },
+      "expected_delta": {
+        "cachedMicroUsd": 57,
+        "cachedTokens": 2288,
+        "completionMicroUsd": 1,
+        "completionTokens": 4,
+        "imageMicroUsd": 0,
+        "microUsd": 59,
+        "promptMicroUsd": 1,
+        "promptTokens": 2293,
+        "requestMicroUsd": 0,
+        "requests": 1
+      },
+      "inference_ms": 627.509,
+      "label": "stream",
+      "replica_id": "qwen-qwen3-8b-9818eea5",
+      "request_id": "gen-49387910d88941c0a724",
+      "usage_delta": {
+        "cachedMicroUsd": 57,
+        "cachedTokens": 2288,
+        "completionMicroUsd": 1,
+        "completionTokens": 4,
+        "imageMicroUsd": 0,
+        "microUsd": 59,
+        "promptMicroUsd": 1,
+        "promptTokens": 2293,
+        "requestMicroUsd": 0,
+        "requests": 1
+      },
+      "usage_observed_after_response_ms": 173.54
+    }
+  ],
+  "workspace_id": "22c19699-8f3c-452c-a63c-30863b29889a"
+}

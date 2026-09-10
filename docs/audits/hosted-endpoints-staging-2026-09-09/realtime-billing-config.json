@@ -1,0 +1,15 @@
+{
+  "aws_version": "1587bb4a-8b78-4ca2-93d5-a618e169affc",
+  "previous_version": "ba6c5dfb-7406-4804-9e4e-430bd33658ad",
+  "beta9_source_version": "80e72265-c7f1-4ebe-880e-79d372fd5759",
+  "sha256": "51a06cb1567be47b6ebd9ed16bd0d1fa772956fe80956f4ab087878d525f3406",
+  "external_secret_exact_sync": true,
+  "added_keys": [
+    "REDIS_HOST_BETA9",
+    "REDIS_MODE_BETA9",
+    "REDIS_PASSWORD_BETA9",
+    "REDIS_PORT_BETA9",
+    "REDIS_TLS_BETA9"
+  ],
+  "credentials_printed": false
+}

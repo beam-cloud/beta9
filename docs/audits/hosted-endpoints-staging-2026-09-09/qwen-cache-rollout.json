@@ -1,0 +1,109 @@
+[
+  {
+    "elapsed_seconds": 0.19,
+    "version": 15,
+    "git_sha": "53031753d71e4e341c3e8b16fb672fa8367b83e7",
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2bb319cd",
+        "version": 15,
+        "status": "loading",
+        "container_id": "managed-3c3e94ad-005b-4052-bfe8-677ddd687100-d090238c",
+        "protected": false,
+        "status_reason": ""
+      },
+      {
+        "id": "qwen-qwen3-8b-954e3ad8",
+        "version": 14,
+        "status": "ready",
+        "container_id": "managed-4b079cb6-2091-4aad-abb1-54dd1061a3b6-a763ec44",
+        "protected": true,
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 496.03,
+    "version": 15,
+    "git_sha": "53031753d71e4e341c3e8b16fb672fa8367b83e7",
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2bb319cd",
+        "version": 15,
+        "status": "ready",
+        "container_id": "managed-3c3e94ad-005b-4052-bfe8-677ddd687100-d090238c",
+        "protected": true,
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 506.26,
+    "version": 15,
+    "git_sha": "53031753d71e4e341c3e8b16fb672fa8367b83e7",
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2bb319cd",
+        "version": 15,
+        "status": "ready",
+        "container_id": "managed-3c3e94ad-005b-4052-bfe8-677ddd687100-d090238c",
+        "protected": true,
+        "status_reason": ""
+      },
+      {
+        "id": "qwen-qwen3-8b-9818eea5",
+        "version": 15,
+        "status": "scheduling",
+        "container_id": "managed-3c3e94ad-005b-4052-bfe8-677ddd687100-5dcca734",
+        "protected": false,
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 516.48,
+    "version": 15,
+    "git_sha": "53031753d71e4e341c3e8b16fb672fa8367b83e7",
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2bb319cd",
+        "version": 15,
+        "status": "ready",
+        "container_id": "managed-3c3e94ad-005b-4052-bfe8-677ddd687100-d090238c",
+        "protected": true,
+        "status_reason": ""
+      },
+      {
+        "id": "qwen-qwen3-8b-9818eea5",
+        "version": 15,
+        "status": "loading",
+        "container_id": "managed-3c3e94ad-005b-4052-bfe8-677ddd687100-5dcca734",
+        "protected": false,
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 757.04,
+    "version": 15,
+    "git_sha": "53031753d71e4e341c3e8b16fb672fa8367b83e7",
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2bb319cd",
+        "version": 15,
+        "status": "ready",
+        "container_id": "managed-3c3e94ad-005b-4052-bfe8-677ddd687100-d090238c",
+        "protected": true,
+        "status_reason": ""
+      },
+      {
+        "id": "qwen-qwen3-8b-9818eea5",
+        "version": 15,
+        "status": "ready",
+        "container_id": "managed-3c3e94ad-005b-4052-bfe8-677ddd687100-5dcca734",
+        "protected": false,
+        "status_reason": ""
+      }
+    ]
+  }
+]
