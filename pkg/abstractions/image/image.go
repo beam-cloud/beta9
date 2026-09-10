@@ -96,7 +96,9 @@ func (is *ContainerImageService) VerifyImageBuild(ctx context.Context, in *pb.Ve
 }
 
 func (is *ContainerImageService) BuildImage(in *pb.BuildImageRequest, stream pb.ImageService_BuildImageServer) error {
-	log.Info().Interface("request", in).Msg("incoming image build request")
+	// The request can contain registry credentials and secret environment
+	// values. Log only non-sensitive build metadata.
+	log.Info().Str("python_version", in.PythonVersion).Str("gpu", in.Gpu).Msg("incoming image build request")
 
 	verifyReq := &pb.VerifyImageBuildRequest{
 		PythonVersion:    in.PythonVersion,
