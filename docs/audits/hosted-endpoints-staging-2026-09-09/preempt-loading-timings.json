@@ -1,0 +1,38 @@
+[
+  {
+    "phase": "preempt-loading",
+    "iteration": 0,
+    "requested_at_ns": 1789013403921359000,
+    "container_id": "sandbox-8b2fc644-55a3-49af-a198-7db887f87918-3975a8bd",
+    "submit_ms": 1770.88,
+    "ready_roundtrip_ms": 9098.09,
+    "exit_code": 0,
+    "stdout": "{\"cuda_ready_ns\": 1789013420729577827, \"device_count\": 1, \"allocated_bytes\": 8388608}\n",
+    "stderr": "",
+    "cuda": {
+      "cuda_ready_ns": 1789013420729577827,
+      "device_count": 1,
+      "allocated_bytes": 8388608
+    },
+    "ok": true,
+    "terminated": true,
+    "startup_phases_ms": {
+      "worker.set_worker_address": 38.794999,
+      "mount.setup": 685.553895,
+      "mount.bind_source_dirs": 0.00618,
+      "worker.port_allocation": 0.830469,
+      "worker.read_bundle_config": 0.15006,
+      "worker.spec_from_request": 0.625409,
+      "mount.overlay_setup": 4.387865,
+      "worker.gpu_assignment": 0.128619,
+      "network.setup": 39.084729,
+      "network.expose_ports": 0.0401,
+      "runtime.prepare": 0.09959,
+      "runtime.config_write": 0.306769,
+      "worker.start_queue_wait": 0.02983,
+      "sandbox.process_manager_ready": 531.484008,
+      "sandbox.apply_cpu_quota": 0.02166
+    },
+    "worker_to_process_manager_ms": 2179.7439999999997
+  }
+]

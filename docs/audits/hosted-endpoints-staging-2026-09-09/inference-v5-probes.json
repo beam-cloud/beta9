@@ -1,0 +1,346 @@
+[
+  {
+    "case": "catalog_ready",
+    "ok": true,
+    "evidence": {
+      "architecture": {
+        "input_modalities": [
+          "text"
+        ],
+        "instruct_type": "chatml",
+        "modality": "text->text",
+        "output_modalities": [
+          "text"
+        ],
+        "tokenizer": "Qwen3"
+      },
+      "canonical_slug": "qwen/qwen3-8b",
+      "context_length": 32768,
+      "created": 1789010731,
+      "datacenters": [
+        "codex-rtx5090"
+      ],
+      "description": "Qwen3-8B with optional thinking, tool calling, and a 32K context window.",
+      "endpoints": {
+        "chat_completions": "/v1/chat/completions",
+        "completions": "/v1/completions"
+      },
+      "hugging_face_id": "Qwen/Qwen3-8B",
+      "id": "qwen/qwen3-8b",
+      "is_ready": true,
+      "name": "Qwen3 8B",
+      "object": "model",
+      "owned_by": "beam",
+      "per_request_limits": null,
+      "pricing": {
+        "completion": "0.0000003",
+        "image": "0",
+        "prompt": "0.0000001",
+        "request": "0"
+      },
+      "supported_parameters": [
+        "max_tokens",
+        "temperature",
+        "top_p",
+        "top_k",
+        "min_p",
+        "presence_penalty",
+        "frequency_penalty",
+        "repetition_penalty",
+        "stop",
+        "seed",
+        "logprobs",
+        "top_logprobs",
+        "response_format",
+        "tools",
+        "tool_choice",
+        "reasoning",
+        "stream"
+      ],
+      "top_provider": {
+        "context_length": 32768,
+        "is_moderated": false,
+        "max_completion_tokens": 8192
+      }
+    },
+    "elapsed_ms": 93.47
+  },
+  {
+    "case": "unauthenticated_rejected",
+    "ok": true,
+    "evidence": {
+      "status": 401,
+      "body": {
+        "message": "Unauthorized"
+      }
+    },
+    "elapsed_ms": 87.78
+  },
+  {
+    "case": "zero_credits_rejected",
+    "ok": true,
+    "evidence": {
+      "status": 402,
+      "body": {
+        "error": {
+          "code": "insufficient_credits",
+          "message": "insufficient credits: add credits to continue using inference endpoints",
+          "type": "insufficient_quota"
+        }
+      }
+    },
+    "elapsed_ms": 160.87
+  },
+  {
+    "case": "nonstream_exact_usage_and_private_generation",
+    "ok": true,
+    "evidence": {
+      "response": {
+        "choices": [
+          {
+            "finish_reason": "stop",
+            "index": 0,
+            "logprobs": null,
+            "message": {
+              "annotations": null,
+              "audio": null,
+              "content": "hello.",
+              "function_call": null,
+              "reasoning": null,
+              "refusal": null,
+              "role": "assistant"
+            },
+            "routed_experts": null,
+            "stop_reason": null,
+            "token_ids": null
+          }
+        ],
+        "created": 1789015805,
+        "ec_transfer_params": null,
+        "id": "gen-869a5d0c48fd4393ab3a",
+        "kv_transfer_params": null,
+        "metrics": null,
+        "model": "qwen/qwen3-8b",
+        "object": "chat.completion",
+        "prompt_logprobs": null,
+        "prompt_text": null,
+        "prompt_token_ids": null,
+        "provider": "beam",
+        "service_tier": null,
+        "system_fingerprint": "vllm-0.1.dev50+g07cd3785f-9e095375",
+        "usage": {
+          "completion_tokens": 3,
+          "completion_tokens_details": {
+            "reasoning_tokens": 0
+          },
+          "cost": 3e-06,
+          "prompt_tokens": 19,
+          "prompt_tokens_details": null,
+          "total_tokens": 22
+        }
+      },
+      "replica_id": "qwen-qwen3-8b-d770465a",
+      "generation": {
+        "cache_discount": null,
+        "created_at": "2026-09-10T04:50:05.338344084Z",
+        "finish_reason": null,
+        "generation_time": 832,
+        "gpu": "RTX5090",
+        "id": "gen-869a5d0c48fd4393ab3a",
+        "is_byok": false,
+        "latency": 0,
+        "locality": "codex-rtx5090",
+        "model": "qwen/qwen3-8b",
+        "native_tokens_cached": 0,
+        "native_tokens_completion": 3,
+        "native_tokens_prompt": 19,
+        "num_media_generation": 0,
+        "provider_name": "beam",
+        "status_code": 200,
+        "streamed": false,
+        "tokens_completion": 3,
+        "tokens_prompt": 19,
+        "total_cost": 3e-06,
+        "usage": 3e-06
+      }
+    },
+    "elapsed_ms": 1125.21
+  },
+  {
+    "case": "stream_forces_final_usage_and_records_generation",
+    "ok": true,
+    "evidence": {
+      "chunks": [
+        {
+          "choices": [
+            {
+              "delta": {
+                "content": "",
+                "role": "assistant"
+              },
+              "finish_reason": null,
+              "index": 0,
+              "logprobs": null
+            }
+          ],
+          "created": 1789015805,
+          "id": "gen-e6a7547ed395435f905b",
+          "model": "qwen/qwen3-8b",
+          "object": "chat.completion.chunk",
+          "prompt_text": null,
+          "prompt_token_ids": null
+        },
+        {
+          "choices": [
+            {
+              "delta": {
+                "content": "hello"
+              },
+              "finish_reason": null,
+              "index": 0,
+              "logprobs": null,
+              "token_ids": null
+            }
+          ],
+          "created": 1789015805,
+          "id": "gen-e6a7547ed395435f905b",
+          "model": "qwen/qwen3-8b",
+          "object": "chat.completion.chunk"
+        },
+        {
+          "choices": [
+            {
+              "delta": {
+                "content": "."
+              },
+              "finish_reason": null,
+              "index": 0,
+              "logprobs": null,
+              "token_ids": null
+            }
+          ],
+          "created": 1789015805,
+          "id": "gen-e6a7547ed395435f905b",
+          "model": "qwen/qwen3-8b",
+          "object": "chat.completion.chunk"
+        },
+        {
+          "choices": [
+            {
+              "delta": {},
+              "finish_reason": "stop",
+              "index": 0,
+              "logprobs": null,
+              "stop_reason": null,
+              "token_ids": null
+            }
+          ],
+          "created": 1789015805,
+          "id": "gen-e6a7547ed395435f905b",
+          "model": "qwen/qwen3-8b",
+          "object": "chat.completion.chunk"
+        },
+        {
+          "choices": [],
+          "created": 1789015805,
+          "id": "gen-e6a7547ed395435f905b",
+          "model": "qwen/qwen3-8b",
+          "object": "chat.completion.chunk",
+          "system_fingerprint": "vllm-0.1.dev50+g07cd3785f-9e095375",
+          "usage": {
+            "completion_tokens": 3,
+            "completion_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "prompt_tokens": 19,
+            "total_tokens": 22
+          }
+        }
+      ],
+      "replica_id": "qwen-qwen3-8b-d770465a",
+      "generation": {
+        "cache_discount": null,
+        "created_at": "2026-09-10T04:50:06.004670663Z",
+        "finish_reason": null,
+        "generation_time": 393,
+        "gpu": "RTX5090",
+        "id": "gen-e6a7547ed395435f905b",
+        "is_byok": false,
+        "latency": 161,
+        "locality": "codex-rtx5090",
+        "model": "qwen/qwen3-8b",
+        "native_tokens_cached": 0,
+        "native_tokens_completion": 3,
+        "native_tokens_prompt": 19,
+        "num_media_generation": 0,
+        "provider_name": "beam",
+        "status_code": 200,
+        "streamed": true,
+        "tokens_completion": 3,
+        "tokens_prompt": 19,
+        "total_cost": 3e-06,
+        "usage": 3e-06
+      }
+    },
+    "elapsed_ms": 631.15
+  },
+  {
+    "case": "tool_calling",
+    "ok": true,
+    "evidence": {
+      "choices": [
+        {
+          "finish_reason": "stop",
+          "index": 0,
+          "logprobs": null,
+          "message": {
+            "annotations": null,
+            "audio": null,
+            "content": "",
+            "function_call": null,
+            "reasoning": null,
+            "refusal": null,
+            "role": "assistant",
+            "tool_calls": [
+              {
+                "function": {
+                  "arguments": "{\"city\": \"Paris\"}",
+                  "name": "get_weather"
+                },
+                "id": "chatcmpl-tool-88312d13d5cb41af",
+                "type": "function"
+              }
+            ]
+          },
+          "routed_experts": null,
+          "stop_reason": null,
+          "token_ids": null
+        }
+      ],
+      "created": 1789015806,
+      "ec_transfer_params": null,
+      "id": "gen-303d7377576e4cbe8598",
+      "kv_transfer_params": null,
+      "metrics": null,
+      "model": "qwen/qwen3-8b",
+      "object": "chat.completion",
+      "prompt_logprobs": null,
+      "prompt_text": null,
+      "prompt_token_ids": null,
+      "provider": "beam",
+      "service_tier": null,
+      "system_fingerprint": "vllm-0.1.dev50+g07cd3785f-9e095375",
+      "usage": {
+        "completion_tokens": 20,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "cost": 2.2e-05,
+        "prompt_tokens": 156,
+        "prompt_tokens_details": null,
+        "total_tokens": 176
+      }
+    },
+    "elapsed_ms": 2236.55
+  }
+]

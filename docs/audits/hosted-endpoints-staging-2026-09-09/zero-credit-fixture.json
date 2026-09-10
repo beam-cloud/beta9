@@ -1,0 +1,15 @@
+{
+  "workspace_id": "7dc489ca-2fcd-492f-9f93-bae9f66ca58e",
+  "identity_id": 121,
+  "identity_workspace_id": 148,
+  "decision": {
+    "billing_mode": "PREPAID",
+    "minimum_purchase_cents": 2000,
+    "required_cents": 1,
+    "has_payment_method": false,
+    "ok": false,
+    "error_code": "insufficient_credits",
+    "message": "this workspace has no credits yet; add credits at https://platform.stage.beam.cloud/settings/credits to run workloads",
+    "available_cents": 0
+  }
+}

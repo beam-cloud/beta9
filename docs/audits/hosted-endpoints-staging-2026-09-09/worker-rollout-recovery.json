@@ -1,0 +1,85 @@
+{
+  "states": [
+    {
+      "phase": "temporary_config",
+      "id": "3ba06902",
+      "status": "disabled",
+      "rolloutGeneration": "74c9e492dfd96ca103df836a49c49f16c35dac8d119cc64c788fe9643c779570",
+      "cordonRequested": true,
+      "freeGpuCount": 1,
+      "evictableGpuCount": null,
+      "totalGpuCount": 1
+    },
+    {
+      "phase": "temporary_config",
+      "id": "3ba06902",
+      "status": "disabled",
+      "rolloutGeneration": "74c9e492dfd96ca103df836a49c49f16c35dac8d119cc64c788fe9643c779570",
+      "cordonRequested": true,
+      "freeGpuCount": 1,
+      "evictableGpuCount": null,
+      "totalGpuCount": 1
+    },
+    {
+      "phase": "temporary_config",
+      "id": "3ba06902",
+      "status": "disabled",
+      "rolloutGeneration": null,
+      "cordonRequested": true,
+      "freeGpuCount": 1,
+      "evictableGpuCount": null,
+      "totalGpuCount": 1
+    },
+    {
+      "phase": "restored_config",
+      "id": "3ba06902",
+      "status": "disabled",
+      "rolloutGeneration": "8b3febf5c70ae0fc7f8c3d07b00255e21f494e6d0468c3136258229f04834323",
+      "cordonRequested": true,
+      "freeGpuCount": 1,
+      "evictableGpuCount": null,
+      "totalGpuCount": 1
+    },
+    {
+      "phase": "restored_config",
+      "id": "3ba06902",
+      "status": "disabled",
+      "rolloutGeneration": "8b3febf5c70ae0fc7f8c3d07b00255e21f494e6d0468c3136258229f04834323",
+      "cordonRequested": true,
+      "freeGpuCount": 1,
+      "evictableGpuCount": null,
+      "totalGpuCount": 1
+    },
+    {
+      "phase": "restored_config",
+      "id": "3ba06902",
+      "status": "disabled",
+      "rolloutGeneration": null,
+      "cordonRequested": true,
+      "freeGpuCount": 1,
+      "evictableGpuCount": null,
+      "totalGpuCount": 1
+    }
+  ],
+  "before": {
+    "id": "3ba06902",
+    "status": "disabled",
+    "rolloutGeneration": "94d9c4ca886037736169ae4f95f515d7ba5ce0ef3827b4a72c16b0fafaa78598",
+    "cordonRequested": null,
+    "freeGpuCount": 1,
+    "evictableGpuCount": null,
+    "totalGpuCount": 1
+  },
+  "original_network_slots": 32,
+  "pool_config_restored": true,
+  "after": {
+    "id": "3ba06902",
+    "status": "available",
+    "rolloutGeneration": null,
+    "cordonRequested": null,
+    "freeGpuCount": 1,
+    "evictableGpuCount": null,
+    "totalGpuCount": 1
+  },
+  "ok": true
+}

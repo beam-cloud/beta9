@@ -1,0 +1,17 @@
+# Hosted endpoint staging validation uses the already-synchronized AWS secret.
+# Keep the normal deployment's secret mounts; no local config copy or file sync
+# is needed for this prebuilt gateway image.
+dev:
+  beta9-gateway:
+    image: public.ecr.aws/n4e0e1y0/beta9-gateway:${GATEWAY_TAG}
+    command:
+    - sh
+    - -c
+    - exec /usr/local/bin/gateway >/proc/1/fd/1 2>&1
+    environment:
+      CONFIG_PATH: /etc/beta9/config.yaml
+    forward:
+    - 11993:1993
+    - 11994:1994
+    persistentVolume:
+      enabled: false

@@ -1,0 +1,10 @@
+{
+  "status": 429,
+  "response": {
+    "error": {
+      "code": "endpoint_saturated",
+      "message": "all replicas are busy, retry shortly",
+      "type": "rate_limit_error"
+    }
+  }
+}

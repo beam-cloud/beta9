@@ -1,0 +1,1389 @@
+[
+  {
+    "elapsed_seconds": 0.136,
+    "replicas": []
+  },
+  {
+    "elapsed_seconds": 5.255,
+    "replicas": []
+  },
+  {
+    "elapsed_seconds": 10.358,
+    "replicas": []
+  },
+  {
+    "elapsed_seconds": 15.546,
+    "replicas": []
+  },
+  {
+    "elapsed_seconds": 20.714,
+    "replicas": []
+  },
+  {
+    "elapsed_seconds": 25.835,
+    "replicas": []
+  },
+  {
+    "elapsed_seconds": 30.968,
+    "replicas": []
+  },
+  {
+    "elapsed_seconds": 36.091,
+    "replicas": []
+  },
+  {
+    "elapsed_seconds": 41.251,
+    "replicas": []
+  },
+  {
+    "elapsed_seconds": 46.36,
+    "replicas": []
+  },
+  {
+    "elapsed_seconds": 51.466,
+    "replicas": []
+  },
+  {
+    "elapsed_seconds": 56.61,
+    "replicas": []
+  },
+  {
+    "elapsed_seconds": 61.764,
+    "replicas": []
+  },
+  {
+    "elapsed_seconds": 67.18,
+    "replicas": []
+  },
+  {
+    "elapsed_seconds": 72.306,
+    "replicas": []
+  },
+  {
+    "elapsed_seconds": 77.465,
+    "replicas": []
+  },
+  {
+    "elapsed_seconds": 82.714,
+    "replicas": []
+  },
+  {
+    "elapsed_seconds": 87.873,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "scheduling",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 93.005,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "scheduling",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 98.14,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 103.283,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 108.396,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 113.509,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 118.616,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 123.752,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 128.894,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 134.002,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 139.121,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 144.221,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 149.336,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 154.474,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 159.589,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 164.707,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 169.827,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 174.961,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 180.084,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 185.21,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 190.333,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 195.444,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 200.555,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 205.694,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 210.841,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 215.997,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 221.137,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 226.279,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 231.402,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 236.559,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 241.719,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 246.832,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 251.981,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 257.106,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 262.222,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 267.433,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 272.557,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 277.683,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 282.797,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 287.959,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 293.101,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 298.215,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 303.349,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 308.482,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 313.592,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 318.764,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 323.886,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 329.034,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 334.301,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 339.437,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 344.611,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 349.741,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 354.874,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 360.135,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 365.285,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 370.406,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 375.561,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 380.687,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 385.786,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 390.994,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 396.119,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 401.247,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 406.372,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 411.49,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 416.603,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 421.715,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 426.828,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 431.953,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 437.083,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 442.217,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 447.355,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 452.813,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 458.015,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 463.166,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 468.434,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 473.577,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 478.687,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 483.821,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 488.952,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 494.221,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 499.335,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 504.459,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 509.595,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 514.708,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 519.873,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 525.081,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 530.222,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 535.405,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 540.503,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 545.649,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 550.858,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 555.978,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 561.113,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 566.255,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 571.38,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 576.491,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 581.616,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 586.766,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": true,
+        "last_heartbeat_unix_ms": "1789019684352",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 591.919,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": true,
+        "last_heartbeat_unix_ms": "1789019689399",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 597.082,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": true,
+        "last_heartbeat_unix_ms": "1789019694489",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 602.238,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": true,
+        "last_heartbeat_unix_ms": "1789019699534",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 607.383,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": true,
+        "last_heartbeat_unix_ms": "1789019699534",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 612.645,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": true,
+        "last_heartbeat_unix_ms": "1789019712178",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 617.894,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": true,
+        "last_heartbeat_unix_ms": "1789019717534",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 623.163,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "loading",
+        "harness_registered": true,
+        "last_heartbeat_unix_ms": "1789019722581",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 628.304,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-2c637f3b",
+        "status": "ready",
+        "harness_registered": true,
+        "last_heartbeat_unix_ms": "1789019727627",
+        "status_reason": ""
+      }
+    ],
+    "first_ready_inference": {
+      "status": 200,
+      "body": {
+        "choices": [
+          {
+            "finish_reason": "stop",
+            "index": 0,
+            "logprobs": null,
+            "message": {
+              "annotations": null,
+              "audio": null,
+              "content": "Hello! How can I assist you today? \ud83d\ude0a",
+              "function_call": null,
+              "reasoning": null,
+              "refusal": null,
+              "role": "assistant"
+            },
+            "routed_experts": null,
+            "stop_reason": null,
+            "token_ids": null
+          }
+        ],
+        "created": 1789019728,
+        "ec_transfer_params": null,
+        "id": "gen-b44ea31433d34c06a92c",
+        "kv_transfer_params": null,
+        "metrics": null,
+        "model": "qwen/qwen3-8b",
+        "object": "chat.completion",
+        "prompt_logprobs": null,
+        "prompt_text": null,
+        "prompt_token_ids": null,
+        "provider": "beam",
+        "service_tier": null,
+        "system_fingerprint": "vllm-0.1.dev50+g07cd3785f-9e095375",
+        "usage": {
+          "completion_tokens": 12,
+          "completion_tokens_details": {
+            "reasoning_tokens": 0
+          },
+          "cost": 5e-06,
+          "prompt_tokens": 15,
+          "prompt_tokens_details": null,
+          "total_tokens": 27
+        }
+      }
+    }
+  }
+]

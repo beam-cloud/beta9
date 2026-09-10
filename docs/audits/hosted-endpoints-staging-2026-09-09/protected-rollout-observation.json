@@ -1,0 +1,93 @@
+[
+  {
+    "at": 1789016770.613035,
+    "desired_version": 6,
+    "protected": true,
+    "live": [
+      {
+        "id": "qwen-qwen3-8b-1b11d431",
+        "version": 5,
+        "status": "ready",
+        "container_id": "managed-df01b249-4e5f-4546-af59-e0871f582e7f-f75cd30e"
+      }
+    ]
+  },
+  {
+    "at": 1789016780.748607,
+    "desired_version": 6,
+    "protected": true,
+    "live": [
+      {
+        "id": "qwen-qwen3-8b-1b11d431",
+        "version": 5,
+        "status": "ready",
+        "container_id": "managed-df01b249-4e5f-4546-af59-e0871f582e7f-f75cd30e"
+      }
+    ]
+  },
+  {
+    "at": 1789016790.951099,
+    "desired_version": 6,
+    "protected": true,
+    "live": [
+      {
+        "id": "qwen-qwen3-8b-1b11d431",
+        "version": 5,
+        "status": "ready",
+        "container_id": "managed-df01b249-4e5f-4546-af59-e0871f582e7f-f75cd30e"
+      }
+    ]
+  },
+  {
+    "at": 1789016801.072077,
+    "desired_version": 6,
+    "protected": true,
+    "live": [
+      {
+        "id": "qwen-qwen3-8b-1b11d431",
+        "version": 5,
+        "status": "ready",
+        "container_id": "managed-df01b249-4e5f-4546-af59-e0871f582e7f-f75cd30e"
+      }
+    ]
+  },
+  {
+    "at": 1789016811.206948,
+    "desired_version": 6,
+    "protected": true,
+    "live": [
+      {
+        "id": "qwen-qwen3-8b-1b11d431",
+        "version": 5,
+        "status": "ready",
+        "container_id": "managed-df01b249-4e5f-4546-af59-e0871f582e7f-f75cd30e"
+      }
+    ]
+  },
+  {
+    "at": 1789016821.32573,
+    "desired_version": 6,
+    "protected": true,
+    "live": [
+      {
+        "id": "qwen-qwen3-8b-1b11d431",
+        "version": 5,
+        "status": "ready",
+        "container_id": "managed-df01b249-4e5f-4546-af59-e0871f582e7f-f75cd30e"
+      }
+    ]
+  },
+  {
+    "at": 1789016831.4378371,
+    "desired_version": 6,
+    "protected": true,
+    "live": [
+      {
+        "id": "qwen-qwen3-8b-1b11d431",
+        "version": 5,
+        "status": "ready",
+        "container_id": "managed-df01b249-4e5f-4546-af59-e0871f582e7f-f75cd30e"
+      }
+    ]
+  }
+]

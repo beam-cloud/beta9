@@ -1,0 +1,43 @@
+{
+  "version": 7,
+  "container_id": "managed-f1074f95-a3cb-4296-886f-e3d5431905a6-5bbb704e",
+  "notes": "One real boot with explicit prefetch on Geese/9P; not a controlled cold-storage comparison.",
+  "logs": [
+    {
+      "timestamp": "2026-09-10T05:34:22.745186763Z",
+      "message": "(APIServer pid=1) INFO 09-10 05:34:22 [api_utils.py:286] non-default args: {'model_tag': 'Qwen/Qwen3-8B', 'enable_auto_tool_choice': True, 'tool_call_parser': 'hermes', 'host': '0.0.0.0', 'model': 'Qwen/Qwen3-8B', 'dtype': 'bfloat16', 'revision': 'b968826d9c46dd6066d109eabc6255188de91218', 'max_model_len': 32768, 'served_model_name': ['qwen/qwen3-8b'], 'safetensors_load_strategy': 'prefetch', 'reasoning_parser': 'qwen3', 'gpu_memory_utilization': 0.9, 'max_num_seqs': 32}"
+    },
+    {
+      "timestamp": "2026-09-10T05:35:47.608016253Z",
+      "message": "\rLoading safetensors checkpoint shards:   0% Completed | 0/5 [00:00<?, ?it/s]"
+    },
+    {
+      "timestamp": "2026-09-10T05:35:48.620309428Z",
+      "message": "\rLoading safetensors checkpoint shards:  20% Completed | 1/5 [00:01<00:04,  1.01s/it]"
+    },
+    {
+      "timestamp": "2026-09-10T05:35:49.226148458Z",
+      "message": "\rLoading safetensors checkpoint shards:  40% Completed | 2/5 [00:01<00:02,  1.29it/s]"
+    },
+    {
+      "timestamp": "2026-09-10T05:35:49.818025457Z",
+      "message": "\rLoading safetensors checkpoint shards:  60% Completed | 3/5 [00:02<00:01,  1.45it/s]"
+    },
+    {
+      "timestamp": "2026-09-10T05:35:50.324919568Z",
+      "message": "(EngineCore pid=56) \rLoading safetensors checkpoint shards:  80% Completed | 4/5 [00:02<00:00,  1.62it/s]"
+    },
+    {
+      "timestamp": "2026-09-10T05:35:50.580545821Z",
+      "message": "\rLoading safetensors checkpoint shards: 100% Completed | 5/5 [00:02<00:00,  2.05it/s]"
+    },
+    {
+      "timestamp": "2026-09-10T05:35:50.580639351Z",
+      "message": "\rLoading safetensors checkpoint shards: 100% Completed | 5/5 [00:02<00:00,  1.68it/s]"
+    },
+    {
+      "timestamp": "2026-09-10T05:35:50.624364313Z",
+      "message": "(EngineCore pid=56) INFO 09-10 05:35:50 [default_loader.py:430] Loading weights took 3.06 seconds"
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "meters": [
+    {
+      "slug": "container_cost_c",
+      "eventType": "container_cost_cents",
+      "aggregation": "SUM",
+      "valueProperty": "$.cost_for_duration"
+    },
+    {
+      "slug": "managed_compute_reservation_cost_cents",
+      "eventType": "managed_compute_reservation_cost_cents",
+      "aggregation": "SUM",
+      "valueProperty": "$.value"
+    },
+    {
+      "slug": "public_task_cost_cents",
+      "eventType": "public_task_cost_cents",
+      "aggregation": "SUM",
+      "valueProperty": "$.value"
+    }
+  ],
+  "has_endpoint_cost_meter": false
+}

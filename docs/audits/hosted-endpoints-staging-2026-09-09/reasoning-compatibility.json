@@ -1,0 +1,104 @@
+[
+  {
+    "request_options": {
+      "reasoning": {
+        "enabled": false
+      }
+    },
+    "status": 200,
+    "body": {
+      "choices": [
+        {
+          "finish_reason": "length",
+          "index": 0,
+          "logprobs": null,
+          "message": {
+            "annotations": null,
+            "audio": null,
+            "content": null,
+            "function_call": null,
+            "reasoning": "\nOkay, the user just said \"Reply with hello.\" So I need to respond with a simple \"Hello.\" But wait, maybe they want a more friendly or detailed response? Let me check the instructions again. The user specified to",
+            "refusal": null,
+            "role": "assistant"
+          },
+          "routed_experts": null,
+          "stop_reason": null,
+          "token_ids": null
+        }
+      ],
+      "created": 1789017178,
+      "ec_transfer_params": null,
+      "id": "gen-f7ad9cdfcac7419e8f2e",
+      "kv_transfer_params": null,
+      "metrics": null,
+      "model": "qwen/qwen3-8b",
+      "object": "chat.completion",
+      "prompt_logprobs": null,
+      "prompt_text": null,
+      "prompt_token_ids": null,
+      "provider": "beam",
+      "service_tier": null,
+      "system_fingerprint": "vllm-0.1.dev50+g07cd3785f-9e095375",
+      "usage": {
+        "completion_tokens": 48,
+        "completion_tokens_details": {
+          "reasoning_tokens": 47
+        },
+        "cost": 1.6e-05,
+        "prompt_tokens": 12,
+        "prompt_tokens_details": null,
+        "total_tokens": 60
+      }
+    }
+  },
+  {
+    "request_options": {
+      "reasoning_effort": "none"
+    },
+    "status": 200,
+    "body": {
+      "choices": [
+        {
+          "finish_reason": "stop",
+          "index": 0,
+          "logprobs": null,
+          "message": {
+            "annotations": null,
+            "audio": null,
+            "content": "Hello! How can I assist you today?",
+            "function_call": null,
+            "reasoning": null,
+            "refusal": null,
+            "role": "assistant"
+          },
+          "routed_experts": null,
+          "stop_reason": null,
+          "token_ids": null
+        }
+      ],
+      "created": 1789017179,
+      "ec_transfer_params": null,
+      "id": "gen-4e5f7ad27dce40418e86",
+      "kv_transfer_params": null,
+      "metrics": null,
+      "model": "qwen/qwen3-8b",
+      "object": "chat.completion",
+      "prompt_logprobs": null,
+      "prompt_text": null,
+      "prompt_token_ids": null,
+      "provider": "beam",
+      "service_tier": null,
+      "system_fingerprint": "vllm-0.1.dev50+g07cd3785f-9e095375",
+      "usage": {
+        "completion_tokens": 10,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "cost": 5e-06,
+        "prompt_tokens": 16,
+        "prompt_tokens_details": null,
+        "total_tokens": 26
+      }
+    }
+  }
+]
