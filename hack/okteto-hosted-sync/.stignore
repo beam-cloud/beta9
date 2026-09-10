@@ -1,0 +1,5 @@
+# Only small, checked-in development helpers belong here.
+*.tar
+*.tar.gz
+*.log
+__pycache__

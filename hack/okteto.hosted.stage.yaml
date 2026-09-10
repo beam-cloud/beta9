@@ -1,15 +1,44 @@
-# Hosted endpoint staging validation uses the already-synchronized AWS secret.
-# Keep the normal deployment's secret mounts; no local config copy or file sync
-# is needed for this prebuilt gateway image.
+# Force the AWS ExternalSecret to sync before starting this session. The release
+# image already contains Go; source changes need no image build or pod restart.
+# postStart keeps the packaged gateway serving during initial sync/cache warmup.
+# See okteto-hosted-sync/README.md for setup and private module cache seeding.
 dev:
   beta9-gateway:
     image: public.ecr.aws/n4e0e1y0/beta9-gateway:${GATEWAY_TAG}
     command:
-    - sh
-    - -c
-    - exec /usr/local/bin/gateway >/proc/1/fd/1 2>&1
+    - bash
+    - /workspace/dev/reload.sh
+    workdir: /workspace
+    lifecycle:
+      postStart:
+        enabled: true
+        command: >-
+          bash -c 'set -e; mkdir -p /var/tmp/beta9-hosted-dev;
+          for attempt in {1..100}; do
+          test -r /var/tmp/beta9-hosted-dev/bootstrap.yaml && break; sleep 0.1; done;
+          test -r /var/tmp/beta9-hosted-dev/bootstrap.yaml;
+          CONFIG_PATH=/var/tmp/beta9-hosted-dev/bootstrap.yaml
+          nohup /usr/local/bin/gateway </dev/null >/proc/1/fd/1 2>&1 &
+          echo $! >/var/tmp/beta9-hosted-dev/gateway.pid'
     environment:
       CONFIG_PATH: /etc/beta9/config.yaml
+      GONOSUMDB: github.com/beam-cloud/*
+      GOTOOLCHAIN: auto
+      HOSTED_DEV_BUILD_JOBS: "4"
+      GOMODCACHE: /go/pkg/mod
+      GOCACHE: /root/.cache/go-build
+    sync:
+    - ../cmd:/workspace/cmd
+    - ../pkg:/workspace/pkg
+    - ../proto:/workspace/proto
+    - okteto-hosted-sync:/workspace/dev
+    # Okteto's single-file copy mechanism avoids synchronizing the repository
+    # root (which contains local configs, credentials, artifacts, and SDK envs).
+    # Restart the session after changing module dependencies, not Go source.
+    secrets:
+    - ../go.mod:/workspace/go.mod:0644
+    - ../go.sum:/workspace/go.sum:0644
+    - /private/tmp/beta9-hosted-bootstrap.yaml:/var/tmp/beta9-hosted-dev/bootstrap.yaml:0600
     forward:
     - 11993:1993
     - 11994:1994
