@@ -282,6 +282,20 @@ func (s *Service) emit(eventType string, event types.EventEndpointSchema) {
 	if s.events == nil {
 		return
 	}
+	// Endpoint control events belong to the admin workspace. Without this
+	// scope the event store writes a global type stream that the authenticated
+	// history API cannot read. The workspace is cached after the first lookup.
+	if event.WorkspaceID == "" {
+		workspace, err := s.AdminWorkspace(s.ctx)
+		if err != nil {
+			log.Error().Err(err).Str("event_type", eventType).Msg("managed endpoints: could not scope audit event")
+		} else {
+			event.WorkspaceID = workspace.ExternalId
+		}
+	}
+	if event.StubID == "" {
+		event.StubID, _ = common.ExtractStubIdFromStubScopedContainerId(event.ContainerID)
+	}
 	if event.Timestamp.IsZero() {
 		event.Timestamp = time.Now().UTC()
 	}

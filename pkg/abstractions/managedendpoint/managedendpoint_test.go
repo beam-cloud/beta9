@@ -371,6 +371,9 @@ func TestConfigHistoryIsCompleteAndBounded(t *testing.T) {
 	s := newServiceForTest(t)
 	endpoint := seedEndpoint(t, s)
 	replica := seedReplica(t, s, endpoint)
+	stubID := "5e3e31ff-aef4-40b6-a98d-439268a9832e"
+	replica.ContainerID = "managed-" + stubID + "-1717f4fc"
+	require.NoError(t, s.repo.SaveReplica(context.Background(), replica))
 	events := &capturingEvents{}
 	s.events = events
 	s.repo = notifyFailingRepo{s.repo}
@@ -380,6 +383,8 @@ func TestConfigHistoryIsCompleteAndBounded(t *testing.T) {
 	assert.True(t, resp.Ok, resp.ErrMsg)
 	set := events.find("config.set")
 	require.NotNil(t, set, "the revision is history even though the wakeup failed")
+	assert.Equal(t, "admin-ws", set.WorkspaceID)
+	assert.Equal(t, stubID, set.StubID)
 	assert.EqualValues(t, 1, set.Revision)
 	assert.Equal(t, "tok", set.Data["actor"])
 	assert.Equal(t, "agent", set.Data["author"])
@@ -401,6 +406,8 @@ func TestConfigHistoryIsCompleteAndBounded(t *testing.T) {
 	assert.True(t, ack.Ok)
 	applied := events.find("config.applied")
 	require.NotNil(t, applied)
+	assert.Equal(t, "admin-ws", applied.WorkspaceID)
+	assert.Equal(t, stubID, applied.StubID)
 	assert.EqualValues(t, 1, applied.Revision)
 	assert.JSONEq(t, `{"max_num_seqs":96}`, string(applied.Data["requested"].(json.RawMessage)))
 	assert.JSONEq(t, `{"max_num_seqs":64}`, string(applied.Data["effective"].(json.RawMessage)), "the engine's effective value, not the request")
