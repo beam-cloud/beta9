@@ -27,14 +27,18 @@ log() { printf '[hosted-dev] %s\n' "$*"; }
 fingerprint() {
     {
         find cmd pkg proto -type f ! -name '*_test.go' ! -name '.st*' \
-            -printf '%p %T@ %s\n' | LC_ALL=C sort
-        sha256sum go.mod go.sum
-        [[ ! -f "$runtime_dir/cache-ready" ]] || cat "$runtime_dir/cache-ready"
+            -printf '%p %T@ %s\n' | LC_ALL=C sort || return 1
+        sha256sum go.mod go.sum || return 1
+        if [[ -f "$runtime_dir/cache-ready" ]]; then
+            cat "$runtime_dir/cache-ready" || return 1
+        fi
     } | sha256sum | cut -d' ' -f1
 }
 alive() {
-    [[ -n ${gateway_pid:-} ]] && kill -0 "$gateway_pid" 2>/dev/null &&
-        [[ $(ps -o stat= -p "$gateway_pid") != Z* ]]
+    local state
+    [[ -n ${gateway_pid:-} ]] && kill -0 "$gateway_pid" 2>/dev/null || return 1
+    state=$(ps -o stat= -p "$gateway_pid" 2>/dev/null) || return 1
+    [[ -n "$state" && "$state" != Z* ]]
 }
 start_gateway() {
     if [[ "$1" == "$bootstrap_binary" ]]; then
@@ -47,14 +51,14 @@ start_gateway() {
 }
 stop_gateway() {
     if alive; then
-        kill -TERM "$gateway_pid"
+        kill -TERM "$gateway_pid" 2>/dev/null || ! alive
         for ((attempt = 0; attempt < 100; attempt++)); do
             alive || break
             sleep 0.1
         done
         if alive; then
             log 'Graceful shutdown exceeded 10 seconds; stopping the old gateway.'
-            kill -KILL "$gateway_pid"
+            kill -KILL "$gateway_pid" 2>/dev/null || ! alive
         fi
     fi
     wait "${gateway_pid:-}" 2>/dev/null || true
@@ -91,7 +95,11 @@ while true; do
         sleep 1
         continue
     fi
-    next_fingerprint=$(fingerprint)
+    if ! next_fingerprint=$(fingerprint 2>/dev/null); then
+        log 'Source sync is incomplete; keeping the gateway and retrying.'
+        sleep 1
+        continue
+    fi
     if [[ "$next_fingerprint" == "$successful_fingerprint" ]] ||
         { [[ "$next_fingerprint" == "$attempted_fingerprint" ]] && (( SECONDS < retry_after )); }; then
         sleep 1
@@ -99,7 +107,8 @@ while true; do
     fi
     # Wait for the whole sync batch rather than compiling each arriving file.
     sleep 1
-    [[ "$next_fingerprint" == "$(fingerprint)" ]] || continue
+    stable_fingerprint=$(fingerprint 2>/dev/null) || continue
+    [[ "$next_fingerprint" == "$stable_fingerprint" ]] || continue
     attempted_fingerprint=$next_fingerprint
     candidate="$runtime_dir/gateway.$next_fingerprint"
     log 'Building changed gateway source.'
@@ -110,7 +119,7 @@ while true; do
         retry_after=$((SECONDS + retry_seconds))
         continue
     fi
-    if [[ "$next_fingerprint" != "$(fingerprint)" ]]; then
+    if ! stable_fingerprint=$(fingerprint 2>/dev/null) || [[ "$next_fingerprint" != "$stable_fingerprint" ]]; then
         log 'Source changed during compilation; building the newest source first.'
         rm -f "$candidate"
         continue
