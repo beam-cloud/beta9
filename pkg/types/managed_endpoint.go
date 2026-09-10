@@ -701,6 +701,9 @@ const (
 )
 
 // Usage is what one workspace consumed on (or earned from) one model.
+// MaxUsageCounter fits exactly in Redis Lua numbers and JavaScript clients.
+const MaxUsageCounter int64 = 1<<53 - 1
+
 type Usage struct {
 	Requests         int64 `json:"requests"`
 	PromptTokens     int64 `json:"prompt_tokens"`

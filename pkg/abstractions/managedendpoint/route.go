@@ -129,7 +129,7 @@ func tokenUsage(body []byte) Usage {
 	if env.Usage.Details != nil {
 		u.CachedTokens = env.Usage.Details.CachedTokens
 	}
-	if u.PromptTokens < 0 || u.CompletionTokens < 0 || u.CachedTokens < 0 || u.CachedTokens > u.PromptTokens {
+	if u.PromptTokens < 0 || u.CompletionTokens < 0 || u.CachedTokens < 0 || u.CachedTokens > u.PromptTokens || u.PromptTokens > types.MaxUsageCounter || u.CompletionTokens > types.MaxUsageCounter {
 		return Usage{}
 	}
 	return u
@@ -1027,7 +1027,13 @@ func (r *router) persist(event types.EventEndpointRouteSchema) error {
 	if event.StatusCode >= 300 {
 		return nil
 	}
-	return r.account(ctx, event)
+	if err := r.account(ctx, event); err != nil {
+		// The complete response is durably journaled and will be charged once.
+		// Returning an error here would invite a client retry even though this
+		// successful engine request is already accepted for billing.
+		log.Warn().Err(err).Str("request_id", event.RequestID).Msg("managed endpoints: usage journaled; accounting will retry")
+	}
+	return nil
 }
 
 func (r *router) account(ctx context.Context, event types.EventEndpointRouteSchema) error {

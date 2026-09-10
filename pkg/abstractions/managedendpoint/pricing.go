@@ -17,6 +17,11 @@ func priceUsage(p types.Pricing, u Usage) (types.Usage, error) {
 	if u.PromptTokens < 0 || u.CompletionTokens < 0 || u.CachedTokens < 0 || u.CachedTokens > u.PromptTokens || u.Images < 0 || u.Requests < 0 {
 		return types.Usage{}, errors.New("invalid token usage")
 	}
+	for _, quantity := range []int64{u.PromptTokens, u.CompletionTokens, u.Images, u.Requests} {
+		if quantity > types.MaxUsageCounter {
+			return types.Usage{}, errors.New("token usage exceeds exact counter limit")
+		}
+	}
 	result := types.Usage{Requests: u.Requests, PromptTokens: u.PromptTokens,
 		CompletionTokens: u.CompletionTokens, CachedTokens: u.CachedTokens, Images: u.Images}
 	cachePrice := p.CachedPromptTokens
@@ -64,6 +69,9 @@ func priceUsage(p types.Pricing, u Usage) (types.Usage, error) {
 		return types.Usage{}, errors.New("token cost overflows micro-USD")
 	}
 	result.MicroUSD = rounded.Int64()
+	if result.MicroUSD > types.MaxUsageCounter {
+		return types.Usage{}, errors.New("token cost exceeds exact counter limit")
+	}
 	for _, line := range lines {
 		floored += *line.cost
 	}

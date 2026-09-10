@@ -526,7 +526,7 @@ func (r *ManagedEndpointRedisRepository) AddUsage(ctx context.Context, kind type
 	}
 	args := []any{int(usageRetain.Seconds()), meKey("meter", string(kind)), workspaceID, model}
 	for field, value := range usageFields(&delta) {
-		if *value < 0 || *value > 9_007_199_254_740_991 {
+		if *value < 0 || *value > types.MaxUsageCounter {
 			return errors.New("invalid usage counter")
 		}
 		if *value > 0 {

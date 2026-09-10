@@ -41,16 +41,19 @@ func TestPriceUsageRoundingReconcilesEveryComponent(t *testing.T) {
 }
 
 func TestPriceUsageRejectsInvalidCountersAndOverflow(t *testing.T) {
-	for _, usage := range []Usage{{PromptTokens: -1}, {CompletionTokens: -1}, {PromptTokens: 1, CachedTokens: 2}, {CachedTokens: -1}} {
+	for _, usage := range []Usage{{PromptTokens: -1}, {CompletionTokens: -1}, {PromptTokens: 1, CachedTokens: 2}, {CachedTokens: -1}, {PromptTokens: types.MaxUsageCounter + 1}} {
 		_, err := priceUsage(types.Pricing{}, usage)
 		require.Error(t, err)
 	}
 	_, err := priceUsage(types.Pricing{PromptTokens: "1"}, Usage{PromptTokens: math.MaxInt64})
 	require.Error(t, err)
+	_, err = priceUsage(types.Pricing{Request: "9007199255"}, Usage{Requests: 1})
+	require.Error(t, err, "a charge must fit the repository before it can be journaled")
 	for _, body := range []string{
 		`{"usage":{"prompt_tokens":-1}}`,
 		`{"usage":{"prompt_tokens":1,"prompt_tokens_details":{"cached_tokens":2}}}`,
 		`{"usage":{"completion_tokens":-3}}`,
+		`{"usage":{"prompt_tokens":9007199254740992}}`,
 	} {
 		require.False(t, tokenUsage([]byte(body)).Found)
 	}

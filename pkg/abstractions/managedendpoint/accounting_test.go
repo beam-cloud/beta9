@@ -39,7 +39,7 @@ func TestAccountingRecoversJournalWithoutDuplicateSpend(t *testing.T) {
 				PromptTokens: 1000, CachedTokens: 800, CompletionTokens: 100, CostMicroUSD: 70,
 				PromptMicroUSD: 20, CachedMicroUSD: 20, CompletionMicroUSD: 30,
 			}
-			require.Error(t, s.router.persist(event))
+			require.NoError(t, s.router.persist(event), "durable acceptance stays successful even when counters need recovery")
 			pending, err := s.repo.ListPendingAccounting(ctx, 100)
 			require.NoError(t, err)
 			require.Len(t, pending, 1)
