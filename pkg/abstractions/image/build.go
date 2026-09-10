@@ -195,7 +195,7 @@ func (b *Build) setupPythonEnv() error {
 }
 
 func (b *Build) executeCommands() error {
-	log.Info().Str("container_id", b.containerID).Interface("options", b.opts).Msg("container building")
+	log.Info().Str("container_id", b.containerID).Str("python_version", b.opts.PythonVersion).Msg("container building")
 	startTime := time.Now()
 
 	for _, cmd := range b.commands {
