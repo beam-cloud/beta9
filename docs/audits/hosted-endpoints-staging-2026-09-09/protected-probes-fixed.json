@@ -1,0 +1,237 @@
+{
+  "protected_spec": {
+    "id": "qwen/qwen3-8b",
+    "kind": "llm",
+    "engine": "vllm",
+    "port": 8000,
+    "health": "/health",
+    "metrics": "/metrics",
+    "gpu": {
+      "RTX5090": {
+        "count": 1,
+        "engine_args": [
+          "--dtype",
+          "bfloat16",
+          "--max-model-len",
+          "32768",
+          "--gpu-memory-utilization",
+          "0.90",
+          "--max-num-seqs",
+          "32"
+        ],
+        "harness": {
+          "instrumentation": "metrics"
+        }
+      }
+    },
+    "routes": [
+      "chat/completions",
+      "completions"
+    ],
+    "pricing": {
+      "prompt_tokens": "0.0000001",
+      "completion_tokens": "0.0000003"
+    },
+    "catalog": {
+      "name": "Qwen3 8B",
+      "description": "Qwen3-8B with optional thinking, tool calling, and a 32K context window.",
+      "hf_id": "Qwen/Qwen3-8B",
+      "context_length": 32768,
+      "max_completion_tokens": 8192,
+      "tokenizer": "Qwen3",
+      "instruct_type": "chatml",
+      "modalities": [
+        "text->text"
+      ],
+      "supported_parameters": [
+        "max_tokens",
+        "temperature",
+        "top_p",
+        "top_k",
+        "min_p",
+        "presence_penalty",
+        "frequency_penalty",
+        "repetition_penalty",
+        "stop",
+        "seed",
+        "logprobs",
+        "top_logprobs",
+        "response_format",
+        "tools",
+        "tool_choice",
+        "reasoning_effort",
+        "reasoning",
+        "stream"
+      ],
+      "public": true
+    },
+    "harness": true,
+    "protected": true,
+    "rollout": "replace",
+    "drain_seconds": 0,
+    "entrypoint": [
+      "python",
+      "/opt/beam/runtime_cache.py",
+      "vllm",
+      "serve",
+      "Qwen/Qwen3-8B",
+      "--revision",
+      "b968826d9c46dd6066d109eabc6255188de91218",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8000",
+      "--safetensors-load-strategy",
+      "prefetch",
+      "--served-model-name",
+      "qwen/qwen3-8b",
+      "--enable-auto-tool-choice",
+      "--tool-call-parser",
+      "hermes",
+      "--reasoning-parser",
+      "qwen3"
+    ]
+  },
+  "replica_before": {
+    "id": "qwen-qwen3-8b-e6859c0c",
+    "endpoint_id": "qwen/qwen3-8b",
+    "version": 11,
+    "gpu": "RTX5090",
+    "gpu_count": 1,
+    "locality": "codex-rtx5090",
+    "pool_name": "codex-rtx5090",
+    "container_id": "managed-8f40d35f-e677-486b-8246-5fb6d89d778f-da00fe62",
+    "worker_id": "3ba06902",
+    "address": "route://machine-96d4b79a-8f48-4ae5-8858-b9c5e252a41a:3ba06902:managed-8f40d35f-e677-486b-8246-5fb6d89d778f-da00fe62:container:8000",
+    "status": "ready",
+    "status_reason": "",
+    "harness_enabled": true,
+    "config": null,
+    "capacity": {
+      "in_flight": "0",
+      "max_concurrency": "32",
+      "running": "0",
+      "waiting": "0",
+      "kv_cache_free_milli": "1000",
+      "decode_tokens_per_sec": "0",
+      "prompt_tokens_per_sec": "0",
+      "ttft_ms": "0",
+      "tpot_ms": "0",
+      "prefix_cache_hit_milli": "0"
+    },
+    "capabilities_json": "{\"schema\":{\"$defs\":{\"JsonValue\":{},\"ProfileCommand\":{\"additionalProperties\":false,\"description\":\"A bounded GPU capture carried by a revision.\\n\\nRevisions belong to one replica; ``command_id`` and ``expires_at`` keep a\\ncommand from being replayed to a replacement engine.\",\"properties\":{\"schema_version\":{\"const\":1,\"default\":1,\"title\":\"Schema Version\",\"type\":\"integer\"},\"command_id\":{\"pattern\":\"^[A-Za-z0-9_-]{1,128}$\",\"title\":\"Command Id\",\"type\":\"string\"},\"action\":{\"default\":\"start\",\"enum\":[\"start\",\"cancel\"],\"title\":\"Action\",\"type\":\"string\"},\"iterations\":{\"default\":32,\"maximum\":256,\"minimum\":1,\"title\":\"Iterations\",\"type\":\"integer\"},\"duration_seconds\":{\"default\":10.0,\"exclusiveMinimum\":0,\"maximum\":60,\"title\":\"Duration Seconds\",\"type\":\"number\"},\"expires_at\":{\"title\":\"Expires At\",\"type\":\"number\"}},\"title\":\"ProfileCommand\",\"type\":\"object\"},\"SpeculativeRange\":{\"additionalProperties\":false,\"description\":\"Inclusive batch-size interval and its next proposal depth.\",\"properties\":{\"min_batch_size\":{\"minimum\":1,\"title\":\"Min Batch Size\",\"type\":\"integer\"},\"max_batch_size\":{\"minimum\":1,\"title\":\"Max Batch Size\",\"type\":\"integer\"},\"num_tokens\":{\"minimum\":0,\"title\":\"Num Tokens\",\"type\":\"integer\"}},\"required\":[\"min_batch_size\",\"max_batch_size\",\"num_tokens\"],\"title\":\"SpeculativeRange\",\"type\":\"object\"}},\"additionalProperties\":false,\"description\":\"Live overrides. None restores the value established during engine startup.\",\"properties\":{\"max_num_scheduled_tokens\":{\"anyOf\":[{\"minimum\":1,\"type\":\"integer\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Max Num Scheduled Tokens\"},\"max_num_seqs\":{\"anyOf\":[{\"minimum\":1,\"type\":\"integer\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Max Num Seqs\"},\"long_prefill_token_threshold\":{\"anyOf\":[{\"minimum\":0,\"type\":\"integer\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Long Prefill Token Threshold\"},\"watermark\":{\"anyOf\":[{\"exclusiveMaximum\":1,\"minimum\":0,\"type\":\"number\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Watermark\"},\"reserve_full_input\":{\"anyOf\":[{\"type\":\"boolean\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Reserve Full Input\"},\"speculative_tokens\":{\"anyOf\":[{\"minimum\":0,\"type\":\"integer\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Speculative Tokens\"},\"speculative_schedule\":{\"anyOf\":[{\"items\":{\"$ref\":\"#/$defs/SpeculativeRange\"},\"type\":\"array\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Speculative Schedule\"},\"instrumentation\":{\"default\":\"off\",\"enum\":[\"off\",\"metrics\"],\"title\":\"Instrumentation\",\"type\":\"string\"},\"extensions\":{\"additionalProperties\":{\"$ref\":\"#/$defs/JsonValue\"},\"title\":\"Extensions\",\"type\":\"object\"},\"profile\":{\"anyOf\":[{\"$ref\":\"#/$defs/ProfileCommand\"},{\"type\":\"null\"}],\"default\":null}},\"title\":\"HarnessConfig\",\"type\":\"object\"},\"startup\":{\"max_num_scheduled_tokens\":2048,\"max_num_seqs\":32,\"long_prefill_token_threshold\":0,\"watermark\":0.0,\"reserve_full_input\":true},\"minimum_token_budget\":1,\"speculation\":{\"available\":false,\"reason\":\"No drafter allocated; enabling speculation requires restart\",\"method\":null,\"minimum\":0,\"maximum\":0,\"startup_schedule\":null,\"effective_schedule\":null,\"activation\":\"next proposal; in-flight drafts finish verification\",\"zero_behavior\":\"no new drafts; retain forward pass that keeps draft KV coherent\",\"search_width\":\"chosen proposal depth\"},\"controls\":[{\"name\":\"max_num_scheduled_tokens\",\"category\":\"scheduling\",\"boundary\":\"batch\",\"live\":true,\"current\":2048,\"value_schema\":{\"anyOf\":[{\"minimum\":1,\"type\":\"integer\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Max Num Scheduled Tokens\"},\"reason\":\"Bounded by startup token allocation and progress constraints\",\"metrics\":[\"output_tokens_per_second\",\"ttft_mean_ms\",\"token_latency_mean_ms\"],\"correctness\":\"scheduling\"},{\"name\":\"max_num_seqs\",\"category\":\"scheduling\",\"boundary\":\"batch\",\"live\":true,\"current\":32,\"value_schema\":{\"anyOf\":[{\"minimum\":1,\"type\":\"integer\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Max Num Seqs\"},\"reason\":\"Admission only; active requests continue after reductions\",\"metrics\":[\"output_tokens_per_second\",\"ttft_mean_ms\",\"token_latency_mean_ms\"],\"correctness\":\"scheduling\"},{\"name\":\"long_prefill_token_threshold\",\"category\":\"scheduling\",\"boundary\":\"batch\",\"live\":true,\"current\":0,\"value_schema\":{\"anyOf\":[{\"minimum\":0,\"type\":\"integer\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Long Prefill Token Threshold\"},\"reason\":\"Requires chunked prefill and scheduler progress\",\"metrics\":[\"output_tokens_per_second\",\"ttft_mean_ms\",\"token_latency_mean_ms\"],\"correctness\":\"scheduling\"},{\"name\":\"watermark\",\"category\":\"kv_cache\",\"boundary\":\"batch\",\"live\":true,\"current\":0.0,\"value_schema\":{\"anyOf\":[{\"exclusiveMaximum\":1,\"minimum\":0,\"type\":\"number\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Watermark\"},\"reason\":\"Admission headroom; no allocation or cache invalidation\",\"metrics\":[\"output_tokens_per_second\",\"ttft_mean_ms\",\"token_latency_mean_ms\"],\"correctness\":\"scheduling\"},{\"name\":\"reserve_full_input\",\"category\":\"kv_cache\",\"boundary\":\"batch\",\"live\":true,\"current\":true,\"value_schema\":{\"anyOf\":[{\"type\":\"boolean\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Reserve Full Input\"},\"reason\":\"Reserve capacity for the whole input before admitting it\",\"metrics\":[\"output_tokens_per_second\",\"ttft_mean_ms\",\"token_latency_mean_ms\"],\"correctness\":\"scheduling\"},{\"name\":\"speculative_tokens\",\"category\":\"speculation\",\"boundary\":\"batch\",\"live\":false,\"current\":null,\"value_schema\":{\"anyOf\":[{\"minimum\":0,\"type\":\"integer\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Speculative Tokens\"},\"reason\":\"No drafter allocated; enabling speculation requires restart\",\"metrics\":[\"output_tokens_per_second\",\"ttft_mean_ms\",\"token_latency_mean_ms\",\"spec_accepted_tokens\",\"spec_verified_tokens\"],\"correctness\":\"distribution\"},{\"name\":\"speculative_schedule\",\"category\":\"speculation\",\"boundary\":\"batch\",\"live\":false,\"current\":null,\"value_schema\":{\"anyOf\":[{\"items\":{\"$ref\":\"#/$defs/SpeculativeRange\"},\"type\":\"array\"},{\"type\":\"null\"}],\"default\":null,\"title\":\"Speculative Schedule\"},\"reason\":\"No drafter allocated; enabling speculation requires restart\",\"metrics\":[\"output_tokens_per_second\",\"ttft_mean_ms\",\"token_latency_mean_ms\",\"spec_accepted_tokens\",\"spec_verified_tokens\"],\"correctness\":\"distribution\"},{\"name\":\"instrumentation\",\"category\":\"observation\",\"boundary\":\"batch\",\"live\":true,\"current\":\"off\",\"value_schema\":{\"default\":\"off\",\"enum\":[\"off\",\"metrics\"],\"title\":\"Instrumentation\",\"type\":\"string\"},\"reason\":\"off or metrics; profiling is a separate bounded command\",\"metrics\":[\"output_tokens_per_second\",\"ttft_mean_ms\",\"token_latency_mean_ms\"],\"correctness\":\"scheduling\"},{\"name\":\"scheduler_config.policy\",\"category\":\"scheduling\",\"boundary\":\"restart\",\"live\":false,\"current\":\"fcfs\",\"value_schema\":{},\"reason\":\"Queue representation and ordering\",\"metrics\":[\"ttft_mean_ms\",\"preemptions\"],\"correctness\":\"scheduling\"},{\"name\":\"scheduler_config.async_scheduling\",\"category\":\"scheduling\",\"boundary\":\"restart\",\"live\":false,\"current\":true,\"value_schema\":{},\"reason\":\"Scheduler/executor pipeline construction\",\"metrics\":[\"schedule_cpu_ms\",\"batch_wall_ms\"],\"correctness\":\"scheduling\"},{\"name\":\"scheduler_config.enable_chunked_prefill\",\"category\":\"scheduling\",\"boundary\":\"restart\",\"live\":false,\"current\":true,\"value_schema\":{},\"reason\":\"Worker and scheduler execution contracts\",\"metrics\":[\"ttft_mean_ms\",\"token_latency_mean_ms\"],\"correctness\":\"scheduling\"},{\"name\":\"scheduler_config.max_num_batched_tokens\",\"category\":\"scheduling\",\"boundary\":\"restart\",\"live\":false,\"current\":2048,\"value_schema\":{},\"reason\":\"Changes allocated token capacity; use live token budget within it\",\"metrics\":[\"output_tokens_per_second\",\"kv_cache_usage\"],\"correctness\":\"scheduling\"},{\"name\":\"scheduler_config.max_num_seqs\",\"category\":\"scheduling\",\"boundary\":\"restart\",\"live\":false,\"current\":32,\"value_schema\":{},\"reason\":\"Changes allocated request capacity; use live admission limit within it\",\"metrics\":[\"output_tokens_per_second\",\"waiting_requests\"],\"correctness\":\"scheduling\"},{\"name\":\"speculative_config.method\",\"category\":\"speculation\",\"boundary\":\"restart\",\"live\":false,\"current\":null,\"value_schema\":{},\"reason\":\"Construct a compatible proposer, verifier and KV layout\",\"metrics\":[\"spec_accepted_tokens\",\"spec_verified_tokens\",\"kernel_gpu_us\"],\"correctness\":\"distribution\"},{\"name\":\"speculative_config.model\",\"category\":\"speculation\",\"boundary\":\"restart\",\"live\":false,\"current\":null,\"value_schema\":{},\"reason\":\"Load and validate a draft model and its tokenizer\",\"metrics\":[\"spec_accepted_tokens\",\"spec_verified_tokens\",\"kernel_gpu_us\"],\"correctness\":\"distribution\"},{\"name\":\"speculative_config.num_speculative_tokens\",\"category\":\"speculation\",\"boundary\":\"restart\",\"live\":false,\"current\":null,\"value_schema\":{},\"reason\":\"Changes maximum draft allocation; use live depth within it\",\"metrics\":[\"spec_accepted_tokens\",\"spec_verified_tokens\"],\"correctness\":\"distribution\"},{\"name\":\"speculative_config.parallel_drafting\",\"category\":\"speculation\",\"boundary\":\"restart\",\"live\":false,\"current\":null,\"value_schema\":{},\"reason\":\"Requires a compatible trained draft shape and execution path\",\"metrics\":[\"kernel_gpu_us\",\"output_tokens_per_second\"],\"correctness\":\"distribution\"},{\"name\":\"speculative_config.prompt_lookup_min\",\"category\":\"speculation\",\"boundary\":\"restart\",\"live\":false,\"current\":null,\"value_schema\":{},\"reason\":\"Proposer construction and compiled search bounds\",\"metrics\":[\"spec_accepted_tokens\",\"spec_verified_tokens\"],\"correctness\":\"distribution\"},{\"name\":\"speculative_config.prompt_lookup_max\",\"category\":\"speculation\",\"boundary\":\"restart\",\"live\":false,\"current\":null,\"value_schema\":{},\"reason\":\"Proposer construction and compiled search bounds\",\"metrics\":[\"spec_accepted_tokens\",\"spec_verified_tokens\"],\"correctness\":\"distribution\"},{\"name\":\"cache_config.enable_prefix_caching\",\"category\":\"kv_cache\",\"boundary\":\"restart\",\"live\":false,\"current\":true,\"value_schema\":{},\"reason\":\"Cache manager and block-pool construction\",\"metrics\":[\"prefix_cache_hits\",\"prefix_cache_queries\",\"ttft_mean_ms\"],\"correctness\":\"scheduling\"},{\"name\":\"cache_config.cache_dtype\",\"category\":\"kv_cache\",\"boundary\":\"restart\",\"live\":false,\"current\":\"auto\",\"value_schema\":{},\"reason\":\"KV storage format, scales and attention kernels\",\"metrics\":[\"kv_cache_usage\",\"kernel_gpu_us\"],\"correctness\":\"numerical\"},{\"name\":\"cache_config.block_size\",\"category\":\"kv_cache\",\"boundary\":\"restart\",\"live\":false,\"current\":16,\"value_schema\":{},\"reason\":\"Page tables, cache layout and kernel specialization\",\"metrics\":[\"kv_cache_usage\",\"preemptions\"],\"correctness\":\"scheduling\"},{\"name\":\"cache_config.gpu_memory_utilization\",\"category\":\"kv_cache\",\"boundary\":\"restart\",\"live\":false,\"current\":0.9,\"value_schema\":{},\"reason\":\"Changes physical KV allocation\",\"metrics\":[\"kv_cache_usage\",\"preemptions\"],\"correctness\":\"scheduling\"},{\"name\":\"cache_config.kv_cache_memory_bytes\",\"category\":\"kv_cache\",\"boundary\":\"restart\",\"live\":false,\"current\":null,\"value_schema\":{},\"reason\":\"Changes physical KV allocation\",\"metrics\":[\"kv_cache_usage\",\"preemptions\"],\"correctness\":\"scheduling\"},{\"name\":\"kv_transfer_config.kv_connector\",\"category\":\"cache_transport\",\"boundary\":\"restart\",\"live\":false,\"current\":null,\"value_schema\":{},\"reason\":\"Connector initialization and peer coordination\",\"metrics\":[\"ttft_mean_ms\",\"kernel_gpu_us\"],\"correctness\":\"scheduling\"},{\"name\":\"attention_config.backend\",\"category\":\"attention\",\"boundary\":\"restart\",\"live\":false,\"current\":null,\"value_schema\":{},\"reason\":\"Backend and metadata/KV contracts are initialized together\",\"metrics\":[\"kernel_gpu_us\",\"kernel_count\"],\"correctness\":\"numerical\"},{\"name\":\"model_config.disable_cascade_attn\",\"category\":\"attention\",\"boundary\":\"restart\",\"live\":false,\"current\":true,\"value_schema\":{},\"reason\":\"Attention builder and graph specializations\",\"metrics\":[\"prefix_cache_hits\",\"kernel_gpu_us\"],\"correctness\":\"numerical\"},{\"name\":\"compilation_config.cudagraph_mode\",\"category\":\"graphs\",\"boundary\":\"rebuild\",\"live\":false,\"current\":\"FULL_AND_PIECEWISE\",\"value_schema\":{},\"reason\":\"Drain, recapture and validate execution graphs; not implemented in V1\",\"metrics\":[\"forward_cpu_submit_ms\",\"kernel_gpu_us\"],\"correctness\":\"numerical\"},{\"name\":\"compilation_config.cudagraph_capture_sizes\",\"category\":\"graphs\",\"boundary\":\"rebuild\",\"live\":false,\"current\":[1,2,4,8,16,24,32,40,48,56,64],\"value_schema\":{},\"reason\":\"New graph captures and memory budget; not implemented in V1\",\"metrics\":[\"forward_cpu_submit_ms\",\"batch_wall_ms\"],\"correctness\":\"numerical\"},{\"name\":\"compilation_config.mode\",\"category\":\"compilation\",\"boundary\":\"rebuild\",\"live\":false,\"current\":\"VLLM_COMPILE\",\"value_schema\":{},\"reason\":\"Recompile and rewarm the model; not implemented in V1\",\"metrics\":[\"kernel_count\",\"kernel_gpu_us\"],\"correctness\":\"numerical\"},{\"name\":\"compilation_config.custom_ops\",\"category\":\"kernels\",\"boundary\":\"rebuild\",\"live\":false,\"current\":[\"none\"],\"value_schema\":{},\"reason\":\"Select trusted compiled operators and verify numerical results\",\"metrics\":[\"kernel_count\",\"kernel_gpu_us\"],\"correctness\":\"numerical\"},{\"name\":\"compilation_config.pass_config.fuse_norm_quant\",\"category\":\"fusion\",\"boundary\":\"rebuild\",\"live\":false,\"current\":false,\"value_schema\":{},\"reason\":\"Recompile operator graph with new fusion passes\",\"metrics\":[\"kernel_count\",\"kernel_gpu_us\"],\"correctness\":\"numerical\"},{\"name\":\"compilation_config.pass_config.fuse_act_quant\",\"category\":\"fusion\",\"boundary\":\"rebuild\",\"live\":false,\"current\":false,\"value_schema\":{},\"reason\":\"Recompile operator graph with new fusion passes\",\"metrics\":[\"kernel_count\",\"kernel_gpu_us\"],\"correctness\":\"numerical\"},{\"name\":\"model_config.quantization\",\"category\":\"quantization\",\"boundary\":\"restart\",\"live\":false,\"current\":null,\"value_schema\":{},\"reason\":\"Compatible weight artifacts, scales and hardware kernels required\",\"metrics\":[\"kernel_gpu_us\",\"kv_cache_usage\"],\"correctness\":\"numerical\"},{\"name\":\"model_config.dtype\",\"category\":\"quantization\",\"boundary\":\"restart\",\"live\":false,\"current\":\"torch.bfloat16\",\"value_schema\":{},\"reason\":\"Reload weights and validate numerical quality\",\"metrics\":[\"kernel_gpu_us\",\"kv_cache_usage\"],\"correctness\":\"numerical\"},{\"name\":\"parallel_config.tensor_parallel_size\",\"category\":\"parallelism\",\"boundary\":\"restart\",\"live\":false,\"current\":1,\"value_schema\":{},\"reason\":\"Reshard weights and initialize communication groups\",\"metrics\":[\"kernel_gpu_us\",\"output_tokens_per_second\"],\"correctness\":\"numerical\"},{\"name\":\"parallel_config.enable_expert_parallel\",\"category\":\"moe\",\"boundary\":\"restart\",\"live\":false,\"current\":false,\"value_schema\":{},\"reason\":\"Expert placement and collective topology\",\"metrics\":[\"kernel_gpu_us\",\"output_tokens_per_second\"],\"correctness\":\"numerical\"},{\"name\":\"parallel_config.enable_eplb\",\"category\":\"moe\",\"boundary\":\"restart\",\"live\":false,\"current\":false,\"value_schema\":{},\"reason\":\"Expert load-balancing state and redundant capacity\",\"metrics\":[\"kernel_gpu_us\",\"output_tokens_per_second\"],\"correctness\":\"scheduling\"},{\"name\":\"parallel_config.disable_custom_all_reduce\",\"category\":\"communication\",\"boundary\":\"restart\",\"live\":false,\"current\":false,\"value_schema\":{},\"reason\":\"Communication buffers and captured collective selection\",\"metrics\":[\"kernel_gpu_us\",\"kernel_count\"],\"correctness\":\"numerical\"},{\"name\":\"sampling_params\",\"category\":\"sampling\",\"boundary\":\"request\",\"live\":false,\"current\":null,\"value_schema\":{},\"reason\":\"Request-owned sampling parameters change output semantics; never rewrite active requests\",\"metrics\":[\"output_tokens_per_second\"],\"correctness\":\"semantic\"},{\"name\":\"routing\",\"category\":\"routing\",\"boundary\":\"external\",\"live\":false,\"current\":null,\"value_schema\":{},\"reason\":\"Cache-aware routing and prefill/decode placement belong to the serving coordinator\",\"metrics\":[\"prefix_cache_hits\",\"ttft_mean_ms\"],\"correctness\":\"scheduling\"},{\"name\":\"kernel_artifact\",\"category\":\"kernels\",\"boundary\":\"rebuild\",\"live\":false,\"current\":null,\"value_schema\":{},\"reason\":\"A trusted, correctness-tested kernel artifact needs recompilation and graph validation\",\"metrics\":[\"kernel_gpu_us\",\"kernel_count\"],\"correctness\":\"numerical\"}],\"extensions\":{},\"boundary\":\"batch\",\"tensor_parallel_size\":1}",
+    "engine_metrics_json": "{\"session_id\":\"37c7ce9309e54f48bc3dde3d9020ab78\",\"replica_id\":\"qwen-qwen3-8b-e6859c0c\",\"desired_revision\":0,\"applied_revision\":0,\"effective\":{\"max_num_scheduled_tokens\":2048,\"max_num_seqs\":32,\"long_prefill_token_threshold\":0,\"watermark\":0.0,\"reserve_full_input\":true,\"instrumentation\":\"metrics\",\"extensions\":{}},\"error\":null,\"error_revision\":null,\"maintenance_error\":null,\"observer_errors\":0,\"last_observer_error\":null,\"draining\":false,\"workers\":[{\"rank\":0,\"local_rank\":0,\"host\":\"runsc\",\"pid\":57,\"device\":\"NVIDIA GeForce RTX 5090\",\"torch_version\":\"2.13.0+cu130\",\"cuda_version\":\"13.0\",\"model\":\"Qwen/Qwen3-8B\",\"model_revision\":\"b968826d9c46dd6066d109eabc6255188de91218\",\"dtype\":\"torch.bfloat16\",\"cudagraph_mode\":\"FULL_AND_PIECEWISE\",\"compilation\":{\"num_models_seen\":2,\"num_graphs_seen\":1,\"num_piecewise_graphs_seen\":73,\"num_piecewise_capturable_graphs_seen\":37,\"num_backend_compilations\":37,\"num_gpu_runner_capture_triggers\":1,\"num_cudagraph_captured\":414,\"num_inductor_compiles\":37,\"num_eager_compiles\":0,\"num_cache_entries_updated\":0,\"num_compiled_artifacts_saved\":3,\"num_compiled_artifacts_loaded\":0,\"num_aot_compiles\":1,\"num_aot_artifacts_saved\":1,\"num_aot_artifacts_loaded\":0,\"stock_torch_compile_count\":0},\"allocations\":{\"model_storage\":\"70297e43a6062ecbb76a41ab2b814b2af67638f052a169552ed93fb4087a3624\",\"kv_storage\":\"a16927ca2ab77f4ab4dce694b98f973f752e41e4c3b2d1799d77b9bc3f8d2c7a\"},\"allocations_observed_at\":1789042232.0038671,\"revision\":0,\"instrumentation\":\"metrics\",\"profile_running\":false,\"error\":null,\"telemetry\":{\"dropped_events\":0,\"export_errors\":0,\"last_export_error\":null,\"last_capture\":null,\"queued_records\":0},\"maintenance_wall_ms\":0.042040000039378356}],\"worker_poll_wall_ms\":0.06629999995766411,\"profile\":null,\"telemetry\":{\"dropped_events\":0,\"export_errors\":0,\"last_export_error\":null,\"last_capture\":null,\"queued_records\":0},\"harness\":{\"registered\":true,\"applied_revision\":0,\"queued_events\":0,\"dropped_events\":0}}",
+    "started_at_unix_ms": "1789041738294",
+    "ready_at_unix_ms": "1789042263412",
+    "last_heartbeat_unix_ms": "1789042327814",
+    "machine_id": "machine-96d4b79a-8f48-4ae5-8858-b9c5e252a41a",
+    "provider_workspace_id": ""
+  },
+  "worker_id": "3ba06902",
+  "free_gpu_count": 0,
+  "worker_capacity": {
+    "status": "available",
+    "free_gpu_count": 0,
+    "evictable_gpu_count": 0,
+    "rollout_generation": ""
+  },
+  "serverless_states": [
+    {
+      "elapsed_ms": 2031.2780830427073,
+      "status": "pending",
+      "exit_code": -1
+    },
+    {
+      "elapsed_ms": 4462.915583048016,
+      "status": "pending",
+      "exit_code": -1
+    },
+    {
+      "elapsed_ms": 6915.387292043306,
+      "status": "pending",
+      "exit_code": -1
+    },
+    {
+      "elapsed_ms": 9280.326375039294,
+      "status": "pending",
+      "exit_code": -1
+    },
+    {
+      "elapsed_ms": 11715.816542040557,
+      "status": "pending",
+      "exit_code": -1
+    },
+    {
+      "elapsed_ms": 14055.311167030595,
+      "status": "pending",
+      "exit_code": -1
+    },
+    {
+      "elapsed_ms": 16382.847208005842,
+      "status": "pending",
+      "exit_code": -1
+    },
+    {
+      "elapsed_ms": 18656.366167007945,
+      "status": "pending",
+      "exit_code": -1
+    },
+    {
+      "elapsed_ms": 21698.205541993957,
+      "status": "pending",
+      "exit_code": -1
+    },
+    {
+      "elapsed_ms": 23980.84175004624,
+      "status": "pending",
+      "exit_code": -1
+    }
+  ],
+  "serverless_container_id": "sandbox-c5f3ba79-ba55-4a16-a4f3-6293ce425820-b2ddbff0",
+  "inference_while_serverless_waits": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "annotations": null,
+          "audio": null,
+          "content": "protected",
+          "function_call": null,
+          "reasoning": null,
+          "refusal": null,
+          "role": "assistant"
+        },
+        "routed_experts": null,
+        "stop_reason": null,
+        "token_ids": null
+      }
+    ],
+    "created": 1789042355,
+    "ec_transfer_params": null,
+    "id": "gen-9a7bb940c9e1491ca69b",
+    "kv_transfer_params": null,
+    "metrics": null,
+    "model": "qwen/qwen3-8b",
+    "object": "chat.completion",
+    "prompt_logprobs": null,
+    "prompt_text": null,
+    "prompt_token_ids": null,
+    "provider": "beam",
+    "service_tier": null,
+    "system_fingerprint": "vllm-0.1.dev50+g07cd3785f-9e095375",
+    "usage": {
+      "completion_tokens": 2,
+      "completion_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "cost": 2e-06,
+      "prompt_tokens": 18,
+      "prompt_tokens_details": null,
+      "total_tokens": 20
+    }
+  },
+  "ok": true,
+  "waiting_serverless_terminated": true
+}

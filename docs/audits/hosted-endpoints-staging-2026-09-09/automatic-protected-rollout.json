@@ -1,0 +1,315 @@
+[
+  {
+    "unix_time": 1789041078.3416462,
+    "elapsed_seconds": 0.17403125762939453,
+    "desired_version": 9,
+    "protected": false,
+    "rollout": "replace",
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-057f4d75",
+        "version": 9,
+        "status": "evicted",
+        "container_id": "managed-86c61fe8-6bc3-446a-88a9-bfa90ce6ef96-efae136d",
+        "status_reason": "container exited",
+        "started_at_unix_ms": "1789040466140"
+      },
+      {
+        "id": "qwen-qwen3-8b-2a78a96d",
+        "version": 9,
+        "status": "evicted",
+        "container_id": "managed-86c61fe8-6bc3-446a-88a9-bfa90ce6ef96-d11ab076",
+        "status_reason": "container exited",
+        "started_at_unix_ms": "1789039466139"
+      },
+      {
+        "id": "qwen-qwen3-8b-d51612b4",
+        "version": 9,
+        "status": "ready",
+        "container_id": "managed-86c61fe8-6bc3-446a-88a9-bfa90ce6ef96-7baa20a9",
+        "status_reason": "",
+        "started_at_unix_ms": "1789040556140"
+      }
+    ]
+  },
+  {
+    "unix_time": 1789041719.9170392,
+    "elapsed_seconds": 641.7494242191315,
+    "desired_version": 10,
+    "protected": true,
+    "rollout": "replace",
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-057f4d75",
+        "version": 9,
+        "status": "evicted",
+        "container_id": "managed-86c61fe8-6bc3-446a-88a9-bfa90ce6ef96-efae136d",
+        "status_reason": "container exited",
+        "started_at_unix_ms": "1789040466140"
+      },
+      {
+        "id": "qwen-qwen3-8b-2a78a96d",
+        "version": 9,
+        "status": "evicted",
+        "container_id": "managed-86c61fe8-6bc3-446a-88a9-bfa90ce6ef96-d11ab076",
+        "status_reason": "container exited",
+        "started_at_unix_ms": "1789039466139"
+      },
+      {
+        "id": "qwen-qwen3-8b-d51612b4",
+        "version": 9,
+        "status": "ready",
+        "container_id": "managed-86c61fe8-6bc3-446a-88a9-bfa90ce6ef96-7baa20a9",
+        "status_reason": "",
+        "started_at_unix_ms": "1789040556140"
+      }
+    ]
+  },
+  {
+    "unix_time": 1789041722.029647,
+    "elapsed_seconds": 643.8620328903198,
+    "desired_version": 10,
+    "protected": true,
+    "rollout": "replace",
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-057f4d75",
+        "version": 9,
+        "status": "evicted",
+        "container_id": "managed-86c61fe8-6bc3-446a-88a9-bfa90ce6ef96-efae136d",
+        "status_reason": "container exited",
+        "started_at_unix_ms": "1789040466140"
+      },
+      {
+        "id": "qwen-qwen3-8b-2a78a96d",
+        "version": 9,
+        "status": "evicted",
+        "container_id": "managed-86c61fe8-6bc3-446a-88a9-bfa90ce6ef96-d11ab076",
+        "status_reason": "container exited",
+        "started_at_unix_ms": "1789039466139"
+      },
+      {
+        "id": "qwen-qwen3-8b-d51612b4",
+        "version": 9,
+        "status": "stopped",
+        "container_id": "managed-86c61fe8-6bc3-446a-88a9-bfa90ce6ef96-7baa20a9",
+        "status_reason": "version 9 retired (making room for version 10)",
+        "started_at_unix_ms": "1789040556140"
+      }
+    ]
+  },
+  {
+    "unix_time": 1789041724.150688,
+    "elapsed_seconds": 645.9830741882324,
+    "desired_version": 11,
+    "protected": true,
+    "rollout": "replace",
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-057f4d75",
+        "version": 9,
+        "status": "evicted",
+        "container_id": "managed-86c61fe8-6bc3-446a-88a9-bfa90ce6ef96-efae136d",
+        "status_reason": "container exited",
+        "started_at_unix_ms": "1789040466140"
+      },
+      {
+        "id": "qwen-qwen3-8b-2a78a96d",
+        "version": 9,
+        "status": "evicted",
+        "container_id": "managed-86c61fe8-6bc3-446a-88a9-bfa90ce6ef96-d11ab076",
+        "status_reason": "container exited",
+        "started_at_unix_ms": "1789039466139"
+      },
+      {
+        "id": "qwen-qwen3-8b-d51612b4",
+        "version": 9,
+        "status": "stopped",
+        "container_id": "managed-86c61fe8-6bc3-446a-88a9-bfa90ce6ef96-7baa20a9",
+        "status_reason": "version 9 retired (making room for version 10)",
+        "started_at_unix_ms": "1789040556140"
+      }
+    ]
+  },
+  {
+    "unix_time": 1789041730.6044302,
+    "elapsed_seconds": 652.4368162155151,
+    "desired_version": 11,
+    "protected": true,
+    "rollout": "replace",
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-057f4d75",
+        "version": 9,
+        "status": "evicted",
+        "container_id": "managed-86c61fe8-6bc3-446a-88a9-bfa90ce6ef96-efae136d",
+        "status_reason": "container exited",
+        "started_at_unix_ms": "1789040466140"
+      },
+      {
+        "id": "qwen-qwen3-8b-2a78a96d",
+        "version": 9,
+        "status": "evicted",
+        "container_id": "managed-86c61fe8-6bc3-446a-88a9-bfa90ce6ef96-d11ab076",
+        "status_reason": "container exited",
+        "started_at_unix_ms": "1789039466139"
+      },
+      {
+        "id": "qwen-qwen3-8b-d51612b4",
+        "version": 9,
+        "status": "stopped",
+        "container_id": "managed-86c61fe8-6bc3-446a-88a9-bfa90ce6ef96-7baa20a9",
+        "status_reason": "version 9 retired (making room for version 10)",
+        "started_at_unix_ms": "1789040556140"
+      },
+      {
+        "id": "qwen-qwen3-8b-e6859c0c",
+        "version": 11,
+        "status": "scheduling",
+        "container_id": "managed-8f40d35f-e677-486b-8246-5fb6d89d778f-da00fe62",
+        "status_reason": "",
+        "started_at_unix_ms": "1789041738294"
+      }
+    ]
+  },
+  {
+    "unix_time": 1789041741.22705,
+    "elapsed_seconds": 663.0594351291656,
+    "desired_version": 11,
+    "protected": true,
+    "rollout": "replace",
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-057f4d75",
+        "version": 9,
+        "status": "evicted",
+        "container_id": "managed-86c61fe8-6bc3-446a-88a9-bfa90ce6ef96-efae136d",
+        "status_reason": "container exited",
+        "started_at_unix_ms": "1789040466140"
+      },
+      {
+        "id": "qwen-qwen3-8b-2a78a96d",
+        "version": 9,
+        "status": "evicted",
+        "container_id": "managed-86c61fe8-6bc3-446a-88a9-bfa90ce6ef96-d11ab076",
+        "status_reason": "container exited",
+        "started_at_unix_ms": "1789039466139"
+      },
+      {
+        "id": "qwen-qwen3-8b-d51612b4",
+        "version": 9,
+        "status": "stopped",
+        "container_id": "managed-86c61fe8-6bc3-446a-88a9-bfa90ce6ef96-7baa20a9",
+        "status_reason": "version 9 retired (making room for version 10)",
+        "started_at_unix_ms": "1789040556140"
+      },
+      {
+        "id": "qwen-qwen3-8b-e6859c0c",
+        "version": 11,
+        "status": "loading",
+        "container_id": "managed-8f40d35f-e677-486b-8246-5fb6d89d778f-da00fe62",
+        "status_reason": "",
+        "started_at_unix_ms": "1789041738294"
+      }
+    ]
+  },
+  {
+    "unix_time": 1789042257.036706,
+    "elapsed_seconds": 1178.8690922260284,
+    "desired_version": 11,
+    "protected": true,
+    "rollout": "replace",
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-057f4d75",
+        "version": 9,
+        "status": "evicted",
+        "container_id": "managed-86c61fe8-6bc3-446a-88a9-bfa90ce6ef96-efae136d",
+        "status_reason": "container exited",
+        "started_at_unix_ms": "1789040466140"
+      },
+      {
+        "id": "qwen-qwen3-8b-2a78a96d",
+        "version": 9,
+        "status": "evicted",
+        "container_id": "managed-86c61fe8-6bc3-446a-88a9-bfa90ce6ef96-d11ab076",
+        "status_reason": "container exited",
+        "started_at_unix_ms": "1789039466139"
+      },
+      {
+        "id": "qwen-qwen3-8b-d51612b4",
+        "version": 9,
+        "status": "stopped",
+        "container_id": "managed-86c61fe8-6bc3-446a-88a9-bfa90ce6ef96-7baa20a9",
+        "status_reason": "version 9 retired (making room for version 10)",
+        "started_at_unix_ms": "1789040556140"
+      },
+      {
+        "id": "qwen-qwen3-8b-e6859c0c",
+        "version": 11,
+        "status": "ready",
+        "container_id": "managed-8f40d35f-e677-486b-8246-5fb6d89d778f-da00fe62",
+        "status_reason": "",
+        "started_at_unix_ms": "1789041738294"
+      }
+    ]
+  },
+  {
+    "unix_time": 1789042265.6419961,
+    "elapsed_seconds": 1187.4743821620941,
+    "desired_version": 11,
+    "protected": true,
+    "rollout": "replace",
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-057f4d75",
+        "version": 9,
+        "status": "evicted",
+        "container_id": "managed-86c61fe8-6bc3-446a-88a9-bfa90ce6ef96-efae136d",
+        "status_reason": "container exited",
+        "started_at_unix_ms": "1789040466140"
+      },
+      {
+        "id": "qwen-qwen3-8b-d51612b4",
+        "version": 9,
+        "status": "stopped",
+        "container_id": "managed-86c61fe8-6bc3-446a-88a9-bfa90ce6ef96-7baa20a9",
+        "status_reason": "version 9 retired (making room for version 10)",
+        "started_at_unix_ms": "1789040556140"
+      },
+      {
+        "id": "qwen-qwen3-8b-e6859c0c",
+        "version": 11,
+        "status": "ready",
+        "container_id": "managed-8f40d35f-e677-486b-8246-5fb6d89d778f-da00fe62",
+        "status_reason": "",
+        "started_at_unix_ms": "1789041738294"
+      }
+    ]
+  },
+  {
+    "unix_time": 1789042356.940756,
+    "elapsed_seconds": 1278.7731420993805,
+    "desired_version": 11,
+    "protected": true,
+    "rollout": "replace",
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-d51612b4",
+        "version": 9,
+        "status": "stopped",
+        "container_id": "managed-86c61fe8-6bc3-446a-88a9-bfa90ce6ef96-7baa20a9",
+        "status_reason": "version 9 retired (making room for version 10)",
+        "started_at_unix_ms": "1789040556140"
+      },
+      {
+        "id": "qwen-qwen3-8b-e6859c0c",
+        "version": 11,
+        "status": "ready",
+        "container_id": "managed-8f40d35f-e677-486b-8246-5fb6d89d778f-da00fe62",
+        "status_reason": "",
+        "started_at_unix_ms": "1789041738294"
+      }
+    ]
+  }
+]

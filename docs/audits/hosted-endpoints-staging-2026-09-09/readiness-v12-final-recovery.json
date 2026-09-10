@@ -1,0 +1,361 @@
+[
+  {
+    "elapsed_seconds": 0.158,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-9de0ccdb",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 5.383,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-9de0ccdb",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 10.513,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-9de0ccdb",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 15.655,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-9de0ccdb",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 20.79,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-9de0ccdb",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 25.925,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-9de0ccdb",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 31.154,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-9de0ccdb",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 36.276,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-9de0ccdb",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 41.457,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-9de0ccdb",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 46.584,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-9de0ccdb",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 51.73,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-9de0ccdb",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 56.847,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-9de0ccdb",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 61.986,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-9de0ccdb",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 67.131,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-9de0ccdb",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 72.26,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-9de0ccdb",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 77.504,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-9de0ccdb",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 82.625,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-9de0ccdb",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 87.751,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-9de0ccdb",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 92.875,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-9de0ccdb",
+        "status": "loading",
+        "harness_registered": false,
+        "last_heartbeat_unix_ms": "0",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 98.027,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-9de0ccdb",
+        "status": "loading",
+        "harness_registered": true,
+        "last_heartbeat_unix_ms": "1789043046929",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 103.165,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-9de0ccdb",
+        "status": "loading",
+        "harness_registered": true,
+        "last_heartbeat_unix_ms": "1789043051977",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 108.305,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-9de0ccdb",
+        "status": "loading",
+        "harness_registered": true,
+        "last_heartbeat_unix_ms": "1789043057730",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 113.455,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-9de0ccdb",
+        "status": "loading",
+        "harness_registered": true,
+        "last_heartbeat_unix_ms": "1789043062775",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 118.603,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-9de0ccdb",
+        "status": "loading",
+        "harness_registered": true,
+        "last_heartbeat_unix_ms": "1789043067821",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 123.737,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-9de0ccdb",
+        "status": "loading",
+        "harness_registered": true,
+        "last_heartbeat_unix_ms": "1789043072867",
+        "status_reason": ""
+      }
+    ]
+  },
+  {
+    "elapsed_seconds": 128.876,
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-9de0ccdb",
+        "status": "ready",
+        "harness_registered": true,
+        "last_heartbeat_unix_ms": "1789043077912",
+        "status_reason": ""
+      }
+    ],
+    "first_ready_inference": {
+      "status": 200,
+      "body": {
+        "choices": [
+          {
+            "finish_reason": "stop",
+            "index": 0,
+            "logprobs": null,
+            "message": {
+              "annotations": null,
+              "audio": null,
+              "content": "Hello! How can I assist you today? \ud83d\ude0a",
+              "function_call": null,
+              "reasoning": null,
+              "refusal": null,
+              "role": "assistant"
+            },
+            "routed_experts": null,
+            "stop_reason": null,
+            "token_ids": null
+          }
+        ],
+        "created": 1789043081,
+        "ec_transfer_params": null,
+        "id": "gen-1335b214cfd34baab4b8",
+        "kv_transfer_params": null,
+        "metrics": null,
+        "model": "qwen/qwen3-8b",
+        "object": "chat.completion",
+        "prompt_logprobs": null,
+        "prompt_text": null,
+        "prompt_token_ids": null,
+        "provider": "beam",
+        "service_tier": null,
+        "system_fingerprint": "vllm-0.1.dev50+g07cd3785f-9e095375",
+        "usage": {
+          "completion_tokens": 12,
+          "completion_tokens_details": {
+            "reasoning_tokens": 0
+          },
+          "cost": 5e-06,
+          "prompt_tokens": 15,
+          "prompt_tokens_details": null,
+          "total_tokens": 27
+        }
+      }
+    }
+  }
+]

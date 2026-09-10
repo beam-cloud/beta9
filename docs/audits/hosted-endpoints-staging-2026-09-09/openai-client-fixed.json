@@ -1,0 +1,501 @@
+{
+  "openai_version": "3.11.0",
+  "nonstream": {
+    "id": "gen-50a343ace075433a9bf4",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "Hello! How can I assist you today?",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null,
+          "reasoning": null
+        },
+        "routed_experts": null,
+        "stop_reason": null,
+        "token_ids": null
+      }
+    ],
+    "created": 1789040158,
+    "model": "qwen/qwen3-8b",
+    "object": "chat.completion",
+    "metadata": null,
+    "moderation": null,
+    "service_tier": null,
+    "system_fingerprint": "vllm-0.1.dev50+g07cd3785f-9e095375",
+    "usage": {
+      "completion_tokens": 10,
+      "prompt_tokens": 18,
+      "total_tokens": 28,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": null,
+        "audio_tokens": null,
+        "reasoning_tokens": 0,
+        "rejected_prediction_tokens": null,
+        "text_tokens": null
+      },
+      "prompt_tokens_details": null,
+      "cost": 5e-06
+    },
+    "ec_transfer_params": null,
+    "kv_transfer_params": null,
+    "metrics": null,
+    "prompt_logprobs": null,
+    "prompt_text": null,
+    "prompt_token_ids": null,
+    "provider": "beam"
+  },
+  "stream": [
+    {
+      "id": "gen-130cba9704324833ad65",
+      "choices": [
+        {
+          "delta": {
+            "content": "",
+            "function_call": null,
+            "refusal": null,
+            "role": "assistant",
+            "tool_calls": null
+          },
+          "finish_reason": null,
+          "index": 0,
+          "logprobs": null
+        }
+      ],
+      "created": 1789040159,
+      "model": "qwen/qwen3-8b",
+      "object": "chat.completion.chunk",
+      "moderation": null,
+      "obfuscation": null,
+      "service_tier": null,
+      "system_fingerprint": null,
+      "usage": {
+        "completion_tokens": 0,
+        "prompt_tokens": 18,
+        "total_tokens": 18,
+        "completion_tokens_details": {
+          "accepted_prediction_tokens": null,
+          "audio_tokens": null,
+          "reasoning_tokens": 0,
+          "rejected_prediction_tokens": null,
+          "text_tokens": null
+        },
+        "prompt_tokens_details": null
+      },
+      "prompt_text": null,
+      "prompt_token_ids": null
+    },
+    {
+      "id": "gen-130cba9704324833ad65",
+      "choices": [
+        {
+          "delta": {
+            "content": "Hello",
+            "function_call": null,
+            "refusal": null,
+            "role": null,
+            "tool_calls": null
+          },
+          "finish_reason": null,
+          "index": 0,
+          "logprobs": null,
+          "token_ids": null
+        }
+      ],
+      "created": 1789040159,
+      "model": "qwen/qwen3-8b",
+      "object": "chat.completion.chunk",
+      "moderation": null,
+      "obfuscation": null,
+      "service_tier": null,
+      "system_fingerprint": null,
+      "usage": {
+        "completion_tokens": 1,
+        "prompt_tokens": 18,
+        "total_tokens": 19,
+        "completion_tokens_details": {
+          "accepted_prediction_tokens": null,
+          "audio_tokens": null,
+          "reasoning_tokens": 0,
+          "rejected_prediction_tokens": null,
+          "text_tokens": null
+        },
+        "prompt_tokens_details": null
+      }
+    },
+    {
+      "id": "gen-130cba9704324833ad65",
+      "choices": [
+        {
+          "delta": {
+            "content": ",",
+            "function_call": null,
+            "refusal": null,
+            "role": null,
+            "tool_calls": null
+          },
+          "finish_reason": null,
+          "index": 0,
+          "logprobs": null,
+          "token_ids": null
+        }
+      ],
+      "created": 1789040159,
+      "model": "qwen/qwen3-8b",
+      "object": "chat.completion.chunk",
+      "moderation": null,
+      "obfuscation": null,
+      "service_tier": null,
+      "system_fingerprint": null,
+      "usage": {
+        "completion_tokens": 2,
+        "prompt_tokens": 18,
+        "total_tokens": 20,
+        "completion_tokens_details": {
+          "accepted_prediction_tokens": null,
+          "audio_tokens": null,
+          "reasoning_tokens": 0,
+          "rejected_prediction_tokens": null,
+          "text_tokens": null
+        },
+        "prompt_tokens_details": null
+      }
+    },
+    {
+      "id": "gen-130cba9704324833ad65",
+      "choices": [
+        {
+          "delta": {
+            "content": " how",
+            "function_call": null,
+            "refusal": null,
+            "role": null,
+            "tool_calls": null
+          },
+          "finish_reason": null,
+          "index": 0,
+          "logprobs": null,
+          "token_ids": null
+        }
+      ],
+      "created": 1789040159,
+      "model": "qwen/qwen3-8b",
+      "object": "chat.completion.chunk",
+      "moderation": null,
+      "obfuscation": null,
+      "service_tier": null,
+      "system_fingerprint": null,
+      "usage": {
+        "completion_tokens": 3,
+        "prompt_tokens": 18,
+        "total_tokens": 21,
+        "completion_tokens_details": {
+          "accepted_prediction_tokens": null,
+          "audio_tokens": null,
+          "reasoning_tokens": 0,
+          "rejected_prediction_tokens": null,
+          "text_tokens": null
+        },
+        "prompt_tokens_details": null
+      }
+    },
+    {
+      "id": "gen-130cba9704324833ad65",
+      "choices": [
+        {
+          "delta": {
+            "content": " can",
+            "function_call": null,
+            "refusal": null,
+            "role": null,
+            "tool_calls": null
+          },
+          "finish_reason": null,
+          "index": 0,
+          "logprobs": null,
+          "token_ids": null
+        }
+      ],
+      "created": 1789040159,
+      "model": "qwen/qwen3-8b",
+      "object": "chat.completion.chunk",
+      "moderation": null,
+      "obfuscation": null,
+      "service_tier": null,
+      "system_fingerprint": null,
+      "usage": {
+        "completion_tokens": 4,
+        "prompt_tokens": 18,
+        "total_tokens": 22,
+        "completion_tokens_details": {
+          "accepted_prediction_tokens": null,
+          "audio_tokens": null,
+          "reasoning_tokens": 0,
+          "rejected_prediction_tokens": null,
+          "text_tokens": null
+        },
+        "prompt_tokens_details": null
+      }
+    },
+    {
+      "id": "gen-130cba9704324833ad65",
+      "choices": [
+        {
+          "delta": {
+            "content": " I",
+            "function_call": null,
+            "refusal": null,
+            "role": null,
+            "tool_calls": null
+          },
+          "finish_reason": null,
+          "index": 0,
+          "logprobs": null,
+          "token_ids": null
+        }
+      ],
+      "created": 1789040159,
+      "model": "qwen/qwen3-8b",
+      "object": "chat.completion.chunk",
+      "moderation": null,
+      "obfuscation": null,
+      "service_tier": null,
+      "system_fingerprint": null,
+      "usage": {
+        "completion_tokens": 5,
+        "prompt_tokens": 18,
+        "total_tokens": 23,
+        "completion_tokens_details": {
+          "accepted_prediction_tokens": null,
+          "audio_tokens": null,
+          "reasoning_tokens": 0,
+          "rejected_prediction_tokens": null,
+          "text_tokens": null
+        },
+        "prompt_tokens_details": null
+      }
+    },
+    {
+      "id": "gen-130cba9704324833ad65",
+      "choices": [
+        {
+          "delta": {
+            "content": " assist",
+            "function_call": null,
+            "refusal": null,
+            "role": null,
+            "tool_calls": null
+          },
+          "finish_reason": null,
+          "index": 0,
+          "logprobs": null,
+          "token_ids": null
+        }
+      ],
+      "created": 1789040159,
+      "model": "qwen/qwen3-8b",
+      "object": "chat.completion.chunk",
+      "moderation": null,
+      "obfuscation": null,
+      "service_tier": null,
+      "system_fingerprint": null,
+      "usage": {
+        "completion_tokens": 6,
+        "prompt_tokens": 18,
+        "total_tokens": 24,
+        "completion_tokens_details": {
+          "accepted_prediction_tokens": null,
+          "audio_tokens": null,
+          "reasoning_tokens": 0,
+          "rejected_prediction_tokens": null,
+          "text_tokens": null
+        },
+        "prompt_tokens_details": null
+      }
+    },
+    {
+      "id": "gen-130cba9704324833ad65",
+      "choices": [
+        {
+          "delta": {
+            "content": " you",
+            "function_call": null,
+            "refusal": null,
+            "role": null,
+            "tool_calls": null
+          },
+          "finish_reason": null,
+          "index": 0,
+          "logprobs": null,
+          "token_ids": null
+        }
+      ],
+      "created": 1789040159,
+      "model": "qwen/qwen3-8b",
+      "object": "chat.completion.chunk",
+      "moderation": null,
+      "obfuscation": null,
+      "service_tier": null,
+      "system_fingerprint": null,
+      "usage": {
+        "completion_tokens": 7,
+        "prompt_tokens": 18,
+        "total_tokens": 25,
+        "completion_tokens_details": {
+          "accepted_prediction_tokens": null,
+          "audio_tokens": null,
+          "reasoning_tokens": 0,
+          "rejected_prediction_tokens": null,
+          "text_tokens": null
+        },
+        "prompt_tokens_details": null
+      }
+    },
+    {
+      "id": "gen-130cba9704324833ad65",
+      "choices": [
+        {
+          "delta": {
+            "content": " today",
+            "function_call": null,
+            "refusal": null,
+            "role": null,
+            "tool_calls": null
+          },
+          "finish_reason": null,
+          "index": 0,
+          "logprobs": null,
+          "token_ids": null
+        }
+      ],
+      "created": 1789040159,
+      "model": "qwen/qwen3-8b",
+      "object": "chat.completion.chunk",
+      "moderation": null,
+      "obfuscation": null,
+      "service_tier": null,
+      "system_fingerprint": null,
+      "usage": {
+        "completion_tokens": 8,
+        "prompt_tokens": 18,
+        "total_tokens": 26,
+        "completion_tokens_details": {
+          "accepted_prediction_tokens": null,
+          "audio_tokens": null,
+          "reasoning_tokens": 0,
+          "rejected_prediction_tokens": null,
+          "text_tokens": null
+        },
+        "prompt_tokens_details": null
+      }
+    },
+    {
+      "id": "gen-130cba9704324833ad65",
+      "choices": [
+        {
+          "delta": {
+            "content": "?",
+            "function_call": null,
+            "refusal": null,
+            "role": null,
+            "tool_calls": null
+          },
+          "finish_reason": null,
+          "index": 0,
+          "logprobs": null,
+          "token_ids": null
+        }
+      ],
+      "created": 1789040159,
+      "model": "qwen/qwen3-8b",
+      "object": "chat.completion.chunk",
+      "moderation": null,
+      "obfuscation": null,
+      "service_tier": null,
+      "system_fingerprint": null,
+      "usage": {
+        "completion_tokens": 9,
+        "prompt_tokens": 18,
+        "total_tokens": 27,
+        "completion_tokens_details": {
+          "accepted_prediction_tokens": null,
+          "audio_tokens": null,
+          "reasoning_tokens": 0,
+          "rejected_prediction_tokens": null,
+          "text_tokens": null
+        },
+        "prompt_tokens_details": null
+      }
+    },
+    {
+      "id": "gen-130cba9704324833ad65",
+      "choices": [
+        {
+          "delta": {
+            "content": null,
+            "function_call": null,
+            "refusal": null,
+            "role": null,
+            "tool_calls": null
+          },
+          "finish_reason": "stop",
+          "index": 0,
+          "logprobs": null,
+          "stop_reason": null,
+          "token_ids": null
+        }
+      ],
+      "created": 1789040159,
+      "model": "qwen/qwen3-8b",
+      "object": "chat.completion.chunk",
+      "moderation": null,
+      "obfuscation": null,
+      "service_tier": null,
+      "system_fingerprint": null,
+      "usage": {
+        "completion_tokens": 10,
+        "prompt_tokens": 18,
+        "total_tokens": 28,
+        "completion_tokens_details": {
+          "accepted_prediction_tokens": null,
+          "audio_tokens": null,
+          "reasoning_tokens": 0,
+          "rejected_prediction_tokens": null,
+          "text_tokens": null
+        },
+        "prompt_tokens_details": null
+      }
+    },
+    {
+      "id": "gen-130cba9704324833ad65",
+      "choices": [],
+      "created": 1789040159,
+      "model": "qwen/qwen3-8b",
+      "object": "chat.completion.chunk",
+      "moderation": null,
+      "obfuscation": null,
+      "service_tier": null,
+      "system_fingerprint": "vllm-0.1.dev50+g07cd3785f-9e095375",
+      "usage": {
+        "completion_tokens": 10,
+        "prompt_tokens": 18,
+        "total_tokens": 28,
+        "completion_tokens_details": {
+          "accepted_prediction_tokens": null,
+          "audio_tokens": null,
+          "reasoning_tokens": 0,
+          "rejected_prediction_tokens": null,
+          "text_tokens": null
+        },
+        "prompt_tokens_details": null
+      }
+    }
+  ],
+  "ok": true
+}

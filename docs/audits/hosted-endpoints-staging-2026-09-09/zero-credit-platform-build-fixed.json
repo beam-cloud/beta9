@@ -1,0 +1,59 @@
+{
+  "ok": true,
+  "image_id": "15c11c5214fa0afe",
+  "container_id": "build-236856da",
+  "persisted_stub_id": "717b976d-4794-4430-8185-6260085a1213",
+  "stub_type": "platform_deployer",
+  "admin_credit_cents": 0,
+  "build_steps": [
+    {
+      "timestamp": "2026-09-10T11:52:26.324905216Z",
+      "message": "STEP 2/2: RUN python -c 'import time; time.sleep(75); print(\"platform-zero-credit-20260910\")'",
+      "container_id": "me-deployer-52bd8df3",
+      "stub_type": "platform_deployer"
+    },
+    {
+      "timestamp": "2026-09-10T11:52:41.307052439Z",
+      "message": "Still running build step... (15s elapsed)",
+      "container_id": "me-deployer-52bd8df3",
+      "stub_type": "platform_deployer"
+    },
+    {
+      "timestamp": "2026-09-10T11:52:56.289188752Z",
+      "message": "Still running build step... (30s elapsed)",
+      "container_id": "me-deployer-52bd8df3",
+      "stub_type": "platform_deployer"
+    },
+    {
+      "timestamp": "2026-09-10T11:53:11.273128946Z",
+      "message": "Still running build step... (45s elapsed)",
+      "container_id": "me-deployer-52bd8df3",
+      "stub_type": "platform_deployer"
+    },
+    {
+      "timestamp": "2026-09-10T11:53:26.361461963Z",
+      "message": "Still running build step... (60s elapsed)",
+      "container_id": "me-deployer-52bd8df3",
+      "stub_type": "platform_deployer"
+    },
+    {
+      "timestamp": "2026-09-10T11:53:41.349799556Z",
+      "message": "Still running build step... (75s elapsed)",
+      "container_id": "me-deployer-52bd8df3",
+      "stub_type": "platform_deployer"
+    },
+    {
+      "timestamp": "2026-09-10T11:53:41.550695354Z",
+      "message": "platform-zero-credit-20260910",
+      "container_id": "me-deployer-52bd8df3",
+      "stub_type": "platform_deployer"
+    },
+    {
+      "timestamp": "2026-09-10T11:53:47.090140891Z",
+      "message": "Platform zero-credit build passed: 15c11c5214fa0afe",
+      "container_id": "me-deployer-52bd8df3",
+      "stub_type": "platform_deployer"
+    }
+  ],
+  "note": "An uncached build with a 75-second command passed admission and periodic enforcement after the temporary admin credit was expired. The subsequent private model-image import failed for absent GHCR credentials, separately from this successful credit test."
+}

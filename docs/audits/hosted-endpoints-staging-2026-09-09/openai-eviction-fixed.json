@@ -1,0 +1,51 @@
+{
+  "replica_before": {
+    "id": "qwen-qwen3-8b-93608aa9",
+    "container_id": "managed-410fe666-5080-4955-aaa2-86101e88874d-66d1b7c1",
+    "version": 12
+  },
+  "chunks": 157,
+  "request_id": "gen-6e3dfe890bda4eef94cc",
+  "usage": {
+    "completion_tokens": 156,
+    "prompt_tokens": 29,
+    "total_tokens": 185,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": null
+  },
+  "sdk_error": {
+    "type": "APIError",
+    "code": "upstream_stream_interrupted",
+    "message": "Upstream inference stream ended before completion"
+  },
+  "cuda_probe_exit": 0,
+  "generation": {
+    "cache_discount": null,
+    "created_at": "2026-09-10T12:20:17.693758453Z",
+    "finish_reason": null,
+    "generation_time": 2476,
+    "gpu": "RTX5090",
+    "id": "gen-6e3dfe890bda4eef94cc",
+    "is_byok": false,
+    "latency": 173,
+    "locality": "codex-rtx5090",
+    "model": "qwen/qwen3-8b",
+    "native_tokens_cached": 0,
+    "native_tokens_completion": 156,
+    "native_tokens_prompt": 29,
+    "num_media_generation": 0,
+    "provider_name": "beam",
+    "status_code": 502,
+    "streamed": true,
+    "tokens_completion": 156,
+    "tokens_prompt": 29,
+    "total_cost": 0,
+    "usage": 0
+  }
+}

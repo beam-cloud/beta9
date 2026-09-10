@@ -1,0 +1,259 @@
+{
+  "ok": true,
+  "cases": [
+    {
+      "request": {
+        "reasoning": {
+          "enabled": false
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "finish_reason": "stop",
+            "index": 0,
+            "logprobs": null,
+            "message": {
+              "annotations": null,
+              "audio": null,
+              "content": "56",
+              "function_call": null,
+              "reasoning": null,
+              "refusal": null,
+              "role": "assistant"
+            },
+            "routed_experts": null,
+            "stop_reason": null,
+            "token_ids": null
+          }
+        ],
+        "created": 1789040152,
+        "ec_transfer_params": null,
+        "id": "gen-5fe70f2f92df4bba84ba",
+        "kv_transfer_params": null,
+        "metrics": null,
+        "model": "qwen/qwen3-8b",
+        "object": "chat.completion",
+        "prompt_logprobs": null,
+        "prompt_text": null,
+        "prompt_token_ids": null,
+        "provider": "beam",
+        "service_tier": null,
+        "system_fingerprint": "vllm-0.1.dev50+g07cd3785f-9e095375",
+        "usage": {
+          "completion_tokens": 3,
+          "completion_tokens_details": {
+            "reasoning_tokens": 0
+          },
+          "cost": 4e-06,
+          "prompt_tokens": 26,
+          "prompt_tokens_details": null,
+          "total_tokens": 29
+        }
+      }
+    },
+    {
+      "request": {
+        "reasoning_effort": "none"
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "finish_reason": "stop",
+            "index": 0,
+            "logprobs": null,
+            "message": {
+              "annotations": null,
+              "audio": null,
+              "content": "56",
+              "function_call": null,
+              "reasoning": null,
+              "refusal": null,
+              "role": "assistant"
+            },
+            "routed_experts": null,
+            "stop_reason": null,
+            "token_ids": null
+          }
+        ],
+        "created": 1789040152,
+        "ec_transfer_params": null,
+        "id": "gen-e933504f6f9e46878f0d",
+        "kv_transfer_params": null,
+        "metrics": null,
+        "model": "qwen/qwen3-8b",
+        "object": "chat.completion",
+        "prompt_logprobs": null,
+        "prompt_text": null,
+        "prompt_token_ids": null,
+        "provider": "beam",
+        "service_tier": null,
+        "system_fingerprint": "vllm-0.1.dev50+g07cd3785f-9e095375",
+        "usage": {
+          "completion_tokens": 3,
+          "completion_tokens_details": {
+            "reasoning_tokens": 0
+          },
+          "cost": 4e-06,
+          "prompt_tokens": 26,
+          "prompt_tokens_details": null,
+          "total_tokens": 29
+        }
+      }
+    },
+    {
+      "request": {
+        "reasoning": {
+          "enabled": true
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "finish_reason": "length",
+            "index": 0,
+            "logprobs": null,
+            "message": {
+              "annotations": null,
+              "audio": null,
+              "content": null,
+              "function_call": null,
+              "reasoning": "\nOkay, let's see. The user is asking for 7 times 8. Hmm, I need to calculate that. Let me think. 7 multiplied by 8. I remember that 7 times 8 is one of those basic multiplication facts. Wait, is it 56? Let me double-check. 7 times 7 is 49, so adding another 7 would be 49 + 7 = 56. Yeah, that makes sense. Or maybe I can think of it as 8 times 7. 8 times 5 is 40, and 8",
+              "refusal": null,
+              "role": "assistant"
+            },
+            "routed_experts": null,
+            "stop_reason": null,
+            "token_ids": null
+          }
+        ],
+        "created": 1789040153,
+        "ec_transfer_params": null,
+        "id": "gen-8bddc03f886f44849106",
+        "kv_transfer_params": null,
+        "metrics": null,
+        "model": "qwen/qwen3-8b",
+        "object": "chat.completion",
+        "prompt_logprobs": null,
+        "prompt_text": null,
+        "prompt_token_ids": null,
+        "provider": "beam",
+        "service_tier": null,
+        "system_fingerprint": "vllm-0.1.dev50+g07cd3785f-9e095375",
+        "usage": {
+          "completion_tokens": 128,
+          "completion_tokens_details": {
+            "reasoning_tokens": 127
+          },
+          "cost": 4.1e-05,
+          "prompt_tokens": 22,
+          "prompt_tokens_details": null,
+          "total_tokens": 150
+        }
+      }
+    },
+    {
+      "request": {
+        "reasoning": {
+          "effort": "low"
+        }
+      },
+      "status": 200,
+      "response": {
+        "choices": [
+          {
+            "finish_reason": "length",
+            "index": 0,
+            "logprobs": null,
+            "message": {
+              "annotations": null,
+              "audio": null,
+              "content": null,
+              "function_call": null,
+              "reasoning": "\nOkay, let's see. The user is asking for 7 times 8. Hmm, I need to calculate that. Let me think. 7 multiplied by 8. I remember that 7 times 8 is one of those basic multiplication facts. Wait, is it 56? Let me double-check. 7 times 7 is 49, so adding another 7 would be 49 + 7 = 56. Yeah, that makes sense. Or maybe I can think of it as 8 times 7. 8 times 5 is 40, and 8",
+              "refusal": null,
+              "role": "assistant"
+            },
+            "routed_experts": null,
+            "stop_reason": null,
+            "token_ids": null
+          }
+        ],
+        "created": 1789040154,
+        "ec_transfer_params": null,
+        "id": "gen-829899f07f884eb79f61",
+        "kv_transfer_params": null,
+        "metrics": null,
+        "model": "qwen/qwen3-8b",
+        "object": "chat.completion",
+        "prompt_logprobs": null,
+        "prompt_text": null,
+        "prompt_token_ids": null,
+        "provider": "beam",
+        "service_tier": null,
+        "system_fingerprint": "vllm-0.1.dev50+g07cd3785f-9e095375",
+        "usage": {
+          "completion_tokens": 128,
+          "completion_tokens_details": {
+            "reasoning_tokens": 127
+          },
+          "cost": 4.1e-05,
+          "prompt_tokens": 22,
+          "prompt_tokens_details": null,
+          "total_tokens": 150
+        }
+      }
+    },
+    {
+      "request": {
+        "reasoning": {
+          "max_tokens": 32
+        }
+      },
+      "status": 400,
+      "response": {
+        "error": {
+          "code": "invalid_reasoning",
+          "message": "reasoning.max_tokens is not supported; use reasoning.effort or reasoning.enabled",
+          "type": "invalid_request_error"
+        }
+      }
+    },
+    {
+      "request": {
+        "reasoning": {
+          "exclude": true
+        }
+      },
+      "status": 400,
+      "response": {
+        "error": {
+          "code": "invalid_reasoning",
+          "message": "reasoning.exclude=true is not supported",
+          "type": "invalid_request_error"
+        }
+      }
+    },
+    {
+      "request": {
+        "reasoning": {
+          "enabled": false
+        },
+        "reasoning_effort": "high"
+      },
+      "status": 400,
+      "response": {
+        "error": {
+          "code": "invalid_reasoning",
+          "message": "reasoning conflicts with reasoning_effort",
+          "type": "invalid_request_error"
+        }
+      }
+    }
+  ],
+  "zero_admin_inference_status": 200,
+  "admin_admission_note": "Cluster-admin token intentionally bypasses customer inference admission; the separate platform proof checks the actual credit balance and scheduler enforcement."
+}

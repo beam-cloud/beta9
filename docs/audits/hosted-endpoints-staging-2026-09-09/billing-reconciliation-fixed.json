@@ -1,0 +1,114 @@
+{
+  "ok": true,
+  "before": {
+    "enabled": true,
+    "workspace_id": "92b5f182-c0fb-4589-8ede-729a023182b1",
+    "meter_query_ms": 114.42128755152225,
+    "endpoint_cost_cents": "0.0254",
+    "ledger_credits_cents": "2499",
+    "live_request_credits_cents": "2498.9746",
+    "records": [
+      {
+        "stub_id": "28a5e4c0-4659-58b8-ac9b-50d006b4c638",
+        "stub_type": "managed_endpoint",
+        "name": "qwen/qwen3-8b",
+        "cost": "0.0000"
+      }
+    ]
+  },
+  "after": {
+    "enabled": true,
+    "workspace_id": "92b5f182-c0fb-4589-8ede-729a023182b1",
+    "meter_query_ms": 125.84168184548616,
+    "endpoint_cost_cents": "0.0278",
+    "ledger_credits_cents": "2499",
+    "live_request_credits_cents": "2498.9722",
+    "records": [
+      {
+        "stub_id": "28a5e4c0-4659-58b8-ac9b-50d006b4c638",
+        "stub_type": "managed_endpoint",
+        "name": "qwen/qwen3-8b",
+        "cost": "0.0000"
+      }
+    ]
+  },
+  "request": {
+    "request_id": "gen-99209868cb544d4c8309",
+    "usage": {
+      "completion_tokens": 74,
+      "completion_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "cost": 2.4e-05,
+      "prompt_tokens": 22,
+      "prompt_tokens_details": null,
+      "total_tokens": 96
+    },
+    "expected_micro_usd": 24,
+    "expected_cost_cents": "0.0024",
+    "elapsed_ms": 1932.1412920253351,
+    "response": {
+      "choices": [
+        {
+          "finish_reason": "stop",
+          "index": 0,
+          "logprobs": null,
+          "message": {
+            "annotations": null,
+            "audio": null,
+            "content": "Rainbows form when sunlight is refracted, or bent, as it enters a water droplet. The light is then reflected inside the droplet and refracted again as it exits, separating into different colors due to varying wavelengths. This dispersion of light creates the spectrum of colors seen in a rainbow, with red on the outer edge and violet on the inner edge.",
+            "function_call": null,
+            "reasoning": null,
+            "refusal": null,
+            "role": "assistant"
+          },
+          "routed_experts": null,
+          "stop_reason": null,
+          "token_ids": null
+        }
+      ],
+      "created": 1789037331,
+      "ec_transfer_params": null,
+      "id": "gen-99209868cb544d4c8309",
+      "kv_transfer_params": null,
+      "metrics": null,
+      "model": "qwen/qwen3-8b",
+      "object": "chat.completion",
+      "prompt_logprobs": null,
+      "prompt_text": null,
+      "prompt_token_ids": null,
+      "provider": "beam",
+      "service_tier": null,
+      "system_fingerprint": "vllm-0.1.dev50+g07cd3785f-9e095375",
+      "usage": {
+        "completion_tokens": 74,
+        "completion_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "cost": 2.4e-05,
+        "prompt_tokens": 22,
+        "prompt_tokens_details": null,
+        "total_tokens": 96
+      }
+    }
+  },
+  "meter_delta_cents": "0.0024",
+  "ledger": {
+    "ok": true,
+    "meter_cost_cents": "0.0278",
+    "debit_observed_inside_transaction_cents": 1,
+    "replay_did_not_debit_twice": true,
+    "rows": [
+      {
+        "workspace_id": "92b5f182-c0fb-4589-8ede-729a023182b1",
+        "stub_name": "qwen/qwen3-8b",
+        "total_cost": "0E-10",
+        "total_cost_credited": "0.0278000000"
+      }
+    ],
+    "transaction_rolled_back": true,
+    "original_balance_restored": true,
+    "current_day_receipt_absent": true
+  },
+  "settlement_note": "Live credit gate includes the metered cost. Daily writes and replay were tested in staging Postgres inside a rolled-back transaction; regular settlement remains scheduled for the closed UTC day."
+}

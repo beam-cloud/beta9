@@ -1,0 +1,11 @@
+{
+  "ok": true,
+  "previous_aws_version": "35cb968e-03b7-48b5-aeb9-4662275af04a",
+  "aws_version": "0c73f9be-103b-4359-9904-58bafba5ff2d",
+  "sha256": "b5a4e3e89aa6bf6a8c1fc69c1009d689b6e8805035de7f746b51c5bfb1ae83f6",
+  "branch": "staging",
+  "legacy_ref_absent": true,
+  "worker_tag": "codex-hosted-catalog-sdk-20260910",
+  "deployer_secrets_empty": true,
+  "deploy_key_unchanged": true
+}

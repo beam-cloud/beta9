@@ -1,0 +1,176 @@
+[
+  {
+    "unix_time": 1789042399.206262,
+    "elapsed_seconds": 0.18312907218933105,
+    "desired_version": 11,
+    "protected": true,
+    "rollout": "replace",
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-d51612b4",
+        "version": 9,
+        "status": "stopped",
+        "container_id": "managed-86c61fe8-6bc3-446a-88a9-bfa90ce6ef96-7baa20a9",
+        "status_reason": "version 9 retired (making room for version 10)",
+        "started_at_unix_ms": "1789040556140"
+      },
+      {
+        "id": "qwen-qwen3-8b-e6859c0c",
+        "version": 11,
+        "status": "ready",
+        "container_id": "managed-8f40d35f-e677-486b-8246-5fb6d89d778f-da00fe62",
+        "status_reason": "",
+        "started_at_unix_ms": "1789041738294"
+      }
+    ]
+  },
+  {
+    "unix_time": 1789042407.767759,
+    "elapsed_seconds": 8.744626760482788,
+    "desired_version": 12,
+    "protected": false,
+    "rollout": "replace",
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-d51612b4",
+        "version": 9,
+        "status": "stopped",
+        "container_id": "managed-86c61fe8-6bc3-446a-88a9-bfa90ce6ef96-7baa20a9",
+        "status_reason": "version 9 retired (making room for version 10)",
+        "started_at_unix_ms": "1789040556140"
+      },
+      {
+        "id": "qwen-qwen3-8b-e6859c0c",
+        "version": 11,
+        "status": "ready",
+        "container_id": "managed-8f40d35f-e677-486b-8246-5fb6d89d778f-da00fe62",
+        "status_reason": "",
+        "started_at_unix_ms": "1789041738294"
+      }
+    ]
+  },
+  {
+    "unix_time": 1789042416.243702,
+    "elapsed_seconds": 17.220568895339966,
+    "desired_version": 12,
+    "protected": false,
+    "rollout": "replace",
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-d51612b4",
+        "version": 9,
+        "status": "stopped",
+        "container_id": "managed-86c61fe8-6bc3-446a-88a9-bfa90ce6ef96-7baa20a9",
+        "status_reason": "version 9 retired (making room for version 10)",
+        "started_at_unix_ms": "1789040556140"
+      },
+      {
+        "id": "qwen-qwen3-8b-e6859c0c",
+        "version": 11,
+        "status": "stopped",
+        "container_id": "managed-8f40d35f-e677-486b-8246-5fb6d89d778f-da00fe62",
+        "status_reason": "version 11 retired (making room for version 12)",
+        "started_at_unix_ms": "1789041738294"
+      }
+    ]
+  },
+  {
+    "unix_time": 1789042427.096104,
+    "elapsed_seconds": 28.0729718208313,
+    "desired_version": 12,
+    "protected": false,
+    "rollout": "replace",
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-93608aa9",
+        "version": 12,
+        "status": "scheduling",
+        "container_id": "managed-410fe666-5080-4955-aaa2-86101e88874d-66d1b7c1",
+        "status_reason": "",
+        "started_at_unix_ms": "1789042433325"
+      },
+      {
+        "id": "qwen-qwen3-8b-d51612b4",
+        "version": 9,
+        "status": "stopped",
+        "container_id": "managed-86c61fe8-6bc3-446a-88a9-bfa90ce6ef96-7baa20a9",
+        "status_reason": "version 9 retired (making room for version 10)",
+        "started_at_unix_ms": "1789040556140"
+      },
+      {
+        "id": "qwen-qwen3-8b-e6859c0c",
+        "version": 11,
+        "status": "stopped",
+        "container_id": "managed-8f40d35f-e677-486b-8246-5fb6d89d778f-da00fe62",
+        "status_reason": "version 11 retired (making room for version 12)",
+        "started_at_unix_ms": "1789041738294"
+      }
+    ]
+  },
+  {
+    "unix_time": 1789042435.96477,
+    "elapsed_seconds": 36.94163703918457,
+    "desired_version": 12,
+    "protected": false,
+    "rollout": "replace",
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-93608aa9",
+        "version": 12,
+        "status": "loading",
+        "container_id": "managed-410fe666-5080-4955-aaa2-86101e88874d-66d1b7c1",
+        "status_reason": "",
+        "started_at_unix_ms": "1789042433325"
+      },
+      {
+        "id": "qwen-qwen3-8b-d51612b4",
+        "version": 9,
+        "status": "stopped",
+        "container_id": "managed-86c61fe8-6bc3-446a-88a9-bfa90ce6ef96-7baa20a9",
+        "status_reason": "version 9 retired (making room for version 10)",
+        "started_at_unix_ms": "1789040556140"
+      },
+      {
+        "id": "qwen-qwen3-8b-e6859c0c",
+        "version": 11,
+        "status": "stopped",
+        "container_id": "managed-8f40d35f-e677-486b-8246-5fb6d89d778f-da00fe62",
+        "status_reason": "version 11 retired (making room for version 12)",
+        "started_at_unix_ms": "1789041738294"
+      }
+    ]
+  },
+  {
+    "unix_time": 1789042712.272156,
+    "elapsed_seconds": 313.24902391433716,
+    "desired_version": 12,
+    "protected": false,
+    "rollout": "replace",
+    "replicas": [
+      {
+        "id": "qwen-qwen3-8b-93608aa9",
+        "version": 12,
+        "status": "ready",
+        "container_id": "managed-410fe666-5080-4955-aaa2-86101e88874d-66d1b7c1",
+        "status_reason": "",
+        "started_at_unix_ms": "1789042433325"
+      },
+      {
+        "id": "qwen-qwen3-8b-d51612b4",
+        "version": 9,
+        "status": "stopped",
+        "container_id": "managed-86c61fe8-6bc3-446a-88a9-bfa90ce6ef96-7baa20a9",
+        "status_reason": "version 9 retired (making room for version 10)",
+        "started_at_unix_ms": "1789040556140"
+      },
+      {
+        "id": "qwen-qwen3-8b-e6859c0c",
+        "version": 11,
+        "status": "stopped",
+        "container_id": "managed-8f40d35f-e677-486b-8246-5fb6d89d778f-da00fe62",
+        "status_reason": "version 11 retired (making room for version 12)",
+        "started_at_unix_ms": "1789041738294"
+      }
+    ]
+  }
+]
