@@ -105,7 +105,10 @@ The affected Go suites and focused race tests passed, along with ten Python
 GitOps tests and full [backend CI](https://github.com/beam-cloud/beta9/actions/runs/34512393078).
 Hot reload preserved both ready v16 containers; its first public
 verification request timed out during the gateway swap, and subsequent checks
-succeeded. No gateway or model image was rebuilt for these fixes.
+succeeded. That is a failed availability check, not an uninterrupted handoff.
+The [gateway reliability investigation](GATEWAY-RELIABILITY.md) identifies the
+forced-shutdown bug and remaining deployment risks. No gateway or model image
+was rebuilt for these fixes.
 
 The live deletion regression then passed: adding a disabled private donor at
 `6bf6c35f` and deleting it at `4fd05e12` preserved Qwen v16, its stub, both ready

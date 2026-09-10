@@ -1,6 +1,6 @@
 # Hosted endpoints: staging fixes and validation
 
-Updated September 10, 2026. Branch selection, the simplified catalog, agent tuning, realtime token charges, gateway-outage recovery, protected minimums, and on-demand hosted models have live staging evidence. Qwen version 16 runs with one protected minimum and one preemptible extra on two RTX 5090s. On-demand validation also exposed an unrelated-model redeploy during endpoint deletion; its cause and correction are documented in [the on-demand report](SERVERLESS.md). **The strict zero-impact serverless cold-start requirement is still not met when a GPU must be reclaimed.**
+Updated September 10, 2026. Branch selection, the simplified catalog, agent tuning, realtime token charges, gateway-outage recovery, protected minimums, and on-demand hosted models have live staging evidence. Qwen version 16 runs with one protected minimum and one preemptible extra on two RTX 5090s. On-demand validation also exposed an unrelated-model redeploy during endpoint deletion; its cause and correction are documented in [the on-demand report](SERVERLESS.md). **The strict zero-impact serverless cold-start requirement is still not met when a GPU must be reclaimed. Gateway replacements also lack uninterrupted-request validation; the observed swap timeout is a failed availability check.**
 
 A real Qwen3-8B runs in the staging `codex-rtx5090` pool through repository GitOps, a custom worker, and an Okteto gateway. The implementation now uses the existing credit ledger, explicit model rollout policy, cancellable worker rollouts, and a lightweight agent client. Live validation found and fixed additional gaps that unit tests alone missed. The earlier audit remains available in commit `db21e959`.
 
@@ -169,3 +169,13 @@ metadata after attachment. Both replicas survived the Okteto reload, and fresh,
 cached, and streaming buyer requests reconciled all token charges exactly.
 Production admin storage migration is delegated separately and is not yet complete.
 See [storage ownership, safeguard, and evidence](WORKSPACE-STORAGE.md).
+
+## Gateway replacement reliability
+
+The fast retry after a swap demonstrated recovery only. Investigation confirmed
+a ten-second forced-kill bug in the Okteto helper and one public staging gateway
+without pod readiness probes. The helper shutdown allowance is corrected in
+source; overlapping traffic and live rollout validation remain outstanding.
+Production has three replicas, but its load-balancer connection termination,
+drain duration, and missing target-health readiness gates also need attention.
+No production routing changes were made. See [findings and validation boundaries](GATEWAY-RELIABILITY.md).

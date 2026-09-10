@@ -8,7 +8,9 @@ bootstrap_binary=${HOSTED_DEV_BOOTSTRAP_BINARY:-/usr/local/bin/gateway}
 bootstrap_config=${HOSTED_DEV_BOOTSTRAP_CONFIG:-/var/tmp/beta9-hosted-dev/bootstrap.yaml}
 health_url=${HOSTED_DEV_HEALTH_URL:-http://127.0.0.1:1994/api/v1/health}
 retry_seconds=${HOSTED_DEV_RETRY_SECONDS:-15}
+shutdown_seconds=${HOSTED_DEV_SHUTDOWN_SECONDS:-195}
 [[ "$retry_seconds" =~ ^[1-9][0-9]*$ ]] || { echo 'HOSTED_DEV_RETRY_SECONDS must be a positive integer.'; exit 1; }
+[[ "$shutdown_seconds" =~ ^[1-9][0-9]*$ ]] || { echo 'HOSTED_DEV_SHUTDOWN_SECONDS must be a positive integer.'; exit 1; }
 mkdir -p "$runtime_dir"
 # Detaching the local terminal must not stop source reload or the gateway.
 trap '' HUP
@@ -54,12 +56,14 @@ start_gateway() {
 stop_gateway() {
     if alive; then
         kill -TERM "$gateway_pid" 2>/dev/null || ! alive
-        for ((attempt = 0; attempt < 100; attempt++)); do
-            alive || break
+        # Match the pod's drain budget: 10 seconds of readiness propagation,
+        # up to 180 seconds for active HTTP requests, and a small buffer.
+        local deadline=$((SECONDS + shutdown_seconds))
+        while alive && (( SECONDS < deadline )); do
             sleep 0.1
         done
         if alive; then
-            log 'Graceful shutdown exceeded 10 seconds; stopping the old gateway.'
+            log "Graceful shutdown exceeded $shutdown_seconds seconds; stopping the old gateway."
             kill -KILL "$gateway_pid" 2>/dev/null || ! alive
         fi
     fi

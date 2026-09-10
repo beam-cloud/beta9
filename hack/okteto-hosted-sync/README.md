@@ -72,3 +72,17 @@ The existing gateway continues serving while caches warm or builds fail. A
 successful binary replacement still briefly restarts the gateway process; it
 does not restart model containers or the Kubernetes pod. Controller recovery
 must preserve those model containers across this interruption.
+
+The watcher allows 195 seconds for shutdown, matching the gateway pod's normal
+10-second readiness propagation, 180-second request drain, and five-second
+buffer. `HOSTED_DEV_SHUTDOWN_SECONDS` overrides that budget when the gateway's
+shutdown configuration changes. A shorter budget can kill active requests before
+the gateway finishes draining.
+
+This single-gateway Okteto workflow does not provide uninterrupted API access
+during replacement. Model containers remaining ready and a successful retry do
+not prove request continuity. Availability testing requires another compatible,
+ready gateway behind the same service, functioning readiness probes, and traffic
+checks throughout the replacement, including existing streams. Okteto disables
+the original gateway's replicas and may remove the development pod's probes, so
+verify the actual service targets before using a reload as a rollout test.
