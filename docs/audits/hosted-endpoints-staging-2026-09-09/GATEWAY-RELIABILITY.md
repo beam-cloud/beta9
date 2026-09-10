@@ -67,3 +67,6 @@ and load-balancer draining, and a test covering sustained new requests plus
 existing streams through the entire replacement. Every timeout/reset/non-2xx
 must count as a failure; a successful retry cannot erase it. Model/container
 continuity and billing correctness should be checked separately.
+
+Sanitized [live infrastructure evidence](gateway-swap-reliability.json) records
+actual deployment, service, target-group, and watcher settings.

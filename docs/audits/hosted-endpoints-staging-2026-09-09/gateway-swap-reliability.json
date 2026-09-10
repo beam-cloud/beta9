@@ -1,0 +1,315 @@
+{
+  "recorded_at": "2026-09-10T19:02:12.905301+00:00",
+  "sources": [
+    "Read-only kubectl Deployment/Service/Pod/EndpointSlice/TargetGroupBinding inspection in exact stage/prod EKS contexts",
+    "Read-only AWS ELBv2 describe-target-groups, describe-target-health and describe-target-group-attributes under beam-engineering-stage and beam-engineering-prod profiles",
+    "Read-only staging /proc and hosted-dev runtime marker inspection"
+  ],
+  "mutations_performed": false,
+  "staging": {
+    "normal_deployment": {
+      "name": "beta9-gateway",
+      "replicas": 0,
+      "strategy": {
+        "type": "RollingUpdate",
+        "maxSurge": "50%",
+        "maxUnavailable": "50%"
+      },
+      "terminationGracePeriodSeconds": 195,
+      "readinessProbe": {
+        "grpc": {
+          "port": 1993,
+          "service": "readiness"
+        },
+        "initialDelaySeconds": 5,
+        "periodSeconds": 3,
+        "timeoutSeconds": 1,
+        "failureThreshold": 2,
+        "successThreshold": 2
+      }
+    },
+    "active_deployment": {
+      "name": "beta9-gateway-okteto",
+      "replicas": 1,
+      "readyReplicas": 1,
+      "strategy": {
+        "type": "Recreate"
+      },
+      "terminationGracePeriodSeconds": 0,
+      "readinessProbe": null,
+      "livenessProbe": null,
+      "startupProbe": null,
+      "resources": {},
+      "aws_target_health_readiness_gates": []
+    },
+    "pod": {
+      "name": "beta9-gateway-okteto-54d9bbdfdd-7868d",
+      "ready": true,
+      "ready_since": "2026-09-10T15:03:43Z",
+      "restartCount": 0,
+      "zone": "us-east-1a"
+    },
+    "endpoint_slice": {
+      "count": 1,
+      "ready": true,
+      "serving": true,
+      "terminating": false
+    },
+    "http_service": {
+      "name": "beta9-gateway-proxy",
+      "type": "LoadBalancer",
+      "selector": {
+        "app.kubernetes.io/component": "gateway",
+        "app.kubernetes.io/instance": "beta9",
+        "app.kubernetes.io/name": "beta9"
+      },
+      "port": 443,
+      "targetPort": 1994,
+      "externalTrafficPolicy": "Cluster",
+      "publishNotReadyAddresses": false,
+      "annotations": {
+        "service.beta.kubernetes.io/aws-load-balancer-backend-protocol": "tcp",
+        "service.beta.kubernetes.io/aws-load-balancer-healthcheck-healthy-threshold": "2",
+        "service.beta.kubernetes.io/aws-load-balancer-healthcheck-interval": "5",
+        "service.beta.kubernetes.io/aws-load-balancer-healthcheck-path": "/api/v1/health",
+        "service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol": "http",
+        "service.beta.kubernetes.io/aws-load-balancer-healthcheck-timeout": "3",
+        "service.beta.kubernetes.io/aws-load-balancer-healthcheck-unhealthy-threshold": "2",
+        "service.beta.kubernetes.io/aws-load-balancer-ip-address-type": "dualstack",
+        "service.beta.kubernetes.io/aws-load-balancer-name": "lb02",
+        "service.beta.kubernetes.io/aws-load-balancer-nlb-target-type": "ip",
+        "service.beta.kubernetes.io/aws-load-balancer-scheme": "internet-facing",
+        "service.beta.kubernetes.io/aws-load-balancer-ssl-negotiation-policy": "ELBSecurityPolicy-TLS13-1-2-2021-06",
+        "service.beta.kubernetes.io/aws-load-balancer-target-group-attributes": "preserve_client_ip.enabled=true,load_balancing.cross_zone.enabled=true,deregistration_delay.connection_termination.enabled=true,deregistration_delay.timeout_seconds=30",
+        "service.beta.kubernetes.io/aws-load-balancer-type": "external"
+      }
+    },
+    "target_group": {
+      "arn": "arn:aws:elasticloadbalancing:us-east-1:683656326989:targetgroup/k8s-beta9-beta9gat-dddcbe6b77/ed94e735a0187a58",
+      "healthy_targets": 1,
+      "health_configuration": {
+        "Protocol": "TCP",
+        "Port": 1994,
+        "TargetType": "ip",
+        "HealthCheckProtocol": "HTTP",
+        "HealthCheckPort": "traffic-port",
+        "HealthCheckIntervalSeconds": 5,
+        "HealthCheckTimeoutSeconds": 3,
+        "HealthyThresholdCount": 2,
+        "UnhealthyThresholdCount": 2,
+        "HealthCheckPath": "/api/v1/health"
+      },
+      "attributes": {
+        "target_group_health.unhealthy_state_routing.minimum_healthy_targets.percentage": "off",
+        "deregistration_delay.timeout_seconds": "30",
+        "stickiness.type": "source_ip",
+        "target_health_state.unhealthy.draining_interval_seconds": "0",
+        "target_group_health.dns_failover.minimum_healthy_targets.percentage": "off",
+        "load_balancing.cross_zone.enabled": "true",
+        "target_group_health.unhealthy_state_routing.minimum_healthy_targets.count": "1",
+        "stickiness.enabled": "false",
+        "target_group_health.dns_failover.minimum_healthy_targets.count": "1",
+        "target_health_state.unhealthy.connection_termination.enabled": "true",
+        "deregistration_delay.connection_termination.enabled": "true"
+      }
+    },
+    "supervisor": {
+      "pid": 54973,
+      "parent_pid": 125,
+      "state": "sleeping",
+      "reload_lock_held": true,
+      "gateway_pid": 116873,
+      "gateway_parent_pid": 54973,
+      "gateway_binary": "/var/tmp/beta9-hosted-dev/gateway.29174abbdcfeeb41263f39d3b499b1e9dee31bae484483d8ca7f523e6686c74d",
+      "source_fingerprint": "29174abbdcfeeb41263f39d3b499b1e9dee31bae484483d8ca7f523e6686c74d",
+      "gateway_inherited_reload_lock": false,
+      "build_hold": false,
+      "watcher_ignores_hup": true,
+      "gateway_ignores_hup": true,
+      "active_watcher_count": 1,
+      "updated_195_second_helper_activated": false,
+      "activation_note": "Root is leaving the current watcher alive to preserve its Okteto command/source-sync session. Updated helper takes effect on the next controlled supervisor/session activation."
+    }
+  },
+  "production": {
+    "deployment": {
+      "name": "beta9-gateway",
+      "image": "public.ecr.aws/n4e0e1y0/beta9-gateway:0.1.772",
+      "replicas": 3,
+      "readyReplicas": 3,
+      "availableReplicas": 3,
+      "strategy": {
+        "type": "RollingUpdate",
+        "maxSurge": "50%",
+        "maxUnavailable": "50%"
+      },
+      "effective_max_surge_at_three_replicas": 2,
+      "effective_max_unavailable_at_three_replicas": 1,
+      "minReadySeconds": 0,
+      "terminationGracePeriodSeconds": 195,
+      "readinessProbe": {
+        "grpc": {
+          "port": 1993,
+          "service": "readiness"
+        },
+        "initialDelaySeconds": 5,
+        "periodSeconds": 3,
+        "timeoutSeconds": 1,
+        "failureThreshold": 2,
+        "successThreshold": 2
+      },
+      "livenessProbe": {
+        "grpc": {
+          "port": 1993,
+          "service": "liveness"
+        },
+        "initialDelaySeconds": 10,
+        "periodSeconds": 3,
+        "timeoutSeconds": 1,
+        "failureThreshold": 10,
+        "successThreshold": 1
+      },
+      "startupProbe": {
+        "grpc": {
+          "port": 1993,
+          "service": "liveness"
+        },
+        "failureThreshold": 400,
+        "periodSeconds": 3,
+        "timeoutSeconds": 1,
+        "successThreshold": 1
+      },
+      "preStop": null,
+      "resources": {
+        "requests": {
+          "cpu": "4",
+          "memory": "4Gi"
+        }
+      },
+      "aws_target_health_readiness_gates": []
+    },
+    "pods": [
+      {
+        "name": "beta9-gateway-684fb74d9d-cqppc",
+        "zone": "us-east-1a",
+        "ready": true,
+        "restartCount": 0
+      },
+      {
+        "name": "beta9-gateway-684fb74d9d-9dtfm",
+        "zone": "us-east-1c",
+        "ready": true,
+        "restartCount": 0
+      },
+      {
+        "name": "beta9-gateway-684fb74d9d-bdhs4",
+        "zone": "us-east-1d",
+        "ready": true,
+        "restartCount": 0
+      }
+    ],
+    "spread": {
+      "zone_maxSkew": 1,
+      "zone_minDomains": 3,
+      "hostname_maxSkew": 1,
+      "whenUnsatisfiable": "DoNotSchedule"
+    },
+    "endpoint_slice": {
+      "count": 3,
+      "all_ready": true,
+      "all_serving": true,
+      "any_terminating": false
+    },
+    "http_service": {
+      "name": "beta9-gateway-proxy",
+      "type": "LoadBalancer",
+      "selector": {
+        "app.kubernetes.io/component": "gateway",
+        "app.kubernetes.io/instance": "beta9",
+        "app.kubernetes.io/name": "beta9"
+      },
+      "port": 443,
+      "targetPort": 1994,
+      "externalTrafficPolicy": "Cluster",
+      "publishNotReadyAddresses": false,
+      "annotations": {
+        "service.beta.kubernetes.io/aws-load-balancer-backend-protocol": "tcp",
+        "service.beta.kubernetes.io/aws-load-balancer-healthcheck-healthy-threshold": "2",
+        "service.beta.kubernetes.io/aws-load-balancer-healthcheck-interval": "5",
+        "service.beta.kubernetes.io/aws-load-balancer-healthcheck-path": "/api/v1/health",
+        "service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol": "http",
+        "service.beta.kubernetes.io/aws-load-balancer-healthcheck-timeout": "3",
+        "service.beta.kubernetes.io/aws-load-balancer-healthcheck-unhealthy-threshold": "2",
+        "service.beta.kubernetes.io/aws-load-balancer-ip-address-type": "dualstack",
+        "service.beta.kubernetes.io/aws-load-balancer-name": "lb02",
+        "service.beta.kubernetes.io/aws-load-balancer-nlb-target-type": "ip",
+        "service.beta.kubernetes.io/aws-load-balancer-scheme": "internet-facing",
+        "service.beta.kubernetes.io/aws-load-balancer-ssl-negotiation-policy": "ELBSecurityPolicy-TLS13-1-2-2021-06",
+        "service.beta.kubernetes.io/aws-load-balancer-target-group-attributes": "preserve_client_ip.enabled=true,load_balancing.cross_zone.enabled=true,deregistration_delay.connection_termination.enabled=true,deregistration_delay.timeout_seconds=30",
+        "service.beta.kubernetes.io/aws-load-balancer-type": "external"
+      }
+    },
+    "target_group": {
+      "arn": "arn:aws:elasticloadbalancing:us-east-1:187248174200:targetgroup/k8s-beta9-beta9gat-5dafdd836d/f51385b2941b9fb7",
+      "healthy_targets": 3,
+      "health_configuration": {
+        "Protocol": "TCP",
+        "Port": 1994,
+        "TargetType": "ip",
+        "HealthCheckProtocol": "HTTP",
+        "HealthCheckPort": "traffic-port",
+        "HealthCheckIntervalSeconds": 5,
+        "HealthCheckTimeoutSeconds": 3,
+        "HealthyThresholdCount": 2,
+        "UnhealthyThresholdCount": 2,
+        "HealthCheckPath": "/api/v1/health"
+      },
+      "attributes": {
+        "target_group_health.unhealthy_state_routing.minimum_healthy_targets.percentage": "off",
+        "deregistration_delay.timeout_seconds": "30",
+        "stickiness.type": "source_ip",
+        "target_health_state.unhealthy.draining_interval_seconds": "0",
+        "target_group_health.dns_failover.minimum_healthy_targets.percentage": "off",
+        "load_balancing.cross_zone.enabled": "true",
+        "target_group_health.unhealthy_state_routing.minimum_healthy_targets.count": "1",
+        "stickiness.enabled": "false",
+        "target_group_health.dns_failover.minimum_healthy_targets.count": "1",
+        "target_health_state.unhealthy.connection_termination.enabled": "true",
+        "deregistration_delay.connection_termination.enabled": "true"
+      }
+    }
+  },
+  "findings": [
+    {
+      "severity": "availability gap",
+      "scope": "staging Okteto",
+      "observed_configuration": true,
+      "detail": "A single selected pod runs the gateway as a replaceable child with no readiness probe. The pod stays Ready while its child stops/restarts. There is no second public target to serve during the listener gap."
+    },
+    {
+      "severity": "unverified normal deployment continuity",
+      "scope": "production",
+      "observed_configuration": true,
+      "detail": "Three ready targets and zone spreading provide redundancy, but Kubernetes readiness is not gated on AWS target health. New pods can satisfy rollout availability before NLB registration/health convergence. This is a configuration risk; no production failure was induced or observed."
+    },
+    {
+      "severity": "connection drain mismatch",
+      "scope": "staging and production",
+      "observed_configuration": true,
+      "detail": "Actual AWS target groups terminate connections immediately when a target becomes unhealthy (drain interval0), and after30s of deregistration. These settings can truncate established HTTP/SSE connections before the gateway180s request-drain budget expires."
+    },
+    {
+      "severity": "supervisor shutdown budget",
+      "scope": "staging Okteto",
+      "observed_configuration": true,
+      "detail": "Root traced the active old helper10s force-kill budget conflicting with gateway10s readiness propagation. A195s helper fix is prepared/tested locally but has not been activated in the existing watcher."
+    }
+  ],
+  "smallest_correct_staging_ha_workflow": [
+    "Add one temporary standby pod selected by the same gateway services, using the same already-built Linux gateway binary and existing runtime image/config; do not scale up the old packaged gateway binary against the new endpoint schema.",
+    "Enable working readiness probes and a195s pod termination grace. Wait for both Kubernetes readiness and actual AWS target health before touching either serving gateway.",
+    "Keep the standby on the known-good binary; update only one gateway at a time. Two watchers must not automatically reload the same source simultaneously.",
+    "Align staging NLB connection draining with the intended graceful request budget before claiming uninterrupted long requests. These load-balancer changes have not been applied or authorized by this review.",
+    "Validate the complete swap with continuous new HTTP requests and an established long request/SSE stream, recording errors and container identities. A retry succeeding afterward is not sufficient evidence of a gap-free reload."
+  ]
+}
