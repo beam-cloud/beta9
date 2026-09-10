@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"mime"
 	"mime/multipart"
 	"net/http"
@@ -232,21 +233,22 @@ var errRegistry = &routeError{http.StatusServiceUnavailable, "registry_unavailab
 
 // routeRequest is the state of one inference request through the pipeline.
 type routeRequest struct {
-	ctx        echo.Context
-	auth       *auth.AuthInfo
-	adapter    adapter
-	route      types.EndpointRoute
-	requestID  string
-	models     []string // requested, in preference order
-	model      string   // the endpoint selected (what the engine sees and what is billed)
-	body       []byte
-	stream     bool
-	info       *llmroute.RequestInfo
-	pinReplica string
-	startedAt  time.Time
-	queueWait  time.Duration
-	retried    bool
-	serverless bool
+	ctx           echo.Context
+	auth          *auth.AuthInfo
+	adapter       adapter
+	route         types.EndpointRoute
+	requestID     string
+	models        []string // requested, in preference order
+	model         string   // the endpoint selected (what the engine sees and what is billed)
+	body          []byte
+	stream        bool
+	info          *llmroute.RequestInfo
+	pinReplica    string
+	startedAt     time.Time
+	queueWait     time.Duration
+	retried       bool
+	serverless    bool
+	readyCapacity int64 // finite serving slots from the selected endpoint's routing snapshot
 }
 
 func (r *router) handleRoute(ctx echo.Context) error {
@@ -408,6 +410,7 @@ func multipartModel(boundary string, body []byte) string {
 // resolveEndpoint picks the first requested model the caller may use that
 // serves the route, preferring one with ready replicas.
 func (r *router) resolveEndpoint(ctx context.Context, rq *routeRequest) (*types.ManagedEndpoint, *routeError) {
+	rq.readyCapacity = 0
 	var first *types.ManagedEndpoint
 	var denied *routeError
 	for _, model := range rq.models {
@@ -433,6 +436,12 @@ func (r *router) resolveEndpoint(ctx context.Context, rq *routeRequest) (*types.
 			return nil, errRegistry
 		}
 		if len(replicas) > 0 {
+			for _, replica := range replicas {
+				// Zero means unbounded to routing, but cannot provide a
+				// finite admission budget. Keep its queue allowance bounded.
+				capacity := max(replica.Capacity.MaxConcurrency, 0)
+				rq.readyCapacity += min(capacity, math.MaxInt64-rq.readyCapacity)
+			}
 			return endpoint, nil
 		}
 	}

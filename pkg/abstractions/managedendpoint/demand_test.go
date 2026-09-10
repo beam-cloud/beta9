@@ -3,6 +3,7 @@ package managedendpoint
 import (
 	"context"
 	"fmt"
+	"math"
 	"testing"
 	"time"
 
@@ -23,28 +24,28 @@ func TestDemandLeasesAreIsolatedIdempotentAndExpiring(t *testing.T) {
 	now := time.Now()
 	redis.SetTime(now)
 	for _, id := range []string{"gateway-a/request-1", "gateway-a/request-1", "gateway-b/request-2"} {
-		_, err := s.demand(ctx, "model", "acquire", id)
+		_, err := s.demand(ctx, "model", "acquire", id, 0)
 		require.NoError(t, err)
 	}
-	d, err := s.demand(ctx, "model", "read", "")
+	d, err := s.demand(ctx, "model", "read", "", 0)
 	require.NoError(t, err)
 	assert.EqualValues(t, 2, d.active)
 	assert.True(t, d.warm)
 	redis.SetTime(now.Add(40 * time.Second))
-	_, err = s.demand(ctx, "model", "renew", "gateway-b/request-2")
+	_, err = s.demand(ctx, "model", "renew", "gateway-b/request-2", 0)
 	require.NoError(t, err)
 	redis.SetTime(now.Add(70 * time.Second))
-	d, err = s.demand(ctx, "model", "read", "")
+	d, err = s.demand(ctx, "model", "read", "", 0)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, d.active, "a crashed gateway's request expires despite traffic on another gateway")
-	_, err = s.demand(ctx, "model", "renew", "gateway-a/request-1")
+	_, err = s.demand(ctx, "model", "renew", "gateway-a/request-1", 0)
 	require.Error(t, err, "an expired owner must not resurrect itself")
-	d, err = s.demand(ctx, "model", "release", "gateway-b/request-2")
+	d, err = s.demand(ctx, "model", "release", "gateway-b/request-2", 0)
 	require.NoError(t, err)
 	assert.Zero(t, d.active)
 	assert.True(t, d.warm)
 	redis.SetTime(now.Add(70*time.Second + demandIdleTimeout + time.Second))
-	d, err = s.demand(ctx, "model", "release", "gateway-b/request-2")
+	d, err = s.demand(ctx, "model", "release", "gateway-b/request-2", 0)
 	require.NoError(t, err)
 	assert.False(t, d.warm, "duplicate release does not renew idle warmth")
 	assert.Zero(t, d.active)
@@ -53,18 +54,127 @@ func TestDemandLeasesAreIsolatedIdempotentAndExpiring(t *testing.T) {
 func TestDemandBoundsRequestsAcrossGateways(t *testing.T) {
 	s := newServiceForTest(t)
 	ctx := context.Background()
-	for i := range serverlessMaxRequests {
-		_, err := s.demand(ctx, "model", "acquire", fmt.Sprint(i))
+	for i := range serverlessMaxQueuedRequests {
+		_, err := s.demand(ctx, "model", "acquire", fmt.Sprint(i), 0)
 		require.NoError(t, err)
 	}
-	_, err := s.demand(ctx, "model", "acquire", "overflow")
+	_, err := s.demand(ctx, "model", "acquire", "overflow", 0)
 	require.ErrorIs(t, err, errDemandLimit)
-	_, err = s.demand(ctx, "model", "renew", "0")
+	_, err = s.demand(ctx, "model", "renew", "0", 0)
 	require.NoError(t, err, "the cap must not interrupt existing work")
-	_, err = s.demand(ctx, "model", "release", "0")
+	_, err = s.demand(ctx, "model", "release", "0", 0)
 	require.NoError(t, err)
-	_, err = s.demand(ctx, "model", "acquire", "overflow")
+	_, err = s.demand(ctx, "model", "acquire", "overflow", 0)
 	require.NoError(t, err)
+}
+
+func TestDemandQueueBudgetPreservesCapacityForScaleOut(t *testing.T) {
+	s := newFillService(t)
+	endpoint := seedEndpoint(t, s)
+	fleet := seedFleet(t, s, map[string]types.FleetEndpoint{endpoint.Spec.ID: {
+		Enabled: true, GPUs: map[string]types.FleetPlacement{"H100": {Priority: 1, Serverless: true, MaxReplicas: 2}},
+	}})
+	replica := versionReplica(t, s, "ready", endpoint.Version, types.ReplicaStatusReady)
+	replica.Address = "ready:8000"
+	replica.Capacity.MaxConcurrency = 128
+	ctx := context.Background()
+	require.NoError(t, s.repo.SaveReplica(ctx, replica))
+	for i := 0; i < 128; i++ {
+		_, err := s.demand(ctx, endpoint.Spec.ID, "acquire", fmt.Sprint(i), 128)
+		require.NoError(t, err)
+	}
+
+	// Reuse the normal routing snapshot instead of adding another registry
+	// lookup on admission. Request129 must reach the distributed demand set.
+	router := newRouter(s)
+	httpCtx, _ := coldRouteContext()
+	rq := &routeRequest{ctx: httpCtx, auth: httpCtx.AuthInfo, route: types.EndpointRouteChatCompletions, models: []string{endpoint.Spec.ID}, requestID: "request-129"}
+	resolved, rerr := router.resolveEndpoint(ctx, rq)
+	require.Nil(t, rerr)
+	require.NotNil(t, resolved)
+	assert.EqualValues(t, 128, rq.readyCapacity)
+	rq.model = resolved.Spec.ID
+	release, err := router.holdDemand(rq)
+	require.NoError(t, err, "a full128-slot engine must allow a request to ask for the next replica")
+	t.Cleanup(release)
+	live := []*types.EndpointReplica{replica}
+	demand := s.controller.readDemand(ctx, fleet, live)
+	assert.EqualValues(t, 129, demand[endpoint.Spec.ID].active)
+	assert.EqualValues(t, 128, demand[endpoint.Spec.ID].capacity)
+	s.controller.fillWithDemand(ctx, "H100", fleet.Entries("H100"), map[string]*types.ManagedEndpoint{endpoint.Spec.ID: endpoint}, live, idleInventory(1), demand)
+	requests, err := scheduler.NewRequestBacklog(s.rdb).PopN(10)
+	require.NoError(t, err)
+	require.Len(t, requests, 1, "queued demand scales out onto one spare GPU")
+	assert.True(t, requests[0].OpportunisticOnly)
+	assert.True(t, requests[0].Evictable)
+
+	// Capacity can disappear after admission without revoking live owners.
+	_, err = s.demand(ctx, endpoint.Spec.ID, "acquire", "after-eviction", 0)
+	require.ErrorIs(t, err, errDemandLimit)
+	_, err = s.demand(ctx, endpoint.Spec.ID, "renew", "request-129", 0)
+	require.NoError(t, err, "shrinking capacity must not cancel an admitted request")
+	_, err = s.demand(ctx, endpoint.Spec.ID, "release", "0", 0)
+	require.NoError(t, err)
+}
+
+func TestDemandLimitsOnlyQueueAllowanceBeyondReadyCapacity(t *testing.T) {
+	s := newServiceForTest(t)
+	ctx := context.Background()
+	const readyCapacity = 192
+	for i := 0; i < readyCapacity+serverlessMaxQueuedRequests; i++ {
+		_, err := s.demand(ctx, "model", "acquire", fmt.Sprint(i), readyCapacity)
+		require.NoError(t, err)
+	}
+	_, err := s.demand(ctx, "model", "acquire", "overflow", readyCapacity)
+	require.ErrorIs(t, err, errDemandLimit, "all gateways share one128-request waiting allowance")
+	_, err = s.demand(ctx, "model", "release", "0", 0)
+	require.NoError(t, err)
+	_, err = s.demand(ctx, "model", "acquire", "overflow", readyCapacity)
+	require.NoError(t, err)
+}
+
+func TestReadDemandUnlimitedCapacityDoesNotScaleOut(t *testing.T) {
+	s := newFillService(t)
+	endpoint := seedEndpoint(t, s)
+	fleet := seedFleet(t, s, map[string]types.FleetEndpoint{endpoint.Spec.ID: {
+		Enabled: true, GPUs: map[string]types.FleetPlacement{"H100": {Priority: 1, Serverless: true, MaxReplicas: 3}},
+	}})
+	unlimited := versionReplica(t, s, "unlimited", endpoint.Version, types.ReplicaStatusReady)
+	finite := versionReplica(t, s, "finite", endpoint.Version, types.ReplicaStatusReady)
+	finite.Capacity.MaxConcurrency = 128
+	ctx := context.Background()
+	for i := 0; i < 129; i++ {
+		_, err := s.demand(ctx, endpoint.Spec.ID, "acquire", fmt.Sprint(i), 128)
+		require.NoError(t, err)
+	}
+	live := []*types.EndpointReplica{unlimited, finite}
+	demand := s.controller.readDemand(ctx, fleet, live)
+	assert.EqualValues(t, math.MaxInt64, demand[endpoint.Spec.ID].capacity, "adding finite slots to unlimited capacity cannot overflow")
+	s.controller.fillWithDemand(ctx, "H100", fleet.Entries("H100"), map[string]*types.ManagedEndpoint{endpoint.Spec.ID: endpoint}, live, idleInventory(1), demand)
+	requests, _ := scheduler.NewRequestBacklog(s.rdb).PopN(10)
+	assert.Empty(t, requests, "a replica that routes unlimited work already covers the demand")
+}
+
+func TestDemandCapacityAdmissionDoesNotOverflow(t *testing.T) {
+	s := newServiceForTest(t)
+	endpoint := seedEndpoint(t, s)
+	ctx := context.Background()
+	for _, id := range []string{"large-one", "large-two"} {
+		replica := versionReplica(t, s, id, endpoint.Version, types.ReplicaStatusReady)
+		replica.Address = id + ":8000"
+		replica.Capacity.MaxConcurrency = math.MaxInt64
+		require.NoError(t, s.repo.SaveReplica(ctx, replica))
+	}
+	router := newRouter(s)
+	httpCtx, _ := coldRouteContext()
+	rq := &routeRequest{ctx: httpCtx, auth: httpCtx.AuthInfo, route: types.EndpointRouteChatCompletions, models: []string{endpoint.Spec.ID}, requestID: "request"}
+	resolved, rerr := router.resolveEndpoint(ctx, rq)
+	require.Nil(t, rerr)
+	rq.model = resolved.Spec.ID
+	assert.EqualValues(t, math.MaxInt64, rq.readyCapacity)
+	release, err := router.holdDemand(rq)
+	require.NoError(t, err, "adding queue allowance cannot wrap a large capacity into a negative limit")
+	release()
 }
 
 func TestServerlessConfigValidation(t *testing.T) {
@@ -171,7 +281,7 @@ func TestServerlessRolloutStartsReplacementOnSpareCapacity(t *testing.T) {
 	old.Capacity.MaxConcurrency = 64
 	fleet := seedFleet(t, s, map[string]types.FleetEndpoint{endpoint.Spec.ID: {Enabled: true, GPUs: map[string]types.FleetPlacement{"H100": {Priority: 1, Serverless: true, MaxReplicas: 1}}}})
 	ctx := context.Background()
-	_, err := s.demand(ctx, endpoint.Spec.ID, "acquire", "request")
+	_, err := s.demand(ctx, endpoint.Spec.ID, "acquire", "request", 0)
 	require.NoError(t, err)
 	live := []*types.EndpointReplica{old}
 	demand := s.controller.readDemand(ctx, fleet, live)

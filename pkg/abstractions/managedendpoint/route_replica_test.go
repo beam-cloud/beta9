@@ -89,7 +89,7 @@ func TestOnDemandRouteWaitsForFirstReplica(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- r.handleRoute(ctx) }()
 	require.Eventually(t, func() bool {
-		demand, err := s.demand(context.Background(), endpoint.Spec.ID, "read", "")
+		demand, err := s.demand(context.Background(), endpoint.Spec.ID, "read", "", 0)
 		return err == nil && demand.active == 1
 	}, time.Second, 5*time.Millisecond, "an admitted cold request registers demand before a replica exists")
 	// The warm queue timeout has elapsed, but a cold request is still waiting.
@@ -114,7 +114,7 @@ func TestOnDemandRouteWaitsForFirstReplica(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), `"content":"hello"`)
 	assert.Contains(t, rec.Body.String(), `"id":"gen-`)
 	assert.Equal(t, replica.ID, rec.Header().Get(headerReplicaServed))
-	demand, err := s.demand(context.Background(), endpoint.Spec.ID, "read", "")
+	demand, err := s.demand(context.Background(), endpoint.Spec.ID, "read", "", 0)
 	require.NoError(t, err)
 	assert.Zero(t, demand.active, "completion releases the request lease")
 	assert.LessOrEqual(t, repo.reads.Load(), int64(4), "cold wait does not poll Redis at the warm ten-per-second rate")
@@ -158,8 +158,8 @@ func TestOnDemandRouteSharedLimitReturns429(t *testing.T) {
 	seedFleet(t, s, map[string]types.FleetEndpoint{endpoint.Spec.ID: {
 		Enabled: true, GPUs: map[string]types.FleetPlacement{"H100": {Priority: 1, MaxReplicas: 1, Serverless: true}},
 	}})
-	for i := 0; i < serverlessMaxRequests; i++ {
-		_, err := s.demand(context.Background(), endpoint.Spec.ID, "acquire", "existing-"+strconv.Itoa(i))
+	for i := 0; i < serverlessMaxQueuedRequests; i++ {
+		_, err := s.demand(context.Background(), endpoint.Spec.ID, "acquire", "existing-"+strconv.Itoa(i), 0)
 		require.NoError(t, err)
 	}
 	r := newRouter(s)
@@ -168,9 +168,9 @@ func TestOnDemandRouteSharedLimitReturns429(t *testing.T) {
 	require.NoError(t, r.handleRoute(ctx))
 	assert.Equal(t, http.StatusTooManyRequests, rec.Code, rec.Body.String())
 	assert.Contains(t, rec.Body.String(), "endpoint_saturated")
-	demand, err := s.demand(context.Background(), endpoint.Spec.ID, "read", "")
+	demand, err := s.demand(context.Background(), endpoint.Spec.ID, "read", "", 0)
 	require.NoError(t, err)
-	assert.EqualValues(t, serverlessMaxRequests, demand.active)
+	assert.EqualValues(t, serverlessMaxQueuedRequests, demand.active)
 	assert.Zero(t, counter(&r.admission, endpoint.Spec.ID).Load(), "shared rejection releases local admission")
 }
 

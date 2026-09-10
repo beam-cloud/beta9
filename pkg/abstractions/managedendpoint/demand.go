@@ -3,18 +3,19 @@ package managedendpoint
 import (
 	"context"
 	"errors"
+	"math"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
 const (
-	demandLeaseTTL        = time.Minute
-	demandRenewInterval   = 20 * time.Second
-	demandIdleTimeout     = 5 * time.Minute
-	demandOpTimeout       = time.Second
-	serverlessQueueWait   = 10 * time.Minute
-	serverlessMaxRequests = 128
+	demandLeaseTTL              = time.Minute
+	demandRenewInterval         = 20 * time.Second
+	demandIdleTimeout           = 5 * time.Minute
+	demandOpTimeout             = time.Second
+	serverlessQueueWait         = 10 * time.Minute
+	serverlessMaxQueuedRequests = 128
 )
 
 var errDemandLimit = errors.New("on-demand endpoint request limit reached")
@@ -53,14 +54,18 @@ type endpointDemand struct {
 	starting bool  // wait for capacity to become known before adding another copy
 }
 
-func (s *Service) demand(ctx context.Context, endpointID, operation, requestID string) (*endpointDemand, error) {
+// readyCapacity is the finite serving capacity observed at admission. Queued
+// callers get their own allowance, so a full engine can trigger scale-out.
+// Capacity changes never prevent an existing request from renewing its lease.
+func (s *Service) demand(ctx context.Context, endpointID, operation, requestID string, readyCapacity int64) (*endpointDemand, error) {
 	if s.rdb == nil {
 		return nil, errors.New("on-demand endpoints require redis")
 	}
 	ctx, cancel := context.WithTimeout(ctx, demandOpTimeout)
 	defer cancel()
+	limit := serverlessMaxQueuedRequests + min(max(readyCapacity, 0), math.MaxInt64-serverlessMaxQueuedRequests)
 	values, err := s.rdb.Eval(ctx, endpointDemandScript, []string{"managed_endpoint:demand:" + endpointID},
-		operation, requestID, demandLeaseTTL.Milliseconds(), demandIdleTimeout.Milliseconds(), serverlessMaxRequests).Int64Slice()
+		operation, requestID, demandLeaseTTL.Milliseconds(), demandIdleTimeout.Milliseconds(), limit).Int64Slice()
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +83,7 @@ func (s *Service) demand(ctx context.Context, endpointID, operation, requestID s
 // cancels the request rather than serving work the controller cannot observe.
 func (r *router) holdDemand(rq *routeRequest) (func(), error) {
 	ctx, cancel := context.WithCancel(rq.ctx.Request().Context())
-	if _, err := r.s.demand(ctx, rq.model, "acquire", rq.requestID); err != nil {
+	if _, err := r.s.demand(ctx, rq.model, "acquire", rq.requestID, rq.readyCapacity); err != nil {
 		cancel()
 		return nil, err
 	}
@@ -96,7 +101,7 @@ func (r *router) holdDemand(rq *routeRequest) (func(), error) {
 				cancel()
 				return
 			case <-ticker.C:
-				if _, err := r.s.demand(ctx, rq.model, "renew", rq.requestID); err != nil {
+				if _, err := r.s.demand(ctx, rq.model, "renew", rq.requestID, 0); err != nil {
 					cancel()
 					return
 				}
@@ -106,7 +111,7 @@ func (r *router) holdDemand(rq *routeRequest) (func(), error) {
 	return func() {
 		cancel()
 		<-done // a late renewal must not resurrect a completed request
-		_, _ = r.s.demand(context.Background(), rq.model, "release", rq.requestID)
+		_, _ = r.s.demand(context.Background(), rq.model, "release", rq.requestID, 0)
 	}, nil
 }
 
@@ -116,7 +121,7 @@ func (c *controller) readDemand(ctx context.Context, fleet *types.Fleet, live []
 		if fleet.Serverless(id) {
 			// A failed read leaves nil: neither scale up nor scale down based
 			// on unknown demand. Hot placements continue independently.
-			out[id], _ = c.s.demand(ctx, id, "read", "")
+			out[id], _ = c.s.demand(ctx, id, "read", "", 0)
 		}
 	}
 	for _, replica := range live {
@@ -129,9 +134,9 @@ func (c *controller) readDemand(ctx context.Context, fleet *types.Fleet, live []
 		} else {
 			capacity := replica.Capacity.MaxConcurrency
 			if capacity <= 0 {
-				capacity = serverlessMaxRequests // routing treats zero as unbounded
+				capacity = math.MaxInt64 // routing treats zero as unbounded
 			}
-			demand.capacity += capacity
+			demand.capacity += min(capacity, math.MaxInt64-demand.capacity)
 		}
 	}
 	return out
