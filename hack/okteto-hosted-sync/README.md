@@ -56,12 +56,34 @@ uses no persistent volume, so repeat seeding if the pod is replaced. Normal
 source edits are synced automatically and need no image build, `okteto up`, or
 pod restart. Edits arriving during a build are compiled before restarting once.
 
-The watcher ignores terminal hangups and records its PID in
-`/var/tmp/beta9-hosted-dev/reload.pid`. A file lock prevents duplicate watchers.
-A reattached session waits for the existing watcher instead of exiting and
-stopping source sync. To pause builds and binary replacement while keeping the gateway supervised,
-create `/var/tmp/beta9-hosted-dev/build-hold` in the pod; remove it to resume.
-The hold also prevents replacement if it is created during an ongoing build.
+Keep `/var/tmp/beta9-hosted-dev/build-hold` present while staging serves public
+traffic. Source synchronization continues while held. After editing and testing
+Go source, use the supported reload command from the repository root:
+
+```sh
+python3 hack/okteto-hosted-sync/safe-reload.py \
+  --evidence /private/tmp/hosted-safe-reload-$(date +%s).json
+```
+
+This requires another compatible gateway selected by the same Services and
+healthy in both AWS target groups, plus the staging fixture’s
+`/var/tmp/beta9-hosted-dev/grpc-ready` checker. Missing prerequisites fail before
+traffic changes. The helper resolves Pod names, removes only
+the development gateway from service selection, and waits for complete AWS
+deregistration (`unused` or absent) before allowing replacement. It forces and
+verifies the staging ExternalSecret, checks the new binary and readiness,
+restores the hold, and waits for both targets to become healthy. `--restart`
+validates this procedure using the current binary. An unchanged source tree is
+a no-op. Public check failures remain in the evidence file.
+
+Do not remove the hold directly on a public gateway. A shorter wait that stopped
+at AWS `draining` produced a measured503; that gate is insufficient. Unguarded
+single-process hotreload is not a supported zero-downtime workflow.
+
+The watcher records its PID in `/var/tmp/beta9-hosted-dev/reload.pid` and uses a
+file lock. Do not casually reconnect with `okteto up`: the installed Okteto
+cleanup kills existing user processes before starting its command. A reconnect
+needs the same complete target removal and healthy peer protection.
 
 Only `cmd`, `pkg`, `proto`, and this helper directory sync. The Go module files
 use Okteto's single-file copy mechanism (`secrets`); these files contain no
