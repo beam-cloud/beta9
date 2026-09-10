@@ -18,7 +18,7 @@ import time
 import traceback
 import urllib.error
 import urllib.request
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 
 def env(name, default=""):
@@ -114,13 +114,33 @@ def ignored_change(path):
     return any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns if pattern and not pattern.startswith("#"))
 
 
-def discover(root):
+def is_app(path):
     skip = {"__pycache__", "node_modules"}
-    return [
-        app
-        for app in sorted(root.rglob("app.py"))
-        if not any(p.startswith(".") or p in skip for p in app.parent.relative_to(root).parts)
-    ]
+    return path.name == "app.py" and not any(
+        p.startswith(".") or p in skip for p in path.parent.parts
+    )
+
+
+def discover(root):
+    return [app for app in sorted(root.rglob("app.py")) if is_app(app.relative_to(root))]
+
+
+def app_directories(root, apps, changed):
+    """Keep deleted endpoint files scoped to their old app, using both Git trees."""
+    dirs = {"" if app.parent == root else str(app.parent.relative_to(root)) for app in apps}
+    if not changed or not LAST_SHA or LAST_SHA == SHA:
+        return dirs
+    # changed_paths fetched LAST_SHA before diffing. A failed tree read aborts
+    # this sync instead of guessing that deleted endpoint files are shared code.
+    tree = git("ls-tree", "-r", "--name-only", "-z", LAST_SHA, "--", REPO_PATH or ".").stdout
+    prefix = f"{REPO_PATH}/" if REPO_PATH else ""
+    for path in tree.split("\0"):
+        if not path.startswith(prefix):
+            continue
+        app = PurePosixPath(path[len(prefix) :])
+        if is_app(app):
+            dirs.add("" if app.parent == PurePosixPath(".") else str(app.parent))
+    return dirs
 
 
 def app_changed(rel, changed, app_dirs):
@@ -134,9 +154,9 @@ def app_changed(rel, changed, app_dirs):
         if not path.startswith(prefix):
             return True
         inner = path[len(prefix) :]
-        if rel and inner.startswith(rel + "/"):
-            return True
-        if not any(inner.startswith(d + "/") for d in app_dirs if d):
+        # The deepest app owns its files when endpoint directories are nested.
+        owners = [d for d in app_dirs if not d or inner.startswith(d + "/")]
+        if not owners or max(owners, key=len) == rel:
             return True
     return False
 
@@ -250,8 +270,8 @@ def main():
         if not root.is_dir():
             raise RuntimeError(f"endpoints path {REPO_PATH!r} not found at {SHA[:8]}")
         apps = discover(root)
-        app_dirs = [str(a.parent.relative_to(root)) for a in apps]
         changed = changed_paths()
+        app_dirs = app_directories(root, apps, changed)
         n_changed = "all" if changed is None else len(changed)
         log(f"{len(apps)} app(s) at {SHA[:8]}; changed={n_changed}")
         for app in apps:

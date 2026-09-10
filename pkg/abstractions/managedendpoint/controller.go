@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"maps"
 	"math"
 	"runtime/debug"
 	"slices"
@@ -102,9 +103,7 @@ func (c *controller) reconcile(ctx context.Context) (err error) {
 		byID[endpoint.Spec.ID] = endpoint
 	}
 	blocked, protectionErr := c.reconcileProtection(ctx, fleet, byID, live)
-	for _, endpoint := range endpoints {
-		c.retire(ctx, endpoint, fleet, live, inv, blocked)
-	}
+	c.retireEndpoints(ctx, endpoints, fleet, live, inv, blocked)
 	demand := c.readDemand(ctx, fleet, live)
 	for group := range blocked {
 		if d := demand[group.endpointID]; d != nil {
@@ -135,6 +134,7 @@ type clusterInventory struct {
 	floors         map[string]uint32 // pool -> GPUs reserved for serverless
 	resourceFloors map[string]replicaResources
 	pending        map[string]bool // CPU/memory of unassigned starts is not in worker accounting yet
+	retiring       map[string]bool // successful releases issued after this inventory snapshot
 }
 
 type inventoryWorker struct {
@@ -351,6 +351,39 @@ func scaleDownOrder(replicas []*types.EndpointReplica) {
 	})
 }
 
+// Issue removals before any serving-version replacement, independent of
+// registry order, so those requested releases are visible to every rollout.
+func (c *controller) retireEndpoints(ctx context.Context, endpoints []*types.ManagedEndpoint, fleet *types.Fleet, live []*types.EndpointReplica, inv *clusterInventory, blocked map[protectionGroup]bool) {
+	for _, endpoint := range endpoints {
+		c.retireUnplaced(ctx, endpoint, fleet, live, inv, blocked)
+	}
+	for _, endpoint := range endpoints {
+		if endpoint.Enabled() {
+			c.retire(ctx, endpoint, fleet, live, inv, blocked)
+		}
+	}
+}
+
+func (c *controller) retireUnplaced(ctx context.Context, endpoint *types.ManagedEndpoint, fleet *types.Fleet, live []*types.EndpointReplica, inv *clusterInventory, blocked map[protectionGroup]bool) {
+	placements := fleet.Placements(endpoint.Spec.ID)
+	for _, replica := range live {
+		if replica.EndpointID != endpoint.Spec.ID || !replica.Alive() || blocked[protectionGroup{endpointID: replica.EndpointID, gpu: replica.GPU}] {
+			continue
+		}
+		_, placed := placements[replica.GPU]
+		if endpoint.Enabled() && placed {
+			continue
+		}
+		reason := "removed from config.yaml"
+		if !endpoint.Enabled() {
+			reason = "endpoint retired"
+		}
+		if err := c.drainReplica(ctx, replica, endpoint.Spec.DrainSeconds, false, reason); err == nil {
+			inv.noteRetirement(replica.ID)
+		}
+	}
+}
+
 // retire drains replicas the endpoint no longer wants (older version, GPU
 // type it no longer fills, or the whole endpoint), one per tick. A serving
 // stale replica stays until a current one is ready or can start on idle
@@ -359,14 +392,19 @@ func scaleDownOrder(replicas []*types.EndpointReplica) {
 func (c *controller) retire(ctx context.Context, endpoint *types.ManagedEndpoint, fleet *types.Fleet, live []*types.EndpointReplica, inv *clusterInventory, blocked map[protectionGroup]bool) {
 	spec := &endpoint.Spec
 	if !endpoint.Enabled() {
-		for _, r := range live {
-			if r.EndpointID == spec.ID && !blocked[protectionGroup{endpointID: r.EndpointID, gpu: r.GPU}] {
-				_ = c.drainReplica(ctx, r, spec.DrainSeconds, false, "endpoint retired")
-			}
-		}
+		c.retireUnplaced(ctx, endpoint, fleet, live, inv, blocked)
 		return
 	}
 	placements := fleet.Placements(spec.ID)
+	replacement := &placementTarget{endpoint: endpoint}
+	pending := map[string]bool{}
+	pendingRelease := func(gpu string) bool {
+		if fits, checked := pending[gpu]; checked {
+			return fits
+		}
+		pending[gpu] = c.pendingReleaseFits(ctx, replacement, gpu, live, inv)
+		return pending[gpu]
+	}
 	matches := func(r *types.EndpointReplica) bool {
 		_, listed := placements[r.GPU]
 		return r.Version == endpoint.Version && listed
@@ -412,7 +450,7 @@ func (c *controller) retire(ctx context.Context, endpoint *types.ManagedEndpoint
 		if r.Serving() && r.Protected && sameGPU && placement.MinReplicas > 0 && protectedReady[r.GPU] <= placement.MinReplicas {
 			// Protection transfers to a ready replacement before retirement.
 			// A ready replica on another GPU cannot cover this GPU's minimum.
-			if startingOnGPU[r.GPU] || inv.canPlace(r.GPU, spec.Gpu[r.GPU].Count) || !canReplace {
+			if startingOnGPU[r.GPU] || inv.canPlace(r.GPU, spec.Gpu[r.GPU].Count) || !canReplace || pendingRelease(r.GPU) {
 				continue
 			}
 			reason = fmt.Sprintf("version %d retired (making room for version %d)", r.Version, endpoint.Version)
@@ -421,7 +459,7 @@ func (c *controller) retire(ctx context.Context, endpoint *types.ManagedEndpoint
 			if currentStarting {
 				continue
 			}
-			if inv.canPlace(r.GPU, spec.Gpu[r.GPU].Count) {
+			if inv.canPlace(r.GPU, spec.Gpu[r.GPU].Count) || pendingRelease(r.GPU) {
 				continue
 			}
 			if serving < 2 && !canReplace {
@@ -432,9 +470,87 @@ func (c *controller) retire(ctx context.Context, endpoint *types.ManagedEndpoint
 			reason = fmt.Sprintf("version %d retired (making room for version %d)", r.Version, endpoint.Version)
 		}
 		if err := c.drainReplica(ctx, r, spec.DrainSeconds, false, reason); err == nil {
+			inv.noteRetirement(r.ID)
 			return
 		}
 	}
+}
+
+func (inv *clusterInventory) noteRetirement(replicaID string) {
+	if inv == nil {
+		return
+	}
+	if inv.retiring == nil {
+		inv.retiring = make(map[string]bool)
+	}
+	inv.retiring[replicaID] = true
+}
+
+// pendingReleaseFits avoids stopping a serving version when a requested
+// retirement can already make room. Immediate stops count only in the snapshot
+// that issued them; older drains count only until their deadline. Projected
+// resources are used for this wait decision, never for scheduler admission.
+func (c *controller) pendingReleaseFits(ctx context.Context, target *placementTarget, gpu string, live []*types.EndpointReplica, inv *clusterInventory) bool {
+	if inv == nil || c.s.containers == nil || gpu == types.CPUInventoryKey {
+		return false
+	}
+	projected := *inv
+	seen := map[string]bool{}
+	changed := false
+	for _, replica := range live {
+		if replica.GPU != gpu || seen[replica.ContainerID] {
+			continue
+		}
+		draining := replica.Status == types.ReplicaStatusDraining || replica.Status == types.ReplicaStatusEvicting
+		if !inv.retiring[replica.ID] && !(draining && time.Now().Before(replica.DrainDeadline)) {
+			continue
+		}
+		worker := projected.workers[replica.WorkerID]
+		if worker == nil || worker.gpu != gpu || worker.pool != replica.PoolName || inv.pending[worker.pool] ||
+			worker.free > worker.total || worker.cpu < 0 || worker.cpu > worker.totalCPU || worker.memory < 0 || worker.memory > worker.totalMemory ||
+			!slices.ContainsFunc(inv.pools[gpu], func(pool eligiblePool) bool { return pool.Name == worker.pool }) {
+			continue
+		}
+		state, err := c.s.containers.GetContainerState(replica.ContainerID)
+		if err != nil || state == nil || state.Evicting || state.WorkerId != replica.WorkerID || types.GPUKey(state.Gpu) != gpu ||
+			state.GpuCount != max(replica.GPUCount, 1) || (state.Status != types.ContainerStatusRunning && state.Status != types.ContainerStatusStopping) {
+			continue
+		}
+		released, ok := reservedReplicaResources(state.Cpu, state.Memory)
+		if !ok {
+			continue
+		}
+		if !changed {
+			projected.workers = maps.Clone(inv.workers)
+		}
+		copy := *worker
+		worker = &copy
+		projected.workers[replica.WorkerID] = worker
+		// Scheduler eviction may have reassigned a victim's resources already;
+		// only explicit, still-owned retirement is projected above.
+		worker.free += min(state.GpuCount, worker.total-worker.free)
+		worker.cpu += min(released.cpu, worker.totalCPU-worker.cpu)
+		worker.memory += min(released.memory, worker.totalMemory-worker.memory)
+		seen[replica.ContainerID], changed = true, true
+	}
+	if !changed {
+		return false
+	}
+	resources := c.targetResources(ctx, target)
+	if resources == nil {
+		return false
+	}
+	free := make(map[string]uint32)
+	for _, worker := range projected.workers {
+		if worker.gpu == gpu {
+			free[worker.pool] += worker.free
+		}
+	}
+	for pool, count := range free {
+		free[pool] = count - min(count, inv.floors[pool])
+	}
+	projected.free = map[string]map[string]uint32{gpu: free}
+	return projected.canFit(gpu, target.endpoint.Spec.Gpu[gpu].Count, *resources)
 }
 
 // placementTarget counts both observed replicas and successful starts in this
