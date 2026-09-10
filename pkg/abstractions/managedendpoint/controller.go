@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"math"
 	"runtime/debug"
 	"slices"
 	"sort"
@@ -19,7 +20,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// controller reconciles replicas against the registry and fleet.yaml. One
+// controller reconciles replicas against the registry and config.yaml. One
 // gateway holds the lock at a time.
 
 const (
@@ -99,12 +100,19 @@ func (c *controller) reconcile(ctx context.Context) (err error) {
 	byID := make(map[string]*types.ManagedEndpoint, len(endpoints))
 	for _, endpoint := range endpoints {
 		byID[endpoint.Spec.ID] = endpoint
-		c.retire(ctx, endpoint, fleet, live, inv)
+	}
+	blocked, protectionErr := c.reconcileProtection(ctx, fleet, byID, live)
+	for _, endpoint := range endpoints {
+		c.retire(ctx, endpoint, fleet, live, inv, blocked)
 	}
 	for _, gpu := range fleet.GPUs() {
-		c.fill(ctx, gpu, fleet.Entries(gpu), byID, live, inv)
+		entries := fleet.Entries(gpu)
+		entries = slices.DeleteFunc(entries, func(entry types.FleetEntry) bool {
+			return blocked[protectionGroup{endpointID: entry.EndpointID, gpu: gpu}]
+		})
+		c.fill(ctx, gpu, entries, byID, live, inv)
 	}
-	return nil
+	return protectionErr
 }
 
 type eligiblePool struct {
@@ -115,8 +123,29 @@ type eligiblePool struct {
 // clusterInventory is where replicas may run: opted-in pools per GPU key and
 // the idle GPUs each has.
 type clusterInventory struct {
-	pools map[string][]eligiblePool
-	free  map[string]map[string]uint32 // gpu key -> pool -> free GPUs
+	pools          map[string][]eligiblePool
+	free           map[string]map[string]uint32 // gpu key -> pool -> free GPUs
+	workers        map[string]*inventoryWorker
+	floors         map[string]uint32 // pool -> GPUs reserved for serverless
+	resourceFloors map[string]replicaResources
+	pending        map[string]bool // CPU/memory of unassigned starts is not in worker accounting yet
+}
+
+type inventoryWorker struct {
+	pool, gpu             string
+	free, total           uint32
+	cpu, memory           int64
+	totalCPU, totalMemory int64
+}
+
+type replicaResources struct{ cpu, memory int64 }
+
+// Matches scheduler.capacityMemoryForScheduling and worker capacity accounting.
+func reservedReplicaResources(cpu, memory int64) (replicaResources, bool) {
+	if cpu < 0 || memory < 0 || memory > (math.MaxInt64-99)/125 {
+		return replicaResources{}, false
+	}
+	return replicaResources{cpu: cpu, memory: (memory*125 + 99) / 100}, true
 }
 
 func (c *controller) poolConfig(name string) (types.WorkerPoolConfig, bool) {
@@ -154,7 +183,11 @@ func (c *controller) inventory(replicas []*types.EndpointReplica) (*clusterInven
 	if err != nil {
 		return nil, err
 	}
-	inv := &clusterInventory{pools: map[string][]eligiblePool{}, free: map[string]map[string]uint32{}}
+	inv := &clusterInventory{
+		pools: map[string][]eligiblePool{}, free: map[string]map[string]uint32{},
+		workers: map[string]*inventoryWorker{}, floors: map[string]uint32{},
+		resourceFloors: map[string]replicaResources{}, pending: map[string]bool{},
+	}
 	type slack struct{ cpu, memory int64 }
 	ready := map[string]*slack{}
 	for name, cfg := range c.poolConfigs() {
@@ -167,8 +200,9 @@ func (c *controller) inventory(replicas []*types.EndpointReplica) (*clusterInven
 		slices.SortFunc(pools, func(a, b eligiblePool) int { return strings.Compare(a.Name, b.Name) })
 	}
 	for _, w := range workers {
-		// Pending workers cannot serve anything yet and must not satisfy the floor.
-		if w == nil || w.Status != types.WorkerStatusAvailable || w.Gpu == "" {
+		// Match admission: hosted requests do not opt into Preemptable workers.
+		// Pending workers cannot serve anything yet or satisfy the floor.
+		if w == nil || w.Status != types.WorkerStatusAvailable || w.Gpu == "" || w.Preemptable {
 			continue
 		}
 		if cfg, ok := c.poolConfig(w.PoolName); !ok || !cfg.ManagedEndpoints.Enabled {
@@ -179,6 +213,10 @@ func (c *controller) inventory(replicas []*types.EndpointReplica) (*clusterInven
 			inv.free[key] = map[string]uint32{}
 		}
 		inv.free[key][w.PoolName] += w.FreeGpuCount
+		inv.workers[w.Id] = &inventoryWorker{
+			pool: w.PoolName, gpu: key, free: w.FreeGpuCount, total: w.TotalGpuCount,
+			cpu: w.FreeCpu, memory: w.FreeMemory, totalCPU: w.TotalCpu, totalMemory: w.TotalMemory,
+		}
 		if ready[w.PoolName] == nil {
 			ready[w.PoolName] = &slack{}
 		}
@@ -186,19 +224,34 @@ func (c *controller) inventory(replicas []*types.EndpointReplica) (*clusterInven
 		ready[w.PoolName].memory += w.FreeMemory
 	}
 	for _, r := range replicas {
-		if r.Status != types.ReplicaStatusScheduling || r.GPU == types.CPUInventoryKey {
+		if r.Status != types.ReplicaStatusScheduling || r.GPU == types.CPUInventoryKey || r.WorkerID != "" {
 			continue
 		}
 		if free, ok := inv.free[r.GPU][r.PoolName]; ok {
-			inv.free[r.GPU][r.PoolName] = free - min(free, max(r.GPUCount, 1))
+			inv.pending[r.PoolName] = true
+			need := min(free, max(r.GPUCount, 1))
+			inv.free[r.GPU][r.PoolName] = free - need
+			// Pending requests have no worker yet. Reserve on one worker when
+			// possible, otherwise conservatively account for every fragment.
+			for need > 0 {
+				worker := inv.idlestWorker(r.GPU, r.PoolName)
+				if worker == nil || worker.free == 0 {
+					break
+				}
+				taken := min(need, worker.free)
+				worker.free -= taken
+				need -= taken
+			}
 		}
 	}
 	for key, pools := range inv.free {
 		for name, free := range pools {
 			cfg, _ := c.poolConfig(name)
 			floor, _ := strconv.ParseUint(cfg.PoolSizing.MinFreeGPU, 10, 32)
+			inv.floors[name] = uint32(floor)
 			minCPU, _ := scheduler.ParseCPU(cfg.PoolSizing.MinFreeCPU)
 			minMemory, _ := scheduler.ParseMemory(cfg.PoolSizing.MinFreeMemory)
+			inv.resourceFloors[name] = replicaResources{cpu: minCPU, memory: minMemory}
 			if s := ready[name]; (minCPU > 0 && s.cpu <= minCPU) || (minMemory > 0 && s.memory <= minMemory) {
 				free = 0
 			}
@@ -206,6 +259,17 @@ func (c *controller) inventory(replicas []*types.EndpointReplica) (*clusterInven
 		}
 	}
 	return inv, nil
+}
+
+func (inv *clusterInventory) idlestWorker(gpu, pool string) *inventoryWorker {
+	var best *inventoryWorker
+	var bestID string
+	for id, worker := range inv.workers {
+		if worker.gpu == gpu && worker.pool == pool && (best == nil || worker.free > best.free || worker.free == best.free && id < bestID) {
+			best, bestID = worker, id
+		}
+	}
+	return best
 }
 
 func (inv *clusterInventory) canPlace(gpu string, count uint32) bool {
@@ -216,7 +280,7 @@ func (inv *clusterInventory) canPlace(gpu string, count uint32) bool {
 		return len(inv.pools[gpu]) > 0
 	}
 	for _, pool := range inv.pools[gpu] {
-		if inv.free[gpu][pool.Name] >= max(count, 1) {
+		if worker := inv.idlestWorker(gpu, pool.Name); worker != nil && worker.free >= max(count, 1) && inv.free[gpu][pool.Name] >= max(count, 1) {
 			return true
 		}
 	}
@@ -238,7 +302,8 @@ func (inv *clusterInventory) place(gpu string, count uint32) (eligiblePool, bool
 	var best eligiblePool
 	bestFree := uint32(0)
 	for _, pool := range pools {
-		if free := inv.free[gpu][pool.Name]; free >= need && free > bestFree {
+		worker := inv.idlestWorker(gpu, pool.Name)
+		if free := inv.free[gpu][pool.Name]; worker != nil && worker.free >= need && free >= need && free > bestFree {
 			best, bestFree = pool, free
 		}
 	}
@@ -246,6 +311,7 @@ func (inv *clusterInventory) place(gpu string, count uint32) (eligiblePool, bool
 		return eligiblePool{}, false
 	}
 	inv.free[gpu][best.Name] -= need
+	inv.idlestWorker(gpu, best.Name).free -= need
 	return best, true
 }
 
@@ -262,10 +328,13 @@ func liveReplicas(replicas []*types.EndpointReplica, endpointID, gpu string, ver
 	return live, ready
 }
 
-// scaleDownOrder puts the least valuable replicas first: not ready, then least loaded, then newest.
+// scaleDownOrder drains unprotected replicas first, then not ready, least loaded, and newest.
 func scaleDownOrder(replicas []*types.EndpointReplica) {
 	sort.SliceStable(replicas, func(i, j int) bool {
 		a, b := replicas[i], replicas[j]
+		if a.Protected != b.Protected {
+			return !a.Protected
+		}
 		if aReady, bReady := a.Status == types.ReplicaStatusReady, b.Status == types.ReplicaStatusReady; aReady != bReady {
 			return !aReady
 		}
@@ -281,11 +350,11 @@ func scaleDownOrder(replicas []*types.EndpointReplica) {
 // stale replica stays until a current one is ready or can start on idle
 // capacity. The explicit replace policy permits downtime to release the last
 // GPU; the default waits for capacity and keeps the sole serving replica.
-func (c *controller) retire(ctx context.Context, endpoint *types.ManagedEndpoint, fleet *types.Fleet, live []*types.EndpointReplica, inv *clusterInventory) {
+func (c *controller) retire(ctx context.Context, endpoint *types.ManagedEndpoint, fleet *types.Fleet, live []*types.EndpointReplica, inv *clusterInventory, blocked map[protectionGroup]bool) {
 	spec := &endpoint.Spec
 	if !endpoint.Enabled() {
 		for _, r := range live {
-			if r.EndpointID == spec.ID {
+			if r.EndpointID == spec.ID && !blocked[protectionGroup{endpointID: r.EndpointID, gpu: r.GPU}] {
 				_ = c.drainReplica(ctx, r, spec.DrainSeconds, false, "endpoint retired")
 			}
 		}
@@ -298,25 +367,42 @@ func (c *controller) retire(ctx context.Context, endpoint *types.ManagedEndpoint
 	}
 	var currentReady, serving int
 	currentStarting := false
+	startingOnGPU := map[string]bool{}
+	protectedReady := map[string]uint32{}
 	for _, r := range live {
 		if r.EndpointID == spec.ID && matches(r) && r.Alive() && !r.Serving() {
 			currentStarting = true
+			startingOnGPU[r.GPU] = true
 		}
 		if r.EndpointID != spec.ID || !r.Serving() {
 			continue
 		}
 		serving++
+		if r.Protected {
+			protectedReady[r.GPU]++
+		}
 		if matches(r) {
 			currentReady++
 		}
 	}
 	for _, r := range live {
-		if r.EndpointID != spec.ID || !r.Alive() || matches(r) {
+		if r.EndpointID != spec.ID || !r.Alive() || matches(r) || blocked[protectionGroup{endpointID: r.EndpointID, gpu: r.GPU}] {
 			continue
 		}
 		reason := fmt.Sprintf("version %d retired", r.Version)
 		if _, listed := placements[r.GPU]; !listed {
-			reason = "removed from fleet.yaml"
+			reason = "removed from config.yaml"
+		}
+		placement, sameGPU := placements[r.GPU]
+		canReplace := spec.Rollout == "replace" && sameGPU && inv != nil &&
+			len(inv.pools[r.GPU]) > 0 && r.GPUCount >= max(spec.Gpu[r.GPU].Count, 1)
+		if r.Serving() && r.Protected && sameGPU && placement.MinReplicas > 0 && protectedReady[r.GPU] <= placement.MinReplicas {
+			// Protection transfers to a ready replacement before retirement.
+			// A ready replica on another GPU cannot cover this GPU's minimum.
+			if startingOnGPU[r.GPU] || inv.canPlace(r.GPU, spec.Gpu[r.GPU].Count) || !canReplace {
+				continue
+			}
+			reason = fmt.Sprintf("version %d retired (making room for version %d)", r.Version, endpoint.Version)
 		}
 		if r.Serving() && currentReady == 0 && len(placements) > 0 {
 			if currentStarting {
@@ -325,9 +411,6 @@ func (c *controller) retire(ctx context.Context, endpoint *types.ManagedEndpoint
 			if inv.canPlace(r.GPU, spec.Gpu[r.GPU].Count) {
 				continue
 			}
-			_, sameGPU := placements[r.GPU]
-			canReplace := spec.Rollout == "replace" && sameGPU && inv != nil &&
-				len(inv.pools[r.GPU]) > 0 && r.GPUCount >= max(spec.Gpu[r.GPU].Count, 1)
 			if serving < 2 && !canReplace {
 				log.Warn().Str("endpoint_id", spec.ID).Str("replica_id", r.ID).Uint("version", endpoint.Version).
 					Msg("managed endpoints: rollout waiting; the only serving replica holds the last GPU")
@@ -341,62 +424,259 @@ func (c *controller) retire(ctx context.Context, endpoint *types.ManagedEndpoint
 	}
 }
 
-// fill converges one GPU type on its priority order: each entry takes idle
-// GPUs up to its cap and drains down to it when over. When an entry is short
-// and nothing is idle, the entries below it give back one replica per tick;
-// an entry still starting a replica waits instead.
+// placementTarget counts both observed replicas and successful starts in this
+// pass. Scheduling/loading replicas satisfy the minimum and cap, so a second
+// pass cannot duplicate a start or reclaim more capacity while it warms up.
+type placementTarget struct {
+	entry         types.FleetEntry
+	endpoint      *types.ManagedEndpoint
+	replicas      []*types.EndpointReplica
+	started       uint32
+	resources     *replicaResources
+	resourcesRead bool
+}
+
+func (c *controller) targetResources(ctx context.Context, target *placementTarget) *replicaResources {
+	if target.resourcesRead {
+		return target.resources
+	}
+	target.resourcesRead = true
+	if c.s.backend == nil {
+		return nil
+	}
+	stub, err := c.s.backend.GetStubByExternalId(ctx, target.endpoint.StubID)
+	if err != nil || stub == nil || stub.ExternalId != target.endpoint.StubID {
+		return nil
+	}
+	config, err := stub.UnmarshalConfig()
+	if err != nil || config == nil {
+		return nil
+	}
+	resources, ok := reservedReplicaResources(config.Runtime.Cpu, config.Runtime.Memory)
+	if ok {
+		target.resources = &resources
+	}
+	return target.resources
+}
+
+func (t *placementTarget) count() uint32 {
+	n := t.started
+	for _, replica := range t.replicas {
+		if replica.Alive() {
+			n++
+		}
+	}
+	return n
+}
+
+func (t *placementTarget) starting() bool {
+	if t.started > 0 {
+		return true
+	}
+	for _, replica := range t.replicas {
+		if replica.Alive() && !replica.Serving() {
+			return true
+		}
+	}
+	return false
+}
+
+// fill satisfies every GPU minimum in priority order before spending spare
+// capacity on surplus. A minimum can reclaim another entry's surplus, even
+// from a higher priority. Surplus only reclaims from lower priorities.
 func (c *controller) fill(ctx context.Context, gpu string, entries []types.FleetEntry, endpoints map[string]*types.ManagedEndpoint, live []*types.EndpointReplica, inv *clusterInventory) {
-	var short *types.ManagedEndpoint
-	reclaimed := false
-	for _, e := range entries {
-		endpoint := endpoints[e.EndpointID]
+	targets := make([]*placementTarget, 0, len(entries))
+	for _, entry := range entries {
+		endpoint := endpoints[entry.EndpointID]
 		if endpoint == nil || !endpoint.Enabled() {
 			continue
 		}
-		current, ready := liveReplicas(live, e.EndpointID, gpu, endpoint.Version)
-		n := uint32(len(current))
-		switch {
-		case e.MaxReplicas > 0 && n > e.MaxReplicas:
+		current, _ := liveReplicas(live, entry.EndpointID, gpu, endpoint.Version)
+		target := &placementTarget{entry: entry, endpoint: endpoint, replicas: current}
+		targets = append(targets, target)
+		// A changed cap is an explicit scale-down, including protected replicas.
+		// Do this for all entries, even while a higher-priority minimum waits.
+		if n := target.count(); entry.MaxReplicas > 0 && n > entry.MaxReplicas {
 			scaleDownOrder(current)
-			for _, r := range current[:n-e.MaxReplicas] {
-				_ = c.drainReplica(ctx, r, endpoint.Spec.DrainSeconds, false, "over fleet.yaml cap")
+			for _, replica := range current[:n-entry.MaxReplicas] {
+				_ = c.drainReplica(ctx, replica, endpoint.Spec.DrainSeconds, false, "over config.yaml cap")
 			}
-		case short != nil:
-			if n == 0 || reclaimed {
-				continue
+		}
+	}
+
+	protected := map[string]uint32{}
+	for _, replica := range live {
+		if replica.GPU == gpu && replica.Alive() && replica.Protected {
+			protected[replica.EndpointID]++
+		}
+	}
+	reclaimed := false
+	for _, minimum := range []bool{true, false} {
+		for index, target := range targets {
+			limit := target.entry.MinReplicas
+			if !minimum {
+				limit = target.entry.MaxReplicas
+				if limit == 0 {
+					limit = target.count() + maxStartsPerTick
+				}
 			}
-			scaleDownOrder(current)
-			if err := c.drainReplica(ctx, current[0], endpoint.Spec.DrainSeconds, false, "gpu reclaimed for "+short.Spec.ID); err == nil {
-				reclaimed = true
+			if n := target.count(); n < limit {
+				want := min(limit-n, maxStartsPerTick-target.started)
+				var protectedBudget uint32
+				if minimum && target.entry.ProtectMinimum {
+					// Old versions keep their protected slot while a replacement
+					// loads; reconciliation transfers it when the new copy is ready.
+					protectedBudget = min(want, target.entry.MinReplicas-min(target.entry.MinReplicas, protected[target.entry.EndpointID]))
+				}
+				started, noRoom := c.grow(ctx, target.endpoint, gpu, want, protectedBudget, inv)
+				target.started += started
+				protected[target.entry.EndpointID] += min(started, protectedBudget)
+				if noRoom && !target.starting() && !reclaimed {
+					reclaimed = c.reclaim(ctx, gpu, index, targets, live, inv, minimum)
+				}
 			}
-		case e.MaxReplicas == 0 || n < e.MaxReplicas:
-			want := uint32(maxStartsPerTick)
-			if e.MaxReplicas > 0 {
-				want = e.MaxReplicas - n
-			}
-			if noRoom := c.grow(ctx, endpoint, gpu, want, inv); noRoom && ready == len(current) {
-				short = endpoint
+		}
+		if minimum {
+			for _, target := range targets {
+				if target.count() < target.entry.MinReplicas {
+					// Also holds capacity during backoff or a per-tick start
+					// limit; another minimum may still have started above.
+					return
+				}
 			}
 		}
 	}
 }
 
-// grow starts up to want replicas and reports whether it stopped for lack of
-// idle GPUs. A failed start backs off the (endpoint, gpu).
-func (c *controller) grow(ctx context.Context, endpoint *types.ManagedEndpoint, gpu string, want uint32, inv *clusterInventory) (noRoom bool) {
-	if backoff, _ := c.s.repo.InScheduleBackoff(ctx, endpoint.Spec.ID, gpu); backoff {
+// reclaim releases one replica only after proving a single ready worker can
+// fit the request using idle capacity and eligible surplus. Summing GPUs
+// across workers or across a pool floor would evict models without progress.
+func (c *controller) reclaim(ctx context.Context, gpu string, index int, targets []*placementTarget, live []*types.EndpointReplica, inv *clusterInventory, minimum bool) bool {
+	if inv == nil || c.s.containers == nil || gpu == types.CPUInventoryKey {
 		return false
+	}
+	target := targets[index]
+	resources := c.targetResources(ctx, target)
+	if resources == nil {
+		return false // Never destroy a replica for an unknown request shape.
+	}
+	need := uint64(max(target.endpoint.Spec.Gpu[gpu].Count, 1))
+	reason := "gpu reclaimed for " + target.endpoint.Spec.ID
+	settling := map[string]bool{}
+	for _, replica := range live {
+		if replica.GPU == gpu && (replica.Status == types.ReplicaStatusDraining || replica.Status == types.ReplicaStatusEvicting) {
+			if replica.StatusReason == reason {
+				return false // Wait for the capacity already being released.
+			}
+			settling[replica.WorkerID] = true
+		}
+	}
+	type victim struct {
+		replica   *types.EndpointReplica
+		owner     *placementTarget
+		resources replicaResources
+	}
+	byWorker := map[string][]victim{}
+	for offset := range len(targets) {
+		ownerIndex := offset
+		if minimum {
+			ownerIndex = len(targets) - 1 - offset // least priority gives back first
+		}
+		owner := targets[ownerIndex]
+		if ownerIndex == index || (!minimum && ownerIndex < index) || owner.count() <= owner.entry.MinReplicas {
+			continue
+		}
+		current := append([]*types.EndpointReplica(nil), owner.replicas...)
+		scaleDownOrder(current)
+		for _, replica := range current {
+			worker := inv.workers[replica.WorkerID]
+			if !replica.Alive() || replica.Protected || worker == nil || worker.gpu != gpu || worker.pool != replica.PoolName {
+				continue
+			}
+			if settling[replica.WorkerID] || inv.pending[worker.pool] || uint64(worker.total) < need || worker.totalCPU < resources.cpu || worker.totalMemory < resources.memory {
+				continue
+			}
+			if !slices.ContainsFunc(inv.pools[gpu], func(pool eligiblePool) bool { return pool.Name == worker.pool }) {
+				continue
+			}
+			state, err := c.s.containers.GetContainerState(replica.ContainerID)
+			if err != nil || state == nil || !state.Evictable || state.Evicting || state.Status != types.ContainerStatusRunning {
+				continue
+			}
+			if state.WorkerId != replica.WorkerID || types.GPUKey(state.Gpu) != gpu || state.GpuCount != max(replica.GPUCount, 1) {
+				continue
+			}
+			released, ok := reservedReplicaResources(state.Cpu, state.Memory)
+			if ok {
+				byWorker[replica.WorkerID] = append(byWorker[replica.WorkerID], victim{replica, owner, released})
+			}
+		}
+	}
+	workerIDs := make([]string, 0, len(byWorker))
+	for id := range byWorker {
+		workerIDs = append(workerIDs, id)
+	}
+	slices.Sort(workerIDs)
+	for _, id := range workerIDs {
+		worker := inv.workers[id]
+		var poolFree uint64
+		var poolResources replicaResources
+		for _, w := range inv.workers {
+			if w.gpu == gpu && w.pool == worker.pool {
+				poolFree += uint64(w.free)
+				poolResources.cpu += w.cpu
+				poolResources.memory += w.memory
+			}
+		}
+		used := map[*placementTarget]uint32{}
+		var released uint64
+		var releasedResources replicaResources
+		var first *victim
+		for _, candidate := range byWorker[id] {
+			if used[candidate.owner] >= candidate.owner.count()-candidate.owner.entry.MinReplicas {
+				continue
+			}
+			used[candidate.owner]++
+			released += uint64(max(candidate.replica.GPUCount, 1))
+			releasedResources.cpu += candidate.resources.cpu
+			releasedResources.memory += candidate.resources.memory
+			if first == nil {
+				copy := candidate
+				first = &copy
+			}
+			floor := inv.resourceFloors[worker.pool]
+			if uint64(worker.free)+released >= need && poolFree+released >= uint64(inv.floors[worker.pool])+need &&
+				worker.cpu+releasedResources.cpu >= resources.cpu && worker.memory+releasedResources.memory >= resources.memory &&
+				poolResources.cpu+releasedResources.cpu-resources.cpu >= floor.cpu && poolResources.memory+releasedResources.memory-resources.memory >= floor.memory {
+				return c.drainReplica(ctx, first.replica, first.owner.endpoint.Spec.DrainSeconds, false, reason) == nil
+			}
+		}
+	}
+	return false
+}
+
+// grow starts up to want replicas and reports successful starts and whether
+// it stopped for lack of idle GPUs. A failed start backs off (endpoint, gpu).
+func (c *controller) grow(ctx context.Context, endpoint *types.ManagedEndpoint, gpu string, want, protectedBudget uint32, inv *clusterInventory) (started uint32, noRoom bool) {
+	if backoff, err := c.s.repo.InScheduleBackoff(ctx, endpoint.Spec.ID, gpu); err != nil || backoff {
+		return 0, false
 	}
 	for range min(want, maxStartsPerTick) {
 		pool, ok := inv.place(gpu, endpoint.Spec.Gpu[gpu].Count)
 		if !ok {
 			log.Debug().Str("endpoint_id", endpoint.Spec.ID).Str("gpu", gpu).Msg("managed endpoints: no idle capacity in any eligible pool")
-			return true
+			return started, true
 		}
-		if _, err := c.startReplica(ctx, endpoint, gpu, pool); err != nil {
+		if _, err := c.startReplica(ctx, endpoint, gpu, pool, started < protectedBudget); err != nil {
 			log.Warn().Err(err).Str("endpoint_id", endpoint.Spec.ID).Str("gpu", gpu).Msg("managed endpoints: start replica failed")
-			return false
+			_ = c.s.repo.SetScheduleBackoff(ctx, endpoint.Spec.ID, gpu, c.s.config.Reconcile.FailureBackoff)
+			return started, false
 		}
+		started++
+		if inv.pending == nil {
+			inv.pending = map[string]bool{}
+		}
+		inv.pending[pool.Name] = true
 	}
-	return false
+	return started, false
 }

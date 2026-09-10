@@ -13,7 +13,7 @@ import (
 )
 
 // Managed endpoints are platform-owned inference endpoints deployed from a git
-// repository: app.py declares a ManagedEndpointSpec, fleet.yaml a Fleet.
+// repository: app.py declares a ManagedEndpointSpec, config.yaml a Fleet.
 
 const (
 	StubTypeManagedEndpoint           string = "managed_endpoint"
@@ -154,9 +154,8 @@ type ManagedEndpointSpec struct {
 	Catalog           Catalog            `json:"catalog"`
 	Public            bool               `json:"public"`
 	AllowedWorkspaces []string           `json:"allowed_workspaces,omitempty"`
-	Protected         bool               `json:"protected,omitempty"` // serverless work cannot evict its replicas; a change rolls them
-	Rollout           string             `json:"rollout,omitempty"`   // wait_for_capacity (default) or replace (allows downtime)
-	DrainSeconds      uint32             `json:"drain_seconds"`       // grace on eviction or retirement; 0 is immediate
+	Rollout           string             `json:"rollout,omitempty"` // wait_for_capacity (default) or replace (allows downtime)
+	DrainSeconds      uint32             `json:"drain_seconds"`     // grace on eviction or retirement; 0 is immediate
 	Entrypoint        []string           `json:"entrypoint,omitempty"`
 }
 
@@ -255,7 +254,7 @@ func (s *ManagedEndpointSpec) ServesRoute(route EndpointRoute) bool {
 	return slices.Contains(s.Routes, route)
 }
 
-// Fleet is fleet.yaml: for each endpoint, whether it runs and which GPU types
+// Fleet is config.yaml: for each endpoint, whether it runs and which GPU types
 // it fills, with a priority among the endpoints on that type and an optional
 // replica cap. It is the only thing that decides where replicas run.
 type Fleet struct {
@@ -269,18 +268,48 @@ type FleetEndpoint struct {
 	GPUs    map[string]FleetPlacement `json:"gpus" yaml:"gpus"`
 }
 
-// FleetPlacement is one endpoint on one GPU type. Priority 1 fills first;
-// MaxReplicas 0 means every idle GPU.
+// FleetPlacement is one endpoint on one GPU type. Minimums fill first, in
+// priority order, then spare capacity fills up to MaxReplicas (0 is uncapped).
+// Disabling preemption protects only the minimum; extras stay evictable.
 type FleetPlacement struct {
 	Priority    uint32 `json:"priority" yaml:"priority"`
+	MinReplicas uint32 `json:"min_replicas,omitempty" yaml:"minReplicas"`
 	MaxReplicas uint32 `json:"max_replicas,omitempty" yaml:"maxReplicas"`
+	Preemption  *bool  `json:"preemption,omitempty" yaml:"preemption"`
+}
+
+// YAML otherwise truncates fractional replica counts when decoding into uint32.
+// Reject ambiguous values instead of silently changing placement or protection.
+func (p *FleetPlacement) UnmarshalYAML(unmarshal func(any) error) error {
+	var fields map[string]any
+	if err := unmarshal(&fields); err != nil {
+		return err
+	}
+	for _, name := range []string{"priority", "minReplicas", "maxReplicas"} {
+		if value, exists := fields[name]; exists {
+			switch value.(type) {
+			case int, int64, uint64:
+			default:
+				return fmt.Errorf("%s must be an integer", name)
+			}
+		}
+	}
+	if value, exists := fields["preemption"]; exists {
+		if _, ok := value.(bool); !ok {
+			return fmt.Errorf("preemption must be a boolean")
+		}
+	}
+	type plain FleetPlacement
+	return unmarshal((*plain)(p))
 }
 
 // FleetEntry is an endpoint's place in one GPU type's priority order.
 type FleetEntry struct {
-	EndpointID  string
-	Priority    uint32
-	MaxReplicas uint32
+	EndpointID     string
+	Priority       uint32
+	MinReplicas    uint32
+	MaxReplicas    uint32
+	ProtectMinimum bool
 }
 
 const maxFleetReplicas = 64
@@ -313,6 +342,12 @@ func (f *Fleet) Validate() error {
 			}
 			if p.MaxReplicas > maxFleetReplicas {
 				errs = append(errs, fmt.Errorf("%s: %s: maxReplicas %d exceeds %d", id, gpu, p.MaxReplicas, maxFleetReplicas))
+			}
+			if p.MinReplicas > maxFleetReplicas {
+				errs = append(errs, fmt.Errorf("%s: %s: minReplicas %d exceeds %d", id, gpu, p.MinReplicas, maxFleetReplicas))
+			}
+			if p.MaxReplicas > 0 && p.MinReplicas > p.MaxReplicas {
+				errs = append(errs, fmt.Errorf("%s: %s: minReplicas must not exceed maxReplicas", id, gpu))
 			}
 			if gpu == CPUInventoryKey && p.MaxReplicas == 0 {
 				errs = append(errs, fmt.Errorf("%s: cpu needs maxReplicas", id))
@@ -367,7 +402,7 @@ func (f *Fleet) Entries(gpu string) []FleetEntry {
 	var out []FleetEntry
 	for id, e := range f.Endpoints {
 		if p, ok := e.GPUs[gpu]; ok && e.Enabled {
-			out = append(out, FleetEntry{EndpointID: id, Priority: p.Priority, MaxReplicas: p.MaxReplicas})
+			out = append(out, FleetEntry{EndpointID: id, Priority: p.Priority, MinReplicas: p.MinReplicas, MaxReplicas: p.MaxReplicas, ProtectMinimum: p.Preemption != nil && !*p.Preemption})
 		}
 	}
 	slices.SortFunc(out, func(a, b FleetEntry) int {
@@ -487,6 +522,7 @@ type EndpointReplica struct {
 	Version             uint            `json:"version"`
 	GPU                 string          `json:"gpu"`
 	GPUCount            uint32          `json:"gpu_count"`
+	Protected           bool            `json:"protected"` // this replica belongs to the protected minimum
 	Locality            string          `json:"locality,omitempty"`
 	PoolName            string          `json:"pool_name,omitempty"`
 	ContainerID         string          `json:"container_id"`
@@ -569,7 +605,7 @@ type GitOpsState struct {
 	TargetSHA   string                         `json:"target_sha,omitempty"`
 	LastRunAt   time.Time                      `json:"last_run_at,omitempty"`
 	LastError   string                         `json:"last_error,omitempty"`
-	FleetError  string                         `json:"fleet_error,omitempty"` // why fleet.yaml was rejected, or "skipped: ..." entries
+	FleetError  string                         `json:"fleet_error,omitempty"` // why config.yaml was rejected, or "skipped: ..." entries
 	FleetSHA    string                         `json:"fleet_sha,omitempty"`   // trails LastSHA only while a fleet write is retried
 	Running     bool                           `json:"running"`
 	PerEndpoint map[string]GitOpsEndpointState `json:"per_endpoint"`
@@ -588,7 +624,7 @@ type GitOpsReport struct {
 	SHA       string               `json:"sha"`
 	Error     string               `json:"error,omitempty"`
 	Results   []GitOpsDeployResult `json:"results"`
-	FleetYAML string               `json:"fleet_yaml,omitempty"` // raw fleet.yaml; empty when the repo has none
+	FleetYAML string               `json:"fleet_yaml,omitempty"` // raw config.yaml; required at the repository root
 }
 
 // GitOpsDeployResult is the outcome for one app directory; ID is empty when

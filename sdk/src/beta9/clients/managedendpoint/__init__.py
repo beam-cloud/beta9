@@ -83,6 +83,9 @@ class EndpointReplica(betterproto.Message):
     provider_workspace_id: str = betterproto.string_field(23)
     """Set when the replica runs on a workspace's contributed machine."""
 
+    protected: bool = betterproto.bool_field(24)
+    """True for a replica reserved to satisfy a non-preemptible minimum."""
+
 
 @dataclass(eq=False, repr=False)
 class ManagedEndpoint(betterproto.Message):
@@ -98,7 +101,7 @@ class ManagedEndpoint(betterproto.Message):
     total_replicas: int = betterproto.uint32_field(10)
     placements_json: str = betterproto.string_field(11)
     """
-    Where fleet.yaml places the endpoint: JSON {gpu: {priority, max_replicas}}; max_replicas 0 = every idle GPU.
+    config.yaml placement: JSON {gpu: {priority, min_replicas, max_replicas, preemption}}.
     """
 
 
@@ -337,7 +340,7 @@ class GetGitOpsStatusResponse(betterproto.Message):
     state: "GitOpsState" = betterproto.message_field(3)
     fleet_json: str = betterproto.string_field(4)
     """
-    The applied fleet.yaml as JSON {endpoint_id: {enabled, gpus: {gpu: {priority, max_replicas}}}}.
+    The applied config.yaml as JSON {endpoint_id: {enabled, gpus: {gpu: {priority, min_replicas, max_replicas, preemption}}}}.
     """
 
 

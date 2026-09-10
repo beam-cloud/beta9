@@ -6,7 +6,7 @@ package managedendpoint;
 
 // Managed endpoints: platform-owned inference endpoints filled onto spare GPU
 // capacity and served through the OpenRouter-compatible /v1 route. The git
-// repository (apps + fleet.yaml) is the source of truth; these services only
+// repository (apps + config.yaml) is the source of truth; these services only
 // observe the platform and tune live engine settings on running replicas.
 //
 //   - EndpointHarnessService: called by the engine-side harness inside a
@@ -71,6 +71,8 @@ message EndpointReplica {
   string machine_id = 22;
   // Set when the replica runs on a workspace's contributed machine.
   string provider_workspace_id = 23;
+  // True for a replica reserved to satisfy a non-preemptible minimum.
+  bool protected = 24;
 }
 
 message ManagedEndpoint {
@@ -84,7 +86,7 @@ message ManagedEndpoint {
   int64 updated_at_unix_ms = 8;
   uint32 ready_replicas = 9;
   uint32 total_replicas = 10;
-  // Where fleet.yaml places the endpoint: JSON {gpu: {priority, max_replicas}}; max_replicas 0 = every idle GPU.
+  // config.yaml placement: JSON {gpu: {priority, min_replicas, max_replicas, preemption}}.
   string placements_json = 11;
 }
 
@@ -324,7 +326,7 @@ message GetGitOpsStatusResponse {
   bool ok = 1;
   string err_msg = 2;
   GitOpsState state = 3;
-  // The applied fleet.yaml as JSON {endpoint_id: {enabled, gpus: {gpu: {priority, max_replicas}}}}.
+  // The applied config.yaml as JSON {endpoint_id: {enabled, gpus: {gpu: {priority, min_replicas, max_replicas, preemption}}}}.
   string fleet_json = 4;
 }
 

@@ -194,7 +194,7 @@ class ManagedEndpoint(RunnerAbstraction):
                 "rollout": self.rollout,
             }
         )
-        # Always sent: an explicit False / 0 must not be pruned.
+        # Zero means immediate eviction and must not be pruned.
         spec["drain_seconds"] = self.drain_seconds
         # A GPU key with no settings still declares the GPU; it must never be pruned.
         if self.gpus:

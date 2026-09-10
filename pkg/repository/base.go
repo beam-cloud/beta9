@@ -177,6 +177,7 @@ type ManagedEndpointRepository interface {
 	ListAllReplicas(ctx context.Context) ([]*types.EndpointReplica, error)
 	DeleteReplica(ctx context.Context, replicaID string) error
 	WithReplicaLock(ctx context.Context, replicaID string, fn func(context.Context) error) error
+	SetReplicaProtection(ctx context.Context, replicaID string, protected bool) (*types.EndpointReplica, error)
 	RequestDrain(ctx context.Context, replicaID string, drainSeconds uint32) error
 	DrainRequested(ctx context.Context, replicaID string) (bool, uint32, error)
 	SetScheduleBackoff(ctx context.Context, endpointID, gpu string, ttl time.Duration) error

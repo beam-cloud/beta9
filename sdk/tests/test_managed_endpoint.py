@@ -74,7 +74,7 @@ def test_gpu_list_and_cpu_default():
 
 @pytest.mark.parametrize("gpu", ["H100", ["H100", "A10G"], {"H100": None}, {"H100": Gpu()}])
 def test_plain_gpu_declarations_survive_serialization(gpu):
-    """A GPU with empty settings is still a supported GPU; fleet.yaml can only place what the spec declares."""
+    """A GPU with empty settings is still a supported GPU; config.yaml can only place what the spec declares."""
     spec = ManagedEndpoint(id="audit/model", gpu=gpu).spec()
     assert spec["gpu"]["H100"] == {"count": 1}
 

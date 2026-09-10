@@ -83,7 +83,7 @@ func (gws *GatewayService) canManageEndpoints(ctx context.Context, authInfo *aut
 
 // managedGpuTypes returns the GPU types the endpoint can run on so the stub
 // runtime carries an accurate GPU requirement; the controller sets the exact
-// type and count per replica from fleet.yaml.
+// type and count per replica from config.yaml.
 func managedGpuTypes(config *types.ManagedEndpointStubConfig) []types.GpuType {
 	if config == nil || config.Endpoint == nil {
 		return nil

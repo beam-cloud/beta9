@@ -36,6 +36,69 @@ func newGitOpsForTest(t *testing.T) (*Service, *gitops) {
 	return s, g
 }
 
+func TestConfigReplicaPolicy(t *testing.T) {
+	fleet, err := parseFleet(`acme/model:
+  enabled: true
+  gpus:
+    h100: {priority: 2, minReplicas: 1, maxReplicas: 2, preemption: false}
+    a100: {priority: 1, minReplicas: 0, maxReplicas: 1}
+acme/other:
+  enabled: true
+  gpus:
+    h100: {priority: 1, minReplicas: 2, maxReplicas: 0, preemption: true}
+`)
+	require.NoError(t, err)
+	require.Equal(t, []types.FleetEntry{
+		{EndpointID: "acme/other", Priority: 1, MinReplicas: 2},
+		{EndpointID: "acme/model", Priority: 2, MinReplicas: 1, MaxReplicas: 2, ProtectMinimum: true},
+	}, fleet.Entries("H100"))
+	require.Equal(t, []types.FleetEntry{{EndpointID: "acme/model", Priority: 1, MaxReplicas: 1}}, fleet.Entries("A100"))
+	for _, value := range []string{
+		"minReplicas: 3, maxReplicas: 2", "minReplicas: 65", "maxReplicas: 65",
+		"minReplicas: -1", "minReplicas: true", "minReplicas: 1.5", "minReplicas: 1.0", "minReplicas: '1'", "minReplicas: null",
+		"maxReplicas: false", "maxReplicas: 1.5", "maxReplicas: '1'",
+		"priority: true", "priority: 1.5", "priority: '1'", "priority: 0",
+		"preemption: 'false'", "preemption: 0", "preemption: null", "preemptible: false",
+		"minReplicas: 1, minReplicas: 2", "min_replicas: 1",
+	} {
+		t.Run(value, func(t *testing.T) {
+			prefix := "priority: 1, "
+			if strings.HasPrefix(value, "priority:") {
+				prefix = ""
+			}
+			_, err := parseFleet("acme/model: {enabled: true, gpus: {H100: {" + prefix + value + "}}}")
+			require.Error(t, err)
+		})
+	}
+	for _, value := range []string{"", "  \n", "null", "~", "[]", "{}\n---\n{}", "acme/model: {unexpected: true}", "acme/model: {}\nacme/model: {}", "acme/model: {}\nACME/model: {}", "' ': {}", "acme/model: {gpus: {H100: {priority: 1}, h100: {priority: 2}}}"} {
+		_, err := parseFleet(value)
+		require.Error(t, err, "invalid config %q", value)
+	}
+	fleet, err = parseFleet("{}")
+	require.NoError(t, err)
+	require.Empty(t, fleet.Endpoints)
+}
+
+func TestGitOpsMissingConfigPreservesAppliedPlacement(t *testing.T) {
+	s, g := newGitOpsForTest(t)
+	ctx := context.Background()
+	seedEndpoint(t, s)
+	for _, config := range []string{"", "null", "acme/model: {enabled: true, gpus: {H100: {priority: 1, minReplicas: 1.5}}}"} {
+		require.NoError(t, s.repo.SaveGitOpsState(ctx, &types.GitOpsState{Running: true, RunID: "r", TargetSHA: "new"}))
+		require.NoError(t, g.applyReport(ctx, &types.GitOpsReport{
+			RunID: "r", SHA: "new", FleetYAML: config,
+			Results: []types.GitOpsDeployResult{{ID: "acme/model", Path: "acme/model", OK: true, Skipped: true}},
+		}))
+		state, err := s.repo.GetGitOpsState(ctx)
+		require.NoError(t, err)
+		require.Contains(t, state.FleetError, "config.yaml")
+		fleet, err := s.repo.GetFleet(ctx)
+		require.NoError(t, err)
+		require.Equal(t, "fleet-sha", fleet.GitSHA)
+		require.Len(t, fleet.Placements("acme/model"), 1)
+	}
+}
+
 func TestGitOpsUsesOnlyConfiguredDeployerSecrets(t *testing.T) {
 	s, g := newGitOpsForTest(t)
 	s.backend = nil // Secret resolution must not consult the admin workspace.
@@ -180,7 +243,7 @@ func TestGitOpsApplyReportRecordsVersionsAndRetires(t *testing.T) {
 	require.Error(t, err)
 
 	// acme/model redeployed, acme/old removed from the repo, one directory
-	// failed to import, and fleet.yaml places acme/model on H100.
+	// failed to import, and config.yaml places acme/model on H100.
 	report := &types.GitOpsReport{
 		RunID: "run-1", SHA: "bbbbbbbb",
 		Results: []types.GitOpsDeployResult{
@@ -226,12 +289,12 @@ func TestGitOpsApplyReportRecordsVersionsAndRetires(t *testing.T) {
 	require.Error(t, g.applyReport(ctx, report))
 
 	// Next run: everything applies, the broken path is gone; LastSHA advances
-	// and the stale failure entry is dropped. A repo without fleet.yaml
+	// and the stale failure entry is dropped. An explicitly empty config.yaml
 	// places nothing.
 	state.Running, state.RunID = true, "run-2"
 	require.NoError(t, s.repo.SaveGitOpsState(ctx, state))
 	require.NoError(t, g.applyReport(ctx, &types.GitOpsReport{
-		RunID: "run-2", SHA: "cccccccc",
+		RunID: "run-2", SHA: "cccccccc", FleetYAML: "{}",
 		Results: []types.GitOpsDeployResult{{Path: "acme/model", ID: "acme/model", OK: true, Skipped: true}},
 	}))
 	state, err = s.repo.GetGitOpsState(ctx)
@@ -260,7 +323,7 @@ func TestGitOpsApplyReportInvalidFleetKeepsPrevious(t *testing.T) {
 		PerEndpoint: map[string]types.GitOpsEndpointState{"acme/model": {Path: "acme/model", ID: "acme/model", Status: types.GitOpsStatusApplied, AppliedSHA: "aaaaaaaa"}},
 	}))
 
-	// fleet.yaml is structurally broken (unknown GPU type, absurd count):
+	// config.yaml is structurally broken (unknown GPU type, absurd count):
 	// every stub applied, but the fleet is rejected as a whole.
 	require.NoError(t, g.applyReport(ctx, &types.GitOpsReport{
 		RunID: "run-1", SHA: "bbbbbbbb",
@@ -271,7 +334,7 @@ func TestGitOpsApplyReportInvalidFleetKeepsPrevious(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "bbbbbbbb", state.LastSHA, "the stubs applied; only the fleet is held back")
 	assert.Contains(t, state.LastError, "1 stub(s) failed")
-	for _, want := range []string{"fleet.yaml", "maxReplicas 65 exceeds 64", "NOTAGPU is not a known GPU type"} {
+	for _, want := range []string{"config.yaml", "maxReplicas 65 exceeds 64", "NOTAGPU is not a known GPU type"} {
 		assert.Contains(t, state.FleetError, want)
 	}
 	assert.Equal(t, types.GitOpsStatusApplied, state.PerEndpoint["acme/model"].Status)
@@ -291,7 +354,7 @@ func TestGitOpsApplyReportInvalidFleetKeepsPrevious(t *testing.T) {
 	}))
 	state, err = s.repo.GetGitOpsState(ctx)
 	require.NoError(t, err)
-	assert.Contains(t, state.FleetError, "fleet.yaml")
+	assert.Contains(t, state.FleetError, "config.yaml")
 	fleet, err = s.repo.GetFleet(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, "fleet-sha", fleet.GitSHA)
@@ -355,7 +418,7 @@ func TestGitOpsApplyReportImportFailureKeepsPriorEndpoint(t *testing.T) {
 	// The new commit breaks acme/model/app.py: it is not discovered, only an
 	// import failure for its path is reported.
 	require.NoError(t, g.applyReport(ctx, &types.GitOpsReport{
-		RunID: "run-1", SHA: "bbbbbbbb",
+		RunID: "run-1", SHA: "bbbbbbbb", FleetYAML: "{}",
 		Results: []types.GitOpsDeployResult{{Path: "acme/model", OK: false, Error: "import failed: SyntaxError"}},
 	}))
 
@@ -381,7 +444,7 @@ func TestGitOpsApplyReportImportFailureKeepsPriorEndpoint(t *testing.T) {
 
 	// The fix lands: the directory imports again and is redeployed.
 	require.NoError(t, g.applyReport(ctx, &types.GitOpsReport{
-		RunID: "run-2", SHA: "cccccccc",
+		RunID: "run-2", SHA: "cccccccc", FleetYAML: "{}",
 		Results: []types.GitOpsDeployResult{{Path: "acme/model", ID: "acme/model", OK: true, StubID: "stub-2", Version: 4}},
 	}))
 	state, err = s.repo.GetGitOpsState(ctx)
@@ -396,7 +459,7 @@ func TestGitOpsApplyReportImportFailureKeepsPriorEndpoint(t *testing.T) {
 	// The directory is really deleted afterwards: now it is retired.
 	state.Running, state.RunID = true, "run-3"
 	require.NoError(t, s.repo.SaveGitOpsState(ctx, state))
-	require.NoError(t, g.applyReport(ctx, &types.GitOpsReport{RunID: "run-3", SHA: "dddddddd"}))
+	require.NoError(t, g.applyReport(ctx, &types.GitOpsReport{RunID: "run-3", SHA: "dddddddd", FleetYAML: "{}"}))
 	state, err = s.repo.GetGitOpsState(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, types.GitOpsStatusRetired, state.PerEndpoint["acme/model"].Status)
@@ -431,7 +494,7 @@ func TestGitOpsApplyReportRetireFailureIsRetried(t *testing.T) {
 		},
 	}))
 
-	require.NoError(t, g.applyReport(ctx, &types.GitOpsReport{RunID: "run-1", SHA: "bbbbbbbb"}))
+	require.NoError(t, g.applyReport(ctx, &types.GitOpsReport{RunID: "run-1", SHA: "bbbbbbbb", FleetYAML: "{}"}))
 	state, err := s.repo.GetGitOpsState(ctx)
 	require.NoError(t, err)
 	old := state.PerEndpoint["acme/old"]
@@ -451,7 +514,7 @@ func TestGitOpsApplyReportRetireFailureIsRetried(t *testing.T) {
 	s.repo = repo
 	state.Running, state.RunID = true, "run-2"
 	require.NoError(t, s.repo.SaveGitOpsState(ctx, state))
-	require.NoError(t, g.applyReport(ctx, &types.GitOpsReport{RunID: "run-2", SHA: "bbbbbbbb"}))
+	require.NoError(t, g.applyReport(ctx, &types.GitOpsReport{RunID: "run-2", SHA: "bbbbbbbb", FleetYAML: "{}"}))
 	state, err = s.repo.GetGitOpsState(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, types.GitOpsStatusRetired, state.PerEndpoint["acme/old"].Status)
@@ -705,7 +768,7 @@ func TestGitOpsReportRouteAuth(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, s.repo.SaveGitOpsState(ctx, &types.GitOpsState{Running: true, RunID: "run-1", TokenID: "run-token", TargetSHA: "bbbbbbbb", StartedAt: time.Now()}))
 	e := echo.New()
-	body, _ := json.Marshal(types.GitOpsReport{RunID: "run-1", SHA: "bbbbbbbb"})
+	body, _ := json.Marshal(types.GitOpsReport{RunID: "run-1", SHA: "bbbbbbbb", FleetYAML: "{}"})
 	runToken := func(externalID string) context.Context {
 		return auth.ContextWithAuthInfo(ctx, &auth.AuthInfo{
 			Workspace: &types.Workspace{Id: 1, ExternalId: "admin-ws"},

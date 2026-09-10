@@ -23,6 +23,7 @@ func TestAdminRESTEndpointIDWithSlash(t *testing.T) {
 	require.Contains(t, endpoint.Spec.ID, "/")
 	replica := seedReplica(t, s, endpoint)
 	replica.Locality = "internal-placement"
+	replica.Protected = true
 	require.NoError(t, s.repo.SaveReplica(context.Background(), replica))
 
 	e := echo.New()
@@ -60,6 +61,7 @@ func TestAdminRESTEndpointIDWithSlash(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &replicas))
 	require.Len(t, replicas.Replicas, 1)
 	assert.Equal(t, replica.ID, replicas.Replicas[0]["id"])
+	assert.Equal(t, true, replicas.Replicas[0]["protected"])
 	assert.NotContains(t, replicas.Replicas[0], "locality")
 	stored, err := s.repo.GetReplica(context.Background(), replica.ID)
 	require.NoError(t, err)

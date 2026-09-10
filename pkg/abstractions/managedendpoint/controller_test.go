@@ -2,12 +2,14 @@ package managedendpoint
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"testing"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
+	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/stretchr/testify/assert"
@@ -25,12 +27,13 @@ func TestInventoryPlacesInEligiblePoolsOnly(t *testing.T) {
 	}
 	require.NoError(t, s.workers.AddWorker(&types.Worker{Id: "w1", PoolName: "gpu-b", Gpu: "H100", TotalGpuCount: 3, FreeGpuCount: 3, Status: types.WorkerStatusAvailable}))
 	require.NoError(t, s.workers.AddWorker(&types.Worker{Id: "w2", PoolName: "opt-out", Gpu: "H100", TotalGpuCount: 8, FreeGpuCount: 8, Status: types.WorkerStatusAvailable}))
+	require.NoError(t, s.workers.AddWorker(&types.Worker{Id: "spot", PoolName: "gpu-b", Gpu: "H100", TotalGpuCount: 8, FreeGpuCount: 8, Status: types.WorkerStatusAvailable, Preemptable: true}))
 
 	inv, err := s.controller.inventory(nil)
 	require.NoError(t, err)
 	assert.Equal(t, []eligiblePool{{Name: "gpu-a", Locality: "us-east"}, {Name: "gpu-b", Locality: "gpu-b"}}, inv.pools["H100"])
 	assert.Equal(t, []eligiblePool{{Name: "cpu-a", Locality: "cpu-a"}}, inv.pools[types.CPUInventoryKey])
-	assert.Equal(t, map[string]uint32{"gpu-b": 3}, inv.free["H100"], "workers in pools that did not opt in are invisible")
+	assert.Equal(t, map[string]uint32{"gpu-b": 3}, inv.free["H100"], "opt-out pools and workers rejected by hosted admission are invisible")
 
 	// Free capacity wins; the reservation is tracked so the next replica
 	// does not count on the same GPUs.
@@ -95,20 +98,20 @@ func TestRetireWaitsForCurrentReady(t *testing.T) {
 
 	// Nothing of v2 is ready: the serving v1 replica keeps the traffic, but
 	// a v1 replica that is not serving anyway is retired right away.
-	s.controller.retire(ctx, endpoint, fleet, live, nil)
+	s.controller.retire(ctx, endpoint, fleet, live, nil, nil)
 	assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, oldReady.ID))
 	assert.Equal(t, types.ReplicaStatusStopped, statusOf(t, s, oldLoading.ID), "a loading replica is stopped without a drain window")
 	assert.Equal(t, types.ReplicaStatusLoading, statusOf(t, s, newLoading.ID))
 
 	// Only one stale replica is retired per tick, so a second pass with the
 	// same picture drains nothing more (the ready one is still needed).
-	s.controller.retire(ctx, endpoint, fleet, live, nil)
+	s.controller.retire(ctx, endpoint, fleet, live, nil, nil)
 	assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, oldReady.ID))
 
 	// Once v2 has a ready replica the old one is drained with the spec's grace.
 	newLoading.Status = types.ReplicaStatusReady
 	require.NoError(t, s.repo.SaveReplica(ctx, newLoading))
-	s.controller.retire(ctx, endpoint, fleet, live, nil)
+	s.controller.retire(ctx, endpoint, fleet, live, nil, nil)
 	stale, err := s.repo.GetReplica(ctx, oldReady.ID)
 	require.NoError(t, err)
 	assert.Equal(t, types.ReplicaStatusDraining, stale.Status)
@@ -130,26 +133,26 @@ func TestRetireKeepsServingReplicaAcrossGPUMove(t *testing.T) {
 	live := []*types.EndpointReplica{onH100, onA100}
 	fleet := seedFleet(t, s, map[string]types.FleetEndpoint{"acme/model": {Enabled: true, GPUs: map[string]types.FleetPlacement{"A100-80": {Priority: 1}}}})
 
-	s.controller.retire(ctx, endpoint, fleet, live, nil)
+	s.controller.retire(ctx, endpoint, fleet, live, nil, nil)
 	assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, onH100.ID), "no A100 replica is ready yet")
 
 	onA100.Status = types.ReplicaStatusReady
 	require.NoError(t, s.repo.SaveReplica(ctx, onA100))
-	s.controller.retire(ctx, endpoint, fleet, live, nil)
+	s.controller.retire(ctx, endpoint, fleet, live, nil, nil)
 	drained, err := s.repo.GetReplica(ctx, onH100.ID)
 	require.NoError(t, err)
 	assert.Equal(t, types.ReplicaStatusDraining, drained.Status)
-	assert.Equal(t, "removed from fleet.yaml", drained.StatusReason)
+	assert.Equal(t, "removed from config.yaml", drained.StatusReason)
 
 	// An endpoint listed nowhere is drained outright.
 	gone := versionReplica(t, s, "gone", 1, types.ReplicaStatusReady)
-	s.controller.retire(ctx, endpoint, &types.Fleet{}, []*types.EndpointReplica{gone}, nil)
+	s.controller.retire(ctx, endpoint, &types.Fleet{}, []*types.EndpointReplica{gone}, nil, nil)
 	assert.Equal(t, types.ReplicaStatusDraining, statusOf(t, s, gone.ID))
 
 	// A retired endpoint drains everything it still has.
 	endpoint.Status = types.EndpointStatusRetired
 	survivor := versionReplica(t, s, "survivor", 1, types.ReplicaStatusLoading)
-	s.controller.retire(ctx, endpoint, fleet, []*types.EndpointReplica{survivor}, nil)
+	s.controller.retire(ctx, endpoint, fleet, []*types.EndpointReplica{survivor}, nil, nil)
 	assert.Equal(t, types.ReplicaStatusStopped, statusOf(t, s, survivor.ID))
 }
 
@@ -157,8 +160,9 @@ func TestRetireKeepsServingReplicaAcrossGPUMove(t *testing.T) {
 // stops for lack of GPUs rather than for lack of a pool.
 func noRoomInventory() *clusterInventory {
 	return &clusterInventory{
-		pools: map[string][]eligiblePool{"H100": {{Name: "gpu-a", Locality: "gpu-a"}}},
-		free:  map[string]map[string]uint32{"H100": {"gpu-a": 0}},
+		pools:   map[string][]eligiblePool{"H100": {{Name: "gpu-a", Locality: "gpu-a"}}},
+		free:    map[string]map[string]uint32{"H100": {"gpu-a": 0}},
+		workers: map[string]*inventoryWorker{"w1": {pool: "gpu-a", gpu: "H100", total: 8}},
 	}
 }
 
@@ -196,8 +200,8 @@ func TestFillReclaimsForHigherPriority(t *testing.T) {
 	entries := []types.FleetEntry{{EndpointID: high.Spec.ID}, {EndpointID: low.Spec.ID}}
 
 	lowReplica := func(id string, status types.ReplicaStatus) *types.EndpointReplica {
-		r := versionReplica(t, s, id, 1, status)
-		r.EndpointID = low.Spec.ID
+		r := reclaimableReplica(t, s, low, id, "w1")
+		r.Status = status
 		require.NoError(t, s.repo.SaveReplica(ctx, r))
 		return r
 	}
@@ -432,12 +436,13 @@ func TestReplaceRolloutMakesRoomOnSingleGPU(t *testing.T) {
 		endpoint := seedEndpoint(t, s)
 		endpoint.Version = 2
 		endpoint.Spec.Rollout = "replace"
-		endpoint.Spec.Protected = protected
 		endpoint.Spec.DrainSeconds = 0
 		old := versionReplica(t, s, "old", 1, types.ReplicaStatusReady)
+		old.Protected = protected
+		require.NoError(t, s.repo.SaveReplica(context.Background(), old))
 		fleet, err := s.repo.GetFleet(context.Background())
 		require.NoError(t, err)
-		s.controller.retire(context.Background(), endpoint, fleet, []*types.EndpointReplica{old}, noRoomInventory())
+		s.controller.retire(context.Background(), endpoint, fleet, []*types.EndpointReplica{old}, noRoomInventory(), nil)
 		assert.Equal(t, types.ReplicaStatusStopped, statusOf(t, s, old.ID))
 	}
 }
@@ -451,6 +456,487 @@ func TestReplaceRolloutPreservesServiceWhileReplacementLoads(t *testing.T) {
 	starting := versionReplica(t, s, "new", 2, types.ReplicaStatusLoading)
 	fleet, err := s.repo.GetFleet(context.Background())
 	require.NoError(t, err)
-	s.controller.retire(context.Background(), endpoint, fleet, []*types.EndpointReplica{old, starting}, noRoomInventory())
+	s.controller.retire(context.Background(), endpoint, fleet, []*types.EndpointReplica{old, starting}, noRoomInventory(), nil)
 	assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, old.ID))
+}
+
+// Use the real Redis-backed scheduler admission/backlog without a consumer:
+// tests inspect exactly what the controller submits without provisioning.
+type fillBackend struct {
+	repository.BackendRepository
+	config string
+	err    error
+}
+
+func (b fillBackend) GetStubByExternalId(_ context.Context, id string, _ ...types.QueryFilter) (*types.StubWithRelated, error) {
+	if b.err != nil {
+		return nil, b.err
+	}
+	config := b.config
+	if config == "" {
+		config = `{}`
+	}
+	return &types.StubWithRelated{
+		Stub: types.Stub{ExternalId: id, Type: types.StubType(types.StubTypeManagedEndpointDeployment), Config: config},
+		App:  &types.App{},
+	}, nil
+}
+
+func newFillService(t *testing.T) *Service {
+	t.Helper()
+	s := newServiceForTest(t)
+	s.config.Preemption.Enabled = true
+	s.backend = fillBackend{}
+	s.containers = repository.NewContainerRedisRepositoryForTest(s.rdb)
+	key := "sk_" + base64.StdEncoding.EncodeToString(make([]byte, 32))
+	s.adminWorkspace.SigningKey = &key
+	var err error
+	s.scheduler, err = scheduler.NewScheduler(s.ctx, types.AppConfig{}, s.rdb, nil, s.backend, nil, nil)
+	require.NoError(t, err)
+	return s
+}
+
+func fillEndpoints(t *testing.T, s *Service) (*types.ManagedEndpoint, *types.ManagedEndpoint, map[string]*types.ManagedEndpoint) {
+	t.Helper()
+	high := seedEndpoint(t, s)
+	low := *high
+	low.Spec.ID = "acme/low"
+	low.StubID = "stub-low"
+	require.NoError(t, s.repo.SaveEndpoint(context.Background(), &low))
+	return high, &low, map[string]*types.ManagedEndpoint{high.Spec.ID: high, low.Spec.ID: &low}
+}
+
+func idleInventory(free uint32) *clusterInventory {
+	inv := noRoomInventory()
+	inv.free["H100"]["gpu-a"] = free
+	inv.workers["w1"].free = free
+	inv.workers["w1"].total = max(free, inv.workers["w1"].total)
+	return inv
+}
+
+func reclaimableReplica(t *testing.T, s *Service, endpoint *types.ManagedEndpoint, id, worker string) *types.EndpointReplica {
+	t.Helper()
+	if s.backend == nil {
+		s.backend = fillBackend{}
+	}
+	if s.containers == nil {
+		s.containers = repository.NewContainerRedisRepositoryForTest(s.rdb)
+	}
+	r := versionReplica(t, s, id, endpoint.Version, types.ReplicaStatusReady)
+	r.EndpointID, r.WorkerID, r.PoolName = endpoint.Spec.ID, worker, "gpu-a"
+	require.NoError(t, s.repo.SaveReplica(context.Background(), r))
+	require.NoError(t, s.containers.SetContainerState(r.ContainerID, &types.ContainerState{
+		ContainerId: r.ContainerID, WorkerId: worker, Gpu: r.GPU, GpuCount: r.GPUCount,
+		Status: types.ContainerStatusRunning, Evictable: true,
+	}))
+	return r
+}
+
+func TestFillMinimumsPrecedePrioritySurplus(t *testing.T) {
+	s := newFillService(t)
+	high, low, endpoints := fillEndpoints(t, s)
+	entries := []types.FleetEntry{
+		{EndpointID: high.Spec.ID, MaxReplicas: 3},
+		{EndpointID: low.Spec.ID, MinReplicas: 1, MaxReplicas: 1, ProtectMinimum: true},
+	}
+	s.controller.fill(context.Background(), "H100", entries, endpoints, nil, idleInventory(3))
+	requests, err := scheduler.NewRequestBacklog(s.rdb).PopN(10)
+	require.NoError(t, err)
+	require.Len(t, requests, 3)
+	assert.Equal(t, []string{low.StubID, high.StubID, high.StubID}, []string{requests[0].StubId, requests[1].StubId, requests[2].StubId})
+	assert.False(t, requests[0].Evictable, "preemption:false protects a minimum replica")
+	assert.True(t, requests[1].Evictable)
+	assert.True(t, requests[2].Evictable)
+	for _, request := range requests {
+		assert.True(t, request.OpportunisticOnly, "even a protected minimum must never evict or provision serverless")
+		assert.Equal(t, "gpu-a", request.PoolSelector)
+	}
+}
+
+func TestFillCountsStartsAcrossMinimumAndSurplusPasses(t *testing.T) {
+	for _, tc := range []struct {
+		name                       string
+		minimum, maximum, expected uint32
+	}{
+		{"same tick cap", 2, 3, 3},
+		{"per tick budget", 9, 10, maxStartsPerTick},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newFillService(t)
+			endpoint := seedEndpoint(t, s)
+			entries := []types.FleetEntry{{EndpointID: endpoint.Spec.ID, MinReplicas: tc.minimum, MaxReplicas: tc.maximum, ProtectMinimum: true}}
+			s.controller.fill(context.Background(), "H100", entries, map[string]*types.ManagedEndpoint{endpoint.Spec.ID: endpoint}, nil, idleInventory(20))
+			replicas, err := s.repo.ListAllReplicas(context.Background())
+			require.NoError(t, err)
+			require.Len(t, replicas, int(tc.expected))
+			var protected uint32
+			for _, replica := range replicas {
+				assert.Equal(t, types.ReplicaStatusScheduling, replica.Status)
+				if replica.Protected {
+					protected++
+				}
+			}
+			assert.Equal(t, min(tc.minimum, tc.expected), protected, "only the minimum starts are protected")
+		})
+	}
+}
+
+func TestFillCountsSchedulingAndLoadingTowardLimits(t *testing.T) {
+	s := newFillService(t)
+	endpoint := seedEndpoint(t, s)
+	live := []*types.EndpointReplica{
+		versionReplica(t, s, "ready", 1, types.ReplicaStatusReady),
+		versionReplica(t, s, "loading", 1, types.ReplicaStatusLoading),
+		versionReplica(t, s, "scheduling", 1, types.ReplicaStatusScheduling),
+	}
+	entries := []types.FleetEntry{{EndpointID: endpoint.Spec.ID, MinReplicas: 3, MaxReplicas: 3}}
+	s.controller.fill(context.Background(), "H100", entries, map[string]*types.ManagedEndpoint{endpoint.Spec.ID: endpoint}, live, idleInventory(4))
+	all, err := s.repo.ListAllReplicas(context.Background())
+	require.NoError(t, err)
+	assert.Len(t, all, 3, "loading and queued minimum replicas must not be duplicated")
+}
+
+func TestFillBackoffDoesNotBlockOtherMinimumOrAllowSurplus(t *testing.T) {
+	s := newFillService(t)
+	high, low, endpoints := fillEndpoints(t, s)
+	require.NoError(t, s.repo.SetScheduleBackoff(context.Background(), high.Spec.ID, "H100", time.Minute))
+	entries := []types.FleetEntry{
+		{EndpointID: high.Spec.ID, MinReplicas: 1, MaxReplicas: 3},
+		{EndpointID: low.Spec.ID, MinReplicas: 1, MaxReplicas: 3},
+	}
+	inv := idleInventory(3)
+	s.controller.fill(context.Background(), "H100", entries, endpoints, nil, inv)
+	requests, err := scheduler.NewRequestBacklog(s.rdb).PopN(10)
+	require.NoError(t, err)
+	require.Len(t, requests, 1)
+	assert.Equal(t, low.StubID, requests[0].StubId)
+	assert.Equal(t, uint32(2), inv.free["H100"]["gpu-a"], "no surplus takes the unmet minimum's capacity")
+}
+
+func TestFillMinimumReclaimsHigherPrioritySurplusAndRestores(t *testing.T) {
+	s := newFillService(t)
+	high, low, endpoints := fillEndpoints(t, s)
+	protected := reclaimableReplica(t, s, high, "protected", "w1")
+	protected.Protected = true
+	require.NoError(t, s.repo.SaveReplica(context.Background(), protected))
+	extra := reclaimableReplica(t, s, high, "extra", "w1")
+	extra.StartedAt = time.Now().Add(time.Minute)
+	require.NoError(t, s.repo.SaveReplica(context.Background(), extra))
+	other := reclaimableReplica(t, s, high, "other-surplus", "w1")
+	entries := []types.FleetEntry{
+		{EndpointID: high.Spec.ID, MinReplicas: 1, MaxReplicas: 3, ProtectMinimum: true},
+		{EndpointID: low.Spec.ID, MinReplicas: 1, MaxReplicas: 1, ProtectMinimum: true},
+	}
+	live := []*types.EndpointReplica{protected, extra, other}
+	s.controller.fill(context.Background(), "H100", entries, endpoints, live, noRoomInventory())
+	assert.Equal(t, types.ReplicaStatusDraining, statusOf(t, s, extra.ID))
+	assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, protected.ID))
+	assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, other.ID))
+	// Repeated reconciliation waits for the already selected victim's GPU.
+	s.controller.fill(context.Background(), "H100", entries, endpoints, live, noRoomInventory())
+	assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, other.ID))
+	// Once the worker reports that GPU free, the missing minimum is restored.
+	extra.Status = types.ReplicaStatusStopped
+	require.NoError(t, s.repo.SaveReplica(context.Background(), extra))
+	s.controller.fill(context.Background(), "H100", entries, endpoints, live, idleInventory(1))
+	requests, err := scheduler.NewRequestBacklog(s.rdb).PopN(10)
+	require.NoError(t, err)
+	require.Len(t, requests, 1)
+	assert.Equal(t, low.StubID, requests[0].StubId)
+	assert.False(t, requests[0].Evictable)
+}
+
+func TestFillReclaimRequiresAUsefulWorkerAndPreservesVictimMinimum(t *testing.T) {
+	for _, tc := range []struct {
+		name                             string
+		split                            bool
+		minimum, floor                   uint32
+		protected, nonEvictable, offline bool
+		wantDrain                        bool
+	}{
+		{name: "same worker makes room", wantDrain: true},
+		{name: "fragmented workers", split: true},
+		{name: "victim minimum", minimum: 1},
+		{name: "serverless GPU floor", floor: 1},
+		{name: "protected replica", protected: true},
+		{name: "non-evictable container", nonEvictable: true},
+		{name: "offline worker", offline: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newServiceForTest(t)
+			high, low, endpoints := fillEndpoints(t, s)
+			high.Spec.Gpu = map[string]types.GpuSpec{"H100": {Count: 2}}
+			first := reclaimableReplica(t, s, low, "first", "w1")
+			secondWorker := "w1"
+			inv := noRoomInventory()
+			if tc.split {
+				secondWorker = "w2"
+				inv.workers["w1"].total = 1
+				inv.workers["w2"] = &inventoryWorker{pool: "gpu-a", gpu: "H100", total: 1}
+			}
+			second := reclaimableReplica(t, s, low, "second", secondWorker)
+			if tc.protected {
+				first.Protected = true
+				require.NoError(t, s.repo.SaveReplica(context.Background(), first))
+			}
+			if tc.nonEvictable {
+				state, err := s.containers.GetContainerState(first.ContainerID)
+				require.NoError(t, err)
+				state.Evictable = false
+				require.NoError(t, s.containers.SetContainerState(first.ContainerID, state))
+			}
+			if tc.offline {
+				delete(inv.workers, "w1")
+			}
+			inv.floors = map[string]uint32{"gpu-a": tc.floor}
+			entries := []types.FleetEntry{
+				{EndpointID: high.Spec.ID, MinReplicas: 1, MaxReplicas: 1},
+				{EndpointID: low.Spec.ID, MinReplicas: tc.minimum, MaxReplicas: 2},
+			}
+			s.controller.fill(context.Background(), "H100", entries, endpoints, []*types.EndpointReplica{first, second}, inv)
+			drained := 0
+			for _, replica := range []*types.EndpointReplica{first, second} {
+				if statusOf(t, s, replica.ID) == types.ReplicaStatusDraining {
+					drained++
+				}
+			}
+			if tc.wantDrain {
+				assert.Equal(t, 1, drained)
+			} else {
+				assert.Zero(t, drained, "do not drain replicas when they cannot make one usable slot")
+			}
+		})
+	}
+}
+
+func TestFillLowersCapWhileAnotherMinimumWaits(t *testing.T) {
+	s := newServiceForTest(t)
+	high, low, endpoints := fillEndpoints(t, s)
+	first := reclaimableReplica(t, s, low, "first", "w1")
+	second := reclaimableReplica(t, s, low, "second", "w1")
+	entries := []types.FleetEntry{
+		{EndpointID: high.Spec.ID, MinReplicas: 1, MaxReplicas: 1},
+		{EndpointID: low.Spec.ID, MaxReplicas: 1},
+	}
+	s.controller.fill(context.Background(), "H100", entries, endpoints, []*types.EndpointReplica{first, second}, noRoomInventory())
+	draining := 0
+	for _, replica := range []*types.EndpointReplica{first, second} {
+		if replica.Status == types.ReplicaStatusDraining {
+			draining++
+		}
+	}
+	assert.Equal(t, 1, draining, "the cap trim already releases enough; do not reclaim another copy while it drains")
+}
+
+func TestInventoryRejectsFragmentedGPUs(t *testing.T) {
+	s := newServiceForTest(t)
+	s.workers = repository.NewWorkerRedisRepositoryForTest(s.rdb)
+	s.appConfig.Worker.Pools = map[string]types.WorkerPoolConfig{"gpu-a": {GPUType: "H100", ManagedEndpoints: types.WorkerPoolManagedEndpointsConfig{Enabled: true}}}
+	for _, id := range []string{"w1", "w2"} {
+		require.NoError(t, s.workers.AddWorker(&types.Worker{Id: id, PoolName: "gpu-a", Gpu: "H100", TotalGpuCount: 1, FreeGpuCount: 1, Status: types.WorkerStatusAvailable}))
+	}
+	inv, err := s.controller.inventory(nil)
+	require.NoError(t, err)
+	assert.Equal(t, uint32(2), inv.free["H100"]["gpu-a"])
+	assert.False(t, inv.canPlace("H100", 2))
+	_, ok := inv.place("H100", 2)
+	assert.False(t, ok, "two 1-GPU workers cannot host a 2-GPU replica")
+	_, ok = inv.place("H100", 1)
+	assert.True(t, ok)
+	_, ok = inv.place("H100", 1)
+	assert.True(t, ok)
+	assert.False(t, inv.canPlace("H100", 1), "reservations consume each worker fragment")
+}
+
+func TestFillMinimumPriorityWhenCapacityIsInsufficient(t *testing.T) {
+	s := newFillService(t)
+	high, low, endpoints := fillEndpoints(t, s)
+	entries := []types.FleetEntry{
+		{EndpointID: high.Spec.ID, MinReplicas: 2, MaxReplicas: 4},
+		{EndpointID: low.Spec.ID, MinReplicas: 1, MaxReplicas: 2},
+	}
+	s.controller.fill(context.Background(), "H100", entries, endpoints, nil, idleInventory(2))
+	requests, err := scheduler.NewRequestBacklog(s.rdb).PopN(10)
+	require.NoError(t, err)
+	require.Len(t, requests, 2)
+	for _, request := range requests {
+		assert.Equal(t, high.StubID, request.StubId)
+	}
+}
+
+func TestFillRolloutDoesNotDuplicateProtectedMinimum(t *testing.T) {
+	s := newFillService(t)
+	endpoint := seedEndpoint(t, s)
+	endpoint.Version = 2
+	old := versionReplica(t, s, "old-protected", 1, types.ReplicaStatusReady)
+	old.Protected = true
+	require.NoError(t, s.repo.SaveReplica(context.Background(), old))
+	entries := []types.FleetEntry{{EndpointID: endpoint.Spec.ID, MinReplicas: 2, MaxReplicas: 2, ProtectMinimum: true}}
+	s.controller.fill(context.Background(), "H100", entries, map[string]*types.ManagedEndpoint{endpoint.Spec.ID: endpoint}, []*types.EndpointReplica{old}, idleInventory(2))
+	requests, err := scheduler.NewRequestBacklog(s.rdb).PopN(10)
+	require.NoError(t, err)
+	require.Len(t, requests, 2)
+	assert.False(t, requests[0].Evictable, "one protected slot is still missing")
+	assert.True(t, requests[1].Evictable, "old ready replica already owns the other protected slot")
+	assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, old.ID))
+}
+
+func TestFillCapTrimPreservesProtectedMinimum(t *testing.T) {
+	s := newServiceForTest(t)
+	endpoint := seedEndpoint(t, s)
+	protected := versionReplica(t, s, "protected", 1, types.ReplicaStatusLoading)
+	protected.Protected = true
+	require.NoError(t, s.repo.SaveReplica(context.Background(), protected))
+	surplus := versionReplica(t, s, "surplus", 1, types.ReplicaStatusReady)
+	entries := []types.FleetEntry{{EndpointID: endpoint.Spec.ID, MinReplicas: 1, MaxReplicas: 1, ProtectMinimum: true}}
+	s.controller.fill(context.Background(), "H100", entries, map[string]*types.ManagedEndpoint{endpoint.Spec.ID: endpoint}, []*types.EndpointReplica{protected, surplus}, noRoomInventory())
+	assert.Equal(t, types.ReplicaStatusLoading, statusOf(t, s, protected.ID))
+	assert.Equal(t, types.ReplicaStatusDraining, statusOf(t, s, surplus.ID))
+}
+
+func TestFillReclaimChecksCPUAndPaddedMemoryOnOneWorker(t *testing.T) {
+	for _, tc := range []struct {
+		name                                                        string
+		cpu, memory, victimCPU, victimMemory, totalCPU, totalMemory int64
+		cpuFloor, memoryFloor                                       int64
+		otherCPU, otherMemory                                       int64
+		pending                                                     bool
+		config                                                      string
+		backendError                                                bool
+		wantDrain                                                   bool
+	}{
+		{name: "exact padded fit", cpu: 1000, victimCPU: 1000, victimMemory: 101, totalCPU: 2000, totalMemory: 127, wantDrain: true},
+		{name: "memory overhead cannot fit", cpu: 1000, victimCPU: 1000, victimMemory: 101, totalCPU: 2000, totalMemory: 126},
+		{name: "CPU held by serverless", cpu: 0, victimCPU: 1000, victimMemory: 101, totalCPU: 4000, totalMemory: 127},
+		{name: "CPU fragmented across workers", cpu: 1000, otherCPU: 1000, victimMemory: 101, totalCPU: 4000, totalMemory: 127},
+		{name: "memory fragmented across workers", cpu: 2000, memory: 64, otherMemory: 63, totalCPU: 2000, totalMemory: 127},
+		{name: "CPU floor", cpu: 1000, victimCPU: 1000, victimMemory: 101, totalCPU: 2000, totalMemory: 127, cpuFloor: 1},
+		{name: "memory floor", cpu: 1000, victimCPU: 1000, victimMemory: 101, totalCPU: 2000, totalMemory: 127, memoryFloor: 1},
+		{name: "pending resource ownership", cpu: 1000, victimCPU: 1000, victimMemory: 101, totalCPU: 2000, totalMemory: 127, pending: true},
+		{name: "backend unavailable", backendError: true},
+		{name: "malformed runtime", config: `{"runtime":`},
+		{name: "negative resources", config: `{"runtime":{"cpu":-1,"memory":0}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newServiceForTest(t)
+			high, low, endpoints := fillEndpoints(t, s)
+			victim := reclaimableReplica(t, s, low, "surplus", "w1")
+			config := tc.config
+			if config == "" {
+				config = `{"runtime":{"cpu":2000,"memory":101}}`
+			}
+			backend := fillBackend{config: config}
+			if tc.backendError {
+				backend.err = errors.New("backend unavailable")
+			}
+			s.backend = backend
+			state, err := s.containers.GetContainerState(victim.ContainerID)
+			require.NoError(t, err)
+			state.Cpu, state.Memory = tc.victimCPU, tc.victimMemory
+			require.NoError(t, s.containers.SetContainerState(victim.ContainerID, state))
+			inv := noRoomInventory()
+			worker := inv.workers["w1"]
+			worker.cpu, worker.memory, worker.totalCPU, worker.totalMemory = tc.cpu, tc.memory, tc.totalCPU, tc.totalMemory
+			inv.workers["w2"] = &inventoryWorker{pool: "gpu-a", gpu: "H100", total: 1, cpu: tc.otherCPU, memory: tc.otherMemory}
+			inv.resourceFloors = map[string]replicaResources{"gpu-a": {cpu: tc.cpuFloor, memory: tc.memoryFloor}}
+			inv.pending = map[string]bool{"gpu-a": tc.pending}
+			entries := []types.FleetEntry{{EndpointID: high.Spec.ID, MinReplicas: 1, MaxReplicas: 1}, {EndpointID: low.Spec.ID, MaxReplicas: 1}}
+			s.controller.fill(context.Background(), "H100", entries, endpoints, []*types.EndpointReplica{victim}, inv)
+			want := types.ReplicaStatusReady
+			if tc.wantDrain {
+				want = types.ReplicaStatusDraining
+			}
+			assert.Equal(t, want, statusOf(t, s, victim.ID))
+		})
+	}
+}
+
+func TestRetirePreservesProtectedMinimumWhileReplacementLoads(t *testing.T) {
+	for _, rollout := range []string{"", "replace"} {
+		t.Run("rollout="+rollout, func(t *testing.T) {
+			s := newServiceForTest(t)
+			endpoint := seedEndpoint(t, s)
+			endpoint.Version, endpoint.Spec.Rollout = 2, rollout
+			fleet := seedFleet(t, s, map[string]types.FleetEndpoint{endpoint.Spec.ID: {Enabled: true, GPUs: map[string]types.FleetPlacement{"H100": {Priority: 1, MinReplicas: 2, MaxReplicas: 2}}}})
+			old := versionReplica(t, s, "old-protected", 1, types.ReplicaStatusReady)
+			ready := versionReplica(t, s, "new-ready", 2, types.ReplicaStatusReady)
+			loading := versionReplica(t, s, "new-loading", 2, types.ReplicaStatusLoading)
+			old.Protected, ready.Protected = true, true
+			require.NoError(t, s.repo.SaveReplica(context.Background(), old))
+			require.NoError(t, s.repo.SaveReplica(context.Background(), ready))
+			live := []*types.EndpointReplica{old, ready, loading}
+			s.controller.retire(context.Background(), endpoint, fleet, live, noRoomInventory(), nil)
+			assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, old.ID), "one ready replacement cannot cover a two-replica protected floor")
+			// The protection pass transfers the slot once the second copy serves.
+			loading.Status, loading.Protected, old.Protected = types.ReplicaStatusReady, true, false
+			require.NoError(t, s.repo.SaveReplica(context.Background(), loading))
+			require.NoError(t, s.repo.SaveReplica(context.Background(), old))
+			s.controller.retire(context.Background(), endpoint, fleet, live, noRoomInventory(), nil)
+			assert.Equal(t, types.ReplicaStatusDraining, statusOf(t, s, old.ID))
+		})
+	}
+}
+
+func TestRetireProtectedMinimumIsPerGPU(t *testing.T) {
+	s := newServiceForTest(t)
+	endpoint := seedEndpoint(t, s)
+	endpoint.Version = 2
+	endpoint.Spec.Gpu = map[string]types.GpuSpec{"H100": {Count: 1}, "A100-80": {Count: 1}}
+	fleet := seedFleet(t, s, map[string]types.FleetEndpoint{endpoint.Spec.ID: {Enabled: true, GPUs: map[string]types.FleetPlacement{
+		"H100": {Priority: 1, MinReplicas: 1, MaxReplicas: 1}, "A100-80": {Priority: 1, MinReplicas: 1, MaxReplicas: 1},
+	}}})
+	old := versionReplica(t, s, "old-a100", 1, types.ReplicaStatusReady)
+	old.GPU, old.Protected = "A100-80", true
+	ready := versionReplica(t, s, "new-h100", 2, types.ReplicaStatusReady)
+	ready.Protected = true
+	loading := versionReplica(t, s, "new-a100", 2, types.ReplicaStatusLoading)
+	loading.GPU = "A100-80"
+	for _, replica := range []*types.EndpointReplica{old, ready, loading} {
+		require.NoError(t, s.repo.SaveReplica(context.Background(), replica))
+	}
+	s.controller.retire(context.Background(), endpoint, fleet, []*types.EndpointReplica{old, ready, loading}, noRoomInventory(), nil)
+	assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, old.ID), "a ready H100 cannot replace the protected A100 minimum")
+}
+
+func TestRetireProtectedMinimumOnlyAllowsExplicitCapacityReplacement(t *testing.T) {
+	for _, tc := range []struct {
+		name, rollout string
+		free          uint32
+		want          types.ReplicaStatus
+	}{
+		{"default waits", "", 0, types.ReplicaStatusReady},
+		{"replace makes room", "replace", 0, types.ReplicaStatusDraining},
+		{"replace uses idle capacity first", "replace", 1, types.ReplicaStatusReady},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newServiceForTest(t)
+			endpoint := seedEndpoint(t, s)
+			endpoint.Version, endpoint.Spec.Rollout = 2, tc.rollout
+			fleet := seedFleet(t, s, map[string]types.FleetEndpoint{endpoint.Spec.ID: {Enabled: true, GPUs: map[string]types.FleetPlacement{"H100": {Priority: 1, MinReplicas: 2, MaxReplicas: 2}}}})
+			old := versionReplica(t, s, "old-protected", 1, types.ReplicaStatusReady)
+			ready := versionReplica(t, s, "new-ready", 2, types.ReplicaStatusReady)
+			old.Protected, ready.Protected = true, true
+			require.NoError(t, s.repo.SaveReplica(context.Background(), old))
+			require.NoError(t, s.repo.SaveReplica(context.Background(), ready))
+			s.controller.retire(context.Background(), endpoint, fleet, []*types.EndpointReplica{old, ready}, idleInventory(tc.free), nil)
+			assert.Equal(t, tc.want, statusOf(t, s, old.ID))
+		})
+	}
+}
+
+func TestRetireSkipsOnlyProtectionFailureGroup(t *testing.T) {
+	s := newServiceForTest(t)
+	endpoint := seedEndpoint(t, s)
+	endpoint.Version = 2
+	endpoint.Spec.Gpu = map[string]types.GpuSpec{"H100": {Count: 1}, "A100-80": {Count: 1}}
+	fleet := seedFleet(t, s, map[string]types.FleetEndpoint{endpoint.Spec.ID: {Enabled: true, GPUs: map[string]types.FleetPlacement{"H100": {Priority: 1}, "A100-80": {Priority: 1}}}})
+	blockedOld := versionReplica(t, s, "blocked-h100", 1, types.ReplicaStatusReady)
+	otherOld := versionReplica(t, s, "old-a100", 1, types.ReplicaStatusReady)
+	otherOld.GPU = "A100-80"
+	require.NoError(t, s.repo.SaveReplica(context.Background(), otherOld))
+	ready := versionReplica(t, s, "new-ready", 2, types.ReplicaStatusReady)
+	blocked := map[protectionGroup]bool{{endpointID: endpoint.Spec.ID, gpu: "H100"}: true}
+	s.controller.retire(context.Background(), endpoint, fleet, []*types.EndpointReplica{blockedOld, otherOld, ready}, noRoomInventory(), blocked)
+	assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, blockedOld.ID))
+	assert.Equal(t, types.ReplicaStatusDraining, statusOf(t, s, otherOld.ID), "an unrelated GPU placement must still progress")
 }

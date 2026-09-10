@@ -88,17 +88,31 @@ func (c *controller) syncReplica(ctx context.Context, replica *types.EndpointRep
 		}
 		return c.finishReplica(ctx, replica, c.exitStatus(replica), "container exited")
 	}
-	if state.WorkerId != "" && replica.WorkerID == "" {
-		replica.WorkerID, replica.MachineID = state.WorkerId, state.MachineId
-		if cfg, ok := c.poolConfig(replica.PoolName); ok && cfg.Mode == types.PoolModeProvider {
-			if worker, err := c.s.workers.GetWorkerById(state.WorkerId); err == nil && worker != nil {
-				replica.ProviderWorkspaceID = worker.WorkspaceId
+	if replica.WorkerID != state.WorkerId || replica.MachineID != state.MachineId {
+		// Pending delivery can move to another worker. Protection and ownership
+		// checks must follow that assignment, including its provider attribution.
+		provider := ""
+		if cfg, ok := c.poolConfig(replica.PoolName); ok && cfg.Mode == types.PoolModeProvider && state.WorkerId != "" {
+			worker, err := c.s.workers.GetWorkerById(state.WorkerId)
+			if err != nil {
+				return err
+			}
+			if worker != nil {
+				provider = worker.WorkspaceId
 			}
 		}
+		if replica.WorkerID != "" {
+			replica.Address = ""
+		}
+		replica.WorkerID, replica.MachineID, replica.ProviderWorkspaceID = state.WorkerId, state.MachineId, provider
 	}
+	replica.Protected = !state.Evictable
 
 	switch state.Status {
 	case types.ContainerStatusPending:
+		if replica.Alive() {
+			replica.Status, replica.EngineReady = types.ReplicaStatusScheduling, false
+		}
 		if now.Sub(replica.StartedAt) > schedulingGrace {
 			return c.stopAndFinish(ctx, replica, types.ReplicaStatusFailed, "not scheduled within grace period")
 		}
@@ -307,7 +321,7 @@ func (c *controller) drainReplica(ctx context.Context, replica *types.EndpointRe
 }
 
 // startReplica submits a container request for one replica and records it.
-func (c *controller) startReplica(ctx context.Context, endpoint *types.ManagedEndpoint, gpu string, pool eligiblePool) (*types.EndpointReplica, error) {
+func (c *controller) startReplica(ctx context.Context, endpoint *types.ManagedEndpoint, gpu string, pool eligiblePool, protected bool) (*types.EndpointReplica, error) {
 	stub, err := c.s.backend.GetStubByExternalId(ctx, endpoint.StubID)
 	if err != nil {
 		return nil, err
@@ -384,7 +398,7 @@ func (c *controller) startReplica(ctx context.Context, endpoint *types.ManagedEn
 		Ports:             []uint32{endpoint.Spec.Port},
 		PoolSelector:      pool.Name,
 		OpportunisticOnly: true,
-		Evictable:         c.s.config.Preemption.Enabled && !endpoint.Spec.Protected,
+		Evictable:         c.s.config.Preemption.Enabled && !protected,
 		DrainSeconds:      drainSeconds,
 		Timestamp:         time.Now(),
 	}
@@ -398,6 +412,7 @@ func (c *controller) startReplica(ctx context.Context, endpoint *types.ManagedEn
 		Version:     endpoint.Version,
 		GPU:         gpu,
 		GPUCount:    gpuCount,
+		Protected:   !request.Evictable,
 		Locality:    pool.Locality,
 		PoolName:    pool.Name,
 		ContainerID: containerID,

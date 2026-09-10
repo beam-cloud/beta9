@@ -93,7 +93,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 	}
 	if managedGpus := managedGpuTypes(managedEndpoint); len(managedGpus) > 0 {
 		// The stub runtime carries the GPU types the app supports; the endpoint
-		// controller sets the exact type/count on each replica from fleet.yaml.
+		// controller sets the exact type/count on each replica from config.yaml.
 		gpus = managedGpus
 	}
 

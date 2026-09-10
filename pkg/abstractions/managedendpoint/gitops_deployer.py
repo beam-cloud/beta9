@@ -3,7 +3,7 @@ GitOps deployer: a one-shot container (git + the beta9 SDK) launched by the
 gateway. Configured by ENDPOINTS_* env (see gitops.go launch): it checks out
 REPO_SHA, deploys every app.py under REPO_PATH that changed since LAST_SHA (or
 everything with FORCE, plus REDEPLOY paths), and POSTs one report with the
-results and the raw fleet.yaml to /api/v1/endpoints/gitops/report.
+results and the raw config.yaml to /api/v1/endpoints/gitops/report.
 """
 
 import fnmatch
@@ -129,7 +129,7 @@ def app_changed(rel, changed, app_dirs):
         return True
     prefix = f"{REPO_PATH}/" if REPO_PATH else ""
     for path in changed:
-        if path == "fleet.yaml":
+        if path == "config.yaml":
             continue  # placement only; the gateway applies it without a redeploy
         if not path.startswith(prefix):
             return True
@@ -199,12 +199,11 @@ def post_report(report):
     return False
 
 
-def load_fleet():
-    """Raw fleet.yaml from the repo root (the gateway parses and validates it)."""
-    path = REPO / "fleet.yaml"
+def load_config():
+    """Raw config.yaml from the repo root (the gateway parses and validates it)."""
+    path = REPO / "config.yaml"
     if not path.is_file():
-        log("no fleet.yaml; nothing will be placed")
-        return ""
+        raise RuntimeError("config.yaml is required at the repository root")
     return path.read_text()
 
 
@@ -246,6 +245,7 @@ def main():
     report = {"run_id": RUN_ID, "sha": SHA, "results": [], "error": ""}
     try:
         checkout()
+        report["fleet_yaml"] = load_config()
         root = REPO / REPO_PATH if REPO_PATH else REPO
         if not root.is_dir():
             raise RuntimeError(f"endpoints path {REPO_PATH!r} not found at {SHA[:8]}")
@@ -256,7 +256,6 @@ def main():
         log(f"{len(apps)} app(s) at {SHA[:8]}; changed={n_changed}")
         for app in apps:
             deploy_app(app, root, changed, app_dirs, report)
-        report["fleet_yaml"] = load_fleet()
     except (Exception, SystemExit) as exc:  # noqa: BLE001  (the report must always be posted)
         traceback.print_exc()
         report["error"] = f"exited with {exc.code}" if isinstance(exc, SystemExit) else str(exc)

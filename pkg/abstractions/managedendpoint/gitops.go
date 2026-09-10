@@ -530,24 +530,52 @@ func (g *gitops) retire(ctx context.Context, id, sha string) error {
 	return nil
 }
 
-// parseFleet reads fleet.yaml: endpoint id -> {enabled, gpus: {<gpu>: {priority, maxReplicas}}}.
+// parseFleet reads config.yaml: endpoint id -> {enabled, gpus: {<gpu>: placement}}.
 func parseFleet(text string) (*types.Fleet, error) {
+	if strings.TrimSpace(text) == "" {
+		return nil, fmt.Errorf("an endpoint mapping is required (use {} to disable all endpoints)")
+	}
 	fleet := &types.Fleet{Endpoints: map[string]types.FleetEndpoint{}}
-	if err := yaml.UnmarshalStrict([]byte(text), &fleet.Endpoints); err != nil {
+	decoder := yaml.NewDecoder(strings.NewReader(text))
+	decoder.SetStrict(true)
+	if err := decoder.Decode(&fleet.Endpoints); err != nil {
 		return nil, err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return nil, fmt.Errorf("exactly one YAML document is required")
+	}
+	if fleet.Endpoints == nil {
+		return nil, fmt.Errorf("an endpoint mapping is required (use {} to disable all endpoints)")
+	}
+	ids := map[string]bool{}
+	for id, endpoint := range fleet.Endpoints {
+		key := strings.ToLower(strings.TrimSpace(id))
+		if key == "" || ids[key] {
+			return nil, fmt.Errorf("empty or duplicate endpoint %q", id)
+		}
+		ids[key] = true
+		gpus := map[string]bool{}
+		for gpu := range endpoint.GPUs {
+			key := types.GPUKey(gpu)
+			if gpus[key] {
+				return nil, fmt.Errorf("%s: duplicate GPU %q", id, gpu)
+			}
+			gpus[key] = true
+		}
 	}
 	fleet.Normalize()
 	return fleet, fleet.Validate()
 }
 
-// applyFleet validates and saves the report's fleet.yaml, dropping entries for
+// applyFleet validates and saves the report's config.yaml, dropping entries for
 // endpoints that are not deployed (reported as skipped). An invalid fleet is
 // not applied and not retried; a failed write leaves FleetSHA behind so sync
 // relaunches at the same SHA.
 func (g *gitops) applyFleet(ctx context.Context, state *types.GitOpsState, report *types.GitOpsReport) bool {
 	fleet, err := parseFleet(report.FleetYAML)
 	if err != nil {
-		state.FleetSHA, state.FleetError = report.SHA, "fleet.yaml: "+err.Error()
+		state.FleetSHA, state.FleetError = report.SHA, "config.yaml: "+err.Error()
 		return false
 	}
 	endpoints, err := g.s.repo.ListEndpoints(ctx)
