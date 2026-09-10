@@ -83,10 +83,9 @@ type Worker struct {
 	// this flag may be recovered automatically after a transient failure.
 	CordonRequested bool `json:"cordon_requested" redis:"cordon_requested"`
 	// RolloutGeneration gates readiness while an agent worker is being replaced.
-	RolloutGeneration     string       `json:"rollout_generation" redis:"rollout_generation"`
-	RolloutPreviousStatus WorkerStatus `json:"-" redis:"rollout_previous_status" go2proto:"ignore"`
-	RolloutBuildVersion   string       `json:"rollout_build_version" redis:"-"`
-	WorkerImageOverride   string       `json:"worker_image_override" redis:"worker_image_override"`
+	RolloutGeneration   string `json:"rollout_generation" redis:"rollout_generation"`
+	RolloutBuildVersion string `json:"rollout_build_version" redis:"-"`
+	WorkerImageOverride string `json:"worker_image_override" redis:"worker_image_override"`
 	// Evictable* is the share of used capacity held by evictable containers
 	// (managed endpoint replicas). Non-evictable requests may claim it; the
 	// scheduler stops the holders first.
@@ -95,6 +94,8 @@ type Worker struct {
 	EvictableGpuCount   uint32 `json:"evictable_gpu_count" redis:"evictable_gpu_count"`
 	WorkspaceId         string `json:"-" redis:"workspace_id" go2proto:"ignore"`
 	ControlPlaneManaged bool   `json:"-" redis:"control_plane_managed" go2proto:"ignore"`
+	// Keep internal fields after wire fields: go2proto numbers by struct position.
+	RolloutPreviousStatus WorkerStatus `json:"-" redis:"rollout_previous_status" go2proto:"ignore"`
 }
 
 type WorkerKeepAlive struct {
