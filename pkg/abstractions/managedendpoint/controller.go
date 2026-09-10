@@ -106,6 +106,11 @@ func (c *controller) reconcile(ctx context.Context) (err error) {
 		c.retire(ctx, endpoint, fleet, live, inv, blocked)
 	}
 	demand := c.readDemand(ctx, fleet, live)
+	for group := range blocked {
+		if d := demand[group.endpointID]; d != nil {
+			delete(d.gpus, group.gpu)
+		}
+	}
 	for _, gpu := range fleet.GPUs() {
 		entries := fleet.Entries(gpu)
 		entries = slices.DeleteFunc(entries, func(entry types.FleetEntry) bool {
@@ -491,9 +496,9 @@ func (t *placementTarget) starting() bool {
 	return false
 }
 
-// fill satisfies every GPU minimum in priority order before spending spare
-// capacity on surplus. A minimum can reclaim another entry's surplus, even
-// from a higher priority. Surplus only reclaims from lower priorities.
+// fill satisfies GPU minimums, then requested on-demand capacity, then hot
+// surplus. Requests can reclaim hot extras; hot surplus only reclaims from
+// lower priorities and never displaces a recently requested on-demand copy.
 func (c *controller) fill(ctx context.Context, gpu string, entries []types.FleetEntry, endpoints map[string]*types.ManagedEndpoint, live []*types.EndpointReplica, inv *clusterInventory) {
 	c.fillWithDemand(ctx, gpu, entries, endpoints, live, inv, nil)
 }
@@ -535,8 +540,12 @@ func (c *controller) fillWithDemand(ctx context.Context, gpu string, entries []t
 		}
 	}
 	reclaimed := false
-	for _, minimum := range []bool{true, false} {
+	for phase := range 3 {
+		minimum := phase == 0
 		for index, target := range targets {
+			if !minimum && (phase == 1) != target.entry.Serverless {
+				continue
+			}
 			limit := target.entry.MinReplicas
 			if !minimum {
 				limit = target.entry.MaxReplicas
@@ -573,8 +582,11 @@ func (c *controller) fillWithDemand(ctx context.Context, gpu string, entries []t
 					target.demand.starting = true
 				}
 				protected[target.entry.EndpointID] += min(started, protectedBudget)
-				if noRoom && !target.entry.Serverless && !target.starting() && !reclaimed {
+				if noRoom && !target.starting() && !reclaimed {
 					reclaimed = c.reclaim(ctx, gpu, index, targets, live, inv, minimum)
+					if reclaimed && target.demand != nil {
+						target.demand.starting = true
+					}
 				}
 			}
 		}
@@ -598,19 +610,35 @@ func (c *controller) reclaim(ctx context.Context, gpu string, index int, targets
 		return false
 	}
 	target := targets[index]
+	// Both minimums and requested on-demand models outrank hot surplus.
+	preferSurplus := minimum || target.entry.Serverless
 	resources := c.targetResources(ctx, target)
 	if resources == nil {
 		return false // Never destroy a replica for an unknown request shape.
+	}
+	if target.entry.Serverless && target.demand != nil {
+		for otherGPU, placement := range target.demand.gpus {
+			if otherGPU == gpu || placement.MaxReplicas > 0 && target.demand.counts[otherGPU] >= placement.MaxReplicas {
+				continue
+			}
+			if inv.canFit(otherGPU, target.endpoint.Spec.Gpu[otherGPU].Count, *resources) {
+				if backoff, err := c.s.repo.InScheduleBackoff(ctx, target.endpoint.Spec.ID, otherGPU); err == nil && !backoff {
+					return false // Use an eligible idle alternative before taking a hot extra.
+				}
+			}
+		}
 	}
 	need := uint64(max(target.endpoint.Spec.Gpu[gpu].Count, 1))
 	reason := "gpu reclaimed for " + target.endpoint.Spec.ID
 	settling := map[string]bool{}
 	for _, replica := range live {
-		if replica.GPU == gpu && (replica.Status == types.ReplicaStatusDraining || replica.Status == types.ReplicaStatusEvicting) {
+		if replica.Status == types.ReplicaStatusDraining || replica.Status == types.ReplicaStatusEvicting {
 			if replica.StatusReason == reason {
 				return false // Wait for the capacity already being released.
 			}
-			settling[replica.WorkerID] = true
+			if replica.GPU == gpu {
+				settling[replica.WorkerID] = true
+			}
 		}
 	}
 	type victim struct {
@@ -621,14 +649,17 @@ func (c *controller) reclaim(ctx context.Context, gpu string, index int, targets
 	byWorker := map[string][]victim{}
 	for offset := range len(targets) {
 		ownerIndex := offset
-		if minimum {
+		if preferSurplus {
 			ownerIndex = len(targets) - 1 - offset // least priority gives back first
 		}
 		owner := targets[ownerIndex]
+		if target.entry.Serverless && owner.entry.Serverless {
+			continue // A requested model only reclaims hot extras.
+		}
 		if !minimum && owner.entry.Serverless && (owner.demand == nil || owner.demand.warm || owner.demand.active > 0) {
 			continue // Hot surplus must not churn a requested on-demand copy.
 		}
-		if ownerIndex == index || (!minimum && ownerIndex < index) || owner.count() <= owner.entry.MinReplicas {
+		if ownerIndex == index || (!preferSurplus && ownerIndex < index) || owner.count() <= owner.entry.MinReplicas {
 			continue
 		}
 		current := append([]*types.EndpointReplica(nil), owner.replicas...)
@@ -695,6 +726,33 @@ func (c *controller) reclaim(ctx context.Context, gpu string, index int, targets
 				poolResources.cpu+releasedResources.cpu-resources.cpu >= floor.cpu && poolResources.memory+releasedResources.memory-resources.memory >= floor.memory {
 				return c.drainReplica(ctx, first.replica, first.owner.endpoint.Spec.DrainSeconds, false, reason) == nil
 			}
+		}
+	}
+	return false
+}
+
+// canFit proves that another configured GPU has idle resources, including the
+// pool's CPU/memory floors. A GPU-only check could strand a request behind a
+// worker with insufficient memory while usable hot surplus exists elsewhere.
+func (inv *clusterInventory) canFit(gpu string, count uint32, resources replicaResources) bool {
+	need := max(count, 1)
+	for _, pool := range inv.pools[gpu] {
+		if inv.pending[pool.Name] || inv.free[gpu][pool.Name] < need {
+			continue
+		}
+		var total replicaResources
+		fits := false
+		for _, worker := range inv.workers {
+			if worker.pool != pool.Name || worker.gpu != gpu {
+				continue
+			}
+			total.cpu += worker.cpu
+			total.memory += worker.memory
+			fits = fits || worker.free >= need && worker.cpu >= resources.cpu && worker.memory >= resources.memory
+		}
+		floor := inv.resourceFloors[pool.Name]
+		if fits && total.cpu-resources.cpu >= floor.cpu && total.memory-resources.memory >= floor.memory {
+			return true
 		}
 	}
 	return false

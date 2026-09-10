@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -50,8 +51,10 @@ return {redis.call('ZCARD', KEYS[1]) - warm, warm}
 type endpointDemand struct {
 	active   int64
 	warm     bool
-	capacity int64 // serving capacity across every GPU type, including hot copies
-	starting bool  // wait for capacity to become known before adding another copy
+	capacity int64                           // serving capacity across every GPU type, including hot copies
+	starting bool                            // wait for capacity to become known before adding another copy
+	gpus     map[string]types.FleetPlacement // configured on-demand GPU alternatives
+	counts   map[string]uint32
 }
 
 // readyCapacity is the finite serving capacity observed at admission. Queued
@@ -122,13 +125,30 @@ func (c *controller) readDemand(ctx context.Context, fleet *types.Fleet, live []
 			// A failed read leaves nil: neither scale up nor scale down based
 			// on unknown demand. Hot placements continue independently.
 			out[id], _ = c.s.demand(ctx, id, "read", "", 0)
+			if demand := out[id]; demand != nil {
+				demand.gpus = make(map[string]types.FleetPlacement)
+				demand.counts = make(map[string]uint32)
+				for gpu, placement := range fleet.Placements(id) {
+					if placement.Serverless {
+						demand.gpus[gpu] = placement
+					}
+				}
+			}
 		}
 	}
 	for _, replica := range live {
+		if replica.Status == types.ReplicaStatusDraining || replica.Status == types.ReplicaStatusEvicting {
+			if id, reclaimed := strings.CutPrefix(replica.StatusReason, "gpu reclaimed for "); reclaimed {
+				if demand := out[id]; demand != nil {
+					demand.starting = true // wait for a donor on any GPU type to release capacity
+				}
+			}
+		}
 		demand := out[replica.EndpointID]
 		if demand == nil || !replica.Alive() {
 			continue
 		}
+		demand.counts[replica.GPU]++
 		if !replica.Serving() {
 			demand.starting = true
 		} else {

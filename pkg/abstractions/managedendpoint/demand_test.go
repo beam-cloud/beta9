@@ -264,13 +264,13 @@ func TestServerlessCapAndIdleRetirementIncludeOldVersions(t *testing.T) {
 	}
 }
 
-func TestServerlessDoesNotReclaimHotReplicas(t *testing.T) {
+func TestServerlessReclaimsHotSurplus(t *testing.T) {
 	s := newFillService(t)
 	high, low, endpoints := fillEndpoints(t, s)
 	other := reclaimableReplica(t, s, low, "hot-surplus", "w1")
 	entries := []types.FleetEntry{{EndpointID: high.Spec.ID, Serverless: true, MaxReplicas: 1}, {EndpointID: low.Spec.ID, MaxReplicas: 1}}
 	s.controller.fillWithDemand(context.Background(), "H100", entries, endpoints, []*types.EndpointReplica{other}, noRoomInventory(), map[string]*endpointDemand{high.Spec.ID: {active: 1, warm: true}})
-	assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, other.ID))
+	assert.Equal(t, types.ReplicaStatusDraining, statusOf(t, s, other.ID))
 }
 
 func TestServerlessRolloutStartsReplacementOnSpareCapacity(t *testing.T) {
