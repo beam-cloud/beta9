@@ -1,0 +1,55 @@
+{
+  "started_at": "2026-09-10T18:22:30.014632+00:00",
+  "source_sha": "307bb8b39b7c4a48aac3f914f2833f484af137a8",
+  "source_hash": "5ef111d0e3558e86ab1bc331c8157799156ca59cc91d29c99f0ccc830be98839",
+  "before_fingerprint": "276fcefeeeabb2eaef4bdebf51fa1da8b7548d0127ea16aa278c6a10029dde90",
+  "before_replicas": [
+    {
+      "id": "qwen-qwen3-8b-2024a25f",
+      "version": 16,
+      "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-1a280d52",
+      "status": "ready",
+      "protected": false
+    },
+    {
+      "id": "qwen-qwen3-8b-8f411457",
+      "version": 16,
+      "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-183a5ebd",
+      "status": "ready",
+      "protected": true
+    }
+  ],
+  "secret_verification": {
+    "ok": true,
+    "namespace": "beta9",
+    "secret": "beta9",
+    "aws_version": "80e72265-c7f1-4ebe-880e-79d372fd5759",
+    "sha256": "04fd693d96e03af999c10ffea537f441c5ccfe45dce162562dddfdda3bbf188d",
+    "kubernetes_resource_version": "566305622"
+  },
+  "gateway_image_rebuilt": false,
+  "ok": true,
+  "verified_at": "2026-09-10T18:22:59.775656+00:00",
+  "source_fingerprint": "37c2c29439616dd2924db9579fc0efcd23c7e1f80706bbd14d6754719a9635b9",
+  "gateway_pid": "106042",
+  "public_models_have_no_placement_mode": true,
+  "public_model_count": 1,
+  "same_ready_containers": true,
+  "after_replicas": [
+    {
+      "id": "qwen-qwen3-8b-2024a25f",
+      "version": 16,
+      "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-1a280d52",
+      "status": "ready",
+      "protected": false
+    },
+    {
+      "id": "qwen-qwen3-8b-8f411457",
+      "version": 16,
+      "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-183a5ebd",
+      "status": "ready",
+      "protected": true
+    }
+  ],
+  "transient_verification_errors": []
+}

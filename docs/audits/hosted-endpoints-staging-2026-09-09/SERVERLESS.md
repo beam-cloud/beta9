@@ -130,4 +130,6 @@ Evidence: [cold requests, accounting and idle expiry](serverless-live.json),
 [live deletion regression](gitops-deletion-regression.json),
 [final inference and catalog](serverless-final-smoke.json),
 [test and deployment summary](serverless-validation.json),
+[configuration-only public interface](config-only-model-interface.json),
+[common frontend verification](common-model-ui.json),
 [final dashboard and itemized usage](serverless-ui-restored.json).

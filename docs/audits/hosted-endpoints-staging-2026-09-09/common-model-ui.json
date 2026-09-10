@@ -1,0 +1,42 @@
+{
+  "source": "Real authenticated staging UI; read-only navigation",
+  "observedAt": "2026-09-10T18:25:04.315Z",
+  "frontendSha": "e278b9466ec30d66e79a4b382df7283cbeedc102",
+  "deploymentStatus": "success",
+  "deploymentUrl": "https://vercel.com/beam-7eff6da6/beta9/7xGj9tYyJnp7GMQvUjYUsGNVQDAe",
+  "catalog": {
+    "listed": true,
+    "modeLabel": false,
+    "loadError": false
+  },
+  "detail": {
+    "connectVisible": true,
+    "sendRequestVisible": true,
+    "modeLabel": false,
+    "modeGuidance": false,
+    "unavailable": false
+  },
+  "admin": {
+    "modeLabel": false,
+    "policy": {
+      "minReplicas": 1,
+      "maxReplicas": 2,
+      "priority": 1,
+      "protectedMinimum": 1
+    },
+    "version": 16,
+    "readyReplicas": 2,
+    "totalReplicas": 2,
+    "appliedRepoSha": "1684ce7",
+    "syncError": false
+  },
+  "checks": [
+    "TypeScript noEmit passed",
+    "Affected ESLint passed",
+    "14 placement/catalog/usage regression tests passed",
+    "Actual ready and zero-ready cards render identically with enabled links",
+    "Actual common connection panel renders without mode-specific guidance"
+  ],
+  "inferenceRequestsMade": 0,
+  "fixtureMutationsMade": 0
+}
