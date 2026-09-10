@@ -285,10 +285,17 @@ func (r *PostgresBackendRepository) GetAdminWorkspace(ctx context.Context) (*typ
 		r.adminWorkspaceMu.Unlock()
 
 		var adminWorkspace types.Workspace
-		query := `SELECT w.id, w.external_id, w.name, w.created_at, w.concurrency_limit_id, w.volume_cache_enabled, w.multi_gpu_enabled
+		query := `SELECT w.id, w.external_id, w.name, w.created_at, w.concurrency_limit_id, w.volume_cache_enabled, w.multi_gpu_enabled,
+	ws.id "storage.id", ws.bucket_name "storage.bucket_name", ws.access_key "storage.access_key",
+	ws.secret_key "storage.secret_key", ws.endpoint_url "storage.endpoint_url", ws.region "storage.region",
+	ws.created_at "storage.created_at", ws.updated_at "storage.updated_at"
 	FROM workspace w
+	LEFT JOIN workspace_storage ws ON w.storage_id = ws.id
 	WHERE w.is_cluster_admin;`
 		err := r.client.GetContext(ctx, &adminWorkspace, query)
+		if err == nil && adminWorkspace.StorageAvailable() {
+			err = r.decryptFields(adminWorkspace.Storage)
+		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			err = ctxErr
 		}
