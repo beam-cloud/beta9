@@ -1,6 +1,6 @@
 # Hosted endpoints: staging fixes and validation
 
-Updated September 10, 2026. Branch selection, the simplified catalog, agent tuning, a four-minute gateway outage, serverless reclaim, and automatic model recovery have passed live staging validation. Qwen version 15 runs with one protected minimum and one preemptible extra on two RTX 5090s. **The strict zero-impact serverless cold-start requirement is still not met when a GPU must be reclaimed.**
+Updated September 10, 2026. Branch selection, the simplified catalog, agent tuning, realtime token charges, gateway-outage recovery, protected minimums, and on-demand hosted models have live staging evidence. Qwen version 16 runs with one protected minimum and one preemptible extra on two RTX 5090s. On-demand validation also exposed an unrelated-model redeploy during endpoint deletion; its cause and correction are documented in [the on-demand report](SERVERLESS.md). **The strict zero-impact serverless cold-start requirement is still not met when a GPU must be reclaimed.**
 
 A real Qwen3-8B runs in the staging `codex-rtx5090` pool through repository GitOps, a custom worker, and an Okteto gateway. The implementation now uses the existing credit ledger, explicit model rollout policy, cancellable worker rollouts, and a lightweight agent client. Live validation found and fixed additional gaps that unit tests alone missed. The earlier audit remains available in commit `db21e959`.
 
@@ -50,9 +50,9 @@ Evidence: [idle baseline](fixes-idle-baseline-timings.json), [active eviction](f
 
 ## Deployment and cleanup
 
-Backend branch: `codex/hosted-staging-validation`, implementation through `3dfcc188`. GPU worker `8e290b6f` uses `codex-hosted-minimums-sdk-20260910` (SDK `e4a96fad`) with physical GPUs 2 and 3. Gateway source `822648dd` runs through Okteto with the existing `codex-hosted-fixes-recovery-20260910` bootstrap image; helper `3dfcc188` fixes reconnecting source sync. Gateway PID 55855 and source fingerprint `721e54f59bfff150707c195da40c448a4692f94f1ec7de76500b8cd68bf2d210` were verified healthy, with both Qwen containers unchanged. The mode-0600 local bootstrap file must remain available for the whole active Okteto session because reconnects reread it.
+Backend branch: `codex/hosted-staging-validation`, implementation through `5f646b98`. GPU worker `8e290b6f` uses `codex-hosted-minimums-sdk-20260910` (SDK `e4a96fad`) with physical GPUs 2 and 3. Gateway source runs through Okteto with the existing `codex-hosted-fixes-recovery-20260910` bootstrap image; no gateway image rebuild was needed. Gateway PID 97643 and source fingerprint `276fcefeeeabb2eaef4bdebf51fa1da8b7548d0127ea16aa278c6a10029dde90` were verified healthy, with both v16 Qwen containers unchanged across this reload. The first public API check during the swap timed out; subsequent checks succeeded. AWS config was forced and byte-verified before reload. [Reload evidence](serverless-cleanup-reload.json). The mode-0600 local bootstrap file must remain available for the whole active Okteto session because reconnects reread it.
 
-Internal API and Celery use `codex-hosted-token-metering-20260910` (`c99355ec`) from an isolated worktree. The old writers were drained before the Decimal credit migration to prevent truncation by an old IntegerField writer. API 2/2 and Celery 1/1 were restored; authentication and configuration mounts were preserved. AWS internal-api config `1587bb4a-8b78-4ca2-93d5-a618e169affc` includes the dedicated canonical-counter connection and was exactly synced before deployment. Frontend `aa66cacf` is deployed and browser-verified, preserving the user's staging changes. Production branches and the user's unrelated local edits remain untouched.
+Internal API and Celery use `codex-hosted-token-metering-20260910` (`c99355ec`) from an isolated worktree. The old writers were drained before the Decimal credit migration to prevent truncation by an old IntegerField writer. API 2/2 and Celery 1/1 were restored; authentication and configuration mounts were preserved. AWS internal-api config `1587bb4a-8b78-4ca2-93d5-a618e169affc` includes the dedicated canonical-counter connection and was exactly synced before deployment. Frontend staging `51deccab` adds on-demand catalog availability and startup guidance to the earlier itemized usage work; both cold and restored hot states were browser-verified. Production branches and the user's unrelated local edits remain untouched.
 
 Hosted repository branch: `staging`; production defaults to `main`, which remains unchanged. One Qwen3-8B model, pinned weights `b968826d9c46dd6066d109eabc6255188de91218`, BF16, 32K context, vLLM image `361b68a01dd52d37e8a147407f7a55c7b91f9a29`, Beam image `d47bd0fd41fdab54`.
 
@@ -62,7 +62,7 @@ Earlier image-build logging included registry credential fields, so historical s
 
 GitHub also deleted the read-only deploy key created by the revoked OAuth token. The same public key was restored as deploy key `162876752`; its private half remains in AWS managed-endpoint configuration. GitOps access recovered and successful polling cleared the stale error. A subsequent failed Okteto startup exceeded the 120-second container lease, causing worker orphan cleanup to kill and replace Qwen. The replacement `qwen-qwen3-8b-bbba4667` became ready and answered a real request. This was not an uninterrupted gateway rollout. Future revocation of the OAuth token that created this replacement key can delete it again; production credential ownership and rotation must account for this [documented GitHub behavior](https://docs.github.com/en/rest/deploy-keys/deploy-keys).
 
-Okteto remains active for staging inspection; the original gateway deployment is preserved at zero replicas. Only the opted-in test pool and one physical RTX5090 are used. The temporary 75-second build proof and obsolete generated ignore file have been removed from the repository; intentional ignore files for each source sync root are tracked. Hosted repository HEAD is `df1abeef094d13b1e347cb1c7b8c548bba804194`; model source remains `cc0efddef79fe8535e8f386b658960987ca4a684`. The branch automatically deployed version 13, with the same cached Beam image and no import credential. The later documentation/SDK-validation commit synced without replacing the model.
+Okteto remains active for staging inspection; the original gateway deployment is preserved at zero replicas. Only the opted-in test pool and physical RTX5090 GPUs 2 and 3 are used. The temporary 75-second build proof and obsolete generated ignore file have been removed from the repository; intentional ignore files for each source sync root are tracked. Hosted model source remains `53031753d71e4e341c3e8b16fb672fa8367b83e7`; the final repository contains one Qwen model. Temporary private test endpoints are retired, retaining their audit history. The latest source, GitOps commits, and preserved-container checks are linked from [SERVERLESS.md](SERVERLESS.md).
 
 Before the failed gateway startup, version 12 had one ready replica, `qwen-qwen3-8b-9de0ccdb`, on worker `3ba06902`. That earlier smoke test verified free GPU count 0, evictable GPU count 1, catalog availability, and a successful OpenAI request. The agent tuned, measured, and restored the model to `max_num_seqs=32`. The dashboard showed Ready, version 12, 1/1 replicas, preemption enabled, replace rollout, and a fresh heartbeat. The [subsequent readiness evidence](readiness-v12-after-gateway-restart.json) records the replacement caused by the gateway failure.
 
@@ -134,6 +134,24 @@ Accounting is based on completed engine requests, not speculative in-flight toke
 Gateway CI `34502908192` and `34502237211` passed; affected Go packages and race checks passed. Internal API CI `34502753217`, custom image build `34502929736`, and 170 focused/broad billing tests passed (two existing skips). Frontend typecheck/lint, nine usage regressions, a React polling/race harness, and real browser checks passed. Hosted validation CI passed for model commit `5303175` and branch head `33f6e921`.
 
 Evidence: [request accounting design](TOKEN-ACCOUNTING.md), [prepaid request reconciliation](realtime-buyer-token-metering.json), [dashboard request reconciliation](realtime-dashboard-token-metering.json), [live browser verification](realtime-usage-ui.json), [usage screenshot](realtime-usage-after.png), [credit balance](realtime-credit-balance.png), [exact ledger/replay](realtime-ledger-rollback.json), [paired latency](realtime-credit-latency.json), [canonical billing snapshot](realtime-billing-snapshot.json), [AWS billing config](realtime-billing-config.json), [Qwen cache and replica state](qwen-cache-final.json).
+
+## On-demand hosted models
+
+Per-GPU `serverless: true` requires `minReplicas: 0`, rejects `preemption: false`,
+and scales only on spare capacity. Requests may reclaim hot extras while leaving
+hot minimums and ordinary serverless work alone. The default remains hot
+placement. There are no new SDK arguments or user-facing regions.
+
+Two simultaneous paid cold requests shared one new Qwen replica, reconciled
+their input/output/cache charges, and returned to zero after five idle minutes.
+A second test reclaimed a hot extra while its protected sibling served an
+uninterrupted 400-second request. Ordinary serverless work also evicted Qwen
+successfully. Qwen startup took roughly 265–278 seconds in these tests; physical
+GPU cleanup still adds latency to ordinary serverless reclamation.
+
+See [implementation, limitations and live evidence](SERVERLESS.md),
+[cold dashboard](serverless-ui-verification.json), and
+[restored ready dashboard and itemized usage](serverless-ui-restored.json).
 
 ## Validation boundaries
 

@@ -1,0 +1,25 @@
+{
+  "ok": true,
+  "at": "2026-09-10T18:13:05.022409+00:00",
+  "seconds": 0.89,
+  "http_status": 200,
+  "request_id": "gen-7dbcd4aee1f64458b961",
+  "replica_id": "qwen-qwen3-8b-8f411457",
+  "usage": {
+    "completion_tokens": 8,
+    "completion_tokens_details": {
+      "reasoning_tokens": 0
+    },
+    "cost": 4e-06,
+    "prompt_tokens": 15,
+    "prompt_tokens_details": {
+      "cached_tokens": 0,
+      "created_cache_tokens": 0,
+      "multimodal_tokens": null
+    },
+    "total_tokens": 23
+  },
+  "public_model_ready": true,
+  "public_model_serverless": false,
+  "private_donor_hidden": true
+}

@@ -1,0 +1,95 @@
+{
+  "started_at": "2026-09-10T17:16:13.053345+00:00",
+  "events": [
+    {
+      "kind": "cold_before",
+      "elapsed_s": 0.171,
+      "replicas": [],
+      "placements": {
+        "RTX5090": {
+          "priority": 1,
+          "max_replicas": 1,
+          "preemption": true,
+          "serverless": true
+        }
+      }
+    },
+    {
+      "kind": "cold_progress",
+      "elapsed_s": 0.339,
+      "replicas": [],
+      "placements": {
+        "RTX5090": {
+          "priority": 1,
+          "max_replicas": 1,
+          "preemption": true,
+          "serverless": true
+        }
+      }
+    },
+    {
+      "kind": "cold_progress",
+      "elapsed_s": 10.55,
+      "replicas": [
+        {
+          "id": "qwen-qwen3-8b-fcc7ffe3",
+          "version": 15,
+          "status": "scheduling",
+          "protected": false,
+          "container_id": "managed-3c3e94ad-005b-4052-bfe8-677ddd687100-90901902",
+          "worker_id": "",
+          "status_reason": ""
+        }
+      ],
+      "placements": {
+        "RTX5090": {
+          "priority": 1,
+          "max_replicas": 1,
+          "preemption": true,
+          "serverless": true
+        }
+      }
+    },
+    {
+      "kind": "cold_progress",
+      "elapsed_s": 25.862,
+      "replicas": [
+        {
+          "id": "qwen-qwen3-8b-fcc7ffe3",
+          "version": 15,
+          "status": "loading",
+          "protected": false,
+          "container_id": "managed-3c3e94ad-005b-4052-bfe8-677ddd687100-90901902",
+          "worker_id": "8e290b6f",
+          "status_reason": ""
+        }
+      ],
+      "placements": {
+        "RTX5090": {
+          "priority": 1,
+          "max_replicas": 1,
+          "preemption": true,
+          "serverless": true
+        }
+      }
+    },
+    {
+      "kind": "preemption_submitted",
+      "victim": "qwen-qwen3-8b-fcc7ffe3"
+    }
+  ],
+  "requests": [],
+  "usage_before": {
+    "requests": "51",
+    "promptTokens": "8029",
+    "completionTokens": "2269",
+    "images": "0",
+    "microUsd": "1146",
+    "cachedTokens": "4576",
+    "promptMicroUsd": "231",
+    "completionMicroUsd": "3",
+    "cachedMicroUsd": "114",
+    "requestMicroUsd": "0",
+    "imageMicroUsd": "0"
+  }
+}

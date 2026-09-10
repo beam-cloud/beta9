@@ -1,0 +1,1075 @@
+{
+  "baseline": {
+    "baseline_sha": "9c3d6534ef85f258a1e0d8324540061b41394da6",
+    "config_sha256": "191cc0b37e78c0cfa439670f683ba62a4f6762a44a4ba9cd643408cb05adb335",
+    "fixture_sha256": "0d7db55752e9cc3d526ec2ebe2d0849d009872839bf13f5875b39a3abd3f3605",
+    "qwen_app_sha256": "1a77dffb8df0b5bc3038bc0133c5faa3a31c910d4584ed9df1d94a651e591a4c",
+    "qwen_version": 16,
+    "qwen_stub_id": "33b8f307-7225-4e03-a0aa-ff83d9e3b468",
+    "expected_replicas": {
+      "qwen-qwen3-8b-2024a25f": {
+        "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-1a280d52",
+        "protected": false
+      },
+      "qwen-qwen3-8b-8f411457": {
+        "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-183a5ebd",
+        "protected": true
+      }
+    }
+  },
+  "phases": {
+    "add": {
+      "sha": "6bf6c35f12ba50ceff663b4b8ff80cb0ee88c8d9",
+      "started_at": "2026-09-10T18:10:40.405776+00:00",
+      "observations": [
+        {
+          "elapsed_s": 0.272,
+          "gitops": {
+            "last_sha": "9c3d6534ef85f258a1e0d8324540061b41394da6",
+            "running": false,
+            "last_error": "",
+            "fleet_error": ""
+          },
+          "qwen": {
+            "version": 16,
+            "stub_id": "33b8f307-7225-4e03-a0aa-ff83d9e3b468",
+            "status": "active",
+            "placements": {
+              "RTX5090": {
+                "priority": 1,
+                "min_replicas": 1,
+                "max_replicas": 2,
+                "preemption": false
+              }
+            },
+            "replicas": [
+              {
+                "id": "qwen-qwen3-8b-2024a25f",
+                "version": 16,
+                "status": "ready",
+                "protected": false,
+                "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-1a280d52",
+                "worker_id": "8e290b6f"
+              },
+              {
+                "id": "qwen-qwen3-8b-8f411457",
+                "version": 16,
+                "status": "ready",
+                "protected": true,
+                "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-183a5ebd",
+                "worker_id": "8e290b6f"
+              }
+            ]
+          },
+          "donor": {
+            "version": 1,
+            "stub_id": "0bda19f4-b5d6-4f72-a4bb-8bf93729511f",
+            "status": "retired",
+            "placements": null,
+            "replicas": []
+          },
+          "donor_gitops_status": "retired"
+        },
+        {
+          "elapsed_s": 2.524,
+          "gitops": {
+            "last_sha": "9c3d6534ef85f258a1e0d8324540061b41394da6",
+            "running": false,
+            "last_error": "",
+            "fleet_error": ""
+          },
+          "qwen": {
+            "version": 16,
+            "stub_id": "33b8f307-7225-4e03-a0aa-ff83d9e3b468",
+            "status": "active",
+            "placements": {
+              "RTX5090": {
+                "priority": 1,
+                "min_replicas": 1,
+                "max_replicas": 2,
+                "preemption": false
+              }
+            },
+            "replicas": [
+              {
+                "id": "qwen-qwen3-8b-2024a25f",
+                "version": 16,
+                "status": "ready",
+                "protected": false,
+                "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-1a280d52",
+                "worker_id": "8e290b6f"
+              },
+              {
+                "id": "qwen-qwen3-8b-8f411457",
+                "version": 16,
+                "status": "ready",
+                "protected": true,
+                "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-183a5ebd",
+                "worker_id": "8e290b6f"
+              }
+            ]
+          },
+          "donor": {
+            "version": 1,
+            "stub_id": "0bda19f4-b5d6-4f72-a4bb-8bf93729511f",
+            "status": "retired",
+            "placements": null,
+            "replicas": []
+          },
+          "donor_gitops_status": "retired"
+        },
+        {
+          "elapsed_s": 4.777,
+          "gitops": {
+            "last_sha": "9c3d6534ef85f258a1e0d8324540061b41394da6",
+            "running": false,
+            "last_error": "",
+            "fleet_error": ""
+          },
+          "qwen": {
+            "version": 16,
+            "stub_id": "33b8f307-7225-4e03-a0aa-ff83d9e3b468",
+            "status": "active",
+            "placements": {
+              "RTX5090": {
+                "priority": 1,
+                "min_replicas": 1,
+                "max_replicas": 2,
+                "preemption": false
+              }
+            },
+            "replicas": [
+              {
+                "id": "qwen-qwen3-8b-2024a25f",
+                "version": 16,
+                "status": "ready",
+                "protected": false,
+                "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-1a280d52",
+                "worker_id": "8e290b6f"
+              },
+              {
+                "id": "qwen-qwen3-8b-8f411457",
+                "version": 16,
+                "status": "ready",
+                "protected": true,
+                "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-183a5ebd",
+                "worker_id": "8e290b6f"
+              }
+            ]
+          },
+          "donor": {
+            "version": 1,
+            "stub_id": "0bda19f4-b5d6-4f72-a4bb-8bf93729511f",
+            "status": "retired",
+            "placements": null,
+            "replicas": []
+          },
+          "donor_gitops_status": "retired"
+        },
+        {
+          "elapsed_s": 7.013,
+          "gitops": {
+            "last_sha": "9c3d6534ef85f258a1e0d8324540061b41394da6",
+            "running": false,
+            "last_error": "",
+            "fleet_error": ""
+          },
+          "qwen": {
+            "version": 16,
+            "stub_id": "33b8f307-7225-4e03-a0aa-ff83d9e3b468",
+            "status": "active",
+            "placements": {
+              "RTX5090": {
+                "priority": 1,
+                "min_replicas": 1,
+                "max_replicas": 2,
+                "preemption": false
+              }
+            },
+            "replicas": [
+              {
+                "id": "qwen-qwen3-8b-2024a25f",
+                "version": 16,
+                "status": "ready",
+                "protected": false,
+                "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-1a280d52",
+                "worker_id": "8e290b6f"
+              },
+              {
+                "id": "qwen-qwen3-8b-8f411457",
+                "version": 16,
+                "status": "ready",
+                "protected": true,
+                "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-183a5ebd",
+                "worker_id": "8e290b6f"
+              }
+            ]
+          },
+          "donor": {
+            "version": 1,
+            "stub_id": "0bda19f4-b5d6-4f72-a4bb-8bf93729511f",
+            "status": "retired",
+            "placements": null,
+            "replicas": []
+          },
+          "donor_gitops_status": "retired"
+        },
+        {
+          "elapsed_s": 9.248,
+          "gitops": {
+            "last_sha": "9c3d6534ef85f258a1e0d8324540061b41394da6",
+            "running": false,
+            "last_error": "",
+            "fleet_error": ""
+          },
+          "qwen": {
+            "version": 16,
+            "stub_id": "33b8f307-7225-4e03-a0aa-ff83d9e3b468",
+            "status": "active",
+            "placements": {
+              "RTX5090": {
+                "priority": 1,
+                "min_replicas": 1,
+                "max_replicas": 2,
+                "preemption": false
+              }
+            },
+            "replicas": [
+              {
+                "id": "qwen-qwen3-8b-2024a25f",
+                "version": 16,
+                "status": "ready",
+                "protected": false,
+                "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-1a280d52",
+                "worker_id": "8e290b6f"
+              },
+              {
+                "id": "qwen-qwen3-8b-8f411457",
+                "version": 16,
+                "status": "ready",
+                "protected": true,
+                "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-183a5ebd",
+                "worker_id": "8e290b6f"
+              }
+            ]
+          },
+          "donor": {
+            "version": 1,
+            "stub_id": "0bda19f4-b5d6-4f72-a4bb-8bf93729511f",
+            "status": "retired",
+            "placements": null,
+            "replicas": []
+          },
+          "donor_gitops_status": "retired"
+        },
+        {
+          "elapsed_s": 11.593,
+          "gitops": {
+            "last_sha": "9c3d6534ef85f258a1e0d8324540061b41394da6",
+            "running": false,
+            "last_error": "",
+            "fleet_error": ""
+          },
+          "qwen": {
+            "version": 16,
+            "stub_id": "33b8f307-7225-4e03-a0aa-ff83d9e3b468",
+            "status": "active",
+            "placements": {
+              "RTX5090": {
+                "priority": 1,
+                "min_replicas": 1,
+                "max_replicas": 2,
+                "preemption": false
+              }
+            },
+            "replicas": [
+              {
+                "id": "qwen-qwen3-8b-2024a25f",
+                "version": 16,
+                "status": "ready",
+                "protected": false,
+                "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-1a280d52",
+                "worker_id": "8e290b6f"
+              },
+              {
+                "id": "qwen-qwen3-8b-8f411457",
+                "version": 16,
+                "status": "ready",
+                "protected": true,
+                "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-183a5ebd",
+                "worker_id": "8e290b6f"
+              }
+            ]
+          },
+          "donor": {
+            "version": 1,
+            "stub_id": "0bda19f4-b5d6-4f72-a4bb-8bf93729511f",
+            "status": "retired",
+            "placements": null,
+            "replicas": []
+          },
+          "donor_gitops_status": "retired"
+        },
+        {
+          "elapsed_s": 13.848,
+          "gitops": {
+            "last_sha": "9c3d6534ef85f258a1e0d8324540061b41394da6",
+            "running": false,
+            "last_error": "",
+            "fleet_error": ""
+          },
+          "qwen": {
+            "version": 16,
+            "stub_id": "33b8f307-7225-4e03-a0aa-ff83d9e3b468",
+            "status": "active",
+            "placements": {
+              "RTX5090": {
+                "priority": 1,
+                "min_replicas": 1,
+                "max_replicas": 2,
+                "preemption": false
+              }
+            },
+            "replicas": [
+              {
+                "id": "qwen-qwen3-8b-2024a25f",
+                "version": 16,
+                "status": "ready",
+                "protected": false,
+                "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-1a280d52",
+                "worker_id": "8e290b6f"
+              },
+              {
+                "id": "qwen-qwen3-8b-8f411457",
+                "version": 16,
+                "status": "ready",
+                "protected": true,
+                "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-183a5ebd",
+                "worker_id": "8e290b6f"
+              }
+            ]
+          },
+          "donor": {
+            "version": 1,
+            "stub_id": "0bda19f4-b5d6-4f72-a4bb-8bf93729511f",
+            "status": "retired",
+            "placements": null,
+            "replicas": []
+          },
+          "donor_gitops_status": "retired"
+        },
+        {
+          "elapsed_s": 16.084,
+          "gitops": {
+            "last_sha": "9c3d6534ef85f258a1e0d8324540061b41394da6",
+            "running": false,
+            "last_error": "",
+            "fleet_error": ""
+          },
+          "qwen": {
+            "version": 16,
+            "stub_id": "33b8f307-7225-4e03-a0aa-ff83d9e3b468",
+            "status": "active",
+            "placements": {
+              "RTX5090": {
+                "priority": 1,
+                "min_replicas": 1,
+                "max_replicas": 2,
+                "preemption": false
+              }
+            },
+            "replicas": [
+              {
+                "id": "qwen-qwen3-8b-2024a25f",
+                "version": 16,
+                "status": "ready",
+                "protected": false,
+                "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-1a280d52",
+                "worker_id": "8e290b6f"
+              },
+              {
+                "id": "qwen-qwen3-8b-8f411457",
+                "version": 16,
+                "status": "ready",
+                "protected": true,
+                "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-183a5ebd",
+                "worker_id": "8e290b6f"
+              }
+            ]
+          },
+          "donor": {
+            "version": 1,
+            "stub_id": "0bda19f4-b5d6-4f72-a4bb-8bf93729511f",
+            "status": "retired",
+            "placements": null,
+            "replicas": []
+          },
+          "donor_gitops_status": "retired"
+        },
+        {
+          "elapsed_s": 18.338,
+          "gitops": {
+            "last_sha": "9c3d6534ef85f258a1e0d8324540061b41394da6",
+            "running": false,
+            "last_error": "",
+            "fleet_error": ""
+          },
+          "qwen": {
+            "version": 16,
+            "stub_id": "33b8f307-7225-4e03-a0aa-ff83d9e3b468",
+            "status": "active",
+            "placements": {
+              "RTX5090": {
+                "priority": 1,
+                "min_replicas": 1,
+                "max_replicas": 2,
+                "preemption": false
+              }
+            },
+            "replicas": [
+              {
+                "id": "qwen-qwen3-8b-2024a25f",
+                "version": 16,
+                "status": "ready",
+                "protected": false,
+                "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-1a280d52",
+                "worker_id": "8e290b6f"
+              },
+              {
+                "id": "qwen-qwen3-8b-8f411457",
+                "version": 16,
+                "status": "ready",
+                "protected": true,
+                "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-183a5ebd",
+                "worker_id": "8e290b6f"
+              }
+            ]
+          },
+          "donor": {
+            "version": 1,
+            "stub_id": "0bda19f4-b5d6-4f72-a4bb-8bf93729511f",
+            "status": "retired",
+            "placements": null,
+            "replicas": []
+          },
+          "donor_gitops_status": "retired"
+        },
+        {
+          "elapsed_s": 20.608,
+          "gitops": {
+            "last_sha": "9c3d6534ef85f258a1e0d8324540061b41394da6",
+            "running": false,
+            "last_error": "",
+            "fleet_error": ""
+          },
+          "qwen": {
+            "version": 16,
+            "stub_id": "33b8f307-7225-4e03-a0aa-ff83d9e3b468",
+            "status": "active",
+            "placements": {
+              "RTX5090": {
+                "priority": 1,
+                "min_replicas": 1,
+                "max_replicas": 2,
+                "preemption": false
+              }
+            },
+            "replicas": [
+              {
+                "id": "qwen-qwen3-8b-2024a25f",
+                "version": 16,
+                "status": "ready",
+                "protected": false,
+                "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-1a280d52",
+                "worker_id": "8e290b6f"
+              },
+              {
+                "id": "qwen-qwen3-8b-8f411457",
+                "version": 16,
+                "status": "ready",
+                "protected": true,
+                "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-183a5ebd",
+                "worker_id": "8e290b6f"
+              }
+            ]
+          },
+          "donor": {
+            "version": 1,
+            "stub_id": "0bda19f4-b5d6-4f72-a4bb-8bf93729511f",
+            "status": "retired",
+            "placements": null,
+            "replicas": []
+          },
+          "donor_gitops_status": "retired"
+        },
+        {
+          "elapsed_s": 22.858,
+          "gitops": {
+            "last_sha": "9c3d6534ef85f258a1e0d8324540061b41394da6",
+            "running": false,
+            "last_error": "",
+            "fleet_error": ""
+          },
+          "qwen": {
+            "version": 16,
+            "stub_id": "33b8f307-7225-4e03-a0aa-ff83d9e3b468",
+            "status": "active",
+            "placements": {
+              "RTX5090": {
+                "priority": 1,
+                "min_replicas": 1,
+                "max_replicas": 2,
+                "preemption": false
+              }
+            },
+            "replicas": [
+              {
+                "id": "qwen-qwen3-8b-2024a25f",
+                "version": 16,
+                "status": "ready",
+                "protected": false,
+                "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-1a280d52",
+                "worker_id": "8e290b6f"
+              },
+              {
+                "id": "qwen-qwen3-8b-8f411457",
+                "version": 16,
+                "status": "ready",
+                "protected": true,
+                "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-183a5ebd",
+                "worker_id": "8e290b6f"
+              }
+            ]
+          },
+          "donor": {
+            "version": 1,
+            "stub_id": "0bda19f4-b5d6-4f72-a4bb-8bf93729511f",
+            "status": "retired",
+            "placements": null,
+            "replicas": []
+          },
+          "donor_gitops_status": "retired"
+        },
+        {
+          "elapsed_s": 25.126,
+          "gitops": {
+            "last_sha": "9c3d6534ef85f258a1e0d8324540061b41394da6",
+            "running": true,
+            "last_error": "",
+            "fleet_error": ""
+          },
+          "qwen": {
+            "version": 16,
+            "stub_id": "33b8f307-7225-4e03-a0aa-ff83d9e3b468",
+            "status": "active",
+            "placements": {
+              "RTX5090": {
+                "priority": 1,
+                "min_replicas": 1,
+                "max_replicas": 2,
+                "preemption": false
+              }
+            },
+            "replicas": [
+              {
+                "id": "qwen-qwen3-8b-2024a25f",
+                "version": 16,
+                "status": "ready",
+                "protected": false,
+                "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-1a280d52",
+                "worker_id": "8e290b6f"
+              },
+              {
+                "id": "qwen-qwen3-8b-8f411457",
+                "version": 16,
+                "status": "ready",
+                "protected": true,
+                "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-183a5ebd",
+                "worker_id": "8e290b6f"
+              }
+            ]
+          },
+          "donor": {
+            "version": 1,
+            "stub_id": "0bda19f4-b5d6-4f72-a4bb-8bf93729511f",
+            "status": "retired",
+            "placements": null,
+            "replicas": []
+          },
+          "donor_gitops_status": "retired"
+        },
+        {
+          "elapsed_s": 27.371,
+          "gitops": {
+            "last_sha": "6bf6c35f12ba50ceff663b4b8ff80cb0ee88c8d9",
+            "running": false,
+            "last_error": "",
+            "fleet_error": ""
+          },
+          "qwen": {
+            "version": 16,
+            "stub_id": "33b8f307-7225-4e03-a0aa-ff83d9e3b468",
+            "status": "active",
+            "placements": {
+              "RTX5090": {
+                "priority": 1,
+                "min_replicas": 1,
+                "max_replicas": 2,
+                "preemption": false
+              }
+            },
+            "replicas": [
+              {
+                "id": "qwen-qwen3-8b-2024a25f",
+                "version": 16,
+                "status": "ready",
+                "protected": false,
+                "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-1a280d52",
+                "worker_id": "8e290b6f"
+              },
+              {
+                "id": "qwen-qwen3-8b-8f411457",
+                "version": 16,
+                "status": "ready",
+                "protected": true,
+                "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-183a5ebd",
+                "worker_id": "8e290b6f"
+              }
+            ]
+          },
+          "donor": {
+            "version": 2,
+            "stub_id": "e3e2cc98-6214-4816-b4bf-03e6029b84db",
+            "status": "active",
+            "placements": null,
+            "replicas": []
+          },
+          "donor_gitops_status": "applied"
+        }
+      ],
+      "ok": true,
+      "completed_at": "2026-09-10T18:11:07.779516+00:00",
+      "observed_samples": 13,
+      "ci": {
+        "conclusion": "success",
+        "databaseId": 34512747769,
+        "headSha": "6bf6c35f12ba50ceff663b4b8ff80cb0ee88c8d9",
+        "status": "completed",
+        "url": "https://github.com/beam-cloud/hosted-endpoints/actions/runs/34512747769"
+      }
+    },
+    "remove": {
+      "sha": "4fd05e12f9883c1f078d7711c766124ae1546c72",
+      "started_at": "2026-09-10T18:11:51.881893+00:00",
+      "observations": [
+        {
+          "elapsed_s": 0.287,
+          "gitops": {
+            "last_sha": "6bf6c35f12ba50ceff663b4b8ff80cb0ee88c8d9",
+            "running": false,
+            "last_error": "",
+            "fleet_error": ""
+          },
+          "qwen": {
+            "version": 16,
+            "stub_id": "33b8f307-7225-4e03-a0aa-ff83d9e3b468",
+            "status": "active",
+            "placements": {
+              "RTX5090": {
+                "priority": 1,
+                "min_replicas": 1,
+                "max_replicas": 2,
+                "preemption": false
+              }
+            },
+            "replicas": [
+              {
+                "id": "qwen-qwen3-8b-2024a25f",
+                "version": 16,
+                "status": "ready",
+                "protected": false,
+                "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-1a280d52",
+                "worker_id": "8e290b6f"
+              },
+              {
+                "id": "qwen-qwen3-8b-8f411457",
+                "version": 16,
+                "status": "ready",
+                "protected": true,
+                "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-183a5ebd",
+                "worker_id": "8e290b6f"
+              }
+            ]
+          },
+          "donor": {
+            "version": 2,
+            "stub_id": "e3e2cc98-6214-4816-b4bf-03e6029b84db",
+            "status": "active",
+            "placements": null,
+            "replicas": []
+          },
+          "donor_gitops_status": "applied"
+        },
+        {
+          "elapsed_s": 2.522,
+          "gitops": {
+            "last_sha": "6bf6c35f12ba50ceff663b4b8ff80cb0ee88c8d9",
+            "running": false,
+            "last_error": "",
+            "fleet_error": ""
+          },
+          "qwen": {
+            "version": 16,
+            "stub_id": "33b8f307-7225-4e03-a0aa-ff83d9e3b468",
+            "status": "active",
+            "placements": {
+              "RTX5090": {
+                "priority": 1,
+                "min_replicas": 1,
+                "max_replicas": 2,
+                "preemption": false
+              }
+            },
+            "replicas": [
+              {
+                "id": "qwen-qwen3-8b-2024a25f",
+                "version": 16,
+                "status": "ready",
+                "protected": false,
+                "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-1a280d52",
+                "worker_id": "8e290b6f"
+              },
+              {
+                "id": "qwen-qwen3-8b-8f411457",
+                "version": 16,
+                "status": "ready",
+                "protected": true,
+                "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-183a5ebd",
+                "worker_id": "8e290b6f"
+              }
+            ]
+          },
+          "donor": {
+            "version": 2,
+            "stub_id": "e3e2cc98-6214-4816-b4bf-03e6029b84db",
+            "status": "active",
+            "placements": null,
+            "replicas": []
+          },
+          "donor_gitops_status": "applied"
+        },
+        {
+          "elapsed_s": 4.76,
+          "gitops": {
+            "last_sha": "6bf6c35f12ba50ceff663b4b8ff80cb0ee88c8d9",
+            "running": false,
+            "last_error": "",
+            "fleet_error": ""
+          },
+          "qwen": {
+            "version": 16,
+            "stub_id": "33b8f307-7225-4e03-a0aa-ff83d9e3b468",
+            "status": "active",
+            "placements": {
+              "RTX5090": {
+                "priority": 1,
+                "min_replicas": 1,
+                "max_replicas": 2,
+                "preemption": false
+              }
+            },
+            "replicas": [
+              {
+                "id": "qwen-qwen3-8b-2024a25f",
+                "version": 16,
+                "status": "ready",
+                "protected": false,
+                "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-1a280d52",
+                "worker_id": "8e290b6f"
+              },
+              {
+                "id": "qwen-qwen3-8b-8f411457",
+                "version": 16,
+                "status": "ready",
+                "protected": true,
+                "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-183a5ebd",
+                "worker_id": "8e290b6f"
+              }
+            ]
+          },
+          "donor": {
+            "version": 2,
+            "stub_id": "e3e2cc98-6214-4816-b4bf-03e6029b84db",
+            "status": "active",
+            "placements": null,
+            "replicas": []
+          },
+          "donor_gitops_status": "applied"
+        },
+        {
+          "elapsed_s": 7.005,
+          "gitops": {
+            "last_sha": "6bf6c35f12ba50ceff663b4b8ff80cb0ee88c8d9",
+            "running": false,
+            "last_error": "",
+            "fleet_error": ""
+          },
+          "qwen": {
+            "version": 16,
+            "stub_id": "33b8f307-7225-4e03-a0aa-ff83d9e3b468",
+            "status": "active",
+            "placements": {
+              "RTX5090": {
+                "priority": 1,
+                "min_replicas": 1,
+                "max_replicas": 2,
+                "preemption": false
+              }
+            },
+            "replicas": [
+              {
+                "id": "qwen-qwen3-8b-2024a25f",
+                "version": 16,
+                "status": "ready",
+                "protected": false,
+                "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-1a280d52",
+                "worker_id": "8e290b6f"
+              },
+              {
+                "id": "qwen-qwen3-8b-8f411457",
+                "version": 16,
+                "status": "ready",
+                "protected": true,
+                "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-183a5ebd",
+                "worker_id": "8e290b6f"
+              }
+            ]
+          },
+          "donor": {
+            "version": 2,
+            "stub_id": "e3e2cc98-6214-4816-b4bf-03e6029b84db",
+            "status": "active",
+            "placements": null,
+            "replicas": []
+          },
+          "donor_gitops_status": "applied"
+        },
+        {
+          "elapsed_s": 9.261,
+          "gitops": {
+            "last_sha": "6bf6c35f12ba50ceff663b4b8ff80cb0ee88c8d9",
+            "running": false,
+            "last_error": "",
+            "fleet_error": ""
+          },
+          "qwen": {
+            "version": 16,
+            "stub_id": "33b8f307-7225-4e03-a0aa-ff83d9e3b468",
+            "status": "active",
+            "placements": {
+              "RTX5090": {
+                "priority": 1,
+                "min_replicas": 1,
+                "max_replicas": 2,
+                "preemption": false
+              }
+            },
+            "replicas": [
+              {
+                "id": "qwen-qwen3-8b-2024a25f",
+                "version": 16,
+                "status": "ready",
+                "protected": false,
+                "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-1a280d52",
+                "worker_id": "8e290b6f"
+              },
+              {
+                "id": "qwen-qwen3-8b-8f411457",
+                "version": 16,
+                "status": "ready",
+                "protected": true,
+                "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-183a5ebd",
+                "worker_id": "8e290b6f"
+              }
+            ]
+          },
+          "donor": {
+            "version": 2,
+            "stub_id": "e3e2cc98-6214-4816-b4bf-03e6029b84db",
+            "status": "active",
+            "placements": null,
+            "replicas": []
+          },
+          "donor_gitops_status": "applied"
+        },
+        {
+          "elapsed_s": 11.503,
+          "gitops": {
+            "last_sha": "6bf6c35f12ba50ceff663b4b8ff80cb0ee88c8d9",
+            "running": false,
+            "last_error": "",
+            "fleet_error": ""
+          },
+          "qwen": {
+            "version": 16,
+            "stub_id": "33b8f307-7225-4e03-a0aa-ff83d9e3b468",
+            "status": "active",
+            "placements": {
+              "RTX5090": {
+                "priority": 1,
+                "min_replicas": 1,
+                "max_replicas": 2,
+                "preemption": false
+              }
+            },
+            "replicas": [
+              {
+                "id": "qwen-qwen3-8b-2024a25f",
+                "version": 16,
+                "status": "ready",
+                "protected": false,
+                "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-1a280d52",
+                "worker_id": "8e290b6f"
+              },
+              {
+                "id": "qwen-qwen3-8b-8f411457",
+                "version": 16,
+                "status": "ready",
+                "protected": true,
+                "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-183a5ebd",
+                "worker_id": "8e290b6f"
+              }
+            ]
+          },
+          "donor": {
+            "version": 2,
+            "stub_id": "e3e2cc98-6214-4816-b4bf-03e6029b84db",
+            "status": "active",
+            "placements": null,
+            "replicas": []
+          },
+          "donor_gitops_status": "applied"
+        },
+        {
+          "elapsed_s": 13.75,
+          "gitops": {
+            "last_sha": "6bf6c35f12ba50ceff663b4b8ff80cb0ee88c8d9",
+            "running": true,
+            "last_error": "",
+            "fleet_error": ""
+          },
+          "qwen": {
+            "version": 16,
+            "stub_id": "33b8f307-7225-4e03-a0aa-ff83d9e3b468",
+            "status": "active",
+            "placements": {
+              "RTX5090": {
+                "priority": 1,
+                "min_replicas": 1,
+                "max_replicas": 2,
+                "preemption": false
+              }
+            },
+            "replicas": [
+              {
+                "id": "qwen-qwen3-8b-2024a25f",
+                "version": 16,
+                "status": "ready",
+                "protected": false,
+                "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-1a280d52",
+                "worker_id": "8e290b6f"
+              },
+              {
+                "id": "qwen-qwen3-8b-8f411457",
+                "version": 16,
+                "status": "ready",
+                "protected": true,
+                "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-183a5ebd",
+                "worker_id": "8e290b6f"
+              }
+            ]
+          },
+          "donor": {
+            "version": 2,
+            "stub_id": "e3e2cc98-6214-4816-b4bf-03e6029b84db",
+            "status": "active",
+            "placements": null,
+            "replicas": []
+          },
+          "donor_gitops_status": "applied"
+        },
+        {
+          "elapsed_s": 16.022,
+          "gitops": {
+            "last_sha": "4fd05e12f9883c1f078d7711c766124ae1546c72",
+            "running": false,
+            "last_error": "",
+            "fleet_error": ""
+          },
+          "qwen": {
+            "version": 16,
+            "stub_id": "33b8f307-7225-4e03-a0aa-ff83d9e3b468",
+            "status": "active",
+            "placements": {
+              "RTX5090": {
+                "priority": 1,
+                "min_replicas": 1,
+                "max_replicas": 2,
+                "preemption": false
+              }
+            },
+            "replicas": [
+              {
+                "id": "qwen-qwen3-8b-2024a25f",
+                "version": 16,
+                "status": "ready",
+                "protected": false,
+                "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-1a280d52",
+                "worker_id": "8e290b6f"
+              },
+              {
+                "id": "qwen-qwen3-8b-8f411457",
+                "version": 16,
+                "status": "ready",
+                "protected": true,
+                "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-183a5ebd",
+                "worker_id": "8e290b6f"
+              }
+            ]
+          },
+          "donor": {
+            "version": 2,
+            "stub_id": "e3e2cc98-6214-4816-b4bf-03e6029b84db",
+            "status": "retired",
+            "placements": null,
+            "replicas": []
+          },
+          "donor_gitops_status": "retired"
+        }
+      ],
+      "ok": true,
+      "completed_at": "2026-09-10T18:12:07.908535+00:00",
+      "observed_samples": 8,
+      "ci": {
+        "conclusion": "success",
+        "databaseId": 34512859029,
+        "headSha": "4fd05e12f9883c1f078d7711c766124ae1546c72",
+        "status": "completed",
+        "url": "https://github.com/beam-cloud/hosted-endpoints/actions/runs/34512859029"
+      }
+    }
+  },
+  "ok": true,
+  "final_worker": {
+    "id": "8e290b6f",
+    "status": "available",
+    "freeGpuCount": 0,
+    "evictableGpuCount": 1,
+    "totalGpuCount": 2,
+    "resourceVersion": "49",
+    "buildVersion": "codex-hosted-minimums-sdk-20260910"
+  },
+  "final_hosted_sha": "4fd05e12f9883c1f078d7711c766124ae1546c72",
+  "hosted_tree_matches_original": true,
+  "hosted_worktree_clean": true
+}

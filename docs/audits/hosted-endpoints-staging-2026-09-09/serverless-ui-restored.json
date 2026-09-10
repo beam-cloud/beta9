@@ -1,0 +1,65 @@
+{
+  "source": "Real authenticated staging UI; read-only navigation, no fixtures",
+  "observedAt": "2026-09-10T18:03:31.126Z",
+  "knownFrontendDeploymentSha": "51deccab157004b2d73e926ce1daad70cde924af",
+  "model": "qwen/qwen3-8b",
+  "version": 16,
+  "appliedRepoSha": "9c3d653",
+  "catalog": {
+    "qwenListed": true,
+    "onDemandLabel": false,
+    "donorVisible": false,
+    "refreshError": false
+  },
+  "policy": {
+    "mode": "Hot",
+    "minReplicas": 1,
+    "maxReplicas": 2,
+    "priority": 1,
+    "preemption": false,
+    "readyReplicas": 2,
+    "totalReplicas": 2
+  },
+  "replicas": [
+    {
+      "id": "qwen-qwen3-8b-8f411457",
+      "status": "ready",
+      "protected": true
+    },
+    {
+      "id": "qwen-qwen3-8b-2024a25f",
+      "status": "ready",
+      "protected": false
+    }
+  ],
+  "donor": {
+    "id": "codex/reclaim-donor",
+    "status": "retired",
+    "readyReplicas": 0,
+    "totalReplicas": 0,
+    "inConfig": false,
+    "publiclyVisible": false
+  },
+  "usage": {
+    "workspaceName": "main",
+    "requests": 7,
+    "uncachedInputTokens": 4647,
+    "completionTokens": 1421,
+    "cachedInputTokens": 2288,
+    "promptMicroUsd": 463,
+    "completionMicroUsd": 62,
+    "cachedMicroUsd": 57,
+    "totalMicroUsd": 950,
+    "unitemizedMicroUsd": 368,
+    "refreshError": false
+  },
+  "gitopsSyncError": false,
+  "inferenceRequestsMade": 0,
+  "modelMutationsMade": 0,
+  "captures": [
+    "serverless-ui-restored-catalog.png",
+    "serverless-ui-restored-policy.png",
+    "serverless-ui-restored-replicas.png",
+    "serverless-ui-restored-usage.png"
+  ]
+}

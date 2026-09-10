@@ -1,0 +1,49 @@
+{
+  "ok": true,
+  "backend_final_ci": {
+    "conclusion": "success",
+    "headSha": "5f646b98ecc527267260f9af649e314fc33f47bf",
+    "jobs": [
+      {
+        "name": "lint_and_test_go_pkg",
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://github.com/beam-cloud/beta9/actions/runs/34512393078/job/102989463143"
+      },
+      {
+        "name": "verify_protobufs",
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://github.com/beam-cloud/beta9/actions/runs/34512393078/job/102989463376"
+      },
+      {
+        "name": "lint_and_test_python_sdk",
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://github.com/beam-cloud/beta9/actions/runs/34512393078/job/102989463485"
+      }
+    ],
+    "status": "completed",
+    "url": "https://github.com/beam-cloud/beta9/actions/runs/34512393078"
+  },
+  "previous_feature_ci": [
+    34506800859,
+    34507999979,
+    34509319091
+  ],
+  "local_go_suites": [
+    "./pkg/types",
+    "./pkg/abstractions/managedendpoint",
+    "./pkg/repository",
+    "./pkg/scheduler"
+  ],
+  "local_go_suites_passed": true,
+  "focused_retirement_race_tests_passed": true,
+  "python_gitops_tests_passed": 10,
+  "hosted_validator_tests_passed": 21,
+  "hosted_final_sha": "4fd05e12f9883c1f078d7711c766124ae1546c72",
+  "frontend_staging_sha": "51deccab157004b2d73e926ce1daad70cde924af",
+  "gateway_source_reload": "serverless-cleanup-reload.json",
+  "final_smoke": "serverless-final-smoke.json",
+  "live_deletion_regression": "gitops-deletion-regression.json"
+}

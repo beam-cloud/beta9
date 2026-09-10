@@ -1,0 +1,42 @@
+{
+  "ok": true,
+  "at": "2026-09-10T18:10:19.972346+00:00",
+  "source_sha": "5f646b98ecc527267260f9af649e314fc33f47bf",
+  "source_fingerprint": "276fcefeeeabb2eaef4bdebf51fa1da8b7548d0127ea16aa278c6a10029dde90",
+  "gateway_pid": "97643",
+  "synced_source_hashes": {
+    "pkg/abstractions/managedendpoint/controller.go": "6de8c2d88b81d887d0fdf2e4ae4374d912383ee4aec8bb43280da36902fbbdb5",
+    "pkg/abstractions/managedendpoint/gitops_deployer.py": "1583d48233049b32e6008aed05f5b6d794a5118f12616437bec73803486cf1a6"
+  },
+  "comparison_snapshot": "serverless-restored-qwen.json",
+  "same_ready_containers": true,
+  "replicas": [
+    {
+      "id": "qwen-qwen3-8b-2024a25f",
+      "version": 16,
+      "status": "ready",
+      "protected": false,
+      "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-1a280d52"
+    },
+    {
+      "id": "qwen-qwen3-8b-8f411457",
+      "version": 16,
+      "status": "ready",
+      "protected": true,
+      "container_id": "managed-33b8f307-7225-4e03-a0aa-ff83d9e3b468-183a5ebd"
+    }
+  ],
+  "api_seconds": 0.096,
+  "gateway_image_rebuilt": false,
+  "build_hold": false,
+  "initial_public_verification_timed_out_during_reload": true,
+  "public_verification_recovered": true,
+  "external_secret_verification": {
+    "ok": true,
+    "namespace": "beta9",
+    "secret": "beta9",
+    "aws_version": "80e72265-c7f1-4ebe-880e-79d372fd5759",
+    "sha256": "04fd693d96e03af999c10ffea537f441c5ccfe45dce162562dddfdda3bbf188d",
+    "kubernetes_resource_version": "566298994"
+  }
+}
