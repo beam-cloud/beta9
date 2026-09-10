@@ -1,6 +1,6 @@
 # Hosted endpoints: staging fixes and validation
 
-Updated September 10, 2026. Branch selection, the simplified catalog, agent tuning, a four-minute gateway outage, serverless reclaim, and automatic model recovery have passed live staging validation. Qwen version 13 is ready and serving requests. **The strict zero-impact serverless cold-start requirement is still not met when a GPU must be reclaimed.**
+Updated September 10, 2026. Branch selection, the simplified catalog, agent tuning, a four-minute gateway outage, serverless reclaim, and automatic model recovery have passed live staging validation. Qwen version 14 runs with one protected minimum and one preemptible extra on two RTX 5090s. **The strict zero-impact serverless cold-start requirement is still not met when a GPU must be reclaimed.**
 
 A real Qwen3-8B runs in the staging `codex-rtx5090` pool through repository GitOps, a custom worker, and an Okteto gateway. The implementation now uses the existing credit ledger, explicit model rollout policy, cancellable worker rollouts, and a lightweight agent client. Live validation found and fixed additional gaps that unit tests alone missed. The earlier audit remains available in commit `db21e959`.
 
@@ -14,7 +14,7 @@ A real Qwen3-8B runs in the staging `codex-rtx5090` pool through repository GitO
 | Single-GPU model updates stalled | Added per-model `rollout="replace"` or `"wait_for_capacity"`, independent of serverless preemptibility. The dashboard explains the downtime policy. Live updates retired the last serving old replica and started the new version on the same GPU, including replacement of a protected model. No dashboard Stop or Redis repair was used. |
 | Reasoning controls ignored | Normalize supported OpenRouter `reasoning` controls into the engine request; reject conflicts and unsupported controls with HTTP 400. Live enabled/disabled/effort and rejection cases passed. OpenAI nonstream and streaming clients passed. |
 | Interrupted streaming usage was unreliable | Request continuous cumulative usage; require `[DONE]` for successful completion. Two evicted streams preserved observed partial usage, returned an explicit SSE interruption error, recorded status 502, and charged zero. The real OpenAI SDK raised APIError with code upstream_stream_interrupted. |
-| Agent client required an inference runtime | Added stdlib-only `beta9.harness_client`, acknowledged effective-config reads, safe patch/restore, revision-scoped metrics including revision zero, and history. A live tune/measure/restore loop passed without Torch or vLLM installed, with durable audit events. |
+| Agent client required an inference runtime | Added stdlib-only `beta9.harness_client`, acknowledged effective-config reads, safe patch/restore, metrics scoped to acknowledged positive revisions, and history. A live tune/measure/restore loop passed without Torch or vLLM installed, with durable audit events. |
 | Docs changes redeployed models | Added explicit `.gitopsignore` support; endpoint definitions remain unignorable and shared-code changes remain conservative. A documentation-only commit advanced GitOps successfully while preserving version 12 and the same active container. |
 | Recovered GitOps access left a permanent error | Credential rotation reproduced a repository lookup failure. Successful polling at the same commit never cleared it. The follow-up clears only a prior lookup error after a real successful ref resolution; explicit-SHA requests and other deployment errors remain unchanged. Regression tests passed; live polling at the unchanged commit cleared the error. |
 | Recovery recompiled everything | The model now restores an immutable compiler-cache archive to local storage and publishes it after a healthy boot. Compiler files are not accessed directly through the shared filesystem. The completed archive includes NVIDIA driver cache files and is 115,752,960 bytes. Same-node launcher-to-HTTP startup fell from 513.3 seconds cold to 250.8 and 243.0 seconds warm. CUDA graph capture fell from roughly 175 to 4 seconds. Recovery still takes minutes. |
@@ -30,6 +30,7 @@ Evidence: [credit reconciliation](billing-reconciliation-fixed.json), [admin cre
 | Updated worker, active Qwen eviction (2) | 1,868–2,064ms |
 | Updated worker, loading Qwen eviction (1) | 1,969ms |
 | After gateway outage, serverless reclaim (1) | 2,330ms |
+| Protected minimum plus extra, reclaim extra (1) | 1,925ms |
 
 Image/mount/spec preparation now overlaps eviction; zero-drain eviction sends one SIGKILL. The no-victim path adds no repository calls, channels, or eviction goroutines. Live idle measurements stayed in the prior range. Reclaiming a held GPU still adds latency: the active trace spent about 0.8 seconds from kill signal to process exit and another 0.55 seconds completing cleanup. Preparation finished before the victim did. The barrier that prevents a new process from starting on resources still held by a victim is retained.
 
@@ -49,7 +50,7 @@ Evidence: [idle baseline](fixes-idle-baseline-timings.json), [active eviction](f
 
 ## Deployment and cleanup
 
-Backend branch: `codex/hosted-staging-validation`. GPU worker `3ba06902` uses `codex-hosted-catalog-sdk-20260910` (SDK `aabff0fc`). Gateway source `8a1f5857` is running through Okteto source reload, using the existing `codex-hosted-fixes-recovery-20260910` image for bootstrap. Internal API and Celery both use `codex-hosted-billing-fast-20260910` (`c6bd4c4`), from an isolated worktree; the user's dirty checkout and the existing staging auth hotfix were preserved. Frontend `11a1a184` is deployed to staging and browser-verified, preserving subsequent user changes to the layout, filters, connection snippets, and readiness indicators.
+Backend branch: `codex/hosted-staging-validation`. GPU worker `8e290b6f` uses `codex-hosted-minimums-sdk-20260910` (SDK `e4a96fad`) with physical GPUs 2 and 3. Gateway source `69909674` is running through Okteto source reload, using the existing `codex-hosted-fixes-recovery-20260910` image for bootstrap. Internal API and Celery both use `codex-hosted-billing-fast-20260910` (`c6bd4c4`), from an isolated worktree; the user's dirty checkout and the existing staging auth hotfix were preserved. Frontend `18d8dd6`, preserving the user’s staging base `53a7149b`, is deployed to staging and browser-verified, preserving subsequent user changes to the layout, filters, connection snippets, and readiness indicators.
 
 Hosted repository branch: `staging`; production defaults to `main`, which remains unchanged. One Qwen3-8B model, pinned weights `b968826d9c46dd6066d109eabc6255188de91218`, BF16, 32K context, vLLM image `361b68a01dd52d37e8a147407f7a55c7b91f9a29`, Beam image `d47bd0fd41fdab54`.
 
@@ -82,6 +83,35 @@ Frontend change `8daa7ea7`, included in staging `11a1a184`, removes model Region
 Gateway changes `bc1e3560` and `8a1f5857` passed the affected Go suites; 21 focused SDK tests passed, as did generated schema and protocol checks. Hosted repository validation passed at `df1abee`. Staging hot reload preserved the exact version-13 replica `qwen-qwen3-8b-d93443d3`, container, and tuning config. A real request returned HTTP 200 with 15 prompt and 12 completion tokens, costing 5 microUSD. Both generation metadata and the durable route audit retained usage without geography. No image was rebuilt, and the gateway source watcher remains active.
 
 Evidence: [live hosted API, SDK client, and audit](region-free-hosted-api.json), [deployed dashboard](region-free-hosted-ui.json).
+
+## Protected minimums in config.yaml
+
+`fleet.yaml` is replaced by required `config.yaml`, with no old-file fallback. Each GPU placement supports `priority`, `minReplicas`, `maxReplicas`, and `preemption`. The SDK model declaration has no `preemptible` argument. Lower numeric priorities fill first; minimums are filled before surplus. `preemption: false` protects only the minimum, while extras remain reclaimable. Minimum zero protects nothing. A maximum of zero retains the existing uncapped-spare-capacity meaning; positive maxima bound the minimum. Explicit `{}` disables all placements; missing, blank, null, duplicate, ambiguous scalar, and invalid configurations are rejected while preserving the applied placement.
+
+```yaml
+qwen/qwen3-8b:
+  enabled: true
+  gpus:
+    RTX5090:
+      priority: 1
+      minReplicas: 1
+      maxReplicas: 2
+      preemption: false
+```
+
+The controller can transfer protection between running replicas without restarting their engines. It changes the live container’s evictable flag, replica role, queued delivery flags, and worker reclaimable counters atomically under existing locks. Free counters and TTLs stay unchanged. No scheduler or worker hot-path code changed in this follow-up. A failed protection change isolates its endpoint/GPU group; other groups continue. Ready old minimums remain protected until replacements on the same GPU are ready, except the explicitly selected `replace` rollout policy. A missing minimum may reclaim other models’ unprotected surplus only when one available worker can actually fit its GPU/CPU/padded-memory requirements and pool headroom. It cannot evict serverless or another model’s minimum.
+
+Backend `6990967403d32d0dbd9285fe23f65882657dae8e` passed affected Go suites and full [CI 34492810348](https://github.com/beam-cloud/beta9/actions/runs/34492810348), including SDK and generated protocol verification. Controller/protection race checks passed; repository protection race tests passed ten repetitions. The hosted repository’s 16 offline validation tests passed. The final restored config is on staging commit `628b4156058d3293c03417e5935a0c0408458286`; [CI 34497799571](https://github.com/beam-cloud/hosted-endpoints/actions/runs/34497799571) passed. Production main is unchanged.
+
+AWS staging config version `80e72265-c7f1-4ebe-880e-79d372fd5759` changes only the worker tag. ExternalSecret and the pod’s mounted configuration matched its SHA-256 exactly before activation. The gateway uses the existing image and Okteto source compilation; current source fingerprint is `4ea52df83eaf9e672eff17cb1e76a56da9401390daf9a37c8b42c697edb4b337`. The previous Qwen container survived the configuration restart. Its later stop was deliberate, to reconfigure the dedicated worker for two GPUs. Restarting the existing agent alone did not advertise its new GPU allowlist because its one-time join token had been consumed. Ordinary managed-machine registration created the two-GPU worker; the old idle machine was deleted, its token revoked, and the new one-time token consumed. No direct scheduler-state edits were used.
+
+Two Qwen copies became ready with `freeGPU=0`, `evictableGPU=1`, and exactly one protected replica. GitOps changes from minimum 1 to 0 and back to 1 changed evictable GPUs 1 → 2 → 1; both replica/container IDs, start/readiness timestamps, and deployment version stayed unchanged. Frontend cards and Operate views show minimum/maximum/priority and the actual per-replica role, with no hosted geography. The lightweight harness tuned the protected replica, served a pinned request, restored its exact baseline, and recorded durable set/applied history. Replica pinning requires cluster-admin authentication; the initial test’s buyer token was correctly not pinned, which made its per-replica metric assertion invalid. The corrected admin-pinned test passed, and separate buyer inference recorded usage and cost.
+
+A real serverless sandbox initialized CUDA, saw exactly one GPU, allocated/freed 8 MiB, and terminated. It evicted only extra replica `0275fcb9`. Protected replica `7777ffd3` remained ready in all 38 observations, retained its container, and answered a pinned request afterward. Worker receipt to process-manager readiness was 1,925.075ms; SDK-to-CUDA round trip was 4,349.4ms. This remains above the earlier 633–847ms idle baseline and does not satisfy a zero-overhead guarantee. The controller automatically restored extra replica `954e3ad8` to ready in 251.893 seconds while protected replica `7777ffd3` kept serving. Final state: two ready copies, exactly one protected, freeGPU=0 and evictableGPU=1.
+
+A protected minimum reserves existing eligible hardware; it does not provision GPUs or displace existing serverless work. Hardware failure and model loading take recovery time. Explicit administrative stops, disabling placements, reducing the minimum, and a `replace` rollout can release a protected copy. The minimum is therefore a maintained capacity target, not an instantaneous availability SLA.
+
+Evidence: [AWS configuration](minimums-staging-config.json), [two ready copies](minimums-two-ready.json), [final automatic recovery](minimums-final-ready.json), [live config changes](minimums-live-config-proof.json), [serverless preemption](minimums-preemption-proof.json), [timing](minimums-surplus-preemption-timings.json), [harness and audit](minimums-harness-audit.json), [dashboard](minimum-policy-ui-verification.json), [replica roles](minimum-policy-replicas.png).
 
 ## Validation boundaries
 

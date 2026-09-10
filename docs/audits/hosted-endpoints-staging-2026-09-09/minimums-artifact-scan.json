@@ -1,0 +1,7 @@
+{
+  "ok": true,
+  "checked_text_artifacts": 15,
+  "exact_staging_sdk_github_and_deploy_credentials_found": false,
+  "credential_patterns_found": false,
+  "screenshots": "Three UI crops reviewed without connection snippets or credentials."
+}

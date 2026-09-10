@@ -1,0 +1,66 @@
+{
+  "verified_at": "2026-09-10T15:44:53.928360+00:00",
+  "change_commit": "18d8dd614b8626e036b6b4e55df6e16749cd44bf",
+  "staging_base_preserved": "53a7149b48f604b88cc79c0085c8841a55930ffb",
+  "deployment_status": "success",
+  "deployment_url": "https://vercel.com/beam-7eff6da6/beta9/5xaaszM5VnYaQVnPPfF9sYrmLkss",
+  "dashboard_url": "https://platform.stage.beam.cloud/endpoints",
+  "validation": {
+    "typescript": "passed before unchanged commit promotion",
+    "eslint": "passed before unchanged commit promotion",
+    "adapter_policy_checks": "passed, including protected minimum, reclaimable extra, min zero and uncapped maximum"
+  },
+  "catalog": {
+    "loaded": true,
+    "input_per_million_usd": "0.10",
+    "output_per_million_usd": "0.30",
+    "context": "32K",
+    "user_facet_sidebar_preserved": true,
+    "policy_details_exposed": false,
+    "geography_exposed": false
+  },
+  "operate": {
+    "config_yaml_label_in_list_and_detail": true,
+    "branch": "staging",
+    "sync_error_visible": false,
+    "old_fleet_yaml_label_visible": false,
+    "geography_visible": false,
+    "observed_version": 14,
+    "observed_min_replicas": 1,
+    "observed_max_replicas": 2,
+    "observed_priority": 1,
+    "observed_policy": "Protect 1 minimum replica; extras are preemptible.",
+    "live_ready_count": "2/2",
+    "token_example_preserved_without_recording_credentials": true,
+    "observed_preemption": false,
+    "replica_roles": [
+      {
+        "id_suffix": "7777ffd3",
+        "version": 14,
+        "status": "ready",
+        "role": "Protected minimum",
+        "protected": true,
+        "matches_parent_verified_api": true
+      },
+      {
+        "id_suffix": "0275fcb9",
+        "version": 14,
+        "status": "ready",
+        "role": "Preemptible",
+        "protected": false,
+        "matches_parent_verified_api": true
+      }
+    ]
+  },
+  "pending_after_hosted_repo_promotion": [],
+  "notes": [
+    "Final live UI verified after hosted repo promotion, before the parent min-zero/restore policy test. Both actual replica roles match parent-verified API values. Screenshot crops exclude connection credentials. Browser actions were limited to navigation and scrolling; no settings, workloads or configs were changed."
+  ],
+  "credentials_in_artifact": false,
+  "hosted_repo_applied_sha": "c3e94e619ba52a787dffab68c65187e7bb4d99ae",
+  "screenshots": {
+    "catalog": "minimum-policy-catalog.png",
+    "operate": "minimum-policy-operate.png",
+    "replicas": "minimum-policy-replicas.png"
+  }
+}

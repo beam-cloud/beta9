@@ -1,0 +1,31 @@
+{
+  "ok": true,
+  "same_replica_ids_and_containers": true,
+  "started_and_ready_timestamps_unchanged": true,
+  "model_version": 14,
+  "minimums": [
+    1,
+    0,
+    1
+  ],
+  "protected_counts": [
+    1,
+    0,
+    1
+  ],
+  "free_gpu_counts": [
+    0,
+    0,
+    0
+  ],
+  "evictable_gpu_counts": [
+    1,
+    2,
+    1
+  ],
+  "config_commits": [
+    "c3e94e619ba52a787dffab68c65187e7bb4d99ae",
+    "19b5cc9e8671f899b19492978a54ab103178f74b",
+    "628b4156058d3293c03417e5935a0c0408458286"
+  ]
+}
