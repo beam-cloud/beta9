@@ -51,7 +51,7 @@ const (
 	gitopsResolveTimeout = 30 * time.Second
 )
 
-var shaPattern = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
+var shaPattern = regexp.MustCompile(`^([0-9a-f]{40}|[0-9a-f]{64})$`)
 var deployerSecretNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 type gitops struct {
@@ -78,7 +78,7 @@ func newGitOps(s *Service) *gitops {
 func (g *gitops) Trigger(sha string) (bool, error) {
 	sha = strings.ToLower(strings.TrimSpace(sha))
 	if sha != "" && !shaPattern.MatchString(sha) {
-		return false, errors.New("sha must be a hex commit id")
+		return false, errors.New("sha must be a full 40- or 64-character hex commit id; omit it to sync the configured ref")
 	}
 	select {
 	case g.pending <- gitopsRequest{sha: sha, force: sha != ""}:

@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -63,12 +64,12 @@ func TestGitOpsResolveHeadUsesConfigDeployKey(t *testing.T) {
 key_path=${GIT_SSH_COMMAND#ssh -i }
 key_path=${key_path%% -o *}
 [ "$(cat "$key_path")" = "-----BEGIN TEST KEY-----" ] || exit 1
-printf 'abcdef1234567 refs/heads/main\n'
+printf 'abcdef1234567890abcdef1234567890abcdef12 refs/heads/main\n'
 `), 0o700))
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	sha, err := g.resolveHead(context.Background())
 	require.NoError(t, err)
-	assert.Equal(t, "abcdef1234567", sha)
+	assert.Equal(t, "abcdef1234567890abcdef1234567890abcdef12", sha)
 }
 
 func TestGitOpsResolveHeadRedactsConfigTokenOnFailure(t *testing.T) {
@@ -89,14 +90,21 @@ func TestGitOpsTriggerValidatesAndCoalesces(t *testing.T) {
 
 	_, err := g.Trigger("not a sha")
 	require.Error(t, err)
+	_, err = g.Trigger("abcdef1")
+	require.ErrorContains(t, err, "full 40- or 64-character")
+	assert.Empty(t, g.pending, "abbreviated commits must not enqueue a second identity for the same revision")
 
 	started, err := g.Trigger("")
 	require.NoError(t, err)
 	assert.True(t, started)
 
-	started, err = g.Trigger("abcdef1")
+	started, err = g.Trigger(strings.Repeat("a", 40))
 	require.NoError(t, err)
 	assert.False(t, started, "a second trigger while one is queued is coalesced")
+	<-g.pending
+	started, err = g.Trigger(strings.Repeat("b", 64))
+	require.NoError(t, err)
+	assert.True(t, started, "SHA-256 repositories are supported")
 }
 
 func TestGitOpsApplyReportRecordsVersionsAndRetires(t *testing.T) {
