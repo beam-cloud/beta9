@@ -1,7 +1,6 @@
 package managedendpoint
 
 import (
-	"bufio"
 	"bytes"
 	"cmp"
 	"context"
@@ -32,16 +31,14 @@ import (
 // pipeline for every kind; adapters carry the per-route differences.
 
 const (
-	maxBody               = 64 << 20
-	queuePollInterval     = 100 * time.Millisecond
-	coldQueuePollInterval = time.Second
-	replicaDialTimeout    = 5 * time.Second
-	generationTTL         = time.Hour
-	headerReplicaPin      = "X-Beam-Endpoint-Replica"
-	headerRequestID       = "X-Request-ID"
-	headerEndpointID      = "X-Beam-Endpoint-ID"
-	headerReplicaServed   = "X-Beam-Replica"
-	providerName          = "beam"
+	maxBody             = 64 << 20
+	replicaDialTimeout  = 5 * time.Second
+	generationTTL       = time.Hour
+	headerReplicaPin    = "X-Beam-Endpoint-Replica"
+	headerRequestID     = "X-Request-ID"
+	headerEndpointID    = "X-Beam-Endpoint-ID"
+	headerReplicaServed = "X-Beam-Replica"
+	providerName        = "beam"
 )
 
 type router struct {
@@ -61,11 +58,34 @@ func newRouter(s *Service) *router {
 }
 
 func (r *router) mount(group *echo.Group, authMiddleware echo.MiddlewareFunc) {
-	g := group.Group(r.prefix, authMiddleware)
+	g := group.Group(r.prefix, openAIErrors, authMiddleware)
 	g.GET("/models", auth.WithAuth(r.handleListModels))
+	g.GET("/models/openrouter", auth.WithAuth(r.handleListOpenRouterModels))
 	g.GET("/generation", auth.WithAuth(r.handleGeneration))
 	for _, path := range []string{"/chat/completions", "/completions", "/embeddings", "/images/generations", "/images/edits", "/models/:author/:slug/invoke", "/models/:slug/invoke"} {
 		g.POST(path, auth.WithAuth(r.handleRoute))
+	}
+}
+
+// Keep shared authentication/method errors in the same envelope as inference
+// errors without changing the rest of the platform's API middleware.
+func openAIErrors(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(ctx echo.Context) error {
+		err := next(ctx)
+		if err == nil || ctx.Response().Committed {
+			return err
+		}
+		var httpErr *echo.HTTPError
+		if !errors.As(err, &httpErr) {
+			return err
+		}
+		code := "invalid_request"
+		if httpErr.Code == http.StatusUnauthorized || httpErr.Code == http.StatusForbidden {
+			code = "invalid_api_key"
+		} else if httpErr.Code >= 500 {
+			code = "server_error"
+		}
+		return (&routeError{httpErr.Code, code, http.StatusText(httpErr.Code)}).write(ctx)
 	}
 }
 
@@ -151,16 +171,6 @@ func imageUsage(body []byte) Usage {
 	return u
 }
 
-// sseUsage scans one SSE data line for a usage object.
-func sseUsage(line []byte) (Usage, bool) {
-	payload := bytes.TrimSpace(bytes.TrimPrefix(line, []byte("data:")))
-	if len(payload) == 0 || bytes.Equal(payload, []byte("[DONE]")) || !bytes.Contains(payload, []byte(`"usage"`)) {
-		return Usage{}, false
-	}
-	u := tokenUsage(payload)
-	return u, u.Found
-}
-
 // forceIncludeUsage asks a streaming request for a final usage chunk and reports whether it is a stream.
 func forceIncludeUsage(payload map[string]any) bool {
 	if stream, _ := payload["stream"].(bool); !stream {
@@ -213,6 +223,8 @@ type routeError struct {
 func (e *routeError) Error() string { return e.Message }
 
 func (e *routeError) write(ctx echo.Context) error {
+	ctx.Response().Header().Set("Content-Type", "application/json")
+	ctx.Response().Header().Del("Content-Encoding")
 	kind := "invalid_request_error"
 	switch {
 	case e.Status == http.StatusUnauthorized || e.Status == http.StatusForbidden:
@@ -221,15 +233,22 @@ func (e *routeError) write(ctx echo.Context) error {
 		kind = "insufficient_quota"
 	case e.Status == http.StatusTooManyRequests:
 		kind = "rate_limit_error"
+		if ctx.Response().Header().Get("Retry-After") == "" {
+			ctx.Response().Header().Set("Retry-After", "1")
+		}
 	case e.Status == http.StatusNotFound:
 		kind = "not_found_error"
 	case e.Status >= 500:
 		kind = "server_error"
 	}
-	return ctx.JSON(e.Status, map[string]any{"error": map[string]any{"message": e.Message, "type": kind, "code": e.Code}})
+	return ctx.JSON(e.Status, map[string]any{"error": map[string]any{"message": e.Message, "type": kind, "code": e.Code, "param": nil}})
 }
 
 var errRegistry = &routeError{http.StatusServiceUnavailable, "registry_unavailable", "endpoint registry unavailable"}
+
+func capacityError(message string) *routeError {
+	return &routeError{http.StatusTooManyRequests, "rate_limit_exceeded", message}
+}
 
 // routeRequest is the state of one inference request through the pipeline.
 type routeRequest struct {
@@ -271,6 +290,7 @@ func (r *router) handleRoute(ctx echo.Context) error {
 		requestID: "gen-" + strings.ReplaceAll(uuid.New().String(), "-", "")[:20],
 		startedAt: time.Now(),
 	}
+	ctx.Response().Header().Set(headerRequestID, rq.requestID)
 	if cc.AuthInfo.Token.TokenType == types.TokenTypeClusterAdmin {
 		rq.pinReplica = strings.TrimSpace(ctx.Request().Header.Get(headerReplicaPin))
 	}
@@ -299,7 +319,7 @@ func (r *router) handleRoute(ctx echo.Context) error {
 		release, err := r.holdDemand(rq)
 		if err != nil {
 			if errors.Is(err, errDemandLimit) {
-				return (&routeError{http.StatusTooManyRequests, "endpoint_saturated", "endpoint is at capacity, retry shortly"}).write(ctx)
+				return capacityError("endpoint is at capacity, retry shortly").write(ctx)
 			}
 			return errRegistry.write(ctx)
 		}
@@ -329,8 +349,11 @@ func (r *router) readRequest(rq *routeRequest, pathModel string) *routeError {
 		}
 	} else {
 		var payload map[string]any
-		if len(bytes.TrimSpace(body)) > 0 && json.Unmarshal(body, &payload) != nil {
-			return &routeError{http.StatusBadRequest, "invalid_json", "request body must be a JSON object"}
+		if len(bytes.TrimSpace(body)) > 0 {
+			payload, err = decodeRequestJSON(body)
+			if err != nil {
+				return &routeError{http.StatusBadRequest, "invalid_json", "request body must be a JSON object"}
+			}
 		}
 		if model, _ := payload["model"].(string); model != "" {
 			rq.models = append(rq.models, model)
@@ -361,10 +384,26 @@ func (r *router) readRequest(rq *routeRequest, pathModel string) *routeError {
 	return nil
 }
 
+// Preserve tool schemas and provider parameters exactly when adding routing
+// fields. float64 would silently round JSON integers larger than 2^53.
+func decodeRequestJSON(body []byte) (map[string]any, error) {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	var payload map[string]any
+	if err := decoder.Decode(&payload); err != nil {
+		return nil, err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, errors.New("request body must contain one JSON object")
+	}
+	return payload, nil
+}
+
 // setModel makes the selected endpoint the model the engine sees.
 func (rq *routeRequest) setModel(model string, continuousUsage bool) {
-	var payload map[string]any
-	if json.Unmarshal(rq.body, &payload) != nil || payload == nil {
+	payload, err := decodeRequestJSON(rq.body)
+	if err != nil || payload == nil {
 		return
 	}
 	continuousUsage = continuousUsage && rq.stream
@@ -497,9 +536,9 @@ func (r *router) admit(ctx context.Context, rq *routeRequest, endpoint *types.Ma
 				counter(&r.admission, held).Add(-1)
 			}
 			if i == 0 && key == endpoint.Spec.ID {
-				return &routeError{http.StatusTooManyRequests, "endpoint_saturated", "endpoint is at capacity, retry shortly"}
+				return capacityError("endpoint is at capacity, retry shortly")
 			}
-			return &routeError{http.StatusTooManyRequests, "rate_limited", "too many concurrent requests for this workspace"}
+			return capacityError("too many concurrent requests for this workspace")
 		}
 	}
 	return nil
@@ -537,72 +576,60 @@ func (r *router) servingReplicas(ctx context.Context, endpoint *types.ManagedEnd
 	return out, nil
 }
 
-// pick waits (bounded) for a serving replica and selects one.
+// pick reserves available capacity immediately. Providers must reject overload
+// before opening a stream; a rejected on-demand request still triggers startup.
 func (r *router) pick(ctx context.Context, rq *routeRequest, endpoint *types.ManagedEndpoint, exclude map[string]bool) (*types.EndpointReplica, *routeError) {
-	wait := r.s.config.Routing.MaxQueueWait
-	if rq.serverless {
-		wait = max(wait, serverlessQueueWait)
-	}
-	deadline := rq.startedAt.Add(wait)
 	var drainDone <-chan struct{}
 	if r.s.drainCtx != nil {
 		drainDone = r.s.drainCtx.Done()
 	}
-	for {
+	stopped := func() *routeError {
 		select {
 		case <-ctx.Done():
-			return nil, &routeError{499, "client_closed", "client closed request"}
+			return &routeError{499, "client_closed", "client closed request"}
 		case <-drainDone:
-			return nil, &routeError{http.StatusServiceUnavailable, "gateway_draining", "gateway is restarting, retry shortly"}
+			return &routeError{http.StatusServiceUnavailable, "gateway_draining", "gateway is restarting, retry shortly"}
 		default:
-		}
-		candidates, err := r.servingReplicas(ctx, endpoint, rq.pinReplica, exclude)
-		if err != nil {
-			select {
-			case <-ctx.Done():
-				return nil, &routeError{499, "client_closed", "client closed request"}
-			case <-drainDone:
-				return nil, &routeError{http.StatusServiceUnavailable, "gateway_draining", "gateway is restarting, retry shortly"}
-			default:
-				return nil, errRegistry
-			}
-		}
-		if len(candidates) == 0 && len(exclude) > 0 {
-			return nil, &routeError{http.StatusBadGateway, "upstream_unavailable", "upstream replicas failed"}
-		}
-		if replica := r.choose(ctx, rq, endpoint, candidates); replica != nil {
-			rq.queueWait = time.Since(rq.startedAt)
-			return replica, nil
-		}
-		if time.Now().After(deadline) {
-			if len(candidates) == 0 && len(exclude) == 0 {
-				return nil, &routeError{http.StatusServiceUnavailable, "no_capacity", fmt.Sprintf("model %s has no ready replicas", endpoint.Spec.ID)}
-			}
-			return nil, &routeError{http.StatusTooManyRequests, "endpoint_saturated", "all replicas are busy, retry shortly"}
-		}
-		poll := queuePollInterval
-		if rq.serverless && len(candidates) == 0 {
-			// Cold starts can take minutes. Avoid reading every replica ten
-			// times a second for each caller while the model is still loading.
-			poll = coldQueuePollInterval
-		}
-		timer := time.NewTimer(min(poll, time.Until(deadline)))
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return nil, &routeError{499, "client_closed", "client closed request"}
-		case <-drainDone:
-			timer.Stop()
-			return nil, &routeError{http.StatusServiceUnavailable, "gateway_draining", "gateway is restarting, retry shortly"}
-		case <-timer.C:
+			return nil
 		}
 	}
+	if rerr := stopped(); rerr != nil {
+		return nil, rerr
+	}
+	candidates, err := r.servingReplicas(ctx, endpoint, rq.pinReplica, exclude)
+	if rerr := stopped(); rerr != nil {
+		return nil, rerr
+	}
+	if err != nil {
+		return nil, errRegistry
+	}
+	if len(candidates) == 0 && len(exclude) > 0 {
+		return nil, &routeError{http.StatusBadGateway, "upstream_unavailable", "upstream replicas failed"}
+	}
+	replica, chooseErr := r.choose(ctx, rq, endpoint, candidates)
+	if chooseErr != nil {
+		if rerr := stopped(); rerr != nil {
+			return nil, rerr
+		}
+		return nil, errRegistry
+	}
+	if replica != nil {
+		rq.queueWait = time.Since(rq.startedAt)
+		return replica, nil
+	}
+	if rerr := stopped(); rerr != nil {
+		return nil, rerr
+	}
+	if rerr := r.wake(ctx, rq); rerr != nil {
+		return nil, rerr
+	}
+	return nil, capacityError(fmt.Sprintf("model %s is temporarily at capacity; retry shortly", endpoint.Spec.ID))
 }
 
 // choose picks a replica (llmroute for LLMs, least loaded otherwise) with one
 // inflight slot reserved; the caller must releaseReplica it exactly once. Nil
 // means every candidate is saturated.
-func (r *router) choose(ctx context.Context, rq *routeRequest, endpoint *types.ManagedEndpoint, candidates []*types.EndpointReplica) *types.EndpointReplica {
+func (r *router) choose(ctx context.Context, rq *routeRequest, endpoint *types.ManagedEndpoint, candidates []*types.EndpointReplica) (*types.EndpointReplica, error) {
 	now := time.Now()
 	slowStart := time.Duration(r.s.config.Routing.SlowStartSeconds) * time.Second
 	state := r.state(endpoint.Spec.ID)
@@ -610,8 +637,11 @@ func (r *router) choose(ctx context.Context, rq *routeRequest, endpoint *types.M
 	var eligible []llmroute.Candidate
 	for _, replica := range candidates {
 		local := counter(&r.inflight, replica.ID).Load()
-		pressure, _ := state.Pressure(ctx, replica.ID)
-		if replica.Capacity.MaxConcurrency > 0 && max(local, pressure.ActiveStreams) >= replica.Capacity.MaxConcurrency {
+		pressure, err := state.Pressure(ctx, replica.ID)
+		if err != nil {
+			return nil, err
+		}
+		if replica.Capacity.MaxConcurrency > 0 && local >= replica.Capacity.MaxConcurrency {
 			continue
 		}
 		penalty := int64(0)
@@ -628,7 +658,7 @@ func (r *router) choose(ctx context.Context, rq *routeRequest, endpoint *types.M
 		})
 	}
 	if len(eligible) == 0 {
-		return nil
+		return nil, nil
 	}
 	var affinity llmroute.Affinity
 	if rq.adapter.LLM && rq.info != nil {
@@ -638,41 +668,57 @@ func (r *router) choose(ctx context.Context, rq *routeRequest, endpoint *types.M
 	for len(eligible) > 0 {
 		selection, ok := r.selector.Select(eligible, affinity, rq.info)
 		if !ok {
-			return nil
+			return nil, nil
 		}
 		replica := selection.Candidate.Payload.(*types.EndpointReplica)
-		if r.reserve(ctx, rq, state, replica) {
-			return replica
+		reserved, err := r.reserve(ctx, rq, state, replica)
+		if err != nil {
+			return nil, err
+		}
+		if reserved {
+			return replica, nil
 		}
 		eligible = slices.DeleteFunc(eligible, func(c llmroute.Candidate) bool { return c.ID == replica.ID })
 	}
-	return nil
+	return nil, nil
 }
 
 // reserve takes one inflight slot: the local counter and the shared Redis
-// reservation that bounds MaxConcurrency across gateways. If Redis is
-// unreachable the local bound alone applies.
-func (r *router) reserve(ctx context.Context, rq *routeRequest, state *llmroute.State, replica *types.EndpointReplica) bool {
+// reservation that bounds MaxConcurrency across gateways. Uncertain shared
+// capacity fails closed rather than overloading the engine.
+func (r *router) reserve(ctx context.Context, rq *routeRequest, state *llmroute.State, replica *types.EndpointReplica) (bool, error) {
 	inflight := counter(&r.inflight, replica.ID)
 	if n := inflight.Add(1); replica.Capacity.MaxConcurrency > 0 && n > replica.Capacity.MaxConcurrency {
 		inflight.Add(-1)
-		return false
+		return false, nil
 	}
-	ok, err := state.Reserve(ctx, replica.ID, rq.tokenPressure(), replica.Capacity.MaxConcurrency)
+	ok, err := r.s.slot(ctx, replica.ID, "acquire", rq.requestID, replica.Capacity.MaxConcurrency)
 	if err != nil {
-		log.Debug().Err(err).Str("replica_id", replica.ID).Msg("managed endpoints: shared reservation unavailable; local bound only")
-		return true
+		inflight.Add(-1)
+		// The server may have acquired the slot before its reply was lost.
+		// Releasing this request ID is safe even when acquire never succeeded.
+		_, _ = r.s.slot(context.Background(), replica.ID, "release", rq.requestID, 0)
+		return false, err
 	}
 	if !ok {
 		inflight.Add(-1)
+	} else {
+		hintCtx, cancel := context.WithTimeout(ctx, slotOpTimeout)
+		_ = state.AddPressure(hintCtx, replica.ID, 1, rq.tokenPressure())
+		cancel()
 	}
-	return ok
+	return ok, nil
 }
 
 // releaseReplica returns the slot taken by reserve.
 func (r *router) releaseReplica(rq *routeRequest, state *llmroute.State, replica *types.EndpointReplica) {
 	counter(&r.inflight, replica.ID).Add(-1)
-	_ = state.AddPressure(context.Background(), replica.ID, -1, -rq.tokenPressure())
+	released, _ := r.s.slot(context.Background(), replica.ID, "release", rq.requestID, 0)
+	if released {
+		hintCtx, cancel := context.WithTimeout(context.Background(), slotOpTimeout)
+		defer cancel()
+		_ = state.AddPressure(hintCtx, replica.ID, -1, -rq.tokenPressure())
+	}
 }
 
 func (rq *routeRequest) tokenPressure() int64 {
@@ -722,8 +768,27 @@ func (r *router) serve(rq *routeRequest, endpoint *types.ManagedEndpoint) error 
 			r.record(rq, endpoint, nil, rerr.Status, Usage{}, 0, rerr.Message)
 			return rerr.write(rq.ctx)
 		}
-		retry, err := r.proxy(ctx, rq, endpoint, replica)
-		r.releaseReplica(rq, r.state(endpoint.Spec.ID), replica) // the slot reserved by pick/choose; the single owner
+		var leaseLost bool
+		retry, err := func() (bool, error) {
+			attemptCtx, stopRenewal := r.renewSlot(ctx, replica.ID, rq.requestID)
+			defer func() {
+				stopRenewal()
+				r.releaseReplica(rq, r.state(endpoint.Spec.ID), replica)
+			}()
+			retry, err := r.proxy(attemptCtx, rq, endpoint, replica)
+			leaseLost = errors.Is(context.Cause(attemptCtx), errSlotLeaseLost)
+			return retry, err
+		}()
+		if leaseLost && err != nil {
+			if !rq.ctx.Response().Committed {
+				r.record(rq, endpoint, replica, http.StatusServiceUnavailable, Usage{}, 0, errSlotLeaseLost.Error())
+				return errRegistry.write(rq.ctx)
+			}
+			if rq.stream && ctx.Err() == nil {
+				writeStreamError(rq.ctx.Response(), rq.requestID, endpoint.Spec.ID, &streamFailure{http.StatusServiceUnavailable, "Endpoint capacity lease lost", "registry_unavailable"})
+			}
+			return nil
+		}
 		if err == nil {
 			return nil
 		}
@@ -742,12 +807,13 @@ func (r *router) serve(rq *routeRequest, endpoint *types.ManagedEndpoint) error 
 
 // proxy relays one attempt; the bool reports whether a retry is safe (nothing was written).
 func (r *router) proxy(ctx context.Context, rq *routeRequest, endpoint *types.ManagedEndpoint, replica *types.EndpointReplica) (bool, error) {
-	// Upstream lives until the client is gone or the gateway drains.
+	// Already-admitted inference survives readiness draining. The gateway service
+	// context ends only after the HTTP graceful-shutdown window has elapsed.
 	upstreamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go func() {
 		select {
-		case <-r.s.drainCtx.Done():
+		case <-r.s.ctx.Done():
 			cancel()
 		case <-upstreamCtx.Done():
 		}
@@ -766,6 +832,9 @@ func (r *router) proxy(ctx context.Context, rq *routeRequest, endpoint *types.Ma
 			req.Header[name] = values
 		}
 	}
+	// Metering and response rewriting require plain JSON/SSE. The transport
+	// disables automatic decompression, so do not forward browser encodings.
+	req.Header.Set("Accept-Encoding", "identity")
 	req.Header.Set(headerRequestID, rq.requestID)
 	req.Header.Set(headerEndpointID, endpoint.Spec.ID)
 	req.ContentLength = int64(len(rq.body))
@@ -793,9 +862,18 @@ func (r *router) proxy(ctx context.Context, rq *routeRequest, endpoint *types.Ma
 	}
 	w.Header().Set(headerRequestID, rq.requestID)
 	w.Header().Set(headerReplicaServed, replica.ID)
+	if resp.StatusCode == http.StatusTooManyRequests {
+		// Engine overload must stay a JSON 429 even for streaming requests.
+		// Never relay a backend-specific error body or open an SSE response.
+		rerr := capacityError("model is temporarily at capacity; retry shortly")
+		r.record(rq, endpoint, replica, rerr.Status, Usage{}, 0, rerr.Message)
+		return false, rerr.write(rq.ctx)
+	}
 
 	contentType, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 	if contentType == "text/event-stream" {
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("X-Accel-Buffering", "no")
 		w.WriteHeader(resp.StatusCode)
 		recorded := false
 		usage, ttft, err := relayStream(w, resp.Body, rq.requestID, sentAt, func(usage Usage, ttft time.Duration) error {
@@ -808,12 +886,15 @@ func (r *router) proxy(ctx context.Context, rq *routeRequest, endpoint *types.Ma
 		})
 		status := resp.StatusCode
 		if err != nil && status < 300 {
-			status = http.StatusBadGateway // the stream broke: not a success, not billed
+			failure := streamFailureFor(err)
+			status = failure.status // the stream broke: not a success, not billed
+			if errors.Is(context.Cause(ctx), errSlotLeaseLost) {
+				status = http.StatusServiceUnavailable
+			}
 			if ctx.Err() == nil {
 				// HTTP headers are already committed. An SSE error lets SDKs
 				// distinguish preemption from a completed generation.
-				_, _ = w.Write([]byte("data: {\"error\":{\"message\":\"Upstream inference stream ended before completion\",\"type\":\"upstream_error\",\"code\":\"upstream_stream_interrupted\"}}\n\n"))
-				w.Flush()
+				writeStreamError(w, rq.requestID, endpoint.Spec.ID, failure)
 			}
 		}
 		if err == nil && status < 300 && billable(endpoint) && !usage.Found {
@@ -831,6 +912,9 @@ func (r *router) proxy(ctx context.Context, rq *routeRequest, endpoint *types.Ma
 	switch {
 	case err != nil:
 		rerr := &routeError{http.StatusBadGateway, "upstream_failed", "upstream response ended early"}
+		if errors.Is(context.Cause(ctx), errSlotLeaseLost) {
+			rerr = errRegistry
+		}
 		r.record(rq, endpoint, replica, rerr.Status, Usage{}, 0, err.Error())
 		return false, rerr.write(rq.ctx)
 	case len(body) > maxBody:
@@ -881,147 +965,6 @@ func (r *router) recordMissingUsage(rq *routeRequest, endpoint *types.ManagedEnd
 	r.record(rq, endpoint, replica, errMissingUsage.Status, usage, ttft, errMissingUsage.Message)
 	r.s.emit(types.EventEndpointHarness, types.EventEndpointSchema{EndpointID: endpoint.Spec.ID, Action: "route.missing_usage", ReplicaID: replica.ID, GPU: replica.GPU, Version: replica.Version})
 	log.Warn().Str("endpoint_id", endpoint.Spec.ID).Str("replica_id", replica.ID).Str("request_id", rq.requestID).Bool("stream", rq.stream).Msg("managed endpoints: upstream response carried no usage; request not billed")
-}
-
-// relayStream forwards SSE events as they arrive, stamping the generation id,
-// retaining cumulative usage and measuring TTFT at the first output. A clean
-// transport EOF without the OpenAI terminal marker is still an incomplete reply.
-func relayStream(w *echo.Response, body io.Reader, requestID string, sentAt time.Time, finalize func(Usage, time.Duration) error) (Usage, time.Duration, error) {
-	flusher, _ := w.Writer.(http.Flusher)
-	reader := bufio.NewReaderSize(body, 64<<10)
-	var usage Usage
-	var ttft time.Duration
-	var done bool
-	var upstreamError bool
-	for {
-		line, err := reader.ReadBytes('\n')
-		if len(line) > 0 {
-			if bytes.HasPrefix(line, []byte("data:")) {
-				payload := bytes.TrimSpace(line[len("data:"):])
-				if bytes.Equal(payload, []byte("[DONE]")) {
-					if upstreamError {
-						return usage, ttft, io.ErrUnexpectedEOF
-					}
-					if finalize != nil {
-						if err := finalize(usage, ttft); err != nil {
-							return usage, ttft, err
-						}
-					}
-					done = true
-				}
-				if bytes.Contains(payload, []byte(`"error"`)) {
-					var frame struct {
-						Error json.RawMessage `json:"error"`
-					}
-					if json.Unmarshal(payload, &frame) == nil && len(frame.Error) > 0 && string(frame.Error) != "null" {
-						upstreamError = true
-					}
-				}
-				if ttft == 0 && generatesOutput(line) {
-					ttft = time.Since(sentAt)
-				}
-				line = stampSSE(line, requestID)
-			}
-			if u, ok := sseUsage(line); ok {
-				usage = u
-			}
-			if _, werr := w.Write(line); werr != nil {
-				return usage, ttft, werr
-			}
-			if flusher != nil && (len(bytes.TrimSpace(line)) == 0 || bytes.HasPrefix(line, []byte("data:"))) {
-				flusher.Flush()
-			}
-		}
-		if done {
-			if _, err := w.Write([]byte("\n")); err != nil {
-				return usage, ttft, err
-			}
-			if flusher != nil {
-				flusher.Flush()
-			}
-			return usage, ttft, nil
-		}
-		if errors.Is(err, io.EOF) {
-			if !done || upstreamError {
-				return usage, ttft, io.ErrUnexpectedEOF
-			}
-			return usage, ttft, nil
-		}
-		if err != nil {
-			return usage, ttft, err
-		}
-	}
-}
-
-// generatesOutput reports whether an SSE line carries content, a tool call or
-// completion text, so TTFT is the first generated token and not the engine's
-// opening frame.
-func generatesOutput(line []byte) bool {
-	payload := bytes.TrimSpace(line[len("data:"):])
-	if len(payload) == 0 || payload[0] != '{' {
-		return false
-	}
-	var chunk struct {
-		Choices *[]struct {
-			Text  *string `json:"text"`
-			Delta *struct {
-				Content   *string         `json:"content"`
-				ToolCalls json.RawMessage `json:"tool_calls"`
-			} `json:"delta"`
-		} `json:"choices"`
-		Usage json.RawMessage `json:"usage"`
-	}
-	if json.Unmarshal(payload, &chunk) != nil {
-		return true // not JSON we understand: any frame is output
-	}
-	if chunk.Choices == nil {
-		return len(chunk.Usage) == 0 // not an OpenAI chunk unless it is usage-only
-	}
-	for _, c := range *chunk.Choices {
-		if c.Text != nil && *c.Text != "" {
-			return true
-		}
-		if c.Delta != nil && ((c.Delta.Content != nil && *c.Delta.Content != "") || (len(c.Delta.ToolCalls) > 0 && string(c.Delta.ToolCalls) != "null")) {
-			return true
-		}
-	}
-	return false
-}
-
-// stampSSE rewrites the id of a JSON SSE chunk to the gateway generation id.
-func stampSSE(line []byte, requestID string) []byte {
-	payload := bytes.TrimSpace(line[len("data:"):])
-	if len(payload) == 0 || payload[0] != '{' || !bytes.Contains(payload, []byte(`"id"`)) {
-		return line
-	}
-	var chunk map[string]any
-	if json.Unmarshal(payload, &chunk) != nil || chunk["id"] == requestID {
-		return line
-	}
-	chunk["id"] = requestID
-	out, err := json.Marshal(chunk)
-	if err != nil {
-		return line
-	}
-	return append(append([]byte("data: "), out...), '\n')
-}
-
-// decorateJSON adds OpenRouter-style fields (generation id, usage, cost) to a JSON body.
-func decorateJSON(body []byte, requestID string, usage Usage, costMicro int64) []byte {
-	var payload map[string]any
-	if err := json.Unmarshal(body, &payload); err != nil || payload == nil {
-		return body
-	}
-	payload["id"] = requestID
-	payload["provider"] = providerName
-	if u, ok := payload["usage"].(map[string]any); ok && usage.Found {
-		u["cost"] = costUSD(costMicro)
-	}
-	out, err := json.Marshal(payload)
-	if err != nil {
-		return body
-	}
-	return out
 }
 
 func (r *router) record(rq *routeRequest, endpoint *types.ManagedEndpoint, replica *types.EndpointReplica, status int, usage Usage, ttft time.Duration, errMsg string) error {

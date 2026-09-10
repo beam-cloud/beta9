@@ -264,8 +264,9 @@ type Fleet struct {
 }
 
 type FleetEndpoint struct {
-	Enabled bool                      `json:"enabled" yaml:"enabled"`
-	GPUs    map[string]FleetPlacement `json:"gpus" yaml:"gpus"`
+	Enabled    bool                      `json:"enabled" yaml:"enabled"`
+	GPUs       map[string]FleetPlacement `json:"gpus" yaml:"gpus"`
+	OpenRouter *OpenRouterMetadata       `json:"openrouter,omitempty" yaml:"openrouter"`
 }
 
 // FleetPlacement is one endpoint on one GPU type. Minimums fill first, in
@@ -337,6 +338,11 @@ func (f *Fleet) Normalize() {
 func (f *Fleet) Validate() error {
 	var errs []error
 	for id, e := range f.Endpoints {
+		if e.OpenRouter != nil {
+			if err := e.OpenRouter.Validate(); err != nil {
+				errs = append(errs, fmt.Errorf("%s: openrouter: %w", id, err))
+			}
+		}
 		for gpu, p := range e.GPUs {
 			if gpu != CPUInventoryKey && !KnownGPUType(GpuType(gpu)) {
 				errs = append(errs, fmt.Errorf("%s: %s is not a known GPU type", id, gpu))

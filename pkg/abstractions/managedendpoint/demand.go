@@ -15,13 +15,13 @@ const (
 	demandRenewInterval         = 20 * time.Second
 	demandIdleTimeout           = 5 * time.Minute
 	demandOpTimeout             = time.Second
-	serverlessQueueWait         = 10 * time.Minute
-	serverlessMaxQueuedRequests = 128
+	serverlessStartupTimeout    = 10 * time.Minute
+	serverlessAdmissionHeadroom = 128
 )
 
 var errDemandLimit = errors.New("on-demand endpoint request limit reached")
 
-// One expiring member per admitted request, plus an idle deadline. Redis time
+// One expiring member per admitted request, plus idle and startup deadlines. Redis time
 // keeps gateways' leases comparable. A process crash expires its own requests;
 // traffic on another gateway cannot keep those abandoned leases alive.
 const endpointDemandScript = `
@@ -33,6 +33,7 @@ if ARGV[1] == 'renew' and not held then return {-1, 0} end
 if ARGV[1] == 'acquire' and not held then
   local count = redis.call('ZCARD', KEYS[1])
   if redis.call('ZSCORE', KEYS[1], '~idle') then count = count - 1 end
+  if redis.call('ZSCORE', KEYS[1], '~wake') then count = count - 1 end
   if count >= tonumber(ARGV[5]) then return {-2, 0} end
 end
 if ARGV[1] == 'acquire' or ARGV[1] == 'renew' or (ARGV[1] == 'release' and held) then
@@ -44,21 +45,28 @@ if ARGV[1] == 'acquire' or ARGV[1] == 'renew' or (ARGV[1] == 'release' and held)
   redis.call('ZADD', KEYS[1], now + tonumber(ARGV[4]), '~idle')
   redis.call('PEXPIRE', KEYS[1], tonumber(ARGV[4]) + tonumber(ARGV[3]))
 end
+if ARGV[1] == 'wake' then
+  redis.call('ZADD', KEYS[1], now + tonumber(ARGV[3]), '~wake')
+  redis.call('ZADD', KEYS[1], now + tonumber(ARGV[4]), '~idle')
+  redis.call('PEXPIRE', KEYS[1], tonumber(ARGV[4]) + tonumber(ARGV[3]))
+end
 local warm = redis.call('ZSCORE', KEYS[1], '~idle') and 1 or 0
-return {redis.call('ZCARD', KEYS[1]) - warm, warm}
+local pending = redis.call('ZSCORE', KEYS[1], '~wake') and 1 or 0
+return {redis.call('ZCARD', KEYS[1]) - warm - pending, warm, pending}
 `
 
 type endpointDemand struct {
 	active   int64
 	warm     bool
+	pending  bool                            // a recent authorized capacity rejection requested startup
 	capacity int64                           // serving capacity across every GPU type, including hot copies
 	starting bool                            // wait for capacity to become known before adding another copy
 	gpus     map[string]types.FleetPlacement // configured on-demand GPU alternatives
 	counts   map[string]uint32
 }
 
-// readyCapacity is the finite serving capacity observed at admission. Queued
-// callers get their own allowance, so a full engine can trigger scale-out.
+// readyCapacity is the finite serving capacity observed at admission. Transient
+// admissions get headroom so a full engine can record a scale-out signal.
 // Capacity changes never prevent an existing request from renewing its lease.
 func (s *Service) demand(ctx context.Context, endpointID, operation, requestID string, readyCapacity int64) (*endpointDemand, error) {
 	if s.rdb == nil {
@@ -66,7 +74,7 @@ func (s *Service) demand(ctx context.Context, endpointID, operation, requestID s
 	}
 	ctx, cancel := context.WithTimeout(ctx, demandOpTimeout)
 	defer cancel()
-	limit := serverlessMaxQueuedRequests + min(max(readyCapacity, 0), math.MaxInt64-serverlessMaxQueuedRequests)
+	limit := serverlessAdmissionHeadroom + min(max(readyCapacity, 0), math.MaxInt64-serverlessAdmissionHeadroom)
 	values, err := s.rdb.Eval(ctx, endpointDemandScript, []string{"managed_endpoint:demand:" + endpointID},
 		operation, requestID, demandLeaseTTL.Milliseconds(), demandIdleTimeout.Milliseconds(), limit).Int64Slice()
 	if err != nil {
@@ -78,7 +86,25 @@ func (s *Service) demand(ctx context.Context, endpointID, operation, requestID s
 	if values[0] < 0 {
 		return nil, errors.New("on-demand request lease expired")
 	}
-	return &endpointDemand{active: values[0], warm: values[1] == 1}, nil
+	return &endpointDemand{active: values[0], warm: values[1] == 1, pending: values[2] == 1}, nil
+}
+
+// A rejected request may be gone before the controller ticks. Coalesce these
+// requests into one short-lived signal, separate from active generation leases.
+func (r *router) wake(ctx context.Context, rq *routeRequest) *routeError {
+	if rq.serverless {
+		if _, err := r.s.demand(ctx, rq.model, "wake", "", 0); err != nil {
+			return errRegistry
+		}
+	}
+	return nil
+}
+
+func initialDemandGrace(replica *types.EndpointReplica, now time.Time) bool {
+	if !replica.ReadyAt.IsZero() {
+		return now.Sub(replica.ReadyAt) < demandIdleTimeout
+	}
+	return !replica.StartedAt.IsZero() && now.Sub(replica.StartedAt) < serverlessStartupTimeout
 }
 
 // holdDemand runs only for hosted endpoints with an on-demand placement, after
@@ -100,7 +126,7 @@ func (r *router) holdDemand(rq *routeRequest) (func(), error) {
 			select {
 			case <-ctx.Done():
 				return
-			case <-r.s.drainCtx.Done():
+			case <-r.s.ctx.Done():
 				cancel()
 				return
 			case <-ticker.C:

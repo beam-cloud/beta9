@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/beam-cloud/beta9/pkg/abstractions/common/llmroute"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -76,7 +76,7 @@ func TestEndpointAccessIsIndependentOfCatalog(t *testing.T) {
 }
 
 func TestChooseReservesInflightAtomically(t *testing.T) {
-	r := &router{s: &Service{}, states: map[string]*llmroute.State{}}
+	r := newRouter(newServiceForTest(t))
 	endpoint := &types.ManagedEndpoint{Spec: types.ManagedEndpointSpec{ID: "acme/model"}}
 	replicas := []*types.EndpointReplica{
 		{ID: "replica-a", Address: "a:8000", Capacity: types.ReplicaCapacity{MaxConcurrency: 1}},
@@ -88,20 +88,27 @@ func TestChooseReservesInflightAtomically(t *testing.T) {
 	// Concurrent selections over the same snapshot: each replica admits at
 	// most MaxConcurrency requests, the rest see no capacity.
 	var wg sync.WaitGroup
-	picked := make(chan *types.EndpointReplica, 16)
+	type reservation struct {
+		replica *types.EndpointReplica
+		request *routeRequest
+	}
+	picked := make(chan reservation, 16)
 	for i := 0; i < cap(picked); i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			picked <- r.choose(ctx, rq, endpoint, replicas)
+			request := &routeRequest{requestID: uuid.NewString(), adapter: rq.adapter}
+			picked <- reservation{chooseForTest(t, r, ctx, request, endpoint, replicas), request}
 		}()
 	}
 	wg.Wait()
 	close(picked)
 	counts := map[string]int{}
-	for replica := range picked {
-		if replica != nil {
-			counts[replica.ID]++
+	owners := map[string]*routeRequest{}
+	for held := range picked {
+		if held.replica != nil {
+			counts[held.replica.ID]++
+			owners[held.replica.ID] = held.request
 		}
 	}
 	assert.Equal(t, map[string]int{"replica-a": 1, "replica-b": 1}, counts)
@@ -109,12 +116,12 @@ func TestChooseReservesInflightAtomically(t *testing.T) {
 	assert.Equal(t, int64(1), counter(&r.inflight, "replica-b").Load())
 
 	// Saturated until a slot is released; releasing frees exactly that replica.
-	assert.Nil(t, r.choose(ctx, rq, endpoint, replicas))
-	r.releaseReplica(rq, r.state(endpoint.Spec.ID), replicas[0])
-	got := r.choose(ctx, rq, endpoint, replicas)
+	assert.Nil(t, chooseForTest(t, r, ctx, rq, endpoint, replicas))
+	r.releaseReplica(owners[replicas[0].ID], r.state(endpoint.Spec.ID), replicas[0])
+	got := chooseForTest(t, r, ctx, rq, endpoint, replicas)
 	require.NotNil(t, got)
 	assert.Equal(t, "replica-a", got.ID)
-	assert.Nil(t, r.choose(ctx, rq, endpoint, replicas))
+	assert.Nil(t, chooseForTest(t, r, ctx, rq, endpoint, replicas))
 
 	// A failed reservation leaves the counter untouched.
 	assert.Equal(t, int64(1), counter(&r.inflight, "replica-a").Load())
@@ -123,7 +130,7 @@ func TestChooseReservesInflightAtomically(t *testing.T) {
 	// Unlimited replicas are never refused.
 	unlimited := []*types.EndpointReplica{{ID: "replica-c", Address: "c:8000"}}
 	for i := 0; i < 5; i++ {
-		require.NotNil(t, r.choose(ctx, rq, endpoint, unlimited))
+		require.NotNil(t, chooseForTest(t, r, ctx, rq, endpoint, unlimited))
 	}
 	assert.Equal(t, int64(5), counter(&r.inflight, "replica-c").Load())
 }
@@ -135,18 +142,19 @@ func TestReplicaConcurrencyIsSharedAcrossGateways(t *testing.T) {
 	a, b := newRouter(s), newRouter(s)
 	endpoint := &types.ManagedEndpoint{Spec: types.ManagedEndpointSpec{ID: "acme/model"}}
 	replicas := []*types.EndpointReplica{{ID: "replica-a", Address: "a:8000", Capacity: types.ReplicaCapacity{MaxConcurrency: 1}}}
-	rq := &routeRequest{adapter: adapters[types.EndpointRouteChatCompletions]}
+	rq := &routeRequest{requestID: "gateway-a-request", adapter: adapters[types.EndpointRouteChatCompletions]}
+	rqB := &routeRequest{requestID: "gateway-b-request", adapter: rq.adapter}
 	ctx := context.Background()
 
-	require.NotNil(t, a.choose(ctx, rq, endpoint, replicas))
-	assert.Nil(t, b.choose(ctx, rq, endpoint, replicas), "gateway B sees gateway A's reservation")
+	require.NotNil(t, chooseForTest(t, a, ctx, rq, endpoint, replicas))
+	assert.Nil(t, chooseForTest(t, b, ctx, rqB, endpoint, replicas), "gateway B sees gateway A's reservation")
 	assert.Equal(t, int64(0), counter(&b.inflight, "replica-a").Load(), "a refused reservation leaves B's counter untouched")
 	pressure, err := a.state(endpoint.Spec.ID).Pressure(ctx, "replica-a")
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, pressure.ActiveStreams)
 
 	a.releaseReplica(rq, a.state(endpoint.Spec.ID), replicas[0])
-	require.NotNil(t, b.choose(ctx, rq, endpoint, replicas))
+	require.NotNil(t, chooseForTest(t, b, ctx, rqB, endpoint, replicas))
 	pressure, _ = a.state(endpoint.Spec.ID).Pressure(ctx, "replica-a")
 	assert.EqualValues(t, 1, pressure.ActiveStreams)
 }
@@ -164,8 +172,20 @@ func TestGeneratesOutput(t *testing.T) {
 		`data: {"choices":[{"delta":{"content":"Hel"}}]}`:                          true,
 		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1"}]}}]}`: true,
 		`data: {"choices":[{"text":"Hel","index":0}]}`:                             true,
-		`data: {"event":"custom","payload":1}`:                                     true,
+		`data: {"event":"custom","payload":1}`:                                     false,
 	} {
 		assert.Equal(t, want, generatesOutput([]byte(line)), line)
 	}
+}
+
+func chooseForTest(t *testing.T, r *router, ctx context.Context, rq *routeRequest, endpoint *types.ManagedEndpoint, replicas []*types.EndpointReplica) *types.EndpointReplica {
+	t.Helper()
+	if rq.requestID == "" {
+		copy := *rq
+		copy.requestID = uuid.NewString()
+		rq = &copy
+	}
+	picked, err := r.choose(ctx, rq, endpoint, replicas)
+	require.NoError(t, err)
+	return picked
 }

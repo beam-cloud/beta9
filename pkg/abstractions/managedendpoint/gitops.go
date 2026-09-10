@@ -589,6 +589,14 @@ func (g *gitops) applyFleet(ctx context.Context, state *types.GitOpsState, repor
 			known[e.Spec.ID] = &e.Spec
 		}
 	}
+	for id, entry := range fleet.Endpoints {
+		if spec := known[id]; spec != nil && entry.OpenRouter != nil {
+			if err := entry.OpenRouter.ValidateFor(spec); err != nil {
+				state.FleetSHA, state.FleetError = report.SHA, fmt.Sprintf("config.yaml: %s: openrouter: %v", id, err)
+				return false
+			}
+		}
+	}
 	fleet.GitSHA = report.SHA
 	dropped := fleet.Prune(known)
 	if err := g.s.repo.SaveFleet(ctx, fleet); err != nil {

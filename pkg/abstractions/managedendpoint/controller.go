@@ -634,7 +634,7 @@ func (c *controller) fillWithDemand(ctx context.Context, gpu string, entries []t
 		targets = append(targets, target)
 		if entry.Serverless && target.demand != nil && !target.demand.warm && target.demand.active == 0 {
 			for _, replica := range live {
-				if replica.EndpointID == entry.EndpointID && replica.GPU == gpu && replica.Alive() {
+				if replica.EndpointID == entry.EndpointID && replica.GPU == gpu && replica.Alive() && !initialDemandGrace(replica, time.Now()) {
 					_ = c.drainReplica(ctx, replica, endpoint.Spec.DrainSeconds, false, "on-demand endpoint idle")
 				}
 			}
@@ -676,7 +676,8 @@ func (c *controller) fillWithDemand(ctx context.Context, gpu string, entries []t
 					// A serving old version may cover traffic while its
 					// replacement loads. Its capacity must not stall rollout.
 					replace := target.replacing && target.count() == 0 && d.warm
-					if d.active <= d.capacity && !replace {
+					requested := d.active > d.capacity || d.pending && d.active >= d.capacity
+					if !requested && !replace {
 						continue
 					}
 					// Capacity is learned from the engine heartbeat. Bring up
@@ -781,6 +782,9 @@ func (c *controller) reclaim(ctx context.Context, gpu string, index int, targets
 		current := append([]*types.EndpointReplica(nil), owner.replicas...)
 		scaleDownOrder(current)
 		for _, replica := range current {
+			if !minimum && owner.entry.Serverless && initialDemandGrace(replica, time.Now()) {
+				continue // Let a requested copy finish loading and become usable.
+			}
 			worker := inv.workers[replica.WorkerID]
 			if !replica.Alive() || replica.Protected || worker == nil || worker.gpu != gpu || worker.pool != replica.PoolName {
 				continue

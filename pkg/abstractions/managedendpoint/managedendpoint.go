@@ -70,7 +70,8 @@ type Opts struct {
 	RouteGroup *echo.Group
 	// AdminRouteGroup receives the /api/v1/endpoints REST mirror.
 	AdminRouteGroup *echo.Group
-	// DrainContext ends in-flight /v1 requests on gateway shutdown.
+	// DrainContext stops admission and queued /v1 requests during shutdown.
+	// Active generations run until the service context ends after HTTP draining.
 	DrainContext context.Context
 }
 

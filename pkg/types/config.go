@@ -86,8 +86,7 @@ type ManagedEndpointsReconcile struct {
 }
 
 type ManagedEndpointsRoutingConfig struct {
-	MaxQueueWait     time.Duration `key:"maxQueueWait" json:"max_queue_wait"`
-	SlowStartSeconds uint32        `key:"slowStartSeconds" json:"slow_start_seconds"`
+	SlowStartSeconds uint32 `key:"slowStartSeconds" json:"slow_start_seconds"`
 	// Per-gateway in-flight caps (each gateway admits up to this many); the
 	// cluster-wide bound is the replicas' MaxConcurrency, reserved atomically
 	// in Redis per request.
@@ -129,7 +128,6 @@ func (c *ManagedEndpointsConfig) ApplyDefaults() {
 		{&c.Repo.PollInterval, 2 * time.Minute},
 		{&c.Reconcile.Interval, 10 * time.Second},
 		{&c.Reconcile.FailureBackoff, 30 * time.Second},
-		{&c.Routing.MaxQueueWait, 2 * time.Second},
 	} {
 		if *d.v <= 0 {
 			*d.v = d.def

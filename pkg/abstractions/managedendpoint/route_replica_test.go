@@ -65,13 +65,12 @@ func coldRouteContext() (*auth.HttpAuthContext, *httptest.ResponseRecorder) {
 	}, rec
 }
 
-func TestOnDemandRouteWaitsForFirstReplica(t *testing.T) {
+func TestOnDemandRouteRejectsThenServesReadyRetry(t *testing.T) {
 	s := newServiceForTest(t)
 	endpoint := seedEndpoint(t, s)
 	seedFleet(t, s, map[string]types.FleetEndpoint{endpoint.Spec.ID: {
 		Enabled: true, GPUs: map[string]types.FleetPlacement{"H100": {Priority: 1, MaxReplicas: 1, Serverless: true}},
 	}})
-	s.config.Routing.MaxQueueWait = 20 * time.Millisecond
 	repo := &routeReplicaRepository{ManagedEndpointRepository: s.repo}
 	s.repo = repo
 	r := newRouter(s)
@@ -86,38 +85,30 @@ func TestOnDemandRouteWaitsForFirstReplica(t *testing.T) {
 	t.Cleanup(transport.CloseIdleConnections)
 	s.transports.Store("test-replica", transport)
 	ctx, rec := coldRouteContext()
-	done := make(chan error, 1)
-	go func() { done <- r.handleRoute(ctx) }()
-	require.Eventually(t, func() bool {
-		demand, err := s.demand(context.Background(), endpoint.Spec.ID, "read", "", 0)
-		return err == nil && demand.active == 1
-	}, time.Second, 5*time.Millisecond, "an admitted cold request registers demand before a replica exists")
-	// The warm queue timeout has elapsed, but a cold request is still waiting.
-	time.Sleep(30 * time.Millisecond)
-	select {
-	case err := <-done:
-		t.Fatalf("cold request returned before readiness: %v (%s)", err, rec.Body.String())
-	default:
-	}
+	started := time.Now()
+	require.NoError(t, r.handleRoute(ctx))
+	assert.Less(t, time.Since(started), 200*time.Millisecond)
+	assert.Equal(t, http.StatusTooManyRequests, rec.Code, rec.Body.String())
+	demand, err := s.demand(context.Background(), endpoint.Spec.ID, "read", "", 0)
+	require.NoError(t, err)
+	assert.Zero(t, demand.active, "a rejected request releases its lease immediately")
+	assert.True(t, demand.pending, "startup survives the rejected request")
+	assert.True(t, demand.warm)
 	replica := seedReplica(t, s, endpoint)
 	replica.Address = "test-replica"
 	replica.Status = types.ReplicaStatusReady
 	replica.Capacity.MaxConcurrency = 1
 	require.NoError(t, s.repo.SaveReplica(context.Background(), replica))
-	select {
-	case err := <-done:
-		require.NoError(t, err)
-	case <-time.After(3 * time.Second):
-		t.Fatal("cold request did not resume after its replica became ready")
-	}
+	ctx, rec = coldRouteContext()
+	require.NoError(t, r.handleRoute(ctx))
 	assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	assert.Contains(t, rec.Body.String(), `"content":"hello"`)
 	assert.Contains(t, rec.Body.String(), `"id":"gen-`)
 	assert.Equal(t, replica.ID, rec.Header().Get(headerReplicaServed))
-	demand, err := s.demand(context.Background(), endpoint.Spec.ID, "read", "", 0)
+	demand, err = s.demand(context.Background(), endpoint.Spec.ID, "read", "", 0)
 	require.NoError(t, err)
 	assert.Zero(t, demand.active, "completion releases the request lease")
-	assert.LessOrEqual(t, repo.reads.Load(), int64(4), "cold wait does not poll Redis at the warm ten-per-second rate")
+	assert.LessOrEqual(t, repo.reads.Load(), int64(4), "rejected requests never poll the replica registry")
 }
 
 func TestRejectedRouteDoesNotCreateDemand(t *testing.T) {
@@ -158,7 +149,7 @@ func TestOnDemandRouteSharedLimitReturns429(t *testing.T) {
 	seedFleet(t, s, map[string]types.FleetEndpoint{endpoint.Spec.ID: {
 		Enabled: true, GPUs: map[string]types.FleetPlacement{"H100": {Priority: 1, MaxReplicas: 1, Serverless: true}},
 	}})
-	for i := 0; i < serverlessMaxQueuedRequests; i++ {
+	for i := 0; i < serverlessAdmissionHeadroom; i++ {
 		_, err := s.demand(context.Background(), endpoint.Spec.ID, "acquire", "existing-"+strconv.Itoa(i), 0)
 		require.NoError(t, err)
 	}
@@ -167,10 +158,10 @@ func TestOnDemandRouteSharedLimitReturns429(t *testing.T) {
 	ctx, rec := coldRouteContext()
 	require.NoError(t, r.handleRoute(ctx))
 	assert.Equal(t, http.StatusTooManyRequests, rec.Code, rec.Body.String())
-	assert.Contains(t, rec.Body.String(), "endpoint_saturated")
+	assert.Contains(t, rec.Body.String(), "rate_limit_exceeded")
 	demand, err := s.demand(context.Background(), endpoint.Spec.ID, "read", "", 0)
 	require.NoError(t, err)
-	assert.EqualValues(t, serverlessMaxQueuedRequests, demand.active)
+	assert.EqualValues(t, serverlessAdmissionHeadroom, demand.active)
 	assert.Zero(t, counter(&r.admission, endpoint.Spec.ID).Load(), "shared rejection releases local admission")
 }
 
@@ -191,56 +182,41 @@ func TestReplicaLookupFailureIsNotColdCapacity(t *testing.T) {
 	assert.Less(t, time.Since(started), 200*time.Millisecond)
 }
 
-func TestColdReplicaWaitCancelsPromptly(t *testing.T) {
+func TestReplicaPickHonorsCancellationAndDrain(t *testing.T) {
 	for _, reason := range []string{"client", "gateway"} {
 		t.Run(reason, func(t *testing.T) {
 			s := newServiceForTest(t)
 			endpoint := seedEndpoint(t, s)
-			repo := &routeReplicaRepository{ManagedEndpointRepository: s.repo, read: make(chan struct{}, 1)}
-			s.repo = repo
 			ctx, cancel := context.WithCancel(context.Background())
-			t.Cleanup(cancel)
 			if reason == "gateway" {
 				s.drainCtx = ctx
 				ctx = context.Background()
 			}
-			rq := &routeRequest{startedAt: time.Now(), serverless: true}
-			done := make(chan *routeError, 1)
-			go func() {
-				_, rerr := newRouter(s).pick(ctx, rq, endpoint, nil)
-				done <- rerr
-			}()
-			select {
-			case <-repo.read:
-			case <-time.After(time.Second):
-				t.Fatal("pick did not enter its initial replica lookup")
-			}
 			cancel()
-			select {
-			case rerr := <-done:
-				require.NotNil(t, rerr)
-				if reason == "client" {
-					assert.Equal(t, "client_closed", rerr.Code)
-				} else {
-					assert.Equal(t, "gateway_draining", rerr.Code)
-				}
-			case <-time.After(200 * time.Millisecond):
-				t.Fatal("cancellation waited for the one-second cold poll")
+			_, rerr := newRouter(s).pick(ctx, &routeRequest{serverless: true}, endpoint, nil)
+			require.NotNil(t, rerr)
+			if reason == "client" {
+				assert.Equal(t, "client_closed", rerr.Code)
+			} else {
+				assert.Equal(t, "gateway_draining", rerr.Code)
 			}
+			keys, err := s.rdb.Exists(context.Background(), "managed_endpoint:demand:"+endpoint.Spec.ID).Result()
+			require.NoError(t, err)
+			assert.Zero(t, keys)
 		})
 	}
 }
 
-func TestWarmOnlyReplicaWaitKeepsExistingTimeout(t *testing.T) {
+func TestHotModelCapacityRejectionDoesNotWait(t *testing.T) {
 	s := newServiceForTest(t)
 	endpoint := seedEndpoint(t, s)
-	s.config.Routing.MaxQueueWait = 20 * time.Millisecond
 	started := time.Now()
 	replica, rerr := newRouter(s).pick(context.Background(), &routeRequest{startedAt: started}, endpoint, nil)
 	assert.Nil(t, replica)
 	require.NotNil(t, rerr)
-	assert.Equal(t, "no_capacity", rerr.Code)
-	assert.Less(t, time.Since(started), 200*time.Millisecond, "warm-only models keep their short queue timeout")
+	assert.Equal(t, http.StatusTooManyRequests, rerr.Status)
+	assert.Equal(t, "rate_limit_exceeded", rerr.Code)
+	assert.Less(t, time.Since(started), 200*time.Millisecond, "capacity rejections do not queue")
 }
 
 func TestModelCatalogKeepsPlacementModeInternal(t *testing.T) {
