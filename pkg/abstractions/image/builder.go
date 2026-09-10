@@ -11,6 +11,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
 
+	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/registry"
@@ -42,6 +43,7 @@ type Builder struct {
 	scheduler     *scheduler.Scheduler
 	registry      *registry.ImageRegistry
 	containerRepo repository.ContainerRepository
+	backendRepo   repository.BackendRepository
 	tailscale     *network.Tailscale
 	eventBus      *common.EventBus
 	skopeoClient  common.SkopeoClient
@@ -93,6 +95,9 @@ func (b *Builder) startBuildContainer(ctx context.Context, build *Build) error {
 		build.log(true, "Error occured while generating container request: "+err.Error())
 		return err
 	}
+	if err := b.attachPlatformBuildStub(ctx, containerRequest); err != nil {
+		return err
+	}
 
 	if err := b.containerRepo.SetBuildContainerTTL(build.containerID, time.Duration(imageContainerTtlS)*time.Second); err != nil {
 		build.log(true, "Failed to connect to build container.\n")
@@ -114,6 +119,37 @@ func (b *Builder) startBuildContainer(ctx context.Context, build *Build) error {
 
 	build.routeResolver = b.containerRepo
 	return build.connectToHost(hostname, b.tailscale)
+}
+
+// Platform builds need a durable billing identity as well as their admission
+// marker. Credit enforcement resolves stub types after the request is consumed.
+// Ordinary builds do not perform any additional database work here.
+func (b *Builder) attachPlatformBuildStub(ctx context.Context, request *types.ContainerRequest) error {
+	if !request.Stub.Type.IsPlatformWorkload() {
+		return nil
+	}
+	if b.backendRepo == nil {
+		return errors.New("platform build identity: backend unavailable")
+	}
+	// The controller creates this canonical object before minting a deployer
+	// token. Reuse its identity; build context mounts remain request-specific.
+	object, err := b.backendRepo.GetObjectByHash(ctx, abstractions.EmptyStubObjectHash(), request.Workspace.Id)
+	if err != nil {
+		return fmt.Errorf("platform build object: %w", err)
+	}
+	const name = "managed-endpoints-build"
+	app, err := b.backendRepo.GetOrCreateApp(ctx, request.Workspace.Id, name)
+	if err != nil {
+		return fmt.Errorf("platform build app: %w", err)
+	}
+	config := types.StubConfigV1{Runtime: types.Runtime{Cpu: request.Cpu, Memory: request.Memory, ImageId: request.ImageId}}
+	stub, err := b.backendRepo.GetOrCreateStub(ctx, name, types.StubTypePlatformDeployer, config, object.Id, request.Workspace.Id, false, app.Id)
+	if err != nil {
+		return fmt.Errorf("platform build stub: %w", err)
+	}
+	request.StubId = stub.ExternalId
+	request.Stub.Stub = stub
+	return nil
 }
 
 func (b *Builder) waitForBuildContainer(ctx context.Context, build *Build, logsDone <-chan error) error {

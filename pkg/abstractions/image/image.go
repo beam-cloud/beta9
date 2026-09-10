@@ -58,6 +58,7 @@ func NewContainerImageService(
 	if err != nil {
 		return nil, err
 	}
+	builder.backendRepo = opts.BackendRepo
 
 	is := ContainerImageService{
 		builder:          builder,

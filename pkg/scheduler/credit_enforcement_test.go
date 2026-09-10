@@ -50,6 +50,8 @@ func TestEnforcementExemptsPlatformReplicasButNotCustomerWorkInSameWorkspace(t *
 		{"managed-spoofed-prefix", "customer", false},
 		{"unknown", "unavailable", false},
 		{"deployer", "gitops", false},
+		{"build-platform", "gitops", false},
+		{"build-customer", "", false},
 	} {
 		require.NoError(t, s.containerRepo.SetContainerState(fixture.id, &types.ContainerState{
 			ContainerId: fixture.id, StubId: fixture.stub, WorkspaceId: "admin", WorkerId: "worker",
@@ -58,11 +60,14 @@ func TestEnforcementExemptsPlatformReplicasButNotCustomerWorkInSameWorkspace(t *
 		require.NoError(t, rdb.SAdd(ctx, common.RedisKeys.SchedulerContainerWorkerIndex("worker"), common.RedisKeys.SchedulerContainerState(fixture.id)).Err())
 	}
 	require.NoError(t, s.enforceCredits(ctx))
-	for _, id := range []string{"endpoint-evictable", "endpoint-protected", "unknown", "deployer"} {
+	for _, id := range []string{"endpoint-evictable", "endpoint-protected", "unknown", "deployer", "build-platform"} {
 		state, err := s.containerRepo.GetContainerState(id)
 		require.NoError(t, err)
 		require.Equal(t, types.ContainerStatusRunning, state.Status)
 	}
+	build, err := s.containerRepo.GetContainerState("build-customer")
+	require.NoError(t, err)
+	require.Equal(t, types.ContainerStatusStopping, build.Status)
 	state, err := s.containerRepo.GetContainerState("managed-spoofed-prefix")
 	require.NoError(t, err)
 	require.Equal(t, types.ContainerStatusStopping, state.Status)
