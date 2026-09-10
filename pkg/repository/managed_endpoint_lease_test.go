@@ -40,7 +40,7 @@ func TestManagedEndpointLeaseSurvivesGatewayOutageWithoutLosingCapacity(t *testi
 			require.NoError(t, containers.UpdateContainerStatus(model.ContainerId, types.ContainerStatusRunning, types.ContainerStateTtlS))
 			assertContainerStateTTL(t, rdb, model.ContainerId, time.Duration(types.ContainerStateTtlSManagedEndpoint)*time.Second)
 
-			// A failed Okteto startup left the gateway unavailable for four minutes.
+			// A gateway outage left the control plane unavailable for four minutes.
 			// The worker lease expires, but the process and its GPU ownership survive.
 			server.FastForward(4 * time.Minute)
 			_, err = workers.GetWorkerById(worker.Id)

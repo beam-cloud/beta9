@@ -1,5 +1,0 @@
-{"event": "preflight", "at": 1789048508.3160949, "watcher_pid": 206, "watcher_start_ticks": "394821462", "gateway_pid": 11066, "gateway_start_ticks": "394835821", "duration_seconds": 240, "note": "Before executing, independently verify no pod liveness/startup restart and managed container TTL near 1800 seconds."}
-{"event": "watchdog_armed", "at": 1789048508.3167887, "watchdog_pid": 16197, "deadline_seconds": 330}
-{"event": "outage_started", "at": 1789048520.3601449, "old_gateway_pid": 11066}
-{"event": "supervision_resumed", "at": 1789048760.36087, "unavailable_seconds": 240.00072465883568}
-{"event": "gateway_recovered", "at": 1789048761.3630128, "new_gateway_pid": 16261, "new_gateway_start_ticks": "394905396", "unavailable_seconds": 241.00286741089076}

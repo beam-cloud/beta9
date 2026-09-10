@@ -1,6 +1,0 @@
-{
-  "name": "qwen3-8b-compile-cache",
-  "id": "d012b716-242e-4c98-820b-6b3836c08111",
-  "deleted": true,
-  "reason": "Unused failed compiler-cache experiment; version 7 uses local compilation cache."
-}

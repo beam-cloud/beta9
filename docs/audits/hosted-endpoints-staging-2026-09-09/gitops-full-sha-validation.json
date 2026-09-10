@@ -1,8 +1,0 @@
-{
-  "ok": true,
-  "invalid_abbreviated_sha_response": {
-    "ok": false,
-    "err_msg": "sha must be a full 40- or 64-character hex commit id; omit it to sync the configured ref",
-    "started": false
-  }
-}

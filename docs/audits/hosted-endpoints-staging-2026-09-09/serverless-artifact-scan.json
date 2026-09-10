@@ -1,7 +1,0 @@
-{
-  "ok": true,
-  "checked_text_artifacts": 16,
-  "exact_staging_sdk_github_and_deploy_credentials_found": false,
-  "credential_patterns_found": false,
-  "screenshots": "Cold and restored catalog, policy, replicas and itemized usage reviewed without credentials."
-}
