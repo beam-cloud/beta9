@@ -6,10 +6,29 @@ import (
 	"testing"
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/common/llmroute"
+	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestEndpointAccessIsIndependentOfCatalog(t *testing.T) {
+	s := newServiceForTest(t)
+	r := newRouter(s)
+	endpoint := seedEndpoint(t, s)
+	endpoint.Spec.Public = false
+	user := &auth.AuthInfo{Token: &types.Token{}, Workspace: &types.Workspace{Id: 2, ExternalId: "user-ws", Name: "user"}}
+	ctx := context.Background()
+	assert.False(t, r.allowed(ctx, endpoint, user), "an endpoint is private without an explicit policy")
+	endpoint.Spec.AllowedWorkspaces = []string{"user-ws"}
+	assert.True(t, r.allowed(ctx, endpoint, user))
+	endpoint.Spec.AllowedWorkspaces = nil
+	endpoint.Spec.Public = true
+	assert.True(t, r.allowed(ctx, endpoint, user))
+	endpoint.Spec.Public = false
+	user.Workspace.Id = 1
+	assert.True(t, r.allowed(ctx, endpoint, user), "the owning admin workspace retains access")
+}
 
 func TestChooseReservesInflightAtomically(t *testing.T) {
 	r := &router{s: &Service{}, states: map[string]*llmroute.State{}}

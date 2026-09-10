@@ -16,6 +16,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestUninstrumentedEngineUsesHTTPReadiness(t *testing.T) {
+	s := newServiceForTest(t)
+	s.containers = repository.NewContainerRedisRepositoryForTest(s.rdb)
+	r := seedReplica(t, s, seedEndpoint(t, s))
+	r.HarnessEnabled = false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	r.Address = strings.TrimPrefix(server.URL, "http://")
+	require.NoError(t, s.containers.SetContainerState(r.ContainerID, &types.ContainerState{
+		ContainerId: r.ContainerID, Status: types.ContainerStatusRunning,
+	}))
+	require.NoError(t, s.controller.syncReplica(context.Background(), r))
+	assert.True(t, r.Serving(), "an engine without instrumentation needs no harness flag or registration")
+	assert.False(t, r.LastHeartbeat.IsZero())
+}
+
 // vLLM's engine core registers before the API process binds its listener.
 // Neither engine readiness nor HTTP readiness alone can admit a replica.
 func TestHarnessReadinessRequiresServingHTTP(t *testing.T) {

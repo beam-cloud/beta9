@@ -28,7 +28,7 @@ def env(name, default=""):
 REPO_URL = env("ENDPOINTS_REPO_URL")
 SHA = env("ENDPOINTS_REPO_SHA")
 LAST_SHA = env("ENDPOINTS_LAST_SHA")
-REF = env("ENDPOINTS_REPO_REF") or "main"
+BRANCH = env("ENDPOINTS_REPO_BRANCH") or "main"
 REPO_PATH = env("ENDPOINTS_REPO_PATH").strip("/")
 FORCE = env("ENDPOINTS_FORCE") == "1"
 REDEPLOY = {p.strip("/") for p in env("ENDPOINTS_REDEPLOY").split(",") if p.strip()}
@@ -72,11 +72,11 @@ def checkout():
         git("fetch", "-q", "--depth", "1", "origin", SHA)
     except subprocess.CalledProcessError as exc:
         # Servers that refuse fetch-by-sha: take the ref head and insist it is our commit.
-        log(f"fetch by sha refused ({exc.stderr.strip()}); fetching {REF}")
-        git("fetch", "-q", "--depth", "1", "origin", REF)
+        log(f"fetch by sha refused ({exc.stderr.strip()}); fetching {BRANCH}")
+        git("fetch", "-q", "--depth", "1", "origin", "refs/heads/" + BRANCH)
         head = git("rev-parse", "FETCH_HEAD").stdout.strip()
-        if not head.startswith(SHA):
-            raise RuntimeError(f"ref {REF} is at {head[:8]}, expected {SHA[:8]}")
+        if head != SHA:
+            raise RuntimeError(f"ref {BRANCH} is at {head[:8]}, expected {SHA[:8]}")
     git("checkout", "-q", "--detach", "FETCH_HEAD")
 
 

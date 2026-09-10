@@ -208,7 +208,7 @@ func (g *gitops) state(ctx context.Context) (*types.GitOpsState, error) {
 		state = &types.GitOpsState{PerEndpoint: map[string]types.GitOpsEndpointState{}}
 	}
 	state.RepoURL = g.s.config.Repo.URL
-	state.Ref = g.s.config.Repo.Ref
+	state.Ref = g.s.config.Repo.Branch
 	return state, nil
 }
 
@@ -239,12 +239,9 @@ func (g *gitops) deployerSecrets() ([]string, error) {
 	return env, nil
 }
 
-// resolveHead is the commit the configured ref (a branch, or refs/... in full) points at.
+// resolveHead resolves only the configured branch, never a same-named tag.
 func (g *gitops) resolveHead(ctx context.Context) (string, error) {
-	ref := strings.TrimSpace(g.s.config.Repo.Ref)
-	if !strings.HasPrefix(ref, "refs/") {
-		ref = "refs/heads/" + ref
-	}
+	ref := "refs/heads/" + strings.TrimSpace(g.s.config.Repo.Branch)
 	key := strings.TrimSpace(g.s.config.Repo.DeployKey)
 	ctx, cancel := context.WithTimeout(ctx, gitopsResolveTimeout)
 	defer cancel()
@@ -278,11 +275,13 @@ func (g *gitops) resolveHead(ctx context.Context) (string, error) {
 		}
 		return "", fmt.Errorf("git ls-remote %s: %v: %s", ref, err, detail)
 	}
-	fields := strings.Fields(stdout.String())
-	if len(fields) < 2 || !shaPattern.MatchString(fields[0]) {
-		return "", fmt.Errorf("ref %q not found on %s", ref, g.s.config.Repo.URL)
+	for _, line := range strings.Split(stdout.String(), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && fields[1] == ref && shaPattern.MatchString(fields[0]) {
+			return fields[0], nil
+		}
 	}
-	return fields[0], nil
+	return "", fmt.Errorf("branch %q not found on %s", g.s.config.Repo.Branch, g.s.config.Repo.URL)
 }
 
 // launch starts the deployer container for sha and marks the run in flight.
@@ -321,7 +320,7 @@ func (g *gitops) launch(ctx context.Context, state *types.GitOpsState, sha strin
 		"ENDPOINTS_REPO_URL="+g.s.config.Repo.URL,
 		"ENDPOINTS_REPO_SHA="+sha,
 		"ENDPOINTS_LAST_SHA="+state.LastSHA,
-		"ENDPOINTS_REPO_REF="+g.s.config.Repo.Ref,
+		"ENDPOINTS_REPO_BRANCH="+g.s.config.Repo.Branch,
 		"ENDPOINTS_REPO_PATH="+strings.Trim(g.s.config.Repo.Path, "/"),
 		"ENDPOINTS_RUN_ID="+runID,
 		"ENDPOINTS_REDEPLOY="+strings.Join(retry, ","),
@@ -597,8 +596,8 @@ func (g *gitops) handleWebhook(ctx echo.Context) error {
 		After   string `json:"after"`
 		Deleted bool   `json:"deleted"`
 	}
-	ref := g.s.config.Repo.Ref
-	if json.Unmarshal(body, &push) != nil || push.Deleted || (push.Ref != ref && push.Ref != "refs/heads/"+ref && push.Ref != "refs/tags/"+ref) {
+	ref := g.s.config.Repo.Branch
+	if json.Unmarshal(body, &push) != nil || push.Deleted || push.Ref != "refs/heads/"+ref {
 		// Pings, other refs and deletions are acknowledged and ignored.
 		return ctx.JSON(http.StatusOK, map[string]any{"ok": true, "ignored": true, "ref": push.Ref})
 	}

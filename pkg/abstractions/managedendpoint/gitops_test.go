@@ -29,7 +29,7 @@ import (
 func newGitOpsForTest(t *testing.T) (*Service, *gitops) {
 	t.Helper()
 	s := newServiceForTest(t)
-	s.config.Repo = types.ManagedEndpointsRepoConfig{URL: "https://example.invalid/endpoints.git", Ref: "main"}
+	s.config.Repo = types.ManagedEndpointsRepoConfig{URL: "https://example.invalid/endpoints.git", Branch: "main"}
 	s.config.Webhook.Secret = "hook-secret"
 	g := &gitops{s: s, lock: common.NewRedisLock(s.rdb), pending: make(chan gitopsRequest, 1)}
 	s.gitops = g
@@ -70,6 +70,22 @@ printf 'abcdef1234567890abcdef1234567890abcdef12 refs/heads/main\n'
 	sha, err := g.resolveHead(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, "abcdef1234567890abcdef1234567890abcdef12", sha)
+}
+
+func TestGitOpsResolveHeadUsesConfiguredBranch(t *testing.T) {
+	for _, branch := range []string{"main", "staging", "release/models"} {
+		t.Run(branch, func(t *testing.T) {
+			s, g := newGitOpsForTest(t)
+			s.config.Repo.Branch = branch
+			bin := t.TempDir()
+			script := "#!/bin/sh\n[ \"$4\" = \"refs/heads/" + branch + "\" ] || exit 1\nprintf 'abcdef1234567890abcdef1234567890abcdef12 refs/heads/" + branch + "\\n'\n"
+			require.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o700))
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			sha, err := g.resolveHead(context.Background())
+			require.NoError(t, err)
+			assert.Equal(t, "abcdef1234567890abcdef1234567890abcdef12", sha)
+		})
+	}
 }
 
 func TestGitOpsResolveHeadRedactsConfigTokenOnFailure(t *testing.T) {
@@ -659,6 +675,20 @@ func TestGitOpsWebhook(t *testing.T) {
 	require.Len(t, g.pending, 1)
 	got := <-g.pending
 	assert.Equal(t, gitopsRequest{}, got)
+
+	// Staging only accepts its branch, including when a tag has the same name.
+	s.config.Repo.Branch = "staging"
+	for _, ref := range []string{"refs/heads/main", "refs/tags/staging", "staging"} {
+		body = push(ref, "abc")
+		rec = post(body, map[string]string{"X-Hub-Signature-256": sign(body)})
+		assert.Contains(t, rec.Body.String(), `"ignored":true`)
+		assert.Empty(t, g.pending)
+	}
+	body = push("refs/heads/staging", "abc")
+	rec = post(body, map[string]string{"X-Hub-Signature-256": sign(body)})
+	assert.Equal(t, http.StatusAccepted, rec.Code)
+	require.Len(t, g.pending, 1)
+	<-g.pending
 
 	// Branch deletion is ignored; ping is acknowledged.
 	body, _ = json.Marshal(map[string]any{"ref": "refs/heads/main", "after": "0000000000000000000000000000000000000000", "deleted": true})

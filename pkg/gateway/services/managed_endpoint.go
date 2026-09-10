@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -38,8 +39,13 @@ func (gws *GatewayService) managedEndpointStubConfig(ctx context.Context, authIn
 	}
 
 	var config types.ManagedEndpointStubConfig
-	if err := json.Unmarshal([]byte(raw), &config); err != nil {
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&config); err != nil {
 		return nil, fmt.Errorf("invalid managed_endpoint spec: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return nil, errors.New("managed_endpoint must contain exactly one JSON object")
 	}
 	if config.Endpoint == nil {
 		return nil, errors.New("managed_endpoint.endpoint is required")

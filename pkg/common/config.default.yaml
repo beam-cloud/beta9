@@ -503,7 +503,7 @@ managedEndpoints:
   enabled: false
   repo:
     url: ""
-    ref: main
+    branch: main
     path: ""
     deployKey: ""
   webhook:

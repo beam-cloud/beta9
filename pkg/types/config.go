@@ -63,9 +63,9 @@ type ManagedEndpointsConfig struct {
 }
 
 type ManagedEndpointsRepoConfig struct {
-	URL  string `key:"url" json:"url"`
-	Ref  string `key:"ref" json:"ref"`
-	Path string `key:"path" json:"path"`
+	URL    string `key:"url" json:"url"`
+	Branch string `key:"branch" json:"branch"`
+	Path   string `key:"path" json:"path"`
 	// DeployKey is an SSH private key (or HTTPS token), stored in secret config.
 	DeployKey    string        `key:"deployKey" json:"deploy_key"`
 	PollInterval time.Duration `key:"pollInterval" json:"poll_interval"`
@@ -102,8 +102,9 @@ func (c *ManagedEndpointsConfig) ApplyDefaults() {
 	if c.RoutePrefix == "/" {
 		c.RoutePrefix = "/v1"
 	}
-	if strings.TrimSpace(c.Repo.Ref) == "" {
-		c.Repo.Ref = "main"
+	c.Repo.Branch = strings.TrimSpace(c.Repo.Branch)
+	if c.Repo.Branch == "" {
+		c.Repo.Branch = "main"
 	}
 	// The harness receives the interval in whole seconds, and a replica must
 	// be allowed to miss at least one heartbeat before it is considered stale.

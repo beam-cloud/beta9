@@ -791,6 +791,11 @@ const (
 const ContainerStateTtlSWhilePending int64 = 1800
 const ContainerStateTtlSWhileStopping int64 = 300
 const ContainerStateTtlS int64 = 120
+
+// Managed endpoint processes are long-lived and report engine liveness through
+// their controller. Keep their ownership record across a bounded gateway outage;
+// explicit stops still use the ordinary STOPPING lease and finalization barrier.
+const ContainerStateTtlSManagedEndpoint int64 = 1800
 const WorkspaceQuotaTtlS int64 = 600
 
 const containerStateNotFoundPrefix = "container state not found: "

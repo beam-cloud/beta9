@@ -317,9 +317,20 @@ func (cr *ContainerRedisRepository) GetContainerExitCode(containerId string) (in
 	return exitCode, nil
 }
 
-func (cr *ContainerRedisRepository) UpdateContainerStatus(containerId string, requestedStatus types.ContainerStatus, expirySeconds int64) error {
-	expiry := time.Duration(expirySeconds) * time.Second
+// The scheduler commits eviction under the worker lock, not the container lock.
+// Compare the observed status atomically so a delayed heartbeat cannot overwrite
+// that STOPPING transition or any assignment/eviction metadata written with it.
+var updateContainerStatusScript = redis.NewScript(`
+local status = redis.call("HGET", KEYS[1], "status")
+if not status then return -1 end
+if status ~= ARGV[1] then return 0 end
+redis.call("HSET", KEYS[1], "status", ARGV[2], "started_at", ARGV[3])
+redis.call("EXPIRE", KEYS[1], ARGV[4])
+redis.call("ZADD", KEYS[2], ARGV[5], KEYS[1])
+return 1
+`)
 
+func (cr *ContainerRedisRepository) UpdateContainerStatus(containerId string, requestedStatus types.ContainerStatus, expirySeconds int64) error {
 	switch requestedStatus {
 	case types.ContainerStatusPending, types.ContainerStatusRunning, types.ContainerStatusStopping:
 		// continue
@@ -356,6 +367,22 @@ func (cr *ContainerRedisRepository) UpdateContainerStatus(containerId string, re
 		// particular, STOPPING is terminal until the state is deleted.
 		return nil
 	}
+	if requestedStatus == types.ContainerStatusRunning && strings.HasPrefix(containerId, "managed-") {
+		// The prefix only avoids extra reads for ordinary serverless heartbeats.
+		// The controller's live replica and its assignment authorize the longer
+		// ownership lease, including for protected (non-evictable) models. Never
+		// recreate missing state or extend a STOPPING transition.
+		replicas := &ManagedEndpointRedisRepository{rdb: cr.rdb}
+		replica, err := replicas.GetReplicaByContainer(context.TODO(), containerId)
+		if err != nil {
+			return fmt.Errorf("failed to resolve managed container lease <%s>: %w", containerId, err)
+		}
+		if replica != nil && replica.ContainerID == containerId && replica.Alive() && state.WorkerId != "" &&
+			(replica.WorkerID == "" || replica.WorkerID == state.WorkerId) {
+			expirySeconds = max(expirySeconds, types.ContainerStateTtlSManagedEndpoint)
+		}
+	}
+	expiry := time.Duration(expirySeconds) * time.Second
 
 	// Update StartedAt if this is the first time we set container status to RUNNING
 	if requestedStatus == types.ContainerStatusRunning && storedStatus != types.ContainerStatusRunning {
@@ -365,16 +392,17 @@ func (cr *ContainerRedisRepository) UpdateContainerStatus(containerId string, re
 	// Update status
 	state.Status = requestedStatus
 
-	// Save state to database
-	pipe := cr.rdb.TxPipeline()
-	pipe.HSet(context.TODO(), stateKey, common.ToSlice(state))
-	pipe.Expire(context.TODO(), stateKey, expiry)
-	pipe.ZAdd(context.TODO(), common.RedisKeys.SchedulerContainerStateIndex(), redis.Z{
-		Score:  float64(time.Now().Add(expiry).Unix()),
-		Member: stateKey,
-	})
-	if _, err = pipe.Exec(context.TODO()); err != nil {
+	updated, err := updateContainerStatusScript.Run(context.TODO(), cr.rdb, []string{
+		stateKey, common.RedisKeys.SchedulerContainerStateIndex(),
+	}, string(storedStatus), string(requestedStatus), state.StartedAt, expirySeconds, time.Now().Add(expiry).Unix()).Int()
+	if err != nil {
 		return fmt.Errorf("failed to set container state ttl <%v>: %w", stateKey, err)
+	}
+	if updated < 0 {
+		return &types.ErrContainerStateNotFound{ContainerId: containerId}
+	}
+	if updated == 0 {
+		return nil
 	}
 
 	if requestedStatus == types.ContainerStatusStopping {

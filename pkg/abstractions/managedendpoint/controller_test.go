@@ -298,8 +298,57 @@ func TestSyncReplicaLeavesReplicaAloneOnRepositoryError(t *testing.T) {
 
 	// The real not-found sentinel still means the container is gone.
 	s.containers = repository.NewContainerRedisRepositoryForTest(s.rdb)
+	s.controller.startedAt = time.Now().Add(-containerLostGrace - time.Second)
 	require.NoError(t, s.controller.syncReplica(context.Background(), replica))
 	assert.True(t, replica.Status.Terminal())
+}
+
+func TestSyncReplicaGatewayReconnectGraceDoesNotEraseStopIntent(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		status types.ReplicaStatus
+		exit   int
+		wait   bool
+	}{
+		{"reconnecting live replica", types.ReplicaStatusReady, -1, true},
+		{"known process exit", types.ReplicaStatusReady, 137, false},
+		{"explicit drain", types.ReplicaStatusDraining, -1, false},
+		{"scheduler eviction", types.ReplicaStatusEvicting, -1, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			s := newServiceForTest(t)
+			s.containers = repository.NewContainerRedisRepositoryForTest(s.rdb)
+			r := seedReplica(t, s, seedEndpoint(t, s))
+			r.Status, r.StartedAt = test.status, time.Now().Add(-time.Hour)
+			if test.exit >= 0 {
+				require.NoError(t, s.containers.SetContainerExitCode(r.ContainerID, test.exit))
+			}
+			require.NoError(t, s.controller.syncReplica(context.Background(), r))
+			assert.Equal(t, !test.wait, r.Status.Terminal())
+			if test.wait {
+				s.controller.startedAt = time.Now().Add(-containerLostGrace - time.Second)
+				require.NoError(t, s.controller.syncReplica(context.Background(), r))
+				assert.True(t, r.Status.Terminal(), "missing ownership is not preserved forever")
+			}
+			_, err := s.containers.GetContainerState(r.ContainerID)
+			assert.True(t, containerStateNotFound(err), "controller never reconstructs expired ownership")
+		})
+	}
+}
+
+func TestSyncReplicaGatewayReconnectStillDetectsDeadHarness(t *testing.T) {
+	s := newServiceForTest(t)
+	s.containers = repository.NewContainerRedisRepositoryForTest(s.rdb)
+	r := seedReplica(t, s, seedEndpoint(t, s))
+	r.Status, r.StartedAt, r.LastHeartbeat = types.ReplicaStatusReady, time.Now().Add(-time.Hour), time.Now().Add(-5*time.Minute)
+	r.HarnessEnabled = true
+	require.NoError(t, s.containers.SetContainerState(r.ContainerID, &types.ContainerState{ContainerId: r.ContainerID, Status: types.ContainerStatusRunning}))
+	require.NoError(t, s.controller.syncReplica(context.Background(), r))
+	assert.Equal(t, types.ReplicaStatusReady, r.Status, "gateway outage is not evidence that the engine died")
+	s.controller.startedAt = time.Now().Add(-s.config.ReplicaStaleAfter - time.Second)
+	require.NoError(t, s.controller.syncReplica(context.Background(), r))
+	assert.Equal(t, types.ReplicaStatusFailed, r.Status)
+	assert.Equal(t, "harness heartbeat stale", r.StatusReason, "long ownership lease does not delay stale harness detection")
 }
 
 // An old version keeps serving during replacement, so it is probed with the

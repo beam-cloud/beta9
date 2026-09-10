@@ -252,7 +252,7 @@ func (s *Service) GetGitOpsStatus(ctx context.Context, _ *pb.GetGitOpsStatusRequ
 			return err
 		}
 		if state == nil {
-			state = &types.GitOpsState{RepoURL: s.config.Repo.URL, Ref: s.config.Repo.Ref}
+			state = &types.GitOpsState{RepoURL: s.config.Repo.URL, Ref: s.config.Repo.Branch}
 		}
 		fleet, err := s.repo.GetFleet(ctx)
 		if err != nil {

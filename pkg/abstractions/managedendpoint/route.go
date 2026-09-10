@@ -231,7 +231,7 @@ func (r *router) cost(endpoint *types.ManagedEndpoint, usage Usage) int64 {
 }
 
 func billable(endpoint *types.ManagedEndpoint) bool {
-	return !endpoint.Spec.Catalog.Free && !endpoint.Spec.Pricing.IsZero()
+	return !endpoint.Spec.Pricing.IsZero()
 }
 
 type routeError struct {
@@ -457,13 +457,13 @@ func (r *router) resolveEndpoint(ctx context.Context, rq *routeRequest) (*types.
 }
 
 func (r *router) allowed(ctx context.Context, endpoint *types.ManagedEndpoint, authInfo *auth.AuthInfo) bool {
-	if authInfo.Token.TokenType == types.TokenTypeClusterAdmin || endpoint.Spec.Catalog.Public {
+	if authInfo.Token.TokenType == types.TokenTypeClusterAdmin || endpoint.Spec.Public {
 		return true
 	}
 	if admin, err := r.s.AdminWorkspace(ctx); err == nil && admin.Id == authInfo.Workspace.Id {
 		return true
 	}
-	allowed := endpoint.Spec.Catalog.AllowedWorkspaces
+	allowed := endpoint.Spec.AllowedWorkspaces
 	return slices.Contains(allowed, authInfo.Workspace.ExternalId) || slices.Contains(allowed, authInfo.Workspace.Name)
 }
 
@@ -1030,26 +1030,6 @@ func (r *router) persist(event types.EventEndpointRouteSchema) {
 	}
 }
 
-func modalities(spec *types.ManagedEndpointSpec) (input []string, output []string) {
-	input, output = []string{"text"}, []string{"text"}
-	switch spec.Kind {
-	case types.EndpointKindLLM:
-		for _, m := range spec.Catalog.Modalities {
-			if m == "image" || m == "vision" || m == "audio" {
-				input = append(input, strings.Replace(m, "vision", "image", 1))
-			}
-		}
-	case types.EndpointKindEmbedding:
-		output = []string{"embeddings"}
-	case types.EndpointKindImage:
-		output = []string{"image"}
-		if spec.ServesRoute(types.EndpointRouteImageEdits) {
-			input = append(input, "image")
-		}
-	}
-	return input, output
-}
-
 // pricingEntry renders per-unit prices as OpenRouter does ("0" when unset).
 func pricingEntry(p types.Pricing) map[string]any {
 	entry := map[string]any{
@@ -1069,14 +1049,6 @@ func orEmpty(list []string) []string {
 		return []string{}
 	}
 	return list
-}
-
-func orNil[T comparable](v T) any {
-	var zero T
-	if v == zero {
-		return nil
-	}
-	return v
 }
 
 func (r *router) handleListModels(ctx echo.Context) error {
@@ -1102,7 +1074,6 @@ func (r *router) handleListModels(ctx echo.Context) error {
 	data := make([]map[string]any, 0, len(endpoints))
 	for _, endpoint := range endpoints {
 		spec := &endpoint.Spec
-		input, output := modalities(spec)
 		routes := map[string]any{}
 		for _, route := range spec.Routes {
 			routes[strings.ReplaceAll(string(route), "/", "_")] = r.prefix + "/" + string(route)
@@ -1110,29 +1081,14 @@ func (r *router) handleListModels(ctx echo.Context) error {
 		slices.Sort(regions[spec.ID])
 		data = append(data, map[string]any{
 			"id":             spec.ID,
-			"canonical_slug": spec.ID,
 			"name":           cmp.Or(spec.Catalog.Name, spec.ID),
 			"created":        endpoint.CreatedAt.Unix(),
 			"description":    spec.Catalog.Description,
 			"context_length": spec.Catalog.ContextLength,
-			"architecture": map[string]any{
-				"modality":          strings.Join(input, "+") + "->" + strings.Join(output, "+"),
-				"input_modalities":  input,
-				"output_modalities": output,
-				"tokenizer":         spec.Catalog.Tokenizer,
-				"instruct_type":     orNil(spec.Catalog.InstructType),
-			},
-			"pricing": pricingEntry(spec.Pricing),
-			"top_provider": map[string]any{
-				"context_length":        spec.Catalog.ContextLength,
-				"max_completion_tokens": orNil(spec.Catalog.MaxCompletionTokens),
-				"is_moderated":          false,
-			},
-			"per_request_limits":   nil,
-			"supported_parameters": orEmpty(spec.Catalog.SupportedParameters),
-			"hugging_face_id":      spec.Catalog.HFID,
-			"owned_by":             providerName,
-			"object":               "model",
+			"kind":           spec.Kind,
+			"pricing":        pricingEntry(spec.Pricing),
+			"owned_by":       providerName,
+			"object":         "model",
 			// Beam extensions: live state for the dashboard and OpenRouter-style route paths.
 			"is_ready":    ready[spec.ID],
 			"datacenters": orEmpty(regions[spec.ID]),

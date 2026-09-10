@@ -84,23 +84,14 @@ func GPUKey(gpu string) string {
 type GpuSpec struct {
 	Count      uint32         `json:"count,omitempty"` // GPUs per replica
 	EngineArgs []string       `json:"engine_args,omitempty"`
-	Harness    map[string]any `json:"harness,omitempty"`
+	Config     map[string]any `json:"config,omitempty"`
 }
 
-// Catalog is the public listing metadata for an endpoint (OpenRouter shape).
+// Catalog contains display metadata; pricing and access belong to the endpoint.
 type Catalog struct {
-	Name                string   `json:"name,omitempty"`
-	Description         string   `json:"description,omitempty"`
-	HFID                string   `json:"hf_id,omitempty"`
-	ContextLength       uint32   `json:"context_length,omitempty"`
-	MaxCompletionTokens uint32   `json:"max_completion_tokens,omitempty"`
-	Tokenizer           string   `json:"tokenizer,omitempty"`
-	InstructType        string   `json:"instruct_type,omitempty"`
-	Modalities          []string `json:"modalities,omitempty"`
-	SupportedParameters []string `json:"supported_parameters,omitempty"`
-	Public              bool     `json:"public"`
-	AllowedWorkspaces   []string `json:"allowed_workspaces,omitempty"`
-	Free                bool     `json:"free,omitempty"`
+	Name          string `json:"name,omitempty"`
+	Description   string `json:"description,omitempty"`
+	ContextLength uint32 `json:"context_length,omitempty"`
 }
 
 // Pricing holds USD decimal strings per billable unit; empty means free.
@@ -112,7 +103,15 @@ type Pricing struct {
 	Image              string `json:"image,omitempty"`
 }
 
-func (p Pricing) IsZero() bool { return p == Pricing{} }
+func (p Pricing) IsZero() bool {
+	// Prices are validated decimal strings; explicitly declaring "0" is free too.
+	for _, value := range []string{p.PromptTokens, p.CompletionTokens, p.CachedPromptTokens, p.Request, p.Image} {
+		if strings.Trim(value, "0.") != "" {
+			return false
+		}
+	}
+	return true
+}
 
 func (p Pricing) Validate() error {
 	for name, value := range map[string]string{
@@ -143,21 +142,22 @@ func PricingRat(value string) (*big.Rat, error) {
 // ManagedEndpointSpec is everything an endpoint's app.py declares. Where
 // replicas run is Fleet's decision.
 type ManagedEndpointSpec struct {
-	ID           string             `json:"id"`
-	Kind         EndpointKind       `json:"kind"`
-	Engine       string             `json:"engine,omitempty"`
-	Port         uint32             `json:"port"`
-	Health       string             `json:"health,omitempty"`
-	Metrics      string             `json:"metrics,omitempty"`
-	Gpu          map[string]GpuSpec `json:"gpu"` // GPU key -> how the engine runs there
-	Routes       []EndpointRoute    `json:"routes,omitempty"`
-	Pricing      Pricing            `json:"pricing"`
-	Catalog      Catalog            `json:"catalog"`
-	Harness      bool               `json:"harness"`
-	Protected    bool               `json:"protected,omitempty"` // serverless work cannot evict its replicas; a change rolls them
-	Rollout      string             `json:"rollout,omitempty"`   // wait_for_capacity (default) or replace (allows downtime)
-	DrainSeconds uint32             `json:"drain_seconds"`       // grace on eviction or retirement; 0 is immediate
-	Entrypoint   []string           `json:"entrypoint,omitempty"`
+	ID                string             `json:"id"`
+	Kind              EndpointKind       `json:"kind"`
+	Engine            string             `json:"engine,omitempty"`
+	Port              uint32             `json:"port"`
+	Health            string             `json:"health,omitempty"`
+	Metrics           string             `json:"metrics,omitempty"`
+	Gpu               map[string]GpuSpec `json:"gpu"` // GPU key -> how the engine runs there
+	Routes            []EndpointRoute    `json:"routes,omitempty"`
+	Pricing           Pricing            `json:"pricing"`
+	Catalog           Catalog            `json:"catalog"`
+	Public            bool               `json:"public"`
+	AllowedWorkspaces []string           `json:"allowed_workspaces,omitempty"`
+	Protected         bool               `json:"protected,omitempty"` // serverless work cannot evict its replicas; a change rolls them
+	Rollout           string             `json:"rollout,omitempty"`   // wait_for_capacity (default) or replace (allows downtime)
+	DrainSeconds      uint32             `json:"drain_seconds"`       // grace on eviction or retirement; 0 is immediate
+	Entrypoint        []string           `json:"entrypoint,omitempty"`
 }
 
 // ManagedEndpointStubConfig is embedded in StubConfigV1 for managed stubs.
@@ -237,8 +237,8 @@ func (s *ManagedEndpointSpec) Validate() error {
 	if err := s.Pricing.Validate(); err != nil {
 		errs = append(errs, err)
 	}
-	if s.Kind == EndpointKindImage && s.Pricing.Image == "" && s.Pricing.Request == "" && !s.Catalog.Free {
-		fail("image endpoints must price per image or per request, or be marked free")
+	if s.Kind == EndpointKindImage && s.Pricing.Image == "" && s.Pricing.Request == "" {
+		fail("image endpoints must set a per-image or per-request price (use \"0\" for free)")
 	}
 	for key, spec := range s.Gpu {
 		if key != CPUInventoryKey && !KnownGPUType(GpuType(key)) {

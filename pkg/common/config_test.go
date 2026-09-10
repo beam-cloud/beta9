@@ -15,6 +15,7 @@ func TestManagedEndpointsSecretConfigLoadsWithoutPrintingCredentials(t *testing.
 	require.NoError(t, os.WriteFile(path, []byte(`managedEndpoints:
   repo:
     url: git@example.invalid:models.git
+    branch: staging
     deployKey: private-deploy-key
   deployerSecrets:
     GITHUB_TOKEN: private-package-token
@@ -30,6 +31,7 @@ func TestManagedEndpointsSecretConfigLoadsWithoutPrintingCredentials(t *testing.
 		require.NotContains(t, printed, value)
 	}
 	config := manager.GetConfig().ManagedEndpoints
+	require.Equal(t, "staging", config.Repo.Branch)
 	require.Equal(t, "private-deploy-key", config.Repo.DeployKey)
 	require.Equal(t, "private-package-token", config.DeployerSecrets["GITHUB_TOKEN"])
 	require.Equal(t, "private-webhook-secret", config.Webhook.Secret)

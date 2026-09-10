@@ -77,6 +77,15 @@ func (c *controller) syncReplica(ctx context.Context, replica *types.EndpointRep
 				return c.finishReplica(ctx, replica, types.ReplicaStatusFailed, "scheduler failed the request")
 			}
 		}
+		// A new gateway has not observed worker/harness reconnection yet. Give
+		// live replicas one bounded reconnect window, but never delay a known
+		// exit or an explicit drain/eviction. This does not recreate a lease:
+		// the worker remains responsible for stopping an actual orphan.
+		if replica.Alive() && now.Sub(c.startedAt) < containerLostGrace {
+			if exitCode, err := c.s.containers.GetContainerExitCode(replica.ContainerID); err != nil || exitCode < 0 {
+				return nil
+			}
+		}
 		return c.finishReplica(ctx, replica, c.exitStatus(replica), "container exited")
 	}
 	if state.WorkerId != "" && replica.WorkerID == "" {
@@ -339,11 +348,11 @@ func (c *controller) startReplica(ctx context.Context, endpoint *types.ManagedEn
 		EnvGpu+"="+gpu,
 		EnvLocality+"="+pool.Locality,
 		fmt.Sprintf("%s=%d", EnvEndpointPort, endpoint.Spec.Port),
-		fmt.Sprintf("%s=%t", EnvHarnessEnabled, endpoint.Spec.Harness),
+		EnvHarnessEnabled+"=true",
 		fmt.Sprintf("%s=%d", EnvDrainSeconds, drainSeconds),
 	)
-	if len(gpuSpec.Harness) > 0 {
-		env = append(env, EnvHarnessConfig+"="+mustJSON(gpuSpec.Harness))
+	if len(gpuSpec.Config) > 0 {
+		env = append(env, EnvHarnessConfig+"="+mustJSON(gpuSpec.Config))
 	}
 
 	entrypoint := endpoint.Spec.Entrypoint
@@ -384,19 +393,18 @@ func (c *controller) startReplica(ctx context.Context, endpoint *types.ManagedEn
 	}
 
 	replica := &types.EndpointReplica{
-		ID:             replicaID,
-		EndpointID:     endpoint.Spec.ID,
-		Version:        endpoint.Version,
-		GPU:            gpu,
-		GPUCount:       gpuCount,
-		Locality:       pool.Locality,
-		PoolName:       pool.Name,
-		ContainerID:    containerID,
-		Status:         types.ReplicaStatusScheduling,
-		SecretHash:     secretHash,
-		HarnessEnabled: endpoint.Spec.Harness,
-		Probe:          probeFor(&endpoint.Spec),
-		StartedAt:      time.Now(),
+		ID:          replicaID,
+		EndpointID:  endpoint.Spec.ID,
+		Version:     endpoint.Version,
+		GPU:         gpu,
+		GPUCount:    gpuCount,
+		Locality:    pool.Locality,
+		PoolName:    pool.Name,
+		ContainerID: containerID,
+		Status:      types.ReplicaStatusScheduling,
+		SecretHash:  secretHash,
+		Probe:       probeFor(&endpoint.Spec),
+		StartedAt:   time.Now(),
 	}
 	if err := c.s.repo.SaveReplica(ctx, replica); err != nil {
 		return nil, err

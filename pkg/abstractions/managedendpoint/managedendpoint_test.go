@@ -71,10 +71,9 @@ func seedEndpoint(t *testing.T, s *Service) *types.ManagedEndpoint {
 	t.Helper()
 	spec := types.ManagedEndpointSpec{
 		ID: "acme/model", Kind: types.EndpointKindLLM, Engine: "vllm", Port: 8000, Entrypoint: []string{"vllm", "serve"},
-		Gpu:          map[string]types.GpuSpec{"H100": {Harness: map[string]any{"max_num_seqs": 64}}},
-		Harness:      true,
+		Gpu:          map[string]types.GpuSpec{"H100": {Config: map[string]any{"max_num_seqs": 64}}},
 		DrainSeconds: 5,
-		Catalog:      types.Catalog{Public: true},
+		Public:       true,
 	}
 	spec.Normalize()
 	endpoint := &types.ManagedEndpoint{Spec: spec, StubID: "stub-1", Version: 1, Status: types.EndpointStatusActive}
@@ -151,6 +150,8 @@ func TestHarnessLifecycle(t *testing.T) {
 	s := newServiceForTest(t)
 	endpoint := seedEndpoint(t, s)
 	replica := seedReplica(t, s, endpoint)
+	replica.HarnessEnabled = false // Instrumented engines opt in by authenticated registration.
+	require.NoError(t, s.repo.SaveReplica(context.Background(), replica))
 	ctx := harnessCtx()
 	health := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -179,6 +180,7 @@ func TestHarnessLifecycle(t *testing.T) {
 
 	stored, err := s.repo.GetReplica(context.Background(), replica.ID)
 	require.NoError(t, err)
+	assert.True(t, stored.HarnessEnabled)
 	assert.Equal(t, types.ReplicaStatusLoading, stored.Status)
 	assert.JSONEq(t, `{"knobs":["max_num_seqs"]}`, string(stored.Capabilities))
 
