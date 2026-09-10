@@ -698,3 +698,18 @@ func authedEchoContext(c echo.Context, ctx context.Context) echo.Context {
 	info, _ := auth.AuthInfoFromContext(ctx)
 	return &auth.HttpAuthContext{Context: c, AuthInfo: info}
 }
+
+func TestGitOpsLaunchFailureIsVisibleBeforeContainerCreation(t *testing.T) {
+	s, g := newGitOpsForTest(t)
+	ctx := context.Background()
+	require.NoError(t, s.repo.SaveGitOpsState(ctx, &types.GitOpsState{LastSHA: "aaaaaaaa", FleetSHA: "aaaaaaaa"}))
+	err := g.sync(ctx, gitopsRequest{sha: "bbbbbbbb"})
+	require.ErrorContains(t, err, "scheduler unavailable")
+	state, err := s.repo.GetGitOpsState(ctx)
+	require.NoError(t, err)
+	require.False(t, state.Running)
+	require.Equal(t, "aaaaaaaa", state.LastSHA)
+	require.Equal(t, "bbbbbbbb", state.TargetSHA)
+	require.Contains(t, state.LastError, "launch deployer: scheduler unavailable")
+	require.False(t, state.LastRunAt.IsZero())
+}

@@ -166,7 +166,12 @@ func (g *gitops) sync(ctx context.Context, req gitopsRequest) error {
 	if !run {
 		return nil
 	}
-	return g.launch(ctx, state, sha, req.force, retry)
+	if err := g.launch(ctx, state, sha, req.force, retry); err != nil {
+		state.TargetSHA = sha
+		g.failRun(ctx, state, "launch deployer: "+err.Error())
+		return err
+	}
+	return nil
 }
 
 // needsRun decides whether to launch a deployer for sha and which failed
@@ -295,7 +300,7 @@ func (g *gitops) launch(ctx context.Context, state *types.GitOpsState, sha strin
 	if err != nil {
 		return err
 	}
-	token, err := g.s.backend.CreateToken(ctx, workspace.Id, types.TokenTypeWorkspace, true)
+	token, err := g.s.backend.CreateToken(ctx, workspace.Id, types.TokenTypePlatformDeployer, true)
 	if err != nil {
 		return fmt.Errorf("mint deployer token: %w", err)
 	}
@@ -346,12 +351,10 @@ func (g *gitops) launch(ctx context.Context, state *types.GitOpsState, sha strin
 	state.LastRunAt = now
 	state.LastError = ""
 	if err := g.s.repo.SaveGitOpsState(ctx, state); err != nil {
-		_ = g.s.backend.DeleteToken(ctx, workspace.Id, token.ExternalId)
 		return err
 	}
 	if err := g.s.scheduler.Run(request); err != nil {
-		g.failRun(ctx, state, "schedule deployer: "+err.Error())
-		return err
+		return fmt.Errorf("schedule deployer: %w", err)
 	}
 	g.s.emit(types.EventEndpointGitOps, types.EventEndpointSchema{
 		Action: "gitops.started", ContainerID: containerID, Message: sha,

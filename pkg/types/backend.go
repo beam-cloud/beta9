@@ -223,6 +223,9 @@ const (
 	TokenTypeClusterAdmin     string = "admin"
 	TokenTypeWorkspacePrimary string = "workspace_primary"
 	TokenTypeWorkspace        string = "workspace"
+	// Minted only by the GitOps controller and revoked when its run finishes.
+	// Image builds from this token belong to the platform, not a customer.
+	TokenTypePlatformDeployer string = "platform_deployer"
 	TokenTypeWorker           string = "worker"
 	// TokenTypeWorkerPrivate is a worker token minted for private-pool (agent)
 	// compute running on customer machines. It carries the pool owner's
