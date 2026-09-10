@@ -1143,10 +1143,6 @@ func pricingEntry(p types.Pricing) map[string]any {
 func (r *router) handleListModels(ctx echo.Context) error {
 	cc := ctx.(*auth.HttpAuthContext)
 	rctx := ctx.Request().Context()
-	fleet, err := r.s.repo.GetFleet(rctx)
-	if err != nil {
-		return errRegistry.write(ctx)
-	}
 	all, err := r.s.repo.ListEndpoints(rctx)
 	if err != nil {
 		return errRegistry.write(ctx)
@@ -1178,9 +1174,8 @@ func (r *router) handleListModels(ctx echo.Context) error {
 			"owned_by":       providerName,
 			"object":         "model",
 			// Beam extensions: live state for the dashboard and OpenRouter-style route paths.
-			"is_ready":   ready[spec.ID],
-			"serverless": fleet.Serverless(spec.ID),
-			"endpoints":  routes,
+			"is_ready":  ready[spec.ID],
+			"endpoints": routes,
 		})
 	}
 	return ctx.JSON(http.StatusOK, map[string]any{"object": "list", "data": data})

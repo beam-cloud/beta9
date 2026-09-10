@@ -243,7 +243,7 @@ func TestWarmOnlyReplicaWaitKeepsExistingTimeout(t *testing.T) {
 	assert.Less(t, time.Since(started), 200*time.Millisecond, "warm-only models keep their short queue timeout")
 }
 
-func TestModelCatalogReportsColdServerlessAvailability(t *testing.T) {
+func TestModelCatalogKeepsPlacementModeInternal(t *testing.T) {
 	for _, serverless := range []bool{false, true} {
 		t.Run(strconv.FormatBool(serverless), func(t *testing.T) {
 			s := newServiceForTest(t)
@@ -262,18 +262,18 @@ func TestModelCatalogReportsColdServerlessAvailability(t *testing.T) {
 			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 			require.Len(t, body.Data, 1)
 			assert.Equal(t, false, body.Data[0]["is_ready"])
-			assert.Equal(t, serverless, body.Data[0]["serverless"])
-			assert.EqualValues(t, 1, repo.fleetReads.Load(), "one fleet lookup serves the whole catalog")
+			assert.NotContains(t, body.Data[0], "serverless")
+			assert.Zero(t, repo.fleetReads.Load(), "public catalog does not need placement policy")
 		})
 	}
 }
 
-func TestModelCatalogRejectsUnknownServerlessAvailability(t *testing.T) {
+func TestModelCatalogDoesNotDependOnPlacementConfig(t *testing.T) {
 	s := newServiceForTest(t)
 	seedEndpoint(t, s)
 	s.repo = &routeReplicaRepository{ManagedEndpointRepository: s.repo, fleetErr: errors.New("fleet unavailable")}
 	ctx, rec := coldRouteContext()
 	require.NoError(t, newRouter(s).handleListModels(ctx))
-	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
-	assert.Contains(t, rec.Body.String(), "registry_unavailable")
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.NotContains(t, rec.Body.String(), "serverless")
 }

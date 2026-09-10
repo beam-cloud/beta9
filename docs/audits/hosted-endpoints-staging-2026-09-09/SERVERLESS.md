@@ -46,10 +46,11 @@ container request used by spare hosted replicas. No ordinary serverless worker,
 admission, scheduling or preemption code changes. This does not eliminate the
 previously measured physical GPU reclamation overhead.
 
-The public model listing includes `serverless`; cold models remain listed and
-callable. The dashboard shows **On demand** and explains the startup wait.
-Input/output/cache accounting continues through the existing completed-request
-journal and credits path.
+`serverless` is internal placement policy configured only in the hosted repo's
+`config.yaml`. The public model listing, frontend and SDK use one common model
+interface, with no separate mode field, label or mode-specific guidance. Cold
+models remain listed and callable. Input/output/cache accounting continues
+through the existing completed-request journal and credits path.
 
 Tests cover lease expiry and duplicate release, cross-gateway queue bounds,
 scale-out above a 128-slot engine, unlimited concurrency, caps, mixed hot
@@ -70,7 +71,7 @@ worker. The ordinary scheduler and worker were unchanged for this addition.
 | Ordinary serverless preemption | With another ordinary one-GPU sandbox running, a second sandbox reclaimed Qwen and initialized CUDA in 2.91 seconds end to end. Qwen did not refill without active demand. |
 | Reclaim a hot extra | A private test endpoint filled both GPUs, one protected minimum and one extra. An on-demand Qwen request reclaimed only the extra and returned HTTP 200 after 277.6 seconds. |
 | Preserve protected work | A concurrent 400-second request to the donor's protected minimum completed successfully on the same container throughout reclamation and Qwen startup. |
-| Cold dashboard | The model stayed visible and callable with an On demand label and startup guidance. The public catalog excluded the private donor. |
+| Cold dashboard | The model stayed visible and callable; the public catalog excluded the private donor. The initial mode label and guidance were subsequently removed to keep placement policy internal. |
 
 The initial single-sandbox, two-GPU test was rejected because the test workspace
 does not enable multi-GPU sandboxes. The successful replacement used two ordinary
