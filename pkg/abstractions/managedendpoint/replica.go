@@ -398,7 +398,7 @@ func (c *controller) startReplica(ctx context.Context, endpoint *types.ManagedEn
 		Ports:             []uint32{endpoint.Spec.Port},
 		PoolSelector:      pool.Name,
 		OpportunisticOnly: true,
-		Evictable:         c.s.config.Preemption.Enabled && !protected,
+		Evictable:         !protected,
 		DrainSeconds:      drainSeconds,
 		Timestamp:         time.Now(),
 	}

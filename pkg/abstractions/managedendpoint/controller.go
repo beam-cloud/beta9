@@ -105,12 +105,13 @@ func (c *controller) reconcile(ctx context.Context) (err error) {
 	for _, endpoint := range endpoints {
 		c.retire(ctx, endpoint, fleet, live, inv, blocked)
 	}
+	demand := c.readDemand(ctx, fleet, live)
 	for _, gpu := range fleet.GPUs() {
 		entries := fleet.Entries(gpu)
 		entries = slices.DeleteFunc(entries, func(entry types.FleetEntry) bool {
 			return blocked[protectionGroup{endpointID: entry.EndpointID, gpu: gpu}]
 		})
-		c.fill(ctx, gpu, entries, byID, live, inv)
+		c.fillWithDemand(ctx, gpu, entries, byID, live, inv, demand)
 	}
 	return protectionErr
 }
@@ -441,6 +442,8 @@ type placementTarget struct {
 	started       uint32
 	resources     *replicaResources
 	resourcesRead bool
+	demand        *endpointDemand
+	replacing     bool
 }
 
 func (c *controller) targetResources(ctx context.Context, target *placementTarget) *replicaResources {
@@ -492,6 +495,10 @@ func (t *placementTarget) starting() bool {
 // capacity on surplus. A minimum can reclaim another entry's surplus, even
 // from a higher priority. Surplus only reclaims from lower priorities.
 func (c *controller) fill(ctx context.Context, gpu string, entries []types.FleetEntry, endpoints map[string]*types.ManagedEndpoint, live []*types.EndpointReplica, inv *clusterInventory) {
+	c.fillWithDemand(ctx, gpu, entries, endpoints, live, inv, nil)
+}
+
+func (c *controller) fillWithDemand(ctx context.Context, gpu string, entries []types.FleetEntry, endpoints map[string]*types.ManagedEndpoint, live []*types.EndpointReplica, inv *clusterInventory, demand map[string]*endpointDemand) {
 	targets := make([]*placementTarget, 0, len(entries))
 	for _, entry := range entries {
 		endpoint := endpoints[entry.EndpointID]
@@ -499,8 +506,18 @@ func (c *controller) fill(ctx context.Context, gpu string, entries []types.Fleet
 			continue
 		}
 		current, _ := liveReplicas(live, entry.EndpointID, gpu, endpoint.Version)
-		target := &placementTarget{entry: entry, endpoint: endpoint, replicas: current}
+		target := &placementTarget{entry: entry, endpoint: endpoint, replicas: current, demand: demand[entry.EndpointID]}
+		target.replacing = slices.ContainsFunc(live, func(replica *types.EndpointReplica) bool {
+			return replica.EndpointID == entry.EndpointID && replica.GPU == gpu && replica.Version != endpoint.Version && replica.Alive()
+		})
 		targets = append(targets, target)
+		if entry.Serverless && target.demand != nil && !target.demand.warm && target.demand.active == 0 {
+			for _, replica := range live {
+				if replica.EndpointID == entry.EndpointID && replica.GPU == gpu && replica.Alive() {
+					_ = c.drainReplica(ctx, replica, endpoint.Spec.DrainSeconds, false, "on-demand endpoint idle")
+				}
+			}
+		}
 		// A changed cap is an explicit scale-down, including protected replicas.
 		// Do this for all entries, even while a higher-priority minimum waits.
 		if n := target.count(); entry.MaxReplicas > 0 && n > entry.MaxReplicas {
@@ -526,6 +543,21 @@ func (c *controller) fill(ctx context.Context, gpu string, entries []types.Fleet
 				if limit == 0 {
 					limit = target.count() + maxStartsPerTick
 				}
+				if target.entry.Serverless {
+					d := target.demand
+					if d == nil || d.starting {
+						continue
+					}
+					// A serving old version may cover traffic while its
+					// replacement loads. Its capacity must not stall rollout.
+					replace := target.replacing && target.count() == 0 && d.warm
+					if d.active <= d.capacity && !replace {
+						continue
+					}
+					// Capacity is learned from the engine heartbeat. Bring up
+					// one copy before deciding whether demand needs another.
+					limit = min(limit, target.count()+1)
+				}
 			}
 			if n := target.count(); n < limit {
 				want := min(limit-n, maxStartsPerTick-target.started)
@@ -535,10 +567,13 @@ func (c *controller) fill(ctx context.Context, gpu string, entries []types.Fleet
 					// loads; reconciliation transfers it when the new copy is ready.
 					protectedBudget = min(want, target.entry.MinReplicas-min(target.entry.MinReplicas, protected[target.entry.EndpointID]))
 				}
-				started, noRoom := c.grow(ctx, target.endpoint, gpu, want, protectedBudget, inv)
+				started, noRoom := c.grow(ctx, target.endpoint, gpu, want, protectedBudget, inv, target.entry.Serverless)
 				target.started += started
+				if started > 0 && target.demand != nil {
+					target.demand.starting = true
+				}
 				protected[target.entry.EndpointID] += min(started, protectedBudget)
-				if noRoom && !target.starting() && !reclaimed {
+				if noRoom && !target.entry.Serverless && !target.starting() && !reclaimed {
 					reclaimed = c.reclaim(ctx, gpu, index, targets, live, inv, minimum)
 				}
 			}
@@ -590,6 +625,9 @@ func (c *controller) reclaim(ctx context.Context, gpu string, index int, targets
 			ownerIndex = len(targets) - 1 - offset // least priority gives back first
 		}
 		owner := targets[ownerIndex]
+		if !minimum && owner.entry.Serverless && (owner.demand == nil || owner.demand.warm || owner.demand.active > 0) {
+			continue // Hot surplus must not churn a requested on-demand copy.
+		}
 		if ownerIndex == index || (!minimum && ownerIndex < index) || owner.count() <= owner.entry.MinReplicas {
 			continue
 		}
@@ -664,7 +702,7 @@ func (c *controller) reclaim(ctx context.Context, gpu string, index int, targets
 
 // grow starts up to want replicas and reports successful starts and whether
 // it stopped for lack of idle GPUs. A failed start backs off (endpoint, gpu).
-func (c *controller) grow(ctx context.Context, endpoint *types.ManagedEndpoint, gpu string, want, protectedBudget uint32, inv *clusterInventory) (started uint32, noRoom bool) {
+func (c *controller) grow(ctx context.Context, endpoint *types.ManagedEndpoint, gpu string, want, protectedBudget uint32, inv *clusterInventory, serverless bool) (started uint32, noRoom bool) {
 	if backoff, err := c.s.repo.InScheduleBackoff(ctx, endpoint.Spec.ID, gpu); err != nil || backoff {
 		return 0, false
 	}
@@ -674,7 +712,8 @@ func (c *controller) grow(ctx context.Context, endpoint *types.ManagedEndpoint, 
 			log.Debug().Str("endpoint_id", endpoint.Spec.ID).Str("gpu", gpu).Msg("managed endpoints: no idle capacity in any eligible pool")
 			return started, true
 		}
-		if _, err := c.startReplica(ctx, endpoint, gpu, pool, started < protectedBudget); err != nil {
+		protected := !serverless && (started < protectedBudget || !c.s.config.Preemption.Enabled)
+		if _, err := c.startReplica(ctx, endpoint, gpu, pool, protected); err != nil {
 			log.Warn().Err(err).Str("endpoint_id", endpoint.Spec.ID).Str("gpu", gpu).Msg("managed endpoints: start replica failed")
 			_ = c.s.repo.SetScheduleBackoff(ctx, endpoint.Spec.ID, gpu, c.s.config.Reconcile.FailureBackoff)
 			return started, false

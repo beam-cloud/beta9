@@ -31,15 +31,16 @@ import (
 // pipeline for every kind; adapters carry the per-route differences.
 
 const (
-	maxBody             = 64 << 20
-	queuePollInterval   = 100 * time.Millisecond
-	replicaDialTimeout  = 5 * time.Second
-	generationTTL       = time.Hour
-	headerReplicaPin    = "X-Beam-Endpoint-Replica"
-	headerRequestID     = "X-Request-ID"
-	headerEndpointID    = "X-Beam-Endpoint-ID"
-	headerReplicaServed = "X-Beam-Replica"
-	providerName        = "beam"
+	maxBody               = 64 << 20
+	queuePollInterval     = 100 * time.Millisecond
+	coldQueuePollInterval = time.Second
+	replicaDialTimeout    = 5 * time.Second
+	generationTTL         = time.Hour
+	headerReplicaPin      = "X-Beam-Endpoint-Replica"
+	headerRequestID       = "X-Request-ID"
+	headerEndpointID      = "X-Beam-Endpoint-ID"
+	headerReplicaServed   = "X-Beam-Replica"
+	providerName          = "beam"
 )
 
 type router struct {
@@ -245,6 +246,7 @@ type routeRequest struct {
 	startedAt  time.Time
 	queueWait  time.Duration
 	retried    bool
+	serverless bool
 }
 
 func (r *router) handleRoute(ctx echo.Context) error {
@@ -286,6 +288,21 @@ func (r *router) handleRoute(ctx echo.Context) error {
 		return rerr.write(ctx)
 	}
 	defer r.release(rq, endpoint)
+	fleet, err := r.s.repo.GetFleet(ctx.Request().Context())
+	if err != nil {
+		return errRegistry.write(ctx)
+	}
+	rq.serverless = fleet.Serverless(endpoint.Spec.ID) && rq.pinReplica == ""
+	if rq.serverless {
+		release, err := r.holdDemand(rq)
+		if err != nil {
+			if errors.Is(err, errDemandLimit) {
+				return (&routeError{http.StatusTooManyRequests, "endpoint_saturated", "endpoint is at capacity, retry shortly"}).write(ctx)
+			}
+			return errRegistry.write(ctx)
+		}
+		defer release()
+	}
 	return r.serve(rq, endpoint)
 }
 
@@ -411,7 +428,11 @@ func (r *router) resolveEndpoint(ctx context.Context, rq *routeRequest) (*types.
 		if first == nil {
 			first = endpoint
 		}
-		if len(r.servingReplicas(ctx, endpoint, rq.pinReplica, nil)) > 0 {
+		replicas, err := r.servingReplicas(ctx, endpoint, rq.pinReplica, nil)
+		if err != nil {
+			return nil, errRegistry
+		}
+		if len(replicas) > 0 {
 			return endpoint, nil
 		}
 	}
@@ -484,10 +505,10 @@ func (r *router) release(rq *routeRequest, endpoint *types.ManagedEndpoint) {
 
 // servingReplicas lists replicas that may take this request; a pinned replica
 // (X-Beam-Endpoint-Replica) bypasses the pool.
-func (r *router) servingReplicas(ctx context.Context, endpoint *types.ManagedEndpoint, pin string, exclude map[string]bool) []*types.EndpointReplica {
+func (r *router) servingReplicas(ctx context.Context, endpoint *types.ManagedEndpoint, pin string, exclude map[string]bool) ([]*types.EndpointReplica, error) {
 	replicas, err := r.s.repo.ListReplicas(ctx, endpoint.Spec.ID)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	var out []*types.EndpointReplica
 	for _, replica := range replicas {
@@ -496,7 +517,7 @@ func (r *router) servingReplicas(ctx context.Context, endpoint *types.ManagedEnd
 		}
 		if pin != "" {
 			if replica.ID == pin && replica.Status == types.ReplicaStatusReady {
-				return []*types.EndpointReplica{replica}
+				return []*types.EndpointReplica{replica}, nil
 			}
 			continue
 		}
@@ -504,14 +525,39 @@ func (r *router) servingReplicas(ctx context.Context, endpoint *types.ManagedEnd
 			out = append(out, replica)
 		}
 	}
-	return out
+	return out, nil
 }
 
 // pick waits (bounded) for a serving replica and selects one.
 func (r *router) pick(ctx context.Context, rq *routeRequest, endpoint *types.ManagedEndpoint, exclude map[string]bool) (*types.EndpointReplica, *routeError) {
-	deadline := rq.startedAt.Add(r.s.config.Routing.MaxQueueWait)
+	wait := r.s.config.Routing.MaxQueueWait
+	if rq.serverless {
+		wait = max(wait, serverlessQueueWait)
+	}
+	deadline := rq.startedAt.Add(wait)
+	var drainDone <-chan struct{}
+	if r.s.drainCtx != nil {
+		drainDone = r.s.drainCtx.Done()
+	}
 	for {
-		candidates := r.servingReplicas(ctx, endpoint, rq.pinReplica, exclude)
+		select {
+		case <-ctx.Done():
+			return nil, &routeError{499, "client_closed", "client closed request"}
+		case <-drainDone:
+			return nil, &routeError{http.StatusServiceUnavailable, "gateway_draining", "gateway is restarting, retry shortly"}
+		default:
+		}
+		candidates, err := r.servingReplicas(ctx, endpoint, rq.pinReplica, exclude)
+		if err != nil {
+			select {
+			case <-ctx.Done():
+				return nil, &routeError{499, "client_closed", "client closed request"}
+			case <-drainDone:
+				return nil, &routeError{http.StatusServiceUnavailable, "gateway_draining", "gateway is restarting, retry shortly"}
+			default:
+				return nil, errRegistry
+			}
+		}
 		if len(candidates) == 0 && len(exclude) > 0 {
 			return nil, &routeError{http.StatusBadGateway, "upstream_unavailable", "upstream replicas failed"}
 		}
@@ -525,10 +571,21 @@ func (r *router) pick(ctx context.Context, rq *routeRequest, endpoint *types.Man
 			}
 			return nil, &routeError{http.StatusTooManyRequests, "endpoint_saturated", "all replicas are busy, retry shortly"}
 		}
+		poll := queuePollInterval
+		if rq.serverless && len(candidates) == 0 {
+			// Cold starts can take minutes. Avoid reading every replica ten
+			// times a second for each caller while the model is still loading.
+			poll = coldQueuePollInterval
+		}
+		timer := time.NewTimer(min(poll, time.Until(deadline)))
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return nil, &routeError{499, "client_closed", "client closed request"}
-		case <-time.After(queuePollInterval):
+		case <-drainDone:
+			timer.Stop()
+			return nil, &routeError{http.StatusServiceUnavailable, "gateway_draining", "gateway is restarting, retry shortly"}
+		case <-timer.C:
 		}
 	}
 }
@@ -1077,6 +1134,10 @@ func pricingEntry(p types.Pricing) map[string]any {
 func (r *router) handleListModels(ctx echo.Context) error {
 	cc := ctx.(*auth.HttpAuthContext)
 	rctx := ctx.Request().Context()
+	fleet, err := r.s.repo.GetFleet(rctx)
+	if err != nil {
+		return errRegistry.write(ctx)
+	}
 	all, err := r.s.repo.ListEndpoints(rctx)
 	if err != nil {
 		return errRegistry.write(ctx)
@@ -1108,8 +1169,9 @@ func (r *router) handleListModels(ctx echo.Context) error {
 			"owned_by":       providerName,
 			"object":         "model",
 			// Beam extensions: live state for the dashboard and OpenRouter-style route paths.
-			"is_ready":  ready[spec.ID],
-			"endpoints": routes,
+			"is_ready":   ready[spec.ID],
+			"serverless": fleet.Serverless(spec.ID),
+			"endpoints":  routes,
 		})
 	}
 	return ctx.JSON(http.StatusOK, map[string]any{"object": "list", "data": data})
