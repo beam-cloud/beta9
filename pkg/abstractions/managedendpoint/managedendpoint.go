@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"strings"
@@ -178,6 +179,18 @@ func (s *Service) AdminWorkspace(ctx context.Context) (*types.Workspace, error) 
 	}
 	if workspace == nil {
 		return nil, errors.New("cluster admin workspace not found")
+	}
+	if !workspace.StorageAvailable() {
+		// The backend can retain a pre-migration admin workspace in its cache.
+		// Reload storage from the database so an operator's migration takes
+		// effect without restarting the gateway.
+		workspace, err = s.backend.GetWorkspace(ctx, workspace.Id)
+		if err != nil {
+			return nil, fmt.Errorf("refresh cluster admin workspace storage: %w", err)
+		}
+		if workspace == nil || !workspace.StorageAvailable() {
+			return nil, errors.New("managed endpoints require workspace storage for the cluster admin workspace; configure storage and migrate existing objects and volumes before starting hosted workloads")
+		}
 	}
 	copied := *workspace // the backend's cached pointer is shared
 	if copied.SigningKey == nil || *copied.SigningKey == "" {
