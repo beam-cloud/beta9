@@ -385,10 +385,17 @@ func (c *controller) retire(ctx context.Context, endpoint *types.ManagedEndpoint
 			currentReady++
 		}
 	}
+	var stale []*types.EndpointReplica
 	for _, r := range live {
 		if r.EndpointID != spec.ID || !r.Alive() || matches(r) || blocked[protectionGroup{endpointID: r.EndpointID, gpu: r.GPU}] {
 			continue
 		}
+		stale = append(stale, r)
+	}
+	// Release a stale extra before using the replace policy on a protected
+	// minimum. Keep the shared observation order intact for the fill pass.
+	scaleDownOrder(stale)
+	for _, r := range stale {
 		reason := fmt.Sprintf("version %d retired", r.Version)
 		if _, listed := placements[r.GPU]; !listed {
 			reason = "removed from config.yaml"

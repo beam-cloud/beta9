@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -920,6 +921,39 @@ func TestRetireProtectedMinimumOnlyAllowsExplicitCapacityReplacement(t *testing.
 			require.NoError(t, s.repo.SaveReplica(context.Background(), ready))
 			s.controller.retire(context.Background(), endpoint, fleet, []*types.EndpointReplica{old, ready}, idleInventory(tc.free), nil)
 			assert.Equal(t, tc.want, statusOf(t, s, old.ID))
+		})
+	}
+}
+
+func TestRetireMakesRoomFromStaleSurplusBeforeProtectedMinimum(t *testing.T) {
+	for _, minimum := range []uint32{1, 2} {
+		t.Run(fmt.Sprintf("minimum=%d", minimum), func(t *testing.T) {
+			s := newServiceForTest(t)
+			endpoint := seedEndpoint(t, s)
+			endpoint.Version, endpoint.Spec.Rollout = 2, "replace"
+			noPreemption := false
+			fleet := seedFleet(t, s, map[string]types.FleetEndpoint{endpoint.Spec.ID: {Enabled: true, GPUs: map[string]types.FleetPlacement{
+				"H100": {Priority: 1, MinReplicas: minimum, MaxReplicas: minimum + 1, Preemption: &noPreemption},
+			}}})
+			var live []*types.EndpointReplica
+			for i := uint32(0); i < minimum; i++ {
+				protected := versionReplica(t, s, fmt.Sprintf("protected-%d", i), 1, types.ReplicaStatusReady)
+				protected.Protected = true
+				require.NoError(t, s.repo.SaveReplica(context.Background(), protected))
+				live = append(live, protected)
+			}
+			surplus := versionReplica(t, s, "surplus", 1, types.ReplicaStatusReady)
+			live = append(live, surplus)
+
+			// Repository order puts the protected copies first. A rollout must
+			// release the stale extra without a next-tick protection transfer.
+			s.controller.retire(context.Background(), endpoint, fleet, live, noRoomInventory(), nil)
+			assert.Equal(t, types.ReplicaStatusDraining, statusOf(t, s, surplus.ID))
+			for _, protected := range live[:minimum] {
+				assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, protected.ID))
+				assert.True(t, protected.Protected)
+			}
+			assert.Same(t, surplus, live[len(live)-1], "retirement does not reorder the shared observation")
 		})
 	}
 }
