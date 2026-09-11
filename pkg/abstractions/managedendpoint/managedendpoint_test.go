@@ -495,9 +495,6 @@ func TestAdminReadRPCs(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, gitops.Ok)
 	assert.JSONEq(t, `{"acme/model":{"enabled":true,"gpus":{"H100":{"priority":1,"max_replicas":2}}}}`, gitops.FleetJson)
-	sync, err := s.TriggerGitOpsSync(ctx, &pb.TriggerGitOpsSyncRequest{})
-	require.NoError(t, err)
-	assert.False(t, sync.Ok, "no repo configured")
 }
 
 func TestRouteRecordCreditsProviderWorkspace(t *testing.T) {

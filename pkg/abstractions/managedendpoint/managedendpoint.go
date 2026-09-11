@@ -1,5 +1,6 @@
-// Package managedendpoint hosts GitOps-deployed inference endpoints on spare
-// GPU capacity and serves them under an OpenAI-compatible /v1 route.
+// Package managedendpoint hosts inference endpoints deployed from the
+// endpoints repo on spare GPU capacity and serves them under an
+// OpenAI-compatible /v1 route.
 package managedendpoint
 
 import (
@@ -94,7 +95,6 @@ type Service struct {
 	controller *controller
 	router     *router
 	meter      *meter
-	gitops     *gitops // nil when no repo is configured
 
 	adminMu        sync.Mutex
 	adminWorkspace *types.Workspace
@@ -140,7 +140,6 @@ func New(ctx context.Context, opts Opts) (*Service, error) {
 	s.controller = newController(s)
 	s.router = newRouter(s)
 	s.meter = newMeter(s)
-	s.gitops = newGitOps(s)
 
 	authMiddleware := auth.AuthMiddleware(opts.BackendRepo, opts.WorkspaceRepo)
 	if opts.RouteGroup != nil {
@@ -149,16 +148,10 @@ func New(ctx context.Context, opts Opts) (*Service, error) {
 	if opts.AdminRouteGroup != nil {
 		authed := opts.AdminRouteGroup.Group("", authMiddleware)
 		s.mountAdminRoutes(authed)
-		if s.gitops != nil {
-			s.gitops.mount(opts.AdminRouteGroup, authed)
-		}
 	}
 
 	go s.controller.run(ctx)
 	go s.meter.run(ctx)
-	if s.gitops != nil {
-		go s.gitops.run(ctx)
-	}
 	return s, nil
 }
 
@@ -463,8 +456,11 @@ func replicasToProto(replicas []*types.EndpointReplica) []*pb.EndpointReplica {
 	return out
 }
 
-func endpointToProto(e *types.ManagedEndpoint, fleet *types.Fleet, replicas []*types.EndpointReplica) *pb.ManagedEndpoint {
+func endpointToProto(e *types.ManagedEndpoint, fleet *types.Fleet, gitops *types.GitOpsState, replicas []*types.EndpointReplica) *pb.ManagedEndpoint {
+	state, reason := endpointState(e, fleet, gitops, replicas)
 	out := &pb.ManagedEndpoint{
+		State:           state,
+		StateReason:     reason,
 		Id:              e.Spec.ID,
 		SpecJson:        mustJSON(e.Spec),
 		StubId:          e.StubID,
@@ -493,17 +489,14 @@ func gitopsToProto(state *types.GitOpsState) *pb.GitOpsState {
 		RepoUrl:         state.RepoURL,
 		Ref:             state.Ref,
 		LastSha:         state.LastSHA,
-		TargetSha:       state.TargetSHA,
 		LastRunAtUnixMs: unixMs(state.LastRunAt),
 		LastError:       state.LastError,
 		FleetError:      state.FleetError,
-		Running:         state.Running,
 	}
 	for _, e := range state.PerEndpoint {
 		out.Endpoints = append(out.Endpoints, &pb.GitOpsEndpointState{
 			Path:            e.Path,
 			Id:              e.ID,
-			AppliedSha:      e.AppliedSHA,
 			Status:          string(e.Status),
 			Error:           e.Error,
 			StubId:          e.StubID,

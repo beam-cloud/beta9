@@ -20,7 +20,7 @@ func protectedReplicas(fleet *types.Fleet, endpoints map[string]*types.ManagedEn
 		// The cluster override also covers copies awaiting retirement after a
 		// config change. Intentional retirement does not require demoting them.
 		for _, replica := range live {
-			if replica.Alive() && !fleet.Placements(replica.EndpointID)[replica.GPU].Serverless {
+			if replica.Alive() {
 				desired[replica.ID] = true
 			}
 		}
@@ -32,7 +32,7 @@ func protectedReplicas(fleet *types.Fleet, endpoints map[string]*types.ManagedEn
 		}
 		for gpu, placement := range fleet.Placements(id) {
 			count := placement.MinReplicas
-			if placement.Serverless || placement.Preemption == nil || *placement.Preemption {
+			if placement.Preemption == nil || *placement.Preemption {
 				count = 0
 			}
 			if count == 0 {

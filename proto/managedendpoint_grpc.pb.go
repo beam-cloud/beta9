@@ -298,14 +298,14 @@ var EndpointHarnessService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	EndpointAdminService_ListEndpoints_FullMethodName     = "/managedendpoint.EndpointAdminService/ListEndpoints"
-	EndpointAdminService_GetEndpoint_FullMethodName       = "/managedendpoint.EndpointAdminService/GetEndpoint"
-	EndpointAdminService_ListReplicas_FullMethodName      = "/managedendpoint.EndpointAdminService/ListReplicas"
-	EndpointAdminService_GetMetrics_FullMethodName        = "/managedendpoint.EndpointAdminService/GetMetrics"
-	EndpointAdminService_SetReplicaConfig_FullMethodName  = "/managedendpoint.EndpointAdminService/SetReplicaConfig"
-	EndpointAdminService_StopReplica_FullMethodName       = "/managedendpoint.EndpointAdminService/StopReplica"
-	EndpointAdminService_GetGitOpsStatus_FullMethodName   = "/managedendpoint.EndpointAdminService/GetGitOpsStatus"
-	EndpointAdminService_TriggerGitOpsSync_FullMethodName = "/managedendpoint.EndpointAdminService/TriggerGitOpsSync"
+	EndpointAdminService_ListEndpoints_FullMethodName    = "/managedendpoint.EndpointAdminService/ListEndpoints"
+	EndpointAdminService_GetEndpoint_FullMethodName      = "/managedendpoint.EndpointAdminService/GetEndpoint"
+	EndpointAdminService_ListReplicas_FullMethodName     = "/managedendpoint.EndpointAdminService/ListReplicas"
+	EndpointAdminService_GetMetrics_FullMethodName       = "/managedendpoint.EndpointAdminService/GetMetrics"
+	EndpointAdminService_SetReplicaConfig_FullMethodName = "/managedendpoint.EndpointAdminService/SetReplicaConfig"
+	EndpointAdminService_StopReplica_FullMethodName      = "/managedendpoint.EndpointAdminService/StopReplica"
+	EndpointAdminService_GetGitOpsStatus_FullMethodName  = "/managedendpoint.EndpointAdminService/GetGitOpsStatus"
+	EndpointAdminService_ApplyRepo_FullMethodName        = "/managedendpoint.EndpointAdminService/ApplyRepo"
 )
 
 // EndpointAdminServiceClient is the client API for EndpointAdminService service.
@@ -323,7 +323,7 @@ type EndpointAdminServiceClient interface {
 	// StopReplica drains and stops a replica; the controller refills.
 	StopReplica(ctx context.Context, in *StopReplicaRequest, opts ...grpc.CallOption) (*StopReplicaResponse, error)
 	GetGitOpsStatus(ctx context.Context, in *GetGitOpsStatusRequest, opts ...grpc.CallOption) (*GetGitOpsStatusResponse, error)
-	TriggerGitOpsSync(ctx context.Context, in *TriggerGitOpsSyncRequest, opts ...grpc.CallOption) (*TriggerGitOpsSyncResponse, error)
+	ApplyRepo(ctx context.Context, in *ApplyRepoRequest, opts ...grpc.CallOption) (*ApplyRepoResponse, error)
 }
 
 type endpointAdminServiceClient struct {
@@ -397,9 +397,9 @@ func (c *endpointAdminServiceClient) GetGitOpsStatus(ctx context.Context, in *Ge
 	return out, nil
 }
 
-func (c *endpointAdminServiceClient) TriggerGitOpsSync(ctx context.Context, in *TriggerGitOpsSyncRequest, opts ...grpc.CallOption) (*TriggerGitOpsSyncResponse, error) {
-	out := new(TriggerGitOpsSyncResponse)
-	err := c.cc.Invoke(ctx, EndpointAdminService_TriggerGitOpsSync_FullMethodName, in, out, opts...)
+func (c *endpointAdminServiceClient) ApplyRepo(ctx context.Context, in *ApplyRepoRequest, opts ...grpc.CallOption) (*ApplyRepoResponse, error) {
+	out := new(ApplyRepoResponse)
+	err := c.cc.Invoke(ctx, EndpointAdminService_ApplyRepo_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -421,7 +421,7 @@ type EndpointAdminServiceServer interface {
 	// StopReplica drains and stops a replica; the controller refills.
 	StopReplica(context.Context, *StopReplicaRequest) (*StopReplicaResponse, error)
 	GetGitOpsStatus(context.Context, *GetGitOpsStatusRequest) (*GetGitOpsStatusResponse, error)
-	TriggerGitOpsSync(context.Context, *TriggerGitOpsSyncRequest) (*TriggerGitOpsSyncResponse, error)
+	ApplyRepo(context.Context, *ApplyRepoRequest) (*ApplyRepoResponse, error)
 	mustEmbedUnimplementedEndpointAdminServiceServer()
 }
 
@@ -450,8 +450,8 @@ func (UnimplementedEndpointAdminServiceServer) StopReplica(context.Context, *Sto
 func (UnimplementedEndpointAdminServiceServer) GetGitOpsStatus(context.Context, *GetGitOpsStatusRequest) (*GetGitOpsStatusResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetGitOpsStatus not implemented")
 }
-func (UnimplementedEndpointAdminServiceServer) TriggerGitOpsSync(context.Context, *TriggerGitOpsSyncRequest) (*TriggerGitOpsSyncResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method TriggerGitOpsSync not implemented")
+func (UnimplementedEndpointAdminServiceServer) ApplyRepo(context.Context, *ApplyRepoRequest) (*ApplyRepoResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ApplyRepo not implemented")
 }
 func (UnimplementedEndpointAdminServiceServer) mustEmbedUnimplementedEndpointAdminServiceServer() {}
 
@@ -592,20 +592,20 @@ func _EndpointAdminService_GetGitOpsStatus_Handler(srv interface{}, ctx context.
 	return interceptor(ctx, in, info, handler)
 }
 
-func _EndpointAdminService_TriggerGitOpsSync_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(TriggerGitOpsSyncRequest)
+func _EndpointAdminService_ApplyRepo_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ApplyRepoRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(EndpointAdminServiceServer).TriggerGitOpsSync(ctx, in)
+		return srv.(EndpointAdminServiceServer).ApplyRepo(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: EndpointAdminService_TriggerGitOpsSync_FullMethodName,
+		FullMethod: EndpointAdminService_ApplyRepo_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(EndpointAdminServiceServer).TriggerGitOpsSync(ctx, req.(*TriggerGitOpsSyncRequest))
+		return srv.(EndpointAdminServiceServer).ApplyRepo(ctx, req.(*ApplyRepoRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -646,8 +646,8 @@ var EndpointAdminService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _EndpointAdminService_GetGitOpsStatus_Handler,
 		},
 		{
-			MethodName: "TriggerGitOpsSync",
-			Handler:    _EndpointAdminService_TriggerGitOpsSync_Handler,
+			MethodName: "ApplyRepo",
+			Handler:    _EndpointAdminService_ApplyRepo_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

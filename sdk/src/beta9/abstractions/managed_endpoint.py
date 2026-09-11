@@ -154,8 +154,8 @@ class ManagedEndpoint(RunnerAbstraction):
         if rollout not in {"wait_for_capacity", "replace"}:
             raise ValueError("rollout must be wait_for_capacity or replace")
         self.rollout = rollout
-        # A fresh Image per stub: the deployer loads many apps in one process,
-        # and Image.build() mutates the instance it was given.
+        # A fresh Image per stub: `beta9 endpoints deploy` loads many apps in
+        # one process, and Image.build() mutates the instance it was given.
         super().__init__(
             cpu=cpu,
             memory=memory,
@@ -206,12 +206,12 @@ class ManagedEndpoint(RunnerAbstraction):
         name: Optional[str] = None,
         context: Optional[ConfigContext] = None,
         invocation_details_func: Optional[Callable[..., None]] = None,
-        git_sha: str = "",
         **_: Any,
     ) -> Tuple[Dict[str, Any], bool]:
         """Deploy this endpoint; ``name`` must match ``id`` when given.
 
-        On failure ``deploy_error`` holds the reason (the deployer reports it).
+        An unchanged app maps to its existing stub, so redeploying it is a
+        no-op rather than a rollout. On failure ``deploy_error`` holds the reason.
         """
         self.deploy_error = ""
         if name and name != self.id:
@@ -233,14 +233,13 @@ class ManagedEndpoint(RunnerAbstraction):
                 "-c",
                 f"cd {USER_CODE_DIR} && exec {shlex.join(self.entrypoint)}",
             ]
-        self.managed_endpoint = json.dumps({"endpoint": self.spec(), "git_sha": git_sha})
+        self.managed_endpoint = json.dumps({"endpoint": self.spec()})
 
         if not self.prepare_runtime(
             stub_type=MANAGED_ENDPOINT_DEPLOYMENT_STUB_TYPE,
-            force_create_stub=True,
             ignore_patterns=["**"] if custom_image else [],
         ):
-            self.deploy_error = "stub preparation failed (see the deployer log)"
+            self.deploy_error = "stub preparation failed (see the build log)"
             return {}, False
 
         terminal.header("Deploying")
@@ -250,11 +249,12 @@ class ManagedEndpoint(RunnerAbstraction):
         self.deployment_id = resp.deployment_id
         if not resp.ok:
             return self._fail(resp.err_msg or "deploy failed")
-        terminal.done("Deployed 🎉")
+        terminal.done("Unchanged" if resp.rollout_action == "unchanged" else "Deployed 🎉")
         return {
             "deployment_id": resp.deployment_id,
             "version": resp.version,
             "id": self.id,
+            "stub_id": self.stub_id,
         }, True
 
     def _fail(self, reason: str) -> Tuple[Dict[str, Any], bool]:

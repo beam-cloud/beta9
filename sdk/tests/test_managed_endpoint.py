@@ -82,13 +82,12 @@ def test_plain_gpu_declarations_survive_serialization(gpu):
 def test_deploy_sets_managed_endpoint_json():
     ep = ManagedEndpoint(id="acme/echo", kind="custom", entrypoint=["python", "app.py"])
     with mock.patch.object(ep, "prepare_runtime", return_value=False) as prepare:
-        result, ok = ep.deploy(git_sha="abc")
+        result, ok = ep.deploy()
     assert not ok and result == {}
     prepare.assert_called_once()
     assert prepare.call_args.kwargs["stub_type"] == "managed_endpoint/deployment"
-    cfg = json.loads(ep.managed_endpoint)
-    assert cfg["endpoint"]["kind"] == "custom"
-    assert cfg["git_sha"] == "abc"
+    assert not prepare.call_args.kwargs.get("force_create_stub"), "an unchanged app reuses its stub"
+    assert json.loads(ep.managed_endpoint) == {"endpoint": ep.spec()}
     assert ep.entrypoint[0] == "sh"
 
 

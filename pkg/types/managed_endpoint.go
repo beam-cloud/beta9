@@ -159,10 +159,11 @@ type ManagedEndpointSpec struct {
 	Entrypoint        []string           `json:"entrypoint,omitempty"`
 }
 
-// ManagedEndpointStubConfig is embedded in StubConfigV1 for managed stubs.
+// ManagedEndpointStubConfig is embedded in StubConfigV1 for managed stubs. It
+// holds only what the app declares, so an unchanged app maps to the same stub
+// and redeploying it is a no-op.
 type ManagedEndpointStubConfig struct {
 	Endpoint *ManagedEndpointSpec `json:"endpoint,omitempty"`
-	GitSHA   string               `json:"git_sha,omitempty"`
 }
 
 var endpointIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)?$`)
@@ -277,7 +278,6 @@ type FleetPlacement struct {
 	MinReplicas uint32 `json:"min_replicas,omitempty" yaml:"minReplicas"`
 	MaxReplicas uint32 `json:"max_replicas,omitempty" yaml:"maxReplicas"`
 	Preemption  *bool  `json:"preemption,omitempty" yaml:"preemption"`
-	Serverless  bool   `json:"serverless,omitempty" yaml:"serverless"`
 }
 
 // YAML otherwise truncates fractional replica counts when decoding into uint32.
@@ -296,11 +296,9 @@ func (p *FleetPlacement) UnmarshalYAML(unmarshal func(any) error) error {
 			}
 		}
 	}
-	for _, name := range []string{"preemption", "serverless"} {
-		if value, exists := fields[name]; exists {
-			if _, ok := value.(bool); !ok {
-				return fmt.Errorf("%s must be a boolean", name)
-			}
+	if value, exists := fields["preemption"]; exists {
+		if _, ok := value.(bool); !ok {
+			return errors.New("preemption must be a boolean")
 		}
 	}
 	type plain FleetPlacement
@@ -314,7 +312,6 @@ type FleetEntry struct {
 	MinReplicas    uint32
 	MaxReplicas    uint32
 	ProtectMinimum bool
-	Serverless     bool
 }
 
 const maxFleetReplicas = 64
@@ -349,12 +346,6 @@ func (f *Fleet) Validate() error {
 			}
 			if p.Priority == 0 {
 				errs = append(errs, fmt.Errorf("%s: %s: priority is required (1 fills first)", id, gpu))
-			}
-			if p.Serverless && p.MinReplicas != 0 {
-				errs = append(errs, fmt.Errorf("%s: %s: serverless requires minReplicas: 0", id, gpu))
-			}
-			if p.Serverless && p.Preemption != nil && !*p.Preemption {
-				errs = append(errs, fmt.Errorf("%s: %s: serverless replicas must allow preemption", id, gpu))
 			}
 			if p.MaxReplicas > maxFleetReplicas {
 				errs = append(errs, fmt.Errorf("%s: %s: maxReplicas %d exceeds %d", id, gpu, p.MaxReplicas, maxFleetReplicas))
@@ -418,7 +409,7 @@ func (f *Fleet) Entries(gpu string) []FleetEntry {
 	var out []FleetEntry
 	for id, e := range f.Endpoints {
 		if p, ok := e.GPUs[gpu]; ok && e.Enabled {
-			out = append(out, FleetEntry{EndpointID: id, Priority: p.Priority, MinReplicas: p.MinReplicas, MaxReplicas: p.MaxReplicas, ProtectMinimum: !p.Serverless && p.Preemption != nil && !*p.Preemption, Serverless: p.Serverless})
+			out = append(out, FleetEntry{EndpointID: id, Priority: p.Priority, MinReplicas: p.MinReplicas, MaxReplicas: p.MaxReplicas, ProtectMinimum: p.Preemption != nil && !*p.Preemption})
 		}
 	}
 	slices.SortFunc(out, func(a, b FleetEntry) int {
@@ -433,16 +424,6 @@ func (f *Fleet) Placements(endpointID string) map[string]FleetPlacement {
 		return e.GPUs
 	}
 	return nil
-}
-
-// Serverless reports whether requests may start on-demand replicas.
-func (f *Fleet) Serverless(endpointID string) bool {
-	for _, placement := range f.Placements(endpointID) {
-		if placement.Serverless {
-			return true
-		}
-	}
-	return false
 }
 
 // MeterBucket is one closed minute of usage not yet delivered to the billing meter.
@@ -612,57 +593,27 @@ const (
 	GitOpsStatusRetired GitOpsStatus = "retired"
 )
 
+// GitOpsEndpointState is the outcome of the last deploy of one app directory.
+// ID is empty when the app failed to import.
 type GitOpsEndpointState struct {
-	Path       string       `json:"path"`
-	ID         string       `json:"id"`
-	AppliedSHA string       `json:"applied_sha,omitempty"`
-	Status     GitOpsStatus `json:"status"`
-	Error      string       `json:"error,omitempty"`
-	StubID     string       `json:"stub_id,omitempty"`
-	Version    uint         `json:"version,omitempty"`
-	UpdatedAt  time.Time    `json:"updated_at"`
+	Path      string       `json:"path"`
+	ID        string       `json:"id,omitempty"`
+	Status    GitOpsStatus `json:"status"`
+	Error     string       `json:"error,omitempty"`
+	StubID    string       `json:"stub_id,omitempty"`
+	Version   uint         `json:"version,omitempty"`
+	UpdatedAt time.Time    `json:"updated_at"`
 }
 
-// GitOpsState is the reconciler's view of the endpoints repo.
+// GitOpsState is what the last CI run of the endpoints repo reported.
 type GitOpsState struct {
 	RepoURL     string                         `json:"repo_url"`
 	Ref         string                         `json:"ref"`
 	LastSHA     string                         `json:"last_sha,omitempty"`
-	TargetSHA   string                         `json:"target_sha,omitempty"`
 	LastRunAt   time.Time                      `json:"last_run_at,omitempty"`
-	LastError   string                         `json:"last_error,omitempty"`
-	FleetError  string                         `json:"fleet_error,omitempty"` // why config.yaml was rejected, or "skipped: ..." entries
-	FleetSHA    string                         `json:"fleet_sha,omitempty"`   // trails LastSHA only while a fleet write is retried
-	Running     bool                           `json:"running"`
-	PerEndpoint map[string]GitOpsEndpointState `json:"per_endpoint"`
-	UpdatedAt   time.Time                      `json:"updated_at"`
-
-	// In-flight deployer run.
-	RunID       string    `json:"run_id,omitempty"`
-	ContainerID string    `json:"container_id,omitempty"`
-	TokenID     string    `json:"token_id,omitempty"`
-	StartedAt   time.Time `json:"started_at,omitempty"`
-}
-
-// GitOpsReport is what the deployer posts back after applying one SHA.
-type GitOpsReport struct {
-	RunID     string               `json:"run_id"`
-	SHA       string               `json:"sha"`
-	Error     string               `json:"error,omitempty"`
-	Results   []GitOpsDeployResult `json:"results"`
-	FleetYAML string               `json:"fleet_yaml,omitempty"` // raw config.yaml; required at the repository root
-}
-
-// GitOpsDeployResult is the outcome for one app directory; ID is empty when
-// the app failed to import.
-type GitOpsDeployResult struct {
-	Path    string `json:"path"`
-	ID      string `json:"id"`
-	OK      bool   `json:"ok"`
-	Skipped bool   `json:"skipped"` // unchanged since the last applied SHA
-	Error   string `json:"error,omitempty"`
-	StubID  string `json:"stub_id,omitempty"`
-	Version uint   `json:"version,omitempty"`
+	LastError   string                         `json:"last_error,omitempty"`  // failed app deploys, one per line
+	FleetError  string                         `json:"fleet_error,omitempty"` // why config.yaml was rejected
+	PerEndpoint map[string]GitOpsEndpointState `json:"per_endpoint"`          // by app path
 }
 
 // RouteSample is one completed /v1 request.

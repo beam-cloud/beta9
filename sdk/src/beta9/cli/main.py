@@ -21,6 +21,7 @@ from . import (
     deployment,
     dev,
     disk,
+    endpoints,
     image,
     logs,
     machine,
@@ -123,6 +124,7 @@ def load_cli(check_config=True, **kwargs: Any) -> CLI:
     cli.register(shell)
     cli.register(run)
     cli.register(dev)
+    cli.register(endpoints)
 
     if check_config:
         cli.check_config()

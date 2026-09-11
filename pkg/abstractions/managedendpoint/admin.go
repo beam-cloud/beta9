@@ -102,9 +102,13 @@ func (s *Service) ListEndpoints(ctx context.Context, _ *pb.ListEndpointsRequest)
 		if err != nil {
 			return err
 		}
+		gitops, err := s.repo.GetGitOpsState(ctx)
+		if err != nil {
+			return err
+		}
 		replicas, err := s.repo.ListAllReplicas(ctx)
 		for _, endpoint := range endpoints {
-			out.Endpoints = append(out.Endpoints, endpointToProto(endpoint, fleet, replicas))
+			out.Endpoints = append(out.Endpoints, endpointToProto(endpoint, fleet, gitops, replicas))
 		}
 		return err
 	})
@@ -121,8 +125,12 @@ func (s *Service) GetEndpoint(ctx context.Context, in *pb.GetEndpointRequest) (*
 		if err != nil {
 			return err
 		}
+		gitops, err := s.repo.GetGitOpsState(ctx)
+		if err != nil {
+			return err
+		}
 		replicas, err := s.repo.ListReplicas(ctx, endpoint.Spec.ID)
-		out.Endpoint, out.Replicas = endpointToProto(endpoint, fleet, replicas), replicasToProto(replicas)
+		out.Endpoint, out.Replicas = endpointToProto(endpoint, fleet, gitops, replicas), replicasToProto(replicas)
 		return err
 	})
 }
@@ -252,7 +260,7 @@ func (s *Service) GetGitOpsStatus(ctx context.Context, _ *pb.GetGitOpsStatusRequ
 			return err
 		}
 		if state == nil {
-			state = &types.GitOpsState{RepoURL: s.config.Repo.URL, Ref: s.config.Repo.Branch}
+			state = &types.GitOpsState{}
 		}
 		fleet, err := s.repo.GetFleet(ctx)
 		if err != nil {
@@ -260,17 +268,6 @@ func (s *Service) GetGitOpsStatus(ctx context.Context, _ *pb.GetGitOpsStatusRequ
 		}
 		out.State, out.FleetJson = gitopsToProto(state), mustJSON(fleet.Endpoints)
 		return nil
-	})
-}
-
-func (s *Service) TriggerGitOpsSync(ctx context.Context, in *pb.TriggerGitOpsSyncRequest) (*pb.TriggerGitOpsSyncResponse, error) {
-	out := &pb.TriggerGitOpsSyncResponse{}
-	return admin(s, ctx, out, func() (err error) {
-		if s.gitops == nil {
-			return errors.New("gitops is not configured (managedEndpoints.repo.url)")
-		}
-		out.Started, err = s.gitops.Trigger(in.Sha)
-		return err
 	})
 }
 
@@ -285,7 +282,7 @@ func (s *Service) mountAdminRoutes(group *echo.Group) {
 	g.GET("", list)
 	g.GET("/", list)
 	g.GET("/gitops", rest(s.GetGitOpsStatus, nil))
-	g.POST("/gitops/sync", rest(s.TriggerGitOpsSync, nil))
+	g.POST("/gitops/apply", rest(s.ApplyRepo, nil))
 	g.GET("/replicas", rest(s.ListReplicas, func(c echo.Context, in *pb.ListReplicasRequest) {
 		in.Status, in.Gpu = c.QueryParam("status"), c.QueryParam("gpu")
 	}))

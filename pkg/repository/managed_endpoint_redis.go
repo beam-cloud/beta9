@@ -285,7 +285,6 @@ func (r *ManagedEndpointRedisRepository) SaveGitOpsState(ctx context.Context, st
 	if state == nil {
 		return errors.New("gitops state is required")
 	}
-	state.UpdatedAt = time.Now()
 	return r.setJSON(ctx, meKey("gitops"), state, 0)
 }
 

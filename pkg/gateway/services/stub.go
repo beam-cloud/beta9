@@ -967,6 +967,16 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 		}, nil
 	}
 
+	if stub.Type.IsManagedEndpoint() {
+		current, err := gws.managedDeployment(ctx, stub, &config)
+		if err != nil {
+			return &pb.DeployStubResponse{Ok: false, ErrMsg: fmt.Sprintf("Failed to register managed endpoint: %v", err)}, nil
+		}
+		if current != nil {
+			return &pb.DeployStubResponse{Ok: true, Version: uint32(current.Version), RolloutAction: "unchanged"}, nil
+		}
+	}
+
 	rolloutPlan, err := gws.planDeploymentRollout(deploymentRolloutInput{
 		workspace: authInfo.Workspace,
 		stub:      stub,

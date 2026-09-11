@@ -36,23 +36,15 @@ type AppConfig struct {
 }
 
 // ManagedEndpointsConfig is the cluster-level configuration for the managed
-// endpoints platform. Only Enabled and Repo are required to turn it on; every
-// other value has a production default (see ApplyDefaults). Endpoint stubs
-// are owned by the cluster admin workspace.
+// endpoints platform. Only Enabled is required to turn it on; every other
+// value has a production default (see ApplyDefaults). Endpoint stubs are
+// owned by the cluster admin workspace and deployed by the endpoints repo's CI.
 type ManagedEndpointsConfig struct {
 	Enabled     bool                          `key:"enabled" json:"enabled"`
 	RoutePrefix string                        `key:"routePrefix" json:"route_prefix"`
-	Repo        ManagedEndpointsRepoConfig    `key:"repo" json:"repo"`
-	Webhook     ManagedEndpointsWebhookConfig `key:"webhook" json:"webhook"`
-	// DeployerImage is the beta9 image id (built once with the SDK and git
-	// installed) the GitOps deployer container runs from.
-	DeployerImage string `key:"deployerImage" json:"deployer_image"`
-	// DeployerSecrets supplies explicitly configured build credentials to the
-	// GitOps deployer. Store these values in the cluster's secret config.
-	DeployerSecrets map[string]string             `key:"deployerSecrets" json:"deployer_secrets"`
-	Preemption      ManagedEndpointsPreemption    `key:"preemption" json:"preemption"`
-	Reconcile       ManagedEndpointsReconcile     `key:"reconcile" json:"reconcile"`
-	Routing         ManagedEndpointsRoutingConfig `key:"routing" json:"routing"`
+	Preemption  ManagedEndpointsPreemption    `key:"preemption" json:"preemption"`
+	Reconcile   ManagedEndpointsReconcile     `key:"reconcile" json:"reconcile"`
+	Routing     ManagedEndpointsRoutingConfig `key:"routing" json:"routing"`
 	// HeartbeatInterval is what replicas are told to heartbeat at.
 	HeartbeatInterval time.Duration `key:"heartbeatInterval" json:"heartbeat_interval"`
 	// ReplicaStaleAfter marks replicas failed when no heartbeat/probe arrives.
@@ -60,19 +52,6 @@ type ManagedEndpointsConfig struct {
 	// ProviderRevenueShare is the fraction of billed token revenue credited to
 	// the workspace whose contributed machine served the request.
 	ProviderRevenueShare float64 `key:"providerRevenueShare" json:"provider_revenue_share"`
-}
-
-type ManagedEndpointsRepoConfig struct {
-	URL    string `key:"url" json:"url"`
-	Branch string `key:"branch" json:"branch"`
-	Path   string `key:"path" json:"path"`
-	// DeployKey is an SSH private key (or HTTPS token), stored in secret config.
-	DeployKey    string        `key:"deployKey" json:"deploy_key"`
-	PollInterval time.Duration `key:"pollInterval" json:"poll_interval"`
-}
-
-type ManagedEndpointsWebhookConfig struct {
-	Secret string `key:"secret" json:"secret"`
 }
 
 type ManagedEndpointsPreemption struct {
@@ -101,10 +80,6 @@ func (c *ManagedEndpointsConfig) ApplyDefaults() {
 	if c.RoutePrefix == "/" {
 		c.RoutePrefix = "/v1"
 	}
-	c.Repo.Branch = strings.TrimSpace(c.Repo.Branch)
-	if c.Repo.Branch == "" {
-		c.Repo.Branch = "main"
-	}
 	// The harness receives the interval in whole seconds, and a replica must
 	// be allowed to miss at least one heartbeat before it is considered stale.
 	if c.HeartbeatInterval <= 0 {
@@ -125,7 +100,6 @@ func (c *ManagedEndpointsConfig) ApplyDefaults() {
 		v   *time.Duration
 		def time.Duration
 	}{
-		{&c.Repo.PollInterval, 2 * time.Minute},
 		{&c.Reconcile.Interval, 10 * time.Second},
 		{&c.Reconcile.FailureBackoff, 30 * time.Second},
 	} {
