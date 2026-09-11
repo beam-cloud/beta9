@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -413,7 +415,39 @@ func TestTerminateImageProcessGroupKillsDescendants(t *testing.T) {
 	}
 }
 
-func TestLayersToPrepareSkipsLocallyCompleteLayers(t *testing.T) {
+func TestVerifyImageSourceFailsOnlyWhenRegistryRefusesRemoteLayers(t *testing.T) {
+	status, requests := http.StatusOK, 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.WriteHeader(status)
+	}))
+	defer server.Close()
+
+	cachePath := t.TempDir()
+	source := server.Listener.Addr().String() + "/org/app:v1"
+	c := &ImageClient{v2ImageRefs: common.NewSafeMap[string]()}
+	c.v2ImageRefs.Set("img", source)
+	request := &types.ContainerRequest{ImageId: "img"}
+	options := clip.MountOptions{CachePath: cachePath, Metadata: &clipCommon.ClipArchiveMetadata{StorageInfo: &clipCommon.OCIStorageInfo{
+		Layers:                  []string{"sha256:1"},
+		DecompressedHashByLayer: map[string]string{"sha256:1": "hash-1"},
+	}}}
+
+	for _, status = range []int{http.StatusOK, http.StatusInternalServerError} {
+		require.NoError(t, c.verifyImageSource(context.Background(), request, options), status)
+	}
+	for _, status = range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound} {
+		require.ErrorContains(t, c.verifyImageSource(context.Background(), request, options), "image source "+source, status)
+	}
+
+	// A layer already in the layer cache needs no registry at all.
+	require.NoError(t, os.WriteFile(filepath.Join(cachePath, "hash-1"), nil, 0o644))
+	requests = 0
+	require.NoError(t, c.verifyImageSource(context.Background(), request, options))
+	require.Zero(t, requests)
+}
+
+func TestRemoteLayersSkipsLayersHeldLocally(t *testing.T) {
 	info := &clipCommon.OCIStorageInfo{
 		Layers: []string{"sha256:a", "sha256:b", "sha256:c"},
 		DecompressedHashByLayer: map[string]string{
@@ -421,10 +455,9 @@ func TestLayersToPrepareSkipsLocallyCompleteLayers(t *testing.T) {
 			"sha256:b": "hash-b",
 		},
 	}
-	local := map[string]bool{"hash-a": true}
+	cachePath := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(cachePath, "hash-a"), nil, 0o644))
 
-	remaining := layersToPrepare(info, func(hash string) bool { return local[hash] })
-
-	// b is not local; c has no decompressed hash so it can never be local.
-	require.Equal(t, []string{"sha256:b", "sha256:c"}, remaining)
+	// b is not on disk; c has no decompressed hash so it can never be local.
+	require.Equal(t, []string{"sha256:b", "sha256:c"}, (&ImageClient{}).remoteLayers(info, cachePath))
 }
