@@ -101,7 +101,7 @@ func TestDemandAdmissionHeadroomPreservesScaleOut(t *testing.T) {
 	demand := s.controller.readDemand(ctx, fleet, live)
 	assert.EqualValues(t, 129, demand[endpoint.Spec.ID].active)
 	assert.EqualValues(t, 128, demand[endpoint.Spec.ID].capacity)
-	s.controller.fillWithDemand(ctx, "H100", fleet.Entries("H100"), map[string]*types.ManagedEndpoint{endpoint.Spec.ID: endpoint}, live, idleInventory(1), demand)
+	s.controller.fill(ctx, "H100", fleet.Entries("H100"), map[string]*types.ManagedEndpoint{endpoint.Spec.ID: endpoint}, live, idleInventory(1), demand)
 	requests, err := scheduler.NewRequestBacklog(s.rdb).PopN(10)
 	require.NoError(t, err)
 	require.Len(t, requests, 1, "excess demand scales out onto one spare GPU")
@@ -150,7 +150,7 @@ func TestReadDemandUnlimitedCapacityDoesNotScaleOut(t *testing.T) {
 	live := []*types.EndpointReplica{unlimited, finite}
 	demand := s.controller.readDemand(ctx, fleet, live)
 	assert.EqualValues(t, math.MaxInt64, demand[endpoint.Spec.ID].capacity, "adding finite slots to unlimited capacity cannot overflow")
-	s.controller.fillWithDemand(ctx, "H100", fleet.Entries("H100"), map[string]*types.ManagedEndpoint{endpoint.Spec.ID: endpoint}, live, idleInventory(1), demand)
+	s.controller.fill(ctx, "H100", fleet.Entries("H100"), map[string]*types.ManagedEndpoint{endpoint.Spec.ID: endpoint}, live, idleInventory(1), demand)
 	requests, _ := scheduler.NewRequestBacklog(s.rdb).PopN(10)
 	assert.Empty(t, requests, "a replica that routes unlimited work already covers the demand")
 }
@@ -230,7 +230,7 @@ func TestServerlessStartsOnlyForUnservedActiveDemand(t *testing.T) {
 			s.config.Preemption.Enabled = false // explicit serverless mode always remains evictable
 			endpoint := seedEndpoint(t, s)
 			entries := []types.FleetEntry{{EndpointID: endpoint.Spec.ID, Serverless: true, MaxReplicas: 2}}
-			s.controller.fillWithDemand(context.Background(), "H100", entries, map[string]*types.ManagedEndpoint{endpoint.Spec.ID: endpoint}, nil, idleInventory(tc.free), map[string]*endpointDemand{endpoint.Spec.ID: tc.demand})
+			s.controller.fill(context.Background(), "H100", entries, map[string]*types.ManagedEndpoint{endpoint.Spec.ID: endpoint}, nil, idleInventory(tc.free), map[string]*endpointDemand{endpoint.Spec.ID: tc.demand})
 			requests, err := scheduler.NewRequestBacklog(s.rdb).PopN(10)
 			if tc.starts > 0 {
 				require.NoError(t, err)
@@ -260,7 +260,7 @@ func TestServerlessCapAndIdleRetirementIncludeOldVersions(t *testing.T) {
 		if warm {
 			d.active = 100
 		}
-		s.controller.fillWithDemand(context.Background(), "H100", []types.FleetEntry{{EndpointID: endpoint.Spec.ID, Serverless: true, MaxReplicas: 1}}, map[string]*types.ManagedEndpoint{endpoint.Spec.ID: endpoint}, live, idleInventory(3), map[string]*endpointDemand{endpoint.Spec.ID: d})
+		s.controller.fill(context.Background(), "H100", []types.FleetEntry{{EndpointID: endpoint.Spec.ID, Serverless: true, MaxReplicas: 1}}, map[string]*types.ManagedEndpoint{endpoint.Spec.ID: endpoint}, live, idleInventory(3), map[string]*endpointDemand{endpoint.Spec.ID: d})
 		requests, _ := scheduler.NewRequestBacklog(s.rdb).PopN(10)
 		assert.Empty(t, requests, "positive max bounds demand even with idle GPUs")
 		for _, replica := range live {
@@ -278,7 +278,7 @@ func TestServerlessReclaimsHotSurplus(t *testing.T) {
 	high, low, endpoints := fillEndpoints(t, s)
 	other := reclaimableReplica(t, s, low, "hot-surplus", "w1")
 	entries := []types.FleetEntry{{EndpointID: high.Spec.ID, Serverless: true, MaxReplicas: 1}, {EndpointID: low.Spec.ID, MaxReplicas: 1}}
-	s.controller.fillWithDemand(context.Background(), "H100", entries, endpoints, []*types.EndpointReplica{other}, noRoomInventory(), map[string]*endpointDemand{high.Spec.ID: {active: 1, warm: true}})
+	s.controller.fill(context.Background(), "H100", entries, endpoints, []*types.EndpointReplica{other}, noRoomInventory(), map[string]*endpointDemand{high.Spec.ID: {active: 1, warm: true}})
 	assert.Equal(t, types.ReplicaStatusDraining, statusOf(t, s, other.ID))
 }
 
@@ -295,7 +295,7 @@ func TestServerlessRolloutStartsReplacementOnSpareCapacity(t *testing.T) {
 	live := []*types.EndpointReplica{old}
 	demand := s.controller.readDemand(ctx, fleet, live)
 	assert.EqualValues(t, 64, demand[endpoint.Spec.ID].capacity)
-	s.controller.fillWithDemand(ctx, "H100", fleet.Entries("H100"), map[string]*types.ManagedEndpoint{endpoint.Spec.ID: endpoint}, live, idleInventory(1), demand)
+	s.controller.fill(ctx, "H100", fleet.Entries("H100"), map[string]*types.ManagedEndpoint{endpoint.Spec.ID: endpoint}, live, idleInventory(1), demand)
 	requests, err := scheduler.NewRequestBacklog(s.rdb).PopN(10)
 	require.NoError(t, err)
 	require.Len(t, requests, 1, "a warm old version must not satisfy the new version's rollout")
@@ -318,10 +318,10 @@ func TestHotSurplusDoesNotChurnRequestedServerlessReplica(t *testing.T) {
 	high, low, endpoints := fillEndpoints(t, s)
 	other := reclaimableReplica(t, s, low, "requested", "w1")
 	entries := []types.FleetEntry{{EndpointID: high.Spec.ID, MaxReplicas: 1}, {EndpointID: low.Spec.ID, Serverless: true, MaxReplicas: 1}}
-	s.controller.fillWithDemand(context.Background(), "H100", entries, endpoints, []*types.EndpointReplica{other}, noRoomInventory(), map[string]*endpointDemand{low.Spec.ID: {active: 1, warm: true}})
+	s.controller.fill(context.Background(), "H100", entries, endpoints, []*types.EndpointReplica{other}, noRoomInventory(), map[string]*endpointDemand{low.Spec.ID: {active: 1, warm: true}})
 	assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, other.ID))
 	entries[0].MinReplicas = 1
-	s.controller.fillWithDemand(context.Background(), "H100", entries, endpoints, []*types.EndpointReplica{other}, noRoomInventory(), map[string]*endpointDemand{low.Spec.ID: {active: 1, warm: true}})
+	s.controller.fill(context.Background(), "H100", entries, endpoints, []*types.EndpointReplica{other}, noRoomInventory(), map[string]*endpointDemand{low.Spec.ID: {active: 1, warm: true}})
 	assert.Equal(t, types.ReplicaStatusDraining, statusOf(t, s, other.ID), "a configured hot minimum still has priority over spare-only copies")
 }
 
@@ -383,7 +383,7 @@ func TestServerlessInitialLoadAndReadyGraceAreBounded(t *testing.T) {
 				replica.ReadyAt = time.Now().Add(-tc.ready)
 			}
 			require.NoError(t, s.repo.SaveReplica(context.Background(), replica))
-			s.controller.fillWithDemand(context.Background(), "H100", []types.FleetEntry{{EndpointID: endpoint.Spec.ID, Serverless: true, MaxReplicas: 1}}, map[string]*types.ManagedEndpoint{endpoint.Spec.ID: endpoint}, []*types.EndpointReplica{replica}, idleInventory(0), map[string]*endpointDemand{endpoint.Spec.ID: {}})
+			s.controller.fill(context.Background(), "H100", []types.FleetEntry{{EndpointID: endpoint.Spec.ID, Serverless: true, MaxReplicas: 1}}, map[string]*types.ManagedEndpoint{endpoint.Spec.ID: endpoint}, []*types.EndpointReplica{replica}, idleInventory(0), map[string]*endpointDemand{endpoint.Spec.ID: {}})
 			want := tc.status
 			if tc.drain {
 				want = types.ReplicaStatusDraining
@@ -396,30 +396,20 @@ func TestServerlessInitialLoadAndReadyGraceAreBounded(t *testing.T) {
 	}
 }
 
-func TestHotSurplusRespectsServerlessStartupGrace(t *testing.T) {
-	for _, ready := range []bool{false, true} {
-		s := newFillService(t)
-		s.scheduler = nil // This test exercises victim selection and retirement.
-		high, low, _ := fillEndpoints(t, s)
-		replica := reclaimableReplica(t, s, low, "requested", "w1")
-		replica.StartedAt = time.Now().Add(-6 * time.Minute)
-		if ready {
-			replica.ReadyAt = time.Now().Add(-time.Minute)
-		} else {
-			replica.Status = types.ReplicaStatusLoading
-		}
-		require.NoError(t, s.repo.SaveReplica(context.Background(), replica))
-		targets := []*placementTarget{
-			{entry: types.FleetEntry{EndpointID: high.Spec.ID, MaxReplicas: 1}, endpoint: high},
-			{entry: types.FleetEntry{EndpointID: low.Spec.ID, Serverless: true, MaxReplicas: 1}, endpoint: low, replicas: []*types.EndpointReplica{replica}, demand: &endpointDemand{}},
-		}
-		live := []*types.EndpointReplica{replica}
-		assert.False(t, s.controller.reclaim(context.Background(), "H100", 0, targets, live, noRoomInventory(), false), "hot extras must respect initial loading and ready grace")
-		replica.StartedAt = time.Now().Add(-time.Hour)
-		if ready {
-			replica.ReadyAt = time.Now().Add(-time.Hour)
-		}
-		require.NoError(t, s.repo.SaveReplica(context.Background(), replica))
-		assert.True(t, s.controller.reclaim(context.Background(), "H100", 0, targets, live, noRoomInventory(), false), "idle copies remain reclaimable after their bounded grace")
+// A serverless copy is never a reclaim victim: an idle one drains on its own
+// once its startup and ready grace pass, and a requested one is in use.
+func TestHotSurplusNeverReclaimsServerlessCopies(t *testing.T) {
+	s := newFillService(t)
+	s.scheduler = nil
+	high, low, _ := fillEndpoints(t, s)
+	replica := reclaimableReplica(t, s, low, "requested", "w1")
+	replica.StartedAt = time.Now().Add(-time.Hour)
+	replica.ReadyAt = replica.StartedAt
+	require.NoError(t, s.repo.SaveReplica(context.Background(), replica))
+	slots := []*slot{
+		{entry: types.FleetEntry{EndpointID: high.Spec.ID, MaxReplicas: 1}, endpoint: high},
+		{entry: types.FleetEntry{EndpointID: low.Spec.ID, Serverless: true, MaxReplicas: 1}, endpoint: low, replicas: []*types.EndpointReplica{replica}, demand: &endpointDemand{}},
 	}
+	assert.False(t, s.controller.reclaim(context.Background(), "H100", 0, slots, []*types.EndpointReplica{replica}, noRoomInventory(), passSurplus))
+	assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, replica.ID))
 }

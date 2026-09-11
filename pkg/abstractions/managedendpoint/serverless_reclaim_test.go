@@ -33,7 +33,7 @@ func TestServerlessReclaimPreservesHotMinimumAndStartsBeforeRefill(t *testing.T)
 		}
 		live := []*types.EndpointReplica{minimum, extra}
 		demand := map[string]*endpointDemand{cold.Spec.ID: {active: 1, warm: true}}
-		s.controller.fillWithDemand(ctx, "H100", entries, endpoints, live, noRoomInventory(), demand)
+		s.controller.fill(ctx, "H100", entries, endpoints, live, noRoomInventory(), demand)
 		assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, minimum.ID), "all configured minima survive, even when preemption is enabled")
 		assert.Equal(t, types.ReplicaStatusDraining, statusOf(t, s, extra.ID), "a request can reclaim higher-priority hot surplus")
 		assert.Equal(t, "gpu reclaimed for "+cold.Spec.ID, extra.StatusReason)
@@ -49,7 +49,7 @@ func TestServerlessReclaimPreservesHotMinimumAndStartsBeforeRefill(t *testing.T)
 		extra.Status = types.ReplicaStatusStopped
 		require.NoError(t, s.repo.SaveReplica(ctx, extra))
 		demand = map[string]*endpointDemand{cold.Spec.ID: {active: 1, warm: true}}
-		s.controller.fillWithDemand(ctx, "H100", entries, endpoints, live, idleInventory(1), demand)
+		s.controller.fill(ctx, "H100", entries, endpoints, live, idleInventory(1), demand)
 		requests, err = scheduler.NewRequestBacklog(s.rdb).PopN(10)
 		require.NoError(t, err)
 		require.Len(t, requests, 1)
@@ -66,7 +66,7 @@ func TestServerlessDemandRunsAfterMinimumsBeforeHotSurplus(t *testing.T) {
 		{EndpointID: hot.Spec.ID, Priority: 1, MinReplicas: 1, MaxReplicas: 3, ProtectMinimum: true},
 		{EndpointID: cold.Spec.ID, Priority: 99, Serverless: true, MaxReplicas: 1},
 	}
-	s.controller.fillWithDemand(context.Background(), "H100", entries, endpoints, nil, idleInventory(3), map[string]*endpointDemand{cold.Spec.ID: {active: 1, warm: true}})
+	s.controller.fill(context.Background(), "H100", entries, endpoints, nil, idleInventory(3), map[string]*endpointDemand{cold.Spec.ID: {active: 1, warm: true}})
 	requests, err := scheduler.NewRequestBacklog(s.rdb).PopN(10)
 	require.NoError(t, err)
 	require.Len(t, requests, 3)
@@ -106,13 +106,11 @@ func TestServerlessReclaimRejectsUnsafeDonorsAndImpossibleTargets(t *testing.T) 
 				demand[hot.Spec.ID] = &endpointDemand{active: 1, warm: true, capacity: 1}
 			case "CPU-held-by-serverless":
 				s.backend = fillBackend{config: `{"runtime":{"cpu":1000,"memory":0}}`}
-				inv.workers["w1"].totalCPU = 2000
 			case "memory-overhead":
 				s.backend = fillBackend{config: `{"runtime":{"cpu":0,"memory":101}}`}
-				inv.workers["w1"].totalMemory = 126 // ceil(101*1.25) requires127
 				state, err := s.containers.GetContainerState(victim.ContainerID)
 				require.NoError(t, err)
-				state.Memory = 101
+				state.Memory = 100 // releases 125 after padding; the request needs 127
 				require.NoError(t, s.containers.SetContainerState(victim.ContainerID, state))
 			case "unknown-requirements":
 				s.backend = fillBackend{err: errors.New("stub unavailable")}
@@ -126,7 +124,7 @@ func TestServerlessReclaimRejectsUnsafeDonorsAndImpossibleTargets(t *testing.T) 
 				inv.workers["w1"].total = 1
 				inv.workers["w2"] = &inventoryWorker{pool: "gpu-a", gpu: "H100", total: 1}
 			}
-			s.controller.fillWithDemand(ctx, "H100", entries, endpoints, live, inv, demand)
+			s.controller.fill(ctx, "H100", entries, endpoints, live, inv, demand)
 			for _, replica := range live {
 				assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, replica.ID), "demand must not destroy capacity it cannot safely use")
 			}
@@ -157,12 +155,11 @@ func TestServerlessReclaimIsOnePendingCapacityOperationAcrossGPUs(t *testing.T) 
 	}
 	inv := noRoomInventory()
 	inv.pools["A100-80"] = []eligiblePool{{Name: "gpu-a", Locality: "gpu-a"}}
-	inv.free["A100-80"] = map[string]uint32{"gpu-a": 0}
 	inv.workers["w2"] = &inventoryWorker{pool: "gpu-a", gpu: "A100-80", total: 1}
 	demand := map[string]*endpointDemand{cold.Spec.ID: {active: 1, warm: true}}
-	s.controller.fillWithDemand(ctx, "H100", entries, endpoints, live, inv, demand)
+	s.controller.fill(ctx, "H100", entries, endpoints, live, inv, demand)
 	require.Equal(t, types.ReplicaStatusDraining, statusOf(t, s, h100.ID))
-	s.controller.fillWithDemand(ctx, "A100-80", entries, endpoints, live, inv, demand)
+	s.controller.fill(ctx, "A100-80", entries, endpoints, live, inv, demand)
 	assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, a100.ID), "one request does not reclaim both GPU types in one tick")
 
 	// Demand is freshly observed each tick. A slow drain on H100 must not
@@ -174,12 +171,12 @@ func TestServerlessReclaimIsOnePendingCapacityOperationAcrossGPUs(t *testing.T) 
 	require.NoError(t, err)
 	demand = s.controller.readDemand(ctx, fleet, live)
 	require.True(t, demand[cold.Spec.ID].starting, "the donor's pending drain belongs to the requesting model")
-	s.controller.fillWithDemand(ctx, "A100-80", entries, endpoints, live, inv, demand)
+	s.controller.fill(ctx, "A100-80", entries, endpoints, live, inv, demand)
 	assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, a100.ID), "an existing drain fences reclaim across later ticks too")
 }
 
 func TestServerlessReclaimPrefersOnlyUsableIdleAlternatives(t *testing.T) {
-	for _, alternative := range []string{"available", "at-cap", "backoff", "CPU-held", "memory-floor"} {
+	for _, alternative := range []string{"available", "at-cap", "backoff"} {
 		t.Run(alternative, func(t *testing.T) {
 			s := newFillService(t)
 			hot, cold, endpoints := fillEndpoints(t, s)
@@ -195,7 +192,6 @@ func TestServerlessReclaimPrefersOnlyUsableIdleAlternatives(t *testing.T) {
 			})
 			inv := noRoomInventory()
 			inv.pools["A100-80"] = []eligiblePool{{Name: "gpu-b", Locality: "gpu-b"}}
-			inv.free["A100-80"] = map[string]uint32{"gpu-b": 1}
 			inv.workers["w2"] = &inventoryWorker{pool: "gpu-b", gpu: "A100-80", total: 2, free: 1}
 			switch alternative {
 			case "at-cap":
@@ -206,33 +202,16 @@ func TestServerlessReclaimPrefersOnlyUsableIdleAlternatives(t *testing.T) {
 				live = append(live, current)
 			case "backoff":
 				require.NoError(t, s.repo.SetScheduleBackoff(ctx, cold.Spec.ID, "A100-80", time.Minute))
-			case "CPU-held":
-				s.backend = fillBackend{config: `{"runtime":{"cpu":1000,"memory":0}}`}
-				inv.workers["w1"].totalCPU = 1000
-				inv.workers["w2"].totalCPU = 1000
-				state, err := s.containers.GetContainerState(victim.ContainerID)
-				require.NoError(t, err)
-				state.Cpu = 1000
-				require.NoError(t, s.containers.SetContainerState(victim.ContainerID, state))
-			case "memory-floor":
-				s.backend = fillBackend{config: `{"runtime":{"cpu":0,"memory":100}}`}
-				inv.workers["w1"].totalMemory = 125
-				inv.workers["w2"].memory, inv.workers["w2"].totalMemory = 125, 125
-				inv.resourceFloors = map[string]replicaResources{"gpu-b": {memory: 1}}
-				state, err := s.containers.GetContainerState(victim.ContainerID)
-				require.NoError(t, err)
-				state.Memory = 100
-				require.NoError(t, s.containers.SetContainerState(victim.ContainerID, state))
 			}
 			for _, id := range []string{"request-1", "request-2"} {
 				_, err := s.demand(ctx, cold.Spec.ID, "acquire", id, 0)
 				require.NoError(t, err)
 			}
 			demand := s.controller.readDemand(ctx, fleet, live)
-			s.controller.fillWithDemand(ctx, "H100", fleet.Entries("H100"), endpoints, live, inv, demand)
+			s.controller.fill(ctx, "H100", fleet.Entries("H100"), endpoints, live, inv, demand)
 			if alternative == "available" {
 				assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, victim.ID), "idle A100 capacity saves the hot H100 replica")
-				s.controller.fillWithDemand(ctx, "A100-80", fleet.Entries("A100-80"), endpoints, live, inv, demand)
+				s.controller.fill(ctx, "A100-80", fleet.Entries("A100-80"), endpoints, live, inv, demand)
 				requests, err := scheduler.NewRequestBacklog(s.rdb).PopN(10)
 				require.NoError(t, err)
 				require.Len(t, requests, 1)

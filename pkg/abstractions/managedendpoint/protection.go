@@ -11,17 +11,32 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
-// protectedReplicas selects the copies that cover each configured minimum.
-// Keep a ready old version protected until its replacement is ready; prefer
-// current versions once ready, then retain existing roles to avoid churn.
+// protectedReplicas selects the copies that cover each preemption:false
+// minimum: serving current first, then serving old (so a rollout keeps its
+// minimum until the replacement is ready), then existing roles to avoid churn.
+// With cluster preemption off, every hot replica is protected.
 func protectedReplicas(fleet *types.Fleet, endpoints map[string]*types.ManagedEndpoint, live []*types.EndpointReplica, preemptionEnabled bool) map[string]bool {
-	desired := make(map[string]bool)
+	desired := map[string]bool{}
+	rank := func(endpoint *types.ManagedEndpoint, r *types.EndpointReplica) int {
+		n := 0
+		if r.Serving() {
+			n += 8
+		}
+		if r.Version == endpoint.Version {
+			n += 1
+			if r.Serving() {
+				n += 4
+			}
+		}
+		if r.Protected {
+			n += 2
+		}
+		return n
+	}
 	if !preemptionEnabled {
-		// The cluster override also covers copies awaiting retirement after a
-		// config change. Intentional retirement does not require demoting them.
-		for _, replica := range live {
-			if replica.Alive() && !fleet.Placements(replica.EndpointID)[replica.GPU].Serverless {
-				desired[replica.ID] = true
+		for _, r := range live {
+			if r.Alive() && !fleet.Placements(r.EndpointID)[r.GPU].Serverless {
+				desired[r.ID] = true
 			}
 		}
 		return desired
@@ -31,70 +46,47 @@ func protectedReplicas(fleet *types.Fleet, endpoints map[string]*types.ManagedEn
 			continue
 		}
 		for gpu, placement := range fleet.Placements(id) {
-			count := placement.MinReplicas
-			if placement.Serverless || placement.Preemption == nil || *placement.Preemption {
-				count = 0
-			}
-			if count == 0 {
+			if placement.Serverless || placement.Preemption == nil || *placement.Preemption || placement.MinReplicas == 0 {
 				continue
 			}
 			var candidates []*types.EndpointReplica
-			for _, replica := range live {
-				if replica.EndpointID == id && replica.GPU == gpu && replica.Alive() {
-					candidates = append(candidates, replica)
+			for _, r := range live {
+				if r.EndpointID == id && r.GPU == gpu && r.Alive() {
+					candidates = append(candidates, r)
 				}
 			}
 			slices.SortFunc(candidates, func(a, b *types.EndpointReplica) int {
-				rank := func(r *types.EndpointReplica) int {
-					n := 0
-					if r.Serving() {
-						n += 8
-						if r.Version == endpoint.Version {
-							n += 4
-						}
-					}
-					if r.Version == endpoint.Version {
-						n++
-					}
-					if r.Protected {
-						n += 2
-					}
-					return n
-				}
-				return cmp.Or(cmp.Compare(rank(b), rank(a)), a.StartedAt.Compare(b.StartedAt), strings.Compare(a.ID, b.ID))
+				return cmp.Or(cmp.Compare(rank(endpoint, b), rank(endpoint, a)), a.StartedAt.Compare(b.StartedAt), strings.Compare(a.ID, b.ID))
 			})
-			for _, replica := range candidates[:min(int(count), len(candidates))] {
-				desired[replica.ID] = true
+			for _, r := range candidates[:min(int(placement.MinReplicas), len(candidates))] {
+				desired[r.ID] = true
 			}
 		}
 	}
 	return desired
 }
 
-type protectionGroup struct{ endpointID, gpu string }
-
-// Promote before demoting so policy changes and rollouts keep the serving
-// minimum reserved. Repository changes fence concurrent scheduler eviction
-// and update worker capacity without restarting the engine.
-// A failed group keeps its existing protected roles and waits for observation
-// to refresh its assignment. Other endpoint/GPU groups can still reconcile.
-func (c *controller) reconcileProtection(ctx context.Context, fleet *types.Fleet, endpoints map[string]*types.ManagedEndpoint, live []*types.EndpointReplica) (map[protectionGroup]bool, error) {
+// protect applies protectedReplicas: promote before demoting so a policy
+// change or rollout never drops below the serving minimum. The repository
+// change fences scheduler eviction without restarting the engine. A failed
+// group keeps its roles and is skipped by fill and retire this tick.
+func (c *controller) protect(ctx context.Context, fleet *types.Fleet, endpoints map[string]*types.ManagedEndpoint, live []*types.EndpointReplica) (map[group]bool, error) {
 	desired := protectedReplicas(fleet, endpoints, live, c.s.config.Preemption.Enabled)
-	blocked := make(map[protectionGroup]bool)
+	blocked := map[group]bool{}
 	var errs []error
-	for _, protect := range []bool{true, false} {
-		for _, replica := range live {
-			group := protectionGroup{replica.EndpointID, replica.GPU}
-			if blocked[group] || !replica.Alive() || desired[replica.ID] != protect || replica.Protected == protect {
+	for _, want := range []bool{true, false} {
+		for _, r := range live {
+			g := group{r.EndpointID, r.GPU}
+			if blocked[g] || !r.Alive() || desired[r.ID] != want || r.Protected == want {
 				continue
 			}
-			updated, err := c.s.repo.SetReplicaProtection(ctx, replica.ID, protect)
+			updated, err := c.s.repo.SetReplicaProtection(ctx, r.ID, want)
 			if err != nil {
-				blocked[group] = true
-				errs = append(errs, fmt.Errorf("replica %s: set protection: %w", replica.ID, err))
+				blocked[g] = true
+				errs = append(errs, fmt.Errorf("replica %s: set protection: %w", r.ID, err))
 				continue
 			}
-			*replica = *updated
+			*r = *updated
 		}
 	}
 	return blocked, errors.Join(errs...)
