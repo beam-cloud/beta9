@@ -46,7 +46,7 @@ func protectedReplicas(fleet *types.Fleet, endpoints map[string]*types.ManagedEn
 			continue
 		}
 		for gpu, placement := range fleet.Placements(id) {
-			if placement.Serverless || placement.Preemption == nil || *placement.Preemption || placement.MinReplicas == 0 {
+			if !placement.ProtectsMinimum() || placement.MinReplicas == 0 {
 				continue
 			}
 			var candidates []*types.EndpointReplica
@@ -77,8 +77,11 @@ func (c *controller) protect(ctx context.Context, fleet *types.Fleet, endpoints 
 	for _, want := range []bool{true, false} {
 		for _, r := range live {
 			g := group{r.EndpointID, r.GPU}
-			if blocked[g] || !r.Alive() || desired[r.ID] != want || r.Protected == want {
+			if blocked[g] || !r.Alive() {
 				continue
+			}
+			if desired[r.ID] != want || r.Protected == want {
+				continue // not this phase, or already right
 			}
 			updated, err := c.s.repo.SetReplicaProtection(ctx, r.ID, want)
 			if err != nil {

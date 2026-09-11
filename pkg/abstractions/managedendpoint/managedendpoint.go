@@ -204,10 +204,19 @@ func (s *Service) authorizeAdmin(ctx context.Context) error {
 		return status.Error(codes.FailedPrecondition, errNotEnabled.Error())
 	}
 	authInfo, ok := auth.AuthInfoFromContext(ctx)
-	if !ok || authInfo == nil || authInfo.Token == nil || authInfo.Token.TokenType != types.TokenTypeClusterAdmin {
+	if !ok || !clusterAdmin(authInfo) {
 		return status.Error(codes.PermissionDenied, "cluster admin token required")
 	}
 	return nil
+}
+
+func clusterAdmin(a *auth.AuthInfo) bool {
+	return a != nil && a.Token != nil && a.Token.TokenType == types.TokenTypeClusterAdmin
+}
+
+// workspaceCaller is a request authenticated with a workspace token of any kind.
+func workspaceCaller(a *auth.AuthInfo) bool {
+	return a != nil && a.Workspace != nil && a.Token != nil
 }
 
 // A replica's only credential is its own secret (BEAM_REPLICA_SECRET), which

@@ -283,6 +283,11 @@ type FleetPlacement struct {
 	Serverless  bool   `json:"serverless,omitempty" yaml:"serverless"`
 }
 
+// ProtectsMinimum: a hot minimum that ordinary serverless workloads may not preempt.
+func (p FleetPlacement) ProtectsMinimum() bool {
+	return !p.Serverless && p.Preemption != nil && !*p.Preemption
+}
+
 // YAML otherwise truncates fractional replica counts when decoding into uint32.
 // Reject ambiguous values instead of silently changing placement or protection.
 func (p *FleetPlacement) UnmarshalYAML(unmarshal func(any) error) error {
@@ -421,7 +426,7 @@ func (f *Fleet) Entries(gpu string) []FleetEntry {
 	var out []FleetEntry
 	for id, e := range f.Endpoints {
 		if p, ok := e.GPUs[gpu]; ok && e.Enabled {
-			out = append(out, FleetEntry{EndpointID: id, Priority: p.Priority, MinReplicas: p.MinReplicas, MaxReplicas: p.MaxReplicas, ProtectMinimum: !p.Serverless && p.Preemption != nil && !*p.Preemption, Serverless: p.Serverless})
+			out = append(out, FleetEntry{EndpointID: id, Priority: p.Priority, MinReplicas: p.MinReplicas, MaxReplicas: p.MaxReplicas, ProtectMinimum: p.ProtectsMinimum(), Serverless: p.Serverless})
 		}
 	}
 	slices.SortFunc(out, func(a, b FleetEntry) int {

@@ -147,12 +147,23 @@ func (s *Service) ListReplicas(ctx context.Context, in *pb.ListReplicasRequest) 
 		}
 		gpu := normalizeGPUKey(in.Gpu)
 		for _, r := range replicas {
-			if (in.Status == "" || string(r.Status) == in.Status) && (gpu == "" || r.GPU == gpu) {
+			if selected(r, in.Status, gpu, "") {
 				out.Replicas = append(out.Replicas, replicaToProto(r))
 			}
 		}
 		return err
 	})
+}
+
+// selected applies the optional status, GPU and replica filters of a listing.
+func selected(r *types.EndpointReplica, status, gpu, replicaID string) bool {
+	if status != "" && string(r.Status) != status {
+		return false
+	}
+	if gpu != "" && r.GPU != gpu {
+		return false
+	}
+	return replicaID == "" || r.ID == replicaID
 }
 
 func (s *Service) GetMetrics(ctx context.Context, in *pb.GetMetricsRequest) (*pb.GetMetricsResponse, error) {
@@ -165,7 +176,7 @@ func (s *Service) GetMetrics(ctx context.Context, in *pb.GetMetricsRequest) (*pb
 			return err
 		}
 		replicas = slices.DeleteFunc(replicas, func(r *types.EndpointReplica) bool {
-			return r.Status.Terminal() || (gpu != "" && r.GPU != gpu) || (in.ReplicaId != "" && r.ID != in.ReplicaId)
+			return r.Status.Terminal() || !selected(r, "", gpu, in.ReplicaId)
 		})
 		if in.ReplicaId != "" {
 			if len(replicas) != 1 {

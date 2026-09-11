@@ -197,7 +197,9 @@ func generatesOutput(line []byte) bool {
 		return false
 	}
 	for _, c := range chunk.Choices {
-		if c.Text != "" || c.Delta.Content != "" || c.Delta.Reasoning != "" || c.Delta.ReasoningContent != "" || len(c.Delta.ReasoningDetails) > 0 || len(c.Delta.ToolCalls) > 0 {
+		d := c.Delta
+		text := c.Text != "" || d.Content != "" || d.Reasoning != "" || d.ReasoningContent != ""
+		if text || len(d.ReasoningDetails) > 0 || len(d.ToolCalls) > 0 {
 			return true
 		}
 	}
