@@ -52,15 +52,6 @@ _image_build_cache = TTLCache(
 )
 
 
-class ImageCredentialValueNotFound(Exception):
-    def __init__(self, key_name: str, *args: object) -> None:
-        super().__init__(*args)
-        self.key_name = key_name
-
-    def __str__(self) -> str:
-        return f"Did not find the environment variable {self.key_name}. Did you forget to set it?"
-
-
 class AWSCredentials(TypedDict, total=False):
     """Amazon Web Services credentials"""
 
@@ -175,7 +166,8 @@ class Image(BaseAbstraction):
                 A key/value pair or key list of environment variables that contain credentials to
                 a private registry. When provided as a dict, you must supply the correct keys and values.
                 When provided as a list, the keys are used to lookup the environment variable value
-                for you. Default is None.
+                for you; a key that is not set in the environment is read from the workspace secret
+                of the same name. Default is None.
             env_vars (Optional[Union[str, List[str], Dict[str, str]]):
                 Adds environment variables to an image. These will be available when building the image
                 and when the container is running. This can be a string, a list of strings, or a
@@ -684,25 +676,17 @@ class Image(BaseAbstraction):
         return result
 
     def get_credentials_from_env(self) -> Dict[str, str]:
-        """Registry credentials named by base_image_creds, read from the environment.
+        """Registry credentials named by base_image_creds.
 
-        Locally a missing key is an error the developer can fix in their shell. In a
-        container (whose environment carries the workspace's secrets) whatever is
-        present is sent and the build reports any registry failure.
+        Each name is read from the environment; a name that is not set is sent
+        empty, and the gateway fills it from the workspace secret of that name.
         """
         keys = (
             self.base_image_creds.keys()
             if isinstance(self.base_image_creds, dict)
             else self.base_image_creds
         )
-
-        creds = {}
-        for key in keys:
-            if v := os.getenv(key):
-                creds[key] = v
-            elif env.is_local():
-                raise ImageCredentialValueNotFound(key)
-        return creds
+        return {key: os.getenv(key, "") for key in keys}
 
     def micromamba(self) -> "Image":
         """

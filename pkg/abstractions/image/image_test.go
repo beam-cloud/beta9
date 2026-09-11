@@ -50,6 +50,27 @@ func TestRetrieveBuildSecretsSortsByName(t *testing.T) {
 	}, buildSecrets)
 }
 
+func TestResolveImageCredsFillsMissingValuesFromWorkspaceSecrets(t *testing.T) {
+	is := &ContainerImageService{
+		backendRepo: &unorderedBuildSecretsRepository{
+			secrets: []types.Secret{{Name: "GITHUB_TOKEN", Value: "ghp_durable"}},
+		},
+	}
+	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{Workspace: &types.Workspace{}})
+
+	creds, err := is.resolveImageCreds(ctx, map[string]string{"GITHUB_USERNAME": "bot", "GITHUB_TOKEN": ""})
+	assert.NoError(t, err)
+	assert.Equal(t, map[string]string{"GITHUB_USERNAME": "bot", "GITHUB_TOKEN": "ghp_durable"}, creds)
+
+	// Values from the environment win; nothing is looked up.
+	creds, err = (&ContainerImageService{}).resolveImageCreds(context.Background(), map[string]string{"GITHUB_TOKEN": "ghp_env"})
+	assert.NoError(t, err)
+	assert.Equal(t, map[string]string{"GITHUB_TOKEN": "ghp_env"}, creds)
+
+	_, err = is.resolveImageCreds(ctx, map[string]string{"GITHUB_USERNAME": ""})
+	assert.EqualError(t, err, "registry credential GITHUB_USERNAME is neither set in the environment nor a workspace secret")
+}
+
 func TestStreamImageBuildOutputSendsTerminalFailureWhenBuildReturnsWithoutOutput(t *testing.T) {
 	outputChan := make(chan common.OutputMsg)
 	buildErrChan := make(chan error, 1)

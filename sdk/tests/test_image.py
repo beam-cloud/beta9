@@ -2,7 +2,7 @@ import os
 from contextlib import contextmanager
 from unittest import TestCase
 
-from beta9.abstractions.image import Image, ImageCredentialValueNotFound
+from beta9.abstractions.image import Image
 
 
 class TestImage(TestCase):
@@ -30,25 +30,11 @@ class TestImage(TestCase):
             creds = image.get_credentials_from_env()
             self.assertTrue(creds == env)
 
-    def test_image_credentials_value_error(self):
-        env = {
-            "Key1": "1234",
-            "Key2": "",
-        }
-        with temp_env_vars(env):
-            image = Image(base_image_creds=list(env.keys()))
-
-            with self.assertRaises(ImageCredentialValueNotFound) as context:
-                image.get_credentials_from_env()
-
-            self.assertTrue("Did not find the environment variable Key2." in str(context.exception))
-
-    def test_image_credentials_in_container_sends_what_is_present(self):
-        # Inside a container the environment is the workspace's secrets; a
-        # missing key is left to the registry to report.
-        with temp_env_vars({"CONTAINER_ID": "c-1", "Key1": "1234", "Key2": ""}):
+    def test_image_credentials_missing_key_is_sent_empty_for_workspace_secret(self):
+        # The gateway fills an empty value from the workspace secret of that name.
+        with temp_env_vars({"Key1": "1234", "Key2": ""}):
             image = Image(base_image_creds=["Key1", "Key2"])
-            self.assertEqual(image.get_credentials_from_env(), {"Key1": "1234"})
+            self.assertEqual(image.get_credentials_from_env(), {"Key1": "1234", "Key2": ""})
 
 
 @contextmanager

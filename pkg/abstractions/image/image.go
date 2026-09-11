@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"maps"
 	"sort"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
@@ -119,21 +120,27 @@ func (is *ContainerImageService) BuildImage(in *pb.BuildImageRequest, stream pb.
 		return err
 	}
 
+	buildOptions := verifyResult.opts
+	if buildOptions == nil {
+		return errors.New("missing image build options")
+	}
+	buildOptions.ExistingImageCreds, err = is.resolveImageCreds(stream.Context(), in.ExistingImageCreds)
+	if err != nil {
+		return err
+	}
+
 	if verifyResult.exists {
+		// The runtime pulls an unmodified image with whatever this deploy
+		// supplied, so a rotated credential must replace the stored one.
+		if err := is.createCredentialSecretIfNeeded(stream.Context(), verifyResult.imageID, buildOptions); err != nil {
+			log.Error().Err(err).Msg("failed to refresh credential secret")
+		}
 		_ = stream.Send(&pb.BuildImageResponse{Msg: "Image already exists\n", Done: false, Success: true, ImageId: verifyResult.imageID})
 		_ = stream.Send(&pb.BuildImageResponse{Msg: "Build completed successfully\n", Done: true, Success: true, ImageId: verifyResult.imageID})
 		return nil
 	}
 
 	clipVersion := is.config.ImageService.ClipVersion
-
-	// Set ExistingImageCreds for credential processing
-	buildOptions := verifyResult.opts
-	if buildOptions == nil {
-		return errors.New("missing image build options")
-	}
-
-	buildOptions.ExistingImageCreds = in.ExistingImageCreds
 	buildOptions.ClipVersion = clipVersion
 
 	// Process credentials for custom base image (if provided)
@@ -234,6 +241,40 @@ func streamImageBuildOutput(ctx context.Context, outputChan <-chan common.Output
 			return lastMessage, ctx.Err()
 		}
 	}
+}
+
+// resolveImageCreds fills in registry credentials the client named without a
+// value from the workspace secrets of the same name, so a deploy does not have
+// to carry them in its environment.
+func (is *ContainerImageService) resolveImageCreds(ctx context.Context, creds map[string]string) (map[string]string, error) {
+	var missing []string
+	for name, value := range creds {
+		if value == "" {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) == 0 {
+		return creds, nil
+	}
+	authInfo, ok := auth.AuthInfoFromContext(ctx)
+	if !ok || authInfo.Workspace == nil {
+		return nil, errors.New("no workspace found in context")
+	}
+	secrets, err := is.backendRepo.GetSecretsByNameDecrypted(ctx, authInfo.Workspace, missing)
+	if err != nil {
+		return nil, err
+	}
+	resolved := maps.Clone(creds)
+	for _, secret := range secrets {
+		resolved[secret.Name] = secret.Value
+	}
+	sort.Strings(missing)
+	for _, name := range missing {
+		if resolved[name] == "" {
+			return nil, fmt.Errorf("registry credential %s is neither set in the environment nor a workspace secret", name)
+		}
+	}
+	return resolved, nil
 }
 
 func (is *ContainerImageService) retrieveBuildSecrets(ctx context.Context, secrets []string, authInfo *auth.AuthInfo) ([]string, error) {
