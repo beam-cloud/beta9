@@ -202,9 +202,12 @@ def get_config_context(name: str = DEFAULT_CONTEXT_NAME) -> ConfigContext:
             token=token,
             gateway_host=gateway_host,
             gateway_port=gateway_port,
-            api_url=settings.api_url
-            if (gateway_host, gateway_port) == (settings.gateway_host, settings.gateway_port)
-            else None,
+            api_url=os.getenv("BETA9_API_URL")
+            or (
+                settings.api_url
+                if (gateway_host, gateway_port) == (settings.gateway_host, settings.gateway_port)
+                else None
+            ),
         )
 
     if not sys.stdin.isatty():
