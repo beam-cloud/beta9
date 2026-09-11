@@ -465,22 +465,12 @@ func (s *WorkerRepositoryService) imageRegistryCredentials(ctx context.Context, 
 	if s.backendRepo == nil || workspaceID == "" || imageID == "" {
 		return ""
 	}
-
-	secretName, _, err := s.backendRepo.GetImageCredentialSecret(ctx, imageID)
-	if err != nil || secretName == "" {
-		return ""
-	}
-
 	workspace, err := s.backendRepo.GetWorkspaceByExternalIdWithSigningKey(ctx, workspaceID)
-	if err != nil || workspace.SigningKey == nil || *workspace.SigningKey == "" {
+	if err != nil {
 		return ""
 	}
-
-	secret, err := s.backendRepo.GetSecretByNameDecrypted(ctx, &workspace, secretName)
-	if err != nil || secret == nil {
-		return ""
-	}
-	return secret.Value
+	credentials, _ := s.backendRepo.GetImageCredentials(ctx, &workspace, imageID)
+	return credentials
 }
 
 func derefString(s *string) string {

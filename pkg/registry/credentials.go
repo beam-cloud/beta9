@@ -189,18 +189,6 @@ func MarshalCredentials(registry string, credType CredType, creds map[string]str
 	return string(jsonBytes), nil
 }
 
-// CreateSecretName generates a consistent secret name for a registry
-// Format: "oci-registry-<normalized-registry-name>"
-func CreateSecretName(registry string) string {
-	// Normalize registry name for use in secret name
-	normalized := strings.ToLower(registry)
-	normalized = strings.ReplaceAll(normalized, ".", "-")
-	normalized = strings.ReplaceAll(normalized, ":", "-")
-	normalized = strings.ReplaceAll(normalized, "/", "-")
-
-	return fmt.Sprintf("oci-registry-%s", normalized)
-}
-
 // CreateProviderFromCredentials creates a CLIP-compatible credential provider from a credential map
 // This function creates an appropriate credential provider without setting environment variables
 // Returns common.RegistryCredentialProvider

@@ -50,6 +50,26 @@ func TestRetrieveBuildSecretsSortsByName(t *testing.T) {
 	}, buildSecrets)
 }
 
+func TestRegistryCredentialsComeFromWorkspaceSecretsOnly(t *testing.T) {
+	is := &ContainerImageService{
+		backendRepo: &unorderedBuildSecretsRepository{
+			secrets: []types.Secret{{Name: "GITHUB_TOKEN", Value: "from-workspace"}},
+		},
+	}
+	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{Workspace: &types.Workspace{}})
+
+	creds, err := is.registryCredentials(ctx, map[string]string{"GITHUB_TOKEN": "sent-by-client"})
+	assert.NoError(t, err)
+	assert.Equal(t, map[string]string{"GITHUB_TOKEN": "from-workspace"}, creds)
+
+	_, err = is.registryCredentials(ctx, map[string]string{"GITHUB_TOKEN": "", "GITHUB_USERNAME": ""})
+	assert.EqualError(t, err, "registry credential GITHUB_USERNAME is not a workspace secret; create it with `beta9 secret create GITHUB_USERNAME <value>`")
+
+	creds, err = is.registryCredentials(ctx, nil)
+	assert.NoError(t, err)
+	assert.Nil(t, creds)
+}
+
 func TestStreamImageBuildOutputSendsTerminalFailureWhenBuildReturnsWithoutOutput(t *testing.T) {
 	outputChan := make(chan common.OutputMsg)
 	buildErrChan := make(chan error, 1)

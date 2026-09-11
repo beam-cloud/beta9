@@ -22,6 +22,7 @@ import (
 	"github.com/pressly/goose/v3"
 
 	pkgCommon "github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/registry"
 	_ "github.com/beam-cloud/beta9/pkg/repository/backend_postgres_migrations"
 	"github.com/beam-cloud/beta9/pkg/repository/common"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -2672,27 +2673,31 @@ func (r *PostgresBackendRepository) CreateImage(ctx context.Context, imageId str
 	return clipVersion, nil
 }
 
-func (r *PostgresBackendRepository) SetImageCredentialSecret(ctx context.Context, imageId string, secretName string, secretExternalId string) error {
-	query := `
-		UPDATE image 
-		SET credential_secret_name = $2, credential_secret_id = $3
-		WHERE image_id = $1;
-	`
-	_, err := r.client.ExecContext(ctx, query, imageId, secretName, secretExternalId)
+func (r *PostgresBackendRepository) SetImageCredentialSecretNames(ctx context.Context, imageId string, names []string) error {
+	query := `UPDATE image SET credential_secret_names = $2 WHERE image_id = $1;`
+	_, err := r.client.ExecContext(ctx, query, imageId, pq.Array(names))
 	return err
 }
 
-func (r *PostgresBackendRepository) GetImageCredentialSecret(ctx context.Context, imageId string) (string, string, error) {
-	var secretName sql.NullString
-	var secretId sql.NullString
-	query := `SELECT credential_secret_name, credential_secret_id FROM image WHERE image_id = $1;`
-
-	err := r.client.QueryRowContext(ctx, query, imageId).Scan(&secretName, &secretId)
-	if err != nil {
-		return "", "", err
+// GetImageCredentials returns the registry credentials for an image, read from
+// the workspace secrets it names, in the form the worker parses. Empty when the
+// image names none.
+func (r *PostgresBackendRepository) GetImageCredentials(ctx context.Context, workspace *types.Workspace, imageId string) (string, error) {
+	var names pq.StringArray
+	query := `SELECT credential_secret_names FROM image WHERE image_id = $1;`
+	if err := r.client.QueryRowContext(ctx, query, imageId).Scan(&names); err != nil || len(names) == 0 {
+		return "", err
 	}
 
-	return secretName.String, secretId.String, nil
+	secrets, err := r.GetSecretsByNameDecrypted(ctx, workspace, names)
+	if err != nil {
+		return "", err
+	}
+	creds := make(map[string]string, len(secrets))
+	for _, secret := range secrets {
+		creds[secret.Name] = secret.Value
+	}
+	return registry.MarshalCredentials("", registry.DetectCredentialType("", creds), creds)
 }
 
 func (r *PostgresBackendRepository) CreateCheckpoint(ctx context.Context, checkpoint *types.Checkpoint) (*types.Checkpoint, error) {

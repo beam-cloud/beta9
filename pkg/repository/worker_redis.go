@@ -1716,6 +1716,9 @@ func (r *WorkerRedisRepository) ScheduleContainerRequests(worker *types.Worker, 
 			victims, err = r.selectEvictionVictims(ctx, worker.Id,
 				cpu-current.FreeCpu, memory-current.FreeMemory, gpu-int64(current.FreeGpuCount))
 			if err != nil {
+				if errors.Is(err, ErrInsufficientEvictableCapacity) && current.ResourceVersion != worker.ResourceVersion {
+					return errors.Join(ErrWorkerCapacityChanged, err)
+				}
 				return err
 			}
 		}

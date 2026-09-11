@@ -69,16 +69,11 @@ type originCredentialsBackendRepo struct {
 	repository.BackendRepository
 	workspace                 *types.Workspace
 	stub                      *types.StubWithRelated
-	secretName                string
 	secret                    *types.Secret
 	workspaceByExternalCalls  int
 	workspaceWithSigningCalls int
 	workspaceCalls            int
 	stubCalls                 int
-}
-
-func (r *originCredentialsBackendRepo) GetImageCredentialSecret(ctx context.Context, imageID string) (string, string, error) {
-	return r.secretName, "", nil
 }
 
 func (r *originCredentialsBackendRepo) GetWorkspaceByExternalId(ctx context.Context, externalID string) (types.Workspace, error) {
@@ -124,14 +119,11 @@ func (r *originCredentialsBackendRepo) GetStubByExternalId(ctx context.Context, 
 	}, nil
 }
 
-func (r *originCredentialsBackendRepo) GetSecretByNameDecrypted(ctx context.Context, workspace *types.Workspace, name string) (*types.Secret, error) {
-	if name != r.secretName {
-		return nil, nil
+func (r *originCredentialsBackendRepo) GetImageCredentials(ctx context.Context, workspace *types.Workspace, imageID string) (string, error) {
+	if r.secret == nil || workspace == nil || workspace.SigningKey == nil || *workspace.SigningKey == "" {
+		return "", nil
 	}
-	if workspace == nil || workspace.SigningKey == nil || *workspace.SigningKey == "" {
-		return nil, nil
-	}
-	return r.secret, nil
+	return r.secret.Value, nil
 }
 
 func TestAuthorizeCacheRepositoryRequestWithWorkerToken(t *testing.T) {
@@ -563,9 +555,8 @@ func TestPruneStaleCacheCheckpointsDefersDbPruneWhenOriginDeleteCannotRun(t *tes
 func TestGetCacheOriginCredentialsVendsImageRegistrySecret(t *testing.T) {
 	signingKey := "workspace-signing-key"
 	backendRepo := &originCredentialsBackendRepo{
-		workspace:  &types.Workspace{Id: 7, ExternalId: "workspace-id", SigningKey: &signingKey},
-		secretName: "registry-secret",
-		secret:     &types.Secret{Name: "registry-secret", Value: "registry-user:registry-pass"},
+		workspace: &types.Workspace{Id: 7, ExternalId: "workspace-id", SigningKey: &signingKey},
+		secret:    &types.Secret{Name: "registry-secret", Value: "registry-user:registry-pass"},
 	}
 	service := &WorkerRepositoryService{
 		backendRepo: backendRepo,
@@ -592,9 +583,8 @@ func TestGetCacheOriginCredentialsVendsImageRegistrySecret(t *testing.T) {
 func TestGetCacheOriginCredentialsDoesNotDecryptImageRegistrySecretWithoutSigningKey(t *testing.T) {
 	service := &WorkerRepositoryService{
 		backendRepo: &originCredentialsBackendRepo{
-			workspace:  &types.Workspace{Id: 7, ExternalId: "workspace-id"},
-			secretName: "registry-secret",
-			secret:     &types.Secret{Name: "registry-secret", Value: "registry-user:registry-pass"},
+			workspace: &types.Workspace{Id: 7, ExternalId: "workspace-id"},
+			secret:    &types.Secret{Name: "registry-secret", Value: "registry-user:registry-pass"},
 		},
 	}
 

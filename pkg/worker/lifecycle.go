@@ -921,6 +921,7 @@ func (s *Worker) loadContainerImage(ctx context.Context, request *types.Containe
 
 	if !request.IsBuildRequest() {
 		log.Error().Str("container_id", request.ContainerId).Msgf("failed to pull image: %v", err)
+		outputLogger.Error(fmt.Sprintf("Failed to load image <%s>: %v\n", request.ImageId, err))
 		return elapsed, false, err
 	}
 

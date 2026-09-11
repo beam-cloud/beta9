@@ -243,42 +243,6 @@ func TestMarshalCredentials(t *testing.T) {
 	assert.NotNil(t, parsed["credentials"])
 }
 
-func TestCreateSecretName(t *testing.T) {
-	tests := []struct {
-		name     string
-		registry string
-		expected string
-	}{
-		{
-			name:     "docker.io",
-			registry: "docker.io",
-			expected: "oci-registry-docker-io",
-		},
-		{
-			name:     "registry with port",
-			registry: "registry.example.com:5000",
-			expected: "oci-registry-registry-example-com-5000",
-		},
-		{
-			name:     "gcr.io",
-			registry: "gcr.io",
-			expected: "oci-registry-gcr-io",
-		},
-		{
-			name:     "ecr registry",
-			registry: "123456789012.dkr.ecr.us-east-1.amazonaws.com",
-			expected: "oci-registry-123456789012-dkr-ecr-us-east-1-amazonaws-com",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := CreateSecretName(tt.registry)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
 func TestCreateProviderFromEnv(t *testing.T) {
 	ctx := context.Background()
 

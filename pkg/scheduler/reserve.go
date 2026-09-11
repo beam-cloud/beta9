@@ -189,10 +189,6 @@ func (a *schedulingAttempt) requeueForWorkerWaitDelay(delay time.Duration, reaso
 		return
 	}
 
-	if delay < requestProcessingInterval {
-		delay = requestProcessingInterval
-	}
-
 	if err := a.scheduler.pushBacklog(a.request, delay); err != nil {
 		requestLog(log.Error(), a.request).Err(err).Msg("failed to requeue request waiting for worker capacity")
 		a.fail(types.ContainerSchedulingFailureReason(reason + "_requeue_failed"))
