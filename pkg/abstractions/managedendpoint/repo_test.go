@@ -130,6 +130,7 @@ func TestEndpointState(t *testing.T) {
 	}{
 		{name: "disabled", want: StateDisabled, fleet: &types.Fleet{}},
 		{name: "waiting", want: StateWaitingForCapacity, fleet: placed},
+		{name: "idle", want: StateIdle, fleet: &types.Fleet{Endpoints: map[string]types.FleetEndpoint{"acme/model": {Enabled: true, GPUs: map[string]types.FleetPlacement{"H100": {Priority: 1, MaxReplicas: 1, Serverless: true}}}}}},
 		{name: "loading", want: StateLoading, fleet: placed, replicas: []*types.EndpointReplica{replica(types.ReplicaStatusLoading, "")}},
 		{name: "ready", want: StateReady, fleet: placed, replicas: []*types.EndpointReplica{replica(types.ReplicaStatusReady, ""), replica(types.ReplicaStatusFailed, "oom")}},
 		{name: "failed", want: StateFailed, fleet: placed, replicas: []*types.EndpointReplica{replica(types.ReplicaStatusFailed, "oom")}},

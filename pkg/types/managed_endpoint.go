@@ -273,11 +273,14 @@ type FleetEndpoint struct {
 // FleetPlacement is one endpoint on one GPU type. Minimums fill first, in
 // priority order, then spare capacity fills up to MaxReplicas (0 is uncapped).
 // Disabling preemption protects only the minimum; extras stay evictable.
+// Serverless placements start replicas only while requests wait for them and
+// scale back to zero when idle.
 type FleetPlacement struct {
 	Priority    uint32 `json:"priority" yaml:"priority"`
 	MinReplicas uint32 `json:"min_replicas,omitempty" yaml:"minReplicas"`
 	MaxReplicas uint32 `json:"max_replicas,omitempty" yaml:"maxReplicas"`
 	Preemption  *bool  `json:"preemption,omitempty" yaml:"preemption"`
+	Serverless  bool   `json:"serverless,omitempty" yaml:"serverless"`
 }
 
 // YAML otherwise truncates fractional replica counts when decoding into uint32.
@@ -296,9 +299,11 @@ func (p *FleetPlacement) UnmarshalYAML(unmarshal func(any) error) error {
 			}
 		}
 	}
-	if value, exists := fields["preemption"]; exists {
-		if _, ok := value.(bool); !ok {
-			return errors.New("preemption must be a boolean")
+	for _, name := range []string{"preemption", "serverless"} {
+		if value, exists := fields[name]; exists {
+			if _, ok := value.(bool); !ok {
+				return fmt.Errorf("%s must be a boolean", name)
+			}
 		}
 	}
 	type plain FleetPlacement
@@ -312,6 +317,7 @@ type FleetEntry struct {
 	MinReplicas    uint32
 	MaxReplicas    uint32
 	ProtectMinimum bool
+	Serverless     bool
 }
 
 const maxFleetReplicas = 64
@@ -346,6 +352,12 @@ func (f *Fleet) Validate() error {
 			}
 			if p.Priority == 0 {
 				errs = append(errs, fmt.Errorf("%s: %s: priority is required (1 fills first)", id, gpu))
+			}
+			if p.Serverless && p.MinReplicas != 0 {
+				errs = append(errs, fmt.Errorf("%s: %s: serverless requires minReplicas: 0", id, gpu))
+			}
+			if p.Serverless && p.Preemption != nil && !*p.Preemption {
+				errs = append(errs, fmt.Errorf("%s: %s: serverless replicas must allow preemption", id, gpu))
 			}
 			if p.MaxReplicas > maxFleetReplicas {
 				errs = append(errs, fmt.Errorf("%s: %s: maxReplicas %d exceeds %d", id, gpu, p.MaxReplicas, maxFleetReplicas))
@@ -409,7 +421,7 @@ func (f *Fleet) Entries(gpu string) []FleetEntry {
 	var out []FleetEntry
 	for id, e := range f.Endpoints {
 		if p, ok := e.GPUs[gpu]; ok && e.Enabled {
-			out = append(out, FleetEntry{EndpointID: id, Priority: p.Priority, MinReplicas: p.MinReplicas, MaxReplicas: p.MaxReplicas, ProtectMinimum: p.Preemption != nil && !*p.Preemption})
+			out = append(out, FleetEntry{EndpointID: id, Priority: p.Priority, MinReplicas: p.MinReplicas, MaxReplicas: p.MaxReplicas, ProtectMinimum: !p.Serverless && p.Preemption != nil && !*p.Preemption, Serverless: p.Serverless})
 		}
 	}
 	slices.SortFunc(out, func(a, b FleetEntry) int {
@@ -419,6 +431,16 @@ func (f *Fleet) Entries(gpu string) []FleetEntry {
 }
 
 // Placements returns the GPU types an enabled endpoint fills.
+// Serverless reports whether requests may start on-demand replicas.
+func (f *Fleet) Serverless(endpointID string) bool {
+	for _, placement := range f.Placements(endpointID) {
+		if placement.Serverless {
+			return true
+		}
+	}
+	return false
+}
+
 func (f *Fleet) Placements(endpointID string) map[string]FleetPlacement {
 	if e, ok := f.Endpoints[endpointID]; ok && e.Enabled {
 		return e.GPUs

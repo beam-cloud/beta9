@@ -270,6 +270,7 @@ const (
 	StateRetired            = "retired"
 	StateDisabled           = "disabled" // deployed but not placed by config.yaml
 	StateWaitingForCapacity = "waiting_for_capacity"
+	StateIdle               = "idle" // serverless placement, scaled to zero
 	StateLoading            = "loading"
 	StateReady              = "ready"
 	StateFailed             = "failed"
@@ -294,9 +295,11 @@ func endpointState(e *types.ManagedEndpoint, fleet *types.Fleet, gitops *types.G
 	}
 	var want uint32
 	var gpus []string
+	serverless := false
 	for gpu, p := range placements {
 		want += p.MinReplicas
 		gpus = append(gpus, gpu)
+		serverless = serverless || p.Serverless
 	}
 	slices.Sort(gpus)
 	var ready, alive uint32
@@ -322,6 +325,8 @@ func endpointState(e *types.ManagedEndpoint, fleet *types.Fleet, gitops *types.G
 		return StateLoading, fmt.Sprintf("%d replica(s) starting", alive)
 	case lastFailure != nil:
 		return StateFailed, fmt.Sprintf("last replica failed: %s", lastFailure.StatusReason)
+	case serverless:
+		return StateIdle, "scaled to zero; the first request starts a replica"
 	case want == 0:
 		return StateWaitingForCapacity, "minReplicas is 0; fills spare " + strings.Join(gpus, ", ") + " capacity only"
 	}
