@@ -30,6 +30,16 @@ func TestGenerateDSNSSLMode(t *testing.T) {
 	})
 }
 
+func TestListStubsQueryBuilderFiltersPreparationCacheKey(t *testing.T) {
+	query, args, err := (&PostgresBackendRepository{}).listStubsQueryBuilder(types.StubFilter{
+		PreparationCacheKey: "cache-key",
+	}).ToSql()
+	require.NoError(t, err)
+	require.Contains(t, query, "s.config->>'preparation_cache_key' = $1")
+	require.Contains(t, query, "ORDER BY s.updated_at DESC, s.id DESC LIMIT 1")
+	require.Equal(t, []interface{}{"cache-key"}, args)
+}
+
 func TestListTaskWithRelated(t *testing.T) {
 	// Remove this skip if you are testing on local data
 	t.Skip()

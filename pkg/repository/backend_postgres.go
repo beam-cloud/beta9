@@ -1790,6 +1790,13 @@ func (c *PostgresBackendRepository) listStubsQueryBuilder(filters types.StubFilt
 		qb = qb.Where(squirrel.Eq{"s.type": filters.StubTypes})
 	}
 
+	if filters.PreparationCacheKey != "" {
+		qb = qb.
+			Where("s.config->>'preparation_cache_key' = ?", filters.PreparationCacheKey).
+			OrderBy("s.updated_at DESC", "s.id DESC").
+			Limit(1)
+	}
+
 	if filters.AppId != "" {
 		qb = qb.Where(squirrel.Eq{"a.external_id": filters.AppId})
 		qb = qb.Where("a.deleted_at IS NULL")

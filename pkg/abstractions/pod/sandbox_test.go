@@ -45,6 +45,52 @@ func TestPreparedStubID(t *testing.T) {
 	}
 }
 
+type preparedStubBackendRepository struct {
+	repository.BackendRepository
+	stubs   []types.StubWithRelated
+	filters types.StubFilter
+}
+
+func (r *preparedStubBackendRepository) ListStubs(_ context.Context, filters types.StubFilter) ([]types.StubWithRelated, error) {
+	r.filters = filters
+	return r.stubs, nil
+}
+
+func TestPreparedStubIDFallsBackToPersistentStub(t *testing.T) {
+	rdb, err := repository.NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = rdb.Close() })
+
+	repo := &preparedStubBackendRepository{
+		stubs: []types.StubWithRelated{{Stub: types.Stub{ExternalId: "stub-persistent"}}},
+	}
+	ctx := metadata.NewIncomingContext(
+		context.Background(),
+		metadata.Pairs(common.PreparedStubCacheMetadata, "cache-key"),
+	)
+
+	got := (&GenericPodService{rdb: rdb, backendRepo: repo}).preparedStubID(ctx, "workspace-1")
+	if got != "stub-persistent" {
+		t.Fatalf("preparedStubID() = %q, want stub-persistent", got)
+	}
+	if repo.filters.WorkspaceID != "workspace-1" || repo.filters.PreparationCacheKey != "cache-key" {
+		t.Fatalf("ListStubs filters = %#v", repo.filters)
+	}
+	if len(repo.filters.StubTypes) != 1 || repo.filters.StubTypes[0] != string(types.StubTypeSandbox) {
+		t.Fatalf("ListStubs stub types = %#v, want sandbox", repo.filters.StubTypes)
+	}
+
+	stubID, err := rdb.Get(
+		context.Background(),
+		common.RedisKeys.GatewayPreparedStub("workspace-1", "cache-key"),
+	).Result()
+	if err != nil || stubID != "stub-persistent" {
+		t.Fatalf("repopulated prepared stub = %q, %v", stubID, err)
+	}
+}
+
 func TestSandboxConnectErrorMessageDoesNotLeakDetails(t *testing.T) {
 	got := sandboxConnectErrorMessage(errors.New("container state not found: sandbox-123 on worker 10.0.0.12"))
 	if got != "Failed to connect to sandbox" {

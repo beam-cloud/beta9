@@ -163,6 +163,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		Disks:              in.Disks,
 		ManagedEndpoint:    managedEndpoint,
 	}
+	stubConfig.PreparationCacheKey = preparedStubCacheKey(ctx)
 
 	// A persistent root is shorthand for a qcow machine-root disk: the
 	// container's overlay upper layer lives on the volume, so disk snapshots
@@ -386,20 +387,31 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 }
 
 func (gws *GatewayService) cachePreparedStub(ctx context.Context, workspaceID, stubID string) {
-	md, ok := metadata.FromIncomingContext(ctx)
-	if !ok || gws.redisClient == nil {
+	if gws.redisClient == nil {
 		return
 	}
-	cacheKeys := md.Get(common.PreparedStubCacheMetadata)
-	if len(cacheKeys) == 0 || cacheKeys[0] == "" {
+	cacheKey := preparedStubCacheKey(ctx)
+	if cacheKey == "" {
 		return
 	}
 	_ = gws.redisClient.SetEx(
 		ctx,
-		common.RedisKeys.GatewayPreparedStub(workspaceID, cacheKeys[0]),
+		common.RedisKeys.GatewayPreparedStub(workspaceID, cacheKey),
 		stubID,
 		common.PreparedStubCacheTTL,
 	).Err()
+}
+
+func preparedStubCacheKey(ctx context.Context) string {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return ""
+	}
+	cacheKeys := md.Get(common.PreparedStubCacheMetadata)
+	if len(cacheKeys) == 0 {
+		return ""
+	}
+	return cacheKeys[0]
 }
 
 type stubCapacityVerdict struct {

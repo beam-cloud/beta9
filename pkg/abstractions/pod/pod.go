@@ -733,18 +733,47 @@ func (s *GenericPodService) CreatePod(ctx context.Context, in *pb.CreatePodReque
 
 func (s *GenericPodService) preparedStubID(ctx context.Context, workspaceID string) string {
 	md, ok := metadata.FromIncomingContext(ctx)
-	if !ok || s.rdb == nil {
+	if !ok {
 		return ""
 	}
 	cacheKeys := md.Get(common.PreparedStubCacheMetadata)
-	if len(cacheKeys) == 0 {
+	if len(cacheKeys) == 0 || cacheKeys[0] == "" {
 		return ""
 	}
-	stubID, _ := s.rdb.GetEx(
-		ctx,
-		common.RedisKeys.GatewayPreparedStub(workspaceID, cacheKeys[0]),
-		common.PreparedStubCacheTTL,
-	).Result()
+	cacheKey := cacheKeys[0]
+
+	if s.rdb != nil {
+		stubID, _ := s.rdb.GetEx(
+			ctx,
+			common.RedisKeys.GatewayPreparedStub(workspaceID, cacheKey),
+			common.PreparedStubCacheTTL,
+		).Result()
+		if stubID != "" {
+			return stubID
+		}
+	}
+
+	if s.backendRepo == nil {
+		return ""
+	}
+	stubs, err := s.backendRepo.ListStubs(ctx, types.StubFilter{
+		WorkspaceID:         workspaceID,
+		StubTypes:           types.StringSlice{string(types.StubTypeSandbox)},
+		PreparationCacheKey: cacheKey,
+	})
+	if err != nil || len(stubs) == 0 {
+		return ""
+	}
+
+	stubID := stubs[0].ExternalId
+	if s.rdb != nil {
+		_ = s.rdb.SetEx(
+			ctx,
+			common.RedisKeys.GatewayPreparedStub(workspaceID, cacheKey),
+			stubID,
+			common.PreparedStubCacheTTL,
+		).Err()
+	}
 	return stubID
 }
 

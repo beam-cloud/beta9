@@ -62,6 +62,15 @@ func TestCachePreparedStub(t *testing.T) {
 	require.Equal(t, "stub-1", stubID)
 }
 
+func TestPreparedStubCacheKey(t *testing.T) {
+	ctx := metadata.NewIncomingContext(
+		context.Background(),
+		metadata.Pairs(common.PreparedStubCacheMetadata, "cache-key"),
+	)
+	require.Equal(t, "cache-key", preparedStubCacheKey(ctx))
+	require.Empty(t, preparedStubCacheKey(context.Background()))
+}
+
 func TestGetOrCreateStubReportsMissingSecret(t *testing.T) {
 	service := &GatewayService{
 		appConfig:   types.AppConfig{GatewayService: types.GatewayServiceConfig{StubLimits: types.StubLimits{Cpu: 2, Memory: 2}}},
