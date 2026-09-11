@@ -183,6 +183,7 @@ class ManagedEndpoint(RunnerAbstraction):
                 "id": self.id,
                 "kind": self.kind,
                 "engine": self.engine,
+                "entrypoint": self.entrypoint,
                 "port": self.port,
                 "health": self.health,
                 "metrics": self.metrics,

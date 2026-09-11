@@ -22,7 +22,7 @@ import click
 from .. import terminal
 from ..abstractions.managed_endpoint import ManagedEndpoint
 from ..config import ConfigContext, get_config_context
-from .extraclick import ClickCommonGroup, ClickManagementGroup
+from .extraclick import ClickCommonGroup, ClickManagementGroup, selected_context
 
 
 @click.group(cls=ClickCommonGroup)
@@ -100,7 +100,7 @@ def _apply(
         "dry_run": dry_run,
     }
     request = Request(
-        context.http_url() + "/api/v1/endpoints/gitops/apply",
+        context.http_url + "/api/v1/endpoints/gitops/apply",
         method="POST",
         data=json.dumps(body).encode(),
         headers={
@@ -135,13 +135,13 @@ def _report(result: Dict[str, Any]) -> None:
 @click.argument("repo", type=click.Path(exists=True, file_okay=False, path_type=Path), default=".")
 def validate(repo: Path):
     apps = _apps(repo)
-    _report(_apply(get_config_context(), repo, apps, dry_run=True))
+    _report(_apply(get_config_context(selected_context()), repo, apps, dry_run=True))
 
 
 @management.command(name="deploy", help="Deploy every app, then apply config.yaml.")
 @click.argument("repo", type=click.Path(exists=True, file_okay=False, path_type=Path), default=".")
 def deploy(repo: Path):
-    context = get_config_context()
+    context = get_config_context(selected_context())
     apps = _apps(repo)
     check = _apply(context, repo, apps, dry_run=True)
     if not check.get("ok"):
