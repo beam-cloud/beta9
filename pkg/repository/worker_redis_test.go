@@ -1072,7 +1072,8 @@ func TestScheduleContainerRequestRejectsStaleWorkerReservation(t *testing.T) {
 	assert.Nil(t, err)
 
 	err = repo.ScheduleContainerRequest(secondWorkerCopy, secondRequest)
-	assert.Error(t, err)
+	assert.True(t, errors.Is(err, ErrWorkerCapacityChanged), err)
+	assert.True(t, errors.Is(err, ErrInsufficientEvictableCapacity), err)
 
 	updatedWorker, err := repo.GetWorkerById(worker.Id)
 	assert.Nil(t, err)

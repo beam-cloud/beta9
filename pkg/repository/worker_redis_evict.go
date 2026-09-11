@@ -14,6 +14,10 @@ import (
 // ErrEvictionVictimsChanged means the chosen victims changed before the placement committed.
 var ErrEvictionVictimsChanged = errors.New("eviction victims changed before placement committed")
 
+// ErrWorkerCapacityChanged means the worker's capacity changed after the
+// scheduler selected it and the request must be planned against a fresh view.
+var ErrWorkerCapacityChanged = errors.New("worker capacity changed after selection")
+
 var ErrInsufficientEvictableCapacity = errors.New("unable to schedule container, worker out of free and evictable capacity")
 
 // requestMayEvict reports whether a request may displace evictable containers.

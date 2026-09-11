@@ -1447,6 +1447,61 @@ func TestProcessRequestBatchDoesNotOverScheduleWorkerSnapshot(t *testing.T) {
 	assert.Equal(t, int64(2), updatedWorker.ResourceVersion)
 }
 
+func TestProcessRequestBatchImmediatelyReplansStaleCapacity(t *testing.T) {
+	firstScheduler, err := NewSchedulerForTest()
+	assert.NoError(t, err)
+	secondScheduler := schedulerReplicaForTest(firstScheduler)
+
+	packed := &types.Worker{
+		Id:          "packed",
+		Status:      types.WorkerStatusAvailable,
+		TotalCpu:    1000,
+		TotalMemory: 1250,
+		FreeCpu:     1000,
+		FreeMemory:  1250,
+		PoolName:    "beta9-cpu",
+	}
+	idle := &types.Worker{
+		Id:          "idle",
+		Status:      types.WorkerStatusAvailable,
+		TotalCpu:    2000,
+		TotalMemory: 2500,
+		FreeCpu:     2000,
+		FreeMemory:  2500,
+		PoolName:    "beta9-cpu",
+	}
+	assert.NoError(t, firstScheduler.workerRepo.AddWorker(packed))
+	assert.NoError(t, firstScheduler.workerRepo.AddWorker(idle))
+
+	firstWorkers, err := firstScheduler.workerRepo.GetAllWorkers()
+	assert.NoError(t, err)
+	staleWorkers, err := secondScheduler.workerRepo.GetAllWorkers()
+	assert.NoError(t, err)
+
+	firstRequest := &types.ContainerRequest{ContainerId: "first", Cpu: 1000, Memory: 1000, Timestamp: time.Now()}
+	secondRequest := &types.ContainerRequest{ContainerId: "second", Cpu: 1000, Memory: 1000, Timestamp: time.Now()}
+	setPendingSchedulerRequests(t, firstScheduler, firstRequest, secondRequest)
+
+	firstScheduler.processRequestBatch([]*types.ContainerRequest{firstRequest}, firstWorkers)
+	secondScheduler.processRequestBatch([]*types.ContainerRequest{secondRequest}, staleWorkers)
+
+	requeued, err := firstScheduler.requestBacklog.Pop()
+	if err != nil {
+		t.Fatalf("stale capacity should be immediately ready to replan: %v", err)
+	}
+
+	currentWorkers, err := firstScheduler.workerRepo.GetAllWorkers()
+	assert.NoError(t, err)
+	firstScheduler.processRequestBatch([]*types.ContainerRequest{requeued}, currentWorkers)
+
+	queued, err := firstScheduler.workerRepo.GetNextContainerRequest(packed.Id)
+	assert.NoError(t, err)
+	assert.Equal(t, firstRequest.ContainerId, queued.ContainerId)
+	queued, err = firstScheduler.workerRepo.GetNextContainerRequest(idle.Id)
+	assert.NoError(t, err)
+	assert.Equal(t, secondRequest.ContainerId, queued.ContainerId)
+}
+
 func TestProcessRequestBatchPacksOntoSingleWorker(t *testing.T) {
 	wb, err := NewSchedulerForTest()
 	assert.Nil(t, err)

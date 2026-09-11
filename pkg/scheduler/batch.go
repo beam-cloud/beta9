@@ -209,14 +209,28 @@ func (b *schedulingBatch) dispatchSchedules(schedules []plannedSchedule) {
 func (b *schedulingBatch) completeSchedule(schedule plannedSchedule, err error) {
 	attempt := newSchedulingAttempt(b.scheduler, schedule.request, b.workers)
 	if err != nil {
+		// A stale selection should be planned against a fresh worker snapshot
+		// immediately. It is expected when scheduler replicas race for the same
+		// best-fit worker and is not a fault of this request.
+		if errors.Is(err, repo.ErrWorkerCapacityChanged) {
+			attempt.recordBacklogWait(false, "worker_capacity_changed")
+			metrics.RecordSchedulerWorkerWait(time.Since(schedule.request.Timestamp), schedule.request, "worker_capacity_changed")
+			workerLog(requestLog(log.Debug(), schedule.request), schedule.worker).
+				Msg("worker capacity changed after selection; replanning request")
+			if attempt.runnable() {
+				attempt.requeueForWorkerWaitNow("worker_capacity_changed")
+			}
+			return
+		}
+
+		attempt.recordBacklogWait(false, "schedule_failed")
+		metrics.RecordSchedulerWorkerWait(time.Since(schedule.request.Timestamp), schedule.request, "schedule_failed")
 		workerLog(requestLog(log.Error(), schedule.request), schedule.worker).
 			Err(err).
 			Msg("unable to schedule planned request on worker")
 
-		attempt.recordBacklogWait(false, "schedule_failed")
-		metrics.RecordSchedulerWorkerWait(time.Since(schedule.request.Timestamp), schedule.request, "schedule_failed")
-		// Reclaimable capacity that moved under us is a capacity wait, not a
-		// fault of this request.
+		// Reclaimable capacity that moved independently of the worker version is
+		// a capacity wait, not a fault of this request.
 		if errors.Is(err, repo.ErrEvictionVictimsChanged) || errors.Is(err, repo.ErrInsufficientEvictableCapacity) {
 			if attempt.runnable() {
 				attempt.requeueForWorkerWaitDelay(provisioningWorkerRequeueDelay, "reclaimable_capacity_changed")
