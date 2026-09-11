@@ -142,6 +142,7 @@ def validate(repo: Path):
 @click.argument("repo", type=click.Path(exists=True, file_okay=False, path_type=Path), default=".")
 def deploy(repo: Path):
     context = get_config_context(selected_context())
+    repo = repo.resolve()
     apps = _apps(repo)
     check = _apply(context, repo, apps, dry_run=True)
     if not check.get("ok"):
@@ -151,12 +152,17 @@ def deploy(repo: Path):
         if endpoint is None:
             continue
         terminal.header(f"Deploying {endpoint.id}")
+        # Files the image adds are relative to app.py, as with `beta9 deploy`.
+        cwd = os.getcwd()
+        os.chdir(repo / "endpoints" / app["path"])
         try:
             out, ok = endpoint.deploy(context=context)
         except BaseException as exc:  # noqa: BLE001
             traceback.print_exc()
             out, ok = {}, False
             endpoint.deploy_error = f"deploy failed: {exc!r}"
+        finally:
+            os.chdir(cwd)
         if ok:
             app.update(stub_id=out.get("stub_id") or "", version=int(out.get("version") or 0))
         else:
