@@ -389,59 +389,43 @@ func (c *ImageClient) scheduleImageLayerPrepare(ctx context.Context, request *ty
 
 // remoteLayers returns the layers this node holds neither as a file in the
 // layer cache nor completely in a local page store.
-func (c *ImageClient) remoteLayers(info *clipCommon.OCIStorageInfo, cachePath string) []string {
-	return layersToPrepare(info, func(hash string) bool {
-		if _, err := os.Stat(filepath.Join(cachePath, hash)); err == nil {
-			return true
+func (c *ImageClient) remoteLayers(info *clipCommon.OCIStorageInfo, cachePath string) (remaining []string) {
+	for _, layer := range info.Layers {
+		hash := info.DecompressedHashByLayer[layer]
+		_, err := os.Stat(filepath.Join(cachePath, hash))
+		if hash == "" || err != nil && !(c.cacheClient != nil && c.cacheClient.LocalContentComplete(hash)) {
+			remaining = append(remaining, layer)
 		}
-		return c.cacheClient != nil && c.cacheClient.LocalContentComplete(hash)
-	})
+	}
+	return remaining
 }
 
-// verifyImageSource refuses a lazy mount whose registry refuses the image. A
-// dead credential then fails the container start with the registry's answer
-// instead of surfacing as EIO on a read the runtime cannot survive. Layers the
-// node already holds need no registry; other registry failures stay lazy.
+// verifyImageSource fails a lazy mount whose registry refuses the image, so a dead
+// credential surfaces at container start instead of as an EIO the runtime cannot
+// survive. Layers the node already holds need no registry; other failures stay lazy.
 func (c *ImageClient) verifyImageSource(ctx context.Context, options clip.MountOptions) error {
 	info, ok := ociStorageInfo(options.Metadata)
 	if !ok || len(c.remoteLayers(info, options.CachePath)) == 0 {
 		return nil
 	}
-	ref, err := name.ParseReference(ociImageReference(info))
+	ref, err := name.ParseReference(strings.Replace(info.RegistryURL+"/"+info.Repository+":"+info.Reference, ":sha256:", "@sha256:", 1))
 	if err != nil {
 		return err
 	}
-	remoteOpts := []remote.Option{remote.WithContext(ctx)}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	opts := []remote.Option{remote.WithContext(ctx)}
 	if provider, ok := options.RegistryCredProvider.(clipCommon.RegistryCredentialProvider); ok {
 		if auth, err := provider.GetCredentials(ctx, info.RegistryURL, info.Repository); err == nil && auth != nil {
-			remoteOpts = append(remoteOpts, remote.WithAuth(authn.FromConfig(*auth)))
+			opts = append(opts, remote.WithAuth(authn.FromConfig(*auth)))
 		}
 	}
-	_, err = remote.Head(ref, remoteOpts...)
+	_, err = remote.Head(ref, opts...)
 	var terr *transport.Error
 	if errors.As(err, &terr) && (terr.StatusCode == http.StatusUnauthorized || terr.StatusCode == http.StatusForbidden || terr.StatusCode == http.StatusNotFound) {
 		return fmt.Errorf("image source %s: %w", ref, err)
 	}
 	return nil
-}
-
-func ociImageReference(info *clipCommon.OCIStorageInfo) string {
-	if strings.HasPrefix(info.Reference, "sha256:") {
-		return fmt.Sprintf("%s/%s@%s", info.RegistryURL, info.Repository, info.Reference)
-	}
-	return fmt.Sprintf("%s/%s:%s", info.RegistryURL, info.Repository, info.Reference)
-}
-
-// layersToPrepare returns the layers localComplete does not vouch for.
-func layersToPrepare(info *clipCommon.OCIStorageInfo, localComplete func(hash string) bool) []string {
-	remaining := make([]string, 0, len(info.Layers))
-	for _, layer := range info.Layers {
-		if hash := info.DecompressedHashByLayer[layer]; hash != "" && localComplete(hash) {
-			continue
-		}
-		remaining = append(remaining, layer)
-	}
-	return remaining
 }
 
 // prepareImageLayers materializes every OCI layer of the archive into the

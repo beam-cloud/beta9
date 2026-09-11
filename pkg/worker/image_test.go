@@ -417,8 +417,7 @@ func TestTerminateImageProcessGroupKillsDescendants(t *testing.T) {
 }
 
 func TestVerifyImageSourceFailsOnlyWhenRegistryRefusesRemoteLayers(t *testing.T) {
-	status := http.StatusOK
-	requests := 0
+	status, requests := http.StatusOK, 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
 		w.WriteHeader(status)
@@ -426,38 +425,30 @@ func TestVerifyImageSourceFailsOnlyWhenRegistryRefusesRemoteLayers(t *testing.T)
 	defer server.Close()
 
 	cachePath := t.TempDir()
-	options := func(layers map[string]string) clip.MountOptions {
-		info := &clipCommon.OCIStorageInfo{
-			RegistryURL:             server.Listener.Addr().String(),
-			Repository:              "org/app",
-			Reference:               "sha256:" + strings.Repeat("a", 64),
-			DecompressedHashByLayer: layers,
-		}
-		for layer := range layers {
-			info.Layers = append(info.Layers, layer)
-		}
-		return clip.MountOptions{CachePath: cachePath, Metadata: &clipCommon.ClipArchiveMetadata{StorageInfo: info}}
-	}
+	options := clip.MountOptions{CachePath: cachePath, Metadata: &clipCommon.ClipArchiveMetadata{StorageInfo: &clipCommon.OCIStorageInfo{
+		RegistryURL:             server.Listener.Addr().String(),
+		Repository:              "org/app",
+		Reference:               "sha256:" + strings.Repeat("a", 64),
+		Layers:                  []string{"sha256:1"},
+		DecompressedHashByLayer: map[string]string{"sha256:1": "hash-1"},
+	}}}
 	c := &ImageClient{}
-	remote := map[string]string{"sha256:1": "hash-1"}
 
 	for _, status = range []int{http.StatusOK, http.StatusInternalServerError} {
-		require.NoError(t, c.verifyImageSource(context.Background(), options(remote)), status)
+		require.NoError(t, c.verifyImageSource(context.Background(), options), status)
 	}
 	for _, status = range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound} {
-		err := c.verifyImageSource(context.Background(), options(remote))
-		require.ErrorContains(t, err, "image source "+server.Listener.Addr().String()+"/org/app@sha256:", status)
+		require.ErrorContains(t, c.verifyImageSource(context.Background(), options), "image source "+server.Listener.Addr().String()+"/org/app@sha256:", status)
 	}
 
 	// A layer already in the layer cache needs no registry at all.
 	require.NoError(t, os.WriteFile(filepath.Join(cachePath, "hash-1"), nil, 0o644))
 	requests = 0
-	status = http.StatusForbidden
-	require.NoError(t, c.verifyImageSource(context.Background(), options(remote)))
+	require.NoError(t, c.verifyImageSource(context.Background(), options))
 	require.Zero(t, requests)
 }
 
-func TestLayersToPrepareSkipsLocallyCompleteLayers(t *testing.T) {
+func TestRemoteLayersSkipsLayersHeldLocally(t *testing.T) {
 	info := &clipCommon.OCIStorageInfo{
 		Layers: []string{"sha256:a", "sha256:b", "sha256:c"},
 		DecompressedHashByLayer: map[string]string{
@@ -465,10 +456,9 @@ func TestLayersToPrepareSkipsLocallyCompleteLayers(t *testing.T) {
 			"sha256:b": "hash-b",
 		},
 	}
-	local := map[string]bool{"hash-a": true}
+	cachePath := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(cachePath, "hash-a"), nil, 0o644))
 
-	remaining := layersToPrepare(info, func(hash string) bool { return local[hash] })
-
-	// b is not local; c has no decompressed hash so it can never be local.
-	require.Equal(t, []string{"sha256:b", "sha256:c"}, remaining)
+	// b is not on disk; c has no decompressed hash so it can never be local.
+	require.Equal(t, []string{"sha256:b", "sha256:c"}, (&ImageClient{}).remoteLayers(info, cachePath))
 }
