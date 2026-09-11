@@ -49,10 +49,27 @@ func (s *Service) ApplyRepo(ctx context.Context, in *pb.ApplyRepoRequest) (*pb.A
 	})
 }
 
-func (s *Service) applyRepo(ctx context.Context, in *pb.ApplyRepoRequest, out *pb.ApplyRepoResponse) (*types.GitOpsState, error) {
-	fail := func(format string, args ...any) { out.Errors = append(out.Errors, fmt.Sprintf(format, args...)) }
-	warn := func(format string, args ...any) { out.Warnings = append(out.Warnings, fmt.Sprintf(format, args...)) }
+// review is one commit of the repo checked against this cluster.
+type review struct {
+	in      *pb.ApplyRepoRequest
+	out     *pb.ApplyRepoResponse
+	now     time.Time
+	state   *types.GitOpsState
+	specs   map[string]*types.ManagedEndpointSpec // what the repo declares at this commit
+	present map[string]bool                       // endpoint ids with an app directory
+	fleet   *types.Fleet
+	failed  []string
+}
 
+func (r *review) fail(format string, args ...any) {
+	r.out.Errors = append(r.out.Errors, fmt.Sprintf(format, args...))
+}
+
+func (r *review) warn(format string, args ...any) {
+	r.out.Warnings = append(r.out.Warnings, fmt.Sprintf(format, args...))
+}
+
+func (s *Service) applyRepo(ctx context.Context, in *pb.ApplyRepoRequest, out *pb.ApplyRepoResponse) (*types.GitOpsState, error) {
 	previous, err := s.repo.GetGitOpsState(ctx)
 	if err != nil {
 		return nil, err
@@ -60,6 +77,30 @@ func (s *Service) applyRepo(ctx context.Context, in *pb.ApplyRepoRequest, out *p
 	if previous == nil {
 		previous = &types.GitOpsState{}
 	}
+	active, err := s.activeEndpoints(ctx)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	r := &review{
+		in:      in,
+		out:     out,
+		now:     now,
+		state:   &types.GitOpsState{RepoURL: in.RepoUrl, Ref: in.Ref, LastSHA: in.Sha, LastRunAt: now, PerEndpoint: map[string]types.GitOpsEndpointState{}},
+		specs:   map[string]*types.ManagedEndpointSpec{},
+		present: map[string]bool{},
+	}
+	for _, e := range in.Endpoints {
+		s.reviewApp(ctx, r, e, previous, active)
+	}
+	s.reviewFleet(r)
+	if in.DryRun {
+		return nil, nil
+	}
+	return r.state, s.commitRepo(ctx, r, active)
+}
+
+func (s *Service) activeEndpoints(ctx context.Context) (map[string]*types.ManagedEndpoint, error) {
 	endpoints, err := s.repo.ListEndpoints(ctx)
 	if err != nil {
 		return nil, err
@@ -70,118 +111,142 @@ func (s *Service) applyRepo(ctx context.Context, in *pb.ApplyRepoRequest, out *p
 			active[e.Spec.ID] = e
 		}
 	}
+	return active, nil
+}
 
-	now := time.Now()
-	state := &types.GitOpsState{RepoURL: in.RepoUrl, Ref: in.Ref, LastSHA: in.Sha, LastRunAt: now, PerEndpoint: map[string]types.GitOpsEndpointState{}}
-	specs := map[string]*types.ManagedEndpointSpec{} // what the repo declares at this commit
-	present := map[string]bool{}
-	var failed []string
-	for _, e := range in.Endpoints {
-		entry := types.GitOpsEndpointState{Path: e.Path, ID: e.Id, Status: types.GitOpsStatusApplied, StubID: e.StubId, Version: uint(e.Version), UpdatedAt: now}
-		if entry.ID == "" {
-			entry.ID = previous.PerEndpoint[e.Path].ID // a broken import keeps its endpoint until the directory is gone
-		}
-		spec, specErr := parseSpec(e.SpecJson)
-		switch {
-		case e.Error != "":
-			entry.Status, entry.Error = types.GitOpsStatusFailed, e.Error
-		case specErr != nil:
-			entry.Status, entry.Error = types.GitOpsStatusFailed, "spec: "+specErr.Error()
-		case spec.ID != e.Path:
-			entry.Status, entry.Error = types.GitOpsStatusFailed, fmt.Sprintf("id %q must equal its directory %q", spec.ID, e.Path)
-		default:
-			entry.ID = spec.ID
-			specs[spec.ID] = spec
-			if in.DryRun {
-				s.checkSpec(ctx, e, spec, fail, warn)
-			}
-		}
-		if entry.Error != "" {
-			fail("%s: %s", e.Path, entry.Error)
-			failed = append(failed, e.Path+": "+entry.Error)
-		}
-		if entry.ID != "" {
-			present[entry.ID] = true
-			if existing := active[entry.ID]; existing != nil && specs[entry.ID] == nil {
-				specs[entry.ID] = &existing.Spec
-			}
-		}
-		state.PerEndpoint[e.Path] = entry
+// reviewApp records one app directory's outcome and what it declares.
+func (s *Service) reviewApp(ctx context.Context, r *review, e *pb.RepoEndpoint, previous *types.GitOpsState, active map[string]*types.ManagedEndpoint) {
+	entry := types.GitOpsEndpointState{Path: e.Path, ID: e.Id, Status: types.GitOpsStatusApplied, StubID: e.StubId, Version: uint(e.Version), UpdatedAt: r.now}
+	if entry.ID == "" {
+		entry.ID = previous.PerEndpoint[e.Path].ID // a broken import keeps its endpoint until the directory is gone
 	}
-
-	fleet, err := parseFleet(in.ConfigYaml)
+	spec, err := appSpec(e)
 	if err != nil {
-		state.FleetError = "config.yaml: " + err.Error()
-		fail("%s", state.FleetError)
+		entry.Status, entry.Error = types.GitOpsStatusFailed, err.Error()
+		r.fail("%s: %s", e.Path, entry.Error)
+		r.failed = append(r.failed, e.Path+": "+entry.Error)
 	} else {
-		for _, id := range slices.Sorted(maps.Keys(fleet.Endpoints)) {
-			entry := fleet.Endpoints[id]
-			spec := specs[id]
-			if spec == nil {
-				fail("config.yaml: %s is not an app in the repo", id)
-				continue
-			}
-			for _, gpu := range slices.Sorted(maps.Keys(entry.GPUs)) {
-				if _, ok := spec.Gpu[gpu]; !ok {
-					fail("config.yaml: %s does not declare gpu %q in its app", id, gpu)
-				} else if in.DryRun && entry.Enabled && len(s.controller.pools(gpu)) == 0 {
-					warn("config.yaml: %s: no pool on this cluster hosts %s", id, gpu)
-				}
-			}
-			if entry.OpenRouter != nil {
-				if err := entry.OpenRouter.ValidateFor(spec); err != nil {
-					fail("config.yaml: %s: openrouter: %v", id, err)
-				}
-			}
+		entry.ID = spec.ID
+		r.specs[spec.ID] = spec
+		if r.in.DryRun {
+			s.checkSpec(ctx, e, spec, r.fail, r.warn)
 		}
 	}
-	if in.DryRun {
-		return nil, nil
+	if entry.ID != "" {
+		r.present[entry.ID] = true
+		if existing := active[entry.ID]; existing != nil && r.specs[entry.ID] == nil {
+			r.specs[entry.ID] = &existing.Spec // config.yaml is checked against what still runs
+		}
 	}
+	r.state.PerEndpoint[e.Path] = entry
+}
 
-	// Deploys already registered their stubs; stamp the commit on them.
-	for id, endpoint := range active {
-		if entry := state.PerEndpoint[id]; present[id] && entry.Status == types.GitOpsStatusApplied && endpoint.GitSHA != in.Sha {
-			endpoint.GitSHA, endpoint.UpdatedAt = in.Sha, now
-			if err := s.repo.SaveEndpoint(ctx, endpoint); err != nil {
-				return state, err
-			}
-		}
+// appSpec is what one app directory declares, or why it cannot be applied.
+func appSpec(e *pb.RepoEndpoint) (*types.ManagedEndpointSpec, error) {
+	if e.Error != "" {
+		return nil, errors.New(e.Error)
 	}
-	// An endpoint whose directory is gone is retired; the controller drains it.
-	for id, endpoint := range active {
-		if present[id] {
+	spec, err := parseSpec(e.SpecJson)
+	if err != nil {
+		return nil, fmt.Errorf("spec: %w", err)
+	}
+	if spec.ID != e.Path {
+		return nil, fmt.Errorf("id %q must equal its directory %q", spec.ID, e.Path)
+	}
+	return spec, nil
+}
+
+// reviewFleet parses config.yaml and checks every placement against the apps.
+func (s *Service) reviewFleet(r *review) {
+	fleet, err := parseFleet(r.in.ConfigYaml)
+	if err != nil {
+		r.state.FleetError = "config.yaml: " + err.Error()
+		r.fail("%s", r.state.FleetError)
+		return
+	}
+	r.fleet = fleet
+	for _, id := range slices.Sorted(maps.Keys(fleet.Endpoints)) {
+		entry := fleet.Endpoints[id]
+		spec := r.specs[id]
+		if spec == nil {
+			r.fail("config.yaml: %s is not an app in the repo", id)
 			continue
 		}
-		endpoint.Status, endpoint.UpdatedAt = types.EndpointStatusRetired, now
-		if err := s.repo.SaveEndpoint(ctx, endpoint); err != nil {
-			return state, err
+		for _, gpu := range slices.Sorted(maps.Keys(entry.GPUs)) {
+			_, declared := spec.Gpu[gpu]
+			switch {
+			case !declared:
+				r.fail("config.yaml: %s does not declare gpu %q in its app", id, gpu)
+			case r.in.DryRun && entry.Enabled && len(s.controller.pools(gpu)) == 0:
+				r.warn("config.yaml: %s: no pool on this cluster hosts %s", id, gpu)
+			}
 		}
-		delete(active, id)
-		state.PerEndpoint[id] = types.GitOpsEndpointState{Path: id, ID: id, Status: types.GitOpsStatusRetired, UpdatedAt: now}
-		s.emit(types.EventEndpointGitOps, types.EventEndpointSchema{EndpointID: id, Action: "gitops.retired", Message: "removed from repo", Data: map[string]any{"sha": in.Sha}})
+		if entry.OpenRouter != nil {
+			if err := entry.OpenRouter.ValidateFor(spec); err != nil {
+				r.fail("config.yaml: %s: openrouter: %v", id, err)
+			}
+		}
 	}
-	if fleet != nil {
-		known := map[string]*types.ManagedEndpointSpec{}
-		for id, e := range active {
-			known[id] = &e.Spec
+}
+
+// commitRepo records the deploy: the commit is stamped on every deployed
+// endpoint, endpoints whose directory is gone are retired (the controller
+// drains them), and config.yaml becomes the fleet.
+func (s *Service) commitRepo(ctx context.Context, r *review, active map[string]*types.ManagedEndpoint) error {
+	for id, endpoint := range active {
+		switch {
+		case !r.present[id]:
+			if err := s.retireEndpoint(ctx, r, endpoint); err != nil {
+				return err
+			}
+			delete(active, id)
+		case r.state.PerEndpoint[id].Status == types.GitOpsStatusApplied && endpoint.GitSHA != r.in.Sha:
+			endpoint.GitSHA, endpoint.UpdatedAt = r.in.Sha, r.now
+			if err := s.repo.SaveEndpoint(ctx, endpoint); err != nil {
+				return err
+			}
 		}
-		fleet.GitSHA = in.Sha
-		if dropped := fleet.Prune(known); len(dropped) > 0 {
-			state.FleetError = "skipped: " + strings.Join(dropped, "; ")
-		}
-		if err := s.repo.SaveFleet(ctx, fleet); err != nil {
-			return state, err
-		}
-		s.emit(types.EventEndpointGitOps, types.EventEndpointSchema{Action: "gitops.fleet", Message: in.Sha, Data: map[string]any{"fleet": fleet.Endpoints}})
 	}
-	state.LastError = strings.Join(failed, "\n")
-	if err := s.repo.SaveGitOpsState(ctx, state); err != nil {
-		return state, err
+	if r.fleet != nil {
+		if err := s.saveFleet(ctx, r, active); err != nil {
+			return err
+		}
 	}
-	s.emit(types.EventEndpointGitOps, types.EventEndpointSchema{Action: "gitops.applied", Message: in.Sha, Data: map[string]any{"sha": in.Sha, "apps": len(in.Endpoints), "failed": len(failed)}})
-	log.Info().Str("sha", in.Sha).Int("apps", len(in.Endpoints)).Int("failed", len(failed)).Msg("managed endpoints: repo applied")
-	return state, nil
+	r.state.LastError = strings.Join(r.failed, "\n")
+	if err := s.repo.SaveGitOpsState(ctx, r.state); err != nil {
+		return err
+	}
+	s.emit(types.EventEndpointGitOps, types.EventEndpointSchema{Action: "gitops.applied", Message: r.in.Sha, Data: map[string]any{"sha": r.in.Sha, "apps": len(r.in.Endpoints), "failed": len(r.failed)}})
+	log.Info().Str("sha", r.in.Sha).Int("apps", len(r.in.Endpoints)).Int("failed", len(r.failed)).Msg("managed endpoints: repo applied")
+	return nil
+}
+
+func (s *Service) retireEndpoint(ctx context.Context, r *review, endpoint *types.ManagedEndpoint) error {
+	id := endpoint.Spec.ID
+	endpoint.Status, endpoint.UpdatedAt = types.EndpointStatusRetired, r.now
+	if err := s.repo.SaveEndpoint(ctx, endpoint); err != nil {
+		return err
+	}
+	r.state.PerEndpoint[id] = types.GitOpsEndpointState{Path: id, ID: id, Status: types.GitOpsStatusRetired, UpdatedAt: r.now}
+	s.emit(types.EventEndpointGitOps, types.EventEndpointSchema{EndpointID: id, Action: "gitops.retired", Message: "removed from repo", Data: map[string]any{"sha": r.in.Sha}})
+	return nil
+}
+
+// saveFleet applies config.yaml, minus placements of endpoints that no longer run.
+func (s *Service) saveFleet(ctx context.Context, r *review, active map[string]*types.ManagedEndpoint) error {
+	known := map[string]*types.ManagedEndpointSpec{}
+	for id, e := range active {
+		known[id] = &e.Spec
+	}
+	r.fleet.GitSHA = r.in.Sha
+	if dropped := r.fleet.Prune(known); len(dropped) > 0 {
+		r.state.FleetError = "skipped: " + strings.Join(dropped, "; ")
+	}
+	if err := s.repo.SaveFleet(ctx, r.fleet); err != nil {
+		return err
+	}
+	s.emit(types.EventEndpointGitOps, types.EventEndpointSchema{Action: "gitops.fleet", Message: r.in.Sha, Data: map[string]any{"fleet": r.fleet.Endpoints}})
+	return nil
 }
 
 // checkSpec is the pre-merge check of one app: known GPU types with a pool on

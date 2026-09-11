@@ -12,15 +12,22 @@ import json
 import os
 import sys
 import traceback
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-from urllib.error import HTTPError
-from urllib.request import Request, urlopen
+from typing import Iterator, List, Optional
 
 import click
 
 from .. import terminal
 from ..abstractions.managed_endpoint import ManagedEndpoint
+from ..channel import get_channel, handle_error
+from ..clients.managedendpoint import (
+    ApplyRepoRequest,
+    ApplyRepoResponse,
+    EndpointAdminServiceStub,
+    RepoEndpoint,
+)
 from ..config import ConfigContext, get_config_context
 from .extraclick import ClickCommonGroup, ClickManagementGroup, selected_context
 
@@ -37,134 +44,136 @@ def management():
     pass
 
 
+@dataclass
+class App:
+    """One app directory: its endpoint, or why it failed to import; then its deploy outcome."""
+
+    dir: Path
+    path: str  # relative to endpoints/, which is also the endpoint id
+    endpoint: Optional[ManagedEndpoint] = None
+    error: str = ""
+    stub_id: str = ""
+    version: int = 0
+
+    def to_proto(self) -> RepoEndpoint:
+        out = RepoEndpoint(
+            path=self.path, error=self.error, stub_id=self.stub_id, version=self.version
+        )
+        if self.endpoint is not None:
+            out.id = self.endpoint.id
+            out.spec_json = json.dumps(self.endpoint.spec())
+            out.image = self.endpoint.image.base_image or ""
+        return out
+
+
+@contextmanager
+def _inside(directory: Path) -> Iterator[None]:
+    """Run with ``directory`` as cwd and on sys.path, then forget the modules it added."""
+    before_modules, before_path, cwd = set(sys.modules), list(sys.path), os.getcwd()
+    sys.path.insert(0, str(directory))
+    os.chdir(directory)
+    try:
+        yield
+    finally:
+        os.chdir(cwd)
+        sys.path[:] = before_path
+        for name in set(sys.modules) - before_modules:
+            origin = getattr(sys.modules[name], "__file__", None)
+            if origin and Path(origin).resolve().is_relative_to(directory.resolve()):
+                sys.modules.pop(name, None)
+
+
 def _load(app: Path) -> ManagedEndpoint:
     """Import app.py from its own directory and return its one ManagedEndpoint."""
     name = "endpoint_app_" + app.parent.name.replace("-", "_").replace(".", "_")
     spec = importlib.util.spec_from_file_location(name, app)
     module = importlib.util.module_from_spec(spec)
-    before_modules, before_path, cwd = set(sys.modules), list(sys.path), os.getcwd()
-    sys.path.insert(0, str(app.parent))
-    os.chdir(app.parent)
-    try:
+    with _inside(app.parent):
         spec.loader.exec_module(module)
-        found = [v for v in vars(module).values() if isinstance(v, ManagedEndpoint)]
-    finally:
-        os.chdir(cwd)
-        sys.path[:] = before_path
-        for added in set(sys.modules) - before_modules:
-            origin = getattr(sys.modules[added], "__file__", None)
-            if origin and Path(origin).resolve().is_relative_to(app.parent.resolve()):
-                sys.modules.pop(added, None)
+    found = [v for v in vars(module).values() if isinstance(v, ManagedEndpoint)]
     if len(found) != 1:
         raise ValueError(f"expected exactly one ManagedEndpoint, found {len(found)}")
     return found[0]
 
 
-def _apps(repo: Path) -> List[Dict[str, Any]]:
-    """One entry per app directory: its spec and image, or why it failed to import."""
+def _apps(repo: Path) -> List[App]:
     root = repo / "endpoints"
-    out = []
-    for app in sorted(root.glob("**/app.py")):
-        path = app.parent.relative_to(root).as_posix()
-        entry: Dict[str, Any] = {"path": path}
+    apps = []
+    for file in sorted(root.glob("**/app.py")):
+        app = App(dir=file.parent, path=file.parent.relative_to(root).as_posix())
         try:
-            endpoint = _load(app)
-            entry.update(
-                id=endpoint.id,
-                spec_json=json.dumps(endpoint.spec()),
-                image=endpoint.image.base_image or "",
-            )
-            entry["endpoint"] = endpoint
-        except BaseException as exc:  # noqa: BLE001  (an app may sys.exit() at import)
+            app.endpoint = _load(file)
+        except (Exception, SystemExit) as exc:  # an app may sys.exit() at import
             traceback.print_exc()
-            entry["error"] = (
-                f"import failed: {exc.code}"
-                if isinstance(exc, SystemExit)
-                else f"import failed: {exc!r}"
-            )
-        out.append(entry)
-    return out
+            app.error = f"import failed: {exc.code if isinstance(exc, SystemExit) else exc!r}"
+        apps.append(app)
+    return apps
 
 
-def _apply(
-    context: ConfigContext, repo: Path, apps: List[Dict[str, Any]], dry_run: bool
-) -> Dict[str, Any]:
-    body = {
-        "repo_url": os.environ.get("GITHUB_REPOSITORY", ""),
-        "ref": os.environ.get("GITHUB_REF_NAME", ""),
-        "sha": os.environ.get("GITHUB_SHA", ""),
-        "config_yaml": (repo / "config.yaml").read_text()
-        if (repo / "config.yaml").exists()
-        else "",
-        "endpoints": [{k: v for k, v in app.items() if k != "endpoint"} for app in apps],
-        "dry_run": dry_run,
-    }
-    request = Request(
-        context.http_url + "/api/v1/endpoints/gitops/apply",
-        method="POST",
-        data=json.dumps(body).encode(),
-        headers={
-            "Authorization": "Bearer " + (context.token or ""),
-            "Content-Type": "application/json",
-        },
-    )
+def _deploy(app: App, context: ConfigContext) -> None:
+    """Deploy one app from its directory, as `beta9 deploy` would, recording the outcome."""
+    terminal.header(f"Deploying {app.endpoint.id}")
     try:
-        with urlopen(request, timeout=120) as response:
-            return json.load(response)
-    except HTTPError as exc:
-        try:
-            return json.loads(exc.read())
-        except ValueError:
-            terminal.error(f"gateway returned HTTP {exc.code}: {exc.reason}")
-
-
-def _report(result: Dict[str, Any]) -> None:
-    for warning in result.get("warnings") or []:
-        terminal.warn(warning)
-    for error in result.get("errors") or []:
-        terminal.error(error, exit=False)
-    if result.get("ok"):
-        terminal.success("All endpoints valid.")
+        with _inside(app.dir):
+            out, ok = app.endpoint.deploy(context=context)
+    except Exception as exc:
+        traceback.print_exc()
+        out, ok = {}, False
+        app.endpoint.deploy_error = f"deploy failed: {exc!r}"
+    if ok:
+        app.stub_id, app.version = out.get("stub_id") or "", int(out.get("version") or 0)
     else:
-        terminal.error(result.get("err_msg") or "validation failed")
+        app.error = app.endpoint.deploy_error or "deploy failed"
+
+
+def _apply(context: ConfigContext, repo: Path, apps: List[App], dry_run: bool) -> ApplyRepoResponse:
+    config = repo / "config.yaml"
+    request = ApplyRepoRequest(
+        repo_url=os.environ.get("GITHUB_REPOSITORY", ""),
+        ref=os.environ.get("GITHUB_REF_NAME", ""),
+        sha=os.environ.get("GITHUB_SHA", ""),
+        config_yaml=config.read_text() if config.exists() else "",
+        endpoints=[app.to_proto() for app in apps],
+        dry_run=dry_run,
+    )
+    with handle_error(), get_channel(context) as channel:
+        return EndpointAdminServiceStub(channel).apply_repo(request)
+
+
+def _report(result: ApplyRepoResponse) -> None:
+    """Print warnings and errors; exit non-zero unless the gateway accepted the repo."""
+    for warning in result.warnings:
+        terminal.warn(warning)
+    for error in result.errors:
+        terminal.error(error, exit=False)
+    if not result.ok:
+        terminal.error(result.err_msg or "validation failed")
+    terminal.success("All endpoints valid.")
+
+
+repo_argument = click.argument(
+    "repo", type=click.Path(exists=True, file_okay=False, path_type=Path), default="."
+)
 
 
 @management.command(
     name="validate", help="Check every app and config.yaml against the gateway without deploying."
 )
-@click.argument("repo", type=click.Path(exists=True, file_okay=False, path_type=Path), default=".")
+@repo_argument
 def validate(repo: Path):
-    apps = _apps(repo)
-    _report(_apply(get_config_context(selected_context()), repo, apps, dry_run=True))
+    context = get_config_context(selected_context())
+    _report(_apply(context, repo, _apps(repo), dry_run=True))
 
 
 @management.command(name="deploy", help="Deploy every app, then apply config.yaml.")
-@click.argument("repo", type=click.Path(exists=True, file_okay=False, path_type=Path), default=".")
+@repo_argument
 def deploy(repo: Path):
     context = get_config_context(selected_context())
-    repo = repo.resolve()
-    apps = _apps(repo)
+    apps = _apps(repo.resolve())
     check = _apply(context, repo, apps, dry_run=True)
-    if not check.get("ok"):
+    if not check.ok:
         _report(check)
     for app in apps:
-        endpoint: Optional[ManagedEndpoint] = app.pop("endpoint", None)
-        if endpoint is None:
-            continue
-        terminal.header(f"Deploying {endpoint.id}")
-        # Files the image adds are relative to app.py, as with `beta9 deploy`.
-        cwd = os.getcwd()
-        os.chdir(repo / "endpoints" / app["path"])
-        try:
-            out, ok = endpoint.deploy(context=context)
-        except BaseException as exc:  # noqa: BLE001
-            traceback.print_exc()
-            out, ok = {}, False
-            endpoint.deploy_error = f"deploy failed: {exc!r}"
-        finally:
-            os.chdir(cwd)
-        if ok:
-            app.update(stub_id=out.get("stub_id") or "", version=int(out.get("version") or 0))
-        else:
-            app["error"] = endpoint.deploy_error or "deploy failed"
+        if app.endpoint is not None:
+            _deploy(app, context)
     _report(_apply(context, repo, apps, dry_run=False))

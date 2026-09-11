@@ -282,7 +282,6 @@ func (s *Service) mountAdminRoutes(group *echo.Group) {
 	g.GET("", list)
 	g.GET("/", list)
 	g.GET("/gitops", rest(s.GetGitOpsStatus, nil))
-	g.POST("/gitops/apply", rest(s.ApplyRepo, nil))
 	g.GET("/replicas", rest(s.ListReplicas, func(c echo.Context, in *pb.ListReplicasRequest) {
 		in.Status, in.Gpu = c.QueryParam("status"), c.QueryParam("gpu")
 	}))
