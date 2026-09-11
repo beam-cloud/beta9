@@ -62,7 +62,6 @@ type endpointDemand struct {
 	capacity int64                           // serving capacity across every GPU type, including hot copies
 	starting bool                            // wait for capacity to become known before adding another copy
 	gpus     map[string]types.FleetPlacement // configured on-demand GPU alternatives
-	counts   map[string]uint32
 }
 
 // readyCapacity is the finite serving capacity observed at admission. Transient
@@ -153,7 +152,6 @@ func (c *controller) readDemand(ctx context.Context, fleet *types.Fleet, live []
 			out[id], _ = c.s.demand(ctx, id, "read", "", 0)
 			if demand := out[id]; demand != nil {
 				demand.gpus = make(map[string]types.FleetPlacement)
-				demand.counts = make(map[string]uint32)
 				for gpu, placement := range fleet.Placements(id) {
 					if placement.Serverless {
 						demand.gpus[gpu] = placement
@@ -174,7 +172,6 @@ func (c *controller) readDemand(ctx context.Context, fleet *types.Fleet, live []
 		if demand == nil || !replica.Alive() {
 			continue
 		}
-		demand.counts[replica.GPU]++
 		if !replica.Serving() {
 			demand.starting = true
 		} else {

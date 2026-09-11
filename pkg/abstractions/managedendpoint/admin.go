@@ -102,9 +102,13 @@ func (s *Service) ListEndpoints(ctx context.Context, _ *pb.ListEndpointsRequest)
 		if err != nil {
 			return err
 		}
+		gitops, err := s.repo.GetGitOpsState(ctx)
+		if err != nil {
+			return err
+		}
 		replicas, err := s.repo.ListAllReplicas(ctx)
 		for _, endpoint := range endpoints {
-			out.Endpoints = append(out.Endpoints, endpointToProto(endpoint, fleet, replicas))
+			out.Endpoints = append(out.Endpoints, endpointToProto(endpoint, fleet, gitops, replicas))
 		}
 		return err
 	})
@@ -121,8 +125,12 @@ func (s *Service) GetEndpoint(ctx context.Context, in *pb.GetEndpointRequest) (*
 		if err != nil {
 			return err
 		}
+		gitops, err := s.repo.GetGitOpsState(ctx)
+		if err != nil {
+			return err
+		}
 		replicas, err := s.repo.ListReplicas(ctx, endpoint.Spec.ID)
-		out.Endpoint, out.Replicas = endpointToProto(endpoint, fleet, replicas), replicasToProto(replicas)
+		out.Endpoint, out.Replicas = endpointToProto(endpoint, fleet, gitops, replicas), replicasToProto(replicas)
 		return err
 	})
 }
@@ -139,12 +147,23 @@ func (s *Service) ListReplicas(ctx context.Context, in *pb.ListReplicasRequest) 
 		}
 		gpu := normalizeGPUKey(in.Gpu)
 		for _, r := range replicas {
-			if (in.Status == "" || string(r.Status) == in.Status) && (gpu == "" || r.GPU == gpu) {
+			if selected(r, in.Status, gpu, "") {
 				out.Replicas = append(out.Replicas, replicaToProto(r))
 			}
 		}
 		return err
 	})
+}
+
+// selected applies the optional status, GPU and replica filters of a listing.
+func selected(r *types.EndpointReplica, status, gpu, replicaID string) bool {
+	if status != "" && string(r.Status) != status {
+		return false
+	}
+	if gpu != "" && r.GPU != gpu {
+		return false
+	}
+	return replicaID == "" || r.ID == replicaID
 }
 
 func (s *Service) GetMetrics(ctx context.Context, in *pb.GetMetricsRequest) (*pb.GetMetricsResponse, error) {
@@ -157,7 +176,7 @@ func (s *Service) GetMetrics(ctx context.Context, in *pb.GetMetricsRequest) (*pb
 			return err
 		}
 		replicas = slices.DeleteFunc(replicas, func(r *types.EndpointReplica) bool {
-			return r.Status.Terminal() || (gpu != "" && r.GPU != gpu) || (in.ReplicaId != "" && r.ID != in.ReplicaId)
+			return r.Status.Terminal() || !selected(r, "", gpu, in.ReplicaId)
 		})
 		if in.ReplicaId != "" {
 			if len(replicas) != 1 {
@@ -252,7 +271,7 @@ func (s *Service) GetGitOpsStatus(ctx context.Context, _ *pb.GetGitOpsStatusRequ
 			return err
 		}
 		if state == nil {
-			state = &types.GitOpsState{RepoURL: s.config.Repo.URL, Ref: s.config.Repo.Branch}
+			state = &types.GitOpsState{}
 		}
 		fleet, err := s.repo.GetFleet(ctx)
 		if err != nil {
@@ -260,17 +279,6 @@ func (s *Service) GetGitOpsStatus(ctx context.Context, _ *pb.GetGitOpsStatusRequ
 		}
 		out.State, out.FleetJson = gitopsToProto(state), mustJSON(fleet.Endpoints)
 		return nil
-	})
-}
-
-func (s *Service) TriggerGitOpsSync(ctx context.Context, in *pb.TriggerGitOpsSyncRequest) (*pb.TriggerGitOpsSyncResponse, error) {
-	out := &pb.TriggerGitOpsSyncResponse{}
-	return admin(s, ctx, out, func() (err error) {
-		if s.gitops == nil {
-			return errors.New("gitops is not configured (managedEndpoints.repo.url)")
-		}
-		out.Started, err = s.gitops.Trigger(in.Sha)
-		return err
 	})
 }
 
@@ -285,7 +293,6 @@ func (s *Service) mountAdminRoutes(group *echo.Group) {
 	g.GET("", list)
 	g.GET("/", list)
 	g.GET("/gitops", rest(s.GetGitOpsStatus, nil))
-	g.POST("/gitops/sync", rest(s.TriggerGitOpsSync, nil))
 	g.GET("/replicas", rest(s.ListReplicas, func(c echo.Context, in *pb.ListReplicasRequest) {
 		in.Status, in.Gpu = c.QueryParam("status"), c.QueryParam("gpu")
 	}))

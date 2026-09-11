@@ -97,23 +97,30 @@ func managedGpuTypes(config *types.ManagedEndpointStubConfig) []types.GpuType {
 	return gpus
 }
 
+// managedDeployment returns the endpoint record a managed stub already serves
+// as, so redeploying an unchanged app is a no-op instead of a rollout.
+func (gws *GatewayService) managedDeployment(ctx context.Context, stub *types.StubWithRelated, config *types.StubConfigV1) (*types.ManagedEndpoint, error) {
+	if gws.endpointRepo == nil || config == nil || config.ManagedEndpoint == nil || config.ManagedEndpoint.Endpoint == nil {
+		return nil, errors.New("managed endpoint spec missing from stub config")
+	}
+	existing, err := gws.endpointRepo.GetEndpoint(ctx, config.ManagedEndpoint.Endpoint.ID)
+	if err != nil || existing == nil || !existing.Enabled() || existing.StubID != stub.ExternalId {
+		return nil, err
+	}
+	return existing, nil
+}
+
 // registerManagedDeployment records a freshly deployed managed stub as the
 // endpoint's current version. The controller rolls replicas over to it.
 func (gws *GatewayService) registerManagedDeployment(ctx context.Context, stub *types.StubWithRelated, config *types.StubConfigV1, deployment *types.Deployment) error {
-	if gws.endpointRepo == nil || config == nil || config.ManagedEndpoint == nil || config.ManagedEndpoint.Endpoint == nil {
-		return errors.New("managed endpoint spec missing from stub config")
-	}
 	spec := config.ManagedEndpoint.Endpoint
 	existing, err := gws.endpointRepo.GetEndpoint(ctx, spec.ID)
 	if err != nil {
 		return err
 	}
-	record := &types.ManagedEndpoint{
-		Spec: *spec, StubID: stub.ExternalId, Version: deployment.Version,
-		GitSHA: config.ManagedEndpoint.GitSHA, Status: types.EndpointStatusActive,
-	}
+	record := &types.ManagedEndpoint{Spec: *spec, StubID: stub.ExternalId, Version: deployment.Version, Status: types.EndpointStatusActive}
 	if existing != nil {
-		record.CreatedAt = existing.CreatedAt
+		record.CreatedAt, record.GitSHA = existing.CreatedAt, existing.GitSHA
 	}
 	return gws.endpointRepo.SaveEndpoint(ctx, record)
 }

@@ -159,10 +159,11 @@ type ManagedEndpointSpec struct {
 	Entrypoint        []string           `json:"entrypoint,omitempty"`
 }
 
-// ManagedEndpointStubConfig is embedded in StubConfigV1 for managed stubs.
+// ManagedEndpointStubConfig is embedded in StubConfigV1 for managed stubs. It
+// holds only what the app declares, so an unchanged app maps to the same stub
+// and redeploying it is a no-op.
 type ManagedEndpointStubConfig struct {
 	Endpoint *ManagedEndpointSpec `json:"endpoint,omitempty"`
-	GitSHA   string               `json:"git_sha,omitempty"`
 }
 
 var endpointIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)?$`)
@@ -272,12 +273,19 @@ type FleetEndpoint struct {
 // FleetPlacement is one endpoint on one GPU type. Minimums fill first, in
 // priority order, then spare capacity fills up to MaxReplicas (0 is uncapped).
 // Disabling preemption protects only the minimum; extras stay evictable.
+// Serverless placements start replicas only while requests wait for them and
+// scale back to zero when idle.
 type FleetPlacement struct {
 	Priority    uint32 `json:"priority" yaml:"priority"`
 	MinReplicas uint32 `json:"min_replicas,omitempty" yaml:"minReplicas"`
 	MaxReplicas uint32 `json:"max_replicas,omitempty" yaml:"maxReplicas"`
 	Preemption  *bool  `json:"preemption,omitempty" yaml:"preemption"`
 	Serverless  bool   `json:"serverless,omitempty" yaml:"serverless"`
+}
+
+// ProtectsMinimum: a hot minimum that ordinary serverless workloads may not preempt.
+func (p FleetPlacement) ProtectsMinimum() bool {
+	return !p.Serverless && p.Preemption != nil && !*p.Preemption
 }
 
 // YAML otherwise truncates fractional replica counts when decoding into uint32.
@@ -418,7 +426,7 @@ func (f *Fleet) Entries(gpu string) []FleetEntry {
 	var out []FleetEntry
 	for id, e := range f.Endpoints {
 		if p, ok := e.GPUs[gpu]; ok && e.Enabled {
-			out = append(out, FleetEntry{EndpointID: id, Priority: p.Priority, MinReplicas: p.MinReplicas, MaxReplicas: p.MaxReplicas, ProtectMinimum: !p.Serverless && p.Preemption != nil && !*p.Preemption, Serverless: p.Serverless})
+			out = append(out, FleetEntry{EndpointID: id, Priority: p.Priority, MinReplicas: p.MinReplicas, MaxReplicas: p.MaxReplicas, ProtectMinimum: p.ProtectsMinimum(), Serverless: p.Serverless})
 		}
 	}
 	slices.SortFunc(out, func(a, b FleetEntry) int {
@@ -428,13 +436,6 @@ func (f *Fleet) Entries(gpu string) []FleetEntry {
 }
 
 // Placements returns the GPU types an enabled endpoint fills.
-func (f *Fleet) Placements(endpointID string) map[string]FleetPlacement {
-	if e, ok := f.Endpoints[endpointID]; ok && e.Enabled {
-		return e.GPUs
-	}
-	return nil
-}
-
 // Serverless reports whether requests may start on-demand replicas.
 func (f *Fleet) Serverless(endpointID string) bool {
 	for _, placement := range f.Placements(endpointID) {
@@ -443,6 +444,13 @@ func (f *Fleet) Serverless(endpointID string) bool {
 		}
 	}
 	return false
+}
+
+func (f *Fleet) Placements(endpointID string) map[string]FleetPlacement {
+	if e, ok := f.Endpoints[endpointID]; ok && e.Enabled {
+		return e.GPUs
+	}
+	return nil
 }
 
 // MeterBucket is one closed minute of usage not yet delivered to the billing meter.
@@ -612,57 +620,31 @@ const (
 	GitOpsStatusRetired GitOpsStatus = "retired"
 )
 
+// GitOpsEndpointState is the outcome of the last deploy of one app directory.
+// ID is empty when the app failed to import.
 type GitOpsEndpointState struct {
-	Path       string       `json:"path"`
-	ID         string       `json:"id"`
-	AppliedSHA string       `json:"applied_sha,omitempty"`
-	Status     GitOpsStatus `json:"status"`
-	Error      string       `json:"error,omitempty"`
-	StubID     string       `json:"stub_id,omitempty"`
-	Version    uint         `json:"version,omitempty"`
-	UpdatedAt  time.Time    `json:"updated_at"`
+	Path      string       `json:"path"`
+	ID        string       `json:"id,omitempty"`
+	Status    GitOpsStatus `json:"status"`
+	Error     string       `json:"error,omitempty"`
+	StubID    string       `json:"stub_id,omitempty"`
+	Version   uint         `json:"version,omitempty"`
+	UpdatedAt time.Time    `json:"updated_at"`
 }
 
-// GitOpsState is the reconciler's view of the endpoints repo.
+// GitOpsState is what the last CI run of the endpoints repo reported.
 type GitOpsState struct {
 	RepoURL     string                         `json:"repo_url"`
 	Ref         string                         `json:"ref"`
 	LastSHA     string                         `json:"last_sha,omitempty"`
-	TargetSHA   string                         `json:"target_sha,omitempty"`
 	LastRunAt   time.Time                      `json:"last_run_at,omitempty"`
-	LastError   string                         `json:"last_error,omitempty"`
-	FleetError  string                         `json:"fleet_error,omitempty"` // why config.yaml was rejected, or "skipped: ..." entries
-	FleetSHA    string                         `json:"fleet_sha,omitempty"`   // trails LastSHA only while a fleet write is retried
-	Running     bool                           `json:"running"`
-	PerEndpoint map[string]GitOpsEndpointState `json:"per_endpoint"`
-	UpdatedAt   time.Time                      `json:"updated_at"`
-
-	// In-flight deployer run.
-	RunID       string    `json:"run_id,omitempty"`
-	ContainerID string    `json:"container_id,omitempty"`
-	TokenID     string    `json:"token_id,omitempty"`
-	StartedAt   time.Time `json:"started_at,omitempty"`
-}
-
-// GitOpsReport is what the deployer posts back after applying one SHA.
-type GitOpsReport struct {
-	RunID     string               `json:"run_id"`
-	SHA       string               `json:"sha"`
-	Error     string               `json:"error,omitempty"`
-	Results   []GitOpsDeployResult `json:"results"`
-	FleetYAML string               `json:"fleet_yaml,omitempty"` // raw config.yaml; required at the repository root
-}
-
-// GitOpsDeployResult is the outcome for one app directory; ID is empty when
-// the app failed to import.
-type GitOpsDeployResult struct {
-	Path    string `json:"path"`
-	ID      string `json:"id"`
-	OK      bool   `json:"ok"`
-	Skipped bool   `json:"skipped"` // unchanged since the last applied SHA
-	Error   string `json:"error,omitempty"`
-	StubID  string `json:"stub_id,omitempty"`
-	Version uint   `json:"version,omitempty"`
+	LastError   string                         `json:"last_error,omitempty"`  // failed app deploys, one per line
+	FleetError  string                         `json:"fleet_error,omitempty"` // why config.yaml was rejected
+	PerEndpoint map[string]GitOpsEndpointState `json:"per_endpoint"`          // by app path
+	// PendingSHA is a deploy that announced itself and has not applied yet; a
+	// stale one means the CI run died between deploying apps and applying.
+	PendingSHA string    `json:"pending_sha,omitempty"`
+	PendingAt  time.Time `json:"pending_at,omitempty"`
 }
 
 // RouteSample is one completed /v1 request.

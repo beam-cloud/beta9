@@ -104,6 +104,13 @@ class ManagedEndpoint(betterproto.Message):
     config.yaml placement: JSON {gpu: {priority, min_replicas, max_replicas, preemption}}.
     """
 
+    state: str = betterproto.string_field(12)
+    """
+    deploy_failed, retired, disabled, waiting_for_capacity, loading, ready or failed.
+    """
+
+    state_reason: str = betterproto.string_field(13)
+
 
 @dataclass(eq=False, repr=False)
 class Event(betterproto.Message):
@@ -307,7 +314,6 @@ class StopReplicaResponse(betterproto.Message):
 class GitOpsEndpointState(betterproto.Message):
     path: str = betterproto.string_field(1)
     id: str = betterproto.string_field(2)
-    applied_sha: str = betterproto.string_field(3)
     status: str = betterproto.string_field(4)
     error: str = betterproto.string_field(5)
     stub_id: str = betterproto.string_field(6)
@@ -320,12 +326,14 @@ class GitOpsState(betterproto.Message):
     repo_url: str = betterproto.string_field(1)
     ref: str = betterproto.string_field(2)
     last_sha: str = betterproto.string_field(3)
-    target_sha: str = betterproto.string_field(4)
     last_run_at_unix_ms: int = betterproto.int64_field(5)
     last_error: str = betterproto.string_field(6)
     fleet_error: str = betterproto.string_field(7)
-    running: bool = betterproto.bool_field(8)
     endpoints: List["GitOpsEndpointState"] = betterproto.message_field(9)
+    pending_sha: str = betterproto.string_field(10)
+    """A deploy that announced itself and has not applied yet."""
+
+    pending_at_unix_ms: int = betterproto.int64_field(11)
 
 
 @dataclass(eq=False, repr=False)
@@ -345,16 +353,43 @@ class GetGitOpsStatusResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class TriggerGitOpsSyncRequest(betterproto.Message):
-    sha: str = betterproto.string_field(1)
-    """Optional explicit SHA; empty resolves the configured ref."""
+class RepoEndpoint(betterproto.Message):
+    """
+    RepoEndpoint is one app directory of the endpoints repo: its spec and image
+     on a dry run, its deploy outcome on a real one.
+    """
+
+    path: str = betterproto.string_field(1)
+    id: str = betterproto.string_field(2)
+    spec_json: str = betterproto.string_field(3)
+    image: str = betterproto.string_field(4)
+    error: str = betterproto.string_field(5)
+    stub_id: str = betterproto.string_field(6)
+    version: int = betterproto.uint32_field(7)
 
 
 @dataclass(eq=False, repr=False)
-class TriggerGitOpsSyncResponse(betterproto.Message):
+class ApplyRepoRequest(betterproto.Message):
+    """
+    ApplyRepoRequest is what the repo's CI sends after deploying every app:
+     config.yaml plus each app's outcome. A dry run validates without applying.
+    """
+
+    repo_url: str = betterproto.string_field(1)
+    ref: str = betterproto.string_field(2)
+    sha: str = betterproto.string_field(3)
+    config_yaml: str = betterproto.string_field(4)
+    endpoints: List["RepoEndpoint"] = betterproto.message_field(5)
+    dry_run: bool = betterproto.bool_field(6)
+
+
+@dataclass(eq=False, repr=False)
+class ApplyRepoResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
-    started: bool = betterproto.bool_field(3)
+    errors: List[str] = betterproto.string_field(3)
+    warnings: List[str] = betterproto.string_field(4)
+    state: "GitOpsState" = betterproto.message_field(5)
 
 
 class EndpointHarnessServiceStub(SyncServiceStub):
@@ -469,11 +504,9 @@ class EndpointAdminServiceStub(SyncServiceStub):
             GetGitOpsStatusResponse,
         )(get_git_ops_status_request)
 
-    def trigger_git_ops_sync(
-        self, trigger_git_ops_sync_request: "TriggerGitOpsSyncRequest"
-    ) -> "TriggerGitOpsSyncResponse":
+    def apply_repo(self, apply_repo_request: "ApplyRepoRequest") -> "ApplyRepoResponse":
         return self._unary_unary(
-            "/managedendpoint.EndpointAdminService/TriggerGitOpsSync",
-            TriggerGitOpsSyncRequest,
-            TriggerGitOpsSyncResponse,
-        )(trigger_git_ops_sync_request)
+            "/managedendpoint.EndpointAdminService/ApplyRepo",
+            ApplyRepoRequest,
+            ApplyRepoResponse,
+        )(apply_repo_request)

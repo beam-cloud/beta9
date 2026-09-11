@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -435,13 +436,17 @@ func (c *controller) startReplica(ctx context.Context, endpoint *types.ManagedEn
 	return replica, nil
 }
 
+func shellScript(entrypoint []string) bool {
+	return len(entrypoint) >= 3 && slices.Contains([]string{"sh", "/bin/sh", "bash"}, entrypoint[0]) && entrypoint[1] == "-c"
+}
+
 // appendEngineArgs appends engine args to a `sh -c` script or a plain argv entrypoint.
 func appendEngineArgs(entrypoint []string, args []string) []string {
 	if len(args) == 0 {
 		return entrypoint
 	}
 	out := append([]string{}, entrypoint...)
-	if len(out) >= 3 && (out[0] == "sh" || out[0] == "/bin/sh" || out[0] == "bash") && out[1] == "-c" {
+	if shellScript(out) {
 		quoted := make([]string, 0, len(args))
 		for _, a := range args {
 			quoted = append(quoted, shellQuote(a))

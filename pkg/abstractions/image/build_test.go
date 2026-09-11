@@ -1940,7 +1940,8 @@ func TestBuildBillingIdentityComesOnlyFromControllerToken(t *testing.T) {
 			build.authInfo.Token = &types.Token{TokenType: tokenType}
 			request, err := build.generateContainerRequest()
 			assert.NoError(t, err)
-			assert.Equal(t, tokenType == types.TokenTypePlatformDeployer, request.Stub.Type.IsPlatformWorkload())
+			platform := tokenType == types.TokenTypePlatformDeployer || tokenType == types.TokenTypeClusterAdmin
+			assert.Equal(t, platform, request.Stub.Type.IsPlatformWorkload())
 			assert.True(t, request.IsBuildRequest())
 		})
 	}

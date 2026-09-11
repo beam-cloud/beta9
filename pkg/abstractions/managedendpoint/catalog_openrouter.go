@@ -26,15 +26,16 @@ func (r *router) handleListOpenRouterModels(ctx echo.Context) error {
 	data := make([]map[string]any, 0, len(endpoints))
 	for _, endpoint := range endpoints {
 		configured := fleet.Endpoints[endpoint.Spec.ID]
-		if !endpoint.Enabled() || !configured.Enabled || configured.OpenRouter == nil || !r.allowed(rctx, endpoint, cc.AuthInfo) {
+		published := endpoint.Enabled() && configured.Enabled && configured.OpenRouter != nil
+		if !published || !r.allowed(rctx, endpoint, cc.AuthInfo) {
 			continue
 		}
 		if err := configured.OpenRouter.ValidateFor(&endpoint.Spec); err != nil {
-			return (&routeError{http.StatusServiceUnavailable, "invalid_catalog", "provider catalog configuration is invalid"}).write(ctx)
+			return errInvalidCatalog.write(ctx)
 		}
 		document := openRouterModel(endpoint, configured.OpenRouter)
 		if err := types.ValidateOpenRouterDocument(document); err != nil {
-			return (&routeError{http.StatusServiceUnavailable, "invalid_catalog", "provider catalog configuration is invalid"}).write(ctx)
+			return errInvalidCatalog.write(ctx)
 		}
 		data = append(data, document)
 	}

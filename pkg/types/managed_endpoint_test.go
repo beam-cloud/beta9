@@ -15,11 +15,3 @@ func TestExplicitZeroPricingIsFree(t *testing.T) {
 		require.False(t, pricing.IsZero())
 	}
 }
-
-func TestManagedEndpointBranchDefaults(t *testing.T) {
-	for _, tc := range []struct{ input, expected string }{{"", "main"}, {"staging", "staging"}, {" main ", "main"}} {
-		config := ManagedEndpointsConfig{Repo: ManagedEndpointsRepoConfig{Branch: tc.input}}
-		config.ApplyDefaults()
-		require.Equal(t, tc.expected, config.Repo.Branch)
-	}
-}

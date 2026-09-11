@@ -4,13 +4,11 @@ import (
 	"bytes"
 	"cmp"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"math"
 	"mime"
-	"mime/multipart"
 	"net/http"
 	"net/url"
 	"slices"
@@ -67,28 +65,6 @@ func (r *router) mount(group *echo.Group, authMiddleware echo.MiddlewareFunc) {
 	}
 }
 
-// Keep shared authentication/method errors in the same envelope as inference
-// errors without changing the rest of the platform's API middleware.
-func openAIErrors(next echo.HandlerFunc) echo.HandlerFunc {
-	return func(ctx echo.Context) error {
-		err := next(ctx)
-		if err == nil || ctx.Response().Committed {
-			return err
-		}
-		var httpErr *echo.HTTPError
-		if !errors.As(err, &httpErr) {
-			return err
-		}
-		code := "invalid_request"
-		if httpErr.Code == http.StatusUnauthorized || httpErr.Code == http.StatusForbidden {
-			code = "invalid_api_key"
-		} else if httpErr.Code >= 500 {
-			code = "server_error"
-		}
-		return (&routeError{httpErr.Code, code, http.StatusText(httpErr.Code)}).write(ctx)
-	}
-}
-
 func (r *router) state(endpointID string) *llmroute.State {
 	r.stateMu.Lock()
 	defer r.stateMu.Unlock()
@@ -122,134 +98,6 @@ var adapters = map[types.EndpointRoute]adapter{
 	types.EndpointRouteInvoke:           {"/invoke", false, func([]byte) Usage { return Usage{Requests: 1, Found: true} }},
 }
 
-// Usage is the billable usage the engine reported. It is never estimated: a
-// response without usage is not billed.
-type Usage struct {
-	PromptTokens     int64
-	CompletionTokens int64
-	CachedTokens     int64
-	Images           int64
-	Requests         int64
-	Found            bool // the response carried a usage object
-}
-
-// tokenUsage reads the OpenAI usage object from a response body.
-func tokenUsage(body []byte) Usage {
-	var env struct {
-		Usage *struct {
-			PromptTokens     int64 `json:"prompt_tokens"`
-			CompletionTokens int64 `json:"completion_tokens"`
-			Details          *struct {
-				CachedTokens int64 `json:"cached_tokens"`
-			} `json:"prompt_tokens_details"`
-		} `json:"usage"`
-	}
-	if err := json.Unmarshal(body, &env); err != nil || env.Usage == nil {
-		return Usage{}
-	}
-	u := Usage{PromptTokens: env.Usage.PromptTokens, CompletionTokens: env.Usage.CompletionTokens, Requests: 1, Found: true}
-	if env.Usage.Details != nil {
-		u.CachedTokens = env.Usage.Details.CachedTokens
-	}
-	if u.PromptTokens < 0 || u.CompletionTokens < 0 || u.CachedTokens < 0 || u.CachedTokens > u.PromptTokens || u.PromptTokens > types.MaxUsageCounter || u.CompletionTokens > types.MaxUsageCounter {
-		return Usage{}
-	}
-	return u
-}
-
-// imageUsage counts generated images plus any token usage the engine reports.
-func imageUsage(body []byte) Usage {
-	var payload struct {
-		Data []json.RawMessage `json:"data"`
-	}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return Usage{}
-	}
-	u := tokenUsage(body)
-	u.Images, u.Requests = int64(len(payload.Data)), 1
-	u.Found = u.Found || u.Images > 0
-	return u
-}
-
-// forceIncludeUsage asks a streaming request for a final usage chunk and reports whether it is a stream.
-func forceIncludeUsage(payload map[string]any) bool {
-	if stream, _ := payload["stream"].(bool); !stream {
-		return false
-	}
-	opts, _ := payload["stream_options"].(map[string]any)
-	if opts == nil {
-		opts = map[string]any{}
-	}
-	opts["include_usage"] = true
-	payload["stream_options"] = opts
-	return true
-}
-
-func routeFromPath(prefix, path string) (types.EndpointRoute, string, bool) {
-	rest := strings.TrimPrefix(strings.TrimPrefix(strings.TrimSuffix(path, "/"), prefix), "/")
-	if id, ok := strings.CutPrefix(rest, "models/"); ok {
-		id, ok = strings.CutSuffix(id, "/invoke")
-		return types.EndpointRouteInvoke, id, ok && id != ""
-	}
-	route := types.EndpointRoute(rest)
-	_, ok := adapters[route]
-	return route, "", ok && route != types.EndpointRouteInvoke
-}
-
-// costUSD renders micro-dollars as the float OpenRouter puts in usage.cost.
-func costUSD(microUSD int64) float64 { return float64(microUSD) / 1_000_000 }
-
-func (r *router) cost(endpoint *types.ManagedEndpoint, usage Usage) int64 {
-	if !billable(endpoint) || !usage.Found {
-		return 0
-	}
-	priced, err := priceUsage(endpoint.Spec.Pricing, usage)
-	if err != nil {
-		log.Warn().Err(err).Str("endpoint_id", endpoint.Spec.ID).Msg("managed endpoints: pricing error")
-	}
-	return priced.MicroUSD
-}
-
-func billable(endpoint *types.ManagedEndpoint) bool {
-	return !endpoint.Spec.Pricing.IsZero()
-}
-
-type routeError struct {
-	Status  int
-	Code    string
-	Message string
-}
-
-func (e *routeError) Error() string { return e.Message }
-
-func (e *routeError) write(ctx echo.Context) error {
-	ctx.Response().Header().Set("Content-Type", "application/json")
-	ctx.Response().Header().Del("Content-Encoding")
-	kind := "invalid_request_error"
-	switch {
-	case e.Status == http.StatusUnauthorized || e.Status == http.StatusForbidden:
-		kind = "authentication_error"
-	case e.Status == http.StatusPaymentRequired:
-		kind = "insufficient_quota"
-	case e.Status == http.StatusTooManyRequests:
-		kind = "rate_limit_error"
-		if ctx.Response().Header().Get("Retry-After") == "" {
-			ctx.Response().Header().Set("Retry-After", "1")
-		}
-	case e.Status == http.StatusNotFound:
-		kind = "not_found_error"
-	case e.Status >= 500:
-		kind = "server_error"
-	}
-	return ctx.JSON(e.Status, map[string]any{"error": map[string]any{"message": e.Message, "type": kind, "code": e.Code, "param": nil}})
-}
-
-var errRegistry = &routeError{http.StatusServiceUnavailable, "registry_unavailable", "endpoint registry unavailable"}
-
-func capacityError(message string) *routeError {
-	return &routeError{http.StatusTooManyRequests, "rate_limit_exceeded", message}
-}
-
 // routeRequest is the state of one inference request through the pipeline.
 type routeRequest struct {
 	ctx           echo.Context
@@ -260,6 +108,7 @@ type routeRequest struct {
 	models        []string // requested, in preference order
 	model         string   // the endpoint selected (what the engine sees and what is billed)
 	body          []byte
+	payload       map[string]any // decoded JSON body; nil for multipart or empty bodies
 	stream        bool
 	info          *llmroute.RequestInfo
 	pinReplica    string
@@ -272,15 +121,15 @@ type routeRequest struct {
 
 func (r *router) handleRoute(ctx echo.Context) error {
 	cc, ok := ctx.(*auth.HttpAuthContext)
-	if !ok || cc.AuthInfo == nil || cc.AuthInfo.Workspace == nil || cc.AuthInfo.Token == nil {
-		return (&routeError{http.StatusUnauthorized, "unauthorized", "a workspace token is required"}).write(ctx)
+	if !ok || !workspaceCaller(cc.AuthInfo) {
+		return errUnauthorized.write(ctx)
 	}
 	if !r.s.Enabled() {
-		return (&routeError{http.StatusNotFound, "not_found", "managed endpoints are not enabled"}).write(ctx)
+		return errEndpointsDisabled.write(ctx)
 	}
 	route, pathModel, ok := routeFromPath(r.prefix, ctx.Request().URL.Path)
 	if !ok {
-		return (&routeError{http.StatusNotFound, "not_found", "unknown route"}).write(ctx)
+		return errUnknownRoute.write(ctx)
 	}
 	if pathModel == "" && ctx.Param("slug") != "" {
 		pathModel = strings.TrimPrefix(ctx.Param("author")+"/"+ctx.Param("slug"), "/")
@@ -291,7 +140,7 @@ func (r *router) handleRoute(ctx echo.Context) error {
 		startedAt: time.Now(),
 	}
 	ctx.Response().Header().Set(headerRequestID, rq.requestID)
-	if cc.AuthInfo.Token.TokenType == types.TokenTypeClusterAdmin {
+	if clusterAdmin(cc.AuthInfo) {
 		rq.pinReplica = strings.TrimSpace(ctx.Request().Header.Get(headerReplicaPin))
 	}
 	if rerr := r.readRequest(rq, pathModel); rerr != nil {
@@ -302,10 +151,7 @@ func (r *router) handleRoute(ctx echo.Context) error {
 		return rerr.write(ctx)
 	}
 	rq.model = endpoint.Spec.ID
-	if rq.route != types.EndpointRouteInvoke {
-		// /invoke payloads are the app's own schema and are left untouched.
-		rq.setModel(endpoint.Spec.ID, endpoint.Spec.Engine == "vllm")
-	}
+	rq.prepareBody(endpoint)
 	if rerr := r.admit(ctx.Request().Context(), rq, endpoint); rerr != nil {
 		return rerr.write(ctx)
 	}
@@ -328,124 +174,6 @@ func (r *router) handleRoute(ctx echo.Context) error {
 	return r.serve(rq, endpoint)
 }
 
-func (r *router) readRequest(rq *routeRequest, pathModel string) *routeError {
-	req := rq.ctx.Request()
-	body, err := io.ReadAll(io.LimitReader(req.Body, maxBody+1))
-	if err != nil {
-		return &routeError{http.StatusBadRequest, "invalid_body", "failed to read request body"}
-	}
-	if len(body) > maxBody {
-		return &routeError{http.StatusRequestEntityTooLarge, "body_too_large", "request body exceeds 64MB"}
-	}
-	rq.body = body
-	if pathModel != "" {
-		rq.models = []string{pathModel}
-	}
-
-	contentType, params, _ := mime.ParseMediaType(req.Header.Get("Content-Type"))
-	if strings.HasPrefix(contentType, "multipart/") {
-		if model := multipartModel(params["boundary"], body); model != "" {
-			rq.models = append(rq.models, model)
-		}
-	} else {
-		var payload map[string]any
-		if len(bytes.TrimSpace(body)) > 0 {
-			payload, err = decodeRequestJSON(body)
-			if err != nil {
-				return &routeError{http.StatusBadRequest, "invalid_json", "request body must be a JSON object"}
-			}
-		}
-		if model, _ := payload["model"].(string); model != "" {
-			rq.models = append(rq.models, model)
-		}
-		if list, ok := payload["models"].([]any); ok {
-			for _, m := range list {
-				if s, ok := m.(string); ok && s != "" {
-					rq.models = append(rq.models, s)
-				}
-			}
-		}
-		if payload != nil && rq.adapter.LLM {
-			changed, err := normalizeReasoning(payload)
-			if err != nil {
-				return &routeError{http.StatusBadRequest, "invalid_reasoning", err.Error()}
-			}
-			rq.stream = forceIncludeUsage(payload)
-			if changed || rq.stream {
-				if body, err := json.Marshal(payload); err == nil {
-					rq.body = body
-				}
-			}
-		}
-	}
-	if len(rq.models) == 0 {
-		return &routeError{http.StatusBadRequest, "missing_model", "the model field is required"}
-	}
-	return nil
-}
-
-// Preserve tool schemas and provider parameters exactly when adding routing
-// fields. float64 would silently round JSON integers larger than 2^53.
-func decodeRequestJSON(body []byte) (map[string]any, error) {
-	decoder := json.NewDecoder(bytes.NewReader(body))
-	decoder.UseNumber()
-	var payload map[string]any
-	if err := decoder.Decode(&payload); err != nil {
-		return nil, err
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		return nil, errors.New("request body must contain one JSON object")
-	}
-	return payload, nil
-}
-
-// setModel makes the selected endpoint the model the engine sees.
-func (rq *routeRequest) setModel(model string, continuousUsage bool) {
-	payload, err := decodeRequestJSON(rq.body)
-	if err != nil || payload == nil {
-		return
-	}
-	continuousUsage = continuousUsage && rq.stream
-	if current, _ := payload["model"].(string); current == model && payload["models"] == nil && !continuousUsage {
-		return
-	}
-	payload["model"] = model
-	delete(payload, "models")
-	if continuousUsage {
-		// vLLM reports cumulative counters on every chunk. A preemption can
-		// then retain observed token usage even when the final chunk is lost.
-		// Failed streams remain unbilled under the existing error policy.
-		options, _ := payload["stream_options"].(map[string]any)
-		if options == nil {
-			options = map[string]any{}
-		}
-		options["include_usage"] = true
-		options["continuous_usage_stats"] = true
-		payload["stream_options"] = options
-	}
-	if body, err := json.Marshal(payload); err == nil {
-		rq.body = body
-	}
-}
-
-func multipartModel(boundary string, body []byte) string {
-	if boundary == "" {
-		return ""
-	}
-	reader := multipart.NewReader(bytes.NewReader(body), boundary)
-	for {
-		part, err := reader.NextPart()
-		if err != nil {
-			return ""
-		}
-		if part.FormName() == "model" {
-			value, _ := io.ReadAll(io.LimitReader(part, 1024))
-			return strings.TrimSpace(string(value))
-		}
-	}
-}
-
 // resolveEndpoint picks the first requested model the caller may use that
 // serves the route, preferring one with ready replicas.
 func (r *router) resolveEndpoint(ctx context.Context, rq *routeRequest) (*types.ManagedEndpoint, *routeError) {
@@ -461,10 +189,10 @@ func (r *router) resolveEndpoint(ctx context.Context, rq *routeRequest) (*types.
 		case endpoint == nil || !endpoint.Enabled():
 			continue
 		case !endpoint.Spec.ServesRoute(rq.route):
-			denied = &routeError{http.StatusNotFound, "route_not_supported", fmt.Sprintf("model %s does not serve %s", model, rq.route)}
+			denied = notFound("route_not_supported", fmt.Sprintf("model %s does not serve %s", model, rq.route))
 			continue
 		case !r.allowed(ctx, endpoint, rq.auth):
-			denied = &routeError{http.StatusForbidden, "model_not_allowed", fmt.Sprintf("model %s is not available to this workspace", model)}
+			denied = forbidden("model_not_allowed", fmt.Sprintf("model %s is not available to this workspace", model))
 			continue
 		}
 		if first == nil {
@@ -490,7 +218,7 @@ func (r *router) resolveEndpoint(ctx context.Context, rq *routeRequest) (*types.
 	case denied != nil:
 		return nil, denied
 	}
-	return nil, &routeError{http.StatusNotFound, "model_not_found", fmt.Sprintf("model %s not found", rq.models[0])}
+	return nil, modelNotFound(rq.models[0])
 }
 
 func (r *router) allowed(ctx context.Context, endpoint *types.ManagedEndpoint, authInfo *auth.AuthInfo) bool {
@@ -523,9 +251,9 @@ func (r *router) admit(ctx context.Context, rq *routeRequest, endpoint *types.Ma
 			if err := gate.Check(ctx, rq.auth.Workspace.ExternalId); err != nil {
 				var insufficient *types.InsufficientCreditsError
 				if errors.As(err, &insufficient) {
-					return &routeError{http.StatusPaymentRequired, "insufficient_credits", "insufficient credits: add credits to continue using inference endpoints"}
+					return errInsufficientCredits
 				}
-				return &routeError{http.StatusServiceUnavailable, "billing_unavailable", "billing check unavailable"}
+				return errBillingUnavailable
 			}
 		}
 	}
@@ -579,51 +307,45 @@ func (r *router) servingReplicas(ctx context.Context, endpoint *types.ManagedEnd
 // pick reserves available capacity immediately. Providers must reject overload
 // before opening a stream; a rejected on-demand request still triggers startup.
 func (r *router) pick(ctx context.Context, rq *routeRequest, endpoint *types.ManagedEndpoint, exclude map[string]bool) (*types.EndpointReplica, *routeError) {
-	var drainDone <-chan struct{}
-	if r.s.drainCtx != nil {
-		drainDone = r.s.drainCtx.Done()
-	}
-	stopped := func() *routeError {
-		select {
-		case <-ctx.Done():
-			return &routeError{499, "client_closed", "client closed request"}
-		case <-drainDone:
-			return &routeError{http.StatusServiceUnavailable, "gateway_draining", "gateway is restarting, retry shortly"}
-		default:
-			return nil
-		}
-	}
-	if rerr := stopped(); rerr != nil {
-		return nil, rerr
-	}
 	candidates, err := r.servingReplicas(ctx, endpoint, rq.pinReplica, exclude)
-	if rerr := stopped(); rerr != nil {
-		return nil, rerr
-	}
-	if err != nil {
-		return nil, errRegistry
-	}
-	if len(candidates) == 0 && len(exclude) > 0 {
-		return nil, &routeError{http.StatusBadGateway, "upstream_unavailable", "upstream replicas failed"}
-	}
-	replica, chooseErr := r.choose(ctx, rq, endpoint, candidates)
-	if chooseErr != nil {
-		if rerr := stopped(); rerr != nil {
-			return nil, rerr
-		}
-		return nil, errRegistry
+	var replica *types.EndpointReplica
+	if err == nil && (len(candidates) > 0 || len(exclude) == 0) {
+		replica, err = r.choose(ctx, rq, endpoint, candidates)
 	}
 	if replica != nil {
 		rq.queueWait = time.Since(rq.startedAt)
 		return replica, nil
 	}
-	if rerr := stopped(); rerr != nil {
+	// A cancelled request or a draining gateway explains most failures here
+	// and must not be reported as capacity.
+	if rerr := r.stopped(ctx); rerr != nil {
 		return nil, rerr
+	}
+	switch {
+	case err != nil:
+		return nil, errRegistry
+	case len(candidates) == 0 && len(exclude) > 0:
+		return nil, errUpstreamUnavailable
 	}
 	if rerr := r.wake(ctx, rq); rerr != nil {
 		return nil, rerr
 	}
 	return nil, capacityError(fmt.Sprintf("model %s is temporarily at capacity; retry shortly", endpoint.Spec.ID))
+}
+
+func (r *router) stopped(ctx context.Context) *routeError {
+	var drainDone <-chan struct{}
+	if r.s.drainCtx != nil {
+		drainDone = r.s.drainCtx.Done()
+	}
+	select {
+	case <-ctx.Done():
+		return errClientClosed
+	case <-drainDone:
+		return errGatewayDraining
+	default:
+		return nil
+	}
 }
 
 // choose picks a replica (llmroute for LLMs, least loaded otherwise) with one
@@ -800,7 +522,7 @@ func (r *router) serve(rq *routeRequest, endpoint *types.ManagedEndpoint) error 
 		exclude[replica.ID], rq.retried = true, true
 		logger.Msg("managed endpoints: upstream failed before response; retrying")
 	}
-	rerr := &routeError{http.StatusBadGateway, "upstream_unavailable", "upstream replicas failed"}
+	rerr := errUpstreamUnavailable
 	r.record(rq, endpoint, nil, rerr.Status, Usage{}, 0, rerr.Message)
 	return rerr.write(rq.ctx)
 }
@@ -872,74 +594,103 @@ func (r *router) proxy(ctx context.Context, rq *routeRequest, endpoint *types.Ma
 
 	contentType, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 	if contentType == "text/event-stream" {
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("X-Accel-Buffering", "no")
-		w.WriteHeader(resp.StatusCode)
-		recorded := false
-		usage, ttft, err := relayStream(w, resp.Body, rq.requestID, sentAt, func(usage Usage, ttft time.Duration) error {
-			recorded = true
-			if resp.StatusCode < 300 && billable(endpoint) && !usage.Found {
-				r.recordMissingUsage(rq, endpoint, replica, usage, ttft)
-				return errors.New("upstream response carried no usage")
-			}
-			return r.record(rq, endpoint, replica, resp.StatusCode, usage, ttft, "")
-		})
-		status := resp.StatusCode
-		if err != nil && status < 300 {
-			failure := streamFailureFor(err)
-			status = failure.status // the stream broke: not a success, not billed
-			if errors.Is(context.Cause(ctx), errSlotLeaseLost) {
-				status = http.StatusServiceUnavailable
-			}
-			if ctx.Err() == nil {
-				// HTTP headers are already committed. An SSE error lets SDKs
-				// distinguish preemption from a completed generation.
-				writeStreamError(w, rq.requestID, endpoint.Spec.ID, failure)
-			}
-		}
-		if err == nil && status < 300 && billable(endpoint) && !usage.Found {
-			// The stream is already with the client; record a 502 so it is not billed.
-			r.recordMissingUsage(rq, endpoint, replica, usage, ttft)
-			return false, nil
-		}
-		if !recorded {
-			r.record(rq, endpoint, replica, status, usage, ttft, errString(err))
-		}
-		return false, err
+		return false, r.proxyStream(ctx, rq, endpoint, replica, resp, sentAt)
 	}
+	return false, r.proxyJSON(ctx, rq, endpoint, replica, resp, contentType)
+}
 
+// proxyStream relays SSE as it arrives. Headers are committed, so a failure
+// becomes an SSE error event; the request is metered exactly once, by the
+// meter when the stream completes and here otherwise.
+func (r *router) proxyStream(ctx context.Context, rq *routeRequest, endpoint *types.ManagedEndpoint, replica *types.EndpointReplica, resp *http.Response, sentAt time.Time) error {
+	w := rq.ctx.Response()
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(resp.StatusCode)
+
+	m := &streamMeter{r: r, rq: rq, endpoint: endpoint, replica: replica, status: resp.StatusCode}
+	usage, ttft, err := relayStream(w, resp.Body, rq.requestID, sentAt, m.complete)
+	status := resp.StatusCode
+	if err != nil && status < 300 {
+		status = r.streamBroke(ctx, rq, endpoint, err)
+	}
+	switch {
+	case err == nil && unbilled(endpoint, status, usage):
+		r.recordMissingUsage(rq, endpoint, replica, usage, ttft)
+	case !m.recorded:
+		r.record(rq, endpoint, replica, status, usage, ttft, errString(err))
+	}
+	return err
+}
+
+// streamMeter bills a stream once its final usage arrives, before the
+// terminal marker is relayed, so an unbilled response fails visibly.
+type streamMeter struct {
+	r        *router
+	rq       *routeRequest
+	endpoint *types.ManagedEndpoint
+	replica  *types.EndpointReplica
+	status   int
+	recorded bool
+}
+
+func (m *streamMeter) complete(usage Usage, ttft time.Duration) error {
+	m.recorded = true
+	if unbilled(m.endpoint, m.status, usage) {
+		m.r.recordMissingUsage(m.rq, m.endpoint, m.replica, usage, ttft)
+		return errors.New("upstream response carried no usage")
+	}
+	return m.r.record(m.rq, m.endpoint, m.replica, m.status, usage, ttft, "")
+}
+
+// streamBroke tells a still-connected client why its stream ended and returns
+// the status to meter: a broken stream is not a success and is not billed.
+func (r *router) streamBroke(ctx context.Context, rq *routeRequest, endpoint *types.ManagedEndpoint, err error) int {
+	failure := streamFailureFor(err)
+	if ctx.Err() == nil {
+		writeStreamError(rq.ctx.Response(), rq.requestID, endpoint.Spec.ID, failure)
+	}
+	if errors.Is(context.Cause(ctx), errSlotLeaseLost) {
+		return http.StatusServiceUnavailable
+	}
+	return failure.status
+}
+
+// proxyJSON buffers the response, meters it and writes it decorated with usage and cost.
+func (r *router) proxyJSON(ctx context.Context, rq *routeRequest, endpoint *types.ManagedEndpoint, replica *types.EndpointReplica, resp *http.Response, contentType string) error {
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
 	switch {
 	case err != nil:
-		rerr := &routeError{http.StatusBadGateway, "upstream_failed", "upstream response ended early"}
+		rerr := errUpstreamEnded
 		if errors.Is(context.Cause(ctx), errSlotLeaseLost) {
 			rerr = errRegistry
 		}
 		r.record(rq, endpoint, replica, rerr.Status, Usage{}, 0, err.Error())
-		return false, rerr.write(rq.ctx)
+		return rerr.write(rq.ctx)
 	case len(body) > maxBody:
-		rerr := &routeError{http.StatusBadGateway, "upstream_too_large", "upstream response exceeds 64MB"}
+		rerr := errUpstreamTooLarge
 		r.record(rq, endpoint, replica, rerr.Status, Usage{}, 0, rerr.Message)
-		return false, rerr.write(rq.ctx)
+		return rerr.write(rq.ctx)
 	}
 	usage := Usage{}
 	if resp.StatusCode < 300 {
 		usage = rq.adapter.Usage(body)
-		if billable(endpoint) && !usage.Found {
+		if unbilled(endpoint, resp.StatusCode, usage) {
 			r.recordMissingUsage(rq, endpoint, replica, usage, 0)
-			return false, errMissingUsage.write(rq.ctx)
+			return errMissingUsage.write(rq.ctx)
 		}
 		if strings.Contains(contentType, "json") {
 			body = decorateJSON(body, rq.requestID, usage, r.cost(endpoint, usage))
 		}
 	}
 	if err := r.record(rq, endpoint, replica, resp.StatusCode, usage, 0, ""); err != nil {
-		return false, errAccountingUnavailable.write(rq.ctx)
+		return errAccountingUnavailable.write(rq.ctx)
 	}
+	w := rq.ctx.Response()
 	w.Header().Set("Content-Length", fmt.Sprint(len(body)))
 	w.WriteHeader(resp.StatusCode)
 	_, _ = w.Write(body)
-	return false, nil
+	return nil
 }
 
 // upstreamQuery drops the gateway's own query parameters (auth_token).
@@ -954,10 +705,6 @@ func errString(err error) string {
 	}
 	return err.Error()
 }
-
-var errAccountingUnavailable = &routeError{http.StatusServiceUnavailable, "accounting_unavailable", "Unable to record request usage"}
-
-var errMissingUsage = &routeError{http.StatusBadGateway, "missing_usage", "upstream response carried no usage; request not billed"}
 
 // recordMissingUsage files a billable response without usage as a 502: not
 // billed, counted as an error, and raised as a route.missing_usage event.
@@ -1070,19 +817,6 @@ func (r *router) account(ctx context.Context, event types.EventEndpointRouteSche
 }
 
 // pricingEntry renders per-unit prices as OpenRouter does ("0" when unset).
-func pricingEntry(p types.Pricing) map[string]any {
-	entry := map[string]any{
-		"prompt":     cmp.Or(p.PromptTokens, "0"),
-		"completion": cmp.Or(p.CompletionTokens, "0"),
-		"request":    cmp.Or(p.Request, "0"),
-		"image":      cmp.Or(p.Image, "0"),
-	}
-	if p.CachedPromptTokens != "" {
-		entry["input_cache_read"] = p.CachedPromptTokens
-	}
-	return entry
-}
-
 func (r *router) handleListModels(ctx echo.Context) error {
 	cc := ctx.(*auth.HttpAuthContext)
 	rctx := ctx.Request().Context()
@@ -1125,15 +859,20 @@ func (r *router) handleListModels(ctx echo.Context) error {
 }
 
 // handleGeneration returns the metered record of one request by id.
+// mayRead: a generation is visible to its workspace and to cluster admins.
+func mayRead(a *auth.AuthInfo, record *types.EventEndpointRouteSchema) bool {
+	return record.WorkspaceID == a.Workspace.ExternalId || clusterAdmin(a)
+}
+
 func (r *router) handleGeneration(ctx echo.Context) error {
 	cc := ctx.(*auth.HttpAuthContext)
 	id := strings.TrimSpace(ctx.QueryParam("id"))
 	if id == "" {
-		return (&routeError{http.StatusBadRequest, "missing_id", "id query parameter is required"}).write(ctx)
+		return errMissingID.write(ctx)
 	}
 	record, err := r.s.repo.GetGeneration(ctx.Request().Context(), id)
-	if err != nil || record == nil || (record.WorkspaceID != cc.AuthInfo.Workspace.ExternalId && cc.AuthInfo.Token.TokenType != types.TokenTypeClusterAdmin) {
-		return (&routeError{http.StatusNotFound, "generation_not_found", "generation not found"}).write(ctx)
+	if err != nil || record == nil || !mayRead(cc.AuthInfo, record) {
+		return errGenerationNotFound.write(ctx)
 	}
 	return ctx.JSON(http.StatusOK, map[string]any{"data": map[string]any{
 		"id":                       record.RequestID,

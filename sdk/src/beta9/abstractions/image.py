@@ -687,9 +687,8 @@ class Image(BaseAbstraction):
         """Registry credentials named by base_image_creds, read from the environment.
 
         Locally a missing key is an error the developer can fix in their shell. In a
-        container (e.g. the managed endpoints deployer, whose environment carries the
-        workspace's secrets) whatever is present is sent and the build reports any
-        registry failure.
+        container (whose environment carries the workspace's secrets) whatever is
+        present is sent and the build reports any registry failure.
         """
         keys = (
             self.base_image_creds.keys()

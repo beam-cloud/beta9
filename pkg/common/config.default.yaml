@@ -501,15 +501,6 @@ managedCompute:
     failureGracePeriod: 10m
 managedEndpoints:
   enabled: false
-  repo:
-    url: ""
-    branch: main
-    path: ""
-    deployKey: ""
-  webhook:
-    secret: ""
-  deployerImage: ""
-  deployerSecrets: {}
   preemption:
     enabled: true
   reconcile:

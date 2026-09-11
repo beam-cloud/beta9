@@ -329,10 +329,10 @@ func (b *Build) generateContainerRequest() (*types.ContainerRequest, error) {
 		EntryPoint:  []string{"tail", "-f", "/dev/null"},
 		Mounts:      b.mounts,
 	}
-	// The controller's short-lived deployer credential is the authority for
-	// platform builds. Workspace credentials and request-supplied fields cannot
-	// opt ordinary builds out of prepaid admission or compute billing.
-	if b.authInfo.Token != nil && b.authInfo.Token.TokenType == types.TokenTypePlatformDeployer {
+	// Only cluster admin and platform deployer credentials build as the
+	// platform. Workspace credentials and request-supplied fields cannot opt
+	// ordinary builds out of prepaid admission or compute billing.
+	if b.authInfo.Token != nil && (b.authInfo.Token.TokenType == types.TokenTypePlatformDeployer || b.authInfo.Token.TokenType == types.TokenTypeClusterAdmin) {
 		req.Stub.Type = types.StubType(types.StubTypePlatformDeployer)
 	}
 

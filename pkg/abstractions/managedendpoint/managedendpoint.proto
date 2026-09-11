@@ -88,6 +88,9 @@ message ManagedEndpoint {
   uint32 total_replicas = 10;
   // config.yaml placement: JSON {gpu: {priority, min_replicas, max_replicas, preemption}}.
   string placements_json = 11;
+  // deploy_failed, retired, disabled, waiting_for_capacity, loading, ready or failed.
+  string state = 12;
+  string state_reason = 13;
 }
 
 message Event {
@@ -203,7 +206,7 @@ service EndpointAdminService {
   // StopReplica drains and stops a replica; the controller refills.
   rpc StopReplica(StopReplicaRequest) returns (StopReplicaResponse) {}
   rpc GetGitOpsStatus(GetGitOpsStatusRequest) returns (GetGitOpsStatusResponse) {}
-  rpc TriggerGitOpsSync(TriggerGitOpsSyncRequest) returns (TriggerGitOpsSyncResponse) {}
+  rpc ApplyRepo(ApplyRepoRequest) returns (ApplyRepoResponse) {}
 }
 
 message ListEndpointsRequest {}
@@ -300,7 +303,6 @@ message StopReplicaResponse {
 message GitOpsEndpointState {
   string path = 1;
   string id = 2;
-  string applied_sha = 3;
   string status = 4;
   string error = 5;
   string stub_id = 6;
@@ -312,12 +314,13 @@ message GitOpsState {
   string repo_url = 1;
   string ref = 2;
   string last_sha = 3;
-  string target_sha = 4;
   int64 last_run_at_unix_ms = 5;
   string last_error = 6;
   string fleet_error = 7;
-  bool running = 8;
   repeated GitOpsEndpointState endpoints = 9;
+  // A deploy that announced itself and has not applied yet.
+  string pending_sha = 10;
+  int64 pending_at_unix_ms = 11;
 }
 
 message GetGitOpsStatusRequest {}
@@ -330,13 +333,33 @@ message GetGitOpsStatusResponse {
   string fleet_json = 4;
 }
 
-message TriggerGitOpsSyncRequest {
-  // Optional explicit SHA; empty resolves the configured ref.
-  string sha = 1;
+// RepoEndpoint is one app directory of the endpoints repo: its spec and image
+// on a dry run, its deploy outcome on a real one.
+message RepoEndpoint {
+  string path = 1;      // app directory relative to endpoints/
+  string id = 2;        // empty when the app failed to import
+  string spec_json = 3; // ManagedEndpoint.spec()
+  string image = 4;     // registry image the app starts from, if any
+  string error = 5;     // import or deploy failure
+  string stub_id = 6;
+  uint32 version = 7;
 }
 
-message TriggerGitOpsSyncResponse {
+// ApplyRepoRequest is what the repo's CI sends after deploying every app:
+// config.yaml plus each app's outcome. A dry run validates without applying.
+message ApplyRepoRequest {
+  string repo_url = 1;
+  string ref = 2;
+  string sha = 3;
+  string config_yaml = 4;
+  repeated RepoEndpoint endpoints = 5;
+  bool dry_run = 6;
+}
+
+message ApplyRepoResponse {
   bool ok = 1;
   string err_msg = 2;
-  bool started = 3;
+  repeated string errors = 3;
+  repeated string warnings = 4;
+  GitOpsState state = 5;
 }
