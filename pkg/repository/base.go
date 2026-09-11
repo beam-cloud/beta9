@@ -311,8 +311,8 @@ type BackendRepository interface {
 	DeleteApp(ctx context.Context, appId string) error
 	GetImageClipVersion(ctx context.Context, imageId string) (uint32, error)
 	CreateImage(ctx context.Context, imageId string, clipVersion uint32) (uint32, error)
-	SetImageCredentialSecret(ctx context.Context, imageId string, secretName string, secretExternalId string) error
-	GetImageCredentialSecret(ctx context.Context, imageId string) (string, string, error)
+	SetImageCredentialSecretNames(ctx context.Context, imageId string, names []string) error
+	GetImageCredentials(ctx context.Context, workspace *types.Workspace, imageId string) (string, error)
 	CreateCheckpoint(ctx context.Context, checkpoint *types.Checkpoint) (*types.Checkpoint, error)
 	UpdateCheckpoint(ctx context.Context, checkpoint *types.Checkpoint) (*types.Checkpoint, error)
 	ListCheckpoints(ctx context.Context, workspaceExternalId string) ([]types.Checkpoint, error)

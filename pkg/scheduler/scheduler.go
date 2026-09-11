@@ -859,34 +859,15 @@ func (s *Scheduler) loadImageCredentials(request *types.ContainerRequest) (sched
 
 	cacheKey := imageCredentialCacheKey(request.WorkspaceId, request.ImageId)
 	credential, cacheHit, err := s.credentials.getOrLoad(cacheKey, schedulerImageCredentialTTL, func() (cachedSchedulerCredential, error) {
-		secretName, _, err := s.backendRepo.GetImageCredentialSecret(context.TODO(), request.ImageId)
-		if err != nil {
-			requestLog(log.Debug(), request).
-				Str("image_id", request.ImageId).
-				Err(err).
-				Msg("error getting image credential secret")
-			return cachedSchedulerCredential{}, err
-		}
-
-		if secretName == "" {
-			return cachedSchedulerCredential{exists: false}, nil
-		}
-
-		secret, err := s.backendRepo.GetSecretByNameDecrypted(context.TODO(), &request.Workspace, secretName)
+		value, err := s.backendRepo.GetImageCredentials(context.TODO(), &request.Workspace, request.ImageId)
 		if err != nil {
 			requestLog(log.Warn(), request).
 				Str("image_id", request.ImageId).
-				Str("secret_name", secretName).
 				Err(err).
-				Msg("failed to get secret by name")
+				Msg("error getting image credentials")
 			return cachedSchedulerCredential{}, err
 		}
-
-		return cachedSchedulerCredential{
-			value:  secret.Value,
-			source: secretName,
-			exists: true,
-		}, nil
+		return cachedSchedulerCredential{value: value, source: request.ImageId, exists: value != ""}, nil
 	})
 	if err != nil {
 		return schedulerCredentialAttachResult{cacheHit: cacheHit}, err
@@ -899,7 +880,6 @@ func (s *Scheduler) loadImageCredentials(request *types.ContainerRequest) (sched
 
 	requestLog(log.Debug(), request).
 		Str("image_id", request.ImageId).
-		Str("secret_name", credential.source).
 		Bool("cache_hit", cacheHit).
 		Int("credentials_length", len(credential.value)).
 		Msg("attached OCI credentials")

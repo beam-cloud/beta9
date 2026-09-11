@@ -3,7 +3,7 @@ import os
 import shlex
 import sys
 from pathlib import Path
-from typing import Dict, List, Literal, NamedTuple, Optional, Sequence, Tuple, TypedDict, Union
+from typing import Dict, List, Literal, NamedTuple, Optional, Sequence, Tuple, Union
 
 from beta9.clients.gateway import GatewayServiceStub
 from beta9.sync import FileSyncer
@@ -52,50 +52,6 @@ _image_build_cache = TTLCache(
 )
 
 
-class ImageCredentialValueNotFound(Exception):
-    def __init__(self, key_name: str, *args: object) -> None:
-        super().__init__(*args)
-        self.key_name = key_name
-
-    def __str__(self) -> str:
-        return f"Did not find the environment variable {self.key_name}. Did you forget to set it?"
-
-
-class AWSCredentials(TypedDict, total=False):
-    """Amazon Web Services credentials"""
-
-    AWS_ACCESS_KEY_ID: str
-    AWS_SECRET_ACCESS_KEY: str
-    AWS_SESSION_TOKEN: str
-    AWS_REGION: str
-
-
-class GCPCredentials(TypedDict, total=False):
-    """Google Cloud Platform credentials"""
-
-    GCP_ACCESS_TOKEN: str
-
-
-class DockerHubCredentials(TypedDict, total=False):
-    """Docker Hub credentials"""
-
-    DOCKERHUB_USERNAME: str
-    DOCKERHUB_PASSWORD: str
-
-
-class GHCRCredentials(TypedDict, total=False):
-    """GitHub Container Registry credentials"""
-
-    GITHUB_USERNAME: str
-    GITHUB_TOKEN: str
-
-
-class NGCCredentials(TypedDict, total=False):
-    """NVIDIA GPU Cloud credentials"""
-
-    NGC_API_KEY: str
-
-
 ImageCredentialKeys = Literal[
     "AWS_ACCESS_KEY_ID",
     "AWS_SECRET_ACCESS_KEY",
@@ -109,14 +65,7 @@ ImageCredentialKeys = Literal[
     "NGC_API_KEY",
 ]
 
-ImageCredentials = Union[
-    AWSCredentials,
-    DockerHubCredentials,
-    GCPCredentials,
-    NGCCredentials,
-    GHCRCredentials,
-    List[ImageCredentialKeys],
-]
+ImageCredentials = List[ImageCredentialKeys]
 
 
 def detected_python_version() -> PythonVersion:
@@ -172,10 +121,10 @@ class Image(BaseAbstraction):
                 `us-east4-docker.pkg.dev/my-project/my-repo/my-image:0.1.0`, and `nvcr.io/my-org/my-repo:0.1.0`.
                 Default is None.
             base_image_creds (Optional[ImageCredentials]):
-                A key/value pair or key list of environment variables that contain credentials to
-                a private registry. When provided as a dict, you must supply the correct keys and values.
-                When provided as a list, the keys are used to lookup the environment variable value
-                for you. Default is None.
+                Names of the workspace secrets holding the credentials for a private registry
+                (`beta9 secret create GITHUB_TOKEN ...`). Values are read from the workspace, at
+                build time and whenever the image is pulled, so rotating a secret needs no redeploy.
+                Default is None.
             env_vars (Optional[Union[str, List[str], Dict[str, str]]):
                 Adds environment variables to an image. These will be available when building the image
                 and when the container is running. This can be a string, a list of strings, or a
@@ -186,14 +135,14 @@ class Image(BaseAbstraction):
 
             Docker Hub
 
-            To use a private image from Docker Hub, export your Docker Hub credentials.
+            To use a private image from Docker Hub, store your Docker Hub credentials as workspace secrets.
 
             ```sh
-            export DOCKERHUB_USERNAME=user123
-            export DOCKERHUB_PASSWORD=pass123
+            beta9 secret create DOCKERHUB_USERNAME user123
+            beta9 secret create DOCKERHUB_PASSWORD pass123
             ```
 
-            Then configure the Image object with those environment variables.
+            Then name those secrets on the Image object.
 
             ```python
             image = Image(
@@ -209,14 +158,14 @@ class Image(BaseAbstraction):
 
             GitHub Container Registry (GHCR)
 
-            To use a private image from GitHub Container Registry, export your GitHub credentials.
+            To use a private image from GitHub Container Registry, store your GitHub credentials as workspace secrets.
 
             ```sh
-            export GITHUB_USERNAME=user123
-            export GITHUB_TOKEN=token123
+            beta9 secret create GITHUB_USERNAME user123
+            beta9 secret create GITHUB_TOKEN token123
             ```
 
-            Then configure the Image object with those environment variables.
+            Then name those secrets on the Image object.
 
             ```python
             image = Image(
@@ -232,8 +181,8 @@ class Image(BaseAbstraction):
 
             Amazon Elastic Container Registry (ECR)
 
-            To use a private image from Amazon ECR, export your AWS environment variables.
-            Then configure the Image object with those environment variables.
+            To use a private image from Amazon ECR, store your AWS keys as workspace secrets
+            and name them on the Image object.
 
             ```python
             image = Image(
@@ -249,13 +198,13 @@ class Image(BaseAbstraction):
 
             Google Artifact Registry (GAR)
 
-            To use a private image from Google Artifact Registry, export your access token.
+            To use a private image from Google Artifact Registry, store your access token as a workspace secret.
 
             ```sh
-            export GCP_ACCESS_TOKEN=$(gcloud auth print-access-token --project=my-project)
+            beta9 secret create GCP_ACCESS_TOKEN $(gcloud auth print-access-token --project=my-project)
             ```
 
-            Then configure the Image object to use the environment variable.
+            Then name that secret on the Image object.
 
             ```python
             image = Image(
@@ -270,13 +219,13 @@ class Image(BaseAbstraction):
 
             NVIDIA GPU Cloud (NGC)
 
-            To use a private image from NVIDIA GPU Cloud, export your API key.
+            To use a private image from NVIDIA GPU Cloud, store your API key as a workspace secret.
 
             ```sh
-            export NGC_API_KEY=abc123
+            beta9 secret create NGC_API_KEY abc123
             ```
 
-            Then configure the Image object to use the environment variable.
+            Then name that secret on the Image object.
 
             ```python
             image = Image(
@@ -347,7 +296,7 @@ class Image(BaseAbstraction):
         self.commands = commands
         self.build_steps = []
         self.base_image = base_image or ""
-        self.base_image_creds = base_image_creds or {}
+        self.base_image_creds = list(base_image_creds or [])
         self.env_vars = []
         self.secrets = []
         self._stub: Optional[ImageServiceStub] = None
@@ -523,8 +472,7 @@ class Image(BaseAbstraction):
                 - ECR: `111111111111.dkr.ecr.us-east-1.amazonaws.com/my-image:latest`
                 - GAR: `us-east4-docker.pkg.dev/my-project/my-repo/my-image:0.1.0`
                 - NGC: `nvcr.io/my-org/my-repo:0.1.0`
-            credentials: Optional credentials for private registry access.
-                Can be provided as a dict with key-value pairs or a list of environment variable keys.
+            credentials: Names of the workspace secrets holding the registry credentials.
 
         Returns:
             Image: The Image object configured with the registry image.
@@ -651,7 +599,7 @@ class Image(BaseAbstraction):
                         commands=self.commands,
                         build_steps=self.build_steps,
                         existing_image_uri=self.base_image,
-                        existing_image_creds=self.get_credentials_from_env(),
+                        existing_image_creds=dict.fromkeys(self.base_image_creds, ""),
                         env_vars=self.env_vars,
                         dockerfile=self.dockerfile,
                         build_ctx_object=self.build_ctx_object,
@@ -682,27 +630,6 @@ class Image(BaseAbstraction):
         )
         self._remember_build_result(cache_key, result)
         return result
-
-    def get_credentials_from_env(self) -> Dict[str, str]:
-        """Registry credentials named by base_image_creds, read from the environment.
-
-        Locally a missing key is an error the developer can fix in their shell. In a
-        container (whose environment carries the workspace's secrets) whatever is
-        present is sent and the build reports any registry failure.
-        """
-        keys = (
-            self.base_image_creds.keys()
-            if isinstance(self.base_image_creds, dict)
-            else self.base_image_creds
-        )
-
-        creds = {}
-        for key in keys:
-            if v := os.getenv(key):
-                creds[key] = v
-            elif env.is_local():
-                raise ImageCredentialValueNotFound(key)
-        return creds
 
     def micromamba(self) -> "Image":
         """

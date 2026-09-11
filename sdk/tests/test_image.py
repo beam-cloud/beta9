@@ -1,8 +1,7 @@
 import os
-from contextlib import contextmanager
 from unittest import TestCase
 
-from beta9.abstractions.image import Image, ImageCredentialValueNotFound
+from beta9.abstractions.image import Image
 
 
 class TestImage(TestCase):
@@ -20,44 +19,11 @@ class TestImage(TestCase):
         assert image.build_steps[3].command == "numpy"
         assert image.build_steps[4].command == "pytorch"
 
-    def test_image_credentials(self):
-        env = {
-            "Key1": "1234",
-            "Key2": "5678",
-        }
-        with temp_env_vars(env):
-            image = Image(base_image_creds=env.keys())
-            creds = image.get_credentials_from_env()
-            self.assertTrue(creds == env)
-
-    def test_image_credentials_value_error(self):
-        env = {
-            "Key1": "1234",
-            "Key2": "",
-        }
-        with temp_env_vars(env):
-            image = Image(base_image_creds=list(env.keys()))
-
-            with self.assertRaises(ImageCredentialValueNotFound) as context:
-                image.get_credentials_from_env()
-
-            self.assertTrue("Did not find the environment variable Key2." in str(context.exception))
-
-    def test_image_credentials_in_container_sends_what_is_present(self):
-        # Inside a container the environment is the workspace's secrets; a
-        # missing key is left to the registry to report.
-        with temp_env_vars({"CONTAINER_ID": "c-1", "Key1": "1234", "Key2": ""}):
-            image = Image(base_image_creds=["Key1", "Key2"])
-            self.assertEqual(image.get_credentials_from_env(), {"Key1": "1234"})
-
-
-@contextmanager
-def temp_env_vars(d: dict):
-    for key, value in d.items():
-        os.environ[key] = value
-    yield
-    for key in d.keys():
-        os.environ.pop(key, None)
+    def test_image_credentials_are_workspace_secret_names(self):
+        # Only names travel; the gateway reads the values from workspace secrets.
+        image = Image(base_image_creds=["Key1", "Key2"])
+        self.assertEqual(image.base_image_creds, ["Key1", "Key2"])
+        self.assertEqual(Image().base_image_creds, [])
 
 
 class TestImageLocalFiles(TestCase):
