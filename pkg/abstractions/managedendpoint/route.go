@@ -171,20 +171,6 @@ func imageUsage(body []byte) Usage {
 	return u
 }
 
-// forceIncludeUsage asks a streaming request for a final usage chunk and reports whether it is a stream.
-func forceIncludeUsage(payload map[string]any) bool {
-	if stream, _ := payload["stream"].(bool); !stream {
-		return false
-	}
-	opts, _ := payload["stream_options"].(map[string]any)
-	if opts == nil {
-		opts = map[string]any{}
-	}
-	opts["include_usage"] = true
-	payload["stream_options"] = opts
-	return true
-}
-
 func routeFromPath(prefix, path string) (types.EndpointRoute, string, bool) {
 	rest := strings.TrimPrefix(strings.TrimPrefix(strings.TrimSuffix(path, "/"), prefix), "/")
 	if id, ok := strings.CutPrefix(rest, "models/"); ok {
@@ -260,6 +246,7 @@ type routeRequest struct {
 	models        []string // requested, in preference order
 	model         string   // the endpoint selected (what the engine sees and what is billed)
 	body          []byte
+	payload       map[string]any // decoded JSON body; nil for multipart or empty bodies
 	stream        bool
 	info          *llmroute.RequestInfo
 	pinReplica    string
@@ -302,10 +289,7 @@ func (r *router) handleRoute(ctx echo.Context) error {
 		return rerr.write(ctx)
 	}
 	rq.model = endpoint.Spec.ID
-	if rq.route != types.EndpointRouteInvoke {
-		// /invoke payloads are the app's own schema and are left untouched.
-		rq.setModel(endpoint.Spec.ID, endpoint.Spec.Engine == "vllm")
-	}
+	rq.prepareBody(endpoint)
 	if rerr := r.admit(ctx.Request().Context(), rq, endpoint); rerr != nil {
 		return rerr.write(ctx)
 	}
@@ -343,45 +327,62 @@ func (r *router) readRequest(rq *routeRequest, pathModel string) *routeError {
 	}
 
 	contentType, params, _ := mime.ParseMediaType(req.Header.Get("Content-Type"))
-	if strings.HasPrefix(contentType, "multipart/") {
+	switch {
+	case strings.HasPrefix(contentType, "multipart/"):
 		if model := multipartModel(params["boundary"], body); model != "" {
 			rq.models = append(rq.models, model)
 		}
-	} else {
-		var payload map[string]any
-		if len(bytes.TrimSpace(body)) > 0 {
-			payload, err = decodeRequestJSON(body)
-			if err != nil {
-				return &routeError{http.StatusBadRequest, "invalid_json", "request body must be a JSON object"}
-			}
+	case len(bytes.TrimSpace(body)) > 0:
+		if rq.payload, err = decodeRequestJSON(body); err != nil {
+			return &routeError{http.StatusBadRequest, "invalid_json", "request body must be a JSON object"}
 		}
-		if model, _ := payload["model"].(string); model != "" {
+		if model, _ := rq.payload["model"].(string); model != "" {
 			rq.models = append(rq.models, model)
 		}
-		if list, ok := payload["models"].([]any); ok {
+		if list, ok := rq.payload["models"].([]any); ok {
 			for _, m := range list {
 				if s, ok := m.(string); ok && s != "" {
 					rq.models = append(rq.models, s)
 				}
 			}
 		}
-		if payload != nil && rq.adapter.LLM {
-			changed, err := normalizeReasoning(payload)
-			if err != nil {
+		if rq.adapter.LLM {
+			if err := normalizeReasoning(rq.payload); err != nil {
 				return &routeError{http.StatusBadRequest, "invalid_reasoning", err.Error()}
 			}
-			rq.stream = forceIncludeUsage(payload)
-			if changed || rq.stream {
-				if body, err := json.Marshal(payload); err == nil {
-					rq.body = body
-				}
-			}
+			rq.stream, _ = rq.payload["stream"].(bool)
 		}
 	}
 	if len(rq.models) == 0 {
 		return &routeError{http.StatusBadRequest, "missing_model", "the model field is required"}
 	}
 	return nil
+}
+
+// prepareBody makes the selected endpoint the model the engine sees and asks
+// LLM streams for usage: a final chunk, or every chunk on vLLM so a preempted
+// stream still shows the tokens it produced. /invoke bodies are the app's own
+// schema and pass through untouched.
+func (rq *routeRequest) prepareBody(endpoint *types.ManagedEndpoint) {
+	if rq.payload == nil || rq.route == types.EndpointRouteInvoke {
+		return
+	}
+	rq.payload["model"] = endpoint.Spec.ID
+	delete(rq.payload, "models")
+	if rq.stream && rq.adapter.LLM {
+		options, _ := rq.payload["stream_options"].(map[string]any)
+		if options == nil {
+			options = map[string]any{}
+		}
+		options["include_usage"] = true
+		if endpoint.Spec.Engine == "vllm" {
+			options["continuous_usage_stats"] = true
+		}
+		rq.payload["stream_options"] = options
+	}
+	if body, err := json.Marshal(rq.payload); err == nil {
+		rq.body = body
+	}
 }
 
 // Preserve tool schemas and provider parameters exactly when adding routing
@@ -398,35 +399,6 @@ func decodeRequestJSON(body []byte) (map[string]any, error) {
 		return nil, errors.New("request body must contain one JSON object")
 	}
 	return payload, nil
-}
-
-// setModel makes the selected endpoint the model the engine sees.
-func (rq *routeRequest) setModel(model string, continuousUsage bool) {
-	payload, err := decodeRequestJSON(rq.body)
-	if err != nil || payload == nil {
-		return
-	}
-	continuousUsage = continuousUsage && rq.stream
-	if current, _ := payload["model"].(string); current == model && payload["models"] == nil && !continuousUsage {
-		return
-	}
-	payload["model"] = model
-	delete(payload, "models")
-	if continuousUsage {
-		// vLLM reports cumulative counters on every chunk. A preemption can
-		// then retain observed token usage even when the final chunk is lost.
-		// Failed streams remain unbilled under the existing error policy.
-		options, _ := payload["stream_options"].(map[string]any)
-		if options == nil {
-			options = map[string]any{}
-		}
-		options["include_usage"] = true
-		options["continuous_usage_stats"] = true
-		payload["stream_options"] = options
-	}
-	if body, err := json.Marshal(payload); err == nil {
-		rq.body = body
-	}
 }
 
 func multipartModel(boundary string, body []byte) string {
@@ -579,51 +551,45 @@ func (r *router) servingReplicas(ctx context.Context, endpoint *types.ManagedEnd
 // pick reserves available capacity immediately. Providers must reject overload
 // before opening a stream; a rejected on-demand request still triggers startup.
 func (r *router) pick(ctx context.Context, rq *routeRequest, endpoint *types.ManagedEndpoint, exclude map[string]bool) (*types.EndpointReplica, *routeError) {
-	var drainDone <-chan struct{}
-	if r.s.drainCtx != nil {
-		drainDone = r.s.drainCtx.Done()
-	}
-	stopped := func() *routeError {
-		select {
-		case <-ctx.Done():
-			return &routeError{499, "client_closed", "client closed request"}
-		case <-drainDone:
-			return &routeError{http.StatusServiceUnavailable, "gateway_draining", "gateway is restarting, retry shortly"}
-		default:
-			return nil
-		}
-	}
-	if rerr := stopped(); rerr != nil {
-		return nil, rerr
-	}
 	candidates, err := r.servingReplicas(ctx, endpoint, rq.pinReplica, exclude)
-	if rerr := stopped(); rerr != nil {
-		return nil, rerr
-	}
-	if err != nil {
-		return nil, errRegistry
-	}
-	if len(candidates) == 0 && len(exclude) > 0 {
-		return nil, &routeError{http.StatusBadGateway, "upstream_unavailable", "upstream replicas failed"}
-	}
-	replica, chooseErr := r.choose(ctx, rq, endpoint, candidates)
-	if chooseErr != nil {
-		if rerr := stopped(); rerr != nil {
-			return nil, rerr
-		}
-		return nil, errRegistry
+	var replica *types.EndpointReplica
+	if err == nil && (len(candidates) > 0 || len(exclude) == 0) {
+		replica, err = r.choose(ctx, rq, endpoint, candidates)
 	}
 	if replica != nil {
 		rq.queueWait = time.Since(rq.startedAt)
 		return replica, nil
 	}
-	if rerr := stopped(); rerr != nil {
+	// A cancelled request or a draining gateway explains most failures here
+	// and must not be reported as capacity.
+	if rerr := r.stopped(ctx); rerr != nil {
 		return nil, rerr
+	}
+	switch {
+	case err != nil:
+		return nil, errRegistry
+	case len(candidates) == 0 && len(exclude) > 0:
+		return nil, &routeError{http.StatusBadGateway, "upstream_unavailable", "upstream replicas failed"}
 	}
 	if rerr := r.wake(ctx, rq); rerr != nil {
 		return nil, rerr
 	}
 	return nil, capacityError(fmt.Sprintf("model %s is temporarily at capacity; retry shortly", endpoint.Spec.ID))
+}
+
+func (r *router) stopped(ctx context.Context) *routeError {
+	var drainDone <-chan struct{}
+	if r.s.drainCtx != nil {
+		drainDone = r.s.drainCtx.Done()
+	}
+	select {
+	case <-ctx.Done():
+		return &routeError{499, "client_closed", "client closed request"}
+	case <-drainDone:
+		return &routeError{http.StatusServiceUnavailable, "gateway_draining", "gateway is restarting, retry shortly"}
+	default:
+		return nil
+	}
 }
 
 // choose picks a replica (llmroute for LLMs, least loaded otherwise) with one
@@ -872,42 +838,54 @@ func (r *router) proxy(ctx context.Context, rq *routeRequest, endpoint *types.Ma
 
 	contentType, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 	if contentType == "text/event-stream" {
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("X-Accel-Buffering", "no")
-		w.WriteHeader(resp.StatusCode)
-		recorded := false
-		usage, ttft, err := relayStream(w, resp.Body, rq.requestID, sentAt, func(usage Usage, ttft time.Duration) error {
-			recorded = true
-			if resp.StatusCode < 300 && billable(endpoint) && !usage.Found {
-				r.recordMissingUsage(rq, endpoint, replica, usage, ttft)
-				return errors.New("upstream response carried no usage")
-			}
-			return r.record(rq, endpoint, replica, resp.StatusCode, usage, ttft, "")
-		})
-		status := resp.StatusCode
-		if err != nil && status < 300 {
-			failure := streamFailureFor(err)
-			status = failure.status // the stream broke: not a success, not billed
-			if errors.Is(context.Cause(ctx), errSlotLeaseLost) {
-				status = http.StatusServiceUnavailable
-			}
-			if ctx.Err() == nil {
-				// HTTP headers are already committed. An SSE error lets SDKs
-				// distinguish preemption from a completed generation.
-				writeStreamError(w, rq.requestID, endpoint.Spec.ID, failure)
-			}
-		}
-		if err == nil && status < 300 && billable(endpoint) && !usage.Found {
-			// The stream is already with the client; record a 502 so it is not billed.
-			r.recordMissingUsage(rq, endpoint, replica, usage, ttft)
-			return false, nil
-		}
-		if !recorded {
-			r.record(rq, endpoint, replica, status, usage, ttft, errString(err))
-		}
-		return false, err
+		return false, r.proxyStream(ctx, rq, endpoint, replica, resp, sentAt)
 	}
+	return false, r.proxyJSON(ctx, rq, endpoint, replica, resp, contentType)
+}
 
+// unbilled is a successful billable response the engine reported no usage for.
+func unbilled(endpoint *types.ManagedEndpoint, status int, usage Usage) bool {
+	return status < 300 && billable(endpoint) && !usage.Found
+}
+
+// proxyStream relays SSE as it arrives; headers are committed, so failures
+// become an SSE error event and are metered as such.
+func (r *router) proxyStream(ctx context.Context, rq *routeRequest, endpoint *types.ManagedEndpoint, replica *types.EndpointReplica, resp *http.Response, sentAt time.Time) error {
+	w := rq.ctx.Response()
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(resp.StatusCode)
+	recorded := false
+	usage, ttft, err := relayStream(w, resp.Body, rq.requestID, sentAt, func(usage Usage, ttft time.Duration) error {
+		recorded = true
+		if unbilled(endpoint, resp.StatusCode, usage) {
+			r.recordMissingUsage(rq, endpoint, replica, usage, ttft)
+			return errors.New("upstream response carried no usage")
+		}
+		return r.record(rq, endpoint, replica, resp.StatusCode, usage, ttft, "")
+	})
+	status := resp.StatusCode
+	if err != nil && status < 300 {
+		failure := streamFailureFor(err)
+		status = failure.status // the stream broke: not a success, not billed
+		if errors.Is(context.Cause(ctx), errSlotLeaseLost) {
+			status = http.StatusServiceUnavailable
+		}
+		if ctx.Err() == nil {
+			writeStreamError(w, rq.requestID, endpoint.Spec.ID, failure)
+		}
+	}
+	switch {
+	case err == nil && unbilled(endpoint, status, usage):
+		r.recordMissingUsage(rq, endpoint, replica, usage, ttft)
+	case !recorded:
+		r.record(rq, endpoint, replica, status, usage, ttft, errString(err))
+	}
+	return err
+}
+
+// proxyJSON buffers the response, meters it and writes it decorated with usage and cost.
+func (r *router) proxyJSON(ctx context.Context, rq *routeRequest, endpoint *types.ManagedEndpoint, replica *types.EndpointReplica, resp *http.Response, contentType string) error {
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
 	switch {
 	case err != nil:
@@ -916,30 +894,31 @@ func (r *router) proxy(ctx context.Context, rq *routeRequest, endpoint *types.Ma
 			rerr = errRegistry
 		}
 		r.record(rq, endpoint, replica, rerr.Status, Usage{}, 0, err.Error())
-		return false, rerr.write(rq.ctx)
+		return rerr.write(rq.ctx)
 	case len(body) > maxBody:
 		rerr := &routeError{http.StatusBadGateway, "upstream_too_large", "upstream response exceeds 64MB"}
 		r.record(rq, endpoint, replica, rerr.Status, Usage{}, 0, rerr.Message)
-		return false, rerr.write(rq.ctx)
+		return rerr.write(rq.ctx)
 	}
 	usage := Usage{}
 	if resp.StatusCode < 300 {
 		usage = rq.adapter.Usage(body)
-		if billable(endpoint) && !usage.Found {
+		if unbilled(endpoint, resp.StatusCode, usage) {
 			r.recordMissingUsage(rq, endpoint, replica, usage, 0)
-			return false, errMissingUsage.write(rq.ctx)
+			return errMissingUsage.write(rq.ctx)
 		}
 		if strings.Contains(contentType, "json") {
 			body = decorateJSON(body, rq.requestID, usage, r.cost(endpoint, usage))
 		}
 	}
 	if err := r.record(rq, endpoint, replica, resp.StatusCode, usage, 0, ""); err != nil {
-		return false, errAccountingUnavailable.write(rq.ctx)
+		return errAccountingUnavailable.write(rq.ctx)
 	}
+	w := rq.ctx.Response()
 	w.Header().Set("Content-Length", fmt.Sprint(len(body)))
 	w.WriteHeader(resp.StatusCode)
 	_, _ = w.Write(body)
-	return false, nil
+	return nil
 }
 
 // upstreamQuery drops the gateway's own query parameters (auth_token).
