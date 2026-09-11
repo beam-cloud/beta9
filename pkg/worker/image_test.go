@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -411,6 +414,47 @@ func TestTerminateImageProcessGroupKillsDescendants(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("process group did not exit after termination")
 	}
+}
+
+func TestVerifyImageSourceFailsOnlyWhenRegistryRefusesRemoteLayers(t *testing.T) {
+	status := http.StatusOK
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.WriteHeader(status)
+	}))
+	defer server.Close()
+
+	cachePath := t.TempDir()
+	options := func(layers map[string]string) clip.MountOptions {
+		info := &clipCommon.OCIStorageInfo{
+			RegistryURL:             server.Listener.Addr().String(),
+			Repository:              "org/app",
+			Reference:               "sha256:" + strings.Repeat("a", 64),
+			DecompressedHashByLayer: layers,
+		}
+		for layer := range layers {
+			info.Layers = append(info.Layers, layer)
+		}
+		return clip.MountOptions{CachePath: cachePath, Metadata: &clipCommon.ClipArchiveMetadata{StorageInfo: info}}
+	}
+	c := &ImageClient{}
+	remote := map[string]string{"sha256:1": "hash-1"}
+
+	for _, status = range []int{http.StatusOK, http.StatusInternalServerError} {
+		require.NoError(t, c.verifyImageSource(context.Background(), options(remote)), status)
+	}
+	for _, status = range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound} {
+		err := c.verifyImageSource(context.Background(), options(remote))
+		require.ErrorContains(t, err, "image source "+server.Listener.Addr().String()+"/org/app@sha256:", status)
+	}
+
+	// A layer already in the layer cache needs no registry at all.
+	require.NoError(t, os.WriteFile(filepath.Join(cachePath, "hash-1"), nil, 0o644))
+	requests = 0
+	status = http.StatusForbidden
+	require.NoError(t, c.verifyImageSource(context.Background(), options(remote)))
+	require.Zero(t, requests)
 }
 
 func TestLayersToPrepareSkipsLocallyCompleteLayers(t *testing.T) {

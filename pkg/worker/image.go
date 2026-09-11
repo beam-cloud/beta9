@@ -33,6 +33,10 @@ import (
 	"github.com/beam-cloud/clip/pkg/clip"
 	clipCommon "github.com/beam-cloud/clip/pkg/common"
 	clipStorage "github.com/beam-cloud/clip/pkg/storage"
+	"github.com/google/go-containerregistry/pkg/authn"
+	"github.com/google/go-containerregistry/pkg/name"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/opencontainers/umoci"
 	"github.com/opencontainers/umoci/oci/cas/dir"
@@ -311,6 +315,9 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 
 	mountOptions := c.lazyMountOptions(ctx, request, archive)
 	if archive.usesOCIStorage() {
+		if err := c.verifyImageSource(ctx, mountOptions); err != nil {
+			return time.Since(startTime), err
+		}
 		c.scheduleImageLayerPrepare(context.WithoutCancel(ctx), request, mountOptions)
 	}
 
@@ -364,11 +371,7 @@ func (c *ImageClient) scheduleImageLayerPrepare(ctx context.Context, request *ty
 	if !ok {
 		return
 	}
-	localComplete := func(string) bool { return false }
-	if c.cacheClient != nil {
-		localComplete = c.cacheClient.LocalContentComplete
-	}
-	remaining := layersToPrepare(ociInfo, localComplete)
+	remaining := c.remoteLayers(ociInfo, options.CachePath)
 	if len(remaining) == 0 {
 		return
 	}
@@ -384,7 +387,52 @@ func (c *ImageClient) scheduleImageLayerPrepare(ctx context.Context, request *ty
 	})
 }
 
-// layersToPrepare returns the layers not fully present in a local page store.
+// remoteLayers returns the layers this node holds neither as a file in the
+// layer cache nor completely in a local page store.
+func (c *ImageClient) remoteLayers(info *clipCommon.OCIStorageInfo, cachePath string) []string {
+	return layersToPrepare(info, func(hash string) bool {
+		if _, err := os.Stat(filepath.Join(cachePath, hash)); err == nil {
+			return true
+		}
+		return c.cacheClient != nil && c.cacheClient.LocalContentComplete(hash)
+	})
+}
+
+// verifyImageSource refuses a lazy mount whose registry refuses the image. A
+// dead credential then fails the container start with the registry's answer
+// instead of surfacing as EIO on a read the runtime cannot survive. Layers the
+// node already holds need no registry; other registry failures stay lazy.
+func (c *ImageClient) verifyImageSource(ctx context.Context, options clip.MountOptions) error {
+	info, ok := ociStorageInfo(options.Metadata)
+	if !ok || len(c.remoteLayers(info, options.CachePath)) == 0 {
+		return nil
+	}
+	ref, err := name.ParseReference(ociImageReference(info))
+	if err != nil {
+		return err
+	}
+	remoteOpts := []remote.Option{remote.WithContext(ctx)}
+	if provider, ok := options.RegistryCredProvider.(clipCommon.RegistryCredentialProvider); ok {
+		if auth, err := provider.GetCredentials(ctx, info.RegistryURL, info.Repository); err == nil && auth != nil {
+			remoteOpts = append(remoteOpts, remote.WithAuth(authn.FromConfig(*auth)))
+		}
+	}
+	_, err = remote.Head(ref, remoteOpts...)
+	var terr *transport.Error
+	if errors.As(err, &terr) && (terr.StatusCode == http.StatusUnauthorized || terr.StatusCode == http.StatusForbidden || terr.StatusCode == http.StatusNotFound) {
+		return fmt.Errorf("image source %s: %w", ref, err)
+	}
+	return nil
+}
+
+func ociImageReference(info *clipCommon.OCIStorageInfo) string {
+	if strings.HasPrefix(info.Reference, "sha256:") {
+		return fmt.Sprintf("%s/%s@%s", info.RegistryURL, info.Repository, info.Reference)
+	}
+	return fmt.Sprintf("%s/%s:%s", info.RegistryURL, info.Repository, info.Reference)
+}
+
+// layersToPrepare returns the layers localComplete does not vouch for.
 func layersToPrepare(info *clipCommon.OCIStorageInfo, localComplete func(hash string) bool) []string {
 	remaining := make([]string, 0, len(info.Layers))
 	for _, layer := range info.Layers {
