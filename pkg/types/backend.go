@@ -561,6 +561,8 @@ type StubConfigV1 struct {
 	// ManagedEndpoint carries the platform endpoint/service spec for
 	// managed_endpoint/* and managed_service/* stubs.
 	ManagedEndpoint *ManagedEndpointStubConfig `json:"managed_endpoint,omitempty"`
+
+	PreparationCacheKey string `json:"preparation_cache_key,omitempty"`
 }
 
 const (

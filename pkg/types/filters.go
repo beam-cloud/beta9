@@ -70,6 +70,8 @@ type StubFilter struct {
 	Pagination  bool        `query:"pagination"`
 	AppId       string      `query:"app_id"`
 	Limit       uint32      `query:"limit"`
+
+	PreparationCacheKey string `query:"-"`
 }
 
 // AppState is how an app reads in the dashboard. It is derived, not stored:
