@@ -15,7 +15,7 @@ import traceback
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator, List, Optional
+from typing import Dict, Iterator, List, Optional
 
 import click
 
@@ -126,15 +126,25 @@ def _deploy(app: App, context: ConfigContext) -> None:
         app.error = app.endpoint.deploy_error or "deploy failed"
 
 
-def _apply(context: ConfigContext, repo: Path, apps: List[App], dry_run: bool) -> ApplyRepoResponse:
+def _commit() -> Dict[str, str]:
+    """The commit being deployed, from GitHub Actions; empty outside CI."""
+    return {
+        "repo_url": os.environ.get("GITHUB_REPOSITORY", ""),
+        "ref": os.environ.get("GITHUB_REF_NAME", ""),
+        "sha": os.environ.get("GITHUB_SHA", ""),
+    }
+
+
+def _apply(
+    context: ConfigContext, repo: Path, apps: List[App], dry_run: bool, commit: Dict[str, str]
+) -> ApplyRepoResponse:
+    """Send the repo to the gateway. A dry run that names a commit announces a deploy."""
     config = repo / "config.yaml"
     request = ApplyRepoRequest(
-        repo_url=os.environ.get("GITHUB_REPOSITORY", ""),
-        ref=os.environ.get("GITHUB_REF_NAME", ""),
-        sha=os.environ.get("GITHUB_SHA", ""),
         config_yaml=config.read_text() if config.exists() else "",
         endpoints=[app.to_proto() for app in apps],
         dry_run=dry_run,
+        **commit,
     )
     with handle_error(), get_channel(context) as channel:
         return EndpointAdminServiceStub(channel).apply_repo(request)
@@ -162,7 +172,7 @@ repo_argument = click.argument(
 @repo_argument
 def validate(repo: Path):
     context = get_config_context(selected_context())
-    _report(_apply(context, repo, _apps(repo), dry_run=True))
+    _report(_apply(context, repo, _apps(repo), dry_run=True, commit={}))
 
 
 @management.command(name="deploy", help="Deploy every app, then apply config.yaml.")
@@ -170,10 +180,11 @@ def validate(repo: Path):
 def deploy(repo: Path):
     context = get_config_context(selected_context())
     apps = _apps(repo.resolve())
-    check = _apply(context, repo, apps, dry_run=True)
+    commit = _commit()
+    check = _apply(context, repo, apps, dry_run=True, commit=commit)
     if not check.ok:
         _report(check)
     for app in apps:
         if app.endpoint is not None:
             _deploy(app, context)
-    _report(_apply(context, repo, apps, dry_run=False))
+    _report(_apply(context, repo, apps, dry_run=False, commit=commit))

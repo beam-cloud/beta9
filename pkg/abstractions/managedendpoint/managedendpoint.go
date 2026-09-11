@@ -501,6 +501,8 @@ func gitopsToProto(state *types.GitOpsState) *pb.GitOpsState {
 		LastRunAtUnixMs: unixMs(state.LastRunAt),
 		LastError:       state.LastError,
 		FleetError:      state.FleetError,
+		PendingSha:      state.PendingSHA,
+		PendingAtUnixMs: unixMs(state.PendingAt),
 	}
 	for _, e := range state.PerEndpoint {
 		out.Endpoints = append(out.Endpoints, &pb.GitOpsEndpointState{

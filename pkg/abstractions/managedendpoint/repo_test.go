@@ -42,7 +42,8 @@ func TestApplyRepoDryRunValidatesWithoutApplying(t *testing.T) {
 
 	state, err := s.repo.GetGitOpsState(context.Background())
 	require.NoError(t, err)
-	assert.Nil(t, state, "a dry run records nothing")
+	assert.Equal(t, "abc", state.PendingSHA, "a dry run naming a commit announces a deploy")
+	assert.Empty(t, state.LastSHA, "and applies nothing")
 	fleet, err := s.repo.GetFleet(context.Background())
 	require.NoError(t, err)
 	assert.Contains(t, fleet.Endpoints, "acme/model")
@@ -56,6 +57,8 @@ func TestApplyRepoAppliesFleetStampsShaAndRetires(t *testing.T) {
 	gone.ID = "acme/gone"
 	require.NoError(t, s.repo.SaveEndpoint(context.Background(), &types.ManagedEndpoint{Spec: gone, StubID: "stub-9", Version: 3, Status: types.EndpointStatusActive}))
 
+	_, err := s.ApplyRepo(adminCtx(), &pb.ApplyRepoRequest{Sha: "abc123", DryRun: true, ConfigYaml: "{}\n"})
+	require.NoError(t, err)
 	out, err := s.ApplyRepo(adminCtx(), &pb.ApplyRepoRequest{
 		RepoUrl: "github.com/acme/endpoints", Ref: "main", Sha: "abc123",
 		ConfigYaml: "acme/model:\n  enabled: true\n  gpus:\n    H100:\n      priority: 1\n      minReplicas: 1\n",
@@ -65,6 +68,7 @@ func TestApplyRepoAppliesFleetStampsShaAndRetires(t *testing.T) {
 	require.True(t, out.Ok, out.ErrMsg)
 	assert.Equal(t, "abc123", out.State.LastSha)
 	assert.Empty(t, out.State.LastError)
+	assert.Empty(t, out.State.PendingSha, "applying settles the announced deploy")
 
 	fleet, err := s.repo.GetFleet(context.Background())
 	require.NoError(t, err)

@@ -95,9 +95,20 @@ func (s *Service) applyRepo(ctx context.Context, in *pb.ApplyRepoRequest, out *p
 	}
 	s.reviewFleet(r)
 	if in.DryRun {
-		return nil, nil
+		return nil, s.announce(ctx, previous, in)
 	}
 	return r.state, s.commitRepo(ctx, r, active)
+}
+
+// announce remembers a deploy that has started: `deploy` names its commit in
+// its dry run, `validate` does not. The commit stays pending until it applies,
+// so a CI run that dies in between is visible.
+func (s *Service) announce(ctx context.Context, state *types.GitOpsState, in *pb.ApplyRepoRequest) error {
+	if in.Sha == "" {
+		return nil
+	}
+	state.PendingSHA, state.PendingAt = in.Sha, time.Now()
+	return s.repo.SaveGitOpsState(ctx, state)
 }
 
 func (s *Service) activeEndpoints(ctx context.Context) (map[string]*types.ManagedEndpoint, error) {

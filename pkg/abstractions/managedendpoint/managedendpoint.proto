@@ -318,6 +318,9 @@ message GitOpsState {
   string last_error = 6;
   string fleet_error = 7;
   repeated GitOpsEndpointState endpoints = 9;
+  // A deploy that announced itself and has not applied yet.
+  string pending_sha = 10;
+  int64 pending_at_unix_ms = 11;
 }
 
 message GetGitOpsStatusRequest {}

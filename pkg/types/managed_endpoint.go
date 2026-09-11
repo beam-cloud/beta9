@@ -641,6 +641,10 @@ type GitOpsState struct {
 	LastError   string                         `json:"last_error,omitempty"`  // failed app deploys, one per line
 	FleetError  string                         `json:"fleet_error,omitempty"` // why config.yaml was rejected
 	PerEndpoint map[string]GitOpsEndpointState `json:"per_endpoint"`          // by app path
+	// PendingSHA is a deploy that announced itself and has not applied yet; a
+	// stale one means the CI run died between deploying apps and applying.
+	PendingSHA string    `json:"pending_sha,omitempty"`
+	PendingAt  time.Time `json:"pending_at,omitempty"`
 }
 
 // RouteSample is one completed /v1 request.

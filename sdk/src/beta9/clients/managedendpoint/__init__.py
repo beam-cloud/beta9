@@ -330,6 +330,10 @@ class GitOpsState(betterproto.Message):
     last_error: str = betterproto.string_field(6)
     fleet_error: str = betterproto.string_field(7)
     endpoints: List["GitOpsEndpointState"] = betterproto.message_field(9)
+    pending_sha: str = betterproto.string_field(10)
+    """A deploy that announced itself and has not applied yet."""
+
+    pending_at_unix_ms: int = betterproto.int64_field(11)
 
 
 @dataclass(eq=False, repr=False)
