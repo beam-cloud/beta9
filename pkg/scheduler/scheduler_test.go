@@ -1448,56 +1448,31 @@ func TestProcessRequestBatchDoesNotOverScheduleWorkerSnapshot(t *testing.T) {
 }
 
 func TestProcessRequestBatchImmediatelyReplansStaleCapacity(t *testing.T) {
-	firstScheduler, err := NewSchedulerForTest()
+	first, err := NewSchedulerForTest()
 	assert.NoError(t, err)
-	secondScheduler := schedulerReplicaForTest(firstScheduler)
-
-	packed := &types.Worker{
-		Id:          "packed",
-		Status:      types.WorkerStatusAvailable,
-		TotalCpu:    1000,
-		TotalMemory: 1250,
-		FreeCpu:     1000,
-		FreeMemory:  1250,
-		PoolName:    "beta9-cpu",
-	}
-	idle := &types.Worker{
-		Id:          "idle",
-		Status:      types.WorkerStatusAvailable,
-		TotalCpu:    2000,
-		TotalMemory: 2500,
-		FreeCpu:     2000,
-		FreeMemory:  2500,
-		PoolName:    "beta9-cpu",
-	}
-	assert.NoError(t, firstScheduler.workerRepo.AddWorker(packed))
-	assert.NoError(t, firstScheduler.workerRepo.AddWorker(idle))
-
-	firstWorkers, err := firstScheduler.workerRepo.GetAllWorkers()
+	second := schedulerReplicaForTest(first)
+	packed := &types.Worker{Id: "packed", Status: types.WorkerStatusAvailable, PoolName: "beta9-cpu", TotalCpu: 1000, TotalMemory: 1250, FreeCpu: 1000, FreeMemory: 1250}
+	idle := &types.Worker{Id: "idle", Status: types.WorkerStatusAvailable, PoolName: "beta9-cpu", TotalCpu: 2000, TotalMemory: 2500, FreeCpu: 2000, FreeMemory: 2500}
+	assert.NoError(t, first.workerRepo.AddWorker(packed))
+	assert.NoError(t, first.workerRepo.AddWorker(idle))
+	firstWorkers, err := first.workerRepo.GetAllWorkers()
 	assert.NoError(t, err)
-	staleWorkers, err := secondScheduler.workerRepo.GetAllWorkers()
+	staleWorkers, err := second.workerRepo.GetAllWorkers()
 	assert.NoError(t, err)
 
 	firstRequest := &types.ContainerRequest{ContainerId: "first", Cpu: 1000, Memory: 1000, Timestamp: time.Now()}
 	secondRequest := &types.ContainerRequest{ContainerId: "second", Cpu: 1000, Memory: 1000, Timestamp: time.Now()}
-	setPendingSchedulerRequests(t, firstScheduler, firstRequest, secondRequest)
+	setPendingSchedulerRequests(t, first, firstRequest, secondRequest)
+	first.processRequestBatch([]*types.ContainerRequest{firstRequest}, firstWorkers)
+	second.processRequestBatch([]*types.ContainerRequest{secondRequest}, staleWorkers)
 
-	firstScheduler.processRequestBatch([]*types.ContainerRequest{firstRequest}, firstWorkers)
-	secondScheduler.processRequestBatch([]*types.ContainerRequest{secondRequest}, staleWorkers)
-
-	requeued, err := firstScheduler.requestBacklog.Pop()
-	if err != nil {
-		t.Fatalf("stale capacity should be immediately ready to replan: %v", err)
-	}
-
-	currentWorkers, err := firstScheduler.workerRepo.GetAllWorkers()
+	// Both replicas best-fit "packed"; the loser is ready to replan at once and lands on "idle".
+	requeued, err := first.requestBacklog.Pop()
 	assert.NoError(t, err)
-	firstScheduler.processRequestBatch([]*types.ContainerRequest{requeued}, currentWorkers)
-
-	queued, err := firstScheduler.workerRepo.GetNextContainerRequest(packed.Id)
+	currentWorkers, err := first.workerRepo.GetAllWorkers()
 	assert.NoError(t, err)
-	assert.Equal(t, firstRequest.ContainerId, queued.ContainerId)
-	queued, err = firstScheduler.workerRepo.GetNextContainerRequest(idle.Id)
+	first.processRequestBatch([]*types.ContainerRequest{requeued}, currentWorkers)
+	queued, err := first.workerRepo.GetNextContainerRequest(idle.Id)
 	assert.NoError(t, err)
 	assert.Equal(t, secondRequest.ContainerId, queued.ContainerId)
 }

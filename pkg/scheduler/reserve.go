@@ -183,26 +183,10 @@ func (a *schedulingAttempt) requeueForWorkerWait() {
 	a.requeueForWorkerWaitDelay(provisioningWorkerRequeueDelay, "worker_capacity_wait")
 }
 
-func (a *schedulingAttempt) requeueForWorkerWaitNow(reason string) {
-	if time.Since(a.request.Timestamp) >= maxScheduleRetryDuration {
-		a.fail(types.ContainerSchedulingFailureWorkerCapacityTimeout)
-		return
-	}
-
-	if err := a.scheduler.pushBacklog(a.request, 0); err != nil {
-		requestLog(log.Error(), a.request).Err(err).Msg("failed to requeue request waiting for worker capacity")
-		a.fail(types.ContainerSchedulingFailureReason(reason + "_requeue_failed"))
-	}
-}
-
 func (a *schedulingAttempt) requeueForWorkerWaitDelay(delay time.Duration, reason string) {
 	if time.Since(a.request.Timestamp) >= maxScheduleRetryDuration {
 		a.fail(types.ContainerSchedulingFailureWorkerCapacityTimeout)
 		return
-	}
-
-	if delay < requestProcessingInterval {
-		delay = requestProcessingInterval
 	}
 
 	if err := a.scheduler.pushBacklog(a.request, delay); err != nil {

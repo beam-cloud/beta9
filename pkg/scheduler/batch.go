@@ -9,6 +9,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/metrics"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -209,35 +210,25 @@ func (b *schedulingBatch) dispatchSchedules(schedules []plannedSchedule) {
 func (b *schedulingBatch) completeSchedule(schedule plannedSchedule, err error) {
 	attempt := newSchedulingAttempt(b.scheduler, schedule.request, b.workers)
 	if err != nil {
-		// A stale selection should be planned against a fresh worker snapshot
-		// immediately. It is expected when scheduler replicas race for the same
-		// best-fit worker and is not a fault of this request.
+		// A stale selection is expected when scheduler replicas race for the same
+		// worker: replan now against a fresh snapshot, keeping the request's place
+		// in line. Reclaimable capacity that moved is a capacity wait.
+		reason, level := "schedule_failed", zerolog.ErrorLevel
 		if errors.Is(err, repo.ErrWorkerCapacityChanged) {
-			attempt.recordBacklogWait(false, "worker_capacity_changed")
-			metrics.RecordSchedulerWorkerWait(time.Since(schedule.request.Timestamp), schedule.request, "worker_capacity_changed")
-			workerLog(requestLog(log.Debug(), schedule.request), schedule.worker).
-				Msg("worker capacity changed after selection; replanning request")
-			if attempt.runnable() {
-				attempt.requeueForWorkerWaitNow("worker_capacity_changed")
-			}
-			return
+			reason, level = "worker_capacity_changed", zerolog.DebugLevel
 		}
-
-		attempt.recordBacklogWait(false, "schedule_failed")
-		metrics.RecordSchedulerWorkerWait(time.Since(schedule.request.Timestamp), schedule.request, "schedule_failed")
-		workerLog(requestLog(log.Error(), schedule.request), schedule.worker).
-			Err(err).
-			Msg("unable to schedule planned request on worker")
-
-		// Reclaimable capacity that moved independently of the worker version is
-		// a capacity wait, not a fault of this request.
-		if errors.Is(err, repo.ErrEvictionVictimsChanged) || errors.Is(err, repo.ErrInsufficientEvictableCapacity) {
-			if attempt.runnable() {
-				attempt.requeueForWorkerWaitDelay(provisioningWorkerRequeueDelay, "reclaimable_capacity_changed")
-			}
-			return
+		attempt.recordBacklogWait(false, reason)
+		metrics.RecordSchedulerWorkerWait(time.Since(schedule.request.Timestamp), schedule.request, reason)
+		workerLog(requestLog(log.WithLevel(level), schedule.request), schedule.worker).Err(err).Msg("unable to schedule planned request on worker")
+		switch {
+		case !attempt.runnable():
+		case errors.Is(err, repo.ErrWorkerCapacityChanged):
+			attempt.requeueForWorkerWaitDelay(0, reason)
+		case errors.Is(err, repo.ErrEvictionVictimsChanged) || errors.Is(err, repo.ErrInsufficientEvictableCapacity):
+			attempt.requeueForWorkerWaitDelay(provisioningWorkerRequeueDelay, "reclaimable_capacity_changed")
+		default:
+			attempt.retrySoon(reason)
 		}
-		attempt.retryIfRunnable("schedule_failed")
 		return
 	}
 
