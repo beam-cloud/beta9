@@ -36,8 +36,6 @@ _EXPORTS = {
     "Pod": (".abstractions.pod", "Pod"),
     "ManagedEndpoint": (".abstractions.managed_endpoint", "ManagedEndpoint"),
     "Gpu": (".abstractions.managed_endpoint", "Gpu"),
-    "Pricing": (".abstractions.managed_endpoint", "Pricing"),
-    "Catalog": (".abstractions.managed_endpoint", "Catalog"),
     "Service": (".abstractions.service", "Service"),
     "Client": (".client.client", "Client"),
     "Task": (".client.task", "Task"),

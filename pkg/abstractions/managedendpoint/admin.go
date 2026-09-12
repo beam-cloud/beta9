@@ -380,3 +380,258 @@ func queryUint(c echo.Context, name string) uint32 {
 	v, _ := strconv.ParseUint(c.QueryParam(name), 10, 32)
 	return uint32(v)
 }
+
+// Operator views. The proto messages are the admin surface for the REST
+// mirror, the frontend and the SDK.
+
+// EndpointState is the one word shown to operators. Deploy problems come from
+// the repo's last CI run; everything after that from the fleet and the replicas.
+type EndpointState string
+
+const (
+	StateDeployFailed       EndpointState = "deploy_failed"
+	StateRetired            EndpointState = "retired"
+	StateDisabled           EndpointState = "disabled" // deployed but not placed by config.yaml
+	StateWaitingForCapacity EndpointState = "waiting_for_capacity"
+	StateIdle               EndpointState = "idle" // serverless placement, scaled to zero
+	StateLoading            EndpointState = "loading"
+	StateReady              EndpointState = "ready"
+	StateFailed             EndpointState = "failed"
+)
+
+// endpointState derives the state and one reason for an app.
+func endpointState(app *types.ManagedEndpoint, fleet *types.Fleet, gitops *types.GitOpsState, replicas []*types.EndpointReplica) (EndpointState, string) {
+	if app.Status == types.EndpointStatusRetired {
+		return StateRetired, "removed from the repo"
+	}
+	if gitops != nil {
+		if entry, ok := gitops.PerEndpoint[app.Spec.ID]; ok && entry.Status == types.GitOpsStatusFailed {
+			return StateDeployFailed, entry.Error
+		}
+	}
+	var placements map[string]types.FleetPlacement
+	if fleet != nil {
+		placements = fleet.Placements(app.Spec.ID)
+	}
+	if len(placements) == 0 {
+		return StateDisabled, "not enabled in config.yaml"
+	}
+	var want uint32
+	var gpus []string
+	serverless := false
+	for gpu, p := range placements {
+		want += p.MinReplicas
+		gpus = append(gpus, gpu)
+		serverless = serverless || p.Serverless
+	}
+	slices.Sort(gpus)
+	var ready, alive uint32
+	var lastFailure *types.EndpointReplica
+	for _, r := range replicas {
+		if r.EndpointID != app.Spec.ID {
+			continue
+		}
+		switch {
+		case r.Status == types.ReplicaStatusReady:
+			ready++
+			alive++
+		case r.Alive():
+			alive++
+		case r.Status == types.ReplicaStatusFailed && (lastFailure == nil || r.EndedAt.After(lastFailure.EndedAt)):
+			lastFailure = r
+		}
+	}
+	switch {
+	case ready > 0:
+		return StateReady, fmt.Sprintf("%d/%d replicas ready", ready, alive)
+	case alive > 0:
+		return StateLoading, fmt.Sprintf("%d replica(s) starting", alive)
+	case lastFailure != nil:
+		return StateFailed, fmt.Sprintf("last replica failed: %s", lastFailure.StatusReason)
+	case serverless:
+		return StateIdle, "scaled to zero; the first request starts a replica"
+	case want == 0:
+		return StateWaitingForCapacity, "minReplicas is 0; fills spare " + strings.Join(gpus, ", ") + " capacity only"
+	}
+	return StateWaitingForCapacity, "no idle " + strings.Join(gpus, ", ") + " in an opted-in pool"
+}
+
+func capacityToProto(c types.ReplicaCapacity) *pb.ReplicaCapacity {
+	return &pb.ReplicaCapacity{
+		InFlight:            c.InFlight,
+		MaxConcurrency:      c.MaxConcurrency,
+		Running:             c.Running,
+		Waiting:             c.Waiting,
+		KvCacheFreeMilli:    c.KVCacheFreeMilli,
+		DecodeTokensPerSec:  c.DecodeTokensPerSec,
+		PromptTokensPerSec:  c.PromptTokensPerSec,
+		TtftMs:              c.TTFTMs,
+		TpotMs:              c.TPOTMs,
+		PrefixCacheHitMilli: c.PrefixCacheHitMilli,
+	}
+}
+
+func capacityFromProto(c *pb.ReplicaCapacity) types.ReplicaCapacity {
+	if c == nil {
+		return types.ReplicaCapacity{}
+	}
+	return types.ReplicaCapacity{
+		InFlight:            c.InFlight,
+		MaxConcurrency:      c.MaxConcurrency,
+		Running:             c.Running,
+		Waiting:             c.Waiting,
+		KVCacheFreeMilli:    c.KvCacheFreeMilli,
+		DecodeTokensPerSec:  c.DecodeTokensPerSec,
+		PromptTokensPerSec:  c.PromptTokensPerSec,
+		TTFTMs:              c.TtftMs,
+		TPOTMs:              c.TpotMs,
+		PrefixCacheHitMilli: c.PrefixCacheHitMilli,
+	}
+}
+
+func configToProto(c types.ReplicaConfig) *pb.ReplicaConfig {
+	if c.Revision == 0 {
+		return nil
+	}
+	return &pb.ReplicaConfig{
+		Revision:      c.Revision,
+		ConfigJson:    string(c.Config),
+		Author:        c.Author,
+		SetAtUnixMs:   unixMs(c.SetAt),
+		AckedRevision: c.AckedRevision,
+		Applied:       c.Applied,
+		Error:         c.Error,
+		EffectiveJson: string(c.Effective),
+		AckedAtUnixMs: unixMs(c.AckedAt),
+		Actor:         c.Actor,
+	}
+}
+
+func replicaToProto(r *types.EndpointReplica) *pb.EndpointReplica {
+	if r == nil {
+		return nil
+	}
+	return &pb.EndpointReplica{
+		Id:                  r.ID,
+		EndpointId:          r.EndpointID,
+		Version:             uint32(r.Version),
+		Gpu:                 r.GPU,
+		GpuCount:            r.GPUCount,
+		Protected:           r.Protected,
+		PoolName:            r.PoolName,
+		ContainerId:         r.ContainerID,
+		WorkerId:            r.WorkerID,
+		MachineId:           r.MachineID,
+		ProviderWorkspaceId: r.ProviderWorkspaceID,
+		Address:             r.Address,
+		Status:              string(r.Status),
+		StatusReason:        r.StatusReason,
+		HarnessEnabled:      r.HarnessEnabled,
+		Config:              configToProto(r.Config),
+		Capacity:            capacityToProto(r.Capacity),
+		CapabilitiesJson:    string(r.Capabilities),
+		EngineMetricsJson:   string(r.EngineMetrics),
+		StartedAtUnixMs:     unixMs(r.StartedAt),
+		ReadyAtUnixMs:       unixMs(r.ReadyAt),
+		LastHeartbeatUnixMs: unixMs(r.LastHeartbeat),
+	}
+}
+
+func replicasToProto(replicas []*types.EndpointReplica) []*pb.EndpointReplica {
+	out := make([]*pb.EndpointReplica, 0, len(replicas))
+	for _, r := range replicas {
+		out = append(out, replicaToProto(r))
+	}
+	return out
+}
+
+func endpointToProto(e *types.ManagedEndpoint, fleet *types.Fleet, gitops *types.GitOpsState, replicas []*types.EndpointReplica) *pb.ManagedEndpoint {
+	state, reason := endpointState(e, fleet, gitops, replicas)
+	out := &pb.ManagedEndpoint{
+		State:           string(state),
+		StateReason:     reason,
+		Id:              e.Spec.ID,
+		SpecJson:        mustJSON(e),
+		StubId:          e.StubID,
+		Version:         uint32(e.Version),
+		GitSha:          e.GitSHA,
+		Status:          string(e.Status),
+		CreatedAtUnixMs: unixMs(e.CreatedAt),
+		UpdatedAtUnixMs: unixMs(e.UpdatedAt),
+	}
+	if fleet != nil {
+		out.PlacementsJson = mustJSON(fleet.Placements(e.Spec.ID))
+	}
+	for _, r := range replicas {
+		if r.EndpointID == e.Spec.ID && !r.Status.Terminal() {
+			out.TotalReplicas++
+			if r.Status == types.ReplicaStatusReady {
+				out.ReadyReplicas++
+			}
+		}
+	}
+	return out
+}
+
+func gitopsToProto(state *types.GitOpsState) *pb.GitOpsState {
+	out := &pb.GitOpsState{
+		RepoUrl:         state.RepoURL,
+		Ref:             state.Ref,
+		LastSha:         state.LastSHA,
+		LastRunAtUnixMs: unixMs(state.LastRunAt),
+		LastError:       state.LastError,
+		FleetError:      state.FleetError,
+		PendingSha:      state.PendingSHA,
+		PendingAtUnixMs: unixMs(state.PendingAt),
+	}
+	for _, e := range state.PerEndpoint {
+		out.Endpoints = append(out.Endpoints, &pb.GitOpsEndpointState{
+			Path:            e.Path,
+			Id:              e.ID,
+			Status:          string(e.Status),
+			Error:           e.Error,
+			StubId:          e.StubID,
+			Version:         uint32(e.Version),
+			UpdatedAtUnixMs: unixMs(e.UpdatedAt),
+		})
+	}
+	return out
+}
+
+func routeMetricsToProto(m *types.RouteMetrics, replicas []*types.EndpointReplica) *pb.EndpointMetrics {
+	if m == nil {
+		return nil
+	}
+	out := &pb.EndpointMetrics{
+		EndpointId:       m.EndpointID,
+		Gpu:              m.GPU,
+		WindowSeconds:    uint32(m.Window.Seconds()),
+		ConfigRevision:   m.ConfigRevision,
+		Requests:         m.Requests,
+		Errors:           m.Errors,
+		PromptTokens:     m.PromptTokens,
+		CompletionTokens: m.CompletionTokens,
+		TtftMs:           m.MeanTTFTMs(),
+		TpotMs:           m.MeanTPOTMs(),
+		CostMicroUsd:     m.CostMicroUSD,
+	}
+	if m.Requests > 0 {
+		out.QueueWaitMs = m.QueueWaitSumMs / m.Requests
+	}
+	var aggregate types.ReplicaCapacity
+	for _, replica := range replicas {
+		if replica.Status != types.ReplicaStatusReady {
+			continue
+		}
+		out.ReadyReplicas++
+		aggregate.InFlight += replica.Capacity.InFlight
+		aggregate.MaxConcurrency += replica.Capacity.MaxConcurrency
+		aggregate.Running += replica.Capacity.Running
+		aggregate.Waiting += replica.Capacity.Waiting
+		aggregate.DecodeTokensPerSec += replica.Capacity.DecodeTokensPerSec
+		aggregate.PromptTokensPerSec += replica.Capacity.PromptTokensPerSec
+	}
+	out.DecodeTokensPerSec = aggregate.DecodeTokensPerSec
+	out.AggregateCapacity = capacityToProto(aggregate)
+	return out
+}

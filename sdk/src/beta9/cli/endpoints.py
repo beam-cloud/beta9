@@ -1,7 +1,7 @@
 """`beta9 endpoints`: validate and deploy a hosted endpoints repo.
 
-The repo holds one Beam app per model under ``endpoints/<id>/app.py`` and a
-``config.yaml`` with placement. ``validate`` sends every app's spec and the
+The repo holds one ``ManagedEndpoint`` per model under ``endpoints/<id>/app.py``
+and a ``config.yaml`` that publishes and places them. ``validate`` sends every app's spec and the
 config to the gateway as a dry run; ``deploy`` deploys each app through the
 ordinary stub RPCs and then applies the config. Both print exactly what is
 wrong, per app, and exit non-zero on any problem.

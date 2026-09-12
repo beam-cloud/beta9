@@ -22,16 +22,16 @@ import (
 )
 
 // The endpoints repo deploys itself: its CI runs `beta9 endpoints deploy`,
-// which deploys every app through the ordinary stub RPCs and then calls
-// ApplyRepo with config.yaml and each app's outcome. Pull requests call the
-// same RPC as a dry run, so a commit is validated against this cluster's GPU
-// types, pools and registry before it merges.
+// which deploys every app through the ordinary stub RPCs (DeployStub
+// registers the app) and then calls ApplyRepo with config.yaml and each app's
+// outcome: config.yaml publishes each app and places it on GPU types. Pull
+// requests call the same RPC as a dry run.
 
 const imageCheckTimeout = 15 * time.Second
 
 // ApplyRepo validates one commit of the endpoints repo and, unless dry_run,
-// records deploy outcomes, applies config.yaml and retires endpoints whose
-// app directory is gone. Validation problems are returned in errors.
+// records deploy outcomes, applies config.yaml and retires apps whose
+// directory is gone. Validation problems are returned in errors.
 func (s *Service) ApplyRepo(ctx context.Context, in *pb.ApplyRepoRequest) (*pb.ApplyRepoResponse, error) {
 	out := &pb.ApplyRepoResponse{}
 	return admin(s, ctx, out, func() error {
@@ -49,14 +49,14 @@ func (s *Service) ApplyRepo(ctx context.Context, in *pb.ApplyRepoRequest) (*pb.A
 	})
 }
 
-// review is one commit of the repo checked against this cluster.
+// review is one commit checked against this cluster.
 type review struct {
 	in      *pb.ApplyRepoRequest
 	out     *pb.ApplyRepoResponse
 	now     time.Time
 	state   *types.GitOpsState
-	specs   map[string]*types.ManagedEndpointSpec // what the repo declares at this commit
-	present map[string]bool                       // endpoint ids with an app directory
+	apps    map[string]*types.ManagedEndpoint // what the repo declares at this commit
+	present map[string]bool                   // endpoint ids with an app directory
 	fleet   *types.Fleet
 	failed  []string
 }
@@ -77,9 +77,15 @@ func (s *Service) applyRepo(ctx context.Context, in *pb.ApplyRepoRequest, out *p
 	if previous == nil {
 		previous = &types.GitOpsState{}
 	}
-	active, err := s.activeEndpoints(ctx)
+	all, err := s.repo.ListEndpoints(ctx)
 	if err != nil {
 		return nil, err
+	}
+	active := map[string]*types.ManagedEndpoint{}
+	for _, app := range all {
+		if app.Enabled() {
+			active[app.Spec.ID] = app
+		}
 	}
 	now := time.Now()
 	r := &review{
@@ -87,87 +93,91 @@ func (s *Service) applyRepo(ctx context.Context, in *pb.ApplyRepoRequest, out *p
 		out:     out,
 		now:     now,
 		state:   &types.GitOpsState{RepoURL: in.RepoUrl, Ref: in.Ref, LastSHA: in.Sha, LastRunAt: now, PerEndpoint: map[string]types.GitOpsEndpointState{}},
-		specs:   map[string]*types.ManagedEndpointSpec{},
+		apps:    map[string]*types.ManagedEndpoint{},
 		present: map[string]bool{},
 	}
 	for _, e := range in.Endpoints {
 		s.reviewApp(ctx, r, e, previous, active)
 	}
 	s.reviewFleet(r)
-	if in.DryRun {
-		return nil, s.announce(ctx, previous, in)
+	if !in.DryRun {
+		return r.state, s.commitRepo(ctx, r, active)
 	}
-	return r.state, s.commitRepo(ctx, r, active)
-}
-
-// announce remembers a deploy that has started: `deploy` names its commit in
-// its dry run, `validate` does not. The commit stays pending until it applies,
-// so a CI run that dies in between is visible.
-func (s *Service) announce(ctx context.Context, state *types.GitOpsState, in *pb.ApplyRepoRequest) error {
+	// `deploy` names its commit in its dry run, `validate` does not. The
+	// commit stays pending until it applies, so a CI run that dies in between
+	// is visible.
 	if in.Sha == "" {
-		return nil
+		return nil, nil
 	}
-	state.PendingSHA, state.PendingAt = in.Sha, time.Now()
-	return s.repo.SaveGitOpsState(ctx, state)
+	previous.PendingSHA, previous.PendingAt = in.Sha, now
+	return nil, s.repo.SaveGitOpsState(ctx, previous)
 }
 
-func (s *Service) activeEndpoints(ctx context.Context) (map[string]*types.ManagedEndpoint, error) {
-	endpoints, err := s.repo.ListEndpoints(ctx)
-	if err != nil {
-		return nil, err
-	}
-	active := map[string]*types.ManagedEndpoint{}
-	for _, e := range endpoints {
-		if e.Enabled() {
-			active[e.Spec.ID] = e
-		}
-	}
-	return active, nil
-}
-
-// reviewApp records one app directory's outcome and what it declares.
+// reviewApp records one app directory's outcome and what it declares. A
+// deployed app is what DeployStub registered; a dry run checks the spec CI read.
 func (s *Service) reviewApp(ctx context.Context, r *review, e *pb.RepoEndpoint, previous *types.GitOpsState, active map[string]*types.ManagedEndpoint) {
 	entry := types.GitOpsEndpointState{Path: e.Path, ID: e.Id, Status: types.GitOpsStatusApplied, StubID: e.StubId, Version: uint(e.Version), UpdatedAt: r.now}
 	if entry.ID == "" {
-		entry.ID = previous.PerEndpoint[e.Path].ID // a broken import keeps its endpoint until the directory is gone
+		entry.ID = previous.PerEndpoint[e.Path].ID // a broken import keeps its app until the directory is gone
 	}
-	spec, err := appSpec(e)
+	app, err := s.declaredApp(ctx, r, e, active)
 	if err != nil {
 		entry.Status, entry.Error = types.GitOpsStatusFailed, err.Error()
 		r.fail("%s: %s", e.Path, entry.Error)
 		r.failed = append(r.failed, e.Path+": "+entry.Error)
 	} else {
-		entry.ID = spec.ID
-		r.specs[spec.ID] = spec
+		entry.ID = app.Spec.ID
+		r.apps[app.Spec.ID] = app
 		if r.in.DryRun {
-			s.checkSpec(ctx, e, spec, r.fail, r.warn)
+			s.checkSpec(ctx, r, e, &app.Spec)
 		}
 	}
 	if entry.ID != "" {
 		r.present[entry.ID] = true
-		if existing := active[entry.ID]; existing != nil && r.specs[entry.ID] == nil {
-			r.specs[entry.ID] = &existing.Spec // config.yaml is checked against what still runs
+		if existing := active[entry.ID]; existing != nil && r.apps[entry.ID] == nil {
+			r.apps[entry.ID] = existing // config.yaml is checked against what still runs
 		}
 	}
 	r.state.PerEndpoint[e.Path] = entry
 }
 
-// appSpec is what one app directory declares, or why it cannot be applied.
-func appSpec(e *pb.RepoEndpoint) (*types.ManagedEndpointSpec, error) {
+// declaredApp is the app one directory declares, or why it cannot be applied.
+// On a deploy it is what DeployStub registered; a dry run checks the spec CI
+// read from app.py (the ManagedEndpoint spec()).
+func (s *Service) declaredApp(ctx context.Context, r *review, e *pb.RepoEndpoint, active map[string]*types.ManagedEndpoint) (*types.ManagedEndpoint, error) {
 	if e.Error != "" {
 		return nil, errors.New(e.Error)
 	}
-	spec, err := parseSpec(e.SpecJson)
-	if err != nil {
+	if e.Id != e.Path {
+		return nil, fmt.Errorf("id %q must equal its directory %q", e.Id, e.Path)
+	}
+	if !r.in.DryRun {
+		app, err := s.repo.GetEndpoint(ctx, e.Id)
+		if err != nil {
+			return nil, err
+		}
+		if app == nil || app.StubID != e.StubId {
+			return nil, fmt.Errorf("stub %s was not registered as %s; deploy it with this cluster's gateway", e.StubId, e.Id)
+		}
+		return app, nil
+	}
+	if strings.TrimSpace(e.SpecJson) == "" {
+		return nil, errors.New("spec: missing")
+	}
+	app := &types.ManagedEndpoint{StubID: e.StubId, Version: uint(e.Version), Status: types.EndpointStatusActive}
+	if err := json.Unmarshal([]byte(e.SpecJson), &app.Spec); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
 	}
-	if spec.ID != e.Path {
-		return nil, fmt.Errorf("id %q must equal its directory %q", spec.ID, e.Path)
+	app.Spec.Normalize()
+	if err := app.Spec.Validate(); err != nil {
+		return nil, fmt.Errorf("spec: %w", err)
 	}
-	return spec, nil
+	return app, nil
 }
 
-// reviewFleet parses config.yaml and checks every placement against the apps.
+// reviewFleet parses config.yaml and checks every entry against the app it
+// publishes: token prices need an engine that reports tokens, OpenRouter
+// metadata must fit the engine kind, and placements need declared GPUs.
 func (s *Service) reviewFleet(r *review) {
 	fleet, err := parseFleet(r.in.ConfigYaml)
 	if err != nil {
@@ -178,13 +188,21 @@ func (s *Service) reviewFleet(r *review) {
 	r.fleet = fleet
 	for _, id := range slices.Sorted(maps.Keys(fleet.Endpoints)) {
 		entry := fleet.Endpoints[id]
-		spec := r.specs[id]
-		if spec == nil {
+		app := r.apps[id]
+		if app == nil {
 			r.fail("config.yaml: %s is not an app in the repo", id)
 			continue
 		}
+		if entry.Enabled && entry.Pricing.PerToken() && app.Spec.Kind != types.EndpointKindLLM && app.Spec.Kind != types.EndpointKindEmbedding {
+			r.fail("config.yaml: %s: token pricing needs an llm or embedding engine; %s apps are priced per request", id, app.Spec.Kind)
+		}
+		if entry.Enabled && entry.OpenRouter != nil {
+			if err := entry.OpenRouter.ValidateFor(app.Spec.Kind, entry.Catalog, entry.Pricing); err != nil {
+				r.fail("config.yaml: %s: openrouter: %v", id, err)
+			}
+		}
 		for _, gpu := range slices.Sorted(maps.Keys(entry.GPUs)) {
-			_, declared := spec.Gpu[gpu]
+			_, declared := app.Spec.Gpu[gpu]
 			switch {
 			case !declared:
 				r.fail("config.yaml: %s does not declare gpu %q in its app", id, gpu)
@@ -192,35 +210,50 @@ func (s *Service) reviewFleet(r *review) {
 				r.warn("config.yaml: %s: no pool on this cluster hosts %s", id, gpu)
 			}
 		}
-		if entry.OpenRouter != nil {
-			if err := entry.OpenRouter.ValidateFor(spec); err != nil {
-				r.fail("config.yaml: %s: openrouter: %v", id, err)
-			}
-		}
 	}
 }
 
-// commitRepo records the deploy: the commit is stamped on every deployed
-// endpoint, endpoints whose directory is gone are retired (the controller
-// drains them), and config.yaml becomes the fleet.
+// commitRepo records the deploy: the commit and publication are stamped on
+// every deployed app, apps whose directory is gone are retired (the
+// controller drains them), and config.yaml becomes the fleet.
 func (s *Service) commitRepo(ctx context.Context, r *review, active map[string]*types.ManagedEndpoint) error {
-	for id, endpoint := range active {
-		switch {
-		case !r.present[id]:
-			if err := s.retireEndpoint(ctx, r, endpoint); err != nil {
-				return err
-			}
-			delete(active, id)
-		case r.state.PerEndpoint[id].Status == types.GitOpsStatusApplied && endpoint.GitSHA != r.in.Sha:
-			endpoint.GitSHA, endpoint.UpdatedAt = r.in.Sha, r.now
-			if err := s.repo.SaveEndpoint(ctx, endpoint); err != nil {
-				return err
-			}
+	for id, app := range active {
+		if r.present[id] {
+			continue
 		}
+		app.Status, app.UpdatedAt = types.EndpointStatusRetired, r.now
+		if err := s.repo.SaveEndpoint(ctx, app); err != nil {
+			return err
+		}
+		delete(active, id)
+		r.state.PerEndpoint[id] = types.GitOpsEndpointState{Path: id, ID: id, Status: types.GitOpsStatusRetired, UpdatedAt: r.now}
+		s.emit(types.EventEndpointGitOps, types.EventEndpointSchema{EndpointID: id, Action: "gitops.retired", Message: "removed from repo", Data: map[string]any{"sha": r.in.Sha}})
 	}
 	if r.fleet != nil {
-		if err := s.saveFleet(ctx, r, active); err != nil {
+		// Placements of apps that no longer run are dropped, never blocking the rest.
+		r.fleet.GitSHA = r.in.Sha
+		if dropped := r.fleet.Prune(active); len(dropped) > 0 {
+			r.state.FleetError = "skipped: " + strings.Join(dropped, "; ")
+		}
+		if err := s.repo.SaveFleet(ctx, r.fleet); err != nil {
 			return err
+		}
+		s.emit(types.EventEndpointGitOps, types.EventEndpointSchema{Action: "gitops.fleet", Message: r.in.Sha, Data: map[string]any{"fleet": r.fleet.Endpoints}})
+	}
+	for id, app := range active {
+		if r.state.PerEndpoint[id].Status != types.GitOpsStatusApplied {
+			continue
+		}
+		publication, published := app.Publication, app.Published
+		if r.fleet != nil {
+			e, ok := r.fleet.Endpoints[id]
+			publication, published = e.Publication, ok && e.Enabled
+		}
+		if app.GitSHA != r.in.Sha || app.Published != published || mustJSON(app.Publication) != mustJSON(publication) {
+			app.GitSHA, app.Publication, app.Published, app.UpdatedAt = r.in.Sha, publication, published, r.now
+			if err := s.repo.SaveEndpoint(ctx, app); err != nil {
+				return err
+			}
 		}
 	}
 	r.state.LastError = strings.Join(r.failed, "\n")
@@ -232,40 +265,12 @@ func (s *Service) commitRepo(ctx context.Context, r *review, active map[string]*
 	return nil
 }
 
-func (s *Service) retireEndpoint(ctx context.Context, r *review, endpoint *types.ManagedEndpoint) error {
-	id := endpoint.Spec.ID
-	endpoint.Status, endpoint.UpdatedAt = types.EndpointStatusRetired, r.now
-	if err := s.repo.SaveEndpoint(ctx, endpoint); err != nil {
-		return err
-	}
-	r.state.PerEndpoint[id] = types.GitOpsEndpointState{Path: id, ID: id, Status: types.GitOpsStatusRetired, UpdatedAt: r.now}
-	s.emit(types.EventEndpointGitOps, types.EventEndpointSchema{EndpointID: id, Action: "gitops.retired", Message: "removed from repo", Data: map[string]any{"sha": r.in.Sha}})
-	return nil
-}
-
-// saveFleet applies config.yaml, minus placements of endpoints that no longer run.
-func (s *Service) saveFleet(ctx context.Context, r *review, active map[string]*types.ManagedEndpoint) error {
-	known := map[string]*types.ManagedEndpointSpec{}
-	for id, e := range active {
-		known[id] = &e.Spec
-	}
-	r.fleet.GitSHA = r.in.Sha
-	if dropped := r.fleet.Prune(known); len(dropped) > 0 {
-		r.state.FleetError = "skipped: " + strings.Join(dropped, "; ")
-	}
-	if err := s.repo.SaveFleet(ctx, r.fleet); err != nil {
-		return err
-	}
-	s.emit(types.EventEndpointGitOps, types.EventEndpointSchema{Action: "gitops.fleet", Message: r.in.Sha, Data: map[string]any{"fleet": r.fleet.Endpoints}})
-	return nil
-}
-
 // checkSpec is the pre-merge check of one app: known GPU types with a pool on
 // this cluster, and a reachable image.
-func (s *Service) checkSpec(ctx context.Context, e *pb.RepoEndpoint, spec *types.ManagedEndpointSpec, fail, warn func(string, ...any)) {
+func (s *Service) checkSpec(ctx context.Context, r *review, e *pb.RepoEndpoint, spec *types.ManagedEndpointSpec) {
 	for _, gpu := range slices.Sorted(maps.Keys(spec.Gpu)) {
 		if gpu != types.CPUInventoryKey && len(s.controller.pools(gpu)) == 0 {
-			warn("%s: no pool on this cluster hosts %s", e.Path, gpu)
+			r.warn("%s: no pool on this cluster hosts %s", e.Path, gpu)
 		}
 	}
 	if e.Image == "" {
@@ -273,7 +278,7 @@ func (s *Service) checkSpec(ctx context.Context, e *pb.RepoEndpoint, spec *types
 	}
 	ref, err := name.ParseReference(e.Image)
 	if err != nil {
-		fail("%s: image %q: %v", e.Path, e.Image, err)
+		r.fail("%s: image %q: %v", e.Path, e.Image, err)
 		return
 	}
 	ctx, cancel := context.WithTimeout(ctx, imageCheckTimeout)
@@ -283,25 +288,13 @@ func (s *Service) checkSpec(ctx context.Context, e *pb.RepoEndpoint, spec *types
 	switch {
 	case err == nil:
 	case errors.As(err, &terr) && (terr.StatusCode == http.StatusUnauthorized || terr.StatusCode == http.StatusForbidden):
-		warn("%s: image %s needs registry credentials; not verified", e.Path, e.Image)
+		r.warn("%s: image %s needs registry credentials; not verified", e.Path, e.Image)
 	default:
-		fail("%s: image %s: %v", e.Path, e.Image, err)
+		r.fail("%s: image %s: %v", e.Path, e.Image, err)
 	}
 }
 
-func parseSpec(raw string) (*types.ManagedEndpointSpec, error) {
-	if strings.TrimSpace(raw) == "" {
-		return nil, errors.New("missing")
-	}
-	spec := &types.ManagedEndpointSpec{}
-	if err := json.Unmarshal([]byte(raw), spec); err != nil {
-		return nil, err
-	}
-	spec.Normalize()
-	return spec, spec.Validate()
-}
-
-// parseFleet reads config.yaml: endpoint id -> {enabled, gpus: {<gpu>: placement}}.
+// parseFleet reads config.yaml: endpoint id -> {enabled, gpus, catalog, public, allowed_workspaces, pricing, openrouter}.
 func parseFleet(text string) (*types.Fleet, error) {
 	if strings.TrimSpace(text) == "" {
 		return nil, errors.New("an endpoint mapping is required (use {} to disable all endpoints)")
@@ -337,74 +330,4 @@ func parseFleet(text string) (*types.Fleet, error) {
 	}
 	fleet.Normalize()
 	return fleet, fleet.Validate()
-}
-
-// Endpoint states shown to operators. Deploy problems come from the repo's
-// last CI run; everything after that from the fleet and the replicas.
-const (
-	StateDeployFailed       = "deploy_failed"
-	StateRetired            = "retired"
-	StateDisabled           = "disabled" // deployed but not placed by config.yaml
-	StateWaitingForCapacity = "waiting_for_capacity"
-	StateIdle               = "idle" // serverless placement, scaled to zero
-	StateLoading            = "loading"
-	StateReady              = "ready"
-	StateFailed             = "failed"
-)
-
-// endpointState derives one word and one reason for an endpoint.
-func endpointState(e *types.ManagedEndpoint, fleet *types.Fleet, gitops *types.GitOpsState, replicas []*types.EndpointReplica) (string, string) {
-	if e.Status == types.EndpointStatusRetired {
-		return StateRetired, "removed from the repo"
-	}
-	if gitops != nil {
-		if entry, ok := gitops.PerEndpoint[e.Spec.ID]; ok && entry.Status == types.GitOpsStatusFailed {
-			return StateDeployFailed, entry.Error
-		}
-	}
-	var placements map[string]types.FleetPlacement
-	if fleet != nil {
-		placements = fleet.Placements(e.Spec.ID)
-	}
-	if len(placements) == 0 {
-		return StateDisabled, "not enabled in config.yaml"
-	}
-	var want uint32
-	var gpus []string
-	serverless := false
-	for gpu, p := range placements {
-		want += p.MinReplicas
-		gpus = append(gpus, gpu)
-		serverless = serverless || p.Serverless
-	}
-	slices.Sort(gpus)
-	var ready, alive uint32
-	var lastFailure *types.EndpointReplica
-	for _, r := range replicas {
-		if r.EndpointID != e.Spec.ID {
-			continue
-		}
-		switch {
-		case r.Status == types.ReplicaStatusReady:
-			ready++
-			alive++
-		case r.Alive():
-			alive++
-		case r.Status == types.ReplicaStatusFailed && (lastFailure == nil || r.EndedAt.After(lastFailure.EndedAt)):
-			lastFailure = r
-		}
-	}
-	switch {
-	case ready > 0:
-		return StateReady, fmt.Sprintf("%d/%d replicas ready", ready, alive)
-	case alive > 0:
-		return StateLoading, fmt.Sprintf("%d replica(s) starting", alive)
-	case lastFailure != nil:
-		return StateFailed, fmt.Sprintf("last replica failed: %s", lastFailure.StatusReason)
-	case serverless:
-		return StateIdle, "scaled to zero; the first request starts a replica"
-	case want == 0:
-		return StateWaitingForCapacity, "minReplicas is 0; fills spare " + strings.Join(gpus, ", ") + " capacity only"
-	}
-	return StateWaitingForCapacity, "no idle " + strings.Join(gpus, ", ") + " in an opted-in pool"
 }
