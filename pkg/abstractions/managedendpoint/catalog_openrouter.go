@@ -9,32 +9,21 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-// Provider documents are deliberately separate from the customer catalog.
-// OpenRouter's v2 schema is closed; combining it with our OpenAI list metadata
-// would invalidate each entry and couple the dashboard to provider onboarding.
+// handleListOpenRouterModels publishes the provider catalog: OpenRouter's v2
+// schema is closed, so it stays separate from the OpenAI list.
 func (r *router) handleListOpenRouterModels(ctx echo.Context) error {
 	cc := ctx.(*auth.HttpAuthContext)
-	rctx := ctx.Request().Context()
-	endpoints, err := r.s.repo.ListEndpoints(rctx)
+	apps, err := r.visible(ctx.Request().Context(), cc.AuthInfo)
 	if err != nil {
 		return errRegistry.write(ctx)
 	}
-	fleet, err := r.s.repo.GetFleet(rctx)
-	if err != nil {
-		return errRegistry.write(ctx)
-	}
-	data := make([]map[string]any, 0, len(endpoints))
-	for _, endpoint := range endpoints {
-		configured := fleet.Endpoints[endpoint.Spec.ID]
-		published := endpoint.Enabled() && configured.Enabled && configured.OpenRouter != nil
-		if !published || !r.allowed(rctx, endpoint, cc.AuthInfo) {
+	data := make([]map[string]any, 0, len(apps))
+	for _, app := range apps {
+		if app.OpenRouter == nil {
 			continue
 		}
-		if err := configured.OpenRouter.ValidateFor(&endpoint.Spec); err != nil {
-			return errInvalidCatalog.write(ctx)
-		}
-		document := openRouterModel(endpoint, configured.OpenRouter)
-		if err := types.ValidateOpenRouterDocument(document); err != nil {
+		document := openRouterModel(app)
+		if app.OpenRouter.ValidateFor(app.Spec.Kind, app.Catalog, app.Pricing) != nil || types.ValidateOpenRouterDocument(document) != nil {
 			return errInvalidCatalog.write(ctx)
 		}
 		data = append(data, document)
@@ -42,45 +31,31 @@ func (r *router) handleListOpenRouterModels(ctx echo.Context) error {
 	return ctx.JSON(http.StatusOK, map[string]any{"object": "list", "data": data})
 }
 
-func openRouterModel(endpoint *types.ManagedEndpoint, metadata *types.OpenRouterMetadata) map[string]any {
-	spec := &endpoint.Spec
+// openRouterOutputs maps engine kinds to OpenRouter output modalities; the rest are text.
+var openRouterOutputs = map[types.EndpointKind]string{types.EndpointKindEmbedding: "embeddings", types.EndpointKindImage: "image"}
+
+func openRouterModel(app *types.ManagedEndpoint) map[string]any {
+	m := app.OpenRouter
 	input := map[string]any{"type": "text"}
-	if spec.Catalog.ContextLength > 0 {
-		input["supported_inputs"] = map[string]any{
-			"max_context_length": map[string]any{"value": spec.Catalog.ContextLength, "unit": "token"},
-		}
+	if app.Catalog.ContextLength > 0 {
+		input["supported_inputs"] = map[string]any{"max_context_length": map[string]any{"value": app.Catalog.ContextLength, "unit": "token"}}
 	}
-	outputKind := "text"
-	switch spec.Kind {
-	case types.EndpointKindEmbedding:
-		outputKind = "embeddings"
-	case types.EndpointKindImage:
-		outputKind = "image"
-	}
-	output := metadata.Output(outputKind)
-	var inputPrices, outputPrices, requestPrices []map[string]any
+	output := m.Output(cmp.Or(openRouterOutputs[app.Spec.Kind], "text"))
 	price := func(kind, unit, cost string) map[string]any {
 		return map[string]any{"type": kind, "unit": unit, "cost_usd": cost}
 	}
-	// Omitted charges are absent SKUs. Explicit zero remains a real free SKU.
-	if spec.Pricing.PromptTokens != "" {
-		inputPrices = append(inputPrices, price("prompt", "token", spec.Pricing.PromptTokens))
-	}
-	if spec.Pricing.CachedPromptTokens != "" {
-		cached := price("cached_prompt", "token", spec.Pricing.CachedPromptTokens)
-		// Beam charges observed engine cache hits; callers do not create or write
-		// a cache SKU through this API.
-		cached["implicit"] = true
-		inputPrices = append(inputPrices, cached)
-	}
-	if spec.Pricing.CompletionTokens != "" {
-		outputPrices = append(outputPrices, price("completion", "token", spec.Pricing.CompletionTokens))
-	}
-	if spec.Pricing.Image != "" {
-		outputPrices = append(outputPrices, price("completion", "image", spec.Pricing.Image))
-	}
-	if spec.Pricing.Request != "" {
-		requestPrices = append(requestPrices, price("request", "request", spec.Pricing.Request))
+	// Omitted charges are absent SKUs; an explicit zero is a real free SKU.
+	var inputPrices, outputPrices []map[string]any
+	if p := app.Pricing; p.PerToken() {
+		inputPrices = append(inputPrices, price("prompt", "token", p.PromptTokens))
+		if p.CachedPromptTokens != "" {
+			cached := price("cached_prompt", "token", p.CachedPromptTokens)
+			cached["implicit"] = true // Beam charges observed engine cache hits
+			inputPrices = append(inputPrices, cached)
+		}
+		if p.CompletionTokens != "" {
+			outputPrices = append(outputPrices, price("completion", "token", p.CompletionTokens))
+		}
 	}
 	if len(inputPrices) > 0 {
 		input["pricing"] = inputPrices
@@ -89,24 +64,20 @@ func openRouterModel(endpoint *types.ManagedEndpoint, metadata *types.OpenRouter
 		output["pricing"] = outputPrices
 	}
 	document := map[string]any{
-		"schema_version": "2.4", "id": spec.ID,
-		"name": cmp.Or(spec.Catalog.Name, spec.ID), "created": endpoint.CreatedAt.Unix(),
-		"description":      spec.Catalog.Description,
+		"schema_version": "2.4", "id": app.Spec.ID, "name": app.Catalog.Name, "created": app.CreatedAt.Unix(), "description": app.Catalog.Description,
 		"input_modalities": []any{input}, "output_modalities": []any{output},
 	}
-	if len(requestPrices) > 0 {
-		document["pricing"] = requestPrices
+	if app.Pricing.PerRequest() {
+		document["pricing"] = []map[string]any{price("request", "request", app.Pricing.Request)}
 	}
-	if metadata.HuggingFaceID != "" {
-		document["hugging_face_id"] = metadata.HuggingFaceID
+	if m.HuggingFaceID != "" {
+		document["hugging_face_id"] = m.HuggingFaceID
 	}
-	if metadata.Quantization != "" {
-		document["quantization"] = metadata.Quantization
+	if m.Quantization != "" {
+		document["quantization"] = m.Quantization
 	}
-	if len(metadata.Datacenters) > 0 {
-		document["datacenters"] = metadata.Datacenters
+	if len(m.Datacenters) > 0 {
+		document["datacenters"] = m.Datacenters
 	}
-	// is_ready is launch control in OpenRouter: false hides a live model.
-	// Replica availability belongs in fast admission/429 responses, never here.
 	return document
 }

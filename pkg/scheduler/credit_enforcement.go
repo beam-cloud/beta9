@@ -107,7 +107,7 @@ func (s *Scheduler) enforceCredits(ctx context.Context) error {
 						// Never stop an unknown workload based on a guessed type.
 						exempt = true
 					} else {
-						exempt = stub.Type.IsPlatformWorkload()
+						exempt = stub.PlatformWorkload()
 					}
 					exemptStubs[container.StubId] = exempt
 				}

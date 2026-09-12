@@ -525,7 +525,7 @@ func (s *Scheduler) privatePoolQuotaExempt(request *types.ContainerRequest) bool
 	}
 	// Managed endpoint replicas are platform workloads in the cluster admin
 	// workspace: they are neither credit-gated nor counted against a quota.
-	if request.Stub.Type.IsPlatformWorkload() {
+	if request.Stub.PlatformWorkload() {
 		return true
 	}
 	if s.workerPoolManager == nil {

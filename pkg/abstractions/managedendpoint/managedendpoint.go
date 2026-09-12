@@ -67,6 +67,10 @@ type Opts struct {
 	Scheduler        *scheduler.Scheduler
 	RedisClient      *common.RedisClient
 	Tailscale        *network.Tailscale
+	// Gateway is the gateway's own HTTP router; hosted requests to ordinary
+	// deployments are dispatched through it, so every execution service keeps
+	// its own admission, buffering and task bookkeeping.
+	Gateway http.Handler
 	// RouteGroup is the root echo group (/v1 is mounted under it).
 	RouteGroup *echo.Group
 	// AdminRouteGroup receives the /api/v1/endpoints REST mirror.
@@ -90,14 +94,16 @@ type Service struct {
 	scheduler  *scheduler.Scheduler
 	rdb        *common.RedisClient
 	tailscale  *network.Tailscale
+	gateway    http.Handler
 	drainCtx   context.Context
 
 	controller *controller
 	router     *router
-	meter      *meter
+	billing    *billing
 
 	adminMu        sync.Mutex
 	adminWorkspace *types.Workspace
+	adminToken     string
 
 	transports sync.Map // replica address -> *http.Transport; dropped when the replica finishes
 
@@ -121,6 +127,7 @@ func New(ctx context.Context, opts Opts) (*Service, error) {
 		scheduler:  opts.Scheduler,
 		rdb:        opts.RedisClient,
 		tailscale:  opts.Tailscale,
+		gateway:    opts.Gateway,
 		drainCtx:   opts.DrainContext,
 	}
 	s.config.ApplyDefaults()
@@ -139,7 +146,7 @@ func New(ctx context.Context, opts Opts) (*Service, error) {
 
 	s.controller = newController(s)
 	s.router = newRouter(s)
-	s.meter = newMeter(s)
+	s.billing = newBilling(s)
 
 	authMiddleware := auth.AuthMiddleware(opts.BackendRepo, opts.WorkspaceRepo)
 	if opts.RouteGroup != nil {
@@ -151,7 +158,7 @@ func New(ctx context.Context, opts Opts) (*Service, error) {
 	}
 
 	go s.controller.run(ctx)
-	go s.meter.run(ctx)
+	go s.billing.run(ctx)
 	return s, nil
 }
 
@@ -208,6 +215,25 @@ func (s *Service) authorizeAdmin(ctx context.Context) error {
 		return status.Error(codes.PermissionDenied, "cluster admin token required")
 	}
 	return nil
+}
+
+// adminToken is the admin workspace token hosted runners and internal
+// dispatch authenticate with; it never reaches a caller.
+func (s *Service) adminTokenKey(ctx context.Context) (string, error) {
+	workspace, err := s.AdminWorkspace(ctx)
+	if err != nil {
+		return "", err
+	}
+	s.adminMu.Lock()
+	defer s.adminMu.Unlock()
+	if s.adminToken == "" {
+		token, err := s.backend.RetrieveActiveToken(ctx, workspace.Id)
+		if err != nil {
+			return "", err
+		}
+		s.adminToken = token.Key
+	}
+	return s.adminToken, nil
 }
 
 func clusterAdmin(a *auth.AuthInfo) bool {
@@ -468,10 +494,10 @@ func replicasToProto(replicas []*types.EndpointReplica) []*pb.EndpointReplica {
 func endpointToProto(e *types.ManagedEndpoint, fleet *types.Fleet, gitops *types.GitOpsState, replicas []*types.EndpointReplica) *pb.ManagedEndpoint {
 	state, reason := endpointState(e, fleet, gitops, replicas)
 	out := &pb.ManagedEndpoint{
-		State:           state,
+		State:           string(state),
 		StateReason:     reason,
 		Id:              e.Spec.ID,
-		SpecJson:        mustJSON(e.Spec),
+		SpecJson:        mustJSON(e),
 		StubId:          e.StubID,
 		Version:         uint32(e.Version),
 		GitSha:          e.GitSHA,

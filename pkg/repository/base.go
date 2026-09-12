@@ -190,18 +190,21 @@ type ManagedEndpointRepository interface {
 	SaveGitOpsState(ctx context.Context, state *types.GitOpsState) error
 	GetGitOpsState(ctx context.Context) (*types.GitOpsState, error)
 
-	// Route metrics (minute buckets, bounded retention)
-	RecordRouteSample(ctx context.Context, sample types.RouteSample) error
+	// Route metrics (minute buckets, bounded retention), derived from settled charges
+	RecordRouteSample(ctx context.Context, charge *types.Charge) error
 	GetRouteMetrics(ctx context.Context, endpointID, gpu, replicaID string, configRevision uint64, window time.Duration) (*types.RouteMetrics, error)
 
-	// Route records: generation lookups
-	SaveGeneration(ctx context.Context, record *types.EventEndpointRouteSchema, ttl time.Duration) error
-	GetGeneration(ctx context.Context, generationID string) (*types.EventEndpointRouteSchema, error)
-	ListPendingAccounting(ctx context.Context, limit int64) ([]types.EventEndpointRouteSchema, error)
-	CompleteAccounting(ctx context.Context, generationID string, ttl time.Duration) error
+	// Charge journal: the durable accounting outbox
+	SaveCharge(ctx context.Context, charge *types.Charge) (written bool, err error)
+	GetCharge(ctx context.Context, id string) (*types.Charge, error)
+	ListPendingCharges(ctx context.Context, now time.Time, limit int64) ([]*types.Charge, error)
+	DeferAccounting(ctx context.Context, id string, until time.Time) error
+	CompleteAccounting(ctx context.Context, id string, ttl time.Duration) error
+	GetChargeSchema(ctx context.Context) (string, error)
+	SetChargeSchema(ctx context.Context, schema string) error
 
 	// Usage: daily per-workspace, per-model counters (spend and provider earnings)
-	AddUsage(ctx context.Context, kind types.UsageKind, workspaceID, model, requestID string, at time.Time, delta types.Usage) error
+	AddUsage(ctx context.Context, kind types.UsageKind, workspaceID, model, chargeID string, at time.Time, delta types.Usage) error
 	GetUsage(ctx context.Context, kind types.UsageKind, workspaceID string, from, to time.Time) (*types.UsageReport, error)
 
 	// Metering: closed minute buckets of usage not yet sent to the billing meter

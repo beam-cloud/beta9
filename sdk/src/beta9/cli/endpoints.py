@@ -1,10 +1,11 @@
 """`beta9 endpoints`: validate and deploy a hosted endpoints repo.
 
-The repo holds one Beam app per model under ``endpoints/<id>/app.py`` and a
-``config.yaml`` with placement. ``validate`` sends every app's spec and the
-config to the gateway as a dry run; ``deploy`` deploys each app through the
-ordinary stub RPCs and then applies the config. Both print exactly what is
-wrong, per app, and exit non-zero on any problem.
+The repo holds one Beam app per model under ``endpoints/<id>/app.py`` (a
+``ManagedEndpoint`` model server, or an ordinary task queue / endpoint / ASGI
+app) and a ``config.yaml`` that publishes and places them. ``validate`` sends
+every app's spec and the config to the gateway as a dry run; ``deploy``
+deploys each app through the ordinary stub RPCs and then applies the config.
+Both print exactly what is wrong, per app, and exit non-zero on any problem.
 """
 
 import importlib.util
@@ -15,11 +16,12 @@ import traceback
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 import click
 
 from .. import terminal
+from ..abstractions.base.runner import RunnerAbstraction
 from ..abstractions.managed_endpoint import ManagedEndpoint
 from ..channel import get_channel, handle_error
 from ..clients.managedendpoint import (
@@ -44,25 +46,42 @@ def management():
     pass
 
 
+def _deployable(value: Any) -> bool:
+    """A ManagedEndpoint, or a decorated function whose parent app can deploy."""
+    return isinstance(value, ManagedEndpoint) or (
+        callable(getattr(value, "deploy", None))
+        and isinstance(getattr(value, "parent", None), RunnerAbstraction)
+    )
+
+
 @dataclass
 class App:
-    """One app directory: its endpoint, or why it failed to import; then its deploy outcome."""
+    """One app directory: its deployable, or why it failed to import; then its deploy outcome."""
 
     dir: Path
     path: str  # relative to endpoints/, which is also the endpoint id
-    endpoint: Optional[ManagedEndpoint] = None
+    app: Any = None
     error: str = ""
     stub_id: str = ""
     version: int = 0
+
+    @property
+    def runner(self) -> Optional[RunnerAbstraction]:
+        return self.app.parent if self.app is not None else None
+
+    def spec(self) -> Dict[str, Any]:
+        if isinstance(self.app, ManagedEndpoint):
+            return self.app.spec()
+        return {"id": self.path}
 
     def to_proto(self) -> RepoEndpoint:
         out = RepoEndpoint(
             path=self.path, error=self.error, stub_id=self.stub_id, version=self.version
         )
-        if self.endpoint is not None:
-            out.id = self.endpoint.id
-            out.spec_json = json.dumps(self.endpoint.spec())
-            out.image = self.endpoint.image.base_image or ""
+        if self.app is not None:
+            out.id = self.path
+            out.spec_json = json.dumps(self.spec())
+            out.image = self.runner.image.base_image or ""
         return out
 
 
@@ -83,17 +102,23 @@ def _inside(directory: Path) -> Iterator[None]:
                 sys.modules.pop(name, None)
 
 
-def _load(app: Path) -> ManagedEndpoint:
-    """Import app.py from its own directory and return its one ManagedEndpoint."""
+def _load(app: Path, id: str) -> Any:
+    """Import app.py from its own directory and return its one deployable, marked hosted."""
     name = "endpoint_app_" + app.parent.name.replace("-", "_").replace(".", "_")
     spec = importlib.util.spec_from_file_location(name, app)
     module = importlib.util.module_from_spec(spec)
     with _inside(app.parent):
         spec.loader.exec_module(module)
-    found = [v for v in vars(module).values() if isinstance(v, ManagedEndpoint)]
+    found = [v for v in vars(module).values() if _deployable(v)]
     if len(found) != 1:
-        raise ValueError(f"expected exactly one ManagedEndpoint, found {len(found)}")
-    return found[0]
+        raise ValueError(f"expected exactly one deployable app, found {len(found)}")
+    deployable = found[0]
+    if isinstance(deployable, ManagedEndpoint):
+        if deployable.id != id:
+            raise ValueError(f"ManagedEndpoint id {deployable.id!r} must equal the path {id!r}")
+    else:
+        deployable.parent.managed_endpoint = json.dumps({"endpoint": {"id": id}})
+    return deployable
 
 
 def _apps(repo: Path) -> List[App]:
@@ -102,7 +127,7 @@ def _apps(repo: Path) -> List[App]:
     for file in sorted(root.glob("**/app.py")):
         app = App(dir=file.parent, path=file.parent.relative_to(root).as_posix())
         try:
-            app.endpoint = _load(file)
+            app.app = _load(file, app.path)
         except (Exception, SystemExit) as exc:  # an app may sys.exit() at import
             traceback.print_exc()
             app.error = f"import failed: {exc.code if isinstance(exc, SystemExit) else exc!r}"
@@ -112,18 +137,18 @@ def _apps(repo: Path) -> List[App]:
 
 def _deploy(app: App, context: ConfigContext) -> None:
     """Deploy one app from its directory, as `beta9 deploy` would, recording the outcome."""
-    terminal.header(f"Deploying {app.endpoint.id}")
+    terminal.header(f"Deploying {app.path}")
     try:
         with _inside(app.dir):
-            out, ok = app.endpoint.deploy(context=context)
+            out, ok = app.app.deploy(name=app.path, context=context)
     except Exception as exc:
         traceback.print_exc()
         out, ok = {}, False
-        app.endpoint.deploy_error = f"deploy failed: {exc!r}"
+        app.error = f"deploy failed: {exc!r}"
     if ok:
         app.stub_id, app.version = out.get("stub_id") or "", int(out.get("version") or 0)
     else:
-        app.error = app.endpoint.deploy_error or "deploy failed"
+        app.error = app.error or getattr(app.app, "deploy_error", "") or "deploy failed"
 
 
 def _commit() -> Dict[str, str]:
@@ -185,6 +210,6 @@ def deploy(repo: Path):
     if not check.ok:
         _report(check)
     for app in apps:
-        if app.endpoint is not None:
+        if app.app is not None:
             _deploy(app, context)
     _report(_apply(context, repo, apps, dry_run=False, commit=commit))

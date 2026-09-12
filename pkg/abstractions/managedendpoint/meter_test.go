@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/stretchr/testify/require"
 )
@@ -38,12 +39,13 @@ func TestMeterFlushDeliversClosedBucketsOnce(t *testing.T) {
 	s.usage = sink
 	ctx := context.Background()
 	now := time.Now()
-	require.NoError(t, s.repo.AddUsage(ctx, types.UsageSpend, "ws-tenant", "acme/model", "req-1", now, types.Usage{Requests: 1, CompletionTokens: 10, MicroUSD: 20_000}))
-	require.NoError(t, s.repo.AddUsage(ctx, types.UsageSpend, "ws-tenant", "acme/model", "req-2", now, types.Usage{Requests: 1, CompletionTokens: 5, MicroUSD: 10_000}))
-	require.NoError(t, s.repo.AddUsage(ctx, types.UsageEarned, "ws-provider", "acme/model", "req-1", now, types.Usage{Requests: 1, CompletionTokens: 10, MicroUSD: 14_000}))
+	require.NoError(t, s.repo.AddUsage(ctx, types.UsageSpend, "ws-tenant", "acme/model", "req-1", now, types.Usage{Work: types.Work{Requests: 1, CompletionTokens: 10}, Cost: types.Cost{MicroUSD: 20_000}}))
+	require.NoError(t, s.repo.AddUsage(ctx, types.UsageSpend, "ws-tenant", "acme/model", "req-2", now, types.Usage{Work: types.Work{Requests: 1, CompletionTokens: 5}, Cost: types.Cost{MicroUSD: 10_000}}))
+	require.NoError(t, s.repo.AddUsage(ctx, types.UsageEarned, "ws-provider", "acme/model", "req-1", now, types.Usage{Work: types.Work{Requests: 1, CompletionTokens: 10}, Cost: types.Cost{MicroUSD: 14_000}}))
 
 	// The current minute is still open.
-	require.NoError(t, s.meter.flush(ctx))
+	require.NoError(t, s.repo.SetChargeSchema(ctx, repository.ChargeSchema))
+	require.NoError(t, s.billing.flush(ctx))
 	require.Empty(t, sink.events)
 	open, err := s.repo.ListMeterBuckets(ctx, now.Add(time.Hour))
 	require.NoError(t, err)
@@ -54,7 +56,7 @@ func TestMeterFlushDeliversClosedBucketsOnce(t *testing.T) {
 		buckets, err := s.repo.ListMeterBuckets(ctx, now.Add(time.Hour))
 		require.NoError(t, err)
 		for _, b := range buckets {
-			if err := s.meter.send(b); err != nil {
+			if err := s.billing.send(b); err != nil {
 				return err
 			}
 			require.NoError(t, s.repo.DeleteMeterBucket(ctx, b.Key))

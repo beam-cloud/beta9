@@ -2,6 +2,7 @@ package managedendpoint
 
 import (
 	"context"
+	"net/http"
 	"testing"
 	"time"
 
@@ -11,22 +12,32 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func repoEndpoint(t *testing.T, path string, spec types.ManagedEndpointSpec) *pb.RepoEndpoint {
-	t.Helper()
-	return &pb.RepoEndpoint{Path: path, Id: spec.ID, SpecJson: mustJSON(spec), StubId: "stub-2", Version: 2}
+func repoEndpoint(path string, app *types.ManagedEndpoint) *pb.RepoEndpoint {
+	return &pb.RepoEndpoint{Path: path, Id: app.Spec.ID, SpecJson: mustJSON(app.Spec), StubId: app.StubID, Version: uint32(app.Version)}
 }
+
+const publishedModel = `acme/model:
+  enabled: true
+  catalog: {name: Model, description: A model, context_length: 32768}
+  public: true
+  pricing: {prompt_tokens: "0.000001", completion_tokens: "0.000002"}
+  gpus:
+    H100:
+      priority: 1
+      minReplicas: 1
+`
 
 func TestApplyRepoDryRunValidatesWithoutApplying(t *testing.T) {
 	s := newServiceForTest(t)
 	existing := seedEndpoint(t, s)
-	other := existing.Spec
-	other.ID = "acme/other"
+	other := *existing
+	other.Spec.ID = "acme/other"
 	out, err := s.ApplyRepo(adminCtx(), &pb.ApplyRepoRequest{
 		Sha: "abc", DryRun: true,
-		ConfigYaml: "acme/model:\n  enabled: true\n  gpus:\n    A100:\n      priority: 1\nacme/ghost:\n  enabled: true\n  gpus: {}\n",
+		ConfigYaml: "acme/model:\n  enabled: true\n  pricing: {request: \"0\"}\n  gpus:\n    A100:\n      priority: 1\nacme/ghost:\n  enabled: true\n  pricing: {request: \"0\"}\n  gpus: {}\n",
 		Endpoints: []*pb.RepoEndpoint{
-			repoEndpoint(t, "acme/model", existing.Spec),
-			repoEndpoint(t, "acme/renamed", other),
+			repoEndpoint("acme/model", existing),
+			repoEndpoint("acme/renamed", &other),
 			{Path: "acme/broken", Error: "ImportError: no module named vllm"},
 		},
 	})
@@ -42,27 +53,28 @@ func TestApplyRepoDryRunValidatesWithoutApplying(t *testing.T) {
 
 	state, err := s.repo.GetGitOpsState(context.Background())
 	require.NoError(t, err)
-	assert.Equal(t, "abc", state.PendingSHA, "a dry run naming a commit announces a deploy")
-	assert.Empty(t, state.LastSHA, "and applies nothing")
+	assert.Equal(t, "abc", state.PendingSHA, "a dry run with a sha announces the deploy")
+	assert.Empty(t, state.LastSHA)
 	fleet, err := s.repo.GetFleet(context.Background())
 	require.NoError(t, err)
-	assert.Contains(t, fleet.Endpoints, "acme/model")
 	assert.Equal(t, "fleet-sha", fleet.GitSHA)
 }
 
-func TestApplyRepoAppliesFleetStampsShaAndRetires(t *testing.T) {
+func TestApplyRepoPublishesPlacesStampsAndRetires(t *testing.T) {
 	s := newServiceForTest(t)
 	existing := seedEndpoint(t, s)
-	gone := existing.Spec
-	gone.ID = "acme/gone"
-	require.NoError(t, s.repo.SaveEndpoint(context.Background(), &types.ManagedEndpoint{Spec: gone, StubID: "stub-9", Version: 3, Status: types.EndpointStatusActive}))
+	existing.Published, existing.Publication = false, types.Publication{}
+	require.NoError(t, s.repo.SaveEndpoint(context.Background(), existing))
+	gone := *existing
+	gone.Spec.ID, gone.StubID = "acme/gone", "stub-9"
+	require.NoError(t, s.repo.SaveEndpoint(context.Background(), &gone))
 
 	_, err := s.ApplyRepo(adminCtx(), &pb.ApplyRepoRequest{Sha: "abc123", DryRun: true, ConfigYaml: "{}\n"})
 	require.NoError(t, err)
 	out, err := s.ApplyRepo(adminCtx(), &pb.ApplyRepoRequest{
 		RepoUrl: "github.com/acme/endpoints", Ref: "main", Sha: "abc123",
-		ConfigYaml: "acme/model:\n  enabled: true\n  gpus:\n    H100:\n      priority: 1\n      minReplicas: 1\n",
-		Endpoints:  []*pb.RepoEndpoint{repoEndpoint(t, "acme/model", existing.Spec)},
+		ConfigYaml: publishedModel,
+		Endpoints:  []*pb.RepoEndpoint{repoEndpoint("acme/model", existing)},
 	})
 	require.NoError(t, err)
 	require.True(t, out.Ok, out.ErrMsg)
@@ -78,7 +90,10 @@ func TestApplyRepoAppliesFleetStampsShaAndRetires(t *testing.T) {
 	updated, err := s.repo.GetEndpoint(context.Background(), "acme/model")
 	require.NoError(t, err)
 	assert.Equal(t, "abc123", updated.GitSHA)
-	assert.Equal(t, "stub-1", updated.StubID, "the deploy RPC owns the stub; apply only stamps the commit")
+	assert.Equal(t, "stub-1", updated.StubID, "DeployStub owns the stub; apply only stamps the commit")
+	assert.True(t, updated.Published)
+	assert.Equal(t, types.Publication{Catalog: types.Catalog{Name: "Model", Description: "A model", ContextLength: 32768}, Public: true, Pricing: types.Pricing{PromptTokens: "0.000001", CompletionTokens: "0.000002"}}, updated.Publication,
+		"config.yaml is the one place publication lives")
 
 	retired, err := s.repo.GetEndpoint(context.Background(), "acme/gone")
 	require.NoError(t, err)
@@ -86,22 +101,56 @@ func TestApplyRepoAppliesFleetStampsShaAndRetires(t *testing.T) {
 
 	list, err := s.ListEndpoints(adminCtx(), &pb.ListEndpointsRequest{})
 	require.NoError(t, err)
-	states := map[string]string{}
+	states := map[string]EndpointState{}
 	for _, e := range list.Endpoints {
-		states[e.Id] = e.State
+		states[e.Id] = EndpointState(e.State)
 	}
-	assert.Equal(t, map[string]string{"acme/model": StateWaitingForCapacity, "acme/gone": StateRetired}, states)
+	assert.Equal(t, map[string]EndpointState{"acme/model": StateWaitingForCapacity, "acme/gone": StateRetired}, states)
+
+	// Disabling the app in config.yaml unpublishes it without retiring the deploy.
+	out, err = s.ApplyRepo(adminCtx(), &pb.ApplyRepoRequest{
+		Sha: "def456", ConfigYaml: "acme/model:\n  enabled: false\n  gpus: {}\n", Endpoints: []*pb.RepoEndpoint{repoEndpoint("acme/model", existing)},
+	})
+	require.NoError(t, err)
+	require.True(t, out.Ok, out.ErrMsg)
+	updated, err = s.repo.GetEndpoint(context.Background(), "acme/model")
+	require.NoError(t, err)
+	assert.False(t, updated.Published)
+	assert.Equal(t, types.EndpointStatusActive, updated.Status)
+	assert.Equal(t, http.StatusNotFound, call(t, s, userInfo, http.MethodPost, "/v1/chat/completions", `{"model":"acme/model","messages":[]}`).Code, "an unpublished app is not callable")
 }
 
-func TestApplyRepoKeepsEndpointOfBrokenImport(t *testing.T) {
+func TestApplyRepoRejectsUnpublishablePricing(t *testing.T) {
+	s := newServiceForTest(t)
+	seedEndpoint(t, s)
+	queue := seedRunner(t, s, "acme/video", types.StubTypeTaskQueue, types.Pricing{Request: "0.10"})
+	for name, tc := range map[string]struct{ yaml, want string }{
+		"mixed forms":            {"acme/model:\n  enabled: true\n  pricing: {request: \"0.1\", prompt_tokens: \"0\", completion_tokens: \"0\"}\n  gpus: {H100: {priority: 1}}\n", "mutually exclusive"},
+		"no price":               {"acme/model:\n  enabled: true\n  gpus: {H100: {priority: 1}}\n", "declare request or prompt_tokens/completion_tokens"},
+		"tokens on a task queue": {"acme/video:\n  enabled: true\n  pricing: {prompt_tokens: \"0\", completion_tokens: \"0\"}\n  gpus: {A10G: {priority: 1, maxReplicas: 1, serverless: true}}\n", "priced per request"},
+		"legacy image price":     {"acme/model:\n  enabled: true\n  pricing: {image: \"0.01\"}\n  gpus: {H100: {priority: 1}}\n", "field image not found"},
+		"access in catalog":      {"acme/model:\n  enabled: true\n  catalog: {public: true}\n  pricing: {request: \"0\"}\n  gpus: {H100: {priority: 1}}\n", "field public not found"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			out, err := s.ApplyRepo(adminCtx(), &pb.ApplyRepoRequest{
+				Sha: "x", DryRun: true, ConfigYaml: tc.yaml, Endpoints: []*pb.RepoEndpoint{repoEndpoint("acme/model", seedEndpoint(t, s)), repoEndpoint("acme/video", queue)},
+			})
+			require.NoError(t, err)
+			assert.False(t, out.Ok)
+			require.Len(t, out.Errors, 1, out.Errors)
+			assert.Contains(t, out.Errors[0], tc.want)
+		})
+	}
+}
+
+func TestApplyRepoKeepsAppOfBrokenImport(t *testing.T) {
 	s := newServiceForTest(t)
 	existing := seedEndpoint(t, s)
 	require.NoError(t, s.repo.SaveGitOpsState(context.Background(), &types.GitOpsState{
 		PerEndpoint: map[string]types.GitOpsEndpointState{"acme/model": {Path: "acme/model", ID: "acme/model", Status: types.GitOpsStatusApplied}},
 	}))
 	out, err := s.ApplyRepo(adminCtx(), &pb.ApplyRepoRequest{
-		Sha: "bad", ConfigYaml: "acme/model:\n  enabled: true\n  gpus:\n    H100:\n      priority: 1\n",
-		Endpoints: []*pb.RepoEndpoint{{Path: "acme/model", Error: "SyntaxError"}},
+		Sha: "bad", ConfigYaml: publishedModel, Endpoints: []*pb.RepoEndpoint{{Path: "acme/model", Error: "SyntaxError"}},
 	})
 	require.NoError(t, err)
 	assert.False(t, out.Ok)
@@ -109,15 +158,25 @@ func TestApplyRepoKeepsEndpointOfBrokenImport(t *testing.T) {
 
 	kept, err := s.repo.GetEndpoint(context.Background(), existing.Spec.ID)
 	require.NoError(t, err)
-	assert.Equal(t, types.EndpointStatusActive, kept.Status, "a bad commit never tears down the previous deploy")
+	assert.Equal(t, types.EndpointStatusActive, kept.Status, "a broken import keeps the last good deploy")
 	fleet, err := s.repo.GetFleet(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, "bad", fleet.GitSHA, "config.yaml still applies to the previous deploy")
 
 	get, err := s.GetEndpoint(adminCtx(), &pb.GetEndpointRequest{EndpointId: existing.Spec.ID})
 	require.NoError(t, err)
-	assert.Equal(t, StateDeployFailed, get.Endpoint.State)
+	assert.Equal(t, StateDeployFailed, EndpointState(get.Endpoint.State))
 	assert.Equal(t, "SyntaxError", get.Endpoint.StateReason)
+}
+
+func TestApplyRepoRequiresRegisteredStub(t *testing.T) {
+	s := newServiceForTest(t)
+	e := repoEndpoint("acme/model", seedEndpoint(t, s))
+	e.StubId = "stub-from-another-cluster"
+	out, err := s.ApplyRepo(adminCtx(), &pb.ApplyRepoRequest{Sha: "x", ConfigYaml: publishedModel, Endpoints: []*pb.RepoEndpoint{e}})
+	require.NoError(t, err)
+	assert.False(t, out.Ok)
+	assert.Contains(t, out.Errors[0], "was not registered as acme/model")
 }
 
 func TestEndpointState(t *testing.T) {
@@ -128,9 +187,10 @@ func TestEndpointState(t *testing.T) {
 		return &types.EndpointReplica{EndpointID: "acme/model", Status: status, StatusReason: reason, EndedAt: now}
 	}
 	for _, tc := range []struct {
-		name, want string
-		fleet      *types.Fleet
-		replicas   []*types.EndpointReplica
+		name     string
+		want     EndpointState
+		fleet    *types.Fleet
+		replicas []*types.EndpointReplica
 	}{
 		{name: "disabled", want: StateDisabled, fleet: &types.Fleet{}},
 		{name: "waiting", want: StateWaitingForCapacity, fleet: placed},

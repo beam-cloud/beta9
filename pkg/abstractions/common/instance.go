@@ -286,6 +286,10 @@ func (i *AutoscaledInstance) logScaleEvent(initialTrackedCount, currentTrackedCo
 		Msg("scaled")
 }
 
+// hostedDemandTTL bounds how long a hosted app's autoscaler demand outlives
+// its last scaling event.
+const hostedDemandTTL = 90 * time.Second
+
 func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
 	err := i.Lock.Acquire(context.Background(), i.InstanceLockKey, common.RedisLockOptions{TtlS: 10, Retries: 0})
 	if err != nil {
@@ -313,6 +317,12 @@ func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
 	if desiredContainers == 0 && noContainersRunning {
 		i.CancelFunc()
 		return nil
+	}
+
+	if i.StubConfig != nil && i.StubConfig.ManagedEndpoint != nil && i.StubConfig.ManagedEndpoint.Endpoint != nil {
+		// Hosted apps: the fleet controller owns placement. Publish what this
+		// autoscaler wants and start nothing; the key expires with the instance.
+		return i.Rdb.Set(context.Background(), types.HostedDemandKey(i.StubConfig.ManagedEndpoint.Endpoint.ID), desiredContainers, hostedDemandTTL).Err()
 	}
 
 	containerDelta := desiredContainers - (state.RunningContainers + state.PendingContainers)

@@ -25,10 +25,11 @@ func TestHostedResponsesKeepPlacementInternal(t *testing.T) {
 	replica.Locality = "internal-placement"
 	replica.Status = types.ReplicaStatusReady
 	require.NoError(t, s.repo.SaveReplica(context.Background(), replica))
-	require.NoError(t, s.repo.SaveGeneration(context.Background(), &types.EventEndpointRouteSchema{
-		RequestID: "req-placement", Model: endpoint.Spec.ID, WorkspaceID: "user-ws",
-		Locality: replica.Locality, Timestamp: time.Now(), PromptTokens: 10,
-	}, generationTTL))
+	_, err := s.repo.SaveCharge(context.Background(), &types.Charge{
+		ID: "req-placement", Status: types.ChargeSettled, AppID: endpoint.Spec.ID, WorkspaceID: "user-ws",
+		ReplicaID: replica.ID, AcceptedAt: time.Now(), SettledAt: time.Now(), Work: types.Work{Requests: 1, PromptTokens: 10},
+	})
+	require.NoError(t, err)
 	get := func(path string, handler echo.HandlerFunc) map[string]any {
 		t.Helper()
 		rec := httptest.NewRecorder()
@@ -61,16 +62,16 @@ func TestEndpointAccessIsIndependentOfCatalog(t *testing.T) {
 	s := newServiceForTest(t)
 	r := newRouter(s)
 	endpoint := seedEndpoint(t, s)
-	endpoint.Spec.Public = false
+	endpoint.Public = false
 	user := &auth.AuthInfo{Token: &types.Token{}, Workspace: &types.Workspace{Id: 2, ExternalId: "user-ws", Name: "user"}}
 	ctx := context.Background()
 	assert.False(t, r.allowed(ctx, endpoint, user), "an endpoint is private without an explicit policy")
-	endpoint.Spec.AllowedWorkspaces = []string{"user-ws"}
+	endpoint.AllowedWorkspaces = []string{"user-ws"}
 	assert.True(t, r.allowed(ctx, endpoint, user))
-	endpoint.Spec.AllowedWorkspaces = nil
-	endpoint.Spec.Public = true
+	endpoint.AllowedWorkspaces = nil
+	endpoint.Public = true
 	assert.True(t, r.allowed(ctx, endpoint, user))
-	endpoint.Spec.Public = false
+	endpoint.Public = false
 	user.Workspace.Id = 1
 	assert.True(t, r.allowed(ctx, endpoint, user), "the owning admin workspace retains access")
 }
@@ -82,7 +83,7 @@ func TestChooseReservesInflightAtomically(t *testing.T) {
 		{ID: "replica-a", Address: "a:8000", Capacity: types.ReplicaCapacity{MaxConcurrency: 1}},
 		{ID: "replica-b", Address: "b:8000", Capacity: types.ReplicaCapacity{MaxConcurrency: 1}},
 	}
-	rq := &routeRequest{adapter: adapters[types.EndpointRouteChatCompletions]}
+	rq := &routeRequest{proto: protocols["chat/completions"]}
 	ctx := context.Background()
 
 	// Concurrent selections over the same snapshot: each replica admits at
@@ -97,7 +98,7 @@ func TestChooseReservesInflightAtomically(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			request := &routeRequest{requestID: uuid.NewString(), adapter: rq.adapter}
+			request := &routeRequest{requestID: uuid.NewString(), proto: rq.proto}
 			picked <- reservation{chooseForTest(t, r, ctx, request, endpoint, replicas), request}
 		}()
 	}
@@ -142,8 +143,8 @@ func TestReplicaConcurrencyIsSharedAcrossGateways(t *testing.T) {
 	a, b := newRouter(s), newRouter(s)
 	endpoint := &types.ManagedEndpoint{Spec: types.ManagedEndpointSpec{ID: "acme/model"}}
 	replicas := []*types.EndpointReplica{{ID: "replica-a", Address: "a:8000", Capacity: types.ReplicaCapacity{MaxConcurrency: 1}}}
-	rq := &routeRequest{requestID: "gateway-a-request", adapter: adapters[types.EndpointRouteChatCompletions]}
-	rqB := &routeRequest{requestID: "gateway-b-request", adapter: rq.adapter}
+	rq := &routeRequest{requestID: "gateway-a-request", proto: protocols["chat/completions"]}
+	rqB := &routeRequest{requestID: "gateway-b-request", proto: rq.proto}
 	ctx := context.Background()
 
 	require.NotNil(t, chooseForTest(t, a, ctx, rq, endpoint, replicas))

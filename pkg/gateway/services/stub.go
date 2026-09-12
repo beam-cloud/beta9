@@ -979,7 +979,7 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 		}, nil
 	}
 
-	if stub.Type.IsManagedEndpoint() {
+	if config.ManagedEndpoint != nil {
 		current, err := gws.managedDeployment(ctx, stub, &config)
 		if err != nil {
 			return &pb.DeployStubResponse{Ok: false, ErrMsg: fmt.Sprintf("Failed to register managed endpoint: %v", err)}, nil
@@ -1022,7 +1022,7 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 		}, nil
 	}
 
-	if stub.Type.IsManagedEndpoint() {
+	if config.ManagedEndpoint != nil {
 		if err := gws.registerManagedDeployment(ctx, stub, &config, deployment); err != nil {
 			log.Error().Err(err).Str("stub_id", stub.ExternalId).Msg("failed to register managed endpoint deployment")
 			return &pb.DeployStubResponse{

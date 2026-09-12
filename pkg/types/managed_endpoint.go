@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math/big"
 	"regexp"
 	"slices"
@@ -12,60 +13,43 @@ import (
 	"time"
 )
 
-// Managed endpoints are platform-owned inference endpoints deployed from a git
-// repository: app.py declares a ManagedEndpointSpec, config.yaml a Fleet.
+// Managed endpoints are Beam deployments the platform publishes under /v1.
+// app.py declares how the app runs (ManagedEndpointSpec, on the stub);
+// config.yaml declares whether it is published, to whom, at what price and on
+// which GPUs (Fleet). ManagedEndpoint is the applied record the gateway serves
+// from, and every request or task against it settles as one Charge.
 
 const (
-	StubTypeManagedEndpoint           string = "managed_endpoint"
+	StubTypeManagedEndpoint           string = "managed_endpoint" // platform-run model server
 	StubTypeManagedEndpointDeployment string = "managed_endpoint/deployment"
-	StubTypePlatformDeployer          string = "platform_deployer"
+	StubTypePlatformDeployer          string = "platform_deployer" // CI job that deploys hosted apps
 )
 
 func (t StubType) IsManagedEndpoint() bool { return t.Kind() == StubTypeManagedEndpoint }
 
-// IsPlatformWorkload identifies service-owned containers, not paying callers.
-// Platform deployer stubs can only be created internally by the control plane.
+// IsPlatformWorkload: runs in the platform workspace, exempt from customer credit and pool quotas.
 func (t StubType) IsPlatformWorkload() bool {
-	return t.IsManagedEndpoint() || t.Kind() == StubTypePlatformDeployer
+	return t.IsManagedEndpoint() || t == StubType(StubTypePlatformDeployer)
 }
 
-type EndpointKind string
-
-const (
-	EndpointKindLLM       EndpointKind = "llm"
-	EndpointKindEmbedding EndpointKind = "embedding"
-	EndpointKindImage     EndpointKind = "image"
-	EndpointKindCustom    EndpointKind = "custom"
-)
-
-// EndpointRoute is an OpenAI-style route suffix under /v1 that an endpoint serves.
-type EndpointRoute string
-
-const (
-	EndpointRouteChatCompletions  EndpointRoute = "chat/completions"
-	EndpointRouteCompletions      EndpointRoute = "completions"
-	EndpointRouteEmbeddings       EndpointRoute = "embeddings"
-	EndpointRouteImageGenerations EndpointRoute = "images/generations"
-	EndpointRouteImageEdits       EndpointRoute = "images/edits"
-	EndpointRouteInvoke           EndpointRoute = "invoke"
-)
-
-// kindRoutes lists the routes each kind may declare; defaults are the leading
-// ones (both completion routes for an LLM, the first for everything else).
-var kindRoutes = map[EndpointKind][]EndpointRoute{
-	EndpointKindLLM:       {EndpointRouteChatCompletions, EndpointRouteCompletions, EndpointRouteEmbeddings, EndpointRouteImageGenerations},
-	EndpointKindEmbedding: {EndpointRouteEmbeddings},
-	EndpointKindImage:     {EndpointRouteImageGenerations, EndpointRouteImageEdits},
-	EndpointKindCustom:    {EndpointRouteInvoke},
+// PlatformWorkload is IsPlatformWorkload for a stub, including hosted
+// deployments of ordinary kinds whose containers the fleet controller runs.
+func (s *Stub) PlatformWorkload() bool {
+	return s.Type.IsPlatformWorkload() || StubConfigIsHosted(s.Config)
 }
 
-func defaultRoutes(kind EndpointKind) []EndpointRoute {
-	routes := kindRoutes[kind]
-	n := 1
-	if kind == EndpointKindLLM {
-		n = 2
-	}
-	return routes[:min(n, len(routes))]
+// StubConfigIsHosted reports whether a stub's config carries a hosted
+// declaration: its containers run for the platform, not the customer.
+func StubConfigIsHosted(config string) bool {
+	marker := struct {
+		ManagedEndpoint *struct{} `json:"managed_endpoint"`
+	}{}
+	return json.Unmarshal([]byte(config), &marker) == nil && marker.ManagedEndpoint != nil
+}
+
+// ManagedEndpointStubConfig is the hosted declaration on a stub's config.
+type ManagedEndpointStubConfig struct {
+	Endpoint *ManagedEndpointSpec `json:"endpoint,omitempty"`
 }
 
 // CPUInventoryKey is the GPU key for CPU-only placement.
@@ -80,115 +64,87 @@ func GPUKey(gpu string) string {
 	return string(NormalizeGPUType(gpu))
 }
 
-// GpuSpec is how an endpoint runs on one GPU type.
+// EndpointKind is the engine kind a model server declares.
+type EndpointKind string
+
+const (
+	EndpointKindLLM       EndpointKind = "llm"
+	EndpointKindEmbedding EndpointKind = "embedding"
+	EndpointKindImage     EndpointKind = "image"
+	EndpointKindCustom    EndpointKind = "custom"
+)
+
+var EndpointKinds = []EndpointKind{EndpointKindLLM, EndpointKindEmbedding, EndpointKindImage, EndpointKindCustom}
+
+// EndpointRoute is an OpenAI-style route suffix under /v1 that the hosted
+// layer knows. Task queues serve only tasks; other deployments any
+// synchronous route.
+type EndpointRoute string
+
+const (
+	EndpointRouteChatCompletions  EndpointRoute = "chat/completions"
+	EndpointRouteCompletions      EndpointRoute = "completions"
+	EndpointRouteEmbeddings       EndpointRoute = "embeddings"
+	EndpointRouteImageGenerations EndpointRoute = "images/generations"
+	EndpointRouteImageEdits       EndpointRoute = "images/edits"
+	EndpointRouteAudioSpeech      EndpointRoute = "audio/speech"
+	EndpointRouteInvoke           EndpointRoute = "invoke"
+	EndpointRouteTasks            EndpointRoute = "tasks"
+)
+
+// Async reports whether the route queues work instead of answering inline.
+func (r EndpointRoute) Async() bool { return r == EndpointRouteTasks }
+
+// ModelScoped reports whether the route is addressed as /models/{id}/{route}
+// rather than by its OpenAI path.
+func (r EndpointRoute) ModelScoped() bool { return r == EndpointRouteInvoke || r == EndpointRouteTasks }
+
+// Rollout says how a new version replaces the old: wait for spare capacity
+// (default) or replace running replicas in place.
+type Rollout string
+
+const (
+	RolloutWaitForCapacity Rollout = "wait_for_capacity"
+	RolloutReplace         Rollout = "replace"
+)
+
+// EngineVLLM is the engine whose streaming usage reporting the gateway tunes.
+const EngineVLLM = "vllm"
+
+// GpuSpec is how a model server runs on one GPU type.
 type GpuSpec struct {
 	Count      uint32         `json:"count,omitempty"` // GPUs per replica
 	EngineArgs []string       `json:"engine_args,omitempty"`
 	Config     map[string]any `json:"config,omitempty"`
 }
 
-// Catalog contains display metadata; pricing and access belong to the endpoint.
-type Catalog struct {
-	Name          string `json:"name,omitempty"`
-	Description   string `json:"description,omitempty"`
-	ContextLength uint32 `json:"context_length,omitempty"`
-}
-
-// Pricing holds USD decimal strings per billable unit; empty means free.
-type Pricing struct {
-	PromptTokens       string `json:"prompt_tokens,omitempty"`
-	CompletionTokens   string `json:"completion_tokens,omitempty"`
-	CachedPromptTokens string `json:"cached_prompt_tokens,omitempty"`
-	Request            string `json:"request,omitempty"`
-	Image              string `json:"image,omitempty"`
-}
-
-func (p Pricing) IsZero() bool {
-	// Prices are validated decimal strings; explicitly declaring "0" is free too.
-	for _, value := range []string{p.PromptTokens, p.CompletionTokens, p.CachedPromptTokens, p.Request, p.Image} {
-		if strings.Trim(value, "0.") != "" {
-			return false
-		}
-	}
-	return true
-}
-
-func (p Pricing) Validate() error {
-	for name, value := range map[string]string{
-		"prompt_tokens": p.PromptTokens, "completion_tokens": p.CompletionTokens,
-		"cached_prompt_tokens": p.CachedPromptTokens, "request": p.Request, "image": p.Image,
-	} {
-		if _, err := PricingRat(value); err != nil {
-			return fmt.Errorf("pricing.%s: %w", name, err)
-		}
-	}
-	return nil
-}
-
-var pricingPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)(\.[0-9]{1,18})?$`)
-
-// PricingRat parses a pricing dimension into an exact rational; empty is zero.
-func PricingRat(value string) (*big.Rat, error) {
-	if value == "" {
-		return new(big.Rat), nil
-	}
-	rat, ok := new(big.Rat).SetString(value)
-	if !ok || !pricingPattern.MatchString(value) {
-		return nil, fmt.Errorf("%q is not a non-negative decimal amount", value)
-	}
-	return rat, nil
-}
-
-// ManagedEndpointSpec is everything an endpoint's app.py declares. Where
-// replicas run is Fleet's decision.
+// ManagedEndpointSpec is the hosting metadata a stub carries; only the platform
+// publishing path may attach it. Model servers (managed_endpoint stubs) also
+// declare how the engine runs; other deployments only carry the id.
 type ManagedEndpointSpec struct {
-	ID                string             `json:"id"`
-	Kind              EndpointKind       `json:"kind"`
-	Engine            string             `json:"engine,omitempty"`
-	Port              uint32             `json:"port"`
-	Health            string             `json:"health,omitempty"`
-	Metrics           string             `json:"metrics,omitempty"`
-	Gpu               map[string]GpuSpec `json:"gpu"` // GPU key -> how the engine runs there
-	Routes            []EndpointRoute    `json:"routes,omitempty"`
-	Pricing           Pricing            `json:"pricing"`
-	Catalog           Catalog            `json:"catalog"`
-	Public            bool               `json:"public"`
-	AllowedWorkspaces []string           `json:"allowed_workspaces,omitempty"`
-	Rollout           string             `json:"rollout,omitempty"` // wait_for_capacity (default) or replace (allows downtime)
-	DrainSeconds      uint32             `json:"drain_seconds"`     // grace on eviction or retirement; 0 is immediate
-	Entrypoint        []string           `json:"entrypoint,omitempty"`
-}
-
-// ManagedEndpointStubConfig is embedded in StubConfigV1 for managed stubs. It
-// holds only what the app declares, so an unchanged app maps to the same stub
-// and redeploying it is a no-op.
-type ManagedEndpointStubConfig struct {
-	Endpoint *ManagedEndpointSpec `json:"endpoint,omitempty"`
+	ID           string             `json:"id"`
+	Kind         EndpointKind       `json:"kind,omitempty"`
+	Engine       string             `json:"engine,omitempty"`
+	Port         uint32             `json:"port,omitempty"`
+	Health       string             `json:"health,omitempty"`
+	Metrics      string             `json:"metrics,omitempty"` // Prometheus path scraped for LLM engines without a harness
+	Gpu          map[string]GpuSpec `json:"gpu,omitempty"`
+	Rollout      Rollout            `json:"rollout,omitempty"`
+	DrainSeconds uint32             `json:"drain_seconds"`
+	Entrypoint   []string           `json:"entrypoint,omitempty"`
 }
 
 var endpointIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)?$`)
 
-func cleanPath(p string) string { return "/" + strings.TrimPrefix(strings.TrimSpace(p), "/") }
-
-func (s *ManagedEndpointSpec) Normalize() {
+func (s *ManagedEndpointSpec) Normalize(modelServer bool) {
 	s.ID = strings.ToLower(strings.TrimSpace(s.ID))
+	if !modelServer {
+		return
+	}
+	s.Kind = cmp.Or(EndpointKind(strings.ToLower(strings.TrimSpace(string(s.Kind)))), EndpointKindCustom)
 	s.Engine = strings.ToLower(strings.TrimSpace(s.Engine))
-	if s.Kind == "" {
-		s.Kind = EndpointKindCustom
-	}
-	if s.Port == 0 {
-		s.Port = 8000
-	}
-	s.Health = cleanPath(cmp.Or(s.Health, "health"))
-	if s.Metrics != "" {
-		s.Metrics = cleanPath(s.Metrics)
-	}
-	if len(s.Routes) == 0 {
-		s.Routes = defaultRoutes(s.Kind)
-	}
-	for i := range s.Routes {
-		s.Routes[i] = EndpointRoute(strings.Trim(strings.TrimSpace(string(s.Routes[i])), "/"))
-	}
+	s.Port = cmp.Or(s.Port, 8000)
+	s.Health = "/" + strings.TrimPrefix(strings.TrimSpace(cmp.Or(s.Health, "health")), "/")
 	gpu := make(map[string]GpuSpec, len(s.Gpu))
 	for key, spec := range s.Gpu {
 		key = GPUKey(key)
@@ -203,42 +159,28 @@ func (s *ManagedEndpointSpec) Normalize() {
 		gpu[CPUInventoryKey] = GpuSpec{}
 	}
 	s.Gpu = gpu
-	if s.Catalog.Name == "" {
-		s.Catalog.Name = s.ID
-	}
 }
 
-// Validate checks a normalized spec.
-func (s *ManagedEndpointSpec) Validate() error {
+func (s *ManagedEndpointSpec) Validate(modelServer bool) error {
 	var errs []error
 	fail := func(format string, args ...any) { errs = append(errs, fmt.Errorf(format, args...)) }
-
 	if !endpointIDPattern.MatchString(s.ID) {
 		fail("id %q must look like vendor/slug (lowercase, [a-z0-9._-])", s.ID)
 	}
-	allowed, validKind := kindRoutes[s.Kind]
-	if !validKind {
-		fail("kind %q is not one of llm, embedding, image, custom", s.Kind)
+	if !modelServer {
+		return errors.Join(errs...)
 	}
-	if s.Port == 0 || s.Port > 65535 {
+	if !slices.Contains(EndpointKinds, s.Kind) {
+		fail("kind %q is not one of %v", s.Kind, EndpointKinds)
+	}
+	if s.Port > 65535 {
 		fail("port %d is invalid", s.Port)
 	}
 	if len(s.Entrypoint) == 0 {
 		fail("entrypoint is required")
 	}
-	if s.Rollout != "" && s.Rollout != "wait_for_capacity" && s.Rollout != "replace" {
-		fail("rollout %q must be wait_for_capacity or replace", s.Rollout)
-	}
-	for _, route := range s.Routes {
-		if validKind && !slices.Contains(allowed, route) {
-			fail("route %q is not valid for kind %q", route, s.Kind)
-		}
-	}
-	if err := s.Pricing.Validate(); err != nil {
-		errs = append(errs, err)
-	}
-	if s.Kind == EndpointKindImage && s.Pricing.Image == "" && s.Pricing.Request == "" {
-		fail("image endpoints must set a per-image or per-request price (use \"0\" for free)")
+	if s.Rollout != "" && s.Rollout != RolloutWaitForCapacity && s.Rollout != RolloutReplace {
+		fail("rollout %q must be %s or %s", s.Rollout, RolloutWaitForCapacity, RolloutReplace)
 	}
 	for key, spec := range s.Gpu {
 		if key != CPUInventoryKey && !KnownGPUType(GpuType(key)) {
@@ -251,12 +193,63 @@ func (s *ManagedEndpointSpec) Validate() error {
 	return errors.Join(errs...)
 }
 
-func (s *ManagedEndpointSpec) ServesRoute(route EndpointRoute) bool {
-	return slices.Contains(s.Routes, route)
+// Catalog is the display metadata of a published app.
+type Catalog struct {
+	Name          string `json:"name,omitempty" yaml:"name"`
+	Description   string `json:"description,omitempty" yaml:"description"`
+	ContextLength uint32 `json:"context_length,omitempty" yaml:"context_length"`
 }
 
-// Fleet is config.yaml: for each endpoint, whether it runs and which GPU types
-// it fills, with a priority among the endpoints on that type and an optional
+// Publication is what config.yaml declares about one app besides placement.
+type Publication struct {
+	Catalog           Catalog             `json:"catalog" yaml:"catalog"`
+	Public            bool                `json:"public" yaml:"public"`
+	AllowedWorkspaces []string            `json:"allowed_workspaces,omitempty" yaml:"allowed_workspaces"`
+	Pricing           Pricing             `json:"pricing" yaml:"pricing"`
+	OpenRouter        *OpenRouterMetadata `json:"openrouter,omitempty" yaml:"openrouter"`
+}
+
+// Allows reports whether a workspace may discover and call the app.
+func (p *Publication) Allows(workspaceID, workspaceName string) bool {
+	return p.Public || slices.Contains(p.AllowedWorkspaces, workspaceID) || slices.Contains(p.AllowedWorkspaces, workspaceName)
+}
+
+type EndpointStatus string
+
+const (
+	EndpointStatusActive  EndpointStatus = "active"
+	EndpointStatusRetired EndpointStatus = "retired"
+)
+
+// ManagedEndpoint is the publication record of one deployed app: its current stub
+// and version, what config.yaml published, and how model servers run.
+type ManagedEndpoint struct {
+	StubID   string         `json:"stub_id"`
+	StubType StubType       `json:"stub_type"`
+	Version  uint           `json:"version"`
+	GitSHA   string         `json:"git_sha,omitempty"`
+	Status   EndpointStatus `json:"status"`
+	// Published is set when config.yaml enables the app; only published apps
+	// are routable and their Publication is what config.yaml last applied.
+	Published bool `json:"published"`
+	Publication
+	Spec      ManagedEndpointSpec `json:"spec"`
+	CreatedAt time.Time           `json:"created_at"`
+	UpdatedAt time.Time           `json:"updated_at"`
+}
+
+// Enabled: deployed and not retired. Callable: enabled and published under /v1.
+func (e *ManagedEndpoint) Enabled() bool     { return e.Status == EndpointStatusActive }
+func (e *ManagedEndpoint) Callable() bool    { return e.Enabled() && e.Published }
+func (e *ManagedEndpoint) ModelServer() bool { return e.StubType.IsManagedEndpoint() }
+
+// HostedDemandKey holds the container count an ordinary deployment's
+// autoscaler wants for a hosted app; the fleet controller reads it instead of
+// letting that autoscaler start containers.
+func HostedDemandKey(id string) string { return "managed_endpoint:want:" + id }
+
+// Fleet is config.yaml: for each app, whether it is published and which GPU
+// types it fills, with a priority among the apps on that type and an optional
 // replica cap. It is the only thing that decides where replicas run.
 type Fleet struct {
 	GitSHA    string                   `json:"git_sha,omitempty"`
@@ -265,16 +258,15 @@ type Fleet struct {
 }
 
 type FleetEndpoint struct {
-	Enabled    bool                      `json:"enabled" yaml:"enabled"`
-	GPUs       map[string]FleetPlacement `json:"gpus" yaml:"gpus"`
-	OpenRouter *OpenRouterMetadata       `json:"openrouter,omitempty" yaml:"openrouter"`
+	Enabled     bool                      `json:"enabled" yaml:"enabled"`
+	GPUs        map[string]FleetPlacement `json:"gpus" yaml:"gpus"`
+	Publication `yaml:",inline"`
 }
 
-// FleetPlacement is one endpoint on one GPU type. Minimums fill first, in
-// priority order, then spare capacity fills up to MaxReplicas (0 is uncapped).
+// FleetPlacement is one app on one GPU type. Minimums fill first, in priority
+// order, then spare capacity fills up to MaxReplicas (0 is uncapped).
 // Disabling preemption protects only the minimum; extras stay evictable.
-// Serverless placements start replicas only while requests wait for them and
-// scale back to zero when idle.
+// Serverless placements start replicas only while work waits for them.
 type FleetPlacement struct {
 	Priority    uint32 `json:"priority" yaml:"priority"`
 	MinReplicas uint32 `json:"min_replicas,omitempty" yaml:"minReplicas"`
@@ -289,7 +281,6 @@ func (p FleetPlacement) ProtectsMinimum() bool {
 }
 
 // YAML otherwise truncates fractional replica counts when decoding into uint32.
-// Reject ambiguous values instead of silently changing placement or protection.
 func (p *FleetPlacement) UnmarshalYAML(unmarshal func(any) error) error {
 	var fields map[string]any
 	if err := unmarshal(&fields); err != nil {
@@ -315,7 +306,7 @@ func (p *FleetPlacement) UnmarshalYAML(unmarshal func(any) error) error {
 	return unmarshal((*plain)(p))
 }
 
-// FleetEntry is an endpoint's place in one GPU type's priority order.
+// FleetEntry is an app's place in one GPU type's priority order.
 type FleetEntry struct {
 	EndpointID     string
 	Priority       uint32
@@ -335,6 +326,7 @@ func (f *Fleet) Normalize() {
 			gpus[GPUKey(gpu)] = p
 		}
 		e.GPUs = gpus
+		e.Catalog.Name = cmp.Or(e.Catalog.Name, id)
 		if id = strings.ToLower(strings.TrimSpace(id)); id != "" {
 			out[id] = e
 		}
@@ -342,58 +334,58 @@ func (f *Fleet) Normalize() {
 	f.Endpoints = out
 }
 
-// Validate checks GPU keys, priorities and caps. Call Normalize first.
+// Validate checks publication, GPU keys, priorities and caps. Call Normalize first.
 func (f *Fleet) Validate() error {
 	var errs []error
+	fail := func(id, format string, args ...any) {
+		errs = append(errs, fmt.Errorf(id+": "+format, args...))
+	}
 	for id, e := range f.Endpoints {
+		if e.Enabled {
+			if err := e.Pricing.Validate(); err != nil {
+				fail(id, "%v", err)
+			}
+		}
 		if e.OpenRouter != nil {
 			if err := e.OpenRouter.Validate(); err != nil {
-				errs = append(errs, fmt.Errorf("%s: openrouter: %w", id, err))
+				fail(id, "openrouter: %v", err)
 			}
 		}
 		for gpu, p := range e.GPUs {
-			if gpu != CPUInventoryKey && !KnownGPUType(GpuType(gpu)) {
-				errs = append(errs, fmt.Errorf("%s: %s is not a known GPU type", id, gpu))
-			}
-			if p.Priority == 0 {
-				errs = append(errs, fmt.Errorf("%s: %s: priority is required (1 fills first)", id, gpu))
-			}
-			if p.Serverless && p.MinReplicas != 0 {
-				errs = append(errs, fmt.Errorf("%s: %s: serverless requires minReplicas: 0", id, gpu))
-			}
-			if p.Serverless && p.Preemption != nil && !*p.Preemption {
-				errs = append(errs, fmt.Errorf("%s: %s: serverless replicas must allow preemption", id, gpu))
-			}
-			if p.MaxReplicas > maxFleetReplicas {
-				errs = append(errs, fmt.Errorf("%s: %s: maxReplicas %d exceeds %d", id, gpu, p.MaxReplicas, maxFleetReplicas))
-			}
-			if p.MinReplicas > maxFleetReplicas {
-				errs = append(errs, fmt.Errorf("%s: %s: minReplicas %d exceeds %d", id, gpu, p.MinReplicas, maxFleetReplicas))
-			}
-			if p.MaxReplicas > 0 && p.MinReplicas > p.MaxReplicas {
-				errs = append(errs, fmt.Errorf("%s: %s: minReplicas must not exceed maxReplicas", id, gpu))
-			}
-			if gpu == CPUInventoryKey && p.MaxReplicas == 0 {
-				errs = append(errs, fmt.Errorf("%s: cpu needs maxReplicas", id))
+			switch {
+			case gpu != CPUInventoryKey && !KnownGPUType(GpuType(gpu)):
+				fail(id, "%s is not a known GPU type", gpu)
+			case p.Priority == 0:
+				fail(id, "%s: priority is required (1 fills first)", gpu)
+			case p.Serverless && p.MinReplicas != 0:
+				fail(id, "%s: serverless requires minReplicas: 0", gpu)
+			case p.Serverless && p.Preemption != nil && !*p.Preemption:
+				fail(id, "%s: serverless replicas must allow preemption", gpu)
+			case p.MaxReplicas > maxFleetReplicas || p.MinReplicas > maxFleetReplicas:
+				fail(id, "%s: replica counts exceed %d", gpu, maxFleetReplicas)
+			case p.MaxReplicas > 0 && p.MinReplicas > p.MaxReplicas:
+				fail(id, "%s: minReplicas must not exceed maxReplicas", gpu)
+			case gpu == CPUInventoryKey && p.MaxReplicas == 0:
+				fail(id, "cpu needs maxReplicas")
 			}
 		}
 	}
 	return errors.Join(errs...)
 }
 
-// Prune drops endpoints that are not deployed and GPU types their app does
-// not declare, so one broken deploy never blocks the rest of the fleet.
-func (f *Fleet) Prune(endpoints map[string]*ManagedEndpointSpec) []string {
+// Prune drops apps that are not deployed and GPU types their app does not
+// declare, so one broken deploy never blocks the rest of the fleet.
+func (f *Fleet) Prune(apps map[string]*ManagedEndpoint) []string {
 	var dropped []string
 	for id, e := range f.Endpoints {
-		spec, ok := endpoints[id]
+		app, ok := apps[id]
 		if !ok {
-			dropped = append(dropped, fmt.Sprintf("%s is not a deployed endpoint", id))
+			dropped = append(dropped, fmt.Sprintf("%s is not a deployed app", id))
 			delete(f.Endpoints, id)
 			continue
 		}
 		for gpu := range e.GPUs {
-			if _, ok := spec.Gpu[gpu]; !ok {
+			if _, ok := app.Spec.Gpu[gpu]; !ok {
 				dropped = append(dropped, fmt.Sprintf("%s does not declare gpu %q in its app", id, gpu))
 				delete(e.GPUs, gpu)
 			}
@@ -403,7 +395,7 @@ func (f *Fleet) Prune(endpoints map[string]*ManagedEndpointSpec) []string {
 	return dropped
 }
 
-// GPUs returns the GPU keys any enabled endpoint fills, sorted.
+// GPUs returns the GPU keys any enabled app fills, sorted.
 func (f *Fleet) GPUs() []string {
 	seen := map[string]bool{}
 	for _, e := range f.Endpoints {
@@ -413,15 +405,10 @@ func (f *Fleet) GPUs() []string {
 			}
 		}
 	}
-	out := make([]string, 0, len(seen))
-	for gpu := range seen {
-		out = append(out, gpu)
-	}
-	slices.Sort(out)
-	return out
+	return slices.Sorted(maps.Keys(seen))
 }
 
-// Entries returns the enabled endpoints on a GPU type in priority order.
+// Entries returns the enabled apps on a GPU type in priority order.
 func (f *Fleet) Entries(gpu string) []FleetEntry {
 	var out []FleetEntry
 	for id, e := range f.Endpoints {
@@ -435,10 +422,9 @@ func (f *Fleet) Entries(gpu string) []FleetEntry {
 	return out
 }
 
-// Placements returns the GPU types an enabled endpoint fills.
-// Serverless reports whether requests may start on-demand replicas.
-func (f *Fleet) Serverless(endpointID string) bool {
-	for _, placement := range f.Placements(endpointID) {
+// Serverless reports whether requests may start on-demand replicas of an app.
+func (f *Fleet) Serverless(id string) bool {
+	for _, placement := range f.Placements(id) {
 		if placement.Serverless {
 			return true
 		}
@@ -446,47 +432,13 @@ func (f *Fleet) Serverless(endpointID string) bool {
 	return false
 }
 
-func (f *Fleet) Placements(endpointID string) map[string]FleetPlacement {
-	if e, ok := f.Endpoints[endpointID]; ok && e.Enabled {
+// Placements returns the GPU types an enabled app fills.
+func (f *Fleet) Placements(id string) map[string]FleetPlacement {
+	if e, ok := f.Endpoints[id]; ok && e.Enabled {
 		return e.GPUs
 	}
 	return nil
 }
-
-// MeterBucket is one closed minute of usage not yet delivered to the billing meter.
-type MeterBucket struct {
-	Key   string
-	Kind  UsageKind
-	Start time.Time
-	Rows  []MeterRow
-}
-
-type MeterRow struct {
-	WorkspaceID string
-	Model       string
-	Usage       Usage
-}
-
-type EndpointStatus string
-
-const (
-	EndpointStatusActive  EndpointStatus = "active"
-	EndpointStatusRetired EndpointStatus = "retired"
-)
-
-// ManagedEndpoint is the registry record of a deployed endpoint. A new deploy
-// bumps Version; the controller replaces replicas of older versions.
-type ManagedEndpoint struct {
-	Spec      ManagedEndpointSpec `json:"spec"`
-	StubID    string              `json:"stub_id"`
-	Version   uint                `json:"version"`
-	GitSHA    string              `json:"git_sha,omitempty"`
-	Status    EndpointStatus      `json:"status"`
-	CreatedAt time.Time           `json:"created_at"`
-	UpdatedAt time.Time           `json:"updated_at"`
-}
-
-func (e *ManagedEndpoint) Enabled() bool { return e.Status == EndpointStatusActive }
 
 type ReplicaStatus string
 
@@ -505,7 +457,7 @@ func (s ReplicaStatus) Terminal() bool {
 	return s == ReplicaStatusEvicted || s == ReplicaStatusFailed || s == ReplicaStatusStopped
 }
 
-// ReplicaCapacity is the harness- or probe-reported serving capacity.
+// ReplicaCapacity is the harness-reported serving capacity.
 type ReplicaCapacity struct {
 	InFlight            int64 `json:"in_flight"`
 	MaxConcurrency      int64 `json:"max_concurrency"`
@@ -549,7 +501,8 @@ func (c *ReplicaConfig) Ack(revision uint64, applied bool, errMsg string, effect
 	return true
 }
 
-// EndpointReplica is one running container serving an endpoint on one GPU type.
+// EndpointReplica is one container the fleet controller runs for a hosted app
+// on one GPU type: a model server, or a runner of an ordinary deployment.
 type EndpointReplica struct {
 	ID                  string          `json:"id"`
 	EndpointID          string          `json:"endpoint_id"`
@@ -569,24 +522,24 @@ type EndpointReplica struct {
 	SecretHash          string          `json:"secret_hash,omitempty"` // SHA-256 of BEAM_REPLICA_SECRET
 	HarnessEnabled      bool            `json:"harness_enabled"`
 	EngineReady         bool            `json:"engine_ready,omitempty"` // harness readiness; HTTP health must also pass before serving
-	Probe               ReplicaProbe    `json:"probe"`                  // snapshotted at start; an old version keeps its own contract
+	Probe               ReplicaProbe    `json:"probe"`                  // snapshotted at start; Port 0 means "ready when running"
 	Config              ReplicaConfig   `json:"config"`
 	Capacity            ReplicaCapacity `json:"capacity"`
 	Capabilities        json.RawMessage `json:"capabilities,omitempty"`
 	EngineMetrics       json.RawMessage `json:"engine_metrics,omitempty"`
 	StartedAt           time.Time       `json:"started_at"`
-	LoadingSince        time.Time       `json:"loading_since,omitempty"` // start of the current loading phase; the grace runs from here
+	LoadingSince        time.Time       `json:"loading_since,omitempty"`
 	ReadyAt             time.Time       `json:"ready_at,omitempty"`
 	LastHeartbeat       time.Time       `json:"last_heartbeat"`
 	EndedAt             time.Time       `json:"ended_at,omitempty"`
 	DrainDeadline       time.Time       `json:"drain_deadline,omitempty"`
 }
 
-// ReplicaProbe is the probe contract of one deployment version.
+// ReplicaProbe is the readiness contract of one deployment version.
 type ReplicaProbe struct {
 	Port    uint32 `json:"port"`
 	Health  string `json:"health,omitempty"`
-	Metrics string `json:"metrics,omitempty"` // Prometheus path; empty for non-LLM engines
+	Metrics string `json:"metrics,omitempty"`
 }
 
 func (r *EndpointReplica) Serving() bool { return r != nil && r.Status == ReplicaStatusReady }
@@ -596,15 +549,11 @@ func (r *EndpointReplica) EnterLoading(now time.Time, reason string) {
 	if r.Status != ReplicaStatusLoading {
 		r.LoadingSince = now
 	}
-	r.Status = ReplicaStatusLoading
-	r.StatusReason = reason
+	r.Status, r.StatusReason = ReplicaStatusLoading, reason
 }
 
 func (r *EndpointReplica) LoadingFor(now time.Time) time.Duration {
-	if r.LoadingSince.IsZero() {
-		return now.Sub(r.StartedAt)
-	}
-	return now.Sub(r.LoadingSince)
+	return now.Sub(cmp.Or(r.LoadingSince, r.StartedAt))
 }
 
 // Alive reports whether the replica counts toward the live set (draining and evicting do not).
@@ -621,7 +570,6 @@ const (
 )
 
 // GitOpsEndpointState is the outcome of the last deploy of one app directory.
-// ID is empty when the app failed to import.
 type GitOpsEndpointState struct {
 	Path      string       `json:"path"`
 	ID        string       `json:"id,omitempty"`
@@ -641,32 +589,12 @@ type GitOpsState struct {
 	LastError   string                         `json:"last_error,omitempty"`  // failed app deploys, one per line
 	FleetError  string                         `json:"fleet_error,omitempty"` // why config.yaml was rejected
 	PerEndpoint map[string]GitOpsEndpointState `json:"per_endpoint"`          // by app path
-	// PendingSHA is a deploy that announced itself and has not applied yet; a
-	// stale one means the CI run died between deploying apps and applying.
-	PendingSHA string    `json:"pending_sha,omitempty"`
-	PendingAt  time.Time `json:"pending_at,omitempty"`
+	PendingSHA  string                         `json:"pending_sha,omitempty"` // announced by a deploy that has not applied yet
+	PendingAt   time.Time                      `json:"pending_at,omitempty"`
 }
 
-// RouteSample is one completed /v1 request.
-type RouteSample struct {
-	EndpointID       string        `json:"endpoint_id"`
-	GPU              string        `json:"gpu"`
-	ReplicaID        string        `json:"replica_id"`
-	ConfigRevision   uint64        `json:"config_revision,omitempty"` // live config acknowledged when the request was served
-	StatusCode       int           `json:"status_code"`
-	PromptTokens     int64         `json:"prompt_tokens"`
-	CompletionTokens int64         `json:"completion_tokens"`
-	Images           int64         `json:"images"`
-	CostMicroUSD     int64         `json:"cost_micro_usd"`
-	Duration         time.Duration `json:"duration"`
-	TTFT             time.Duration `json:"ttft"`
-	QueueWait        time.Duration `json:"queue_wait"`
-	At               time.Time     `json:"at"`
-}
-
-func (s RouteSample) Failed() bool { return s.StatusCode >= 500 || s.StatusCode == 0 }
-
-// RouteMetrics aggregates RouteSamples over a window.
+// RouteMetrics are routing diagnostics aggregated over minute buckets; they
+// are derived from settled charges but are not the billing record.
 type RouteMetrics struct {
 	EndpointID       string        `json:"endpoint_id"`
 	GPU              string        `json:"gpu,omitempty"`
@@ -677,12 +605,19 @@ type RouteMetrics struct {
 	Errors           int64         `json:"errors"`
 	PromptTokens     int64         `json:"prompt_tokens"`
 	CompletionTokens int64         `json:"completion_tokens"`
-	Images           int64         `json:"images"`
 	CostMicroUSD     int64         `json:"cost_micro_usd"`
 	DurationSumMs    int64         `json:"duration_sum_ms"`
 	TTFTSumMs        int64         `json:"ttft_sum_ms"`
 	TTFTCount        int64         `json:"ttft_count"`
 	QueueWaitSumMs   int64         `json:"queue_wait_sum_ms"`
+}
+
+func (m *RouteMetrics) Fields() map[string]*int64 {
+	return map[string]*int64{
+		"requests": &m.Requests, "errors": &m.Errors, "prompt_tokens": &m.PromptTokens, "completion_tokens": &m.CompletionTokens,
+		"cost_micro_usd": &m.CostMicroUSD, "duration_sum_ms": &m.DurationSumMs,
+		"ttft_sum_ms": &m.TTFTSumMs, "ttft_count": &m.TTFTCount, "queue_wait_sum_ms": &m.QueueWaitSumMs,
+	}
 }
 
 func (m RouteMetrics) MeanTTFTMs() int64 {
@@ -699,8 +634,133 @@ func (m RouteMetrics) MeanTPOTMs() int64 {
 	return max(m.DurationSumMs-m.TTFTSumMs, 0) / m.CompletionTokens
 }
 
-// UsageKind separates what a workspace spent calling models from what it
-// earned serving them on contributed machines.
+// MeterBucket is one closed minute of usage not yet delivered to the billing meter.
+type MeterBucket struct {
+	Key   string
+	Kind  UsageKind
+	Start time.Time
+	Rows  []MeterRow
+}
+
+type MeterRow struct {
+	WorkspaceID string
+	Model       string
+	Usage       Usage
+}
+
+// MaxUsageCounter fits exactly in Redis Lua numbers and JavaScript clients.
+const MaxUsageCounter int64 = 1<<53 - 1
+
+// Pricing has exactly two forms: a flat price per successful request or task,
+// or per-token prices. Free offerings declare an explicit "0"; an empty
+// Pricing is unpriced and rejected at publication.
+type Pricing struct {
+	Request            string `json:"request,omitempty" yaml:"request"`
+	PromptTokens       string `json:"prompt_tokens,omitempty" yaml:"prompt_tokens"`
+	CompletionTokens   string `json:"completion_tokens,omitempty" yaml:"completion_tokens"`
+	CachedPromptTokens string `json:"cached_prompt_tokens,omitempty" yaml:"cached_prompt_tokens"`
+}
+
+var pricingPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)(\.[0-9]{1,18})?$`)
+
+// PricingRat parses one price into an exact rational; empty is zero.
+func PricingRat(value string) (*big.Rat, error) {
+	if value == "" {
+		return new(big.Rat), nil
+	}
+	rat, ok := new(big.Rat).SetString(value)
+	if !ok || !pricingPattern.MatchString(value) {
+		return nil, fmt.Errorf("%q is not a non-negative decimal amount", value)
+	}
+	return rat, nil
+}
+
+func (p Pricing) PerRequest() bool { return p.Request != "" }
+func (p Pricing) PerToken() bool   { return p.PromptTokens != "" || p.CompletionTokens != "" }
+
+// Free reports whether every declared price is zero.
+func (p Pricing) Free() bool {
+	for _, value := range []string{p.Request, p.PromptTokens, p.CompletionTokens, p.CachedPromptTokens} {
+		if rat, err := PricingRat(value); err != nil || rat.Sign() != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func (p Pricing) Validate() error {
+	for name, value := range map[string]string{"request": p.Request, "prompt_tokens": p.PromptTokens, "completion_tokens": p.CompletionTokens, "cached_prompt_tokens": p.CachedPromptTokens} {
+		if _, err := PricingRat(value); err != nil {
+			return fmt.Errorf("pricing.%s: %w", name, err)
+		}
+	}
+	switch {
+	case p.PerRequest() && (p.PerToken() || p.CachedPromptTokens != ""):
+		return errors.New("pricing: request and token prices are mutually exclusive")
+	case p.PerToken() && (p.PromptTokens == "" || p.CompletionTokens == ""):
+		return errors.New("pricing: token pricing needs both prompt_tokens and completion_tokens (use \"0\" for free)")
+	case !p.PerRequest() && !p.PerToken():
+		return errors.New("pricing: declare request or prompt_tokens/completion_tokens (use \"0\" for free)")
+	}
+	return nil
+}
+
+// Work is what an app reported for one completed request or task. It is
+// never estimated: token-priced work without a usage object is not billed.
+type Work struct {
+	Requests         int64 `json:"requests"`
+	PromptTokens     int64 `json:"prompt_tokens"`
+	CompletionTokens int64 `json:"completion_tokens"`
+	CachedTokens     int64 `json:"cached_tokens"` // part of PromptTokens, billed at the cache rate
+}
+
+func (w Work) Valid() bool {
+	for _, n := range []int64{w.Requests, w.PromptTokens, w.CompletionTokens, w.CachedTokens} {
+		if n < 0 || n > MaxUsageCounter {
+			return false
+		}
+	}
+	return w.CachedTokens <= w.PromptTokens
+}
+
+// Cost is the exact micro-USD price of Work: the total and its four components.
+type Cost struct {
+	MicroUSD           int64 `json:"micro_usd"`
+	PromptMicroUSD     int64 `json:"prompt_micro_usd"` // uncached input
+	CompletionMicroUSD int64 `json:"completion_micro_usd"`
+	CachedMicroUSD     int64 `json:"cached_micro_usd"`
+	RequestMicroUSD    int64 `json:"request_micro_usd"`
+}
+
+// Usage is Work and Cost summed over many charges (a day, a model, a report).
+type Usage struct {
+	Work
+	Cost
+}
+
+func (u *Usage) Add(o Usage) {
+	for i, field := range u.Fields() {
+		*field += *o.Fields()[i]
+	}
+}
+
+// Fields lists every counter by its wire name, in a fixed order.
+func (u *Usage) Fields() []*int64 {
+	return []*int64{&u.Requests, &u.PromptTokens, &u.CompletionTokens, &u.CachedTokens,
+		&u.MicroUSD, &u.PromptMicroUSD, &u.CompletionMicroUSD, &u.CachedMicroUSD, &u.RequestMicroUSD}
+}
+
+var UsageFieldNames = []string{"requests", "prompt_tokens", "completion_tokens", "cached_tokens",
+	"micro_usd", "prompt_micro_usd", "completion_micro_usd", "cached_micro_usd", "request_micro_usd"}
+
+type UsageReport struct {
+	Total    Usage            `json:"total"`
+	PerModel map[string]Usage `json:"per_model"`
+	PerDay   map[string]Usage `json:"per_day"`
+}
+
+// UsageKind separates what a workspace spent calling apps from what it earned
+// serving them on contributed machines.
 type UsageKind string
 
 const (
@@ -708,42 +768,122 @@ const (
 	UsageEarned UsageKind = "earned"
 )
 
-// Usage is what one workspace consumed on (or earned from) one model.
-// MaxUsageCounter fits exactly in Redis Lua numbers and JavaScript clients.
-const MaxUsageCounter int64 = 1<<53 - 1
-
-type Usage struct {
-	Requests         int64 `json:"requests"`
-	PromptTokens     int64 `json:"prompt_tokens"`
-	CompletionTokens int64 `json:"completion_tokens"`
-	// CachedTokens is a subset of PromptTokens. PromptMicroUSD prices only
-	// uncached input; cached input has its own cost even without a discount.
-	CachedTokens       int64 `json:"cached_tokens"`
-	Images             int64 `json:"images"`
-	MicroUSD           int64 `json:"micro_usd"`
-	PromptMicroUSD     int64 `json:"prompt_micro_usd"`
-	CompletionMicroUSD int64 `json:"completion_micro_usd"`
-	CachedMicroUSD     int64 `json:"cached_micro_usd"`
-	RequestMicroUSD    int64 `json:"request_micro_usd"`
-	ImageMicroUSD      int64 `json:"image_micro_usd"`
+// Price computes the exact cost of w under p. The total is rounded once to
+// micro-USD; the micro-dollars lost to flooring each component go to the
+// components with the largest fractions, so the breakdown reconciles.
+func (p Pricing) Price(w Work) (Cost, error) {
+	if !w.Valid() {
+		return Cost{}, errors.New("invalid usage")
+	}
+	var cost Cost
+	type line struct {
+		price    string
+		quantity int64
+		cost     *int64
+		fraction *big.Rat
+	}
+	lines := []*line{
+		{p.PromptTokens, w.PromptTokens - w.CachedTokens, &cost.PromptMicroUSD, nil},
+		{p.CompletionTokens, w.CompletionTokens, &cost.CompletionMicroUSD, nil},
+		{cmp.Or(p.CachedPromptTokens, p.PromptTokens), w.CachedTokens, &cost.CachedMicroUSD, nil},
+		{p.Request, w.Requests, &cost.RequestMicroUSD, nil},
+	}
+	total := new(big.Rat)
+	for _, l := range lines {
+		amount := new(big.Rat)
+		if l.price != "" && l.quantity > 0 {
+			rate, err := PricingRat(l.price)
+			if err != nil {
+				return Cost{}, err
+			}
+			amount.Mul(rate, big.NewRat(l.quantity*1_000_000, 1))
+		}
+		whole := new(big.Int).Quo(amount.Num(), amount.Denom())
+		if !whole.IsInt64() {
+			return Cost{}, errors.New("cost overflows micro-USD")
+		}
+		*l.cost = whole.Int64()
+		l.fraction = new(big.Rat).Sub(amount, new(big.Rat).SetInt(whole))
+		total.Add(total, amount)
+	}
+	// Round half up, then reconcile the components with the total.
+	rounded := new(big.Int).Quo(new(big.Int).Add(new(big.Int).Mul(total.Num(), big.NewInt(2)), total.Denom()), new(big.Int).Mul(total.Denom(), big.NewInt(2)))
+	if !rounded.IsInt64() || rounded.Int64() > MaxUsageCounter {
+		return Cost{}, errors.New("cost exceeds exact counter limit")
+	}
+	cost.MicroUSD = rounded.Int64()
+	floored := cost.PromptMicroUSD + cost.CompletionMicroUSD + cost.CachedMicroUSD + cost.RequestMicroUSD
+	slices.SortStableFunc(lines, func(a, b *line) int { return b.fraction.Cmp(a.fraction) })
+	for i := int64(0); i < cost.MicroUSD-floored; i++ {
+		*lines[i].cost++
+	}
+	return cost, nil
 }
 
-func (u *Usage) Add(o Usage) {
-	u.Requests += o.Requests
-	u.PromptTokens += o.PromptTokens
-	u.CompletionTokens += o.CompletionTokens
-	u.CachedTokens += o.CachedTokens
-	u.Images += o.Images
-	u.MicroUSD += o.MicroUSD
-	u.PromptMicroUSD += o.PromptMicroUSD
-	u.CompletionMicroUSD += o.CompletionMicroUSD
-	u.CachedMicroUSD += o.CachedMicroUSD
-	u.RequestMicroUSD += o.RequestMicroUSD
-	u.ImageMicroUSD += o.ImageMicroUSD
+// ChargeStatus is the settlement state of a Charge.
+type ChargeStatus string
+
+const (
+	ChargeOpen    ChargeStatus = "open"    // accepted; work not finished yet (queued tasks)
+	ChargeSettled ChargeStatus = "settled" // priced and counted, or a completed unbilled request
+	ChargeVoid    ChargeStatus = "void"    // failed, cancelled, expired or preempted; never billed
+)
+
+// Void closes a charge without billing it.
+func (c *Charge) Void(reason string, now time.Time) {
+	c.Status, c.Error, c.SettledAt = ChargeVoid, reason, now
 }
 
-type UsageReport struct {
-	Total    Usage            `json:"total"`
-	PerModel map[string]Usage `json:"per_model"`
-	PerDay   map[string]Usage `json:"per_day"`
+// Charge is the authoritative record of one request or task against a hosted
+// app. Its ID is the request id, or the task id for queued work, so retries
+// and duplicate completions settle the same charge once. The caller, the app
+// version and the price are snapshotted when the work is accepted.
+type Charge struct {
+	ID          string        `json:"id"`
+	Status      ChargeStatus  `json:"status"`
+	WorkspaceID string        `json:"workspace_id"` // the caller, never the execution workspace
+	TokenID     string        `json:"token_id,omitempty"`
+	AppID       string        `json:"app_id"`
+	Version     uint          `json:"version"`
+	StubType    string        `json:"stub_type,omitempty"`
+	Route       EndpointRoute `json:"route,omitempty"`
+	Pricing     Pricing       `json:"pricing"`
+	Work        Work          `json:"work"`
+	Cost        Cost          `json:"cost"`
+	// Provider attribution: set when a workspace-contributed machine served
+	// the work; ProviderShareMicroUSD is its cut of Cost.MicroUSD.
+	ProviderWorkspaceID   string `json:"provider_workspace_id,omitempty"`
+	ProviderShareMicroUSD int64  `json:"provider_share_micro_usd,omitempty"`
+	// Diagnostics of the serving attempt (not billing inputs).
+	ReplicaID      string    `json:"replica_id,omitempty"`
+	ContainerID    string    `json:"container_id,omitempty"`
+	MachineID      string    `json:"machine_id,omitempty"`
+	GPU            string    `json:"gpu,omitempty"`
+	ConfigRevision uint64    `json:"config_revision,omitempty"`
+	StatusCode     int       `json:"status_code,omitempty"`
+	Stream         bool      `json:"stream,omitempty"`
+	DurationMs     int64     `json:"duration_ms,omitempty"`
+	TTFTMs         int64     `json:"ttft_ms,omitempty"`
+	QueueWaitMs    int64     `json:"queue_wait_ms,omitempty"`
+	Error          string    `json:"error,omitempty"`
+	AcceptedAt     time.Time `json:"accepted_at"`
+	SettledAt      time.Time `json:"settled_at,omitempty"`
+}
+
+// Usage is the charge as one row of the usage counters.
+func (c *Charge) Usage() Usage { return Usage{Work: c.Work, Cost: c.Cost} }
+
+// Settle prices the reported work as one completed request and marks the
+// charge settled. Flat-priced work ignores any reported tokens.
+func (c *Charge) Settle(w Work, now time.Time) error {
+	if c.Pricing.PerRequest() {
+		w = Work{}
+	}
+	w.Requests = 1
+	cost, err := c.Pricing.Price(w)
+	if err != nil {
+		return err
+	}
+	c.Work, c.Cost, c.Status, c.SettledAt = w, cost, ChargeSettled, now
+	return nil
 }

@@ -126,7 +126,7 @@ func TestRejectedRouteDoesNotCreateDemand(t *testing.T) {
 			case "unauthenticated":
 				ctx.AuthInfo.Token = nil
 			case "private":
-				endpoint.Spec.Public = false
+				endpoint.Public = false
 				require.NoError(t, s.repo.SaveEndpoint(context.Background(), endpoint))
 				want = http.StatusForbidden
 			case "admission":
