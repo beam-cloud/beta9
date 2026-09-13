@@ -436,7 +436,7 @@ func TestReplaceRolloutMakesRoomOnSingleGPU(t *testing.T) {
 		s := newServiceForTest(t)
 		endpoint := seedEndpoint(t, s)
 		endpoint.Version = 2
-		endpoint.Spec.Rollout = "replace"
+		endpoint.Spec.Rollout = types.RolloutReplace
 		endpoint.Spec.DrainSeconds = 0
 		old := versionReplica(t, s, "old", 1, types.ReplicaStatusReady)
 		old.Protected = protected
@@ -452,7 +452,7 @@ func TestReplaceRolloutPreservesServiceWhileReplacementLoads(t *testing.T) {
 	s := newServiceForTest(t)
 	endpoint := seedEndpoint(t, s)
 	endpoint.Version = 2
-	endpoint.Spec.Rollout = "replace"
+	endpoint.Spec.Rollout = types.RolloutReplace
 	old := versionReplica(t, s, "old", 1, types.ReplicaStatusReady)
 	starting := versionReplica(t, s, "new", 2, types.ReplicaStatusLoading)
 	fleet, err := s.repo.GetFleet(context.Background())
@@ -844,8 +844,8 @@ func TestFillReclaimChecksCPUAndPaddedMemoryOnOneWorker(t *testing.T) {
 }
 
 func TestRetirePreservesProtectedMinimumWhileReplacementLoads(t *testing.T) {
-	for _, rollout := range []string{"", "replace"} {
-		t.Run("rollout="+rollout, func(t *testing.T) {
+	for _, rollout := range []types.Rollout{"", types.RolloutReplace} {
+		t.Run("rollout="+string(rollout), func(t *testing.T) {
 			s := newServiceForTest(t)
 			endpoint := seedEndpoint(t, s)
 			endpoint.Version, endpoint.Spec.Rollout = 2, rollout
@@ -892,13 +892,14 @@ func TestRetireProtectedMinimumIsPerGPU(t *testing.T) {
 
 func TestRetireProtectedMinimumOnlyAllowsExplicitCapacityReplacement(t *testing.T) {
 	for _, tc := range []struct {
-		name, rollout string
-		starting      bool
-		want          types.ReplicaStatus
+		name     string
+		rollout  types.Rollout
+		starting bool
+		want     types.ReplicaStatus
 	}{
 		{"default waits", "", false, types.ReplicaStatusReady},
-		{"replace makes room", "replace", false, types.ReplicaStatusDraining},
-		{"replace waits for a replacement already starting", "replace", true, types.ReplicaStatusReady},
+		{"replace makes room", types.RolloutReplace, false, types.ReplicaStatusDraining},
+		{"replace waits for a replacement already starting", types.RolloutReplace, true, types.ReplicaStatusReady},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newServiceForTest(t)
@@ -925,7 +926,7 @@ func TestRetireMakesRoomFromStaleSurplusBeforeProtectedMinimum(t *testing.T) {
 		t.Run(fmt.Sprintf("minimum=%d", minimum), func(t *testing.T) {
 			s := newServiceForTest(t)
 			endpoint := seedEndpoint(t, s)
-			endpoint.Version, endpoint.Spec.Rollout = 2, "replace"
+			endpoint.Version, endpoint.Spec.Rollout = 2, types.RolloutReplace
 			noPreemption := false
 			fleet := seedFleet(t, s, map[string]types.FleetEndpoint{endpoint.Spec.ID: {Enabled: true, GPUs: map[string]types.FleetPlacement{
 				"H100": {Priority: 1, MinReplicas: minimum, MaxReplicas: minimum + 1, Preemption: &noPreemption},

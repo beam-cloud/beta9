@@ -10,19 +10,30 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/types"
+
 	"github.com/labstack/echo/v4"
 )
 
-const streamKeepaliveInterval = 10 * time.Second
+// Transport: how a request reaches its executor, and how an OpenAI-style
+// response body is read for usage on the way back.
 
-// relayStream keeps one writer for both engine events and heartbeat comments.
-// Comments keep a silent reasoning step connected without counting as output or
-// completing billing. Accounting must succeed before the terminal marker leaves.
-func relayStream(w *echo.Response, body io.Reader, requestID string, sentAt time.Time, finalize func(Usage, time.Duration) error) (Usage, time.Duration, error) {
+const (
+	maxBody                 = 64 << 20
+	replicaDialTimeout      = 5 * time.Second
+	streamKeepaliveInterval = 10 * time.Second
+	providerName            = "beam"
+)
+
+// relayStream forwards SSE as it arrives, keeping a silent reasoning step
+// connected with comments that count as neither output nor completion.
+// finalize runs on the terminal marker before it is relayed, so a response
+// that cannot be accounted fails visibly instead of looking complete.
+func relayStream(w *echo.Response, body io.Reader, requestID string, sentAt time.Time, finalize func(types.Work, bool, time.Duration) error) (types.Work, bool, time.Duration, error) {
 	return relayStreamWithKeepalive(w, body, requestID, sentAt, finalize, streamKeepaliveInterval)
 }
 
-func relayStreamWithKeepalive(w *echo.Response, body io.Reader, requestID string, sentAt time.Time, finalize func(Usage, time.Duration) error, interval time.Duration) (Usage, time.Duration, error) {
+func relayStreamWithKeepalive(w *echo.Response, body io.Reader, requestID string, sentAt time.Time, finalize func(types.Work, bool, time.Duration) error, interval time.Duration) (types.Work, bool, time.Duration, error) {
 	type eventRead struct {
 		event []byte
 		err   error
@@ -31,10 +42,8 @@ func relayStreamWithKeepalive(w *echo.Response, body io.Reader, requestID string
 	stop := make(chan struct{})
 	defer func() {
 		close(stop)
-		// In production this is an HTTP response body: Close releases a reader
-		// blocked on the next event after a write failure or terminal marker.
 		if closer, ok := body.(io.Closer); ok {
-			_ = closer.Close()
+			_ = closer.Close() // unblocks a reader waiting on the next event
 		}
 	}()
 	go func() {
@@ -62,13 +71,12 @@ func relayStreamWithKeepalive(w *echo.Response, body io.Reader, requestID string
 		return nil
 	}
 	const keepalive = ": keepalive\n\n"
-	var usage Usage
+	var usage types.Work
+	var found bool
 	var ttft time.Duration
 	toolChoices := make(map[int]bool)
-	// Flush the HTTP response immediately, even if the engine has sent only
-	// headers. No generated-token metric is inferred from this comment.
 	if err := write([]byte(keepalive)); err != nil {
-		return usage, ttft, err
+		return usage, found, ttft, err
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -76,48 +84,48 @@ func relayStreamWithKeepalive(w *echo.Response, body io.Reader, requestID string
 		select {
 		case <-ticker.C:
 			if err := write([]byte(keepalive)); err != nil {
-				return usage, ttft, err
+				return usage, found, ttft, err
 			}
 		case result := <-reads:
 			if result.err != nil {
 				if errors.Is(result.err, io.EOF) {
-					return usage, ttft, io.ErrUnexpectedEOF
+					return usage, found, ttft, io.ErrUnexpectedEOF
 				}
-				return usage, ttft, result.err
+				return usage, found, ttft, result.err
 			}
 			payload, data := sseEventData(result.event)
 			if data && len(bytes.TrimSpace(payload)) > 0 {
 				if bytes.Equal(bytes.TrimSpace(payload), []byte("[DONE]")) {
 					if finalize != nil {
-						if err := finalize(usage, ttft); err != nil {
-							return usage, ttft, err
+						if err := finalize(usage, found, ttft); err != nil {
+							return usage, found, ttft, err
 						}
 					}
-					return usage, ttft, write(result.event)
+					return usage, found, ttft, write(result.event)
 				}
 				if err := streamPayloadError(payload); err != nil {
-					// The proxy emits one canonical terminal error chunk. Do not
-					// forward an engine error and then emit a second gateway error.
-					return usage, ttft, err
+					// One canonical terminal error chunk: never relay an engine
+					// error and then emit a second gateway error.
+					return usage, found, ttft, err
 				}
 				line := append([]byte("data: "), payload...)
 				if ttft == 0 && generatesOutput(line) {
 					ttft = time.Since(sentAt)
 				}
-				if next := tokenUsage(payload); next.Found {
-					usage = next
+				if next, ok := tokenUsage(payload); ok {
+					usage, found = next, true
 				}
 				result.event = replaceSSEData(result.event, bytes.TrimSuffix(stampSSE(line, requestID, toolChoices), []byte("\n")))
 			}
 			if err := write(result.event); err != nil {
-				return usage, ttft, err
+				return usage, found, ttft, err
 			}
 		}
 	}
 }
 
-// Bound one event, including a line with no newline, without buffering the
-// entire generation. Only complete SSE events may reach the client or meter.
+// readSSEEvent bounds one event, including a line with no newline, without
+// buffering the entire generation. Only complete events reach the client.
 func readSSEEvent(reader *bufio.Reader, limit int) ([]byte, error) {
 	var event []byte
 	lineStart := 0
@@ -140,8 +148,7 @@ func readSSEEvent(reader *bufio.Reader, limit int) ([]byte, error) {
 	}
 }
 
-// SSE joins consecutive data fields with a newline. Other fields and comments
-// remain intact when replacing those data fields with one equivalent JSON line.
+// sseEventData joins consecutive data fields with a newline, as SSE does.
 func sseEventData(event []byte) ([]byte, bool) {
 	var payload []byte
 	found := false
@@ -198,16 +205,15 @@ func generatesOutput(line []byte) bool {
 	}
 	for _, c := range chunk.Choices {
 		d := c.Delta
-		text := c.Text != "" || d.Content != "" || d.Reasoning != "" || d.ReasoningContent != ""
-		if text || len(d.ReasoningDetails) > 0 || len(d.ToolCalls) > 0 {
+		if c.Text != "" || d.Content != "" || d.Reasoning != "" || d.ReasoningContent != "" || len(d.ReasoningDetails) > 0 || len(d.ToolCalls) > 0 {
 			return true
 		}
 	}
 	return false
 }
 
-// RawMessage preserves nested tool/reasoning fields and integers exactly while
-// stamping the generation id and correcting completed tool-call finish reasons.
+// stampSSE sets the generation id and corrects completed tool-call finish
+// reasons; RawMessage preserves nested fields and large integers exactly.
 func stampSSE(line []byte, requestID string, toolChoices map[int]bool) []byte {
 	payload := bytes.TrimSpace(bytes.TrimPrefix(line, []byte("data:")))
 	var chunk map[string]json.RawMessage
@@ -223,7 +229,8 @@ func stampSSE(line []byte, requestID string, toolChoices map[int]bool) []byte {
 	return append(append([]byte("data: "), out...), '\n')
 }
 
-func decorateJSON(body []byte, requestID string, usage Usage, costMicro int64) []byte {
+// decorateJSON stamps the generation id and provider and adds the cost to the usage object.
+func decorateJSON(body []byte, requestID string, priced bool, costMicro int64) []byte {
 	var payload map[string]json.RawMessage
 	if json.Unmarshal(body, &payload) != nil || payload == nil {
 		return body
@@ -231,7 +238,7 @@ func decorateJSON(body []byte, requestID string, usage Usage, costMicro int64) [
 	payload["id"], _ = json.Marshal(requestID)
 	payload["provider"], _ = json.Marshal(providerName)
 	normalizeToolFinishReasons(payload, nil)
-	if usage.Found {
+	if priced {
 		var reported map[string]json.RawMessage
 		if json.Unmarshal(payload["usage"], &reported) == nil && reported != nil {
 			reported["cost"], _ = json.Marshal(costUSD(costMicro))
@@ -245,8 +252,8 @@ func decorateJSON(body []byte, requestID string, usage Usage, costMicro int64) [
 	return out
 }
 
-// Some engines finish valid tool calls with "stop". OpenAI clients need
-// "tool_calls" to continue the tool loop. Never hide truncation or errors.
+// normalizeToolFinishReasons rewrites "stop" to "tool_calls" on choices that
+// produced tool calls, as OpenAI clients need to continue the tool loop.
 // Streamed calls can arrive before the final reason, independently per choice.
 func normalizeToolFinishReasons(payload map[string]json.RawMessage, toolChoices map[int]bool) {
 	var choices []json.RawMessage
@@ -298,6 +305,7 @@ type streamFailure struct {
 }
 
 func (e *streamFailure) Error() string { return e.message }
+
 func (e *streamFailure) Unwrap() error { return io.ErrUnexpectedEOF }
 
 func streamFailureFor(err error) *streamFailure {

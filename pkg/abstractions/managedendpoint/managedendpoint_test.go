@@ -1,19 +1,17 @@
 package managedendpoint
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"net"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/beam-cloud/beta9/pkg/abstractions/common/llmroute"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -27,92 +25,18 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// newServiceForTest wires a Service onto miniredis with no backend or
-// scheduler; RPCs that only touch the registry are exercised directly.
-func newServiceForTest(t *testing.T) *Service {
-	t.Helper()
-	rdb, err := repository.NewRedisClientForTest()
-	require.NoError(t, err)
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	config := types.ManagedEndpointsConfig{Enabled: true}
-	config.ApplyDefaults()
-	s := &Service{
-		ctx:            ctx,
-		config:         config,
-		repo:           repository.NewManagedEndpointRedisRepository(rdb),
-		rdb:            rdb,
-		drainCtx:       ctx,
-		adminWorkspace: &types.Workspace{Id: 1, ExternalId: "admin-ws", Name: "admin"},
-	}
-	s.controller = newController(s)
-	s.meter = newMeter(s)
-	return s
-}
-
-func adminCtx() context.Context {
-	return auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
-		Workspace: &types.Workspace{Id: 1, ExternalId: "admin-ws"},
-		Token:     &types.Token{TokenType: types.TokenTypeClusterAdmin, ExternalId: "tok"},
-	})
-}
-
-const testReplicaSecret = "replica-secret-1"
-
-// harnessCtx is what a replica container presents: no workspace token, only
-// its own replica secret in gRPC metadata.
-func harnessCtx() context.Context {
-	return metadata.NewIncomingContext(context.Background(), metadata.Pairs(replicaSecretHeader, testReplicaSecret))
-}
-
-// seedEndpoint registers acme/model (an H100 vLLM endpoint with the harness)
-// as version 1 and places it on H100 through the fleet.
-func seedEndpoint(t *testing.T, s *Service) *types.ManagedEndpoint {
-	t.Helper()
-	spec := types.ManagedEndpointSpec{
-		ID: "acme/model", Kind: types.EndpointKindLLM, Engine: "vllm", Port: 8000, Entrypoint: []string{"vllm", "serve"},
-		Gpu:          map[string]types.GpuSpec{"H100": {Config: map[string]any{"max_num_seqs": 64}}},
-		DrainSeconds: 5,
-		Public:       true,
-	}
-	spec.Normalize()
-	endpoint := &types.ManagedEndpoint{Spec: spec, StubID: "stub-1", Version: 1, Status: types.EndpointStatusActive}
-	require.NoError(t, s.repo.SaveEndpoint(context.Background(), endpoint))
-	seedFleet(t, s, map[string]types.FleetEndpoint{spec.ID: {Enabled: true, GPUs: map[string]types.FleetPlacement{"H100": {Priority: 1, MaxReplicas: 2}}}})
-	return endpoint
-}
-
-func seedFleet(t *testing.T, s *Service, endpoints map[string]types.FleetEndpoint) *types.Fleet {
-	t.Helper()
-	fleet := &types.Fleet{GitSHA: "fleet-sha", Endpoints: endpoints}
-	fleet.Normalize()
-	require.NoError(t, s.repo.SaveFleet(context.Background(), fleet))
-	return fleet
-}
-
-func seedReplica(t *testing.T, s *Service, endpoint *types.ManagedEndpoint) *types.EndpointReplica {
-	t.Helper()
-	replica := &types.EndpointReplica{
-		ID: "rep-1", EndpointID: endpoint.Spec.ID, Version: 1, GPU: "H100", GPUCount: 1,
-		ContainerID: "managed-stub-1-abc", Status: types.ReplicaStatusScheduling, HarnessEnabled: true, StartedAt: time.Now(),
-		SecretHash: hashReplicaSecret(testReplicaSecret), Probe: probeFor(&endpoint.Spec),
-	}
-	require.NoError(t, s.repo.SaveReplica(context.Background(), replica))
-	return replica
-}
-
 func TestAuthorization(t *testing.T) {
 	s := newServiceForTest(t)
 
-	_, err := s.ListEndpoints(context.Background(), &pb.ListEndpointsRequest{})
-	assert.Equal(t, codes.PermissionDenied, status.Code(err))
-
-	workspaceToken := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
+	workspaceToken := &auth.AuthInfo{
 		Workspace: &types.Workspace{Id: 1, ExternalId: "admin-ws"},
 		Token:     &types.Token{TokenType: types.TokenTypeWorkspace, ExternalId: "tok"},
-	})
-	_, err = s.ListEndpoints(workspaceToken, &pb.ListEndpointsRequest{})
-	assert.Equal(t, codes.PermissionDenied, status.Code(err), "workspace tokens cannot use admin RPCs")
+	}
+	assert.Equal(t, http.StatusUnauthorized, call(t, s, nil, http.MethodGet, "/api/v1/endpoints", nil).Code)
+	assert.Equal(t, http.StatusUnauthorized, call(t, s, workspaceToken, http.MethodGet, "/api/v1/endpoints", nil).Code, "workspace tokens cannot use the admin API")
+	assert.Equal(t, http.StatusOK, call(t, s, adminInfo, http.MethodGet, "/api/v1/endpoints", nil).Code)
+	_, err := s.ApplyRepo(auth.ContextWithAuthInfo(context.Background(), workspaceToken), &pb.ApplyRepoRequest{})
+	assert.Equal(t, codes.PermissionDenied, status.Code(err), "workspace tokens cannot apply the repo")
 
 	// Harness RPCs are authorized by the replica secret alone; an unknown
 	// replica has none to compare against.
@@ -125,7 +49,7 @@ func TestAuthorization(t *testing.T) {
 	replica := seedReplica(t, s, endpoint)
 	_, err = s.Heartbeat(context.Background(), &pb.HarnessHeartbeatRequest{ReplicaId: replica.ID})
 	assert.Equal(t, codes.PermissionDenied, status.Code(err))
-	_, err = s.Heartbeat(workspaceToken, &pb.HarnessHeartbeatRequest{ReplicaId: replica.ID})
+	_, err = s.Heartbeat(auth.ContextWithAuthInfo(context.Background(), workspaceToken), &pb.HarnessHeartbeatRequest{ReplicaId: replica.ID})
 	assert.Equal(t, codes.PermissionDenied, status.Code(err))
 	_, err = s.Heartbeat(adminCtx(), &pb.HarnessHeartbeatRequest{ReplicaId: replica.ID})
 	assert.Equal(t, codes.PermissionDenied, status.Code(err), "no cluster-admin bypass for harness RPCs")
@@ -140,10 +64,10 @@ func TestAuthorization(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, hb.Ok)
 
-	disabled := newServiceForTest(t)
-	disabled.config.Enabled = false
-	_, err = disabled.ListEndpoints(adminCtx(), &pb.ListEndpointsRequest{})
-	assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+	// The hosted route needs a workspace token; the admin API is not enough
+	// to be a caller, but a cluster admin may call anything.
+	assert.Equal(t, http.StatusUnauthorized, call(t, s, nil, http.MethodGet, "/v1/models", nil).Code)
+	assert.Equal(t, http.StatusOK, call(t, s, userInfo, http.MethodGet, "/v1/models", nil).Code)
 }
 
 func TestHarnessLifecycle(t *testing.T) {
@@ -365,7 +289,6 @@ type capturingEvents struct {
 func (c *capturingEvents) PushEndpointEvent(_ string, event types.EventEndpointSchema) {
 	c.events = append(c.events, event)
 }
-func (c *capturingEvents) PushEndpointRouteEvent(types.EventEndpointRouteSchema) {}
 
 func (c *capturingEvents) find(action string) *types.EventEndpointSchema {
 	for i := range c.events {
@@ -399,9 +322,8 @@ func TestConfigHistoryIsCompleteAndBounded(t *testing.T) {
 	s.events = events
 	s.repo = notifyFailingRepo{s.repo}
 
-	resp, err := s.SetReplicaConfig(adminCtx(), &pb.SetReplicaConfigRequest{ReplicaId: replica.ID, ConfigJson: `{"max_num_seqs":96}`, Author: "agent", WaitSeconds: 1})
-	require.NoError(t, err)
-	assert.True(t, resp.Ok, resp.ErrMsg)
+	code, resp := callJSON(t, s, adminInfo, http.MethodPost, "/api/v1/endpoints/replicas/"+replica.ID+"/config", map[string]any{"config_json": `{"max_num_seqs":96}`, "author": "agent", "wait_seconds": 1})
+	require.Equal(t, http.StatusOK, code, resp)
 	set := events.find("config.set")
 	require.NotNil(t, set, "the revision is history even though the wakeup failed")
 	assert.Equal(t, "admin-ws", set.WorkspaceID)
@@ -409,7 +331,7 @@ func TestConfigHistoryIsCompleteAndBounded(t *testing.T) {
 	assert.EqualValues(t, 1, set.Revision)
 	assert.Equal(t, "tok", set.Data["actor"])
 	assert.Equal(t, "agent", set.Data["author"])
-	assert.Equal(t, "tok", resp.Replica.Config.Actor)
+	assert.Equal(t, "tok", resp["replica"].(map[string]any)["config"].(map[string]any)["actor"])
 
 	// An ack for a revision that was never issued is refused and leaves the
 	// cursor alone; so does a heartbeat claiming one.
@@ -462,6 +384,10 @@ func TestAdminReadRPCs(t *testing.T) {
 	assert.Len(t, get.Replicas, 1)
 	assert.Equal(t, endpoint.Spec.ID, get.Endpoint.Id)
 	assert.Contains(t, get.Endpoint.SpecJson, `"H100"`)
+	var record types.ManagedEndpoint
+	require.NoError(t, json.Unmarshal([]byte(get.Endpoint.SpecJson), &record))
+	assert.Equal(t, endpoint.Publication, record.Publication, "spec_json carries the published record: spec, catalog, access and pricing")
+	assert.True(t, record.Published)
 	get, err = s.GetEndpoint(ctx, &pb.GetEndpointRequest{EndpointId: "acme/missing"})
 	require.NoError(t, err)
 	assert.False(t, get.Ok)
@@ -494,135 +420,301 @@ func TestAdminReadRPCs(t *testing.T) {
 	gitops, err := s.GetGitOpsStatus(ctx, &pb.GetGitOpsStatusRequest{})
 	require.NoError(t, err)
 	require.True(t, gitops.Ok)
-	assert.JSONEq(t, `{"acme/model":{"enabled":true,"gpus":{"H100":{"priority":1,"max_replicas":2}}}}`, gitops.FleetJson)
+	assert.JSONEq(t, `{"acme/model":{"enabled":true,"gpus":{"H100":{"priority":1,"max_replicas":2}},"catalog":{"name":"Model","context_length":32768},"public":true,"pricing":{"prompt_tokens":"0.000001","completion_tokens":"0.000002"}}}`, gitops.FleetJson,
+		"config.yaml as applied: placement and publication together")
 }
 
-func TestRouteRecordCreditsProviderWorkspace(t *testing.T) {
+// Every finished request is one Charge: the caller, the price and the
+// reported work are journaled together, the counters are updated once, and
+// the provider whose machine served it earns its share.
+func TestChargeFlowCreditsProviderWorkspace(t *testing.T) {
 	s := newServiceForTest(t)
-	r := &router{s: s}
+	r := s.router
 	now := time.Now()
-	endpoint := &types.ManagedEndpoint{Spec: types.ManagedEndpointSpec{ID: "acme/model", Pricing: types.Pricing{CompletionTokens: "0.000001"}}}
+	app := &types.ManagedEndpoint{Spec: types.ManagedEndpointSpec{ID: "acme/model"}, Publication: types.Publication{Pricing: types.Pricing{PromptTokens: "0", CompletionTokens: "0.000001"}}}
 	replica := &types.EndpointReplica{ID: "rep-1", GPU: "H100", MachineID: "machine-a", ProviderWorkspaceID: "ws-provider"}
-	rq := &routeRequest{
-		auth:      &auth.AuthInfo{Workspace: &types.Workspace{ExternalId: "ws-tenant"}, Token: &types.Token{ExternalId: "tok"}},
-		requestID: "req-1", route: types.EndpointRouteChatCompletions, models: []string{"acme/model"}, startedAt: time.Now(),
+	rq := func(id string) *routeRequest {
+		rq := &routeRequest{auth: userInfo, requestID: id, route: types.EndpointRouteChatCompletions, startedAt: time.Now()}
+		rq.charge = newCharge(id, app, userInfo.Workspace, userInfo.Token.ExternalId, rq.route, rq.startedAt)
+		return rq
 	}
 	ctx := context.Background()
-	// record persists synchronously; the generation record is the event as written.
-	generation := func(requestID string) *types.EventEndpointRouteSchema {
-		t.Helper()
-		record, err := s.repo.GetGeneration(ctx, requestID)
-		require.NoError(t, err)
-		require.NotNil(t, record)
-		return record
-	}
 
-	r.record(rq, endpoint, replica, 200, Usage{CompletionTokens: 1000, Found: true}, 0, "")
-	event := generation("req-1")
-	require.Equal(t, int64(1000), event.CostMicroUSD)
-	require.Equal(t, "ws-provider", event.ProviderWorkspaceID)
-	require.Equal(t, "machine-a", event.MachineID)
-	require.Equal(t, int64(700), event.ProviderShareMicroUSD) // default 70% share
-	require.Equal(t, "acme/model", event.Model)
-	require.Equal(t, "ws-tenant", event.WorkspaceID)
+	require.NoError(t, r.finish(rq("req-1"), app, replica, 200, types.Work{CompletionTokens: 1000}, true, 0, ""))
+	c := charge(t, s, "req-1")
+	require.Equal(t, types.ChargeSettled, c.Status)
+	require.EqualValues(t, 1000, c.Cost.MicroUSD)
+	require.Equal(t, "ws-provider", c.ProviderWorkspaceID)
+	require.Equal(t, "machine-a", c.MachineID)
+	require.EqualValues(t, 700, c.ProviderShareMicroUSD) // default 70% share
+	require.Equal(t, "acme/model", c.AppID)
+	require.Equal(t, "user-ws", c.WorkspaceID)
+	require.Equal(t, app.Pricing, c.Pricing, "the price is snapshotted on the charge")
 
-	spend, err := s.repo.GetUsage(ctx, types.UsageSpend, "ws-tenant", now, now)
+	spendReport, err := s.repo.GetUsage(ctx, types.UsageSpend, "user-ws", now, now)
 	require.NoError(t, err)
-	require.Equal(t, types.Usage{Requests: 1, CompletionTokens: 1000, MicroUSD: 1000, CompletionMicroUSD: 1000}, spend.PerModel["acme/model"])
+	require.Equal(t, types.Usage{Work: types.Work{Requests: 1, CompletionTokens: 1000}, Cost: types.Cost{MicroUSD: 1000, CompletionMicroUSD: 1000}}, spendReport.PerModel["acme/model"])
 	earned, err := s.repo.GetUsage(ctx, types.UsageEarned, "ws-provider", now, now)
 	require.NoError(t, err)
-	require.Equal(t, types.Usage{Requests: 1, CompletionTokens: 1000, MicroUSD: 700}, earned.PerModel["acme/model"])
+	require.Equal(t, types.Usage{Work: types.Work{Requests: 1, CompletionTokens: 1000}, Cost: types.Cost{MicroUSD: 700}}, earned.PerModel["acme/model"])
 
-	// Recording the same request twice (a retried accounting leg) never double-counts.
-	r.record(rq, endpoint, replica, 200, Usage{CompletionTokens: 1000, Found: true}, 0, "")
-	replayed, err := s.repo.GetUsage(ctx, types.UsageSpend, "ws-tenant", now, now)
+	// Finishing the same request twice (a duplicate completion) never double-counts.
+	require.NoError(t, r.finish(rq("req-1"), app, replica, 200, types.Work{CompletionTokens: 1000}, true, 0, ""))
+	replayed, err := s.repo.GetUsage(ctx, types.UsageSpend, "user-ws", now, now)
 	require.NoError(t, err)
-	require.Equal(t, spend.Total, replayed.Total)
+	require.Equal(t, spendReport.Total, replayed.Total)
 
 	// Free requests earn nothing and carry no provider attribution.
-	rq.requestID = "req-2"
-	r.record(rq, endpoint, replica, 200, Usage{Found: true}, 0, "")
-	require.Empty(t, generation("req-2").ProviderWorkspaceID)
+	require.NoError(t, r.finish(rq("req-2"), app, replica, 200, types.Work{}, true, 0, ""))
+	require.Empty(t, charge(t, s, "req-2").ProviderWorkspaceID)
 
-	// Failed requests are recorded but never billed.
-	rq.requestID = "req-3"
-	r.record(rq, endpoint, replica, 502, Usage{CompletionTokens: 5, Found: true}, 0, "boom")
-	failed := generation("req-3")
-	require.Zero(t, failed.CostMicroUSD)
+	// Failed requests are journaled but void: never billed, never counted as a request.
+	require.NoError(t, r.finish(rq("req-3"), app, replica, 502, types.Work{CompletionTokens: 5}, true, 0, "boom"))
+	failed := charge(t, s, "req-3")
+	require.Equal(t, types.ChargeVoid, failed.Status)
+	require.Zero(t, failed.Cost.MicroUSD)
 	require.Equal(t, "boom", failed.Error)
-	spend, err = s.repo.GetUsage(ctx, types.UsageSpend, "ws-tenant", now, now)
+	spendReport, err = s.repo.GetUsage(ctx, types.UsageSpend, "user-ws", now, now)
 	require.NoError(t, err)
-	require.Equal(t, int64(2), spend.Total.Requests, "the free request counts, the failed one does not")
+	require.Equal(t, int64(2), spendReport.Total.Requests, "the free request counts, the failed one does not")
 
 	// Every sample lands in the serving replica's own metrics bucket.
 	metrics, err := s.repo.GetRouteMetrics(ctx, "acme/model", "H100", "rep-1", 0, time.Minute)
 	require.NoError(t, err)
-	require.EqualValues(t, 4, metrics.Requests)
+	require.EqualValues(t, 3, metrics.Requests)
 	require.EqualValues(t, 1, metrics.Errors)
+
+	// Nothing is left waiting for accounting.
+	pending, err := s.repo.ListPendingCharges(ctx, time.Now().Add(time.Hour), 10)
+	require.NoError(t, err)
+	require.Empty(t, pending)
 }
 
-// TestProxyStreamWithoutUsageIsNotBilled: a billable SSE stream that completes
-// without a usage chunk reaches the client intact but is recorded as a 502
-// with no cost, like the buffered path, so it is not billed.
-func TestProxyStreamWithoutUsageIsNotBilled(t *testing.T) {
+// A crash between journaling a charge and updating the counters leaves the
+// charge pending; the next flush applies it exactly once.
+func TestPendingChargeIsAccountedOnceByFlush(t *testing.T) {
 	s := newServiceForTest(t)
-	r := &router{s: s, states: map[string]*llmroute.State{}}
+	ctx := context.Background()
+	c := &types.Charge{ID: "req-crash", Status: types.ChargeOpen, WorkspaceID: "user-ws", AppID: "acme/model", Pricing: types.Pricing{Request: "0.01"}, AcceptedAt: time.Now()}
+	require.NoError(t, c.Settle(types.Work{}, time.Now()))
+	_, err := s.repo.SaveCharge(ctx, c)
+	require.NoError(t, err)
+	require.NoError(t, s.repo.SetChargeSchema(ctx, repository.ChargeSchema))
+	require.Zero(t, spend(t, s, "user-ws").Requests)
 
-	var withUsage atomic.Bool
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		fmt.Fprint(w, "data: {\"id\":\"chatcmpl-upstream\",\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n")
-		if withUsage.Load() {
-			fmt.Fprint(w, "data: {\"id\":\"chatcmpl-upstream\",\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":7}}\n\n")
-		}
-		fmt.Fprint(w, "data: [DONE]\n\n")
-	}))
-	defer upstream.Close()
-	r.s.transports.Store(upstream.Listener.Addr().String(), &http.Transport{
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return net.Dial("tcp", upstream.Listener.Addr().String())
-		},
-	})
+	s.usage = &recordingUsageMetrics{}
+	require.NoError(t, s.billing.flush(ctx))
+	require.NoError(t, s.billing.flush(ctx))
+	total := spend(t, s, "user-ws")
+	require.EqualValues(t, 1, total.Requests)
+	require.EqualValues(t, 10_000, total.MicroUSD)
+	pending, err := s.repo.ListPendingCharges(ctx, time.Now().Add(time.Hour), 10)
+	require.NoError(t, err)
+	require.Empty(t, pending)
+}
 
-	endpoint := &types.ManagedEndpoint{Spec: types.ManagedEndpointSpec{ID: "acme/model", Pricing: types.Pricing{CompletionTokens: "0.000001"}}}
-	replica := &types.EndpointReplica{ID: "rep-1", Address: upstream.Listener.Addr().String(), GPU: "H100"}
-	proxyOnce := func() (*httptest.ResponseRecorder, types.EventEndpointRouteSchema) {
-		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"acme/model","stream":true}`))
-		rq := &routeRequest{
-			ctx: echo.New().NewContext(req, rec), adapter: adapters[types.EndpointRouteChatCompletions], route: types.EndpointRouteChatCompletions,
-			auth:      &auth.AuthInfo{Workspace: &types.Workspace{ExternalId: "ws-tenant"}, Token: &types.Token{ExternalId: "tok"}},
-			requestID: "req-1", models: []string{"acme/model"}, body: []byte(`{"model":"acme/model","stream":true}`), stream: true, startedAt: time.Now(),
-		}
-		if withUsage.Load() {
-			rq.requestID = "req-with-usage"
-		}
-		retry, err := r.proxy(context.Background(), rq, endpoint, replica)
-		if withUsage.Load() {
-			require.NoError(t, err)
-		} else {
-			require.Error(t, err)
-		}
-		require.False(t, retry)
-		event, err := s.repo.GetGeneration(context.Background(), rq.requestID)
-		require.NoError(t, err)
-		require.NotNil(t, event, "record persists the generation synchronously")
-		return rec, *event
+// Pre-consolidation route records still awaiting accounting are migrated
+// into charges with their amounts preserved before the schema marker is set.
+func TestFlushMigratesLegacyPendingRecords(t *testing.T) {
+	s := newServiceForTest(t)
+	ctx := context.Background()
+	s.usage = &recordingUsageMetrics{}
+	legacy := `{"request_id":"gen-old","endpoint_id":"acme/image","workspace_id":"user-ws","status_code":200,"images":2,"cost_micro_usd":900,"image_micro_usd":900,"timestamp":"` + time.Now().UTC().Format(time.RFC3339Nano) + `"}`
+	require.NoError(t, s.rdb.Set(ctx, "managed_endpoint:generation:gen-old", legacy, 0).Err())
+	require.NoError(t, s.repo.DeferAccounting(ctx, "gen-old", time.Now().Add(-time.Minute)))
+
+	require.NoError(t, s.billing.flush(ctx))
+	schema, err := s.repo.GetChargeSchema(ctx)
+	require.NoError(t, err)
+	require.Equal(t, repository.ChargeSchema, schema)
+	total := spend(t, s, "user-ws")
+	require.EqualValues(t, 1, total.Requests)
+	require.EqualValues(t, 900, total.MicroUSD, "the historical image amount is preserved in the total")
+	require.Zero(t, total.RequestMicroUSD, "and never reinterpreted as a per-request price")
+	c := charge(t, s, "gen-old")
+	require.Equal(t, types.ChargeSettled, c.Status)
+	require.NoError(t, s.billing.flush(ctx), "a second flush finds nothing to migrate")
+	require.Equal(t, total, spend(t, s, "user-ws"))
+}
+
+// newServiceForTest wires a Service onto miniredis with no backend or
+// scheduler; RPCs that only touch the registry are exercised directly.
+func newServiceForTest(t *testing.T) *Service {
+	t.Helper()
+	rdb, err := repository.NewRedisClientForTest()
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	config := types.ManagedEndpointsConfig{Enabled: true}
+	config.ApplyDefaults()
+	s := &Service{
+		ctx:            ctx,
+		config:         config,
+		repo:           repository.NewManagedEndpointRedisRepository(rdb),
+		rdb:            rdb,
+		drainCtx:       ctx,
+		adminWorkspace: &types.Workspace{Id: 1, ExternalId: "admin-ws", Name: "admin"},
+		adminToken:     "admin-token",
 	}
+	s.controller = newController(s)
+	s.router = newRouter(s)
+	s.billing = newBilling(s)
+	return s
+}
 
-	rec, event := proxyOnce()
-	assert.Equal(t, http.StatusOK, rec.Code, "the stream already reached the client")
-	assert.NotContains(t, rec.Body.String(), "data: [DONE]", "missing usage cannot complete a successful billed stream")
-	assert.Contains(t, rec.Body.String(), "upstream_stream_interrupted")
-	assert.Contains(t, rec.Body.String(), `"id":"req-1"`, "chunks carry the gateway generation id")
-	assert.NotContains(t, rec.Body.String(), "chatcmpl-upstream")
-	assert.Equal(t, http.StatusBadGateway, event.StatusCode)
-	assert.Equal(t, errMissingUsage.Message, event.Error)
-	assert.Zero(t, event.CostMicroUSD)
+var (
+	adminInfo = &auth.AuthInfo{Workspace: &types.Workspace{Id: 1, ExternalId: "admin-ws", Name: "admin"}, Token: &types.Token{TokenType: types.TokenTypeClusterAdmin, ExternalId: "tok"}}
+	userInfo  = &auth.AuthInfo{Workspace: &types.Workspace{Id: 2, ExternalId: "user-ws", Name: "user"}, Token: &types.Token{TokenType: types.TokenTypeWorkspace, ExternalId: "user-tok"}}
+	otherInfo = &auth.AuthInfo{Workspace: &types.Workspace{Id: 3, ExternalId: "other-ws", Name: "other"}, Token: &types.Token{TokenType: types.TokenTypeWorkspace, ExternalId: "other-tok"}}
+)
 
-	withUsage.Store(true)
-	_, event = proxyOnce()
-	assert.Equal(t, http.StatusOK, event.StatusCode)
-	assert.Equal(t, int64(7), event.CompletionTokens)
-	assert.Equal(t, int64(7), event.CostMicroUSD)
+func adminCtx() context.Context { return auth.ContextWithAuthInfo(context.Background(), adminInfo) }
+
+const testReplicaSecret = "replica-secret-1"
+
+// harnessCtx is what a replica container presents: no workspace token, only
+// its own replica secret in gRPC metadata.
+func harnessCtx() context.Context {
+	return metadata.NewIncomingContext(context.Background(), metadata.Pairs(replicaSecretHeader, testReplicaSecret))
+}
+
+// asCaller is the auth middleware the gateway would run: it stamps the
+// caller's identity onto the request context.
+func asCaller(info *auth.AuthInfo) echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			if info == nil {
+				return echo.NewHTTPError(http.StatusUnauthorized)
+			}
+			return next(&auth.HttpAuthContext{Context: c, AuthInfo: info})
+		}
+	}
+}
+
+// testServer serves the hosted /v1 route and the admin API in-process, as
+// the caller identified by info.
+func testServer(s *Service, info *auth.AuthInfo) *echo.Echo {
+	e := echo.New()
+	s.router.mount(e.Group(""), asCaller(info))
+	s.mountAdminRoutes(e.Group("/api/v1/endpoints", asCaller(info)))
+	return e
+}
+
+// call runs one request through the hosted routes as the given caller and
+// returns the recorder; body may be a string, []byte or a JSON-able value.
+func call(t *testing.T, s *Service, info *auth.AuthInfo, method, path string, body any, headers ...string) *httptest.ResponseRecorder {
+	t.Helper()
+	var reader io.Reader
+	contentType := "application/json"
+	switch b := body.(type) {
+	case nil:
+	case string:
+		reader = strings.NewReader(b)
+	case []byte:
+		reader = bytes.NewReader(b)
+	default:
+		data, err := json.Marshal(b)
+		require.NoError(t, err)
+		reader = bytes.NewReader(data)
+	}
+	req := httptest.NewRequest(method, path, reader)
+	req.Header.Set("Content-Type", contentType)
+	for i := 0; i+1 < len(headers); i += 2 {
+		req.Header.Set(headers[i], headers[i+1])
+	}
+	rec := httptest.NewRecorder()
+	testServer(s, info).ServeHTTP(rec, req)
+	return rec
+}
+
+// callJSON is call with the response decoded as a JSON object.
+func callJSON(t *testing.T, s *Service, info *auth.AuthInfo, method, path string, body any, headers ...string) (int, map[string]any) {
+	t.Helper()
+	rec := call(t, s, info, method, path, body, headers...)
+	var out map[string]any
+	if len(bytes.TrimSpace(rec.Body.Bytes())) > 0 {
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &out), rec.Body.String())
+	}
+	return rec.Code, out
+}
+
+// seedEndpoint registers acme/model (an H100 vLLM model server with the harness)
+// as version 1, publishes it publicly at a per-token price and places it on H100.
+func seedEndpoint(t *testing.T, s *Service) *types.ManagedEndpoint {
+	t.Helper()
+	spec := types.ManagedEndpointSpec{
+		ID: "acme/model", Kind: types.EndpointKindLLM, Engine: "vllm", Port: 8000, Entrypoint: []string{"vllm", "serve"},
+		Gpu:          map[string]types.GpuSpec{"H100": {Config: map[string]any{"max_num_seqs": 64}}},
+		DrainSeconds: 5,
+	}
+	spec.Normalize(true)
+	app := &types.ManagedEndpoint{
+		Spec: spec, StubID: "stub-1", StubType: types.StubType(types.StubTypeManagedEndpointDeployment), Version: 1, Status: types.EndpointStatusActive, Published: true,
+		Publication: types.Publication{Catalog: types.Catalog{Name: "Model", ContextLength: 32768}, Public: true, Pricing: types.Pricing{PromptTokens: "0.000001", CompletionTokens: "0.000002"}},
+	}
+	require.NoError(t, s.repo.SaveEndpoint(context.Background(), app))
+	seedFleet(t, s, map[string]types.FleetEndpoint{spec.ID: {Enabled: true, Publication: app.Publication, GPUs: map[string]types.FleetPlacement{"H100": {Priority: 1, MaxReplicas: 2}}}})
+	return app
+}
+
+// seedRunner registers a hosted task queue (an ordinary deployment) priced per request.
+func seedRunner(t *testing.T, s *Service, id, kind string, pricing types.Pricing) *types.ManagedEndpoint {
+	t.Helper()
+	spec := types.ManagedEndpointSpec{ID: id, Gpu: map[string]types.GpuSpec{"A10G": {Count: 1}}}
+	spec.Normalize(false)
+	app := &types.ManagedEndpoint{
+		Spec: spec, StubID: "stub-" + strings.ReplaceAll(id, "/", "-"), StubType: types.StubType(kind + "/deployment"), Version: 1, Status: types.EndpointStatusActive, Published: true,
+		Publication: types.Publication{Catalog: types.Catalog{Name: id}, Public: true, Pricing: pricing},
+	}
+	require.NoError(t, s.repo.SaveEndpoint(context.Background(), app))
+	fleet, err := s.repo.GetFleet(context.Background())
+	require.NoError(t, err)
+	fleet.Endpoints[id] = types.FleetEndpoint{Enabled: true, Publication: app.Publication, GPUs: map[string]types.FleetPlacement{"A10G": {Priority: 1, MaxReplicas: 1, Serverless: true}}}
+	require.NoError(t, s.repo.SaveFleet(context.Background(), fleet))
+	return app
+}
+
+func seedFleet(t *testing.T, s *Service, endpoints map[string]types.FleetEndpoint) *types.Fleet {
+	t.Helper()
+	fleet := &types.Fleet{GitSHA: "fleet-sha", Endpoints: endpoints}
+	fleet.Normalize()
+	require.NoError(t, s.repo.SaveFleet(context.Background(), fleet))
+	return fleet
+}
+
+func seedReplica(t *testing.T, s *Service, app *types.ManagedEndpoint) *types.EndpointReplica {
+	t.Helper()
+	replica := &types.EndpointReplica{
+		ID: "rep-1", EndpointID: app.Spec.ID, Version: 1, GPU: "H100", GPUCount: 1,
+		ContainerID: "managed-stub-1-abc", Status: types.ReplicaStatusScheduling, HarnessEnabled: true, StartedAt: time.Now(),
+		SecretHash: hashReplicaSecret(testReplicaSecret), Probe: probeFor(&app.Spec),
+	}
+	require.NoError(t, s.repo.SaveReplica(context.Background(), replica))
+	return replica
+}
+
+// readyReplica makes a replica serve at address with the given concurrency.
+func readyReplica(t *testing.T, s *Service, replica *types.EndpointReplica, address string, maxConcurrency int64) *types.EndpointReplica {
+	t.Helper()
+	replica.Status, replica.Address, replica.ReadyAt = types.ReplicaStatusReady, address, time.Now().Add(-time.Hour)
+	replica.Capacity.MaxConcurrency = maxConcurrency
+	require.NoError(t, s.repo.SaveReplica(context.Background(), replica))
+	return replica
+}
+
+// charge reads the journaled charge for one request or task id.
+func charge(t *testing.T, s *Service, id string) *types.Charge {
+	t.Helper()
+	c, err := s.repo.GetCharge(context.Background(), id)
+	require.NoError(t, err)
+	require.NotNil(t, c, "charge %s was not journaled", id)
+	return c
+}
+
+func spend(t *testing.T, s *Service, workspaceID string) types.Usage {
+	t.Helper()
+	now := time.Now()
+	report, err := s.repo.GetUsage(context.Background(), types.UsageSpend, workspaceID, now.Add(-24*time.Hour), now)
+	require.NoError(t, err)
+	return report.Total
 }

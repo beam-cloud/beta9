@@ -93,7 +93,7 @@ func TestDemandAdmissionHeadroomPreservesScaleOut(t *testing.T) {
 	require.Nil(t, rerr)
 	require.NotNil(t, resolved)
 	assert.EqualValues(t, 128, rq.readyCapacity)
-	rq.model = resolved.Spec.ID
+	rq.app = resolved
 	release, err := router.holdDemand(rq)
 	require.NoError(t, err, "a full128-slot engine must allow a request to ask for the next replica")
 	t.Cleanup(release)
@@ -170,7 +170,7 @@ func TestDemandCapacityAdmissionDoesNotOverflow(t *testing.T) {
 	rq := &routeRequest{ctx: httpCtx, auth: httpCtx.AuthInfo, route: types.EndpointRouteChatCompletions, models: []string{endpoint.Spec.ID}, requestID: "request"}
 	resolved, rerr := router.resolveEndpoint(ctx, rq)
 	require.Nil(t, rerr)
-	rq.model = resolved.Spec.ID
+	rq.app = resolved
 	assert.EqualValues(t, math.MaxInt64, rq.readyCapacity)
 	release, err := router.holdDemand(rq)
 	require.NoError(t, err, "adding queue allowance cannot wrap a large capacity into a negative limit")
@@ -193,7 +193,7 @@ func TestServerlessConfigValidation(t *testing.T) {
 		{"serverless: 1", false, false},
 	} {
 		t.Run(tc.fields, func(t *testing.T) {
-			fleet, err := parseFleet("acme/model: {enabled: true, gpus: {H100: {priority: 1, " + tc.fields + "}}}")
+			fleet, err := parseFleet("acme/model: {enabled: true, pricing: {request: \"0\"}, gpus: {H100: {priority: 1, " + tc.fields + "}}}")
 			if !tc.valid {
 				require.Error(t, err)
 				return

@@ -232,12 +232,13 @@ func TestHostedSlotLossDuringJSONBodyReturns503(t *testing.T) {
 	defer transport.CloseIdleConnections()
 	s.transports.Store(replica.Address, transport)
 	ctx, rec := coldRouteContext()
-	rq := &routeRequest{ctx: ctx, auth: ctx.AuthInfo, requestID: "lease-lost", model: endpoint.Spec.ID, adapter: adapters[types.EndpointRouteChatCompletions], startedAt: time.Now()}
+	rq := &routeRequest{ctx: ctx, auth: ctx.AuthInfo, requestID: "lease-lost", app: endpoint, route: types.EndpointRouteChatCompletions, proto: protocols[types.EndpointRouteChatCompletions], startedAt: time.Now()}
+	rq.charge = newCharge(rq.requestID, endpoint, ctx.AuthInfo.Workspace, "tok", rq.route, rq.startedAt)
 	attempt, cancel := context.WithCancelCause(ctx.Request().Context())
 	defer cancel(context.Canceled)
 	ctx.SetRequest(ctx.Request().WithContext(attempt))
 	done := make(chan error, 1)
-	go func() { done <- newRouter(s).serve(rq, endpoint) }()
+	go func() { done <- newRouter(s).serveModel(rq, endpoint) }()
 	select {
 	case <-started:
 	case <-time.After(time.Second):
@@ -254,8 +255,7 @@ func TestHostedSlotLossDuringJSONBodyReturns503(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), `"code":"registry_unavailable"`)
 	assert.NotContains(t, rec.Body.String(), `"type":"rate_limit_error"`)
 	assert.Zero(t, s.rdb.Exists(context.Background(), slotKey(replica.ID)).Val(), "canceled attempt releases its lease")
-	stored, err := s.repo.GetGeneration(context.Background(), rq.requestID)
-	require.NoError(t, err)
-	require.NotNil(t, stored)
+	stored := charge(t, s, rq.requestID)
 	assert.Equal(t, http.StatusServiceUnavailable, stored.StatusCode, "lease loss is audited once as a 503")
+	assert.Equal(t, types.ChargeVoid, stored.Status)
 }

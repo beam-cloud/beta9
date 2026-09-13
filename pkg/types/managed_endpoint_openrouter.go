@@ -5,7 +5,6 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
-	"slices"
 	"sync"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
@@ -135,43 +134,30 @@ func (m *OpenRouterMetadata) Output(kind string) map[string]any {
 	return output
 }
 
-func (m *OpenRouterMetadata) ValidateFor(spec *ManagedEndpointSpec) error {
-	if spec.Kind != EndpointKindImage && spec.Pricing.Image != "" {
-		return fmt.Errorf("image pricing requires an image output")
-	}
-	if spec.Kind == EndpointKindImage && (spec.Pricing.PromptTokens != "" || spec.Pricing.CompletionTokens != "" || spec.Pricing.CachedPromptTokens != "") {
-		return fmt.Errorf("image outputs require image/request pricing, not token pricing")
-	}
-	if spec.Kind == EndpointKindEmbedding && spec.Pricing.CompletionTokens != "" {
-		return fmt.Errorf("embedding token pricing belongs to the input")
-	}
-	var requiredRoute EndpointRoute
-	switch spec.Kind {
+// ValidateFor checks the metadata against the published app: token pricing
+// belongs to text models, embeddings price only their input, and LLM output
+// limits must fit the declared context length.
+func (m *OpenRouterMetadata) ValidateFor(kind EndpointKind, catalog Catalog, pricing Pricing) error {
+	switch kind {
 	case EndpointKindLLM:
-		requiredRoute = EndpointRouteChatCompletions
-		if spec.Catalog.ContextLength == 0 || m.MaxOutputTokens == 0 || m.MaxOutputTokens > spec.Catalog.ContextLength {
-			return fmt.Errorf("max_output_tokens must be positive and no greater than the app's context_length")
+		if catalog.ContextLength == 0 || m.MaxOutputTokens == 0 || m.MaxOutputTokens > catalog.ContextLength {
+			return fmt.Errorf("max_output_tokens must be positive and no greater than context_length")
 		}
 	case EndpointKindEmbedding, EndpointKindImage:
-		requiredRoute = EndpointRouteImageGenerations
-		if spec.Kind == EndpointKindEmbedding {
-			requiredRoute = EndpointRouteEmbeddings
-		}
 		if m.MaxOutputTokens != 0 {
 			return fmt.Errorf("max_output_tokens is only supported for text outputs")
 		}
-		if spec.Kind == EndpointKindEmbedding && m.Streaming != nil {
+		if kind == EndpointKindEmbedding && m.Streaming != nil {
 			return fmt.Errorf("streaming is not supported for embeddings")
 		}
+		if kind == EndpointKindEmbedding && pricing.CompletionTokens != "" {
+			return fmt.Errorf("embedding token pricing belongs to the input")
+		}
+		if kind == EndpointKindImage && pricing.PerToken() {
+			return fmt.Errorf("image outputs require request pricing, not token pricing")
+		}
 	default:
-		return fmt.Errorf("kind %q has no OpenRouter modality adapter", spec.Kind)
-	}
-	routes := spec.Routes
-	if len(routes) == 0 {
-		routes = defaultRoutes(spec.Kind)
-	}
-	if !slices.Contains(routes, requiredRoute) {
-		return fmt.Errorf("the provider modality requires the %s route", requiredRoute)
+		return fmt.Errorf("kind %q has no OpenRouter modality adapter", kind)
 	}
 	return nil
 }

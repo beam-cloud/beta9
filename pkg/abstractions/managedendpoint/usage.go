@@ -1,40 +1,160 @@
 package managedendpoint
 
 import (
-	"cmp"
+	"context"
 	"encoding/json"
-	"errors"
-	"math/big"
-	"slices"
+	"fmt"
+	"time"
 
+	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
 )
 
-// Usage is the billable usage the engine reported. It is never estimated: a
-// response without usage is not billed.
-type Usage struct {
-	PromptTokens     int64
-	CompletionTokens int64
-	CachedTokens     int64 // part of PromptTokens, billed at the cache rate
-	Images           int64
-	Requests         int64
-	Found            bool // the response carried a usage object
+// billing is the one accounting path. A Charge is opened when work is
+// accepted with the caller, app version and price snapshotted; settling it
+// prices what the app reported and journals it; accounting applies the
+// journal to the usage counters, the credit gate and the billing meter, then
+// closes the journal entry. Synchronous requests settle inline; queued tasks
+// settle from the task record, here or on read. Anything left pending after
+// a crash is finished by the next flush.
+
+const (
+	chargeTTL       = time.Hour // journal retention after accounting
+	billingLockKey  = "managed_endpoint:meter"
+	billingLockTTL  = 30 * time.Second
+	billingInterval = 5 * time.Second
+	pendingBatch    = 100
+	taskLostAfter   = 48 * time.Hour // an open charge whose task record vanished
+)
+
+type billing struct {
+	s    *Service
+	lock *common.RedisLock
 }
 
-// valid rejects negative counters, counters beyond exact int64 arithmetic,
-// and more cached tokens than prompt tokens.
-func (u Usage) valid() bool {
-	for _, n := range []int64{u.PromptTokens, u.CompletionTokens, u.CachedTokens, u.Images, u.Requests} {
-		if n < 0 || n > types.MaxUsageCounter {
-			return false
+func newBilling(s *Service) *billing { return &billing{s: s, lock: common.NewRedisLock(s.rdb)} }
+
+// newCharge snapshots the caller and the published price of one accepted request.
+func newCharge(id string, app *types.ManagedEndpoint, caller *types.Workspace, tokenID string, route types.EndpointRoute, now time.Time) *types.Charge {
+	return &types.Charge{
+		ID: id, Status: types.ChargeOpen, WorkspaceID: caller.ExternalId, TokenID: tokenID,
+		AppID: app.Spec.ID, Version: app.Version, StubType: string(app.StubType), Route: route, Pricing: app.Pricing, AcceptedAt: now.UTC(),
+	}
+}
+
+// attribute records the serving replica on the charge, including the
+// provider's share when it ran on a contributed machine.
+func (b *billing) attribute(c *types.Charge, replica *types.EndpointReplica) {
+	if replica == nil {
+		return
+	}
+	c.ReplicaID, c.ContainerID, c.MachineID, c.GPU, c.ConfigRevision = replica.ID, replica.ContainerID, replica.MachineID, replica.GPU, replica.Config.AckedRevision
+	c.ProviderWorkspaceID, c.ProviderShareMicroUSD = "", 0
+	if replica.ProviderWorkspaceID != "" && c.Cost.MicroUSD > 0 {
+		c.ProviderWorkspaceID = replica.ProviderWorkspaceID
+		c.ProviderShareMicroUSD = int64(float64(c.Cost.MicroUSD) * b.s.config.ProviderRevenueShare)
+	}
+}
+
+// open journals a charge for work that will finish later (a queued task).
+func (b *billing) open(ctx context.Context, c *types.Charge) error {
+	_, err := b.s.repo.SaveCharge(ctx, c)
+	return err
+}
+
+// finish journals a finished charge and applies it. The journal write is the
+// commit point: once it succeeds the work is accepted for billing and a
+// failure applying counters is retried by flush, never surfaced as a client
+// error that would invite a retry of already-billed work. A charge that was
+// already final (a duplicate completion) is left exactly as it was.
+func (b *billing) finish(ctx context.Context, c *types.Charge) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	written, err := b.s.repo.SaveCharge(ctx, c)
+	if err != nil {
+		return fmt.Errorf("journal charge: %w", err)
+	}
+	if !written {
+		return nil
+	}
+	b.s.emit(types.EventEndpointRoute, types.EventEndpointSchema{
+		EndpointID: c.AppID, Action: "route." + string(c.Status), WorkspaceID: c.WorkspaceID, Version: c.Version, ReplicaID: c.ReplicaID, ContainerID: c.ContainerID, GPU: c.GPU,
+		Revision: c.ConfigRevision, Message: c.Error, Data: map[string]any{"charge": c},
+	})
+	if err := b.s.repo.RecordRouteSample(ctx, c); err != nil {
+		log.Debug().Err(err).Msg("managed endpoints: record route sample")
+	}
+	if err := b.account(ctx, c); err != nil {
+		log.Warn().Err(err).Str("charge_id", c.ID).Msg("managed endpoints: charge journaled; accounting will retry")
+	}
+	return nil
+}
+
+// account applies a settled charge to the caller's spend, the provider's
+// earnings and the credit gate, then closes the journal entry. Every step is
+// idempotent on the charge id, so a retry after a partial failure charges once.
+func (b *billing) account(ctx context.Context, c *types.Charge) error {
+	if c.Status == types.ChargeOpen {
+		return nil
+	}
+	if c.Status == types.ChargeSettled {
+		if err := b.s.repo.AddUsage(ctx, types.UsageSpend, c.WorkspaceID, c.AppID, c.ID, c.SettledAt, c.Usage()); err != nil {
+			return fmt.Errorf("record spend: %w", err)
+		}
+		if c.Cost.MicroUSD > 0 && b.s.scheduler != nil {
+			if gate := b.s.scheduler.CreditGate(); gate != nil {
+				gate.Invalidate(ctx, c.WorkspaceID)
+			}
+		}
+		if c.ProviderWorkspaceID != "" {
+			earned := types.Usage{Work: c.Work, Cost: types.Cost{MicroUSD: c.ProviderShareMicroUSD}}
+			if err := b.s.repo.AddUsage(ctx, types.UsageEarned, c.ProviderWorkspaceID, c.AppID, c.ID, c.SettledAt, earned); err != nil {
+				return fmt.Errorf("record provider earnings: %w", err)
+			}
 		}
 	}
-	return u.CachedTokens <= u.PromptTokens
+	return b.s.repo.CompleteAccounting(ctx, c.ID, chargeTTL)
+}
+
+// settleTask finishes an open task charge from the task record: a completed
+// task is one flat-priced request, any other terminal state is unbilled.
+// Submission, polling, failed attempts and retries never move money.
+func (b *billing) settleTask(ctx context.Context, c *types.Charge) (*types.Charge, error) {
+	if c.Status != types.ChargeOpen {
+		return c, nil
+	}
+	task, err := b.s.backend.GetTaskWithRelated(ctx, c.ID)
+	now := time.Now()
+	switch {
+	case err != nil:
+		return c, err
+	case task == nil || task.ExternalId != c.ID:
+		if now.Sub(c.AcceptedAt) < taskLostAfter {
+			return c, nil
+		}
+		c.Void("task record not found", now)
+	case task.Status == types.TaskStatusComplete:
+		if err := c.Settle(types.Work{}, now); err != nil {
+			return c, err
+		}
+		c.StatusCode = 200
+	case task.Status.IsCompleted():
+		c.Void("task "+string(task.Status), now)
+	default:
+		return c, b.s.repo.DeferAccounting(ctx, c.ID, now.Add(repository.TaskPollInterval))
+	}
+	c.DurationMs = now.Sub(c.AcceptedAt).Milliseconds()
+	if task != nil && task.ContainerId != "" {
+		replica, _ := b.s.repo.GetReplicaByContainer(ctx, task.ContainerId)
+		b.attribute(c, replica)
+	}
+	return c, b.finish(ctx, c)
 }
 
 // tokenUsage reads the OpenAI usage object from a response body.
-func tokenUsage(body []byte) Usage {
+func tokenUsage(body []byte) (w types.Work, ok bool) {
 	var env struct {
 		Usage *struct {
 			PromptTokens     int64 `json:"prompt_tokens"`
@@ -45,153 +165,14 @@ func tokenUsage(body []byte) Usage {
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(body, &env); err != nil || env.Usage == nil {
-		return Usage{}
+		return types.Work{}, false
 	}
-	u := Usage{PromptTokens: env.Usage.PromptTokens, CompletionTokens: env.Usage.CompletionTokens, Requests: 1, Found: true}
+	w = types.Work{PromptTokens: env.Usage.PromptTokens, CompletionTokens: env.Usage.CompletionTokens}
 	if env.Usage.Details != nil {
-		u.CachedTokens = env.Usage.Details.CachedTokens
+		w.CachedTokens = env.Usage.Details.CachedTokens
 	}
-	if !u.valid() {
-		return Usage{}
-	}
-	return u
-}
-
-// imageUsage counts generated images plus any token usage the engine reports.
-func imageUsage(body []byte) Usage {
-	var payload struct {
-		Data []json.RawMessage `json:"data"`
-	}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return Usage{}
-	}
-	u := tokenUsage(body)
-	u.Images, u.Requests = int64(len(payload.Data)), 1
-	u.Found = u.Found || u.Images > 0
-	return u
-}
-
-func billable(endpoint *types.ManagedEndpoint) bool {
-	return !endpoint.Spec.Pricing.IsZero()
-}
-
-// unbilled is a successful billable response the engine reported no usage for.
-func unbilled(endpoint *types.ManagedEndpoint, status int, usage Usage) bool {
-	return status < 300 && billable(endpoint) && !usage.Found
+	return w, w.Valid()
 }
 
 // costUSD renders micro-dollars as the float OpenRouter puts in usage.cost.
 func costUSD(microUSD int64) float64 { return float64(microUSD) / 1_000_000 }
-
-func (r *router) cost(endpoint *types.ManagedEndpoint, usage Usage) int64 {
-	if !billable(endpoint) || !usage.Found {
-		return 0
-	}
-	priced, err := priceUsage(endpoint.Spec.Pricing, usage)
-	if err != nil {
-		log.Warn().Err(err).Str("endpoint_id", endpoint.Spec.ID).Msg("managed endpoints: pricing error")
-	}
-	return priced.MicroUSD
-}
-
-// pricingEntry is the OpenRouter-style price listing of /v1/models.
-func pricingEntry(p types.Pricing) map[string]any {
-	entry := map[string]any{
-		"prompt":     cmp.Or(p.PromptTokens, "0"),
-		"completion": cmp.Or(p.CompletionTokens, "0"),
-		"request":    cmp.Or(p.Request, "0"),
-		"image":      cmp.Or(p.Image, "0"),
-	}
-	if p.CachedPromptTokens != "" {
-		entry["input_cache_read"] = p.CachedPromptTokens
-	}
-	return entry
-}
-
-// costLine is one priced component of a request.
-type costLine struct {
-	price    string
-	quantity int64
-	cost     *int64
-	fraction *big.Rat
-}
-
-// priceUsage snapshots the actual charge with its breakdown. Cached input is
-// billed once, at the cache rate. The request total is rounded once to
-// micro-USD; the remaining micro-dollars go to the components with the
-// largest fractions, so every displayed component reconciles with the total.
-func priceUsage(p types.Pricing, u Usage) (types.Usage, error) {
-	if !u.valid() {
-		return types.Usage{}, errors.New("invalid token usage")
-	}
-	result := types.Usage{Requests: u.Requests, PromptTokens: u.PromptTokens,
-		CompletionTokens: u.CompletionTokens, CachedTokens: u.CachedTokens, Images: u.Images}
-	lines := []costLine{
-		{p.PromptTokens, u.PromptTokens - u.CachedTokens, &result.PromptMicroUSD, nil},
-		{p.CompletionTokens, u.CompletionTokens, &result.CompletionMicroUSD, nil},
-		{cmp.Or(p.CachedPromptTokens, p.PromptTokens), u.CachedTokens, &result.CachedMicroUSD, nil},
-		{p.Request, u.Requests, &result.RequestMicroUSD, nil},
-		{p.Image, u.Images, &result.ImageMicroUSD, nil},
-	}
-	total := new(big.Rat)
-	for i := range lines {
-		amount, err := lines[i].amount()
-		if err != nil {
-			return types.Usage{}, err
-		}
-		total.Add(total, amount)
-	}
-	rounded, ok := roundMicroUSD(total)
-	if !ok {
-		return types.Usage{}, errors.New("token cost overflows micro-USD")
-	}
-	if rounded > types.MaxUsageCounter {
-		return types.Usage{}, errors.New("token cost exceeds exact counter limit")
-	}
-	result.MicroUSD = rounded
-	distributeRemainder(lines, rounded)
-	return result, nil
-}
-
-// amount prices the line in micro-USD, storing the whole part on the line
-// and keeping the fraction for distributeRemainder.
-func (l *costLine) amount() (*big.Rat, error) {
-	amount := new(big.Rat)
-	if l.price != "" && l.quantity > 0 {
-		rate, err := types.PricingRat(l.price)
-		if err != nil {
-			return nil, err
-		}
-		amount.Mul(rate, big.NewRat(l.quantity, 1))
-		amount.Mul(amount, big.NewRat(1_000_000, 1))
-	}
-	whole := new(big.Int).Quo(amount.Num(), amount.Denom())
-	if !whole.IsInt64() {
-		return nil, errors.New("token cost overflows micro-USD")
-	}
-	*l.cost = whole.Int64()
-	l.fraction = new(big.Rat).Sub(amount, new(big.Rat).SetInt(whole))
-	return amount, nil
-}
-
-func roundMicroUSD(total *big.Rat) (int64, bool) {
-	half := new(big.Rat).Add(total, big.NewRat(1, 2))
-	rounded := new(big.Int).Quo(half.Num(), half.Denom())
-	if !rounded.IsInt64() {
-		return 0, false
-	}
-	return rounded.Int64(), true
-}
-
-// distributeRemainder hands the micro-dollars lost to flooring to the lines
-// with the largest fractions, stable on ties.
-func distributeRemainder(lines []costLine, total int64) {
-	var floored int64
-	for _, line := range lines {
-		floored += *line.cost
-	}
-	slices.SortStableFunc(lines, func(a, b costLine) int { return b.fraction.Cmp(a.fraction) })
-	for i := int64(0); i < total-floored; i++ {
-		*lines[i].cost++
-	}
-}

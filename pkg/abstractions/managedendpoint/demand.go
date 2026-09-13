@@ -61,13 +61,24 @@ type endpointDemand struct {
 	pending  bool                            // a recent authorized capacity rejection requested startup
 	capacity int64                           // serving capacity across every GPU type, including hot copies
 	starting bool                            // wait for capacity to become known before adding another copy
+	runner   bool                            // demand is the deployment autoscaler's container count
 	gpus     map[string]types.FleetPlacement // configured on-demand GPU alternatives
 }
 
 // readyCapacity is the finite serving capacity observed at admission. Transient
 // admissions get headroom so a full engine can record a scale-out signal.
 // Capacity changes never prevent an existing request from renewing its lease.
-func (s *Service) demand(ctx context.Context, endpointID, operation, requestID string, readyCapacity int64) (*endpointDemand, error) {
+// demandOp is what a caller does to an endpoint's demand record.
+type demandOp string
+
+const (
+	demandWake    demandOp = "wake"    // a request arrived for a cold endpoint
+	demandAcquire demandOp = "acquire" // a request holds a serving lease
+	demandRenew   demandOp = "renew"   // a long request extends its lease
+	demandRead    demandOp = "read"    // the controller samples demand
+)
+
+func (s *Service) demand(ctx context.Context, endpointID string, operation demandOp, requestID string, readyCapacity int64) (*endpointDemand, error) {
 	if s.rdb == nil {
 		return nil, errors.New("on-demand endpoints require redis")
 	}
@@ -75,7 +86,7 @@ func (s *Service) demand(ctx context.Context, endpointID, operation, requestID s
 	defer cancel()
 	limit := serverlessAdmissionHeadroom + min(max(readyCapacity, 0), math.MaxInt64-serverlessAdmissionHeadroom)
 	values, err := s.rdb.Eval(ctx, endpointDemandScript, []string{"managed_endpoint:demand:" + endpointID},
-		operation, requestID, demandLeaseTTL.Milliseconds(), demandIdleTimeout.Milliseconds(), limit).Int64Slice()
+		string(operation), requestID, demandLeaseTTL.Milliseconds(), demandIdleTimeout.Milliseconds(), limit).Int64Slice()
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +103,7 @@ func (s *Service) demand(ctx context.Context, endpointID, operation, requestID s
 // requests into one short-lived signal, separate from active generation leases.
 func (r *router) wake(ctx context.Context, rq *routeRequest) *routeError {
 	if rq.serverless {
-		if _, err := r.s.demand(ctx, rq.model, "wake", "", 0); err != nil {
+		if _, err := r.s.demand(ctx, rq.app.Spec.ID, demandWake, "", 0); err != nil {
 			return errRegistry
 		}
 	}
@@ -111,7 +122,7 @@ func initialDemandGrace(replica *types.EndpointReplica, now time.Time) bool {
 // cancels the request rather than serving work the controller cannot observe.
 func (r *router) holdDemand(rq *routeRequest) (func(), error) {
 	ctx, cancel := context.WithCancel(rq.ctx.Request().Context())
-	if _, err := r.s.demand(ctx, rq.model, "acquire", rq.requestID, rq.readyCapacity); err != nil {
+	if _, err := r.s.demand(ctx, rq.app.Spec.ID, demandAcquire, rq.requestID, rq.readyCapacity); err != nil {
 		cancel()
 		return nil, err
 	}
@@ -129,7 +140,7 @@ func (r *router) holdDemand(rq *routeRequest) (func(), error) {
 				cancel()
 				return
 			case <-ticker.C:
-				if _, err := r.s.demand(ctx, rq.model, "renew", rq.requestID, 0); err != nil {
+				if _, err := r.s.demand(ctx, rq.app.Spec.ID, demandRenew, rq.requestID, 0); err != nil {
 					cancel()
 					return
 				}
@@ -139,17 +150,25 @@ func (r *router) holdDemand(rq *routeRequest) (func(), error) {
 	return func() {
 		cancel()
 		<-done // a late renewal must not resurrect a completed request
-		_, _ = r.s.demand(context.Background(), rq.model, "release", rq.requestID, 0)
+		_, _ = r.s.demand(context.Background(), rq.app.Spec.ID, "release", rq.requestID, 0)
 	}, nil
 }
 
+// readDemand collects, per serverless app, what waits for capacity: the
+// container count an ordinary deployment's own autoscaler asked for
+// (HostedDemandKey, present only while that autoscaler runs), else the
+// request leases of a model server.
 func (c *controller) readDemand(ctx context.Context, fleet *types.Fleet, live []*types.EndpointReplica) map[string]*endpointDemand {
 	out := make(map[string]*endpointDemand)
 	for id := range fleet.Endpoints {
 		if fleet.Serverless(id) {
 			// A failed read leaves nil: neither scale up nor scale down based
 			// on unknown demand. Hot placements continue independently.
-			out[id], _ = c.s.demand(ctx, id, "read", "", 0)
+			if want, err := c.s.rdb.Get(ctx, types.HostedDemandKey(id)).Int64(); err == nil {
+				out[id] = &endpointDemand{active: want, warm: want > 0, runner: true}
+			} else {
+				out[id], _ = c.s.demand(ctx, id, demandRead, "", 0)
+			}
 			if demand := out[id]; demand != nil {
 				demand.gpus = make(map[string]types.FleetPlacement)
 				for gpu, placement := range fleet.Placements(id) {
@@ -176,7 +195,9 @@ func (c *controller) readDemand(ctx context.Context, fleet *types.Fleet, live []
 			demand.starting = true
 		} else {
 			capacity := replica.Capacity.MaxConcurrency
-			if capacity <= 0 {
+			if demand.runner {
+				capacity = 1 // one container per requested container
+			} else if capacity <= 0 {
 				capacity = math.MaxInt64 // routing treats zero as unbounded
 			}
 			demand.capacity += min(capacity, math.MaxInt64-demand.capacity)

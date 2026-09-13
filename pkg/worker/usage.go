@@ -93,7 +93,7 @@ func NewWorkerUsageMetrics(
 func (wm *WorkerUsageMetrics) EmitContainerUsage(ctx context.Context, request *types.ContainerRequest) {
 	// Gateway reservation metering owns private pools. Recording their
 	// containers here as well would charge the same machine twice.
-	if wm == nil || request == nil || wm.poolMode == types.PoolModePrivate || request.Stub.Type.IsPlatformWorkload() {
+	if wm == nil || request == nil || wm.poolMode == types.PoolModePrivate || request.Stub.PlatformWorkload() {
 		return
 	}
 

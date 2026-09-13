@@ -2,32 +2,18 @@ package managedendpoint
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
 )
 
-// meter flushes closed minute buckets (see AddUsage) to the billing meter as
-// idempotent events; a bucket is deleted only after every event landed.
-
-const (
-	meterLockKey  = "managed_endpoint:meter"
-	meterLockTTL  = 30 * time.Second
-	meterInterval = 5 * time.Second
-)
-
-type meter struct {
-	s    *Service
-	lock *common.RedisLock
-}
-
-func newMeter(s *Service) *meter { return &meter{s: s, lock: common.NewRedisLock(s.rdb)} }
-
-func (m *meter) run(ctx context.Context) {
-	ticker := time.NewTicker(meterInterval)
+func (b *billing) run(ctx context.Context) {
+	ticker := time.NewTicker(billingInterval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -35,86 +21,114 @@ func (m *meter) run(ctx context.Context) {
 			return
 		case <-ticker.C:
 		}
-		err := m.lock.WithLease(ctx, meterLockKey, common.RedisLockOptions{TtlS: int(meterLockTTL.Seconds()), Retries: 0}, m.flush)
+		err := b.lock.WithLease(ctx, billingLockKey, common.RedisLockOptions{TtlS: int(billingLockTTL.Seconds()), Retries: 0}, b.flush)
 		if err != nil && !common.IsRedisLockNotObtained(err) {
-			log.Warn().Err(err).Msg("managed endpoints: meter flush failed; will retry")
+			log.Warn().Err(err).Msg("managed endpoints: billing flush failed; will retry")
 		}
 	}
 }
 
-// flush delivers closed buckets oldest first, stopping at the first failure.
-func (m *meter) flush(ctx context.Context) error {
-	// Billing verifies this marker before reading the shared counter schema;
-	// pointing it at an unrelated empty Redis must never look like free usage.
-	if err := m.s.rdb.Set(ctx, "managed_endpoint:accounting:schema", "2", 0).Err(); err != nil {
+// flush finishes pending accounting oldest first, then delivers closed
+// minute buckets to the billing meter, stopping at the first failure.
+func (b *billing) flush(ctx context.Context) error {
+	if err := b.migrate(ctx); err != nil {
 		return err
 	}
-	if err := m.recoverAccounting(ctx); err != nil {
-		return err
-	}
-	// AddUsage chooses the bucket using Redis TIME. Use the same clock to
-	// close it, so gateway clock skew cannot flush a still-writable minute.
-	now, err := m.s.rdb.Time(ctx).Result()
+	pending, err := b.s.repo.ListPendingCharges(ctx, time.Now(), pendingBatch)
 	if err != nil {
 		return err
 	}
-	buckets, err := m.s.repo.ListMeterBuckets(ctx, now.Truncate(time.Minute).Add(-time.Second))
+	for _, c := range pending {
+		if c.Status == types.ChargeOpen {
+			if _, err := b.settleTask(ctx, c); err != nil {
+				return fmt.Errorf("settle task %s: %w", c.ID, err)
+			}
+			continue
+		}
+		if err := b.account(ctx, c); err != nil {
+			return err
+		}
+	}
+	// AddUsage chooses the bucket using Redis TIME. Use the same clock to
+	// close it, so gateway clock skew cannot flush a still-writable minute.
+	now, err := b.s.rdb.Time(ctx).Result()
+	if err != nil {
+		return err
+	}
+	buckets, err := b.s.repo.ListMeterBuckets(ctx, now.Truncate(time.Minute).Add(-time.Second))
 	if err != nil {
 		return err
 	}
 	for _, bucket := range buckets {
-		if err := m.send(bucket); err != nil {
+		if err := b.send(bucket); err != nil {
 			return fmt.Errorf("bucket %s: %w", bucket.Key, err)
 		}
-		if err := m.s.repo.DeleteMeterBucket(ctx, bucket.Key); err != nil {
+		if err := b.s.repo.DeleteMeterBucket(ctx, bucket.Key); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (m *meter) recoverAccounting(ctx context.Context) error {
-	entries, err := m.s.repo.ListPendingAccounting(ctx, 100)
-	if err != nil {
+// migrate rewrites pre-consolidation route records still awaiting
+// accounting as charges, preserving their amounts, then marks the schema.
+// Billing readers verify the marker before trusting the counters.
+func (b *billing) migrate(ctx context.Context) error {
+	schema, err := b.s.repo.GetChargeSchema(ctx)
+	if err != nil || schema == repository.ChargeSchema {
 		return err
 	}
-	for _, event := range entries {
-		if err := m.s.router.account(ctx, event); err != nil {
+	for {
+		pending, err := b.s.repo.ListPendingCharges(ctx, time.Now(), pendingBatch)
+		if err != nil {
 			return err
 		}
+		for _, c := range pending {
+			// GetCharge decoded legacy records into charges; write them back
+			// as charges so every later reader sees one schema.
+			if _, err := b.s.repo.SaveCharge(ctx, c); err != nil {
+				return err
+			}
+			if c.Status == types.ChargeOpen {
+				if err := b.s.repo.DeferAccounting(ctx, c.ID, time.Now().Add(repository.TaskPollInterval)); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := b.account(ctx, c); err != nil {
+				return err
+			}
+		}
+		if len(pending) < pendingBatch {
+			break
+		}
 	}
-	return nil
+	log.Info().Msg("managed endpoints: accounting journal migrated to charges")
+	return b.s.repo.SetChargeSchema(ctx, repository.ChargeSchema)
 }
 
-func (m *meter) send(bucket types.MeterBucket) error {
-	if m.s.usage == nil {
-		return fmt.Errorf("usage meter is not configured")
+// send delivers one closed minute of usage as idempotent billing events; the
+// meter payload is derived from the same counters the usage API reports.
+func (b *billing) send(bucket types.MeterBucket) error {
+	if b.s.usage == nil {
+		return errors.New("usage meter is not configured")
 	}
 	for _, row := range bucket.Rows {
 		labels := map[string]any{
 			"workspace_id": row.WorkspaceID, "endpoint_id": row.Model,
 			"interval_start": bucket.Start.Format(time.RFC3339Nano), "interval_end": bucket.Start.Add(time.Minute).Format(time.RFC3339Nano),
 		}
-		// Preserve the complete price snapshot on the billing event. OpenMeter
-		// can aggregate any component without repricing historical tokens.
-		for name, value := range map[string]int64{
-			"prompt_tokens": row.Usage.PromptTokens, "completion_tokens": row.Usage.CompletionTokens,
-			"cached_tokens": row.Usage.CachedTokens, "prompt_micro_usd": row.Usage.PromptMicroUSD,
-			"completion_micro_usd": row.Usage.CompletionMicroUSD, "cached_micro_usd": row.Usage.CachedMicroUSD,
-			"request_micro_usd": row.Usage.RequestMicroUSD, "image_micro_usd": row.Usage.ImageMicroUSD,
-		} {
-			labels[name] = value
+		// The complete price snapshot rides on the event so billing can
+		// aggregate any component without repricing historical tokens.
+		for i, value := range row.Usage.Fields() {
+			labels[types.UsageFieldNames[i]] = *value
 		}
-		var counters map[string]float64
-		switch bucket.Kind {
-		case types.UsageEarned:
-			counters = map[string]float64{types.UsageMetricsEndpointProviderEarnings: float64(row.Usage.MicroUSD) / 10_000}
-		default:
+		counters := map[string]float64{types.UsageMetricsEndpointProviderEarnings: float64(row.Usage.MicroUSD) / 10_000}
+		if bucket.Kind == types.UsageSpend {
 			counters = map[string]float64{
 				types.UsageMetricsEndpointRequests:         float64(row.Usage.Requests),
 				types.UsageMetricsEndpointPromptTokens:     float64(row.Usage.PromptTokens),
 				types.UsageMetricsEndpointCompletionTokens: float64(row.Usage.CompletionTokens),
-				types.UsageMetricsEndpointImages:           float64(row.Usage.Images),
 				types.UsageMetricsEndpointCost:             float64(row.Usage.MicroUSD) / 10_000, // billing consumes cents
 			}
 		}
@@ -122,7 +136,7 @@ func (m *meter) send(bucket types.MeterBucket) error {
 			if value <= 0 {
 				continue
 			}
-			if err := m.s.usage.IncrementCounter(metric, labels, value); err != nil {
+			if err := b.s.usage.IncrementCounter(metric, labels, value); err != nil {
 				return fmt.Errorf("%s %s/%s: %w", metric, row.WorkspaceID, row.Model, err)
 			}
 		}

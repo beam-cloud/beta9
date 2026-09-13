@@ -25,16 +25,20 @@ const (
 	usageMaxDays                 = 90
 	metricsAggregateGPU          = "_all"
 	metricsAggregateReplica      = "-"
+
+	// ChargeSchema marks that every pending accounting record is a types.Charge.
+	ChargeSchema = "3"
 )
 
 // ManagedEndpointRedisRepository implements ManagedEndpointRepository on Redis. Keys (under managed_endpoint:):
 //
-//	endpoint:<id>, replica:<rid>                      JSON, indexed by the sets endpoints, replicas, replicas:<id>
+//	app:<id>, replica:<rid>                           JSON, indexed by the sets apps, replicas, replicas:<id>
 //	replica_container:<cid> -> rid; replica_lock:<rid>, drain:<rid>, backoff:<id>:<gpu>
-//	fleet, gitops, generation:<request_id>            JSON
+//	fleet, gitops                                     JSON
+//	generation:<charge_id>                            JSON charge; accounting:pending ZSET of unaccounted ids; accounting:schema
 //	config_events:<rid>                               pub/sub, replica config revision numbers
 //	metrics:<id>:<gpu>:<replica[@revision]>:<minute>  HASH counters
-//	usage:seen:<kind>:<request_id>                    request dedupe marker
+//	usage:seen:<kind>:<charge_id>                     charge dedupe marker
 //	usage:<spend|earned>:<workspace>:<day>            HASH counters, fields "<model>|<counter>"
 //	meter:<kind>:<minute>, meter:buckets              HASH counters "<workspace>|<model>|<counter>" awaiting the billing flush, and their ZSET index
 type ManagedEndpointRedisRepository struct {
@@ -50,15 +54,6 @@ func meKey(parts ...string) string {
 	return managedEndpointPrefix + ":" + strings.Join(parts, ":")
 }
 
-func meKeys(members []string, prefix ...string) []string {
-	p := strings.Join(prefix, ":")
-	keys := make([]string, 0, len(members))
-	for _, m := range members {
-		keys = append(keys, meKey(p, m))
-	}
-	return keys
-}
-
 func u64(n uint64) string { return strconv.FormatUint(n, 10) }
 
 // getJSON returns nil, nil when the key does not exist.
@@ -70,17 +65,21 @@ func getJSON[T any](ctx context.Context, rdb *common.RedisClient, key string) (*
 	return out[0], nil
 }
 
-// listIndexed MGETs meKey(keyPrefix..., member) for every member of the index set, sorted by less.
-func listIndexed[T any](ctx context.Context, rdb *common.RedisClient, indexKey string, less func(a, b *T) bool, keyPrefix ...string) ([]*T, error) {
+// listIndexed MGETs meKey(keyPrefix, member) for every member of the index set, sorted by id.
+func listIndexed[T any](ctx context.Context, rdb *common.RedisClient, indexKey, keyPrefix string, id func(*T) string) ([]*T, error) {
 	members, err := rdb.SMembers(ctx, indexKey).Result()
 	if err != nil {
 		return nil, err
 	}
-	out, err := listJSON[T](ctx, rdb, meKeys(members, keyPrefix...))
+	keys := make([]string, 0, len(members))
+	for _, m := range members {
+		keys = append(keys, meKey(keyPrefix, m))
+	}
+	out, err := listJSON[T](ctx, rdb, keys)
 	if err != nil {
 		return nil, err
 	}
-	sort.Slice(out, func(i, j int) bool { return less(out[i], out[j]) })
+	sort.Slice(out, func(i, j int) bool { return id(out[i]) < id(out[j]) })
 	return out, nil
 }
 
@@ -127,21 +126,21 @@ func (r *ManagedEndpointRedisRepository) hgetAll(ctx context.Context, keys []str
 	return out, nil
 }
 
-func (r *ManagedEndpointRedisRepository) SaveEndpoint(ctx context.Context, endpoint *types.ManagedEndpoint) error {
-	if endpoint == nil || endpoint.Spec.ID == "" {
-		return errors.New("endpoint id is required")
+func (r *ManagedEndpointRedisRepository) SaveEndpoint(ctx context.Context, app *types.ManagedEndpoint) error {
+	if app == nil || app.Spec.ID == "" {
+		return errors.New("app id is required")
 	}
-	endpoint.UpdatedAt = time.Now()
-	endpoint.CreatedAt = cmp.Or(endpoint.CreatedAt, endpoint.UpdatedAt)
-	return r.saveIndexed(ctx, meKey("endpoint", endpoint.Spec.ID), meKey("endpoints"), endpoint.Spec.ID, endpoint, nil)
+	app.UpdatedAt = time.Now()
+	app.CreatedAt = cmp.Or(app.CreatedAt, app.UpdatedAt)
+	return r.saveIndexed(ctx, meKey("endpoint", app.Spec.ID), meKey("endpoints"), app.Spec.ID, app, nil)
 }
 
-func (r *ManagedEndpointRedisRepository) GetEndpoint(ctx context.Context, endpointID string) (*types.ManagedEndpoint, error) {
-	return getJSON[types.ManagedEndpoint](ctx, r.rdb, meKey("endpoint", endpointID))
+func (r *ManagedEndpointRedisRepository) GetEndpoint(ctx context.Context, id string) (*types.ManagedEndpoint, error) {
+	return getJSON[types.ManagedEndpoint](ctx, r.rdb, meKey("endpoint", id))
 }
 
 func (r *ManagedEndpointRedisRepository) ListEndpoints(ctx context.Context) ([]*types.ManagedEndpoint, error) {
-	return listIndexed(ctx, r.rdb, meKey("endpoints"), func(a, b *types.ManagedEndpoint) bool { return a.Spec.ID < b.Spec.ID }, "endpoint")
+	return listIndexed(ctx, r.rdb, meKey("endpoints"), "endpoint", func(e *types.ManagedEndpoint) string { return e.Spec.ID })
 }
 
 func (r *ManagedEndpointRedisRepository) SaveFleet(ctx context.Context, fleet *types.Fleet) error {
@@ -195,11 +194,11 @@ func (r *ManagedEndpointRedisRepository) GetReplicaByContainer(ctx context.Conte
 }
 
 func (r *ManagedEndpointRedisRepository) ListReplicas(ctx context.Context, endpointID string) ([]*types.EndpointReplica, error) {
-	return listIndexed(ctx, r.rdb, meKey("replicas", endpointID), func(a, b *types.EndpointReplica) bool { return a.ID < b.ID }, "replica")
+	return listIndexed(ctx, r.rdb, meKey("replicas", endpointID), "replica", func(a *types.EndpointReplica) string { return a.ID })
 }
 
 func (r *ManagedEndpointRedisRepository) ListAllReplicas(ctx context.Context) ([]*types.EndpointReplica, error) {
-	return listIndexed(ctx, r.rdb, meKey("replicas"), func(a, b *types.EndpointReplica) bool { return a.ID < b.ID }, "replica")
+	return listIndexed(ctx, r.rdb, meKey("replicas"), "replica", func(a *types.EndpointReplica) string { return a.ID })
 }
 
 func (r *ManagedEndpointRedisRepository) DeleteReplica(ctx context.Context, replicaID string) error {
@@ -300,42 +299,40 @@ func metricsKey(endpointID, gpu, replica string, bucket time.Time) string {
 	return meKey("metrics", endpointID, gpu, replica, strconv.FormatInt(bucket.Unix(), 10))
 }
 
-func routeMetricsFields(m *types.RouteMetrics) map[string]*int64 {
-	return map[string]*int64{
-		"requests": &m.Requests, "errors": &m.Errors, "prompt_tokens": &m.PromptTokens, "completion_tokens": &m.CompletionTokens,
-		"images": &m.Images, "cost_micro_usd": &m.CostMicroUSD, "duration_sum_ms": &m.DurationSumMs,
-		"ttft_sum_ms": &m.TTFTSumMs, "ttft_count": &m.TTFTCount, "queue_wait_sum_ms": &m.QueueWaitSumMs,
-	}
+// replicaRevisionKey scopes a replica's metrics to one live config revision.
+func replicaRevisionKey(replicaID string, revision uint64) string {
+	return replicaID + "@" + strconv.FormatUint(revision, 10)
 }
 
-// RecordRouteSample increments the minute buckets for the endpoint, its GPU type and the replica.
-func (r *ManagedEndpointRedisRepository) RecordRouteSample(ctx context.Context, sample types.RouteSample) error {
-	if sample.EndpointID == "" {
-		return errors.New("endpoint id is required")
+// RecordRouteSample folds one finished charge into the minute buckets for
+// the app, its GPU type, the replica and the replica's config revision.
+func (r *ManagedEndpointRedisRepository) RecordRouteSample(ctx context.Context, c *types.Charge) error {
+	if c.AppID == "" {
+		return errors.New("app id is required")
 	}
-	bucket := cmp.Or(sample.At, time.Now()).Truncate(managedEndpointMetricsBucket)
-	gpu := cmp.Or(sample.GPU, metricsAggregateGPU)
+	bucket := cmp.Or(c.SettledAt, time.Now()).Truncate(managedEndpointMetricsBucket)
+	gpu := cmp.Or(c.GPU, metricsAggregateGPU)
 	keys := map[string]struct{}{
-		metricsKey(sample.EndpointID, metricsAggregateGPU, metricsAggregateReplica, bucket): {},
-		metricsKey(sample.EndpointID, gpu, metricsAggregateReplica, bucket):                 {},
+		metricsKey(c.AppID, metricsAggregateGPU, metricsAggregateReplica, bucket): {},
+		metricsKey(c.AppID, gpu, metricsAggregateReplica, bucket):                 {},
 	}
-	if sample.ReplicaID != "" {
-		keys[metricsKey(sample.EndpointID, gpu, sample.ReplicaID, bucket)] = struct{}{}
-		if sample.ConfigRevision > 0 {
-			keys[metricsKey(sample.EndpointID, gpu, replicaRevisionKey(sample.ReplicaID, sample.ConfigRevision), bucket)] = struct{}{}
+	if c.ReplicaID != "" {
+		keys[metricsKey(c.AppID, gpu, c.ReplicaID, bucket)] = struct{}{}
+		if c.ConfigRevision > 0 {
+			keys[metricsKey(c.AppID, gpu, replicaRevisionKey(c.ReplicaID, c.ConfigRevision), bucket)] = struct{}{}
 		}
 	}
 	delta := types.RouteMetrics{
-		Requests: 1, PromptTokens: sample.PromptTokens, CompletionTokens: sample.CompletionTokens, Images: sample.Images,
-		CostMicroUSD: sample.CostMicroUSD, DurationSumMs: sample.Duration.Milliseconds(), TTFTSumMs: sample.TTFT.Milliseconds(), QueueWaitSumMs: sample.QueueWait.Milliseconds(),
+		Requests: 1, PromptTokens: c.Work.PromptTokens, CompletionTokens: c.Work.CompletionTokens,
+		CostMicroUSD: c.Cost.MicroUSD, DurationSumMs: c.DurationMs, TTFTSumMs: c.TTFTMs, QueueWaitSumMs: c.QueueWaitMs,
 	}
-	if sample.Failed() {
+	if c.Status != types.ChargeSettled {
 		delta.Errors = 1
 	}
-	if sample.TTFT > 0 {
+	if c.TTFTMs > 0 {
 		delta.TTFTCount = 1
 	}
-	fields := routeMetricsFields(&delta)
+	fields := delta.Fields()
 	_, err := r.rdb.Pipelined(ctx, func(pipe redis.Pipeliner) error {
 		for key := range keys {
 			for field, value := range fields {
@@ -350,12 +347,7 @@ func (r *ManagedEndpointRedisRepository) RecordRouteSample(ctx context.Context, 
 	return err
 }
 
-// replicaRevisionKey scopes a replica's metrics to one live config revision.
-func replicaRevisionKey(replicaID string, revision uint64) string {
-	return replicaID + "@" + strconv.FormatUint(revision, 10)
-}
-
-// GetRouteMetrics sums the window for the endpoint, one GPU type, one replica
+// GetRouteMetrics sums the window for the app, one GPU type, one replica
 // or one replica under one config revision.
 func (r *ManagedEndpointRedisRepository) GetRouteMetrics(ctx context.Context, endpointID, gpu, replicaID string, configRevision uint64, window time.Duration) (*types.RouteMetrics, error) {
 	if window <= 0 {
@@ -380,7 +372,7 @@ func (r *ManagedEndpointRedisRepository) GetRouteMetrics(ctx context.Context, en
 	if gpu != metricsAggregateGPU {
 		metrics.GPU = gpu
 	}
-	fields := routeMetricsFields(metrics)
+	fields := metrics.Fields()
 	for _, values := range buckets {
 		for field, total := range fields {
 			n, _ := strconv.ParseInt(values[field], 10, 64)
@@ -390,52 +382,154 @@ func (r *ManagedEndpointRedisRepository) GetRouteMetrics(ctx context.Context, en
 	return metrics, nil
 }
 
-func (r *ManagedEndpointRedisRepository) SaveGeneration(ctx context.Context, record *types.EventEndpointRouteSchema, ttl time.Duration) error {
-	if record == nil || record.RequestID == "" {
-		return errors.New("generation id is required")
+// SaveCharge journals a charge and reports whether it was written. A charge
+// may be created, or rewritten while still open (a task settling); a
+// settled or void charge is final, so a duplicate completion writes nothing.
+// Written charges stay in the pending index until CompleteAccounting.
+func (r *ManagedEndpointRedisRepository) SaveCharge(ctx context.Context, c *types.Charge) (bool, error) {
+	if c == nil || c.ID == "" || c.WorkspaceID == "" || c.AppID == "" {
+		return false, errors.New("charge id, caller and app are required")
 	}
-	data, err := json.Marshal(record)
+	data, err := json.Marshal(c)
 	if err != nil {
-		return err
+		return false, err
 	}
-	// A successful response is also the durable accounting outbox. Do not
-	// expire it until spend and provider earnings have both been applied.
-	pending := record.StatusCode >= 200 && record.StatusCode < 300
-	return saveGenerationScript.Run(ctx, r.rdb, []string{meKey("generation", record.RequestID), meKey("accounting", "pending")}, string(data), record.RequestID, record.Timestamp.Unix(), int(ttl.Seconds()), pending).Err()
+	// The pending score is when accounting should next look: a final charge
+	// right away (oldest first), an open task after one poll interval.
+	due := cmp.Or(c.SettledAt, c.AcceptedAt)
+	if c.Status == types.ChargeOpen {
+		due = c.AcceptedAt.Add(TaskPollInterval)
+	}
+	written, err := saveChargeScript.Run(ctx, r.rdb, []string{meKey("generation", c.ID), meKey("accounting", "pending")},
+		string(data), c.ID, due.Unix(), fmt.Sprintf(`"status":%q`, string(types.ChargeOpen))).Int()
+	return written == 1, err
 }
 
-var saveGenerationScript = redis.NewScript(`
-if redis.call('EXISTS', KEYS[1]) == 1 then return 0 end
+// TaskPollInterval is how often accounting re-checks an open task charge.
+const TaskPollInterval = 30 * time.Second
+
+// DeferAccounting reschedules a pending charge's next accounting attempt.
+func (r *ManagedEndpointRedisRepository) DeferAccounting(ctx context.Context, id string, until time.Time) error {
+	return r.rdb.ZAdd(ctx, meKey("accounting", "pending"), redis.Z{Score: float64(until.Unix()), Member: id}).Err()
+}
+
+// KEYS[1] charge, KEYS[2] pending index; ARGV[1] json, ARGV[2] id, ARGV[3]
+// score, ARGV[4] the JSON fragment marking an open charge. Returns 1 when the
+// charge was written, 0 when a final charge already existed.
+var saveChargeScript = redis.NewScript(`
 local pendingType = redis.call('TYPE', KEYS[2]).ok
-if ARGV[5] == '1' and pendingType ~= 'none' and pendingType ~= 'zset' then
+if pendingType ~= 'none' and pendingType ~= 'zset' then
 	return redis.error_reply('invalid pending accounting index')
 end
-redis.call('SET', KEYS[1], ARGV[1])
-if ARGV[5] == '1' then
+local existing = redis.call('GET', KEYS[1])
+if existing then
+	-- Only an open charge, or a pre-consolidation record (no status), may be rewritten.
+	local open = string.find(existing, ARGV[4], 1, true) ~= nil
+	local legacy = string.find(existing, '"status":"', 1, true) == nil
+	if not open and not legacy then return 0 end
+	redis.call('SET', KEYS[1], ARGV[1], 'KEEPTTL')
 	redis.call('ZADD', KEYS[2], ARGV[3], ARGV[2])
-else
-	redis.call('EXPIRE', KEYS[1], ARGV[4])
+	return 1
 end
+redis.call('SET', KEYS[1], ARGV[1])
+redis.call('ZADD', KEYS[2], ARGV[3], ARGV[2])
 return 1
 `)
 
-func (r *ManagedEndpointRedisRepository) ListPendingAccounting(ctx context.Context, limit int64) ([]types.EventEndpointRouteSchema, error) {
-	ids, err := r.rdb.ZRange(ctx, meKey("accounting", "pending"), 0, limit-1).Result()
+func (r *ManagedEndpointRedisRepository) GetCharge(ctx context.Context, id string) (*types.Charge, error) {
+	raw, err := r.rdb.Get(ctx, meKey("generation", id)).Result()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return decodeCharge(raw)
+}
+
+// legacyCharge is the pre-consolidation route record; only the fields the
+// accounting migration needs are read.
+type legacyCharge struct {
+	RequestID        string              `json:"request_id"`
+	EndpointID       string              `json:"endpoint_id"`
+	WorkspaceID      string              `json:"workspace_id"`
+	TokenID          string              `json:"token_id"`
+	Route            types.EndpointRoute `json:"route"`
+	Version          uint                `json:"version"`
+	ReplicaID        string              `json:"replica_id"`
+	ContainerID      string              `json:"container_id"`
+	MachineID        string              `json:"machine_id"`
+	GPU              string              `json:"gpu"`
+	ConfigRevision   uint64              `json:"config_revision"`
+	ProviderWS       string              `json:"provider_workspace_id"`
+	ProviderShare    int64               `json:"provider_share_micro_usd"`
+	StatusCode       int                 `json:"status_code"`
+	Stream           bool                `json:"stream"`
+	PromptTokens     int64               `json:"prompt_tokens"`
+	CompletionTokens int64               `json:"completion_tokens"`
+	CachedTokens     int64               `json:"cached_tokens"`
+	Images           int64               `json:"images"`
+	CostMicroUSD     int64               `json:"cost_micro_usd"`
+	PromptMicroUSD   int64               `json:"prompt_micro_usd"`
+	CompletionMicro  int64               `json:"completion_micro_usd"`
+	CachedMicroUSD   int64               `json:"cached_micro_usd"`
+	RequestMicroUSD  int64               `json:"request_micro_usd"`
+	ImageMicroUSD    int64               `json:"image_micro_usd"`
+	DurationMs       int64               `json:"duration_ms"`
+	TTFTMs           int64               `json:"ttft_ms"`
+	QueueWaitMs      int64               `json:"queue_wait_ms"`
+	Error            string              `json:"error"`
+	Timestamp        time.Time           `json:"timestamp"`
+}
+
+// decodeCharge reads a charge, converting a legacy route record in place. A
+// legacy image charge keeps its historical amount: the image price is carried
+// in the total and never reinterpreted as a per-request price.
+func decodeCharge(raw string) (*types.Charge, error) {
+	var c types.Charge
+	if err := json.Unmarshal([]byte(raw), &c); err != nil {
+		return nil, err
+	}
+	if c.ID != "" {
+		return &c, nil
+	}
+	var l legacyCharge
+	if err := json.Unmarshal([]byte(raw), &l); err != nil || l.RequestID == "" {
+		return nil, fmt.Errorf("unreadable charge record")
+	}
+	c = types.Charge{
+		ID: l.RequestID, Status: types.ChargeSettled, WorkspaceID: l.WorkspaceID, TokenID: l.TokenID, AppID: l.EndpointID, Version: l.Version, Route: l.Route,
+		Work:                types.Work{Requests: 1, PromptTokens: l.PromptTokens, CompletionTokens: l.CompletionTokens, CachedTokens: l.CachedTokens},
+		Cost:                types.Cost{MicroUSD: l.CostMicroUSD, PromptMicroUSD: l.PromptMicroUSD, CompletionMicroUSD: l.CompletionMicro, CachedMicroUSD: l.CachedMicroUSD, RequestMicroUSD: l.RequestMicroUSD},
+		ProviderWorkspaceID: l.ProviderWS, ProviderShareMicroUSD: l.ProviderShare,
+		ReplicaID: l.ReplicaID, ContainerID: l.ContainerID, MachineID: l.MachineID, GPU: l.GPU, ConfigRevision: l.ConfigRevision,
+		StatusCode: l.StatusCode, Stream: l.Stream, DurationMs: l.DurationMs, TTFTMs: l.TTFTMs, QueueWaitMs: l.QueueWaitMs, Error: l.Error,
+		AcceptedAt: l.Timestamp, SettledAt: l.Timestamp,
+	}
+	if l.StatusCode >= 300 {
+		c.Status = types.ChargeVoid
+	}
+	return &c, nil
+}
+
+// ListPendingCharges returns the charges due for accounting by now, oldest first.
+func (r *ManagedEndpointRedisRepository) ListPendingCharges(ctx context.Context, now time.Time, limit int64) ([]*types.Charge, error) {
+	ids, err := r.rdb.ZRangeByScore(ctx, meKey("accounting", "pending"), &redis.ZRangeBy{Min: "-inf", Max: strconv.FormatInt(now.Unix(), 10), Count: limit}).Result()
 	if err != nil {
 		return nil, err
 	}
-	records := make([]types.EventEndpointRouteSchema, 0, len(ids))
+	charges := make([]*types.Charge, 0, len(ids))
 	for _, id := range ids {
-		record, err := r.GetGeneration(ctx, id)
+		c, err := r.GetCharge(ctx, id)
 		if err != nil {
 			return nil, err
 		}
-		if record == nil {
+		if c == nil {
 			return nil, fmt.Errorf("missing pending accounting record %s", id)
 		}
-		records = append(records, *record)
+		charges = append(charges, c)
 	}
-	return records, nil
+	return charges, nil
 }
 
 var completeAccountingScript = redis.NewScript(`
@@ -444,26 +538,26 @@ redis.call('EXPIRE', KEYS[2], ARGV[2])
 return 1
 `)
 
-func (r *ManagedEndpointRedisRepository) CompleteAccounting(ctx context.Context, generationID string, ttl time.Duration) error {
-	return completeAccountingScript.Run(ctx, r.rdb, []string{meKey("accounting", "pending"), meKey("generation", generationID)}, generationID, int(ttl.Seconds())).Err()
+// CompleteAccounting takes a charge out of the pending index and lets its journal entry expire.
+func (r *ManagedEndpointRedisRepository) CompleteAccounting(ctx context.Context, id string, ttl time.Duration) error {
+	return completeAccountingScript.Run(ctx, r.rdb, []string{meKey("accounting", "pending"), meKey("generation", id)}, id, int(ttl.Seconds())).Err()
 }
 
-func (r *ManagedEndpointRedisRepository) GetGeneration(ctx context.Context, generationID string) (*types.EventEndpointRouteSchema, error) {
-	return getJSON[types.EventEndpointRouteSchema](ctx, r.rdb, meKey("generation", generationID))
-}
-
-func usageFields(u *types.Usage) map[string]*int64 {
-	return map[string]*int64{
-		"requests": &u.Requests, "prompt_tokens": &u.PromptTokens, "completion_tokens": &u.CompletionTokens,
-		"images": &u.Images, "micro_usd": &u.MicroUSD,
-		"cached_tokens":    &u.CachedTokens,
-		"prompt_micro_usd": &u.PromptMicroUSD, "completion_micro_usd": &u.CompletionMicroUSD,
-		"cached_micro_usd": &u.CachedMicroUSD, "request_micro_usd": &u.RequestMicroUSD, "image_micro_usd": &u.ImageMicroUSD,
+// ChargeSchema reports the accounting schema marker written after migration.
+func (r *ManagedEndpointRedisRepository) GetChargeSchema(ctx context.Context) (string, error) {
+	value, err := r.rdb.Get(ctx, meKey("accounting", "schema")).Result()
+	if errors.Is(err, redis.Nil) {
+		return "", nil
 	}
+	return value, err
 }
 
-// addUsageScript records one request atomically (seen marker, day counters,
-// minute meter bucket) so a replay with the same request id is a no-op.
+func (r *ManagedEndpointRedisRepository) SetChargeSchema(ctx context.Context, schema string) error {
+	return r.rdb.Set(ctx, meKey("accounting", "schema"), schema, 0).Err()
+}
+
+// addUsageScript records one charge atomically (seen marker, day counters,
+// minute meter bucket) so a replay with the same charge id is a no-op.
 //
 // KEYS[1] seen marker, KEYS[2] day bucket, KEYS[3] meter bucket index;
 // ARGV[1] usage ttl seconds, ARGV[2] meter key prefix, ARGV[3] workspace,
@@ -508,11 +602,11 @@ redis.call('ZADD', KEYS[3], minute, meter)
 return 1
 `)
 
-// AddUsage credits one request to a workspace's daily bucket for kind; a
-// replayed request id is a no-op.
-func (r *ManagedEndpointRedisRepository) AddUsage(ctx context.Context, kind types.UsageKind, workspaceID, model, requestID string, at time.Time, delta types.Usage) error {
-	if workspaceID == "" || model == "" || requestID == "" {
-		return errors.New("workspace id, model and request id are required")
+// AddUsage credits one charge to a workspace's daily bucket for kind; a
+// replayed charge id is a no-op.
+func (r *ManagedEndpointRedisRepository) AddUsage(ctx context.Context, kind types.UsageKind, workspaceID, model, chargeID string, at time.Time, delta types.Usage) error {
+	if workspaceID == "" || model == "" || chargeID == "" {
+		return errors.New("workspace id, model and charge id are required")
 	}
 	if kind != types.UsageSpend && kind != types.UsageEarned {
 		return errors.New("invalid usage kind")
@@ -520,24 +614,35 @@ func (r *ManagedEndpointRedisRepository) AddUsage(ctx context.Context, kind type
 	if strings.ContainsAny(workspaceID+model, "|") {
 		return errors.New("invalid usage identifier")
 	}
-	if delta.CachedTokens > delta.PromptTokens {
-		return errors.New("cached tokens exceed prompt tokens")
+	if !delta.Work.Valid() {
+		return errors.New("invalid usage counter")
 	}
 	args := []any{int(usageRetain.Seconds()), meKey("meter", string(kind)), workspaceID, model}
-	for field, value := range usageFields(&delta) {
+	for i, value := range delta.Fields() {
 		if *value < 0 || *value > types.MaxUsageCounter {
 			return errors.New("invalid usage counter")
 		}
 		if *value > 0 {
-			args = append(args, field, *value)
+			args = append(args, types.UsageFieldNames[i], *value)
 		}
 	}
 	keys := []string{
-		meKey("usage", "seen", string(kind), requestID),
+		meKey("usage", "seen", string(kind), chargeID),
 		meKey("usage", string(kind), workspaceID, at.UTC().Format(time.DateOnly)),
 		meKey("meter", "buckets"),
 	}
 	return addUsageScript.Run(ctx, r.rdb, keys, args...).Err()
+}
+
+// usageField returns the counter slot for a wire name; historical fields such
+// as images are not counters any more and are ignored.
+func usageField(u *types.Usage, name string) *int64 {
+	for i, field := range types.UsageFieldNames {
+		if field == name {
+			return u.Fields()[i]
+		}
+	}
+	return nil
 }
 
 // GetUsage folds the UTC days from..to (clamped to usageMaxDays) into a report.
@@ -575,7 +680,7 @@ func (r *ManagedEndpointRedisRepository) GetUsage(ctx context.Context, kind type
 				}
 				target, field = perModel[model], name
 			}
-			if slot := usageFields(target)[field]; slot != nil {
+			if slot := usageField(target, field); slot != nil {
 				*slot += n
 			}
 		}
@@ -625,7 +730,7 @@ func (r *ManagedEndpointRedisRepository) ListMeterBuckets(ctx context.Context, b
 				row = &types.MeterRow{WorkspaceID: workspace, Model: model}
 				rows[workspace+"|"+model] = row
 			}
-			if value, ok := usageFields(&row.Usage)[name]; ok {
+			if value := usageField(&row.Usage, name); value != nil {
 				*value, _ = strconv.ParseInt(raw, 10, 64)
 			}
 		}

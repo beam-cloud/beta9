@@ -590,6 +590,7 @@ func (g *Gateway) registerServices() error {
 		Scheduler:        g.Scheduler,
 		RedisClient:      g.RedisClient,
 		Tailscale:        g.Tailscale,
+		Gateway:          g.httpServer.Handler,
 		RouteGroup:       g.rootRouteGroup,
 		AdminRouteGroup:  g.baseRouteGroup.Group("/endpoints"),
 		DrainContext:     g.drainCtx,
