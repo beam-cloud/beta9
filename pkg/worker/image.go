@@ -2179,6 +2179,7 @@ func (c *ImageClient) buildahEnv(runroot, tmpdir, storageConf string) []string {
 		"XDG_RUNTIME_DIR="+runroot,
 		"CONTAINERS_STORAGE_CONF="+storageConf,
 		"BUILDAH_LAYERS=true",
+		"BUILDAH_ISOLATION=oci",
 		"GOMAXPROCS=0",
 		"PIGZ=-p"+fmt.Sprintf("%d", runtime.NumCPU()),
 	)
@@ -2621,6 +2622,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	f.Close()
 
 	budArgs := []string{"--root", graphroot, "--runroot", runroot, "--storage-driver=" + storageDriver, "bud"}
+	budArgs = append(budArgs, buildahIsolationArgs()...)
 	if insecure {
 		budArgs = append(budArgs, "--tls-verify=false")
 	}

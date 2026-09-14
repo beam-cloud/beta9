@@ -166,19 +166,17 @@ func (b *layeredBuild) step(step dockerfileStep) error {
 	switch step.kind {
 	case stepRun:
 		args := b.storageArgs("run")
+		args = append(args, buildahIsolationArgs()...)
 		for _, volume := range b.runVolumes {
 			args = append(args, "--volume", volume)
 		}
-		// ARG values reach RUN as environment without persisting in the
-		// image, and only once the Dockerfile has declared them, as with
-		// Docker. They are handed over through buildah's own environment
-		// (--env NAME) so secrets stay off the command line.
-		var extraEnv []string
+		// Pass ARG values to the build container only. Adding them to
+		// buildah's own environment lets a tenant override its runtime,
+		// storage configuration, or dynamic loader before isolation starts.
 		for name := range b.declaredArgs {
 			value, given := b.buildArgs[name]
 			if _, isEnv := b.env[name]; given && !isEnv {
-				args = append(args, "--env", name)
-				extraEnv = append(extraEnv, name+"="+value)
+				args = append(args, "--env", name+"="+value)
 			}
 		}
 		args = append(args, b.container, "--")
@@ -189,7 +187,7 @@ func (b *layeredBuild) step(step dockerfileStep) error {
 		}
 		output := newActiveOutputWriter(b.out)
 		stop := startSilentOutputHeartbeat(b.ctx, b.out, time.Now(), output, "Still running build step...")
-		env := append(b.c.buildahEnv(b.runroot, b.tmpdir, b.storageConf), extraEnv...)
+		env := b.c.buildahEnv(b.runroot, b.tmpdir, b.storageConf)
 		err := newBuildahCommand(b.ctx, args, env, output, output).Run()
 		stop()
 		if err != nil {
