@@ -32,6 +32,10 @@ func ConfigureContainerRequestMounts(containerId string, stub *types.StubWithRel
 	}
 
 	for _, v := range config.Volumes {
+		// Recheck persisted configurations when launching existing stubs.
+		if err := ValidateVolumeMount(v); err != nil {
+			return nil, err
+		}
 		mount := types.Mount{
 			LocalPath: path.Join(types.DefaultVolumesPath, workspace.Name, v.Id),
 			LinkPath:  path.Join(types.TempContainerWorkspace(containerId), v.MountPath),
