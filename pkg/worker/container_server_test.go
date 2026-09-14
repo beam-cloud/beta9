@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -942,4 +943,223 @@ func (f *fakeContainerNetworkController) ContainerPortAddressMap(containerId str
 
 func (f *fakeContainerNetworkController) Close() error {
 	return nil
+}
+
+func sandboxFileFixture(t *testing.T) (*ContainerRuntimeServer, *ContainerInstance, string) {
+	t.Helper()
+	root, uploads := t.TempDir(), t.TempDir()
+	instance := &ContainerInstance{Spec: &specs.Spec{
+		Root: &specs.Root{Path: root}, Process: &specs.Process{Cwd: "/work"},
+		Mounts: []specs.Mount{{Source: uploads, Destination: "/tmp/.beta9", Type: "none", Options: []string{"rbind", "rw"}}},
+	}}
+	server := &ContainerRuntimeServer{
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		runtime:            &MockRuntime{state: betaruntime.State{Pid: 1, Status: types.RuncContainerStatusRunning}},
+	}
+	server.containerInstances.Set("sandbox-test", instance)
+	return server, instance, uploads
+}
+
+func TestSandboxFileAPIsConfineTraversalAndSymlinks(t *testing.T) {
+	server, instance, _ := sandboxFileFixture(t)
+	hostDir := t.TempDir()
+	hostFile := filepath.Join(hostDir, "worker-secret")
+	require.NoError(t, os.WriteFile(hostFile, []byte("host-secret"), 0600))
+	require.NoError(t, os.Symlink(hostDir, filepath.Join(instance.Spec.Root.Path, "escape")))
+	ctx := context.Background()
+	for _, path := range []string{
+		"/tmp/.beta9/" + strings.Repeat("../", 20) + strings.TrimPrefix(hostFile, "/"),
+		"/escape/worker-secret",
+		"/escape/worker-secret/",
+	} {
+		t.Run(path, func(t *testing.T) {
+			download, err := server.ContainerSandboxDownloadFile(ctx, &pb.ContainerSandboxDownloadFileRequest{ContainerId: "sandbox-test", ContainerPath: path})
+			require.NoError(t, err)
+			require.NotEqual(t, "host-secret", string(download.Data))
+			_, err = server.ContainerSandboxUploadFile(ctx, &pb.ContainerSandboxUploadFileRequest{ContainerId: "sandbox-test", ContainerPath: path, Data: []byte("changed"), Mode: 0600})
+			require.NoError(t, err)
+			_, err = server.ContainerSandboxStatFile(ctx, &pb.ContainerSandboxStatFileRequest{ContainerId: "sandbox-test", ContainerPath: path})
+			require.NoError(t, err)
+			_, err = server.ContainerSandboxListFiles(ctx, &pb.ContainerSandboxListFilesRequest{ContainerId: "sandbox-test", ContainerPath: filepath.Dir(path)})
+			require.NoError(t, err)
+			find, err := server.ContainerSandboxFindInFiles(ctx, &pb.ContainerSandboxFindInFilesRequest{ContainerId: "sandbox-test", ContainerPath: path, Pattern: "host-secret"})
+			require.NoError(t, err)
+			require.Empty(t, find.Results)
+			_, err = server.ContainerSandboxReplaceInFiles(ctx, &pb.ContainerSandboxReplaceInFilesRequest{ContainerId: "sandbox-test", ContainerPath: path, Pattern: "host-secret", NewString: "changed"})
+			require.NoError(t, err)
+			_, err = server.ContainerSandboxDeleteFile(ctx, &pb.ContainerSandboxDeleteFileRequest{ContainerId: "sandbox-test", ContainerPath: path})
+			require.NoError(t, err)
+			_, err = server.ContainerSandboxCreateDirectory(ctx, &pb.ContainerSandboxCreateDirectoryRequest{ContainerId: "sandbox-test", ContainerPath: path + "/new-dir", Mode: 0755})
+			require.NoError(t, err)
+			_, err = server.ContainerSandboxDeleteDirectory(ctx, &pb.ContainerSandboxDeleteDirectoryRequest{ContainerId: "sandbox-test", ContainerPath: path + "/new-dir"})
+			require.NoError(t, err)
+			contents, err := os.ReadFile(hostFile)
+			require.NoError(t, err)
+			require.Equal(t, "host-secret", string(contents))
+		})
+	}
+}
+
+func TestContainerPathsConfineSymlinksAndSelectNestedMounts(t *testing.T) {
+	_, instance, uploads := sandboxFileFixture(t)
+	guest := instance.Spec.Root.Path
+	require.NoError(t, os.MkdirAll(filepath.Join(guest, "var"), 0755))
+	require.NoError(t, os.MkdirAll(filepath.Join(guest, "run"), 0755))
+	require.NoError(t, os.Symlink("/run", filepath.Join(guest, "var/run")))
+	require.NoError(t, os.Symlink("/tmp/.beta9", filepath.Join(guest, "data")))
+	require.NoError(t, os.WriteFile(filepath.Join(guest, "run/value"), []byte("guest"), 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(uploads, "value"), []byte("upload"), 0600))
+	require.NoError(t, os.Symlink("value", filepath.Join(uploads, "relative")))
+	nested := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(nested, "value"), []byte("nested"), 0600))
+	instance.Spec.Mounts = append(instance.Spec.Mounts, specs.Mount{Source: nested, Destination: "/tmp/.beta9/nested", Options: []string{"rbind", "ro"}})
+	for path, expected := range map[string]string{
+		"/run/value": "guest", "/tmp/.beta9/relative": "upload", "/tmp/.beta9/nested/value": "nested",
+	} {
+		root, name, err := openContainerPath(path, instance, false)
+		require.NoError(t, err, path)
+		data, err := root.ReadFile(name)
+		root.Close()
+		require.NoError(t, err)
+		require.Equal(t, expected, string(data))
+	}
+	for _, path := range []string{"/var/run/value", "/data/value"} {
+		root, name, err := openContainerPath(path, instance, false)
+		require.NoError(t, err)
+		_, err = root.ReadFile(name)
+		root.Close()
+		require.Error(t, err, "absolute symlinks must not be followed")
+	}
+	_, _, err := openContainerPath("/tmp/.beta9/nested/value", instance, true)
+	require.ErrorContains(t, err, "read-only")
+}
+
+func TestContainerPathsRespectFileMountsAndRootPermissions(t *testing.T) {
+	_, instance, _ := sandboxFileFixture(t)
+	source := filepath.Join(t.TempDir(), "resolv.conf")
+	require.NoError(t, os.WriteFile(source, []byte("nameserver 127.0.0.1\n"), 0600))
+	instance.Spec.Root.Readonly = true
+	instance.Spec.Mounts = append(instance.Spec.Mounts,
+		specs.Mount{Source: source, Destination: "/etc/resolv.conf", Type: "bind", Options: []string{"ro"}},
+		specs.Mount{Source: "proc", Destination: "/proc", Type: "proc"},
+	)
+	root, name, err := openContainerPath("/etc/resolv.conf", instance, false)
+	require.NoError(t, err)
+	data, err := root.ReadFile(name)
+	root.Close()
+	require.NoError(t, err)
+	require.Equal(t, "nameserver 127.0.0.1\n", string(data))
+	for _, path := range []string{"/work/file", "/etc/resolv.conf", "/etc/resolv.conf/child", "/proc/1/root"} {
+		_, _, err := openContainerPath(path, instance, true)
+		require.Error(t, err, path)
+	}
+	root, name, err = openContainerPath("/tmp/.beta9/writable", instance, true)
+	require.NoError(t, err)
+	defer root.Close()
+	require.NoError(t, root.WriteFile(name, []byte("guest"), 0600))
+}
+
+func TestContainerPathHandleRejectsSymlinkSwap(t *testing.T) {
+	_, instance, uploads := sandboxFileFixture(t)
+	outside := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(outside, "secret"), []byte("host-secret"), 0600))
+	require.NoError(t, os.Mkdir(filepath.Join(uploads, "dir"), 0755))
+	root, name, err := openContainerPath("/tmp/.beta9/dir/secret", instance, true)
+	require.NoError(t, err)
+	defer root.Close()
+	require.NoError(t, os.Remove(filepath.Join(uploads, "dir")))
+	require.NoError(t, os.Symlink(outside, filepath.Join(uploads, "dir")))
+	_, err = root.ReadFile(name)
+	require.Error(t, err)
+	require.Error(t, root.WriteFile(name, []byte("changed"), 0600))
+	contents, err := os.ReadFile(filepath.Join(outside, "secret"))
+	require.NoError(t, err)
+	require.Equal(t, "host-secret", string(contents))
+}
+
+func TestSandboxFileAPIsPreserveNormalOperations(t *testing.T) {
+	server, instance, _ := sandboxFileFixture(t)
+	ctx := context.Background()
+	for _, path := range []string{"relative/value", "/tmp/.beta9/value"} {
+		for i, chunk := range []string{"hello ", "world\n"} {
+			resp, err := server.ContainerSandboxUploadFile(ctx, &pb.ContainerSandboxUploadFileRequest{ContainerId: "sandbox-test", ContainerPath: path, Data: []byte(chunk), Mode: 0644, Offset: int64(i * 6)})
+			require.NoError(t, err)
+			require.True(t, resp.Ok, resp.ErrorMsg)
+		}
+		resp, err := server.ContainerSandboxDownloadFile(ctx, &pb.ContainerSandboxDownloadFileRequest{ContainerId: "sandbox-test", ContainerPath: path, Offset: 6, Length: 5})
+		require.NoError(t, err)
+		require.True(t, resp.Ok, resp.ErrorMsg)
+		require.Equal(t, "world", string(resp.Data))
+		find, err := server.ContainerSandboxFindInFiles(ctx, &pb.ContainerSandboxFindInFilesRequest{ContainerId: "sandbox-test", ContainerPath: path, Pattern: "world"})
+		require.NoError(t, err)
+		require.True(t, find.Ok, find.ErrorMsg)
+		require.Len(t, find.Results, 1)
+		expected := path
+		if !filepath.IsAbs(expected) {
+			expected = filepath.Join(instance.Spec.Process.Cwd, expected)
+		}
+		require.Equal(t, expected, find.Results[0].Path)
+		replace, err := server.ContainerSandboxReplaceInFiles(ctx, &pb.ContainerSandboxReplaceInFilesRequest{ContainerId: "sandbox-test", ContainerPath: path, Pattern: "world", NewString: "guest"})
+		require.NoError(t, err)
+		require.True(t, replace.Ok, replace.ErrorMsg)
+		resp, err = server.ContainerSandboxDownloadFile(ctx, &pb.ContainerSandboxDownloadFileRequest{ContainerId: "sandbox-test", ContainerPath: path})
+		require.NoError(t, err)
+		require.Equal(t, "hello guest\n", string(resp.Data))
+	}
+}
+
+func TestSandboxRecursiveOperationsSkipEscapingLinks(t *testing.T) {
+	server, _, uploads := sandboxFileFixture(t)
+	hostFile := filepath.Join(t.TempDir(), "secret")
+	require.NoError(t, os.WriteFile(hostFile, []byte("host-secret"), 0600))
+	require.NoError(t, os.Symlink(hostFile, filepath.Join(uploads, "link")))
+	ctx := context.Background()
+	find, err := server.ContainerSandboxFindInFiles(ctx, &pb.ContainerSandboxFindInFilesRequest{ContainerId: "sandbox-test", ContainerPath: "/tmp/.beta9", Pattern: "host-secret"})
+	require.NoError(t, err)
+	require.True(t, find.Ok, find.ErrorMsg)
+	require.Empty(t, find.Results)
+	replace, err := server.ContainerSandboxReplaceInFiles(ctx, &pb.ContainerSandboxReplaceInFilesRequest{ContainerId: "sandbox-test", ContainerPath: "/tmp/.beta9", Pattern: "host-secret", NewString: "changed"})
+	require.NoError(t, err)
+	require.True(t, replace.Ok, replace.ErrorMsg)
+	contents, err := os.ReadFile(hostFile)
+	require.NoError(t, err)
+	require.Equal(t, "host-secret", string(contents))
+}
+
+func TestContainerSyncWorkspaceConfinesPaths(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "sandbox-sync-test-")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	containerID := filepath.Base(dir)
+	workspace := types.TempContainerWorkspace(containerID)
+	require.NoError(t, os.Mkdir(workspace, 0755))
+	hostDir := t.TempDir()
+	hostFile := filepath.Join(hostDir, "worker-secret")
+	require.NoError(t, os.WriteFile(hostFile, []byte("host-secret"), 0600))
+	require.NoError(t, os.Symlink(hostDir, filepath.Join(workspace, "escape")))
+	server := &ContainerRuntimeServer{containerInstances: common.NewSafeMap[*ContainerInstance]()}
+	server.containerInstances.Set(containerID, &ContainerInstance{})
+	ctx := context.Background()
+	for _, path := range []string{"../../" + strings.TrimPrefix(hostFile, "/"), "escape/worker-secret"} {
+		for _, op := range []pb.SyncContainerWorkspaceOperation{pb.SyncContainerWorkspaceOperation_WRITE, pb.SyncContainerWorkspaceOperation_DELETE} {
+			resp, err := server.ContainerSyncWorkspace(ctx, &pb.SyncContainerWorkspaceRequest{ContainerId: containerID, Path: path, Op: op, Data: []byte("changed")})
+			require.NoError(t, err)
+			require.False(t, resp.Ok)
+		}
+	}
+	resp, err := server.ContainerSyncWorkspace(ctx, &pb.SyncContainerWorkspaceRequest{ContainerId: containerID, Path: "nested/file", Op: pb.SyncContainerWorkspaceOperation_WRITE, Data: []byte("guest")})
+	require.NoError(t, err)
+	require.True(t, resp.Ok)
+	resp, err = server.ContainerSyncWorkspace(ctx, &pb.SyncContainerWorkspaceRequest{ContainerId: containerID, Path: "nested/file", NewPath: "escape/worker-secret", Op: pb.SyncContainerWorkspaceOperation_MOVED})
+	require.NoError(t, err)
+	require.False(t, resp.Ok)
+	resp, err = server.ContainerSyncWorkspace(ctx, &pb.SyncContainerWorkspaceRequest{ContainerId: containerID, Path: "nested/file", NewPath: "moved", Op: pb.SyncContainerWorkspaceOperation_MOVED})
+	require.NoError(t, err)
+	require.True(t, resp.Ok)
+	contents, err := os.ReadFile(filepath.Join(workspace, "moved"))
+	require.NoError(t, err)
+	require.Equal(t, "guest", string(contents))
+	contents, err = os.ReadFile(hostFile)
+	require.NoError(t, err)
+	require.Equal(t, "host-secret", string(contents))
 }
