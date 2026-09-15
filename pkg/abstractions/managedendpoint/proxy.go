@@ -49,16 +49,16 @@ func (r *router) serve(rq *routeRequest, app *types.ManagedEndpoint) error {
 				r.releaseReplica(rq, r.state(app.Spec.ID), replica)
 			}()
 			retry, err := r.proxy(attemptCtx, rq, app, replica)
-			leaseLost = errors.Is(context.Cause(attemptCtx), errSlotLeaseLost)
+			leaseLost = errors.Is(context.Cause(attemptCtx), errLeaseLost)
 			return retry, err
 		}()
 		if leaseLost && err != nil {
 			if !rq.ctx.Response().Committed {
-				r.finish(rq, app, replica, http.StatusServiceUnavailable, nil, 0, errSlotLeaseLost.Error())
+				r.finish(rq, app, replica, http.StatusServiceUnavailable, nil, 0, errLeaseLost.Error())
 				return errRegistry.write(rq.ctx)
 			}
 			if rq.stream && ctx.Err() == nil {
-				writeStreamError(rq.ctx.Response(), rq.requestID, app.Spec.ID, &streamFailure{http.StatusServiceUnavailable, "Endpoint capacity lease lost", "registry_unavailable"})
+				writeStreamError(rq.ctx.Response(), rq.requestID, app.Spec.ID, &streamFailure{http.StatusServiceUnavailable, "Request lease lost", "registry_unavailable"})
 			}
 			return nil
 		}
@@ -188,11 +188,11 @@ func (r *router) reserve(ctx context.Context, rq *routeRequest, state *llmroute.
 		inflight.Add(-1)
 		return false, nil
 	}
-	ok, err := r.s.slot(ctx, replica.ID, leaseAcquire, rq.requestID, replica.Capacity.MaxConcurrency)
+	ok, err := r.s.lease(ctx, slotKey(replica.ID), leaseAcquire, rq.requestID, replica.Capacity.MaxConcurrency)
 	if err != nil {
 		inflight.Add(-1)
 		// The server may have acquired the slot before its reply was lost.
-		_, _ = r.s.slot(context.Background(), replica.ID, leaseRelease, rq.requestID, 0)
+		_, _ = r.s.lease(context.Background(), slotKey(replica.ID), leaseRelease, rq.requestID, 0)
 		return false, err
 	}
 	if !ok {
@@ -208,7 +208,7 @@ func (r *router) reserve(ctx context.Context, rq *routeRequest, state *llmroute.
 // releaseReplica returns the slot taken by reserve.
 func (r *router) releaseReplica(rq *routeRequest, state *llmroute.State, replica *types.EndpointReplica) {
 	counter(&r.inflight, replica.ID).Add(-1)
-	released, _ := r.s.slot(context.Background(), replica.ID, leaseRelease, rq.requestID, 0)
+	released, _ := r.s.lease(context.Background(), slotKey(replica.ID), leaseRelease, rq.requestID, 0)
 	if released {
 		hintCtx, cancel := context.WithTimeout(context.Background(), leaseOpTimeout)
 		defer cancel()
@@ -217,13 +217,13 @@ func (r *router) releaseReplica(rq *routeRequest, state *llmroute.State, replica
 }
 
 // renewSlot keeps one attempt's slot alive; losing it cancels the attempt
-// with errSlotLeaseLost. Admission drain is not a reason to stop: running
+// with errLeaseLost. Admission drain is not a reason to stop: running
 // generation survives that phase.
 func (r *router) renewSlot(parent context.Context, replicaID, requestID string, ticks <-chan time.Time) (context.Context, func()) {
 	return r.s.keepAlive(parent, ticks, func(ctx context.Context) error {
-		_, err := r.s.slot(ctx, replicaID, leaseRenew, requestID, 0)
+		_, err := r.s.lease(ctx, slotKey(replicaID), leaseRenew, requestID, 0)
 		return err
-	}, errSlotLeaseLost)
+	}, errLeaseLost)
 }
 
 func (rq *routeRequest) tokenPressure() int64 {
@@ -373,7 +373,7 @@ func (r *router) streamBroke(ctx context.Context, rq *routeRequest, app *types.M
 	if ctx.Err() == nil {
 		writeStreamError(rq.ctx.Response(), rq.requestID, app.Spec.ID, failure)
 	}
-	if errors.Is(context.Cause(ctx), errSlotLeaseLost) {
+	if errors.Is(context.Cause(ctx), errLeaseLost) {
 		return http.StatusServiceUnavailable
 	}
 	return failure.status
@@ -385,7 +385,7 @@ func (r *router) proxyJSON(ctx context.Context, rq *routeRequest, app *types.Man
 	switch {
 	case err != nil:
 		rerr := errUpstreamEnded
-		if errors.Is(context.Cause(ctx), errSlotLeaseLost) {
+		if errors.Is(context.Cause(ctx), errLeaseLost) {
 			rerr = errRegistry
 		}
 		r.finish(rq, app, replica, rerr.Status, nil, 0, err.Error())

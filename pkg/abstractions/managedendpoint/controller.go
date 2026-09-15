@@ -34,8 +34,7 @@ const (
 )
 
 type controller struct {
-	s    *Service
-	lock *common.RedisLock
+	s *Service
 
 	metricsMu   sync.Mutex
 	lastMetrics map[string]llmroute.EngineMetrics // replica id -> previous scrape
@@ -44,7 +43,7 @@ type controller struct {
 }
 
 func newController(s *Service) *controller {
-	return &controller{s: s, lock: common.NewRedisLock(s.rdb), lastMetrics: map[string]llmroute.EngineMetrics{}, startedAt: time.Now()}
+	return &controller{s: s, lastMetrics: map[string]llmroute.EngineMetrics{}, startedAt: time.Now()}
 }
 
 func (c *controller) run(ctx context.Context) {
@@ -57,7 +56,7 @@ func (c *controller) run(ctx context.Context) {
 			return
 		case <-ticker.C:
 		}
-		err := c.lock.WithLease(ctx, controllerLockKey, common.RedisLockOptions{TtlS: int(controllerLockTTL.Seconds()), Retries: 0}, c.reconcile)
+		err := c.s.lock.WithLease(ctx, controllerLockKey, common.RedisLockOptions{TtlS: int(controllerLockTTL.Seconds()), Retries: 0}, c.reconcile)
 		if err != nil && !common.IsRedisLockNotObtained(err) {
 			log.Error().Err(err).Msg("managed endpoints: reconcile failed")
 		}

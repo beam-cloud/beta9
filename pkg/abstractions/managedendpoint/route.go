@@ -71,9 +71,8 @@ type router struct {
 	prefix   string
 	selector llmroute.Selector
 
-	states    sync.Map // endpoint id -> *llmroute.State (shared affinity and pressure)
-	inflight  sync.Map // replica id -> *atomic.Int64
-	admission sync.Map // endpoint id / endpoint|workspace -> *atomic.Int64 (per gateway; see admit)
+	states   sync.Map // endpoint id -> *llmroute.State (shared affinity and pressure)
+	inflight sync.Map // replica id -> *atomic.Int64, this gateway's share of the replica's slots
 }
 
 func newRouter(s *Service) *router {
@@ -141,24 +140,19 @@ func (r *router) handleRoute(ctx echo.Context) error {
 	if rerr := r.admit(ctx.Request().Context(), rq, app); rerr != nil {
 		return rerr.write(ctx)
 	}
-	defer r.release(rq, app)
-	rq.charge = &types.Charge{
-		ID: rq.requestID, WorkspaceID: rq.auth.Workspace.ExternalId, TokenID: rq.auth.Token.ExternalId,
-		AppID: app.Spec.ID, Version: app.Version, Route: route, Pricing: app.Pricing, Stream: rq.stream, AcceptedAt: rq.startedAt.UTC(),
-	}
 	fleet, err := r.s.repo.GetFleet(ctx.Request().Context())
 	if err != nil {
 		return errRegistry.write(ctx)
 	}
-	if rq.serverless = fleet.Serverless(app.Spec.ID) && rq.pinReplica == ""; rq.serverless {
-		release, err := r.holdDemand(rq)
-		if err != nil {
-			if errors.Is(err, errDemandLimit) {
-				return capacityError("endpoint is at capacity, retry shortly").write(ctx)
-			}
-			return errRegistry.write(ctx)
-		}
-		defer release()
+	rq.serverless = fleet.Serverless(app.Spec.ID) && rq.pinReplica == ""
+	release, rerr := r.hold(rq)
+	if rerr != nil {
+		return rerr.write(ctx)
+	}
+	defer release()
+	rq.charge = &types.Charge{
+		ID: rq.requestID, WorkspaceID: rq.auth.Workspace.ExternalId, TokenID: rq.auth.Token.ExternalId,
+		AppID: app.Spec.ID, Version: app.Version, Route: route, Pricing: app.Pricing, Stream: rq.stream, AcceptedAt: rq.startedAt.UTC(),
 	}
 	return r.serve(rq, app)
 }
@@ -231,51 +225,85 @@ func caller(ctx echo.Context) *auth.AuthInfo {
 	return nil
 }
 
-// admissionKeys are the configured concurrency counters a request holds.
-func (r *router) admissionKeys(rq *routeRequest, app *types.ManagedEndpoint) (keys []string, caps []uint32) {
-	if c := r.s.config.Routing.PerEndpointConcurrency; c > 0 {
-		keys, caps = append(keys, app.Spec.ID), append(caps, c)
-	}
-	if c := r.s.config.Routing.PerWorkspaceConcurrency; c > 0 {
-		keys, caps = append(keys, app.Spec.ID+"|"+rq.auth.Workspace.ExternalId), append(caps, c)
-	}
-	return keys, caps
-}
-
-// admit applies the credit gate and this gateway's concurrency caps; the
-// cluster-wide bound is the replicas' MaxConcurrency, enforced in reserve.
+// admit is the credit gate: a paid app needs a workspace in good standing.
 func (r *router) admit(ctx context.Context, rq *routeRequest, app *types.ManagedEndpoint) *routeError {
-	if !app.Pricing.Free() && r.s.scheduler != nil && !clusterAdmin(rq.auth) {
-		if gate := r.s.scheduler.CreditGate(); gate != nil {
-			if err := gate.Check(ctx, rq.auth.Workspace.ExternalId); err != nil {
-				var insufficient *types.InsufficientCreditsError
-				if errors.As(err, &insufficient) {
-					return errInsufficientCredits
-				}
-				return errBillingUnavailable
-			}
-		}
+	if app.Pricing.Free() || r.s.scheduler == nil || clusterAdmin(rq.auth) {
+		return nil
 	}
-	keys, caps := r.admissionKeys(rq, app)
-	for i, key := range keys {
-		if counter(&r.admission, key).Add(1) > int64(caps[i]) {
-			for _, held := range keys[:i+1] {
-				counter(&r.admission, held).Add(-1)
-			}
-			if i == 0 && key == app.Spec.ID {
-				return capacityError("endpoint is at capacity, retry shortly")
-			}
-			return capacityError("too many concurrent requests for this workspace")
+	gate := r.s.scheduler.CreditGate()
+	if gate == nil {
+		return nil
+	}
+	if err := gate.Check(ctx, rq.auth.Workspace.ExternalId); err != nil {
+		var insufficient *types.InsufficientCreditsError
+		if errors.As(err, &insufficient) {
+			return errInsufficientCredits
 		}
+		return errBillingUnavailable
 	}
 	return nil
 }
 
-func (r *router) release(rq *routeRequest, app *types.ManagedEndpoint) {
-	keys, _ := r.admissionKeys(rq, app)
-	for _, key := range keys {
-		counter(&r.admission, key).Add(-1)
+// admissionCap is one configured concurrency limit, shared by every gateway.
+// The engines' own bound is the replicas' MaxConcurrency, reserved in reserve.
+type admissionCap struct {
+	scope string
+	limit int64
+	full  *routeError
+}
+
+func (r *router) caps(rq *routeRequest) (out []admissionCap) {
+	if c := r.s.config.Routing.PerEndpointConcurrency; c > 0 {
+		out = append(out, admissionCap{rq.app.Spec.ID, int64(c), capacityError("endpoint is at capacity, retry shortly")})
 	}
+	if c := r.s.config.Routing.PerWorkspaceConcurrency; c > 0 {
+		out = append(out, admissionCap{rq.app.Spec.ID + "|" + rq.auth.Workspace.ExternalId, int64(c), capacityError("too many concurrent requests for this workspace")})
+	}
+	return out
+}
+
+// hold takes the leases a request keeps for the rest of its life (the
+// admission caps and, for a serverless app, the demand record the controller
+// scales on) and renews them until release is called. Losing one cancels the
+// request rather than serving work the cluster cannot see.
+func (r *router) hold(rq *routeRequest) (release func(), rerr *routeError) {
+	reqCtx := rq.ctx.Request().Context()
+	drop := func() { _ = rq.leases(context.Background(), leaseRelease) } // releasing what may have been taken is always safe
+	for _, c := range r.caps(rq) {
+		key := admissionKey(c.scope)
+		rq.held = append(rq.held, func(ctx context.Context, op leaseOp) error {
+			_, err := r.s.lease(ctx, key, op, rq.requestID, 0)
+			return err
+		})
+		held, err := r.s.lease(reqCtx, key, leaseAcquire, rq.requestID, c.limit)
+		if err != nil || !held {
+			drop()
+			if err != nil {
+				return nil, errRegistry
+			}
+			return nil, c.full
+		}
+	}
+	if rq.serverless {
+		rq.held = append(rq.held, func(ctx context.Context, op leaseOp) error {
+			_, err := r.s.demand(ctx, rq.app.Spec.ID, op, rq.requestID, 0)
+			return err
+		})
+		if _, err := r.s.demand(reqCtx, rq.app.Spec.ID, leaseAcquire, rq.requestID, rq.readyCapacity); err != nil {
+			drop()
+			if errors.Is(err, errDemandLimit) {
+				return nil, capacityError("endpoint is at capacity, retry shortly")
+			}
+			return nil, errRegistry
+		}
+	}
+	if len(rq.held) == 0 {
+		return func() {}, nil
+	}
+	ticker := time.NewTicker(leaseRenewInterval)
+	ctx, stop := r.s.keepAlive(reqCtx, ticker.C, func(ctx context.Context) error { return rq.leases(ctx, leaseRenew) }, errLeaseLost)
+	rq.ctx.SetRequest(rq.ctx.Request().WithContext(ctx))
+	return func() { ticker.Stop(); stop(); drop() }, nil
 }
 
 // A rejected request may be gone before the controller ticks. Coalesce these
@@ -287,27 +315,6 @@ func (r *router) wake(ctx context.Context, rq *routeRequest) *routeError {
 		}
 	}
 	return nil
-}
-
-// holdDemand registers an admitted request with the controller for the rest
-// of its life. Losing the lease cancels the request rather than serving work
-// the controller cannot observe.
-func (r *router) holdDemand(rq *routeRequest) (release func(), err error) {
-	id, reqCtx := rq.app.Spec.ID, rq.ctx.Request().Context()
-	if _, err := r.s.demand(reqCtx, id, leaseAcquire, rq.requestID, rq.readyCapacity); err != nil {
-		return nil, err
-	}
-	ticker := time.NewTicker(leaseRenewInterval)
-	ctx, stop := r.s.keepAlive(reqCtx, ticker.C, func(ctx context.Context) error {
-		_, err := r.s.demand(ctx, id, leaseRenew, rq.requestID, 0)
-		return err
-	}, errDemandLeaseLost)
-	rq.ctx.SetRequest(rq.ctx.Request().WithContext(ctx))
-	return func() {
-		ticker.Stop()
-		stop()
-		_, _ = r.s.demand(context.Background(), id, leaseRelease, rq.requestID, 0)
-	}, nil
 }
 
 // routeRequest is one request through admission, replica selection and proxying.
@@ -333,6 +340,17 @@ type routeRequest struct {
 	serverless    bool
 	readyCapacity int64 // finite serving slots from the selected app's replicas
 	queueWait     time.Duration
+	held          []func(context.Context, leaseOp) error // the leases hold took, in order
+}
+
+// leases applies op to every lease the request holds.
+func (rq *routeRequest) leases(ctx context.Context, op leaseOp) error {
+	for _, lease := range rq.held {
+		if err := lease(ctx, op); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // routeFromPath names the protocol and, for model-scoped paths, the model.

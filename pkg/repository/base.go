@@ -199,16 +199,6 @@ type ManagedEndpointRepository interface {
 	GetCharge(ctx context.Context, id string) (*types.Charge, error)
 	ListPendingCharges(ctx context.Context, now time.Time, limit int64) ([]*types.Charge, error)
 	CompleteAccounting(ctx context.Context, id string, ttl time.Duration) error
-	GetChargeSchema(ctx context.Context) (string, error)
-	SetChargeSchema(ctx context.Context, schema string) error
-
-	// Usage: daily per-workspace, per-model counters (spend and provider earnings)
-	AddUsage(ctx context.Context, kind types.UsageKind, workspaceID, model, chargeID string, at time.Time, delta types.Usage) error
-	GetUsage(ctx context.Context, kind types.UsageKind, workspaceID string, from, to time.Time) (*types.UsageReport, error)
-
-	// Metering: closed minute buckets of usage not yet sent to the billing meter
-	ListMeterBuckets(ctx context.Context, before time.Time) ([]types.MeterBucket, error)
-	DeleteMeterBucket(ctx context.Context, key string) error
 }
 
 type WorkspaceRepository interface {
@@ -439,4 +429,11 @@ type UsageMetricsRepository interface {
 	Init(source string) error
 	IncrementCounter(name string, metadata map[string]interface{}, value float64) error
 	SetGauge(name string, metadata map[string]interface{}, value float64) error
+}
+
+// UsageMeterReader is the query side of a usage collector that keeps meters:
+// one aggregate per UTC day for a subject, split by the group-by dimensions.
+// A collector that only exports counters does not implement it.
+type UsageMeterReader interface {
+	QueryMeter(ctx context.Context, meter, subject string, from, to time.Time, groupBy []string) ([]types.MeterRow, error)
 }

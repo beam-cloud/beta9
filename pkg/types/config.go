@@ -66,9 +66,8 @@ type ManagedEndpointsReconcile struct {
 
 type ManagedEndpointsRoutingConfig struct {
 	SlowStartSeconds uint32 `key:"slowStartSeconds" json:"slow_start_seconds"`
-	// Per-gateway in-flight caps (each gateway admits up to this many); the
-	// cluster-wide bound is the replicas' MaxConcurrency, reserved atomically
-	// in Redis per request.
+	// Cluster-wide in-flight caps, leased in Redis per request across every
+	// gateway; the engines' own bound is the replicas' MaxConcurrency.
 	PerWorkspaceConcurrency uint32 `key:"perWorkspaceConcurrency" json:"per_workspace_concurrency"`
 	PerEndpointConcurrency  uint32 `key:"perEndpointConcurrency" json:"per_endpoint_concurrency"`
 }

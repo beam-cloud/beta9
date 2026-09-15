@@ -322,7 +322,8 @@ func TestRejectedRouteDoesNotCreateDemand(t *testing.T) {
 				want = http.StatusForbidden
 			case "admission":
 				s.config.Routing.PerEndpointConcurrency = 1
-				counter(&r.admission, endpoint.Spec.ID).Store(1)
+				_, err := s.lease(context.Background(), admissionKey(endpoint.Spec.ID), leaseAcquire, "held-by-another-gateway", 1)
+				require.NoError(t, err)
 				want = http.StatusTooManyRequests
 			}
 			require.NoError(t, r.handleRoute(ctx))
@@ -353,7 +354,7 @@ func TestOnDemandRouteSharedLimitReturns429(t *testing.T) {
 	demand, err := s.demand(context.Background(), endpoint.Spec.ID, demandRead, "", 0)
 	require.NoError(t, err)
 	assert.EqualValues(t, serverlessAdmissionHeadroom, demand.active)
-	assert.Zero(t, counter(&r.admission, endpoint.Spec.ID).Load(), "shared rejection releases local admission")
+	assert.Zero(t, s.rdb.Exists(context.Background(), admissionKey(endpoint.Spec.ID)).Val(), "shared rejection releases the admission lease")
 }
 
 func TestReplicaLookupFailureIsNotColdCapacity(t *testing.T) {
@@ -462,26 +463,26 @@ func TestHostedSlotAcquireIsAtomicIdempotentAndOwned(t *testing.T) {
 	now := time.Now()
 	server.SetTime(now)
 	for range 2 {
-		ok, err := s.slot(ctx, "replica", leaseAcquire, "request-a", 1)
+		ok, err := s.lease(ctx, slotKey("replica"), leaseAcquire, "request-a", 1)
 		require.NoError(t, err)
 		require.True(t, ok)
 	}
 	assert.EqualValues(t, 1, s.rdb.ZCard(ctx, slotKey("replica")).Val())
-	ok, err := s.slot(ctx, "replica", leaseAcquire, "request-b", 1)
+	ok, err := s.lease(ctx, slotKey("replica"), leaseAcquire, "request-b", 1)
 	require.NoError(t, err)
 	assert.False(t, ok)
 	server.SetTime(now.Add(leaseTTL + time.Second))
-	ok, err = s.slot(ctx, "replica", leaseAcquire, "request-b", 1)
+	ok, err = s.lease(ctx, slotKey("replica"), leaseAcquire, "request-b", 1)
 	require.NoError(t, err)
 	assert.True(t, ok, "expired request releases its own slot")
-	ok, err = s.slot(ctx, "replica", leaseRenew, "request-a", 1)
-	require.ErrorIs(t, err, errSlotLeaseLost)
+	ok, err = s.lease(ctx, slotKey("replica"), leaseRenew, "request-a", 1)
+	require.ErrorIs(t, err, errLeaseLost)
 	assert.False(t, ok, "old request cannot resurrect its lease")
-	ok, err = s.slot(ctx, "replica", leaseRelease, "request-a", 1)
+	ok, err = s.lease(ctx, slotKey("replica"), leaseRelease, "request-a", 1)
 	require.NoError(t, err)
 	assert.False(t, ok, "late release cannot touch request-b")
 	assert.Equal(t, []string{"request-b"}, s.rdb.ZRange(ctx, slotKey("replica"), 0, -1).Val())
-	ok, err = s.slot(ctx, "replica", leaseRelease, "request-b", 1)
+	ok, err = s.lease(ctx, slotKey("replica"), leaseRelease, "request-b", 1)
 	require.NoError(t, err)
 	assert.True(t, ok)
 	assert.Zero(t, s.rdb.Exists(ctx, slotKey("replica")).Val())
@@ -505,7 +506,7 @@ func TestHostedSlotCrashExpiryIsIndependentOfOtherTraffic(t *testing.T) {
 	}
 	for _, elapsed := range []time.Duration{40 * time.Second, 70 * time.Second} {
 		server.SetTime(now.Add(elapsed))
-		ok, err := s.slot(ctx, replica.ID, leaseRenew, "running", 0)
+		ok, err := s.lease(ctx, slotKey(replica.ID), leaseRenew, "running", 0)
 		require.NoError(t, err)
 		require.True(t, ok)
 	}
@@ -532,7 +533,7 @@ func TestHostedSlotLongGenerationRenewsAcrossGateways(t *testing.T) {
 	for i := 1; i <= 40; i++ {
 		server.SetTime(now.Add(time.Duration(i) * leaseRenewInterval))
 		server.FastForward(leaseRenewInterval)
-		ok, err = s.slot(ctx, replica.ID, leaseRenew, requestA.requestID, 0)
+		ok, err = s.lease(ctx, slotKey(replica.ID), leaseRenew, requestA.requestID, 0)
 		require.NoError(t, err)
 		require.True(t, ok)
 		ok, err = b.reserve(ctx, &routeRequest{requestID: fmt.Sprint("retry-", i)}, b.state("model"), replica)
@@ -555,7 +556,7 @@ func TestHostedSlotRenewalCancelsLostLeaseAndStopsBeforeRelease(t *testing.T) {
 			ctx := context.Background()
 			now := time.Now()
 			server.SetTime(now)
-			ok, err := s.slot(ctx, "replica", leaseAcquire, "old", 1)
+			ok, err := s.lease(ctx, slotKey("replica"), leaseAcquire, "old", 1)
 			require.NoError(t, err)
 			require.True(t, ok)
 			ticks := make(chan time.Time, 1)
@@ -563,7 +564,7 @@ func TestHostedSlotRenewalCancelsLostLeaseAndStopsBeforeRelease(t *testing.T) {
 			defer stop()
 			if failure == "expiry" {
 				server.SetTime(now.Add(leaseTTL + time.Second))
-				ok, err := s.slot(ctx, "replica", leaseAcquire, "new", 1)
+				ok, err := s.lease(ctx, slotKey("replica"), leaseAcquire, "new", 1)
 				require.NoError(t, err)
 				require.True(t, ok)
 			} else {
@@ -576,10 +577,10 @@ func TestHostedSlotRenewalCancelsLostLeaseAndStopsBeforeRelease(t *testing.T) {
 			case <-time.After(time.Second):
 				t.Fatal("lost lease did not cancel the upstream context")
 			}
-			assert.ErrorIs(t, context.Cause(attempt), errSlotLeaseLost)
+			assert.ErrorIs(t, context.Cause(attempt), errLeaseLost)
 			stop()
 			if failure == "expiry" {
-				_, err := s.slot(ctx, "replica", leaseRelease, "old", 0)
+				_, err := s.lease(ctx, slotKey("replica"), leaseRelease, "old", 0)
 				require.NoError(t, err)
 				assert.Equal(t, []string{"new"}, s.rdb.ZRange(ctx, slotKey("replica"), 0, -1).Val())
 			}
@@ -600,7 +601,7 @@ func TestHostedSlotRenewalSurvivesDrainAndEndsWithRequestOrService(t *testing.T)
 			defer cancelClient()
 			now := time.Now()
 			server.SetTime(now)
-			ok, err := s.slot(client, "replica", leaseAcquire, "request", 1)
+			ok, err := s.lease(client, slotKey("replica"), leaseAcquire, "request", 1)
 			require.NoError(t, err)
 			require.True(t, ok)
 			ticks := make(chan time.Time, 1)
@@ -627,7 +628,7 @@ func TestHostedSlotRenewalSurvivesDrainAndEndsWithRequestOrService(t *testing.T)
 				t.Fatal("request lifecycle did not stop renewal")
 			}
 			stop()
-			_, err = s.slot(context.Background(), "replica", leaseRelease, "request", 0)
+			_, err = s.lease(context.Background(), slotKey("replica"), leaseRelease, "request", 0)
 			require.NoError(t, err)
 			ticks <- time.Now()
 			assert.Zero(t, s.rdb.Exists(context.Background(), slotKey("replica")).Val(), "stopped renewal cannot recreate a released slot")
@@ -673,7 +674,7 @@ func TestHostedSlotLossDuringJSONBodyReturns503(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("upstream was not reached")
 	}
-	cancel(errSlotLeaseLost)
+	cancel(errLeaseLost)
 	select {
 	case err := <-done:
 		require.NoError(t, err)

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/abstractions/managedendpoint"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
@@ -41,9 +42,6 @@ func (gws *GatewayService) GetEndpointUsage(ctx context.Context, in *pb.GetEndpo
 	if authInfo == nil || authInfo.Workspace == nil {
 		return &pb.GetEndpointUsageResponse{Ok: false, ErrMsg: "missing workspace auth"}, nil
 	}
-	if gws.endpointRepo == nil {
-		return &pb.GetEndpointUsageResponse{Ok: false, ErrMsg: "managed endpoints are not enabled"}, nil
-	}
 	kind := types.UsageSpend
 	if in.GetKind() == string(types.UsageEarned) {
 		kind = types.UsageEarned
@@ -52,7 +50,7 @@ func (gws *GatewayService) GetEndpointUsage(ctx context.Context, in *pb.GetEndpo
 	if err != nil {
 		return &pb.GetEndpointUsageResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
-	report, err := gws.endpointRepo.GetUsage(ctx, kind, authInfo.Workspace.ExternalId, from, to)
+	report, err := managedendpoint.Usage(ctx, gws.usageMetricsRepo, kind, authInfo.Workspace.ExternalId, from, to)
 	if err != nil {
 		return &pb.GetEndpointUsageResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
@@ -66,19 +64,19 @@ func (gws *GatewayService) GetEndpointUsage(ctx context.Context, in *pb.GetEndpo
 	return &pb.GetEndpointUsageResponse{Ok: true, Total: usageToProto(report.Total), PerModel: toProto(report.PerModel), PerDay: toProto(report.PerDay)}, nil
 }
 
-// usageWindow parses the request's inclusive UTC day range; end_date
-// defaults to today.
+// usageWindow parses the request's inclusive UTC day range (end_date
+// defaults to today) as a half-open interval of instants.
 func usageWindow(in *pb.GetEndpointUsageRequest) (from, to time.Time, err error) {
 	if from, err = time.Parse(time.DateOnly, in.GetStartDate()); err != nil {
 		return from, to, fmt.Errorf("invalid start_date: %w", err)
 	}
-	to = time.Now().UTC()
+	to = time.Now().UTC().Truncate(24 * time.Hour)
 	if in.GetEndDate() != "" {
 		if to, err = time.Parse(time.DateOnly, in.GetEndDate()); err != nil {
 			return from, to, fmt.Errorf("invalid end_date: %w", err)
 		}
 	}
-	return from, to, nil
+	return from, to.AddDate(0, 0, 1), nil
 }
 
 func usageToProto(u types.Usage) *pb.EndpointUsage {
