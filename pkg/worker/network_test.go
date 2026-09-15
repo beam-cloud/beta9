@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -20,6 +21,23 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 )
+
+func TestWriteBuildahNetworkConfigUsesWorkerMTU(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "87-podman-bridge.conflist")
+	require.NoError(t, writeBuildahNetworkConfig(path, 1420))
+
+	var config struct {
+		Plugins []struct {
+			Type string `json:"type"`
+			MTU  int    `json:"mtu"`
+		} `json:"plugins"`
+	}
+	contents, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(contents, &config))
+	require.Equal(t, "bridge", config.Plugins[0].Type)
+	require.Equal(t, 1420, config.Plugins[0].MTU)
+}
 
 type cleanupContextWorkerRepoClient struct {
 	pb.WorkerRepositoryServiceClient

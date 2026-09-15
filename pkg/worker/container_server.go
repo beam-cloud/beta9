@@ -744,7 +744,7 @@ func (s *ContainerRuntimeServer) execSandboxProcess(ctx context.Context, contain
 		return nil, err
 	}
 
-	resp := &pb.ContainerSandboxExecResponse{Ok: true, Pid: int32(pid)}
+	resp := &pb.ContainerSandboxExecResponse{Ok: true, Pid: int32(pid), ExitCode: -1}
 	if !wait {
 		return resp, nil
 	}

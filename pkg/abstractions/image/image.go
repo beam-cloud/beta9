@@ -18,6 +18,8 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type ImageService interface {
@@ -126,6 +128,10 @@ func (is *ContainerImageService) BuildImage(in *pb.BuildImageRequest, stream pb.
 	}
 	buildOptions.ExistingImageCreds, err = is.registryCredentials(stream.Context(), in.ExistingImageCreds)
 	if err != nil {
+		var configErr *registryCredentialConfigError
+		if errors.As(err, &configErr) {
+			return status.Error(codes.InvalidArgument, err.Error())
+		}
 		return err
 	}
 
@@ -267,6 +273,14 @@ func convertBuildSteps(buildSteps []*pb.BuildStep) []BuildStep {
 	return steps
 }
 
+type registryCredentialConfigError struct {
+	name string
+}
+
+func (e *registryCredentialConfigError) Error() string {
+	return fmt.Sprintf("registry credential %s is not a workspace secret; create it with `beta9 secret create %s <value>`", e.name, e.name)
+}
+
 // registryCredentials reads the workspace secrets named by the keys of creds.
 // Values sent by the client are ignored; a secret is the only place they live.
 func (is *ContainerImageService) registryCredentials(ctx context.Context, creds map[string]string) (map[string]string, error) {
@@ -288,7 +302,7 @@ func (is *ContainerImageService) registryCredentials(ctx context.Context, creds 
 	}
 	for _, name := range names {
 		if resolved[name] == "" {
-			return nil, fmt.Errorf("registry credential %s is not a workspace secret; create it with `beta9 secret create %s <value>`", name, name)
+			return nil, &registryCredentialConfigError{name: name}
 		}
 	}
 	return resolved, nil
