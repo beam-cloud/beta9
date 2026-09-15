@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -334,6 +335,34 @@ func TestPublishStubCodeCacheAdoptsACacheAnotherPodPublished(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "third", string(data))
 	require.FileExists(t, readyPath)
+}
+
+// The cache is a shortcut shared with other pods on the node. When it cannot
+// be copied the object is extracted directly; a container never fails for it.
+func TestSetupContainerMountsRecoversFromAnUnusableStubCodeCache(t *testing.T) {
+	cacheRoot, err := os.MkdirTemp("/tmp", "sc") // short: a unix socket path is limited
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(cacheRoot) })
+	manager := NewContainerMountManager(types.AppConfig{
+		Storage: types.StorageConfig{WorkspaceStorage: types.WorkspaceStorageConfig{BaseMountPath: t.TempDir()}},
+	})
+	manager.codeCacheRoot = cacheRoot
+	workspace, objectID := "workspace-1", "object-1"
+	require.NoError(t, writeZipObject(filepath.Join(manager.storageConfig.WorkspaceStorage.BaseMountPath, workspace, types.DefaultObjectPrefix, objectID), map[string]string{"main.py": "print('hello')\n"}))
+
+	cachePath := filepath.Join(cacheRoot, stubCodeCacheKey(workspace, objectID))
+	require.NoError(t, os.MkdirAll(cachePath, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(cachePath, ".beta9-cache-ready"), []byte("ok"), 0644))
+	socket, err := net.Listen("unix", filepath.Join(cachePath, "main.py"))
+	require.NoError(t, err)
+	t.Cleanup(func() { socket.Close() })
+
+	request := stubCodeMountRequest("container-torn-cache", workspace, objectID)
+	t.Cleanup(func() { _ = os.RemoveAll(filepath.Dir(types.TempContainerWorkspace(request.ContainerId))) })
+	require.NoError(t, manager.SetupContainerMounts(context.Background(), request, discardLogger()))
+	data, err := os.ReadFile(filepath.Join(request.Mounts[0].LocalPath, "main.py"))
+	require.NoError(t, err)
+	require.Equal(t, "print('hello')\n", string(data))
 }
 
 // A bucket that cannot be mounted is left out of the container; the mounts

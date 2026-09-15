@@ -333,11 +333,21 @@ func (c *ContainerMountManager) setupUserCodeMount(ctx context.Context, request 
 	}
 
 	cachePath, err := c.ensureStubCodeCache(ctx, request)
-	if err != nil {
-		return "", err
+	if err == nil {
+		err = installContainerWorkspace(destPath, readyPath, request.ContainerId, func(tmpPath string) error {
+			return copyDirectoryContents(cachePath, tmpPath)
+		})
 	}
-
-	if err := copyDirectoryContentsAtomic(cachePath, destPath, readyPath, request.ContainerId); err != nil {
+	if err != nil {
+		// The cache is shared with the other worker pods on the node and is
+		// only a shortcut; the object is the source of truth. A cache that is
+		// torn or unreadable must never cost a container.
+		log.Warn().Str("container_id", request.ContainerId).Err(err).Msg("stub code cache unusable, extracting object directly")
+		err = installContainerWorkspace(destPath, readyPath, request.ContainerId, func(tmpPath string) error {
+			return c.extractStubCode(ctx, request, tmpPath)
+		})
+	}
+	if err != nil {
 		return "", err
 	}
 
@@ -479,7 +489,9 @@ func pathExists(path string) bool {
 	return err == nil
 }
 
-func copyDirectoryContentsAtomic(src, dest, readyPath, containerID string) error {
+// installContainerWorkspace has fill populate a fresh directory, then moves it
+// to dest and marks it ready, so a workspace is either complete or absent.
+func installContainerWorkspace(dest, readyPath, containerID string, fill func(tmpPath string) error) error {
 	tmpPath := fmt.Sprintf("%s.tmp.%s", dest, containerID)
 	if err := os.RemoveAll(tmpPath); err != nil {
 		return err
@@ -491,7 +503,7 @@ func copyDirectoryContentsAtomic(src, dest, readyPath, containerID string) error
 		return err
 	}
 
-	if err := copyDirectoryContents(src, tmpPath); err != nil {
+	if err := fill(tmpPath); err != nil {
 		_ = os.RemoveAll(tmpPath)
 		return err
 	}
