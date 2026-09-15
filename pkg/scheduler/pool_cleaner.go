@@ -141,6 +141,13 @@ func (c *WorkerResourceCleaner) deleteWorkerStatesWithoutJobs(ctx context.Contex
 		if _, exists := workerJobIds[worker.Id]; exists {
 			continue
 		}
+		jobName := fmt.Sprintf("%s-%s-%s", Beta9WorkerJobPrefix, c.PoolName, worker.Id)
+		_, err := c.KubeClient.BatchV1().Jobs(c.Config.Namespace).Get(ctx, jobName, metav1.GetOptions{})
+		if err == nil || !apierrors.IsNotFound(err) {
+			// The job may have been created after the list at the start of this
+			// cleanup pass. Only delete state after a point-in-time recheck.
+			continue
+		}
 
 		if err := c.deleteWorkerState(ctx, worker.Id); err != nil {
 			continue

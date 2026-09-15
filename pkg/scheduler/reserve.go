@@ -9,6 +9,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/bsm/redislock"
 	"github.com/rs/zerolog/log"
 )
 
@@ -171,6 +172,20 @@ func (a *schedulingAttempt) provisionWorker() {
 		return
 	}
 
+	// One provisioning attempt per container across scheduler replicas. A
+	// successful attempt keeps the lock until the pending-worker reservation
+	// expires, so a replica that has not yet seen the new worker cannot add
+	// a second one.
+	lockKey := common.RedisKeys.SchedulerWorkerProvisioningLock(a.request.ContainerId)
+	if err := a.scheduler.workerProvisioningLock.Acquire(a.scheduler.ctx, lockKey, common.RedisLockOptions{TtlS: int(pendingWorkerReservationTTL.Seconds())}); err != nil {
+		if !errors.Is(err, redislock.ErrNotObtained) {
+			requestLog(log.Error(), a.request).Err(err).Msg("unable to acquire worker provisioning lock")
+		}
+		a.recordBacklogWait(false, "worker_provisioning_in_progress")
+		a.requeueForWorkerWaitDelay(provisioningWorkerRequeueDelay, "worker_provisioning_in_progress")
+		return
+	}
+
 	metrics.RecordSchedulerWorkerWait(time.Since(a.request.Timestamp), a.request, "no_worker")
 
 	a.request.ProvisioningAttempts++
@@ -279,6 +294,10 @@ func (a *workerProvisioningAttempt) run() {
 	defer func() {
 		if releaseOnReturn {
 			a.scheduler.provisioning.release(a.reservationID)
+			lockKey := common.RedisKeys.SchedulerWorkerProvisioningLock(a.request.ContainerId)
+			if err := a.scheduler.workerProvisioningLock.Release(lockKey); err != nil && !errors.Is(err, redislock.ErrLockNotHeld) {
+				requestLog(log.Error(), a.request).Err(err).Msg("unable to release worker provisioning lock")
+			}
 		}
 	}()
 
@@ -310,7 +329,7 @@ func (a *workerProvisioningAttempt) run() {
 	}
 
 	workerLog(requestLog(log.Info(), a.request), newWorker).Msg("added new worker")
-	releaseOnReturn = false
+	releaseOnReturn = false // the reservation and its lock now belong to the pending worker
 	a.scheduler.provisioning.handoff(a.reservationID, newWorker)
 }
 

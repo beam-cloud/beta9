@@ -52,6 +52,7 @@ type Scheduler struct {
 	eventBus              *common.EventBus
 
 	provisioning              *provisioningTracker
+	workerProvisioningLock    *common.RedisLock
 	workerProvisioningBackoff *workerProvisioningBackoff
 	credentials               *schedulerCredentialCache
 	agentPoolMu               sync.Mutex
@@ -151,6 +152,7 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 		eventRepo:                 eventRepo,
 		schedulerUsageMetrics:     schedulerUsage,
 		provisioning:              newProvisioningTracker(),
+		workerProvisioningLock:    common.NewRedisLock(redisClient),
 		workerProvisioningBackoff: newWorkerProvisioningBackoff(),
 		credentials:               newSchedulerCredentialCache(),
 		pushComputeEvent:          pushPoolMetrics,
