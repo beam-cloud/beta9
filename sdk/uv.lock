@@ -117,7 +117,7 @@ wheels = [
 
 [[package]]
 name = "beta9"
-version = "0.1.267"
+version = "0.1.268"
 source = { editable = "." }
 dependencies = [
     { name = "asgiref" },
