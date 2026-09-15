@@ -1065,6 +1065,24 @@ type MonitoringConfig struct {
 	ContainerCostHookConfig  ContainerCostHookConfig `key:"containerCostHook" json:"container_cost_hook"`
 }
 
+// Metering is the part of a monitoring config that records and prices
+// container usage: the collector with its credentials and the cost hook. A
+// control-plane managed worker boots without one and receives the control
+// plane's at startup.
+func (m MonitoringConfig) Metering() MonitoringConfig {
+	return MonitoringConfig{MetricsCollector: m.MetricsCollector, Prometheus: m.Prometheus, OpenMeter: m.OpenMeter, ContainerCostHookConfig: m.ContainerCostHookConfig}
+}
+
+// Metered reports whether a collector is configured.
+func (m MonitoringConfig) Metered() bool {
+	return m.MetricsCollector != "" && m.MetricsCollector != string(MetricsCollectorNone)
+}
+
+// SetMetering replaces the metering part of m, keeping its local settings.
+func (m *MonitoringConfig) SetMetering(metering MonitoringConfig) {
+	m.MetricsCollector, m.Prometheus, m.OpenMeter, m.ContainerCostHookConfig = metering.MetricsCollector, metering.Prometheus, metering.OpenMeter, metering.ContainerCostHookConfig
+}
+
 const (
 	ManagedComputeDefaultMinimumCreditCents int64   = 2500
 	ManagedComputeDefaultBillableMarginPct  float64 = 0.10

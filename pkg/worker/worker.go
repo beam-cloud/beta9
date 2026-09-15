@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -498,6 +499,9 @@ func NewWorker() (_ *Worker, err error) {
 	if !poolFound {
 		return nil, errors.New("invalid worker pool name")
 	}
+	if err := hydrateManagedWorkerMetering(ctx, workerId, &config, poolConfig, workerRepoClient); err != nil {
+		return nil, err
+	}
 
 	ensureWritableSysfs()
 
@@ -728,6 +732,27 @@ func NewWorker() (_ *Worker, err error) {
 	worker.containerServer = containerServer
 
 	return worker, nil
+}
+
+// hydrateManagedWorkerMetering fetches the control plane's metering config
+// for a control-plane managed agent worker, which boots without one; failing
+// here stops the worker rather than letting it run containers unmetered.
+func hydrateManagedWorkerMetering(ctx context.Context, workerID string, config *types.AppConfig, pool types.WorkerPoolConfig, client pb.WorkerRepositoryServiceClient) error {
+	if pool.Mode != types.PoolModeExternal || !pool.AgentHosted() || config.Monitoring.Metered() {
+		return nil
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, containerRequestAckTimeout)
+	defer cancel()
+	resp, err := handleGRPCResponse(client.GetWorkerMeteringConfig(requestCtx, &pb.GetWorkerMeteringConfigRequest{WorkerId: workerID}))
+	if err != nil {
+		return fmt.Errorf("load managed worker metering config: %w", err)
+	}
+	var metering types.MonitoringConfig
+	if err := json.Unmarshal([]byte(resp.MeteringJson), &metering); err != nil {
+		return fmt.Errorf("load managed worker metering config: %w", err)
+	}
+	config.Monitoring.SetMetering(metering)
+	return nil
 }
 
 func (s *Worker) Run() error {

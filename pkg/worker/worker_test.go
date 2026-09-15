@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -125,6 +126,7 @@ type fakeWorkerRepoClient struct {
 	lastKeepAlive     *pb.SetWorkerKeepAliveRequest
 	disableErr        error
 	disables          int
+	metering          *pb.GetWorkerMeteringConfigResponse
 }
 
 // call records one fake RPC under the lock and returns its configured error.
@@ -158,8 +160,30 @@ func (f *fakeWorkerRepoClient) SetWorkerKeepAlive(ctx context.Context, req *pb.S
 	return &pb.SetWorkerKeepAliveResponse{Ok: true, PoolHeadroom: f.keepAliveHeadroom}, nil
 }
 
+func (f *fakeWorkerRepoClient) GetWorkerMeteringConfig(context.Context, *pb.GetWorkerMeteringConfigRequest, ...grpc.CallOption) (*pb.GetWorkerMeteringConfigResponse, error) {
+	return f.metering, nil
+}
+
 func (f *fakeWorkerRepoClient) disableCalls() int   { return f.count(&f.disables) }
 func (f *fakeWorkerRepoClient) keepAliveCalls() int { return f.count(&f.keepAlives) }
+
+func TestHydrateManagedWorkerMetering(t *testing.T) {
+	config := types.AppConfig{Monitoring: types.MonitoringConfig{MetricsCollector: string(types.MetricsCollectorNone), ContainerMetricsInterval: 3 * time.Second}}
+	metering := types.MonitoringConfig{
+		MetricsCollector:        string(types.MetricsCollectorOpenMeter),
+		OpenMeter:               types.OpenMeterConfig{ServerUrl: "https://meter.example.com", ApiKey: "meter-key"},
+		ContainerCostHookConfig: types.ContainerCostHookConfig{Endpoint: "https://billing.example.com/quote", Token: "quote-key"},
+	}
+	meteringJSON, _ := json.Marshal(metering)
+	provider := types.ProviderAgent
+	err := hydrateManagedWorkerMetering(context.Background(), "worker-1", &config, types.WorkerPoolConfig{
+		Mode: types.PoolModeExternal, Provider: &provider,
+	}, &fakeWorkerRepoClient{metering: &pb.GetWorkerMeteringConfigResponse{Ok: true, MeteringJson: string(meteringJSON)}})
+
+	require.NoError(t, err)
+	metering.ContainerMetricsInterval = 3 * time.Second
+	require.Equal(t, metering, config.Monitoring, "the vended metering joins the worker's local settings")
+}
 
 // idleTestWorker is a worker with no containers that asks repo for headroom
 // before an idle exit. Ages are set directly, without jitteredWorkerAge.
