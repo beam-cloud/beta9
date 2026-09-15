@@ -70,12 +70,8 @@ func (b *layeredBuild) storageArgs(sub string) []string {
 // id or path buildah prints), or both streams folded into the error on
 // failure.
 func (b *layeredBuild) quiet(sub string, args ...string) (string, error) {
-	return b.quietEnv(nil, sub, args...)
-}
-
-func (b *layeredBuild) quietEnv(extraEnv []string, sub string, args ...string) (string, error) {
 	var stdout, stderr strings.Builder
-	env := append(b.c.buildahEnv(b.runroot, b.tmpdir, b.storageConf), extraEnv...)
+	env := b.c.buildahEnv(b.runroot, b.tmpdir, b.storageConf)
 	cmd := newBuildahCommand(b.ctx, append(b.storageArgs(sub), args...), env, &stdout, &stderr)
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("buildah %s: %w: %s", sub, err, strings.TrimSpace(stderr.String()+"\n"+stdout.String()))
@@ -170,9 +166,11 @@ func (b *layeredBuild) step(step dockerfileStep) error {
 		for _, volume := range b.runVolumes {
 			args = append(args, "--volume", volume)
 		}
-		// Pass ARG values to the build container only. Adding them to
-		// buildah's own environment lets a tenant override its runtime,
-		// storage configuration, or dynamic loader before isolation starts.
+		// ARG values reach RUN as environment without persisting in the
+		// image, and only once the Dockerfile has declared them, as with
+		// Docker. They go to the build container only: in buildah's own
+		// environment a tenant-named ARG such as LD_PRELOAD or
+		// BUILDAH_ISOLATION would act on the worker.
 		for name := range b.declaredArgs {
 			value, given := b.buildArgs[name]
 			if _, isEnv := b.env[name]; given && !isEnv {
@@ -297,7 +295,8 @@ func (b *layeredBuild) shellForm(command string) []string {
 // gets the directory copied in through buildah, which needs nothing from the
 // image.
 func (b *layeredBuild) mkdir(dir string) error {
-	_, shellErr := b.quiet("run", b.container, "--", "/bin/sh", "-c", "mkdir -p -- \"$0\"", dir)
+	// The image's own /bin/sh runs here, so it is isolated like any RUN.
+	_, shellErr := b.quiet("run", append(buildahIsolationArgs(), b.container, "--", "/bin/sh", "-c", "mkdir -p -- \"$0\"", dir)...)
 	if shellErr == nil {
 		return nil
 	}

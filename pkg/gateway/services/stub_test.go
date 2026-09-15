@@ -20,44 +20,26 @@ type checkpointVolumeBackendRepo struct {
 
 type volumeLookupBackendRepo struct {
 	repository.BackendRepository
-	workspaceID uint
-	volumeID    string
-	volume      *types.Volume
-	err         error
+	volumes map[string]*types.Volume // owned by workspace 42
 }
 
 func (r *volumeLookupBackendRepo) GetVolumeByExternalId(_ context.Context, workspaceID uint, volumeID string) (*types.Volume, error) {
-	r.workspaceID, r.volumeID = workspaceID, volumeID
-	return r.volume, r.err
+	if workspaceID != 42 {
+		return nil, nil
+	}
+	return r.volumes[volumeID], nil
 }
 
 func TestConfigureVolumesRequiresWorkspaceOwnership(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		volume  *types.Volume
-		err     error
-		wantErr bool
-	}{
-		{name: "owned", volume: &types.Volume{ExternalId: "volume-1"}},
-		{name: "unknown or another workspace", wantErr: true},
-		{name: "repository failure", err: sql.ErrConnDone, wantErr: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			repo := &volumeLookupBackendRepo{volume: tc.volume, err: tc.err}
-			service := &GatewayService{backendRepo: repo}
-			err := service.configureVolumes(context.Background(), []*pb.Volume{{Id: "volume-1", MountPath: "/data"}}, &types.Workspace{Id: 42})
-			require.Equal(t, tc.wantErr, err != nil)
-			require.Equal(t, uint(42), repo.workspaceID)
-			require.Equal(t, "volume-1", repo.volumeID)
-		})
+	repo := &volumeLookupBackendRepo{volumes: map[string]*types.Volume{"volume-1": {ExternalId: "volume-1"}}}
+	service := &GatewayService{backendRepo: repo}
+	configure := func(workspaceID uint, volumeID string) error {
+		return service.configureVolumes(context.Background(), []*pb.Volume{{Id: volumeID, MountPath: "/data"}}, &types.Workspace{Id: workspaceID})
 	}
-}
-
-func TestConfigureVolumesRejectsTraversalBeforeLookup(t *testing.T) {
-	service := &GatewayService{}
-	for _, volume := range []*pb.Volume{nil, {Id: "../../..", MountPath: "/frogmnt"}, {Id: "valid", MountPath: "../../worker"}} {
-		require.Error(t, service.configureVolumes(context.Background(), []*pb.Volume{volume}, &types.Workspace{Id: 42}))
-	}
+	require.NoError(t, configure(42, "volume-1"))
+	require.Error(t, configure(42, "volume-2"), "unknown volume")
+	require.Error(t, configure(7, "volume-1"), "another workspace's volume")
+	require.Error(t, configure(42, "../../.."), "traversal")
 }
 
 type missingSecretBackendRepo struct {

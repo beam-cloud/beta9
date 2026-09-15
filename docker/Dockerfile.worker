@@ -274,7 +274,7 @@ ln -s /usr/local/bin/nvidia-container-cli /usr/bin/nvidia-container-cli
 EOT
 RUN apt-get update && apt-get install -y fuse3 libfuse2 libfuse3-dev libfuse-dev bash-completion
 
-# OCI-isolated Buildah RUN steps need the bridge/loopback CNI plugins.
+# buildah run --network=private builds its bridge from the CNI plugins.
 RUN apt-get install -y libbtrfs-dev libgpgme11-dev containernetworking-plugins
 RUN mkdir -p /etc/containers/registries.conf.d
 RUN curl -L https://raw.githubusercontent.com/containers/shortnames/refs/heads/main/shortnames.conf \
@@ -374,7 +374,7 @@ case "$TARGETARCH" in
 esac
 EOT
 
-RUN apt-get install -y ripgrep wget
+RUN apt-get install -y wget
 
 RUN if [ "$TARGETARCH" = "arm64" ]; then \
       wget https://github.com/beam-cloud/goproc/releases/download/v0.1.12/goproc-0.1.12-linux-arm64 -O /usr/local/bin/goproc && chmod +x /usr/local/bin/goproc ; \

@@ -2172,6 +2172,14 @@ runroot = "%s"
 	return f.Name(), nil
 }
 
+// buildahIsolationArgs give a RUN step its own PID, IPC and network
+// namespaces. Its commands are tenant code and the worker is privileged, so
+// nothing of the worker's may be reachable from them. Explicit flags win over
+// BUILDAH_ISOLATION and containers.conf.
+func buildahIsolationArgs() []string {
+	return []string{"--isolation=oci", "--pid=private", "--ipc=private", "--network=private"}
+}
+
 // buildahEnv returns environment variables for buildah
 func (c *ImageClient) buildahEnv(runroot, tmpdir, storageConf string) []string {
 	env := append(os.Environ(),
