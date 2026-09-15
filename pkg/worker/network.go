@@ -64,6 +64,7 @@ const (
 	containerNetworkCleanupRPCTimeout   time.Duration = 30 * time.Second
 	containerNetworkCleanupLockRetries                = 14
 	containerNetworkSlotAcquireAttempts               = 3
+	buildahNetworkConfigPath                          = "/etc/cni/net.d/87-podman-bridge.conflist"
 )
 
 type ContainerNetworkManager struct {
@@ -434,6 +435,9 @@ func NewContainerNetworkManager(ctx context.Context, workerId, poolName string, 
 	if err != nil {
 		return nil, err
 	}
+	if err := writeBuildahNetworkConfig(buildahNetworkConfigPath, defaultLink.Attrs().MTU); err != nil {
+		return nil, fmt.Errorf("failed to configure buildah network: %w", err)
+	}
 
 	ipTablesMode := detectIptablesMode()
 
@@ -527,6 +531,46 @@ func NewContainerNetworkManager(ctx context.Context, workerId, poolName string, 
 	}
 
 	return m, nil
+}
+
+func writeBuildahNetworkConfig(path string, mtu int) error {
+	if mtu <= 0 {
+		return fmt.Errorf("invalid default interface MTU: %d", mtu)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+
+	config := fmt.Sprintf(`{
+  "cniVersion": "0.4.0",
+  "name": "podman",
+  "plugins": [
+    {
+      "type": "bridge",
+      "bridge": "cni-podman0",
+      "isGateway": true,
+      "ipMasq": true,
+      "hairpinMode": true,
+      "mtu": %d,
+      "ipam": {
+        "type": "host-local",
+        "routes": [{"dst": "0.0.0.0/0"}],
+        "ranges": [[{"subnet": "10.88.0.0/16", "gateway": "10.88.0.1"}]]
+      },
+      "capabilities": {"ips": true}
+    },
+    {
+      "type": "portmap",
+      "capabilities": {"portMappings": true}
+    },
+    {"type": "firewall"},
+    {"type": "tuning"}
+  ]
+}
+`, mtu)
+
+	return os.WriteFile(path, []byte(config), 0o644)
 }
 
 func (m *ContainerNetworkManager) lockContainerNetwork(containerId string) func() {

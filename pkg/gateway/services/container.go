@@ -197,6 +197,9 @@ func (gws GatewayService) StopContainer(ctx context.Context, in *pb.StopContaine
 
 	state, err := gws.containerRepo.GetContainerState(in.ContainerId)
 	if err != nil {
+		if (&types.ErrContainerStateNotFound{}).From(err) {
+			return &pb.StopContainerResponse{Ok: true}, nil
+		}
 		return &pb.StopContainerResponse{
 			Ok:       false,
 			ErrorMsg: fmt.Sprintf("Container not found: %s", in.ContainerId),
