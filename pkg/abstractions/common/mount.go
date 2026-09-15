@@ -1,14 +1,35 @@
 package abstractions
 
 import (
+	"errors"
+	"fmt"
 	"path"
+	"slices"
+	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/storage"
 	"github.com/beam-cloud/beta9/pkg/types"
+	pb "github.com/beam-cloud/beta9/proto"
 )
 
 const defaultExternalVolumesPath string = "/tmp/external-volumes"
+
+// ValidateVolume rejects ids and mount paths that would carry a bind mount
+// source, or the symlink to it, outside the workspace's own directories.
+// Bucket mounts have no volume record, so their id may be empty.
+func ValidateVolume(v *pb.Volume) error {
+	if v == nil {
+		return errors.New("volume is required")
+	}
+	if (v.Id == "" && v.Config == nil) || v.Id == "." || v.Id == ".." || strings.Contains(v.Id, "/") {
+		return fmt.Errorf("invalid volume id %q", v.Id)
+	}
+	if slices.Contains(strings.Split(v.MountPath, "/"), "..") {
+		return fmt.Errorf("invalid volume mount path %q", v.MountPath)
+	}
+	return nil
+}
 
 func ConfigureContainerRequestMounts(containerId string, stub *types.StubWithRelated, workspace *types.Workspace, config types.StubConfigV1) ([]types.Mount, error) {
 	secretKey, err := common.ParseSecretKey(*workspace.SigningKey)
@@ -32,6 +53,10 @@ func ConfigureContainerRequestMounts(containerId string, stub *types.StubWithRel
 	}
 
 	for _, v := range config.Volumes {
+		// Stub configs persisted before validation existed are checked here.
+		if err := ValidateVolume(v); err != nil {
+			return nil, err
+		}
 		mount := types.Mount{
 			LocalPath: path.Join(types.DefaultVolumesPath, workspace.Name, v.Id),
 			LinkPath:  path.Join(types.TempContainerWorkspace(containerId), v.MountPath),

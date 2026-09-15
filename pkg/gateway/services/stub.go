@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/abstractions/endpoint"
 	"github.com/beam-cloud/beta9/pkg/abstractions/function"
 	"github.com/beam-cloud/beta9/pkg/abstractions/taskqueue"
@@ -1182,7 +1183,20 @@ func (gws *GatewayService) GetURL(ctx context.Context, in *pb.GetURLRequest) (*p
 
 func (gws *GatewayService) configureVolumes(ctx context.Context, volumes []*pb.Volume, workspace *types.Workspace) error {
 	for i, volume := range volumes {
-		if volume.Config != nil {
+		if err := abstractions.ValidateVolume(volume); err != nil {
+			return err
+		}
+		if volume.Config == nil {
+			// The id becomes a path under the workspace's volumes directory:
+			// only a volume this workspace owns may be mounted.
+			owned, err := gws.backendRepo.GetVolumeByExternalId(ctx, workspace.Id, volume.Id)
+			if err != nil {
+				return fmt.Errorf("failed to resolve volume %q", volume.Id)
+			}
+			if owned == nil {
+				return fmt.Errorf("volume %q does not exist in this workspace", volume.Id)
+			}
+		} else {
 			// De-reference secrets
 			accessKey, err := gws.backendRepo.GetSecretByName(ctx, workspace, volume.Config.AccessKey)
 			if err != nil {

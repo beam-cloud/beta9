@@ -18,6 +18,30 @@ type checkpointVolumeBackendRepo struct {
 	repository.BackendRepository
 }
 
+type volumeLookupBackendRepo struct {
+	repository.BackendRepository
+	volumes map[string]*types.Volume // owned by workspace 42
+}
+
+func (r *volumeLookupBackendRepo) GetVolumeByExternalId(_ context.Context, workspaceID uint, volumeID string) (*types.Volume, error) {
+	if workspaceID != 42 {
+		return nil, nil
+	}
+	return r.volumes[volumeID], nil
+}
+
+func TestConfigureVolumesRequiresWorkspaceOwnership(t *testing.T) {
+	repo := &volumeLookupBackendRepo{volumes: map[string]*types.Volume{"volume-1": {ExternalId: "volume-1"}}}
+	service := &GatewayService{backendRepo: repo}
+	configure := func(workspaceID uint, volumeID string) error {
+		return service.configureVolumes(context.Background(), []*pb.Volume{{Id: volumeID, MountPath: "/data"}}, &types.Workspace{Id: workspaceID})
+	}
+	require.NoError(t, configure(42, "volume-1"))
+	require.Error(t, configure(42, "volume-2"), "unknown volume")
+	require.Error(t, configure(7, "volume-1"), "another workspace's volume")
+	require.Error(t, configure(42, "../../.."), "traversal")
+}
+
 type missingSecretBackendRepo struct {
 	repository.BackendRepository
 }

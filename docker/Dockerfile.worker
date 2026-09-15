@@ -274,7 +274,8 @@ ln -s /usr/local/bin/nvidia-container-cli /usr/bin/nvidia-container-cli
 EOT
 RUN apt-get update && apt-get install -y fuse3 libfuse2 libfuse3-dev libfuse-dev bash-completion
 
-RUN apt-get install -y libbtrfs-dev libgpgme11-dev
+# buildah run --network=private builds its bridge from the CNI plugins.
+RUN apt-get install -y libbtrfs-dev libgpgme11-dev containernetworking-plugins
 RUN mkdir -p /etc/containers/registries.conf.d
 RUN curl -L https://raw.githubusercontent.com/containers/shortnames/refs/heads/main/shortnames.conf \
     -o /etc/containers/registries.conf.d/shortnames.conf
@@ -373,7 +374,7 @@ case "$TARGETARCH" in
 esac
 EOT
 
-RUN apt-get install -y ripgrep wget
+RUN apt-get install -y wget
 
 RUN if [ "$TARGETARCH" = "arm64" ]; then \
       wget https://github.com/beam-cloud/goproc/releases/download/v0.1.12/goproc-0.1.12-linux-arm64 -O /usr/local/bin/goproc && chmod +x /usr/local/bin/goproc ; \
@@ -437,7 +438,7 @@ RUN mkdir -p /run/gvisor
 
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics,ngx,video
 ENV _BUILDAH_STARTED_IN_USERNS="" \
-    BUILDAH_ISOLATION=chroot
+    BUILDAH_ISOLATION=oci
 
 # Configure buildah/containers for better concurrency
 # image_parallel_copies controls how many layers can be pushed/pulled simultaneously

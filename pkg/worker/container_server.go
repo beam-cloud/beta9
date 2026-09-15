@@ -1,16 +1,16 @@
 package worker
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"os"
-	"os/exec"
-	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -595,32 +595,31 @@ func (s *ContainerRuntimeServer) ContainerSyncWorkspace(ctx context.Context, in 
 		return &pb.SyncContainerWorkspaceResponse{Ok: false}, nil
 	}
 
-	workspacePath := types.TempContainerWorkspace(in.ContainerId)
-	destPath := path.Join(workspacePath, in.Path)
-	destNewPath := path.Join(workspacePath, in.NewPath)
+	// Paths are relative to the workspace; Root fails any that resolve outside it.
+	root, err := os.OpenRoot(types.TempContainerWorkspace(in.ContainerId))
+	if err != nil {
+		return &pb.SyncContainerWorkspaceResponse{Ok: false}, nil
+	}
+	defer root.Close()
+	destPath := strings.TrimPrefix(in.Path, "/")
+	destNewPath := strings.TrimPrefix(in.NewPath, "/")
 
 	switch in.Op {
 	case pb.SyncContainerWorkspaceOperation_DELETE:
-		if err := os.RemoveAll(destPath); err != nil {
-			return &pb.SyncContainerWorkspaceResponse{Ok: false}, nil
-		}
+		err = root.RemoveAll(destPath)
 	case pb.SyncContainerWorkspaceOperation_WRITE:
 		if in.IsDir {
-			os.MkdirAll(destPath, 0755)
-		} else {
-			os.MkdirAll(path.Dir(destPath), 0755)
-			if err := os.WriteFile(destPath, in.Data, 0644); err != nil {
-				return &pb.SyncContainerWorkspaceResponse{Ok: false}, nil
-			}
+			err = root.MkdirAll(destPath, 0755)
+		} else if err = root.MkdirAll(filepath.Dir(destPath), 0755); err == nil {
+			err = root.WriteFile(destPath, in.Data, 0644)
 		}
 	case pb.SyncContainerWorkspaceOperation_MOVED:
-		os.MkdirAll(path.Dir(destNewPath), 0755)
-		if err := os.Rename(destPath, destNewPath); err != nil {
-			return &pb.SyncContainerWorkspaceResponse{Ok: false}, nil
+		if err = root.MkdirAll(filepath.Dir(destNewPath), 0755); err == nil {
+			err = root.Rename(destPath, destNewPath)
 		}
 	}
 
-	return &pb.SyncContainerWorkspaceResponse{Ok: true}, nil
+	return &pb.SyncContainerWorkspaceResponse{Ok: err == nil}, nil
 }
 
 // waitForContainer waits for a container to be running
@@ -676,19 +675,6 @@ func waitForContainerRetry(ctx context.Context) error {
 	case <-timer.C:
 		return nil
 	}
-}
-
-func (s *ContainerRuntimeServer) getHostPathFromContainerPath(containerPath string, instance *ContainerInstance) string {
-	// Check mounts first
-	for _, mount := range instance.Spec.Mounts {
-		if containerPath == mount.Destination || strings.HasPrefix(containerPath, mount.Destination+"/") {
-			relativePath := strings.TrimPrefix(containerPath, mount.Destination)
-			return filepath.Join(mount.Source, strings.TrimPrefix(relativePath, "/"))
-		}
-	}
-
-	// Use root path (already set to overlay merged path in lifecycle.go)
-	return filepath.Join(instance.Spec.Root.Path, strings.TrimPrefix(filepath.Clean(containerPath), "/"))
 }
 
 // Sandbox methods follow (these are runtime-agnostic and work with the sandbox process manager)
@@ -1254,15 +1240,18 @@ func (s *ContainerRuntimeServer) ContainerSandboxUploadFile(ctx context.Context,
 	// For gVisor: write to external mount, then mv inside container to avoid caching issues
 	// External mounts are always shared (no caching) per gVisor docs
 	if instance.Runtime != nil && instance.Runtime.Name() == types.ContainerRuntimeGvisor.String() {
-		if err := s.waitForContainer(ctx, in.ContainerId); err != nil {
-			return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: err.Error()}, nil
-		}
-
-		// Write to external bind mount
-		tempFile := fmt.Sprintf("upload_%d", time.Now().UnixNano())
+		// The sandbox writes this directory too, so the temp file is created
+		// exclusively under a name it cannot have planted a symlink at.
+		tempFile := "upload_" + uuid.NewString()
 		tempHostPath := filepath.Join(types.WorkerContainerUploadsHostPath, in.ContainerId, tempFile)
-		if err := os.WriteFile(tempHostPath, in.Data, os.FileMode(in.Mode)); err != nil {
-			return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: err.Error()}, nil
+		file, err := os.OpenFile(tempHostPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, os.FileMode(in.Mode))
+		if err != nil {
+			return &pb.ContainerSandboxUploadFileResponse{ErrorMsg: err.Error()}, nil
+		}
+		defer os.Remove(tempHostPath) // gone already if the container moved it
+		_, err = file.Write(in.Data)
+		if err = errors.Join(err, file.Close()); err != nil {
+			return &pb.ContainerSandboxUploadFileResponse{ErrorMsg: err.Error()}, nil
 		}
 
 		tempContainerPath := filepath.Join(types.WorkerContainerUploadsMountPath, tempFile)
@@ -1285,7 +1274,6 @@ func (s *ContainerRuntimeServer) ContainerSandboxUploadFile(ctx context.Context,
 			Cmd:         cmd,
 			Env:         instance.Spec.Process.Env,
 		}); err != nil || !resp.Ok {
-			os.Remove(tempHostPath)
 			return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: "Failed to write uploaded data"}, nil
 		}
 
@@ -1293,15 +1281,19 @@ func (s *ContainerRuntimeServer) ContainerSandboxUploadFile(ctx context.Context,
 	}
 
 	// For runc: direct write to overlay
-	hostPath := s.getHostPathFromContainerPath(containerPath, instance)
-	if err := os.MkdirAll(filepath.Dir(hostPath), 0755); err != nil {
+	root, name, err := containerRoot(instance, containerPath, true)
+	if err != nil {
+		return &pb.ContainerSandboxUploadFileResponse{ErrorMsg: err.Error()}, nil
+	}
+	defer root.Close()
+	if err := root.MkdirAll(filepath.Dir(name), 0755); err != nil {
 		return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: fmt.Sprintf("failed to create directory for %s: %s", containerPath, err.Error())}, nil
 	}
 	flags := os.O_CREATE | os.O_WRONLY
 	if in.Offset == 0 {
 		flags |= os.O_TRUNC
 	}
-	file, err := os.OpenFile(hostPath, flags, os.FileMode(in.Mode))
+	file, err := root.OpenFile(name, flags, os.FileMode(in.Mode))
 	if err != nil {
 		return &pb.ContainerSandboxUploadFileResponse{ErrorMsg: err.Error()}, nil
 	}
@@ -1328,8 +1320,12 @@ func (s *ContainerRuntimeServer) ContainerSandboxCreateDirectory(ctx context.Con
 		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
 	}
 
-	hostPath := s.getHostPathFromContainerPath(filepath.Clean(containerPath), instance)
-	if err := os.MkdirAll(hostPath, os.FileMode(in.Mode)); err != nil {
+	root, name, err := containerRoot(instance, containerPath, true)
+	if err != nil {
+		return &pb.ContainerSandboxCreateDirectoryResponse{ErrorMsg: err.Error()}, nil
+	}
+	defer root.Close()
+	if err := root.MkdirAll(name, os.FileMode(in.Mode)); err != nil {
 		return &pb.ContainerSandboxCreateDirectoryResponse{Ok: false, ErrorMsg: fmt.Sprintf("failed to create directory %s: %s", containerPath, err.Error())}, nil
 	}
 
@@ -1351,8 +1347,12 @@ func (s *ContainerRuntimeServer) ContainerSandboxDeleteDirectory(ctx context.Con
 		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
 	}
 
-	hostPath := s.getHostPathFromContainerPath(filepath.Clean(containerPath), instance)
-	if err := os.RemoveAll(hostPath); err != nil {
+	root, name, err := containerRoot(instance, containerPath, true)
+	if err != nil {
+		return &pb.ContainerSandboxDeleteDirectoryResponse{ErrorMsg: err.Error()}, nil
+	}
+	defer root.Close()
+	if err := root.RemoveAll(name); err != nil {
 		return &pb.ContainerSandboxDeleteDirectoryResponse{Ok: false, ErrorMsg: fmt.Sprintf("failed to delete directory %s: %s", containerPath, err.Error())}, nil
 	}
 
@@ -1378,8 +1378,12 @@ func (s *ContainerRuntimeServer) ContainerSandboxDownloadFile(ctx context.Contex
 		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
 	}
 
-	hostPath := s.getHostPathFromContainerPath(containerPath, instance)
-	file, err := os.Open(hostPath)
+	root, name, err := containerRoot(instance, containerPath, false)
+	if err != nil {
+		return &pb.ContainerSandboxDownloadFileResponse{ErrorMsg: err.Error()}, nil
+	}
+	defer root.Close()
+	file, err := root.Open(name)
 	if err != nil {
 		return &pb.ContainerSandboxDownloadFileResponse{Ok: false, ErrorMsg: fmt.Sprintf("failed to read file from %s: %s", containerPath, err.Error())}, nil
 	}
@@ -1415,8 +1419,12 @@ func (s *ContainerRuntimeServer) ContainerSandboxDeleteFile(ctx context.Context,
 		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
 	}
 
-	hostPath := s.getHostPathFromContainerPath(containerPath, instance)
-	err = os.RemoveAll(hostPath)
+	root, name, err := containerRoot(instance, containerPath, true)
+	if err != nil {
+		return &pb.ContainerSandboxDeleteFileResponse{ErrorMsg: err.Error()}, nil
+	}
+	defer root.Close()
+	err = root.RemoveAll(name)
 	if err != nil {
 		return &pb.ContainerSandboxDeleteFileResponse{Ok: false, ErrorMsg: fmt.Sprintf("failed to delete file %s: %s", containerPath, err.Error())}, nil
 	}
@@ -1440,8 +1448,12 @@ func (s *ContainerRuntimeServer) ContainerSandboxStatFile(ctx context.Context, i
 		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
 	}
 
-	hostPath := s.getHostPathFromContainerPath(containerPath, instance)
-	stat, err := os.Stat(hostPath)
+	root, name, err := containerRoot(instance, containerPath, false)
+	if err != nil {
+		return &pb.ContainerSandboxStatFileResponse{ErrorMsg: err.Error()}, nil
+	}
+	defer root.Close()
+	stat, err := root.Stat(name)
 	if err != nil {
 		return &pb.ContainerSandboxStatFileResponse{Ok: false, ErrorMsg: fmt.Sprintf("failed to stat file %s: %s", containerPath, err.Error())}, nil
 	}
@@ -1474,15 +1486,19 @@ func (s *ContainerRuntimeServer) ContainerSandboxListFiles(ctx context.Context, 
 		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
 	}
 
-	hostPath := s.getHostPathFromContainerPath(containerPath, instance)
-	files, err := os.ReadDir(hostPath)
+	root, name, err := containerRoot(instance, containerPath, false)
+	if err != nil {
+		return &pb.ContainerSandboxListFilesResponse{ErrorMsg: err.Error()}, nil
+	}
+	defer root.Close()
+	files, err := fs.ReadDir(root.FS(), name)
 	if err != nil {
 		return &pb.ContainerSandboxListFilesResponse{Ok: false, ErrorMsg: fmt.Sprintf("failed to list files in %s: %s", containerPath, err.Error())}, nil
 	}
 
 	responseFiles := make([]*pb.FileInfo, 0)
 	for _, file := range files {
-		stat, err := file.Info()
+		stat, err := root.Lstat(filepath.Join(name, file.Name()))
 		if err != nil {
 			return &pb.ContainerSandboxListFilesResponse{Ok: false, ErrorMsg: fmt.Sprintf("failed to get file info for %s: %s", file.Name(), err.Error())}, nil
 		}
@@ -1670,14 +1686,18 @@ func (s *ContainerRuntimeServer) ContainerSandboxReplaceInFiles(ctx context.Cont
 		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
 	}
 
-	hostPath := s.getHostPathFromContainerPath(containerPath, instance)
-	stagedFiles, err := stageFilesForReplacement(hostPath, in.Pattern, in.NewString)
+	root, name, err := containerRoot(instance, containerPath, true)
+	if err != nil {
+		return &pb.ContainerSandboxReplaceInFilesResponse{ErrorMsg: err.Error()}, nil
+	}
+	defer root.Close()
+	stagedFiles, err := stageFilesForReplacement(root, name, in.Pattern, in.NewString)
 	if err != nil {
 		return &pb.ContainerSandboxReplaceInFilesResponse{Ok: false, ErrorMsg: fmt.Sprintf("failed to replace in files at %s: %s", containerPath, err.Error())}, nil
 	}
 
 	for _, stagedFile := range stagedFiles {
-		err = os.WriteFile(stagedFile.Path, []byte(stagedFile.Content), 0644)
+		err = root.WriteFile(stagedFile.Path, []byte(stagedFile.Content), 0644)
 		if err != nil {
 			return &pb.ContainerSandboxReplaceInFilesResponse{Ok: false, ErrorMsg: fmt.Sprintf("failed to write replaced file %s: %s", stagedFile.Path, err.Error())}, nil
 		}
@@ -1702,112 +1722,32 @@ func (s *ContainerRuntimeServer) ContainerSandboxFindInFiles(ctx context.Context
 		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
 	}
 
-	hostPath := s.getHostPathFromContainerPath(containerPath, instance)
-
-	// Build ripgrep command with JSON output format
-	args := []string{
-		"--json",
-		"--line-number",
-		"--column",
-		"--with-filename",
-		"--no-heading",
-		"--no-messages",
-		"--no-ignore",
-		"--hidden",
-		"--binary",
-		"--regexp", in.Pattern,
-		hostPath,
-	}
-
-	cmd := exec.CommandContext(ctx, "rg", args...)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err = cmd.Run()
+	regex, err := regexp.Compile(in.Pattern)
 	if err != nil {
-		// ripgrep returns exit code 1 when no matches are found
-		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
-			return &pb.ContainerSandboxFindInFilesResponse{Ok: true, Results: []*pb.FileSearchResult{}}, nil
-		}
-		return &pb.ContainerSandboxFindInFilesResponse{
-			Ok:       false,
-			ErrorMsg: fmt.Sprintf("failed to search for '%s' in %s: ripgrep failed: %v, stderr: %s", in.Pattern, containerPath, err, stderr.String()),
-		}, nil
+		return &pb.ContainerSandboxFindInFilesResponse{ErrorMsg: err.Error()}, nil
 	}
-
-	// Parse ripgrep JSON output
-	results := []*pb.FileSearchResult{}
-	fileMatches := make(map[string][]*pb.FileSearchMatch)
-
-	lines := strings.Split(stdout.String(), "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-
-		var rgResult struct {
-			Type string `json:"type"`
-			Data struct {
-				Path struct {
-					Text string `json:"text"`
-				} `json:"path"`
-				Lines struct {
-					Text string `json:"text"`
-				} `json:"lines"`
-				LineNumber     int `json:"line_number"`
-				AbsoluteOffset int `json:"absolute_offset"`
-				Submatches     []struct {
-					Match struct {
-						Text string `json:"text"`
-					} `json:"match"`
-					Start int `json:"start"`
-					End   int `json:"end"`
-				} `json:"submatches"`
-			} `json:"data"`
-		}
-
-		if err := json.Unmarshal([]byte(line), &rgResult); err != nil {
-			log.Warn().Str("line", line).Err(err).Msg("failed to parse ripgrep JSON output")
-			continue
-		}
-
-		if rgResult.Type != "match" {
-			continue
-		}
-
-		filePath := rgResult.Data.Path.Text
-		lineNum := rgResult.Data.LineNumber
-
-		for _, submatch := range rgResult.Data.Submatches {
-			startCol := submatch.Start + 1
-			endCol := submatch.End
-
-			match := &pb.FileSearchMatch{
-				Range: &pb.FileSearchRange{
-					Start: &pb.FileSearchPosition{
-						Line:   int32(lineNum),
-						Column: int32(startCol),
-					},
-					End: &pb.FileSearchPosition{
-						Line:   int32(lineNum),
-						Column: int32(endCol),
-					},
-				},
-				Content: submatch.Match.Text,
-			}
-
-			cleanedPath := filepath.Clean(filepath.Join(containerPath, strings.TrimPrefix(filePath, hostPath+string(os.PathSeparator))))
-			fileMatches[cleanedPath] = append(fileMatches[cleanedPath], match)
-		}
+	root, name, err := containerRoot(instance, containerPath, false)
+	if err != nil {
+		return &pb.ContainerSandboxFindInFilesResponse{ErrorMsg: err.Error()}, nil
 	}
+	defer root.Close()
 
-	for filePath, matches := range fileMatches {
-		results = append(results, &pb.FileSearchResult{
-			Path:    filePath,
-			Matches: matches,
-		})
+	var results []*pb.FileSearchResult
+	err = walkContainerFiles(root, name, func(fileName string) error {
+		file, err := root.Open(fileName)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		matches, err := searchFile(file, regex)
+		if len(matches) > 0 {
+			rel, _ := filepath.Rel(name, fileName)
+			results = append(results, &pb.FileSearchResult{Path: filepath.Join(containerPath, rel), Matches: matches})
+		}
+		return err
+	})
+	if err != nil {
+		return &pb.ContainerSandboxFindInFilesResponse{ErrorMsg: fmt.Sprintf("failed to search for '%s' in %s: %s", in.Pattern, containerPath, err.Error())}, nil
 	}
 
 	return &pb.ContainerSandboxFindInFilesResponse{Ok: true, Results: results}, nil
@@ -1815,47 +1755,100 @@ func (s *ContainerRuntimeServer) ContainerSandboxFindInFiles(ctx context.Context
 
 // Helper types and functions
 
+// containerRoot opens the host directory that backs containerPath and returns
+// the path relative to it. Every later open goes through the returned Root,
+// so ".." and symlinks, including absolute ones like /var/run -> /run, resolve
+// inside the container's filesystem and never the worker's. Bind mounts win
+// over the rootfs, longest destination first, as they do in the container.
+func containerRoot(instance *ContainerInstance, containerPath string, write bool) (*os.Root, string, error) {
+	containerPath = filepath.Clean("/" + containerPath)
+	mount := specs.Mount{Source: instance.Spec.Root.Path, Destination: "/"}
+	for _, m := range instance.Spec.Mounts {
+		dest := filepath.Clean(m.Destination)
+		if len(dest) >= len(mount.Destination) && (containerPath == dest || strings.HasPrefix(containerPath, dest+"/")) {
+			mount = m
+			mount.Destination = dest
+		}
+	}
+	// proc, sysfs, tmpfs and the like have no host directory behind them.
+	if !filepath.IsAbs(mount.Source) {
+		return nil, "", fmt.Errorf("%s is not on a bind mount or the root filesystem", containerPath)
+	}
+	if write && slices.Contains(mount.Options, "ro") {
+		return nil, "", fmt.Errorf("%s is read-only", containerPath)
+	}
+	root, err := os.OpenRoot(mount.Source)
+	if err != nil {
+		return nil, "", err
+	}
+	name, _ := filepath.Rel(mount.Destination, containerPath)
+	return root, name, nil
+}
+
+// walkContainerFiles visits the regular files under base. Symlinks are not
+// followed; visit reopens each file through root at the point of use.
+func walkContainerFiles(root *os.Root, base string, visit func(string) error) error {
+	return fs.WalkDir(root.FS(), base, func(name string, entry fs.DirEntry, err error) error {
+		if err == nil && entry.Type().IsRegular() {
+			return visit(name)
+		}
+		return err
+	})
+}
+
+// A longer line is not text worth searching.
+const maxSearchLineBytes = 16 << 20
+
+// searchFile reports regex matches as 1-based line and column ranges. A file
+// with a NUL byte is binary and has no matches.
+func searchFile(r io.Reader, regex *regexp.Regexp) ([]*pb.FileSearchMatch, error) {
+	var matches []*pb.FileSearchMatch
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(nil, maxSearchLineBytes)
+	for line := int32(1); scanner.Scan(); line++ {
+		text := scanner.Bytes()
+		if bytes.IndexByte(text, 0) >= 0 {
+			return nil, nil
+		}
+		for _, loc := range regex.FindAllIndex(text, -1) {
+			matches = append(matches, &pb.FileSearchMatch{
+				Range: &pb.FileSearchRange{
+					Start: &pb.FileSearchPosition{Line: line, Column: int32(loc[0] + 1)},
+					End:   &pb.FileSearchPosition{Line: line, Column: int32(loc[1])},
+				},
+				Content: string(text[loc[0]:loc[1]]),
+			})
+		}
+	}
+	if err := scanner.Err(); err != nil && !errors.Is(err, bufio.ErrTooLong) {
+		return nil, err
+	}
+	return matches, nil
+}
+
 type StagedFile struct {
 	Path    string
 	Content string
 }
 
-func stageFilesForReplacement(basePath string, stringToReplace string, stringToReplaceWith string) ([]StagedFile, error) {
+func stageFilesForReplacement(root *os.Root, basePath string, stringToReplace string, stringToReplaceWith string) ([]StagedFile, error) {
 	stagedFiles := []StagedFile{}
 	regex, err := regexp.Compile(stringToReplace)
 	if err != nil {
 		return nil, err
 	}
-
-	filepath.WalkDir(basePath, func(path string, d os.DirEntry, err error) error {
-		if err != nil && os.IsNotExist(err) {
-			return nil
+	err = walkContainerFiles(root, basePath, func(name string) error {
+		content, err := root.ReadFile(name)
+		if err != nil {
+			return err
 		}
-
-		if !d.IsDir() {
-			file, err := os.Open(path)
-			if err != nil {
-				return err
-			}
-			defer file.Close()
-
-			content, err := io.ReadAll(file)
-			if err != nil {
-				return err
-			}
-
-			if regex.Match(content) {
-				content = regex.ReplaceAll(content, []byte(stringToReplaceWith))
-			}
-
+		if regex.Match(content) {
 			stagedFiles = append(stagedFiles, StagedFile{
-				Path:    path,
-				Content: string(content),
+				Path:    name,
+				Content: string(regex.ReplaceAll(content, []byte(stringToReplaceWith))),
 			})
 		}
-
 		return nil
 	})
-
-	return stagedFiles, nil
+	return stagedFiles, err
 }

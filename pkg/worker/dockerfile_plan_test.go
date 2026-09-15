@@ -1,6 +1,12 @@
 package worker
 
 import (
+	"context"
+	"io"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
@@ -180,6 +186,31 @@ func TestLayeredBuildConfigFileAppliesInstructions(t *testing.T) {
 	require.Contains(t, cfg.Config.Env, "NEW=v")
 	require.Contains(t, cfg.Config.Env, "PATH=/x")
 	require.NotContains(t, cfg.Config.Env, "PATH=/usr/bin")
+}
+
+// RUN steps get private namespaces, and ARG values reach only the build
+// container: a tenant must not be able to set buildah's own environment.
+func TestLayeredBuildRunIsIsolatedFromWorker(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "buildah"), []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$RECORD\"\nenv >> \"$RECORD\"\n"), 0755))
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("RECORD", filepath.Join(dir, "record"))
+	t.Setenv("BUILDAH_ISOLATION", "chroot")
+	b := &layeredBuild{
+		c: &ImageClient{}, ctx: context.Background(), out: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		container: "ctr", storage: "vfs",
+		declaredArgs: map[string]struct{}{"LD_PRELOAD": {}},
+		buildArgs:    map[string]string{"LD_PRELOAD": "/tenant.so"},
+	}
+	require.NoError(t, b.step(dockerfileStep{kind: stepRun, exec: []string{"true"}}))
+	record, err := os.ReadFile(filepath.Join(dir, "record"))
+	require.NoError(t, err)
+	lines := strings.Split(string(record), "\n")
+	require.Subset(t, lines, buildahIsolationArgs())
+	require.Contains(t, lines, "--env")
+	require.Contains(t, lines, "LD_PRELOAD=/tenant.so", "the value is an argument to buildah")
+	require.Contains(t, lines, "BUILDAH_ISOLATION=oci", "the worker's default overrides the inherited one")
+	require.Equal(t, 1, strings.Count(string(record), "LD_PRELOAD="), "and not in buildah's environment")
 }
 
 func TestUnescapeMountField(t *testing.T) {
