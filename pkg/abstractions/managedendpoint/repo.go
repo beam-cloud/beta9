@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/google/go-containerregistry/pkg/name"
@@ -27,25 +28,33 @@ import (
 // outcome: config.yaml publishes each app and places it on GPU types. Pull
 // requests call the same RPC as a dry run.
 
-const imageCheckTimeout = 15 * time.Second
+const (
+	imageCheckTimeout = 15 * time.Second
+	applyLockKey      = "managed_endpoint:apply"
+	applyLockTTL      = time.Minute
+)
 
 // ApplyRepo validates one commit of the endpoints repo and, unless dry_run,
 // records deploy outcomes, applies config.yaml and retires apps whose
-// directory is gone. Validation problems are returned in errors.
+// directory is gone. Validation problems are returned in errors. Commits
+// apply one at a time across gateways; a concurrent CI run waits its turn.
 func (s *Service) ApplyRepo(ctx context.Context, in *pb.ApplyRepoRequest) (*pb.ApplyRepoResponse, error) {
 	out := &pb.ApplyRepoResponse{}
 	return admin(s, ctx, out, func() error {
-		state, err := s.applyRepo(ctx, in, out)
-		if state != nil {
-			out.State = gitopsToProto(state)
-		}
-		if err != nil {
-			return err
-		}
-		if len(out.Errors) > 0 {
-			return fmt.Errorf("%d problem(s) found", len(out.Errors))
-		}
-		return nil
+		opts := common.RedisLockOptions{TtlS: int(applyLockTTL.Seconds()), Retries: int(applyLockTTL / time.Second), RetryInterval: time.Second}
+		return s.lock.WithLease(ctx, applyLockKey, opts, func(ctx context.Context) error {
+			state, err := s.applyRepo(ctx, in, out)
+			if state != nil {
+				out.State = gitopsToProto(state)
+			}
+			if err != nil {
+				return err
+			}
+			if len(out.Errors) > 0 {
+				return fmt.Errorf("%d problem(s) found", len(out.Errors))
+			}
+			return nil
+		})
 	})
 }
 

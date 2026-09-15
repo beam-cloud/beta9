@@ -45,24 +45,23 @@ func TestOpenMeterEventTimeUsesIntervalStart(t *testing.T) {
 	}
 }
 
-func TestOpenMeterEndpointBucketEventIDIsStable(t *testing.T) {
-	data := map[string]interface{}{"workspace_id": "ws-1", "endpoint_id": "acme/model", "interval_start": "2026-09-09T17:00:00Z", "interval_end": "2026-09-09T17:01:00Z", "value": 3}
-	first := openMeterEventID("gateway", "endpoint_requests", data)
-	data["value"] = 7
-	if again := openMeterEventID("gateway", "endpoint_requests", data); again != first {
-		t.Fatalf("event id changed with the value: %s != %s", again, first)
+func TestOpenMeterChargeEventIDIsStable(t *testing.T) {
+	data := map[string]interface{}{"charge_id": "req-1", "kind": "spend", "workspace_id": "ws-1", "endpoint_id": "acme/model", "settled_at": "2026-09-09T17:00:00Z", "micro_usd": 700}
+	first := openMeterEventID("gateway", "endpoint_usage", data)
+	data["micro_usd"] = 900
+	if again := openMeterEventID("gateway", "endpoint_usage", data); again != first {
+		t.Fatalf("event id changed with the payload: %s != %s", again, first)
 	}
 	for name, other := range map[string]map[string]interface{}{
-		"bucket":    {"workspace_id": "ws-1", "endpoint_id": "acme/model", "interval_start": "2026-09-09T17:01:00Z", "interval_end": "2026-09-09T17:02:00Z"},
-		"workspace": {"workspace_id": "ws-2", "endpoint_id": "acme/model", "interval_start": "2026-09-09T17:00:00Z", "interval_end": "2026-09-09T17:01:00Z"},
-		"endpoint":  {"workspace_id": "ws-1", "endpoint_id": "acme/other", "interval_start": "2026-09-09T17:00:00Z", "interval_end": "2026-09-09T17:01:00Z"},
+		"charge": {"charge_id": "req-2", "kind": "spend"},
+		"kind":   {"charge_id": "req-1", "kind": "earned"},
 	} {
-		if openMeterEventID("gateway", "endpoint_requests", other) == first {
+		if openMeterEventID("gateway", "endpoint_usage", other) == first {
 			t.Fatalf("a different %s produced the same event id", name)
 		}
 	}
-	if openMeterEventID("gateway", "endpoint_cost", data) == first {
-		t.Fatal("different metrics for one bucket must not collide")
+	if got := openMeterEventTime(data); !got.Equal(time.Date(2026, 9, 9, 17, 0, 0, 0, time.UTC)) {
+		t.Fatalf("event time = %v, want settled_at", got)
 	}
 }
 

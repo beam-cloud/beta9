@@ -4,36 +4,34 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/sync/errgroup"
 )
 
 // billing is the one accounting path. A Charge snapshots the caller, app
 // version and price when a request is accepted; finishing it prices what the
-// app reported and journals it; accounting applies the journal to the usage
-// counters, the credit gate and the billing meter, then closes the journal
-// entry. Anything left pending after a crash is finished by the next flush.
+// app reported, journals it and meters it right away. Anything the inline
+// path left pending (a crash, the meter down) is finished by the next flush,
+// which one gateway runs at a time.
 
 const (
 	chargeTTL       = time.Hour // journal retention after accounting
 	billingLockKey  = "managed_endpoint:meter"
 	billingLockTTL  = 30 * time.Second
 	billingInterval = 5 * time.Second
+	pendingRetry    = 30 * time.Second // how long a journaled charge is left to the gateway that finished it
 	pendingBatch    = 100
 )
 
-type billing struct {
-	s    *Service
-	lock *common.RedisLock
-}
+type billing struct{ s *Service }
 
-func newBilling(s *Service) *billing {
-	return &billing{s: s, lock: common.NewRedisLock(s.rdb)}
-}
+func newBilling(s *Service) *billing { return &billing{s: s} }
 
 func (b *billing) run(ctx context.Context) {
 	ticker := time.NewTicker(billingInterval)
@@ -44,7 +42,7 @@ func (b *billing) run(ctx context.Context) {
 			return
 		case <-ticker.C:
 		}
-		err := b.lock.WithLease(ctx, billingLockKey, common.RedisLockOptions{TtlS: int(billingLockTTL.Seconds()), Retries: 0}, b.flush)
+		err := b.s.lock.WithLease(ctx, billingLockKey, common.RedisLockOptions{TtlS: int(billingLockTTL.Seconds()), Retries: 0}, b.flush)
 		if err != nil && !common.IsRedisLockNotObtained(err) {
 			log.Warn().Err(err).Msg("managed endpoints: billing flush failed; will retry")
 		}
@@ -86,36 +84,54 @@ func (b *billing) finish(ctx context.Context, c *types.Charge, replica *types.En
 	return nil
 }
 
-// account applies a settled charge to the caller's spend, the provider's
-// earnings and the credit gate, then closes the journal entry. Every step is
-// idempotent on the charge id, so a retry after a partial failure charges once.
+// account meters a settled charge for the caller (spend) and, when a
+// contributed machine served it, for the provider (earned), refreshes the
+// credit gate and closes the journal entry. The meter deduplicates on the
+// charge id, so a retry after a partial failure bills once.
 func (b *billing) account(ctx context.Context, c *types.Charge) error {
 	if c.Status == types.ChargeSettled {
-		if err := b.s.repo.AddUsage(ctx, types.UsageSpend, c.WorkspaceID, c.AppID, c.ID, c.SettledAt, c.Usage()); err != nil {
-			return fmt.Errorf("record spend: %w", err)
+		if err := b.meter(types.UsageSpend, c.WorkspaceID, c, c.Usage()); err != nil {
+			return err
+		}
+		if c.ProviderWorkspaceID != "" {
+			earned := types.Usage{Work: c.Work, Cost: types.Cost{MicroUSD: c.ProviderShareMicroUSD}}
+			if err := b.meter(types.UsageEarned, c.ProviderWorkspaceID, c, earned); err != nil {
+				return err
+			}
 		}
 		if c.Cost.MicroUSD > 0 && b.s.scheduler != nil {
 			if gate := b.s.scheduler.CreditGate(); gate != nil {
 				gate.Invalidate(ctx, c.WorkspaceID)
 			}
 		}
-		if c.ProviderWorkspaceID != "" {
-			earned := types.Usage{Work: c.Work, Cost: types.Cost{MicroUSD: c.ProviderShareMicroUSD}}
-			if err := b.s.repo.AddUsage(ctx, types.UsageEarned, c.ProviderWorkspaceID, c.AppID, c.ID, c.SettledAt, earned); err != nil {
-				return fmt.Errorf("record provider earnings: %w", err)
-			}
-		}
 	}
 	return b.s.repo.CompleteAccounting(ctx, c.ID, chargeTTL)
 }
 
-// flush finishes pending accounting oldest first, then delivers closed
-// minute buckets to the billing meter, stopping at the first failure.
-func (b *billing) flush(ctx context.Context) error {
-	if err := b.migrate(ctx); err != nil {
-		return err
+// meter sends one endpoint_usage event carrying every Usage field; each
+// field has its own meter, so billing aggregates any component without
+// repricing historical tokens.
+func (b *billing) meter(kind types.UsageKind, workspaceID string, c *types.Charge, u types.Usage) error {
+	if b.s.usage == nil {
+		return errors.New("usage meter is not configured")
 	}
-	pending, err := b.s.repo.ListPendingCharges(ctx, time.Now(), pendingBatch)
+	data := map[string]any{
+		"charge_id": c.ID, "kind": string(kind), "workspace_id": workspaceID, "endpoint_id": c.AppID,
+		"settled_at": c.SettledAt.UTC().Format(time.RFC3339Nano),
+	}
+	for i, value := range u.Fields() {
+		data[types.UsageFieldNames[i]] = *value
+	}
+	if err := b.s.usage.IncrementCounter(types.UsageMetricsEndpointUsage, data, 1); err != nil {
+		return fmt.Errorf("meter %s %s: %w", kind, c.ID, err)
+	}
+	return nil
+}
+
+// flush finishes pending accounting oldest first, stopping at the first
+// failure. Charges younger than pendingRetry are still being metered inline.
+func (b *billing) flush(ctx context.Context) error {
+	pending, err := b.s.repo.ListPendingCharges(ctx, time.Now().Add(-pendingRetry), pendingBatch)
 	if err != nil {
 		return err
 	}
@@ -124,91 +140,42 @@ func (b *billing) flush(ctx context.Context) error {
 			return err
 		}
 	}
-	// AddUsage chooses the bucket using Redis TIME. Use the same clock to
-	// close it, so gateway clock skew cannot flush a still-writable minute.
-	now, err := b.s.rdb.Time(ctx).Result()
-	if err != nil {
-		return err
-	}
-	buckets, err := b.s.repo.ListMeterBuckets(ctx, now.Truncate(time.Minute).Add(-time.Second))
-	if err != nil {
-		return err
-	}
-	for _, bucket := range buckets {
-		if err := b.send(bucket); err != nil {
-			return fmt.Errorf("bucket %s: %w", bucket.Key, err)
-		}
-		if err := b.s.repo.DeleteMeterBucket(ctx, bucket.Key); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
-// migrate rewrites pre-consolidation route records still awaiting
-// accounting as charges, preserving their amounts, then marks the schema.
-// Billing readers verify the marker before trusting the counters.
-func (b *billing) migrate(ctx context.Context) error {
-	schema, err := b.s.repo.GetChargeSchema(ctx)
-	if err != nil || schema == repository.ChargeSchema {
-		return err
+// Usage reads one workspace's spend or earnings back from the billing meter
+// as the dashboard shows it: totals, per UTC day and per model.
+func Usage(ctx context.Context, meter repository.UsageMetricsRepository, kind types.UsageKind, workspaceID string, from, to time.Time) (*types.UsageReport, error) {
+	reader, ok := meter.(repository.UsageMeterReader)
+	if !ok {
+		return nil, errors.New("usage reporting requires a collector that keeps meters")
 	}
-	for {
-		pending, err := b.s.repo.ListPendingCharges(ctx, time.Now(), pendingBatch)
-		if err != nil {
-			return err
-		}
-		for _, c := range pending {
-			// GetCharge decoded legacy records into charges; write them back
-			// as charges so every later reader sees one schema.
-			if _, err := b.s.repo.SaveCharge(ctx, c); err != nil {
+	report := &types.UsageReport{PerModel: map[string]types.Usage{}, PerDay: map[string]types.Usage{}}
+	var mu sync.Mutex
+	g, ctx := errgroup.WithContext(ctx)
+	for i, field := range types.UsageFieldNames {
+		g.Go(func() error {
+			rows, err := reader.QueryMeter(ctx, types.EndpointUsageMeter(field), workspaceID, from, to, []string{"endpoint_id", "kind"})
+			if err != nil {
 				return err
 			}
-			if err := b.account(ctx, c); err != nil {
-				return err
+			mu.Lock()
+			defer mu.Unlock()
+			for _, row := range rows {
+				if row.GroupBy["kind"] != string(kind) {
+					continue
+				}
+				add := func(usage map[string]types.Usage, key string) {
+					u := usage[key]
+					*u.Fields()[i] += int64(row.Value)
+					usage[key] = u
+				}
+				*report.Total.Fields()[i] += int64(row.Value)
+				add(report.PerDay, row.WindowStart.UTC().Format(time.DateOnly))
+				add(report.PerModel, row.GroupBy["endpoint_id"])
 			}
-		}
-		if len(pending) < pendingBatch {
-			break
-		}
+			return nil
+		})
 	}
-	log.Info().Msg("managed endpoints: accounting journal migrated to charges")
-	return b.s.repo.SetChargeSchema(ctx, repository.ChargeSchema)
-}
-
-// send delivers one closed minute of usage as idempotent billing events; the
-// meter payload is derived from the same counters the usage API reports.
-func (b *billing) send(bucket types.MeterBucket) error {
-	if b.s.usage == nil {
-		return errors.New("usage meter is not configured")
-	}
-	for _, row := range bucket.Rows {
-		labels := map[string]any{
-			"workspace_id": row.WorkspaceID, "endpoint_id": row.Model,
-			"interval_start": bucket.Start.Format(time.RFC3339Nano), "interval_end": bucket.Start.Add(time.Minute).Format(time.RFC3339Nano),
-		}
-		// The complete price snapshot rides on the event so billing can
-		// aggregate any component without repricing historical tokens.
-		for i, value := range row.Usage.Fields() {
-			labels[types.UsageFieldNames[i]] = *value
-		}
-		counters := map[string]float64{types.UsageMetricsEndpointProviderEarnings: float64(row.Usage.MicroUSD) / 10_000}
-		if bucket.Kind == types.UsageSpend {
-			counters = map[string]float64{
-				types.UsageMetricsEndpointRequests:         float64(row.Usage.Requests),
-				types.UsageMetricsEndpointPromptTokens:     float64(row.Usage.PromptTokens),
-				types.UsageMetricsEndpointCompletionTokens: float64(row.Usage.CompletionTokens),
-				types.UsageMetricsEndpointCost:             float64(row.Usage.MicroUSD) / 10_000, // billing consumes cents
-			}
-		}
-		for metric, value := range counters {
-			if value <= 0 {
-				continue
-			}
-			if err := b.s.usage.IncrementCounter(metric, labels, value); err != nil {
-				return fmt.Errorf("%s %s/%s: %w", metric, row.WorkspaceID, row.Model, err)
-			}
-		}
-	}
-	return nil
+	return report, g.Wait()
 }

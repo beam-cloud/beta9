@@ -605,21 +605,15 @@ func (m RouteMetrics) MeanTPOTMs() int64 {
 	return max(m.DurationSumMs-m.TTFTSumMs, 0) / m.CompletionTokens
 }
 
-// MeterBucket is one closed minute of usage not yet delivered to the billing meter.
-type MeterBucket struct {
-	Key   string
-	Kind  UsageKind
-	Start time.Time
-	Rows  []MeterRow
-}
-
+// MeterRow is one aggregate returned by the billing meter: a window for one
+// subject, split by the requested dimensions.
 type MeterRow struct {
-	WorkspaceID string
-	Model       string
-	Usage       Usage
+	WindowStart time.Time
+	Value       float64
+	GroupBy     map[string]string
 }
 
-// MaxUsageCounter fits exactly in Redis Lua numbers and JavaScript clients.
+// MaxUsageCounter fits exactly in a float64 (the meter) and in JavaScript clients.
 const MaxUsageCounter int64 = 1<<53 - 1
 
 // Pricing has exactly two forms: a flat price per successful request,
@@ -723,6 +717,10 @@ func (u *Usage) Fields() []*int64 {
 
 var UsageFieldNames = []string{"requests", "prompt_tokens", "completion_tokens", "cached_tokens",
 	"micro_usd", "prompt_micro_usd", "completion_micro_usd", "cached_micro_usd", "request_micro_usd"}
+
+// EndpointUsageMeter names the billing meter that sums one Usage field over
+// endpoint_usage events, grouped by workspace_id, endpoint_id and kind.
+func EndpointUsageMeter(field string) string { return "endpoint_usage_" + field }
 
 type UsageReport struct {
 	Total    Usage            `json:"total"`
@@ -834,7 +832,7 @@ type Charge struct {
 	SettledAt      time.Time `json:"settled_at,omitempty"`
 }
 
-// Usage is the charge as one row of the usage counters.
+// Usage is the charge as what the caller was metered for.
 func (c *Charge) Usage() Usage { return Usage{Work: c.Work, Cost: c.Cost} }
 
 // Settle prices the reported work as one completed request and marks the

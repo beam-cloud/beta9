@@ -16,6 +16,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	cloudevents "github.com/cloudevents/sdk-go/v2/event"
 	openmeter "github.com/openmeterio/openmeter/api/client/go"
+	"github.com/openmeterio/openmeter/pkg/models"
 )
 
 const (
@@ -136,10 +137,10 @@ func openMeterEventID(source, name string, data map[string]interface{}) string {
 		sum := sha256.Sum256(identity)
 		return fmt.Sprintf("%x", sum)
 	}
-	// Managed endpoint usage is metered per closed minute bucket, workspace and
-	// model, so resending a bucket after an ambiguous failure is a no-op.
-	if endpointID, ok := data["endpoint_id"].(string); ok && endpointID != "" {
-		identity, _ := json.Marshal([]interface{}{source, name, data["workspace_id"], endpointID, data["interval_start"], data["interval_end"]})
+	// A managed endpoint charge is metered once per party (the caller's spend,
+	// the provider's earnings), so replaying a journaled charge is a no-op.
+	if chargeID, ok := data["charge_id"].(string); ok && chargeID != "" {
+		identity, _ := json.Marshal([]interface{}{source, name, chargeID, data["kind"]})
 		sum := sha256.Sum256(identity)
 		return fmt.Sprintf("%x", sum)
 	}
@@ -187,10 +188,38 @@ func isRetryableOpenMeterError(err error) bool {
 }
 
 func openMeterEventTime(data map[string]interface{}) time.Time {
-	if value, ok := data["interval_start"].(string); ok {
-		if intervalStart, err := time.Parse(time.RFC3339Nano, value); err == nil {
-			return intervalStart
+	for _, key := range []string{"interval_start", "settled_at"} {
+		if value, ok := data[key].(string); ok {
+			if t, err := time.Parse(time.RFC3339Nano, value); err == nil {
+				return t
+			}
 		}
 	}
 	return time.Now()
+}
+
+// QueryMeter sums one meter per UTC day for a subject between from and to,
+// split by the requested group-by dimensions.
+func (o *OpenMeterUsageMetricsRepository) QueryMeter(ctx context.Context, slug, subject string, from, to time.Time, groupBy []string) ([]types.MeterRow, error) {
+	window := openmeter.WindowSize(models.WindowSizeDay)
+	resp, err := o.client.QueryMeterWithResponse(ctx, slug, &openmeter.QueryMeterParams{
+		From: &from, To: &to, WindowSize: &window, Subject: &[]string{subject}, GroupBy: &groupBy,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("querying OpenMeter meter %s: %w", slug, err)
+	}
+	if resp.JSON200 == nil {
+		return nil, fmt.Errorf("querying OpenMeter meter %s: unexpected HTTP status %s", slug, resp.Status())
+	}
+	rows := make([]types.MeterRow, 0, len(resp.JSON200.Data))
+	for _, r := range resp.JSON200.Data {
+		row := types.MeterRow{WindowStart: r.WindowStart, Value: r.Value, GroupBy: make(map[string]string, len(r.GroupBy))}
+		for k, v := range r.GroupBy {
+			if v != nil {
+				row.GroupBy[k] = *v
+			}
+		}
+		rows = append(rows, row)
+	}
+	return rows, nil
 }

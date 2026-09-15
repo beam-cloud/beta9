@@ -2,14 +2,49 @@ package repository_services
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
+	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/stretchr/testify/require"
 )
+
+func TestGetWorkerMeteringConfigRequiresAssignedManagedSlot(t *testing.T) {
+	service := &WorkerRepositoryService{
+		workerRepo: &lifecycleWorkerRepo{worker: &types.Worker{
+			Id: "worker-1", WorkspaceId: "workspace-1", PoolName: "pool-1", MachineId: "machine-1", ControlPlaneManaged: true,
+		}},
+		computeRepo: &lifecycleComputeRepo{slots: []*compute.AgentWorkerSlotState{{
+			WorkerID: "worker-1", WorkerTokenID: "token-1",
+		}}},
+		appConfig: types.AppConfig{Monitoring: types.MonitoringConfig{
+			MetricsCollector:        string(types.MetricsCollectorOpenMeter),
+			OpenMeter:               types.OpenMeterConfig{ServerUrl: "https://meter.example.com", ApiKey: "meter-key"},
+			ContainerCostHookConfig: types.ContainerCostHookConfig{Endpoint: "https://billing.example.com/quote", Token: "quote-key"},
+		}},
+	}
+	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
+		Token:     &types.Token{ExternalId: "token-1", TokenType: types.TokenTypeWorker},
+		Workspace: &types.Workspace{ExternalId: "workspace-1"},
+	})
+
+	response, err := service.GetWorkerMeteringConfig(ctx, &pb.GetWorkerMeteringConfigRequest{WorkerId: "worker-1"})
+	require.NoError(t, err)
+	require.True(t, response.Ok)
+	var metering types.MonitoringConfig
+	require.NoError(t, json.Unmarshal([]byte(response.MeteringJson), &metering))
+	require.Equal(t, service.appConfig.Monitoring, metering)
+
+	service.computeRepo = &lifecycleComputeRepo{slots: []*compute.AgentWorkerSlotState{{WorkerID: "worker-1", WorkerTokenID: "another-token"}}}
+	response, err = service.GetWorkerMeteringConfig(ctx, &pb.GetWorkerMeteringConfigRequest{WorkerId: "worker-1"})
+	require.NoError(t, err)
+	require.False(t, response.Ok)
+}
 
 type claimWorkerRepo struct {
 	repository.WorkerRepository

@@ -66,9 +66,8 @@ type ManagedEndpointsReconcile struct {
 
 type ManagedEndpointsRoutingConfig struct {
 	SlowStartSeconds uint32 `key:"slowStartSeconds" json:"slow_start_seconds"`
-	// Per-gateway in-flight caps (each gateway admits up to this many); the
-	// cluster-wide bound is the replicas' MaxConcurrency, reserved atomically
-	// in Redis per request.
+	// Cluster-wide in-flight caps, leased in Redis per request across every
+	// gateway; the engines' own bound is the replicas' MaxConcurrency.
 	PerWorkspaceConcurrency uint32 `key:"perWorkspaceConcurrency" json:"per_workspace_concurrency"`
 	PerEndpointConcurrency  uint32 `key:"perEndpointConcurrency" json:"per_endpoint_concurrency"`
 }
@@ -1063,6 +1062,24 @@ type MonitoringConfig struct {
 	ContainerMetricsInterval time.Duration           `key:"containerMetricsInterval" json:"container_metrics_interval"`
 	VictoriaMetrics          VictoriaMetricsConfig   `key:"victoriametrics" json:"victoriametrics"`
 	ContainerCostHookConfig  ContainerCostHookConfig `key:"containerCostHook" json:"container_cost_hook"`
+}
+
+// Metering is the part of a monitoring config that records and prices
+// container usage: the collector with its credentials and the cost hook. A
+// control-plane managed worker boots without one and receives the control
+// plane's at startup.
+func (m MonitoringConfig) Metering() MonitoringConfig {
+	return MonitoringConfig{MetricsCollector: m.MetricsCollector, Prometheus: m.Prometheus, OpenMeter: m.OpenMeter, ContainerCostHookConfig: m.ContainerCostHookConfig}
+}
+
+// Metered reports whether a collector is configured.
+func (m MonitoringConfig) Metered() bool {
+	return m.MetricsCollector != "" && m.MetricsCollector != string(MetricsCollectorNone)
+}
+
+// SetMetering replaces the metering part of m, keeping its local settings.
+func (m *MonitoringConfig) SetMetering(metering MonitoringConfig) {
+	m.MetricsCollector, m.Prometheus, m.OpenMeter, m.ContainerCostHookConfig = metering.MetricsCollector, metering.Prometheus, metering.OpenMeter, metering.ContainerCostHookConfig
 }
 
 const (

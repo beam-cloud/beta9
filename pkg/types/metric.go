@@ -14,14 +14,10 @@ var (
 	UsageMetricsManagedComputeReservationCost    = "managed_compute_reservation_cost_cents"
 	UsageMetricsNodeUsage                        = "node_usage"
 
-	// Managed endpoint (/v1 route) keys
-	UsageMetricsEndpointPromptTokens     = "endpoint_prompt_tokens"
-	UsageMetricsEndpointCompletionTokens = "endpoint_completion_tokens"
-	UsageMetricsEndpointImages           = "endpoint_images"
-	UsageMetricsEndpointRequests         = "endpoint_requests"
-	UsageMetricsEndpointCost             = "endpoint_cost_cents"
-	// Credited to the provider workspace whose machine served the request.
-	UsageMetricsEndpointProviderEarnings = "endpoint_provider_earnings_cents"
+	// Managed endpoint accounting: one event per settled charge and party
+	// (spend for the caller, earned for the provider), carrying every Usage
+	// field. The meter for each field is EndpointUsageMeter(field).
+	UsageMetricsEndpointUsage = "endpoint_usage"
 )
 
 type TaskMetrics struct {

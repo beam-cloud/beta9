@@ -8,6 +8,8 @@ service WorkerRepositoryService {
       returns (stream GetNextContainerRequestResponse) {}
   rpc PushContainerLifecycleEvents(PushContainerLifecycleEventsRequest)
       returns (PushContainerLifecycleEventsResponse) {}
+  rpc GetWorkerMeteringConfig(GetWorkerMeteringConfigRequest)
+      returns (GetWorkerMeteringConfigResponse) {}
   rpc StreamWorkerEvents(StreamWorkerEventsRequest)
       returns (stream WorkerEvent) {}
   rpc SetImagePullLock(SetImagePullLockRequest)
@@ -656,4 +658,15 @@ message PushContainerLifecycleEventsRequest {
 message PushContainerLifecycleEventsResponse {
   bool ok = 1;
   string error_msg = 2;
+}
+
+message GetWorkerMeteringConfigRequest {
+  string worker_id = 1;
+}
+
+message GetWorkerMeteringConfigResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  // The control plane's metering configuration (types.MonitoringConfig.Metering) as JSON.
+  string metering_json = 3;
 }

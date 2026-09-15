@@ -2,10 +2,14 @@ package repository_services
 
 import (
 	"context"
+	"encoding/json"
+	"slices"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -222,6 +226,45 @@ func (s *WorkerRepositoryService) GetWorkerById(ctx context.Context, req *pb.Get
 	}
 
 	return &pb.GetWorkerByIdResponse{Ok: true, Worker: worker.ToProto()}, nil
+}
+
+// GetWorkerMeteringConfig vends the control plane's metering configuration
+// (collector credentials and cost hook) to a control-plane managed agent
+// worker, which boots without one. The caller must present the worker token
+// assigned to its own slot.
+func (s *WorkerRepositoryService) GetWorkerMeteringConfig(ctx context.Context, req *pb.GetWorkerMeteringConfigRequest) (*pb.GetWorkerMeteringConfigResponse, error) {
+	fail := func(msg string) (*pb.GetWorkerMeteringConfigResponse, error) {
+		return &pb.GetWorkerMeteringConfigResponse{ErrorMsg: msg}, nil
+	}
+	authInfo, ok := auth.AuthInfoFromContext(ctx)
+	if !ok || authInfo.Token == nil || authInfo.Workspace == nil || authInfo.Token.TokenType != types.TokenTypeWorker {
+		return fail("managed worker token is required")
+	}
+	worker, err := s.workerRepo.GetWorkerById(req.GetWorkerId())
+	if err != nil {
+		return fail(err.Error())
+	}
+	if worker == nil || !worker.ControlPlaneManaged || worker.WorkspaceId != authInfo.Workspace.ExternalId {
+		return fail("worker is not control-plane managed")
+	}
+	slots, err := s.computeRepo.ListAgentWorkerSlotStates(ctx, worker.WorkspaceId, worker.PoolName, worker.MachineId)
+	if err != nil {
+		return fail(err.Error())
+	}
+	if !slices.ContainsFunc(slots, func(slot *compute.AgentWorkerSlotState) bool {
+		return slot != nil && slot.WorkerID == worker.Id && slot.WorkerTokenID == authInfo.Token.ExternalId
+	}) {
+		return fail("worker token is not assigned to worker")
+	}
+	metering := s.appConfig.Monitoring.Metering()
+	if !metering.Metered() || metering.ContainerCostHookConfig.Endpoint == "" || metering.ContainerCostHookConfig.Token == "" {
+		return fail("managed worker metering is not configured")
+	}
+	data, err := json.Marshal(metering)
+	if err != nil {
+		return fail(err.Error())
+	}
+	return &pb.GetWorkerMeteringConfigResponse{Ok: true, MeteringJson: string(data)}, nil
 }
 
 func (s *WorkerRepositoryService) ToggleWorkerAvailable(ctx context.Context, req *pb.ToggleWorkerAvailableRequest) (*pb.ToggleWorkerAvailableResponse, error) {

@@ -90,6 +90,7 @@ type Service struct {
 	usage      repository.UsageMetricsRepository
 	scheduler  *scheduler.Scheduler
 	rdb        *common.RedisClient
+	lock       *common.RedisLock // cluster-wide: one gateway reconciles, flushes or applies at a time
 	tailscale  *network.Tailscale
 	drainCtx   context.Context
 
@@ -137,6 +138,7 @@ func New(ctx context.Context, opts Opts) (*Service, error) {
 		}
 		s.repo = repository.NewManagedEndpointRedisRepository(s.rdb)
 	}
+	s.lock = common.NewRedisLock(s.rdb)
 
 	s.controller = newController(s)
 	s.router = newRouter(s)
@@ -377,10 +379,11 @@ func mustJSON(v any) string {
 	return string(data)
 }
 
-// Leases. Both the per-replica capacity slot and the per-endpoint demand
-// record are Redis sorted sets with one expiring member per request, so a
-// crashed gateway's requests expire on their own while other traffic renews
-// the key, and a late release cannot touch a newer request's reservation.
+// Leases. Every request-scoped reservation (a replica's inflight slots, an
+// admission cap, an endpoint's demand record) is a Redis sorted set with one
+// expiring member per request, shared by every gateway: a crashed gateway's
+// requests expire on their own while other traffic renews the key, and a
+// late release cannot touch a newer request's reservation.
 
 const (
 	leaseTTL                    = time.Minute
@@ -392,9 +395,8 @@ const (
 )
 
 var (
-	errSlotLeaseLost   = errors.New("hosted endpoint capacity lease lost")
-	errDemandLeaseLost = errors.New("on-demand request lease expired")
-	errDemandLimit     = errors.New("on-demand endpoint request limit reached")
+	errLeaseLost   = errors.New("request lease lost")
+	errDemandLimit = errors.New("on-demand endpoint request limit reached")
 )
 
 // leaseOp is what a request does to a lease set.
@@ -408,7 +410,10 @@ const (
 	demandRead   leaseOp = "read"    // the controller samples demand
 )
 
-const slotScript = `
+// leaseScript keeps one bounded set: KEYS[1] set; ARGV[1] op, ARGV[2] member,
+// ARGV[3] ttl ms, ARGV[4] capacity (0 = unbounded). Returns 1 held, 0 full,
+// -1 renewing an expired member.
+const leaseScript = `
 local now = redis.call('TIME')
 now = now[1] * 1000 + math.floor(now[2] / 1000)
 redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', now)
@@ -427,22 +432,25 @@ redis.call('PEXPIRE', KEYS[1], ARGV[3])
 return 1
 `
 
-func slotKey(replicaID string) string { return "managed_endpoint:slots:" + replicaID }
+// slotKey bounds a replica's inflight requests (its MaxConcurrency);
+// admissionKey bounds the requests under one configured concurrency cap.
+func slotKey(replicaID string) string  { return "managed_endpoint:slots:" + replicaID }
+func admissionKey(scope string) string { return "managed_endpoint:admission:" + scope }
 
-// slot is one inflight reservation on a replica, bounding MaxConcurrency
-// across gateways. It reports whether the request holds the slot afterwards.
-func (s *Service) slot(ctx context.Context, replicaID string, op leaseOp, requestID string, capacity int64) (bool, error) {
-	if s.rdb == nil || replicaID == "" || requestID == "" {
-		return false, errors.New("hosted capacity requires redis and replica/request identities")
+// lease takes, renews or releases one request's member of a bounded lease
+// set and reports whether the request holds it afterwards.
+func (s *Service) lease(ctx context.Context, key string, op leaseOp, requestID string, capacity int64) (bool, error) {
+	if s.rdb == nil || requestID == "" {
+		return false, errors.New("leases require redis and a request identity")
 	}
 	ctx, cancel := context.WithTimeout(ctx, leaseOpTimeout)
 	defer cancel()
-	result, err := s.rdb.Eval(ctx, slotScript, []string{slotKey(replicaID)}, string(op), requestID, leaseTTL.Milliseconds(), capacity).Int64()
+	result, err := s.rdb.Eval(ctx, leaseScript, []string{key}, string(op), requestID, leaseTTL.Milliseconds(), capacity).Int64()
 	if err != nil {
 		return false, err
 	}
 	if result < 0 {
-		return false, errSlotLeaseLost
+		return false, errLeaseLost
 	}
 	return result == 1, nil
 }
@@ -501,7 +509,7 @@ func (s *Service) demand(ctx context.Context, endpointID string, op leaseOp, req
 	case values[0] == -2:
 		return nil, errDemandLimit
 	case values[0] < 0:
-		return nil, errDemandLeaseLost
+		return nil, errLeaseLost
 	}
 	return &endpointDemand{active: values[0], warm: values[1] == 1, pending: values[2] == 1}, nil
 }

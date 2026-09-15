@@ -1049,14 +1049,14 @@ func TestDemandAdmissionHeadroomPreservesScaleOut(t *testing.T) {
 	// lookup on admission. Request129 must reach the distributed demand set.
 	router := newRouter(s)
 	httpCtx, _ := coldRouteContext()
-	rq := &routeRequest{ctx: httpCtx, auth: httpCtx.AuthInfo, route: types.EndpointRouteChatCompletions, models: []string{endpoint.Spec.ID}, requestID: "request-129"}
+	rq := &routeRequest{ctx: httpCtx, auth: httpCtx.AuthInfo, route: types.EndpointRouteChatCompletions, models: []string{endpoint.Spec.ID}, requestID: "request-129", serverless: true}
 	resolved, rerr := router.resolveEndpoint(ctx, rq)
 	require.Nil(t, rerr)
 	require.NotNil(t, resolved)
 	assert.EqualValues(t, 128, rq.readyCapacity)
 	rq.app = resolved
-	release, err := router.holdDemand(rq)
-	require.NoError(t, err, "a full128-slot engine must allow a request to ask for the next replica")
+	release, rerr := router.hold(rq)
+	require.Nil(t, rerr, "a full128-slot engine must allow a request to ask for the next replica")
 	t.Cleanup(release)
 	live := []*types.EndpointReplica{replica}
 	demand := s.controller.readDemand(ctx, fleet, live)
@@ -1128,13 +1128,13 @@ func TestDemandCapacityAdmissionDoesNotOverflow(t *testing.T) {
 	}
 	router := newRouter(s)
 	httpCtx, _ := coldRouteContext()
-	rq := &routeRequest{ctx: httpCtx, auth: httpCtx.AuthInfo, route: types.EndpointRouteChatCompletions, models: []string{endpoint.Spec.ID}, requestID: "request"}
+	rq := &routeRequest{ctx: httpCtx, auth: httpCtx.AuthInfo, route: types.EndpointRouteChatCompletions, models: []string{endpoint.Spec.ID}, requestID: "request", serverless: true}
 	resolved, rerr := router.resolveEndpoint(ctx, rq)
 	require.Nil(t, rerr)
 	rq.app = resolved
 	assert.EqualValues(t, math.MaxInt64, rq.readyCapacity)
-	release, err := router.holdDemand(rq)
-	require.NoError(t, err, "adding queue allowance cannot wrap a large capacity into a negative limit")
+	release, rerr := router.hold(rq)
+	require.Nil(t, rerr, "adding queue allowance cannot wrap a large capacity into a negative limit")
 	release()
 }
 

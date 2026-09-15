@@ -9,15 +9,16 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/labstack/echo/v4"
-	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -426,8 +427,8 @@ func TestAdminReadRPCs(t *testing.T) {
 }
 
 // Every finished request is one Charge: the caller, the price and the
-// reported work are journaled together, the counters are updated once, and
-// the provider whose machine served it earns its share.
+// reported work are journaled together, metered once, and the provider whose
+// machine served it earns its share.
 func TestChargeFlowCreditsProviderWorkspace(t *testing.T) {
 	s := newServiceForTest(t)
 	ctx := context.Background()
@@ -446,9 +447,7 @@ func TestChargeFlowCreditsProviderWorkspace(t *testing.T) {
 	require.Equal(t, "ws-provider", c.ProviderWorkspaceID)
 	require.EqualValues(t, 700, c.ProviderShareMicroUSD) // default 70% share
 	require.Equal(t, types.Usage{Work: types.Work{Requests: 1, CompletionTokens: 1000}, Cost: types.Cost{MicroUSD: 1000, CompletionMicroUSD: 1000}}, spend(t, s, "user-ws"))
-	earned, err := s.repo.GetUsage(ctx, types.UsageEarned, "ws-provider", now, now)
-	require.NoError(t, err)
-	require.Equal(t, types.Usage{Work: types.Work{Requests: 1, CompletionTokens: 1000}, Cost: types.Cost{MicroUSD: 700}}, earned.Total)
+	require.Equal(t, types.Usage{Work: types.Work{Requests: 1, CompletionTokens: 1000}, Cost: types.Cost{MicroUSD: 700}}, metered(s, types.UsageEarned, "ws-provider"))
 
 	// A duplicate completion never double-counts; a free request earns nothing;
 	// a failed request is journaled void: never billed, never counted.
@@ -469,30 +468,25 @@ func TestChargeFlowCreditsProviderWorkspace(t *testing.T) {
 	require.Empty(t, pending, "nothing is left waiting for accounting")
 }
 
-// A charge journaled but not yet counted (a crash in between) and a
-// pre-consolidation route record are both finished by the next flush, exactly
-// once, with historical amounts preserved.
-func TestFlushAccountsPendingChargesAndMigratesLegacyRecords(t *testing.T) {
+// A charge journaled but not yet metered (a crash, or the meter down) is
+// finished by the next flush, exactly once.
+func TestFlushAccountsPendingCharges(t *testing.T) {
 	s := newServiceForTest(t)
 	ctx := context.Background()
 	c := &types.Charge{ID: "req-crash", WorkspaceID: "user-ws", AppID: "acme/model", Pricing: types.Pricing{Request: "0.01"}, AcceptedAt: time.Now()}
-	require.NoError(t, c.Settle(types.Work{}, time.Now()))
+	require.NoError(t, c.Settle(types.Work{}, time.Now().Add(-pendingRetry)))
 	_, err := s.repo.SaveCharge(ctx, c)
 	require.NoError(t, err)
-	legacy := `{"request_id":"gen-old","endpoint_id":"acme/image","workspace_id":"user-ws","status_code":200,"images":2,"cost_micro_usd":900,"image_micro_usd":900,"timestamp":"` + time.Now().UTC().Format(time.RFC3339Nano) + `"}`
-	require.NoError(t, s.rdb.Set(ctx, "managed_endpoint:generation:gen-old", legacy, 0).Err())
-	require.NoError(t, s.rdb.ZAdd(ctx, "managed_endpoint:accounting:pending", redis.Z{Score: float64(time.Now().Add(-time.Minute).Unix()), Member: "gen-old"}).Err())
 	require.Zero(t, spend(t, s, "user-ws").Requests)
 
+	s.usage.(*recordingMeter).fail = true
+	require.Error(t, s.billing.flush(ctx))
+	require.Zero(t, spend(t, s, "user-ws").Requests, "a rejected event leaves the charge pending")
+
+	s.usage.(*recordingMeter).fail = false
 	require.NoError(t, s.billing.flush(ctx))
 	total := spend(t, s, "user-ws")
-	require.EqualValues(t, 2, total.Requests)
-	require.EqualValues(t, 10_900, total.MicroUSD, "the historical image amount is preserved in the total")
-	require.EqualValues(t, 10_000, total.RequestMicroUSD, "and never reinterpreted as a per-request price")
-	schema, err := s.repo.GetChargeSchema(ctx)
-	require.NoError(t, err)
-	require.Equal(t, repository.ChargeSchema, schema)
-	require.Equal(t, types.ChargeSettled, charge(t, s, "gen-old").Status)
+	require.Equal(t, types.Usage{Work: types.Work{Requests: 1}, Cost: types.Cost{MicroUSD: 10_000, RequestMicroUSD: 10_000}}, total)
 
 	require.NoError(t, s.billing.flush(ctx))
 	require.Equal(t, total, spend(t, s, "user-ws"), "a second flush finds nothing to do")
@@ -516,6 +510,8 @@ func newServiceForTest(t *testing.T) *Service {
 		config:         config,
 		repo:           repository.NewManagedEndpointRedisRepository(rdb),
 		rdb:            rdb,
+		lock:           common.NewRedisLock(rdb),
+		usage:          &recordingMeter{},
 		drainCtx:       ctx,
 		adminWorkspace: &types.Workspace{Id: 1, ExternalId: "admin-ws", Name: "admin"},
 	}
@@ -657,8 +653,47 @@ func charge(t *testing.T, s *Service, id string) *types.Charge {
 
 func spend(t *testing.T, s *Service, workspaceID string) types.Usage {
 	t.Helper()
-	now := time.Now()
-	report, err := s.repo.GetUsage(context.Background(), types.UsageSpend, workspaceID, now.Add(-24*time.Hour), now)
-	require.NoError(t, err)
-	return report.Total
+	return metered(s, types.UsageSpend, workspaceID)
+}
+
+// recordingMeter stands in for OpenMeter: it keeps every endpoint_usage
+// event, deduplicated on charge and kind the way the real meter is.
+type recordingMeter struct {
+	mu     sync.Mutex
+	fail   bool
+	events map[string]map[string]any
+}
+
+func (m *recordingMeter) Init(string) error { return nil }
+func (m *recordingMeter) SetGauge(string, map[string]any, float64) error {
+	return nil
+}
+func (m *recordingMeter) IncrementCounter(name string, data map[string]any, _ float64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.fail {
+		return errors.New("meter unavailable")
+	}
+	if m.events == nil {
+		m.events = map[string]map[string]any{}
+	}
+	m.events[name+"|"+data["charge_id"].(string)+"|"+data["kind"].(string)] = data
+	return nil
+}
+
+// metered sums what one workspace was metered for, spend or earned.
+func metered(s *Service, kind types.UsageKind, workspaceID string) types.Usage {
+	m := s.usage.(*recordingMeter)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var total types.Usage
+	for _, data := range m.events {
+		if data["kind"] != string(kind) || data["workspace_id"] != workspaceID {
+			continue
+		}
+		for i, field := range total.Fields() {
+			*field += data[types.UsageFieldNames[i]].(int64)
+		}
+	}
+	return total
 }
