@@ -1,9 +1,8 @@
 """
-Managed endpoints: platform-owned inference endpoints declared in a git repo
-and served through ``/v1``. An ``app.py`` exports one ``ManagedEndpoint`` that
-says how the engine runs; ``config.yaml`` at the repo root says which endpoints
-fill each GPU type, in what order and with what cap. The GitOps reconciler
-deploys both. Beam handles placement automatically.
+Managed endpoints: platform-hosted model servers declared in a git repo and
+served through ``/v1``. An ``app.py`` exports one ``ManagedEndpoint`` that says
+only how the engine runs; the repo's ``config.yaml`` publishes it (catalog,
+access, pricing) and places it (which GPU types, priority, replica bounds).
 """
 
 import json
@@ -47,30 +46,6 @@ class Gpu:
     to_dict = asdict
 
 
-@dataclass
-class Pricing:
-    """USD decimal strings per unit. Empty dimensions are free."""
-
-    prompt_tokens: str = ""
-    completion_tokens: str = ""
-    cached_prompt_tokens: str = ""
-    request: str = ""
-    image: str = ""
-
-    to_dict = asdict
-
-
-@dataclass
-class Catalog:
-    """Display metadata. Pricing, access, and runtime behavior live on the endpoint."""
-
-    name: str = ""
-    description: str = ""
-    context_length: int = 0
-
-    to_dict = asdict
-
-
 GpuArg = Union[
     Dict[Union[GpuTypeAlias, str], Union[Gpu, None]],
     List[Union[GpuTypeAlias, str]],
@@ -95,7 +70,7 @@ def _normalize_gpu(gpu: GpuArg) -> Dict[str, Gpu]:
 
 
 class ManagedEndpoint(RunnerAbstraction):
-    """A platform-hosted inference endpoint; ``id`` (``vendor/slug``) is also the app name.
+    """A platform-hosted model server; ``id`` (``vendor/slug``) is also the app name.
 
     Parameters:
         id: ``vendor/slug``; also the model name callers send to ``/v1``.
@@ -106,13 +81,11 @@ class ManagedEndpoint(RunnerAbstraction):
         port / health / metrics: Where the engine listens and its readiness / Prometheus paths.
         gpu: GPU types the engine can run on, optionally with per-type ``Gpu`` settings.
             ``config.yaml`` sets replica minimums, limits, priority, and preemption.
-        routes: Override the default routes for ``kind``.
-        pricing / catalog: Billing and ``/v1/models`` metadata.
-        public / allowed_workspaces: Who may discover and call the endpoint. Defaults to admin-only.
-        Instrumented engines register live tuning automatically; Gpu.config supplies their seed.
         drain_seconds: Grace for in-flight requests on eviction or replacement; ``0`` is immediate.
         rollout: ``wait_for_capacity`` preserves the last serving replica. ``replace`` allows
             downtime to release its GPU for a new version when there is no spare capacity.
+
+    Catalog, access and pricing are not app settings: they live in ``config.yaml``.
     """
 
     def __init__(
@@ -126,11 +99,6 @@ class ManagedEndpoint(RunnerAbstraction):
         health: str = "/health",
         metrics: str = "",
         gpu: GpuArg = None,
-        routes: Optional[List[str]] = None,
-        pricing: Optional[Pricing] = None,
-        catalog: Optional[Catalog] = None,
-        public: bool = False,
-        allowed_workspaces: Optional[List[str]] = None,
         drain_seconds: int = 5,
         cpu: Union[int, float, str] = 4.0,
         memory: Union[int, str] = "16Gi",
@@ -145,11 +113,6 @@ class ManagedEndpoint(RunnerAbstraction):
         self.port = int(port)
         self.health = health
         self.metrics = metrics
-        self.routes = list(routes or [])
-        self.pricing = pricing or Pricing()
-        self.catalog = catalog or Catalog()
-        self.public = bool(public)
-        self.allowed_workspaces = list(allowed_workspaces or [])
         self.drain_seconds = int(drain_seconds)
         if rollout not in {"wait_for_capacity", "replace"}:
             raise ValueError("rollout must be wait_for_capacity or replace")
@@ -177,7 +140,7 @@ class ManagedEndpoint(RunnerAbstraction):
             self.image.ignore_python = True
 
     def spec(self) -> Dict[str, Any]:
-        """The endpoint spec as the gateway validates it (pkg/types ManagedEndpointSpec)."""
+        """The runtime spec as the gateway validates it (pkg/types ManagedEndpointSpec)."""
         spec = _drop_empty(
             {
                 "id": self.id,
@@ -187,11 +150,6 @@ class ManagedEndpoint(RunnerAbstraction):
                 "port": self.port,
                 "health": self.health,
                 "metrics": self.metrics,
-                "routes": self.routes,
-                "pricing": self.pricing.to_dict(),
-                "catalog": self.catalog.to_dict(),
-                "public": self.public,
-                "allowed_workspaces": self.allowed_workspaces,
                 "rollout": self.rollout,
             }
         )

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/require"
 )
@@ -33,7 +34,7 @@ func TestRelayStreamRequiresCompletionAndRetainsLatestUsage(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 			}
-			require.True(t, usage.Found)
+			require.NotNil(t, usage)
 			require.EqualValues(t, 12, usage.PromptTokens)
 			require.EqualValues(t, 7, usage.CompletionTokens)
 			require.Positive(t, ttft)
@@ -48,7 +49,7 @@ func TestRelayStreamCommitsAccountingBeforeTerminalMarker(t *testing.T) {
 		recorder := httptest.NewRecorder()
 		response := echo.NewResponse(recorder, echo.New())
 		calls := 0
-		_, _, err := relayStream(response, strings.NewReader(stream), "gen-test", time.Now(), func(u Usage, _ time.Duration) error {
+		_, _, err := relayStream(response, strings.NewReader(stream), "gen-test", time.Now(), func(u *types.Work, _ time.Duration) error {
 			calls++
 			require.NotContains(t, recorder.Body.String(), "[DONE]")
 			require.EqualValues(t, 64, u.CachedTokens)
@@ -116,7 +117,7 @@ func TestRelayStreamPreservesMultilineToolsReasoningAndExactNumbers(t *testing.T
 	recorder := httptest.NewRecorder()
 	u, ttft, err := relayStream(echo.NewResponse(recorder, echo.New()), strings.NewReader(stream), "gen-test", time.Now(), nil)
 	require.NoError(t, err)
-	require.True(t, u.Found)
+	require.NotNil(t, u)
 	require.EqualValues(t, 12, u.CachedTokens)
 	require.Positive(t, ttft)
 	body := recorder.Body.String()
@@ -145,7 +146,7 @@ func TestRelayStreamRejectsErrorFinishReasonAndMalformedJSON(t *testing.T) {
 	} {
 		recorder := httptest.NewRecorder()
 		calls := 0
-		_, ttft, err := relayStream(echo.NewResponse(recorder, echo.New()), strings.NewReader("data: "+frame+"\n\ndata: [DONE]\n\n"), "gen-test", time.Now(), func(Usage, time.Duration) error { calls++; return nil })
+		_, ttft, err := relayStream(echo.NewResponse(recorder, echo.New()), strings.NewReader("data: "+frame+"\n\ndata: [DONE]\n\n"), "gen-test", time.Now(), func(*types.Work, time.Duration) error { calls++; return nil })
 		require.ErrorIs(t, err, io.ErrUnexpectedEOF)
 		require.Zero(t, calls)
 		require.Zero(t, ttft)
@@ -164,7 +165,7 @@ func TestStreamOutputRecognizesGeneratedReasoningButNotOpeningFrames(t *testing.
 
 func TestDecorateJSONPreservesOpaqueResponseValues(t *testing.T) {
 	body := []byte(`{"id":"engine","choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"original-call","function":{"arguments":"{\"id\":9007199254740993}"}}],"reasoning_details":[{"signature":"opaque","index":9007199254740993}]}}],"usage":{"prompt_tokens":12,"completion_tokens":3,"completion_tokens_details":{"reasoning_tokens":2}}}`)
-	decorated := string(decorateJSON(body, "gen-test", tokenUsage(body), 5))
+	decorated := string(decorateJSON(body, "gen-test", tokenUsage(body) != nil, 5))
 	require.Contains(t, decorated, `"id":"gen-test"`)
 	require.Contains(t, decorated, `"id":"original-call"`)
 	require.Contains(t, decorated, `"index":9007199254740993`)
@@ -195,7 +196,7 @@ func TestDecorateJSONNormalizesOnlyCompletedToolCalls(t *testing.T) {
 					FinishReason json.RawMessage `json:"finish_reason"`
 				} `json:"choices"`
 			}
-			require.NoError(t, json.Unmarshal(decorateJSON(body, "gen-test", Usage{}, 0), &result))
+			require.NoError(t, json.Unmarshal(decorateJSON(body, "gen-test", false, 0), &result))
 			require.Equal(t, tc.want, string(result.Choices[0].FinishReason))
 			require.Equal(t, tc.message, string(result.Choices[0].Message), "nested arguments and exact numbers remain opaque")
 		})
@@ -208,7 +209,7 @@ func TestDecorateJSONNormalizesOnlyCompletedToolCalls(t *testing.T) {
 			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
 	}
-	require.NoError(t, json.Unmarshal(decorateJSON(body, "gen-test", Usage{}, 0), &result))
+	require.NoError(t, json.Unmarshal(decorateJSON(body, "gen-test", false, 0), &result))
 	require.Equal(t, []int{2, 0, 1}, []int{result.Choices[0].Index, result.Choices[1].Index, result.Choices[2].Index})
 	require.Equal(t, []string{"tool_calls", "stop", "length"}, []string{result.Choices[0].FinishReason, result.Choices[1].FinishReason, result.Choices[2].FinishReason})
 }
@@ -295,9 +296,23 @@ func TestUpstreamStreamFailureRetains429AndSanitizesServerErrors(t *testing.T) {
 
 func TestRelayStreamDoesNotCountCommentOrEmptyDataAsOutput(t *testing.T) {
 	recorder := httptest.NewRecorder()
-	usage, ttft, err := relayStream(echo.NewResponse(recorder, echo.New()), strings.NewReader(": engine keepalive\n\ndata:\n\ndata: [DONE]\n\n"), "gen-test", time.Now(), nil)
+	u, ttft, err := relayStream(echo.NewResponse(recorder, echo.New()), strings.NewReader(": engine keepalive\n\ndata:\n\ndata: [DONE]\n\n"), "gen-test", time.Now(), nil)
 	require.NoError(t, err)
-	require.False(t, usage.Found)
+	require.Nil(t, u)
 	require.Zero(t, ttft)
 	require.Contains(t, recorder.Body.String(), ": engine keepalive")
+}
+
+func TestTokenUsageRejectsInvalidCounters(t *testing.T) {
+	for _, body := range []string{
+		`{"usage":{"prompt_tokens":-1}}`,
+		`{"usage":{"prompt_tokens":1,"prompt_tokens_details":{"cached_tokens":2}}}`,
+		`{"usage":{"completion_tokens":-3}}`,
+		`{"usage":{"prompt_tokens":9007199254740992}}`,
+	} {
+		require.Nil(t, tokenUsage([]byte(body)), body)
+	}
+	w := tokenUsage([]byte(`{"usage":{"prompt_tokens":10,"completion_tokens":3,"prompt_tokens_details":{"cached_tokens":4}}}`))
+	require.NotNil(t, w)
+	require.Equal(t, types.Work{PromptTokens: 10, CompletionTokens: 3, CachedTokens: 4}, *w)
 }

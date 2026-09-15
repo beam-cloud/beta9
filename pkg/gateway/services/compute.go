@@ -84,9 +84,9 @@ func usageWindow(in *pb.GetEndpointUsageRequest) (from, to time.Time, err error)
 func usageToProto(u types.Usage) *pb.EndpointUsage {
 	return &pb.EndpointUsage{
 		Requests: u.Requests, PromptTokens: u.PromptTokens, CompletionTokens: u.CompletionTokens,
-		CachedTokens: u.CachedTokens, Images: u.Images, MicroUsd: u.MicroUSD,
+		CachedTokens: u.CachedTokens, MicroUsd: u.MicroUSD,
 		PromptMicroUsd: u.PromptMicroUSD, CompletionMicroUsd: u.CompletionMicroUSD,
-		CachedMicroUsd: u.CachedMicroUSD, RequestMicroUsd: u.RequestMicroUSD, ImageMicroUsd: u.ImageMicroUSD,
+		CachedMicroUsd: u.CachedMicroUSD, RequestMicroUsd: u.RequestMicroUSD,
 	}
 }
 

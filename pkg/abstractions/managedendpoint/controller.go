@@ -3,6 +3,7 @@ package managedendpoint
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"runtime/debug"
@@ -116,9 +117,155 @@ func (c *controller) reconcile(ctx context.Context) (err error) {
 	return protectErr
 }
 
+// group is one endpoint's placement on one GPU type, the unit protection,
+// fill and retire reason about.
 type group struct{ endpointID, gpu string }
 
-// Inventory ------------------------------------------------------------------
+// protectedReplicas selects the copies that cover each preemption:false
+// minimum: serving current first, then serving old (so a rollout keeps its
+// minimum until the replacement is ready), then existing roles to avoid churn.
+// With cluster preemption off, every hot replica is protected.
+func protectedReplicas(fleet *types.Fleet, endpoints map[string]*types.ManagedEndpoint, live []*types.EndpointReplica, preemptionEnabled bool) map[string]bool {
+	desired := map[string]bool{}
+	rank := func(endpoint *types.ManagedEndpoint, r *types.EndpointReplica) int {
+		n := 0
+		if r.Serving() {
+			n += 8
+		}
+		if r.Version == endpoint.Version {
+			n += 1
+			if r.Serving() {
+				n += 4
+			}
+		}
+		if r.Protected {
+			n += 2
+		}
+		return n
+	}
+	if !preemptionEnabled {
+		for _, r := range live {
+			if r.Alive() && !fleet.Placements(r.EndpointID)[r.GPU].Serverless {
+				desired[r.ID] = true
+			}
+		}
+		return desired
+	}
+	for id, endpoint := range endpoints {
+		if !endpoint.Enabled() {
+			continue
+		}
+		for gpu, placement := range fleet.Placements(id) {
+			if !placement.ProtectsMinimum() || placement.MinReplicas == 0 {
+				continue
+			}
+			var candidates []*types.EndpointReplica
+			for _, r := range live {
+				if r.EndpointID == id && r.GPU == gpu && r.Alive() {
+					candidates = append(candidates, r)
+				}
+			}
+			slices.SortFunc(candidates, func(a, b *types.EndpointReplica) int {
+				return cmp.Or(cmp.Compare(rank(endpoint, b), rank(endpoint, a)), a.StartedAt.Compare(b.StartedAt), strings.Compare(a.ID, b.ID))
+			})
+			for _, r := range candidates[:min(int(placement.MinReplicas), len(candidates))] {
+				desired[r.ID] = true
+			}
+		}
+	}
+	return desired
+}
+
+// protect applies protectedReplicas: promote before demoting so a policy
+// change or rollout never drops below the serving minimum. The repository
+// change fences scheduler eviction without restarting the engine. A failed
+// group keeps its roles and is skipped by fill and retire this tick.
+func (c *controller) protect(ctx context.Context, fleet *types.Fleet, endpoints map[string]*types.ManagedEndpoint, live []*types.EndpointReplica) (map[group]bool, error) {
+	desired := protectedReplicas(fleet, endpoints, live, c.s.config.Preemption.Enabled)
+	blocked := map[group]bool{}
+	var errs []error
+	for _, want := range []bool{true, false} {
+		for _, r := range live {
+			g := group{r.EndpointID, r.GPU}
+			if blocked[g] || !r.Alive() {
+				continue
+			}
+			if desired[r.ID] != want || r.Protected == want {
+				continue // not this phase, or already right
+			}
+			updated, err := c.s.repo.SetReplicaProtection(ctx, r.ID, want)
+			if err != nil {
+				blocked[g] = true
+				errs = append(errs, fmt.Errorf("replica %s: set protection: %w", r.ID, err))
+				continue
+			}
+			*r = *updated
+		}
+	}
+	return blocked, errors.Join(errs...)
+}
+
+// endpointDemand is what the controller reads from a serverless endpoint's
+// demand lease and the serving capacity it saw for it this tick.
+type endpointDemand struct {
+	active   int64
+	warm     bool
+	pending  bool                            // a recent authorized capacity rejection requested startup
+	capacity int64                           // serving capacity across every GPU type, including hot copies
+	starting bool                            // wait for capacity to become known before adding another copy
+	gpus     map[string]types.FleetPlacement // configured on-demand GPU alternatives
+}
+
+// initialDemandGrace keeps a fresh serverless replica while its first
+// requests arrive: through startup, then one idle timeout after ready.
+func initialDemandGrace(replica *types.EndpointReplica, now time.Time) bool {
+	if !replica.ReadyAt.IsZero() {
+		return now.Sub(replica.ReadyAt) < demandIdleTimeout
+	}
+	return !replica.StartedAt.IsZero() && now.Sub(replica.StartedAt) < serverlessStartupTimeout
+}
+
+func (c *controller) readDemand(ctx context.Context, fleet *types.Fleet, live []*types.EndpointReplica) map[string]*endpointDemand {
+	out := make(map[string]*endpointDemand)
+	for id := range fleet.Endpoints {
+		if fleet.Serverless(id) {
+			// A failed read leaves nil: neither scale up nor scale down based
+			// on unknown demand. Hot placements continue independently.
+			out[id], _ = c.s.demand(ctx, id, demandRead, "", 0)
+			if demand := out[id]; demand != nil {
+				demand.gpus = make(map[string]types.FleetPlacement)
+				for gpu, placement := range fleet.Placements(id) {
+					if placement.Serverless {
+						demand.gpus[gpu] = placement
+					}
+				}
+			}
+		}
+	}
+	for _, replica := range live {
+		if replica.Status == types.ReplicaStatusDraining || replica.Status == types.ReplicaStatusEvicting {
+			if id, reclaimed := strings.CutPrefix(replica.StatusReason, "gpu reclaimed for "); reclaimed {
+				if demand := out[id]; demand != nil {
+					demand.starting = true // wait for a donor on any GPU type to release capacity
+				}
+			}
+		}
+		demand := out[replica.EndpointID]
+		if demand == nil || !replica.Alive() {
+			continue
+		}
+		if !replica.Serving() {
+			demand.starting = true
+		} else {
+			capacity := replica.Capacity.MaxConcurrency
+			if capacity <= 0 {
+				capacity = math.MaxInt64 // routing treats zero as unbounded
+			}
+			demand.capacity += min(capacity, math.MaxInt64-demand.capacity)
+		}
+	}
+	return out
+}
 
 type eligiblePool struct {
 	Name     string

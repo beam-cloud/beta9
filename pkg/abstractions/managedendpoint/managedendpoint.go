@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/http"
 	"strings"
@@ -94,7 +95,7 @@ type Service struct {
 
 	controller *controller
 	router     *router
-	meter      *meter
+	billing    *billing
 
 	adminMu        sync.Mutex
 	adminWorkspace *types.Workspace
@@ -139,7 +140,7 @@ func New(ctx context.Context, opts Opts) (*Service, error) {
 
 	s.controller = newController(s)
 	s.router = newRouter(s)
-	s.meter = newMeter(s)
+	s.billing = newBilling(s)
 
 	authMiddleware := auth.AuthMiddleware(opts.BackendRepo, opts.WorkspaceRepo)
 	if opts.RouteGroup != nil {
@@ -151,7 +152,7 @@ func New(ctx context.Context, opts Opts) (*Service, error) {
 	}
 
 	go s.controller.run(ctx)
-	go s.meter.run(ctx)
+	go s.billing.run(ctx)
 	return s, nil
 }
 
@@ -376,182 +377,157 @@ func mustJSON(v any) string {
 	return string(data)
 }
 
-func capacityToProto(c types.ReplicaCapacity) *pb.ReplicaCapacity {
-	return &pb.ReplicaCapacity{
-		InFlight:            c.InFlight,
-		MaxConcurrency:      c.MaxConcurrency,
-		Running:             c.Running,
-		Waiting:             c.Waiting,
-		KvCacheFreeMilli:    c.KVCacheFreeMilli,
-		DecodeTokensPerSec:  c.DecodeTokensPerSec,
-		PromptTokensPerSec:  c.PromptTokensPerSec,
-		TtftMs:              c.TTFTMs,
-		TpotMs:              c.TPOTMs,
-		PrefixCacheHitMilli: c.PrefixCacheHitMilli,
+// Leases. Both the per-replica capacity slot and the per-endpoint demand
+// record are Redis sorted sets with one expiring member per request, so a
+// crashed gateway's requests expire on their own while other traffic renews
+// the key, and a late release cannot touch a newer request's reservation.
+
+const (
+	leaseTTL                    = time.Minute
+	leaseRenewInterval          = 20 * time.Second
+	leaseOpTimeout              = time.Second
+	demandIdleTimeout           = 5 * time.Minute
+	serverlessStartupTimeout    = 10 * time.Minute
+	serverlessAdmissionHeadroom = 128
+)
+
+var (
+	errSlotLeaseLost   = errors.New("hosted endpoint capacity lease lost")
+	errDemandLeaseLost = errors.New("on-demand request lease expired")
+	errDemandLimit     = errors.New("on-demand endpoint request limit reached")
+)
+
+// leaseOp is what a request does to a lease set.
+type leaseOp string
+
+const (
+	leaseAcquire leaseOp = "acquire" // a request takes its member
+	leaseRenew   leaseOp = "renew"   // a long request extends its member
+	leaseRelease leaseOp = "release" // the request finished
+	demandWake   leaseOp = "wake"    // a rejected request asks for a cold endpoint to start
+	demandRead   leaseOp = "read"    // the controller samples demand
+)
+
+const slotScript = `
+local now = redis.call('TIME')
+now = now[1] * 1000 + math.floor(now[2] / 1000)
+redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', now)
+if ARGV[1] == 'release' then
+  local removed = redis.call('ZREM', KEYS[1], ARGV[2])
+  if redis.call('ZCARD', KEYS[1]) == 0 then redis.call('DEL', KEYS[1]) end
+  return removed
+end
+local held = redis.call('ZSCORE', KEYS[1], ARGV[2])
+if ARGV[1] == 'renew' and not held then return -1 end
+if ARGV[1] == 'acquire' and not held and tonumber(ARGV[4]) > 0 then
+  if redis.call('ZCARD', KEYS[1]) >= tonumber(ARGV[4]) then return 0 end
+end
+redis.call('ZADD', KEYS[1], now + tonumber(ARGV[3]), ARGV[2])
+redis.call('PEXPIRE', KEYS[1], ARGV[3])
+return 1
+`
+
+func slotKey(replicaID string) string { return "managed_endpoint:slots:" + replicaID }
+
+// slot is one inflight reservation on a replica, bounding MaxConcurrency
+// across gateways. It reports whether the request holds the slot afterwards.
+func (s *Service) slot(ctx context.Context, replicaID string, op leaseOp, requestID string, capacity int64) (bool, error) {
+	if s.rdb == nil || replicaID == "" || requestID == "" {
+		return false, errors.New("hosted capacity requires redis and replica/request identities")
 	}
+	ctx, cancel := context.WithTimeout(ctx, leaseOpTimeout)
+	defer cancel()
+	result, err := s.rdb.Eval(ctx, slotScript, []string{slotKey(replicaID)}, string(op), requestID, leaseTTL.Milliseconds(), capacity).Int64()
+	if err != nil {
+		return false, err
+	}
+	if result < 0 {
+		return false, errSlotLeaseLost
+	}
+	return result == 1, nil
 }
 
-func capacityFromProto(c *pb.ReplicaCapacity) types.ReplicaCapacity {
-	if c == nil {
-		return types.ReplicaCapacity{}
+// The demand set also carries idle and startup deadlines as the members
+// ~idle and ~wake, so the controller reads active requests, whether the
+// endpoint was used recently, and whether a rejected request asked for it.
+const demandScript = `
+local now = redis.call('TIME')
+now = now[1] * 1000 + math.floor(now[2] / 1000)
+redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', now)
+local held = redis.call('ZSCORE', KEYS[1], ARGV[2])
+if ARGV[1] == 'renew' and not held then return {-1, 0} end
+if ARGV[1] == 'acquire' and not held then
+  local count = redis.call('ZCARD', KEYS[1])
+  if redis.call('ZSCORE', KEYS[1], '~idle') then count = count - 1 end
+  if redis.call('ZSCORE', KEYS[1], '~wake') then count = count - 1 end
+  if count >= tonumber(ARGV[5]) then return {-2, 0} end
+end
+if ARGV[1] == 'acquire' or ARGV[1] == 'renew' or (ARGV[1] == 'release' and held) then
+  if ARGV[1] ~= 'release' then
+    redis.call('ZADD', KEYS[1], now + tonumber(ARGV[3]), ARGV[2])
+  else
+    redis.call('ZREM', KEYS[1], ARGV[2])
+  end
+  redis.call('ZADD', KEYS[1], now + tonumber(ARGV[4]), '~idle')
+  redis.call('PEXPIRE', KEYS[1], tonumber(ARGV[4]) + tonumber(ARGV[3]))
+end
+if ARGV[1] == 'wake' then
+  redis.call('ZADD', KEYS[1], now + tonumber(ARGV[3]), '~wake')
+  redis.call('ZADD', KEYS[1], now + tonumber(ARGV[4]), '~idle')
+  redis.call('PEXPIRE', KEYS[1], tonumber(ARGV[4]) + tonumber(ARGV[3]))
+end
+local warm = redis.call('ZSCORE', KEYS[1], '~idle') and 1 or 0
+local pending = redis.call('ZSCORE', KEYS[1], '~wake') and 1 or 0
+return {redis.call('ZCARD', KEYS[1]) - warm - pending, warm, pending}
+`
+
+// demand records a serverless endpoint's live requests. readyCapacity is the
+// finite serving capacity seen at admission; admissions beyond it get a
+// bounded headroom so a full engine still records a scale-out signal, and
+// an existing request can always renew.
+func (s *Service) demand(ctx context.Context, endpointID string, op leaseOp, requestID string, readyCapacity int64) (*endpointDemand, error) {
+	if s.rdb == nil {
+		return nil, errors.New("on-demand endpoints require redis")
 	}
-	return types.ReplicaCapacity{
-		InFlight:            c.InFlight,
-		MaxConcurrency:      c.MaxConcurrency,
-		Running:             c.Running,
-		Waiting:             c.Waiting,
-		KVCacheFreeMilli:    c.KvCacheFreeMilli,
-		DecodeTokensPerSec:  c.DecodeTokensPerSec,
-		PromptTokensPerSec:  c.PromptTokensPerSec,
-		TTFTMs:              c.TtftMs,
-		TPOTMs:              c.TpotMs,
-		PrefixCacheHitMilli: c.PrefixCacheHitMilli,
+	ctx, cancel := context.WithTimeout(ctx, leaseOpTimeout)
+	defer cancel()
+	limit := serverlessAdmissionHeadroom + min(max(readyCapacity, 0), math.MaxInt64-serverlessAdmissionHeadroom)
+	values, err := s.rdb.Eval(ctx, demandScript, []string{"managed_endpoint:demand:" + endpointID},
+		string(op), requestID, leaseTTL.Milliseconds(), demandIdleTimeout.Milliseconds(), limit).Int64Slice()
+	if err != nil {
+		return nil, err
 	}
+	switch {
+	case values[0] == -2:
+		return nil, errDemandLimit
+	case values[0] < 0:
+		return nil, errDemandLeaseLost
+	}
+	return &endpointDemand{active: values[0], warm: values[1] == 1, pending: values[2] == 1}, nil
 }
 
-func configToProto(c types.ReplicaConfig) *pb.ReplicaConfig {
-	if c.Revision == 0 {
-		return nil
-	}
-	return &pb.ReplicaConfig{
-		Revision:      c.Revision,
-		ConfigJson:    string(c.Config),
-		Author:        c.Author,
-		SetAtUnixMs:   unixMs(c.SetAt),
-		AckedRevision: c.AckedRevision,
-		Applied:       c.Applied,
-		Error:         c.Error,
-		EffectiveJson: string(c.Effective),
-		AckedAtUnixMs: unixMs(c.AckedAt),
-		Actor:         c.Actor,
-	}
-}
-
-func replicaToProto(r *types.EndpointReplica) *pb.EndpointReplica {
-	if r == nil {
-		return nil
-	}
-	return &pb.EndpointReplica{
-		Id:                  r.ID,
-		EndpointId:          r.EndpointID,
-		Version:             uint32(r.Version),
-		Gpu:                 r.GPU,
-		GpuCount:            r.GPUCount,
-		Protected:           r.Protected,
-		PoolName:            r.PoolName,
-		ContainerId:         r.ContainerID,
-		WorkerId:            r.WorkerID,
-		MachineId:           r.MachineID,
-		ProviderWorkspaceId: r.ProviderWorkspaceID,
-		Address:             r.Address,
-		Status:              string(r.Status),
-		StatusReason:        r.StatusReason,
-		HarnessEnabled:      r.HarnessEnabled,
-		Config:              configToProto(r.Config),
-		Capacity:            capacityToProto(r.Capacity),
-		CapabilitiesJson:    string(r.Capabilities),
-		EngineMetricsJson:   string(r.EngineMetrics),
-		StartedAtUnixMs:     unixMs(r.StartedAt),
-		ReadyAtUnixMs:       unixMs(r.ReadyAt),
-		LastHeartbeatUnixMs: unixMs(r.LastHeartbeat),
-	}
-}
-
-func replicasToProto(replicas []*types.EndpointReplica) []*pb.EndpointReplica {
-	out := make([]*pb.EndpointReplica, 0, len(replicas))
-	for _, r := range replicas {
-		out = append(out, replicaToProto(r))
-	}
-	return out
-}
-
-func endpointToProto(e *types.ManagedEndpoint, fleet *types.Fleet, gitops *types.GitOpsState, replicas []*types.EndpointReplica) *pb.ManagedEndpoint {
-	state, reason := endpointState(e, fleet, gitops, replicas)
-	out := &pb.ManagedEndpoint{
-		State:           state,
-		StateReason:     reason,
-		Id:              e.Spec.ID,
-		SpecJson:        mustJSON(e.Spec),
-		StubId:          e.StubID,
-		Version:         uint32(e.Version),
-		GitSha:          e.GitSHA,
-		Status:          string(e.Status),
-		CreatedAtUnixMs: unixMs(e.CreatedAt),
-		UpdatedAtUnixMs: unixMs(e.UpdatedAt),
-	}
-	if fleet != nil {
-		out.PlacementsJson = mustJSON(fleet.Placements(e.Spec.ID))
-	}
-	for _, r := range replicas {
-		if r.EndpointID == e.Spec.ID && !r.Status.Terminal() {
-			out.TotalReplicas++
-			if r.Status == types.ReplicaStatusReady {
-				out.ReadyReplicas++
+// keepAlive renews a lease on every tick until stop is called or the service
+// ends. A failed renewal cancels the returned context with cause; stop joins
+// the loop so a late renewal can never revive completed work.
+func (s *Service) keepAlive(parent context.Context, ticks <-chan time.Time, renew func(context.Context) error, cause error) (ctx context.Context, stop func()) {
+	ctx, cancel := context.WithCancelCause(parent)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-s.ctx.Done():
+				cancel(context.Canceled)
+				return
+			case <-ticks:
+				if err := renew(ctx); err != nil {
+					cancel(cause)
+					return
+				}
 			}
 		}
-	}
-	return out
-}
-
-func gitopsToProto(state *types.GitOpsState) *pb.GitOpsState {
-	out := &pb.GitOpsState{
-		RepoUrl:         state.RepoURL,
-		Ref:             state.Ref,
-		LastSha:         state.LastSHA,
-		LastRunAtUnixMs: unixMs(state.LastRunAt),
-		LastError:       state.LastError,
-		FleetError:      state.FleetError,
-		PendingSha:      state.PendingSHA,
-		PendingAtUnixMs: unixMs(state.PendingAt),
-	}
-	for _, e := range state.PerEndpoint {
-		out.Endpoints = append(out.Endpoints, &pb.GitOpsEndpointState{
-			Path:            e.Path,
-			Id:              e.ID,
-			Status:          string(e.Status),
-			Error:           e.Error,
-			StubId:          e.StubID,
-			Version:         uint32(e.Version),
-			UpdatedAtUnixMs: unixMs(e.UpdatedAt),
-		})
-	}
-	return out
-}
-
-func routeMetricsToProto(m *types.RouteMetrics, replicas []*types.EndpointReplica) *pb.EndpointMetrics {
-	if m == nil {
-		return nil
-	}
-	out := &pb.EndpointMetrics{
-		EndpointId:       m.EndpointID,
-		Gpu:              m.GPU,
-		WindowSeconds:    uint32(m.Window.Seconds()),
-		ConfigRevision:   m.ConfigRevision,
-		Requests:         m.Requests,
-		Errors:           m.Errors,
-		PromptTokens:     m.PromptTokens,
-		CompletionTokens: m.CompletionTokens,
-		TtftMs:           m.MeanTTFTMs(),
-		TpotMs:           m.MeanTPOTMs(),
-		CostMicroUsd:     m.CostMicroUSD,
-	}
-	if m.Requests > 0 {
-		out.QueueWaitMs = m.QueueWaitSumMs / m.Requests
-	}
-	var aggregate types.ReplicaCapacity
-	for _, replica := range replicas {
-		if replica.Status != types.ReplicaStatusReady {
-			continue
-		}
-		out.ReadyReplicas++
-		aggregate.InFlight += replica.Capacity.InFlight
-		aggregate.MaxConcurrency += replica.Capacity.MaxConcurrency
-		aggregate.Running += replica.Capacity.Running
-		aggregate.Waiting += replica.Capacity.Waiting
-		aggregate.DecodeTokensPerSec += replica.Capacity.DecodeTokensPerSec
-		aggregate.PromptTokensPerSec += replica.Capacity.PromptTokensPerSec
-	}
-	out.DecodeTokensPerSec = aggregate.DecodeTokensPerSec
-	out.AggregateCapacity = capacityToProto(aggregate)
-	return out
+	}()
+	return ctx, func() { cancel(context.Canceled); <-done }
 }

@@ -111,7 +111,8 @@ func (gws *GatewayService) managedDeployment(ctx context.Context, stub *types.St
 }
 
 // registerManagedDeployment records a freshly deployed managed stub as the
-// endpoint's current version. The controller rolls replicas over to it.
+// endpoint's current version. Publication stays what config.yaml last
+// applied; the controller rolls replicas over to the new version.
 func (gws *GatewayService) registerManagedDeployment(ctx context.Context, stub *types.StubWithRelated, config *types.StubConfigV1, deployment *types.Deployment) error {
 	spec := config.ManagedEndpoint.Endpoint
 	existing, err := gws.endpointRepo.GetEndpoint(ctx, spec.ID)
@@ -120,7 +121,7 @@ func (gws *GatewayService) registerManagedDeployment(ctx context.Context, stub *
 	}
 	record := &types.ManagedEndpoint{Spec: *spec, StubID: stub.ExternalId, Version: deployment.Version, Status: types.EndpointStatusActive}
 	if existing != nil {
-		record.CreatedAt, record.GitSHA = existing.CreatedAt, existing.GitSHA
+		record.CreatedAt, record.GitSHA, record.Publication, record.Published = existing.CreatedAt, existing.GitSHA, existing.Publication, existing.Published
 	}
 	return gws.endpointRepo.SaveEndpoint(ctx, record)
 }
