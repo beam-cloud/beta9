@@ -305,6 +305,67 @@ func TestSetupContainerMountsReusesDurableStubCodeCacheAcrossManagers(t *testing
 	require.FileExists(t, filepath.Join(cacheRoot, "stub-code", stubCodeCacheKey(workspace, objectID), ".beta9-cache-ready"))
 }
 
+// Two worker pods on one node extract the same object at once. The one that
+// publishes second must adopt the first's cache, which other containers are
+// already copying from, rather than delete it out from under them.
+func TestPublishStubCodeCacheAdoptsACacheAnotherPodPublished(t *testing.T) {
+	root := t.TempDir()
+	cachePath := filepath.Join(root, "key")
+	readyPath := filepath.Join(cachePath, ".beta9-cache-ready")
+	extraction := func(name, content string) string {
+		tmp := filepath.Join(root, "key.tmp."+name)
+		require.NoError(t, os.MkdirAll(tmp, 0755))
+		require.NoError(t, os.WriteFile(filepath.Join(tmp, "main.py"), []byte(content), 0644))
+		require.NoError(t, os.WriteFile(filepath.Join(tmp, ".beta9-cache-ready"), []byte("ok"), 0644))
+		return tmp
+	}
+
+	require.NoError(t, publishStubCodeCache(extraction("a", "first"), cachePath, readyPath))
+	require.NoError(t, publishStubCodeCache(extraction("b", "second"), cachePath, readyPath))
+	data, err := os.ReadFile(filepath.Join(cachePath, "main.py"))
+	require.NoError(t, err)
+	require.Equal(t, "first", string(data), "the published cache is left alone")
+	require.NoDirExists(t, filepath.Join(root, "key.tmp.b"), "the loser's extraction is discarded")
+
+	// A directory without the marker is torn and nobody reads it: replace it.
+	require.NoError(t, os.Remove(readyPath))
+	require.NoError(t, publishStubCodeCache(extraction("c", "third"), cachePath, readyPath))
+	data, err = os.ReadFile(filepath.Join(cachePath, "main.py"))
+	require.NoError(t, err)
+	require.Equal(t, "third", string(data))
+	require.FileExists(t, readyPath)
+}
+
+// A bucket that cannot be mounted is left out of the container; the mounts
+// after it must still get their workspace-storage paths.
+func TestSetupContainerMountsSkipsFailedBucketAndResolvesLaterMounts(t *testing.T) {
+	manager := NewContainerMountManager(types.AppConfig{
+		Storage: types.StorageConfig{WorkspaceStorage: types.WorkspaceStorageConfig{BaseMountPath: t.TempDir()}},
+	})
+	manager.codeCacheRoot = t.TempDir()
+	workspace, objectID := "workspace-1", "object-1"
+	require.NoError(t, writeZipObject(filepath.Join(manager.storageConfig.WorkspaceStorage.BaseMountPath, workspace, types.DefaultObjectPrefix, objectID), map[string]string{"main.py": ""}))
+
+	request := stubCodeMountRequest("container-bucket", workspace, objectID)
+	t.Cleanup(func() { _ = os.RemoveAll(filepath.Dir(types.TempContainerWorkspace(request.ContainerId))) })
+	request.Mounts = append(request.Mounts,
+		types.Mount{
+			MountPath:        "/mnt/bucket",
+			LocalPath:        filepath.Join(t.TempDir(), "bucket"),
+			MountType:        storage.StorageModeMountPoint,
+			MountPointConfig: &types.MountPointConfig{BucketName: "bucket", EndpointURL: "http://127.0.0.1:1"},
+		},
+		types.Mount{
+			MountPath: types.WorkerContainerVolumePath + "/data",
+			LocalPath: filepath.Join(types.DefaultVolumesPath, workspace, "vol-1"),
+		},
+	)
+
+	require.NoError(t, manager.SetupContainerMounts(context.Background(), request, discardLogger()))
+	require.Equal(t, filepath.Join(manager.storageConfig.WorkspaceStorage.BaseMountPath, workspace, types.DefaultVolumesPrefix, "vol-1"), request.Mounts[2].LocalPath)
+	require.NoDirExists(t, request.Mounts[1].LocalPath, "the failed bucket has no source, so addRequestMounts skips it")
+}
+
 func TestStubCodeCacheKeyDoesNotCollideAcrossWorkspaceObjectPairs(t *testing.T) {
 	key1 := stubCodeCacheKey("workspace-a", "b-c")
 	key2 := stubCodeCacheKey("workspace-a-b", "c")

@@ -140,10 +140,11 @@ func (c *ContainerMountManager) SetupContainerMounts(ctx context.Context, reques
 			m.LocalPath = path.Join(m.LocalPath, request.ContainerId, m.MountPointConfig.BucketName)
 			request.Mounts[i].LocalPath = m.LocalPath
 
-			err := c.setupMountPointS3(request.ContainerId, m)
-			if err != nil {
+			// The container runs without a bucket it cannot mount
+			// (addRequestMounts skips the missing source); the mounts
+			// after it still need their paths resolved.
+			if err := c.setupMountPointS3(request.ContainerId, m); err != nil {
 				outputLogger.Info(fmt.Sprintf("failed to setup s3 mount, error: %v\n", err))
-				return err
 			}
 		}
 	}
@@ -390,15 +391,10 @@ func (c *ContainerMountManager) ensureStubCodeCache(ctx context.Context, request
 			return "", err
 		}
 
-		if err := os.RemoveAll(cachePath); err != nil {
-			_ = os.RemoveAll(tmpPath)
+		if err := publishStubCodeCache(tmpPath, cachePath, readyPath); err != nil {
 			return "", err
 		}
-		if err := os.Rename(tmpPath, cachePath); err != nil {
-			_ = os.RemoveAll(tmpPath)
-			return "", err
-		}
-
+		markReadyUsed()
 		return cachePath, nil
 	})
 	if err != nil {
@@ -406,6 +402,28 @@ func (c *ContainerMountManager) ensureStubCodeCache(ctx context.Context, request
 	}
 
 	return value.(string), nil
+}
+
+// publishStubCodeCache moves a finished extraction into place. Worker pods on
+// one node share the cache root but not the singleflight, so another pod may
+// have published the same cache meanwhile, and its containers may be copying
+// from it: adopt it, never remove it. Rename refuses a non-empty target, so
+// what is there is either that or a torn directory without a marker, which
+// nobody reads.
+func publishStubCodeCache(tmpPath, cachePath, readyPath string) error {
+	err := os.Rename(tmpPath, cachePath)
+	if err != nil && !pathExists(readyPath) {
+		if err = os.RemoveAll(cachePath); err == nil {
+			err = os.Rename(tmpPath, cachePath)
+		}
+	}
+	if err != nil {
+		_ = os.RemoveAll(tmpPath)
+		if !pathExists(readyPath) {
+			return err
+		}
+	}
+	return nil
 }
 
 func (c *ContainerMountManager) extractStubCode(ctx context.Context, request *types.ContainerRequest, destPath string) error {
